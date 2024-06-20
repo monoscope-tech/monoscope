@@ -52,7 +52,7 @@ endpointListGetH pid layoutM filterTM hostM projectHostM' sortM hxRequestM hxBoo
         ItemsList.ItemsListCfg
           { projectId = pid
           , nextFetchUrl = Nothing
-          , sort = fromMaybe "events" sortM
+          , sort = Just $ ItemsList.SortCfg {current = fromMaybe "events" sortM}
           , tabsFilter =
               Just
                 $ ItemsList.TabFilter

@@ -178,7 +178,7 @@ anomalyListGetH pid layoutM filterTM sortM pageM loadM endpointM hxRequestM hxBo
         ItemsList.ItemsListCfg
           { projectId = pid
           , nextFetchUrl
-          , sort = fromMaybe "events" sortM
+          , sort = Just $ ItemsList.SortCfg {current = fromMaybe "events" sortM}
           , tabsFilter =
               Just
                 $ ItemsList.TabFilter

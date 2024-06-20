@@ -64,6 +64,7 @@ default-extensions:
   - TemplateHaskell
   - RoleAnnotations
   - NoImplicitPrelude
+  - DuplicateRecordFields
 
 extra-source-files:
   - README.md

@@ -26,7 +26,7 @@ outgoingGetH pid sortM = do
   let listCfg =
         ItemsList.ItemsListCfg
           { projectId = pid
-          , sort = sortV
+          , sort = Just $ ItemsList.SortCfg {current = sortV}
           , currentURL = "/p/" <> pid.toText <> "/outgoing?sort=" <> sortV
           , currTime
           , heading =

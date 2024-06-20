@@ -89,7 +89,7 @@ testingGetH pid filterTM = do
   let listCfg =
         ItemsList.ItemsListCfg
           { projectId = pid
-          , sort = ""
+          , sort = Nothing 
           , currentURL = "/p/" <> pid.toText <> "/testing"
           , currTime
           , nextFetchUrl = Nothing

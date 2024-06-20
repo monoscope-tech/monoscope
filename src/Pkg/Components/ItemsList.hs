@@ -7,6 +7,7 @@ module Pkg.Components.ItemsList (
   ItemsListCfg (..),
   TabFilter (..),
   TabFilterOpt (..),
+  SortCfg (..),
 )
 where
 
@@ -23,7 +24,7 @@ import Utils (deleteParam, escapedQueryPartial, faSprite_, mIcon_, textToBool)
 
 data ItemsListCfg = ItemsListCfg
   { currentURL :: Text
-  , sort :: Text
+  , sort :: Maybe SortCfg 
   , projectId :: Projects.ProjectId
   , currTime :: UTCTime
   , elemID :: Text
@@ -31,6 +32,10 @@ data ItemsListCfg = ItemsListCfg
   , zeroState :: Maybe ZeroState
   , tabsFilter :: Maybe TabFilter
   , heading :: Maybe Heading
+  }
+
+data SortCfg = SortCfg 
+  { current :: Text 
   }
 
 
@@ -63,7 +68,7 @@ data ZeroState = ZeroState
 
 
 itemsPage_ :: ItemsListCfg -> V.Vector a -> (ItemsListCfg -> a -> Html ()) -> Html ()
-itemsPage_ listCfg items renderItem = div_ [class_ "w-full mx-auto px-16 pt-10 pb-24 overflow-y-scroll h-full"] $ do
+itemsPage_ listCfg items renderItem = div_ [class_ "w-full mx-auto px-16 pt-10 pb-24 overflow-y-scroll h-full space-y-6"] $ do
   whenJust listCfg.heading \heading -> do
     div_ [class_ "flex justify-between"] do
       h3_ [class_ "text-xl text-slate-700 flex gap-1 place-items-center"] $ heading.pageTitle
@@ -71,7 +76,7 @@ itemsPage_ listCfg items renderItem = div_ [class_ "w-full mx-auto px-16 pt-10 p
     fromMaybe "" heading.subSection
   whenJust listCfg.tabsFilter \tabsFilter -> do
     let uri = deleteParam "filter" listCfg.currentURL
-    div_ [class_ "py-2 px-2 space-x-6 border-b border-slate-20 mt-6 mb-8 text-sm font-light", hxBoost_ "true", role_ "tablist"] $ forM_ tabsFilter.options \opt ->
+    div_ [class_ "py-2 px-2 space-x-6 border-b border-slate-20 text-sm font-light", hxBoost_ "true", role_ "tablist"] $ forM_ tabsFilter.options \opt ->
       a_
         [ class_ $ "inline-block py-2  " <> if opt.name == tabsFilter.current then " font-bold text-black " else ""
         , role_ "tab"
@@ -94,7 +99,6 @@ itemsList_ listCfg items renderItem = div_ [class_ "grid grid-cols-5 card-round"
           , ("Events", "Number of events", "events")
           ]
             :: [(Text, Text, Text)]
-    let currentSortTitle = maybe "First Seen" fst3 $ find (\(_, _, identifier) -> identifier == listCfg.sort) sortMenu
     div_
       [class_ "flex py-3 gap-8 items-center  bg-gray-50"]
       do
@@ -105,24 +109,26 @@ itemsList_ listCfg items renderItem = div_ [class_ "grid grid-cols-5 card-round"
           button_ [class_ "btn btn-sm btn-outline space-x-1 border-black hover:shadow-2xl", hxPost_ $ bulkActionBase <> "/archive", hxSwap_ "none"] do
             faSprite_ "inbox-full" "solid" "h-4 w-4 inline-block"
             span_ "archive"
-        div_ [class_ "relative inline-block"] do
-          a_ [class_ "btn btn-sm btn-outline border-black hover:shadow-2xl space-x-2", [__|on click toggle .hidden on #sortMenuDiv |]] do
-            mIcon_ "sort" "h-4 w-4"
-            span_ $ toHtml currentSortTitle
-          div_ [id_ "sortMenuDiv", hxBoost_ "true", class_ "p-1 hidden text-sm border border-black-30 absolute right-0 z-10 mt-2 w-72 origin-top-right rounded-md bg-white shadow-lg ring-1 ring-black ring-opacity-5 focus:outline-none", tabindex_ "-1"] do
-            sortMenu & mapM_ \(title, desc, identifier) -> do
-              let isActive = listCfg.sort == identifier || (listCfg.sort == "" && identifier == "first_seen")
-              a_
-                [ class_ $ "block flex flex-row px-3 py-2 hover:bg-blue-50 rounded-md cursor-pointer " <> (if isActive then " text-blue-800 " else "")
-                , href_ $ currentURL' <> "&sort=" <> identifier
-                , hxIndicator_ "#sortLoader"
-                ]
-                do
-                  div_ [class_ "flex flex-col items-center justify-center px-3"] do
-                    if isActive then mIcon_ "checkmark4" "w-4 h-5" else mIcon_ "" "w-4 h-5"
-                  div_ [class_ "grow space-y-1"] do
-                    span_ [class_ "block text-lg"] $ toHtml title
-                    span_ [class_ "block "] $ toHtml desc
+        whenJust listCfg.sort \sortCfg -> do
+          let currentSortTitle = maybe "First Seen" fst3 $ find (\(_, _, identifier) -> identifier == sortCfg.current) sortMenu
+          div_ [class_ "relative inline-block"] do
+            a_ [class_ "btn btn-sm btn-outline border-black hover:shadow-2xl space-x-2", [__|on click toggle .hidden on #sortMenuDiv |]] do
+              mIcon_ "sort" "h-4 w-4"
+              span_ $ toHtml currentSortTitle
+            div_ [id_ "sortMenuDiv", hxBoost_ "true", class_ "p-1 hidden text-sm border border-black-30 absolute right-0 z-10 mt-2 w-72 origin-top-right rounded-md bg-white shadow-lg ring-1 ring-black ring-opacity-5 focus:outline-none", tabindex_ "-1"] do
+              sortMenu & mapM_ \(title, desc, identifier) -> do
+                let isActive = sortCfg.current == identifier || (sortCfg.current == "" && identifier == "first_seen")
+                a_
+                  [ class_ $ "block flex flex-row px-3 py-2 hover:bg-blue-50 rounded-md cursor-pointer " <> (if isActive then " text-blue-800 " else "")
+                  , href_ $ currentURL' <> "&sort=" <> identifier
+                  , hxIndicator_ "#sortLoader"
+                  ]
+                  do
+                    div_ [class_ "flex flex-col items-center justify-center px-3"] do
+                      if isActive then mIcon_ "checkmark4" "w-4 h-5" else mIcon_ "" "w-4 h-5"
+                    div_ [class_ "grow space-y-1"] do
+                      span_ [class_ "block text-lg"] $ toHtml title
+                      span_ [class_ "block "] $ toHtml desc
 
         div_ [class_ "flex justify-center font-base w-60 content-between gap-14"] do
           span_ "GRAPH"
