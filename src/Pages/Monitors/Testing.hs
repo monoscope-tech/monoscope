@@ -14,7 +14,7 @@ import Data.Vector qualified as V
 import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
 import Effectful.Time qualified as Time
 import Lucid
-import Lucid.Htmx (hxBoost_, hxPost_, hxSwap_, hxTarget_)
+import Lucid.Htmx (hxPost_, hxSwap_, hxTarget_)
 import Lucid.Hyperscript (__)
 import Models.Projects.Projects qualified as Projects
 import Models.Tests.Testing qualified as Testing
@@ -79,23 +79,23 @@ testingPostH pid collection = do
 testingGetH :: Projects.ProjectId -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))
 testingGetH pid filterTM = do
   (sess, project) <- Sessions.sessionAndProject pid
-  let (ackd, archived, currentFilterTab, tabStatus) = case filterTM of
-        Just "Active" -> (True, False, "Active", Testing.Active)
-        Just "Archived" -> (False, False, "Archived", Testing.Inactive)
-        _ -> (True, False, "Active", Testing.Active)
+  let (currentFilterTab, tabStatus) = case filterTM of
+        Just "Active" -> ("Active", Testing.Active)
+        Just "Archived" -> ("Archived", Testing.Inactive)
+        _ -> ("Active", Testing.Active)
   currTime <- Time.currentTime
 
   colls <- dbtToEff $ Testing.getCollections pid tabStatus
   let listCfg =
         ItemsList.ItemsListCfg
           { projectId = pid
-          , sort = Nothing 
+          , sort = Nothing
           , currentURL = "/p/" <> pid.toText <> "/testing"
           , currTime
           , nextFetchUrl = Nothing
           , tabsFilter =
-              Just $
-                ItemsList.TabFilter
+              Just
+                $ ItemsList.TabFilter
                   { current = currentFilterTab
                   , options =
                       [ ItemsList.TabFilterOpt{name = "Active", count = Nothing}
@@ -103,8 +103,8 @@ testingGetH pid filterTM = do
                       ]
                   }
           , heading =
-              Just $
-                ItemsList.Heading
+              Just
+                $ ItemsList.Heading
                   { pageTitle = "Multistep API monitors/tests (Beta)"
                   , rightComponent =
                       Just
@@ -116,8 +116,8 @@ testingGetH pid filterTM = do
                   , subSection = Nothing
                   }
           , zeroState =
-              Just $
-                ItemsList.ZeroState
+              Just
+                $ ItemsList.ZeroState
                   { icon = "empty-set"
                   , title = "No Multistep Test/Monitor yet."
                   , description = "You're can create one to start monitoring your services."

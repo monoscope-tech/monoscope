@@ -19,12 +19,12 @@ import Lucid.Htmx
 import Lucid.Hyperscript (__)
 import Models.Projects.Projects qualified as Projects
 import Relude
-import Utils (deleteParam, escapedQueryPartial, faSprite_, mIcon_, textToBool)
+import Utils (deleteParam, escapedQueryPartial, faSprite_, mIcon_)
 
 
 data ItemsListCfg = ItemsListCfg
   { currentURL :: Text
-  , sort :: Maybe SortCfg 
+  , sort :: Maybe SortCfg
   , projectId :: Projects.ProjectId
   , currTime :: UTCTime
   , elemID :: Text
@@ -34,8 +34,9 @@ data ItemsListCfg = ItemsListCfg
   , heading :: Maybe Heading
   }
 
-data SortCfg = SortCfg 
-  { current :: Text 
+
+data SortCfg = SortCfg
+  { current :: Text
   }
 
 
@@ -103,8 +104,12 @@ itemsList_ listCfg items renderItem = div_ [class_ "grid grid-cols-5 card-round"
       [class_ "flex py-3 gap-8 items-center  bg-gray-50"]
       do
         div_ [class_ "h-4 flex space-x-3 w-8"] do
-          a_ [class_ " w-2 h-full"] "" >> input_ [term "aria-label" "Select Issue", type_ "checkbox"
-            , [__| on click set .bulkactionItemCheckbox.checked to my.checked |]]
+          a_ [class_ " w-2 h-full"] ""
+            >> input_
+              [ term "aria-label" "Select Issue"
+              , type_ "checkbox"
+              , [__| on click set .bulkactionItemCheckbox.checked to my.checked |]
+              ]
         div_ [class_ " grow flex flex-row gap-2"] do
           button_ [class_ "btn btn-sm btn-outline border-black hover:shadow-2xl", hxPost_ $ bulkActionBase <> "/acknowlege", hxSwap_ "none"] "✓ acknowlege"
           button_ [class_ "btn btn-sm btn-outline space-x-1 border-black hover:shadow-2xl", hxPost_ $ bulkActionBase <> "/archive", hxSwap_ "none"] do

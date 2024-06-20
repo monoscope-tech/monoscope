@@ -32,7 +32,7 @@ import Effectful.Reader.Static (ask)
 import Lucid
 import Lucid.Aria qualified as Aria
 import Lucid.Base (termRaw)
-import Lucid.Htmx (hxBoost_, hxGet_, hxSwap_, hxTrigger_)
+import Lucid.Htmx (hxGet_, hxSwap_, hxTrigger_)
 import Lucid.Hyperscript (__)
 import Models.Apis.Anomalies qualified as Anomalies
 import Models.Apis.Endpoints qualified as Endpoints
@@ -51,7 +51,6 @@ import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
 import Models.Users.Users (User (id))
 import NeatInterpolation (text)
-import Network.URI (escapeURIString, isUnescapedInURI)
 import OddJobs.Job (createJob)
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
 import Pages.Components qualified as Components
@@ -63,7 +62,7 @@ import Relude.Unsafe qualified as Unsafe
 import System.Config (AuthContext (pool))
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders, addSuccessToast)
 import Text.Time.Pretty (prettyTimeAuto)
-import Utils (deleteParam, escapedQueryPartial, faSprite_, getMethodColor, mIcon_, textToBool)
+import Utils (escapedQueryPartial, faSprite_, getMethodColor, mIcon_)
 import Web.FormUrlEncoded (FromForm)
 
 
@@ -135,14 +134,6 @@ anomalyBulkActionsPostH pid action items = do
   addRespHeaders ""
 
 
-data ParamInput = ParamInput
-  { currentURL :: Text
-  , ackd :: Bool
-  , archived :: Bool
-  , sort :: Text
-  }
-
-
 anomalyListGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Endpoints.EndpointId -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))
 anomalyListGetH pid layoutM filterTM sortM pageM loadM endpointM hxRequestM hxBoostedM = do
   (sess, project) <- Sessions.sessionAndProject pid
@@ -151,7 +142,6 @@ anomalyListGetH pid layoutM filterTM sortM pageM loadM endpointM hxRequestM hxBo
         Just "Acknowleged" -> (True, False, "Acknowleged")
         Just "Archived" -> (False, False, "Archived")
         _ -> (False, False, "Inbox")
-
 
   let fLimit = 10
       pageInt = maybe 0 (Unsafe.read . toString) pageM
@@ -167,18 +157,11 @@ anomalyListGetH pid layoutM filterTM sortM pageM loadM endpointM hxRequestM hxBo
       nextFetchUrl = case layoutM of
         Just "slider" -> Nothing
         _ -> Just $ currentURL <> "&load_more=true&page=" <> show (pageInt + 1)
-      paramInput =
-        ParamInput
-          { currentURL = currentURL
-          , ackd = ackd
-          , archived = archived
-          , sort = fromMaybe "" sortM
-          }
   let listCfg =
         ItemsList.ItemsListCfg
           { projectId = pid
           , nextFetchUrl
-          , sort = Just $ ItemsList.SortCfg {current = fromMaybe "events" sortM}
+          , sort = Just $ ItemsList.SortCfg{current = fromMaybe "events" sortM}
           , tabsFilter =
               Just
                 $ ItemsList.TabFilter
@@ -192,9 +175,9 @@ anomalyListGetH pid layoutM filterTM sortM pageM loadM endpointM hxRequestM hxBo
           , heading =
               Just
                 $ ItemsList.Heading
-                  { pageTitle = "Issues: Changes, Alerts & Errors" 
+                  { pageTitle = "Issues: Changes, Alerts & Errors"
                   , rightComponent = Nothing
-                  , subSection = Nothing 
+                  , subSection = Nothing
                   }
           , zeroState =
               Just
@@ -209,12 +192,10 @@ anomalyListGetH pid layoutM filterTM sortM pageM loadM endpointM hxRequestM hxBo
           , ..
           }
 
-
   addRespHeaders $ case (layoutM, hxRequestM, hxBoostedM, loadM) of
     (Just "slider", Just "true", _, _) -> anomalyListSlider currTime pid endpointM (Just issues)
     (_, _, _, Just "true") -> ItemsList.itemRows_ nextFetchUrl (renderIssue False currTime) issues
     _ -> bodyWrapper bwconf $ ItemsList.itemsPage_ listCfg issues \_ -> (renderIssue False listCfg.currTime)
-
 
 
 anomalyListSlider :: UTCTime -> Projects.ProjectId -> Maybe Endpoints.EndpointId -> Maybe (Vector Anomalies.IssueL) -> Html ()
@@ -285,7 +266,7 @@ issueItem hideByDefault currTime issue icon title subTitle content = do
   div_ [class_ $ "flex py-4 gap-8 " <> if hideByDefault then "card-round bg-white px-5" else "", style_ (if hideByDefault then "display:none" else ""), id_ issueId] do
     div_ [class_ $ "h-4 flex self-start space-x-3 w-8 " <> if hideByDefault then "hidden" else ""] do
       a_ [class_ $ anomalyAccentColor (isJust issue.acknowlegedAt) (isJust issue.archivedAt) <> " w-2 h-full"] ""
-      input_ [term "aria-label" "Select Issue",class_ "bulkactionItemCheckbox", type_ "checkbox", name_ "issueId", value_ issueId]
+      input_ [term "aria-label" "Select Issue", class_ "bulkactionItemCheckbox", type_ "checkbox", name_ "issueId", value_ issueId]
     div_ [class_ "space-y-3 grow"] do
       div_ [class_ "space-x-3"] do
         a_ [href_ $ "/p/" <> issue.projectId.toText <> "/anomalies/by_hash/" <> issue.targetHash, class_ "inline-block font-bold text-blue-700 space-x-2", termRaw "preload" "mouseover"] do

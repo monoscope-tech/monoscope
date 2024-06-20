@@ -7,7 +7,6 @@ import Data.Time (UTCTime)
 import Data.UUID qualified as UUID
 import Data.Vector (Vector)
 import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
-import Effectful.Reader.Static (ask)
 import Effectful.Time qualified as Time
 import Fmt (commaizeF, fmt)
 import Lucid
@@ -52,7 +51,7 @@ endpointListGetH pid layoutM filterTM hostM projectHostM' sortM hxRequestM hxBoo
         ItemsList.ItemsListCfg
           { projectId = pid
           , nextFetchUrl = Nothing
-          , sort = Just $ ItemsList.SortCfg {current = fromMaybe "events" sortM}
+          , sort = Just $ ItemsList.SortCfg{current = fromMaybe "events" sortM}
           , tabsFilter =
               Just
                 $ ItemsList.TabFilter

@@ -26,15 +26,15 @@ outgoingGetH pid sortM = do
   let listCfg =
         ItemsList.ItemsListCfg
           { projectId = pid
-          , sort = Just $ ItemsList.SortCfg {current = sortV}
+          , sort = Just $ ItemsList.SortCfg{current = sortV}
           , currentURL = "/p/" <> pid.toText <> "/outgoing?sort=" <> sortV
           , currTime
           , heading =
               Just
                 $ ItemsList.Heading
-                  { pageTitle = "Outgoing Integrations" 
+                  { pageTitle = "Outgoing Integrations"
                   , rightComponent = Nothing
-                  , subSection = Nothing 
+                  , subSection = Nothing
                   }
           , nextFetchUrl = Nothing
           , tabsFilter = Nothing
@@ -55,7 +55,7 @@ outgoingGetH pid sortM = do
           , currProject = Just project
           , pageTitle = "Outgoing Integrations"
           }
-  addRespHeaders $ bodyWrapper bwconf $ ItemsList.itemsPage_ listCfg hostsAndEvents \_ -> renderOutgoing pid 
+  addRespHeaders $ bodyWrapper bwconf $ ItemsList.itemsPage_ listCfg hostsAndEvents \_ -> renderOutgoing pid
 
 
 renderOutgoing :: Projects.ProjectId -> Endpoints.HostEvents -> Html ()
