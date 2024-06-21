@@ -130,14 +130,14 @@ itemsList_ listCfg items renderItem = div_ [class_ "grid grid-cols-5 card-round 
             whenJust blkA.icon \icon -> faSprite_ icon "solid" "h-4 w-4 inline-block"
             span_ (toHtml blkA.title)
           whenJust listCfg.search \search -> label_ [class_ "input input-sm input-bordered flex items-center gap-2"] do
-            input_ $
-              [ type_ "text"
-              , class_ "grow"
-              , placeholder_ "Search"
-              ]
-                <> case search.viaQueryParam of
-                  Just param -> [name_ param]
-                  Nothing -> [[__| on input show .itemsListItem in #itemsListPage when its textContent.toLowerCase() contains my value.toLowerCase() |]]
+            input_
+              $ [ type_ "text"
+                , class_ "grow"
+                , placeholder_ "Search"
+                ]
+              <> case search.viaQueryParam of
+                Just param -> [name_ param]
+                Nothing -> [[__| on input show .itemsListItem in #itemsListPage when its textContent.toLowerCase() contains my value.toLowerCase() |]]
             faSprite_ "magnifying-glass" "regular" "w-4 h-4 opacity-70"
 
         whenJust listCfg.sort \sortCfg -> do
@@ -180,6 +180,6 @@ itemRows_ :: Maybe Text -> (a -> Html ()) -> V.Vector a -> Html ()
 itemRows_ nextFetchUrl renderItem items = do
   mapM_ (renderItem) items
   whenJust nextFetchUrl \url ->
-    when (length items > 10) $
-      a_ [class_ "cursor-pointer block p-1 blue-800 bg-blue-100 hover:bg-blue-200 text-center", hxTrigger_ "click", hxSwap_ "outerHTML", hxGet_ url] do
+    when (length items > 10)
+      $ a_ [class_ "cursor-pointer block p-1 blue-800 bg-blue-100 hover:bg-blue-200 text-center", hxTrigger_ "click", hxSwap_ "outerHTML", hxGet_ url] do
         span_ [class_ "htmx-indicator loading loading-dots loading-md"] "" >> "LOAD MORE"
