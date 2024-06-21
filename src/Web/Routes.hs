@@ -42,6 +42,7 @@ import Pages.Projects.Routes qualified as ProjectsRoutes
 import Pages.Projects.Server qualified as ProjectsRoutes
 import Pages.RedactedFields (RedactFieldForm)
 import Pages.RedactedFields qualified as RedactedFields
+import Pages.JsonRedactor qualified as JsonRedactor
 import Pages.Reports qualified as Reports
 import Pages.Share qualified as Share
 import Pages.SlackInstall qualified as SlackInstall
@@ -142,6 +143,7 @@ data CookieProtectedRoutes mode = CookieProtectedRoutes
   , slackLinkProjectsGet :: mode :- "slack" :> "link-projects" :> QPT "code" :> Get '[HTML] (RespHeaders (Html ()))
   , slackUpdateWebhook :: mode :- "p" :> ProjectId :> "slack" :> "webhook" :> ReqBody '[FormUrlEncoded] SlackInstall.LinkProjectsForm :> Post '[HTML] (RespHeaders (Html ()))
   , redactedFieldsGet :: mode :- "p" :> ProjectId :> "redacted_fields" :> Get '[HTML] (RespHeaders (Html ()))
+  , jsonRedactorGet :: mode :- "p" :> ProjectId :> "json_redactor" :> Get '[HTML] (RespHeaders (Html ()))
   , redactedFieldsPost :: mode :- "p" :> ProjectId :> "redacted_fields" :> ReqBody '[FormUrlEncoded] RedactFieldForm :> Post '[HTML] (RespHeaders (Html ()))
   , reportsGet :: mode :- "p" :> ProjectId :> "reports" :> QPT "page" :> HXRequest :> HXBoosted :> Get '[HTML] (RespHeaders (Html ()))
   , reportsSingleGet :: mode :- "p" :> ProjectId :> "reports" :> Capture "report_id" ReportsM.ReportId :> Get '[HTML] (RespHeaders (Html ()))
@@ -177,6 +179,7 @@ cookieProtectedServer =
     , slackUpdateWebhook = SlackInstall.updateWebHook
     , redactedFieldsGet = RedactedFields.redactedFieldsGetH
     , redactedFieldsPost = RedactedFields.redactedFieldsPostH
+    , jsonRedactorGet = JsonRedactor.jsonRedactorGetH
     , reportsGet = Reports.reportsGetH
     , reportsSingleGet = Reports.singleReportGetH
     , reportsPost = Reports.reportsPostH

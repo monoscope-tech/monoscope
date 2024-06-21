@@ -36,6 +36,7 @@ extra-deps:
   - contiguous-0.6.4.0@sha256:30d28d17b3ca2a9eecb753f6e38f7bc0d0a4d3afd6d76ca79931b9c167b68c39,1861
   - primitive-unlifted-2.1.0.0@sha256:4a6fb2fc5836b18b217b814931472a0b1a84df03b45955b236c80291f1f46893,2326
   - wai-log-0.4.0.1@sha256:0b4b57ae218cf5ec59523c8cf405802a588d4e299436b5a663a6001ea34bb7e6,1583
+  - jsonpath-0.3.0.0
   - git: https://github.com/Kleidukos/pg-transact-effectful
     commit: d296ec54cbdfd2e7b3a822cdb759daf761d6f24b
     subdirs:

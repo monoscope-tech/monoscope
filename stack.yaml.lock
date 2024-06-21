@@ -229,6 +229,13 @@ packages:
   original:
     hackage: wai-log-0.4.0.1@sha256:0b4b57ae218cf5ec59523c8cf405802a588d4e299436b5a663a6001ea34bb7e6,1583
 - completed:
+    hackage: jsonpath-0.3.0.0@sha256:40e791c564c49a52cafad2427d07f3d7e61b4254e6575743ede406e16a203917,1692
+    pantry-tree:
+      sha256: 2e0dc253b4585711bf1bba118c9653ed117e0724272d5e8c01463f994247aa35
+      size: 1197
+  original:
+    hackage: jsonpath-0.3.0.0
+- completed:
     commit: d296ec54cbdfd2e7b3a822cdb759daf761d6f24b
     git: https://github.com/Kleidukos/pg-transact-effectful
     name: pg-transact-effectful
