@@ -9,6 +9,7 @@ module Pkg.Components.ItemsList (
   TabFilter (..),
   TabFilterOpt (..),
   SortCfg (..),
+  SearchCfg (..),
 )
 where
 
@@ -34,7 +35,12 @@ data ItemsListCfg = ItemsListCfg
   , tabsFilter :: Maybe TabFilter
   , heading :: Maybe Heading
   , bulkActions :: [BulkAction]
+  , search :: Maybe SearchCfg
   }
+
+
+data SearchCfg = SearchCfg
+  {viaQueryParam :: Maybe Text}
 
 
 data BulkAction = BulkAction
@@ -119,10 +125,20 @@ itemsList_ listCfg items renderItem = div_ [class_ "grid grid-cols-5 card-round 
             , class_ "checkbox  checkbox-md checked:checkbox-primary"
             , [__| on click set .bulkactionItemCheckbox.checked to my.checked |]
             ]
-        div_ [class_ " grow flex flex-row gap-2"] $ forM_ listCfg.bulkActions \blkA ->
-          button_ [class_ "btn btn-sm  border-black hover:shadow-2xl btn-disabled group-has-[.bulkactionItemCheckbox:checked]/grid:!btn-outline group-has-[.bulkactionItemCheckbox:checked]/grid:!pointer-events-auto  ", hxPost_ blkA.uri, hxSwap_ "none"] do
+        div_ [class_ " grow flex flex-row gap-2"] do
+          forM_ listCfg.bulkActions \blkA -> button_ [class_ "btn btn-sm  border-black hover:shadow-2xl btn-disabled group-has-[.bulkactionItemCheckbox:checked]/grid:!btn-outline group-has-[.bulkactionItemCheckbox:checked]/grid:!pointer-events-auto  ", hxPost_ blkA.uri, hxSwap_ "none"] do
             whenJust blkA.icon \icon -> faSprite_ icon "solid" "h-4 w-4 inline-block"
             span_ (toHtml blkA.title)
+          whenJust listCfg.search \search -> label_ [class_ "input input-sm input-bordered flex items-center gap-2"] do
+            input_ $
+              [ type_ "text"
+              , class_ "grow"
+              , placeholder_ "Search"
+              ]
+                <> case search.viaQueryParam of
+                  Just param -> [name_ param]
+                  Nothing -> [[__| on input show .itemsListItem in #itemsListPage when its textContent.toLowerCase() contains my value.toLowerCase() |]]
+            faSprite_ "magnifying-glass" "regular" "w-4 h-4 opacity-70"
 
         whenJust listCfg.sort \sortCfg -> do
           let currentSortTitle = maybe "First Seen" fst3 $ find (\(_, _, identifier) -> identifier == sortCfg.current) sortMenu
@@ -164,6 +180,6 @@ itemRows_ :: Maybe Text -> (a -> Html ()) -> V.Vector a -> Html ()
 itemRows_ nextFetchUrl renderItem items = do
   mapM_ (renderItem) items
   whenJust nextFetchUrl \url ->
-    when (length items > 10)
-      $ a_ [class_ "cursor-pointer block p-1 blue-800 bg-blue-100 hover:bg-blue-200 text-center", hxTrigger_ "click", hxSwap_ "outerHTML", hxGet_ url] do
+    when (length items > 10) $
+      a_ [class_ "cursor-pointer block p-1 blue-800 bg-blue-100 hover:bg-blue-200 text-center", hxTrigger_ "click", hxSwap_ "outerHTML", hxGet_ url] do
         span_ [class_ "htmx-indicator loading loading-dots loading-md"] "" >> "LOAD MORE"

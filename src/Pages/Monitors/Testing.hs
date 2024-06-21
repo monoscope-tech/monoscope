@@ -64,9 +64,10 @@ testingGetH pid filterTM = do
           , currentURL = "/p/" <> pid.toText <> "/testing?"
           , currTime
           , nextFetchUrl = Nothing
+          , search = Just $ ItemsList.SearchCfg{viaQueryParam = Nothing}
           , tabsFilter =
-              Just
-                $ ItemsList.TabFilter
+              Just $
+                ItemsList.TabFilter
                   { current = currentFilterTab
                   , options =
                       [ ItemsList.TabFilterOpt{name = "Active", count = Nothing}
@@ -77,8 +78,8 @@ testingGetH pid filterTM = do
               [ ItemsList.BulkAction{icon = Just "check", title = "deactivate", uri = "/p/" <> pid.toText <> "/anomalies/bulk_actions/acknowlege"}
               ]
           , heading =
-              Just
-                $ ItemsList.Heading
+              Just $
+                ItemsList.Heading
                   { pageTitle = "Multistep API monitors/tests (Beta)"
                   , rightComponent =
                       Just
@@ -96,8 +97,8 @@ testingGetH pid filterTM = do
                   , subSection = Nothing
                   }
           , zeroState =
-              Just
-                $ ItemsList.ZeroState
+              Just $
+                ItemsList.ZeroState
                   { icon = "empty-set"
                   , title = "No Multistep Test/Monitor yet."
                   , description = "You're can create one to start monitoring your services."
@@ -116,7 +117,7 @@ testingGetH pid filterTM = do
 
 
 collectionCard :: Projects.ProjectId -> Testing.CollectionListItem -> Html ()
-collectionCard pid col = div_ [class_ "flex py-4 gap-8 items-center"] do
+collectionCard pid col = div_ [class_ "flex py-4 gap-8 items-center itemsListItem"] do
   div_ [class_ "h-4 flex space-x-3 w-8 "] do
     a_ [class_ "w-2 h-full"] ""
     input_ [term "aria-label" "Select Issue", class_ "endpoint_anomaly_input bulkactionItemCheckbox checkbox  checkbox-md checked:checkbox-primary", type_ "checkbox", name_ "listItemId", value_ col.id.toText]
