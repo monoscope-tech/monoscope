@@ -249,7 +249,7 @@ export class StepsEditor extends LitElement {
     return html`
       <div class="flex flex-row items-center gap-2  paramRow">
         <span class="shrink hidden assertIndicator">✅</span>
-        <input class="input input-bordered input-xs w-1/3" placeholder="Key" .value="${key}" @change=${(e) => this.updateKey(e, idx, type, aidx)} />
+        <input class="input input-bordered input-xs w-1/3" list="${type}DataList" placeholder="Key" .value="${key}" @change=${(e) => this.updateKey(e, idx, type, aidx)} />
         <input class="input input-bordered input-xs w-full" placeholder="Value" .value="${value}" @input=${(e) => this.updateValue(e, idx, type, aidx, key)} />
         <a class="cursor-pointer text-red-700" @click=${(e) => this.deleteKey(e, idx, type, aidx, key)}
           ><svg class="inline-block icon w-3 h-3 "><use href="/assets/svgs/fa-sprites/solid.svg#xmark"></use></svg

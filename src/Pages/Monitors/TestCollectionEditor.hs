@@ -15,9 +15,9 @@ import Data.Text qualified as T
 import Data.Vector qualified as V
 import Deriving.Aeson qualified as DAE
 import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
+import Log qualified
 import Lucid
 import Lucid.Aria qualified as Aria
-import Log qualified
 import Lucid.Base (TermRaw (termRaw))
 import Lucid.Htmx (
   hxExt_,
@@ -33,10 +33,10 @@ import Models.Tests.TestToDump qualified as TestToDump
 import Models.Tests.Testing qualified as Testing
 import Models.Users.Sessions qualified as Sessions
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
-import Pkg.Components qualified as Components
+import Pkg.Components.Modals qualified as Components
 import PyF (fmt)
 import Relude hiding (ask)
-import System.Types (ATAuthCtx, RespHeaders, addRespHeaders, addSuccessToast, addErrorToast)
+import System.Types (ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders, addSuccessToast)
 import Utils (faSprite_)
 
 
@@ -63,8 +63,8 @@ collectionStepsUpdateH pid colId colF = do
 collectionRunTestsH :: Projects.ProjectId -> Testing.CollectionId -> Maybe Int -> CollectionStepUpdateForm -> ATAuthCtx (RespHeaders (Html ()))
 collectionRunTestsH pid colId runIdxM stepsForm = do
   stepResultsE <- TestToDump.runTestAndLog pid stepsForm.stepsData
-  case stepResultsE of 
-    Right stepResults -> do 
+  case stepResultsE of
+    Right stepResults -> do
       let tkRespJson = decodeUtf8 @Text $ AE.encode stepResults
       addSuccessToast "Collection completed execution" Nothing
       addRespHeaders $ do
@@ -72,9 +72,8 @@ collectionRunTestsH pid colId runIdxM stepsForm = do
         V.iforM_ stepResults collectionStepResult_
     Left e -> do
       Log.logAttention "Collection failed execution" e
-      addErrorToast "Collection failed execution" (Just $ show e) 
+      addErrorToast "Collection failed execution" (Just $ show e)
       addRespHeaders $ span_ ""
-
 
 
 collectionGetH :: Projects.ProjectId -> Testing.CollectionId -> ATAuthCtx (RespHeaders (Html ()))
@@ -177,13 +176,13 @@ collectionStepResult_ idx stepResult = section_ [class_ "p-1"] do
     toHtml $ (show $ idx + 1) <> " " <> fromMaybe "" stepResult.stepName
   div_ [role_ "tablist", class_ "tabs tabs-lifted"] do
     input_ [type_ "radio", name_ $ "step-result-tabs-" <> show idx, role_ "tab", class_ "tab", Aria.label_ "Response Log", checked_]
-    div_ [role_ "tabpanel", class_ "tab-content bg-base-100 bg-base-100 border-base-300 rounded-box p-6"]
-      $ toHtmlRaw
-      $ textToHTML stepResult.stepLog
+    div_ [role_ "tabpanel", class_ "tab-content bg-base-100 bg-base-100 border-base-300 rounded-box p-6"] $
+      toHtmlRaw $
+        textToHTML stepResult.stepLog
 
     input_ [type_ "radio", name_ $ "step-result-tabs-" <> show idx, role_ "tab", class_ "tab", Aria.label_ "Response Headers"]
-    div_ [role_ "tabpanel", class_ "tab-content bg-base-100 bg-base-100 border-base-300 rounded-box p-6 "]
-      $ table_ [class_ "table table-xs"] do
+    div_ [role_ "tabpanel", class_ "tab-content bg-base-100 bg-base-100 border-base-300 rounded-box p-6 "] $
+      table_ [class_ "table table-xs"] do
         thead_ [] $ tr_ [] $ th_ [] "Name" >> th_ [] "Value"
         tbody_ $ forM_ (M.toList stepResult.request.resp.headers) $ \(k, v) -> tr_ [] do
           td_ [] $ toHtml k
@@ -191,10 +190,10 @@ collectionStepResult_ idx stepResult = section_ [class_ "p-1"] do
 
     input_ [type_ "radio", name_ $ "step-result-tabs-" <> show idx, role_ "tab", class_ "tab", Aria.label_ "Response Body"]
     div_ [role_ "tabpanel", class_ "tab-content bg-base-100 bg-base-100 border-base-300 rounded-box p-6"] do
-      pre_ [class_ "flex text-sm leading-snug w-full max-h-[50rem] overflow-y-scroll"]
-        $ code_ [class_ "h-full hljs language-json atom-one-dark w-full rounded"]
-        $ toHtmlRaw
-        $ encodePretty stepResult.request.resp.json
+      pre_ [class_ "flex text-sm leading-snug w-full max-h-[50rem] overflow-y-scroll"] $
+        code_ [class_ "h-full hljs language-json atom-one-dark w-full rounded"] $
+          toHtmlRaw $
+            encodePretty stepResult.request.resp.json
 
 
 textToHTML :: Text -> Text
@@ -212,4 +211,15 @@ editorExtraElements = do
     option_ [value_ "UPDATE"] ""
     option_ [value_ "PATCH"] ""
     option_ [value_ "DELETE"] ""
+  datalist_ [id_ "assertsDataList"] do
+    option_ [value_ "ok"] ""
+    option_ [value_ "array"] ""
+    option_ [value_ "empty"] ""
+    option_ [value_ "string"] ""
+    option_ [value_ "number"] ""
+    option_ [value_ "boolean"] ""
+    option_ [value_ "null"] ""
+    option_ [value_ "exists"] ""
+    option_ [value_ "date"] ""
+    option_ [value_ "notEmpty"] ""
   script_ [src_ "/assets/js/thirdparty/jsyaml.min.js", crossorigin_ "true"] ("" :: Text)
