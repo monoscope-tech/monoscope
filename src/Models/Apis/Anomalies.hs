@@ -680,7 +680,7 @@ insertErrorQueryAndParams pid err = (q, params)
   where
     q =
       [sql| insert into apis.errors (project_id,created_at, hash, error_type, message, error_data) VALUES (?,?,?,?,?,?)
-            ON CONFLICT (project_id, hash) DO NOTHING |]
+            ON CONFLICT (project_id, hash) DO NOTHING; |]
     params =
       [ MkDBField pid
       , MkDBField err.when
@@ -697,5 +697,5 @@ insertIssue issue = execute Insert q issue
     q =
       [sql|insert into apis.issues (id, created_at, updated_at, project_id, acknowleged_at, anomaly_type, target_hash,
                       issue_data, endpoint_id, acknowleged_by, archived_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                      ON CONFLICT (project_id, target_hash) DO NOTHING 
+                      ON CONFLICT (project_id, target_hash) DO NOTHING; 
                       |]

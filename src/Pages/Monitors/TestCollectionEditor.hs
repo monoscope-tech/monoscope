@@ -10,7 +10,6 @@ module Pages.Monitors.TestCollectionEditor (
 import Data.Aeson qualified as AE
 import Data.Aeson.Encode.Pretty (encodePretty)
 import Data.Default (def)
-import Data.Either.Extra (fromRight')
 import Data.Map qualified as M
 import Data.Text qualified as T
 import Data.Vector qualified as V
@@ -18,6 +17,7 @@ import Deriving.Aeson qualified as DAE
 import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
 import Lucid
 import Lucid.Aria qualified as Aria
+import Log qualified
 import Lucid.Base (TermRaw (termRaw))
 import Lucid.Htmx (
   hxExt_,
@@ -36,7 +36,7 @@ import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
 import Pkg.Components qualified as Components
 import PyF (fmt)
 import Relude hiding (ask)
-import System.Types (ATAuthCtx, RespHeaders, addRespHeaders, addSuccessToast)
+import System.Types (ATAuthCtx, RespHeaders, addRespHeaders, addSuccessToast, addErrorToast)
 import Utils (faSprite_)
 
 
@@ -63,12 +63,18 @@ collectionStepsUpdateH pid colId colF = do
 collectionRunTestsH :: Projects.ProjectId -> Testing.CollectionId -> Maybe Int -> CollectionStepUpdateForm -> ATAuthCtx (RespHeaders (Html ()))
 collectionRunTestsH pid colId runIdxM stepsForm = do
   stepResultsE <- TestToDump.runTestAndLog pid stepsForm.stepsData
-  let stepResults = fromRight' stepResultsE
-  let tkRespJson = decodeUtf8 @Text $ AE.encode stepResults
-  addSuccessToast "Collection completed execution" Nothing
-  addRespHeaders $ do
-    script_ [fmt|window.collectionResults = {tkRespJson}|]
-    V.iforM_ stepResults collectionStepResult_
+  case stepResultsE of 
+    Right stepResults -> do 
+      let tkRespJson = decodeUtf8 @Text $ AE.encode stepResults
+      addSuccessToast "Collection completed execution" Nothing
+      addRespHeaders $ do
+        script_ [fmt|window.collectionResults = {tkRespJson}|]
+        V.iforM_ stepResults collectionStepResult_
+    Left e -> do
+      Log.logAttention "Collection failed execution" e
+      addErrorToast "Collection failed execution" (Just $ show e) 
+      addRespHeaders $ span_ ""
+
 
 
 collectionGetH :: Projects.ProjectId -> Testing.CollectionId -> ATAuthCtx (RespHeaders (Html ()))
