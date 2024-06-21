@@ -1,10 +1,10 @@
 {
   "devDependencies": {
     "autoprefixer": "^10.4.17",
-    "daisyui": "^4.11.1",
+    "daisyui": "^4.12.2",
     "jest": "^29.7.0",
     "postcss": "^8.4.34",
-    "tailwindcss": "^3.4.3"
+    "tailwindcss": "^3.4.4"
   },
   "dependencies": {
     "@tailwindcss/typography": "^0.5.10",

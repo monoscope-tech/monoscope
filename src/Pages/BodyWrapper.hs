@@ -231,21 +231,7 @@ projectsDropDown currProject projects = do
   let pidTxt = currProject.id.toText
   div_
     [ term "data-menu" "true"
-    , class_ "hidden origin-top-right z-40 transition transform bg-white p-4 absolute w-[20rem] rounded-2xl shadow-2xl shadow-indigo-200"
-    , [__|
-          on open
-              remove .hidden
-              add .ease-out .duration-100 .opacity-0 .scale-95
-              wait a tick toggle .opacity-0 .opacity-100 .scale-95 .scale-100
-              settle remove .ease-out .duration-100
-          end
-          on close
-              toggle .ease-in .duration-75
-              wait a tick toggle .opacity-100 .opacity-0 .scale-100 .scale-95 
-              settle remove .ease-in .duration-75 .opacity-0 .opacity-100 .scale-95 .scale-100
-              add .hidden 
-          end
-          |]
+    , class_ "origin-top-right z-40 transition transform bg-white p-4 absolute w-[20rem] rounded-2xl shadow-2xl shadow-indigo-200 opacity-100 scale-100"
     ]
     do
       div_ [class_ "p-2 pb-4 "] do
@@ -291,7 +277,7 @@ projectsDropDown currProject projects = do
 
 sideNav :: Sessions.PersistentSession -> Projects.Project -> Text -> Maybe Text -> Maybe Bool -> Html ()
 sideNav sess project pageTitle menuItem hasIntegrated = do
-  aside_ [class_ "shrink-0 top-0 border-r bg-white border-gray-200 w-16 h-screen overflow-hidden transition-all duration-200 ease-in-out", id_ "side-nav-menu"] do
+  aside_ [class_ "shrink-0 top-0 border-r bg-white border-gray-200 w-16 h-screen transition-all duration-200 ease-in-out", id_ "side-nav-menu"] do
     script_
       [text|if (window.initialCloseSideMenu == 'true'){
               document.getElementById('side-nav-menu').classList.add('hidden-side-nav-menu');
@@ -301,32 +287,20 @@ sideNav sess project pageTitle menuItem hasIntegrated = do
       a_ [href_ "/", class_ "inline-block px-2 py-2 flex items-center justify-center h-12"] do
         img_ [class_ "w-40 mt-2 sd-hidden", src_ "/assets/svgs/logo.svg"]
         img_ [class_ "w-10 mt-2 hidden sd-show", src_ "/assets/logo-mini.png"]
-    div_ [class_ "py-4 px-4 transition-all  duration-1000 ease-in-out", id_ "side-nav-ctx-btn"] do
+    div_ [class_ "py-4 px-4 dropdown block", id_ "side-nav-ctx-btn"] do
       a_
         [ class_ "flex flex-row bg-blue-50 hover:bg-blue-100 text-blue-900 block p-6 rounded-md cursor-pointer"
-        , [__|  on click queue first
-                    if I do not match .active
-                        add .active then send open to <[data-menu]/> 
-                    else 
-                        remove .active then send close to <[data-menu]/> 
-                    end
-                end
-                on keyup[key is 'Escape'] from <body/>  
-                    if I match .active
-                        remove .active then send close to <[data-menu]/> in me
-                    end
-                end|]
+        , tabindex_ "0"
         ]
         do
-          div_ [class_ "space-2 grow sd-hidden"] do
-            strong_ [class_ "block text-slate-900"] $ toHtml project.title
+          div_ [class_ "space-2 grow sd-hidden overflow-x-hidden"] do
+            strong_ [class_ "block text-slate-900 whitespace-nowrap truncate"] $ toHtml project.title
             small_ [class_ "block text-slate-900"] $ toHtml project.paymentPlan
           -- Development?
           div_ [class_ "flex flex-col"] do
             faSprite_ "chevron-up" "regular" " h-4 w-4 m-1"
             faSprite_ "chevron-down" "regular" " h-4 w-4 m-1"
-
-      projectsDropDown project (Sessions.getProjects $ Sessions.projects sess)
+      div_ [tabindex_ "0", class_ "dropdown-content z-[40]"] $ projectsDropDown project (Sessions.getProjects $ Sessions.projects sess)
     nav_ [class_ "mt-4 text-slate-900 "] do
       -- FIXME: reeanable hx-boost hxBoost_ "true"
       menu project.id & mapM_ \(mTitle, mUrl, fIcon) -> do
@@ -336,11 +310,11 @@ sideNav sess project pageTitle menuItem hasIntegrated = do
           [ href_ mUrl
           , term "data-tippy-placement" "right"
           , term "data-tippy-content" mTitle
-          , class_ $ " block flex gap-3 px-4 py-2 flex no-wrap shrink-0 items-center border-l-4 hover:bg-blue-50" <> activeCls
+          , class_ $ " block flex gap-3 px-4 py-2 flex no-wrap shrink-0 items-center border-l-4 hover:bg-blue-50 overflow-x-hidden" <> activeCls
           ]
           do
             faSprite_ fIcon "regular" $ "w-5 h-5 shrink-0 " <> if isActive then "text-blue-900 " else " text-slate-500 "
-            span_ [class_ "sd-hidden "] $ toHtml mTitle
+            span_ [class_ "sd-hidden whitespace-nowrap truncate"] $ toHtml mTitle
 
 
 navbar :: Users.User -> Html ()
@@ -364,24 +338,8 @@ navbar currUser = do
     div_ [class_ "inline-block flex items-center"] do
       a_ [class_ "inline-block p-2 px-3 align-middle"] $ faSprite_ "magnifying-glass" "regular" "w-5 h-5 text-gray-500"
       a_ [class_ "inline-block border-r-2 p-2 pr-5"] $ faSprite_ "bell" "regular" "w-5 h-5 text-gray-500"
-      a_
-        [ class_ "cursor-pointer inline-block space-x-4 pl-4 relative "
-        , [__| 
-            on click queue first
-                if I do not match .active
-                    add .active then send open to <[drop-menu]/> 
-                else 
-                    remove .active then send close to <[drop-menu]/> 
-                end
-            end
-            on keyup[key is 'Escape'] from <body/>  
-                if I match .active
-                    remove .active then send close to <[drop-menu]/> in me
-                end
-            end
-        |]
-        ]
-        do
+      div_ [class_ "dropdown dropdown-end"] do
+        div_ [tabindex_ "0", role_ "button", class_ "cursor-pointer pl-4 space-x-2 flex items-center"] do
           img_ [class_ "inline-block w-9 h-9 rounded-lg bg-gray-300", src_ currUser.displayImageUrl]
           span_ [class_ "inline-block"]
             $ toHtml
@@ -389,29 +347,8 @@ navbar currUser = do
               then currUser.firstName <> " " <> currUser.lastName
               else CI.original currUser.email
           faSprite_ "caret-down" "solid" "w-4 h-4 inline-block"
-
-      -- logout dropdown
-      div_
-        [ term "drop-menu" "true"
-        , class_ "hidden origin-top-left border border-gray-100 w-[10rem] rounded-lg shadow-2xl shadow-indigo-200 z-40 transition transform bg-white p-1 absolute top-14 right-5 "
-        , [__|
-            on open
-                remove .hidden
-                add .ease-out .duration-100 .opacity-0 .scale-95
-                wait a tick toggle .opacity-0 .opacity-100 .scale-95 .scale-100
-                settle remove .ease-out .duration-100
-            end
-            on close
-                toggle .ease-in .duration-75
-                wait a tick toggle .opacity-100 .opacity-0 .scale-100 .scale-95 
-                settle remove .ease-in .duration-75 .opacity-0 .opacity-100 .scale-95 .scale-100
-                add .hidden 
-            end
-            |]
-        ]
-        do
-          -- dropdown mainbody
-          a_ [class_ "text-base p-2 flex gap-3 rounded hover:bg-gray-100", href_ "/logout", [__| on click js posthog.reset(); end |]] do
+        ul_ [tabindex_ "0", class_ "dropdown-content z-[1] menu p-2 shadow bg-base-100 rounded-box w-52"] do
+          li_ $ a_ [class_ "text-base p-2 flex gap-3 rounded hover:bg-gray-100", href_ "/logout", [__| on click js posthog.reset(); end |]] do
             faSprite_ "user-plus" "regular" "h-5 w-5" >> span_ "Logout"
 
 
