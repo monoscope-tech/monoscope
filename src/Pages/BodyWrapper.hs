@@ -289,7 +289,7 @@ sideNav sess project pageTitle menuItem hasIntegrated = do
         img_ [class_ "w-10 mt-2 hidden sd-show", src_ "/assets/logo-mini.png"]
     div_ [class_ "py-4 px-4 dropdown block", id_ "side-nav-ctx-btn"] do
       a_
-        [ class_ "flex flex-row bg-blue-50 hover:bg-blue-100 text-blue-900 block p-6 rounded-md cursor-pointer"
+        [ class_ "flex flex-row bg-blue-50 hover:bg-blue-100 text-blue-900 block p-6 justify-center rounded-md cursor-pointer"
         , tabindex_ "0"
         ]
         do
@@ -310,7 +310,7 @@ sideNav sess project pageTitle menuItem hasIntegrated = do
           [ href_ mUrl
           , term "data-tippy-placement" "right"
           , term "data-tippy-content" mTitle
-          , class_ $ " block flex gap-3 px-4 py-2 flex no-wrap shrink-0 items-center border-l-4 hover:bg-blue-50 overflow-x-hidden" <> activeCls
+          , class_ $ " block flex gap-3 px-4 py-2 flex no-wrap shrink-0 items-center border-l-4 hover:bg-blue-50 overflow-x-hidden h-[2.5rem]" <> activeCls
           ]
           do
             faSprite_ fIcon "regular" $ "w-5 h-5 shrink-0 " <> if isActive then "text-blue-900 " else " text-slate-500 "
