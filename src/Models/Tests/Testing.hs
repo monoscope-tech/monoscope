@@ -1,5 +1,3 @@
-{-# LANGUAGE DuplicateRecordFields #-}
-
 module Models.Tests.Testing (
   Collection (..),
   StepResult (..),
@@ -8,7 +6,6 @@ module Models.Tests.Testing (
   CollectionId (..),
   CollectionListItem (..),
   CollectionStepId (..),
-  CollectionStep (..),
   CollectionStepData (..),
   CollectionSteps (..),
   stepDataMethod,
@@ -25,7 +22,7 @@ import Data.Aeson (KeyValue ((.=)), (.:?))
 import Data.Aeson qualified as AE
 import Data.Default (Default)
 import Data.Default.Instances ()
-import Data.Time (ZonedTime)
+import Data.Time (UTCTime)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity (insert)
@@ -139,23 +136,6 @@ instance AE.FromJSON CollectionStepData where
     return CollectionStepData{..}
 
 
--- TODO: delete table
-data CollectionStep = CollectionStep
-  { id :: CollectionStepId
-  , createdAt :: ZonedTime
-  , updatedAt :: ZonedTime
-  , lastRun :: Maybe ZonedTime
-  , projectId :: Projects.ProjectId
-  , collectionId :: CollectionId
-  , stepData :: CollectionStepData
-  }
-  deriving stock (Show, Generic)
-  deriving anyclass (FromRow, ToRow, AE.ToJSON, AE.FromJSON, NFData, Default)
-  deriving
-    (Entity)
-    via (GenericEntity '[Schema "tests", TableName "collection_steps", PrimaryKey "id", FieldModifiers '[CamelToSnake]] CollectionStep)
-
-
 newtype CollectionSteps = CollectionSteps (V.Vector CollectionStepData)
   deriving stock (Show, Generic)
   deriving anyclass (AE.ToJSON, AE.FromJSON, NFData, Default)
@@ -164,9 +144,9 @@ newtype CollectionSteps = CollectionSteps (V.Vector CollectionStepData)
 
 data Collection = Collection
   { id :: CollectionId
-  , createdAt :: ZonedTime
-  , updatedAt :: ZonedTime
-  , lastRun :: Maybe ZonedTime
+  , createdAt :: UTCTime
+  , updatedAt :: UTCTime
+  , lastRun :: Maybe UTCTime
   , projectId :: Projects.ProjectId
   , title :: Text
   , description :: Text
@@ -182,12 +162,12 @@ data Collection = Collection
     via (GenericEntity '[Schema "tests", TableName "collections", PrimaryKey "id", FieldModifiers '[CamelToSnake]] Collection)
 
 
-data CollectionListItem = ReportListItem
+data CollectionListItem = CollectionListItem
   { id :: CollectionId
-  , createdAt :: ZonedTime
-  , updatedAt :: ZonedTime
+  , createdAt :: UTCTime
+  , updatedAt :: UTCTime
   , projectId :: Projects.ProjectId
-  , lastRun :: Maybe ZonedTime
+  , lastRun :: Maybe UTCTime
   , title :: Text
   , description :: Text
   , stepsCount :: Int

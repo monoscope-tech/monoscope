@@ -1,4 +1,11 @@
-module Pages.Monitors.TestCollectionEditor (collectionGetH, CollectionStepUpdateForm (..), collectionRunTestsH, collectionPage, collectionStepsUpdateH) where
+module Pages.Monitors.TestCollectionEditor (
+  collectionGetH,
+  CollectionStepUpdateForm (..),
+  collectionRunTestsH,
+  collectionPage,
+  collectionStepsUpdateH,
+  testSettingsModalContent_,
+) where
 
 import Data.Aeson qualified as AE
 import Data.Aeson.Encode.Pretty (encodePretty)
@@ -80,9 +87,9 @@ collectionGetH pid colId = do
     Just col -> addRespHeaders $ bodyWrapper bwconf $ collectionPage pid col
 
 
-testSettingsModalContent_ :: Testing.Collection -> Html ()
-testSettingsModalContent_ col = div_ [class_ "space-y-5 w-96"] do
-  div_ $ h3_ "Update Test settings"
+testSettingsModalContent_ :: Bool -> Testing.Collection -> Html ()
+testSettingsModalContent_ isUpdate col = div_ [class_ "space-y-5 w-96"] do
+  div_ $ h3_ if isUpdate then "Update Test settings" else "New Text/Monitor"
   label_ [class_ "form-control w-full"] do
     div_ [class_ "label"] $ span_ [class_ "label-text"] "Test title"
     input_ [type_ "text", placeholder_ "Type here", class_ "input input-bordered w-full ", name_ "title", value_ col.title]
@@ -104,7 +111,7 @@ testSettingsModalContent_ col = div_ [class_ "space-y-5 w-96"] do
           option_ [selected_ "" | scheduleNumberUnit == "minutes"] "Minutes"
           option_ [selected_ "" | scheduleNumberUnit == "hours"] "Hours"
           option_ [selected_ "" | scheduleNumberUnit == "days"] "Days"
-  div_ $ button_ [class_ "btn btn-bordered btn-primary", type_ "submit"] "Update"
+  div_ $ button_ [class_ "btn btn-bordered btn-primary", type_ "submit"] $ if isUpdate then "Update" else "Create Test"
 
 
 collectionPage :: Projects.ProjectId -> Testing.Collection -> Html ()
@@ -131,7 +138,7 @@ collectionPage pid col = do
               p_ [class_ "text-sm"] $ toHtml col.description
             div_ [class_ ""] do
               span_ [class_ "badge badge-success"] "Active"
-              div_ [class_ "inline-block"] $ Components.modal_ "test-settings-modal" (span_ [class_ "p-3"] $ Utils.faSprite_ "sliders" "regular" "h-4") $ testSettingsModalContent_ col
+              div_ [class_ "inline-block"] $ Components.modal_ "test-settings-modal" (span_ [class_ "p-3"] $ Utils.faSprite_ "sliders" "regular" "h-4") $ testSettingsModalContent_ True col
           div_ [class_ "shrink p-4 flex justify-between items-center"] do
             h4_ [class_ "font-semibold text-2xl font-medium "] "Steps"
             div_ [class_ "space-x-4 flex items-center"] do

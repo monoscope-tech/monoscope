@@ -1,6 +1,3 @@
-{-# LANGUAGE DuplicateRecordFields #-}
-{-# LANGUAGE GeneralizedNewtypeDeriving #-}
-
 module Models.Apis.Anomalies (
   AnomalyVM (..),
   errorByHash,

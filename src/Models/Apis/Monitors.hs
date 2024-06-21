@@ -1,5 +1,3 @@
-{-# LANGUAGE DuplicateRecordFields #-}
-
 module Models.Apis.Monitors (
   queryMonitorsAll,
   queryMonitorById,

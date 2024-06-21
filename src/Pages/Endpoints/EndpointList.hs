@@ -52,6 +52,10 @@ endpointListGetH pid layoutM filterTM hostM projectHostM' sortM hxRequestM hxBoo
           { projectId = pid
           , nextFetchUrl = Nothing
           , sort = Just $ ItemsList.SortCfg{current = fromMaybe "events" sortM}
+          , bulkActions =
+              [ ItemsList.BulkAction{icon = Just "check", title = "acknowlege", uri = "/p/" <> pid.toText <> "/anomalies/bulk_actions/acknowlege"}
+              , ItemsList.BulkAction{icon = Just "inbox-full", title = "archive", uri = "/p/" <> pid.toText <> "/anomalies/bulk_actions/archive"}
+              ]
           , tabsFilter =
               Just
                 $ ItemsList.TabFilter
@@ -105,10 +109,10 @@ endpointAccentColor False False = "bg-red-800"
 renderEndpoint :: Bool -> UTCTime -> Endpoints.EndpointRequestStats -> Html ()
 renderEndpoint activePage currTime enp = do
   div_ [class_ "flex py-4 gap-8 items-center endpoint_item "] do
-    div_ [class_ "h-4 flex space-x-3 w-8 "] do
+    div_ [class_ "h-4 flex space-x-3 w-8 justify-center items-center"] do
       a_ [class_ $ endpointAccentColor True {- isJust enp.acknowlegedAt -} True {- isJust enp.archivedAt -} <> " w-2 h-full"] ""
       let anomalyId = UUID.toText enp.anomalyId
-      input_ [term "aria-label" "Select Issue", class_ "endpoint_anomaly_input bulkactionItemCheckbox", type_ "checkbox", name_ "anomalyId", value_ anomalyId]
+      input_ [term "aria-label" "Select Issue", class_ "endpoint_anomaly_input bulkactionItemCheckbox checkbox checkbox-md checked:checkbox-primary", type_ "checkbox", name_ "anomalyId", value_ anomalyId]
     div_ [class_ "space-y-3 grow"] do
       div_ [class_ "space-x-3"] do
         a_ [class_ "inline-block font-bold text-red-700 space-x-2", href_ ("/p/" <> enp.projectId.toText <> "/endpoints/" <> Endpoints.endpointIdText enp.endpointId)] $ do

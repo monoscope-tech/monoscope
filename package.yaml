@@ -65,6 +65,7 @@ default-extensions:
   - RoleAnnotations
   - NoImplicitPrelude
   - DuplicateRecordFields
+  - TupleSections
 
 extra-source-files:
   - README.md

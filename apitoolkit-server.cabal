@@ -175,6 +175,7 @@ library
       RoleAnnotations
       NoImplicitPrelude
       DuplicateRecordFields
+      TupleSections
   ghc-options: -fwrite-ide-info -hiedir=.hie -O -Weverything -Werror -Wno-error=deprecations -Wno-error=unused-packages -Wno-missing-exported-signatures -Wno-missing-import-lists -Wno-missed-specialisations -Wno-all-missed-specialisations -Wno-unsafe -Wno-safe -Wno-missing-local-signatures -Wno-monomorphism-restriction -Wno-missing-safe-haskell-mode -Wno-orphans -Wno-unused-matches -Wno-missing-kind-signatures -Wno-type-defaults -j4 +RTS -A128m -n2m -RTS
   build-depends:
       HaskellNet
@@ -304,6 +305,7 @@ executable apitoolkit-server-exe
       RoleAnnotations
       NoImplicitPrelude
       DuplicateRecordFields
+      TupleSections
   ghc-options: -fwrite-ide-info -hiedir=.hie -O -Weverything -Werror -Wno-error=deprecations -Wno-error=unused-packages -Wno-missing-exported-signatures -Wno-missing-import-lists -Wno-missed-specialisations -Wno-all-missed-specialisations -Wno-unsafe -Wno-safe -Wno-missing-local-signatures -Wno-monomorphism-restriction -Wno-missing-safe-haskell-mode -Wno-orphans -Wno-unused-matches -Wno-missing-kind-signatures -Wno-type-defaults -j4 +RTS -A128m -n2m -RTS -threaded -rtsopts -with-rtsopts=-N -fwrite-ide-info -hiedir=.hie
   build-depends:
       apitoolkit-server
@@ -349,6 +351,7 @@ test-suite doctests
       RoleAnnotations
       NoImplicitPrelude
       DuplicateRecordFields
+      TupleSections
   ghc-options: -fwrite-ide-info -hiedir=.hie -O -Weverything -Werror -Wno-error=deprecations -Wno-error=unused-packages -Wno-missing-exported-signatures -Wno-missing-import-lists -Wno-missed-specialisations -Wno-all-missed-specialisations -Wno-unsafe -Wno-safe -Wno-missing-local-signatures -Wno-monomorphism-restriction -Wno-missing-safe-haskell-mode -Wno-orphans -Wno-unused-matches -Wno-missing-kind-signatures -Wno-type-defaults -j4 +RTS -A128m -n2m -RTS -threaded -rtsopts -with-rtsopts=-N -fwrite-ide-info -hiedir=.hie
   build-depends:
       apitoolkit-server
@@ -395,6 +398,7 @@ test-suite tests
       RoleAnnotations
       NoImplicitPrelude
       DuplicateRecordFields
+      TupleSections
   ghc-options: -fwrite-ide-info -hiedir=.hie -O -Weverything -Werror -Wno-error=deprecations -Wno-error=unused-packages -Wno-missing-exported-signatures -Wno-missing-import-lists -Wno-missed-specialisations -Wno-all-missed-specialisations -Wno-unsafe -Wno-safe -Wno-missing-local-signatures -Wno-monomorphism-restriction -Wno-missing-safe-haskell-mode -Wno-orphans -Wno-unused-matches -Wno-missing-kind-signatures -Wno-type-defaults -j4 +RTS -A128m -n2m -RTS
   build-depends:
       apitoolkit-server

@@ -130,7 +130,7 @@ anomalyBulkActionsPostH pid action items = do
       _ <- dbtToEff $ execute Update [sql| update apis.anomalies set archived_at=NOW() where id=ANY(?::uuid[]) |] (Only $ Vector.fromList items.anomalyId)
       pass
     _ -> error $ "unhandled anomaly bulk action state " <> action
-  addSuccessToast (action <> "d anomalies Successfully") Nothing
+  addSuccessToast (action <> "d items Successfully") Nothing
   addRespHeaders ""
 
 
@@ -172,6 +172,10 @@ anomalyListGetH pid layoutM filterTM sortM pageM loadM endpointM hxRequestM hxBo
                       , ItemsList.TabFilterOpt{name = "Archived", count = Nothing}
                       ]
                   }
+          , bulkActions =
+              [ ItemsList.BulkAction{icon = Just "check", title = "acknowlege", uri = "/p/" <> pid.toText <> "/anomalies/bulk_actions/acknowlege"}
+              , ItemsList.BulkAction{icon = Just "inbox-full", title = "archive", uri = "/p/" <> pid.toText <> "/anomalies/bulk_actions/archive"}
+              ]
           , heading =
               Just
                 $ ItemsList.Heading
@@ -263,10 +267,10 @@ anomalyAccentColor False False = "bg-red-800"
 issueItem :: Bool -> UTCTime -> Anomalies.IssueL -> Text -> Text -> Maybe (Html ()) -> Maybe (Html ()) -> Html ()
 issueItem hideByDefault currTime issue icon title subTitle content = do
   let issueId = Anomalies.anomalyIdText issue.id
-  div_ [class_ $ "flex py-4 gap-8 " <> if hideByDefault then "card-round bg-white px-5" else "", style_ (if hideByDefault then "display:none" else ""), id_ issueId] do
-    div_ [class_ $ "h-4 flex self-start space-x-3 w-8 " <> if hideByDefault then "hidden" else ""] do
+  div_ [class_ $ "flex py-4 gap-8 items-center " <> if hideByDefault then "card-round bg-white px-5" else "", style_ (if hideByDefault then "display:none" else ""), id_ issueId] do
+    div_ [class_ $ "h-4 flex space-x-3 w-8 items-center justify-center " <> if hideByDefault then "hidden" else ""] do
       a_ [class_ $ anomalyAccentColor (isJust issue.acknowlegedAt) (isJust issue.archivedAt) <> " w-2 h-full"] ""
-      input_ [term "aria-label" "Select Issue", class_ "bulkactionItemCheckbox", type_ "checkbox", name_ "issueId", value_ issueId]
+      input_ [term "aria-label" "Select Issue", class_ "bulkactionItemCheckbox  checkbox checkbox-md checked:checkbox-primary", type_ "checkbox", name_ "issueId", value_ issueId]
     div_ [class_ "space-y-3 grow"] do
       div_ [class_ "space-x-3"] do
         a_ [href_ $ "/p/" <> issue.projectId.toText <> "/anomalies/by_hash/" <> issue.targetHash, class_ "inline-block font-bold text-blue-700 space-x-2", termRaw "preload" "mouseover"] do
@@ -330,10 +334,9 @@ anomalyDetailsGetH pid targetHash hxBoostedM = do
           let shapesWithFieldsMap = Vector.map (`getShapeFields` fields) shapes
           case hxBoostedM of
             Just _ -> addRespHeaders $ anomalyDetailsPage issue (Just shapesWithFieldsMap) Nothing Nothing currTime True
-            Nothing -> do
-              addRespHeaders $ bodyWrapper bwconf $ div_ [class_ "w-full px-32 overflow-y-scroll h-full"] do
-                h1_ [class_ "my-10 py-2 border-b w-full text-lg font-semibold"] "Anomaly Details"
-                anomalyDetailsPage issue (Just shapesWithFieldsMap) Nothing Nothing currTime False
+            Nothing -> addRespHeaders $ bodyWrapper bwconf $ div_ [class_ "w-full px-32 overflow-y-scroll h-full"] do
+              h1_ [class_ "my-10 py-2 border-b w-full text-lg font-semibold"] "Anomaly Details"
+              anomalyDetailsPage issue (Just shapesWithFieldsMap) Nothing Nothing currTime False
         Anomalies.IDNewShapeIssue issueD -> do
           newF <- dbtToEff $ Fields.selectFieldsByHashes pid issueD.newUniqueFields
           updF <- dbtToEff $ Fields.selectFieldsByHashes pid (T.take 16 <$> issueD.updatedFieldFormats)

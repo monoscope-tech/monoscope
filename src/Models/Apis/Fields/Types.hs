@@ -1,6 +1,3 @@
-{-# LANGUAGE GeneralizedNewtypeDeriving #-}
-{-# LANGUAGE TupleSections #-}
-
 module Models.Apis.Fields.Types (
   Field (..),
   FieldTypes (..),

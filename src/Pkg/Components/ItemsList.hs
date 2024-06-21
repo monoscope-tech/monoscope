@@ -2,6 +2,7 @@ module Pkg.Components.ItemsList (
   itemsList_,
   itemsPage_,
   itemRows_,
+  BulkAction (..),
   ZeroState (..),
   Heading (..),
   ItemsListCfg (..),
@@ -19,7 +20,7 @@ import Lucid.Htmx
 import Lucid.Hyperscript (__)
 import Models.Projects.Projects qualified as Projects
 import Relude
-import Utils (deleteParam, escapedQueryPartial, faSprite_, mIcon_)
+import Utils (deleteParam, escapedQueryPartial, faSprite_)
 
 
 data ItemsListCfg = ItemsListCfg
@@ -32,6 +33,14 @@ data ItemsListCfg = ItemsListCfg
   , zeroState :: Maybe ZeroState
   , tabsFilter :: Maybe TabFilter
   , heading :: Maybe Heading
+  , bulkActions :: [BulkAction]
+  }
+
+
+data BulkAction = BulkAction
+  { icon :: Maybe Text
+  , title :: Text
+  , uri :: Text
   }
 
 
@@ -69,7 +78,7 @@ data ZeroState = ZeroState
 
 
 itemsPage_ :: ItemsListCfg -> V.Vector a -> (ItemsListCfg -> a -> Html ()) -> Html ()
-itemsPage_ listCfg items renderItem = div_ [class_ "w-full mx-auto px-16 pt-10 pb-24 overflow-y-scroll h-full space-y-6"] $ do
+itemsPage_ listCfg items renderItem = div_ [class_ "w-full mx-auto px-16 pt-10 pb-24 overflow-y-scroll h-full space-y-6", id_ "itemsListPage"] $ do
   whenJust listCfg.heading \heading -> do
     div_ [class_ "flex justify-between"] do
       h3_ [class_ "text-xl text-slate-700 flex gap-1 place-items-center"] $ heading.pageTitle
@@ -90,9 +99,8 @@ itemsPage_ listCfg items renderItem = div_ [class_ "w-full mx-auto px-16 pt-10 p
 
 
 itemsList_ :: ItemsListCfg -> V.Vector a -> (ItemsListCfg -> a -> Html ()) -> Html ()
-itemsList_ listCfg items renderItem = div_ [class_ "grid grid-cols-5 card-round", id_ "anomalyListBelowTab", hxGet_ listCfg.currentURL, hxSwap_ "outerHTML", hxTrigger_ "refreshMain"] do
+itemsList_ listCfg items renderItem = div_ [class_ "grid grid-cols-5 card-round group/grid", id_ "anomalyListBelowTab", hxGet_ listCfg.currentURL, hxSwap_ "outerHTML", hxTrigger_ "refreshMain"] do
   form_ [class_ "col-span-5 bg-white divide-y ", id_ listCfg.elemID] do
-    let bulkActionBase = "/p/" <> listCfg.projectId.toText <> "/anomalies/bulk_actions"
     let currentURL' = deleteParam "sort" listCfg.currentURL
     let sortMenu =
           [ ("First Seen", "First time the issue occured", "first_seen")
@@ -103,23 +111,24 @@ itemsList_ listCfg items renderItem = div_ [class_ "grid grid-cols-5 card-round"
     div_
       [class_ "flex py-3 gap-8 items-center  bg-gray-50"]
       do
-        div_ [class_ "h-4 flex space-x-3 w-8"] do
-          a_ [class_ " w-2 h-full"] ""
-            >> input_
-              [ term "aria-label" "Select Issue"
-              , type_ "checkbox"
-              , [__| on click set .bulkactionItemCheckbox.checked to my.checked |]
-              ]
-        div_ [class_ " grow flex flex-row gap-2"] do
-          button_ [class_ "btn btn-sm btn-outline border-black hover:shadow-2xl", hxPost_ $ bulkActionBase <> "/acknowlege", hxSwap_ "none"] "✓ acknowlege"
-          button_ [class_ "btn btn-sm btn-outline space-x-1 border-black hover:shadow-2xl", hxPost_ $ bulkActionBase <> "/archive", hxSwap_ "none"] do
-            faSprite_ "inbox-full" "solid" "h-4 w-4 inline-block"
-            span_ "archive"
+        div_ [class_ "h-4 flex space-x-3 w-8 items-center"] do
+          span_ [class_ " w-2 h-full"] ""
+          input_
+            [ term "aria-label" "Select Issue"
+            , type_ "checkbox"
+            , class_ "checkbox  checkbox-md checked:checkbox-primary"
+            , [__| on click set .bulkactionItemCheckbox.checked to my.checked |]
+            ]
+        div_ [class_ " grow flex flex-row gap-2"] $ forM_ listCfg.bulkActions \blkA ->
+          button_ [class_ "btn btn-sm  border-black hover:shadow-2xl btn-disabled group-has-[.bulkactionItemCheckbox:checked]/grid:!btn-outline group-has-[.bulkactionItemCheckbox:checked]/grid:!pointer-events-auto  ", hxPost_ blkA.uri, hxSwap_ "none"] do
+            whenJust blkA.icon \icon -> faSprite_ icon "solid" "h-4 w-4 inline-block"
+            span_ (toHtml blkA.title)
+
         whenJust listCfg.sort \sortCfg -> do
           let currentSortTitle = maybe "First Seen" fst3 $ find (\(_, _, identifier) -> identifier == sortCfg.current) sortMenu
           div_ [class_ "relative inline-block"] do
-            a_ [class_ "btn btn-sm btn-outline border-black hover:shadow-2xl space-x-2", [__|on click toggle .hidden on #sortMenuDiv |]] do
-              mIcon_ "sort" "h-4 w-4"
+            a_ [class_ "btn btn-sm btn-outline border-black hover:shadow-2xl", [__|on click toggle .hidden on #sortMenuDiv |]] do
+              faSprite_ "sort" "solid" "h-4 w-4"
               span_ $ toHtml currentSortTitle
             div_ [id_ "sortMenuDiv", hxBoost_ "true", class_ "p-1 hidden text-sm border border-black-30 absolute right-0 z-10 mt-2 w-72 origin-top-right rounded-md bg-white shadow-lg ring-1 ring-black ring-opacity-5 focus:outline-none", tabindex_ "-1"] do
               sortMenu & mapM_ \(title, desc, identifier) -> do
@@ -131,7 +140,7 @@ itemsList_ listCfg items renderItem = div_ [class_ "grid grid-cols-5 card-round"
                   ]
                   do
                     div_ [class_ "flex flex-col items-center justify-center px-3"] do
-                      if isActive then mIcon_ "checkmark4" "w-4 h-5" else mIcon_ "" "w-4 h-5"
+                      if isActive then faSprite_ "icon-checkmark4" "solid" "w-4 h-5" else div_ [class_ "w-4 h-5"] ""
                     div_ [class_ "grow space-y-1"] do
                       span_ [class_ "block text-lg"] $ toHtml title
                       span_ [class_ "block "] $ toHtml desc

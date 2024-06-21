@@ -1,5 +1,3 @@
-{-# LANGUAGE DuplicateRecordFields #-}
-
 module Models.Projects.ProjectsEmail (
   sendEmail,
 ) where

@@ -14,7 +14,7 @@ import Pages.BodyWrapper (BWConfig (currProject, pageTitle, sessM), bodyWrapper)
 import Pkg.Components.ItemsList qualified as ItemsList
 import PyF qualified
 import Relude hiding (ask, asks)
-import System.Types
+import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
 
 
 outgoingGetH :: Projects.ProjectId -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))
@@ -29,6 +29,10 @@ outgoingGetH pid sortM = do
           , sort = Just $ ItemsList.SortCfg{current = sortV}
           , currentURL = "/p/" <> pid.toText <> "/outgoing?sort=" <> sortV
           , currTime
+          , bulkActions =
+              [ ItemsList.BulkAction{icon = Just "check", title = "acknowlege", uri = "/p/" <> pid.toText <> "/anomalies/bulk_actions/acknowlege"}
+              , ItemsList.BulkAction{icon = Just "inbox-full", title = "archive", uri = "/p/" <> pid.toText <> "/anomalies/bulk_actions/archive"}
+              ]
           , heading =
               Just
                 $ ItemsList.Heading
@@ -62,7 +66,7 @@ renderOutgoing :: Projects.ProjectId -> Endpoints.HostEvents -> Html ()
 renderOutgoing pid host = div_ [class_ "flex py-4 gap-8 items-center "] do
   div_ [class_ "h-4 flex space-x-3 w-8 "] do
     a_ [class_ "w-2 h-full"] ""
-    input_ [term "aria-label" "Select Issue", class_ "endpoint_anomaly_input bulkactionItemCheckbox", type_ "checkbox", name_ "hostId", value_ host.host]
+    input_ [term "aria-label" "Select Issue", class_ "endpoint_anomaly_input bulkactionItemCheckbox checkbox checkbox-md checked:checkbox-primary", type_ "checkbox", name_ "hostId", value_ host.host]
 
   div_ [class_ "space-y-3 grow"] do
     div_ [class_ "space-x-3"] do

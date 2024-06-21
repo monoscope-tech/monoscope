@@ -1,5 +1,3 @@
-{-# LANGUAGE GeneralizedNewtypeDeriving #-}
-
 module Models.Apis.Shapes (
   Shape (..),
   ShapeWithFields (..),

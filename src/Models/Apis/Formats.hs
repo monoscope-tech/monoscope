@@ -1,5 +1,3 @@
-{-# LANGUAGE GeneralizedNewtypeDeriving #-}
-
 module Models.Apis.Formats (
   Format (..),
   FormatId (..),

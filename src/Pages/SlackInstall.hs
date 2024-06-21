@@ -184,8 +184,7 @@ slackPage projects token = do
                             small_ do
                               span_ "Created on "
                               time_ [datetime_ $ fmt $ dateDashF project.createdAt] $ toHtml @Text $ fmt $ dateDashF project.createdAt
-                    div_ [class_ "ml-5 flex-shrink-0 text-gray-400"] do
-                      input_ [type_ "checkbox", id_ project.id.toText, name_ "projects", value_ project.id.toText]
+                    div_ [class_ "ml-5 flex-shrink-0"] $ input_ [type_ "checkbox", class_ "checkbox", id_ project.id.toText, name_ "projects", value_ project.id.toText]
             button_ [class_ "mx-2 mb-2 mt-6 btn btn-primary"] "Link Projects"
 
 
