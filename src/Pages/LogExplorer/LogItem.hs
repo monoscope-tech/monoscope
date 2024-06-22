@@ -46,7 +46,7 @@ expandAPIlogItem' pid req modal = do
         div_ [class_ $ "font-semibold px-2 py-1 rounded min-w-[70px] text-center h-full " <> methodColor] $ toHtml req.method
         div_ [class_ $ "text-lg font-bold px-2 " <> statusColor] $ show req.statusCode
         div_ [class_ "flex border border-gray-200 m-1 rounded-xl p-2"] do
-          mIcon_ "calender" "h-4 mr-2 w-4"
+          faSprite_ "regular-calendar-days-clock" "regular" "h-4 mr-2 w-4"
           span_ [class_ "text-xs"] $ toHtml $ formatTime defaultTimeLocale "%b %d, %Y %R" req.createdAt
       when modal do
         div_
@@ -93,7 +93,7 @@ expandAPIlogItem' pid req modal = do
       div_ [class_ "flex gap-2 mt-4"] do
         div_ [class_ "flex flex-col gap-1 px-4 min-w-[120px] py-3 border border-dashed border-gray-400 m-1 rounded"] do
           div_ [class_ "flex gap-1 items-center"] do
-            mIcon_ "clock" "h-4 w-4 text-slate-400"
+            faSprite_ "clock" "regular" "h-4 w-4 text-slate-400"
             span_ [class_ "text-md font-bold"] $ show (req.durationNs `div` 1000) <> " ms"
           p_ [class_ "text-slate-500"] "Latency"
         div_ [class_ "flex flex-col gap-1 px-4 min-w-[120px] py-3 border border-dashed border-gray-400 m-1 rounded"] do

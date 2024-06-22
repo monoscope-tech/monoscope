@@ -170,7 +170,7 @@ logQueryBox_ pid currentRange =
                 , [__| on click toggle .hidden on #timepickerBox|]
                 ]
                 do
-                  mIcon_ "clock" "h-4 w-4"
+                  faSprite_ "clock" "regular" "h-4 w-4"
                   span_ [class_ "inline-block", id_ "currentRange"] $ toHtml (fromMaybe "Last 14 Days" currentRange)
                   faSprite_ "chevron-down" "regular" "h-3 w-3 inline-block"
               div_ [id_ "timepickerBox", class_ "hidden absolute z-10 mt-1  rounded-md flex"] do

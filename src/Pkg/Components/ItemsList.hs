@@ -105,7 +105,7 @@ itemsPage_ listCfg items renderItem = div_ [class_ "w-full mx-auto px-16 pt-10 p
 
 
 itemsList_ :: ItemsListCfg -> V.Vector a -> (ItemsListCfg -> a -> Html ()) -> Html ()
-itemsList_ listCfg items renderItem = div_ [class_ "grid grid-cols-5 card-round group/grid", id_ "anomalyListBelowTab", hxGet_ listCfg.currentURL, hxSwap_ "outerHTML", hxTrigger_ "refreshMain"] do
+itemsList_ listCfg items renderItem = div_ [class_ "grid grid-cols-5 card-round overflow-hidden group/grid", id_ "anomalyListBelowTab", hxGet_ listCfg.currentURL, hxSwap_ "outerHTML", hxTrigger_ "refreshMain"] do
   form_ [class_ "col-span-5 bg-white divide-y ", id_ listCfg.elemID] do
     let currentURL' = deleteParam "sort" listCfg.currentURL
     let sortMenu =
@@ -142,11 +142,11 @@ itemsList_ listCfg items renderItem = div_ [class_ "grid grid-cols-5 card-round 
 
         whenJust listCfg.sort \sortCfg -> do
           let currentSortTitle = maybe "First Seen" fst3 $ find (\(_, _, identifier) -> identifier == sortCfg.current) sortMenu
-          div_ [class_ "relative inline-block"] do
-            a_ [class_ "btn btn-sm btn-outline border-black hover:shadow-2xl", [__|on click toggle .hidden on #sortMenuDiv |]] do
+          div_ [class_ "dropdown dropdown-end inline-block"] do
+            a_ [class_ "btn btn-sm btn-outline border-black hover:shadow-2xl", tabindex_ "0"] do
               faSprite_ "sort" "solid" "h-4 w-4"
               span_ $ toHtml currentSortTitle
-            div_ [id_ "sortMenuDiv", hxBoost_ "true", class_ "p-1 hidden text-sm border border-black-30 absolute right-0 z-10 mt-2 w-72 origin-top-right rounded-md bg-white shadow-lg ring-1 ring-black ring-opacity-5 focus:outline-none", tabindex_ "-1"] do
+            div_ [id_ "sortMenuDiv", hxBoost_ "true", class_ "dropdown-content bg-base-100 p-1 text-sm border border-black-30 z-50 mt-2 w-72 origin-top-right rounded-md shadow-lg ", tabindex_ "0"] do
               sortMenu & mapM_ \(title, desc, identifier) -> do
                 let isActive = sortCfg.current == identifier || (sortCfg.current == "" && identifier == "first_seen")
                 a_

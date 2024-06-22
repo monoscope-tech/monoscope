@@ -1,0 +1,43 @@
+<html>
+
+  <body>
+    Regular:
+    <div id="regular"></div>
+
+    Solid:
+    <div id="solid"></div>
+
+    <script>
+
+function renderSprite(url, id){
+// Fetch the remote SVG sprite file
+fetch(url)
+  .then(response => response.text())
+  .then(svgText => {
+    // Create a temporary DOM element to hold the SVG content
+    const tempDiv = document.createElement('div');
+    tempDiv.innerHTML = svgText;
+
+    // Get all symbols from the loaded SVG
+    const symbols = tempDiv.querySelectorAll('symbol');
+
+    symbols.forEach(symbol => {
+      // Insert each symbol into the body
+      document.getElementById(id).insertAdjacentHTML('beforeend', `
+        <svg width="50" height="50">
+          <title>#${symbol.id}</title>
+          <use xlink:href="${url}#${symbol.id}" />
+        </svg>
+      `);
+    });
+  })
+  .catch(error => {
+    console.error('Error loading SVG sprite:', error);
+  });
+}
+renderSprite('/assets/svgs/fa-sprites/regular.svg', "regular")
+renderSprite('/assets/svgs/fa-sprites/solid.svg', "solid")
+
+    </script>
+  </body>
+</html>

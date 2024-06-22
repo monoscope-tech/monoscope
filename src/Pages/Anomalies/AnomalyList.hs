@@ -62,7 +62,7 @@ import Relude.Unsafe qualified as Unsafe
 import System.Config (AuthContext (pool))
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders, addSuccessToast)
 import Text.Time.Pretty (prettyTimeAuto)
-import Utils (escapedQueryPartial, faSprite_, getMethodColor, mIcon_)
+import Utils (escapedQueryPartial, faSprite_, getMethodColor)
 import Web.FormUrlEncoded (FromForm)
 
 
@@ -296,7 +296,7 @@ issueItem hideByDefault currTime issue icon title subTitle content = do
             anomalyArchiveButton issue.projectId issue.id (isJust issue.archivedAt)
             anomalyAcknowlegeButton issue.projectId issue.id (isJust issue.acknowlegedAt)
             let modalEndpoint = "/p/" <> issue.projectId.toText <> "/anomalies/by_hash/" <> issue.targetHash <> "?modal=True"
-            Components.drawerWithURLContent_ ("expand-log-drawer-" <> issue.targetHash) modalEndpoint $ span_ [class_ "inline-block cursor-pointer py-2 px-3 rounded border border-gray-200 text-xs hover:shadow shadow-blue-100"] (mIcon_ "enlarge" "w-3 h-3")
+            Components.drawerWithURLContent_ ("expand-log-drawer-" <> issue.targetHash) modalEndpoint $ span_ [class_ "flex items-center justify-center cursor-pointer py-2 px-3 rounded border border-gray-200 text-xs hover:shadow shadow-blue-100"] (faSprite_ "expand" "regular" "w-3 h-3")
         fromMaybe (toHtml @String "") content
     let issueQueryPartial = buildQueryForAnomaly issue.anomalyType issue.targetHash
     div_ [class_ "flex items-center justify-center "]
@@ -419,7 +419,7 @@ anomalyDetailsPage issue shapesWithFieldsMap fields prvFormatsM currTime modal =
             div_ [class_ "flex flex-col gap-2"] do
               h4_ [class_ "font-semibold"] "First seen"
               span_ [class_ "inline-block space-x-1"] do
-                mIcon_ "clock" "w-3 h-3"
+                faSprite_ "clock" "regular" "w-3 h-3"
                 span_
                   [ class_ "decoration-black underline ml-1"
                   , term "data-tippy-content" $ "first seen: " <> show issue.createdAt
@@ -443,7 +443,7 @@ anomalyDetailsPage issue shapesWithFieldsMap fields prvFormatsM currTime modal =
       if modal
         then do
           a_ [href_ $ "/p/" <> issue.projectId.toText <> "/anomalies/by_hash/" <> issue.targetHash, term "data-tippy-content" "Go to page", class_ "btn btn-sm btn-outline "] do
-            "Expand Page" >> mIcon_ "enlarge" "w-3 h-3"
+            "Expand Page" >> faSprite_ "expand" "regular" "w-3 h-3"
         else do
           anomalyArchiveButton issue.projectId issue.id (isJust issue.archivedAt)
           anomalyAcknowlegeButton issue.projectId issue.id (isJust issue.acknowlegedAt)

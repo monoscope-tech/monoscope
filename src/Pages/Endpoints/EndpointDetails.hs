@@ -179,12 +179,12 @@ fieldDetailsView field formats = do
       div_ [class_ " "] do
         h4_ [class_ "text-sm text-slate-800 mb-2"] "CREATION DATE"
         div_ [class_ "flex border border-gray-200 m-1 rounded-xl p-2"] do
-          mIcon_ "calender" "h-4 mr-2 w-4"
+          faSprite_ "regular-calendar-days-clock" "regular" "h-4 mr-2 w-4"
           span_ [class_ "text-xs"] $ toHtml $ formatTime defaultTimeLocale "%b %d, %Y %R" field.createdAt
       div_ [class_ " "] do
         h4_ [class_ "text-sm text-slate-800 mb-2"] "LAST CHANGE"
         div_ [class_ "flex border border-gray-200 m-1 justify-between rounded-xl p-2"] do
-          mIcon_ "calender" "h-4 mr-2 w-4"
+          faSprite_ "regular-calendar-days-clock" "regular" "h-4 mr-2 w-4"
           span_ [class_ "text-xs"] $ toHtml $ formatTime defaultTimeLocale "%b %d, %Y %R" field.updatedAt
     h6_ [class_ "mt-5 text-sm text-slate-800 mb-2"] "DESCRIPTION"
     p_ [class_ "text-slate-800 text-sm"] $ toHtml field.description
@@ -481,7 +481,7 @@ apiOverviewSubPage pid paramInput currTime endpoint fieldsM reqLatenciesRolledBy
       , [__| on click toggle .hidden on #timepickerBox|]
       ]
       do
-        mIcon_ "clock" "h-4 w-4"
+        faSprite_ "clock" "regular" "h-4 w-4"
         span_ [class_ "inline-block"] $ toHtml paramInput.currentPickerTxt
         faSprite_ "chevron-down" "light" "h-4 w-4 inline-block"
     div_ [id_ "timepickerBox", class_ "hidden absolute z-10 mt-1  rounded-md flex"] do

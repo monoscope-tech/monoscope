@@ -336,8 +336,6 @@ navbar currUser = do
       do
         faSprite_ "bars-sort" "regular" "w-5 h-5 text-gray-500"
     div_ [class_ "inline-block flex items-center"] do
-      a_ [class_ "inline-block p-2 px-3 align-middle"] $ faSprite_ "magnifying-glass" "regular" "w-5 h-5 text-gray-500"
-      a_ [class_ "inline-block border-r-2 p-2 pr-5"] $ faSprite_ "bell" "regular" "w-5 h-5 text-gray-500"
       div_ [class_ "dropdown dropdown-end"] do
         div_ [tabindex_ "0", role_ "button", class_ "cursor-pointer pl-4 space-x-2 flex items-center"] do
           img_ [class_ "inline-block w-9 h-9 rounded-lg bg-gray-300", src_ currUser.displayImageUrl]
