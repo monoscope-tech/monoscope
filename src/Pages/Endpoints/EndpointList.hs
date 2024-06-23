@@ -1,11 +1,11 @@
-module Pages.Endpoints.EndpointList (endpointListGetH, renderEndpoint) where
+module Pages.Endpoints.EndpointList (endpointListGetH,renderEndpoint, EndpointRequestStatsVM(..)) where
 
 import Data.Default (def)
 import Data.Text (toLower)
 import Data.Text qualified as T
 import Data.Time (UTCTime)
 import Data.UUID qualified as UUID
-import Data.Vector (Vector)
+import Data.Vector qualified as V
 import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
 import Effectful.Time qualified as Time
 import Fmt (commaizeF, fmt)
@@ -16,7 +16,7 @@ import Models.Apis.Endpoints qualified as Endpoints
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
 import Pages.Anomalies.AnomalyList qualified as AnomalyList
-import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
+import Pages.BodyWrapper (BWConfig (..), PageCtx(..))
 import Pkg.Components.ItemsList qualified as ItemsList
 import PyF qualified
 import Relude hiding (ask, asks)
@@ -24,7 +24,8 @@ import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
 import Utils (deleteParam)
 
 
-endpointListGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))
+endpointListGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text 
+                 -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders (PageCtx (ItemsList.ItemsPage EndpointRequestStatsVM)))
 endpointListGetH pid layoutM filterTM hostM projectHostM' sortM hxRequestM hxBoostedM hxCurrentURL = do
   (sess, project) <- Sessions.sessionAndProject pid
   let (ackd, archived, currentFilterTab) = case filterTM of
@@ -88,10 +89,19 @@ endpointListGetH pid layoutM filterTM hostM projectHostM' sortM hxRequestM hxBoo
           , elemID = "anomalyListForm"
           , ..
           }
-  addRespHeaders $ bodyWrapper bwconf $ ItemsList.itemsPage_ listCfg endpointStats \_ -> (renderEndpoint (ackd && not archived) listCfg.currTime)
+  addRespHeaders $ PageCtx bwconf (ItemsList.ItemsPage listCfg $ V.map (EndpointRequestStatsVM (ackd && not archived) currTime) endpointStats) 
 
 
-hostFilter_ :: Text -> Vector Endpoints.Host -> Maybe Text -> Maybe Text -> Html ()
+data EndpointRequestStatsVM = EndpointRequestStatsVM Bool UTCTime Endpoints.EndpointRequestStats
+
+instance ToHtml EndpointRequestStatsVM where 
+  toHtml (EndpointRequestStatsVM activePage currTime enpStat) = toHtmlRaw $ renderEndpoint activePage currTime enpStat
+  toHtmlRaw = toHtml
+
+
+
+
+hostFilter_ :: Text -> V.Vector Endpoints.Host -> Maybe Text -> Maybe Text -> Html ()
 hostFilter_ currentURL hosts hostM pHostM = when (isNothing hostM) $ div_ [class_ "mt-8 flex  items-center gap-2"] do
   span_ [class_ "font-bold"] "Host "
   div_ [class_ "dropdown"] do

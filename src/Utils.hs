@@ -13,7 +13,6 @@ module Utils (
   lookupVecText,
   lookupVecIntByKey,
   lookupVecTextByKey,
-  mIcon_,
   faIcon_,
   deleteParam,
   quoteTxt,
@@ -85,10 +84,6 @@ instance Show DBField where
 
 instance ToField DBField where
   toField (MkDBField a) = toField a
-
-
-mIcon_ :: Text -> Text -> Html ()
-mIcon_ mIcon classes = svg_ [class_ $ "inline-block icon " <> classes] $ Svg.use_ [href_ $ "/assets/svgs/symbol-defs.svg#icon-" <> mIcon]
 
 
 faSprite_ :: Text -> Text -> Text -> Html ()

@@ -23,7 +23,7 @@ import Pages.Components qualified as Components
 import PyF (fmt)
 import Relude
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
-import Utils (faSprite_, getMethodColor, getStatusColor, mIcon_, unwrapJsonPrimValue)
+import Utils (faSprite_, getMethodColor, getStatusColor, unwrapJsonPrimValue)
 
 
 expandAPIlogItemH :: Projects.ProjectId -> UUID.UUID -> UTCTime -> ATAuthCtx (RespHeaders (Html ()))
@@ -98,19 +98,19 @@ expandAPIlogItem' pid req modal = do
           p_ [class_ "text-slate-500"] "Latency"
         div_ [class_ "flex flex-col gap-1 px-4 min-w-[120px] py-3 border border-dashed border-gray-400 m-1 rounded"] do
           div_ [class_ "flex gap-1 items-center"] do
-            mIcon_ "upload" "h-4 w-4 text-slate-400"
+            faSprite_ "upload" "solid" "h-4 w-4 text-slate-400"
             let reqSize = BS.length $ AE.encode req.requestBody
             span_ [class_ "text-md font-bold"] $ show (reqSize - 2) <> " bytes"
           p_ [class_ "text-slate-500"] "Request size"
         div_ [class_ "flex flex-col gap-1 px-4 min-w-[120px] py-3 border border-dashed border-gray-400 m-1 rounded"] do
           div_ [class_ "flex gap-1 items-center"] do
-            mIcon_ "download4" "h-4 w-4 text-slate-400"
+            faSprite_ "download" "solid" "h-4 w-4 text-slate-400"
             let respSize = BS.length $ AE.encode req.responseBody
             span_ [class_ "text-md font-bold"] $ show (respSize - 2) <> " bytes"
           p_ [class_ "text-slate-500"] "Response size"
         div_ [class_ "flex flex-col gap-1 px-4 min-w-[120px] py-3 border border-dashed border-gray-400 m-1 rounded"] do
           div_ [class_ "flex gap-1 items-center"] do
-            mIcon_ "projects" "h-5 w-5 text-slate-400"
+            faSprite_ "layer-group" "solid" "h-5 w-5 text-slate-400"
             span_ [class_ "text-md font-bold"] $ show req.sdkType
           p_ [class_ "text-slate-500"] "Framework"
     -- errors

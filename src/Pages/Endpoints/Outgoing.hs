@@ -1,4 +1,4 @@
-module Pages.Endpoints.Outgoing (outgoingGetH) where
+module Pages.Endpoints.Outgoing (outgoingGetH, HostEventsVM) where
 
 import Data.Default (def)
 import Data.Text qualified as T
@@ -10,14 +10,15 @@ import Models.Apis.Endpoints qualified as Endpoints
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
 import Pages.Anomalies.AnomalyList qualified as AnomalyList
-import Pages.BodyWrapper (BWConfig (currProject, pageTitle, sessM), bodyWrapper)
+import Pages.BodyWrapper (BWConfig (currProject, pageTitle, sessM), PageCtx(..))
 import Pkg.Components.ItemsList qualified as ItemsList
 import PyF qualified
+import Data.Vector qualified as V
 import Relude hiding (ask, asks)
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
 
 
-outgoingGetH :: Projects.ProjectId -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))
+outgoingGetH :: Projects.ProjectId -> Maybe Text -> ATAuthCtx (RespHeaders (PageCtx (ItemsList.ItemsPage HostEventsVM)))
 outgoingGetH pid sortM = do
   (sess, project) <- Sessions.sessionAndProject pid
   hostsAndEvents <- dbtToEff $ Endpoints.dependenciesAndEventsCount pid (fromMaybe "events" sortM)
@@ -60,8 +61,13 @@ outgoingGetH pid sortM = do
           , currProject = Just project
           , pageTitle = "Outgoing Integrations"
           }
-  addRespHeaders $ bodyWrapper bwconf $ ItemsList.itemsPage_ listCfg hostsAndEvents \_ -> renderOutgoing pid
+  addRespHeaders $ PageCtx bwconf (ItemsList.ItemsPage listCfg $ V.map (HostEventsVM pid) hostsAndEvents)
 
+data HostEventsVM = HostEventsVM Projects.ProjectId Endpoints.HostEvents
+
+instance ToHtml HostEventsVM where 
+  toHtml (HostEventsVM pid he) = toHtmlRaw $ renderOutgoing pid he
+  toHtmlRaw = toHtml
 
 renderOutgoing :: Projects.ProjectId -> Endpoints.HostEvents -> Html ()
 renderOutgoing pid host = div_ [class_ "flex py-4 gap-8 items-center itemsListItem"] do

@@ -42,7 +42,7 @@ import Relude hiding (ask, asks, max, min)
 import Relude.Unsafe qualified as Unsafe
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders, redirectCS)
 import Text.Interpolation.Nyan (int, rmode')
-import Utils (deleteParam, faSprite_, getStatusColor, mIcon_)
+import Utils (deleteParam, faSprite_, getStatusColor)
 import Witch (from)
 
 
@@ -292,15 +292,6 @@ endpointDetails pid paramInput currTime endpoint endpointStats shapesWithFieldsM
                 ]
                 $ toHtml title
 
-        div_ [class_ "flex flex-row hidden"] do
-          a_ [href_ ""] do
-            button_ [class_ "bg-white rounded-lg h-10 mt-1 "] do
-              faSprite_ "line-height" "regular" "h-6 w-6 m-2"
-          a_ [href_ ""] do
-            button_ [class_ "bg-blue-700 flex h-11 flex-row mx-2 px-3 rounded-xl py-2"] do
-              h3_ [class_ "text-white text-sm text-bold mx-2 mt-1"] "Download Swagger"
-              div_ [class_ "bg-blue-900 p-1 rounded-lg ml-2"] do
-                mIcon_ "whitedown" "text-white h-2 w-2 m-1"
       case paramInput.subPage of
         "api_docs" -> apiDocsSubPage shapesWithFieldsMap shapeHashM
         "shapes" -> shapesSubPage endpoint.projectId shapesList shapesWithFieldsMap paramInput.currentURL
