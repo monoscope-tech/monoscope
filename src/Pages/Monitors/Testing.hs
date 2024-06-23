@@ -107,7 +107,7 @@ testingGetH pid filterTM = do
                   , title = "No Multistep Test/Monitor yet."
                   , description = "You're can create one to start monitoring your services."
                   , actionText = "Create Monitor"
-                  , destination = "/p/" <> listCfg.projectId.toText <> "/integration_guides#outgoing-request-monitoring"
+                  , destination = Left "test-settings-modal" 
                   }
           , elemID = "anomalyListForm"
           }

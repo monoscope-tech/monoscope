@@ -81,7 +81,7 @@ data ZeroState = ZeroState
   , title :: Text
   , description :: Text
   , actionText :: Text
-  , destination :: Text
+  , destination :: Either Text Text -- Either LabelID URL
   }
 
 
@@ -192,7 +192,9 @@ itemsList_ listCfg items = div_ [class_ "grid grid-cols-5 card-round overflow-hi
       div_ [class_ "flex flex-col gap-2"] do
         h2_ [class_ "text-2xl font-bold"] $ toHtml zeroState.title
         p_ $ toHtml zeroState.description
-        a_ [href_ zeroState.destination, class_ "w-max btn btn-indigo -ml-1 text-md"] $ toHtml zeroState.actionText
+        case zeroState.destination of
+          Right destination -> a_ [href_ destination, class_ "w-max btn btn-indigo -ml-1 text-md"] $ toHtml zeroState.actionText
+          Left labelId -> label_ [Lucid.for_ labelId, class_ "w-max btn btn-indigo -ml-1 text-md"] $ toHtml zeroState.actionText   
     itemRows_ listCfg.nextFetchUrl items
 
 

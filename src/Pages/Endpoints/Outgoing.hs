@@ -51,7 +51,7 @@ outgoingGetH pid sortM = do
                   , title = "No Outgoing Requests Monitored."
                   , description = "You're currently not monitoring your outbound integrations."
                   , actionText = "See monitoring guide"
-                  , destination = "/p/" <> listCfg.projectId.toText <> "/integration_guides#outgoing-request-monitoring"
+                  , destination = Right $ "/p/" <> listCfg.projectId.toText <> "/integration_guides#outgoing-request-monitoring"
                   }
           , elemID = "anomalyListForm"
           }

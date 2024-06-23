@@ -84,7 +84,7 @@ endpointListGetH pid layoutM filterTM hostM projectHostM' sortM hxRequestM hxBoo
                   , title = "Waiting for events"
                   , description = "You're currently not sending any data to APItoolkit from your backends yet."
                   , actionText = "Read the setup guide"
-                  , destination = "/p/" <> listCfg.projectId.toText <> "/integration_guides"
+                  , destination = Right $ "/p/" <> listCfg.projectId.toText <> "/integration_guides"
                   }
           , elemID = "anomalyListForm"
           , ..

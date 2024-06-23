@@ -189,7 +189,7 @@ anomalyListGetH pid layoutM filterTM sortM pageM loadM endpointM hxRequestM hxBo
                   , title = "No Issues Or Errors."
                   , description = "Start monitoring errors that happened during a request."
                   , actionText = "Error reporting guide"
-                  , destination = "/p/" <> listCfg.projectId.toText <> "/integration_guides#errors-monitoring"
+                  , destination = Right $ "/p/" <> listCfg.projectId.toText <> "/integration_guides#errors-monitoring"
                   }
           , elemID = "anomalyListForm"
           , ..
