@@ -169,7 +169,7 @@ sqlFromQueryComponents sqlCfg qc =
             {whereClause}) {alertGroupByClause} 
       |]
    in
-    ( pTraceShow finalSqlQuery finalSqlQuery
+    ( finalSqlQuery
     , qc
         { finalColumns = listToColNames selectedCols
         , countQuery
