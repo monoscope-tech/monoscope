@@ -321,7 +321,7 @@ createProjectBody :: Sessions.PersistentSession -> EnvConfig -> Bool -> CreatePr
 createProjectBody sess envCfg isUpdate cp cpe = do
   let paymentPlan = if cp.paymentPlan == "" then "UsageBased" else cp.paymentPlan
   section_ [id_ "main-content", class_ "p-3 py-5 sm:p-6 overflow-y-scroll h-full"] do
-    div_ [class_ "mx-auto", style_ "max-width:1000px"] do
+    div_ [class_ "mx-auto", style_ "max-width:800px"] do
       h2_ [class_ "text-slate-700 text-3xl font-medium mb-5"] $ toHtml @String $ if isUpdate then "Project Settings" else "Create Project"
       div_ [class_ "grid gap-5"] do
         form_
@@ -369,7 +369,7 @@ createProjectBody sess envCfg isUpdate cp cpe = do
               p_ [class_ "text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70 mb-2"] do
                 "Please select a plan"
                 span_ [class_ "text-red-400"] " *"
-              div_ [class_ "grid sm:grid-cols-2 md:grid-cols-2 gap-24 border-1"] do
+              div_ [class_ "grid sm:grid-cols-2 md:grid-cols-2 gap-10 border-1"] do
                 ( [ ("Free", "20k", "$0", "2", cp.paymentPlan == "Free", "Free")
                   ]
                     :: [(Text, Text, Text, Text, Bool, Text)]
@@ -429,7 +429,7 @@ createProjectBody sess envCfg isUpdate cp cpe = do
                       span_ [class_ "text-slate-500 mr-3"] " requests"
                       p_ [class_ "text-blue-500 inline-block mt-0 text-sm text-green-500 font-semibold"] do
                         span_ [] "save "
-                        span_ [id_ "save_container"] ""
+                        span_ [id_ "save_container"] "$1/month"
                       span_ [class_ "text-blue-500 text-sm block mt-2"] "then $1 per 10k requests"
                     div_ [] do
                       input_ [type_ "range", min_ "0", max_ "6", step_ "1", value_ "0", class_ "range range-primary range-sm", id_ "price_range"]
