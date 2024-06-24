@@ -1,4 +1,4 @@
-module Pages.Endpoints.EndpointList (endpointListGetH,renderEndpoint, EndpointRequestStatsVM(..)) where
+module Pages.Endpoints.EndpointList (endpointListGetH, renderEndpoint, EndpointRequestStatsVM (..)) where
 
 import Data.Default (def)
 import Data.Text (toLower)
@@ -16,7 +16,7 @@ import Models.Apis.Endpoints qualified as Endpoints
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
 import Pages.Anomalies.AnomalyList qualified as AnomalyList
-import Pages.BodyWrapper (BWConfig (..), PageCtx(..))
+import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
 import Pkg.Components.ItemsList qualified as ItemsList
 import PyF qualified
 import Relude hiding (ask, asks)
@@ -24,8 +24,17 @@ import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
 import Utils (deleteParam)
 
 
-endpointListGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text 
-                 -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders (PageCtx (ItemsList.ItemsPage EndpointRequestStatsVM)))
+endpointListGetH
+  :: Projects.ProjectId
+  -> Maybe Text
+  -> Maybe Text
+  -> Maybe Text
+  -> Maybe Text
+  -> Maybe Text
+  -> Maybe Text
+  -> Maybe Text
+  -> Maybe Text
+  -> ATAuthCtx (RespHeaders (PageCtx (ItemsList.ItemsPage EndpointRequestStatsVM)))
 endpointListGetH pid layoutM filterTM hostM projectHostM' sortM hxRequestM hxBoostedM hxCurrentURL = do
   (sess, project) <- Sessions.sessionAndProject pid
   let (ackd, archived, currentFilterTab) = case filterTM of
@@ -89,16 +98,15 @@ endpointListGetH pid layoutM filterTM hostM projectHostM' sortM hxRequestM hxBoo
           , elemID = "anomalyListForm"
           , ..
           }
-  addRespHeaders $ PageCtx bwconf (ItemsList.ItemsPage listCfg $ V.map (EndpointRequestStatsVM (ackd && not archived) currTime) endpointStats) 
+  addRespHeaders $ PageCtx bwconf (ItemsList.ItemsPage listCfg $ V.map (EndpointRequestStatsVM (ackd && not archived) currTime) endpointStats)
 
 
 data EndpointRequestStatsVM = EndpointRequestStatsVM Bool UTCTime Endpoints.EndpointRequestStats
 
-instance ToHtml EndpointRequestStatsVM where 
+
+instance ToHtml EndpointRequestStatsVM where
   toHtml (EndpointRequestStatsVM activePage currTime enpStat) = toHtmlRaw $ renderEndpoint activePage currTime enpStat
   toHtmlRaw = toHtml
-
-
 
 
 hostFilter_ :: Text -> V.Vector Endpoints.Host -> Maybe Text -> Maybe Text -> Html ()

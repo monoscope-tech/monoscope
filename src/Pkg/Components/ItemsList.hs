@@ -2,8 +2,8 @@ module Pkg.Components.ItemsList (
   itemsList_,
   itemsPage_,
   itemRows_,
-  ItemsRows(..),
-  ItemsPage(..),
+  ItemsRows (..),
+  ItemsPage (..),
   BulkAction (..),
   ZeroState (..),
   Heading (..),
@@ -150,14 +150,14 @@ itemsList_ listCfg items = div_ [class_ "grid grid-cols-5 card-round overflow-hi
             whenJust blkA.icon \icon -> faSprite_ icon "solid" "h-4 w-4 inline-block"
             span_ (toHtml blkA.title)
           whenJust listCfg.search \search -> label_ [class_ "input input-sm input-bordered flex items-center gap-2"] do
-            input_ $
-              [ type_ "text"
-              , class_ "grow"
-              , placeholder_ "Search"
-              ]
-                <> case search.viaQueryParam of
-                  Just param -> [name_ param]
-                  Nothing -> [[__| on input show .itemsListItem in #itemsListPage when its textContent.toLowerCase() contains my value.toLowerCase() |]]
+            input_
+              $ [ type_ "text"
+                , class_ "grow"
+                , placeholder_ "Search"
+                ]
+              <> case search.viaQueryParam of
+                Just param -> [name_ param]
+                Nothing -> [[__| on input show .itemsListItem in #itemsListPage when its textContent.toLowerCase() contains my value.toLowerCase() |]]
             faSprite_ "magnifying-glass" "regular" "w-4 h-4 opacity-70"
 
         whenJust listCfg.sort \sortCfg -> do
@@ -175,8 +175,8 @@ itemsList_ listCfg items = div_ [class_ "grid grid-cols-5 card-round overflow-hi
                   , hxIndicator_ "#sortLoader"
                   ]
                   do
-                    div_ [class_ "flex flex-col items-center justify-center px-3"] $
-                      if isActive then faSprite_ "icon-checkmark4" "solid" "w-4 h-5" else div_ [class_ "w-4 h-5"] ""
+                    div_ [class_ "flex flex-col items-center justify-center px-3"]
+                      $ if isActive then faSprite_ "icon-checkmark4" "solid" "w-4 h-5" else div_ [class_ "w-4 h-5"] ""
                     div_ [class_ "grow space-y-1"] do
                       span_ [class_ "block text-lg"] $ toHtml title
                       span_ [class_ "block "] $ toHtml desc
@@ -194,7 +194,7 @@ itemsList_ listCfg items = div_ [class_ "grid grid-cols-5 card-round overflow-hi
         p_ $ toHtml zeroState.description
         case zeroState.destination of
           Right destination -> a_ [href_ destination, class_ "w-max btn btn-indigo -ml-1 text-md"] $ toHtml zeroState.actionText
-          Left labelId -> label_ [Lucid.for_ labelId, class_ "w-max btn btn-indigo -ml-1 text-md"] $ toHtml zeroState.actionText   
+          Left labelId -> label_ [Lucid.for_ labelId, class_ "w-max btn btn-indigo -ml-1 text-md"] $ toHtml zeroState.actionText
     itemRows_ listCfg.nextFetchUrl items
 
 
@@ -202,6 +202,6 @@ itemRows_ :: ToHtml a => Maybe Text -> V.Vector a -> Html ()
 itemRows_ nextFetchUrl items = do
   mapM_ (toHtml) items
   whenJust nextFetchUrl \url ->
-    when (length items > 10) $
-      a_ [class_ "cursor-pointer block p-1 blue-800 bg-blue-100 hover:bg-blue-200 text-center", hxTrigger_ "click", hxSwap_ "outerHTML", hxGet_ url] do
+    when (length items > 10)
+      $ a_ [class_ "cursor-pointer block p-1 blue-800 bg-blue-100 hover:bg-blue-200 text-center", hxTrigger_ "click", hxSwap_ "outerHTML", hxGet_ url] do
         span_ [class_ "htmx-indicator loading loading-dots loading-md"] "" >> "LOAD MORE"

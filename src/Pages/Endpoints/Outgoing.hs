@@ -2,6 +2,7 @@ module Pages.Endpoints.Outgoing (outgoingGetH, HostEventsVM) where
 
 import Data.Default (def)
 import Data.Text qualified as T
+import Data.Vector qualified as V
 import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
 import Effectful.Time qualified as Time
 import Lucid
@@ -10,10 +11,9 @@ import Models.Apis.Endpoints qualified as Endpoints
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
 import Pages.Anomalies.AnomalyList qualified as AnomalyList
-import Pages.BodyWrapper (BWConfig (currProject, pageTitle, sessM), PageCtx(..))
+import Pages.BodyWrapper (BWConfig (currProject, pageTitle, sessM), PageCtx (..))
 import Pkg.Components.ItemsList qualified as ItemsList
 import PyF qualified
-import Data.Vector qualified as V
 import Relude hiding (ask, asks)
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
 
@@ -63,11 +63,14 @@ outgoingGetH pid sortM = do
           }
   addRespHeaders $ PageCtx bwconf (ItemsList.ItemsPage listCfg $ V.map (HostEventsVM pid) hostsAndEvents)
 
+
 data HostEventsVM = HostEventsVM Projects.ProjectId Endpoints.HostEvents
 
-instance ToHtml HostEventsVM where 
+
+instance ToHtml HostEventsVM where
   toHtml (HostEventsVM pid he) = toHtmlRaw $ renderOutgoing pid he
   toHtmlRaw = toHtml
+
 
 renderOutgoing :: Projects.ProjectId -> Endpoints.HostEvents -> Html ()
 renderOutgoing pid host = div_ [class_ "flex py-4 gap-8 items-center itemsListItem"] do

@@ -369,9 +369,8 @@ createProjectBody sess envCfg isUpdate cp cpe = do
               p_ [class_ "text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70 mb-2"] do
                 "Please select a plan"
                 span_ [class_ "text-red-400"] " *"
-              div_ [class_ "grid sm:grid-cols-2 md:grid-cols-3 gap-2 border-1"] do
+              div_ [class_ "grid sm:grid-cols-2 md:grid-cols-2 gap-24 border-1"] do
                 ( [ ("Free", "20k", "$0", "2", cp.paymentPlan == "Free", "Free")
-                  , ("Pay as you use", "250k", "$1", "Unlimited", paymentPlan == "UsageBased", "UsageBased")
                   ]
                     :: [(Text, Text, Text, Text, Bool, Text)]
                   )
@@ -420,20 +419,20 @@ createProjectBody sess envCfg isUpdate cp cpe = do
                   ]
                   do
                     div_ [class_ "flex items-center justify-between border-b border-b-1 p-1"] do
-                      h4_ [class_ "text-xl font-medium text-slate-700"] $ toHtml "Graduated"
+                      h4_ [class_ "text-xl font-medium text-slate-700"] $ toHtml "Pay as you use"
                       div_ [role_ "tablist", class_ "tabs tabs-boxed"] $ do
                         input_ [onchange_ "handlePlanToggle(e)", value_ "month", type_ "radio", name_ "plans", role_ "tab", class_ "tab", term "aria-label" "Monthly", checked_]
                         input_ [onchange_ "handlePlanToggle(e)", value_ "annual", type_ "radio", name_ "plans", role_ "tab", class_ "tab", term "aria-label" "Annual"]
                     div_ [class_ "text-lg py-3 px-2"] do
-                      span_ [class_ "text-2xl text-blue-700", id_ "price"] $ toHtml "$49"
-                      span_ [class_ "text-slate-500", id_ "num_requests"] "/550k"
+                      span_ [class_ "text-2xl text-blue-700", id_ "price"] $ toHtml "$19"
+                      span_ [class_ "text-slate-500", id_ "num_requests"] "/200k"
                       span_ [class_ "text-slate-500 mr-3"] " requests"
                       p_ [class_ "text-blue-500 inline-block mt-0 text-sm text-green-500 font-semibold"] do
                         span_ [] "save "
-                        span_ [id_ "save_container"] "$6/month"
+                        span_ [id_ "save_container"] ""
                       span_ [class_ "text-blue-500 text-sm block mt-2"] "then $1 per 10k requests"
                     div_ [] do
-                      input_ [type_ "range", min_ "0", max_ "5", step_ "1", value_ "0", class_ "range range-primary range-sm", id_ "price_range"]
+                      input_ [type_ "range", min_ "0", max_ "6", step_ "1", value_ "0", class_ "range range-primary range-sm", id_ "price_range"]
 
                     checkList "GR" "Unlimited"
 
@@ -525,12 +524,12 @@ createProjectBody sess envCfg isUpdate cp cpe = do
                const price_indicator = document.querySelector("#price_range");
                window.graduatedRangeUrl = "$graduatedCheckoutOne"
                let plan = "month";
-               const prices = [49, 88, 215, 420, 615, 800]
-               const saves = [6, 12, 35, 80, 135, 200]
-               const reqs = ["550k", "1M", "2.5M", "5M", "7.5M", "10M"]
-               const pricesYr = [588, 1056, 2580, 5000, 5000, 5000]
-               const savesYr = [72,144,420,960,960,960]
-               const reqsYr = ["6.6M", "12M", "30M", "60M", "60M", "60M"]
+               const prices = [19, 49, 88, 215, 420, 615, 800]
+               const saves = [1, 6, 12, 35, 80, 135, 200]
+               const reqs = ["200k","550k", "1M", "2.5M", "5M", "7.5M", "10M"]
+               const pricesYr = [200, 588, 1056, 2580, 5000, 5000, 5000]
+               const savesYr = [28, 72,144,420,960,960,960]
+               const reqsYr = ["2.4M", "6.6M", "12M", "30M", "60M", "60M", "60M"]
                const urls = $lmnUrls
                const urlsAnnual = $lmnUrlAnnual
                const priceContainer = document.querySelector("#price")

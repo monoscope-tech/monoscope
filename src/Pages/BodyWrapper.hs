@@ -42,13 +42,16 @@ data BWConfig = BWConfig
   deriving stock (Show, Generic)
   deriving anyclass (Default)
 
+
 type role PageCtx representational
 data PageCtx a = PageCtx BWConfig a
   deriving stock (Show, Generic)
 
-instance (ToHtml a) => ToHtml (PageCtx a) where
+
+instance ToHtml a => ToHtml (PageCtx a) where
   toHtml (PageCtx bwcfg child) = toHtmlRaw $ bodyWrapper bwcfg (toHtml child)
   toHtmlRaw = toHtml
+
 
 bodyWrapper :: BWConfig -> Html () -> Html ()
 bodyWrapper BWConfig{sessM, currProject, pageTitle, menuItem, hasIntegrated} child = do

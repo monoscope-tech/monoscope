@@ -203,7 +203,8 @@ freeTierLimitExceededBanner pid =
 lemonSqueezyUrls :: V.Vector Text
 lemonSqueezyUrls =
   V.fromList
-    [ "https://apitoolkit.lemonsqueezy.com/buy/9695dbc9-6e24-4054-879f-1f360eda9293?embed=1&media=0&logo=0&desc=0" -- 550K
+    [ "https://apitoolkit.lemonsqueezy.com/buy/2cfaa8c6-fc81-4609-93d1-69d6bcd89552?embed=1&media=0&logo=0&desc=0" -- 200k
+    , "https://apitoolkit.lemonsqueezy.com/buy/9695dbc9-6e24-4054-879f-1f360eda9293?embed=1&media=0&logo=0&desc=0" -- 550K
     , "https://apitoolkit.lemonsqueezy.com/buy/096bb970-e6a2-4cd7-a6ee-5f6ce6ecd39e?embed=1&media=0&logo=0&desc=0" -- 1M
     , "https://apitoolkit.lemonsqueezy.com/buy/e1b06cdb-5e18-44a4-9ec9-ece569f73137?embed=1&media=0&logo=0&desc=0" -- 2.5M
     , "https://apitoolkit.lemonsqueezy.com/buy/952fc4b0-2c5e-4789-b186-8580998dabd5?embed=1&media=0&logo=0&desc=0" -- 5M
@@ -215,7 +216,8 @@ lemonSqueezyUrls =
 lemonSqueezyUrlsAnnual :: V.Vector Text
 lemonSqueezyUrlsAnnual =
   V.fromList
-    [ "https://apitoolkit.lemonsqueezy.com/buy/0900a416-05b1-4ebe-a7bb-8b7d4c063c7f?embed=1&media=0&logo=0&desc=0" -- 6.6M
+    [ "https://apitoolkit.lemonsqueezy.com/buy/311bf5e7-f17a-44e6-b209-c42b84306f47?embed=1&media=0&logo=0&desc=0" -- 2.4M
+    , "https://apitoolkit.lemonsqueezy.com/buy/0900a416-05b1-4ebe-a7bb-8b7d4c063c7f?embed=1&media=0&logo=0&desc=0" -- 6.6M
     , "https://apitoolkit.lemonsqueezy.com/buy/53fc9818-8f8a-4e60-a390-c10609e0a535?embed=1&media=0&logo=0&desc=0" -- 12M
     , "https://apitoolkit.lemonsqueezy.com/buy/196ba4de-af2e-4e17-ada6-6889e62011d0?embed=1&media=0&logo=0&desc=0" -- 30M
     , "https://apitoolkit.lemonsqueezy.com/buy/1821b082-28c2-4d2d-9a29-2cae822943b6?embed=1&media=0&logo=0&desc=0" -- 60M

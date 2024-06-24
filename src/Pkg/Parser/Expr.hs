@@ -281,7 +281,7 @@ subjectHasWildcard (Subject _ _ keys) = any isArrayWildcard keys
 instance Display Subject where
   displayPrec prec (Subject entire x []) = displayPrec prec x
   displayPrec prec (Subject entire x (y : ys)) =
-    displayPrec prec $ buildQuerySequence x (y : ys) 
+    displayPrec prec $ buildQuerySequence x (y : ys)
     where
       buildQuerySequence :: T.Text -> [FieldKey] -> T.Text
       buildQuerySequence acc [] = acc

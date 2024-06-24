@@ -1,7 +1,7 @@
 module Pages.Monitors.Testing (
   testingGetH,
   testingPostH,
-  CollectionListItemVM(..),
+  CollectionListItemVM (..),
 )
 where
 
@@ -9,6 +9,7 @@ import Data.Aeson qualified as AE
 import Data.Default (def)
 import Data.Text qualified as T
 import Data.UUID.V4 qualified as UUIDV4
+import Data.Vector qualified as V
 import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
 import Effectful.Time qualified as Time
 import Lucid
@@ -16,7 +17,6 @@ import Lucid.Htmx (hxExt_, hxPost_, hxSelect_, hxSwap_, hxTarget_, hxVals_)
 import Models.Projects.Projects qualified as Projects
 import Models.Tests.Testing qualified as Testing
 import Models.Users.Sessions qualified as Sessions
-import Data.Vector qualified as V
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
 import Pages.Monitors.TestCollectionEditor qualified as TestCollectionEditor
 import Pkg.Components qualified as Components
@@ -26,8 +26,10 @@ import System.Types (ATAuthCtx, RespHeaders, addRespHeaders, addSuccessToast)
 import Utils
 
 
-testingPostH :: Projects.ProjectId -> TestCollectionEditor.CollectionStepUpdateForm 
-             -> ATAuthCtx (RespHeaders (PageCtx (ItemsList.ItemsPage CollectionListItemVM)))
+testingPostH
+  :: Projects.ProjectId
+  -> TestCollectionEditor.CollectionStepUpdateForm
+  -> ATAuthCtx (RespHeaders (PageCtx (ItemsList.ItemsPage CollectionListItemVM)))
 testingPostH pid colF = do
   (_, project) <- Sessions.sessionAndProject pid
   currentTime <- Time.currentTime
@@ -51,8 +53,10 @@ testingPostH pid colF = do
   testingGetH pid Nothing
 
 
-testingGetH :: Projects.ProjectId -> Maybe Text 
-            -> ATAuthCtx (RespHeaders (PageCtx (ItemsList.ItemsPage CollectionListItemVM)))
+testingGetH
+  :: Projects.ProjectId
+  -> Maybe Text
+  -> ATAuthCtx (RespHeaders (PageCtx (ItemsList.ItemsPage CollectionListItemVM)))
 testingGetH pid filterTM = do
   (sess, project) <- Sessions.sessionAndProject pid
   let (currentFilterTab, tabStatus) = case filterTM of
@@ -70,8 +74,8 @@ testingGetH pid filterTM = do
           , nextFetchUrl = Nothing
           , search = Just $ ItemsList.SearchCfg{viaQueryParam = Nothing}
           , tabsFilter =
-              Just $
-                ItemsList.TabFilter
+              Just
+                $ ItemsList.TabFilter
                   { current = currentFilterTab
                   , options =
                       [ ItemsList.TabFilterOpt{name = "Active", count = Nothing}
@@ -82,8 +86,8 @@ testingGetH pid filterTM = do
               [ ItemsList.BulkAction{icon = Just "check", title = "deactivate", uri = "/p/" <> pid.toText <> "/anomalies/bulk_actions/acknowlege"}
               ]
           , heading =
-              Just $
-                ItemsList.Heading
+              Just
+                $ ItemsList.Heading
                   { pageTitle = "Multistep API monitors/tests (Beta)"
                   , rightComponent =
                       Just
@@ -101,13 +105,13 @@ testingGetH pid filterTM = do
                   , subSection = Nothing
                   }
           , zeroState =
-              Just $
-                ItemsList.ZeroState
+              Just
+                $ ItemsList.ZeroState
                   { icon = "empty-set"
                   , title = "No Multistep Test/Monitor yet."
                   , description = "You're can create one to start monitoring your services."
                   , actionText = "Create Monitor"
-                  , destination = Left "test-settings-modal" 
+                  , destination = Left "test-settings-modal"
                   }
           , elemID = "anomalyListForm"
           }
@@ -119,11 +123,14 @@ testingGetH pid filterTM = do
           }
   addRespHeaders $ PageCtx bwconf (ItemsList.ItemsPage listCfg $ V.map (CollectionListItemVM pid) colls)
 
+
 data CollectionListItemVM = CollectionListItemVM Projects.ProjectId Testing.CollectionListItem
 
-instance ToHtml CollectionListItemVM where 
+
+instance ToHtml CollectionListItemVM where
   toHtml (CollectionListItemVM pid he) = toHtmlRaw $ collectionCard pid he
   toHtmlRaw = toHtml
+
 
 collectionCard :: Projects.ProjectId -> Testing.CollectionListItem -> Html ()
 collectionCard pid col = div_ [class_ "flex py-4 gap-8 items-center itemsListItem"] do

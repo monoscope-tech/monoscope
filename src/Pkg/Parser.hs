@@ -8,19 +8,19 @@ import Data.Text.Display (display)
 import Data.Time.Calendar (fromGregorian)
 import Data.Time.Clock (UTCTime (..), diffUTCTime, nominalDiffTimeToSeconds, secondsToDiffTime)
 import Data.Time.Format.ISO8601 (iso8601Show)
+import Debug.Pretty.Simple
 import GHC.Records (HasField (getField))
 import Models.Projects.Projects qualified as Projects
 import Pkg.Parser.Expr (pExpr, pSubject)
 import Pkg.Parser.Stats (pStatsSection, pTimeChartSection)
 import Pkg.Parser.Types (
-  Subject(..),
   ByClause (..),
   Parser,
   Rollup (..),
   Section (..),
+  Subject (..),
  )
 import PyF (fmt)
-import Debug.Pretty.Simple
 import Relude
 import Safe qualified
 import Text.Megaparsec (choice, errorBundlePretty, parse, sepBy)
@@ -97,8 +97,10 @@ data SqlQueryCfg = SqlQueryCfg
   deriving stock (Show, Generic)
   deriving anyclass (Default)
 
+
 normalizeKeyPath :: Text -> Text
 normalizeKeyPath txt = T.toLower $ T.replace "]" "❳" $ T.replace "[" "❲" $ T.replace "." "•" txt
+
 
 sqlFromQueryComponents :: SqlQueryCfg -> QueryComponents -> (Text, QueryComponents)
 sqlFromQueryComponents sqlCfg qc =
@@ -106,9 +108,10 @@ sqlFromQueryComponents sqlCfg qc =
     fmtTime = toText . iso8601Show
     cursorT = maybe "" (\c -> " AND created_at<'" <> fmtTime c <> "' ") sqlCfg.cursorM
     -- Handle the Either error case correctly not hushing it.
-    projectedColsProcessed = sqlCfg.projectedColsByUser & mapMaybe \col -> do
-      subJ@(Subject entire _ _) <- hush (parse pSubject "" col) 
-      pure $ display subJ <> " as " <> normalizeKeyPath entire 
+    projectedColsProcessed =
+      sqlCfg.projectedColsByUser & mapMaybe \col -> do
+        subJ@(Subject entire _ _) <- hush (parse pSubject "" col)
+        pure $ display subJ <> " as " <> normalizeKeyPath entire
     selectedCols = if null qc.select then projectedColsProcessed <> sqlCfg.defaultSelect else qc.select
     selectClause = T.intercalate "," $ colsNoAsClause selectedCols
     whereClause = maybe "" (\whereC -> " AND (" <> whereC <> ")") qc.whereClause

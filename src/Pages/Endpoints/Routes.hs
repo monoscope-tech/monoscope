@@ -2,16 +2,16 @@ module Pages.Endpoints.Routes (Routes, Routes' (..)) where
 
 import Lucid (Html)
 import Models.Apis.Endpoints qualified as Endpoints
-import Pages.Endpoints.EndpointList qualified as EndpointList
 import Models.Apis.Fields.Types qualified as Fields (FieldId)
+import Pages.BodyWrapper
+import Pages.Endpoints.EndpointList qualified as EndpointList
+import Pages.Endpoints.Outgoing qualified as Outgoing
+import Pkg.Components.ItemsList qualified as ItemsList
 import Relude
 import Servant
 import Servant.HTML.Lucid (HTML)
 import Servant.Htmx
-import Pages.Endpoints.Outgoing  qualified as Outgoing
 import System.Types
-import Pages.BodyWrapper
-import Pkg.Components.ItemsList qualified as ItemsList
 
 
 type QPT a = QueryParam a Text
