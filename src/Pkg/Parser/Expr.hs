@@ -281,10 +281,8 @@ subjectHasWildcard (Subject _ _ keys) = any isArrayWildcard keys
 instance Display Subject where
   displayPrec prec (Subject entire x []) = displayPrec prec x
   displayPrec prec (Subject entire x (y : ys)) =
-    displayPrec prec $ buildQuerySequence x (y : ys) <> " as " <> normalizeKeyPath entire
+    displayPrec prec $ buildQuerySequence x (y : ys) 
     where
-      normalizeKeyPath txt = T.toLower $ T.replace "]" "❳" $ T.replace "[" "❲" $ T.replace "." "•" txt
-
       buildQuerySequence :: T.Text -> [FieldKey] -> T.Text
       buildQuerySequence acc [] = acc
       buildQuerySequence acc [lastKey] = buildQuery acc lastKey True
@@ -373,22 +371,22 @@ displayExprHelper op prec sub val =
 -- Examples:
 --
 -- >>> jsonPathQuery "==" (Subject "" "data" [FieldKey "name"]) (Str "John Doe")
--- "jsonb_path_exists(data, $$$.\"name\" ? (@ == \"John Doe\")$$)"
+-- "jsonb_path_exists(data, $$$.\"name\" ? (@ == \"John Doe\")$$::jsonpath)"
 --
 -- >>> jsonPathQuery "!=" (Subject "" "users" [ArrayIndex "" 1, FieldKey "age"]) (Num "30")
--- "jsonb_path_exists(users, $$$[1].\"age\" ? (@ != 30)$$)"
+-- "jsonb_path_exists(users, $$$[1].\"age\" ? (@ != 30)$$::jsonpath)"
 --
 -- >>> jsonPathQuery "!=" (Subject "" "settings" [ArrayWildcard "", FieldKey "enabled"]) (Boolean True)
--- "jsonb_path_exists(settings, $$$[*].\"enabled\" ? (@ != True)$$)"
+-- "jsonb_path_exists(settings, $$$[*].\"enabled\" ? (@ != True)$$::jsonpath)"
 --
 -- >>> jsonPathQuery "<" (Subject "" "user" [FieldKey "profile", FieldKey "address", FieldKey "zipcode"]) Null
--- "jsonb_path_exists(user, $$$.\"profile\".\"address\".\"zipcode\" ? (@ < null)$$)"
+-- "jsonb_path_exists(user, $$$.\"profile\".\"address\".\"zipcode\" ? (@ < null)$$::jsonpath)"
 --
 -- >>> jsonPathQuery ">" (Subject "" "orders" [ArrayIndex "" 0, ArrayWildcard "val", FieldKey "status"]) (Str "pending")
--- "jsonb_path_exists(orders, $$$[0].val[*].\"status\" ? (@ > \"pending\")$$)"
+-- "jsonb_path_exists(orders, $$$[0].val[*].\"status\" ? (@ > \"pending\")$$::jsonpath)"
 jsonPathQuery :: T.Text -> Subject -> Values -> T.Text
 jsonPathQuery op' (Subject entire base keys) val =
-  "jsonb_path_exists(" <> base <> ", $$" <> "$" <> buildPath keys <> buildCondition op val <> "$$)"
+  "jsonb_path_exists(" <> base <> ", $$" <> "$" <> buildPath keys <> buildCondition op val <> "$$::jsonpath)"
   where
     op = if op' == "=" then "==" else "="
 
@@ -403,7 +401,7 @@ jsonPathQuery op' (Subject entire base keys) val =
     buildCondition :: T.Text -> Values -> T.Text
     buildCondition oper (Num n) = " ? (@ " <> oper <> " " <> n <> ")"
     buildCondition oper (Str s) = " ? (@ " <> oper <> " \"" <> s <> "\")"
-    buildCondition oper (Boolean b) = " ? (@ " <> oper <> " " <> show b <> ")"
+    buildCondition oper (Boolean b) = " ? (@ " <> oper <> " " <> (T.toLower $ show b) <> ")"
     buildCondition oper Null = " ? (@ " <> oper <> " null)"
     buildCondition oper (List xs) = " ? (@ " <> oper <> " {" <> (mconcat . intersperse "," . map display) xs <> "} )"
 
