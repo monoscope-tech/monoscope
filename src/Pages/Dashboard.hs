@@ -64,7 +64,7 @@ data DashboardGet = DashboardGet Projects.ProjectId ParamInput UTCTime Projects.
 
 
 instance ToHtml DashboardGet where
-  toHtml (DashboardGet pid paramInput now stats endpoints lastRequestTime (fromD, toD) exceededFree hasRequest) = toHtmlRaw $ toHtml $ dashboardPage pid paramInput now stats endpoints lastRequestTime (fromD, toD) exceededFree hasRequest
+  toHtml (DashboardGet pid paramInput now stats endpoints lastRequestTime (fromD, toD) exceededFree hasRequest) = toHtml $ dashboardPage pid paramInput now stats endpoints lastRequestTime (fromD, toD) exceededFree hasRequest
   toHtmlRaw = toHtml
 
 

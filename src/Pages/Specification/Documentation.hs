@@ -35,7 +35,7 @@ import Models.Projects.Swaggers qualified as Swaggers
 import Models.Users.Sessions qualified as Sessions
 import NeatInterpolation (text)
 import Numeric (showHex)
-import Pages.BodyWrapper (BWConfig (..), PageCtx (..), bodyWrapper)
+import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
 import Relude hiding (ask)
 import Relude.Unsafe qualified as Unsafe
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders, addSuccessToast)
@@ -289,7 +289,7 @@ data DocumentationGet = DocumentationGet Projects.ProjectId (V.Vector Swaggers.S
 
 
 instance ToHtml DocumentationGet where
-  toHtml (DocumentationGet pid swaggers swaggerID jsonString) = toHtmlRaw $ toHtml $ documentationsPage pid swaggers swaggerID jsonString
+  toHtml (DocumentationGet pid swaggers swaggerID jsonString) = toHtml $ documentationsPage pid swaggers swaggerID jsonString
   toHtmlRaw = toHtml
 
 

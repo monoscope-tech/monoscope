@@ -1,5 +1,6 @@
 module Pages.Log (
   apiLogH,
+  LogsGet,
 )
 where
 
@@ -35,7 +36,7 @@ import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
 import NeatInterpolation (text)
-import Pages.BodyWrapper (BWConfig, bodyWrapper, currProject, pageTitle, sessM)
+import Pages.BodyWrapper (BWConfig, PageCtx (..), bodyWrapper, currProject, pageTitle, sessM)
 import Pages.Components qualified as Components
 import Pages.Monitors.Alerts qualified as Alerts
 import Relude hiding (ask)
@@ -52,7 +53,7 @@ import Witch (from)
 -- >>> import Data.Aeson
 
 
-apiLogH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe UTCTime -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))
+apiLogH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe UTCTime -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders (LogsGet))
 apiLogH pid queryM cols' cursorM' sinceM fromM toM layoutM hxRequestM hxBoostedM = do
   (sess, project) <- Sessions.sessionAndProject pid
 
@@ -116,23 +117,40 @@ apiLogH pid queryM cols' cursorM' sinceM fromM toM layoutM hxRequestM hxBoostedM
               , query = queryM
               }
       case (layoutM, hxRequestM, hxBoostedM) of
-        (Just "loadmore", Just "true", _) -> addRespHeaders $ logItemRows_ pid requestVecs curatedColNames colIdxMap nextLogsURL
-        (Just "resultTable", Just "true", _) -> addRespHeaders $ resultTable_ page False
-        (Just "all", Just "true", _) -> addRespHeaders $ resultTable_ page True
+        (Just "loadmore", Just "true", _) -> addRespHeaders $ LogsGetRows pid requestVecs curatedColNames colIdxMap nextLogsURL
+        (Just "resultTable", Just "true", _) -> addRespHeaders $ LogsGetResultTable page False
+        (Just "all", Just "true", _) -> addRespHeaders $ LogsGetResultTable page True
         _ -> do
-          addRespHeaders $ bodyWrapper bwconf $ apiLogsPage page
+          addRespHeaders $ LogPage $ PageCtx bwconf page
     Nothing -> do
       case (layoutM, hxRequestM, hxBoostedM) of
         (Just "loadmore", Just "true", _) -> do
           addErrorToast "Something went wrong" Nothing
-          addRespHeaders $ ""
+          addRespHeaders $ LogsGetErrorSimple ""
         (Just "resultTable", Just "true", _) -> do
-          addRespHeaders $ span_ [class_ "text-red-500"] "Something went wrong"
+          addRespHeaders $ LogsGetErrorSimple "Something went wrong"
         (Just "all", Just "true", _) -> do
           addErrorToast "Something went wrong" Nothing
-          addRespHeaders $ ""
+          addRespHeaders $ LogsGetErrorSimple ""
         _ -> do
-          addRespHeaders $ bodyWrapper bwconf $ h4_ [] "Something went wrong"
+          addRespHeaders $ LogsGetError $ PageCtx bwconf "Something went wrong"
+
+
+data LogsGet
+  = LogPage (PageCtx (ApiLogsPageData))
+  | LogsGetRows Projects.ProjectId (V.Vector (V.Vector Value)) [Text] (HM.HashMap Text Int) Text
+  | LogsGetResultTable ApiLogsPageData Bool
+  | LogsGetError (PageCtx (Text))
+  | LogsGetErrorSimple Text
+
+
+instance ToHtml LogsGet where
+  toHtml (LogPage (PageCtx conf pa_dat)) = toHtml $ PageCtx conf $ apiLogsPage pa_dat
+  toHtml (LogsGetRows pid requestVecs cols colIdxMap nextLogsURL) = toHtml $ logItemRows_ pid requestVecs cols colIdxMap nextLogsURL
+  toHtml (LogsGetResultTable page bol) = toHtml $ resultTable_ page bol
+  toHtml (LogsGetErrorSimple err) = span_ [class_ "text-red-500"] $ toHtml err
+  toHtml (LogsGetError (PageCtx conf err)) = toHtml $ PageCtx conf err
+  toHtmlRaw = toHtml
 
 
 timePickerItems :: [(Text, Text)]

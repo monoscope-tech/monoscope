@@ -3,6 +3,7 @@ module Pages.LogExplorer.Routes (Routes, Routes' (..)) where
 import Data.Time (UTCTime)
 import Data.UUID qualified as UUID
 import Lucid (Html)
+import Pages.Log qualified as Log
 import Relude (Generic, Text)
 import Servant (
   Capture,
@@ -18,6 +19,8 @@ import System.Types (RespHeaders)
 
 
 type QPU a = QueryParam a UTCTime
+
+
 type QPT a = QueryParam a Text
 
 
@@ -25,8 +28,10 @@ type role Routes' nominal
 
 
 type Routes = NamedRoutes Routes'
+
+
 data Routes' mode = Routes'
-  { logExplorerGet :: mode :- "log_explorer" :> QPT "query" :> QPT "cols" :> QPU "cursor" :> QPT "since" :> QPT "from" :> QPT "to" :> QPT "layout" :> HXRequest :> HXBoosted :> Get '[HTML] (RespHeaders (Html ()))
+  { logExplorerGet :: mode :- "log_explorer" :> QPT "query" :> QPT "cols" :> QPU "cursor" :> QPT "since" :> QPT "from" :> QPT "to" :> QPT "layout" :> HXRequest :> HXBoosted :> Get '[HTML] (RespHeaders (Log.LogsGet))
   , logExplorerItemGet :: mode :- "log_explorer" :> Capture "logItemID" UUID.UUID :> Capture "createdAt" UTCTime :> Get '[HTML] (RespHeaders (Html ()))
   , logExplorerItemDetailedGet :: mode :- "log_explorer" :> Capture "logItemID" UUID.UUID :> Capture "createdAt" UTCTime :> "detailed" :> Get '[HTML] (RespHeaders (Html ()))
   }
