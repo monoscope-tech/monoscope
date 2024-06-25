@@ -61,13 +61,6 @@ packages:
   original:
     hackage: monad-time-effectful-1.0.0.0@sha256:4994617545bb4b25ba01eaf2bdb1c2c74f7cefab36945af8eb92dca9842fc4b6,1528
 - completed:
-    hackage: lucid-aria-0.1.0.1@sha256:d4f37b67a28f2e38eb3cf9fca4cbed5dcc6bf335c880113c618ca50fa933cd40,920
-    pantry-tree:
-      sha256: 86dc56b3e719f1cd436a3efad829cfd0fa75a29c8bdbbb9e866ec8d2ea96cac7
-      size: 318
-  original:
-    hackage: lucid-aria-0.1.0.1@sha256:d4f37b67a28f2e38eb3cf9fca4cbed5dcc6bf335c880113c618ca50fa933cd40,920
-- completed:
     hackage: colourista-0.1.0.1@sha256:98353ee0e2f5d97d2148513f084c1cd37dfda03e48aa9dd7a017c9d9c0ba710e,3307
     pantry-tree:
       sha256: aa027b21ac1ed1d446a4b20b9a1708fabed9042edf7a28ef05f3fc6278b07841
@@ -75,12 +68,19 @@ packages:
   original:
     hackage: colourista-0.1.0.1@sha256:98353ee0e2f5d97d2148513f084c1cd37dfda03e48aa9dd7a017c9d9c0ba710e,3307
 - completed:
-    hackage: lucid-htmx-0.1.0.6@sha256:83d9eed5ff74778a2dfc3f320a66b08592a2880abca28d75747a0513a39bd871,1528
+    hackage: lucid-aria-0.1.0.1@sha256:d4f37b67a28f2e38eb3cf9fca4cbed5dcc6bf335c880113c618ca50fa933cd40,920
     pantry-tree:
-      sha256: e7e0ebb5432ec6dd278e1ac594a94aa3311e378c683275274874dfee2e12dfe3
-      size: 427
+      sha256: 86dc56b3e719f1cd436a3efad829cfd0fa75a29c8bdbbb9e866ec8d2ea96cac7
+      size: 318
   original:
-    hackage: lucid-htmx-0.1.0.6@sha256:83d9eed5ff74778a2dfc3f320a66b08592a2880abca28d75747a0513a39bd871,1528
+    hackage: lucid-aria-0.1.0.1@sha256:d4f37b67a28f2e38eb3cf9fca4cbed5dcc6bf335c880113c618ca50fa933cd40,920
+- completed:
+    hackage: lucid-htmx-0.1.0.7@sha256:05d0bec34cd3c3d99d69a02c5c5f87385a9e53de8fa2e57a0c7c477dd3e5a6af,1491
+    pantry-tree:
+      sha256: 02dcd0ec63f113e1c17e82108daa7282b4e27374a1be380fc132f9aa5fa2d813
+      size: 428
+  original:
+    hackage: lucid-htmx-0.1.0.7@sha256:05d0bec34cd3c3d99d69a02c5c5f87385a9e53de8fa2e57a0c7c477dd3e5a6af,1491
 - completed:
     hackage: lucid-hyperscript-0.1.0.2@sha256:c3b048424e75c0e9cbadc30f7ebeb6abc164c2b45b2c995fd0674d4cc57be216,2035
     pantry-tree:
@@ -89,12 +89,12 @@ packages:
   original:
     hackage: lucid-hyperscript-0.1.0.2@sha256:c3b048424e75c0e9cbadc30f7ebeb6abc164c2b45b2c995fd0674d4cc57be216,2035
 - completed:
-    hackage: lucid-svg-0.7.1@sha256:012455fd2b1ec6b0f3bba405fd66c99cc6d26592bf25c2624741969567c6e510,1088
+    hackage: lucid-svg-0.7.1.1@sha256:52f3842a4fdec8a0f2661b437305fbedae480568428daef93aead58a91ef2c67,1107
     pantry-tree:
-      sha256: 46cd22d19a82b9defe4cdec84eaca2fbc804d81515631f0afdb7f2c76a7b548a
+      sha256: facc77cf18b4ece25185279f6041cb273b7e3be59afece0b08db549887abddc7
       size: 456
   original:
-    hackage: lucid-svg-0.7.1@sha256:012455fd2b1ec6b0f3bba405fd66c99cc6d26592bf25c2624741969567c6e510,1088
+    hackage: lucid-svg-0.7.1.1@sha256:52f3842a4fdec8a0f2661b437305fbedae480568428daef93aead58a91ef2c67,1107
 - completed:
     hackage: servant-htmx-0.1.0.2@sha256:cdafd3165d28694ec4bf81fff3b87b4721415293d75a394a97c26d0d4d57e38c,1817
     pantry-tree:
@@ -292,19 +292,6 @@ packages:
   original:
     commit: c8b7fa416e5c11b4828c35d0ef29158019433fa2
     git: https://github.com/marcelbuesing/sendgrid-v3
-    subdir: .
-- completed:
-    commit: ca0ccc45ffa073556f74befb114710e797b4628a
-    git: https://github.com/haskell-servant/servant-lucid
-    name: servant-lucid
-    pantry-tree:
-      sha256: 0e3a6981b8be2fa5e692560324753c2f618ea632b7641e8e15ca6bd683feb1d9
-      size: 724
-    subdir: .
-    version: 0.9.0.6
-  original:
-    commit: ca0ccc45ffa073556f74befb114710e797b4628a
-    git: https://github.com/haskell-servant/servant-lucid
     subdir: .
 - completed:
     commit: 0fa01adb871e66996d4ed2c27a3e97fac39ac466

@@ -12,13 +12,13 @@ import GHC.Records (HasField (getField))
 import Models.Projects.Projects qualified as Projects
 import Pkg.Parser.Expr (pExpr, pSubject)
 import Pkg.Parser.Stats (pStatsSection, pTimeChartSection)
-import Pkg.Parser.Types
-  ( ByClause (..),
-    Parser,
-    Rollup (..),
-    Section (..),
-    Subject (..),
-  )
+import Pkg.Parser.Types (
+  ByClause (..),
+  Parser,
+  Rollup (..),
+  Section (..),
+  Subject (..),
+ )
 import PyF (fmt)
 import Relude
 import Safe qualified
@@ -88,26 +88,29 @@ data SqlQueryCfg = SqlQueryCfg
   deriving stock (Show, Generic)
   deriving anyclass (Default)
 
+
 normalizeKeyPath :: Text -> Text
 normalizeKeyPath txt = T.toLower $ T.replace "]" "❳" $ T.replace "[" "❲" $ T.replace "." "•" txt
 
+
 sqlFromQueryComponents :: SqlQueryCfg -> QueryComponents -> (Text, QueryComponents)
 sqlFromQueryComponents sqlCfg qc =
-  let fmtTime = toText . iso8601Show
-      cursorT = maybe "" (\c -> " AND created_at<'" <> fmtTime c <> "' ") sqlCfg.cursorM
-      -- Handle the Either error case correctly not hushing it.
-      projectedColsProcessed =
-        sqlCfg.projectedColsByUser & mapMaybe \col -> do
-          subJ@(Subject entire _ _) <- hush (parse pSubject "" col)
-          pure $ display subJ <> " as " <> normalizeKeyPath entire
-      selectedCols = if null qc.select then projectedColsProcessed <> sqlCfg.defaultSelect else qc.select
-      selectClause = T.intercalate "," $ colsNoAsClause selectedCols
-      whereClause = maybe "" (\whereC -> " AND (" <> whereC <> ")") qc.whereClause
-      groupByClause = if null qc.groupByClause then "" else " GROUP BY " <> T.intercalate "," qc.groupByClause
-      dateRangeStr = case sqlCfg.dateRange of
-        (Nothing, Just b) -> "AND created_at BETWEEN NOW() AND '" <> fmtTime b <> "'"
-        (Just a, Just b) -> "AND created_at BETWEEN '" <> fmtTime a <> "' AND '" <> fmtTime b <> "'"
-        _ -> ""
+  let
+    fmtTime = toText . iso8601Show
+    cursorT = maybe "" (\c -> " AND created_at<'" <> fmtTime c <> "' ") sqlCfg.cursorM
+    -- Handle the Either error case correctly not hushing it.
+    projectedColsProcessed =
+      sqlCfg.projectedColsByUser & mapMaybe \col -> do
+        subJ@(Subject entire _ _) <- hush (parse pSubject "" col)
+        pure $ display subJ <> " as " <> normalizeKeyPath entire
+    selectedCols = if null qc.select then projectedColsProcessed <> sqlCfg.defaultSelect else qc.select
+    selectClause = T.intercalate "," $ colsNoAsClause selectedCols
+    whereClause = maybe "" (\whereC -> " AND (" <> whereC <> ")") qc.whereClause
+    groupByClause = if null qc.groupByClause then "" else " GROUP BY " <> T.intercalate "," qc.groupByClause
+    dateRangeStr = case sqlCfg.dateRange of
+      (Nothing, Just b) -> "AND created_at BETWEEN NOW() AND '" <> fmtTime b <> "'"
+      (Just a, Just b) -> "AND created_at BETWEEN '" <> fmtTime a <> "' AND '" <> fmtTime b <> "'"
+      _ -> ""
 
       (fromT, toT) = bimap (fromMaybe sqlCfg.currentTime) (fromMaybe sqlCfg.currentTime) sqlCfg.dateRange
       timeDiffSecs = abs $ nominalDiffTimeToSeconds $ diffUTCTime fromT toT

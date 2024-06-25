@@ -90,17 +90,10 @@ data ItemsPage a = ItemsPage ItemsListCfg (V.Vector a)
 
 
 instance ToHtml a => ToHtml (ItemsPage a) where
+  {-# INLINE toHtml #-}
   toHtml (ItemsPage cfg items) = toHtmlRaw $ itemsPage_ cfg items
-  toHtmlRaw = toHtml
-
-
-type role ItemsRows representational
-data ItemsRows a = ItemsRows (Maybe Text) (V.Vector a) -- Text represents nextFetchUrl
-
-
-instance ToHtml a => ToHtml (ItemsRows a) where
-  toHtml (ItemsRows nextFetchUrl items) = toHtmlRaw $ itemRows_ nextFetchUrl items
-  toHtmlRaw = toHtml
+  {-# INLINE toHtmlRaw #-}
+  toHtmlRaw (ItemsPage cfg items) = toHtmlRaw $ itemsPage_ cfg items
 
 
 itemsPage_ :: ToHtml a => ItemsListCfg -> V.Vector a -> Html ()
@@ -198,7 +191,18 @@ itemsList_ listCfg items = div_ [class_ "grid grid-cols-5 card-round overflow-hi
     itemRows_ listCfg.nextFetchUrl items
 
 
-itemRows_ :: ToHtml a => Maybe Text -> V.Vector a -> Html ()
+type role ItemsRows representational
+data ItemsRows a = ItemsRows (Maybe Text) (V.Vector a) -- Text represents nextFetchUrl
+
+
+instance ToHtml a => ToHtml (ItemsRows a) where
+  {-# INLINE toHtml #-}
+  toHtml (ItemsRows nextFetchUrl items) = toHtmlRaw $ itemRows_ nextFetchUrl items
+  {-# INLINE toHtmlRaw #-}
+  toHtmlRaw (ItemsRows nextFetchUrl items) = toHtmlRaw $ itemRows_ nextFetchUrl items
+
+
+itemRows_ :: (Monad m, ToHtml a) => Maybe Text -> V.Vector a -> HtmlT m ()
 itemRows_ nextFetchUrl items = do
   mapM_ (toHtml) items
   whenJust nextFetchUrl \url ->

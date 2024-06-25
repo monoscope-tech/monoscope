@@ -83,7 +83,6 @@ library:
     - effectful
     - effectful-core
     - monad-time-effectful
-    # - monad-time
     - wai-log
     - pg-transact-effectful
     - log-base
@@ -112,7 +111,6 @@ library:
     - envy
     - errors
     - extra
-    - lucid-aria
     - fmt
     - PyF
     - generic-lens
@@ -123,10 +121,11 @@ library:
     - http-api-data
     - lens
     - lens-aeson
-    - lucid
-    - lucid-htmx
-    - lucid-hyperscript
-    - lucid-svg
+    - lucid >= 2.9.12.1
+    - lucid-aria >= 0.1.0.1
+    - lucid-htmx >= 0.1.0.7
+    - lucid-hyperscript >= 0.1.0.2
+    - lucid-svg >= 0.7.1.1
     - megaparsec
     - neat-interpolation
     - odd-jobs

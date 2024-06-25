@@ -105,6 +105,7 @@ data EndpointRequestStatsVM = EndpointRequestStatsVM Bool UTCTime Endpoints.Endp
 
 
 instance ToHtml EndpointRequestStatsVM where
+  {-# INLINE toHtml #-}
   toHtml (EndpointRequestStatsVM activePage currTime enpStat) = toHtmlRaw $ renderEndpoint activePage currTime enpStat
   toHtmlRaw = toHtml
 
