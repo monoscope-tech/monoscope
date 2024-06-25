@@ -25,6 +25,7 @@ import Safe qualified
 import Text.Megaparsec (choice, errorBundlePretty, parse, sepBy)
 import Text.Megaparsec.Char (char, space)
 
+
 -- Example queries
 -- request_body.v1.v2 = "abc" AND (request_body.v3.v4 = 123 OR request_body.v5[].v6=ANY[1,2,3] OR request_body[1].v7 OR NOT request_body[-1].v8 )
 -- request_body[1].v7 | {.v7, .v8} |
@@ -33,57 +34,64 @@ import Text.Megaparsec.Char (char, space)
 pSection :: Parser Section
 pSection =
   choice @[]
-    [ pStatsSection,
-      pTimeChartSection,
-      Search <$> pExpr
+    [ pStatsSection
+    , pTimeChartSection
+    , Search <$> pExpr
     ]
+
 
 parseQuery :: Parser [Section]
 parseQuery = sepBy pSection (space *> char '|' <* space)
 
+
 data QueryComponents = QueryComponents
-  { whereClause :: Maybe Text,
-    groupByClause :: [Text],
-    select :: [Text],
-    finalColumns :: [Text],
-    -- A query which can be run to retrieve the count
-    countQuery :: Text,
-    -- final generated sql query
-    finalSqlQuery :: Text,
-    finalAlertQuery :: Maybe Text,
-    rollup :: Maybe Text,
-    finalTimechartQuery :: Maybe Text
+  { whereClause :: Maybe Text
+  , groupByClause :: [Text]
+  , select :: [Text]
+  , finalColumns :: [Text]
+  , -- A query which can be run to retrieve the count
+    countQuery :: Text
+  , -- final generated sql query
+    finalSqlQuery :: Text
+  , finalAlertQuery :: Maybe Text
+  , rollup :: Maybe Text
+  , finalTimechartQuery :: Maybe Text
   }
   deriving stock (Show, Generic)
   deriving anyclass (Default)
 
+
 sectionsToComponents :: [Section] -> QueryComponents
 sectionsToComponents = foldl' applySectionToComponent (def :: QueryComponents)
 
+
 applySectionToComponent :: QueryComponents -> Section -> QueryComponents
-applySectionToComponent qc (Search expr) = qc {whereClause = Just $ display expr}
-applySectionToComponent qc (StatsCommand aggs Nothing) = qc {select = qc.select <> map display aggs}
-applySectionToComponent qc (StatsCommand aggs byClauseM) = applyByClauseToQC byClauseM $ qc {select = qc.select <> map display aggs}
-applySectionToComponent qc (TimeChartCommand agg byClauseM rollupM) = applyRollupToQC rollupM $ applyByClauseToQC byClauseM $ qc {select = qc.select <> [display agg]}
+applySectionToComponent qc (Search expr) = qc{whereClause = Just $ display expr}
+applySectionToComponent qc (StatsCommand aggs Nothing) = qc{select = qc.select <> map display aggs}
+applySectionToComponent qc (StatsCommand aggs byClauseM) = applyByClauseToQC byClauseM $ qc{select = qc.select <> map display aggs}
+applySectionToComponent qc (TimeChartCommand agg byClauseM rollupM) = applyRollupToQC rollupM $ applyByClauseToQC byClauseM $ qc{select = qc.select <> [display agg]}
+
 
 applyByClauseToQC :: Maybe ByClause -> QueryComponents -> QueryComponents
 applyByClauseToQC Nothing qc = qc
-applyByClauseToQC (Just (ByClause fields)) qc = qc {groupByClause = qc.groupByClause <> map display fields}
+applyByClauseToQC (Just (ByClause fields)) qc = qc{groupByClause = qc.groupByClause <> map display fields}
+
 
 applyRollupToQC :: Maybe Rollup -> QueryComponents -> QueryComponents
 applyRollupToQC Nothing qc = qc
-applyRollupToQC (Just (Rollup ru)) qc = qc {rollup = Just ru}
+applyRollupToQC (Just (Rollup ru)) qc = qc{rollup = Just ru}
+
 
 ----------------------------------------------------------------------------------
 
 data SqlQueryCfg = SqlQueryCfg
-  { pid :: Projects.ProjectId,
-    presetRollup :: Maybe Text,
-    dateRange :: (Maybe UTCTime, Maybe UTCTime),
-    cursorM :: Maybe UTCTime,
-    projectedColsByUser :: [Text], -- cols selected explicitly by user
-    currentTime :: UTCTime,
-    defaultSelect :: [Text]
+  { pid :: Projects.ProjectId
+  , presetRollup :: Maybe Text
+  , dateRange :: (Maybe UTCTime, Maybe UTCTime)
+  , cursorM :: Maybe UTCTime
+  , projectedColsByUser :: [Text] -- cols selected explicitly by user
+  , currentTime :: UTCTime
+  , defaultSelect :: [Text]
   }
   deriving stock (Show, Generic)
   deriving anyclass (Default)
@@ -112,62 +120,64 @@ sqlFromQueryComponents sqlCfg qc =
       (Just a, Just b) -> "AND created_at BETWEEN '" <> fmtTime a <> "' AND '" <> fmtTime b <> "'"
       _ -> ""
 
-      (fromT, toT) = bimap (fromMaybe sqlCfg.currentTime) (fromMaybe sqlCfg.currentTime) sqlCfg.dateRange
-      timeDiffSecs = abs $ nominalDiffTimeToSeconds $ diffUTCTime fromT toT
+    (fromT, toT) = bimap (fromMaybe sqlCfg.currentTime) (fromMaybe sqlCfg.currentTime) sqlCfg.dateRange
+    timeDiffSecs = abs $ nominalDiffTimeToSeconds $ diffUTCTime fromT toT
 
-      finalSqlQuery =
-        [fmt|SELECT json_build_array({selectClause}) FROM apis.request_dumps 
-            WHERE project_id='{sqlCfg.pid.toText}'::uuid  and ( created_at > NOW() - interval '14 days' 
-            {cursorT} {dateRangeStr} {whereClause} )
-            {groupByClause} ORDER BY created_at desc limit 200 |]
+    finalSqlQuery =
+      [fmt|SELECT json_build_array({selectClause}) FROM apis.request_dumps 
+          WHERE project_id='{sqlCfg.pid.toText}'::uuid  and ( created_at > NOW() - interval '14 days' 
+          {cursorT} {dateRangeStr} {whereClause} )
+          {groupByClause} ORDER BY created_at desc limit 200 |]
 
-      countQuery =
-        [fmt|SELECT count(*) FROM apis.request_dumps 
-            WHERE project_id='{sqlCfg.pid.toText}'::uuid  and ( created_at > NOW() - interval '14 days' 
-            {cursorT} {dateRangeStr} {whereClause} )
-            {groupByClause} limit 1|]
+    countQuery =
+      [fmt|SELECT count(*) FROM apis.request_dumps 
+          WHERE project_id='{sqlCfg.pid.toText}'::uuid  and ( created_at > NOW() - interval '14 days' 
+          {cursorT} {dateRangeStr} {whereClause} )
+          {groupByClause} limit 1|]
 
-      defRollup
-        | timeDiffSecs == 0 = "1h"
-        | timeDiffSecs <= (60 * 30) = "1s"
-        | timeDiffSecs <= (60 * 60) = "20s"
-        | timeDiffSecs <= (60 * 60 * 6) = "1m"
-        | timeDiffSecs <= (60 * 60 * 24 * 3) = "5m"
-        | otherwise = "1h"
+    defRollup
+      | timeDiffSecs == 0 = "1h"
+      | timeDiffSecs <= (60 * 30) = "1s"
+      | timeDiffSecs <= (60 * 60) = "20s"
+      | timeDiffSecs <= (60 * 60 * 6) = "1m"
+      | timeDiffSecs <= (60 * 60 * 24 * 3) = "5m"
+      | otherwise = "1h"
 
-      timeRollup = fromMaybe defRollup (sqlCfg.presetRollup <|> qc.rollup)
+    timeRollup = fromMaybe defRollup (sqlCfg.presetRollup <|> qc.rollup)
 
-      timebucket = [fmt|extract(epoch from time_bucket('{timeRollup}', created_at))::integer as timeB, |] :: Text
-      -- FIXME: render this based on the aggregations
-      chartSelect = [fmt| count(*)::integer as count|] :: Text
-      timeGroupByClause = " GROUP BY " <> T.intercalate "," ("timeB" : qc.groupByClause)
-      timeChartQuery =
-        [fmt|
-        SELECT {timebucket} {chartSelect}, 'Throughput' FROM apis.request_dumps
-            WHERE project_id='{sqlCfg.pid.toText}'::uuid  and ( created_at > NOW() - interval '14 days' 
-            {cursorT} {dateRangeStr} {whereClause} )
-            {timeGroupByClause}
-      |]
+    timebucket = [fmt|extract(epoch from time_bucket('{timeRollup}', created_at))::integer as timeB, |] :: Text
+    -- FIXME: render this based on the aggregations
+    chartSelect = [fmt| count(*)::integer as count|] :: Text
+    timeGroupByClause = " GROUP BY " <> T.intercalate "," ("timeB" : qc.groupByClause)
+    timeChartQuery =
+      [fmt|
+      SELECT {timebucket} {chartSelect}, 'Throughput' FROM apis.request_dumps
+          WHERE project_id='{sqlCfg.pid.toText}'::uuid  and ( created_at > NOW() - interval '14 days' 
+          {cursorT} {dateRangeStr} {whereClause} )
+          {timeGroupByClause}
+    |]
 
-      -- FIXME: render this based on the aggregations, but without the aliases
-      alertSelect = [fmt| count(*)::integer|] :: Text
-      alertGroupByClause = if null qc.groupByClause then "" else " GROUP BY " <> T.intercalate "," qc.groupByClause
-      -- Returns the max of all the values returned by the query. Change 5mins to
-      alertQuery =
-        [fmt|
-        SELECT GREATEST({alertSelect}) FROM apis.request_dumps
-            WHERE project_id='{sqlCfg.pid.toText}'::uuid  and ( created_at > NOW() - interval '{timeRollup}'
-            {whereClause}) {alertGroupByClause} 
-      |]
-   in ( finalSqlQuery,
-        qc
-          { finalColumns = listToColNames selectedCols,
-            countQuery,
-            finalSqlQuery,
-            finalTimechartQuery = Just timeChartQuery,
-            finalAlertQuery = Just alertQuery
-          }
-      )
+    -- FIXME: render this based on the aggregations, but without the aliases
+    alertSelect = [fmt| count(*)::integer|] :: Text
+    alertGroupByClause = if null qc.groupByClause then "" else " GROUP BY " <> T.intercalate "," qc.groupByClause
+    -- Returns the max of all the values returned by the query. Change 5mins to
+    alertQuery =
+      [fmt|
+      SELECT GREATEST({alertSelect}) FROM apis.request_dumps
+          WHERE project_id='{sqlCfg.pid.toText}'::uuid  and ( created_at > NOW() - interval '{timeRollup}'
+          {whereClause}) {alertGroupByClause} 
+    |]
+   in
+    ( finalSqlQuery
+    , qc
+        { finalColumns = listToColNames selectedCols
+        , countQuery
+        , finalSqlQuery
+        , finalTimechartQuery = Just timeChartQuery
+        , finalAlertQuery = Just alertQuery
+        }
+    )
+
 
 -----------------------------------------------------------------------------------
 
@@ -213,6 +223,7 @@ parseQueryStringToWhereClause q =
         (\x -> fromMaybe "" (sectionsToComponents x).whereClause)
         (parse parseQuery "" q)
 
+
 ----------------------------------------------------------------------------------
 -- Convert Query as string to a string capable of being
 -- used in the where clause of an sql statement
@@ -245,32 +256,35 @@ parseQueryToComponents sqlCfg q =
     (sqlFromQueryComponents sqlCfg . sectionsToComponents)
     (parse parseQuery "" q)
 
+
 defPid :: Projects.ProjectId
 defPid = def :: Projects.ProjectId
+
 
 -- Only for tests. and harrd coding
 fixedUTCTime :: UTCTime
 fixedUTCTime = UTCTime (fromGregorian 2020 1 1) (secondsToDiffTime 0)
 
+
 defSqlQueryCfg :: Projects.ProjectId -> UTCTime -> SqlQueryCfg
 defSqlQueryCfg pid currentTime =
   SqlQueryCfg
-    { pid = pid,
-      presetRollup = Nothing,
-      cursorM = Nothing,
-      dateRange = (Nothing, Nothing),
-      projectedColsByUser = [],
-      currentTime,
-      defaultSelect =
-        [ "id::text as id",
-          [fmt|to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as created_at|],
-          "request_type",
-          "host",
-          "status_code",
-          "method",
-          "url_path",
-          "JSONB_ARRAY_LENGTH(errors) as errors_count",
-          [fmt|LEFT(
+    { pid = pid
+    , presetRollup = Nothing
+    , cursorM = Nothing
+    , dateRange = (Nothing, Nothing)
+    , projectedColsByUser = []
+    , currentTime
+    , defaultSelect =
+        [ "id::text as id"
+        , [fmt|to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as created_at|]
+        , "request_type"
+        , "host"
+        , "status_code"
+        , "method"
+        , "url_path"
+        , "JSONB_ARRAY_LENGTH(errors) as errors_count"
+        , [fmt|LEFT(
         CONCAT(
             'url=', COALESCE(raw_url, 'null'),
             ' response_body=', COALESCE(response_body, 'null'),
@@ -281,15 +295,18 @@ defSqlQueryCfg pid currentTime =
         ]
     }
 
+
 -- >>> listToColNames ["id", "JSONB_ARRAY_LENGTH(errors) as errors_count"]
 -- ["id","errors_count"]
 listToColNames :: [Text] -> [Text]
 listToColNames = map \x -> T.strip $ last $ "" :| T.splitOn "as" x
 
+
 -- >>> colsNoAsClause ["id", "JSONB_ARRAY_LENGTH(errors) as errors_count"]
 -- ["id","JSONB_ARRAY_LENGTH(errors)"]
 colsNoAsClause :: [Text] -> [Text]
 colsNoAsClause = mapMaybe (\x -> Safe.headMay $ T.strip <$> T.splitOn "as" x)
+
 
 instance HasField "toColNames" QueryComponents [Text] where
   getField qc = qc.finalColumns

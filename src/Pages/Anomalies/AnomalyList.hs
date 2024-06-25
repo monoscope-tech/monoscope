@@ -219,7 +219,6 @@ data AnomalyListGet
   | ALSlider UTCTime Projects.ProjectId (Maybe Endpoints.EndpointId) (Maybe (V.Vector IssueVM))
 
 
-
 instance ToHtml AnomalyListGet where
   toHtml (ALSlider utcTime pid eid issue) = toHtmlRaw $ anomalyListSlider utcTime pid eid issue
   toHtml (ALItemsPage pg) = toHtml pg
