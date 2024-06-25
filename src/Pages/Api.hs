@@ -1,4 +1,4 @@
-module Pages.Api (apiGetH, apiPostH, apiDeleteH, GenerateAPIKeyForm (..)) where
+module Pages.Api (apiGetH, apiPostH, apiDeleteH, GenerateAPIKeyForm (..), ApiGet) where
 
 import Data.ByteString.Base64 qualified as B64
 import Data.Default (def)
@@ -16,7 +16,7 @@ import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
-import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
+import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
 import Relude hiding (ask)
 import System.Config (AuthContext (config), EnvConfig (apiKeyEncryptionSecretKey))
 import System.Types (ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders, addSuccessToast)
@@ -61,7 +61,7 @@ apiDeleteH pid keyid = do
 
 
 -- | apiGetH renders the api keys list page which includes a modal for creating the apikeys.
-apiGetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders (Html ()))
+apiGetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders (ApiGet))
 apiGetH pid = do
   (sess, project) <- Sessions.sessionAndProject pid
   apiKeys <- dbtToEff $ ProjectApiKeys.projectApiKeysByProjectId pid
@@ -73,7 +73,15 @@ apiGetH pid = do
           , pageTitle = "API Keys"
           , hasIntegrated = Just (requestDumps > 0)
           }
-  addRespHeaders $ bodyWrapper bwconf $ apiKeysPage pid apiKeys
+  addRespHeaders $ ApiGet $ PageCtx bwconf (pid, apiKeys)
+
+
+data ApiGet = ApiGet (PageCtx (Projects.ProjectId, (Vector ProjectApiKeys.ProjectApiKey)))
+
+
+instance ToHtml ApiGet where
+  toHtml (ApiGet (PageCtx bwconf (pid, apiKeys))) = toHtml $ PageCtx bwconf $ apiKeysPage pid apiKeys
+  toHtmlRaw = toHtml
 
 
 apiKeysPage :: Projects.ProjectId -> Vector ProjectApiKeys.ProjectApiKey -> Html ()

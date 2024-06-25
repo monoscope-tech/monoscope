@@ -136,7 +136,7 @@ data CookieProtectedRoutes mode = CookieProtectedRoutes
   , endpoints :: mode :- "p" :> ProjectId :> EndpointsRoutes.Routes
   , monitors :: mode :- "p" :> ProjectId :> MonitorsRoutes.Routes
   , specification :: mode :- "p" :> ProjectId :> SpecificationRoutes.Routes
-  , apiGet :: mode :- "p" :> ProjectId :> "apis" :> Get '[HTML] (RespHeaders (Html ()))
+  , apiGet :: mode :- "p" :> ProjectId :> "apis" :> Get '[HTML] (RespHeaders (Api.ApiGet))
   , apiDelete :: mode :- "p" :> ProjectId :> "apis" :> Capture "keyID" ProjectApiKeys.ProjectApiKeyId :> Delete '[HTML] (RespHeaders (Html ()))
   , apiPost :: mode :- "p" :> ProjectId :> "apis" :> ReqBody '[FormUrlEncoded] Api.GenerateAPIKeyForm :> Post '[HTML] (RespHeaders (Html ()))
   , slackInstallPost :: mode :- "slack" :> "link-projects" :> ReqBody '[FormUrlEncoded] SlackInstall.LinkProjectsForm :> Post '[HTML] (RespHeaders (Html ()))
