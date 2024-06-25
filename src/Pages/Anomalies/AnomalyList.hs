@@ -23,8 +23,7 @@ import Data.Text (replace)
 import Data.Text qualified as T
 import Data.Time (UTCTime, getCurrentTime, zonedTimeToUTC)
 import Data.UUID qualified as UUID
-import Data.Vector (Vector)
-import Data.Vector qualified as Vector
+import Data.Vector qualified as V
 import Database.PostgreSQL.Entity.DBT (QueryNature (Update), execute)
 import Database.PostgreSQL.Simple (Only (Only))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
@@ -78,7 +77,7 @@ acknowlegeAnomalyGetH :: Projects.ProjectId -> Anomalies.AnomalyId -> ATAuthCtx 
 acknowlegeAnomalyGetH pid aid = do
   (sess, project) <- Sessions.sessionAndProject pid
   appCtx <- ask @AuthContext
-  let text_id = Vector.fromList [UUID.toText aid.unAnomalyId]
+  let text_id = V.fromList [UUID.toText aid.unAnomalyId]
   v <- dbtToEff $ Anomalies.acknowledgeAnomalies sess.user.id text_id
   _ <- dbtToEff $ Anomalies.acknowlegeCascade sess.user.id v
   _ <- liftIO $ withResource appCtx.pool \conn -> createJob conn "background_jobs" $ BackgroundJobs.GenSwagger pid sess.user.id
@@ -123,12 +122,12 @@ anomalyBulkActionsPostH pid action items = do
   appCtx <- ask @AuthContext
   _ <- case action of
     "acknowlege" -> do
-      v <- dbtToEff $ Anomalies.acknowledgeAnomalies sess.user.id (Vector.fromList items.anomalyId)
+      v <- dbtToEff $ Anomalies.acknowledgeAnomalies sess.user.id (V.fromList items.anomalyId)
       _ <- dbtToEff $ Anomalies.acknowlegeCascade sess.user.id v
       _ <- liftIO $ withResource appCtx.pool \conn -> createJob conn "background_jobs" $ BackgroundJobs.GenSwagger pid sess.user.id
       pass
     "archive" -> do
-      _ <- dbtToEff $ execute Update [sql| update apis.anomalies set archived_at=NOW() where id=ANY(?::uuid[]) |] (Only $ Vector.fromList items.anomalyId)
+      _ <- dbtToEff $ execute Update [sql| update apis.anomalies set archived_at=NOW() where id=ANY(?::uuid[]) |] (Only $ V.fromList items.anomalyId)
       pass
     _ -> error $ "unhandled anomaly bulk action state " <> action
   addSuccessToast (action <> "d items Successfully") Nothing
@@ -155,7 +154,7 @@ anomalyListGetH pid layoutM filterTM sortM pageM loadM endpointM hxRequestM hxBo
         _ -> (False, False, "Inbox")
 
   let fLimit = 10
-      pageInt = maybe 0 (Unsafe.read . toString) pageM
+  let pageInt = maybe 0 (Unsafe.read . toString) pageM
   issues <- dbtToEff $ Anomalies.selectIssues pid endpointM (Just ackd) (Just archived) sortM (Just fLimit) (pageInt * fLimit)
   currTime <- liftIO getCurrentTime
   let currentURL = mconcat ["/p/", pid.toText, "/anomalies?layout=", fromMaybe "false" layoutM, "&ackd=", show ackd, "&archived=", show archived]
@@ -207,26 +206,27 @@ anomalyListGetH pid layoutM filterTM sortM pageM loadM endpointM hxRequestM hxBo
           , currProject = Just project
           , pageTitle = "Changes & Errors"
           }
-
+      issuesVM = V.map (IssueVM False currTime) issues
   addRespHeaders $ case (layoutM, hxRequestM, hxBoostedM, loadM) of
-    (Just "slider", Just "true", _, _) -> ALSlider currTime pid endpointM (Just issues)
-    (_, _, _, Just "true") -> ALItemsRows $ ItemsList.ItemsRows nextFetchUrl issues
-    _ -> ALItemsPage $ PageCtx bwconf (ItemsList.ItemsPage listCfg issues)
+    (Just "slider", Just "true", _, _) -> ALSlider currTime pid endpointM (Just $ V.map (IssueVM True currTime) issues)
+    (_, _, _, Just "true") -> ALItemsRows $ ItemsList.ItemsRows nextFetchUrl issuesVM
+    _ -> ALItemsPage $ PageCtx bwconf (ItemsList.ItemsPage listCfg issuesVM)
 
 
 data AnomalyListGet
-  = ALItemsPage (PageCtx (ItemsList.ItemsPage Anomalies.IssueL))
-  | ALItemsRows (ItemsList.ItemsRows Anomalies.IssueL)
-  | ALSlider UTCTime Projects.ProjectId (Maybe Endpoints.EndpointId) (Maybe (Vector Anomalies.IssueL))
+  = ALItemsPage (PageCtx (ItemsList.ItemsPage IssueVM))
+  | ALItemsRows (ItemsList.ItemsRows IssueVM)
+  | ALSlider UTCTime Projects.ProjectId (Maybe Endpoints.EndpointId) (Maybe (V.Vector IssueVM))
 
 
 instance ToHtml AnomalyListGet where
-  toHtml (ALSlider utcTime pid eid issue) = toHtmlRaw $ toHtml $ anomalyListSlider utcTime pid eid issue
-  toHtml (val) = toHtmlRaw $ toHtml val
+  toHtml (ALSlider utcTime pid eid issue) = toHtmlRaw $ anomalyListSlider utcTime pid eid issue
+  toHtml (ALItemsPage pg) = toHtml pg
+  toHtml (ALItemsRows rows) = toHtml rows
   toHtmlRaw = toHtml
 
 
-anomalyListSlider :: UTCTime -> Projects.ProjectId -> Maybe Endpoints.EndpointId -> Maybe (Vector Anomalies.IssueL) -> Html ()
+anomalyListSlider :: UTCTime -> Projects.ProjectId -> Maybe Endpoints.EndpointId -> Maybe (V.Vector IssueVM) -> Html ()
 anomalyListSlider _ _ _ (Just []) = ""
 anomalyListSlider _ pid eid Nothing = do
   div_ [hxGet_ $ "/p/" <> pid.toText <> "/anomalies?layout=slider" <> maybe "" (\x -> "&endpoint=" <> x.toText) eid, hxSwap_ "outerHTML", hxTrigger_ "load"] do
@@ -236,7 +236,7 @@ anomalyListSlider _ pid eid Nothing = do
         span_ [class_ "text-lg text-slate-700"] "Ongoing Issues and Monitors"
       div_ [class_ "flex flex-row mt-2"] ""
 anomalyListSlider currTime _ _ (Just issues) = do
-  let anomalyIds = replace "\"" "'" $ show $ fmap (Anomalies.anomalyIdText . (.id)) issues
+  let anomalyIds = replace "\"" "'" $ show $ fmap (Anomalies.anomalyIdText . (\(IssueVM _ _ issue) -> issue.id)) issues
   let totalAnomaliesTxt = toText $ if length issues > 10 then ("10+" :: Text) else show (length issues)
   div_ do
     script_ [text| var rem = (x,y)=>((x%y)==0?1:(x%y)); |]
@@ -271,7 +271,7 @@ anomalyListSlider currTime _ _ (Just issues) = do
       [ class_ "parent-slider"
       , [__|init setAnomalySliderPag() then show #{$anomalyIds[$currentAnomaly]} |]
       ]
-      $ mapM_ (renderIssue True currTime) issues
+      $ mapM_ toHtml issues
 
 
 shapeParameterStats_ :: Int -> Int -> Int -> Html ()
@@ -355,7 +355,7 @@ anomalyDetailsGetH pid targetHash hxBoostedM = do
           -- for endpoint anomalies
           shapes <- dbtToEff $ Shapes.shapesByEndpointHash pid targetHash
           fields <- dbtToEff $ Fields.selectFields pid targetHash
-          let shapesWithFieldsMap = Vector.map (`getShapeFields` fields) shapes
+          let shapesWithFieldsMap = V.map (`getShapeFields` fields) shapes
           case hxBoostedM of
             Just _ -> addRespHeaders $ anomalyDetailsPage issue (Just shapesWithFieldsMap) Nothing Nothing currTime True
             Nothing -> addRespHeaders $ bodyWrapper bwconf $ div_ [class_ "w-full px-32 overflow-y-scroll h-full"] do
@@ -389,7 +389,7 @@ anomalyDetailsGetH pid targetHash hxBoostedM = do
         _ -> addRespHeaders $ "TODO"
 
 
-anomalyDetailsPage :: Anomalies.IssueL -> Maybe (Vector Shapes.ShapeWithFields) -> Maybe (Map Fields.FieldCategoryEnum [Fields.Field], Map Fields.FieldCategoryEnum [Fields.Field], Map Fields.FieldCategoryEnum [Fields.Field]) -> Maybe (Vector Text) -> UTCTime -> Bool -> Html ()
+anomalyDetailsPage :: Anomalies.IssueL -> Maybe (V.Vector Shapes.ShapeWithFields) -> Maybe (Map Fields.FieldCategoryEnum [Fields.Field], Map Fields.FieldCategoryEnum [Fields.Field], Map Fields.FieldCategoryEnum [Fields.Field]) -> Maybe (V.Vector Text) -> UTCTime -> Bool -> Html ()
 anomalyDetailsPage issue shapesWithFieldsMap fields prvFormatsM currTime modal = do
   let anomalyQueryPartial = buildQueryForAnomaly issue.anomalyType issue.targetHash
   div_ [class_ "w-full "] do
@@ -496,12 +496,12 @@ buildQueryForAnomaly Anomalies.ATRuntimeException hash = "errors[*].hash==\"" <>
 buildQueryForAnomaly Anomalies.ATUnknown hash = ""
 
 
-endpointOverview :: Maybe (Vector Shapes.ShapeWithFields) -> Html ()
+endpointOverview :: Maybe (V.Vector Shapes.ShapeWithFields) -> Html ()
 endpointOverview shapesWithFieldsMap =
   div_ [] do
     whenJust shapesWithFieldsMap \s -> do
-      reqResSection "Request" True (Vector.toList s)
-      reqResSection "Response" False (Vector.toList s)
+      reqResSection "Request" True (V.toList s)
+      reqResSection "Response" False (V.toList s)
 
 
 requestShapeOverview :: Maybe (Map Fields.FieldCategoryEnum [Fields.Field], Map Fields.FieldCategoryEnum [Fields.Field], Map Fields.FieldCategoryEnum [Fields.Field]) -> Html ()
@@ -524,7 +524,7 @@ requestShapeOverview fieldChanges = div_ [class_ "flex flex-col gap-6"] do
         subSubSection "Response Body" (Map.lookup Fields.FCResponseBody fields)
 
 
-anomalyFormatOverview :: Anomalies.NewFormatIssue -> Vector Text -> Html ()
+anomalyFormatOverview :: Anomalies.NewFormatIssue -> V.Vector Text -> Html ()
 anomalyFormatOverview formatData prevFormats =
   section_ [class_ "space-y-10"] do
     div_ [class_ "flex items-center gap-6"] do
@@ -564,6 +564,15 @@ issueDisplayConfig issue = case issue.issueData of
   Anomalies.IDEmpty -> ("Unknown anomaly", "/assets/svgs/anomalies/fields.svg")
 
 
+data IssueVM = IssueVM Bool UTCTime Anomalies.IssueL
+
+
+instance ToHtml IssueVM where
+  {-# INLINE toHtml #-}
+  toHtml (IssueVM hideByDefault currTime issue) = toHtmlRaw $ renderIssue hideByDefault currTime issue
+  toHtmlRaw = toHtml
+
+
 renderIssue :: Bool -> UTCTime -> Anomalies.IssueL -> Html ()
 renderIssue hideByDefault currTime issue = do
   let (issueTitle, icon) = issueDisplayConfig issue
@@ -595,7 +604,7 @@ renderIssue hideByDefault currTime issue = do
                 span_ "" -- TODO: Should be comma separated list of formats for that field.
               div_ do
                 small_ "examples: "
-                small_ $ toHtml $ maybe "" (T.intercalate ", " . Vector.toList) issueD.examples
+                small_ $ toHtml $ maybe "" (T.intercalate ", " . V.toList) issueD.examples
       issueItem hideByDefault currTime issue icon issueTitle (Just subTitle) (Just formatContent)
     Anomalies.IDNewRuntimeExceptionIssue issueD -> do
       let subTitle = span_ [class_ "space-x-2"] do

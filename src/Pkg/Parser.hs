@@ -103,78 +103,80 @@ normalizeKeyPath txt = T.toLower $ T.replace "]" "❳" $ T.replace "[" "❲" $ T
 
 sqlFromQueryComponents :: SqlQueryCfg -> QueryComponents -> (Text, QueryComponents)
 sqlFromQueryComponents sqlCfg qc =
-  let fmtTime = toText . iso8601Show
-      cursorT = maybe "" (\c -> " AND created_at<'" <> fmtTime c <> "' ") sqlCfg.cursorM
-      -- Handle the Either error case correctly not hushing it.
-      projectedColsProcessed =
-        sqlCfg.projectedColsByUser & mapMaybe \col -> do
-          subJ@(Subject entire _ _) <- hush (parse pSubject "" col)
-          pure $ display subJ <> " as " <> normalizeKeyPath entire
-      selectedCols = if null qc.select then projectedColsProcessed <> sqlCfg.defaultSelect else qc.select
-      selectClause = T.intercalate "," $ colsNoAsClause selectedCols
-      whereClause = maybe "" (\whereC -> " AND (" <> whereC <> ")") qc.whereClause
-      groupByClause = if null qc.groupByClause then "" else " GROUP BY " <> T.intercalate "," qc.groupByClause
-      dateRangeStr = case sqlCfg.dateRange of
-        (Nothing, Just b) -> "AND created_at BETWEEN NOW() AND '" <> fmtTime b <> "'"
-        (Just a, Just b) -> "AND created_at BETWEEN '" <> fmtTime a <> "' AND '" <> fmtTime b <> "'"
-        _ -> ""
+  let
+    fmtTime = toText . iso8601Show
+    cursorT = maybe "" (\c -> " AND created_at<'" <> fmtTime c <> "' ") sqlCfg.cursorM
+    -- Handle the Either error case correctly not hushing it.
+    projectedColsProcessed =
+      sqlCfg.projectedColsByUser & mapMaybe \col -> do
+        subJ@(Subject entire _ _) <- hush (parse pSubject "" col)
+        pure $ display subJ <> " as " <> normalizeKeyPath entire
+    selectedCols = if null qc.select then projectedColsProcessed <> sqlCfg.defaultSelect else qc.select
+    selectClause = T.intercalate "," $ colsNoAsClause selectedCols
+    whereClause = maybe "" (\whereC -> " AND (" <> whereC <> ")") qc.whereClause
+    groupByClause = if null qc.groupByClause then "" else " GROUP BY " <> T.intercalate "," qc.groupByClause
+    dateRangeStr = case sqlCfg.dateRange of
+      (Nothing, Just b) -> "AND created_at BETWEEN NOW() AND '" <> fmtTime b <> "'"
+      (Just a, Just b) -> "AND created_at BETWEEN '" <> fmtTime a <> "' AND '" <> fmtTime b <> "'"
+      _ -> ""
 
-      (fromT, toT) = bimap (fromMaybe sqlCfg.currentTime) (fromMaybe sqlCfg.currentTime) sqlCfg.dateRange
-      timeDiffSecs = abs $ nominalDiffTimeToSeconds $ diffUTCTime fromT toT
+    (fromT, toT) = bimap (fromMaybe sqlCfg.currentTime) (fromMaybe sqlCfg.currentTime) sqlCfg.dateRange
+    timeDiffSecs = abs $ nominalDiffTimeToSeconds $ diffUTCTime fromT toT
 
-      finalSqlQuery =
-        [fmt|SELECT json_build_array({selectClause}) FROM apis.request_dumps 
-            WHERE project_id='{sqlCfg.pid.toText}'::uuid  and ( created_at > NOW() - interval '14 days' 
-            {cursorT} {dateRangeStr} {whereClause} )
-            {groupByClause} ORDER BY created_at desc limit 200 |]
+    finalSqlQuery =
+      [fmt|SELECT json_build_array({selectClause}) FROM apis.request_dumps 
+          WHERE project_id='{sqlCfg.pid.toText}'::uuid  and ( created_at > NOW() - interval '14 days' 
+          {cursorT} {dateRangeStr} {whereClause} )
+          {groupByClause} ORDER BY created_at desc limit 200 |]
 
-      countQuery =
-        [fmt|SELECT count(*) FROM apis.request_dumps 
-            WHERE project_id='{sqlCfg.pid.toText}'::uuid  and ( created_at > NOW() - interval '14 days' 
-            {cursorT} {dateRangeStr} {whereClause} )
-            {groupByClause} limit 1|]
+    countQuery =
+      [fmt|SELECT count(*) FROM apis.request_dumps 
+          WHERE project_id='{sqlCfg.pid.toText}'::uuid  and ( created_at > NOW() - interval '14 days' 
+          {cursorT} {dateRangeStr} {whereClause} )
+          {groupByClause} limit 1|]
 
-      defRollup
-        | timeDiffSecs == 0 = "1h"
-        | timeDiffSecs <= (60 * 30) = "1s"
-        | timeDiffSecs <= (60 * 60) = "20s"
-        | timeDiffSecs <= (60 * 60 * 6) = "1m"
-        | timeDiffSecs <= (60 * 60 * 24 * 3) = "5m"
-        | otherwise = "1h"
+    defRollup
+      | timeDiffSecs == 0 = "1h"
+      | timeDiffSecs <= (60 * 30) = "1s"
+      | timeDiffSecs <= (60 * 60) = "20s"
+      | timeDiffSecs <= (60 * 60 * 6) = "1m"
+      | timeDiffSecs <= (60 * 60 * 24 * 3) = "5m"
+      | otherwise = "1h"
 
-      timeRollup = fromMaybe defRollup (sqlCfg.presetRollup <|> qc.rollup)
+    timeRollup = fromMaybe defRollup (sqlCfg.presetRollup <|> qc.rollup)
 
-      timebucket = [fmt|extract(epoch from time_bucket('{timeRollup}', created_at))::integer as timeB, |] :: Text
-      -- FIXME: render this based on the aggregations
-      chartSelect = [fmt| count(*)::integer as count|] :: Text
-      timeGroupByClause = " GROUP BY " <> T.intercalate "," ("timeB" : qc.groupByClause)
-      timeChartQuery =
-        [fmt|
-        SELECT {timebucket} {chartSelect}, 'Throughput' FROM apis.request_dumps
-            WHERE project_id='{sqlCfg.pid.toText}'::uuid  and ( created_at > NOW() - interval '14 days' 
-            {cursorT} {dateRangeStr} {whereClause} )
-            {timeGroupByClause}
-      |]
+    timebucket = [fmt|extract(epoch from time_bucket('{timeRollup}', created_at))::integer as timeB, |] :: Text
+    -- FIXME: render this based on the aggregations
+    chartSelect = [fmt| count(*)::integer as count|] :: Text
+    timeGroupByClause = " GROUP BY " <> T.intercalate "," ("timeB" : qc.groupByClause)
+    timeChartQuery =
+      [fmt|
+      SELECT {timebucket} {chartSelect}, 'Throughput' FROM apis.request_dumps
+          WHERE project_id='{sqlCfg.pid.toText}'::uuid  and ( created_at > NOW() - interval '14 days' 
+          {cursorT} {dateRangeStr} {whereClause} )
+          {timeGroupByClause}
+    |]
 
-      -- FIXME: render this based on the aggregations, but without the aliases
-      alertSelect = [fmt| count(*)::integer|] :: Text
-      alertGroupByClause = if null qc.groupByClause then "" else " GROUP BY " <> T.intercalate "," qc.groupByClause
-      -- Returns the max of all the values returned by the query. Change 5mins to
-      alertQuery =
-        [fmt|
-        SELECT GREATEST({alertSelect}) FROM apis.request_dumps
-            WHERE project_id='{sqlCfg.pid.toText}'::uuid  and ( created_at > NOW() - interval '{timeRollup}'
-            {whereClause}) {alertGroupByClause} 
-      |]
-   in ( finalSqlQuery
-      , qc
-          { finalColumns = listToColNames selectedCols
-          , countQuery
-          , finalSqlQuery
-          , finalTimechartQuery = Just timeChartQuery
-          , finalAlertQuery = Just alertQuery
-          }
-      )
+    -- FIXME: render this based on the aggregations, but without the aliases
+    alertSelect = [fmt| count(*)::integer|] :: Text
+    alertGroupByClause = if null qc.groupByClause then "" else " GROUP BY " <> T.intercalate "," qc.groupByClause
+    -- Returns the max of all the values returned by the query. Change 5mins to
+    alertQuery =
+      [fmt|
+      SELECT GREATEST({alertSelect}) FROM apis.request_dumps
+          WHERE project_id='{sqlCfg.pid.toText}'::uuid  and ( created_at > NOW() - interval '{timeRollup}'
+          {whereClause}) {alertGroupByClause} 
+    |]
+   in
+    ( finalSqlQuery
+    , qc
+        { finalColumns = listToColNames selectedCols
+        , countQuery
+        , finalSqlQuery
+        , finalTimechartQuery = Just timeChartQuery
+        , finalAlertQuery = Just alertQuery
+        }
+    )
 
 
 -----------------------------------------------------------------------------------

@@ -218,11 +218,11 @@ library
     , lens-aeson
     , log-base
     , log-effectful
-    , lucid
-    , lucid-aria
-    , lucid-htmx
-    , lucid-hyperscript
-    , lucid-svg
+    , lucid >=2.9.12.1
+    , lucid-aria >=0.1.0.1
+    , lucid-htmx >=0.1.0.7
+    , lucid-hyperscript >=0.1.0.2
+    , lucid-svg >=0.7.1.1
     , megaparsec
     , monad-time-effectful
     , mtl
