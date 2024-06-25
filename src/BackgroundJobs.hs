@@ -470,27 +470,24 @@ Endpoint: `{endpointPath}`
         project <- Unsafe.fromJust <<$>> dbtToEff $ Projects.projectById pid
         let anomaly' = anomaly{Anomalies.anomalyType = anomalyType, Anomalies.shapeDeletedFields = V.fromList deletedFields, Anomalies.shapeUpdatedFieldFormats = updatedFieldFormats, Anomalies.shapeNewUniqueFields = V.fromList newFields}
         _ <- dbtToEff $ Anomalies.insertIssue $ Unsafe.fromJust $ Anomalies.convertAnomalyToIssue (endp <&> (.host)) anomaly'
-        pass
-    -- Temporarily disable notifications due to change in how field hashes are computed (no longer include field type in the hash).
-    -- Uncomment after 24 to 48 hours, since mossst users would have had a lot of the shapes show up already
-    -- forM_ project.notificationsChannel \case
-    --   Projects.NSlack ->
-    --     sendSlackMessage
-    --       pid
-    --       [fmtTrim| 🤖 *New Shape anomaly found for `{project.title}`*
-    --                   We detected a different API request shape to your endpoints than what you usually have
+        forM_ project.notificationsChannel \case
+         Projects.NSlack ->
+           sendSlackMessage
+             pid
+             [fmtTrim| 🤖 *New Shape anomaly found for `{project.title}`*
+                         We detected a different API request shape to your endpoints than what you usually have
 
-    --                   <https://app.apitoolkit.io/p/{pid.toText}/anomalies/by_hash/{targetHash}|More details on the apitoolkit>
-    --                        |]
-    --   _ -> do
-    --     forM_ users \u -> do
-    --       let templateVars =
-    --             object
-    --               [ "user_name" .= u.firstName
-    --               , "project_name" .= project.title
-    --               , "anomaly_url" .= ("https://app.apitoolkit.io/p/" <> pid.toText <> "/anomalies/by_hash/" <> targetHash)
-    --               ]
-    --       sendPostmarkEmail (CI.original u.email) "anomaly-shape" templateVars
+                         <https://app.apitoolkit.io/p/{pid.toText}/anomalies/by_hash/{targetHash}|More details on the apitoolkit>
+                              |]
+         _ -> do
+           forM_ users \u -> do
+             let templateVars =
+                   object
+                     [ "user_name" .= u.firstName
+                     , "project_name" .= project.title
+                     , "anomaly_url" .= ("https://app.apitoolkit.io/p/" <> pid.toText <> "/anomalies/by_hash/" <> targetHash)
+                     ]
+             sendPostmarkEmail (CI.original u.email) "anomaly-shape" templateVars
     Anomalies.ATFormat -> do
       -- Send an email about the new shape anomaly but only if there was no endpoint anomaly logged
       hasEndpointAnomaly <- dbtToEff $ Anomalies.getFormatParentAnomalyVM pid targetHash
@@ -499,30 +496,27 @@ Endpoint: `{endpointPath}`
         users <- dbtToEff $ Projects.usersByProjectId pid
         project <- Unsafe.fromJust <<$>> dbtToEff $ Projects.projectById pid
         _ <- dbtToEff $ Anomalies.insertIssue $ Unsafe.fromJust $ Anomalies.convertAnomalyToIssue (endp <&> (.host)) anomaly
-        pass
-    -- Temporarily disable notifications due to change in how field hashes are computed (no longer include field type in the hash).
-    -- Uncomment after 24 to 48 hours, since mossst users would have had a lot of the shapes show up already
-    -- forM_ project.notificationsChannel \case
-    --   Projects.NSlack ->
-    --     sendSlackMessage
-    --       pid
-    --       [fmtTrim| 🤖 *New Field Format Anomaly Found for `{project.title}`*
+        forM_ project.notificationsChannel \case
+          Projects.NSlack ->
+            sendSlackMessage
+              pid
+              [fmtTrim| 🤖 *New Field Format Anomaly Found for `{project.title}`*
 
-    --                      We detected that a particular field on your API is returning a different format/type than what it usually gets.
+                             We detected that a particular field on your API is returning a different format/type than what it usually gets.
 
-    --                      <https://app.apitoolkit.io/p/{pid.toText}/anomalies/by_hash/{targetHash}|More details on the apitoolkit>
-    --                        |]
-    --   _ -> forM_ users \u -> do
-    --     let firstName = u.firstName
-    --     let title = project.title
-    --     let anomaly_url = "https://app.apitoolkit.io/p/" <> pid.toText <> "/anomalies/by_hash/" <> targetHash
-    --     let templateVars =
-    --           [aesonQQ|{
-    --               "user_name": #{firstName},
-    --               "project_name": #{title},
-    --               "anomaly_url": #{anomaly_url}
-    --          }|]
-    --     sendPostmarkEmail (CI.original u.email) "anomaly-field" templateVars
+                             <https://app.apitoolkit.io/p/{pid.toText}/anomalies/by_hash/{targetHash}|More details on the apitoolkit>
+                               |]
+          _ -> forM_ users \u -> do
+            let firstName = u.firstName
+            let title = project.title
+            let anomaly_url = "https://app.apitoolkit.io/p/" <> pid.toText <> "/anomalies/by_hash/" <> targetHash
+            let templateVars =
+                  [aesonQQ|{
+                      "user_name": #{firstName},
+                      "project_name": #{title},
+                      "anomaly_url": #{anomaly_url}
+                 }|]
+            sendPostmarkEmail (CI.original u.email) "anomaly-field" templateVars
     Anomalies.ATRuntimeException -> do
       users <- dbtToEff $ Projects.usersByProjectId pid
       project <- Unsafe.fromJust <<$>> dbtToEff $ Projects.projectById pid
