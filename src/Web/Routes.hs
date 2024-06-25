@@ -27,6 +27,7 @@ import Pages.Anomalies.Routes qualified as AnomaliesRoutes
 import Pages.Anomalies.Server qualified as AnomaliesRoutes
 import Pages.Api qualified as Api
 import Pages.AutoComplete qualified as AutoComplete
+import Pages.BodyWrapper (PageCtx (..))
 import Pages.Charts.Charts qualified as Charts
 import Pages.Dashboard qualified as Dashboard
 import Pages.Endpoints.Routes qualified as EndpointsRoutes
@@ -127,7 +128,7 @@ type role CookieProtectedRoutes nominal
 
 
 data CookieProtectedRoutes mode = CookieProtectedRoutes
-  { dashboardGet :: mode :- "p" :> ProjectId :> QPT "from" :> QPT "to" :> QPT "since" :> Get '[HTML] (RespHeaders (Html ()))
+  { dashboardGet :: mode :- "p" :> ProjectId :> QPT "from" :> QPT "to" :> QPT "since" :> Get '[HTML] (RespHeaders (PageCtx Dashboard.DashboardGet))
   , projects :: mode :- ProjectsRoutes.Routes
   , onboardingGet :: mode :- "p" :> ProjectId :> "onboarding" :> QPB "polling" :> QPB "redirected" :> QPT "current_tab" :> Get '[HTML] (RespHeaders (Html ()))
   , anomalies :: mode :- "p" :> ProjectId :> "anomalies" :> AnomaliesRoutes.Routes

@@ -1,6 +1,6 @@
 {-# OPTIONS_GHC -Wno-unused-do-bind #-}
 
-module Pages.Specification.Documentation (documentationGetH, documentationPostH, documentationPutH, SwaggerForm, SaveSwaggerForm) where
+module Pages.Specification.Documentation (documentationGetH, documentationPostH, documentationPutH, SwaggerForm, SaveSwaggerForm, DocumentationGet) where
 
 import Data.Aeson (
   FromJSON,
@@ -35,7 +35,7 @@ import Models.Projects.Swaggers qualified as Swaggers
 import Models.Users.Sessions qualified as Sessions
 import NeatInterpolation (text)
 import Numeric (showHex)
-import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
+import Pages.BodyWrapper (BWConfig (..), PageCtx (..), bodyWrapper)
 import Relude hiding (ask)
 import Relude.Unsafe qualified as Unsafe
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders, addSuccessToast)
@@ -285,7 +285,15 @@ documentationPostH pid SwaggerForm{swagger_json, from} = do
   addRespHeaders ""
 
 
-documentationGetH :: Projects.ProjectId -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))
+data DocumentationGet = DocumentationGet Projects.ProjectId (V.Vector Swaggers.Swagger) String String
+
+
+instance ToHtml DocumentationGet where
+  toHtml (DocumentationGet pid swaggers swaggerID jsonString) = toHtmlRaw $ toHtml $ documentationsPage pid swaggers swaggerID jsonString
+  toHtmlRaw = toHtml
+
+
+documentationGetH :: Projects.ProjectId -> Maybe Text -> ATAuthCtx (RespHeaders (PageCtx (DocumentationGet)))
 documentationGetH pid swagger_id = do
   (sess, project) <- Sessions.sessionAndProject pid
   (swaggers, swagger, swaggerId) <- dbtToEff do
@@ -319,7 +327,7 @@ documentationGetH pid swagger_id = do
           , currProject = Just project
           , pageTitle = "OpenAPI/Swagger"
           }
-  addRespHeaders $ bodyWrapper bwconf $ documentationsPage pid swaggers swaggerId (decodeUtf8 (encode swagger))
+  addRespHeaders $ PageCtx bwconf $ DocumentationGet pid swaggers swaggerId (decodeUtf8 (encode swagger))
 
 
 documentationsPage :: Projects.ProjectId -> V.Vector Swaggers.Swagger -> String -> String -> Html ()
