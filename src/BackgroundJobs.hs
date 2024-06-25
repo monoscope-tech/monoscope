@@ -471,23 +471,23 @@ Endpoint: `{endpointPath}`
         let anomaly' = anomaly{Anomalies.anomalyType = anomalyType, Anomalies.shapeDeletedFields = V.fromList deletedFields, Anomalies.shapeUpdatedFieldFormats = updatedFieldFormats, Anomalies.shapeNewUniqueFields = V.fromList newFields}
         _ <- dbtToEff $ Anomalies.insertIssue $ Unsafe.fromJust $ Anomalies.convertAnomalyToIssue (endp <&> (.host)) anomaly'
         forM_ project.notificationsChannel \case
-         Projects.NSlack ->
-           sendSlackMessage
-             pid
-             [fmtTrim| 🤖 *New Shape anomaly found for `{project.title}`*
+          Projects.NSlack ->
+            sendSlackMessage
+              pid
+              [fmtTrim| 🤖 *New Shape anomaly found for `{project.title}`*
                          We detected a different API request shape to your endpoints than what you usually have
 
                          <https://app.apitoolkit.io/p/{pid.toText}/anomalies/by_hash/{targetHash}|More details on the apitoolkit>
                               |]
-         _ -> do
-           forM_ users \u -> do
-             let templateVars =
-                   object
-                     [ "user_name" .= u.firstName
-                     , "project_name" .= project.title
-                     , "anomaly_url" .= ("https://app.apitoolkit.io/p/" <> pid.toText <> "/anomalies/by_hash/" <> targetHash)
-                     ]
-             sendPostmarkEmail (CI.original u.email) "anomaly-shape" templateVars
+          _ -> do
+            forM_ users \u -> do
+              let templateVars =
+                    object
+                      [ "user_name" .= u.firstName
+                      , "project_name" .= project.title
+                      , "anomaly_url" .= ("https://app.apitoolkit.io/p/" <> pid.toText <> "/anomalies/by_hash/" <> targetHash)
+                      ]
+              sendPostmarkEmail (CI.original u.email) "anomaly-shape" templateVars
     Anomalies.ATFormat -> do
       -- Send an email about the new shape anomaly but only if there was no endpoint anomaly logged
       hasEndpointAnomaly <- dbtToEff $ Anomalies.getFormatParentAnomalyVM pid targetHash

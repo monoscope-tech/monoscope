@@ -1,6 +1,6 @@
 {-# OPTIONS_GHC -Wno-unused-do-bind #-}
 
-module Pages.Onboarding (onboardingGetH, integrateApiToolkit, tabs, contentHeader) where
+module Pages.Onboarding (onboardingGetH, integrateApiToolkit, tabs, contentHeader, OnboardingGet) where
 
 import Data.Default (def)
 import Data.Vector qualified as V
@@ -14,7 +14,7 @@ import Models.Projects.Projects qualified as Projectjs
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
 import NeatInterpolation (text)
-import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
+import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
 import Pkg.Components
 import Relude hiding (ask)
 import System.Types
@@ -23,7 +23,7 @@ import Utils (
  )
 
 
-onboardingGetH :: Projects.ProjectId -> Maybe Bool -> Maybe Bool -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))
+onboardingGetH :: Projects.ProjectId -> Maybe Bool -> Maybe Bool -> Maybe Text -> ATAuthCtx (RespHeaders (OnboardingGet))
 onboardingGetH pid polling redirected current_tab = do
   (sess, project) <- Sessions.sessionAndProject pid
   apiKeys <- dbtToEff $ ProjectApiKeys.projectApiKeysByProjectId pid
@@ -38,8 +38,19 @@ onboardingGetH pid polling redirected current_tab = do
           , hasIntegrated = Just hasRequest
           }
   case polling of
-    Just _ -> addRespHeaders $ onboardingPage pid apikey hasRequest (isJust project.questions) (fromMaybe False redirected) (fromMaybe "express" current_tab)
-    Nothing -> addRespHeaders $ bodyWrapper bwconf $ onboardingPage pid apikey hasRequest (isJust project.questions) (fromMaybe False redirected) "express"
+    Just _ -> addRespHeaders $ OnboardingGetPolling pid apikey hasRequest (isJust project.questions) (fromMaybe False redirected) (fromMaybe "express" current_tab)
+    Nothing -> addRespHeaders $ OnboardingGetNM $ PageCtx bwconf $ (pid, apikey, hasRequest, (isJust project.questions), (fromMaybe False redirected), "express")
+
+
+data OnboardingGet
+  = OnboardingGetNM (PageCtx (Projects.ProjectId, Text, Bool, Bool, Bool, Text))
+  | OnboardingGetPolling Projects.ProjectId Text Bool Bool Bool Text
+
+
+instance ToHtml OnboardingGet where
+  toHtml (OnboardingGetNM (PageCtx bwconf (pid, apikey, hasRequest, ans, redi, ctb))) = toHtml $ PageCtx bwconf $ onboardingPage pid apikey hasRequest ans redi ctb
+  toHtml (OnboardingGetPolling pid apikey hasRequest ans redi ctb) = toHtml $ onboardingPage pid apikey hasRequest ans redi ctb
+  toHtmlRaw = toHtml
 
 
 onboardingPage :: Projects.ProjectId -> Text -> Bool -> Bool -> Bool -> Text -> Html ()

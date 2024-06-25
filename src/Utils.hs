@@ -1,34 +1,34 @@
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE RankNTypes #-}
 
-module Utils
-  ( eitherStrToText,
-    userIsProjectMember,
-    GetOrRedirect,
-    redirect,
-    lookupVecByKey,
-    DBField (..),
-    faSprite_,
-    lookupVecInt,
-    lookupVecText,
-    lookupVecIntByKey,
-    lookupVecTextByKey,
-    faIcon_,
-    deleteParam,
-    quoteTxt,
-    textToBool,
-    getMethodColor,
-    getStatusColor,
-    unwrapJsonPrimValue,
-    listToIndexHashMap,
-    lemonSqueezyUrls,
-    lemonSqueezyUrlsAnnual,
-    lookupMapText,
-    lookupMapInt,
-    freeTierLimitExceededBanner,
-    isDemoAndNotSudo,
-    escapedQueryPartial,
-  )
+module Utils (
+  eitherStrToText,
+  userIsProjectMember,
+  GetOrRedirect,
+  redirect,
+  lookupVecByKey,
+  DBField (..),
+  faSprite_,
+  lookupVecInt,
+  lookupVecText,
+  lookupVecIntByKey,
+  lookupVecTextByKey,
+  faIcon_,
+  deleteParam,
+  quoteTxt,
+  textToBool,
+  getMethodColor,
+  getStatusColor,
+  unwrapJsonPrimValue,
+  listToIndexHashMap,
+  lemonSqueezyUrls,
+  lemonSqueezyUrlsAnnual,
+  lookupMapText,
+  lookupMapInt,
+  freeTierLimitExceededBanner,
+  isDemoAndNotSudo,
+  escapedQueryPartial,
+)
 where
 
 import Data.Aeson (Value)
@@ -51,9 +51,11 @@ import Servant
 import Text.Regex.TDFA ((=~))
 import Text.Show
 
+
 -- Added only for satisfying the tests
 instance Eq ZonedTime where
   (==) _ _ = True
+
 
 -- | eitherStrToText helps to convert Either String a to Either Text a,
 -- to allow using both of them via do notation in the same monad.
@@ -61,24 +63,32 @@ eitherStrToText :: Either String a -> Either Text a
 eitherStrToText (Left str) = Left $ toText str
 eitherStrToText (Right a) = Right a
 
+
 type GetOrRedirect = '[WithStatus 200 (Html ()), WithStatus 302 (Headers '[Header "Location" Text] NoContent)]
+
 
 escapedQueryPartial :: Text -> Text
 escapedQueryPartial x = toText $ escapeURIString isUnescapedInURI $ toString x
 
+
 redirect :: Text -> Headers '[Header "Location" Text] NoContent
 redirect destination = addHeader destination NoContent
 
+
 data DBField = forall a. (ToField a, Show a) => MkDBField a
+
 
 instance Show DBField where
   show (MkDBField a) = "MkDBField " ++ show a
 
+
 instance ToField DBField where
   toField (MkDBField a) = toField a
 
+
 faSprite_ :: Text -> Text -> Text -> Html ()
 faSprite_ mIcon faType classes = svg_ [class_ $ "inline-block icon " <> classes] $ Svg.use_ [href_ $ "/assets/svgs/fa-sprites/" <> faType <> ".svg#" <> mIcon]
+
 
 -- DO NOT USE. Copy the svg into static/public/assets/svgs/fa-sprites/regular.svg or solid.svg
 faIcon_ :: Text -> Text -> Text -> Html ()
@@ -86,17 +96,21 @@ faIcon_ faIcon faClasses classes = do
   i_ [class_ faClasses, term "data-fa-symbol" faIcon] ""
   svg_ [class_ classes] $ Svg.use_ [href_ $ "#" <> faIcon]
 
+
 deleteParam :: Text -> Text -> Text
 deleteParam key url = if needle == "" then url else replace needle "" url
   where
     needle = url =~ reg :: Text
     reg = "&" <> key <> "(=[^&]*)?|^" <> key <> "(=[^&]*)?&?" :: Text
 
+
 quoteTxt :: Text -> Text
 quoteTxt a = "'" <> a <> "'"
 
+
 textToBool :: Text -> Bool
 textToBool a = a == "true"
+
 
 userIsProjectMember :: Session.PersistentSession -> Projects.ProjectId -> DBT IO Bool
 userIsProjectMember sess pid = do
@@ -106,6 +120,7 @@ userIsProjectMember sess pid = do
       user <- ProjectMembers.selectProjectActiveMember pid sess.userId
       case user of Nothing -> pure False; Just _ -> pure True
 
+
 getMethodColor :: Text -> Text
 getMethodColor "POST" = " badge badge-warning "
 getMethodColor "PUT" = " badge badge-info "
@@ -114,12 +129,14 @@ getMethodColor "PATCH" = " badge badge-info "
 getMethodColor "GET" = " badge badge-success "
 getMethodColor _ = " badge badge-outline "
 
+
 getStatusColor :: Int -> Text
 getStatusColor status
   | status < 200 = "text-slate-500 bg-slate-800 border border-slate-200 "
   | status >= 200 && status < 300 = "text-green-800 bg-green-50 border border-green-200"
   | status >= 300 && status < 400 = "text-amber-800 bg-yellow-50 border border-yellow-200"
   | otherwise = "text-red-800 bg-red-50 border border-red-200"
+
 
 unwrapJsonPrimValue :: AE.Value -> Text
 unwrapJsonPrimValue (AE.Bool True) = "true"
@@ -130,6 +147,7 @@ unwrapJsonPrimValue AE.Null = "null"
 unwrapJsonPrimValue (AE.Object _) = "{..}"
 unwrapJsonPrimValue (AE.Array items) = "[" <> toText (show (length items)) <> "]"
 
+
 -- unwrapJsonPrimValue (AE.Object _) = error "Impossible. unwrapJsonPrimValue should be for primitive types only. got object" -- should never be reached
 -- unwrapJsonPrimValue (AE.Array _) = error "Impossible. unwrapJsonPrimValue should be for primitive types only. got array" -- should never be reached
 
@@ -139,33 +157,41 @@ lookupMapText key hashMap = case HM.lookup key hashMap of
   Just (AE.String textValue) -> Just textValue -- Extract text from Value if it's a String
   _ -> Nothing
 
+
 -- FIXME: delete
 lookupMapInt :: Text -> HashMap Text Value -> Int
 lookupMapInt key hashMap = case HM.lookup key hashMap of
   Just (AE.Number val) -> fromMaybe 0 $ toBoundedInteger val -- Extract text from Value if it's a String
   _ -> 0
 
+
 lookupVecText :: V.Vector Value -> Int -> Maybe Text
 lookupVecText vec idx = case vec V.!? idx of
   Just (AE.String textValue) -> Just textValue -- Extract text from Value if it's a String
   _ -> Nothing
+
 
 lookupVecInt :: V.Vector Value -> Int -> Int
 lookupVecInt vec idx = case vec V.!? idx of
   Just (AE.Number val) -> fromMaybe 0 $ toBoundedInteger val -- Extract text from Value if it's a String
   _ -> 0
 
+
 lookupVecTextByKey :: V.Vector Value -> HM.HashMap Text Int -> Text -> Maybe Text
 lookupVecTextByKey vec colIdxMap key = HM.lookup key colIdxMap >>= lookupVecText vec
+
 
 lookupVecIntByKey :: V.Vector Value -> HM.HashMap Text Int -> Text -> Int
 lookupVecIntByKey vec colIdxMap key = (HM.lookup key colIdxMap >>= Just . lookupVecInt vec) & fromMaybe 0
 
+
 lookupVecByKey :: V.Vector Value -> HM.HashMap Text Int -> Text -> Maybe Value
 lookupVecByKey vec colIdxMap key = HM.lookup key colIdxMap >>= (vec V.!?)
 
-listToIndexHashMap :: (Hashable a) => [a] -> HM.HashMap a Int
+
+listToIndexHashMap :: Hashable a => [a] -> HM.HashMap a Int
 listToIndexHashMap list = HM.fromList [(x, i) | (x, i) <- zip list [0 ..]]
+
 
 freeTierLimitExceededBanner :: Text -> Html ()
 freeTierLimitExceededBanner pid =
@@ -173,29 +199,32 @@ freeTierLimitExceededBanner pid =
     p_ [] "You have exceeded the free tier requests limit for this month, new requests will not be processed."
     a_ [class_ "font-semibold", href_ $ "/p/" <> pid <> "/settings"] "upgrade now"
 
+
 lemonSqueezyUrls :: V.Vector Text
 lemonSqueezyUrls =
   V.fromList
-    [ "https://apitoolkit.lemonsqueezy.com/buy/9181a871-b4e6-41b0-9562-eae1d86efd59?embed=1&media=0&logo=0&desc=0", -- 200k
-      "https://apitoolkit.lemonsqueezy.com/buy/9695dbc9-6e24-4054-879f-1f360eda9293?embed=1&media=0&logo=0&desc=0", -- 550K
-      "https://apitoolkit.lemonsqueezy.com/buy/096bb970-e6a2-4cd7-a6ee-5f6ce6ecd39e?embed=1&media=0&logo=0&desc=0", -- 1M
-      "https://apitoolkit.lemonsqueezy.com/buy/e1b06cdb-5e18-44a4-9ec9-ece569f73137?embed=1&media=0&logo=0&desc=0", -- 2.5M
-      "https://apitoolkit.lemonsqueezy.com/buy/952fc4b0-2c5e-4789-b186-8580998dabd5?embed=1&media=0&logo=0&desc=0", -- 5M
-      "https://apitoolkit.lemonsqueezy.com/buy/1ceb7455-fa10-4c5c-b34b-00fa6f1b1729?embed=1&media=0&logo=0&desc=0", -- 7.5M
-      "https://apitoolkit.lemonsqueezy.com/buy/d0095f15-2363-4045-8c99-6603e8038c9e?embed=1&media=0&logo=0&desc=0" -- 10M
+    [ "https://apitoolkit.lemonsqueezy.com/buy/9181a871-b4e6-41b0-9562-eae1d86efd59?embed=1&media=0&logo=0&desc=0" -- 200k
+    , "https://apitoolkit.lemonsqueezy.com/buy/9695dbc9-6e24-4054-879f-1f360eda9293?embed=1&media=0&logo=0&desc=0" -- 550K
+    , "https://apitoolkit.lemonsqueezy.com/buy/096bb970-e6a2-4cd7-a6ee-5f6ce6ecd39e?embed=1&media=0&logo=0&desc=0" -- 1M
+    , "https://apitoolkit.lemonsqueezy.com/buy/e1b06cdb-5e18-44a4-9ec9-ece569f73137?embed=1&media=0&logo=0&desc=0" -- 2.5M
+    , "https://apitoolkit.lemonsqueezy.com/buy/952fc4b0-2c5e-4789-b186-8580998dabd5?embed=1&media=0&logo=0&desc=0" -- 5M
+    , "https://apitoolkit.lemonsqueezy.com/buy/1ceb7455-fa10-4c5c-b34b-00fa6f1b1729?embed=1&media=0&logo=0&desc=0" -- 7.5M
+    , "https://apitoolkit.lemonsqueezy.com/buy/d0095f15-2363-4045-8c99-6603e8038c9e?embed=1&media=0&logo=0&desc=0" -- 10M
     ]
+
 
 lemonSqueezyUrlsAnnual :: V.Vector Text
 lemonSqueezyUrlsAnnual =
   V.fromList
-    [ "https://apitoolkit.lemonsqueezy.com/buy/311bf5e7-f17a-44e6-b209-c42b84306f47?embed=1&media=0&logo=0&desc=0", -- 2.4M
-      "https://apitoolkit.lemonsqueezy.com/buy/0900a416-05b1-4ebe-a7bb-8b7d4c063c7f?embed=1&media=0&logo=0&desc=0", -- 6.6M
-      "https://apitoolkit.lemonsqueezy.com/buy/53fc9818-8f8a-4e60-a390-c10609e0a535?embed=1&media=0&logo=0&desc=0", -- 12M
-      "https://apitoolkit.lemonsqueezy.com/buy/196ba4de-af2e-4e17-ada6-6889e62011d0?embed=1&media=0&logo=0&desc=0", -- 30M
-      "https://apitoolkit.lemonsqueezy.com/buy/1821b082-28c2-4d2d-9a29-2cae822943b6?embed=1&media=0&logo=0&desc=0", -- 60M
-      "https://apitoolkit.lemonsqueezy.com/buy/1821b082-28c2-4d2d-9a29-2cae822943b6?embed=1&media=0&logo=0&desc=0", -- 60M
-      "https://apitoolkit.lemonsqueezy.com/buy/1821b082-28c2-4d2d-9a29-2cae822943b6?embed=1&media=0&logo=0&desc=0" -- 60M
+    [ "https://apitoolkit.lemonsqueezy.com/buy/311bf5e7-f17a-44e6-b209-c42b84306f47?embed=1&media=0&logo=0&desc=0" -- 2.4M
+    , "https://apitoolkit.lemonsqueezy.com/buy/0900a416-05b1-4ebe-a7bb-8b7d4c063c7f?embed=1&media=0&logo=0&desc=0" -- 6.6M
+    , "https://apitoolkit.lemonsqueezy.com/buy/53fc9818-8f8a-4e60-a390-c10609e0a535?embed=1&media=0&logo=0&desc=0" -- 12M
+    , "https://apitoolkit.lemonsqueezy.com/buy/196ba4de-af2e-4e17-ada6-6889e62011d0?embed=1&media=0&logo=0&desc=0" -- 30M
+    , "https://apitoolkit.lemonsqueezy.com/buy/1821b082-28c2-4d2d-9a29-2cae822943b6?embed=1&media=0&logo=0&desc=0" -- 60M
+    , "https://apitoolkit.lemonsqueezy.com/buy/1821b082-28c2-4d2d-9a29-2cae822943b6?embed=1&media=0&logo=0&desc=0" -- 60M
+    , "https://apitoolkit.lemonsqueezy.com/buy/1821b082-28c2-4d2d-9a29-2cae822943b6?embed=1&media=0&logo=0&desc=0" -- 60M
     ]
+
 
 isDemoAndNotSudo :: Projects.ProjectId -> Bool -> Bool
 isDemoAndNotSudo pid isSudo = (pid.toText == "00000000-0000-0000-0000-000000000000" && isSudo == False)
