@@ -1,4 +1,4 @@
-module Pages.Share (ReqForm, shareLinkPostH, shareLinkGetH) where
+module Pages.Share (ReqForm, shareLinkPostH, shareLinkGetH, ShareLinkGet) where
 
 import Data.Aeson qualified as AE
 import Data.Default (def)
@@ -15,36 +15,33 @@ import Lucid
 import Lucid.Hyperscript (__)
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.Projects qualified as Projects
-import Pages.BodyWrapper (BWConfig, bodyWrapper, currProject, pageTitle, sessM)
+import Pages.BodyWrapper (BWConfig, PageCtx (..), bodyWrapper, currProject, pageTitle, sessM)
 import Pages.LogExplorer.LogItem qualified as LogItem
 import Pkg.Components (navBar)
 import Relude
 import System.Types (ATAuthCtx, ATBaseCtx, RespHeaders, addErrorToast, addRespHeaders)
 import Web.FormUrlEncoded (FromForm)
 
-
 data ReqForm = ReqForm
-  { expiresIn :: Text
-  , reqId :: UUID.UUID
-  , reqCreatedAt :: UTCTime
+  { expiresIn :: Text,
+    reqId :: UUID.UUID,
+    reqCreatedAt :: UTCTime
   }
   deriving stock (Show, Generic)
   deriving anyclass (FromForm)
 
-
 data Swagger = Swagger
-  { id :: UUID.UUID
-  , projectId :: Projects.ProjectId
-  , createdAt :: ZonedTime
-  , updatedAt :: ZonedTime
-  , swaggerJson :: AE.Value
+  { id :: UUID.UUID,
+    projectId :: Projects.ProjectId,
+    createdAt :: ZonedTime,
+    updatedAt :: ZonedTime,
+    swaggerJson :: AE.Value
   }
   deriving stock (Show, Generic)
   deriving anyclass (FromRow, ToRow)
   deriving
     (Entity)
     via (GenericEntity '[Schema "apis", TableName "swagger_jsons", PrimaryKey "id", FieldModifiers '[CamelToSnake]] Swagger)
-
 
 shareLinkPostH :: Projects.ProjectId -> ReqForm -> ATAuthCtx (RespHeaders (Html ()))
 shareLinkPostH pid reqForm = do
@@ -67,7 +64,6 @@ shareLinkPostH pid reqForm = do
       addErrorToast "Invalid expiry interval" Nothing
       addRespHeaders ""
 
-
 copyLink :: Text -> Html ()
 copyLink rid = do
   let url = "https://app.apitoolkit.io/share/r/" <> rid
@@ -76,9 +72,9 @@ copyLink rid = do
       p_ "Secure share url."
       strong_ [class_ "block pt-2 text-gray-500 truncate ...", id_ "shareURL"] $ toHtml url
     button_
-      [ type_ "button"
-      , class_ "self-end bg-green-500 px-2 py-1.5 text-white rounded-md text-sm font-medium text-green-800 hover:bg-green-300 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-green-50 focus:ring-green-600"
-      , [__|
+      [ type_ "button",
+        class_ "self-end bg-green-500 px-2 py-1.5 text-white rounded-md text-sm font-medium text-green-800 hover:bg-green-300 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-green-50 focus:ring-green-600",
+        [__|
         on click
           if 'clipboard' in window.navigator then
             call navigator.clipboard.writeText(#shareURL's innerText)
@@ -88,8 +84,7 @@ copyLink rid = do
       ]
       "Copy URL"
 
-
-shareLinkGetH :: UUID.UUID -> ATBaseCtx (Html ())
+shareLinkGetH :: UUID.UUID -> ATBaseCtx (ShareLinkGet)
 shareLinkGetH sid = do
   -- FIXME: handle errors
   reqM <- dbtToEff $ do
@@ -97,12 +92,17 @@ shareLinkGetH sid = do
     RequestDumps.selectRequestDumpByProjectAndId pId createdAt rId
   let bwconf =
         (def :: BWConfig)
-          { sessM = Nothing
-          , currProject = Nothing
-          , pageTitle = "Share request log"
+          { sessM = Nothing,
+            currProject = Nothing,
+            pageTitle = "Share request log"
           }
-  pure $ bodyWrapper bwconf $ sharePage reqM
+  pure $ ShareLinkGet $ PageCtx bwconf reqM
 
+data ShareLinkGet = ShareLinkGet (PageCtx (Maybe RequestDumps.RequestDumpLogItem))
+
+instance ToHtml ShareLinkGet where
+  toHtml (ShareLinkGet (PageCtx conf reqM)) = toHtml $ PageCtx conf $ sharePage reqM
+  toHtmlRaw = toHtml
 
 sharePage :: Maybe RequestDumps.RequestDumpLogItem -> Html ()
 sharePage req = do
