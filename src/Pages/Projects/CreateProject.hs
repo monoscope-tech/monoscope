@@ -10,6 +10,7 @@ module Pages.Projects.CreateProject (
   CreateProjectFormError,
   projectSettingsGetH,
   deleteProjectGetH,
+  CreateProject,
 )
 where
 
@@ -47,7 +48,7 @@ import Models.Users.Users qualified as Users
 import NeatInterpolation (text)
 import Network.Wreq (defaults, getWith, header, responseBody)
 import OddJobs.Job (createJob)
-import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
+import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
 import Pkg.ConvertKit qualified as ConvertKit
 import Relude hiding (ask, asks)
 import Relude.Unsafe qualified as Unsafe
@@ -100,20 +101,33 @@ createProjectFormV =
 
 ----------------------------------------------------------------------------------------------------------
 -- createProjectGetH is the handler for the create projects page
-createProjectGetH :: ATAuthCtx (RespHeaders (Html ()))
+createProjectGetH :: ATAuthCtx (RespHeaders (CreateProject))
 createProjectGetH = do
   appCtx <- ask @AuthContext
   sess <- Sessions.getSession
   let bwconf =
         (def :: BWConfig)
           { sessM = Just sess.persistentSession
-          , pageTitle = "Endpoints"
+          , pageTitle = "Create Project"
           }
-  addRespHeaders $ bodyWrapper bwconf $ createProjectBody (sess.persistentSession) appCtx.config False (def @CreateProjectForm) (def @CreateProjectFormError)
+  addRespHeaders $ CreateProject $ PageCtx bwconf $ ((sess.persistentSession), appCtx.config, False, def @CreateProjectForm, def @CreateProjectFormError)
+
+
+data CreateProject
+  = CreateProject (PageCtx (Sessions.PersistentSession, EnvConfig, Bool, CreateProjectForm, CreateProjectFormError))
+  | PostNoContent Text
+  | ProjectPost Sessions.PersistentSession EnvConfig Bool CreateProjectForm CreateProjectFormError
+
+
+instance ToHtml CreateProject where
+  toHtml (CreateProject (PageCtx bwconf (sess, config, isUpdate, prf, pref))) = toHtml $ PageCtx bwconf $ createProjectBody sess config isUpdate prf pref
+  toHtml (PostNoContent message) = span_ [class_ ""] $ toHtml message
+  toHtml (ProjectPost sess config isUpdate prf pref) = toHtml $ createProjectBody sess config isUpdate prf pref
+  toHtmlRaw = toHtml
 
 
 ----------------------------------------------------------------------------------------------------------
-projectSettingsGetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders (Html ()))
+projectSettingsGetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders (CreateProject))
 projectSettingsGetH pid = do
   (sess, project) <- Sessions.sessionAndProject pid
   appCtx <- ask @AuthContext
@@ -131,36 +145,37 @@ projectSettingsGetH pid = do
           }
 
   let bwconf = (def :: BWConfig){sessM = Just sess.persistentSession, currProject = Just project, pageTitle = "Settings"}
-  addRespHeaders $ bodyWrapper bwconf $ createProjectBody (sess.persistentSession) appCtx.config True createProj (def @CreateProjectFormError)
+  addRespHeaders $ CreateProject $ PageCtx bwconf $ ((sess.persistentSession), appCtx.config, True, createProj, def @CreateProjectFormError)
 
 
 ----------------------------------------------------------------------------------------------------------
-deleteProjectGetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders (Html ()))
+deleteProjectGetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders (CreateProject))
 deleteProjectGetH pid = do
   sess <- Sessions.getSession
   appCtx <- ask @AuthContext
   if (isDemoAndNotSudo pid sess.user.isSudo)
     then do
       addSuccessToast "Can't perform this action on the demon project" Nothing
-      addRespHeaders ""
+      addRespHeaders $ PostNoContent ""
     else do
       _ <- dbtToEff $ Projects.deleteProject pid
       _ <- liftIO $ withResource appCtx.pool \conn ->
         createJob conn "background_jobs" $ BackgroundJobs.DeletedProject pid
       addSuccessToast "Deleted Project Successfully" Nothing
-      redirectCS "/" >> addRespHeaders ""
+      redirectCS "/"
+      addRespHeaders $ PostNoContent ""
 
 
 ----------------------------------------------------------------------------------------------------------
 -- createProjectPostH is the handler for the create projects page form handling.
 -- It processes post requests and is expected to return a redirect header and a hyperscript event trigger header.
-createProjectPostH :: CreateProjectForm -> ATAuthCtx (RespHeaders (Html ()))
+createProjectPostH :: CreateProjectForm -> ATAuthCtx (RespHeaders (CreateProject))
 createProjectPostH createP = do
   sess <- Sessions.getSession
   appCtx <- ask @AuthContext
   validationRes <- validateM createProjectFormV createP
   case validationRes of
-    Right cpe -> addRespHeaders $ createProjectBody (sess.persistentSession) appCtx.config createP.isUpdate createP cpe
+    Right cpe -> addRespHeaders $ ProjectPost (sess.persistentSession) appCtx.config createP.isUpdate createP cpe
     Left cp -> processProjectPostForm cp
 
 
@@ -214,7 +229,7 @@ getSubscriptionId orderId apiKey = do
           return Nothing
 
 
-processProjectPostForm :: Valor.Valid CreateProjectForm -> ATAuthCtx (RespHeaders (Html ()))
+processProjectPostForm :: Valor.Valid CreateProjectForm -> ATAuthCtx (RespHeaders (CreateProject))
 processProjectPostForm cpRaw = do
   appCtx <- ask @AuthContext
   let envCfg = appCtx.config
@@ -227,10 +242,10 @@ processProjectPostForm cpRaw = do
       if isDemoAndNotSudo pid sess.user.isSudo
         then do
           addErrorToast "Can't perform this action on the demo project" Nothing
-          addRespHeaders $ createProjectBody sess.persistentSession envCfg cp.isUpdate cp (def @CreateProjectFormError)
+          addRespHeaders $ ProjectPost sess.persistentSession envCfg cp.isUpdate cp (def @CreateProjectFormError)
         else do
           let hxTriggerDataUpdate = decodeUtf8 $ encode [aesonQQ| {"successToast": ["Updated Project Successfully"]}|]
-          let bdy = createProjectBody sess.persistentSession envCfg cp.isUpdate cp (def @CreateProjectFormError)
+          let bdy = ProjectPost sess.persistentSession envCfg cp.isUpdate cp (def @CreateProjectFormError)
           project <- dbtToEff $ Projects.projectById pid
           case project of
             Just p -> do
@@ -251,7 +266,7 @@ processProjectPostForm cpRaw = do
                   if isNothing subId || isNothing firstSubItemId
                     then do
                       let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"errorToast": ["Couldn't get subscription Id please try again"]}|]
-                      let bd = createProjectBody sess.persistentSession envCfg cp.isUpdate cp (def @CreateProjectFormError)
+                      let bd = ProjectPost sess.persistentSession envCfg cp.isUpdate cp (def @CreateProjectFormError)
                       pure $ addHeader hxTriggerData $ addHeader ("/p/" <> pid.toText <> "/about_project") bd
                     else do
                       _ <- dbtToEff $ Projects.updateProject (createProjectFormToModel pid subId firstSubItemId cp)
@@ -261,7 +276,7 @@ processProjectPostForm cpRaw = do
                   pure $ addHeader hxTriggerDataUpdate $ noHeader bdy
             Nothing -> do
               let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"errorToast": ["Something went wrong, try again."]}|]
-              pure $ addHeader hxTriggerData $ noHeader $ span_ [] ""
+              pure $ addHeader hxTriggerData $ noHeader $ PostNoContent ""
     else do
       let usersAndPermissions = zip cp.emails cp.permissions & uniq
       subRes <- liftIO $ getSubscriptionId cp.orderId envCfg.lemonSqueezyApiKey
@@ -279,7 +294,7 @@ processProjectPostForm cpRaw = do
         then do
           addErrorToast "Couldn't get subscription ID. Please try again" Nothing
           redirectCS ("/p/" <> pid.toText <> "/about_project")
-          addRespHeaders $ createProjectBody sess.persistentSession envCfg cp.isUpdate cp (def @CreateProjectFormError)
+          addRespHeaders $ ProjectPost sess.persistentSession envCfg cp.isUpdate cp (def @CreateProjectFormError)
         else do
           _ <- dbtToEff do
             Projects.insertProject (createProjectFormToModel pid subId firstSubItemId cp)
@@ -312,7 +327,7 @@ processProjectPostForm cpRaw = do
             createJob conn "background_jobs" $ BackgroundJobs.CreatedProjectSuccessfully sess.user.id pid (original sess.user.email) cp.title
           addSuccessToast "Created Project Successfully" Nothing
           redirectCS ("/p/" <> pid.toText <> "/about_project")
-          addRespHeaders $ createProjectBody sess.persistentSession envCfg cp.isUpdate cp (def @CreateProjectFormError)
+          addRespHeaders $ ProjectPost sess.persistentSession envCfg cp.isUpdate cp (def @CreateProjectFormError)
 
 
 ----------------------------------------------------------------------------------------------------------
