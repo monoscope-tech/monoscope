@@ -1,4 +1,4 @@
-module Pages.LogExplorer.LogItem (expandAPIlogItemH, expandAPIlogItem', apiLogItemH) where
+module Pages.LogExplorer.LogItem (expandAPIlogItemH, expandAPIlogItem', apiLogItemH, ApiLogItem) where
 
 import Data.Aeson ((.=))
 import Data.Aeson qualified as AE
@@ -26,7 +26,6 @@ import Relude
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
 import Utils (faSprite_, getMethodColor, getStatusColor, unwrapJsonPrimValue)
 
-
 expandAPIlogItemH :: Projects.ProjectId -> UUID.UUID -> UTCTime -> ATAuthCtx (RespHeaders (Html ()))
 expandAPIlogItemH pid rdId createdAt = do
   _ <- Sessions.sessionAndProject pid
@@ -35,7 +34,6 @@ expandAPIlogItemH pid rdId createdAt = do
     Just req -> expandAPIlogItem' pid req True
     Nothing -> div_ [class_ "h-full flex flex-col justify-center items-center"] do
       p_ [] "Request not found"
-
 
 expandAPIlogItem' :: Projects.ProjectId -> RequestDumps.RequestDumpLogItem -> Bool -> Html ()
 expandAPIlogItem' pid req modal = do
@@ -51,15 +49,15 @@ expandAPIlogItem' pid req modal = do
           span_ [class_ "text-xs"] $ toHtml $ formatTime defaultTimeLocale "%b %d, %Y %R" req.createdAt
       when modal do
         div_
-          [ class_ "flex gap-2 px-4 items-center border border-dashed h-[50px]"
-          , id_ "copy_share_link"
+          [ class_ "flex gap-2 px-4 items-center border border-dashed h-[50px]",
+            id_ "copy_share_link"
           ]
           do
             div_ [class_ "relative", style_ "width:150px"] do
               button_
-                [ [__|on click toggle .hidden on #expire_container|]
-                , id_ "toggle_expires_btn"
-                , class_ "w-full flex gap-2 text-slate-600 justify_between items-center cursor-pointer px-2 py-1 border rounded focus:ring-2 focus:ring-blue-200 active:ring-2 active:ring-blue-200"
+                [ [__|on click toggle .hidden on #expire_container|],
+                  id_ "toggle_expires_btn",
+                  class_ "w-full flex gap-2 text-slate-600 justify_between items-center cursor-pointer px-2 py-1 border rounded focus:ring-2 focus:ring-blue-200 active:ring-2 active:ring-blue-200"
                 ]
                 do
                   p_ [style_ "width: calc(100% - 25px)", class_ "text-sm truncate ..."] "Expires in: 1 hour"
@@ -68,16 +66,16 @@ expandAPIlogItem' pid req modal = do
                 forM_ (["1 hour", "8 hours", "1 day"] :: [Text]) \sw -> do
                   button_
                     [ [__|on click set #toggle_expires_btn.firstChild.innerText to 'Expires in ' + event.target's @data-expire-value 
-                                        then set #expire_input.value to event.target's @data-expire-value|]
-                    , term "data-expire-value" sw
-                    , class_ "p-2 w-full text-left truncate ... hover:bg-blue-100 hover:text-black"
+                                        then set #expire_input.value to event.target's @data-expire-value|],
+                      term "data-expire-value" sw,
+                      class_ "p-2 w-full text-left truncate ... hover:bg-blue-100 hover:text-black"
                     ]
                     $ toHtml sw
             button_
-              [ class_ "flex flex-col gap-1 bg-blue-500 px-2 py-1 rounded text-white"
-              , term "data-req-id" (show req.id)
-              , term "data-req-created-at" (toText $ formatTime defaultTimeLocale "%FT%T%6QZ" req.createdAt)
-              , [__|on click set #req_id_input.value to my @data-req-id 
+              [ class_ "flex flex-col gap-1 bg-blue-500 px-2 py-1 rounded text-white",
+                term "data-req-id" (show req.id),
+                term "data-req-created-at" (toText $ formatTime defaultTimeLocale "%FT%T%6QZ" req.createdAt),
+                [__|on click set #req_id_input.value to my @data-req-id 
                           then set #req_created_at_input.value to my @data-req-created-at
                           then call #share_log_form.requestSubmit() |]
               ]
@@ -173,15 +171,20 @@ expandAPIlogItem' pid req modal = do
           $ div_ [class_ "bg-gray-50 m-4 p-2 rounded-lg border", id_ "res_headers_json"]
           $ jsonValueToHtmlTree req.responseHeaders
 
-
-apiLogItemH :: Projects.ProjectId -> UUID.UUID -> UTCTime -> ATAuthCtx (RespHeaders (Html ()))
+apiLogItemH :: Projects.ProjectId -> UUID.UUID -> UTCTime -> ATAuthCtx (RespHeaders (ApiLogItem))
 apiLogItemH pid rdId createdAt = do
   _ <- Sessions.sessionAndProject pid
   logItemM <- dbtToEff $ RequestDumps.selectRequestDumpByProjectAndId pid createdAt rdId
   addRespHeaders $ case logItemM of
-    Just req -> apiLogItemView req (RequestDumps.requestDumpLogItemUrlPath pid req)
-    Nothing -> div_ "invalid log request ID"
+    Just req -> ApiLogItem (req, (RequestDumps.requestDumpLogItemUrlPath pid req))
+    Nothing -> ApiLogItemNotFound
 
+data ApiLogItem = ApiLogItem (RequestDumps.RequestDumpLogItem, Text) | ApiLogItemNotFound
+
+instance ToHtml ApiLogItem where
+  toHtml (ApiLogItem (req, expandItemPath)) = toHtml $ apiLogItemView req expandItemPath
+  toHtml (ApiLogItemNotFound) = div_ "Invalid log request ID"
+  toHtmlRaw = toHtml
 
 apiLogItemView :: RequestDumps.RequestDumpLogItem -> Text -> Html ()
 apiLogItemView req expandItemPath = do
@@ -192,47 +195,45 @@ apiLogItemView req expandItemPath = do
       $ span_ [class_ "btn btn-sm btn-outline"] ("Expand" >> faSprite_ "expand" "regular" "h-3 w-3")
     let reqJson = decodeUtf8 $ AE.encode $ AE.toJSON req
     button_
-      [ class_ "btn btn-sm btn-outline"
-      , term "data-reqJson" reqJson
-      , onclick_ "buildCurlRequest(event)"
+      [ class_ "btn btn-sm btn-outline",
+        term "data-reqJson" reqJson,
+        onclick_ "buildCurlRequest(event)"
       ]
       (span_ [] "Copy as curl" >> faSprite_ "copy" "regular" "h-3 w-3")
     button_
-      [ class_ "btn btn-sm btn-outline"
-      , onclick_ "downloadJson(event)"
-      , term "data-reqJson" reqJson
+      [ class_ "btn btn-sm btn-outline",
+        onclick_ "downloadJson(event)",
+        term "data-reqJson" reqJson
       ]
       (span_ [] "Download" >> faSprite_ "arrow-down-to-line" "regular" "h-3 w-3")
   jsonValueToHtmlTree $ selectiveToJson req
-
 
 -- Function to selectively convert RequestDumpLogItem to JSON
 selectiveToJson :: RequestDumps.RequestDumpLogItem -> AE.Value
 selectiveToJson req =
   AE.object
     $ concat @[]
-      [ ["created_at" .= req.createdAt]
-      , ["duration_ns" .= req.durationNs]
-      , ["errors" .= req.errors]
-      , ["host" .= req.host]
-      , ["method" .= req.method]
-      , ["parent_id" .= req.parentId]
-      , ["path_params" .= req.pathParams]
-      , ["query_params" .= req.queryParams]
-      , ["raw_url" .= req.rawUrl]
-      , ["referer" .= req.referer]
-      , ["request_body" .= req.requestBody]
-      , ["request_headers" .= req.requestHeaders]
-      , ["request_type" .= req.requestType]
-      , ["response_body" .= req.responseBody]
-      , ["response_headers" .= req.responseHeaders]
-      , ["sdk_type" .= req.sdkType]
-      , ["service_version" .= req.serviceVersion]
-      , ["status_code" .= req.statusCode]
-      , ["tags" .= req.tags]
-      , ["url_path" .= req.urlPath]
+      [ ["created_at" .= req.createdAt],
+        ["duration_ns" .= req.durationNs],
+        ["errors" .= req.errors],
+        ["host" .= req.host],
+        ["method" .= req.method],
+        ["parent_id" .= req.parentId],
+        ["path_params" .= req.pathParams],
+        ["query_params" .= req.queryParams],
+        ["raw_url" .= req.rawUrl],
+        ["referer" .= req.referer],
+        ["request_body" .= req.requestBody],
+        ["request_headers" .= req.requestHeaders],
+        ["request_type" .= req.requestType],
+        ["response_body" .= req.responseBody],
+        ["response_headers" .= req.responseHeaders],
+        ["sdk_type" .= req.sdkType],
+        ["service_version" .= req.serviceVersion],
+        ["status_code" .= req.statusCode],
+        ["tags" .= req.tags],
+        ["url_path" .= req.urlPath]
       ]
-
 
 -- >>> replaceNumbers "response_body.0.completed"
 -- "response_body[*].completed"
@@ -251,7 +252,6 @@ replaceNumbers input = T.replace ".[*]" "[*]" $ T.intercalate "." (map replaceDi
       | isDigit ch = "[*]"
       | otherwise = T.singleton ch
 
-
 -- | jsonValueToHtmlTree takes an aeson json object and renders it as a collapsible html tree, with hyperscript for interactivity.
 jsonValueToHtmlTree :: AE.Value -> Html ()
 jsonValueToHtmlTree val = jsonValueToHtmlTree' ("", "", val)
@@ -263,9 +263,9 @@ jsonValueToHtmlTree val = jsonValueToHtmlTree' ("", "", val)
       let fullFieldPath = if T.isSuffixOf "[*]" path then path else path <> "." <> key
       let fullFieldPath' = fromMaybe fullFieldPath $ T.stripPrefix ".." fullFieldPath
       div_
-        [ class_ "relative log-item-field-parent"
-        , term "data-field-path" $ replaceNumbers $ fullFieldPath'
-        , term "data-field-value" $ unwrapJsonPrimValue value
+        [ class_ "relative log-item-field-parent",
+          term "data-field-path" $ replaceNumbers $ fullFieldPath',
+          term "data-field-value" $ unwrapJsonPrimValue value
         ]
         $ a_
           [class_ "block hover:bg-blue-50 cursor-pointer pl-6 relative log-item-field-anchor ", [__|install LogItemMenuable|]]
@@ -277,8 +277,8 @@ jsonValueToHtmlTree val = jsonValueToHtmlTree' ("", "", val)
     renderParentType :: Text -> Text -> Text -> Int -> Html () -> Html ()
     renderParentType opening closing key count child = div_ [class_ (if key == "" then "" else "collapsed")] do
       a_
-        [ class_ "inline-block cursor-pointer"
-        , onclick_ "this.parentNode.classList.toggle('collapsed')"
+        [ class_ "inline-block cursor-pointer",
+          onclick_ "this.parentNode.classList.toggle('collapsed')"
         ]
         do
           span_ [class_ "log-item-tree-chevron "] "▾"
