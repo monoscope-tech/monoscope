@@ -2,6 +2,7 @@
 
 module Pages.Projects.ListProjects (
   listProjectsGetH,
+  ListProjectsGet,
 )
 where
 
@@ -13,13 +14,13 @@ import Fmt
 import Lucid
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
-import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
+import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
 import Relude hiding (ask, asks)
 import System.Types
 import Utils (faSprite_)
 
 
-listProjectsGetH :: ATAuthCtx (RespHeaders (Html ()))
+listProjectsGetH :: ATAuthCtx (RespHeaders (ListProjectsGet))
 listProjectsGetH = do
   (sess, project) <- Sessions.sessionAndProject (Projects.ProjectId UUID.nil)
   let bwconf =
@@ -38,7 +39,15 @@ listProjectsGetH = do
             , Projects.createdAt = project.createdAt
             }
 
-  addRespHeaders $ bodyWrapper bwconf $ listProjectsBody projects'
+  addRespHeaders $ ListProjectsGet $ PageCtx bwconf projects'
+
+
+data ListProjectsGet = ListProjectsGet (PageCtx (V.Vector Projects.Project'))
+
+
+instance ToHtml ListProjectsGet where
+  toHtml (ListProjectsGet (PageCtx bwconf projects)) = toHtml $ PageCtx bwconf $ listProjectsBody projects
+  toHtmlRaw = toHtml
 
 
 listProjectsBody :: V.Vector Projects.Project' -> Html ()

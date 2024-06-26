@@ -5,6 +5,7 @@ import Lucid (Html)
 import Models.Projects.Projects qualified as Projects
 import Pages.Projects.CreateProject qualified as CreateProject
 import Pages.Projects.Integrations qualified as Integrations
+import Pages.Projects.ListProjects qualified as ListProjects
 import Pages.Projects.ManageMembers qualified as ManageMembers
 import Servant (Capture, FormUrlEncoded, GenericMode (type (:-)), Get, NamedRoutes, Post, ReqBody, type (:>))
 import Servant.HTML.Lucid (HTML)
@@ -16,7 +17,7 @@ type role Routes' nominal
 
 type Routes = NamedRoutes Routes'
 data Routes' mode = Routes'
-  { listGet :: mode :- Get '[HTML] (RespHeaders (Html ()))
+  { listGet :: mode :- Get '[HTML] (RespHeaders (ListProjects.ListProjectsGet))
   , createGet :: mode :- "p" :> "new" :> Get '[HTML] (RespHeaders (Html ())) -- p represents project
   , createPost :: mode :- "p" :> "new" :> ReqBody '[FormUrlEncoded] CreateProject.CreateProjectForm :> Post '[HTML] (RespHeaders (Html ()))
   , settingsGet :: mode :- "p" :> Capture "projectID" Projects.ProjectId :> "settings" :> Get '[HTML] (RespHeaders (Html ()))
