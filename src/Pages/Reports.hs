@@ -14,6 +14,7 @@ module Pages.Reports (
   reportEmail,
   ReportAnomalyType (..),
   PerformanceReport (..),
+  ReportsGet,
 )
 where
 
@@ -43,7 +44,7 @@ import Models.Apis.RequestDumps (EndpointPerf, RequestForReport (endpointHash))
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
-import Pages.BodyWrapper (BWConfig, bodyWrapper, currProject, pageTitle, sessM)
+import Pages.BodyWrapper (BWConfig, PageCtx (..), bodyWrapper, currProject, pageTitle, sessM)
 import Relude
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders, addSuccessToast)
 import Text.Printf (printf)
@@ -121,7 +122,7 @@ singleReportGetH pid rid = do
   addRespHeaders $ bodyWrapper bwconf $ singleReportPage pid report
 
 
-reportsGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))
+reportsGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders (ReportsGet))
 reportsGetH pid page hxRequest hxBoosted = do
   (sess, project) <- Sessions.sessionAndProject pid
   let p = toString (fromMaybe "0" page)
@@ -130,7 +131,7 @@ reportsGetH pid page hxRequest hxBoosted = do
   reports <- dbtToEff $ Reports.reportHistoryByProject pid pg
   let nextUrl = "/p/" <> show pid.unProjectId <> "/reports?page=" <> show (pg + 1)
   case (hxRequest, hxBoosted) of
-    (Just "true", Nothing) -> addRespHeaders $ reportListItems pid reports nextUrl
+    (Just "true", Nothing) -> addRespHeaders $ ReportsGetList pid reports nextUrl
     _ -> do
       let bwconf =
             (def :: BWConfig)
@@ -138,7 +139,18 @@ reportsGetH pid page hxRequest hxBoosted = do
               , currProject = Just project
               , pageTitle = "Reports"
               }
-      addRespHeaders $ bodyWrapper bwconf $ reportsPage pid reports nextUrl project.dailyNotif project.weeklyNotif
+      addRespHeaders $ ReportsGetMain $ PageCtx bwconf $ (pid, reports, nextUrl, project.dailyNotif, project.weeklyNotif)
+
+
+data ReportsGet
+  = ReportsGetMain (PageCtx (Projects.ProjectId, (Vector Reports.ReportListItem), Text, Bool, Bool))
+  | ReportsGetList Projects.ProjectId (Vector Reports.ReportListItem) Text
+
+
+instance ToHtml ReportsGet where
+  toHtml (ReportsGetMain (PageCtx conf (pid, reports, next, daily, weekly))) = toHtml $ PageCtx conf $ reportsPage pid reports next daily weekly
+  toHtml (ReportsGetList pid reports next) = toHtml $ reportListItems pid reports next
+  toHtmlRaw = toHtml
 
 
 singleReportPage :: Projects.ProjectId -> Maybe Reports.Report -> Html ()

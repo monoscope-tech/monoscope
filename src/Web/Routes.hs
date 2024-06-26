@@ -65,47 +65,52 @@ import Web.ClientMetadata qualified as ClientMetadata
 import Web.Cookie (SetCookie)
 import Web.Error
 
+
 type QPT a = QueryParam a Text
+
 
 type GetRedirect = Verb 'GET 302
 
+
 type role Routes nominal
 
+
 data Routes mode = Routes
-  { assets :: mode :- "assets" :> Servant.Raw,
-    public :: mode :- "public" :> Servant.Raw,
-    cookieProtected :: mode :- AuthProtect "optional-cookie-auth" :> Servant.NamedRoutes CookieProtectedRoutes,
-    ping :: mode :- "ping" :> Get '[PlainText] Text,
-    status :: mode :- "status" :> Get '[JSON] Status,
-    login :: mode :- "login" :> GetRedirect '[HTML] (Headers '[Header "Location" Text, Header "Set-Cookie" SetCookie] NoContent),
-    toLogin :: mode :- "to_login" :> GetRedirect '[HTML] (Headers '[Header "Location" Text, Header "Set-Cookie" SetCookie] NoContent),
-    logout :: mode :- "logout" :> GetRedirect '[HTML] (Headers '[Header "Location" Text, Header "Set-Cookie" SetCookie] NoContent),
-    authCallback :: mode :- "auth_callback" :> QPT "code" :> QPT "state" :> GetRedirect '[HTML] (Headers '[Header "Location" Text, Header "Set-Cookie" SetCookie] (Html ())),
-    shareLinkGet :: mode :- "share" :> "r" :> Capture "shareID" UUID.UUID :> Get '[HTML] (Share.ShareLinkGet),
-    slackInstallGet :: mode :- "slack" :> "oauth" :> "callback" :> QPT "code" :> Get '[HTML] (Html ()),
-    slackLinkProjectGet :: mode :- "slack" :> "oauth" :> "callback" :> Capture "project_id" Projects.ProjectId :> QPT "code" :> Get '[HTML] (Html ()),
-    clientMetadata :: mode :- "api" :> "client_metadata" :> Header "Authorization" Text :> Get '[JSON] ClientMetadata.ClientMetadata
+  { assets :: mode :- "assets" :> Servant.Raw
+  , public :: mode :- "public" :> Servant.Raw
+  , cookieProtected :: mode :- AuthProtect "optional-cookie-auth" :> Servant.NamedRoutes CookieProtectedRoutes
+  , ping :: mode :- "ping" :> Get '[PlainText] Text
+  , status :: mode :- "status" :> Get '[JSON] Status
+  , login :: mode :- "login" :> GetRedirect '[HTML] (Headers '[Header "Location" Text, Header "Set-Cookie" SetCookie] NoContent)
+  , toLogin :: mode :- "to_login" :> GetRedirect '[HTML] (Headers '[Header "Location" Text, Header "Set-Cookie" SetCookie] NoContent)
+  , logout :: mode :- "logout" :> GetRedirect '[HTML] (Headers '[Header "Location" Text, Header "Set-Cookie" SetCookie] NoContent)
+  , authCallback :: mode :- "auth_callback" :> QPT "code" :> QPT "state" :> GetRedirect '[HTML] (Headers '[Header "Location" Text, Header "Set-Cookie" SetCookie] (Html ()))
+  , shareLinkGet :: mode :- "share" :> "r" :> Capture "shareID" UUID.UUID :> Get '[HTML] (Share.ShareLinkGet)
+  , slackInstallGet :: mode :- "slack" :> "oauth" :> "callback" :> QPT "code" :> Get '[HTML] (Html ())
+  , slackLinkProjectGet :: mode :- "slack" :> "oauth" :> "callback" :> Capture "project_id" Projects.ProjectId :> QPT "code" :> Get '[HTML] (Html ())
+  , clientMetadata :: mode :- "api" :> "client_metadata" :> Header "Authorization" Text :> Get '[JSON] ClientMetadata.ClientMetadata
   }
   deriving stock (Generic)
 
-server ::
-  Pool PG.Connection ->
-  Routes (AsServerT ATBaseCtx)
+
+server
+  :: Pool PG.Connection
+  -> Routes (AsServerT ATBaseCtx)
 server pool =
   Routes
-    { assets = Servant.serveDirectoryWebApp "./static/public/assets",
-      public = Servant.serveDirectoryWebApp "./static/public",
-      ping = pingH,
-      status = statusH,
-      login = Auth.loginH,
-      toLogin = Auth.loginRedirectH,
-      logout = Auth.logoutH,
-      authCallback = Auth.authCallbackH,
-      shareLinkGet = Share.shareLinkGetH,
-      slackInstallGet = SlackInstall.getH,
-      slackLinkProjectGet = SlackInstall.linkProjectGetH,
-      clientMetadata = ClientMetadata.clientMetadataH,
-      cookieProtected = \sessionWithCookies ->
+    { assets = Servant.serveDirectoryWebApp "./static/public/assets"
+    , public = Servant.serveDirectoryWebApp "./static/public"
+    , ping = pingH
+    , status = statusH
+    , login = Auth.loginH
+    , toLogin = Auth.loginRedirectH
+    , logout = Auth.logoutH
+    , authCallback = Auth.authCallbackH
+    , shareLinkGet = Share.shareLinkGetH
+    , slackInstallGet = SlackInstall.getH
+    , slackLinkProjectGet = SlackInstall.linkProjectGetH
+    , clientMetadata = ClientMetadata.clientMetadataH
+    , cookieProtected = \sessionWithCookies ->
         Servant.hoistServerWithContext
           (Proxy @(Servant.NamedRoutes CookieProtectedRoutes))
           (Proxy @'[APItoolkitAuthContext])
@@ -118,70 +123,74 @@ server pool =
           cookieProtectedServer
     }
 
+
 type role CookieProtectedRoutes nominal
 
+
 data CookieProtectedRoutes mode = CookieProtectedRoutes
-  { dashboardGet :: mode :- "p" :> ProjectId :> QPT "from" :> QPT "to" :> QPT "since" :> Get '[HTML] (RespHeaders (PageCtx Dashboard.DashboardGet)),
-    projects :: mode :- ProjectsRoutes.Routes,
-    onboardingGet :: mode :- "p" :> ProjectId :> "onboarding" :> QPB "polling" :> QPB "redirected" :> QPT "current_tab" :> Get '[HTML] (RespHeaders (Onboarding.OnboardingGet)),
-    anomalies :: mode :- "p" :> ProjectId :> "anomalies" :> AnomaliesRoutes.Routes,
-    logExplorer :: mode :- "p" :> ProjectId :> LogExplorerRoutes.Routes,
-    endpoints :: mode :- "p" :> ProjectId :> EndpointsRoutes.Routes,
-    monitors :: mode :- "p" :> ProjectId :> MonitorsRoutes.Routes,
-    specification :: mode :- "p" :> ProjectId :> SpecificationRoutes.Routes,
-    apiGet :: mode :- "p" :> ProjectId :> "apis" :> Get '[HTML] (RespHeaders (Api.ApiGet)),
-    apiDelete :: mode :- "p" :> ProjectId :> "apis" :> Capture "keyID" ProjectApiKeys.ProjectApiKeyId :> Delete '[HTML] (RespHeaders (Html ())),
-    apiPost :: mode :- "p" :> ProjectId :> "apis" :> ReqBody '[FormUrlEncoded] Api.GenerateAPIKeyForm :> Post '[HTML] (RespHeaders (Html ())),
-    slackInstallPost :: mode :- "slack" :> "link-projects" :> ReqBody '[FormUrlEncoded] SlackInstall.LinkProjectsForm :> Post '[HTML] (RespHeaders (Html ())),
-    slackLinkProjectsGet :: mode :- "slack" :> "link-projects" :> QPT "code" :> Get '[HTML] (RespHeaders (Html ())),
-    slackUpdateWebhook :: mode :- "p" :> ProjectId :> "slack" :> "webhook" :> ReqBody '[FormUrlEncoded] SlackInstall.LinkProjectsForm :> Post '[HTML] (RespHeaders (Html ())),
-    redactedFieldsGet :: mode :- "p" :> ProjectId :> "redacted_fields" :> Get '[HTML] (RespHeaders (Html ())),
-    redactedFieldsPost :: mode :- "p" :> ProjectId :> "redacted_fields" :> ReqBody '[FormUrlEncoded] RedactFieldForm :> Post '[HTML] (RespHeaders (Html ())),
-    reportsGet :: mode :- "p" :> ProjectId :> "reports" :> QPT "page" :> HXRequest :> HXBoosted :> Get '[HTML] (RespHeaders (Html ())),
-    reportsSingleGet :: mode :- "p" :> ProjectId :> "reports" :> Capture "report_id" ReportsM.ReportId :> Get '[HTML] (RespHeaders (Html ())),
-    reportsPost :: mode :- "p" :> ProjectId :> "reports_notif" :> Capture "report_type" Text :> Post '[HTML] (RespHeaders (Html ())),
-    shareLinkPost :: mode :- "p" :> ProjectId :> "share" :> ReqBody '[FormUrlEncoded] Share.ReqForm :> Post '[HTML] (RespHeaders (Html ())),
-    queryBuilderAutocomplete :: mode :- "p" :> ProjectId :> "query_builder" :> "autocomplete" :> QPT "category" :> QPT "prefix" :> Get '[JSON] (RespHeaders AE.Value),
-    swaggerGenerateGet :: mode :- "p" :> ProjectId :> "generate_swagger" :> Get '[JSON] (RespHeaders AE.Value),
-    chartsGet :: mode :- "charts_html" :> QP "chart_type" Charts.ChartType :> QPT "query_raw" :> QueryParam "pid" Projects.ProjectId :> QP "group_by" Charts.GroupBy :> QP "query_by" [Charts.QueryBy] :> QP "num_slots" Int :> QP "limit" Int :> QP "theme" Text :> QPT "id" :> QP "show_legend" Bool :> QPT "since" :> QPT "from" :> QPT "to" :> Get '[HTML] (RespHeaders (Html ())),
-    surveyPut :: mode :- "p" :> ProjectId :> "survey" :> ReqBody '[FormUrlEncoded] Survey.SurveyForm :> Post '[HTML] (RespHeaders (Html ())),
-    surveyGet :: mode :- "p" :> ProjectId :> "about_project" :> Get '[HTML] (RespHeaders (Html ())),
-    editField :: mode :- "p" :> ProjectId :> "fields" :> Capture "field_id" Fields.FieldId :> ReqBody '[FormUrlEncoded] FieldDetails.EditFieldForm :> Post '[HTML] (RespHeaders (Html ())),
-    integrationGuides :: mode :- "p" :> ProjectId :> "integration_guides" :> QPT "sdk" :> QPT "error_reporting" :> QPT "dependency_monitoring" :> Get '[HTML] (RespHeaders (Html ()))
+  { dashboardGet :: mode :- "p" :> ProjectId :> QPT "from" :> QPT "to" :> QPT "since" :> Get '[HTML] (RespHeaders (PageCtx Dashboard.DashboardGet))
+  , projects :: mode :- ProjectsRoutes.Routes
+  , onboardingGet :: mode :- "p" :> ProjectId :> "onboarding" :> QPB "polling" :> QPB "redirected" :> QPT "current_tab" :> Get '[HTML] (RespHeaders (Onboarding.OnboardingGet))
+  , anomalies :: mode :- "p" :> ProjectId :> "anomalies" :> AnomaliesRoutes.Routes
+  , logExplorer :: mode :- "p" :> ProjectId :> LogExplorerRoutes.Routes
+  , endpoints :: mode :- "p" :> ProjectId :> EndpointsRoutes.Routes
+  , monitors :: mode :- "p" :> ProjectId :> MonitorsRoutes.Routes
+  , specification :: mode :- "p" :> ProjectId :> SpecificationRoutes.Routes
+  , apiGet :: mode :- "p" :> ProjectId :> "apis" :> Get '[HTML] (RespHeaders (Api.ApiGet))
+  , apiDelete :: mode :- "p" :> ProjectId :> "apis" :> Capture "keyID" ProjectApiKeys.ProjectApiKeyId :> Delete '[HTML] (RespHeaders (Html ()))
+  , apiPost :: mode :- "p" :> ProjectId :> "apis" :> ReqBody '[FormUrlEncoded] Api.GenerateAPIKeyForm :> Post '[HTML] (RespHeaders (Html ()))
+  , slackInstallPost :: mode :- "slack" :> "link-projects" :> ReqBody '[FormUrlEncoded] SlackInstall.LinkProjectsForm :> Post '[HTML] (RespHeaders (Html ()))
+  , slackLinkProjectsGet :: mode :- "slack" :> "link-projects" :> QPT "code" :> Get '[HTML] (RespHeaders (Html ()))
+  , slackUpdateWebhook :: mode :- "p" :> ProjectId :> "slack" :> "webhook" :> ReqBody '[FormUrlEncoded] SlackInstall.LinkProjectsForm :> Post '[HTML] (RespHeaders (Html ()))
+  , redactedFieldsGet :: mode :- "p" :> ProjectId :> "redacted_fields" :> Get '[HTML] (RespHeaders (Html ()))
+  , redactedFieldsPost :: mode :- "p" :> ProjectId :> "redacted_fields" :> ReqBody '[FormUrlEncoded] RedactFieldForm :> Post '[HTML] (RespHeaders (Html ()))
+  , reportsGet :: mode :- "p" :> ProjectId :> "reports" :> QPT "page" :> HXRequest :> HXBoosted :> Get '[HTML] (RespHeaders (Reports.ReportsGet))
+  , reportsSingleGet :: mode :- "p" :> ProjectId :> "reports" :> Capture "report_id" ReportsM.ReportId :> Get '[HTML] (RespHeaders (Html ()))
+  , reportsPost :: mode :- "p" :> ProjectId :> "reports_notif" :> Capture "report_type" Text :> Post '[HTML] (RespHeaders (Html ()))
+  , shareLinkPost :: mode :- "p" :> ProjectId :> "share" :> ReqBody '[FormUrlEncoded] Share.ReqForm :> Post '[HTML] (RespHeaders (Html ()))
+  , queryBuilderAutocomplete :: mode :- "p" :> ProjectId :> "query_builder" :> "autocomplete" :> QPT "category" :> QPT "prefix" :> Get '[JSON] (RespHeaders AE.Value)
+  , swaggerGenerateGet :: mode :- "p" :> ProjectId :> "generate_swagger" :> Get '[JSON] (RespHeaders AE.Value)
+  , chartsGet :: mode :- "charts_html" :> QP "chart_type" Charts.ChartType :> QPT "query_raw" :> QueryParam "pid" Projects.ProjectId :> QP "group_by" Charts.GroupBy :> QP "query_by" [Charts.QueryBy] :> QP "num_slots" Int :> QP "limit" Int :> QP "theme" Text :> QPT "id" :> QP "show_legend" Bool :> QPT "since" :> QPT "from" :> QPT "to" :> Get '[HTML] (RespHeaders (Html ()))
+  , surveyPut :: mode :- "p" :> ProjectId :> "survey" :> ReqBody '[FormUrlEncoded] Survey.SurveyForm :> Post '[HTML] (RespHeaders (Html ()))
+  , surveyGet :: mode :- "p" :> ProjectId :> "about_project" :> Get '[HTML] (RespHeaders (Html ()))
+  , editField :: mode :- "p" :> ProjectId :> "fields" :> Capture "field_id" Fields.FieldId :> ReqBody '[FormUrlEncoded] FieldDetails.EditFieldForm :> Post '[HTML] (RespHeaders (Html ()))
+  , integrationGuides :: mode :- "p" :> ProjectId :> "integration_guides" :> QPT "sdk" :> QPT "error_reporting" :> QPT "dependency_monitoring" :> Get '[HTML] (RespHeaders (Html ()))
   }
   deriving stock (Generic)
+
 
 cookieProtectedServer :: Servant.ServerT (Servant.NamedRoutes CookieProtectedRoutes) ATAuthCtx
 cookieProtectedServer =
   CookieProtectedRoutes
-    { dashboardGet = Dashboard.dashboardGetH,
-      projects = ProjectsRoutes.server,
-      onboardingGet = Onboarding.onboardingGetH,
-      logExplorer = LogExplorerRoutes.server,
-      anomalies = AnomaliesRoutes.server,
-      endpoints = EndpointsRoutes.server,
-      monitors = MonitorsRoutes.server,
-      specification = SpecificationRoutes.server,
-      apiGet = Api.apiGetH,
-      apiDelete = Api.apiDeleteH,
-      apiPost = Api.apiPostH,
-      slackInstallPost = SlackInstall.postH,
-      slackLinkProjectsGet = SlackInstall.linkProjectsGetH,
-      slackUpdateWebhook = SlackInstall.updateWebHook,
-      redactedFieldsGet = RedactedFields.redactedFieldsGetH,
-      redactedFieldsPost = RedactedFields.redactedFieldsPostH,
-      reportsGet = Reports.reportsGetH,
-      reportsSingleGet = Reports.singleReportGetH,
-      reportsPost = Reports.reportsPostH,
-      shareLinkPost = Share.shareLinkPostH,
-      queryBuilderAutocomplete = AutoComplete.getH,
-      swaggerGenerateGet = GenerateSwagger.generateGetH,
-      chartsGet = Charts.chartsGetH,
-      surveyPut = Survey.surveyPutH,
-      surveyGet = Survey.surveyGetH,
-      editField = FieldDetails.fieldPutH,
-      integrationGuides = IntegrationGuides.getH
+    { dashboardGet = Dashboard.dashboardGetH
+    , projects = ProjectsRoutes.server
+    , onboardingGet = Onboarding.onboardingGetH
+    , logExplorer = LogExplorerRoutes.server
+    , anomalies = AnomaliesRoutes.server
+    , endpoints = EndpointsRoutes.server
+    , monitors = MonitorsRoutes.server
+    , specification = SpecificationRoutes.server
+    , apiGet = Api.apiGetH
+    , apiDelete = Api.apiDeleteH
+    , apiPost = Api.apiPostH
+    , slackInstallPost = SlackInstall.postH
+    , slackLinkProjectsGet = SlackInstall.linkProjectsGetH
+    , slackUpdateWebhook = SlackInstall.updateWebHook
+    , redactedFieldsGet = RedactedFields.redactedFieldsGetH
+    , redactedFieldsPost = RedactedFields.redactedFieldsPostH
+    , reportsGet = Reports.reportsGetH
+    , reportsSingleGet = Reports.singleReportGetH
+    , reportsPost = Reports.reportsPostH
+    , shareLinkPost = Share.shareLinkPostH
+    , queryBuilderAutocomplete = AutoComplete.getH
+    , swaggerGenerateGet = GenerateSwagger.generateGetH
+    , chartsGet = Charts.chartsGetH
+    , surveyPut = Survey.surveyPutH
+    , surveyGet = Survey.surveyGetH
+    , editField = FieldDetails.fieldPutH
+    , integrationGuides = IntegrationGuides.getH
     }
+
 
 -- | The context that will be made available to request handlers. We supply the
 -- "cookie-auth"-tagged request handler defined above, so that the 'HasServer' instance
@@ -189,9 +198,11 @@ cookieProtectedServer =
 genAuthServerContext :: Logger -> AuthContext -> Servant.Context '[APItoolkitAuthContext, Servant.ErrorFormatters]
 genAuthServerContext logger env = authHandler logger env :. errorFormatters env :. EmptyContext
 
+
 errorFormatters :: AuthContext -> Servant.ErrorFormatters
 errorFormatters env =
-  Servant.defaultErrorFormatters {Servant.notFoundErrorFormatter = notFoundPage env}
+  Servant.defaultErrorFormatters{Servant.notFoundErrorFormatter = notFoundPage env}
+
 
 notFoundPage :: AuthContext -> Servant.NotFoundErrorFormatter
 notFoundPage env _req =
@@ -200,15 +211,17 @@ notFoundPage env _req =
         Left err -> err
         Right _ -> Servant.err404
 
+
 data Status = Status
-  { dbVersion :: Maybe Text,
-    gitHash :: Text,
-    gitCommitDate :: Text
+  { dbVersion :: Maybe Text
+  , gitHash :: Text
+  , gitCommitDate :: Text
   }
   deriving stock (Generic)
   deriving
     (FromJSON, ToJSON)
     via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] Status
+
 
 statusH :: ATBaseCtx Status
 statusH = do
@@ -218,27 +231,35 @@ statusH = do
   let gi = $$tGitInfoCwd
   pure
     Status
-      { dbVersion = version,
-        gitHash = toText $ giHash gi,
-        gitCommitDate = toText $ giCommitDate gi
+      { dbVersion = version
+      , gitHash = toText $ giHash gi
+      , gitCommitDate = toText $ giCommitDate gi
       }
+
 
 pingH :: ATBaseCtx Text
 pingH = do
   pure "pong"
 
+
 -- When bystring is returned for json, simply return the bytestring
 instance Servant.MimeRender JSON ByteString where
   mimeRender _ = fromStrict
 
+
 type QP a b = QueryParam a b
+
 
 type QPU a = QueryParam a UTCTime
 
+
 type QPB a = QueryParam a Bool
+
 
 type QPI a = QueryParam a Int
 
+
 type QEID a = QueryParam a Endpoints.EndpointId
+
 
 type ProjectId = Capture "projectID" Projects.ProjectId
