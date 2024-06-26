@@ -3,6 +3,7 @@ module Pages.Projects.ManageMembers (
   manageMembersPostH,
   ManageMembersForm (..),
   manageSubGetH,
+  ManageMembersGet,
 )
 where
 
@@ -83,10 +84,10 @@ manageMembersPostH pid form = do
             Just idX -> pure idX
         Just idX -> pure idX
 
-    when (userId' /= currUserId)
-      $ void
-      $ liftIO
-      $ withResource appCtx.pool \conn -> createJob conn "background_jobs" $ BackgroundJobs.InviteUserToProject currUserId pid email project.title -- invite the users to the project (Usually as an email)
+    when (userId' /= currUserId) $
+      void $
+        liftIO $
+          withResource appCtx.pool \conn -> createJob conn "background_jobs" $ BackgroundJobs.InviteUserToProject currUserId pid email project.title -- invite the users to the project (Usually as an email)
     pure (email, permission, userId')
 
   let projectMembers =
@@ -99,13 +100,13 @@ manageMembersPostH pid form = do
   -- TODO: Send a notification via background job, about the users permission having been updated.
   unless (null uAndPOldAndChanged)
     $ void
-    . dbtToEff
+      . dbtToEff
     $ ProjectMembers.updateProjectMembersPermissons uAndPOldAndChanged
 
   -- soft delete project members with id
   unless (null deletedUAndP)
     $ void
-    . dbtToEff
+      . dbtToEff
     $ ProjectMembers.softDeleteProjectMembers deletedUAndP
 
   projMembersLatest <- dbtToEff $ ProjectMembers.selectActiveProjectMembers pid
@@ -113,13 +114,21 @@ manageMembersPostH pid form = do
   addRespHeaders $ manageMembersBody projMembersLatest
 
 
-manageMembersGetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders (Html ()))
+manageMembersGetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders (ManageMembersGet))
 manageMembersGetH pid = do
   (sess, project) <- Sessions.sessionAndProject pid
   appCtx <- ask @AuthContext
   projMembers <- dbtToEff $ ProjectMembers.selectActiveProjectMembers pid
   let bwconf = (def :: BWConfig){sessM = Just sess.persistentSession, pageTitle = "Settings", currProject = Just project}
-  addRespHeaders $ bodyWrapper bwconf $ manageMembersBody projMembers
+  addRespHeaders $ ManageMembersGet $ PageCtx bwconf projMembers
+
+
+data ManageMembersGet = ManageMembersGet (PageCtx (V.Vector ProjectMembers.ProjectMemberVM))
+
+
+instance ToHtml ManageMembersGet where
+  toHtml (ManageMembersGet (PageCtx bwconf memebers)) = toHtml $ PageCtx bwconf $ manageMembersBody memebers
+  toHtmlRaw = toHtml
 
 
 manageMembersBody :: V.Vector ProjectMembers.ProjectMemberVM -> Html ()
