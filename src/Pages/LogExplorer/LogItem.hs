@@ -27,14 +27,13 @@ import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
 import Utils (faSprite_, getMethodColor, getStatusColor, unwrapJsonPrimValue)
 
 
-expandAPIlogItemH :: Projects.ProjectId -> UUID.UUID -> UTCTime -> ATAuthCtx (RespHeaders (Html ()))
+expandAPIlogItemH :: Projects.ProjectId -> UUID.UUID -> UTCTime -> ATAuthCtx (RespHeaders (ApiLogItem))
 expandAPIlogItemH pid rdId createdAt = do
   _ <- Sessions.sessionAndProject pid
   logItemM <- dbtToEff $ RequestDumps.selectRequestDumpByProjectAndId pid createdAt rdId
   addRespHeaders $ case logItemM of
-    Just req -> expandAPIlogItem' pid req True
-    Nothing -> div_ [class_ "h-full flex flex-col justify-center items-center"] do
-      p_ [] "Request not found"
+    Just req -> LogItemExpanded pid req True
+    Nothing -> ApiLogItemNotFound "Request not found"
 
 
 expandAPIlogItem' :: Projects.ProjectId -> RequestDumps.RequestDumpLogItem -> Bool -> Html ()
@@ -138,24 +137,24 @@ expandAPIlogItem' pid req modal = do
 
       div_ [class_ "tabs tabs-bordered place-content-start ", role_ "tablist"] do
         input_ [type_ "radio", name_ $ "req-details-tabx-" <> show req.id, role_ "tab", Aria.label_ "Body", class_ "tab w-max", checked_]
-        div_ [class_ "tab-content grow w-full", role_ "tabpanel"]
-          $ div_ [class_ "bg-gray-50 m-4  p-2 rounded-lg border break-all", id_ "req_body_json"]
-          $ jsonValueToHtmlTree req.requestBody
+        div_ [class_ "tab-content grow w-full", role_ "tabpanel"] $
+          div_ [class_ "bg-gray-50 m-4  p-2 rounded-lg border break-all", id_ "req_body_json"] $
+            jsonValueToHtmlTree req.requestBody
 
         input_ [type_ "radio", name_ $ "req-details-tabx-" <> show req.id, role_ "tab", Aria.label_ "Headers", class_ "tab"]
-        div_ [class_ "tab-content grow w-full", role_ "tabpanel"]
-          $ div_ [class_ "bg-gray-50 m-4 p-2 rounded-lg border break-all", id_ "req_headers_json"]
-          $ jsonValueToHtmlTree req.requestHeaders
+        div_ [class_ "tab-content grow w-full", role_ "tabpanel"] $
+          div_ [class_ "bg-gray-50 m-4 p-2 rounded-lg border break-all", id_ "req_headers_json"] $
+            jsonValueToHtmlTree req.requestHeaders
 
         input_ [type_ "radio", name_ $ "req-details-tabx-" <> show req.id, role_ "tab", Aria.label_ "Query Params", class_ "tab break-keep"]
-        div_ [class_ "tab-content grow w-full", role_ "tabpanel"]
-          $ div_ [class_ "bg-gray-50 m-4 p-2 rounded-lg border", id_ "query_params_json"]
-          $ jsonValueToHtmlTree req.queryParams
+        div_ [class_ "tab-content grow w-full", role_ "tabpanel"] $
+          div_ [class_ "bg-gray-50 m-4 p-2 rounded-lg border", id_ "query_params_json"] $
+            jsonValueToHtmlTree req.queryParams
 
         input_ [type_ "radio", name_ $ "req-details-tabx-" <> show req.id, role_ "tab", Aria.label_ "Path Params", class_ "tab break-keep"]
-        div_ [class_ "tab-content grow w-full", role_ "tabpanel"]
-          $ div_ [class_ "bg-gray-50 m-4 p-2 rounded-lg border", id_ "path_params_json"]
-          $ jsonValueToHtmlTree req.pathParams
+        div_ [class_ "tab-content grow w-full", role_ "tabpanel"] $
+          div_ [class_ "bg-gray-50 m-4 p-2 rounded-lg border", id_ "path_params_json"] $
+            jsonValueToHtmlTree req.pathParams
 
     -- response details
     div_ [class_ "border rounded-lg mt-8", id_ "reponse_detail_container"] do
@@ -164,14 +163,14 @@ expandAPIlogItem' pid req modal = do
 
       div_ [class_ "tabs tabs-bordered place-content-start grid grid-flow-col", role_ "tablist"] do
         input_ [type_ "radio", name_ "resp-details-tab", role_ "tab", Aria.label_ "Body", class_ "tab", checked_]
-        div_ [class_ "tab-content", role_ "tabpanel"]
-          $ div_ [class_ "bg-gray-50 m-4  p-2 rounded-lg border", id_ "res_body_json"]
-          $ jsonValueToHtmlTree req.responseBody
+        div_ [class_ "tab-content", role_ "tabpanel"] $
+          div_ [class_ "bg-gray-50 m-4  p-2 rounded-lg border", id_ "res_body_json"] $
+            jsonValueToHtmlTree req.responseBody
 
         input_ [type_ "radio", name_ "resp-details-tab", role_ "tab", Aria.label_ "Headers", class_ "tab"]
-        div_ [class_ "tab-content", role_ "tabpanel"]
-          $ div_ [class_ "bg-gray-50 m-4 p-2 rounded-lg border", id_ "res_headers_json"]
-          $ jsonValueToHtmlTree req.responseHeaders
+        div_ [class_ "tab-content", role_ "tabpanel"] $
+          div_ [class_ "bg-gray-50 m-4 p-2 rounded-lg border", id_ "res_headers_json"] $
+            jsonValueToHtmlTree req.responseHeaders
 
 
 apiLogItemH :: Projects.ProjectId -> UUID.UUID -> UTCTime -> ATAuthCtx (RespHeaders (ApiLogItem))
@@ -180,15 +179,19 @@ apiLogItemH pid rdId createdAt = do
   logItemM <- dbtToEff $ RequestDumps.selectRequestDumpByProjectAndId pid createdAt rdId
   addRespHeaders $ case logItemM of
     Just req -> ApiLogItem (req, (RequestDumps.requestDumpLogItemUrlPath pid req))
-    Nothing -> ApiLogItemNotFound
+    Nothing -> ApiLogItemNotFound "Invalid request log ID"
 
 
-data ApiLogItem = ApiLogItem (RequestDumps.RequestDumpLogItem, Text) | ApiLogItemNotFound
+data ApiLogItem
+  = ApiLogItem (RequestDumps.RequestDumpLogItem, Text)
+  | ApiLogItemNotFound Text
+  | LogItemExpanded Projects.ProjectId RequestDumps.RequestDumpLogItem Bool
 
 
 instance ToHtml ApiLogItem where
   toHtml (ApiLogItem (req, expandItemPath)) = toHtml $ apiLogItemView req expandItemPath
-  toHtml (ApiLogItemNotFound) = div_ "Invalid log request ID"
+  toHtml (ApiLogItemNotFound message) = div_ [] $ toHtml message
+  toHtml (LogItemExpanded pid log_item is_modal) = toHtml $ expandAPIlogItem' pid log_item is_modal
   toHtmlRaw = toHtml
 
 
@@ -218,8 +221,8 @@ apiLogItemView req expandItemPath = do
 -- Function to selectively convert RequestDumpLogItem to JSON
 selectiveToJson :: RequestDumps.RequestDumpLogItem -> AE.Value
 selectiveToJson req =
-  AE.object
-    $ concat @[]
+  AE.object $
+    concat @[]
       [ ["created_at" .= req.createdAt]
       , ["duration_ns" .= req.durationNs]
       , ["errors" .= req.errors]
