@@ -1,6 +1,5 @@
 module Pages.Anomalies.Routes (Routes, Routes' (..)) where
 
-import Lucid (Html)
 import Models.Apis.Anomalies qualified as Anomalies
 import Models.Apis.Endpoints qualified as Endpoints
 import Pages.Anomalies.AnomalyList qualified as AnomalyList
