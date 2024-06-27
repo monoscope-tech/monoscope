@@ -1,11 +1,11 @@
-module Pages.IntegrationGuides (getH) where
+module Pages.IntegrationGuides (getH, IntegrationsGet) where
 
 import Data.Default (Default (def))
 import Data.Vector qualified as V
 import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
 import Lucid (
   Html,
-  ToHtml (toHtml),
+  ToHtml (toHtml, toHtmlRaw),
   a_,
   button_,
   class_,
@@ -25,7 +25,7 @@ import Models.Users.Sessions qualified as Sessions
 import NeatInterpolation (text)
 import Pages.BodyWrapper (
   BWConfig (currProject, pageTitle, sessM),
-  bodyWrapper,
+  PageCtx (..),
  )
 import Pages.IntegrationDemos.AdonisJS (adonisGuide)
 import Pages.IntegrationDemos.Django (djangoGuide)
@@ -50,7 +50,7 @@ import System.Types
 import Utils (faSprite_)
 
 
-getH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))
+getH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders (IntegrationsGet))
 getH pid sdkM errReportM reqMonM = do
   (sess, project) <- Sessions.sessionAndProject pid
   apiKey <- dbtToEff $ ProjectApiKeys.projectApiKeysByProjectId pid
@@ -61,7 +61,15 @@ getH pid sdkM errReportM reqMonM = do
           , currProject = Just project
           , pageTitle = "Integrations"
           }
-  addRespHeaders $ bodyWrapper bwconf $ integrationsPage pid (fromMaybe "express" sdkM) key errReportM reqMonM
+  addRespHeaders $ IntegrationsGet $ PageCtx bwconf (pid, (fromMaybe "express" sdkM), key, errReportM, reqMonM)
+
+
+data IntegrationsGet = IntegrationsGet (PageCtx (Projects.ProjectId, Text, Text, Maybe Text, Maybe Text))
+
+
+instance ToHtml IntegrationsGet where
+  toHtml (IntegrationsGet (PageCtx bwconf (pid, sdk, apiKey, errReportM, reqMonM))) = toHtml $ PageCtx bwconf $ integrationsPage pid sdk apiKey errReportM reqMonM
+  toHtmlRaw = toHtml
 
 
 integrationsPage :: Projects.ProjectId -> Text -> Text -> Maybe Text -> Maybe Text -> Html ()
