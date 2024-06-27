@@ -12,6 +12,8 @@ module Pages.Anomalies.AnomalyList (
   AnomalyListGet (..),
   anomalyAcknowlegeButton,
   anomalyArchiveButton,
+  AnomalyAction,
+  AnomalyDetails,
 )
 where
 
@@ -73,7 +75,7 @@ newtype AnomalyBulkForm = AnomalyBulk
   deriving anyclass (FromForm)
 
 
-acknowlegeAnomalyGetH :: Projects.ProjectId -> Anomalies.AnomalyId -> ATAuthCtx (RespHeaders (Html ()))
+acknowlegeAnomalyGetH :: Projects.ProjectId -> Anomalies.AnomalyId -> ATAuthCtx (RespHeaders (AnomalyAction))
 acknowlegeAnomalyGetH pid aid = do
   (sess, project) <- Sessions.sessionAndProject pid
   appCtx <- ask @AuthContext
@@ -81,42 +83,55 @@ acknowlegeAnomalyGetH pid aid = do
   v <- dbtToEff $ Anomalies.acknowledgeAnomalies sess.user.id text_id
   _ <- dbtToEff $ Anomalies.acknowlegeCascade sess.user.id v
   _ <- liftIO $ withResource appCtx.pool \conn -> createJob conn "background_jobs" $ BackgroundJobs.GenSwagger pid sess.user.id
-  addRespHeaders $ anomalyAcknowlegeButton pid aid True
+  addRespHeaders $ Acknowlege pid aid True
 
 
-unAcknowlegeAnomalyGetH :: Projects.ProjectId -> Anomalies.AnomalyId -> ATAuthCtx (RespHeaders (Html ()))
+unAcknowlegeAnomalyGetH :: Projects.ProjectId -> Anomalies.AnomalyId -> ATAuthCtx (RespHeaders (AnomalyAction))
 unAcknowlegeAnomalyGetH pid aid = do
   (sess, project) <- Sessions.sessionAndProject pid
   let q = [sql| update apis.anomalies set acknowleged_by=null, acknowleged_at=null where id=? |]
   let qI = [sql| update apis.issues set acknowleged_by=null, acknowleged_at=null where id=? |]
   _ <- dbtToEff $ execute Update qI (Only aid)
   _ <- dbtToEff $ execute Update q (Only aid)
-  addRespHeaders $ anomalyAcknowlegeButton pid aid False
+  addRespHeaders $ Acknowlege pid aid False
 
 
-archiveAnomalyGetH :: Projects.ProjectId -> Anomalies.AnomalyId -> ATAuthCtx (RespHeaders (Html ()))
+archiveAnomalyGetH :: Projects.ProjectId -> Anomalies.AnomalyId -> ATAuthCtx (RespHeaders (AnomalyAction))
 archiveAnomalyGetH pid aid = do
   (sess, project) <- Sessions.sessionAndProject pid
   let q = [sql| update apis.anomalies set archived_at=NOW() where id=? |]
   let qI = [sql| update apis.issues set archived_at=NOW() where id=? |]
   _ <- dbtToEff $ execute Update qI (Only aid)
   _ <- dbtToEff $ execute Update q (Only aid)
-  addRespHeaders $ anomalyArchiveButton pid aid True
+  addRespHeaders $ Archive pid aid True
 
 
-unArchiveAnomalyGetH :: Projects.ProjectId -> Anomalies.AnomalyId -> ATAuthCtx (RespHeaders (Html ()))
+unArchiveAnomalyGetH :: Projects.ProjectId -> Anomalies.AnomalyId -> ATAuthCtx (RespHeaders (AnomalyAction))
 unArchiveAnomalyGetH pid aid = do
   (sess, project) <- Sessions.sessionAndProject pid
   let q = [sql| update apis.anomalies set archived_at=null where id=? |]
   let qI = [sql| update apis.issues set archived_at=null where id=? |]
   _ <- dbtToEff $ execute Update qI (Only aid)
   _ <- dbtToEff $ execute Update q (Only aid)
-  addRespHeaders $ anomalyArchiveButton pid aid False
+  addRespHeaders $ Archive pid aid False
+
+
+data AnomalyAction
+  = Acknowlege Projects.ProjectId Anomalies.AnomalyId Bool
+  | Archive Projects.ProjectId Anomalies.AnomalyId Bool
+  | Bulk
+
+
+instance ToHtml AnomalyAction where
+  toHtml (Acknowlege pid aid is_ack) = toHtml $ anomalyAcknowlegeButton pid aid is_ack
+  toHtml (Archive pid aid is_arch) = toHtml $ anomalyArchiveButton pid aid is_arch
+  toHtml (Bulk) = ""
+  toHtmlRaw = toHtml
 
 
 -- When given a list of anomalyIDs and an action, said action would be applied to the anomalyIDs.
 -- Then a notification should be triggered, as well as an action to reload the anomaly List.
-anomalyBulkActionsPostH :: Projects.ProjectId -> Text -> AnomalyBulkForm -> ATAuthCtx (RespHeaders (Html ()))
+anomalyBulkActionsPostH :: Projects.ProjectId -> Text -> AnomalyBulkForm -> ATAuthCtx (RespHeaders (AnomalyAction))
 anomalyBulkActionsPostH pid action items = do
   (sess, project) <- Sessions.sessionAndProject pid
   appCtx <- ask @AuthContext
@@ -131,7 +146,7 @@ anomalyBulkActionsPostH pid action items = do
       pass
     _ -> error $ "unhandled anomaly bulk action state " <> action
   addSuccessToast (action <> "d items Successfully") Nothing
-  addRespHeaders ""
+  addRespHeaders Bulk
 
 
 anomalyListGetH
@@ -168,8 +183,8 @@ anomalyListGetH pid layoutM filterTM sortM pageM loadM endpointM hxRequestM hxBo
           , sort = Just $ ItemsList.SortCfg{current = fromMaybe "events" sortM}
           , search = Just $ ItemsList.SearchCfg{viaQueryParam = Nothing} -- FIXME: search actual db
           , tabsFilter =
-              Just
-                $ ItemsList.TabFilter
+              Just $
+                ItemsList.TabFilter
                   { current = currentFilterTab
                   , options =
                       [ ItemsList.TabFilterOpt{name = "Inbox", count = Nothing}
@@ -182,15 +197,15 @@ anomalyListGetH pid layoutM filterTM sortM pageM loadM endpointM hxRequestM hxBo
               , ItemsList.BulkAction{icon = Just "inbox-full", title = "archive", uri = "/p/" <> pid.toText <> "/anomalies/bulk_actions/archive"}
               ]
           , heading =
-              Just
-                $ ItemsList.Heading
+              Just $
+                ItemsList.Heading
                   { pageTitle = "Issues: Changes, Alerts & Errors"
                   , rightComponent = Nothing
                   , subSection = Nothing
                   }
           , zeroState =
-              Just
-                $ ItemsList.ZeroState
+              Just $
+                ItemsList.ZeroState
                   { icon = "empty-set"
                   , title = "No Issues Or Errors."
                   , description = "Start monitoring errors that happened during a request."
@@ -322,21 +337,21 @@ issueItem hideByDefault currTime issue icon title subTitle content = do
             Components.drawerWithURLContent_ ("expand-log-drawer-" <> issue.targetHash) modalEndpoint $ span_ [class_ "flex items-center justify-center cursor-pointer py-2 px-3 rounded border border-gray-200 text-xs hover:shadow shadow-blue-100"] (faSprite_ "expand" "regular" "w-3 h-3")
         fromMaybe (toHtml @String "") content
     let issueQueryPartial = buildQueryForAnomaly issue.anomalyType issue.targetHash
-    div_ [class_ "flex items-center justify-center "]
-      $ div_
+    div_ [class_ "flex items-center justify-center "] $
+      div_
         [ class_ "w-60 h-16 px-3"
         , hxGet_ $ "/charts_html?pid=" <> issue.projectId.toText <> "&since=14D&query_raw=" <> escapedQueryPartial [fmt|{issueQueryPartial} | timechart [1d]|]
         , hxTrigger_ "intersect once"
         , hxSwap_ "innerHTML"
         ]
         ""
-    div_ [class_ "w-36 flex items-center justify-center"]
-      $ span_ [class_ "tabular-nums text-xl", term "data-tippy-content" "Events for this Anomaly in the last 14days"]
-      $ show issue.eventsAgg.count
+    div_ [class_ "w-36 flex items-center justify-center"] $
+      span_ [class_ "tabular-nums text-xl", term "data-tippy-content" "Events for this Anomaly in the last 14days"] $
+        show issue.eventsAgg.count
 
 
 -- anomalyDetailsGetH: either in modal or as a standalone page
-anomalyDetailsGetH :: Projects.ProjectId -> Text -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))
+anomalyDetailsGetH :: Projects.ProjectId -> Text -> Maybe Text -> ATAuthCtx (RespHeaders (AnomalyDetails))
 anomalyDetailsGetH pid targetHash hxBoostedM = do
   (sess, project) <- Sessions.sessionAndProject pid
   issueM <- dbtToEff $ Anomalies.selectIssueByHash pid targetHash
@@ -347,7 +362,7 @@ anomalyDetailsGetH pid targetHash hxBoostedM = do
           , pageTitle = "Anomaly Details"
           }
   case issueM of
-    Nothing -> addRespHeaders $ bodyWrapper bwconf $ h4_ [] "ANOMALY NOT FOUND"
+    Nothing -> addRespHeaders $ AnomalyDetailsNoFound $ PageCtx bwconf ()
     Just issue -> do
       currTime <- liftIO getCurrentTime
       case issue.issueData of
@@ -357,36 +372,53 @@ anomalyDetailsGetH pid targetHash hxBoostedM = do
           fields <- dbtToEff $ Fields.selectFields pid targetHash
           let shapesWithFieldsMap = V.map (`getShapeFields` fields) shapes
           case hxBoostedM of
-            Just _ -> addRespHeaders $ anomalyDetailsPage issue (Just shapesWithFieldsMap) Nothing Nothing currTime True
-            Nothing -> addRespHeaders $ bodyWrapper bwconf $ div_ [class_ "w-full px-32 overflow-y-scroll h-full"] do
-              h1_ [class_ "my-10 py-2 border-b w-full text-lg font-semibold"] "Anomaly Details"
-              anomalyDetailsPage issue (Just shapesWithFieldsMap) Nothing Nothing currTime False
+            Just _ -> addRespHeaders $ AnomalyDetailsBoosted (issue, (Just shapesWithFieldsMap), Nothing, Nothing, currTime, True)
+            Nothing -> addRespHeaders $ AnomalyDetailsMain $ PageCtx bwconf $ (issue, (Just shapesWithFieldsMap), Nothing, Nothing, currTime, False)
         Anomalies.IDNewShapeIssue issueD -> do
           newF <- dbtToEff $ Fields.selectFieldsByHashes pid issueD.newUniqueFields
           updF <- dbtToEff $ Fields.selectFieldsByHashes pid (T.take 16 <$> issueD.updatedFieldFormats)
           delF <- dbtToEff $ Fields.selectFieldsByHashes pid issueD.deletedFields
           let anFields = (groupFieldsByCategory newF, groupFieldsByCategory updF, groupFieldsByCategory delF)
           case hxBoostedM of
-            Just _ -> addRespHeaders $ anomalyDetailsPage issue Nothing (Just anFields) Nothing currTime True
-            Nothing -> addRespHeaders $ bodyWrapper bwconf $ div_ [class_ "w-full px-32 overflow-y-scroll h-full"] do
-              h1_ [class_ "my-10 py-2 border-b w-full text-lg font-semibold"] "Anomaly Details"
-              anomalyDetailsPage issue Nothing (Just anFields) Nothing currTime False
+            Just _ -> addRespHeaders $ AnomalyDetailsBoosted (issue, Nothing, (Just anFields), Nothing, currTime, True)
+            Nothing -> addRespHeaders $ AnomalyDetailsMain $ PageCtx bwconf (issue, Nothing, (Just anFields), Nothing, currTime, False)
         Anomalies.IDNewFormatIssue issueD -> do
           anFormats <-
-            dbtToEff
-              $ Fields.getFieldsByEndpointKeyPathAndCategory pid (issueD.endpointId.toText) (issueD.fieldKeyPath) (issueD.fieldCategory)
+            dbtToEff $
+              Fields.getFieldsByEndpointKeyPathAndCategory pid (issueD.endpointId.toText) (issueD.fieldKeyPath) (issueD.fieldCategory)
           case hxBoostedM of
-            Just _ -> addRespHeaders $ anomalyDetailsPage issue Nothing Nothing (Just anFormats) currTime True
-            Nothing -> addRespHeaders $ bodyWrapper bwconf $ div_ [class_ "w-full px-32 overflow-y-scroll h-full"] do
-              h1_ [class_ "my-10 py-2 border-b w-full text-lg font-semibold"] "Anomaly Details"
-              anomalyDetailsPage issue Nothing Nothing (Just anFormats) currTime False
+            Just _ -> addRespHeaders $ AnomalyDetailsBoosted (issue, Nothing, Nothing, (Just anFormats), currTime, True)
+            Nothing -> addRespHeaders $ AnomalyDetailsMain $ PageCtx bwconf (issue, Nothing, Nothing, (Just anFormats), currTime, False)
         Anomalies.IDNewRuntimeExceptionIssue issueD -> do
           case hxBoostedM of
-            Just _ -> addRespHeaders $ anomalyDetailsPage issue Nothing Nothing Nothing currTime True
-            Nothing -> addRespHeaders $ bodyWrapper bwconf $ div_ [class_ "w-full px-32 overflow-y-scroll h-full"] do
-              h1_ [class_ "my-10 py-2 border-b w-full text-lg font-semibold"] "Anomaly Details"
-              anomalyDetailsPage issue Nothing Nothing Nothing currTime False
-        _ -> addRespHeaders $ "TODO"
+            Just _ -> addRespHeaders $ AnomalyDetailsBoosted (issue, Nothing, Nothing, Nothing, currTime, True)
+            Nothing -> addRespHeaders $ AnomalyDetailsMain $ PageCtx bwconf (issue, Nothing, Nothing, Nothing, currTime, False)
+        _ -> addRespHeaders $ AnomalyDetailsNoFound $ PageCtx bwconf ()
+
+
+data AnomalyDetails
+  = AnomalyDetailsMain (PageCtx (Anomalies.IssueL, Maybe (V.Vector Shapes.ShapeWithFields), Maybe (Map Fields.FieldCategoryEnum [Fields.Field], Map Fields.FieldCategoryEnum [Fields.Field], Map Fields.FieldCategoryEnum [Fields.Field]), Maybe (V.Vector Text), UTCTime, Bool))
+  | AnomalyDetailsBoosted (Anomalies.IssueL, Maybe (V.Vector Shapes.ShapeWithFields), Maybe (Map Fields.FieldCategoryEnum [Fields.Field], Map Fields.FieldCategoryEnum [Fields.Field], Map Fields.FieldCategoryEnum [Fields.Field]), Maybe (V.Vector Text), UTCTime, Bool)
+  | AnomalyDetailsNoFound (PageCtx ())
+
+
+instance ToHtml AnomalyDetails where
+  toHtml (AnomalyDetailsMain (PageCtx bwconf (issue, shapesWithFieldsMap, fields, prvFormatsM, currTime, modal))) = toHtml $ PageCtx bwconf $ anomalyDetailsPageM issue shapesWithFieldsMap fields prvFormatsM currTime modal
+  toHtml (AnomalyDetailsBoosted (issue, shapesWithFieldsMap, fields, prvFormatsM, currTime, modal)) = toHtml $ anomalyDetailsPage issue shapesWithFieldsMap fields prvFormatsM currTime modal
+  toHtml (AnomalyDetailsNoFound (PageCtx bwconf ())) = toHtml $ PageCtx bwconf notFoundPage
+  toHtmlRaw = toHtml
+
+
+notFoundPage :: Html ()
+notFoundPage = do
+  h4_ [] "ANOMALY NOT FOUND"
+
+
+anomalyDetailsPageM :: Anomalies.IssueL -> Maybe (V.Vector Shapes.ShapeWithFields) -> Maybe (Map Fields.FieldCategoryEnum [Fields.Field], Map Fields.FieldCategoryEnum [Fields.Field], Map Fields.FieldCategoryEnum [Fields.Field]) -> Maybe (V.Vector Text) -> UTCTime -> Bool -> Html ()
+anomalyDetailsPageM issue shapesWithFieldsMap fields prvFormatsM currTime modal = do
+  div_ [class_ "w-full px-32 overflow-y-scroll h-full"] do
+    h1_ [class_ "my-10 py-2 border-b w-full text-lg font-semibold"] "Anomaly Details"
+    anomalyDetailsPage issue shapesWithFieldsMap fields prvFormatsM currTime modal
 
 
 anomalyDetailsPage :: Anomalies.IssueL -> Maybe (V.Vector Shapes.ShapeWithFields) -> Maybe (Map Fields.FieldCategoryEnum [Fields.Field], Map Fields.FieldCategoryEnum [Fields.Field], Map Fields.FieldCategoryEnum [Fields.Field]) -> Maybe (V.Vector Text) -> UTCTime -> Bool -> Html ()
@@ -618,9 +650,9 @@ anomalyAcknowlegeButton :: Projects.ProjectId -> Anomalies.AnomalyId -> Bool -> 
 anomalyAcknowlegeButton pid aid acked = do
   let acknowlegeAnomalyEndpoint = "/p/" <> pid.toText <> "/anomalies/" <> Anomalies.anomalyIdText aid <> if acked then "/unacknowlege" else "/acknowlege"
   a_
-    [ class_
-        $ "inline-block child-hover cursor-pointer py-2 px-3 rounded border border-gray-200 text-xs hover:shadow shadow-blue-100 "
-        <> (if acked then "bg-green-100 text-green-900" else "")
+    [ class_ $
+        "inline-block child-hover cursor-pointer py-2 px-3 rounded border border-gray-200 text-xs hover:shadow shadow-blue-100 "
+          <> (if acked then "bg-green-100 text-green-900" else "")
     , term "data-tippy-content" "acknowlege anomaly"
     , hxGet_ acknowlegeAnomalyEndpoint
     , hxSwap_ "outerHTML"
@@ -632,9 +664,9 @@ anomalyArchiveButton :: Projects.ProjectId -> Anomalies.AnomalyId -> Bool -> Htm
 anomalyArchiveButton pid aid archived = do
   let archiveAnomalyEndpoint = "/p/" <> pid.toText <> "/anomalies/" <> Anomalies.anomalyIdText aid <> if archived then "/unarchive" else "/archive"
   a_
-    [ class_
-        $ "inline-block xchild-hover cursor-pointer py-2 px-3 rounded border border-gray-200 text-xs hover:shadow shadow-blue-100 "
-        <> (if archived then " bg-green-100 text-green-900" else "")
+    [ class_ $
+        "inline-block xchild-hover cursor-pointer py-2 px-3 rounded border border-gray-200 text-xs hover:shadow shadow-blue-100 "
+          <> (if archived then " bg-green-100 text-green-900" else "")
     , term "data-tippy-content" $ if archived then "unarchive" else "archive"
     , hxGet_ archiveAnomalyEndpoint
     , hxSwap_ "outerHTML"
@@ -647,24 +679,24 @@ reqResSection title isRequest shapesWithFieldsMap =
   section_ [class_ "space-y-3"] do
     div_ [class_ "flex justify-between mt-5"] do
       div_ [class_ "flex flex-row"] do
-        a_ [class_ "cursor-pointer", [__|on click toggle .neg-rotate-90 on me then toggle .hidden on (next .reqResSubSection)|]]
-          $ faSprite_ "chevron-down" "light" "h-4 mr-3 mt-1 w-4"
+        a_ [class_ "cursor-pointer", [__|on click toggle .neg-rotate-90 on me then toggle .hidden on (next .reqResSubSection)|]] $
+          faSprite_ "chevron-down" "light" "h-4 mr-3 mt-1 w-4"
         span_ [class_ "text-lg text-slate-800"] $ toHtml title
 
-    div_ [class_ "bg-white border border-gray-100 rounded-xl py-5 px-5 space-y-6 reqResSubSection"]
-      $ forM_ (zip [(1 :: Int) ..] shapesWithFieldsMap)
-      $ \(index, s) -> do
-        let sh = if index == 1 then title <> "_fields" else title <> "_fields hidden"
-        div_ [class_ sh, id_ $ title <> "_" <> show index] do
-          if isRequest
-            then do
-              subSubSection (title <> " Path Params") (Map.lookup Fields.FCPathParam s.fieldsMap)
-              subSubSection (title <> " Query Params") (Map.lookup Fields.FCQueryParam s.fieldsMap)
-              subSubSection (title <> " Headers") (Map.lookup Fields.FCRequestHeader s.fieldsMap)
-              subSubSection (title <> " Body") (Map.lookup Fields.FCRequestBody s.fieldsMap)
-            else do
-              subSubSection (title <> " Headers") (Map.lookup Fields.FCResponseHeader s.fieldsMap)
-              subSubSection (title <> " Body") (Map.lookup Fields.FCResponseBody s.fieldsMap)
+    div_ [class_ "bg-white border border-gray-100 rounded-xl py-5 px-5 space-y-6 reqResSubSection"] $
+      forM_ (zip [(1 :: Int) ..] shapesWithFieldsMap) $
+        \(index, s) -> do
+          let sh = if index == 1 then title <> "_fields" else title <> "_fields hidden"
+          div_ [class_ sh, id_ $ title <> "_" <> show index] do
+            if isRequest
+              then do
+                subSubSection (title <> " Path Params") (Map.lookup Fields.FCPathParam s.fieldsMap)
+                subSubSection (title <> " Query Params") (Map.lookup Fields.FCQueryParam s.fieldsMap)
+                subSubSection (title <> " Headers") (Map.lookup Fields.FCRequestHeader s.fieldsMap)
+                subSubSection (title <> " Body") (Map.lookup Fields.FCRequestBody s.fieldsMap)
+              else do
+                subSubSection (title <> " Headers") (Map.lookup Fields.FCResponseHeader s.fieldsMap)
+                subSubSection (title <> " Body") (Map.lookup Fields.FCResponseBody s.fieldsMap)
 
 
 -- | subSubSection ..
