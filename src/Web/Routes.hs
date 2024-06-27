@@ -86,8 +86,7 @@ data Routes mode = Routes
   , logout :: mode :- "logout" :> GetRedirect '[HTML] (Headers '[Header "Location" Text, Header "Set-Cookie" SetCookie] NoContent)
   , authCallback :: mode :- "auth_callback" :> QPT "code" :> QPT "state" :> GetRedirect '[HTML] (Headers '[Header "Location" Text, Header "Set-Cookie" SetCookie] (Html ()))
   , shareLinkGet :: mode :- "share" :> "r" :> Capture "shareID" UUID.UUID :> Get '[HTML] (Share.ShareLinkGet)
-  , slackInstallGet :: mode :- "slack" :> "oauth" :> "callback" :> QPT "code" :> Get '[HTML] (Html ())
-  , slackLinkProjectGet :: mode :- "slack" :> "oauth" :> "callback" :> Capture "project_id" Projects.ProjectId :> QPT "code" :> Get '[HTML] (Html ())
+  , slackLinkProjectGet :: mode :- "slack" :> "oauth" :> "callback" :> Capture "project_id" Projects.ProjectId :> QPT "code" :> Get '[HTML] (SlackInstall.SlackLink)
   , clientMetadata :: mode :- "api" :> "client_metadata" :> Header "Authorization" Text :> Get '[JSON] ClientMetadata.ClientMetadata
   }
   deriving stock (Generic)
@@ -107,7 +106,6 @@ server pool =
     , logout = Auth.logoutH
     , authCallback = Auth.authCallbackH
     , shareLinkGet = Share.shareLinkGetH
-    , slackInstallGet = SlackInstall.getH
     , slackLinkProjectGet = SlackInstall.linkProjectGetH
     , clientMetadata = ClientMetadata.clientMetadataH
     , cookieProtected = \sessionWithCookies ->
@@ -140,7 +138,6 @@ data CookieProtectedRoutes mode = CookieProtectedRoutes
   , apiDelete :: mode :- "p" :> ProjectId :> "apis" :> Capture "keyID" ProjectApiKeys.ProjectApiKeyId :> Delete '[HTML] (RespHeaders (Api.ApiMut))
   , apiPost :: mode :- "p" :> ProjectId :> "apis" :> ReqBody '[FormUrlEncoded] Api.GenerateAPIKeyForm :> Post '[HTML] (RespHeaders (Api.ApiMut))
   , slackInstallPost :: mode :- "slack" :> "link-projects" :> ReqBody '[FormUrlEncoded] SlackInstall.LinkProjectsForm :> Post '[HTML] (RespHeaders (Html ()))
-  , slackLinkProjectsGet :: mode :- "slack" :> "link-projects" :> QPT "code" :> Get '[HTML] (RespHeaders (Html ()))
   , slackUpdateWebhook :: mode :- "p" :> ProjectId :> "slack" :> "webhook" :> ReqBody '[FormUrlEncoded] SlackInstall.LinkProjectsForm :> Post '[HTML] (RespHeaders (Html ()))
   , redactedFieldsGet :: mode :- "p" :> ProjectId :> "redacted_fields" :> Get '[HTML] (RespHeaders (RedactedFields.RedactGet))
   , redactedFieldsPost :: mode :- "p" :> ProjectId :> "redacted_fields" :> ReqBody '[FormUrlEncoded] RedactFieldForm :> Post '[HTML] (RespHeaders (RedactedFields.RedactPost))
@@ -153,7 +150,7 @@ data CookieProtectedRoutes mode = CookieProtectedRoutes
   , chartsGet :: mode :- "charts_html" :> QP "chart_type" Charts.ChartType :> QPT "query_raw" :> QueryParam "pid" Projects.ProjectId :> QP "group_by" Charts.GroupBy :> QP "query_by" [Charts.QueryBy] :> QP "num_slots" Int :> QP "limit" Int :> QP "theme" Text :> QPT "id" :> QP "show_legend" Bool :> QPT "since" :> QPT "from" :> QPT "to" :> Get '[HTML] (RespHeaders (Html ()))
   , surveyPut :: mode :- "p" :> ProjectId :> "survey" :> ReqBody '[FormUrlEncoded] Survey.SurveyForm :> Post '[HTML] (RespHeaders (Survey.SurveyPut))
   , surveyGet :: mode :- "p" :> ProjectId :> "about_project" :> Get '[HTML] (RespHeaders (Survey.SurveyGet))
-  , editField :: mode :- "p" :> ProjectId :> "fields" :> Capture "field_id" Fields.FieldId :> ReqBody '[FormUrlEncoded] FieldDetails.EditFieldForm :> Post '[HTML] (RespHeaders (Html ()))
+  , editField :: mode :- "p" :> ProjectId :> "fields" :> Capture "field_id" Fields.FieldId :> ReqBody '[FormUrlEncoded] FieldDetails.EditFieldForm :> Post '[HTML] (RespHeaders (FieldDetails.FieldPut))
   , integrationGuides :: mode :- "p" :> ProjectId :> "integration_guides" :> QPT "sdk" :> QPT "error_reporting" :> QPT "dependency_monitoring" :> Get '[HTML] (RespHeaders (Html ()))
   }
   deriving stock (Generic)
@@ -174,7 +171,6 @@ cookieProtectedServer =
     , apiDelete = Api.apiDeleteH
     , apiPost = Api.apiPostH
     , slackInstallPost = SlackInstall.postH
-    , slackLinkProjectsGet = SlackInstall.linkProjectsGetH
     , slackUpdateWebhook = SlackInstall.updateWebHook
     , redactedFieldsGet = RedactedFields.redactedFieldsGetH
     , redactedFieldsPost = RedactedFields.redactedFieldsPostH

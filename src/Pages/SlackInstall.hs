@@ -1,27 +1,24 @@
 {-# OPTIONS_GHC -Wno-unrecognised-pragmas #-}
 
-module Pages.SlackInstall (getH, linkProjectsGetH, linkProjectGetH, postH, LinkProjectsForm, updateWebHook) where
+module Pages.SlackInstall (linkProjectGetH, postH, LinkProjectsForm, updateWebHook, SlackLink) where
 
 import Control.Lens ((.~), (^.))
 import Data.Aeson qualified as AE
 import Data.Default (Default (def))
-import Data.Vector qualified as V
 import Database.PostgreSQL.Entity.DBT (withPool)
 import Deriving.Aeson qualified as DAE
 import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
 import Effectful.Reader.Static (ask, asks)
-import Fmt (dateDashF, fmt)
 import Lucid
-import Lucid.Htmx (hxPost_)
 import Models.Apis.Slack (insertAccessToken)
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
 import Network.Wreq (FormParam (..), defaults, header, postWith, responseBody)
-import Pages.BodyWrapper (BWConfig, bodyWrapper, currProject, pageTitle, sessM)
+import Pages.BodyWrapper (BWConfig, PageCtx (..), currProject, pageTitle, sessM)
 import Pkg.Components (navBar)
 import Pkg.Mail (sendSlackMessage)
 import Relude hiding (ask, asks)
-import System.Config (AuthContext (config, env, pool), EnvConfig (slackClientId, slackClientSecret, slackRedirectUri))
+import System.Config (AuthContext (env, pool), EnvConfig (slackClientId, slackClientSecret, slackRedirectUri))
 import System.Types (ATAuthCtx, ATBaseCtx, RespHeaders, addRespHeaders, addSuccessToast)
 import Utils (faSprite_)
 import Web.FormUrlEncoded (FromForm)
@@ -85,58 +82,15 @@ updateWebHook pid LinkProjectsForm{projects, webhookUrl} = do
 
 postH :: LinkProjectsForm -> ATAuthCtx (RespHeaders (Html ()))
 postH LinkProjectsForm{projects, webhookUrl} = do
-  -- TODO: temporary, to work with current logic
   appCtx <- ask @AuthContext
   sess' <- Sessions.getSession
 
   _ <- dbtToEff $ insertAccessToken projects webhookUrl
-  addSuccessToast "Slack account linked to project(s),successfully" Nothing
+  addSuccessToast "Slack account linked to project(s), successfully" Nothing
   addRespHeaders $ span_ [] "Projects linked successfully"
 
 
-getH :: Maybe Text -> ATBaseCtx ((Html ()))
-getH slack_code = do
-  let bwconf =
-        (def :: BWConfig)
-          { sessM = Nothing
-          , currProject = Nothing
-          , pageTitle = "Slack Install"
-          }
-  pure $ bodyWrapper bwconf (maybe noTokenFound toLinkPage slack_code)
-
-
-toLinkPage :: Text -> Html ()
-toLinkPage code = do
-  navBar
-  section_ [class_ "h-full mt-[80px] w-[1000px] flex flex-col gap-6 items-center mx-auto"] do
-    div_ [class_ "mt-10"] do
-      h1_ [class_ "text-2xl font-bold"] "Link Slack Account to a project to complete"
-    section_ [] do
-      div_ [class_ "bg-white flex flex-col items-center sm:rounded-md"] do
-        h3_ [class_ "mb-6"] "Make sure you are logged in"
-        a_ [href_ $ "/slack/link-projects?code=" <> code, class_ "btn btn-primary"] "Link a project(s)"
-
-
-linkProjectsGetH :: Maybe Text -> ATAuthCtx (RespHeaders (Html ()))
-linkProjectsGetH slack_code = do
-  sess <- Sessions.getSession
-  appCtx <- ask @AuthContext
-  let envCfg = appCtx.config
-  let client_id = envCfg.slackClientId
-  let client_secret = envCfg.slackClientSecret
-  let redirect_uri = envCfg.slackRedirectUri
-  token <- liftIO $ exchangeCodeForToken client_id client_secret redirect_uri (fromMaybe "" slack_code)
-  projects <- dbtToEff $ Projects.selectProjectsForUser sess.persistentSession.userId
-  let bwconf =
-        (def :: BWConfig)
-          { sessM = Just sess.persistentSession
-          , currProject = Nothing
-          , pageTitle = "Link a project"
-          }
-  addRespHeaders $ bodyWrapper bwconf (maybe noTokenFound (slackPage projects) token)
-
-
-linkProjectGetH :: Projects.ProjectId -> Maybe Text -> ATBaseCtx (Html ())
+linkProjectGetH :: Projects.ProjectId -> Maybe Text -> ATBaseCtx (SlackLink)
 linkProjectGetH pid slack_code = do
   appCtx <- ask @AuthContext
   envCfg <- asks env
@@ -157,35 +111,19 @@ linkProjectGetH pid slack_code = do
       n <- liftIO $ withPool pool do
         insertAccessToken [pid.toText] token'.incomingWebhook.url
       sendSlackMessage pid ("APItoolkit Bot has been linked to your project: " <> project'.title)
-      pure $ bodyWrapper bwconf installedSuccess
-    (_, _) -> pure $ bodyWrapper bwconf noTokenFound
+      pure $ SlackLinked $ PageCtx bwconf ()
+    (_, _) -> pure $ NoTokenFound $ PageCtx bwconf ()
 
 
-slackPage :: V.Vector Projects.Project' -> TokenResponse -> Html ()
-slackPage projects token = do
-  main_ [class_ "w-[1000px] flex flex-col mt-8 items-center mx-auto"] do
-    h1_ [class_ "text-2xl font-bold"] "Link Slack Account to a project to complete"
-    section_ [class_ "w-full"] do
-      div_ [class_ "bg-white shadow overflow-hidden sm:rounded-md"] do
-        form_ [hxPost_ "/slack/link-projects"] do
-          input_ [type_ "hidden", name_ "webhookUrl", value_ $ toText token.incomingWebhook.url]
-          ul_ [role_ "list", class_ "divide-y divide-gray-200"] do
-            projects & mapM_ \project -> do
-              li_ do
-                label_ [class_ "block", Lucid.for_ project.id.toText] do
-                  div_ [class_ "px-4 py-4 flex items-center sm:px-6"] do
-                    div_ [class_ "min-w-0 flex-1 sm:flex sm:items-center sm:justify-between"] do
-                      div_ [class_ "truncate"] do
-                        div_ [class_ "text-sm"] do
-                          p_ [class_ "block font-medium text-indigo-600 truncate py-2"] $ toHtml project.title
-                          p_ [class_ "block flex-shrink-0 font-normal text-gray-500"] $ toHtml project.description
-                        div_ [class_ "mt-2 flex"] do
-                          div_ [class_ "flex items-center text-sm text-gray-500"] do
-                            small_ do
-                              span_ "Created on "
-                              time_ [datetime_ $ fmt $ dateDashF project.createdAt] $ toHtml @Text $ fmt $ dateDashF project.createdAt
-                    div_ [class_ "ml-5 flex-shrink-0"] $ input_ [type_ "checkbox", class_ "checkbox", id_ project.id.toText, name_ "projects", value_ project.id.toText]
-            button_ [class_ "mx-2 mb-2 mt-6 btn btn-primary"] "Link Projects"
+data SlackLink
+  = SlackLinked (PageCtx ())
+  | NoTokenFound (PageCtx ())
+
+
+instance ToHtml SlackLink where
+  toHtml (SlackLinked (PageCtx bwconf ())) = toHtml $ PageCtx bwconf installedSuccess
+  toHtml (NoTokenFound (PageCtx bwconf ())) = toHtml $ PageCtx bwconf noTokenFound
+  toHtmlRaw = toHtml
 
 
 noTokenFound :: Html ()
