@@ -1,4 +1,13 @@
-module Pages.Monitors.Alerts (alertSingleGetH, convertToQueryMonitor, alertSingleToggleActiveH, alertListGetH, alertUpsertPostH, editAlert_, AlertUpsertForm (..)) where
+module Pages.Monitors.Alerts (
+  alertSingleGetH,
+  convertToQueryMonitor,
+  alertSingleToggleActiveH,
+  alertListGetH,
+  alertUpsertPostH,
+  editAlert_,
+  AlertUpsertForm (..),
+  Alert,
+) where
 
 import Data.CaseInsensitive qualified as CI
 import Data.Default
@@ -82,7 +91,7 @@ convertToQueryMonitor projectId now queryMonitorId alertForm =
         }
 
 
-alertUpsertPostH :: Projects.ProjectId -> AlertUpsertForm -> ATAuthCtx (RespHeaders (Html ()))
+alertUpsertPostH :: Projects.ProjectId -> AlertUpsertForm -> ATAuthCtx (RespHeaders (Alert))
 alertUpsertPostH pid form = do
   let alertId = form.alertId >>= UUID.fromText
   queryMonitorId <- liftIO $ case alertId of
@@ -93,30 +102,47 @@ alertUpsertPostH pid form = do
 
   _ <- dbtToEff $ Monitors.queryMonitorUpsert queryMonitor
   addSuccessToast "Monitor was updated successfully" Nothing
-  addRespHeaders ""
+  addRespHeaders $ AlertNoContent ""
 
 
-alertListGetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders (Html ()))
+alertListGetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders (Alert))
 alertListGetH pid = do
   monitors <- dbtToEff $ Monitors.queryMonitorsAll pid
-  addRespHeaders $ queryMonitors_ monitors
+  addRespHeaders $ AlertListGet monitors
 
 
-alertSingleToggleActiveH :: Projects.ProjectId -> Monitors.QueryMonitorId -> ATAuthCtx (RespHeaders (Html ()))
+alertSingleToggleActiveH :: Projects.ProjectId -> Monitors.QueryMonitorId -> ATAuthCtx (RespHeaders (Alert))
 alertSingleToggleActiveH pid monitorId = do
   _ <- dbtToEff $ Monitors.monitorToggleActiveById monitorId
 
   monitors <- dbtToEff $ Monitors.queryMonitorsAll pid
-  addRespHeaders $ queryMonitors_ monitors
+  addRespHeaders $ AlertListGet monitors
 
 
-alertSingleGetH :: Projects.ProjectId -> Monitors.QueryMonitorId -> ATAuthCtx (RespHeaders (Html ()))
+alertSingleGetH :: Projects.ProjectId -> Monitors.QueryMonitorId -> ATAuthCtx (RespHeaders (Alert))
 alertSingleGetH pid monitorId = do
   monitor <- dbtToEff $ Monitors.queryMonitorById monitorId
-  addRespHeaders $ do
-    div_ [] do
-      a_ [class_ "border-y p-3 block cursor-pointer", hxGet_ $ "/p/" <> pid.toText <> "/alerts", hxTarget_ "#alertsListContainer"] "‹ Back to alerts list"
-      div_ [class_ "p-3"] $ editAlert_ pid monitor
+  addRespHeaders $ AlertSingle pid monitor
+
+
+data Alert
+  = AlertListGet (V.Vector Monitors.QueryMonitor)
+  | AlertSingle Projects.ProjectId (Maybe Monitors.QueryMonitor)
+  | AlertNoContent Text
+
+
+instance ToHtml Alert where
+  toHtml (AlertListGet monitors) = toHtml $ queryMonitors_ monitors
+  toHtml (AlertSingle pid monitor) = toHtml $ alertSingleComp pid monitor
+  toHtml (AlertNoContent msg) = toHtml msg
+  toHtmlRaw = toHtml
+
+
+alertSingleComp :: Projects.ProjectId -> Maybe Monitors.QueryMonitor -> Html ()
+alertSingleComp pid monitor = do
+  div_ [] do
+    a_ [class_ "border-y p-3 block cursor-pointer", hxGet_ $ "/p/" <> pid.toText <> "/alerts", hxTarget_ "#alertsListContainer"] "‹ Back to alerts list"
+    div_ [class_ "p-3"] $ editAlert_ pid monitor
 
 
 editAlert_ :: Projects.ProjectId -> Maybe Monitors.QueryMonitor -> Html ()
@@ -251,8 +277,8 @@ editAlert_ pid monitorM = do
             forM_ monitor.alertConfig.slackChannels addRecipientSlackTmpl_
 
       div_ [class_ "py-5"] do
-        button_ [type_ "submit", class_ "btn btn-success"]
-          $ if isNewMonitor
+        button_ [type_ "submit", class_ "btn btn-success"] $
+          if isNewMonitor
             then "Create Alert"
             else "Update Alert"
 
