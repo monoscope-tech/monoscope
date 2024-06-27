@@ -5,6 +5,9 @@ module Pages.Monitors.TestCollectionEditor (
   collectionPage,
   collectionStepsUpdateH,
   testSettingsModalContent_,
+  CollectionGet,
+  CollectionRunTest,
+  CollectionMut,
 ) where
 
 import Data.Aeson qualified as AE
@@ -32,7 +35,7 @@ import Models.Projects.Projects qualified as Projects
 import Models.Tests.TestToDump qualified as TestToDump
 import Models.Tests.Testing qualified as Testing
 import Models.Users.Sessions qualified as Sessions
-import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
+import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
 import Pkg.Components.Modals qualified as Components
 import PyF (fmt)
 import Relude hiding (ask)
@@ -52,31 +55,29 @@ data CollectionStepUpdateForm = CollectionStepUpdateForm
   deriving (AE.FromJSON, AE.ToJSON) via (DAE.CustomJSON) '[DAE.OmitNothingFields] CollectionStepUpdateForm
 
 
-collectionStepsUpdateH :: Projects.ProjectId -> Testing.CollectionId -> CollectionStepUpdateForm -> ATAuthCtx (RespHeaders (Html ()))
+collectionStepsUpdateH :: Projects.ProjectId -> Testing.CollectionId -> CollectionStepUpdateForm -> ATAuthCtx (RespHeaders (CollectionMut))
 collectionStepsUpdateH pid colId colF = do
   let isScheduled = colF.scheduled == Just "on"
   _ <- dbtToEff $ Testing.updateCollection pid colId (fromMaybe "" colF.title) (fromMaybe "" colF.description) isScheduled ((fromMaybe "" colF.scheduleNumber) <> " " <> fromMaybe "" colF.scheduleNumberUnit) colF.stepsData
   addSuccessToast "Collection's steps updated successfully" Nothing
-  addRespHeaders $ toHtml ""
+  addRespHeaders $ CollectionMut
 
 
-collectionRunTestsH :: Projects.ProjectId -> Testing.CollectionId -> Maybe Int -> CollectionStepUpdateForm -> ATAuthCtx (RespHeaders (Html ()))
+collectionRunTestsH :: Projects.ProjectId -> Testing.CollectionId -> Maybe Int -> CollectionStepUpdateForm -> ATAuthCtx (RespHeaders (CollectionRunTest))
 collectionRunTestsH pid colId runIdxM stepsForm = do
   stepResultsE <- TestToDump.runTestAndLog pid stepsForm.stepsData
   case stepResultsE of
     Right stepResults -> do
       let tkRespJson = decodeUtf8 @Text $ AE.encode stepResults
       addSuccessToast "Collection completed execution" Nothing
-      addRespHeaders $ do
-        script_ [fmt|window.collectionResults = {tkRespJson}|]
-        V.iforM_ stepResults collectionStepResult_
+      addRespHeaders $ CollectionRunTest stepResults tkRespJson
     Left e -> do
       Log.logAttention "Collection failed execution" e
       addErrorToast "Collection failed execution" (Just $ show e)
-      addRespHeaders $ span_ ""
+      addRespHeaders $ RunTestError
 
 
-collectionGetH :: Projects.ProjectId -> Testing.CollectionId -> ATAuthCtx (RespHeaders (Html ()))
+collectionGetH :: Projects.ProjectId -> Testing.CollectionId -> ATAuthCtx (RespHeaders (CollectionGet))
 collectionGetH pid colId = do
   (sess, project) <- Sessions.sessionAndProject pid
   collectionM <- dbtToEff $ Testing.getCollectionById colId
@@ -87,9 +88,45 @@ collectionGetH pid colId = do
           , pageTitle = "Testing"
           }
   case collectionM of
-    Nothing -> addRespHeaders $ bodyWrapper bwconf $ div_ [class_ "w-full h-full flex items-center justify-center"] $ do
-      h4_ [] "Collection not found"
-    Just col -> addRespHeaders $ bodyWrapper bwconf $ collectionPage pid col
+    Nothing -> addRespHeaders $ CollectionNotFound $ PageCtx bwconf ()
+    Just col -> addRespHeaders $ CollectionGet $ PageCtx bwconf (pid, col)
+
+
+data CollectionGet
+  = CollectionGet (PageCtx (Projects.ProjectId, Testing.Collection))
+  | CollectionNotFound (PageCtx ())
+
+
+instance ToHtml CollectionGet where
+  toHtml (CollectionGet (PageCtx bwconf (pid, col))) = toHtml $ PageCtx bwconf $ collectionPage pid col
+  toHtml (CollectionNotFound (PageCtx bwconf ())) = toHtml $ PageCtx bwconf $ collectionNotFoundPage
+  toHtmlRaw = toHtml
+
+
+data CollectionMut = CollectionMut
+
+
+instance ToHtml CollectionMut where
+  toHtml (CollectionMut) = ""
+  toHtmlRaw = toHtml
+
+
+data CollectionRunTest
+  = CollectionRunTest (V.Vector Testing.StepResult) Text
+  | RunTestError
+
+
+instance ToHtml CollectionRunTest where
+  toHtml (CollectionRunTest results tkjson) = toHtml $ do
+    script_ [fmt|window.collectionResults = {tkjson}|]
+    V.iforM_ results (\i r -> collectionStepResult_ i r)
+  toHtml RunTestError = ""
+  toHtmlRaw = toHtml
+
+
+collectionNotFoundPage :: Html ()
+collectionNotFoundPage = div_ [class_ "w-full h-full flex items-center justify-center"] $ do
+  h4_ [] "Collection not found"
 
 
 testSettingsModalContent_ :: Bool -> Testing.Collection -> Html ()
@@ -176,13 +213,13 @@ collectionStepResult_ idx stepResult = section_ [class_ "p-1"] do
     toHtml $ (show $ idx + 1) <> " " <> fromMaybe "" stepResult.stepName
   div_ [role_ "tablist", class_ "tabs tabs-lifted"] do
     input_ [type_ "radio", name_ $ "step-result-tabs-" <> show idx, role_ "tab", class_ "tab", Aria.label_ "Response Log", checked_]
-    div_ [role_ "tabpanel", class_ "tab-content bg-base-100 bg-base-100 border-base-300 rounded-box p-6"]
-      $ toHtmlRaw
-      $ textToHTML stepResult.stepLog
+    div_ [role_ "tabpanel", class_ "tab-content bg-base-100 bg-base-100 border-base-300 rounded-box p-6"] $
+      toHtmlRaw $
+        textToHTML stepResult.stepLog
 
     input_ [type_ "radio", name_ $ "step-result-tabs-" <> show idx, role_ "tab", class_ "tab", Aria.label_ "Response Headers"]
-    div_ [role_ "tabpanel", class_ "tab-content bg-base-100 bg-base-100 border-base-300 rounded-box p-6 "]
-      $ table_ [class_ "table table-xs"] do
+    div_ [role_ "tabpanel", class_ "tab-content bg-base-100 bg-base-100 border-base-300 rounded-box p-6 "] $
+      table_ [class_ "table table-xs"] do
         thead_ [] $ tr_ [] $ th_ [] "Name" >> th_ [] "Value"
         tbody_ $ forM_ (M.toList stepResult.request.resp.headers) $ \(k, v) -> tr_ [] do
           td_ [] $ toHtml k
@@ -190,10 +227,10 @@ collectionStepResult_ idx stepResult = section_ [class_ "p-1"] do
 
     input_ [type_ "radio", name_ $ "step-result-tabs-" <> show idx, role_ "tab", class_ "tab", Aria.label_ "Response Body"]
     div_ [role_ "tabpanel", class_ "tab-content bg-base-100 bg-base-100 border-base-300 rounded-box p-6"] do
-      pre_ [class_ "flex text-sm leading-snug w-full max-h-[50rem] overflow-y-scroll"]
-        $ code_ [class_ "h-full hljs language-json atom-one-dark w-full rounded"]
-        $ toHtmlRaw
-        $ encodePretty stepResult.request.resp.json
+      pre_ [class_ "flex text-sm leading-snug w-full max-h-[50rem] overflow-y-scroll"] $
+        code_ [class_ "h-full hljs language-json atom-one-dark w-full rounded"] $
+          toHtmlRaw $
+            encodePretty stepResult.request.resp.json
 
 
 textToHTML :: Text -> Text
