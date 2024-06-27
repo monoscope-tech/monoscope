@@ -1,4 +1,4 @@
-module Pages.Api (apiGetH, apiPostH, apiDeleteH, GenerateAPIKeyForm (..), ApiGet) where
+module Pages.Api (apiGetH, apiPostH, apiDeleteH, GenerateAPIKeyForm (..), ApiGet, ApiMut) where
 
 import Data.ByteString.Base64 qualified as B64
 import Data.Default (def)
@@ -32,7 +32,7 @@ data GenerateAPIKeyForm = GenerateAPIKeyForm
   deriving anyclass (FromForm)
 
 
-apiPostH :: Projects.ProjectId -> GenerateAPIKeyForm -> ATAuthCtx (RespHeaders (Html ()))
+apiPostH :: Projects.ProjectId -> GenerateAPIKeyForm -> ATAuthCtx (RespHeaders (ApiMut))
 apiPostH pid apiKeyForm = do
   (sess, project) <- Sessions.sessionAndProject pid
   authCtx <- ask @AuthContext
@@ -45,11 +45,11 @@ apiPostH pid apiKeyForm = do
     ProjectApiKeys.projectApiKeysByProjectId pid
   addSuccessToast "Created API Key Successfully" Nothing
   case from apiKeyForm of
-    Just v -> addRespHeaders $ copyNewApiKey (Just (pApiKey, encryptedKeyB64)) True
-    Nothing -> addRespHeaders $ mainContent pid apiKeys (Just (pApiKey, encryptedKeyB64))
+    Just v -> addRespHeaders $ ApiPostCopy (Just (pApiKey, encryptedKeyB64)) True
+    Nothing -> addRespHeaders $ ApiPost pid apiKeys (Just (pApiKey, encryptedKeyB64))
 
 
-apiDeleteH :: Projects.ProjectId -> ProjectApiKeys.ProjectApiKeyId -> ATAuthCtx (RespHeaders (Html ()))
+apiDeleteH :: Projects.ProjectId -> ProjectApiKeys.ProjectApiKeyId -> ATAuthCtx (RespHeaders (ApiMut))
 apiDeleteH pid keyid = do
   (sess, project) <- Sessions.sessionAndProject pid
   res <- dbtToEff $ ProjectApiKeys.revokeApiKey keyid
@@ -57,7 +57,18 @@ apiDeleteH pid keyid = do
   if res > 0
     then addSuccessToast "Revoked API Key Successfully" Nothing
     else addErrorToast "Something went wrong" Nothing
-  addRespHeaders $ mainContent pid apikeys Nothing
+  addRespHeaders $ ApiPost pid apikeys Nothing
+
+
+data ApiMut
+  = ApiPost Projects.ProjectId (Vector ProjectApiKeys.ProjectApiKey) (Maybe (ProjectApiKeys.ProjectApiKey, Text))
+  | ApiPostCopy (Maybe (ProjectApiKeys.ProjectApiKey, Text)) Bool
+
+
+instance ToHtml ApiMut where
+  toHtml (ApiPost pid apiKeys m) = toHtml $ mainContent pid apiKeys m
+  toHtml (ApiPostCopy m b) = toHtml $ copyNewApiKey m b
+  toHtmlRaw = toHtml
 
 
 -- | apiGetH renders the api keys list page which includes a modal for creating the apikeys.
