@@ -15,6 +15,7 @@ module Pages.Reports (
   ReportAnomalyType (..),
   PerformanceReport (..),
   ReportsGet,
+  ReportsPost,
 )
 where
 
@@ -101,12 +102,20 @@ data ReportData = ReportData
   deriving anyclass (FromJSON)
 
 
-reportsPostH :: Projects.ProjectId -> Text -> ATAuthCtx (RespHeaders (Html ()))
+reportsPostH :: Projects.ProjectId -> Text -> ATAuthCtx (RespHeaders (ReportsPost))
 reportsPostH pid t = do
   _ <- Sessions.sessionAndProject pid
   apiKeys <- dbtToEff $ Projects.updateProjectReportNotif pid t
   addSuccessToast "Report notifications updated Successfully" Nothing
-  addRespHeaders $ span_ [] ""
+  addRespHeaders $ ReportsPost
+
+
+data ReportsPost = ReportsPost
+
+
+instance ToHtml ReportsPost where
+  toHtml ReportsPost = ""
+  toHtmlRaw = toHtml
 
 
 singleReportGetH :: Projects.ProjectId -> Reports.ReportId -> ATAuthCtx (RespHeaders (ReportsGet))
