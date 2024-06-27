@@ -1,4 +1,4 @@
-module Pages.Survey (surveyGetH, surveyPutH, SurveyForm) where
+module Pages.Survey (surveyGetH, surveyPutH, SurveyForm, SurveyGet, SurveyPut) where
 
 import BackgroundJobs qualified
 import Data.Aeson (
@@ -23,7 +23,7 @@ import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
 import Models.Users.Users qualified as Users
 import OddJobs.Job (createJob)
-import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
+import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
 import Relude hiding (ask, asks)
 import System.Config
 import System.Types
@@ -52,7 +52,7 @@ instance ToJSON SurveyForm where
       ]
 
 
-surveyPutH :: Projects.ProjectId -> SurveyForm -> ATAuthCtx (RespHeaders (Html ()))
+surveyPutH :: Projects.ProjectId -> SurveyForm -> ATAuthCtx (RespHeaders (SurveyPut))
 surveyPutH pid survey = do
   appCtx <- ask @AuthContext
   (sess, project) <- Sessions.sessionAndProject pid
@@ -60,7 +60,7 @@ surveyPutH pid survey = do
   if length nameArr < 2
     then do
       addErrorToast "Invalid full name format." Nothing
-      addRespHeaders ""
+      addRespHeaders SurveyPut
     else do
       let jsonBytes = encode survey
       let firstName = nameArr !! 0
@@ -74,10 +74,16 @@ surveyPutH pid survey = do
       _ <- liftIO $ withResource appCtx.pool \conn ->
         createJob conn "background_jobs" $ BackgroundJobs.SendDiscordData sess.user.id pid fullName stack
       redirectCS ("/p/" <> show pid.unProjectId <> "/onboarding")
-      addRespHeaders ""
+      addRespHeaders SurveyPut
 
 
-surveyGetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders (Html ()))
+data SurveyPut = SurveyPut
+instance ToHtml SurveyPut where
+  toHtml _ = ""
+  toHtmlRaw = toHtml
+
+
+surveyGetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders (SurveyGet))
 surveyGetH pid = do
   (sess, project) <- Sessions.sessionAndProject pid
   let bwconf =
@@ -88,7 +94,15 @@ surveyGetH pid = do
           }
   let full_name = sess.user.firstName <> " " <> sess.user.lastName
   let phoneNumber = fromMaybe "" sess.user.phoneNumber
-  addRespHeaders $ bodyWrapper bwconf $ surveyPage pid full_name phoneNumber
+  addRespHeaders $ SurveyGet $ PageCtx bwconf (pid, full_name, phoneNumber)
+
+
+data SurveyGet = SurveyGet (PageCtx (Projects.ProjectId, Text, Text))
+
+
+instance ToHtml SurveyGet where
+  toHtml (SurveyGet (PageCtx bwconf (pid, full_name, phoneNumber))) = toHtml $ PageCtx bwconf $ surveyPage pid full_name phoneNumber
+  toHtmlRaw = toHtml
 
 
 surveyPage :: Projects.ProjectId -> Text -> Text -> Html ()

@@ -1,4 +1,4 @@
-module Pages.Share (ReqForm, shareLinkPostH, shareLinkGetH, ShareLinkGet) where
+module Pages.Share (ReqForm, shareLinkPostH, shareLinkGetH, ShareLinkGet, ShareLinkPost) where
 
 import Data.Aeson qualified as AE
 import Data.Default (def)
@@ -46,7 +46,7 @@ data Swagger = Swagger
     via (GenericEntity '[Schema "apis", TableName "swagger_jsons", PrimaryKey "id", FieldModifiers '[CamelToSnake]] Swagger)
 
 
-shareLinkPostH :: Projects.ProjectId -> ReqForm -> ATAuthCtx (RespHeaders (Html ()))
+shareLinkPostH :: Projects.ProjectId -> ReqForm -> ATAuthCtx (RespHeaders (ShareLinkPost))
 shareLinkPostH pid reqForm = do
   currentTime <- liftIO getZonedTime
   let rid = reqForm.reqId
@@ -62,10 +62,21 @@ shareLinkPostH pid reqForm = do
             [sql| INSERT INTO apis.share_requests (id, project_id, expired_at, request_dump_id, request_created_at) 
                                   VALUES (?,?, current_timestamp + interval ?,?,?) |]
             (inId, pid, expIn, rid, reqForm.reqCreatedAt)
-      addRespHeaders $ copyLink $ show inId
+      addRespHeaders $ ShareLinkPost $ show inId
     else do
       addErrorToast "Invalid expiry interval" Nothing
-      addRespHeaders ""
+      addRespHeaders ShareLinkPostError
+
+
+data ShareLinkPost
+  = ShareLinkPost Text
+  | ShareLinkPostError
+
+
+instance ToHtml ShareLinkPost where
+  toHtml (ShareLinkPost shareId) = toHtml $ copyLink shareId
+  toHtml (ShareLinkPostError) = toHtml $ ""
+  toHtmlRaw = toHtml
 
 
 copyLink :: Text -> Html ()
