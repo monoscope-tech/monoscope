@@ -1,6 +1,14 @@
 {-# OPTIONS_GHC -Wno-unused-do-bind #-}
 
-module Pages.Specification.Documentation (documentationGetH, documentationPostH, documentationPutH, SwaggerForm, SaveSwaggerForm, DocumentationGet) where
+module Pages.Specification.Documentation (
+  documentationGetH,
+  documentationPostH,
+  documentationPutH,
+  SwaggerForm,
+  SaveSwaggerForm,
+  DocumentationGet,
+  DocumentationMut,
+) where
 
 import Data.Aeson (
   FromJSON,
@@ -236,7 +244,7 @@ flattenVector :: [V.Vector FieldOperation] -> V.Vector FieldOperation
 flattenVector = V.concat
 
 
-documentationPutH :: Projects.ProjectId -> SaveSwaggerForm -> ATAuthCtx (RespHeaders (Html ()))
+documentationPutH :: Projects.ProjectId -> SaveSwaggerForm -> ATAuthCtx (RespHeaders (DocumentationMut))
 documentationPutH pid SaveSwaggerForm{updated_swagger, swagger_id, endpoints, diffsInfo} = do
   (sess, project) <- Sessions.sessionAndProject pid
   currentTime <- Time.currentTime
@@ -262,10 +270,10 @@ documentationPutH pid SaveSwaggerForm{updated_swagger, swagger_id, endpoints, di
       _ -> void $ Swaggers.updateSwagger swagger_id value
 
   addSuccessToast "Swagger Saved Successfully" Nothing
-  addRespHeaders ""
+  addRespHeaders DocumentationMut
 
 
-documentationPostH :: Projects.ProjectId -> SwaggerForm -> ATAuthCtx (RespHeaders (Html ()))
+documentationPostH :: Projects.ProjectId -> SwaggerForm -> ATAuthCtx (RespHeaders (DocumentationMut))
 documentationPostH pid SwaggerForm{swagger_json, from} = do
   (sess, project) <- Sessions.sessionAndProject pid
   swaggerId <- Swaggers.SwaggerId <$> liftIO UUIDV4.nextRandom
@@ -282,7 +290,15 @@ documentationPostH pid SwaggerForm{swagger_json, from} = do
           }
   _ <- dbtToEff $ Swaggers.addSwagger swaggerToAdd
   addSuccessToast "Swagger uploaded Successfully" Nothing
-  addRespHeaders ""
+  addRespHeaders DocumentationMut
+
+
+data DocumentationMut = DocumentationMut
+
+
+instance ToHtml DocumentationMut where
+  toHtml DocumentationMut = toHtml $ ""
+  toHtmlRaw = toHtml
 
 
 data DocumentationGet = DocumentationGet Projects.ProjectId (V.Vector Swaggers.Swagger) String String
