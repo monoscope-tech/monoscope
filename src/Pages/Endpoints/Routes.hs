@@ -26,7 +26,7 @@ type role Routes' nominal
 
 data Routes' mode = Routes'
   { endpointListGet :: mode :- "endpoints" :> QPT "layout" :> QPT "filter" :> QPT "host" :> QPT "project_host" :> QPT "sort" :> HXRequest :> HXBoosted :> HXCurrentURL :> Get '[HTML] (RespHeaders (PageCtx (ItemsList.ItemsPage EndpointList.EndpointRequestStatsVM)))
-  , fieldDetailsPartial :: mode :- "fields" :> Capture "field_id" Fields.FieldId :> Get '[HTML] (RespHeaders (Html ()))
+  , fieldDetailsPartial :: mode :- "fields" :> Capture "field_id" Fields.FieldId :> Get '[HTML] (RespHeaders (EndpointDetails.FieldDetails))
   , endpointDetailsWithHash :: mode :- "log_explorer" :> "endpoint" :> Capture "endpoint_hash" Text :> Get '[HTML] (RespHeaders (Html ()))
   , endpointDetails :: mode :- "endpoints" :> Capture "endpoints_id" Endpoints.EndpointId :> QPT "from" :> QPT "to" :> QPT "since" :> QPT "subpage" :> QPT "shape" :> Get '[HTML] (RespHeaders (EndpointDetails.EndpointDetailsGet))
   , outgoingGet :: mode :- "outgoing" :> QPT "sort" :> Get '[HTML] (RespHeaders (PageCtx (ItemsList.ItemsPage Outgoing.HostEventsVM)))

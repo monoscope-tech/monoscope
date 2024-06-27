@@ -1,7 +1,14 @@
 {-# LANGUAGE TupleSections #-}
 {-# OPTIONS_GHC -Wno-name-shadowing #-}
 
-module Pages.Endpoints.EndpointDetails (endpointDetailsH, fieldDetailsPartialH, fieldsToNormalized, endpointDetailsWithHashH, EndpointDetailsGet) where
+module Pages.Endpoints.EndpointDetails (
+  endpointDetailsH,
+  fieldDetailsPartialH,
+  fieldsToNormalized,
+  endpointDetailsWithHashH,
+  EndpointDetailsGet,
+  FieldDetails,
+) where
 
 import Data.Aeson (KeyValue ((.=)))
 import Data.Aeson qualified as AE
@@ -72,7 +79,7 @@ subPageMenu =
   ]
 
 
-fieldDetailsPartialH :: Projects.ProjectId -> Fields.FieldId -> ATAuthCtx (RespHeaders (Html ()))
+fieldDetailsPartialH :: Projects.ProjectId -> Fields.FieldId -> ATAuthCtx (RespHeaders (FieldDetails))
 fieldDetailsPartialH pid fid = do
   _ <- Sessions.sessionAndProject pid
   (fieldsM, formats) <- dbtToEff do
@@ -80,8 +87,19 @@ fieldDetailsPartialH pid fid = do
     formats <- Formats.formatsByFieldHash (maybe "" (.hash) field)
     pure (field, formats)
   case fieldsM of
-    Nothing -> addRespHeaders ""
-    Just field -> addRespHeaders $ fieldDetailsView field formats
+    Nothing -> addRespHeaders $ FieldDetailsNoContent
+    Just field -> addRespHeaders $ FieldDetails field formats
+
+
+data FieldDetails
+  = FieldDetails Fields.Field (Vector Formats.Format)
+  | FieldDetailsNoContent
+
+
+instance ToHtml FieldDetails where
+  toHtml (FieldDetails field formats) = toHtml $ fieldDetailsView field formats
+  toHtml (FieldDetailsNoContent) = toHtml $ ""
+  toHtmlRaw = toHtml
 
 
 fieldDetailsView :: Fields.Field -> Vector Formats.Format -> Html ()
