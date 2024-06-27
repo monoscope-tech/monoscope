@@ -1,6 +1,12 @@
 {-# LANGUAGE NamedFieldPuns #-}
 
-module Pages.RedactedFields (redactedFieldsGetH, redactedFieldsPostH, RedactFieldForm (..)) where
+module Pages.RedactedFields (
+  redactedFieldsGetH,
+  redactedFieldsPostH,
+  RedactFieldForm (..),
+  RedactGet,
+  RedactPost,
+) where
 
 import Data.Default (def)
 import Data.UUID.V4 qualified as UUIDV4
@@ -12,7 +18,7 @@ import Lucid.Hyperscript (__)
 import Models.Projects.Projects qualified as Projects
 import Models.Projects.RedactedFields qualified as RedactedFields
 import Models.Users.Sessions qualified as Sessions
-import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
+import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
 import Relude
 import System.Types
 import Utils (faSprite_)
@@ -28,7 +34,7 @@ data RedactFieldForm = RedactFieldForm
   deriving anyclass (FromForm)
 
 
-redactedFieldsPostH :: Projects.ProjectId -> RedactFieldForm -> ATAuthCtx (RespHeaders (Html ()))
+redactedFieldsPostH :: Projects.ProjectId -> RedactFieldForm -> ATAuthCtx (RespHeaders (RedactPost))
 redactedFieldsPostH pid RedactFieldForm{path, description, endpointHash} = do
   (sess, project) <- Sessions.sessionAndProject pid
   redactedFieldId <- RedactedFields.RedactedFieldId <$> liftIO UUIDV4.nextRandom
@@ -38,11 +44,19 @@ redactedFieldsPostH pid RedactFieldForm{path, description, endpointHash} = do
     RedactedFields.redactField fieldToRedact
     RedactedFields.redactedFieldsByProject pid
   addSuccessToast "Submitted field to be redacted, Successfully" Nothing
-  addRespHeaders $ mainContent pid redactedFields
+  addRespHeaders $ RedactPost pid redactedFields
+
+
+data RedactPost = RedactPost Projects.ProjectId (Vector RedactedFields.RedactedField)
+
+
+instance ToHtml RedactPost where
+  toHtml (RedactPost pid redactedFields) = toHtml $ mainContent pid redactedFields
+  toHtmlRaw = toHtml
 
 
 -- | redactedFieldsGetH renders the api keys list page which includes a modal for creating the apikeys.
-redactedFieldsGetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders (Html ()))
+redactedFieldsGetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders (RedactGet))
 redactedFieldsGetH pid = do
   (sess, project) <- Sessions.sessionAndProject pid
   redactedFields <- dbtToEff $ RedactedFields.redactedFieldsByProject pid
@@ -52,7 +66,15 @@ redactedFieldsGetH pid = do
           , currProject = Just project
           , pageTitle = "Redacted Fields"
           }
-  addRespHeaders $ bodyWrapper bwconf $ redactedFieldsPage pid redactedFields
+  addRespHeaders $ RedactGet $ PageCtx bwconf (pid, redactedFields)
+
+
+data RedactGet = RedactGet (PageCtx (Projects.ProjectId, Vector RedactedFields.RedactedField))
+
+
+instance ToHtml RedactGet where
+  toHtml (RedactGet (PageCtx bwconf (pid, redactedFields))) = toHtml $ PageCtx bwconf $ redactedFieldsPage pid redactedFields
+  toHtmlRaw = toHtml
 
 
 redactedFieldsPage :: Projects.ProjectId -> Vector RedactedFields.RedactedField -> Html ()
@@ -86,8 +108,8 @@ redactedFieldsPage pid redactedFields = do
                   ]
                   $ (span_ [class_ "sr-only"] "Close" >> faSprite_ "xmark" "regular" "h-6 w-6")
               div_ [class_ "sm:flex sm:items-start"] do
-                div_ [class_ "mx-auto flex-shrink-0 flex items-center justify-center h-12 w-12 rounded-full bg-red-100 sm:mx-0 sm:h-10 sm:w-10"]
-                  $ (span_ [class_ "sr-only"] "Close" >> faSprite_ "xmark" "regular" "h-6 w-6 text-red-600")
+                div_ [class_ "mx-auto flex-shrink-0 flex items-center justify-center h-12 w-12 rounded-full bg-red-100 sm:mx-0 sm:h-10 sm:w-10"] $
+                  (span_ [class_ "sr-only"] "Close" >> faSprite_ "xmark" "regular" "h-6 w-6 text-red-600")
                 div_ [class_ "mt-3 text-center sm:mt-0 sm:ml-4 sm:text-left grow"] do
                   h3_ [class_ "text-lg leading-6 font-medium text-slate-900", id_ "modal-title"] "Redact a field path"
                   p_ [] "Redacting a field path means apitookit will strip out and discard all values of this field and will never be able to see those values."
