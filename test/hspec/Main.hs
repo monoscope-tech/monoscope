@@ -2,7 +2,6 @@ module Main (main) where
 
 import Relude
 import Spec qualified
-import Test.DocTest (mainFromCabal)
 import Test.Hspec.Formatters (progress)
 import Test.Hspec.Runner (
   Config (configFormatter),

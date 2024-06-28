@@ -1,16 +1,10 @@
 module Main (main) where
 
 import Relude
-import Test.DocTest (mainFromCabal)
-import Test.Hspec.Formatters (progress)
-import Test.Hspec.Runner (
-  Config (configFormatter),
-  defaultConfig,
-  hspecWith,
- )
+import Test.DocTest qualified as DocTest 
 
 
 main :: IO ()
 main = do
   -- FIXME: figure out why some of the doctests are not working correctly and fix them. Maybe upgrade the dependency first.
-  mainFromCabal "apitoolkit-server" =<< getArgs
+  DocTest.mainFromCabal "apitoolkit-server" =<< getArgs
