@@ -20,11 +20,12 @@ module Models.Users.Sessions (
 ) where
 
 import Data.Default
+import Data.Effectful.UUID (UUIDEff)
+import Data.Effectful.UUID qualified as UUID
 import Data.Map.Strict qualified as Map
 import Data.Text.Display
 import Data.Time
 import Data.UUID qualified as UUID
-import Data.UUID.V4 qualified as UUID
 import Data.Vector qualified as V
 import Data.Vector qualified as Vector
 import Database.PostgreSQL.Entity
@@ -116,12 +117,12 @@ data PersistentSession = PersistentSession
     via (GenericEntity '[Schema "users", TableName "persistent_sessions", PrimaryKey "id"] PersistentSession)
 
 
-newPersistentSessionId :: IO PersistentSessionId
-newPersistentSessionId = PersistentSessionId <$> UUID.nextRandom
+newPersistentSessionId :: UUIDEff :> es => Eff es PersistentSessionId
+newPersistentSessionId = PersistentSessionId <$> UUID.genUUID
 
 
-insertSession :: PersistentSessionId -> UserId -> SessionData -> DBT IO ()
-insertSession pid userId sessionData = DBT.execute Insert q (pid, userId, sessionData) >> pass
+insertSession :: DB :> es => PersistentSessionId -> UserId -> SessionData -> Eff es ()
+insertSession pid userId sessionData = void <$> dbtToEff $ DBT.execute Insert q (pid, userId, sessionData)
   where
     q = [sql| insert into users.persistent_sessions(id, user_id, session_data) VALUES (?, ?, ?) |]
 

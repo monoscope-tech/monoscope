@@ -15,7 +15,9 @@ import Data.Aeson (FromJSON (parseJSON), ToJSON (toJSON))
 import Data.CaseInsensitive qualified as CI
 import Data.Default
 import Data.Default.Instances ()
-import Data.Time (ZonedTime, getZonedTime)
+import Data.Effectful.UUID (UUIDEff)
+import Data.Effectful.UUID qualified as UUID
+import Data.Time (UTCTime)
 import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUIDV4
 import Database.PostgreSQL.Entity (
@@ -42,6 +44,7 @@ import Database.PostgreSQL.Transact qualified as PgT
 import Deriving.Aeson qualified as DAE
 import Effectful (Eff, type (:>))
 import Effectful.PostgreSQL.Transact.Effect (DB, dbtToEff)
+import Effectful.Time (Time, currentTime)
 import GHC.Records (HasField (getField))
 import Relude
 
@@ -73,9 +76,9 @@ instance HasField "toText" UserId Text where
 
 data User = User
   { id :: UserId
-  , createdAt :: ZonedTime
-  , updatedAt :: ZonedTime
-  , deletedAt :: Maybe ZonedTime
+  , createdAt :: UTCTime
+  , updatedAt :: UTCTime
+  , deletedAt :: Maybe UTCTime
   , active :: Bool
   , firstName :: Text
   , lastName :: Text
@@ -94,14 +97,14 @@ data User = User
     via (GenericEntity '[Schema "users", TableName "users", PrimaryKey "id", FieldModifiers '[CamelToSnake]] User)
 
 
-createUserId :: IO UserId
-createUserId = UserId <$> UUIDV4.nextRandom
+createUserId :: UUIDEff :> es => Eff es UserId
+createUserId = UserId <$> UUID.genUUID
 
 
-createUser :: Text -> Text -> Text -> Text -> IO User
+createUser :: (Time :> es, UUIDEff :> es) => Text -> Text -> Text -> Text -> Eff es User
 createUser firstName lastName picture email = do
   uid <- createUserId
-  now <- getZonedTime
+  now <- currentTime
   pure
     $ User
       { id = uid
@@ -118,18 +121,19 @@ createUser firstName lastName picture email = do
       }
 
 
-insertUser :: User -> PgT.DBT IO ()
-insertUser = insert @User
+insertUser :: DB :> es => User -> Eff es ()
+insertUser user = dbtToEff $ insert @User user
 
 
 userById :: DB :> es => UserId -> Eff es (Maybe User)
 userById userId = dbtToEff $ selectById (Only userId)
 
 
-userByEmail :: Text -> PgT.DBT IO (Maybe User)
-userByEmail email = selectOneByField @User [field| email |] (Only email)
+userByEmail :: DB :> es => Text -> Eff es (Maybe User)
+userByEmail email = dbtToEff $ selectOneByField @User [field| email |] (Only email)
 
 
+-- TODO: switch to the Eff monad
 userIdByEmail :: Text -> PgT.DBT IO (Maybe UserId)
 userIdByEmail email = queryOne Select q (Only email)
   where

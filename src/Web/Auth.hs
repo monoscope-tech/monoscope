@@ -14,6 +14,7 @@ import Control.Error (note)
 import Control.Lens qualified as L
 import Control.Monad.Except qualified as T
 import Data.Aeson.Lens (key, _String)
+import Data.Effectful.UUID (UUIDEff)
 import Data.List qualified as List
 import Data.Map.Strict qualified as Map
 import Data.UUID qualified as UUID
@@ -33,6 +34,7 @@ import Effectful.Log (Log)
 import Effectful.PostgreSQL.Transact.Effect (DB, dbtToEff)
 import Effectful.PostgreSQL.Transact.Effect qualified as DB
 import Effectful.Reader.Static (ask, asks)
+import Effectful.Time (Time, currentTime)
 import Log (Logger)
 import Lucid (Html)
 import Lucid.Html5 (
@@ -217,23 +219,8 @@ authCallbackH codeM _ = do
     -- TODO: For users with no profile photos or empty profile photos, use gravatars as their profile photo
     -- https://en.gravatar.com/site/implement/images/
     let picture = fromMaybe "" $ resp L.^? responseBody . key "picture" . _String
-    (userId, persistentSessId) <- liftIO
-      $ withPool
-        pool
-        do
-          userM <- Users.userByEmail email
-          userId <- case userM of
-            Nothing -> do
-              user <- liftIO $ Users.createUser firstName lastName picture email
-              Users.insertUser user
-              pure user.id
-            Just user -> pure user.id
-          persistentSessId <- liftIO Sessions.newPersistentSessionId
-          Sessions.insertSession persistentSessId userId (Sessions.SessionData Map.empty)
-          pure (userId, persistentSessId)
-    _ <- liftIO $ ConvertKit.addUser envCfg.config.convertkitApiKey email firstName lastName "" "" ""
-    pure persistentSessId
-
+    sessID <- lift $ authorizeUserAndPersist (Just envCfg.config.convertkitApiKey) firstName lastName picture email
+    pure sessID
   case resp of
     Left err -> putStrLn ("unable to process auth callback page " <> err) >> (throwError $ err302{errHeaders = [("Location", "/login?auth0_callback_failure")]}) >> pure (noHeader $ noHeader "")
     Right persistentSessId -> pure
@@ -246,3 +233,18 @@ authCallbackH codeM _ = do
               meta_ [httpEquiv_ "refresh", content_ "1;url=/"]
             body_ do
               a_ [href_ "/"] "Continue to APIToolkit"
+
+
+authorizeUserAndPersist :: (DB :> es, UUIDEff :> es, IOE :> es, Time :> es) => Maybe Text -> Text -> Text -> Text -> Text -> Eff es Sessions.PersistentSessionId
+authorizeUserAndPersist convertkitApiKeyM firstName lastName picture email = do
+  userM <- Users.userByEmail email
+  userId <- case userM of
+    Nothing -> do
+      user <- Users.createUser firstName lastName picture email
+      Users.insertUser user
+      pure user.id
+    Just user -> pure user.id
+  persistentSessId <- Sessions.newPersistentSessionId
+  Sessions.insertSession persistentSessId userId (Sessions.SessionData Map.empty)
+  _ <- whenJust convertkitApiKeyM \ckKey -> liftIO $ ConvertKit.addUser ckKey email firstName lastName "" "" ""
+  pure persistentSessId

@@ -17,27 +17,31 @@ module System.Types (
   TriggerEvents,
   RespHeaders,
   redirectCS,
+  effToServantHandler,
+  effToHandler,
 ) where
 
+import Control.Monad.Except qualified as Except
 import Data.Aeson qualified as AE
+import Data.Effectful.UUID (UUIDEff, runStaticUUID, runUUID)
 import Data.Map qualified as Map
+import Data.Time.Clock.POSIX (posixSecondsToUTCTime)
+import Data.UUID qualified as UUID
 import Effectful (Eff, IOE, runEff)
-import Effectful.Error.Static (Error)
+import Effectful.Error.Static (Error, runErrorNoCallStack)
 import Effectful.Log (Log)
 import Effectful.PostgreSQL.Transact.Effect (DB, runDB)
 import Effectful.Reader.Static (Reader, runReader)
 import Effectful.State.Static.Local qualified as State
-import Effectful.Time (Time, runTime)
+import Effectful.Time (Time, runFrozenTime, runTime)
 import Log qualified
 import Models.Users.Sessions qualified as Sessions
-import Relude (IO, Map, Maybe (..), Semigroup ((<>)), Text, Type, catMaybes, decodeUtf8, maybe, pure, show, ($), (&), (++))
+import Relude
 import Servant (AuthProtect, Header, Headers, ServerError, addHeader, noHeader)
+import Servant qualified
 import Servant.Htmx (HXRedirect, HXTriggerAfterSettle)
 import Servant.Server.Experimental.Auth (AuthServerData)
-import System.Config (
-  AuthContext (config, jobsPool),
-  EnvConfig (environment),
- )
+import System.Config (AuthContext (..), EnvConfig (..))
 import System.Logging qualified as Logging
 import Web.Cookie (SetCookie)
 
@@ -50,31 +54,70 @@ type TriggerEvents = Map Text [AE.Value]
 type HXRedirectDest = Maybe Text
 
 
-type ATBaseCtx :: Type -> Type
-type ATBaseCtx =
-  Effectful.Eff
-    '[ Effectful.Reader.Static.Reader AuthContext
-     , DB
-     , Time
-     , Log
-     , Error ServerError
-     , Effectful.IOE
-     ]
+type CommonWebEffects =
+  '[ Effectful.Reader.Static.Reader AuthContext
+   , UUIDEff
+   , DB
+   , Time
+   , Log
+   , Error ServerError
+   , Effectful.IOE
+   ]
 
 
-type ATAuthCtx :: Type -> Type
+type ATBaseCtx = Effectful.Eff CommonWebEffects
+
+
 type ATAuthCtx =
   Effectful.Eff
-    '[ State.State TriggerEvents
-     , State.State HXRedirectDest
-     , Effectful.Reader.Static.Reader (Headers '[Header "Set-Cookie" SetCookie] Sessions.Session)
-     , Effectful.Reader.Static.Reader AuthContext
-     , DB
-     , Time
-     , Log
-     , Error ServerError
-     , Effectful.IOE
-     ]
+    ( State.State TriggerEvents
+        ': State.State HXRedirectDest
+        ': Effectful.Reader.Static.Reader (Headers '[Header "Set-Cookie" SetCookie] Sessions.Session)
+        ': CommonWebEffects
+    )
+
+
+atAuthToBase :: Headers '[Header "Set-Cookie" SetCookie] Sessions.Session -> ATAuthCtx a -> ATBaseCtx a
+atAuthToBase sessionWithCookies page =
+  page
+    & State.evalState Map.empty
+    & State.evalState Nothing
+    & Effectful.Reader.Static.runReader sessionWithCookies
+
+
+-- | `effToServantHandler` for live services
+effToServantHandler :: AuthContext -> Log.Logger -> ATBaseCtx a -> Servant.Handler a
+effToServantHandler env logger app =
+  app
+    & Effectful.Reader.Static.runReader env
+    & runUUID
+    & runDB env.pool
+    & runTime
+    & Logging.runLog (show env.config.environment) logger
+    & effToHandler
+
+
+-- | `effToServantHandler` exists specifically to be used in tests,
+-- so the UUID and Time effects are fixed to constants.
+effToServantHandlerTest :: AuthContext -> Log.Logger -> ATBaseCtx a -> Servant.Handler a
+effToServantHandlerTest env logger app =
+  app
+    & Effectful.Reader.Static.runReader env
+    & (runStaticUUID $ map (UUID.fromWords 0 0 0) [1 .. 10])
+    & runDB env.pool
+    & runFrozenTime (posixSecondsToUTCTime 0)
+    & Logging.runLog (show env.config.environment) logger
+    & effToHandler
+
+
+effToHandler
+  :: forall (a :: Type)
+   . ()
+  => Eff '[Error ServerError, IOE] a
+  -> Servant.Handler a
+effToHandler computation = do
+  v <- liftIO . runEff . runErrorNoCallStack @ServerError $ computation
+  either Except.throwError pure v
 
 
 type ATBackgroundCtx :: Type -> Type

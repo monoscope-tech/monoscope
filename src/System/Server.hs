@@ -92,7 +92,7 @@ import System.Config (
   getAppContext,
  )
 import System.Logging qualified as Logging
-import System.Types (ATBaseCtx, runBackground)
+import System.Types (ATBaseCtx, effToHandler, effToServantHandler, runBackground)
 import Web.Routes qualified as Routes
 
 
@@ -196,38 +196,9 @@ mkServer
   -> Servant.Application
 mkServer logger env = do
   genericServeTWithContext
-    (naturalTransform env logger)
+    (effToServantHandler env logger)
     (Routes.server env.pool)
     (Routes.genAuthServerContext logger env)
-
-
-naturalTransform :: AuthContext -> Log.Logger -> ATBaseCtx a -> Handler a
-naturalTransform env logger app =
-  app
-    & Effectful.Reader.Static.runReader env
-    & runDB env.pool
-    & runTime
-    & Logging.runLog (show env.config.environment) logger
-    & effToHandler
-
-
--- handlerToEff
---   :: forall (es :: [Effect]) (a :: Type)
---    . Error ServerError :> es
---   => Handler a
---   -> Eff es a
--- handlerToEff handler = do
---   v <- unsafeEff_ $ Servant.runHandler handler
---   either throwError pure v
-
-effToHandler
-  :: forall (a :: Type)
-   . ()
-  => Eff '[Error ServerError, IOE] a
-  -> Handler a
-effToHandler computation = do
-  v <- liftIO . runEff . runErrorNoCallStack @ServerError $ computation
-  either T.throwError pure v
 
 
 shutdownAPItoolkit :: AuthContext -> Eff '[IOE] ()
