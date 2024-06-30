@@ -3,7 +3,7 @@ module Pages.Projects.ManageMembers (
   manageMembersPostH,
   ManageMembersForm (..),
   manageSubGetH,
-  ManageMembersGet,
+  ManageMembers,
 )
 where
 
@@ -43,7 +43,7 @@ data ManageMembersForm = ManageMembersForm
   deriving anyclass (FromForm)
 
 
-manageMembersPostH :: Projects.ProjectId -> ManageMembersForm -> ATAuthCtx (RespHeaders (Html ()))
+manageMembersPostH :: Projects.ProjectId -> ManageMembersForm -> ATAuthCtx (RespHeaders (ManageMembers))
 manageMembersPostH pid form = do
   (sess, project) <- Sessions.sessionAndProject pid
   appCtx <- ask @AuthContext
@@ -84,10 +84,10 @@ manageMembersPostH pid form = do
             Just idX -> pure idX
         Just idX -> pure idX
 
-    when (userId' /= currUserId)
-      $ void
-      $ liftIO
-      $ withResource appCtx.pool \conn -> createJob conn "background_jobs" $ BackgroundJobs.InviteUserToProject currUserId pid email project.title -- invite the users to the project (Usually as an email)
+    when (userId' /= currUserId) $
+      void $
+        liftIO $
+          withResource appCtx.pool \conn -> createJob conn "background_jobs" $ BackgroundJobs.InviteUserToProject currUserId pid email project.title -- invite the users to the project (Usually as an email)
     pure (email, permission, userId')
 
   let projectMembers =
@@ -100,21 +100,21 @@ manageMembersPostH pid form = do
   -- TODO: Send a notification via background job, about the users permission having been updated.
   unless (null uAndPOldAndChanged)
     $ void
-    . dbtToEff
+      . dbtToEff
     $ ProjectMembers.updateProjectMembersPermissons uAndPOldAndChanged
 
   -- soft delete project members with id
   unless (null deletedUAndP)
     $ void
-    . dbtToEff
+      . dbtToEff
     $ ProjectMembers.softDeleteProjectMembers deletedUAndP
 
   projMembersLatest <- dbtToEff $ ProjectMembers.selectActiveProjectMembers pid
   addSuccessToast "Updated Members List Successfully" Nothing
-  addRespHeaders $ manageMembersBody projMembersLatest
+  addRespHeaders $ ManageMembersPost projMembersLatest
 
 
-manageMembersGetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders (ManageMembersGet))
+manageMembersGetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders (ManageMembers))
 manageMembersGetH pid = do
   (sess, project) <- Sessions.sessionAndProject pid
   appCtx <- ask @AuthContext
@@ -123,11 +123,14 @@ manageMembersGetH pid = do
   addRespHeaders $ ManageMembersGet $ PageCtx bwconf projMembers
 
 
-data ManageMembersGet = ManageMembersGet (PageCtx (V.Vector ProjectMembers.ProjectMemberVM))
+data ManageMembers
+  = ManageMembersGet (PageCtx (V.Vector ProjectMembers.ProjectMemberVM))
+  | ManageMembersPost (V.Vector ProjectMembers.ProjectMemberVM)
 
 
-instance ToHtml ManageMembersGet where
+instance ToHtml ManageMembers where
   toHtml (ManageMembersGet (PageCtx bwconf memebers)) = toHtml $ PageCtx bwconf $ manageMembersBody memebers
+  toHtml (ManageMembersPost memebers) = toHtml $ manageMembersBody memebers
   toHtmlRaw = toHtml
 
 
