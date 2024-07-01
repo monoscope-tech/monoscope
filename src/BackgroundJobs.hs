@@ -53,7 +53,7 @@ import System.Types (ATBackgroundCtx, runBackground)
 data BgJobs
   = InviteUserToProject Users.UserId Projects.ProjectId Text Text
   | CreatedProjectSuccessfully Users.UserId Projects.ProjectId Text Text
-  | SendDiscordData Users.UserId Projects.ProjectId Text [Text]
+  | SendDiscordData Users.UserId Projects.ProjectId Text [Text] Text
   | -- NewAnomaly Projects.ProjectId Anomalies.AnomalyTypes Anomalies.AnomalyActions TargetHash
     NewAnomaly Projects.ProjectId ZonedTime Text Text Text
   | DailyReports Projects.ProjectId
@@ -112,7 +112,7 @@ jobsRunner logger authCtx job = when authCtx.config.enableBackgroundJobs $ do
            "project_url": #{project_url}
         }|]
         sendPostmarkEmail reciever "project-invite" templateVars
-    SendDiscordData userId projectId fullName stack -> whenJustM (dbtToEff $ Projects.projectById projectId) \project -> do
+    SendDiscordData userId projectId fullName stack foundUsFrom -> whenJustM (dbtToEff $ Projects.projectById projectId) \project -> do
       users <- dbtToEff $ Projects.usersByProjectId projectId
       let stackString = intercalate ", " $ map T.unpack stack
       forM_ users \user -> do
@@ -127,6 +127,7 @@ jobsRunner logger authCtx job = when authCtx.config.enableBackgroundJobs $ do
 - **User ID**: {userId.toText}
 - **Payment Plan**: {project.paymentPlan}
 - **Stack**: {stackString}
+- **Found us from**: {foundUsFrom}
 |]
         sendMessageToDiscord msg
     CreatedProjectSuccessfully userId projectId reciever projectTitle -> do

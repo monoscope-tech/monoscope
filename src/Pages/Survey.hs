@@ -68,11 +68,12 @@ surveyPutH pid survey = do
       let fullName = survey.fullName
       let stack = survey.stack
       let phoneNumber = survey.phoneNumber
+      let foundUsFrom = survey.foundUsFrom
       res <- dbtToEff $ execute Update [sql| update projects.projects set questions= ? where id=? |] (jsonBytes, pid)
       u <- dbtToEff $ execute Update [sql| update users.users set first_name= ?, last_name=?, phone_number=? where id=? |] (firstName, lastName, phoneNumber, sess.user.id)
       addSuccessToast "Thanks for taking the survey!" Nothing
       _ <- liftIO $ withResource appCtx.pool \conn ->
-        createJob conn "background_jobs" $ BackgroundJobs.SendDiscordData sess.user.id pid fullName stack
+        createJob conn "background_jobs" $ BackgroundJobs.SendDiscordData sess.user.id pid fullName stack foundUsFrom
       redirectCS ("/p/" <> show pid.unProjectId <> "/onboarding")
       addRespHeaders SurveyPut
 
@@ -243,7 +244,7 @@ foundUsFromOptions =
   , ("google", "Google Search")
   , ("linkedin", "LinkedIn")
   , ("reddit", "Reddit")
-  , ("github", "GitHub")
+  , ("devto", "Dev.to")
   , ("other", "Other")
   ]
 
