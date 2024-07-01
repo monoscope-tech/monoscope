@@ -240,12 +240,13 @@ dataLocationOptions =
 
 foundUsFromOptions :: [(T.Text, T.Text)]
 foundUsFromOptions =
-  [ ("twitter", "X (Twitter)")
-  , ("google", "Google Search")
-  , ("linkedin", "LinkedIn")
-  , ("reddit", "Reddit")
+  [ ("google", "Google Search")
+  , ("ads", "Ads")
   , ("devto", "Dev.to")
-  , ("other", "Other")
+  , ("reddit", "Reddit")
+  , ("linkedin", "LinkedIn")
+  , ("twitter", "X (Twitter)")
+  , ("other", "Other online community")
   ]
 
 
