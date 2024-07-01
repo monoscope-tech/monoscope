@@ -132,8 +132,8 @@ deleteSession sessionId = delete @PersistentSession (Only sessionId)
 
 
 -- TODO: getting persistent session happens very frequently, so we should create a view for this, when our user base grows.
-getPersistentSession :: PersistentSessionId -> DBT IO (Maybe PersistentSession)
-getPersistentSession sessionId = DBT.queryOne Select q value
+getPersistentSession :: DB :> es => PersistentSessionId -> Eff es (Maybe PersistentSession)
+getPersistentSession sessionId = dbtToEff $ DBT.queryOne Select q value
   where
     q =
       [sql| select ps.id, ps.created_at, ps.updated_at, ps.user_id, ps.session_data, row_to_json(u) as user, u.is_sudo,

@@ -27,6 +27,7 @@ library
       BackgroundJobs
       Data.Default.Instances
       Data.Effectful.UUID
+      Data.Effectful.Wreq
       Devel
       Models.Apis.Anomalies
       Models.Apis.Endpoints
@@ -206,6 +207,7 @@ library
     , envy
     , errors
     , extra
+    , filepath
     , fmt
     , generic-lens
     , githash
@@ -215,6 +217,7 @@ library
     , hspec
     , hspec-expectations-json
     , http-api-data
+    , http-client
     , http-types
     , lens
     , lens-aeson

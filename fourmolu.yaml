@@ -6,10 +6,12 @@ indent-wheres: true
 record-brace-space: false
 newlines-between-decls: 2
 haddock-style: single-line
-haddock-style-module:
+haddock-style-module: single-line
 let-style: auto
 in-style: right-align
 respectful: true
 fixities: []
 unicode: detect 
 single-constraint-parens: never
+single-deriving-parens: always
+single-deriving-parens: always 

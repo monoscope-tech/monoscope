@@ -6,8 +6,10 @@ module Web.Auth (
   loginRedirectH,
   loginH,
   authCallbackH,
+  sessionByID,
   authHandler,
   APItoolkitAuthContext,
+  authorizeUserAndPersist,
 ) where
 
 import Control.Error (note)
@@ -15,12 +17,12 @@ import Control.Lens qualified as L
 import Control.Monad.Except qualified as T
 import Data.Aeson.Lens (key, _String)
 import Data.Effectful.UUID (UUIDEff)
+import Data.Effectful.Wreq (HTTP)
 import Data.List qualified as List
 import Data.Map.Strict qualified as Map
 import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUID
 import Data.UUID.V4 qualified as UUIDV4
-import Database.PostgreSQL.Entity.DBT (withPool)
 import Effectful (
   Eff,
   Effect,
@@ -30,11 +32,10 @@ import Effectful (
  )
 import Effectful.Dispatch.Static (unsafeEff_)
 import Effectful.Error.Static (Error, runErrorNoCallStack, throwError)
-import Effectful.Log (Log)
-import Effectful.PostgreSQL.Transact.Effect (DB, dbtToEff)
+import Effectful.PostgreSQL.Transact.Effect (DB)
 import Effectful.PostgreSQL.Transact.Effect qualified as DB
 import Effectful.Reader.Static (ask, asks)
-import Effectful.Time (Time, currentTime)
+import Effectful.Time (Time)
 import Log (Logger)
 import Lucid (Html)
 import Lucid.Html5 (
@@ -87,19 +88,24 @@ authHandler logger env =
       & DB.runDB env.pool
       & effToHandler
   where
-    handler :: Request -> Eff '[Log, DB, Error ServerError, IOE] (Headers '[Header "Set-Cookie" SetCookie] Sessions.Session)
+    handler :: (DB :> es, Error ServerError :> es,IOE :> es) => Request -> Eff es (Headers '[Header "Set-Cookie" SetCookie] Sessions.Session)
     handler req = do
       let cookies = getCookies req
       mbPersistentSessionId <- handlerToEff $ getSessionId cookies
       let isSidebarClosed = sidebarClosedFromCookie cookies
-      mbPersistentSession <- maybe (pure Nothing) (dbtToEff . Sessions.getPersistentSession) mbPersistentSessionId
-      let mUser = mbPersistentSession <&> (.user.getUser)
       requestID <- liftIO $ getRequestID req
-      (user, sessionId, persistentSession) <- case (mUser, mbPersistentSession) of
-        (Just user, Just userSession) -> pure (user, userSession.id, userSession)
-        _ -> throwError $ err302{errHeaders = [("Location", "/to_login")]}
-      let sessionCookie = Sessions.craftSessionCookie sessionId False
-      pure $ Sessions.addCookie sessionCookie (Sessions.Session{persistentSession, ..})
+      sessionByID mbPersistentSessionId requestID isSidebarClosed
+
+
+sessionByID :: (DB :> es, Error ServerError :> es) => Maybe Sessions.PersistentSessionId -> Text -> Bool -> Eff es (Headers '[Header "Set-Cookie" SetCookie] Sessions.Session)
+sessionByID mbPersistentSessionId requestID isSidebarClosed = do
+  mbPersistentSession <- join <$> mapM Sessions.getPersistentSession mbPersistentSessionId
+  let mUser = mbPersistentSession <&> (.user.getUser)
+  (user, sessionId, persistentSession) <- case (mUser, mbPersistentSession) of
+    (Just user, Just userSession) -> pure (user, userSession.id, userSession)
+    _ -> throwError $ err302{errHeaders = [("Location", "/to_login")]}
+  let sessionCookie = Sessions.craftSessionCookie sessionId False
+  pure $ Sessions.addCookie sessionCookie (Sessions.Session{persistentSession, ..})
 
 
 getCookies :: Request -> Cookies
@@ -235,7 +241,7 @@ authCallbackH codeM _ = do
               a_ [href_ "/"] "Continue to APIToolkit"
 
 
-authorizeUserAndPersist :: (DB :> es, UUIDEff :> es, IOE :> es, Time :> es) => Maybe Text -> Text -> Text -> Text -> Text -> Eff es Sessions.PersistentSessionId
+authorizeUserAndPersist :: (DB :> es, UUIDEff :> es, HTTP :> es, Time :> es) => Maybe Text -> Text -> Text -> Text -> Text -> Eff es Sessions.PersistentSessionId
 authorizeUserAndPersist convertkitApiKeyM firstName lastName picture email = do
   userM <- Users.userByEmail email
   userId <- case userM of
@@ -246,5 +252,5 @@ authorizeUserAndPersist convertkitApiKeyM firstName lastName picture email = do
     Just user -> pure user.id
   persistentSessId <- Sessions.newPersistentSessionId
   Sessions.insertSession persistentSessId userId (Sessions.SessionData Map.empty)
-  _ <- whenJust convertkitApiKeyM \ckKey -> liftIO $ ConvertKit.addUser ckKey email firstName lastName "" "" ""
+  _ <- whenJust convertkitApiKeyM \ckKey -> ConvertKit.addUser ckKey email firstName lastName "" "" ""
   pure persistentSessId

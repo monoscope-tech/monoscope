@@ -8,7 +8,6 @@ import Control.Concurrent.Async (async, waitAnyCancel)
 import Control.Exception.Safe qualified as Safe
 import Control.Lens ((^?), _Just)
 import Control.Lens qualified as L
-import Control.Monad.Except qualified as T
 import Control.Monad.Trans.Resource (runResourceT)
 import Data.Aeson qualified as Aeson
 import Data.ByteString.Lazy.Base64 qualified as LB64
@@ -18,15 +17,11 @@ import Data.Text.Lazy.Encoding qualified as LT
 import Effectful (
   Eff,
   IOE,
-  MonadIO (liftIO),
   runEff,
   type (:>),
  )
 import Effectful.Concurrent (runConcurrent)
-import Effectful.Error.Static (Error, runErrorNoCallStack)
 import Effectful.Fail (runFailIO)
-import Effectful.PostgreSQL.Transact.Effect (runDB)
-import Effectful.Reader.Static qualified
 import Effectful.Time (runTime)
 import Gogol qualified as Google
 import Gogol.Auth.ApplicationDefault qualified as Google
@@ -42,40 +37,8 @@ import Network.Wai.Handler.Warp (
 import Network.Wai.Log qualified as WaiLog
 import Network.Wai.Middleware.Heartbeat (heartbeatMiddleware)
 import ProcessMessage (processMessages)
-import Relude (
-  Applicative (pure),
-  Foldable (null),
-  IO,
-  Maybe (Just),
-  Proxy (..),
-  Semigroup ((<>)),
-  String,
-  Text,
-  ToText (toText),
-  Traversable (sequence),
-  Type,
-  catMaybes,
-  concat,
-  const,
-  either,
-  error,
-  forM,
-  forever,
-  fromIntegral,
-  fromMaybe,
-  id,
-  map,
-  pass,
-  show,
-  unless,
-  void,
-  ($),
-  (&),
-  (.),
-  (<&>),
- )
+import Relude
 import Servant qualified
-import Servant.Server (Handler, ServerError)
 import Servant.Server.Generic (genericServeTWithContext)
 import System.Config (
   AuthContext (config, jobsPool, pool),
@@ -92,7 +55,7 @@ import System.Config (
   getAppContext,
  )
 import System.Logging qualified as Logging
-import System.Types (ATBaseCtx, effToHandler, effToServantHandler, runBackground)
+import System.Types (effToServantHandler, runBackground)
 import Web.Routes qualified as Routes
 
 

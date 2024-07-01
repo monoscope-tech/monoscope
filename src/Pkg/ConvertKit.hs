@@ -2,13 +2,14 @@ module Pkg.ConvertKit (addUser, addUserOrganization) where
 
 import Control.Lens ((&), (.~))
 import Data.Aeson.QQ (aesonQQ)
+import Data.Effectful.Wreq
 import Data.Text (Text)
-import Network.Wreq (defaults, header, postWith)
-import Relude (IO, pass)
+import Effectful
+import Relude (pass)
 
 
 -- Function to add user to ConvertKit
-addUser :: Text -> Text -> Text -> Text -> Text -> Text -> Text -> IO ()
+addUser :: HTTP :> es => Text -> Text -> Text -> Text -> Text -> Text -> Text -> Eff es ()
 addUser apiKey email firstName lastName orgId orgName plan = do
   r <-
     postWith
@@ -27,7 +28,7 @@ addUser apiKey email firstName lastName orgId orgName plan = do
   pass
 
 
-addUserOrganization :: Text -> Text -> Text -> Text -> Text -> IO ()
+addUserOrganization :: HTTP :> es => Text -> Text -> Text -> Text -> Text -> Eff es ()
 addUserOrganization apiKey email orgID orgName orgPlan = do
   r <-
     postWith

@@ -165,6 +165,8 @@ library:
     - network-uri
     - hspec-expectations-json
     - scotty
+    - filepath
+    - http-client
     - wai-middleware-static
 
 executables:

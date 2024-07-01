@@ -19,13 +19,7 @@ import Data.Effectful.UUID (UUIDEff)
 import Data.Effectful.UUID qualified as UUID
 import Data.Time (UTCTime)
 import Data.UUID qualified as UUID
-import Data.UUID.V4 qualified as UUIDV4
-import Database.PostgreSQL.Entity (
-  Entity,
-  insert,
-  selectById,
-  selectOneByField,
- )
+import Database.PostgreSQL.Entity ( Entity, insert, selectById, selectOneByField)
 import Database.PostgreSQL.Entity.DBT (QueryNature (..), execute, queryOne)
 import Database.PostgreSQL.Entity.Types (
   CamelToSnake,

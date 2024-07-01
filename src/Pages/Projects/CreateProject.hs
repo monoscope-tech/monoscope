@@ -2,15 +2,15 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 
 module Pages.Projects.CreateProject (
-  CreateProjectForm,
+  CreateProjectForm(..),
   createProjectGetH,
   createProjectPostH,
   createProjectFormV,
   createProjectFormToModel,
-  CreateProjectFormError,
+  CreateProjectFormError(..),
   projectSettingsGetH,
   deleteProjectGetH,
-  CreateProject,
+  CreateProject(..),
 )
 where
 
@@ -296,33 +296,32 @@ processProjectPostForm cpRaw = do
           redirectCS ("/p/" <> pid.toText <> "/about_project")
           addRespHeaders $ ProjectPost sess.persistentSession envCfg cp.isUpdate cp (def @CreateProjectFormError)
         else do
-          _ <- dbtToEff do
-            Projects.insertProject (createProjectFormToModel pid subId firstSubItemId cp)
-            projectKeyUUID <- liftIO UUIDV4.nextRandom
-            let encryptedKey = ProjectApiKeys.encryptAPIKey (encodeUtf8 envCfg.apiKeyEncryptionSecretKey) (encodeUtf8 $ UUID.toText projectKeyUUID)
-            let encryptedKeyB64 = B64.encodeBase64 encryptedKey
-            let keyPrefix = encryptedKeyB64
-            pApiKey <- liftIO $ ProjectApiKeys.newProjectApiKeys pid projectKeyUUID "Default API Key" keyPrefix
-            ProjectApiKeys.insertProjectApiKey pApiKey
-            liftIO $ ConvertKit.addUserOrganization envCfg.convertkitApiKey (CI.original sess.user.email) pid.toText cp.title cp.paymentPlan
-            newProjectMembers <-
-              catMaybes <$> forM usersAndPermissions \(email, permission) -> do
-                userId' <- runMaybeT $ MaybeT (Users.userIdByEmail email) <|> MaybeT (Users.createEmptyUser email)
-                liftIO $ ConvertKit.addUserOrganization envCfg.convertkitApiKey email pid.toText cp.title cp.paymentPlan
-                when (userId' /= Just sess.user.id) do
-                  case userId' of
-                    Just userId -> do
-                      -- invite the users to the project (Usually as an email)
-                      _ <- liftIO $ withResource appCtx.pool \conn -> createJob conn "background_jobs" $ BackgroundJobs.InviteUserToProject userId pid email cp.title
-                      pass
-                    Nothing -> pass
-                pure $ maybe Nothing (\userId -> Just (email, permission, userId)) userId'
-            let projectMembers =
-                  newProjectMembers
-                    & filter (\(_, _, id') -> id' /= sess.user.id)
-                    & map (\(email, permission, id') -> ProjectMembers.CreateProjectMembers pid id' permission)
-                    & cons (ProjectMembers.CreateProjectMembers pid sess.user.id Projects.PAdmin)
-            ProjectMembers.insertProjectMembers projectMembers
+          dbtToEff $ Projects.insertProject (createProjectFormToModel pid subId firstSubItemId cp)
+          projectKeyUUID <- liftIO UUIDV4.nextRandom
+          let encryptedKey = ProjectApiKeys.encryptAPIKey (encodeUtf8 envCfg.apiKeyEncryptionSecretKey) (encodeUtf8 $ UUID.toText projectKeyUUID)
+          let encryptedKeyB64 = B64.encodeBase64 encryptedKey
+          let keyPrefix = encryptedKeyB64
+          pApiKey <- liftIO $ ProjectApiKeys.newProjectApiKeys pid projectKeyUUID "Default API Key" keyPrefix
+          dbtToEff $ ProjectApiKeys.insertProjectApiKey pApiKey
+          ConvertKit.addUserOrganization envCfg.convertkitApiKey (CI.original sess.user.email) pid.toText cp.title cp.paymentPlan
+          newProjectMembers <-
+            catMaybes <$> forM usersAndPermissions \(email, permission) -> do
+              userId' <- runMaybeT $ MaybeT (dbtToEff $ Users.userIdByEmail email) <|> MaybeT (dbtToEff $ Users.createEmptyUser email)
+              ConvertKit.addUserOrganization envCfg.convertkitApiKey email pid.toText cp.title cp.paymentPlan
+              when (userId' /= Just sess.user.id) do
+                case userId' of
+                  Just userId -> do
+                    -- invite the users to the project (Usually as an email)
+                    _ <- liftIO $ withResource appCtx.pool \conn -> createJob conn "background_jobs" $ BackgroundJobs.InviteUserToProject userId pid email cp.title
+                    pass
+                  Nothing -> pass
+              pure $ maybe Nothing (\userId -> Just (email, permission, userId)) userId'
+          let projectMembers =
+                newProjectMembers
+                  & filter (\(_, _, id') -> id' /= sess.user.id)
+                  & map (\(email, permission, id') -> ProjectMembers.CreateProjectMembers pid id' permission)
+                  & cons (ProjectMembers.CreateProjectMembers pid sess.user.id Projects.PAdmin)
+          _ <- dbtToEff $ ProjectMembers.insertProjectMembers projectMembers
           _ <- liftIO $ withResource appCtx.pool \conn ->
             createJob conn "background_jobs" $ BackgroundJobs.CreatedProjectSuccessfully sess.user.id pid (original sess.user.email) cp.title
           addSuccessToast "Created Project Successfully" Nothing

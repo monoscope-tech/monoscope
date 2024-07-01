@@ -14,6 +14,7 @@ import Effectful.Dispatch.Dynamic
 import Relude
 
 
+type role UUIDEff phantom nominal
 data UUIDEff :: Effect where
   GenUUID :: UUIDEff m UUID.UUID
 

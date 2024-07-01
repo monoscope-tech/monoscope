@@ -18,12 +18,15 @@ module System.Types (
   RespHeaders,
   redirectCS,
   effToServantHandler,
+  effToServantHandlerTest,
   effToHandler,
+  atAuthToBase,
 ) where
 
 import Control.Monad.Except qualified as Except
 import Data.Aeson qualified as AE
 import Data.Effectful.UUID (UUIDEff, runStaticUUID, runUUID)
+import Data.Effectful.Wreq (HTTP, runHTTPGolden, runHTTPWreq)
 import Data.Map qualified as Map
 import Data.Time.Clock.POSIX (posixSecondsToUTCTime)
 import Data.UUID qualified as UUID
@@ -57,6 +60,7 @@ type HXRedirectDest = Maybe Text
 type CommonWebEffects =
   '[ Effectful.Reader.Static.Reader AuthContext
    , UUIDEff
+   , HTTP
    , DB
    , Time
    , Log
@@ -91,6 +95,7 @@ effToServantHandler env logger app =
   app
     & Effectful.Reader.Static.runReader env
     & runUUID
+    & runHTTPWreq
     & runDB env.pool
     & runTime
     & Logging.runLog (show env.config.environment) logger
@@ -104,6 +109,7 @@ effToServantHandlerTest env logger app =
   app
     & Effectful.Reader.Static.runReader env
     & (runStaticUUID $ map (UUID.fromWords 0 0 0) [1 .. 10])
+    & runHTTPGolden "./golden/"
     & runDB env.pool
     & runFrozenTime (posixSecondsToUTCTime 0)
     & Logging.runLog (show env.config.environment) logger
