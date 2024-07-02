@@ -72,7 +72,7 @@ sendPostmarkEmail reciever template templateVars = do
 
 sendSlackMessage :: (DB :> es, Log :> es, IOE :> es) => Projects.ProjectId -> Text -> Eff es ()
 sendSlackMessage pid message = do
-  slackData <- dbtToEff $ getProjectSlackData pid
+  slackData <- getProjectSlackData pid
   case slackData of
     Just s -> liftIO $ slackPostWebhook s.webhookUrl message
     Nothing -> Log.logAttention "sendSlackMessage is not configured. But was called" (pid, message)
