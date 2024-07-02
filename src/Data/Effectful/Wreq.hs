@@ -34,17 +34,17 @@ module Data.Effectful.Wreq (
 
 import Data.Aeson hiding (Options)
 import Data.ByteString.Lazy qualified as LBS
+import Data.CaseInsensitive qualified as CI
 import Data.Text (Text)
 import Effectful
 import Effectful.Dispatch.Dynamic
-import Data.CaseInsensitive qualified as CI
 import Network.HTTP.Client (createCookieJar, defaultRequest)
 import Network.HTTP.Client.Internal (Response (..), ResponseClose (..))
-import Network.HTTP.Types.Status (statusCode, statusMessage, Status (..))
+import Network.HTTP.Types.Status (Status (..), statusCode, statusMessage)
 import Network.HTTP.Types.Version (http11)
 import Network.Wreq qualified as W
 import Network.Wreq.Types qualified as W
-import Relude (ByteString, Bool (..), FilePath, Generic, IO, Int, Maybe (..), Show,show, String,encodeUtf8,  decodeUtf8, elem, error, fromString, map, return, ($), (<>))
+import Relude (Bool (..), ByteString, FilePath, Generic, IO, Int, Maybe (..), Show, String, decodeUtf8, elem, encodeUtf8, error, fromString, map, return, show, ($), (<>))
 import System.Directory (createDirectoryIfMissing, doesFileExist)
 import System.FilePath ((</>))
 
@@ -57,6 +57,7 @@ type Options = W.Options
 type Postable = W.Postable
 type Putable = W.Putable
 type Patchable = W.Patchable
+
 
 type role HTTP phantom nominal
 data HTTP :: Effect where
@@ -189,24 +190,28 @@ data WreqResponse = WreqResponse
   deriving stock (Show, Generic)
   deriving anyclass (FromJSON, ToJSON)
 
+
 -- Convert HTTP headers to a more serializable form
 convertHeaders :: [(CI.CI ByteString, ByteString)] -> [(Text, Text)]
 convertHeaders = map (\(k, v) -> (decodeUtf8 (CI.original k), decodeUtf8 v))
 
+
 convertHeadersBack :: [(Text, Text)] -> [(CI.CI ByteString, ByteString)]
 convertHeadersBack = map (\(k, v) -> (CI.mk (encodeUtf8 k), encodeUtf8 v))
+
 
 -- Convert from WreqResponse to Response LBS.ByteString
 fromWreqResponse :: Response LBS.ByteString -> WreqResponse
 fromWreqResponse r =
   WreqResponse
-    { statusCode = r.responseStatus.statusCode 
-    , statusMessage = decodeUtf8 (r.responseStatus.statusMessage )
+    { statusCode = r.responseStatus.statusCode
+    , statusMessage = decodeUtf8 (r.responseStatus.statusMessage)
     , respBody = decodeUtf8 (LBS.toStrict (r.responseBody))
     , responseHeaders = convertHeaders r.responseHeaders
     , originalRequest = decodeUtf8 (LBS.toStrict (show (r.responseOriginalRequest)))
     , responseEarlyHints = convertHeaders r.responseEarlyHints
     }
+
 
 -- Convert from WreqResponse to Response LBS.ByteString
 toWreqResponse :: WreqResponse -> Response LBS.ByteString
@@ -221,6 +226,7 @@ toWreqResponse wr =
     , responseOriginalRequest = defaultRequest -- Unsafe.read (toString (wr.originalRequest)) :: Request
     , responseEarlyHints = convertHeadersBack wr.responseEarlyHints
     }
+
 
 getOrCreateGoldenResponse :: FilePath -> String -> IO (W.Response LBS.ByteString) -> IO (W.Response LBS.ByteString)
 getOrCreateGoldenResponse goldenDir fileName action = do

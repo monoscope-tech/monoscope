@@ -88,7 +88,7 @@ authHandler logger env =
       & DB.runDB env.pool
       & effToHandler
   where
-    handler :: (DB :> es, Error ServerError :> es,IOE :> es) => Request -> Eff es (Headers '[Header "Set-Cookie" SetCookie] Sessions.Session)
+    handler :: (DB :> es, Error ServerError :> es, IOE :> es) => Request -> Eff es (Headers '[Header "Set-Cookie" SetCookie] Sessions.Session)
     handler req = do
       let cookies = getCookies req
       mbPersistentSessionId <- handlerToEff $ getSessionId cookies

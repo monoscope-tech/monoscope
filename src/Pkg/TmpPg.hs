@@ -30,8 +30,7 @@ migrate db = do
   -- Create a nil user and projects to make subsequent tests easier
   let q =
         [sql| INSERT into users.users (id, first_name, last_name, email) VALUES ('00000000-0000-0000-0000-000000000000', 'FN', 'LN', 'test@apitoolkit.io');
-              INSERT into projects.projects (id, title) VALUES ('00000000-0000-0000-0000-000000000000', 'test-title')
-          |]
+        |]
   _ <- execute conn q ()
   pass
 

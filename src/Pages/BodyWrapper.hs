@@ -32,7 +32,10 @@ menu pid =
 
 
 type role PageCtx representational
-data PageCtx a = PageCtx BWConfig a
+data PageCtx a = PageCtx
+  { conf :: BWConfig
+  , content :: a
+  }
   deriving stock (Show, Generic)
 
 

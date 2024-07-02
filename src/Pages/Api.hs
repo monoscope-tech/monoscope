@@ -39,7 +39,7 @@ apiPostH pid apiKeyForm = do
   projectKeyUUID <- liftIO UUIDV4.nextRandom
   let encryptedKey = ProjectApiKeys.encryptAPIKey (encodeUtf8 authCtx.config.apiKeyEncryptionSecretKey) (encodeUtf8 $ UUID.toText projectKeyUUID)
   let encryptedKeyB64 = B64.encodeBase64 encryptedKey
-  pApiKey <- liftIO $ ProjectApiKeys.newProjectApiKeys pid projectKeyUUID (title apiKeyForm) encryptedKeyB64
+  pApiKey <- ProjectApiKeys.newProjectApiKeys pid projectKeyUUID (title apiKeyForm) encryptedKeyB64
   apiKeys <- dbtToEff do
     ProjectApiKeys.insertProjectApiKey pApiKey
     ProjectApiKeys.projectApiKeysByProjectId pid

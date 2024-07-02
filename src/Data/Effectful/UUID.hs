@@ -1,6 +1,8 @@
 {-# LANGUAGE GADTs #-}
 
 module Data.Effectful.UUID (
+  UUID.UUID,
+  UUID.toText,
   UUIDEff,
   genUUID,
   runUUID,

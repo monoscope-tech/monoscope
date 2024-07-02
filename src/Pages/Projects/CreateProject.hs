@@ -2,15 +2,15 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 
 module Pages.Projects.CreateProject (
-  CreateProjectForm(..),
+  CreateProjectForm (..),
   createProjectGetH,
   createProjectPostH,
   createProjectFormV,
   createProjectFormToModel,
-  CreateProjectFormError(..),
+  CreateProjectFormError (..),
   projectSettingsGetH,
   deleteProjectGetH,
-  CreateProject(..),
+  CreateProject (..),
 )
 where
 
@@ -18,22 +18,23 @@ import BackgroundJobs qualified
 import Control.Lens ((.~), (^.))
 import Data.Aeson (encode)
 import Data.Aeson qualified as AE
-import Data.Aeson.QQ (aesonQQ)
 import Data.ByteString.Base64 qualified as B64
 import Data.CaseInsensitive (original)
 import Data.CaseInsensitive qualified as CI
 import Data.Default (Default (..))
+import Data.Effectful.UUID qualified as UUID
+import Data.Effectful.Wreq
+import Data.Effectful.Wreq qualified as W
 import Data.List.Extra (cons)
 import Data.List.Unique (uniq)
 import Data.Pool (withResource)
 import Data.Text (toLower)
 import Data.Text qualified as T
-import Data.UUID qualified as UUID
-import Data.UUID.V4 qualified as UUIDV4
 import Data.Valor (Valor, check1, failIf, validateM)
 import Data.Valor qualified as Valor
 import Data.Vector qualified as V
 import Deriving.Aeson qualified as DAE
+import Effectful
 import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
 import Effectful.Reader.Static (ask)
 import Lucid
@@ -46,13 +47,11 @@ import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
 import Models.Users.Users qualified as Users
 import NeatInterpolation (text)
-import Network.Wreq (defaults, getWith, header, responseBody)
 import OddJobs.Job (createJob)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
 import Pkg.ConvertKit qualified as ConvertKit
 import Relude hiding (ask, asks)
 import Relude.Unsafe qualified as Unsafe
-import Servant (addHeader, noHeader)
 import System.Config
 import System.Types (ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders, addSuccessToast, redirectCS)
 import Utils (faSprite_, isDemoAndNotSudo, lemonSqueezyUrls, lemonSqueezyUrlsAnnual)
@@ -116,7 +115,14 @@ createProjectGetH = do
 data CreateProject
   = CreateProject (PageCtx (Sessions.PersistentSession, EnvConfig, Bool, CreateProjectForm, CreateProjectFormError))
   | PostNoContent Text
-  | ProjectPost Sessions.PersistentSession EnvConfig Bool CreateProjectForm CreateProjectFormError
+  | ProjectPost
+      { sess :: Sessions.PersistentSession
+      , env :: EnvConfig
+      , isUpdate :: Bool
+      , form :: CreateProjectForm
+      , formError :: CreateProjectFormError
+      }
+  deriving stock (Show)
 
 
 instance ToHtml CreateProject where
@@ -214,13 +220,13 @@ instance AE.FromJSON SubResponse where
     return (SubResponse{dataVal = dataVal})
 
 
-getSubscriptionId :: Maybe Text -> Text -> IO (Maybe SubResponse)
+getSubscriptionId :: HTTP :> es => Maybe Text -> Text -> Eff es (Maybe SubResponse)
 getSubscriptionId orderId apiKey = do
   case orderId of
     Nothing -> pure Nothing
     Just ordId -> do
       let hds = header "Authorization" .~ ["Bearer " <> encodeUtf8 @Text @ByteString apiKey]
-      response <- liftIO $ getWith (defaults & hds) ("https://api.lemonsqueezy.com/v1/orders/" <> toString ordId <> "/subscriptions")
+      response <- W.getWith (defaults & hds) ("https://api.lemonsqueezy.com/v1/orders/" <> toString ordId <> "/subscriptions")
       let responseBdy = response ^. responseBody
       case AE.eitherDecode responseBdy of
         Right res -> do
@@ -236,7 +242,7 @@ processProjectPostForm cpRaw = do
   sess <- Sessions.getSession
 
   let cp = Valor.unValid cpRaw
-  pid <- liftIO $ maybe (Projects.ProjectId <$> UUIDV4.nextRandom) pure (Projects.projectIdFromText cp.projectId)
+  pid <- maybe (Projects.ProjectId <$> UUID.genUUID) pure (Projects.projectIdFromText cp.projectId)
   if cp.isUpdate
     then do
       if isDemoAndNotSudo pid sess.user.isSudo
@@ -244,42 +250,36 @@ processProjectPostForm cpRaw = do
           addErrorToast "Can't perform this action on the demo project" Nothing
           addRespHeaders $ ProjectPost sess.persistentSession envCfg cp.isUpdate cp (def @CreateProjectFormError)
         else do
-          let hxTriggerDataUpdate = decodeUtf8 $ encode [aesonQQ| {"successToast": ["Updated Project Successfully"]}|]
-          let bdy = ProjectPost sess.persistentSession envCfg cp.isUpdate cp (def @CreateProjectFormError)
           project <- dbtToEff $ Projects.projectById pid
           case project of
             Just p -> do
-              if (cp.paymentPlan == "UsageBased" && p.paymentPlan /= "UsageBased")
-                || (cp.paymentPlan == "GraduatedPricing" && p.paymentPlan /= "GraduatedPricing")
-                then do
-                  subRes <- liftIO $ getSubscriptionId cp.orderId envCfg.lemonSqueezyApiKey
-                  let (subId, firstSubItemId) = case subRes of
-                        Just sub ->
-                          if length sub.dataVal < 1
-                            then (Nothing, Nothing)
-                            else
-                              let target = sub.dataVal Unsafe.!! 0
-                                  firstSubItemId' = show target.attributes.firstSubscriptionItem.id
-                                  subId' = show target.attributes.firstSubscriptionItem.subscriptionId
-                               in (Just subId', Just firstSubItemId')
-                        Nothing -> (Nothing, Nothing)
-                  if isNothing subId || isNothing firstSubItemId
-                    then do
-                      let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"errorToast": ["Couldn't get subscription Id please try again"]}|]
-                      let bd = ProjectPost sess.persistentSession envCfg cp.isUpdate cp (def @CreateProjectFormError)
-                      pure $ addHeader hxTriggerData $ addHeader ("/p/" <> pid.toText <> "/about_project") bd
-                    else do
-                      _ <- dbtToEff $ Projects.updateProject (createProjectFormToModel pid subId firstSubItemId cp)
-                      pure $ addHeader hxTriggerDataUpdate $ noHeader bdy
-                else do
-                  _ <- dbtToEff $ Projects.updateProject (createProjectFormToModel pid p.subId p.firstSubItemId cp)
-                  pure $ addHeader hxTriggerDataUpdate $ noHeader bdy
+              let checkPaymentPlan = cp.paymentPlan `elem` ["UsageBased", "GraduatedPricing"] && cp.paymentPlan /= p.paymentPlan
+              (subId, firstSubItemId) <-
+                if checkPaymentPlan
+                  then
+                    getSubscriptionId cp.orderId envCfg.lemonSqueezyApiKey >>= \case
+                      Just sub
+                        | not (null sub.dataVal) ->
+                            let target = sub.dataVal Unsafe.!! 0
+                             in pure (Just (show target.attributes.firstSubscriptionItem.subscriptionId), Just (show target.attributes.firstSubscriptionItem.id))
+                      _ -> pure (Nothing, Nothing)
+                  else pure (p.subId, p.firstSubItemId)
+              case (if checkPaymentPlan then (subId, firstSubItemId) else (p.subId, p.firstSubItemId)) of
+                (Just sid, Just fsid) -> do
+                  _ <- dbtToEff $ Projects.updateProject (createProjectFormToModel pid (Just sid) (Just fsid) cp)
+                  addSuccessToast "Updated Project Successfully" Nothing
+                  addRespHeaders $ ProjectPost sess.persistentSession envCfg cp.isUpdate cp (def @CreateProjectFormError)
+                _ -> do
+                  addErrorToast "Something went wrong. Please try again." Nothing
+                  redirectCS ("/p/" <> pid.toText <> "/about_project")
+                  addRespHeaders $ ProjectPost sess.persistentSession envCfg cp.isUpdate cp (def @CreateProjectFormError)
             Nothing -> do
-              let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"errorToast": ["Something went wrong, try again."]}|]
-              pure $ addHeader hxTriggerData $ noHeader $ PostNoContent ""
+              addErrorToast "Something went wrong. Please try again." Nothing
+              redirectCS ("/p/" <> pid.toText <> "/about_project")
+              addRespHeaders $ ProjectPost sess.persistentSession envCfg cp.isUpdate cp (def @CreateProjectFormError)
     else do
       let usersAndPermissions = zip cp.emails cp.permissions & uniq
-      subRes <- liftIO $ getSubscriptionId cp.orderId envCfg.lemonSqueezyApiKey
+      subRes <- getSubscriptionId cp.orderId envCfg.lemonSqueezyApiKey
       let (subId, firstSubItemId) = case subRes of
             Just sub ->
               if length sub.dataVal < 1
@@ -292,29 +292,22 @@ processProjectPostForm cpRaw = do
             Nothing -> (Nothing, Nothing)
       if (cp.paymentPlan /= "Free" && isNothing firstSubItemId)
         then do
-          addErrorToast "Couldn't get subscription ID. Please try again" Nothing
+          addErrorToast "Something went wrong. Please try again" Nothing
           redirectCS ("/p/" <> pid.toText <> "/about_project")
           addRespHeaders $ ProjectPost sess.persistentSession envCfg cp.isUpdate cp (def @CreateProjectFormError)
         else do
           dbtToEff $ Projects.insertProject (createProjectFormToModel pid subId firstSubItemId cp)
-          projectKeyUUID <- liftIO UUIDV4.nextRandom
-          let encryptedKey = ProjectApiKeys.encryptAPIKey (encodeUtf8 envCfg.apiKeyEncryptionSecretKey) (encodeUtf8 $ UUID.toText projectKeyUUID)
-          let encryptedKeyB64 = B64.encodeBase64 encryptedKey
-          let keyPrefix = encryptedKeyB64
-          pApiKey <- liftIO $ ProjectApiKeys.newProjectApiKeys pid projectKeyUUID "Default API Key" keyPrefix
+          projectKeyUUID <- UUID.genUUID
+          let encryptedKeyB64 = B64.encodeBase64 $ ProjectApiKeys.encryptAPIKey (encodeUtf8 envCfg.apiKeyEncryptionSecretKey) (encodeUtf8 $ UUID.toText projectKeyUUID)
+          pApiKey <- ProjectApiKeys.newProjectApiKeys pid projectKeyUUID "Default API Key" encryptedKeyB64
           dbtToEff $ ProjectApiKeys.insertProjectApiKey pApiKey
           ConvertKit.addUserOrganization envCfg.convertkitApiKey (CI.original sess.user.email) pid.toText cp.title cp.paymentPlan
           newProjectMembers <-
             catMaybes <$> forM usersAndPermissions \(email, permission) -> do
               userId' <- runMaybeT $ MaybeT (dbtToEff $ Users.userIdByEmail email) <|> MaybeT (dbtToEff $ Users.createEmptyUser email)
               ConvertKit.addUserOrganization envCfg.convertkitApiKey email pid.toText cp.title cp.paymentPlan
-              when (userId' /= Just sess.user.id) do
-                case userId' of
-                  Just userId -> do
-                    -- invite the users to the project (Usually as an email)
-                    _ <- liftIO $ withResource appCtx.pool \conn -> createJob conn "background_jobs" $ BackgroundJobs.InviteUserToProject userId pid email cp.title
-                    pass
-                  Nothing -> pass
+              when (userId' /= Just sess.user.id) $ whenJust userId' \userId ->
+                liftIO $ withResource appCtx.pool \conn -> void $ createJob conn "background_jobs" $ BackgroundJobs.InviteUserToProject userId pid email cp.title
               pure $ maybe Nothing (\userId -> Just (email, permission, userId)) userId'
           let projectMembers =
                 newProjectMembers

@@ -18,8 +18,7 @@ import Crypto.Cipher.AES (AES256)
 import Crypto.Cipher.Types (BlockCipher (..), Cipher (..), nullIV)
 import Crypto.Error (throwCryptoError)
 import Data.Default (Default)
-import Data.Time (ZonedTime)
-import Data.Time qualified as Time
+import Data.Time (UTCTime)
 import Data.UUID qualified as UUID
 import Data.Vector (Vector)
 import Database.PostgreSQL.Entity
@@ -30,6 +29,9 @@ import Database.PostgreSQL.Simple.FromField (FromField)
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.ToField (ToField)
 import Database.PostgreSQL.Transact (DBT)
+import Effectful (Eff, type (:>))
+import Effectful.Time (Time)
+import Effectful.Time qualified as Time
 import GHC.Records (HasField (getField))
 import Models.Projects.Projects qualified as Projects
 import Relude hiding (id)
@@ -48,9 +50,9 @@ instance HasField "toText" ProjectApiKeyId Text where
 
 data ProjectApiKey = ProjectApiKey
   { id :: ProjectApiKeyId
-  , createdAt :: ZonedTime
-  , updatedAt :: ZonedTime
-  , deletedAt :: Maybe ZonedTime
+  , createdAt :: UTCTime
+  , updatedAt :: UTCTime
+  , deletedAt :: Maybe UTCTime
   , active :: Bool
   , projectId :: Projects.ProjectId
   , title :: Text
@@ -61,9 +63,9 @@ data ProjectApiKey = ProjectApiKey
   deriving (Entity) via (GenericEntity '[Schema "projects", TableName "project_api_keys", PrimaryKey "id", FieldModifiers '[CamelToSnake]] ProjectApiKey)
 
 
-newProjectApiKeys :: Projects.ProjectId -> UUID.UUID -> Text -> Text -> IO ProjectApiKey
+newProjectApiKeys :: Time :> es => Projects.ProjectId -> UUID.UUID -> Text -> Text -> Eff es ProjectApiKey
 newProjectApiKeys projectId projectKeyUUID title keyPrefix = do
-  createdAt <- Time.getZonedTime
+  createdAt <- Time.currentTime
   let updatedAt = createdAt
       deletedAt = Nothing
       active = True

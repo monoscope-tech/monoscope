@@ -2,7 +2,7 @@
 
 module Pages.Projects.ListProjects (
   listProjectsGetH,
-  ListProjectsGet,
+  ListProjectsGet (..),
 )
 where
 
@@ -42,7 +42,8 @@ listProjectsGetH = do
   addRespHeaders $ ListProjectsGet $ PageCtx bwconf projects'
 
 
-data ListProjectsGet = ListProjectsGet (PageCtx (V.Vector Projects.Project'))
+newtype ListProjectsGet = ListProjectsGet {unwrap :: PageCtx (V.Vector Projects.Project')}
+  deriving stock (Show)
 
 
 instance ToHtml ListProjectsGet where

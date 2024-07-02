@@ -26,6 +26,7 @@ ghc-options:
   - -Wno-missing-local-signatures # Warning for polymorphic local bindings; nothing wrong with those.
   - -Wno-monomorphism-restriction # Don’t warn if the monomorphism restriction is used
   - -Wno-missing-safe-haskell-mode
+  - -Wno-partial-fields
   - -Wno-orphans
   # remove the next options when possible. This is a temporary workaround
   - -Wno-unused-matches
