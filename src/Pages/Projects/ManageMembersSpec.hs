@@ -31,6 +31,7 @@ import System.Types (atAuthToBase, effToServantHandlerTest)
 import Test.Hspec
 import Web.Auth qualified as Auth
 import Web.Cookie (SetCookie)
+import Web.ClientMetadata  qualified as ClientMetadata
 
 
 fromRightShow :: Show a => Either a b -> b
@@ -70,6 +71,8 @@ withTestResources f = TmpPg.withSetup $ \pool -> LogBulk.withBulkStdOutLogger \l
       , trLogger = logger
       }
 
+testPid :: Projects.ProjectId
+testPid = Unsafe.fromJust $ Projects.ProjectId <$> UUID.fromText "00000000-0000-0000-0000-000000000000"
 
 spec :: Spec
 spec = aroundAll withTestResources do
@@ -80,21 +83,15 @@ spec = aroundAll withTestResources do
               { emails = ["example@gmail.com"]
               , permissions = [ProjectMembers.PAdmin]
               }
-      let pid = Unsafe.fromJust $ Projects.ProjectId <$> UUID.fromText "00000000-0000-0000-0000-000000000000"
       pg <-
-        ManageMembers.manageMembersPostH pid member
+        ManageMembers.manageMembersPostH testPid member
           & atAuthToBase trSessAndHeader
           & effToServantHandlerTest trATCtx trLogger
           & ServantS.runHandler
           <&> fromRightShow
           <&> Servant.getResponse
-
       -- Check if the response contains the newly added member
-      case pg of
-        ManageMembers.ManageMembersPost projMembers -> do
-          let emails = projMembers & V.toList & map (.email)
-          "example@gmail.com" `shouldSatisfy` (`elem` emails)
-        _ -> fail "Expected ManageMembersPost response"
+      "example@gmail.com" `shouldSatisfy` (`elem` (pg.unwrapPost & V.toList & map (.email)))
 
     it "Update member permissions" \TestResources{..} -> do
       let member =
@@ -102,9 +99,8 @@ spec = aroundAll withTestResources do
               { emails = ["example@gmail.com"]
               , permissions = [ProjectMembers.PView]
               }
-      let pid = Unsafe.fromJust $ Projects.ProjectId <$> UUID.fromText "00000000-0000-0000-0000-000000000000"
       pg <-
-        ManageMembers.manageMembersPostH pid member
+        ManageMembers.manageMembersPostH testPid member
           & atAuthToBase trSessAndHeader
           & effToServantHandlerTest trATCtx trLogger
           & ServantS.runHandler
@@ -122,9 +118,8 @@ spec = aroundAll withTestResources do
         _ -> fail "Expected ManageMembersPost response"
 
     it "Get members" \TestResources{..} -> do
-      let pid = Unsafe.fromJust $ Projects.ProjectId <$> UUID.fromText "00000000-0000-0000-0000-000000000000"
       pg <-
-        ManageMembers.manageMembersGetH pid
+        ManageMembers.manageMembersGetH testPid
           & atAuthToBase trSessAndHeader
           & effToServantHandlerTest trATCtx trLogger
           & ServantS.runHandler
@@ -145,9 +140,8 @@ spec = aroundAll withTestResources do
               { emails = []
               , permissions = []
               }
-      let pid = Unsafe.fromJust $ Projects.ProjectId <$> UUID.fromText "00000000-0000-0000-0000-000000000000"
       pg <-
-        ManageMembers.manageMembersPostH pid member
+        ManageMembers.manageMembersPostH testPid member
           & atAuthToBase trSessAndHeader
           & effToServantHandlerTest trATCtx trLogger
           & ServantS.runHandler
@@ -160,6 +154,16 @@ spec = aroundAll withTestResources do
           let emails = projMembers & V.toList & map (.email)
           "example@gmail.com" `shouldNotSatisfy` (`elem` emails)
         _ -> fail "Expected ManageMembersPost response"
+
+    it "Get ClientMetadata" \TestResources{..} -> do
+      pg <-
+        ClientMetadata.clientMetadataH (Just "APIKEY") 
+          & effToServantHandlerTest trATCtx trLogger
+          & ServantS.runHandler
+          <&> fromRightShow
+
+      1 `shouldBe` 1 
+
 
 
 -- TODO: add more checks for the info we we display on list page

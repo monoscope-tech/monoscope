@@ -124,8 +124,8 @@ manageMembersGetH pid = do
 
 
 data ManageMembers
-  = ManageMembersGet (PageCtx (V.Vector ProjectMembers.ProjectMemberVM))
-  | ManageMembersPost (V.Vector ProjectMembers.ProjectMemberVM)
+  = ManageMembersGet {unwrapGet :: PageCtx (V.Vector ProjectMembers.ProjectMemberVM)}
+  | ManageMembersPost {unwrapPost :: (V.Vector ProjectMembers.ProjectMemberVM)}
 
 
 instance ToHtml ManageMembers where

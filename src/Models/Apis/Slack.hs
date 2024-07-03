@@ -1,14 +1,14 @@
 module Models.Apis.Slack (SlackData (..), insertAccessToken, getProjectSlackData) where
 
-import Effectful.PostgreSQL.Transact.Effect (DB, dbtToEff)
 import Data.Text
 import Database.PostgreSQL.Entity.DBT (QueryNature (Select), queryOne)
-import Database.PostgreSQL.Simple.SqlQQ (sql)
-import Effectful
 import Database.PostgreSQL.Simple (FromRow, Only (Only), ToRow)
+import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Transact (DBT, executeMany)
 import Deriving.Aeson qualified as AE
 import Deriving.Aeson qualified as DAE
+import Effectful
+import Effectful.PostgreSQL.Transact.Effect (DB, dbtToEff)
 import Models.Projects.Projects qualified as Projects
 import Relude
 
@@ -34,7 +34,7 @@ insertAccessToken projects webhookUrl = executeMany q params
     params = (\p -> (p, webhookUrl)) <$> projects
 
 
-getProjectSlackData :: (DB :> es) => Projects.ProjectId -> Eff es (Maybe SlackData)
+getProjectSlackData :: DB :> es => Projects.ProjectId -> Eff es (Maybe SlackData)
 getProjectSlackData pid = dbtToEff $ queryOne Select q (Only pid)
   where
     q = [sql|SELECT project_id, webhook_url FROM apis.slack WHERE project_id =? |]
