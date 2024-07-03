@@ -54,13 +54,13 @@ withTestResources f = TmpPg.withSetup $ \pool -> LogBulk.withBulkStdOutLogger \l
   projectCache <- newCache (Just $ TimeSpec (60 * 60) 0)
   sessAndHeader <- testSessionHeader pool
   let atAuthCtx =
-        AuthContext (def @EnvConfig) pool pool projectCache
-          $ ( (def :: EnvConfig)
-                { apiKeyEncryptionSecretKey = "apitoolkit123456123456apitoolkit"
-                , convertkitApiKey = ""
-                , convertkitApiSecret = ""
-                }
-            )
+        AuthContext (def @EnvConfig) pool pool projectCache $
+          ( (def :: EnvConfig)
+              { apiKeyEncryptionSecretKey = "apitoolkit123456123456apitoolkit"
+              , convertkitApiKey = ""
+              , convertkitApiSecret = ""
+              }
+          )
   f
     TestResources
       { trPool = pool
@@ -147,7 +147,6 @@ spec = aroundAll withTestResources do
           <&> fromRightShow
           <&> Servant.getResponse
       length pg.unwrap.content `shouldBe` 2
-      traceShowM $ pg.unwrap.content
       (pg.unwrap.content V.! 0).id.toText `shouldBe` "00000000-0000-0000-0000-000000000001"
       (pg.unwrap.content V.! 0).title `shouldBe` "Test Project CI2"
       (pg.unwrap.content V.! 0).description `shouldBe` "Test Description2"
