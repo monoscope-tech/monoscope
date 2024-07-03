@@ -2,48 +2,23 @@ module Web.ClientMetadataSpec (spec) where
 
 import Data.Aeson.QQ (aesonQQ)
 import Data.ByteString.Base64 qualified as B64
-import Data.UUID.V4 qualified as UUIDV4
-
-import Data.Default (def)
-import Data.Effectful.UUID (runStaticUUID)
-import Data.Effectful.Wreq (runHTTPGolden)
-import Data.Time (getCurrentTime)
-
-import Data.Cache (Cache (..), newCache)
 import Data.Pool (Pool)
+import Data.Time (getCurrentTime)
 import Data.UUID qualified as UUID
-import Database.PostgreSQL.Simple (Connection)
-import System.Clock (TimeSpec (TimeSpec))
-
+import Data.UUID.V4 qualified as UUIDV4
 import Database.PostgreSQL.Entity.DBT (withPool)
-
+import Database.PostgreSQL.Simple (Connection)
 import Effectful
-
-import Effectful.Error.Static (runErrorNoCallStack)
-import Effectful.PostgreSQL.Transact.Effect qualified as DB
-import Effectful.Time (runTime)
-import Log qualified
-import Log.Backend.StandardOutput.Bulk qualified as LogBulk
 import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
 import Models.Projects.Projects qualified as Projects
-import Models.Users.Sessions qualified as Sessions
-
-import Pkg.TmpPg qualified as TmpPg
+import Pkg.TestUtils
 import Relude
 import Relude.Unsafe qualified as Unsafe
-import Servant qualified
 import Servant.Server qualified as ServantS
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types (effToServantHandlerTest)
 import Test.Hspec
-import Web.Auth qualified as Auth
 import Web.ClientMetadata (ClientMetadata (..), clientMetadataH)
-import Web.Cookie (SetCookie)
-
-
-fromRightShow :: Show a => Either a b -> b
-fromRightShow (Right b) = b
-fromRightShow (Left a) = error $ "Unexpected Left value: " <> show a
 
 
 testId :: Projects.ProjectId
@@ -81,56 +56,6 @@ spec = aroundAll withTestResources do
         , pubsubProjectId = "past-3"
         , pubsubPushServiceAccount = [aesonQQ|{}|]
         }
-
-
-data TestResources = TestResources
-  { trPool :: Pool Connection
-  , trProjectCache :: Cache Projects.ProjectId Projects.ProjectCache
-  , trSessAndHeader :: Servant.Headers '[Servant.Header "Set-Cookie" SetCookie] Sessions.Session
-  , trATCtx :: AuthContext
-  , trLogger :: Log.Logger
-  }
-
-
-withTestResources :: (TestResources -> IO ()) -> IO ()
-withTestResources f = TmpPg.withSetup $ \pool -> LogBulk.withBulkStdOutLogger \logger -> do
-  projectCache <- newCache (Just $ TimeSpec (60 * 60) 0)
-  sessAndHeader <- testSessionHeader pool
-  let atAuthCtx =
-        AuthContext (def @EnvConfig) pool pool projectCache
-          $ ( (def :: EnvConfig)
-                { apiKeyEncryptionSecretKey = "apitoolkit123456123456apitoolkit"
-                , convertkitApiKey = ""
-                , convertkitApiSecret = ""
-                , requestPubsubTopics = ["apitoolkit-prod-default"]
-                }
-            )
-  f
-    TestResources
-      { trPool = pool
-      , trSessAndHeader = sessAndHeader
-      , trProjectCache = projectCache
-      , trATCtx = atAuthCtx
-      , trLogger = logger
-      }
-
-
-testSessionHeader :: MonadIO m => Pool Connection -> m (Servant.Headers '[Servant.Header "Set-Cookie" SetCookie] Sessions.Session)
-testSessionHeader pool = do
-  pSessId <-
-    Auth.authorizeUserAndPersist Nothing "firstName" "lastName" "https://placehold.it/500x500" "test@apitoolkit.io"
-      & (runStaticUUID $ map (UUID.fromWords 0 0 0) [1 .. 10])
-      & runHTTPGolden "./golden/"
-      & DB.runDB pool
-      & runTime
-      & runEff
-      & liftIO
-  Auth.sessionByID (Just pSessId) "requestID" False
-    & runErrorNoCallStack @Servant.ServerError
-    & DB.runDB pool
-    & runEff
-    & liftIO
-    <&> fromRightShow
 
 
 createAndSaveApiKey :: Pool Connection -> AuthContext -> IO (Text)

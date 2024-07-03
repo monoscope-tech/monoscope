@@ -13,7 +13,7 @@ import Models.Apis.Monitors qualified as Monitors
 import Models.Projects.Projects qualified as Projects
 import OddJobs.Job (Job)
 import Pages.Monitors.Alerts (AlertUpsertForm (..), convertToQueryMonitor)
-import Pkg.TmpPg qualified as TmpPg
+import Pkg.TestUtils qualified as TestUtils
 import ProcessMessage (processRequestMessages)
 import ProcessMessageSpec (convert, msg1, msg2, runTestBackground, testAuthContext)
 import Relude
@@ -23,7 +23,7 @@ import Test.Hspec (Spec, aroundAll, describe, it)
 
 
 spec :: Spec
-spec = aroundAll TmpPg.withSetup do
+spec = aroundAll TestUtils.withSetup do
   describe "Query Log Monitors" do
     it "should create monitor with no triggers" \pool -> do
       currentTime <- getCurrentTime

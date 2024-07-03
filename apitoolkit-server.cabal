@@ -130,7 +130,7 @@ library
       Pkg.Parser.Stats
       Pkg.Parser.Types
       Pkg.ParserSpec
-      Pkg.TmpPg
+      Pkg.TestUtils
       ProcessMessage
       ProcessMessageSpec
       RequestMessages
