@@ -1,6 +1,6 @@
 module Pkg.TmpPg (withSetup, abort, rollback) where
 
-import Control.Exception (throwIO, bracket_, mask, finally)
+import Control.Exception (bracket_, finally, mask, throwIO)
 import Data.Pool (Pool, defaultPoolConfig, newPool)
 import Database.PostgreSQL.Simple (
   Connection,
@@ -9,10 +9,10 @@ import Database.PostgreSQL.Simple (
   execute,
   execute_,
  )
-import Database.PostgreSQL.Simple.Transaction  (newSavepoint, rollbackToAndReleaseSavepoint)
 import Database.PostgreSQL.Simple.Migration (MigrationCommand (MigrationDirectory, MigrationInitialization))
 import Database.PostgreSQL.Simple.Migration qualified as Migration
 import Database.PostgreSQL.Simple.SqlQQ (sql)
+import Database.PostgreSQL.Simple.Transaction (newSavepoint, rollbackToAndReleaseSavepoint)
 import Database.Postgres.Temp (cacheAction, cacheConfig, toConnectionString, withConfig, withDbCache)
 import Database.Postgres.Temp qualified as TmpPostgres
 import Relude
@@ -54,12 +54,15 @@ withSetup f = do
     withConfig migratedConfig $ \db ->
       f =<< newPool (defaultPoolConfig (connectPostgreSQL $ toConnectionString db) close 60 10)
 
+
 -- throw away all db changes that happened within this abort block
 abort :: (Connection -> IO a) -> Connection -> IO a
-abort f conn = bracket_
-  (execute_ conn "BEGIN")
-  (execute_ conn "ROLLBACK")
-  (f conn)
+abort f conn =
+  bracket_
+    (execute_ conn "BEGIN")
+    (execute_ conn "ROLLBACK")
+    (f conn)
+
 
 -- can be a nested transaction, and creates a savepoint which then gets auto rolled back,
 -- while reusing all the setup and db operations that happened up until that savepoint

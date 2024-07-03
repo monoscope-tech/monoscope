@@ -103,6 +103,7 @@ library
       Pages.Projects.Integrations
       Pages.Projects.ListProjects
       Pages.Projects.ManageMembers
+      Pages.Projects.ManageMembersSpec
       Pages.Projects.ProjectsSpec
       Pages.Projects.Routes
       Pages.Projects.Server

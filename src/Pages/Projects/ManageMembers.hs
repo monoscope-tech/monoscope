@@ -3,7 +3,7 @@ module Pages.Projects.ManageMembers (
   manageMembersPostH,
   ManageMembersForm (..),
   manageSubGetH,
-  ManageMembers,
+  ManageMembers (..),
 )
 where
 
