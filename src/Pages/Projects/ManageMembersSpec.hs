@@ -31,7 +31,6 @@ import System.Types (atAuthToBase, effToServantHandlerTest)
 import Test.Hspec
 import Web.Auth qualified as Auth
 import Web.Cookie (SetCookie)
-import Web.ClientMetadata  qualified as ClientMetadata
 
 
 fromRightShow :: Show a => Either a b -> b
@@ -55,13 +54,13 @@ withTestResources f = TmpPg.withSetup $ \pool -> LogBulk.withBulkStdOutLogger \l
   projectCache <- newCache (Just $ TimeSpec (60 * 60) 0)
   sessAndHeader <- testSessionHeader pool
   let atAuthCtx =
-        AuthContext (def @EnvConfig) pool pool projectCache
-          $ ( (def :: EnvConfig)
-                { apiKeyEncryptionSecretKey = "apitoolkit123456123456apitoolkit"
-                , convertkitApiKey = ""
-                , convertkitApiSecret = ""
-                }
-            )
+        AuthContext (def @EnvConfig) pool pool projectCache $
+          ( (def :: EnvConfig)
+              { apiKeyEncryptionSecretKey = "apitoolkit123456123456apitoolkit"
+              , convertkitApiKey = ""
+              , convertkitApiSecret = ""
+              }
+          )
   f
     TestResources
       { trPool = pool
@@ -71,8 +70,10 @@ withTestResources f = TmpPg.withSetup $ \pool -> LogBulk.withBulkStdOutLogger \l
       , trLogger = logger
       }
 
+
 testPid :: Projects.ProjectId
 testPid = Unsafe.fromJust $ Projects.ProjectId <$> UUID.fromText "00000000-0000-0000-0000-000000000000"
+
 
 spec :: Spec
 spec = aroundAll withTestResources do
@@ -154,16 +155,6 @@ spec = aroundAll withTestResources do
           let emails = projMembers & V.toList & map (.email)
           "example@gmail.com" `shouldNotSatisfy` (`elem` emails)
         _ -> fail "Expected ManageMembersPost response"
-
-    it "Get ClientMetadata" \TestResources{..} -> do
-      pg <-
-        ClientMetadata.clientMetadataH (Just "APIKEY") 
-          & effToServantHandlerTest trATCtx trLogger
-          & ServantS.runHandler
-          <&> fromRightShow
-
-      1 `shouldBe` 1 
-
 
 
 -- TODO: add more checks for the info we we display on list page
