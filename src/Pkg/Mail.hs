@@ -12,7 +12,7 @@ import Effectful (
   type (:>),
  )
 import Effectful.Log (Log)
-import Effectful.PostgreSQL.Transact.Effect (DB, dbtToEff)
+import Effectful.PostgreSQL.Transact.Effect (DB)
 import Effectful.Reader.Static (ask)
 import Log qualified
 import Models.Apis.Slack (SlackData (..), getProjectSlackData)
