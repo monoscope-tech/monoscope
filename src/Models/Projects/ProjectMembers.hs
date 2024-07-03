@@ -35,7 +35,7 @@ import Database.PostgreSQL.Simple (FromRow, Only (Only), ResultError (..), ToRow
 import Database.PostgreSQL.Simple.FromField (FromField, fromField, returnError)
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.ToField (Action (Escape), ToField, toField)
-import Database.PostgreSQL.Transact (DBT, executeMany)
+import Database.PostgreSQL.Transact (DBT, execute, executeMany)
 import Database.PostgreSQL.Transact qualified as PgT
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Users qualified as Users
@@ -153,10 +153,9 @@ updateProjectMembersPermissons vals = void $ executeMany q vals
 
 
 softDeleteProjectMembers :: [UUID.UUID] -> DBT IO ()
-softDeleteProjectMembers vals = void $ executeMany q (map Only vals)
+softDeleteProjectMembers vals = void $ execute q (Only (V.fromList vals))
   where
     q =
-      [sql| UPDATE projects.project_members  pm
-            SET pm.active = FALSE
-            FROM (VALUES (?)) as c(id)
-            WHERE pm.id::uuid = c.id::uuid; |]
+      [sql| UPDATE projects.project_members
+            SET active = FALSE
+            WHERE id = Any(?::uuid[]); |]
