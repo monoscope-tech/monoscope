@@ -74,7 +74,7 @@ integrationsSettingsGetH pid = do
           , timeZone = project.timeZone
           , orderId = project.orderId
           }
-  slackInfo <- dbtToEff $ getProjectSlackData pid
+  slackInfo <- getProjectSlackData pid
 
   let bwconf = (def :: BWConfig){sessM = Just sess.persistentSession, currProject = Just project, pageTitle = "Integrations"}
   addRespHeaders $ bodyWrapper bwconf $ integrationsBody (sess.persistentSession) appCtx.config True createProj (Just project.notificationsChannel) slackInfo
@@ -91,7 +91,7 @@ updateNotificationsChannel :: Projects.ProjectId -> NotifListForm -> ATAuthCtx (
 updateNotificationsChannel pid NotifListForm{notificationsChannel} = do
   if "slack" `elem` notificationsChannel
     then do
-      slackData <- dbtToEff $ getProjectSlackData pid
+      slackData <- getProjectSlackData pid
       case slackData of
         Nothing -> do
           addErrorToast "You need to connect slack to this project first." Nothing
