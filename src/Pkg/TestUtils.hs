@@ -87,8 +87,7 @@ withSetup f = do
   let throwE x = either throwIO pure =<< x
   throwE $ withDbCache $ \dbCache -> do
     let combinedConfig =
-          cacheConfig dbCache
-            <> TmpPostgres.verboseConfig
+          cacheConfig dbCache -- <> TmpPostgres.verboseConfig
             <> mempty
               { TmpPostgres.postgresConfigFile = [("shared_preload_libraries", "'timescaledb'")]
               }

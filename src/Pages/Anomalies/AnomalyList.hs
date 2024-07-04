@@ -12,7 +12,7 @@ module Pages.Anomalies.AnomalyList (
   AnomalyListGet (..),
   anomalyAcknowlegeButton,
   anomalyArchiveButton,
-  AnomalyAction,
+  AnomalyAction (..),
   AnomalyDetails,
   IssueVM (..),
 )

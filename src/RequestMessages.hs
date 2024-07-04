@@ -7,6 +7,8 @@ module RequestMessages (
   valueToFormatStr,
   valueToFields,
   redactJSON,
+  toXXHash,
+  replaceNullChars,
 )
 where
 
