@@ -11,11 +11,13 @@ module Pkg.TestUtils (
   convert,
   runTestBackground,
   runAllBackgroundJobs,
+  refreshMaterializedView,
   setBjRunAtInThePast,
 ) where
 
 import Data.Default (Default (..))
 import Data.Vector qualified as V
+import Database.PostgreSQL.Simple.Types (Query (Query))
 import Effectful.PostgreSQL.Transact.Effect qualified as DB
 import Effectful.Time (runTime)
 
@@ -41,6 +43,7 @@ import Database.Postgres.Temp qualified as TmpPostgres
 import Effectful
 import Effectful.Error.Static (runErrorNoCallStack)
 import Log qualified
+import NeatInterpolation (text)
 import System.Config qualified as Config
 import System.Types (ATBackgroundCtx, runBackground)
 
@@ -84,7 +87,8 @@ withSetup f = do
   let throwE x = either throwIO pure =<< x
   throwE $ withDbCache $ \dbCache -> do
     let combinedConfig =
-          cacheConfig dbCache -- <> TmpPostgres.verboseConfig
+          cacheConfig dbCache
+            <> TmpPostgres.verboseConfig
             <> mempty
               { TmpPostgres.postgresConfigFile = [("shared_preload_libraries", "'timescaledb'")]
               }
@@ -270,3 +274,9 @@ setBjRunAtInThePast :: PgT.DBT IO ()
 setBjRunAtInThePast = void $ PgT.execute q ()
   where
     q = [sql|UPDATE background_jobs SET run_at = CURRENT_DATE - INTERVAL '1 day' WHERE status = 'pending'|]
+
+
+refreshMaterializedView :: Text -> PgT.DBT IO (Int64)
+refreshMaterializedView name = PgT.execute (Query $ encodeUtf8 q) ()
+  where
+    q = [text|REFRESH MATERIALIZED VIEW $name|]

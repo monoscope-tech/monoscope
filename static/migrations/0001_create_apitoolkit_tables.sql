@@ -416,6 +416,7 @@ CREATE INDEX IF NOT EXISTS idx_reports_project_id ON apis.reports(project_id);
 
 -- TODO: rewrite this. This query is killing the database.
 -- Create a view that tracks endpoint related statistic points from the request dump table.
+DROP MATERIALIZED VIEW IF EXISTS apis.endpoint_request_stats;
 CREATE MATERIALIZED VIEW IF NOT EXISTS apis.endpoint_request_stats AS 
  WITH request_dump_stats as (
       SELECT
@@ -451,6 +452,25 @@ CREATE MATERIALIZED VIEW IF NOT EXISTS apis.endpoint_request_stats AS
   
 CREATE INDEX IF NOT EXISTS idx_apis_endpoint_request_stats_project_id ON apis.endpoint_request_stats(project_id);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_apis_endpoint_request_stats_endpoint_id ON apis.endpoint_request_stats(endpoint_id);
+
+CREATE TABLE IF NOT EXISTS apis.issues 
+(
+  id              UUID NOT NULL DEFAULT gen_random_uuid(),
+  created_at      TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT current_timestamp,
+  updated_at      TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT current_timestamp,
+  project_id      UUID NOT NULL REFERENCES projects.projects (id) ON DELETE CASCADE,
+  acknowleged_at  TIMESTAMP WITH TIME ZONE,
+  anomaly_type    apis.anomaly_type NOT NULL, 
+  target_hash     TEXT,
+  issue_data      JSONB NOT NULL DEFAULT '{}',
+  endpoint_id     UUID,
+  acknowleged_by  UUID,
+  archived_at    TIMESTAMP           WITH       TIME        ZONE
+);
+SELECT manage_updated_at('apis.issues');
+CREATE INDEX IF NOT EXISTS idx_apis_issues_project_id ON apis.issues(project_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_apis_issues_project_id_target_hash ON apis.issues(project_id, target_hash);
+
 
 -- Create a view that tracks project request related statistic points from the request dump table.
 CREATE MATERIALIZED VIEW IF NOT EXISTS apis.project_request_stats AS 
@@ -501,7 +521,7 @@ CREATE MATERIALIZED VIEW IF NOT EXISTS apis.project_request_stats AS
           project_id,
           count(*) FILTER (WHERE anomaly_type != 'field' AND acknowleged_at IS NULL) as total_anomalies,
           count(*) FILTER (WHERE created_at < NOW()::DATE - 7 AND anomaly_type != 'field' AND acknowleged_at IS NULL) as total_anomalies_last_week
-      FROM apis.anomalies
+      FROM apis.issues
       GROUP BY project_id
   )
   SELECT 	
@@ -764,23 +784,6 @@ SELECT add_job('tests.check_tests_to_trigger', '10min');
 
 INSERT into projects.projects (id, title) VALUES ('00000000-0000-0000-0000-000000000000', 'Demo Project');
 
-CREATE TABLE IF NOT EXISTS apis.issues 
-(
-  id              UUID NOT NULL DEFAULT gen_random_uuid(),
-  created_at      TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT current_timestamp,
-  updated_at      TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT current_timestamp,
-  project_id      UUID NOT NULL REFERENCES projects.projects (id) ON DELETE CASCADE,
-  acknowleged_at  TIMESTAMP WITH TIME ZONE,
-  anomaly_type    apis.anomaly_type NOT NULL, 
-  target_hash     TEXT,
-  issue_data      JSONB NOT NULL DEFAULT '{}',
-  endpoint_id     UUID,
-  acknowleged_by  UUID,
-  archived_at    TIMESTAMP           WITH       TIME        ZONE
-);
-SELECT manage_updated_at('apis.issues');
-CREATE INDEX IF NOT EXISTS idx_apis_issues_project_id ON apis.issues(project_id);
-CREATE UNIQUE INDEX IF NOT EXISTS idx_apis_issues_project_id_target_hash ON apis.issues(project_id, target_hash);
 
 
 

@@ -1,4 +1,4 @@
-module Pages.Dashboard (dashboardGetH, DashboardGet) where
+module Pages.Dashboard (dashboardGetH, DashboardGet (..)) where
 
 import Data.Aeson qualified as AE
 import Data.Default (def)
@@ -60,11 +60,13 @@ data ParamInput = ParamInput
   }
 
 
-data DashboardGet = DashboardGet Projects.ProjectId ParamInput UTCTime Projects.ProjectRequestStats (Vector.Vector Endpoints.EndpointRequestStats) Text (Maybe ZonedTime, Maybe ZonedTime) Bool Bool
+data DashboardGet = DashboardGet
+  { unwrap :: (Projects.ProjectId, ParamInput, UTCTime, Projects.ProjectRequestStats, (Vector.Vector Endpoints.EndpointRequestStats), Text, (Maybe ZonedTime, Maybe ZonedTime), Bool, Bool)
+  }
 
 
 instance ToHtml DashboardGet where
-  toHtml (DashboardGet pid paramInput now stats endpoints lastRequestTime (fromD, toD) exceededFree hasRequest) = toHtml $ dashboardPage pid paramInput now stats endpoints lastRequestTime (fromD, toD) exceededFree hasRequest
+  toHtml (DashboardGet (pid, paramInput, now, stats, endpoints, lastRequestTime, (fromD, toD), exceededFree, hasRequest)) = toHtml $ dashboardPage pid paramInput now stats endpoints lastRequestTime (fromD, toD) exceededFree hasRequest
   toHtmlRaw = toHtml
 
 
@@ -118,7 +120,7 @@ dashboardGetH pid fromDStr toDStr sinceStr' = do
   let currentURL = "/p/" <> pid.toText <> "?&from=" <> fromMaybe "" fromDStr <> "&to=" <> fromMaybe "" toDStr
   let currentPickerTxt = fromMaybe (maybe "" (toText . formatTime defaultTimeLocale "%F %T") fromD <> " - " <> maybe "" (toText . formatTime defaultTimeLocale "%F %T") toD) sinceStr
   let paramInput = ParamInput{currentURL = currentURL, sinceStr = sinceStr, dateRange = (fromD, toD), currentPickerTxt = currentPickerTxt}
-  addRespHeaders $ PageCtx bwconf $ DashboardGet pid paramInput currTime projectRequestStats newEndpoints reqLatenciesRolledByStepsJ (fromD, toD) freeTierExceeded hasRequests
+  addRespHeaders $ PageCtx bwconf $ DashboardGet (pid, paramInput, currTime, projectRequestStats, newEndpoints, reqLatenciesRolledByStepsJ, (fromD, toD), freeTierExceeded, hasRequests)
 
 
 dashboardPage :: Projects.ProjectId -> ParamInput -> UTCTime -> Projects.ProjectRequestStats -> Vector.Vector Endpoints.EndpointRequestStats -> Text -> (Maybe ZonedTime, Maybe ZonedTime) -> Bool -> Bool -> Html ()

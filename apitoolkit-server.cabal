@@ -63,6 +63,7 @@ library
       Pages.Charts.Charts
       Pages.Components
       Pages.Dashboard
+      Pages.DashboardSpec
       Pages.Endpoints.EndpointComponents
       Pages.Endpoints.EndpointDetails
       Pages.Endpoints.EndpointList
