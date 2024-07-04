@@ -54,6 +54,7 @@ library
       MonitoringSpec
       Network.Wai.Middleware.Heartbeat
       Pages.Anomalies.AnomalyList
+      Pages.Anomalies.AnomalyListSpec
       Pages.Anomalies.Routes
       Pages.Anomalies.Server
       Pages.Api

@@ -15,7 +15,7 @@ import OddJobs.Job (Job)
 import Pages.Monitors.Alerts (AlertUpsertForm (..), convertToQueryMonitor)
 import Pkg.TestUtils qualified as TestUtils
 import ProcessMessage (processRequestMessages)
-import ProcessMessageSpec (convert, msg1, msg2, runTestBackground, testAuthContext)
+import ProcessMessageSpec (convert, runTestBackground, testAuthContext)
 import Relude
 import Relude.Unsafe qualified as Unsafe
 import System.Config (AuthContext (pool))
@@ -49,8 +49,8 @@ spec = aroundAll TestUtils.withSetup do
                 }
       _ <- withPool pool $ Monitors.queryMonitorUpsert queryMonitor
       let nowTxt = toText $ formatTime defaultTimeLocale "%FT%T%QZ" currentTime
-      let reqMsg1 = Unsafe.fromJust $ convert $ msg1 nowTxt
-      let reqMsg2 = Unsafe.fromJust $ convert $ msg2 nowTxt
+      let reqMsg1 = Unsafe.fromJust $ convert $ TestUtils.testRequestMsgs.reqMsg1 nowTxt
+      let reqMsg2 = Unsafe.fromJust $ convert $ TestUtils.testRequestMsgs.reqMsg2 nowTxt
       let msgs =
             [ ("m1", reqMsg1)
             , ("m2", reqMsg1)
