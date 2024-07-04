@@ -14,6 +14,7 @@ module Pages.Anomalies.AnomalyList (
   anomalyArchiveButton,
   AnomalyAction,
   AnomalyDetails,
+  IssueVM (..),
 )
 where
 
