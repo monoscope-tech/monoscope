@@ -597,6 +597,7 @@ issueDisplayConfig issue = case issue.issueData of
 
 
 data IssueVM = IssueVM Bool UTCTime Anomalies.IssueL
+  deriving stock (Show)
 
 
 instance ToHtml IssueVM where

@@ -1,6 +1,5 @@
-module ProcessMessageSpec (spec, testAuthContext, runTestBackground, convert) where
+module ProcessMessageSpec (spec, testAuthContext, runTestBackground) where
 
-import Data.Aeson (Result (Error, Success), Value, fromJSON)
 import Data.Cache (Cache, newCache)
 import Data.Default (Default (..))
 import Data.Pool (Pool)
@@ -17,7 +16,6 @@ import Pkg.TestUtils qualified as TestUtils
 import ProcessMessage (processMessages, processRequestMessages)
 import Relude
 import Relude.Unsafe qualified as Unsafe
-import RequestMessages qualified
 import System.Clock (TimeSpec (TimeSpec))
 import System.Config qualified as Config
 import System.Types (ATBackgroundCtx, runBackground)
@@ -53,8 +51,8 @@ spec = aroundAll TestUtils.withSetup do
     it "should save the request" \pool -> do
       currentTime <- getCurrentTime
       let nowTxt = toText $ formatTime defaultTimeLocale "%FT%T%QZ" currentTime
-      let reqMsg1 = Unsafe.fromJust $ convert $ TestUtils.testRequestMsgs.reqMsg1 nowTxt
-      let reqMsg2 = Unsafe.fromJust $ convert $ TestUtils.testRequestMsgs.reqMsg2 nowTxt
+      let reqMsg1 = Unsafe.fromJust $ TestUtils.convert $ TestUtils.testRequestMsgs.reqMsg1 nowTxt
+      let reqMsg2 = Unsafe.fromJust $ TestUtils.convert $ TestUtils.testRequestMsgs.reqMsg2 nowTxt
       let msgs =
             [ ("m1", reqMsg1)
             , ("m2", reqMsg2)
@@ -75,9 +73,3 @@ spec = aroundAll TestUtils.withSetup do
       forM_ endpoints \enp -> do
         ["/", "/api/v1/user/login"] `shouldContain` [enp.urlPath]
       pass
-
-
-convert :: Value -> Maybe RequestMessages.RequestMessage
-convert val = case fromJSON val of
-  Success p -> Just p
-  Error _ -> Nothing

@@ -1,24 +1,17 @@
 module MonitoringSpec (spec) where
 
-import BackgroundJobs (jobsRunner)
 import Data.Time (defaultTimeLocale, formatTime, getCurrentTime)
 import Data.UUID qualified as UUID
-import Data.Vector qualified as V
 import Database.PostgreSQL.Entity.DBT (QueryNature (Select), execute, withPool)
-import Database.PostgreSQL.Entity.DBT qualified as DBT
 import Database.PostgreSQL.Simple.SqlQQ (sql)
-import Database.PostgreSQL.Transact (DBT)
-import Log.Backend.StandardOutput.Bulk qualified as LogBulk
 import Models.Apis.Monitors qualified as Monitors
 import Models.Projects.Projects qualified as Projects
-import OddJobs.Job (Job)
 import Pages.Monitors.Alerts (AlertUpsertForm (..), convertToQueryMonitor)
 import Pkg.TestUtils qualified as TestUtils
 import ProcessMessage (processRequestMessages)
-import ProcessMessageSpec (convert, runTestBackground, testAuthContext)
+import ProcessMessageSpec (runTestBackground, testAuthContext)
 import Relude
 import Relude.Unsafe qualified as Unsafe
-import System.Config (AuthContext (pool))
 import Test.Hspec (Spec, aroundAll, describe, it)
 
 
@@ -49,8 +42,8 @@ spec = aroundAll TestUtils.withSetup do
                 }
       _ <- withPool pool $ Monitors.queryMonitorUpsert queryMonitor
       let nowTxt = toText $ formatTime defaultTimeLocale "%FT%T%QZ" currentTime
-      let reqMsg1 = Unsafe.fromJust $ convert $ TestUtils.testRequestMsgs.reqMsg1 nowTxt
-      let reqMsg2 = Unsafe.fromJust $ convert $ TestUtils.testRequestMsgs.reqMsg2 nowTxt
+      let reqMsg1 = Unsafe.fromJust $ TestUtils.convert $ TestUtils.testRequestMsgs.reqMsg1 nowTxt
+      let reqMsg2 = Unsafe.fromJust $ TestUtils.convert $ TestUtils.testRequestMsgs.reqMsg2 nowTxt
       let msgs =
             [ ("m1", reqMsg1)
             , ("m2", reqMsg1)
@@ -60,22 +53,8 @@ spec = aroundAll TestUtils.withSetup do
             ]
       _ <- runTestBackground authCtx $ processRequestMessages msgs
       _ <- withPool pool $ execute Select [sql|CALL monitors.check_triggered_query_monitors(0, '{}')|] ()
-      _ <- runAllBackgroundJobs authCtx
+      _ <- TestUtils.runAllBackgroundJobs authCtx
       -- TODO:
       -- Introduce a .env.test
       -- - Configure email sending into the test context
       pass
-
-
-runAllBackgroundJobs :: AuthContext -> IO (V.Vector Job)
-runAllBackgroundJobs authCtx = do
-  jobs <- withPool authCtx.pool $ getBackgroundJobs
-  LogBulk.withBulkStdOutLogger \logger ->
-    V.forM_ jobs \job -> jobsRunner logger authCtx job
-  pure jobs
-
-
-getBackgroundJobs :: DBT IO (V.Vector Job)
-getBackgroundJobs = DBT.query Select q ()
-  where
-    q = [sql|SELECT id, created_at, updated_at, run_at, status, payload,last_error, attempts, locked_at, locked_by FROM background_jobs|]

@@ -8,14 +8,20 @@ module Pkg.TestUtils (
   testSessionHeader,
   testRequestMsgs,
   TestRequestMessages (..),
+  convert,
+  runTestBackground,
+  runAllBackgroundJobs,
+  setBjRunAtInThePast,
 ) where
 
 import Data.Default (Default (..))
+import Data.Vector qualified as V
 import Effectful.PostgreSQL.Transact.Effect qualified as DB
 import Effectful.Time (runTime)
 
+import BackgroundJobs (jobsRunner)
 import Control.Exception (bracket_, finally, mask, throwIO)
-import Data.Aeson (Value)
+import Data.Aeson (Result (Error, Success), Value, fromJSON)
 import Data.Aeson.QQ (aesonQQ)
 import Data.Cache (Cache (..), newCache)
 import Data.Effectful.UUID (runStaticUUID)
@@ -23,26 +29,32 @@ import Data.Effectful.Wreq (runHTTPGolden)
 import Data.Either.Extra
 import Data.Pool (Pool, defaultPoolConfig, newPool)
 import Data.UUID qualified as UUID
+import Database.PostgreSQL.Entity.DBT (QueryNature (Select), query, withPool)
 import Database.PostgreSQL.Simple (Connection, close, connectPostgreSQL, execute, execute_)
 import Database.PostgreSQL.Simple.Migration (MigrationCommand (MigrationDirectory, MigrationInitialization))
 import Database.PostgreSQL.Simple.Migration qualified as Migration
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.Transaction (newSavepoint, rollbackToAndReleaseSavepoint)
+import Database.PostgreSQL.Transact qualified as PgT
 import Database.Postgres.Temp (cacheAction, cacheConfig, toConnectionString, withConfig, withDbCache)
 import Database.Postgres.Temp qualified as TmpPostgres
 import Effectful
 import Effectful.Error.Static (runErrorNoCallStack)
 import Log qualified
+import System.Config qualified as Config
+import System.Types (ATBackgroundCtx, runBackground)
+
 import Log.Backend.StandardOutput.Bulk qualified as LogBulk
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
+import OddJobs.Job (Job)
 import Relude
+import RequestMessages qualified
 import Servant qualified
 import System.Clock (TimeSpec (TimeSpec))
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Directory (getFileSize, listDirectory)
 import Web.Auth qualified as Auth
-
 import Web.Cookie (SetCookie)
 
 
@@ -124,6 +136,11 @@ fromRightShow (Right b) = b
 fromRightShow (Left a) = error $ "Unexpected Left value: " <> show a
 
 
+runTestBackground :: Config.AuthContext -> ATBackgroundCtx a -> IO a
+runTestBackground authCtx action = LogBulk.withBulkStdOutLogger \logger ->
+  runBackground logger authCtx $ action
+
+
 -- New type to hold all our resources
 data TestResources = TestResources
   { trPool :: Pool Connection
@@ -146,6 +163,7 @@ withTestResources f = withSetup $ \pool -> LogBulk.withBulkStdOutLogger \logger 
                 , convertkitApiKey = ""
                 , convertkitApiSecret = ""
                 , requestPubsubTopics = ["apitoolkit-prod-default"]
+                , enableBackgroundJobs = True
                 }
             )
   f
@@ -226,3 +244,29 @@ data TestRequestMessages = RequestMessages
   { reqMsg1 :: Text -> Value
   , reqMsg2 :: Text -> Value
   }
+
+
+convert :: Value -> Maybe RequestMessages.RequestMessage
+convert val = case fromJSON val of
+  Success p -> Just p
+  Error _ -> Nothing
+
+
+runAllBackgroundJobs :: AuthContext -> IO (V.Vector Job)
+runAllBackgroundJobs authCtx = do
+  jobs <- withPool authCtx.pool $ getBackgroundJobs
+  LogBulk.withBulkStdOutLogger \logger ->
+    V.forM_ jobs \job -> jobsRunner logger authCtx job
+  pure jobs
+
+
+getBackgroundJobs :: PgT.DBT IO (V.Vector Job)
+getBackgroundJobs = query Select q ()
+  where
+    q = [sql|SELECT id, created_at, updated_at, run_at, status, payload,last_error, attempts, locked_at, locked_by FROM background_jobs|]
+
+
+setBjRunAtInThePast :: PgT.DBT IO ()
+setBjRunAtInThePast = void $ PgT.execute q ()
+  where
+    q = [sql|UPDATE background_jobs SET run_at = CURRENT_DATE - INTERVAL '1 day' WHERE status = 'pending'|]
