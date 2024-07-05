@@ -6,7 +6,7 @@ module Pages.Monitors.Alerts (
   alertUpsertPostH,
   editAlert_,
   AlertUpsertForm (..),
-  Alert,
+  Alert (..),
 ) where
 
 import Data.CaseInsensitive qualified as CI

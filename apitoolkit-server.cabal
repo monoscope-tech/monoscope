@@ -99,6 +99,7 @@ library
       Pages.LogExplorer.Server
       Pages.LogSpec
       Pages.Monitors.Alerts
+      Pages.Monitors.AlertsSpec
       Pages.Monitors.Routes
       Pages.Monitors.Server
       Pages.Monitors.TestCollectionEditor
