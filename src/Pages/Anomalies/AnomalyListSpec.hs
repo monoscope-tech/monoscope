@@ -135,7 +135,6 @@ spec = aroundAll withTestResources do
           (length shapesAnomalies) `shouldBe` 1 -- reqMsg3 is same endpoint as reqMsg1 with different request body shape
           (length formatAnomalies) `shouldBe` 0 -- lower levels anomalies are ignored until the parent is acknowledge
           (length anomalies) `shouldBe` 2
-        -- TODO: add more tests
         _ -> error "Unexpected response"
 
     it "should detect new format" \TestResources{..} -> do
@@ -197,6 +196,25 @@ spec = aroundAll withTestResources do
           (length formatAnomalies) `shouldBe` 1 -- lower levels anomalies are ignored until the parent is acknowledge
           (length anomalies) `shouldBe` 2
         -- TODO: add more tests
+        _ -> error "Unexpected response"
+
+    it "should get acknowledged anomalies" \TestResources{..} -> do
+      pg <-
+        AnomalyList.anomalyListGetH testPid Nothing (Just "Acknowleged") Nothing Nothing Nothing Nothing Nothing Nothing
+          & atAuthToBase trSessAndHeader
+          & effToServantHandlerTest trATCtx trLogger
+          & ServantS.runHandler
+          <&> fromRightShow
+          <&> Servant.getResponse
+      case pg of
+        AnomalyList.ALItemsPage (PageCtx _ (ItemsList.ItemsPage _ anomalies)) -> do
+          let endpointAnomalies = V.filter (\(AnomalyList.IssueVM _ _ c) -> c.anomalyType == ATEndpoint) anomalies
+          let shapesAnomalies = V.filter (\(AnomalyList.IssueVM _ _ c) -> c.anomalyType == ATShape) anomalies
+          let formatAnomalies = V.filter (\(AnomalyList.IssueVM _ _ c) -> c.anomalyType == ATFormat) anomalies
+          (length endpointAnomalies) `shouldBe` 1 -- acknowledged one endpoint anomaly
+          (length shapesAnomalies) `shouldBe` 1 -- acknowledged one shape anomaly
+          (length formatAnomalies) `shouldBe` 0 -- acknowledged zero format anomaly
+          (length anomalies) `shouldBe` 2
         _ -> error "Unexpected response"
 
 
