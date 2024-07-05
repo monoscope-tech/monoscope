@@ -1,4 +1,4 @@
-module Pages.Endpoints.Outgoing (outgoingGetH, HostEventsVM) where
+module Pages.Endpoints.Outgoing (outgoingGetH, HostEventsVM (..)) where
 
 import Data.Default (def)
 import Data.Text qualified as T
