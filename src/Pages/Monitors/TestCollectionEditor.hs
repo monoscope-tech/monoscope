@@ -7,7 +7,7 @@ module Pages.Monitors.TestCollectionEditor (
   testSettingsModalContent_,
   CollectionGet,
   CollectionRunTest,
-  CollectionMut,
+  CollectionMut (..),
 ) where
 
 import Data.Aeson qualified as AE
