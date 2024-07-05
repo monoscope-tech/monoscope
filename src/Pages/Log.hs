@@ -1,6 +1,7 @@
 module Pages.Log (
   apiLogH,
-  LogsGet,
+  LogsGet (..),
+  ApiLogsPageData (..),
 )
 where
 

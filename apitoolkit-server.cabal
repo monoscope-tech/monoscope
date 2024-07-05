@@ -96,6 +96,7 @@ library
       Pages.LogExplorer.LogItemSpec
       Pages.LogExplorer.Routes
       Pages.LogExplorer.Server
+      Pages.LogSpec
       Pages.Monitors.Alerts
       Pages.Monitors.Routes
       Pages.Monitors.Server
