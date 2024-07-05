@@ -200,7 +200,6 @@ msg1 timestamp =
             "sdk_type":"JsExpress",
             "status_code":200,
             "timestamp": #{timestamp},
-            "msg_id": "00000000-0000-0000-0000-000000000000",
             "url_path":"/","errors":[],"tags":[]} 
       |]
 
@@ -232,7 +231,6 @@ msg2 timestamp =
             "response_body":"eyJlcnJvcnMiOiJjcnlwdG8vYmNyeXB0OiBoYXNoZWRQYXNzd29yZCBpcyBub3QgdGhlIGhhc2ggb2YgdGhlIGdpdmVuIHBhc3N3b3JkIiwibWVzc2FnZSI6ImludmFsaWQgY3JlZGVudGlhbHMiLCJzdGF0dXMiOiJVbnByb2Nlc3NhYmxlIEVudGl0eSIsInRpbWVzdGFtcCI6Ik1vbmRheSwgMTYtT2N0LTIzIDIxOjQ3OjQxIFVUQyJ9",
             "request_body":"eyJwYXNzd29yZCI6IltDTElFTlRfUkVEQUNURURdIiwidXNlcm5hbWUiOiJhZG1pbkBncm92ZXBheS5jby51ayJ9",
             "proto_minor":1,
-            "msg_id": "00000000-0000-0000-0000-000000000001",
             "status_code":422,"proto_major":1,"duration":103636077} 
         |]
 

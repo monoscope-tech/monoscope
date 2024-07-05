@@ -1,8 +1,11 @@
 module Pages.LogExplorer.LogItemSpec (spec) where
 
+import Data.Aeson (Value)
+import Data.Aeson.QQ (aesonQQ)
 import Data.Time (defaultTimeLocale, formatTime, getCurrentTime)
 import Models.Projects.Projects qualified as Projects
 import Pages.LogExplorer.LogItem qualified as LogItem
+
 import Pkg.TestUtils
 import ProcessMessage (processRequestMessages)
 import Test.Hspec
@@ -43,7 +46,7 @@ spec = aroundAll withTestResources do
     it "should return a log item" \TestResources{..} -> do
       currentTime <- getCurrentTime
       let nowTxt = toText $ formatTime defaultTimeLocale "%FT%T%QZ" currentTime
-      let reqMsg1 = Unsafe.fromJust $ convert $ testRequestMsgs.reqMsg1 nowTxt
+      let reqMsg1 = Unsafe.fromJust $ convert $ msg1 nowTxt
       let reqMsg2 = Unsafe.fromJust $ convert $ testRequestMsgs.reqMsg2 nowTxt
       let msgs =
             concat
@@ -65,8 +68,35 @@ spec = aroundAll withTestResources do
 
       case pg of
         LogItem.ApiLogItem (item, urlPath) -> do
-          item.urlPath `shouldBe` "/"
+          item.urlPath `shouldBe` "/hello"
+          item.rawUrl `shouldBe` "/hello?hi=byebye"
           item.method `shouldBe` "GET"
           item.statusCode `shouldBe` 200
           item.errorsCount `shouldBe` 0
         _ -> error "Unexpected response"
+
+
+msg1 :: Text -> Value
+msg1 timestamp =
+  [aesonQQ|{"duration":476434,
+            "host":"172.31.29.11",
+            "method":"GET",
+            "path_params":{},
+            "project_id":"00000000-0000-0000-0000-000000000000",
+            "proto_minor":1,
+            "proto_major":1,"query_params":{},
+            "raw_url":"/hello?hi=byebye","referer":"","request_body":"e30=",
+            "request_headers":{
+              "connection":["upgrade"],"host":["172.31.29.11"],
+              "x-real-ip":["172.31.81.1"],"x-forwarded-for":["172.31.81.1"],
+              "user-agent":["ELB-HealthChecker/2.0"],"accept-encoding":["gzip, compressed"]},
+              "response_body":"V2VsY29tZSB0byBSZXRhaWxsb29w","response_headers":{"x-powered-by":["Express"],
+              "vary":["Origin"],"access-control-allow-credentials":["true"],"content-type":["text/html; charset=utf-8"],
+              "content-length":["21"],"etag":["W/\"15-2rFUmgZR2gmQik/+S8kDb7KSIZk\""]
+            },
+            "sdk_type":"JsExpress",
+            "status_code":200,
+            "msg_id": "00000000-0000-0000-0000-000000000000",
+            "timestamp": #{timestamp},
+            "url_path":"/hello","errors":[],"tags":[]} 
+      |]

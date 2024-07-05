@@ -116,6 +116,7 @@ apiLogH pid queryM cols' cursorM' sinceM fromM toM layoutM hxRequestM hxBoostedM
               , currentRange
               , exceededFreeTier = freeTierExceeded
               , query = queryM
+              , cursor = reqLastCreatedAtM
               }
       case (layoutM, hxRequestM, hxBoostedM) of
         (Just "loadmore", Just "true", _) -> addRespHeaders $ LogsGetRows pid requestVecs curatedColNames colIdxMap nextLogsURL
@@ -238,6 +239,7 @@ data ApiLogsPageData = ApiLogsPageData
   , currentRange :: Maybe Text
   , exceededFreeTier :: Bool
   , query :: Maybe Text
+  , cursor :: Maybe Text
   }
 
 
