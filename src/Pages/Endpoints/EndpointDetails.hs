@@ -6,7 +6,7 @@ module Pages.Endpoints.EndpointDetails (
   fieldDetailsPartialH,
   fieldsToNormalized,
   endpointDetailsWithHashH,
-  EndpointDetailsGet,
+  EndpointDetailsGet (..),
   FieldDetails,
 ) where
 
