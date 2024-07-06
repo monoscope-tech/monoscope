@@ -4,10 +4,10 @@ module Pages.Specification.Documentation (
   documentationGetH,
   documentationPostH,
   documentationPutH,
-  SwaggerForm,
+  SwaggerForm (..),
   SaveSwaggerForm,
-  DocumentationGet,
-  DocumentationMut,
+  DocumentationGet (..),
+  DocumentationMut (..),
 ) where
 
 import Data.Aeson (
@@ -46,7 +46,7 @@ import Numeric (showHex)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
 import Relude hiding (ask)
 import Relude.Unsafe qualified as Unsafe
-import System.Types (ATAuthCtx, RespHeaders, addRespHeaders, addSuccessToast)
+import System.Types (ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders, addSuccessToast)
 import Utils (faSprite_)
 import Web.FormUrlEncoded (FromForm)
 
@@ -270,7 +270,7 @@ documentationPutH pid SaveSwaggerForm{updated_swagger, swagger_id, endpoints, di
       _ -> void $ Swaggers.updateSwagger swagger_id value
 
   addSuccessToast "Swagger Saved Successfully" Nothing
-  addRespHeaders DocumentationMut
+  addRespHeaders $ DocumentationMut ""
 
 
 documentationPostH :: Projects.ProjectId -> SwaggerForm -> ATAuthCtx (RespHeaders (DocumentationMut))
@@ -278,26 +278,31 @@ documentationPostH pid SwaggerForm{swagger_json, from} = do
   (sess, project) <- Sessions.sessionAndProject pid
   swaggerId <- Swaggers.SwaggerId <$> liftIO UUIDV4.nextRandom
   currentTime <- liftIO getZonedTime
-  let value = fromMaybe (error "Failed to parse JSON: ") $ decodeStrict (encodeUtf8 swagger_json)
-  let swaggerToAdd =
-        Swaggers.Swagger
-          { id = swaggerId
-          , projectId = pid
-          , createdBy = sess.persistentSession.userId
-          , createdAt = currentTime
-          , updatedAt = currentTime
-          , swaggerJson = value
-          }
-  _ <- dbtToEff $ Swaggers.addSwagger swaggerToAdd
-  addSuccessToast "Swagger uploaded Successfully" Nothing
-  addRespHeaders DocumentationMut
+  let valueM = decodeStrict (encodeUtf8 swagger_json)
+  case valueM of
+    Just value -> do
+      let swaggerToAdd =
+            Swaggers.Swagger
+              { id = swaggerId
+              , projectId = pid
+              , createdBy = sess.persistentSession.userId
+              , createdAt = currentTime
+              , updatedAt = currentTime
+              , swaggerJson = value
+              }
+      _ <- dbtToEff $ Swaggers.addSwagger swaggerToAdd
+      addSuccessToast "Swagger uploaded Successfully" Nothing
+      addRespHeaders $ DocumentationMut "Swagger added successfully"
+    Nothing -> do
+      addErrorToast "Failed to upload swagger, make sure it's a valid json" Nothing
+      addRespHeaders $ DocumentationMut "Swagger upload failed"
 
 
-data DocumentationMut = DocumentationMut
+data DocumentationMut = DocumentationMut Text
 
 
 instance ToHtml DocumentationMut where
-  toHtml DocumentationMut = toHtml $ ""
+  toHtml (DocumentationMut msg) = toHtml $ msg
   toHtmlRaw = toHtml
 
 

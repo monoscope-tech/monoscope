@@ -120,6 +120,7 @@ library
       Pages.Share
       Pages.SlackInstall
       Pages.Specification.Documentation
+      Pages.Specification.DocumentationSpec
       Pages.Specification.GenerateSwagger
       Pages.Specification.GenerateSwaggerSpec
       Pages.Specification.Routes
