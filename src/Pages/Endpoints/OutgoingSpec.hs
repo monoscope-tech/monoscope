@@ -13,9 +13,6 @@ import Pkg.TestUtils
 import ProcessMessage (processRequestMessages)
 import Relude
 import Relude.Unsafe qualified as Unsafe
-import Servant qualified
-import Servant.Server qualified as ServantS
-import System.Types (atAuthToBase, effToServantHandlerTest)
 import Test.Hspec
 
 
@@ -33,13 +30,7 @@ spec = aroundAll withTestResources do
       _ <- runTestBackground trATCtx $ processRequestMessages msgs
 
       PageCtx _ (ItemsList.ItemsPage _ (he)) <-
-        Outgoing.outgoingGetH testPid Nothing
-          & atAuthToBase trSessAndHeader
-          & effToServantHandlerTest trATCtx trLogger
-          & ServantS.runHandler
-          <&> fromRightShow
-          <&> Servant.getResponse
-
+        toServantResponse trATCtx trSessAndHeader trLogger $ Outgoing.outgoingGetH testPid Nothing
       length he `shouldBe` 2
       let githubM = V.find (\(Outgoing.HostEventsVM _ host) -> host.host == "github.com") he
       let aptM = V.find (\(Outgoing.HostEventsVM pid h) -> h.host == "api.apitoolkit.io") he

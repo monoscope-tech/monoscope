@@ -20,11 +20,8 @@ import Pkg.TestUtils
 import ProcessMessage (processRequestMessages)
 import Relude
 import RequestMessages (RequestMessage (..), replaceNullChars, toXXHash, valueToFields)
-import Servant qualified
 
 import Relude.Unsafe qualified as Unsafe
-import Servant.Server qualified as ServantS
-import System.Types (atAuthToBase, effToServantHandlerTest)
 
 import Test.Hspec (Spec, aroundAll, describe, it, shouldBe)
 
@@ -38,12 +35,7 @@ spec = aroundAll withTestResources do
   describe "Check Anomaly List" do
     it "should return an empty list" \TestResources{..} -> do
       pg <-
-        AnomalyList.anomalyListGetH testPid Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
-          & atAuthToBase trSessAndHeader
-          & effToServantHandlerTest trATCtx trLogger
-          & ServantS.runHandler
-          <&> fromRightShow
-          <&> Servant.getResponse
+        toServantResponse trATCtx trSessAndHeader trLogger $ AnomalyList.anomalyListGetH testPid Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
 
       case pg of
         AnomalyList.ALItemsPage (PageCtx _ (ItemsList.ItemsPage _ anomalies)) -> do
@@ -65,12 +57,7 @@ spec = aroundAll withTestResources do
       _ <- runAllBackgroundJobs trATCtx
 
       pg <-
-        AnomalyList.anomalyListGetH testPid Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
-          & atAuthToBase trSessAndHeader
-          & effToServantHandlerTest trATCtx trLogger
-          & ServantS.runHandler
-          <&> fromRightShow
-          <&> Servant.getResponse
+        toServantResponse trATCtx trSessAndHeader trLogger $ AnomalyList.anomalyListGetH testPid Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
 
       case pg of
         AnomalyList.ALItemsPage (PageCtx _ (ItemsList.ItemsPage _ anomalies)) -> do
@@ -90,12 +77,7 @@ spec = aroundAll withTestResources do
       isJust anm `shouldBe` True
       let anmId = anm & Unsafe.fromJust & (\a -> a.id)
       pg <-
-        AnomalyList.acknowlegeAnomalyGetH testPid anmId
-          & atAuthToBase trSessAndHeader
-          & effToServantHandlerTest trATCtx trLogger
-          & ServantS.runHandler
-          <&> fromRightShow
-          <&> Servant.getResponse
+        toServantResponse trATCtx trSessAndHeader trLogger $ AnomalyList.acknowlegeAnomalyGetH testPid anmId
       case pg of
         AnomalyList.Acknowlege pid anid isack -> do
           pid `shouldBe` testPid
@@ -119,12 +101,7 @@ spec = aroundAll withTestResources do
       _ <- runAllBackgroundJobs trATCtx
 
       pg <-
-        AnomalyList.anomalyListGetH testPid Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
-          & atAuthToBase trSessAndHeader
-          & effToServantHandlerTest trATCtx trLogger
-          & ServantS.runHandler
-          <&> fromRightShow
-          <&> Servant.getResponse
+        toServantResponse trATCtx trSessAndHeader trLogger $ AnomalyList.anomalyListGetH testPid Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
 
       case pg of
         AnomalyList.ALItemsPage (PageCtx _ (ItemsList.ItemsPage _ anomalies)) -> do
@@ -164,13 +141,8 @@ spec = aroundAll withTestResources do
       isJust anm `shouldBe` True
       let anmId = anm & Unsafe.fromJust & (\a -> a.id)
 
-      pgr <-
-        AnomalyList.acknowlegeAnomalyGetH testPid anmId
-          & atAuthToBase trSessAndHeader
-          & effToServantHandlerTest trATCtx trLogger
-          & ServantS.runHandler
-
-      isRight pgr `shouldBe` True
+      _ <-
+        toServantResponse trATCtx trSessAndHeader trLogger $ AnomalyList.acknowlegeAnomalyGetH testPid anmId
 
       let reqMsg4 = Unsafe.fromJust $ convert $ msg4 nowTxt
       let msgs =
@@ -179,12 +151,7 @@ spec = aroundAll withTestResources do
       _ <- runAllBackgroundJobs trATCtx
 
       pg <-
-        AnomalyList.anomalyListGetH testPid Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
-          & atAuthToBase trSessAndHeader
-          & effToServantHandlerTest trATCtx trLogger
-          & ServantS.runHandler
-          <&> fromRightShow
-          <&> Servant.getResponse
+        toServantResponse trATCtx trSessAndHeader trLogger $ AnomalyList.anomalyListGetH testPid Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
 
       case pg of
         AnomalyList.ALItemsPage (PageCtx _ (ItemsList.ItemsPage _ anomalies)) -> do
@@ -200,12 +167,7 @@ spec = aroundAll withTestResources do
 
     it "should get acknowledged anomalies" \TestResources{..} -> do
       pg <-
-        AnomalyList.anomalyListGetH testPid Nothing (Just "Acknowleged") Nothing Nothing Nothing Nothing Nothing Nothing
-          & atAuthToBase trSessAndHeader
-          & effToServantHandlerTest trATCtx trLogger
-          & ServantS.runHandler
-          <&> fromRightShow
-          <&> Servant.getResponse
+        toServantResponse trATCtx trSessAndHeader trLogger $ AnomalyList.anomalyListGetH testPid Nothing (Just "Acknowleged") Nothing Nothing Nothing Nothing Nothing Nothing
       case pg of
         AnomalyList.ALItemsPage (PageCtx _ (ItemsList.ItemsPage _ anomalies)) -> do
           let endpointAnomalies = V.filter (\(AnomalyList.IssueVM _ _ c) -> c.anomalyType == ATEndpoint) anomalies

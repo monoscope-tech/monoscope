@@ -6,20 +6,14 @@ import Data.Time (defaultTimeLocale, formatTime, getCurrentTime)
 import Models.Projects.Projects qualified as Projects
 import Pages.LogExplorer.LogItem qualified as LogItem
 
-import Pkg.TestUtils
-import ProcessMessage (processRequestMessages)
-import Test.Hspec
-
 import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUID
-import Relude
-import Servant qualified
-import Servant.Server qualified as ServantS
-import System.Types (atAuthToBase, effToServantHandlerTest)
-
 import Models.Apis.RequestDumps (RequestDumpLogItem (..))
-
+import Pkg.TestUtils
+import ProcessMessage (processRequestMessages)
+import Relude
 import Relude.Unsafe qualified as Unsafe
+import Test.Hspec
 
 
 testPid :: Projects.ProjectId
@@ -33,12 +27,7 @@ spec = aroundAll withTestResources do
       currentTime <- getCurrentTime
       logId <- UUID.nextRandom
       pg <-
-        LogItem.apiLogItemH testPid logId currentTime
-          & atAuthToBase trSessAndHeader
-          & effToServantHandlerTest trATCtx trLogger
-          & ServantS.runHandler
-          <&> fromRightShow
-          <&> Servant.getResponse
+        toServantResponse trATCtx trSessAndHeader trLogger $ LogItem.apiLogItemH testPid logId currentTime
       case pg of
         LogItem.ApiLogItemNotFound msg -> do
           msg `shouldBe` "Invalid request log ID"
@@ -49,9 +38,9 @@ spec = aroundAll withTestResources do
       let reqMsg1 = Unsafe.fromJust $ convert $ msg1 nowTxt
       let reqMsg2 = Unsafe.fromJust $ convert $ testRequestMsgs.reqMsg2 nowTxt
       let msgs =
-            concat
-              $ replicate 5
-              $ [ ("m1", reqMsg1)
+            concat $
+              replicate 5 $
+                [ ("m1", reqMsg1)
                 , ("m2", reqMsg2)
                 ]
       _ <- runTestBackground trATCtx $ processRequestMessages msgs
@@ -59,12 +48,7 @@ spec = aroundAll withTestResources do
 
       let logId = Unsafe.fromJust $ UUID.fromText "00000000-0000-0000-0000-000000000000"
       pg <-
-        LogItem.apiLogItemH testPid logId currentTime
-          & atAuthToBase trSessAndHeader
-          & effToServantHandlerTest trATCtx trLogger
-          & ServantS.runHandler
-          <&> fromRightShow
-          <&> Servant.getResponse
+        toServantResponse trATCtx trSessAndHeader trLogger $ LogItem.apiLogItemH testPid logId currentTime
 
       case pg of
         LogItem.ApiLogItem (item, urlPath) -> do

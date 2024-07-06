@@ -7,11 +7,7 @@ import Pages.BodyWrapper
 import Pages.Projects.CreateProject qualified as CreateProject
 import Pages.Projects.ListProjects qualified as ListProjects
 import Pkg.TestUtils
-import Servant qualified
-import Servant.Server qualified as ServantS
-
 import Relude
-import System.Types (atAuthToBase, effToServantHandlerTest)
 import Test.Hspec
 
 
@@ -32,23 +28,13 @@ spec = aroundAll withTestResources do
               , orderId = Nothing
               }
       pg <-
-        CreateProject.createProjectPostH createPForm
-          & atAuthToBase trSessAndHeader
-          & effToServantHandlerTest trATCtx trLogger
-          & ServantS.runHandler
-          <&> fromRightShow
-          <&> Servant.getResponse
+        toServantResponse trATCtx trSessAndHeader trLogger $ CreateProject.createProjectPostH createPForm
       pg.form.title `shouldBe` "Test Project CI"
       pg.form.description `shouldBe` "Test Description"
 
     it "Non empty project list" \TestResources{..} -> do
       pg <-
-        ListProjects.listProjectsGetH
-          & atAuthToBase trSessAndHeader
-          & effToServantHandlerTest trATCtx trLogger
-          & ServantS.runHandler
-          <&> fromRightShow
-          <&> Servant.getResponse
+        toServantResponse trATCtx trSessAndHeader trLogger $ ListProjects.listProjectsGetH
       length pg.unwrap.content `shouldBe` 2
       -- default demo project created in migrations
       (pg.unwrap.content V.! 1).id.toText `shouldBe` "00000000-0000-0000-0000-000000000000"
@@ -72,24 +58,14 @@ spec = aroundAll withTestResources do
               , orderId = Nothing
               }
       pg <-
-        CreateProject.createProjectPostH createPForm
-          & atAuthToBase trSessAndHeader
-          & effToServantHandlerTest trATCtx trLogger
-          & ServantS.runHandler
-          <&> fromRightShow
-          <&> Servant.getResponse
+        toServantResponse trATCtx trSessAndHeader trLogger $ CreateProject.createProjectPostH createPForm
       pg.form.title `shouldBe` "Test Project CI2"
       pg.form.description `shouldBe` "Test Description2"
 
     -- FIXME: marked as pending with xit. Test is faily and should be investigated
     xit "Project in list should have new details" \TestResources{..} -> do
       pg <-
-        ListProjects.listProjectsGetH
-          & atAuthToBase trSessAndHeader
-          & effToServantHandlerTest trATCtx trLogger
-          & ServantS.runHandler
-          <&> fromRightShow
-          <&> Servant.getResponse
+        toServantResponse trATCtx trSessAndHeader trLogger $ ListProjects.listProjectsGetH
       length pg.unwrap.content `shouldBe` 2
       (pg.unwrap.content V.! 0).id.toText `shouldBe` "00000000-0000-0000-0000-000000000001"
       (pg.unwrap.content V.! 0).title `shouldBe` "Test Project CI2"

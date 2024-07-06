@@ -9,9 +9,6 @@ import Pages.Projects.ManageMembers qualified as ManageMembers
 import Pkg.TestUtils
 import Relude
 import Relude.Unsafe qualified as Unsafe
-import Servant qualified
-import Servant.Server qualified as ServantS
-import System.Types (atAuthToBase, effToServantHandlerTest)
 import Test.Hspec
 
 
@@ -29,12 +26,7 @@ spec = aroundAll withTestResources do
               , permissions = [ProjectMembers.PAdmin]
               }
       pg <-
-        ManageMembers.manageMembersPostH testPid member
-          & atAuthToBase trSessAndHeader
-          & effToServantHandlerTest trATCtx trLogger
-          & ServantS.runHandler
-          <&> fromRightShow
-          <&> Servant.getResponse
+        toServantResponse trATCtx trSessAndHeader trLogger $ ManageMembers.manageMembersPostH testPid member
       -- Check if the response contains the newly added member
       "example@gmail.com" `shouldSatisfy` (`elem` (pg.unwrapPost & V.toList & map (.email)))
 
@@ -45,12 +37,7 @@ spec = aroundAll withTestResources do
               , permissions = [ProjectMembers.PView]
               }
       pg <-
-        ManageMembers.manageMembersPostH testPid member
-          & atAuthToBase trSessAndHeader
-          & effToServantHandlerTest trATCtx trLogger
-          & ServantS.runHandler
-          <&> fromRightShow
-          <&> Servant.getResponse
+        toServantResponse trATCtx trSessAndHeader trLogger $ ManageMembers.manageMembersPostH testPid member
 
       -- Check if the member's permission is updated
       case pg of
@@ -64,12 +51,7 @@ spec = aroundAll withTestResources do
 
     it "Get members" \TestResources{..} -> do
       pg <-
-        ManageMembers.manageMembersGetH testPid
-          & atAuthToBase trSessAndHeader
-          & effToServantHandlerTest trATCtx trLogger
-          & ServantS.runHandler
-          <&> fromRightShow
-          <&> Servant.getResponse
+        toServantResponse trATCtx trSessAndHeader trLogger $ ManageMembers.manageMembersGetH testPid
 
       -- Check if the response contains the expected members
       case pg of
@@ -86,12 +68,7 @@ spec = aroundAll withTestResources do
               , permissions = []
               }
       pg <-
-        ManageMembers.manageMembersPostH testPid member
-          & atAuthToBase trSessAndHeader
-          & effToServantHandlerTest trATCtx trLogger
-          & ServantS.runHandler
-          <&> fromRightShow
-          <&> Servant.getResponse
+        toServantResponse trATCtx trSessAndHeader trLogger $ ManageMembers.manageMembersPostH testPid member
 
       -- Check if the member is deleted
       case pg of

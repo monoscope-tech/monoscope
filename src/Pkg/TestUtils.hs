@@ -13,6 +13,7 @@ module Pkg.TestUtils (
   runAllBackgroundJobs,
   refreshMaterializedView,
   setBjRunAtInThePast,
+  toServantResponse,
 ) where
 
 import Data.Default (Default (..))
@@ -45,7 +46,7 @@ import Effectful.Error.Static (runErrorNoCallStack)
 import Log qualified
 import NeatInterpolation (text)
 import System.Config qualified as Config
-import System.Types (ATBackgroundCtx, runBackground)
+import System.Types (ATAuthCtx, ATBackgroundCtx, RespHeaders, atAuthToBase, effToServantHandlerTest, runBackground)
 
 import Log.Backend.StandardOutput.Bulk qualified as LogBulk
 import Models.Projects.Projects qualified as Projects
@@ -54,6 +55,7 @@ import OddJobs.Job (Job)
 import Relude
 import RequestMessages qualified
 import Servant qualified
+import Servant.Server qualified as ServantS
 import System.Clock (TimeSpec (TimeSpec))
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Directory (getFileSize, listDirectory)
@@ -179,13 +181,19 @@ withTestResources f = withSetup $ \pool -> LogBulk.withBulkStdOutLogger \logger 
       }
 
 
--- toServantResponse :: TestResources -> ATAuthCtx a -> ServantS.Handler a
--- toServantResponse TestResources{trATCtx, trSessAndHeader, trLogger} k =
---   atAuthToBase trSessAndHeader k
---     & effToServantHandlerTest trATCtx trLogger
---     & ServantS.runHandler
---     <&> fromRightShow
---     <&> Servant.getResponse
+toServantResponse
+  :: AuthContext
+  -> Servant.Headers '[Servant.Header "Set-Cookie" SetCookie] Sessions.Session
+  -> Log.Logger
+  -> ATAuthCtx (RespHeaders a)
+  -> IO a
+toServantResponse trATCtx trSessAndHeader trLogger k = do
+  atAuthToBase trSessAndHeader k
+    & effToServantHandlerTest trATCtx trLogger
+    & ServantS.runHandler
+    <&> fromRightShow
+    <&> Servant.getResponse
+
 
 msg1 :: Text -> Value
 msg1 timestamp =

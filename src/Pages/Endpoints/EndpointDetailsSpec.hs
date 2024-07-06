@@ -14,9 +14,6 @@ import ProcessMessage (processRequestMessages)
 import Relude
 import Relude.Unsafe qualified as Unsafe
 import RequestMessages (toXXHash)
-import Servant qualified
-import Servant.Server qualified as ServantS
-import System.Types (atAuthToBase, effToServantHandlerTest)
 import Test.Hspec (Spec, aroundAll, describe, it, shouldBe)
 
 
@@ -30,12 +27,7 @@ spec = aroundAll withTestResources do
     it "should return an empty list" \TestResources{..} -> do
       enpId <- Endpoints.EndpointId <$> UUID.nextRandom
       pg <-
-        EndpointDetails.endpointDetailsH testPid enpId Nothing Nothing Nothing Nothing Nothing
-          & atAuthToBase trSessAndHeader
-          & effToServantHandlerTest trATCtx trLogger
-          & ServantS.runHandler
-          <&> fromRightShow
-          <&> Servant.getResponse
+        toServantResponse trATCtx trSessAndHeader trLogger $ EndpointDetails.endpointDetailsH testPid enpId Nothing Nothing Nothing Nothing Nothing
       case pg of
         EndpointDetails.EndpointsDetailsNotFound (PageCtx _ ()) -> do
           1 `shouldBe` 1
@@ -46,9 +38,9 @@ spec = aroundAll withTestResources do
       let reqMsg1 = Unsafe.fromJust $ convert $ testRequestMsgs.reqMsg1 nowTxt
       let reqMsg2 = Unsafe.fromJust $ convert $ testRequestMsgs.reqMsg2 nowTxt
       let msgs =
-            concat
-              $ replicate 100
-              $ [ ("m1", reqMsg1)
+            concat $
+              replicate 100 $
+                [ ("m1", reqMsg1)
                 , ("m2", reqMsg2)
                 ]
       _ <- runTestBackground trATCtx $ processRequestMessages msgs
@@ -66,12 +58,7 @@ spec = aroundAll withTestResources do
       let endpointDuration = (476434 * 100) / 1000000 -- duration in request message example
       let totalTimeProj = endpointDuration + ((103636077 * 100) / 1000000)
       pg <-
-        EndpointDetails.endpointDetailsH testPid endpointId Nothing Nothing Nothing Nothing Nothing
-          & atAuthToBase trSessAndHeader
-          & effToServantHandlerTest trATCtx trLogger
-          & ServantS.runHandler
-          <&> fromRightShow
-          <&> Servant.getResponse
+        toServantResponse trATCtx trSessAndHeader trLogger $ EndpointDetails.endpointDetailsH testPid endpointId Nothing Nothing Nothing Nothing Nothing
       case pg of
         EndpointDetails.EndpointsDetailsMain (PageCtx _ content) -> do
           let (pid, _paramInput, _currTime, endpt, enpStats, _shapesWithFieldsMap, _fieldsMap, _shapesList, _shapeHashM, _reqLatenciesRolledByStepsJ, _) = content

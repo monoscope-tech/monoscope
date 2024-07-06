@@ -12,9 +12,6 @@ import Models.Projects.Projects qualified as Projects
 import Pages.BodyWrapper (PageCtx (..))
 import Pkg.TestUtils
 import Relude
-import Servant qualified
-import Servant.Server qualified as ServantS
-import System.Types (atAuthToBase, effToServantHandlerTest)
 
 import Pkg.Components.ItemsList qualified as ItemsList
 
@@ -69,31 +66,16 @@ spec = aroundAll withTestResources do
   describe "Check Test Collections" do
     it "should return an empty list" \TestResources{..} -> do
       (PageCtx _ (ItemsList.ItemsPage _ collections)) <-
-        Testing.testingGetH testPid Nothing
-          & atAuthToBase trSessAndHeader
-          & effToServantHandlerTest trATCtx trLogger
-          & ServantS.runHandler
-          <&> fromRightShow
-          <&> Servant.getResponse
+        toServantResponse trATCtx trSessAndHeader trLogger $ Testing.testingGetH testPid Nothing
       length collections `shouldBe` 0
 
     it "should add test collection" \TestResources{..} -> do
       (PageCtx _ (ItemsList.ItemsPage _ collections)) <-
-        Testing.testingPostH testPid collection
-          & atAuthToBase trSessAndHeader
-          & effToServantHandlerTest trATCtx trLogger
-          & ServantS.runHandler
-          <&> fromRightShow
-          <&> Servant.getResponse
+        toServantResponse trATCtx trSessAndHeader trLogger $ Testing.testingPostH testPid collection
       length collections `shouldBe` 0 -- Return active collections but add collection is inactive by default
     it "should get inactive collections and schedule collection" \TestResources{..} -> do
       (PageCtx _ (ItemsList.ItemsPage _ collections)) <-
-        Testing.testingGetH testPid (Just "Inactive")
-          & atAuthToBase trSessAndHeader
-          & effToServantHandlerTest trATCtx trLogger
-          & ServantS.runHandler
-          <&> fromRightShow
-          <&> Servant.getResponse
+        toServantResponse trATCtx trSessAndHeader trLogger $ Testing.testingGetH testPid (Just "Inactive")
       length collections `shouldBe` 1
       let col = V.head $ (\(Testing.CollectionListItemVM _ co) -> co) <$> collections
       col.title `shouldBe` "Test Collection"
@@ -102,21 +84,11 @@ spec = aroundAll withTestResources do
       col.schedule `shouldBe` "5 hours"
       col.isScheduled `shouldBe` False
       _ <-
-        TestCollectionEditor.collectionStepsUpdateH testPid (col.id) scheduleCollection
-          & atAuthToBase trSessAndHeader
-          & effToServantHandlerTest trATCtx trLogger
-          & ServantS.runHandler
-          <&> fromRightShow
-          <&> Servant.getResponse
+        toServantResponse trATCtx trSessAndHeader trLogger $ TestCollectionEditor.collectionStepsUpdateH testPid (col.id) scheduleCollection
       col.description `shouldBe` "get todos"
     it "should get active collections" \TestResources{..} -> do
       (PageCtx _ (ItemsList.ItemsPage _ collections)) <-
-        Testing.testingGetH testPid Nothing
-          & atAuthToBase trSessAndHeader
-          & effToServantHandlerTest trATCtx trLogger
-          & ServantS.runHandler
-          <&> fromRightShow
-          <&> Servant.getResponse
+        toServantResponse trATCtx trSessAndHeader trLogger $ Testing.testingGetH testPid Nothing
       length collections `shouldBe` 1
       let col = V.head $ (\(Testing.CollectionListItemVM _ co) -> co) <$> collections
       col.title `shouldBe` "Test Collection"

@@ -11,30 +11,11 @@ import Pkg.TestUtils
 import Pages.Monitors.Alerts qualified as Alerts
 import Relude
 import Relude.Unsafe qualified as Unsafe
-import Servant qualified
-import Servant.Server qualified as ServantS
-import System.Types (atAuthToBase, effToServantHandlerTest)
 
 
 testPid :: Projects.ProjectId
 testPid = Projects.ProjectId UUID.nil
 
-
---   , alertThreshold :: Int
---   , warningThreshold :: Maybe Text
---   , recipientEmails :: [Text]
---   , recipientSlacks :: [Text]
---   , recipientEmailAll :: Maybe Bool
---   , -- , checkIntervalMins :: Int
---     direction :: Text
---   , title :: Text
---   , severity :: Text
---   , subject :: Text
---   , message :: Text
---   , query :: Text
---   , since :: Text
---   , from :: Text
---   , to :: Text
 
 alertId :: UUID.UUID
 alertId = UUID.nil
@@ -66,12 +47,7 @@ spec = aroundAll withTestResources do
   describe "Check Alerts" do
     it "should return an empty list" \TestResources{..} -> do
       pg <-
-        Alerts.alertListGetH testPid
-          & atAuthToBase trSessAndHeader
-          & effToServantHandlerTest trATCtx trLogger
-          & ServantS.runHandler
-          <&> fromRightShow
-          <&> Servant.getResponse
+        toServantResponse trATCtx trSessAndHeader trLogger $ Alerts.alertListGetH testPid
       case pg of
         Alerts.AlertListGet (monitors) -> do
           length monitors `shouldBe` 0
@@ -79,24 +55,14 @@ spec = aroundAll withTestResources do
 
     it "should insert an alert" \TestResources{..} -> do
       pg <-
-        Alerts.alertUpsertPostH testPid alertForm
-          & atAuthToBase trSessAndHeader
-          & effToServantHandlerTest trATCtx trLogger
-          & ServantS.runHandler
-          <&> fromRightShow
-          <&> Servant.getResponse
+        toServantResponse trATCtx trSessAndHeader trLogger $ Alerts.alertUpsertPostH testPid alertForm
       case pg of
         Alerts.AlertNoContent d -> do
           d `shouldBe` ""
         _ -> fail "unexpected response"
     it "should return a list with the inserted alert" \TestResources{..} -> do
       pg <-
-        Alerts.alertListGetH testPid
-          & atAuthToBase trSessAndHeader
-          & effToServantHandlerTest trATCtx trLogger
-          & ServantS.runHandler
-          <&> fromRightShow
-          <&> Servant.getResponse
+        toServantResponse trATCtx trSessAndHeader trLogger $ Alerts.alertListGetH testPid
       case pg of
         Alerts.AlertListGet (monitors) -> do
           length monitors `shouldBe` 1
@@ -107,12 +73,7 @@ spec = aroundAll withTestResources do
         _ -> fail "unexpected response"
     it "should get single alert" \TestResources{..} -> do
       pg <-
-        Alerts.alertSingleGetH testPid (QueryMonitorId alertId)
-          & atAuthToBase trSessAndHeader
-          & effToServantHandlerTest trATCtx trLogger
-          & ServantS.runHandler
-          <&> fromRightShow
-          <&> Servant.getResponse
+        toServantResponse trATCtx trSessAndHeader trLogger $ Alerts.alertSingleGetH testPid (QueryMonitorId alertId)
       case pg of
         Alerts.AlertSingle pid monitorM -> do
           isJust monitorM `shouldBe` True

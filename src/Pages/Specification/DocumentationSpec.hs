@@ -10,9 +10,6 @@ import Pages.BodyWrapper (PageCtx (..))
 import Pages.Specification.Documentation qualified as Documentation
 import Pkg.TestUtils
 import Relude
-import Servant qualified
-import Servant.Server qualified as ServantS
-import System.Types (atAuthToBase, effToServantHandlerTest)
 import Test.Hspec
 
 
@@ -26,22 +23,12 @@ spec = aroundAll withTestResources do
     it "should add swagger" \TestResources{..} -> do
       let swagForm = Documentation.SwaggerForm swg1 "Swagger"
       (Documentation.DocumentationMut msg) <-
-        Documentation.documentationPostH testPid swagForm
-          & atAuthToBase trSessAndHeader
-          & effToServantHandlerTest trATCtx trLogger
-          & ServantS.runHandler
-          <&> fromRightShow
-          <&> Servant.getResponse
+        toServantResponse trATCtx trSessAndHeader trLogger $ Documentation.documentationPostH testPid swagForm
       msg `shouldBe` "Swagger added successfully"
 
     it "should get swagger" \TestResources{..} -> do
       (PageCtx _ (Documentation.DocumentationGet pid swaggers swaggerID jsonString)) <-
-        Documentation.documentationGetH testPid Nothing
-          & atAuthToBase trSessAndHeader
-          & effToServantHandlerTest trATCtx trLogger
-          & ServantS.runHandler
-          <&> fromRightShow
-          <&> Servant.getResponse
+        toServantResponse trATCtx trSessAndHeader trLogger $ Documentation.documentationGetH testPid Nothing
       let jsonVal = decodeStrict (encodeUtf8 jsonString)
       let swagVal = decodeStrict (encodeUtf8 swg1)
       swagVal `shouldBe` jsonVal
