@@ -388,7 +388,7 @@ SELECT create_hypertable('apis.request_dumps', by_range('created_at', INTERVAL '
 SELECT add_retention_policy('apis.request_dumps',INTERVAL '1 months',true);
 CREATE INDEX IF NOT EXISTS idx_apis_request_dumps_project_id ON apis.request_dumps(project_id, created_at DESC);
 ALTER TABLE apis.request_dumps SET (timescaledb.compress, timescaledb.compress_orderby = 'created_at DESC', timescaledb.compress_segmentby = 'project_id');
-SELECT add_compression_policy('apis.request_dumps', INTERVAL '7d');
+SELECT add_compression_policy('apis.request_dumps', INTERVAL '2d');
 CREATE INDEX IF NOT EXISTS idx_apis_request_dumps_project_id_parent_id ON apis.request_dumps(project_id, parent_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_apis_request_dumps_project_id_endpoint_hash ON apis.request_dumps(project_id, endpoint_hash, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_apis_request_dumps_project_id_shape_hash ON apis.request_dumps(project_id, shape_hash, created_at DESC);
