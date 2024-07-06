@@ -160,15 +160,15 @@ withTestResources f = withSetup $ \pool -> LogBulk.withBulkStdOutLogger \logger 
   projectCache <- newCache (Just $ TimeSpec (60 * 60) 0)
   sessAndHeader <- testSessionHeader pool
   let atAuthCtx =
-        AuthContext (def @EnvConfig) pool pool projectCache
-          $ ( (def :: EnvConfig)
-                { apiKeyEncryptionSecretKey = "apitoolkit123456123456apitoolkit"
-                , convertkitApiKey = ""
-                , convertkitApiSecret = ""
-                , requestPubsubTopics = ["apitoolkit-prod-default"]
-                , enableBackgroundJobs = True
-                }
-            )
+        AuthContext (def @EnvConfig) pool pool projectCache $
+          ( (def :: EnvConfig)
+              { apiKeyEncryptionSecretKey = "apitoolkit123456123456apitoolkit"
+              , convertkitApiKey = ""
+              , convertkitApiSecret = ""
+              , requestPubsubTopics = ["apitoolkit-prod-default"]
+              , enableBackgroundJobs = True
+              }
+          )
   f
     TestResources
       { trPool = pool
@@ -178,6 +178,14 @@ withTestResources f = withSetup $ \pool -> LogBulk.withBulkStdOutLogger \logger 
       , trLogger = logger
       }
 
+
+-- toServantResponse :: TestResources -> ATAuthCtx a -> ServantS.Handler a
+-- toServantResponse TestResources{trATCtx, trSessAndHeader, trLogger} k =
+--   atAuthToBase trSessAndHeader k
+--     & effToServantHandlerTest trATCtx trLogger
+--     & ServantS.runHandler
+--     <&> fromRightShow
+--     <&> Servant.getResponse
 
 msg1 :: Text -> Value
 msg1 timestamp =
