@@ -10,9 +10,6 @@ import Pkg.TestUtils
 import ProcessMessage (processRequestMessages)
 import Relude
 import Relude.Unsafe qualified as Unsafe
-import Servant qualified
-import Servant.Server qualified as ServantS
-import System.Types (atAuthToBase, effToServantHandlerTest)
 import Test.Hspec
 
 
@@ -29,9 +26,9 @@ spec = aroundAll withTestResources do
       let reqMsg1 = Unsafe.fromJust $ convert $ testRequestMsgs.reqMsg1 nowTxt
       let reqMsg2 = Unsafe.fromJust $ convert $ testRequestMsgs.reqMsg2 nowTxt
       let msgs =
-            concat
-              $ replicate 100
-              $ [ ("m1", reqMsg1)
+            concat $
+              replicate 100 $
+                [ ("m1", reqMsg1)
                 , ("m2", reqMsg2)
                 ]
       _ <- runTestBackground trATCtx $ processRequestMessages msgs
@@ -39,12 +36,7 @@ spec = aroundAll withTestResources do
       _ <- withPool trPool $ refreshMaterializedView "apis.project_request_stats"
 
       (PageCtx _ dat) <-
-        dashboardGetH testPid Nothing Nothing Nothing
-          & atAuthToBase trSessAndHeader
-          & effToServantHandlerTest trATCtx trLogger
-          & ServantS.runHandler
-          <&> fromRightShow
-          <&> Servant.getResponse
+        toServantResponse trATCtx trSessAndHeader trLogger $ dashboardGetH testPid Nothing Nothing Nothing
       let (pid, _paramInput, _currTime, projectRequestStats, newEndpoints, _reqLatenciesRolledByStepsJ, (_fromD, _toD), freeTierExceeded, hasRequests) = dat.unwrap
 
       testPid `shouldBe` pid
