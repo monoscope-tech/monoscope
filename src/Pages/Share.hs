@@ -1,14 +1,12 @@
-module Pages.Share (ReqForm, shareLinkPostH, shareLinkGetH, ShareLinkGet, ShareLinkPost) where
+module Pages.Share (ReqForm (..), shareLinkPostH, shareLinkGetH, ShareLinkGet (..), ShareLinkPost (..)) where
 
-import Data.Aeson qualified as AE
 import Data.Default (def)
 import Data.Text ()
-import Data.Time (UTCTime, ZonedTime, getZonedTime)
+import Data.Time (UTCTime, getZonedTime)
 import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUIDV4
 import Database.PostgreSQL.Entity.DBT (QueryNature (Insert, Select), execute, queryOne)
-import Database.PostgreSQL.Entity.Types (CamelToSnake, Entity, FieldModifiers, GenericEntity, PrimaryKey, Schema, TableName)
-import Database.PostgreSQL.Simple (FromRow, Only (Only), ToRow)
+import Database.PostgreSQL.Simple (Only (Only))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
 import Lucid
@@ -30,20 +28,6 @@ data ReqForm = ReqForm
   }
   deriving stock (Show, Generic)
   deriving anyclass (FromForm)
-
-
-data Swagger = Swagger
-  { id :: UUID.UUID
-  , projectId :: Projects.ProjectId
-  , createdAt :: ZonedTime
-  , updatedAt :: ZonedTime
-  , swaggerJson :: AE.Value
-  }
-  deriving stock (Show, Generic)
-  deriving anyclass (FromRow, ToRow)
-  deriving
-    (Entity)
-    via (GenericEntity '[Schema "apis", TableName "swagger_jsons", PrimaryKey "id", FieldModifiers '[CamelToSnake]] Swagger)
 
 
 shareLinkPostH :: Projects.ProjectId -> ReqForm -> ATAuthCtx (RespHeaders (ShareLinkPost))

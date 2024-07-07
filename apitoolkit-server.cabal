@@ -122,6 +122,7 @@ library
       Pages.Reports
       Pages.ReportsSpec
       Pages.Share
+      Pages.ShareSpec
       Pages.SlackInstall
       Pages.Specification.Documentation
       Pages.Specification.DocumentationSpec
