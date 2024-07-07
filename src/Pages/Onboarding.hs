@@ -1,6 +1,6 @@
 {-# OPTIONS_GHC -Wno-unused-do-bind #-}
 
-module Pages.Onboarding (onboardingGetH, integrateApiToolkit, tabs, contentHeader, OnboardingGet) where
+module Pages.Onboarding (onboardingGetH, integrateApiToolkit, tabs, contentHeader, OnboardingGet (..)) where
 
 import Data.Default (def)
 import Data.Vector qualified as V
