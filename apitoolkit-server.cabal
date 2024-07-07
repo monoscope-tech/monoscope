@@ -117,6 +117,7 @@ library
       Pages.Projects.Server
       Pages.RedactedFields
       Pages.Reports
+      Pages.ReportsSpec
       Pages.Share
       Pages.SlackInstall
       Pages.Specification.Documentation

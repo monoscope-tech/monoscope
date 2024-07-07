@@ -162,15 +162,15 @@ withTestResources f = withSetup $ \pool -> LogBulk.withBulkStdOutLogger \logger 
   projectCache <- newCache (Just $ TimeSpec (60 * 60) 0)
   sessAndHeader <- testSessionHeader pool
   let atAuthCtx =
-        AuthContext (def @EnvConfig) pool pool projectCache $
-          ( (def :: EnvConfig)
-              { apiKeyEncryptionSecretKey = "apitoolkit123456123456apitoolkit"
-              , convertkitApiKey = ""
-              , convertkitApiSecret = ""
-              , requestPubsubTopics = ["apitoolkit-prod-default"]
-              , enableBackgroundJobs = True
-              }
-          )
+        AuthContext (def @EnvConfig) pool pool projectCache
+          $ ( (def :: EnvConfig)
+                { apiKeyEncryptionSecretKey = "apitoolkit123456123456apitoolkit"
+                , convertkitApiKey = ""
+                , convertkitApiSecret = ""
+                , requestPubsubTopics = ["apitoolkit-prod-default"]
+                , enableBackgroundJobs = True
+                }
+            )
   f
     TestResources
       { trPool = pool

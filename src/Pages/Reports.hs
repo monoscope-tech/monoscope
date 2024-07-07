@@ -14,8 +14,8 @@ module Pages.Reports (
   reportEmail,
   ReportAnomalyType (..),
   PerformanceReport (..),
-  ReportsGet,
-  ReportsPost,
+  ReportsGet (..),
+  ReportsPost (..),
 )
 where
 
@@ -107,14 +107,14 @@ reportsPostH pid t = do
   _ <- Sessions.sessionAndProject pid
   apiKeys <- dbtToEff $ Projects.updateProjectReportNotif pid t
   addSuccessToast "Report notifications updated Successfully" Nothing
-  addRespHeaders $ ReportsPost
+  addRespHeaders $ ReportsPost "updated"
 
 
-data ReportsPost = ReportsPost
+data ReportsPost = ReportsPost Text
 
 
 instance ToHtml ReportsPost where
-  toHtml ReportsPost = ""
+  toHtml (ReportsPost _t) = ""
   toHtmlRaw = toHtml
 
 
