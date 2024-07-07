@@ -1,4 +1,4 @@
-module Pages.Api (apiGetH, apiPostH, apiDeleteH, GenerateAPIKeyForm (..), ApiGet, ApiMut) where
+module Pages.Api (apiGetH, apiPostH, apiDeleteH, GenerateAPIKeyForm (..), ApiGet (..), ApiMut (..)) where
 
 import Data.ByteString.Base64 qualified as B64
 import Data.Default (def)

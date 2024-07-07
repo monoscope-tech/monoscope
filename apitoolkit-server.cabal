@@ -58,6 +58,7 @@ library
       Pages.Anomalies.Routes
       Pages.Anomalies.Server
       Pages.Api
+      Pages.ApiSpec
       Pages.AutoComplete
       Pages.BodyWrapper
       Pages.Charts.Charts
