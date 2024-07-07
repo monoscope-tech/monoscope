@@ -68,6 +68,7 @@ library
       Pages.Endpoints.EndpointDetails
       Pages.Endpoints.EndpointDetailsSpec
       Pages.Endpoints.EndpointList
+      Pages.Endpoints.EndpointListSpec
       Pages.Endpoints.Outgoing
       Pages.Endpoints.OutgoingSpec
       Pages.Endpoints.Routes
