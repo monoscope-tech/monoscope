@@ -1,4 +1,4 @@
-module Pages.Fields.FieldDetails (fieldPutH, EditFieldForm, FieldPut) where
+module Pages.Fields.FieldDetails (fieldPutH, EditFieldForm (..), FieldPut) where
 
 import Data.Aeson qualified as AE
 import Data.Digest.XXHash (xxHash)

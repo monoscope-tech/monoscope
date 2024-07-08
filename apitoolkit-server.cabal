@@ -75,6 +75,7 @@ library
       Pages.Endpoints.Routes
       Pages.Endpoints.Server
       Pages.Fields.FieldDetails
+      Pages.Fields.FieldDetailsSpec
       Pages.IntegrationDemos.AdonisJS
       Pages.IntegrationDemos.Django
       Pages.IntegrationDemos.DotNet
