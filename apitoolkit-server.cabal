@@ -94,6 +94,7 @@ library
       Pages.IntegrationDemos.Springboot
       Pages.IntegrationDemos.Symfony
       Pages.IntegrationGuides
+      Pages.IntegrationGuidesSpec
       Pages.Log
       Pages.LogExplorer.LogItem
       Pages.LogExplorer.LogItemSpec

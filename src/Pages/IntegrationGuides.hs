@@ -1,4 +1,4 @@
-module Pages.IntegrationGuides (getH, IntegrationsGet) where
+module Pages.IntegrationGuides (getH, IntegrationsGet (..)) where
 
 import Data.Default (Default (def))
 import Data.Vector qualified as V
