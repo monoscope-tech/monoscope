@@ -1,4 +1,4 @@
-module Pages.Survey (surveyGetH, surveyPutH, SurveyForm, SurveyGet, SurveyPut) where
+module Pages.Survey (surveyGetH, surveyPutH, SurveyForm, SurveyGet (..), SurveyPut) where
 
 import BackgroundJobs qualified
 import Data.Aeson (

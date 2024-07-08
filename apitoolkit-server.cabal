@@ -131,6 +131,7 @@ library
       Pages.Specification.Routes
       Pages.Specification.Server
       Pages.Survey
+      Pages.SurveySpec
       Pkg.Components
       Pkg.Components.ExternalHeadScripts
       Pkg.Components.ItemsList
