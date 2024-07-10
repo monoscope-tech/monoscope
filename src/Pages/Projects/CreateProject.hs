@@ -326,7 +326,7 @@ processProjectPostForm cpRaw = do
 -- createProjectBody is the core html view
 createProjectBody :: Sessions.PersistentSession -> EnvConfig -> Bool -> CreateProjectForm -> CreateProjectFormError -> Html ()
 createProjectBody sess envCfg isUpdate cp cpe = do
-  let paymentPlan = if cp.paymentPlan == "" then "UsageBased" else cp.paymentPlan
+  let paymentPlan = if cp.paymentPlan == "" then "GraduatedPricing" else cp.paymentPlan
   section_ [id_ "main-content", class_ "p-3 py-5 sm:p-6 overflow-y-scroll h-full"] do
     div_ [class_ "mx-auto", style_ "max-width:800px"] do
       h2_ [class_ "text-slate-700 text-3xl font-medium mb-5"] $ toHtml @String $ if isUpdate then "Project Settings" else "Create Project"
@@ -404,7 +404,7 @@ createProjectBody sess envCfg isUpdate cp cpe = do
                           span_ [class_ "text-2xl text-blue-700"] $ toHtml price
                           case value of
                             "Free" -> do
-                              span_ [class_ "text-slate-500"] "/month"
+                              span_ [class_ "text-slate-500"] "/20K request per month"
                             _ -> span_ [class_ "text-slate-500"] "/10k requests"
                         checkList value team
                 let isSelected = paymentPlan == "GraduatedPricing"
@@ -432,12 +432,12 @@ createProjectBody sess envCfg isUpdate cp cpe = do
                         input_ [onchange_ "handlePlanToggle(e)", value_ "annual", type_ "radio", name_ "plans", role_ "tab", class_ "tab", term "aria-label" "Annual"]
                     div_ [class_ "text-lg py-3 px-2"] do
                       span_ [class_ "text-2xl text-blue-700", id_ "price"] $ toHtml "$19"
-                      span_ [class_ "text-slate-500", id_ "num_requests"] "/200k"
+                      span_ [class_ "text-slate-500", id_ "num_requests"] "/400k"
                       span_ [class_ "text-slate-500 mr-3"] " requests"
                       p_ [class_ "text-blue-500 inline-block mt-0 text-sm text-green-500 font-semibold"] do
                         span_ [] "save "
                         span_ [id_ "save_container"] "$1/month"
-                      span_ [class_ "text-blue-500 text-sm block mt-2"] "then $1 per 10k requests"
+                      span_ [class_ "text-blue-500 text-sm block mt-2"] "then $1 per 20k requests"
                     div_ [] do
                       input_ [type_ "range", min_ "0", max_ "6", step_ "1", value_ "0", class_ "range range-primary range-sm", id_ "price_range"]
 
@@ -533,10 +533,10 @@ createProjectBody sess envCfg isUpdate cp cpe = do
                let plan = "month";
                const prices = [19, 49, 88, 215, 420, 615, 800]
                const saves = [1, 6, 12, 35, 80, 135, 200]
-               const reqs = ["200k","550k", "1M", "2.5M", "5M", "7.5M", "10M"]
+               const reqs = ["400k","1.1M", "2M", "5M", "10M", "15M", "10M"]
                const pricesYr = [200, 588, 1056, 2580, 5000, 5000, 5000]
                const savesYr = [28, 72,144,420,960,960,960]
-               const reqsYr = ["2.4M", "6.6M", "12M", "30M", "60M", "60M", "60M"]
+               const reqsYr = ["4.8M", "13.2M", "24M", "60M", "120M", "120M", "120M"]
                const urls = $lmnUrls
                const urlsAnnual = $lmnUrlAnnual
                const priceContainer = document.querySelector("#price")
