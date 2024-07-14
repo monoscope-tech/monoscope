@@ -384,11 +384,11 @@ CREATE TABLE IF NOT EXISTS apis.request_dumps
     PRIMARY KEY(project_id,created_at,id)
 );
 SELECT manage_updated_at('apis.request_dumps');
-SELECT create_hypertable('apis.request_dumps', by_range('created_at', INTERVAL '1 day'), migrate_data => true);
+SELECT create_hypertable('apis.request_dumps', by_range('created_at', INTERVAL '4 hours'), migrate_data => true);
 SELECT add_retention_policy('apis.request_dumps',INTERVAL '14 days',true);
 CREATE INDEX IF NOT EXISTS idx_apis_request_dumps_project_id ON apis.request_dumps(project_id, created_at DESC);
 ALTER TABLE apis.request_dumps SET (timescaledb.compress, timescaledb.compress_orderby = 'created_at DESC', timescaledb.compress_segmentby = 'project_id');
-SELECT add_compression_policy('apis.request_dumps', INTERVAL '2d');
+SELECT add_compression_policy('apis.request_dumps', INTERVAL '8 hours');
 CREATE INDEX IF NOT EXISTS idx_apis_request_dumps_project_id_parent_id ON apis.request_dumps(project_id, parent_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_apis_request_dumps_project_id_endpoint_hash ON apis.request_dumps(project_id, endpoint_hash, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_apis_request_dumps_project_id_shape_hash ON apis.request_dumps(project_id, shape_hash, created_at DESC);

@@ -38,6 +38,7 @@ import Database.PostgreSQL.Simple.ToField (Action (..), ToField (toField))
 import Database.PostgreSQL.Transact (DBT)
 import Deriving.Aeson qualified as DAE
 import GHC.Records (HasField (getField))
+import Hasql.Interpolate qualified as Hasql
 import Models.Users.Users qualified as Users
 import Relude
 import Web.HttpApiData
@@ -47,6 +48,7 @@ newtype ProjectId = ProjectId {unProjectId :: UUID.UUID}
   deriving stock (Generic, Show, Read)
   deriving newtype (Eq, Ord, ToJSON, FromJSON, FromField, ToField, FromHttpApiData, Default, Hashable, NFData)
   deriving anyclass (FromRow, ToRow)
+  deriving newtype (Hasql.EncodeValue)
 
 
 instance HasField "unwrap" ProjectId UUID.UUID where

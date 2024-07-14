@@ -33,7 +33,7 @@ import Data.Aeson qualified as AE
 import Data.Default
 import Data.Default.Instances ()
 import Data.Text qualified as T
-import Data.Time (CalendarDiffTime, UTCTime, ZonedTime, getCurrentTime)
+import Data.Time (DiffTime, UTCTime, ZonedTime, getCurrentTime)
 import Data.Time.Format
 import Data.Time.Format.ISO8601 (ISO8601 (iso8601Format), formatShow)
 import Data.UUID qualified as UUID
@@ -46,9 +46,12 @@ import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.ToField (ToField (toField))
 import Database.PostgreSQL.Simple.Types (Query (Query))
-import Database.PostgreSQL.Transact (DBT, executeMany)
+import Database.PostgreSQL.Transact (DBT)
 import Database.PostgreSQL.Transact qualified as DBT
 import Deriving.Aeson qualified as DAE
+import Hasql.Encoders qualified as Hasql
+import Hasql.Interpolate qualified as Hasql
+import Hasql.Statement qualified as Hasql
 import Models.Apis.Fields.Query ()
 import Models.Projects.Projects qualified as Projects
 import NeatInterpolation (text)
@@ -213,7 +216,7 @@ data ATError = ATError
   , requestMethod :: Maybe Text
   , requestPath :: Maybe Text
   }
-  deriving stock (Show, Generic, Eq)
+  deriving stock (Show, Generic)
   deriving anyclass (NFData, Default)
   deriving
     (AE.FromJSON, AE.ToJSON)
@@ -237,37 +240,41 @@ data RequestDump = RequestDump
   , host :: Text
   , urlPath :: Text
   , rawUrl :: Text
-  , pathParams :: AE.Value
+  , pathParams :: Hasql.AsJsonb AE.Value
   , method :: Text
   , referer :: Text
-  , protoMajor :: Int
-  , protoMinor :: Int
-  , duration :: CalendarDiffTime
-  , statusCode :: Int
+  , protoMajor :: Int64
+  , protoMinor :: Int64
+  , duration :: DiffTime
+  , statusCode :: Int64
   , --
-    queryParams :: AE.Value
-  , requestHeaders :: AE.Value
-  , responseHeaders :: AE.Value
-  , requestBody :: AE.Value
-  , responseBody :: AE.Value
+    queryParams :: Hasql.AsJsonb AE.Value
+  , requestHeaders :: Hasql.AsJsonb AE.Value
+  , responseHeaders :: Hasql.AsJsonb AE.Value
+  , requestBody :: Hasql.AsJsonb AE.Value
+  , responseBody :: Hasql.AsJsonb AE.Value
   , --
     endpointHash :: Text
   , shapeHash :: Text
   , formatHashes :: V.Vector Text
   , fieldHashes :: V.Vector Text
-  , durationNs :: Integer
+  , durationNs :: Int64
   , sdkType :: SDKTypes
   , parentId :: Maybe UUID.UUID
   , serviceVersion :: Maybe Text
-  , errors :: AE.Value -- Vector ATError
+  , errors :: Hasql.AsJsonb AE.Value -- Vector ATError
   , tags :: V.Vector Text
   , requestType :: RequestTypes
   }
-  deriving stock (Show, Generic, Eq)
-  deriving anyclass (ToRow, FromRow, NFData)
-  deriving
-    (Entity)
-    via (GenericEntity '[Schema "apis", TableName "request_dumps", PrimaryKey "id", FieldModifiers '[CamelToSnake]] RequestDump)
+  deriving stock (Generic)
+  deriving anyclass (Hasql.EncodeRow)
+
+instance Hasql.EncodeValue SDKTypes where
+  encodeValue = Hasql.enum show
+
+
+instance Hasql.EncodeValue RequestTypes where
+  encodeValue = Hasql.enum show
 
 
 -- Fields to from request dump neccessary for generating performance reports
@@ -282,7 +289,7 @@ data RequestForReport = RequestForReport
   , endpointHash :: Text
   , averageDuration :: Integer
   }
-  deriving stock (Show, Generic, Eq)
+  deriving stock (Show, Generic)
   deriving anyclass (ToRow, FromRow, NFData)
   deriving
     (Entity)
@@ -330,7 +337,7 @@ data RequestDumpLogItem = RequestDumpLogItem
   , tags :: Maybe (V.Vector Text)
   , requestType :: RequestTypes
   }
-  deriving stock (Show, Generic, Eq)
+  deriving stock (Show, Generic)
   deriving anyclass (ToRow, FromRow, NFData)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] RequestDumpLogItem
 
@@ -473,14 +480,88 @@ hasRequest pid = do
   FROM apis.request_dumps where project_id = ?
 ) |]
 
+-- bulkInsertRequestDumps :: Hasql.Statement [RequestDump] ()
+-- bulkInsertRequestDumps = (fmap (uncurryN RequestDump)) [Hasql.resultlessStatement| 
+--     INSERT INTO apis.request_dumps (
+--         id, created_at, updated_at, project_id, host, url_path, raw_url, path_params,
+--         method, referer, proto_major, proto_minor, duration, status_code,
+--         query_params, request_headers, response_headers, request_body, response_body,
+--         endpoint_hash, shape_hash, format_hashes, field_hashes, duration_ns,
+--         sdk_type, parent_id, service_version, errors, tags, request_type
+--     )
+--     SELECT * FROM unnest(
+--         $1::uuid, $2::timestamptz, $3::timestamptz, $4::uuid, $5::text, $6::text,
+--         $7::text, $8::jsonb, $9::text, $10::text, $11::bigint, $12::bigint,
+--         $13::interval, $14::bigint, $15::jsonb, $16::jsonb, $17::jsonb, $18::jsonb,
+--         $19::jsonb, $20::text, $21::text, $22::text, $23::text, $24::bigint,
+--         $25::text, $26::uuid, $27::text, $28::jsonb, $29::text, $30::text
+--     )
+--   |]
+
+-- bulkInsertRequestDumps :: [RequestDump] -> Hasql.Statement () ()
+-- bulkInsertRequestDumps dumps = Hasql.Statement sql encoder D.noResult False
+--   where
+--     sql = "INSERT INTO apis.request_dumps (id, created_at, updated_at, project_id, host, url_path, raw_url, path_params, method, referer, proto_major, proto_minor, duration, status_code, query_params, request_headers, response_headers, request_body, response_body, endpoint_hash, shape_hash, format_hashes, field_hashes, duration_ns, sdk_type, parent_id, service_version, errors, tags, request_type) VALUES " <> valuePlaceholders <> " ON CONFLICT DO NOTHING;"
+--     valuePlaceholders = mconcat $ replicate (length dumps) valuePlaceholder
+--     valuePlaceholder = "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?),"
+--     encoder = Hasql.param (Hasql.array Hasql.nonNullable requestDumpEncoder)
+
+-- [resultlessStatement|insert into "user" (name, email) values ($1 :: text, $2 :: text)|]
+
 
 -- bulkInsertRequestDumps is a very import function because it's what inserts the request dumps into the database.
 -- But it's tied to the literal database structure for performance purposes, so we need ot update this
 -- if we add or remove new columns to the database table.
-bulkInsertRequestDumps :: [RequestDump] -> DBT IO Int64
-bulkInsertRequestDumps = executeMany q
-  where
-    q = [sql| INSERT INTO apis.request_dumps VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING; |]
+-- bulkInsertRequestDumps :: [RequestDump] -> Hasql.Statement () ()
+-- bulkInsertRequestDumps rowsToInsert =
+--   Hasql.interp
+--     True
+--     [Hasql.sql| INSERT INTO apis.request_dumps 
+--     (id, created_at, updated_at, project_id, host, url_path, raw_url, path_params, method, referer, proto_major, proto_minor, duration, status_code, query_params, request_headers, response_headers, request_body, response_body, endpoint_hash, shape_hash, format_hashes, field_hashes, duration_ns, sdk_type, parent_id, service_version, errors, tags, request_type)
+--     SELECT 
+--     a1::uuid, a2::timestamptz, a3::timestamptz, a4::uuid, a5::text, a6::text, a7::text, a8::jsonb, a9::text, a10::text, 
+--     a11::integer, a12::numeric, a13::interval, a14::numeric, a15::jsonb, a16::jsonb, a17::jsonb, a18::jsonb, a19::jsonb, a20::text, a21::text,
+--     string_to_array(trim(both '[]' from a22), ',')::text[],
+--     string_to_array(trim(both '[]' from a23), ',')::text[],
+--     a24::numeric, a25, a26::uuid, a27::text, a28::jsonb, 
+--     string_to_array(trim(both '[]' from a29), ',')::text[],
+--     a30
+--     from ^{Hasql.toTable rowsToInsert} 
+--     AS t(a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11, a12, a13, a14, a15, a16, a17, a18, a19, a20, a21, a22, a23, a24, a25, a26, a27, a28, a29, a30)
+--     ON CONFLICT DO NOTHING; |]
+
+bulkInsertRequestDumps :: [RequestDump] -> Hasql.Statement () ()
+bulkInsertRequestDumps rowsToInsert =
+  Hasql.interp
+    True
+    [Hasql.sql|
+--INSERT INTO apis.request_dumps 
+--(
+--id --, created_at, updated_at, project_id, host, url_path, raw_url, path_params, method, referer, 
+-- proto_major, proto_minor, duration, status_code, query_params, request_headers, response_headers, 
+-- request_body, response_body, endpoint_hash, shape_hash, format_hashes, field_hashes, duration_ns, 
+-- sdk_type, parent_id, service_version, errors, tags, request_type
+--)
+SELECT 
+    gen_random_uuid() --, created_at, updated_at, project_id::uuid, host, url_path, raw_url, path_params::jsonb, method, referer,
+    -- proto_major::integer, proto_minor::numeric, duration::interval, status_code::numeric, 
+    -- query_params::jsonb, request_headers::jsonb, response_headers::jsonb, 
+    -- equest_body::jsonb, response_body::jsonb, endpoint_hash, shape_hash,
+    -- string_to_array(trim(both '[]' from format_hashes), ',')::text[], string_to_array(trim(both '[]' from field_hashes), ',')::text[],
+    -- duration_ns::numeric, sdk_type, parent_id, service_version, 
+    -- errors::jsonb, string_to_array(trim(both '[]' from tags), ',')::text[], request_type
+FROM 
+  ^{Hasql.toTable rowsToInsert}
+  AS t(id, created_at, updated_at, project_id, host, url_path, raw_url, path_params, method, referer,
+       proto_major, proto_minor, duration, status_code, query_params, request_headers, response_headers,
+       request_body, response_body, endpoint_hash, shape_hash, format_hashes, field_hashes, duration_ns,
+       sdk_type, parent_id, service_version, errors, tags, request_type)
+-- ON CONFLICT DO NOTHING;
+
+
+  |]
+
+
 
 
 selectRequestDumpByProjectAndId :: Projects.ProjectId -> UTCTime -> UUID.UUID -> DBT IO (Maybe RequestDumpLogItem)

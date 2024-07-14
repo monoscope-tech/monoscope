@@ -1,34 +1,44 @@
+{-# LANGUAGE ScopedTypeVariables #-}
+
 module ProcessMessage (
   processMessages,
   processRequestMessages,
 )
 where
 
-import Control.Monad.Trans.Except.Extra (handleExceptT)
 import Data.Aeson (eitherDecode)
 import Data.Aeson.Types (KeyValue ((.=)), object)
 import Data.ByteString.Lazy.Char8 qualified as BL
 import Data.Cache qualified as Cache
-import Data.List (unzip4)
+import Data.Effectful.Hasql
+import Data.Effectful.Hasql qualified as Hasql
+import Data.List (unzip7)
 import Data.Text qualified as T
 import Data.UUID.V4 (nextRandom)
 import Database.PostgreSQL.Entity.DBT (withPool)
-import Database.PostgreSQL.Simple (Query)
-import Database.PostgreSQL.Transact (execute)
 import Debug.Pretty.Simple ()
 import Effectful (
   Eff,
   IOE,
   type (:>),
  )
+import Effectful.Error.Static (Error)
 import Effectful.Log (Log)
-import Effectful.PostgreSQL.Transact.Effect (DB, dbtToEff)
 import Effectful.Reader.Static (ask)
 import Effectful.Reader.Static qualified as Reader
 import Effectful.Time qualified as Time
 import Fmt (fmtLn, (+|), (|+))
+import Hasql.Pool (UsageError)
+
+-- import Hasql.Pipeline qualified as Hasql
+import Hasql.Session qualified as Hasql
 import Log qualified
+import Models.Apis.Endpoints qualified as Endpoints
+import Models.Apis.Fields.Query qualified as Fields
+import Models.Apis.Fields.Types qualified as Fields
+import Models.Apis.Formats qualified as Formats
 import Models.Apis.RequestDumps qualified as RequestDumps
+import Models.Apis.Shapes qualified as Shapes
 import Models.Projects.Projects qualified as Projects
 import Relude hiding (ask)
 import RequestMessages qualified
@@ -39,7 +49,7 @@ import System.Clock (
   toNanoSecs,
  )
 import System.Config qualified as Config
-import Utils (DBField, eitherStrToText)
+import Utils (eitherStrToText)
 
 
 {--
@@ -102,7 +112,7 @@ import Utils (DBField, eitherStrToText)
     We could also maintain hashes of all the formats in the cache, and check each field format within this list.🤔
  --}
 processMessages
-  :: (Reader.Reader Config.AuthContext :> es, Time.Time :> es, DB :> es, Log :> es, IOE :> es)
+  :: (Reader.Reader Config.AuthContext :> es, Time.Time :> es, Hasql :> es, Error UsageError :> es, Log :> es, IOE :> es)
   => [(Text, ByteString)]
   -> Eff es [Text]
 processMessages msgs = do
@@ -126,52 +136,50 @@ replaceNullChars :: Text -> Text
 replaceNullChars = T.replace "\\u0000" ""
 
 
-wrapTxtException :: Text -> SomeException -> Text
-wrapTxtException wrap e = " " <> wrap <> " : " <> (toText @String $ show e)
-
-
 processRequestMessages
-  :: (Reader.Reader Config.AuthContext :> es, Time.Time :> es, DB :> es, Log :> es, IOE :> es)
+  :: (Reader.Reader Config.AuthContext :> es, Time.Time :> es, Hasql :> es, Error UsageError :> es, Log :> es, IOE :> es)
   => [(Text, RequestMessages.RequestMessage)]
   -> Eff es [Text]
 processRequestMessages msgs = do
   startTime <- liftIO $ getTime Monotonic
   processed <- forM msgs \(rmAckId, msg) -> do
     resp <- processRequestMessage msg
-    pure $ resp <&> \(q, p, r) -> (rmAckId, q, p, r)
+    pure $ case resp of
+      Left err -> Left (err, rmAckId, msg)
+      Right (rd, enp, s, f, fo, err) -> Right (rd, enp, s, f, fo, err, rmAckId)
 
-  let (rmAckIds, queries, params, reqDumps) = unzip4 $ rights processed
-  let query' = mconcat $ catMaybes queries
-  let params' = concat $ catMaybes params
+  let (failures, successes) = partitionEithers processed
+      (reqDumps, endpoints, shapes, fields, formats, _errs, rmAckIds) = unzip7 successes
 
-  unless (null $ lefts processed) do
-    let leftMsgs = [(a, b) | (Left a, b) <- zip processed msgs]
-    forM_ leftMsgs \(a, b) -> Log.logAttention "processMessages': Error processing msgs" (object ["Error" .= a, "OriginalMsg" .= b])
+  forM_ failures $ \(err, rmAckId, msg) ->
+    Log.logAttention "Error processing message" (object ["Error" .= err, "AckId" .= rmAckId, "OriginalMsg" .= msg])
 
-  afterProccessing <- liftIO $ getTime Monotonic
-  when (null reqDumps) $ Log.logAttention_ "Empty params/query for processMessages for request dumps; "
-  resp <- runExceptT do
-    unless (null params')
-      $ handleExceptT (wrapTxtException $ toStrict $ "execute query " <> show query')
-      $ void
-      $ dbtToEff
-      $ execute query' params'
-    unless (null reqDumps)
-      $ handleExceptT (wrapTxtException $ toStrict $ "bulkInsertReqDump => " <> show reqDumps <> show msgs)
-      $ void
-      $ dbtToEff
-      $ RequestDumps.bulkInsertRequestDumps
-      $ catMaybes reqDumps
-
+  afterProcessing <- liftIO $ getTime Monotonic
+  dbResult <- Hasql.runSession $ do
+    unless (null $ catMaybes reqDumps) $ Hasql.statement () $ RequestDumps.bulkInsertRequestDumps (catMaybes reqDumps)
+    unless (null $ catMaybes endpoints) $ Hasql.statement () $ Endpoints.bulkInsertEndpoints (catMaybes endpoints)
+    unless (null $ catMaybes shapes) $ Hasql.statement () $ Shapes.bulkInsertShapes (catMaybes shapes)
+    unless (null $ concat fields) $ Hasql.statement () $ Fields.bulkInsertFields (concat fields)
+    unless (null $ concat formats) $ Hasql.statement () $ Formats.bulkInsertFormat (concat formats)
   endTime <- liftIO $ getTime Monotonic
-  let msg = fmtLn @String $ "Process Message (" +| length msgs |+ ") pipeline microsecs: queryDuration " +| toNanoSecs (diffTimeSpec startTime afterProccessing) `div` 1000 |+ " -> processingDuration " +| toNanoSecs (diffTimeSpec afterProccessing endTime) `div` 1000 |+ " -> TotalDuration " +| toNanoSecs (diffTimeSpec startTime endTime) `div` 1000 |+ ""
-  Log.logInfo_ (show msg)
 
-  case resp of
-    Left err -> do
-      Log.logAttention "error executing RequestMessage derived Insert queries. \n" err
-      pure []
-    Right _ -> pure rmAckIds
+  let msg =
+        fmtLn @String
+          $ "Process Message ("
+          +| length msgs
+          |+ ") pipeline microsecs: "
+          +| "queryDuration "
+          +| toNanoSecs (diffTimeSpec startTime afterProcessing)
+            `div` 1000
+          |+ " -> processingDuration "
+          +| toNanoSecs (diffTimeSpec afterProcessing endTime)
+            `div` 1000
+          |+ " -> TotalDuration "
+          +| toNanoSecs (diffTimeSpec startTime endTime)
+            `div` 1000
+          |+ ""
+  Log.logInfo_ (show msg)
+  pure rmAckIds
 
 
 projectCacheDefault :: Projects.ProjectCache
@@ -189,7 +197,7 @@ projectCacheDefault =
 processRequestMessage
   :: (Reader.Reader Config.AuthContext :> es, Time.Time :> es, IOE :> es)
   => RequestMessages.RequestMessage
-  -> Eff es (Either Text (Maybe Query, Maybe [DBField], Maybe RequestDumps.RequestDump))
+  -> Eff es (Either Text (Maybe RequestDumps.RequestDump, Maybe Endpoints.Endpoint, Maybe Shapes.Shape, [Fields.Field], [Formats.Format], [RequestDumps.ATError]))
 processRequestMessage recMsg = do
   appCtx <- ask @Config.AuthContext
   timestamp <- Time.currentTime
@@ -204,5 +212,5 @@ processRequestMessage recMsg = do
   recId <- liftIO nextRandom
   pure
     $ if projectCacheVal.paymentPlan == "Free" && projectCacheVal.weeklyRequestCount > 5000
-      then (Right (Nothing, Nothing, Nothing))
+      then (Right (Nothing, Nothing, Nothing, [], [], []))
       else (RequestMessages.requestMsgToDumpAndEndpoint projectCacheVal recMsg timestamp recId)

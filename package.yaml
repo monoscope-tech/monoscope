@@ -88,7 +88,6 @@ library:
     - pg-transact-effectful
     - log-base
     - log-effectful
-    - HaskellNet
     - Unique
     - aeson
     - aeson-qq
@@ -139,7 +138,7 @@ library:
     - resource-pool
     - resourcet
     - scientific
-    - sendgrid-v3 >= 0.3.0.0
+    - sendgrid-v3 >= 0.3.0.0 # todo delete
     - servant
     - servant-htmx
     - servant-lucid
@@ -168,7 +167,14 @@ library:
     - scotty
     - filepath
     - http-client
+    - tuple
+    - profunctors
     - wai-middleware-static
+    - hasql 
+    - hasql-th
+    - hasql-transaction
+    - hasql-pool
+    - hasql-interpolate
 
 executables:
   apitoolkit-server-exe:

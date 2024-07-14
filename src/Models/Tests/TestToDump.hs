@@ -1,7 +1,9 @@
 module Models.Tests.TestToDump (testRunToRequestMsg, runTestAndLog) where
 
 import Data.Aeson qualified as AE
+import Data.Base64.Types qualified as B64
 import Data.ByteString.Base64 qualified as B64
+import Data.Effectful.Hasql
 import Data.Either.Extra (mapLeft)
 import Data.Time
 import Data.UUID qualified as UUID
@@ -12,11 +14,12 @@ import Effectful (
   IOE,
   type (:>),
  )
+import Effectful.Error.Static (Error)
 import Effectful.Log (Log)
-import Effectful.PostgreSQL.Transact.Effect (DB)
 import Effectful.Reader.Static qualified as Reader
 import Effectful.Time qualified as Time
 import Foreign.C.String (peekCString, withCString)
+import Hasql.Pool (UsageError)
 import Log qualified
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.Projects qualified as Projects
@@ -56,9 +59,9 @@ testRunToRequestMsg (Projects.ProjectId pid) currentTime parent_id sr = do
     , queryParams = AE.toJSON (fromMaybe mempty (sr.request.req.params)) -- Assuming all params are query params
     , rawUrl = rawUri
     , referer = Nothing
-    , requestBody = B64.encodeBase64 $ encodeUtf8 $ fromMaybe "" (sr.request.req.raw)
+    , requestBody = B64.extractBase64 $ B64.encodeBase64 $ encodeUtf8 $ fromMaybe "" (sr.request.req.raw)
     , requestHeaders = AE.toJSON (fromMaybe mempty (sr.request.req.headers))
-    , responseBody = B64.encodeBase64 $ encodeUtf8 $ sr.request.resp.raw -- TODO: base64 encode
+    , responseBody = B64.extractBase64 $ B64.encodeBase64 $ encodeUtf8 $ sr.request.resp.raw -- TODO: base64 encode
     , responseHeaders = AE.toJSON (sr.request.resp.headers)
     , sdkType = RequestDumps.TestkitOutgoing
     , statusCode = sr.request.resp.status
@@ -85,7 +88,7 @@ runCollectionTest collectionSteps = do
 
 
 runTestAndLog
-  :: (IOE :> es, Time.Time :> es, Reader.Reader Config.AuthContext :> es, DB :> es, Log :> es)
+  :: (IOE :> es, Time.Time :> es, Reader.Reader Config.AuthContext :> es, Hasql :> es, Error UsageError :> es, Log :> es)
   => Projects.ProjectId
   -> V.Vector Testing.CollectionStepData
   -> Eff es (Either Text (V.Vector Testing.StepResult))
@@ -111,9 +114,9 @@ runTestAndLog pid collectionSteps = do
               , queryParams = AE.object [] -- Assuming all params are query params
               , rawUrl = "/TEST_RUN"
               , referer = Nothing -- Placeholder for the referer
-              , requestBody = B64.encodeBase64 $ encodeUtf8 $ "{\"MESSAGE\": \"CUSTOM PARENT REQUEST CREATED BY APITOOLIT\"}"
+              , requestBody = B64.extractBase64 $ B64.encodeBase64 $ encodeUtf8 $ "{\"MESSAGE\": \"CUSTOM PARENT REQUEST CREATED BY APITOOLIT\"}"
               , requestHeaders = AE.object []
-              , responseBody = B64.encodeBase64 $ encodeUtf8 $ "" -- TODO: base64 encode
+              , responseBody = B64.extractBase64 $ B64.encodeBase64 $ encodeUtf8 $ "" -- TODO: base64 encode
               , responseHeaders = AE.object []
               , sdkType = RequestDumps.TestkitOutgoing
               , statusCode = 200

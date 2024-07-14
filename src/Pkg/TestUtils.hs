@@ -14,43 +14,42 @@ module Pkg.TestUtils (
   refreshMaterializedView,
   setBjRunAtInThePast,
   toServantResponse,
-) where
-
-import Data.Default (Default (..))
-import Data.Vector qualified as V
-import Database.PostgreSQL.Simple.Types (Query (Query))
-import Effectful.PostgreSQL.Transact.Effect qualified as DB
-import Effectful.Time (runTime)
+)
+where
 
 import BackgroundJobs (jobsRunner)
 import Control.Exception (bracket_, finally, mask, throwIO)
 import Data.Aeson (Result (Error, Success), Value, fromJSON)
 import Data.Aeson.QQ (aesonQQ)
 import Data.Cache (Cache (..), newCache)
+import Data.Default (Default (..))
 import Data.Effectful.UUID (runStaticUUID)
 import Data.Effectful.Wreq (runHTTPGolden)
 import Data.Either.Extra
 import Data.Pool (Pool, defaultPoolConfig, newPool)
 import Data.UUID qualified as UUID
+import Data.Vector qualified as V
 import Database.PostgreSQL.Entity.DBT (QueryNature (Select), query, withPool)
 import Database.PostgreSQL.Simple (Connection, close, connectPostgreSQL, execute, execute_)
 import Database.PostgreSQL.Simple.Migration (MigrationCommand (MigrationDirectory, MigrationInitialization))
 import Database.PostgreSQL.Simple.Migration qualified as Migration
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.Transaction (newSavepoint, rollbackToAndReleaseSavepoint)
+import Database.PostgreSQL.Simple.Types (Query (Query))
 import Database.PostgreSQL.Transact qualified as PgT
 import Database.Postgres.Temp (cacheAction, cacheConfig, toConnectionString, withConfig, withDbCache)
 import Database.Postgres.Temp qualified as TmpPostgres
 import Effectful
 import Effectful.Error.Static (runErrorNoCallStack)
+import Effectful.PostgreSQL.Transact.Effect qualified as DB
+import Effectful.Time (runTime)
+import Hasql.Pool qualified as Hasql
+import Hasql.Pool.Config qualified as Hasql
 import Log qualified
-import NeatInterpolation (text)
-import System.Config qualified as Config
-import System.Types (ATAuthCtx, ATBackgroundCtx, RespHeaders, atAuthToBase, effToServantHandlerTest, runBackground)
-
 import Log.Backend.StandardOutput.Bulk qualified as LogBulk
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
+import NeatInterpolation (text)
 import OddJobs.Job (Job)
 import Relude
 import RequestMessages qualified
@@ -58,7 +57,9 @@ import Servant qualified
 import Servant.Server qualified as ServantS
 import System.Clock (TimeSpec (TimeSpec))
 import System.Config (AuthContext (..), EnvConfig (..))
+import System.Config qualified as Config
 import System.Directory (getFileSize, listDirectory)
+import System.Types (ATAuthCtx, ATBackgroundCtx, AppError, RespHeaders, atAuthToBase, effToServantHandlerTest, runBackground)
 import Web.Auth qualified as Auth
 import Web.Cookie (SetCookie)
 
@@ -83,7 +84,7 @@ migrate db = do
 
 -- Setup function that spins up a database with the db migrations already executed.
 -- source: https://jfischoff.github.io/blog/keeping-database-tests-fast.html
-withSetup :: (Pool Connection -> IO ()) -> IO ()
+withSetup :: ((Pool Connection, Hasql.Pool) -> IO ()) -> IO ()
 withSetup f = do
   -- Helper to throw exceptions
   let throwE x = either throwIO pure =<< x
@@ -95,8 +96,10 @@ withSetup f = do
               }
     dirSize <- sum <$> (listDirectory migrationsDirr >>= mapM (getFileSize . (migrationsDirr <>)))
     migratedConfig <- throwE $ cacheAction ("./.tmp/postgres/" <> show dirSize) migrate combinedConfig
-    withConfig migratedConfig $ \db ->
-      f =<< newPool (defaultPoolConfig (connectPostgreSQL $ toConnectionString db) close 60 10)
+    withConfig migratedConfig $ \db -> do
+      pool <- newPool (defaultPoolConfig (connectPostgreSQL $ toConnectionString db) close 60 10)
+      hPool <- Hasql.acquire $ Hasql.settings [Hasql.staticConnectionSettings $ toConnectionString db]
+      f (pool, hPool)
 
 
 -- throw away all db changes that happened within this abort block
@@ -141,7 +144,7 @@ fromRightShow (Right b) = b
 fromRightShow (Left a) = error $ "Unexpected Left value: " <> show a
 
 
-runTestBackground :: Config.AuthContext -> ATBackgroundCtx a -> IO a
+runTestBackground :: Config.AuthContext -> ATBackgroundCtx a -> IO (Either AppError a)
 runTestBackground authCtx action = LogBulk.withBulkStdOutLogger \logger ->
   runBackground logger authCtx $ action
 
@@ -149,6 +152,7 @@ runTestBackground authCtx action = LogBulk.withBulkStdOutLogger \logger ->
 -- New type to hold all our resources
 data TestResources = TestResources
   { trPool :: Pool Connection
+  , trHPool :: Hasql.Pool
   , trProjectCache :: Cache Projects.ProjectId Projects.ProjectCache
   , trSessAndHeader :: Servant.Headers '[Servant.Header "Set-Cookie" SetCookie] Sessions.Session
   , trATCtx :: AuthContext
@@ -158,11 +162,11 @@ data TestResources = TestResources
 
 -- Compose withSetup with additional IO actions
 withTestResources :: (TestResources -> IO ()) -> IO ()
-withTestResources f = withSetup $ \pool -> LogBulk.withBulkStdOutLogger \logger -> do
+withTestResources f = withSetup $ \(pool, hPool) -> LogBulk.withBulkStdOutLogger \logger -> do
   projectCache <- newCache (Just $ TimeSpec (60 * 60) 0)
   sessAndHeader <- testSessionHeader pool
   let atAuthCtx =
-        AuthContext (def @EnvConfig) pool pool projectCache
+        AuthContext (def @EnvConfig) pool pool hPool projectCache
           $ ( (def :: EnvConfig)
                 { apiKeyEncryptionSecretKey = "apitoolkit123456123456apitoolkit"
                 , convertkitApiKey = ""
@@ -174,6 +178,7 @@ withTestResources f = withSetup $ \pool -> LogBulk.withBulkStdOutLogger \logger 
   f
     TestResources
       { trPool = pool
+      , trHPool = hPool
       , trProjectCache = projectCache
       , trSessAndHeader = sessAndHeader
       , trATCtx = atAuthCtx

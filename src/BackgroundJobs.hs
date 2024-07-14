@@ -42,8 +42,8 @@ import OddJobs.ConfigBuilder (mkConfig)
 import OddJobs.Job (ConcurrencyControl (..), Job (..), LogEvent, LogLevel, createJob, startJobRunner, throwParsePayload)
 import Pages.Reports qualified as RP
 import Pages.Specification.GenerateSwagger (generateSwagger)
-import Pkg.Mail (sendEmail, sendPostmarkEmail, sendSlackMessage)
-import PyF (fmt, fmtTrim)
+import Pkg.Mail (sendPostmarkEmail, sendSlackMessage)
+import PyF (fmtTrim)
 import Relude hiding (ask)
 import Relude.Unsafe qualified as Unsafe
 import System.Config qualified as Config
@@ -97,7 +97,7 @@ sendMessageToDiscord msg = do
 jobsRunner :: Log.Logger -> Config.AuthContext -> Job -> IO ()
 jobsRunner logger authCtx job = when authCtx.config.enableBackgroundJobs $ do
   bgJob <- throwParsePayload job
-  runBackground logger authCtx $ case bgJob of
+  void $ runBackground logger authCtx $ case bgJob of
     QueryMonitorsTriggered queryMonitorIds -> queryMonitorsTriggered queryMonitorIds
     NewAnomaly pid createdAt anomalyTypesT anomalyActionsT targetHash -> newAnomalyJob pid createdAt anomalyTypesT anomalyActionsT targetHash
     InviteUserToProject userId projectId reciever projectTitle' -> do
@@ -403,18 +403,20 @@ weeklyReportForProject pid = do
 
 emailQueryMonitorAlert :: Monitors.QueryMonitorEvaled -> CI.CI Text -> Maybe Users.User -> ATBackgroundCtx ()
 emailQueryMonitorAlert monitorE@Monitors.QueryMonitorEvaled{alertConfig} email userM = whenJust userM \user ->
-  sendEmail
-    (CI.original email)
-    [fmt| 🤖 APITOOLKIT: log monitor triggered `{alertConfig.title}` |]
-    [fmtTrim|
-      Hi {user.firstName},<br/>
-      
-      The monitor: `{alertConfig.title}` was triggered and got above it's defined threshold.
-      
-      <br/><br/>
-      Regards,
-      Apitoolkit team
-                |]
+  -- FIXME: implement query alert email using postmark
+  -- sendEmail
+  --   (CI.original email)
+  --   [fmt| 🤖 APITOOLKIT: log monitor triggered `{alertConfig.title}` |]
+  --   [fmtTrim|
+  --     Hi {user.firstName},<br/>
+  --
+  --     The monitor: `{alertConfig.title}` was triggered and got above it's defined threshold.
+  --
+  --     <br/><br/>
+  --     Regards,
+  --     Apitoolkit team
+  --               |]
+  pass
 
 
 newAnomalyJob :: Projects.ProjectId -> ZonedTime -> Text -> Text -> Text -> ATBackgroundCtx ()

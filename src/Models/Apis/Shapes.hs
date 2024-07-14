@@ -4,12 +4,13 @@ module Models.Apis.Shapes (
   SwShape (..),
   ShapeId (..),
   getShapeFields,
+  bulkInsertShapes,
   shapeIdText,
-  insertShapeQueryAndParam,
   insertShapes,
   shapesByEndpointHashes,
   shapesByEndpointHash,
-) where
+)
+where
 
 import Data.Aeson qualified as AE
 import Data.Default (Default)
@@ -19,7 +20,7 @@ import Data.Vector (Vector)
 import Data.Vector qualified as Vector
 import Database.PostgreSQL.Entity.DBT (QueryNature (..), query)
 import Database.PostgreSQL.Entity.Types (CamelToSnake, Entity, FieldModifiers, GenericEntity, PrimaryKey, Schema, TableName)
-import Database.PostgreSQL.Simple (FromRow, Query, ToRow)
+import Database.PostgreSQL.Simple (FromRow, ToRow)
 import Database.PostgreSQL.Simple.FromField (FromField)
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
@@ -27,12 +28,13 @@ import Database.PostgreSQL.Simple.ToField (ToField)
 import Database.PostgreSQL.Transact (DBT, executeMany)
 import Database.PostgreSQL.Transact qualified as PgT
 import Deriving.Aeson qualified as DAE
+import Hasql.Interpolate qualified as Hasql
+import Hasql.Statement qualified as Hasql
 import Models.Apis.Fields.Types
 import Models.Apis.Fields.Types qualified as Fields
 import Models.Projects.Projects qualified as Projects
 import Models.Projects.Projects qualified as Projescts
 import Relude
-import Utils (DBField (MkDBField))
 import Web.HttpApiData (FromHttpApiData)
 
 
@@ -100,29 +102,31 @@ data Shape = Shape
   deriving (FromField) via Aeson Shape
 
 
-insertShapeQueryAndParam :: Shape -> (Query, [DBField])
-insertShapeQueryAndParam shape = (q, params)
-  where
-    q =
-      [sql| 
+bulkInsertShapes :: [Shape] -> Hasql.Statement () ()
+bulkInsertShapes shapes =
+  Hasql.interp
+    True
+    [Hasql.sql| 
             INSERT INTO apis.shapes
             (project_id, endpoint_hash, query_params_keypaths, request_body_keypaths, response_body_keypaths, request_headers_keypaths, response_headers_keypaths, field_hashes, hash, status_code, request_description, response_description)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING; 
+            ^{Hasql.toTable rowsToInsert} ON CONFLICT DO NOTHING; 
           |]
-    params =
-      [ MkDBField shape.projectId
-      , MkDBField shape.endpointHash
-      , MkDBField shape.queryParamsKeypaths
-      , MkDBField shape.requestBodyKeypaths
-      , MkDBField shape.responseBodyKeypaths
-      , MkDBField shape.requestHeadersKeypaths
-      , MkDBField shape.responseHeadersKeypaths
-      , MkDBField shape.fieldHashes
-      , MkDBField shape.hash
-      , MkDBField shape.statusCode
-      , MkDBField @String ""
-      , MkDBField @String ""
-      ]
+  where
+    rowsToInsert =
+      shapes <&> \shape ->
+        ( shape.projectId
+        , shape.endpointHash
+        , shape.queryParamsKeypaths
+        , shape.requestBodyKeypaths
+        , shape.responseBodyKeypaths
+        , shape.requestHeadersKeypaths
+        , shape.responseHeadersKeypaths
+        , shape.fieldHashes
+        , shape.hash
+        , fromIntegral shape.statusCode
+        , ""
+        , ""
+        )
 
 
 shapesByEndpointHash :: Projescts.ProjectId -> Text -> PgT.DBT IO (Vector Shape)

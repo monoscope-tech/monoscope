@@ -1,5 +1,6 @@
 module Pages.Api (apiGetH, apiPostH, apiDeleteH, GenerateAPIKeyForm (..), ApiGet (..), ApiMut (..)) where
 
+import Data.Base64.Types qualified as B64
 import Data.ByteString.Base64 qualified as B64
 import Data.Default (def)
 import Data.Text qualified as T
@@ -38,7 +39,7 @@ apiPostH pid apiKeyForm = do
   authCtx <- ask @AuthContext
   projectKeyUUID <- liftIO UUIDV4.nextRandom
   let encryptedKey = ProjectApiKeys.encryptAPIKey (encodeUtf8 authCtx.config.apiKeyEncryptionSecretKey) (encodeUtf8 $ UUID.toText projectKeyUUID)
-  let encryptedKeyB64 = B64.encodeBase64 encryptedKey
+  let encryptedKeyB64 = B64.extractBase64 $ B64.encodeBase64 encryptedKey
   pApiKey <- ProjectApiKeys.newProjectApiKeys pid projectKeyUUID (title apiKeyForm) encryptedKeyB64
   apiKeys <- dbtToEff do
     ProjectApiKeys.insertProjectApiKey pApiKey

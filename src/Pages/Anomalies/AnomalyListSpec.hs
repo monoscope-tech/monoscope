@@ -120,8 +120,8 @@ spec = aroundAll withTestResources do
       let reqMsg3 = Unsafe.fromJust $ convert $ msg3 nowTxt
       let endpointHash = toXXHash $ testPid.toText <> "172.31.29.11" <> "GET" <> "/"
       let sanitizeNullChars = encodeUtf8 . replaceNullChars . decodeUtf8
-          reqBodyB64 = fromRight "" $ B64.decodeBase64 $ encodeUtf8 reqMsg3.requestBody
-          respBodyB64 = fromRight "" $ B64.decodeBase64 $ encodeUtf8 reqMsg3.responseBody
+          reqBodyB64 = fromRight "" $ B64.decodeBase64Untyped $ encodeUtf8 reqMsg3.requestBody
+          respBodyB64 = fromRight "" $ B64.decodeBase64Untyped $ encodeUtf8 reqMsg3.responseBody
 
       let reqBody = fromRight (AE.object []) $ AE.eitherDecodeStrict $ sanitizeNullChars reqBodyB64
           respBody = fromRight (AE.object []) $ AE.eitherDecodeStrict $ sanitizeNullChars respBodyB64

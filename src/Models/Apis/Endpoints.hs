@@ -8,6 +8,7 @@ module Models.Apis.Endpoints (
   EndpointRequestStats (..),
   Host (..),
   HostEvents (..),
+  bulkInsertEndpoints,
   dependenciesAndEventsCount,
   endpointsByProjectId,
   endpointUrlPath,
@@ -17,7 +18,6 @@ module Models.Apis.Endpoints (
   endpointById,
   endpointIdText,
   endpointToUrlPath,
-  upsertEndpointQueryAndParam,
   endpointByHash,
   getProjectHosts,
   insertEndpoints,
@@ -44,10 +44,11 @@ import Database.PostgreSQL.Transact (DBT, executeMany)
 import Database.PostgreSQL.Transact qualified as PgT
 import Deriving.Aeson qualified as DAE
 import GHC.Records (HasField (getField))
+import Hasql.Interpolate qualified as Hasql
+import Hasql.Statement qualified as Hasql
 import Models.Projects.Projects qualified as Projects
 import NeatInterpolation (text)
 import Relude
-import Utils (DBField (MkDBField))
 import Web.HttpApiData (FromHttpApiData)
 
 
@@ -99,26 +100,24 @@ endpointUrlPath :: Projects.ProjectId -> EndpointId -> Text
 endpointUrlPath pid eid = "/p/" <> pid.toText <> "/endpoints/" <> endpointIdText eid
 
 
-upsertEndpointQueryAndParam :: Endpoint -> (Query, [DBField])
-upsertEndpointQueryAndParam endpoint = (q, params)
-  where
-    host = endpoint.host -- Read the first item from head or default to empty string
-    q =
-      [sql|  
-          INSERT INTO apis.endpoints (project_id, url_path, url_params, method, host, hash, outgoing)
-          VALUES(?, ?, ?, ?, ?, ?, ?) 
-          ON CONFLICT (hash) 
-          DO  NOTHING;
+bulkInsertEndpoints :: [Endpoint] -> Hasql.Statement () ()
+bulkInsertEndpoints endpoints =
+  Hasql.interp
+    True
+    [Hasql.sql| INSERT INTO apis.endpoints (project_id, url_path, url_params, method, host, hash, outgoing)
+          ^{Hasql.toTable rowsToInsert} ON CONFLICT (hash) DO  NOTHING;
       |]
-    params =
-      [ MkDBField endpoint.projectId
-      , MkDBField endpoint.urlPath
-      , MkDBField endpoint.urlParams
-      , MkDBField endpoint.method
-      , MkDBField host
-      , MkDBField endpoint.hash
-      , MkDBField endpoint.outgoing
-      ]
+  where
+    rowsToInsert =
+      endpoints <&> \endpoint ->
+        ( endpoint.projectId
+        , endpoint.urlPath
+        , Hasql.AsJsonb endpoint.urlParams
+        , endpoint.method
+        , endpoint.host
+        , endpoint.hash
+        , endpoint.outgoing
+        )
 
 
 -- Based of a view which is generated every 5minutes.
@@ -257,7 +256,7 @@ data HostEvents = HostEvents
   , first_seen :: Maybe ZonedTime
   , last_seen :: Maybe ZonedTime
   }
-  deriving stock (Show, Generic, Eq)
+  deriving stock (Show, Generic)
   deriving anyclass (ToRow, FromRow, NFData)
 
 

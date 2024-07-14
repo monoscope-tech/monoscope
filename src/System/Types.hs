@@ -13,6 +13,7 @@ module System.Types (
   addToast,
   addSuccessToast,
   addErrorToast,
+  AppError (..),
   HXRedirectDest,
   TriggerEvents,
   RespHeaders,
@@ -21,26 +22,29 @@ module System.Types (
   effToServantHandlerTest,
   effToHandler,
   atAuthToBase,
-) where
+)
+where
 
 import Control.Monad.Except qualified as Except
 import Data.Aeson qualified as AE
+import Data.Effectful.Hasql
 import Data.Effectful.UUID (UUIDEff, runStaticUUID, runUUID)
 import Data.Effectful.Wreq (HTTP, runHTTPGolden, runHTTPWreq)
 import Data.Map qualified as Map
 import Data.Time.Clock.POSIX (posixSecondsToUTCTime)
 import Data.UUID qualified as UUID
-import Effectful (Eff, IOE, runEff)
-import Effectful.Error.Static (Error, runErrorNoCallStack)
+import Effectful (Eff, IOE, runEff, (:>))
+import Effectful.Error.Static (Error, runError, runErrorNoCallStack, runErrorWith, throwError)
 import Effectful.Log (Log)
 import Effectful.PostgreSQL.Transact.Effect (DB, runDB)
 import Effectful.Reader.Static (Reader, runReader)
 import Effectful.State.Static.Local qualified as State
 import Effectful.Time (Time, runFrozenTime, runTime)
+import Hasql.Pool (UsageError)
 import Log qualified
 import Models.Users.Sessions qualified as Sessions
 import Relude
-import Servant (AuthProtect, Header, Headers, ServerError, addHeader, noHeader)
+import Servant (AuthProtect, Header, Headers, ServerError, addHeader, err500, errBody, noHeader)
 import Servant qualified
 import Servant.Htmx (HXRedirect, HXTriggerAfterSettle)
 import Servant.Server.Experimental.Auth (AuthServerData)
@@ -62,6 +66,8 @@ type CommonWebEffects =
    , UUIDEff
    , HTTP
    , DB
+   , Hasql
+   , Error UsageError
    , Time
    , Log
    , Error ServerError
@@ -97,9 +103,18 @@ effToServantHandler env logger app =
     & runUUID
     & runHTTPWreq
     & runDB env.pool
+    & runHasqlIO env.hasqlPool
+    -- FIXME: This just converts errror into an exception. Should handle this correctly
+    & runErrorWith @UsageError handleUsageError
     & runTime
     & Logging.runLog (show env.config.environment) logger
     & effToHandler
+
+
+handleUsageError :: (Log :> es, Error ServerError :> es) => CallStack -> UsageError -> Eff es a
+handleUsageError cs e = do
+  Log.logAttention "Postgres DB UsageError" (show e)
+  throwError $ err500{errBody = "TODO"}
 
 
 -- | `effToServantHandler` exists specifically to be used in tests,
@@ -111,6 +126,9 @@ effToServantHandlerTest env logger app =
     & (runStaticUUID $ map (UUID.fromWords 0 0 0) [1 .. 10])
     & runHTTPGolden "./golden/"
     & runDB env.pool
+    & runHasqlIO env.hasqlPool
+    -- FIXME: This just converts errror into an exception. Should handle this correctly
+    & runErrorWith @UsageError handleUsageError
     & runFrozenTime (posixSecondsToUTCTime 0)
     & Logging.runLog (show env.config.environment) logger
     & effToHandler
@@ -131,20 +149,41 @@ type ATBackgroundCtx =
   Effectful.Eff
     '[ Effectful.Reader.Static.Reader AuthContext
      , DB
+     , Hasql
+     , Error UsageError
      , Time
      , Log
      , Effectful.IOE
      ]
 
 
-runBackground :: Log.Logger -> AuthContext -> ATBackgroundCtx a -> IO a
+data AppError
+  = UsageError UsageError CallStack
+  | UnexpectedError String
+  deriving stock (Show)
+
+
+runBackground :: Log.Logger -> AuthContext -> ATBackgroundCtx a -> IO (Either AppError a)
 runBackground logger appCtx process =
   process
     & Effectful.Reader.Static.runReader appCtx
     & runDB appCtx.jobsPool
+    & runHasqlIO appCtx.hasqlPool
+    & runError @UsageError
+    & logUsageError
     & runTime
     & Logging.runLog ("background-job:" <> show appCtx.config.environment) logger
     & Effectful.runEff
+
+
+logUsageError :: Log :> es => Eff es (Either (CallStack, UsageError) a) -> Eff es (Either AppError a)
+logUsageError eff = do
+  result <- eff
+  case result of
+    Left (cs, e) -> do
+      Log.logAttention "Postgres DB UsageError" (show e)
+      pure $ Left $ UsageError e cs
+    Right value -> pure $ Right value
 
 
 type instance

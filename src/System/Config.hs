@@ -14,36 +14,12 @@ import Data.Text.Lazy qualified as LT
 import Database.PostgreSQL.Simple (Connection)
 import Database.PostgreSQL.Simple qualified as PG
 import Database.PostgreSQL.Simple.Migration qualified as Migrations
-import Effectful (Eff, IOE, MonadIO (liftIO), type (:>))
+import Effectful
 import Effectful.Fail (Fail)
+import Hasql.Pool qualified as Hasql
+import Hasql.Pool.Config qualified as Hasql
 import Models.Projects.Projects qualified as Projects
-import Relude (
-  Applicative (pure),
-  Bool,
-  ConvertUtf8 (encodeUtf8),
-  Either (..),
-  FilePath,
-  Generic,
-  IO,
-  Int,
-  Maybe (Just),
-  Num ((*)),
-  Read,
-  ReaderT (runReaderT),
-  Semigroup ((<>)),
-  Show,
-  SomeException,
-  String,
-  Text,
-  ToString (toString),
-  ToText (toText),
-  error,
-  pass,
-  show,
-  when,
-  ($),
-  (.),
- )
+import Relude
 import Servant.Server (Handler)
 import System.Clock (TimeSpec (TimeSpec))
 import System.Envy (FromEnv (..), ReadShowVar (..), Var (..), decodeEnv, fromVar, toVar)
@@ -112,6 +88,7 @@ data AuthContext = AuthContext
   { env :: EnvConfig
   , pool :: Pool.Pool Connection
   , jobsPool :: Pool.Pool Connection
+  , hasqlPool :: Hasql.Pool
   , projectCache :: Cache Projects.ProjectId Projects.ProjectCache
   , config :: EnvConfig
   }
@@ -149,11 +126,13 @@ configToEnv config = do
     pass
   pool <- liftIO $ Pool.newPool $ Pool.defaultPoolConfig createPgConnIO PG.close (60 * 6) 100
   jobsPool <- liftIO $ Pool.newPool $ Pool.defaultPoolConfig createPgConnIO PG.close (60 * 6) 150
+  hasqlPool <- liftIO $ Hasql.acquire $ Hasql.settings [Hasql.staticConnectionSettings $ encodeUtf8 config.databaseUrl]
   projectCache <- liftIO $ newCache (Just $ TimeSpec (60 * 60) 0) -- :: m (Cache Projects.ProjectId Projects.ProjectCache) -- 60*60secs or 1 hour TTL
   pure
     AuthContext
       { pool = pool
       , jobsPool = jobsPool
+      , hasqlPool
       , env = config
       , projectCache
       , config
@@ -166,5 +145,4 @@ getAppContext = do
   configE <- liftIO (decodeEnv :: IO (Either String EnvConfig))
   case configE of
     Left errMsg -> error $ toText errMsg
-    Right config -> do
-      configToEnv config
+    Right config -> configToEnv config

@@ -23,17 +23,15 @@ import Data.HashMap.Strict qualified as HM
 import Data.List (groupBy)
 import Data.Scientific qualified as Scientific
 import Data.Text qualified as T
-import Data.Time.Clock as Clock (UTCTime, secondsToNominalDiffTime)
-import Data.Time.LocalTime as Time (ZonedTime, calendarTimeTime, zonedTimeToUTC)
+import Data.Time.Clock as Clock (UTCTime, secondsToDiffTime)
+import Data.Time.LocalTime as Time (ZonedTime, zonedTimeToUTC)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Database.PostgreSQL.Simple (Query)
 import Deriving.Aeson qualified as DAE
+import Hasql.Interpolate qualified as Hasql
 import Models.Apis.Anomalies qualified as Anomalies
 import Models.Apis.Endpoints qualified as Endpoints
-import Models.Apis.Fields.Query qualified as Fields (
-  insertFieldQueryAndParams,
- )
 import Models.Apis.Fields.Types qualified as Fields (
   Field (..),
   FieldCategoryEnum (..),
@@ -162,7 +160,12 @@ processErrors pid sdkType method urlPath err = (normalizedError, q, params)
 -- from the google cloud pub sub, and to concatenate their queries so that only a single database call is needed for a batch.
 -- Also, being a pure function means it's easier to test the request processing logic since we can unit test pure functions easily.
 -- We can pass in a request, it's project cache object and inspect the generated sql and params.
-requestMsgToDumpAndEndpoint :: Projects.ProjectCache -> RequestMessages.RequestMessage -> UTCTime -> UUID.UUID -> Either Text (Maybe Query, Maybe [DBField], Maybe RequestDumps.RequestDump)
+requestMsgToDumpAndEndpoint
+  :: Projects.ProjectCache
+  -> RequestMessages.RequestMessage
+  -> UTCTime
+  -> UUID.UUID
+  -> Either Text (Maybe RequestDumps.RequestDump, Maybe Endpoints.Endpoint, Maybe Shapes.Shape, [Fields.Field], [Formats.Format], [RequestDumps.ATError])
 requestMsgToDumpAndEndpoint pjc rM now dumpIDOriginal = do
   -- TODO: User dumpID and msgID to get correct ID
   let dumpID = fromMaybe dumpIDOriginal rM.msgId
@@ -175,8 +178,8 @@ requestMsgToDumpAndEndpoint pjc rM now dumpIDOriginal = do
   let !endpointHash = toXXHash $ UUID.toText rM.projectId <> fromMaybe "" rM.host <> method <> urlPath
   let redactFieldsList = V.toList pjc.redactFieldslist <> [".set-cookie", ".password"]
   let sanitizeNullChars = encodeUtf8 . replaceNullChars . decodeUtf8
-  reqBodyB64 <- B64.decodeBase64 $ encodeUtf8 rM.requestBody
-  respBodyB64 <- B64.decodeBase64 $ encodeUtf8 rM.responseBody
+  reqBodyB64 <- B64.decodeBase64Untyped $ encodeUtf8 rM.requestBody
+  respBodyB64 <- B64.decodeBase64Untyped $ encodeUtf8 rM.responseBody
   let reqBody = redactJSON redactFieldsList $ fromRight (AE.object []) $ AE.eitherDecodeStrict $ sanitizeNullChars reqBodyB64
       respBody = redactJSON redactFieldsList $ fromRight (AE.object []) $ AE.eitherDecodeStrict $ sanitizeNullChars respBodyB64
       pathParamFields = valueToFields $ redactJSON redactFieldsList rM.pathParams
@@ -220,19 +223,19 @@ requestMsgToDumpAndEndpoint pjc rM now dumpIDOriginal = do
   -- Since it foes into the endpoint, maybe it should be the keys and their type? I'm unsure.
   -- At the moment, if an endpoint exists, we don't insert it anymore. But then how do we deal with requests from new hosts?
   let urlParams = AET.emptyObject
-  let (endpointQ, endpointP)
-        | endpointHash `elem` pjc.endpointHashes = ("", []) -- We have the endpoint cache in our db already. Skill adding
-        | rM.statusCode == 404 = ("", [])
-        | otherwise = Endpoints.upsertEndpointQueryAndParam $ buildEndpoint rM now dumpID projectId method urlPath urlParams endpointHash (isRequestOutgoing rM.sdkType)
+  let endpoint
+        | endpointHash `elem` pjc.endpointHashes = Nothing -- We have the endpoint cache in our db already. Skill adding
+        | rM.statusCode == 404 = Nothing
+        | otherwise = Just $ buildEndpoint rM now dumpID projectId method urlPath urlParams endpointHash (isRequestOutgoing rM.sdkType)
 
-  let (shapeQ, shapeP)
-        | shapeHash `elem` pjc.shapeHashes = ("", [])
-        | rM.statusCode == 404 = ("", [])
+  let shape
+        | shapeHash `elem` pjc.shapeHashes = Nothing
+        | rM.statusCode == 404 = Nothing
         | otherwise =
             -- A shape is a deterministic representation of a request-response combination for a given endpoint.
             -- We usually expect multiple shapes per endpoint. Eg a shape for a success request-response and another for an error response.
             -- Shapes are dependent on the endpoint, statusCode and the unique fields in that shape.
-            Shapes.insertShapeQueryAndParam
+            Just
               $ Shapes.Shape
                 { id = Shapes.ShapeId dumpID
                 , createdAt = timestampUTC
@@ -252,7 +255,8 @@ requestMsgToDumpAndEndpoint pjc rM now dumpIDOriginal = do
                 , requestDescription = ""
                 }
 
-  let (errorsList, errQ, errP) = unzip3 $ map (processErrors projectId rM.sdkType rM.method (fromMaybe "" rM.urlPath)) $ fromMaybe [] rM.errors
+  -- FIXME: simplify processErrors func
+  let (errorsList, _, _) = unzip3 $ map (processErrors projectId rM.sdkType rM.method (fromMaybe "" rM.urlPath)) $ fromMaybe [] rM.errors
 
   -- request dumps are time series dumps representing each requests which we consume from our users.
   -- We use this field via the log explorer for exploring and searching traffic. And at the moment also use it for most time series analytics.
@@ -268,19 +272,19 @@ requestMsgToDumpAndEndpoint pjc rM now dumpIDOriginal = do
           , host = fromMaybe "" rM.host
           , urlPath = urlPath
           , rawUrl = rM.rawUrl
-          , pathParams = pathParams
+          , pathParams = Hasql.AsJsonb pathParams
           , method = method
           , referer = fromMaybe "" $ rM.referer >>= either Just listToMaybe
-          , protoMajor = rM.protoMajor
-          , protoMinor = rM.protoMinor
-          , duration = calendarTimeTime $ secondsToNominalDiffTime $ fromIntegral rM.duration
-          , statusCode = rM.statusCode
+          , protoMajor = fromIntegral rM.protoMajor
+          , protoMinor = fromIntegral rM.protoMinor
+          , duration = secondsToDiffTime $ fromIntegral rM.duration
+          , statusCode = fromIntegral rM.statusCode
           , --
-            queryParams = rM.queryParams
-          , requestBody = reqBody
-          , responseBody = respBody
-          , requestHeaders = rM.requestHeaders
-          , responseHeaders = rM.responseHeaders
+            queryParams = Hasql.AsJsonb rM.queryParams
+          , requestBody = Hasql.AsJsonb reqBody
+          , responseBody = Hasql.AsJsonb respBody
+          , requestHeaders = Hasql.AsJsonb rM.requestHeaders
+          , responseHeaders = Hasql.AsJsonb rM.responseHeaders
           , --
             endpointHash = endpointHash
           , shapeHash = shapeHash
@@ -290,18 +294,18 @@ requestMsgToDumpAndEndpoint pjc rM now dumpIDOriginal = do
           , sdkType = rM.sdkType
           , parentId = rM.parentId
           , serviceVersion = rM.serviceVersion
-          , errors = toJSON $ errorsList
+          , errors = Hasql.AsJsonb $ toJSON $ errorsList
           , tags = maybe V.empty V.fromList rM.tags
           , requestType = RequestDumps.getRequestType rM.sdkType
           }
 
   -- Build all fields and formats, unzip them as separate lists and append them to query and params
   -- We don't border adding them if their shape exists, as we asume that we've already seen such before.
-  let (fieldsQ, fieldsP)
+  let fields'
         -- TODO: Replace this faulty logic with bloom  filter. See comment on formats for more.
         -- \| shapeHash `elem` pjc.shapeHashes = ([], [])
-        | rM.statusCode == 404 = ([], [])
-        | otherwise = unzip $ map Fields.insertFieldQueryAndParams fields
+        | rM.statusCode == 404 = []
+        | otherwise = fields
 
   -- FIXME:
   -- Instead of having examples as a column under formats, could we be better served by having an examples table?
@@ -309,17 +313,15 @@ requestMsgToDumpAndEndpoint pjc rM now dumpIDOriginal = do
   -- Should we use some randomizer?
   -- The original plan was that we could skip the shape from the input into this function, but then that would mean
   -- also inserting the fields and the shape, when all we want to insert is just the example.
-  let (formatsQ, formatsP)
+  let formats'
         -- TODO: Replace this redundancy check with a sort of bit vector or bloom filter that holds all the
         -- existing formats or even just fields in the given project. So we don't insert existing fields
         -- and formats over and over
         -- \| shapeHash `elem` pjc.shapeHashes = ([], [])
-        | rM.statusCode == 404 = ([], [])
-        | otherwise = unzip $ map Formats.insertFormatQueryAndParams formats
+        | rM.statusCode == 404 = []
+        | otherwise = formats
 
-  let query = endpointQ <> shapeQ <> mconcat fieldsQ <> mconcat formatsQ <> mconcat errQ
-  let params = endpointP <> shapeP <> concat fieldsP <> concat formatsP <> concat errP
-  pure (Just query, Just params, Just reqDumpP)
+  Right (Just reqDumpP, endpoint, shape, fields', formats', errorsList)
 
 
 isRequestOutgoing :: RequestDumps.SDKTypes -> Bool

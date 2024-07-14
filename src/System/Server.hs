@@ -120,7 +120,7 @@ pubsubService appLogger appCtx = do
   env <- case envConfig.googleServiceAccountB64 of
     "" -> Google.newEnv <&> (Google.envScopes L..~ pubSubScope)
     sa -> do
-      let credJSON = either error id $ LB64.decodeBase64 (LT.encodeUtf8 sa)
+      let credJSON = either error id $ LB64.decodeBase64Untyped (LT.encodeUtf8 sa)
       let credsE = Google.fromJSONCredentials credJSON
       let creds = either (error . toText) id credsE
       -- let Right creds = credsE
@@ -142,10 +142,12 @@ pubsubService appLogger appCtx = do
                   b64Msg <- msg ^? field @"message" . _Just . field @"data'" . _Just . _Base64
                   Just (ackId, b64Msg)
 
-          -- unless (null messages) do
-          msgIds <- liftIO $ runBackground appLogger appCtx $ processMessages (catMaybes msgsB64)
-          let acknowlegReq = PubSub.newAcknowledgeRequest & field @"ackIds" L..~ Just msgIds
-          unless (null msgIds) $ void $ PubSub.newPubSubProjectsSubscriptionsAcknowledge acknowlegReq subscription & Google.send env
+          msgIdsE <- liftIO $ runBackground appLogger appCtx $ processMessages (catMaybes msgsB64)
+          case msgIdsE of
+            Left _ -> pass
+            Right msgIds -> do
+              let acknowlegReq = PubSub.newAcknowledgeRequest & field @"ackIds" L..~ Just msgIds
+              unless (null msgIds) $ void $ PubSub.newPubSubProjectsSubscriptionsAcknowledge acknowlegReq subscription & Google.send env
 
 
 -- pubSubScope :: Proxy PubSub.Pubsub'FullControl

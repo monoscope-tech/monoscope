@@ -18,6 +18,7 @@ import BackgroundJobs qualified
 import Control.Lens ((.~), (^.))
 import Data.Aeson (encode)
 import Data.Aeson qualified as AE
+import Data.Base64.Types qualified as B64
 import Data.ByteString.Base64 qualified as B64
 import Data.CaseInsensitive (original)
 import Data.CaseInsensitive qualified as CI
@@ -298,7 +299,7 @@ processProjectPostForm cpRaw = do
         else do
           dbtToEff $ Projects.insertProject (createProjectFormToModel pid subId firstSubItemId cp)
           projectKeyUUID <- UUID.genUUID
-          let encryptedKeyB64 = B64.encodeBase64 $ ProjectApiKeys.encryptAPIKey (encodeUtf8 envCfg.apiKeyEncryptionSecretKey) (encodeUtf8 $ UUID.toText projectKeyUUID)
+          let encryptedKeyB64 = B64.extractBase64 $ B64.encodeBase64 $ ProjectApiKeys.encryptAPIKey (encodeUtf8 envCfg.apiKeyEncryptionSecretKey) (encodeUtf8 $ UUID.toText projectKeyUUID)
           pApiKey <- ProjectApiKeys.newProjectApiKeys pid projectKeyUUID "Default API Key" encryptedKeyB64
           dbtToEff $ ProjectApiKeys.insertProjectApiKey pApiKey
           ConvertKit.addUserOrganization envCfg.convertkitApiKey (CI.original sess.user.email) pid.toText cp.title cp.paymentPlan

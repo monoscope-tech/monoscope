@@ -42,7 +42,7 @@ clientMetadataH (Just authTextB64) = do
   -- TODO: temporary, to work with current logic
   appCtx <- ask @AuthContext
 
-  let authTextE = B64.decodeBase64 (encodeUtf8 $ T.replace "Bearer " "" authTextB64)
+  let authTextE = B64.decodeBase64Untyped (encodeUtf8 $ T.replace "Bearer " "" authTextB64)
   case authTextE of
     Left err -> Log.logAttention "Auth Error in clientMetadata" (toString err) >> throwError err401
     Right authText -> do

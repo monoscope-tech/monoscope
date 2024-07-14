@@ -13,7 +13,7 @@ module Models.Apis.Fields (
   groupFieldsByCategory,
   fieldTypeToText,
   fieldCategoryEnumToText,
-  insertFieldQueryAndParams,
+  bulkInsertFields,
 ) where
 
 import Models.Apis.Fields.Query

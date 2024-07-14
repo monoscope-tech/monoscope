@@ -4,7 +4,7 @@ module Models.Apis.Formats (
   SwFormat (..),
   formatsByFieldHash,
   formatsByFieldsHashes,
-  insertFormatQueryAndParams,
+  bulkInsertFormat,
   insertFormats,
   formatsByHash,
 ) where
@@ -17,7 +17,7 @@ import Data.Vector (Vector)
 import Data.Vector qualified as Vector
 import Database.PostgreSQL.Entity.DBT (QueryNature (Select), query)
 import Database.PostgreSQL.Entity.Types
-import Database.PostgreSQL.Simple (FromRow, Only (Only), Query, ToRow)
+import Database.PostgreSQL.Simple (FromRow, Only (Only), ToRow)
 import Database.PostgreSQL.Simple.FromField (FromField)
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
@@ -25,11 +25,12 @@ import Database.PostgreSQL.Simple.ToField (ToField)
 import Database.PostgreSQL.Transact (DBT, executeMany)
 import Database.PostgreSQL.Transact qualified as PgT
 import Deriving.Aeson qualified as DAE
+import Hasql.Interpolate qualified as Hasql
+import Hasql.Statement qualified as Hasql
 import Models.Apis.Fields.Types qualified as Fields
 import Models.Projects.Projects qualified as Projects
 import Relude
 import Servant (FromHttpApiData)
-import Utils (DBField (MkDBField))
 
 
 newtype FormatId = FormatId {unFormatId :: UUID.UUID}
@@ -67,27 +68,28 @@ formatsByHash fhash = query Select q (Only fhash)
     q = [sql| SELECT id,created_at,updated_at,project_id, field_hash,field_type,field_format,examples::json[], hash from apis.formats where hash=? |]
 
 
--- TODO: explore using postgres values to handle bulking loading multiple fields and formats into the same insert query.
-insertFormatQueryAndParams :: Format -> (Query, [DBField])
-insertFormatQueryAndParams format = (q, params)
-  where
-    q =
-      [sql| 
-      insert into apis.formats (project_id, field_hash, field_type, field_format, examples, hash) VALUES (?,?,?,?,?,?)
+bulkInsertFormat :: [Format] -> Hasql.Statement () ()
+bulkInsertFormat formats =
+  Hasql.interp
+    True
+    [Hasql.sql| 
+      insert into apis.formats (project_id, field_hash, field_type, field_format, examples, hash) 
+        VALUES ^{Hasql.toTable rowsToInsert} 
         ON CONFLICT (project_id, field_hash, field_format)
         DO
           UPDATE SET 
-            examples = ARRAY(SELECT DISTINCT e from unnest(apis.formats.examples || excluded.examples) as e order by e limit ?); 
+            examples = ARRAY(SELECT DISTINCT e from unnest(apis.formats.examples || excluded.examples) as e order by e limit 20); 
       |]
-    params =
-      [ MkDBField format.projectId
-      , MkDBField format.fieldHash
-      , MkDBField format.fieldType
-      , MkDBField format.fieldFormat
-      , MkDBField format.examples
-      , MkDBField format.hash
-      , MkDBField (20 :: Int64) -- NOTE: max number of examples
-      ]
+  where
+    rowsToInsert =
+      formats <&> \format ->
+        ( format.projectId
+        , format.fieldHash
+        , show format.fieldType
+        , format.fieldFormat
+        , Hasql.AsJsonb format.examples
+        , format.hash
+        )
 
 
 insertFormats :: [Format] -> DBT IO Int64

@@ -1,6 +1,7 @@
 module Web.ClientMetadataSpec (spec) where
 
 import Data.Aeson.QQ (aesonQQ)
+import Data.Base64.Types qualified as B64
 import Data.ByteString.Base64 qualified as B64
 import Data.Pool (Pool)
 import Data.Time (getCurrentTime)
@@ -63,7 +64,7 @@ createAndSaveApiKey pool authCtx = do
   projectKeyUUID <- liftIO UUIDV4.nextRandom
   let title = "Test API Key"
   let encryptedKey = ProjectApiKeys.encryptAPIKey (encodeUtf8 authCtx.config.apiKeyEncryptionSecretKey) (encodeUtf8 $ UUID.toText projectKeyUUID)
-  let encryptedKeyB64 = B64.encodeBase64 encryptedKey
+  let encryptedKeyB64 = B64.extractBase64 $ B64.encodeBase64 encryptedKey
   let keyId = ProjectApiKeys.ProjectApiKeyId projectKeyUUID
 
   currentTime <- liftIO getCurrentTime

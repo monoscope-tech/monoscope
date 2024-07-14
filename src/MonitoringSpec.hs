@@ -9,7 +9,7 @@ import Models.Projects.Projects qualified as Projects
 import Pages.Monitors.Alerts (AlertUpsertForm (..), convertToQueryMonitor)
 import Pkg.TestUtils qualified as TestUtils
 import ProcessMessage (processRequestMessages)
-import ProcessMessageSpec (runTestBackground, testAuthContext)
+import ProcessMessageSpec (testAuthContext)
 import Relude
 import Relude.Unsafe qualified as Unsafe
 import Test.Hspec (Spec, aroundAll, describe, it)
@@ -18,9 +18,9 @@ import Test.Hspec (Spec, aroundAll, describe, it)
 spec :: Spec
 spec = aroundAll TestUtils.withSetup do
   describe "Query Log Monitors" do
-    it "should create monitor with no triggers" \pool -> do
+    it "should create monitor with no triggers" \(pool, hPool) -> do
       currentTime <- getCurrentTime
-      authCtx <- testAuthContext pool
+      authCtx <- testAuthContext (pool, hPool)
       let queryMonitor =
             convertToQueryMonitor (Projects.ProjectId UUID.nil) currentTime (Monitors.QueryMonitorId UUID.nil)
               $ AlertUpsertForm
@@ -51,7 +51,7 @@ spec = aroundAll TestUtils.withSetup do
             , ("m5", reqMsg1)
             , ("m5", reqMsg2)
             ]
-      _ <- runTestBackground authCtx $ processRequestMessages msgs
+      _ <- TestUtils.runTestBackground authCtx $ processRequestMessages msgs
       _ <- withPool pool $ execute Select [sql|CALL monitors.check_triggered_query_monitors(0, '{}')|] ()
       _ <- TestUtils.runAllBackgroundJobs authCtx
       -- TODO:
