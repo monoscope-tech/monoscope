@@ -145,6 +145,7 @@ library:
     - servant-server
     - text
     - text-display
+    - unliftio
     - time
     - transformers-except
     - unordered-containers

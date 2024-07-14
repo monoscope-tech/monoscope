@@ -288,6 +288,7 @@ library
     , tmp-postgres
     , transformers-except
     , tuple
+    , unliftio
     , unordered-containers
     , uuid
     , valor >=1.0.0.0

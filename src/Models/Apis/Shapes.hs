@@ -18,6 +18,8 @@ import Data.Time (UTCTime, getZonedTime)
 import Data.UUID qualified as UUID
 import Data.Vector (Vector)
 import Data.Vector qualified as Vector
+import Effectful 
+import Effectful.PostgreSQL.Transact.Effect (DB, dbtToEff)
 import Database.PostgreSQL.Entity.DBT (QueryNature (..), query)
 import Database.PostgreSQL.Entity.Types (CamelToSnake, Entity, FieldModifiers, GenericEntity, PrimaryKey, Schema, TableName)
 import Database.PostgreSQL.Simple (FromRow, ToRow)
@@ -28,8 +30,6 @@ import Database.PostgreSQL.Simple.ToField (ToField)
 import Database.PostgreSQL.Transact (DBT, executeMany)
 import Database.PostgreSQL.Transact qualified as PgT
 import Deriving.Aeson qualified as DAE
-import Hasql.Interpolate qualified as Hasql
-import Hasql.Statement qualified as Hasql
 import Models.Apis.Fields.Types
 import Models.Apis.Fields.Types qualified as Fields
 import Models.Projects.Projects qualified as Projects
@@ -102,16 +102,14 @@ data Shape = Shape
   deriving (FromField) via Aeson Shape
 
 
-bulkInsertShapes :: [Shape] -> Hasql.Statement () ()
-bulkInsertShapes shapes =
-  Hasql.interp
-    True
-    [Hasql.sql| 
+bulkInsertShapes :: DB :> es => [Shape] -> Eff es () 
+bulkInsertShapes shapes = void $ dbtToEff $ executeMany q rowsToInsert
+    where 
+    q = [sql| 
             INSERT INTO apis.shapes
             (project_id, endpoint_hash, query_params_keypaths, request_body_keypaths, response_body_keypaths, request_headers_keypaths, response_headers_keypaths, field_hashes, hash, status_code, request_description, response_description)
-            ^{Hasql.toTable rowsToInsert} ON CONFLICT DO NOTHING; 
+            (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING; 
           |]
-  where
     rowsToInsert =
       shapes <&> \shape ->
         ( shape.projectId

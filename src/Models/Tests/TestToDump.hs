@@ -3,23 +3,17 @@ module Models.Tests.TestToDump (testRunToRequestMsg, runTestAndLog) where
 import Data.Aeson qualified as AE
 import Data.Base64.Types qualified as B64
 import Data.ByteString.Base64 qualified as B64
-import Data.Effectful.Hasql
 import Data.Either.Extra (mapLeft)
 import Data.Time
 import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUIDV4
 import Data.Vector qualified as V
-import Effectful (
-  Eff,
-  IOE,
-  type (:>),
- )
-import Effectful.Error.Static (Error)
+import Effectful 
+import Effectful.PostgreSQL.Transact.Effect (DB)
 import Effectful.Log (Log)
 import Effectful.Reader.Static qualified as Reader
 import Effectful.Time qualified as Time
 import Foreign.C.String (peekCString, withCString)
-import Hasql.Pool (UsageError)
 import Log qualified
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.Projects qualified as Projects
@@ -88,7 +82,7 @@ runCollectionTest collectionSteps = do
 
 
 runTestAndLog
-  :: (IOE :> es, Time.Time :> es, Reader.Reader Config.AuthContext :> es, Hasql :> es, Error UsageError :> es, Log :> es)
+  :: (IOE :> es, Time.Time :> es, Reader.Reader Config.AuthContext :> es, DB :> es, Log :> es)
   => Projects.ProjectId
   -> V.Vector Testing.CollectionStepData
   -> Eff es (Either Text (V.Vector Testing.StepResult))

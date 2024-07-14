@@ -23,13 +23,12 @@ import Data.HashMap.Strict qualified as HM
 import Data.List (groupBy)
 import Data.Scientific qualified as Scientific
 import Data.Text qualified as T
-import Data.Time.Clock as Clock (UTCTime, secondsToDiffTime)
-import Data.Time.LocalTime as Time (ZonedTime, zonedTimeToUTC)
+import Data.Time.Clock as Clock (UTCTime, secondsToNominalDiffTime)
+import Data.Time.LocalTime as Time (ZonedTime, zonedTimeToUTC, calendarTimeTime)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Database.PostgreSQL.Simple (Query)
 import Deriving.Aeson qualified as DAE
-import Hasql.Interpolate qualified as Hasql
 import Models.Apis.Anomalies qualified as Anomalies
 import Models.Apis.Endpoints qualified as Endpoints
 import Models.Apis.Fields.Types qualified as Fields (
@@ -272,19 +271,19 @@ requestMsgToDumpAndEndpoint pjc rM now dumpIDOriginal = do
           , host = fromMaybe "" rM.host
           , urlPath = urlPath
           , rawUrl = rM.rawUrl
-          , pathParams = Hasql.AsJsonb pathParams
+          , pathParams = pathParams
           , method = method
           , referer = fromMaybe "" $ rM.referer >>= either Just listToMaybe
           , protoMajor = fromIntegral rM.protoMajor
           , protoMinor = fromIntegral rM.protoMinor
-          , duration = secondsToDiffTime $ fromIntegral rM.duration
+          , duration = calendarTimeTime $ secondsToNominalDiffTime $ fromIntegral rM.duration
           , statusCode = fromIntegral rM.statusCode
           , --
-            queryParams = Hasql.AsJsonb rM.queryParams
-          , requestBody = Hasql.AsJsonb reqBody
-          , responseBody = Hasql.AsJsonb respBody
-          , requestHeaders = Hasql.AsJsonb rM.requestHeaders
-          , responseHeaders = Hasql.AsJsonb rM.responseHeaders
+            queryParams = rM.queryParams
+          , requestBody = reqBody
+          , responseBody = respBody
+          , requestHeaders = rM.requestHeaders
+          , responseHeaders = rM.responseHeaders
           , --
             endpointHash = endpointHash
           , shapeHash = shapeHash
@@ -294,7 +293,7 @@ requestMsgToDumpAndEndpoint pjc rM now dumpIDOriginal = do
           , sdkType = rM.sdkType
           , parentId = rM.parentId
           , serviceVersion = rM.serviceVersion
-          , errors = Hasql.AsJsonb $ toJSON $ errorsList
+          , errors = toJSON $ errorsList
           , tags = maybe V.empty V.fromList rM.tags
           , requestType = RequestDumps.getRequestType rM.sdkType
           }

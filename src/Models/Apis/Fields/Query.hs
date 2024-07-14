@@ -14,8 +14,10 @@ module Models.Apis.Fields.Query (
 )
 where
 
+import Effectful.PostgreSQL.Transact.Effect (DB, dbtToEff)
 import Data.Time (ZonedTime)
 import Data.Vector (Vector)
+import Effectful
 import Database.PostgreSQL.Entity (selectById)
 import Database.PostgreSQL.Entity.DBT (QueryNature (Select, Update), execute, query)
 import Database.PostgreSQL.Simple (Only (Only))
@@ -23,8 +25,6 @@ import Database.PostgreSQL.Simple.FromRow
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Transact (DBT, executeMany)
 import Database.PostgreSQL.Transact qualified as PgT
-import Hasql.Interpolate qualified as Hasql
-import Hasql.Statement qualified as Hasql
 import Models.Apis.Fields.Types (Field, FieldCategoryEnum, FieldId, FieldTypes, SwField)
 import Models.Apis.Fields.Types qualified as FT
 import Models.Projects.Projects qualified as Projects
@@ -35,23 +35,21 @@ instance FromRow Text where
   fromRow = field
 
 
-bulkInsertFields :: [Field] -> Hasql.Statement () ()
-bulkInsertFields fields =
-  Hasql.interp
-    True
-    [Hasql.sql| INSERT into apis.fields (project_id, endpoint_hash, key, field_type, format, description, key_path, field_category, hash) 
-            VALUES ^{Hasql.toTable rowsToInsert} ON CONFLICT DO NOTHING; |]
+bulkInsertFields :: DB :> es =>  [Field] -> Eff es ()
+bulkInsertFields fields = void $ dbtToEff $ executeMany q rowsToInsert
   where
+    q = [sql| INSERT into apis.fields (project_id, endpoint_hash, key, field_type, format, description, key_path, field_category, hash) 
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING; |]
     rowsToInsert =
       fields <&> \field ->
         ( field.projectId
         , field.endpointHash
         , field.key
-        , show field.fieldType
+        , field.fieldType
         , field.format
         , field.description
         , field.keyPath
-        , show field.fieldCategory
+        , field.fieldCategory
         , field.hash
         )
 

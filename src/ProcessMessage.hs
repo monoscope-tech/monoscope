@@ -10,28 +10,20 @@ import Data.Aeson (eitherDecode)
 import Data.Aeson.Types (KeyValue ((.=)), object)
 import Data.ByteString.Lazy.Char8 qualified as BL
 import Data.Cache qualified as Cache
-import Data.Effectful.Hasql
-import Data.Effectful.Hasql qualified as Hasql
 import Data.List (unzip7)
 import Data.Text qualified as T
 import Data.UUID.V4 (nextRandom)
 import Database.PostgreSQL.Entity.DBT (withPool)
 import Debug.Pretty.Simple ()
-import Effectful (
-  Eff,
-  IOE,
-  type (:>),
- )
-import Effectful.Error.Static (Error)
+import Effectful 
+import UnliftIO.Exception (try)
+import Effectful.PostgreSQL.Transact.Effect (DB)
 import Effectful.Log (Log)
 import Effectful.Reader.Static (ask)
 import Effectful.Reader.Static qualified as Reader
 import Effectful.Time qualified as Time
-import Fmt (fmtLn, (+|), (|+))
-import Hasql.Pool (UsageError)
-
--- import Hasql.Pipeline qualified as Hasql
-import Hasql.Session qualified as Hasql
+import PyF (fmt)
+import Database.PostgreSQL.Simple (SomePostgreSqlException)
 import Log qualified
 import Models.Apis.Endpoints qualified as Endpoints
 import Models.Apis.Fields.Query qualified as Fields
@@ -112,7 +104,7 @@ import Utils (eitherStrToText)
     We could also maintain hashes of all the formats in the cache, and check each field format within this list.🤔
  --}
 processMessages
-  :: (Reader.Reader Config.AuthContext :> es, Time.Time :> es, Hasql :> es, Error UsageError :> es, Log :> es, IOE :> es)
+  :: (Reader.Reader Config.AuthContext :> es, Time.Time :> es, DB :> es, Log :> es, IOE :> es)
   => [(Text, ByteString)]
   -> Eff es [Text]
 processMessages msgs = do
@@ -137,7 +129,7 @@ replaceNullChars = T.replace "\\u0000" ""
 
 
 processRequestMessages
-  :: (Reader.Reader Config.AuthContext :> es, Time.Time :> es, Hasql :> es, Error UsageError :> es, Log :> es, IOE :> es)
+  :: (Reader.Reader Config.AuthContext :> es, Time.Time :> es, DB :> es, Log :> es, IOE :> es)
   => [(Text, RequestMessages.RequestMessage)]
   -> Eff es [Text]
 processRequestMessages msgs = do
@@ -155,31 +147,23 @@ processRequestMessages msgs = do
     Log.logAttention "Error processing message" (object ["Error" .= err, "AckId" .= rmAckId, "OriginalMsg" .= msg])
 
   afterProcessing <- liftIO $ getTime Monotonic
-  dbResult <- Hasql.runSession $ do
-    unless (null $ catMaybes reqDumps) $ Hasql.statement () $ RequestDumps.bulkInsertRequestDumps (catMaybes reqDumps)
-    unless (null $ catMaybes endpoints) $ Hasql.statement () $ Endpoints.bulkInsertEndpoints (catMaybes endpoints)
-    unless (null $ catMaybes shapes) $ Hasql.statement () $ Shapes.bulkInsertShapes (catMaybes shapes)
-    unless (null $ concat fields) $ Hasql.statement () $ Fields.bulkInsertFields (concat fields)
-    unless (null $ concat formats) $ Hasql.statement () $ Formats.bulkInsertFormat (concat formats)
+  result <- try do
+    unless (null $ catMaybes reqDumps) $ RequestDumps.bulkInsertRequestDumps (catMaybes reqDumps)
+    unless (null $ catMaybes endpoints) $ Endpoints.bulkInsertEndpoints (catMaybes endpoints)
+    unless (null $ catMaybes shapes) $ Shapes.bulkInsertShapes (catMaybes shapes)
+    unless (null $ concat fields) $ Fields.bulkInsertFields (concat fields)
+    unless (null $ concat formats) $ Formats.bulkInsertFormat (concat formats)
   endTime <- liftIO $ getTime Monotonic
-
-  let msg =
-        fmtLn @String
-          $ "Process Message ("
-          +| length msgs
-          |+ ") pipeline microsecs: "
-          +| "queryDuration "
-          +| toNanoSecs (diffTimeSpec startTime afterProcessing)
-            `div` 1000
-          |+ " -> processingDuration "
-          +| toNanoSecs (diffTimeSpec afterProcessing endTime)
-            `div` 1000
-          |+ " -> TotalDuration "
-          +| toNanoSecs (diffTimeSpec startTime endTime)
-            `div` 1000
-          |+ ""
+  let processingTime = toNanoSecs (diffTimeSpec startTime afterProcessing) `div` 1000
+  let queryTime = toNanoSecs (diffTimeSpec afterProcessing endTime) `div` 1000 
+  let totalTime = toNanoSecs (diffTimeSpec startTime endTime) `div` 1000 
+  let msg = [fmt| Processing Message {length msgs} pipeline. totalTime: {totalTime} -> query: {queryTime} -> processing: {processingTime}|]
   Log.logInfo_ (show msg)
-  pure rmAckIds
+  case result of 
+    Left (e::SomePostgreSqlException) -> do
+      Log.logAttention "Postgres Exception" (show e)
+      pure []
+    Right _ -> pure rmAckIds
 
 
 projectCacheDefault :: Projects.ProjectCache

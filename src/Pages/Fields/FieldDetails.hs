@@ -68,7 +68,7 @@ fieldPutH pid fid editData = do
               }
         )
           <$> editData.formats
-  r <- dbtToEff $ Formats.insertFormats formats
+  r <- Formats.bulkInsertFormat formats
   addSuccessToast "Field edited successfully" Nothing
   addRespHeaders FieldPut
 

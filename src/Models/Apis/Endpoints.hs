@@ -30,6 +30,8 @@ import Data.Aeson qualified as AE
 import Data.Default (Default)
 import Data.Default.Instances ()
 import Data.Time (UTCTime, ZonedTime)
+import Effectful.PostgreSQL.Transact.Effect (DB, dbtToEff)
+import Effectful
 import Data.UUID qualified as UUID
 import Data.Vector (Vector)
 import Database.PostgreSQL.Entity.DBT (QueryNature (..), query, queryOne)
@@ -44,8 +46,6 @@ import Database.PostgreSQL.Transact (DBT, executeMany)
 import Database.PostgreSQL.Transact qualified as PgT
 import Deriving.Aeson qualified as DAE
 import GHC.Records (HasField (getField))
-import Hasql.Interpolate qualified as Hasql
-import Hasql.Statement qualified as Hasql
 import Models.Projects.Projects qualified as Projects
 import NeatInterpolation (text)
 import Relude
@@ -100,19 +100,17 @@ endpointUrlPath :: Projects.ProjectId -> EndpointId -> Text
 endpointUrlPath pid eid = "/p/" <> pid.toText <> "/endpoints/" <> endpointIdText eid
 
 
-bulkInsertEndpoints :: [Endpoint] -> Hasql.Statement () ()
-bulkInsertEndpoints endpoints =
-  Hasql.interp
-    True
-    [Hasql.sql| INSERT INTO apis.endpoints (project_id, url_path, url_params, method, host, hash, outgoing)
-          ^{Hasql.toTable rowsToInsert} ON CONFLICT (hash) DO  NOTHING;
+bulkInsertEndpoints :: DB :> es => [Endpoint] -> Eff es ()
+bulkInsertEndpoints endpoints = void $ dbtToEff $ executeMany q rowsToInsert 
+  where 
+    q = [sql| INSERT INTO apis.endpoints (project_id, url_path, url_params, method, host, hash, outgoing)
+          VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT (hash) DO  NOTHING;
       |]
-  where
     rowsToInsert =
       endpoints <&> \endpoint ->
         ( endpoint.projectId
         , endpoint.urlPath
-        , Hasql.AsJsonb endpoint.urlParams
+        , endpoint.urlParams
         , endpoint.method
         , endpoint.host
         , endpoint.hash
