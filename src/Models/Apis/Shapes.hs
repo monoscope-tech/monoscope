@@ -106,10 +106,9 @@ bulkInsertShapes :: DB :> es => [Shape] -> Eff es ()
 bulkInsertShapes shapes = void $ dbtToEff $ executeMany q rowsToInsert
     where 
     q = [sql| 
-            INSERT INTO apis.shapes
+        INSERT INTO apis.shapes
             (project_id, endpoint_hash, query_params_keypaths, request_body_keypaths, response_body_keypaths, request_headers_keypaths, response_headers_keypaths, field_hashes, hash, status_code, request_description, response_description)
-            (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING; 
-          |]
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING|]
     rowsToInsert =
       shapes <&> \shape ->
         ( shape.projectId
