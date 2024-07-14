@@ -179,35 +179,35 @@ requestMsgToDumpAndEndpoint pjc rM now dumpIDOriginal = do
   let sanitizeNullChars = encodeUtf8 . replaceNullChars . decodeUtf8
   reqBodyB64 <- B64.decodeBase64Untyped $ encodeUtf8 rM.requestBody
   respBodyB64 <- B64.decodeBase64Untyped $ encodeUtf8 rM.responseBody
-  let reqBody = redactJSON redactFieldsList $ fromRight (AE.object []) $ AE.eitherDecodeStrict $ sanitizeNullChars reqBodyB64
-      respBody = redactJSON redactFieldsList $ fromRight (AE.object []) $ AE.eitherDecodeStrict $ sanitizeNullChars respBodyB64
-      pathParamFields = valueToFields $ redactJSON redactFieldsList rM.pathParams
-      queryParamFields = valueToFields $ redactJSON redactFieldsList rM.queryParams
-      reqHeaderFields = valueToFields $ redactJSON redactFieldsList rM.requestHeaders
-      respHeaderFields = valueToFields $ redactJSON redactFieldsList rM.responseHeaders
-      reqBodyFields = valueToFields reqBody
-      respBodyFields = valueToFields respBody
-      queryParamsKP = V.fromList $ map fst queryParamFields
-      requestHeadersKP = V.fromList $ map fst reqHeaderFields
-      responseHeadersKP = V.fromList $ map fst respHeaderFields
-      requestBodyKP = V.fromList $ map fst reqBodyFields
-      responseBodyKP = V.fromList $ map fst respBodyFields
+  let !reqBody = redactJSON redactFieldsList $ fromRight (AE.object []) $ AE.eitherDecodeStrict $ sanitizeNullChars reqBodyB64
+      !respBody = redactJSON redactFieldsList $ fromRight (AE.object []) $ AE.eitherDecodeStrict $ sanitizeNullChars respBodyB64
+      !pathParamFields = valueToFields $ redactJSON redactFieldsList rM.pathParams
+      !queryParamFields = valueToFields $ redactJSON redactFieldsList rM.queryParams
+      !reqHeaderFields = valueToFields $ redactJSON redactFieldsList rM.requestHeaders
+      !respHeaderFields = valueToFields $ redactJSON redactFieldsList rM.responseHeaders
+      !reqBodyFields = valueToFields reqBody
+      !respBodyFields = valueToFields respBody
+      !queryParamsKP = V.fromList $ map fst queryParamFields
+      !requestHeadersKP = V.fromList $ map fst reqHeaderFields
+      !responseHeadersKP = V.fromList $ map fst respHeaderFields
+      !requestBodyKP = V.fromList $ map fst reqBodyFields
+      !responseBodyKP = V.fromList $ map fst respBodyFields
 
   -- We calculate a hash that represents the request.
   -- We skip the request headers from this hash, since the source of the request like browsers might add or skip headers at will,
   -- which would make this process not deterministic anymore, and that's necessary for a hash.
-  let combinedKeyPathStr = T.concat $ sort $ V.toList $ queryParamsKP <> responseHeadersKP <> requestBodyKP <> responseBodyKP
+  let !combinedKeyPathStr = T.concat $ sort $ V.toList $ queryParamsKP <> responseHeadersKP <> requestBodyKP <> responseBodyKP
   -- Include the endpoint hash and status code to make the shape hash unique by endpoint and status code.
   let !shapeHash = endpointHash <> show rM.statusCode <> toXXHash combinedKeyPathStr
   let projectId = Projects.ProjectId rM.projectId
 
-  let pathParamsFieldsDTO = pathParamFields <&> fieldsToFieldDTO Fields.FCPathParam projectId endpointHash
-      queryParamsFieldsDTO = queryParamFields <&> fieldsToFieldDTO Fields.FCQueryParam projectId endpointHash
-      reqHeadersFieldsDTO = reqHeaderFields <&> fieldsToFieldDTO Fields.FCRequestHeader projectId endpointHash
-      respHeadersFieldsDTO = respHeaderFields <&> fieldsToFieldDTO Fields.FCResponseHeader projectId endpointHash
-      reqBodyFieldsDTO = reqBodyFields <&> fieldsToFieldDTO Fields.FCRequestBody projectId endpointHash
-      respBodyFieldsDTO = respBodyFields <&> fieldsToFieldDTO Fields.FCResponseBody projectId endpointHash
-      fieldsDTO =
+  let !pathParamsFieldsDTO = pathParamFields <&> fieldsToFieldDTO Fields.FCPathParam projectId endpointHash
+      !queryParamsFieldsDTO = queryParamFields <&> fieldsToFieldDTO Fields.FCQueryParam projectId endpointHash
+      !reqHeadersFieldsDTO = reqHeaderFields <&> fieldsToFieldDTO Fields.FCRequestHeader projectId endpointHash
+      !respHeadersFieldsDTO = respHeaderFields <&> fieldsToFieldDTO Fields.FCResponseHeader projectId endpointHash
+      !reqBodyFieldsDTO = reqBodyFields <&> fieldsToFieldDTO Fields.FCRequestBody projectId endpointHash
+      !respBodyFieldsDTO = respBodyFields <&> fieldsToFieldDTO Fields.FCResponseBody projectId endpointHash
+      !fieldsDTO =
         pathParamsFieldsDTO
           <> queryParamsFieldsDTO
           <> reqHeadersFieldsDTO
@@ -215,8 +215,8 @@ requestMsgToDumpAndEndpoint pjc rM now dumpIDOriginal = do
           <> reqBodyFieldsDTO
           <> respBodyFieldsDTO
   let (fields, formats) = unzip fieldsDTO
-  let fieldHashes = V.fromList $ sort $ map (.hash) fields
-  let formatHashes = V.fromList $ sort $ map (.hash) formats
+  let !fieldHashes = V.fromList $ sort $ map (.hash) fields
+  let !formatHashes = V.fromList $ sort $ map (.hash) formats
 
   --- FIXME: why are we not using the actual url params?
   -- Since it foes into the endpoint, maybe it should be the keys and their type? I'm unsure.
@@ -255,14 +255,14 @@ requestMsgToDumpAndEndpoint pjc rM now dumpIDOriginal = do
                 }
 
   -- FIXME: simplify processErrors func
-  let (errorsList, _, _) = unzip3 $ map (processErrors projectId rM.sdkType rM.method (fromMaybe "" rM.urlPath)) $ fromMaybe [] rM.errors
+  let !(errorsList, _, _) = unzip3 $ map (processErrors projectId rM.sdkType rM.method (fromMaybe "" rM.urlPath)) $ fromMaybe [] rM.errors
 
   -- request dumps are time series dumps representing each requests which we consume from our users.
   -- We use this field via the log explorer for exploring and searching traffic. And at the moment also use it for most time series analytics.
   -- It's likely a good idea to stop relying on it for some of the time series analysis, to allow us easily support request sampling, but still support
   -- relatively accurate analytic counts.
   -- Build the query and params for inserting a request dump into the database.
-  let reqDumpP =
+  let !reqDumpP =
         RequestDumps.RequestDump
           { id = dumpID
           , createdAt = timestampUTC
