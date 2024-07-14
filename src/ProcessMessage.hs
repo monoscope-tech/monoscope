@@ -14,7 +14,6 @@ import Data.List (unzip7, nubBy)
 import Data.Text qualified as T
 import Data.UUID.V4 (nextRandom)
 import Database.PostgreSQL.Entity.DBT (withPool)
-import Debug.Pretty.Simple (pTraceShowM)
 import Effectful 
 import UnliftIO.Exception (try)
 import Effectful.PostgreSQL.Transact.Effect (DB)
@@ -166,10 +165,6 @@ processRequestMessages msgs = do
   Log.logInfo_ (show msg)
   case result of 
     Left (e::SomePostgreSqlException) -> do
-      pTraceShowM $ formatsFinal <&> (.hash) 
-      pTraceShowM $ fieldsFinal <&> (.hash)
-      -- pTraceShowM (fields <&> (.hash) )
-      -- pTraceShowM $ uniq fields
       Log.logAttention "Postgres Exception" (show e)
       pure []
     Right _ -> pure rmAckIds
