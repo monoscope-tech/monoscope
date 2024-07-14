@@ -32,17 +32,15 @@ import Data.Aeson (Value)
 import Data.Aeson qualified as AE
 import Data.Default
 import Data.Default.Instances ()
-import Database.PostgreSQL.Simple (FromRow, Only (Only), ToRow)
 import Data.Text qualified as T
 import Data.Time (CalendarDiffTime, UTCTime, ZonedTime, getCurrentTime)
 import Data.Time.Format
 import Data.Time.Format.ISO8601 (ISO8601 (iso8601Format), formatShow)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
-import Effectful
-import Database.PostgreSQL.Entity.DBT (QueryNature (Select, Insert), query, queryOne, executeMany)
-import Effectful.PostgreSQL.Transact.Effect (DB, dbtToEff)
+import Database.PostgreSQL.Entity.DBT (QueryNature (Insert, Select), executeMany, query, queryOne)
 import Database.PostgreSQL.Entity.Types
+import Database.PostgreSQL.Simple (FromRow, Only (Only), ToRow)
 import Database.PostgreSQL.Simple.FromField (FromField (fromField))
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
@@ -51,6 +49,8 @@ import Database.PostgreSQL.Simple.Types (Query (Query))
 import Database.PostgreSQL.Transact (DBT)
 import Database.PostgreSQL.Transact qualified as DBT
 import Deriving.Aeson qualified as DAE
+import Effectful
+import Effectful.PostgreSQL.Transact.Effect (DB, dbtToEff)
 import Models.Apis.Fields.Query ()
 import Models.Projects.Projects qualified as Projects
 import NeatInterpolation (text)
@@ -473,12 +473,10 @@ hasRequest pid = do
 ) |]
 
 
-bulkInsertRequestDumps :: DB :> es => [RequestDump] -> Eff es () 
+bulkInsertRequestDumps :: DB :> es => [RequestDump] -> Eff es ()
 bulkInsertRequestDumps params = void $ dbtToEff $ executeMany Insert q params
   where
     q = [sql| INSERT INTO apis.request_dumps VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING; |]
-
-
 
 
 selectRequestDumpByProjectAndId :: Projects.ProjectId -> UTCTime -> UUID.UUID -> DBT IO (Maybe RequestDumpLogItem)

@@ -8,9 +8,9 @@ import Data.Time
 import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUIDV4
 import Data.Vector qualified as V
-import Effectful 
-import Effectful.PostgreSQL.Transact.Effect (DB)
+import Effectful
 import Effectful.Log (Log)
+import Effectful.PostgreSQL.Transact.Effect (DB)
 import Effectful.Reader.Static qualified as Reader
 import Effectful.Time qualified as Time
 import Foreign.C.String (peekCString, withCString)

@@ -22,10 +22,10 @@ import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.ToField (ToField)
 import Database.PostgreSQL.Transact (DBT, executeMany)
-import Effectful
-import Effectful.PostgreSQL.Transact.Effect (DB, dbtToEff)
 import Database.PostgreSQL.Transact qualified as PgT
 import Deriving.Aeson qualified as DAE
+import Effectful
+import Effectful.PostgreSQL.Transact.Effect (DB, dbtToEff)
 import Models.Apis.Fields.Types qualified as Fields
 import Models.Projects.Projects qualified as Projects
 import Relude
@@ -67,10 +67,11 @@ formatsByHash fhash = query Select q (Only fhash)
     q = [sql| SELECT id,created_at,updated_at,project_id, field_hash,field_type,field_format,examples::json[], hash from apis.formats where hash=? |]
 
 
-bulkInsertFormat ::DB :> es =>  [Format] -> Eff es ()
+bulkInsertFormat :: DB :> es => [Format] -> Eff es ()
 bulkInsertFormat formats = void $ dbtToEff $ executeMany q rowsToInsert
   where
-    q = [sql| 
+    q =
+      [sql| 
       insert into apis.formats (project_id, field_hash, field_type, field_format, examples, hash) 
         VALUES (?, ?, ?, ?, ?, ?) 
         ON CONFLICT (hash)
@@ -86,7 +87,6 @@ bulkInsertFormat formats = void $ dbtToEff $ executeMany q rowsToInsert
         , format.examples
         , format.hash
         )
-
 
 
 data SwFormat = SwFormat

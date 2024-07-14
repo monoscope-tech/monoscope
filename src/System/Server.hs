@@ -15,7 +15,6 @@ import Data.Generics.Product (field)
 import Data.Pool as Pool (destroyAllResources)
 import Data.Text.Lazy.Encoding qualified as LT
 import Effectful
-import UnliftIO.Exception (tryAny)
 import Effectful.Concurrent (runConcurrent)
 import Effectful.Fail (runFailIO)
 import Effectful.Time (runTime)
@@ -52,6 +51,7 @@ import System.Config (
  )
 import System.Logging qualified as Logging
 import System.Types (effToServantHandler, runBackground)
+import UnliftIO.Exception (tryAny)
 import Web.Routes qualified as Routes
 
 
@@ -129,27 +129,27 @@ pubsubService appLogger appCtx = do
     $ runResourceT
       do
         forM envConfig.requestPubsubTopics \topic -> do
-            result <- tryAny do
-              let subscription = "projects/past-3/subscriptions/" <> topic <> "-sub"
-              pullResp <- Google.send env $ PubSub.newPubSubProjectsSubscriptionsPull pullReq subscription
-              let messages = fromMaybe [] (pullResp L.^. field @"receivedMessages")
-              let msgsB64 =
-                    messages & map \msg -> do
-                      ackId <- msg.ackId
-                      b64Msg <- msg ^? field @"message" . _Just . field @"data'" . _Just . _Base64
-                      Just (ackId, b64Msg)
+          result <- tryAny do
+            let subscription = "projects/past-3/subscriptions/" <> topic <> "-sub"
+            pullResp <- Google.send env $ PubSub.newPubSubProjectsSubscriptionsPull pullReq subscription
+            let messages = fromMaybe [] (pullResp L.^. field @"receivedMessages")
+            let msgsB64 =
+                  messages & map \msg -> do
+                    ackId <- msg.ackId
+                    b64Msg <- msg ^? field @"message" . _Just . field @"data'" . _Just . _Base64
+                    Just (ackId, b64Msg)
 
-              msgIdsE <- liftIO $ runBackground appLogger appCtx $ processMessages (catMaybes msgsB64)
-              case msgIdsE of
-                Left _ -> pass
-                Right msgIds -> do
-                  let acknowlegReq = PubSub.newAcknowledgeRequest & field @"ackIds" L..~ Just msgIds
-                  unless (null msgIds) $ void $ PubSub.newPubSubProjectsSubscriptionsAcknowledge acknowlegReq subscription & Google.send env 
-            case result of 
-              Left (e) -> do
-                liftIO $ Log.runLogT "apitoolkit" appLogger Log.LogAttention $ Log.logAttention "Run Pubsub exception" (show e)
-                pass
-              Right _ -> pass
+            msgIdsE <- liftIO $ runBackground appLogger appCtx $ processMessages (catMaybes msgsB64)
+            case msgIdsE of
+              Left _ -> pass
+              Right msgIds -> do
+                let acknowlegReq = PubSub.newAcknowledgeRequest & field @"ackIds" L..~ Just msgIds
+                unless (null msgIds) $ void $ PubSub.newPubSubProjectsSubscriptionsAcknowledge acknowlegReq subscription & Google.send env
+          case result of
+            Left (e) -> do
+              liftIO $ Log.runLogT "apitoolkit" appLogger Log.LogAttention $ Log.logAttention "Run Pubsub exception" (show e)
+              pass
+            Right _ -> pass
 
 
 -- pubSubScope :: Proxy PubSub.Pubsub'FullControl

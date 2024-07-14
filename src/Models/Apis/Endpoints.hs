@@ -30,8 +30,6 @@ import Data.Aeson qualified as AE
 import Data.Default (Default)
 import Data.Default.Instances ()
 import Data.Time (UTCTime, ZonedTime)
-import Effectful.PostgreSQL.Transact.Effect (DB, dbtToEff)
-import Effectful
 import Data.UUID qualified as UUID
 import Data.Vector (Vector)
 import Database.PostgreSQL.Entity.DBT (QueryNature (..), query, queryOne)
@@ -45,6 +43,8 @@ import Database.PostgreSQL.Simple.Types (Query (Query))
 import Database.PostgreSQL.Transact (DBT, executeMany)
 import Database.PostgreSQL.Transact qualified as PgT
 import Deriving.Aeson qualified as DAE
+import Effectful
+import Effectful.PostgreSQL.Transact.Effect (DB, dbtToEff)
 import GHC.Records (HasField (getField))
 import Models.Projects.Projects qualified as Projects
 import NeatInterpolation (text)
@@ -101,9 +101,10 @@ endpointUrlPath pid eid = "/p/" <> pid.toText <> "/endpoints/" <> endpointIdText
 
 
 bulkInsertEndpoints :: DB :> es => [Endpoint] -> Eff es ()
-bulkInsertEndpoints endpoints = void $ dbtToEff $ executeMany q rowsToInsert 
-  where 
-    q = [sql| INSERT INTO apis.endpoints (project_id, url_path, url_params, method, host, hash, outgoing)
+bulkInsertEndpoints endpoints = void $ dbtToEff $ executeMany q rowsToInsert
+  where
+    q =
+      [sql| INSERT INTO apis.endpoints (project_id, url_path, url_params, method, host, hash, outgoing)
           VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT (hash) DO  NOTHING;
       |]
     rowsToInsert =

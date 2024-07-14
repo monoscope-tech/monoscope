@@ -24,7 +24,7 @@ import Data.List (groupBy)
 import Data.Scientific qualified as Scientific
 import Data.Text qualified as T
 import Data.Time.Clock as Clock (UTCTime, secondsToNominalDiffTime)
-import Data.Time.LocalTime as Time (ZonedTime, zonedTimeToUTC, calendarTimeTime)
+import Data.Time.LocalTime as Time (ZonedTime, calendarTimeTime, zonedTimeToUTC)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Database.PostgreSQL.Simple (Query)

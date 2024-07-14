@@ -10,19 +10,17 @@ import Data.Aeson (eitherDecode)
 import Data.Aeson.Types (KeyValue ((.=)), object)
 import Data.ByteString.Lazy.Char8 qualified as BL
 import Data.Cache qualified as Cache
-import Data.List (unzip7, nubBy)
+import Data.List (nubBy, unzip7)
 import Data.Text qualified as T
 import Data.UUID.V4 (nextRandom)
 import Database.PostgreSQL.Entity.DBT (withPool)
-import Effectful 
-import UnliftIO.Exception (try)
-import Effectful.PostgreSQL.Transact.Effect (DB)
+import Database.PostgreSQL.Simple (SomePostgreSqlException)
+import Effectful
 import Effectful.Log (Log)
+import Effectful.PostgreSQL.Transact.Effect (DB)
 import Effectful.Reader.Static (ask)
 import Effectful.Reader.Static qualified as Reader
 import Effectful.Time qualified as Time
-import PyF (fmt)
-import Database.PostgreSQL.Simple (SomePostgreSqlException)
 import Log qualified
 import Models.Apis.Endpoints qualified as Endpoints
 import Models.Apis.Fields.Query qualified as Fields
@@ -31,6 +29,7 @@ import Models.Apis.Formats qualified as Formats
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Apis.Shapes qualified as Shapes
 import Models.Projects.Projects qualified as Projects
+import PyF (fmt)
 import Relude hiding (ask)
 import RequestMessages qualified
 import System.Clock (
@@ -40,6 +39,7 @@ import System.Clock (
   toNanoSecs,
  )
 import System.Config qualified as Config
+import UnliftIO.Exception (try)
 import Utils (eitherStrToText)
 
 
@@ -143,8 +143,8 @@ processRequestMessages msgs = do
       !(reqDumps, endpoints, shapes, fields, formats, _errs, rmAckIds) = unzip7 successes
   let !reqDumpsFinal = catMaybes reqDumps
   let !endpointsFinal = nubBy (\x y -> x.hash == x.hash) $ catMaybes endpoints
-  let !shapesFinal = nubBy (\x y -> x.hash == x.hash)  $ catMaybes shapes
-  let !fieldsFinal = nubBy (\x y -> x.hash == x.hash) $  concat fields
+  let !shapesFinal = nubBy (\x y -> x.hash == x.hash) $ catMaybes shapes
+  let !fieldsFinal = nubBy (\x y -> x.hash == x.hash) $ concat fields
   let !formatsFinal = nubBy (\x y -> x.hash == x.hash) $ concat formats
 
   forM_ failures $ \(err, rmAckId, msg) ->
@@ -159,12 +159,12 @@ processRequestMessages msgs = do
     unless (null $ formatsFinal) $ Formats.bulkInsertFormat (formatsFinal)
   endTime <- liftIO $ getTime Monotonic
   let processingTime = toNanoSecs (diffTimeSpec startTime afterProcessing) `div` 1000
-  let queryTime = toNanoSecs (diffTimeSpec afterProcessing endTime) `div` 1000 
-  let totalTime = toNanoSecs (diffTimeSpec startTime endTime) `div` 1000 
+  let queryTime = toNanoSecs (diffTimeSpec afterProcessing endTime) `div` 1000
+  let totalTime = toNanoSecs (diffTimeSpec startTime endTime) `div` 1000
   let msg = [fmt| Processing Message {length msgs} pipeline. totalTime: {totalTime} -> query: {queryTime} -> processing: {processingTime}|]
   Log.logInfo_ (show msg)
-  case result of 
-    Left (e::SomePostgreSqlException) -> do
+  case result of
+    Left (e :: SomePostgreSqlException) -> do
       Log.logAttention "Postgres Exception" (show e)
       pure []
     Right _ -> pure rmAckIds
