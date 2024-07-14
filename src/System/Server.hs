@@ -147,8 +147,7 @@ pubsubService appLogger appCtx = do
                   unless (null msgIds) $ void $ PubSub.newPubSubProjectsSubscriptionsAcknowledge acknowlegReq subscription & Google.send env 
             case result of 
               Left (e) -> do
-                liftIO $ Log.runLogT "apitoolkit" appLogger Log.LogAttention $ do
-                  Log.logAttention "Run Pubsub exception" (show e)
+                liftIO $ Log.runLogT "apitoolkit" appLogger Log.LogAttention $ Log.logAttention "Run Pubsub exception" (show e)
                 pass
               Right _ -> pass
 

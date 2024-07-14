@@ -10,11 +10,11 @@ import Data.Aeson (eitherDecode)
 import Data.Aeson.Types (KeyValue ((.=)), object)
 import Data.ByteString.Lazy.Char8 qualified as BL
 import Data.Cache qualified as Cache
-import Data.List (unzip7)
+import Data.List (unzip7, nubBy)
 import Data.Text qualified as T
 import Data.UUID.V4 (nextRandom)
 import Database.PostgreSQL.Entity.DBT (withPool)
-import Debug.Pretty.Simple ()
+import Debug.Pretty.Simple (pTraceShowM)
 import Effectful 
 import UnliftIO.Exception (try)
 import Effectful.PostgreSQL.Transact.Effect (DB)
@@ -141,18 +141,23 @@ processRequestMessages msgs = do
       Right (rd, enp, s, f, fo, err) -> Right (rd, enp, s, f, fo, err, rmAckId)
 
   let (failures, successes) = partitionEithers processed
-      (reqDumps, endpoints, shapes, fields, formats, _errs, rmAckIds) = unzip7 successes
+      !(reqDumps, endpoints, shapes, fields, formats, _errs, rmAckIds) = unzip7 successes
+  let !reqDumpsFinal = catMaybes reqDumps
+  let !endpointsFinal = nubBy (\x y -> x.hash == x.hash) $ catMaybes endpoints
+  let !shapesFinal = nubBy (\x y -> x.hash == x.hash)  $ catMaybes shapes
+  let !fieldsFinal = nubBy (\x y -> x.hash == x.hash) $  concat fields
+  let !formatsFinal = nubBy (\x y -> x.hash == x.hash) $ concat formats
 
   forM_ failures $ \(err, rmAckId, msg) ->
     Log.logAttention "Error processing message" (object ["Error" .= err, "AckId" .= rmAckId, "OriginalMsg" .= msg])
 
   afterProcessing <- liftIO $ getTime Monotonic
   result <- try do
-    unless (null $ catMaybes reqDumps) $ RequestDumps.bulkInsertRequestDumps (catMaybes reqDumps)
-    unless (null $ catMaybes endpoints) $ Endpoints.bulkInsertEndpoints (catMaybes endpoints)
-    unless (null $ catMaybes shapes) $ Shapes.bulkInsertShapes (catMaybes shapes)
-    unless (null $ concat fields) $ Fields.bulkInsertFields (concat fields)
-    unless (null $ concat formats) $ Formats.bulkInsertFormat (concat formats)
+    unless (null $ reqDumpsFinal) $ RequestDumps.bulkInsertRequestDumps (reqDumpsFinal)
+    unless (null $ endpointsFinal) $ Endpoints.bulkInsertEndpoints (endpointsFinal)
+    unless (null $ shapesFinal) $ Shapes.bulkInsertShapes (shapesFinal)
+    unless (null $ fieldsFinal) $ Fields.bulkInsertFields (fieldsFinal)
+    unless (null $ formatsFinal) $ Formats.bulkInsertFormat (formatsFinal)
   endTime <- liftIO $ getTime Monotonic
   let processingTime = toNanoSecs (diffTimeSpec startTime afterProcessing) `div` 1000
   let queryTime = toNanoSecs (diffTimeSpec afterProcessing endTime) `div` 1000 
@@ -161,6 +166,10 @@ processRequestMessages msgs = do
   Log.logInfo_ (show msg)
   case result of 
     Left (e::SomePostgreSqlException) -> do
+      pTraceShowM $ formatsFinal <&> (.hash) 
+      pTraceShowM $ fieldsFinal <&> (.hash)
+      -- pTraceShowM (fields <&> (.hash) )
+      -- pTraceShowM $ uniq fields
       Log.logAttention "Postgres Exception" (show e)
       pure []
     Right _ -> pure rmAckIds
