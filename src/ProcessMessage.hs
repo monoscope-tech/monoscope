@@ -159,9 +159,9 @@ processRequestMessages msgs = do
     unless (null $ formatsFinal) $ Formats.bulkInsertFormat (formatsFinal)
   endTime <- liftIO $ getTime Monotonic
   let processingTime = toNanoSecs (diffTimeSpec startTime afterProcessing) `div` 1000
-  let queryTime = toNanoSecs (diffTimeSpec afterProcessing endTime) `div` 1000
-  let totalTime = toNanoSecs (diffTimeSpec startTime endTime) `div` 1000
-  let msg = [fmt| Processing Message {length msgs} pipeline. totalTime: {totalTime} -> query: {queryTime} -> processing: {processingTime}|]
+  let queryTime = toNanoSecs (diffTimeSpec afterProcessing endTime) `div` 1000 
+  let totalTime = toNanoSecs (diffTimeSpec startTime endTime) `div` 1000 
+  let msg = [fmt| Processing {length msgs} msgs. saved {length reqDumpsFinal}. totalTime: {totalTime} -> query: {queryTime} -> processing: {processingTime}|]
   Log.logInfo_ (show msg)
   case result of
     Left (e :: SomePostgreSqlException) -> do

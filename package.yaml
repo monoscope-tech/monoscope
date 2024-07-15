@@ -38,35 +38,26 @@ ghc-options:
 default-extensions:
   - BlockArguments
   - DataKinds
-  - DeriveAnyClass
-  - DerivingStrategies
   - DerivingVia
-  - DisambiguateRecordFields
+  - DeriveAnyClass
+  # - DerivingStrategies
+  - DuplicateRecordFields
+  - ExplicitNamespaces
   - ExtendedDefaultRules
-  - MultiWayIf
-  - FlexibleInstances
   - LambdaCase
-  - MultiParamTypeClasses
-  - NamedFieldPuns
-  - GeneralizedNewtypeDeriving
-  - FlexibleContexts
+  - MultiWayIf
+  - NoImplicitPrelude
   - OverloadedLabels
   - OverloadedLists
+  - OverloadedRecordDot
   - OverloadedStrings
   - PatternSynonyms
   - QuasiQuotes
-  - RecordWildCards
-  - StrictData
-  - TypeApplications
-  - TypeFamilies
-  - GeneralizedNewtypeDeriving
-  - UndecidableInstances
-  - OverloadedRecordDot
-  - TemplateHaskell
   - RoleAnnotations
-  - NoImplicitPrelude
-  - DuplicateRecordFields
-  - TupleSections
+  - UndecidableInstances
+  - TypeFamilies
+  - RecordWildCards 
+  - TemplateHaskell
 
 extra-source-files:
   - README.md
@@ -191,6 +182,7 @@ executables:
       # - -fPIC
     dependencies:
       - apitoolkit-server
+      - rust-interop
       - name: relude
         version: ">= 1.2.0.0"
         mixin:

@@ -1,0 +1,60 @@
+packages: . ./rust-interop
+
+source-repository-package
+  type: git
+  location: https://github.com/Kleidukos/pg-transact-effectful
+  tag: bcd3aeb5ca63a02ba026be4f02f4ce5767fb4f78
+  subdir: .
+
+source-repository-package
+  type: git
+  location: https://github.com/saurabhnanda/odd-jobs.git
+  tag: a159d7a17913725a0cb2a2251fa0b812acd3d160
+  subdir: .
+
+source-repository-package
+  type: git
+  location: https://github.com/tonyalaribe/gogol.git
+  tag: b54294c179f8ce8e76c9549c953e2ee684fcef8a
+  subdir: lib/gogol-core
+
+source-repository-package
+  type: git
+  location: https://github.com/tonyalaribe/gogol.git
+  tag: b54294c179f8ce8e76c9549c953e2ee684fcef8a
+  subdir: lib/gogol
+
+source-repository-package
+  type: git
+  location: https://github.com/tonyalaribe/gogol.git
+  tag: b54294c179f8ce8e76c9549c953e2ee684fcef8a
+  subdir: lib/services/gogol-pubsub
+
+source-repository-package
+  type: git
+  location: https://github.com/tonyalaribe/gogol.git
+  tag: b54294c179f8ce8e76c9549c953e2ee684fcef8a
+  subdir: lib/services/gogol-logging
+
+source-repository-package
+  type: git
+  location: https://github.com/tonyalaribe/gogol.git
+  tag: b54294c179f8ce8e76c9549c953e2ee684fcef8a
+  subdir: lib/services/gogol-cloudtrace
+
+source-repository-package
+  type: git
+  location: https://github.com/tonyalaribe/xxhash
+  tag: 0fa01adb871e66996d4ed2c27a3e97fac39ac466
+  subdir: .
+
+source-repository-package
+  type: git
+  location: https://github.com/tonyalaribe/tmp-postgres
+  tag: 893368e6010a87c3a2d33227af675b4fb8fe411f
+  subdir: .
+
+constraints:
+  pg-entity +prod
+
+allow-newer: all 
