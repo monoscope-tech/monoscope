@@ -34,7 +34,7 @@ data SurveyForm = SurveyForm
   { stack :: [Text]
   , functionality :: [Text]
   , dataLocation :: Text
-  , foundUsFrom :: Text
+  , foundUsFrom :: [Text]
   , phoneNumber :: Maybe Text
   , fullName :: Text
   }
@@ -59,6 +59,7 @@ surveyPutH pid survey = do
   let nameArr = T.splitOn " " (fullName survey)
   if length nameArr < 2
     then do
+      traceShowM survey.foundUsFrom
       addErrorToast "Invalid full name format." Nothing
       addRespHeaders SurveyPut
     else do
@@ -68,14 +69,20 @@ surveyPutH pid survey = do
       let fullName = survey.fullName
       let stack = survey.stack
       let phoneNumber = survey.phoneNumber
-      let foundUsFrom = survey.foundUsFrom
-      res <- dbtToEff $ execute Update [sql| update projects.projects set questions= ? where id=? |] (jsonBytes, pid)
-      u <- dbtToEff $ execute Update [sql| update users.users set first_name= ?, last_name=?, phone_number=? where id=? |] (firstName, lastName, phoneNumber, sess.user.id)
-      addSuccessToast "Thanks for taking the survey!" Nothing
-      _ <- liftIO $ withResource appCtx.pool \conn ->
-        createJob conn "background_jobs" $ BackgroundJobs.SendDiscordData sess.user.id pid fullName stack foundUsFrom
-      redirectCS ("/p/" <> show pid.unProjectId <> "/onboarding")
-      addRespHeaders SurveyPut
+      let foundF = filter (/= "") $ T.strip <$> survey.foundUsFrom
+      if null foundF
+        then do
+          addErrorToast "Please tell use where you found us from" Nothing
+          addRespHeaders SurveyPut
+        else do
+          let foundUsFrom = foundF !! 0
+          res <- dbtToEff $ execute Update [sql| update projects.projects set questions= ? where id=? |] (jsonBytes, pid)
+          u <- dbtToEff $ execute Update [sql| update users.users set first_name= ?, last_name=?, phone_number=? where id=? |] (firstName, lastName, phoneNumber, sess.user.id)
+          addSuccessToast "Thanks for taking the survey!" Nothing
+          _ <- liftIO $ withResource appCtx.pool \conn ->
+            createJob conn "background_jobs" $ BackgroundJobs.SendDiscordData sess.user.id pid fullName stack foundUsFrom
+          redirectCS ("/p/" <> show pid.unProjectId <> "/onboarding")
+          addRespHeaders SurveyPut
 
 
 data SurveyPut = SurveyPut
@@ -172,10 +179,16 @@ surveyPage pid full_name phoneNumber = do
                     label_ [class_ "font-medium"] do
                       "How did you find APItoolkit?"
                       span_ [class_ "text-red-400"] " *"
-                    div_ [class_ "columns-3"] $ forM_ foundUsFromOptions $ \(value, label) -> do
-                      label_ [class_ "block hover:bg-slate-100 p-2"] do
-                        input_ [class_ "mr-3", type_ "radio", id_ value, name_ "foundUsFrom", value_ value, required_ "required"]
-                        toHtml label
+                    div_ [class_ ""] do
+                      div_ [class_ "columns-3"] $ do
+                        forM_ foundUsFromOptions $ \(value, label) -> do
+                          label_ [class_ "block hover:bg-slate-100 p-2"] do
+                            input_ [class_ "mr-3", type_ "radio", id_ value, name_ "foundUsFrom", value_ value]
+                            toHtml label
+                      div_ [class_ "flex flex-col w-96 gap-2 pl-2"] do
+                        label_ [class_ ""] "Other (please specify):"
+                        input_ [type_ "text", name_ "foundUsFrom", class_ "px-3 py-1 text-sm bg-slate-50 border border-gray-300 text-gray-900 focus:outline-none rounded-lg focus:ring-blue-500 focus:border-blue-500 block w-full"]
+
                 -- div_ [class_ "flex flex-col gap-2 w-full"] do
                 --   label_ [class_ "font-medium"] "What's your phone number?"
                 --   div_ [class_ "w-full"] do
@@ -246,7 +259,6 @@ foundUsFromOptions =
   , ("reddit", "Reddit")
   , ("linkedin", "LinkedIn")
   , ("twitter", "X (Twitter)")
-  , ("other", "Other online community")
   ]
 
 

@@ -223,7 +223,7 @@ dashboardPage pid paramInput currTime projectStats newEndpoints reqLatenciesRoll
 dStats :: Projects.ProjectId -> Projects.ProjectRequestStats -> Text -> (Maybe ZonedTime, Maybe ZonedTime) -> Bool -> Html ()
 dStats pid projReqStats@Projects.ProjectRequestStats{..} reqLatenciesRolledByStepsJ dateRange@(fromD, toD) hasRequest = do
   section_ [class_ "space-y-3"] do
-    unless (hasRequest) do
+    unless hasRequest do
       section_ [class_ "card-round p-5 sm:py-14 sm:px-24 items-center flex gap-16"] do
         div_ [] do
           faSprite_ "empty-set" "solid" "h-24 w-24"
