@@ -13,6 +13,8 @@ import Data.Cache qualified as Cache
 import Data.List (nubBy, unzip7)
 import Data.Text qualified as T
 import Data.UUID.V4 (nextRandom)
+import Data.Vector qualified as V
+import Data.Vector.Algorithms qualified as VAA
 import Database.PostgreSQL.Entity.DBT (withPool)
 import Database.PostgreSQL.Simple (SomePostgreSqlException)
 import Effectful
@@ -144,8 +146,8 @@ processRequestMessages msgs = do
   let !reqDumpsFinal = catMaybes reqDumps
   let !endpointsFinal = nubBy (\x y -> x.hash == x.hash) $ catMaybes endpoints
   let !shapesFinal = nubBy (\x y -> x.hash == x.hash) $ catMaybes shapes
-  let !fieldsFinal = nubBy (\x y -> x.hash == x.hash) $ concat fields
-  let !formatsFinal = nubBy (\x y -> x.hash == x.hash) $ concat formats
+  let !fieldsFinal = VAA.nubBy (comparing (.hash)) $ V.concat $ fields
+  let !formatsFinal = VAA.nubBy (comparing (.hash)) $ V.concat $ formats
 
   forM_ failures $ \(err, rmAckId, msg) ->
     Log.logAttention "Error processing message" (object ["Error" .= err, "AckId" .= rmAckId, "OriginalMsg" .= msg])
@@ -156,11 +158,11 @@ processRequestMessages msgs = do
     unless (null $ endpointsFinal) $ Endpoints.bulkInsertEndpoints (endpointsFinal)
     unless (null $ shapesFinal) $ Shapes.bulkInsertShapes (shapesFinal)
     unless (null $ fieldsFinal) $ Fields.bulkInsertFields (fieldsFinal)
-    unless (null $ formatsFinal) $ Formats.bulkInsertFormat (formatsFinal)
+    unless (null $ formatsFinal) $ Formats.bulkInsertFormat (V.toList formatsFinal)
   endTime <- liftIO $ getTime Monotonic
   let processingTime = toNanoSecs (diffTimeSpec startTime afterProcessing) `div` 1000
-  let queryTime = toNanoSecs (diffTimeSpec afterProcessing endTime) `div` 1000 
-  let totalTime = toNanoSecs (diffTimeSpec startTime endTime) `div` 1000 
+  let queryTime = toNanoSecs (diffTimeSpec afterProcessing endTime) `div` 1000
+  let totalTime = toNanoSecs (diffTimeSpec startTime endTime) `div` 1000
   let msg = [fmt| Processing {length msgs} msgs. saved {length reqDumpsFinal}. totalTime: {totalTime} -> query: {queryTime} -> processing: {processingTime}|]
   Log.logInfo_ (show msg)
   case result of
@@ -183,9 +185,9 @@ projectCacheDefault =
 
 
 processRequestMessage
-  :: (Reader.Reader Config.AuthContext :> es, Time.Time :> es, IOE :> es)
+  :: (Reader.Reader Config.AuthContext :> es, Time.Time :> es, Log :> es, IOE :> es)
   => RequestMessages.RequestMessage
-  -> Eff es (Either Text (Maybe RequestDumps.RequestDump, Maybe Endpoints.Endpoint, Maybe Shapes.Shape, [Fields.Field], [Formats.Format], [RequestDumps.ATError]))
+  -> Eff es (Either Text (Maybe RequestDumps.RequestDump, Maybe Endpoints.Endpoint, Maybe Shapes.Shape, V.Vector Fields.Field, V.Vector Formats.Format, V.Vector RequestDumps.ATError))
 processRequestMessage recMsg = do
   appCtx <- ask @Config.AuthContext
   timestamp <- Time.currentTime
@@ -198,7 +200,9 @@ processRequestMessage recMsg = do
     mpjCache <- withPool appCtx.jobsPool $ Projects.projectCacheById pid'
     pure $ fromMaybe projectCacheDefault mpjCache
   recId <- liftIO nextRandom
+  cacheSize <- liftIO $ Cache.size appCtx.projectCache
+  Log.logAttention "Project Cache Size" (cacheSize)
   pure
     $ if projectCacheVal.paymentPlan == "Free" && projectCacheVal.weeklyRequestCount > 5000
-      then (Right (Nothing, Nothing, Nothing, [], [], []))
+      then (Right (Nothing, Nothing, Nothing, V.empty, V.empty, V.empty))
       else (RequestMessages.requestMsgToDumpAndEndpoint projectCacheVal recMsg timestamp recId)

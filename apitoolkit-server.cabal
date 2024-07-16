@@ -189,7 +189,7 @@ library
       TypeFamilies
       RecordWildCards
       TemplateHaskell
-  ghc-options: -fwrite-ide-info -hiedir=.hie -O -Weverything -Werror -Wno-error=deprecations -Wno-error=unused-packages -Wno-missing-exported-signatures -Wno-missing-import-lists -Wno-missed-specialisations -Wno-all-missed-specialisations -Wno-unsafe -Wno-safe -Wno-missing-local-signatures -Wno-monomorphism-restriction -Wno-missing-safe-haskell-mode -Wno-partial-fields -Wno-orphans -Wno-unused-matches -Wno-missing-kind-signatures -Wno-type-defaults -j4 +RTS -A128m -n2m -RTS
+  ghc-options: -fwrite-ide-info -hiedir=.hie -O3 -Weverything -Werror -Wno-error=deprecations -Wno-error=unused-packages -Wno-missing-exported-signatures -Wno-missing-import-lists -Wno-missed-specialisations -Wno-all-missed-specialisations -Wno-unsafe -Wno-safe -Wno-missing-local-signatures -Wno-monomorphism-restriction -Wno-missing-safe-haskell-mode -Wno-partial-fields -Wno-orphans -Wno-unused-matches -Wno-missing-kind-signatures -Wno-type-defaults -j4 +RTS -A128m -n2m -RTS
   build-depends:
       PyF
     , Unique
@@ -223,6 +223,8 @@ library
     , gogol
     , gogol-core
     , gogol-pubsub
+    , hashable
+    , hashtables
     , hasql
     , hasql-interpolate
     , hasql-pool
@@ -272,6 +274,7 @@ library
     , servant-htmx
     , servant-lucid
     , servant-server
+    , strict-containers
     , text
     , text-display
     , time
@@ -283,6 +286,8 @@ library
     , uuid
     , valor >=1.0.0.0
     , vector
+    , vector-algorithms
+    , vector-hashtables
     , wai
     , wai-log
     , wai-middleware-static
@@ -318,7 +323,7 @@ executable apitoolkit-server-exe
       TypeFamilies
       RecordWildCards
       TemplateHaskell
-  ghc-options: -fwrite-ide-info -hiedir=.hie -O -Weverything -Werror -Wno-error=deprecations -Wno-error=unused-packages -Wno-missing-exported-signatures -Wno-missing-import-lists -Wno-missed-specialisations -Wno-all-missed-specialisations -Wno-unsafe -Wno-safe -Wno-missing-local-signatures -Wno-monomorphism-restriction -Wno-missing-safe-haskell-mode -Wno-partial-fields -Wno-orphans -Wno-unused-matches -Wno-missing-kind-signatures -Wno-type-defaults -j4 +RTS -A128m -n2m -RTS -threaded -rtsopts -with-rtsopts=-N -fwrite-ide-info -hiedir=.hie
+  ghc-options: -fwrite-ide-info -hiedir=.hie -O3 -Weverything -Werror -Wno-error=deprecations -Wno-error=unused-packages -Wno-missing-exported-signatures -Wno-missing-import-lists -Wno-missed-specialisations -Wno-all-missed-specialisations -Wno-unsafe -Wno-safe -Wno-missing-local-signatures -Wno-monomorphism-restriction -Wno-missing-safe-haskell-mode -Wno-partial-fields -Wno-orphans -Wno-unused-matches -Wno-missing-kind-signatures -Wno-type-defaults -j4 +RTS -A128m -n2m -RTS -threaded -rtsopts -with-rtsopts=-N -fwrite-ide-info -hiedir=.hie
   build-depends:
       apitoolkit-server
     , relude >=1.2.0.0
@@ -355,7 +360,7 @@ test-suite doctests
       TypeFamilies
       RecordWildCards
       TemplateHaskell
-  ghc-options: -fwrite-ide-info -hiedir=.hie -O -Weverything -Werror -Wno-error=deprecations -Wno-error=unused-packages -Wno-missing-exported-signatures -Wno-missing-import-lists -Wno-missed-specialisations -Wno-all-missed-specialisations -Wno-unsafe -Wno-safe -Wno-missing-local-signatures -Wno-monomorphism-restriction -Wno-missing-safe-haskell-mode -Wno-partial-fields -Wno-orphans -Wno-unused-matches -Wno-missing-kind-signatures -Wno-type-defaults -j4 +RTS -A128m -n2m -RTS -threaded -rtsopts -with-rtsopts=-N -fwrite-ide-info -hiedir=.hie
+  ghc-options: -fwrite-ide-info -hiedir=.hie -O3 -Weverything -Werror -Wno-error=deprecations -Wno-error=unused-packages -Wno-missing-exported-signatures -Wno-missing-import-lists -Wno-missed-specialisations -Wno-all-missed-specialisations -Wno-unsafe -Wno-safe -Wno-missing-local-signatures -Wno-monomorphism-restriction -Wno-missing-safe-haskell-mode -Wno-partial-fields -Wno-orphans -Wno-unused-matches -Wno-missing-kind-signatures -Wno-type-defaults -j4 +RTS -A128m -n2m -RTS -threaded -rtsopts -with-rtsopts=-N -fwrite-ide-info -hiedir=.hie
   build-depends:
       apitoolkit-server
     , base
@@ -392,7 +397,7 @@ test-suite tests
       TypeFamilies
       RecordWildCards
       TemplateHaskell
-  ghc-options: -fwrite-ide-info -hiedir=.hie -O -Weverything -Werror -Wno-error=deprecations -Wno-error=unused-packages -Wno-missing-exported-signatures -Wno-missing-import-lists -Wno-missed-specialisations -Wno-all-missed-specialisations -Wno-unsafe -Wno-safe -Wno-missing-local-signatures -Wno-monomorphism-restriction -Wno-missing-safe-haskell-mode -Wno-partial-fields -Wno-orphans -Wno-unused-matches -Wno-missing-kind-signatures -Wno-type-defaults -j4 +RTS -A128m -n2m -RTS
+  ghc-options: -fwrite-ide-info -hiedir=.hie -O3 -Weverything -Werror -Wno-error=deprecations -Wno-error=unused-packages -Wno-missing-exported-signatures -Wno-missing-import-lists -Wno-missed-specialisations -Wno-all-missed-specialisations -Wno-unsafe -Wno-safe -Wno-missing-local-signatures -Wno-monomorphism-restriction -Wno-missing-safe-haskell-mode -Wno-partial-fields -Wno-orphans -Wno-unused-matches -Wno-missing-kind-signatures -Wno-type-defaults -j4 +RTS -A128m -n2m -RTS
   build-depends:
       apitoolkit-server
     , base

@@ -25,3 +25,5 @@ gha-creds-*.json
 .tmp/
 testkit
 coverage
+
+apitoolkit-server-exe*

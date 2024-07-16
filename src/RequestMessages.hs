@@ -12,6 +12,7 @@ module RequestMessages (
 )
 where
 
+import Control.Monad.ST (ST, runST)
 import Data.Aeson (ToJSON (toJSON), Value (Object))
 import Data.Aeson qualified as AE
 import Data.Aeson.Key qualified as AEKey
@@ -20,13 +21,16 @@ import Data.Aeson.Types qualified as AET
 import Data.ByteString.Base64 qualified as B64
 import Data.Digest.XXHash (xxHash)
 import Data.HashMap.Strict qualified as HM
-import Data.List (groupBy)
+import Data.HashTable.Class qualified as HTC
+import Data.HashTable.ST.Cuckoo qualified as HT
 import Data.Scientific qualified as Scientific
 import Data.Text qualified as T
 import Data.Time.Clock as Clock (UTCTime, secondsToNominalDiffTime)
 import Data.Time.LocalTime as Time (ZonedTime, calendarTimeTime, zonedTimeToUTC)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
+import Data.Vector.Algorithms.Intro qualified as VA
+import Data.Vector.Mutable qualified as VM
 import Database.PostgreSQL.Simple (Query)
 import Deriving.Aeson qualified as DAE
 import Models.Apis.Anomalies qualified as Anomalies
@@ -115,17 +119,18 @@ instance {-# OVERLAPPING #-} AE.FromJSON (Either Text [Text]) where
 --
 -- >>> redactJSON ["menu.[].id", "menu.[].names.[]"] [aesonQQ| {"menu":[{"id":"i1", "names":["John","okon"]}, {"id":"i2"}]} |]
 -- Object (fromList [("menu",Array [Object (fromList [("id",String "[REDACTED]"),("names",Array [String "[REDACTED]",String "[REDACTED]"])]),Object (fromList [("id",String "[REDACTED]")])])])
-redactJSON :: [Text] -> Value -> Value
-redactJSON paths' = redactJSON' (stripPrefixDot paths')
+redactJSON :: V.Vector Text -> Value -> Value
+redactJSON paths' = redactJSON' (V.map stripPrefixDot paths')
   where
-    redactJSON' paths (AET.String value) = if "" `elem` paths then AET.String "[REDACTED]" else AET.String value
-    redactJSON' paths (AET.Number value) = if "" `elem` paths then AET.String "[REDACTED]" else AET.Number value
-    redactJSON' paths AET.Null = AET.Null
-    redactJSON' paths (AET.Bool value) = AET.Bool value
-    redactJSON' paths (AET.Object objMap) = AET.Object $ AEK.fromHashMapText $ HM.mapWithKey (\k v -> redactJSON' (mapMaybe (\path -> T.stripPrefix (k <> ".") path <|> T.stripPrefix k path) paths) v) (AEK.toHashMapText objMap)
-    redactJSON' paths (AET.Array jsonList) = AET.Array $ V.map (redactJSON' (mapMaybe (\path -> T.stripPrefix "[]." path <|> T.stripPrefix "[]" path) paths)) jsonList
+    redactJSON' !paths value = case value of
+      AET.String v -> if "" `V.elem` paths then AET.String "[REDACTED]" else AET.String v
+      AET.Number v -> if "" `V.elem` paths then AET.String "[REDACTED]" else AET.Number v
+      AET.Null -> AET.Null
+      AET.Bool v -> AET.Bool v
+      AET.Object objMap -> AET.Object $ AEK.fromHashMapText $ HM.mapWithKey (\k v -> redactJSON' (V.mapMaybe (\path -> T.stripPrefix (k <> ".") path <|> T.stripPrefix k path) paths) v) (AEK.toHashMapText objMap)
+      AET.Array jsonList -> AET.Array $ V.map (redactJSON' (V.mapMaybe (\path -> T.stripPrefix "[]." path <|> T.stripPrefix "[]" path) paths)) jsonList
 
-    stripPrefixDot = map (\p -> fromMaybe p (T.stripPrefix "." p))
+    stripPrefixDot !p = fromMaybe p (T.stripPrefix "." p)
 
 
 replaceNullChars :: Text -> Text
@@ -153,6 +158,13 @@ processErrors pid sdkType method urlPath err = (normalizedError, q, params)
         }
 
 
+sortVector :: Ord a => V.Vector a -> V.Vector a
+sortVector vec = runST $ do
+  mvec <- V.thaw vec
+  VA.sort mvec
+  V.freeze mvec
+
+
 -- requestMsgToDumpAndEndpoint is a very improtant function designed to be run as a pure function
 -- which takes in a request and processes it returning an sql query and it's params which can be executed.
 -- The advantage of returning these queries and params is that it becomes possible to group together batches of requests
@@ -164,163 +176,167 @@ requestMsgToDumpAndEndpoint
   -> RequestMessages.RequestMessage
   -> UTCTime
   -> UUID.UUID
-  -> Either Text (Maybe RequestDumps.RequestDump, Maybe Endpoints.Endpoint, Maybe Shapes.Shape, [Fields.Field], [Formats.Format], [RequestDumps.ATError])
-requestMsgToDumpAndEndpoint pjc rM now dumpIDOriginal = do
-  -- TODO: User dumpID and msgID to get correct ID
-  let dumpID = fromMaybe dumpIDOriginal rM.msgId
-  let timestampUTC = zonedTimeToUTC rM.timestamp
+  -> Either Text (Maybe RequestDumps.RequestDump, Maybe Endpoints.Endpoint, Maybe Shapes.Shape, V.Vector Fields.Field, V.Vector Formats.Format, V.Vector RequestDumps.ATError)
+requestMsgToDumpAndEndpoint pjc rM now dumpIDOriginal =
+  {-# SCC "requestMsgToDumpAndEndpoint" #-}
+  do
+    -- TODO: User dumpID and msgID to get correct ID
+    let dumpID = fromMaybe dumpIDOriginal rM.msgId
+    let timestampUTC = zonedTimeToUTC rM.timestamp
 
-  let method = T.toUpper rM.method
-  let urlPath' = RequestDumps.normalizeUrlPath rM.sdkType rM.statusCode rM.method (fromMaybe "/" rM.urlPath)
-  let (urlPathDyn, pathParamsDyn, hasDyn) = ensureUrlParams urlPath'
-  let (urlPath, pathParams) = if hasDyn then (urlPathDyn, pathParamsDyn) else (urlPath', rM.pathParams)
-  let !endpointHash = toXXHash $ UUID.toText rM.projectId <> fromMaybe "" rM.host <> method <> urlPath
-  let redactFieldsList = V.toList pjc.redactFieldslist <> [".set-cookie", ".password"]
-  let sanitizeNullChars = encodeUtf8 . replaceNullChars . decodeUtf8
-  reqBodyB64 <- B64.decodeBase64Untyped $ encodeUtf8 rM.requestBody
-  respBodyB64 <- B64.decodeBase64Untyped $ encodeUtf8 rM.responseBody
-  let !reqBody = redactJSON redactFieldsList $ fromRight (AE.object []) $ AE.eitherDecodeStrict $ sanitizeNullChars reqBodyB64
-      !respBody = redactJSON redactFieldsList $ fromRight (AE.object []) $ AE.eitherDecodeStrict $ sanitizeNullChars respBodyB64
-      !pathParamFields = valueToFields $ redactJSON redactFieldsList rM.pathParams
-      !queryParamFields = valueToFields $ redactJSON redactFieldsList rM.queryParams
-      !reqHeaderFields = valueToFields $ redactJSON redactFieldsList rM.requestHeaders
-      !respHeaderFields = valueToFields $ redactJSON redactFieldsList rM.responseHeaders
-      !reqBodyFields = valueToFields reqBody
-      !respBodyFields = valueToFields respBody
-      !queryParamsKP = V.fromList $ map fst queryParamFields
-      !requestHeadersKP = V.fromList $ map fst reqHeaderFields
-      !responseHeadersKP = V.fromList $ map fst respHeaderFields
-      !requestBodyKP = V.fromList $ map fst reqBodyFields
-      !responseBodyKP = V.fromList $ map fst respBodyFields
+    let method = T.toUpper rM.method
+    let urlPath' = RequestDumps.normalizeUrlPath rM.sdkType rM.statusCode rM.method (fromMaybe "/" rM.urlPath)
+    let (urlPathDyn, pathParamsDyn, hasDyn) = ensureUrlParams urlPath'
+    let (urlPath, pathParams) = if hasDyn then (urlPathDyn, pathParamsDyn) else (urlPath', rM.pathParams)
+    let !endpointHash = toXXHash $ UUID.toText rM.projectId <> fromMaybe "" rM.host <> method <> urlPath
+    let redactFieldsList = pjc.redactFieldslist V.++ V.fromList [".set-cookie", ".password"]
+    let redacted = redactJSON redactFieldsList
+    let sanitizeNullChars = encodeUtf8 . replaceNullChars . decodeUtf8
+    reqBodyB64 <- B64.decodeBase64Untyped $ encodeUtf8 rM.requestBody
+    respBodyB64 <- B64.decodeBase64Untyped $ encodeUtf8 rM.responseBody
+    let !reqBody = redacted $ fromRight (AE.object []) $ AE.eitherDecodeStrict $ sanitizeNullChars reqBodyB64
+        !respBody = redacted $ fromRight (AE.object []) $ AE.eitherDecodeStrict $ sanitizeNullChars respBodyB64
+        !pathParamFields = valueToFields $ redacted rM.pathParams
+        !queryParamFields = valueToFields $ redacted rM.queryParams
+        !reqHeaderFields = valueToFields $ redacted rM.requestHeaders
+        !respHeaderFields = valueToFields $ redacted rM.responseHeaders
+        !reqBodyFields = valueToFields reqBody
+        !respBodyFields = valueToFields respBody
+        !queryParamsKP = V.map fst queryParamFields
+        !requestHeadersKP = V.map fst reqHeaderFields
+        !responseHeadersKP = V.map fst respHeaderFields
+        !requestBodyKP = V.map fst reqBodyFields
+        !responseBodyKP = V.map fst respBodyFields
 
-  -- We calculate a hash that represents the request.
-  -- We skip the request headers from this hash, since the source of the request like browsers might add or skip headers at will,
-  -- which would make this process not deterministic anymore, and that's necessary for a hash.
-  let !combinedKeyPathStr = T.concat $ sort $ V.toList $ queryParamsKP <> responseHeadersKP <> requestBodyKP <> responseBodyKP
-  -- Include the endpoint hash and status code to make the shape hash unique by endpoint and status code.
-  let !shapeHash = endpointHash <> show rM.statusCode <> toXXHash combinedKeyPathStr
-  let projectId = Projects.ProjectId rM.projectId
+    -- We calculate a hash that represents the request.
+    -- We skip the request headers from this hash, since the source of the request like browsers might add or skip headers at will,
+    -- which would make this process not deterministic anymore, and that's necessary for a hash.
+    let representativeKP = sortVector $ queryParamsKP <> responseHeadersKP <> requestBodyKP <> responseBodyKP
+    let !combinedKeyPathStr = T.concat $ V.toList $ representativeKP
+    -- Include the endpoint hash and status code to make the shape hash unique by endpoint and status code.
+    let !shapeHash = endpointHash <> show rM.statusCode <> toXXHash combinedKeyPathStr
+    let projectId = Projects.ProjectId rM.projectId
 
-  let !pathParamsFieldsDTO = pathParamFields <&> fieldsToFieldDTO Fields.FCPathParam projectId endpointHash
-      !queryParamsFieldsDTO = queryParamFields <&> fieldsToFieldDTO Fields.FCQueryParam projectId endpointHash
-      !reqHeadersFieldsDTO = reqHeaderFields <&> fieldsToFieldDTO Fields.FCRequestHeader projectId endpointHash
-      !respHeadersFieldsDTO = respHeaderFields <&> fieldsToFieldDTO Fields.FCResponseHeader projectId endpointHash
-      !reqBodyFieldsDTO = reqBodyFields <&> fieldsToFieldDTO Fields.FCRequestBody projectId endpointHash
-      !respBodyFieldsDTO = respBodyFields <&> fieldsToFieldDTO Fields.FCResponseBody projectId endpointHash
-      !fieldsDTO =
-        pathParamsFieldsDTO
-          <> queryParamsFieldsDTO
-          <> reqHeadersFieldsDTO
-          <> respHeadersFieldsDTO
-          <> reqBodyFieldsDTO
-          <> respBodyFieldsDTO
-  let (fields, formats) = unzip fieldsDTO
-  let !fieldHashes = V.fromList $ sort $ map (.hash) fields
-  let !formatHashes = V.fromList $ sort $ map (.hash) formats
+    let !pathParamsFieldsDTO = pathParamFields <&> fieldsToFieldDTO Fields.FCPathParam projectId endpointHash
+        !queryParamsFieldsDTO = queryParamFields <&> fieldsToFieldDTO Fields.FCQueryParam projectId endpointHash
+        !reqHeadersFieldsDTO = reqHeaderFields <&> fieldsToFieldDTO Fields.FCRequestHeader projectId endpointHash
+        !respHeadersFieldsDTO = respHeaderFields <&> fieldsToFieldDTO Fields.FCResponseHeader projectId endpointHash
+        !reqBodyFieldsDTO = reqBodyFields <&> fieldsToFieldDTO Fields.FCRequestBody projectId endpointHash
+        !respBodyFieldsDTO = respBodyFields <&> fieldsToFieldDTO Fields.FCResponseBody projectId endpointHash
+        !fieldsDTO =
+          pathParamsFieldsDTO
+            <> queryParamsFieldsDTO
+            <> reqHeadersFieldsDTO
+            <> respHeadersFieldsDTO
+            <> reqBodyFieldsDTO
+            <> respBodyFieldsDTO
+    let (fields, formats) = V.unzip fieldsDTO
+    let !fieldHashes = sortVector $ V.map (.hash) fields
+    let !formatHashes = sortVector $ V.map (.hash) formats
 
-  --- FIXME: why are we not using the actual url params?
-  -- Since it foes into the endpoint, maybe it should be the keys and their type? I'm unsure.
-  -- At the moment, if an endpoint exists, we don't insert it anymore. But then how do we deal with requests from new hosts?
-  let urlParams = AET.emptyObject
-  let endpoint
-        | endpointHash `elem` pjc.endpointHashes = Nothing -- We have the endpoint cache in our db already. Skill adding
-        | rM.statusCode == 404 = Nothing
-        | otherwise = Just $ buildEndpoint rM now dumpID projectId method urlPath urlParams endpointHash (isRequestOutgoing rM.sdkType)
+    --- FIXME: why are we not using the actual url params?
+    -- Since it foes into the endpoint, maybe it should be the keys and their type? I'm unsure.
+    -- At the moment, if an endpoint exists, we don't insert it anymore. But then how do we deal with requests from new hosts?
+    let urlParams = AET.emptyObject
+    let endpoint
+          | endpointHash `elem` pjc.endpointHashes = Nothing -- We have the endpoint cache in our db already. Skill adding
+          | rM.statusCode == 404 = Nothing
+          | otherwise = Just $ buildEndpoint rM now dumpID projectId method urlPath urlParams endpointHash (isRequestOutgoing rM.sdkType)
 
-  let shape
-        | shapeHash `elem` pjc.shapeHashes = Nothing
-        | rM.statusCode == 404 = Nothing
-        | otherwise =
-            -- A shape is a deterministic representation of a request-response combination for a given endpoint.
-            -- We usually expect multiple shapes per endpoint. Eg a shape for a success request-response and another for an error response.
-            -- Shapes are dependent on the endpoint, statusCode and the unique fields in that shape.
-            Just
-              $ Shapes.Shape
-                { id = Shapes.ShapeId dumpID
-                , createdAt = timestampUTC
-                , updatedAt = now
-                , approvedOn = Nothing
-                , projectId = projectId
-                , endpointHash = endpointHash
-                , queryParamsKeypaths = queryParamsKP
-                , requestBodyKeypaths = requestBodyKP
-                , responseBodyKeypaths = responseBodyKP
-                , requestHeadersKeypaths = requestHeadersKP
-                , responseHeadersKeypaths = responseHeadersKP
-                , fieldHashes = fieldHashes
-                , hash = shapeHash
-                , statusCode = rM.statusCode
-                , responseDescription = ""
-                , requestDescription = ""
-                }
+    let shape
+          | shapeHash `elem` pjc.shapeHashes = Nothing
+          | rM.statusCode == 404 = Nothing
+          | otherwise =
+              -- A shape is a deterministic representation of a request-response combination for a given endpoint.
+              -- We usually expect multiple shapes per endpoint. Eg a shape for a success request-response and another for an error response.
+              -- Shapes are dependent on the endpoint, statusCode and the unique fields in that shape.
+              Just
+                $ Shapes.Shape
+                  { id = Shapes.ShapeId dumpID
+                  , createdAt = timestampUTC
+                  , updatedAt = now
+                  , approvedOn = Nothing
+                  , projectId = projectId
+                  , endpointHash = endpointHash
+                  , queryParamsKeypaths = queryParamsKP
+                  , requestBodyKeypaths = requestBodyKP
+                  , responseBodyKeypaths = responseBodyKP
+                  , requestHeadersKeypaths = requestHeadersKP
+                  , responseHeadersKeypaths = responseHeadersKP
+                  , fieldHashes = fieldHashes
+                  , hash = shapeHash
+                  , statusCode = rM.statusCode
+                  , responseDescription = ""
+                  , requestDescription = ""
+                  }
 
-  -- FIXME: simplify processErrors func
-  let !(errorsList, _, _) = unzip3 $ map (processErrors projectId rM.sdkType rM.method (fromMaybe "" rM.urlPath)) $ fromMaybe [] rM.errors
+    -- FIXME: simplify processErrors func
+    let !(errorsList, _, _) = V.unzip3 $ V.map (processErrors projectId rM.sdkType rM.method (fromMaybe "" rM.urlPath)) $ V.fromList $ fromMaybe [] rM.errors
 
-  -- request dumps are time series dumps representing each requests which we consume from our users.
-  -- We use this field via the log explorer for exploring and searching traffic. And at the moment also use it for most time series analytics.
-  -- It's likely a good idea to stop relying on it for some of the time series analysis, to allow us easily support request sampling, but still support
-  -- relatively accurate analytic counts.
-  -- Build the query and params for inserting a request dump into the database.
-  let !reqDumpP =
-        RequestDumps.RequestDump
-          { id = dumpID
-          , createdAt = timestampUTC
-          , updatedAt = now
-          , projectId = rM.projectId
-          , host = fromMaybe "" rM.host
-          , urlPath = urlPath
-          , rawUrl = rM.rawUrl
-          , pathParams = pathParams
-          , method = method
-          , referer = fromMaybe "" $ rM.referer >>= either Just listToMaybe
-          , protoMajor = fromIntegral rM.protoMajor
-          , protoMinor = fromIntegral rM.protoMinor
-          , duration = calendarTimeTime $ secondsToNominalDiffTime $ fromIntegral rM.duration
-          , statusCode = fromIntegral rM.statusCode
-          , --
-            queryParams = rM.queryParams
-          , requestBody = reqBody
-          , responseBody = respBody
-          , requestHeaders = rM.requestHeaders
-          , responseHeaders = rM.responseHeaders
-          , --
-            endpointHash = endpointHash
-          , shapeHash = shapeHash
-          , formatHashes = formatHashes
-          , fieldHashes = fieldHashes
-          , durationNs = fromIntegral rM.duration
-          , sdkType = rM.sdkType
-          , parentId = rM.parentId
-          , serviceVersion = rM.serviceVersion
-          , errors = toJSON $ errorsList
-          , tags = maybe V.empty V.fromList rM.tags
-          , requestType = RequestDumps.getRequestType rM.sdkType
-          }
+    -- request dumps are time series dumps representing each requests which we consume from our users.
+    -- We use this field via the log explorer for exploring and searching traffic. And at the moment also use it for most time series analytics.
+    -- It's likely a good idea to stop relying on it for some of the time series analysis, to allow us easily support request sampling, but still support
+    -- relatively accurate analytic counts.
+    -- Build the query and params for inserting a request dump into the database.
+    let !reqDumpP =
+          RequestDumps.RequestDump
+            { id = dumpID
+            , createdAt = timestampUTC
+            , updatedAt = now
+            , projectId = rM.projectId
+            , host = fromMaybe "" rM.host
+            , urlPath = urlPath
+            , rawUrl = rM.rawUrl
+            , pathParams = pathParams
+            , method = method
+            , referer = fromMaybe "" $ rM.referer >>= either Just listToMaybe
+            , protoMajor = fromIntegral rM.protoMajor
+            , protoMinor = fromIntegral rM.protoMinor
+            , duration = calendarTimeTime $ secondsToNominalDiffTime $ fromIntegral rM.duration
+            , statusCode = fromIntegral rM.statusCode
+            , --
+              queryParams = rM.queryParams
+            , requestBody = reqBody
+            , responseBody = respBody
+            , requestHeaders = rM.requestHeaders
+            , responseHeaders = rM.responseHeaders
+            , --
+              endpointHash = endpointHash
+            , shapeHash = shapeHash
+            , formatHashes = formatHashes
+            , fieldHashes = fieldHashes
+            , durationNs = fromIntegral rM.duration
+            , sdkType = rM.sdkType
+            , parentId = rM.parentId
+            , serviceVersion = rM.serviceVersion
+            , errors = toJSON $ errorsList
+            , tags = maybe V.empty V.fromList rM.tags
+            , requestType = RequestDumps.getRequestType rM.sdkType
+            }
 
-  -- Build all fields and formats, unzip them as separate lists and append them to query and params
-  -- We don't border adding them if their shape exists, as we asume that we've already seen such before.
-  let fields'
-        -- TODO: Replace this faulty logic with bloom  filter. See comment on formats for more.
-        -- \| shapeHash `elem` pjc.shapeHashes = ([], [])
-        | rM.statusCode == 404 = []
-        | otherwise = fields
+    -- Build all fields and formats, unzip them as separate lists and append them to query and params
+    -- We don't border adding them if their shape exists, as we asume that we've already seen such before.
+    let fields'
+          -- TODO: Replace this faulty logic with bloom  filter. See comment on formats for more.
+          -- \| shapeHash `elem` pjc.shapeHashes = ([], [])
+          | rM.statusCode == 404 = []
+          | otherwise = fields
 
-  -- FIXME:
-  -- Instead of having examples as a column under formats, could we be better served by having an examples table?
-  -- How do we solve the problem of updating examples for formats if we never insert the format when the shape already exists?
-  -- Should we use some randomizer?
-  -- The original plan was that we could skip the shape from the input into this function, but then that would mean
-  -- also inserting the fields and the shape, when all we want to insert is just the example.
-  let formats'
-        -- TODO: Replace this redundancy check with a sort of bit vector or bloom filter that holds all the
-        -- existing formats or even just fields in the given project. So we don't insert existing fields
-        -- and formats over and over
-        -- \| shapeHash `elem` pjc.shapeHashes = ([], [])
-        | rM.statusCode == 404 = []
-        | otherwise = formats
+    -- FIXME:
+    -- Instead of having examples as a column under formats, could we be better served by having an examples table?
+    -- How do we solve the problem of updating examples for formats if we never insert the format when the shape already exists?
+    -- Should we use some randomizer?
+    -- The original plan was that we could skip the shape from the input into this function, but then that would mean
+    -- also inserting the fields and the shape, when all we want to insert is just the example.
+    let formats'
+          -- TODO: Replace this redundancy check with a sort of bit vector or bloom filter that holds all the
+          -- existing formats or even just fields in the given project. So we don't insert existing fields
+          -- and formats over and over
+          -- \| shapeHash `elem` pjc.shapeHashes = ([], [])
+          | rM.statusCode == 404 = []
+          | otherwise = formats
 
-  Right (Just reqDumpP, endpoint, shape, fields', formats', errorsList)
+    Right (Just reqDumpP, endpoint, shape, fields', formats', errorsList)
 
 
 isRequestOutgoing :: RequestDumps.SDKTypes -> Bool
@@ -346,41 +362,41 @@ buildEndpoint rM now dumpID projectId method urlPath urlParams endpointHash outg
     }
 
 
--- valueToFields takes an aeson object and converts it into a list of paths to
+-- valueToFields takes an aeson object and converts it into a vector of paths to
 -- each primitive value in the json and the values.
 --
 -- Regular nested text fields:
 -- >>> valueToFields [aesonQQ|{"menu":{"id":"text"}}|]
--- [(".menu.id",[String "text"])]
+-- V.fromList [(".menu.id", V.fromList [String "text"])]
 --
 -- Integer nested field within an array of objects:
 -- >>> valueToFields [aesonQQ|{"menu":{"id":[{"int_field":22}]}}|]
--- [(".menu.id[*].int_field",[Number 22.0])]
+-- V.fromList [(".menu.id[*].int_field", V.fromList [Number 22.0])]
 --
 -- Deeper nested field with an array of objects:
 -- >>> valueToFields [aesonQQ|{"menu":{"id":{"menuitems":[{"key":"value"}]}}}|]
--- [(".menu.id.menuitems[*].key",[String "value"])]
+-- V.fromList [(".menu.id.menuitems[*].key", V.fromList [String "value"])]
 --
 -- Flat array value:
 -- >>> valueToFields [aesonQQ|{"menu":["abc", "xyz"]}|]
--- [(".menu[*]",[String "abc",String "xyz"])]
+-- V.fromList [(".menu[*]", V.fromList [String "abc", String "xyz"])]
 --
 -- Float values and Null
 -- >>> valueToFields [aesonQQ|{"fl":1.234, "nl": null}|]
--- [(".fl",[Number 1.234]),(".nl",[Null])]
+-- V.fromList [(".fl", V.fromList [Number 1.234]), (".nl", V.fromList [Null])]
 --
 -- Multiple fields with same key via array:
 -- >>> valueToFields [aesonQQ|{"menu":[{"id":"text"},{"id":123}]}|]
--- [(".menu[*].id",[String "text",Number 123.0])]
+-- V.fromList [(".menu[*].id", V.fromList [String "text", Number 123.0])]
 --
 -- >>> valueToFields [aesonQQ|{"menu":[{"c73bcdcc-2669-4bf6-81d3-e4ae73fb11fd":"text"},{"id":123}]}|]
--- [(".menu[*].id",[Number 123.0]),(".menu[*].{uuid}",[String "text"])]
+-- V.fromList [(".menu[*].id", V.fromList [Number 123.0]), (".menu[*].{uuid}", V.fromList [String "text"])]
 --
 -- FIXME: value To Fields should use the redact fields list to actually redact fields
-valueToFields :: AE.Value -> [(Text, [AE.Value])]
-valueToFields value = dedupFields $ removeBlacklistedFields $ snd $ valueToFields' value ("", [])
+valueToFields :: AE.Value -> V.Vector (Text, V.Vector AE.Value)
+valueToFields value = {-# SCC "dedupFields" #-} dedupFields $ removeBlacklistedFields $ snd $ {-# SCC "valueToFields'" #-} valueToFields' value ("", [])
   where
-    valueToFields' :: AE.Value -> (Text, [(Text, AE.Value)]) -> (Text, [(Text, AE.Value)])
+    valueToFields' :: AE.Value -> (Text, V.Vector (Text, AE.Value)) -> (Text, V.Vector (Text, AE.Value))
     valueToFields' (AE.Object v) akk =
       AEK.toHashMapText v
         & HM.toList
@@ -388,14 +404,51 @@ valueToFields value = dedupFields $ removeBlacklistedFields $ snd $ valueToField
           ( \(akkT, akkL) (k, val) -> (akkT, snd $ valueToFields' val (akkT <> "." <> normalizeKey k, akkL))
           )
           akk
-    valueToFields' (AE.Array v) akk = foldl' (\(akkT, akkL) val -> (akkT, snd $ valueToFields' val (akkT <> "[*]", akkL))) akk v
-    valueToFields' v (akk, l) = (akk, (akk, v) : l)
+    valueToFields' (AE.Array v) akk = V.foldl' (\(akkT, akkL) val -> (akkT, snd $ valueToFields' val (akkT <> "[*]", akkL))) akk (v)
+    valueToFields' v (akk, l) = (akk, V.cons (akk, v) l)
 
     normalizeKey :: Text -> Text
     normalizeKey key = case valueToFormatStr key of
       Just result -> "{" <> result <> "}"
       Nothing -> key
 
+
+-- | Merge all fields in the vector of tuples by the first item in the tuple.
+--
+-- >>> dedupFields (V.fromList [(".menu[*]", AE.String "xyz"),(".menu[*]", AE.String "abc")])
+-- V.fromList [(".menu[*]",V.fromList [AE.String "abc",AE.String "xyz"])]
+--
+-- >>> dedupFields (V.fromList [(".menu.[*]", AE.String "xyz"),(".menu.[*]", AE.String "abc"),(".menu.[*]", AE.Number 123)])
+-- V.fromList [(".menu.[*]",V.fromList [AE.Number 123.0,AE.String "abc",AE.String "xyz"])]
+--
+-- >>> dedupFields (V.fromList [(".menu.[*].a", AE.String "xyz"),(".menu.[*].b", AE.String "abc"),(".menu.[*].a", AE.Number 123)])
+-- V.fromList [(".menu.[*].a",V.fromList [AE.Number 123.0,AE.String "xyz"]),(".menu.[*].b",V.fromList [AE.String "abc"])]
+dedupFields :: V.Vector (Text, AE.Value) -> V.Vector (Text, V.Vector AE.Value)
+dedupFields fields = runST $ do
+  -- Create a mutable hash table
+  hashTable <- HT.newSized (V.length fields) :: ST s (HT.HashTable s Text (V.Vector AE.Value))
+
+  -- Populate the hash table
+  forM_ fields $ \(k, v) -> do
+    existing <- HT.lookup hashTable k
+    let newVec = v `V.cons` fromMaybe V.empty existing
+    HT.insert hashTable k newVec
+
+  -- Convert the hash table to a list of immutable vectors
+  pairs <- HTC.toList hashTable
+  V.thaw (V.fromList pairs) >>= V.freeze
+
+
+-- dedupFields fields = runST $ do
+--     hashTable <- HT.new :: ST s (HT.HashTable s Text (V.Vector AE.Value))
+--     -- Populate the hash table
+--     forM_ fields $ \(k, v) -> do
+--         existing <- HT.lookup hashTable k
+--         let newVec = v `V.cons` fromMaybe V.empty existing
+--         HT.insert hashTable k newVec
+--     -- Convert the hash table to an immutable vector of tuples
+--     pairs <- HTC.toList hashTable
+--     V.thaw (V.fromList pairs) >>= V.freeze
 
 -- debupFields would merge all fields in the list of tuples by the first item in the tupple.
 --
@@ -407,21 +460,52 @@ valueToFields value = dedupFields $ removeBlacklistedFields $ snd $ valueToField
 --
 -- dedupFields [(".menu.[*].a",String "xyz"),(".menu.[*].b",String "abc"),(".menu.[*].a",Number 123)]
 -- [(".menu.[*].a",[Number 123.0,String "xyz"]),(".menu.[*].b",[String "abc"])]
---
-dedupFields :: [(Text, AE.Value)] -> [(Text, [AE.Value])]
-dedupFields fields =
-  sortWith fst fields
-    & groupBy (\a b -> fst a == fst b)
-    & map (foldl' (\(_, xs) (a, b) -> (a, b : xs)) ("", []))
+--  dedupFields :: [(Text, AE.Value)] -> [(Text, [AE.Value])]
+--  dedupFields fields =
+--    sortWith fst fields
+--      & groupBy (\a b -> fst a == fst b)
+--      & map (foldl' (\(_, xs) (a, b) -> (a, b : xs)) ("", []))
 
+-- dedupFields :: V.Vector (Text, AE.Value) -> V.Vector (Text, V.Vector AE.Value)
+-- dedupFields input = V.create do
+--     let n = V.length input
+--     indexMap <- V.thaw $ V.generate n id
+--     VA.sortBy  (\i j -> compare (fst $ input V.! i) (fst $ input V.! j)) indexMap
+--
+--     resultMap <- HM.newSized n
+--     V.forM_ indexMap $ \i -> do
+--         let (key, value) = input V.! i
+--         HM.modify (Just . maybe (V.singleton value) (`V.snoc` value)) key resultMap
+--     V.fromList . HM.toList <$> HM.freeze resultMap
+
+-- dedupFields :: [(Text, AE.Value)] -> [(Text, [AE.Value])]
+-- dedupFields fields =
+--   sortWith fst fields
+--     & groupBy (\a b -> fst a == fst b)
+--     & map (foldl' (\(_, xs) (a, b) -> (a, b : xs)) ("", []))
+
+-- dedupFields :: V.Vector (Text, AE.Value) -> V.Vector (Text, V.Vector AE.Value)
+-- dedupFields fields = force $ V.create do
+--   mv <- V.thaw fields -- Create a mutable copy of the input vector
+--   VA.sortBy (compare `on` fst) mv -- Sort the mutable vector in-place
+--   sorted <- V.freeze mv -- Freeze the sorted vector
+--   pure $ V.unfoldr groupAndFold sorted -- Group and fold the sorted vector
+--   where
+--     groupAndFold v
+--       | V.null v = Nothing
+--       | otherwise =
+--           let (key, value) = V.head v
+--               (group, rest) = V.span ((== key) . fst) v
+--               values = V.map snd group
+--            in Just ((key, values), rest)
 
 -- >>> removeBlacklistedFields [(".menu.password",String "xyz"),(".authorization",String "abc")]
 -- [(".menu.password",String "[REDACTED]"),(".authorization",String "[REDACTED]")]
 --
 -- >>> removeBlacklistedFields [(".menu.password",Null),(".regular",String "abc")]
 -- [(".menu.password",String "[REDACTED]"),(".regular",String "abc")]
-removeBlacklistedFields :: [(Text, AE.Value)] -> [(Text, AE.Value)]
-removeBlacklistedFields = map \(k, val) ->
+removeBlacklistedFields :: V.Vector (Text, AE.Value) -> V.Vector (Text, AE.Value)
+removeBlacklistedFields = V.map \(k, val) ->
   if or @[]
     [ T.isSuffixOf "password" (T.toLower k)
     , T.isSuffixOf "authorization" (T.toLower k)
@@ -539,7 +623,7 @@ valueToFormatNum val
 
 -- fieldsToFieldDTO processes a field from apitoolkit clients into a field and format record,
 -- which can then be converted into separate sql insert queries.
-fieldsToFieldDTO :: Fields.FieldCategoryEnum -> Projects.ProjectId -> Text -> (Text, [AE.Value]) -> (Fields.Field, Formats.Format)
+fieldsToFieldDTO :: Fields.FieldCategoryEnum -> Projects.ProjectId -> Text -> (Text, V.Vector AE.Value) -> (Fields.Field, Formats.Format)
 fieldsToFieldDTO fieldCategory projectID endpointHash (keyPath, val) =
   ( Fields.Field
       { createdAt = Unsafe.read "2019-08-31 05:14:37.537084021 UTC"
@@ -572,7 +656,7 @@ fieldsToFieldDTO fieldCategory projectID endpointHash (keyPath, val) =
       , fieldFormat = format
       , -- NOTE: A trailing question, is whether to store examples into a separate table.
         -- It requires some more of a cost benefit analysis.
-        examples = V.fromList val
+        examples = val
       , hash = formatHash
       }
   )
@@ -586,12 +670,12 @@ fieldsToFieldDTO fieldCategory projectID endpointHash (keyPath, val) =
     aeValueToFieldType (AET.Array _) = Fields.FTList
 
     fieldType :: Fields.FieldTypes
-    fieldType = fromMaybe Fields.FTUnknown $ viaNonEmpty head $ aeValueToFieldType <$> val
+    fieldType = fromMaybe Fields.FTUnknown $ (V.map aeValueToFieldType val) V.!? 0
 
     -- field hash is <hash of the endpoint> + <the hash of <field_category><key_path_str><field_type>> (No space or comma between data)
     !fieldHash = endpointHash <> toXXHash (Fields.fieldCategoryEnumToText fieldCategory <> keyPath)
     -- FIXME: We should rethink this value to format logic.
     -- FIXME: Maybe it actually needs machine learning,
     -- FIXME: or maybe it should operate on the entire list, and not just one value.
-    format = (fromMaybe "" $ viaNonEmpty head $ valueToFormat <$> val)
+    format = fromMaybe "" $ (V.map valueToFormat val) V.!? 0
     !formatHash = fieldHash <> toXXHash format

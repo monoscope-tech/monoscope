@@ -129,10 +129,10 @@ spec = aroundAll withTestResources do
           respHeaderFields = valueToFields reqMsg3.responseHeaders
           reqBodyFields = valueToFields reqBody
           respBodyFields = valueToFields respBody
-          queryParamsKP = V.fromList $ map fst queryParamFields
-          responseHeadersKP = V.fromList $ map fst respHeaderFields
-          requestBodyKP = V.fromList $ map fst reqBodyFields
-          responseBodyKP = V.fromList $ map fst respBodyFields
+          queryParamsKP = V.map fst queryParamFields
+          responseHeadersKP = V.map fst respHeaderFields
+          requestBodyKP = V.map fst reqBodyFields
+          responseBodyKP = V.map fst respBodyFields
       let combinedKeyPathStr = T.concat $ sort $ V.toList $ queryParamsKP <> responseHeadersKP <> requestBodyKP <> responseBodyKP
       let !shapeHash = endpointHash <> show reqMsg3.statusCode <> toXXHash combinedKeyPathStr
 

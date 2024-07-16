@@ -117,6 +117,13 @@ packages:
   original:
     hackage: wai-log-0.4.0.1@sha256:0b4b57ae218cf5ec59523c8cf405802a588d4e299436b5a663a6001ea34bb7e6,1583
 - completed:
+    hackage: strict-containers-0.2@sha256:1bebfdb5ffb2aba15d6f34a8e0ddd7c26eeb99c92917bd5b20630fa671aeb446,9582
+    pantry-tree:
+      sha256: e289eed6930a4cef7d6da95e4fd3740cc1f1a2117953e30d61a427e9a4bea4b4
+      size: 4999
+  original:
+    hackage: strict-containers-0.2@sha256:1bebfdb5ffb2aba15d6f34a8e0ddd7c26eeb99c92917bd5b20630fa671aeb446,9582
+- completed:
     hackage: x509-1.7.7@sha256:90eef2d745a654146fc1c325e035eaddac531e4d2145d4bc1dcf4b8fad439d34,2276
     pantry-tree:
       sha256: d81ffd09633c0417bcedbfc29f870cc843ec0750edd2f73c8fd60a5e5df278d2

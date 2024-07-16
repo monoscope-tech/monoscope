@@ -15,7 +15,8 @@ module Models.Apis.Fields.Query (
 where
 
 import Data.Time (ZonedTime)
-import Data.Vector (Vector)
+import Effectful
+import Data.Vector qualified as V
 import Database.PostgreSQL.Entity (selectById)
 import Database.PostgreSQL.Entity.DBT (QueryNature (Select, Update), execute, query)
 import Database.PostgreSQL.Simple (Only (Only))
@@ -35,24 +36,27 @@ instance FromRow Text where
   fromRow = field
 
 
-bulkInsertFields :: DB :> es => [Field] -> Eff es ()
-bulkInsertFields fields = void $ dbtToEff $ executeMany q rowsToInsert
+bulkInsertFields :: DB :> es => V.Vector Field -> Eff es ()
+bulkInsertFields fields = void $ dbtToEff $ executeMany q (V.toList rowsToInsert)
   where
     q =
       [sql| INSERT into apis.fields (project_id, endpoint_hash, key, field_type, format, description, key_path, field_category, hash) 
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING; |]
     rowsToInsert =
-      fields <&> \field ->
-        ( field.projectId
-        , field.endpointHash
-        , field.key
-        , field.fieldType
-        , field.format
-        , field.description
-        , field.keyPath
-        , field.fieldCategory
-        , field.hash
+      V.map
+        ( \field ->
+            ( field.projectId
+            , field.endpointHash
+            , field.key
+            , field.fieldType
+            , field.format
+            , field.description
+            , field.keyPath
+            , field.fieldCategory
+            , field.hash
+            )
         )
+        fields
 
 
 insertFields :: [Field] -> DBT IO Int64
@@ -91,7 +95,7 @@ fieldById :: FieldId -> DBT IO (Maybe Field)
 fieldById fid = selectById @Field (Only fid)
 
 
-selectFields :: Projects.ProjectId -> Text -> DBT IO (Vector Field)
+selectFields :: Projects.ProjectId -> Text -> DBT IO (V.Vector Field)
 selectFields pid endpointHash = query Select q (pid, endpointHash)
   where
     q =
@@ -100,7 +104,7 @@ selectFields pid endpointHash = query Select q (pid, endpointHash)
                 from apis.fields where project_id=? AND endpoint_hash=? order by field_category, key |]
 
 
-selectFieldsByHashes :: Projects.ProjectId -> Vector Text -> DBT IO (Vector Field)
+selectFieldsByHashes :: Projects.ProjectId -> V.Vector Text -> DBT IO (V.Vector Field)
 selectFieldsByHashes pid fieldHashes = query Select q (pid, fieldHashes)
   where
     q =
@@ -110,7 +114,7 @@ selectFieldsByHashes pid fieldHashes = query Select q (pid, fieldHashes)
           |]
 
 
-getFieldsByEndpointKeyPathAndCategory :: Projects.ProjectId -> Text -> Text -> FieldCategoryEnum -> DBT IO (Vector Text)
+getFieldsByEndpointKeyPathAndCategory :: Projects.ProjectId -> Text -> Text -> FieldCategoryEnum -> DBT IO (V.Vector Text)
 getFieldsByEndpointKeyPathAndCategory pid endpointId keyPath fieldCategory = query Select q (pid, endpointId, keyPath, fieldCategory)
   where
     q = [sql|SELECT f.format from apis.endpoints enp JOIN apis.fields f on enp.hash = f.endpoint_hash where f.project_id=? AND enp.id=? AND f.key_path=? AND f.field_category=?  limit 4;|]
@@ -130,7 +134,7 @@ deleteFieldByHash fieldHash dTime = do
   execute Update q (dTime, fieldHash)
 
 
-fieldsByEndpointHashes :: Projects.ProjectId -> Vector Text -> PgT.DBT IO (Vector SwField)
+fieldsByEndpointHashes :: Projects.ProjectId -> V.Vector Text -> PgT.DBT IO (V.Vector SwField)
 fieldsByEndpointHashes pid hashes = query Select q (pid, hashes)
   where
     q =
@@ -142,7 +146,7 @@ fieldsByEndpointHashes pid hashes = query Select q (pid, hashes)
     |]
 
 
-autoCompleteFields :: Projects.ProjectId -> FieldCategoryEnum -> Text -> DBT IO (Vector Text)
+autoCompleteFields :: Projects.ProjectId -> FieldCategoryEnum -> Text -> DBT IO (V.Vector Text)
 autoCompleteFields pid fieldCategory pathPrefix = query Select q (pid, fieldCategory, pathPrefix <> "%")
   where
     q = [sql|SELECT DISTINCT key_path from apis.fields WHERE project_id = ? AND field_category = ? AND key_path <> ''  AND key_path LIKE ?|]

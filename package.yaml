@@ -12,7 +12,7 @@ spec-version: 0.36.0
 ghc-options:
   - "-fwrite-ide-info"
   - "-hiedir=.hie"
-  - "-O" 
+  - "-O3" 
   - -Weverything
   - -Werror # Treat warnings as errors
   - -Wno-error=deprecations
@@ -56,7 +56,7 @@ default-extensions:
   - RoleAnnotations
   - UndecidableInstances
   - TypeFamilies
-  - RecordWildCards 
+  - RecordWildCards
   - TemplateHaskell
 
 extra-source-files:
@@ -72,6 +72,7 @@ library:
     - relude >= 1.2.0.0
     - rust-interop
     - colourista
+    - vector-algorithms
     - effectful
     - effectful-core
     - monad-time-effectful
@@ -109,6 +110,10 @@ library:
     - gogol-core
     - gogol-pubsub
     - hspec
+    - hashtables
+    - vector-hashtables
+    - strict-containers
+    - hashable
     - http-api-data
     - lens
     - lens-aeson
