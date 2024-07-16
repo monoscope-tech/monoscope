@@ -59,7 +59,6 @@ surveyPutH pid survey = do
   let nameArr = T.splitOn " " (fullName survey)
   if length nameArr < 2
     then do
-      traceShowM survey.foundUsFrom
       addErrorToast "Invalid full name format." Nothing
       addRespHeaders SurveyPut
     else do
