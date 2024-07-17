@@ -38,7 +38,7 @@ ghc-options:
   # - -g
   # - "-fprof-late"
   # - "-finfo-table-map"
-  - "+RTS -A128m -n2m -RTS"
+  - "+RTS -N -A128m -n2m -RTS"
 
 default-extensions:
   - BlockArguments
