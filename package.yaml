@@ -33,6 +33,10 @@ ghc-options:
   - -Wno-missing-kind-signatures
   - -Wno-type-defaults
   - -j4
+  # - "-prof"
+  - -g
+  - "-fprof-late"
+  - "-finfo-table-map"
   - "+RTS -A128m -n2m -RTS"
 
 default-extensions:

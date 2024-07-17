@@ -30,7 +30,6 @@ import Data.Time.LocalTime as Time (ZonedTime, calendarTimeTime, zonedTimeToUTC)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Data.Vector.Algorithms.Intro qualified as VA
-import Data.Vector.Mutable qualified as VM
 import Database.PostgreSQL.Simple (Query)
 import Deriving.Aeson qualified as DAE
 import Models.Apis.Anomalies qualified as Anomalies
@@ -177,9 +176,7 @@ requestMsgToDumpAndEndpoint
   -> UTCTime
   -> UUID.UUID
   -> Either Text (Maybe RequestDumps.RequestDump, Maybe Endpoints.Endpoint, Maybe Shapes.Shape, V.Vector Fields.Field, V.Vector Formats.Format, V.Vector RequestDumps.ATError)
-requestMsgToDumpAndEndpoint pjc rM now dumpIDOriginal =
-  {-# SCC "requestMsgToDumpAndEndpoint" #-}
-  do
+requestMsgToDumpAndEndpoint pjc rM now dumpIDOriginal = do
     -- TODO: User dumpID and msgID to get correct ID
     let dumpID = fromMaybe dumpIDOriginal rM.msgId
     let timestampUTC = zonedTimeToUTC rM.timestamp
@@ -217,12 +214,12 @@ requestMsgToDumpAndEndpoint pjc rM now dumpIDOriginal =
     let !shapeHash = endpointHash <> show rM.statusCode <> toXXHash combinedKeyPathStr
     let projectId = Projects.ProjectId rM.projectId
 
-    let !pathParamsFieldsDTO = pathParamFields <&> fieldsToFieldDTO Fields.FCPathParam projectId endpointHash
-        !queryParamsFieldsDTO = queryParamFields <&> fieldsToFieldDTO Fields.FCQueryParam projectId endpointHash
-        !reqHeadersFieldsDTO = reqHeaderFields <&> fieldsToFieldDTO Fields.FCRequestHeader projectId endpointHash
-        !respHeadersFieldsDTO = respHeaderFields <&> fieldsToFieldDTO Fields.FCResponseHeader projectId endpointHash
-        !reqBodyFieldsDTO = reqBodyFields <&> fieldsToFieldDTO Fields.FCRequestBody projectId endpointHash
-        !respBodyFieldsDTO = respBodyFields <&> fieldsToFieldDTO Fields.FCResponseBody projectId endpointHash
+    let !pathParamsFieldsDTO = V.map (fieldsToFieldDTO Fields.FCPathParam projectId endpointHash) pathParamFields
+        !queryParamsFieldsDTO = V.map (fieldsToFieldDTO Fields.FCQueryParam projectId endpointHash) queryParamFields
+        !reqHeadersFieldsDTO = V.map (fieldsToFieldDTO Fields.FCRequestHeader projectId endpointHash) reqHeaderFields
+        !respHeadersFieldsDTO = V.map (fieldsToFieldDTO Fields.FCResponseHeader projectId endpointHash) respHeaderFields
+        !reqBodyFieldsDTO = V.map (fieldsToFieldDTO Fields.FCRequestBody projectId endpointHash) reqBodyFields
+        !respBodyFieldsDTO = V.map (fieldsToFieldDTO Fields.FCResponseBody projectId endpointHash) respBodyFields
         !fieldsDTO =
           pathParamsFieldsDTO
             <> queryParamsFieldsDTO
@@ -243,7 +240,7 @@ requestMsgToDumpAndEndpoint pjc rM now dumpIDOriginal =
           | rM.statusCode == 404 = Nothing
           | otherwise = Just $ buildEndpoint rM now dumpID projectId method urlPath urlParams endpointHash (isRequestOutgoing rM.sdkType)
 
-    let shape
+    let !shape
           | shapeHash `elem` pjc.shapeHashes = Nothing
           | rM.statusCode == 404 = Nothing
           | otherwise =
@@ -319,7 +316,7 @@ requestMsgToDumpAndEndpoint pjc rM now dumpIDOriginal =
     let fields'
           -- TODO: Replace this faulty logic with bloom  filter. See comment on formats for more.
           -- \| shapeHash `elem` pjc.shapeHashes = ([], [])
-          | rM.statusCode == 404 = []
+          | rM.statusCode == 404 = V.empty
           | otherwise = fields
 
     -- FIXME:
@@ -333,7 +330,7 @@ requestMsgToDumpAndEndpoint pjc rM now dumpIDOriginal =
           -- existing formats or even just fields in the given project. So we don't insert existing fields
           -- and formats over and over
           -- \| shapeHash `elem` pjc.shapeHashes = ([], [])
-          | rM.statusCode == 404 = []
+          | rM.statusCode == 404 = V.empty
           | otherwise = formats
 
     Right (Just reqDumpP, endpoint, shape, fields', formats', errorsList)
@@ -394,18 +391,23 @@ buildEndpoint rM now dumpID projectId method urlPath urlParams endpointHash outg
 --
 -- FIXME: value To Fields should use the redact fields list to actually redact fields
 valueToFields :: AE.Value -> V.Vector (Text, V.Vector AE.Value)
-valueToFields value = {-# SCC "dedupFields" #-} dedupFields $ removeBlacklistedFields $ snd $ {-# SCC "valueToFields'" #-} valueToFields' value ("", [])
+valueToFields value = dedupFields $ removeBlacklistedFields $ snd $ valueToFields' value ("", V.empty)
   where
     valueToFields' :: AE.Value -> (Text, V.Vector (Text, AE.Value)) -> (Text, V.Vector (Text, AE.Value))
-    valueToFields' (AE.Object v) akk =
-      AEK.toHashMapText v
-        & HM.toList
-        & foldl'
-          ( \(akkT, akkL) (k, val) -> (akkT, snd $ valueToFields' val (akkT <> "." <> normalizeKey k, akkL))
-          )
-          akk
-    valueToFields' (AE.Array v) akk = V.foldl' (\(akkT, akkL) val -> (akkT, snd $ valueToFields' val (akkT <> "[*]", akkL))) akk (v)
-    valueToFields' v (akk, l) = (akk, V.cons (akk, v) l)
+    valueToFields' (AE.Object v) (!prefix, !acc) =
+        HM.foldlWithKey' folder (prefix, acc) (AEK.toHashMapText v)
+      where
+        folder (!akkT, !akkL) k val =
+            let newPrefix = if T.null akkT then normalizeKey k else akkT <> "." <> normalizeKey k
+                (_, newAkkL) = valueToFields' val (newPrefix, akkL)
+            in (akkT, newAkkL)
+    valueToFields' (AE.Array v) (!prefix, !acc) =
+        V.foldl' folder (prefix, acc) v
+      where
+        folder (!akkT, !akkL) val =
+            let (_, newAkkL) = valueToFields' val (akkT <> "[*]", akkL)
+            in (akkT, newAkkL)
+    valueToFields' v (!prefix, !acc) = (prefix, V.snoc acc (prefix, v))
 
     normalizeKey :: Text -> Text
     normalizeKey key = case valueToFormatStr key of
