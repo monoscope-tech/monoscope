@@ -12,7 +12,7 @@ import Data.Aeson qualified as AE
 import Data.Default (Default)
 import Data.Time (ZonedTime)
 import Data.UUID qualified as UUID
-import Data.Vector qualified as V 
+import Data.Vector qualified as V
 import Database.PostgreSQL.Entity.DBT (QueryNature (Select), query)
 import Database.PostgreSQL.Entity.Types
 import Database.PostgreSQL.Simple (FromRow, Only (Only), ToRow)

@@ -9,6 +9,7 @@ import Data.Time (defaultTimeLocale, formatTime, getCurrentTime)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity.DBT (withPool)
+import Debug.Pretty.Simple
 import Models.Apis.Anomalies
 import Models.Projects.Projects qualified as Projects
 import Pages.Anomalies.AnomalyList qualified as AnomalyList
@@ -17,10 +18,9 @@ import Pkg.Components.ItemsList qualified as ItemsList
 import Pkg.TestUtils
 import ProcessMessage (processRequestMessages)
 import Relude
-import RequestMessages (RequestMessage (..), replaceNullChars, toXXHash, valueToFields)
 import Relude.Unsafe qualified as Unsafe
+import RequestMessages (RequestMessage (..), replaceNullChars, toXXHash, valueToFields)
 import Test.Hspec (Spec, aroundAll, describe, it, shouldBe)
-import Debug.Pretty.Simple
 
 
 testPid :: Projects.ProjectId

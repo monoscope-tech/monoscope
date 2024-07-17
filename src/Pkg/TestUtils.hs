@@ -270,7 +270,7 @@ data TestRequestMessages = RequestMessages
   }
 
 
--- FIXME: rename to some clearer. like toRequestMessage. 
+-- FIXME: rename to some clearer. like toRequestMessage.
 -- convert is too general
 convert :: Value -> Maybe RequestMessages.RequestMessage
 convert val = case fromJSON val of

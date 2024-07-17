@@ -4,6 +4,7 @@ import Data.Aeson qualified as AE
 import Data.Digest.XXHash (xxHash)
 import Data.Time (getZonedTime)
 import Data.UUID qualified as UUID
+import Data.Vector qualified as V
 import Database.PostgreSQL.Entity.DBT (QueryNature (Update), execute)
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
@@ -12,9 +13,8 @@ import Models.Apis.Fields.Types qualified as Fields
 import Models.Apis.Formats qualified as Formats
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
-import Data.Vector qualified as V
 import Numeric (showHex)
-import Relude 
+import Relude
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders, addSuccessToast)
 import Web.FormUrlEncoded (FromForm)
 

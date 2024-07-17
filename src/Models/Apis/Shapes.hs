@@ -1,22 +1,22 @@
-module Models.Apis.Shapes
-  ( Shape (..),
-    ShapeWithFields (..),
-    SwShape (..),
-    ShapeId (..),
-    getShapeFields,
-    bulkInsertShapes,
-    shapeIdText,
-    insertShapes,
-    shapesByEndpointHashes,
-    shapesByEndpointHash,
-  )
+module Models.Apis.Shapes (
+  Shape (..),
+  ShapeWithFields (..),
+  SwShape (..),
+  ShapeId (..),
+  getShapeFields,
+  bulkInsertShapes,
+  shapeIdText,
+  insertShapes,
+  shapesByEndpointHashes,
+  shapesByEndpointHash,
+)
 where
 
 import Data.Aeson qualified as AE
 import Data.Default (Default)
 import Data.Time (UTCTime, getZonedTime)
 import Data.UUID qualified as UUID
-import Data.Vector qualified as V 
+import Data.Vector qualified as V
 import Database.PostgreSQL.Entity.DBT (QueryNature (..), query)
 import Database.PostgreSQL.Entity.Types (CamelToSnake, Entity, FieldModifiers, GenericEntity, PrimaryKey, Schema, TableName)
 import Database.PostgreSQL.Simple (FromRow, ToRow)
@@ -36,6 +36,7 @@ import Models.Projects.Projects qualified as Projescts
 import Relude
 import Web.HttpApiData (FromHttpApiData)
 
+
 newtype ShapeId = ShapeId {unShapeId :: UUID.UUID}
   deriving stock (Generic, Show)
   deriving newtype (NFData)
@@ -43,51 +44,55 @@ newtype ShapeId = ShapeId {unShapeId :: UUID.UUID}
     (AE.FromJSON, AE.ToJSON, Eq, Ord, FromField, ToField, FromHttpApiData, Default)
     via UUID.UUID
 
+
 shapeIdText :: ShapeId -> Text
 shapeIdText = UUID.toText . unShapeId
 
+
 data ShapeWithFields = ShapeWidthFields
-  { status :: Int,
-    sHash :: Text,
-    fieldsMap :: Map FieldCategoryEnum [Fields.Field],
-    reqDescription :: Text,
-    resDescription :: Text
+  { status :: Int
+  , sHash :: Text
+  , fieldsMap :: Map FieldCategoryEnum [Fields.Field]
+  , reqDescription :: Text
+  , resDescription :: Text
   }
   deriving stock (Generic, Show)
   deriving anyclass (NFData)
 
+
 getShapeFields :: Shape -> V.Vector Fields.Field -> ShapeWithFields
 getShapeFields shape fields =
   ShapeWidthFields
-    { status = shape.statusCode,
-      sHash = shape.hash,
-      fieldsMap = fieldM,
-      reqDescription = shape.requestDescription,
-      resDescription = shape.responseDescription
+    { status = shape.statusCode
+    , sHash = shape.hash
+    , fieldsMap = fieldM
+    , reqDescription = shape.requestDescription
+    , resDescription = shape.responseDescription
     }
   where
     matchedFields = V.filter (\field -> field.hash `V.elem` shape.fieldHashes) fields
     fieldM = Fields.groupFieldsByCategory matchedFields
 
+
 -- A shape is a deterministic representation of a request-response combination for a given endpoint.
 -- We usually expect multiple shapes per endpoint. Eg a shape for a success request-response and another for an error response.
 data Shape = Shape
-  { id :: ShapeId,
-    createdAt :: UTCTime,
-    updatedAt :: UTCTime,
-    approvedOn :: Maybe UTCTime,
-    projectId :: Projects.ProjectId,
-    endpointHash :: Text,
-    queryParamsKeypaths :: V.Vector Text,
-    requestBodyKeypaths :: V.Vector Text,
-    responseBodyKeypaths :: V.Vector Text,
-    requestHeadersKeypaths :: V.Vector Text,
-    responseHeadersKeypaths :: V.Vector Text,
-    fieldHashes :: V.Vector Text,
-    hash :: Text,
-    statusCode :: Int,
-    responseDescription :: Text,
-    requestDescription :: Text
+  { id :: ShapeId
+  , createdAt :: UTCTime
+  , updatedAt :: UTCTime
+  , approvedOn :: Maybe UTCTime
+  , projectId :: Projects.ProjectId
+  , endpointHash :: Text
+  , queryParamsKeypaths :: V.Vector Text
+  , requestBodyKeypaths :: V.Vector Text
+  , responseBodyKeypaths :: V.Vector Text
+  , requestHeadersKeypaths :: V.Vector Text
+  , responseHeadersKeypaths :: V.Vector Text
+  , fieldHashes :: V.Vector Text
+  , hash :: Text
+  , statusCode :: Int
+  , responseDescription :: Text
+  , requestDescription :: Text
   }
   deriving stock (Show, Generic)
   deriving anyclass (FromRow, ToRow, Default, NFData)
@@ -95,7 +100,8 @@ data Shape = Shape
   deriving (Entity) via (GenericEntity '[Schema "apis", TableName "shapes", PrimaryKey "id", FieldModifiers '[CamelToSnake]] Shape)
   deriving (FromField) via Aeson Shape
 
-bulkInsertShapes :: (DB :> es) => V.Vector Shape -> Eff es ()
+
+bulkInsertShapes :: DB :> es => V.Vector Shape -> Eff es ()
 bulkInsertShapes shapes = void $ dbtToEff $ executeMany q $ V.toList rowsToInsert
   where
     q =
@@ -106,21 +112,22 @@ bulkInsertShapes shapes = void $ dbtToEff $ executeMany q $ V.toList rowsToInser
     rowsToInsert =
       V.map
         ( \shape ->
-            ( shape.projectId,
-              shape.endpointHash,
-              shape.queryParamsKeypaths,
-              shape.requestBodyKeypaths,
-              shape.responseBodyKeypaths,
-              shape.requestHeadersKeypaths,
-              shape.responseHeadersKeypaths,
-              shape.fieldHashes,
-              shape.hash,
-              fromIntegral shape.statusCode,
-              "",
-              ""
+            ( shape.projectId
+            , shape.endpointHash
+            , shape.queryParamsKeypaths
+            , shape.requestBodyKeypaths
+            , shape.responseBodyKeypaths
+            , shape.requestHeadersKeypaths
+            , shape.responseHeadersKeypaths
+            , shape.fieldHashes
+            , shape.hash
+            , fromIntegral shape.statusCode
+            , ""
+            , ""
             )
         )
         shapes
+
 
 shapesByEndpointHash :: Projescts.ProjectId -> Text -> PgT.DBT IO (V.Vector Shape)
 shapesByEndpointHash pid endpointHash = query Select q (pid, endpointHash)
@@ -131,6 +138,7 @@ shapesByEndpointHash pid endpointHash = query Select q (pid, endpointHash)
           response_body_keypaths, request_headers_keypaths, response_headers_keypaths, field_hashes, hash, status_code, request_description, response_description
           FROM apis.shapes WHERE project_id= ? AND endpoint_hash = ?
       |]
+
 
 insertShapes :: [Shape] -> DBT IO Int64
 insertShapes shapes = do
@@ -146,41 +154,44 @@ insertShapes shapes = do
   let params = map getShapeParams shapes
   executeMany insertQuery params
 
+
 getShapeParams :: Shape -> (Maybe UTCTime, Projects.ProjectId, Text, V.Vector Text, V.Vector Text, V.Vector Text, V.Vector Text, V.Vector Text, V.Vector Text, Text, Int, Text, Text)
 getShapeParams shape =
-  ( shape.approvedOn,
-    shape.projectId,
-    shape.endpointHash,
-    shape.queryParamsKeypaths,
-    shape.requestBodyKeypaths,
-    shape.responseBodyKeypaths,
-    shape.requestHeadersKeypaths,
-    shape.responseHeadersKeypaths,
-    shape.fieldHashes,
-    shape.hash,
-    shape.statusCode,
-    shape.requestDescription,
-    shape.responseDescription
+  ( shape.approvedOn
+  , shape.projectId
+  , shape.endpointHash
+  , shape.queryParamsKeypaths
+  , shape.requestBodyKeypaths
+  , shape.responseBodyKeypaths
+  , shape.requestHeadersKeypaths
+  , shape.responseHeadersKeypaths
+  , shape.fieldHashes
+  , shape.hash
+  , shape.statusCode
+  , shape.requestDescription
+  , shape.responseDescription
   )
 
+
 data SwShape = SwShape
-  { swEndpointHash :: Text,
-    swQueryParamsKeypaths :: V.Vector Text,
-    swRequestBodyKeypaths :: V.Vector Text,
-    swResponseBodyKeypaths :: V.Vector Text,
-    swRequestHeadersKeypaths :: V.Vector Text,
-    swResponseHeadersKeypaths :: V.Vector Text,
-    swHash :: Text,
-    swStatusCode :: Int,
-    swFieldHashes :: V.Vector Text,
-    swRequestDescription :: Text,
-    swResponseDescription :: Text
+  { swEndpointHash :: Text
+  , swQueryParamsKeypaths :: V.Vector Text
+  , swRequestBodyKeypaths :: V.Vector Text
+  , swResponseBodyKeypaths :: V.Vector Text
+  , swRequestHeadersKeypaths :: V.Vector Text
+  , swResponseHeadersKeypaths :: V.Vector Text
+  , swHash :: Text
+  , swStatusCode :: Int
+  , swFieldHashes :: V.Vector Text
+  , swRequestDescription :: Text
+  , swResponseDescription :: Text
   }
   deriving stock (Show, Generic)
   deriving anyclass (FromRow, ToRow, Default, NFData)
   deriving (AE.FromJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] SwShape
   deriving (FromField) via Aeson SwShape
   deriving anyclass (AE.ToJSON)
+
 
 shapesByEndpointHashes :: Projects.ProjectId -> V.Vector Text -> PgT.DBT IO (V.Vector SwShape)
 shapesByEndpointHashes pid hashes = query Select q (pid, hashes)

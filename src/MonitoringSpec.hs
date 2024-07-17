@@ -12,7 +12,8 @@ import ProcessMessage (processRequestMessages)
 import ProcessMessageSpec (testAuthContext)
 import Relude
 import Relude.Unsafe qualified as Unsafe
-import Test.Hspec 
+import Test.Hspec
+
 
 spec :: Spec
 spec = aroundAll TestUtils.withSetup do
