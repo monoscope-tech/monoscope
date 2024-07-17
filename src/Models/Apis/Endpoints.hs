@@ -31,7 +31,7 @@ import Data.Default (Default)
 import Data.Default.Instances ()
 import Data.Time (UTCTime, ZonedTime)
 import Data.UUID qualified as UUID
-import Data.Vector (Vector)
+import Data.Vector qualified as V
 import Database.PostgreSQL.Entity.DBT (QueryNature (..), query, queryOne)
 import Database.PostgreSQL.Entity.Types
 import Database.PostgreSQL.Simple (FromRow, Only (Only), ToRow)
@@ -100,8 +100,8 @@ endpointUrlPath :: Projects.ProjectId -> EndpointId -> Text
 endpointUrlPath pid eid = "/p/" <> pid.toText <> "/endpoints/" <> endpointIdText eid
 
 
-bulkInsertEndpoints :: DB :> es => [Endpoint] -> Eff es ()
-bulkInsertEndpoints endpoints = void $ dbtToEff $ executeMany q rowsToInsert
+bulkInsertEndpoints :: DB :> es => V.Vector Endpoint -> Eff es ()
+bulkInsertEndpoints endpoints = void $ dbtToEff $ executeMany q $ V.toList rowsToInsert
   where
     q =
       [sql| INSERT INTO apis.endpoints (project_id, url_path, url_params, method, host, hash, outgoing)
@@ -150,7 +150,7 @@ data EndpointRequestStats = EndpointRequestStats
 
 -- FIXME: Include and return a boolean flag to show if fields that have annomalies.
 -- FIXME: return endpoint_hash as well.
-endpointRequestStatsByProject :: Projects.ProjectId -> Bool -> Bool -> Maybe Text -> Maybe Text -> PgT.DBT IO (Vector EndpointRequestStats)
+endpointRequestStatsByProject :: Projects.ProjectId -> Bool -> Bool -> Maybe Text -> Maybe Text -> PgT.DBT IO (V.Vector EndpointRequestStats)
 endpointRequestStatsByProject pid ackd archived pHostM sortM = case pHostM of Just h -> query Select (Query $ encodeUtf8 q) (pid, h); Nothing -> query Select (Query $ encodeUtf8 q) (Only pid)
   where
     ackdAt = if ackd && not archived then "AND ann.acknowleged_at IS NOT NULL AND ann.archived_at IS NULL " else "AND ann.acknowleged_at IS NULL "
@@ -181,7 +181,7 @@ endpointRequestStatsByProject pid ackd archived pHostM sortM = case pHostM of Ju
   |]
 
 
-dependencyEndpointsRequestStatsByProject :: Projects.ProjectId -> Text -> PgT.DBT IO (Vector EndpointRequestStats)
+dependencyEndpointsRequestStatsByProject :: Projects.ProjectId -> Text -> PgT.DBT IO (V.Vector EndpointRequestStats)
 dependencyEndpointsRequestStatsByProject pid host = query Select (Query $ encodeUtf8 q) (pid, host)
   where
     q =
@@ -259,7 +259,7 @@ data HostEvents = HostEvents
   deriving anyclass (ToRow, FromRow, NFData)
 
 
-endpointsByProjectId :: Projects.ProjectId -> PgT.DBT IO (Vector SwEndpoint)
+endpointsByProjectId :: Projects.ProjectId -> PgT.DBT IO (V.Vector SwEndpoint)
 endpointsByProjectId pid = query Select q (Only pid)
   where
     q =
@@ -296,13 +296,13 @@ insertEndpoints endpoints = do
       )
 
 
-getProjectHosts :: Projects.ProjectId -> PgT.DBT IO (Vector Host)
+getProjectHosts :: Projects.ProjectId -> PgT.DBT IO (V.Vector Host)
 getProjectHosts pid = query Select q (Only pid)
   where
     q = [sql| SELECT DISTINCT host FROM apis.endpoints where  project_id = ? AND outgoing=false AND host!= '' |]
 
 
-dependenciesAndEventsCount :: Projects.ProjectId -> Text -> DBT IO (Vector HostEvents)
+dependenciesAndEventsCount :: Projects.ProjectId -> Text -> DBT IO (V.Vector HostEvents)
 dependenciesAndEventsCount pid sortT = query Select (Query $ encodeUtf8 q) (pid, pid)
   where
     orderBy = case sortT of

@@ -10,7 +10,7 @@ import Data.Aeson (eitherDecode)
 import Data.Aeson.Types (KeyValue ((.=)), object)
 import Data.ByteString.Lazy.Char8 qualified as BL
 import Data.Cache qualified as Cache
-import Data.List (nubBy, unzip7)
+import Data.List (unzip7)
 import Data.Text qualified as T
 import Data.UUID.V4 (nextRandom)
 import Data.Vector qualified as V
@@ -135,17 +135,17 @@ processRequestMessages
   -> Eff es [Text]
 processRequestMessages msgs = do
   startTime <- liftIO $ getTime Monotonic
-  processed <- forM msgs \(rmAckId, msg) -> do
+  !processed <- forM msgs \(rmAckId, msg) -> do
     resp <- processRequestMessage msg
     pure $ case resp of
       Left err -> Left (err, rmAckId, msg)
       Right (rd, enp, s, f, fo, err) -> Right (rd, enp, s, f, fo, err, rmAckId)
 
-  let (failures, successes) = partitionEithers processed
+  let !(failures, successes) = partitionEithers processed
       !(reqDumps, endpoints, shapes, fields, formats, _errs, rmAckIds) = unzip7 successes
   let !reqDumpsFinal = catMaybes reqDumps
-  let !endpointsFinal = nubBy (\x y -> x.hash == x.hash) $ catMaybes endpoints
-  let !shapesFinal = nubBy (\x y -> x.hash == x.hash) $ catMaybes shapes
+  let !endpointsFinal = VAA.nubBy (comparing (.hash)) $ V.fromList $ catMaybes endpoints
+  let !shapesFinal = VAA.nubBy (comparing (.hash)) $ V.fromList $ catMaybes shapes
   let !fieldsFinal = VAA.nubBy (comparing (.hash)) $ V.concat $ fields
   let !formatsFinal = VAA.nubBy (comparing (.hash)) $ V.concat $ formats
 
@@ -154,17 +154,16 @@ processRequestMessages msgs = do
 
   afterProcessing <- liftIO $ getTime Monotonic
   result <- try do
-    unless (null $ reqDumpsFinal) $ RequestDumps.bulkInsertRequestDumps (reqDumpsFinal)
-    unless (null $ endpointsFinal) $ Endpoints.bulkInsertEndpoints (endpointsFinal)
-    unless (null $ shapesFinal) $ Shapes.bulkInsertShapes (shapesFinal)
-    unless (null $ fieldsFinal) $ Fields.bulkInsertFields (fieldsFinal)
-    unless (null $ formatsFinal) $ Formats.bulkInsertFormat (V.toList formatsFinal)
+    unless (null $ reqDumpsFinal) $ RequestDumps.bulkInsertRequestDumps reqDumpsFinal
+    unless (null $ endpointsFinal) $ Endpoints.bulkInsertEndpoints endpointsFinal
+    unless (null $ shapesFinal) $ Shapes.bulkInsertShapes shapesFinal
+    unless (null $ fieldsFinal) $ Fields.bulkInsertFields fieldsFinal
+    unless (null $ formatsFinal) $ Formats.bulkInsertFormat formatsFinal
   endTime <- liftIO $ getTime Monotonic
   let processingTime = toNanoSecs (diffTimeSpec startTime afterProcessing) `div` 1000
   let queryTime = toNanoSecs (diffTimeSpec afterProcessing endTime) `div` 1000
   let totalTime = toNanoSecs (diffTimeSpec startTime endTime) `div` 1000
-  let msg = [fmt| Processing {length msgs} msgs. saved {length reqDumpsFinal}. totalTime: {totalTime} -> query: {queryTime} -> processing: {processingTime}|]
-  Log.logInfo_ (show msg)
+  Log.logInfo_ $ show [fmt| Processing {length msgs} msgs. saved {length reqDumpsFinal}. totalTime: {totalTime} -> query: {queryTime} -> processing: {processingTime}|]
   case result of
     Left (e :: SomePostgreSqlException) -> do
       Log.logAttention "Postgres Exception" (show e)
@@ -185,7 +184,7 @@ projectCacheDefault =
 
 
 processRequestMessage
-  :: (Reader.Reader Config.AuthContext :> es, Time.Time :> es, Log :> es, IOE :> es)
+  :: (Reader.Reader Config.AuthContext :> es, Time.Time :> es, IOE :> es)
   => RequestMessages.RequestMessage
   -> Eff es (Either Text (Maybe RequestDumps.RequestDump, Maybe Endpoints.Endpoint, Maybe Shapes.Shape, V.Vector Fields.Field, V.Vector Formats.Format, V.Vector RequestDumps.ATError))
 processRequestMessage recMsg = do
@@ -200,8 +199,6 @@ processRequestMessage recMsg = do
     mpjCache <- withPool appCtx.jobsPool $ Projects.projectCacheById pid'
     pure $ fromMaybe projectCacheDefault mpjCache
   recId <- liftIO nextRandom
-  cacheSize <- liftIO $ Cache.size appCtx.projectCache
-  Log.logAttention "Project Cache Size" (cacheSize)
   pure
     $ if projectCacheVal.paymentPlan == "Free" && projectCacheVal.weeklyRequestCount > 5000
       then (Right (Nothing, Nothing, Nothing, V.empty, V.empty, V.empty))

@@ -407,7 +407,7 @@ valueToFields value = dedupFields $ removeBlacklistedFields $ snd $ valueToField
         folder (!akkT, !akkL) val =
             let (_, newAkkL) = valueToFields' val (akkT <> "[*]", akkL)
             in (akkT, newAkkL)
-    valueToFields' v (!prefix, !acc) = (prefix, V.snoc acc (prefix, v))
+    valueToFields' v (!prefix, !acc) = (prefix, V.cons (prefix, v) acc)
 
     normalizeKey :: Text -> Text
     normalizeKey key = case valueToFormatStr key of

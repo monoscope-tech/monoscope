@@ -257,7 +257,7 @@ documentationPutH pid SaveSwaggerForm{updated_swagger, swagger_id, endpoints, di
       fields = nubBy (\x y -> x.hash == y.hash) (map fst fAndF) -- to prevent ON CONFLICT DO UPDATE command cannot affect row a second time
       formats = nubBy (\x y -> x.hash == y.hash) (map snd fAndF) -- to prevent ON CONFLICT DO UPDATE command cannot affect row a second time
       shapesSet = nubBy (\x y -> x.hash == y.hash) shapes
-  Formats.bulkInsertFormat formats
+  Formats.bulkInsertFormat $ V.fromList formats
   res <- dbtToEff do
     Fields.insertFields fields
     Shapes.insertShapes shapesSet

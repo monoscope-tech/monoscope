@@ -12,8 +12,7 @@ import ProcessMessage (processRequestMessages)
 import ProcessMessageSpec (testAuthContext)
 import Relude
 import Relude.Unsafe qualified as Unsafe
-import Test.Hspec (Spec, aroundAll, describe, it)
-
+import Test.Hspec 
 
 spec :: Spec
 spec = aroundAll TestUtils.withSetup do
@@ -40,7 +39,8 @@ spec = aroundAll TestUtils.withSetup do
                 , from = ""
                 , to = ""
                 }
-      _ <- withPool pool $ Monitors.queryMonitorUpsert queryMonitor
+      respC <- withPool pool $ Monitors.queryMonitorUpsert queryMonitor
+      respC `shouldBe` 1
       let nowTxt = toText $ formatTime defaultTimeLocale "%FT%T%QZ" currentTime
       let reqMsg1 = Unsafe.fromJust $ TestUtils.convert $ TestUtils.testRequestMsgs.reqMsg1 nowTxt
       let reqMsg2 = Unsafe.fromJust $ TestUtils.convert $ TestUtils.testRequestMsgs.reqMsg2 nowTxt
@@ -51,8 +51,10 @@ spec = aroundAll TestUtils.withSetup do
             , ("m5", reqMsg1)
             , ("m5", reqMsg2)
             ]
-      _ <- TestUtils.runTestBackground authCtx $ processRequestMessages msgs
-      _ <- withPool pool $ execute Select [sql|CALL monitors.check_triggered_query_monitors(0, '{}')|] ()
+      r <- TestUtils.runTestBackground authCtx $ processRequestMessages msgs
+      r `shouldBe` Right ["m1", "m2", "m4", "m5", "m5"]
+      respC' <- withPool pool $ execute Select [sql|CALL monitors.check_triggered_query_monitors(0, '{}')|] ()
+      respC' `shouldBe` 0
       _ <- TestUtils.runAllBackgroundJobs authCtx
       -- TODO:
       -- Introduce a .env.test

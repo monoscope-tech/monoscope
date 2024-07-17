@@ -5,10 +5,8 @@ import Data.Aeson qualified as AE
 import Data.Aeson.QQ (aesonQQ)
 import Data.ByteString.Base64 qualified as B64
 import Data.Text qualified as T
-
 import Data.Time (defaultTimeLocale, formatTime, getCurrentTime)
 import Data.UUID qualified as UUID
-
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity.DBT (withPool)
 import Models.Apis.Anomalies
@@ -20,10 +18,9 @@ import Pkg.TestUtils
 import ProcessMessage (processRequestMessages)
 import Relude
 import RequestMessages (RequestMessage (..), replaceNullChars, toXXHash, valueToFields)
-
 import Relude.Unsafe qualified as Unsafe
-
 import Test.Hspec (Spec, aroundAll, describe, it, shouldBe)
+import Debug.Pretty.Simple
 
 
 testPid :: Projects.ProjectId
@@ -46,7 +43,6 @@ spec = aroundAll withTestResources do
       currentTime <- getCurrentTime
       let nowTxt = toText $ formatTime defaultTimeLocale "%FT%T%QZ" currentTime
       let reqMsg1 = Unsafe.fromJust $ convert $ testRequestMsgs.reqMsg1 nowTxt
-      -- let reqMsg2 = Unsafe.fromJust $ convert $ testRequestMsgs.reqMsg2 nowTxt
       let msgs =
             [ ("m1", reqMsg1)
             , ("m2", reqMsg1) -- same message
@@ -71,7 +67,7 @@ spec = aroundAll withTestResources do
         -- TODO: add more tests
         _ -> error "Unexpected response"
 
-    it "should acknowledge anomaly" \TestResources{..} -> do
+    it "should acknowledge endpoint anomaly" \TestResources{..} -> do
       let msg1EndpointHash = toXXHash $ testPid.toText <> "172.31.29.11" <> "GET" <> "/"
       anm <- withPool trPool $ selectIssueByHash testPid msg1EndpointHash
       isJust anm `shouldBe` True
@@ -85,7 +81,7 @@ spec = aroundAll withTestResources do
           anid `shouldBe` anmId
         _ -> error "Unexpected response"
 
-    it "should detect new endpoint and shape" \TestResources{..} -> do
+    it "should detect new endpoint and shape on first endpoint" \TestResources{..} -> do
       currentTime <- getCurrentTime
       let nowTxt = toText $ formatTime defaultTimeLocale "%FT%T%QZ" currentTime
       let reqMsg1 = Unsafe.fromJust $ convert $ testRequestMsgs.reqMsg1 nowTxt
@@ -108,9 +104,11 @@ spec = aroundAll withTestResources do
           let endpointAnomalies = V.filter (\(AnomalyList.IssueVM _ _ c) -> c.anomalyType == ATEndpoint) anomalies
           let shapesAnomalies = V.filter (\(AnomalyList.IssueVM _ _ c) -> c.anomalyType == ATShape) anomalies
           let formatAnomalies = V.filter (\(AnomalyList.IssueVM _ _ c) -> c.anomalyType == ATFormat) anomalies
+          traceShowM "FormatAnomalies"
+          pTraceShowM formatAnomalies
           (length endpointAnomalies) `shouldBe` 1
           (length shapesAnomalies) `shouldBe` 1 -- reqMsg3 is same endpoint as reqMsg1 with different request body shape
-          (length formatAnomalies) `shouldBe` 0 -- lower levels anomalies are ignored until the parent is acknowledge
+          (length formatAnomalies) `shouldBe` 0 -- lower levels anomalies are ignored until the parent is acknowledged
           (length anomalies) `shouldBe` 2
         _ -> error "Unexpected response"
 

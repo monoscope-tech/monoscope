@@ -162,6 +162,12 @@ data AppError
   | UnexpectedError String
   deriving stock (Show)
 
+instance Eq AppError where
+  (==) (UsageError a _) (UsageError b _) = a == b 
+  (==) (UnexpectedError a) (UnexpectedError b) = a == b
+  (==) _ _ = False
+
+
 
 runBackground :: Log.Logger -> AuthContext -> ATBackgroundCtx a -> IO (Either AppError a)
 runBackground logger appCtx process =

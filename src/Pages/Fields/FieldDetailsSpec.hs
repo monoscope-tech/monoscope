@@ -37,7 +37,7 @@ spec = aroundAll withTestResources do
                 ]
       _ <- runTestBackground trATCtx $ processRequestMessages msgs
       _ <- runAllBackgroundJobs trATCtx
-      fieldsAll <- withPool trPool $ Fields.selectFields testPid $ (toXXHash $ testPid.toText <> "api.grovepay.co.uk" <> "POST" <> "/api/v1/user/login")
+      fieldsAll <- withPool trPool $ Fields.selectFields testPid $ (toXXHash $ testPid.toText <> "api.test.com" <> "POST" <> "/api/v1/user/login")
       let reqBodyFields = V.filter (\field -> field.fieldCategory == Fields.FCRequestBody) fieldsAll
       length reqBodyFields `shouldBe` 2
       let reqBodyField = reqBodyFields V.! 0

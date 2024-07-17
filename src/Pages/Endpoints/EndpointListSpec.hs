@@ -55,7 +55,7 @@ spec = aroundAll withTestResources do
       let enp1 = (\(EndpointList.EndpointRequestStatsVM a b c) -> c) <$> Unsafe.fromJust $ find (\(EndpointList.EndpointRequestStatsVM a b c) -> c.urlPath == "/") enpList
       let enp2 = (\(EndpointList.EndpointRequestStatsVM a b c) -> c) <$> Unsafe.fromJust $ find (\(EndpointList.EndpointRequestStatsVM a b c) -> c.urlPath == "/api/v1/user/login") enpList
       enp1.endpointHash `shouldBe` (toXXHash $ testPid.toText <> "172.31.29.11" <> "GET" <> "/")
-      enp2.endpointHash `shouldBe` (toXXHash $ testPid.toText <> "api.grovepay.co.uk" <> "POST" <> "/api/v1/user/login")
+      enp2.endpointHash `shouldBe` (toXXHash $ testPid.toText <> "api.test.com" <> "POST" <> "/api/v1/user/login")
       pg <-
         toServantResponse trATCtx trSessAndHeader trLogger $ AnomalyList.anomalyListGetH testPid Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
       case pg of
@@ -75,4 +75,4 @@ spec = aroundAll withTestResources do
       let enp1 = (\(EndpointList.EndpointRequestStatsVM a b c) -> c) <$> Unsafe.fromJust $ find (\(EndpointList.EndpointRequestStatsVM a b c) -> c.urlPath == "/") enpList
       let enp2 = (\(EndpointList.EndpointRequestStatsVM a b c) -> c) <$> Unsafe.fromJust $ find (\(EndpointList.EndpointRequestStatsVM a b c) -> c.urlPath == "/api/v1/user/login") enpList
       enp1.endpointHash `shouldBe` (toXXHash $ testPid.toText <> "172.31.29.11" <> "GET" <> "/")
-      enp2.endpointHash `shouldBe` (toXXHash $ testPid.toText <> "api.grovepay.co.uk" <> "POST" <> "/api/v1/user/login")
+      enp2.endpointHash `shouldBe` (toXXHash $ testPid.toText <> "api.test.co.uk" <> "POST" <> "/api/v1/user/login")

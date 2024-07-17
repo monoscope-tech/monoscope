@@ -12,21 +12,9 @@ import Models.Apis.Fields.Types qualified as Fields
 import Models.Apis.Formats qualified as Formats
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
+import Data.Vector qualified as V
 import Numeric (showHex)
-import Relude (
-  Bool (..),
-  ConvertUtf8 (encodeUtf8),
-  Generic,
-  Maybe (..),
-  MonadIO (liftIO),
-  Semigroup ((<>)),
-  Show,
-  Text,
-  ToText (toText),
-  fromMaybe,
-  ($),
-  (<$>),
- )
+import Relude 
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders, addSuccessToast)
 import Web.FormUrlEncoded (FromForm)
 
@@ -68,7 +56,7 @@ fieldPutH pid fid editData = do
               }
         )
           <$> editData.formats
-  r <- Formats.bulkInsertFormat formats
+  r <- Formats.bulkInsertFormat $ V.fromList formats
   addSuccessToast "Field edited successfully" Nothing
   addRespHeaders FieldPut
 

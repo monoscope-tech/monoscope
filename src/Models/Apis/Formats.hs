@@ -12,8 +12,7 @@ import Data.Aeson qualified as AE
 import Data.Default (Default)
 import Data.Time (ZonedTime)
 import Data.UUID qualified as UUID
-import Data.Vector (Vector)
-import Data.Vector qualified as Vector
+import Data.Vector qualified as V 
 import Database.PostgreSQL.Entity.DBT (QueryNature (Select), query)
 import Database.PostgreSQL.Entity.Types
 import Database.PostgreSQL.Simple (FromRow, Only (Only), ToRow)
@@ -45,7 +44,7 @@ data Format = Format
   , fieldHash :: Text
   , fieldType :: Fields.FieldTypes
   , fieldFormat :: Text
-  , examples :: Vector.Vector AE.Value
+  , examples :: V.Vector AE.Value
   , hash :: Text
   }
   deriving stock (Show, Generic)
@@ -55,20 +54,20 @@ data Format = Format
   deriving (FromField) via Aeson Format
 
 
-formatsByFieldHash :: Text -> DBT IO (Vector.Vector Format)
+formatsByFieldHash :: Text -> DBT IO (V.Vector Format)
 formatsByFieldHash fhash = query Select q (Only fhash)
   where
     q = [sql| SELECT id,created_at,updated_at,project_id, field_hash,field_type,field_format,examples::json[], hash from apis.formats where field_hash=? |]
 
 
-formatsByHash :: Text -> DBT IO (Vector.Vector Format)
+formatsByHash :: Text -> DBT IO (V.Vector Format)
 formatsByHash fhash = query Select q (Only fhash)
   where
     q = [sql| SELECT id,created_at,updated_at,project_id, field_hash,field_type,field_format,examples::json[], hash from apis.formats where hash=? |]
 
 
-bulkInsertFormat :: DB :> es => [Format] -> Eff es ()
-bulkInsertFormat formats = void $ dbtToEff $ executeMany q rowsToInsert
+bulkInsertFormat :: DB :> es => V.Vector Format -> Eff es ()
+bulkInsertFormat formats = void $ dbtToEff $ executeMany q $ V.toList rowsToInsert
   where
     q =
       [sql| 
@@ -93,7 +92,7 @@ data SwFormat = SwFormat
   { swFieldHash :: Text
   , swFieldType :: Fields.FieldTypes
   , swFieldFormat :: Text
-  , swExamples :: Vector.Vector AE.Value
+  , swExamples :: V.Vector AE.Value
   , swHash :: Text
   }
   deriving stock (Show, Generic)
@@ -103,7 +102,7 @@ data SwFormat = SwFormat
   deriving anyclass (AE.ToJSON)
 
 
-formatsByFieldsHashes :: Projects.ProjectId -> Vector Text -> PgT.DBT IO (Vector SwFormat)
+formatsByFieldsHashes :: Projects.ProjectId -> V.Vector Text -> PgT.DBT IO (V.Vector SwFormat)
 formatsByFieldsHashes pid fieldHashes = query Select q (pid, fieldHashes)
   where
     q =
