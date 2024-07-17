@@ -34,6 +34,7 @@ import Data.Vector.Mutable qualified as VM
 import Database.PostgreSQL.Simple (Query)
 import Deriving.Aeson qualified as DAE
 import Models.Apis.Anomalies qualified as Anomalies
+import Models.Apis.Endpoints qualified as Endpoints
 import Models.Apis.Fields.Types qualified as Fields (
   Field (..),
   FieldCategoryEnum (..),
@@ -45,7 +46,6 @@ import Models.Apis.Formats qualified as Formats
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Apis.Shapes qualified as Shapes
 import Models.Projects.Projects qualified as Projects
-import Models.Apis.Endpoints qualified as Endpoints
 import NeatInterpolation (text)
 import Numeric (showHex)
 import Relude

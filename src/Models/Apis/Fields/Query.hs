@@ -15,7 +15,6 @@ module Models.Apis.Fields.Query (
 where
 
 import Data.Time (ZonedTime)
-import Effectful
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity (selectById)
 import Database.PostgreSQL.Entity.DBT (QueryNature (Select, Update), execute, query)
