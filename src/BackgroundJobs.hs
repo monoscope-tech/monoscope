@@ -18,6 +18,7 @@ import Database.PostgreSQL.Entity.DBT (QueryNature (Select, Update), execute, qu
 import Database.PostgreSQL.Simple (Only (Only))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Transact (DBT)
+import Debug.Pretty.Simple
 import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
 import Effectful.Reader.Static (ask)
 import Effectful.Time qualified as Time
@@ -48,7 +49,6 @@ import Relude hiding (ask)
 import Relude.Unsafe qualified as Unsafe
 import System.Config qualified as Config
 import System.Types (ATBackgroundCtx, runBackground)
-import Debug.Pretty.Simple
 
 
 data BgJobs
@@ -134,62 +134,61 @@ jobsRunner logger authCtx job = when authCtx.config.enableBackgroundJobs $ do
   |]
           sendMessageToDiscord msg
       CreatedProjectSuccessfully userId projectId reciever projectTitle -> do
-       userM <- Users.userById userId
-       whenJust userM \user -> do
-         let firstName = user.firstName
-         let project_url = "https://app.apitoolkit.io/p/" <> projectId.toText
-         let templateVars =
-               [aesonQQ|{
+        userM <- Users.userById userId
+        whenJust userM \user -> do
+          let firstName = user.firstName
+          let project_url = "https://app.apitoolkit.io/p/" <> projectId.toText
+          let templateVars =
+                [aesonQQ|{
             "user_name": #{firstName},
             "project_name": #{projectTitle},
             "project_url": #{project_url}
          }|]
-         sendPostmarkEmail reciever "project-created" templateVars
+          sendPostmarkEmail reciever "project-created" templateVars
       DeletedProject pid -> do
-       users <- dbtToEff $ Projects.usersByProjectId pid
-       projectM <- dbtToEff $ Projects.projectById pid
-       forM_ projectM \pr -> do
-         forM_ users \user -> do
-           let firstName = user.firstName
-           let projectTitle = pr.title
-           let userEmail = CI.original (user.email)
-           let templateVars =
-                 [aesonQQ|{
+        users <- dbtToEff $ Projects.usersByProjectId pid
+        projectM <- dbtToEff $ Projects.projectById pid
+        forM_ projectM \pr -> do
+          forM_ users \user -> do
+            let firstName = user.firstName
+            let projectTitle = pr.title
+            let userEmail = CI.original (user.email)
+            let templateVars =
+                  [aesonQQ|{
              "user_name": #{firstName},
              "project_name": #{projectTitle}
            }|]
-           sendPostmarkEmail userEmail "project-deleted" templateVars
+            sendPostmarkEmail userEmail "project-deleted" templateVars
       DailyJob -> do
-       currentDay <- utctDay <$> Time.currentTime
-       projects <- dbtToEff $ query Select [sql|SELECT id FROM projects.projects WHERE active=? AND deleted_at IS NULL|] (Only True)
-       forM_ projects \p -> do
-         liftIO $ withResource authCtx.jobsPool \conn -> do
-           _ <-
-             if dayOfWeek currentDay == Monday
-               then createJob conn "background_jobs" $ BackgroundJobs.WeeklyReports p
-               else createJob conn "background_jobs" $ BackgroundJobs.DailyReports p
-           _ <- createJob conn "background_jobs" $ BackgroundJobs.ReportUsage p
-           pass
+        currentDay <- utctDay <$> Time.currentTime
+        projects <- dbtToEff $ query Select [sql|SELECT id FROM projects.projects WHERE active=? AND deleted_at IS NULL|] (Only True)
+        forM_ projects \p -> do
+          liftIO $ withResource authCtx.jobsPool \conn -> do
+            _ <-
+              if dayOfWeek currentDay == Monday
+                then createJob conn "background_jobs" $ BackgroundJobs.WeeklyReports p
+                else createJob conn "background_jobs" $ BackgroundJobs.DailyReports p
+            _ <- createJob conn "background_jobs" $ BackgroundJobs.ReportUsage p
+            pass
       DailyReports pid -> dailyReportForProject pid
       WeeklyReports pid -> weeklyReportForProject pid
       GenSwagger pid uid -> generateSwaggerForProject pid uid
       ReportUsage pid -> whenJustM (dbtToEff $ Projects.projectById pid) \project -> do
-       when (project.paymentPlan == "UsageBased" || project.paymentPlan == "GraduatedPricing") $ whenJust project.firstSubItemId \fSubId -> do
-         currentTime <- liftIO getZonedTime
-         totalToReport <- dbtToEff $ RequestDumps.getTotalRequestToReport pid project.usageLastReported
-         liftIO $ reportUsageToLemonsqueezy fSubId totalToReport authCtx.config.lemonSqueezyApiKey
-         _ <- dbtToEff $ Projects.updateUsageLastReported pid currentTime
-         pass
+        when (project.paymentPlan == "UsageBased" || project.paymentPlan == "GraduatedPricing") $ whenJust project.firstSubItemId \fSubId -> do
+          currentTime <- liftIO getZonedTime
+          totalToReport <- dbtToEff $ RequestDumps.getTotalRequestToReport pid project.usageLastReported
+          liftIO $ reportUsageToLemonsqueezy fSubId totalToReport authCtx.config.lemonSqueezyApiKey
+          _ <- dbtToEff $ Projects.updateUsageLastReported pid currentTime
+          pass
       RunCollectionTests col_id -> do
-        pass
-       -- now <- Time.currentTime
-       -- collectionM <- dbtToEff $ Testing.getCollectionById col_id
-       -- if job.jobRunAt > addUTCTime (-900) now -- Run time is less than 15 mins ago
-       --   then whenJust collectionM \collection -> when (collection.isScheduled) do
-       --     let (Testing.CollectionSteps colStepsV) = collection.collectionSteps
-       --     _ <- TestToDump.runTestAndLog collection.projectId colStepsV
-       --     pass
-       --   else Log.logAttention "RunCollectionTests failed.  Job was sheduled to run over 30 mins ago" $ collectionM <&> \c -> (c.title, c.id)
+        now <- Time.currentTime
+        collectionM <- dbtToEff $ Testing.getCollectionById col_id
+        if job.jobRunAt > addUTCTime (-900) now -- Run time is less than 15 mins ago
+          then whenJust collectionM \collection -> when (collection.isScheduled) do
+            let (Testing.CollectionSteps colStepsV) = collection.collectionSteps
+            _ <- TestToDump.runTestAndLog collection.projectId colStepsV
+            pass
+          else Log.logAttention "RunCollectionTests failed.  Job was sheduled to run over 30 mins ago" $ collectionM <&> \c -> (c.title, c.id)
 
 
 generateSwaggerForProject :: Projects.ProjectId -> Users.UserId -> ATBackgroundCtx ()
@@ -276,8 +275,8 @@ handleQueryMonitorThreshold monitorE isAlert = do
 
 jobsWorkerInit :: Log.Logger -> Config.AuthContext -> IO ()
 jobsWorkerInit logger appCtx =
-  startJobRunner
-    $ mkConfig jobLogger "background_jobs" (appCtx.jobsPool) (MaxConcurrentJobs 1) (jobsRunner logger appCtx) id
+  startJobRunner $
+    mkConfig jobLogger "background_jobs" (appCtx.jobsPool) (MaxConcurrentJobs 1) (jobsRunner logger appCtx) id
   where
     jobLogger :: LogLevel -> LogEvent -> IO ()
     jobLogger logLevel logEvent = Log.runLogT "OddJobs" logger Log.LogAttention $ Log.logInfo "Background jobs ping." (show @Text logLevel, show @Text logEvent) -- logger show (logLevel, logEvent)
@@ -422,6 +421,7 @@ emailQueryMonitorAlert monitorE@Monitors.QueryMonitorEvaled{alertConfig} email u
   --               |]
   pass
 
+
 newAnomalyJob :: Projects.ProjectId -> ZonedTime -> Text -> Text -> Text -> ATBackgroundCtx ()
 newAnomalyJob pid createdAt anomalyTypesT anomalyActionsT targetHash = do
   pass
@@ -453,8 +453,8 @@ Endpoint: `{endpointPath}`
 <https://app.apitoolkit.io/p/{pid.toText}/anomalies/by_hash/{targetHash}|More details on the apitoolkit>
                               |]
           _ -> do
-            when (totalRequestsCount > 50)
-              $ forM_ users \u -> do
+            when (totalRequestsCount > 50) $
+              forM_ users \u -> do
                 let templateVars =
                       object
                         [ "user_name" .= u.firstName
@@ -536,21 +536,21 @@ Endpoint: `{endpointPath}`
       err <- Unsafe.fromJust <<$>> dbtToEff $ Anomalies.errorByHash targetHash
       issueId <- liftIO $ Anomalies.AnomalyId <$> UUIDV4.nextRandom
       _ <-
-        dbtToEff
-          $ Anomalies.insertIssue
-          $ Anomalies.Issue
-            { id = issueId
-            , createdAt = err.createdAt
-            , updatedAt = err.updatedAt
-            , projectId = pid
-            , anomalyType = Anomalies.ATRuntimeException
-            , targetHash = targetHash
-            , issueData = Anomalies.IDNewRuntimeExceptionIssue err.errorData
-            , acknowlegedAt = Nothing
-            , acknowlegedBy = Nothing
-            , endpointId = Nothing
-            , archivedAt = Nothing
-            }
+        dbtToEff $
+          Anomalies.insertIssue $
+            Anomalies.Issue
+              { id = issueId
+              , createdAt = err.createdAt
+              , updatedAt = err.updatedAt
+              , projectId = pid
+              , anomalyType = Anomalies.ATRuntimeException
+              , targetHash = targetHash
+              , issueData = Anomalies.IDNewRuntimeExceptionIssue err.errorData
+              , acknowlegedAt = Nothing
+              , acknowlegedBy = Nothing
+              , endpointId = Nothing
+              , archivedAt = Nothing
+              }
       forM_ project.notificationsChannel \case
         Projects.NSlack ->
           sendSlackMessage

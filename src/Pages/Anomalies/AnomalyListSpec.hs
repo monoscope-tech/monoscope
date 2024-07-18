@@ -104,8 +104,6 @@ spec = aroundAll withTestResources do
           let endpointAnomalies = V.filter (\(AnomalyList.IssueVM _ _ c) -> c.anomalyType == ATEndpoint) anomalies
           let shapesAnomalies = V.filter (\(AnomalyList.IssueVM _ _ c) -> c.anomalyType == ATShape) anomalies
           let formatAnomalies = V.filter (\(AnomalyList.IssueVM _ _ c) -> c.anomalyType == ATFormat) anomalies
-          traceShowM "FormatAnomalies"
-          pTraceShowM formatAnomalies
           (length endpointAnomalies) `shouldBe` 1
           (length shapesAnomalies) `shouldBe` 1 -- reqMsg3 is same endpoint as reqMsg1 with different request body shape
           (length formatAnomalies) `shouldBe` 0 -- lower levels anomalies are ignored until the parent is acknowledged
