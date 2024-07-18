@@ -422,13 +422,9 @@ emailQueryMonitorAlert monitorE@Monitors.QueryMonitorEvaled{alertConfig} email u
   pass
 
 
+
 newAnomalyJob :: Projects.ProjectId -> ZonedTime -> Text -> Text -> Text -> ATBackgroundCtx ()
 newAnomalyJob pid createdAt anomalyTypesT anomalyActionsT targetHash = do
-  pass
-
-
-newAnomalyJob' :: Projects.ProjectId -> ZonedTime -> Text -> Text -> Text -> ATBackgroundCtx ()
-newAnomalyJob' pid createdAt anomalyTypesT anomalyActionsT targetHash = do
   let anomalyType = Unsafe.fromJust $ Anomalies.parseAnomalyTypes anomalyTypesT
   case anomalyType of
     Anomalies.ATEndpoint -> do
