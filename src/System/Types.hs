@@ -32,7 +32,7 @@ import Data.Map qualified as Map
 import Data.Time.Clock.POSIX (posixSecondsToUTCTime)
 import Data.UUID qualified as UUID
 import Effectful
-import Effectful.Error.Static (Error,runErrorNoCallStack )
+import Effectful.Error.Static (Error, runErrorNoCallStack)
 import Effectful.Log (Log)
 import Effectful.PostgreSQL.Transact.Effect (DB, runDB)
 import Effectful.Reader.Static (Reader, runReader)
@@ -41,7 +41,7 @@ import Effectful.Time (Time, runFrozenTime, runTime)
 import Log qualified
 import Models.Users.Sessions qualified as Sessions
 import Relude
-import Servant (AuthProtect, Header, Headers,ServerError, addHeader, noHeader)
+import Servant (AuthProtect, Header, Headers, ServerError, addHeader, noHeader)
 import Servant qualified
 import Servant.Htmx (HXRedirect, HXTriggerAfterSettle)
 import Servant.Server.Experimental.Auth (AuthServerData)
@@ -103,7 +103,6 @@ effToServantHandler env logger app =
     & effToHandler
 
 
-
 -- | `effToServantHandler` exists specifically to be used in tests,
 -- so the UUID and Time effects are fixed to constants.
 effToServantHandlerTest :: AuthContext -> Log.Logger -> ATBaseCtx a -> Servant.Handler a
@@ -147,7 +146,6 @@ runBackground logger appCtx process =
     & runTime
     & Logging.runLog ("background-job:" <> show appCtx.config.environment) logger
     & Effectful.runEff
-
 
 
 type instance
