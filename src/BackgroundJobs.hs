@@ -48,6 +48,7 @@ import Relude hiding (ask)
 import Relude.Unsafe qualified as Unsafe
 import System.Config qualified as Config
 import System.Types (ATBackgroundCtx, runBackground)
+import Debug.Pretty.Simple
 
 
 data BgJobs
@@ -97,96 +98,98 @@ sendMessageToDiscord msg = do
 jobsRunner :: Log.Logger -> Config.AuthContext -> Job -> IO ()
 jobsRunner logger authCtx job = when authCtx.config.enableBackgroundJobs $ do
   bgJob <- throwParsePayload job
-  traceShowM bgJob
-  void $ runBackground logger authCtx $ case bgJob of
-    QueryMonitorsTriggered queryMonitorIds -> queryMonitorsTriggered queryMonitorIds
-    NewAnomaly pid createdAt anomalyTypesT anomalyActionsT targetHash -> newAnomalyJob pid createdAt anomalyTypesT anomalyActionsT targetHash
-    InviteUserToProject userId projectId reciever projectTitle' -> do
-      userM <- Users.userById userId
-      whenJust userM \user -> do
-        let firstName = user.firstName
-        let project_url = "https://app.apitoolkit.io/p/" <> projectId.toText
-        let templateVars =
-              [aesonQQ|{
-           "user_name": #{firstName},
-           "project_name": #{projectTitle'},
-           "project_url": #{project_url}
-        }|]
-        sendPostmarkEmail reciever "project-invite" templateVars
-    SendDiscordData userId projectId fullName stack foundUsFrom -> whenJustM (dbtToEff $ Projects.projectById projectId) \project -> do
-      users <- dbtToEff $ Projects.usersByProjectId projectId
-      let stackString = intercalate ", " $ map T.unpack stack
-      forM_ users \user -> do
-        let userEmail = CI.original (user.email)
-        let project_url = "https://app.apitoolkit.io/p/" <> projectId.toText
-        let project_title = project.title
-        let msg =
-              [fmtTrim| 🎉 New project created on apitoolkit.io! 🎉
-- **User Full Name**: {fullName} 
-- **User Email**: {userEmail}
-- **Project Title**: [{project_title}]({project_url})
-- **User ID**: {userId.toText}
-- **Payment Plan**: {project.paymentPlan}
-- **Stack**: {stackString}
-- **Found us from**: {foundUsFrom}
-|]
-        sendMessageToDiscord msg
-    CreatedProjectSuccessfully userId projectId reciever projectTitle -> do
-      userM <- Users.userById userId
-      whenJust userM \user -> do
-        let firstName = user.firstName
-        let project_url = "https://app.apitoolkit.io/p/" <> projectId.toText
-        let templateVars =
-              [aesonQQ|{
-           "user_name": #{firstName},
-           "project_name": #{projectTitle},
-           "project_url": #{project_url}
-        }|]
-        sendPostmarkEmail reciever "project-created" templateVars
-    DeletedProject pid -> do
-      users <- dbtToEff $ Projects.usersByProjectId pid
-      projectM <- dbtToEff $ Projects.projectById pid
-      forM_ projectM \pr -> do
-        forM_ users \user -> do
-          let firstName = user.firstName
-          let projectTitle = pr.title
-          let userEmail = CI.original (user.email)
-          let templateVars =
-                [aesonQQ|{
-            "user_name": #{firstName},
-            "project_name": #{projectTitle}
-          }|]
-          sendPostmarkEmail userEmail "project-deleted" templateVars
-    DailyJob -> do
-      currentDay <- utctDay <$> Time.currentTime
-      projects <- dbtToEff $ query Select [sql|SELECT id FROM projects.projects WHERE active=? AND deleted_at IS NULL|] (Only True)
-      forM_ projects \p -> do
-        liftIO $ withResource authCtx.jobsPool \conn -> do
-          _ <-
-            if dayOfWeek currentDay == Monday
-              then createJob conn "background_jobs" $ BackgroundJobs.WeeklyReports p
-              else createJob conn "background_jobs" $ BackgroundJobs.DailyReports p
-          _ <- createJob conn "background_jobs" $ BackgroundJobs.ReportUsage p
-          pass
-    DailyReports pid -> dailyReportForProject pid
-    WeeklyReports pid -> weeklyReportForProject pid
-    GenSwagger pid uid -> generateSwaggerForProject pid uid
-    ReportUsage pid -> whenJustM (dbtToEff $ Projects.projectById pid) \project -> do
-      when (project.paymentPlan == "UsageBased" || project.paymentPlan == "GraduatedPricing") $ whenJust project.firstSubItemId \fSubId -> do
-        currentTime <- liftIO getZonedTime
-        totalToReport <- dbtToEff $ RequestDumps.getTotalRequestToReport pid project.usageLastReported
-        liftIO $ reportUsageToLemonsqueezy fSubId totalToReport authCtx.config.lemonSqueezyApiKey
-        _ <- dbtToEff $ Projects.updateUsageLastReported pid currentTime
-        pass
-    RunCollectionTests col_id -> do
-      now <- Time.currentTime
-      collectionM <- dbtToEff $ Testing.getCollectionById col_id
-      if job.jobRunAt > addUTCTime (-900) now -- Run time is less than 15 mins ago
-        then whenJust collectionM \collection -> when (collection.isScheduled) do
-          let (Testing.CollectionSteps colStepsV) = collection.collectionSteps
-          _ <- TestToDump.runTestAndLog collection.projectId colStepsV
-          pass
-        else Log.logAttention "RunCollectionTests failed.  Job was sheduled to run over 30 mins ago" $ collectionM <&> \c -> (c.title, c.id)
+  void $ runBackground logger authCtx do
+    Log.logInfo "Backgroun job run" (show bgJob)
+    pass
+--    case bgJob of
+--     QueryMonitorsTriggered queryMonitorIds -> queryMonitorsTriggered queryMonitorIds
+--     NewAnomaly pid createdAt anomalyTypesT anomalyActionsT targetHash -> newAnomalyJob pid createdAt anomalyTypesT anomalyActionsT targetHash
+--     InviteUserToProject userId projectId reciever projectTitle' -> do
+--       userM <- Users.userById userId
+--       whenJust userM \user -> do
+--         let firstName = user.firstName
+--         let project_url = "https://app.apitoolkit.io/p/" <> projectId.toText
+--         let templateVars =
+--               [aesonQQ|{
+--            "user_name": #{firstName},
+--            "project_name": #{projectTitle'},
+--            "project_url": #{project_url}
+--         }|]
+--         sendPostmarkEmail reciever "project-invite" templateVars
+--     SendDiscordData userId projectId fullName stack foundUsFrom -> whenJustM (dbtToEff $ Projects.projectById projectId) \project -> do
+--       users <- dbtToEff $ Projects.usersByProjectId projectId
+--       let stackString = intercalate ", " $ map T.unpack stack
+--       forM_ users \user -> do
+--         let userEmail = CI.original (user.email)
+--         let project_url = "https://app.apitoolkit.io/p/" <> projectId.toText
+--         let project_title = project.title
+--         let msg =
+--               [fmtTrim| 🎉 New project created on apitoolkit.io! 🎉
+-- - **User Full Name**: {fullName} 
+-- - **User Email**: {userEmail}
+-- - **Project Title**: [{project_title}]({project_url})
+-- - **User ID**: {userId.toText}
+-- - **Payment Plan**: {project.paymentPlan}
+-- - **Stack**: {stackString}
+-- - **Found us from**: {foundUsFrom}
+-- |]
+--         sendMessageToDiscord msg
+--     CreatedProjectSuccessfully userId projectId reciever projectTitle -> do
+--       userM <- Users.userById userId
+--       whenJust userM \user -> do
+--         let firstName = user.firstName
+--         let project_url = "https://app.apitoolkit.io/p/" <> projectId.toText
+--         let templateVars =
+--               [aesonQQ|{
+--            "user_name": #{firstName},
+--            "project_name": #{projectTitle},
+--            "project_url": #{project_url}
+--         }|]
+--         sendPostmarkEmail reciever "project-created" templateVars
+--     DeletedProject pid -> do
+--       users <- dbtToEff $ Projects.usersByProjectId pid
+--       projectM <- dbtToEff $ Projects.projectById pid
+--       forM_ projectM \pr -> do
+--         forM_ users \user -> do
+--           let firstName = user.firstName
+--           let projectTitle = pr.title
+--           let userEmail = CI.original (user.email)
+--           let templateVars =
+--                 [aesonQQ|{
+--             "user_name": #{firstName},
+--             "project_name": #{projectTitle}
+--           }|]
+--           sendPostmarkEmail userEmail "project-deleted" templateVars
+--     DailyJob -> do
+--       currentDay <- utctDay <$> Time.currentTime
+--       projects <- dbtToEff $ query Select [sql|SELECT id FROM projects.projects WHERE active=? AND deleted_at IS NULL|] (Only True)
+--       forM_ projects \p -> do
+--         liftIO $ withResource authCtx.jobsPool \conn -> do
+--           _ <-
+--             if dayOfWeek currentDay == Monday
+--               then createJob conn "background_jobs" $ BackgroundJobs.WeeklyReports p
+--               else createJob conn "background_jobs" $ BackgroundJobs.DailyReports p
+--           _ <- createJob conn "background_jobs" $ BackgroundJobs.ReportUsage p
+--           pass
+--     DailyReports pid -> dailyReportForProject pid
+--     WeeklyReports pid -> weeklyReportForProject pid
+--     GenSwagger pid uid -> generateSwaggerForProject pid uid
+--     ReportUsage pid -> whenJustM (dbtToEff $ Projects.projectById pid) \project -> do
+--       when (project.paymentPlan == "UsageBased" || project.paymentPlan == "GraduatedPricing") $ whenJust project.firstSubItemId \fSubId -> do
+--         currentTime <- liftIO getZonedTime
+--         totalToReport <- dbtToEff $ RequestDumps.getTotalRequestToReport pid project.usageLastReported
+--         liftIO $ reportUsageToLemonsqueezy fSubId totalToReport authCtx.config.lemonSqueezyApiKey
+--         _ <- dbtToEff $ Projects.updateUsageLastReported pid currentTime
+--         pass
+--     RunCollectionTests col_id -> do
+--       now <- Time.currentTime
+--       collectionM <- dbtToEff $ Testing.getCollectionById col_id
+--       if job.jobRunAt > addUTCTime (-900) now -- Run time is less than 15 mins ago
+--         then whenJust collectionM \collection -> when (collection.isScheduled) do
+--           let (Testing.CollectionSteps colStepsV) = collection.collectionSteps
+--           _ <- TestToDump.runTestAndLog collection.projectId colStepsV
+--           pass
+--         else Log.logAttention "RunCollectionTests failed.  Job was sheduled to run over 30 mins ago" $ collectionM <&> \c -> (c.title, c.id)
 
 
 generateSwaggerForProject :: Projects.ProjectId -> Users.UserId -> ATBackgroundCtx ()

@@ -35,6 +35,8 @@ ghc-options:
   - -Wno-type-defaults
   - -rtsopts
   - -j4
+  - -Wno-unused-top-binds
+  - -Wno-unused-imports
   # - "-prof"
   # - -g
   - "-fprof-late"
