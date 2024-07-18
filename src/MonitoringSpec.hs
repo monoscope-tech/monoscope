@@ -18,9 +18,9 @@ import Test.Hspec
 spec :: Spec
 spec = aroundAll TestUtils.withSetup do
   describe "Query Log Monitors" do
-    it "should create monitor with no triggers" \(pool, hPool) -> do
+    it "should create monitor with no triggers" \pool -> do
       currentTime <- getCurrentTime
-      authCtx <- testAuthContext (pool, hPool)
+      authCtx <- testAuthContext pool
       let queryMonitor =
             convertToQueryMonitor (Projects.ProjectId UUID.nil) currentTime (Monitors.QueryMonitorId UUID.nil)
               $ AlertUpsertForm
@@ -53,7 +53,7 @@ spec = aroundAll TestUtils.withSetup do
             , ("m5", reqMsg2)
             ]
       r <- TestUtils.runTestBackground authCtx $ processRequestMessages msgs
-      r `shouldBe` Right ["m1", "m2", "m4", "m5", "m5"]
+      r `shouldBe` ["m1", "m2", "m4", "m5", "m5"]
       respC' <- withPool pool $ execute Select [sql|CALL monitors.check_triggered_query_monitors(0, '{}')|] ()
       respC' `shouldBe` 0
       _ <- TestUtils.runAllBackgroundJobs authCtx

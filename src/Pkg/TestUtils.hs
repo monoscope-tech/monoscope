@@ -43,8 +43,6 @@ import Effectful
 import Effectful.Error.Static (runErrorNoCallStack)
 import Effectful.PostgreSQL.Transact.Effect qualified as DB
 import Effectful.Time (runTime)
-import Hasql.Pool qualified as Hasql
-import Hasql.Pool.Config qualified as Hasql
 import Log qualified
 import Log.Backend.StandardOutput.Bulk qualified as LogBulk
 import Models.Projects.Projects qualified as Projects
@@ -59,7 +57,7 @@ import System.Clock (TimeSpec (TimeSpec))
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Config qualified as Config
 import System.Directory (getFileSize, listDirectory)
-import System.Types (ATAuthCtx, ATBackgroundCtx, AppError, RespHeaders, atAuthToBase, effToServantHandlerTest, runBackground)
+import System.Types (ATAuthCtx, ATBackgroundCtx, RespHeaders, atAuthToBase, effToServantHandlerTest, runBackground)
 import Web.Auth qualified as Auth
 import Web.Cookie (SetCookie)
 
@@ -84,7 +82,7 @@ migrate db = do
 
 -- Setup function that spins up a database with the db migrations already executed.
 -- source: https://jfischoff.github.io/blog/keeping-database-tests-fast.html
-withSetup :: ((Pool Connection, Hasql.Pool) -> IO ()) -> IO ()
+withSetup :: (Pool Connection -> IO ()) -> IO ()
 withSetup f = do
   -- Helper to throw exceptions
   let throwE x = either throwIO pure =<< x
@@ -96,10 +94,7 @@ withSetup f = do
               }
     dirSize <- sum <$> (listDirectory migrationsDirr >>= mapM (getFileSize . (migrationsDirr <>)))
     migratedConfig <- throwE $ cacheAction ("./.tmp/postgres/" <> show dirSize) migrate combinedConfig
-    withConfig migratedConfig $ \db -> do
-      pool <- newPool (defaultPoolConfig (connectPostgreSQL $ toConnectionString db) close 60 10)
-      hPool <- Hasql.acquire $ Hasql.settings [Hasql.staticConnectionSettings $ toConnectionString db]
-      f (pool, hPool)
+    withConfig migratedConfig $ \db -> f =<< newPool (defaultPoolConfig (connectPostgreSQL $ toConnectionString db) close 60 10)
 
 
 -- throw away all db changes that happened within this abort block
@@ -144,7 +139,7 @@ fromRightShow (Right b) = b
 fromRightShow (Left a) = error $ "Unexpected Left value: " <> show a
 
 
-runTestBackground :: Config.AuthContext -> ATBackgroundCtx a -> IO (Either AppError a)
+runTestBackground :: Config.AuthContext -> ATBackgroundCtx a -> IO a
 runTestBackground authCtx action = LogBulk.withBulkStdOutLogger \logger ->
   runBackground logger authCtx $ action
 
@@ -152,7 +147,6 @@ runTestBackground authCtx action = LogBulk.withBulkStdOutLogger \logger ->
 -- New type to hold all our resources
 data TestResources = TestResources
   { trPool :: Pool Connection
-  , trHPool :: Hasql.Pool
   , trProjectCache :: Cache Projects.ProjectId Projects.ProjectCache
   , trSessAndHeader :: Servant.Headers '[Servant.Header "Set-Cookie" SetCookie] Sessions.Session
   , trATCtx :: AuthContext
@@ -162,11 +156,11 @@ data TestResources = TestResources
 
 -- Compose withSetup with additional IO actions
 withTestResources :: (TestResources -> IO ()) -> IO ()
-withTestResources f = withSetup $ \(pool, hPool) -> LogBulk.withBulkStdOutLogger \logger -> do
+withTestResources f = withSetup $ \pool -> LogBulk.withBulkStdOutLogger \logger -> do
   projectCache <- newCache (Just $ TimeSpec (60 * 60) 0)
   sessAndHeader <- testSessionHeader pool
   let atAuthCtx =
-        AuthContext (def @EnvConfig) pool pool hPool projectCache
+        AuthContext (def @EnvConfig) pool pool projectCache
           $ ( (def :: EnvConfig)
                 { apiKeyEncryptionSecretKey = "apitoolkit123456123456apitoolkit"
                 , convertkitApiKey = ""
@@ -178,7 +172,6 @@ withTestResources f = withSetup $ \(pool, hPool) -> LogBulk.withBulkStdOutLogger
   f
     TestResources
       { trPool = pool
-      , trHPool = hPool
       , trProjectCache = projectCache
       , trSessAndHeader = sessAndHeader
       , trATCtx = atAuthCtx

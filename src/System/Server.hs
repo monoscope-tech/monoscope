@@ -138,12 +138,9 @@ pubsubService appLogger appCtx = do
                 b64Msg <- msg ^? field @"message" . _Just . field @"data'" . _Just . _Base64
                 Just (ackId, b64Msg)
 
-        msgIdsE <- liftIO $ runBackground appLogger appCtx $ processMessages (catMaybes msgsB64)
-        case msgIdsE of
-          Left _ -> pass
-          Right msgIds -> do
-            let acknowlegReq = PubSub.newAcknowledgeRequest & field @"ackIds" L..~ Just msgIds
-            unless (null msgIds) $ void $ PubSub.newPubSubProjectsSubscriptionsAcknowledge acknowlegReq subscription & Google.send env
+        msgIds <- liftIO $ runBackground appLogger appCtx $ processMessages (catMaybes msgsB64)
+        let acknowlegReq = PubSub.newAcknowledgeRequest & field @"ackIds" L..~ Just msgIds
+        unless (null msgIds) $ void $ PubSub.newPubSubProjectsSubscriptionsAcknowledge acknowlegReq subscription & Google.send env
       case result of
         Left (e) -> do
           liftIO $ Log.runLogT "apitoolkit" appLogger Log.LogAttention $ Log.logAttention "Run Pubsub exception" (show e)

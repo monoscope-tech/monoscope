@@ -16,8 +16,6 @@ import Database.PostgreSQL.Simple qualified as PG
 import Database.PostgreSQL.Simple.Migration qualified as Migrations
 import Effectful
 import Effectful.Fail (Fail)
-import Hasql.Pool qualified as Hasql
-import Hasql.Pool.Config qualified as Hasql
 import Models.Projects.Projects qualified as Projects
 import Relude
 import Servant.Server (Handler)
@@ -88,7 +86,6 @@ data AuthContext = AuthContext
   { env :: EnvConfig
   , pool :: Pool.Pool Connection
   , jobsPool :: Pool.Pool Connection
-  , hasqlPool :: Hasql.Pool
   , projectCache :: Cache Projects.ProjectId Projects.ProjectCache
   , config :: EnvConfig
   }
@@ -124,15 +121,13 @@ configToEnv config = do
     migrationRes <- Migrations.runMigration conn Migrations.defaultOptions $ Migrations.MigrationDirectory (toString config.migrationsDir :: FilePath)
     blueMessage ("migration result " <> show migrationRes)
     pass
-  pool <- liftIO $ Pool.newPool $ Pool.defaultPoolConfig createPgConnIO PG.close (60 * 6) 100
-  jobsPool <- liftIO $ Pool.newPool $ Pool.defaultPoolConfig createPgConnIO PG.close (60 * 6) 150
-  hasqlPool <- liftIO $ Hasql.acquire $ Hasql.settings [Hasql.staticConnectionSettings $ encodeUtf8 config.databaseUrl]
+  pool <- liftIO $ Pool.newPool $ Pool.defaultPoolConfig createPgConnIO PG.close (60 * 2) 100
+  jobsPool <- liftIO $ Pool.newPool $ Pool.defaultPoolConfig createPgConnIO PG.close (60 * 2) 10
   projectCache <- liftIO $ newCache (Just $ TimeSpec (60 * 60) 0) -- :: m (Cache Projects.ProjectId Projects.ProjectCache) -- 60*60secs or 1 hour TTL
   pure
     AuthContext
       { pool = pool
       , jobsPool = jobsPool
-      , hasqlPool
       , env = config
       , projectCache
       , config

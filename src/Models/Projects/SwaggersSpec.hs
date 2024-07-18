@@ -41,7 +41,7 @@ spec = aroundAll TestUtils.withSetup $ describe "Models.Projects.Swaggers" $ do
   let swaggerJson1 = [aesonQQ| {"info": {"title": "API 1"}}|]
   let swaggerJson2 = [aesonQQ| {"info": {"title": "API 2"}}|]
   describe "addSwagger"
-    $ it "should insert a new Swagger into the database" \(pool, _) -> do
+    $ it "should insert a new Swagger into the database" \pool -> do
       currentTime <- liftIO getZonedTime
       let swagger =
             Swagger
@@ -58,13 +58,13 @@ spec = aroundAll TestUtils.withSetup $ describe "Models.Projects.Swaggers" $ do
       (fromJust result).swaggerJson `shouldBe` swaggerJson'
 
   describe "getSwaggerById"
-    $ it "should retrieve a Swagger by its ID" \(pool, _) -> do
+    $ it "should retrieve a Swagger by its ID" \pool -> do
       swagger <- withPool pool $ createSwagger (ProjectId UUID.nil) (UserId UUID.nil) swaggerJson'
       result <- withPool pool $ getSwaggerById swagger.id.toText
       (fromJust result).swaggerJson `shouldBe` swagger.swaggerJson
 
   describe "swaggersByProject"
-    $ it "should retrieve all Swaggers for a given Project" \(pool, _) -> do
+    $ it "should retrieve all Swaggers for a given Project" \pool -> do
       result <- withPool pool $ do
         _ <- createSwagger (ProjectId UUID.nil) (UserId UUID.nil) swaggerJson1
         _ <- createSwagger (ProjectId UUID.nil) (UserId UUID.nil) swaggerJson2
@@ -72,7 +72,7 @@ spec = aroundAll TestUtils.withSetup $ describe "Models.Projects.Swaggers" $ do
       map (.swaggerJson) (toList result) `shouldBe` [swaggerJson2, swaggerJson1, swaggerJson', swaggerJson']
 
   describe "updateSwagger"
-    $ it "should update the Swagger JSON of a Swagger" \(pool, _) -> do
+    $ it "should update the Swagger JSON of a Swagger" \pool -> do
       result <- withPool pool $ do
         _ <- updateSwagger swaggerId.toText swaggerJson2
         getSwaggerById swaggerId.toText

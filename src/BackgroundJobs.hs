@@ -97,6 +97,7 @@ sendMessageToDiscord msg = do
 jobsRunner :: Log.Logger -> Config.AuthContext -> Job -> IO ()
 jobsRunner logger authCtx job = when authCtx.config.enableBackgroundJobs $ do
   bgJob <- throwParsePayload job
+  traceShowM bgJob
   void $ runBackground logger authCtx $ case bgJob of
     QueryMonitorsTriggered queryMonitorIds -> queryMonitorsTriggered queryMonitorIds
     NewAnomaly pid createdAt anomalyTypesT anomalyActionsT targetHash -> newAnomalyJob pid createdAt anomalyTypesT anomalyActionsT targetHash

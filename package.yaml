@@ -33,11 +33,12 @@ ghc-options:
   - -Wno-unused-matches
   - -Wno-missing-kind-signatures
   - -Wno-type-defaults
+  - -rtsopts
   - -j4
   # - "-prof"
   # - -g
-  # - "-fprof-late"
-  # - "-finfo-table-map"
+  - "-fprof-late"
+  - "-finfo-table-map"
   - "+RTS -N -A128m -n2m -RTS"
 
 default-extensions:
@@ -118,7 +119,6 @@ library:
     - hashtables
     - vector-hashtables
     - strict-containers
-    - hashable
     - http-api-data
     - lens
     - lens-aeson
@@ -170,13 +170,7 @@ library:
     - filepath
     - http-client
     - tuple
-    - profunctors
     - wai-middleware-static
-    - hasql 
-    - hasql-th
-    - hasql-transaction
-    - hasql-pool
-    - hasql-interpolate
 
 executables:
   apitoolkit-server-exe:
