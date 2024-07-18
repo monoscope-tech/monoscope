@@ -425,7 +425,7 @@ emailQueryMonitorAlert monitorE@Monitors.QueryMonitorEvaled{alertConfig} email u
 
 newAnomalyJob :: Projects.ProjectId -> ZonedTime -> Text -> Text -> Text -> ATBackgroundCtx ()
 newAnomalyJob pid createdAt anomalyTypesT anomalyActionsT targetHash = do
-  let anomalyType = Unsafe.fromJust $ Anomalies.parseAnomalyTypes anomalyTypesT
+  let anomalyType = fromMaybe (error "parseAnomalyTypes returned Nothing") $ Anomalies.parseAnomalyTypes anomalyTypesT
   case anomalyType of
     Anomalies.ATEndpoint -> do
       totalRequestsCount <- dbtToEff $ RequestDumps.countRequestDumpByProject pid
@@ -460,24 +460,25 @@ Endpoint: `{endpointPath}`
                         ]
                 sendPostmarkEmail (CI.original u.email) "anomaly-endpoint" templateVars
     Anomalies.ATShape -> do
-      hasEndpointAnomaly <- dbtToEff $ Anomalies.getShapeParentAnomalyVM pid targetHash
-      when (hasEndpointAnomaly == 0) $ whenJustM (dbtToEff $ Anomalies.getAnomalyVM pid targetHash) \anomaly -> do
-        endp <- dbtToEff $ Endpoints.endpointByHash pid $ T.take 8 targetHash
-        let getShapesQuery = [sql| select hash, field_hashes from apis.shapes where project_id=? and endpoint_hash=? |]
-        shapes <- (dbtToEff $ query Select getShapesQuery (pid, T.take 8 targetHash))
-        let targetFields = maybe [] (V.toList . snd) $ V.find (\a -> fst a == targetHash) shapes
-        let otherFields = toList <$> toList (snd $ V.unzip $ V.filter (\a -> fst a /= targetHash) shapes)
-        updatedFieldFormats <- dbtToEff $ getUpdatedFieldFormats pid (V.fromList targetFields)
+      pass 
+      -- hasEndpointAnomaly <- dbtToEff $ Anomalies.getShapeParentAnomalyVM pid targetHash
+      -- when (hasEndpointAnomaly == 0) $ whenJustM (dbtToEff $ Anomalies.getAnomalyVM pid targetHash) \anomaly -> do
+      --   endp <- dbtToEff $ Endpoints.endpointByHash pid $ T.take 8 targetHash
+      --   let getShapesQuery = [sql| select hash, field_hashes from apis.shapes where project_id=? and endpoint_hash=? |]
+      --   shapes <- (dbtToEff $ query Select getShapesQuery (pid, T.take 8 targetHash))
+      --   let targetFields = maybe [] (V.toList . snd) $ V.find (\a -> fst a == targetHash) shapes
+      --   let otherFields = toList <$> toList (snd $ V.unzip $ V.filter (\a -> fst a /= targetHash) shapes)
+      --   updatedFieldFormats <- dbtToEff $ getUpdatedFieldFormats pid (V.fromList targetFields)
 
-        let newFields = filter (`notElem` foldl' union [] otherFields) targetFields
-        let deletedFields = filter (`notElem` targetFields) $ foldl' intersect (head $ [] :| otherFields) (tail $ [] :| otherFields)
-        _ <- dbtToEff $ updateShapeCounts pid targetHash (V.fromList newFields) (V.fromList deletedFields) updatedFieldFormats
-        -- Send an email about the new shape anomaly but only if there was no endpoint anomaly logged
-        users <- dbtToEff $ Projects.usersByProjectId pid
-        project <- Unsafe.fromJust <<$>> dbtToEff $ Projects.projectById pid
-        let anomaly' = anomaly{Anomalies.anomalyType = anomalyType, Anomalies.shapeDeletedFields = V.fromList deletedFields, Anomalies.shapeUpdatedFieldFormats = updatedFieldFormats, Anomalies.shapeNewUniqueFields = V.fromList newFields}
-        _ <- dbtToEff $ Anomalies.insertIssue $ Unsafe.fromJust $ Anomalies.convertAnomalyToIssue (endp <&> (.host)) anomaly'
-        pass
+      --   let newFields = filter (`notElem` foldl' union [] otherFields) targetFields
+      --   let deletedFields = filter (`notElem` targetFields) $ foldl' intersect (head $ [] :| otherFields) (tail $ [] :| otherFields)
+      --   _ <- dbtToEff $ updateShapeCounts pid targetHash (V.fromList newFields) (V.fromList deletedFields) updatedFieldFormats
+      --   -- Send an email about the new shape anomaly but only if there was no endpoint anomaly logged
+      --   users <- dbtToEff $ Projects.usersByProjectId pid
+      --   project <- Unsafe.fromJust <<$>> dbtToEff $ Projects.projectById pid
+      --   let anomaly' = anomaly{Anomalies.anomalyType = anomalyType, Anomalies.shapeDeletedFields = V.fromList deletedFields, Anomalies.shapeUpdatedFieldFormats = updatedFieldFormats, Anomalies.shapeNewUniqueFields = V.fromList newFields}
+      --   _ <- dbtToEff $ Anomalies.insertIssue $ Unsafe.fromJust $ Anomalies.convertAnomalyToIssue (endp <&> (.host)) anomaly'
+      --   pass
     -- forM_ project.notificationsChannel \case
     --   Projects.NSlack ->
     --     sendSlackMessage
