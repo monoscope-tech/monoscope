@@ -74,7 +74,7 @@ dashboardGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text ->
 dashboardGetH pid fromDStr toDStr sinceStr' = do
   (sess, project) <- Sessions.sessionAndProject pid
   now <- Time.currentTime
-  let sinceStr = if isNothing fromDStr && isNothing toDStr && isNothing sinceStr' || fromDStr == Just "" then Just "7D" else sinceStr'
+  let sinceStr = if isNothing fromDStr && isNothing toDStr && isNothing sinceStr' || fromDStr == Just "" then Just "24H" else sinceStr'
   hasRequests <- dbtToEff $ RequestDumps.hasRequest pid
   newEndpoints <- dbtToEff $ Endpoints.endpointRequestStatsByProject pid False False Nothing Nothing
   -- TODO: Replace with a duration parser.
@@ -92,7 +92,6 @@ dashboardGetH pid fromDStr toDStr sinceStr' = do
           let t = utcToZonedTime utc <$> (iso8601ParseM (from @Text $ fromMaybe "" toDStr) :: Maybe UTCTime)
           (f, t)
 
-  startTime <- liftIO $ getTime Monotonic
   (projectRequestStats, reqLatenciesRolledByStepsLabeled, freeTierExceeded) <- dbtToEff do
     projectRequestStats <- fromMaybe (def :: Projects.ProjectRequestStats) <$> Projects.projectRequestStatsByProject pid
     let maxV = round projectRequestStats.p99 :: Int
@@ -180,6 +179,7 @@ dashboardPage pid paramInput currTime projectStats newEndpoints reqLatenciesRoll
     -- button_ [class_ "", id_ "checkin", onclick_ "window.picker.show()"] "timepicker"
     section_ $ AnomaliesList.anomalyListSlider currTime pid Nothing Nothing
     dStats pid projectStats reqLatenciesRolledByStepsJ dateRange hasRequest
+  -- TODO delete most of this
   script_
     [text|
 

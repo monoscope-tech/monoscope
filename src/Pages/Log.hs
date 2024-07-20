@@ -45,6 +45,7 @@ import Relude.Unsafe qualified as Unsafe
 import System.Types
 import Utils
 import Witch (from)
+import Effectful.Time qualified as Time
 
 
 -- $setup
@@ -60,7 +61,7 @@ apiLogH pid queryM cols' cursorM' sinceM fromM toM layoutM hxRequestM hxBoostedM
 
   let summaryCols = T.splitOn "," (fromMaybe "" cols')
   let query = fromMaybe "" queryM
-  now <- liftIO getCurrentTime
+  now <- Time.currentTime
   let (fromD, toD, currentRange) = case sinceM of
         Just "1H" -> (Just $ addUTCTime (negate $ secondsToNominalDiffTime 3600) now, Just now, Just "Last Hour")
         Just "24H" -> (Just $ addUTCTime (negate $ secondsToNominalDiffTime $ 3600 * 24) now, Just now, Just "Last 24 Hours")
@@ -359,13 +360,10 @@ resultTable_ page mainLog = table_ [class_ "w-full table table-sm table-pin-rows
             h2_ [class_ "text-2xl font-bold"] "Waiting for events..."
             p_ "You're currently not sending any data to APItoolkit from your backends yet."
             a_ [href_ $ "/p/" <> page.pid.toText <> "/integration_guides", class_ "w-max btn btn-indigo -ml-1 text-md"] "Read the setup guide"
-      else do
-        section_ [class_ "w-max mx-auto"] do
-          p_ "This request has no outgoing requests yet."
+      else section_ [class_ "w-max mx-auto"] $ p_ "This request has no outgoing requests yet."
   unless (null page.requestVecs) $ do
     thead_ $ tr_ $ forM_ page.cols $ logTableHeading_ page.pid isLogEventB
-    tbody_ [id_ "w-full log-item-table-body"] do
-      logItemRows_ page.pid page.requestVecs page.cols page.colIdxMap page.nextLogsURL
+    tbody_ [id_ "w-full log-item-table-body"] $ logItemRows_ page.pid page.requestVecs page.cols page.colIdxMap page.nextLogsURL
 
 
 curateCols :: [Text] -> [Text] -> [Text]
@@ -556,71 +554,9 @@ jsonTreeAuxillaryCode pid = do
 
   script_
     [text|
-      const picker = new easepick.create({
-        element: '#startTime',
-        css: [
-          'https://cdn.jsdelivr.net/npm/@easepick/bundle@1.2.0/dist/index.css',
-        ],
-        inline: true,
-        plugins: ['RangePlugin', 'TimePlugin'],
-        autoApply: false,
-        setup(picker) {
-          picker.on('select', (e) => {
-            const start = JSON.stringify(e.detail.start).slice(1, -1);
-            const end = JSON.stringify(e.detail.end).slice(1, -1);
-            const rangeInput = document.getElementById("custom_range_input")
-            rangeInput.value = start + "/" + end
-            document.getElementById("timepickerBox").classList.toggle("hidden")
-            document.getElementById("currentRange").innerText = start.split("T")[0] + " - " + end.split("T")[0]
-            htmx.trigger("#log_explorer_form", "submit")
-          });
-        },
+      document.getElementById("log_explorer_form").addEventListener("keydown", function(e) {
+        if (e.key === "Enter") {e.preventDefault()}
       });
-      window.picker = picker; 
-        document.getElementById("log_explorer_form").addEventListener("keydown", function (e) {
-            if (e.key === "Enter") {
-                e.preventDefault();
-            }
-        });
-
-      function buildCurlRequest(event) {
-          const data = JSON.parse(event.currentTarget.dataset.reqjson);
-          const request_headers = data.request_headers;
-          const request_body = data.request_body;
-          const url = "https://" + data.host + data.raw_url + " \\\n";
-          const method = data.method;
-          let curlCommand = 'curl -X "' + method + '" ' + url + " ";
-          let curlHeaders = "";
-          if (typeof request_headers === "object") {
-            try {
-              curlHeaders = Object.entries(request_headers)
-                .map(([key, value]) => '-H "' + key + " " + value + '" \\\n')
-                .join("");
-            } catch (error) {}
-          }
-          if (curlHeaders != "") curlCommand += curlHeaders;
-          let reqBody = "";
-          if (method.toLowerCase() != "get") {
-            try {
-              reqBody = " -d '" + JSON.stringify(request_body) + "' \\\n";
-            } catch (error) {
-              reqBody = "-data-raw " + '"' + request_body + '"  \\\n';
-            }
-          }
-          if (reqBody !== " -d ''") {
-            curlCommand += reqBody;
-          }
-          navigator.clipboard.writeText(curlCommand)
-            .then(() => {
-              const event = new CustomEvent("successToast", {
-                  detail: { value: ["Curl command copied"] },
-                  bubbles: true,
-                  composed: true,
-                });
-              document.querySelector("body").dispatchEvent(event);
-            })
-          
-      }
 
     function downloadJson(event) {
          event.stopPropagation()
