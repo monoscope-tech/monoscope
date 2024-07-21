@@ -27,8 +27,8 @@ import System.Config qualified as Config
 
 methodPath :: Testing.CollectionStepData -> Maybe (Text, Text)
 methodPath stepData =
-  listToMaybe
-    $ catMaybes
+  listToMaybe $
+    catMaybes
       [ ("POST",) <$> stepData.post
       , ("GET",) <$> stepData.get
       , ("PUT",) <$> stepData.put
@@ -71,13 +71,14 @@ testRunToRequestMsg (Projects.ProjectId pid) currentTime parent_id sr = do
 
 callRunTestkit :: String -> IO String
 callRunTestkit hsString = withCString hsString $ \cstr -> do
-  resultCString <- run_testkit (cstr)
-  peekCString (resultCString)
+  resultCString <- run_testkit cstr
+  peekCString resultCString
 
 
 runCollectionTest :: IOE :> es => V.Vector Testing.CollectionStepData -> Eff es (Either Text (V.Vector Testing.StepResult))
 runCollectionTest collectionSteps = do
-  tkResp <- liftIO $ callRunTestkit $ decodeUtf8 $ AE.encode $ collectionSteps
+  tkResp <- liftIO $ callRunTestkit $ decodeUtf8 $ AE.encode collectionSteps
+  traceShowM tkResp
   pure $ mapLeft (\e -> fromString e <> toText tkResp) $ AE.eitherDecodeStrictText (toText tkResp)
 
 

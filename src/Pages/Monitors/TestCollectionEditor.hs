@@ -35,7 +35,9 @@ import Models.Projects.Projects qualified as Projects
 import Models.Tests.TestToDump qualified as TestToDump
 import Models.Tests.Testing qualified as Testing
 import Models.Users.Sessions qualified as Sessions
+import NeatInterpolation (text)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
+import Pages.LogExplorer.LogItem (jsonValueToHtmlTree)
 import Pkg.Components.Modals qualified as Components
 import PyF (fmt)
 import Relude hiding (ask)
@@ -118,7 +120,11 @@ data CollectionRunTest
 
 instance ToHtml CollectionRunTest where
   toHtml (CollectionRunTest results tkjson) = toHtml $ do
-    script_ [fmt|window.collectionResults = {tkjson}|]
+    script_
+      [fmt|
+        window.collectionResults = {tkjson}; 
+        window.updateCollectionResults({tkjson});
+    |]
     V.iforM_ results (\i r -> collectionStepResult_ i r)
   toHtml RunTestError = ""
   toHtmlRaw = toHtml
@@ -200,10 +206,10 @@ collectionPage pid col = do
           div_ [class_ "h-full flex-1 overflow-y-hidden"] $ termRaw "steps-editor" [id_ "stepsEditor"] ""
 
         div_ [class_ "col-span-1 h-full border-r border-gray-200"] do
-          div_ [class_ "max-h-full overflow-y-scroll space-y-4", id_ "step-results-parent"] ""
-          div_ [class_ "flex flex-col justify-center items-center h-full text-slate-400 text-xl space-y-4"] do
-            div_ [] $ Utils.faSprite_ "objects-column" "solid" "w-16 h-16"
-            p_ [class_ "text-slate-500"] "Run a test to view the results here. "
+          div_ [class_ "max-h-full overflow-y-scroll space-y-4", id_ "step-results-parent"] do
+            div_ [class_ "flex flex-col justify-center items-center h-full text-slate-400 text-xl space-y-4"] do
+              div_ [] $ Utils.faSprite_ "objects-column" "solid" "w-16 h-16"
+              p_ [class_ "text-slate-500"] "Run a test to view the results here. "
     script_ [type_ "module", src_ "/assets/steps-editor.js"] ("" :: Text)
 
 
@@ -213,13 +219,13 @@ collectionStepResult_ idx stepResult = section_ [class_ "p-1"] do
     toHtml $ (show $ idx + 1) <> " " <> fromMaybe "" stepResult.stepName
   div_ [role_ "tablist", class_ "tabs tabs-lifted"] do
     input_ [type_ "radio", name_ $ "step-result-tabs-" <> show idx, role_ "tab", class_ "tab", Aria.label_ "Response Log", checked_]
-    div_ [role_ "tabpanel", class_ "tab-content bg-base-100 bg-base-100 border-base-300 rounded-box p-6"]
-      $ toHtmlRaw
-      $ textToHTML stepResult.stepLog
+    div_ [role_ "tabpanel", class_ "tab-content bg-base-100 bg-base-100 border-base-300 rounded-box p-6"] $
+      toHtmlRaw $
+        textToHTML stepResult.stepLog
 
     input_ [type_ "radio", name_ $ "step-result-tabs-" <> show idx, role_ "tab", class_ "tab", Aria.label_ "Response Headers"]
-    div_ [role_ "tabpanel", class_ "tab-content bg-base-100 bg-base-100 border-base-300 rounded-box p-6 "]
-      $ table_ [class_ "table table-xs"] do
+    div_ [role_ "tabpanel", class_ "tab-content bg-base-100 bg-base-100 border-base-300 rounded-box p-6 "] $
+      table_ [class_ "table table-xs"] do
         thead_ [] $ tr_ [] $ th_ [] "Name" >> th_ [] "Value"
         tbody_ $ forM_ (M.toList stepResult.request.resp.headers) $ \(k, v) -> tr_ [] do
           td_ [] $ toHtml k
@@ -227,10 +233,37 @@ collectionStepResult_ idx stepResult = section_ [class_ "p-1"] do
 
     input_ [type_ "radio", name_ $ "step-result-tabs-" <> show idx, role_ "tab", class_ "tab", Aria.label_ "Response Body"]
     div_ [role_ "tabpanel", class_ "tab-content bg-base-100 bg-base-100 border-base-300 rounded-box p-6"] do
-      pre_ [class_ "flex text-sm leading-snug w-full max-h-[50rem] overflow-y-scroll"]
-        $ code_ [class_ "h-full hljs language-json atom-one-dark w-full rounded"]
-        $ toHtmlRaw
-        $ encodePretty stepResult.request.resp.json
+      jsonValueToHtmlTree stepResult.request.resp.json
+    jsonTreeAuxillaryCode idx
+    let stepIndex = show idx
+    script_
+      [text|
+        function addToAssertions(event) {
+            const step = $stepIndex
+            const target = event.target.parentNode.parentNode.parentNode
+            const path = target.getAttribute('data-field-path');
+            const value = target.getAttribute('data-field-value');
+            const assertion = "$.resp.json." + path + ' == ' + value;
+            console.log(assertion)
+            window.updateStepAssertions(assertion, step);
+        }
+    |]
+
+
+jsonTreeAuxillaryCode :: Int -> Html ()
+jsonTreeAuxillaryCode idx = do
+  template_ [id_ "log-item-context-menu-tmpl"] do
+    div_ [id_ "log-item-context-menu", class_ "log-item-context-menu text-sm origin-top-right absolute left-0 mt-2 w-56 rounded-md shadow-md shadow-slate-300 bg-white ring-1 ring-black ring-opacity-5 divide-y divide-gray-100 focus:outline-none z-10", role_ "menu", tabindex_ "-1"] do
+      div_ [class_ "py-1", role_ "none"] do
+        button_
+          [ class_ "cursor-pointer w-full text-left text-slate-700 block px-4 py-1 text-sm hover:bg-gray-100 hover:text-slate-900"
+          , role_ "menuitem"
+          , tabindex_ "-1"
+          , id_ "menu-item-2"
+          , onclick_ "addToAssertions(event)"
+          , type_ "button"
+          ]
+          "Add to assertions"
 
 
 textToHTML :: Text -> Text

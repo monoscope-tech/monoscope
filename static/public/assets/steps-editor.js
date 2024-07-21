@@ -3,17 +3,34 @@ import { LitElement, html, ref, createRef } from './js/thirdparty/lit.js'
 export class StepsEditor extends LitElement {
   static properties = {
     collectionSteps: [],
+    collectionResults: [],
   }
 
   constructor() {
     super()
-    this.collectionSteps = window.collectionSteps || [{}]
+    this.collectionSteps = window.collectionSteps || []
+    this.collectionResults = window.collectionResults || []
 
     require.config({ paths: { vs: '/assets/js/monaco/vs' } })
     require.config({ paths: { vs: 'https://unpkg.com/monaco-editor/min/vs' } })
     require(['vs/editor/editor.main'], () => {
       this.initializeEditor(monaco)
     })
+
+    window.updateStepAssertions = (assertion, step) => {
+      const stepData = this.collectionSteps[step]
+      const asserts = stepData.asserts || []
+      asserts.push({"ok": assertion})
+      stepData.asserts = asserts
+      this.collectionSteps[step] = stepData
+      window.collectionSteps = this.collectionSteps
+      this.requestUpdate()
+    }
+
+    window.updateCollectionResults = (results) => {
+      this.collectionResults = results
+      this.requestUpdate()
+    }
   }
 
   initializeEditor(monaco) {
@@ -151,11 +168,13 @@ export class StepsEditor extends LitElement {
   }
 
 
-  renderCollectionStep(stepData, idx) {
+  renderCollectionStep(stepData, idx, result) {
     const { method, url } = this.methodAndUrl(stepData)
+    const hasResults = !!result 
+    const hasFailingAssertions = result?.assert_results.some((a) => !a.ok || a.ok === false) || false
     return html`
       <div
-        class="rounded-lg overflow-hidden border border-slate-200 group/item collectionStep bg-white draggable"
+        class="rounded-lg overflow-hidden border group/item collectionStep bg-white draggable ${hasFailingAssertions ? 'border-red-500' : hasResults ? 'border-green-500' : 'border-slate-200'}"
         draggable="true"
         @dragstart="${(e) => e.dataTransfer.setData('text/plain', e.target.dataset.index)}"
         @dragover="${this._onDragOver}"
@@ -176,10 +195,6 @@ export class StepsEditor extends LitElement {
             </label>
             <div class="w-full space-y-1 relative">
               <div class="absolute right-0 items-center gap-3 text-xs text-gray-600 hidden group-hover/item:flex">
-                <button>View results</button>
-                <button class="text-blue-600">
-                  <svg class="w-2 h-3"><use href="/assets/svgs/fa-sprites/solid.svg#play"></use></svg>
-                </button>
                 <a class="text-red-700" @click="${() => (this.collectionSteps = this.collectionSteps.filter((_, i) => i != idx))}">
                   <svg class="w-2 h-3"><use href="/assets/svgs/fa-sprites/solid.svg#xmark"></use></svg>
                 </a>
@@ -234,7 +249,7 @@ export class StepsEditor extends LitElement {
           </div>
           <div>
             <h5 class="label-text p-1 mb-2">Assertions</h5>
-            <div class="text-sm space-y-2 px-2 paramRows [&_.assertIndicator]:inline-block" id="[${idx}][asserts]">${this.renderParamsRows(stepData, idx, 'asserts')}</div>
+            <div class="text-sm space-y-2 px-2 paramRows [&_.assertIndicator]:inline-block" id="[${idx}][asserts]">${this.renderParamsRows(stepData, idx, 'asserts', result?.assert_results || [])}</div>
           </div>
           <div>
             <h5 class="label-text p-1 mb-2">Exports</h5>
@@ -245,24 +260,43 @@ export class StepsEditor extends LitElement {
     `
   }
 
-  renderParamRow(key, value, type, idx, aidx) {
+  renderAssertResult(result) {
+    let hasPassed = result?.ok === true || false
+    let notRun = !result
+    let error = result?.err?.advice || ""
+
+    if(hasPassed) {
+      return  html` <svg class="icon w-3 h-3 text-green-500"><use href="/assets/svgs/fa-sprites/solid.svg#check"></use></svg>`
+    }
+    if(!hasPassed && !notRun) {
+     return  html`<svg class="icon w-3 h-3 text-red-500" title="${error}"><use href="/assets/svgs/fa-sprites/solid.svg#xmark"></use></svg>`
+    }
+    return html`<pre>${""}</pre>`
+  }
+
+  renderParamRow(key, value, type, idx, aidx, result) {
+    console.log(result)
     return html`
-      <div class="flex flex-row items-center gap-2  paramRow">
-        <span class="shrink hidden assertIndicator">✅</span>
+      <div class="flex flex-row items-center gap-2 paramRow">
+        <span class="shrink hidden assertIndicator">
+          ${
+            this.renderAssertResult(result)
+          }
+        </span>
         <input class="input input-bordered input-xs w-1/3" list="${type}DataList" placeholder="Key" .value="${key}" @change=${(e) => this.updateKey(e, idx, type, aidx)} />
         <input class="input input-bordered input-xs w-full" placeholder="Value" .value="${value}" @input=${(e) => this.updateValue(e, idx, type, aidx, key)} />
-        <a class="cursor-pointer text-red-700" @click=${(e) => this.deleteKey(e, idx, type, aidx, key)}
-          ><svg class="inline-block icon w-3 h-3 "><use href="/assets/svgs/fa-sprites/solid.svg#xmark"></use></svg
-        ></a>
+        <a class="cursor-pointer text-red-700" @click=${(e) => this.deleteKey(e, idx, type, aidx, key)}>
+        <svg class="inline-block icon w-3 h-3 "><use href="/assets/svgs/fa-sprites/solid.svg#xmark"></use></svg>
+        </a>
       </div>
     `
   }
 
-  renderParamsRows(stepData, idx, type) {
+  renderParamsRows(stepData, idx, type, results) {
     let rows
     if (type === 'asserts') {
       const data = stepData[type] || []
-      rows = data.map((assertObj, aidx) => Object.entries(assertObj).map(([key, value]) => this.renderParamRow(key, value, type, idx, aidx)))
+      rows = data.map((assertObj, aidx) => Object.entries(assertObj).map(([key, value]) => this.renderParamRow(key, value, type, idx, aidx, results[aidx])))
       if (rows.length === 0 || !Object.entries(data).some(([k, v]) => k.trim() === '' && v.trim() === '')) {
         rows.push(this.renderParamRow('', '', type, idx, rows.length))
       }
@@ -353,7 +387,9 @@ export class StepsEditor extends LitElement {
       <div id="collectionStepsContainer" class="h-full">
         <div id="steps-codeEditor" class="h-full max-h-screen hidden group-has-[.editormode:checked]/colform:block"></div>
         <div class="h-full overflow-y-scroll group-has-[.editormode:checked]/colform:hidden">
-          <div id="collectionStepsContainer" class=" p-4 space-y-4 collectionSteps">${this.collectionSteps.map((stepData, idx) => this.renderCollectionStep(stepData, idx))}</div>
+          <div id="collectionStepsContainer" class=" p-4 space-y-4 collectionSteps">
+          ${this.collectionSteps.map((stepData, idx) => this.renderCollectionStep(stepData, idx, this.collectionResults[idx]) || undefined)}
+          </div>
           <div class="p-4 pt-2">
             <a class="btn btn-outline btn-neutral btn-sm items-center cursor-pointer" @click=${() => (this.collectionSteps = [...this.collectionSteps, {}])}>
               <svg class="inline-block icon w-3 h-3"><use href="/assets/svgs/fa-sprites/solid.svg#plus"></use></svg>

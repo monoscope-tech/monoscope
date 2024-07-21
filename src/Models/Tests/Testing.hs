@@ -100,8 +100,8 @@ stepDataMethod stepData =
 
 instance AE.ToJSON CollectionStepData where
   toJSON csd =
-    AE.object
-      $ catMaybes
+    AE.object $
+      catMaybes
         [ Just $ "title" .= csd.title
         , fmap ("POST" .=) csd.post -- Change the key to "POST" here for the output JSON
         , fmap ("GET" .=) csd.get
@@ -199,10 +199,27 @@ data StepRequest = StepRequest
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] StepRequest
 
 
-data AssertResult = AssertResult
-  {}
+newtype AssertError = AssertError {advice :: Maybe Text}
   deriving stock (Show, Generic)
-  deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] AssertResult
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] AssertError
+data AssertResult = AssertResult
+  { ok :: Maybe Bool
+  , err :: Maybe AssertError -- Assuming AssertError is a String for simplicity
+  }
+  deriving stock (Show, Generic)
+  deriving (AE.ToJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] AssertResult
+
+
+-- Custom FromJSON instance
+instance AE.FromJSON AssertResult where
+  parseJSON = AE.withObject "AssertResult" $ \obj -> do
+    okValue <- obj AE..:? "Ok"
+    errValue <- obj AE..:? "Err"
+    return
+      AssertResult
+        { ok = okValue
+        , err = errValue
+        }
 
 
 data StepResult = StepResult
