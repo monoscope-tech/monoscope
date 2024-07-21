@@ -27,6 +27,7 @@ import Data.Time.Format.ISO8601 (iso8601ParseM)
 import Data.Vector qualified as V
 import Data.Vector qualified as Vector
 import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
+import Effectful.Time qualified as Time
 import Fmt (commaizeF, fmt)
 import Lucid
 import Lucid.Aria qualified as Aria
@@ -45,7 +46,6 @@ import Relude.Unsafe qualified as Unsafe
 import System.Types
 import Utils
 import Witch (from)
-import Effectful.Time qualified as Time
 
 
 -- $setup
