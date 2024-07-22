@@ -596,7 +596,7 @@ percentileRow key p = do
   let (d, unit) = fmtDuration p
   li_ [class_ "flex flex-row content-between justify-between"] do
     span_ [class_ "inline-block"] $ toHtml key
-    span_ [class_ "inline-block font-mono"] do
+    span_ [class_ "inline-block monospace"] do
       span_ [class_ "tabular-nums"] $ toHtml d
       span_ $ toHtml unit
 
