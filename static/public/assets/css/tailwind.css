@@ -139,6 +139,9 @@
 @layer components {
   :root {
     font-family: "Bakemono", sans-serif;
+    font-variation-settings: "mono" 600;
+    font-size: 14px;
+    --white: 255 255 255;
   }
 
   @supports (font-variation-settings: normal) {
@@ -146,32 +149,24 @@
       font-family: "Bakemono", sans-serif;
     }
   }
-  html {
-    font-size: 14px;
-    font-family: "Bakemono", sans-serif;
-    /* font-family: 'Poppins', sans-serif; */
-    /* font-family: 'Roboto', sans-serif; */
-    --white: 255 255 255;
-  }
   .inconsolata {
     font-family: "Inconsolata", monospace;
-    font-size: 14px;
   }
 
   h1 {
-    font-variation-settings: "wght" 700, "MONO" 500;
+    font-variation-settings: "wght" 700, "mono" 400;
   }
   h2 {
-    font-variation-settings: "wght" 600, "MONO" 500;
+    font-variation-settings: "wght" 600, "mono" 400;
   }
   h3,
   h4,
   h5 {
-    font-variation-settings: "wght" 500, "MONO" 500;
+    font-variation-settings: "wght" 500, "mono" 400;
   }
   .monospace {
     font-family: "Bakemono", monospace;
-    font-variation-settings: "MONO" 1000;
+    font-variation-settings: "mono" 1000;
   }
 
   /* From icomoon app*/
