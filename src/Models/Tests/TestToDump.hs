@@ -77,6 +77,7 @@ callRunTestkit hsString = withCString hsString $ \cstr -> do
 
 runCollectionTest :: IOE :> es => V.Vector Testing.CollectionStepData -> Eff es (Either Text (V.Vector Testing.StepResult))
 runCollectionTest collectionSteps = do
+  traceShowM collectionSteps
   tkResp <- liftIO $ callRunTestkit $ decodeUtf8 $ AE.encode collectionSteps
   traceShowM tkResp
   pure $ mapLeft (\e -> fromString e <> toText tkResp) $ AE.eitherDecodeStrictText (toText tkResp)

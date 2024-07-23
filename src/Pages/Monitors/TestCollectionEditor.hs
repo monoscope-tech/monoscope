@@ -188,10 +188,13 @@ collectionPage pid col = do
               span_ [class_ "badge badge-success"] "Active"
               div_ [class_ "inline-block"] $ Components.modal_ "test-settings-modal" (span_ [class_ "p-3"] $ Utils.faSprite_ "sliders" "regular" "h-4") $ testSettingsModalContent_ True col
           div_ [class_ "shrink p-4 flex justify-between items-center"] do
-            h4_ [class_ "font-semibold text-2xl font-medium "] "Steps"
+            div_ [class_ "flex items-center space-x-4"] do
+              h4_ [class_ "font-semibold text-2xl font-medium "] "Steps"
+              a_ [href_ "https://apitoolkit.io/docs/dashboard/dashboard-pages/api-tests/", target_ "_blank", class_ "text-sm flex items-center gap-1 text-blue-500"] do
+                faSprite_ "link-simple" "regular" "w-4 h-4" >> "Docs"
             div_ [class_ "space-x-4 flex items-center"] do
               button_
-                [ class_ "btn btn-sm btn-success "
+                [ class_ "btn btn-sm btn-success"
                 , hxPatch_ ""
                 , hxParams_ "stepsData"
                 , hxExt_ "json-enc"
