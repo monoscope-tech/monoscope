@@ -269,23 +269,26 @@ export class StepsEditor extends LitElement {
       return  html` <svg class="icon w-3 h-3 text-green-500"><use href="/assets/svgs/fa-sprites/solid.svg#check"></use></svg>`
     }
     if(!hasPassed && !notRun) {
-     return  html`<svg class="icon w-3 h-3 text-red-500" title="${error}"><use href="/assets/svgs/fa-sprites/solid.svg#xmark"></use></svg>`
+     return  html`<span title="${error}"><svg class="icon w-3 h-3 text-red-500"><use href="/assets/svgs/fa-sprites/solid.svg#xmark"></use></svg><span>`
     }
-    return html`<pre>${""}</pre>`
+    return html`<pre>${" "}</pre>`
   }
 
   renderParamRow(key, value, type, idx, aidx, result) {
-    console.log(result)
+    let error = result?.err?.advice || ""
     return html`
-      <div class="flex flex-row items-center gap-2 paramRow">
+      <div class="flex flex-row gap-2 paramRow">
         <span class="shrink hidden assertIndicator">
           ${
             this.renderAssertResult(result)
           }
         </span>
         <input class="input input-bordered input-xs w-1/3" list="${type}DataList" placeholder="Key" .value="${key}" @change=${(e) => this.updateKey(e, idx, type, aidx)} />
-        <input class="input input-bordered input-xs w-full" placeholder="Value" .value="${value}" @input=${(e) => this.updateValue(e, idx, type, aidx, key)} />
-        <a class="cursor-pointer text-red-700" @click=${(e) => this.deleteKey(e, idx, type, aidx, key)}>
+        <div>
+        <input class="input input-bordered ${error ? "input-error":""} input-xs w-full" placeholder="Value" .value="${value}" @input=${(e) => this.updateValue(e, idx, type, aidx, key)} />
+        <span class="text-xs text-red-500">${error}</span> 
+        </div>
+        <a class="cursor-pointer text-slate-600" @click=${(e) => this.deleteKey(e, idx, type, aidx, key)}>
         <svg class="inline-block icon w-3 h-3 "><use href="/assets/svgs/fa-sprites/solid.svg#xmark"></use></svg>
         </a>
       </div>
@@ -342,12 +345,11 @@ export class StepsEditor extends LitElement {
 
   deleteKey(_event, idx, type, aidx, oldKey) {
     const stepData = this.collectionSteps[idx]
-    stepData[type] = stepData[type] || (aidx != null ? [] : {})
+    stepData[type] = stepData[type] || (aidx != null ? [] : {}) 
+
 
     if (aidx != null) {
-      const arrayItem = stepData[type][aidx] || {}
-      delete arrayItem[oldKey]
-      stepData[type][aidx] = arrayItem
+      stepData[type] = stepData[type].splice(aidx, 1)
     } else {
       delete stepData[type][oldKey]
     }
