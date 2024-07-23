@@ -42,7 +42,7 @@ endpointListGetH pid layoutM pageM filterTM hostM projectHostM' sortM hxRequestM
   let (ackd, archived, currentFilterTab) = case filterTM of
         Just "Active" -> (True, False, "Active")
         Just "Inbox" -> (False, False, "Inbox")
-        Just "Archived" -> (False, False, "Archived")
+        Just "Archived" -> (False, True, "Archived")
         _ -> (True, False, "Active")
 
   let projectHostM = projectHostM' >>= (\t -> if t == "" then Nothing else Just t)
