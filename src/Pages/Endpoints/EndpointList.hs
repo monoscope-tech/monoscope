@@ -59,7 +59,7 @@ endpointListGetH pid layoutM pageM filterTM hostM projectHostM' sortM hxRequestM
           , pageTitle = "Endpoints"
           }
   let currentURL = "/p/" <> pid.toText <> "/endpoints?layout=" <> fromMaybe "false" layoutM <> "&filter=" <> fromMaybe "" filterTM <> "&sort=" <> fromMaybe "event" sortM <> "&project_host=" <> fromMaybe "" hostM
-  let nextFetchUrl = currentURL <> "&page=" <> show (page + 1) <> "load_more=true"
+  let nextFetchUrl = currentURL <> "&page=" <> show (page + 1) <> "&load_more=true"
   currTime <- Time.currentTime
   let endpReqVM = V.map (EnpReqStatsVM False currTime) endpointStats
   case loadMoreM of
