@@ -85,7 +85,7 @@ collectionRunTestsH pid colId runIdxM stepsForm = do
   stepResultsE <- TestToDump.runTestAndLog pid stepsForm.stepsData
   case stepResultsE of
     Right stepResults -> do
-      let (failed, passed, status) = getCollectionRunStatus stepResults
+      let (passed, failed, status) = getCollectionRunStatus stepResults
       let tkRespJson = decodeUtf8 @Text $ AE.encode stepResults
       currentTime <- liftIO $ getCurrentTime
       runId <- Testing.CollectionRunId <$> liftIO UUIDV4.nextRandom
