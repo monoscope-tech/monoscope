@@ -24,6 +24,7 @@ import Lucid.Aria qualified as Aria
 import Lucid.Base (TermRaw (termRaw))
 import Lucid.Htmx (
   hxExt_,
+  hxIndicator_,
   hxParams_,
   hxPatch_,
   hxPost_,
@@ -201,6 +202,7 @@ collectionPage pid col = do
                 , hxVals_ "js:{stepsData: document.getElementById('stepsEditor').collectionSteps}"
                 , hxTarget_ "#step-results-parent"
                 , hxSwap_ "innerHTML"
+                , hxIndicator_ "#step-results-indicator"
                 ]
                 (span_ "Run all" >> faSprite_ "play" "solid" "w-3 h-3")
               button_ [class_ "btn btn-sm btn-warning ", type_ "submit"] (span_ "Save" >> faSprite_ "floppy-disk" "solid" "w-3 h-3")
@@ -209,26 +211,33 @@ collectionPage pid col = do
           div_ [class_ "h-full flex-1 overflow-y-hidden"] $ termRaw "steps-editor" [id_ "stepsEditor"] ""
 
         div_ [class_ "col-span-1 h-full border-r border-gray-200"] do
-          div_ [class_ "max-h-full overflow-y-scroll space-y-4", id_ "step-results-parent"] do
-            div_ [class_ "flex flex-col justify-center items-center h-full text-slate-400 text-xl space-y-4"] do
-              div_ [] $ Utils.faSprite_ "objects-column" "solid" "w-16 h-16"
-              p_ [class_ "text-slate-500"] "Run tests to view the results here."
+          div_ [class_ "max-h-full h-full overflow-y-auto space-y-4 relative", id_ "step-results-parent"] do
+            div_ [id_ "step-results-indicator", class_ "steps-indicator flex flex-col justify-center items-center h-full text-slate-400 text-xl space-y-4"] do
+              div_ [class_ "w-full flex flex-col gap-2 items-center empty-state"] do
+                Utils.faSprite_ "objects-column" "solid" "w-16 h-16"
+                p_ [class_ "text-slate-500"] "Run tests to view the results here."
+              div_ [class_ "hidden loading-indicator flex justify-center"] do
+                span_ [class_ "loading loading-dots loading-lg"] ""
+
     script_ [type_ "module", src_ "/assets/steps-editor.js"] ("" :: Text)
 
 
 collectionStepResult_ :: Int -> Testing.StepResult -> Html ()
 collectionStepResult_ idx stepResult = section_ [class_ "p-1"] do
+  when (idx == 1) $ div_ [id_ "step-results-indicator", class_ "absolute top-1/2 z-10 left-1/2 -translate-x-1/2 rounded-sm -translate-y-1/2 steps-indicator text-slate-400"] do
+    div_ [class_ "hidden loading-indicator flex justify-center bg-white rounded-sm shadow-sm p-4"] do
+      span_ [class_ "loading loading-dots loading-lg"] ""
   div_ [class_ "p-2 bg-base-200 font-bold"] do
     toHtml $ (show $ idx + 1) <> " " <> fromMaybe "" stepResult.stepName
   div_ [role_ "tablist", class_ "tabs tabs-lifted"] do
     input_ [type_ "radio", name_ $ "step-result-tabs-" <> show idx, role_ "tab", class_ "tab", Aria.label_ "Response Log", checked_]
-    div_ [role_ "tabpanel", class_ "tab-content bg-base-100 bg-base-100 border-base-300 rounded-box p-6"] $
-      toHtmlRaw $
-        textToHTML stepResult.stepLog
+    div_ [role_ "tabpanel", class_ "tab-content bg-base-100 bg-base-100 border-base-300 rounded-box p-6"]
+      $ toHtmlRaw
+      $ textToHTML stepResult.stepLog
 
     input_ [type_ "radio", name_ $ "step-result-tabs-" <> show idx, role_ "tab", class_ "tab", Aria.label_ "Response Headers"]
-    div_ [role_ "tabpanel", class_ "tab-content bg-base-100 bg-base-100 border-base-300 rounded-box p-6 "] $
-      table_ [class_ "table table-xs"] do
+    div_ [role_ "tabpanel", class_ "tab-content bg-base-100 bg-base-100 border-base-300 rounded-box p-6 "]
+      $ table_ [class_ "table table-xs"] do
         thead_ [] $ tr_ [] $ th_ [] "Name" >> th_ [] "Value"
         tbody_ $ forM_ (M.toList stepResult.request.resp.headers) $ \(k, v) -> tr_ [] do
           td_ [] $ toHtml k
