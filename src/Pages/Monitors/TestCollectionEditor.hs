@@ -212,7 +212,7 @@ collectionPage pid col = do
           div_ [class_ "max-h-full overflow-y-scroll space-y-4", id_ "step-results-parent"] do
             div_ [class_ "flex flex-col justify-center items-center h-full text-slate-400 text-xl space-y-4"] do
               div_ [] $ Utils.faSprite_ "objects-column" "solid" "w-16 h-16"
-              p_ [class_ "text-slate-500"] "Run a test to view the results here. "
+              p_ [class_ "text-slate-500"] "Run tests to view the results here."
     script_ [type_ "module", src_ "/assets/steps-editor.js"] ("" :: Text)
 
 
@@ -248,7 +248,7 @@ collectionStepResult_ idx stepResult = section_ [class_ "p-1"] do
             const value = target.getAttribute('data-field-value');
             const assertion = "$.resp.json." + path + ' == ' + value;
             console.log(assertion)
-            window.updateStepAssertions(assertion, step);
+            window.updateStepAssertions(assertion, step - 1);
         }
     |]
 
