@@ -292,10 +292,8 @@ export class StepsEditor extends LitElement {
     
    
     const matches = Array.from(fieldPathValues).filter(v => {
-      console.log("vvvvv", v,"aaaaa", value, v.startsWith(value));
-      return v.startsWith(value);
+      return v.startsWith(value) && v.length > value.length;
     });
-    console.log(Array.from(fieldPathValues), matches);
 
     return html`
       <div class="flex flex-row gap-2 paramRow">
@@ -307,20 +305,16 @@ export class StepsEditor extends LitElement {
         <input class="input input-bordered input-xs w-1/3" list="${type}DataList" placeholder="Key" .value="${key}" @change=${(e) => this.updateKey(e, idx, type, aidx)} />
         <div>
         <div class="relative">
-        <input class="input input-bordered ${error ? "input-error":""} input-xs w-full" placeholder="Value" .value="${value}" @input=${(e) => this.updateValue(e, idx, type, aidx, key)} />
+        <input list="assertAutocomplete" class="input input-bordered ${error ? "input-error":""} input-xs w-full" placeholder="Value" .value="${value}" @input=${(e) => this.updateValue(e, idx, type, aidx, key)} />
         <span class="text-xs text-red-500">${error}</span> 
-         ${
-          type === "asserts" ? 
-          html`<datalist id="assertAutocomplete">
+         <datalist id="assertAutocomplete">
            ${
             matches.map(fieldPath => {
               return html`<option class="w-full  text-left text-xs px-3 py-1 hover:bg-gray-200">${fieldPath}</option>`
             })
            }
-          </datalist>` : ""
-         }
+          </datalist>
          <div>
-
          </div>
         </div>
         </div>
