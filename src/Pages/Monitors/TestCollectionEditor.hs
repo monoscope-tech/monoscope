@@ -12,6 +12,7 @@ module Pages.Monitors.TestCollectionEditor (
 
 import Data.Aeson qualified as AE
 import Data.Aeson.Encode.Pretty (encodePretty)
+import Data.ByteString qualified as Data.ByteString.Lazy.Internal
 import Data.Default (def)
 import Data.Map qualified as M
 import Data.Text qualified as T
@@ -130,17 +131,20 @@ collectionGetH pid colId = do
   case collectionM of
     Nothing -> addRespHeaders $ CollectionNotFound $ PageCtx bwconf ()
     Just col -> do
+      let respJs = decodeUtf8 $ case collectionRunM of
+            Just run -> AE.encode run.response
+            Nothing -> AE.encode $ AE.Array []
       let runRes = collectionRunM >>= (\x -> castToStepResult x.response)
-      addRespHeaders $ CollectionGet $ PageCtx bwconf (pid, col, runRes)
+      addRespHeaders $ CollectionGet $ PageCtx bwconf (pid, col, runRes, respJs)
 
 
 data CollectionGet
-  = CollectionGet (PageCtx (Projects.ProjectId, Testing.Collection, Maybe (V.Vector Testing.StepResult)))
+  = CollectionGet (PageCtx (Projects.ProjectId, Testing.Collection, Maybe (V.Vector Testing.StepResult), String))
   | CollectionNotFound (PageCtx ())
 
 
 instance ToHtml CollectionGet where
-  toHtml (CollectionGet (PageCtx bwconf (pid, col, cl_rn))) = toHtml $ PageCtx bwconf $ collectionPage pid col cl_rn
+  toHtml (CollectionGet (PageCtx bwconf (pid, col, cl_rn, respJsn))) = toHtml $ PageCtx bwconf $ collectionPage pid col cl_rn respJsn
   toHtml (CollectionNotFound (PageCtx bwconf ())) = toHtml $ PageCtx bwconf $ collectionNotFoundPage
   toHtmlRaw = toHtml
 
@@ -202,10 +206,9 @@ testSettingsModalContent_ isUpdate col = div_ [class_ "space-y-5 w-96"] do
   div_ $ button_ [class_ "btn btn-bordered btn-primary", type_ "submit"] $ if isUpdate then "Update" else "Create Test"
 
 
-collectionPage :: Projects.ProjectId -> Testing.Collection -> Maybe (V.Vector Testing.StepResult) -> Html ()
-collectionPage pid col col_rn = do
+collectionPage :: Projects.ProjectId -> Testing.Collection -> Maybe (V.Vector Testing.StepResult) -> String -> Html ()
+collectionPage pid col col_rn respJson = do
   let collectionStepsJSON = AE.encode col.collectionSteps
-  let respJson = AE.encode col_rn
   script_
     []
     [fmt|
