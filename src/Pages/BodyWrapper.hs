@@ -32,6 +32,8 @@ menu pid =
 
 
 type role PageCtx representational
+
+
 data PageCtx a = PageCtx
   { conf :: BWConfig
   , content :: a
@@ -74,7 +76,7 @@ bodyWrapper BWConfig{sessM, currProject, pageTitle, menuItem, hasIntegrated} chi
       link_ [rel_ "mask-icon", href_ "/public/safari-pinned-tab.svg", term "color" "#5bbad5"]
       meta_ [name_ "msapplication-TileColor", content_ "#da532c"]
       meta_ [name_ "theme-color", content_ "#ffffff"]
-      link_ [rel_ "stylesheet", type_ "text/css", href_ "/assets/css/tailwind.min.css?v=2"]
+      link_ [rel_ "stylesheet", type_ "text/css", href_ "/assets/css/tailwind.min.css?v=3"]
       link_ [rel_ "stylesheet", type_ "text/css", href_ "/assets/css/thirdparty/notyf3.min.css"]
       link_ [rel_ "preconnect", href_ "https://rsms.me/"]
       link_ [rel_ "stylesheet", href_ "https://rsms.me/inter/inter.css"]
@@ -147,7 +149,7 @@ bodyWrapper BWConfig{sessM, currProject, pageTitle, menuItem, hasIntegrated} chi
 
               if("serviceWorker" in navigator) {
                   window.addEventListener("load", () => {
-                    navigator.serviceWorker.register("/public/sw.js?v=4").then(swReg => {}).catch(err => {
+                    navigator.serviceWorker.register("/public/sw.js?v=5").then(swReg => {}).catch(err => {
                         console.error('Service Worker Error', err);
                     });
                 });
@@ -266,12 +268,12 @@ projectsDropDown currProject projects = do
             faSprite_ "arrows-turn-right" "regular" "h-5 w-5" >> span_ "Integrations"
           when (currProject.paymentPlan == "UsageBased" || currProject.paymentPlan == "GraduatedPricing")
             $ a_
-              [class_ "p-3 flex gap-3 flex gap-3 items-center rounded hover:bg-gray-100 cursor-pointer", hxGet_ [text| /p/$pidTxt/manage_subscription |]]
+              [class_ "p-3 flex gap-3 items-center rounded hover:bg-gray-100 cursor-pointer", hxGet_ [text| /p/$pidTxt/manage_subscription |]]
               (faSprite_ "dollar-sign" "regular" "h-5 w-5" >> span_ "Manage billing")
       div_ [class_ "border-t border-gray-100 p-2"] do
         div_ [class_ "flex justify-between content-center items-center py-5 mb-2 "] do
           a_ [href_ "/"] $ h3_ [class_ "text-xl"] "Switch projects"
-          a_ [class_ "inline-block bg-blue-700 flex pl-3 pr-4 py-2 rounded-xl text-white space-x-2", href_ "/p/new"] do
+          a_ [class_ "bg-blue-700 flex pl-3 pr-4 py-2 rounded-xl text-white space-x-2", href_ "/p/new"] do
             faSprite_ "plus" "regular" "h-5 w-5 bg-blue-800 rounded-lg" >> span_ [class_ "inline-block px-1"] "Add"
         div_ do
           div_ [class_ "relative"] do
@@ -291,20 +293,16 @@ projectsDropDown currProject projects = do
 
 
 sideNav :: Sessions.PersistentSession -> Projects.Project -> Text -> Maybe Text -> Maybe Bool -> Html ()
-sideNav sess project pageTitle menuItem hasIntegrated = do
-  aside_ [class_ "shrink-0 top-0 border-r bg-white border-gray-200 w-16 h-screen transition-all duration-200 ease-in-out", id_ "side-nav-menu"] do
-    script_
-      [text|if (window.initialCloseSideMenu == 'true'){
-              document.getElementById('side-nav-menu').classList.add('hidden-side-nav-menu');
-              }|]
-
+sideNav sess project pageTitle menuItem hasIntegrated = aside_ [class_ "shrink-0 top-0 border-r bg-white border-gray-200 w-16 h-screen transition-all duration-200 ease-in-out flex flex-col justify-between", id_ "side-nav-menu"] do
+  script_ [text|if (window.initialCloseSideMenu == 'true'){document.getElementById('side-nav-menu').classList.add('hidden-side-nav-menu');}|]
+  div_ do
     div_ [class_ "text-center"] do
-      a_ [href_ "/", class_ "inline-block px-2 py-2 flex items-center justify-center h-12"] do
+      a_ [href_ "/", class_ "px-2 py-2 inline-flex items-center justify-center h-12"] do
         img_ [class_ "w-40 mt-2 sd-hidden", src_ "/assets/svgs/logo.svg"]
         img_ [class_ "w-10 mt-2 hidden sd-show", src_ "/assets/logo-mini.png"]
     div_ [class_ "py-4 px-4 dropdown block", id_ "side-nav-ctx-btn"] do
       a_
-        [ class_ "flex flex-row bg-blue-50 hover:bg-blue-100 text-blue-900 block p-6 justify-center rounded-md cursor-pointer"
+        [ class_ "flex flex-row bg-blue-50 hover:bg-blue-100 text-blue-900 p-6 justify-center rounded-md cursor-pointer"
         , tabindex_ "0"
         ]
         do
@@ -316,7 +314,7 @@ sideNav sess project pageTitle menuItem hasIntegrated = do
             faSprite_ "chevron-up" "regular" " h-4 w-4 m-1"
             faSprite_ "chevron-down" "regular" " h-4 w-4 m-1"
       div_ [tabindex_ "0", class_ "dropdown-content z-[40]"] $ projectsDropDown project (Sessions.getProjects $ Sessions.projects sess)
-    nav_ [class_ "mt-4 text-slate-900 "] do
+    nav_ [class_ "mt-4 text-slate-900 flex flex-col space-between"] do
       -- FIXME: reeanable hx-boost hxBoost_ "true"
       menu project.id & mapM_ \(mTitle, mUrl, fIcon) -> do
         let isActive = maybe (pageTitle == mTitle) (== mTitle) menuItem
@@ -325,20 +323,52 @@ sideNav sess project pageTitle menuItem hasIntegrated = do
           [ href_ mUrl
           , term "data-tippy-placement" "right"
           , term "data-tippy-content" mTitle
-          , class_ $ " block flex gap-3 px-4 py-2 flex no-wrap shrink-0 items-center border-l-4 hover:bg-blue-50 overflow-x-hidden h-[2.5rem]" <> activeCls
+          , class_ $ " gap-3 px-4 py-2 flex no-wrap shrink-0 items-center border-l-4 hover:bg-blue-50 overflow-x-hidden h-[2.5rem]" <> activeCls
           ]
           do
             faSprite_ fIcon "regular" $ "w-5 h-5 shrink-0 " <> if isActive then "text-blue-900 " else " text-slate-500 "
             span_ [class_ "sd-hidden whitespace-nowrap truncate"] $ toHtml mTitle
 
+  div_ [class_ "border-t py-8"] do
+    let currUser = sess.user.getUser
+    let userIdentifier =
+          if currUser.firstName /= "" || currUser.lastName /= ""
+            then currUser.firstName <> " " <> currUser.lastName
+            else CI.original currUser.email
+    div_ [tabindex_ "0", role_ "button", class_ "cursor-pointer pl-4 space-x-2 flex items-center mb-3"] do
+      img_
+        [ class_ "inline-block w-9 h-9 rounded-lg bg-gray-300"
+        , term "data-tippy-placement" "right"
+        , term "data-tippy-content" userIdentifier
+        , src_ currUser.displayImageUrl
+        ]
+      span_ [class_ "inline-block sd-hidden overflow-hidden"] $ toHtml $ userIdentifier
+    a_
+      [ class_ "gap-3 px-4 py-2 flex no-wrap shrink-0 items-center border-l-4 hover:bg-blue-50 overflow-x-hidden h-[2.5rem]"
+      , target_ "blank"
+      , term "data-tippy-placement" "right"
+      , term "data-tippy-content" "Documentation"
+      , href_ "https://apitoolkit.io/docs/"
+      ]
+      do
+        faSprite_ "question" "regular" "h-5 w-5 shrink-0" >> span_ [class_ "sd-hidden whitespace-nowrap truncate"] "Documentation"
+    a_
+      [ class_ "gap-3 px-4 py-2 flex no-wrap shrink-0 items-center border-l-4 hover:bg-blue-50 overflow-x-hidden h-[2.5rem]"
+      , term "data-tippy-placement" "right"
+      , term "data-tippy-content" "Logout"
+      , href_ "/logout"
+      , [__| on click js posthog.reset(); end |]
+      ]
+      do
+        faSprite_ "arrow-right-from-bracket" "regular" "h-5 w-5 shrink-0" >> span_ [class_ "sd-hidden whitespace-nowrap truncate"] "Logout"
+
 
 navbar :: Users.User -> Html ()
-navbar currUser = do
-  nav_ [id_ "main-navbar", class_ "sticky z-20 top-0 w-full px-6 py-2 border-b bg-white flex flex-row justify-between"] do
-    a_
-      [ id_ "side_nav_toggler"
-      , class_ "cursor-pointer flex items-center"
-      , [__|
+navbar currUser = nav_ [id_ "main-navbar", class_ "sticky z-20 top-0 w-full px-6 py-2 flex flex-row justify-between border border-gray-200"] do
+  a_
+    [ id_ "side_nav_toggler"
+    , class_ "cursor-pointer flex items-center"
+    , [__|
       on click 
         if (localStorage.getItem('close-sidemenu') != 'true') then  
           add .hidden-side-nav-menu to #side-nav-menu then 
@@ -347,22 +377,8 @@ navbar currUser = do
           call localStorage.removeItem('close-sidemenu') 
         end
         |]
-      ]
-      do
-        faSprite_ "bars-sort" "regular" "w-5 h-5 text-gray-500"
-    div_ [class_ "inline-block flex items-center"] do
-      div_ [class_ "dropdown dropdown-end"] do
-        div_ [tabindex_ "0", role_ "button", class_ "cursor-pointer pl-4 space-x-2 flex items-center"] do
-          img_ [class_ "inline-block w-9 h-9 rounded-lg bg-gray-300", src_ currUser.displayImageUrl]
-          span_ [class_ "inline-block"]
-            $ toHtml
-            $ if currUser.firstName /= "" || currUser.lastName /= ""
-              then currUser.firstName <> " " <> currUser.lastName
-              else CI.original currUser.email
-          faSprite_ "caret-down" "solid" "w-4 h-4 inline-block"
-        ul_ [tabindex_ "0", class_ "dropdown-content z-[1] menu p-2 shadow bg-base-100 rounded-box w-52"] do
-          li_ $ a_ [class_ "text-base p-2 flex gap-3 rounded hover:bg-gray-100", href_ "/logout", [__| on click js posthog.reset(); end |]] do
-            faSprite_ "user-plus" "regular" "h-5 w-5" >> span_ "Logout"
+    ]
+    $ faSprite_ "bars-sort" "regular" "w-5 h-5 text-gray-500"
 
 
 alerts_ :: Html ()

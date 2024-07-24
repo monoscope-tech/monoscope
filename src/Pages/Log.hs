@@ -27,6 +27,7 @@ import Data.Time.Format.ISO8601 (iso8601ParseM)
 import Data.Vector qualified as V
 import Data.Vector qualified as Vector
 import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
+import Effectful.Time qualified as Time
 import Fmt (commaizeF, fmt)
 import Lucid
 import Lucid.Aria qualified as Aria
@@ -60,7 +61,7 @@ apiLogH pid queryM cols' cursorM' sinceM fromM toM layoutM hxRequestM hxBoostedM
 
   let summaryCols = T.splitOn "," (fromMaybe "" cols')
   let query = fromMaybe "" queryM
-  now <- liftIO getCurrentTime
+  now <- Time.currentTime
   let (fromD, toD, currentRange) = case sinceM of
         Just "1H" -> (Just $ addUTCTime (negate $ secondsToNominalDiffTime 3600) now, Just now, Just "Last Hour")
         Just "24H" -> (Just $ addUTCTime (negate $ secondsToNominalDiffTime $ 3600 * 24) now, Just now, Just "Last 24 Hours")
@@ -359,13 +360,10 @@ resultTable_ page mainLog = table_ [class_ "w-full table table-sm table-pin-rows
             h2_ [class_ "text-2xl font-bold"] "Waiting for events..."
             p_ "You're currently not sending any data to APItoolkit from your backends yet."
             a_ [href_ $ "/p/" <> page.pid.toText <> "/integration_guides", class_ "w-max btn btn-indigo -ml-1 text-md"] "Read the setup guide"
-      else do
-        section_ [class_ "w-max mx-auto"] do
-          p_ "This request has no outgoing requests yet."
+      else section_ [class_ "w-max mx-auto"] $ p_ "This request has no outgoing requests yet."
   unless (null page.requestVecs) $ do
     thead_ $ tr_ $ forM_ page.cols $ logTableHeading_ page.pid isLogEventB
-    tbody_ [id_ "w-full log-item-table-body"] do
-      logItemRows_ page.pid page.requestVecs page.cols page.colIdxMap page.nextLogsURL
+    tbody_ [id_ "w-full log-item-table-body"] $ logItemRows_ page.pid page.requestVecs page.cols page.colIdxMap page.nextLogsURL
 
 
 curateCols :: [Text] -> [Text] -> [Text]
@@ -429,7 +427,7 @@ errorClass expandedSection reqVec colIdxMap =
 logTableHeading_ :: Projects.ProjectId -> Bool -> Text -> Html ()
 logTableHeading_ pid True "id" = logTableHeadingWrapper_ pid "_" $ toHtml @Text ""
 logTableHeading_ pid True "status_code" = logTableHeadingWrapper_ pid "status_code" $ toHtml @Text "status"
-logTableHeading_ pid True "created_at" = logTableHeadingWrapper_ pid "created_at" $ toHtml @Text "timestamp"
+logTableHeading_ pid True "created_at" = logTableHeadingWrapper_ pid "created_at" $ toHtml @Text "timestamp (UTC)"
 logTableHeading_ pid isLogEventB col = logTableHeadingWrapper_ pid col $ toHtml $ Unsafe.last $ T.splitOn "•" col
 
 
@@ -440,7 +438,7 @@ logTableHeadingWrapper_ pid title child = td_
   $ div_
     [class_ "dropdown", term "data-tippy-content" title]
     do
-      div_ [tabindex_ "0", role_ "button", class_ "py-2 px-3 block"] child
+      div_ [tabindex_ "0", role_ "button", class_ "py-1 px-3 block"] child
       ul_ [tabindex_ "0", class_ "dropdown-content z-[1] menu p-2 shadow bg-base-100 rounded-box min-w-[15rem]"] do
         li_ [class_ "underline underline-offset-2"] $ toHtml title
         li_
@@ -478,17 +476,17 @@ logItemCol_ pid reqVec colIdxMap "id" = do
         (logItemPath <> "/detailed")
       $ faSprite_ "link" "solid" "h-3 w-3 text-blue-500"
     faSprite_ "chevron-right" "solid" "h-3 w-3 col-span-1 ml-1 text-gray-500 chevron log-chevron "
-logItemCol_ _ reqVec colIdxMap "created_at" = span_ [class_ "font-mono whitespace-nowrap ", term "data-tippy-content" "timestamp"] $ toHtml $ displayTimestamp $ fromMaybe "" $ lookupVecTextByKey reqVec colIdxMap "created_at"
-logItemCol_ _ reqVec colIdxMap "status_code" = span_ [class_ $ "badge " <> getStatusColor (lookupVecIntByKey reqVec colIdxMap "status_code"), term "data-tippy-content" "status"] $ toHtml $ show @Text $ lookupVecIntByKey reqVec colIdxMap "status_code"
-logItemCol_ _ reqVec colIdxMap "method" = span_ [class_ $ "min-w-[4rem] badge " <> maybe "badge-ghost" getMethodColor (lookupVecTextByKey reqVec colIdxMap "method"), term "data-tippy-content" "method"] $ toHtml $ fromMaybe "/" $ lookupVecTextByKey reqVec colIdxMap "method"
+logItemCol_ _ reqVec colIdxMap "created_at" = span_ [class_ "monospace whitespace-nowrap ", term "data-tippy-content" "timestamp"] $ toHtml $ displayTimestamp $ fromMaybe "" $ lookupVecTextByKey reqVec colIdxMap "created_at"
+logItemCol_ _ reqVec colIdxMap "status_code" = span_ [class_ $ "badge badge-sm " <> getStatusColor (lookupVecIntByKey reqVec colIdxMap "status_code"), term "data-tippy-content" "status"] $ toHtml $ show @Text $ lookupVecIntByKey reqVec colIdxMap "status_code"
+logItemCol_ _ reqVec colIdxMap "method" = span_ [class_ $ "min-w-[4rem] badge badge-sm  " <> maybe "badge-ghost" getMethodColor (lookupVecTextByKey reqVec colIdxMap "method"), term "data-tippy-content" "method"] $ toHtml $ fromMaybe "/" $ lookupVecTextByKey reqVec colIdxMap "method"
 logItemCol_ pid reqVec colIdxMap key@"rest" = div_ [class_ "space-x-2 whitespace-nowrap max-w-8xl overflow-x-hidden "] do
   if lookupVecTextByKey reqVec colIdxMap "request_type" == Just "Incoming"
     then span_ [class_ "text-center w-3 inline-flex ", term "data-tippy-content" "Incoming Request"] $ faSprite_ "arrow-down-left" "solid" "h-3 w-3 text-gray-400"
     else span_ [class_ "text-center w-3 inline-flex ", term "data-tippy-content" "Outgoing Request"] $ faSprite_ "arrow-up-right" "solid" "h-3 w-3 text-red-800"
   logItemCol_ pid reqVec colIdxMap "status_code"
   logItemCol_ pid reqVec colIdxMap "method"
-  span_ [class_ "badge badge-ghost ", term "data-tippy-content" "URL Path"] $ toHtml $ fromMaybe "" $ lookupVecTextByKey reqVec colIdxMap "url_path"
-  span_ [class_ "badge badge-ghost ", term "data-tippy-content" "Host"] $ toHtml $ fromMaybe "" $ lookupVecTextByKey reqVec colIdxMap "host"
+  span_ [class_ "badge badge-sm badge-ghost ", term "data-tippy-content" "URL Path"] $ toHtml $ fromMaybe "" $ lookupVecTextByKey reqVec colIdxMap "url_path"
+  span_ [class_ "badge badge-sm badge-ghost ", term "data-tippy-content" "Host"] $ toHtml $ fromMaybe "" $ lookupVecTextByKey reqVec colIdxMap "host"
   span_ [] $ toHtml $ maybe "" unwrapJsonPrimValue (lookupVecByKey reqVec colIdxMap key)
 logItemCol_ _ reqVec colIdxMap key =
   div_ [class_ "xwhitespace-nowrap xoverflow-x-hidden max-w-lg ", term "data-tippy-content" key]
@@ -523,7 +521,7 @@ jsonTreeAuxillaryCode pid = do
             [__|init set fp to (closest @data-field-path) then 
                   if isFieldInSummary(fp) then set my innerHTML to 'Remove field from summary' end|]
           ]
-          "Add field to Summary"
+          "Add field as Column"
         a_
           [ class_ "cursor-pointer text-slate-700 block px-4 py-1 text-sm hover:bg-gray-100 hover:text-slate-900"
           , role_ "menuitem"
@@ -556,71 +554,9 @@ jsonTreeAuxillaryCode pid = do
 
   script_
     [text|
-      const picker = new easepick.create({
-        element: '#startTime',
-        css: [
-          'https://cdn.jsdelivr.net/npm/@easepick/bundle@1.2.0/dist/index.css',
-        ],
-        inline: true,
-        plugins: ['RangePlugin', 'TimePlugin'],
-        autoApply: false,
-        setup(picker) {
-          picker.on('select', (e) => {
-            const start = JSON.stringify(e.detail.start).slice(1, -1);
-            const end = JSON.stringify(e.detail.end).slice(1, -1);
-            const rangeInput = document.getElementById("custom_range_input")
-            rangeInput.value = start + "/" + end
-            document.getElementById("timepickerBox").classList.toggle("hidden")
-            document.getElementById("currentRange").innerText = start.split("T")[0] + " - " + end.split("T")[0]
-            htmx.trigger("#log_explorer_form", "submit")
-          });
-        },
+      document.getElementById("log_explorer_form").addEventListener("keydown", function(e) {
+        if (e.key === "Enter") {e.preventDefault()}
       });
-      window.picker = picker; 
-        document.getElementById("log_explorer_form").addEventListener("keydown", function (e) {
-            if (e.key === "Enter") {
-                e.preventDefault();
-            }
-        });
-
-      function buildCurlRequest(event) {
-          const data = JSON.parse(event.currentTarget.dataset.reqjson);
-          const request_headers = data.request_headers;
-          const request_body = data.request_body;
-          const url = "https://" + data.host + data.raw_url + " \\\n";
-          const method = data.method;
-          let curlCommand = 'curl -X "' + method + '" ' + url + " ";
-          let curlHeaders = "";
-          if (typeof request_headers === "object") {
-            try {
-              curlHeaders = Object.entries(request_headers)
-                .map(([key, value]) => '-H "' + key + " " + value + '" \\\n')
-                .join("");
-            } catch (error) {}
-          }
-          if (curlHeaders != "") curlCommand += curlHeaders;
-          let reqBody = "";
-          if (method.toLowerCase() != "get") {
-            try {
-              reqBody = " -d '" + JSON.stringify(request_body) + "' \\\n";
-            } catch (error) {
-              reqBody = "-data-raw " + '"' + request_body + '"  \\\n';
-            }
-          }
-          if (reqBody !== " -d ''") {
-            curlCommand += reqBody;
-          }
-          navigator.clipboard.writeText(curlCommand)
-            .then(() => {
-              const event = new CustomEvent("successToast", {
-                  detail: { value: ["Curl command copied"] },
-                  bubbles: true,
-                  composed: true,
-                });
-              document.querySelector("body").dispatchEvent(event);
-            })
-          
-      }
 
     function downloadJson(event) {
          event.stopPropagation()

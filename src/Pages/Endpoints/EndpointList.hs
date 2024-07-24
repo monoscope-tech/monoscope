@@ -1,4 +1,4 @@
-module Pages.Endpoints.EndpointList (endpointListGetH, renderEndpoint, EndpointRequestStatsVM (..)) where
+module Pages.Endpoints.EndpointList (endpointListGetH, renderEndpoint, EndpointRequestStatsVM (..), EnpReqStatsVM (..)) where
 
 import Data.Default (def)
 import Data.Text (toLower)
@@ -34,19 +34,22 @@ endpointListGetH
   -> Maybe Text
   -> Maybe Text
   -> Maybe Text
-  -> ATAuthCtx (RespHeaders (PageCtx (ItemsList.ItemsPage EndpointRequestStatsVM)))
-endpointListGetH pid layoutM filterTM hostM projectHostM' sortM hxRequestM hxBoostedM hxCurrentURL = do
+  -> Maybe Text
+  -> Maybe Text
+  -> ATAuthCtx (RespHeaders EndpointRequestStatsVM)
+endpointListGetH pid layoutM pageM filterTM hostM projectHostM' sortM hxRequestM hxBoostedM hxCurrentURL loadMoreM = do
   (sess, project) <- Sessions.sessionAndProject pid
   let (ackd, archived, currentFilterTab) = case filterTM of
         Just "Active" -> (True, False, "Active")
         Just "Inbox" -> (False, False, "Inbox")
-        Just "Archived" -> (False, False, "Archived")
+        Just "Archived" -> (False, True, "Archived")
         _ -> (True, False, "Active")
 
   let projectHostM = projectHostM' >>= (\t -> if t == "" then Nothing else Just t)
+  let page = fromMaybe 0 $ readMaybe (toString $ fromMaybe "" pageM)
   endpointStats <- dbtToEff $ case hostM of
     Just h -> Endpoints.dependencyEndpointsRequestStatsByProject pid h
-    Nothing -> Endpoints.endpointRequestStatsByProject pid ackd archived projectHostM sortM
+    Nothing -> Endpoints.endpointRequestStatsByProject pid ackd archived projectHostM sortM page
   projHosts <- dbtToEff $ Endpoints.getProjectHosts pid
   inboxCount <- dbtToEff $ Endpoints.countEndpointInbox pid
   let bwconf =
@@ -56,57 +59,77 @@ endpointListGetH pid layoutM filterTM hostM projectHostM' sortM hxRequestM hxBoo
           , pageTitle = "Endpoints"
           }
   let currentURL = "/p/" <> pid.toText <> "/endpoints?layout=" <> fromMaybe "false" layoutM <> "&filter=" <> fromMaybe "" filterTM <> "&sort=" <> fromMaybe "event" sortM <> "&project_host=" <> fromMaybe "" hostM
+  let nextFetchUrl = currentURL <> "&page=" <> show (page + 1) <> "&load_more=true"
   currTime <- Time.currentTime
-  let listCfg =
-        ItemsList.ItemsListCfg
-          { projectId = pid
-          , nextFetchUrl = Nothing
-          , sort = Just $ ItemsList.SortCfg{current = fromMaybe "events" sortM}
-          , bulkActions =
-              [ ItemsList.BulkAction{icon = Just "check", title = "acknowlege", uri = "/p/" <> pid.toText <> "/anomalies/bulk_actions/acknowlege"}
-              , ItemsList.BulkAction{icon = Just "inbox-full", title = "archive", uri = "/p/" <> pid.toText <> "/anomalies/bulk_actions/archive"}
-              ]
-          , tabsFilter =
-              Just
-                $ ItemsList.TabFilter
-                  { current = currentFilterTab
-                  , options =
-                      [ ItemsList.TabFilterOpt{name = "Active", count = Nothing}
-                      , ItemsList.TabFilterOpt{name = "Inbox", count = if inboxCount > 0 then Just inboxCount else Nothing}
-                      , ItemsList.TabFilterOpt{name = "Archived", count = Nothing}
-                      ]
-                  }
-          , heading =
-              Just
-                $ ItemsList.Heading
-                  { pageTitle = case hostM of
-                      Just h -> span_ [] "Endpoints for dependency: " >> (span_ [class_ "text-blue-500 font-bold"] $ toHtml h)
-                      Nothing -> "Endpoints"
-                  , rightComponent = Nothing
-                  , subSection = Just $ hostFilter_ currentURL projHosts hostM projectHostM
-                  }
-          , search = Just $ ItemsList.SearchCfg{viaQueryParam = Nothing}
-          , zeroState =
-              Just
-                $ ItemsList.ZeroState
-                  { icon = "empty-set"
-                  , title = "Waiting for events"
-                  , description = "You're currently not sending any data to APItoolkit from your backends yet."
-                  , actionText = "Read the setup guide"
-                  , destination = Right $ "/p/" <> listCfg.projectId.toText <> "/integration_guides"
-                  }
-          , elemID = "anomalyListForm"
-          , ..
-          }
-  addRespHeaders $ PageCtx bwconf (ItemsList.ItemsPage listCfg $ V.map (EndpointRequestStatsVM (ackd && not archived) currTime) endpointStats)
+  let endpReqVM = V.map (EnpReqStatsVM False currTime) endpointStats
+  case loadMoreM of
+    Just _ -> do
+      addRespHeaders $ EndpointsListRows $ ItemsList.ItemsRows (Just nextFetchUrl) endpReqVM
+    Nothing -> do
+      let listCfg =
+            ItemsList.ItemsListCfg
+              { projectId = pid
+              , nextFetchUrl = Just nextFetchUrl
+              , sort = Just $ ItemsList.SortCfg{current = fromMaybe "events" sortM}
+              , bulkActions =
+                  [ ItemsList.BulkAction{icon = Just "check", title = "acknowlege", uri = "/p/" <> pid.toText <> "/anomalies/bulk_actions/acknowlege"}
+                  , ItemsList.BulkAction{icon = Just "inbox-full", title = "archive", uri = "/p/" <> pid.toText <> "/anomalies/bulk_actions/archive"}
+                  ]
+              , tabsFilter =
+                  Just $
+                    ItemsList.TabFilter
+                      { current = currentFilterTab
+                      , options =
+                          [ ItemsList.TabFilterOpt{name = "Active", count = Nothing}
+                          , ItemsList.TabFilterOpt{name = "Inbox", count = if inboxCount > 0 then Just inboxCount else Nothing}
+                          , ItemsList.TabFilterOpt{name = "Archived", count = Nothing}
+                          ]
+                      }
+              , heading =
+                  Just $
+                    ItemsList.Heading
+                      { pageTitle = case hostM of
+                          Just h -> span_ [] "Endpoints for dependency: " >> (span_ [class_ "text-blue-500 font-bold"] $ toHtml h)
+                          Nothing -> "Endpoints"
+                      , rightComponent = Nothing
+                      , subSection = Just $ hostFilter_ currentURL projHosts hostM projectHostM
+                      }
+              , search = Just $ ItemsList.SearchCfg{viaQueryParam = Nothing}
+              , zeroState =
+                  Just $
+                    ItemsList.ZeroState
+                      { icon = "empty-set"
+                      , title = "Waiting for events"
+                      , description = "You're currently not sending any data to APItoolkit from your backends yet."
+                      , actionText = "Read the setup guide"
+                      , destination = Right $ "/p/" <> listCfg.projectId.toText <> "/integration_guides"
+                      }
+              , elemID = "anomalyListForm"
+              , ..
+              }
+      addRespHeaders $ EndpointsListPage $ PageCtx bwconf (ItemsList.ItemsPage listCfg endpReqVM)
 
 
-data EndpointRequestStatsVM = EndpointRequestStatsVM Bool UTCTime Endpoints.EndpointRequestStats
+data EnpReqStatsVM = EnpReqStatsVM Bool UTCTime Endpoints.EndpointRequestStats
+  deriving stock (Show)
+
+
+instance ToHtml EnpReqStatsVM where
+  {-# INLINE toHtml #-}
+  toHtml (EnpReqStatsVM hideByDefault currTime enp) = toHtmlRaw $ renderEndpoint hideByDefault currTime enp
+  toHtmlRaw = toHtml
+
+
+data EndpointRequestStatsVM
+  = EndpointsListPage (PageCtx (ItemsList.ItemsPage EnpReqStatsVM))
+  | EndpointsListRows (ItemsList.ItemsRows EnpReqStatsVM)
 
 
 instance ToHtml EndpointRequestStatsVM where
   {-# INLINE toHtml #-}
-  toHtml (EndpointRequestStatsVM activePage currTime enpStat) = toHtmlRaw $ renderEndpoint activePage currTime enpStat
+  toHtml (EndpointsListPage pg) = toHtml pg
+  toHtml (EndpointsListRows rows) = toHtml rows
+  toHtmlRaw :: Monad m => EndpointRequestStatsVM -> HtmlT m ()
   toHtmlRaw = toHtml
 
 
@@ -142,8 +165,8 @@ renderEndpoint activePage currTime enp = do
         div_ [class_ "flex items-center gap-2 mt-5"] do
           AnomalyList.anomalyArchiveButton enp.projectId (Anomalies.AnomalyId enp.anomalyId) (isJust enp.archivedAt)
           AnomalyList.anomalyAcknowlegeButton enp.projectId (Anomalies.AnomalyId enp.anomalyId) (isJust enp.acknowlegedAt)
-    div_ [class_ "flex items-center justify-center "]
-      $ div_
+    div_ [class_ "flex items-center justify-center "] $
+      div_
         [ class_ "w-56 h-12 px-3"
         , hxGet_ $ "/charts_html?pid=" <> enp.projectId.toText <> "&since=14D&query_raw=" <> AnomalyList.escapedQueryPartial [PyF.fmt|endpoint_hash=="{enp.endpointHash}" | timechart [1d]|]
         , hxTrigger_ "intersect once"

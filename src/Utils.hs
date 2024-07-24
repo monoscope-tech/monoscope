@@ -203,7 +203,7 @@ freeTierLimitExceededBanner pid =
 lemonSqueezyUrls :: V.Vector Text
 lemonSqueezyUrls =
   V.fromList
-    [ "https://apitoolkit.lemonsqueezy.com/buy/9181a871-b4e6-41b0-9562-eae1d86efd59?embed=1&media=0&logo=0&desc=0" -- 200k
+    [ "https://apitoolkit.lemonsqueezy.com/buy/7c2ec567-2b9f-4bab-bb63-c3d5ab45e65b?embed=1&media=0&logo=0&desc=0" -- 400k
     , "https://apitoolkit.lemonsqueezy.com/buy/9695dbc9-6e24-4054-879f-1f360eda9293?embed=1&media=0&logo=0&desc=0" -- 550K
     , "https://apitoolkit.lemonsqueezy.com/buy/096bb970-e6a2-4cd7-a6ee-5f6ce6ecd39e?embed=1&media=0&logo=0&desc=0" -- 1M
     , "https://apitoolkit.lemonsqueezy.com/buy/e1b06cdb-5e18-44a4-9ec9-ece569f73137?embed=1&media=0&logo=0&desc=0" -- 2.5M
