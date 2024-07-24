@@ -248,7 +248,12 @@ export class StepsEditor extends LitElement {
             </div>
           </div>
           <div>
-            <h5 class="label-text p-1 mb-2">Assertions</h5>
+            <div class="flex gap-2 items-center mb-2">
+              <h5 class="label-text">Assertions</h5>
+              <a href="https://apitoolkit.io/docs/dashboard/dashboard-pages/api-tests/#test-definition-syntax" class="" target="_blank">
+              <svg class="w-3 h-3 text-slate-700"><use href="/assets/svgs/fa-sprites/regular.svg#circle-info"></use></svg>
+              </a>
+            </div>
             <div class="text-sm space-y-2 px-2 paramRows [&_.assertIndicator]:inline-block" id="[${idx}][asserts]">${this.renderParamsRows(stepData, idx, 'asserts', result?.assert_results || [])}</div>
           </div>
           <div>
@@ -275,10 +280,6 @@ export class StepsEditor extends LitElement {
   }
 
 
-  renderAssertRow(key,value, idx, aidx, result) {
-    return html`
-    `
-  }
 
   renderParamRow(key, value, type, idx, aidx, result) {
     let error = result?.err?.advice || ""
