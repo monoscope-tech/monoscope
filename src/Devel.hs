@@ -56,4 +56,4 @@ dev = scotty 8000 $ do
             }
     let collection = (def :: Testing.Collection){Testing.title = "Demo collection", Testing.description = "Description"}
     let pid = Projects.ProjectId UUID.nil
-    html $ renderText $ bodyWrapper bwconf $ TestCollectionEditor.collectionPage pid collection
+    html $ renderText $ bodyWrapper bwconf $ TestCollectionEditor.collectionPage pid collection Nothing

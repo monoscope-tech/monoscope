@@ -2,18 +2,23 @@ module Models.Tests.Testing (
   Collection (..),
   StepResult (..),
   StepRequest (..),
+  AssertResult (..),
   StepResponse (..),
   CollectionId (..),
   CollectionListItem (..),
   CollectionStepId (..),
   CollectionStepData (..),
   CollectionSteps (..),
+  CollectionRun (..),
+  CollectionRunId (..),
   stepDataMethod,
   updateCollection,
   addCollection,
   getCollections,
+  getCollectionRunByCollectionId,
   getCollectionById,
   getCollectionsId,
+  addCollectionRun,
   TabStatus (..),
 )
 where
@@ -42,6 +47,14 @@ import Web.HttpApiData (FromHttpApiData)
 
 
 newtype CollectionId = CollectionId {collectionId :: UUID.UUID}
+  deriving stock (Generic, Show)
+  deriving
+    (Eq, Ord, AE.ToJSON, AE.FromJSON, FromField, ToField, FromHttpApiData, Default, NFData)
+    via UUID.UUID
+  deriving anyclass (FromRow, ToRow)
+
+
+newtype CollectionRunId = CollectionRunId {collectionRunId :: UUID.UUID}
   deriving stock (Generic, Show)
   deriving
     (Eq, Ord, AE.ToJSON, AE.FromJSON, FromField, ToField, FromHttpApiData, Default, NFData)
@@ -100,8 +113,8 @@ stepDataMethod stepData =
 
 instance AE.ToJSON CollectionStepData where
   toJSON csd =
-    AE.object
-      $ catMaybes
+    AE.object $
+      catMaybes
         [ Just $ "title" .= csd.title
         , fmap ("POST" .=) csd.post -- Change the key to "POST" here for the output JSON
         , fmap ("GET" .=) csd.get
@@ -173,6 +186,8 @@ data CollectionListItem = CollectionListItem
   , stepsCount :: Int
   , schedule :: Text
   , isScheduled :: Bool
+  , passed :: Int
+  , failed :: Int
   }
   deriving stock (Show, Generic)
   deriving anyclass (FromRow, ToRow, NFData)
@@ -233,11 +248,33 @@ data StepResult = StepResult
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] StepResult
 
 
+data CollectionRun = CollectionRun
+  { id :: CollectionRunId
+  , createdAt :: UTCTime
+  , updatedAt :: UTCTime
+  , collectionId :: CollectionId
+  , status :: Text
+  , projectId :: Projects.ProjectId
+  , passed :: Int
+  , failed :: Int
+  , response :: AE.Value
+  }
+  deriving stock (Show, Generic)
+  deriving anyclass (FromRow, ToRow, AE.ToJSON, AE.FromJSON, NFData, Default)
+  deriving
+    (Entity)
+    via (GenericEntity '[Schema "tests", TableName "collection_runs", PrimaryKey "id", FieldModifiers '[CamelToSnake]] CollectionRun)
+
+
 data TabStatus = Active | Inactive
 
 
 addCollection :: Collection -> DBT IO ()
 addCollection = insert @Collection
+
+
+addCollectionRun :: CollectionRun -> DBT IO ()
+addCollectionRun = insert @CollectionRun
 
 
 updateCollection :: Projects.ProjectId -> CollectionId -> Text -> Text -> Bool -> Text -> V.Vector CollectionStepData -> DBT IO Int64
@@ -260,7 +297,18 @@ getCollectionById id' = queryOne Select q (Only id')
                   FROM tests.collections t WHERE id=?|]
 
 
--- TODO: delete or remove the collect_steps join
+getCollectionRunByCollectionId :: CollectionId -> DBT IO (Maybe CollectionRun)
+getCollectionRunByCollectionId id' = queryOne Select q (Only id')
+  where
+    q =
+      [sql| 
+    SELECT DISTINCT ON (collection_id) id, created_at, updated_at, collection_id, status::text, project_id, passed, failed, response
+    FROM tests.collection_runs t 
+    WHERE collection_id=?
+    ORDER BY  collection_id, created_at DESC
+    |]
+
+
 getCollections :: Projects.ProjectId -> TabStatus -> DBT IO (V.Vector CollectionListItem)
 getCollections pid tabStatus = query Select q (pid, statusValue)
   where
@@ -270,18 +318,29 @@ getCollections pid tabStatus = query Select q (pid, statusValue)
 
     q =
       [sql|
-      SELECT t.id, t.created_at, t.updated_at, t.project_id, t.last_run, 
-             t.title, t.description, jsonb_array_length(t.collection_steps), 
-             CASE
-               WHEN EXTRACT(DAY FROM t.schedule) > 0 THEN CONCAT(EXTRACT(DAY FROM t.schedule)::TEXT, ' days')
-               WHEN EXTRACT(HOUR FROM t.schedule) > 0 THEN CONCAT(EXTRACT(HOUR FROM t.schedule)::TEXT, ' hours')
-               ELSE CONCAT(EXTRACT(MINUTE FROM t.schedule)::TEXT, ' minutes')
-             END as schedule,
-             t.is_scheduled
-      FROM tests.collections t
-      WHERE t.project_id = ? AND t.is_scheduled = ?
-      GROUP BY t.id
-      ORDER BY t.updated_at DESC;
+           WITH latest_runs AS (
+               SELECT DISTINCT ON (collection_id) 
+                      collection_id, 
+                      created_at as latest_run_date,
+                      passed,
+                      failed
+               FROM tests.collection_runs
+               ORDER BY collection_id, created_at DESC
+           )
+           SELECT t.id, t.created_at, t.updated_at, t.project_id, t.last_run, 
+                  t.title, t.description, jsonb_array_length(t.collection_steps), 
+                  CASE
+                    WHEN EXTRACT(DAY FROM t.schedule) > 0 THEN CONCAT(EXTRACT(DAY FROM t.schedule)::TEXT, ' days')
+                    WHEN EXTRACT(HOUR FROM t.schedule) > 0 THEN CONCAT(EXTRACT(HOUR FROM t.schedule)::TEXT, ' hours')
+                    ELSE CONCAT(EXTRACT(MINUTE FROM t.schedule)::TEXT, ' minutes')
+                  END as schedule,
+                  t.is_scheduled,
+                  COALESCE(lr.passed, 0) as passed,
+                  COALESCE(lr.failed, 0) as failed
+           FROM tests.collections t
+           LEFT JOIN latest_runs lr ON t.id = lr.collection_id
+           WHERE t.project_id = ? AND t.is_scheduled = ?
+           ORDER BY t.updated_at DESC;
     |]
 
 

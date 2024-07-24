@@ -671,6 +671,24 @@ CREATE TABLE IF NOT EXISTS tests.collections
 SELECT manage_updated_at('tests.collections');
 create index if not exists idx_apis_testing_project_Id on tests.collections(project_id); 
 
+
+CREATE TYPE test_status AS ENUM ('passed', 'failed');
+
+CREATE TABLE IF NOT EXISTS tests.collection_runs (
+  id               UUID        NOT     NULL   DEFAULT        gen_random_uuid() PRIMARY KEY,
+  created_at       TIMESTAMP   WITH    TIME   ZONE       NOT               NULL              DEFAULT current_timestamp,
+  updated_at       TIMESTAMP   WITH    TIME   ZONE       NOT               NULL              DEFAULT current_timestamp,
+  project_id       UUID        NOT     NULL   REFERENCES projects.projects (id)              ON      DELETE CASCADE,
+  collection_id    UUID        NOT     NULL   REFERENCES tests.collections (id)              ON      DELETE CASCADE,
+  status           test_status NOT     NULL   DEFAULT        'passed',
+  passed           INT         NOT     NULL   DEFAULT        '0',
+  failed          INT         NOT     NULL   DEFAULT        '0',
+  response     JSONB       NOT     NULL   DEFAULT     '{}'::jsonb
+);
+SELECT manage_updated_at('tests.collection_runs');
+CREATE INDEX IF NOT EXISTS idx_collection_runs_collection_id ON tests.collection_runs(collection_id);
+
+
 CREATE TABLE IF NOT EXISTS monitors.query_monitors 
 (
   id                           UUID NOT NULL DEFAULT gen_random_uuid() PRIMARY KEY,

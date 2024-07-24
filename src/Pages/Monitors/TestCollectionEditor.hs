@@ -15,6 +15,8 @@ import Data.Aeson.Encode.Pretty (encodePretty)
 import Data.Default (def)
 import Data.Map qualified as M
 import Data.Text qualified as T
+import Data.Time (getCurrentTime)
+import Data.UUID.V4 qualified as UUIDV4
 import Data.Vector qualified as V
 import Deriving.Aeson qualified as DAE
 import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
@@ -34,6 +36,7 @@ import Lucid.Htmx (
  )
 import Models.Projects.Projects qualified as Projects
 import Models.Tests.TestToDump qualified as TestToDump
+import Models.Tests.Testing (CollectionRun (failed))
 import Models.Tests.Testing qualified as Testing
 import Models.Users.Sessions qualified as Sessions
 import NeatInterpolation (text)
@@ -43,6 +46,7 @@ import Pkg.Components.Modals qualified as Components
 import PyF (fmt)
 import Relude hiding (ask)
 import System.Types (ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders, addSuccessToast)
+import Text.ParserCombinators.ReadPrec (step)
 import Utils (faSprite_)
 
 
@@ -55,35 +59,68 @@ data CollectionStepUpdateForm = CollectionStepUpdateForm
   , scheduleNumberUnit :: Maybe Text
   }
   deriving stock (Show, Generic)
-  deriving (AE.FromJSON, AE.ToJSON) via (DAE.CustomJSON) '[DAE.OmitNothingFields] CollectionStepUpdateForm
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields] CollectionStepUpdateForm
 
 
-collectionStepsUpdateH :: Projects.ProjectId -> Testing.CollectionId -> CollectionStepUpdateForm -> ATAuthCtx (RespHeaders (CollectionMut))
+getCollectionRunStatus :: V.Vector Testing.StepResult -> (Int, Int, Text)
+getCollectionRunStatus steps = (passed, failed, if failed == 0 then "passed" else "failed")
+  where
+    passed = V.length $ V.filter (\x -> hasPassed x.assertResults) steps
+    failed = V.length $ V.filter (\x -> not $ hasPassed x.assertResults) steps
+    hasPassed :: [Testing.AssertResult] -> Bool
+    hasPassed res = length res == length (filter (\x -> x.ok == Just True) res)
+
+
+collectionStepsUpdateH :: Projects.ProjectId -> Testing.CollectionId -> CollectionStepUpdateForm -> ATAuthCtx (RespHeaders CollectionMut)
 collectionStepsUpdateH pid colId colF = do
   let isScheduled = colF.scheduled == Just "on"
-  _ <- dbtToEff $ Testing.updateCollection pid colId (fromMaybe "" colF.title) (fromMaybe "" colF.description) isScheduled ((fromMaybe "" colF.scheduleNumber) <> " " <> fromMaybe "" colF.scheduleNumberUnit) colF.stepsData
+  _ <- dbtToEff $ Testing.updateCollection pid colId (fromMaybe "" colF.title) (fromMaybe "" colF.description) isScheduled (fromMaybe "" colF.scheduleNumber <> " " <> fromMaybe "" colF.scheduleNumberUnit) colF.stepsData
   addSuccessToast "Collection's steps updated successfully" Nothing
-  addRespHeaders $ CollectionMut
+  addRespHeaders CollectionMut
 
 
-collectionRunTestsH :: Projects.ProjectId -> Testing.CollectionId -> Maybe Int -> CollectionStepUpdateForm -> ATAuthCtx (RespHeaders (CollectionRunTest))
+collectionRunTestsH :: Projects.ProjectId -> Testing.CollectionId -> Maybe Int -> CollectionStepUpdateForm -> ATAuthCtx (RespHeaders CollectionRunTest)
 collectionRunTestsH pid colId runIdxM stepsForm = do
   stepResultsE <- TestToDump.runTestAndLog pid stepsForm.stepsData
   case stepResultsE of
     Right stepResults -> do
+      let (failed, passed, status) = getCollectionRunStatus stepResults
       let tkRespJson = decodeUtf8 @Text $ AE.encode stepResults
+      currentTime <- liftIO $ getCurrentTime
+      runId <- Testing.CollectionRunId <$> liftIO UUIDV4.nextRandom
+      let colRun =
+            Testing.CollectionRun
+              { id = runId
+              , createdAt = currentTime
+              , updatedAt = currentTime
+              , collectionId = colId
+              , projectId = pid
+              , failed = failed
+              , passed = passed
+              , status = status
+              , response = AE.toJSON stepResults
+              }
+
+      _ <- dbtToEff $ Testing.addCollectionRun colRun
       addSuccessToast "Collection completed execution" Nothing
       addRespHeaders $ CollectionRunTest stepResults tkRespJson
     Left e -> do
       Log.logAttention "Collection failed execution" e
       addErrorToast "Collection failed execution" (Just $ show e)
-      addRespHeaders $ RunTestError
+      addRespHeaders RunTestError
 
 
-collectionGetH :: Projects.ProjectId -> Testing.CollectionId -> ATAuthCtx (RespHeaders (CollectionGet))
+castToStepResult :: AE.Value -> Maybe (V.Vector Testing.StepResult)
+castToStepResult v = case AE.eitherDecodeStrictText (decodeUtf8 $ AE.encode v) of
+  Right v' -> Just v'
+  Left e -> Nothing
+
+
+collectionGetH :: Projects.ProjectId -> Testing.CollectionId -> ATAuthCtx (RespHeaders CollectionGet)
 collectionGetH pid colId = do
   (sess, project) <- Sessions.sessionAndProject pid
   collectionM <- dbtToEff $ Testing.getCollectionById colId
+  collectionRunM <- dbtToEff $ Testing.getCollectionRunByCollectionId colId
   let bwconf =
         (def :: BWConfig)
           { sessM = Just sess.persistentSession
@@ -92,16 +129,18 @@ collectionGetH pid colId = do
           }
   case collectionM of
     Nothing -> addRespHeaders $ CollectionNotFound $ PageCtx bwconf ()
-    Just col -> addRespHeaders $ CollectionGet $ PageCtx bwconf (pid, col)
+    Just col -> do
+      let runRes = collectionRunM >>= (\x -> castToStepResult x.response)
+      addRespHeaders $ CollectionGet $ PageCtx bwconf (pid, col, runRes)
 
 
 data CollectionGet
-  = CollectionGet (PageCtx (Projects.ProjectId, Testing.Collection))
+  = CollectionGet (PageCtx (Projects.ProjectId, Testing.Collection, Maybe (V.Vector Testing.StepResult)))
   | CollectionNotFound (PageCtx ())
 
 
 instance ToHtml CollectionGet where
-  toHtml (CollectionGet (PageCtx bwconf (pid, col))) = toHtml $ PageCtx bwconf $ collectionPage pid col
+  toHtml (CollectionGet (PageCtx bwconf (pid, col, cl_rn))) = toHtml $ PageCtx bwconf $ collectionPage pid col cl_rn
   toHtml (CollectionNotFound (PageCtx bwconf ())) = toHtml $ PageCtx bwconf $ collectionNotFoundPage
   toHtmlRaw = toHtml
 
@@ -163,10 +202,19 @@ testSettingsModalContent_ isUpdate col = div_ [class_ "space-y-5 w-96"] do
   div_ $ button_ [class_ "btn btn-bordered btn-primary", type_ "submit"] $ if isUpdate then "Update" else "Create Test"
 
 
-collectionPage :: Projects.ProjectId -> Testing.Collection -> Html ()
-collectionPage pid col = do
+collectionPage :: Projects.ProjectId -> Testing.Collection -> Maybe (V.Vector Testing.StepResult) -> Html ()
+collectionPage pid col col_rn = do
   let collectionStepsJSON = AE.encode col.collectionSteps
-  script_ [] [fmt|window.collectionSteps = {collectionStepsJSON};|]
+  let respJson = AE.encode col_rn
+  script_
+    []
+    [fmt|
+  window.collectionSteps = {collectionStepsJSON}; 
+  window.collectionResults = {respJson}; 
+  document.addEventListener('DOMContentLoaded', function(){{
+       window.updateCollectionResults({respJson});
+   }})
+  |]
   editorExtraElements
   section_ [class_ "h-full overflow-y-hidden"] do
     form_
@@ -212,12 +260,16 @@ collectionPage pid col = do
 
         div_ [class_ "col-span-1 h-full border-r border-gray-200"] do
           div_ [class_ "max-h-full h-full overflow-y-auto space-y-4 relative", id_ "step-results-parent"] do
-            div_ [id_ "step-results-indicator", class_ "steps-indicator flex flex-col justify-center items-center h-full text-slate-400 text-xl space-y-4"] do
-              div_ [class_ "w-full flex flex-col gap-2 items-center empty-state"] do
-                Utils.faSprite_ "objects-column" "solid" "w-16 h-16"
-                p_ [class_ "text-slate-500"] "Run tests to view the results here."
-              div_ [class_ "hidden loading-indicator flex justify-center"] do
-                span_ [class_ "loading loading-dots loading-lg"] ""
+            case col_rn of
+              Just res -> do
+                V.iforM_ res collectionStepResult_
+              Nothing -> do
+                div_ [id_ "step-results-indicator", class_ "steps-indicator flex flex-col justify-center items-center h-full text-slate-400 text-xl space-y-4"] do
+                  div_ [class_ "w-full flex flex-col gap-2 items-center empty-state"] do
+                    Utils.faSprite_ "objects-column" "solid" "w-16 h-16"
+                    p_ [class_ "text-slate-500"] "Run tests to view the results here."
+                  div_ [class_ "hidden loading-indicator flex justify-center"] do
+                    span_ [class_ "loading loading-dots loading-lg"] ""
 
     script_ [type_ "module", src_ "/assets/steps-editor.js"] ("" :: Text)
 
@@ -228,16 +280,16 @@ collectionStepResult_ idx stepResult = section_ [class_ "p-1"] do
     div_ [class_ "hidden loading-indicator flex justify-center bg-white rounded-sm shadow-sm p-4"] do
       span_ [class_ "loading loading-dots loading-lg"] ""
   div_ [class_ "p-2 bg-base-200 font-bold"] do
-    toHtml $ (show $ idx + 1) <> " " <> fromMaybe "" stepResult.stepName
+    toHtml $ show (idx + 1) <> " " <> fromMaybe "" stepResult.stepName
   div_ [role_ "tablist", class_ "tabs tabs-lifted"] do
     input_ [type_ "radio", name_ $ "step-result-tabs-" <> show idx, role_ "tab", class_ "tab", Aria.label_ "Response Log", checked_]
-    div_ [role_ "tabpanel", class_ "tab-content bg-base-100 bg-base-100 border-base-300 rounded-box p-6"]
-      $ toHtmlRaw
-      $ textToHTML stepResult.stepLog
+    div_ [role_ "tabpanel", class_ "tab-content bg-base-100 bg-base-100 border-base-300 rounded-box p-6"] $
+      toHtmlRaw $
+        textToHTML stepResult.stepLog
 
     input_ [type_ "radio", name_ $ "step-result-tabs-" <> show idx, role_ "tab", class_ "tab", Aria.label_ "Response Headers"]
-    div_ [role_ "tabpanel", class_ "tab-content bg-base-100 bg-base-100 border-base-300 rounded-box p-6 "]
-      $ table_ [class_ "table table-xs"] do
+    div_ [role_ "tabpanel", class_ "tab-content bg-base-100 bg-base-100 border-base-300 rounded-box p-6 "] $
+      table_ [class_ "table table-xs"] do
         thead_ [] $ tr_ [] $ th_ [] "Name" >> th_ [] "Value"
         tbody_ $ forM_ (M.toList stepResult.request.resp.headers) $ \(k, v) -> tr_ [] do
           td_ [] $ toHtml k

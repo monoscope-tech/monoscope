@@ -74,8 +74,8 @@ testingGetH pid filterTM = do
           , nextFetchUrl = Nothing
           , search = Just $ ItemsList.SearchCfg{viaQueryParam = Nothing}
           , tabsFilter =
-              Just
-                $ ItemsList.TabFilter
+              Just $
+                ItemsList.TabFilter
                   { current = currentFilterTab
                   , options =
                       [ ItemsList.TabFilterOpt{name = "Active", count = Nothing}
@@ -86,8 +86,8 @@ testingGetH pid filterTM = do
               [ ItemsList.BulkAction{icon = Just "check", title = "deactivate", uri = "/p/" <> pid.toText <> "/anomalies/bulk_actions/acknowlege"}
               ]
           , heading =
-              Just
-                $ ItemsList.Heading
+              Just $
+                ItemsList.Heading
                   { pageTitle = "Multistep API monitors/tests (Beta)"
                   , rightComponent =
                       Just
@@ -105,8 +105,8 @@ testingGetH pid filterTM = do
                   , subSection = Nothing
                   }
           , zeroState =
-              Just
-                $ ItemsList.ZeroState
+              Just $
+                ItemsList.ZeroState
                   { icon = "empty-set"
                   , title = "No Multistep Test/Monitor yet."
                   , description = "You're can create one to start monitoring your services."
@@ -154,8 +154,8 @@ collectionCard pid col = div_ [class_ "flex py-4 gap-8 items-center itemsListIte
         div_ [class_ "text-base"] $ show col.stepsCount
         small_ [class_ "block"] "Steps"
       div_ [class_ " p-2 bg-emerald-100 text-emerald-900 border border-emerald-300"] do
-        div_ [class_ "text-base"] "-"
+        div_ [class_ "text-base"] $ show col.passed
         small_ [class_ "block"] "Passed"
       div_ [class_ "p-2  bg-rose-100 text-rose-900 border border-rose-300"] do
-        div_ [class_ "text-base"] "-"
+        div_ [class_ "text-base"] $ show col.failed
         small_ [class_ "block"] "Failed"
