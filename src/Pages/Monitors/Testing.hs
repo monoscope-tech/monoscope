@@ -2,22 +2,29 @@ module Pages.Monitors.Testing (
   testingGetH,
   testingPostH,
   CollectionListItemVM (..),
+  collectionDashboard,
 )
 where
 
+import Control.Error.Util (hush)
 import Data.Aeson qualified as AE
 import Data.Default (def)
+import Data.List.Extra (nubOrd)
 import Data.Text qualified as T
 import Data.UUID.V4 qualified as UUIDV4
 import Data.Vector qualified as V
 import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
 import Effectful.Time qualified as Time
 import Lucid
-import Lucid.Htmx (hxExt_, hxPost_, hxSelect_, hxSwap_, hxTarget_, hxVals_)
+import Lucid.Htmx (hxExt_, hxGet_, hxIndicator_, hxPost_, hxSelect_, hxSwap_, hxTarget_, hxTrigger_, hxVals_)
+import Lucid.Hyperscript (__)
+import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.Projects qualified as Projects
 import Models.Tests.Testing qualified as Testing
 import Models.Users.Sessions qualified as Sessions
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
+import Pages.Components (statBox)
+import Pages.Log qualified as Log
 import Pages.Monitors.TestCollectionEditor qualified as TestCollectionEditor
 import Pkg.Components qualified as Components
 import Pkg.Components.ItemsList qualified as ItemsList
@@ -133,29 +140,107 @@ instance ToHtml CollectionListItemVM where
 
 
 collectionCard :: Projects.ProjectId -> Testing.CollectionListItem -> Html ()
-collectionCard pid col = div_ [class_ "flex py-4 gap-8 items-center itemsListItem"] do
-  div_ [class_ "h-4 flex space-x-3 w-8 "] do
-    a_ [class_ "w-2 h-full"] ""
-    input_ [term "aria-label" "Select Issue", class_ "endpoint_anomaly_input bulkactionItemCheckbox checkbox  checkbox-md checked:checkbox-primary", type_ "checkbox", name_ "listItemId", value_ col.id.toText]
+collectionCard pid col =
+  div_ [class_ "flex flex-col gap-1"] do
+    div_ [class_ "flex py-4 gap-8 items-center itemsListItem"] do
+      div_ [class_ "h-4 flex space-x-3 w-8 "] do
+        a_ [class_ "w-2 h-full"] ""
+        input_ [term "aria-label" "Select Issue", class_ "endpoint_anomaly_input bulkactionItemCheckbox checkbox  checkbox-md checked:checkbox-primary", type_ "checkbox", name_ "listItemId", value_ col.id.toText]
 
-  div_ [class_ "space-y-3 grow"] do
-    div_ [class_ ""] do
-      a_ [href_ $ "/p/" <> pid.toText <> "/testing/" <> col.id.toText, class_ "inline-block font-bold text-blue-700 space-x-2"] $ toHtml col.title
-      div_ [class_ "mt-5"] do
-        div_ [class_ "flex items-center gap-2"] do
-          span_ [class_ "text-xs text-gray-500 font-bold"] "Created"
-          span_ [class_ "inline-block text-gray-800 text-xs"] $ toHtml $ T.take 19 $ show @Text col.createdAt
-        div_ [class_ "flex items-center gap-2"] do
-          span_ [class_ "text-xs text-gray-500 font-bold"] "Last run"
-          span_ [class_ "text-gray-500"] $ toHtml $ maybe "-" (T.take 19 . show @Text) col.lastRun
-  div_ [class_ "flex items-center justify-center "] do
-    div_ [class_ "grid grid-cols-3 gap-2 text-center text-xs w-96"] do
-      div_ [class_ "p-2 bg-slate-100 text-slate-900 border border-slate-300"] do
-        div_ [class_ "text-base"] $ show col.stepsCount
-        small_ [class_ "block"] "Steps"
-      div_ [class_ " p-2 bg-emerald-100 text-emerald-900 border border-emerald-300"] do
-        div_ [class_ "text-base"] $ show col.passed
-        small_ [class_ "block"] "Passed"
-      div_ [class_ "p-2  bg-rose-100 text-rose-900 border border-rose-300"] do
-        div_ [class_ "text-base"] $ show col.failed
-        small_ [class_ "block"] "Failed"
+      div_ [class_ "space-y-3 grow"] do
+        div_ [class_ ""] do
+          a_ [href_ $ "/p/" <> pid.toText <> "/testing/" <> col.id.toText, class_ "inline-block font-bold text-blue-700 space-x-2"] $ toHtml col.title
+          div_ [class_ "mt-5"] do
+            div_ [class_ "flex items-center gap-2"] do
+              span_ [class_ "text-xs text-gray-500 font-bold"] "Created"
+              span_ [class_ "inline-block text-gray-800 text-xs"] $ toHtml $ T.take 19 $ show @Text col.createdAt
+            div_ [class_ "flex items-center gap-2"] do
+              span_ [class_ "text-xs text-gray-500 font-bold"] "Last run"
+              span_ [class_ "text-gray-500"] $ toHtml $ maybe "-" (T.take 19 . show @Text) col.lastRun
+      div_ [class_ "flex items-center justify-center "] do
+        div_ [class_ "grid grid-cols-3 gap-2 text-center text-xs w-96"] do
+          div_ [class_ "p-2 bg-slate-100 text-slate-900 border border-slate-300"] do
+            div_ [class_ "text-base"] $ show col.stepsCount
+            small_ [class_ "block"] "Steps"
+          div_ [class_ " p-2 bg-emerald-100 text-emerald-900 border border-emerald-300"] do
+            div_ [class_ "text-base"] $ show col.passed
+            small_ [class_ "block"] "Passed"
+          div_ [class_ "p-2  bg-rose-100 text-rose-900 border border-rose-300 mr-4"] do
+            div_ [class_ "text-base"] $ show col.failed
+            small_ [class_ "block"] "Failed"
+    div_ [class_ "flex items-center justify-end border-t mx-4 py-2"] do
+      a_ [href_ $ "/p/" <> pid.toText <> "/testing/" <> col.id.toText <> "/dashboard", class_ "link link-primary px-2 py-1 hover:bg-blue-100 rounded-sm"] $ "View dashboard" >> faSprite_ "arrow-right" "regular" "h-3"
+
+
+collectionDashboard :: Projects.ProjectId -> Testing.CollectionId -> ATAuthCtx (RespHeaders (PageCtx (Html ())))
+collectionDashboard pid cid = do
+  (sess, project) <- Sessions.sessionAndProject pid
+  tableAsVecE <- dbtToEff $ RequestDumps.selectLogTable pid "sdk_type == \"TestkitOutgoing\"" Nothing (Nothing, Nothing) [""]
+
+  let tableAsVecM = hush tableAsVecE
+
+  let bwconf =
+        (def :: BWConfig)
+          { sessM = Just sess.persistentSession
+          , currProject = Just project
+          , pageTitle = "API Tests (Beta)"
+          }
+  addRespHeaders $ PageCtx bwconf $ dashboardPage pid cid tableAsVecM
+
+
+dashboardPage :: Projects.ProjectId -> Testing.CollectionId -> Maybe (V.Vector (V.Vector AE.Value), [Text], Int) -> Html ()
+dashboardPage pid cid reqsVecM =
+  section_ [class_ "p-8  mx-auto px-16 w-full flex flex-col space-y-12 pb-24  h-full"] do
+    h1_ [class_ "text-2xl font-bold"] "API Test Dashboard"
+    div_ [class_ "relative p-1 flex gap-10 items-start"] do
+      dStats pid
+      div_ [class_ "w-full py-1 card-round text-sm overflow-hidden"] do
+        div_
+          [ id_ "testChartECP"
+          , class_ "px-2"
+          , style_ "height:180px"
+          , hxGet_ $ "/charts_html?id=reqsChartsEC&show_legend=true&pid=" <> pid.toText
+          , hxTrigger_ "intersect,  htmx:beforeRequest from:#log_explorer_form"
+          , hxVals_ "js:{query_raw:'', layout:'all'}"
+          , hxSwap_ "innerHTML"
+          ]
+          ""
+    div_ [class_ "card-round p-4 h-auto overflow-y-scroll"] do
+      h6_ [class_ "font-medium"] "Test run logs"
+      div_ [class_ "overflow-x-hidden"] do
+        case reqsVecM of
+          Just reqVec -> do
+            let (requestVecs, colNames, requestsCount) = reqVec
+                query = Just "sdk_type=\"TestkitOutgoing\""
+                colIdxMap = listToIndexHashMap colNames
+                reqLastCreatedAtM = (\r -> lookupVecTextByKey r colIdxMap "created_at") =<< (requestVecs V.!? (V.length requestVecs - 1))
+                curatedColNames = nubOrd $ Log.curateCols [""] colNames
+                nextLogsURL = RequestDumps.requestDumpLogUrlPath pid query Nothing reqLastCreatedAtM Nothing Nothing Nothing (Just "loadmore")
+                resetLogsURL = RequestDumps.requestDumpLogUrlPath pid query Nothing Nothing Nothing Nothing Nothing Nothing
+                page =
+                  Log.ApiLogsPageData
+                    { pid
+                    , resultCount = requestsCount
+                    , requestVecs
+                    , cols = curatedColNames
+                    , colIdxMap
+                    , nextLogsURL
+                    , resetLogsURL
+                    , currentRange = Nothing
+                    , exceededFreeTier = False
+                    , query
+                    , cursor = Nothing
+                    }
+            Log.resultTable_ page False
+          _ -> pass
+
+
+dStats :: Projects.ProjectId -> Html ()
+dStats pid = do
+  section_ [class_ "space-y-3 w-96 shrink-0"] do
+    div_ [class_ "reqResSubSection space-y-5"] do
+      div_ [class_ "grid grid-cols-2 gap-5"] do
+        statBox (Just pid) "Runs" "Total requests in the last 2 weeks" 40 Nothing
+        statBox (Just pid) "Passed" "Total anomalies still active this week vs last week" 38 Nothing
+        statBox (Just pid) "Failed" "Total endpoints now vs last week" 2 Nothing
+        statBox (Just pid) "Frequency" "Total request signatures which are active now vs last week" 5 Nothing

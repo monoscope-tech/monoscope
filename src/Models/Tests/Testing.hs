@@ -33,15 +33,17 @@ import Data.Vector qualified as V
 import Database.PostgreSQL.Entity (insert)
 import Database.PostgreSQL.Entity.DBT (QueryNature (..), execute, query, queryOne)
 import Database.PostgreSQL.Entity.Types (CamelToSnake, Entity, FieldModifiers, GenericEntity, PrimaryKey, Schema, TableName)
-import Database.PostgreSQL.Simple hiding (execute, executeMany, query)
+import Database.PostgreSQL.Simple hiding (execute, executeMany, query, query_)
 import Database.PostgreSQL.Simple.FromField (FromField)
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.ToField (ToField)
-import Database.PostgreSQL.Transact (DBT)
+import Database.PostgreSQL.Simple.Types (Query (Query))
+import Database.PostgreSQL.Transact (DBT, query_)
 import Deriving.Aeson qualified as DAE
 import GHC.Records (HasField (getField))
 import Models.Projects.Projects qualified as Projects
+import NeatInterpolation
 import Relude hiding (get, put)
 import Web.HttpApiData (FromHttpApiData)
 
@@ -349,3 +351,14 @@ getCollectionsId = query Select q ()
   where
     q =
       [sql|SELECT id FROM tests.collections where deleted_at IS NULL AND schedule IS NOT NULL;|]
+
+
+getCollectionLogs :: CollectionId -> DBT IO (V.Vector (Only AE.Value))
+getCollectionLogs cid = V.fromList <$> query_ (Query $ encodeUtf8 q)
+  where
+    q =
+      [text|
+    
+    S
+    
+    |]
