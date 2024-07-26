@@ -76,8 +76,8 @@ endpointListGetH pid layoutM pageM filterTM hostM projectHostM' sortM hxRequestM
                   , ItemsList.BulkAction{icon = Just "inbox-full", title = "archive", uri = "/p/" <> pid.toText <> "/anomalies/bulk_actions/archive"}
                   ]
               , tabsFilter =
-                  Just $
-                    ItemsList.TabFilter
+                  Just
+                    $ ItemsList.TabFilter
                       { current = currentFilterTab
                       , options =
                           [ ItemsList.TabFilterOpt{name = "Active", count = Nothing}
@@ -86,8 +86,8 @@ endpointListGetH pid layoutM pageM filterTM hostM projectHostM' sortM hxRequestM
                           ]
                       }
               , heading =
-                  Just $
-                    ItemsList.Heading
+                  Just
+                    $ ItemsList.Heading
                       { pageTitle = case hostM of
                           Just h -> span_ [] "Endpoints for dependency: " >> (span_ [class_ "text-blue-500 font-bold"] $ toHtml h)
                           Nothing -> "Endpoints"
@@ -96,8 +96,8 @@ endpointListGetH pid layoutM pageM filterTM hostM projectHostM' sortM hxRequestM
                       }
               , search = Just $ ItemsList.SearchCfg{viaQueryParam = Nothing}
               , zeroState =
-                  Just $
-                    ItemsList.ZeroState
+                  Just
+                    $ ItemsList.ZeroState
                       { icon = "empty-set"
                       , title = "Waiting for events"
                       , description = "You're currently not sending any data to APItoolkit from your backends yet."
@@ -165,8 +165,8 @@ renderEndpoint activePage currTime enp = do
         div_ [class_ "flex items-center gap-2 mt-5"] do
           AnomalyList.anomalyArchiveButton enp.projectId (Anomalies.AnomalyId enp.anomalyId) (isJust enp.archivedAt)
           AnomalyList.anomalyAcknowlegeButton enp.projectId (Anomalies.AnomalyId enp.anomalyId) (isJust enp.acknowlegedAt)
-    div_ [class_ "flex items-center justify-center "] $
-      div_
+    div_ [class_ "flex items-center justify-center "]
+      $ div_
         [ class_ "w-56 h-12 px-3"
         , hxGet_ $ "/charts_html?pid=" <> enp.projectId.toText <> "&since=14D&query_raw=" <> AnomalyList.escapedQueryPartial [PyF.fmt|endpoint_hash=="{enp.endpointHash}" | timechart [1d]|]
         , hxTrigger_ "intersect once"
