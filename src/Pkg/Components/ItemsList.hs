@@ -151,8 +151,8 @@ itemsList_ listCfg items =
                   case search.viaQueryParam of
                     Just param -> do
                       input_ [type_ "text", class_ "grow", id_ "search_box", placeholder_ "Search"]
-                      button_ [class_ "bg-blue-500 w-max text-white px-2 translate-x-2 rounded", [__|on click send click() to #searchThing|]] do
-                        faSprite_ "magnifying-glass" "regular" "w-5 h-5 p-1"
+                      button_ [class_ "bg-blue-500 w-max text-white px-2 translate-x-2 rounded-lg", [__|on click send click() to #searchThing|]] do
+                        faSprite_ "magnifying-glass" "regular" "w-4 h-4"
                     Nothing -> do
                       input_ [type_ "text", class_ "grow", placeholder_ "Search", [__| on input show .itemsListItem in #itemsListPage when its textContent.toLowerCase() contains my value.toLowerCase() |]]
                       faSprite_ "magnifying-glass" "regular" "w-4 h-4 opacity-70"
@@ -172,8 +172,8 @@ itemsList_ listCfg items =
                     , hxIndicator_ "#sortLoader"
                     ]
                     do
-                      div_ [class_ "flex flex-col items-center justify-center px-3"]
-                        $ if isActive then faSprite_ "icon-checkmark4" "solid" "w-4 h-5" else div_ [class_ "w-4 h-5"] ""
+                      div_ [class_ "flex flex-col items-center justify-center px-3"] $
+                        if isActive then faSprite_ "icon-checkmark4" "solid" "w-4 h-5" else div_ [class_ "w-4 h-5"] ""
                       div_ [class_ "grow space-y-1"] do
                         span_ [class_ "block text-lg"] $ toHtml title
                         span_ [class_ "block "] $ toHtml desc
@@ -219,6 +219,6 @@ itemRows_ :: (Monad m, ToHtml a) => Maybe Text -> V.Vector a -> HtmlT m ()
 itemRows_ nextFetchUrl items = do
   mapM_ (toHtml) items
   whenJust nextFetchUrl \url ->
-    when (length items > 10)
-      $ a_ [class_ "cursor-pointer block p-1 blue-800 bg-blue-100 hover:bg-blue-200 text-center", hxTrigger_ "click", hxSwap_ "outerHTML", hxGet_ url] do
+    when (length items > 10) $
+      a_ [class_ "cursor-pointer block p-1 blue-800 bg-blue-100 hover:bg-blue-200 text-center", hxTrigger_ "click", hxSwap_ "outerHTML", hxGet_ url] do
         span_ [class_ "htmx-indicator loading loading-dots loading-md"] "" >> "LOAD MORE"
