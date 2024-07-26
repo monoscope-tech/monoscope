@@ -121,7 +121,7 @@ itemsPage_ listCfg items = div_ [class_ "w-full mx-auto px-16 pt-10 pb-24 overfl
 itemsList_ :: ToHtml a => ItemsListCfg -> V.Vector a -> Html ()
 itemsList_ listCfg items =
   div_ [class_ "card-round overflow-hidden", id_ "anomalyListBelowTab", hxGet_ listCfg.currentURL, hxSwap_ "outerHTML", hxTrigger_ "refreshMain"] do
-    form_ [class_ "flex flex-col bg-white divide-y ", id_ listCfg.elemID] do
+    form_ [class_ "flex flex-col bg-white divide-y w-full ", id_ listCfg.elemID] do
       let currentURL' = deleteParam "sort" listCfg.currentURL
       let sortMenu =
             [ ("First Seen", "First time the issue occured", "first_seen")
@@ -146,16 +146,24 @@ itemsList_ listCfg items =
               span_ (toHtml blkA.title)
 
             whenJust listCfg.search \search -> do
-              div_ [hxGet_ currentURL', hxTarget_ "#rowsContainer", hxSwap_ "innerHTML", id_ "searchThing", hxVals_ "js:{search:getSearchVal()}"] do
-                label_ [class_ "input input-sm input-bordered flex  overflow-hidden items-center gap-2", [__|on click halt|]] do
-                  case search.viaQueryParam of
-                    Just param -> do
-                      input_ [type_ "text", class_ "grow", id_ "search_box", placeholder_ "Search"]
-                      button_ [class_ "bg-blue-500 w-max text-white px-2 translate-x-2 rounded-lg", [__|on click send click() to #searchThing|]] do
-                        faSprite_ "magnifying-glass" "regular" "w-4 h-4"
-                    Nothing -> do
-                      input_ [type_ "text", class_ "grow", placeholder_ "Search", [__| on input show .itemsListItem in #itemsListPage when its textContent.toLowerCase() contains my value.toLowerCase() |]]
-                      faSprite_ "magnifying-glass" "regular" "w-4 h-4 opacity-70"
+              div_
+                [ hxGet_ currentURL'
+                , hxTarget_ "#rowsContainer"
+                , hxSwap_ "innerHTML"
+                , id_ "searchThing"
+                , hxIndicator_ "#searchIndicator"
+                , hxVals_ "js:{search:getSearchVal()}"
+                ]
+                do
+                  label_ [class_ "input input-sm input-bordered flex  overflow-hidden items-center gap-2", [__|on click halt|]] do
+                    case search.viaQueryParam of
+                      Just param -> do
+                        input_ [type_ "text", class_ "grow", id_ "search_box", placeholder_ "Search"]
+                        button_ [class_ "bg-blue-500 w-max text-white px-2 translate-x-2 rounded-lg", [__|on click send click() to #searchThing|]] do
+                          faSprite_ "magnifying-glass" "regular" "w-4 h-4"
+                      Nothing -> do
+                        input_ [type_ "text", class_ "grow", placeholder_ "Search", [__| on input show .itemsListItem in #itemsListPage when its textContent.toLowerCase() contains my value.toLowerCase() |]]
+                        faSprite_ "magnifying-glass" "regular" "w-4 h-4 opacity-70"
 
           whenJust listCfg.sort \sortCfg -> do
             let currentSortTitle = maybe "First Seen" fst3 $ find (\(_, _, identifier) -> identifier == sortCfg.current) sortMenu
@@ -192,8 +200,10 @@ itemsList_ listCfg items =
           case zeroState.destination of
             Right destination -> a_ [href_ destination, class_ "w-max btn btn-indigo -ml-1 text-md"] $ toHtml zeroState.actionText
             Left labelId -> label_ [Lucid.for_ labelId, class_ "w-max btn btn-indigo -ml-1 text-md"] $ toHtml zeroState.actionText
-      div_ [id_ "rowsContainer"] do
-        itemRows_ listCfg.nextFetchUrl items
+      div_ [class_ "w-full flex flex-col"] do
+        span_ [id_ "searchIndicator", class_ "htmx-indicator loading loading-sm loading-dots mx-auto"] ""
+        div_ [id_ "rowsContainer"] do
+          itemRows_ listCfg.nextFetchUrl items
 
     script_
       [text|
@@ -217,7 +227,7 @@ instance ToHtml a => ToHtml (ItemsRows a) where
 
 itemRows_ :: (Monad m, ToHtml a) => Maybe Text -> V.Vector a -> HtmlT m ()
 itemRows_ nextFetchUrl items = do
-  mapM_ (toHtml) items
+  mapM_ toHtml items
   whenJust nextFetchUrl \url ->
     when (length items > 10) $
       a_ [class_ "cursor-pointer block p-1 blue-800 bg-blue-100 hover:bg-blue-200 text-center", hxTrigger_ "click", hxSwap_ "outerHTML", hxGet_ url] do
