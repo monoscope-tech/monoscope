@@ -76,7 +76,7 @@ dashboardGetH pid fromDStr toDStr sinceStr' = do
   now <- Time.currentTime
   let sinceStr = if isNothing fromDStr && isNothing toDStr && isNothing sinceStr' || fromDStr == Just "" then Just "24H" else sinceStr'
   hasRequests <- dbtToEff $ RequestDumps.hasRequest pid
-  newEndpoints <- dbtToEff $ Endpoints.endpointRequestStatsByProject pid False False Nothing Nothing 0
+  newEndpoints <- dbtToEff $ Endpoints.endpointRequestStatsByProject pid False False Nothing Nothing Nothing 0
   -- TODO: Replace with a duration parser.
   let (fromD, toD) = case sinceStr of
         Just "1H" -> (Just $ utcToZonedTime utc $ addUTCTime (negate $ secondsToNominalDiffTime 3600) now, Just $ utcToZonedTime utc now)
@@ -193,7 +193,7 @@ dashboardPage pid paramInput currTime projectStats newEndpoints reqLatenciesRoll
            document.getElementById("newEndpointsModal").checked = true
         }
     })
-    
+
     const picker = new easepick.create({
       element: '#startTime',
       css: [
