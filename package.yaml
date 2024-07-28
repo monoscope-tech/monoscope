@@ -28,6 +28,8 @@ ghc-options:
   - -Wno-monomorphism-restriction # Don’t warn if the monomorphism restriction is used
   - -Wno-missing-safe-haskell-mode
   - -Wno-partial-fields
+  - -Wno-prepositive-qualified-module
+  - -Wno-missing-export-lists
   - -Wno-orphans
   # remove the next options when possible. This is a temporary workaround
   - -Wno-unused-matches
@@ -173,6 +175,11 @@ library:
     - http-client
     - tuple
     - wai-middleware-static
+    - proto-lens-runtime
+    - grapesy
+    # - grpc-haskell
+    # - proto3-suite
+    # - proto3-wire
 
 executables:
   apitoolkit-server-exe:

@@ -138,6 +138,74 @@ packages:
   original:
     hackage: x509-store-1.6.9@sha256:1f1abeab5bacf1407b920d0f34f4c35a5ad450ff0d8121cd3dc76460f81e711d,1716
 - completed:
+    hackage: grpc-haskell-0.1.0@sha256:af109db9bf7d7d00a5088fb30dab1a03e3c54b19c66dc1ac0d8d61217524d11b,6334
+    pantry-tree:
+      sha256: d02f71fad7f9c8d734c30d6c039f1ad98e210e416ddb960c961d0669a4c184fc
+      size: 1934
+  original:
+    hackage: grpc-haskell-0.1.0@sha256:af109db9bf7d7d00a5088fb30dab1a03e3c54b19c66dc1ac0d8d61217524d11b,6334
+- completed:
+    hackage: proto3-suite-0.7.0@sha256:3733d946f4f15cf485412765380a9a8abee7b2fad1418dcd07b03cb1fbd40350,8381
+    pantry-tree:
+      sha256: 7b63dec87f0a7e3cbb8498faef9531cd2b63b468e5b4eba0d64e122dc5f88e7b
+      size: 3858
+  original:
+    hackage: proto3-suite-0.7.0@sha256:3733d946f4f15cf485412765380a9a8abee7b2fad1418dcd07b03cb1fbd40350,8381
+- completed:
+    hackage: proto3-wire-1.4.1@sha256:f3d141990f89a4c6e4215e21f412de15e688ca7de496f53a7a94828a138657be,2630
+    pantry-tree:
+      sha256: 41455b98c09d7cf37bff73ef74df274fd979dd5859e4168312e43a0fa178d3d7
+      size: 1065
+  original:
+    hackage: proto3-wire-1.4.1@sha256:f3d141990f89a4c6e4215e21f412de15e688ca7de496f53a7a94828a138657be,2630
+- completed:
+    hackage: dhall-1.42.1@sha256:3af5086c38158868ef7f94c6db8832cf9c61e8eab1010b33e109c4ddca0f0668,16814
+    pantry-tree:
+      sha256: 296bfba2c52bb9aff78e9653f3724d33d009a1753e5d71c10e9cf7edd76c5569
+      size: 352601
+  original:
+    hackage: dhall-1.42.1@sha256:3af5086c38158868ef7f94c6db8832cf9c61e8eab1010b33e109c4ddca0f0668,16814
+- completed:
+    hackage: grpc-haskell-core-0.1.0@sha256:50adbefd11be9e8b72ea98b7c3b5a4b2879fea211de4552b9759b91f2d4d8c51,3304
+    pantry-tree:
+      sha256: 5225c7c8413b57b43e94ec64a7efbc107fa764ccf66eb1fa6a7be22e5a98c683
+      size: 2330
+  original:
+    hackage: grpc-haskell-core-0.1.0@sha256:50adbefd11be9e8b72ea98b7c3b5a4b2879fea211de4552b9759b91f2d4d8c51,3304
+- completed:
+    hackage: snappy-c-0.1.0@sha256:d79733db50552dc471710be8a16cc5f4fb69f210ece15fb430a50cb02a24f014,3999
+    pantry-tree:
+      sha256: 29f78868decbed86eef55e8ae3336300de7ae246024565355a9b66f88849282c
+      size: 1109
+  original:
+    hackage: snappy-c-0.1.0@sha256:d79733db50552dc471710be8a16cc5f4fb69f210ece15fb430a50cb02a24f014,3999
+- completed:
+    commit: 22ed2deca4c60c6dc9aea248bba5f0c1281d79ca
+    git: git@github.com:well-typed/grapesy.git
+    name: grapesy
+    pantry-tree:
+      sha256: 789198788493224755b628e955f6adcc65f24a56af370e207c46bf4dd04050cf
+      size: 17999
+    subdir: .
+    version: 0.1.0
+  original:
+    commit: 22ed2deca4c60c6dc9aea248bba5f0c1281d79ca
+    git: git@github.com:well-typed/grapesy.git
+    subdir: .
+- completed:
+    commit: b2c4b13c2b567fcc6bbcc344646ce258a93bae0d
+    git: git@github.com:kazu-yamamoto/http2-tls.git
+    name: http2-tls
+    pantry-tree:
+      sha256: 81fd1869e0fb68b191aa5846126bf9184adef95afd2e66a50e5cb056d0031a68
+      size: 1001
+    subdir: .
+    version: 0.4.1
+  original:
+    commit: b2c4b13c2b567fcc6bbcc344646ce258a93bae0d
+    git: git@github.com:kazu-yamamoto/http2-tls.git
+    subdir: .
+- completed:
     commit: bcd3aeb5ca63a02ba026be4f02f4ce5767fb4f78
     git: https://github.com/Kleidukos/pg-transact-effectful
     name: pg-transact-effectful
