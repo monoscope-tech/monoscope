@@ -106,9 +106,9 @@ itemsPage_ listCfg items = div_ [class_ "w-full mx-auto px-16 pt-10 pb-24 overfl
     fromMaybe "" heading.subSection
   whenJust listCfg.tabsFilter \tabsFilter -> do
     let uri = deleteParam "filter" listCfg.currentURL
-    div_ [class_ "py-2 px-2 space-x-6 border-b border-slate-20 text-sm font-light relative", hxBoost_ "true", role_ "tablist"] $ forM_ tabsFilter.options \opt ->
+    div_ [class_ "py-2 px-2 space-x-6 border-b border-slate-20 text-sm font-light", hxBoost_ "true", role_ "tablist"] $ forM_ tabsFilter.options \opt ->
       a_
-        [ class_ $ "inline-block py-2  " <> if opt.name == tabsFilter.current then " font-bold text-black " else ""
+        [ class_ $ "inline-block py-2 relative " <> if opt.name == tabsFilter.current then " font-bold text-black " else ""
         , role_ "tab"
         , href_ $ uri <> "&filter=" <> escapedQueryPartial opt.name
         ]
