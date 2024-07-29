@@ -11,6 +11,7 @@ import Data.Aeson qualified as AE
 import Data.Default (def)
 import Data.List.Extra (nubOrd)
 import Data.Text qualified as T
+import Data.Time (UTCTime, getCurrentTime, zonedTimeToUTC)
 import Data.UUID.V4 qualified as UUIDV4
 import Data.Vector qualified as V
 import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
@@ -30,6 +31,7 @@ import Pkg.Components qualified as Components
 import Pkg.Components.ItemsList qualified as ItemsList
 import Relude hiding (ask)
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders, addSuccessToast)
+import Text.Time.Pretty (prettyTimeAuto)
 import Utils
 
 
@@ -84,8 +86,8 @@ testingGetH pid filterTM = do
           , nextFetchUrl = Nothing
           , search = Just $ ItemsList.SearchCfg{viaQueryParam = Nothing}
           , tabsFilter =
-              Just
-                $ ItemsList.TabFilter
+              Just $
+                ItemsList.TabFilter
                   { current = currentFilterTab
                   , options =
                       [ ItemsList.TabFilterOpt{name = "Active", count = Nothing}
@@ -96,8 +98,8 @@ testingGetH pid filterTM = do
               [ ItemsList.BulkAction{icon = Just "check", title = "deactivate", uri = "/p/" <> pid.toText <> "/anomalies/bulk_actions/acknowlege"}
               ]
           , heading =
-              Just
-                $ ItemsList.Heading
+              Just $
+                ItemsList.Heading
                   { pageTitle = "Multistep API monitors/tests (Beta)"
                   , rightComponent =
                       Just
@@ -115,8 +117,8 @@ testingGetH pid filterTM = do
                   , subSection = Nothing
                   }
           , zeroState =
-              Just
-                $ ItemsList.ZeroState
+              Just $
+                ItemsList.ZeroState
                   { icon = "empty-set"
                   , title = "No Multistep Test/Monitor yet."
                   , description = "You're can create one to start monitoring your services."
@@ -131,19 +133,19 @@ testingGetH pid filterTM = do
           , currProject = Just project
           , pageTitle = "API Tests (Beta)"
           }
-  addRespHeaders $ PageCtx bwconf (ItemsList.ItemsPage listCfg $ V.map (CollectionListItemVM pid) colls)
+  addRespHeaders $ PageCtx bwconf (ItemsList.ItemsPage listCfg $ V.map (\col -> CollectionListItemVM pid col currTime) colls)
 
 
-data CollectionListItemVM = CollectionListItemVM Projects.ProjectId Testing.CollectionListItem
+data CollectionListItemVM = CollectionListItemVM Projects.ProjectId Testing.CollectionListItem UTCTime
 
 
 instance ToHtml CollectionListItemVM where
-  toHtml (CollectionListItemVM pid he) = toHtmlRaw $ collectionCard pid he
+  toHtml (CollectionListItemVM pid he tme) = toHtmlRaw $ collectionCard pid he tme
   toHtmlRaw = toHtml
 
 
-collectionCard :: Projects.ProjectId -> Testing.CollectionListItem -> Html ()
-collectionCard pid col =
+collectionCard :: Projects.ProjectId -> Testing.CollectionListItem -> UTCTime -> Html ()
+collectionCard pid col currTime = do
   div_ [class_ "flex flex-col gap-1"] do
     div_ [class_ "flex py-4 gap-8 items-center itemsListItem"] do
       div_ [class_ "h-4 flex space-x-3 w-8 "] do
@@ -156,19 +158,32 @@ collectionCard pid col =
           , value_ col.id.toText
           ]
       div_ [class_ "space-y-3 grow"] do
-        div_ [class_ ""] do
+        div_ [class_ "flex gap-10 items-center"] do
           a_
             [ href_ $ "/p/" <> pid.toText <> "/testing/" <> col.id.toText <> "/overview"
-            , class_ "inline-block font-bold text-blue-700 space-x-2"
+            , class_ "text-xl font-medium text-blue-700"
             ]
             $ toHtml col.title
-          div_ [class_ "mt-5"] do
-            div_ [class_ "flex items-center gap-2"] do
-              span_ [class_ "text-xs text-gray-500 font-bold"] "Created"
-              span_ [class_ "inline-block text-gray-800 text-xs"] $ toHtml $ T.take 19 $ show @Text col.createdAt
-            div_ [class_ "flex items-center gap-2"] do
-              span_ [class_ "text-xs text-gray-500 font-bold"] "Last run"
-              span_ [class_ "text-gray-500"] $ toHtml $ maybe "-" (T.take 19 . show @Text) col.lastRun
+          a_ [href_ $ "/p/" <> pid.toText <> "/testing/" <> col.id.toText] do
+            faSprite_ "pen-to-square" "regular" "h-5 w-5 -mt-2"
+
+        div_ [class_ "mt-2 flex gap-2 items-center"] do
+          span_ [class_ "inline-block space-x-1"] do
+            faSprite_ "clock" "regular" "w-3 h-3"
+          span_
+            [ class_ "decoration-black underline ml-1"
+            , term "data-tippy-content" $ "created at: " <> show col.createdAt
+            ]
+            $ toHtml
+            $ prettyTimeAuto currTime col.createdAt
+          span_ "|"
+          span_
+            [class_ "decoration-black underline", term "data-tippy-content" $ "last run: " <> show col.lastRun]
+            do
+              case col.lastRun of
+                Just t -> toHtml $ prettyTimeAuto currTime t
+                Nothing -> "-"
+
       div_ [class_ "flex items-center justify-center "] do
         div_ [class_ "grid grid-cols-3 gap-2 text-center text-xs w-96"] do
           div_ [class_ "p-2 bg-slate-100 text-slate-900 border border-slate-300"] do
@@ -180,9 +195,6 @@ collectionCard pid col =
           div_ [class_ "p-2  bg-rose-100 text-rose-900 border border-rose-300 mr-4"] do
             div_ [class_ "text-base"] $ show col.failed
             small_ [class_ "block"] "Failed"
-    div_ [class_ "flex items-center justify-end border-t mx-4 py-2"] do
-      a_ [href_ $ "/p/" <> pid.toText <> "/testing/" <> col.id.toText] do
-        faSprite_ "pen-to-square" "regular" "h-5 w-5"
 
 
 collectionDashboard :: Projects.ProjectId -> Testing.CollectionId -> ATAuthCtx (RespHeaders (PageCtx (Html ())))
