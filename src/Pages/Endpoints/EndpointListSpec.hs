@@ -32,7 +32,7 @@ spec = aroundAll withTestResources do
     it "should return an empty list" \TestResources{..} -> do
       enpId <- Endpoints.EndpointId <$> UUID.nextRandom
       enp <-
-        toServantResponse trATCtx trSessAndHeader trLogger $ EndpointList.endpointListGetH testPid Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
+        toServantResponse trATCtx trSessAndHeader trLogger $ EndpointList.endpointListGetH testPid Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
       case enp of
         EndpointList.EndpointsListPage (PageCtx _ (ItemsList.ItemsPage _ enpList)) -> do
           length enpList `shouldBe` 0
@@ -53,7 +53,7 @@ spec = aroundAll withTestResources do
       _ <- withPool trPool $ refreshMaterializedView "apis.endpoint_request_stats"
 
       enp <-
-        toServantResponse trATCtx trSessAndHeader trLogger $ EndpointList.endpointListGetH testPid Nothing Nothing (Just "Inbox") Nothing Nothing Nothing Nothing Nothing Nothing Nothing
+        toServantResponse trATCtx trSessAndHeader trLogger $ EndpointList.endpointListGetH testPid Nothing Nothing (Just "Inbox") Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
       case enp of
         EndpointList.EndpointsListPage (PageCtx _ (ItemsList.ItemsPage _ enpList)) -> do
           length enpList `shouldBe` 2
@@ -75,7 +75,7 @@ spec = aroundAll withTestResources do
 
     it "should return active endpoints list" \TestResources{..} -> do
       evm <-
-        toServantResponse trATCtx trSessAndHeader trLogger $ EndpointList.endpointListGetH testPid Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
+        toServantResponse trATCtx trSessAndHeader trLogger $ EndpointList.endpointListGetH testPid Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
       case evm of
         EndpointList.EndpointsListPage (PageCtx _ (ItemsList.ItemsPage _ enpList)) -> do
           length enpList `shouldBe` 2
