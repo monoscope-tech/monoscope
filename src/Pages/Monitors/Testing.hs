@@ -81,8 +81,8 @@ testingGetH pid filterTM = do
           , nextFetchUrl = Nothing
           , search = Just $ ItemsList.SearchCfg{viaQueryParam = Nothing}
           , tabsFilter =
-              Just
-                $ ItemsList.TabFilter
+              Just $
+                ItemsList.TabFilter
                   { current = currentFilterTab
                   , options =
                       [ ItemsList.TabFilterOpt{name = "Active", count = Nothing}
@@ -93,8 +93,8 @@ testingGetH pid filterTM = do
               [ ItemsList.BulkAction{icon = Just "check", title = "deactivate", uri = "/p/" <> pid.toText <> "/anomalies/bulk_actions/acknowlege"}
               ]
           , heading =
-              Just
-                $ ItemsList.Heading
+              Just $
+                ItemsList.Heading
                   { pageTitle = "Multistep API monitors/tests (Beta)"
                   , rightComponent =
                       Just
@@ -112,8 +112,8 @@ testingGetH pid filterTM = do
                   , subSection = Nothing
                   }
           , zeroState =
-              Just
-                $ ItemsList.ZeroState
+              Just $
+                ItemsList.ZeroState
                   { icon = "empty-set"
                   , title = "No Multistep Test/Monitor yet."
                   , description = "You're can create one to start monitoring your services."
@@ -145,11 +145,20 @@ collectionCard pid col =
     div_ [class_ "flex py-4 gap-8 items-center itemsListItem"] do
       div_ [class_ "h-4 flex space-x-3 w-8 "] do
         a_ [class_ "w-2 h-full"] ""
-        input_ [term "aria-label" "Select Issue", class_ "endpoint_anomaly_input bulkactionItemCheckbox checkbox  checkbox-md checked:checkbox-primary", type_ "checkbox", name_ "listItemId", value_ col.id.toText]
-
+        input_
+          [ term "aria-label" "Select Issue"
+          , class_ "endpoint_anomaly_input bulkactionItemCheckbox checkbox  checkbox-md checked:checkbox-primary"
+          , type_ "checkbox"
+          , name_ "listItemId"
+          , value_ col.id.toText
+          ]
       div_ [class_ "space-y-3 grow"] do
         div_ [class_ ""] do
-          a_ [href_ $ "/p/" <> pid.toText <> "/testing/" <> col.id.toText, class_ "inline-block font-bold text-blue-700 space-x-2"] $ toHtml col.title
+          a_
+            [ href_ $ "/p/" <> pid.toText <> "/testing/" <> col.id.toText <> "/overview"
+            , class_ "inline-block font-bold text-blue-700 space-x-2"
+            ]
+            $ toHtml col.title
           div_ [class_ "mt-5"] do
             div_ [class_ "flex items-center gap-2"] do
               span_ [class_ "text-xs text-gray-500 font-bold"] "Created"
@@ -169,7 +178,8 @@ collectionCard pid col =
             div_ [class_ "text-base"] $ show col.failed
             small_ [class_ "block"] "Failed"
     div_ [class_ "flex items-center justify-end border-t mx-4 py-2"] do
-      a_ [href_ $ "/p/" <> pid.toText <> "/testing/" <> col.id.toText <> "/dashboard", class_ "link link-primary px-2 py-1 hover:bg-blue-100 rounded-sm"] $ "View dashboard" >> faSprite_ "arrow-right" "regular" "h-3"
+      a_ [href_ $ "/p/" <> pid.toText <> "/testing/" <> col.id.toText] do
+        faSprite_ "pen-to-square" "regular" "h-5 w-5"
 
 
 collectionDashboard :: Projects.ProjectId -> Testing.CollectionId -> ATAuthCtx (RespHeaders (PageCtx (Html ())))
