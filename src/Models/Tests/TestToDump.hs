@@ -10,7 +10,7 @@ import Data.UUID.V4 qualified as UUIDV4
 import Data.Vector qualified as V
 import Effectful
 import Effectful.Log (Log)
-import Effectful.PostgreSQL.Transact.Effect (DB)
+import Effectful.PostgreSQL.Transact.Effect (DB, dbtToEff)
 import Effectful.Reader.Static qualified as Reader
 import Effectful.Time qualified as Time
 import Foreign.C.String (peekCString, withCString)
@@ -84,9 +84,10 @@ runCollectionTest collectionSteps = do
 runTestAndLog
   :: (IOE :> es, Time.Time :> es, Reader.Reader Config.AuthContext :> es, DB :> es, Log :> es)
   => Projects.ProjectId
+  -> Testing.CollectionId
   -> V.Vector Testing.CollectionStepData
   -> Eff es (Either Text (V.Vector Testing.StepResult))
-runTestAndLog pid collectionSteps = do
+runTestAndLog pid colId collectionSteps = do
   stepResultsE <- runCollectionTest collectionSteps
   case stepResultsE of
     Left e -> do
@@ -94,8 +95,12 @@ runTestAndLog pid collectionSteps = do
       pure $ Left e
     Right stepResults -> do
       currentTime <- Time.currentTime
+      let (passed, failed) = Testing.getCollectionRunStatus stepResults
+
       -- Create a parent request for to act as parent for current test run
       msg_id <- liftIO $ UUIDV4.nextRandom
+      let response = AE.toJSON stepResults
+      _ <- dbtToEff $ Testing.updateCollectionLastRun colId (Just response) passed failed
       let parent_msg =
             RequestMessage
               { duration = 1000000 -- Placeholder for duration in nanoseconds

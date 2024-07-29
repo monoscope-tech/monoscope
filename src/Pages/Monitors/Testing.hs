@@ -55,6 +55,8 @@ testingPostH pid colF = do
           , isScheduled = colF.scheduled == Just "on"
           , collectionSteps = Testing.CollectionSteps colF.stepsData
           , lastRunResponse = Nothing
+          , lastRunPassed = 0
+          , lastRunFailed = 0
           }
   _ <- dbtToEff $ Testing.addCollection coll
   addSuccessToast "Collection added Successfully" Nothing

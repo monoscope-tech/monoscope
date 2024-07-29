@@ -62,15 +62,6 @@ data CollectionStepUpdateForm = CollectionStepUpdateForm
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields] CollectionStepUpdateForm
 
 
-getCollectionRunStatus :: V.Vector Testing.StepResult -> (Int, Int, Text)
-getCollectionRunStatus steps = (passed, failed, if failed == 0 then "passed" else "failed")
-  where
-    passed = V.length $ V.filter (\x -> hasPassed x.assertResults) steps
-    failed = V.length $ V.filter (\x -> not $ hasPassed x.assertResults) steps
-    hasPassed :: [Testing.AssertResult] -> Bool
-    hasPassed res = length res == length (filter (\x -> x.ok == Just True) res)
-
-
 collectionStepsUpdateH :: Projects.ProjectId -> Testing.CollectionId -> CollectionStepUpdateForm -> ATAuthCtx (RespHeaders CollectionMut)
 collectionStepsUpdateH pid colId colF = do
   let isScheduled = colF.scheduled == Just "on"
@@ -81,12 +72,13 @@ collectionStepsUpdateH pid colId colF = do
 
 collectionRunTestsH :: Projects.ProjectId -> Testing.CollectionId -> Maybe Int -> CollectionStepUpdateForm -> ATAuthCtx (RespHeaders CollectionRunTest)
 collectionRunTestsH pid colId runIdxM stepsForm = do
-  stepResultsE <- TestToDump.runTestAndLog pid stepsForm.stepsData
+  stepResultsE <- TestToDump.runTestAndLog pid colId stepsForm.stepsData
   case stepResultsE of
     Right stepResults -> do
       let tkRespJson = decodeUtf8 @Text $ AE.encode stepResults
+          (passed, failed) = Testing.getCollectionRunStatus stepResults
           response = AE.toJSON stepResults
-      _ <- dbtToEff $ Testing.updateCollectionLastRun colId (Just response)
+      _ <- dbtToEff $ Testing.updateCollectionLastRun colId (Just response) passed failed
       addSuccessToast "Collection completed execution" Nothing
       addRespHeaders $ CollectionRunTest stepResults tkRespJson
     Left e -> do

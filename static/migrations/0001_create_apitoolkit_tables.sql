@@ -671,6 +671,8 @@ CREATE TABLE IF NOT EXISTS tests.collections
 SELECT manage_updated_at('tests.collections');
 create index if not exists idx_apis_testing_project_Id on tests.collections(project_id);
 ALTER TABLE tests.collections ADD COLUMN last_run_response jsonb DEFAULT NULL;
+ALTER TABLE tests.collections ADD COLUMN last_run_passed INT DEFAULT 0;
+ALTER TABLE tests.collections ADD COLUMN last_run_failed INT DEFAULT 0;
 
 
 CREATE TABLE IF NOT EXISTS monitors.query_monitors

@@ -17,6 +17,7 @@ module Models.Tests.Testing (
   getCollectionById,
   getCollectionsId,
   TabStatus (..),
+  getCollectionRunStatus,
 )
 where
 
@@ -159,6 +160,8 @@ data Collection = Collection
   , isScheduled :: Bool
   , collectionSteps :: CollectionSteps
   , lastRunResponse :: Maybe AE.Value
+  , lastRunFailed :: Int
+  , lastRunPassed :: Int
   }
   deriving stock (Show, Generic)
   deriving anyclass (FromRow, ToRow, AE.ToJSON, AE.FromJSON, NFData, Default)
@@ -243,15 +246,24 @@ data StepResult = StepResult
 data TabStatus = Active | Inactive
 
 
+getCollectionRunStatus :: V.Vector StepResult -> (Int, Int)
+getCollectionRunStatus steps = (passed, failed)
+  where
+    passed = V.length $ V.filter (\x -> hasPassed x.assertResults) steps
+    failed = V.length $ V.filter (\x -> not $ hasPassed x.assertResults) steps
+    hasPassed :: [AssertResult] -> Bool
+    hasPassed res = length res == length (filter (\x -> x.ok == Just True) res)
+
+
 addCollection :: Collection -> DBT IO ()
 addCollection = insert @Collection
 
 
-updateCollectionLastRun :: CollectionId -> Maybe AE.Value -> DBT IO Int64
-updateCollectionLastRun id' lastRunResponse' = execute Update q params
+updateCollectionLastRun :: CollectionId -> Maybe AE.Value -> Int -> Int -> DBT IO Int64
+updateCollectionLastRun id' lastRunResponse' passed failed = execute Update q params
   where
-    params = (lastRunResponse', id')
-    q = [sql| UPDATE tests.collections SET last_run=NOW(), last_run_response=? WHERE id=? |]
+    params = (lastRunResponse', passed, failed, id')
+    q = [sql| UPDATE tests.collections SET last_run=NOW(), last_run_response=?, last_run_passed=?, last_run_failed=? WHERE id=? |]
 
 
 updateCollection :: Projects.ProjectId -> CollectionId -> Text -> Text -> Bool -> Text -> V.Vector CollectionStepData -> DBT IO Int64
@@ -270,7 +282,7 @@ getCollectionById id' = queryOne Select q (Only id')
                       WHEN EXTRACT(DAY FROM schedule) > 0 THEN CONCAT(EXTRACT(DAY FROM schedule)::TEXT, ' days')
                       WHEN EXTRACT(HOUR FROM schedule) > 0 THEN CONCAT(EXTRACT(HOUR FROM schedule)::TEXT, ' hours')
                       ELSE CONCAT(EXTRACT(MINUTE FROM schedule)::TEXT, ' minutes')
-                  END as schedule, is_scheduled, collection_steps, last_run_response
+                  END as schedule, is_scheduled, collection_steps, last_run_response, last_run_passed, last_run_failed
                   FROM tests.collections t WHERE id=?|]
 
 
@@ -283,15 +295,6 @@ getCollections pid tabStatus = query Select q (pid, statusValue)
 
     q =
       [sql|
-           WITH latest_runs AS (
-               SELECT DISTINCT ON (collection_id)
-                      collection_id,
-                      created_at as latest_run_date,
-                      passed,
-                      failed
-               FROM tests.collection_runs
-               ORDER BY collection_id, created_at DESC
-           )
            SELECT t.id, t.created_at, t.updated_at, t.project_id, t.last_run,
                   t.title, t.description, jsonb_array_length(t.collection_steps),
                   CASE
@@ -300,10 +303,9 @@ getCollections pid tabStatus = query Select q (pid, statusValue)
                     ELSE CONCAT(EXTRACT(MINUTE FROM t.schedule)::TEXT, ' minutes')
                   END as schedule,
                   t.is_scheduled,
-                  COALESCE(lr.passed, 0) as passed,
-                  COALESCE(lr.failed, 0) as failed
+                  t.last_run_passed as passed,
+                  t.last_run_failed as failed
            FROM tests.collections t
-           LEFT JOIN latest_runs lr ON t.id = lr.collection_id
            WHERE t.project_id = ? AND t.is_scheduled = ?
            ORDER BY t.updated_at DESC;
     |]
