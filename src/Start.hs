@@ -16,29 +16,5 @@ import Relude
 import System.Server qualified as Server
 
 
--- startApp :: IO ()
--- startApp = Server.runAPItoolkit
-
 startApp :: IO ()
-startApp = do
-  runServerWithHandlers (serverParams) serverConfig (fromServices $ services)
-
-
-services
-  :: Services
-      IO
-      ['[LogsService]]
-services =
-  Service handlers $
-    NoMoreServices
-
-
-handlers :: Methods IO '[LogsService]
-handlers =
-  Method (mkNonStreaming handleExport) $
-    NoMoreMethods
-
-
-handleExport :: Proto ExportLogsServiceRequest -> IO (Proto ExportLogsServiceResponse)
-handleExport req = do
-  return $ defMessage & #partialSuccess .~ Nothing
+startApp = Server.runAPItoolkit

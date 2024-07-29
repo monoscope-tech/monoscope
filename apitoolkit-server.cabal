@@ -150,28 +150,6 @@ library
       Pkg.TestUtils
       ProcessMessage
       ProcessMessageSpec
-      Proto.Opentelemetry.Proto.Collector.Logs.V1.LogsService
-      Proto.Opentelemetry.Proto.Collector.Logs.V1.LogsService_Fields
-      Proto.Opentelemetry.Proto.Collector.Metrics.V1.MetricsService
-      Proto.Opentelemetry.Proto.Collector.Metrics.V1.MetricsService_Fields
-      Proto.Opentelemetry.Proto.Collector.Profiles.V1experimental.ProfilesService
-      Proto.Opentelemetry.Proto.Collector.Profiles.V1experimental.ProfilesService_Fields
-      Proto.Opentelemetry.Proto.Collector.Trace.V1.TraceService
-      Proto.Opentelemetry.Proto.Collector.Trace.V1.TraceService_Fields
-      Proto.Opentelemetry.Proto.Common.V1.Common
-      Proto.Opentelemetry.Proto.Common.V1.Common_Fields
-      Proto.Opentelemetry.Proto.Logs.V1.Logs
-      Proto.Opentelemetry.Proto.Logs.V1.Logs_Fields
-      Proto.Opentelemetry.Proto.Metrics.V1.Metrics
-      Proto.Opentelemetry.Proto.Metrics.V1.Metrics_Fields
-      Proto.Opentelemetry.Proto.Profiles.V1experimental.Pprofextended
-      Proto.Opentelemetry.Proto.Profiles.V1experimental.Pprofextended_Fields
-      Proto.Opentelemetry.Proto.Profiles.V1experimental.Profiles
-      Proto.Opentelemetry.Proto.Profiles.V1experimental.Profiles_Fields
-      Proto.Opentelemetry.Proto.Resource.V1.Resource
-      Proto.Opentelemetry.Proto.Resource.V1.Resource_Fields
-      Proto.Opentelemetry.Proto.Trace.V1.Trace
-      Proto.Opentelemetry.Proto.Trace.V1.Trace_Fields
       RequestMessages
       RequestMessagesSpec
       Spec

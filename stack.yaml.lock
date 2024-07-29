@@ -180,32 +180,6 @@ packages:
   original:
     hackage: snappy-c-0.1.0@sha256:d79733db50552dc471710be8a16cc5f4fb69f210ece15fb430a50cb02a24f014,3999
 - completed:
-    commit: 22ed2deca4c60c6dc9aea248bba5f0c1281d79ca
-    git: git@github.com:well-typed/grapesy.git
-    name: grapesy
-    pantry-tree:
-      sha256: 789198788493224755b628e955f6adcc65f24a56af370e207c46bf4dd04050cf
-      size: 17999
-    subdir: .
-    version: 0.1.0
-  original:
-    commit: 22ed2deca4c60c6dc9aea248bba5f0c1281d79ca
-    git: git@github.com:well-typed/grapesy.git
-    subdir: .
-- completed:
-    commit: b2c4b13c2b567fcc6bbcc344646ce258a93bae0d
-    git: git@github.com:kazu-yamamoto/http2-tls.git
-    name: http2-tls
-    pantry-tree:
-      sha256: 81fd1869e0fb68b191aa5846126bf9184adef95afd2e66a50e5cb056d0031a68
-      size: 1001
-    subdir: .
-    version: 0.4.1
-  original:
-    commit: b2c4b13c2b567fcc6bbcc344646ce258a93bae0d
-    git: git@github.com:kazu-yamamoto/http2-tls.git
-    subdir: .
-- completed:
     commit: bcd3aeb5ca63a02ba026be4f02f4ce5767fb4f78
     git: https://github.com/Kleidukos/pg-transact-effectful
     name: pg-transact-effectful
