@@ -55,13 +55,14 @@ data BWConfig = BWConfig
   , pageTitle :: Text
   , menuItem :: Maybe Text -- Use PageTitle if menuItem is not set
   , hasIntegrated :: Maybe Bool
+  , navTabs :: Maybe (Html ())
   }
   deriving stock (Show, Generic)
   deriving anyclass (Default)
 
 
 bodyWrapper :: BWConfig -> Html () -> Html ()
-bodyWrapper BWConfig{sessM, currProject, pageTitle, menuItem, hasIntegrated} child = do
+bodyWrapper BWConfig{sessM, currProject, pageTitle, menuItem, hasIntegrated, navTabs} child = do
   doctypehtml_ do
     head_ do
       title_ $ toHtml pageTitle
@@ -128,7 +129,7 @@ bodyWrapper BWConfig{sessM, currProject, pageTitle, menuItem, hasIntegrated} chi
         [raw|
               window.initialCloseSideMenu = localStorage.getItem('close-sidemenu');
               var currentISOTimeStringVar = ((new Date()).toISOString().split(".")[0])+"+00:00";
-              document.addEventListener('DOMContentLoaded', function(){ 
+              document.addEventListener('DOMContentLoaded', function(){
                 if (window.initialCloseSideMenu == 'true'){
                    document.getElementById('side-nav-menu').classList.add('hidden-side-nav-menu');
                 }
@@ -163,8 +164,8 @@ bodyWrapper BWConfig{sessM, currProject, pageTitle, menuItem, hasIntegrated} chi
         , tabindex_ "-1"
         ]
         do
-          div_ [class_ "relative mx-auto max-h-full", style_ "width: min(90vw, 500px)"]
-            $ div_ [class_ "bg-white rounded-lg drop-shadow-md border-1 w-full"] do
+          div_ [class_ "relative mx-auto max-h-full", style_ "width: min(90vw, 500px)"] $
+            div_ [class_ "bg-white rounded-lg drop-shadow-md border-1 w-full"] do
               div_ [class_ "flex items-start justify-between p-6 space-x-2  border-b rounded-t"] do
                 h3_ [class_ "text-3xl font-bold text-gray-900"] "Only Desktop Browsers are Supported for now!"
               -- Modal body
@@ -186,7 +187,7 @@ bodyWrapper BWConfig{sessM, currProject, pageTitle, menuItem, hasIntegrated} chi
            in section_ [class_ "flex flex-row h-screen overflow-hidden"] do
                 sideNav'
                 section_ [class_ "flex flex-col grow h-screen overflow-y-hidden"] do
-                  navbar currUser
+                  navbar currUser navTabs
                   section_ [class_ "flex-1 overflow-y-hidden h-full grow"] $ child
       externalHeadScripts_
       alerts_
@@ -222,7 +223,7 @@ bodyWrapper BWConfig{sessM, currProject, pageTitle, menuItem, hasIntegrated} chi
       let email = show $ fromMaybe "" $ sessM <&> (.user.getUser.email)
       let name = fromMaybe "" $ sessM <&> (\sess -> sess.user.getUser.firstName <> " " <> sess.user.getUser.lastName)
       script_
-        [text| window.addEventListener("load", (event) => { 
+        [text| window.addEventListener("load", (event) => {
         posthog.people.set_once({email: ${email}, name: "${name}"});
       });|]
       script_
@@ -234,7 +235,7 @@ bodyWrapper BWConfig{sessM, currProject, pageTitle, menuItem, hasIntegrated} chi
                 remove <.log-item-context-menu /> then remove .with-context-menu from <.with-context-menu />
               else
                 remove <.log-item-context-menu /> then remove .with-context-menu from <.with-context-menu /> then
-                get #log-item-context-menu-tmpl.innerHTML then put it after me then add .with-context-menu to me then 
+                get #log-item-context-menu-tmpl.innerHTML then put it after me then add .with-context-menu to me then
                 _hyperscript.processNode(.log-item-context-menu) then htmx.process(next <.log-item-context-menu/>)
               end
             end
@@ -266,8 +267,8 @@ projectsDropDown currProject projects = do
             faSprite_ "key" "regular" "h-5 w-5" >> span_ "API Keys"
           a_ [href_ [text| /p/$pidTxt/integrations|], class_ "p-3 flex gap-3 items-center rounded hover:bg-gray-100"] do
             faSprite_ "arrows-turn-right" "regular" "h-5 w-5" >> span_ "Integrations"
-          when (currProject.paymentPlan == "UsageBased" || currProject.paymentPlan == "GraduatedPricing")
-            $ a_
+          when (currProject.paymentPlan == "UsageBased" || currProject.paymentPlan == "GraduatedPricing") $
+            a_
               [class_ "p-3 flex gap-3 items-center rounded hover:bg-gray-100 cursor-pointer", hxGet_ [text| /p/$pidTxt/manage_subscription |]]
               (faSprite_ "dollar-sign" "regular" "h-5 w-5" >> span_ "Manage billing")
       div_ [class_ "border-t border-gray-100 p-2"] do
@@ -286,9 +287,9 @@ projectsDropDown currProject projects = do
           div_ [class_ "space-y-2 py-4 text-sm", id_ "projectsContainer"] do
             projects & mapM_ \project -> do
               a_ [class_ "flex justify-between p-2 project_item", href_ $ "/p/" <> project.id.toText] do
-                div_ [class_ "space-x-3"]
-                  $ faSprite_ "folders" "regular" "h-5 w-5 inline-block"
-                  >> span_ [class_ "inline-block"] (toHtml project.title)
+                div_ [class_ "space-x-3"] $
+                  faSprite_ "folders" "regular" "h-5 w-5 inline-block"
+                    >> span_ [class_ "inline-block"] (toHtml project.title)
                 when (currProject.id == project.id) $ faSprite_ "circle-check" "regular" "h-6 w-6 text-green-700"
 
 
@@ -363,22 +364,24 @@ sideNav sess project pageTitle menuItem hasIntegrated = aside_ [class_ "shrink-0
         faSprite_ "arrow-right-from-bracket" "regular" "h-5 w-5 shrink-0" >> span_ [class_ "sd-hidden whitespace-nowrap truncate"] "Logout"
 
 
-navbar :: Users.User -> Html ()
-navbar currUser = nav_ [id_ "main-navbar", class_ "sticky z-20 top-0 w-full px-6 py-2 flex flex-row justify-between border border-gray-200"] do
-  a_
-    [ id_ "side_nav_toggler"
-    , class_ "cursor-pointer flex items-center"
-    , [__|
-      on click 
-        if (localStorage.getItem('close-sidemenu') != 'true') then  
-          add .hidden-side-nav-menu to #side-nav-menu then 
+navbar :: Users.User -> Maybe (Html ()) -> Html ()
+navbar currUser tabs =
+  nav_ [id_ "main-navbar", class_ "sticky z-20 top-0 w-full px-6 py-2 flex flex-row justify-between border border-gray-200"] do
+    a_
+      [ id_ "side_nav_toggler"
+      , class_ "cursor-pointer flex items-center"
+      , [__|
+      on click
+        if (localStorage.getItem('close-sidemenu') != 'true') then
+          add .hidden-side-nav-menu to #side-nav-menu then
           call localStorage.setItem('close-sidemenu', 'true')
-        else remove  .hidden-side-nav-menu from #side-nav-menu then 
-          call localStorage.removeItem('close-sidemenu') 
+        else remove  .hidden-side-nav-menu from #side-nav-menu then
+          call localStorage.removeItem('close-sidemenu')
         end
         |]
-    ]
-    $ faSprite_ "bars-sort" "regular" "w-5 h-5 text-gray-500"
+      ]
+      $ faSprite_ "bars-sort" "regular" "w-5 h-5 text-gray-500"
+    whenJust tabs $ \tabs' -> tabs'
 
 
 alerts_ :: Html ()

@@ -197,6 +197,13 @@ collectionCard pid col currTime = do
             small_ [class_ "block"] "Failed"
 
 
+pageTabs :: Text -> Html ()
+pageTabs url = do
+  div_ [class_ "tabs tabs-boxed"] do
+    a_ [href_ $ url <> "/overview", role_ "tab", class_ "tab tab-active"] "Overview"
+    a_ [href_ $ url, role_ "tab", class_ "tab"] "Test editor"
+
+
 collectionDashboard :: Projects.ProjectId -> Testing.CollectionId -> ATAuthCtx (RespHeaders (PageCtx (Html ())))
 collectionDashboard pid cid = do
   (sess, project) <- Sessions.sessionAndProject pid
@@ -204,11 +211,14 @@ collectionDashboard pid cid = do
   tableAsVecE <- dbtToEff $ RequestDumps.selectLogTable pid query Nothing (Nothing, Nothing) [""]
   collectionM <- dbtToEff $ Testing.getCollectionById cid
   let tableAsVecM = hush tableAsVecE
+  let url = "/p/" <> pid.toText <> "/testing/" <> cid.toText
+
   let bwconf =
         (def :: BWConfig)
           { sessM = Just sess.persistentSession
           , currProject = Just project
           , pageTitle = "API Tests (Beta)"
+          , navTabs = Just $ pageTabs url
           }
   case collectionM of
     Just col -> do
