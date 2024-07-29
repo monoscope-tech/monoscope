@@ -200,7 +200,8 @@ collectionCard pid col currTime = do
 collectionDashboard :: Projects.ProjectId -> Testing.CollectionId -> ATAuthCtx (RespHeaders (PageCtx (Html ())))
 collectionDashboard pid cid = do
   (sess, project) <- Sessions.sessionAndProject pid
-  tableAsVecE <- dbtToEff $ RequestDumps.selectLogTable pid "sdk_type == \"TestkitOutgoing\"" Nothing (Nothing, Nothing) [""]
+  let query = "sdk_type == \"TestkitOutgoing\" and request_headers.X-Testkit-Collection-ID == \"" <> cid.toText <> "\""
+  tableAsVecE <- dbtToEff $ RequestDumps.selectLogTable pid query Nothing (Nothing, Nothing) [""]
   collectionM <- dbtToEff $ Testing.getCollectionById cid
   let tableAsVecM = hush tableAsVecE
   let bwconf =
