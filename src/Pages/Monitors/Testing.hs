@@ -201,35 +201,28 @@ collectionDashboard :: Projects.ProjectId -> Testing.CollectionId -> ATAuthCtx (
 collectionDashboard pid cid = do
   (sess, project) <- Sessions.sessionAndProject pid
   tableAsVecE <- dbtToEff $ RequestDumps.selectLogTable pid "sdk_type == \"TestkitOutgoing\"" Nothing (Nothing, Nothing) [""]
-
+  collectionM <- dbtToEff $ Testing.getCollectionById cid
   let tableAsVecM = hush tableAsVecE
-
   let bwconf =
         (def :: BWConfig)
           { sessM = Just sess.persistentSession
           , currProject = Just project
           , pageTitle = "API Tests (Beta)"
           }
-  addRespHeaders $ PageCtx bwconf $ dashboardPage pid cid tableAsVecM
+  case collectionM of
+    Just col -> do
+      let (Testing.CollectionSteps steps) = col.collectionSteps
+          stepsCount = V.length steps
+      addRespHeaders $ PageCtx bwconf $ dashboardPage pid cid stepsCount col.lastRunPassed col.lastRunFailed col.schedule tableAsVecM
+    Nothing -> addRespHeaders $ PageCtx bwconf $ "Something went wrong"
 
 
-dashboardPage :: Projects.ProjectId -> Testing.CollectionId -> Maybe (V.Vector (V.Vector AE.Value), [Text], Int) -> Html ()
-dashboardPage pid cid reqsVecM =
+dashboardPage :: Projects.ProjectId -> Testing.CollectionId -> Int -> Int -> Int -> Text -> Maybe (V.Vector (V.Vector AE.Value), [Text], Int) -> Html ()
+dashboardPage pid cid steps passed failed schedule reqsVecM =
   section_ [class_ "p-8  mx-auto px-16 w-full flex flex-col space-y-12 pb-24  h-full"] do
     h1_ [class_ "text-2xl font-bold"] "API Test Dashboard"
     div_ [class_ "relative p-1 flex gap-10 items-start"] do
-      dStats pid
-      div_ [class_ "w-full py-1 card-round text-sm overflow-hidden"] do
-        div_
-          [ id_ "testChartECP"
-          , class_ "px-2"
-          , style_ "height:180px"
-          , hxGet_ $ "/charts_html?id=reqsChartsEC&show_legend=true&pid=" <> pid.toText
-          , hxTrigger_ "intersect,  htmx:beforeRequest from:#log_explorer_form"
-          , hxVals_ "js:{query_raw:'', layout:'all'}"
-          , hxSwap_ "innerHTML"
-          ]
-          ""
+      dStats pid steps passed failed schedule
     div_ [class_ "card-round p-4 h-auto overflow-y-scroll"] do
       h6_ [class_ "font-medium"] "Test run logs"
       div_ [class_ "overflow-x-hidden"] do
@@ -260,12 +253,17 @@ dashboardPage pid cid reqsVecM =
           _ -> pass
 
 
-dStats :: Projects.ProjectId -> Html ()
-dStats pid = do
-  section_ [class_ "space-y-3 w-96 shrink-0"] do
+dStats :: Projects.ProjectId -> Int -> Int -> Int -> Text -> Html ()
+dStats pid steps passed failed freq = do
+  section_ [class_ "space-y-3 shrink-0 w-1/2"] do
     div_ [class_ "reqResSubSection space-y-5"] do
-      div_ [class_ "grid grid-cols-2 gap-5"] do
-        statBox (Just pid) "Runs" "Total requests in the last 2 weeks" 40 Nothing
-        statBox (Just pid) "Passed" "Total anomalies still active this week vs last week" 38 Nothing
-        statBox (Just pid) "Failed" "Total endpoints now vs last week" 2 Nothing
-        statBox (Just pid) "Frequency" "Total request signatures which are active now vs last week" 5 Nothing
+      div_ [class_ "grid grid-cols-4 gap-5"] do
+        statBox (Just pid) "Steps" "Total number of steps" steps Nothing
+        statBox (Just pid) "Passed" "Total number of steps passed in the last test run" passed Nothing
+        statBox (Just pid) "Failed" "Total number of steps failed in the last test run" failed Nothing
+        div_ [class_ "col-span-1 card-round p-5 flex flex-row content-between justify-between"] do
+          div_ do
+            div_ [class_ "inline-block flex flex-row content-between"] do
+              strong_ [class_ "font-bold text-2xl"] $ toHtml freq
+            span_ $ "Frequency"
+          span_ [class_ "inline-block tooltip", term "data-tip" ("Collection test runs every: " <> freq)] $ faSprite_ "circle-info" "regular" "w-4 h-4"

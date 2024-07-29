@@ -105,8 +105,8 @@ stepDataMethod stepData =
 
 instance AE.ToJSON CollectionStepData where
   toJSON csd =
-    AE.object
-      $ catMaybes
+    AE.object $
+      catMaybes
         [ Just $ "title" .= csd.title
         , fmap ("POST" .=) csd.post -- Change the key to "POST" here for the output JSON
         , fmap ("GET" .=) csd.get
@@ -144,7 +144,7 @@ instance AE.FromJSON CollectionStepData where
 newtype CollectionSteps = CollectionSteps (V.Vector CollectionStepData)
   deriving stock (Show, Generic)
   deriving anyclass (AE.ToJSON, AE.FromJSON, NFData, Default)
-  deriving (FromField, ToField) via Aeson (CollectionSteps)
+  deriving (FromField, ToField) via Aeson CollectionSteps
 
 
 data Collection = Collection
@@ -160,8 +160,8 @@ data Collection = Collection
   , isScheduled :: Bool
   , collectionSteps :: CollectionSteps
   , lastRunResponse :: Maybe AE.Value
-  , lastRunFailed :: Int
   , lastRunPassed :: Int
+  , lastRunFailed :: Int
   }
   deriving stock (Show, Generic)
   deriving anyclass (FromRow, ToRow, AE.ToJSON, AE.FromJSON, NFData, Default)
