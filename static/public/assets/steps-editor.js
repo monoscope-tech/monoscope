@@ -305,21 +305,18 @@ export class StepsEditor extends LitElement {
         <input class="input input-bordered input-xs w-1/3" list="${type}DataList" placeholder="Key" .value="${key}" @change=${(e) => this.updateKey(e, idx, type, aidx)} />
         <div class="shrink w-full flex flex-col">
           <input
-            list="assertAutocomplete"
+            list="${type === 'asserts' ? 'assertAutocomplete' : ''}"
             class="input input-bordered ${error ? 'input-error' : ''} input-xs w-full"
             placeholder="Value"
             .value="${value}"
             @input=${(e) => this.updateValue(e, idx, type, aidx, key)}
           />
           <span class="text-xs text-red-500">${error}</span>
-          ${type === 'asserts' && (
-            <datalist id="assertAutocomplete">
-              $
-              {matches.map((fieldPath) => {
-                return html`<option class="w-full  text-left text-xs px-3 py-1 hover:bg-gray-200">${fieldPath}</option>`
-              })}
-            </datalist>
-          )}
+          <datalist id="assertAutocomplete">
+            ${matches.map((fieldPath) => {
+              return html`<option class="w-full  text-left text-xs px-3 py-1 hover:bg-gray-200">${fieldPath}</option>`
+            })}
+          </datalist>
         </div>
         <a class="cursor-pointer text-slate-600" @click=${(e) => this.deleteKey(e, idx, type, aidx, key)}>
           <svg class="inline-block icon w-3 h-3 "><use href="/assets/svgs/fa-sprites/solid.svg#xmark"></use></svg>
