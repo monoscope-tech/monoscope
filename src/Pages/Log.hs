@@ -2,6 +2,8 @@ module Pages.Log (
   apiLogH,
   LogsGet (..),
   ApiLogsPageData (..),
+  resultTable_,
+  curateCols,
 )
 where
 

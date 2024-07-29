@@ -16,7 +16,7 @@
   }
 
   .card-round {
-    @apply bg-white border-[1px] border-slate-200 rounded-xl shadow  shadow-slate-200; /*overflow-hidden;*/
+    @apply bg-white border border-slate-200 rounded-xl shadow-sm  shadow-slate-200; /*overflow-hidden;*/
   }
 }
 
@@ -126,6 +126,14 @@
 .htmx-request.htmx-indicator ~ span {
   display: none;
 }
+
+.htmx-request.steps-indicator > .empty-state {
+  display: none;
+}
+.htmx-request.steps-indicator > .loading-indicator {
+  display: block;
+}
+
 @font-face {
   font-family: "Bakemono";
   src: url("/assets/deps/bakemono/Bakemono-Variable.woff2")

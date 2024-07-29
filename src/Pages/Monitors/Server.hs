@@ -21,4 +21,5 @@ server pid =
     , collectionGet = TestCollectionEditor.collectionGetH pid
     , collectionStepsUpdate = TestCollectionEditor.collectionStepsUpdateH pid
     , collectionRunTests = TestCollectionEditor.collectionRunTestsH pid
+    , collectionDashboardGet = Testing.collectionDashboard pid
     }

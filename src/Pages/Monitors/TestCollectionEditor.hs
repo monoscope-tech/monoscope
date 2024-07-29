@@ -12,9 +12,12 @@ module Pages.Monitors.TestCollectionEditor (
 
 import Data.Aeson qualified as AE
 import Data.Aeson.Encode.Pretty (encodePretty)
+import Data.ByteString qualified as Data.ByteString.Lazy.Internal
 import Data.Default (def)
 import Data.Map qualified as M
 import Data.Text qualified as T
+import Data.Time (getCurrentTime)
+import Data.UUID.V4 qualified as UUIDV4
 import Data.Vector qualified as V
 import Deriving.Aeson qualified as DAE
 import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
@@ -24,6 +27,7 @@ import Lucid.Aria qualified as Aria
 import Lucid.Base (TermRaw (termRaw))
 import Lucid.Htmx (
   hxExt_,
+  hxIndicator_,
   hxParams_,
   hxPatch_,
   hxPost_,
@@ -35,11 +39,14 @@ import Models.Projects.Projects qualified as Projects
 import Models.Tests.TestToDump qualified as TestToDump
 import Models.Tests.Testing qualified as Testing
 import Models.Users.Sessions qualified as Sessions
+import NeatInterpolation (text)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
+import Pages.LogExplorer.LogItem (jsonValueToHtmlTree)
 import Pkg.Components.Modals qualified as Components
 import PyF (fmt)
 import Relude hiding (ask)
 import System.Types (ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders, addSuccessToast)
+import Text.ParserCombinators.ReadPrec (step)
 import Utils (faSprite_)
 
 
@@ -52,53 +59,76 @@ data CollectionStepUpdateForm = CollectionStepUpdateForm
   , scheduleNumberUnit :: Maybe Text
   }
   deriving stock (Show, Generic)
-  deriving (AE.FromJSON, AE.ToJSON) via (DAE.CustomJSON) '[DAE.OmitNothingFields] CollectionStepUpdateForm
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields] CollectionStepUpdateForm
 
 
-collectionStepsUpdateH :: Projects.ProjectId -> Testing.CollectionId -> CollectionStepUpdateForm -> ATAuthCtx (RespHeaders (CollectionMut))
+collectionStepsUpdateH :: Projects.ProjectId -> Testing.CollectionId -> CollectionStepUpdateForm -> ATAuthCtx (RespHeaders CollectionMut)
 collectionStepsUpdateH pid colId colF = do
   let isScheduled = colF.scheduled == Just "on"
-  _ <- dbtToEff $ Testing.updateCollection pid colId (fromMaybe "" colF.title) (fromMaybe "" colF.description) isScheduled ((fromMaybe "" colF.scheduleNumber) <> " " <> fromMaybe "" colF.scheduleNumberUnit) colF.stepsData
+  _ <- dbtToEff $ Testing.updateCollection pid colId (fromMaybe "" colF.title) (fromMaybe "" colF.description) isScheduled (fromMaybe "" colF.scheduleNumber <> " " <> fromMaybe "" colF.scheduleNumberUnit) colF.stepsData
   addSuccessToast "Collection's steps updated successfully" Nothing
-  addRespHeaders $ CollectionMut
+  addRespHeaders CollectionMut
 
 
-collectionRunTestsH :: Projects.ProjectId -> Testing.CollectionId -> Maybe Int -> CollectionStepUpdateForm -> ATAuthCtx (RespHeaders (CollectionRunTest))
+collectionRunTestsH :: Projects.ProjectId -> Testing.CollectionId -> Maybe Int -> CollectionStepUpdateForm -> ATAuthCtx (RespHeaders CollectionRunTest)
 collectionRunTestsH pid colId runIdxM stepsForm = do
-  stepResultsE <- TestToDump.runTestAndLog pid stepsForm.stepsData
+  stepResultsE <- TestToDump.runTestAndLog pid colId stepsForm.stepsData
   case stepResultsE of
     Right stepResults -> do
       let tkRespJson = decodeUtf8 @Text $ AE.encode stepResults
+          (passed, failed) = Testing.getCollectionRunStatus stepResults
+          response = AE.toJSON stepResults
+      _ <- dbtToEff $ Testing.updateCollectionLastRun colId (Just response) passed failed
       addSuccessToast "Collection completed execution" Nothing
       addRespHeaders $ CollectionRunTest stepResults tkRespJson
     Left e -> do
       Log.logAttention "Collection failed execution" e
       addErrorToast "Collection failed execution" (Just $ show e)
-      addRespHeaders $ RunTestError
+      addRespHeaders RunTestError
 
 
-collectionGetH :: Projects.ProjectId -> Testing.CollectionId -> ATAuthCtx (RespHeaders (CollectionGet))
+castToStepResult :: AE.Value -> Maybe (V.Vector Testing.StepResult)
+castToStepResult v = case AE.eitherDecodeStrictText (decodeUtf8 $ AE.encode v) of
+  Right v' -> Just v'
+  Left e -> Nothing
+
+
+pageTabs :: Text -> Html ()
+pageTabs url = do
+  div_ [class_ "tabs tabs-boxed"] do
+    a_ [href_ $ url <> "/overview", role_ "tab", class_ "tab"] "Overview"
+    a_ [href_ $ url, role_ "tab", class_ "tab tab-active"] "Test editor"
+
+
+collectionGetH :: Projects.ProjectId -> Testing.CollectionId -> ATAuthCtx (RespHeaders CollectionGet)
 collectionGetH pid colId = do
   (sess, project) <- Sessions.sessionAndProject pid
   collectionM <- dbtToEff $ Testing.getCollectionById colId
+  let url = "/p/" <> pid.toText <> "/testing/" <> colId.toText
   let bwconf =
         (def :: BWConfig)
           { sessM = Just sess.persistentSession
           , currProject = Just project
           , pageTitle = "Testing"
+          , navTabs = Just $ pageTabs url
           }
   case collectionM of
     Nothing -> addRespHeaders $ CollectionNotFound $ PageCtx bwconf ()
-    Just col -> addRespHeaders $ CollectionGet $ PageCtx bwconf (pid, col)
+    Just col -> do
+      let respJs = decodeUtf8 $ case col.lastRunResponse of
+            Just res -> AE.encode res
+            Nothing -> AE.encode $ AE.Array []
+      let runRes = col.lastRunResponse >>= castToStepResult
+      addRespHeaders $ CollectionGet $ PageCtx bwconf (pid, col, runRes, respJs)
 
 
 data CollectionGet
-  = CollectionGet (PageCtx (Projects.ProjectId, Testing.Collection))
+  = CollectionGet (PageCtx (Projects.ProjectId, Testing.Collection, Maybe (V.Vector Testing.StepResult), String))
   | CollectionNotFound (PageCtx ())
 
 
 instance ToHtml CollectionGet where
-  toHtml (CollectionGet (PageCtx bwconf (pid, col))) = toHtml $ PageCtx bwconf $ collectionPage pid col
+  toHtml (CollectionGet (PageCtx bwconf (pid, col, cl_rn, respJsn))) = toHtml $ PageCtx bwconf $ collectionPage pid col cl_rn respJsn
   toHtml (CollectionNotFound (PageCtx bwconf ())) = toHtml $ PageCtx bwconf $ collectionNotFoundPage
   toHtmlRaw = toHtml
 
@@ -118,7 +148,11 @@ data CollectionRunTest
 
 instance ToHtml CollectionRunTest where
   toHtml (CollectionRunTest results tkjson) = toHtml $ do
-    script_ [fmt|window.collectionResults = {tkjson}|]
+    script_
+      [fmt|
+        window.collectionResults = {tkjson};
+        window.updateCollectionResults({tkjson});
+    |]
     V.iforM_ results (\i r -> collectionStepResult_ i r)
   toHtml RunTestError = ""
   toHtmlRaw = toHtml
@@ -156,10 +190,18 @@ testSettingsModalContent_ isUpdate col = div_ [class_ "space-y-5 w-96"] do
   div_ $ button_ [class_ "btn btn-bordered btn-primary", type_ "submit"] $ if isUpdate then "Update" else "Create Test"
 
 
-collectionPage :: Projects.ProjectId -> Testing.Collection -> Html ()
-collectionPage pid col = do
+collectionPage :: Projects.ProjectId -> Testing.Collection -> Maybe (V.Vector Testing.StepResult) -> String -> Html ()
+collectionPage pid col col_rn respJson = do
   let collectionStepsJSON = AE.encode col.collectionSteps
-  script_ [] [fmt|window.collectionSteps = {collectionStepsJSON};|]
+  script_
+    []
+    [fmt|
+  window.collectionSteps = {collectionStepsJSON};
+  window.collectionResults = {respJson};
+  document.addEventListener('DOMContentLoaded', function(){{
+       window.updateCollectionResults({respJson});
+   }})
+  |]
   editorExtraElements
   section_ [class_ "h-full overflow-y-hidden"] do
     form_
@@ -182,16 +224,20 @@ collectionPage pid col = do
               span_ [class_ "badge badge-success"] "Active"
               div_ [class_ "inline-block"] $ Components.modal_ "test-settings-modal" (span_ [class_ "p-3"] $ Utils.faSprite_ "sliders" "regular" "h-4") $ testSettingsModalContent_ True col
           div_ [class_ "shrink p-4 flex justify-between items-center"] do
-            h4_ [class_ "font-semibold text-2xl font-medium "] "Steps"
+            div_ [class_ "flex items-center space-x-4"] do
+              h4_ [class_ "font-semibold text-2xl font-medium "] "Steps"
+              a_ [href_ "https://apitoolkit.io/docs/dashboard/dashboard-pages/api-tests/", target_ "_blank", class_ "text-sm flex items-center gap-1 text-blue-500"] do
+                faSprite_ "link-simple" "regular" "w-4 h-4" >> "Docs"
             div_ [class_ "space-x-4 flex items-center"] do
               button_
-                [ class_ "btn btn-sm btn-success "
+                [ class_ "btn btn-sm btn-success"
                 , hxPatch_ ""
                 , hxParams_ "stepsData"
                 , hxExt_ "json-enc"
                 , hxVals_ "js:{stepsData: document.getElementById('stepsEditor').collectionSteps}"
                 , hxTarget_ "#step-results-parent"
                 , hxSwap_ "innerHTML"
+                , hxIndicator_ "#step-results-indicator"
                 ]
                 (span_ "Run all" >> faSprite_ "play" "solid" "w-3 h-3")
               button_ [class_ "btn btn-sm btn-warning ", type_ "submit"] (span_ "Save" >> faSprite_ "floppy-disk" "solid" "w-3 h-3")
@@ -200,37 +246,129 @@ collectionPage pid col = do
           div_ [class_ "h-full flex-1 overflow-y-hidden"] $ termRaw "steps-editor" [id_ "stepsEditor"] ""
 
         div_ [class_ "col-span-1 h-full border-r border-gray-200"] do
-          div_ [class_ "max-h-full overflow-y-scroll space-y-4", id_ "step-results-parent"] ""
-          div_ [class_ "flex flex-col justify-center items-center h-full text-slate-400 text-xl space-y-4"] do
-            div_ [] $ Utils.faSprite_ "objects-column" "solid" "w-16 h-16"
-            p_ [class_ "text-slate-500"] "Run a test to view the results here. "
+          div_ [class_ "max-h-full h-full overflow-y-auto space-y-4 relative", id_ "step-results-parent"] do
+            case col_rn of
+              Just res -> do
+                V.iforM_ res collectionStepResult_
+              Nothing -> do
+                div_ [id_ "step-results-indicator", class_ "steps-indicator flex flex-col justify-center items-center h-full text-slate-400 text-xl space-y-4"] do
+                  div_ [class_ "w-full flex flex-col gap-2 items-center empty-state"] do
+                    Utils.faSprite_ "objects-column" "solid" "w-16 h-16"
+                    p_ [class_ "text-slate-500"] "Run tests to view the results here."
+                  div_ [class_ "hidden loading-indicator flex justify-center"] do
+                    span_ [class_ "loading loading-dots loading-lg"] ""
+        jsonTreeAuxillaryCode
+
     script_ [type_ "module", src_ "/assets/steps-editor.js"] ("" :: Text)
+    script_
+      [text|
+        function addToAssertions(event, assertion, operation) {
+            const parent = event.target.closest(".tab-content")
+            const step = Number(parent.getAttribute('data-step'));
+            const target = event.target.parentNode.parentNode.parentNode
+            const path = target.getAttribute('data-field-path');
+            const value = target.getAttribute('data-field-value');
+            let expression = "$.resp.json." + path
+            if(operation) {
+              expression +=  ' ' + operation + ' ' + value;
+              }
+            window.updateStepAssertions(assertion, expression, step);
+        }
+    |]
+    script_
+      [type_ "text/hyperscript"]
+      [text|
+          behavior LogItemMenuable
+            on click
+              if I match <.with-context-menu/> then
+                remove <.log-item-context-menu /> then remove .with-context-menu from <.with-context-menu />
+              else
+                remove <.log-item-context-menu /> then remove .with-context-menu from <.with-context-menu /> then
+                get #log-item-context-menu-tmpl.innerHTML then put it after me then add .with-context-menu to me then
+                _hyperscript.processNode(.log-item-context-menu) then htmx.process(next <.log-item-context-menu/>)
+              end
+            end
+          end
+
+        |]
 
 
 collectionStepResult_ :: Int -> Testing.StepResult -> Html ()
 collectionStepResult_ idx stepResult = section_ [class_ "p-1"] do
+  when (idx == 0) $ div_ [id_ "step-results-indicator", class_ "absolute top-1/2 z-10 left-1/2 -translate-x-1/2 rounded-sm -translate-y-1/2 steps-indicator text-slate-400"] do
+    div_ [class_ "hidden loading-indicator flex justify-center bg-white rounded-sm shadow-sm p-4"] do
+      span_ [class_ "loading loading-dots loading-lg"] ""
   div_ [class_ "p-2 bg-base-200 font-bold"] do
-    toHtml $ (show $ idx + 1) <> " " <> fromMaybe "" stepResult.stepName
+    toHtml $ show (idx + 1) <> " " <> fromMaybe "" stepResult.stepName
   div_ [role_ "tablist", class_ "tabs tabs-lifted"] do
     input_ [type_ "radio", name_ $ "step-result-tabs-" <> show idx, role_ "tab", class_ "tab", Aria.label_ "Response Log", checked_]
-    div_ [role_ "tabpanel", class_ "tab-content bg-base-100 bg-base-100 border-base-300 rounded-box p-6"]
-      $ toHtmlRaw
-      $ textToHTML stepResult.stepLog
+    div_ [role_ "tabpanel", class_ "tab-content bg-base-100 bg-base-100 border-base-300 rounded-box p-6"] $
+      toHtmlRaw $
+        textToHTML stepResult.stepLog
 
     input_ [type_ "radio", name_ $ "step-result-tabs-" <> show idx, role_ "tab", class_ "tab", Aria.label_ "Response Headers"]
-    div_ [role_ "tabpanel", class_ "tab-content bg-base-100 bg-base-100 border-base-300 rounded-box p-6 "]
-      $ table_ [class_ "table table-xs"] do
+    div_ [role_ "tabpanel", class_ "tab-content bg-base-100 bg-base-100 border-base-300 rounded-box p-6 "] $
+      table_ [class_ "table table-xs"] do
         thead_ [] $ tr_ [] $ th_ [] "Name" >> th_ [] "Value"
         tbody_ $ forM_ (M.toList stepResult.request.resp.headers) $ \(k, v) -> tr_ [] do
           td_ [] $ toHtml k
           td_ [] $ toHtml $ T.intercalate "," v
 
     input_ [type_ "radio", name_ $ "step-result-tabs-" <> show idx, role_ "tab", class_ "tab", Aria.label_ "Response Body"]
-    div_ [role_ "tabpanel", class_ "tab-content bg-base-100 bg-base-100 border-base-300 rounded-box p-6"] do
-      pre_ [class_ "flex text-sm leading-snug w-full max-h-[50rem] overflow-y-scroll"]
-        $ code_ [class_ "h-full hljs language-json atom-one-dark w-full rounded"]
-        $ toHtmlRaw
-        $ encodePretty stepResult.request.resp.json
+    div_ [role_ "tabpanel", class_ "tab-content bg-base-100 bg-base-100 border-base-300 rounded-box p-6", term "data-step" (show idx)] do
+      jsonValueToHtmlTree stepResult.request.resp.json
+
+
+jsonTreeAuxillaryCode :: Html ()
+jsonTreeAuxillaryCode = do
+  template_ [id_ "log-item-context-menu-tmpl"] do
+    div_ [id_ "log-item-context-menu", class_ "log-item-context-menu text-sm origin-top-right absolute left-0 mt-2 rounded-md shadow-md shadow-slate-300 bg-white ring-1 ring-black ring-opacity-5 divide-y divide-gray-100 focus:outline-none z-10", role_ "menu", tabindex_ "-1"] do
+      div_ [class_ "py-1 w-max", role_ "none"] do
+        button_
+          [ class_ "cursor-pointer w-full text-left text-slate-700 block px-4 py-1 text-sm hover:bg-gray-100 hover:text-slate-900"
+          , role_ "menuitem"
+          , tabindex_ "-1"
+          , id_ "menu-item-1"
+          , onclick_ "addToAssertions(event, 'ok', '==')"
+          , type_ "button"
+          ]
+          "Add an equals to assertion"
+        button_
+          [ class_ "cursor-pointer w-full text-left text-slate-700 block px-4 py-1 text-sm hover:bg-gray-100 hover:text-slate-900"
+          , role_ "menuitem"
+          , tabindex_ "-1"
+          , id_ "menu-item-2"
+          , onclick_ "addToAssertions(event, 'ok', '!=')"
+          , type_ "button"
+          ]
+          "Add a not equals assertion"
+        button_
+          [ class_ "cursor-pointer w-full text-left text-slate-700 block px-4 py-1 text-sm hover:bg-gray-100 hover:text-slate-900"
+          , role_ "menuitem"
+          , tabindex_ "-1"
+          , onclick_ "addToAssertions(event, 'ok', '>')"
+          , type_ "button"
+          ]
+          "Add a greater than assertions"
+        button_
+          [ class_ "cursor-pointer w-full text-left text-slate-700 block px-4 py-1 text-sm hover:bg-gray-100 hover:text-slate-900"
+          , role_ "menuitem"
+          , tabindex_ "-1"
+          , id_ "menu-item-4"
+          , onclick_ "addToAssertions(event, 'string')"
+          , type_ "button"
+          ]
+          "Add an is string assertions"
+
+        button_
+          [ class_ "cursor-pointer w-full text-left text-slate-700 block px-4 py-1 text-sm hover:bg-gray-100 hover:text-slate-900"
+          , role_ "menuitem"
+          , tabindex_ "-1"
+          , id_ "menu-item-4"
+          , onclick_ "addToAssertions(event, 'number')"
+          , type_ "button"
+          ]
+          "Add an is number assertions"
 
 
 textToHTML :: Text -> Text

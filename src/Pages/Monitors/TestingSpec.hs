@@ -77,7 +77,7 @@ spec = aroundAll withTestResources do
       (PageCtx _ (ItemsList.ItemsPage _ collections)) <-
         toServantResponse trATCtx trSessAndHeader trLogger $ Testing.testingGetH testPid (Just "Inactive")
       length collections `shouldBe` 1
-      let col = V.head $ (\(Testing.CollectionListItemVM _ co) -> co) <$> collections
+      let col = V.head $ (\(Testing.CollectionListItemVM _ co _) -> co) <$> collections
       col.title `shouldBe` "Test Collection"
       col.stepsCount `shouldBe` 1
       col.lastRun `shouldBe` Nothing
@@ -90,7 +90,7 @@ spec = aroundAll withTestResources do
       (PageCtx _ (ItemsList.ItemsPage _ collections)) <-
         toServantResponse trATCtx trSessAndHeader trLogger $ Testing.testingGetH testPid Nothing
       length collections `shouldBe` 1
-      let col = V.head $ (\(Testing.CollectionListItemVM _ co) -> co) <$> collections
+      let col = V.head $ (\(Testing.CollectionListItemVM _ co _) -> co) <$> collections
       col.title `shouldBe` "Test Collection"
       col.stepsCount `shouldBe` 1
       col.lastRun `shouldBe` Nothing

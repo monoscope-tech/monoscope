@@ -2,6 +2,7 @@ module Models.Tests.Testing (
   Collection (..),
   StepResult (..),
   StepRequest (..),
+  AssertResult (..),
   StepResponse (..),
   CollectionId (..),
   CollectionListItem (..),
@@ -12,9 +13,11 @@ module Models.Tests.Testing (
   updateCollection,
   addCollection,
   getCollections,
+  updateCollectionLastRun,
   getCollectionById,
   getCollectionsId,
   TabStatus (..),
+  getCollectionRunStatus,
 )
 where
 
@@ -28,15 +31,17 @@ import Data.Vector qualified as V
 import Database.PostgreSQL.Entity (insert)
 import Database.PostgreSQL.Entity.DBT (QueryNature (..), execute, query, queryOne)
 import Database.PostgreSQL.Entity.Types (CamelToSnake, Entity, FieldModifiers, GenericEntity, PrimaryKey, Schema, TableName)
-import Database.PostgreSQL.Simple hiding (execute, executeMany, query)
+import Database.PostgreSQL.Simple hiding (execute, executeMany, query, query_)
 import Database.PostgreSQL.Simple.FromField (FromField)
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.ToField (ToField)
-import Database.PostgreSQL.Transact (DBT)
+import Database.PostgreSQL.Simple.Types (Query (Query))
+import Database.PostgreSQL.Transact (DBT, query_)
 import Deriving.Aeson qualified as DAE
 import GHC.Records (HasField (getField))
 import Models.Projects.Projects qualified as Projects
+import NeatInterpolation
 import Relude hiding (get, put)
 import Web.HttpApiData (FromHttpApiData)
 
@@ -100,8 +105,8 @@ stepDataMethod stepData =
 
 instance AE.ToJSON CollectionStepData where
   toJSON csd =
-    AE.object
-      $ catMaybes
+    AE.object $
+      catMaybes
         [ Just $ "title" .= csd.title
         , fmap ("POST" .=) csd.post -- Change the key to "POST" here for the output JSON
         , fmap ("GET" .=) csd.get
@@ -139,7 +144,7 @@ instance AE.FromJSON CollectionStepData where
 newtype CollectionSteps = CollectionSteps (V.Vector CollectionStepData)
   deriving stock (Show, Generic)
   deriving anyclass (AE.ToJSON, AE.FromJSON, NFData, Default)
-  deriving (FromField, ToField) via Aeson (CollectionSteps)
+  deriving (FromField, ToField) via Aeson CollectionSteps
 
 
 data Collection = Collection
@@ -154,6 +159,9 @@ data Collection = Collection
   , schedule :: Text
   , isScheduled :: Bool
   , collectionSteps :: CollectionSteps
+  , lastRunResponse :: Maybe AE.Value
+  , lastRunPassed :: Int
+  , lastRunFailed :: Int
   }
   deriving stock (Show, Generic)
   deriving anyclass (FromRow, ToRow, AE.ToJSON, AE.FromJSON, NFData, Default)
@@ -173,6 +181,8 @@ data CollectionListItem = CollectionListItem
   , stepsCount :: Int
   , schedule :: Text
   , isScheduled :: Bool
+  , passed :: Int
+  , failed :: Int
   }
   deriving stock (Show, Generic)
   deriving anyclass (FromRow, ToRow, NFData)
@@ -199,10 +209,27 @@ data StepRequest = StepRequest
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] StepRequest
 
 
-data AssertResult = AssertResult
-  {}
+newtype AssertError = AssertError {advice :: Maybe Text}
   deriving stock (Show, Generic)
-  deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] AssertResult
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] AssertError
+data AssertResult = AssertResult
+  { ok :: Maybe Bool
+  , err :: Maybe AssertError -- Assuming AssertError is a String for simplicity
+  }
+  deriving stock (Show, Generic)
+  deriving (AE.ToJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] AssertResult
+
+
+-- Custom FromJSON instance
+instance AE.FromJSON AssertResult where
+  parseJSON = AE.withObject "AssertResult" $ \obj -> do
+    okValue <- obj AE..:? "Ok"
+    errValue <- obj AE..:? "Err"
+    return
+      AssertResult
+        { ok = okValue
+        , err = errValue
+        }
 
 
 data StepResult = StepResult
@@ -219,8 +246,24 @@ data StepResult = StepResult
 data TabStatus = Active | Inactive
 
 
+getCollectionRunStatus :: V.Vector StepResult -> (Int, Int)
+getCollectionRunStatus steps = (passed, failed)
+  where
+    passed = V.length $ V.filter (\x -> hasPassed x.assertResults) steps
+    failed = V.length $ V.filter (\x -> not $ hasPassed x.assertResults) steps
+    hasPassed :: [AssertResult] -> Bool
+    hasPassed res = length res == length (filter (\x -> x.ok == Just True) res)
+
+
 addCollection :: Collection -> DBT IO ()
 addCollection = insert @Collection
+
+
+updateCollectionLastRun :: CollectionId -> Maybe AE.Value -> Int -> Int -> DBT IO Int64
+updateCollectionLastRun id' lastRunResponse' passed failed = execute Update q params
+  where
+    params = (lastRunResponse', passed, failed, id')
+    q = [sql| UPDATE tests.collections SET last_run=NOW(), last_run_response=?, last_run_passed=?, last_run_failed=? WHERE id=? |]
 
 
 updateCollection :: Projects.ProjectId -> CollectionId -> Text -> Text -> Bool -> Text -> V.Vector CollectionStepData -> DBT IO Int64
@@ -234,16 +277,15 @@ getCollectionById :: CollectionId -> DBT IO (Maybe Collection)
 getCollectionById id' = queryOne Select q (Only id')
   where
     q =
-      [sql| SELECT id, created_at, updated_at, last_run, project_id, title, description, config, 
+      [sql| SELECT id, created_at, updated_at, last_run, project_id, title, description, config,
                   CASE
                       WHEN EXTRACT(DAY FROM schedule) > 0 THEN CONCAT(EXTRACT(DAY FROM schedule)::TEXT, ' days')
                       WHEN EXTRACT(HOUR FROM schedule) > 0 THEN CONCAT(EXTRACT(HOUR FROM schedule)::TEXT, ' hours')
                       ELSE CONCAT(EXTRACT(MINUTE FROM schedule)::TEXT, ' minutes')
-                  END as schedule, is_scheduled, collection_steps 
+                  END as schedule, is_scheduled, collection_steps, last_run_response, last_run_passed, last_run_failed
                   FROM tests.collections t WHERE id=?|]
 
 
--- TODO: delete or remove the collect_steps join
 getCollections :: Projects.ProjectId -> TabStatus -> DBT IO (V.Vector CollectionListItem)
 getCollections pid tabStatus = query Select q (pid, statusValue)
   where
@@ -253,18 +295,19 @@ getCollections pid tabStatus = query Select q (pid, statusValue)
 
     q =
       [sql|
-      SELECT t.id, t.created_at, t.updated_at, t.project_id, t.last_run, 
-             t.title, t.description, jsonb_array_length(t.collection_steps), 
-             CASE
-               WHEN EXTRACT(DAY FROM t.schedule) > 0 THEN CONCAT(EXTRACT(DAY FROM t.schedule)::TEXT, ' days')
-               WHEN EXTRACT(HOUR FROM t.schedule) > 0 THEN CONCAT(EXTRACT(HOUR FROM t.schedule)::TEXT, ' hours')
-               ELSE CONCAT(EXTRACT(MINUTE FROM t.schedule)::TEXT, ' minutes')
-             END as schedule,
-             t.is_scheduled
-      FROM tests.collections t
-      WHERE t.project_id = ? AND t.is_scheduled = ?
-      GROUP BY t.id
-      ORDER BY t.updated_at DESC;
+           SELECT t.id, t.created_at, t.updated_at, t.project_id, t.last_run,
+                  t.title, t.description, jsonb_array_length(t.collection_steps),
+                  CASE
+                    WHEN EXTRACT(DAY FROM t.schedule) > 0 THEN CONCAT(EXTRACT(DAY FROM t.schedule)::TEXT, ' days')
+                    WHEN EXTRACT(HOUR FROM t.schedule) > 0 THEN CONCAT(EXTRACT(HOUR FROM t.schedule)::TEXT, ' hours')
+                    ELSE CONCAT(EXTRACT(MINUTE FROM t.schedule)::TEXT, ' minutes')
+                  END as schedule,
+                  t.is_scheduled,
+                  t.last_run_passed as passed,
+                  t.last_run_failed as failed
+           FROM tests.collections t
+           WHERE t.project_id = ? AND t.is_scheduled = ?
+           ORDER BY t.updated_at DESC;
     |]
 
 
@@ -273,3 +316,14 @@ getCollectionsId = query Select q ()
   where
     q =
       [sql|SELECT id FROM tests.collections where deleted_at IS NULL AND schedule IS NOT NULL;|]
+
+
+getCollectionLogs :: CollectionId -> DBT IO (V.Vector (Only AE.Value))
+getCollectionLogs cid = V.fromList <$> query_ (Query $ encodeUtf8 q)
+  where
+    q =
+      [text|
+
+    S
+
+    |]
