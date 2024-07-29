@@ -27,8 +27,8 @@ import System.Config qualified as Config
 
 methodPath :: Testing.CollectionStepData -> Maybe (Text, Text)
 methodPath stepData =
-  listToMaybe
-    $ catMaybes
+  listToMaybe $
+    catMaybes
       [ ("POST",) <$> stepData.post
       , ("GET",) <$> stepData.get
       , ("PUT",) <$> stepData.put
@@ -69,15 +69,16 @@ testRunToRequestMsg (Projects.ProjectId pid) currentTime parent_id sr = do
     }
 
 
-callRunTestkit :: String -> IO String
-callRunTestkit hsString = withCString hsString $ \cstr -> do
-  resultCString <- run_testkit cstr
-  peekCString resultCString
+callRunTestkit :: String -> String -> IO String
+callRunTestkit hsString hsColid = withCString hsString $ \cstr -> do
+  withCString hsColid $ \cstr2 -> do
+    resultCString <- run_testkit cstr cstr2
+    peekCString resultCString
 
 
-runCollectionTest :: IOE :> es => V.Vector Testing.CollectionStepData -> Eff es (Either Text (V.Vector Testing.StepResult))
-runCollectionTest collectionSteps = do
-  tkResp <- liftIO $ callRunTestkit $ decodeUtf8 $ AE.encode collectionSteps
+runCollectionTest :: IOE :> es => V.Vector Testing.CollectionStepData -> Testing.CollectionId -> Eff es (Either Text (V.Vector Testing.StepResult))
+runCollectionTest collectionSteps cold_id = do
+  tkResp <- liftIO $ callRunTestkit (decodeUtf8 $ AE.encode collectionSteps) (toString cold_id.toText)
   pure $ mapLeft (\e -> fromString e <> toText tkResp) $ AE.eitherDecodeStrictText (toText tkResp)
 
 
@@ -88,7 +89,7 @@ runTestAndLog
   -> V.Vector Testing.CollectionStepData
   -> Eff es (Either Text (V.Vector Testing.StepResult))
 runTestAndLog pid colId collectionSteps = do
-  stepResultsE <- runCollectionTest collectionSteps
+  stepResultsE <- runCollectionTest collectionSteps colId
   case stepResultsE of
     Left e -> do
       Log.logAttention "unable to run test collection" (AE.object ["error" AE..= e, "steps" AE..= collectionSteps])
