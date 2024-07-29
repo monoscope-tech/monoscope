@@ -37,7 +37,6 @@ import Lucid.Htmx (
  )
 import Models.Projects.Projects qualified as Projects
 import Models.Tests.TestToDump qualified as TestToDump
-import Models.Tests.Testing (CollectionRun (failed))
 import Models.Tests.Testing qualified as Testing
 import Models.Users.Sessions qualified as Sessions
 import NeatInterpolation (text)
@@ -85,24 +84,9 @@ collectionRunTestsH pid colId runIdxM stepsForm = do
   stepResultsE <- TestToDump.runTestAndLog pid stepsForm.stepsData
   case stepResultsE of
     Right stepResults -> do
-      let (passed, failed, status) = getCollectionRunStatus stepResults
       let tkRespJson = decodeUtf8 @Text $ AE.encode stepResults
-      currentTime <- liftIO $ getCurrentTime
-      runId <- Testing.CollectionRunId <$> liftIO UUIDV4.nextRandom
-      let colRun =
-            Testing.CollectionRun
-              { id = runId
-              , createdAt = currentTime
-              , updatedAt = currentTime
-              , collectionId = colId
-              , projectId = pid
-              , failed = failed
-              , passed = passed
-              , status = status
-              , response = AE.toJSON stepResults
-              }
-
-      _ <- dbtToEff $ Testing.addCollectionRun colRun
+          response = AE.toJSON stepResults
+      _ <- dbtToEff $ Testing.updateCollectionLastRun colId (Just response)
       addSuccessToast "Collection completed execution" Nothing
       addRespHeaders $ CollectionRunTest stepResults tkRespJson
     Left e -> do
@@ -121,7 +105,6 @@ collectionGetH :: Projects.ProjectId -> Testing.CollectionId -> ATAuthCtx (RespH
 collectionGetH pid colId = do
   (sess, project) <- Sessions.sessionAndProject pid
   collectionM <- dbtToEff $ Testing.getCollectionById colId
-  collectionRunM <- dbtToEff $ Testing.getCollectionRunByCollectionId colId
   let bwconf =
         (def :: BWConfig)
           { sessM = Just sess.persistentSession
@@ -131,10 +114,10 @@ collectionGetH pid colId = do
   case collectionM of
     Nothing -> addRespHeaders $ CollectionNotFound $ PageCtx bwconf ()
     Just col -> do
-      let respJs = decodeUtf8 $ case collectionRunM of
-            Just run -> AE.encode run.response
+      let respJs = decodeUtf8 $ case col.lastRunResponse of
+            Just res -> AE.encode res
             Nothing -> AE.encode $ AE.Array []
-      let runRes = collectionRunM >>= (\x -> castToStepResult x.response)
+      let runRes = col.lastRunResponse >>= castToStepResult
       addRespHeaders $ CollectionGet $ PageCtx bwconf (pid, col, runRes, respJs)
 
 
@@ -318,13 +301,13 @@ collectionStepResult_ idx stepResult = section_ [class_ "p-1"] do
     toHtml $ show (idx + 1) <> " " <> fromMaybe "" stepResult.stepName
   div_ [role_ "tablist", class_ "tabs tabs-lifted"] do
     input_ [type_ "radio", name_ $ "step-result-tabs-" <> show idx, role_ "tab", class_ "tab", Aria.label_ "Response Log", checked_]
-    div_ [role_ "tabpanel", class_ "tab-content bg-base-100 bg-base-100 border-base-300 rounded-box p-6"] $
-      toHtmlRaw $
-        textToHTML stepResult.stepLog
+    div_ [role_ "tabpanel", class_ "tab-content bg-base-100 bg-base-100 border-base-300 rounded-box p-6"]
+      $ toHtmlRaw
+      $ textToHTML stepResult.stepLog
 
     input_ [type_ "radio", name_ $ "step-result-tabs-" <> show idx, role_ "tab", class_ "tab", Aria.label_ "Response Headers"]
-    div_ [role_ "tabpanel", class_ "tab-content bg-base-100 bg-base-100 border-base-300 rounded-box p-6 "] $
-      table_ [class_ "table table-xs"] do
+    div_ [role_ "tabpanel", class_ "tab-content bg-base-100 bg-base-100 border-base-300 rounded-box p-6 "]
+      $ table_ [class_ "table table-xs"] do
         thead_ [] $ tr_ [] $ th_ [] "Name" >> th_ [] "Value"
         tbody_ $ forM_ (M.toList stepResult.request.resp.headers) $ \(k, v) -> tr_ [] do
           td_ [] $ toHtml k

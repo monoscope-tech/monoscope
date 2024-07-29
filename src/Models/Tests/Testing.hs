@@ -9,16 +9,13 @@ module Models.Tests.Testing (
   CollectionStepId (..),
   CollectionStepData (..),
   CollectionSteps (..),
-  CollectionRun (..),
-  CollectionRunId (..),
   stepDataMethod,
   updateCollection,
   addCollection,
   getCollections,
-  getCollectionRunByCollectionId,
+  updateCollectionLastRun,
   getCollectionById,
   getCollectionsId,
-  addCollectionRun,
   TabStatus (..),
 )
 where
@@ -49,14 +46,6 @@ import Web.HttpApiData (FromHttpApiData)
 
 
 newtype CollectionId = CollectionId {collectionId :: UUID.UUID}
-  deriving stock (Generic, Show)
-  deriving
-    (Eq, Ord, AE.ToJSON, AE.FromJSON, FromField, ToField, FromHttpApiData, Default, NFData)
-    via UUID.UUID
-  deriving anyclass (FromRow, ToRow)
-
-
-newtype CollectionRunId = CollectionRunId {collectionRunId :: UUID.UUID}
   deriving stock (Generic, Show)
   deriving
     (Eq, Ord, AE.ToJSON, AE.FromJSON, FromField, ToField, FromHttpApiData, Default, NFData)
@@ -169,6 +158,7 @@ data Collection = Collection
   , schedule :: Text
   , isScheduled :: Bool
   , collectionSteps :: CollectionSteps
+  , lastRunResponse :: Maybe AE.Value
   }
   deriving stock (Show, Generic)
   deriving anyclass (FromRow, ToRow, AE.ToJSON, AE.FromJSON, NFData, Default)
@@ -250,24 +240,6 @@ data StepResult = StepResult
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] StepResult
 
 
-data CollectionRun = CollectionRun
-  { id :: CollectionRunId
-  , createdAt :: UTCTime
-  , updatedAt :: UTCTime
-  , collectionId :: CollectionId
-  , status :: Text
-  , projectId :: Projects.ProjectId
-  , passed :: Int
-  , failed :: Int
-  , response :: AE.Value
-  }
-  deriving stock (Show, Generic)
-  deriving anyclass (FromRow, ToRow, AE.ToJSON, AE.FromJSON, NFData, Default)
-  deriving
-    (Entity)
-    via (GenericEntity '[Schema "tests", TableName "collection_runs", PrimaryKey "id", FieldModifiers '[CamelToSnake]] CollectionRun)
-
-
 data TabStatus = Active | Inactive
 
 
@@ -275,8 +247,11 @@ addCollection :: Collection -> DBT IO ()
 addCollection = insert @Collection
 
 
-addCollectionRun :: CollectionRun -> DBT IO ()
-addCollectionRun = insert @CollectionRun
+updateCollectionLastRun :: CollectionId -> Maybe AE.Value -> DBT IO Int64
+updateCollectionLastRun id' lastRunResponse' = execute Update q params
+  where
+    params = (lastRunResponse', id')
+    q = [sql| UPDATE tests.collections SET last_run=NOW(), last_run_response=? WHERE id=? |]
 
 
 updateCollection :: Projects.ProjectId -> CollectionId -> Text -> Text -> Bool -> Text -> V.Vector CollectionStepData -> DBT IO Int64
@@ -290,25 +265,13 @@ getCollectionById :: CollectionId -> DBT IO (Maybe Collection)
 getCollectionById id' = queryOne Select q (Only id')
   where
     q =
-      [sql| SELECT id, created_at, updated_at, last_run, project_id, title, description, config, 
+      [sql| SELECT id, created_at, updated_at, last_run, project_id, title, description, config,
                   CASE
                       WHEN EXTRACT(DAY FROM schedule) > 0 THEN CONCAT(EXTRACT(DAY FROM schedule)::TEXT, ' days')
                       WHEN EXTRACT(HOUR FROM schedule) > 0 THEN CONCAT(EXTRACT(HOUR FROM schedule)::TEXT, ' hours')
                       ELSE CONCAT(EXTRACT(MINUTE FROM schedule)::TEXT, ' minutes')
-                  END as schedule, is_scheduled, collection_steps 
+                  END as schedule, is_scheduled, collection_steps, last_run_response
                   FROM tests.collections t WHERE id=?|]
-
-
-getCollectionRunByCollectionId :: CollectionId -> DBT IO (Maybe CollectionRun)
-getCollectionRunByCollectionId id' = queryOne Select q (Only id')
-  where
-    q =
-      [sql| 
-    SELECT DISTINCT ON (collection_id) id, created_at, updated_at, collection_id, status::text, project_id, passed, failed, response
-    FROM tests.collection_runs t 
-    WHERE collection_id=?
-    ORDER BY  collection_id, created_at DESC
-    |]
 
 
 getCollections :: Projects.ProjectId -> TabStatus -> DBT IO (V.Vector CollectionListItem)
@@ -321,16 +284,16 @@ getCollections pid tabStatus = query Select q (pid, statusValue)
     q =
       [sql|
            WITH latest_runs AS (
-               SELECT DISTINCT ON (collection_id) 
-                      collection_id, 
+               SELECT DISTINCT ON (collection_id)
+                      collection_id,
                       created_at as latest_run_date,
                       passed,
                       failed
                FROM tests.collection_runs
                ORDER BY collection_id, created_at DESC
            )
-           SELECT t.id, t.created_at, t.updated_at, t.project_id, t.last_run, 
-                  t.title, t.description, jsonb_array_length(t.collection_steps), 
+           SELECT t.id, t.created_at, t.updated_at, t.project_id, t.last_run,
+                  t.title, t.description, jsonb_array_length(t.collection_steps),
                   CASE
                     WHEN EXTRACT(DAY FROM t.schedule) > 0 THEN CONCAT(EXTRACT(DAY FROM t.schedule)::TEXT, ' days')
                     WHEN EXTRACT(HOUR FROM t.schedule) > 0 THEN CONCAT(EXTRACT(HOUR FROM t.schedule)::TEXT, ' hours')
@@ -358,7 +321,7 @@ getCollectionLogs cid = V.fromList <$> query_ (Query $ encodeUtf8 q)
   where
     q =
       [text|
-    
+
     S
-    
+
     |]

@@ -17,7 +17,7 @@ CREATE SCHEMA IF NOT EXISTS monitors;
 CREATE SCHEMA IF NOT EXISTS tests;
 
 -----------------------------------------------------------------------
--- HELPER FUNCTIONS AND DOMAIN. 
+-- HELPER FUNCTIONS AND DOMAIN.
 -----------------------------------------------------------------------
 -----------------------------------------------------------------------
 --make manage_updated_at reusable
@@ -51,9 +51,9 @@ DO $$ BEGIN
 END $$;
 
 -----------------------------------------------------------------------
--- USERS TABLE 
+-- USERS TABLE
 -- query patterns:
--- -- 
+-- --
 -----------------------------------------------------------------------
 
 CREATE TABLE IF NOT EXISTS users.users
@@ -75,7 +75,7 @@ SELECT manage_updated_at('users.users');
 
 
 -----------------------------------------------------------------------
--- PROJECT PERSISTENT SESSION 
+-- PROJECT PERSISTENT SESSION
 -----------------------------------------------------------------------
 
 CREATE TABLE IF NOT EXISTS users.persistent_sessions
@@ -113,7 +113,7 @@ SELECT manage_updated_at('projects.projects');
 
 
 -----------------------------------------------------------------------
--- PROJECT MEMBERS table 
+-- PROJECT MEMBERS table
 -- query patterns:
 -----------------------------------------------------------------------
 
@@ -133,7 +133,7 @@ CREATE TABLE IF NOT EXISTS projects.project_members
 SELECT manage_updated_at('projects.project_members');
 
 -----------------------------------------------------------------------
--- PROJECT API KEYS table 
+-- PROJECT API KEYS table
 -- query patterns:
 -- -- API keys in a project
 -----------------------------------------------------------------------
@@ -173,7 +173,7 @@ SELECT manage_updated_at('apis.swagger_jsons');
 CREATE INDEX IF NOT EXISTS idx_swagger_jsons_project_id ON apis.swagger_jsons(project_id);
 
 -----------------------------------------------------------------------
--- ENDPOINTS table 
+-- ENDPOINTS table
 -- -- Used to build the endpoint_vm which is used to display endpoint list view and endpoint stats
 -----------------------------------------------------------------------
 
@@ -200,7 +200,7 @@ CREATE INDEX IF NOT EXISTS idx_apis_endpoints_project_id ON apis.endpoints(proje
 CREATE UNIQUE INDEX IF NOT EXISTS idx_apis_endpoints_hash ON apis.endpoints(hash);
 
 -----------------------------------------------------------------------
--- SHAPES table 
+-- SHAPES table
 -----------------------------------------------------------------------
 
 CREATE TABLE IF NOT EXISTS apis.shapes
@@ -211,7 +211,7 @@ CREATE TABLE IF NOT EXISTS apis.shapes
     approved_on               TIMESTAMP WITH TIME ZONE                                 DEFAULT NULL,
     project_id                uuid      NOT  NULL REFERENCES projects.projects (id)    ON      DELETE CASCADE,
     endpoint_hash             text      NOT  NULL,
-    
+
     query_params_keypaths     text[]    NOT  NULL DEFAULT    '{}'::TEXT[],
     request_body_keypaths     text[]    NOT  NULL DEFAULT    '{}'::TEXT[],
     response_body_keypaths    text[]    NOT  NULL DEFAULT    '{}'::TEXT[],
@@ -220,7 +220,7 @@ CREATE TABLE IF NOT EXISTS apis.shapes
 
     -- shape hash is a hash of all the key paths put together into a single sorted list and hashed
     -- We skip the request headers from the shape hash, since a lot of sources might add unnecessary hashes at anytime
-    -- the final hash is the hash as described above, but with the endpoint hash prepended to it. 
+    -- the final hash is the hash as described above, but with the endpoint hash prepended to it.
     -- This opens up prefix search possibilities as well, for shapes.
     hash text NOT NULL DEFAULT ''::TEXT,
     field_hashes              text[]    NOT  NULL DEFAULT    '{}'::TEXT[],
@@ -239,7 +239,7 @@ ALTER TABLE apis.shapes ADD COLUMN response_description TEXT NOT NULL DEFAULT ''
 ALTER TABLE apis.shapes ADD COLUMN request_description TEXT NOT NULL DEFAULT ''::TEXT;
 
 -----------------------------------------------------------------------
--- FIELDS table 
+-- FIELDS table
 -----------------------------------------------------------------------
 
 CREATE TYPE apis.field_type AS ENUM ('unknown','string','number','bool','object', 'list', 'null');
@@ -254,7 +254,7 @@ CREATE TABLE IF NOT EXISTS apis.fields
     key                 text            NOT  NULL DEFAULT    ''::text,
     field_type          apis.field_type NOT  NULL DEFAULT    'unknown'::apis.field_type,
     field_type_override text,
-    -- I'm forgetting what this format is. But I think it should be the mask of the field format. 
+    -- I'm forgetting what this format is. But I think it should be the mask of the field format.
     -- And should sort of mirror the formats table?
     format              text            NOT  NULL DEFAULT    'none'::text,
     format_override     text            NOT  NULL DEFAULT    '',
@@ -272,7 +272,7 @@ ALTER TABLE apis.fields ADD COLUMN is_enum BOOL NOT NULL DEFAULT 'f';
 ALTER TABLE apis.fields ADD COLUMN is_required BOOL NOT NULL DEFAULT 'f';
 
 -----------------------------------------------------------------------
--- FORMATS table 
+-- FORMATS table
 -----------------------------------------------------------------------
 
 CREATE TABLE IF NOT EXISTS apis.formats
@@ -287,7 +287,7 @@ CREATE TABLE IF NOT EXISTS apis.formats
   field_format text            NOT  NULL DEFAULT    '',
   examples     text[]          NOT  NULL DEFAULT    '{}'::text[],
 
-  -- hash for formats will be the <field hash> + <field_format hash> 
+  -- hash for formats will be the <field hash> + <field_format hash>
   hash         text            NOT  NULL DEFAULT    ''::TEXT,
 
   UNIQUE (project_id, field_hash, field_format)
@@ -297,7 +297,7 @@ CREATE INDEX IF NOT EXISTS idx_apis_formats_project_id ON apis.formats(project_i
 CREATE UNIQUE INDEX IF NOT EXISTS idx_apis_formats_hash ON apis.formats(hash);
 
 -----------------------------------------------------------------------
--- ANOMALIES table 
+-- ANOMALIES table
 -----------------------------------------------------------------------
 
 CREATE TYPE apis.anomaly_type AS ENUM ('unknown', 'field', 'endpoint','shape', 'format', 'runtime_exception');
@@ -321,7 +321,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_apis_anomalies_project_id_target_hash ON a
 
 
 CREATE OR REPLACE FUNCTION apis.new_anomaly_proc() RETURNS trigger AS $$
-DECLARE 
+DECLARE
 	anomaly_type apis.anomaly_type;
 	anomaly_action apis.anomaly_action;
 BEGIN
@@ -367,8 +367,8 @@ CREATE TABLE IF NOT EXISTS apis.request_dumps
     response_headers          jsonb     NOT  NULL DEFAULT    '{}'::jsonb,
     request_body              jsonb     NOT  NULL DEFAULT    '{}'::jsonb,
     response_body             jsonb     NOT  NULL DEFAULT    '{}'::jsonb,
-    
-    -- Instead of holding ids which are difficult to compute, let's rather store their hashes only. 
+
+    -- Instead of holding ids which are difficult to compute, let's rather store their hashes only.
     endpoint_hash             text      NOT  NULL DEFAULT    ''::text,
     shape_hash                text      NOT  NULL DEFAULT    ''::text,
     format_hashes             text[]    NOT  NULL DEFAULT    '{}'::text[],
@@ -400,7 +400,7 @@ CREATE INDEX IF NOT EXISTS idxgin_apis_request_dumps_format_hashes ON apis.reque
 --                    END OF REQUEST DUMP AND ITS CONTINUOUS AGGREGATES
 -- ==========================================================================================================================
 
-CREATE TABLE IF NOT EXISTS apis.reports 
+CREATE TABLE IF NOT EXISTS apis.reports
 (
     id                        uuid      NOT  NULL DEFAULT    gen_random_uuid(),
     created_at                TIMESTAMP WITH TIME ZONE       NOT               NULL DEFAULT current_timestamp,
@@ -417,7 +417,7 @@ CREATE INDEX IF NOT EXISTS idx_reports_project_id ON apis.reports(project_id);
 -- TODO: rewrite this. This query is killing the database.
 -- Create a view that tracks endpoint related statistic points from the request dump table.
 DROP MATERIALIZED VIEW IF EXISTS apis.endpoint_request_stats;
-CREATE MATERIALIZED VIEW IF NOT EXISTS apis.endpoint_request_stats AS 
+CREATE MATERIALIZED VIEW IF NOT EXISTS apis.endpoint_request_stats AS
  WITH request_dump_stats as (
       SELECT
           project_id, url_path, method,
@@ -431,7 +431,7 @@ CREATE MATERIALIZED VIEW IF NOT EXISTS apis.endpoint_request_stats AS
       where created_at > NOW() - interval '14' day
       GROUP BY project_id, url_path, method, endpoint_hash
     )
-    SELECT 	
+    SELECT
         enp.id endpoint_id,
         enp.hash endpoint_hash,
         rds.project_id,
@@ -447,20 +447,20 @@ CREATE MATERIALIZED VIEW IF NOT EXISTS apis.endpoint_request_stats AS
         CAST (total_time_proj/1000000  AS FLOAT8) total_time_proj,
         CAST (total_requests AS INT),
         CAST (total_requests_proj AS INT)
-	FROM apis.endpoints enp 
+	FROM apis.endpoints enp
 	JOIN request_dump_stats rds on (rds.project_id=enp.project_id AND rds.endpoint_hash=enp.hash);
-  
+
 CREATE INDEX IF NOT EXISTS idx_apis_endpoint_request_stats_project_id ON apis.endpoint_request_stats(project_id);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_apis_endpoint_request_stats_endpoint_id ON apis.endpoint_request_stats(endpoint_id);
 
-CREATE TABLE IF NOT EXISTS apis.issues 
+CREATE TABLE IF NOT EXISTS apis.issues
 (
   id              UUID NOT NULL DEFAULT gen_random_uuid(),
   created_at      TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT current_timestamp,
   updated_at      TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT current_timestamp,
   project_id      UUID NOT NULL REFERENCES projects.projects (id) ON DELETE CASCADE,
   acknowleged_at  TIMESTAMP WITH TIME ZONE,
-  anomaly_type    apis.anomaly_type NOT NULL, 
+  anomaly_type    apis.anomaly_type NOT NULL,
   target_hash     TEXT,
   issue_data      JSONB NOT NULL DEFAULT '{}',
   endpoint_id     UUID,
@@ -473,7 +473,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_apis_issues_project_id_target_hash ON apis
 
 
 -- Create a view that tracks project request related statistic points from the request dump table.
-CREATE MATERIALIZED VIEW IF NOT EXISTS apis.project_request_stats AS 
+CREATE MATERIALIZED VIEW IF NOT EXISTS apis.project_request_stats AS
   WITH request_dump_stats AS (
       SELECT
           project_id,
@@ -501,7 +501,7 @@ CREATE MATERIALIZED VIEW IF NOT EXISTS apis.project_request_stats AS
       GROUP BY project_id
   ),
   endpoints_stats AS (
-      SELECT 
+      SELECT
           project_id,
           count(*) as total_endpoints,
           count(*) FILTER (WHERE created_at <= NOW()::DATE - 7) as total_endpoints_last_week
@@ -524,7 +524,7 @@ CREATE MATERIALIZED VIEW IF NOT EXISTS apis.project_request_stats AS
       FROM apis.issues
       GROUP BY project_id
   )
-  SELECT 	
+  SELECT
       rds.project_id,
       coalesce(approx_percentile(0,    agg)/1000000, 0) min,
       coalesce(approx_percentile(0.50, agg)/1000000, 0) p50,
@@ -549,9 +549,9 @@ CREATE MATERIALIZED VIEW IF NOT EXISTS apis.project_request_stats AS
   LEFT JOIN endpoints_stats es ON rds.project_id = es.project_id
   LEFT JOIN shapes_stats ss ON rds.project_id = ss.project_id
   LEFT JOIN anomalies_stats ass ON rds.project_id = ass.project_id;
-  
+
 CREATE UNIQUE INDEX IF NOT EXISTS idx_apis_project_request_stats_project_id ON apis.project_request_stats(project_id);
--- TODO: Create triggers to create new anomalies when new fields, 
+-- TODO: Create triggers to create new anomalies when new fields,
 -- TODO: endpoints and shapes are created.
 
 CREATE OR REPLACE PROCEDURE apis.refresh_request_dump_views_every_5mins(job_id int, config jsonb) LANGUAGE PLPGSQL AS
@@ -567,7 +567,7 @@ SELECT add_job('apis.refresh_request_dump_views_every_5mins','5min');
 
 --------------------------------------------------------------------
 
-CREATE TABLE IF NOT EXISTS background_jobs 
+CREATE TABLE IF NOT EXISTS background_jobs
   ( id         serial    primary key
   , created_at timestamp with    time zone    default now() not null
   , updated_at timestamp with    time zone    default now() not null
@@ -578,27 +578,27 @@ CREATE TABLE IF NOT EXISTS background_jobs
   , attempts   int       not     null default 0
   , locked_at  timestamp with    time zone    null
   , locked_by  text      null
-  , constraint incorrect_locking_info CHECK ((status <> 'locked' and locked_at is null and locked_by is null) or (status = 'locked' and locked_at is not null and locked_by is not null)) 
-  ); 
+  , constraint incorrect_locking_info CHECK ((status <> 'locked' and locked_at is null and locked_by is null) or (status = 'locked' and locked_at is not null and locked_by is not null))
+  );
 
-create index if not exists idx_background_jobs_created_at on background_jobs(created_at); 
-create index if not exists idx_background_jobs_updated_at on background_jobs(updated_at); 
-create index if not exists idx_background_jobs_locked_at on background_jobs(locked_at); 
-create index if not exists idx_background_jobs_locked_by on background_jobs(locked_by); 
-create index if not exists idx_background_jobs_status on background_jobs(status); 
+create index if not exists idx_background_jobs_created_at on background_jobs(created_at);
+create index if not exists idx_background_jobs_updated_at on background_jobs(updated_at);
+create index if not exists idx_background_jobs_locked_at on background_jobs(locked_at);
+create index if not exists idx_background_jobs_locked_by on background_jobs(locked_by);
+create index if not exists idx_background_jobs_status on background_jobs(status);
 create index if not exists idx_background_jobs_run_at on background_jobs(run_at);
 
 
 
 
-create or replace function notify_job_monitor_for_background_jobs() returns trigger as  
-$$ BEGIN  
-  perform pg_notify('background_jobs',  
-    json_build_object('id', new.id, 'run_at', new.run_at, 'locked_at', new.locked_at)::text);  
-  return new;  
-end;  
-$$ language plpgsql; 
-drop trigger if exists trg_notify_job_monitor_for_background_jobs on background_jobs; 
+create or replace function notify_job_monitor_for_background_jobs() returns trigger as
+$$ BEGIN
+  perform pg_notify('background_jobs',
+    json_build_object('id', new.id, 'run_at', new.run_at, 'locked_at', new.locked_at)::text);
+  return new;
+end;
+$$ language plpgsql;
+drop trigger if exists trg_notify_job_monitor_for_background_jobs on background_jobs;
 create trigger trg_notify_job_monitor_for_background_jobs after insert on background_jobs for each row execute procedure notify_job_monitor_for_background_jobs();
 
 CREATE TABLE IF NOT EXISTS projects.redacted_fields
@@ -615,7 +615,7 @@ CREATE TABLE IF NOT EXISTS projects.redacted_fields
     configured_via TEXT      NOT        NULL           DEFAULT    '',
     description    TEXT      NOT        NULL           DEFAULT    '',
     endpoint_hash  TEXT,
-    field_category apis.field_category 
+    field_category apis.field_category
 );
 SELECT manage_updated_at('projects.redacted_fields');
 CREATE INDEX IF NOT EXISTS idx_projects_redacted_fields_project_id ON projects.redacted_fields(project_id);
@@ -623,14 +623,14 @@ CREATE INDEX IF NOT EXISTS idx_projects_redacted_fields_project_id ON projects.r
 
 -- apitoolkit_daily_job should be executed every day at midnight
 CREATE OR REPLACE PROCEDURE apitoolkit_daily_job(job_id int, config jsonb) LANGUAGE PLPGSQL AS
-$$ BEGIN 
+$$ BEGIN
   INSERT INTO background_jobs (run_at, status, payload) VALUES (now(), 'queued',  jsonb_build_object('tag', 'DailyJob'));
 END;
 $$;
 SELECT add_job('apitoolkit_daily_job', schedule_interval => interval '1 DAY', initial_start => '2024-05-16 00:00'::timestamptz);
 
 CREATE TABLE IF NOT EXISTS apis.share_requests
- (               
+ (
     id                 UUID      NOT        NULL           DEFAULT           gen_random_uuid() PRIMARY KEY,
     project_id         UUID      NOT        NULL           REFERENCES projects.projects (id)              ON      DELETE CASCADE,
     created_at         TIMESTAMP WITH       TIME           ZONE       NOT               NULL              DEFAULT current_timestamp,
@@ -643,9 +643,9 @@ CREATE INDEX IF NOT EXISTS idx_apis_share_requests_id ON apis.share_requests(id)
 CREATE INDEX IF NOT EXISTS idx_share_requests ON apis.share_requests(request_created_at);
 
 
-CREATE TABLE IF NOT EXISTS apis.slack 
+CREATE TABLE IF NOT EXISTS apis.slack
 (
-  id             UUID        NOT     NULL   DEFAULT        gen_random_uuid() PRIMARY KEY, 
+  id             UUID        NOT     NULL   DEFAULT        gen_random_uuid() PRIMARY KEY,
   project_id     UUID        NOT     NULL   REFERENCES projects.projects (id)              ON      DELETE CASCADE,
   created_at     TIMESTAMP   WITH    TIME   ZONE       NOT               NULL              DEFAULT current_timestamp,
   updated_at     TIMESTAMP   WITH    TIME   ZONE       NOT               NULL              DEFAULT current_timestamp,
@@ -669,27 +669,11 @@ CREATE TABLE IF NOT EXISTS tests.collections
   schedule         INTERVAL NOT NULL DEFAULT '1 day'
 );
 SELECT manage_updated_at('tests.collections');
-create index if not exists idx_apis_testing_project_Id on tests.collections(project_id); 
+create index if not exists idx_apis_testing_project_Id on tests.collections(project_id);
+ALTER TABLE tests.collections ADD COLUMN last_run_response jsonb DEFAULT NULL;
 
 
-CREATE TYPE test_status AS ENUM ('passed', 'failed');
-
-CREATE TABLE IF NOT EXISTS tests.collection_runs (
-  id               UUID        NOT     NULL   DEFAULT        gen_random_uuid() PRIMARY KEY,
-  created_at       TIMESTAMP   WITH    TIME   ZONE       NOT               NULL              DEFAULT current_timestamp,
-  updated_at       TIMESTAMP   WITH    TIME   ZONE       NOT               NULL              DEFAULT current_timestamp,
-  project_id       UUID        NOT     NULL   REFERENCES projects.projects (id)              ON      DELETE CASCADE,
-  collection_id    UUID        NOT     NULL   REFERENCES tests.collections (id)              ON      DELETE CASCADE,
-  status           test_status NOT     NULL   DEFAULT        'passed',
-  passed           INT         NOT     NULL   DEFAULT        '0',
-  failed          INT         NOT     NULL   DEFAULT        '0',
-  response     JSONB       NOT     NULL   DEFAULT     '{}'::jsonb
-);
-SELECT manage_updated_at('tests.collection_runs');
-CREATE INDEX IF NOT EXISTS idx_collection_runs_collection_id ON tests.collection_runs(collection_id);
-
-
-CREATE TABLE IF NOT EXISTS monitors.query_monitors 
+CREATE TABLE IF NOT EXISTS monitors.query_monitors
 (
   id                           UUID NOT NULL DEFAULT gen_random_uuid() PRIMARY KEY,
   project_id                   UUID NOT NULL REFERENCES projects.projects(id)        ON DELETE CASCADE,
@@ -707,11 +691,11 @@ CREATE TABLE IF NOT EXISTS monitors.query_monitors
   threshold_sustained_for_mins INT NOT NULL DEFAULT 0,
   alert_config                 JSONB NOT NULL DEFAULT '{}',
   deactivated_at               TIMESTAMP WITH TIME ZONE,
-  deleted_at                   TIMESTAMP WITH TIME ZONE 
+  deleted_at                   TIMESTAMP WITH TIME ZONE
 );
 SELECT manage_updated_at('monitors.query_monitors');
 
--- used for the alerts, to execute queries stored in a table, 
+-- used for the alerts, to execute queries stored in a table,
 create or replace function eval(expression text) returns integer as $body$
 declare result integer;
 begin
@@ -755,7 +739,7 @@ END;
 $$;
 SELECT add_job('monitors.check_triggered_query_monitors','1min');
 
--- Find all tests where last_run + schedule is < NOW()+10min 
+-- Find all tests where last_run + schedule is < NOW()+10min
 -- schedule them as 1 job per test.
 CREATE OR REPLACE PROCEDURE tests.check_tests_to_trigger(job_id int, config JSONB) LANGUAGE PLPGSQL AS $$
 DECLARE
@@ -805,7 +789,7 @@ INSERT into projects.projects (id, title) VALUES ('00000000-0000-0000-0000-00000
 
 
 
-CREATE TABLE IF NOT EXISTS apis.errors 
+CREATE TABLE IF NOT EXISTS apis.errors
 (
   id              UUID NOT NULL DEFAULT gen_random_uuid(),
   created_at      TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT current_timestamp,
@@ -823,7 +807,7 @@ CREATE INDEX IF NOT EXISTS idx_apis_errors_project_id ON apis.errors(project_id)
 CREATE UNIQUE INDEX IF NOT EXISTS idx_apis_errors_project_id_hash ON apis.errors(project_id, hash);
 
 CREATE OR REPLACE FUNCTION apis.new_anomaly_proc_job_only() RETURNS trigger AS $$
-DECLARE 
+DECLARE
 	anomaly_type apis.anomaly_type;
 	anomaly_action apis.anomaly_action;
 BEGIN
