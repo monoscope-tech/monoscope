@@ -17,10 +17,10 @@ export class StepsEditor extends LitElement {
       this.initializeEditor(monaco)
     })
 
-    window.updateStepAssertions = (assertion, step) => {
+    window.updateStepAssertions = (assertion, expression, step) => {
       const stepData = this.collectionSteps[step]
       const asserts = stepData.asserts || []
-      asserts.push({"ok": assertion})
+      asserts.push({ [assertion]: expression })
       stepData.asserts = asserts
       this.collectionSteps[step] = stepData
       window.collectionSteps = this.collectionSteps
@@ -111,66 +111,66 @@ export class StepsEditor extends LitElement {
     return found ? { method: found[0], url: found[1] } : { method: '', url: '' }
   }
 
-
   _onDragOver(event) {
-    event.preventDefault();
-    const items = document.querySelectorAll('.draggable');
-    let closestItem = null;
-    let smallestDistance = Number.MAX_SAFE_INTEGER;
+    event.preventDefault()
+    const items = document.querySelectorAll('.draggable')
+    let closestItem = null
+    let smallestDistance = Number.MAX_SAFE_INTEGER
 
-    items.forEach(item => {
-      const box = item.getBoundingClientRect();
-      const midpoint = box.top + box.height / 2;
-      const distance = Math.abs(event.clientY - midpoint);
+    items.forEach((item) => {
+      const box = item.getBoundingClientRect()
+      const midpoint = box.top + box.height / 2
+      const distance = Math.abs(event.clientY - midpoint)
       if (distance < smallestDistance) {
-        closestItem = item;
-        smallestDistance = distance;
+        closestItem = item
+        smallestDistance = distance
       }
-    });
+    })
 
-    items.forEach(item => {
+    items.forEach((item) => {
       if (item === closestItem) {
-        item.classList.add('active-drop-target');
-      } else { item.classList.remove('active-drop-target') }
-    });
+        item.classList.add('active-drop-target')
+      } else {
+        item.classList.remove('active-drop-target')
+      }
+    })
   }
 
   _onDragEnter(event) {
     if (event.target.hasAttribute('data-index')) {
-      event.preventDefault();  // Necessary to allow dropping
-      event.target.classList.add('over');  // Highlight the drop target only if it has data-index
+      event.preventDefault() // Necessary to allow dropping
+      event.target.classList.add('over') // Highlight the drop target only if it has data-index
     }
   }
 
   _onDragLeave(event) {
     if (event.target.hasAttribute('data-index')) {
-      event.target.classList.remove('over');
-      event.target.classList.remove('active-drop-target');  // Remove additional highlight
+      event.target.classList.remove('over')
+      event.target.classList.remove('active-drop-target') // Remove additional highlight
     }
   }
 
   _onDrop(event) {
-    const activeTarget = document.querySelector('.active-drop-target');
+    const activeTarget = document.querySelector('.active-drop-target')
     if (activeTarget) {
-      event.preventDefault();
-      activeTarget.classList.remove('over');
-      activeTarget.classList.remove('active-drop-target');
-      const originIndex = parseInt(event.dataTransfer.getData('text/plain'));
-      const targetIndex = parseInt(activeTarget.dataset.index);
+      event.preventDefault()
+      activeTarget.classList.remove('over')
+      activeTarget.classList.remove('active-drop-target')
+      const originIndex = parseInt(event.dataTransfer.getData('text/plain'))
+      const targetIndex = parseInt(activeTarget.dataset.index)
       if (targetIndex !== originIndex) {
-        const movedItems = [...this.collectionSteps];
-        const item = movedItems.splice(originIndex, 1)[0];
-        movedItems.splice(targetIndex, 0, item);
-        this.collectionSteps = [...movedItems];
-        this.requestUpdate();
+        const movedItems = [...this.collectionSteps]
+        const item = movedItems.splice(originIndex, 1)[0]
+        movedItems.splice(targetIndex, 0, item)
+        this.collectionSteps = [...movedItems]
+        this.requestUpdate()
       }
     }
   }
 
-
   renderCollectionStep(stepData, idx, result) {
     const { method, url } = this.methodAndUrl(stepData)
-    const hasResults = !!result 
+    const hasResults = !!result
     const hasFailingAssertions = result?.assert_results.some((a) => !a.ok || a.ok === false) || false
     return html`
       <div
@@ -251,10 +251,12 @@ export class StepsEditor extends LitElement {
             <div class="flex gap-2 items-center mb-2">
               <h5 class="label-text">Assertions</h5>
               <a href="https://apitoolkit.io/docs/dashboard/dashboard-pages/api-tests/#test-definition-syntax" class="" target="_blank">
-              <svg class="w-3 h-3 text-slate-700"><use href="/assets/svgs/fa-sprites/regular.svg#circle-info"></use></svg>
+                <svg class="w-3 h-3 text-slate-700"><use href="/assets/svgs/fa-sprites/regular.svg#circle-info"></use></svg>
               </a>
             </div>
-            <div class="text-sm space-y-2 px-2 paramRows [&_.assertIndicator]:inline-block" id="[${idx}][asserts]">${this.renderParamsRows(stepData, idx, 'asserts', result?.assert_results || [])}</div>
+            <div class="text-sm space-y-2 px-2 paramRows [&_.assertIndicator]:inline-block" id="[${idx}][asserts]">
+              ${this.renderParamsRows(stepData, idx, 'asserts', result?.assert_results || [])}
+            </div>
           </div>
           <div>
             <h5 class="label-text p-1 mb-2">Exports</h5>
@@ -268,59 +270,56 @@ export class StepsEditor extends LitElement {
   renderAssertResult(result) {
     let hasPassed = result?.ok === true || false
     let notRun = !result
-    let error = result?.err?.advice || ""
+    let error = result?.err?.advice || ''
 
-    if(hasPassed) {
-      return  html` <svg class="icon w-3 h-3 text-green-500"><use href="/assets/svgs/fa-sprites/solid.svg#check"></use></svg>`
+    if (hasPassed) {
+      return html` <svg class="icon w-3 h-3 text-green-500"><use href="/assets/svgs/fa-sprites/solid.svg#check"></use></svg>`
     }
-    if(!hasPassed && !notRun) {
-     return  html`<span title="${error}"><svg class="icon w-3 h-3 text-red-500"><use href="/assets/svgs/fa-sprites/solid.svg#xmark"></use></svg><span>`
+    if (!hasPassed && !notRun) {
+      return html`<span title="${error}"
+        ><svg class="icon w-3 h-3 text-red-500"><use href="/assets/svgs/fa-sprites/solid.svg#xmark"></use></svg><span></span
+      ></span>`
     }
-    return  html`<span title="${error}" class="opacity-0"><svg class="icon w-3 h-3 text-red-500"><use href="/assets/svgs/fa-sprites/solid.svg#xmark"></use></svg><span>`
+    return html`<span title="${error}" class="opacity-0"
+      ><svg class="icon w-3 h-3 text-red-500"><use href="/assets/svgs/fa-sprites/solid.svg#xmark"></use></svg><span></span
+    ></span>`
   }
 
-
-
   renderParamRow(key, value, type, idx, aidx, result) {
-    let error = result?.err?.advice || ""
+    let error = result?.err?.advice || ''
 
-    let elements = document.querySelectorAll('[data-field-path]');
-    let fieldPathValues = new Set();
+    let elements = document.querySelectorAll('[data-field-path]')
+    let fieldPathValues = new Set()
 
-    elements.forEach(element => {
-        fieldPathValues.add("$.resp.json." + element.getAttribute('data-field-path'));
-    });
-    
-   
-    const matches = Array.from(fieldPathValues).filter(v => {
-      return v.startsWith(value) && v.length > value.length;
-    });
+    elements.forEach((element) => {
+      fieldPathValues.add('$.resp.json.' + element.getAttribute('data-field-path'))
+    })
+
+    const matches = Array.from(fieldPathValues).filter((v) => {
+      return v.startsWith(value) && v.length > value.length
+    })
 
     return html`
-      <div class="flex flex-row gap-2 paramRow">
-        <span class="shrink hidden assertIndicator">
-          ${
-            this.renderAssertResult(result)
-          }
-        </span>
+      <div class="flex flex-row gap-2 w-full paramRow">
+        <span class="shrink hidden assertIndicator"> ${this.renderAssertResult(result)} </span>
         <input class="input input-bordered input-xs w-1/3" list="${type}DataList" placeholder="Key" .value="${key}" @change=${(e) => this.updateKey(e, idx, type, aidx)} />
-        <div>
-        <div class="relative">
-        <input list="assertAutocomplete" class="input input-bordered ${error ? "input-error":""} input-xs w-full" placeholder="Value" .value="${value}" @input=${(e) => this.updateValue(e, idx, type, aidx, key)} />
-        <span class="text-xs text-red-500">${error}</span> 
-         <datalist id="assertAutocomplete">
-           ${
-            matches.map(fieldPath => {
+        <div class="shrink w-full flex flex-col">
+          <input
+            list="assertAutocomplete"
+            class="input input-bordered ${error ? 'input-error' : ''} input-xs w-full"
+            placeholder="Value"
+            .value="${value}"
+            @input=${(e) => this.updateValue(e, idx, type, aidx, key)}
+          />
+          <span class="text-xs text-red-500">${error}</span>
+          <datalist id="assertAutocomplete">
+            ${matches.map((fieldPath) => {
               return html`<option class="w-full  text-left text-xs px-3 py-1 hover:bg-gray-200">${fieldPath}</option>`
-            })
-           }
+            })}
           </datalist>
-         <div>
-         </div>
-        </div>
         </div>
         <a class="cursor-pointer text-slate-600" @click=${(e) => this.deleteKey(e, idx, type, aidx, key)}>
-        <svg class="inline-block icon w-3 h-3 "><use href="/assets/svgs/fa-sprites/solid.svg#xmark"></use></svg>
+          <svg class="inline-block icon w-3 h-3 "><use href="/assets/svgs/fa-sprites/solid.svg#xmark"></use></svg>
         </a>
       </div>
     `
@@ -338,7 +337,7 @@ export class StepsEditor extends LitElement {
       const data = stepData[type] || {}
       rows = Object.entries(data).map(([key, value]) => this.renderParamRow(key, value, type, idx, null))
       if (rows.length === 0 || !Object.entries(data).some(([k, v]) => k.trim() === '' && v.trim() === '')) {
-          rows.push(this.renderParamRow('', '', type, idx))
+        rows.push(this.renderParamRow('', '', type, idx))
       }
     }
     return html`${rows}`
@@ -376,15 +375,14 @@ export class StepsEditor extends LitElement {
 
   deleteKey(_event, idx, type, aidx, oldKey) {
     const stepData = this.collectionSteps[idx]
-    stepData[type] = stepData[type] || (aidx != null ? [] : {}) 
-
+    stepData[type] = stepData[type] || (aidx != null ? [] : {})
 
     if (aidx != null) {
-      stepData[type] = stepData[type].splice(aidx, 1)
+      stepData[type].splice(aidx, 1)
     } else {
       delete stepData[type][oldKey]
     }
-    this.requestUpdate() 
+    this.requestUpdate()
   }
 
   updateValue(event, idx, type, aidx, key) {
@@ -412,7 +410,7 @@ export class StepsEditor extends LitElement {
           border: 2px solid blue;
         }
         .active-drop-target {
-          background-color: lightblue !important;  
+          background-color: lightblue !important;
           border: 2px solid blue;
           transform: translateY(-20px);
         }
@@ -421,7 +419,7 @@ export class StepsEditor extends LitElement {
         <div id="steps-codeEditor" class="h-full max-h-screen hidden group-has-[.editormode:checked]/colform:block"></div>
         <div class="h-full overflow-y-scroll group-has-[.editormode:checked]/colform:hidden">
           <div id="collectionStepsContainer" class=" p-4 space-y-4 collectionSteps">
-          ${this.collectionSteps.map((stepData, idx) => this.renderCollectionStep(stepData, idx, this.collectionResults[idx]) || undefined)}
+            ${this.collectionSteps.map((stepData, idx) => this.renderCollectionStep(stepData, idx, this.collectionResults[idx]) || undefined)}
           </div>
           <div class="p-4 pt-2">
             <a class="btn btn-outline btn-neutral btn-sm items-center cursor-pointer" @click=${() => (this.collectionSteps = [...this.collectionSteps, {}])}>

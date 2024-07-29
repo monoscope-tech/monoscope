@@ -166,7 +166,7 @@ instance ToHtml CollectionRunTest where
   toHtml (CollectionRunTest results tkjson) = toHtml $ do
     script_
       [fmt|
-        window.collectionResults = {tkjson}; 
+        window.collectionResults = {tkjson};
         window.updateCollectionResults({tkjson});
     |]
     V.iforM_ results (\i r -> collectionStepResult_ i r)
@@ -212,8 +212,8 @@ collectionPage pid col col_rn respJson = do
   script_
     []
     [fmt|
-  window.collectionSteps = {collectionStepsJSON}; 
-  window.collectionResults = {respJson}; 
+  window.collectionSteps = {collectionStepsJSON};
+  window.collectionResults = {respJson};
   document.addEventListener('DOMContentLoaded', function(){{
        window.updateCollectionResults({respJson});
    }})
@@ -273,64 +273,118 @@ collectionPage pid col col_rn respJson = do
                     p_ [class_ "text-slate-500"] "Run tests to view the results here."
                   div_ [class_ "hidden loading-indicator flex justify-center"] do
                     span_ [class_ "loading loading-dots loading-lg"] ""
+        jsonTreeAuxillaryCode
 
     script_ [type_ "module", src_ "/assets/steps-editor.js"] ("" :: Text)
+    script_
+      [text|
+        function addToAssertions(event, assertion, operation) {
+            const parent = event.target.closest(".tab-content")
+            const step = Number(parent.getAttribute('data-step'));
+            const target = event.target.parentNode.parentNode.parentNode
+            const path = target.getAttribute('data-field-path');
+            const value = target.getAttribute('data-field-value');
+            let expression = "$.resp.json." + path
+            if(operation) {
+              expression +=  ' ' + operation + ' ' + value;
+              }
+            window.updateStepAssertions(assertion, expression, step);
+        }
+    |]
+    script_
+      [type_ "text/hyperscript"]
+      [text|
+          behavior LogItemMenuable
+            on click
+              if I match <.with-context-menu/> then
+                remove <.log-item-context-menu /> then remove .with-context-menu from <.with-context-menu />
+              else
+                remove <.log-item-context-menu /> then remove .with-context-menu from <.with-context-menu /> then
+                get #log-item-context-menu-tmpl.innerHTML then put it after me then add .with-context-menu to me then
+                _hyperscript.processNode(.log-item-context-menu) then htmx.process(next <.log-item-context-menu/>)
+              end
+            end
+          end
+
+        |]
 
 
 collectionStepResult_ :: Int -> Testing.StepResult -> Html ()
 collectionStepResult_ idx stepResult = section_ [class_ "p-1"] do
-  when (idx == 1) $ div_ [id_ "step-results-indicator", class_ "absolute top-1/2 z-10 left-1/2 -translate-x-1/2 rounded-sm -translate-y-1/2 steps-indicator text-slate-400"] do
+  when (idx == 0) $ div_ [id_ "step-results-indicator", class_ "absolute top-1/2 z-10 left-1/2 -translate-x-1/2 rounded-sm -translate-y-1/2 steps-indicator text-slate-400"] do
     div_ [class_ "hidden loading-indicator flex justify-center bg-white rounded-sm shadow-sm p-4"] do
       span_ [class_ "loading loading-dots loading-lg"] ""
   div_ [class_ "p-2 bg-base-200 font-bold"] do
     toHtml $ show (idx + 1) <> " " <> fromMaybe "" stepResult.stepName
   div_ [role_ "tablist", class_ "tabs tabs-lifted"] do
     input_ [type_ "radio", name_ $ "step-result-tabs-" <> show idx, role_ "tab", class_ "tab", Aria.label_ "Response Log", checked_]
-    div_ [role_ "tabpanel", class_ "tab-content bg-base-100 bg-base-100 border-base-300 rounded-box p-6"]
-      $ toHtmlRaw
-      $ textToHTML stepResult.stepLog
+    div_ [role_ "tabpanel", class_ "tab-content bg-base-100 bg-base-100 border-base-300 rounded-box p-6"] $
+      toHtmlRaw $
+        textToHTML stepResult.stepLog
 
     input_ [type_ "radio", name_ $ "step-result-tabs-" <> show idx, role_ "tab", class_ "tab", Aria.label_ "Response Headers"]
-    div_ [role_ "tabpanel", class_ "tab-content bg-base-100 bg-base-100 border-base-300 rounded-box p-6 "]
-      $ table_ [class_ "table table-xs"] do
+    div_ [role_ "tabpanel", class_ "tab-content bg-base-100 bg-base-100 border-base-300 rounded-box p-6 "] $
+      table_ [class_ "table table-xs"] do
         thead_ [] $ tr_ [] $ th_ [] "Name" >> th_ [] "Value"
         tbody_ $ forM_ (M.toList stepResult.request.resp.headers) $ \(k, v) -> tr_ [] do
           td_ [] $ toHtml k
           td_ [] $ toHtml $ T.intercalate "," v
 
     input_ [type_ "radio", name_ $ "step-result-tabs-" <> show idx, role_ "tab", class_ "tab", Aria.label_ "Response Body"]
-    div_ [role_ "tabpanel", class_ "tab-content bg-base-100 bg-base-100 border-base-300 rounded-box p-6"] do
+    div_ [role_ "tabpanel", class_ "tab-content bg-base-100 bg-base-100 border-base-300 rounded-box p-6", term "data-step" (show idx)] do
       jsonValueToHtmlTree stepResult.request.resp.json
-    jsonTreeAuxillaryCode idx
-    let stepIndex = show idx
-    script_
-      [text|
-        function addToAssertions(event) {
-            const step = $stepIndex
-            const target = event.target.parentNode.parentNode.parentNode
-            const path = target.getAttribute('data-field-path');
-            const value = target.getAttribute('data-field-value');
-            const assertion = "$.resp.json." + path + ' == ' + value;
-            console.log(assertion)
-            window.updateStepAssertions(assertion, step - 1);
-        }
-    |]
 
 
-jsonTreeAuxillaryCode :: Int -> Html ()
-jsonTreeAuxillaryCode idx = do
+jsonTreeAuxillaryCode :: Html ()
+jsonTreeAuxillaryCode = do
   template_ [id_ "log-item-context-menu-tmpl"] do
-    div_ [id_ "log-item-context-menu", class_ "log-item-context-menu text-sm origin-top-right absolute left-0 mt-2 w-56 rounded-md shadow-md shadow-slate-300 bg-white ring-1 ring-black ring-opacity-5 divide-y divide-gray-100 focus:outline-none z-10", role_ "menu", tabindex_ "-1"] do
-      div_ [class_ "py-1", role_ "none"] do
+    div_ [id_ "log-item-context-menu", class_ "log-item-context-menu text-sm origin-top-right absolute left-0 mt-2 rounded-md shadow-md shadow-slate-300 bg-white ring-1 ring-black ring-opacity-5 divide-y divide-gray-100 focus:outline-none z-10", role_ "menu", tabindex_ "-1"] do
+      div_ [class_ "py-1 w-max", role_ "none"] do
+        button_
+          [ class_ "cursor-pointer w-full text-left text-slate-700 block px-4 py-1 text-sm hover:bg-gray-100 hover:text-slate-900"
+          , role_ "menuitem"
+          , tabindex_ "-1"
+          , id_ "menu-item-1"
+          , onclick_ "addToAssertions(event, 'ok', '==')"
+          , type_ "button"
+          ]
+          "Add an equals to assertion"
         button_
           [ class_ "cursor-pointer w-full text-left text-slate-700 block px-4 py-1 text-sm hover:bg-gray-100 hover:text-slate-900"
           , role_ "menuitem"
           , tabindex_ "-1"
           , id_ "menu-item-2"
-          , onclick_ "addToAssertions(event)"
+          , onclick_ "addToAssertions(event, 'ok', '!=')"
           , type_ "button"
           ]
-          "Add to assertions"
+          "Add a not equals assertion"
+        button_
+          [ class_ "cursor-pointer w-full text-left text-slate-700 block px-4 py-1 text-sm hover:bg-gray-100 hover:text-slate-900"
+          , role_ "menuitem"
+          , tabindex_ "-1"
+          , onclick_ "addToAssertions(event, 'ok', '>')"
+          , type_ "button"
+          ]
+          "Add a greater than assertions"
+        button_
+          [ class_ "cursor-pointer w-full text-left text-slate-700 block px-4 py-1 text-sm hover:bg-gray-100 hover:text-slate-900"
+          , role_ "menuitem"
+          , tabindex_ "-1"
+          , id_ "menu-item-4"
+          , onclick_ "addToAssertions(event, 'string')"
+          , type_ "button"
+          ]
+          "Add an is string assertions"
+
+        button_
+          [ class_ "cursor-pointer w-full text-left text-slate-700 block px-4 py-1 text-sm hover:bg-gray-100 hover:text-slate-900"
+          , role_ "menuitem"
+          , tabindex_ "-1"
+          , id_ "menu-item-4"
+          , onclick_ "addToAssertions(event, 'number')"
+          , type_ "button"
+          ]
+          "Add an is number assertions"
 
 
 textToHTML :: Text -> Text
