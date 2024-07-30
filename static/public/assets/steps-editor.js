@@ -287,9 +287,32 @@ export class StepsEditor extends LitElement {
 
   renderParamRow(key, value, type, idx, aidx, result) {
     let error = result?.err?.advice || ''
-    let matches = []
 
+    return html`
+      <div class="flex flex-row gap-2 w-full paramRow">
+        <span class="shrink hidden assertIndicator"> ${this.renderAssertResult(result)} </span>
+        <input class="input input-bordered input-xs w-1/3" list="${type}DataList" placeholder="Key" .value="${key}" @change=${(e) => this.updateKey(e, idx, type, aidx)} />
+        <div class="shrink w-full flex flex-col">
+          <input
+            list="${type === 'asserts' ? 'assertAutocomplete-' + idx : ''}"
+            class="input input-bordered ${error ? 'input-error' : ''} input-xs w-full"
+            placeholder="Value"
+            .value="${value}"
+            @input=${(e) => this.updateValue(e, idx, type, aidx, key)}
+          />
+          <span class="text-xs text-red-500">${error}</span>
+        </div>
+        <a class="cursor-pointer text-slate-600" @click=${(e) => this.deleteKey(e, idx, type, aidx, key)}>
+          <svg class="inline-block icon w-3 h-3 "><use href="/assets/svgs/fa-sprites/solid.svg#xmark"></use></svg>
+        </a>
+      </div>
+    `
+  }
+
+  renderParamsRows(stepData, idx, type, results) {
+    let rows
     if (type === 'asserts') {
+      let matches = []
       let fieldPathValues = new Set()
       let resultContainer = document.querySelector('#res-container-' + idx)
       let elements = resultContainer.querySelectorAll('[data-field-path]')
@@ -302,50 +325,19 @@ export class StepsEditor extends LitElement {
       })
 
       matches = Array.from(fieldPathValues)
-        .filter((v) => {
-          return v.startsWith(value) && v.length > value.length
-        })
-        .slice(0, 10)
-    }
 
-    return html`
-      <div class="flex flex-row gap-2 w-full paramRow">
-        <span class="shrink hidden assertIndicator"> ${this.renderAssertResult(result)} </span>
-        <input class="input input-bordered input-xs w-1/3" list="${type}DataList" placeholder="Key" .value="${key}" @change=${(e) => this.updateKey(e, idx, type, aidx)} />
-        <div class="shrink w-full flex flex-col">
-          <input
-            list="${type === 'asserts' ? 'assertAutocomplete-' + idx + '-' + aidx : ''}"
-            class="input input-bordered ${error ? 'input-error' : ''} input-xs w-full"
-            placeholder="Value"
-            .value="${value}"
-            @input=${(e) => this.updateValue(e, idx, type, aidx, key)}
-          />
-          <span class="text-xs text-red-500">${error}</span>
-          ${type === 'asserts'
-            ? html`
-                <datalist id=${'assertAutocomplete-' + idx + '-' + aidx}>
-                  ${matches.map((fieldPath) => {
-                    return html`<option class="w-full  text-left text-xs px-3 py-1 hover:bg-gray-200">${fieldPath}</option>`
-                  })}
-                </datalist>
-              `
-            : ''}
-        </div>
-        <a class="cursor-pointer text-slate-600" @click=${(e) => this.deleteKey(e, idx, type, aidx, key)}>
-          <svg class="inline-block icon w-3 h-3 "><use href="/assets/svgs/fa-sprites/solid.svg#xmark"></use></svg>
-        </a>
-      </div>
-    `
-  }
-
-  renderParamsRows(stepData, idx, type, results) {
-    let rows
-    if (type === 'asserts') {
       const data = stepData[type] || []
       rows = data.map((assertObj, aidx) => Object.entries(assertObj).map(([key, value]) => this.renderParamRow(key, value, type, idx, aidx, results[aidx])))
       if (rows.length === 0 || !Object.entries(data).some(([k, v]) => k.trim() === '' && v.trim() === '')) {
         rows.push(this.renderParamRow('', '', type, idx, rows.length))
       }
+      rows.push(html`
+        <datalist id=${'assertAutocomplete-' + idx}>
+          ${matches.map((fieldPath) => {
+            return html`<option class="w-full  text-left text-xs px-3 py-1 hover:bg-gray-200">${fieldPath}</option>`
+          })}
+        </datalist>
+      `)
     } else {
       const data = stepData[type] || {}
       rows = Object.entries(data).map(([key, value]) => this.renderParamRow(key, value, type, idx, null))
