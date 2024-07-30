@@ -398,7 +398,11 @@ export class StepsEditor extends LitElement {
       return
     }
     if (aidx != null) {
-      this.collectionSteps[idx][type][aidx][key] = value
+      if (key === '') {
+        this.collectionSteps[idx][type][aidx] = { ok: value }
+      } else {
+        this.collectionSteps[idx][type][aidx][key] = value
+      }
     } else {
       this.collectionSteps[idx][type][key] = value
     }
