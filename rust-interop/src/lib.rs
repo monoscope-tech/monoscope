@@ -21,10 +21,11 @@ fn run_testkit(file: &str, col: &str) -> String {
         path: ".".into(),
         step: Some("stage_name".into()),
         step_index: 0,
+        should_log: false,
     };
 
     let result = tokio::runtime::Runtime::new().unwrap().block_on(async {
-        base_request::run_json(ctx, file.to_string(), true, Some(col.to_string())).await
+        base_request::run_json(ctx, file.to_string(), Some(col.to_string())).await
     });
 
     match result {

@@ -152,7 +152,7 @@ itemsList_ listCfg items =
 
             whenJust listCfg.search \search -> do
               do
-                label_ [class_ "input input-sm input-bordered flex  overflow-hidden items-center gap-2", [__|on click halt|], [__|on keydown halt|]] do
+                label_ [class_ "input input-sm input-bordered flex  overflow-hidden items-center gap-2"] do
                   case search.viaQueryParam of
                     Just param -> do
                       input_
