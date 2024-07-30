@@ -315,7 +315,7 @@ collectionStepResult_ idx stepResult = section_ [class_ "p-1"] do
           td_ [] $ toHtml $ T.intercalate "," v
 
     input_ [type_ "radio", name_ $ "step-result-tabs-" <> show idx, role_ "tab", class_ "tab", Aria.label_ "Response Body"]
-    div_ [role_ "tabpanel", class_ "tab-content bg-base-100 bg-base-100 border-base-300 rounded-box p-6", term "data-step" (show idx)] do
+    div_ [role_ "tabpanel", id_ $ "res-container-" <> show idx, class_ "tab-content bg-base-100 bg-base-100 border-base-300 rounded-box p-6", term "data-step" (show idx)] do
       jsonValueToHtmlTree stepResult.request.resp.json
 
 

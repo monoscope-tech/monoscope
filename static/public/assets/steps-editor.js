@@ -287,17 +287,26 @@ export class StepsEditor extends LitElement {
 
   renderParamRow(key, value, type, idx, aidx, result) {
     let error = result?.err?.advice || ''
+    let matches = []
 
-    let elements = document.querySelectorAll('[data-field-path]')
-    let fieldPathValues = new Set()
+    if (type === 'asserts') {
+      let fieldPathValues = new Set()
+      let resultContainer = document.querySelector('#res-container-' + idx)
+      let elements = resultContainer.querySelectorAll('[data-field-path]')
 
-    elements.forEach((element) => {
-      fieldPathValues.add('$.resp.json.' + element.getAttribute('data-field-path'))
-    })
+      elements.forEach((element) => {
+        let path = element.getAttribute('data-field-path')
+        if (path) {
+          fieldPathValues.add(('$.resp.json.' + path.replace(/\.?(\d+)\.?/g, '.[$1].')).replace('..', '.'))
+        }
+      })
 
-    const matches = Array.from(fieldPathValues).filter((v) => {
-      return v.startsWith(value) && v.length > value.length
-    })
+      matches = Array.from(fieldPathValues)
+        .filter((v) => {
+          return v.startsWith(value) && v.length > value.length
+        })
+        .slice(0, 10)
+    }
 
     return html`
       <div class="flex flex-row gap-2 w-full paramRow">
@@ -305,18 +314,22 @@ export class StepsEditor extends LitElement {
         <input class="input input-bordered input-xs w-1/3" list="${type}DataList" placeholder="Key" .value="${key}" @change=${(e) => this.updateKey(e, idx, type, aidx)} />
         <div class="shrink w-full flex flex-col">
           <input
-            list="${type === 'asserts' ? 'assertAutocomplete' : ''}"
+            list="${type === 'asserts' ? 'assertAutocomplete-' + idx + '-' + aidx : ''}"
             class="input input-bordered ${error ? 'input-error' : ''} input-xs w-full"
             placeholder="Value"
             .value="${value}"
             @input=${(e) => this.updateValue(e, idx, type, aidx, key)}
           />
           <span class="text-xs text-red-500">${error}</span>
-          <datalist id="assertAutocomplete">
-            ${matches.map((fieldPath) => {
-              return html`<option class="w-full  text-left text-xs px-3 py-1 hover:bg-gray-200">${fieldPath}</option>`
-            })}
-          </datalist>
+          ${type === 'asserts'
+            ? html`
+                <datalist id=${'assertAutocomplete-' + idx + '-' + aidx}>
+                  ${matches.map((fieldPath) => {
+                    return html`<option class="w-full  text-left text-xs px-3 py-1 hover:bg-gray-200">${fieldPath}</option>`
+                  })}
+                </datalist>
+              `
+            : ''}
         </div>
         <a class="cursor-pointer text-slate-600" @click=${(e) => this.deleteKey(e, idx, type, aidx, key)}>
           <svg class="inline-block icon w-3 h-3 "><use href="/assets/svgs/fa-sprites/solid.svg#xmark"></use></svg>
