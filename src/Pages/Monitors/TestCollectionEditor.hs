@@ -234,7 +234,7 @@ collectionPage pid col col_rn respJson = do
                 , hxPatch_ ""
                 , hxParams_ "stepsData"
                 , hxExt_ "json-enc"
-                , hxVals_ "js:{stepsData: document.getElementById('stepsEditor').collectionSteps}"
+                , hxVals_ "js:{stepsData: getCollectionStepsData()}"
                 , hxTarget_ "#step-results-parent"
                 , hxSwap_ "innerHTML"
                 , hxIndicator_ "#step-results-indicator"
@@ -274,6 +274,13 @@ collectionPage pid col col_rn respJson = do
               }
             window.updateStepAssertions(assertion, expression, step);
         }
+
+      function getCollectionStepsData() {
+        const stepsData = document.getElementById('stepsEditor').collectionSteps
+        const errors = validateStepsData(stepsData);
+
+
+      }
     |]
     script_
       [type_ "text/hyperscript"]
