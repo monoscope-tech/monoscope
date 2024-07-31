@@ -4,12 +4,14 @@ export class StepsEditor extends LitElement {
   static properties = {
     collectionSteps: [],
     collectionResults: [],
+    saveErrors: [],
   }
 
   constructor() {
     super()
     this.collectionSteps = window.collectionSteps || []
     this.collectionResults = window.collectionResults || []
+    this.saveErrors = []
 
     require.config({ paths: { vs: '/assets/js/monaco/vs' } })
     require.config({ paths: { vs: 'https://unpkg.com/monaco-editor/min/vs' } })
@@ -29,6 +31,11 @@ export class StepsEditor extends LitElement {
 
     window.updateCollectionResults = (results) => {
       this.collectionResults = results
+      this.requestUpdate()
+    }
+
+    window.updateStepsWithErrors = (errors) => {
+      this.saveErrors = errors
       this.requestUpdate()
     }
   }
@@ -168,13 +175,19 @@ export class StepsEditor extends LitElement {
     }
   }
 
-  renderCollectionStep(stepData, idx, result) {
+  renderCollectionStep(stepData, idx, result, saveError) {
     const { method, url } = this.methodAndUrl(stepData)
     const hasResults = !!result
     const hasFailingAssertions = result?.assert_results.some((a) => !a.ok || a.ok === false) || false
+    const svErr = saveError !== undefined
+    saveError = saveError ? saveError : {}
     return html`
       <div
-        class="rounded-lg overflow-hidden border group/item collectionStep bg-white draggable ${hasFailingAssertions ? 'border-red-500' : hasResults ? 'border-green-500' : 'border-slate-200'}"
+        class="rounded-lg overflow-hidden border group/item collectionStep bg-white draggable ${hasFailingAssertions || svErr
+          ? 'border-red-500'
+          : hasResults
+          ? 'border-green-500'
+          : 'border-slate-200'}"
         draggable="true"
         @dragstart="${(e) => e.dataTransfer.setData('text/plain', e.target.dataset.index)}"
         @dragover="${this._onDragOver}"
@@ -210,6 +223,7 @@ export class StepsEditor extends LitElement {
                     value="${method}"
                     @change=${(e) => this.updateKey(e, idx, null, null)}
                   />
+                  ${saveError.method ? html`<span class="text-red-700 text-xs">${saveError.method}</span>` : ''}
                 </label>
                 <label for="actions-data" class="flex-1 text-sm font-medium form-control w-full flex flex-row items-center gap-1">
                   <input
@@ -220,6 +234,7 @@ export class StepsEditor extends LitElement {
                     .value="${url}"
                     @change=${(e) => this.updateValue(e, idx, null, null, method)}
                   />
+                  ${saveError.url ? html`<span class="text-red-700 text-xs">${saveError.url}</span>` : ''}
                 </label>
               </div>
             </div>
@@ -285,13 +300,21 @@ export class StepsEditor extends LitElement {
     ></span>`
   }
 
-  renderParamRow(key, value, type, idx, aidx, result) {
+  renderParamRow(key, value, type, idx, aidx, result, saveError) {
     let error = result?.err?.advice || ''
+    let keyError = ''
+    if (saveError) {
+      error = saveError.value ? saveError.value : error
+      keyError = saveError.key ? saveError.key : ''
+    }
 
     return html`
       <div class="flex flex-row gap-2 w-full paramRow">
         <span class="shrink hidden assertIndicator"> ${this.renderAssertResult(result)} </span>
-        <input class="input input-bordered input-xs w-1/3" list="${type}DataList" placeholder="Key" .value="${key}" @change=${(e) => this.updateKey(e, idx, type, aidx)} />
+        <div class="flex flex-col w-1/3">
+          <input class="input input-bordered input-xs w-full" list="${type}DataList" placeholder="Key" .value="${key}" @change=${(e) => this.updateKey(e, idx, type, aidx)} />
+          <span class="text-xs text-red-500 w-full">${keyError}</span>
+        </div>
         <div class="shrink w-full flex flex-col">
           <input
             list="${type === 'asserts' ? 'assertAutocomplete-' + idx : ''}"
@@ -311,6 +334,7 @@ export class StepsEditor extends LitElement {
 
   renderParamsRows(stepData, idx, type, results) {
     let rows
+    const errors = this.saveErrors[idx] ? this.saveErrors[idx][type] || [] : []
     if (type === 'asserts') {
       let matches = []
       let fieldPathValues = new Set()
@@ -327,7 +351,7 @@ export class StepsEditor extends LitElement {
       matches = Array.from(fieldPathValues)
 
       const data = stepData[type] || []
-      rows = data.map((assertObj, aidx) => Object.entries(assertObj).map(([key, value]) => this.renderParamRow(key, value, type, idx, aidx, results[aidx])))
+      rows = data.map((assertObj, aidx) => Object.entries(assertObj).map(([key, value]) => this.renderParamRow(key, value, type, idx, aidx, results[aidx], errors[aidx])))
       if (rows.length === 0 || !Object.entries(data).some(([k, v]) => k.trim() === '' && v.trim() === '')) {
         rows.push(this.renderParamRow('', '', type, idx, rows.length))
       }
@@ -340,7 +364,7 @@ export class StepsEditor extends LitElement {
       `)
     } else {
       const data = stepData[type] || {}
-      rows = Object.entries(data).map(([key, value]) => this.renderParamRow(key, value, type, idx, null))
+      rows = Object.entries(data).map(([key, value], ind) => this.renderParamRow(key, value, type, idx, null, undefined, errors[ind]))
       if (rows.length === 0 || !Object.entries(data).some(([k, v]) => k.trim() === '' && v.trim() === '')) {
         rows.push(this.renderParamRow('', '', type, idx))
       }
@@ -428,7 +452,7 @@ export class StepsEditor extends LitElement {
         <div id="steps-codeEditor" class="h-full max-h-screen hidden group-has-[.editormode:checked]/colform:block"></div>
         <div class="h-full overflow-y-scroll group-has-[.editormode:checked]/colform:hidden">
           <div id="collectionStepsContainer" class=" p-4 space-y-4 collectionSteps">
-            ${this.collectionSteps.map((stepData, idx) => this.renderCollectionStep(stepData, idx, this.collectionResults[idx]) || undefined)}
+            ${this.collectionSteps.map((stepData, idx) => this.renderCollectionStep(stepData, idx, this.collectionResults[idx], this.saveErrors[idx]) || undefined)}
           </div>
           <div class="p-4 pt-2">
             <a class="btn btn-outline btn-neutral btn-sm items-center cursor-pointer" @click=${() => (this.collectionSteps = [...this.collectionSteps, {}])}>

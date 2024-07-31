@@ -1,160 +1,143 @@
-export const PostConfig = {
-  method: "POST",
-  headers: { "Content-Type": "application/json" },
-};
+'use strict'
 
-export function getEvent(eventName, value) {
+function getEvent(eventName, value) {
   const event = new CustomEvent(eventName, {
     detail: value,
     bubbles: true,
     composed: true,
-  });
-  return event;
+  })
+  return event
 }
 
-export const METHODS = [
-  "GET",
-  "POST",
-  "PATCH",
-  "PUT",
-  "DELETE",
-  "HEAD",
-  "OPTIONS",
-];
-export const ASSERTS = [
-  "exists",
-  "number",
-  "string",
-  "boolean",
-  "ok",
-  "empty",
-  "notEmpty",
-];
+const METHODS = ['GET', 'POST', 'PATCH', 'PUT', 'DELETE', 'HEAD', 'OPTIONS']
+const ASSERTS = ['exists', 'number', 'string', 'array', 'boolean', 'ok', 'empty', 'notEmpty', 'null']
 
-export function triggerToastEvent(event) {
-  document.querySelector("body").dispatchEvent(event);
+function triggerToastEvent(event) {
+  document.querySelector('body').dispatchEvent(event)
 }
 
-function isValidStep(step, step_ind, errors) {
-  hasMethod(step, step_ind, errors);
-  if (step.asserts) isValidAssert(step.asserts, step_ind, errors);
-  if (step.headers) hasValidHeaders(step.headers, step_ind, errors);
+function mergeErrors(errors, errs) {
+  if (errs === undefined) {
+    return errors
+  }
+  if (errors === undefined) {
+    errors = {}
+  }
+  return { ...errors, ...errs }
 }
-function hasValidHeaders(headers, step, errors) {
+
+function isValidStep(step) {
+  let errors
+  errors = mergeErrors(errors, getMethodAndUrlErrors(step))
+  if (step.asserts) {
+    errors = mergeErrors(errors, getAssertErrors(step.asserts))
+  }
+  if (step.headers) {
+    errors = mergeErrors(errors, getHeaderErrors(step.headers))
+  }
+
+  return errors
+}
+
+function getHeaderErrors(headers) {
   // Check if headers is an object
-  if (
-    typeof headers !== "object" ||
-    headers === null ||
-    Array.isArray(headers)
-  ) {
-    errors.push(`STEP ${step} (Headers): Header must be key value object pair`);
-    return;
+  if (typeof headers !== 'object' || headers === null || Array.isArray(headers)) {
+    return { headers: 'Header must be key value object pair' }
   }
-
+  const errors = []
   for (const [key, value] of Object.entries(headers)) {
-    if (typeof key !== "string" || key.trim() === "") {
-      errors.push(`STEP ${step} (Headers): ${key} is not a valid header`);
-      return;
+    const err = undefined
+    if (typeof key !== 'string' || key.trim() === '') {
+      if (!err) {
+        err.key = 'Header key must be a non empty string'
+      }
     }
-    if (typeof value !== "string") {
-      errors.push(`STEP ${step} (Headers): Value ${key} must be a string`);
-      return;
+    if (typeof value !== 'string') {
+      if (!err) {
+        err.value = 'Header value must be a non empty string'
+      }
     }
+    errors.push(err)
   }
-  return true;
+  if (errors.filter((e) => e !== undefined).length > 0) {
+    return { headers: errors }
+  }
+  return undefined
 }
 
-function hasMethod(obj, step, errors) {
-  if (typeof obj !== "object" || obj === null || Array.isArray(obj)) {
-    errors.push(`STEP ${step}: No valid http method found`);
-    return;
+function getMethodAndUrlErrors(obj) {
+  if (typeof obj !== 'object' || obj === null || Array.isArray(obj)) {
+    return { method: 'No valid http method found' }
   }
-  const httpMethodKeys = Object.keys(obj).filter((key) =>
-    METHODS.includes(key)
-  );
-  if (httpMethodKeys.length !== 1) {
-    errors.push(`STEP ${step}: No valid HTTP method found`);
-    return;
+  const httpMethodKeys = Object.keys(obj).filter((key) => METHODS.includes(key))
+  if (httpMethodKeys.length === 0) {
+    return { method: 'No valid http method found' }
   }
-  const httpMethodValue = obj[httpMethodKeys[0]];
-  if (typeof httpMethodValue !== "string") {
-    errors.push(`STEP ${step}: Invalid HTTP method value`);
+  const httpMethodValue = obj[httpMethodKeys[0]]
+  if (typeof httpMethodValue !== 'string') {
+    return { url: 'No valid url found' }
   }
+  return undefined
 }
 
-function isValidAssert(asserts, step, errors) {
+function getAssertErrors(asserts) {
   if (!Array.isArray(asserts)) {
-    errors.push(`STEP ${step} (Asserts): Asserts must be an array`);
-    return;
+    return { asserts: 'Asserts must be an array' }
   }
+
+  let errors = []
   for (const item of asserts) {
-    if (typeof item !== "object" || item === null || Array.isArray(item)) {
-      errors.push(`STEP ${step} (Asserts): Each assert must be an object`);
-      return;
+    let err = undefined
+    if (typeof item !== 'object' || item === null || Array.isArray(item)) {
+      err.value = 'Assert must be an object'
     }
-    const keys = Object.keys(item);
-    if (keys.length !== 1) {
-      errors.push(`STEP ${step} (Asserts): Each assert must have only one key`);
-      return;
-    }
+    const keys = Object.keys(item)
 
     if (!ASSERTS.includes(keys[0])) {
-      errors.push(
-        `STEP ${step} (Asserts): ${keys[0]} is not a valid assertion `
-      );
+      if (!err) {
+        err = {}
+      }
+      err.key = 'Invalid assert key'
     }
+    if (typeof item[keys[0]] !== 'string') {
+      if (!err) {
+        err = {}
+      }
+
+      err.value = 'Invalid assert value'
+    }
+    errors.push(err)
   }
+  if (errors.filter((e) => e !== undefined).length > 0) {
+    return { asserts: errors }
+  }
+  return undefined
 }
 
-export function validateYaml(yaml) {
+function validateYaml(data) {
   try {
-    const data = jsyaml.load(yaml);
     if (!Array.isArray(data)) {
-      triggerToastEvent(
-        getEvent("errorToast", { value: ["Array of steps expected"] })
-      );
-      return undefined;
+      triggerToastEvent(getEvent('errorToast', { value: ['Array of steps expected'] }))
+      return undefined
     }
-    let errors = [];
-    for (let [ind, step] of data.entries()) {
-      isValidStep(step, ind + 1, errors);
-      if (errors.length !== 0) {
-        return {
-          validate_errors: errors,
-        };
-      }
+    let errors = []
+    for (let [_, step] of data.entries()) {
+      errors.push(isValidStep(step))
+    }
+    window.updateStepsWithErrors(errors)
+    if (errors.filter((err) => err !== undefined).length > 0) {
+      triggerToastEvent(getEvent('errorToast', { value: ['Saving failed. Please fix the errors and try again.'] }))
+      return
     }
     data.map((step) => {
       if (step.json) {
-        step.json =
-          typeof step.json === "string" ? step.json : JSON.stringify(step.json);
+        step.json = typeof step.json === 'string' ? step.json : JSON.stringify(step.json)
       }
-    });
-    return data;
-  } catch (error) {
-    const event = getEvent("errorToast", { value: ["Invalid yaml"] });
-    triggerToastEvent(event);
-    return undefined;
-  }
-}
-
-export function getDeletedUpdatedAndNewSteps(steps, newSteps) {
-  const deletedSteps = steps
-    .filter((step) => !newSteps.some((s) => s.id === step.id))
-    .map((step) => step.id);
-  const addedSteps = newSteps.filter((step) => !step.id);
-  const updatedSteps = newSteps
-    .filter((step) => {
-      const updatedStep = steps.find((s) => s.id === step.id);
-      return (
-        updatedStep && JSON.stringify(step) !== JSON.stringify(updatedStep)
-      );
     })
-    .map((step) => {
-      const id = step.id;
-      delete step.id;
-      delete step.lastRun;
-      return { stepId: id, stepData: step };
-    });
-  return { deletedSteps, updatedSteps, addedSteps };
+    return data
+  } catch (error) {
+    const event = getEvent('errorToast', { value: ['Invalid yaml'] })
+    triggerToastEvent(event)
+    return undefined
+  }
 }

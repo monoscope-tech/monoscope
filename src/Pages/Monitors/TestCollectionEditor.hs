@@ -210,7 +210,7 @@ collectionPage pid col col_rn respJson = do
       , hxPost_ ""
       , hxSwap_ "none"
       , hxExt_ "json-enc"
-      , hxVals_ "js:{stepsData: document.getElementById('stepsEditor').collectionSteps}"
+      , hxVals_ "js:{stepsData: saveStepData()}"
       ]
       do
         div_ [class_ "col-span-1 h-full divide-y flex flex-col overflow-y-hidden"] do
@@ -234,7 +234,7 @@ collectionPage pid col col_rn respJson = do
                 , hxPatch_ ""
                 , hxParams_ "stepsData"
                 , hxExt_ "json-enc"
-                , hxVals_ "js:{stepsData: getCollectionStepsData()}"
+                , hxVals_ "js:{stepsData: saveStepData()}"
                 , hxTarget_ "#step-results-parent"
                 , hxSwap_ "innerHTML"
                 , hxIndicator_ "#step-results-indicator"
@@ -259,6 +259,7 @@ collectionPage pid col col_rn respJson = do
                     span_ [class_ "loading loading-dots loading-lg"] ""
         jsonTreeAuxillaryCode
 
+    script_ [src_ "/assets/testeditor-utils.js"] ("" :: Text)
     script_ [type_ "module", src_ "/assets/steps-editor.js"] ("" :: Text)
     script_
       [text|
@@ -275,13 +276,16 @@ collectionPage pid col col_rn respJson = do
             window.updateStepAssertions(assertion, expression, step);
         }
 
-      function getCollectionStepsData() {
-        const stepsData = document.getElementById('stepsEditor').collectionSteps
-        const errors = validateStepsData(stepsData);
-
-
+     function saveStepData()  {
+       const data = document.getElementById('stepsEditor').collectionSteps
+       const check = validateYaml(data)
+       if(check === undefined) {
+          return undefined
+        }
+       return data;
       }
     |]
+
     script_
       [type_ "text/hyperscript"]
       [text|
@@ -309,13 +313,13 @@ collectionStepResult_ idx stepResult = section_ [class_ "p-1"] do
     toHtml $ show (idx + 1) <> " " <> fromMaybe "" stepResult.stepName
   div_ [role_ "tablist", class_ "tabs tabs-lifted"] do
     input_ [type_ "radio", name_ $ "step-result-tabs-" <> show idx, role_ "tab", class_ "tab", Aria.label_ "Response Log", checked_]
-    div_ [role_ "tabpanel", class_ "tab-content bg-base-100 bg-base-100 border-base-300 rounded-box p-6"] $
-      toHtmlRaw $
-        textToHTML stepResult.stepLog
+    div_ [role_ "tabpanel", class_ "tab-content bg-base-100 bg-base-100 border-base-300 rounded-box p-6"]
+      $ toHtmlRaw
+      $ textToHTML stepResult.stepLog
 
     input_ [type_ "radio", name_ $ "step-result-tabs-" <> show idx, role_ "tab", class_ "tab", Aria.label_ "Response Headers"]
-    div_ [role_ "tabpanel", class_ "tab-content bg-base-100 bg-base-100 border-base-300 rounded-box p-6 "] $
-      table_ [class_ "table table-xs"] do
+    div_ [role_ "tabpanel", class_ "tab-content bg-base-100 bg-base-100 border-base-300 rounded-box p-6 "]
+      $ table_ [class_ "table table-xs"] do
         thead_ [] $ tr_ [] $ th_ [] "Name" >> th_ [] "Value"
         tbody_ $ forM_ (M.toList stepResult.request.resp.headers) $ \(k, v) -> tr_ [] do
           td_ [] $ toHtml k

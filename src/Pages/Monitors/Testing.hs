@@ -86,8 +86,8 @@ testingGetH pid filterTM = do
           , nextFetchUrl = Nothing
           , search = Just $ ItemsList.SearchCfg{viaQueryParam = Nothing}
           , tabsFilter =
-              Just $
-                ItemsList.TabFilter
+              Just
+                $ ItemsList.TabFilter
                   { current = currentFilterTab
                   , options =
                       [ ItemsList.TabFilterOpt{name = "Active", count = Nothing}
@@ -98,8 +98,8 @@ testingGetH pid filterTM = do
               [ ItemsList.BulkAction{icon = Just "check", title = "deactivate", uri = "/p/" <> pid.toText <> "/anomalies/bulk_actions/acknowlege"}
               ]
           , heading =
-              Just $
-                ItemsList.Heading
+              Just
+                $ ItemsList.Heading
                   { pageTitle = "Multistep API monitors/tests (Beta)"
                   , rightComponent =
                       Just
@@ -117,8 +117,8 @@ testingGetH pid filterTM = do
                   , subSection = Nothing
                   }
           , zeroState =
-              Just $
-                ItemsList.ZeroState
+              Just
+                $ ItemsList.ZeroState
                   { icon = "empty-set"
                   , title = "No Multistep Test/Monitor yet."
                   , description = "You're can create one to start monitoring your services."
