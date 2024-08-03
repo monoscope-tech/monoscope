@@ -32,7 +32,7 @@ import Models.Apis.Formats qualified as Formats
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Apis.Shapes qualified as Shapes
 import Models.Projects.Projects qualified as Projects
-import Network.Wreq
+import Network.Wreq hiding (params)
 import PyF (fmt)
 import Relude hiding (ask)
 import RequestMessages qualified

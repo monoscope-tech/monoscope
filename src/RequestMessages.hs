@@ -12,7 +12,6 @@ module RequestMessages (
 )
 where
 
-import Control.Lens ((.~))
 import Control.Monad.ST (ST, runST)
 import Data.Aeson (ToJSON (toJSON), Value (Object), (.=))
 import Data.Aeson qualified as AE
@@ -48,7 +47,6 @@ import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Apis.Shapes qualified as Shapes
 import Models.Projects.Projects qualified as Projects
 import NeatInterpolation (text)
-import Network.Wreq
 import Numeric (showHex)
 import Relude
 import Relude.Unsafe as Unsafe (read)
