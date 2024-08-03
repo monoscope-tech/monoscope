@@ -20,6 +20,7 @@ window.buildCurlRequest = function buildCurlRequest(event) {
     try {
       reqBody = " -d '" + JSON.stringify(request_body) + "' \\\n"
     } catch (error) {
+      // none json request body
       reqBody = '-data-raw ' + '"' + request_body + '"  \\\n'
     }
   }
