@@ -32,6 +32,8 @@ ghc-options:
   - -Wno-missing-export-lists
   - -Wno-orphans
   # remove the next options when possible. This is a temporary workaround
+  - -Wno-missing-deriving-strategies # for otlp generated files. Might move this to new package
+  - -Wno-missing-role-annotations # for otlp generated files. Might move this to new package
   - -Wno-unused-matches
   - -Wno-missing-kind-signatures
   - -Wno-type-defaults
@@ -68,6 +70,7 @@ default-extensions:
   - TypeFamilies
   - RecordWildCards
   - TemplateHaskell
+  - AllowAmbiguousTypes
 
 extra-source-files:
   - README.md
@@ -176,10 +179,10 @@ library:
     - tuple
     - wai-middleware-static
     - proto-lens-runtime
-    - grapesy
-    # - grpc-haskell
-    # - proto3-suite
-    # - proto3-wire
+    - grpc-haskell
+    - proto3-suite
+    - proto3-wire
+    - deepseq
 
 executables:
   apitoolkit-server-exe:

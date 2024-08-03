@@ -497,14 +497,15 @@ Endpoint: `{endpointPath}`
     --               ]
     --       sendPostmarkEmail (CI.original u.email) "anomaly-shape" templateVars
     Anomalies.ATFormat -> do
-      -- Send an email about the new shape anomaly but only if there was no endpoint anomaly logged
-      hasEndpointAnomaly <- dbtToEff $ Anomalies.getFormatParentAnomalyVM pid targetHash
-      when (hasEndpointAnomaly == 0) $ whenJustM (dbtToEff $ Anomalies.getAnomalyVM pid targetHash) \anomaly -> do
-        endp <- dbtToEff $ Endpoints.endpointByHash pid $ T.take 8 targetHash
-        users <- dbtToEff $ Projects.usersByProjectId pid
-        project <- Unsafe.fromJust <<$>> dbtToEff $ Projects.projectById pid
-        _ <- dbtToEff $ Anomalies.insertIssue $ Unsafe.fromJust $ Anomalies.convertAnomalyToIssue (endp <&> (.host)) anomaly
-        pass
+      pass
+    -- -- Send an email about the new shape anomaly but only if there was no endpoint anomaly logged
+    -- hasEndpointAnomaly <- dbtToEff $ Anomalies.getFormatParentAnomalyVM pid targetHash
+    -- when (hasEndpointAnomaly == 0) $ whenJustM (dbtToEff $ Anomalies.getAnomalyVM pid targetHash) \anomaly -> do
+    --   endp <- dbtToEff $ Endpoints.endpointByHash pid $ T.take 8 targetHash
+    --   users <- dbtToEff $ Projects.usersByProjectId pid
+    --   project <- Unsafe.fromJust <<$>> dbtToEff $ Projects.projectById pid
+    --   _ <- dbtToEff $ Anomalies.insertIssue $ Unsafe.fromJust $ Anomalies.convertAnomalyToIssue (endp <&> (.host)) anomaly
+    --   pass
     -- forM_ project.notificationsChannel \case
     --   Projects.NSlack ->
     --     sendSlackMessage

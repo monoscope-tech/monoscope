@@ -138,41 +138,6 @@ packages:
   original:
     hackage: x509-store-1.6.9@sha256:1f1abeab5bacf1407b920d0f34f4c35a5ad450ff0d8121cd3dc76460f81e711d,1716
 - completed:
-    hackage: grpc-haskell-0.1.0@sha256:af109db9bf7d7d00a5088fb30dab1a03e3c54b19c66dc1ac0d8d61217524d11b,6334
-    pantry-tree:
-      sha256: d02f71fad7f9c8d734c30d6c039f1ad98e210e416ddb960c961d0669a4c184fc
-      size: 1934
-  original:
-    hackage: grpc-haskell-0.1.0@sha256:af109db9bf7d7d00a5088fb30dab1a03e3c54b19c66dc1ac0d8d61217524d11b,6334
-- completed:
-    hackage: proto3-suite-0.7.0@sha256:3733d946f4f15cf485412765380a9a8abee7b2fad1418dcd07b03cb1fbd40350,8381
-    pantry-tree:
-      sha256: 7b63dec87f0a7e3cbb8498faef9531cd2b63b468e5b4eba0d64e122dc5f88e7b
-      size: 3858
-  original:
-    hackage: proto3-suite-0.7.0@sha256:3733d946f4f15cf485412765380a9a8abee7b2fad1418dcd07b03cb1fbd40350,8381
-- completed:
-    hackage: proto3-wire-1.4.1@sha256:f3d141990f89a4c6e4215e21f412de15e688ca7de496f53a7a94828a138657be,2630
-    pantry-tree:
-      sha256: 41455b98c09d7cf37bff73ef74df274fd979dd5859e4168312e43a0fa178d3d7
-      size: 1065
-  original:
-    hackage: proto3-wire-1.4.1@sha256:f3d141990f89a4c6e4215e21f412de15e688ca7de496f53a7a94828a138657be,2630
-- completed:
-    hackage: dhall-1.42.1@sha256:3af5086c38158868ef7f94c6db8832cf9c61e8eab1010b33e109c4ddca0f0668,16814
-    pantry-tree:
-      sha256: 296bfba2c52bb9aff78e9653f3724d33d009a1753e5d71c10e9cf7edd76c5569
-      size: 352601
-  original:
-    hackage: dhall-1.42.1@sha256:3af5086c38158868ef7f94c6db8832cf9c61e8eab1010b33e109c4ddca0f0668,16814
-- completed:
-    hackage: grpc-haskell-core-0.1.0@sha256:50adbefd11be9e8b72ea98b7c3b5a4b2879fea211de4552b9759b91f2d4d8c51,3304
-    pantry-tree:
-      sha256: 5225c7c8413b57b43e94ec64a7efbc107fa764ccf66eb1fa6a7be22e5a98c683
-      size: 2330
-  original:
-    hackage: grpc-haskell-core-0.1.0@sha256:50adbefd11be9e8b72ea98b7c3b5a4b2879fea211de4552b9759b91f2d4d8c51,3304
-- completed:
     hackage: snappy-c-0.1.0@sha256:d79733db50552dc471710be8a16cc5f4fb69f210ece15fb430a50cb02a24f014,3999
     pantry-tree:
       sha256: 29f78868decbed86eef55e8ae3336300de7ae246024565355a9b66f88849282c
@@ -270,6 +235,58 @@ packages:
     commit: b54294c179f8ce8e76c9549c953e2ee684fcef8a
     git: https://github.com/tonyalaribe/gogol.git
     subdir: lib/services/gogol-cloudtrace
+- completed:
+    commit: 2d48ee3446858f08a8c75130c90d770c377569bd
+    git: https://github.com/awakesecurity/proto3-wire.git
+    name: proto3-wire
+    pantry-tree:
+      sha256: 435441c5b8a677353e3c6566f3e6e7d9c1947ff75ade51ce1bc8d66e4ae329eb
+      size: 2648
+    subdir: .
+    version: 1.4.3
+  original:
+    commit: 2d48ee3446858f08a8c75130c90d770c377569bd
+    git: https://github.com/awakesecurity/proto3-wire.git
+    subdir: .
+- completed:
+    commit: 4076ae6d6a1b2b91d0d4b70625c53754ba12f9b0
+    git: https://github.com/tonyalaribe/proto3-suite.git
+    name: proto3-suite
+    pantry-tree:
+      sha256: 86bccc2ee01665ff9c029a1e2016597ee95b2890d91141c88001ac19d2553446
+      size: 8417
+    subdir: .
+    version: 0.8.0
+  original:
+    commit: 4076ae6d6a1b2b91d0d4b70625c53754ba12f9b0
+    git: https://github.com/tonyalaribe/proto3-suite.git
+    subdir: .
+- completed:
+    commit: 4b3b04d0ac9d1db53033fb4f0b6864f25b6e945d
+    git: https://github.com/awakesecurity/gRPC-haskell.git
+    name: grpc-haskell-core
+    pantry-tree:
+      sha256: 2bfee0e6b5c88593099df242bd48a051f79468d1f4559b0c30a0c69125747a9e
+      size: 2532
+    subdir: core
+    version: 0.6.0
+  original:
+    commit: 4b3b04d0ac9d1db53033fb4f0b6864f25b6e945d
+    git: https://github.com/awakesecurity/gRPC-haskell.git
+    subdir: core
+- completed:
+    commit: 4b3b04d0ac9d1db53033fb4f0b6864f25b6e945d
+    git: https://github.com/awakesecurity/gRPC-haskell.git
+    name: grpc-haskell
+    pantry-tree:
+      sha256: e2acf6df3b1db984868c794451712321fcc68df403e70e590b79e6eba28be898
+      size: 7616
+    subdir: .
+    version: 0.4.0
+  original:
+    commit: 4b3b04d0ac9d1db53033fb4f0b6864f25b6e945d
+    git: https://github.com/awakesecurity/gRPC-haskell.git
+    subdir: .
 - completed:
     commit: 0fa01adb871e66996d4ed2c27a3e97fac39ac466
     git: https://github.com/tonyalaribe/xxhash

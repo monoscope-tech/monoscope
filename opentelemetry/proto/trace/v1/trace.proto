@@ -317,7 +317,7 @@ message Status {
     STATUS_CODE_OK                  = 1;
     // The Span contains an error.
     STATUS_CODE_ERROR               = 2;
-  };
+  }
 
   // The status code.
   StatusCode code = 3;
