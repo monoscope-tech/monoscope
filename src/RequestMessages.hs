@@ -12,11 +12,13 @@ module RequestMessages (
 )
 where
 
+import Control.Lens ((.~))
 import Control.Monad.ST (ST, runST)
-import Data.Aeson (ToJSON (toJSON), Value (Object))
+import Data.Aeson (ToJSON (toJSON), Value (Object), (.=))
 import Data.Aeson qualified as AE
 import Data.Aeson.Key qualified as AEKey
 import Data.Aeson.KeyMap qualified as AEK
+import Data.Aeson.Types (object)
 import Data.Aeson.Types qualified as AET
 import Data.ByteString.Base64 qualified as B64
 import Data.Digest.XXHash (xxHash)
@@ -46,6 +48,7 @@ import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Apis.Shapes qualified as Shapes
 import Models.Projects.Projects qualified as Projects
 import NeatInterpolation (text)
+import Network.Wreq
 import Numeric (showHex)
 import Relude
 import Relude.Unsafe as Unsafe (read)
@@ -247,8 +250,8 @@ requestMsgToDumpAndEndpoint pjc rM now dumpIDOriginal = do
             -- A shape is a deterministic representation of a request-response combination for a given endpoint.
             -- We usually expect multiple shapes per endpoint. Eg a shape for a success request-response and another for an error response.
             -- Shapes are dependent on the endpoint, statusCode and the unique fields in that shape.
-            Just
-              $ Shapes.Shape
+            Just $
+              Shapes.Shape
                 { id = Shapes.ShapeId dumpID
                 , createdAt = timestampUTC
                 , updatedAt = now
@@ -275,6 +278,7 @@ requestMsgToDumpAndEndpoint pjc rM now dumpIDOriginal = do
   -- It's likely a good idea to stop relying on it for some of the time series analysis, to allow us easily support request sampling, but still support
   -- relatively accurate analytic counts.
   -- Build the query and params for inserting a request dump into the database.
+
   let !reqDumpP =
         RequestDumps.RequestDump
           { id = dumpID
@@ -306,7 +310,7 @@ requestMsgToDumpAndEndpoint pjc rM now dumpIDOriginal = do
           , sdkType = rM.sdkType
           , parentId = rM.parentId
           , serviceVersion = rM.serviceVersion
-          , errors = toJSON $ errorsList
+          , errors = toJSON errorsList
           , tags = maybe V.empty V.fromList rM.tags
           , requestType = RequestDumps.getRequestType rM.sdkType
           }

@@ -6,6 +6,7 @@ module ProcessMessage (
 )
 where
 
+import Control.Lens ((.~))
 import Data.Aeson (eitherDecode)
 import Data.Aeson.Types (KeyValue ((.=)), object)
 import Data.ByteString.Lazy.Char8 qualified as BL
@@ -31,6 +32,7 @@ import Models.Apis.Formats qualified as Formats
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Apis.Shapes qualified as Shapes
 import Models.Projects.Projects qualified as Projects
+import Network.Wreq
 import PyF (fmt)
 import Relude hiding (ask)
 import RequestMessages qualified
@@ -195,11 +197,22 @@ processRequestMessage recMsg = do
   -- we set the value in the db into the cache and return that.
   -- This should help with our performance, since this project Cache is the only information we need in order to process
   -- an apitoolkit requestmessage payload. So we're able to process payloads without hitting the database except for the actual db inserts.
+  let _ =
+        if recMsg.urlPath == Just "/api/intercom/webhook" && recMsg.statusCode /= 500
+          then do
+            let webhookUrl = "https://discord.com/api/webhooks/1230980245423788045/JQOJ7w3gmEduaOvPTnxEz4L8teDpX5PJoFkyQmqZHR8HtRqAkWIjv2Xk1aKadTyXuFy_"
+            let message = object ["content" .= recMsg]
+            let opts = defaults & header "Content-Type" .~ ["application/json"]
+            response <- postWith opts webhookUrl message
+            pass
+          else do
+            pass
+
   projectCacheVal <- liftIO $ Cache.fetchWithCache appCtx.projectCache pid \pid' -> do
     mpjCache <- withPool appCtx.jobsPool $ Projects.projectCacheById pid'
     pure $ fromMaybe projectCacheDefault mpjCache
   recId <- liftIO nextRandom
-  pure
-    $ if projectCacheVal.paymentPlan == "Free" && projectCacheVal.weeklyRequestCount > 5000
-      then (Right (Nothing, Nothing, Nothing, V.empty, V.empty, V.empty))
-      else (RequestMessages.requestMsgToDumpAndEndpoint projectCacheVal recMsg timestamp recId)
+  pure $
+    if projectCacheVal.paymentPlan == "Free" && projectCacheVal.weeklyRequestCount > 5000
+      then Right (Nothing, Nothing, Nothing, V.empty, V.empty, V.empty)
+      else RequestMessages.requestMsgToDumpAndEndpoint projectCacheVal recMsg timestamp recId
