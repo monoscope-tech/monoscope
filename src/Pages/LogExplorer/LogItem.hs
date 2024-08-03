@@ -1,4 +1,4 @@
-module Pages.LogExplorer.LogItem (expandAPIlogItemH, expandAPIlogItem', apiLogItemH, ApiLogItem (..)) where
+module Pages.LogExplorer.LogItem (expandAPIlogItemH, expandAPIlogItem', apiLogItemH, ApiLogItem (..), jsonValueToHtmlTree) where
 
 import Data.Aeson ((.=))
 import Data.Aeson qualified as AE
@@ -66,7 +66,7 @@ expandAPIlogItem' pid req modal = do
               div_ [id_ "expire_container", class_ "absolute hidden bg-white border shadow w-full overflow-y-auto", style_ "top:100%; max-height: 300px; z-index:9"] do
                 forM_ (["1 hour", "8 hours", "1 day"] :: [Text]) \sw -> do
                   button_
-                    [ [__|on click set #toggle_expires_btn.firstChild.innerText to 'Expires in ' + event.target's @data-expire-value 
+                    [ [__|on click set #toggle_expires_btn.firstChild.innerText to 'Expires in ' + event.target's @data-expire-value
                                         then set #expire_input.value to event.target's @data-expire-value|]
                     , term "data-expire-value" sw
                     , class_ "p-2 w-full text-left truncate ... hover:bg-blue-100 hover:text-black"
@@ -76,7 +76,7 @@ expandAPIlogItem' pid req modal = do
               [ class_ "flex flex-col gap-1 bg-blue-500 px-2 py-1 rounded text-white"
               , term "data-req-id" (show req.id)
               , term "data-req-created-at" (toText $ formatTime defaultTimeLocale "%FT%T%6QZ" req.createdAt)
-              , [__|on click set #req_id_input.value to my @data-req-id 
+              , [__|on click set #req_id_input.value to my @data-req-id
                           then set #req_created_at_input.value to my @data-req-created-at
                           then call #share_log_form.requestSubmit() |]
               ]
@@ -206,7 +206,7 @@ apiLogItemView req expandItemPath = do
     button_
       [ class_ "btn btn-sm btn-outline"
       , term "data-reqJson" reqJson
-      , onclick_ "buildCurlRequest(event)"
+      , onclick_ "window.buildCurlRequest(event)"
       ]
       (span_ [] "Copy as curl" >> faSprite_ "copy" "regular" "h-3 w-3")
     button_

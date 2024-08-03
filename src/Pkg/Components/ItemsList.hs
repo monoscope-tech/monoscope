@@ -108,7 +108,7 @@ itemsPage_ listCfg items = div_ [class_ "w-full mx-auto px-16 pt-10 pb-24 overfl
     let uri = deleteParam "filter" listCfg.currentURL
     div_ [class_ "py-2 px-2 space-x-6 border-b border-slate-20 text-sm font-light", hxBoost_ "true", role_ "tablist"] $ forM_ tabsFilter.options \opt ->
       a_
-        [ class_ $ "inline-block py-2  " <> if opt.name == tabsFilter.current then " font-bold text-black " else ""
+        [ class_ $ "inline-block py-2 relative " <> if opt.name == tabsFilter.current then " font-bold text-black " else ""
         , role_ "tab"
         , href_ $ uri <> "&filter=" <> escapedQueryPartial opt.name
         ]
@@ -120,8 +120,8 @@ itemsPage_ listCfg items = div_ [class_ "w-full mx-auto px-16 pt-10 pb-24 overfl
 
 itemsList_ :: ToHtml a => ItemsListCfg -> V.Vector a -> Html ()
 itemsList_ listCfg items =
-  div_ [class_ "card-round overflow-hidden", id_ "anomalyListBelowTab", hxGet_ listCfg.currentURL, hxSwap_ "outerHTML", hxTrigger_ "refreshMain"] do
-    form_ [class_ "flex flex-col bg-white divide-y w-full ", id_ listCfg.elemID] do
+  div_ [class_ "grid card-round overflow-hidden group/grid", id_ "anomalyListBelowTab", hxGet_ listCfg.currentURL, hxSwap_ "outerHTML", hxTrigger_ "refreshMain"] do
+    form_ [class_ "flex flex-col bg-white divide-y w-full ", id_ listCfg.elemID, onkeydown_ "return event.key != 'Enter';"] do
       let currentURL' = deleteParam "sort" listCfg.currentURL
       let sortMenu =
             [ ("First Seen", "First time the issue occured", "first_seen")
@@ -141,29 +141,36 @@ itemsList_ listCfg items =
               , [__| on click set .bulkactionItemCheckbox.checked to my.checked |]
               ]
           div_ [class_ " grow flex flex-row gap-2"] do
-            forM_ listCfg.bulkActions \blkA -> button_ [class_ "btn btn-sm  border-black hover:shadow-2xl btn-disabled group-has-[.bulkactionItemCheckbox:checked]/grid:!btn-outline group-has-[.bulkactionItemCheckbox:checked]/grid:!pointer-events-auto  ", hxPost_ blkA.uri, hxSwap_ "none"] do
-              whenJust blkA.icon \icon -> faSprite_ icon "solid" "h-4 w-4 inline-block"
-              span_ (toHtml blkA.title)
+            forM_ listCfg.bulkActions \blkA -> button_
+              [ class_ "btn btn-sm  border-black hover:shadow-2xl btn-disabled group-has-[.bulkactionItemCheckbox:checked]/grid:!btn-outline group-has-[.bulkactionItemCheckbox:checked]/grid:!pointer-events-auto  "
+              , hxPost_ blkA.uri
+              , hxSwap_ "none"
+              ]
+              do
+                whenJust blkA.icon \icon -> faSprite_ icon "solid" "h-4 w-4 inline-block"
+                span_ (toHtml blkA.title)
 
             whenJust listCfg.search \search -> do
-              div_
-                [ hxGet_ currentURL'
-                , hxTarget_ "#rowsContainer"
-                , hxSwap_ "innerHTML"
-                , id_ "searchThing"
-                , hxIndicator_ "#searchIndicator"
-                , hxVals_ "js:{search:getSearchVal()}"
-                ]
-                do
-                  label_ [class_ "input input-sm input-bordered flex  overflow-hidden items-center gap-2", [__|on click halt|]] do
-                    case search.viaQueryParam of
-                      Just param -> do
-                        input_ [type_ "text", class_ "grow", id_ "search_box", placeholder_ "Search"]
-                        button_ [class_ "bg-blue-500 w-max text-white px-2 translate-x-2 rounded-lg", [__|on click send click() to #searchThing|]] do
-                          faSprite_ "magnifying-glass" "regular" "w-4 h-4"
-                      Nothing -> do
-                        input_ [type_ "text", class_ "grow", placeholder_ "Search", [__| on input show .itemsListItem in #itemsListPage when its textContent.toLowerCase() contains my value.toLowerCase() |]]
-                        faSprite_ "magnifying-glass" "regular" "w-4 h-4 opacity-70"
+              do
+                label_ [class_ "input input-sm input-bordered flex  overflow-hidden items-center gap-2"] do
+                  case search.viaQueryParam of
+                    Just param -> do
+                      input_
+                        [ type_ "text"
+                        , class_ "grow"
+                        , name_ "search"
+                        , id_ "search_box"
+                        , placeholder_ "Search"
+                        , hxTrigger_ "keyup changed delay:500ms"
+                        , hxGet_ currentURL'
+                        , hxTarget_ "#rowsContainer"
+                        , hxSwap_ "innerHTML"
+                        , id_ "searchThing"
+                        , hxIndicator_ "#searchIndicator"
+                        ]
+                    Nothing -> do
+                      input_ [type_ "text", class_ "grow", placeholder_ "Search", [__| on input show .itemsListItem in #itemsListPage when its textContent.toLowerCase() contains my value.toLowerCase() |]]
+                  faSprite_ "magnifying-glass" "regular" "w-4 h-4 opacity-70"
 
           whenJust listCfg.sort \sortCfg -> do
             let currentSortTitle = maybe "First Seen" fst3 $ find (\(_, _, identifier) -> identifier == sortCfg.current) sortMenu
@@ -180,8 +187,8 @@ itemsList_ listCfg items =
                     , hxIndicator_ "#sortLoader"
                     ]
                     do
-                      div_ [class_ "flex flex-col items-center justify-center px-3"] $
-                        if isActive then faSprite_ "icon-checkmark4" "solid" "w-4 h-5" else div_ [class_ "w-4 h-5"] ""
+                      div_ [class_ "flex flex-col items-center justify-center px-3"]
+                        $ if isActive then faSprite_ "icon-checkmark4" "solid" "w-4 h-5" else div_ [class_ "w-4 h-5"] ""
                       div_ [class_ "grow space-y-1"] do
                         span_ [class_ "block text-lg"] $ toHtml title
                         span_ [class_ "block "] $ toHtml desc
@@ -205,14 +212,6 @@ itemsList_ listCfg items =
         div_ [id_ "rowsContainer"] do
           itemRows_ listCfg.nextFetchUrl items
 
-    script_
-      [text|
-       function getSearchVal() {
-        var searchVal = document.getElementById("search_box").value;
-        return searchVal;
-       }
-    |]
-
 
 type role ItemsRows representational
 data ItemsRows a = ItemsRows (Maybe Text) (V.Vector a) -- Text represents nextFetchUrl
@@ -229,6 +228,6 @@ itemRows_ :: (Monad m, ToHtml a) => Maybe Text -> V.Vector a -> HtmlT m ()
 itemRows_ nextFetchUrl items = do
   mapM_ toHtml items
   whenJust nextFetchUrl \url ->
-    when (length items > 10) $
-      a_ [class_ "cursor-pointer block p-1 blue-800 bg-blue-100 hover:bg-blue-200 text-center", hxTrigger_ "click", hxSwap_ "outerHTML", hxGet_ url] do
+    when (length items > 10)
+      $ a_ [class_ "cursor-pointer block p-1 blue-800 bg-blue-100 hover:bg-blue-200 text-center", hxTrigger_ "click", hxSwap_ "outerHTML", hxGet_ url] do
         span_ [class_ "htmx-indicator loading loading-dots loading-md"] "" >> "LOAD MORE"

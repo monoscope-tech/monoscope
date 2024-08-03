@@ -6,6 +6,7 @@ module ProcessMessage (
 )
 where
 
+import Control.Lens ((.~))
 import Data.Aeson (eitherDecode)
 import Data.Aeson.Types (KeyValue ((.=)), object)
 import Data.ByteString.Lazy.Char8 qualified as BL
@@ -31,6 +32,7 @@ import Models.Apis.Formats qualified as Formats
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Apis.Shapes qualified as Shapes
 import Models.Projects.Projects qualified as Projects
+import Network.Wreq hiding (params)
 import PyF (fmt)
 import Relude hiding (ask)
 import RequestMessages qualified
@@ -199,7 +201,7 @@ processRequestMessage recMsg = do
     mpjCache <- withPool appCtx.jobsPool $ Projects.projectCacheById pid'
     pure $ fromMaybe projectCacheDefault mpjCache
   recId <- liftIO nextRandom
-  pure
-    $ if projectCacheVal.paymentPlan == "Free" && projectCacheVal.weeklyRequestCount > 5000
-      then (Right (Nothing, Nothing, Nothing, V.empty, V.empty, V.empty))
-      else (RequestMessages.requestMsgToDumpAndEndpoint projectCacheVal recMsg timestamp recId)
+  pure $
+    if projectCacheVal.paymentPlan == "Free" && projectCacheVal.weeklyRequestCount > 5000
+      then Right (Nothing, Nothing, Nothing, V.empty, V.empty, V.empty)
+      else RequestMessages.requestMsgToDumpAndEndpoint projectCacheVal recMsg timestamp recId

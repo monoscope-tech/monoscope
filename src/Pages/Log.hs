@@ -2,6 +2,8 @@ module Pages.Log (
   apiLogH,
   LogsGet (..),
   ApiLogsPageData (..),
+  resultTable_,
+  curateCols,
 )
 where
 
@@ -202,8 +204,8 @@ logQueryBox_ pid currentRange =
                         [ class_ "block text-gray-900 relative cursor-pointer select-none py-2 pl-3 pr-9 hover:bg-gray-200 "
                         , term "data-value" val
                         , term "data-title" title
-                        , [__| on click set #custom_range_input's value to my @data-value then log my @data-value 
-                                   then toggle .hidden on #timepickerBox 
+                        , [__| on click set #custom_range_input's value to my @data-value then log my @data-value
+                                   then toggle .hidden on #timepickerBox
                                    then set #currentRange's innerText to my @data-title
                                    then htmx.trigger("#log_explorer_form", "submit")
                          |]
@@ -518,7 +520,7 @@ jsonTreeAuxillaryCode pid = do
           , hxTarget_ "#resultTable"
           , hxSwap_ "outerHTML"
           , -- , hxIndicator_ "#query-indicator"
-            [__|init set fp to (closest @data-field-path) then 
+            [__|init set fp to (closest @data-field-path) then
                   if isFieldInSummary(fp) then set my innerHTML to 'Remove field from summary' end|]
           ]
           "Add field as Column"
@@ -527,8 +529,8 @@ jsonTreeAuxillaryCode pid = do
           , role_ "menuitem"
           , tabindex_ "-1"
           , id_ "menu-item-1"
-          , [__|on click 
-                  if 'clipboard' in window.navigator then 
+          , [__|on click
+                  if 'clipboard' in window.navigator then
                     call navigator.clipboard.writeText((previous <.log-item-field-value/>)'s innerText)
                     send successToast(value:['Value has been added to the Clipboard']) to <body/>
                     halt
@@ -568,7 +570,7 @@ jsonTreeAuxillaryCode pid = do
          a.textContent = "";
          document.body.appendChild(a);
          a.click();
-         document.body.removeChild(a); 
+         document.body.removeChild(a);
        }
 
     function filterByField(event, operation) {
@@ -578,7 +580,7 @@ jsonTreeAuxillaryCode pid = do
        const regex = /\[\*\]\.(\d+)\./g;
        const replacedPath = path.replace(regex, '[*].');
        const filter = replacedPath + ' ' + operation + ' ' + value
-       let editorVal = '' 
+       let editorVal = ''
        if(window.queryBuilderValue) {
         editorVal = window.queryBuilderValue
         }else if(window.editor) {
@@ -614,10 +616,10 @@ jsonTreeAuxillaryCode pid = do
 
     var toggleColumnToSummary = (e)=>{
       const cols = (params().cols??"").split(",").filter(x=>x!="");
-      const subject = e.target.closest('.log-item-field-parent').dataset.fieldPath; 
+      const subject = e.target.closest('.log-item-field-parent').dataset.fieldPath;
       if (cols.includes(subject)) {
         return [...new Set(cols.filter(x=>x!=subject))].join(",");
-      } 
+      }
       cols.push(subject)
       return [... new Set (cols)].join (",")
     }
@@ -625,7 +627,7 @@ jsonTreeAuxillaryCode pid = do
     var removeNamedColumnToSummary = (namedCol)=>{
       console.log(params())
       const cols = (params().cols??"").split(",").filter(x=>x!="");
-      const subject = namedCol; 
+      const subject = namedCol;
 
       cols.forEach(x=>console.log(subject,x.replaceAll(".", "•").replaceAll("[", "❲").replaceAll("]", "❳") ))
 
@@ -637,7 +639,7 @@ jsonTreeAuxillaryCode pid = do
     }
 
     var isFieldInSummary = field => params().cols.split(",").includes(field);
-    
+
 
 
     function toggleQueryBuilder() {

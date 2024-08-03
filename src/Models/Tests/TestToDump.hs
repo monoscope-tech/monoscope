@@ -10,7 +10,7 @@ import Data.UUID.V4 qualified as UUIDV4
 import Data.Vector qualified as V
 import Effectful
 import Effectful.Log (Log)
-import Effectful.PostgreSQL.Transact.Effect (DB)
+import Effectful.PostgreSQL.Transact.Effect (DB, dbtToEff)
 import Effectful.Reader.Static qualified as Reader
 import Effectful.Time qualified as Time
 import Foreign.C.String (peekCString, withCString)
@@ -69,33 +69,39 @@ testRunToRequestMsg (Projects.ProjectId pid) currentTime parent_id sr = do
     }
 
 
-callRunTestkit :: String -> IO String
-callRunTestkit hsString = withCString hsString $ \cstr -> do
-  resultCString <- run_testkit (cstr)
-  peekCString (resultCString)
+callRunTestkit :: String -> String -> IO String
+callRunTestkit hsString hsColid = withCString hsString $ \cstr -> do
+  withCString hsColid $ \cstr2 -> do
+    resultCString <- run_testkit cstr cstr2
+    peekCString resultCString
 
 
-runCollectionTest :: IOE :> es => V.Vector Testing.CollectionStepData -> Eff es (Either Text (V.Vector Testing.StepResult))
-runCollectionTest collectionSteps = do
-  tkResp <- liftIO $ callRunTestkit $ decodeUtf8 $ AE.encode $ collectionSteps
+runCollectionTest :: IOE :> es => V.Vector Testing.CollectionStepData -> Testing.CollectionId -> Eff es (Either Text (V.Vector Testing.StepResult))
+runCollectionTest collectionSteps cold_id = do
+  tkResp <- liftIO $ callRunTestkit (decodeUtf8 $ AE.encode collectionSteps) (toString cold_id.toText)
   pure $ mapLeft (\e -> fromString e <> toText tkResp) $ AE.eitherDecodeStrictText (toText tkResp)
 
 
 runTestAndLog
   :: (IOE :> es, Time.Time :> es, Reader.Reader Config.AuthContext :> es, DB :> es, Log :> es)
   => Projects.ProjectId
+  -> Testing.CollectionId
   -> V.Vector Testing.CollectionStepData
   -> Eff es (Either Text (V.Vector Testing.StepResult))
-runTestAndLog pid collectionSteps = do
-  stepResultsE <- runCollectionTest collectionSteps
+runTestAndLog pid colId collectionSteps = do
+  stepResultsE <- runCollectionTest collectionSteps colId
   case stepResultsE of
     Left e -> do
       Log.logAttention "unable to run test collection" (AE.object ["error" AE..= e, "steps" AE..= collectionSteps])
       pure $ Left e
     Right stepResults -> do
       currentTime <- Time.currentTime
+      let (passed, failed) = Testing.getCollectionRunStatus stepResults
+
       -- Create a parent request for to act as parent for current test run
       msg_id <- liftIO $ UUIDV4.nextRandom
+      let response = AE.toJSON stepResults
+      _ <- dbtToEff $ Testing.updateCollectionLastRun colId (Just response) passed failed
       let parent_msg =
             RequestMessage
               { duration = 1000000 -- Placeholder for duration in nanoseconds

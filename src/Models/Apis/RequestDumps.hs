@@ -366,7 +366,7 @@ getRequestDumpForReports pid report_type = query Select (Query $ encodeUtf8 q) p
   where
     report_interval = if report_type == "daily" then ("'24 hours'" :: Text) else "'7 days'"
     q =
-      [text| 
+      [text|
      SELECT DISTINCT ON (endpoint_hash)
         id, created_at, project_id, host, url_path, raw_url, method, endpoint_hash,
         CAST (ROUND (AVG (duration_ns) OVER (PARTITION BY endpoint_hash)) AS BIGINT) AS average_duration
@@ -382,7 +382,7 @@ getRequestDumpsForPreviousReportPeriod pid report_type = query Select (Query $ e
   where
     (start, end) = if report_type == "daily" then ("'48 hours'" :: Text, "'24 hours'") else ("'14 days'", "'7 days'")
     q =
-      [text| 
+      [text|
      SELECT  endpoint_hash,
         CAST (ROUND (AVG (duration_ns)) AS BIGINT) AS average_duration
      FROM
@@ -434,7 +434,7 @@ selectRequestDumpByProject pid extraQuery cursorM fromM toM = do
     extraQueryParsed = either error (\v -> if v == "" then "" else " AND " <> v) $ parseQueryStringToWhereClause extraQuery
     -- We only let people search within the 14 days time period
     qCount =
-      [text| SELECT count(*) 
+      [text| SELECT count(*)
              FROM apis.request_dumps where project_id=? and created_at > NOW() - interval '14 days' and created_at<? $dateRangeStr |]
         <> extraQueryParsed
         <> " limit 1;"
@@ -485,7 +485,7 @@ selectRequestDumpByProjectAndId pid createdAt rdId = queryOne Select q (createdA
     q =
       [sql|SELECT   id,created_at,project_id, host,url_path,method,raw_url,referer,
                     path_params,status_code,query_params,
-                    request_body,response_body,request_headers,response_headers, 
+                    request_body,response_body,request_headers,response_headers,
                     duration_ns, sdk_type,
                     parent_id, service_version, JSONB_ARRAY_LENGTH(errors) as errors_count, errors, tags, request_type
              FROM apis.request_dumps where (created_at=?)  and project_id=? and id=? LIMIT 1|]
@@ -495,13 +495,13 @@ selectReqLatenciesRolledBySteps :: Int -> Int -> Projects.ProjectId -> Text -> T
 selectReqLatenciesRolledBySteps maxv steps pid urlPath method = query Select q (maxv, steps, steps, steps, pid, urlPath, method)
   where
     q =
-      [sql| 
+      [sql|
 SELECT duration_steps, count(id)
 	FROM generate_series(0, ?, ?) AS duration_steps
-	LEFT OUTER JOIN apis.request_dumps on (duration_steps = round((EXTRACT(epoch FROM duration)/1000000)/?)*? 
+	LEFT OUTER JOIN apis.request_dumps on (duration_steps = round((EXTRACT(epoch FROM duration)/1000000)/?)*?
     AND created_at > NOW() - interval '14' day
     AND project_id=? and url_path=? and method=?)
-	GROUP BY duration_steps 
+	GROUP BY duration_steps
 	ORDER BY duration_steps;
       |]
 
@@ -515,12 +515,12 @@ selectReqLatenciesRolledByStepsForProject maxv steps pid dateRange = query Selec
       (Just a, Just b) -> "AND created_at BETWEEN '" <> formatTime defaultTimeLocale "%F %R" a <> "' AND '" <> formatTime defaultTimeLocale "%F %R" b <> "'"
       _ -> ""
     q =
-      [text| 
+      [text|
 select duration_steps, count(id)
 	FROM generate_series(0, ?, ?) AS duration_steps
 	LEFT OUTER JOIN apis.request_dumps on (duration_steps = round((EXTRACT(epoch FROM duration)/1000000)/?)*?
     AND project_id=? $dateRangeStr )
-	GROUP BY duration_steps 
+	GROUP BY duration_steps
 	ORDER BY duration_steps;
       |]
 
@@ -535,7 +535,7 @@ selectRequestDumpByProjectAndParentId pid parentId = query Select q (pid, parent
                     request_body,response_body,'{}'::jsonb,'{}'::jsonb,
                     duration_ns, sdk_type,
                     parent_id, service_version, JSONB_ARRAY_LENGTH(errors) as errors_count, '{}'::jsonb, tags, request_type
-             FROM apis.request_dumps where project_id=? AND created_at > NOW() - interval '14' day AND parent_id= ? LIMIT 199; 
+             FROM apis.request_dumps where project_id=? AND created_at > NOW() - interval '14' day AND parent_id= ? LIMIT 199;
      |]
 
 

@@ -55,13 +55,14 @@ data BWConfig = BWConfig
   , pageTitle :: Text
   , menuItem :: Maybe Text -- Use PageTitle if menuItem is not set
   , hasIntegrated :: Maybe Bool
+  , navTabs :: Maybe (Html ())
   }
   deriving stock (Show, Generic)
   deriving anyclass (Default)
 
 
 bodyWrapper :: BWConfig -> Html () -> Html ()
-bodyWrapper BWConfig{sessM, currProject, pageTitle, menuItem, hasIntegrated} child = do
+bodyWrapper BWConfig{sessM, currProject, pageTitle, menuItem, hasIntegrated, navTabs} child = do
   doctypehtml_ do
     head_ do
       title_ $ toHtml pageTitle
@@ -102,7 +103,7 @@ bodyWrapper BWConfig{sessM, currProject, pageTitle, menuItem, hasIntegrated} chi
       script_ [src_ "/assets/js/thirdparty/instantpage5_1_0.js", type_ "module", defer_ "true"] ("" :: Text)
       script_ [src_ "/assets/js/monaco/vs/loader.js", defer_ "true"] ("" :: Text)
       script_ [src_ "/assets/js/charts.js"] ("" :: Text)
-      script_ [src_ "/assets/js/main.js"] ("" :: Text)
+      script_ [src_ "https://cdn.jsdelivr.net/npm/@easepick/bundle@1.2.0/dist/index.umd.min.js"] ("" :: Text)
       script_ [src_ "https://cdn.jsdelivr.net/npm/lodash@4.17.21/lodash.min.js"] ("" :: Text)
       script_ [src_ "https://kit.fontawesome.com/e0cb5637ed.js", crossorigin_ "anonymous"] ("" :: Text)
       script_ [src_ "https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"] ("" :: Text)
@@ -114,6 +115,7 @@ bodyWrapper BWConfig{sessM, currProject, pageTitle, menuItem, hasIntegrated} chi
       script_ [src_ "https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.63.0/codemirror.min.js"] ("" :: Text)
       script_ [src_ "https://cdnjs.cloudflare.com/ajax/libs/codemirror/6.65.7/mode/javascript/javascript.min.js"] ("" :: Text)
       script_ [type_ "module", src_ "/assets/filtercomponent.js"] ("" :: Text)
+      script_ [src_ "/assets/js/main.js"] ("" :: Text)
 
       script_
         [text|
@@ -122,13 +124,11 @@ bodyWrapper BWConfig{sessM, currProject, pageTitle, menuItem, hasIntegrated} chi
       twq('config','om5gt');
       |]
 
-      script_ [src_ "https://cdn.jsdelivr.net/npm/@easepick/bundle@1.2.0/dist/index.umd.min.js"] ("" :: Text)
-
       script_
         [raw|
               window.initialCloseSideMenu = localStorage.getItem('close-sidemenu');
               var currentISOTimeStringVar = ((new Date()).toISOString().split(".")[0])+"+00:00";
-              document.addEventListener('DOMContentLoaded', function(){ 
+              document.addEventListener('DOMContentLoaded', function(){
                 if (window.initialCloseSideMenu == 'true'){
                    document.getElementById('side-nav-menu').classList.add('hidden-side-nav-menu');
                 }
@@ -186,7 +186,7 @@ bodyWrapper BWConfig{sessM, currProject, pageTitle, menuItem, hasIntegrated} chi
            in section_ [class_ "flex flex-row h-screen overflow-hidden"] do
                 sideNav'
                 section_ [class_ "flex flex-col grow h-screen overflow-y-hidden"] do
-                  navbar currUser
+                  navbar currUser navTabs
                   section_ [class_ "flex-1 overflow-y-hidden h-full grow"] $ child
       externalHeadScripts_
       alerts_
@@ -222,7 +222,7 @@ bodyWrapper BWConfig{sessM, currProject, pageTitle, menuItem, hasIntegrated} chi
       let email = show $ fromMaybe "" $ sessM <&> (.user.getUser.email)
       let name = fromMaybe "" $ sessM <&> (\sess -> sess.user.getUser.firstName <> " " <> sess.user.getUser.lastName)
       script_
-        [text| window.addEventListener("load", (event) => { 
+        [text| window.addEventListener("load", (event) => {
         posthog.people.set_once({email: ${email}, name: "${name}"});
       });|]
       script_
@@ -234,7 +234,7 @@ bodyWrapper BWConfig{sessM, currProject, pageTitle, menuItem, hasIntegrated} chi
                 remove <.log-item-context-menu /> then remove .with-context-menu from <.with-context-menu />
               else
                 remove <.log-item-context-menu /> then remove .with-context-menu from <.with-context-menu /> then
-                get #log-item-context-menu-tmpl.innerHTML then put it after me then add .with-context-menu to me then 
+                get #log-item-context-menu-tmpl.innerHTML then put it after me then add .with-context-menu to me then
                 _hyperscript.processNode(.log-item-context-menu) then htmx.process(next <.log-item-context-menu/>)
               end
             end
@@ -363,22 +363,24 @@ sideNav sess project pageTitle menuItem hasIntegrated = aside_ [class_ "shrink-0
         faSprite_ "arrow-right-from-bracket" "regular" "h-5 w-5 shrink-0" >> span_ [class_ "sd-hidden whitespace-nowrap truncate"] "Logout"
 
 
-navbar :: Users.User -> Html ()
-navbar currUser = nav_ [id_ "main-navbar", class_ "sticky z-20 top-0 w-full px-6 py-2 flex flex-row justify-between border border-gray-200"] do
-  a_
-    [ id_ "side_nav_toggler"
-    , class_ "cursor-pointer flex items-center"
-    , [__|
-      on click 
-        if (localStorage.getItem('close-sidemenu') != 'true') then  
-          add .hidden-side-nav-menu to #side-nav-menu then 
+navbar :: Users.User -> Maybe (Html ()) -> Html ()
+navbar currUser tabs =
+  nav_ [id_ "main-navbar", class_ "sticky z-20 top-0 w-full px-6 py-2 flex flex-row justify-between border border-gray-200"] do
+    a_
+      [ id_ "side_nav_toggler"
+      , class_ "cursor-pointer flex items-center"
+      , [__|
+      on click
+        if (localStorage.getItem('close-sidemenu') != 'true') then
+          add .hidden-side-nav-menu to #side-nav-menu then
           call localStorage.setItem('close-sidemenu', 'true')
-        else remove  .hidden-side-nav-menu from #side-nav-menu then 
-          call localStorage.removeItem('close-sidemenu') 
+        else remove  .hidden-side-nav-menu from #side-nav-menu then
+          call localStorage.removeItem('close-sidemenu')
         end
         |]
-    ]
-    $ faSprite_ "bars-sort" "regular" "w-5 h-5 text-gray-500"
+      ]
+      $ faSprite_ "bars-sort" "regular" "w-5 h-5 text-gray-500"
+    whenJust tabs $ \tabs' -> tabs'
 
 
 alerts_ :: Html ()

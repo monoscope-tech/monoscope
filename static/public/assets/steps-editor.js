@@ -3,17 +3,41 @@ import { LitElement, html, ref, createRef } from './js/thirdparty/lit.js'
 export class StepsEditor extends LitElement {
   static properties = {
     collectionSteps: [],
+    collectionResults: [],
+    saveErrors: [],
   }
 
   constructor() {
     super()
-    this.collectionSteps = window.collectionSteps || [{}]
+    this.collectionSteps = window.collectionSteps || []
+    this.collectionResults = window.collectionResults || []
+    this.saveErrors = []
 
     require.config({ paths: { vs: '/assets/js/monaco/vs' } })
     require.config({ paths: { vs: 'https://unpkg.com/monaco-editor/min/vs' } })
     require(['vs/editor/editor.main'], () => {
       this.initializeEditor(monaco)
     })
+
+    window.updateStepAssertions = (assertion, expression, step) => {
+      const stepData = this.collectionSteps[step]
+      const asserts = stepData.asserts || []
+      asserts.push({ [assertion]: expression })
+      stepData.asserts = asserts
+      this.collectionSteps[step] = stepData
+      window.collectionSteps = this.collectionSteps
+      this.requestUpdate()
+    }
+
+    window.updateCollectionResults = (results) => {
+      this.collectionResults = results
+      this.requestUpdate()
+    }
+
+    window.updateStepsWithErrors = (errors) => {
+      this.saveErrors = errors
+      this.requestUpdate()
+    }
   }
 
   initializeEditor(monaco) {
@@ -94,68 +118,76 @@ export class StepsEditor extends LitElement {
     return found ? { method: found[0], url: found[1] } : { method: '', url: '' }
   }
 
-
   _onDragOver(event) {
-    event.preventDefault();
-    const items = document.querySelectorAll('.draggable');
-    let closestItem = null;
-    let smallestDistance = Number.MAX_SAFE_INTEGER;
+    event.preventDefault()
+    const items = document.querySelectorAll('.draggable')
+    let closestItem = null
+    let smallestDistance = Number.MAX_SAFE_INTEGER
 
-    items.forEach(item => {
-      const box = item.getBoundingClientRect();
-      const midpoint = box.top + box.height / 2;
-      const distance = Math.abs(event.clientY - midpoint);
+    items.forEach((item) => {
+      const box = item.getBoundingClientRect()
+      const midpoint = box.top + box.height / 2
+      const distance = Math.abs(event.clientY - midpoint)
       if (distance < smallestDistance) {
-        closestItem = item;
-        smallestDistance = distance;
+        closestItem = item
+        smallestDistance = distance
       }
-    });
+    })
 
-    items.forEach(item => {
+    items.forEach((item) => {
       if (item === closestItem) {
-        item.classList.add('active-drop-target');
-      } else { item.classList.remove('active-drop-target') }
-    });
+        item.classList.add('active-drop-target')
+      } else {
+        item.classList.remove('active-drop-target')
+      }
+    })
   }
 
   _onDragEnter(event) {
     if (event.target.hasAttribute('data-index')) {
-      event.preventDefault();  // Necessary to allow dropping
-      event.target.classList.add('over');  // Highlight the drop target only if it has data-index
+      event.preventDefault() // Necessary to allow dropping
+      event.target.classList.add('over') // Highlight the drop target only if it has data-index
     }
   }
 
   _onDragLeave(event) {
     if (event.target.hasAttribute('data-index')) {
-      event.target.classList.remove('over');
-      event.target.classList.remove('active-drop-target');  // Remove additional highlight
+      event.target.classList.remove('over')
+      event.target.classList.remove('active-drop-target') // Remove additional highlight
     }
   }
 
   _onDrop(event) {
-    const activeTarget = document.querySelector('.active-drop-target');
+    const activeTarget = document.querySelector('.active-drop-target')
     if (activeTarget) {
-      event.preventDefault();
-      activeTarget.classList.remove('over');
-      activeTarget.classList.remove('active-drop-target');
-      const originIndex = parseInt(event.dataTransfer.getData('text/plain'));
-      const targetIndex = parseInt(activeTarget.dataset.index);
+      event.preventDefault()
+      activeTarget.classList.remove('over')
+      activeTarget.classList.remove('active-drop-target')
+      const originIndex = parseInt(event.dataTransfer.getData('text/plain'))
+      const targetIndex = parseInt(activeTarget.dataset.index)
       if (targetIndex !== originIndex) {
-        const movedItems = [...this.collectionSteps];
-        const item = movedItems.splice(originIndex, 1)[0];
-        movedItems.splice(targetIndex, 0, item);
-        this.collectionSteps = [...movedItems];
-        this.requestUpdate();
+        const movedItems = [...this.collectionSteps]
+        const item = movedItems.splice(originIndex, 1)[0]
+        movedItems.splice(targetIndex, 0, item)
+        this.collectionSteps = [...movedItems]
+        this.requestUpdate()
       }
     }
   }
 
-
-  renderCollectionStep(stepData, idx) {
+  renderCollectionStep(stepData, idx, result, saveError) {
     const { method, url } = this.methodAndUrl(stepData)
+    const hasResults = !!result
+    const hasFailingAssertions = result?.assert_results.some((a) => !a.ok || a.ok === false) || false
+    const svErr = saveError !== undefined
+    saveError = saveError ? saveError : {}
     return html`
       <div
-        class="rounded-lg overflow-hidden border border-slate-200 group/item collectionStep bg-white draggable"
+        class="rounded-lg overflow-hidden border group/item collectionStep bg-white draggable ${hasFailingAssertions || svErr
+          ? 'border-red-500'
+          : hasResults
+          ? 'border-green-500'
+          : 'border-slate-200'}"
         draggable="true"
         @dragstart="${(e) => e.dataTransfer.setData('text/plain', e.target.dataset.index)}"
         @dragover="${this._onDragOver}"
@@ -176,10 +208,6 @@ export class StepsEditor extends LitElement {
             </label>
             <div class="w-full space-y-1 relative">
               <div class="absolute right-0 items-center gap-3 text-xs text-gray-600 hidden group-hover/item:flex">
-                <button>View results</button>
-                <button class="text-blue-600">
-                  <svg class="w-2 h-3"><use href="/assets/svgs/fa-sprites/solid.svg#play"></use></svg>
-                </button>
                 <a class="text-red-700" @click="${() => (this.collectionSteps = this.collectionSteps.filter((_, i) => i != idx))}">
                   <svg class="w-2 h-3"><use href="/assets/svgs/fa-sprites/solid.svg#xmark"></use></svg>
                 </a>
@@ -195,6 +223,7 @@ export class StepsEditor extends LitElement {
                     value="${method}"
                     @change=${(e) => this.updateKey(e, idx, null, null)}
                   />
+                  ${saveError.method ? html`<span class="text-red-700 text-xs">${saveError.method}</span>` : ''}
                 </label>
                 <label for="actions-data" class="flex-1 text-sm font-medium form-control w-full flex flex-row items-center gap-1">
                   <input
@@ -205,6 +234,7 @@ export class StepsEditor extends LitElement {
                     .value="${url}"
                     @change=${(e) => this.updateValue(e, idx, null, null, method)}
                   />
+                  ${saveError.url ? html`<span class="text-red-700 text-xs">${saveError.url}</span>` : ''}
                 </label>
               </div>
             </div>
@@ -233,8 +263,15 @@ export class StepsEditor extends LitElement {
             </div>
           </div>
           <div>
-            <h5 class="label-text p-1 mb-2">Assertions</h5>
-            <div class="text-sm space-y-2 px-2 paramRows [&_.assertIndicator]:inline-block" id="[${idx}][asserts]">${this.renderParamsRows(stepData, idx, 'asserts')}</div>
+            <div class="flex gap-2 items-center mb-2">
+              <h5 class="label-text">Assertions</h5>
+              <a href="https://apitoolkit.io/docs/dashboard/dashboard-pages/api-tests/#test-definition-syntax" class="" target="_blank">
+                <svg class="w-3 h-3 text-slate-700"><use href="/assets/svgs/fa-sprites/regular.svg#circle-info"></use></svg>
+              </a>
+            </div>
+            <div class="text-sm space-y-2 px-2 paramRows [&_.assertIndicator]:inline-block" id="[${idx}][asserts]">
+              ${this.renderParamsRows(stepData, idx, 'asserts', result?.assert_results || [])}
+            </div>
           </div>
           <div>
             <h5 class="label-text p-1 mb-2">Exports</h5>
@@ -245,30 +282,89 @@ export class StepsEditor extends LitElement {
     `
   }
 
-  renderParamRow(key, value, type, idx, aidx) {
+  renderAssertResult(result) {
+    let hasPassed = result?.ok === true || false
+    let notRun = !result
+    let error = result?.err?.advice || ''
+
+    if (hasPassed) {
+      return html` <svg class="icon w-3 h-3 text-green-500"><use href="/assets/svgs/fa-sprites/solid.svg#check"></use></svg>`
+    }
+    if (!hasPassed && !notRun) {
+      return html`<span title="${error}"
+        ><svg class="icon w-3 h-3 text-red-500"><use href="/assets/svgs/fa-sprites/solid.svg#xmark"></use></svg><span></span
+      ></span>`
+    }
+    return html`<span title="${error}" class="opacity-0"
+      ><svg class="icon w-3 h-3 text-red-500"><use href="/assets/svgs/fa-sprites/solid.svg#xmark"></use></svg><span></span
+    ></span>`
+  }
+
+  renderParamRow(key, value, type, idx, aidx, result, saveError) {
+    let error = result?.err?.advice || ''
+    let keyError = ''
+    if (saveError) {
+      error = saveError.value ? saveError.value : error
+      keyError = saveError.key ? saveError.key : ''
+    }
+
     return html`
-      <div class="flex flex-row items-center gap-2  paramRow">
-        <span class="shrink hidden assertIndicator">✅</span>
-        <input class="input input-bordered input-xs w-1/3" list="${type}DataList" placeholder="Key" .value="${key}" @change=${(e) => this.updateKey(e, idx, type, aidx)} />
-        <input class="input input-bordered input-xs w-full" placeholder="Value" .value="${value}" @input=${(e) => this.updateValue(e, idx, type, aidx, key)} />
-        <a class="cursor-pointer text-red-700" @click=${(e) => this.deleteKey(e, idx, type, aidx, key)}
-          ><svg class="inline-block icon w-3 h-3 "><use href="/assets/svgs/fa-sprites/solid.svg#xmark"></use></svg
-        ></a>
+      <div class="flex flex-row gap-2 w-full paramRow">
+        <span class="shrink hidden assertIndicator"> ${this.renderAssertResult(result)} </span>
+        <div class="flex flex-col w-1/3">
+          <input class="input input-bordered input-xs w-full" list="${type}DataList" placeholder="Key" .value="${key}" @change=${(e) => this.updateKey(e, idx, type, aidx)} />
+          <span class="text-xs text-red-500 w-full">${keyError}</span>
+        </div>
+        <div class="shrink w-full flex flex-col">
+          <input
+            list="${type === 'asserts' ? 'assertAutocomplete-' + idx : ''}"
+            class="input input-bordered ${error ? 'input-error' : ''} input-xs w-full"
+            placeholder="Value"
+            .value="${value}"
+            @input=${(e) => this.updateValue(e, idx, type, aidx, key)}
+          />
+          <span class="text-xs text-red-500">${error}</span>
+        </div>
+        <a class="cursor-pointer text-slate-600" @click=${(e) => this.deleteKey(e, idx, type, aidx, key)}>
+          <svg class="inline-block icon w-3 h-3 "><use href="/assets/svgs/fa-sprites/solid.svg#xmark"></use></svg>
+        </a>
       </div>
     `
   }
 
-  renderParamsRows(stepData, idx, type) {
+  renderParamsRows(stepData, idx, type, results) {
     let rows
+    const errors = this.saveErrors[idx] ? this.saveErrors[idx][type] || [] : []
     if (type === 'asserts') {
+      let matches = []
+      let fieldPathValues = new Set()
+      let resultContainer = document.querySelector('#res-container-' + idx)
+      let elements = resultContainer.querySelectorAll('[data-field-path]')
+
+      elements.forEach((element) => {
+        let path = element.getAttribute('data-field-path')
+        if (path) {
+          fieldPathValues.add(('$.resp.json.' + path.replace(/\.?(\d+)\.?/g, '.[$1].')).replace('..', '.'))
+        }
+      })
+
+      matches = Array.from(fieldPathValues)
+
       const data = stepData[type] || []
-      rows = data.map((assertObj, aidx) => Object.entries(assertObj).map(([key, value]) => this.renderParamRow(key, value, type, idx, aidx)))
+      rows = data.map((assertObj, aidx) => Object.entries(assertObj).map(([key, value]) => this.renderParamRow(key, value, type, idx, aidx, results[aidx], errors[aidx])))
       if (rows.length === 0 || !Object.entries(data).some(([k, v]) => k.trim() === '' && v.trim() === '')) {
         rows.push(this.renderParamRow('', '', type, idx, rows.length))
       }
+      rows.push(html`
+        <datalist id=${'assertAutocomplete-' + idx}>
+          ${matches.map((fieldPath) => {
+            return html`<option class="w-full  text-left text-xs px-3 py-1 hover:bg-gray-200">${fieldPath}</option>`
+          })}
+        </datalist>
+      `)
     } else {
       const data = stepData[type] || {}
-      rows = Object.entries(data).map(([key, value]) => this.renderParamRow(key, value, type, idx, null))
+      rows = Object.entries(data).map(([key, value], ind) => this.renderParamRow(key, value, type, idx, null, undefined, errors[ind]))
       if (rows.length === 0 || !Object.entries(data).some(([k, v]) => k.trim() === '' && v.trim() === '')) {
         rows.push(this.renderParamRow('', '', type, idx))
       }
@@ -311,13 +407,11 @@ export class StepsEditor extends LitElement {
     stepData[type] = stepData[type] || (aidx != null ? [] : {})
 
     if (aidx != null) {
-      const arrayItem = stepData[type][aidx] || {}
-      delete arrayItem[oldKey]
-      stepData[type][aidx] = arrayItem
+      stepData[type].splice(aidx, 1)
     } else {
       delete stepData[type][oldKey]
     }
-    this.requestUpdate() 
+    this.requestUpdate()
   }
 
   updateValue(event, idx, type, aidx, key) {
@@ -328,7 +422,11 @@ export class StepsEditor extends LitElement {
       return
     }
     if (aidx != null) {
-      this.collectionSteps[idx][type][aidx][key] = value
+      if (key === '') {
+        this.collectionSteps[idx][type][aidx] = { ok: value }
+      } else {
+        this.collectionSteps[idx][type][aidx][key] = value
+      }
     } else {
       this.collectionSteps[idx][type][key] = value
     }
@@ -345,7 +443,7 @@ export class StepsEditor extends LitElement {
           border: 2px solid blue;
         }
         .active-drop-target {
-          background-color: lightblue !important;  
+          background-color: lightblue !important;
           border: 2px solid blue;
           transform: translateY(-20px);
         }
@@ -353,7 +451,9 @@ export class StepsEditor extends LitElement {
       <div id="collectionStepsContainer" class="h-full">
         <div id="steps-codeEditor" class="h-full max-h-screen hidden group-has-[.editormode:checked]/colform:block"></div>
         <div class="h-full overflow-y-scroll group-has-[.editormode:checked]/colform:hidden">
-          <div id="collectionStepsContainer" class=" p-4 space-y-4 collectionSteps">${this.collectionSteps.map((stepData, idx) => this.renderCollectionStep(stepData, idx))}</div>
+          <div id="collectionStepsContainer" class=" p-4 space-y-4 collectionSteps">
+            ${this.collectionSteps.map((stepData, idx) => this.renderCollectionStep(stepData, idx, this.collectionResults[idx], this.saveErrors[idx]) || undefined)}
+          </div>
           <div class="p-4 pt-2">
             <a class="btn btn-outline btn-neutral btn-sm items-center cursor-pointer" @click=${() => (this.collectionSteps = [...this.collectionSteps, {}])}>
               <svg class="inline-block icon w-3 h-3"><use href="/assets/svgs/fa-sprites/solid.svg#plus"></use></svg>

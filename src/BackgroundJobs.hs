@@ -73,7 +73,7 @@ getUpdatedFieldFormats :: Projects.ProjectId -> Vector Text -> DBT IO (Vector Te
 getUpdatedFieldFormats pid fieldHashes = query Select q (pid, fieldHashes)
   where
     q =
-      [sql| select fm.hash from apis.formats fm JOIN apis.fields fd ON (fm.project_id=fd.project_id AND fd.hash=fm.field_hash) 
+      [sql| select fm.hash from apis.formats fm JOIN apis.fields fd ON (fm.project_id=fd.project_id AND fd.hash=fm.field_hash)
                 where fm.project_id=? AND fm.created_at>(fd.created_at+interval '2 minutes') AND fm.field_hash=ANY(?) |]
 
 
@@ -122,9 +122,9 @@ jobsRunner logger authCtx job = when authCtx.config.enableBackgroundJobs $ do
           let project_url = "https://app.apitoolkit.io/p/" <> projectId.toText
           let project_title = project.title
           let msg =
-                [fmtTrim| 
+                [fmtTrim|
   🎉 New project created on apitoolkit.io! 🎉
-  - **User Full Name**: {fullName} 
+  - **User Full Name**: {fullName}
   - **User Email**: {userEmail}
   - **Project Title**: [{project_title}]({project_url})
   - **User ID**: {userId.toText}
@@ -186,7 +186,7 @@ jobsRunner logger authCtx job = when authCtx.config.enableBackgroundJobs $ do
         if job.jobRunAt > addUTCTime (-900) now -- Run time is less than 15 mins ago
           then whenJust collectionM \collection -> when (collection.isScheduled) do
             let (Testing.CollectionSteps colStepsV) = collection.collectionSteps
-            _ <- TestToDump.runTestAndLog collection.projectId colStepsV
+            _ <- TestToDump.runTestAndLog collection.projectId col_id colStepsV
             pass
           else Log.logAttention "RunCollectionTests failed.  Job was sheduled to run over 30 mins ago" $ collectionM <&> \c -> (c.title, c.id)
 
@@ -310,7 +310,7 @@ dailyReportForProject pid = do
         sendSlackMessage
           pid
           [fmtTrim| 🤖 *Daily Report for `{pr.title}`**
-  
+
 <https://app.apitoolkit.io/p/{pid.toText}/reports/{show report.id.reportId}|View today's report>
 |]
       _ -> do
@@ -329,7 +329,7 @@ dailyReportForProject pid = do
                 [aesonQQ|{
                  "user_name": #{firstName},
                  "project_name": #{projectTitle},
-                 "anomalies_count": #{total_anomalies}, 
+                 "anomalies_count": #{total_anomalies},
                  "anomalies":  #{anmls},
                  "report_url": #{rp_url},
                  "performance_count": #{perf_count},
@@ -370,7 +370,7 @@ weeklyReportForProject pid = do
         sendSlackMessage
           pid
           [trimming| 🤖 *Weekly Report for `{pr.title}`*
-    
+
 <https://app.apitoolkit.io/p/{pid.toText}/reports/{show report.id.reportId}|View this week's report>
                      |]
       _ -> do
@@ -393,7 +393,7 @@ weeklyReportForProject pid = do
                 [aesonQQ|{
                  "user_name": #{firstName},
                  "project_name": #{projectTitle},
-                 "anomalies_count": #{total_anomalies}, 
+                 "anomalies_count": #{total_anomalies},
                  "anomalies":  #{anmls},
                  "report_url": #{rp_url},
                  "performance_count": #{perf_count},
@@ -440,11 +440,11 @@ newAnomalyJob pid createdAt anomalyTypesT anomalyActionsT targetHash = do
             sendSlackMessage
               pid
               [fmtTrim| 🤖 *New Endpoint Detected for `{project.title}`*
-  
+
 We have detected a new endpoint on *{project.title}*
-  
+
 Endpoint: `{endpointPath}`
-  
+
 <https://app.apitoolkit.io/p/{pid.toText}/anomalies/by_hash/{targetHash}|More details on the apitoolkit>
                               |]
           _ -> do
@@ -553,7 +553,7 @@ Endpoint: `{endpointPath}`
           sendSlackMessage
             pid
             [fmtTrim| 🤖 *New Runtime Exception Found for `{project.title}`*
-  
+
 We detected that a particular field on your API is returning a different format/type than what it usually gets.
 
 <https://app.apitoolkit.io/p/{pid.toText}/anomalies/by_hash/{targetHash}|More details on the apitoolkit>
