@@ -53,8 +53,8 @@ testingPostH pid colF = do
           , title = fromMaybe "" colF.title
           , description = fromMaybe "" colF.description
           , config = AE.object []
-          , schedule = fromMaybe "" colF.scheduleNumber <> " " <> fromMaybe "" colF.scheduleNumberUnit
-          , isScheduled = colF.scheduled == Just "on"
+          , schedule = fromMaybe "1" colF.scheduleNumber <> " " <> fromMaybe "day" colF.scheduleNumberUnit
+          , isScheduled = True
           , collectionSteps = Testing.CollectionSteps colF.stepsData
           , lastRunResponse = Nothing
           , lastRunPassed = 0
@@ -77,6 +77,7 @@ testingGetH pid filterTM = do
         _ -> ("Active", Testing.Active)
   currTime <- Time.currentTime
   colls <- dbtToEff $ Testing.getCollections pid tabStatus
+  count <- dbtToEff $ Testing.inactiveCollectionsCount pid
   let listCfg =
         ItemsList.ItemsListCfg
           { projectId = pid
@@ -86,20 +87,20 @@ testingGetH pid filterTM = do
           , nextFetchUrl = Nothing
           , search = Just $ ItemsList.SearchCfg{viaQueryParam = Nothing}
           , tabsFilter =
-              Just
-                $ ItemsList.TabFilter
+              Just $
+                ItemsList.TabFilter
                   { current = currentFilterTab
                   , options =
                       [ ItemsList.TabFilterOpt{name = "Active", count = Nothing}
-                      , ItemsList.TabFilterOpt{name = "Inactive", count = Nothing}
+                      , ItemsList.TabFilterOpt{name = "Inactive", count = if currentFilterTab == "Active" then Just count else Nothing}
                       ]
                   }
           , bulkActions =
               [ ItemsList.BulkAction{icon = Just "check", title = "deactivate", uri = "/p/" <> pid.toText <> "/anomalies/bulk_actions/acknowlege"}
               ]
           , heading =
-              Just
-                $ ItemsList.Heading
+              Just $
+                ItemsList.Heading
                   { pageTitle = "Multistep API monitors/tests (Beta)"
                   , rightComponent =
                       Just
@@ -117,8 +118,8 @@ testingGetH pid filterTM = do
                   , subSection = Nothing
                   }
           , zeroState =
-              Just
-                $ ItemsList.ZeroState
+              Just $
+                ItemsList.ZeroState
                   { icon = "empty-set"
                   , title = "No Multistep Test/Monitor yet."
                   , description = "You're can create one to start monitoring your services."

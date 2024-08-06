@@ -18,6 +18,7 @@ module Models.Tests.Testing (
   getCollectionsId,
   TabStatus (..),
   getCollectionRunStatus,
+  inactiveCollectionsCount,
 )
 where
 
@@ -105,8 +106,8 @@ stepDataMethod stepData =
 
 instance AE.ToJSON CollectionStepData where
   toJSON csd =
-    AE.object
-      $ catMaybes
+    AE.object $
+      catMaybes
         [ Just $ "title" .= csd.title
         , fmap ("POST" .=) csd.post -- Change the key to "POST" here for the output JSON
         , fmap ("GET" .=) csd.get
@@ -309,6 +310,20 @@ getCollections pid tabStatus = query Select q (pid, statusValue)
            WHERE t.project_id = ? AND t.is_scheduled = ?
            ORDER BY t.updated_at DESC;
     |]
+
+
+inactiveCollectionsCount :: Projects.ProjectId -> DBT IO Int
+inactiveCollectionsCount pid = do
+  result <- query Select q pid
+  case result of
+    [Only countt] -> return countt
+    v -> return $ length v
+  where
+    q =
+      [sql|SELECT COUNT(*)
+           FROM tests.collections
+           WHERE project_id = ? and is_scheduled = false;
+      |]
 
 
 getCollectionsId :: DBT IO (V.Vector CollectionId)
