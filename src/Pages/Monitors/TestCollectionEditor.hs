@@ -293,23 +293,6 @@ collectionPage pid col col_rn respJson = do
       }
     |]
 
-    script_
-      [type_ "text/hyperscript"]
-      [text|
-          behavior LogItemMenuable
-            on click
-              if I match <.with-context-menu/> then
-                remove <.log-item-context-menu /> then remove .with-context-menu from <.with-context-menu />
-              else
-                remove <.log-item-context-menu /> then remove .with-context-menu from <.with-context-menu /> then
-                get #log-item-context-menu-tmpl.innerHTML then put it after me then add .with-context-menu to me then
-                _hyperscript.processNode(.log-item-context-menu) then htmx.process(next <.log-item-context-menu/>)
-              end
-            end
-          end
-
-        |]
-
 
 collectionStepResult_ :: Int -> Testing.StepResult -> Html ()
 collectionStepResult_ idx stepResult = section_ [class_ "p-1"] do
@@ -320,13 +303,13 @@ collectionStepResult_ idx stepResult = section_ [class_ "p-1"] do
     toHtml $ show (idx + 1) <> " " <> fromMaybe "" stepResult.stepName
   div_ [role_ "tablist", class_ "tabs tabs-lifted"] do
     input_ [type_ "radio", name_ $ "step-result-tabs-" <> show idx, role_ "tab", class_ "tab", Aria.label_ "Response Log", checked_]
-    div_ [role_ "tabpanel", class_ "tab-content bg-base-100 bg-base-100 border-base-300 rounded-box p-6"]
-      $ toHtmlRaw
-      $ textToHTML stepResult.stepLog
+    div_ [role_ "tabpanel", class_ "tab-content bg-base-100 bg-base-100 border-base-300 rounded-box p-6"] $
+      toHtmlRaw $
+        textToHTML stepResult.stepLog
 
     input_ [type_ "radio", name_ $ "step-result-tabs-" <> show idx, role_ "tab", class_ "tab", Aria.label_ "Response Headers"]
-    div_ [role_ "tabpanel", class_ "tab-content bg-base-100 bg-base-100 border-base-300 rounded-box p-6 "]
-      $ table_ [class_ "table table-xs"] do
+    div_ [role_ "tabpanel", class_ "tab-content bg-base-100 bg-base-100 border-base-300 rounded-box p-6 "] $
+      table_ [class_ "table table-xs"] do
         thead_ [] $ tr_ [] $ th_ [] "Name" >> th_ [] "Value"
         tbody_ $ forM_ (M.toList stepResult.request.resp.headers) $ \(k, v) -> tr_ [] do
           td_ [] $ toHtml k
