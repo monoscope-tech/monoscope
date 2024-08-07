@@ -457,7 +457,7 @@ export class StepsEditor extends LitElement {
           <div class="p-4 pt-2">
             <a class="btn btn-outline btn-neutral btn-sm items-center cursor-pointer" @click=${() => (this.collectionSteps = [...this.collectionSteps, {}])}>
               <svg class="inline-block icon w-3 h-3"><use href="/assets/svgs/fa-sprites/solid.svg#plus"></use></svg>
-              Add Another Step
+              Add a step to test
             </a>
           </div>
         </div>
