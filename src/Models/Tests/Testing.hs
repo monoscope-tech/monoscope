@@ -239,6 +239,7 @@ data StepResult = StepResult
   , assertResults :: [AssertResult]
   , request :: StepRequest
   , stepLog :: Text
+  , stepError :: Maybe Text
   }
   deriving stock (Show, Generic)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] StepResult
