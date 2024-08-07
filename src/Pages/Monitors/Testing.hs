@@ -25,6 +25,7 @@ import Models.Tests.Testing qualified as Testing
 import Models.Users.Sessions qualified as Sessions
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
 import Pages.Components (statBox)
+import Pages.Log (ApiLogsPageData (isTestLog))
 import Pages.Log qualified as Log
 import Pages.Monitors.TestCollectionEditor qualified as TestCollectionEditor
 import Pkg.Components qualified as Components
@@ -265,6 +266,8 @@ dashboardPage pid cid steps passed failed schedule reqsVecM =
                     , exceededFreeTier = False
                     , query
                     , cursor = Nothing
+                    , isTestLog = Just True
+                    , emptyStateUrl = Just $ "/p/" <> pid.toText <> "/testing/" <> cid.toText
                     }
             Log.resultTable_ page False
           _ -> pass
