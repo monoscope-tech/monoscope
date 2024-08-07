@@ -30,7 +30,7 @@ import Pages.Monitors.TestCollectionEditor qualified as TestCollectionEditor
 import Pkg.Components qualified as Components
 import Pkg.Components.ItemsList qualified as ItemsList
 import Relude hiding (ask)
-import System.Types (ATAuthCtx, RespHeaders, addRespHeaders, addSuccessToast)
+import System.Types (ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders, addSuccessToast)
 import Text.Time.Pretty (prettyTimeAuto)
 import Utils
 
@@ -43,6 +43,9 @@ testingPostH pid colF = do
   (_, project) <- Sessions.sessionAndProject pid
   currentTime <- Time.currentTime
   colId <- Testing.CollectionId <$> liftIO UUIDV4.nextRandom
+  let scheduleText = fromMaybe "1" colF.scheduleNumber <> " " <> fromMaybe "Days" colF.scheduleNumberUnit
+  let scheduleText' = if project.paymentPlan == "Free" then "1 day" else scheduleText
+
   let coll =
         Testing.Collection
           { id = colId
@@ -53,7 +56,7 @@ testingPostH pid colF = do
           , title = fromMaybe "" colF.title
           , description = fromMaybe "" colF.description
           , config = AE.object []
-          , schedule = fromMaybe "1" colF.scheduleNumber <> " " <> fromMaybe "day" colF.scheduleNumberUnit
+          , schedule = scheduleText'
           , isScheduled = True
           , collectionSteps = Testing.CollectionSteps colF.stepsData
           , lastRunResponse = Nothing
@@ -61,7 +64,9 @@ testingPostH pid colF = do
           , lastRunFailed = 0
           }
   _ <- dbtToEff $ Testing.addCollection coll
-  addSuccessToast "Collection added Successfully" Nothing
+  if project.paymentPlan == "Free" && isJust colF.scheduleNumberUnit && colF.scheduleNumberUnit /= Just "Days"
+    then addErrorToast "You are using the free plan. You can only schedule collections to run once a day." Nothing
+    else addSuccessToast "Collection added Successfully" Nothing
   testingGetH pid Nothing
 
 
@@ -87,8 +92,8 @@ testingGetH pid filterTM = do
           , nextFetchUrl = Nothing
           , search = Just $ ItemsList.SearchCfg{viaQueryParam = Nothing}
           , tabsFilter =
-              Just $
-                ItemsList.TabFilter
+              Just
+                $ ItemsList.TabFilter
                   { current = currentFilterTab
                   , options =
                       [ ItemsList.TabFilterOpt{name = "Active", count = Nothing}
@@ -99,8 +104,8 @@ testingGetH pid filterTM = do
               [ ItemsList.BulkAction{icon = Just "check", title = "deactivate", uri = "/p/" <> pid.toText <> "/anomalies/bulk_actions/acknowlege"}
               ]
           , heading =
-              Just $
-                ItemsList.Heading
+              Just
+                $ ItemsList.Heading
                   { pageTitle = "Multistep API monitors/tests (Beta)"
                   , rightComponent =
                       Just
@@ -118,8 +123,8 @@ testingGetH pid filterTM = do
                   , subSection = Nothing
                   }
           , zeroState =
-              Just $
-                ItemsList.ZeroState
+              Just
+                $ ItemsList.ZeroState
                   { icon = "empty-set"
                   , title = "No Multistep Test/Monitor yet."
                   , description = "You're can create one to start monitoring your services."

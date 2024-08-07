@@ -64,10 +64,17 @@ data CollectionStepUpdateForm = CollectionStepUpdateForm
 
 collectionStepsUpdateH :: Projects.ProjectId -> Testing.CollectionId -> CollectionStepUpdateForm -> ATAuthCtx (RespHeaders CollectionMut)
 collectionStepsUpdateH pid colId colF = do
+  (_, project) <- Sessions.sessionAndProject pid
   let isScheduled = colF.scheduled == Just "on"
-  _ <- dbtToEff $ Testing.updateCollection pid colId (fromMaybe "" colF.title) (fromMaybe "" colF.description) isScheduled (fromMaybe "" colF.scheduleNumber <> " " <> fromMaybe "" colF.scheduleNumberUnit) colF.stepsData
-  addSuccessToast "Collection's steps updated successfully" Nothing
-  addRespHeaders CollectionMut
+  let scheduleTxt = fromMaybe "" colF.scheduleNumber <> " " <> fromMaybe "" colF.scheduleNumberUnit
+  if project.paymentPlan == "Free" && isJust colF.scheduleNumberUnit && colF.scheduleNumberUnit /= Just "Days"
+    then do
+      addErrorToast "You are on Free plan. You can't schedule collection to run more than once a day" Nothing
+      addRespHeaders CollectionMut
+    else do
+      _ <- dbtToEff $ Testing.updateCollection pid colId (fromMaybe "" colF.title) (fromMaybe "" colF.description) isScheduled scheduleTxt colF.stepsData
+      addSuccessToast "Collection's steps updated successfully" Nothing
+      addRespHeaders CollectionMut
 
 
 collectionRunTestsH :: Projects.ProjectId -> Testing.CollectionId -> Maybe Int -> CollectionStepUpdateForm -> ATAuthCtx (RespHeaders CollectionRunTest)
@@ -179,7 +186,7 @@ testSettingsModalContent_ isUpdate col = div_ [class_ "space-y-5 w-96"] do
     label_ [class_ "form-control w-full hidden group-has-[.toggle:checked]/schedule:block"] do
       div_ [class_ "label"] $ span_ [class_ "label-text"] "run test every:"
       div_ [class_ "join"] do
-        let (scheduleNumber, scheduleNumberUnit) = case (words col.schedule) of
+        let (scheduleNumber, scheduleNumberUnit) = case words col.schedule of
               [num, unit] -> (num, unit)
               _ -> ("1", "day")
         input_ [class_ "input input-bordered join-item", type_ "number", name_ "scheduleNumber", value_ $ scheduleNumber]
