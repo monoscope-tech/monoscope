@@ -339,8 +339,10 @@ export class StepsEditor extends LitElement {
       let matches = []
       let fieldPathValues = new Set()
       let resultContainer = document.querySelector('#res-container-' + idx)
-      let elements = resultContainer.querySelectorAll('[data-field-path]')
-
+      let elements = []
+      if (resultContainer) {
+        resultContainer.querySelectorAll('[data-field-path]')
+      }
       elements.forEach((element) => {
         let path = element.getAttribute('data-field-path')
         if (path) {
