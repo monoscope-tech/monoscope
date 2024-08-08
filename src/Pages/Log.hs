@@ -48,6 +48,7 @@ import Relude.Unsafe qualified as Unsafe
 import System.Types
 import Utils
 import Witch (from)
+import Web.Scotty (function)
 
 
 -- $setup
@@ -57,6 +58,7 @@ import Witch (from)
 -- >>> import Data.Aeson
 
 
+ 
 apiLogH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe UTCTime -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders (LogsGet))
 apiLogH pid queryM cols' cursorM' sinceM fromM toM layoutM hxRequestM hxBoostedM = do
   (sess, project) <- Sessions.sessionAndProject pid
@@ -174,7 +176,7 @@ logQueryBox_ pid currentRange =
     , hxGet_ $ "/p/" <> pid.toText <> "/log_explorer"
     , hxPushUrl_ "true"
     , hxVals_ "js:{query:getQueryFromEditor(), since: getTimeRange().since, from: getTimeRange().from, to:getTimeRange().to, cols:params().cols, layout:'all'}"
-    , termRaw "hx-on::before-request" ""
+    , termRaw "hx-on::before-request" "if (!validateQuery()) { showErrorToast(); return false; }"
     , hxTarget_ "#resultTable"
     , hxSwap_ "outerHTML"
     , id_ "log_explorer_form"
@@ -298,8 +300,8 @@ apiLogsPage page = do
        return {since: params().since, from: params().from, to: params().to}
     }
       |]
+    div_ [ id_ "toast-container", style_ "position: fixed; top: 1rem; right: 1rem; z-index: 1000; width:348px;"] ""
     logQueryBox_ page.pid page.currentRange
-
     div_ [class_ "card-round w-full  grow divide-y flex flex-col text-sm h-full overflow-hidden"] do
       div_ [class_ "flex-1 "] do
         div_ [class_ "pl-3 py-1 flex flex-row justify-between"] do
@@ -503,6 +505,7 @@ requestDumpLogItemUrlPath pid rd colIdxMap = do
   pure $ ("/p/" <> pid.toText <> "/log_explorer/" <> rdId <> "/" <> rdCreatedAt, rdId)
 
 
+  
 -- TODO:
 jsonTreeAuxillaryCode :: Projects.ProjectId -> Html ()
 jsonTreeAuxillaryCode pid = do
@@ -572,6 +575,37 @@ jsonTreeAuxillaryCode pid = do
          a.click();
          document.body.removeChild(a);
        }
+      function validateQuery() {
+          const query = getQueryFromEditor();
+          const timeRange = getTimeRange();
+          
+          // Check if the query is empty
+          if (!query || query.trim() === "") {
+              return false;
+          }
+          
+          // Ensure 'since' or 'from' is provided in the time range
+          if (!timeRange.since && !timeRange.from) {
+              return false;
+          }
+          
+          // Everything looks good
+          return true;
+      }
+
+function showErrorToast() {
+    const toastContainer = document.getElementById('toast-container');
+    const toast = document.createElement('div');
+      toast.className = 'bg-red-500 text-white rounded-md p-4 flex items-center justify-between';
+    toast.innerText = "Invalid query";
+    toastContainer.appendChild(toast);
+    setTimeout(() => {
+        toast.classList.add('opacity-0');
+        setTimeout(() => {
+            toast.remove();
+        }, 1000); // Wait for the fade-out transition to complete before removing
+    }, 3000);
+}
 
     function filterByField(event, operation) {
        const target = event.target.parentNode.parentNode.parentNode
@@ -623,7 +657,7 @@ jsonTreeAuxillaryCode pid = do
       cols.push(subject)
       return [... new Set (cols)].join (",")
     }
-
+    
     var removeNamedColumnToSummary = (namedCol)=>{
       console.log(params())
       const cols = (params().cols??"").split(",").filter(x=>x!="");
