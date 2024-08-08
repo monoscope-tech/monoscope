@@ -150,7 +150,7 @@ bodyWrapper BWConfig{sessM, currProject, pageTitle, menuItem, hasIntegrated, nav
 
               if("serviceWorker" in navigator) {
                   window.addEventListener("load", () => {
-                    navigator.serviceWorker.register("/public/sw.js?v=5").then(swReg => {}).catch(err => {
+                    navigator.serviceWorker.register("/public/sw.js?v=6").then(swReg => {}).catch(err => {
                         console.error('Service Worker Error', err);
                     });
                 });
