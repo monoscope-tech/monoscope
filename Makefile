@@ -39,7 +39,7 @@ fix-imports:
 	fix-imports $$(find ./src -name '*.hs') <$$(find ./src -name '*.hs')
 
 lint:
-	hlint src 
+	hlint src
 
 fix-lint:
 	find ./src -name '*.hs' | xargs -L1 hlint --refactor --refactor-options="--inplace"
@@ -59,7 +59,7 @@ timescaledb-docker-tmp:
 		docker.io/timescale/timescaledb-ha:pg15-latest -c shared_preload_libraries='pg_stat_statements,timescaledb'
 
 update-service-worker:
-	workbox generateSW workbox-config.js
+	npx workbox generateSW workbox-config.js
 
 show-os-arch:
 	@echo "OS and Architecture: $(OS_ARCH)"

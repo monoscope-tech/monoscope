@@ -156,6 +156,22 @@ bodyWrapper BWConfig{sessM, currProject, pageTitle, menuItem, hasIntegrated, nav
                 });
               }
             |]
+      script_
+        [type_ "text/hyperscript"]
+        [text|
+          behavior LogItemMenuable
+            on click
+              if I match <.with-context-menu/> then
+                remove <.log-item-context-menu /> then remove .with-context-menu from <.with-context-menu />
+              else
+                remove <.log-item-context-menu /> then remove .with-context-menu from <.with-context-menu /> then
+                get #log-item-context-menu-tmpl.innerHTML then put it after me then add .with-context-menu to me then
+                _hyperscript.processNode(.log-item-context-menu) then htmx.process(next <.log-item-context-menu/>)
+              end
+            end
+          end
+
+        |]
 
     body_ [class_ "text-gray-900 h-full w-full bg-white fixed", term "data-theme" "winter", term "hx-ext" "multi-swap,preload"] do
       div_
@@ -220,28 +236,12 @@ bodyWrapper BWConfig{sessM, currProject, pageTitle, menuItem, hasIntegrated, nav
       });
 
           |]
-      let email = show $ fromMaybe "" $ sessM <&> (.user.getUser.email)
-      let name = fromMaybe "" $ sessM <&> (\sess -> sess.user.getUser.firstName <> " " <> sess.user.getUser.lastName)
+      let email = show $ maybe "" ((.user.getUser.email)) sessM
+      let name = maybe "" (\sess -> sess.user.getUser.firstName <> " " <> sess.user.getUser.lastName) sessM
       script_
         [text| window.addEventListener("load", (event) => {
         posthog.people.set_once({email: ${email}, name: "${name}"});
       });|]
-      script_
-        [type_ "text/hyperscript"]
-        [text|
-          behavior LogItemMenuable
-            on click
-              if I match <.with-context-menu/> then
-                remove <.log-item-context-menu /> then remove .with-context-menu from <.with-context-menu />
-              else
-                remove <.log-item-context-menu /> then remove .with-context-menu from <.with-context-menu /> then
-                get #log-item-context-menu-tmpl.innerHTML then put it after me then add .with-context-menu to me then
-                _hyperscript.processNode(.log-item-context-menu) then htmx.process(next <.log-item-context-menu/>)
-              end
-            end
-          end
-
-        |]
 
 
 projectsDropDown :: Projects.Project -> Vector.Vector Projects.Project -> Html ()

@@ -18,6 +18,7 @@ module Models.Tests.Testing (
   getCollectionsId,
   TabStatus (..),
   getCollectionRunStatus,
+  inactiveCollectionsCount,
 )
 where
 
@@ -238,6 +239,7 @@ data StepResult = StepResult
   , assertResults :: [AssertResult]
   , request :: StepRequest
   , stepLog :: Text
+  , stepError :: Maybe Text
   }
   deriving stock (Show, Generic)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] StepResult
@@ -309,6 +311,20 @@ getCollections pid tabStatus = query Select q (pid, statusValue)
            WHERE t.project_id = ? AND t.is_scheduled = ?
            ORDER BY t.updated_at DESC;
     |]
+
+
+inactiveCollectionsCount :: Projects.ProjectId -> DBT IO Int
+inactiveCollectionsCount pid = do
+  result <- query Select q pid
+  case result of
+    [Only countt] -> return countt
+    v -> return $ length v
+  where
+    q =
+      [sql|SELECT COUNT(*)
+           FROM tests.collections
+           WHERE project_id = ? and is_scheduled = false;
+      |]
 
 
 getCollectionsId :: DBT IO (V.Vector CollectionId)

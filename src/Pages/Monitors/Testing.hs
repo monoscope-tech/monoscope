@@ -25,12 +25,13 @@ import Models.Tests.Testing qualified as Testing
 import Models.Users.Sessions qualified as Sessions
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
 import Pages.Components (statBox)
+import Pages.Log (ApiLogsPageData (isTestLog))
 import Pages.Log qualified as Log
 import Pages.Monitors.TestCollectionEditor qualified as TestCollectionEditor
 import Pkg.Components qualified as Components
 import Pkg.Components.ItemsList qualified as ItemsList
 import Relude hiding (ask)
-import System.Types (ATAuthCtx, RespHeaders, addRespHeaders, addSuccessToast)
+import System.Types (ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders, addSuccessToast)
 import Text.Time.Pretty (prettyTimeAuto)
 import Utils
 
@@ -43,6 +44,9 @@ testingPostH pid colF = do
   (_, project) <- Sessions.sessionAndProject pid
   currentTime <- Time.currentTime
   colId <- Testing.CollectionId <$> liftIO UUIDV4.nextRandom
+  let scheduleText = fromMaybe "1" colF.scheduleNumber <> " " <> fromMaybe "Days" colF.scheduleNumberUnit
+  let scheduleText' = if project.paymentPlan == "Free" then "1 day" else scheduleText
+
   let coll =
         Testing.Collection
           { id = colId
@@ -53,15 +57,17 @@ testingPostH pid colF = do
           , title = fromMaybe "" colF.title
           , description = fromMaybe "" colF.description
           , config = AE.object []
-          , schedule = fromMaybe "" colF.scheduleNumber <> " " <> fromMaybe "" colF.scheduleNumberUnit
-          , isScheduled = colF.scheduled == Just "on"
+          , schedule = scheduleText'
+          , isScheduled = True
           , collectionSteps = Testing.CollectionSteps colF.stepsData
           , lastRunResponse = Nothing
           , lastRunPassed = 0
           , lastRunFailed = 0
           }
   _ <- dbtToEff $ Testing.addCollection coll
-  addSuccessToast "Collection added Successfully" Nothing
+  if project.paymentPlan == "Free" && isJust colF.scheduleNumberUnit && colF.scheduleNumberUnit /= Just "Days"
+    then addErrorToast "You are using the free plan. You can only schedule collections to run once a day." Nothing
+    else addSuccessToast "Collection added Successfully" Nothing
   testingGetH pid Nothing
 
 
@@ -77,6 +83,7 @@ testingGetH pid filterTM = do
         _ -> ("Active", Testing.Active)
   currTime <- Time.currentTime
   colls <- dbtToEff $ Testing.getCollections pid tabStatus
+  count <- dbtToEff $ Testing.inactiveCollectionsCount pid
   let listCfg =
         ItemsList.ItemsListCfg
           { projectId = pid
@@ -91,7 +98,7 @@ testingGetH pid filterTM = do
                   { current = currentFilterTab
                   , options =
                       [ ItemsList.TabFilterOpt{name = "Active", count = Nothing}
-                      , ItemsList.TabFilterOpt{name = "Inactive", count = Nothing}
+                      , ItemsList.TabFilterOpt{name = "Inactive", count = if currentFilterTab == "Active" then Just count else Nothing}
                       ]
                   }
           , bulkActions =
@@ -258,6 +265,8 @@ dashboardPage pid cid steps passed failed schedule reqsVecM =
                     , exceededFreeTier = False
                     , query
                     , cursor = Nothing
+                    , isTestLog = Just True
+                    , emptyStateUrl = Just $ "/p/" <> pid.toText <> "/testing/" <> cid.toText
                     }
             Log.resultTable_ page False
           _ -> pass
