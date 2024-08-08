@@ -12,7 +12,7 @@ window.buildCurlRequest = function buildCurlRequest(event) {
       curlHeaders = Object.entries(request_headers)
         .map(([key, value]) => '-H "' + key + ' ' + value + '" \\\n')
         .join('')
-    } catch (error) {}
+    } catch (error) { }
   }
   if (curlHeaders != '') curlCommand += curlHeaders
   let reqBody = ''
@@ -35,6 +35,18 @@ window.buildCurlRequest = function buildCurlRequest(event) {
     })
     document.querySelector('body').dispatchEvent(event)
   })
+}
+
+window.setQueryParamAndReload = (key, value) => {
+  const url = new URL(window.location.href);
+  url.searchParams.set(key, value);
+  window.location.href = url.toString();
+}
+
+window.getQueryFromEditor = () => {
+  const toggler = document.getElementById("toggleQueryEditor")
+  if (toggler.checked) return window.editor.getValue();
+  return window.queryBuilderValue || "";
 }
 
 // Unified Timepicker

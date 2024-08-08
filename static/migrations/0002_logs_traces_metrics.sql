@@ -5,7 +5,7 @@ CREATE TYPE telemetry.severity_level AS ENUM ('DEBUG', 'INFO', 'WARN', 'ERROR', 
 
 CREATE TABLE IF NOT EXISTS telemetry.logs (
     project_id UUID NOT NULL REFERENCES projects.projects (id) ON DELETE CASCADE,
-    id UUID NOT  NULL DEFAULT    gen_random_uuid(),
+    id UUID NOT  NULL DEFAULT  gen_random_uuid(),
     timestamp TIMESTAMPTZ NOT NULL,
     observed_timestamp TIMESTAMPTZ NOT NULL,
     trace_id BYTEA NOT NULL,

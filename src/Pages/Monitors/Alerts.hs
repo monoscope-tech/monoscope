@@ -7,7 +7,8 @@ module Pages.Monitors.Alerts (
   editAlert_,
   AlertUpsertForm (..),
   Alert (..),
-) where
+)
+where
 
 import Data.CaseInsensitive qualified as CI
 import Data.Default
@@ -49,6 +50,8 @@ data AlertUpsertForm = AlertUpsertForm
   , since :: Text
   , from :: Text
   , to :: Text
+  -- TODO: support source for alerts. and hence alerts on traces, metrics etc
+  -- , source :: Text
   }
   deriving stock (Show, Generic)
   deriving anyclass (FromForm)
@@ -57,7 +60,7 @@ data AlertUpsertForm = AlertUpsertForm
 convertToQueryMonitor :: Projects.ProjectId -> UTCTime -> Monitors.QueryMonitorId -> AlertUpsertForm -> Monitors.QueryMonitor
 convertToQueryMonitor projectId now queryMonitorId alertForm =
   -- FIXME: handle errors correctly, not crashing
-  let sqlQueryCfg = (defSqlQueryCfg projectId fixedUTCTime){presetRollup = Just "5m"}
+  let sqlQueryCfg = (defSqlQueryCfg projectId fixedUTCTime Nothing){presetRollup = Just "5m"}
       (_, qc) = fromRight' $ parseQueryToComponents sqlQueryCfg alertForm.query
       warningThresholdInt = readMaybe . toString =<< alertForm.warningThreshold
       alertConfig =
@@ -277,8 +280,8 @@ editAlert_ pid monitorM = do
             forM_ monitor.alertConfig.slackChannels addRecipientSlackTmpl_
 
       div_ [class_ "py-5"] do
-        button_ [type_ "submit", class_ "btn btn-success"]
-          $ if isNewMonitor
+        button_ [type_ "submit", class_ "btn btn-success"] $
+          if isNewMonitor
             then "Create Alert"
             else "Update Alert"
 

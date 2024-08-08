@@ -126,7 +126,7 @@ dashboardPage :: Projects.ProjectId -> ParamInput -> UTCTime -> Projects.Project
 dashboardPage pid paramInput currTime projectStats newEndpoints reqLatenciesRolledByStepsJ dateRange exceededFreeTier hasRequest = do
   let currentURL' = deleteParam "to" $ deleteParam "from" $ deleteParam "since" paramInput.currentURL
   let bulkActionBase = "/p/" <> pid.toText <> "/anomalies/bulk_actions"
-  section_ [class_ "p-8  mx-auto px-16 w-full space-y-12 pb-24 overflow-y-scroll  h-full"] do
+  section_ [class_ "  mx-auto px-6 w-full space-y-12 pb-24 overflow-y-scroll  h-full"] do
     when exceededFreeTier $ freeTierLimitExceededBanner pid.toText
     unless (null newEndpoints)
       $ div_ [id_ "modalContainer"] do

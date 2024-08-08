@@ -199,7 +199,7 @@ collectionCard pid col currTime = do
 
 pageTabs :: Text -> Html ()
 pageTabs url = do
-  div_ [class_ "tabs tabs-boxed"] do
+  div_ [class_ "tabs tabs-boxed border"] do
     a_ [href_ $ url <> "/overview", role_ "tab", class_ "tab tab-active"] "Overview"
     a_ [href_ $ url, role_ "tab", class_ "tab"] "Test editor"
 
@@ -208,7 +208,7 @@ collectionDashboard :: Projects.ProjectId -> Testing.CollectionId -> ATAuthCtx (
 collectionDashboard pid cid = do
   (sess, project) <- Sessions.sessionAndProject pid
   let query = "sdk_type == \"TestkitOutgoing\" and request_headers.X-Testkit-Collection-ID == \"" <> cid.toText <> "\""
-  tableAsVecE <- dbtToEff $ RequestDumps.selectLogTable pid query Nothing (Nothing, Nothing) [""]
+  tableAsVecE <-  RequestDumps.selectLogTable pid query Nothing (Nothing, Nothing) [""] Nothing
   collectionM <- dbtToEff $ Testing.getCollectionById cid
   let tableAsVecM = hush tableAsVecE
   let url = "/p/" <> pid.toText <> "/testing/" <> cid.toText
@@ -231,7 +231,6 @@ collectionDashboard pid cid = do
 dashboardPage :: Projects.ProjectId -> Testing.CollectionId -> Int -> Int -> Int -> Text -> Maybe (V.Vector (V.Vector AE.Value), [Text], Int) -> Html ()
 dashboardPage pid cid steps passed failed schedule reqsVecM =
   section_ [class_ "p-8  mx-auto px-16 w-full flex flex-col space-y-12 pb-24  h-full"] do
-    h1_ [class_ "text-2xl font-bold"] "API Test Dashboard"
     div_ [class_ "relative p-1 flex gap-10 items-start"] do
       dStats pid steps passed failed schedule
     div_ [class_ "card-round p-4 h-auto overflow-y-scroll"] do

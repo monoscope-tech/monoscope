@@ -124,9 +124,9 @@ export class MyElement extends LitElement {
 
   render() {
     return html`
-      <div class="relative w-full" @click=${(e) => e.stopPropagation()}>
+      <div class="relative w-full h-10" @click=${(e) => e.stopPropagation()}>
         <div
-          class="flex items-center flex-wrap gap-2 m-2 border border-1 border-slate-400 px-4 py-2 w-ful rounded"
+          class="flex items-center flex-wrap gap-2 border border-1 border-slate-400 px-4 py-2 w-ful rounded"
         >
           <i class="fa-regular fa-filter h-4 w-4 text-gray-500"></i>
           <div class="flex flex-wrap gap-2">

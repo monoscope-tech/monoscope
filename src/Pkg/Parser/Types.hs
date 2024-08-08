@@ -1,16 +1,7 @@
-module Pkg.Parser.Types (Parser, Values (..), Subject (..), FieldKey (..), Expr (..), AggFunction (..), ByClause (..), Rollup (..), Section (..), symbol, lexeme, sc)
+module Pkg.Parser.Types (Parser, Values (..), Subject (..), FieldKey (..), Expr (..), AggFunction (..), ByClause (..), Rollup (..), Section (..), Sources (..), symbol, lexeme, sc)
 where
 
-import Relude (
-  Bool,
-  Eq,
-  Int,
-  Maybe,
-  Ord,
-  Show,
-  Text,
-  Void,
- )
+import Relude
 import Text.Megaparsec (Parsec)
 import Text.Megaparsec.Char (space1)
 import Text.Megaparsec.Char.Lexer qualified as L
@@ -79,12 +70,15 @@ data ByClause = ByClause [Subject] -- List of fields to group by
 data Rollup = Rollup Text
   deriving stock (Show)
 
+data Sources = SRequests | SLogs | STraces | SSpans | SMetrics 
+  deriving stock (Show)
 
 data Section
   = Search Expr
   | -- Define the AST for the 'stats' command
     StatsCommand [AggFunction] (Maybe ByClause)
   | TimeChartCommand AggFunction (Maybe ByClause) (Maybe Rollup)
+  | Source Sources 
   deriving stock (Show)
 
 
