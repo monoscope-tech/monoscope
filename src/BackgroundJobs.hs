@@ -43,7 +43,7 @@ import OddJobs.ConfigBuilder (mkConfig)
 import OddJobs.Job (ConcurrencyControl (..), Job (..), LogEvent, LogLevel, createJob, startJobRunner, throwParsePayload)
 import Pages.Reports qualified as RP
 import Pages.Specification.GenerateSwagger (generateSwagger)
-import Pkg.Mail (sendPostmarkEmail, sendSlackMessage)
+import Pkg.Mail (sendDiscordNotif, sendPostmarkEmail, sendSlackMessage)
 import PyF (fmtTrim)
 import Relude hiding (ask)
 import Relude.Unsafe qualified as Unsafe
@@ -275,8 +275,8 @@ handleQueryMonitorThreshold monitorE isAlert = do
 
 jobsWorkerInit :: Log.Logger -> Config.AuthContext -> IO ()
 jobsWorkerInit logger appCtx =
-  startJobRunner
-    $ mkConfig jobLogger "background_jobs" (appCtx.jobsPool) (MaxConcurrentJobs 1) (jobsRunner logger appCtx) id
+  startJobRunner $
+    mkConfig jobLogger "background_jobs" (appCtx.jobsPool) (MaxConcurrentJobs 1) (jobsRunner logger appCtx) id
   where
     jobLogger :: LogLevel -> LogEvent -> IO ()
     jobLogger logLevel logEvent = Log.runLogT "OddJobs" logger Log.LogAttention $ Log.logInfo "Background jobs ping." (show @Text logLevel, show @Text logEvent) -- logger show (logLevel, logEvent)
@@ -313,6 +313,9 @@ dailyReportForProject pid = do
 
 <https://app.apitoolkit.io/p/{pid.toText}/reports/{show report.id.reportId}|View today's report>
 |]
+      Projects.NDiscord -> do
+        let projectUrl = "https://app.apitoolkit.io/p/" <> pid.toText <> "/reports/" <> show report.id.reportId
+        whenJust pr.discordUrl \url -> sendDiscordNotif url [fmtTrim|**Daily REPORT**: [{pr.title}]({projectUrl})|]
       _ -> do
         users & mapM_ \user -> do
           let firstName = user.firstName
@@ -373,6 +376,9 @@ weeklyReportForProject pid = do
 
 <https://app.apitoolkit.io/p/{pid.toText}/reports/{show report.id.reportId}|View this week's report>
                      |]
+      Projects.NDiscord -> do
+        let projectUrl = "https://app.apitoolkit.io/p/" <> pid.toText <> "/reports/" <> show report.id.reportId
+        whenJust pr.discordUrl \url -> sendDiscordNotif url [fmtTrim|**WEEKLY REPORT**: [{pr.title}]({projectUrl})|]
       _ -> do
         forM_ users \user -> do
           let firstName = user.firstName
@@ -448,8 +454,8 @@ Endpoint: `{endpointPath}`
 <https://app.apitoolkit.io/p/{pid.toText}/anomalies/by_hash/{targetHash}|More details on the apitoolkit>
                               |]
           _ -> do
-            when (totalRequestsCount > 50)
-              $ forM_ users \u -> do
+            when (totalRequestsCount > 50) $
+              forM_ users \u -> do
                 let templateVars =
                       object
                         [ "user_name" .= u.firstName
@@ -532,21 +538,21 @@ Endpoint: `{endpointPath}`
       err <- Unsafe.fromJust <<$>> dbtToEff $ Anomalies.errorByHash targetHash
       issueId <- liftIO $ Anomalies.AnomalyId <$> UUIDV4.nextRandom
       _ <-
-        dbtToEff
-          $ Anomalies.insertIssue
-          $ Anomalies.Issue
-            { id = issueId
-            , createdAt = err.createdAt
-            , updatedAt = err.updatedAt
-            , projectId = pid
-            , anomalyType = Anomalies.ATRuntimeException
-            , targetHash = targetHash
-            , issueData = Anomalies.IDNewRuntimeExceptionIssue err.errorData
-            , acknowlegedAt = Nothing
-            , acknowlegedBy = Nothing
-            , endpointId = Nothing
-            , archivedAt = Nothing
-            }
+        dbtToEff $
+          Anomalies.insertIssue $
+            Anomalies.Issue
+              { id = issueId
+              , createdAt = err.createdAt
+              , updatedAt = err.updatedAt
+              , projectId = pid
+              , anomalyType = Anomalies.ATRuntimeException
+              , targetHash = targetHash
+              , issueData = Anomalies.IDNewRuntimeExceptionIssue err.errorData
+              , acknowlegedAt = Nothing
+              , acknowlegedBy = Nothing
+              , endpointId = Nothing
+              , archivedAt = Nothing
+              }
       forM_ project.notificationsChannel \case
         Projects.NSlack ->
           sendSlackMessage

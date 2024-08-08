@@ -88,7 +88,9 @@ CREATE TABLE IF NOT EXISTS users.persistent_sessions
 );
 SELECT manage_updated_at('users.persistent_sessions');
 
-CREATE TYPE notification_channel_enum AS ENUM ('email', 'slack');
+CREATE TYPE IF NOT EXISTS notification_channel_enum AS ENUM ('email', 'slack');
+ALTER TYPE notification_channel_enum ADD VALUE 'discord';
+
 CREATE TABLE IF NOT EXISTS projects.projects
 (
   id          UUID      NOT  NULL DEFAULT gen_random_uuid() PRIMARY KEY,
@@ -110,6 +112,7 @@ CREATE TABLE IF NOT EXISTS projects.projects
   usage_last_reported   TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT current_timestamp
 );
 SELECT manage_updated_at('projects.projects');
+ALTER TABLE projects.projects ADD COLUMN IF NOT EXISTS discord_url TEXT DEFAULT NULL;
 
 
 -----------------------------------------------------------------------

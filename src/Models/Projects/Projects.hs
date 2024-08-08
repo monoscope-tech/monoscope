@@ -64,6 +64,7 @@ projectIdFromText pid = ProjectId <$> UUID.fromText pid
 data NotificationChannel
   = NEmail
   | NSlack
+  | NDiscord
   deriving stock (Eq, Generic, Show)
   deriving anyclass (NFData)
 
@@ -71,17 +72,20 @@ data NotificationChannel
 instance ToJSON NotificationChannel where
   toJSON NEmail = String "email"
   toJSON NSlack = String "slack"
+  toJSON NDiscord = String "discord"
 
 
 instance FromJSON NotificationChannel where
   parseJSON (String "email") = pure NEmail
   parseJSON (String "slack") = pure NSlack
+  parseJSON (String "discord") = pure NDiscord
   parseJSON _ = fail "Invalid NotificationChannel value"
 
 
 instance ToField NotificationChannel where
   toField NEmail = Escape "email"
   toField NSlack = Escape "slack"
+  toField NDiscord = Escape "discord"
 
 
 parsePermissions :: (Eq s, IsString s) => s -> NotificationChannel
@@ -116,6 +120,7 @@ data Project = Project
   , firstSubItemId :: Maybe Text
   , orderId :: Maybe Text
   , usageLastReported :: ZonedTime
+  , discordUrl :: Maybe Text
   }
   deriving stock (Show, Generic)
   deriving anyclass (FromRow, NFData)
@@ -148,6 +153,7 @@ data Project' = Project'
   , firstSubItemId :: Maybe Text
   , orderId :: Maybe Text
   , usageLastReported :: ZonedTime
+  , discordUrl :: Maybe Text
   , hasIntegrated :: Bool
   , usersDisplayImages :: Vector Text
   }
@@ -198,11 +204,11 @@ projectCacheById :: ProjectId -> DBT IO (Maybe ProjectCache)
 projectCacheById pid = queryOne Select q (pid, pid, pid)
   where
     q =
-      [sql| select  coalesce(ARRAY_AGG(DISTINCT hosts ORDER BY hosts ASC),'{}') hosts, 
-                    coalesce(ARRAY_AGG(DISTINCT endpoint_hashes ORDER BY endpoint_hashes ASC),'{}') endpoint_hashes, 
-                    coalesce(ARRAY_AGG(DISTINCT shape_hashes ORDER BY shape_hashes ASC),'{}'::text[]) shape_hashes, 
+      [sql| select  coalesce(ARRAY_AGG(DISTINCT hosts ORDER BY hosts ASC),'{}') hosts,
+                    coalesce(ARRAY_AGG(DISTINCT endpoint_hashes ORDER BY endpoint_hashes ASC),'{}') endpoint_hashes,
+                    coalesce(ARRAY_AGG(DISTINCT shape_hashes ORDER BY shape_hashes ASC),'{}'::text[]) shape_hashes,
                     coalesce(ARRAY_AGG(DISTINCT paths ORDER BY paths ASC),'{}') redacted_fields,
-                    ( SELECT count(*) FROM apis.request_dumps 
+                    ( SELECT count(*) FROM apis.request_dumps
                      WHERE project_id=? AND created_at > NOW() - INTERVAL '7' DAY
                     ) weekly_request_count,
                     (SELECT COALESCE((SELECT payment_plan FROM projects.projects WHERE id = ?),'Free')) payment_plan
@@ -313,11 +319,11 @@ projectRequestStatsByProject :: ProjectId -> DBT IO (Maybe ProjectRequestStats)
 projectRequestStatsByProject = selectById @ProjectRequestStats
 
 
-updateNotificationsChannel :: ProjectId -> [Text] -> DBT IO Int64
-updateNotificationsChannel pid channels = execute Update q (list, pid)
+updateNotificationsChannel :: ProjectId -> [Text] -> Maybe Text -> DBT IO Int64
+updateNotificationsChannel pid channels discordUrl = execute Update q (list, discordUrl, pid)
   where
     list = V.fromList channels
-    q = [sql| UPDATE projects.projects SET notifications_channel=?::notification_channel_enum[] WHERE id=?;|]
+    q = [sql| UPDATE projects.projects SET notifications_channel=?::notification_channel_enum[], discord_url=? WHERE id=?;|]
 
 
 updateUsageLastReported :: ProjectId -> ZonedTime -> DBT IO Int64
