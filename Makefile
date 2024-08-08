@@ -39,10 +39,16 @@ fix-imports:
 	fix-imports $$(find ./src -name '*.hs') <$$(find ./src -name '*.hs')
 
 lint:
-	hlint src 
+	hlint src
 
 fix-lint:
 	find ./src -name '*.hs' | xargs -L1 hlint --refactor --refactor-options="--inplace"
+
+gen-proto:
+	protoc --plugin=protoc-gen-haskell=`which proto-lens-protoc` \
+    --haskell_out=. \
+    --proto_path=. \
+    opentelemetry/**/*.proto
 
 timescaledb-docker:
 	docker run -it --rm --name=apitoolkit -p 5432:5432/tcp -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=apitoolkit -v $$HOME/pg-data:/home/postgres/pgdata \
@@ -53,7 +59,7 @@ timescaledb-docker-tmp:
 		docker.io/timescale/timescaledb-ha:pg15-latest -c shared_preload_libraries='pg_stat_statements,timescaledb'
 
 update-service-worker:
-	workbox generateSW workbox-config.js
+	npx workbox generateSW workbox-config.js
 
 show-os-arch:
 	@echo "OS and Architecture: $(OS_ARCH)"

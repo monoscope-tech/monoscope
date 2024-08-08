@@ -2,6 +2,9 @@ resolver: nightly-2024-07-12
 packages:
   - .
 
+ghc-options:
+  "grpc-haskell-core": -Wno-x-partial
+
 extra-deps:
   - ./rust-interop
   - pg-entity-0.0.4.4
@@ -23,6 +26,23 @@ extra-deps:
   - strict-containers-0.2@sha256:1bebfdb5ffb2aba15d6f34a8e0ddd7c26eeb99c92917bd5b20630fa671aeb446,9582
   - x509-1.7.7@sha256:90eef2d745a654146fc1c325e035eaddac531e4d2145d4bc1dcf4b8fad439d34,2276
   - x509-store-1.6.9@sha256:1f1abeab5bacf1407b920d0f34f4c35a5ad450ff0d8121cd3dc76460f81e711d,1716
+  - snappy-c-0.1.0@sha256:d79733db50552dc471710be8a16cc5f4fb69f210ece15fb430a50cb02a24f014,3999
+  # - large-generics-0.2.1@sha256:30677d4d1d35b6403d6d9909cbfd6a90a9fbcddf39ff6b8bd0ef31061caf4d48,2836
+  # - large-records-0.4@sha256:8bc3253575efdd8e5430667a0b244d007766318e5e33d605866c56716d4e9c71,4283
+  # - git: https://github.com/well-typed/large-records.git
+  #   commit: 5018da3d52c434b4fa11e5e1f2af2c23b2d9aa55
+  #   subdirs:
+  #     - large-records
+  #     - large-generics 
+  #     - large-anon
+  # - git: git@github.com:well-typed/grapesy.git 
+  #   commit: 22ed2deca4c60c6dc9aea248bba5f0c1281d79ca 
+  #   subdirs: 
+  #     - .
+  # - git: git@github.com:kazu-yamamoto/http2-tls.git
+  #   commit: b2c4b13c2b567fcc6bbcc344646ce258a93bae0d 
+  #   subdirs:
+  #     - .
   - git: https://github.com/Kleidukos/pg-transact-effectful
     commit: bcd3aeb5ca63a02ba026be4f02f4ce5767fb4f78 
     subdirs:
@@ -39,6 +59,20 @@ extra-deps:
       - lib/services/gogol-pubsub
       - lib/services/gogol-logging
       - lib/services/gogol-cloudtrace
+  - git: https://github.com/awakesecurity/proto3-wire.git 
+    commit: 2d48ee3446858f08a8c75130c90d770c377569bd 
+    subdirs:
+      - .
+  - git: https://github.com/tonyalaribe/proto3-suite.git 
+    branch: aeson-error-fix 
+    commit: 4076ae6d6a1b2b91d0d4b70625c53754ba12f9b0 
+    subdirs: 
+      - .
+  - git: https://github.com/awakesecurity/gRPC-haskell.git
+    commit: 4b3b04d0ac9d1db53033fb4f0b6864f25b6e945d 
+    subdirs: 
+      - core
+      - .
   # - git: https://github.com/m4dc4p/gogol.git
   #   commit: 2812d672c86ea283e53e6e0f213bcd6a65d7a345
   #   subdirs:
@@ -60,5 +94,8 @@ extra-deps:
 flags:
   pg-entity:
     prod: true
+  proto3-suite:
+    large-records: False
+    dhall: False
 
 allow-newer: true

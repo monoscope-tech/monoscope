@@ -47,7 +47,7 @@ import PyF (fmt)
 import Relude hiding (ask)
 import System.Types (ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders, addSuccessToast)
 import Text.ParserCombinators.ReadPrec (step)
-import Utils (faSprite_)
+import Utils (faSprite_, getStatusColor)
 
 
 data CollectionStepUpdateForm = CollectionStepUpdateForm
@@ -64,10 +64,17 @@ data CollectionStepUpdateForm = CollectionStepUpdateForm
 
 collectionStepsUpdateH :: Projects.ProjectId -> Testing.CollectionId -> CollectionStepUpdateForm -> ATAuthCtx (RespHeaders CollectionMut)
 collectionStepsUpdateH pid colId colF = do
+  (_, project) <- Sessions.sessionAndProject pid
   let isScheduled = colF.scheduled == Just "on"
-  _ <- dbtToEff $ Testing.updateCollection pid colId (fromMaybe "" colF.title) (fromMaybe "" colF.description) isScheduled (fromMaybe "" colF.scheduleNumber <> " " <> fromMaybe "" colF.scheduleNumberUnit) colF.stepsData
-  addSuccessToast "Collection's steps updated successfully" Nothing
-  addRespHeaders CollectionMut
+  let scheduleTxt = fromMaybe "" colF.scheduleNumber <> " " <> fromMaybe "" colF.scheduleNumberUnit
+  if project.paymentPlan == "Free" && isJust colF.scheduleNumberUnit && colF.scheduleNumberUnit /= Just "Days"
+    then do
+      addErrorToast "You are on Free plan. You can't schedule collection to run more than once a day" Nothing
+      addRespHeaders CollectionMut
+    else do
+      _ <- dbtToEff $ Testing.updateCollection pid colId (fromMaybe "" colF.title) (fromMaybe "" colF.description) isScheduled scheduleTxt colF.stepsData
+      addSuccessToast "Collection's steps updated successfully" Nothing
+      addRespHeaders CollectionMut
 
 
 collectionRunTestsH :: Projects.ProjectId -> Testing.CollectionId -> Maybe Int -> CollectionStepUpdateForm -> ATAuthCtx (RespHeaders CollectionRunTest)
@@ -95,7 +102,7 @@ castToStepResult v = case AE.eitherDecodeStrictText (decodeUtf8 $ AE.encode v) o
 
 pageTabs :: Text -> Html ()
 pageTabs url = do
-  div_ [class_ "tabs tabs-boxed"] do
+  div_ [class_ "tabs tabs-boxed border"] do
     a_ [href_ $ url <> "/overview", role_ "tab", class_ "tab"] "Overview"
     a_ [href_ $ url, role_ "tab", class_ "tab tab-active"] "Test editor"
 
@@ -179,7 +186,7 @@ testSettingsModalContent_ isUpdate col = div_ [class_ "space-y-5 w-96"] do
     label_ [class_ "form-control w-full hidden group-has-[.toggle:checked]/schedule:block"] do
       div_ [class_ "label"] $ span_ [class_ "label-text"] "run test every:"
       div_ [class_ "join"] do
-        let (scheduleNumber, scheduleNumberUnit) = case (words col.schedule) of
+        let (scheduleNumber, scheduleNumberUnit) = case words col.schedule of
               [num, unit] -> (num, unit)
               _ -> ("1", "day")
         input_ [class_ "input input-bordered join-item", type_ "number", name_ "scheduleNumber", value_ $ scheduleNumber]
@@ -286,23 +293,6 @@ collectionPage pid col col_rn respJson = do
       }
     |]
 
-    script_
-      [type_ "text/hyperscript"]
-      [text|
-          behavior LogItemMenuable
-            on click
-              if I match <.with-context-menu/> then
-                remove <.log-item-context-menu /> then remove .with-context-menu from <.with-context-menu />
-              else
-                remove <.log-item-context-menu /> then remove .with-context-menu from <.with-context-menu /> then
-                get #log-item-context-menu-tmpl.innerHTML then put it after me then add .with-context-menu to me then
-                _hyperscript.processNode(.log-item-context-menu) then htmx.process(next <.log-item-context-menu/>)
-              end
-            end
-          end
-
-        |]
-
 
 collectionStepResult_ :: Int -> Testing.StepResult -> Html ()
 collectionStepResult_ idx stepResult = section_ [class_ "p-1"] do
@@ -311,15 +301,16 @@ collectionStepResult_ idx stepResult = section_ [class_ "p-1"] do
       span_ [class_ "loading loading-dots loading-lg"] ""
   div_ [class_ "p-2 bg-base-200 font-bold"] do
     toHtml $ show (idx + 1) <> " " <> fromMaybe "" stepResult.stepName
+    p_ [class_ $ "block badge badge-sm " <> getStatusColor stepResult.request.resp.status, term "data-tippy-content" "status"] $ show stepResult.request.resp.status
   div_ [role_ "tablist", class_ "tabs tabs-lifted"] do
     input_ [type_ "radio", name_ $ "step-result-tabs-" <> show idx, role_ "tab", class_ "tab", Aria.label_ "Response Log", checked_]
-    div_ [role_ "tabpanel", class_ "tab-content bg-base-100 bg-base-100 border-base-300 rounded-box p-6"]
-      $ toHtmlRaw
-      $ textToHTML stepResult.stepLog
+    div_ [role_ "tabpanel", class_ "tab-content bg-base-100 bg-base-100 border-base-300 rounded-box p-6"] $
+      toHtmlRaw $
+        textToHTML stepResult.stepLog
 
     input_ [type_ "radio", name_ $ "step-result-tabs-" <> show idx, role_ "tab", class_ "tab", Aria.label_ "Response Headers"]
-    div_ [role_ "tabpanel", class_ "tab-content bg-base-100 bg-base-100 border-base-300 rounded-box p-6 "]
-      $ table_ [class_ "table table-xs"] do
+    div_ [role_ "tabpanel", class_ "tab-content bg-base-100 bg-base-100 border-base-300 rounded-box p-6 "] $
+      table_ [class_ "table table-xs"] do
         thead_ [] $ tr_ [] $ th_ [] "Name" >> th_ [] "Value"
         tbody_ $ forM_ (M.toList stepResult.request.resp.headers) $ \(k, v) -> tr_ [] do
           td_ [] $ toHtml k

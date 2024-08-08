@@ -1,6 +1,9 @@
+{-# LANGUAGE OverloadedLabels #-}
+
 module Start (
   startApp,
-) where
+)
+where
 
 import Relude
 import System.Server qualified as Server
