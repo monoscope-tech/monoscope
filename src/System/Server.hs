@@ -31,6 +31,7 @@ import Network.Wai.Handler.Warp (
  )
 import Network.Wai.Log qualified as WaiLog
 import Network.Wai.Middleware.Heartbeat (heartbeatMiddleware)
+import Opentelemetry.OtlpServer qualified as OtlpServer
 import ProcessMessage (processMessages)
 import Relude
 import Servant qualified
@@ -53,7 +54,6 @@ import System.Logging qualified as Logging
 import System.Types (effToServantHandler, runBackground)
 import UnliftIO.Exception (tryAny)
 import Web.Routes qualified as Routes
-import Opentelemetry.OtlpServer qualified as OtlpServer
 
 
 runAPItoolkit :: IO ()

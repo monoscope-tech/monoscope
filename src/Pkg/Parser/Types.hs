@@ -70,15 +70,17 @@ data ByClause = ByClause [Subject] -- List of fields to group by
 data Rollup = Rollup Text
   deriving stock (Show)
 
-data Sources = SRequests | SLogs | STraces | SSpans | SMetrics 
+
+data Sources = SRequests | SLogs | STraces | SSpans | SMetrics
   deriving stock (Show)
+
 
 data Section
   = Search Expr
   | -- Define the AST for the 'stats' command
     StatsCommand [AggFunction] (Maybe ByClause)
   | TimeChartCommand AggFunction (Maybe ByClause) (Maybe Rollup)
-  | Source Sources 
+  | Source Sources
   deriving stock (Show)
 
 

@@ -215,7 +215,7 @@ collectionDashboard :: Projects.ProjectId -> Testing.CollectionId -> ATAuthCtx (
 collectionDashboard pid cid = do
   (sess, project) <- Sessions.sessionAndProject pid
   let query = "sdk_type == \"TestkitOutgoing\" and request_headers.X-Testkit-Collection-ID == \"" <> cid.toText <> "\""
-  tableAsVecE <-  RequestDumps.selectLogTable pid query Nothing (Nothing, Nothing) [""] Nothing
+  tableAsVecE <- RequestDumps.selectLogTable pid query Nothing (Nothing, Nothing) [""] Nothing
   collectionM <- dbtToEff $ Testing.getCollectionById cid
   let tableAsVecM = hush tableAsVecE
   let url = "/p/" <> pid.toText <> "/testing/" <> cid.toText

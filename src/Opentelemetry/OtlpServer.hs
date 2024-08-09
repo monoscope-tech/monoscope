@@ -2,7 +2,19 @@
 
 module Opentelemetry.OtlpServer (runServer) where
 
+import Data.Aeson (object, (.=))
+import Data.Aeson qualified as AE
+import Data.Aeson.Key qualified as AEK
+import Data.ByteString qualified as BS
+import Data.Scientific
+import Data.Text.Lazy qualified as LT
+import Data.Time (UTCTime)
+import Data.Time.Clock.POSIX
+import Data.UUID qualified as UUID
+import Data.Vector qualified as V
 import Debug.Pretty.Simple
+import Log qualified
+import Models.Telemetry.Telemetry qualified as Telemetry
 import Network.GRPC.HighLevel.Client as HsGRPC
 import Network.GRPC.HighLevel.Generated as HsGRPC
 import Network.GRPC.HighLevel.Server as HsGRPC hiding (serverLoop)
@@ -12,28 +24,17 @@ import Opentelemetry.Proto.Collector.Trace.V1.TraceService
 import Opentelemetry.Proto.Common.V1.Common
 import Opentelemetry.Proto.Logs.V1.Logs
 import Opentelemetry.Proto.Resource.V1.Resource
-import Data.Time.Clock.POSIX
-import Data.Scientific
-import Data.UUID qualified as UUID
-import Data.Aeson ((.=), object)
-import Data.Aeson qualified as AE
+import Proto3.Suite.Class qualified as HsProtobuf
+import Proto3.Suite.Types qualified as HsProtobuf
+import Proto3.Wire qualified as HsProtobuf
 import Relude
-import Log qualified
-import Data.Vector qualified as V
-import Data.Time (UTCTime)
-import qualified Data.Text.Lazy as LT
-import Data.Aeson.Key qualified as AEK
 import System.Config (AuthContext)
-import Models.Telemetry.Telemetry qualified as Telemetry 
-import qualified Proto3.Wire as HsProtobuf
-import qualified Proto3.Suite.Class as HsProtobuf
-import qualified Proto3.Suite.Types as HsProtobuf
 import System.Types (runBackground)
-import qualified Data.ByteString as BS
 
 
 logsServiceExportH
-  ::  Log.Logger -> AuthContext 
+  :: Log.Logger
+  -> AuthContext
   -> ServerRequest 'Normal ExportLogsServiceRequest ExportLogsServiceResponse
   -> IO (ServerResponse 'Normal ExportLogsServiceResponse)
 logsServiceExportH appLogger appCtx (ServerNormalRequest _meta (ExportLogsServiceRequest req)) = do
@@ -45,37 +46,44 @@ logsServiceExportH appLogger appCtx (ServerNormalRequest _meta (ExportLogsServic
   _ <- runBackground appLogger appCtx $ Telemetry.bulkInsertLogs logRecords
   return (ServerNormalResponse (ExportLogsServiceResponse Nothing) mempty StatusOk "")
 
+
 -- Convert nanoseconds to UTCTime
 nanosecondsToUTC :: Word64 -> UTCTime
 nanosecondsToUTC ns = posixSecondsToUTCTime (fromIntegral ns / 1e9)
 
+
 -- Convert a list of KeyValue to a JSONB object
 keyValueToJSONB :: V.Vector KeyValue -> AE.Value
-keyValueToJSONB kvs = AE.object 
-  $ V.foldr (\kv acc -> (AEK.fromText $ LT.toStrict kv.keyValueKey, convertAnyValue (kv.keyValueValue)) : acc) [] kvs
+keyValueToJSONB kvs =
+  AE.object
+    $ V.foldr (\kv acc -> (AEK.fromText $ LT.toStrict kv.keyValueKey, convertAnyValue (kv.keyValueValue)) : acc) [] kvs
+
 
 convertAnyValue :: Maybe AnyValue -> AE.Value
 convertAnyValue (Just (AnyValue (Just (AnyValueValueStringValue val)))) = AE.String $ toText val
 convertAnyValue (Just (AnyValue (Just (AnyValueValueBoolValue val)))) = AE.Bool val
 convertAnyValue (Just (AnyValue (Just (AnyValueValueIntValue val)))) = AE.Number (fromIntegral val)
 convertAnyValue (Just (AnyValue (Just (AnyValueValueDoubleValue val)))) = AE.Number (fromFloatDigits val)
-convertAnyValue (Just (AnyValue (Just (AnyValueValueArrayValue vals)))) = AE.Array ( (V.map (convertAnyValue . Just) vals.arrayValueValues))
+convertAnyValue (Just (AnyValue (Just (AnyValueValueArrayValue vals)))) = AE.Array ((V.map (convertAnyValue . Just) vals.arrayValueValues))
 convertAnyValue _ = AE.Null
+
 
 -- Convert Protobuf severity text to SeverityLevel
 parseSeverityLevel :: Text -> Maybe Telemetry.SeverityLevel
-parseSeverityLevel =  \case
+parseSeverityLevel = \case
   "DEBUG" -> Just Telemetry.SLDebug
-  "INFO"  -> Just Telemetry.SLInfo
-  "WARN"  -> Just Telemetry.SLWarn
+  "INFO" -> Just Telemetry.SLInfo
+  "WARN" -> Just Telemetry.SLWarn
   "ERROR" -> Just Telemetry.SLError
   "FATAL" -> Just Telemetry.SLFatal
-  _       -> Nothing 
+  _ -> Nothing
+
 
 -- Convert a resource to JSONB
 resourceToJSONB :: Maybe Resource -> AE.Value
 resourceToJSONB (Just resource) = keyValueToJSONB resource.resourceAttributes
 resourceToJSONB Nothing = AE.Null
+
 
 -- Convert an instrumentation scope to JSONB
 instrumentationScopeToJSONB :: Maybe InstrumentationScope -> AE.Value
@@ -87,26 +95,29 @@ instrumentationScopeToJSONB (Just scope) =
     ]
 instrumentationScopeToJSONB Nothing = AE.Null
 
+
 -- Convert ExportLogsServiceRequest to [Log]
 convertToLog :: UUID.UUID -> ResourceLogs -> V.Vector Telemetry.LogRecord
 convertToLog projectId resourceLogs = join $ V.map (convertScopeLog projectId resourceLogs.resourceLogsResource) resourceLogs.resourceLogsScopeLogs
 
+
 convertScopeLog :: UUID.UUID -> Maybe Resource -> ScopeLogs -> V.Vector Telemetry.LogRecord
 convertScopeLog projectId resource sl =
-  V.map (convertLogRecord projectId resource sl.scopeLogsScope ) sl.scopeLogsLogRecords
+  V.map (convertLogRecord projectId resource sl.scopeLogsScope) sl.scopeLogsLogRecords
 
-convertLogRecord :: UUID.UUID -> Maybe Resource -> Maybe InstrumentationScope -> LogRecord -> Telemetry.LogRecord 
+
+convertLogRecord :: UUID.UUID -> Maybe Resource -> Maybe InstrumentationScope -> LogRecord -> Telemetry.LogRecord
 convertLogRecord projectId resource scope lr =
   Telemetry.LogRecord
     { projectId = projectId
-    , id = Nothing 
+    , id = Nothing
     , timestamp = nanosecondsToUTC lr.logRecordTimeUnixNano
     , observedTimestamp = nanosecondsToUTC lr.logRecordObservedTimeUnixNano
     , traceId = lr.logRecordTraceId
     , spanId = if BS.null lr.logRecordSpanId then Nothing else Just lr.logRecordSpanId
     , severityText = parseSeverityLevel $ toText lr.logRecordSeverityText
     , severityNumber = fromIntegral $ (either id HsProtobuf.fromProtoEnum . HsProtobuf.enumerated) lr.logRecordSeverityNumber
-    , body =  convertAnyValue (lr.logRecordBody)
+    , body = convertAnyValue (lr.logRecordBody)
     , attributes = keyValueToJSONB lr.logRecordAttributes
     , resource = resourceToJSONB resource
     , instrumentationScope = instrumentationScopeToJSONB scope
@@ -114,7 +125,8 @@ convertLogRecord projectId resource scope lr =
 
 
 traceServiceExportH
-  ::  Log.Logger -> AuthContext 
+  :: Log.Logger
+  -> AuthContext
   -> ServerRequest 'Normal ExportTraceServiceRequest ExportTraceServiceResponse
   -> IO (ServerResponse 'Normal ExportTraceServiceResponse)
 traceServiceExportH appLogger appCtx (ServerNormalRequest _meta (ExportTraceServiceRequest req)) = do
@@ -123,6 +135,7 @@ traceServiceExportH appLogger appCtx (ServerNormalRequest _meta (ExportTraceServ
   pTraceShowM _meta
   return (ServerNormalResponse (ExportTraceServiceResponse Nothing) mempty StatusOk "")
 
+
 -- -- Convert nanoseconds to UTCTime
 -- nanosecondsToUTC :: Int64 -> UTCTime
 -- nanosecondsToUTC ns = posixSecondsToUTCTime (fromIntegral ns / 1e9)
@@ -130,7 +143,6 @@ traceServiceExportH appLogger appCtx (ServerNormalRequest _meta (ExportTraceServ
 -- -- Convert a list of KeyValue to a JSONB object
 -- keyValueToJSONB :: [Logs.KeyValue] -> Value
 -- keyValueToJSONB kvs = object [(unpack kv.key, kv.value) | kv <- kvs]
-
 
 -- -- Convert Protobuf kind to SpanKind
 -- parseSpanKind :: Maybe Text -> Maybe SpanKind
@@ -163,7 +175,7 @@ traceServiceExportH appLogger appCtx (ServerNormalRequest _meta (ExportTraceServ
 --   map (convertLogRecord projectId resource sl.scope logId) sl.logRecords
 
 -- convertLogRecord :: UUID.UUID -> Logs.Resource -> Logs.InstrumentationScope -> UUID -> Logs.LogRecord -> Log
--- convertLogRecord projectId resource scope logId lr = 
+-- convertLogRecord projectId resource scope logId lr =
 --   Log
 --     { projectId = projectId
 --     , logId = logId
@@ -190,7 +202,7 @@ traceServiceExportH appLogger appCtx (ServerNormalRequest _meta (ExportTraceServ
 -- convertScopeSpan projectId resource ss = map (convertSpanData projectId resource ss.scope) ss.spans
 
 -- convertSpanData :: UUID.UUID -> Traces.Resource -> Traces.InstrumentationScope -> Traces.Span -> Span
--- convertSpanData projectId resource scope sd = 
+-- convertSpanData projectId resource scope sd =
 --   let startTime = nanosecondsToUTC sd.startTimeUnixNano
 --       endTime = if sd.endTimeUnixNano == 0 then Nothing else Just $ nanosecondsToUTC sd.endTimeUnixNano
 --   in Span
@@ -230,8 +242,8 @@ traceServiceExportH appLogger appCtx (ServerNormalRequest _meta (ExportTraceServ
 -- Server
 ---------------------------------------------------------------------------------------
 
-runServer :: Log.Logger -> AuthContext ->  IO ()
-runServer appLogger appCtx= do
+runServer :: Log.Logger -> AuthContext -> IO ()
+runServer appLogger appCtx = do
   let opts =
         defaultServiceOptions
           { serverHost = Host "localhost"
@@ -240,8 +252,8 @@ runServer appLogger appCtx= do
   otlpServer opts appLogger appCtx
 
 
-otlpServer :: HsGRPC.ServiceOptions ->  Log.Logger -> AuthContext -> IO ()
-otlpServer opts appLogger appCtx=
+otlpServer :: HsGRPC.ServiceOptions -> Log.Logger -> AuthContext -> IO ()
+otlpServer opts appLogger appCtx =
   HsGRPC.serverLoop
     HsGRPC.defaultOptions
       { HsGRPC.optNormalHandlers =
