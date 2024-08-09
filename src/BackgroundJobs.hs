@@ -456,7 +456,7 @@ Endpoint: `{endpointPath}`
           Projects.NDiscord -> do
             let msg =
                   [fmtTrim|
-{{···}} **NEW ENDPOINT DETECTED**
+{{···}} **New Endpoint Detected For {project.title}**
 
 **Endpoint**: `{endpointPath}`
 [View more](https://app.apitoolkit.io/p/{pid.toText}/anomalies/by_hash/{targetHash})|]
@@ -574,7 +574,7 @@ A new runtime exception has been detected. click the link below to see more deta
         Projects.NDiscord -> do
           let msg =
                 [fmtTrim|
-{{···}} **New Runtime Exception Found for `{project.title}`**
+{{···}} **New Runtime Exception Found for {project.title}**
 A new runtime exception has been detected. click the link below to see more details.
 
 [View more](https://app.apitoolkit.io/p/{pid.toText}/anomalies/by_hash/{targetHash})|]
