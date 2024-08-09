@@ -451,8 +451,16 @@ We have detected a new endpoint on *{project.title}*
 
 Endpoint: `{endpointPath}`
 
-<https://app.apitoolkit.io/p/{pid.toText}/anomalies/by_hash/{targetHash}|More details on the apitoolkit>
+<https://app.apitoolkit.io/p/{pid.toText}/anomalies/by_hash/{targetHash}|More details on APItoolkit>
                               |]
+          Projects.NDiscord -> do
+            let msg =
+                  [fmtTrim|
+{{···}} **NEW ENDPOINT DETECTED**
+
+**Endpoint**: `{endpointPath}`
+[View more](https://app.apitoolkit.io/p/{pid.toText}/anomalies/by_hash/{targetHash})|]
+            whenJust project.discordUrl (`sendDiscordNotif` msg)
           _ -> do
             when (totalRequestsCount > 50) $
               forM_ users \u -> do
@@ -559,10 +567,19 @@ Endpoint: `{endpointPath}`
             pid
             [fmtTrim| 🤖 *New Runtime Exception Found for `{project.title}`*
 
-We detected that a particular field on your API is returning a different format/type than what it usually gets.
+A new runtime exception has been detected. click the link below to see more details.
 
 <https://app.apitoolkit.io/p/{pid.toText}/anomalies/by_hash/{targetHash}|More details on the apitoolkit>
                                |]
+        Projects.NDiscord -> do
+          let msg =
+                [fmtTrim|
+{{···}} **New Runtime Exception Found for `{project.title}`**
+A new runtime exception has been detected. click the link below to see more details.
+
+[View more](https://app.apitoolkit.io/p/{pid.toText}/anomalies/by_hash/{targetHash})|]
+
+          whenJust project.discordUrl (`sendDiscordNotif` msg)
         _ -> forM_ users \u -> do
           let firstName = u.firstName
           let title = project.title
