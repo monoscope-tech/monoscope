@@ -21,6 +21,7 @@ import Data.Time (
 import Data.Time.Format.ISO8601 (iso8601ParseM)
 import Data.Tuple.Extra (fst3, thd3)
 import Data.UUID qualified as UUID
+import Text.Megaparsec (parseMaybe)
 import Data.UUID.V4 qualified as UUIDV4
 import Database.PostgreSQL.Entity.DBT (QueryNature (Select), query)
 import Database.PostgreSQL.Simple.Types (Query (Query))
@@ -32,6 +33,7 @@ import Models.Projects.Projects qualified as Projects
 import NeatInterpolation (text)
 import Network.URI (escapeURIString, isUnescapedInURI)
 import Pkg.Parser (
+  pSource,
   QueryComponents (finalTimechartQuery),
   SqlQueryCfg (dateRange),
   defSqlQueryCfg,
@@ -175,29 +177,14 @@ formatUTC utcTime =
   toText $ formatTime defaultTimeLocale "%Y-%m-%dT%H:%M:%S%QZ" utcTime
 
 
-chartsGetH :: M ChartType -> M Text -> M Projects.ProjectId -> M GroupBy -> M [QueryBy] -> M Int -> M Int -> M Text -> M Text -> M Bool -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))
-chartsGetH typeM Nothing pidM groupByM queryByM slotsM limitsM themeM idM showLegendM sinceM fromM toM = chartsGetDef typeM Nothing pidM groupByM queryByM slotsM limitsM themeM idM showLegendM sinceM fromM toM
-chartsGetH typeM (Just queryRaw) pidM groupByM queryByM slotsM limitsM themeM idM showLegendM sinceM fromM toM = chartsGetRaw typeM queryRaw pidM groupByM queryByM slotsM limitsM themeM idM showLegendM sinceM fromM toM
+chartsGetH :: M ChartType -> M Text -> M Projects.ProjectId -> M GroupBy -> M [QueryBy] -> M Int -> M Int -> M Text -> M Text -> M Bool -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))
+chartsGetH typeM Nothing pidM groupByM queryByM slotsM limitsM themeM idM showLegendM sinceM fromM toM sourceM= chartsGetDef typeM Nothing pidM groupByM queryByM slotsM limitsM themeM idM showLegendM sinceM fromM toM sourceM
+chartsGetH typeM (Just queryRaw) pidM groupByM queryByM slotsM limitsM themeM idM showLegendM sinceM fromM toM sourceM= chartsGetRaw typeM queryRaw pidM groupByM queryByM slotsM limitsM themeM idM showLegendM sinceM fromM toM sourceM
 
 
---  chartsGetRaw and chartGetDef should be refactored and merged.
-chartsGetRaw :: M ChartType -> Text -> M Projects.ProjectId -> M GroupBy -> M [QueryBy] -> M Int -> M Int -> M Text -> M Text -> M Bool -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))
-chartsGetRaw typeM queryRaw pidM groupByM queryByM slotsM limitsM themeM idM showLegendM sinceM fromM toM = do
-  -- let cType = case fromMaybe BarCT typeM of
-  --       BarCT -> "bar"::Text
-  --       LineCT -> "line":: Text
-
-  -- let chartExps =
-  --       catMaybes
-  --         [ TypeE <$> typeM
-  --         , GByE <$> groupByM
-  --         , QByE <$> queryByM
-  --         , SlotsE <$> slotsM
-  --         , LimitE <$> limitsM
-  --         , Theme <$> themeM
-  --         , IdE <$> idM
-  --         , showLegendM >>= (\x -> if x then Just ShowLegendE else Nothing)
-  --         ]
+--  FIXME: chartsGetRaw and chartGetDef should be refactored and merged.
+chartsGetRaw :: M ChartType -> Text -> M Projects.ProjectId -> M GroupBy -> M [QueryBy] -> M Int -> M Int -> M Text -> M Text -> M Bool -> Maybe Text -> Maybe Text ->  Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))
+chartsGetRaw typeM queryRaw pidM groupByM queryByM slotsM limitsM themeM idM showLegendM sinceM fromM toM sourceM= do
   randomID <- liftIO UUIDV4.nextRandom
   now <- liftIO getCurrentTime
 
@@ -217,7 +204,7 @@ chartsGetRaw typeM queryRaw pidM groupByM queryByM slotsM limitsM themeM idM sho
           (f, t, range)
 
   let sqlQueryComponents =
-        (defSqlQueryCfg (Unsafe.fromJust pidM) now)
+        (defSqlQueryCfg (Unsafe.fromJust pidM) now (parseMaybe pSource =<< sourceM))
           { dateRange = (fromD, toD)
           }
   let (_, qc) = fromRight' $ parseQueryToComponents sqlQueryComponents queryRaw
@@ -241,8 +228,8 @@ chartsGetRaw typeM queryRaw pidM groupByM queryByM slotsM limitsM themeM idM sho
     script_ scriptContent
 
 
-chartsGetDef :: M ChartType -> M Text -> M Projects.ProjectId -> M GroupBy -> M [QueryBy] -> M Int -> M Int -> M Text -> M Text -> M Bool -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))
-chartsGetDef typeM queryRaw pidM groupByM queryByM slotsM limitsM themeM idM showLegendM sinceM _fromM _toM = do
+chartsGetDef :: M ChartType -> M Text -> M Projects.ProjectId -> M GroupBy -> M [QueryBy] -> M Int -> M Int -> M Text -> M Text -> M Bool -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))
+chartsGetDef typeM queryRaw pidM groupByM queryByM slotsM limitsM themeM idM showLegendM sinceM _fromM _toM sourceM= do
   let chartExps =
         catMaybes
           [ TypeE <$> typeM

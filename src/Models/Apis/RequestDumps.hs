@@ -44,6 +44,7 @@ import Database.PostgreSQL.Simple (FromRow, Only (Only), ToRow)
 import Database.PostgreSQL.Simple.FromField (FromField (fromField))
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
+import Effectful.Time qualified as Time
 import Database.PostgreSQL.Simple.ToField (ToField (toField))
 import Database.PostgreSQL.Simple.Types (Query (Query))
 import Database.PostgreSQL.Transact (DBT)
@@ -57,6 +58,7 @@ import NeatInterpolation (text)
 import Pkg.Parser
 import Relude hiding (many, some)
 import Witch (from)
+import Pkg.Parser.Types (Sources)
 
 
 data SDKTypes
@@ -393,10 +395,10 @@ getRequestDumpsForPreviousReportPeriod pid report_type = query Select (Query $ e
     |]
 
 
-selectLogTable :: Projects.ProjectId -> Text -> Maybe UTCTime -> (Maybe UTCTime, Maybe UTCTime) -> [Text] -> DBT IO (Either Text (V.Vector (V.Vector Value), [Text], Int))
-selectLogTable pid extraQuery cursorM dateRange projectedColsByUser = do
-  now <- liftIO getCurrentTime
-  let resp = parseQueryToComponents ((defSqlQueryCfg pid now){cursorM, dateRange, projectedColsByUser}) extraQuery
+selectLogTable :: (DB :> es, Time.Time :> es) => Projects.ProjectId -> Text -> Maybe UTCTime -> (Maybe UTCTime, Maybe UTCTime) -> [Text] -> Maybe Sources -> Eff es (Either Text (V.Vector (V.Vector Value), [Text], Int))
+selectLogTable pid extraQuery cursorM dateRange projectedColsByUser source = do
+  now <- Time.currentTime
+  let resp = parseQueryToComponents ((defSqlQueryCfg pid now source){cursorM, dateRange, projectedColsByUser, source}) extraQuery
   case resp of
     Left x -> pure $ Left x
     Right (q, queryComponents) -> do
@@ -412,12 +414,12 @@ valueToVector (Only val) = case val of
   _ -> Nothing
 
 
-queryToValues :: Text -> DBT IO (V.Vector (Only Value))
-queryToValues q = V.fromList <$> DBT.query_ (Query $ encodeUtf8 q)
+queryToValues :: DB :> es => Text -> Eff es (V.Vector (Only Value))
+queryToValues q = dbtToEff $ V.fromList <$> DBT.query_ (Query $ encodeUtf8 q)
 
 
-queryCount :: Text -> DBT IO (Maybe (Only Int))
-queryCount q = DBT.queryOne_ (Query $ encodeUtf8 q)
+queryCount :: DB :> es => Text -> Eff es (Maybe (Only Int))
+queryCount q = dbtToEff $ DBT.queryOne_ (Query $ encodeUtf8 q)
 
 
 selectRequestDumpByProject :: Projects.ProjectId -> Text -> Maybe Text -> Maybe ZonedTime -> Maybe ZonedTime -> DBT IO (V.Vector RequestDumpLogItem, Int)

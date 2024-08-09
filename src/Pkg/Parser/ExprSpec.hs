@@ -17,7 +17,7 @@ spec = do
       let extraQuery = "method==\"POST\""
       let projectedColsByUser = ["request_body.requestClientId", "request_body.contextClientId", "request_type", "method", "status_code", "request_body\8226contextclientid"]
       let pid = Projects.ProjectId $ Unsafe.fromJust $ UUID.fromString "00000000-0000-0000-0000-000000000000"
-      let _resp = parseQueryToComponents ((defSqlQueryCfg pid fixedUTCTime){cursorM, dateRange, projectedColsByUser}) extraQuery
+      let _resp = parseQueryToComponents ((defSqlQueryCfg pid fixedUTCTime Nothing){cursorM, dateRange, projectedColsByUser}) extraQuery
       -- pTraceShowM resp
       -- pass
       True `shouldBe` True

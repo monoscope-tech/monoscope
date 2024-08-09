@@ -53,6 +53,7 @@ import System.Logging qualified as Logging
 import System.Types (effToServantHandler, runBackground)
 import UnliftIO.Exception (tryAny)
 import Web.Routes qualified as Routes
+import Opentelemetry.OtlpServer qualified as OtlpServer
 
 
 runAPItoolkit :: IO ()
@@ -103,6 +104,7 @@ runServer appLogger env = do
         , -- , [async $ OJCli.defaultWebUI ojStartArgs ojCfg] -- Uncomment or modify as needed
           [async $ Safe.withException (pubsubService appLogger env) (logException env.config.environment appLogger) | env.config.enablePubsubService]
         , [async $ Safe.withException bgJobWorker (logException env.config.environment appLogger) | env.config.enableBackgroundJobs]
+        , [async $ Safe.withException (OtlpServer.runServer appLogger env) (logException env.config.environment appLogger)]
         ]
   void $ liftIO $ waitAnyCancel asyncs
 

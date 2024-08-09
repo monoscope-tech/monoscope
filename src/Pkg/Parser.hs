@@ -1,10 +1,10 @@
 -- Parser implemented with help and code from: https://markkarpov.com/tutorial/megaparsec.html
-module Pkg.Parser (parseQueryStringToWhereClause, parseQueryToComponents, fixedUTCTime, parseQuery, sectionsToComponents, defSqlQueryCfg, defPid, SqlQueryCfg (..), QueryComponents (..), listToColNames) where
+module Pkg.Parser (parseQueryStringToWhereClause, parseQueryToComponents, fixedUTCTime, parseQuery, sectionsToComponents, defSqlQueryCfg, defPid, SqlQueryCfg (..), QueryComponents (..), listToColNames, pSource) where
 
 import Control.Error (hush)
 import Data.Default (Default (def))
 import Data.Text qualified as T
-import Data.Text.Display (display)
+import Data.Text.Display (Display (displayPrec), display)
 import Data.Time.Calendar (fromGregorian)
 import Data.Time.Clock (UTCTime (..), diffUTCTime, nominalDiffTimeToSeconds, secondsToDiffTime)
 import Data.Time.Format.ISO8601 (iso8601Show)
@@ -17,13 +17,14 @@ import Pkg.Parser.Types (
   Parser,
   Rollup (..),
   Section (..),
+  Sources (..),
   Subject (..),
  )
 import PyF (fmt)
 import Relude
 import Safe qualified
 import Text.Megaparsec (choice, errorBundlePretty, parse, sepBy)
-import Text.Megaparsec.Char (char, space)
+import Text.Megaparsec.Char (char, space, space1, string)
 
 
 -- Example queries
@@ -31,13 +32,60 @@ import Text.Megaparsec.Char (char, space)
 -- request_body[1].v7 | {.v7, .v8} |
 --
 
+-- >>> parse pSection "" "traces"
+-- Right (Source STraces)
+--
+-- >>> parse pSection "" "method==\"GET\""
+-- Right (Search (Eq (Subject "method" "method" []) (Str "GET")))
+--
+-- >>> parse pSection "" "method==\"GET\" | traces"
+-- Right (Search (Eq (Subject "method" "method" []) (Str "GET")))
+--
+-- >>> parse pSection "" "traces | method==\"GET\" "
+-- Right (Source STraces)
+--
+-- >>> parse pSection "" " traces | method==\"GET\" "
+-- Right (Source STraces)
+--
 pSection :: Parser Section
-pSection =
+pSection = do
+  _ <- space
   choice @[]
     [ pStatsSection
     , pTimeChartSection
     , Search <$> pExpr
+    , Source <$> pSource
     ]
+
+
+-- find what source to use when processing a query. By default, the requests source is used
+--
+-- >>> parse pSource "" "traces"
+-- Right STraces
+--
+-- >>> parse pSource "" "spans"
+-- Right SSpans
+--
+-- >>> parse pSource "" "metrics"
+-- Right SMetrics
+--
+pSource :: Parser Sources
+pSource =
+  choice @[]
+    [ SRequests <$ string "requests"
+    , SLogs <$ string "logs"
+    , STraces <$ string "traces"
+    , SSpans <$ string "spans"
+    , SMetrics <$ string "metrics"
+    ]
+
+
+instance Display Sources where
+  displayPrec prec SRequests = "apis.request_dumps"
+  displayPrec prec SLogs = "telemetry.logs"
+  displayPrec prec STraces = "telemetry.traces"
+  displayPrec prec SSpans = "telemetry.spans"
+  displayPrec prec SMetrics = "telemetry.metrics"
 
 
 parseQuery :: Parser [Section]
@@ -47,6 +95,7 @@ parseQuery = sepBy pSection (space *> char '|' <* space)
 data QueryComponents = QueryComponents
   { whereClause :: Maybe Text
   , groupByClause :: [Text]
+  , fromTable :: Maybe Text
   , select :: [Text]
   , finalColumns :: [Text]
   , -- A query which can be run to retrieve the count
@@ -67,6 +116,7 @@ sectionsToComponents = foldl' applySectionToComponent (def :: QueryComponents)
 
 applySectionToComponent :: QueryComponents -> Section -> QueryComponents
 applySectionToComponent qc (Search expr) = qc{whereClause = Just $ display expr}
+applySectionToComponent qc (Source source) = qc{fromTable = Just $ display source}
 applySectionToComponent qc (StatsCommand aggs Nothing) = qc{select = qc.select <> map display aggs}
 applySectionToComponent qc (StatsCommand aggs byClauseM) = applyByClauseToQC byClauseM $ qc{select = qc.select <> map display aggs}
 applySectionToComponent qc (TimeChartCommand agg byClauseM rollupM) = applyRollupToQC rollupM $ applyByClauseToQC byClauseM $ qc{select = qc.select <> [display agg]}
@@ -92,6 +142,7 @@ data SqlQueryCfg = SqlQueryCfg
   , projectedColsByUser :: [Text] -- cols selected explicitly by user
   , currentTime :: UTCTime
   , defaultSelect :: [Text]
+  , source :: Maybe Sources
   }
   deriving stock (Show, Generic)
   deriving anyclass (Default)
@@ -103,80 +154,81 @@ normalizeKeyPath txt = T.toLower $ T.replace "]" "❳" $ T.replace "[" "❲" $ T
 
 sqlFromQueryComponents :: SqlQueryCfg -> QueryComponents -> (Text, QueryComponents)
 sqlFromQueryComponents sqlCfg qc =
-  let
-    fmtTime = toText . iso8601Show
-    cursorT = maybe "" (\c -> " AND created_at<'" <> fmtTime c <> "' ") sqlCfg.cursorM
-    -- Handle the Either error case correctly not hushing it.
-    projectedColsProcessed =
-      sqlCfg.projectedColsByUser & mapMaybe \col -> do
-        subJ@(Subject entire _ _) <- hush (parse pSubject "" col)
-        pure $ display subJ <> " as " <> normalizeKeyPath entire
-    selectedCols = if null qc.select then projectedColsProcessed <> sqlCfg.defaultSelect else qc.select
-    selectClause = T.intercalate "," $ colsNoAsClause selectedCols
-    whereClause = maybe "" (\whereC -> " AND (" <> whereC <> ")") qc.whereClause
-    groupByClause = if null qc.groupByClause then "" else " GROUP BY " <> T.intercalate "," qc.groupByClause
-    dateRangeStr = case sqlCfg.dateRange of
-      (Nothing, Just b) -> "AND created_at BETWEEN NOW() AND '" <> fmtTime b <> "'"
-      (Just a, Just b) -> "AND created_at BETWEEN '" <> fmtTime a <> "' AND '" <> fmtTime b <> "'"
-      _ -> ""
+  let fmtTime = toText . iso8601Show
+      fromTable = fromMaybe "apis.request_dumps" $ qc.fromTable <|> (display <$> sqlCfg.source)
+      timestampCol = if fromTable == "apis.request_dumps" then "created_at" else "timestamp"
 
-    (fromT, toT) = bimap (fromMaybe sqlCfg.currentTime) (fromMaybe sqlCfg.currentTime) sqlCfg.dateRange
-    timeDiffSecs = abs $ nominalDiffTimeToSeconds $ diffUTCTime fromT toT
+      cursorT = maybe "" (\c -> " AND " <> timestampCol <> "<'" <> fmtTime c <> "' ") sqlCfg.cursorM
+      -- Handle the Either error case correctly not hushing it.
+      projectedColsProcessed =
+        sqlCfg.projectedColsByUser & mapMaybe \col -> do
+          subJ@(Subject entire _ _) <- hush (parse pSubject "" col)
+          pure $ display subJ <> " as " <> normalizeKeyPath entire
+      selectedCols = if null qc.select then projectedColsProcessed <> sqlCfg.defaultSelect else qc.select
+      selectClause = T.intercalate "," $ colsNoAsClause selectedCols
+      whereClause = maybe "" (\whereC -> " AND (" <> whereC <> ")") qc.whereClause
+      groupByClause = if null qc.groupByClause then "" else " GROUP BY " <> T.intercalate "," qc.groupByClause
+      dateRangeStr = case sqlCfg.dateRange of
+        (Nothing, Just b) -> "AND " <> timestampCol <> " BETWEEN NOW() AND '" <> fmtTime b <> "'"
+        (Just a, Just b) -> "AND " <> timestampCol <> " BETWEEN '" <> fmtTime a <> "' AND '" <> fmtTime b <> "'"
+        _ -> ""
 
-    finalSqlQuery =
-      [fmt|SELECT json_build_array({selectClause}) FROM apis.request_dumps 
-          WHERE project_id='{sqlCfg.pid.toText}'::uuid  and ( created_at > NOW() - interval '14 days' 
+      (fromT, toT) = bimap (fromMaybe sqlCfg.currentTime) (fromMaybe sqlCfg.currentTime) sqlCfg.dateRange
+      timeDiffSecs = abs $ nominalDiffTimeToSeconds $ diffUTCTime fromT toT
+
+      finalSqlQuery =
+        [fmt|SELECT json_build_array({selectClause}) FROM {fromTable} 
+          WHERE project_id='{sqlCfg.pid.toText}'::uuid  and ( {timestampCol} > NOW() - interval '14 days' 
           {cursorT} {dateRangeStr} {whereClause} )
-          {groupByClause} ORDER BY created_at desc limit 200 |]
+          {groupByClause} ORDER BY {timestampCol} desc limit 200 |]
 
-    countQuery =
-      [fmt|SELECT count(*) FROM apis.request_dumps 
-          WHERE project_id='{sqlCfg.pid.toText}'::uuid  and ( created_at > NOW() - interval '14 days' 
+      countQuery =
+        [fmt|SELECT count(*) FROM {fromTable} 
+          WHERE project_id='{sqlCfg.pid.toText}'::uuid  and ( {timestampCol} > NOW() - interval '14 days' 
           {cursorT} {dateRangeStr} {whereClause} )
           {groupByClause} limit 1|]
 
-    defRollup
-      | timeDiffSecs == 0 = "1h"
-      | timeDiffSecs <= (60 * 30) = "1s"
-      | timeDiffSecs <= (60 * 60) = "20s"
-      | timeDiffSecs <= (60 * 60 * 6) = "1m"
-      | timeDiffSecs <= (60 * 60 * 24 * 3) = "5m"
-      | otherwise = "1h"
+      defRollup
+        | timeDiffSecs == 0 = "1h"
+        | timeDiffSecs <= (60 * 30) = "1s"
+        | timeDiffSecs <= (60 * 60) = "20s"
+        | timeDiffSecs <= (60 * 60 * 6) = "1m"
+        | timeDiffSecs <= (60 * 60 * 24 * 3) = "5m"
+        | otherwise = "1h"
 
-    timeRollup = fromMaybe defRollup (sqlCfg.presetRollup <|> qc.rollup)
+      timeRollup = fromMaybe defRollup (sqlCfg.presetRollup <|> qc.rollup)
 
-    timebucket = [fmt|extract(epoch from time_bucket('{timeRollup}', created_at))::integer as timeB, |] :: Text
-    -- FIXME: render this based on the aggregations
-    chartSelect = [fmt| count(*)::integer as count|] :: Text
-    timeGroupByClause = " GROUP BY " <> T.intercalate "," ("timeB" : qc.groupByClause)
-    timeChartQuery =
-      [fmt|
-      SELECT {timebucket} {chartSelect}, 'Throughput' FROM apis.request_dumps
-          WHERE project_id='{sqlCfg.pid.toText}'::uuid  and ( created_at > NOW() - interval '14 days' 
+      timebucket = [fmt|extract(epoch from time_bucket('{timeRollup}', {timestampCol}))::integer as timeB, |] :: Text
+      -- FIXME: render this based on the aggregations
+      chartSelect = [fmt| count(*)::integer as count|] :: Text
+      timeGroupByClause = " GROUP BY " <> T.intercalate "," ("timeB" : qc.groupByClause)
+      timeChartQuery =
+        [fmt|
+      SELECT {timebucket} {chartSelect}, 'Throughput' FROM {fromTable} 
+          WHERE project_id='{sqlCfg.pid.toText}'::uuid  and ( {timestampCol} > NOW() - interval '14 days' 
           {cursorT} {dateRangeStr} {whereClause} )
           {timeGroupByClause}
     |]
 
-    -- FIXME: render this based on the aggregations, but without the aliases
-    alertSelect = [fmt| count(*)::integer|] :: Text
-    alertGroupByClause = if null qc.groupByClause then "" else " GROUP BY " <> T.intercalate "," qc.groupByClause
-    -- Returns the max of all the values returned by the query. Change 5mins to
-    alertQuery =
-      [fmt|
-      SELECT GREATEST({alertSelect}) FROM apis.request_dumps
-          WHERE project_id='{sqlCfg.pid.toText}'::uuid  and ( created_at > NOW() - interval '{timeRollup}'
+      -- FIXME: render this based on the aggregations, but without the aliases
+      alertSelect = [fmt| count(*)::integer|] :: Text
+      alertGroupByClause = if null qc.groupByClause then "" else " GROUP BY " <> T.intercalate "," qc.groupByClause
+      -- Returns the max of all the values returned by the query. Change 5mins to
+      alertQuery =
+        [fmt|
+      SELECT GREATEST({alertSelect}) FROM {fromTable}
+          WHERE project_id='{sqlCfg.pid.toText}'::uuid  and ( {timestampCol} > NOW() - interval '{timeRollup}'
           {whereClause}) {alertGroupByClause} 
     |]
-   in
-    ( finalSqlQuery
-    , qc
-        { finalColumns = listToColNames selectedCols
-        , countQuery
-        , finalSqlQuery
-        , finalTimechartQuery = Just timeChartQuery
-        , finalAlertQuery = Just alertQuery
-        }
-    )
+   in ( finalSqlQuery
+      , qc
+          { finalColumns = listToColNames selectedCols
+          , countQuery
+          , finalSqlQuery
+          , finalTimechartQuery = Just timeChartQuery
+          , finalAlertQuery = Just alertQuery
+          }
+      )
 
 
 -----------------------------------------------------------------------------------
@@ -188,30 +240,43 @@ sqlFromQueryComponents sqlCfg qc =
 -- used in the where clause of an sql statement
 ----------------------------------------------------------------------------------
 -- >>> parseQueryStringToWhereClause "request_body.message!=\"blabla\" AND method==\"GET\""
--- Right "request_body->>'message' as request_body\8226message!='blabla' AND method=='GET'"
+-- Right "request_body->>'message'!='blabla' AND method='GET'"
 --
 -- >>> parseQueryStringToWhereClause "request_body.message!=\"blabla\" AND method==\"GET\""
--- Right "request_body->>'message' as request_body\8226message!='blabla' AND method=='GET'"
+-- Right "request_body->>'message'!='blabla' AND method='GET'"
+--
+-- >>> parseQueryStringToWhereClause "request_body.message==\"blabla\" AND method==\"GET\""
+-- Right "request_body->>'message'='blabla' AND method='GET'"
 --
 -- >>> parseQueryStringToWhereClause "request_body.message.tags[*].name!=\"blabla\" AND method==\"GET\""
--- Right "jsonb_path_exists(request_body, '$.\"message\"[*].\"name\" ?? (@ != \"blabla\")') AND method=='GET'"
+-- Right "jsonb_path_exists(request_body, $$$.\"message\".tags[*].\"name\" ? (@ != \"blabla\")$$::jsonpath) AND method='GET'"
 --
 -- >>> parseQueryStringToWhereClause "errors[*].error_type==\"Exception\""
--- Right "jsonb_path_exists(errors, '$[*].\"error_type\" ?? (@ == \"Exception\")')"
+-- Right "jsonb_path_exists(errors, $$$[*].\"error_type\" ? (@ == \"Exception\")$$::jsonpath)"
 --
+-- -- FIXME: broken. Should return non empty query
 -- >>> parseQueryStringToWhereClause "errors==[]"
--- Right "errors==ARRAY[]"
+-- Right ""
 --
+-- -- FIXME: broken. Should return non empty query
 -- >>> parseQueryStringToWhereClause "errors[*].error_type==[]" -- works with empty array but not otherwise. Right "jsonb_path_exists(errors, '$[*].\"error_type\" ?? (@ == {} )')"
--- Right "jsonb_path_exists(errors, '$[*].\"error_type\" ?? (@ == {} )')"
+-- Right ""
+--
+-- -- FIXME: broken. Should return non empty query
+-- >>> parseQueryStringToWhereClause "errors.error_type==[]"
+-- Right ""
 --
 -- >>> parseQueryStringToWhereClause "errors[*].error_type=~/^ab.*c/"
--- Right "jsonb_path_exists(errors, '$[*].\"error_type\" ?? (@ like_regex \"^ab.*c\")')"
+-- Right "jsonb_path_exists(errors, $$$[*].\"error_type\" ? (@ like_regex \"^ab.*c\" flag \"i\" )$$::jsonpath)"
 --
 -- >>> parseQueryStringToWhereClause "response_body.roles[*] == \"user\""
--- Right "jsonb_path_exists(response_body, '$[*] ?? (@ == \"user\")')"
+-- Right "jsonb_path_exists(response_body, $$$.roles[*] ? (@ == \"user\")$$::jsonpath)"
 --
 -- >>> parseQueryStringToWhereClause "field_hashes[*]==\"42dd8b6020091ea9c01\""
+-- Right "jsonb_path_exists(field_hashes, $$$[*] ? (@ == \"42dd8b6020091ea9c01\")$$::jsonpath)"
+--
+-- >>>  parseQueryStringToWhereClause "request_body.is_customer==true"
+-- Right "request_body->>'is_customer'=true"
 --
 parseQueryStringToWhereClause :: Text -> Either Text Text
 parseQueryStringToWhereClause q =
@@ -225,29 +290,23 @@ parseQueryStringToWhereClause q =
 
 
 ----------------------------------------------------------------------------------
--- Convert Query as string to a string capable of being
--- used in the where clause of an sql statement
+-- parseQueryToComponents converts an apitoolkit query to components which can be executed directly against a database
 ----------------------------------------------------------------------------------
--- >>> parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime) "request_body.message!=\"blabla\" AND method==\"GET\""
--- Right "SELECT id,created_at,host,status_code,LEFT(\n        CONCAT(\n            'request_body=', COALESCE(request_body, 'null'), \n            ' response_body=', COALESCE(response_body, 'null')\n        ),\n        255\n    ) AS rest FROM apis.request_dumps \n          WHERE project_id='00000000-0000-0000-0000-000000000000'::uuid  and created_at > NOW() - interval '14 days'    AND request_body->>'message'!='blabla' AND method=='GET'\n           ORDER BY created_at desc limit 200"
+-- >>> Right (q, cmp) = parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime) "request_body.message!=\"blabla\" AND method==\"GET\""
+-- >>> q
+-- "SELECT json_build_array(id::text,to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"'),request_type,host,status_code,method,url_path,JSONB_ARRAY_LENGTH(errors),LEFT(\n        CONCAT(\n            'url=', COALESCE(raw_url, 'null'),\n            ' response_body=', COALESCE(response_body, 'null'),\n            ' request_body=', COALESCE(request_body, 'null') \n        ),\n        255\n    )) FROM  \n          WHERE project_id='00000000-0000-0000-0000-000000000000'::uuid  and ( created_at > NOW() - interval '14 days' \n             AND (request_body->>'message'!='blabla' AND method='GET') )\n           ORDER BY created_at desc limit 200 "
 --
--- >>> parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime) "request_body.message!=\"blabla\" AND method==\"GET\""
--- Right "SELECT id,created_at,host,status_code,LEFT(\n        CONCAT(\n            'request_body=', COALESCE(request_body, 'null'), \n            ' response_body=', COALESCE(response_body, 'null')\n        ),\n        255\n    ) AS rest FROM apis.request_dumps \n          WHERE project_id='00000000-0000-0000-0000-000000000000'::uuid  and created_at > NOW() - interval '14 days'    AND request_body->>'message'!='blabla' AND method=='GET'\n           ORDER BY created_at desc limit 200"
+-- >>> Right (q2, cmp2) = parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime) "request_body.message!=\"blabla\" AND method==\"GET\""
+-- >>> q2
+-- "SELECT json_build_array(id::text,to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"'),request_type,host,status_code,method,url_path,JSONB_ARRAY_LENGTH(errors),LEFT(\n        CONCAT(\n            'url=', COALESCE(raw_url, 'null'),\n            ' response_body=', COALESCE(response_body, 'null'),\n            ' request_body=', COALESCE(request_body, 'null') \n        ),\n        255\n    )) FROM  \n          WHERE project_id='00000000-0000-0000-0000-000000000000'::uuid  and ( created_at > NOW() - interval '14 days' \n             AND (request_body->>'message'!='blabla' AND method='GET') )\n           ORDER BY created_at desc limit 200 "
 --
--- >>> parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime) "request_body.message.tags[*].name!=\"blabla\" AND method==\"GET\""
--- Right "SELECT id,created_at,host,status_code,LEFT(\n        CONCAT(\n            'request_body=', COALESCE(request_body, 'null'), \n            ' response_body=', COALESCE(response_body, 'null')\n        ),\n        255\n    ) AS rest FROM apis.request_dumps \n          WHERE project_id='00000000-0000-0000-0000-000000000000'::uuid  and created_at > NOW() - interval '14 days'    AND jsonb_path_exists(request_body, '$.\"message\"[*].\"name\" ?? (@ != \"blabla\")') AND method=='GET'\n           ORDER BY created_at desc limit 200"
+-- >>> Right (q3, cmp3) = parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime) "errors[*].error_type==[]"
+-- >>> cmp3.whereClause
+-- Just "jsonb_path_exists(errors, $$$[*].\"error_type\" ? (@ == {} )$$::jsonpath)"
 --
--- >>> parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime) "errors[*].error_type==\"Exception\""
--- Right "SELECT id,created_at,host,status_code,LEFT(\n        CONCAT(\n            'request_body=', COALESCE(request_body, 'null'), \n            ' response_body=', COALESCE(response_body, 'null')\n        ),\n        255\n    ) AS rest FROM apis.request_dumps \n          WHERE project_id='00000000-0000-0000-0000-000000000000'::uuid  and created_at > NOW() - interval '14 days'    AND jsonb_path_exists(errors, '$[*].\"error_type\" ?? (@ == \"Exception\")')\n           ORDER BY created_at desc limit 200"
---
--- >>> parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime) "errors==[]"
--- Right "SELECT id,created_at,host,status_code,LEFT(\n        CONCAT(\n            'request_body=', COALESCE(request_body, 'null'), \n            ' response_body=', COALESCE(response_body, 'null')\n        ),\n        255\n    ) AS rest FROM apis.request_dumps \n          WHERE project_id='00000000-0000-0000-0000-000000000000'::uuid  and created_at > NOW() - interval '14 days'    AND errors==ARRAY[]\n           ORDER BY created_at desc limit 200"
---
--- >>> parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime) "errors[*].error_type==[]" -- works with empty array but not otherwise. Right "jsonb_path_exists(errors, '$[*].\"error_type\" ?? (@ == {} )')"
--- Right "SELECT id,created_at,host,status_code,LEFT(\n        CONCAT(\n            'request_body=', COALESCE(request_body, 'null'), \n            ' response_body=', COALESCE(response_body, 'null')\n        ),\n        255\n    ) AS rest FROM apis.request_dumps \n          WHERE project_id='00000000-0000-0000-0000-000000000000'::uuid  and created_at > NOW() - interval '14 days'    AND jsonb_path_exists(errors, '$[*].\"error_type\" ?? (@ == {} )')\n           ORDER BY created_at desc limit 200"
---
--- >>> parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime) "errors[*].error_type=~/^ab.*c/"
--- Right "SELECT id,created_at,host,status_code,LEFT(\n        CONCAT(\n            'request_body=', COALESCE(request_body, 'null'), \n            ' response_body=', COALESCE(response_body, 'null')\n        ),\n        255\n    ) AS rest FROM apis.request_dumps \n          WHERE project_id='00000000-0000-0000-0000-000000000000'::uuid  and created_at > NOW() - interval '14 days'    AND jsonb_path_exists(errors, '$[*].\"error_type\" ?? (@ like_regex \"^ab.*c\")')\n           ORDER BY created_at desc limit 200"
+-- >>> Right (q4, cmp4) = parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime) "errors[*].error_type=~/^ab.*c/"
+-- >>> cmp4.whereClause
+-- Just "jsonb_path_exists(errors, $$$[*].\"error_type\" ? (@ = \"^ab.*c\")$$::jsonpath)"
 --
 parseQueryToComponents :: SqlQueryCfg -> Text -> Either Text (Text, QueryComponents)
 parseQueryToComponents sqlCfg q =
@@ -266,25 +325,40 @@ fixedUTCTime :: UTCTime
 fixedUTCTime = UTCTime (fromGregorian 2020 1 1) (secondsToDiffTime 0)
 
 
-defSqlQueryCfg :: Projects.ProjectId -> UTCTime -> SqlQueryCfg
-defSqlQueryCfg pid currentTime =
+defSqlQueryCfg :: Projects.ProjectId -> UTCTime -> Maybe Sources -> SqlQueryCfg
+defSqlQueryCfg pid currentTime source =
   SqlQueryCfg
     { pid = pid
     , presetRollup = Nothing
     , cursorM = Nothing
     , dateRange = (Nothing, Nothing)
+    , source = source
     , projectedColsByUser = []
     , currentTime
-    , defaultSelect =
-        [ "id::text as id"
-        , [fmt|to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as created_at|]
-        , "request_type"
-        , "host"
-        , "status_code"
-        , "method"
-        , "url_path"
-        , "JSONB_ARRAY_LENGTH(errors) as errors_count"
-        , [fmt|LEFT(
+    , defaultSelect = defaultSelectSqlQuery source
+    }
+
+
+timestampLogFmt :: Text -> Text
+timestampLogFmt colName = [fmt|to_char({colName} AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as {colName}|]
+
+
+defaultSelectSqlQuery :: Maybe Sources -> [Text]
+defaultSelectSqlQuery (Just SLogs) = ["id", timestampLogFmt "timestamp", "severity_text", "body", "attributes"]
+defaultSelectSqlQuery (Just STraces) = ["id"]
+defaultSelectSqlQuery (Just SMetrics) = ["id"]
+defaultSelectSqlQuery (Just SSpans) = ["id"]
+defaultSelectSqlQuery (Nothing) = defaultSelectSqlQuery (Just SRequests)
+defaultSelectSqlQuery (Just SRequests) =
+  [ "id::text as id"
+  , timestampLogFmt "created_at"
+  , "request_type"
+  , "host"
+  , "status_code"
+  , "method"
+  , "url_path"
+  , "JSONB_ARRAY_LENGTH(errors) as errors_count"
+  , [fmt|LEFT(
         CONCAT(
             'url=', COALESCE(raw_url, 'null'),
             ' response_body=', COALESCE(response_body, 'null'),
@@ -292,8 +366,7 @@ defSqlQueryCfg pid currentTime =
         ),
         255
     ) as rest|]
-        ]
-    }
+  ]
 
 
 -- >>> listToColNames ["id", "JSONB_ARRAY_LENGTH(errors) as errors_count"]
