@@ -1,42 +1,45 @@
 {-# LANGUAGE OverloadedRecordDot #-}
 
-module Models.Telemetry.Telemetry (LogRecord(..), SpanRecord(..), SeverityLevel(..), SpanStatus(..), SpanKind(..), bulkInsertLogs, bulkInsertSpans) where
+module Models.Telemetry.Telemetry (LogRecord (..), SpanRecord (..), SeverityLevel (..), SpanStatus (..), SpanKind (..), bulkInsertLogs, bulkInsertSpans) where
 
-import Relude
-import Effectful
-import Database.PostgreSQL.Simple.SqlQQ (sql)
-import Effectful.PostgreSQL.Transact.Effect (DB)
-import Data.Vector qualified as V
 import Data.Aeson (Value)
 import Data.ByteString (ByteString)
 import Data.Text (Text, toUpper)
 import Data.Time (UTCTime)
 import Data.UUID (UUID)
-import Database.PostgreSQL.Transact (DBT, executeMany, execute)
-import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
-import GHC.Generics (Generic)
+import Data.Vector qualified as V
+import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.ToField (ToField, toField)
+import Database.PostgreSQL.Transact (DBT, execute, executeMany)
+import Effectful
+import Effectful.PostgreSQL.Transact.Effect (DB, dbtToEff)
+import GHC.Generics (Generic)
+import Relude
 
 
-data SeverityLevel = SLDebug | SLInfo | SLWarn | SLError | SLFatal 
+data SeverityLevel = SLDebug | SLInfo | SLWarn | SLError | SLFatal
   deriving (Show, Generic, Read)
 
 
-data SpanStatus = SSOk | SSError | SSUnset 
+data SpanStatus = SSOk | SSError | SSUnset
   deriving (Show, Generic, Read)
 
 
-data SpanKind = SKInterval | SKServer | SKClient | SKProducer | SKConsumer 
+data SpanKind = SKInterval | SKServer | SKClient | SKProducer | SKConsumer
   deriving (Show, Generic, Read)
+
 
 instance ToField SeverityLevel where
-  toField = toField  . toUpper . fromString . drop 2 . show
+  toField = toField . toUpper . fromString . drop 2 . show
+
 
 instance ToField SpanStatus where
   toField = toField . toUpper . fromString . drop 2 . show
 
+
 instance ToField SpanKind where
   toField = toField . toUpper . fromString . fromString . drop 2 . show
+
 
 data LogRecord = LogRecord
   { projectId :: UUID

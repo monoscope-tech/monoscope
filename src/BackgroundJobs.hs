@@ -43,7 +43,7 @@ import OddJobs.ConfigBuilder (mkConfig)
 import OddJobs.Job (ConcurrencyControl (..), Job (..), LogEvent, LogLevel, createJob, startJobRunner, throwParsePayload)
 import Pages.Reports qualified as RP
 import Pages.Specification.GenerateSwagger (generateSwagger)
-import Pkg.Mail (sendPostmarkEmail, sendSlackMessage)
+import Pkg.Mail (sendDiscordNotif, sendPostmarkEmail, sendSlackMessage)
 import PyF (fmtTrim)
 import Relude hiding (ask)
 import Relude.Unsafe qualified as Unsafe
@@ -313,6 +313,9 @@ dailyReportForProject pid = do
 
 <https://app.apitoolkit.io/p/{pid.toText}/reports/{show report.id.reportId}|View today's report>
 |]
+      Projects.NDiscord -> do
+        let projectUrl = "https://app.apitoolkit.io/p/" <> pid.toText <> "/reports/" <> show report.id.reportId
+        whenJust pr.discordUrl \url -> sendDiscordNotif url [fmtTrim|**Daily REPORT**: [{pr.title}]({projectUrl})|]
       _ -> do
         users & mapM_ \user -> do
           let firstName = user.firstName
@@ -373,7 +376,11 @@ weeklyReportForProject pid = do
 
 <https://app.apitoolkit.io/p/{pid.toText}/reports/{show report.id.reportId}|View this week's report>
                      |]
+      Projects.NDiscord -> do
+        let projectUrl = "https://app.apitoolkit.io/p/" <> pid.toText <> "/reports/" <> show report.id.reportId
+        whenJust pr.discordUrl \url -> sendDiscordNotif url [fmtTrim|**WEEKLY REPORT**: [{pr.title}]({projectUrl})|]
       _ -> do
+        totalRequest <- dbtToEff $ RequestDumps.getLastSevenDaysTotalRequest pid
         forM_ users \user -> do
           let firstName = user.firstName
           let projectTitle = pr.title
@@ -388,6 +395,7 @@ weeklyReportForProject pid = do
           let sevenDaysAgoUTCTime = addUTCTime (negate $ 6 * 86400) currentUTCTime
           let sevenDaysAgoZonedTime = utcToZonedTime timeZone sevenDaysAgoUTCTime
           let dayStart = show $ localDay (zonedTimeToLocalTime sevenDaysAgoZonedTime)
+          let freeTierLimitExceeded = totalRequest > 5000
 
           let templateVars =
                 [aesonQQ|{
@@ -399,7 +407,8 @@ weeklyReportForProject pid = do
                  "performance_count": #{perf_count},
                  "performance": #{perf_shrt},
                  "start_date": #{dayStart},
-                 "end_date": #{dayEnd}
+                 "end_date": #{dayEnd},
+                 "free_exceeded": #{freeTierLimitExceeded}
           }|]
           sendPostmarkEmail userEmail "weekly-report" templateVars
 
@@ -445,8 +454,16 @@ We have detected a new endpoint on *{project.title}*
 
 Endpoint: `{endpointPath}`
 
-<https://app.apitoolkit.io/p/{pid.toText}/anomalies/by_hash/{targetHash}|More details on the apitoolkit>
+<https://app.apitoolkit.io/p/{pid.toText}/anomalies/by_hash/{targetHash}|More details on APItoolkit>
                               |]
+          Projects.NDiscord -> do
+            let msg =
+                  [fmtTrim|
+{{···}} **New Endpoint Detected For {project.title}**
+
+**Endpoint**: `{endpointPath}`
+[View more](https://app.apitoolkit.io/p/{pid.toText}/anomalies/by_hash/{targetHash})|]
+            whenJust project.discordUrl (`sendDiscordNotif` msg)
           _ -> do
             when (totalRequestsCount > 50)
               $ forM_ users \u -> do
@@ -554,10 +571,19 @@ Endpoint: `{endpointPath}`
             pid
             [fmtTrim| 🤖 *New Runtime Exception Found for `{project.title}`*
 
-We detected that a particular field on your API is returning a different format/type than what it usually gets.
+A new runtime exception has been detected. click the link below to see more details.
 
 <https://app.apitoolkit.io/p/{pid.toText}/anomalies/by_hash/{targetHash}|More details on the apitoolkit>
                                |]
+        Projects.NDiscord -> do
+          let msg =
+                [fmtTrim|
+{{···}} **New Runtime Exception Found for {project.title}**
+A new runtime exception has been detected. click the link below to see more details.
+
+[View more](https://app.apitoolkit.io/p/{pid.toText}/anomalies/by_hash/{targetHash})|]
+
+          whenJust project.discordUrl (`sendDiscordNotif` msg)
         _ -> forM_ users \u -> do
           let firstName = u.firstName
           let title = project.title

@@ -280,8 +280,8 @@ editAlert_ pid monitorM = do
             forM_ monitor.alertConfig.slackChannels addRecipientSlackTmpl_
 
       div_ [class_ "py-5"] do
-        button_ [type_ "submit", class_ "btn btn-success"] $
-          if isNewMonitor
+        button_ [type_ "submit", class_ "btn btn-success"]
+          $ if isNewMonitor
             then "Create Alert"
             else "Update Alert"
 
