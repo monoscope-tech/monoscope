@@ -25,8 +25,8 @@ menu pid =
   , ("Changes & Errors", "/p/" <> pid.toText <> "/anomalies", "bug")
   , ("Outgoing Integrations", "/p/" <> pid.toText <> "/outgoing", "arrows-turn-right")
   , ("API Tests (Beta)", "/p/" <> pid.toText <> "/testing", "list-check")
-  -- , ("OpenAPI/Swagger", "/p/" <> pid.toText <> "/documentation", "brackets-curly")
-  , ("Reports", "/p/" <> pid.toText <> "/reports", "chart-simple")
+  , -- , ("OpenAPI/Swagger", "/p/" <> pid.toText <> "/documentation", "brackets-curly")
+    ("Reports", "/p/" <> pid.toText <> "/reports", "chart-simple")
   ]
 
 
@@ -297,8 +297,8 @@ sideNav sess project pageTitle menuItem hasIntegrated = aside_ [class_ "shrink-0
   script_ [text|if (window.initialCloseSideMenu == 'true'){document.getElementById('side-nav-menu').classList.add('hidden-side-nav-menu');}|]
   div_ do
     a_ [href_ "/", class_ "px-2 py-2 inline-flex items-center justify-center"] do
-        img_ [class_ "h-10 w-40 mt-2 sd-hidden pl-2", src_ "/assets/svgs/logo.svg"]
-        img_ [class_ "h-10 w-10 mt-2 hidden sd-show", src_ "/assets/logo-mini.png"]
+      img_ [class_ "h-10 w-40 mt-2 sd-hidden pl-2", src_ "/assets/svgs/logo.svg"]
+      img_ [class_ "h-10 w-10 mt-2 hidden sd-show", src_ "/assets/logo-mini.png"]
     div_ [class_ "sm:p-4 border sd-p-0 dropdown block"] do
       a_
         [ class_ "flex flex-row bg-blue-50 hover:bg-blue-100 text-blue-900 p-6 justify-center rounded-md cursor-pointer"

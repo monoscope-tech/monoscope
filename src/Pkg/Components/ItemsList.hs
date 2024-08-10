@@ -149,8 +149,8 @@ itemsList_ listCfg items =
                     , hxIndicator_ "#sortLoader"
                     ]
                     do
-                      div_ [class_ "flex flex-col items-center justify-center px-3"] $
-                        if isActive then faSprite_ "icon-checkmark4" "solid" "w-4 h-5" else div_ [class_ "w-4 h-5"] ""
+                      div_ [class_ "flex flex-col items-center justify-center px-3"]
+                        $ if isActive then faSprite_ "icon-checkmark4" "solid" "w-4 h-5" else div_ [class_ "w-4 h-5"] ""
                       div_ [class_ "grow space-y-1"] do
                         span_ [class_ "block text-lg"] $ toHtml title
                         span_ [class_ "block "] $ toHtml desc
@@ -191,6 +191,6 @@ itemRows_ :: (Monad m, ToHtml a) => Maybe Text -> V.Vector a -> HtmlT m ()
 itemRows_ nextFetchUrl items = do
   mapM_ toHtml items
   whenJust nextFetchUrl \url ->
-    when (length items > 9) $
-      a_ [class_ "cursor-pointer block p-1 blue-800 bg-blue-100 hover:bg-blue-200 text-center", hxTrigger_ "click", hxSwap_ "outerHTML", hxGet_ url] do
+    when (length items > 9)
+      $ a_ [class_ "cursor-pointer block p-1 blue-800 bg-blue-100 hover:bg-blue-200 text-center", hxTrigger_ "click", hxSwap_ "outerHTML", hxGet_ url] do
         span_ [class_ "htmx-indicator loading loading-dots loading-md"] "" >> "LOAD MORE"

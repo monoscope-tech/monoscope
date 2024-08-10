@@ -43,6 +43,7 @@ import NeatInterpolation (text)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), currProject, pageActions, pageTitle, sessM)
 import Pages.Components qualified as Components
 import Pages.Monitors.Alerts qualified as Alerts
+import Pkg.Components qualified as Components
 import Pkg.Parser (pSource)
 import Relude hiding (ask)
 import Relude.Unsafe qualified as Unsafe
@@ -50,7 +51,6 @@ import System.Types
 import Text.Megaparsec (parseMaybe)
 import Utils
 import Witch (from)
-import qualified Pkg.Components as Components
 
 
 -- $setup

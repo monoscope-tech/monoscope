@@ -22,8 +22,6 @@ import Utils (faSprite_)
 
 listProjectsGetH :: ATAuthCtx (RespHeaders (ListProjectsGet))
 listProjectsGetH = do
-  traceShowM "list projects"
-  traceShowM "==="
   (sess, project) <- Sessions.sessionAndProject (Projects.ProjectId UUID.nil)
   let bwconf =
         (def :: BWConfig)
@@ -31,9 +29,7 @@ listProjectsGetH = do
           , pageTitle = "Projects List"
           }
 
-  traceShowM "===1"
   projects <- dbtToEff $ Projects.selectProjectsForUser sess.persistentSession.userId
-  traceShowM "===2"
   let projects' =
         V.snoc
           projects

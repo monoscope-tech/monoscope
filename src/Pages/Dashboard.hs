@@ -29,19 +29,20 @@ import NeatInterpolation (text)
 import Pages.Anomalies.AnomalyList qualified as AnomaliesList
 import Pages.BodyWrapper (
   BWConfig (currProject, pageTitle, sessM),
-  PageCtx (..), pageActions,
+  PageCtx (..),
+  pageActions,
  )
 import Pages.Charts.Charts qualified as C
 import Pages.Charts.Charts qualified as Charts
 import Pages.Components (statBox)
 import Pages.Endpoints.EndpointList (renderEndpoint)
+import Pkg.Components qualified as Components
 import Relude hiding (max, min)
 import System.Clock (Clock (Monotonic), getTime)
 import System.Types
 import Text.Interpolation.Nyan (int, rmode')
 import Utils (deleteParam, faSprite_, freeTierLimitExceededBanner)
 import Witch (from)
-import qualified Pkg.Components as Components
 
 
 timePickerItems :: [(Text, Text)]
@@ -56,7 +57,7 @@ timePickerItems =
 data ParamInput = ParamInput
   { currentURL :: Text
   , sinceStr :: Maybe Text
-  , dateRange :: (Maybe UTCTime, Maybe  UTCTime)
+  , dateRange :: (Maybe UTCTime, Maybe UTCTime)
   }
 
 
@@ -125,7 +126,6 @@ dashboardGetH pid fromDStr toDStr sinceStr' = do
 
 dashboardPage :: Projects.ProjectId -> ParamInput -> UTCTime -> Projects.ProjectRequestStats -> Vector.Vector Endpoints.EndpointRequestStats -> Text -> (Maybe UTCTime, Maybe UTCTime) -> Bool -> Bool -> Html ()
 dashboardPage pid paramInput currTime projectStats newEndpoints reqLatenciesRolledByStepsJ dateRange exceededFreeTier hasRequest = do
-  let currentURL' = deleteParam "to" $ deleteParam "from" $ deleteParam "since" paramInput.currentURL
   let bulkActionBase = "/p/" <> pid.toText <> "/anomalies/bulk_actions"
   section_ [class_ "  mx-auto px-6 w-full space-y-12 pb-24 overflow-y-scroll  h-full"] do
     when exceededFreeTier $ freeTierLimitExceededBanner pid.toText

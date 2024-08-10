@@ -148,7 +148,7 @@ buildReqDumpSQL exps = (q, join qByArgs, mFrom, mTo)
     dateRangeFromQueryBy :: [QueryBy] -> (Maybe UTCTime, Maybe UTCTime)
     dateRangeFromQueryBy = foldl' goDateRange (Nothing, Nothing)
       where
-        goDateRange :: (Maybe UTCTime, Maybe UTCTime) -> QueryBy -> (Maybe UTCTime, Maybe  UTCTime)
+        goDateRange :: (Maybe UTCTime, Maybe UTCTime) -> QueryBy -> (Maybe UTCTime, Maybe UTCTime)
         goDateRange acc@(Just _from, Just _to) _ = acc -- Both from and to found, no need to continue
         goDateRange acc (QBAnd a b) = acc -- TODO: support checking QBAnd for date range foldl' goDateRange (mFrom, mTo) [a, b]
         goDateRange (_mFrom, mTop) (QBFrom from_) = (Just from_, mTop)
@@ -158,7 +158,7 @@ buildReqDumpSQL exps = (q, join qByArgs, mFrom, mTo)
 
     (mFrom, mTo) = dateRangeFromQueryBy queryBy
 
-    calculateIntervalFromQuery :: Int -> (Maybe UTCTime, Maybe  UTCTime) -> [QueryBy] -> Maybe Int
+    calculateIntervalFromQuery :: Int -> (Maybe UTCTime, Maybe UTCTime) -> [QueryBy] -> Maybe Int
     calculateIntervalFromQuery numSlots (mFrom', mTo') queryList = do
       to_ <- mTo'
       from_ <- mFrom'
@@ -272,8 +272,8 @@ data QueryBy
   | QBShapeHash Text
   | QBFormatHash Text
   | QBStatusCodeGT Int
-  | QBFrom UTCTime 
-  | QBTo UTCTime 
+  | QBFrom UTCTime
+  | QBTo UTCTime
   | QBHost Text
   | QBAnd QueryBy QueryBy
   deriving stock (Show, Read)

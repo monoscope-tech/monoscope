@@ -8,8 +8,8 @@ module Pkg.Components (
   timepicker_,
   codeEmphasis,
   withEmphasisedText,
-  TabFilter(..),
-  TabFilterOpt(..),
+  TabFilter (..),
+  TabFilterOpt (..),
 )
 where
 
@@ -137,11 +137,10 @@ instance ToHtml TabFilter where
           span_ $ toHtml opt.name
           whenJust opt.count \countV -> span_ [class_ "absolute top-[1px] -right-[5px] text-white text-xs font-medium rounded-full px-1 bg-red-500"] $ show countV
 
+
 -----------
-  --
-  --
-
-
+--
+--
 
 timePickerItems :: [(Text, Text)]
 timePickerItems =
@@ -182,5 +181,3 @@ timepicker_ currentRange = div_ [class_ "relative"] do
       a_ [class_ "block text-gray-900 relative cursor-pointer select-none py-2 pl-3 pr-9 hover:bg-gray-200 ", [__| on click toggle .hidden on #timepickerSidebar |]] "Custom date range"
     div_ [class_ "inline-block relative hidden", id_ "timepickerSidebar"] do
       div_ [id_ "startTime", class_ "hidden"] ""
-
-
