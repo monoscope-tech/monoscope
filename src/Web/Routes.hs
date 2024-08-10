@@ -41,8 +41,6 @@ import Pages.Monitors.Server qualified as MonitorsRoutes
 import Pages.Onboarding qualified as Onboarding
 import Pages.Projects.Routes qualified as ProjectsRoutes
 import Pages.Projects.Server qualified as ProjectsRoutes
-import Pages.RedactedFields (RedactFieldForm)
-import Pages.RedactedFields qualified as RedactedFields
 import Pages.Reports qualified as Reports
 import Pages.Share qualified as Share
 import Pages.SlackInstall qualified as SlackInstall
@@ -139,8 +137,6 @@ data CookieProtectedRoutes mode = CookieProtectedRoutes
   , apiPost :: mode :- "p" :> ProjectId :> "apis" :> ReqBody '[FormUrlEncoded] Api.GenerateAPIKeyForm :> Post '[HTML] (RespHeaders (Api.ApiMut))
   , slackInstallPost :: mode :- "slack" :> "link-projects" :> ReqBody '[FormUrlEncoded] SlackInstall.LinkProjectsForm :> Post '[HTML] (RespHeaders (Html ()))
   , slackUpdateWebhook :: mode :- "p" :> ProjectId :> "slack" :> "webhook" :> ReqBody '[FormUrlEncoded] SlackInstall.LinkProjectsForm :> Post '[HTML] (RespHeaders (Html ()))
-  , redactedFieldsGet :: mode :- "p" :> ProjectId :> "redacted_fields" :> Get '[HTML] (RespHeaders (RedactedFields.RedactGet))
-  , redactedFieldsPost :: mode :- "p" :> ProjectId :> "redacted_fields" :> ReqBody '[FormUrlEncoded] RedactFieldForm :> Post '[HTML] (RespHeaders (RedactedFields.RedactPost))
   , reportsGet :: mode :- "p" :> ProjectId :> "reports" :> QPT "page" :> HXRequest :> HXBoosted :> Get '[HTML] (RespHeaders (Reports.ReportsGet))
   , reportsSingleGet :: mode :- "p" :> ProjectId :> "reports" :> Capture "report_id" ReportsM.ReportId :> Get '[HTML] (RespHeaders (Reports.ReportsGet))
   , reportsPost :: mode :- "p" :> ProjectId :> "reports_notif" :> Capture "report_type" Text :> Post '[HTML] (RespHeaders (Reports.ReportsPost))
@@ -172,8 +168,6 @@ cookieProtectedServer =
     , apiPost = Api.apiPostH
     , slackInstallPost = SlackInstall.postH
     , slackUpdateWebhook = SlackInstall.updateWebHook
-    , redactedFieldsGet = RedactedFields.redactedFieldsGetH
-    , redactedFieldsPost = RedactedFields.redactedFieldsPostH
     , reportsGet = Reports.reportsGetH
     , reportsSingleGet = Reports.singleReportGetH
     , reportsPost = Reports.reportsPostH

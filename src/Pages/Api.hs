@@ -118,11 +118,11 @@ apiKeysPage pid apiKeys = do
           do
             div_ [class_ "fixed inset-0 bg-gray-500 bg-opacity-75 transition-opacity"] do
               span_ [class_ "hidden sm:inline-block sm:align-middle sm:h-screen"] ""
-            div_ [class_ "inline-block align-bottom bg-white rounded-lg px-4 pt-5 pb-4 text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:align-middle sm:max-w-lg sm:w-full sm:p-6"] do
+            div_ [class_ "inline-block align-bottom bg-base-100 rounded-lg px-4 pt-5 pb-4 text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:align-middle sm:max-w-lg sm:w-full sm:p-6"] do
               div_ [class_ "hidden sm:block absolute top-0 right-0 pt-4 pr-4"] do
                 button_
                   [ type_ "button"
-                  , class_ "bg-white rounded-md text-gray-400 hover:text-gray-500 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
+                  , class_ "bg-base-100 rounded-md text-gray-400 hover:text-gray-500 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
                   , [__|on click add .hidden to #generateApiKeyDialog|]
                   ]
                   do
@@ -140,7 +140,7 @@ apiKeysPage pid apiKeys = do
                 button_ [type_ "submit", class_ "w-full inline-flex justify-center rounded-md border border-transparent shadow-sm px-4 py-2 bg-red-600 text-base font-medium text-white hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500 sm:ml-3 sm:w-auto sm:text-sm"] "Submit"
                 button_
                   [ type_ "button"
-                  , class_ "mt-3 w-full inline-flex justify-center rounded-md border border-gray-300 shadow-sm px-4 py-2 bg-white text-base font-medium text-gray-700 hover:text-gray-500 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 sm:mt-0 sm:w-auto sm:text-sm"
+                  , class_ "mt-3 w-full inline-flex justify-center rounded-md border border-gray-300 shadow-sm px-4 py-2 bg-base-100 text-base font-medium text-gray-700 hover:text-gray-500 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 sm:mt-0 sm:w-auto sm:text-sm"
                   , [__|on click add .hidden to #generateApiKeyDialog|]
                   ]
                   "Cancel"
@@ -160,7 +160,7 @@ mainContent pid apiKeys newKeyM = section_ [id_ "main-content"] do
                 th_ [class_ "px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider"] "Key"
                 th_ [class_ "relative px-6 py-3"] do
                   span_ [class_ "sr-only"] "Edit"
-            tbody_ [class_ "bg-white divide-y divide-gray-200"] do
+            tbody_ [class_ "bg-base-100 divide-y divide-gray-200"] do
               V.indexed apiKeys & mapM_ \(i, apiKey) -> do
                 tr_ [] do
                   td_ [class_ "px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900"] $ toHtml apiKey.title

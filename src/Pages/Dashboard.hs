@@ -29,7 +29,7 @@ import NeatInterpolation (text)
 import Pages.Anomalies.AnomalyList qualified as AnomaliesList
 import Pages.BodyWrapper (
   BWConfig (currProject, pageTitle, sessM),
-  PageCtx (..),
+  PageCtx (..), pageActions,
  )
 import Pages.Charts.Charts qualified as C
 import Pages.Charts.Charts qualified as Charts
@@ -41,6 +41,7 @@ import System.Types
 import Text.Interpolation.Nyan (int, rmode')
 import Utils (deleteParam, faSprite_, freeTierLimitExceededBanner)
 import Witch (from)
+import qualified Pkg.Components as Components
 
 
 timePickerItems :: [(Text, Text)]
@@ -55,13 +56,12 @@ timePickerItems =
 data ParamInput = ParamInput
   { currentURL :: Text
   , sinceStr :: Maybe Text
-  , dateRange :: (Maybe ZonedTime, Maybe ZonedTime)
-  , currentPickerTxt :: Text
+  , dateRange :: (Maybe UTCTime, Maybe  UTCTime)
   }
 
 
 data DashboardGet = DashboardGet
-  { unwrap :: (Projects.ProjectId, ParamInput, UTCTime, Projects.ProjectRequestStats, (Vector.Vector Endpoints.EndpointRequestStats), Text, (Maybe ZonedTime, Maybe ZonedTime), Bool, Bool)
+  { unwrap :: (Projects.ProjectId, ParamInput, UTCTime, Projects.ProjectRequestStats, (Vector.Vector Endpoints.EndpointRequestStats), Text, (Maybe UTCTime, Maybe UTCTime), Bool, Bool)
   }
 
 
@@ -78,19 +78,20 @@ dashboardGetH pid fromDStr toDStr sinceStr' = do
   hasRequests <- dbtToEff $ RequestDumps.hasRequest pid
   newEndpoints <- dbtToEff $ Endpoints.endpointRequestStatsByProject pid False False Nothing Nothing Nothing 0
   -- TODO: Replace with a duration parser.
-  let (fromD, toD) = case sinceStr of
-        Just "1H" -> (Just $ utcToZonedTime utc $ addUTCTime (negate $ secondsToNominalDiffTime 3600) now, Just $ utcToZonedTime utc now)
-        Just "24H" -> (Just $ utcToZonedTime utc $ addUTCTime (negate $ secondsToNominalDiffTime $ 3600 * 24) now, Just $ utcToZonedTime utc now)
-        Just "7D" -> (Just $ utcToZonedTime utc $ addUTCTime (negate $ secondsToNominalDiffTime $ 3600 * 24 * 7) now, Just $ utcToZonedTime utc now)
-        Just "14D" -> (Just $ utcToZonedTime utc $ addUTCTime (negate $ secondsToNominalDiffTime $ 3600 * 24 * 14) now, Just $ utcToZonedTime utc now)
-        Nothing -> do
-          let f = utcToZonedTime utc <$> (iso8601ParseM (from @Text $ fromMaybe "" fromDStr) :: Maybe UTCTime)
-          let t = utcToZonedTime utc <$> (iso8601ParseM (from @Text $ fromMaybe "" toDStr) :: Maybe UTCTime)
-          (f, t)
+  let (fromD, toD, currentRange) = case sinceStr of
+        Just "1H" -> (Just $ addUTCTime (negate $ secondsToNominalDiffTime 3600) now, Just now, Just "Last Hour")
+        Just "24H" -> (Just $ addUTCTime (negate $ secondsToNominalDiffTime $ 3600 * 24) now, Just now, Just "Last 24 Hours")
+        Just "7D" -> (Just $ addUTCTime (negate $ secondsToNominalDiffTime $ 3600 * 24 * 7) now, Just now, Just "Last 7 Days")
+        Just "14D" -> (Just $ addUTCTime (negate $ secondsToNominalDiffTime $ 3600 * 24 * 14) now, Just now, Just "Last 14 Days")
         _ -> do
-          let f = utcToZonedTime utc <$> (iso8601ParseM (from @Text $ fromMaybe "" fromDStr) :: Maybe UTCTime)
-          let t = utcToZonedTime utc <$> (iso8601ParseM (from @Text $ fromMaybe "" toDStr) :: Maybe UTCTime)
-          (f, t)
+          let f = (iso8601ParseM (from @Text $ fromMaybe "" fromDStr) :: Maybe UTCTime)
+          let t = (iso8601ParseM (from @Text $ fromMaybe "" toDStr) :: Maybe UTCTime)
+          let start = toText . formatTime defaultTimeLocale "%F %T" <$> f
+          let end = toText . formatTime defaultTimeLocale "%F %T" <$> t
+          let range = case (start, end) of
+                (Just s, Just e) -> Just (s <> "-" <> e)
+                _ -> Nothing
+          (f, t, range)
 
   (projectRequestStats, reqLatenciesRolledByStepsLabeled, freeTierExceeded) <- dbtToEff do
     projectRequestStats <- fromMaybe (def :: Projects.ProjectRequestStats) <$> Projects.projectRequestStatsByProject pid
@@ -114,15 +115,15 @@ dashboardGetH pid fromDStr toDStr sinceStr' = do
           { sessM = Just sess.persistentSession
           , currProject = Just project
           , pageTitle = "Dashboard"
+          , pageActions = Just $ Components.timepicker_ currentRange
           }
   currTime <- liftIO getCurrentTime
   let currentURL = "/p/" <> pid.toText <> "?&from=" <> fromMaybe "" fromDStr <> "&to=" <> fromMaybe "" toDStr
-  let currentPickerTxt = fromMaybe (maybe "" (toText . formatTime defaultTimeLocale "%F %T") fromD <> " - " <> maybe "" (toText . formatTime defaultTimeLocale "%F %T") toD) sinceStr
-  let paramInput = ParamInput{currentURL = currentURL, sinceStr = sinceStr, dateRange = (fromD, toD), currentPickerTxt = currentPickerTxt}
+  let paramInput = ParamInput{currentURL = currentURL, sinceStr = sinceStr, dateRange = (fromD, toD)}
   addRespHeaders $ PageCtx bwconf $ DashboardGet (pid, paramInput, currTime, projectRequestStats, newEndpoints, reqLatenciesRolledByStepsJ, (fromD, toD), freeTierExceeded, hasRequests)
 
 
-dashboardPage :: Projects.ProjectId -> ParamInput -> UTCTime -> Projects.ProjectRequestStats -> Vector.Vector Endpoints.EndpointRequestStats -> Text -> (Maybe ZonedTime, Maybe ZonedTime) -> Bool -> Bool -> Html ()
+dashboardPage :: Projects.ProjectId -> ParamInput -> UTCTime -> Projects.ProjectRequestStats -> Vector.Vector Endpoints.EndpointRequestStats -> Text -> (Maybe UTCTime, Maybe UTCTime) -> Bool -> Bool -> Html ()
 dashboardPage pid paramInput currTime projectStats newEndpoints reqLatenciesRolledByStepsJ dateRange exceededFreeTier hasRequest = do
   let currentURL' = deleteParam "to" $ deleteParam "from" $ deleteParam "since" paramInput.currentURL
   let bulkActionBase = "/p/" <> pid.toText <> "/anomalies/bulk_actions"
@@ -152,29 +153,6 @@ dashboardPage pid paramInput currTime projectStats newEndpoints reqLatenciesRoll
                   ]
                   "Acknowledge All"
           label_ [class_ "modal-backdrop", Lucid.for_ "newEndpointsModal"] "Close"
-
-    div_ [class_ "relative p-1 "] do
-      div_ [class_ "relative"] do
-        a_
-          [ class_ "relative px-3 py-2 border border-1 border-black-200 space-x-2  inline-block relative cursor-pointer rounded-md"
-          , [__| on click toggle .hidden on #timepickerBox|]
-          ]
-          do
-            faSprite_ "clock" "regular" "h-4 w-4"
-            span_ [class_ "inline-block"] $ toHtml paramInput.currentPickerTxt
-            faSprite_ "chevron-down" "regular" "h-4 w-4 inline-block"
-        div_ [id_ "timepickerBox", class_ "hidden absolute z-10 mt-1  rounded-md flex"] do
-          div_ [class_ "inline-block w-84 overflow-auto bg-white py-1 text-base shadow-lg ring-1 ring-black ring-opacity-5 focus:outline-none sm:text-sm"] do
-            timePickerItems
-              & mapM_ \(val, title) ->
-                a_
-                  [ class_ "block text-gray-900 relative cursor-pointer select-none py-2 pl-3 pr-9 hover:bg-gray-200 "
-                  , href_ $ currentURL' <> "&since=" <> val
-                  ]
-                  $ toHtml title
-            a_ [class_ "block text-gray-900 relative cursor-pointer select-none py-2 pl-3 pr-9 hover:bg-gray-200 ", [__| on click toggle .hidden on #timepickerSidebar |]] "Custom date range"
-          div_ [class_ "inline-block relative hidden", id_ "timepickerSidebar"] do
-            div_ [id_ "startTime", class_ "hidden"] ""
 
     -- button_ [class_ "", id_ "checkin", onclick_ "window.picker.show()"] "timepicker"
     section_ $ AnomaliesList.anomalyListSlider currTime pid Nothing Nothing
@@ -220,7 +198,7 @@ dashboardPage pid paramInput currTime projectStats newEndpoints reqLatenciesRoll
     |]
 
 
-dStats :: Projects.ProjectId -> Projects.ProjectRequestStats -> Text -> (Maybe ZonedTime, Maybe ZonedTime) -> Bool -> Html ()
+dStats :: Projects.ProjectId -> Projects.ProjectRequestStats -> Text -> (Maybe UTCTime, Maybe UTCTime) -> Bool -> Html ()
 dStats pid projReqStats@Projects.ProjectRequestStats{..} reqLatenciesRolledByStepsJ dateRange@(fromD, toD) hasRequest = do
   section_ [class_ "space-y-3"] do
     unless hasRequest do

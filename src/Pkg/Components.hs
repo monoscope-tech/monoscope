@@ -5,9 +5,13 @@ module Pkg.Components (
   codeExample,
   modal_,
   dropDownMenu_,
+  timepicker_,
   codeEmphasis,
   withEmphasisedText,
-) where
+  TabFilter(..),
+  TabFilterOpt(..),
+)
+where
 
 import Data.Text
 import Lucid
@@ -30,7 +34,7 @@ loader =
 
 navBar :: Html ()
 navBar = do
-  nav_ [id_ "main-navbar", class_ "fixed z-20 top-0 w-full w-full px-6 py-4 border-b bg-white flex flex-row justify-between"] do
+  nav_ [id_ "main-navbar", class_ "fixed z-20 top-0 w-full w-full px-6 py-4 border-b bg-base-100 flex flex-row justify-between"] do
     div_ [class_ "flex justify-between items-center gap-4 w-[1000px] mx-auto"] do
       a_ [href_ "https://apitoolkit.io", class_ "flex items-center text-gray-500 hover:text-gray-700"] do
         img_
@@ -101,3 +105,82 @@ withEmphasisedText ((text, True) : xs) = do
 withEmphasisedText ((text, False) : xs) = do
   toHtml text
   withEmphasisedText xs
+
+
+--------------------------------------------------------------------
+-- DaisyUI bordered tabs.
+------------------------------------------------------------------
+data TabFilter = TabFilter
+  { current :: Text
+  , currentURL :: Text
+  , options :: [TabFilterOpt]
+  }
+
+
+data TabFilterOpt = TabFilterOpt
+  { name :: Text
+  , count :: Maybe Int
+  }
+
+
+instance ToHtml TabFilter where
+  toHtmlRaw a = toHtml a
+  toHtml tf = div_ [class_ "tabs tabs-boxed border"] do
+    let uri = deleteParam "filter" tf.currentURL
+    forM_ tf.options \opt ->
+      a_
+        [ href_ $ uri <> "&filter=" <> escapedQueryPartial opt.name
+        , role_ "tab"
+        , class_ $ "tab " <> if opt.name == tf.current then "tab-active" else ""
+        ]
+        do
+          span_ $ toHtml opt.name
+          whenJust opt.count \countV -> span_ [class_ "absolute top-[1px] -right-[5px] text-white text-xs font-medium rounded-full px-1 bg-red-500"] $ show countV
+
+-----------
+  --
+  --
+
+
+
+timePickerItems :: [(Text, Text)]
+timePickerItems =
+  [ ("1H", "Last Hour")
+  , ("24H", "Last 24 Hours")
+  , ("7D", "Last 7 days")
+  , ("14D", "Last 14 days")
+  ]
+
+
+timepicker_ :: Maybe Text -> Html ()
+timepicker_ currentRange = div_ [class_ "relative"] do
+  input_ [type_ "hidden", id_ "since_input"]
+  input_ [type_ "hidden", id_ "custom_range_input"]
+  a_
+    [ class_ "relative btn btn-sm btn-outline"
+    , [__| on click toggle .hidden on #timepickerBox|]
+    ]
+    do
+      faSprite_ "clock" "regular" "h-4 w-4"
+      span_ [class_ "inline-block", id_ "currentRange"] $ toHtml (fromMaybe "Last 14 Days" currentRange)
+      faSprite_ "chevron-down" "regular" "h-3 w-3 inline-block"
+  div_ [id_ "timepickerBox", class_ "hidden absolute z-10 mt-1  rounded-md flex"] do
+    div_ [class_ "inline-block w-84 overflow-auto bg-base-100 py-1 text-base shadow-lg ring-1 ring-black ring-opacity-5 focus:outline-none sm:text-sm"] do
+      timePickerItems
+        & mapM_ \(val, title) ->
+          a_
+            [ class_ "block text-gray-900 relative cursor-pointer select-none py-2 pl-3 pr-9 hover:bg-gray-200 "
+            , term "data-value" val
+            , term "data-title" title
+            , [__| on click set #custom_range_input's value to my @data-value then log my @data-value
+                                   then toggle .hidden on #timepickerBox
+                                   then set #currentRange's innerText to my @data-title
+                                   then htmx.trigger("#log_explorer_form", "submit")
+                         |]
+            ]
+            $ toHtml title
+      a_ [class_ "block text-gray-900 relative cursor-pointer select-none py-2 pl-3 pr-9 hover:bg-gray-200 ", [__| on click toggle .hidden on #timepickerSidebar |]] "Custom date range"
+    div_ [class_ "inline-block relative hidden", id_ "timepickerSidebar"] do
+      div_ [id_ "startTime", class_ "hidden"] ""
+
+

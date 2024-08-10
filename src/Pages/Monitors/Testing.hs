@@ -10,15 +10,13 @@ import Control.Error.Util (hush)
 import Data.Aeson qualified as AE
 import Data.Default (def)
 import Data.List.Extra (nubOrd)
-import Data.Text qualified as T
-import Data.Time (UTCTime, getCurrentTime, zonedTimeToUTC)
+import Data.Time (UTCTime)
 import Data.UUID.V4 qualified as UUIDV4
 import Data.Vector qualified as V
 import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
 import Effectful.Time qualified as Time
 import Lucid
-import Lucid.Htmx (hxExt_, hxGet_, hxIndicator_, hxPost_, hxSelect_, hxSwap_, hxTarget_, hxTrigger_, hxVals_)
-import Lucid.Hyperscript (__)
+import Lucid.Htmx (hxExt_, hxPost_, hxSelect_, hxSwap_, hxTarget_, hxVals_)
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.Projects qualified as Projects
 import Models.Tests.Testing qualified as Testing
@@ -81,51 +79,25 @@ testingGetH pid filterTM = do
         Just "Active" -> ("Active", Testing.Active)
         Just "Inactive" -> ("Inactive", Testing.Inactive)
         _ -> ("Active", Testing.Active)
+  let currentURL = "/p/" <> pid.toText <> "/testing?"
   currTime <- Time.currentTime
   colls <- dbtToEff $ Testing.getCollections pid tabStatus
-  count <- dbtToEff $ Testing.inactiveCollectionsCount pid
+  inactiveColsCount <- dbtToEff $ Testing.inactiveCollectionsCount pid
   let listCfg =
         ItemsList.ItemsListCfg
           { projectId = pid
           , sort = Nothing
-          , currentURL = "/p/" <> pid.toText <> "/testing?"
+          , currentURL
           , currTime
           , nextFetchUrl = Nothing
           , search = Just $ ItemsList.SearchCfg{viaQueryParam = Nothing}
-          , tabsFilter =
-              Just
-                $ ItemsList.TabFilter
-                  { current = currentFilterTab
-                  , options =
-                      [ ItemsList.TabFilterOpt{name = "Active", count = Nothing}
-                      , ItemsList.TabFilterOpt{name = "Inactive", count = if currentFilterTab == "Active" then Just count else Nothing}
-                      ]
-                  }
+          , heading = Nothing
           , bulkActions =
               [ ItemsList.BulkAction{icon = Just "check", title = "deactivate", uri = "/p/" <> pid.toText <> "/anomalies/bulk_actions/acknowlege"}
               ]
-          , heading =
-              Just
-                $ ItemsList.Heading
-                  { pageTitle = "Multistep API monitors/tests (Beta)"
-                  , rightComponent =
-                      Just
-                        $ Components.modal_ "test-settings-modal" (span_ [class_ "btn btn-sm btn-primary space-x-2"] $ Utils.faSprite_ "plus" "regular" "h-4" >> "new tests")
-                        $ form_
-                          [ hxPost_ $ "/p/" <> pid.toText <> "/testing"
-                          , class_ "w-full"
-                          , hxTarget_ "#itemsListPage"
-                          , hxSelect_ "#itemsListPage"
-                          , hxVals_ "js:{stepsData: []}"
-                          , hxExt_ "json-enc"
-                          , hxSwap_ "outerHTML"
-                          ]
-                        $ TestCollectionEditor.testSettingsModalContent_ False (def :: Testing.Collection)
-                  , subSection = Nothing
-                  }
           , zeroState =
-              Just
-                $ ItemsList.ZeroState
+              Just $
+                ItemsList.ZeroState
                   { icon = "empty-set"
                   , title = "No Multistep Test/Monitor yet."
                   , description = "You're can create one to start monitoring your services."
@@ -138,7 +110,31 @@ testingGetH pid filterTM = do
         (def :: BWConfig)
           { sessM = Just sess.persistentSession
           , currProject = Just project
-          , pageTitle = "API Tests (Beta)"
+          , pageTitle = "Multistep API Tests (Beta)"
+          , pageActions =
+              Just
+                $ Components.modal_ "test-settings-modal" (span_ [class_ "btn btn-sm btn-primary space-x-2"] $ Utils.faSprite_ "plus" "regular" "h-4" >> "new tests")
+                $ form_
+                  [ hxPost_ $ "/p/" <> pid.toText <> "/testing"
+                  , class_ "w-full"
+                  , hxTarget_ "#itemsListPage"
+                  , hxSelect_ "#itemsListPage"
+                  , hxVals_ "js:{stepsData: []}"
+                  , hxExt_ "json-enc"
+                  , hxSwap_ "outerHTML"
+                  ]
+                $ TestCollectionEditor.testSettingsModalContent_ False (def :: Testing.Collection)
+          , navTabs =
+              Just $
+                toHtml $
+                  Components.TabFilter
+                    { current = currentFilterTab
+                    , currentURL
+                    , options =
+                        [ Components.TabFilterOpt{name = "Active", count = Nothing}
+                        , Components.TabFilterOpt{name = "Inactive", count = Just inactiveColsCount}
+                        ]
+                    }
           }
   addRespHeaders $ PageCtx bwconf (ItemsList.ItemsPage listCfg $ V.map (\col -> CollectionListItemVM pid col currTime) colls)
 

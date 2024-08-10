@@ -34,16 +34,9 @@ outgoingGetH pid sortM = do
               [ ItemsList.BulkAction{icon = Just "check", title = "acknowlege", uri = "/p/" <> pid.toText <> "/anomalies/bulk_actions/acknowlege"}
               , ItemsList.BulkAction{icon = Just "inbox-full", title = "archive", uri = "/p/" <> pid.toText <> "/anomalies/bulk_actions/archive"}
               ]
-          , heading =
-              Just
-                $ ItemsList.Heading
-                  { pageTitle = "Outgoing Integrations"
-                  , rightComponent = Nothing
-                  , subSection = Nothing
-                  }
           , search = Just $ ItemsList.SearchCfg{viaQueryParam = Nothing}
           , nextFetchUrl = Nothing
-          , tabsFilter = Nothing
+          , heading = Nothing
           , zeroState =
               Just
                 $ ItemsList.ZeroState

@@ -140,7 +140,7 @@ manageMembersBody projMembers =
     section_ [id_ "main-content", class_ "p-6 w-[800px] mx-auto"] do
       h2_ [class_ "text-slate-700 text-2xl font-medium mb-5"] "Manage project members"
       form_
-        [ class_ "relative px-10 border border-gray-200 py-10  bg-white w-full rounded-3xl"
+        [ class_ "relative px-10 border border-gray-200 py-10  bg-base-100 w-full rounded-3xl"
         , hxPost_ ""
         , hxTarget_ "#main-content"
         , hxSwap_ "outerHTML"
@@ -166,12 +166,12 @@ projectMemberRow projMembersM =
   div_ [class_ "flex flex-row space-x-2"] do
     input_
       [ name_ "emails"
-      , class_ "w-2/3 h-10 px-5 my-2 w-full text-sm bg-white text-slate-700 font-light border-solid border border-gray-200 rounded-2xl border-0 "
+      , class_ "w-2/3 h-10 px-5 my-2 w-full text-sm bg-base-100 text-slate-700 font-light border-solid border border-gray-200 rounded-2xl border-0 "
       , placeholder_ "name@example.com"
       , value_ (maybe "" (original . (.email)) projMembersM)
       ]
     let permission = maybe ProjectMembers.PView (.permission) projMembersM
-    select_ [name_ "permissions", class_ "w-1/3 h-10 px-5  my-2 w-full text-sm bg-white text-zinc-500 border-solid border border-gray-200 rounded-2xl border-0"] do
+    select_ [name_ "permissions", class_ "w-1/3 h-10 px-5  my-2 w-full text-sm bg-base-100 text-zinc-500 border-solid border border-gray-200 rounded-2xl border-0"] do
       option_ ([class_ "text-gray-500", value_ "admin"] <> selectedIf ProjectMembers.PAdmin permission) "Admin"
       option_ ([class_ "text-gray-500", value_ "edit"] <> selectedIf ProjectMembers.PEdit permission) "Can Edit"
       option_ ([class_ "text-gray-500", value_ "view"] <> selectedIf ProjectMembers.PView permission) "Can View"

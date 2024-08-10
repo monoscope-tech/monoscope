@@ -6,10 +6,7 @@ module Pkg.Components.ItemsList (
   ItemsPage (..),
   BulkAction (..),
   ZeroState (..),
-  Heading (..),
   ItemsListCfg (..),
-  TabFilter (..),
-  TabFilterOpt (..),
   SortCfg (..),
   SearchCfg (..),
 )
@@ -35,10 +32,9 @@ data ItemsListCfg = ItemsListCfg
   , elemID :: Text
   , nextFetchUrl :: Maybe Text
   , zeroState :: Maybe ZeroState
-  , tabsFilter :: Maybe TabFilter
-  , heading :: Maybe Heading
   , bulkActions :: [BulkAction]
   , search :: Maybe SearchCfg
+  , heading :: Maybe (Html ())
   }
 
 
@@ -58,25 +54,6 @@ data SortCfg = SortCfg
   }
 
 
-data Heading = Heading
-  { pageTitle :: Html ()
-  , rightComponent :: Maybe (Html ())
-  , subSection :: Maybe (Html ())
-  }
-
-
-data TabFilter = TabFilter
-  { current :: Text
-  , options :: [TabFilterOpt]
-  }
-
-
-data TabFilterOpt = TabFilterOpt
-  { name :: Text
-  , count :: Maybe Int
-  }
-
-
 data ZeroState = ZeroState
   { icon :: Text
   , title :: Text
@@ -87,6 +64,8 @@ data ZeroState = ZeroState
 
 
 type role ItemsPage representational
+
+
 data ItemsPage a = ItemsPage ItemsListCfg (V.Vector a)
 
 
@@ -98,30 +77,14 @@ instance ToHtml a => ToHtml (ItemsPage a) where
 
 
 itemsPage_ :: ToHtml a => ItemsListCfg -> V.Vector a -> Html ()
-itemsPage_ listCfg items = div_ [class_ "w-full mx-auto px-16 pt-10 pb-24 overflow-y-scroll h-full space-y-6", id_ "itemsListPage"] $ do
-  whenJust listCfg.heading \heading -> do
-    div_ [class_ "flex justify-between"] do
-      h3_ [class_ "text-xl text-slate-700 flex gap-1 place-items-center"] $ heading.pageTitle
-      fromMaybe "" heading.rightComponent
-    fromMaybe "" heading.subSection
-  whenJust listCfg.tabsFilter \tabsFilter -> do
-    let uri = deleteParam "filter" listCfg.currentURL
-    div_ [class_ "py-2 px-2 space-x-6 border-b border-slate-20 text-sm font-light", hxBoost_ "true", role_ "tablist"] $ forM_ tabsFilter.options \opt ->
-      a_
-        [ class_ $ "inline-block py-2 relative " <> if opt.name == tabsFilter.current then " font-bold text-black " else ""
-        , role_ "tab"
-        , href_ $ uri <> "&filter=" <> escapedQueryPartial opt.name
-        ]
-        $ do
-          span_ $ toHtml opt.name
-          whenJust opt.count \countV -> span_ [class_ "absolute top-[1px] -right-[5px] text-white text-xs font-medium rounded-full px-1 bg-red-500"] $ show countV
+itemsPage_ listCfg items = div_ [class_ "w-full mx-auto px-8 pt-10 pb-24 overflow-y-scroll h-full space-y-6", id_ "itemsListPage"] $ do
   itemsList_ listCfg items
 
 
 itemsList_ :: ToHtml a => ItemsListCfg -> V.Vector a -> Html ()
 itemsList_ listCfg items =
   div_ [class_ "grid card-round overflow-hidden group/grid", id_ "anomalyListBelowTab", hxGet_ listCfg.currentURL, hxSwap_ "outerHTML", hxTrigger_ "refreshMain"] do
-    form_ [class_ "flex flex-col bg-white divide-y w-full ", id_ listCfg.elemID, onkeydown_ "return event.key != 'Enter';"] do
+    form_ [class_ "flex flex-col bg-base-100 divide-y w-full ", id_ listCfg.elemID, onkeydown_ "return event.key != 'Enter';"] do
       let currentURL' = deleteParam "sort" listCfg.currentURL
       let sortMenu =
             [ ("First Seen", "First time the issue occured", "first_seen")
@@ -151,26 +114,25 @@ itemsList_ listCfg items =
                 span_ (toHtml blkA.title)
 
             whenJust listCfg.search \search -> do
-              do
-                label_ [class_ "input input-sm input-bordered flex  overflow-hidden items-center gap-2"] do
-                  case search.viaQueryParam of
-                    Just param -> do
-                      input_
-                        [ type_ "text"
-                        , class_ "grow"
-                        , name_ "search"
-                        , id_ "search_box"
-                        , placeholder_ "Search"
-                        , hxTrigger_ "keyup changed delay:500ms"
-                        , hxGet_ currentURL'
-                        , hxTarget_ "#rowsContainer"
-                        , hxSwap_ "innerHTML"
-                        , id_ "searchThing"
-                        , hxIndicator_ "#searchIndicator"
-                        ]
-                    Nothing -> do
-                      input_ [type_ "text", class_ "grow", placeholder_ "Search", [__| on input show .itemsListItem in #itemsListPage when its textContent.toLowerCase() contains my value.toLowerCase() |]]
-                  faSprite_ "magnifying-glass" "regular" "w-4 h-4 opacity-70"
+              label_ [class_ "input input-sm input-bordered flex  overflow-hidden items-center gap-2"] do
+                case search.viaQueryParam of
+                  Just param ->
+                    input_
+                      [ type_ "text"
+                      , class_ "grow"
+                      , name_ "search"
+                      , id_ "search_box"
+                      , placeholder_ "Search"
+                      , hxTrigger_ "keyup changed delay:500ms"
+                      , hxGet_ currentURL'
+                      , hxTarget_ "#rowsContainer"
+                      , hxSwap_ "innerHTML"
+                      , id_ "searchThing"
+                      , hxIndicator_ "#searchIndicator"
+                      ]
+                  Nothing -> do
+                    input_ [type_ "text", class_ "grow", placeholder_ "Search", [__| on input show .itemsListItem in #itemsListPage when its textContent.toLowerCase() contains my value.toLowerCase() |]]
+                faSprite_ "magnifying-glass" "regular" "w-4 h-4 opacity-70"
 
           whenJust listCfg.sort \sortCfg -> do
             let currentSortTitle = maybe "First Seen" fst3 $ find (\(_, _, identifier) -> identifier == sortCfg.current) sortMenu
@@ -187,8 +149,8 @@ itemsList_ listCfg items =
                     , hxIndicator_ "#sortLoader"
                     ]
                     do
-                      div_ [class_ "flex flex-col items-center justify-center px-3"]
-                        $ if isActive then faSprite_ "icon-checkmark4" "solid" "w-4 h-5" else div_ [class_ "w-4 h-5"] ""
+                      div_ [class_ "flex flex-col items-center justify-center px-3"] $
+                        if isActive then faSprite_ "icon-checkmark4" "solid" "w-4 h-5" else div_ [class_ "w-4 h-5"] ""
                       div_ [class_ "grow space-y-1"] do
                         span_ [class_ "block text-lg"] $ toHtml title
                         span_ [class_ "block "] $ toHtml desc
@@ -197,7 +159,7 @@ itemsList_ listCfg items =
             span_ "GRAPH"
             div_ [class_ " space-x-2 font-base text-sm"] $ (a_ [class_ "cursor-pointer"] "24h" >> a_ [class_ "cursor-pointer font-bold text-base"] "14d")
           div_ [class_ "w-36 flex items-center justify-center"] $ span_ [class_ "font-base"] "EVENTS"
-          div_ [class_ "p-12 fixed rounded-lg shadow bg-white top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 htmx-indicator loading loading-dots loading-md", id_ "sortLoader"] ""
+          div_ [class_ "p-12 fixed rounded-lg shadow bg-base-100 top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 htmx-indicator loading loading-dots loading-md", id_ "sortLoader"] ""
 
       when (null items) $ whenJust listCfg.zeroState \zeroState -> section_ [class_ "mx-auto w-max p-5 sm:py-10 sm:px-16 items-center flex my-10 gap-16"] do
         div_ [] $ faSprite_ zeroState.icon "solid" "h-24 w-24"
@@ -209,11 +171,12 @@ itemsList_ listCfg items =
             Left labelId -> label_ [Lucid.for_ labelId, class_ "w-max btn btn-indigo -ml-1 text-md"] $ toHtml zeroState.actionText
       div_ [class_ "w-full flex flex-col"] do
         span_ [id_ "searchIndicator", class_ "htmx-indicator loading loading-sm loading-dots mx-auto"] ""
-        div_ [id_ "rowsContainer"] do
-          itemRows_ listCfg.nextFetchUrl items
+        div_ [id_ "rowsContainer", class_ "divide-y"] $ itemRows_ listCfg.nextFetchUrl items
 
 
 type role ItemsRows representational
+
+
 data ItemsRows a = ItemsRows (Maybe Text) (V.Vector a) -- Text represents nextFetchUrl
 
 
@@ -228,6 +191,6 @@ itemRows_ :: (Monad m, ToHtml a) => Maybe Text -> V.Vector a -> HtmlT m ()
 itemRows_ nextFetchUrl items = do
   mapM_ toHtml items
   whenJust nextFetchUrl \url ->
-    when (length items > 9)
-      $ a_ [class_ "cursor-pointer block p-1 blue-800 bg-blue-100 hover:bg-blue-200 text-center", hxTrigger_ "click", hxSwap_ "outerHTML", hxGet_ url] do
+    when (length items > 9) $
+      a_ [class_ "cursor-pointer block p-1 blue-800 bg-blue-100 hover:bg-blue-200 text-center", hxTrigger_ "click", hxSwap_ "outerHTML", hxGet_ url] do
         span_ [class_ "htmx-indicator loading loading-dots loading-md"] "" >> "LOAD MORE"

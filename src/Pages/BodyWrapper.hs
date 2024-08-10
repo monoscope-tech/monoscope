@@ -21,13 +21,12 @@ menu pid =
   [ ("Get Started", "/p/" <> pid.toText <> "/onboarding", "list-check")
   , ("Dashboard", "/p/" <> pid.toText <> "/", "qrcode")
   , ("Endpoints", "/p/" <> pid.toText <> "/endpoints", "swap")
-  , ("API Log Explorer", "/p/" <> pid.toText <> "/log_explorer", "list-tree")
-  , ("Changes & Errors", "/p/" <> pid.toText <> "/anomalies?ackd=false&archived=false", "bug")
+  , ("Explorer", "/p/" <> pid.toText <> "/log_explorer", "list-tree")
+  , ("Changes & Errors", "/p/" <> pid.toText <> "/anomalies", "bug")
   , ("Outgoing Integrations", "/p/" <> pid.toText <> "/outgoing", "arrows-turn-right")
   , ("API Tests (Beta)", "/p/" <> pid.toText <> "/testing", "list-check")
-  , ("OpenAPI/Swagger", "/p/" <> pid.toText <> "/documentation", "brackets-curly")
+  -- , ("OpenAPI/Swagger", "/p/" <> pid.toText <> "/documentation", "brackets-curly")
   , ("Reports", "/p/" <> pid.toText <> "/reports", "chart-simple")
-  -- , ("Redacted Fields", "/p/" <> pid.toText <> "/redacted_fields", "#redacted")
   ]
 
 
@@ -173,7 +172,7 @@ bodyWrapper BWConfig{sessM, currProject, pageTitle, menuItem, hasIntegrated, nav
 
         |]
 
-    body_ [class_ "text-gray-900 h-full w-full bg-white fixed", term "data-theme" "winter", term "hx-ext" "multi-swap,preload"] do
+    body_ [class_ "text-gray-900 h-full w-full bg-base-100 fixed", term "data-theme" "winter", term "hx-ext" "multi-swap,preload"] do
       div_
         [ style_ "z-index:99999"
         , class_ "fixed pt-24 sm:hidden justify-center z-50 w-full p-4 bg-gray-50 overflow-y-auto inset-0 h-full max-h-full"
@@ -181,7 +180,7 @@ bodyWrapper BWConfig{sessM, currProject, pageTitle, menuItem, hasIntegrated, nav
         ]
         do
           div_ [class_ "relative mx-auto max-h-full", style_ "width: min(90vw, 500px)"]
-            $ div_ [class_ "bg-white rounded-lg drop-shadow-md border-1 w-full"] do
+            $ div_ [class_ "bg-base-100 rounded-lg drop-shadow-md border-1 w-full"] do
               div_ [class_ "flex items-start justify-between p-6 space-x-2  border-b rounded-t"] do
                 h3_ [class_ "text-3xl font-bold text-gray-900"] "Only Desktop Browsers are Supported for now!"
               -- Modal body
@@ -249,7 +248,7 @@ projectsDropDown currProject projects = do
   let pidTxt = currProject.id.toText
   div_
     [ term "data-menu" "true"
-    , class_ "origin-top-right z-40 transition transform bg-white p-4 absolute w-[20rem] rounded-2xl shadow-2xl shadow-indigo-200 opacity-100 scale-100"
+    , class_ "origin-top-right z-40 transition transform bg-base-100 p-4 absolute w-[20rem] rounded-2xl shadow-2xl shadow-indigo-200 opacity-100 scale-100"
     ]
     do
       div_ [class_ "p-2 pb-4 "] do
@@ -294,14 +293,13 @@ projectsDropDown currProject projects = do
 
 
 sideNav :: Sessions.PersistentSession -> Projects.Project -> Text -> Maybe Text -> Maybe Bool -> Html ()
-sideNav sess project pageTitle menuItem hasIntegrated = aside_ [class_ "shrink-0 top-0 border-r bg-white border-gray-200 w-14 text-sm h-screen transition-all duration-200 ease-in-out flex flex-col justify-between", id_ "side-nav-menu"] do
+sideNav sess project pageTitle menuItem hasIntegrated = aside_ [class_ "shrink-0 top-0 border-r bg-base-100 border-gray-200 w-14 text-sm h-screen transition-all duration-200 ease-in-out flex flex-col justify-between", id_ "side-nav-menu"] do
   script_ [text|if (window.initialCloseSideMenu == 'true'){document.getElementById('side-nav-menu').classList.add('hidden-side-nav-menu');}|]
   div_ do
-    div_ [class_ "text-center"] do
-      a_ [href_ "/", class_ "px-2 py-2 inline-flex items-center justify-center h-12"] do
-        img_ [class_ "w-40 mt-2 sd-hidden", src_ "/assets/svgs/logo.svg"]
-        img_ [class_ "w-10 mt-2 hidden sd-show", src_ "/assets/logo-mini.png"]
-    div_ [class_ "py-4 px-4 dropdown block", id_ "side-nav-ctx-btn"] do
+    a_ [href_ "/", class_ "px-2 py-2 inline-flex items-center justify-center"] do
+        img_ [class_ "h-10 w-40 mt-2 sd-hidden pl-2", src_ "/assets/svgs/logo.svg"]
+        img_ [class_ "h-10 w-10 mt-2 hidden sd-show", src_ "/assets/logo-mini.png"]
+    div_ [class_ "sm:p-4 border sd-p-0 dropdown block"] do
       a_
         [ class_ "flex flex-row bg-blue-50 hover:bg-blue-100 text-blue-900 p-6 justify-center rounded-md cursor-pointer"
         , tabindex_ "0"
@@ -366,7 +364,7 @@ sideNav sess project pageTitle menuItem hasIntegrated = aside_ [class_ "shrink-0
 
 navbar :: Users.User -> Text -> Maybe (Html ()) -> Maybe (Html ()) -> Html ()
 navbar currUser pageTitle tabsM pageActionsM =
-  nav_ [id_ "main-navbar", class_ "sticky z-20 top-0 w-full px-6 py-2 flex flex-row border-b border-gray-200"] do
+  nav_ [id_ "main-navbar", class_ "sticky z-20 top-0 w-full px-6 py-1 flex flex-row border-b border-gray-200 h-12"] do
     a_
       [ id_ "side_nav_toggler"
       , class_ "cursor-pointer flex items-center "

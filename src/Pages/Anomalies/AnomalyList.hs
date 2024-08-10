@@ -58,6 +58,7 @@ import OddJobs.Job (createJob)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
 import Pages.Components qualified as Components
 import Pages.Endpoints.EndpointComponents qualified as EndpointComponents
+import Pkg.Components qualified as Components
 import Pkg.Components.ItemsList qualified as ItemsList
 import PyF (fmt)
 import Relude hiding (ask)
@@ -166,7 +167,7 @@ anomalyListGetH pid layoutM filterTM sortM pageM loadM endpointM hxRequestM hxBo
   let (ackd, archived, currentFilterTab) = case filterTM of
         Just "Inbox" -> (False, False, "Inbox")
         Just "Acknowleged" -> (True, False, "Acknowleged")
-        Just "Archived" -> (False, False, "Archived")
+        Just "Archived" -> (False, True, "Archived")
         _ -> (False, False, "Inbox")
 
   let fLimit = 10
@@ -183,30 +184,14 @@ anomalyListGetH pid layoutM filterTM sortM pageM loadM endpointM hxRequestM hxBo
           , nextFetchUrl
           , sort = Just $ ItemsList.SortCfg{current = fromMaybe "events" sortM}
           , search = Just $ ItemsList.SearchCfg{viaQueryParam = Nothing} -- FIXME: search actual db
-          , tabsFilter =
-              Just
-                $ ItemsList.TabFilter
-                  { current = currentFilterTab
-                  , options =
-                      [ ItemsList.TabFilterOpt{name = "Inbox", count = Nothing}
-                      , ItemsList.TabFilterOpt{name = "Acknowleged", count = Nothing}
-                      , ItemsList.TabFilterOpt{name = "Archived", count = Nothing}
-                      ]
-                  }
+          , heading = Nothing
           , bulkActions =
               [ ItemsList.BulkAction{icon = Just "check", title = "acknowlege", uri = "/p/" <> pid.toText <> "/anomalies/bulk_actions/acknowlege"}
               , ItemsList.BulkAction{icon = Just "inbox-full", title = "archive", uri = "/p/" <> pid.toText <> "/anomalies/bulk_actions/archive"}
               ]
-          , heading =
-              Just
-                $ ItemsList.Heading
-                  { pageTitle = "Issues: Changes, Alerts & Errors"
-                  , rightComponent = Nothing
-                  , subSection = Nothing
-                  }
           , zeroState =
-              Just
-                $ ItemsList.ZeroState
+              Just $
+                ItemsList.ZeroState
                   { icon = "empty-set"
                   , title = "No Issues Or Errors."
                   , description = "Start monitoring errors that happened during a request."
@@ -220,7 +205,20 @@ anomalyListGetH pid layoutM filterTM sortM pageM loadM endpointM hxRequestM hxBo
         (def :: BWConfig)
           { sessM = Just sess.persistentSession
           , currProject = Just project
-          , pageTitle = "Changes & Errors"
+          , pageTitle = "Issues: Changes, Alerts & Errors"
+          , menuItem = Just "Changes & Errors"
+          , navTabs =
+              Just $
+                toHtml $
+                  Components.TabFilter
+                    { current = currentFilterTab
+                    , currentURL
+                    , options =
+                        [ Components.TabFilterOpt{name = "Inbox", count = Nothing}
+                        , Components.TabFilterOpt{name = "Acknowleged", count = Nothing}
+                        , Components.TabFilterOpt{name = "Archived", count = Nothing}
+                        ]
+                    }
           }
       issuesVM = V.map (IssueVM False currTime) issues
   addRespHeaders $ case (layoutM, hxRequestM, hxBoostedM, loadM) of
@@ -307,7 +305,7 @@ anomalyAccentColor False False = "bg-red-800"
 issueItem :: Bool -> UTCTime -> Anomalies.IssueL -> Text -> Text -> Maybe (Html ()) -> Maybe (Html ()) -> Html ()
 issueItem hideByDefault currTime issue icon title subTitle content = do
   let issueId = Anomalies.anomalyIdText issue.id
-  div_ [class_ $ "flex py-4 gap-8 items-center itemsListItem " <> if hideByDefault then "card-round bg-white px-5" else "", style_ (if hideByDefault then "display:none" else ""), id_ issueId] do
+  div_ [class_ $ "flex py-4 gap-8 items-center itemsListItem " <> if hideByDefault then "card-round px-5" else "", style_ (if hideByDefault then "display:none" else ""), id_ issueId] do
     div_ [class_ $ "h-4 flex space-x-3 w-8 items-center justify-center " <> if hideByDefault then "hidden" else ""] do
       a_ [class_ $ anomalyAccentColor (isJust issue.acknowlegedAt) (isJust issue.archivedAt) <> " w-2 h-full"] ""
       input_ [term "aria-label" "Select Issue", class_ "bulkactionItemCheckbox  checkbox checkbox-md checked:checkbox-primary", type_ "checkbox", name_ "issueId", value_ issueId]
@@ -338,17 +336,17 @@ issueItem hideByDefault currTime issue icon title subTitle content = do
             Components.drawerWithURLContent_ ("expand-log-drawer-" <> issue.targetHash) modalEndpoint $ span_ [class_ "flex items-center justify-center cursor-pointer py-2 px-3 rounded border border-gray-200 text-xs hover:shadow shadow-blue-100"] (faSprite_ "expand" "regular" "w-3 h-3")
         fromMaybe (toHtml @String "") content
     let issueQueryPartial = buildQueryForAnomaly issue.anomalyType issue.targetHash
-    div_ [class_ "flex items-center justify-center "]
-      $ div_
+    div_ [class_ "flex items-center justify-center "] $
+      div_
         [ class_ "w-60 h-16 px-3"
         , hxGet_ $ "/charts_html?pid=" <> issue.projectId.toText <> "&since=14D&query_raw=" <> escapedQueryPartial [fmt|{issueQueryPartial} | timechart [1d]|]
         , hxTrigger_ "intersect once"
         , hxSwap_ "innerHTML"
         ]
         ""
-    div_ [class_ "w-36 flex items-center justify-center"]
-      $ span_ [class_ "tabular-nums text-xl", term "data-tippy-content" "Events for this Anomaly in the last 14days"]
-      $ show issue.eventsAgg.count
+    div_ [class_ "w-36 flex items-center justify-center"] $
+      span_ [class_ "tabular-nums text-xl", term "data-tippy-content" "Events for this Anomaly in the last 14days"] $
+        show issue.eventsAgg.count
 
 
 -- anomalyDetailsGetH: either in modal or as a standalone page
@@ -385,8 +383,8 @@ anomalyDetailsGetH pid targetHash hxBoostedM = do
             Nothing -> addRespHeaders $ AnomalyDetailsMain $ PageCtx bwconf (issue, Nothing, (Just anFields), Nothing, currTime, False)
         Anomalies.IDNewFormatIssue issueD -> do
           anFormats <-
-            dbtToEff
-              $ Fields.getFieldsByEndpointKeyPathAndCategory pid (issueD.endpointId.toText) (issueD.fieldKeyPath) (issueD.fieldCategory)
+            dbtToEff $
+              Fields.getFieldsByEndpointKeyPathAndCategory pid (issueD.endpointId.toText) (issueD.fieldKeyPath) (issueD.fieldCategory)
           case hxBoostedM of
             Just _ -> addRespHeaders $ AnomalyDetailsBoosted (issue, Nothing, Nothing, (Just anFormats), currTime, True)
             Nothing -> addRespHeaders $ AnomalyDetailsMain $ PageCtx bwconf (issue, Nothing, Nothing, (Just anFormats), currTime, False)
@@ -507,7 +505,7 @@ anomalyDetailsPage issue shapesWithFieldsMap fields prvFormatsM currTime modal =
     div_ [class_ "mt-6 space-y-4"] do
       div_ [class_ "tabs tabs-bordered", role_ "tablist"] do
         input_ [type_ "radio", name_ $ "anomaly-events-tabs-" <> issue.targetHash, role_ "tab", class_ "tab", Aria.label_ "Overview", checked_]
-        div_ [role_ "tabpanel", class_ "tab-content w-full bg-white rounded-lg overflow-x-hidden", id_ "overview_content"] do
+        div_ [role_ "tabpanel", class_ "tab-content w-full bg-base-100 rounded-lg overflow-x-hidden", id_ "overview_content"] do
           case issue.issueData of
             Anomalies.IDNewEndpointIssue _ -> endpointOverview shapesWithFieldsMap
             Anomalies.IDNewShapeIssue _ -> requestShapeOverview fields
@@ -652,9 +650,9 @@ anomalyAcknowlegeButton :: Projects.ProjectId -> Anomalies.AnomalyId -> Bool -> 
 anomalyAcknowlegeButton pid aid acked = do
   let acknowlegeAnomalyEndpoint = "/p/" <> pid.toText <> "/anomalies/" <> Anomalies.anomalyIdText aid <> if acked then "/unacknowlege" else "/acknowlege"
   a_
-    [ class_
-        $ "inline-block child-hover cursor-pointer py-2 px-3 rounded border border-gray-200 text-xs hover:shadow shadow-blue-100 "
-        <> (if acked then "bg-green-100 text-green-900" else "")
+    [ class_ $
+        "inline-block child-hover cursor-pointer py-2 px-3 rounded border border-gray-200 text-xs hover:shadow shadow-blue-100 "
+          <> (if acked then "bg-green-100 text-green-900" else "")
     , term "data-tippy-content" "acknowlege anomaly"
     , hxGet_ acknowlegeAnomalyEndpoint
     , hxSwap_ "outerHTML"
@@ -666,9 +664,9 @@ anomalyArchiveButton :: Projects.ProjectId -> Anomalies.AnomalyId -> Bool -> Htm
 anomalyArchiveButton pid aid archived = do
   let archiveAnomalyEndpoint = "/p/" <> pid.toText <> "/anomalies/" <> Anomalies.anomalyIdText aid <> if archived then "/unarchive" else "/archive"
   a_
-    [ class_
-        $ "inline-block xchild-hover cursor-pointer py-2 px-3 rounded border border-gray-200 text-xs hover:shadow shadow-blue-100 "
-        <> (if archived then " bg-green-100 text-green-900" else "")
+    [ class_ $
+        "inline-block xchild-hover cursor-pointer py-2 px-3 rounded border border-gray-200 text-xs hover:shadow shadow-blue-100 "
+          <> (if archived then " bg-green-100 text-green-900" else "")
     , term "data-tippy-content" $ if archived then "unarchive" else "archive"
     , hxGet_ archiveAnomalyEndpoint
     , hxSwap_ "outerHTML"
@@ -681,24 +679,24 @@ reqResSection title isRequest shapesWithFieldsMap =
   section_ [class_ "space-y-3"] do
     div_ [class_ "flex justify-between mt-5"] do
       div_ [class_ "flex flex-row"] do
-        a_ [class_ "cursor-pointer", [__|on click toggle .neg-rotate-90 on me then toggle .hidden on (next .reqResSubSection)|]]
-          $ faSprite_ "chevron-down" "light" "h-4 mr-3 mt-1 w-4"
+        a_ [class_ "cursor-pointer", [__|on click toggle .neg-rotate-90 on me then toggle .hidden on (next .reqResSubSection)|]] $
+          faSprite_ "chevron-down" "light" "h-4 mr-3 mt-1 w-4"
         span_ [class_ "text-lg text-slate-800"] $ toHtml title
 
-    div_ [class_ "bg-white border border-gray-100 rounded-xl py-5 px-5 space-y-6 reqResSubSection"]
-      $ forM_ (zip [(1 :: Int) ..] shapesWithFieldsMap)
-      $ \(index, s) -> do
-        let sh = if index == 1 then title <> "_fields" else title <> "_fields hidden"
-        div_ [class_ sh, id_ $ title <> "_" <> show index] do
-          if isRequest
-            then do
-              subSubSection (title <> " Path Params") (Map.lookup Fields.FCPathParam s.fieldsMap)
-              subSubSection (title <> " Query Params") (Map.lookup Fields.FCQueryParam s.fieldsMap)
-              subSubSection (title <> " Headers") (Map.lookup Fields.FCRequestHeader s.fieldsMap)
-              subSubSection (title <> " Body") (Map.lookup Fields.FCRequestBody s.fieldsMap)
-            else do
-              subSubSection (title <> " Headers") (Map.lookup Fields.FCResponseHeader s.fieldsMap)
-              subSubSection (title <> " Body") (Map.lookup Fields.FCResponseBody s.fieldsMap)
+    div_ [class_ "bg-base-100 border border-gray-100 rounded-xl py-5 px-5 space-y-6 reqResSubSection"] $
+      forM_ (zip [(1 :: Int) ..] shapesWithFieldsMap) $
+        \(index, s) -> do
+          let sh = if index == 1 then title <> "_fields" else title <> "_fields hidden"
+          div_ [class_ sh, id_ $ title <> "_" <> show index] do
+            if isRequest
+              then do
+                subSubSection (title <> " Path Params") (Map.lookup Fields.FCPathParam s.fieldsMap)
+                subSubSection (title <> " Query Params") (Map.lookup Fields.FCQueryParam s.fieldsMap)
+                subSubSection (title <> " Headers") (Map.lookup Fields.FCRequestHeader s.fieldsMap)
+                subSubSection (title <> " Body") (Map.lookup Fields.FCRequestBody s.fieldsMap)
+              else do
+                subSubSection (title <> " Headers") (Map.lookup Fields.FCResponseHeader s.fieldsMap)
+                subSubSection (title <> " Body") (Map.lookup Fields.FCResponseBody s.fieldsMap)
 
 
 -- | subSubSection ..

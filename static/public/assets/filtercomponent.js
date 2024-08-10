@@ -293,7 +293,7 @@ class Filter extends LitElement {
           }}
         />
         <div
-          class="flex flex-col border overflow-auto p-4 gap-2 text-left shadow bg-white w-96 left-1/2 -translate-x-1/2 absolute z-50 -bottom-3"
+          class="flex flex-col border overflow-auto p-4 gap-2 text-left shadow bg-base-100 w-96 left-1/2 -translate-x-1/2 absolute z-50 -bottom-3"
           style="max-height:500px"
         >
           ${this.matches.map(

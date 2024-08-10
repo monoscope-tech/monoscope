@@ -22,6 +22,8 @@ import Utils (faSprite_)
 
 listProjectsGetH :: ATAuthCtx (RespHeaders (ListProjectsGet))
 listProjectsGetH = do
+  traceShowM "list projects"
+  traceShowM "==="
   (sess, project) <- Sessions.sessionAndProject (Projects.ProjectId UUID.nil)
   let bwconf =
         (def :: BWConfig)
@@ -29,7 +31,9 @@ listProjectsGetH = do
           , pageTitle = "Projects List"
           }
 
+  traceShowM "===1"
   projects <- dbtToEff $ Projects.selectProjectsForUser sess.persistentSession.userId
+  traceShowM "===2"
   let projects' =
         V.snoc
           projects
@@ -58,7 +62,7 @@ listProjectsBody projects = do
       h2_ [class_ "text-slate-700 text-2xl font-medium"] "Projects"
       a_ [class_ "btn btn-primary", href_ "/p/new"] "Create Project"
     section_ [] do
-      div_ [class_ "bg-white shadow overflow-hidden sm:rounded-md"] do
+      div_ [class_ "bg-base-100 shadow overflow-hidden sm:rounded-md"] do
         ul_ [role_ "list", class_ "divide-y divide-gray-200"] $ mapM_ projectItem_ projects
 
 

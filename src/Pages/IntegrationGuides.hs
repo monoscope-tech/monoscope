@@ -76,7 +76,7 @@ integrationsPage :: Projects.ProjectId -> Text -> Text -> Maybe Text -> Maybe Te
 integrationsPage pid sdk apiKey errReportM reqMonM = do
   let baseUrl = "/p/" <> pid.toText <> "/integration_guides?" <> maybe "" ("error_reporting=" <>) errReportM <> maybe "" (\v -> "&outgoing=" <> v) reqMonM
   main_ [class_ "w-full h-full overflow-y-scroll scroll-smooth", id_ "main"] do
-    div_ [class_ "flex flex-col gap-6 border-b  m-8 pb-4 sticky top-[-40px] bg-white z-50"] do
+    div_ [class_ "flex flex-col gap-6 border-b  m-8 pb-4 sticky top-[-40px] bg-base-100 z-50"] do
       div_ [class_ "flex justify-between items-center"] do
         h3_ [class_ "text-3xl font-medium capitalize"] $ toHtml $ "Configure " <> sdk <> " SDK"
         div_ [class_ "flex items-center gap-4"] do
@@ -87,7 +87,7 @@ integrationsPage pid sdk apiKey errReportM reqMonM = do
             span_ [class_ "b"] $ toHtml $ getTitle sdk
             span_ [] do
               faSprite_ "chevron-down" "regular" "h-3 w-3"
-          div_ [class_ "hidden w-full flex flex-col left-0 absolute shadow top-8 bg-white text-sm rounded", id_ "sdk_list"] do
+          div_ [class_ "hidden w-full flex flex-col left-0 absolute shadow top-8 bg-base-100 text-sm rounded", id_ "sdk_list"] do
             -- .NET
             a_ [class_ "px-2 py-1 hover:bg-gray-200", href_ $ baseUrl <> "sdk=dotnet"] ".NET"
             -- Elixir

@@ -16,7 +16,7 @@
   }
 
   .card-round {
-    @apply bg-white border border-slate-200 rounded-xl shadow-sm shadow-slate-200;
+    @apply bg-base-100 border border-slate-200 rounded-xl shadow-sm shadow-slate-200;
     /*overflow-hidden;*/
   }
 }
@@ -191,7 +191,7 @@
   }
 
   .btn-white-sm {
-    @apply btn-sm bg-white border-gray-300 text-gray-700 hover:bg-gray-50 focus:ring-indigo-500;
+    @apply btn-sm bg-base-100 border-gray-300 text-gray-700 hover:bg-gray-50 focus:ring-indigo-500;
   }
 
   .input-txt {
@@ -218,15 +218,14 @@
   .hidden-side-nav-menu .sd-show {
     display: inline-block;
   }
+  .hidden-side-nav-menu .sd-p-0 {
+    padding: 0;
+  }
 }
 
 @layer utilities {
   #side-nav-menu:not(.hidden-side-nav-menu) {
     @apply w-60;
-  }
-
-  #side-nav-ctx-btn {
-    @apply px-0;
   }
 
   .hidden-side-nav-menu #side-nav-menu {

@@ -50,6 +50,7 @@ import System.Types
 import Text.Megaparsec (parseMaybe)
 import Utils
 import Witch (from)
+import qualified Pkg.Components as Components
 
 
 -- $setup
@@ -98,9 +99,8 @@ apiLogH pid queryM cols' cursorM' sinceM fromM toM layoutM sourceM hxRequestM hx
         (def :: BWConfig)
           { sessM = Just sess.persistentSession
           , currProject = Just project
-          , pageTitle = "API Log Explorer"
-          , pageActions = Just do
-              timepicker_ currentRange
+          , pageTitle = "Explorer"
+          , pageActions = Just $ Components.timepicker_ currentRange
           , navTabs = Just $ div_ [class_ "tabs tabs-boxed border"] do
               a_ [onclick_ "window.setQueryParamAndReload('source', 'requests')", role_ "tab", class_ $ "tab " <> if source == "requests" then "tab-active" else ""] "Requests"
               a_ [onclick_ "window.setQueryParamAndReload('source', 'logs')", role_ "tab", class_ $ "tab " <> if source == "logs" then "tab-active" else ""] "Logs"
@@ -169,15 +169,6 @@ instance ToHtml LogsGet where
   toHtmlRaw = toHtml
 
 
-timePickerItems :: [(Text, Text)]
-timePickerItems =
-  [ ("1H", "Last Hour")
-  , ("24H", "Last 24 Hours")
-  , ("7D", "Last 7 days")
-  , ("14D", "Last 14 days")
-  ]
-
-
 logQueryBox_ :: Projects.ProjectId -> Maybe Text -> Html ()
 logQueryBox_ pid currentRange =
   form_
@@ -204,38 +195,6 @@ logQueryBox_ pid currentRange =
           span_ [id_ "run-query-indicator", class_ "refresh-indicator htmx-indicator query-indicator loading loading-dots loading-md"] ""
           faSprite_ "sparkles" "regular" "h-3 w-3 inline-block"
           span_ "Search"
-
-
-timepicker_ :: Maybe Text -> Html ()
-timepicker_ currentRange = div_ [class_ "relative"] do
-  input_ [type_ "hidden", id_ "since_input"]
-  input_ [type_ "hidden", id_ "custom_range_input"]
-  a_
-    [ class_ "relative btn btn-sm btn-outline"
-    , [__| on click toggle .hidden on #timepickerBox|]
-    ]
-    do
-      faSprite_ "clock" "regular" "h-4 w-4"
-      span_ [class_ "inline-block", id_ "currentRange"] $ toHtml (fromMaybe "Last 14 Days" currentRange)
-      faSprite_ "chevron-down" "regular" "h-3 w-3 inline-block"
-  div_ [id_ "timepickerBox", class_ "hidden absolute z-10 mt-1  rounded-md flex"] do
-    div_ [class_ "inline-block w-84 overflow-auto bg-white py-1 text-base shadow-lg ring-1 ring-black ring-opacity-5 focus:outline-none sm:text-sm"] do
-      timePickerItems
-        & mapM_ \(val, title) ->
-          a_
-            [ class_ "block text-gray-900 relative cursor-pointer select-none py-2 pl-3 pr-9 hover:bg-gray-200 "
-            , term "data-value" val
-            , term "data-title" title
-            , [__| on click set #custom_range_input's value to my @data-value then log my @data-value
-                                   then toggle .hidden on #timepickerBox
-                                   then set #currentRange's innerText to my @data-title
-                                   then htmx.trigger("#log_explorer_form", "submit")
-                         |]
-            ]
-            $ toHtml title
-      a_ [class_ "block text-gray-900 relative cursor-pointer select-none py-2 pl-3 pr-9 hover:bg-gray-200 ", [__| on click toggle .hidden on #timepickerSidebar |]] "Custom date range"
-    div_ [class_ "inline-block relative hidden", id_ "timepickerSidebar"] do
-      div_ [id_ "startTime", class_ "hidden"] ""
 
 
 data ApiLogsPageData = ApiLogsPageData
@@ -519,7 +478,7 @@ requestDumpLogItemUrlPath pid rd colIdxMap = do
 jsonTreeAuxillaryCode :: Projects.ProjectId -> Html ()
 jsonTreeAuxillaryCode pid = do
   template_ [id_ "log-item-context-menu-tmpl"] do
-    div_ [id_ "log-item-context-menu", class_ "log-item-context-menu text-sm origin-top-right absolute left-0 mt-2 w-56 rounded-md shadow-md shadow-slate-300 bg-white ring-1 ring-black ring-opacity-5 divide-y divide-gray-100 focus:outline-none z-10", role_ "menu", tabindex_ "-1"] do
+    div_ [id_ "log-item-context-menu", class_ "log-item-context-menu text-sm origin-top-right absolute left-0 mt-2 w-56 rounded-md shadow-md shadow-slate-300 bg-base-100 ring-1 ring-black ring-opacity-5 divide-y divide-gray-100 focus:outline-none z-10", role_ "menu", tabindex_ "-1"] do
       div_ [class_ "py-1", role_ "none"] do
         a_
           [ class_ "cursor-pointer text-slate-700 block px-4 py-1 text-sm hover:bg-gray-100 hover:text-slate-900"
