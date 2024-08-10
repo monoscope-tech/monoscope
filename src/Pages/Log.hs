@@ -187,7 +187,7 @@ logQueryBox_ pid currentRange =
     , hxGet_ $ "/p/" <> pid.toText <> "/log_explorer"
     , hxPushUrl_ "true"
     , hxVals_ "js:{query:getQueryFromEditor(), since: getTimeRange().since, from: getTimeRange().from, to:getTimeRange().to, cols:params().cols, layout:'all'}"
-    , termRaw "hx-on::before-request" ""
+    , termRaw "hx-on::before-request" "validateQuery()"
     , hxTarget_ "#resultTable"
     , hxSwap_ "outerHTML"
     , id_ "log_explorer_form"
@@ -587,39 +587,63 @@ jsonTreeAuxillaryCode pid = do
          a.click();
          document.body.removeChild(a);
        }
-      function validateQuery() {
-          const query = getQueryFromEditor();
-          const timeRange = getTimeRange();
-          
-          // Check if the query is empty
-          if (!query || query.trim() === "") {
-              return false;
-          }
-          
-          // Ensure 'since' or 'from' is provided in the time range
-          if (!timeRange.since && !timeRange.from) {
-              return false;
-          }
-          
-          // Everything looks good
-          return true;
-      }
+  function validateQuery() {
+    const query = getQueryFromEditor();
+    const timeRange = getTimeRange();
 
-function showErrorToast() {
-    const toastContainer = document.getElementById('toast-container');
-    const toast = document.createElement('div');
-      toast.className = 'bg-red-500 text-white rounded-md p-4 flex items-center justify-between';
-    toast.innerText = "Invalid query";
-    toastContainer.appendChild(toast);
-    setTimeout(() => {
-        toast.classList.add('opacity-0');
-        setTimeout(() => {
-            toast.remove();
-        }, 1000); // Wait for the fade-out transition to complete before removing
-    }, 3000);
+    // Check if the query is empty
+    if (!query || query.trim() === "") {
+        showErrorToast("Query cannot be empty.");
+        return false;
+    }
+
+    // Check for invalid characters in the query (e.g., to prevent SQL injection)
+    const invalidChars = /[;"'\\]/;
+    if (invalidChars.test(query)) {
+        showErrorToast("Query contains invalid characters.");
+        return false;
+    }
+
+    // Ensure 'since' or 'from' is provided in the time range
+    if (!timeRange.since && !timeRange.from) {
+        showErrorToast("Please specify a 'since' or 'from' time range.");
+        return false;
+    }
+
+    // Ensure that 'from' is before 'to' (if both are provided)
+    if (timeRange.from && timeRange.to && new Date(timeRange.from) >= new Date(timeRange.to)) {
+        showErrorToast("'From' time must be before 'To' time.");
+        return false;
+    }
+
+    // Everything looks good
+    return true;
 }
 
-    function filterByField(event, operation) {
+  function showErrorToast(message) {
+      const toastContainer = document.getElementById('toast-container');
+      
+      // Remove any existing toasts before adding a new one
+      while (toastContainer.firstChild) {
+          toastContainer.removeChild(toastContainer.firstChild);
+      }
+
+      const toast = document.createElement('div');
+      toast.className = 'bg-red-500 text-white rounded-md p-4 flex items-center justify-between shadow-md';
+      toast.innerText = message;
+
+      toastContainer.appendChild(toast);
+      
+      // Fade out and remove the toast after 3 seconds
+      setTimeout(() => {
+          toast.classList.add('opacity-0');
+          setTimeout(() => {
+              toast.remove();
+          }, 1000); // Wait for the fade-out transition to complete before removing
+      }, 3000);
+  }
+
+      function filterByField(event, operation) {
        const target = event.target.parentNode.parentNode.parentNode
        const path = target.getAttribute('data-field-path');
        const value = target.getAttribute('data-field-value');
