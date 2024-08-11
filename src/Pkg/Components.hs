@@ -21,6 +21,7 @@ import Lucid.Svg (d_, fill_, path_, viewBox_)
 import Pkg.Components.Modals (dropDownMenu_, modal_)
 import Relude
 import Utils
+import PyF 
 
 
 loader :: Html ()
@@ -151,8 +152,8 @@ timePickerItems =
   ]
 
 
-timepicker_ :: Maybe Text -> Html ()
-timepicker_ currentRange = div_ [class_ "relative"] do
+timepicker_ :: Maybe Text -> Maybe Text -> Html ()
+timepicker_ submitForm currentRange = div_ [class_ "relative"] do
   input_ [type_ "hidden", id_ "since_input"]
   input_ [type_ "hidden", id_ "custom_range_input"]
   a_
@@ -166,15 +167,17 @@ timepicker_ currentRange = div_ [class_ "relative"] do
   div_ [id_ "timepickerBox", class_ "hidden absolute z-10 mt-1  rounded-md flex"] do
     div_ [class_ "inline-block w-84 overflow-auto bg-base-100 py-1 text-base shadow-lg ring-1 ring-black ring-opacity-5 focus:outline-none sm:text-sm"] do
       timePickerItems
-        & mapM_ \(val, title) ->
-          a_
+        & mapM_ \(val, title) -> let
+              action = maybe "window.setQueryParamAndReload('since', my @data-value)" (\fm->[fmt|htmx.trigger("#{fm}", "submit")|]) submitForm
+            in a_
             [ class_ "block text-gray-900 relative cursor-pointer select-none py-2 pl-3 pr-9 hover:bg-gray-200 "
             , term "data-value" val
             , term "data-title" title
-            , [__| on click set #custom_range_input's value to my @data-value then log my @data-value
-                                   then toggle .hidden on #timepickerBox
-                                   then set #currentRange's innerText to my @data-title
-                                   then htmx.trigger("#log_explorer_form", "submit")
+            , termRaw "_" [fmt|on click set #custom_range_input's value to my @data-value then log my @data-value
+                       then toggle .hidden on #timepickerBox
+                       then set #currentRange's innerText to my @data-title
+                        then {action} 
+                       -- 
                          |]
             ]
             $ toHtml title

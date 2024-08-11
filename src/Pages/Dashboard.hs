@@ -116,7 +116,7 @@ dashboardGetH pid fromDStr toDStr sinceStr' = do
           { sessM = Just sess.persistentSession
           , currProject = Just project
           , pageTitle = "Dashboard"
-          , pageActions = Just $ Components.timepicker_ currentRange
+          , pageActions = Just $ Components.timepicker_ Nothing currentRange
           }
   currTime <- liftIO getCurrentTime
   let currentURL = "/p/" <> pid.toText <> "?&from=" <> fromMaybe "" fromDStr <> "&to=" <> fromMaybe "" toDStr
