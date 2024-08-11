@@ -38,6 +38,7 @@ import Relude.Unsafe qualified as Unsafe
 import System.Config
 import System.Types (runBackground)
 import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
+import Safe qualified
 
 
 logsServiceExportH
@@ -49,7 +50,7 @@ logsServiceExportH appLogger appCtx (ServerNormalRequest meta (ExportLogsService
   pTraceShowM "Hello called"
   pTraceShowM req
   pTraceShowM meta
-  let authHeader = Unsafe.head $ Unsafe.fromJust $ M.lookup "authorization" meta.metadata.unMap
+  let authHeader =  Unsafe.fromJust $ Safe.headMay  =<< M.lookup "authorization" meta.metadata.unMap
   let authTextE = B64.decodeBase64Untyped $ encodeUtf8 $ T.replace "Bearer " "" $ decodeUtf8 $ authHeader
   apiKeyUUID <- case authTextE of
     Left err -> error err
