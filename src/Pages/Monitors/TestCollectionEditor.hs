@@ -250,9 +250,9 @@ collectionPage pid col col_rn respJson = do
               button_ [class_ "btn btn-sm btn-warning ", type_ "submit"] (span_ "Save" >> faSprite_ "floppy-disk" "solid" "w-3 h-3")
               label_ [class_ "relative inline-flex items-center cursor-pointer space-x-2"] do
                 input_ [type_ "checkbox", class_ "toggle editormode"] >> span_ [class_ "text-sm"] "Code"
-          div_ [class_ "h-full flex-1 overflow-y-hidden"] $ termRaw "steps-editor" [id_ "stepsEditor"] ""
+          div_ [class_ "h-full overflow-y-hidden flex-1"] $ termRaw "steps-editor" [id_ "stepsEditor"] ""
 
-        div_ [class_ "col-span-1 h-full border-r border-gray-200"] do
+        div_ [class_ "col-span-1 h-full border-r border-gray-200 overflow-y-auto"] do
           div_ [class_ "max-h-full h-full overflow-y-auto space-y-4 relative", id_ "step-results-parent"] do
             case col_rn of
               Just res -> do

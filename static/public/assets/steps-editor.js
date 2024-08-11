@@ -450,9 +450,9 @@ export class StepsEditor extends LitElement {
           transform: translateY(-20px);
         }
       </style>
-      <div id="collectionStepsContainer" class="h-full">
+      <div id="collectionStepsContainer" class="h-full overflow-y-auto">
         <div id="steps-codeEditor" class="h-full max-h-screen hidden group-has-[.editormode:checked]/colform:block"></div>
-        <div class="h-full overflow-y-scroll group-has-[.editormode:checked]/colform:hidden">
+        <div class="h-full group-has-[.editormode:checked]/colform:hidden">
           <div id="collectionStepsContainer" class=" p-4 space-y-4 collectionSteps">
             ${this.collectionSteps.map((stepData, idx) => this.renderCollectionStep(stepData, idx, this.collectionResults[idx], this.saveErrors[idx]) || undefined)}
           </div>
