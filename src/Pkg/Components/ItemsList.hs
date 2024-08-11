@@ -194,7 +194,7 @@ itemRows_ nextFetchUrl items = do
     when (length items > 9) $
       a_
         [ class_ "cursor-pointer flex justify-center items-center block p-1 blue-800 bg-blue-100 hover:bg-blue-200 text-center"
-        , hxTrigger_ "click"
+        , hxTrigger_ "click, intersect once"
         , hxSwap_ "outerHTML"
         , hxGet_ url
         , hxIndicator_ "#rowsIndicator"
