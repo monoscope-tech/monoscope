@@ -18,6 +18,7 @@ dist-newstyle
 .env
 env
 .vscode
+logs/
 apitoolkit-server-exe
 gha-creds-*.json
 .DS_Store

@@ -6,7 +6,11 @@ import Data.Aeson (object, (.=))
 import Data.Aeson qualified as AE
 import Data.Aeson.Key qualified as AEK
 import Data.ByteString qualified as BS
+import Data.ByteString.Base64 qualified as B64
+import Data.ByteString.Char8 qualified as C
+import Data.Map qualified as M
 import Data.Scientific
+import Data.Text qualified as T
 import Data.Text.Lazy qualified as LT
 import Data.Time (UTCTime)
 import Data.Time.Clock.POSIX
@@ -14,6 +18,7 @@ import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Debug.Pretty.Simple
 import Log qualified
+import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
 import Models.Telemetry.Telemetry qualified as Telemetry
 import Network.GRPC.HighLevel.Client as HsGRPC
 import Network.GRPC.HighLevel.Generated as HsGRPC
@@ -23,13 +28,16 @@ import Opentelemetry.Proto.Collector.Logs.V1.LogsService
 import Opentelemetry.Proto.Collector.Trace.V1.TraceService
 import Opentelemetry.Proto.Common.V1.Common
 import Opentelemetry.Proto.Logs.V1.Logs
+import Models.Projects.Projects qualified as Projects
 import Opentelemetry.Proto.Resource.V1.Resource
 import Proto3.Suite.Class qualified as HsProtobuf
 import Proto3.Suite.Types qualified as HsProtobuf
 import Proto3.Wire qualified as HsProtobuf
 import Relude
-import System.Config (AuthContext)
+import Relude.Unsafe qualified as Unsafe
+import System.Config
 import System.Types (runBackground)
+import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
 
 
 logsServiceExportH
@@ -37,13 +45,22 @@ logsServiceExportH
   -> AuthContext
   -> ServerRequest 'Normal ExportLogsServiceRequest ExportLogsServiceResponse
   -> IO (ServerResponse 'Normal ExportLogsServiceResponse)
-logsServiceExportH appLogger appCtx (ServerNormalRequest _meta (ExportLogsServiceRequest req)) = do
+logsServiceExportH appLogger appCtx (ServerNormalRequest meta (ExportLogsServiceRequest req)) = do
   pTraceShowM "Hello called"
   pTraceShowM req
-  pTraceShowM _meta
-  let pid = UUID.nil
-  let logRecords = join $ V.map (convertToLog pid) req
-  _ <- runBackground appLogger appCtx $ Telemetry.bulkInsertLogs logRecords
+  pTraceShowM meta
+  let authHeader = Unsafe.head $ Unsafe.fromJust $ M.lookup "authorization" meta.metadata.unMap
+  let authTextE = B64.decodeBase64Untyped $ encodeUtf8 $ T.replace "Bearer " "" $ decodeUtf8 $ authHeader
+  apiKeyUUID <- case authTextE of
+    Left err -> error err
+    Right authText -> do
+      let decryptedKey = ProjectApiKeys.decryptAPIKey (encodeUtf8 appCtx.config.apiKeyEncryptionSecretKey) authText
+      pure $ Unsafe.fromJust $ ProjectApiKeys.ProjectApiKeyId <$> UUID.fromASCIIBytes decryptedKey
+
+  _ <- runBackground appLogger appCtx do
+    pApiKey <- dbtToEff $ ProjectApiKeys.getProjectApiKey apiKeyUUID
+    let logRecords = join $ V.map (convertToLog $ (Unsafe.fromJust pApiKey).projectId.unProjectId) req
+    Telemetry.bulkInsertLogs logRecords
   return (ServerNormalResponse (ExportLogsServiceResponse Nothing) mempty StatusOk "")
 
 
@@ -55,8 +72,8 @@ nanosecondsToUTC ns = posixSecondsToUTCTime (fromIntegral ns / 1e9)
 -- Convert a list of KeyValue to a JSONB object
 keyValueToJSONB :: V.Vector KeyValue -> AE.Value
 keyValueToJSONB kvs =
-  AE.object
-    $ V.foldr (\kv acc -> (AEK.fromText $ LT.toStrict kv.keyValueKey, convertAnyValue (kv.keyValueValue)) : acc) [] kvs
+  AE.object $
+    V.foldr (\kv acc -> (AEK.fromText $ LT.toStrict kv.keyValueKey, convertAnyValue (kv.keyValueValue)) : acc) [] kvs
 
 
 convertAnyValue :: Maybe AnyValue -> AE.Value
@@ -70,7 +87,7 @@ convertAnyValue _ = AE.Null
 
 -- Convert Protobuf severity text to SeverityLevel
 parseSeverityLevel :: Text -> Maybe Telemetry.SeverityLevel
-parseSeverityLevel = \case
+parseSeverityLevel input = case T.toUpper input of
   "DEBUG" -> Just Telemetry.SLDebug
   "INFO" -> Just Telemetry.SLInfo
   "WARN" -> Just Telemetry.SLWarn
