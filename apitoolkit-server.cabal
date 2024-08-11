@@ -44,7 +44,6 @@ library
       Models.Projects.ProjectMembers
       Models.Projects.Projects
       Models.Projects.ProjectsEmail
-      Models.Projects.RedactedFields
       Models.Projects.Swaggers
       Models.Projects.SwaggersSpec
       Models.Telemetry.Telemetry
@@ -133,7 +132,6 @@ library
       Pages.Projects.ProjectsSpec
       Pages.Projects.Routes
       Pages.Projects.Server
-      Pages.RedactedFields
       Pages.Reports
       Pages.ReportsSpec
       Pages.Share

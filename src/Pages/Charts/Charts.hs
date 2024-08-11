@@ -83,7 +83,7 @@ pivot' rows = do
 -- ("SELECT extract(epoch from time_bucket('9360 seconds', created_at))::integer as timeB, COALESCE(COUNT(*), 0) total_count ,status_code::text as status_code FROM apis.request_dumps WHERE project_id=? AND status_code>? AND created_at>=? AND created_at<? GROUP BY timeB ,status_code LIMIT 1000",[MkDBField ProjectId {unProjectId = 00000000-0000-0000-0000-000000000000},MkDBField 400,MkDBField 2023-01-01 12:00:00 +0000,MkDBField 2023-01-14 12:00:00 +0000])
 --
 --
-buildReqDumpSQL :: [ChartExp] -> (Text, [DBField], Maybe ZonedTime, Maybe ZonedTime)
+buildReqDumpSQL :: [ChartExp] -> (Text, [DBField], Maybe UTCTime, Maybe UTCTime)
 buildReqDumpSQL exps = (q, join qByArgs, mFrom, mTo)
   where
     (slots, groupByFields, gBy, queryBy, limit, q) = foldr go (120, "" :: Text, "" :: Text, [], 10000, qDefault) exps
@@ -145,20 +145,20 @@ buildReqDumpSQL exps = (q, join qByArgs, mFrom, mTo)
           (txt2, arg2) = runQueryBySql b
        in (" ( " <> txt1 <> " AND " <> txt2 <> " ) ", arg1 ++ arg2)
 
-    dateRangeFromQueryBy :: [QueryBy] -> (Maybe ZonedTime, Maybe ZonedTime)
+    dateRangeFromQueryBy :: [QueryBy] -> (Maybe UTCTime, Maybe UTCTime)
     dateRangeFromQueryBy = foldl' goDateRange (Nothing, Nothing)
       where
-        goDateRange :: (Maybe ZonedTime, Maybe ZonedTime) -> QueryBy -> (Maybe ZonedTime, Maybe ZonedTime)
+        goDateRange :: (Maybe UTCTime, Maybe UTCTime) -> QueryBy -> (Maybe UTCTime, Maybe UTCTime)
         goDateRange acc@(Just _from, Just _to) _ = acc -- Both from and to found, no need to continue
         goDateRange acc (QBAnd a b) = acc -- TODO: support checking QBAnd for date range foldl' goDateRange (mFrom, mTo) [a, b]
         goDateRange (_mFrom, mTop) (QBFrom from_) = (Just from_, mTop)
         goDateRange (mFromp, _mTo) (QBTo to_) = (mFromp, Just to_)
         goDateRange acc _ = acc -- Ignore all other constructors
-    calcInterval numSlotsE' fromE' toE' = floor (diffUTCTime (zonedTimeToUTC toE') (zonedTimeToUTC fromE')) `div` numSlotsE'
+    calcInterval numSlotsE' fromE' toE' = floor (diffUTCTime (toE') (fromE')) `div` numSlotsE'
 
     (mFrom, mTo) = dateRangeFromQueryBy queryBy
 
-    calculateIntervalFromQuery :: Int -> (Maybe ZonedTime, Maybe ZonedTime) -> [QueryBy] -> Maybe Int
+    calculateIntervalFromQuery :: Int -> (Maybe UTCTime, Maybe UTCTime) -> [QueryBy] -> Maybe Int
     calculateIntervalFromQuery numSlots (mFrom', mTo') queryList = do
       to_ <- mTo'
       from_ <- mFrom'
@@ -254,8 +254,8 @@ chartsGetDef typeM queryRaw pidM groupByM queryByM slotsM limitsM themeM idM sho
       idAttr = fromMaybe (UUID.toText randomID) idM
       showLegend = toLower $ show $ fromMaybe False showLegendM
       chartThemeTxt = fromMaybe "" themeM
-      fromDStr = maybe "" formatZonedTimeAsUTC fromM
-      toDStr = maybe "" formatZonedTimeAsUTC toM
+      fromDStr = maybe "" formatUTC fromM
+      toDStr = maybe "" formatUTC toM
       cType = case fromMaybe BarCT typeM of
         BarCT -> "bar"
         LineCT -> "line"
@@ -272,8 +272,8 @@ data QueryBy
   | QBShapeHash Text
   | QBFormatHash Text
   | QBStatusCodeGT Int
-  | QBFrom ZonedTime
-  | QBTo ZonedTime
+  | QBFrom UTCTime
+  | QBTo UTCTime
   | QBHost Text
   | QBAnd QueryBy QueryBy
   deriving stock (Show, Read)

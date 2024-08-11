@@ -333,7 +333,7 @@ createProjectBody sess envCfg isUpdate cp cpe = do
       h2_ [class_ "text-slate-700 text-3xl font-medium mb-5"] $ toHtml @String $ if isUpdate then "Project Settings" else "Create Project"
       div_ [class_ "grid gap-5"] do
         form_
-          [ class_ "col-span-1 relative px-3 sm:px-10 border border-gray-200 py-10  bg-white rounded-3xl"
+          [ class_ "col-span-1 relative px-3 sm:px-10 border border-gray-200 py-10  bg-base-100 rounded-3xl"
           , hxPost_ "/p/new"
           , hxTarget_ "#main-content"
           , hxSwap_ "outerHTML"
@@ -449,8 +449,8 @@ createProjectBody sess envCfg isUpdate cp cpe = do
               section_ [id_ "inviteMemberSection"] do
                 template_ [id_ "inviteTmpl"] do
                   div_ [class_ "flex flex-row space-x-2"] do
-                    input_ [name_ "emails", class_ "w-2/3 h-10 px-5 my-2 w-full text-sm bg-white text-slate-700 font-light border-solid border border-gray-200 rounded-2xl border-0 ", placeholder_ "name@example.com"]
-                    select_ [name_ "permissions", class_ "w-1/3 h-10 px-5  my-2 w-full text-sm bg-white text-zinc-500 border-solid border border-gray-200 rounded-2xl border-0"] do
+                    input_ [name_ "emails", class_ "w-2/3 h-10 px-5 my-2 w-full text-sm bg-base-100 text-slate-700 font-light border-solid border border-gray-200 rounded-2xl border-0 ", placeholder_ "name@example.com"]
+                    select_ [name_ "permissions", class_ "w-1/3 h-10 px-5  my-2 w-full text-sm bg-base-100 text-zinc-500 border-solid border border-gray-200 rounded-2xl border-0"] do
                       option_ [class_ "text-slate-500", value_ "edit"] "Can Edit"
                       option_ [class_ "text-slate-500", value_ "view"] "Can View"
                     button_

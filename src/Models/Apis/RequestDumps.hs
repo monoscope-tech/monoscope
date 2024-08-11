@@ -509,7 +509,7 @@ SELECT duration_steps, count(id)
 
 
 -- TODO: expand this into a view
-selectReqLatenciesRolledByStepsForProject :: Int -> Int -> Projects.ProjectId -> (Maybe ZonedTime, Maybe ZonedTime) -> DBT IO (V.Vector (Int, Int))
+selectReqLatenciesRolledByStepsForProject :: Int -> Int -> Projects.ProjectId -> (Maybe UTCTime, Maybe UTCTime) -> DBT IO (V.Vector (Int, Int))
 selectReqLatenciesRolledByStepsForProject maxv steps pid dateRange = query Select (Query $ encodeUtf8 q) (maxv, steps, steps, steps, pid)
   where
     dateRangeStr = from @String $ case dateRange of

@@ -116,13 +116,13 @@ surveyPage :: Projects.ProjectId -> Text -> Text -> Html ()
 surveyPage pid full_name phoneNumber = do
   div_
     [ style_ "z-index:26"
-    , class_ "fixed pt-16 justify-center z-50 w-full p-4 bg-white overflow-y-auto inset-0 h-full max-h-full text-lg"
+    , class_ "fixed pt-16 justify-center z-50 w-full p-4 bg-base-100 overflow-y-auto inset-0 h-full max-h-full text-lg"
     , id_ "surveyDialog"
     ]
     do
       div_ [class_ "relative mx-auto pb-24", style_ "width: min(90vw, 1000px)"] do
         div_ [class_ "flex justify-between mb-8"] progressSteps
-        div_ [class_ "bg-white rounded-lg shadow w-full"] do
+        div_ [class_ "bg-base-100 rounded-lg shadow w-full"] do
           div_ [class_ "flex items-start justify-between p-6 space-x-2 w-full  border-b rounded-t"] do
             form_
               [ hxPost_ $ "/p/" <> pid.toText <> "/survey"

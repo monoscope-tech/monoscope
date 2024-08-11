@@ -1,4 +1,4 @@
-FROM ubuntu:22.04
+FROM ubuntu:24.04
 RUN mkdir -p /opt/apitoolkit/
 # Set the LANG environment variable
 ENV LANG C.UTF-8
@@ -8,6 +8,7 @@ RUN apt-get update && apt-get install -y \
   netbase \
   curl \
   libgmp-dev \
+  libgrpc-dev \
   libpq-dev
 COPY apitoolkit-server-exe /opt/apitoolkit
 COPY static /opt/apitoolkit/static

@@ -183,7 +183,7 @@ export class StepsEditor extends LitElement {
     saveError = saveError ? saveError : {}
     return html`
       <div
-        class="rounded-lg overflow-hidden border group/item collectionStep bg-white draggable ${hasFailingAssertions || svErr
+        class="rounded-lg overflow-hidden border group/item collectionStep bg-base-100 draggable ${hasFailingAssertions || svErr
           ? 'border-red-500'
           : hasResults
           ? 'border-green-500'
@@ -201,7 +201,7 @@ export class StepsEditor extends LitElement {
           <div class="h-full shrink bg-gray-50 p-3 border-r border-r-slate-200">
             <svg class="h-4 w-4"><use href="/assets/svgs/fa-sprites/solid.svg#grip-dots-vertical"></use></svg>
           </div>
-          <div class="flex-1 flex flex-row items-center gap-1 bg-white pr-5 py-3">
+          <div class="flex-1 flex flex-row items-center gap-1 bg-base-100 pr-5 py-3">
             <label for="stepState-${idx}" class="p-3 cursor-pointer text-xs text-slate-700">${idx + 1}</label>
             <label for="stepState-${idx}" class="p-3 cursor-pointer">
               <svg class="h-4 w-3 group-has-[.stepState:checked]/item:rotate-90"><use href="/assets/svgs/fa-sprites/solid.svg#chevron-right"></use></svg>
