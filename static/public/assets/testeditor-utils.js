@@ -10,7 +10,7 @@ function getEvent(eventName, value) {
 }
 
 const METHODS = ['GET', 'POST', 'PATCH', 'PUT', 'DELETE', 'HEAD', 'OPTIONS']
-const ASSERTS = ['exists', 'number', 'string', 'array', 'boolean', 'ok', 'empty', 'notEmpty', 'null']
+const ASSERTS = ['exists', 'number', 'string', 'array', 'date', 'boolean', 'ok', 'empty', 'notEmpty', 'null']
 
 function triggerToastEvent(event) {
   document.querySelector('body').dispatchEvent(event)
