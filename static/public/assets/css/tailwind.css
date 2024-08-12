@@ -218,8 +218,9 @@
   .hidden-side-nav-menu .sd-show {
     display: inline-block;
   }
-  .hidden-side-nav-menu .sd-p-0 {
-    padding: 0;
+  .hidden-side-nav-menu .sd-px-0 {
+    padding-left: 0;
+    padding-right: 0;
   }
 }
 

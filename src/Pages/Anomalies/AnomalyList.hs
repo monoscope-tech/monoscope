@@ -613,7 +613,7 @@ renderIssue hideByDefault currTime issue = do
       let endpointTitle = issueD.endpointMethod <> "  " <> issueD.endpointUrlPath
       let subTitle = span_ [class_ "space-x-2"] do
             a_ [class_ "cursor-pointer"] $ toHtml endpointTitle 
-            span_ [] "in"
+            span_ [] "from"
             span_ [] $ toHtml issueD.host 
       issueItem hideByDefault currTime issue icon issueTitle (Just subTitle) Nothing
     Anomalies.IDNewShapeIssue issueD -> do

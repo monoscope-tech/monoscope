@@ -77,7 +77,7 @@ bodyWrapper BWConfig{sessM, currProject, pageTitle, menuItem, hasIntegrated, nav
       link_ [rel_ "mask-icon", href_ "/public/safari-pinned-tab.svg", term "color" "#5bbad5"]
       meta_ [name_ "msapplication-TileColor", content_ "#da532c"]
       meta_ [name_ "theme-color", content_ "#ffffff"]
-      link_ [rel_ "stylesheet", type_ "text/css", href_ "/assets/css/tailwind.min.css?v=3"]
+      link_ [rel_ "stylesheet", type_ "text/css", href_ "/assets/css/tailwind.min.css?v=4"]
       link_ [rel_ "stylesheet", type_ "text/css", href_ "/assets/css/thirdparty/notyf3.min.css"]
       link_ [rel_ "preconnect", href_ "https://rsms.me/"]
       link_ [rel_ "stylesheet", href_ "https://rsms.me/inter/inter.css"]
@@ -149,7 +149,7 @@ bodyWrapper BWConfig{sessM, currProject, pageTitle, menuItem, hasIntegrated, nav
 
               if("serviceWorker" in navigator) {
                   window.addEventListener("load", () => {
-                    navigator.serviceWorker.register("/public/sw.js?v=6").then(swReg => {}).catch(err => {
+                    navigator.serviceWorker.register("/public/sw.js?v=7").then(swReg => {}).catch(err => {
                         console.error('Service Worker Error', err);
                     });
                 });
@@ -299,7 +299,7 @@ sideNav sess project pageTitle menuItem hasIntegrated = aside_ [class_ "shrink-0
     a_ [href_ "/", class_ "px-2 py-2 inline-flex items-center justify-center"] do
       img_ [class_ "h-10 w-40 mt-2 sd-hidden pl-2", src_ "/assets/svgs/logo.svg"]
       img_ [class_ "h-10 w-10 mt-2 hidden sd-show", src_ "/assets/logo-mini.png"]
-    div_ [class_ "sm:p-4 border sd-p-0 dropdown block"] do
+    div_ [class_ "sm:p-4 border sd-px-0 dropdown block"] do
       a_
         [ class_ "flex flex-row bg-blue-50 hover:bg-blue-100 text-blue-900 p-6 justify-center rounded-md cursor-pointer"
         , tabindex_ "0"
