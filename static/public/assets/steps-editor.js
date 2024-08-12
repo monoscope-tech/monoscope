@@ -395,8 +395,17 @@ export class StepsEditor extends LitElement {
 
     if (aidx != null) {
       const arrayItem = stepData[type][aidx] || {}
-      updateObject(arrayItem, oldKey, newKey)
-      stepData[type][aidx] = arrayItem
+      const values = Object.entries(arrayItem)
+      if (values.length > 0) {
+        const val = values[0][1]
+        stepData[type][aidx] = {
+          [newKey]: val,
+        }
+      } else {
+        stepData[type][aidx] = {
+          [newKey]: '',
+        }
+      }
     } else {
       updateObject(stepData[type], oldKey, newKey)
     }
