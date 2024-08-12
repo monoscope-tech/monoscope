@@ -700,6 +700,20 @@ CREATE TABLE IF NOT EXISTS monitors.query_monitors
 );
 SELECT manage_updated_at('monitors.query_monitors');
 
+
+CREATE TABLE IF NOT EXISTS apis.subscriptions (
+  id UUID NOT NULL DEFAULT gen_random_uuid() PRIMARY KEY,
+  created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT current_timestamp,
+  updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT current_timestamp,
+  project_id TEXT,
+  subscription_id INT NOT NULL,
+  order_id INT NOT NULL,
+  first_sub_id INT NOT NULL,
+  product_name TEXT NOT NULL,
+  user_email  TEXT NOT NULL
+);
+SELECT manage_updated_at('apis.subscriptions');
+
 -- used for the alerts, to execute queries stored in a table,
 create or replace function eval(expression text) returns integer as $body$
 declare result integer;

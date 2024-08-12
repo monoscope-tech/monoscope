@@ -152,7 +152,7 @@ projectSettingsGetH pid = do
           }
 
   let bwconf = (def :: BWConfig){sessM = Just sess.persistentSession, currProject = Just project, pageTitle = "Settings"}
-  addRespHeaders $ CreateProject $ PageCtx bwconf $ ((sess.persistentSession), appCtx.config, True, createProj, def @CreateProjectFormError)
+  addRespHeaders $ CreateProject $ PageCtx bwconf $ (sess.persistentSession, appCtx.config, True, createProj, def @CreateProjectFormError)
 
 
 ----------------------------------------------------------------------------------------------------------
@@ -388,12 +388,12 @@ createProjectBody sess envCfg isUpdate cp cpe = do
                       [ class_ $ "payment-plans cursor-pointer space-y-1 border border-1  block p-2  rounded-md " <> if isSelected then " border-2 border-blue-300 shadow-lg" else ""
                       , term
                           "_"
-                          [text| 
-                          init if $isSelectedTxt then set window.paymentPlan to $value end 
+                          [text|
+                          init if $isSelectedTxt then set window.paymentPlan to $value end
                           on click  set window.paymentPlan to $value
                                then set #paymentPlanEl.value to "$value"
                                then remove .border-2 .border-blue-300 .shadow-lg from .payment-plans
-                               then remove .payment-radio-active from .payment-radio 
+                               then remove .payment-radio-active from .payment-radio
                                then add .payment-radio-active to (.payment-radio in me)
                                then add .border-2 .border-blue-300 .shadow-lg to me
                                |]
@@ -415,12 +415,12 @@ createProjectBody sess envCfg isUpdate cp cpe = do
                   [ class_ $ "payment-plans cursor-pointer space-y-1 border border-1 block p-2 rounded-md " <> if isSelected then " border-2 border-blue-300 shadow-lg" else ""
                   , term
                       "_"
-                      [text| 
-                          init if $isSelectedTxt then set window.paymentPlan to $value end 
+                      [text|
+                          init if $isSelectedTxt then set window.paymentPlan to $value end
                           on click  set window.paymentPlan to $value
                                then set #paymentPlanEl.value to "$value"
                                then remove .border-2 .border-blue-300 .shadow-lg from .payment-plans
-                               then remove .payment-radio-active from .payment-radio 
+                               then remove .payment-radio-active from .payment-radio
                                then add .payment-radio-active to (.payment-radio in me)
                                then add .border-2 .border-blue-300 .shadow-lg to me
                                |]
@@ -460,7 +460,7 @@ createProjectBody sess envCfg isUpdate cp cpe = do
                       $ faSprite_ "trash" "regular" "w-4 h-4"
               a_
                 [ class_ "bg-transparent inline-flex cursor-pointer mt-2"
-                , [__| on click put #inviteTmpl.innerHTML at end of #inviteMemberSection then 
+                , [__| on click put #inviteTmpl.innerHTML at end of #inviteMemberSection then
                          _hyperscript.processNode(#inviteMemberSection) then halt |]
                 ]
                 do
@@ -470,11 +470,10 @@ createProjectBody sess envCfg isUpdate cp cpe = do
             -- LEMON SQUEEZY PAYMENT
 
             script_ [src_ "https://assets.lemonsqueezy.com/lemon.js"] ("" :: Text)
-            let checkoutUrl = envCfg.lemonSqueezyUrl
-            let graduatedCheckoutOne = V.head lemonSqueezyUrls
+            let graduatedCheckoutOne = V.head lemonSqueezyUrls <> cp.projectId
             script_
               [type_ "text/javascript"]
-              [text| 
+              [text|
              window.payLemon = function() {
              const sub = document.getElementById("createIndicator")
              if(sub.classList.contains("htmx-request")) {
@@ -512,8 +511,6 @@ createProjectBody sess envCfg isUpdate cp cpe = do
              })
              if(document.getElementById("paymentPlanEl").value == "GraduatedPricing") {
                   LemonSqueezy.Url.Open(window.graduatedRangeUrl);
-              }else {
-                 LemonSqueezy.Url.Open("$checkoutUrl");
               }
              };
            const timezoneSelect = document.getElementById("timezone");
@@ -525,8 +522,8 @@ createProjectBody sess envCfg isUpdate cp cpe = do
              timezoneSelect.appendChild(option);
            });
             |]
-            let lmnUrls = decodeUtf8 $ encode $ lemonSqueezyUrls
-            let lmnUrlAnnual = decodeUtf8 $ encode $ lemonSqueezyUrlsAnnual
+            let lmnUrls = decodeUtf8 $ encode $ lemonSqueezyUrls <&> (<> cp.projectId)
+            let lmnUrlAnnual = decodeUtf8 $ encode $ lemonSqueezyUrlsAnnual <&> (<> cp.projectId)
             script_
               [text|
                const price_indicator = document.querySelector("#price_range");
@@ -549,6 +546,7 @@ createProjectBody sess envCfg isUpdate cp cpe = do
                  let num_reqs = reqs[value]
                  let sav = saves[value] + "/month"
                  window.graduatedRangeUrl = urls[value]
+                 console.log(window.graduatedRangeUrl)
                  if(plan === "annual") {
                     price = pricesYr[value]
                     num_reqs = reqsYr[value]
@@ -557,8 +555,8 @@ createProjectBody sess envCfg isUpdate cp cpe = do
                   }
                  priceContainer.innerText = "$" + price
                  reqsContainer.innerText = "/" + num_reqs
-                 saveContainer.innerText = "$" + sav 
-                 
+                 saveContainer.innerText = "$" + sav
+
                }
                price_indicator.addEventListener('input', priceChange)
 

@@ -17,8 +17,10 @@ import Data.Time.Clock.POSIX
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Debug.Pretty.Simple
+import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
 import Log qualified
 import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
+import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Telemetry qualified as Telemetry
 import Network.GRPC.HighLevel.Client as HsGRPC
 import Network.GRPC.HighLevel.Generated as HsGRPC
@@ -28,17 +30,15 @@ import Opentelemetry.Proto.Collector.Logs.V1.LogsService
 import Opentelemetry.Proto.Collector.Trace.V1.TraceService
 import Opentelemetry.Proto.Common.V1.Common
 import Opentelemetry.Proto.Logs.V1.Logs
-import Models.Projects.Projects qualified as Projects
 import Opentelemetry.Proto.Resource.V1.Resource
 import Proto3.Suite.Class qualified as HsProtobuf
 import Proto3.Suite.Types qualified as HsProtobuf
 import Proto3.Wire qualified as HsProtobuf
 import Relude
 import Relude.Unsafe qualified as Unsafe
+import Safe qualified
 import System.Config
 import System.Types (runBackground)
-import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
-import Safe qualified
 
 
 logsServiceExportH
@@ -50,7 +50,7 @@ logsServiceExportH appLogger appCtx (ServerNormalRequest meta (ExportLogsService
   pTraceShowM "Hello called"
   pTraceShowM req
   pTraceShowM meta
-  let authHeader =  Unsafe.fromJust $ Safe.headMay  =<< M.lookup "authorization" meta.metadata.unMap
+  let authHeader = Unsafe.fromJust $ Safe.headMay =<< M.lookup "authorization" meta.metadata.unMap
   let authTextE = B64.decodeBase64Untyped $ encodeUtf8 $ T.replace "Bearer " "" $ decodeUtf8 $ authHeader
   apiKeyUUID <- case authTextE of
     Left err -> error err
@@ -73,8 +73,8 @@ nanosecondsToUTC ns = posixSecondsToUTCTime (fromIntegral ns / 1e9)
 -- Convert a list of KeyValue to a JSONB object
 keyValueToJSONB :: V.Vector KeyValue -> AE.Value
 keyValueToJSONB kvs =
-  AE.object $
-    V.foldr (\kv acc -> (AEK.fromText $ LT.toStrict kv.keyValueKey, convertAnyValue (kv.keyValueValue)) : acc) [] kvs
+  AE.object
+    $ V.foldr (\kv acc -> (AEK.fromText $ LT.toStrict kv.keyValueKey, convertAnyValue (kv.keyValueValue)) : acc) [] kvs
 
 
 convertAnyValue :: Maybe AnyValue -> AE.Value

@@ -34,6 +34,7 @@ import Pages.Endpoints.Routes qualified as EndpointsRoutes
 import Pages.Endpoints.Server qualified as EndpointsRoutes
 import Pages.Fields.FieldDetails qualified as FieldDetails
 import Pages.IntegrationGuides qualified as IntegrationGuides
+import Pages.LemonSqueezy qualified as LemonSqueezy
 import Pages.LogExplorer.Routes qualified as LogExplorerRoutes
 import Pages.LogExplorer.Server qualified as LogExplorerRoutes
 import Pages.Monitors.Routes qualified as MonitorsRoutes
@@ -83,9 +84,10 @@ data Routes mode = Routes
   , toLogin :: mode :- "to_login" :> GetRedirect '[HTML] (Headers '[Header "Location" Text, Header "Set-Cookie" SetCookie] NoContent)
   , logout :: mode :- "logout" :> GetRedirect '[HTML] (Headers '[Header "Location" Text, Header "Set-Cookie" SetCookie] NoContent)
   , authCallback :: mode :- "auth_callback" :> QPT "code" :> QPT "state" :> GetRedirect '[HTML] (Headers '[Header "Location" Text, Header "Set-Cookie" SetCookie] (Html ()))
-  , shareLinkGet :: mode :- "share" :> "r" :> Capture "shareID" UUID.UUID :> Get '[HTML] (Share.ShareLinkGet)
-  , slackLinkProjectGet :: mode :- "slack" :> "oauth" :> "callback" :> Capture "project_id" Projects.ProjectId :> QPT "code" :> Get '[HTML] (SlackInstall.SlackLink)
+  , shareLinkGet :: mode :- "share" :> "r" :> Capture "shareID" UUID.UUID :> Get '[HTML] Share.ShareLinkGet
+  , slackLinkProjectGet :: mode :- "slack" :> "oauth" :> "callback" :> Capture "project_id" Projects.ProjectId :> QPT "code" :> Get '[HTML] SlackInstall.SlackLink
   , clientMetadata :: mode :- "api" :> "client_metadata" :> Header "Authorization" Text :> Get '[JSON] ClientMetadata.ClientMetadata
+  , lemonWebhook :: mode :- "webhook" :> "lemon-squeezy" :> ReqBody '[JSON] LemonSqueezy.WebhookData :> Post '[HTML] (Html ())
   }
   deriving stock (Generic)
 
@@ -106,6 +108,7 @@ server pool =
     , shareLinkGet = Share.shareLinkGetH
     , slackLinkProjectGet = SlackInstall.linkProjectGetH
     , clientMetadata = ClientMetadata.clientMetadataH
+    , lemonWebhook = LemonSqueezy.webhookPostH
     , cookieProtected = \sessionWithCookies ->
         Servant.hoistServerWithContext
           (Proxy @(Servant.NamedRoutes CookieProtectedRoutes))
