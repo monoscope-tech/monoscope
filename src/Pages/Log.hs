@@ -110,7 +110,7 @@ apiLogH pid queryM cols' cursorM' sinceM fromM toM layoutM sourceM hxRequestM hx
 
   case tableAsVecM of
     Just tableAsVec -> do
-      let (requestVecs, colNames, requestsCount) = tableAsVec
+      let (requestVecs, colNames, resultCount) = tableAsVec
           curatedColNames = nubOrd $ curateCols summaryCols colNames
           colIdxMap = listToIndexHashMap colNames
           reqLastCreatedAtM = (\r -> lookupVecTextByKey r colIdxMap "created_at") =<< (requestVecs V.!? (V.length requestVecs - 1))
@@ -119,7 +119,7 @@ apiLogH pid queryM cols' cursorM' sinceM fromM toM layoutM sourceM hxRequestM hx
           page =
             ApiLogsPageData
               { pid
-              , resultCount = requestsCount
+              , resultCount 
               , requestVecs
               , cols = curatedColNames
               , colIdxMap
@@ -261,12 +261,12 @@ apiLogsPage page = do
       |]
     logQueryBox_ page.pid page.currentRange
 
-    div_ [class_ "card-round w-full  grow divide-y flex flex-col text-sm h-full overflow-hidden"] do
+    div_ [class_ "card-round w-full  grow divide-y flex flex-col text-sm h-full overflow-hidden group/result"] do
       div_ [class_ "flex-1 "] do
         div_ [class_ "pl-3 py-1 flex flex-row justify-between"] do
-          a_ [class_ "cursor-pointer inline-block pr-3 space-x-2 bg-blue-50 hover:bg-blue-100 blue-800 p-1 rounded-md", [__|on click toggle .hidden on #reqsChartParent|]] do
-            faSprite_ "chart-bar" "regular" "h-3 w-3 inline-block"
-            span_ [] "toggle chart"
+          label_ [class_ "flex items-center cursor-pointer space-x-2 p-1"] do
+            input_ [type_ "checkbox", class_ "toggle toggle-sm toggle-chart", checked_] 
+            small_ "toggle chart"
           a_
             [ class_ "cursor-pointer flex gap-2 items-center pr-3"
             , hxGet_ page.resetLogsURL
@@ -280,7 +280,7 @@ apiLogsPage page = do
               span_ [] "refresh"
         div_
           [ id_ "reqsChartsECP"
-          , class_ "px-5"
+          , class_ "px-5 hidden group-has-[.toggle-chart:checked]/result:block"
           , style_ "height:150px"
           , hxGet_ $ "/charts_html?id=reqsChartsEC&show_legend=true&pid=" <> page.pid.toText
           , hxTrigger_ "intersect,  htmx:beforeRequest from:#log_explorer_form"
