@@ -28,7 +28,7 @@ newtype CustomData = CustomData
 
 
 data MetaData = MetaData
-  {customData :: CustomData, eventName :: Text}
+  {customData :: Maybe CustomData, eventName :: Text}
   deriving stock (Show, Generic)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] MetaData
 
@@ -75,7 +75,9 @@ webhookPostH :: WebhookData -> ATBaseCtx (Html ())
 webhookPostH dat = do
   currentTime <- liftIO getZonedTime
   subId <- LemonSqueezy.LemonSubId <$> liftIO UUIDV4.nextRandom
-  let projectId = fromMaybe "" dat.meta.customData.projectId
+  let projectId = case dat.meta.customData of
+        Nothing -> ""
+        Just d -> fromMaybe "" d.projectId
   let subItem = dat.dataVal.attributes.firstSubscriptionItem
   let sub =
         LemonSqueezy.LemonSub
