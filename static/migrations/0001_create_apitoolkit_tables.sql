@@ -113,6 +113,8 @@ CREATE TABLE IF NOT EXISTS projects.projects
 );
 SELECT manage_updated_at('projects.projects');
 ALTER TABLE projects.projects ADD COLUMN IF NOT EXISTS discord_url TEXT DEFAULT NULL;
+ALTER TABLE projects.projects ADD COLUMN IF NOT EXISTS billing_day TIMESTAMP WITH TIME ZONE DEFAULT current_timestamp
+
 
 
 -----------------------------------------------------------------------
@@ -713,6 +715,17 @@ CREATE TABLE IF NOT EXISTS apis.subscriptions (
   user_email  TEXT NOT NULL
 );
 SELECT manage_updated_at('apis.subscriptions');
+
+
+CREATE TABLE IF NOT EXISTS apis.daily_usage (
+  id             UUID      NOT  NULL DEFAULT gen_random_uuid() PRIMARY KEY,
+  created_at     TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT current_timestamp,
+  updated_at     TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT current_timestamp,
+  project_id     UUID      NOT  NULL REFERENCES projects.projects (id)   ON DELETE CASCADE,
+  total_requests INT NOT  NULL
+);
+CREATE INDEX IF NOT EXISTS idx_apis_daily_usage_project_id ON apis.daily_usage(project_id);
+
 
 -- used for the alerts, to execute queries stored in a table,
 create or replace function eval(expression text) returns integer as $body$

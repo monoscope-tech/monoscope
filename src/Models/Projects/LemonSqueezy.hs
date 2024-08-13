@@ -1,8 +1,8 @@
-module Models.Projects.LemonSqueezy (LemonSub (..), LemonSubId (..), addSubscription) where
+module Models.Projects.LemonSqueezy (LemonSub (..), LemonSubId (..), addSubscription, getTotalUsage, addDailyUsageReport) where
 
 import Data.Aeson as Aeson
 import Data.Default (Default)
-import Data.Time (ZonedTime)
+import Data.Time (UTCTime, ZonedTime)
 import Data.UUID qualified as UUID
 import Data.Vector (Vector)
 import Database.PostgreSQL.Entity (Entity, insert, selectById)
@@ -49,3 +49,17 @@ data LemonSub = LemonSub
 
 addSubscription :: LemonSub -> DBT IO ()
 addSubscription = insert @LemonSub
+
+
+addDailyUsageReport :: Projects.ProjectId -> Int -> DBT IO Int64
+addDailyUsageReport pid total_requests = execute Insert q (pid, total_requests)
+  where
+    q = [sql|INSERT INTO apis.daily_usage (project_id, total_requests) VALUES (?, ?) |]
+
+
+getTotalUsage :: Projects.ProjectId -> UTCTime -> DBT IO Int64
+getTotalUsage pid start = do
+  [Only count] <- query Select q (pid, start)
+  return count
+  where
+    q = [sql|SELECT COALESCE(SUM(total_requests), 0) FROM apis.daily_usage WHERE project_id = ? AND created_at >= ?|]

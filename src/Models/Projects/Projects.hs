@@ -121,6 +121,7 @@ data Project = Project
   , orderId :: Maybe Text
   , usageLastReported :: ZonedTime
   , discordUrl :: Maybe Text
+  , billingDay :: Maybe ZonedTime
   }
   deriving stock (Show, Generic)
   deriving anyclass (FromRow, NFData)
@@ -154,6 +155,7 @@ data Project' = Project'
   , orderId :: Maybe Text
   , usageLastReported :: ZonedTime
   , discordUrl :: Maybe Text
+  , billingDay :: Maybe ZonedTime
   , hasIntegrated :: Bool
   , usersDisplayImages :: Vector Text
   }
