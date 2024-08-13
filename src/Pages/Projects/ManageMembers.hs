@@ -85,10 +85,10 @@ manageMembersPostH pid form = do
             Just idX -> pure idX
         Just idX -> pure idX
 
-    when (userId' /= currUserId) $
-      void $
-        liftIO $
-          withResource appCtx.pool \conn -> createJob conn "background_jobs" $ BackgroundJobs.InviteUserToProject currUserId pid email project.title -- invite the users to the project (Usually as an email)
+    when (userId' /= currUserId)
+      $ void
+      $ liftIO
+      $ withResource appCtx.pool \conn -> createJob conn "background_jobs" $ BackgroundJobs.InviteUserToProject currUserId pid email project.title -- invite the users to the project (Usually as an email)
     pure (email, permission, userId')
 
   let projectMembers =
@@ -101,13 +101,13 @@ manageMembersPostH pid form = do
   -- TODO: Send a notification via background job, about the users permission having been updated.
   unless (null uAndPOldAndChanged)
     $ void
-      . dbtToEff
+    . dbtToEff
     $ ProjectMembers.updateProjectMembersPermissons uAndPOldAndChanged
 
   -- soft delete project members with id
   unless (null deletedUAndP)
     $ void
-      . dbtToEff
+    . dbtToEff
     $ ProjectMembers.softDeleteProjectMembers deletedUAndP
 
   projMembersLatest <- dbtToEff $ ProjectMembers.selectActiveProjectMembers pid
@@ -137,14 +137,15 @@ instance ToHtml ManageMembers where
 
 manageMembersBody :: V.Vector ProjectMembers.ProjectMemberVM -> Html ()
 manageMembersBody projMembers =
-  div_ [class_ "w-full py-16"] do
-    section_ [id_ "main-content", class_ "p-6 w-[800px] mx-auto"] do
+  div_ [id_ "main-content", class_ "w-full py-16"] do
+    section_ [class_ "p-6 w-[800px] mx-auto"] do
       h2_ [class_ "text-slate-700 text-2xl font-medium mb-5"] "Manage project members"
       form_
         [ class_ "relative px-10 border border-gray-200 py-10  bg-base-100 w-full rounded-3xl"
         , hxPost_ ""
         , hxTarget_ "#main-content"
         , hxSwap_ "outerHTML"
+        , hxIndicator_ "#submitIndicator"
         ]
         do
           div_ [class_ "mt-6"] do
@@ -159,7 +160,9 @@ manageMembersBody projMembers =
               do
                 faSprite_ "plus" "regular" "mt-1 mx-2 w-3 h-3 text-blue-700"
                 span_ [class_ "text-blue-700 font-medium text-sm "] "Add member"
-          button_ [class_ "py-2 px-5 bg-blue-700 absolute m-5 bottom-0 right-0 text-[white] text-sm rounded-xl cursor-pointer", type_ "submit"] "Submit"
+          button_ [class_ "py-2 px-5 bg-blue-700 absolute m-5 flex items-center bottom-0 right-0 text-[white] text-sm rounded-xl cursor-pointer", type_ "submit"] do
+            "Submit"
+            span_ [id_ "submitIndicator", class_ "loading loading-dots loading-sm htmx-indicator"] ""
 
 
 projectMemberRow :: Maybe ProjectMembers.ProjectMemberVM -> Html ()
