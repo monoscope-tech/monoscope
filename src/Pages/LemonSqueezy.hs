@@ -18,6 +18,8 @@ import Pages.BodyWrapper (BWConfig (..), PageCtx (PageCtx))
 
 import Data.Text qualified as T
 import Data.Time.LocalTime (localTimeToUTC, utc)
+import Lucid.Htmx (hxGet_)
+import NeatInterpolation (text)
 import Relude
 import System.Types (ATAuthCtx, ATBaseCtx, RespHeaders, addRespHeaders)
 import Text.Printf (printf)
@@ -101,11 +103,11 @@ webhookPostH dat = do
   pure ""
 
 
-newtype BillingGet = BillingGet (PageCtx (Int64, Text, Text))
+newtype BillingGet = BillingGet (PageCtx (Text, Int64, Text, Text))
 
 
 instance ToHtml BillingGet where
-  toHtml (BillingGet (PageCtx bwconf (totalReqs, amount, last_reported))) = toHtml $ PageCtx bwconf $ billingPage totalReqs amount last_reported
+  toHtml (BillingGet (PageCtx bwconf (pidText, totalReqs, amount, last_reported))) = toHtml $ PageCtx bwconf $ billingPage pidText totalReqs amount last_reported
   toHtmlRaw = toHtml
 
 
@@ -124,11 +126,11 @@ manageBillingGetH pid from = do
           , currProject = Just project
           , pageTitle = "Manage Billing"
           }
-  addRespHeaders $ BillingGet $ PageCtx bwconf (totalRequests, estimatedAmount, last_reported)
+  addRespHeaders $ BillingGet $ PageCtx bwconf (pid.toText, totalRequests, estimatedAmount, last_reported)
 
 
-billingPage :: Int64 -> Text -> Text -> Html ()
-billingPage reqs amount last_reported = div_ [class_ "w-full pt-40"] do
+billingPage :: Text -> Int64 -> Text -> Text -> Html ()
+billingPage pidTxt reqs amount last_reported = div_ [class_ "w-full pt-40"] do
   div_ [class_ "border w-[550px] rounded-xl shadow-sm mx-auto p-10"] do
     div_ [class_ "flex flex-col gap-1"] do
       h3_ [class_ "font-bold text-3xl"] "Usage & Billing"
@@ -146,7 +148,7 @@ billingPage reqs amount last_reported = div_ [class_ "w-full pt-40"] do
       div_ [class_ "flex items-center gap-2 text-sm text-gray-600"] $ do
         faSprite_ "regular-calendar-days-clock" "regular" "h-4 w-4"
         span_ [data_ "id" "18"] $ toHtml $ "Latest data: " <> T.take 19 last_reported
-      div_ [class_ "flex items-center gap-2 font-bold"] $ do
+      a_ [class_ "flex items-center gap-2 font-bold cursor-pointer", hxGet_ [text| /p/$pidTxt/manage_subscription |]] $ do
         faSprite_ "link-simple" "regular" "h-4 w-4"
         span_ [data_ "id" "18"] "View on LemonSqueezy"
 
