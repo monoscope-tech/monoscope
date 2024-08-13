@@ -119,7 +119,7 @@ apiLogH pid queryM cols' cursorM' sinceM fromM toM layoutM sourceM hxRequestM hx
           page =
             ApiLogsPageData
               { pid
-              , resultCount 
+              , resultCount
               , requestVecs
               , cols = curatedColNames
               , colIdxMap
@@ -265,7 +265,7 @@ apiLogsPage page = do
       div_ [class_ "flex-1 "] do
         div_ [class_ "pl-3 py-1 flex flex-row justify-between"] do
           label_ [class_ "flex items-center cursor-pointer space-x-2 p-1"] do
-            input_ [type_ "checkbox", class_ "toggle toggle-sm toggle-chart", checked_] 
+            input_ [type_ "checkbox", class_ "toggle toggle-sm toggle-chart", checked_]
             small_ "toggle chart"
           a_
             [ class_ "cursor-pointer flex gap-2 items-center pr-3"

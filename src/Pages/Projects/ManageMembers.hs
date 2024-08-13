@@ -14,6 +14,7 @@ import Data.CaseInsensitive (original)
 import Data.Default (def)
 import Data.List.Unique (uniq)
 import Data.Pool (withResource)
+import Data.Text qualified as T
 import Data.Vector qualified as V
 import Deriving.Aeson qualified as DAE
 import Effectful.PostgreSQL.Transact.Effect
@@ -55,7 +56,7 @@ manageMembersPostH pid form = do
   -- Insert the new emails and permissions.
   -- Update the permissions only of the existing emails.
 
-  let usersAndPermissions = zip form.emails form.permissions & uniq
+  let usersAndPermissions = zip (form.emails <&> T.strip) form.permissions & uniq
   let uAndPOldAndChanged =
         mapMaybe
           ( \(email, permission) -> do
@@ -84,10 +85,10 @@ manageMembersPostH pid form = do
             Just idX -> pure idX
         Just idX -> pure idX
 
-    when (userId' /= currUserId)
-      $ void
-      $ liftIO
-      $ withResource appCtx.pool \conn -> createJob conn "background_jobs" $ BackgroundJobs.InviteUserToProject currUserId pid email project.title -- invite the users to the project (Usually as an email)
+    when (userId' /= currUserId) $
+      void $
+        liftIO $
+          withResource appCtx.pool \conn -> createJob conn "background_jobs" $ BackgroundJobs.InviteUserToProject currUserId pid email project.title -- invite the users to the project (Usually as an email)
     pure (email, permission, userId')
 
   let projectMembers =
@@ -100,13 +101,13 @@ manageMembersPostH pid form = do
   -- TODO: Send a notification via background job, about the users permission having been updated.
   unless (null uAndPOldAndChanged)
     $ void
-    . dbtToEff
+      . dbtToEff
     $ ProjectMembers.updateProjectMembersPermissons uAndPOldAndChanged
 
   -- soft delete project members with id
   unless (null deletedUAndP)
     $ void
-    . dbtToEff
+      . dbtToEff
     $ ProjectMembers.softDeleteProjectMembers deletedUAndP
 
   projMembersLatest <- dbtToEff $ ProjectMembers.selectActiveProjectMembers pid
@@ -152,7 +153,7 @@ manageMembersBody projMembers =
               template_ [id_ "inviteTmpl"] $ projectMemberRow Nothing
             a_
               [ class_ "bg-transparent inline-flex cursor-pointer mt-2"
-              , [__| on click put #inviteTmpl.innerHTML at end of #inviteMemberSection then 
+              , [__| on click put #inviteTmpl.innerHTML at end of #inviteMemberSection then
                           _hyperscript.processNode(#inviteMemberSection) then halt |]
               ]
               do
