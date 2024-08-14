@@ -43,8 +43,8 @@ collection =
     { title = Just "Test Collection"
     , description = Just "get todos"
     , scheduled = Nothing
-    , scheduleNumber = Just "5"
-    , scheduleNumberUnit = Just "hours"
+    , scheduleNumber = Nothing
+    , scheduleNumberUnit = Nothing
     , stepsData = [colStepData]
     }
 
@@ -54,8 +54,20 @@ scheduleCollection =
   TestCollectionEditor.CollectionStepUpdateForm
     { title = Just "Test Collection"
     , description = Just "get todos"
+    , scheduled = Nothing
+    , scheduleNumber = Just "1"
+    , scheduleNumberUnit = Just "days"
+    , stepsData = [colStepData]
+    }
+
+
+scheduleCollectionMn :: TestCollectionEditor.CollectionStepUpdateForm
+scheduleCollectionMn =
+  TestCollectionEditor.CollectionStepUpdateForm
+    { title = Just "Test Collection"
+    , description = Just "get todos"
     , scheduled = Just "on"
-    , scheduleNumber = Just "5"
+    , scheduleNumber = Just "1"
     , scheduleNumberUnit = Just "hours"
     , stepsData = [colStepData]
     }
@@ -72,21 +84,25 @@ spec = aroundAll withTestResources do
     it "should add test collection" \TestResources{..} -> do
       (PageCtx _ (ItemsList.ItemsPage _ collections)) <-
         toServantResponse trATCtx trSessAndHeader trLogger $ Testing.testingPostH testPid collection
-      length collections `shouldBe` 0 -- Return active collections but add collection is inactive by default
-    it "should get inactive collections and schedule collection" \TestResources{..} -> do
+      length collections `shouldBe` 1
+
+    it "should get inactive collections" \TestResources{..} -> do
       (PageCtx _ (ItemsList.ItemsPage _ collections)) <-
         toServantResponse trATCtx trSessAndHeader trLogger $ Testing.testingGetH testPid (Just "Inactive")
+      length collections `shouldBe` 0
+
+    it "should not allow schedule unit less than a day with free plan" \TestResources{..} -> do
+      (PageCtx _ (ItemsList.ItemsPage _ collections)) <-
+        toServantResponse trATCtx trSessAndHeader trLogger $ Testing.testingGetH testPid Nothing
       length collections `shouldBe` 1
       let col = V.head $ (\(Testing.CollectionListItemVM _ co _) -> co) <$> collections
-      col.title `shouldBe` "Test Collection"
-      col.stepsCount `shouldBe` 1
-      col.lastRun `shouldBe` Nothing
-      col.schedule `shouldBe` "5 hours"
-      col.isScheduled `shouldBe` False
-      _ <-
-        toServantResponse trATCtx trSessAndHeader trLogger $ TestCollectionEditor.collectionStepsUpdateH testPid (col.id) scheduleCollection
-      col.description `shouldBe` "get todos"
-    it "should get active collections" \TestResources{..} -> do
+      res <-
+        toServantResponse trATCtx trSessAndHeader trLogger $ TestCollectionEditor.collectionStepsUpdateH testPid col.id scheduleCollectionMn
+      case res of
+        TestCollectionEditor.CollectionMutSuccess -> fail "Error"
+        _ -> do pass
+
+    it "should get active collections and disable collection" \TestResources{..} -> do
       (PageCtx _ (ItemsList.ItemsPage _ collections)) <-
         toServantResponse trATCtx trSessAndHeader trLogger $ Testing.testingGetH testPid Nothing
       length collections `shouldBe` 1
@@ -94,5 +110,22 @@ spec = aroundAll withTestResources do
       col.title `shouldBe` "Test Collection"
       col.stepsCount `shouldBe` 1
       col.lastRun `shouldBe` Nothing
-      col.schedule `shouldBe` "5 hours"
+      col.schedule `shouldBe` "1 days"
       col.isScheduled `shouldBe` True
+      col.description `shouldBe` "get todos"
+
+      res <-
+        toServantResponse trATCtx trSessAndHeader trLogger $ TestCollectionEditor.collectionStepsUpdateH testPid col.id scheduleCollection
+      case res of
+        TestCollectionEditor.CollectionMutError -> fail "Error"
+        _ -> do pass
+    it "should get inative collections" \TestResources{..} -> do
+      (PageCtx _ (ItemsList.ItemsPage _ collections)) <-
+        toServantResponse trATCtx trSessAndHeader trLogger $ Testing.testingGetH testPid (Just "Inactive")
+      length collections `shouldBe` 1
+      let col = V.head $ (\(Testing.CollectionListItemVM _ co _) -> co) <$> collections
+      col.title `shouldBe` "Test Collection"
+      col.stepsCount `shouldBe` 1
+      col.lastRun `shouldBe` Nothing
+      col.schedule `shouldBe` "1 days"
+      col.isScheduled `shouldBe` False

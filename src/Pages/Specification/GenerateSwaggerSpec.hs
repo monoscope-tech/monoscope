@@ -322,7 +322,7 @@ expectedSwaggerJSON =
           "post": {
             "description": "",
             "responses": {
-              "401": { 
+              "401": {
                 "content": {
                   "application/json":  {
                     "schema": {
@@ -536,21 +536,15 @@ hExpectedSwaggerJSON =
                         "properties": {
                           "Access-Control-Allow-Credentials": {
                             "description": "Sample header 1",
-                            "items": {
                               "type": "string",
                               "format": "text",
                               "example": "header 1"
-                            },
-                            "type": "array"
                           },
                           "Access-Control-Allow-Methods": {
                             "description": "Sample header 2",
-                            "items": {
                               "type": "string",
                               "format": "text",
                               "example": "header 2"
-                            },
-                            "type": "array"
                           },
                           "Content-Length": {
                             "description": "Sample header 3",

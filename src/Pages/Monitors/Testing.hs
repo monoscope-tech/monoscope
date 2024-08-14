@@ -42,8 +42,8 @@ testingPostH pid colF = do
   (_, project) <- Sessions.sessionAndProject pid
   currentTime <- Time.currentTime
   colId <- Testing.CollectionId <$> liftIO UUIDV4.nextRandom
-  let scheduleText = fromMaybe "1" colF.scheduleNumber <> " " <> fromMaybe "Days" colF.scheduleNumberUnit
-  let scheduleText' = if project.paymentPlan == "Free" then "1 day" else scheduleText
+  let scheduleText = fromMaybe "1" colF.scheduleNumber <> " " <> fromMaybe "days" colF.scheduleNumberUnit
+  let scheduleText' = if project.paymentPlan == "Free" then "1 days" else scheduleText
 
   let coll =
         Testing.Collection
@@ -63,7 +63,7 @@ testingPostH pid colF = do
           , lastRunFailed = 0
           }
   _ <- dbtToEff $ Testing.addCollection coll
-  if project.paymentPlan == "Free" && isJust colF.scheduleNumberUnit && colF.scheduleNumberUnit /= Just "Days"
+  if project.paymentPlan == "Free" && isJust colF.scheduleNumberUnit && colF.scheduleNumberUnit /= Just "days"
     then addErrorToast "You are using the free plan. You can only schedule collections to run once a day." Nothing
     else addSuccessToast "Collection added Successfully" Nothing
   testingGetH pid Nothing
