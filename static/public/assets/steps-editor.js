@@ -30,13 +30,20 @@ export class StepsEditor extends LitElement {
     }
 
     window.updateCollectionResults = (results) => {
-      this.collectionResults = results
+      if (results && Array.isArray(results)) {
+        this.collectionResults = results
+      }
       this.requestUpdate()
     }
 
     window.updateStepsWithErrors = (errors) => {
-      this.saveErrors = errors
+      if (errors && Array.isArray(errors)) {
+        this.saveErrors = errors
+      }
       this.requestUpdate()
+    }
+    window.updateEditorVal = () => {
+      this.updateEditorContent()
     }
   }
 

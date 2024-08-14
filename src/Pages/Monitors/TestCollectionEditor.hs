@@ -10,6 +10,7 @@ module Pages.Monitors.TestCollectionEditor (
   CollectionMut (..),
 ) where
 
+import Data.Aeson (encode)
 import Data.Aeson qualified as AE
 import Data.Aeson.Encode.Pretty (encodePretty)
 import Data.ByteString qualified as Data.ByteString.Lazy.Internal
@@ -199,15 +200,11 @@ testSettingsModalContent_ isUpdate col = div_ [class_ "space-y-5 w-96"] do
 
 collectionPage :: Projects.ProjectId -> Testing.Collection -> Maybe (V.Vector Testing.StepResult) -> String -> Html ()
 collectionPage pid col col_rn respJson = do
-  let collectionStepsJSON = AE.encode col.collectionSteps
+  let collectionStepsJSON = encode col.collectionSteps
   script_
     []
     [fmt|
-  window.collectionSteps = {collectionStepsJSON};
-  window.collectionResults = {respJson};
-  document.addEventListener('DOMContentLoaded', function(){{
-       window.updateCollectionResults({respJson});
-   }})
+        window.collectionSteps = {collectionStepsJSON};
   |]
   editorExtraElements
   section_ [class_ "h-full overflow-y-hidden"] do
@@ -249,7 +246,7 @@ collectionPage pid col col_rn respJson = do
                 (span_ "Run all" >> faSprite_ "play" "solid" "w-3 h-3")
               button_ [class_ "btn btn-sm btn-warning ", type_ "submit"] (span_ "Save" >> faSprite_ "floppy-disk" "solid" "w-3 h-3")
               label_ [class_ "relative inline-flex items-center cursor-pointer space-x-2"] do
-                input_ [type_ "checkbox", class_ "toggle editormode"] >> span_ [class_ "text-sm"] "Code"
+                input_ [type_ "checkbox", class_ "toggle editormode", onchange_ "codeToggle(event)"] >> span_ [class_ "text-sm"] "Code"
           div_ [class_ "h-full overflow-y-hidden flex-1"] $ termRaw "steps-editor" [id_ "stepsEditor"] ""
 
         div_ [class_ "col-span-1 h-full border-r border-gray-200 overflow-y-auto"] do
@@ -270,6 +267,12 @@ collectionPage pid col col_rn respJson = do
     script_ [type_ "module", src_ "/assets/steps-editor.js"] ("" :: Text)
     script_
       [text|
+
+        function codeToggle(e) {
+          if(e.target.checked) {
+               window.updateEditorVal()
+            }
+        }
         function addToAssertions(event, assertion, operation) {
             const parent = event.target.closest(".tab-content")
             const step = Number(parent.getAttribute('data-step'));
@@ -292,6 +295,14 @@ collectionPage pid col col_rn respJson = do
        return data;
       }
     |]
+    let res = toText respJson
+    script_
+      [text|
+        window.collectionResults = $res;
+        document.addEventListener('DOMContentLoaded', function(){{
+             window.updateCollectionResults($res);
+        }})
+      |]
 
 
 collectionStepResult_ :: Int -> Testing.StepResult -> Html ()
@@ -304,13 +315,13 @@ collectionStepResult_ idx stepResult = section_ [class_ "p-1"] do
     p_ [class_ $ "block badge badge-sm " <> getStatusColor stepResult.request.resp.status, term "data-tippy-content" "status"] $ show stepResult.request.resp.status
   div_ [role_ "tablist", class_ "tabs tabs-lifted"] do
     input_ [type_ "radio", name_ $ "step-result-tabs-" <> show idx, role_ "tab", class_ "tab", Aria.label_ "Response Log", checked_]
-    div_ [role_ "tabpanel", class_ "tab-content bg-base-100 border-base-300 rounded-box p-6"]
-      $ toHtmlRaw
-      $ textToHTML stepResult.stepLog
+    div_ [role_ "tabpanel", class_ "tab-content bg-base-100 border-base-300 rounded-box p-6"] $
+      toHtmlRaw $
+        textToHTML stepResult.stepLog
 
     input_ [type_ "radio", name_ $ "step-result-tabs-" <> show idx, role_ "tab", class_ "tab", Aria.label_ "Response Headers"]
-    div_ [role_ "tabpanel", class_ "tab-content bg-base-100 border-base-300 rounded-box p-6 "]
-      $ table_ [class_ "table table-xs"] do
+    div_ [role_ "tabpanel", class_ "tab-content bg-base-100 border-base-300 rounded-box p-6 "] $
+      table_ [class_ "table table-xs"] do
         thead_ [] $ tr_ [] $ th_ [] "Name" >> th_ [] "Value"
         tbody_ $ forM_ (M.toList stepResult.request.resp.headers) $ \(k, v) -> tr_ [] do
           td_ [] $ toHtml k
