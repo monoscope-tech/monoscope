@@ -103,10 +103,6 @@ export class StepsEditor extends LitElement {
     }
   }
 
-  updated(_changedProperties) {
-    this.updateEditorContent()
-  }
-
   createRenderRoot() {
     return this
   }
