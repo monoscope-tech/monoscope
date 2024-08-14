@@ -88,7 +88,7 @@ CREATE TABLE IF NOT EXISTS users.persistent_sessions
 );
 SELECT manage_updated_at('users.persistent_sessions');
 
-CREATE TYPE IF NOT EXISTS notification_channel_enum AS ENUM ('email', 'slack');
+CREATE TYPE notification_channel_enum AS ENUM ('email', 'slack');
 ALTER TYPE notification_channel_enum ADD VALUE 'discord';
 
 CREATE TABLE IF NOT EXISTS projects.projects
@@ -819,8 +819,6 @@ SELECT add_job('tests.check_tests_to_trigger', '10min');
 INSERT into projects.projects (id, title) VALUES ('00000000-0000-0000-0000-000000000000', 'Demo Project');
 
 
-
-
 CREATE TABLE IF NOT EXISTS apis.errors
 (
   id              UUID NOT NULL DEFAULT gen_random_uuid(),
@@ -852,6 +850,7 @@ BEGIN
   RETURN NULL;
 END;
 $$ LANGUAGE plpgsql;
+
 CREATE OR REPLACE TRIGGER error_created_anomaly AFTER INSERT ON apis.errors FOR EACH ROW EXECUTE PROCEDURE apis.new_anomaly_proc_job_only('runtime_exception', 'created');
 
 
