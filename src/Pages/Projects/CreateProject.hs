@@ -429,8 +429,8 @@ createProjectBody sess envCfg isUpdate cp cpe = do
                     div_ [class_ "flex items-center justify-between border-b border-b-1 p-1"] do
                       h4_ [class_ "text-xl font-medium text-slate-700"] $ toHtml "Pay as you use"
                       div_ [role_ "tablist", class_ "tabs tabs-boxed"] $ do
-                        input_ [onchange_ "handlePlanToggle(e)", value_ "month", type_ "radio", name_ "plans", role_ "tab", class_ "tab", term "aria-label" "Monthly", checked_]
-                        input_ [onchange_ "handlePlanToggle(e)", value_ "annual", type_ "radio", name_ "plans", role_ "tab", class_ "tab", term "aria-label" "Annual"]
+                        input_ [onchange_ "handlePlanToggle()", value_ "month", type_ "radio", name_ "plans", role_ "tab", class_ "tab", term "aria-label" "Monthly", checked_]
+                        input_ [onchange_ "handlePlanToggle()", value_ "annual", type_ "radio", name_ "plans", role_ "tab", class_ "tab", term "aria-label" "Annual"]
                     div_ [class_ "text-lg py-3 px-2"] do
                       span_ [class_ "text-2xl text-blue-700", id_ "price"] $ toHtml "$19"
                       span_ [class_ "text-slate-500", id_ "num_requests"] "/400k"
@@ -546,7 +546,6 @@ createProjectBody sess envCfg isUpdate cp cpe = do
                  let num_reqs = reqs[value]
                  let sav = saves[value] + "/month"
                  window.graduatedRangeUrl = urls[value]
-                 console.log(window.graduatedRangeUrl)
                  if(plan === "annual") {
                     price = pricesYr[value]
                     num_reqs = reqsYr[value]
@@ -560,7 +559,7 @@ createProjectBody sess envCfg isUpdate cp cpe = do
                }
                price_indicator.addEventListener('input', priceChange)
 
-               function handlePlanToggle(e) {
+               function handlePlanToggle() {
                   const radios = document.getElementsByName("plans")
                   for(let radio of radios) {
                     if(radio.checked) {
