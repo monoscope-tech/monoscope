@@ -86,29 +86,58 @@ pivot' rows = do
 buildReqDumpSQL :: [ChartExp] -> (Text, [DBField], Maybe UTCTime, Maybe UTCTime)
 buildReqDumpSQL exps = (q, join qByArgs, mFrom, mTo)
   where
-    (slots, groupByFields, gBy, queryBy, limit, q) = foldr go (120, "" :: Text, "" :: Text, [], 10000, qDefault) exps
-    go (SlotsE n) (_, gbF, gb, qb, l, qd) = (n, gbF, gb, qb, l, qd)
-    go (GByE GBEndpoint) (i, _, gb, qb, l, qd) = (i, ",method, url_path", ",method||' '||url_path as g", qb, l, qd)
-    go (GByE GBStatusCode) (i, _, gb, qb, l, qd) = (i, ",status_code", ",status_code::text as status_code", qb, l, qd)
-    go (GByE GBDurationPercentile) (i, gbF, gb, qb, l, qd) = (i, gbF, gb, qb, l, qForDurationPercentile)
-    go (QByE qb) (i, gbF, gb, qbOld, l, qd) = (i, gbF, gb, qb ++ qbOld, l, qd)
+    (slots, groupByFields, gBy, queryBy, limit, q, extr) = foldr go (120, "" :: Text, "" :: Text, [], 10000, qDefault, "" :: Text) exps
+    go (SlotsE n) (_, gbF, gb, qb, l, qd, _) = (n, gbF, gb, qb, l, qd, "")
+    go (GByE GBEndpoint) (i, _, gb, qb, l, qd, _) = (i, ",method, url_path", ",method||' '||url_path as g", qb, l, qd, "g")
+    go (GByE GBStatusCode) (i, _, gb, qb, l, qd, _) = (i, ",status_code", ",status_code::text as status_code", qb, l, qd, "status_code")
+    go (GByE GBDurationPercentile) (i, gbF, gb, qb, l, qd, _) = (i, gbF, gb, qb, l, qForDurationPercentile, "")
+    go (QByE qb) (i, gbF, gb, qbOld, l, qd, _) = (i, gbF, gb, qb ++ qbOld, l, qd, "")
     go (TypeE _) options = options
-    go (LimitE lm) (i, gbF, gb, qb, _, qd) = (i, gbF, gb, qb, lm, qd)
+    go (LimitE lm) (i, gbF, gb, qb, _, qd, _) = (i, gbF, gb, qb, lm, qd, "")
     go _ acc = acc
 
     (qByTxtList, qByArgs) = unzip $ runQueryBySql <$> queryBy
 
+    --     WITH RankedGroups AS (
+    --   SELECT
+    --     extract(epoch from time_bucket('"
+    --         , show $ fromMaybe 3600 $ calculateIntervalFromQuery slots (mFrom, mTo) queryBy
+    --         , " seconds', created_at))::integer as timeB,
+    --     COALESCE(COUNT(*), 0) as total_count,
+    --     " -- here goes your grouping fields like method, url_path, etc.
+    --     ,
+    --     ROW_NUMBER() OVER (PARTITION BY timeB ORDER BY COUNT(*) DESC) as group_rank
+    --   FROM apis.request_dumps
+    --   " -- your WHERE clause goes here if needed
+    --   "
+    --   GROUP BY timeB
+    --   " -- plus your other group by fields
+    --   "
+    -- )
+    -- SELECT *
+    -- FROM RankedGroups
+    -- WHERE group_rank <= 20
+    -- ORDER BY timeB
+    -- LIMIT " <> show limit
+
     qDefault =
       T.concat
-        [ "SELECT extract(epoch from time_bucket('"
+        [ "WITH RankedGroups AS ( SELECT extract(epoch from time_bucket('"
         , show $ fromMaybe 3600 $ calculateIntervalFromQuery slots (mFrom, mTo) queryBy
         , " seconds', created_at))::integer as timeB, "
         , "COALESCE(COUNT(*), 0) total_count "
         , toText gBy
+        , ", ROW_NUMBER() OVER (PARTITION BY extract(epoch from time_bucket('"
+        , show $ fromMaybe 3600 $ calculateIntervalFromQuery slots (mFrom, mTo) queryBy
+        , " seconds', created_at))::integer ORDER BY COUNT(*) DESC) as group_rank"
         , " FROM apis.request_dumps"
         , if null qByTxtList then "" else " WHERE " <> T.intercalate " AND " qByTxtList
         , " GROUP BY timeB "
         , toText groupByFields
+        , " )"
+        , "SELECT timeB, total_count, "
+        , toText extr
+        , " FROM RankedGroups WHERE group_rank <= 20 ORDER BY timeB "
         , " LIMIT " <> show limit
         ]
 
@@ -245,7 +274,6 @@ chartsGetDef typeM queryRaw pidM groupByM queryByM slotsM limitsM themeM idM sho
   let (q, args, fromM, toM) = case groupByM of
         Just GBDurationPercentile -> buildReqDumpSQL chartExps
         _ -> buildReqDumpSQL chartExps
-
   chartData <- dbtToEff $ query Select (Query $ encodeUtf8 q) args
 
   let (headers, groupedData) = pivot' $ toList chartData
