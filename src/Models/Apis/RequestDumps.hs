@@ -458,7 +458,7 @@ countRequestDumpByProject pid = do
     [Only count] -> return count
     v -> return $ length v
   where
-    q = [sql| SELECT count(*) FROM apis.request_dumps WHERE project_id=? |]
+    q = [sql| SELECT count(*) FROM apis.request_dumps WHERE project_id=?  created_at > NOW() - interval '14 days'|]
 
 
 hasRequest :: Projects.ProjectId -> DBT IO Bool
@@ -466,7 +466,7 @@ hasRequest pid = do
   result <- query Select q pid
   case result of
     [Only count] -> return count
-    v -> return $ length v > 0
+    v -> return $ not (null v)
   where
     q =
       [sql|SELECT EXISTS(
