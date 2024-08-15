@@ -137,7 +137,7 @@ buildReqDumpSQL exps = (q, join qByArgs, mFrom, mTo)
         , " )"
         , "SELECT timeB, total_count, "
         , toText extr
-        , " FROM RankedGroups WHERE group_rank <= 20 ORDER BY timeB "
+        , " FROM RankedGroups WHERE group_rank <= 20"
         , " LIMIT " <> show limit
         ]
 
