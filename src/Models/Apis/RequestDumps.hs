@@ -458,7 +458,7 @@ countRequestDumpByProject pid = do
     [Only count] -> return count
     v -> return $ length v
   where
-    q = [sql| SELECT count(*) FROM apis.request_dumps WHERE project_id=?  created_at > NOW() - interval '14 days'|]
+    q = [sql| SELECT count(*) FROM apis.request_dumps WHERE project_id=?  AND created_at > NOW() - interval '14 days'|]
 
 
 hasRequest :: Projects.ProjectId -> DBT IO Bool
