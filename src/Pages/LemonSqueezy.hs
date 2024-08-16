@@ -112,6 +112,9 @@ webhookPostH secretHeaderM dat = do
     "subscription_resumed" -> do
       _ <- dbtToEff $ LemonSqueezy.upgradeToPaid orderId subItem.subscriptionId subItem.id
       pure "Upgraded"
+    "subscription_expired" -> do
+      _ <- dbtToEff $ LemonSqueezy.downgradeToFree orderId subItem.subscriptionId subItem.id
+      pure "Downgraded to free,sub expired"
     _ -> pure ""
 
 
