@@ -1,4 +1,4 @@
-module Models.Projects.LemonSqueezy (LemonSub (..), LemonSubId (..), addSubscription, getTotalUsage, addDailyUsageReport, downgradeToFree) where
+module Models.Projects.LemonSqueezy (LemonSub (..), LemonSubId (..), addSubscription, getTotalUsage, addDailyUsageReport, upgradeToPaid, downgradeToFree) where
 
 import Data.Aeson as Aeson
 import Data.Default (Default)
@@ -69,3 +69,9 @@ downgradeToFree :: Int -> Int -> Int -> DBT IO Int64
 downgradeToFree orderId subId subItemId = execute Update q (show orderId, show subId, show subItemId)
   where
     q = [sql|UPDATE projects.projects SET payment_plan = 'Free' WHERE order_id = ? AND sub_id = ? AND first_sub_item_id = ?|]
+
+
+upgradeToPaid :: Int -> Int -> Int -> DBT IO Int64
+upgradeToPaid orderId subId subItemId = execute Update q (show orderId, show subId, show subItemId)
+  where
+    q = [sql|UPDATE projects.projects SET payment_plan = 'GraduatedPricing' WHERE order_id = ? AND sub_id = ? AND first_sub_item_id = ?|]

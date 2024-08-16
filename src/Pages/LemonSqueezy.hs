@@ -105,10 +105,13 @@ webhookPostH secretHeaderM dat = do
               , userEmail = dat.dataVal.attributes.userEmail
               }
       _ <- dbtToEff $ LemonSqueezy.addSubscription sub
-      pure ""
+      pure "subscription created"
     "subscription_cancelled" -> do
       _ <- dbtToEff $ LemonSqueezy.downgradeToFree orderId subItem.subscriptionId subItem.id
-      pure ""
+      pure "downgraded"
+    "subscription_resumed" -> do
+      _ <- dbtToEff $ LemonSqueezy.upgradeToPaid orderId subItem.subscriptionId subItem.id
+      pure "Upgraded"
     _ -> pure ""
 
 
