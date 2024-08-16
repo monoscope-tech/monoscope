@@ -2,6 +2,8 @@ module Pages.Endpoints.OutgoingSpec (spec) where
 
 import Data.Aeson (Value)
 import Data.Aeson.QQ (aesonQQ)
+import Data.Time (formatTime, getCurrentTime)
+import Data.Time.Format (defaultTimeLocale)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Models.Apis.Endpoints
@@ -24,8 +26,10 @@ spec :: Spec
 spec = aroundAll withTestResources do
   describe "Check Outgoing Integrations" do
     it "should return outgoing integrations" \TestResources{..} -> do
-      let reqMsg1 = Unsafe.fromJust $ convert $ msg1
-      let reqMsg2 = Unsafe.fromJust $ convert $ msg2
+      currentTime <- getCurrentTime
+      let timeTxt = toText $ formatTime defaultTimeLocale "%FT%T%QZ" currentTime
+      let reqMsg1 = Unsafe.fromJust $ convert $ msg1 timeTxt
+      let reqMsg2 = Unsafe.fromJust $ convert $ msg2 timeTxt
       let msgs = concat $ replicate 100 $ [("m1", reqMsg1), ("m2", reqMsg2)]
       _ <- runTestBackground trATCtx $ processRequestMessages msgs
 
@@ -45,8 +49,8 @@ spec = aroundAll withTestResources do
       1 `shouldBe` 1
 
 
-msg1 :: Value
-msg1 =
+msg1 :: Text -> Value
+msg1 timeTxt =
   [aesonQQ|{"duration":476434,
             "host":"github.com",
             "method":"GET",
@@ -65,14 +69,14 @@ msg1 =
             },
             "sdk_type":"JsAxiosOutgoing",
             "status_code":200,
-            "timestamp":"2024-07-05T13:06:26.620094239Z",
-            "url_path":"/","errors":[],"tags":[]} 
+            "timestamp":#{timeTxt},
+            "url_path":"/","errors":[],"tags":[]}
       |]
 
 
-msg2 :: Value
-msg2 =
-  [aesonQQ|{"timestamp": "2024-07-05T13:06:26.620094239Z",
+msg2 :: Text -> Value
+msg2 timeTxt =
+  [aesonQQ|{"timestamp":#{timeTxt},
             "request_headers":{
                 "Accept":["application/json, text/plain, */*"],
                 "Accept-Encoding":["gzip, deflate, br"],
@@ -98,5 +102,5 @@ msg2 =
             "request_body":"eyJwYXNzd29yZCI6IltDTElFTlRfUkVEQUNURURdIiwidXNlcm5hbWUiOiJhZG1pbkBncm92ZXBheS5jby51ayJ9",
             "proto_minor":1,
             "sdk_type": "JsAxiosOutgoing",
-            "status_code":422,"proto_major":1,"duration":103636077} 
+            "status_code":422,"proto_major":1,"duration":103636077}
         |]
