@@ -173,7 +173,6 @@ invalidPatterns =
 hasInvalidSymbols :: Text -> Bool
 hasInvalidSymbols = T.any (not . validChar)
 
--- Define what constitutes a valid character
 validChar :: Char -> Bool
 validChar c = isAlphaNum c || c `elem` "._-+=@#$%&*()<>[]{}|\\/:;\"' "
 
