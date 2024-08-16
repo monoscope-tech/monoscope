@@ -76,3 +76,14 @@ spec = aroundAll withTestResources do
           let emails = projMembers & V.toList & map (.email)
           "example@gmail.com" `shouldNotSatisfy` (`elem` emails)
         _ -> fail "Expected ManageMembersPost response"
+
+    it "Should add member after deletion" \TestResources{..} -> do
+      let member =
+            ManageMembers.ManageMembersForm
+              { emails = ["example@gmail.com"]
+              , permissions = [ProjectMembers.PAdmin]
+              }
+      pg <-
+        toServantResponse trATCtx trSessAndHeader trLogger $ ManageMembers.manageMembersPostH testPid member
+      -- Check if the response contains the newly added member
+      "example@gmail.com" `shouldSatisfy` (`elem` (pg.unwrapPost & V.toList & map (.email)))
