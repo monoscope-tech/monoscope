@@ -43,9 +43,9 @@ spec = aroundAll withTestResources do
       let reqMsg1 = Unsafe.fromJust $ convert $ testRequestMsgs.reqMsg1 nowTxt
       let reqMsg2 = Unsafe.fromJust $ convert $ testRequestMsgs.reqMsg2 nowTxt
       let msgs =
-            concat
-              $ replicate 100
-              $ [ ("m1", reqMsg1)
+            concat $
+              replicate 100 $
+                [ ("m1", reqMsg1)
                 , ("m2", reqMsg2)
                 ]
       _ <- runTestBackground trATCtx $ processRequestMessages msgs
@@ -82,5 +82,5 @@ spec = aroundAll withTestResources do
           let enp1 = (\(EndpointList.EnpReqStatsVM _ _ c) -> c) <$> Unsafe.fromJust $ find (\(EndpointList.EnpReqStatsVM _ _ c) -> c.urlPath == "/") enpList
           let enp2 = (\(EndpointList.EnpReqStatsVM _ _ c) -> c) <$> Unsafe.fromJust $ find (\(EndpointList.EnpReqStatsVM _ _ c) -> c.urlPath == "/api/v1/user/login") enpList
           enp1.endpointHash `shouldBe` toXXHash (testPid.toText <> "172.31.29.11" <> "GET" <> "/")
-          enp2.endpointHash `shouldBe` toXXHash (testPid.toText <> "api.test.co.uk" <> "POST" <> "/api/v1/user/login")
+          enp2.endpointHash `shouldBe` toXXHash (testPid.toText <> "api.test.com" <> "POST" <> "/api/v1/user/login")
         _ -> error "Unexpected response"
