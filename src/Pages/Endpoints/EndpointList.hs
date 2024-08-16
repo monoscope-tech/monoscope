@@ -22,7 +22,7 @@ import Pkg.Components.ItemsList qualified as ItemsList
 import PyF qualified
 import Relude hiding (ask, asks)
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
-import Utils (deleteParam)
+import Utils (deleteParam,faSprite_)
 
 
 endpointListGetH
@@ -164,6 +164,8 @@ renderEndpoint activePage currTime enp = do
         a_ [class_ "inline-block font-bold text-red-700 space-x-2", href_ ("/p/" <> enp.projectId.toText <> "/endpoints/" <> Endpoints.endpointIdText enp.endpointId)] $ do
           span_ [class_ $ "endpoint endpoint-" <> toLower enp.method, data_ "enp-urlMethod" enp.method] $ toHtml enp.method
           span_ [class_ " inconsolata text-base text-slate-700", data_ "enp-urlPath" enp.urlPath] $ toHtml $ if T.null enp.urlPath then "/" else T.take 150 enp.urlPath
+        a_ [class_ "inline-block font-bold", href_ ("/p/" <> enp.projectId.toText <> "/log_explorer?query=url_path==" <> enp.urlPath <> "/")] do
+            faSprite_ "link-simple" "regular" "h-4 w-4"  
       unless activePage do
         div_ [class_ "flex items-center gap-2 mt-5"] do
           AnomalyList.anomalyArchiveButton enp.projectId (Anomalies.AnomalyId enp.anomalyId) (isJust enp.archivedAt)
