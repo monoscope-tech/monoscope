@@ -2,25 +2,26 @@ module Pages.LemonSqueezy (webhookPostH, WebhookData, manageBillingGetH, Billing
 
 import Data.Aeson qualified as AE
 import Data.Default
+import Data.Text qualified as T
 import Data.Time (LocalTime (LocalTime), ZonedTime, getCurrentTime, getCurrentTimeZone, getZonedTime, localTimeOfDay, utctDay, zonedTimeToLocalTime, zonedTimeToUTC)
 import Data.Time.Calendar (fromGregorian, toGregorian)
 import Data.Time.Clock (UTCTime)
+import Data.Time.LocalTime (localTimeToUTC, utc)
 import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUIDV4
 import Deriving.Aeson qualified as DAE
 import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
+import Effectful.Reader.Static (asks)
 import Lucid
+import Lucid.Htmx (hxGet_)
 import Models.Projects.LemonSqueezy qualified as LemonSqueezy
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
+import NeatInterpolation (text)
 import Network.GRPC.HighLevel (AuthContext)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (PageCtx))
-
-import Data.Text qualified as T
-import Data.Time.LocalTime (localTimeToUTC, utc)
-import Lucid.Htmx (hxGet_)
-import NeatInterpolation (text)
-import Relude
+import Relude hiding (asks)
+import System.Config (env, lemonSqueezyWebhookSecret)
 import System.Types (ATAuthCtx, ATBaseCtx, RespHeaders, addRespHeaders)
 import Text.Printf (printf)
 import Utils (faSprite_)
@@ -79,28 +80,36 @@ instance AE.FromJSON WebhookData where
     return (WebhookData{dataVal = dataVal, meta = meta})
 
 
-webhookPostH :: WebhookData -> ATBaseCtx (Html ())
-webhookPostH dat = do
-  currentTime <- liftIO getZonedTime
-  subId <- LemonSqueezy.LemonSubId <$> liftIO UUIDV4.nextRandom
-  let projectId = case dat.meta.customData of
-        Nothing -> ""
-        Just d -> fromMaybe "" d.projectId
+webhookPostH :: Maybe Text -> WebhookData -> ATBaseCtx (Html ())
+webhookPostH secretHeaderM dat = do
+  envConfig <- asks env
+  let orderId = dat.dataVal.attributes.orderId
   let subItem = dat.dataVal.attributes.firstSubscriptionItem
-  let sub =
-        LemonSqueezy.LemonSub
-          { id = subId
-          , createdAt = currentTime
-          , updatedAt = currentTime
-          , projectId = projectId
-          , subscriptionId = subItem.subscriptionId
-          , orderId = dat.dataVal.attributes.orderId
-          , firstSubId = subItem.id
-          , productName = dat.dataVal.attributes.productName
-          , userEmail = dat.dataVal.attributes.userEmail
-          }
-  _ <- dbtToEff $ LemonSqueezy.addSubscription sub
-  pure ""
+  case dat.meta.eventName of
+    "subscription_created" -> do
+      currentTime <- liftIO getZonedTime
+      subId <- LemonSqueezy.LemonSubId <$> liftIO UUIDV4.nextRandom
+      let projectId = case dat.meta.customData of
+            Nothing -> ""
+            Just d -> fromMaybe "" d.projectId
+      let sub =
+            LemonSqueezy.LemonSub
+              { id = subId
+              , createdAt = currentTime
+              , updatedAt = currentTime
+              , projectId = projectId
+              , subscriptionId = subItem.subscriptionId
+              , orderId
+              , firstSubId = subItem.id
+              , productName = dat.dataVal.attributes.productName
+              , userEmail = dat.dataVal.attributes.userEmail
+              }
+      _ <- dbtToEff $ LemonSqueezy.addSubscription sub
+      pure ""
+    "subscription_cancelled" -> do
+      _ <- dbtToEff $ LemonSqueezy.downgradeToFree orderId subItem.subscriptionId subItem.id
+      pure ""
+    _ -> pure ""
 
 
 newtype BillingGet = BillingGet (PageCtx (Text, Int64, Text, Text))

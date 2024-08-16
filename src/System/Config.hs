@@ -70,6 +70,7 @@ data EnvConfig = EnvConfig
   , lemonSqueezyApiKey :: Text
   , lemonSqueezyUrl :: Text
   , postmarkToken :: Text
+  , lemonSqueezyWebhookSecret :: Text
   }
   deriving stock (Show, Generic)
   deriving anyclass (FromEnv, Default)

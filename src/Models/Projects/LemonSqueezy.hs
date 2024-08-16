@@ -1,4 +1,4 @@
-module Models.Projects.LemonSqueezy (LemonSub (..), LemonSubId (..), addSubscription, getTotalUsage, addDailyUsageReport) where
+module Models.Projects.LemonSqueezy (LemonSub (..), LemonSubId (..), addSubscription, getTotalUsage, addDailyUsageReport, downgradeToFree) where
 
 import Data.Aeson as Aeson
 import Data.Default (Default)
@@ -63,3 +63,9 @@ getTotalUsage pid start = do
   return count
   where
     q = [sql|SELECT COALESCE(SUM(total_requests), 0) FROM apis.daily_usage WHERE project_id = ? AND created_at >= ?|]
+
+
+downgradeToFree :: Int -> Int -> Int -> DBT IO Int64
+downgradeToFree orderId subId subItemId = execute Update q (show orderId, show subId, show subItemId)
+  where
+    q = [sql|UPDATE projects.projects SET payment_plan = 'Free' WHERE order_id = ? AND sub_id = ? AND first_sub_item_id = ?|]

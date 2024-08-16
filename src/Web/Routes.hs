@@ -87,7 +87,7 @@ data Routes mode = Routes
   , shareLinkGet :: mode :- "share" :> "r" :> Capture "shareID" UUID.UUID :> Get '[HTML] Share.ShareLinkGet
   , slackLinkProjectGet :: mode :- "slack" :> "oauth" :> "callback" :> Capture "project_id" Projects.ProjectId :> QPT "code" :> Get '[HTML] SlackInstall.SlackLink
   , clientMetadata :: mode :- "api" :> "client_metadata" :> Header "Authorization" Text :> Get '[JSON] ClientMetadata.ClientMetadata
-  , lemonWebhook :: mode :- "webhook" :> "lemon-squeezy" :> ReqBody '[JSON] LemonSqueezy.WebhookData :> Post '[HTML] (Html ())
+  , lemonWebhook :: mode :- "webhook" :> "lemon-squeezy" :> Header "X-Signature" Text :> ReqBody '[JSON] LemonSqueezy.WebhookData :> Post '[HTML] (Html ())
   }
   deriving stock (Generic)
 
