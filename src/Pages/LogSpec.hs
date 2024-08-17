@@ -66,7 +66,7 @@ spec = aroundAll withTestResources do
           pg2 <-
             toServantResponse trATCtx trSessAndHeader trLogger $ Log.apiLogH testPid Nothing Nothing cur Nothing Nothing Nothing (Just "loadmore") Nothing (Just "true") Nothing
           case pg2 of
-            Log.LogsGetRows pid requestVecs curatedColNames colIdxMap nextLogsURL source-> do
+            Log.LogsGetRows pid requestVecs curatedColNames colIdxMap nextLogsURL source -> do
               pid `shouldBe` testPid
               length requestVecs `shouldBe` 2
             _ -> error "Unexpected response"

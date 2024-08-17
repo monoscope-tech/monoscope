@@ -9,6 +9,7 @@ where
 
 import Control.Error (hush)
 import Data.Aeson (Value)
+import Data.Char
 import Data.Containers.ListUtils (nubOrd)
 import Data.Default (def)
 import Data.HashMap.Strict qualified as HM
@@ -51,7 +52,8 @@ import System.Types
 import Text.Megaparsec (parseMaybe)
 import Utils
 import Witch (from)
-import Data.Char
+
+
 -- $setup
 -- >>> import Relude
 -- >>> import Data.Vector qualified as Vector
@@ -150,9 +152,10 @@ apiLogH pid queryM cols' cursorM' sinceM fromM toM layoutM sourceM hxRequestM hx
         _ -> do
           addRespHeaders $ LogsGetError $ PageCtx bwconf "Something went wrong"
 
+
 data LogsGet
   = LogPage (PageCtx (ApiLogsPageData))
-  | LogsGetRows Projects.ProjectId (V.Vector (V.Vector Value)) [Text] (HM.HashMap Text Int) Text Text 
+  | LogsGetRows Projects.ProjectId (V.Vector (V.Vector Value)) [Text] (HM.HashMap Text Int) Text Text
   | LogsGetResultTable ApiLogsPageData Bool
   | LogsGetError (PageCtx (Text))
   | LogsGetErrorSimple Text
@@ -355,12 +358,12 @@ curateCols summaryCols cols = sortBy sortAccordingly filteredCols
 
 
 logItemRows_ :: Projects.ProjectId -> V.Vector (V.Vector Value) -> [Text] -> HM.HashMap Text Int -> Text -> Text -> Html ()
-logItemRows_ pid requests curatedCols colIdxMap nextLogsURL source= do
+logItemRows_ pid requests curatedCols colIdxMap nextLogsURL source = do
   forM_ requests \reqVec -> do
     let (logItemPath, _reqId) = fromMaybe ("", "") $ requestDumpLogItemUrlPath pid reqVec colIdxMap source
     let (_, errCount, errClass) = errorClass True reqVec colIdxMap
-    tr_ [class_ "cursor-pointer divide-x b--b2", [__|on click toggle .hidden on next <tr/> then toggle .expanded-log on me|]] $
-      forM_ curatedCols (td_ . logItemCol_ source pid reqVec colIdxMap)
+    tr_ [class_ "cursor-pointer divide-x b--b2", [__|on click toggle .hidden on next <tr/> then toggle .expanded-log on me|]]
+      $ forM_ curatedCols (td_ . logItemCol_ source pid reqVec colIdxMap)
     tr_ [class_ "hidden"] $ do
       -- used for when a row is expanded.
       td_ $ a_ [class_ $ "inline-block h-full " <> errClass, term "data-tippy-content" $ show errCount <> " errors attached to this request"] ""
@@ -466,7 +469,7 @@ logItemCol_ _ _ reqVec colIdxMap key =
     $ maybe "" unwrapJsonPrimValue (lookupVecByKey reqVec colIdxMap key)
 
 
-requestDumpLogItemUrlPath :: Projects.ProjectId -> V.Vector Value -> HM.HashMap Text Int ->Text -> Maybe (Text, Text)
+requestDumpLogItemUrlPath :: Projects.ProjectId -> V.Vector Value -> HM.HashMap Text Int -> Text -> Maybe (Text, Text)
 requestDumpLogItemUrlPath pid rd colIdxMap source = do
   rdId <- lookupVecTextByKey rd colIdxMap "id"
   rdCreatedAt <- lookupVecTextByKey rd colIdxMap "created_at" <|> lookupVecTextByKey rd colIdxMap "timestamp"

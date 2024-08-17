@@ -2,6 +2,7 @@ module ProcessMessageSpec (spec, testAuthContext) where
 
 import Data.Cache (Cache, newCache)
 import Data.Default (Default (..))
+import Data.HashMap.Strict qualified as HashMap
 import Data.Pool (Pool)
 import Data.Time (defaultTimeLocale, formatTime, getCurrentTime)
 import Data.UUID qualified as UUID
@@ -18,7 +19,6 @@ import Relude.Unsafe qualified as Unsafe
 import System.Clock (TimeSpec (TimeSpec))
 import System.Config qualified as Config
 import Test.Hspec (Spec, aroundAll, describe, it, shouldBe, shouldContain)
-import qualified Data.HashMap.Strict as HashMap
 
 
 pid :: Projects.ProjectId

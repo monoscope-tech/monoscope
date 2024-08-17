@@ -1,15 +1,15 @@
 module Pages.LogExplorer.LogItemSpec (spec) where
 
+import Control.Lens ((^?))
 import Data.Aeson (Value)
+import Data.Aeson.Lens
 import Data.Aeson.QQ (aesonQQ)
 import Data.Time (defaultTimeLocale, formatTime, getCurrentTime)
-import Models.Projects.Projects qualified as Projects
-import Pages.LogExplorer.LogItem qualified as LogItem
-import Control.Lens ((^?))
-import Data.Aeson.Lens
 import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUID
 import Models.Apis.RequestDumps (RequestDumpLogItem (..))
+import Models.Projects.Projects qualified as Projects
+import Pages.LogExplorer.LogItem qualified as LogItem
 import Pkg.TestUtils
 import ProcessMessage (processRequestMessages)
 import Relude
@@ -52,7 +52,7 @@ spec = aroundAll withTestResources do
         toServantResponse trATCtx trSessAndHeader trLogger $ LogItem.apiLogItemH testPid logId currentTime Nothing
 
       case pg of
-        LogItem.ApiLogItem logId item urlPath source -> do
+        LogItem.ApiLogItem _logId item urlPath source -> do
           item ^? key "urlPath" . _String `shouldBe` Just "/hello"
           item ^? key "rawUrl" . _String `shouldBe` Just "/hello?hi=byebye"
           item ^? key "method" . _String `shouldBe` Just "GET"

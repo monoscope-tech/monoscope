@@ -32,9 +32,9 @@ import Network.Wai.Handler.Warp (
 import Network.Wai.Log qualified as WaiLog
 import Network.Wai.Middleware.Heartbeat (heartbeatMiddleware)
 import Opentelemetry.OtlpServer qualified as OtlpServer
+import Pkg.Queue qualified as Queue
 import ProcessMessage (processMessages)
 import Relude
-import Pkg.Queue qualified as Queue
 import Servant qualified
 import Servant.Server.Generic (genericServeTWithContext)
 import System.Config (
@@ -46,9 +46,9 @@ import System.Config (
     googleServiceAccountB64,
     loggingDestination,
     messagesPerPubsubPullBatch,
+    otlpStreamTopics,
     port,
-    requestPubsubTopics,
-    otlpStreamTopics
+    requestPubsubTopics
   ),
   getAppContext,
  )

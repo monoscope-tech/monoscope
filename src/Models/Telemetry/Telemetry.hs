@@ -1,66 +1,76 @@
 {-# LANGUAGE OverloadedRecordDot #-}
 
-module Models.Telemetry.Telemetry (LogRecord (..)
-  ,logRecordByProjectAndId
-  ,SpanRecord (..), SeverityLevel (..), SpanStatus (..), SpanKind (..), bulkInsertLogs, bulkInsertSpans) where
+module Models.Telemetry.Telemetry (
+  LogRecord (..),
+  logRecordByProjectAndId,
+  SpanRecord (..),
+  SeverityLevel (..),
+  SpanStatus (..),
+  SpanKind (..),
+  bulkInsertLogs,
+  bulkInsertSpans,
+) where
 
 import Data.Aeson (Value)
 import Data.Aeson qualified as AE
 import Data.ByteString (ByteString)
-import Data.Text (Text, toUpper, toTitle)
+import Data.ByteString.Base16 qualified as B16
+import Data.Text (Text, toTitle, toUpper)
+import Data.Text.Encoding qualified as TE
 import Data.Time (UTCTime)
 import Data.UUID (UUID)
+import Data.UUID qualified as UUID
 import Data.Vector qualified as V
+import Database.PostgreSQL.Entity.DBT (QueryNature (..), queryOne)
+import Database.PostgreSQL.Simple (FromRow, ResultError (..))
+import Database.PostgreSQL.Simple.FromField (Conversion, FromField (..), fromField, returnError)
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.ToField (ToField, toField)
 import Database.PostgreSQL.Transact (DBT, execute, executeMany)
+import Deriving.Aeson qualified as DAE
+import Deriving.Aeson.Stock qualified as DAE
 import Effectful
 import Effectful.PostgreSQL.Transact.Effect (DB, dbtToEff)
 import GHC.Generics (Generic)
-import Relude
-import qualified Models.Projects.Projects as Projects
-import qualified Data.ByteString.Base16 as B16
-import qualified Data.Text.Encoding as TE
-import qualified Data.UUID as UUID
-import Database.PostgreSQL.Entity.DBT (QueryNature(..), queryOne)
-import Database.PostgreSQL.Simple (FromRow(..),ResultError (..))
-import Relude.Unsafe qualified as Unsafe
-import Database.PostgreSQL.Simple.FromField (FromField(..), Conversion)
-import qualified Deriving.Aeson as DAE
-import Deriving.Aeson.Stock qualified as DAE
 import GHC.TypeLits
-import Database.PostgreSQL.Simple.FromField (FromField, fromField, returnError)
+import Models.Projects.Projects qualified as Projects
+import Relude
+import Relude.Unsafe qualified as Unsafe
+
 
 newtype WrappedEnum (prefix :: Symbol) a = WrappedEnum a
   deriving (Generic)
 
-instance (Show a, Generic a) => ToField (WrappedEnum prefix a) where
+
+instance Show a => ToField (WrappedEnum prefix a) where
   toField (WrappedEnum a) = toField . toUpper . fromString . drop 2 . show $ a
 
-instance (KnownSymbol prefix, Typeable a, Read a, Show a, Generic a) => FromField (WrappedEnum prefix a) where
+
+instance (KnownSymbol prefix, Typeable a, Read a) => FromField (WrappedEnum prefix a) where
   fromField f bs = do
     let pfx = symbolVal (Proxy @prefix)
-    case bs of 
+    case bs of
       Nothing -> returnError UnexpectedNull f ""
       Just bss -> do
         pure $ WrappedEnum (Unsafe.read $ pfx <> (toString $ toTitle (decodeUtf8 bss)))
 
+
 data SeverityLevel = SLDebug | SLInfo | SLWarn | SLError | SLFatal
   deriving (Show, Generic, Read)
   deriving anyclass (NFData, AE.FromJSON, AE.ToJSON)
-  deriving (ToField, FromField) via WrappedEnum "SL" SeverityLevel 
+  deriving (ToField, FromField) via WrappedEnum "SL" SeverityLevel
 
 
 data SpanStatus = SSOk | SSError | SSUnset
   deriving (Show, Generic, Read)
   deriving anyclass (NFData, AE.FromJSON)
-  deriving (ToField, FromField) via WrappedEnum "SS" SpanStatus 
+  deriving (ToField, FromField) via WrappedEnum "SS" SpanStatus
 
 
 data SpanKind = SKInterval | SKServer | SKClient | SKProducer | SKConsumer
   deriving (Show, Generic, Read)
   deriving anyclass (NFData, AE.FromJSON)
-  deriving (ToField, FromField) via WrappedEnum "SK" SpanKind 
+  deriving (ToField, FromField) via WrappedEnum "SK" SpanKind
 
 
 data LogRecord = LogRecord
@@ -78,8 +88,9 @@ data LogRecord = LogRecord
   , instrumentationScope :: Value
   }
   deriving (Show, Generic)
-  deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake LogRecord 
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake LogRecord
   deriving anyclass (NFData, FromRow)
+
 
 instance AE.FromJSON ByteString where
   parseJSON = AE.withText "ByteString" $ \t ->
@@ -87,8 +98,10 @@ instance AE.FromJSON ByteString where
       Right bs -> return bs
       Left err -> fail $ "Invalid hex-encoded ByteString: " ++ err
 
+
 instance AE.ToJSON ByteString where
   toJSON = AE.String . TE.decodeUtf8 . B16.encode
+
 
 data SpanRecord = SpanRecord
   { projectId :: UUID
@@ -111,6 +124,7 @@ data SpanRecord = SpanRecord
   }
   deriving (Show, Generic)
 
+
 logRecordByProjectAndId :: DB :> es => Projects.ProjectId -> UTCTime -> UUID.UUID -> Eff es (Maybe LogRecord)
 logRecordByProjectAndId pid createdAt rdId = dbtToEff $ queryOne Select q (createdAt, pid, rdId)
   where
@@ -118,6 +132,7 @@ logRecordByProjectAndId pid createdAt rdId = dbtToEff $ queryOne Select q (creat
       [sql|SELECT project_id, id, timestamp, observed_timestamp, trace_id, span_id, severity_text, 
                   severity_number, body, attributes, resource, instrumentation_scope
              FROM telemetry.logs where (timestamp=?)  and project_id=? and id=? LIMIT 1|]
+
 
 -- Function to insert multiple log entries
 bulkInsertLogs :: DB :> es => V.Vector LogRecord -> Eff es ()

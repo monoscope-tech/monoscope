@@ -335,7 +335,6 @@ data RequestDumpLogItem = RequestDumpLogItem
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] RequestDumpLogItem
 
 
-
 requestDumpLogUrlPath
   :: Projects.ProjectId
   -> Maybe Text

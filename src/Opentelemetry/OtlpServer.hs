@@ -19,9 +19,10 @@ import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Debug.Pretty.Simple
 import Effectful
-import Effectful.PostgreSQL.Transact.Effect (dbtToEff, DB)
-import Log qualified
+import Effectful.PostgreSQL.Transact.Effect (DB, dbtToEff)
 import Effectful.Reader.Static (ask, asks)
+import Effectful.Reader.Static qualified as Eff
+import Log qualified
 import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Telemetry qualified as Telemetry
@@ -40,49 +41,29 @@ import Proto3.Wire qualified as HsProtobuf
 import Proto3.Wire.Decode qualified as HsProtobuf
 import Relude hiding (ask)
 import Relude.Unsafe qualified as Unsafe
-import Effectful.Reader.Static  qualified as Eff
 import Safe qualified
 import System.Config
 import System.Types (runBackground)
 
 
--- processList :: [(Text, ByteString)] -> HashMap Text Text -> Eff es [Text]
--- processList msgs attrs = do
---   traceShowM "In process list for otlp grpc"
---   traceShowM msgs
---   let msgs' = V.fromList msgs
---   appCtx <- ask @AuthContext
---   case HashMap.lookup "ce-type" attrs of
---     Just "org.opentelemetry.otlp.logs.v1" -> do
---       let (ackIds, logs) = V.unzip $ V.forM msgs' \(ackId, msg) ->
---             let resp = HsProtobuf.fromByteString msg :: Either HsProtobuf.ParseError ExportLogsServiceRequest
---              in case resp of
---                   Left err -> error $ "unable to parse logs service request with err " <> show err
---                   Right (ExportLogsServiceRequest a) -> (ackId, join $ V.map convertToLog a)
---       Telemetry.bulkInsertLogs $ join $ join logs
---       pure $ V.toList ackIds
---     _ -> error "unsupported opentelemetry data type"
--- 
-
 processList :: (Eff.Reader AuthContext :> es, DB :> es) => [(Text, ByteString)] -> HashMap Text Text -> Eff es [Text]
 processList [] _ = pure []
 processList msgs attrs = do
-  traceShowM "In process list for otlp grpc"
-  -- traceShowM msgs
-  traceShowM $ HashMap.lookup "ce-type" attrs
   let msgs' = V.fromList msgs
   appCtx <- ask @AuthContext
   case HashMap.lookup "ce-type" attrs of
     Just "org.opentelemetry.otlp.logs.v1" -> do
-      let results = msgs' & V.map \(ackId, msg) -> do
-            let resp = HsProtobuf.fromByteString msg :: Either HsProtobuf.ParseError ExportLogsServiceRequest
-            case resp of
-              Left err -> error $ "unable to parse logs service request with err " <> show err
-              Right (ExportLogsServiceRequest a) -> (ackId, join $ V.map convertToLog a)
+      let results =
+            msgs' & V.map \(ackId, msg) -> do
+              let resp = HsProtobuf.fromByteString msg :: Either HsProtobuf.ParseError ExportLogsServiceRequest
+              case resp of
+                Left err -> error $ "unable to parse logs service request with err " <> show err
+                Right (ExportLogsServiceRequest a) -> (ackId, join $ V.map convertToLog a)
       let (ackIds, logs) = V.unzip results
       Telemetry.bulkInsertLogs $ join logs
       pure $ V.toList ackIds
     _ -> error "unsupported opentelemetry data type"
+
 
 projectApiKeyFromB64 :: Text -> Text -> ProjectApiKeys.ProjectApiKeyId
 projectApiKeyFromB64 apiKeyEncryptionSecretKey projectKey = do
@@ -100,9 +81,6 @@ logsServiceExportH
   -> ServerRequest 'Normal ExportLogsServiceRequest ExportLogsServiceResponse
   -> IO (ServerResponse 'Normal ExportLogsServiceResponse)
 logsServiceExportH appLogger appCtx (ServerNormalRequest meta (ExportLogsServiceRequest req)) = do
-  pTraceShowM "Hello called"
-  pTraceShowM req
-  pTraceShowM meta
   let projectKey = T.replace "Bearer " "" $ decodeUtf8 $ Unsafe.fromJust $ Safe.headMay =<< M.lookup "authorization" meta.metadata.unMap
       apiKeyUUID = projectApiKeyFromB64 appCtx.config.apiKeyEncryptionSecretKey projectKey
   _ <- runBackground appLogger appCtx do
@@ -121,8 +99,8 @@ nanosecondsToUTC ns = posixSecondsToUTCTime (fromIntegral ns / 1e9)
 -- Convert a list of KeyValue to a JSONB object
 keyValueToJSONB :: V.Vector KeyValue -> AE.Value
 keyValueToJSONB kvs =
-  AE.object $
-    V.foldr (\kv acc -> (AEK.fromText $ LT.toStrict kv.keyValueKey, convertAnyValue (kv.keyValueValue)) : acc) [] kvs
+  AE.object
+    $ V.foldr (\kv acc -> (AEK.fromText $ LT.toStrict kv.keyValueKey, convertAnyValue (kv.keyValueValue)) : acc) [] kvs
 
 
 convertAnyValue :: Maybe AnyValue -> AE.Value
@@ -172,12 +150,17 @@ convertScopeLog resource sl =
   V.map (convertLogRecord resource sl.scopeLogsScope) sl.scopeLogsLogRecords
 
 
+anyValueToString :: AnyValueValue -> Maybe Text
+anyValueToString (AnyValueValueStringValue val) = Just $ toStrict val
+anyValueToString _ = Nothing
+
+
 convertLogRecord :: Maybe Resource -> Maybe InstrumentationScope -> LogRecord -> Telemetry.LogRecord
 convertLogRecord resource scope lr =
   Telemetry.LogRecord
     { projectId = fromMaybe (error "invalid at-project-id in logs") do
-        let (AnyValueValueStringValue v) = Unsafe.fromJust $ resource >>= \r -> find (\kv -> kv.keyValueKey == "at-project-id") r.resourceAttributes >>= (.keyValueValue) >>= (.anyValueValue)
-        UUID.fromText $ toStrict v
+        let v = Unsafe.fromJust $ resource >>= \r -> find (\kv -> kv.keyValueKey == "at-project-id") r.resourceAttributes >>= (.keyValueValue) >>= (.anyValueValue)
+        UUID.fromText =<< anyValueToString v
     , id = Nothing
     , timestamp = nanosecondsToUTC lr.logRecordTimeUnixNano
     , observedTimestamp = nanosecondsToUTC lr.logRecordObservedTimeUnixNano
@@ -198,9 +181,9 @@ traceServiceExportH
   -> ServerRequest 'Normal ExportTraceServiceRequest ExportTraceServiceResponse
   -> IO (ServerResponse 'Normal ExportTraceServiceResponse)
 traceServiceExportH appLogger appCtx (ServerNormalRequest _meta (ExportTraceServiceRequest req)) = do
-  pTraceShowM "Hello trace called"
-  pTraceShowM req
-  pTraceShowM _meta
+  -- pTraceShowM "Hello trace called"
+  -- pTraceShowM req
+  -- pTraceShowM _meta
   return (ServerNormalResponse (ExportTraceServiceResponse Nothing) mempty StatusOk "")
 
 
