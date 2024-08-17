@@ -150,27 +150,6 @@ apiLogH pid queryM cols' cursorM' sinceM fromM toM layoutM sourceM hxRequestM hx
         _ -> do
           addRespHeaders $ LogsGetError $ PageCtx bwconf "Something went wrong"
 
-validateQuery
-  :: Text
-  -> Either Text (Maybe (Vector.Vector (Vector.Vector Value), [Text], Int))
-validateQuery query
-  | containsInvalidPattern query = Left "Invalid query"
-  | otherwise = Right Nothing  
-
-containsInvalidPattern :: Text -> Bool
-containsInvalidPattern q = any (`T.isInfixOf` q) invalidPatterns || hasInvalidSymbols q
-
-invalidPatterns :: [Text]
-invalidPatterns =
-  [ "<<<", ">>>", "----", "^^^", "~~~", "!!!", "***" 
-  ]
-
-hasInvalidSymbols :: Text -> Bool
-hasInvalidSymbols = T.any (not . validChar)
-
-validChar :: Char -> Bool
-validChar c = isAlphaNum c || c `elem` "._-+=@#$%&*()<>[]{}|\\/:;\"' "
-
 data LogsGet
   = LogPage (PageCtx (ApiLogsPageData))
   | LogsGetRows Projects.ProjectId (V.Vector (V.Vector Value)) [Text] (HM.HashMap Text Int) Text Text 
