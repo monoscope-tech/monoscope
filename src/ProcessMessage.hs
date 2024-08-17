@@ -109,8 +109,10 @@ import Utils (eitherStrToText)
 processMessages
   :: (Reader.Reader Config.AuthContext :> es, Time.Time :> es, DB :> es, Log :> es, IOE :> es)
   => [(Text, ByteString)]
+  -> HashMap Text Text
   -> Eff es [Text]
-processMessages msgs = do
+processMessages [] _ = pure []
+processMessages msgs attrs= do
   let msgs' =
         msgs <&> \(ackId, msg) -> do
           let sanitizedJsonStr = replaceNullChars $ decodeUtf8 msg
@@ -201,7 +203,7 @@ processRequestMessage recMsg = do
     mpjCache <- withPool appCtx.jobsPool $ Projects.projectCacheById pid'
     pure $ fromMaybe projectCacheDefault mpjCache
   recId <- liftIO nextRandom
-  pure
-    $ if projectCacheVal.paymentPlan == "Free" && projectCacheVal.weeklyRequestCount > 5000
+  pure $
+    if projectCacheVal.paymentPlan == "Free" && projectCacheVal.weeklyRequestCount > 5000
       then Right (Nothing, Nothing, Nothing, V.empty, V.empty, V.empty)
       else RequestMessages.requestMsgToDumpAndEndpoint projectCacheVal recMsg timestamp recId

@@ -246,8 +246,8 @@ dashboardPage pid cid steps passed failed schedule reqsVecM =
                 colIdxMap = listToIndexHashMap colNames
                 reqLastCreatedAtM = (\r -> lookupVecTextByKey r colIdxMap "created_at") =<< (requestVecs V.!? (V.length requestVecs - 1))
                 curatedColNames = nubOrd $ Log.curateCols [""] colNames
-                nextLogsURL = RequestDumps.requestDumpLogUrlPath pid query Nothing reqLastCreatedAtM Nothing Nothing Nothing (Just "loadmore")
-                resetLogsURL = RequestDumps.requestDumpLogUrlPath pid query Nothing Nothing Nothing Nothing Nothing Nothing
+                nextLogsURL = RequestDumps.requestDumpLogUrlPath pid query Nothing reqLastCreatedAtM Nothing Nothing Nothing (Just "loadmore") "requests"
+                resetLogsURL = RequestDumps.requestDumpLogUrlPath pid query Nothing Nothing Nothing Nothing Nothing Nothing "requests"
                 page =
                   Log.ApiLogsPageData
                     { pid
@@ -263,6 +263,7 @@ dashboardPage pid cid steps passed failed schedule reqsVecM =
                     , cursor = Nothing
                     , isTestLog = Just True
                     , emptyStateUrl = Just $ "/p/" <> pid.toText <> "/testing/" <> cid.toText
+                    , source = "requests"
                     }
             Log.resultTable_ page False
           _ -> pass

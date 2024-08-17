@@ -5,7 +5,8 @@ import Data.Aeson.QQ (aesonQQ)
 import Data.Time (defaultTimeLocale, formatTime, getCurrentTime)
 import Models.Projects.Projects qualified as Projects
 import Pages.LogExplorer.LogItem qualified as LogItem
-
+import Control.Lens ((^?))
+import Data.Aeson.Lens
 import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUID
 import Models.Apis.RequestDumps (RequestDumpLogItem (..))
@@ -27,7 +28,7 @@ spec = aroundAll withTestResources do
       currentTime <- getCurrentTime
       logId <- UUID.nextRandom
       pg <-
-        toServantResponse trATCtx trSessAndHeader trLogger $ LogItem.apiLogItemH testPid logId currentTime
+        toServantResponse trATCtx trSessAndHeader trLogger $ LogItem.apiLogItemH testPid logId currentTime Nothing
       case pg of
         LogItem.ApiLogItemNotFound msg -> do
           msg `shouldBe` "Invalid request log ID"
@@ -48,15 +49,15 @@ spec = aroundAll withTestResources do
 
       let logId = Unsafe.fromJust $ UUID.fromText "00000000-0000-0000-0000-000000000000"
       pg <-
-        toServantResponse trATCtx trSessAndHeader trLogger $ LogItem.apiLogItemH testPid logId currentTime
+        toServantResponse trATCtx trSessAndHeader trLogger $ LogItem.apiLogItemH testPid logId currentTime Nothing
 
       case pg of
-        LogItem.ApiLogItem (item, urlPath) -> do
-          item.urlPath `shouldBe` "/hello"
-          item.rawUrl `shouldBe` "/hello?hi=byebye"
-          item.method `shouldBe` "GET"
-          item.statusCode `shouldBe` 200
-          item.errorsCount `shouldBe` 0
+        LogItem.ApiLogItem logId item urlPath source -> do
+          item ^? key "urlPath" . _String `shouldBe` Just "/hello"
+          item ^? key "rawUrl" . _String `shouldBe` Just "/hello?hi=byebye"
+          item ^? key "method" . _String `shouldBe` Just "GET"
+          item ^? key "statusCode" . _Number `shouldBe` Just 200
+          item ^? key "errorsCount" . _Number `shouldBe` Just 0
         _ -> error "Unexpected response"
 
 

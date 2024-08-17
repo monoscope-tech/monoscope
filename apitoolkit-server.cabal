@@ -160,6 +160,7 @@ library
       Pkg.Parser.Stats
       Pkg.Parser.Types
       Pkg.ParserSpec
+      Pkg.Queue
       Pkg.TestUtils
       ProcessMessage
       ProcessMessageSpec
@@ -211,6 +212,7 @@ library
     , aeson-qq
     , async
     , base
+    , base16-bytestring
     , base64
     , bytestring
     , cache >=0.1.3.0

@@ -1,6 +1,7 @@
 module Pages.LogExplorer.LogItem (expandAPIlogItemH, expandAPIlogItem', apiLogItemH, ApiLogItem (..), jsonValueToHtmlTree) where
 
 import Data.Aeson ((.=))
+import Models.Telemetry.Telemetry qualified as Telemetry
 import Data.Aeson qualified as AE
 import Data.Aeson.KeyMap qualified as AEK
 import Data.ByteString.Lazy qualified as BS
@@ -12,6 +13,7 @@ import Data.Time.Format (defaultTimeLocale, formatTime)
 import Data.UUID qualified as UUID
 import Data.Vector (iforM_)
 import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
+import Data.Time.Format.ISO8601 (ISO8601 (iso8601Format), formatShow)
 import Lucid
 import Lucid.Aria qualified as Aria
 import Lucid.Htmx (hxGet_, hxSwap_, hxTrigger_)
@@ -21,6 +23,7 @@ import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
 import Network.URI (escapeURIString, isUnescapedInURI)
 import Pages.Components qualified as Components
+import Witch (from)
 import PyF (fmt)
 import Relude
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
@@ -137,24 +140,24 @@ expandAPIlogItem' pid req modal = do
 
       div_ [class_ "tabs tabs-bordered place-content-start ", role_ "tablist"] do
         input_ [type_ "radio", name_ $ "req-details-tabx-" <> show req.id, role_ "tab", Aria.label_ "Body", class_ "tab w-max", checked_]
-        div_ [class_ "tab-content grow w-full", role_ "tabpanel"]
-          $ div_ [class_ "bg-gray-50 m-4  p-2 rounded-lg border break-all", id_ "req_body_json"]
-          $ jsonValueToHtmlTree req.requestBody
+        div_ [class_ "tab-content grow w-full", role_ "tabpanel"] $
+          div_ [class_ "bg-gray-50 m-4  p-2 rounded-lg border break-all", id_ "req_body_json"] $
+            jsonValueToHtmlTree req.requestBody
 
         input_ [type_ "radio", name_ $ "req-details-tabx-" <> show req.id, role_ "tab", Aria.label_ "Headers", class_ "tab"]
-        div_ [class_ "tab-content grow w-full", role_ "tabpanel"]
-          $ div_ [class_ "bg-gray-50 m-4 p-2 rounded-lg border break-all", id_ "req_headers_json"]
-          $ jsonValueToHtmlTree req.requestHeaders
+        div_ [class_ "tab-content grow w-full", role_ "tabpanel"] $
+          div_ [class_ "bg-gray-50 m-4 p-2 rounded-lg border break-all", id_ "req_headers_json"] $
+            jsonValueToHtmlTree req.requestHeaders
 
         input_ [type_ "radio", name_ $ "req-details-tabx-" <> show req.id, role_ "tab", Aria.label_ "Query Params", class_ "tab break-keep"]
-        div_ [class_ "tab-content grow w-full", role_ "tabpanel"]
-          $ div_ [class_ "bg-gray-50 m-4 p-2 rounded-lg border", id_ "query_params_json"]
-          $ jsonValueToHtmlTree req.queryParams
+        div_ [class_ "tab-content grow w-full", role_ "tabpanel"] $
+          div_ [class_ "bg-gray-50 m-4 p-2 rounded-lg border", id_ "query_params_json"] $
+            jsonValueToHtmlTree req.queryParams
 
         input_ [type_ "radio", name_ $ "req-details-tabx-" <> show req.id, role_ "tab", Aria.label_ "Path Params", class_ "tab break-keep"]
-        div_ [class_ "tab-content grow w-full", role_ "tabpanel"]
-          $ div_ [class_ "bg-gray-50 m-4 p-2 rounded-lg border", id_ "path_params_json"]
-          $ jsonValueToHtmlTree req.pathParams
+        div_ [class_ "tab-content grow w-full", role_ "tabpanel"] $
+          div_ [class_ "bg-gray-50 m-4 p-2 rounded-lg border", id_ "path_params_json"] $
+            jsonValueToHtmlTree req.pathParams
 
     -- response details
     div_ [class_ "border rounded-lg mt-8", id_ "reponse_detail_container"] do
@@ -163,66 +166,78 @@ expandAPIlogItem' pid req modal = do
 
       div_ [class_ "tabs tabs-bordered place-content-start grid grid-flow-col", role_ "tablist"] do
         input_ [type_ "radio", name_ "resp-details-tab", role_ "tab", Aria.label_ "Body", class_ "tab", checked_]
-        div_ [class_ "tab-content", role_ "tabpanel"]
-          $ div_ [class_ "bg-gray-50 m-4  p-2 rounded-lg border", id_ "res_body_json"]
-          $ jsonValueToHtmlTree req.responseBody
+        div_ [class_ "tab-content", role_ "tabpanel"] $
+          div_ [class_ "bg-gray-50 m-4  p-2 rounded-lg border", id_ "res_body_json"] $
+            jsonValueToHtmlTree req.responseBody
 
         input_ [type_ "radio", name_ "resp-details-tab", role_ "tab", Aria.label_ "Headers", class_ "tab"]
-        div_ [class_ "tab-content", role_ "tabpanel"]
-          $ div_ [class_ "bg-gray-50 m-4 p-2 rounded-lg border", id_ "res_headers_json"]
-          $ jsonValueToHtmlTree req.responseHeaders
+        div_ [class_ "tab-content", role_ "tabpanel"] $
+          div_ [class_ "bg-gray-50 m-4 p-2 rounded-lg border", id_ "res_headers_json"] $
+            jsonValueToHtmlTree req.responseHeaders
 
 
-apiLogItemH :: Projects.ProjectId -> UUID.UUID -> UTCTime -> ATAuthCtx (RespHeaders (ApiLogItem))
-apiLogItemH pid rdId createdAt = do
+apiLogItemH :: Projects.ProjectId -> UUID.UUID -> UTCTime -> Maybe Text -> ATAuthCtx (RespHeaders (ApiLogItem))
+apiLogItemH pid rdId createdAt sourceM = do
+  let source = (fromMaybe "requests" sourceM)
   _ <- Sessions.sessionAndProject pid
-  logItemM <- dbtToEff $ RequestDumps.selectRequestDumpByProjectAndId pid createdAt rdId
-  addRespHeaders $ case logItemM of
-    Just req -> ApiLogItem (req, (RequestDumps.requestDumpLogItemUrlPath pid req))
+  logItem <- case sourceM of
+    Just "logs" -> do
+      logItem <- Telemetry.logRecordByProjectAndId pid createdAt rdId
+      pure $ AE.toJSON <$> logItem
+    _ -> do
+      logItemM <- dbtToEff $ RequestDumps.selectRequestDumpByProjectAndId pid createdAt rdId 
+      pure $ selectiveReqToJson <$> logItemM
+  addRespHeaders $ case logItem of
+    Just req -> ApiLogItem rdId req (requestDumpLogItemUrlPath pid rdId createdAt) source
     Nothing -> ApiLogItemNotFound "Invalid request log ID"
+
+requestDumpLogItemUrlPath :: Projects.ProjectId -> UUID.UUID -> UTCTime -> Text
+requestDumpLogItemUrlPath pid rdId timestamp= "/p/" <> pid.toText <> "/log_explorer/" <> UUID.toText rdId <> "/" <> from @String (formatShow iso8601Format timestamp)
+
 
 
 data ApiLogItem
-  = ApiLogItem (RequestDumps.RequestDumpLogItem, Text)
+  = ApiLogItem UUID.UUID AE.Value Text Text
   | ApiLogItemNotFound Text
   | LogItemExpanded Projects.ProjectId RequestDumps.RequestDumpLogItem Bool
 
 
 instance ToHtml ApiLogItem where
-  toHtml (ApiLogItem (req, expandItemPath)) = toHtml $ apiLogItemView req expandItemPath
+  toHtml (ApiLogItem logId req expandItemPath source) = toHtml $ apiLogItemView logId req expandItemPath source
   toHtml (ApiLogItemNotFound message) = div_ [] $ toHtml message
   toHtml (LogItemExpanded pid log_item is_modal) = toHtml $ expandAPIlogItem' pid log_item is_modal
   toHtmlRaw = toHtml
 
 
-apiLogItemView :: RequestDumps.RequestDumpLogItem -> Text -> Html ()
-apiLogItemView req expandItemPath = do
+apiLogItemView :: UUID.UUID -> AE.Value -> Text -> Text -> Html ()
+apiLogItemView logId req expandItemPath source = do
   div_ [class_ "flex items-center gap-2"] do
     Components.drawerWithURLContent_
-      ("expand-log-drawer-" <> UUID.toText req.id)
-      (expandItemPath <> "/detailed")
+      ("expand-log-drawer-" <> UUID.toText logId)
+      (expandItemPath <> "/detailed?source=" <> source)
       $ span_ [class_ "btn btn-sm btn-outline"] ("Expand" >> faSprite_ "expand" "regular" "h-3 w-3")
-    let reqJson = decodeUtf8 $ AE.encode $ AE.toJSON req
-    button_
-      [ class_ "btn btn-sm btn-outline"
-      , term "data-reqJson" reqJson
-      , onclick_ "window.buildCurlRequest(event)"
-      ]
-      (span_ [] "Copy as curl" >> faSprite_ "copy" "regular" "h-3 w-3")
+    let reqJson = decodeUtf8 $ AE.encode $ req
+    when (source == "requests") $
+      button_
+        [ class_ "btn btn-sm btn-outline"
+        , term "data-reqJson" reqJson
+        , onclick_ "window.buildCurlRequest(event)"
+        ]
+        (span_ [] "Copy as curl" >> faSprite_ "copy" "regular" "h-3 w-3")
     button_
       [ class_ "btn btn-sm btn-outline"
       , onclick_ "downloadJson(event)"
       , term "data-reqJson" reqJson
       ]
       (span_ [] "Download" >> faSprite_ "arrow-down-to-line" "regular" "h-3 w-3")
-  jsonValueToHtmlTree $ selectiveToJson req
+  jsonValueToHtmlTree $ req
 
 
 -- Function to selectively convert RequestDumpLogItem to JSON
-selectiveToJson :: RequestDumps.RequestDumpLogItem -> AE.Value
-selectiveToJson req =
-  AE.object
-    $ concat @[]
+selectiveReqToJson :: RequestDumps.RequestDumpLogItem -> AE.Value
+selectiveReqToJson req =
+  AE.object $
+    concat @[]
       [ ["created_at" .= req.createdAt]
       , ["duration_ns" .= req.durationNs]
       , ["errors" .= req.errors]

@@ -34,6 +34,7 @@ import Network.Wai.Middleware.Heartbeat (heartbeatMiddleware)
 import Opentelemetry.OtlpServer qualified as OtlpServer
 import ProcessMessage (processMessages)
 import Relude
+import Pkg.Queue qualified as Queue
 import Servant qualified
 import Servant.Server.Generic (genericServeTWithContext)
 import System.Config (
@@ -46,7 +47,8 @@ import System.Config (
     loggingDestination,
     messagesPerPubsubPullBatch,
     port,
-    requestPubsubTopics
+    requestPubsubTopics,
+    otlpStreamTopics
   ),
   getAppContext,
  )
@@ -95,64 +97,19 @@ runServer appLogger env = do
   -- let ojLogger logLevel logEvent = logger <& show (logLevel, logEvent)
   -- let ojTable = "background_jobs" :: OJTypes.TableName
   -- let ojCfg = OJConfig.mkUIConfig ojLogger ojTable poolConn id
-
+  let exceptionLogger = logException env.config.environment appLogger
   asyncs <-
     liftIO
       $ sequence
       $ concat @[]
         [ [async $ runSettings warpSettings wrappedServer]
         , -- , [async $ OJCli.defaultWebUI ojStartArgs ojCfg] -- Uncomment or modify as needed
-          [async $ Safe.withException (pubsubService appLogger env) (logException env.config.environment appLogger) | env.config.enablePubsubService]
-        , [async $ Safe.withException bgJobWorker (logException env.config.environment appLogger) | env.config.enableBackgroundJobs]
-        , [async $ Safe.withException (OtlpServer.runServer appLogger env) (logException env.config.environment appLogger)]
+          [async $ Safe.withException (Queue.pubsubService appLogger env env.config.requestPubsubTopics processMessages) exceptionLogger | env.config.enablePubsubService]
+        , [async $ Safe.withException bgJobWorker exceptionLogger | env.config.enableBackgroundJobs]
+        , [async $ Safe.withException (OtlpServer.runServer appLogger env) exceptionLogger]
+        , [async $ Safe.withException (Queue.pubsubService appLogger env env.config.otlpStreamTopics OtlpServer.processList) exceptionLogger | (not . null) env.config.otlpStreamTopics]
         ]
   void $ liftIO $ waitAnyCancel asyncs
-
-
--- pubsubService connects to the pubsub service and listens for  messages,
--- then it calls the processMessage function to process the messages, and
--- acknoleges the list message in one request.
-pubsubService :: Log.Logger -> AuthContext -> IO ()
-pubsubService appLogger appCtx = do
-  let envConfig = appCtx.config
-  env <- case envConfig.googleServiceAccountB64 of
-    "" -> Google.newEnv <&> (Google.envScopes L..~ pubSubScope)
-    sa -> do
-      let credJSON = either error id $ LB64.decodeBase64Untyped (LT.encodeUtf8 sa)
-      let credsE = Google.fromJSONCredentials credJSON
-      let creds = either (error . toText) id credsE
-      -- let Right creds = credsE
-      managerG <- Google.newManager Google.tlsManagerSettings
-      Google.newEnvWith creds (\_ _ -> pass) managerG <&> (Google.envScopes L..~ pubSubScope)
-
-  let pullReq = PubSub.newPullRequest & field @"maxMessages" L.?~ fromIntegral envConfig.messagesPerPubsubPullBatch
-
-  forever
-    $ runResourceT
-    $ forM envConfig.requestPubsubTopics \topic -> do
-      result <- tryAny do
-        let subscription = "projects/past-3/subscriptions/" <> topic <> "-sub"
-        pullResp <- Google.send env $ PubSub.newPubSubProjectsSubscriptionsPull pullReq subscription
-        let messages = fromMaybe [] (pullResp L.^. field @"receivedMessages")
-        let msgsB64 =
-              messages & map \msg -> do
-                ackId <- msg.ackId
-                b64Msg <- msg ^? field @"message" . _Just . field @"data'" . _Just . _Base64
-                Just (ackId, b64Msg)
-
-        msgIds <- liftIO $ runBackground appLogger appCtx $ processMessages (catMaybes msgsB64)
-        let acknowlegReq = PubSub.newAcknowledgeRequest & field @"ackIds" L..~ Just msgIds
-        unless (null msgIds) $ void $ PubSub.newPubSubProjectsSubscriptionsAcknowledge acknowlegReq subscription & Google.send env
-      case result of
-        Left (e) -> do
-          liftIO $ Log.runLogT "apitoolkit" appLogger Log.LogAttention $ Log.logAttention "Run Pubsub exception" (show e)
-          pass
-        Right _ -> pass
-
-
--- pubSubScope :: Proxy PubSub.Pubsub'FullControl
-pubSubScope :: Proxy '["https://www.googleapis.com/auth/pubsub"]
-pubSubScope = Proxy
 
 
 mkServer

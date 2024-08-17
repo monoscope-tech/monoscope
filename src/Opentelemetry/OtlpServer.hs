@@ -1,6 +1,6 @@
 {-# LANGUAGE OverloadedRecordDot #-}
 
-module Opentelemetry.OtlpServer (runServer) where
+module Opentelemetry.OtlpServer (runServer, processList) where
 
 import Data.Aeson (object, (.=))
 import Data.Aeson qualified as AE
@@ -8,6 +8,7 @@ import Data.Aeson.Key qualified as AEK
 import Data.ByteString qualified as BS
 import Data.ByteString.Base64 qualified as B64
 import Data.ByteString.Char8 qualified as C
+import Data.HashMap.Strict qualified as HashMap
 import Data.Map qualified as M
 import Data.Scientific
 import Data.Text qualified as T
@@ -17,8 +18,10 @@ import Data.Time.Clock.POSIX
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Debug.Pretty.Simple
-import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
+import Effectful
+import Effectful.PostgreSQL.Transact.Effect (dbtToEff, DB)
 import Log qualified
+import Effectful.Reader.Static (ask, asks)
 import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Telemetry qualified as Telemetry
@@ -34,11 +37,61 @@ import Opentelemetry.Proto.Resource.V1.Resource
 import Proto3.Suite.Class qualified as HsProtobuf
 import Proto3.Suite.Types qualified as HsProtobuf
 import Proto3.Wire qualified as HsProtobuf
-import Relude
+import Proto3.Wire.Decode qualified as HsProtobuf
+import Relude hiding (ask)
 import Relude.Unsafe qualified as Unsafe
+import Effectful.Reader.Static  qualified as Eff
 import Safe qualified
 import System.Config
 import System.Types (runBackground)
+
+
+-- processList :: [(Text, ByteString)] -> HashMap Text Text -> Eff es [Text]
+-- processList msgs attrs = do
+--   traceShowM "In process list for otlp grpc"
+--   traceShowM msgs
+--   let msgs' = V.fromList msgs
+--   appCtx <- ask @AuthContext
+--   case HashMap.lookup "ce-type" attrs of
+--     Just "org.opentelemetry.otlp.logs.v1" -> do
+--       let (ackIds, logs) = V.unzip $ V.forM msgs' \(ackId, msg) ->
+--             let resp = HsProtobuf.fromByteString msg :: Either HsProtobuf.ParseError ExportLogsServiceRequest
+--              in case resp of
+--                   Left err -> error $ "unable to parse logs service request with err " <> show err
+--                   Right (ExportLogsServiceRequest a) -> (ackId, join $ V.map convertToLog a)
+--       Telemetry.bulkInsertLogs $ join $ join logs
+--       pure $ V.toList ackIds
+--     _ -> error "unsupported opentelemetry data type"
+-- 
+
+processList :: (Eff.Reader AuthContext :> es, DB :> es) => [(Text, ByteString)] -> HashMap Text Text -> Eff es [Text]
+processList [] _ = pure []
+processList msgs attrs = do
+  traceShowM "In process list for otlp grpc"
+  -- traceShowM msgs
+  traceShowM $ HashMap.lookup "ce-type" attrs
+  let msgs' = V.fromList msgs
+  appCtx <- ask @AuthContext
+  case HashMap.lookup "ce-type" attrs of
+    Just "org.opentelemetry.otlp.logs.v1" -> do
+      let results = msgs' & V.map \(ackId, msg) -> do
+            let resp = HsProtobuf.fromByteString msg :: Either HsProtobuf.ParseError ExportLogsServiceRequest
+            case resp of
+              Left err -> error $ "unable to parse logs service request with err " <> show err
+              Right (ExportLogsServiceRequest a) -> (ackId, join $ V.map convertToLog a)
+      let (ackIds, logs) = V.unzip results
+      Telemetry.bulkInsertLogs $ join logs
+      pure $ V.toList ackIds
+    _ -> error "unsupported opentelemetry data type"
+
+projectApiKeyFromB64 :: Text -> Text -> ProjectApiKeys.ProjectApiKeyId
+projectApiKeyFromB64 apiKeyEncryptionSecretKey projectKey = do
+  let authTextE = B64.decodeBase64Untyped $ encodeUtf8 $ projectKey
+  case authTextE of
+    Left err -> error err
+    Right authText -> do
+      let decryptedKey = ProjectApiKeys.decryptAPIKey (encodeUtf8 apiKeyEncryptionSecretKey) authText
+      Unsafe.fromJust $ ProjectApiKeys.ProjectApiKeyId <$> UUID.fromASCIIBytes decryptedKey
 
 
 logsServiceExportH
@@ -50,17 +103,12 @@ logsServiceExportH appLogger appCtx (ServerNormalRequest meta (ExportLogsService
   pTraceShowM "Hello called"
   pTraceShowM req
   pTraceShowM meta
-  let authHeader = Unsafe.fromJust $ Safe.headMay =<< M.lookup "authorization" meta.metadata.unMap
-  let authTextE = B64.decodeBase64Untyped $ encodeUtf8 $ T.replace "Bearer " "" $ decodeUtf8 $ authHeader
-  apiKeyUUID <- case authTextE of
-    Left err -> error err
-    Right authText -> do
-      let decryptedKey = ProjectApiKeys.decryptAPIKey (encodeUtf8 appCtx.config.apiKeyEncryptionSecretKey) authText
-      pure $ Unsafe.fromJust $ ProjectApiKeys.ProjectApiKeyId <$> UUID.fromASCIIBytes decryptedKey
-
+  let projectKey = T.replace "Bearer " "" $ decodeUtf8 $ Unsafe.fromJust $ Safe.headMay =<< M.lookup "authorization" meta.metadata.unMap
+      apiKeyUUID = projectApiKeyFromB64 appCtx.config.apiKeyEncryptionSecretKey projectKey
   _ <- runBackground appLogger appCtx do
     pApiKey <- dbtToEff $ ProjectApiKeys.getProjectApiKey apiKeyUUID
-    let logRecords = join $ V.map (convertToLog $ (Unsafe.fromJust pApiKey).projectId.unProjectId) req
+    -- No longer inserting the log using project id from api key. Maybe atleast assert the project id at this point?
+    let logRecords = join $ V.map convertToLog req
     Telemetry.bulkInsertLogs logRecords
   return (ServerNormalResponse (ExportLogsServiceResponse Nothing) mempty StatusOk "")
 
@@ -73,8 +121,8 @@ nanosecondsToUTC ns = posixSecondsToUTCTime (fromIntegral ns / 1e9)
 -- Convert a list of KeyValue to a JSONB object
 keyValueToJSONB :: V.Vector KeyValue -> AE.Value
 keyValueToJSONB kvs =
-  AE.object
-    $ V.foldr (\kv acc -> (AEK.fromText $ LT.toStrict kv.keyValueKey, convertAnyValue (kv.keyValueValue)) : acc) [] kvs
+  AE.object $
+    V.foldr (\kv acc -> (AEK.fromText $ LT.toStrict kv.keyValueKey, convertAnyValue (kv.keyValueValue)) : acc) [] kvs
 
 
 convertAnyValue :: Maybe AnyValue -> AE.Value
@@ -115,19 +163,21 @@ instrumentationScopeToJSONB Nothing = AE.Null
 
 
 -- Convert ExportLogsServiceRequest to [Log]
-convertToLog :: UUID.UUID -> ResourceLogs -> V.Vector Telemetry.LogRecord
-convertToLog projectId resourceLogs = join $ V.map (convertScopeLog projectId resourceLogs.resourceLogsResource) resourceLogs.resourceLogsScopeLogs
+convertToLog :: ResourceLogs -> V.Vector Telemetry.LogRecord
+convertToLog resourceLogs = join $ V.map (convertScopeLog resourceLogs.resourceLogsResource) resourceLogs.resourceLogsScopeLogs
 
 
-convertScopeLog :: UUID.UUID -> Maybe Resource -> ScopeLogs -> V.Vector Telemetry.LogRecord
-convertScopeLog projectId resource sl =
-  V.map (convertLogRecord projectId resource sl.scopeLogsScope) sl.scopeLogsLogRecords
+convertScopeLog :: Maybe Resource -> ScopeLogs -> V.Vector Telemetry.LogRecord
+convertScopeLog resource sl =
+  V.map (convertLogRecord resource sl.scopeLogsScope) sl.scopeLogsLogRecords
 
 
-convertLogRecord :: UUID.UUID -> Maybe Resource -> Maybe InstrumentationScope -> LogRecord -> Telemetry.LogRecord
-convertLogRecord projectId resource scope lr =
+convertLogRecord :: Maybe Resource -> Maybe InstrumentationScope -> LogRecord -> Telemetry.LogRecord
+convertLogRecord resource scope lr =
   Telemetry.LogRecord
-    { projectId = projectId
+    { projectId = fromMaybe (error "invalid at-project-id in logs") do
+        let (AnyValueValueStringValue v) = Unsafe.fromJust $ resource >>= \r -> find (\kv -> kv.keyValueKey == "at-project-id") r.resourceAttributes >>= (.keyValueValue) >>= (.anyValueValue)
+        UUID.fromText $ toStrict v
     , id = Nothing
     , timestamp = nanosecondsToUTC lr.logRecordTimeUnixNano
     , observedTimestamp = nanosecondsToUTC lr.logRecordObservedTimeUnixNano
