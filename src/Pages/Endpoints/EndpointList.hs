@@ -22,7 +22,7 @@ import Pkg.Components.ItemsList qualified as ItemsList
 import PyF qualified
 import Relude hiding (ask, asks)
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
-import Utils (deleteParam,faSprite_)
+import Utils (deleteParam, faSprite_)
 
 
 endpointListGetH
@@ -61,17 +61,17 @@ endpointListGetH pid layoutM pageM filterTM hostM projectHostM' sortM hxRequestM
           , currProject = Just project
           , pageTitle = "Endpoints"
           , navTabs =
-              Just
-                $ toHtml
-                $ Components.TabFilter
-                  { current = currentFilterTab
-                  , currentURL
-                  , options =
-                      [ Components.TabFilterOpt{name = "Active", count = Nothing}
-                      , Components.TabFilterOpt{name = "Inbox", count = Just inboxCount}
-                      , Components.TabFilterOpt{name = "Archived", count = Nothing}
-                      ]
-                  }
+              Just $
+                toHtml $
+                  Components.TabFilter
+                    { current = currentFilterTab
+                    , currentURL
+                    , options =
+                        [ Components.TabFilterOpt{name = "Active", count = Nothing}
+                        , Components.TabFilterOpt{name = "Inbox", count = Just inboxCount}
+                        , Components.TabFilterOpt{name = "Archived", count = Nothing}
+                        ]
+                    }
           }
 
   let nextFetchUrl = currentURL <> "&page=" <> show (page + 1) <> "&load_more=true"
@@ -99,8 +99,8 @@ endpointListGetH pid layoutM pageM filterTM hostM projectHostM' sortM hxRequestM
                   hostFilter_ currentURL projHosts hostM projectHostM
               , search = Just $ ItemsList.SearchCfg{viaQueryParam = Just (fromMaybe "" searchM)}
               , zeroState =
-                  Just
-                    $ ItemsList.ZeroState
+                  Just $
+                    ItemsList.ZeroState
                       { icon = "empty-set"
                       , title = "Waiting for events"
                       , description = "You're currently not sending any data to APItoolkit from your backends yet."
@@ -164,13 +164,13 @@ renderEndpoint activePage currTime enp = do
         a_ [class_ "inline-block font-bold text-red-700 space-x-2", href_ ("/p/" <> enp.projectId.toText <> "/endpoints/" <> Endpoints.endpointIdText enp.endpointId)] $ do
           span_ [class_ $ "endpoint endpoint-" <> toLower enp.method, data_ "enp-urlMethod" enp.method] $ toHtml enp.method
           span_ [class_ " inconsolata text-base text-slate-700", data_ "enp-urlPath" enp.urlPath] $ toHtml $ if T.null enp.urlPath then "/" else T.take 150 enp.urlPath
-        a_ [class_ "text-blue-500 hover:text-slate-600", href_ ("/p/" <> enp.projectId.toText <> "/log_explorer?query="  <>  "url_path==\"" <> enp.urlPath <> "\"" <> "&since=14D&from=&to=&cols=&layout=all")] "View Log"
+        a_ [class_ "text-blue-500 hover:text-slate-600", href_ ("/p/" <> enp.projectId.toText <> "/log_explorer?query=" <> "url_path==\"" <> enp.urlPath <> "\"" <> "&since=14D&from=&to=&cols=&layout=all")] "View Log"
       unless activePage do
         div_ [class_ "flex items-center gap-2 mt-5"] do
           AnomalyList.anomalyArchiveButton enp.projectId (Anomalies.AnomalyId enp.anomalyId) (isJust enp.archivedAt)
           AnomalyList.anomalyAcknowlegeButton enp.projectId (Anomalies.AnomalyId enp.anomalyId) (isJust enp.acknowlegedAt)
-    div_ [class_ "flex items-center justify-center "]
-      $ div_
+    div_ [class_ "flex items-center justify-center "] $
+      div_
         [ class_ "w-56 h-12 px-3"
         , hxGet_ $ "/charts_html?pid=" <> enp.projectId.toText <> "&since=14D&query_raw=" <> AnomalyList.escapedQueryPartial [PyF.fmt|endpoint_hash=="{enp.endpointHash}" | timechart [1d]|]
         , hxTrigger_ "intersect once"

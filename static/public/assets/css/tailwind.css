@@ -255,6 +255,13 @@
   @apply neg-rotate-90;
 }
 
+.b--b2{
+  border-color: oklch(var(--b2));
+}
+.b--b2 > :not([hidden]) ~ :not([hidden]){
+  border-color: oklch(var(--b2));
+}
+
 /*
 == THIS SECTION IS FOR CSS CLASSES THAT ARE ADDED DYNAMICALLY, 
    SINCE TREE SHAKING IS NOT ENABLED TO CLASSES DEFINED OUTSIDE THE TAILWIND @layers

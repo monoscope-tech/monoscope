@@ -8,7 +8,6 @@ module Models.Apis.RequestDumps (
   ATError (..),
   normalizeUrlPath,
   selectLogTable,
-  requestDumpLogItemUrlPath,
   requestDumpLogUrlPath,
   selectReqLatenciesRolledBySteps,
   selectReqLatenciesRolledByStepsForProject,
@@ -336,10 +335,6 @@ data RequestDumpLogItem = RequestDumpLogItem
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] RequestDumpLogItem
 
 
-requestDumpLogItemUrlPath :: Projects.ProjectId -> RequestDumpLogItem -> Text
-requestDumpLogItemUrlPath pid rd = "/p/" <> pid.toText <> "/log_explorer/" <> UUID.toText rd.id <> "/" <> from @String (formatShow iso8601Format rd.createdAt)
-
-
 requestDumpLogUrlPath
   :: Projects.ProjectId
   -> Maybe Text
@@ -350,8 +345,9 @@ requestDumpLogUrlPath
   -> Maybe Text
   -> Maybe Text
   -> Text
-requestDumpLogUrlPath pid q cols cursorM sinceM fromM toM layoutM =
-  [text|/p/$pidT/log_explorer?query=$queryT&cols=$colsT&cursor=$cursorT&since=$sinceT&from=$fromT&to=$toT&layout=$layoutT|]
+  -> Text
+requestDumpLogUrlPath pid q cols cursorM sinceM fromM toM layoutM source =
+  [text|/p/$pidT/log_explorer?query=$queryT&cols=$colsT&cursor=$cursorT&since=$sinceT&from=$fromT&to=$toT&layout=$layoutT&source=$source|]
   where
     pidT = pid.toText
     queryT = fromMaybe "" q

@@ -109,8 +109,10 @@ import Utils (eitherStrToText)
 processMessages
   :: (Reader.Reader Config.AuthContext :> es, Time.Time :> es, DB :> es, Log :> es, IOE :> es)
   => [(Text, ByteString)]
+  -> HashMap Text Text
   -> Eff es [Text]
-processMessages msgs = do
+processMessages [] _ = pure []
+processMessages msgs attrs = do
   let msgs' =
         msgs <&> \(ackId, msg) -> do
           let sanitizedJsonStr = replaceNullChars $ decodeUtf8 msg

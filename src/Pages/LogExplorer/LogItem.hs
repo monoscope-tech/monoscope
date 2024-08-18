@@ -9,6 +9,7 @@ import Data.HashMap.Strict qualified as HM
 import Data.Text qualified as T
 import Data.Time (UTCTime)
 import Data.Time.Format (defaultTimeLocale, formatTime)
+import Data.Time.Format.ISO8601 (ISO8601 (iso8601Format), formatShow)
 import Data.UUID qualified as UUID
 import Data.Vector (iforM_)
 import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
@@ -18,6 +19,7 @@ import Lucid.Htmx (hxGet_, hxSwap_, hxTrigger_)
 import Lucid.Hyperscript (__)
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.Projects qualified as Projects
+import Models.Telemetry.Telemetry qualified as Telemetry
 import Models.Users.Sessions qualified as Sessions
 import Network.URI (escapeURIString, isUnescapedInURI)
 import Pages.Components qualified as Components
@@ -25,6 +27,7 @@ import PyF (fmt)
 import Relude
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
 import Utils (faSprite_, getMethodColor, getStatusColor, unwrapJsonPrimValue)
+import Witch (from)
 
 
 expandAPIlogItemH :: Projects.ProjectId -> UUID.UUID -> UTCTime -> ATAuthCtx (RespHeaders (ApiLogItem))
@@ -173,54 +176,66 @@ expandAPIlogItem' pid req modal = do
           $ jsonValueToHtmlTree req.responseHeaders
 
 
-apiLogItemH :: Projects.ProjectId -> UUID.UUID -> UTCTime -> ATAuthCtx (RespHeaders (ApiLogItem))
-apiLogItemH pid rdId createdAt = do
+apiLogItemH :: Projects.ProjectId -> UUID.UUID -> UTCTime -> Maybe Text -> ATAuthCtx (RespHeaders (ApiLogItem))
+apiLogItemH pid rdId createdAt sourceM = do
+  let source = (fromMaybe "requests" sourceM)
   _ <- Sessions.sessionAndProject pid
-  logItemM <- dbtToEff $ RequestDumps.selectRequestDumpByProjectAndId pid createdAt rdId
-  addRespHeaders $ case logItemM of
-    Just req -> ApiLogItem (req, (RequestDumps.requestDumpLogItemUrlPath pid req))
+  logItem <- case sourceM of
+    Just "logs" -> do
+      logItem <- Telemetry.logRecordByProjectAndId pid createdAt rdId
+      pure $ AE.toJSON <$> logItem
+    _ -> do
+      logItemM <- dbtToEff $ RequestDumps.selectRequestDumpByProjectAndId pid createdAt rdId
+      pure $ selectiveReqToJson <$> logItemM
+  addRespHeaders $ case logItem of
+    Just req -> ApiLogItem rdId req (requestDumpLogItemUrlPath pid rdId createdAt) source
     Nothing -> ApiLogItemNotFound "Invalid request log ID"
 
 
+requestDumpLogItemUrlPath :: Projects.ProjectId -> UUID.UUID -> UTCTime -> Text
+requestDumpLogItemUrlPath pid rdId timestamp = "/p/" <> pid.toText <> "/log_explorer/" <> UUID.toText rdId <> "/" <> from @String (formatShow iso8601Format timestamp)
+
+
 data ApiLogItem
-  = ApiLogItem (RequestDumps.RequestDumpLogItem, Text)
+  = ApiLogItem UUID.UUID AE.Value Text Text
   | ApiLogItemNotFound Text
   | LogItemExpanded Projects.ProjectId RequestDumps.RequestDumpLogItem Bool
 
 
 instance ToHtml ApiLogItem where
-  toHtml (ApiLogItem (req, expandItemPath)) = toHtml $ apiLogItemView req expandItemPath
+  toHtml (ApiLogItem logId req expandItemPath source) = toHtml $ apiLogItemView logId req expandItemPath source
   toHtml (ApiLogItemNotFound message) = div_ [] $ toHtml message
   toHtml (LogItemExpanded pid log_item is_modal) = toHtml $ expandAPIlogItem' pid log_item is_modal
   toHtmlRaw = toHtml
 
 
-apiLogItemView :: RequestDumps.RequestDumpLogItem -> Text -> Html ()
-apiLogItemView req expandItemPath = do
+apiLogItemView :: UUID.UUID -> AE.Value -> Text -> Text -> Html ()
+apiLogItemView logId req expandItemPath source = do
   div_ [class_ "flex items-center gap-2"] do
     Components.drawerWithURLContent_
-      ("expand-log-drawer-" <> UUID.toText req.id)
-      (expandItemPath <> "/detailed")
+      ("expand-log-drawer-" <> UUID.toText logId)
+      (expandItemPath <> "/detailed?source=" <> source)
       $ span_ [class_ "btn btn-sm btn-outline"] ("Expand" >> faSprite_ "expand" "regular" "h-3 w-3")
-    let reqJson = decodeUtf8 $ AE.encode $ AE.toJSON req
-    button_
-      [ class_ "btn btn-sm btn-outline"
-      , term "data-reqJson" reqJson
-      , onclick_ "window.buildCurlRequest(event)"
-      ]
-      (span_ [] "Copy as curl" >> faSprite_ "copy" "regular" "h-3 w-3")
+    let reqJson = decodeUtf8 $ AE.encode $ req
+    when (source == "requests")
+      $ button_
+        [ class_ "btn btn-sm btn-outline"
+        , term "data-reqJson" reqJson
+        , onclick_ "window.buildCurlRequest(event)"
+        ]
+        (span_ [] "Copy as curl" >> faSprite_ "copy" "regular" "h-3 w-3")
     button_
       [ class_ "btn btn-sm btn-outline"
       , onclick_ "downloadJson(event)"
       , term "data-reqJson" reqJson
       ]
       (span_ [] "Download" >> faSprite_ "arrow-down-to-line" "regular" "h-3 w-3")
-  jsonValueToHtmlTree $ selectiveToJson req
+  jsonValueToHtmlTree $ req
 
 
 -- Function to selectively convert RequestDumpLogItem to JSON
-selectiveToJson :: RequestDumps.RequestDumpLogItem -> AE.Value
-selectiveToJson req =
+selectiveReqToJson :: RequestDumps.RequestDumpLogItem -> AE.Value
+selectiveReqToJson req =
   AE.object
     $ concat @[]
       [ ["created_at" .= req.createdAt]

@@ -299,7 +299,7 @@ sideNav sess project pageTitle menuItem hasIntegrated = aside_ [class_ "shrink-0
     a_ [href_ "/", class_ "px-2 py-2 inline-flex items-center justify-center"] do
       img_ [class_ "h-10 w-40 mt-2 sd-hidden pl-2", src_ "/assets/svgs/logo.svg"]
       img_ [class_ "h-10 w-10 mt-2 hidden sd-show", src_ "/assets/logo-mini.png"]
-    div_ [class_ "sm:p-4 border sd-px-0 dropdown block"] do
+    div_ [class_ "sm:p-4 border-y sd-px-0 dropdown block"] do
       a_
         [ class_ "flex flex-row bg-blue-50 hover:bg-blue-100 text-blue-900 p-6 justify-center rounded-md cursor-pointer"
         , tabindex_ "0"

@@ -38,6 +38,8 @@ data EnvConfig = EnvConfig
   , messagesPerPubsubPullBatch :: Int
   , migrateAndInitializeOnStart :: Bool
   , requestPubsubTopics :: [Text]
+  , enablePubsubService :: Bool
+  , otlpStreamTopics :: [Text]
   , smtpHost :: Text
   , smtpPort :: Int
   , smtpUsername :: Text
@@ -66,7 +68,6 @@ data EnvConfig = EnvConfig
   , courierApiKey :: Text
   , environment :: Text
   , loggingDestination :: Logging.LoggingDestination
-  , enablePubsubService :: Bool
   , lemonSqueezyApiKey :: Text
   , lemonSqueezyUrl :: Text
   , postmarkToken :: Text

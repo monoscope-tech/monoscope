@@ -332,14 +332,3 @@ getCollectionsId = query Select q ()
   where
     q =
       [sql|SELECT id FROM tests.collections where deleted_at IS NULL AND schedule IS NOT NULL;|]
-
-
-getCollectionLogs :: CollectionId -> DBT IO (V.Vector (Only AE.Value))
-getCollectionLogs cid = V.fromList <$> query_ (Query $ encodeUtf8 q)
-  where
-    q =
-      [text|
-
-    S
-
-    |]
