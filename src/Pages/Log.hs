@@ -85,96 +85,74 @@ apiLogH pid queryM cols' cursorM' sinceM fromM toM layoutM sourceM hxRequestM hx
 
   -- FIXME: we're silently ignoring parse errors and the likes.
   let tableAsVecM = hush tableAsVecE
-
-  freeTierExceeded <-
-    dbtToEff
-      $ if project.paymentPlan == "Free"
-        then do
-          totalRequest <- RequestDumps.getLastSevenDaysTotalRequest pid
-          return $ totalRequest > 5000
-        else do
-          return False
-  let bwconf =
-        (def :: BWConfig)
-          { sessM = Just sess.persistentSession
-          , currProject = Just project
-          , pageTitle = "Explorer"
-          , pageActions = Just $ Components.timepicker_ (Just "log_explorer_form") currentRange
-          , navTabs = Just $ div_ [class_ "tabs tabs-boxed border"] do
-              a_ [onclick_ "window.setQueryParamAndReload('source', 'requests')", role_ "tab", class_ $ "tab " <> if source == "requests" then "tab-active" else ""] "Requests"
-              a_ [onclick_ "window.setQueryParamAndReload('source', 'logs')", role_ "tab", class_ $ "tab " <> if source == "logs" then "tab-active" else ""] "Logs"
-              -- a_ [onclick_ "window.setQueryParamAndReload('source', 'traces')", role_ "tab", class_ $ "tab " <> if source == "traces" then "tab-active" else ""] "Traces"
-              -- a_ [onclick_ "window.setQueryParamAndReload('source', 'metrics')", role_ "tab", class_ $ "tab " <> if source == "spans" then "tab-active" else ""] "Metrics"
-          }
-  case validateQuery query of
-    Left msg  -> do
-        addErrorToast msg Nothing
-        addRespHeaders $ LogsGetErrorSimple "Invalid Query" 
-    Right _ -> do
-       case tableAsVecM of
-          Just tableAsVec -> do
-            let (requestVecs, colNames, resultCount) = tableAsVec
-                curatedColNames = nubOrd $ curateCols summaryCols colNames
-                colIdxMap = listToIndexHashMap colNames
-                reqLastCreatedAtM = (\r -> lookupVecTextByKey r colIdxMap "created_at") =<< (requestVecs V.!? (V.length requestVecs - 1))
-                nextLogsURL = RequestDumps.requestDumpLogUrlPath pid queryM cols' reqLastCreatedAtM sinceM fromM toM (Just "loadmore")
-                resetLogsURL = RequestDumps.requestDumpLogUrlPath pid queryM cols' Nothing Nothing Nothing Nothing Nothing
-                page =
-                  ApiLogsPageData
-                    { pid
-                    , resultCount
-                    , requestVecs
-                    , cols = curatedColNames
-                    , colIdxMap
-                    , nextLogsURL
-                    , resetLogsURL
-                    , currentRange
-                    , exceededFreeTier = freeTierExceeded
-                    , query = queryM
-                    , cursor = reqLastCreatedAtM
-                    , isTestLog = Nothing
-                    , emptyStateUrl = Nothing
-                    }
-            case (layoutM, hxRequestM, hxBoostedM) of
-              (Just "loadmore", Just "true", _) -> addRespHeaders $ LogsGetRows pid requestVecs curatedColNames colIdxMap nextLogsURL
-              (Just "resultTable", Just "true", _) -> addRespHeaders $ LogsGetResultTable page False
-              (Just "all", Just "true", _) -> addRespHeaders $ LogsGetResultTable page True
-              _ -> do
-                addRespHeaders $ LogPage $ PageCtx bwconf page
-          Nothing -> do
-            case (layoutM, hxRequestM, hxBoostedM) of
-              (Just "loadmore", Just "true", _) -> do
-                addErrorToast "Something went wrong" Nothing
-                addRespHeaders $ LogsGetErrorSimple ""
-              (Just "resultTable", Just "true", _) -> do
-                addRespHeaders $ LogsGetErrorSimple "Something went wrong"
-              (Just "all", Just "true", _) -> do
-                addErrorToast "Something went wrong" Nothing
-                addRespHeaders $ LogsGetErrorSimple ""
-              _ -> do
-                addRespHeaders $ LogsGetError $ PageCtx bwconf "Something went wrong"
-
-
-validateQuery
-  :: Text
-  -> Either Text (Maybe (Vector.Vector (Vector.Vector Value), [Text], Int))
-validateQuery query
-  | containsInvalidPattern query = Left "Invalid query"
-  | otherwise = Right Nothing  
-
-containsInvalidPattern :: Text -> Bool
-containsInvalidPattern q = any (`T.isInfixOf` q) invalidPatterns || hasInvalidSymbols q
-
-invalidPatterns :: [Text]
-invalidPatterns =
-  [ "<<<", ">>>", "----", "^^^", "~~~", "!!!", "***" 
-  ]
-
-hasInvalidSymbols :: Text -> Bool
-hasInvalidSymbols = T.any (not . validChar)
-
-validChar :: Char -> Bool
-validChar c = isAlphaNum c || c `elem` "._-+=@#$%&*()<>[]{}|\\/:;\"' "
+  case tableAsVecE  of 
+    Left _ -> do
+      addErrorToast "Invalid query" Nothing
+      addRespHeaders $ LogsGetErrorSimple "Invalid Query" 
+    Right _ -> do   
+      freeTierExceeded <-
+        dbtToEff
+          $ if project.paymentPlan == "Free"
+            then do
+              totalRequest <- RequestDumps.getLastSevenDaysTotalRequest pid
+              return $ totalRequest > 5000
+            else do
+              return False
+      let bwconf =
+            (def :: BWConfig)
+              { sessM = Just sess.persistentSession
+              , currProject = Just project
+              , pageTitle = "Explorer"
+              , pageActions = Just $ Components.timepicker_ (Just "log_explorer_form") currentRange
+              , navTabs = Just $ div_ [class_ "tabs tabs-boxed border"] do
+                  a_ [onclick_ "window.setQueryParamAndReload('source', 'requests')", role_ "tab", class_ $ "tab " <> if source == "requests" then "tab-active" else ""] "Requests"
+                  a_ [onclick_ "window.setQueryParamAndReload('source', 'logs')", role_ "tab", class_ $ "tab " <> if source == "logs" then "tab-active" else ""] "Logs"
+                  -- a_ [onclick_ "window.setQueryParamAndReload('source', 'traces')", role_ "tab", class_ $ "tab " <> if source == "traces" then "tab-active" else ""] "Traces"
+                  -- a_ [onclick_ "window.setQueryParamAndReload('source', 'metrics')", role_ "tab", class_ $ "tab " <> if source == "spans" then "tab-active" else ""] "Metrics"
+              }
+      case tableAsVecM of
+              Just tableAsVec -> do
+                let (requestVecs, colNames, resultCount) = tableAsVec
+                    curatedColNames = nubOrd $ curateCols summaryCols colNames
+                    colIdxMap = listToIndexHashMap colNames
+                    reqLastCreatedAtM = (\r -> lookupVecTextByKey r colIdxMap "created_at") =<< (requestVecs V.!? (V.length requestVecs - 1))
+                    nextLogsURL = RequestDumps.requestDumpLogUrlPath pid queryM cols' reqLastCreatedAtM sinceM fromM toM (Just "loadmore")
+                    resetLogsURL = RequestDumps.requestDumpLogUrlPath pid queryM cols' Nothing Nothing Nothing Nothing Nothing
+                    page =
+                      ApiLogsPageData
+                        { pid
+                        , resultCount
+                        , requestVecs
+                        , cols = curatedColNames
+                        , colIdxMap
+                        , nextLogsURL
+                        , resetLogsURL
+                        , currentRange
+                        , exceededFreeTier = freeTierExceeded
+                        , query = queryM
+                        , cursor = reqLastCreatedAtM
+                        , isTestLog = Nothing
+                        , emptyStateUrl = Nothing
+                        }
+                case (layoutM, hxRequestM, hxBoostedM) of
+                  (Just "loadmore", Just "true", _) -> addRespHeaders $ LogsGetRows pid requestVecs curatedColNames colIdxMap nextLogsURL
+                  (Just "resultTable", Just "true", _) -> addRespHeaders $ LogsGetResultTable page False
+                  (Just "all", Just "true", _) -> addRespHeaders $ LogsGetResultTable page True
+                  _ -> do
+                    addRespHeaders $ LogPage $ PageCtx bwconf page
+              Nothing -> do
+                case (layoutM, hxRequestM, hxBoostedM) of
+                  (Just "loadmore", Just "true", _) -> do
+                    addErrorToast "Something went wrong" Nothing
+                    addRespHeaders $ LogsGetErrorSimple ""
+                  (Just "resultTable", Just "true", _) -> do
+                    addRespHeaders $ LogsGetErrorSimple "Something went wrong"
+                  (Just "all", Just "true", _) -> do
+                    addErrorToast "Something went wrong" Nothing
+                    addRespHeaders $ LogsGetErrorSimple ""
+                  _ -> do
+                    addRespHeaders $ LogsGetError $ PageCtx bwconf "Something went wrong"
+     
 
 data LogsGet
   = LogPage (PageCtx (ApiLogsPageData))
@@ -267,7 +245,14 @@ apiLogsPage page = do
       []
       [text|
 
-
+    function getQueryFromEditor(){
+     const toggler = document.getElementById("toggleQueryEditor")
+     if(toggler.checked) {
+          return window.editor.getValue();
+      }else {
+          return window.queryBuilderValue || "";
+      }
+    }
     function getTimeRange () {
       const rangeInput = document.getElementById("custom_range_input")
       const range = rangeInput.value.split("/")
