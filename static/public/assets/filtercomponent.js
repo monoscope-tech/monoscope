@@ -18,6 +18,9 @@ export class MyElement extends LitElement {
     super()
     this.showFilterSearch = false
     this.addEventListener('add-filter', this.handleChildEvent)
+    this.addEventListener('remove-filter', (e) => {
+      this.removeFilter(e.detail.filter)
+    })
     this.addEventListener('close-search', () => {
       this.showFilterSearch = false
     })
@@ -160,9 +163,23 @@ class FilterItem extends LitElement {
     this.fields = FIELDS
     this.operators = []
     this.values = []
+    this.fieldType = 'string'
+
+    const body = document.querySelector('body')
+    body.addEventListener('click', () => {
+      this.showFieldModal = false
+      this.showOperatoinModal = false
+      this.showValueModal = false
+      this.requestUpdate()
+    })
   }
 
-  triggerFilterChange(filter) {
+  triggerFilterChange(field, op, value) {
+    this.showFieldModal = false
+    this.showOperatoinModal = false
+    this.showValueModal = false
+    let pureVal = this.fieldType === 'string' && !value.startsWith('"') && !value.endsWith('"') ? `"${value}"` : value
+    const filter = field + op + pureVal
     const event = new CustomEvent('add-filter', {
       detail: {
         filter,
@@ -173,9 +190,21 @@ class FilterItem extends LitElement {
     })
     this.dispatchEvent(event)
   }
+  removeFilter() {
+    const event = new CustomEvent('remove-filter', {
+      detail: {
+        filter: this.filter,
+        pos: this.pos,
+      },
+      bubbles: true,
+      composed: true,
+    })
+    this.dispatchEvent(event)
+  }
 
   render() {
     const [field, operator, value] = getFieldAndValue(this.filter)
+    this.fieldType = filterAutoComplete[field]?.type || 'string'
     this.operators = filterAutoComplete[field]?.operators || ['==', '!=']
     this.values = filterAutoComplete[field]?.values || []
 
@@ -202,22 +231,16 @@ class FilterItem extends LitElement {
                 }
                 this.requestUpdate()
               }}
+              @keydown=${(e) => {
+                if (e.key === 'Enter') {
+                  this.triggerFilterChange(e.target.value, operator, value)
+                }
+              }}
             />
             <div class="max-h-48 overflow-y-auto">
               <div class="flex flex-col">
                 ${this.fields.map((field) => {
-                  return html`<button
-                    type="button"
-                    class="flex items-center gap-2 px-2 py-1 hover:bg-gray-100"
-                    @click=${(e) => {
-                      this.showFieldModal = false
-                      this.showOperatoinModal = false
-                      this.showValueModal = false
-                      this.triggerFilterChange(field + operator + value)
-                    }}
-                  >
-                    ${field}
-                  </button>`
+                  return html`<button type="button" class="flex items-center gap-2 px-2 py-1 hover:bg-gray-100" @click=${(e) => this.triggerFilterChange(field, operator, value)}>${field}</button>`
                 })}
               </div>
             </div>
@@ -235,22 +258,10 @@ class FilterItem extends LitElement {
     ${
       this.showOperatoinModal
         ? html`<div style="heigh" class="absolute z-50 bg-white border rounded w-56 text-gray-500 font-normal top-10 left-0" @click=${(e) => e.stopPropagation()}>
-            <input type="text" class="w-full border-b text-sm outline-none focus:outline-none px-2 py-1" placeholder="Search field" />
             <div class="max-h-48 overflow-y-auto">
               <div class="flex flex-col">
                 ${this.operators.map((op) => {
-                  return html`<button
-                    type="button"
-                    class="flex items-center gap-2 px-2 py-1 hover:bg-gray-100"
-                    @click=${(e) => {
-                      this.showFieldModal = false
-                      this.showOperatoinModal = false
-                      this.showValueModal = false
-                      this.triggerFilterChange(field + op + value)
-                    }}
-                  >
-                    ${op}
-                  </button>`
+                  return html`<button type="button" class="flex items-center gap-2 px-2 py-1 hover:bg-gray-100" @click=${(e) => this.triggerFilterChange(field, op, value)}>${op}</button>`
                 })}
               </div>
             </div>
@@ -279,22 +290,16 @@ class FilterItem extends LitElement {
                 }
                 this.requestUpdate()
               }}
+              @keydown=${(e) => {
+                if (e.key === 'Enter') {
+                  this.triggerFilterChange(field, operator, e.target.value)
+                }
+              }}
             />
             <div class="max-h-48 overflow-y-auto">
               <div class="flex flex-col">
                 ${this.values.map((v) => {
-                  return html`<button
-                    type="button"
-                    class="flex items-center gap-2 px-2 py-1 hover:bg-gray-100"
-                    @click=${(e) => {
-                      this.showFieldModal = false
-                      this.showOperatoinModal = false
-                      this.showValueModal = false
-                      this.triggerFilterChange(field + operator + v)
-                    }}
-                  >
-                    ${v}
-                  </button>`
+                  return html`<button type="button" class="flex items-center gap-2 px-2 py-1 hover:bg-gray-100" @click=${(e) => this.triggerFilterChange(field, operator, v)}>${v}</button>`
                 })}
               </div>
             </div>
@@ -302,7 +307,7 @@ class FilterItem extends LitElement {
         : null
     }
     </div>
-    ${html`<span class="px-2 hover:bg-blue-50 py-1" @click=${() => this.removeFilter(this.filter)}>
+    ${html`<span class="px-2 hover:bg-blue-50 py-1" @click=${() => this.removeFilter(this.pos)}>
       <i class="fa-sharp fa-xmark"></i>
     </span>`}
   </div>`
@@ -339,7 +344,7 @@ const filterAutoComplete = {
   method: {
     type: 'string',
     operators: string_operators,
-    values: ['"GET"', '"POST"', '"PUT"', '"PATCH"', '"DELETE"', '"OPTIONS"', '"HEAD"', '"CONNECT"', '"TRACE"'],
+    values: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS', 'HEAD', 'CONNECT', 'TRACE'],
   },
   status_code: {
     type: 'number',
@@ -349,7 +354,7 @@ const filterAutoComplete = {
   request_type: {
     type: 'string',
     operators: string_operators,
-    values: ['"Outgoing"', '"Incoming"'],
+    values: ['Outgoing', 'Incoming'],
   },
   duration_ns: {
     operators: number_operators,
@@ -397,6 +402,7 @@ class Filter extends LitElement {
         <div style="z-index:99" class="${this.boxClassName}">
           <input
             type="text"
+            placeholder="Type query..."
             autofocus
             ${ref(this.inputRef)}
             class="border-b px-2 w-full py-1 outline-none focus:outline-0"
