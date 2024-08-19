@@ -179,7 +179,7 @@ class FilterItem extends LitElement {
     this.showOperatoinModal = false
     this.showValueModal = false
     let pureVal = this.fieldType === 'string' && !value.startsWith('"') && !value.endsWith('"') ? `"${value}"` : value
-    const filter = field + op + pureVal
+    const filter = `${field} ${op} ${pureVal}`
     const event = new CustomEvent('add-filter', {
       detail: {
         filter,
@@ -209,7 +209,7 @@ class FilterItem extends LitElement {
     this.values = filterAutoComplete[field]?.values || []
 
     return html`
-    <div class="border flex font-bold shrink-0 text-sm text-blue-500 rounded">
+    <div class="border flex font-medium shrink-0 text-sm text-blue-500 rounded">
     <div type="button"  class="cursor-pointer relative py-1 px-2 hover:bg-blue-50" @click=${() => {
       this.showFieldModal = !this.showFieldModal
       this.showOperatoinModal = false
