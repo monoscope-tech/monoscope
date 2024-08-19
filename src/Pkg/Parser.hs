@@ -88,6 +88,9 @@ instance Display Sources where
   displayPrec prec SMetrics = "telemetry.metrics"
 
 
+--- >>> parse parseQuery "" "method// = bla "
+-- Right []
+--
 parseQuery :: Parser [Section]
 parseQuery = sepBy pSection (space *> char '|' <* space)
 
