@@ -596,19 +596,17 @@ jsonTreeAuxillaryCode pid = do
       return [... new Set (cols)].join (",")
     }
 
-    var removeNamedColumnToSummary = (namedCol)=>{
+
+    var removeNamedColumnToSummary = (namedCol) => {
       console.log(params())
-      const cols = (params().cols??"").split(",").filter(x=>x!="");
-      const subject = namedCol;
+      const cols = (params().cols ?? '').split(',').filter((x) => x != '')
+      const subject = namedCol
 
-      cols.forEach(x=>console.log(subject,x.replaceAll(".", "•").replaceAll("[", "❲").replaceAll("]", "❳") ))
+      cols.forEach((x) => console.log(subject, x.replaceAll('.', '•').replaceAll('[', '❲').replaceAll(']', '❳')))
 
-      return [...new Set(cols.filter(
-            x=>subject.toLowerCase() != x.replaceAll(".", "•")
-                           .replaceAll("[", "❲")
-                           .replaceAll("]", "❳").toLowerCase()
-                                    ))].join(",");
+      return [...new Set(cols.filter((x) => subject.toLowerCase() != x.replaceAll('.', '•').replaceAll('[', '❲').replaceAll(']', '❳').toLowerCase()))].join(',')
     }
+
 
     var isFieldInSummary = field => params().cols.split(",").includes(field);
 
