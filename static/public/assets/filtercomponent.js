@@ -119,8 +119,9 @@ export class MyElement extends LitElement {
   render() {
     return html`
       <div class="relative w-full" @click=${(e) => e.stopPropagation()}>
-        <div class="flex items-center flex-wrap gap-2 border border-1 border-slate-400 px-4 py-2 w-ful rounded-lg">
+        <div class="flex items-center flex-wrap gap-2 border border-1  px-4 py-2 w-ful rounded-lg">
           <i class="fa-regular fa-filter h-4 w-4 text-gray-500"></i>
+          <!-- <svg class="h-4 w-4 text-gray-500"><use href="/assets/svgs/fa-sprites/regular.svg#filter"></use></svg> -->
           <div class="flex flex-wrap gap-2">
             ${this.filters.map((filter, index) => {
               return html`
@@ -136,7 +137,7 @@ export class MyElement extends LitElement {
             ${this.filters.length == 0
               ? html`<button type="button" @click=${() => (this.showFilterSearch = !this.showFilterSearch)} class="text-gray-500">Click to add filter...</button>`
               : html`<button type="button" @click=${() => (this.showFilterSearch = !this.showFilterSearch)} class="px-2 py-1 border rounded text-gray-500 hover:bg-gray-100">
-                  <i class="fa-solid fa-plus"></i>
+                  <svg class="inline-block icon h-4 w-4"><use href="/assets/svgs/fa-sprites/regular.svg#plus"></use></svg>
                 </button>`}
           </div>
         </div>
@@ -179,6 +180,7 @@ class FilterItem extends LitElement {
     this.showOperatoinModal = false
     this.showValueModal = false
     let pureVal = this.fieldType === 'string' && !value.startsWith('"') && !value.endsWith('"') ? `"${value}"` : value
+    this.fields = FIELDS
     const filter = `${field} ${op} ${pureVal}`
     const event = new CustomEvent('add-filter', {
       detail: {
@@ -209,13 +211,14 @@ class FilterItem extends LitElement {
     this.values = filterAutoComplete[field]?.values || []
 
     return html`
-    <div class="border flex font-medium shrink-0 text-sm text-blue-500 rounded">
-    <div type="button"  class="cursor-pointer relative py-1 px-2 hover:bg-blue-50" @click=${() => {
+    <div class="border flex font-bold shrink-0 text-sm text-blue-500 rounded-full bg-blue-50">
+    <div type="button"  class="cursor-pointer rounded-l-full  relative py-1 px-2 hover:bg-blue-100" @click=${() => {
       this.showFieldModal = !this.showFieldModal
       this.showOperatoinModal = false
       this.showValueModal = false
       this.requestUpdate()
-    }}>
+    }}
+    >
     <span>${field}</span>
     ${
       this.showFieldModal
@@ -248,7 +251,7 @@ class FilterItem extends LitElement {
         : null
     }
     </div>
-    <div type="button"  class="cursor-pointer relative border-l border-r px-2 py-1 hover:bg-blue-50" @click=${() => {
+    <div type="button"  class="cursor-pointer relative border-l border-r px-2 py-1 hover:bg-blue-100" @click=${() => {
       this.showFieldModal = false
       this.showOperatoinModal = !this.showOperatoinModal
       this.showValueModal = false
@@ -269,7 +272,7 @@ class FilterItem extends LitElement {
         : null
     }
     </div>
-    <div type="button"  class="cursor-pointer relative py-1 px-2 border-r hover:bg-blue-50" @click=${() => {
+    <div type="button"  class="cursor-pointer relative py-1 px-2 border-r hover:bg-blue-100" @click=${() => {
       this.showFieldModal = false
       this.showOperatoinModal = false
       this.showValueModal = !this.showValueModal
@@ -282,12 +285,9 @@ class FilterItem extends LitElement {
             <input
               type="text"
               class="w-full border-b text-sm outline-none focus:outline-none px-2 py-1"
-              placeholder="Search field"
+              placeholder="Enter value"
               @input=${(e) => {
-                this.fields = this.fields.filter((field) => field.toLowerCase().includes(e.target.value.toLowerCase()))
-                if (e.target.value.length == 0) {
-                  this.fields = FIELDS
-                }
+                this.values = this.values.filter((field) => field.toLowerCase().includes(e.target.value.toLowerCase()))
                 this.requestUpdate()
               }}
               @keydown=${(e) => {
@@ -307,8 +307,8 @@ class FilterItem extends LitElement {
         : null
     }
     </div>
-    ${html`<span class="px-2 hover:bg-blue-50 py-1" @click=${() => this.removeFilter(this.pos)}>
-      <i class="fa-sharp fa-xmark"></i>
+    ${html`<span class="px-2 hover:bg-blue-100 rounded-r-full py-1" @click=${() => this.removeFilter(this.pos)}>
+      <svg class="inline-block icon h-3 w-3"><use href="/assets/svgs/fa-sprites/regular.svg#xmark"></use></svg>
     </span>`}
   </div>`
   }
@@ -394,12 +394,11 @@ class Filter extends LitElement {
   }
 
   inputRef = createRef()
-  boxClassName = `flex absolute overflow-hidden -bottom-full flex-col border rounded text-left bg-white w-96 ${this.hasQuery ? 'left-1/2 -translate-x-1/2' : 'left-0'}`
   render() {
     return html`
       <div class="relative text-gray-500">
-        <div class="h-8"></div>
-        <div style="z-index:99" class="${this.boxClassName}">
+        <div class="h-4"></div>
+        <div style="z-index:99" class="${`flex absolute overflow-hidden top-8 flex-col border rounded text-left bg-white w-96 ${this.hasQuery ? 'left-1/2 -translate-x-1/2' : 'left-0'}`}">
           <input
             type="text"
             placeholder="Type query..."
