@@ -321,7 +321,7 @@ dependenciesAndEventsCount pid requestType sortT = query Select (Query $ encodeU
     endpointFilter = case requestType of
       "Outgoing" -> "ep.outgoing = true"
       "Incoming" -> "ep.outgoing = false"
-      _          -> "1=1"
+      _          -> "ep.outgoing =  false"
 
     q =
       [text|
