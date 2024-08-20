@@ -407,7 +407,7 @@ class Filter extends LitElement {
             placeholder="Type query..."
             autofocus
             ${ref(this.inputRef)}
-            class="border-b px-2 w-full py-1 outline-none focus:outline-0"
+            class="border-b px-2 w-full py-1 outline-none focus:outline-0 min-w-96 max-w-[500px]"
             @input=${(event) => {
               this.handleChange(event.target.value)
               this.adjustInputWidthAndFocus()
