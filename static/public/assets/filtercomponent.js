@@ -543,12 +543,12 @@ class Filter extends LitElement {
 
   needsAutoCompleteKeyPath(filter) {
     let rootEnd = filter.indexOf('.')
-    if (rootEnd == -1) return { result: false, field: null, prefix: null }
-
-    const field = filter.substring(0, rootEnd)
-    const prefix = filter.substring(rootEnd + 1)
-    if (prefix.length < 2) return { result: false, field: null, prefix: null }
-
+    let field = filter
+    let prefix = ''
+    if (rootEnd !== -1) {
+      field = filter.substring(0, rootEnd)
+      prefix = filter.substring(rootEnd + 1)
+    }
     if (['request_body', 'response_body', 'request_header', 'response_header', 'query_param', 'path_param'].includes(field)) {
       return {
         result: true,
@@ -556,7 +556,7 @@ class Filter extends LitElement {
         prefix: prefix,
       }
     }
-    if (rootEnd == -1) return { result: false, field: null, prefix: null }
+    return { result: false, field: null, prefix: null }
   }
 
   handleChange(val) {
@@ -572,6 +572,7 @@ class Filter extends LitElement {
       let target_info = filterAutoComplete[target]
       if (!target_info) {
         const key = this.needsAutoCompleteKeyPath(this.inputVal)
+        target_info = { operators: string_operators, values: [] }
         if (key.result) {
           fetch(`/p/${this.projectId}/query_builder/autocomplete?category=${key.field}&prefix=.${key.prefix}`)
             .then((res) => res.json())
@@ -588,8 +589,6 @@ class Filter extends LitElement {
                 this.matches = data.map((d) => `${result.key} ${result.operator} "${d}"`)
               })
             return
-          } else {
-            target_info = { operators: string_operators, values: [] }
           }
         }
       }
