@@ -318,25 +318,9 @@ class FilterItem extends LitElement {
 }
 customElements.define('filter-item', FilterItem)
 
-const FIELDS = [
-  'method',
-  'status_code',
-  'url_path',
-  'duration_ns',
-  'request_body',
-  'has_errors',
-  'request_header',
-  'response_body',
-  'response_header',
-  'host',
-  'raw_url',
-  'referer',
-  'query_param',
-  'path_param',
-  'request_type',
-  'service_version',
-]
+const FIELDS_WITH_KEYPATHS = ['request_header', 'response_header', 'request_body', 'response_body', 'query_param', 'path_param']
 
+const FIELDS = ['method', 'status_code', 'url_path', 'duration_ns', 'has_errors', 'host', 'raw_url', ...FIELDS_WITH_KEYPATHS, 'referer', 'query_param', 'path_param', 'request_type', 'service_version']
 const string_operators = ['==', '!=']
 const number_operators = ['==', '>', '<', '!=', '>=', '<=']
 
@@ -577,7 +561,14 @@ class Filter extends LitElement {
           fetch(`/p/${this.projectId}/query_builder/autocomplete?category=${key.field}&prefix=.${key.prefix}`)
             .then((res) => res.json())
             .then((data) => {
-              this.matches = data.map((d) => key.field + d)
+              const res = data.map((d) => `${key.field} ${d}`)
+              let matches = []
+              res.forEach((match) => {
+                target_info.operators.forEach((op) => {
+                  matches.push(`${match} ${op}`)
+                })
+              })
+              this.matches = matches
             })
           return
         } else {
@@ -594,8 +585,12 @@ class Filter extends LitElement {
       }
 
       if (filter == this.inputVal.trim() || filter.length > this.inputVal.length) {
-        for (let op of target_info.operators) {
-          auto_complete.push(`${filter} ${op} `)
+        if (FIELDS_WITH_KEYPATHS.includes(filter)) {
+          auto_complete.push(filter)
+        } else {
+          for (let op of target_info.operators) {
+            auto_complete.push(`${filter} ${op} `)
+          }
         }
       } else {
         target_info.values.forEach((v) => {

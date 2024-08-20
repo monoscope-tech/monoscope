@@ -39,7 +39,7 @@ bulkInsertFields :: DB :> es => V.Vector Field -> Eff es ()
 bulkInsertFields fields = void $ dbtToEff $ executeMany q (V.toList rowsToInsert)
   where
     q =
-      [sql| INSERT into apis.fields (project_id, endpoint_hash, key, field_type, format, description, key_path, field_category, hash) 
+      [sql| INSERT into apis.fields (project_id, endpoint_hash, key, field_type, format, description, key_path, field_category, hash)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING; |]
     rowsToInsert =
       V.map
@@ -61,7 +61,7 @@ bulkInsertFields fields = void $ dbtToEff $ executeMany q (V.toList rowsToInsert
 insertFields :: [Field] -> DBT IO Int64
 insertFields fields = do
   let q =
-        [sql| 
+        [sql|
         INSERT INTO apis.fields
         (project_id, endpoint_hash, key, field_type, field_type_override, format, format_override, description, key_path, field_category, hash, is_enum, is_required)
         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
@@ -109,7 +109,7 @@ selectFieldsByHashes pid fieldHashes = query Select q (pid, fieldHashes)
     q =
       [sql| SELECT id,created_at,updated_at,project_id,endpoint_hash,key,field_type,
               field_type_override,format,format_override,description,key_path,field_category, hash, is_enum, is_required
-              FROM apis.fields WHERE project_id=? AND hash= ANY(?)  ORDER BY field_category, key 
+              FROM apis.fields WHERE project_id=? AND hash= ANY(?)  ORDER BY field_category, key
           |]
 
 
@@ -148,4 +148,4 @@ fieldsByEndpointHashes pid hashes = query Select q (pid, hashes)
 autoCompleteFields :: Projects.ProjectId -> FieldCategoryEnum -> Text -> DBT IO (V.Vector Text)
 autoCompleteFields pid fieldCategory pathPrefix = query Select q (pid, fieldCategory, pathPrefix <> "%")
   where
-    q = [sql|SELECT DISTINCT key_path from apis.fields WHERE project_id = ? AND field_category = ? AND key_path <> ''  AND key_path LIKE ?|]
+    q = [sql|SELECT DISTINCT key_path from apis.fields WHERE project_id = ? AND field_category = ? AND key_path <> ''  AND key_path LIKE ? LIMIT 15|]
