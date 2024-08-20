@@ -7,6 +7,7 @@ import Pages.BodyWrapper
 import Pages.Endpoints.EndpointDetails qualified as EndpointDetails
 import Pages.Endpoints.EndpointList qualified as EndpointList
 import Pages.Endpoints.Outgoing qualified as Outgoing
+import Pages.Endpoints.ApiCatalog qualified as ApiCatalog
 import Pkg.Components.ItemsList qualified as ItemsList
 import Relude
 import Servant
@@ -30,5 +31,6 @@ data Routes' mode = Routes'
   , endpointDetailsWithHash :: mode :- "log_explorer" :> "endpoint" :> Capture "endpoint_hash" Text :> Get '[HTML] (RespHeaders (Html ()))
   , endpointDetails :: mode :- "endpoints" :> Capture "endpoints_id" Endpoints.EndpointId :> QPT "from" :> QPT "to" :> QPT "since" :> QPT "subpage" :> QPT "shape" :> Get '[HTML] (RespHeaders (EndpointDetails.EndpointDetailsGet))
   , outgoingGet :: mode :- "outgoing" :> QPT "sort" :> Get '[HTML] (RespHeaders (PageCtx (ItemsList.ItemsPage Outgoing.HostEventsVM)))
+  , apiCatalogGet :: mode :- "api_catalog" :> QPT "sort" :> QPT "request_type" :> Get '[HTML] (RespHeaders (PageCtx (ItemsList.ItemsPage ApiCatalog.HostEventsVM)))
   }
   deriving stock (Generic)

@@ -55,11 +55,17 @@ endpointListGetH pid layoutM pageM filterTM hostM projectHostM' sortM hxRequestM
   projHosts <- dbtToEff $ Endpoints.getProjectHosts pid
   inboxCount <- dbtToEff $ Endpoints.countEndpointInbox pid
   let currentURL = "/p/" <> pid.toText <> "/endpoints?layout=" <> fromMaybe "false" layoutM <> "&filter=" <> fromMaybe "" filterTM <> "&sort=" <> fromMaybe "event" sortM <> "&project_host=" <> fromMaybe "" hostM
+
+  let pageTitle = case hostM of
+        Just host -> "Endpoint For " <> host
+        Nothing   -> "Endpoint"
+
+
   let bwconf =
         (def :: BWConfig)
           { sessM = Just sess.persistentSession
           , currProject = Just project
-          , pageTitle = "Endpoints"
+          , pageTitle = pageTitle
           , navTabs =
               Just
                 $ toHtml

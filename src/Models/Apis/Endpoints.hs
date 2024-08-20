@@ -309,13 +309,19 @@ getProjectHosts pid = query Select q (Only pid)
     q = [sql| SELECT DISTINCT host FROM apis.endpoints where  project_id = ? AND outgoing=false AND host!= '' |]
 
 
-dependenciesAndEventsCount :: Projects.ProjectId -> Text -> DBT IO (V.Vector HostEvents)
-dependenciesAndEventsCount pid sortT = query Select (Query $ encodeUtf8 q) (pid, pid)
+dependenciesAndEventsCount :: Projects.ProjectId -> Text -> Text -> DBT IO (V.Vector HostEvents)
+dependenciesAndEventsCount pid requestType sortT = query Select (Query $ encodeUtf8 q) (pid, requestType, pid)
   where
     orderBy = case sortT of
       "first_seen" -> "first_seen ASC;"
       "last_seen" -> "last_seen DESC;"
       _ -> "eventsCount DESC;"
+
+
+    endpointFilter = case requestType of
+      "Outgoing" -> "ep.outgoing = true"
+      "Incoming" -> "ep.outgoing = false"
+      _          -> "1=1"
 
     q =
       [text|
@@ -327,7 +333,7 @@ WITH filtered_requests AS (
     FROM apis.request_dumps rd
     WHERE rd.project_id = ?
       AND rd.created_at > NOW() - interval '14' day
-      AND rd.request_type = 'Outgoing'
+      AND rd.request_type = ?
     GROUP BY rd.host
 )
 SELECT DISTINCT ep.host,
@@ -338,9 +344,10 @@ FROM apis.endpoints ep
 LEFT JOIN filtered_requests fr ON ep.host = fr.host
 WHERE ep.project_id = ?
   AND ep.host != ''
-  AND ep.outgoing = true
+  AND $endpointFilter
   ORDER BY $orderBy
       |]
+
 
 
 countEndpointInbox :: Projects.ProjectId -> DBT IO Int
