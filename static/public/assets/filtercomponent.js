@@ -398,7 +398,10 @@ class Filter extends LitElement {
     return html`
       <div class="relative text-gray-500">
         <div class="h-4"></div>
-        <div style="z-index:99" class="${`flex absolute overflow-hidden top-8 flex-col border rounded text-left bg-white w-96 ${this.hasQuery ? 'left-1/2 -translate-x-1/2' : 'left-0'}`}">
+        <div
+          style="z-index:99"
+          class="${`flex absolute overflow-hidden top-8 flex-col border rounded text-left bg-white min-w-96 max-w-[500px] ${this.hasQuery ? 'left-1/2 -translate-x-1/2' : 'left-0'}`}"
+        >
           <input
             type="text"
             placeholder="Type query..."
