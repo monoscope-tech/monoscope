@@ -17,6 +17,7 @@ module Utils (
   deleteParam,
   quoteTxt,
   textToBool,
+  getSeverityColor,
   getMethodColor,
   getStatusColor,
   unwrapJsonPrimValue,
@@ -136,6 +137,17 @@ getStatusColor status
   | status >= 200 && status < 300 = "text-green-800 bg-green-50 border border-green-200"
   | status >= 300 && status < 400 = "text-amber-800 bg-yellow-50 border border-yellow-200"
   | otherwise = "text-red-800 bg-red-50 border border-red-200"
+
+
+getSeverityColor :: Text -> Text
+getSeverityColor "debug" = "text-gray-500 bg-gray-100"
+getSeverityColor "info" = "text-blue-500 bg-blue-100"
+getSeverityColor "warning" = "text-yellow-700 bg-yellow-100"
+getSeverityColor "error" = "text-red-500 bg-red-100"
+getSeverityColor "critical" = "text-red-700 bg-red-200 font-bold"
+getSeverityColor "notice" = "text-green-500 bg-green-100"
+getSeverityColor "alert" = "text-orange-600 bg-orange-100 font-bold"
+getSeverityColor _ = "text-black bg-gray-50"
 
 
 unwrapJsonPrimValue :: AE.Value -> Text
