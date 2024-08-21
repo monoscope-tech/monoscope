@@ -25,6 +25,7 @@ import Effectful.Reader.Static qualified as Eff
 import Log qualified
 import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
 import Models.Projects.Projects qualified as Projects
+import Models.Telemetry.Telemetry (SpanKind (..), SpanStatus (..))
 import Models.Telemetry.Telemetry qualified as Telemetry
 import Network.GRPC.HighLevel.Client as HsGRPC
 import Network.GRPC.HighLevel.Generated as HsGRPC
@@ -35,6 +36,17 @@ import Opentelemetry.Proto.Collector.Trace.V1.TraceService
 import Opentelemetry.Proto.Common.V1.Common
 import Opentelemetry.Proto.Logs.V1.Logs
 import Opentelemetry.Proto.Resource.V1.Resource
+import Opentelemetry.Proto.Trace.V1.Trace (
+  ResourceSpans (resourceSpansResource, resourceSpansScopeSpans),
+  ScopeSpans (scopeSpansScope),
+  Span (..),
+  Span_Event,
+  Span_Link,
+  Span_SpanKind (..),
+  Status (..),
+  Status_StatusCode (..),
+  scopeSpansSpans,
+ )
 import Proto3.Suite.Class qualified as HsProtobuf
 import Proto3.Suite.Types qualified as HsProtobuf
 import Proto3.Wire qualified as HsProtobuf
@@ -61,6 +73,16 @@ processList msgs attrs = do
                 Right (ExportLogsServiceRequest a) -> (ackId, join $ V.map convertToLog a)
       let (ackIds, logs) = V.unzip results
       Telemetry.bulkInsertLogs $ join logs
+      pure $ V.toList ackIds
+    Just "org.opentelemetry.otlp.traces.v1" -> do
+      let results =
+            msgs' & V.map \(ackId, msg) -> do
+              let res = HsProtobuf.fromByteString msg :: Either HsProtobuf.ParseError ExportTraceServiceRequest
+              case res of
+                Left err -> error $ "unable to parse logs service request with err " <> show err
+                Right (ExportTraceServiceRequest a) -> (ackId, join $ V.map convertToSpan a)
+      let (ackIds, spans) = V.unzip results
+      Telemetry.bulkInsertSpans $ join spans
       pure $ V.toList ackIds
     _ -> error "unsupported opentelemetry data type"
 
@@ -155,12 +177,24 @@ anyValueToString (AnyValueValueStringValue val) = Just $ toStrict val
 anyValueToString _ = Nothing
 
 
+convertScopeSpan :: Maybe Resource -> ScopeSpans -> V.Vector Telemetry.SpanRecord
+convertScopeSpan resource sl =
+  V.map (convertSpanRecord resource sl.scopeSpansScope) sl.scopeSpansSpans
+
+
+-- Convert ExportTraceServiceRequest to [Trace]
+convertToSpan :: ResourceSpans -> V.Vector Telemetry.SpanRecord
+convertToSpan resourceSpans = join $ V.map (convertScopeSpan resourceSpans.resourceSpansResource) resourceSpans.resourceSpansScopeSpans
+
+
+-- fromMaybe (error "invalid at-project-id in logs") do
+--         let v = Unsafe.fromJust $ resource >>= \r -> find (\kv -> kv.keyValueKey == "at-project-id") r.resourceAttributes >>= (.keyValueValue) >>= (.anyValueValue)
+--         UUID.fromText =<< anyValueToString v
+
 convertLogRecord :: Maybe Resource -> Maybe InstrumentationScope -> LogRecord -> Telemetry.LogRecord
 convertLogRecord resource scope lr =
   Telemetry.LogRecord
-    { projectId = fromMaybe (error "invalid at-project-id in logs") do
-        let v = Unsafe.fromJust $ resource >>= \r -> find (\kv -> kv.keyValueKey == "at-project-id") r.resourceAttributes >>= (.keyValueValue) >>= (.anyValueValue)
-        UUID.fromText =<< anyValueToString v
+    { projectId = UUID.nil -- project id for demo project
     , id = Nothing
     , timestamp = nanosecondsToUTC lr.logRecordTimeUnixNano
     , observedTimestamp = nanosecondsToUTC lr.logRecordObservedTimeUnixNano
@@ -168,8 +202,31 @@ convertLogRecord resource scope lr =
     , spanId = if BS.null lr.logRecordSpanId then Nothing else Just lr.logRecordSpanId
     , severityText = parseSeverityLevel $ toText lr.logRecordSeverityText
     , severityNumber = fromIntegral $ (either id HsProtobuf.fromProtoEnum . HsProtobuf.enumerated) lr.logRecordSeverityNumber
-    , body = convertAnyValue (lr.logRecordBody)
+    , body = convertAnyValue lr.logRecordBody
     , attributes = keyValueToJSONB lr.logRecordAttributes
+    , resource = resourceToJSONB resource
+    , instrumentationScope = instrumentationScopeToJSONB scope
+    }
+
+
+convertSpanRecord :: Maybe Resource -> Maybe InstrumentationScope -> Span -> Telemetry.SpanRecord
+convertSpanRecord resource scope sp =
+  Telemetry.SpanRecord
+    { projectId = UUID.nil -- project id for demo project
+    , timestamp = nanosecondsToUTC sp.spanStartTimeUnixNano
+    , traceId = sp.spanTraceId
+    , spanId = sp.spanSpanId
+    , parentSpanId = if BS.null sp.spanParentSpanId then Nothing else Just sp.spanParentSpanId
+    , traceState = Just (toText sp.spanTraceState)
+    , spanName = toText sp.spanName
+    , startTime = nanosecondsToUTC sp.spanStartTimeUnixNano
+    , endTime = Just $ nanosecondsToUTC sp.spanEndTimeUnixNano
+    , kind = parseSpanKind (HsProtobuf.enumerated sp.spanKind)
+    , status = parseSpanStatus sp.spanStatus
+    , statusMessage = Nothing
+    , attributes = keyValueToJSONB sp.spanAttributes
+    , events = eventsToJSONB $ V.toList sp.spanEvents
+    , links = linksToJSONB $ V.toList sp.spanLinks
     , resource = resourceToJSONB resource
     , instrumentationScope = instrumentationScopeToJSONB scope
     }
@@ -195,15 +252,35 @@ traceServiceExportH appLogger appCtx (ServerNormalRequest _meta (ExportTraceServ
 -- keyValueToJSONB :: [Logs.KeyValue] -> Value
 -- keyValueToJSONB kvs = object [(unpack kv.key, kv.value) | kv <- kvs]
 
--- -- Convert Protobuf kind to SpanKind
--- parseSpanKind :: Maybe Text -> Maybe SpanKind
--- parseSpanKind = fmap $ \case
---   "INTERNAL" -> INTERNAL
---   "SERVER"   -> SERVER
---   "CLIENT"   -> CLIENT
---   "PRODUCER" -> PRODUCER
---   "CONSUMER" -> CONSUMER
---   _          -> INTERNAL
+--  Span_SpanKindSPAN_KIND_UNSPECIFIED
+--   |
+--   |
+--   | Span_SpanKindSPAN_KIND_CLIENT
+--   | Span_SpanKindSPAN_KIND_PRODUCER
+--   | Span_SpanKindSPAN_KIND_CONSUMER
+
+-- Convert Protobuf kind to SpanKind
+parseSpanKind :: Either Int32 Span_SpanKind -> Maybe SpanKind
+parseSpanKind spKind = case spKind of
+  Left _ -> Nothing
+  Right sp -> case sp of
+    Span_SpanKindSPAN_KIND_INTERNAL -> Just SKInternal
+    Span_SpanKindSPAN_KIND_SERVER -> Just SKServer
+    Span_SpanKindSPAN_KIND_CLIENT -> Just SKClient
+    Span_SpanKindSPAN_KIND_PRODUCER -> Just SKProducer
+    Span_SpanKindSPAN_KIND_CONSUMER -> Just SKConsumer
+    _ -> Just SKUnspecified
+
+
+parseSpanStatus :: Maybe Status -> Maybe SpanStatus
+parseSpanStatus st = case st of
+  Just est -> case HsProtobuf.enumerated est.statusCode of
+    Left _ -> Nothing
+    Right Status_StatusCodeSTATUS_CODE_OK -> Just SSOk
+    Right Status_StatusCodeSTATUS_CODE_ERROR -> Just SSError
+    Right Status_StatusCodeSTATUS_CODE_UNSET -> Just SSUnset
+  _ -> Nothing
+
 
 -- -- Convert ExportTraceServiceRequest to [Span]
 -- convertToSpan :: UUID.UUID -> Traces.ExportTraceServiceRequest -> [Span]
@@ -246,11 +323,13 @@ traceServiceExportH appLogger appCtx (ServerNormalRequest _meta (ExportTraceServ
 -- instrumentationScopeToJSONB :: Traces.InstrumentationScope -> Value
 -- instrumentationScopeToJSONB _ = object [] -- Replace with actual implementation if necessary
 
--- eventsToJSONB :: [Traces.Event] -> Value
--- eventsToJSONB _ = object [] -- Replace with actual implementation if necessary
+eventsToJSONB :: [Span_Event] -> AE.Value
+eventsToJSONB _ = object [] -- Replace with actual implementation if necessary
 
--- linksToJSONB :: [Traces.Link] -> Value
--- linksToJSONB _ = object [] -- Replace with actual implementation if necessary
+
+linksToJSONB :: [Span_Link] -> AE.Value
+linksToJSONB _ = object [] -- Replace with actual implementation if necessary
+
 
 ---------------------------------------------------------------------------------------
 -- Server

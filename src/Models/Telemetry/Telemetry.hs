@@ -67,7 +67,7 @@ data SpanStatus = SSOk | SSError | SSUnset
   deriving (ToField, FromField) via WrappedEnum "SS" SpanStatus
 
 
-data SpanKind = SKInterval | SKServer | SKClient | SKProducer | SKConsumer
+data SpanKind = SKInternal | SKServer | SKClient | SKProducer | SKConsumer | SKUnspecified
   deriving (Show, Generic, Read)
   deriving anyclass (NFData, AE.FromJSON)
   deriving (ToField, FromField) via WrappedEnum "SK" SpanKind
@@ -129,7 +129,7 @@ logRecordByProjectAndId :: DB :> es => Projects.ProjectId -> UTCTime -> UUID.UUI
 logRecordByProjectAndId pid createdAt rdId = dbtToEff $ queryOne Select q (createdAt, pid, rdId)
   where
     q =
-      [sql|SELECT project_id, id, timestamp, observed_timestamp, trace_id, span_id, severity_text, 
+      [sql|SELECT project_id, id, timestamp, observed_timestamp, trace_id, span_id, severity_text,
                   severity_number, body, attributes, resource, instrumentation_scope
              FROM telemetry.logs where (timestamp=?)  and project_id=? and id=? LIMIT 1|]
 
@@ -141,7 +141,7 @@ bulkInsertLogs logs = void $ dbtToEff $ executeMany q (V.toList rowsToInsert)
     q =
       [sql|
       INSERT INTO telemetry.logs
-      (project_id, timestamp, observed_timestamp, trace_id, span_id, 
+      (project_id, timestamp, observed_timestamp, trace_id, span_id,
        severity_text, severity_number, body, attributes, resource, instrumentation_scope)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     |]
@@ -168,7 +168,7 @@ bulkInsertSpans spans = void $ dbtToEff $ executeMany q (V.toList rowsToInsert)
     q =
       [sql|
       INSERT INTO telemetry.spans
-      (project_id, timestamp, trace_id, span_id, parent_span_id, trace_state, span_name, 
+      (project_id, timestamp, trace_id, span_id, parent_span_id, trace_state, span_name,
        start_time, end_time, kind, status, status_message, attributes, events, links, resource, instrumentation_scope)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     |]
