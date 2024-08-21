@@ -22,7 +22,7 @@ import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
 apiCatalogH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders (PageCtx (ItemsList.ItemsPage HostEventsVM)))
 apiCatalogH pid sortM requestTypeM = do
   (sess, project) <- Sessions.sessionAndProject pid
-  let requestType = fromMaybe "Outgoing" requestTypeM
+  let requestType = fromMaybe "Incoming" requestTypeM
   hostsAndEvents <- dbtToEff $ Endpoints.dependenciesAndEventsCount pid requestType (fromMaybe "events" sortM)
   currTime <- Time.currentTime
   let sortV = fromMaybe "events" sortM
@@ -55,7 +55,7 @@ apiCatalogH pid sortM requestTypeM = do
         def
           { sessM = Just sess.persistentSession
           , currProject = Just project
-          , pageTitle = "API CATALOG"
+          , pageTitle = "API Catalog"
          , navTabs = Just $ div_ [class_ "tabs tabs-boxed border"] do
               a_ [href_ $ "/p/" <> pid.toText <> "/api_catalog?sort=" <> sortV <> "&request_type=Incoming", role_ "tab", class_ $ "tab " <> if requestType == "Incoming" then "tab-active" else ""] "Incoming"
               a_ [href_ $ "/p/" <> pid.toText <> "/api_catalog?sort=" <> sortV <> "&request_type=Outgoing", role_ "tab", class_ $ "tab " <> if requestType == "Outgoing" then "tab-active" else ""] "Outgoing"
@@ -81,7 +81,7 @@ renderapiCatalog pid host = div_ [class_ "flex py-4 gap-8 items-center itemsList
     div_ [class_ "space-x-3"] do
       a_ [class_ "inline-block font-bold space-x-2"] $ do
         a_ [href_ $ "/p/" <> pid.toText <> "/endpoints?host=" <> host.host, class_ " hover:text-slate-600"] $ toHtml (T.replace "http://" "" $ T.replace "https://" "" host.host)
-        a_ [href_ $ "/p/" <> pid.toText <> "/log_explorer?query=host%3D%3D" <> "\"" <> host.host <> "\"", class_ "text-blue-500 hover:text-slate-600"] $ "View logs"
+        a_ [href_ $ "/p/" <> pid.toText <> "/log_explorer?query=host%3D%3D" <> "\"" <> host.host <> "\"", class_ "text-blue-500 hover:text-slate-600 text-xs"] $ "View logs"
   div_ [class_ "flex items-center justify-center "]
     $ div_
       [ class_ "w-56 h-12 px-3"
@@ -91,3 +91,4 @@ renderapiCatalog pid host = div_ [class_ "flex py-4 gap-8 items-center itemsList
       ]
       ""
   div_ [class_ "w-36 flex items-center justify-center"] $ span_ [class_ "tabular-nums text-xl", term "data-tippy-content" "Events for this Anomaly in the last 14days"] $ toHtml (show host.eventCount)
+

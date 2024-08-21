@@ -20,7 +20,7 @@ menu :: Projects.ProjectId -> [(Text, Text, Text)]
 menu pid =
   [ ("Get Started", "/p/" <> pid.toText <> "/onboarding", "list-check")
   , ("Dashboard", "/p/" <> pid.toText <> "/", "qrcode")
-  , ("API CATALOG", "/p/" <> pid.toText <> "/api_catalog", "swap")
+  , ("API Catalog", "/p/" <> pid.toText <> "/api_catalog", "swap")
   , ("Explorer", "/p/" <> pid.toText <> "/log_explorer", "list-tree")
   , ("Changes & Errors", "/p/" <> pid.toText <> "/anomalies", "bug")
   --, ("Outgoing Integrations", "/p/" <> pid.toText <> "/outgoing", "arrows-turn-right")

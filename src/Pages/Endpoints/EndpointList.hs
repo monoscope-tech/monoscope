@@ -54,6 +54,7 @@ endpointListGetH pid layoutM pageM filterTM hostM projectHostM' sortM hxRequestM
     Nothing -> Endpoints.endpointRequestStatsByProject pid ackd archived projectHostM sortM searchM page
   projHosts <- dbtToEff $ Endpoints.getProjectHosts pid
   inboxCount <- dbtToEff $ Endpoints.countEndpointInbox pid
+  
   let currentURL = "/p/" <> pid.toText <> "/endpoints?layout=" <> fromMaybe "false" layoutM <> "&filter=" <> fromMaybe "" filterTM <> "&sort=" <> fromMaybe "event" sortM <> "&project_host=" <> fromMaybe "" hostM
 
   let pageTitle = case hostM of
