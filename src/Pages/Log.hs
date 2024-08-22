@@ -482,7 +482,7 @@ logItemCol_ _ _ reqVec colIdxMap "timestamp" = span_ [class_ "monospace whitespa
 logItemCol_ _ _ reqVec colIdxMap "status_code" = span_ [class_ $ "badge badge-sm ph-` " <> getStatusColor (lookupVecIntByKey reqVec colIdxMap "status_code"), term "data-tippy-content" "status"] $ toHtml $ show @Text $ lookupVecIntByKey reqVec colIdxMap "status_code"
 logItemCol_ _ _ reqVec colIdxMap "method" = span_ [class_ $ "min-w-[4rem] badge badge-sm  " <> maybe "badge-ghost" getMethodColor (lookupVecTextByKey reqVec colIdxMap "method"), term "data-tippy-content" "method"] $ toHtml $ fromMaybe "/" $ lookupVecTextByKey reqVec colIdxMap "method"
 logItemCol_ _ _ reqVec colIdxMap "severity_text" = span_ [class_ $ "badge badge-sm " <> getSeverityColor (T.toLower $ fromMaybe "" $ lookupVecTextByKey reqVec colIdxMap "severity_text")] $ toHtml $ fromMaybe "" $ lookupVecTextByKey reqVec colIdxMap "severity_text"
-logItemCol_ _ _ reqVec colIdxMap "duration" = span_ [class_ $ "badge badge-sm badge-ghost whitespace-nowrap"] $ toHtml $ show (lookupVecIntByKey reqVec colIdxMap "duration") <> " ms"
+logItemCol_ _ _ reqVec colIdxMap "duration" = span_ [class_ "badge badge-sm badge-ghost whitespace-nowrap", term "data-tippy-content" "duration"] $ toHtml $ show (lookupVecIntByKey reqVec colIdxMap "duration") <> " ms"
 logItemCol_ _ _ reqVec colIdxMap "kind" = do
   let kind = fromMaybe "" $ lookupVecTextByKey reqVec colIdxMap "kind"
   span_ [class_ $ "badge badge-sm " <> getKindColor kind, term "data-tippy-content" "span kind"] $ toHtml $ kind
