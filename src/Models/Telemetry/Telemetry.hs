@@ -22,7 +22,7 @@ import Data.UUID (UUID)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity.DBT (QueryNature (..), queryOne)
-import Database.PostgreSQL.Simple (FromRow, ResultError (..))
+import Database.PostgreSQL.Simple (FromRow, ResultError (..), ToRow)
 import Database.PostgreSQL.Simple.FromField (Conversion, FromField (..), fromField, returnError)
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.ToField (ToField, toField)
@@ -106,9 +106,9 @@ instance AE.ToJSON ByteString where
 data SpanRecord = SpanRecord
   { projectId :: UUID
   , timestamp :: UTCTime
-  , traceId :: ByteString
-  , spanId :: ByteString
-  , parentSpanId :: Maybe ByteString
+  , traceId :: Text
+  , spanId :: Text
+  , parentSpanId :: Maybe Text
   , traceState :: Maybe Text
   , spanName :: Text
   , startTime :: UTCTime
@@ -123,6 +123,8 @@ data SpanRecord = SpanRecord
   , instrumentationScope :: Value
   }
   deriving (Show, Generic)
+  deriving (AE.FromJSON) via DAE.Snake SpanRecord
+  deriving anyclass (NFData, FromRow, ToRow)
 
 
 logRecordByProjectAndId :: DB :> es => Projects.ProjectId -> UTCTime -> UUID.UUID -> Eff es (Maybe LogRecord)
