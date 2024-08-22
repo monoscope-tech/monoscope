@@ -350,8 +350,10 @@ curateCols summaryCols cols = sortBy sortAccordingly filteredCols
       , "method"
       , "url_path"
       , "request_type"
+      , "trace_id"
       , "severity_text"
       , "kind"
+      , "span_name"
       , "status"
       , "start_time"
       , "end_time"
@@ -483,6 +485,7 @@ logItemCol_ _ _ reqVec colIdxMap "status_code" = span_ [class_ $ "badge badge-sm
 logItemCol_ _ _ reqVec colIdxMap "method" = span_ [class_ $ "min-w-[4rem] badge badge-sm  " <> maybe "badge-ghost" getMethodColor (lookupVecTextByKey reqVec colIdxMap "method"), term "data-tippy-content" "method"] $ toHtml $ fromMaybe "/" $ lookupVecTextByKey reqVec colIdxMap "method"
 logItemCol_ _ _ reqVec colIdxMap "severity_text" = span_ [class_ $ "badge badge-sm " <> getSeverityColor (T.toLower $ fromMaybe "" $ lookupVecTextByKey reqVec colIdxMap "severity_text")] $ toHtml $ fromMaybe "" $ lookupVecTextByKey reqVec colIdxMap "severity_text"
 logItemCol_ _ _ reqVec colIdxMap "duration" = span_ [class_ "badge badge-sm badge-ghost whitespace-nowrap", term "data-tippy-content" "duration"] $ toHtml $ show (lookupVecIntByKey reqVec colIdxMap "duration") <> " ms"
+logItemCol_ _ _ reqVec colIdxMap "span_name" = span_ [class_ "badge badge-sm badge-ghost whitespace-nowrap", term "data-tippy-content" "span name"] $ toHtml $ fromMaybe "" $ lookupVecTextByKey reqVec colIdxMap "span_name"
 logItemCol_ _ _ reqVec colIdxMap "kind" = do
   let kind = fromMaybe "" $ lookupVecTextByKey reqVec colIdxMap "kind"
   span_ [class_ $ "badge badge-sm " <> getKindColor kind, term "data-tippy-content" "span kind"] $ toHtml $ kind
@@ -497,6 +500,7 @@ logItemCol_ source pid reqVec colIdxMap key@"rest" = div_ [class_ "space-x-2 whi
       logItemCol_ source pid reqVec colIdxMap "severity_text"
       span_ [] $ toHtml $ fromMaybe "" $ lookupVecTextByKey reqVec colIdxMap key
     "spans" -> do
+      logItemCol_ source pid reqVec colIdxMap "span_name"
       logItemCol_ source pid reqVec colIdxMap "status"
       logItemCol_ source pid reqVec colIdxMap "kind"
       span_ [] $ toHtml $ maybe "" unwrapJsonPrimValue (lookupVecByKey reqVec colIdxMap key)

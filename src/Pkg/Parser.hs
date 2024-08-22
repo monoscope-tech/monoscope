@@ -354,13 +354,13 @@ defaultSelectSqlQuery Nothing = defaultSelectSqlQuery (Just SRequests)
 defaultSelectSqlQuery (Just SSpans) =
   [ "id"
   , timestampLogFmt "timestamp"
-  , "trace_id::text"
+  , "trace_id"
   , "kind"
   , "status"
+  , "span_name"
   , "CAST(EXTRACT(EPOCH FROM (end_time - start_time)) * 1000 AS INTEGER) as duration"
   , [fmt|LEFT(
         CONCAT(
-            'span name=', COALESCE(span_name, 'null'),
             ' attributes=', COALESCE(attributes, 'null'),
             ' events=', COALESCE(events, 'null')
         ),

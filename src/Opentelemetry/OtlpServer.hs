@@ -85,7 +85,6 @@ processList msgs attrs = do
       Telemetry.bulkInsertSpans $ join spans
       pure $ V.toList ackIds
     Just "org.opentelemetry.otlp.metrics.v1" -> do
-      traceShowM $ "---------------------------------------------------metrics------------------------------------------------------------"
       let (ackIds, _) = V.unzip $ V.fromList msgs
       pure $ V.toList ackIds
     _ -> error "unsupported opentelemetry data type"

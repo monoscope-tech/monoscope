@@ -231,7 +231,8 @@ apiLogItemView logId req expandItemPath source = do
       $ Components.drawerWithURLContent_
         ("expand-log-drawer-" <> UUID.toText logId)
         (expandItemPath <> "/detailed?source=" <> source)
-      $ span_ [class_ "btn btn-sm btn-outline"] ("Expand" >> faSprite_ "expand" "regular" "h-3 w-3")
+      $ span_ [class_ "btn btn-sm btn-outline"]
+      $ "Expan Trace"
 
     button_
       [ class_ "btn btn-sm btn-outline"
