@@ -343,7 +343,19 @@ resultTable_ page mainLog = table_ [class_ "w-full table table-sm table-pin-rows
 curateCols :: [Text] -> [Text] -> [Text]
 curateCols summaryCols cols = sortBy sortAccordingly filteredCols
   where
-    defaultSummaryPaths = ["errors_count", "host", "status_code", "method", "url_path", "trace_id", "request_type", "severity_text", "kind", "status", "start_time", "end_time"]
+    defaultSummaryPaths =
+      [ "errors_count"
+      , "host"
+      , "status_code"
+      , "method"
+      , "url_path"
+      , "request_type"
+      , "severity_text"
+      , "kind"
+      , "status"
+      , "start_time"
+      , "end_time"
+      ]
     isLogEventB = isLogEvent cols
     filteredCols = filter (\c -> not isLogEventB || (c `notElem` defaultSummaryPaths || c `elem` summaryCols)) cols
 
@@ -470,9 +482,10 @@ logItemCol_ _ _ reqVec colIdxMap "timestamp" = span_ [class_ "monospace whitespa
 logItemCol_ _ _ reqVec colIdxMap "status_code" = span_ [class_ $ "badge badge-sm ph-` " <> getStatusColor (lookupVecIntByKey reqVec colIdxMap "status_code"), term "data-tippy-content" "status"] $ toHtml $ show @Text $ lookupVecIntByKey reqVec colIdxMap "status_code"
 logItemCol_ _ _ reqVec colIdxMap "method" = span_ [class_ $ "min-w-[4rem] badge badge-sm  " <> maybe "badge-ghost" getMethodColor (lookupVecTextByKey reqVec colIdxMap "method"), term "data-tippy-content" "method"] $ toHtml $ fromMaybe "/" $ lookupVecTextByKey reqVec colIdxMap "method"
 logItemCol_ _ _ reqVec colIdxMap "severity_text" = span_ [class_ $ "badge badge-sm " <> getSeverityColor (T.toLower $ fromMaybe "" $ lookupVecTextByKey reqVec colIdxMap "severity_text")] $ toHtml $ fromMaybe "" $ lookupVecTextByKey reqVec colIdxMap "severity_text"
+logItemCol_ _ _ reqVec colIdxMap "duration" = span_ [class_ $ "badge badge-sm badge-ghost whitespace-nowrap"] $ toHtml $ show (lookupVecIntByKey reqVec colIdxMap "duration") <> " ms"
 logItemCol_ _ _ reqVec colIdxMap "kind" = do
   let kind = fromMaybe "" $ lookupVecTextByKey reqVec colIdxMap "kind"
-  span_ [class_ $ "badge badge-sm " <> getKindColor kind, term "data-tippy-content" "status"] $ toHtml $ kind
+  span_ [class_ $ "badge badge-sm " <> getKindColor kind, term "data-tippy-content" "span kind"] $ toHtml $ kind
 logItemCol_ _ _ reqVec colIdxMap "status" = do
   let sts = fromMaybe "" $ lookupVecTextByKey reqVec colIdxMap "status"
   span_ [class_ $ "badge badge-sm " <> getSpanStatusColor sts, term "data-tippy-content" "status"] $ toHtml $ sts
