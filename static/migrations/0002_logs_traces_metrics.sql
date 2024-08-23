@@ -41,9 +41,9 @@ CREATE TYPE telemetry.span_kind AS ENUM ('INTERNAL', 'SERVER', 'CLIENT', 'PRODUC
 CREATE TABLE IF NOT EXISTS telemetry.spans (
     project_id UUID NOT NULL REFERENCES projects.projects (id) ON DELETE CASCADE,
     timestamp TIMESTAMPTZ NOT NULL,
-    trace_id BYTEA NOT NULL, -- Unique identifier for the trace
-    span_id BYTEA, -- Unique identifier for the span
-    parent_span_id BYTEA, -- Identifier for the parent span
+    trace_id TEXT NOT NULL, -- Unique identifier for the trace
+    span_id TEXT, -- Unique identifier for the span
+    parent_span_id TEXT, -- Identifier for the parent span
     trace_state TEXT, -- Trace state
     span_name TEXT NOT NULL, -- Name of the span
     start_time TIMESTAMPTZ NOT NULL, -- Start time of the span
@@ -60,7 +60,6 @@ CREATE TABLE IF NOT EXISTS telemetry.spans (
 );
 SELECT create_hypertable('telemetry.spans', by_range('timestamp', INTERVAL '1 hours'), migrate_data => true);
 SELECT add_retention_policy('telemetry.spans',INTERVAL '3 days',true);
-ALTER TABLE telemetry.spans ADD COLUMN IF NOT EXISTS id UUID NOT NULL DEFAULT gen_random_uuid();
 
 -- Indexes for efficient querying
 CREATE INDEX idx_traces_trace_id ON telemetry.spans(project_id, trace_id, timestamp DESC);
