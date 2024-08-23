@@ -23,8 +23,8 @@ menu pid =
   , ("API Catalog", "/p/" <> pid.toText <> "/api_catalog", "swap")
   , ("Explorer", "/p/" <> pid.toText <> "/log_explorer", "list-tree")
   , ("Changes & Errors", "/p/" <> pid.toText <> "/anomalies", "bug")
-  --, ("Outgoing Integrations", "/p/" <> pid.toText <> "/outgoing", "arrows-turn-right")
-  , ("API Tests (Beta)", "/p/" <> pid.toText <> "/testing", "list-check")
+  , -- , ("Outgoing Integrations", "/p/" <> pid.toText <> "/outgoing", "arrows-turn-right")
+    ("API Tests (Beta)", "/p/" <> pid.toText <> "/testing", "list-check")
   , ("OpenAPI/Swagger", "/p/" <> pid.toText <> "/documentation", "brackets-curly")
   , ("Reports", "/p/" <> pid.toText <> "/reports", "chart-simple")
   ]

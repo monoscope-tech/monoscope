@@ -62,7 +62,7 @@ spec = aroundAll TestUtils.withSetup do
 
     it "We should expect 2 endpoints, albeit unacknowleged." \pool -> do
       _ <- withPool pool $ execute Select [sql|CALL apis.refresh_request_dump_views_every_5mins(0, '{}')|] ()
-      endpoints <- withPool pool $ Endpoints.endpointRequestStatsByProject pid False False Nothing Nothing Nothing 0
+      endpoints <- withPool pool $ Endpoints.endpointRequestStatsByProject pid False False Nothing Nothing Nothing 0 "Incoming"
       length endpoints `shouldBe` 2 -- Two new endpoints from the last 2 requests
       forM_ endpoints \enp -> do
         ["/", "/api/v1/user/login"] `shouldContain` [enp.urlPath]

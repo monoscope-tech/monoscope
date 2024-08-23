@@ -77,7 +77,7 @@ dashboardGetH pid fromDStr toDStr sinceStr' = do
   now <- Time.currentTime
   let sinceStr = if isNothing fromDStr && isNothing toDStr && isNothing sinceStr' || fromDStr == Just "" then Just "24H" else sinceStr'
   hasRequests <- dbtToEff $ RequestDumps.hasRequest pid
-  newEndpoints <- dbtToEff $ Endpoints.endpointRequestStatsByProject pid False False Nothing Nothing Nothing 0
+  newEndpoints <- dbtToEff $ Endpoints.endpointRequestStatsByProject pid False False Nothing Nothing Nothing 0 "Incoming"
   -- TODO: Replace with a duration parser.
   let (fromD, toD, currentRange) = case sinceStr of
         Just "1H" -> (Just $ addUTCTime (negate $ secondsToNominalDiffTime 3600) now, Just now, Just "Last Hour")

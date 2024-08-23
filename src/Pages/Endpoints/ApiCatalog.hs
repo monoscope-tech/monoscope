@@ -11,8 +11,8 @@ import Models.Apis.Endpoints qualified as Endpoints
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
 import Pages.Anomalies.AnomalyList qualified as AnomalyList
+import Pages.BodyWrapper (BWConfig (currProject, pageTitle, sessM), PageCtx (..), navTabs)
 import Pkg.Components qualified as Components
-import Pages.BodyWrapper (BWConfig (currProject, pageTitle, sessM), PageCtx (..),navTabs)
 import Pkg.Components.ItemsList qualified as ItemsList
 import PyF qualified
 import Relude hiding (ask, asks)
@@ -56,12 +56,11 @@ apiCatalogH pid sortM requestTypeM = do
           { sessM = Just sess.persistentSession
           , currProject = Just project
           , pageTitle = "API Catalog"
-         , navTabs = Just $ div_ [class_ "tabs tabs-boxed border"] do
+          , navTabs = Just $ div_ [class_ "tabs tabs-boxed border"] do
               a_ [href_ $ "/p/" <> pid.toText <> "/api_catalog?sort=" <> sortV <> "&request_type=Incoming", role_ "tab", class_ $ "tab " <> if requestType == "Incoming" then "tab-active" else ""] "Incoming"
               a_ [href_ $ "/p/" <> pid.toText <> "/api_catalog?sort=" <> sortV <> "&request_type=Outgoing", role_ "tab", class_ $ "tab " <> if requestType == "Outgoing" then "tab-active" else ""] "Outgoing"
           }
   addRespHeaders $ PageCtx bwconf (ItemsList.ItemsPage listCfg $ V.map (\host -> HostEventsVM pid host requestType) hostsAndEvents)
-
 
 
 data HostEventsVM = HostEventsVM Projects.ProjectId Endpoints.HostEvents Text
@@ -72,8 +71,7 @@ instance ToHtml HostEventsVM where
   toHtmlRaw = toHtml
 
 
-
-renderapiCatalog :: Projects.ProjectId -> Endpoints.HostEvents -> Text ->Html ()
+renderapiCatalog :: Projects.ProjectId -> Endpoints.HostEvents -> Text -> Html ()
 renderapiCatalog pid host requestType = div_ [class_ "flex py-4 gap-8 items-center itemsListItem"] do
   div_ [class_ "h-4 flex space-x-3 w-8 "] do
     a_ [class_ "w-2 h-full"] ""
@@ -82,7 +80,7 @@ renderapiCatalog pid host requestType = div_ [class_ "flex py-4 gap-8 items-cent
   div_ [class_ "space-y-3 grow"] do
     div_ [class_ "space-x-3"] do
       a_ [class_ "inline-block font-bold space-x-2"] $ do
-        a_ [href_ $ "/p/" <> pid.toText <> if requestType == "Incoming" then  "/endpoints?project_host=" <> host.host <> "&request_type=" <> requestType else "/endpoints?host=" <> host.host <> "&request_type=" <> requestType, class_ " hover:text-slate-600"] $ toHtml (T.replace "http://" "" $ T.replace "https://" "" host.host)
+        a_ [href_ $ "/p/" <> pid.toText <> if requestType == "Incoming" then "/endpoints?project_host=" <> host.host <> "&request_type=" <> requestType else "/endpoints?host=" <> host.host <> "&request_type=" <> requestType, class_ " hover:text-slate-600"] $ toHtml (T.replace "http://" "" $ T.replace "https://" "" host.host)
         a_ [href_ $ "/p/" <> pid.toText <> "/log_explorer?query=host%3D%3D" <> "\"" <> host.host <> "\"", class_ "text-blue-500 hover:text-slate-600 text-xs"] "View logs"
   div_ [class_ "flex items-center justify-center "]
     $ div_
@@ -93,4 +91,3 @@ renderapiCatalog pid host requestType = div_ [class_ "flex py-4 gap-8 items-cent
       ]
       ""
   div_ [class_ "w-36 flex items-center justify-center"] $ span_ [class_ "tabular-nums text-xl", term "data-tippy-content" "Events for this Anomaly in the last 14days"] $ toHtml (show host.eventCount)
-

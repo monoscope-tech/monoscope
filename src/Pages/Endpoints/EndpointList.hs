@@ -51,28 +51,37 @@ endpointListGetH pid layoutM pageM filterTM hostM projectHostM' requestTypeM sor
   let projectHostM = projectHostM' >>= (\t -> if t == "" then Nothing else Just t)
   let page = fromMaybe 0 $ readMaybe (toString $ fromMaybe "" pageM)
   endpointStats <- dbtToEff $ case hostM of
-    Just h -> Endpoints.dependencyEndpointsRequestStatsByProject pid h
-    Nothing -> Endpoints.endpointRequestStatsByProject pid ackd archived projectHostM sortM searchM page
+    Just h -> Endpoints.endpointRequestStatsByProject pid ackd archived (Just h) sortM searchM page "Outgoing"
+    Nothing -> Endpoints.endpointRequestStatsByProject pid ackd archived projectHostM sortM searchM page "Incoming"
   projHosts <- dbtToEff $ Endpoints.getProjectHosts pid
   inboxCount <- dbtToEff $ Endpoints.countEndpointInbox pid
 
-  
   let requestType = fromMaybe "Incoming" requestTypeM
-  let currentURL =  "/p/" <> pid.toText <> "/endpoints?layout=" <> fromMaybe "false" layoutM <> "&filter=" <> fromMaybe "" filterTM <> "&sort=" <> fromMaybe "event" sortM <> "&request_type=" <> requestType <> if requestType == "Incoming" then "&project_host=" <> fromMaybe "" hostM else "&host=" <> fromMaybe "" hostM
-
+  let currentURL =
+        "/p/"
+          <> pid.toText
+          <> "/endpoints?layout="
+          <> fromMaybe "false" layoutM
+          <> "&filter="
+          <> fromMaybe "" filterTM
+          <> "&sort="
+          <> fromMaybe "event" sortM
+          <> "&request_type="
+          <> requestType
+          <> if requestType == "Incoming" then "&project_host=" <> fromMaybe "" projectHostM else "&host=" <> fromMaybe "" hostM
 
   let pageTitleHost = case hostM of
         Just host -> "Endpoint For " <> host
-        Nothing   -> "Endpoint"
+        Nothing -> "Endpoint"
 
   let pageTitleProjectHost = case projectHostM of
-        Just host  -> "Endpoint For " <> host
-        Nothing    -> "Endpoint"
+        Just host -> "Endpoint For " <> host
+        Nothing -> "Endpoint"
   let bwconf =
         (def :: BWConfig)
           { sessM = Just sess.persistentSession
           , currProject = Just project
-          , pageTitle =  if isNothing hostM then pageTitleProjectHost else pageTitleHost
+          , pageTitle = if isNothing hostM then pageTitleProjectHost else pageTitleHost
           , navTabs =
               Just
                 $ toHtml

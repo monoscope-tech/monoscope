@@ -4,10 +4,10 @@ import Lucid (Html)
 import Models.Apis.Endpoints qualified as Endpoints
 import Models.Apis.Fields.Types qualified as Fields (FieldId)
 import Pages.BodyWrapper
+import Pages.Endpoints.ApiCatalog qualified as ApiCatalog
 import Pages.Endpoints.EndpointDetails qualified as EndpointDetails
 import Pages.Endpoints.EndpointList qualified as EndpointList
 import Pages.Endpoints.Outgoing qualified as Outgoing
-import Pages.Endpoints.ApiCatalog qualified as ApiCatalog
 import Pkg.Components.ItemsList qualified as ItemsList
 import Relude
 import Servant

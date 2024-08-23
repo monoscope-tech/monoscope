@@ -150,12 +150,13 @@ data EndpointRequestStats = EndpointRequestStats
 
 -- FIXME: Include and return a boolean flag to show if fields that have annomalies.
 -- FIXME: return endpoint_hash as well.
-endpointRequestStatsByProject :: Projects.ProjectId -> Bool -> Bool -> Maybe Text -> Maybe Text -> Maybe Text -> Int -> PgT.DBT IO (V.Vector EndpointRequestStats)
-endpointRequestStatsByProject pid ackd archived pHostM sortM searchM page =
+endpointRequestStatsByProject :: Projects.ProjectId -> Bool -> Bool -> Maybe Text -> Maybe Text -> Maybe Text -> Int -> Text -> PgT.DBT IO (V.Vector EndpointRequestStats)
+endpointRequestStatsByProject pid ackd archived pHostM sortM searchM page requestType =
   case pHostM of
-    Just h -> query Select (Query $ encodeUtf8 q) (pid, h, skip)
-    Nothing -> query Select (Query $ encodeUtf8 q) (pid, skip)
+    Just h -> query Select (Query $ encodeUtf8 q) (pid, isOutgoing, h, skip)
+    Nothing -> query Select (Query $ encodeUtf8 q) (pid, isOutgoing, skip)
   where
+    isOutgoing = requestType == "Outgoing"
     skip = page * 30
     ackdAt = if ackd && not archived then "AND ann.acknowleged_at IS NOT NULL AND ann.archived_at IS NULL " else "AND ann.acknowleged_at IS NULL "
     archivedAt = if archived then "AND ann.archived_at IS NOT NULL " else " AND ann.archived_at IS NULL"
@@ -181,19 +182,19 @@ endpointRequestStatsByProject pid ackd archived pHostM sortM searchM page =
      from apis.endpoints enp
      left join apis.endpoint_request_stats ers on (enp.id=ers.endpoint_id)
      left join apis.anomalies ann on (ann.anomaly_type='endpoint' AND ann.target_hash=enp.hash)
-     where enp.project_id=? and enp.outgoing=false and ann.id is not null $ackdAt $archivedAt $pHostQery $search
+     where enp.project_id=? and enp.outgoing=? and ann.id is not null $ackdAt $archivedAt $pHostQery $search
      order by $orderBy , url_path ASC
      offset ? limit 30;
      ;
   |]
 
 
-dependencyEndpointsRequestStatsByProject :: Projects.ProjectId -> Text -> PgT.DBT IO (V.Vector EndpointRequestStats)
-dependencyEndpointsRequestStatsByProject pid host = query Select (Query $ encodeUtf8 q) (pid, host)
+dependencyEndpointsRequestStatsByProject :: Projects.ProjectId -> Text -> Bool -> Bool -> Maybe Text -> Maybe Text -> Int -> PgT.DBT IO (V.Vector EndpointRequestStats)
+dependencyEndpointsRequestStatsByProject pid host ack arch sortM searchM page = query Select (Query $ encodeUtf8 q) (pid, host)
   where
     q =
       [text|
-      SELECT enp.id endpoint_id, enp.hash endpoint_hash, enp.project_id, enp.url_path, enp.method, coalesce(min,0),  coalesce(p50,0),  coalesce(p75,0),  coalesce(p90,0),  coalesce(p95,0),  coalesce(p99,0),  coalesce(max,0) ,
+      SELECT enp.id endpoint_id, enp.hash endpoint_hash, enp.project_id, enp.url_path, enp.method, coalesce(min,0),  coalesce(p50,0),  coalesce(p75,0),  coalesce(p90,0), coalesce(p95,0),  coalesce(p99,0),  coalesce(max,0) ,
          coalesce(total_time,0), coalesce(total_time_proj,0), coalesce(total_requests,0), coalesce(total_requests_proj,0),
          (SELECT count(*) from apis.issues
                  where project_id=enp.project_id AND acknowleged_at is null AND archived_at is null AND anomaly_type != 'field'
@@ -317,11 +318,10 @@ dependenciesAndEventsCount pid requestType sortT = query Select (Query $ encodeU
       "last_seen" -> "last_seen DESC;"
       _ -> "eventsCount DESC;"
 
-
     endpointFilter = case requestType of
       "Outgoing" -> "ep.outgoing = true"
       "Incoming" -> "ep.outgoing = false"
-      _          -> "ep.outgoing =  false"
+      _ -> "ep.outgoing =  false"
 
     q =
       [text|
@@ -347,7 +347,6 @@ WHERE ep.project_id = ?
   AND $endpointFilter
   ORDER BY $orderBy
       |]
-
 
 
 countEndpointInbox :: Projects.ProjectId -> DBT IO Int
