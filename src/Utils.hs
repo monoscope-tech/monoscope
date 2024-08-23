@@ -29,6 +29,8 @@ module Utils (
   freeTierLimitExceededBanner,
   isDemoAndNotSudo,
   escapedQueryPartial,
+  getSpanStatusColor,
+  getKindColor,
 )
 where
 
@@ -148,6 +150,24 @@ getSeverityColor "critical" = "text-red-700 bg-red-200 font-bold"
 getSeverityColor "notice" = "text-green-500 bg-green-100"
 getSeverityColor "alert" = "text-orange-600 bg-orange-100 font-bold"
 getSeverityColor _ = "text-black bg-gray-50"
+
+getSpanStatusColor :: Text -> Text
+getSpanStatusColor "ERROR" = "badge-error"
+getSpanStatusColor "OK" = "badge-success"
+getSpanStatusColor _ = "text-gray-500 bg-gray-100"
+
+
+-- data SpanKind = SKInternal | SKServer | SKClient | SKProducer | SKConsumer | SKUnspecified
+
+
+getKindColor :: Text -> Text
+getKindColor "INTERNAL" = "badge-info"
+getKindColor "SERVER" = "badge-success"
+getKindColor "CLIENT" = "badge-warning"
+getKindColor "PRODUCER" = "badge-success"
+getKindColor "CONSUMER" = "badge-warning"
+getKindColor _ = "badge-outline"
+
 
 
 unwrapJsonPrimValue :: AE.Value -> Text
