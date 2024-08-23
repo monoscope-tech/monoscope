@@ -150,24 +150,19 @@ data EndpointRequestStats = EndpointRequestStats
 
 -- FIXME: Include and return a boolean flag to show if fields that have annomalies.
 -- FIXME: return endpoint_hash as well.
-endpointRequestStatsByProject :: Projects.ProjectId -> Bool -> Bool -> Maybe Text -> Maybe Text -> Maybe Text -> Int -> PgT.DBT IO (V.Vector EndpointRequestStats)
-endpointRequestStatsByProject pid ackd archived pHostM sortM searchM page =
-  case pHostM of
-    Just h -> query Select (Query $ encodeUtf8 q) (pid, h, skip)
-    Nothing -> query Select (Query $ encodeUtf8 q) (pid, skip)
+endpointRequestStatsByProject :: Projects.ProjectId -> Bool -> Bool -> Maybe Text -> Maybe Text -> Maybe Text -> Int -> Text -> PgT.DBT IO (V.Vector EndpointRequestStats)
+endpointRequestStatsByProject pid ackd archived pHostM sortM searchM page requestType = query Select (Query $ encodeUtf8 q) (pid, isOutgoing, skip)
   where
+    isOutgoing = requestType == "Outgoing"
     skip = page * 30
     ackdAt = if ackd && not archived then "AND ann.acknowleged_at IS NOT NULL AND ann.archived_at IS NULL " else "AND ann.acknowleged_at IS NULL "
     archivedAt = if archived then "AND ann.archived_at IS NOT NULL " else " AND ann.archived_at IS NULL"
     search = case searchM of Just s -> " AND enp.url_path LIKE '%" <> s <> "%'"; Nothing -> ""
-    pHostQery = case pHostM of Just h -> " AND enp.host = ?"; Nothing -> ""
-    sortEnp = fromMaybe "" sortM
-    orderBy = case sortEnp of "first_seen" -> "enp.created_at ASC"; "last_seen" -> "enp.created_at DESC"; _ -> " coalesce(ers.total_requests,0) DESC"
+    pHostQuery = case pHostM of Just h -> " AND enp.host = ?"; Nothing -> ""
+    orderBy = case (fromMaybe "" sortM) of "first_seen" -> "enp.created_at ASC"; "last_seen" -> "enp.created_at DESC"; _ -> " coalesce(ers.total_requests,0) DESC"
     -- TODO This query to get the anomalies for the anomalies page might be too complex.
     -- Does it make sense yet to remove the call to endpoint_request_stats? since we're using async charts already
-    q =
-      [text|
-      SELECT enp.id endpoint_id, enp.hash endpoint_hash, enp.project_id, enp.url_path, enp.method, coalesce(min,0),  coalesce(p50,0),  coalesce(p75,0),  coalesce(p90,0),  coalesce(p95,0),  coalesce(p99,0),  coalesce(max,0) ,
+    q = [text| SELECT enp.id endpoint_id, enp.hash endpoint_hash, enp.project_id, enp.url_path, enp.method, coalesce(min,0),  coalesce(p50,0),  coalesce(p75,0),  coalesce(p90,0),  coalesce(p95,0),  coalesce(p99,0),  coalesce(max,0) ,
          coalesce(total_time,0), coalesce(total_time_proj,0), coalesce(ers.total_requests,0), coalesce(total_requests_proj,0),
          (SELECT count(*) from apis.issues
                  where project_id=enp.project_id AND acknowleged_at is null AND archived_at is null AND anomaly_type != 'field'
@@ -181,19 +176,19 @@ endpointRequestStatsByProject pid ackd archived pHostM sortM searchM page =
      from apis.endpoints enp
      left join apis.endpoint_request_stats ers on (enp.id=ers.endpoint_id)
      left join apis.anomalies ann on (ann.anomaly_type='endpoint' AND ann.target_hash=enp.hash)
-     where enp.project_id=? and enp.outgoing=false and ann.id is not null $ackdAt $archivedAt $pHostQery $search
+     where enp.project_id=? and enp.outgoing=? and ann.id is not null $ackdAt $archivedAt $pHostQuery $search
      order by $orderBy , url_path ASC
      offset ? limit 30;
      ;
   |]
 
 
-dependencyEndpointsRequestStatsByProject :: Projects.ProjectId -> Text -> PgT.DBT IO (V.Vector EndpointRequestStats)
-dependencyEndpointsRequestStatsByProject pid host = query Select (Query $ encodeUtf8 q) (pid, host)
+dependencyEndpointsRequestStatsByProject :: Projects.ProjectId -> Text -> Bool -> Bool -> Maybe Text -> Maybe Text -> Int -> PgT.DBT IO (V.Vector EndpointRequestStats)
+dependencyEndpointsRequestStatsByProject pid host ack arch sortM searchM page = query Select (Query $ encodeUtf8 q) (pid, host)
   where
     q =
       [text|
-      SELECT enp.id endpoint_id, enp.hash endpoint_hash, enp.project_id, enp.url_path, enp.method, coalesce(min,0),  coalesce(p50,0),  coalesce(p75,0),  coalesce(p90,0),  coalesce(p95,0),  coalesce(p99,0),  coalesce(max,0) ,
+      SELECT enp.id endpoint_id, enp.hash endpoint_hash, enp.project_id, enp.url_path, enp.method, coalesce(min,0),  coalesce(p50,0),  coalesce(p75,0),  coalesce(p90,0), coalesce(p95,0),  coalesce(p99,0),  coalesce(max,0) ,
          coalesce(total_time,0), coalesce(total_time_proj,0), coalesce(total_requests,0), coalesce(total_requests_proj,0),
          (SELECT count(*) from apis.issues
                  where project_id=enp.project_id AND acknowleged_at is null AND archived_at is null AND anomaly_type != 'field'
@@ -309,13 +304,18 @@ getProjectHosts pid = query Select q (Only pid)
     q = [sql| SELECT DISTINCT host FROM apis.endpoints where  project_id = ? AND outgoing=false AND host!= '' |]
 
 
-dependenciesAndEventsCount :: Projects.ProjectId -> Text -> DBT IO (V.Vector HostEvents)
-dependenciesAndEventsCount pid sortT = query Select (Query $ encodeUtf8 q) (pid, pid)
+dependenciesAndEventsCount :: Projects.ProjectId -> Text -> Text -> DBT IO (V.Vector HostEvents)
+dependenciesAndEventsCount pid requestType sortT = query Select (Query $ encodeUtf8 q) (pid, requestType, pid)
   where
     orderBy = case sortT of
       "first_seen" -> "first_seen ASC;"
       "last_seen" -> "last_seen DESC;"
       _ -> "eventsCount DESC;"
+
+    endpointFilter = case requestType of
+      "Outgoing" -> "ep.outgoing = true"
+      "Incoming" -> "ep.outgoing = false"
+      _ -> "ep.outgoing =  false"
 
     q =
       [text|
@@ -327,7 +327,7 @@ WITH filtered_requests AS (
     FROM apis.request_dumps rd
     WHERE rd.project_id = ?
       AND rd.created_at > NOW() - interval '14' day
-      AND rd.request_type = 'Outgoing'
+      AND rd.request_type = ?
     GROUP BY rd.host
 )
 SELECT DISTINCT ep.host,
@@ -338,14 +338,14 @@ FROM apis.endpoints ep
 LEFT JOIN filtered_requests fr ON ep.host = fr.host
 WHERE ep.project_id = ?
   AND ep.host != ''
-  AND ep.outgoing = true
+  AND $endpointFilter
   ORDER BY $orderBy
       |]
 
 
-countEndpointInbox :: Projects.ProjectId -> DBT IO Int
-countEndpointInbox pid = do
-  result <- query Select (Query $ encodeUtf8 q) pid
+countEndpointInbox :: Projects.ProjectId -> Text -> DBT IO Int
+countEndpointInbox pid host = do
+  result <- query Select (Query $ encodeUtf8 q) (pid, host)
   case result of
     [Only count] -> return count
     v -> return $ length v
@@ -362,4 +362,5 @@ countEndpointInbox pid = do
             AND enp.outgoing = false
             AND ann.id IS NOT NULL
             AND ann.acknowleged_at IS NULL
+            AND host = ?
      |]

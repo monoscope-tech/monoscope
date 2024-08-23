@@ -1,6 +1,6 @@
 cabal-version: 2.0
 
--- This file has been generated from package.yaml by hpack version 0.36.0.
+-- This file has been generated from package.yaml by hpack version 0.37.0.
 --
 -- see: https://github.com/sol/hpack
 
@@ -67,13 +67,12 @@ library
       Pages.Components
       Pages.Dashboard
       Pages.DashboardSpec
+      Pages.Endpoints.ApiCatalog
       Pages.Endpoints.EndpointComponents
       Pages.Endpoints.EndpointDetails
       Pages.Endpoints.EndpointDetailsSpec
       Pages.Endpoints.EndpointList
       Pages.Endpoints.EndpointListSpec
-      Pages.Endpoints.Outgoing
-      Pages.Endpoints.OutgoingSpec
       Pages.Endpoints.Routes
       Pages.Endpoints.Server
       Pages.Fields.FieldDetails
