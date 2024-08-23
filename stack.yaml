@@ -1,4 +1,4 @@
-resolver: nightly-2024-07-12
+resolver: nightly-2024-08-23
 packages:
   - .
 
