@@ -154,9 +154,8 @@ endpointRequestStatsByProject :: Projects.ProjectId -> Bool -> Bool -> Maybe Tex
 endpointRequestStatsByProject pid ackd archived pHostM sortM searchM page requestType = query Select (Query $ encodeUtf8 q) queryParams 
   where
     -- Construct the list of parameters conditionally
-    baseParams = [toField pid, toField isOutgoing]
     pHostParams = maybe [] (\h -> [toField h]) pHostM
-    queryParams = baseParams ++ pHostParams ++ [toField offset]
+    queryParams = [toField pid, toField isOutgoing] ++ pHostParams ++ [toField offset]
 
     isOutgoing = requestType == "Outgoing"
     offset = page * 30
