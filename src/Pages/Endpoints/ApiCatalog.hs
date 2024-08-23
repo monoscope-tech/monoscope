@@ -80,7 +80,7 @@ renderapiCatalog pid host requestType = div_ [class_ "flex py-4 gap-8 items-cent
   div_ [class_ "space-y-3 grow"] do
     div_ [class_ "space-x-3"] do
       a_ [class_ "inline-block font-bold space-x-2"] $ do
-        a_ [href_ $ "/p/" <> pid.toText <> if requestType == "Incoming" then "/endpoints?project_host=" <> host.host <> "&request_type=" <> requestType else "/endpoints?host=" <> host.host <> "&request_type=" <> requestType, class_ " hover:text-slate-600"] $ toHtml (T.replace "http://" "" $ T.replace "https://" "" host.host)
+        a_ [href_ $ "/p/" <> pid.toText <> "/endpoints?host=" <> host.host <> "&request_type=" <> requestType, class_ " hover:text-slate-600"] $ toHtml (T.replace "http://" "" $ T.replace "https://" "" host.host)
         a_ [href_ $ "/p/" <> pid.toText <> "/log_explorer?query=host%3D%3D" <> "\"" <> host.host <> "\"", class_ "text-blue-500 hover:text-slate-600 text-xs"] "View logs"
   div_ [class_ "flex items-center justify-center "]
     $ div_

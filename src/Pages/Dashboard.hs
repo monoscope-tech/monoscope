@@ -4,13 +4,10 @@ import Data.Aeson qualified as AE
 import Data.Default (def)
 import Data.Time (
   UTCTime,
-  ZonedTime,
   addUTCTime,
   formatTime,
   getCurrentTime,
   secondsToNominalDiffTime,
-  utc,
-  utcToZonedTime,
  )
 import Data.Time.Format (defaultTimeLocale)
 import Data.Time.Format.ISO8601 (iso8601ParseM)

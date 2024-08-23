@@ -38,9 +38,8 @@ endpointListGetH
   -> Maybe Text
   -> Maybe Text
   -> Maybe Text
-  -> Maybe Text
   -> ATAuthCtx (RespHeaders EndpointRequestStatsVM)
-endpointListGetH pid layoutM pageM filterTM hostM projectHostM' requestTypeM sortM hxRequestM hxBoostedM hxCurrentURL loadMoreM searchM = do
+endpointListGetH pid pageM layoutM filterTM hostM requestTypeM sortM hxRequestM hxBoostedM hxCurrentURL loadMoreM searchM = do
   (sess, project) <- Sessions.sessionAndProject pid
   let (ackd, archived, currentFilterTab) = case filterTM of
         Just "Active" -> (True, False, "Active")
@@ -48,62 +47,38 @@ endpointListGetH pid layoutM pageM filterTM hostM projectHostM' requestTypeM sor
         Just "Archived" -> (False, True, "Archived")
         _ -> (True, False, "Active")
 
-  let projectHostM = projectHostM' >>= (\t -> if t == "" then Nothing else Just t)
+  let host = fromMaybe "" $ hostM >>= \t -> if t == "" then Nothing else Just t
   let page = fromMaybe 0 $ readMaybe (toString $ fromMaybe "" pageM)
-  endpointStats <- dbtToEff $ case hostM of
-    Just h -> Endpoints.endpointRequestStatsByProject pid ackd archived (Just h) sortM searchM page "Outgoing"
-    Nothing -> Endpoints.endpointRequestStatsByProject pid ackd archived projectHostM sortM searchM page "Incoming"
-  projHosts <- dbtToEff $ Endpoints.getProjectHosts pid
-  inboxCount <- dbtToEff $ Endpoints.countEndpointInbox pid
-
+  endpointStats <- dbtToEff $ Endpoints.endpointRequestStatsByProject pid ackd archived (Just host) sortM searchM page (fromMaybe "" requestTypeM)
+  inboxCount <- dbtToEff $ Endpoints.countEndpointInbox pid host
   let requestType = fromMaybe "Incoming" requestTypeM
-  let currentURL =
-        "/p/"
-          <> pid.toText
-          <> "/endpoints?layout="
-          <> fromMaybe "false" layoutM
-          <> "&filter="
-          <> fromMaybe "" filterTM
-          <> "&sort="
-          <> fromMaybe "event" sortM
-          <> "&request_type="
-          <> requestType
-          <> if requestType == "Incoming" then "&project_host=" <> fromMaybe "" projectHostM else "&host=" <> fromMaybe "" hostM
-
-  let pageTitleHost = case hostM of
-        Just host -> "Endpoint For " <> host
-        Nothing -> "Endpoint"
-
-  let pageTitleProjectHost = case projectHostM of
-        Just host -> "Endpoint For " <> host
-        Nothing -> "Endpoint"
+  let currentURL = [PyF.fmt|/p/{pid.toText}/endpoints?layout={fromMaybe "false" layoutM}&filter={fromMaybe "" filterTM}&sort={fromMaybe "event" sortM}&request_type={requestType}&host={host}|]
+  let pageTitleHost = "Endpoint For " <> host
   let bwconf =
         (def :: BWConfig)
           { sessM = Just sess.persistentSession
           , currProject = Just project
-          , pageTitle = if isNothing hostM then pageTitleProjectHost else pageTitleHost
+          , pageTitle = pageTitleHost
           , navTabs =
-              Just
-                $ toHtml
-                $ Components.TabFilter
-                  { current = currentFilterTab
-                  , currentURL
-                  , options =
-                      [ Components.TabFilterOpt{name = "Active", count = Nothing}
-                      , Components.TabFilterOpt{name = "Inbox", count = Just inboxCount}
-                      , Components.TabFilterOpt{name = "Archived", count = Nothing}
-                      ]
-                  }
+              Just $
+                toHtml $
+                  Components.TabFilter
+                    { current = currentFilterTab
+                    , currentURL
+                    , options =
+                        [ Components.TabFilterOpt{name = "Active", count = Nothing}
+                        , Components.TabFilterOpt{name = "Inbox", count = Just inboxCount}
+                        , Components.TabFilterOpt{name = "Archived", count = Nothing}
+                        ]
+                    }
           }
 
   let nextFetchUrl = currentURL <> "&page=" <> show (page + 1) <> "&load_more=true"
   currTime <- Time.currentTime
   let endpReqVM = V.map (EnpReqStatsVM False currTime) endpointStats
   case (loadMoreM, searchM) of
-    (Just _, _) -> do
-      addRespHeaders $ EndpointsListRows $ ItemsList.ItemsRows (Just nextFetchUrl) endpReqVM
-    (_, Just _) -> do
-      addRespHeaders $ EndpointsListRows $ ItemsList.ItemsRows (Just nextFetchUrl) endpReqVM
+    (Just _, _) -> addRespHeaders $ EndpointsListRows $ ItemsList.ItemsRows (Just nextFetchUrl) endpReqVM
+    (_, Just _) -> addRespHeaders $ EndpointsListRows $ ItemsList.ItemsRows (Just nextFetchUrl) endpReqVM
     _ -> do
       let listCfg =
             ItemsList.ItemsListCfg
@@ -118,11 +93,10 @@ endpointListGetH pid layoutM pageM filterTM hostM projectHostM' requestTypeM sor
                   case hostM of
                     Just h -> span_ [] "Endpoints for dependency: " >> span_ [class_ "text-blue-500 font-bold"] (toHtml h)
                     Nothing -> "Endpoints"
-                  hostFilter_ currentURL projHosts hostM projectHostM
               , search = Just $ ItemsList.SearchCfg{viaQueryParam = Just (fromMaybe "" searchM)}
               , zeroState =
-                  Just
-                    $ ItemsList.ZeroState
+                  Just $
+                    ItemsList.ZeroState
                       { icon = "empty-set"
                       , title = "Waiting for events"
                       , description = "You're currently not sending any data to APItoolkit from your backends yet."
@@ -158,16 +132,6 @@ instance ToHtml EndpointRequestStatsVM where
   toHtmlRaw = toHtml
 
 
-hostFilter_ :: Text -> V.Vector Endpoints.Host -> Maybe Text -> Maybe Text -> Html ()
-hostFilter_ currentURL hosts hostM pHostM = when (isNothing hostM) $ div_ [class_ "mt-8 flex  items-center gap-2"] do
-  span_ [class_ "font-bold"] "Host "
-  div_ [class_ "dropdown"] do
-    div_ [tabindex_ "0", role_ "btn", class_ "input input-sm"] $ toHtml $ fromMaybe "Select host" pHostM
-    ul_ [tabindex_ "0", class_ "dropdown-content z-[1] menu p-2 shadow bg-base-100 rounded-box w-52 h-96 overflow-y-scroll"] do
-      let uri = deleteParam "project_host" currentURL
-      forM_ hosts \host -> li_ [] $ a_ [class_ "prm", href_ $ uri <> "&project_host=" <> host.host] $ toHtml host.host
-
-
 endpointAccentColor :: Bool -> Bool -> Text
 endpointAccentColor _ True = "bg-slate-400"
 endpointAccentColor True False = "bg-green-200"
@@ -191,8 +155,8 @@ renderEndpoint activePage currTime enp = do
         div_ [class_ "flex items-center gap-2 mt-5"] do
           AnomalyList.anomalyArchiveButton enp.projectId (Anomalies.AnomalyId enp.anomalyId) (isJust enp.archivedAt)
           AnomalyList.anomalyAcknowlegeButton enp.projectId (Anomalies.AnomalyId enp.anomalyId) (isJust enp.acknowlegedAt)
-    div_ [class_ "flex items-center justify-center "]
-      $ div_
+    div_ [class_ "flex items-center justify-center "] $
+      div_
         [ class_ "w-56 h-12 px-3"
         , hxGet_ $ "/charts_html?pid=" <> enp.projectId.toText <> "&since=14D&query_raw=" <> AnomalyList.escapedQueryPartial [PyF.fmt|endpoint_hash=="{enp.endpointHash}" | timechart [1d]|]
         , hxTrigger_ "intersect once"
