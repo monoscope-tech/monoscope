@@ -348,10 +348,25 @@ timestampLogFmt colName = [fmt|to_char({colName} AT TIME ZONE 'UTC', 'YYYY-MM-DD
 
 defaultSelectSqlQuery :: Maybe Sources -> [Text]
 defaultSelectSqlQuery (Just SLogs) = ["id", timestampLogFmt "timestamp", "severity_text", "body as rest"]
-defaultSelectSqlQuery (Just STraces) = ["id"]
 defaultSelectSqlQuery (Just SMetrics) = ["id"]
-defaultSelectSqlQuery (Just SSpans) = ["id"]
+defaultSelectSqlQuery (Just STraces) = ["id"]
 defaultSelectSqlQuery Nothing = defaultSelectSqlQuery (Just SRequests)
+defaultSelectSqlQuery (Just SSpans) =
+  [ "id"
+  , timestampLogFmt "timestamp"
+  , "trace_id"
+  , "kind"
+  , "status"
+  , "span_name"
+  , "CAST(EXTRACT(EPOCH FROM (end_time - start_time)) * 1000 AS INTEGER) as duration"
+  , [fmt|LEFT(
+        CONCAT(
+            ' attributes=', COALESCE(attributes, 'null'),
+            ' events=', COALESCE(events, 'null')
+        ),
+        255
+    ) as rest|]
+  ]
 defaultSelectSqlQuery (Just SRequests) =
   [ "id::text as id"
   , timestampLogFmt "created_at"
