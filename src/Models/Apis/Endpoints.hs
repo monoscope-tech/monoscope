@@ -151,7 +151,7 @@ data EndpointRequestStats = EndpointRequestStats
 -- FIXME: Include and return a boolean flag to show if fields that have annomalies.
 -- FIXME: return endpoint_hash as well.
 endpointRequestStatsByProject :: Projects.ProjectId -> Bool -> Bool -> Maybe Text -> Maybe Text -> Maybe Text -> Int -> Text -> PgT.DBT IO (V.Vector EndpointRequestStats)
-endpointRequestStatsByProject pid ackd archived pHostM sortM searchM page requestType = query Select (Query $ encodeUtf8 q) (pid, isOutgoing, pHostM, skip)
+endpointRequestStatsByProject pid ackd archived pHostM sortM searchM page requestType = query Select (Query $ encodeUtf8 q) (pid, isOutgoing, skip)
   where
     isOutgoing = requestType == "Outgoing"
     skip = page * 30
