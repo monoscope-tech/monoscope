@@ -94,7 +94,7 @@ convertToQueryMonitor projectId now queryMonitorId alertForm =
         }
 
 
-alertUpsertPostH :: Projects.ProjectId -> AlertUpsertForm -> ATAuthCtx (RespHeaders (Alert))
+alertUpsertPostH :: Projects.ProjectId -> AlertUpsertForm -> ATAuthCtx (RespHeaders Alert)
 alertUpsertPostH pid form = do
   let alertId = form.alertId >>= UUID.fromText
   queryMonitorId <- liftIO $ case alertId of
@@ -108,13 +108,13 @@ alertUpsertPostH pid form = do
   addRespHeaders $ AlertNoContent ""
 
 
-alertListGetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders (Alert))
+alertListGetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders Alert)
 alertListGetH pid = do
   monitors <- dbtToEff $ Monitors.queryMonitorsAll pid
   addRespHeaders $ AlertListGet monitors
 
 
-alertSingleToggleActiveH :: Projects.ProjectId -> Monitors.QueryMonitorId -> ATAuthCtx (RespHeaders (Alert))
+alertSingleToggleActiveH :: Projects.ProjectId -> Monitors.QueryMonitorId -> ATAuthCtx (RespHeaders Alert)
 alertSingleToggleActiveH pid monitorId = do
   _ <- dbtToEff $ Monitors.monitorToggleActiveById monitorId
 
@@ -122,7 +122,7 @@ alertSingleToggleActiveH pid monitorId = do
   addRespHeaders $ AlertListGet monitors
 
 
-alertSingleGetH :: Projects.ProjectId -> Monitors.QueryMonitorId -> ATAuthCtx (RespHeaders (Alert))
+alertSingleGetH :: Projects.ProjectId -> Monitors.QueryMonitorId -> ATAuthCtx (RespHeaders Alert)
 alertSingleGetH pid monitorId = do
   monitor <- dbtToEff $ Monitors.queryMonitorById monitorId
   addRespHeaders $ AlertSingle pid monitor

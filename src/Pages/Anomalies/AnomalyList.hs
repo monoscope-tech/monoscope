@@ -77,7 +77,7 @@ newtype AnomalyBulkForm = AnomalyBulk
   deriving anyclass (FromForm)
 
 
-acknowlegeAnomalyGetH :: Projects.ProjectId -> Anomalies.AnomalyId -> ATAuthCtx (RespHeaders (AnomalyAction))
+acknowlegeAnomalyGetH :: Projects.ProjectId -> Anomalies.AnomalyId -> ATAuthCtx (RespHeaders AnomalyAction)
 acknowlegeAnomalyGetH pid aid = do
   (sess, project) <- Sessions.sessionAndProject pid
   appCtx <- ask @AuthContext
@@ -88,7 +88,7 @@ acknowlegeAnomalyGetH pid aid = do
   addRespHeaders $ Acknowlege pid aid True
 
 
-unAcknowlegeAnomalyGetH :: Projects.ProjectId -> Anomalies.AnomalyId -> ATAuthCtx (RespHeaders (AnomalyAction))
+unAcknowlegeAnomalyGetH :: Projects.ProjectId -> Anomalies.AnomalyId -> ATAuthCtx (RespHeaders AnomalyAction)
 unAcknowlegeAnomalyGetH pid aid = do
   (sess, project) <- Sessions.sessionAndProject pid
   let q = [sql| update apis.anomalies set acknowleged_by=null, acknowleged_at=null where id=? |]
@@ -98,7 +98,7 @@ unAcknowlegeAnomalyGetH pid aid = do
   addRespHeaders $ Acknowlege pid aid False
 
 
-archiveAnomalyGetH :: Projects.ProjectId -> Anomalies.AnomalyId -> ATAuthCtx (RespHeaders (AnomalyAction))
+archiveAnomalyGetH :: Projects.ProjectId -> Anomalies.AnomalyId -> ATAuthCtx (RespHeaders AnomalyAction)
 archiveAnomalyGetH pid aid = do
   (sess, project) <- Sessions.sessionAndProject pid
   let q = [sql| update apis.anomalies set archived_at=NOW() where id=? |]
@@ -108,7 +108,7 @@ archiveAnomalyGetH pid aid = do
   addRespHeaders $ Archive pid aid True
 
 
-unArchiveAnomalyGetH :: Projects.ProjectId -> Anomalies.AnomalyId -> ATAuthCtx (RespHeaders (AnomalyAction))
+unArchiveAnomalyGetH :: Projects.ProjectId -> Anomalies.AnomalyId -> ATAuthCtx (RespHeaders AnomalyAction)
 unArchiveAnomalyGetH pid aid = do
   (sess, project) <- Sessions.sessionAndProject pid
   let q = [sql| update apis.anomalies set archived_at=null where id=? |]
@@ -127,13 +127,13 @@ data AnomalyAction
 instance ToHtml AnomalyAction where
   toHtml (Acknowlege pid aid is_ack) = toHtml $ anomalyAcknowlegeButton pid aid is_ack
   toHtml (Archive pid aid is_arch) = toHtml $ anomalyArchiveButton pid aid is_arch
-  toHtml (Bulk) = ""
+  toHtml Bulk = ""
   toHtmlRaw = toHtml
 
 
 -- When given a list of anomalyIDs and an action, said action would be applied to the anomalyIDs.
 -- Then a notification should be triggered, as well as an action to reload the anomaly List.
-anomalyBulkActionsPostH :: Projects.ProjectId -> Text -> AnomalyBulkForm -> ATAuthCtx (RespHeaders (AnomalyAction))
+anomalyBulkActionsPostH :: Projects.ProjectId -> Text -> AnomalyBulkForm -> ATAuthCtx (RespHeaders AnomalyAction)
 anomalyBulkActionsPostH pid action items = do
   (sess, project) <- Sessions.sessionAndProject pid
   appCtx <- ask @AuthContext
@@ -161,7 +161,7 @@ anomalyListGetH
   -> Maybe Endpoints.EndpointId
   -> Maybe Text
   -> Maybe Text
-  -> ATAuthCtx (RespHeaders (AnomalyListGet))
+  -> ATAuthCtx (RespHeaders AnomalyListGet)
 anomalyListGetH pid layoutM filterTM sortM pageM loadM endpointM hxRequestM hxBoostedM = do
   (sess, project) <- Sessions.sessionAndProject pid
   let (ackd, archived, currentFilterTab) = case filterTM of
@@ -290,9 +290,9 @@ anomalyListSlider currTime _ _ (Just issues) = do
 
 shapeParameterStats_ :: Int -> Int -> Int -> Html ()
 shapeParameterStats_ newF deletedF updatedFF = div_ [class_ "stats stats-vertical lg:stats-horizontal shadow"] do
-  div_ [class_ "stat p-3 px-4"] $ (div_ [class_ "text-2xl font-medium text-green-800"] $ toHtml @String $ show newF) >> small_ [class_ "stat-title"] "new fields"
-  div_ [class_ "stat p-3 px-4"] $ (div_ [class_ "text-2xl font-medium text-slate-800"] $ toHtml @String $ show updatedFF) >> small_ [class_ "stat-title"] "updated"
-  div_ [class_ "stat p-3 px-4"] $ (div_ [class_ "text-2xl font-medium text-red-800"] $ toHtml @String $ show deletedF) >> small_ [class_ "stat-title"] "deleted"
+  div_ [class_ "stat p-3 px-4"] $ div_ [class_ "text-2xl font-medium text-green-800"] (toHtml @String $ show newF) >> small_ [class_ "stat-title"] "new fields"
+  div_ [class_ "stat p-3 px-4"] $ div_ [class_ "text-2xl font-medium text-slate-800"] (toHtml @String $ show updatedFF) >> small_ [class_ "stat-title"] "updated"
+  div_ [class_ "stat p-3 px-4"] $ div_ [class_ "text-2xl font-medium text-red-800"] (toHtml @String $ show deletedF) >> small_ [class_ "stat-title"] "deleted"
 
 
 -- anomalyAccentColor isAcknowleged isArchived
@@ -312,7 +312,7 @@ issueItem hideByDefault currTime issue icon title subTitle content = do
     div_ [class_ "space-y-3 grow"] do
       div_ [class_ "space-x-3"] do
         a_ [href_ $ "/p/" <> issue.projectId.toText <> "/anomalies/by_hash/" <> issue.targetHash, class_ "inline-block font-bold text-blue-700 space-x-2", termRaw "preload" "mouseover"] do
-          (img_ [src_ icon, class_ "inline w-4 h-4"] >> (span_ $ toHtml title))
+          img_ [src_ icon, class_ "inline w-4 h-4"] >> (span_ $ toHtml title)
         small_ [class_ "inline-block text-gray-800"] $ fromMaybe (toHtml @String "") subTitle
       div_ [class_ "flex flex-row gap-8"] do
         div_ do
@@ -328,7 +328,7 @@ issueItem hideByDefault currTime issue icon title subTitle content = do
                 $ prettyTimeAuto currTime
                 $ zonedTimeToUTC issue.createdAt
               span_ "|"
-              span_ [class_ "decoration-black underline", term "data-tippy-content" $ "last seen: " <> show issue.eventsAgg.lastSeen] $ toHtml $ prettyTimeAuto currTime $ issue.eventsAgg.lastSeen
+              span_ [class_ "decoration-black underline", term "data-tippy-content" $ "last seen: " <> show issue.eventsAgg.lastSeen] $ toHtml $ prettyTimeAuto currTime issue.eventsAgg.lastSeen
           div_ [class_ "flex items-center gap-2 mt-5"] do
             anomalyArchiveButton issue.projectId issue.id (isJust issue.archivedAt)
             anomalyAcknowlegeButton issue.projectId issue.id (isJust issue.acknowlegedAt)
@@ -350,7 +350,7 @@ issueItem hideByDefault currTime issue icon title subTitle content = do
 
 
 -- anomalyDetailsGetH: either in modal or as a standalone page
-anomalyDetailsGetH :: Projects.ProjectId -> Text -> Maybe Text -> ATAuthCtx (RespHeaders (AnomalyDetails))
+anomalyDetailsGetH :: Projects.ProjectId -> Text -> Maybe Text -> ATAuthCtx (RespHeaders AnomalyDetails)
 anomalyDetailsGetH pid targetHash hxBoostedM = do
   (sess, project) <- Sessions.sessionAndProject pid
   issueM <- dbtToEff $ Anomalies.selectIssueByHash pid targetHash
@@ -371,23 +371,23 @@ anomalyDetailsGetH pid targetHash hxBoostedM = do
           fields <- dbtToEff $ Fields.selectFields pid targetHash
           let shapesWithFieldsMap = V.map (`getShapeFields` fields) shapes
           case hxBoostedM of
-            Just _ -> addRespHeaders $ AnomalyDetailsBoosted (issue, (Just shapesWithFieldsMap), Nothing, Nothing, currTime, True)
-            Nothing -> addRespHeaders $ AnomalyDetailsMain $ PageCtx bwconf $ (issue, (Just shapesWithFieldsMap), Nothing, Nothing, currTime, False)
+            Just _ -> addRespHeaders $ AnomalyDetailsBoosted (issue, Just shapesWithFieldsMap, Nothing, Nothing, currTime, True)
+            Nothing -> addRespHeaders $ AnomalyDetailsMain $ PageCtx bwconf (issue, (Just shapesWithFieldsMap), Nothing, Nothing, currTime, False)
         Anomalies.IDNewShapeIssue issueD -> do
           newF <- dbtToEff $ Fields.selectFieldsByHashes pid issueD.newUniqueFields
           updF <- dbtToEff $ Fields.selectFieldsByHashes pid (T.take 16 <$> issueD.updatedFieldFormats)
           delF <- dbtToEff $ Fields.selectFieldsByHashes pid issueD.deletedFields
           let anFields = (groupFieldsByCategory newF, groupFieldsByCategory updF, groupFieldsByCategory delF)
           case hxBoostedM of
-            Just _ -> addRespHeaders $ AnomalyDetailsBoosted (issue, Nothing, (Just anFields), Nothing, currTime, True)
-            Nothing -> addRespHeaders $ AnomalyDetailsMain $ PageCtx bwconf (issue, Nothing, (Just anFields), Nothing, currTime, False)
+            Just _ -> addRespHeaders $ AnomalyDetailsBoosted (issue, Nothing, Just anFields, Nothing, currTime, True)
+            Nothing -> addRespHeaders $ AnomalyDetailsMain $ PageCtx bwconf (issue, Nothing, Just anFields, Nothing, currTime, False)
         Anomalies.IDNewFormatIssue issueD -> do
           anFormats <-
             dbtToEff
-              $ Fields.getFieldsByEndpointKeyPathAndCategory pid (issueD.endpointId.toText) (issueD.fieldKeyPath) (issueD.fieldCategory)
+              $ Fields.getFieldsByEndpointKeyPathAndCategory pid issueD.endpointId.toText issueD.fieldKeyPath issueD.fieldCategory
           case hxBoostedM of
-            Just _ -> addRespHeaders $ AnomalyDetailsBoosted (issue, Nothing, Nothing, (Just anFormats), currTime, True)
-            Nothing -> addRespHeaders $ AnomalyDetailsMain $ PageCtx bwconf (issue, Nothing, Nothing, (Just anFormats), currTime, False)
+            Just _ -> addRespHeaders $ AnomalyDetailsBoosted (issue, Nothing, Nothing, Just anFormats, currTime, True)
+            Nothing -> addRespHeaders $ AnomalyDetailsMain $ PageCtx bwconf (issue, Nothing, Nothing, Just anFormats, currTime, False)
         Anomalies.IDNewRuntimeExceptionIssue issueD -> do
           case hxBoostedM of
             Just _ -> addRespHeaders $ AnomalyDetailsBoosted (issue, Nothing, Nothing, Nothing, currTime, True)
@@ -433,19 +433,19 @@ anomalyDetailsPage issue shapesWithFieldsMap fields prvFormatsM currTime modal =
                 faSprite_ "arrow-up-arrow-down" "solid" "inline w-6 h-6 -mt-1"
                 span_ [class_ "text-2xl"] "New Endpoint"
               div_ [class_ "flex items-center gap-3"] do
-                let methodColor = Utils.getMethodColor (issueD.endpointMethod)
-                div_ [class_ $ "px-4 py-1 text-sm rounded-lg font-semibold " <> methodColor] $ toHtml $ issueD.endpointMethod
-                span_ [] $ toHtml $ issueD.endpointUrlPath
+                let methodColor = Utils.getMethodColor issueD.endpointMethod
+                div_ [class_ $ "px-4 py-1 text-sm rounded-lg font-semibold " <> methodColor] $ toHtml issueD.endpointMethod
+                span_ [] $ toHtml issueD.endpointUrlPath
           Anomalies.IDNewShapeIssue issueD -> do
             div_ [class_ "flex flex-col gap-4 shrink-0"] do
               a_ [class_ "inline-block font-bold text-blue-700 space-x-2"] do
                 img_ [src_ "/assets/svgs/anomalies/fields.svg", class_ "inline w-6 h-6 -mt-1"]
                 span_ [class_ "text-2xl"] "New Request Shape"
               div_ [class_ "flex items-center gap-3"] do
-                let methodColor = Utils.getMethodColor (issueD.endpointMethod)
+                let methodColor = Utils.getMethodColor issueD.endpointMethod
                 p_ [class_ "italic"] "in"
-                div_ [class_ $ "px-4 py-1 text-sm rounded-lg font-semibold " <> methodColor] $ toHtml $ issueD.endpointMethod
-                span_ [] $ toHtml $ issueD.endpointUrlPath
+                div_ [class_ $ "px-4 py-1 text-sm rounded-lg font-semibold " <> methodColor] $ toHtml issueD.endpointMethod
+                span_ [] $ toHtml issueD.endpointUrlPath
               div_ [class_ "mt-4"] do
                 shapeParameterStats_ (length issueD.newUniqueFields) (length issueD.deletedFields) (length issueD.updatedFieldFormats)
           Anomalies.IDNewFormatIssue issueD -> do
@@ -454,16 +454,16 @@ anomalyDetailsPage issue shapesWithFieldsMap fields prvFormatsM currTime modal =
                 img_ [src_ "/assets/svgs/anomalies/fields.svg", class_ "inline w-6 h-6 -mt-1"]
                 span_ [class_ "text-2xl"] "Modified field"
               div_ [class_ "flex items-center gap-3"] do
-                let methodColor = Utils.getMethodColor (issueD.endpointMethod)
+                let methodColor = Utils.getMethodColor issueD.endpointMethod
                 p_ [class_ "italic"] "in"
-                div_ [class_ $ "px-4 py-1 text-sm rounded-lg font-semibold " <> methodColor] $ toHtml $ issueD.endpointMethod
-                span_ [] $ toHtml $ issueD.endpointUrlPath
+                div_ [class_ $ "px-4 py-1 text-sm rounded-lg font-semibold " <> methodColor] $ toHtml issueD.endpointMethod
+                span_ [] $ toHtml issueD.endpointUrlPath
           Anomalies.IDNewRuntimeExceptionIssue issueD -> do
             div_ [class_ "flex flex-col gap-4 shrink-0"] do
               a_ [class_ "inline-block font-bold text-blue-700 space-x-2"] do
                 img_ [src_ "/assets/svgs/anomalies/fields.svg", class_ "inline w-6 h-6 -mt-1"]
                 span_ [class_ "text-2xl"] $ toHtml issueD.errorType
-              p_ $ toHtml $ issueD.message
+              p_ $ toHtml issueD.message
           _ -> pass
         div_ [class_ "flex items-center gap-8 shrink-0 text-gray-600"] do
           div_ [class_ "flex items-center gap-6 -mt-4"] do
@@ -564,14 +564,14 @@ anomalyFormatOverview formatData prevFormats =
       --   h3_ [class_ "text-base text-slate-800"] $ toHtml $ formatData.fieldKey
       div_ do
         h6_ [class_ "text-sm text-slate-800 "] "FIELD PATH"
-        h3_ [class_ "text-base text-slate-800 monospace"] $ toHtml $ formatData.fieldKeyPath
+        h3_ [class_ "text-base text-slate-800 monospace"] $ toHtml formatData.fieldKeyPath
     -- div_ do
     --   h6_ [class_ "text-sm text-slate-800"] "FIELD CATEGORY"
     --   h4_ [class_ "text-base text-slate-800"] $ EndpointComponents.fieldCategoryToDisplay $ fromMaybe FCRequestBody an.fieldCategory
     div_ [class_ "flex items-center gap-6"] do
       div_ do
         h5_ [class_ "text-sm text-slate-800"] "NEW FIELD FORMAT"
-        h3_ [class_ "text-base text-slate-800 monospace"] $ toHtml $ fieldTypeToText $ formatData.formatType
+        h3_ [class_ "text-base text-slate-800 monospace"] $ toHtml $ fieldTypeToText formatData.formatType
       div_ do
         h5_ [class_ "text-sm text-slate-800"] "PREVIOUS FIELD FORMATS"
         ul_ [class_ "list-disc"] do
@@ -627,14 +627,14 @@ renderIssue hideByDefault currTime issue = do
     Anomalies.IDNewFormatIssue issueD -> do
       let endpointTitle = toHtml $ issueD.endpointMethod <> "  " <> issueD.endpointUrlPath
       let subTitle = span_ [class_ "space-x-2"] do
-            a_ [class_ "cursor-pointer"] $ toHtml $ issueD.fieldKeyPath
+            a_ [class_ "cursor-pointer"] $ toHtml issueD.fieldKeyPath
             span_ [] "in"
             span_ [] $ toHtml endpointTitle
       let formatContent = div_ [class_ "block"] do
             div_ [class_ "text-sm"] do
               div_ do
                 small_ "current format: "
-                span_ $ toHtml $ issueD.formatType.toText
+                span_ $ toHtml issueD.formatType.toText
               div_ do
                 small_ "previous formats: "
                 span_ "" -- TODO: Should be comma separated list of formats for that field.

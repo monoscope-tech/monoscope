@@ -54,7 +54,7 @@ transform fields tuples =
   where
     getValue field = lookup field (map swap_ tuples)
     swap_ (_, a, b) = (b, a)
-    timestamp = fromMaybe 0 $ fst3 <$> Safe.headMay tuples
+    timestamp = maybe 0 fst3 (Safe.headMay tuples)
 
 
 pivot' :: [(Int, Int, String)] -> ([String], [[Maybe Int]])
@@ -183,7 +183,7 @@ buildReqDumpSQL exps = (q, join qByArgs, mFrom, mTo)
         goDateRange (_mFrom, mTop) (QBFrom from_) = (Just from_, mTop)
         goDateRange (mFromp, _mTo) (QBTo to_) = (mFromp, Just to_)
         goDateRange acc _ = acc -- Ignore all other constructors
-    calcInterval numSlotsE' fromE' toE' = floor (diffUTCTime (toE') (fromE')) `div` numSlotsE'
+    calcInterval numSlotsE' fromE' toE' = floor (diffUTCTime toE' fromE') `div` numSlotsE'
 
     (mFrom, mTo) = dateRangeFromQueryBy queryBy
 

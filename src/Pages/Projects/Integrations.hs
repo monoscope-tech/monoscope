@@ -54,7 +54,7 @@ createProjectGetH = do
           { sessM = Just sess.persistentSession
           , pageTitle = "Endpoints"
           }
-  addRespHeaders $ bodyWrapper bwconf $ integrationsBody (sess.persistentSession) appCtx.config False (def @CreateProjectForm) Nothing Nothing
+  addRespHeaders $ bodyWrapper bwconf $ integrationsBody sess.persistentSession appCtx.config False (def @CreateProjectForm) Nothing Nothing
 
 
 ----------------------------------------------------------------------------------------------------------

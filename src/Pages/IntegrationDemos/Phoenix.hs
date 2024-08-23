@@ -18,7 +18,7 @@ phoenixGuide apikey = do
         "to the dependencies in"
         codeEmphasis " mix.exs: "
       codeExample
-        $ [text|def deps do
+        [text|def deps do
   [
     {:apitoolkit_phoenix, "~> 0.1.1"}
   ]
@@ -33,7 +33,7 @@ end|]
         codeEmphasis " router.ex "
         "file to start monitoring incoming requests."
       codeExample
-        $ [text|
+        [text|
 defmodule HelloWeb.Router do
   use HelloWeb, :router
   use Plug.ErrorHandler
@@ -60,7 +60,7 @@ end
       p_ [class_ "text-gray-600 font-medium max-w-5xl"] "APItoolkit allows you to report errors alongside the request that caused them which allows you to easily reproduce and fix issues in production."
       h6_ [class_ "text-lg font-medium"] "Automatic error handling"
       codeExample
-        $ [text|
+        [text|
 @impl Plug.ErrorHandler
 def handle_errors(conn, err) do
   conn = report_error(conn, err)
@@ -69,7 +69,7 @@ end
       |]
       h6_ [class_ "text-lg font-medium"] "Report errors manually to APItoolkit"
       codeExample
-        $ [text|
+        [text|
 defmodule HelloWeb.PageController do
   use HelloWeb, :controller
   import ApitoolkitPhoenix

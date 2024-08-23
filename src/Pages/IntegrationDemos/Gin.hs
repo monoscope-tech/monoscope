@@ -1,6 +1,5 @@
 module Pages.IntegrationDemos.Gin (ginGuide) where
 
-import Data.Text
 import Data.Text qualified as T
 import Lucid
 import Pkg.Components
@@ -40,7 +39,7 @@ ginGuide apikey = do
 
 initCode :: Text -> Text
 initCode apiKey =
-  T.unlines
+  unlines
     [ "package main"
     , ""
     , "import ("
@@ -73,7 +72,7 @@ initCode apiKey =
 
 configOptions :: Text
 configOptions =
-  T.unlines
+  unlines
     [ "apitoolkit.Config{"
     , "\t// Your apikey, the only required field"
     , "\tAPIKey: \"<API_KEY>\""
@@ -95,7 +94,7 @@ configOptions =
 
 errorReportingCode :: Text -> Text
 errorReportingCode apiKey =
-  T.unlines
+  unlines
     [ "package main"
     , ""
     , "import ("
@@ -129,7 +128,7 @@ errorReportingCode apiKey =
 
 outgoingRequest :: Text -> Text
 outgoingRequest apiKey =
-  T.unlines
+  unlines
     [ "package main"
     , ""
     , "import ("

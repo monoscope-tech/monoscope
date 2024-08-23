@@ -244,7 +244,7 @@ flattenVector :: [V.Vector FieldOperation] -> V.Vector FieldOperation
 flattenVector = V.concat
 
 
-documentationPutH :: Projects.ProjectId -> SaveSwaggerForm -> ATAuthCtx (RespHeaders (DocumentationMut))
+documentationPutH :: Projects.ProjectId -> SaveSwaggerForm -> ATAuthCtx (RespHeaders DocumentationMut)
 documentationPutH pid SaveSwaggerForm{updated_swagger, swagger_id, endpoints, diffsInfo} = do
   (sess, project) <- Sessions.sessionAndProject pid
   currentTime <- Time.currentTime
@@ -273,7 +273,7 @@ documentationPutH pid SaveSwaggerForm{updated_swagger, swagger_id, endpoints, di
   addRespHeaders $ DocumentationMut ""
 
 
-documentationPostH :: Projects.ProjectId -> SwaggerForm -> ATAuthCtx (RespHeaders (DocumentationMut))
+documentationPostH :: Projects.ProjectId -> SwaggerForm -> ATAuthCtx (RespHeaders DocumentationMut)
 documentationPostH pid SwaggerForm{swagger_json, from} = do
   (sess, project) <- Sessions.sessionAndProject pid
   swaggerId <- Swaggers.SwaggerId <$> liftIO UUIDV4.nextRandom
@@ -302,7 +302,7 @@ data DocumentationMut = DocumentationMut Text
 
 
 instance ToHtml DocumentationMut where
-  toHtml (DocumentationMut msg) = toHtml $ msg
+  toHtml (DocumentationMut msg) = toHtml msg
   toHtmlRaw = toHtml
 
 
@@ -314,7 +314,7 @@ instance ToHtml DocumentationGet where
   toHtmlRaw = toHtml
 
 
-documentationGetH :: Projects.ProjectId -> Maybe Text -> ATAuthCtx (RespHeaders (PageCtx (DocumentationGet)))
+documentationGetH :: Projects.ProjectId -> Maybe Text -> ATAuthCtx (RespHeaders (PageCtx DocumentationGet))
 documentationGetH pid swagger_id = do
   (sess, project) <- Sessions.sessionAndProject pid
   (swaggers, swagger, swaggerId) <- dbtToEff do

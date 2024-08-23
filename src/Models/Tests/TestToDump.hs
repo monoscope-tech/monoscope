@@ -46,17 +46,17 @@ testRunToRequestMsg (Projects.ProjectId pid) currentTime parent_id sr = do
     { duration = 1000000
     , host = Just ""
     , method = method
-    , pathParams = AE.toJSON (fromMaybe mempty (sr.request.req.params))
+    , pathParams = AE.toJSON (maybeToMonoid sr.request.req.params)
     , projectId = pid
     , protoMajor = 1
     , protoMinor = 1
-    , queryParams = AE.toJSON (fromMaybe mempty (sr.request.req.params)) -- Assuming all params are query params
+    , queryParams = AE.toJSON (maybeToMonoid sr.request.req.params) -- Assuming all params are query params
     , rawUrl = rawUri
     , referer = Nothing
-    , requestBody = B64.extractBase64 $ B64.encodeBase64 $ encodeUtf8 $ fromMaybe "" (sr.request.req.raw)
-    , requestHeaders = AE.toJSON (fromMaybe mempty (sr.request.req.headers))
-    , responseBody = B64.extractBase64 $ B64.encodeBase64 $ encodeUtf8 $ sr.request.resp.raw -- TODO: base64 encode
-    , responseHeaders = AE.toJSON (sr.request.resp.headers)
+    , requestBody = B64.extractBase64 $ B64.encodeBase64 $ encodeUtf8 $ fromMaybe "" sr.request.req.raw
+    , requestHeaders = AE.toJSON (maybeToMonoid sr.request.req.headers)
+    , responseBody = B64.extractBase64 $ B64.encodeBase64 $ encodeUtf8 sr.request.resp.raw -- TODO: base64 encode
+    , responseHeaders = AE.toJSON sr.request.resp.headers
     , sdkType = RequestDumps.TestkitOutgoing
     , statusCode = sr.request.resp.status
     , urlPath = Just rawUri
@@ -99,7 +99,7 @@ runTestAndLog pid colId collectionSteps = do
       let (passed, failed) = Testing.getCollectionRunStatus stepResults
 
       -- Create a parent request for to act as parent for current test run
-      msg_id <- liftIO $ UUIDV4.nextRandom
+      msg_id <- liftIO UUIDV4.nextRandom
       let response = AE.toJSON stepResults
       _ <- dbtToEff $ Testing.updateCollectionLastRun colId (Just response) passed failed
       let parent_msg =
@@ -114,9 +114,9 @@ runTestAndLog pid colId collectionSteps = do
               , queryParams = AE.object [] -- Assuming all params are query params
               , rawUrl = "/TEST_RUN"
               , referer = Nothing -- Placeholder for the referer
-              , requestBody = B64.extractBase64 $ B64.encodeBase64 $ encodeUtf8 $ "{\"MESSAGE\": \"CUSTOM PARENT REQUEST CREATED BY APITOOLIT\"}"
+              , requestBody = B64.extractBase64 $ B64.encodeBase64 $ encodeUtf8 "{\"MESSAGE\": \"CUSTOM PARENT REQUEST CREATED BY APITOOLIT\"}"
               , requestHeaders = AE.object []
-              , responseBody = B64.extractBase64 $ B64.encodeBase64 $ encodeUtf8 $ "" -- TODO: base64 encode
+              , responseBody = B64.extractBase64 $ B64.encodeBase64 $ encodeUtf8 "" -- TODO: base64 encode
               , responseHeaders = AE.object []
               , sdkType = RequestDumps.TestkitOutgoing
               , statusCode = 200

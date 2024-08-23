@@ -105,7 +105,7 @@ pageTabs :: Text -> Html ()
 pageTabs url = do
   div_ [class_ "tabs tabs-boxed border"] do
     a_ [href_ $ url <> "/overview", role_ "tab", class_ "tab"] "Overview"
-    a_ [href_ $ url, role_ "tab", class_ "tab tab-active"] "Test editor"
+    a_ [href_ url, role_ "tab", class_ "tab tab-active"] "Test editor"
 
 
 collectionGetH :: Projects.ProjectId -> Testing.CollectionId -> ATAuthCtx (RespHeaders CollectionGet)
@@ -137,7 +137,7 @@ data CollectionGet
 
 instance ToHtml CollectionGet where
   toHtml (CollectionGet (PageCtx bwconf (pid, col, cl_rn, respJsn))) = toHtml $ PageCtx bwconf $ collectionPage pid col cl_rn respJsn
-  toHtml (CollectionNotFound (PageCtx bwconf ())) = toHtml $ PageCtx bwconf $ collectionNotFoundPage
+  toHtml (CollectionNotFound (PageCtx bwconf ())) = toHtml $ PageCtx bwconf collectionNotFoundPage
   toHtmlRaw = toHtml
 
 
@@ -145,8 +145,8 @@ data CollectionMut = CollectionMutSuccess | CollectionMutError
 
 
 instance ToHtml CollectionMut where
-  toHtml (CollectionMutSuccess) = ""
-  toHtml (CollectionMutError) = ""
+  toHtml CollectionMutSuccess = ""
+  toHtml CollectionMutError = ""
   toHtmlRaw = toHtml
 
 
@@ -162,7 +162,7 @@ instance ToHtml CollectionRunTest where
         window.collectionResults = {tkjson};
         window.updateCollectionResults({tkjson});
     |]
-    V.iforM_ results (\i r -> collectionStepResult_ i r)
+    V.iforM_ results collectionStepResult_
   toHtml RunTestError = ""
   toHtmlRaw = toHtml
 
@@ -191,7 +191,7 @@ testSettingsModalContent_ isUpdate col = div_ [class_ "space-y-5 w-96"] do
         let (scheduleNumber, scheduleNumberUnit) = case words col.schedule of
               [num, unit] -> (num, unit)
               _ -> ("1", "day")
-        input_ [class_ "input input-bordered join-item", type_ "number", name_ "scheduleNumber", value_ $ scheduleNumber]
+        input_ [class_ "input input-bordered join-item", type_ "number", name_ "scheduleNumber", value_ scheduleNumber]
         select_ [class_ "select select-bordered join-item", name_ "scheduleNumberUnit"] do
           option_ [selected_ "" | scheduleNumberUnit == "minutes"] "Minutes"
           option_ [selected_ "" | scheduleNumberUnit == "hours"] "Hours"

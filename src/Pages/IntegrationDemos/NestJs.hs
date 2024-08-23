@@ -24,7 +24,7 @@ nestGuide apikey = do
       h3_ [class_ "text-2xl font-semibold"] "Configure & Initialize SDK (Express Platform or Default)"
       p_ [class_ "text-gray-600 font-medium"] "Configure and initialize the SDK to start monitoring incoming request to your server"
       codeExample
-        $ [text|
+        [text|
 import { NestFactory } from '@nestjs/core';
 import { APIToolkit } from 'apitoolkit-express';
 import { AppModule } from './app.module';
@@ -42,7 +42,7 @@ bootstrap();
       h3_ [class_ "text-2xl font-semibold"] "Configure & Initialize SDK (Fastify Platform)"
       p_ [class_ "text-gray-600 font-medium"] "Configure and initialize the SDK to start monitoring incoming request to your server"
       codeExample
-        $ [text|
+        [text|
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
 import { FastifyAdapter, NestFastifyApplication} from '@nestjs/platform-fastify';
@@ -82,7 +82,7 @@ bootstrap();
 
       h3_ [class_ "text-2xl font-semibold mt-2"] "Error Reporting (Fastify Platform)"
       codeExample
-        $ [text|
+        [text|
 import { Controller, Get } from '@nestjs/common';
 import { AppService } from './app.service';
 import { ReportError } from 'apitoolkit-fastify';
@@ -117,7 +117,7 @@ export class AppController {
 
       h3_ [class_ "text-2xl font-semibold"] "Outgoing Request Monitoring (Fastify Platform)"
       codeExample
-        $ [text|
+        [text|
 import { Controller, Get } from '@nestjs/common';
 import { AppService } from './app.service';
 import { observeAxios } from 'apitoolkit-fastify';

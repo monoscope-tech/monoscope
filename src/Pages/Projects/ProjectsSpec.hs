@@ -34,7 +34,7 @@ spec = aroundAll withTestResources do
 
     it "Non empty project list" \TestResources{..} -> do
       pg <-
-        toServantResponse trATCtx trSessAndHeader trLogger $ ListProjects.listProjectsGetH
+        toServantResponse trATCtx trSessAndHeader trLogger ListProjects.listProjectsGetH
       length pg.unwrap.content `shouldBe` 2
       -- default demo project created in migrations
       (pg.unwrap.content V.! 1).id.toText `shouldBe` "00000000-0000-0000-0000-000000000000"
@@ -65,7 +65,7 @@ spec = aroundAll withTestResources do
     -- FIXME: marked as pending with xit. Test is faily and should be investigated
     xit "Project in list should have new details" \TestResources{..} -> do
       pg <-
-        toServantResponse trATCtx trSessAndHeader trLogger $ ListProjects.listProjectsGetH
+        toServantResponse trATCtx trSessAndHeader trLogger ListProjects.listProjectsGetH
       length pg.unwrap.content `shouldBe` 2
       (pg.unwrap.content V.! 0).id.toText `shouldBe` "00000000-0000-0000-0000-000000000001"
       (pg.unwrap.content V.! 0).title `shouldBe` "Test Project CI2"
