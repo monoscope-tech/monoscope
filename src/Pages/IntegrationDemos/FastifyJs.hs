@@ -1,6 +1,5 @@
 module Pages.IntegrationDemos.FastifyJs (fastifyGuide) where
 
-import Data.Text
 import Lucid
 import NeatInterpolation
 import Pkg.Components
@@ -19,7 +18,7 @@ fastifyGuide apikey = do
       h3_ [class_ "text-2xl font-semibold"] "Configure & Initialize SDK"
       p_ [class_ "text-gray-600 font-medium"] "Configure and initialize the SDK to start monitoring incoming request to your server"
       codeExample
-        $ [text|
+        [text|
 import Fastify from 'fastify';
 import APIToolkit from 'apitoolkit-fastify';
 
@@ -49,7 +48,7 @@ fastify.listen({ port: 3000 }, function (err, address) {
       h3_ [class_ "text-xl font-medium"] "Configuration Options"
       p_ [class_ "text-gray-600 font-medium max-w-5xl"] "The SDK accepts other options alongside apikey to allow you to customize the sdk. Redacting sensitive fields, debug mode etc"
       codeExample
-        $ [text|
+        [text|
 {
     // List of request and response headers to be redacted
     redactHeaders: [\"Authorization\"],
@@ -66,7 +65,7 @@ fastify.listen({ port: 3000 }, function (err, address) {
       h3_ [class_ "text-2xl font-semibold"] "Error Reporting"
       p_ [class_ "text-gray-600 font-medium max-w-5xl"] "APItoolkit allows you to report errors alongside the request that caused them which allows you to easily reproduce and fix issues in production."
       codeExample
-        $ [text|
+        [text|
 import Fastify from 'fastify';
 import axios from "axios";
 import APIToolkit, { ReportError } from "apitoolkit-fastify";
@@ -90,7 +89,7 @@ fastify.get('/', async (request, reply) => {
       h3_ [class_ "text-2xl font-semibold"] "Outgoing Request Monitoring"
       p_ [class_ "text-gray-600 max-w-5xl"] "APItoolkit also allows you to monitor your outgoing request (i.e the api calls your make from your server). Monitored outgoing are also associated with the incoming request that triggered them. To achieve this, wrap your axios instance with APItoolkit's observeAxios function."
       codeExample
-        $ [text|
+        [text|
 import APIToolkit, { observeAxios } from "apitoolkit-fastify";
 import axios from "axios"
 import Fastify from 'fastify';

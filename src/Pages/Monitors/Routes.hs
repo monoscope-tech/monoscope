@@ -30,7 +30,7 @@ data Routes' mode = Routes'
   , newCollectionPost :: mode :- "testing" :> ReqBody '[JSON] Testing.CollectionStepUpdateForm :> Post '[HTML] (RespHeaders (PageCtx (ItemsList.ItemsPage Testing.CollectionListItemVM)))
   , collectionGet :: mode :- "testing" :> Capture "collection_id" TestingM.CollectionId :> Get '[HTML] (RespHeaders Testing.CollectionGet)
   , collectionDashboardGet :: mode :- "testing" :> Capture "collection_id" TestingM.CollectionId :> "overview" :> Get '[HTML] (RespHeaders (PageCtx (Html ())))
-  , collectionStepsUpdate :: mode :- "testing" :> Capture "collection_id" TestingM.CollectionId :> ReqBody '[JSON] Testing.CollectionStepUpdateForm :> Post '[HTML] (RespHeaders (Testing.CollectionMut))
+  , collectionStepsUpdate :: mode :- "testing" :> Capture "collection_id" TestingM.CollectionId :> ReqBody '[JSON] Testing.CollectionStepUpdateForm :> Post '[HTML] (RespHeaders Testing.CollectionMut)
   , collectionRunTests :: mode :- "testing" :> Capture "collection_id" TestingM.CollectionId :> QueryParam "step_index" Int :> ReqBody '[JSON] Testing.CollectionStepUpdateForm :> Patch '[HTML] (RespHeaders Testing.CollectionRunTest)
   }
   deriving stock (Generic)

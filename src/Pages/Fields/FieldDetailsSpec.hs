@@ -32,13 +32,14 @@ spec = aroundAll withTestResources do
         let reqMsg2 = Unsafe.fromJust $ convert $ testRequestMsgs.reqMsg2 nowTxt
         let msgs =
               concat
-                $ replicate 2
-                $ [ ("m1", reqMsg1)
+                $ replicate
+                  2
+                  [ ("m1", reqMsg1)
                   , ("m2", reqMsg2)
                   ]
         _ <- runTestBackground trATCtx $ processRequestMessages msgs
         _ <- runAllBackgroundJobs trATCtx
-        fieldsAll <- withPool trPool $ Fields.selectFields testPid $ (toXXHash $ testPid.toText <> "api.test.com" <> "POST" <> "/api/v1/user/login")
+        fieldsAll <- withPool trPool $ Fields.selectFields testPid (toXXHash $ testPid.toText <> "api.test.com" <> "POST" <> "/api/v1/user/login")
         let reqBodyFields = V.filter (\field -> field.fieldCategory == Fields.FCRequestBody) fieldsAll
         length reqBodyFields `shouldBe` 2
         let reqBodyField = reqBodyFields V.! 0

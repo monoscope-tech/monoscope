@@ -150,19 +150,19 @@ processRequestMessages msgs = do
   let !reqDumpsFinal = catMaybes reqDumps
   let !endpointsFinal = VAA.nubBy (comparing (.hash)) $ V.fromList $ catMaybes endpoints
   let !shapesFinal = VAA.nubBy (comparing (.hash)) $ V.fromList $ catMaybes shapes
-  let !fieldsFinal = VAA.nubBy (comparing (.hash)) $ V.concat $ fields
-  let !formatsFinal = VAA.nubBy (comparing (.hash)) $ V.concat $ formats
+  let !fieldsFinal = VAA.nubBy (comparing (.hash)) $ V.concat fields
+  let !formatsFinal = VAA.nubBy (comparing (.hash)) $ V.concat formats
 
   forM_ failures $ \(err, rmAckId, msg) ->
     Log.logAttention "Error processing message" (object ["Error" .= err, "AckId" .= rmAckId, "OriginalMsg" .= msg])
 
   afterProcessing <- liftIO $ getTime Monotonic
   result <- try do
-    unless (null $ reqDumpsFinal) $ RequestDumps.bulkInsertRequestDumps reqDumpsFinal
-    unless (null $ endpointsFinal) $ Endpoints.bulkInsertEndpoints endpointsFinal
-    unless (null $ shapesFinal) $ Shapes.bulkInsertShapes shapesFinal
-    unless (null $ fieldsFinal) $ Fields.bulkInsertFields fieldsFinal
-    unless (null $ formatsFinal) $ Formats.bulkInsertFormat formatsFinal
+    unless (null reqDumpsFinal) $ RequestDumps.bulkInsertRequestDumps reqDumpsFinal
+    unless (null endpointsFinal) $ Endpoints.bulkInsertEndpoints endpointsFinal
+    unless (null shapesFinal) $ Shapes.bulkInsertShapes shapesFinal
+    unless (null fieldsFinal) $ Fields.bulkInsertFields fieldsFinal
+    unless (null formatsFinal) $ Formats.bulkInsertFormat formatsFinal
   endTime <- liftIO $ getTime Monotonic
   let processingTime = toNanoSecs (diffTimeSpec startTime afterProcessing) `div` 1000
   let queryTime = toNanoSecs (diffTimeSpec afterProcessing endTime) `div` 1000

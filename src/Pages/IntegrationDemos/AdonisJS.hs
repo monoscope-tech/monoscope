@@ -1,6 +1,5 @@
 module Pages.IntegrationDemos.AdonisJS (adonisGuide) where
 
-import Data.Text
 import Data.Text qualified as T
 import Lucid
 import Pkg.Components
@@ -58,7 +57,7 @@ adonisGuide apikey = do
 
 initCode :: Text -> Text
 initCode apiKey =
-  T.unlines
+  unlines
     [ "Server.middleware.register(["
     , "    () => import('@ioc:Adonis/Core/BodyParser'),"
     , "    () => import(\"@ioc:APIToolkit\")"
@@ -68,7 +67,7 @@ initCode apiKey =
 
 confCode :: Text -> Text
 confCode apiKey =
-  T.unlines
+  unlines
     [ "export const apitoolkitConfig = {"
     , "    apiKey: \"" <> apiKey <> "\","
     ]
@@ -76,7 +75,7 @@ confCode apiKey =
 
 configOptions :: Text
 configOptions =
-  T.unlines
+  unlines
     [ "export const apitoolkitConfig = {"
     , "    apiKey: \"YOUR_API_KEY\","
     , "    redactHeaders: [\"Content-Type\", \"Authorization\", \"Cookies\"], // Specified headers will be redacted"
@@ -88,7 +87,7 @@ configOptions =
 
 configOptions2 :: Text
 configOptions2 =
-  T.unlines
+  unlines
     [ "export const http: ServerConfig = {"
     , "  useAsyncLocalStorage: true"
     , "  // other configs"
@@ -98,7 +97,7 @@ configOptions2 =
 
 errorReportingCode :: Text -> Text
 errorReportingCode apiKey =
-  T.unlines
+  unlines
     [ "import Route from '@ioc:Adonis/Core/Route'"
     , "import { reportError } from \"apitoolkit-adonis\";"
     , ""
@@ -115,7 +114,7 @@ errorReportingCode apiKey =
 
 outgoingRequest :: Text -> Text
 outgoingRequest apiKey =
-  T.unlines
+  unlines
     [ "import Route from '@ioc:Adonis/Core/Route'"
     , "import { observeAxios } from \"apitoolkit-adonis\""
     , "import axios from \"axios\""

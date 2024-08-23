@@ -29,7 +29,7 @@ symfonyGuide apikey = do
         "Register the APItoolkit listener in your"
         codeEmphasis " service.yaml "
         "file"
-      codeExample $ initCode
+      codeExample initCode
 
     div_ [class_ "w-full flex flex-col gap-2"] do
       h3_ [class_ "text-xl font-medium"] "Configuration Options"

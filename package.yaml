@@ -84,6 +84,7 @@ library:
     - base 
     - relude >= 1.2.0.0
     - rust-interop
+    - otlp
     - colourista
     - vector-algorithms
     - effectful
@@ -125,7 +126,6 @@ library:
     - gogol-pubsub
     - hspec
     - hashtables
-    - vector-hashtables
     - strict-containers
     - http-api-data
     - lens
@@ -156,7 +156,6 @@ library:
     - text-display
     - unliftio
     - time
-    - transformers-except
     - unordered-containers
     - uuid
     - valor >= 1.0.0.0
@@ -177,13 +176,10 @@ library:
     - scotty
     - filepath
     - http-client
-    - tuple
     - wai-middleware-static
-    - proto-lens-runtime
     - grpc-haskell
     - proto3-suite
     - proto3-wire
-    - deepseq
 
 executables:
   apitoolkit-server-exe:

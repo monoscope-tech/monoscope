@@ -261,4 +261,4 @@ lemonSqueezyUrlsAnnual =
 
 
 isDemoAndNotSudo :: Projects.ProjectId -> Bool -> Bool
-isDemoAndNotSudo pid isSudo = (pid.toText == "00000000-0000-0000-0000-000000000000" && isSudo == False)
+isDemoAndNotSudo pid isSudo = pid.toText == "00000000-0000-0000-0000-000000000000" && isSudo == False

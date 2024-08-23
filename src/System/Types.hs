@@ -109,7 +109,7 @@ effToServantHandlerTest :: AuthContext -> Log.Logger -> ATBaseCtx a -> Servant.H
 effToServantHandlerTest env logger app =
   app
     & Effectful.Reader.Static.runReader env
-    & (runStaticUUID $ map (UUID.fromWords 0 0 0) [1 .. 10])
+    & runStaticUUID (map (UUID.fromWords 0 0 0) [1 .. 10])
     & runHTTPGolden "./golden/"
     & runDB env.pool
     & runFrozenTime (posixSecondsToUTCTime 0)
@@ -160,11 +160,11 @@ type RespHeaders =
      ]
 
 
-addRespHeaders :: a -> ATAuthCtx (RespHeaders (a))
+addRespHeaders :: a -> ATAuthCtx (RespHeaders a)
 addRespHeaders resp = do
   triggerEvents <- State.get @TriggerEvents
   redirectDest <- State.get @HXRedirectDest
-  pure $ addHeader (decodeUtf8 $ AE.encode triggerEvents) $ maybe noHeader addHeader redirectDest $ resp
+  pure $ addHeader (decodeUtf8 $ AE.encode triggerEvents) $ maybe noHeader addHeader redirectDest resp
 
 
 -- redirectCS adds a header to the request, which in turn triggers a client side redirect via HTMX redirect header.
@@ -181,7 +181,7 @@ addTriggerEvent key value = State.modify $ \events ->
 
 
 addToast :: Text -> Text -> Maybe Text -> ATAuthCtx ()
-addToast toastType title descM = addTriggerEvent ("triggerToast") $ AE.toJSON $ [toastType, title] ++ catMaybes [descM]
+addToast toastType title descM = addTriggerEvent "triggerToast" $ AE.toJSON $ [toastType, title] ++ catMaybes [descM]
 
 
 addSuccessToast :: Text -> Maybe Text -> ATAuthCtx ()

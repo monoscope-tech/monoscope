@@ -142,7 +142,7 @@ leftPad len txt = T.justifyRight len '0' (T.take len txt)
 
 
 toXXHash :: Text -> Text
-toXXHash input = leftPad 8 $ fromString $ showHex (xxHash $ encodeUtf8 $ input) ""
+toXXHash input = leftPad 8 $ fromString $ showHex (xxHash $ encodeUtf8 input) ""
 
 
 processErrors :: Projects.ProjectId -> RequestDumps.SDKTypes -> Text -> Text -> RequestDumps.ATError -> (RequestDumps.ATError, Query, [DBField])
@@ -210,7 +210,7 @@ requestMsgToDumpAndEndpoint pjc rM now dumpIDOriginal = do
   -- We skip the request headers from this hash, since the source of the request like browsers might add or skip headers at will,
   -- which would make this process not deterministic anymore, and that's necessary for a hash.
   let representativeKP = sortVector $ queryParamsKP <> responseHeadersKP <> requestBodyKP <> responseBodyKP
-  let !combinedKeyPathStr = T.concat $ V.toList $ representativeKP
+  let !combinedKeyPathStr = T.concat $ V.toList representativeKP
   -- Include the endpoint hash and status code to make the shape hash unique by endpoint and status code.
   let !shapeHash = endpointHash <> show rM.statusCode <> toXXHash combinedKeyPathStr
   let projectId = Projects.ProjectId rM.projectId
@@ -563,7 +563,7 @@ valueToFormatStr val
   | val =~ ([text|^[0-9]+$|] :: Text) = Just "integer"
   | val =~ ([text|^[+-]?([0-9]+([.][0-9]*)?|[.][0-9]+)$|] :: Text) = Just "float"
   | val =~ ([text|^[0-9a-fA-F]{8}\b-[0-9a-fA-F]{4}\b-[0-9a-fA-F]{4}\b-[0-9a-fA-F]{4}\b-[0-9a-fA-F]{12}|] :: Text) = Just "uuid"
-  | val =~ ([text|\b[0-9a-fA-F]{24}\b|]) = Just "uuid"
+  | val =~ [text|\b[0-9a-fA-F]{24}\b|] = Just "uuid"
   | val =~ ([text|^(0[1-9]|1[012])[- /.](0[1-9]|[12][0-9]|3[01])[- /.](19|20)\d\d$|] :: Text) = Just "mm/dd/yyyy"
   | val =~ ([text|^(0[1-9]|1[012])[- -.](0[1-9]|[12][0-9]|3[01])[- -.](19|20)\d\d$|] :: Text) = Just "mm-dd-yyyy"
   | val =~ ([text|^(0[1-9]|1[012])[- ..](0[1-9]|[12][0-9]|3[01])[- ..](19|20)\d\d$|] :: Text) = Just "mm.dd.yyyy"
@@ -578,7 +578,7 @@ ensureUrlParams url = (parsedUrl, pathParams, hasDyn)
   where
     (segs, vals) = parseUrlSegments (T.splitOn "/" url) ([], [])
     parsedUrl = T.intercalate "/" segs
-    dynSegs = filter (\x -> T.isPrefixOf "{" x) segs
+    dynSegs = filter (T.isPrefixOf "{") segs
     hasDyn = not $ null dynSegs
     pathParams = buildPathParams dynSegs vals (AE.object [])
 
@@ -597,7 +597,7 @@ parseUrlSegments (x : xs) (segs, vals) = case valueToFormatStr x of
 addNewSegment :: [Text] -> Text -> [Text]
 addNewSegment segs seg = newSegs
   where
-    catFilter = filter (\x -> T.isPrefixOf ("{" <> seg) x) segs
+    catFilter = filter (T.isPrefixOf ("{" <> seg)) segs
     pos = length catFilter
     newSeg = if pos > 0 then "{" <> seg <> "_" <> show pos <> "}" else "{" <> seg <> "}"
     newSegs = segs ++ [newSeg]
@@ -610,7 +610,7 @@ buildPathParams (x : xs) (v : vs) acc = buildPathParams xs vs param
   where
     current = AE.object [AEKey.fromText (T.tail x) AE..= v]
     param = case (acc, current) of
-      ((Object a), (Object b)) -> Object $ a <> b
+      (Object a, Object b) -> Object $ a <> b
       _ -> acc
 
 
@@ -674,12 +674,12 @@ fieldsToFieldDTO fieldCategory projectID endpointHash (keyPath, val) =
     aeValueToFieldType (AET.Array _) = Fields.FTList
 
     fieldType :: Fields.FieldTypes
-    fieldType = fromMaybe Fields.FTUnknown $ (V.map aeValueToFieldType val) V.!? 0
+    fieldType = fromMaybe Fields.FTUnknown $ V.map aeValueToFieldType val V.!? 0
 
     -- field hash is <hash of the endpoint> + <the hash of <field_category><key_path_str><field_type>> (No space or comma between data)
     !fieldHash = endpointHash <> toXXHash (Fields.fieldCategoryEnumToText fieldCategory <> keyPath)
     -- FIXME: We should rethink this value to format logic.
     -- FIXME: Maybe it actually needs machine learning,
     -- FIXME: or maybe it should operate on the entire list, and not just one value.
-    format = fromMaybe "" $ (V.map valueToFormat val) V.!? 0
+    format = fromMaybe "" $ V.map valueToFormat val V.!? 0
     !formatHash = fieldHash <> toXXHash format

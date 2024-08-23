@@ -102,7 +102,7 @@ data ReportData = ReportData
   deriving anyclass (FromJSON)
 
 
-reportsPostH :: Projects.ProjectId -> Text -> ATAuthCtx (RespHeaders (ReportsPost))
+reportsPostH :: Projects.ProjectId -> Text -> ATAuthCtx (RespHeaders ReportsPost)
 reportsPostH pid t = do
   _ <- Sessions.sessionAndProject pid
   apiKeys <- dbtToEff $ Projects.updateProjectReportNotif pid t
@@ -118,7 +118,7 @@ instance ToHtml ReportsPost where
   toHtmlRaw = toHtml
 
 
-singleReportGetH :: Projects.ProjectId -> Reports.ReportId -> ATAuthCtx (RespHeaders (ReportsGet))
+singleReportGetH :: Projects.ProjectId -> Reports.ReportId -> ATAuthCtx (RespHeaders ReportsGet)
 singleReportGetH pid rid = do
   (sess, project) <- Sessions.sessionAndProject pid
   report <- dbtToEff $ Reports.getReportById rid
@@ -131,7 +131,7 @@ singleReportGetH pid rid = do
   addRespHeaders $ ReportsGetSingle $ PageCtx bwconf (pid, report)
 
 
-reportsGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders (ReportsGet))
+reportsGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders ReportsGet)
 reportsGetH pid page hxRequest hxBoosted = do
   (sess, project) <- Sessions.sessionAndProject pid
   let p = toString (fromMaybe "0" page)
@@ -148,11 +148,11 @@ reportsGetH pid page hxRequest hxBoosted = do
               , currProject = Just project
               , pageTitle = "Reports"
               }
-      addRespHeaders $ ReportsGetMain $ PageCtx bwconf $ (pid, reports, nextUrl, project.dailyNotif, project.weeklyNotif)
+      addRespHeaders $ ReportsGetMain $ PageCtx bwconf (pid, reports, nextUrl, project.dailyNotif, project.weeklyNotif)
 
 
 data ReportsGet
-  = ReportsGetMain (PageCtx (Projects.ProjectId, (Vector Reports.ReportListItem), Text, Bool, Bool))
+  = ReportsGetMain (PageCtx (Projects.ProjectId, Vector Reports.ReportListItem, Text, Bool, Bool))
   | ReportsGetList Projects.ProjectId (Vector Reports.ReportListItem) Text
   | ReportsGetSingle (PageCtx (Projects.ProjectId, Maybe Reports.Report))
 
@@ -390,7 +390,7 @@ getAnomaliesEmailTemplate anomalies = buildEmailjson <$> anomalies
           , "eventsCount" .= an.eventsAgg.count
           , "endpointMethod" .= e.endpointMethod
           , "endpointUrlPath" .= e.endpointUrlPath
-          , "firstSeen" .= (formatUTC an.eventsAgg.lastSeen)
+          , "firstSeen" .= formatUTC an.eventsAgg.lastSeen
           ]
       Anomalies.IDNewShapeIssue s ->
         Aeson.object
@@ -402,7 +402,7 @@ getAnomaliesEmailTemplate anomalies = buildEmailjson <$> anomalies
           , "endpointUrlPath" .= s.endpointUrlPath
           , "newUniqueFields" .= length s.newUniqueFields
           , "updatedFields" .= length s.updatedFieldFormats
-          , "firstSeen" .= (formatUTC an.eventsAgg.lastSeen)
+          , "firstSeen" .= formatUTC an.eventsAgg.lastSeen
           ]
       Anomalies.IDNewFormatIssue f ->
         Aeson.object
@@ -414,7 +414,7 @@ getAnomaliesEmailTemplate anomalies = buildEmailjson <$> anomalies
           , "endpointMethod" .= f.endpointMethod
           , "endpointUrlPath" .= f.endpointUrlPath
           , "formatExamples" .= f.examples
-          , "firstSeen" .= (formatUTC an.eventsAgg.lastSeen)
+          , "firstSeen" .= formatUTC an.eventsAgg.lastSeen
           ]
       Anomalies.IDNewRuntimeExceptionIssue e ->
         Aeson.object
@@ -424,13 +424,13 @@ getAnomaliesEmailTemplate anomalies = buildEmailjson <$> anomalies
           , "errorMessage" .= e.message
           , "endpointMethod" .= e.requestMethod
           , "endpointUrlPath" .= e.requestPath
-          , "firstSeen" .= (formatUTC an.eventsAgg.lastSeen)
+          , "firstSeen" .= formatUTC an.eventsAgg.lastSeen
           ]
       _ -> Aeson.object ["message" .= String "unknown"]
 
 
 formatUTC :: UTCTime -> String
-formatUTC utcTime = formatTime defaultTimeLocale "%Y-%m-%d %H:%M" utcTime
+formatUTC = formatTime defaultTimeLocale "%Y-%m-%d %H:%M"
 
 
 getPerformanceInsight :: V.Vector RequestDumps.RequestForReport -> V.Vector RequestDumps.EndpointPerf -> V.Vector PerformanceReport
@@ -447,11 +447,11 @@ getPerformanceEmailTemplate pr previous_p =
       Aeson.object
         [ "endpointUrlPath" .= p.urlPath
         , "endpointMethod" .= p.method
-        , "averageLatency" .= (getMs p.averageDuration)
+        , "averageLatency" .= getMs p.averageDuration
         , "latencyChange" .= ((if p.durationDiff > 0 then "+" else "") <> getMs p.durationDiff <> " (" <> getDesc p.durationDiffPct <> ")")
         ]
   )
-    <$> (getPerformanceInsight pr previous_p)
+    <$> getPerformanceInsight pr previous_p
   where
     getMs :: Integer -> String
     getMs val = msText
@@ -467,7 +467,7 @@ mapFunc prMap rd =
   case Map.lookup rd.endpointHash prMap of
     Just prevDuration ->
       let diff = rd.averageDuration - prevDuration
-          diffPct = round $ (divideIntegers diff prevDuration) * 100
+          diffPct = round $ divideIntegers diff prevDuration * 100
           diffType = if diff >= 0 then "up" else "down"
        in PerformanceReport
             { urlPath = rd.urlPath

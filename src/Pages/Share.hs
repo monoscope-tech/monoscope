@@ -30,7 +30,7 @@ data ReqForm = ReqForm
   deriving anyclass (FromForm)
 
 
-shareLinkPostH :: Projects.ProjectId -> ReqForm -> ATAuthCtx (RespHeaders (ShareLinkPost))
+shareLinkPostH :: Projects.ProjectId -> ReqForm -> ATAuthCtx (RespHeaders ShareLinkPost)
 shareLinkPostH pid reqForm = do
   currentTime <- liftIO getZonedTime
   let rid = reqForm.reqId
@@ -59,7 +59,7 @@ data ShareLinkPost
 
 instance ToHtml ShareLinkPost where
   toHtml (ShareLinkPost shareId) = toHtml $ copyLink shareId
-  toHtml (ShareLinkPostError) = toHtml $ ""
+  toHtml ShareLinkPostError = toHtml ""
   toHtmlRaw = toHtml
 
 
@@ -84,7 +84,7 @@ copyLink rid = do
       "Copy URL"
 
 
-shareLinkGetH :: UUID.UUID -> ATBaseCtx (ShareLinkGet)
+shareLinkGetH :: UUID.UUID -> ATBaseCtx ShareLinkGet
 shareLinkGetH sid = do
   -- FIXME: handle errors
   reqM <- dbtToEff $ do

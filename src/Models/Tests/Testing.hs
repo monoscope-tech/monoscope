@@ -81,8 +81,8 @@ data CollectionStepData = CollectionStepData
   , params :: Maybe (Map Text Text)
   , headers :: Maybe (Map Text Text)
   , exports :: Maybe (Map Text Text)
-  , json :: Maybe (AE.Value)
-  , raw :: Maybe (Text)
+  , json :: Maybe AE.Value
+  , raw :: Maybe Text
   , asserts :: Maybe (V.Vector (Map Text AE.Value))
   }
   deriving stock (Show, Generic)

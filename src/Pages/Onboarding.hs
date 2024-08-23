@@ -23,7 +23,7 @@ import Utils (
  )
 
 
-onboardingGetH :: Projects.ProjectId -> Maybe Bool -> Maybe Bool -> Maybe Text -> ATAuthCtx (RespHeaders (OnboardingGet))
+onboardingGetH :: Projects.ProjectId -> Maybe Bool -> Maybe Bool -> Maybe Text -> ATAuthCtx (RespHeaders OnboardingGet)
 onboardingGetH pid polling redirected current_tab = do
   (sess, project) <- Sessions.sessionAndProject pid
   apiKeys <- dbtToEff $ ProjectApiKeys.projectApiKeysByProjectId pid
@@ -39,7 +39,7 @@ onboardingGetH pid polling redirected current_tab = do
           }
   case polling of
     Just _ -> addRespHeaders $ OnboardingGetPolling pid apikey hasRequest (isJust project.questions) (fromMaybe False redirected) (fromMaybe "express" current_tab)
-    Nothing -> addRespHeaders $ OnboardingGetNM $ PageCtx bwconf $ (pid, apikey, hasRequest, (isJust project.questions), (fromMaybe False redirected), "express")
+    Nothing -> addRespHeaders $ OnboardingGetNM $ PageCtx bwconf (pid, apikey, hasRequest, (isJust project.questions), (fromMaybe False redirected), "express")
 
 
 data OnboardingGet
@@ -98,8 +98,8 @@ onboardingPage pid apikey hasRequest ans redi ctb = do
                   button_ [class_ "flex justify-between text-left w-full items-center cursor-default", [__|on click toggle .hidden on #SDKs|]] do
                     div_ [class_ "flex flex-col"] do
                       p_ [class_ $ "font-semibold " <> style2] "Integrate APItoolkit to your app"
-                      span_ [class_ $ "text-slate-500"] "Integrate APItoolkit using any of our SDKs to start monitoring requests."
-                when (not hasRequest) $ div_ [class_ " inline-block space-x-2 text-red-800 pt-2"] do
+                      span_ [class_ "text-slate-500"] "Integrate APItoolkit using any of our SDKs to start monitoring requests."
+                unless hasRequest $ div_ [class_ " inline-block space-x-2 text-red-800 pt-2"] do
                   span_ [class_ "loading loading-spinner loading-sm"] ""
                   span_ "Waiting to recieve data from your server."
 
@@ -185,10 +185,10 @@ tabContentExpress apikey current_tab =
         p_ [class_ "w-full py-1"] "Here is how to quickly integrate APItoolkit into your Express.js application"
       div_ [class_ "mb-6"] do
         h3_ [class_ "text-slate-900 font-medium text-lg mb-1"] "Installation"
-        bashCommand $ "npm i apitoolkit-express"
+        bashCommand "npm i apitoolkit-express"
       h4_ [class_ "text-slate-900 font-medium text-lg my-2"] "Integrate"
       codeExample
-        $ [text|
+        [text|
 import express from 'express';
 import { APIToolkit } from 'apitoolkit-express';
 
@@ -251,7 +251,7 @@ apitoolkit.apikey=$apikey
         codeEmphasis " @EnableAPIToolkit "
         "annotation to your application's main class"
       codeExample
-        $ [text|
+        [text|
 package com.example.demo;
 
 import org.springframework.boot.SpringApplication;
@@ -289,10 +289,10 @@ tabContentGin apikey current_tab =
         p_ [class_ "w-full py-1"] "Here's how to quickly integrate APItoolkit into your Golang Gin application."
       div_ [class_ "mb-6"] do
         h3_ [class_ "text-slate-900 font-medium text-lg mb-1"] "Installation"
-        bashCommand $ "go get github.com/apitoolkit/apitoolkit-go"
+        bashCommand "go get github.com/apitoolkit/apitoolkit-go"
       h4_ [class_ "text-slate-900 font-medium text-lg my-2"] "Integrate"
       codeExample
-        $ [text|
+        [text|
 package main
 
 import (
@@ -345,7 +345,7 @@ tabContentLaravel apikey current_tab =
         codeEmphasis " app/Http/Kernel.php "
         "file."
       codeExample
-        $ [text|
+        [text|
 <?php
 
 namespace App\Http;
@@ -383,7 +383,7 @@ tabContentSymfony apikey current_tab =
         p_ [class_ "w-full py-1"] "Here's how to quickly integrate APItoolkit into your Symfony PHP application."
       div_ [class_ "mb-6"] do
         h3_ [class_ "text-slate-900 font-medium text-lg mb-1"] "Installation"
-        bashCommand $ "composer require apitoolkit/apitoolkit-symfony"
+        bashCommand "composer require apitoolkit/apitoolkit-symfony"
         h3_ [class_ "text-slate-900 font-medium text-lg mb-1 mt-4"] "Integrate"
         p_ [class_ "w-full py-1"] do
           "First, set the APITOOLKIT_KEY environment variable to your"
@@ -395,7 +395,7 @@ tabContentSymfony apikey current_tab =
         codeEmphasis " service.yaml "
         "file"
       codeExample
-        $ [text|
+        [text|
 services:
   APIToolkit\EventSubscriber\APIToolkitService:
     arguments:
@@ -418,10 +418,10 @@ tabContentDotNet apikey current_tab =
         p_ [class_ "w-full py-1"] "Here's how to quickly integrate APItoolkit into your .NET application."
       div_ [class_ "mb-6"] do
         h3_ [class_ "text-slate-900 font-medium text-lg mb-1"] "Installation"
-        bashCommand $ "dotnet add package ApiToolkit.Net"
+        bashCommand "dotnet add package ApiToolkit.Net"
       h4_ [class_ "text-slate-900 font-medium text-lg my-2"] "Integrate"
       codeExample
-        $ [text|
+        [text|
 using ApiToolkit.Net;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -459,10 +459,10 @@ tabContentFastify apikey current_tab =
           p_ [class_ "w-full py-1"] "Here's how to quickly integrate APItoolkit into your Fastify.js application."
         div_ [class_ "mb-6"] do
           h3_ [class_ "text-slate-900 font-medium text-lg mb-1"] "Installation"
-          bashCommand $ "npm install apitoolkit-fastify"
+          bashCommand "npm install apitoolkit-fastify"
         h4_ [class_ "text-slate-900 font-medium text-lg my-2"] "Integrate"
         codeExample
-          $ [text|
+          [text|
 import APIToolkit from 'apitoolkit-fastify';
 import Fastify from 'fastify';
 const fastify = Fastify();
@@ -499,10 +499,10 @@ tabContentFlask apikey current_tab =
           p_ [class_ "w-full py-1"] "Here's how to quickly integrate APItoolkit into your Flask application."
         div_ [class_ "mb-6"] do
           h3_ [class_ "text-slate-900 font-medium text-lg mb-1"] "Installation"
-          bashCommand $ "pip install apitoolkit-flask"
+          bashCommand "pip install apitoolkit-flask"
         h4_ [class_ "text-slate-900 font-medium text-lg my-2"] "Integrate"
         codeExample
-          $ [text|
+          [text|
 from flask import Flask
 from apitoolkit_flask import APIToolkit
 
@@ -538,10 +538,10 @@ tabContentFastAPI apikey current_tab =
           p_ [class_ "w-full py-1"] "Here's how to quickly integrate APItoolkit into your FastAPI application."
         div_ [class_ "mb-6"] do
           h3_ [class_ "text-slate-900 font-medium text-lg mb-1"] "Installation"
-          bashCommand $ "pip install apitoolkit-fastapi"
+          bashCommand "pip install apitoolkit-fastapi"
         h4_ [class_ "text-slate-900 font-medium text-lg my-2"] "Integrate"
         codeExample
-          $ [text|
+          [text|
 from fastapi import FastAPI
 from apitoolkit_fastapi import APIToolkit
 
@@ -578,10 +578,10 @@ tabContentDjango apikey current_tab =
           p_ [class_ "w-full py-1"] "Here's how to quickly integrate APItoolkit into your Django application."
         div_ [class_ "mb-6"] do
           h3_ [class_ "text-slate-900 font-medium text-lg mb-1"] "Installation"
-          bashCommand $ "pip install apitoolkit-django"
+          bashCommand "pip install apitoolkit-django"
         h4_ [class_ "text-slate-900 font-medium text-lg my-2"] "Integrate"
         codeExample
-          $ [text|
+          [text|
 APITOOLKIT_KEY = "$apikey"
 MIDDLEWARE = [
     ...,
@@ -607,7 +607,7 @@ tabContentEcho apikey current_tab =
           p_ [class_ "w-full bg-slate-200 px-4 py-2 rounded-xl text-lg"] "go get github.com/apitoolkit/apitoolkit-go"
         h4_ [class_ "text-slate-900 font-medium text-lg my-2"] "Integrate into your app by adding APITOOLKIT_KEY and APIToolkit to the settings middleware list"
         codeExample
-          $ [text|
+          [text|
 package main
 
 import (
@@ -650,10 +650,10 @@ tabContentGorilla apikey current_tab =
           p_ [class_ "w-full py-1"] "Here's how to quickly integrate APItoolkit into your Golang Gorilla Mux application."
         div_ [class_ "mb-6"] do
           h3_ [class_ "text-slate-900 font-medium text-lg mb-1"] "Installation"
-          bashCommand $ "go get github.com/apitoolkit/apitoolkit-go"
+          bashCommand "go get github.com/apitoolkit/apitoolkit-go"
         h4_ [class_ "text-slate-900 font-medium text-lg my-2"] "Integrate"
         codeExample
-          $ [text|
+          [text|
 package main
 
 import (
@@ -696,11 +696,11 @@ tabContentPhoenix apikey current_tab =
           p_ [class_ "w-full py-1"] "Here is how to integrate APItoolkit into your Elixir application. "
         div_ [class_ "mb-6"] do
           h3_ [class_ "text-slate-900 font-medium text-lg mb-1"] "Installation"
-          codeExample $ "{:apitoolkit_phoenix, \"~> 0.1.1\"}"
+          codeExample "{:apitoolkit_phoenix, \"~> 0.1.1\"}"
         div_ [class_ "mb-6"] do
           h3_ [class_ "text-slate-900 font-medium text-lg mb-1"] "Integrate"
         codeExample
-          $ [text|
+          [text|
 defmodule HelloWeb.Router do
   use HelloWeb, :router
   use Plug.ErrorHandler
@@ -732,11 +732,11 @@ tabContentAdonis apikey current_tab =
           p_ [class_ "w-full py-1"] "Here's how to quickly integrate APItoolkit into your Adonis.js application."
         div_ [class_ "mb-6"] do
           h3_ [class_ "text-slate-900 font-medium text-lg mb-1"] "Installation"
-          bashCommand $ "npm install apitoolkit-adonis"
+          bashCommand "npm install apitoolkit-adonis"
         div_ [class_ "mb-6"] do
           h3_ [class_ "text-slate-900 font-medium text-lg mb-1"] "Integrate"
           p_ [class_ ""] "First configure the package"
-          bashCommand $ "node ace configure apitoolkit-adonis"
+          bashCommand "node ace configure apitoolkit-adonis"
           p_ [class_ "mt-4"] $ withEmphasisedText [("Next, set API key in a", False), ("/conf/apitoolkit.ts", True), ("file.", False)]
           codeExample
             [text|
@@ -752,7 +752,7 @@ apiKey: "$apikey",
             span_ [class_ "text-red-500"] " start/kernel.ts "
             "file."
         codeExample
-          $ [text|
+          [text|
 Server.middleware.register([
   () => import(\"@ioc:Adonis/Core/BodyParser\"),
   () => import(\"@ioc:APIToolkit\"),

@@ -30,10 +30,10 @@ spec = aroundAll withTestResources do
       let timeTxt = toText $ formatTime defaultTimeLocale "%FT%T%QZ" currentTime
       let reqMsg1 = Unsafe.fromJust $ convert $ msg1 timeTxt
       let reqMsg2 = Unsafe.fromJust $ convert $ msg2 timeTxt
-      let msgs = concat $ replicate 100 $ [("m1", reqMsg1), ("m2", reqMsg2)]
+      let msgs = concat $ replicate 100 [("m1", reqMsg1), ("m2", reqMsg2)]
       _ <- runTestBackground trATCtx $ processRequestMessages msgs
 
-      PageCtx _ (ItemsList.ItemsPage _ (he)) <-
+      PageCtx _ (ItemsList.ItemsPage _ he) <-
         toServantResponse trATCtx trSessAndHeader trLogger $ Outgoing.outgoingGetH testPid Nothing
       length he `shouldBe` 2
       let githubM = V.find (\(Outgoing.HostEventsVM _ host) -> host.host == "github.com") he

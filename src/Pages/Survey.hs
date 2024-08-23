@@ -52,7 +52,7 @@ instance ToJSON SurveyForm where
       ]
 
 
-surveyPutH :: Projects.ProjectId -> SurveyForm -> ATAuthCtx (RespHeaders (SurveyPut))
+surveyPutH :: Projects.ProjectId -> SurveyForm -> ATAuthCtx (RespHeaders SurveyPut)
 surveyPutH pid survey = do
   appCtx <- ask @AuthContext
   (sess, project) <- Sessions.sessionAndProject pid
@@ -90,7 +90,7 @@ instance ToHtml SurveyPut where
   toHtmlRaw = toHtml
 
 
-surveyGetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders (SurveyGet))
+surveyGetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders SurveyGet)
 surveyGetH pid = do
   (sess, project) <- Sessions.sessionAndProject pid
   let bwconf =

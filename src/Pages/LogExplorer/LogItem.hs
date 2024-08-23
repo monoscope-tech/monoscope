@@ -30,7 +30,7 @@ import Utils (faSprite_, getMethodColor, getStatusColor, unwrapJsonPrimValue)
 import Witch (from)
 
 
-expandAPIlogItemH :: Projects.ProjectId -> UUID.UUID -> UTCTime -> ATAuthCtx (RespHeaders (ApiLogItem))
+expandAPIlogItemH :: Projects.ProjectId -> UUID.UUID -> UTCTime -> ATAuthCtx (RespHeaders ApiLogItem)
 expandAPIlogItemH pid rdId createdAt = do
   _ <- Sessions.sessionAndProject pid
   logItemM <- dbtToEff $ RequestDumps.selectRequestDumpByProjectAndId pid createdAt rdId
@@ -128,7 +128,7 @@ expandAPIlogItem' pid req modal = do
     div_ [class_ "flex w-full bg-gray-100 px-4 py-2 flex-col gap-2"] do
       p_ [class_ "font-bold"] "Outgoing requests"
     div_ [class_ "grow overflow-y-auto py-2 px-1 max-h-[500px] whitespace-nowrap text-sm divide-y overflow-x-hidden"] do
-      let createdAt = (toText $ formatTime defaultTimeLocale "%FT%T%6QZ" req.createdAt)
+      let createdAt = toText $ formatTime defaultTimeLocale "%FT%T%6QZ" req.createdAt
       let escapedQueryPartial = toText $ escapeURIString isUnescapedInURI $ toString [fmt|parent_id=="{UUID.toText req.id}" AND created_at<="{createdAt}"|]
       let events_url = "/p/" <> pid.toText <> "/log_explorer?layout=resultTable&query=" <> escapedQueryPartial
       div_ [hxGet_ events_url, hxTrigger_ "intersect once", hxSwap_ "outerHTML"] $ span_ [class_ "loading loading-dots loading-md"] ""
@@ -176,7 +176,7 @@ expandAPIlogItem' pid req modal = do
             jsonValueToHtmlTree req.responseHeaders
 
 
-apiLogItemH :: Projects.ProjectId -> UUID.UUID -> UTCTime -> Maybe Text -> ATAuthCtx (RespHeaders (ApiLogItem))
+apiLogItemH :: Projects.ProjectId -> UUID.UUID -> UTCTime -> Maybe Text -> ATAuthCtx (RespHeaders ApiLogItem)
 apiLogItemH pid rdId createdAt sourceM = do
   let source = fromMaybe "requests" sourceM
   _ <- Sessions.sessionAndProject pid
@@ -219,9 +219,9 @@ apiLogItemView logId req expandItemPath source = do
       ("expand-log-drawer-" <> UUID.toText logId)
       (expandItemPath <> "/detailed?source=" <> source)
       $ span_ [class_ "btn btn-sm btn-outline"] ("Expand" >> faSprite_ "expand" "regular" "h-3 w-3")
-    let reqJson = decodeUtf8 $ AE.encode $ req
-    when (source == "requests") $
-      button_
+    let reqJson = decodeUtf8 $ AE.encode req
+    when (source == "requests")
+      $ button_
         [ class_ "btn btn-sm btn-outline"
         , term "data-reqJson" reqJson
         , onclick_ "window.buildCurlRequest(event)"
@@ -240,7 +240,7 @@ apiLogItemView logId req expandItemPath source = do
       , term "data-reqJson" reqJson
       ]
       (span_ [] "Download" >> faSprite_ "arrow-down-to-line" "regular" "h-3 w-3")
-  jsonValueToHtmlTree $ req
+  jsonValueToHtmlTree req
 
 
 -- Function to selectively convert RequestDumpLogItem to JSON
@@ -286,7 +286,7 @@ replaceNumbers input = T.replace ".[*]" "[*]" $ T.intercalate "." (map replaceDi
     replaceDigitWithAsterisk :: Char -> Text
     replaceDigitWithAsterisk ch
       | isDigit ch = "[*]"
-      | otherwise = T.singleton ch
+      | otherwise = one ch
 
 
 -- | jsonValueToHtmlTree takes an aeson json object and renders it as a collapsible html tree, with hyperscript for interactivity.
@@ -301,7 +301,7 @@ jsonValueToHtmlTree val = jsonValueToHtmlTree' ("", "", val)
       let fullFieldPath' = fromMaybe fullFieldPath $ T.stripPrefix ".." fullFieldPath
       div_
         [ class_ "relative log-item-field-parent"
-        , term "data-field-path" $ replaceNumbers $ fullFieldPath'
+        , term "data-field-path" $ replaceNumbers fullFieldPath'
         , term "data-field-value" $ unwrapJsonPrimValue value
         ]
         $ a_

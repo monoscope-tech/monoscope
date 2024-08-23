@@ -1,6 +1,5 @@
 module Pages.IntegrationDemos.Flask (flaskGuide) where
 
-import Data.Text
 import Lucid
 import NeatInterpolation
 import Pkg.Components
@@ -19,7 +18,7 @@ flaskGuide apikey = do
       h3_ [class_ "text-2xl font-semibold"] "Configure & Initialize The SDK"
       p_ [class_ "text-gray-600 font-medium"] "Configure and initialize the SDK to start monitoring incoming request to your server"
       codeExample
-        $ [text|
+        [text|
 from flask import Flask
 from apitoolkit_flask import APIToolkit
 
@@ -47,7 +46,7 @@ app.run(debug=True)
       h3_ [class_ "text-xl font-medium"] "Configuration Options"
       p_ [class_ "text-gray-600 font-medium max-w-5xl"] "The SDK accepts other options alongside apikey to allow you to customize the sdk. Redacting sensitive fields, debug mode etc."
       codeExample
-        $ [text|
+        [text|
 from apitoolkit_flask import APIToolkit
 
 # A list of fields to redact from response body
@@ -71,7 +70,7 @@ apitoolkit = APIToolkit(api_key="", debug=debug,redact_response_body=redact_res,
       h3_ [class_ "text-2xl font-semibold"] "Error Reporting"
       p_ [class_ "text-gray-600 font-medium max-w-5xl"] "APIToolkit allows you to report errors alongside the request that caused them which allows you to easily reproduce and fix issues in production."
       codeExample
-        $ [text|
+        [text|
 from flask import Flask, request
 from apitoolkit_flask import report_error
 
@@ -92,7 +91,7 @@ async def sample_route(subject):
       h3_ [class_ "text-2xl font-semibold"] "Outgoing Request Monitoring"
       p_ [class_ "text-gray-600 max-w-5xl"] "APItoolkit also allows you to monitor your outgoing request (i.e the api calls your make from your server). Monitored outgoing are also associated with the incoming request that triggered them."
       codeExample
-        $ [text|
+        [text|
 from flask import Flask, request
 from apitoolkit_flask import observe_request
 

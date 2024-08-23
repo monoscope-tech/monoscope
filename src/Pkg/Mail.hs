@@ -28,7 +28,7 @@ sendPostmarkEmail :: Text -> Text -> AE.Value -> ATBackgroundCtx ()
 sendPostmarkEmail reciever template templateVars = do
   appCtx <- ask @Config.AuthContext
   let url = "https://api.postmarkapp.com/email/withTemplate"
-  let apiKey = encodeUtf8 $ appCtx.config.postmarkToken
+  let apiKey = encodeUtf8 appCtx.config.postmarkToken
   let payload =
         [aesonQQ|
         {

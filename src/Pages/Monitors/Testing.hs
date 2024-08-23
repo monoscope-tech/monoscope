@@ -204,7 +204,7 @@ pageTabs :: Text -> Html ()
 pageTabs url = do
   div_ [class_ "tabs tabs-boxed border"] do
     a_ [href_ $ url <> "/overview", role_ "tab", class_ "tab tab-active"] "Overview"
-    a_ [href_ $ url, role_ "tab", class_ "tab"] "Test editor"
+    a_ [href_ url, role_ "tab", class_ "tab"] "Test editor"
 
 
 collectionDashboard :: Projects.ProjectId -> Testing.CollectionId -> ATAuthCtx (RespHeaders (PageCtx (Html ())))
@@ -228,7 +228,7 @@ collectionDashboard pid cid = do
       let (Testing.CollectionSteps steps) = col.collectionSteps
           stepsCount = V.length steps
       addRespHeaders $ PageCtx bwconf $ dashboardPage pid cid stepsCount col.lastRunPassed col.lastRunFailed col.schedule tableAsVecM
-    Nothing -> addRespHeaders $ PageCtx bwconf $ "Something went wrong"
+    Nothing -> addRespHeaders $ PageCtx bwconf "Something went wrong"
 
 
 dashboardPage :: Projects.ProjectId -> Testing.CollectionId -> Int -> Int -> Int -> Text -> Maybe (V.Vector (V.Vector AE.Value), [Text], Int) -> Html ()
@@ -281,5 +281,5 @@ dStats pid steps passed failed freq = do
           div_ do
             div_ [class_ "inline-block flex flex-row content-between"] do
               strong_ [class_ "font-bold text-2xl"] $ toHtml freq
-            span_ $ "Frequency"
+            span_ "Frequency"
           span_ [class_ "inline-block tooltip", term "data-tip" ("Collection test runs every: " <> freq)] $ faSprite_ "circle-info" "regular" "w-4 h-4"

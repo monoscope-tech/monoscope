@@ -94,7 +94,7 @@ endpointListGetH pid layoutM pageM filterTM hostM projectHostM' sortM hxRequestM
                   ]
               , heading = Just $ do
                   case hostM of
-                    Just h -> span_ [] "Endpoints for dependency: " >> (span_ [class_ "text-blue-500 font-bold"] $ toHtml h)
+                    Just h -> span_ [] "Endpoints for dependency: " >> span_ [class_ "text-blue-500 font-bold"] (toHtml h)
                     Nothing -> "Endpoints"
                   hostFilter_ currentURL projHosts hostM projectHostM
               , search = Just $ ItemsList.SearchCfg{viaQueryParam = Just (fromMaybe "" searchM)}
