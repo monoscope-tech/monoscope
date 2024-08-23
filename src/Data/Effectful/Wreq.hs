@@ -44,7 +44,7 @@ import Network.HTTP.Types.Status (Status (..), statusCode, statusMessage)
 import Network.HTTP.Types.Version (http11)
 import Network.Wreq qualified as W
 import Network.Wreq.Types qualified as W
-import Relude (Bool (..), ByteString, FilePath, Generic, IO, Int, Maybe (..), Show, String, decodeUtf8, elem, encodeUtf8, error, fromString, map, return, show, ($), (<>))
+import Relude hiding (get, put)
 import System.Directory (createDirectoryIfMissing, doesFileExist)
 import System.FilePath ((</>))
 
@@ -205,10 +205,10 @@ fromWreqResponse :: Response LBS.ByteString -> WreqResponse
 fromWreqResponse r =
   WreqResponse
     { statusCode = r.responseStatus.statusCode
-    , statusMessage = decodeUtf8 (r.responseStatus.statusMessage)
-    , respBody = decodeUtf8 (LBS.toStrict (r.responseBody))
+    , statusMessage = decodeUtf8 r.responseStatus.statusMessage
+    , respBody = decodeUtf8 r.responseBody
     , responseHeaders = convertHeaders r.responseHeaders
-    , originalRequest = decodeUtf8 (LBS.toStrict (show (r.responseOriginalRequest)))
+    , originalRequest = fromString (show (r.responseOriginalRequest))
     , responseEarlyHints = convertHeaders r.responseEarlyHints
     }
 
@@ -217,12 +217,12 @@ fromWreqResponse r =
 toWreqResponse :: WreqResponse -> Response LBS.ByteString
 toWreqResponse wr =
   Response
-    { responseStatus = Status (wr.statusCode) (encodeUtf8 (wr.statusMessage))
+    { responseStatus = Status wr.statusCode (encodeUtf8 wr.statusMessage)
     , responseVersion = http11
     , responseHeaders = convertHeadersBack wr.responseHeaders
-    , responseBody = LBS.fromStrict (encodeUtf8 (wr.respBody))
+    , responseBody = encodeUtf8 wr.respBody
     , responseCookieJar = createCookieJar []
-    , responseClose' = ResponseClose (return ())
+    , responseClose' = ResponseClose (pass)
     , responseOriginalRequest = defaultRequest -- Unsafe.read (toString (wr.originalRequest)) :: Request
     , responseEarlyHints = convertHeadersBack wr.responseEarlyHints
     }
@@ -234,12 +234,12 @@ getOrCreateGoldenResponse goldenDir fileName action = do
   exists <- doesFileExist filePath
   if exists
     then do
-      content <- LBS.readFile filePath
+      content <- readFileLBS filePath
       case decode content of
         Just response -> return $ toWreqResponse response
         Nothing -> error $ fromString $ "Failed to decode response from file: " <> filePath
     else do
       createDirectoryIfMissing True goldenDir
       response <- action
-      LBS.writeFile filePath (encode $ fromWreqResponse response)
+      writeFileLBS filePath (encode $ fromWreqResponse response)
       return response

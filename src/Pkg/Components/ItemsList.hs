@@ -157,7 +157,7 @@ itemsList_ listCfg items =
 
           div_ [class_ "flex justify-center font-base w-60 content-between gap-14"] do
             span_ "GRAPH"
-            div_ [class_ " space-x-2 font-base text-sm"] $ (a_ [class_ "cursor-pointer"] "24h" >> a_ [class_ "cursor-pointer font-bold text-base"] "14d")
+            div_ [class_ " space-x-2 font-base text-sm"] (a_ [class_ "cursor-pointer"] "24h" >> a_ [class_ "cursor-pointer font-bold text-base"] "14d")
           div_ [class_ "w-36 flex items-center justify-center"] $ span_ [class_ "font-base"] "EVENTS"
           div_ [class_ "p-12 fixed rounded-lg shadow bg-base-100 top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 htmx-indicator loading loading-dots loading-md", id_ "sortLoader"] ""
 

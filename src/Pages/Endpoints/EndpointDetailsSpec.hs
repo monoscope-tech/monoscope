@@ -39,8 +39,9 @@ spec = aroundAll withTestResources do
       let reqMsg2 = Unsafe.fromJust $ convert $ testRequestMsgs.reqMsg2 nowTxt
       let msgs =
             concat
-              $ replicate 100
-              $ [ ("m1", reqMsg1)
+              $ replicate
+                100
+                [ ("m1", reqMsg1)
                 , ("m2", reqMsg2)
                 ]
       _ <- runTestBackground trATCtx $ processRequestMessages msgs
@@ -70,6 +71,6 @@ spec = aroundAll withTestResources do
           enpStats.totalRequestsProj `shouldBe` 200
           enpStats.totalTime `shouldBe` endpointDuration
           let timeText = show enpStats.totalTimeProj <> "00000001"
-          let timeText' = show $ totalTimeProj
+          let timeText' = show totalTimeProj
           timeText `shouldBe` timeText'
         _ -> error "Unexpected response"

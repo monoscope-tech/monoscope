@@ -50,7 +50,7 @@ import System.Types
 import Utils (faSprite_)
 
 
-getH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders (IntegrationsGet))
+getH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders IntegrationsGet)
 getH pid sdkM errReportM reqMonM = do
   (sess, project) <- Sessions.sessionAndProject pid
   apiKey <- dbtToEff $ ProjectApiKeys.projectApiKeysByProjectId pid
@@ -61,7 +61,7 @@ getH pid sdkM errReportM reqMonM = do
           , currProject = Just project
           , pageTitle = "Integrations"
           }
-  addRespHeaders $ IntegrationsGet $ PageCtx bwconf (pid, (fromMaybe "express" sdkM), key, errReportM, reqMonM)
+  addRespHeaders $ IntegrationsGet $ PageCtx bwconf (pid, fromMaybe "express" sdkM, key, errReportM, reqMonM)
 
 
 data IntegrationsGet = IntegrationsGet (PageCtx (Projects.ProjectId, Text, Text, Maybe Text, Maybe Text))
@@ -74,7 +74,7 @@ instance ToHtml IntegrationsGet where
 
 integrationsPage :: Projects.ProjectId -> Text -> Text -> Maybe Text -> Maybe Text -> Html ()
 integrationsPage pid sdk apiKey errReportM reqMonM = do
-  let baseUrl = "/p/" <> pid.toText <> "/integration_guides?" <> maybe "" ("error_reporting=" <>) errReportM <> maybe "" (\v -> "&outgoing=" <> v) reqMonM
+  let baseUrl = "/p/" <> pid.toText <> "/integration_guides?" <> maybe "" ("error_reporting=" <>) errReportM <> maybe "" ("&outgoing=" <>) reqMonM
   main_ [class_ "w-full h-full overflow-y-scroll scroll-smooth", id_ "main"] do
     div_ [class_ "flex flex-col gap-6 border-b  m-8 pb-4 sticky top-[-40px] bg-base-100 z-50"] do
       div_ [class_ "flex justify-between items-center"] do

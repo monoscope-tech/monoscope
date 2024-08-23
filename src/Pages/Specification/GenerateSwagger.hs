@@ -300,9 +300,9 @@ groupEndpointsByUrlPath endpoints =
                     .= object
                       ( [ "parameters" .= qParams
                         , "responses" .= groupShapesByStatusCode (shapes mergedEndpoint)
-                        , "requestBody" .= object (["content" .= object ["application/json" .= rqProps]] ++ if not (T.null rqS.shape.swRequestDescription) then ["description" .= rqS.shape.swRequestDescription] else [])
+                        , "requestBody" .= object (("content" .= object ["application/json" .= rqProps]) : if not (T.null rqS.shape.swRequestDescription) then ["description" .= rqS.shape.swRequestDescription] else [])
                         ]
-                          ++ (["description" .= description mergedEndpoint | T.length (mergedEndpoint.description) > 0])
+                          ++ (["description" .= description mergedEndpoint | T.length mergedEndpoint.description > 0])
                       )
             (Just rqS, Nothing) ->
               let rqProps = convertKeyPathsToJson (V.toList rqS.shape.swRequestBodyKeypaths) (fromMaybe [] (Map.lookup Field.FCRequestBody rqS.sField)) ""
@@ -310,9 +310,9 @@ groupEndpointsByUrlPath endpoints =
                     .= object
                       ( [ "description" .= description mergedEndpoint
                         , "responses" .= groupShapesByStatusCode (shapes mergedEndpoint)
-                        , "requestBody" .= object (["content" .= object ["application/json" .= rqProps]] ++ if not (T.null rqS.shape.swRequestDescription) then ["description" .= rqS.shape.swRequestDescription] else [])
+                        , "requestBody" .= object (("content" .= object ["application/json" .= rqProps]) : if not (T.null rqS.shape.swRequestDescription) then ["description" .= rqS.shape.swRequestDescription] else [])
                         ]
-                          ++ (["description" .= description mergedEndpoint | T.length (mergedEndpoint.description) > 0])
+                          ++ (["description" .= description mergedEndpoint | T.length mergedEndpoint.description > 0])
                       )
             (Nothing, Just qS) ->
               let qParams = convertQueryParamsToJSON (V.toList qS.shape.swQueryParamsKeypaths) (fromMaybe [] (Map.lookup Field.FCQueryParam qS.sField))
@@ -321,12 +321,12 @@ groupEndpointsByUrlPath endpoints =
                       ( [ "parameters" .= qParams
                         , "responses" .= groupShapesByStatusCode (shapes mergedEndpoint)
                         ]
-                          ++ (["description" .= description mergedEndpoint | T.length (mergedEndpoint.description) > 0])
+                          ++ (["description" .= description mergedEndpoint | T.length mergedEndpoint.description > 0])
                       )
             (_, _) ->
               AEKey.fromText (T.toLower $ method mergedEndpoint)
                 .= object
-                  ( ("responses" .= groupShapesByStatusCode (shapes mergedEndpoint)) : if T.length (mergedEndpoint.description) > 0 then ["description" .= description mergedEndpoint] else []
+                  ( ("responses" .= groupShapesByStatusCode (shapes mergedEndpoint)) : (["description" .= description mergedEndpoint | T.length (mergedEndpoint.description) > 0])
                   )
        in endPointJSON
 
@@ -368,4 +368,4 @@ generateGetH pid = do
   let field_hashes = V.map (.fHash) fields
   formats <- dbtToEff $ Formats.formatsByFieldsHashes pid field_hashes
   let swagger = generateSwagger project.title project.description endpoints shapes fields formats
-  addRespHeaders $ swagger
+  addRespHeaders swagger

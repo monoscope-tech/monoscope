@@ -33,7 +33,7 @@ data GenerateAPIKeyForm = GenerateAPIKeyForm
   deriving anyclass (FromForm)
 
 
-apiPostH :: Projects.ProjectId -> GenerateAPIKeyForm -> ATAuthCtx (RespHeaders (ApiMut))
+apiPostH :: Projects.ProjectId -> GenerateAPIKeyForm -> ATAuthCtx (RespHeaders ApiMut)
 apiPostH pid apiKeyForm = do
   (sess, project) <- Sessions.sessionAndProject pid
   authCtx <- ask @AuthContext
@@ -50,7 +50,7 @@ apiPostH pid apiKeyForm = do
     Nothing -> addRespHeaders $ ApiPost pid apiKeys (Just (pApiKey, encryptedKeyB64))
 
 
-apiDeleteH :: Projects.ProjectId -> ProjectApiKeys.ProjectApiKeyId -> ATAuthCtx (RespHeaders (ApiMut))
+apiDeleteH :: Projects.ProjectId -> ProjectApiKeys.ProjectApiKeyId -> ATAuthCtx (RespHeaders ApiMut)
 apiDeleteH pid keyid = do
   (sess, project) <- Sessions.sessionAndProject pid
   res <- dbtToEff $ ProjectApiKeys.revokeApiKey keyid
@@ -73,7 +73,7 @@ instance ToHtml ApiMut where
 
 
 -- | apiGetH renders the api keys list page which includes a modal for creating the apikeys.
-apiGetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders (ApiGet))
+apiGetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders ApiGet)
 apiGetH pid = do
   (sess, project) <- Sessions.sessionAndProject pid
   apiKeys <- dbtToEff $ ProjectApiKeys.projectApiKeysByProjectId pid
@@ -88,7 +88,7 @@ apiGetH pid = do
   addRespHeaders $ ApiGet $ PageCtx bwconf (pid, apiKeys)
 
 
-data ApiGet = ApiGet (PageCtx (Projects.ProjectId, (Vector ProjectApiKeys.ProjectApiKey)))
+data ApiGet = ApiGet (PageCtx (Projects.ProjectId, Vector ProjectApiKeys.ProjectApiKey))
 
 
 instance ToHtml ApiGet where

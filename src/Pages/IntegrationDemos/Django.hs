@@ -31,7 +31,7 @@ djangoGuide apikey = do
         "To initialize the django package simple Tadd apitoolkit_django middleware into the"
         codeEmphasis " settings.py "
         "middleware list:"
-      codeExample $ initCode
+      codeExample initCode
 
     div_ [class_ "w-full flex flex-col gap-2"] do
       h3_ [class_ "text-xl font-medium"] "Configuration Options"

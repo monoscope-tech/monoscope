@@ -1,6 +1,5 @@
 module Pages.IntegrationDemos.Echo (echoGuide) where
 
-import Data.Text
 import Lucid
 import NeatInterpolation
 import Pkg.Components

@@ -36,7 +36,7 @@ parseCheckbox (Just _) = True
 parseCheckbox Nothing = False
 
 
-fieldPutH :: Projects.ProjectId -> Fields.FieldId -> EditFieldForm -> ATAuthCtx (RespHeaders (FieldPut))
+fieldPutH :: Projects.ProjectId -> Fields.FieldId -> EditFieldForm -> ATAuthCtx (RespHeaders FieldPut)
 fieldPutH pid fid editData = do
   _ <- Sessions.sessionAndProject pid
   fi <- dbtToEff $ execute Update [sql|update apis.fields set is_required = ?, is_enum = ?, description=? where id=?|] (parseCheckbox editData.isRequired, parseCheckbox editData.isEnum, editData.description, fid)

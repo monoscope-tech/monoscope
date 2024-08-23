@@ -15,8 +15,8 @@ type Routes = NamedRoutes Routes'
 
 
 data Routes' mode = Routes'
-  { documentationPut :: mode :- "documentation" :> "save" :> ReqBody '[JSON] Documentation.SaveSwaggerForm :> Post '[HTML] (RespHeaders (Documentation.DocumentationMut))
-  , documentationPost :: mode :- "documentation" :> ReqBody '[FormUrlEncoded] Documentation.SwaggerForm :> Post '[HTML] (RespHeaders (Documentation.DocumentationMut))
-  , documentationGet :: mode :- "documentation" :> QueryParam "swagger_id" Text :> Get '[HTML] (RespHeaders (PageCtx (Documentation.DocumentationGet)))
+  { documentationPut :: mode :- "documentation" :> "save" :> ReqBody '[JSON] Documentation.SaveSwaggerForm :> Post '[HTML] (RespHeaders Documentation.DocumentationMut)
+  , documentationPost :: mode :- "documentation" :> ReqBody '[FormUrlEncoded] Documentation.SwaggerForm :> Post '[HTML] (RespHeaders Documentation.DocumentationMut)
+  , documentationGet :: mode :- "documentation" :> QueryParam "swagger_id" Text :> Get '[HTML] (RespHeaders (PageCtx Documentation.DocumentationGet))
   }
   deriving stock (Generic)

@@ -1,6 +1,5 @@
 module Pages.IntegrationDemos.DotNet (dotNetGuide) where
 
-import Data.Text
 import Data.Text qualified as T
 import Lucid
 import Pkg.Components
@@ -43,7 +42,7 @@ dotNetGuide apikey = do
 
 initCode :: Text -> Text
 initCode apiKey =
-  T.unlines
+  unlines
     [ "using ApiToolkit.Net;"
     , ""
     , "var builder = WebApplication.CreateBuilder(args);"
@@ -72,7 +71,7 @@ initCode apiKey =
 
 configOptions :: Text
 configOptions =
-  T.unlines
+  unlines
     [ "var config = new Config"
     , "{"
     , "    // Your api key, this is the only required field"
@@ -97,7 +96,7 @@ configOptions =
 
 errorReportingCode :: Text -> Text
 errorReportingCode apiKey =
-  T.unlines
+  unlines
     [ "using ApiToolkit.Net;"
     , ""
     , "var builder = WebApplication.CreateBuilder(args);"
@@ -140,7 +139,7 @@ errorReportingCode apiKey =
 
 outgoingRequest :: Text -> Text
 outgoingRequest apiKey =
-  T.unlines
+  unlines
     [ "using ApiToolkit.Net;"
     , ""
     , "var builder = WebApplication.CreateBuilder(args);"

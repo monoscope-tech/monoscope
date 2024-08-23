@@ -152,7 +152,7 @@ pValues =
     , Str . toText <$> (char '\"' *> manyTill L.charLiteral (char '\"'))
     , List [] <$ string "[]"
     , List <$> sqParens (pValues `sepBy` char ',')
-    , Str . toText <$> (manyTill L.charLiteral (space1))
+    , Str . toText <$> manyTill L.charLiteral (space1)
     ]
 
 
@@ -390,7 +390,7 @@ jsonPathQuery op' (Subject entire base keys) val =
     buildCondition :: T.Text -> Values -> T.Text -> T.Text
     buildCondition oper (Num n) pstfx = " ? (@ " <> oper <> " " <> n <> postfix <> ")"
     buildCondition oper (Str s) pstfx = " ? (@ " <> oper <> " \"" <> s <> "\"" <> postfix <> ")"
-    buildCondition oper (Boolean b) pstfx = " ? (@ " <> oper <> " " <> (T.toLower $ show b) <> pstfx <> ")"
+    buildCondition oper (Boolean b) pstfx = " ? (@ " <> oper <> " " <> T.toLower (show b) <> pstfx <> ")"
     buildCondition oper Null pstfx = " ? (@ " <> oper <> " null" <> pstfx <> ")"
     buildCondition oper (List xs) pstfx = " ? (@ " <> oper <> " {" <> (mconcat . intersperse "," . map display) xs <> "}" <> pstfx <> ")"
 

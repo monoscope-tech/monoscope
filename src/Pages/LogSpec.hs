@@ -1,11 +1,10 @@
 module Pages.LogSpec (spec) where
 
 import Data.Text qualified as T
-import Data.Time.Clock (UTCTime)
+import Data.Time.Clock (UTCTime, addUTCTime)
 import Test.Hspec
 
 import Data.Time (defaultTimeLocale, formatTime, getCurrentTime, parseTimeM)
-import Data.Time.Clock (addUTCTime)
 import Data.UUID qualified as UUID
 import Database.PostgreSQL.Entity.DBT (withPool)
 import Models.Apis.RequestDumps qualified as RequestDump

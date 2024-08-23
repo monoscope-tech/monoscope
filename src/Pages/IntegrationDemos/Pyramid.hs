@@ -1,6 +1,5 @@
 module Pages.IntegrationDemos.Pyramid (pyramidGuide) where
 
-import Data.Text
 import Data.Text qualified as T
 import Lucid
 import Pkg.Components
@@ -43,7 +42,7 @@ pyramidGuide apikey = do
 
 initCode :: Text -> Text
 initCode apiKey =
-  T.unlines
+  unlines
     [ "from wsgiref.simple_server import make_server"
     , "from pyramid.config import Configurator"
     , "from pyramid.response import Response"
@@ -70,7 +69,7 @@ initCode apiKey =
 
 configOptions :: Text
 configOptions =
-  T.unlines
+  unlines
     [ "setting = {"
     , "   # YOU API KEY"
     , "   \"APITOOLKIT_KEY\": \"<YOUR_API_KEY>\","
@@ -94,7 +93,7 @@ configOptions =
 
 errorReportingCode :: Text -> Text
 errorReportingCode apiKey =
-  T.unlines
+  unlines
     [ "from pyramid.response import Response"
     , "from pyramid.view import view_config"
     , "from apitoolkit_pyramid import observe_request, report_error"
@@ -123,7 +122,7 @@ errorReportingCode apiKey =
 
 outgoingRequest :: Text -> Text
 outgoingRequest apiKey =
-  T.unlines
+  unlines
     [ "from pyramid.response import Response"
     , "from pyramid.view import view_config"
     , "from apitoolkit_pyramid import observe_request"

@@ -1,6 +1,5 @@
 module Pages.IntegrationDemos.ExpressJs (expressGuide) where
 
-import Data.Text
 import Data.Text qualified as T
 import Lucid
 import Pkg.Components
@@ -38,7 +37,7 @@ expressGuide apikey = do
 
 initCode :: Text -> Text
 initCode apiKey =
-  T.unlines
+  unlines
     [ "import express from 'express';"
     , "import { APIToolkit } from 'apitoolkit-express';"
     , ""
@@ -63,7 +62,7 @@ initCode apiKey =
 
 configOptions :: Text
 configOptions =
-  T.unlines
+  unlines
     [ "{"
     , "  // List of request and response headers to be redacted"
     , "  redactHeaders: [\"Authorization\"],"
@@ -79,7 +78,7 @@ configOptions =
 
 errorReportingCode :: Text -> Text
 errorReportingCode apiKey =
-  T.unlines
+  unlines
     [ "import { APIToolkit, ReportError } from \"apitoolkit-express\";"
     , "import express from \"express\";"
     , "import axios from \"axios\";"
@@ -112,7 +111,7 @@ errorReportingCode apiKey =
 
 outgoingRequest :: Text -> Text
 outgoingRequest apiKey =
-  T.unlines
+  unlines
     [ "import express from 'express';"
     , "import axios from 'axios';"
     , "import { observeAxios } from 'apitoolkit-express';"

@@ -40,8 +40,9 @@ spec = aroundAll withTestResources do
       let reqMsg2 = Unsafe.fromJust $ convert $ testRequestMsgs.reqMsg2 nowTxt
       let msgs =
             concat
-              $ replicate 5
-              $ [ ("m1", reqMsg1)
+              $ replicate
+                5
+                [ ("m1", reqMsg1)
                 , ("m2", reqMsg2)
                 ]
       _ <- runTestBackground trATCtx $ processRequestMessages msgs

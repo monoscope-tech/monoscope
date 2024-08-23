@@ -117,9 +117,9 @@ jobsRunner logger authCtx job = when authCtx.config.enableBackgroundJobs $ do
           sendPostmarkEmail reciever "project-invite" templateVars
       SendDiscordData userId projectId fullName stack foundUsFrom -> whenJustM (dbtToEff $ Projects.projectById projectId) \project -> do
         users <- dbtToEff $ Projects.usersByProjectId projectId
-        let stackString = intercalate ", " $ map T.unpack stack
+        let stackString = intercalate ", " $ map toString stack
         forM_ users \user -> do
-          let userEmail = CI.original (user.email)
+          let userEmail = CI.original user.email
           let project_url = "https://app.apitoolkit.io/p/" <> projectId.toText
           let project_title = project.title
           let msg =
@@ -153,7 +153,7 @@ jobsRunner logger authCtx job = when authCtx.config.enableBackgroundJobs $ do
           forM_ users \user -> do
             let firstName = user.firstName
             let projectTitle = pr.title
-            let userEmail = CI.original (user.email)
+            let userEmail = CI.original user.email
             let templateVars =
                   [aesonQQ|{
              "user_name": #{firstName},
@@ -186,7 +186,7 @@ jobsRunner logger authCtx job = when authCtx.config.enableBackgroundJobs $ do
         now <- Time.currentTime
         collectionM <- dbtToEff $ Testing.getCollectionById col_id
         if job.jobRunAt > addUTCTime (-900) now -- Run time is less than 15 mins ago
-          then whenJust collectionM \collection -> when (collection.isScheduled) do
+          then whenJust collectionM \collection -> when collection.isScheduled do
             let (Testing.CollectionSteps colStepsV) = collection.collectionSteps
             _ <- TestToDump.runTestAndLog collection.projectId col_id colStepsV
             pass
@@ -251,12 +251,11 @@ queryMonitorsTriggered queryMonitorIds = do
       || (not monitorE.triggerLessThan && monitorE.evalResult <= monitorE.alertThreshold)
       then handleQueryMonitorThreshold monitorE True
       else do
-        if ( Just True
-              == ( monitorE.warningThreshold <&> \warningThreshold ->
-                    (monitorE.triggerLessThan && monitorE.evalResult >= warningThreshold)
-                      || (not monitorE.triggerLessThan && monitorE.evalResult <= warningThreshold)
-                 )
-           )
+        if Just True
+          == ( monitorE.warningThreshold <&> \warningThreshold ->
+                (monitorE.triggerLessThan && monitorE.evalResult >= warningThreshold)
+                  || (not monitorE.triggerLessThan && monitorE.evalResult <= warningThreshold)
+             )
           then handleQueryMonitorThreshold monitorE False
           else pass
 
@@ -278,7 +277,7 @@ handleQueryMonitorThreshold monitorE isAlert = do
 jobsWorkerInit :: Log.Logger -> Config.AuthContext -> IO ()
 jobsWorkerInit logger appCtx =
   startJobRunner
-    $ mkConfig jobLogger "background_jobs" (appCtx.jobsPool) (MaxConcurrentJobs 1) (jobsRunner logger appCtx) id
+    $ mkConfig jobLogger "background_jobs" appCtx.jobsPool (MaxConcurrentJobs 1) (jobsRunner logger appCtx) id
   where
     jobLogger :: LogLevel -> LogEvent -> IO ()
     jobLogger logLevel logEvent = Log.runLogT "OddJobs" logger Log.LogAttention $ Log.logInfo "Background jobs ping." (show @Text logLevel, show @Text logEvent) -- logger show (logLevel, logEvent)
@@ -322,7 +321,7 @@ dailyReportForProject pid = do
         users & mapM_ \user -> do
           let firstName = user.firstName
           let projectTitle = pr.title
-          let userEmail = CI.original (user.email)
+          let userEmail = CI.original user.email
           let anmls = if total_anomalies == 0 then [Aeson.object ["message" .= "No anomalies detected yet."]] else RP.getAnomaliesEmailTemplate anomalies
           let perf = RP.getPerformanceEmailTemplate endpoint_rp previous_day
           let perf_count = V.length perf
@@ -386,7 +385,7 @@ weeklyReportForProject pid = do
         forM_ users \user -> do
           let firstName = user.firstName
           let projectTitle = pr.title
-          let userEmail = CI.original (user.email)
+          let userEmail = CI.original user.email
           let anmls = if total_anomalies == 0 then [Aeson.object ["message" .= "No anomalies detected yet."]] else RP.getAnomaliesEmailTemplate anomalies
           let perf = RP.getPerformanceEmailTemplate endpoint_rp previous_week
           let perf_count = V.length perf

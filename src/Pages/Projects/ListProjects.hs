@@ -20,7 +20,7 @@ import System.Types
 import Utils (faSprite_)
 
 
-listProjectsGetH :: ATAuthCtx (RespHeaders (ListProjectsGet))
+listProjectsGetH :: ATAuthCtx (RespHeaders ListProjectsGet)
 listProjectsGetH = do
   (sess, project) <- Sessions.sessionAndProject (Projects.ProjectId UUID.nil)
   let bwconf =

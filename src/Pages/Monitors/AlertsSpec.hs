@@ -38,7 +38,7 @@ alertForm =
     , direction = "down"
     , alertThreshold = 1
     , warningThreshold = Nothing
-    , alertId = (Just (UUID.toText alertId))
+    , alertId = Just (UUID.toText alertId)
     }
 
 
@@ -49,7 +49,7 @@ spec = aroundAll withTestResources do
       pg <-
         toServantResponse trATCtx trSessAndHeader trLogger $ Alerts.alertListGetH testPid
       case pg of
-        Alerts.AlertListGet (monitors) -> do
+        Alerts.AlertListGet monitors -> do
           length monitors `shouldBe` 0
         _ -> fail "unexpected response"
 
@@ -64,12 +64,12 @@ spec = aroundAll withTestResources do
       pg <-
         toServantResponse trATCtx trSessAndHeader trLogger $ Alerts.alertListGetH testPid
       case pg of
-        Alerts.AlertListGet (monitors) -> do
+        Alerts.AlertListGet monitors -> do
           length monitors `shouldBe` 1
           let alert = V.head monitors
           alert.warningThreshold `shouldBe` Nothing
           alert.alertThreshold `shouldBe` 1
-          alert.id `shouldBe` (QueryMonitorId alertId)
+          alert.id `shouldBe` QueryMonitorId alertId
         _ -> fail "unexpected response"
     it "should get single alert" \TestResources{..} -> do
       pg <-
@@ -80,5 +80,5 @@ spec = aroundAll withTestResources do
           let monitor = Unsafe.fromJust monitorM
           monitor.warningThreshold `shouldBe` Nothing
           monitor.alertThreshold `shouldBe` 1
-          monitor.id `shouldBe` (QueryMonitorId alertId)
+          monitor.id `shouldBe` QueryMonitorId alertId
         _ -> fail "unexpected response"
