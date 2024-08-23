@@ -13,7 +13,7 @@ import System.Types (ATAuthCtx)
 server :: Projects.ProjectId -> Servant.ServerT Routes ATAuthCtx
 server pid =
   Routes'
-    { endpointListGet = EndpointList.endpointListGetH pid
+    { endpointListGet =  EndpointList.endpointListGetH pid 
     , fieldDetailsPartial = EndpointDetails.fieldDetailsPartialH pid
     , endpointDetailsWithHash = EndpointDetails.endpointDetailsWithHashH pid
     , endpointDetails = EndpointDetails.endpointDetailsH pid

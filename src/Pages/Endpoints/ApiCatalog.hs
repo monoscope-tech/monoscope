@@ -60,19 +60,21 @@ apiCatalogH pid sortM requestTypeM = do
               a_ [href_ $ "/p/" <> pid.toText <> "/api_catalog?sort=" <> sortV <> "&request_type=Incoming", role_ "tab", class_ $ "tab " <> if requestType == "Incoming" then "tab-active" else ""] "Incoming"
               a_ [href_ $ "/p/" <> pid.toText <> "/api_catalog?sort=" <> sortV <> "&request_type=Outgoing", role_ "tab", class_ $ "tab " <> if requestType == "Outgoing" then "tab-active" else ""] "Outgoing"
           }
-  addRespHeaders $ PageCtx bwconf (ItemsList.ItemsPage listCfg $ V.map (HostEventsVM pid) hostsAndEvents)
+  addRespHeaders $ PageCtx bwconf (ItemsList.ItemsPage listCfg $ V.map (\host -> HostEventsVM pid host requestType) hostsAndEvents)
 
 
-data HostEventsVM = HostEventsVM Projects.ProjectId Endpoints.HostEvents
+
+data HostEventsVM = HostEventsVM Projects.ProjectId Endpoints.HostEvents Text
 
 
 instance ToHtml HostEventsVM where
-  toHtml (HostEventsVM pid he) = toHtmlRaw $ renderapiCatalog pid he
+  toHtml (HostEventsVM pid he requestType) = toHtmlRaw $ renderapiCatalog pid he requestType
   toHtmlRaw = toHtml
 
 
-renderapiCatalog :: Projects.ProjectId -> Endpoints.HostEvents -> Html ()
-renderapiCatalog pid host = div_ [class_ "flex py-4 gap-8 items-center itemsListItem"] do
+
+renderapiCatalog :: Projects.ProjectId -> Endpoints.HostEvents -> Text ->Html ()
+renderapiCatalog pid host requestType = div_ [class_ "flex py-4 gap-8 items-center itemsListItem"] do
   div_ [class_ "h-4 flex space-x-3 w-8 "] do
     a_ [class_ "w-2 h-full"] ""
     input_ [term "aria-label" "Select Issue", class_ "endpoint_anomaly_input bulkactionItemCheckbox checkbox checkbox-md checked:checkbox-primary", type_ "checkbox", name_ "hostId", value_ host.host]
@@ -80,8 +82,8 @@ renderapiCatalog pid host = div_ [class_ "flex py-4 gap-8 items-center itemsList
   div_ [class_ "space-y-3 grow"] do
     div_ [class_ "space-x-3"] do
       a_ [class_ "inline-block font-bold space-x-2"] $ do
-        a_ [href_ $ "/p/" <> pid.toText <> "/endpoints?host=" <> host.host, class_ " hover:text-slate-600"] $ toHtml (T.replace "http://" "" $ T.replace "https://" "" host.host)
-        a_ [href_ $ "/p/" <> pid.toText <> "/log_explorer?query=host%3D%3D" <> "\"" <> host.host <> "\"", class_ "text-blue-500 hover:text-slate-600 text-xs"] $ "View logs"
+        a_ [href_ $ "/p/" <> pid.toText <> if requestType == "Incoming" then  "/endpoints?project_host=" <> host.host <> "&request_type=" <> requestType else "/endpoints?host=" <> host.host <> "&request_type=" <> requestType, class_ " hover:text-slate-600"] $ toHtml (T.replace "http://" "" $ T.replace "https://" "" host.host)
+        a_ [href_ $ "/p/" <> pid.toText <> "/log_explorer?query=host%3D%3D" <> "\"" <> host.host <> "\"", class_ "text-blue-500 hover:text-slate-600 text-xs"] "View logs"
   div_ [class_ "flex items-center justify-center "]
     $ div_
       [ class_ "w-56 h-12 px-3"

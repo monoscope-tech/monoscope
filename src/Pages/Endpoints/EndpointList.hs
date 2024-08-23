@@ -38,8 +38,9 @@ endpointListGetH
   -> Maybe Text
   -> Maybe Text
   -> Maybe Text
+  -> Maybe Text
   -> ATAuthCtx (RespHeaders EndpointRequestStatsVM)
-endpointListGetH pid layoutM pageM filterTM hostM projectHostM' sortM hxRequestM hxBoostedM hxCurrentURL loadMoreM searchM = do
+endpointListGetH pid layoutM pageM filterTM hostM projectHostM' requestTypeM sortM hxRequestM hxBoostedM hxCurrentURL loadMoreM searchM = do
   (sess, project) <- Sessions.sessionAndProject pid
   let (ackd, archived, currentFilterTab) = case filterTM of
         Just "Active" -> (True, False, "Active")
@@ -54,19 +55,24 @@ endpointListGetH pid layoutM pageM filterTM hostM projectHostM' sortM hxRequestM
     Nothing -> Endpoints.endpointRequestStatsByProject pid ackd archived projectHostM sortM searchM page
   projHosts <- dbtToEff $ Endpoints.getProjectHosts pid
   inboxCount <- dbtToEff $ Endpoints.countEndpointInbox pid
-  
-  let currentURL = "/p/" <> pid.toText <> "/endpoints?layout=" <> fromMaybe "false" layoutM <> "&filter=" <> fromMaybe "" filterTM <> "&sort=" <> fromMaybe "event" sortM <> "&project_host=" <> fromMaybe "" hostM
 
-  let pageTitle = case hostM of
+  
+  let requestType = fromMaybe "Incoming" requestTypeM
+  let currentURL =  "/p/" <> pid.toText <> "/endpoints?layout=" <> fromMaybe "false" layoutM <> "&filter=" <> fromMaybe "" filterTM <> "&sort=" <> fromMaybe "event" sortM <> "&request_type=" <> requestType <> if requestType == "Incoming" then "&project_host=" <> fromMaybe "" hostM else "&host=" <> fromMaybe "" hostM
+
+
+  let pageTitleHost = case hostM of
         Just host -> "Endpoint For " <> host
         Nothing   -> "Endpoint"
 
-
+  let pageTitleProjectHost = case projectHostM of
+        Just host  -> "Endpoint For " <> host
+        Nothing    -> "Endpoint"
   let bwconf =
         (def :: BWConfig)
           { sessM = Just sess.persistentSession
           , currProject = Just project
-          , pageTitle = pageTitle
+          , pageTitle =  if isNothing hostM then pageTitleProjectHost else pageTitleHost
           , navTabs =
               Just
                 $ toHtml
