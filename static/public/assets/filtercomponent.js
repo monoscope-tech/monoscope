@@ -561,7 +561,7 @@ class Filter extends LitElement {
           fetch(`/p/${this.projectId}/query_builder/autocomplete?category=${key.field}&prefix=.${key.prefix}`)
             .then((res) => res.json())
             .then((data) => {
-              const res = data.map((d) => `${key.field} ${d}`)
+              const res = data.map((d) => `${key.field}${d}`)
               let matches = []
               res.forEach((match) => {
                 target_info.operators.forEach((op) => {
