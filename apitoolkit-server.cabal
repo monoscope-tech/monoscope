@@ -55,17 +55,6 @@ library
       MonitoringSpec
       Network.Wai.Middleware.Heartbeat
       Opentelemetry.OtlpServer
-      Opentelemetry.Proto.Collector.Logs.V1.LogsService
-      Opentelemetry.Proto.Collector.Metrics.V1.MetricsService
-      Opentelemetry.Proto.Collector.Profiles.V1experimental.ProfilesService
-      Opentelemetry.Proto.Collector.Trace.V1.TraceService
-      Opentelemetry.Proto.Common.V1.Common
-      Opentelemetry.Proto.Logs.V1.Logs
-      Opentelemetry.Proto.Metrics.V1.Metrics
-      Opentelemetry.Proto.Profiles.V1experimental.Pprofextended
-      Opentelemetry.Proto.Profiles.V1experimental.Profiles
-      Opentelemetry.Proto.Resource.V1.Resource
-      Opentelemetry.Proto.Trace.V1.Trace
       Pages.Anomalies.AnomalyList
       Pages.Anomalies.AnomalyListSpec
       Pages.Anomalies.Routes
@@ -224,7 +213,6 @@ library
     , cookie
     , cryptonite
     , data-default
-    , deepseq
     , deriving-aeson
     , directory
     , dotenv
@@ -263,6 +251,7 @@ library
     , network-uri
     , nyan-interpolation
     , odd-jobs
+    , otlp
     , parser-combinators
     , pg-entity
     , pg-transact
@@ -271,7 +260,6 @@ library
     , postgresql-simple
     , pretty-relative-time
     , pretty-simple
-    , proto-lens-runtime
     , proto3-suite
     , proto3-wire
     , regex-tdfa
@@ -293,15 +281,12 @@ library
     , text-display
     , time
     , tmp-postgres
-    , transformers-except
-    , tuple
     , unliftio
     , unordered-containers
     , uuid
     , valor >=1.0.0.0
     , vector
     , vector-algorithms
-    , vector-hashtables
     , wai
     , wai-log
     , wai-middleware-static

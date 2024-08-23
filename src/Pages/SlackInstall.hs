@@ -90,7 +90,7 @@ postH LinkProjectsForm{projects, webhookUrl} = do
   addRespHeaders $ span_ [] "Projects linked successfully"
 
 
-linkProjectGetH :: Projects.ProjectId -> Maybe Text -> ATBaseCtx (SlackLink)
+linkProjectGetH :: Projects.ProjectId -> Maybe Text -> ATBaseCtx SlackLink
 linkProjectGetH pid slack_code = do
   appCtx <- ask @AuthContext
   envCfg <- asks env

@@ -588,9 +588,9 @@ createIssueData hostM anomaly = case anomaly.anomalyType of
               <*> anomaly.endpointMethod
               <*> anomaly.endpointUrlPath
               <*> pure (fromMaybe "" hostM)
-              <*> pure (anomaly.shapeNewUniqueFields)
-              <*> pure (anomaly.shapeDeletedFields)
-              <*> pure (anomaly.shapeUpdatedFieldFormats)
+              <*> pure anomaly.shapeNewUniqueFields
+              <*> pure anomaly.shapeDeletedFields
+              <*> pure anomaly.shapeUpdatedFieldFormats
           )
   ATField ->
     IDNewFieldIssue
@@ -692,7 +692,7 @@ insertErrorQueryAndParams pid err = (q, params)
 
 
 insertIssue :: Issue -> DBT IO Int64
-insertIssue issue = execute Insert q issue
+insertIssue = execute Insert q
   where
     q =
       [sql|insert into apis.issues (id, created_at, updated_at, project_id, acknowleged_at, anomaly_type, target_hash,

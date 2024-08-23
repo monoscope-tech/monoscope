@@ -95,7 +95,7 @@ codeExample code = do
 
 
 codeEmphasis :: Text -> Html ()
-codeEmphasis code = span_ [class_ "text-red-500"] $ toHtml $ code
+codeEmphasis code = span_ [class_ "text-red-500"] $ toHtml code
 
 
 withEmphasisedText :: [(Text, Bool)] -> Html ()
@@ -125,7 +125,7 @@ data TabFilterOpt = TabFilterOpt
 
 
 instance ToHtml TabFilter where
-  toHtmlRaw a = toHtml a
+  toHtmlRaw = toHtml
   toHtml tf = div_ [class_ "tabs tabs-boxed border"] do
     let uri = deleteParam "filter" tf.currentURL
     forM_ tf.options \opt ->
@@ -136,7 +136,7 @@ instance ToHtml TabFilter where
         ]
         do
           span_ $ toHtml opt.name
-          whenJust opt.count \countV -> span_ [class_ "absolute top-[1px] -right-[5px] text-white text-xs font-medium rounded-full px-1 bg-red-500"] $ show countV
+          whenJust opt.count $ span_ [class_ "absolute top-[1px] -right-[5px] text-white text-xs font-medium rounded-full px-1 bg-red-500"] . show
 
 
 -----------

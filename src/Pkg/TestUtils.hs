@@ -120,7 +120,7 @@ testSessionHeader :: MonadIO m => Pool Connection -> m (Servant.Headers '[Servan
 testSessionHeader pool = do
   pSessId <-
     Auth.authorizeUserAndPersist Nothing "firstName" "lastName" "https://placehold.it/500x500" "test@apitoolkit.io"
-      & (runStaticUUID $ map (UUID.fromWords 0 0 0) [1 .. 10])
+      & runStaticUUID (map (UUID.fromWords 0 0 0) [1 .. 10])
       & runHTTPGolden "./golden/"
       & DB.runDB pool
       & runTime
@@ -141,7 +141,7 @@ fromRightShow (Left a) = error $ "Unexpected Left value: " <> show a
 
 runTestBackground :: Config.AuthContext -> ATBackgroundCtx a -> IO a
 runTestBackground authCtx action = LogBulk.withBulkStdOutLogger \logger ->
-  runBackground logger authCtx $ action
+  runBackground logger authCtx action
 
 
 -- New type to hold all our resources
@@ -160,15 +160,19 @@ withTestResources f = withSetup $ \pool -> LogBulk.withBulkStdOutLogger \logger 
   projectCache <- newCache (Just $ TimeSpec (60 * 60) 0)
   sessAndHeader <- testSessionHeader pool
   let atAuthCtx =
-        AuthContext (def @EnvConfig) pool pool projectCache
-          $ ( (def :: EnvConfig)
-                { apiKeyEncryptionSecretKey = "apitoolkit123456123456apitoolkit"
-                , convertkitApiKey = ""
-                , convertkitApiSecret = ""
-                , requestPubsubTopics = ["apitoolkit-prod-default"]
-                , enableBackgroundJobs = True
-                }
-            )
+        AuthContext
+          (def @EnvConfig)
+          pool
+          pool
+          projectCache
+          ( (def :: EnvConfig)
+              { apiKeyEncryptionSecretKey = "apitoolkit123456123456apitoolkit"
+              , convertkitApiKey = ""
+              , convertkitApiSecret = ""
+              , requestPubsubTopics = ["apitoolkit-prod-default"]
+              , enableBackgroundJobs = True
+              }
+          )
   f
     TestResources
       { trPool = pool
@@ -186,11 +190,12 @@ toServantResponse
   -> ATAuthCtx (RespHeaders a)
   -> IO a
 toServantResponse trATCtx trSessAndHeader trLogger k = do
-  atAuthToBase trSessAndHeader k
-    & effToServantHandlerTest trATCtx trLogger
-    & ServantS.runHandler
-    <&> fromRightShow
+  ( atAuthToBase trSessAndHeader k
+      & effToServantHandlerTest trATCtx trLogger
+      & ServantS.runHandler
+    )
     <&> Servant.getResponse
+    . fromRightShow
 
 
 msg1 :: Text -> Value
@@ -273,9 +278,9 @@ convert val = case fromJSON val of
 
 runAllBackgroundJobs :: AuthContext -> IO (V.Vector Job)
 runAllBackgroundJobs authCtx = do
-  jobs <- withPool authCtx.pool $ getBackgroundJobs
+  jobs <- withPool authCtx.pool getBackgroundJobs
   LogBulk.withBulkStdOutLogger \logger ->
-    V.forM_ jobs \job -> jobsRunner logger authCtx job
+    V.forM_ jobs $ jobsRunner logger authCtx
   pure jobs
 
 
@@ -291,7 +296,7 @@ setBjRunAtInThePast = void $ PgT.execute q ()
     q = [sql|UPDATE background_jobs SET run_at = CURRENT_DATE - INTERVAL '1 day' WHERE status = 'pending'|]
 
 
-refreshMaterializedView :: Text -> PgT.DBT IO (Int64)
+refreshMaterializedView :: Text -> PgT.DBT IO Int64
 refreshMaterializedView name = PgT.execute (Query $ encodeUtf8 q) ()
   where
     q = [text|REFRESH MATERIALIZED VIEW $name|]

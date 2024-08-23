@@ -44,7 +44,7 @@ data ManageMembersForm = ManageMembersForm
   deriving anyclass (FromForm)
 
 
-manageMembersPostH :: Projects.ProjectId -> ManageMembersForm -> ATAuthCtx (RespHeaders (ManageMembers))
+manageMembersPostH :: Projects.ProjectId -> ManageMembersForm -> ATAuthCtx (RespHeaders ManageMembers)
 manageMembersPostH pid form = do
   (sess, project) <- Sessions.sessionAndProject pid
   appCtx <- ask @AuthContext
@@ -115,7 +115,7 @@ manageMembersPostH pid form = do
   addRespHeaders $ ManageMembersPost projMembersLatest
 
 
-manageMembersGetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders (ManageMembers))
+manageMembersGetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders ManageMembers)
 manageMembersGetH pid = do
   (sess, project) <- Sessions.sessionAndProject pid
   appCtx <- ask @AuthContext
@@ -126,7 +126,7 @@ manageMembersGetH pid = do
 
 data ManageMembers
   = ManageMembersGet {unwrapGet :: PageCtx (V.Vector ProjectMembers.ProjectMemberVM)}
-  | ManageMembersPost {unwrapPost :: (V.Vector ProjectMembers.ProjectMemberVM)}
+  | ManageMembersPost {unwrapPost :: V.Vector ProjectMembers.ProjectMemberVM}
 
 
 instance ToHtml ManageMembers where

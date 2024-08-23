@@ -37,7 +37,7 @@ spec = aroundAll withTestResources do
       let nowTxt = toText $ formatTime defaultTimeLocale "%FT%T%QZ" currentTime
       let reqMsg1 = Unsafe.fromJust $ convert $ testRequestMsgs.reqMsg1 nowTxt
       let reqMsg2 = Unsafe.fromJust $ convert $ testRequestMsgs.reqMsg2 nowTxt
-      let msgs = concat $ replicate 2 $ [("m1", reqMsg1), ("m2", reqMsg2)]
+      let msgs = concat $ replicate 2 [("m1", reqMsg1), ("m2", reqMsg2)]
       _ <- runTestBackground trATCtx $ processRequestMessages msgs
       res <-
         toServantResponse trATCtx trSessAndHeader trLogger $ Onboarding.onboardingGetH testPid Nothing Nothing Nothing

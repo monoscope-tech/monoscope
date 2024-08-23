@@ -38,7 +38,7 @@ springGuide apikey = do
       h3_ [class_ "text-2xl font-semibold"] "Initialize SDK"
       p_ [class_ "text-gray-600 font-medium"] do
         "To initialize the the sdk add the " <> codeEmphasis " @EnableAPIToolkit " <> "custom annotation to your application's main class."
-      codeExample $ initCode
+      codeExample initCode
 
     div_ [class_ "w-full flex flex-col gap-2", id_ "errors-monitoring"] do
       h3_ [class_ "text-2xl font-semibold"] "Error Reporting"

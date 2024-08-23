@@ -200,18 +200,18 @@ data Session = Session
 
 
 sessionAndProject
-  :: (DB :> es, (EffReader.Reader (Headers '[Header "Set-Cookie" SetCookie] Session)) :> es, EffError.Error ServerError :> es)
+  :: (DB :> es, EffReader.Reader (Headers '[Header "Set-Cookie" SetCookie] Session) :> es, EffError.Error ServerError :> es)
   => Projects.ProjectId
   -> Eff es (Session, Projects.Project)
 sessionAndProject pid = do
   sess <- getSession
   let projects = sess.persistentSession.projects.getProjects
-  case (V.find (\v -> v.id == pid) projects) of
+  case V.find (\v -> v.id == pid) projects of
     Just p -> pure (sess, p)
     Nothing ->
       if pid == Projects.ProjectId UUID.nil || sess.user.isSudo
         then do
-          (dbtToEff $ Projects.projectById pid) >>= \case
+          dbtToEff (Projects.projectById pid) >>= \case
             Just p -> pure (sess, p)
             Nothing -> throwError $ err302{errHeaders = [("Location", "/p/?missingProjectPermission")]}
         else throwError $ err302{errHeaders = [("Location", "/p/?missingProjectPermission")]}

@@ -61,10 +61,10 @@ import Witch (from)
 -- >>> import Data.Aeson
 
 
-apiLogH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe UTCTime -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders (LogsGet))
+apiLogH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe UTCTime -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders LogsGet)
 apiLogH pid queryM cols' cursorM' sinceM fromM toM layoutM sourceM hxRequestM hxBoostedM = do
   (sess, project) <- Sessions.sessionAndProject pid
-  let source = fromMaybe "requests" $ sourceM
+  let source = fromMaybe "requests" sourceM
   let summaryCols = T.splitOn "," (fromMaybe "" cols')
   let query = fromMaybe "" queryM
   now <- Time.currentTime
@@ -89,8 +89,8 @@ apiLogH pid queryM cols' cursorM' sinceM fromM toM layoutM sourceM hxRequestM hx
   let tableAsVecM = hush tableAsVecE
 
   freeTierExceeded <-
-    dbtToEff
-      $ if project.paymentPlan == "Free"
+    dbtToEff $
+      if project.paymentPlan == "Free"
         then do
           totalRequest <- RequestDumps.getLastSevenDaysTotalRequest pid
           return $ totalRequest > 5000
@@ -105,8 +105,8 @@ apiLogH pid queryM cols' cursorM' sinceM fromM toM layoutM sourceM hxRequestM hx
           , navTabs = Just $ div_ [class_ "tabs tabs-boxed border"] do
               a_ [onclick_ "window.setQueryParamAndReload('source', 'requests')", role_ "tab", class_ $ "tab " <> if source == "requests" then "tab-active" else ""] "Requests"
               a_ [onclick_ "window.setQueryParamAndReload('source', 'logs')", role_ "tab", class_ $ "tab " <> if source == "logs" then "tab-active" else ""] "Logs"
-              -- a_ [onclick_ "window.setQueryParamAndReload('source', 'traces')", role_ "tab", class_ $ "tab " <> if source == "traces" then "tab-active" else ""] "Traces"
-              -- a_ [onclick_ "window.setQueryParamAndReload('source', 'metrics')", role_ "tab", class_ $ "tab " <> if source == "spans" then "tab-active" else ""] "Metrics"
+              a_ [onclick_ "window.setQueryParamAndReload('source', 'spans')", role_ "tab", class_ $ "tab " <> if source == "spans" then "tab-active" else ""] "Traces"
+              -- a_ [onclick_ "window.setQueryParamAndReload('source', 'metrics')", role_ "tab", class_ $ "tab " <> if source == "metrics" then "tab-active" else ""] "Metrics"
           }
   case tableAsVecM of
     Just tableAsVec -> do
@@ -133,6 +133,7 @@ apiLogH pid queryM cols' cursorM' sinceM fromM toM layoutM sourceM hxRequestM hx
               , emptyStateUrl = Nothing
               , source
               }
+
       case (layoutM, hxRequestM, hxBoostedM) of
         (Just "loadmore", Just "true", _) -> addRespHeaders $ LogsGetRows pid requestVecs curatedColNames colIdxMap nextLogsURL source
         (Just "resultTable", Just "true", _) -> addRespHeaders $ LogsGetResultTable page False
@@ -154,10 +155,10 @@ apiLogH pid queryM cols' cursorM' sinceM fromM toM layoutM sourceM hxRequestM hx
 
 
 data LogsGet
-  = LogPage (PageCtx (ApiLogsPageData))
+  = LogPage (PageCtx ApiLogsPageData)
   | LogsGetRows Projects.ProjectId (V.Vector (V.Vector Value)) [Text] (HM.HashMap Text Int) Text Text
   | LogsGetResultTable ApiLogsPageData Bool
-  | LogsGetError (PageCtx (Text))
+  | LogsGetError (PageCtx Text)
   | LogsGetErrorSimple Text
 
 
@@ -187,9 +188,9 @@ logQueryBox_ pid currentRange =
       div_ [class_ "flex-1"] do
         div_ [id_ "queryEditor", class_ "h-14 hidden overflow-hidden bg-gray-200"] pass
         div_ [id_ "queryBuilder"] $ termRaw "filter-element" [id_ "filterElement"] ("" :: Text)
-      div_ [class_ "form-control"]
-        $ label_ [class_ "label cursor-pointer space-x-2"]
-        $ input_ [type_ "checkbox", class_ "toggle tooltip tooltip-left", id_ "toggleQueryEditor", onclick_ "toggleQueryBuilder()", term "data-tip" "toggle query editor"]
+      div_ [class_ "form-control"] $
+        label_ [class_ "label cursor-pointer space-x-2"] $
+          input_ [type_ "checkbox", class_ "toggle tooltip tooltip-left", id_ "toggleQueryEditor", onclick_ "toggleQueryBuilder()", term "data-tip" "toggle query editor"]
       button_
         [type_ "submit", class_ "btn btn-sm btn-success"]
         do
@@ -228,9 +229,9 @@ apiLogsPage page = do
       ]
       do
         div_ [class_ "relative ml-auto w-full", style_ ""] do
-          div_ [class_ "flex justify-end  w-full p-4 "]
-            $ button_ [[__|on click add .hidden to #expand-log-modal|]]
-            $ faSprite_ "xmark" "regular" "h-8"
+          div_ [class_ "flex justify-end  w-full p-4 "] $
+            button_ [[__|on click add .hidden to #expand-log-modal|]] $
+              faSprite_ "xmark" "regular" "h-8"
           form_
             [ hxPost_ $ "/p/" <> page.pid.toText <> "/share/"
             , hxSwap_ "innerHTML"
@@ -342,7 +343,21 @@ resultTable_ page mainLog = table_ [class_ "w-full table table-sm table-pin-rows
 curateCols :: [Text] -> [Text] -> [Text]
 curateCols summaryCols cols = sortBy sortAccordingly filteredCols
   where
-    defaultSummaryPaths = ["errors_count", "host", "status_code", "method", "url_path", "request_type"]
+    defaultSummaryPaths =
+      [ "errors_count"
+      , "host"
+      , "status_code"
+      , "method"
+      , "url_path"
+      , "request_type"
+      , "trace_id"
+      , "severity_text"
+      , "kind"
+      , "span_name"
+      , "status"
+      , "start_time"
+      , "end_time"
+      ]
     isLogEventB = isLogEvent cols
     filteredCols = filter (\c -> not isLogEventB || (c `notElem` defaultSummaryPaths || c `elem` summaryCols)) cols
 
@@ -362,12 +377,12 @@ logItemRows_ pid requests curatedCols colIdxMap nextLogsURL source = do
   forM_ requests \reqVec -> do
     let (logItemPath, _reqId) = fromMaybe ("", "") $ requestDumpLogItemUrlPath pid reqVec colIdxMap source
     let (_, errCount, errClass) = errorClass True reqVec colIdxMap
-    tr_ [class_ "cursor-pointer divide-x b--b2", [__|on click toggle .hidden on next <tr/> then toggle .expanded-log on me|]]
-      $ forM_ curatedCols (td_ . logItemCol_ source pid reqVec colIdxMap)
+    tr_ [class_ "cursor-pointer divide-x b--b2", [__|on click toggle .hidden on next <tr/> then toggle .expanded-log on me|]] $
+      forM_ curatedCols (td_ . logItemCol_ source pid reqVec colIdxMap)
     tr_ [class_ "hidden"] $ do
       -- used for when a row is expanded.
       td_ $ a_ [class_ $ "inline-block h-full " <> errClass, term "data-tippy-content" $ show errCount <> " errors attached to this request"] ""
-      td_ [colspan_ $ show $ length curatedCols - 1] $ div_ [hxGet_ $ logItemPath, hxTrigger_ "intersect once", hxSwap_ "outerHTML"] $ span_ [class_ "loading loading-dots loading-md"] ""
+      td_ [colspan_ $ show $ length curatedCols - 1] $ div_ [hxGet_ logItemPath, hxTrigger_ "intersect once", hxSwap_ "outerHTML"] $ span_ [class_ "loading loading-dots loading-md"] ""
   when (Vector.length requests > 199)
     $ tr_
     $ td_ [colspan_ $ show $ length curatedCols]
@@ -397,6 +412,19 @@ errorClass expandedSection reqVec colIdxMap =
       )
 
 
+barSeverityClass :: V.Vector Value -> HM.HashMap Text Int -> Text
+barSeverityClass reqVec colIdxMap =
+  let severity = fromMaybe "INFO" $ lookupVecTextByKey reqVec colIdxMap "severity"
+      cls = case severity of
+        "ERROR" -> "bg-red-500"
+        "WARNING" -> "bg-warning"
+        "INFO" -> "bg-blue-200"
+        "DEBUG" -> "bg-gray-300"
+        "FATAL" -> "bg-purple-500"
+        _ -> "bg-blue-200"
+   in cls
+
+
 logTableHeading_ :: Projects.ProjectId -> Bool -> Text -> Html ()
 logTableHeading_ pid True "id" = logTableHeadingWrapper_ pid "_" $ toHtml @Text ""
 logTableHeading_ pid True "status_code" = logTableHeadingWrapper_ pid "status_code" $ toHtml @Text "status"
@@ -415,8 +443,8 @@ logTableHeadingWrapper_ pid title child = td_
       div_ [tabindex_ "0", role_ "button", class_ "py-1 px-3 block"] child
       ul_ [tabindex_ "0", class_ "dropdown-content z-[1] menu p-2 shadow bg-base-100 rounded-box min-w-[15rem]"] do
         li_ [class_ "underline underline-offset-2"] $ toHtml title
-        li_
-          $ a_
+        li_ $
+          a_
             [ hxGet_ $ "/p/" <> pid.toText <> "/log_explorer"
             , hxPushUrl_ "true"
             , hxVals_ $ "js:{query:params().query,cols:removeNamedColumnToSummary('" <> title <> "'),layout:'resultTable'}"
@@ -441,9 +469,10 @@ displayTimestamp inputDateString =
 logItemCol_ :: Text -> Projects.ProjectId -> V.Vector Value -> HM.HashMap Text Int -> Text -> Html ()
 logItemCol_ source pid reqVec colIdxMap "id" = do
   let (status, errCount, errClass) = errorClass False reqVec colIdxMap
+  let severityClass = barSeverityClass reqVec colIdxMap
   let (logItemPath, reqId) = fromMaybe ("", "") $ requestDumpLogItemUrlPath pid reqVec colIdxMap source
   div_ [class_ "grid grid-cols-3 gap-3 items-center max-w-8 min-w-7"] do
-    a_ [class_ $ "col-span-1 shrink-0 inline-block h-full w-1 " <> errClass, term "data-tippy-content" $ show errCount <> " errors attached to this request; status " <> show status] " "
+    a_ [class_ $ "col-span-1 shrink-0 inline-block h-full w-1 " <> if source == "logs" then severityClass else errClass, term "data-tippy-content" $ show errCount <> " errors attached to this request; status " <> show status] " "
     div_ [class_ "col-span-1 w-3"]
       $ Components.drawerWithURLContent_
         ("expand-log-drawer-" <> reqId)
@@ -451,29 +480,51 @@ logItemCol_ source pid reqVec colIdxMap "id" = do
       $ faSprite_ "link" "solid" "h-3 w-3 text-blue-500"
     faSprite_ "chevron-right" "solid" "h-3 w-3 col-span-1 ml-1 text-gray-500 chevron log-chevron "
 logItemCol_ _ _ reqVec colIdxMap "created_at" = span_ [class_ "monospace whitespace-nowrap ", term "data-tippy-content" "timestamp"] $ toHtml $ displayTimestamp $ fromMaybe "" $ lookupVecTextByKey reqVec colIdxMap "created_at"
-logItemCol_ _ _ reqVec colIdxMap "timestamp" = span_ [class_ "monospace whitespace-nowrap ", term "data-tippy-content" "timestamp"] $ toHtml $ displayTimestamp $ fromMaybe "" $ lookupVecTextByKey reqVec colIdxMap "timestamp"
-logItemCol_ _ _ reqVec colIdxMap "status_code" = span_ [class_ $ "badge badge-sm " <> getStatusColor (lookupVecIntByKey reqVec colIdxMap "status_code"), term "data-tippy-content" "status"] $ toHtml $ show @Text $ lookupVecIntByKey reqVec colIdxMap "status_code"
+logItemCol_ _ _ reqVec colIdxMap "timestamp" = span_ [class_ "monospace whitespace-nowrap w-max ", term "data-tippy-content" "timestamp"] $ toHtml $ displayTimestamp $ fromMaybe "" $ lookupVecTextByKey reqVec colIdxMap "timestamp"
+logItemCol_ _ _ reqVec colIdxMap "status_code" = span_ [class_ $ "badge badge-sm ph-` " <> getStatusColor (lookupVecIntByKey reqVec colIdxMap "status_code"), term "data-tippy-content" "status"] $ toHtml $ show @Text $ lookupVecIntByKey reqVec colIdxMap "status_code"
 logItemCol_ _ _ reqVec colIdxMap "method" = span_ [class_ $ "min-w-[4rem] badge badge-sm  " <> maybe "badge-ghost" getMethodColor (lookupVecTextByKey reqVec colIdxMap "method"), term "data-tippy-content" "method"] $ toHtml $ fromMaybe "/" $ lookupVecTextByKey reqVec colIdxMap "method"
+logItemCol_ _ _ reqVec colIdxMap "severity_text" = span_ [class_ $ "badge badge-sm " <> getSeverityColor (T.toLower $ fromMaybe "" $ lookupVecTextByKey reqVec colIdxMap "severity_text")] $ toHtml $ fromMaybe "" $ lookupVecTextByKey reqVec colIdxMap "severity_text"
+logItemCol_ _ _ reqVec colIdxMap "duration" = span_ [class_ "badge badge-sm badge-ghost whitespace-nowrap", term "data-tippy-content" "duration"] $ toHtml $ show (lookupVecIntByKey reqVec colIdxMap "duration") <> " ms"
+logItemCol_ _ _ reqVec colIdxMap "span_name" = span_ [class_ "badge badge-sm badge-ghost whitespace-nowrap", term "data-tippy-content" "span name"] $ toHtml $ fromMaybe "" $ lookupVecTextByKey reqVec colIdxMap "span_name"
+logItemCol_ _ _ reqVec colIdxMap "kind" = do
+  let kind = fromMaybe "" $ lookupVecTextByKey reqVec colIdxMap "kind"
+  span_ [class_ $ "badge badge-sm " <> getKindColor kind, term "data-tippy-content" "span kind"] $ toHtml $ kind
+logItemCol_ _ _ reqVec colIdxMap "status" = do
+  let sts = fromMaybe "" $ lookupVecTextByKey reqVec colIdxMap "status"
+  span_ [class_ $ "badge badge-sm " <> getSpanStatusColor sts, term "data-tippy-content" "status"] $ toHtml $ sts
+
+-- logItemCol_ _ _ reqVec colIdxMap "body" =
 logItemCol_ source pid reqVec colIdxMap key@"rest" = div_ [class_ "space-x-2 whitespace-nowrap max-w-8xl overflow-x-hidden "] do
-  if lookupVecTextByKey reqVec colIdxMap "request_type" == Just "Incoming"
-    then span_ [class_ "text-center w-3 inline-flex ", term "data-tippy-content" "Incoming Request"] $ faSprite_ "arrow-down-left" "solid" "h-3 w-3 text-gray-400"
-    else span_ [class_ "text-center w-3 inline-flex ", term "data-tippy-content" "Outgoing Request"] $ faSprite_ "arrow-up-right" "solid" "h-3 w-3 text-red-800"
-  logItemCol_ source pid reqVec colIdxMap "status_code"
-  logItemCol_ source pid reqVec colIdxMap "method"
-  span_ [class_ "badge badge-sm badge-ghost ", term "data-tippy-content" "URL Path"] $ toHtml $ fromMaybe "" $ lookupVecTextByKey reqVec colIdxMap "url_path"
-  span_ [class_ "badge badge-sm badge-ghost ", term "data-tippy-content" "Host"] $ toHtml $ fromMaybe "" $ lookupVecTextByKey reqVec colIdxMap "host"
-  span_ [] $ toHtml $ maybe "" unwrapJsonPrimValue (lookupVecByKey reqVec colIdxMap key)
+  case source of
+    "logs" -> do
+      logItemCol_ source pid reqVec colIdxMap "severity_text"
+      span_ [] $ toHtml $ fromMaybe "" $ lookupVecTextByKey reqVec colIdxMap key
+    "spans" -> do
+      logItemCol_ source pid reqVec colIdxMap "span_name"
+      logItemCol_ source pid reqVec colIdxMap "status"
+      logItemCol_ source pid reqVec colIdxMap "kind"
+      span_ [] $ toHtml $ maybe "" unwrapJsonPrimValue (lookupVecByKey reqVec colIdxMap key)
+    _ -> do
+      if lookupVecTextByKey reqVec colIdxMap "request_type" == Just "Incoming"
+        then span_ [class_ "text-center w-3 inline-flex ", term "data-tippy-content" "Incoming Request"] $ faSprite_ "arrow-down-left" "solid" "h-3 w-3 text-gray-400"
+        else span_ [class_ "text-center w-3 inline-flex ", term "data-tippy-content" "Outgoing Request"] $ faSprite_ "arrow-up-right" "solid" "h-3 w-3 text-red-800"
+      logItemCol_ source pid reqVec colIdxMap "status_code"
+      logItemCol_ source pid reqVec colIdxMap "method"
+      span_ [class_ "badge badge-sm badge-ghost ", term "data-tippy-content" "URL Path"] $ toHtml $ fromMaybe "" $ lookupVecTextByKey reqVec colIdxMap "url_path"
+      span_ [class_ "badge badge-sm badge-ghost ", term "data-tippy-content" "Host"] $ toHtml $ fromMaybe "" $ lookupVecTextByKey reqVec colIdxMap "host"
+      span_ [] $ toHtml $ maybe "" unwrapJsonPrimValue (lookupVecByKey reqVec colIdxMap key)
+logItemCol_ _ _ reqVec colIdxMap "body" = p_ [class_ "space-x-2 whitespace-nowrap max-w-8xl overflow-x-hidden"] $ toHtml $ fromMaybe "" $ lookupVecTextByKey reqVec colIdxMap "body"
 logItemCol_ _ _ reqVec colIdxMap key =
-  div_ [class_ "xwhitespace-nowrap xoverflow-x-hidden max-w-lg ", term "data-tippy-content" key]
-    $ toHtml
-    $ maybe "" unwrapJsonPrimValue (lookupVecByKey reqVec colIdxMap key)
+  div_ [class_ "xwhitespace-nowrap overflow-x-hidden max-w-lg ", term "data-tippy-content" key] $
+    toHtml $
+      maybe "" unwrapJsonPrimValue (lookupVecByKey reqVec colIdxMap key)
 
 
 requestDumpLogItemUrlPath :: Projects.ProjectId -> V.Vector Value -> HM.HashMap Text Int -> Text -> Maybe (Text, Text)
 requestDumpLogItemUrlPath pid rd colIdxMap source = do
   rdId <- lookupVecTextByKey rd colIdxMap "id"
   rdCreatedAt <- lookupVecTextByKey rd colIdxMap "created_at" <|> lookupVecTextByKey rd colIdxMap "timestamp"
-  pure $ ("/p/" <> pid.toText <> "/log_explorer/" <> rdId <> "/" <> rdCreatedAt <> "?source=" <> source, rdId)
+  pure ("/p/" <> pid.toText <> "/log_explorer/" <> rdId <> "/" <> rdCreatedAt <> "?source=" <> source, rdId)
 
 
 -- TODO:

@@ -80,7 +80,7 @@ subPageMenu =
   ]
 
 
-fieldDetailsPartialH :: Projects.ProjectId -> Fields.FieldId -> ATAuthCtx (RespHeaders (FieldDetails))
+fieldDetailsPartialH :: Projects.ProjectId -> Fields.FieldId -> ATAuthCtx (RespHeaders FieldDetails)
 fieldDetailsPartialH pid fid = do
   _ <- Sessions.sessionAndProject pid
   (fieldsM, formats) <- dbtToEff do
@@ -88,7 +88,7 @@ fieldDetailsPartialH pid fid = do
     formats <- Formats.formatsByFieldHash (maybe "" (.hash) field)
     pure (field, formats)
   case fieldsM of
-    Nothing -> addRespHeaders $ FieldDetailsNoContent
+    Nothing -> addRespHeaders FieldDetailsNoContent
     Just field -> addRespHeaders $ FieldDetails field formats
 
 
@@ -99,7 +99,7 @@ data FieldDetails
 
 instance ToHtml FieldDetails where
   toHtml (FieldDetails field formats) = toHtml $ fieldDetailsView field formats
-  toHtml (FieldDetailsNoContent) = toHtml $ ""
+  toHtml FieldDetailsNoContent = toHtml ""
   toHtmlRaw = toHtml
 
 
@@ -228,7 +228,7 @@ endpointDetailsWithHashH pid endpoint_hash = do
 
 -- | endpointDetailsH is the main handler for the endpoint details page.
 -- It reuses the fieldDetailsView as well, which is used for the side navigation on the page and also exposed un the fieldDetailsPartialH endpoint
-endpointDetailsH :: Projects.ProjectId -> Endpoints.EndpointId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders (EndpointDetailsGet))
+endpointDetailsH :: Projects.ProjectId -> Endpoints.EndpointId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders EndpointDetailsGet)
 endpointDetailsH pid eid fromDStr toDStr sinceStr' subPageM shapeHashM = do
   (sess, project) <- Sessions.sessionAndProject pid
   now <- liftIO getCurrentTime
@@ -296,9 +296,9 @@ data EndpointDetailsGet
           , Endpoints.Endpoint
           , Endpoints.EndpointRequestStats
           , [Shapes.ShapeWithFields]
-          , (Map FieldCategoryEnum [Fields.Field])
-          , (Vector Shapes.Shape)
-          , (Maybe Text)
+          , Map FieldCategoryEnum [Fields.Field]
+          , Vector Shapes.Shape
+          , Maybe Text
           , Text
           , (Maybe UTCTime, Maybe UTCTime)
           )

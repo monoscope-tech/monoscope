@@ -225,8 +225,7 @@ authCallbackH codeM _ = do
     -- TODO: For users with no profile photos or empty profile photos, use gravatars as their profile photo
     -- https://en.gravatar.com/site/implement/images/
     let picture = fromMaybe "" $ resp L.^? responseBody . key "picture" . _String
-    sessID <- lift $ authorizeUserAndPersist (Just envCfg.config.convertkitApiKey) firstName lastName picture email
-    pure sessID
+    lift $ authorizeUserAndPersist (Just envCfg.config.convertkitApiKey) firstName lastName picture email
   case resp of
     Left err -> putStrLn ("unable to process auth callback page " <> err) >> (throwError $ err302{errHeaders = [("Location", "/login?auth0_callback_failure")]}) >> pure (noHeader $ noHeader "")
     Right persistentSessId -> pure

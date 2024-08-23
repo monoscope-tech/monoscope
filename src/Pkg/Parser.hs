@@ -180,14 +180,14 @@ sqlFromQueryComponents sqlCfg qc =
       timeDiffSecs = abs $ nominalDiffTimeToSeconds $ diffUTCTime fromT toT
 
       finalSqlQuery =
-        [fmt|SELECT json_build_array({selectClause}) FROM {fromTable} 
-          WHERE project_id='{sqlCfg.pid.toText}'::uuid  and ( {timestampCol} > NOW() - interval '14 days' 
+        [fmt|SELECT json_build_array({selectClause}) FROM {fromTable}
+          WHERE project_id='{sqlCfg.pid.toText}'::uuid  and ( {timestampCol} > NOW() - interval '14 days'
           {cursorT} {dateRangeStr} {whereClause} )
           {groupByClause} ORDER BY {timestampCol} desc limit 200 |]
 
       countQuery =
-        [fmt|SELECT count(*) FROM {fromTable} 
-          WHERE project_id='{sqlCfg.pid.toText}'::uuid  and ( {timestampCol} > NOW() - interval '14 days' 
+        [fmt|SELECT count(*) FROM {fromTable}
+          WHERE project_id='{sqlCfg.pid.toText}'::uuid  and ( {timestampCol} > NOW() - interval '14 days'
           {cursorT} {dateRangeStr} {whereClause} )
           {groupByClause} limit 1|]
 
@@ -207,8 +207,8 @@ sqlFromQueryComponents sqlCfg qc =
       timeGroupByClause = " GROUP BY " <> T.intercalate "," ("timeB" : qc.groupByClause)
       timeChartQuery =
         [fmt|
-      SELECT {timebucket} {chartSelect}, 'Throughput' FROM {fromTable} 
-          WHERE project_id='{sqlCfg.pid.toText}'::uuid  and ( {timestampCol} > NOW() - interval '14 days' 
+      SELECT {timebucket} {chartSelect}, 'Throughput' FROM {fromTable}
+          WHERE project_id='{sqlCfg.pid.toText}'::uuid  and ( {timestampCol} > NOW() - interval '14 days'
           {cursorT} {dateRangeStr} {whereClause} )
           {timeGroupByClause}
     |]
@@ -221,7 +221,7 @@ sqlFromQueryComponents sqlCfg qc =
         [fmt|
       SELECT GREATEST({alertSelect}) FROM {fromTable}
           WHERE project_id='{sqlCfg.pid.toText}'::uuid  and ( {timestampCol} > NOW() - interval '{timeRollup}'
-          {whereClause}) {alertGroupByClause} 
+          {whereClause}) {alertGroupByClause}
     |]
    in ( finalSqlQuery
       , qc
@@ -347,11 +347,26 @@ timestampLogFmt colName = [fmt|to_char({colName} AT TIME ZONE 'UTC', 'YYYY-MM-DD
 
 
 defaultSelectSqlQuery :: Maybe Sources -> [Text]
-defaultSelectSqlQuery (Just SLogs) = ["id", timestampLogFmt "timestamp", "severity_text", "body", "attributes"]
-defaultSelectSqlQuery (Just STraces) = ["id"]
+defaultSelectSqlQuery (Just SLogs) = ["id", timestampLogFmt "timestamp", "severity_text", "body as rest"]
 defaultSelectSqlQuery (Just SMetrics) = ["id"]
-defaultSelectSqlQuery (Just SSpans) = ["id"]
-defaultSelectSqlQuery (Nothing) = defaultSelectSqlQuery (Just SRequests)
+defaultSelectSqlQuery (Just STraces) = ["id"]
+defaultSelectSqlQuery Nothing = defaultSelectSqlQuery (Just SRequests)
+defaultSelectSqlQuery (Just SSpans) =
+  [ "id"
+  , timestampLogFmt "timestamp"
+  , "trace_id"
+  , "kind"
+  , "status"
+  , "span_name"
+  , "CAST(EXTRACT(EPOCH FROM (end_time - start_time)) * 1000 AS INTEGER) as duration"
+  , [fmt|LEFT(
+        CONCAT(
+            ' attributes=', COALESCE(attributes, 'null'),
+            ' events=', COALESCE(events, 'null')
+        ),
+        255
+    ) as rest|]
+  ]
 defaultSelectSqlQuery (Just SRequests) =
   [ "id::text as id"
   , timestampLogFmt "created_at"
@@ -365,7 +380,7 @@ defaultSelectSqlQuery (Just SRequests) =
         CONCAT(
             'url=', COALESCE(raw_url, 'null'),
             ' response_body=', COALESCE(response_body, 'null'),
-            ' request_body=', COALESCE(request_body, 'null') 
+            ' request_body=', COALESCE(request_body, 'null')
         ),
         255
     ) as rest|]

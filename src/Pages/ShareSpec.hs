@@ -30,7 +30,7 @@ spec = aroundAll withTestResources do
       let shareForm =
             Share.ReqForm
               { expiresIn = "1 hour"
-              , reqId = (Unsafe.fromJust $ UUID.fromText "00000000-0000-0000-0000-000000000000")
+              , reqId = Unsafe.fromJust $ UUID.fromText "00000000-0000-0000-0000-000000000000"
               , reqCreatedAt = currentTime
               }
       let nowTxt = toText $ formatTime defaultTimeLocale "%FT%T%QZ" currentTime
@@ -50,7 +50,7 @@ spec = aroundAll withTestResources do
               <&> fromRightShow
           isJust reqM `shouldBe` True
           let req = Unsafe.fromJust reqM
-          req.id `shouldBe` (Unsafe.fromJust $ UUID.fromText "00000000-0000-0000-0000-000000000000")
+          req.id `shouldBe` Unsafe.fromJust (UUID.fromText "00000000-0000-0000-0000-000000000000")
           req.projectId `shouldBe` testPid
           req.urlPath `shouldBe` "/"
         _ -> error "Unexpected response"
@@ -60,7 +60,7 @@ spec = aroundAll withTestResources do
       let shareForm =
             Share.ReqForm
               { expiresIn = "55 hour"
-              , reqId = (Unsafe.fromJust $ UUID.fromText "00000000-0000-0000-0000-000000000000")
+              , reqId = Unsafe.fromJust $ UUID.fromText "00000000-0000-0000-0000-000000000000"
               , reqCreatedAt = currentTime
               }
       res <- toServantResponse trATCtx trSessAndHeader trLogger $ Share.shareLinkPostH testPid shareForm

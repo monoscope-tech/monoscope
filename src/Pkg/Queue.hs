@@ -73,11 +73,11 @@ pubsubService appLogger appCtx topics fn = do
                 Just (ackId, b64Msg)
         let firstAttrs = messages ^? L.folded . field @"message" . _Just . field @"attributes" . _Just . field @"additional"
 
-        msgIds <- liftIO $ runBackground appLogger appCtx $ fn (catMaybes msgsB64) (fromMaybe mempty firstAttrs)
+        msgIds <- liftIO $ runBackground appLogger appCtx $ fn (catMaybes msgsB64) (maybeToMonoid firstAttrs)
         let acknowlegReq = PubSub.newAcknowledgeRequest & field @"ackIds" L..~ Just msgIds
         unless (null msgIds) $ void $ PubSub.newPubSubProjectsSubscriptionsAcknowledge acknowlegReq subscription & Google.send env
       case result of
-        Left (e) -> do
+        Left e -> do
           liftIO $ Log.runLogT "apitoolkit" appLogger Log.LogAttention $ Log.logAttention "Run Pubsub exception" (show e)
           pass
         Right _ -> pass

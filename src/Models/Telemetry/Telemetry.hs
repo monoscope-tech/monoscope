@@ -3,6 +3,7 @@
 module Models.Telemetry.Telemetry (
   LogRecord (..),
   logRecordByProjectAndId,
+  spanRecordByProjectAndId,
   SpanRecord (..),
   SeverityLevel (..),
   SpanStatus (..),
@@ -22,7 +23,7 @@ import Data.UUID (UUID)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity.DBT (QueryNature (..), queryOne)
-import Database.PostgreSQL.Simple (FromRow, ResultError (..))
+import Database.PostgreSQL.Simple (FromRow, ResultError (..), ToRow)
 import Database.PostgreSQL.Simple.FromField (Conversion, FromField (..), fromField, returnError)
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.ToField (ToField, toField)
@@ -63,13 +64,13 @@ data SeverityLevel = SLDebug | SLInfo | SLWarn | SLError | SLFatal
 
 data SpanStatus = SSOk | SSError | SSUnset
   deriving (Show, Generic, Read)
-  deriving anyclass (NFData, AE.FromJSON)
+  deriving anyclass (NFData, AE.FromJSON, AE.ToJSON)
   deriving (ToField, FromField) via WrappedEnum "SS" SpanStatus
 
 
-data SpanKind = SKInterval | SKServer | SKClient | SKProducer | SKConsumer
+data SpanKind = SKInternal | SKServer | SKClient | SKProducer | SKConsumer | SKUnspecified
   deriving (Show, Generic, Read)
-  deriving anyclass (NFData, AE.FromJSON)
+  deriving anyclass (NFData, AE.FromJSON, AE.ToJSON)
   deriving (ToField, FromField) via WrappedEnum "SK" SpanKind
 
 
@@ -78,8 +79,8 @@ data LogRecord = LogRecord
   , id :: Maybe UUID
   , timestamp :: UTCTime
   , observedTimestamp :: UTCTime
-  , traceId :: ByteString
-  , spanId :: Maybe ByteString -- Hex representation
+  , traceId :: Text
+  , spanId :: Maybe Text -- Hex representation
   , severityText :: Maybe SeverityLevel
   , severityNumber :: Int
   , body :: Value
@@ -106,9 +107,9 @@ instance AE.ToJSON ByteString where
 data SpanRecord = SpanRecord
   { projectId :: UUID
   , timestamp :: UTCTime
-  , traceId :: ByteString
-  , spanId :: ByteString
-  , parentSpanId :: Maybe ByteString
+  , traceId :: Text
+  , spanId :: Text
+  , parentSpanId :: Maybe Text
   , traceState :: Maybe Text
   , spanName :: Text
   , startTime :: UTCTime
@@ -123,15 +124,27 @@ data SpanRecord = SpanRecord
   , instrumentationScope :: Value
   }
   deriving (Show, Generic)
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake SpanRecord
+  deriving anyclass (NFData, FromRow, ToRow)
 
 
 logRecordByProjectAndId :: DB :> es => Projects.ProjectId -> UTCTime -> UUID.UUID -> Eff es (Maybe LogRecord)
 logRecordByProjectAndId pid createdAt rdId = dbtToEff $ queryOne Select q (createdAt, pid, rdId)
   where
     q =
-      [sql|SELECT project_id, id, timestamp, observed_timestamp, trace_id, span_id, severity_text, 
+      [sql|SELECT project_id, id, timestamp, observed_timestamp, trace_id, span_id, severity_text,
                   severity_number, body, attributes, resource, instrumentation_scope
              FROM telemetry.logs where (timestamp=?)  and project_id=? and id=? LIMIT 1|]
+
+
+spanRecordByProjectAndId :: DB :> es => Projects.ProjectId -> UTCTime -> UUID.UUID -> Eff es (Maybe SpanRecord)
+spanRecordByProjectAndId pid createdAt rdId = dbtToEff $ queryOne Select q (createdAt, pid, rdId)
+  where
+    q =
+      [sql| SELECT project_id, timestamp, trace_id::text, span_id::text, parent_span_id::text, trace_state,
+                     span_name, start_time, end_time, kind, status, status_message, attributes,
+                     events, links, resource, instrumentation_scope
+              FROM telemetry.spans where (timestamp=?)  and project_id=? and id=? LIMIT 1|]
 
 
 -- Function to insert multiple log entries
@@ -141,7 +154,7 @@ bulkInsertLogs logs = void $ dbtToEff $ executeMany q (V.toList rowsToInsert)
     q =
       [sql|
       INSERT INTO telemetry.logs
-      (project_id, timestamp, observed_timestamp, trace_id, span_id, 
+      (project_id, timestamp, observed_timestamp, trace_id, span_id,
        severity_text, severity_number, body, attributes, resource, instrumentation_scope)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     |]
@@ -168,7 +181,7 @@ bulkInsertSpans spans = void $ dbtToEff $ executeMany q (V.toList rowsToInsert)
     q =
       [sql|
       INSERT INTO telemetry.spans
-      (project_id, timestamp, trace_id, span_id, parent_span_id, trace_state, span_name, 
+      (project_id, timestamp, trace_id, span_id, parent_span_id, trace_state, span_name,
        start_time, end_time, kind, status, status_message, attributes, events, links, resource, instrumentation_scope)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     |]

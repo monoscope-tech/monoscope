@@ -203,7 +203,7 @@ bodyWrapper BWConfig{sessM, currProject, pageTitle, menuItem, hasIntegrated, nav
                 sideNav'
                 section_ [class_ "flex flex-col grow h-screen overflow-y-hidden"] do
                   navbar currUser pageTitle navTabs pageActions
-                  section_ [class_ "flex-1 overflow-y-hidden h-full grow"] $ child
+                  section_ [class_ "flex-1 overflow-y-hidden h-full grow"] child
       externalHeadScripts_
       alerts_
       script_ [async_ "true", src_ "https://www.googletagmanager.com/gtag/js?id=AW-11285541899"] ("" :: Text)
@@ -341,7 +341,7 @@ sideNav sess project pageTitle menuItem hasIntegrated = aside_ [class_ "shrink-0
         , term "data-tippy-content" userIdentifier
         , src_ currUser.displayImageUrl
         ]
-      span_ [class_ "inline-block sd-hidden overflow-hidden"] $ toHtml $ userIdentifier
+      span_ [class_ "inline-block sd-hidden overflow-hidden"] $ toHtml userIdentifier
     a_
       [ class_ "gap-3 px-4 py-2 flex no-wrap shrink-0 items-center border-l-4 hover:bg-blue-50 overflow-x-hidden h-[2.5rem]"
       , target_ "blank"

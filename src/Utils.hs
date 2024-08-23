@@ -17,6 +17,7 @@ module Utils (
   deleteParam,
   quoteTxt,
   textToBool,
+  getSeverityColor,
   getMethodColor,
   getStatusColor,
   unwrapJsonPrimValue,
@@ -28,6 +29,8 @@ module Utils (
   freeTierLimitExceededBanner,
   isDemoAndNotSudo,
   escapedQueryPartial,
+  getSpanStatusColor,
+  getKindColor,
 )
 where
 
@@ -138,6 +141,35 @@ getStatusColor status
   | otherwise = "text-red-800 bg-red-50 border border-red-200"
 
 
+getSeverityColor :: Text -> Text
+getSeverityColor "debug" = "text-gray-500 bg-gray-100"
+getSeverityColor "info" = "text-blue-500 bg-blue-100"
+getSeverityColor "warning" = "text-yellow-700 bg-yellow-100"
+getSeverityColor "error" = "text-red-500 bg-red-100"
+getSeverityColor "critical" = "text-red-700 bg-red-200 font-bold"
+getSeverityColor "notice" = "text-green-500 bg-green-100"
+getSeverityColor "alert" = "text-orange-600 bg-orange-100 font-bold"
+getSeverityColor _ = "text-black bg-gray-50"
+
+getSpanStatusColor :: Text -> Text
+getSpanStatusColor "ERROR" = "badge-error"
+getSpanStatusColor "OK" = "badge-success"
+getSpanStatusColor _ = "text-gray-500 bg-gray-100"
+
+
+-- data SpanKind = SKInternal | SKServer | SKClient | SKProducer | SKConsumer | SKUnspecified
+
+
+getKindColor :: Text -> Text
+getKindColor "INTERNAL" = "badge-info"
+getKindColor "SERVER" = "badge-success"
+getKindColor "CLIENT" = "badge-warning"
+getKindColor "PRODUCER" = "badge-success"
+getKindColor "CONSUMER" = "badge-warning"
+getKindColor _ = "badge-outline"
+
+
+
 unwrapJsonPrimValue :: AE.Value -> Text
 unwrapJsonPrimValue (AE.Bool True) = "true"
 unwrapJsonPrimValue (AE.Bool False) = "true"
@@ -229,4 +261,4 @@ lemonSqueezyUrlsAnnual =
 
 
 isDemoAndNotSudo :: Projects.ProjectId -> Bool -> Bool
-isDemoAndNotSudo pid isSudo = (pid.toText == "00000000-0000-0000-0000-000000000000" && isSudo == False)
+isDemoAndNotSudo pid isSudo = pid.toText == "00000000-0000-0000-0000-000000000000" && isSudo == False

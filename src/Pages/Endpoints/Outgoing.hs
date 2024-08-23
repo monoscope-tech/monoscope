@@ -23,7 +23,7 @@ outgoingGetH pid sortM = do
   (sess, project) <- Sessions.sessionAndProject pid
   hostsAndEvents <- dbtToEff $ Endpoints.dependenciesAndEventsCount pid "outgoing" (fromMaybe "events" sortM)
   currTime <- Time.currentTime
-  let sortV = (fromMaybe "events" sortM)
+  let sortV = fromMaybe "events" sortM
   let listCfg =
         ItemsList.ItemsListCfg
           { projectId = pid
@@ -75,7 +75,7 @@ renderOutgoing pid host = div_ [class_ "flex py-4 gap-8 items-center itemsListIt
     div_ [class_ "space-x-3"] do
       a_ [class_ "inline-block font-bold space-x-2"] $ do
         a_ [href_ $ "/p/" <> pid.toText <> "/endpoints?host=" <> host.host, class_ " hover:text-slate-600"] $ toHtml (T.replace "http://" "" $ T.replace "https://" "" host.host)
-        a_ [href_ $ "/p/" <> pid.toText <> "/log_explorer?query=host%3D%3D" <> "\"" <> host.host <> "\"", class_ "text-blue-500 hover:text-slate-600"] $ "View logs"
+        a_ [href_ $ "/p/" <> pid.toText <> "/log_explorer?query=host%3D%3D" <> "\"" <> host.host <> "\"", class_ "text-blue-500 hover:text-slate-600"] "View logs"
   div_ [class_ "flex items-center justify-center "]
     $ div_
       [ class_ "w-56 h-12 px-3"

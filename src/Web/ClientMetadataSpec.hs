@@ -59,7 +59,7 @@ spec = aroundAll withTestResources do
         }
 
 
-createAndSaveApiKey :: Pool Connection -> AuthContext -> IO (Text)
+createAndSaveApiKey :: Pool Connection -> AuthContext -> IO Text
 createAndSaveApiKey pool authCtx = do
   projectKeyUUID <- liftIO UUIDV4.nextRandom
   let title = "Test API Key"

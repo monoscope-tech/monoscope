@@ -29,7 +29,7 @@ data Routes' mode = Routes'
   { endpointListGet :: mode :- "endpoints" :> QPT "page" :> QPT "layout" :> QPT "filter" :> QPT "host" :> QPT "project_host" :> QPT "request_type" :> QPT "sort" :> HXRequest :> HXBoosted :> HXCurrentURL :> QPT "load_more" :> QPT "search" :> Get '[HTML] (RespHeaders EndpointList.EndpointRequestStatsVM)
   , fieldDetailsPartial :: mode :- "fields" :> Capture "field_id" Fields.FieldId :> Get '[HTML] (RespHeaders (EndpointDetails.FieldDetails))
   , endpointDetailsWithHash :: mode :- "log_explorer" :> "endpoint" :> Capture "endpoint_hash" Text :> Get '[HTML] (RespHeaders (Html ()))
-  , endpointDetails :: mode :- "endpoints" :> Capture "endpoints_id" Endpoints.EndpointId :> QPT "from" :> QPT "to" :> QPT "since" :> QPT "subpage" :> QPT "shape" :> Get '[HTML] (RespHeaders (EndpointDetails.EndpointDetailsGet))
+  , endpointDetails :: mode :- "endpoints" :> Capture "endpoints_id" Endpoints.EndpointId :> QPT "from" :> QPT "to" :> QPT "since" :> QPT "subpage" :> QPT "shape" :> Get '[HTML] (RespHeaders EndpointDetails.EndpointDetailsGet)
   , outgoingGet :: mode :- "outgoing" :> QPT "sort" :> Get '[HTML] (RespHeaders (PageCtx (ItemsList.ItemsPage Outgoing.HostEventsVM)))
   , apiCatalogGet :: mode :- "api_catalog" :> QPT "sort" :> QPT "request_type" :> Get '[HTML] (RespHeaders (PageCtx (ItemsList.ItemsPage ApiCatalog.HostEventsVM)))
   }
