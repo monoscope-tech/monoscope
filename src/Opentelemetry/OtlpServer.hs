@@ -197,7 +197,9 @@ convertToSpan resourceSpans = join $ V.map (convertScopeSpan resourceSpans.resou
 convertLogRecord :: Maybe Resource -> Maybe InstrumentationScope -> LogRecord -> Telemetry.LogRecord
 convertLogRecord resource scope lr =
   Telemetry.LogRecord
-    { projectId = UUID.nil -- project id for demo project
+    { projectId = fromMaybe (error "invalid at-project-id in logs") do
+        let v = Unsafe.fromJust $ resource >>= \r -> find (\kv -> kv.keyValueKey == "at-project-id") r.resourceAttributes >>= (.keyValueValue) >>= (.anyValueValue)
+        UUID.fromText =<< anyValueToString v
     , id = Nothing
     , timestamp = nanosecondsToUTC lr.logRecordTimeUnixNano
     , observedTimestamp = nanosecondsToUTC lr.logRecordObservedTimeUnixNano
@@ -215,7 +217,9 @@ convertLogRecord resource scope lr =
 convertSpanRecord :: Maybe Resource -> Maybe InstrumentationScope -> Span -> Telemetry.SpanRecord
 convertSpanRecord resource scope sp =
   Telemetry.SpanRecord
-    { projectId = UUID.nil -- project id for demo project
+    { projectId = fromMaybe (error "invalid at-project-id in span") do
+        let v = Unsafe.fromJust $ Just sp >>= \s -> find (\kv -> kv.keyValueKey == "at-project-id") s.spanAttributes >>= (.keyValueValue) >>= (.anyValueValue)
+        UUID.fromText =<< anyValueToString v
     , timestamp = nanosecondsToUTC sp.spanStartTimeUnixNano
     , traceId = decodeUtf8 sp.spanTraceId
     , spanId = decodeUtf8 sp.spanSpanId
