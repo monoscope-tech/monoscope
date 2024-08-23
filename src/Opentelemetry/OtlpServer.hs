@@ -146,8 +146,7 @@ convertToLog resourceLogs = join $ V.map (convertScopeLog resourceLogs.resourceL
 
 
 convertScopeLog :: Maybe Resource -> ScopeLogs -> V.Vector Telemetry.LogRecord
-convertScopeLog resource sl =
-  V.map (convertLogRecord resource sl.scopeLogsScope) sl.scopeLogsLogRecords
+convertScopeLog resource sl = V.map (convertLogRecord resource sl.scopeLogsScope) sl.scopeLogsLogRecords
 
 
 anyValueToString :: AnyValueValue -> Maybe Text
@@ -159,13 +158,13 @@ convertLogRecord :: Maybe Resource -> Maybe InstrumentationScope -> LogRecord ->
 convertLogRecord resource scope lr =
   Telemetry.LogRecord
     { projectId = fromMaybe (error "invalid at-project-id in logs") do
-        let v = Unsafe.fromJust $ resource >>= \r -> find (\kv -> kv.keyValueKey == "at-project-id") r.resourceAttributes >>= (.keyValueValue) >>= (.anyValueValue)
-        UUID.fromText =<< anyValueToString v
+        let v = resource >>= \r -> find (\kv -> kv.keyValueKey == "at-project-id") r.resourceAttributes >>= (.keyValueValue) >>= (.anyValueValue)
+        UUID.fromText =<< anyValueToString =<< v
     , id = Nothing
     , timestamp = nanosecondsToUTC lr.logRecordTimeUnixNano
     , observedTimestamp = nanosecondsToUTC lr.logRecordObservedTimeUnixNano
-    , traceId = lr.logRecordTraceId
-    , spanId = if BS.null lr.logRecordSpanId then Nothing else Just lr.logRecordSpanId
+    , traceId = decodeUtf8 lr.logRecordTraceId
+    , spanId = if BS.null lr.logRecordSpanId then Nothing else Just (decodeUtf8 lr.logRecordSpanId)
     , severityText = parseSeverityLevel $ toText lr.logRecordSeverityText
     , severityNumber = fromIntegral $ (either id HsProtobuf.fromProtoEnum . HsProtobuf.enumerated) lr.logRecordSeverityNumber
     , body = convertAnyValue (lr.logRecordBody)

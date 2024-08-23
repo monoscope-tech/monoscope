@@ -78,8 +78,8 @@ data LogRecord = LogRecord
   , id :: Maybe UUID
   , timestamp :: UTCTime
   , observedTimestamp :: UTCTime
-  , traceId :: ByteString
-  , spanId :: Maybe ByteString -- Hex representation
+  , traceId :: Text
+  , spanId :: Maybe Text -- Hex representation
   , severityText :: Maybe SeverityLevel
   , severityNumber :: Int
   , body :: Value

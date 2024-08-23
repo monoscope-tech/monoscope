@@ -212,7 +212,6 @@ library
     , cookie
     , cryptonite
     , data-default
-    , deepseq
     , deriving-aeson
     , directory
     , dotenv
@@ -260,7 +259,6 @@ library
     , postgresql-simple
     , pretty-relative-time
     , pretty-simple
-    , proto-lens-runtime
     , proto3-suite
     , proto3-wire
     , regex-tdfa
@@ -282,15 +280,12 @@ library
     , text-display
     , time
     , tmp-postgres
-    , transformers-except
-    , tuple
     , unliftio
     , unordered-containers
     , uuid
     , valor >=1.0.0.0
     , vector
     , vector-algorithms
-    , vector-hashtables
     , wai
     , wai-log
     , wai-middleware-static
