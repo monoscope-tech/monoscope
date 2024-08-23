@@ -31,6 +31,7 @@ module Utils (
   escapedQueryPartial,
   getSpanStatusColor,
   getKindColor,
+  displayTimestamp,
 )
 where
 
@@ -39,7 +40,10 @@ import Data.Aeson qualified as AE
 import Data.HashMap.Strict qualified as HM
 import Data.Scientific (toBoundedInteger)
 import Data.Text (replace)
-import Data.Time (ZonedTime)
+import Data.Text qualified as T
+import Data.Time (ZonedTime, defaultTimeLocale, parseTimeM)
+import Data.Time.Clock (UTCTime)
+import Data.Time.Format (formatTime)
 import Data.Vector qualified as V
 import Database.PostgreSQL.Simple.ToField (ToField (..))
 import Database.PostgreSQL.Transact
@@ -222,6 +226,14 @@ lookupVecByKey vec colIdxMap key = HM.lookup key colIdxMap >>= (vec V.!?)
 
 listToIndexHashMap :: Hashable a => [a] -> HM.HashMap a Int
 listToIndexHashMap list = HM.fromList [(x, i) | (x, i) <- zip list [0 ..]]
+
+
+displayTimestamp :: Text -> Text
+displayTimestamp inputDateString =
+  maybe
+    T.empty
+    (toText . formatTime defaultTimeLocale "%b %d %H:%M:%S")
+    (parseTimeM True defaultTimeLocale "%Y-%m-%dT%H:%M:%S%QZ" (toString inputDateString) :: Maybe UTCTime)
 
 
 freeTierLimitExceededBanner :: Text -> Html ()
