@@ -60,6 +60,7 @@ CREATE TABLE IF NOT EXISTS telemetry.spans (
 );
 SELECT create_hypertable('telemetry.spans', by_range('timestamp', INTERVAL '1 hours'), migrate_data => true);
 SELECT add_retention_policy('telemetry.spans',INTERVAL '3 days',true);
+ALTER TABLE telemetry.spans ADD COLUMN IF NOT EXISTS id UUID NOT NULL DEFAULT gen_random_uuid();
 
 -- Indexes for efficient querying
 CREATE INDEX idx_traces_trace_id ON telemetry.spans(project_id, trace_id, timestamp DESC);

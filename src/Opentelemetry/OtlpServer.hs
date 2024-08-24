@@ -25,7 +25,7 @@ import Effectful.Reader.Static qualified as Eff
 import Log qualified
 import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
 import Models.Projects.Projects qualified as Projects
-import Models.Telemetry.Telemetry (SpanEvent (..), SpanKind (..), SpanLink (..), SpanStatus (..))
+import Models.Telemetry.Telemetry (SpanKind (..), SpanStatus (..))
 import Models.Telemetry.Telemetry qualified as Telemetry
 import Network.GRPC.HighLevel.Client as HsGRPC
 import Network.GRPC.HighLevel.Generated as HsGRPC
@@ -244,9 +244,6 @@ traceServiceExportH
   -> ServerRequest 'Normal ExportTraceServiceRequest ExportTraceServiceResponse
   -> IO (ServerResponse 'Normal ExportTraceServiceResponse)
 traceServiceExportH appLogger appCtx (ServerNormalRequest _meta (ExportTraceServiceRequest req)) = do
-  -- pTraceShowM "Hello trace called"
-  -- pTraceShowM req
-  -- pTraceShowM _meta
   _ <- runBackground appLogger appCtx do
     let spanRecords = join $ V.map convertToSpan req
     Telemetry.bulkInsertSpans spanRecords
@@ -291,31 +288,31 @@ parseSpanStatus st = case st of
 --   , span_EventDroppedAttributesCount :: Hs.Word32
 --   }
 
-eventsToJSONB :: [Span_Event] -> V.Vector SpanEvent
+eventsToJSONB :: [Span_Event] -> AE.Value
 eventsToJSONB spans =
-  V.fromList $
+  AE.toJSON $
     ( \sp ->
-        SpanEvent
-          { eventName = toText sp.span_EventName
-          , eventTime = nanosecondsToUTC sp.span_EventTimeUnixNano
-          , eventAttributes = keyValueToJSONB sp.span_EventAttributes
-          , eventDroppedAttributesCount = fromIntegral sp.span_EventDroppedAttributesCount
-          }
+        object
+          [ "event_name" .= toText sp.span_EventName
+          , "event_time" .= nanosecondsToUTC sp.span_EventTimeUnixNano
+          , "event_attributes" .= keyValueToJSONB sp.span_EventAttributes
+          , "event_dropped_attributes_count" .= fromIntegral sp.span_EventDroppedAttributesCount
+          ]
     )
       <$> spans
 
 
-linksToJSONB :: [Span_Link] -> V.Vector SpanLink
+linksToJSONB :: [Span_Link] -> AE.Value
 linksToJSONB lnks =
-  V.fromList $
+  AE.toJSON $
     ( \lnk ->
-        SpanLink
-          { linkSpanId = decodeUtf8 lnk.span_LinkSpanId
-          , linkTraceId = decodeUtf8 lnk.span_LinkTraceId
-          , linkAttributes = keyValueToJSONB lnk.span_LinkAttributes
-          , linkDroppedAttributesCount = fromIntegral lnk.span_LinkDroppedAttributesCount
-          , linkFlags = fromIntegral lnk.span_LinkFlags
-          }
+        object
+          [ "link_span_id" .= (decodeUtf8 lnk.span_LinkSpanId :: Text)
+          , "link_trace_id" .= (decodeUtf8 lnk.span_LinkTraceId :: Text)
+          , "link_attributes" .= keyValueToJSONB lnk.span_LinkAttributes
+          , "link_dropped_attributes_count" .= fromIntegral lnk.span_LinkDroppedAttributesCount
+          , "link_flags" .= fromIntegral lnk.span_LinkFlags
+          ]
     )
       <$> lnks
 

@@ -1,6 +1,10 @@
 module Pages.Traces.Spans (expandedSpanItem) where
 
+import Data.Aeson (Value (..))
+import Data.Aeson.Key qualified as Key
+import Data.Aeson.KeyMap qualified as KM
 import Data.Effectful.UUID (UUID)
+import Data.HashMap.Strict qualified as HM
 import Lucid
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Telemetry (SpanRecord (..))
@@ -10,14 +14,14 @@ import Utils
 
 
 expandedSpanItem :: Projects.ProjectId -> Telemetry.SpanRecord -> Html ()
-expandedSpanItem pid span = do
+expandedSpanItem pid sp = do
   div_ [class_ "w-full max-w-4xl"] $ do
     div_ [class_ "flex flex-col space-y-1.5 p-6 bg-gray-50 px-6 py-4"] $ do
       div_ [class_ "flex items-center justify-between"] $ do
         div_ [class_ "grid gap-1"] $ do
-          h3_ [class_ "whitespace-nowrap text-2xl font-semibold leading-none tracking-tight"] $ toHtml span.spanName
-          p_ [class_ "text-sm text-muted-foreground"] $ "Span ID: " <> toHtml span.spanId
-          p_ [class_ "text-sm text-muted-foreground"] $ "Trace ID: " <> toHtml span.traceId
+          h3_ [class_ "whitespace-nowrap text-2xl font-semibold leading-none tracking-tight"] $ toHtml sp.spanName
+          p_ [class_ "text-sm text-muted-foreground"] $ "Span ID: " <> toHtml sp.spanId
+          p_ [class_ "text-sm text-muted-foreground"] $ "Trace ID: " <> toHtml sp.traceId
         div_ [class_ "flex items-center gap-2"] $ do
           div_ [class_ "text-sm text-muted-foreground"] $
             time_ [datetime_ "2023-06-23T15:34:12Z"] "Jun 23, 2023 3:34 PM"
@@ -27,19 +31,13 @@ expandedSpanItem pid span = do
     div_ [class_ "grid gap-6 p-6"] $ do
       div_ [class_ "grid gap-3"] $ do
         div_ [class_ "font-semibold"] "Tags"
-        div_ [class_ "grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4"] $ do
-          div_ [class_ "flex items-center gap-2 rounded-md bg-gray-50 px-3 py-1 text-sm"] $ do
-            div_ [class_ "h-2 w-2 rounded-full bg-slate-700"] ""
-            div_ [data_ "id" "18"] "http.method=GET"
-          div_ [class_ "flex items-center gap-2 rounded-md bg-gray-50 px-3 py-1 text-sm"] $ do
-            div_ [class_ "h-2 w-2 rounded-full bg-slate-700"] ""
-            div_ [data_ "id" "21"] "http.url=/api/users"
-          div_ [class_ "flex items-center gap-2 rounded-md bg-gray-50 px-3 py-1 text-sm"] $ do
-            div_ [class_ "h-2 w-2 rounded-full bg-slate-700"] ""
-            div_ [data_ "id" "24"] "http.status_code=200"
-          div_ [class_ "flex items-center gap-2 rounded-md bg-gray-50 px-3 py-1 text-sm"] $ do
-            div_ [class_ "h-2 w-2 rounded-full bg-slate-700"] ""
-            div_ [data_ "id" "27"] "service=api"
+        div_ [class_ "flex gap-2 flex-wrap"] $ do
+          displaySpanJson sp.attributes
+
+      div_ [class_ "grid gap-3"] $ do
+        div_ [class_ "font-semibold"] "Metadata"
+        div_ [class_ "flex gap-2 flex-wrap"] $ do
+          displaySpanJson sp.resource
 
       div_ [class_ "grid gap-3"] $ do
         div_ [class_ "font-semibold"] "Logs"
@@ -60,23 +58,26 @@ expandedSpanItem pid span = do
               div_ [class_ "font-medium"] "Response sent"
               div_ [class_ "text-muted-foreground"] "Sent 200 OK response with user data"
 
-      div_ [class_ "grid gap-3"] $ do
-        div_ [class_ "font-semibold"] "Metadata"
-        div_ [class_ "grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4"] $ do
-          div_ [class_ "flex items-center gap-2 rounded-md bg-gray-50 px-3 py-1 text-sm"] $ do
-            div_ [class_ "h-2 w-2 rounded-full bg-slate-700"] ""
-            div_ [data_ "id" "51"] "http.method=GET"
-          div_ [class_ "flex items-center gap-2 rounded-md bg-gray-50 px-3 py-1 text-sm"] $ do
-            div_ [class_ "h-2 w-2 rounded-full bg-slate-700"] ""
-            div_ [data_ "id" "54"] "http.url=/api/users"
-          div_ [class_ "flex items-center gap-2 rounded-md bg-gray-50 px-3 py-1 text-sm"] $ do
-            div_ [class_ "h-2 w-2 rounded-full bg-slate-700"] ""
-            div_ [data_ "id" "57"] "http.status_code=200"
-          tagItem "service=api"
-
 
 tagItem :: Text -> Html ()
 tagItem tag =
-  div_ [class_ "flex items-center gap-2 rounded-md bg-gray-50 px-3 py-1 text-sm"] $ do
-    div_ [class_ "h-2 w-2 rounded-full bg-slate-700"] ""
+  div_ [class_ "flex items-center gap-2 rounded-md bg-gray-100 px-3 py-1 text-sm"] $ do
+    div_ [class_ "h-1 w-1 rounded-full bg-slate-700 shrink-0"] ""
     div_ [data_ "id" "60"] $ toHtml tag
+
+
+displaySpanJson :: Value -> Html ()
+displaySpanJson (Object obj) = do
+  mapM_ displaySpanList (KM.toList obj)
+displaySpanJson _ = pass
+
+
+displaySpanList :: (KM.Key, Value) -> Html ()
+displaySpanList (key, String v) = do
+  tagItem $ Key.toText key <> "=" <> v
+displaySpanList (key, Number val) = do
+  tagItem $ Key.toText key <> "=" <> show val
+displaySpanList (key, Bool val) = do
+  tagItem $ Key.toText key <> "=" <> show val
+displaySpanList (key, val) = do
+  tagItem $ Key.toText key <> "=" <> show val

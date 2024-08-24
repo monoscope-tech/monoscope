@@ -121,8 +121,8 @@ data SpanRecord = SpanRecord
   , status :: Maybe SpanStatus
   , statusMessage :: Maybe Text
   , attributes :: Value
-  , events :: V.Vector SpanEvent
-  , links :: V.Vector SpanLink
+  , events :: Value
+  , links :: Value
   , resource :: Value
   , instrumentationScope :: Value
   }
