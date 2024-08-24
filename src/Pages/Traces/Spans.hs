@@ -19,10 +19,10 @@ expandedSpanItem pid span = do
           p_ [class_ "text-sm text-muted-foreground"] $ "Span ID: " <> toHtml span.spanId
           p_ [class_ "text-sm text-muted-foreground"] $ "Trace ID: " <> toHtml span.traceId
         div_ [class_ "flex items-center gap-2"] $ do
-          div_ [class_ "text-sm text-muted-foreground"] $
-            time_ [datetime_ "2023-06-23T15:34:12Z"] "Jun 23, 2023 3:34 PM"
-          div_ [class_ "text-lg font-medium"] $
-            span_ [data_ "id" "11"] "250ms"
+          div_ [class_ "text-sm text-muted-foreground"]
+            $ time_ [datetime_ "2023-06-23T15:34:12Z"] "Jun 23, 2023 3:34 PM"
+          div_ [class_ "text-lg font-medium"]
+            $ span_ [data_ "id" "11"] "250ms"
 
     div_ [class_ "grid gap-6 p-6"] $ do
       div_ [class_ "grid gap-3"] $ do
