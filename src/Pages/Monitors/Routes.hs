@@ -6,13 +6,12 @@ import Models.Tests.Testing qualified as TestingM
 import Pages.BodyWrapper (PageCtx (..))
 import Pages.Monitors.Alerts qualified as Alerts
 import Pages.Monitors.TestCollectionEditor qualified as Testing
-import Pages.Monitors.Testing (collectionDashboard)
 import Pages.Monitors.Testing qualified as Testing
 import Pkg.Components.ItemsList qualified as ItemsList
 import Relude
 import Servant (Capture, FormUrlEncoded, GenericMode (type (:-)), Get, JSON, NamedRoutes, Patch, Post, QueryParam, ReqBody, type (:>))
 import Servant.HTML.Lucid (HTML)
-import System.Types (ATAuthCtx, RespHeaders)
+import System.Types (RespHeaders)
 
 
 type Routes = NamedRoutes Routes'

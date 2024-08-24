@@ -102,7 +102,6 @@ library
       Pages.LogExplorer.LogItem
       Pages.LogExplorer.LogItemSpec
       Pages.LogExplorer.Routes
-      Pages.LogExplorer.Server
       Pages.LogSpec
       Pages.Monitors.Alerts
       Pages.Monitors.AlertsSpec

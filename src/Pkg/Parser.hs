@@ -24,7 +24,7 @@ import PyF (fmt)
 import Relude
 import Safe qualified
 import Text.Megaparsec (choice, errorBundlePretty, parse, sepBy)
-import Text.Megaparsec.Char (char, space, space1, string)
+import Text.Megaparsec.Char (char, space, string)
 
 
 -- Example queries
@@ -141,7 +141,6 @@ data SqlQueryCfg = SqlQueryCfg
   { pid :: Projects.ProjectId
   , presetRollup :: Maybe Text
   , dateRange :: (Maybe UTCTime, Maybe UTCTime)
-  , cursorM :: Maybe UTCTime
   , projectedColsByUser :: [Text] -- cols selected explicitly by user
   , currentTime :: UTCTime
   , defaultSelect :: [Text]
@@ -160,8 +159,6 @@ sqlFromQueryComponents sqlCfg qc =
   let fmtTime = toText . iso8601Show
       fromTable = fromMaybe "apis.request_dumps" $ qc.fromTable <|> (display <$> sqlCfg.source)
       timestampCol = if fromTable == "apis.request_dumps" then "created_at" else "timestamp"
-
-      cursorT = maybe "" (\c -> " AND " <> timestampCol <> "<'" <> fmtTime c <> "' ") sqlCfg.cursorM
       -- Handle the Either error case correctly not hushing it.
       projectedColsProcessed =
         sqlCfg.projectedColsByUser & mapMaybe \col -> do
@@ -182,13 +179,13 @@ sqlFromQueryComponents sqlCfg qc =
       finalSqlQuery =
         [fmt|SELECT json_build_array({selectClause}) FROM {fromTable}
           WHERE project_id='{sqlCfg.pid.toText}'::uuid  and ( {timestampCol} > NOW() - interval '14 days'
-          {cursorT} {dateRangeStr} {whereClause} )
+          {dateRangeStr} {whereClause} )
           {groupByClause} ORDER BY {timestampCol} desc limit 200 |]
 
       countQuery =
         [fmt|SELECT count(*) FROM {fromTable}
           WHERE project_id='{sqlCfg.pid.toText}'::uuid  and ( {timestampCol} > NOW() - interval '14 days'
-          {cursorT} {dateRangeStr} {whereClause} )
+          {dateRangeStr} {whereClause} )
           {groupByClause} limit 1|]
 
       defRollup
@@ -209,7 +206,7 @@ sqlFromQueryComponents sqlCfg qc =
         [fmt|
       SELECT {timebucket} {chartSelect}, 'Throughput' FROM {fromTable}
           WHERE project_id='{sqlCfg.pid.toText}'::uuid  and ( {timestampCol} > NOW() - interval '14 days'
-          {cursorT} {dateRangeStr} {whereClause} )
+          {dateRangeStr} {whereClause} )
           {timeGroupByClause}
     |]
 
@@ -333,7 +330,6 @@ defSqlQueryCfg pid currentTime source =
   SqlQueryCfg
     { pid = pid
     , presetRollup = Nothing
-    , cursorM = Nothing
     , dateRange = (Nothing, Nothing)
     , source = source
     , projectedColsByUser = []

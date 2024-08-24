@@ -12,6 +12,8 @@ module Utils (
   lookupVecInt,
   lookupVecText,
   lookupVecIntByKey,
+  formatUTC,
+  parseUTC,
   lookupVecTextByKey,
   faIcon_,
   deleteParam,
@@ -57,6 +59,7 @@ import Relude hiding (show)
 import Servant
 import Text.Regex.TDFA ((=~))
 import Text.Show
+import Data.Time.Format.ISO8601 (iso8601ParseM)
 
 
 -- Added only for satisfying the tests
@@ -235,6 +238,13 @@ displayTimestamp inputDateString =
     (toText . formatTime defaultTimeLocale "%b %d %H:%M:%S")
     (parseTimeM True defaultTimeLocale "%Y-%m-%dT%H:%M:%S%QZ" (toString inputDateString) :: Maybe UTCTime)
 
+formatUTC :: UTCTime -> Text
+formatUTC utcTime =
+  toText $ formatTime defaultTimeLocale "%Y-%m-%dT%H:%M:%S%QZ" utcTime
+
+parseUTC :: Text -> Maybe UTCTime
+parseUTC utcTime = iso8601ParseM (toString utcTime)
+
 
 freeTierLimitExceededBanner :: Text -> Html ()
 freeTierLimitExceededBanner pid =
@@ -272,4 +282,4 @@ lemonSqueezyUrlsAnnual =
 
 
 isDemoAndNotSudo :: Projects.ProjectId -> Bool -> Bool
-isDemoAndNotSudo pid isSudo = pid.toText == "00000000-0000-0000-0000-000000000000" && isSudo == False
+isDemoAndNotSudo pid isSudo = pid.toText == "00000000-0000-0000-0000-000000000000" && not isSudo

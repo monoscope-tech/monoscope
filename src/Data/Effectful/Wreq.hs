@@ -35,7 +35,6 @@ module Data.Effectful.Wreq (
 import Data.Aeson hiding (Options)
 import Data.ByteString.Lazy qualified as LBS
 import Data.CaseInsensitive qualified as CI
-import Data.Text (Text)
 import Effectful
 import Effectful.Dispatch.Dynamic
 import Network.HTTP.Client (createCookieJar, defaultRequest)
@@ -208,7 +207,7 @@ fromWreqResponse r =
     , statusMessage = decodeUtf8 r.responseStatus.statusMessage
     , respBody = decodeUtf8 r.responseBody
     , responseHeaders = convertHeaders r.responseHeaders
-    , originalRequest = fromString (show (r.responseOriginalRequest))
+    , originalRequest = fromString (show r.responseOriginalRequest)
     , responseEarlyHints = convertHeaders r.responseEarlyHints
     }
 
@@ -222,7 +221,7 @@ toWreqResponse wr =
     , responseHeaders = convertHeadersBack wr.responseHeaders
     , responseBody = encodeUtf8 wr.respBody
     , responseCookieJar = createCookieJar []
-    , responseClose' = ResponseClose (pass)
+    , responseClose' = ResponseClose pass
     , responseOriginalRequest = defaultRequest -- Unsafe.read (toString (wr.originalRequest)) :: Request
     , responseEarlyHints = convertHeadersBack wr.responseEarlyHints
     }

@@ -1,18 +1,11 @@
 module Pages.Traces.Spans (expandedSpanItem) where
 
-import Data.Aeson (Value (..))
-import Data.Aeson.Key qualified as Key
-import Data.Aeson.KeyMap qualified as KM
-import Data.Effectful.UUID (UUID)
-import Data.HashMap.Strict qualified as HM
-import Data.Vector qualified as V
 import Lucid
 import Lucid.Hyperscript (__)
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Telemetry (SpanRecord (..))
 import Models.Telemetry.Telemetry qualified as Telemetry
 import Relude
-import Utils
 
 
 expandedSpanItem :: Projects.ProjectId -> Telemetry.SpanRecord -> Html ()

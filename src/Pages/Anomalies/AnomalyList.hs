@@ -312,7 +312,7 @@ issueItem hideByDefault currTime issue icon title subTitle content = do
     div_ [class_ "space-y-3 grow"] do
       div_ [class_ "space-x-3"] do
         a_ [href_ $ "/p/" <> issue.projectId.toText <> "/anomalies/by_hash/" <> issue.targetHash, class_ "inline-block font-bold text-blue-700 space-x-2", termRaw "preload" "mouseover"] do
-          img_ [src_ icon, class_ "inline w-4 h-4"] >> (span_ $ toHtml title)
+          img_ [src_ icon, class_ "inline w-4 h-4"] >> span_ (toHtml title)
         small_ [class_ "inline-block text-gray-800"] $ fromMaybe (toHtml @String "") subTitle
       div_ [class_ "flex flex-row gap-8"] do
         div_ do
@@ -372,7 +372,7 @@ anomalyDetailsGetH pid targetHash hxBoostedM = do
           let shapesWithFieldsMap = V.map (`getShapeFields` fields) shapes
           case hxBoostedM of
             Just _ -> addRespHeaders $ AnomalyDetailsBoosted (issue, Just shapesWithFieldsMap, Nothing, Nothing, currTime, True)
-            Nothing -> addRespHeaders $ AnomalyDetailsMain $ PageCtx bwconf (issue, (Just shapesWithFieldsMap), Nothing, Nothing, currTime, False)
+            Nothing -> addRespHeaders $ AnomalyDetailsMain $ PageCtx bwconf (issue, Just shapesWithFieldsMap, Nothing, Nothing, currTime, False)
         Anomalies.IDNewShapeIssue issueD -> do
           newF <- dbtToEff $ Fields.selectFieldsByHashes pid issueD.newUniqueFields
           updF <- dbtToEff $ Fields.selectFieldsByHashes pid (T.take 16 <$> issueD.updatedFieldFormats)

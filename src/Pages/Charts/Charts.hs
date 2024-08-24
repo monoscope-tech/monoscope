@@ -9,14 +9,12 @@ import Data.Text (toLower)
 import Data.Text qualified as T
 import Data.Time (
   UTCTime,
-  ZonedTime,
   addUTCTime,
   defaultTimeLocale,
   diffUTCTime,
   formatTime,
   getCurrentTime,
   secondsToNominalDiffTime,
-  zonedTimeToUTC,
  )
 import Data.Time.Format.ISO8601 (iso8601ParseM)
 import Data.Tuple.Extra (fst3, thd3)
@@ -44,7 +42,7 @@ import Safe qualified
 import Servant (FromHttpApiData (..))
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
 import Text.Megaparsec (parseMaybe)
-import Utils (DBField (MkDBField))
+import Utils (DBField (MkDBField), formatUTC)
 import Witch (from)
 
 
@@ -196,14 +194,6 @@ buildReqDumpSQL exps = (q, join qByArgs, mFrom, mTo)
 
 type M = Maybe
 
-
-formatZonedTimeAsUTC :: ZonedTime -> Text
-formatZonedTimeAsUTC zonedTime = formatUTC (zonedTimeToUTC zonedTime)
-
-
-formatUTC :: UTCTime -> Text
-formatUTC utcTime =
-  toText $ formatTime defaultTimeLocale "%Y-%m-%dT%H:%M:%S%QZ" utcTime
 
 
 chartsGetH :: M ChartType -> M Text -> M Projects.ProjectId -> M GroupBy -> M [QueryBy] -> M Int -> M Int -> M Text -> M Text -> M Bool -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))

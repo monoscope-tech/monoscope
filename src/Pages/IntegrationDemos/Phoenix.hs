@@ -4,7 +4,6 @@ import Data.Text
 import Lucid
 import NeatInterpolation
 import Pkg.Components
-import Relude
 
 
 phoenixGuide :: Text -> Html ()

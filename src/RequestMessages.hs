@@ -13,11 +13,9 @@ module RequestMessages (
 where
 
 import Control.Monad.ST (ST, runST)
-import Data.Aeson (ToJSON (toJSON), Value (Object), (.=))
 import Data.Aeson qualified as AE
 import Data.Aeson.Key qualified as AEKey
 import Data.Aeson.KeyMap qualified as AEK
-import Data.Aeson.Types (object)
 import Data.Aeson.Types qualified as AET
 import Data.ByteString.Base64 qualified as B64
 import Data.Digest.XXHash (xxHash)
@@ -119,7 +117,7 @@ instance {-# OVERLAPPING #-} AE.FromJSON (Either Text [Text]) where
 --
 -- >>> redactJSON ["menu.[].id", "menu.[].names.[]"] [aesonQQ| {"menu":[{"id":"i1", "names":["John","okon"]}, {"id":"i2"}]} |]
 -- Object (fromList [("menu",Array [Object (fromList [("id",String "[REDACTED]"),("names",Array [String "[REDACTED]",String "[REDACTED]"])]),Object (fromList [("id",String "[REDACTED]")])])])
-redactJSON :: V.Vector Text -> Value -> Value
+redactJSON :: V.Vector Text -> AE.Value -> AE.Value
 redactJSON paths' = redactJSON' (V.map stripPrefixDot paths')
   where
     redactJSON' !paths value = case value of
@@ -308,7 +306,7 @@ requestMsgToDumpAndEndpoint pjc rM now dumpIDOriginal = do
           , sdkType = rM.sdkType
           , parentId = rM.parentId
           , serviceVersion = rM.serviceVersion
-          , errors = toJSON errorsList
+          , errors = AE.toJSON errorsList
           , tags = maybe V.empty V.fromList rM.tags
           , requestType = RequestDumps.getRequestType rM.sdkType
           }
@@ -344,7 +342,7 @@ isRequestOutgoing sdkType
   | otherwise = False
 
 
-buildEndpoint :: RequestMessages.RequestMessage -> UTCTime -> UUID.UUID -> Projects.ProjectId -> Text -> Text -> Value -> Text -> Bool -> Endpoints.Endpoint
+buildEndpoint :: RequestMessages.RequestMessage -> UTCTime -> UUID.UUID -> Projects.ProjectId -> Text -> Text -> AE.Value -> Text -> Bool -> Endpoints.Endpoint
 buildEndpoint rM now dumpID projectId method urlPath urlParams endpointHash outgoing =
   Endpoints.Endpoint
     { createdAt = zonedTimeToUTC rM.timestamp
@@ -572,7 +570,7 @@ valueToFormatStr val
   | otherwise = Nothing
 
 
-ensureUrlParams :: Text -> (Text, Value, Bool)
+ensureUrlParams :: Text -> (Text, AE.Value, Bool)
 ensureUrlParams "" = ("", AE.object [], False)
 ensureUrlParams url = (parsedUrl, pathParams, hasDyn)
   where
@@ -603,14 +601,14 @@ addNewSegment segs seg = newSegs
     newSegs = segs ++ [newSeg]
 
 
-buildPathParams :: [Text] -> [Text] -> Value -> Value
+buildPathParams :: [Text] -> [Text] -> AE.Value -> AE.Value
 buildPathParams [] _ acc = acc
 buildPathParams _ [] acc = acc
 buildPathParams (x : xs) (v : vs) acc = buildPathParams xs vs param
   where
     current = AE.object [AEKey.fromText (T.tail x) AE..= v]
     param = case (acc, current) of
-      (Object a, Object b) -> Object $ a <> b
+      (AE.Object a, AE.Object b) -> AE.Object $ a <> b
       _ -> acc
 
 

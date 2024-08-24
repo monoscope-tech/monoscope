@@ -16,5 +16,5 @@ server pid =
     , fieldDetailsPartial = EndpointDetails.fieldDetailsPartialH pid
     , endpointDetailsWithHash = EndpointDetails.endpointDetailsWithHashH pid
     , endpointDetails = EndpointDetails.endpointDetailsH pid
-    , apiCatalogGet = \sortM requestTypeM -> ApiCatalog.apiCatalogH pid sortM requestTypeM
+    , apiCatalogGet = ApiCatalog.apiCatalogH pid
     }

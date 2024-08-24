@@ -7,7 +7,6 @@ import Data.Aeson.QQ (aesonQQ)
 import Data.Time (defaultTimeLocale, formatTime, getCurrentTime)
 import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUID
-import Models.Apis.RequestDumps (RequestDumpLogItem (..))
 import Models.Projects.Projects qualified as Projects
 import Pages.LogExplorer.LogItem qualified as LogItem
 import Pkg.TestUtils

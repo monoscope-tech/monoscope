@@ -19,9 +19,8 @@ import Lucid
 import Lucid.Htmx
 import Lucid.Hyperscript (__)
 import Models.Projects.Projects qualified as Projects
-import NeatInterpolation (text)
 import Relude
-import Utils (deleteParam, escapedQueryPartial, faSprite_)
+import Utils (deleteParam, faSprite_)
 
 
 data ItemsListCfg = ItemsListCfg

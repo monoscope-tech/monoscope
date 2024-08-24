@@ -300,7 +300,7 @@ groupEndpointsByUrlPath endpoints =
                     .= object
                       ( [ "parameters" .= qParams
                         , "responses" .= groupShapesByStatusCode (shapes mergedEndpoint)
-                        , "requestBody" .= object (("content" .= object ["application/json" .= rqProps]) : if not (T.null rqS.shape.swRequestDescription) then ["description" .= rqS.shape.swRequestDescription] else [])
+                        , "requestBody" .= object (("content" .= object ["application/json" .= rqProps]) : (["description" .= rqS.shape.swRequestDescription | not (T.null rqS.shape.swRequestDescription)]))
                         ]
                           ++ (["description" .= description mergedEndpoint | T.length mergedEndpoint.description > 0])
                       )
@@ -310,7 +310,7 @@ groupEndpointsByUrlPath endpoints =
                     .= object
                       ( [ "description" .= description mergedEndpoint
                         , "responses" .= groupShapesByStatusCode (shapes mergedEndpoint)
-                        , "requestBody" .= object (("content" .= object ["application/json" .= rqProps]) : if not (T.null rqS.shape.swRequestDescription) then ["description" .= rqS.shape.swRequestDescription] else [])
+                        , "requestBody" .= object (("content" .= object ["application/json" .= rqProps]) : (["description" .= rqS.shape.swRequestDescription | not (T.null rqS.shape.swRequestDescription)]))
                         ]
                           ++ (["description" .= description mergedEndpoint | T.length mergedEndpoint.description > 0])
                       )
@@ -326,7 +326,7 @@ groupEndpointsByUrlPath endpoints =
             (_, _) ->
               AEKey.fromText (T.toLower $ method mergedEndpoint)
                 .= object
-                  ( ("responses" .= groupShapesByStatusCode (shapes mergedEndpoint)) : (["description" .= description mergedEndpoint | T.length (mergedEndpoint.description) > 0])
+                  ( ("responses" .= groupShapesByStatusCode (shapes mergedEndpoint)) : (["description" .= description mergedEndpoint | T.length mergedEndpoint.description > 0])
                   )
        in endPointJSON
 
