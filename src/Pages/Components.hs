@@ -72,8 +72,8 @@ drawerWithURLContent_ :: Text -> Text -> Html () -> Html ()
 drawerWithURLContent_ drawerId url trigger = div_ [class_ "drawer drawer-end inline-block w-auto"] do
   input_ [id_ drawerId, type_ "checkbox", class_ "drawer-toggle", [__|on keyup if the event's key is 'Escape' set my.checked to false trigger keyup |]]
   label_ [Lucid.for_ drawerId, class_ "drawer-button inline-block"] trigger
-  div_ [class_ "drawer-side fixed top-0 left-0 w-full h-full flex z-[10000] ", style_ "position:fixed;width:100%;display:flex"] do
+  div_ [class_ "drawer-side fixed top-0 left-0 w-full h-full flex z-[10000] overflow-y-scroll ", style_ "position:fixed;width:100%;display:flex"] do
     label_ [Lucid.for_ drawerId, Aria.label_ "close modal", class_ "w-full drawer-overlay grow flex-1"] ""
-    div_ [style_ "width: min(90vw, 850px) ", class_ "bg-base-100 min-h-full p-5 clear-both"] do
+    div_ [style_ "width: min(90vw, 850px) ", class_ "bg-base-100 min-h-full p-5 clear-both overflow-y-scroll"] do
       label_ [Lucid.for_ drawerId, Aria.label_ "close modal", class_ "float-right p-3 rounded-full hover:bg-gray-100 text-xl"] "x"
       div_ [class_ "bg-base-100", hxGet_ url, hxTrigger_ "intersect once", hxSwap_ "innerHTML"] $ span_ [class_ "loading loading-dots loading-md"] ""
