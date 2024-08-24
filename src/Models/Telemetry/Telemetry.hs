@@ -10,6 +10,8 @@ module Models.Telemetry.Telemetry (
   SpanKind (..),
   bulkInsertLogs,
   bulkInsertSpans,
+  SpanEvent (..),
+  SpanLink (..),
 ) where
 
 import Data.Aeson (Value)
@@ -25,6 +27,7 @@ import Data.Vector qualified as V
 import Database.PostgreSQL.Entity.DBT (QueryNature (..), queryOne)
 import Database.PostgreSQL.Simple (FromRow, ResultError (..), ToRow)
 import Database.PostgreSQL.Simple.FromField (Conversion, FromField (..), fromField, returnError)
+import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.ToField (ToField, toField)
 import Database.PostgreSQL.Transact (DBT, execute, executeMany)
@@ -118,14 +121,39 @@ data SpanRecord = SpanRecord
   , status :: Maybe SpanStatus
   , statusMessage :: Maybe Text
   , attributes :: Value
-  , events :: Value
-  , links :: Value
+  , events :: V.Vector SpanEvent
+  , links :: V.Vector SpanLink
   , resource :: Value
   , instrumentationScope :: Value
   }
   deriving (Show, Generic)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake SpanRecord
   deriving anyclass (NFData, FromRow, ToRow)
+
+
+data SpanEvent = SpanEvent
+  { eventName :: Text
+  , eventTime :: UTCTime
+  , eventAttributes :: Value
+  , eventDroppedAttributesCount :: Int
+  }
+  deriving (Show, Generic)
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake SpanEvent
+  deriving anyclass (NFData, FromRow, ToRow)
+  deriving (ToField, FromField) via Aeson SpanEvent
+
+
+data SpanLink = SpanLink
+  { linkTraceId :: Text
+  , linkSpanId :: Text
+  , linkAttributes :: Value
+  , linkDroppedAttributesCount :: Int
+  , linkFlags :: Int
+  }
+  deriving (Show, Generic)
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake SpanLink
+  deriving anyclass (NFData, FromRow, ToRow)
+  deriving (ToField, FromField) via Aeson SpanLink
 
 
 logRecordByProjectAndId :: DB :> es => Projects.ProjectId -> UTCTime -> UUID.UUID -> Eff es (Maybe LogRecord)
