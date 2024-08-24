@@ -1,5 +1,3 @@
-{-# LANGUAGE OverloadedRecordDot #-}
-
 module Models.Telemetry.Telemetry (
   LogRecord (..),
   logRecordByProjectAndId,
@@ -14,7 +12,6 @@ module Models.Telemetry.Telemetry (
   SpanLink (..),
 ) where
 
-import Data.Aeson (Value)
 import Data.Aeson qualified as AE
 import Data.ByteString.Base16 qualified as B16
 import Data.Text (toTitle, toUpper)
@@ -26,6 +23,7 @@ import Data.Vector qualified as V
 import Database.PostgreSQL.Entity.DBT (QueryNature (..), queryOne, executeMany)
 import Database.PostgreSQL.Simple (FromRow, ResultError (..), ToRow)
 import Database.PostgreSQL.Simple.FromField (FromField (..), fromField, returnError)
+import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.ToField (ToField, toField)
 import Deriving.Aeson qualified as DAE
@@ -82,10 +80,10 @@ data LogRecord = LogRecord
   , spanId :: Maybe Text -- Hex representation
   , severityText :: Maybe SeverityLevel
   , severityNumber :: Int
-  , body :: Value
-  , attributes :: Value
-  , resource :: Value
-  , instrumentationScope :: Value
+  , body :: AE.Value
+  , attributes :: AE.Value
+  , resource :: AE.Value
+  , instrumentationScope :: AE.Value
   }
   deriving (Show, Generic)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake LogRecord
@@ -116,11 +114,11 @@ data SpanRecord = SpanRecord
   , kind :: Maybe SpanKind
   , status :: Maybe SpanStatus
   , statusMessage :: Maybe Text
-  , attributes :: Value
-  , events :: Value
-  , links :: Value
-  , resource :: Value
-  , instrumentationScope :: Value
+  , attributes :: AE.Value
+  , events :: AE.Value
+  , links :: AE.Value
+  , resource :: AE.Value
+  , instrumentationScope :: AE.Value
   }
   deriving (Show, Generic)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake SpanRecord
@@ -130,7 +128,7 @@ data SpanRecord = SpanRecord
 data SpanEvent = SpanEvent
   { eventName :: Text
   , eventTime :: UTCTime
-  , eventAttributes :: Value
+  , eventAttributes :: AE.Value
   , eventDroppedAttributesCount :: Int
   }
   deriving (Show, Generic)
@@ -142,7 +140,7 @@ data SpanEvent = SpanEvent
 data SpanLink = SpanLink
   { linkTraceId :: Text
   , linkSpanId :: Text
-  , linkAttributes :: Value
+  , linkAttributes :: AE.Value
   , linkDroppedAttributesCount :: Int
   , linkFlags :: Int
   }
