@@ -325,6 +325,10 @@
   @apply justify-center items-center leading-none;
 }
 
+.overflow-anchor-auto {
+  overflow-anchor:auto !important;
+}
+
 /* ======= CODEMIRROR */
 .tree-children {
   display: block;
