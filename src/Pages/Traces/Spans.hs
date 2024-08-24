@@ -10,14 +10,14 @@ import Utils
 
 
 expandedSpanItem :: Projects.ProjectId -> Telemetry.SpanRecord -> Html ()
-expandedSpanItem pid span = do
+expandedSpanItem pid spn = do
   div_ [class_ "w-full max-w-4xl"] $ do
     div_ [class_ "flex flex-col space-y-1.5 p-6 bg-gray-50 px-6 py-4"] $ do
       div_ [class_ "flex items-center justify-between"] $ do
         div_ [class_ "grid gap-1"] $ do
-          h3_ [class_ "whitespace-nowrap text-2xl font-semibold leading-none tracking-tight"] $ toHtml span.spanName
-          p_ [class_ "text-sm text-muted-foreground"] $ "Span ID: " <> toHtml span.spanId
-          p_ [class_ "text-sm text-muted-foreground"] $ "Trace ID: " <> toHtml span.traceId
+          h3_ [class_ "whitespace-nowrap text-2xl font-semibold leading-none tracking-tight"] $ toHtml spn.spanName
+          p_ [class_ "text-sm text-muted-foreground"] $ "Span ID: " <> toHtml spn.spanId
+          p_ [class_ "text-sm text-muted-foreground"] $ "Trace ID: " <> toHtml spn.traceId
         div_ [class_ "flex items-center gap-2"] $ do
           div_ [class_ "text-sm text-muted-foreground"]
             $ time_ [datetime_ "2023-06-23T15:34:12Z"] "Jun 23, 2023 3:34 PM"
