@@ -38,7 +38,7 @@ import Database.PostgreSQL.Simple (FromRow, Only (Only), ToRow)
 import Database.PostgreSQL.Simple.FromField (FromField)
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
-import Database.PostgreSQL.Simple.ToField (ToField)
+import Database.PostgreSQL.Simple.ToField (ToField, toField)
 import Database.PostgreSQL.Simple.Types (Query (Query))
 import Database.PostgreSQL.Transact (DBT, executeMany)
 import Database.PostgreSQL.Transact qualified as PgT
@@ -151,10 +151,14 @@ data EndpointRequestStats = EndpointRequestStats
 -- FIXME: Include and return a boolean flag to show if fields that have annomalies.
 -- FIXME: return endpoint_hash as well.
 endpointRequestStatsByProject :: Projects.ProjectId -> Bool -> Bool -> Maybe Text -> Maybe Text -> Maybe Text -> Int -> Text -> PgT.DBT IO (V.Vector EndpointRequestStats)
-endpointRequestStatsByProject pid ackd archived pHostM sortM searchM page requestType = query Select (Query $ encodeUtf8 q) (pid, isOutgoing, skip)
+endpointRequestStatsByProject pid ackd archived pHostM sortM searchM page requestType = query Select (Query $ encodeUtf8 q) queryParams
   where
+    -- Construct the list of parameters conditionally
+    pHostParams = maybe [] (\h -> [toField h]) pHostM
+    queryParams = [toField pid, toField isOutgoing] ++ pHostParams ++ [toField offset]
+
     isOutgoing = requestType == "Outgoing"
-    skip = page * 30
+    offset = page * 30
     ackdAt = if ackd && not archived then "AND ann.acknowleged_at IS NOT NULL AND ann.archived_at IS NULL " else "AND ann.acknowleged_at IS NULL "
     archivedAt = if archived then "AND ann.archived_at IS NOT NULL " else " AND ann.archived_at IS NULL"
     search = case searchM of Just s -> " AND enp.url_path LIKE '%" <> s <> "%'"; Nothing -> ""
@@ -162,7 +166,8 @@ endpointRequestStatsByProject pid ackd archived pHostM sortM searchM page reques
     orderBy = case (fromMaybe "" sortM) of "first_seen" -> "enp.created_at ASC"; "last_seen" -> "enp.created_at DESC"; _ -> " coalesce(ers.total_requests,0) DESC"
     -- TODO This query to get the anomalies for the anomalies page might be too complex.
     -- Does it make sense yet to remove the call to endpoint_request_stats? since we're using async charts already
-    q = [text| SELECT enp.id endpoint_id, enp.hash endpoint_hash, enp.project_id, enp.url_path, enp.method, coalesce(min,0),  coalesce(p50,0),  coalesce(p75,0),  coalesce(p90,0),  coalesce(p95,0),  coalesce(p99,0),  coalesce(max,0) ,
+    q =
+      [text| SELECT enp.id endpoint_id, enp.hash endpoint_hash, enp.project_id, enp.url_path, enp.method, coalesce(min,0),  coalesce(p50,0),  coalesce(p75,0),  coalesce(p90,0),  coalesce(p95,0),  coalesce(p99,0),  coalesce(max,0) ,
          coalesce(total_time,0), coalesce(total_time_proj,0), coalesce(ers.total_requests,0), coalesce(total_requests_proj,0),
          (SELECT count(*) from apis.issues
                  where project_id=enp.project_id AND acknowleged_at is null AND archived_at is null AND anomaly_type != 'field'
