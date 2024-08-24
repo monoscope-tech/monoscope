@@ -1,15 +1,15 @@
 module Pages.Traces.Spans (expandedSpanItem) where
 
+import Data.Aeson qualified as AE
+import Data.Aeson.Key qualified as Key
+import Data.Aeson.KeyMap qualified as KM
+import Data.Vector qualified as V
 import Lucid
 import Lucid.Hyperscript (__)
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Telemetry (SpanRecord (..))
 import Models.Telemetry.Telemetry qualified as Telemetry
 import Relude
-import Data.Aeson qualified as AE
-import qualified Data.Aeson.KeyMap as KM
-import qualified Data.Vector as V
-import qualified Data.Aeson.Key as Key
 
 
 expandedSpanItem :: Projects.ProjectId -> Telemetry.SpanRecord -> Html ()
@@ -54,25 +54,19 @@ tagItem key val cls =
 
 
 displaySpanJson :: AE.Value -> Html ()
-displaySpanJson (AE.Object obj) = do
-  mapM_ displaySpanList (KM.toList obj)
+displaySpanJson (AE.Object obj) = mapM_ displaySpanList (KM.toList obj)
 displaySpanJson _ = pass
 
 
 displaySpanList :: (KM.Key, AE.Value) -> Html ()
-displaySpanList (key, AE.String v) = do
-  tagItem (Key.toText key) v "text-orange-600"
-displaySpanList (key, AE.Number v) = do
-  tagItem (Key.toText key) (show v) "text-blue-600"
-displaySpanList (key, AE.Bool v) = do
-  tagItem (Key.toText key) (show v) "text-blue-600"
-displaySpanList (key, v) = do
-  tagItem (Key.toText key) (show v) "text-orange-600"
+displaySpanList (key, AE.String v) = tagItem (Key.toText key) v "text-orange-600"
+displaySpanList (key, AE.Number v) = tagItem (Key.toText key) (show v) "text-blue-600"
+displaySpanList (key, AE.Bool v) = tagItem (Key.toText key) (show v) "text-blue-600"
+displaySpanList (key, v) = tagItem (Key.toText key) (show v) "text-orange-600"
 
 
 displayLogsSection :: AE.Value -> Html ()
-displayLogsSection (AE.Array obj) = do
-  V.mapM_ displayEventItem obj
+displayLogsSection (AE.Array obj) = V.mapM_ displayEventItem obj
 displayLogsSection _ = pass
 
 
