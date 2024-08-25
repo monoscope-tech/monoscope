@@ -29,7 +29,6 @@ where
 
 import Data.Aeson (Value)
 import Data.Aeson qualified as AE
-import Utils
 import Data.Default
 import Data.Default.Instances ()
 import Data.Text qualified as T
@@ -57,6 +56,7 @@ import NeatInterpolation (text)
 import Pkg.Parser
 import Pkg.Parser.Types (Sources)
 import Relude hiding (many, some)
+import Utils
 import Witch (from)
 
 
@@ -346,15 +346,18 @@ requestDumpLogUrlPath
   -> Text
   -> Text
 requestDumpLogUrlPath pid q cols sinceM fromM toM layoutM source =
-  [text|/p/$pidT/log_explorer?query=$queryT&cols=$colsT&since=$sinceT&from=$fromT&to=$toT&layout=$layoutT&source=$source|]
+  T.concat ["/p/", pid.toText, "/log_explorer?", T.intercalate "&" queryParams]
   where
-    pidT = pid.toText
-    queryT = fromMaybe "" q
-    colsT = fromMaybe "" cols
-    sinceT = fromMaybe "" sinceM
-    fromT = maybe "" formatUTC fromM
-    toT = maybe "" formatUTC toM
-    layoutT = fromMaybe "" layoutM
+    queryParams =
+      catMaybes
+        [ ("query=" <>) <$> q
+        , ("cols=" <>) <$> cols
+        , ("since=" <>) <$> sinceM
+        , ("from=" <>) . Utils.escapedQueryPartial . formatUTC <$> fromM
+        , ("to=" <>) . Utils.escapedQueryPartial . formatUTC <$> toM
+        , ("layout=" <>) <$> layoutM
+        , Just $ "source=" <> source
+        ]
 
 
 getRequestDumpForReports :: Projects.ProjectId -> Text -> DBT IO (V.Vector RequestForReport)

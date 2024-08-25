@@ -170,7 +170,7 @@ logQueryBox_ pid currentRange =
     [ class_ "card-round w-full text-sm flex gap-3 items-center p-1"
     , hxGet_ $ "/p/" <> pid.toText <> "/log_explorer"
     , hxPushUrl_ "true"
-    , hxVals_ "js:{query:window.getQueryFromEditor(), since: getTimeRange().since, from: getTimeRange().from, to:getTimeRange().to, cols:params().cols, layout:'all', , source: params().source}"
+    , hxVals_ "js:{query:window.getQueryFromEditor(), since: getTimeRange().since, from: getTimeRange().from, to:getTimeRange().to, cols:params().cols, layout:'all', source: params().source}"
     , termRaw "hx-on::before-request" ""
     , hxTarget_ "#resultTable"
     , hxSwap_ "outerHTML"
@@ -290,10 +290,9 @@ resultTableAndMeta_ :: ApiLogsPageData -> Html ()
 resultTableAndMeta_ page = do
   section_ [class_ " w-full h-full overflow-hidden"] $ section_ [class_ " w-full tabs tabs-bordered items-start overflow-hidden h-full place-content-start", role_ "tablist"] do
     input_ [type_ "radio", name_ "logExplorerMain", role_ "tab", class_ "tab", checked_, Aria.label_ $ "Query results (" <> fmt (commaizeF page.resultCount) <> ")"]
-    div_ [class_ "relative overflow-y-hidden overflow-x-hidden h-full w-full tab-content ", role_ "tabpanel", id_ "resultTableScrollParent"] do
-      section_ [class_ "overflow-y-scroll h-full w-full overflow-x-hidden !flex flex-col-reverse [overflow-anchor:none]"] do
+    div_ [class_ "relative overflow-y-hidden overflow-x-hidden h-full w-full tab-content ", role_ "tabpanel"] do
+      section_ [class_ "overflow-y-scroll scroll-smooth h-full w-full overflow-x-hidden", id_ "resultTableScrollParent"] do
         resultTable_ page True
-        div_ [class_ "[overflow-anchor:auto]"] ""
       div_ [style_ "width:2000px"] pass
 
     input_ [type_ "radio", name_ "logExplorerMain", role_ "tab", class_ "tab", Aria.label_ "Alerts"]
@@ -308,7 +307,7 @@ resultTableAndMeta_ page = do
 
 resultTable_ :: ApiLogsPageData -> Bool -> Html ()
 resultTable_ page mainLog = table_
-  [ class_ "w-full table table-sm table-pin-rows table-pin-cols overflow-x-hidden scroll-smooth"
+  [ class_ "w-full table table-sm table-pin-rows table-pin-cols overflow-x-hidden"
   , style_ "height:1px"
   , id_ "resultTable"
   ]
@@ -335,7 +334,7 @@ resultTable_ page mainLog = table_
           else section_ [class_ "w-max mx-auto"] $ p_ "This request has no outgoing requests yet."
     unless (null page.requestVecs) $ do
       thead_ $ tr_ [class_ "divide-x b--b2"] $ forM_ page.cols $ logTableHeading_ page.pid isLogEventB
-      tbody_ [id_ "w-full log-item-table-body scroll-smooth [] "] $ logItemRows_ page.pid page.requestVecs page.cols page.colIdxMap page.nextLogsURL page.source
+      tbody_ [id_ "w-full log-item-table-body "] $ logItemRows_ page.pid page.requestVecs page.cols page.colIdxMap page.nextLogsURL page.source
 
 
 -- script_ [text| document.getElementById('resultTableScrollParent').scrollTop = document.getElementById('resultTableScrollParent').scrollHeight;|]
@@ -374,6 +373,15 @@ curateCols summaryCols cols = sortBy sortAccordingly filteredCols
 
 logItemRows_ :: Projects.ProjectId -> V.Vector (V.Vector Value) -> [Text] -> HM.HashMap Text Int -> Text -> Text -> Html ()
 logItemRows_ pid requests curatedCols colIdxMap nextLogsURL source = do
+  forM_ requests \reqVec -> do
+    let (logItemPath, _reqId) = fromMaybe ("", "") $ requestDumpLogItemUrlPath pid reqVec colIdxMap
+    let (_, errCount, errClass) = errorClass True reqVec colIdxMap
+    tr_ [class_ "cursor-pointer divide-x b--b2 ", [__|on click toggle .hidden on next <tr/> then toggle .expanded-log on me|]]
+      $ forM_ curatedCols (td_ . logItemCol_ source pid reqVec colIdxMap)
+    tr_ [class_ "hidden  "] $ do
+      -- used for when a row is expanded.
+      td_ $ a_ [class_ $ "inline-block h-full " <> errClass, term "data-tippy-content" $ show errCount <> " errors attached to this request"] ""
+      td_ [colspan_ $ show $ length curatedCols - 1] $ div_ [hxGet_ $ logItemPath <> "?source=" <> source, hxTrigger_ "intersect once", hxSwap_ "outerHTML"] $ span_ [class_ "loading loading-dots loading-md"] ""
   when (Vector.length requests > 199)
     $ tr_
     $ td_ [colspan_ $ show $ length curatedCols]
@@ -385,15 +393,7 @@ logItemRows_ pid requests curatedCols colIdxMap nextLogsURL source = do
       , hxTarget_ "closest tr"
       ]
       (span_ [class_ "inline-block"] "LOAD MORE " >> span_ [class_ "loading loading-dots loading-sm inline-block pl-3"] "")
-  forM_ (V.reverse requests) \reqVec -> do
-    let (logItemPath, _reqId) = fromMaybe ("", "") $ requestDumpLogItemUrlPath pid reqVec colIdxMap
-    let (_, errCount, errClass) = errorClass True reqVec colIdxMap
-    tr_ [class_ "cursor-pointer divide-x b--b2", [__|on click toggle .hidden on next <tr/> then toggle .expanded-log on me|]]
-      $ forM_ curatedCols (td_ . logItemCol_ source pid reqVec colIdxMap)
-    tr_ [class_ "hidden"] $ do
-      -- used for when a row is expanded.
-      td_ $ a_ [class_ $ "inline-block h-full " <> errClass, term "data-tippy-content" $ show errCount <> " errors attached to this request"] ""
-      td_ [colspan_ $ show $ length curatedCols - 1] $ div_ [hxGet_ $ logItemPath <> "?source=" <> source, hxTrigger_ "intersect once", hxSwap_ "outerHTML"] $ span_ [class_ "loading loading-dots loading-md"] ""
+
 
 
 errorClass :: Bool -> V.Vector Value -> HM.HashMap Text Int -> (Int, Int, Text)

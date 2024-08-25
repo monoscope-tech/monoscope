@@ -169,7 +169,8 @@ sqlFromQueryComponents sqlCfg qc =
       whereClause = maybe "" (\whereC -> " AND (" <> whereC <> ")") qc.whereClause
       groupByClause = if null qc.groupByClause then "" else " GROUP BY " <> T.intercalate "," qc.groupByClause
       dateRangeStr = case sqlCfg.dateRange of
-        (Nothing, Just b) -> "AND " <> timestampCol <> " BETWEEN NOW() AND '" <> fmtTime b <> "'"
+        (Just a, Nothing) -> "AND " <> timestampCol <> " > '" <> fmtTime a <> "'"
+        (Nothing, Just b) -> "AND " <> timestampCol <> " < '" <> fmtTime b <> "'"
         (Just a, Just b) -> "AND " <> timestampCol <> " BETWEEN '" <> fmtTime a <> "' AND '" <> fmtTime b <> "'"
         _ -> ""
 
@@ -224,7 +225,7 @@ sqlFromQueryComponents sqlCfg qc =
       , qc
           { finalColumns = listToColNames selectedCols
           , countQuery
-          , finalSqlQuery
+          , finalSqlQuery 
           , finalTimechartQuery = Just timeChartQuery
           , finalAlertQuery = Just alertQuery
           }

@@ -22,6 +22,7 @@ import Pkg.Components.ItemsList qualified as ItemsList
 import PyF qualified
 import Relude hiding (ask, asks)
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
+import Utils qualified
 
 
 endpointListGetH
@@ -157,7 +158,7 @@ renderEndpoint activePage currTime enp = do
     div_ [class_ "flex items-center justify-center "]
       $ div_
         [ class_ "w-56 h-12 px-3"
-        , hxGet_ $ "/charts_html?pid=" <> enp.projectId.toText <> "&since=14D&query_raw=" <> AnomalyList.escapedQueryPartial [PyF.fmt|endpoint_hash=="{enp.endpointHash}" | timechart [1d]|]
+        , hxGet_ $ "/charts_html?pid=" <> enp.projectId.toText <> "&since=14D&query_raw=" <> Utils.escapedQueryPartial [PyF.fmt|endpoint_hash=="{enp.endpointHash}" | timechart [1d]|]
         , hxTrigger_ "intersect once"
         , hxSwap_ "innerHTML"
         ]
