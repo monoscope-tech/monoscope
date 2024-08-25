@@ -7,7 +7,6 @@ import Data.Aeson qualified as AE
 import Data.Aeson.Key qualified as AEK
 import Data.ByteString qualified as BS
 import Data.ByteString.Base64 qualified as B64
-import Data.ByteString.Char8 qualified as C
 import Data.HashMap.Strict qualified as HashMap
 import Data.Map qualified as M
 import Data.Scientific
@@ -17,14 +16,12 @@ import Data.Time (UTCTime)
 import Data.Time.Clock.POSIX
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
-import Debug.Pretty.Simple
 import Effectful
 import Effectful.PostgreSQL.Transact.Effect (DB, dbtToEff)
-import Effectful.Reader.Static (ask, asks)
+import Effectful.Reader.Static (ask)
 import Effectful.Reader.Static qualified as Eff
 import Log qualified
 import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
-import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Telemetry (SpanKind (..), SpanStatus (..))
 import Models.Telemetry.Telemetry qualified as Telemetry
 import Network.GRPC.HighLevel.Client as HsGRPC

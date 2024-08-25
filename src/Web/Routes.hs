@@ -36,7 +36,6 @@ import Pages.Fields.FieldDetails qualified as FieldDetails
 import Pages.IntegrationGuides qualified as IntegrationGuides
 import Pages.LemonSqueezy qualified as LemonSqueezy
 import Pages.LogExplorer.Routes qualified as LogExplorerRoutes
-import Pages.LogExplorer.Server qualified as LogExplorerRoutes
 import Pages.Monitors.Routes qualified as MonitorsRoutes
 import Pages.Monitors.Server qualified as MonitorsRoutes
 import Pages.Onboarding qualified as Onboarding

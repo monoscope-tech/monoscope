@@ -3,11 +3,10 @@ module Pages.LemonSqueezy (webhookPostH, WebhookData, manageBillingGetH, Billing
 import Data.Aeson qualified as AE
 import Data.Default
 import Data.Text qualified as T
-import Data.Time (LocalTime (LocalTime), ZonedTime, getCurrentTime, getCurrentTimeZone, getZonedTime, localTimeOfDay, utctDay, zonedTimeToLocalTime, zonedTimeToUTC)
+import Data.Time (LocalTime (LocalTime), ZonedTime, getZonedTime, localTimeOfDay, utctDay, zonedTimeToLocalTime, zonedTimeToUTC)
 import Data.Time.Calendar (fromGregorian, toGregorian)
 import Data.Time.Clock (UTCTime)
 import Data.Time.LocalTime (localTimeToUTC, utc)
-import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUIDV4
 import Deriving.Aeson qualified as DAE
 import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
@@ -18,10 +17,9 @@ import Models.Projects.LemonSqueezy qualified as LemonSqueezy
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
 import NeatInterpolation (text)
-import Network.GRPC.HighLevel (AuthContext)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (PageCtx))
 import Relude hiding (asks)
-import System.Config (env, lemonSqueezyWebhookSecret)
+import System.Config (env)
 import System.Types (ATAuthCtx, ATBaseCtx, RespHeaders, addRespHeaders)
 import Text.Printf (printf)
 import Utils (faSprite_)

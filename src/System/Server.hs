@@ -6,22 +6,12 @@ import BackgroundJobs qualified
 import Colourista.IO (blueMessage)
 import Control.Concurrent.Async (async, waitAnyCancel)
 import Control.Exception.Safe qualified as Safe
-import Control.Lens ((^?), _Just)
-import Control.Lens qualified as L
-import Control.Monad.Trans.Resource (runResourceT)
 import Data.Aeson qualified as Aeson
-import Data.ByteString.Lazy.Base64 qualified as LB64
-import Data.Generics.Product (field)
 import Data.Pool as Pool (destroyAllResources)
-import Data.Text.Lazy.Encoding qualified as LT
 import Effectful
 import Effectful.Concurrent (runConcurrent)
 import Effectful.Fail (runFailIO)
 import Effectful.Time (runTime)
-import Gogol qualified as Google
-import Gogol.Auth.ApplicationDefault qualified as Google
-import Gogol.Data.Base64 (_Base64)
-import Gogol.PubSub qualified as PubSub
 import Log qualified
 import Network.Wai.Handler.Warp (
   defaultSettings,
@@ -43,9 +33,7 @@ import System.Config (
     enableBackgroundJobs,
     enablePubsubService,
     environment,
-    googleServiceAccountB64,
     loggingDestination,
-    messagesPerPubsubPullBatch,
     otlpStreamTopics,
     port,
     requestPubsubTopics
@@ -53,8 +41,7 @@ import System.Config (
   getAppContext,
  )
 import System.Logging qualified as Logging
-import System.Types (effToServantHandler, runBackground)
-import UnliftIO.Exception (tryAny)
+import System.Types (effToServantHandler)
 import Web.Routes qualified as Routes
 
 

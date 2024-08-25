@@ -1,5 +1,3 @@
-{-# LANGUAGE OverloadedRecordDot #-}
-
 module Models.Telemetry.Telemetry (
   LogRecord (..),
   logRecordByProjectAndId,
@@ -14,28 +12,24 @@ module Models.Telemetry.Telemetry (
   SpanLink (..),
 ) where
 
-import Data.Aeson (Value)
 import Data.Aeson qualified as AE
-import Data.ByteString (ByteString)
 import Data.ByteString.Base16 qualified as B16
-import Data.Text (Text, toTitle, toUpper)
+import Data.Text (toTitle, toUpper)
 import Data.Text.Encoding qualified as TE
 import Data.Time (UTCTime)
 import Data.UUID (UUID)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
-import Database.PostgreSQL.Entity.DBT (QueryNature (..), queryOne)
+import Database.PostgreSQL.Entity.DBT (QueryNature (..), executeMany, queryOne)
 import Database.PostgreSQL.Simple (FromRow, ResultError (..), ToRow)
-import Database.PostgreSQL.Simple.FromField (Conversion, FromField (..), fromField, returnError)
+import Database.PostgreSQL.Simple.FromField (FromField (..), fromField, returnError)
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.ToField (ToField, toField)
-import Database.PostgreSQL.Transact (DBT, execute, executeMany)
 import Deriving.Aeson qualified as DAE
 import Deriving.Aeson.Stock qualified as DAE
 import Effectful
 import Effectful.PostgreSQL.Transact.Effect (DB, dbtToEff)
-import GHC.Generics (Generic)
 import GHC.TypeLits
 import Models.Projects.Projects qualified as Projects
 import Relude
@@ -86,10 +80,10 @@ data LogRecord = LogRecord
   , spanId :: Maybe Text -- Hex representation
   , severityText :: Maybe SeverityLevel
   , severityNumber :: Int
-  , body :: Value
-  , attributes :: Value
-  , resource :: Value
-  , instrumentationScope :: Value
+  , body :: AE.Value
+  , attributes :: AE.Value
+  , resource :: AE.Value
+  , instrumentationScope :: AE.Value
   }
   deriving (Show, Generic)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake LogRecord
@@ -120,11 +114,11 @@ data SpanRecord = SpanRecord
   , kind :: Maybe SpanKind
   , status :: Maybe SpanStatus
   , statusMessage :: Maybe Text
-  , attributes :: Value
-  , events :: Value
-  , links :: Value
-  , resource :: Value
-  , instrumentationScope :: Value
+  , attributes :: AE.Value
+  , events :: AE.Value
+  , links :: AE.Value
+  , resource :: AE.Value
+  , instrumentationScope :: AE.Value
   , spanDuration :: Int
   }
   deriving (Show, Generic)
@@ -135,7 +129,7 @@ data SpanRecord = SpanRecord
 data SpanEvent = SpanEvent
   { eventName :: Text
   , eventTime :: UTCTime
-  , eventAttributes :: Value
+  , eventAttributes :: AE.Value
   , eventDroppedAttributesCount :: Int
   }
   deriving (Show, Generic)
@@ -147,7 +141,7 @@ data SpanEvent = SpanEvent
 data SpanLink = SpanLink
   { linkTraceId :: Text
   , linkSpanId :: Text
-  , linkAttributes :: Value
+  , linkAttributes :: AE.Value
   , linkDroppedAttributesCount :: Int
   , linkFlags :: Int
   }
@@ -178,7 +172,7 @@ spanRecordByProjectAndId pid createdAt rdId = dbtToEff $ queryOne Select q (crea
 
 -- Function to insert multiple log entries
 bulkInsertLogs :: DB :> es => V.Vector LogRecord -> Eff es ()
-bulkInsertLogs logs = void $ dbtToEff $ executeMany q (V.toList rowsToInsert)
+bulkInsertLogs logs = void $ dbtToEff $ executeMany Insert q (V.toList rowsToInsert)
   where
     q =
       [sql|
@@ -205,7 +199,7 @@ bulkInsertLogs logs = void $ dbtToEff $ executeMany q (V.toList rowsToInsert)
 
 -- Function to insert multiple span entries
 bulkInsertSpans :: DB :> es => V.Vector SpanRecord -> Eff es ()
-bulkInsertSpans spans = void $ dbtToEff $ executeMany q (V.toList rowsToInsert)
+bulkInsertSpans spans = void $ dbtToEff $ executeMany Insert q (V.toList rowsToInsert)
   where
     q =
       [sql|

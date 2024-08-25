@@ -1,45 +1,21 @@
 module Pkg.Queue (pubsubService) where
 
-import BackgroundJobs qualified
-import Colourista.IO (blueMessage)
-import Control.Concurrent.Async (async, waitAnyCancel)
-import Control.Exception.Safe qualified as Safe
 import Control.Lens ((^?), _Just)
 import Control.Lens qualified as L
 import Control.Monad.Trans.Resource (runResourceT)
-import Data.Aeson qualified as Aeson
 import Data.ByteString.Lazy.Base64 qualified as LB64
 import Data.Generics.Product (field)
-import Data.HashMap.Strict qualified as HashMap
-import Data.Pool as Pool (destroyAllResources)
 import Data.Text.Lazy.Encoding qualified as LT
 import Effectful
-import Effectful.Concurrent (runConcurrent)
-import Effectful.Fail (runFailIO)
-import Effectful.Time (runTime)
 import Gogol qualified as Google
 import Gogol.Auth.ApplicationDefault qualified as Google
 import Gogol.Data.Base64 (_Base64)
 import Gogol.PubSub qualified as PubSub
 import Log qualified
-import Network.Wai.Handler.Warp (
-  defaultSettings,
-  runSettings,
-  setOnException,
-  setPort,
- )
-import Network.Wai.Log qualified as WaiLog
-import Network.Wai.Middleware.Heartbeat (heartbeatMiddleware)
-import Opentelemetry.OtlpServer qualified as OtlpServer
-import ProcessMessage (processMessages)
 import Relude
-import Servant qualified
-import Servant.Server.Generic (genericServeTWithContext)
 import System.Config
-import System.Logging qualified as Logging
-import System.Types (ATBackgroundCtx, effToServantHandler, runBackground)
+import System.Types (ATBackgroundCtx, runBackground)
 import UnliftIO.Exception (tryAny)
-import Web.Routes qualified as Routes
 
 
 -- pubsubService connects to the pubsub service and listens for  messages,

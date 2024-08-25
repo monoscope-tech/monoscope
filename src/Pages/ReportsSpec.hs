@@ -49,7 +49,7 @@ spec = aroundAll withTestResources do
       let reqMsg3 = Unsafe.fromJust $ convert $ testRequestMsgs.reqMsg1 "2024-07-05T13:06:26.620094239Z"
       let reqMsg4 = Unsafe.fromJust $ convert $ testRequestMsgs.reqMsg2 "2024-07-05T12:06:26.620094239Z"
 
-      let msgs = concat (replicate 100 $ [("m1", reqMsg1), ("m2", reqMsg2)]) ++ [("m3", reqMsg3), ("m4", reqMsg4)]
+      let msgs = concat (replicate 100 [("m1", reqMsg1), ("m2", reqMsg2)]) ++ [("m3", reqMsg3), ("m4", reqMsg4)]
       _ <- runTestBackground trATCtx $ processRequestMessages msgs
 
       _ <- liftIO $ withResource trPool \conn -> do

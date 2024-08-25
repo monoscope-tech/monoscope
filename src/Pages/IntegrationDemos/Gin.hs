@@ -1,6 +1,5 @@
 module Pages.IntegrationDemos.Gin (ginGuide) where
 
-import Data.Text qualified as T
 import Lucid
 import Pkg.Components
 import Relude

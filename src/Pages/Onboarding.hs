@@ -39,7 +39,7 @@ onboardingGetH pid polling redirected current_tab = do
           }
   case polling of
     Just _ -> addRespHeaders $ OnboardingGetPolling pid apikey hasRequest (isJust project.questions) (fromMaybe False redirected) (fromMaybe "express" current_tab)
-    Nothing -> addRespHeaders $ OnboardingGetNM $ PageCtx bwconf (pid, apikey, hasRequest, (isJust project.questions), (fromMaybe False redirected), "express")
+    Nothing -> addRespHeaders $ OnboardingGetNM $ PageCtx bwconf (pid, apikey, hasRequest, isJust project.questions, fromMaybe False redirected, "express")
 
 
 data OnboardingGet

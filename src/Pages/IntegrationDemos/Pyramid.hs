@@ -1,6 +1,5 @@
 module Pages.IntegrationDemos.Pyramid (pyramidGuide) where
 
-import Data.Text qualified as T
 import Lucid
 import Pkg.Components
 import Relude

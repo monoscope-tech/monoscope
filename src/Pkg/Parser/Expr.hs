@@ -7,16 +7,7 @@ import Control.Monad.Combinators.Expr (
 import Data.Text qualified as T
 import Data.Text.Display (Display, display, displayBuilder, displayParen, displayPrec)
 import Data.Text.Lazy.Builder (Builder)
-import Pkg.Parser.Types (
-  AggFunction (..),
-  Expr (And, Eq, GT, GTEq, LT, LTEq, NotEq, Or, Paren, Regex),
-  FieldKey (..),
-  Parser,
-  Sources (..),
-  Subject (..),
-  Values (..),
-  symbol,
- )
+import Pkg.Parser.Types
 import Relude hiding (GT, LT, Sum, many, some)
 import Text.Megaparsec (
   MonadParsec (try),
@@ -27,11 +18,8 @@ import Text.Megaparsec (
   many,
   manyTill,
   oneOf,
-  optional,
-  parse,
   sepBy,
   some,
-  (<|>),
  )
 import Text.Megaparsec.Char (alphaNumChar, char, digitChar, space, space1, string)
 import Text.Megaparsec.Char.Lexer qualified as L
@@ -152,7 +140,7 @@ pValues =
     , Str . toText <$> (char '\"' *> manyTill L.charLiteral (char '\"'))
     , List [] <$ string "[]"
     , List <$> sqParens (pValues `sepBy` char ',')
-    , Str . toText <$> manyTill L.charLiteral (space1)
+    , Str . toText <$> manyTill L.charLiteral space1
     ]
 
 

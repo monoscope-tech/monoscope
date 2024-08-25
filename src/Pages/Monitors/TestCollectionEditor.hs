@@ -12,13 +12,9 @@ module Pages.Monitors.TestCollectionEditor (
 
 import Data.Aeson (encode)
 import Data.Aeson qualified as AE
-import Data.Aeson.Encode.Pretty (encodePretty)
-import Data.ByteString qualified as Data.ByteString.Lazy.Internal
 import Data.Default (def)
 import Data.Map qualified as M
 import Data.Text qualified as T
-import Data.Time (getCurrentTime)
-import Data.UUID.V4 qualified as UUIDV4
 import Data.Vector qualified as V
 import Deriving.Aeson qualified as DAE
 import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
@@ -47,7 +43,6 @@ import Pkg.Components.Modals qualified as Components
 import PyF (fmt)
 import Relude hiding (ask)
 import System.Types (ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders, addSuccessToast)
-import Text.ParserCombinators.ReadPrec (step)
 import Utils (faSprite_, getStatusColor)
 
 

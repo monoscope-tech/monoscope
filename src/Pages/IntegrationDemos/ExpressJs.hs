@@ -1,6 +1,5 @@
 module Pages.IntegrationDemos.ExpressJs (expressGuide) where
 
-import Data.Text qualified as T
 import Lucid
 import Pkg.Components
 import Relude

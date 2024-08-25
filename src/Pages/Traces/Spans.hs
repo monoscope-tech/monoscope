@@ -1,10 +1,8 @@
 module Pages.Traces.Spans (expandedSpanItem) where
 
-import Data.Aeson (Value (..))
+import Data.Aeson qualified as AE
 import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap qualified as KM
-import Data.Effectful.UUID (UUID)
-import Data.HashMap.Strict qualified as HM
 import Data.Vector qualified as V
 import Lucid
 import Lucid.Hyperscript (__)
@@ -12,7 +10,6 @@ import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Telemetry (SpanRecord (..))
 import Models.Telemetry.Telemetry qualified as Telemetry
 import Relude
-import Utils
 
 
 expandedSpanItem :: Projects.ProjectId -> Telemetry.SpanRecord -> Html ()
@@ -61,36 +58,30 @@ tagItem key val cls =
       span_ [] $ toHtml val
 
 
-displaySpanJson :: Value -> Html ()
-displaySpanJson (Object obj) = do
-  mapM_ displaySpanList (KM.toList obj)
+displaySpanJson :: AE.Value -> Html ()
+displaySpanJson (AE.Object obj) = mapM_ displaySpanList (KM.toList obj)
 displaySpanJson _ = pass
 
 
-displaySpanList :: (KM.Key, Value) -> Html ()
-displaySpanList (key, String v) = do
-  tagItem (Key.toText key) v "text-orange-600"
-displaySpanList (key, Number v) = do
-  tagItem (Key.toText key) (show v) "text-blue-600"
-displaySpanList (key, Bool v) = do
-  tagItem (Key.toText key) (show v) "text-blue-600"
-displaySpanList (key, v) = do
-  tagItem (Key.toText key) (show v) "text-orange-600"
+displaySpanList :: (KM.Key, AE.Value) -> Html ()
+displaySpanList (key, AE.String v) = tagItem (Key.toText key) v "text-orange-600"
+displaySpanList (key, AE.Number v) = tagItem (Key.toText key) (show v) "text-blue-600"
+displaySpanList (key, AE.Bool v) = tagItem (Key.toText key) (show v) "text-blue-600"
+displaySpanList (key, v) = tagItem (Key.toText key) (show v) "text-orange-600"
 
 
-displayLogsSection :: Value -> Html ()
-displayLogsSection (Array obj) = do
-  V.mapM_ displayEventItem obj
+displayLogsSection :: AE.Value -> Html ()
+displayLogsSection (AE.Array obj) = V.mapM_ displayEventItem obj
 displayLogsSection _ = pass
 
 
-displayEventItem :: Value -> Html ()
-displayEventItem (Object obj) = do
+displayEventItem :: AE.Value -> Html ()
+displayEventItem (AE.Object obj) = do
   div_ [class_ "w-full", [__| on click halt|]] do
     div_ [class_ "flex items-center justify-between w-full px-2 py-1 bg-gray-100", [__|on click toggle .hidden on the next <div/>|]] $ do
       let evnt = KM.lookup "event_name" obj
       case evnt of
-        Just (String v) -> do
+        Just (AE.String v) -> do
           div_ [] $ toHtml $ "event = " <> toText v
           div_ [] pass
         _ -> div_ [] "event = "

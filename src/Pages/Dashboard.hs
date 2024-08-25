@@ -35,20 +35,10 @@ import Pages.Components (statBox)
 import Pages.Endpoints.EndpointList (renderEndpoint)
 import Pkg.Components qualified as Components
 import Relude hiding (max, min)
-import System.Clock (Clock (Monotonic), getTime)
 import System.Types
 import Text.Interpolation.Nyan (int, rmode')
-import Utils (deleteParam, faSprite_, freeTierLimitExceededBanner)
+import Utils (faSprite_, freeTierLimitExceededBanner)
 import Witch (from)
-
-
-timePickerItems :: [(Text, Text)]
-timePickerItems =
-  [ ("1H", "Last Hour")
-  , ("24H", "Last 24 Hours")
-  , ("7D", "Last 7 days")
-  , ("14D", "Last 14 days")
-  ]
 
 
 data ParamInput = ParamInput

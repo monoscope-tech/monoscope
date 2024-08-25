@@ -4,8 +4,7 @@ import Data.Aeson as Aeson
 import Data.Default (Default)
 import Data.Time (UTCTime, ZonedTime)
 import Data.UUID qualified as UUID
-import Data.Vector (Vector)
-import Database.PostgreSQL.Entity (Entity, insert, selectById)
+import Database.PostgreSQL.Entity (Entity, insert)
 import Database.PostgreSQL.Entity.DBT
 import Database.PostgreSQL.Entity.Types (CamelToSnake, FieldModifiers, GenericEntity, PrimaryKey, Schema, TableName)
 import Database.PostgreSQL.Simple hiding (execute, query)
@@ -15,7 +14,6 @@ import Database.PostgreSQL.Simple.ToField
 import Database.PostgreSQL.Transact (DBT)
 import GHC.Records (HasField (getField))
 import Models.Projects.Projects qualified as Projects
-import Models.Users.Users qualified as Users
 import Relude
 import Servant (FromHttpApiData)
 
