@@ -125,6 +125,7 @@ data SpanRecord = SpanRecord
   , links :: Value
   , resource :: Value
   , instrumentationScope :: Value
+  , spanDuration :: Int
   }
   deriving (Show, Generic)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake SpanRecord
@@ -171,7 +172,7 @@ spanRecordByProjectAndId pid createdAt rdId = dbtToEff $ queryOne Select q (crea
     q =
       [sql| SELECT project_id, timestamp, trace_id::text, span_id::text, parent_span_id::text, trace_state,
                      span_name, start_time, end_time, kind, status, status_message, attributes,
-                     events, links, resource, instrumentation_scope
+                     events, links, resource, instrumentation_scope, CAST(EXTRACT(EPOCH FROM (end_time - start_time)) * 1000 AS INTEGER) as span_duration
               FROM telemetry.spans where (timestamp=?)  and project_id=? and id=? LIMIT 1|]
 
 
