@@ -6,6 +6,7 @@ import Data.Aeson (object, (.=))
 import Data.Aeson qualified as AE
 import Data.Aeson.Key qualified as AEK
 import Data.ByteString qualified as BS
+import Data.ByteString.Base16 qualified as B16
 import Data.ByteString.Base64 qualified as B64
 import Data.HashMap.Strict qualified as HashMap
 import Data.Map qualified as M
@@ -118,11 +119,15 @@ nanosecondsToUTC :: Word64 -> UTCTime
 nanosecondsToUTC ns = posixSecondsToUTCTime (fromIntegral ns / 1e9)
 
 
+byteStringToHexText :: BS.ByteString -> T.Text
+byteStringToHexText bs = decodeUtf8 (B16.encode bs)
+
+
 -- Convert a list of KeyValue to a JSONB object
 keyValueToJSONB :: V.Vector KeyValue -> AE.Value
 keyValueToJSONB kvs =
-  AE.object
-    $ V.foldr (\kv acc -> (AEK.fromText $ LT.toStrict kv.keyValueKey, convertAnyValue kv.keyValueValue) : acc) [] kvs
+  AE.object $
+    V.foldr (\kv acc -> (AEK.fromText $ LT.toStrict kv.keyValueKey, convertAnyValue kv.keyValueValue) : acc) [] kvs
 
 
 convertAnyValue :: Maybe AnyValue -> AE.Value
@@ -199,8 +204,8 @@ convertLogRecord resource scope lr =
     , id = Nothing
     , timestamp = nanosecondsToUTC lr.logRecordTimeUnixNano
     , observedTimestamp = nanosecondsToUTC lr.logRecordObservedTimeUnixNano
-    , traceId = decodeUtf8 lr.logRecordTraceId
-    , spanId = if BS.null lr.logRecordSpanId then Nothing else Just (decodeUtf8 lr.logRecordSpanId)
+    , traceId = byteStringToHexText lr.logRecordTraceId
+    , spanId = if BS.null lr.logRecordSpanId then Nothing else Just (byteStringToHexText lr.logRecordSpanId)
     , severityText = parseSeverityLevel $ toText lr.logRecordSeverityText
     , severityNumber = fromIntegral $ (either id HsProtobuf.fromProtoEnum . HsProtobuf.enumerated) lr.logRecordSeverityNumber
     , body = convertAnyValue lr.logRecordBody
@@ -217,9 +222,9 @@ convertSpanRecord resource scope sp =
         let v = Unsafe.fromJust $ Just sp >>= \s -> find (\kv -> kv.keyValueKey == "at-project-id") s.spanAttributes >>= (.keyValueValue) >>= (.anyValueValue)
         UUID.fromText =<< anyValueToString v
     , timestamp = nanosecondsToUTC sp.spanStartTimeUnixNano
-    , traceId = decodeUtf8 sp.spanTraceId
-    , spanId = decodeUtf8 sp.spanSpanId
-    , parentSpanId = if BS.null sp.spanParentSpanId then Nothing else Just $ decodeUtf8 sp.spanParentSpanId
+    , traceId = byteStringToHexText sp.spanTraceId
+    , spanId = byteStringToHexText sp.spanSpanId
+    , parentSpanId = if BS.null sp.spanParentSpanId then Nothing else Just $ byteStringToHexText sp.spanParentSpanId
     , traceState = Just (toText sp.spanTraceState)
     , spanName = toText sp.spanName
     , startTime = nanosecondsToUTC sp.spanStartTimeUnixNano
@@ -288,31 +293,31 @@ parseSpanStatus st = case st of
 
 eventsToJSONB :: [Span_Event] -> AE.Value
 eventsToJSONB spans =
-  AE.toJSON
-    $ ( \sp ->
-          object
-            [ "event_name" .= toText sp.span_EventName
-            , "event_time" .= nanosecondsToUTC sp.span_EventTimeUnixNano
-            , "event_attributes" .= keyValueToJSONB sp.span_EventAttributes
-            , "event_dropped_attributes_count" .= fromIntegral sp.span_EventDroppedAttributesCount
-            ]
-      )
-    <$> spans
+  AE.toJSON $
+    ( \sp ->
+        object
+          [ "event_name" .= toText sp.span_EventName
+          , "event_time" .= nanosecondsToUTC sp.span_EventTimeUnixNano
+          , "event_attributes" .= keyValueToJSONB sp.span_EventAttributes
+          , "event_dropped_attributes_count" .= fromIntegral sp.span_EventDroppedAttributesCount
+          ]
+    )
+      <$> spans
 
 
 linksToJSONB :: [Span_Link] -> AE.Value
 linksToJSONB lnks =
-  AE.toJSON
-    $ ( \lnk ->
-          object
-            [ "link_span_id" .= (decodeUtf8 lnk.span_LinkSpanId :: Text)
-            , "link_trace_id" .= (decodeUtf8 lnk.span_LinkTraceId :: Text)
-            , "link_attributes" .= keyValueToJSONB lnk.span_LinkAttributes
-            , "link_dropped_attributes_count" .= fromIntegral lnk.span_LinkDroppedAttributesCount
-            , "link_flags" .= fromIntegral lnk.span_LinkFlags
-            ]
-      )
-    <$> lnks
+  AE.toJSON $
+    ( \lnk ->
+        object
+          [ "link_span_id" .= (decodeUtf8 lnk.span_LinkSpanId :: Text)
+          , "link_trace_id" .= (decodeUtf8 lnk.span_LinkTraceId :: Text)
+          , "link_attributes" .= keyValueToJSONB lnk.span_LinkAttributes
+          , "link_dropped_attributes_count" .= fromIntegral lnk.span_LinkDroppedAttributesCount
+          , "link_flags" .= fromIntegral lnk.span_LinkFlags
+          ]
+    )
+      <$> lnks
 
 
 ---------------------------------------------------------------------------------------
