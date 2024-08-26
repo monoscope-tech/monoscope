@@ -199,8 +199,7 @@ convertLogRecord :: Maybe Resource -> Maybe InstrumentationScope -> LogRecord ->
 convertLogRecord resource scope lr =
   Telemetry.LogRecord
     { projectId = fromMaybe (error "invalid at-project-id in logs") do
-        let v = resource >>= \r -> find (\kv -> kv.keyValueKey == "at-project-id") r.resourceAttributes >>= (.keyValueValue) >>= (.anyValueValue)
-        UUID.fromText =<< anyValueToString =<< v
+        UUID.fromText =<< anyValueToString =<< pid'
     , id = Nothing
     , timestamp = nanosecondsToUTC lr.logRecordTimeUnixNano
     , observedTimestamp = nanosecondsToUTC lr.logRecordObservedTimeUnixNano
@@ -213,14 +212,16 @@ convertLogRecord resource scope lr =
     , resource = resourceToJSONB resource
     , instrumentationScope = instrumentationScopeToJSONB scope
     }
+  where
+    pid = resource >>= \r -> find (\kv -> kv.keyValueKey == "at-project-id") r.resourceAttributes >>= (.keyValueValue) >>= (.anyValueValue)
+    pid' = if isJust pid then pid else find (\kv -> kv.keyValueKey == "at-project-id") lr.logRecordAttributes >>= (.keyValueValue) >>= (.anyValueValue)
 
 
 convertSpanRecord :: Maybe Resource -> Maybe InstrumentationScope -> Span -> Telemetry.SpanRecord
 convertSpanRecord resource scope sp =
   Telemetry.SpanRecord
     { projectId = fromMaybe (error "invalid at-project-id in span") do
-        let v = Unsafe.fromJust $ Just sp >>= \s -> find (\kv -> kv.keyValueKey == "at-project-id") s.spanAttributes >>= (.keyValueValue) >>= (.anyValueValue)
-        UUID.fromText =<< anyValueToString v
+        UUID.fromText =<< anyValueToString =<< pid'
     , timestamp = nanosecondsToUTC sp.spanStartTimeUnixNano
     , traceId = byteStringToHexText sp.spanTraceId
     , spanId = byteStringToHexText sp.spanSpanId
@@ -239,6 +240,9 @@ convertSpanRecord resource scope sp =
     , instrumentationScope = instrumentationScopeToJSONB scope
     , spanDuration = 0
     }
+  where
+    pid = resource >>= \r -> find (\kv -> kv.keyValueKey == "at-project-id") r.resourceAttributes >>= (.keyValueValue) >>= (.anyValueValue)
+    pid' = if isJust pid then pid else find (\kv -> kv.keyValueKey == "at-project-id") sp.spanAttributes >>= (.keyValueValue) >>= (.anyValueValue)
 
 
 traceServiceExportH
