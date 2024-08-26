@@ -195,7 +195,6 @@ buildReqDumpSQL exps = (q, join qByArgs, mFrom, mTo)
 type M = Maybe
 
 
-
 chartsGetH :: M ChartType -> M Text -> M Projects.ProjectId -> M GroupBy -> M [QueryBy] -> M Int -> M Int -> M Text -> M Text -> M Bool -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))
 chartsGetH typeM Nothing pidM groupByM queryByM slotsM limitsM themeM idM showLegendM sinceM fromM toM sourceM = chartsGetDef typeM Nothing pidM groupByM queryByM slotsM limitsM themeM idM showLegendM sinceM fromM toM sourceM
 chartsGetH typeM (Just queryRaw) pidM groupByM queryByM slotsM limitsM themeM idM showLegendM sinceM fromM toM sourceM = chartsGetRaw typeM queryRaw pidM groupByM queryByM slotsM limitsM themeM idM showLegendM sinceM fromM toM sourceM

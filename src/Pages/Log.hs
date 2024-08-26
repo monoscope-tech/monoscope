@@ -56,12 +56,14 @@ import Utils
 -- >>> import Data.Aeson
 
 
-apiLogH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe UTCTime -> Maybe UTCTime -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders LogsGet)
-apiLogH pid queryM cols' sinceM fromM toM layoutM sourceM hxRequestM hxBoostedM = do
+apiLogH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders LogsGet)
+apiLogH pid queryM cols' sinceM fromMT toMT layoutM sourceM hxRequestM hxBoostedM = do
   (sess, project) <- Sessions.sessionAndProject pid
   let source = fromMaybe "requests" sourceM
   let summaryCols = T.splitOn "," (fromMaybe "" cols')
   let query = fromMaybe "" queryM
+  let fromM = parseUTC $ fromMaybe "" fromMT
+  let toM = parseUTC $ fromMaybe "" toMT
   now <- Time.currentTime
   let (fromD, toD, currentRange) = case sinceM of
         Just "1H" -> (Just $ addUTCTime (negate $ secondsToNominalDiffTime 3600) now, Just now, Just "Last Hour")
@@ -393,7 +395,6 @@ logItemRows_ pid requests curatedCols colIdxMap nextLogsURL source = do
       , hxTarget_ "closest tr"
       ]
       (span_ [class_ "inline-block"] "LOAD MORE " >> span_ [class_ "loading loading-dots loading-sm inline-block pl-3"] "")
-
 
 
 errorClass :: Bool -> V.Vector Value -> HM.HashMap Text Int -> (Int, Int, Text)

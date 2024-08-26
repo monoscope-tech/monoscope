@@ -1,8 +1,7 @@
 module Pages.LogSpec (spec) where
 
-import Data.Time.Clock (UTCTime, addUTCTime)
-import Test.Hspec
 import Data.Time (defaultTimeLocale, formatTime, getCurrentTime, parseTimeM)
+import Data.Time.Clock (UTCTime, addUTCTime)
 import Data.UUID qualified as UUID
 import Models.Projects.Projects qualified as Projects
 import Pages.BodyWrapper (PageCtx (..))
@@ -11,6 +10,7 @@ import Pkg.TestUtils
 import ProcessMessage (processRequestMessages)
 import Relude
 import Relude.Unsafe qualified as Unsafe
+import Test.Hspec
 
 
 testPid :: Projects.ProjectId
@@ -57,7 +57,7 @@ spec = aroundAll withTestResources do
           content.cols `shouldBe` ["id", "created_at", "rest"]
           length content.requestVecs `shouldBe` 200
 
-          let cur = textToUTCTime $ fromMaybe "" content.cursor
+          let cur = content.cursor
           pg2 <-
             toServantResponse trATCtx trSessAndHeader trLogger $ Log.apiLogH testPid Nothing Nothing Nothing cur Nothing (Just "loadmore") Nothing (Just "true") Nothing
           case pg2 of

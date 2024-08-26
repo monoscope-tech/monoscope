@@ -225,7 +225,7 @@ sqlFromQueryComponents sqlCfg qc =
       , qc
           { finalColumns = listToColNames selectedCols
           , countQuery
-          , finalSqlQuery 
+          , finalSqlQuery
           , finalTimechartQuery = Just timeChartQuery
           , finalAlertQuery = Just alertQuery
           }

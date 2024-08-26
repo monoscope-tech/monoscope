@@ -46,6 +46,7 @@ import Data.Text qualified as T
 import Data.Time (ZonedTime, defaultTimeLocale, parseTimeM)
 import Data.Time.Clock (UTCTime)
 import Data.Time.Format (formatTime)
+import Data.Time.Format.ISO8601 (iso8601ParseM)
 import Data.Vector qualified as V
 import Database.PostgreSQL.Simple.ToField (ToField (..))
 import Database.PostgreSQL.Transact
@@ -59,7 +60,6 @@ import Relude hiding (show)
 import Servant
 import Text.Regex.TDFA ((=~))
 import Text.Show
-import Data.Time.Format.ISO8601 (iso8601ParseM)
 
 
 -- Added only for satisfying the tests
@@ -238,9 +238,11 @@ displayTimestamp inputDateString =
     (toText . formatTime defaultTimeLocale "%b %d %H:%M:%S")
     (parseTimeM True defaultTimeLocale "%Y-%m-%dT%H:%M:%S%QZ" (toString inputDateString) :: Maybe UTCTime)
 
+
 formatUTC :: UTCTime -> Text
 formatUTC utcTime =
   toText $ formatTime defaultTimeLocale "%Y-%m-%dT%H:%M:%S%QZ" utcTime
+
 
 parseUTC :: Text -> Maybe UTCTime
 parseUTC utcTime = iso8601ParseM (toString utcTime)
