@@ -89,13 +89,11 @@ processList msgs attrs = do
 
 
 projectApiKeyFromB64 :: Text -> Text -> ProjectApiKeys.ProjectApiKeyId
-projectApiKeyFromB64 apiKeyEncryptionSecretKey projectKey = do
-  let authTextE = B64.decodeBase64Untyped $ encodeUtf8 $ projectKey
-  case authTextE of
-    Left err -> error err
-    Right authText -> do
-      let decryptedKey = ProjectApiKeys.decryptAPIKey (encodeUtf8 apiKeyEncryptionSecretKey) authText
-      Unsafe.fromJust $ ProjectApiKeys.ProjectApiKeyId <$> UUID.fromASCIIBytes decryptedKey
+projectApiKeyFromB64 apiKeyEncryptionSecretKey projectKey = case (B64.decodeBase64Untyped $ encodeUtf8 projectKey) of
+  Left err -> error err
+  Right authText -> do
+    let decryptedKey = ProjectApiKeys.decryptAPIKey (encodeUtf8 apiKeyEncryptionSecretKey) authText
+    Unsafe.fromJust $ ProjectApiKeys.ProjectApiKeyId <$> UUID.fromASCIIBytes decryptedKey
 
 
 logsServiceExportH
