@@ -199,7 +199,7 @@ convertLogRecord resource scope lr =
     { projectId = fromMaybe (error "invalid at-project-id in logs") do
         UUID.fromText =<< anyValueToString =<< pid'
     , id = Nothing
-    , timestamp = nanosecondsToUTC lr.logRecordTimeUnixNano
+    , timestamp = if lr.logRecordTimeUnixNano == 0 then nanosecondsToUTC lr.logRecordObservedTimeUnixNano else  nanosecondsToUTC lr.logRecordTimeUnixNano
     , observedTimestamp = nanosecondsToUTC lr.logRecordObservedTimeUnixNano
     , traceId = byteStringToHexText lr.logRecordTraceId
     , spanId = if BS.null lr.logRecordSpanId then Nothing else Just (byteStringToHexText lr.logRecordSpanId)
