@@ -89,13 +89,11 @@ processList msgs attrs = do
 
 
 projectApiKeyFromB64 :: Text -> Text -> ProjectApiKeys.ProjectApiKeyId
-projectApiKeyFromB64 apiKeyEncryptionSecretKey projectKey = do
-  let authTextE = B64.decodeBase64Untyped $ encodeUtf8 $ projectKey
-  case authTextE of
-    Left err -> error err
-    Right authText -> do
-      let decryptedKey = ProjectApiKeys.decryptAPIKey (encodeUtf8 apiKeyEncryptionSecretKey) authText
-      Unsafe.fromJust $ ProjectApiKeys.ProjectApiKeyId <$> UUID.fromASCIIBytes decryptedKey
+projectApiKeyFromB64 apiKeyEncryptionSecretKey projectKey = case (B64.decodeBase64Untyped $ encodeUtf8 projectKey) of
+  Left err -> error err
+  Right authText -> do
+    let decryptedKey = ProjectApiKeys.decryptAPIKey (encodeUtf8 apiKeyEncryptionSecretKey) authText
+    Unsafe.fromJust $ ProjectApiKeys.ProjectApiKeyId <$> UUID.fromASCIIBytes decryptedKey
 
 
 logsServiceExportH
@@ -201,7 +199,7 @@ convertLogRecord resource scope lr =
     { projectId = fromMaybe (error "invalid at-project-id in logs") do
         UUID.fromText =<< anyValueToString =<< pid'
     , id = Nothing
-    , timestamp = nanosecondsToUTC lr.logRecordTimeUnixNano
+    , timestamp = if lr.logRecordTimeUnixNano == 0 then nanosecondsToUTC lr.logRecordObservedTimeUnixNano else  nanosecondsToUTC lr.logRecordTimeUnixNano
     , observedTimestamp = nanosecondsToUTC lr.logRecordObservedTimeUnixNano
     , traceId = byteStringToHexText lr.logRecordTraceId
     , spanId = if BS.null lr.logRecordSpanId then Nothing else Just (byteStringToHexText lr.logRecordSpanId)

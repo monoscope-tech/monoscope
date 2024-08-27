@@ -12,7 +12,8 @@ module Models.Telemetry.Telemetry (
   bulkInsertSpans,
   SpanEvent (..),
   SpanLink (..),
-) where
+)
+where
 
 import Data.Aeson qualified as AE
 import Data.ByteString.Base16 qualified as B16
@@ -47,12 +48,9 @@ instance Show a => ToField (WrappedEnum prefix a) where
 
 
 instance (KnownSymbol prefix, Typeable a, Read a) => FromField (WrappedEnum prefix a) where
-  fromField f bs = do
-    let pfx = symbolVal (Proxy @prefix)
-    case bs of
-      Nothing -> returnError UnexpectedNull f ""
-      Just bss -> do
-        pure $ WrappedEnum (Unsafe.read $ pfx <> (toString $ toTitle (decodeUtf8 bss)))
+  fromField f = \case
+    Nothing -> returnError UnexpectedNull f ""
+    Just bss -> pure $ WrappedEnum (Unsafe.read $ (symbolVal (Proxy @prefix)) <> (toString $ toTitle (decodeUtf8 bss)))
 
 
 data SeverityLevel = SLDebug | SLInfo | SLWarn | SLError | SLFatal
