@@ -8,6 +8,7 @@ import Control.Concurrent.Async (async, waitAnyCancel)
 import Control.Exception.Safe qualified as Safe
 import Data.Aeson qualified as Aeson
 import Data.Pool as Pool (destroyAllResources)
+import Data.Text qualified as T
 import Effectful
 import Effectful.Concurrent (runConcurrent)
 import Effectful.Fail (runFailIO)
@@ -23,7 +24,6 @@ import Network.Wai.Log qualified as WaiLog
 import Network.Wai.Middleware.Heartbeat (heartbeatMiddleware)
 import Opentelemetry.OtlpServer qualified as OtlpServer
 import Pkg.Queue qualified as Queue
-import Data.Text qualified as T
 import ProcessMessage (processMessages)
 import Relude
 import Servant qualified

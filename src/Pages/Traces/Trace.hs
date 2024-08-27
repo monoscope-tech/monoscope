@@ -53,3 +53,4 @@ tracePage pid traceItem sId = do
           div_ [class_ "font-medium"] do
             span_ "Duration"
             span_ [class_ "text-sm font-normal badge badge-ghost"] $ toHtml $ getDurationNSMS traceItem.traceDurationNs
+          div_ [] $ show traceItem.serviceNames

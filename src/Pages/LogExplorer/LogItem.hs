@@ -150,24 +150,24 @@ expandAPIlogItem' pid req modal = do
 
       div_ [class_ "tabs tabs-bordered place-content-start ", role_ "tablist"] do
         input_ [type_ "radio", name_ $ "req-details-tabx-" <> show req.id, role_ "tab", Aria.label_ "Body", class_ "tab w-max", checked_]
-        div_ [class_ "tab-content grow w-full", role_ "tabpanel"] $
-          div_ [class_ "bg-gray-50 m-4  p-2 rounded-lg border break-all", id_ "req_body_json"] $
-            jsonValueToHtmlTree req.requestBody
+        div_ [class_ "tab-content grow w-full", role_ "tabpanel"]
+          $ div_ [class_ "bg-gray-50 m-4  p-2 rounded-lg border break-all", id_ "req_body_json"]
+          $ jsonValueToHtmlTree req.requestBody
 
         input_ [type_ "radio", name_ $ "req-details-tabx-" <> show req.id, role_ "tab", Aria.label_ "Headers", class_ "tab"]
-        div_ [class_ "tab-content grow w-full", role_ "tabpanel"] $
-          div_ [class_ "bg-gray-50 m-4 p-2 rounded-lg border break-all", id_ "req_headers_json"] $
-            jsonValueToHtmlTree req.requestHeaders
+        div_ [class_ "tab-content grow w-full", role_ "tabpanel"]
+          $ div_ [class_ "bg-gray-50 m-4 p-2 rounded-lg border break-all", id_ "req_headers_json"]
+          $ jsonValueToHtmlTree req.requestHeaders
 
         input_ [type_ "radio", name_ $ "req-details-tabx-" <> show req.id, role_ "tab", Aria.label_ "Query Params", class_ "tab break-keep"]
-        div_ [class_ "tab-content grow w-full", role_ "tabpanel"] $
-          div_ [class_ "bg-gray-50 m-4 p-2 rounded-lg border", id_ "query_params_json"] $
-            jsonValueToHtmlTree req.queryParams
+        div_ [class_ "tab-content grow w-full", role_ "tabpanel"]
+          $ div_ [class_ "bg-gray-50 m-4 p-2 rounded-lg border", id_ "query_params_json"]
+          $ jsonValueToHtmlTree req.queryParams
 
         input_ [type_ "radio", name_ $ "req-details-tabx-" <> show req.id, role_ "tab", Aria.label_ "Path Params", class_ "tab break-keep"]
-        div_ [class_ "tab-content grow w-full", role_ "tabpanel"] $
-          div_ [class_ "bg-gray-50 m-4 p-2 rounded-lg border", id_ "path_params_json"] $
-            jsonValueToHtmlTree req.pathParams
+        div_ [class_ "tab-content grow w-full", role_ "tabpanel"]
+          $ div_ [class_ "bg-gray-50 m-4 p-2 rounded-lg border", id_ "path_params_json"]
+          $ jsonValueToHtmlTree req.pathParams
 
     -- response details
     div_ [class_ "border rounded-lg mt-8", id_ "reponse_detail_container"] do
@@ -176,14 +176,14 @@ expandAPIlogItem' pid req modal = do
 
       div_ [class_ "tabs tabs-bordered place-content-start grid grid-flow-col", role_ "tablist"] do
         input_ [type_ "radio", name_ "resp-details-tab", role_ "tab", Aria.label_ "Body", class_ "tab", checked_]
-        div_ [class_ "tab-content", role_ "tabpanel"] $
-          div_ [class_ "bg-gray-50 m-4  p-2 rounded-lg border", id_ "res_body_json"] $
-            jsonValueToHtmlTree req.responseBody
+        div_ [class_ "tab-content", role_ "tabpanel"]
+          $ div_ [class_ "bg-gray-50 m-4  p-2 rounded-lg border", id_ "res_body_json"]
+          $ jsonValueToHtmlTree req.responseBody
 
         input_ [type_ "radio", name_ "resp-details-tab", role_ "tab", Aria.label_ "Headers", class_ "tab"]
-        div_ [class_ "tab-content", role_ "tabpanel"] $
-          div_ [class_ "bg-gray-50 m-4 p-2 rounded-lg border", id_ "res_headers_json"] $
-            jsonValueToHtmlTree req.responseHeaders
+        div_ [class_ "tab-content", role_ "tabpanel"]
+          $ div_ [class_ "bg-gray-50 m-4 p-2 rounded-lg border", id_ "res_headers_json"]
+          $ jsonValueToHtmlTree req.responseHeaders
 
 
 apiLogItemH :: Projects.ProjectId -> UUID.UUID -> UTCTime -> Maybe Text -> ATAuthCtx (RespHeaders ApiLogItem)
@@ -240,8 +240,8 @@ apiLogItemView pid logId req expandItemPath source = do
         (expandItemPath <> "/detailed?source=" <> source)
       $ span_ [class_ "btn btn-sm btn-outline"] ("Expand" >> faSprite_ "expand" "regular" "h-3 w-3")
     let reqJson = decodeUtf8 $ AE.encode req
-    when (source == "requests") $
-      button_
+    when (source == "requests")
+      $ button_
         [ class_ "btn btn-sm btn-outline"
         , term "data-reqJson" reqJson
         , onclick_ "window.buildCurlRequest(event)"
@@ -252,9 +252,9 @@ apiLogItemView pid logId req expandItemPath source = do
             Just (AE.String trid) -> Just trid
             _ -> Nothing
           _ -> Nothing
-    when (source == "spans" && isJust trId) $
-      Components.drawerWithURLContent_ ("expand-log-drawer-trace-" <> UUID.toText logId) ("/p/" <> pid.toText <> "/traces/" <> fromMaybe "" trId) $
-        span_ [class_ "btn btn-sm btn-outline"] "View Trace"
+    when (source == "spans" && isJust trId)
+      $ Components.drawerWithURLContent_ ("expand-log-drawer-trace-" <> UUID.toText logId) ("/p/" <> pid.toText <> "/traces/" <> fromMaybe "" trId)
+      $ span_ [class_ "btn btn-sm btn-outline"] "View Trace"
 
     button_
       [ class_ "btn btn-sm btn-outline"
@@ -268,8 +268,8 @@ apiLogItemView pid logId req expandItemPath source = do
 -- Function to selectively convert RequestDumpLogItem to JSON
 selectiveReqToJson :: RequestDumps.RequestDumpLogItem -> AE.Value
 selectiveReqToJson req =
-  AE.object $
-    concat @[]
+  AE.object
+    $ concat @[]
       [ ["created_at" .= req.createdAt]
       , ["duration_ns" .= req.durationNs]
       , ["errors" .= req.errors]
