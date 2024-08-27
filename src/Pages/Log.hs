@@ -136,7 +136,6 @@ apiLogH pid queryM cols' cursorM' sinceM fromM toM layoutM sourceM hxRequestM hx
               , emptyStateUrl = Nothing
               , source
               }
-      traceShowM $ reqLastCreatedAtM
       case (layoutM, hxRequestM, hxBoostedM) of
         (Just "loadmore", Just "true", _) -> addRespHeaders $ LogsGetRows pid requestVecs curatedColNames colIdxMap nextLogsURL source
         (Just "resultTable", Just "true", _) -> addRespHeaders $ LogsGetResultTable page False
@@ -360,6 +359,7 @@ curateCols summaryCols cols = sortBy sortAccordingly filteredCols
       , "status"
       , "start_time"
       , "end_time"
+      , "duration"
       ]
     isLogEventB = isLogEvent cols
     filteredCols = filter (\c -> not isLogEventB || (c `notElem` defaultSummaryPaths || c `elem` summaryCols)) cols
@@ -483,10 +483,10 @@ logItemCol_ _ _ reqVec colIdxMap "duration" = span_ [class_ "badge badge-sm badg
 logItemCol_ _ _ reqVec colIdxMap "span_name" = span_ [class_ "badge badge-sm badge-ghost whitespace-nowrap", term "data-tippy-content" "span name"] $ toHtml $ fromMaybe "" $ lookupVecTextByKey reqVec colIdxMap "span_name"
 logItemCol_ _ _ reqVec colIdxMap "kind" = do
   let kind = fromMaybe "" $ lookupVecTextByKey reqVec colIdxMap "kind"
-  span_ [class_ $ "badge badge-sm " <> getKindColor kind, term "data-tippy-content" "span kind"] $ toHtml $ kind
+  span_ [class_ $ "badge badge-sm " <> getKindColor kind, term "data-tippy-content" "span kind"] $ toHtml kind
 logItemCol_ _ _ reqVec colIdxMap "status" = do
   let sts = fromMaybe "" $ lookupVecTextByKey reqVec colIdxMap "status"
-  span_ [class_ $ "badge badge-sm " <> getSpanStatusColor sts, term "data-tippy-content" "status"] $ toHtml $ sts
+  span_ [class_ $ "badge badge-sm " <> getSpanStatusColor sts, term "data-tippy-content" "status"] $ toHtml sts
 
 -- logItemCol_ _ _ reqVec colIdxMap "body" =
 logItemCol_ source pid reqVec colIdxMap key@"rest" = div_ [class_ "space-x-2 whitespace-nowrap max-w-8xl overflow-x-hidden "] do
@@ -495,6 +495,7 @@ logItemCol_ source pid reqVec colIdxMap key@"rest" = div_ [class_ "space-x-2 whi
       logItemCol_ source pid reqVec colIdxMap "severity_text"
       span_ [] $ toHtml $ fromMaybe "" $ lookupVecTextByKey reqVec colIdxMap key
     "spans" -> do
+      logItemCol_ source pid reqVec colIdxMap "duration"
       logItemCol_ source pid reqVec colIdxMap "span_name"
       logItemCol_ source pid reqVec colIdxMap "status"
       logItemCol_ source pid reqVec colIdxMap "kind"
