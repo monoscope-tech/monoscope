@@ -495,19 +495,19 @@ logItemCol_ source pid reqVec colIdxMap key@"rest" = div_ [class_ "space-x-2 whi
       logItemCol_ source pid reqVec colIdxMap "severity_text"
       span_ [] $ toHtml $ fromMaybe "" $ lookupVecTextByKey reqVec colIdxMap key
     "spans" -> do
-      logItemCol_ source pid reqVec colIdxMap "duration"
-      logItemCol_ source pid reqVec colIdxMap "span_name"
       logItemCol_ source pid reqVec colIdxMap "status"
       logItemCol_ source pid reqVec colIdxMap "kind"
+      logItemCol_ source pid reqVec colIdxMap "span_name"
+      logItemCol_ source pid reqVec colIdxMap "duration"
       span_ [] $ toHtml $ maybe "" unwrapJsonPrimValue (lookupVecByKey reqVec colIdxMap key)
     _ -> do
       if lookupVecTextByKey reqVec colIdxMap "request_type" == Just "Incoming"
         then span_ [class_ "text-center w-3 inline-flex ", term "data-tippy-content" "Incoming Request"] $ faSprite_ "arrow-down-left" "solid" "h-3 w-3 text-gray-400"
         else span_ [class_ "text-center w-3 inline-flex ", term "data-tippy-content" "Outgoing Request"] $ faSprite_ "arrow-up-right" "solid" "h-3 w-3 text-red-800"
-      logItemCol_ source pid reqVec colIdxMap "duration"
       logItemCol_ source pid reqVec colIdxMap "status_code"
       logItemCol_ source pid reqVec colIdxMap "method"
       span_ [class_ "badge badge-sm badge-ghost ", term "data-tippy-content" "URL Path"] $ toHtml $ fromMaybe "" $ lookupVecTextByKey reqVec colIdxMap "url_path"
+      logItemCol_ source pid reqVec colIdxMap "duration"
       span_ [class_ "badge badge-sm badge-ghost ", term "data-tippy-content" "Host"] $ toHtml $ fromMaybe "" $ lookupVecTextByKey reqVec colIdxMap "host"
       span_ [] $ toHtml $ maybe "" unwrapJsonPrimValue (lookupVecByKey reqVec colIdxMap key)
 logItemCol_ _ _ reqVec colIdxMap "body" = p_ [class_ "space-x-2 whitespace-nowrap max-w-8xl overflow-x-hidden"] $ toHtml $ fromMaybe "" $ lookupVecTextByKey reqVec colIdxMap "body"
