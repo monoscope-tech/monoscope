@@ -96,8 +96,8 @@ testingGetH pid filterTM = do
               [ ItemsList.BulkAction{icon = Just "check", title = "deactivate", uri = "/p/" <> pid.toText <> "/anomalies/bulk_actions/acknowlege"}
               ]
           , zeroState =
-              Just
-                $ ItemsList.ZeroState
+              Just $
+                ItemsList.ZeroState
                   { icon = "empty-set"
                   , title = "No Multistep Test/Monitor yet."
                   , description = "You're can create one to start monitoring your services."
@@ -125,16 +125,16 @@ testingGetH pid filterTM = do
                   ]
                 $ TestCollectionEditor.testSettingsModalContent_ False (def :: Testing.Collection)
           , navTabs =
-              Just
-                $ toHtml
-                $ Components.TabFilter
-                  { current = currentFilterTab
-                  , currentURL
-                  , options =
-                      [ Components.TabFilterOpt{name = "Active", count = Nothing}
-                      , Components.TabFilterOpt{name = "Inactive", count = Just inactiveColsCount}
-                      ]
-                  }
+              Just $
+                toHtml $
+                  Components.TabFilter
+                    { current = currentFilterTab
+                    , currentURL
+                    , options =
+                        [ Components.TabFilterOpt{name = "Active", count = Nothing}
+                        , Components.TabFilterOpt{name = "Inactive", count = Just inactiveColsCount}
+                        ]
+                    }
           }
   addRespHeaders $ PageCtx bwconf (ItemsList.ItemsPage listCfg $ V.map (\col -> CollectionListItemVM pid col currTime) colls)
 
@@ -211,7 +211,7 @@ collectionDashboard :: Projects.ProjectId -> Testing.CollectionId -> ATAuthCtx (
 collectionDashboard pid cid = do
   (sess, project) <- Sessions.sessionAndProject pid
   let query = "sdk_type == \"TestkitOutgoing\" and request_headers.X-Testkit-Collection-ID == \"" <> cid.toText <> "\""
-  tableAsVecE <- RequestDumps.selectLogTable pid query (Nothing, Nothing) [""] Nothing
+  tableAsVecE <- RequestDumps.selectLogTable pid query Nothing (Nothing, Nothing) [""] Nothing
   collectionM <- dbtToEff $ Testing.getCollectionById cid
   let tableAsVecM = hush tableAsVecE
   let url = "/p/" <> pid.toText <> "/testing/" <> cid.toText
@@ -246,8 +246,8 @@ dashboardPage pid cid steps passed failed schedule reqsVecM =
                 colIdxMap = listToIndexHashMap colNames
                 reqLastCreatedAtM = (\r -> lookupVecTextByKey r colIdxMap "created_at") =<< (requestVecs V.!? (V.length requestVecs - 1))
                 curatedColNames = nubOrd $ Log.curateCols [""] colNames
-                nextLogsURL = RequestDumps.requestDumpLogUrlPath pid query reqLastCreatedAtM Nothing Nothing Nothing (Just "loadmore") "requests"
-                resetLogsURL = RequestDumps.requestDumpLogUrlPath pid query Nothing Nothing Nothing Nothing Nothing "requests"
+                nextLogsURL = RequestDumps.requestDumpLogUrlPath pid query reqLastCreatedAtM Nothing Nothing Nothing Nothing (Just "loadmore") "requests"
+                resetLogsURL = RequestDumps.requestDumpLogUrlPath pid query Nothing Nothing Nothing Nothing Nothing Nothing "requests"
                 page =
                   Log.ApiLogsPageData
                     { pid

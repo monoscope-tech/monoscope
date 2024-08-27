@@ -9,6 +9,7 @@ where
 
 import Control.Error (hush)
 import Data.Aeson (Value)
+import Data.Char
 import Data.Containers.ListUtils (nubOrd)
 import Data.Default (def)
 import Data.HashMap.Strict qualified as HM
@@ -17,12 +18,15 @@ import Data.Text qualified as T
 import Data.Time (
   UTCTime,
   addUTCTime,
+  getCurrentTime,
   secondsToNominalDiffTime,
  )
 import Data.Time.Format (
   defaultTimeLocale,
   formatTime,
+  parseTimeM,
  )
+import Data.Time.Format.ISO8601 (iso8601ParseM)
 import Data.Vector qualified as V
 import Data.Vector qualified as Vector
 import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
@@ -47,6 +51,7 @@ import Relude.Unsafe qualified as Unsafe
 import System.Types
 import Text.Megaparsec (parseMaybe)
 import Utils
+import Witch (from)
 
 
 -- $setup
@@ -56,14 +61,12 @@ import Utils
 -- >>> import Data.Aeson
 
 
-apiLogH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders LogsGet)
-apiLogH pid queryM cols' sinceM fromMT toMT layoutM sourceM hxRequestM hxBoostedM = do
+apiLogH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe UTCTime -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders LogsGet)
+apiLogH pid queryM cols' cursorM' sinceM fromM toM layoutM sourceM hxRequestM hxBoostedM = do
   (sess, project) <- Sessions.sessionAndProject pid
   let source = fromMaybe "requests" sourceM
   let summaryCols = T.splitOn "," (fromMaybe "" cols')
   let query = fromMaybe "" queryM
-  let fromM = parseUTC $ fromMaybe "" fromMT
-  let toM = parseUTC $ fromMaybe "" toMT
   now <- Time.currentTime
   let (fromD, toD, currentRange) = case sinceM of
         Just "1H" -> (Just $ addUTCTime (negate $ secondsToNominalDiffTime 3600) now, Just now, Just "Last Hour")
@@ -71,21 +74,23 @@ apiLogH pid queryM cols' sinceM fromMT toMT layoutM sourceM hxRequestM hxBoosted
         Just "7D" -> (Just $ addUTCTime (negate $ secondsToNominalDiffTime $ 3600 * 24 * 7) now, Just now, Just "Last 7 Days")
         Just "14D" -> (Just $ addUTCTime (negate $ secondsToNominalDiffTime $ 3600 * 24 * 14) now, Just now, Just "Last 14 Days")
         _ -> do
-          let start = toText . formatTime defaultTimeLocale "%F %T" <$> fromM
-          let end = toText . formatTime defaultTimeLocale "%F %T" <$> toM
+          let f = (iso8601ParseM (from @Text $ fromMaybe "" fromM) :: Maybe UTCTime)
+          let t = (iso8601ParseM (from @Text $ fromMaybe "" toM) :: Maybe UTCTime)
+          let start = toText . formatTime defaultTimeLocale "%F %T" <$> f
+          let end = toText . formatTime defaultTimeLocale "%F %T" <$> t
           let range = case (start, end) of
                 (Just s, Just e) -> Just (s <> "-" <> e)
                 _ -> Nothing
-          (fromM, toM, range)
+          (f, t, range)
 
-  tableAsVecE <- RequestDumps.selectLogTable pid query (fromD, toD) summaryCols (parseMaybe pSource =<< sourceM)
+  tableAsVecE <- RequestDumps.selectLogTable pid query cursorM' (fromD, toD) summaryCols (parseMaybe pSource =<< sourceM)
 
   -- FIXME: we're silently ignoring parse errors and the likes.
   let tableAsVecM = hush tableAsVecE
 
   freeTierExceeded <-
-    dbtToEff
-      $ if project.paymentPlan == "Free"
+    dbtToEff $
+      if project.paymentPlan == "Free"
         then do
           totalRequest <- RequestDumps.getLastSevenDaysTotalRequest pid
           return $ totalRequest > 5000
@@ -108,9 +113,12 @@ apiLogH pid queryM cols' sinceM fromMT toMT layoutM sourceM hxRequestM hxBoosted
       let (requestVecs, colNames, resultCount) = tableAsVec
           curatedColNames = nubOrd $ curateCols summaryCols colNames
           colIdxMap = listToIndexHashMap colNames
-          reqLastCreatedAtM = (\r -> lookupVecTextByKey r colIdxMap "created_at") =<< (requestVecs V.!? (V.length requestVecs - 1))
-          nextLogsURL = RequestDumps.requestDumpLogUrlPath pid queryM cols' sinceM fromM (parseUTC =<< reqLastCreatedAtM) (Just "loadmore") source
-          resetLogsURL = RequestDumps.requestDumpLogUrlPath pid queryM cols' Nothing Nothing Nothing Nothing source
+          reqLastCreatedAtM =
+            if source == "requests"
+              then (\r -> lookupVecTextByKey r colIdxMap "created_at") =<< (requestVecs V.!? (V.length requestVecs - 1))
+              else (\r -> lookupVecTextByKey r colIdxMap "timestamp") =<< (requestVecs V.!? (V.length requestVecs - 1))
+          nextLogsURL = RequestDumps.requestDumpLogUrlPath pid queryM cols' reqLastCreatedAtM sinceM fromM toM (Just "loadmore") source
+          resetLogsURL = RequestDumps.requestDumpLogUrlPath pid queryM cols' Nothing Nothing Nothing Nothing Nothing source
           page =
             ApiLogsPageData
               { pid
@@ -128,7 +136,7 @@ apiLogH pid queryM cols' sinceM fromMT toMT layoutM sourceM hxRequestM hxBoosted
               , emptyStateUrl = Nothing
               , source
               }
-
+      traceShowM $ reqLastCreatedAtM
       case (layoutM, hxRequestM, hxBoostedM) of
         (Just "loadmore", Just "true", _) -> addRespHeaders $ LogsGetRows pid requestVecs curatedColNames colIdxMap nextLogsURL source
         (Just "resultTable", Just "true", _) -> addRespHeaders $ LogsGetResultTable page False
@@ -172,7 +180,7 @@ logQueryBox_ pid currentRange =
     [ class_ "card-round w-full text-sm flex gap-3 items-center p-1"
     , hxGet_ $ "/p/" <> pid.toText <> "/log_explorer"
     , hxPushUrl_ "true"
-    , hxVals_ "js:{query:window.getQueryFromEditor(), since: getTimeRange().since, from: getTimeRange().from, to:getTimeRange().to, cols:params().cols, layout:'all', source: params().source}"
+    , hxVals_ "js:{query:window.getQueryFromEditor(), since: getTimeRange().since, from: getTimeRange().from, to:getTimeRange().to, cols:params().cols, layout:'all'}"
     , termRaw "hx-on::before-request" ""
     , hxTarget_ "#resultTable"
     , hxSwap_ "outerHTML"
@@ -183,9 +191,9 @@ logQueryBox_ pid currentRange =
       div_ [class_ "flex-1"] do
         div_ [id_ "queryEditor", class_ "h-14 hidden overflow-hidden bg-gray-200"] pass
         div_ [id_ "queryBuilder"] $ termRaw "filter-element" [id_ "filterElement"] ("" :: Text)
-      div_ [class_ "form-control"]
-        $ label_ [class_ "label cursor-pointer space-x-2"]
-        $ input_ [type_ "checkbox", class_ "toggle tooltip tooltip-left", id_ "toggleQueryEditor", onclick_ "toggleQueryBuilder()", term "data-tip" "toggle query editor"]
+      div_ [class_ "form-control"] $
+        label_ [class_ "label cursor-pointer space-x-2"] $
+          input_ [type_ "checkbox", class_ "toggle tooltip tooltip-left", id_ "toggleQueryEditor", onclick_ "toggleQueryBuilder()", term "data-tip" "toggle query editor"]
       button_
         [type_ "submit", class_ "btn btn-sm btn-success"]
         do
@@ -224,9 +232,9 @@ apiLogsPage page = do
       ]
       do
         div_ [class_ "relative ml-auto w-full", style_ ""] do
-          div_ [class_ "flex justify-end  w-full p-4 "]
-            $ button_ [[__|on click add .hidden to #expand-log-modal|]]
-            $ faSprite_ "xmark" "regular" "h-8"
+          div_ [class_ "flex justify-end  w-full p-4 "] $
+            button_ [[__|on click add .hidden to #expand-log-modal|]] $
+              faSprite_ "xmark" "regular" "h-8"
           form_
             [ hxPost_ $ "/p/" <> page.pid.toText <> "/share/"
             , hxSwap_ "innerHTML"
@@ -240,6 +248,8 @@ apiLogsPage page = do
     script_
       []
       [text|
+
+
     function getTimeRange () {
       const rangeInput = document.getElementById("custom_range_input")
       const range = rangeInput.value.split("/")
@@ -292,9 +302,8 @@ resultTableAndMeta_ :: ApiLogsPageData -> Html ()
 resultTableAndMeta_ page = do
   section_ [class_ " w-full h-full overflow-hidden"] $ section_ [class_ " w-full tabs tabs-bordered items-start overflow-hidden h-full place-content-start", role_ "tablist"] do
     input_ [type_ "radio", name_ "logExplorerMain", role_ "tab", class_ "tab", checked_, Aria.label_ $ "Query results (" <> fmt (commaizeF page.resultCount) <> ")"]
-    div_ [class_ "relative overflow-y-hidden overflow-x-hidden h-full w-full tab-content ", role_ "tabpanel"] do
-      section_ [class_ "overflow-y-scroll scroll-smooth h-full w-full overflow-x-hidden", id_ "resultTableScrollParent"] do
-        resultTable_ page True
+    div_ [class_ "relative overflow-y-scroll overflow-x-hidden h-full w-full tab-content", role_ "tabpanel"] do
+      resultTable_ page True
       div_ [style_ "width:2000px"] pass
 
     input_ [type_ "radio", name_ "logExplorerMain", role_ "tab", class_ "tab", Aria.label_ "Alerts"]
@@ -308,38 +317,31 @@ resultTableAndMeta_ page = do
 
 
 resultTable_ :: ApiLogsPageData -> Bool -> Html ()
-resultTable_ page mainLog = table_
-  [ class_ "w-full table table-sm table-pin-rows table-pin-cols overflow-x-hidden"
-  , style_ "height:1px"
-  , id_ "resultTable"
-  ]
-  do
-    -- height:1px fixes the daisy ui cell minimum heights somehow.
-    let isLogEventB = isLogEvent page.cols
-    when (null page.requestVecs && (isNothing page.query || not mainLog)) $ do
-      whenJust page.isTestLog $ \query -> do
-        section_ [class_ "w-max  mx-auto my-16 p-5 sm:py-14 sm:px-24 items-center flex gap-16"] do
-          div_ [] $ faSprite_ "empty-set" "solid" "h-24 w-24"
-          div_ [class_ "flex flex-col gap-2"] do
-            h2_ [class_ "text-2xl font-bold"] "Waiting for Test run events..."
-            p_ "You're currently not running any tests yet."
-            a_ [href_ $ fromMaybe "" page.emptyStateUrl, class_ "w-max btn btn-indigo -ml-1 text-md"] "Go to test editor"
-      unless (isJust page.isTestLog) $ do
-        if mainLog
-          then do
-            section_ [class_ "w-max  mx-auto my-16 p-5 sm:py-14 sm:px-24 items-center flex gap-16"] do
-              div_ [] $ faSprite_ "empty-set" "solid" "h-24 w-24"
-              div_ [class_ "flex flex-col gap-2"] do
-                h2_ [class_ "text-2xl font-bold"] "Waiting for events..."
-                p_ "You're currently not sending any data to APItoolkit from your backends yet."
-                a_ [href_ $ "/p/" <> page.pid.toText <> "/integration_guides", class_ "w-max btn btn-indigo -ml-1 text-md"] "Read the setup guide"
-          else section_ [class_ "w-max mx-auto"] $ p_ "This request has no outgoing requests yet."
-    unless (null page.requestVecs) $ do
-      thead_ $ tr_ [class_ "divide-x b--b2"] $ forM_ page.cols $ logTableHeading_ page.pid isLogEventB
-      tbody_ [id_ "w-full log-item-table-body "] $ logItemRows_ page.pid page.requestVecs page.cols page.colIdxMap page.nextLogsURL page.source
+resultTable_ page mainLog = table_ [class_ "w-full table table-sm table-pin-rows table-pin-cols overflow-x-hidden", style_ "height:1px", id_ "resultTable"] do
+  -- height:1px fixes the cell minimum heights somehow.
+  let isLogEventB = isLogEvent page.cols
+  when (null page.requestVecs && (isNothing page.query || not mainLog)) $ do
+    whenJust page.isTestLog $ \query -> do
+      section_ [class_ "w-max  mx-auto my-16 p-5 sm:py-14 sm:px-24 items-center flex gap-16"] do
+        div_ [] $ faSprite_ "empty-set" "solid" "h-24 w-24"
+        div_ [class_ "flex flex-col gap-2"] do
+          h2_ [class_ "text-2xl font-bold"] "Waiting for Test run events..."
+          p_ "You're currently not running any tests yet."
+          a_ [href_ $ fromMaybe "" page.emptyStateUrl, class_ "w-max btn btn-indigo -ml-1 text-md"] "Go to test editor"
+    unless (isJust page.isTestLog) $ do
+      if mainLog
+        then do
+          section_ [class_ "w-max  mx-auto my-16 p-5 sm:py-14 sm:px-24 items-center flex gap-16"] do
+            div_ [] $ faSprite_ "empty-set" "solid" "h-24 w-24"
+            div_ [class_ "flex flex-col gap-2"] do
+              h2_ [class_ "text-2xl font-bold"] "Waiting for events..."
+              p_ "You're currently not sending any data to APItoolkit from your backends yet."
+              a_ [href_ $ "/p/" <> page.pid.toText <> "/integration_guides", class_ "w-max btn btn-indigo -ml-1 text-md"] "Read the setup guide"
+        else section_ [class_ "w-max mx-auto"] $ p_ "This request has no outgoing requests yet."
+  unless (null page.requestVecs) $ do
+    thead_ $ tr_ [class_ "divide-x b--b2"] $ forM_ page.cols $ logTableHeading_ page.pid isLogEventB
+    tbody_ [id_ "w-full log-item-table-body"] $ logItemRows_ page.pid page.requestVecs page.cols page.colIdxMap page.nextLogsURL page.source
 
-
--- script_ [text| document.getElementById('resultTableScrollParent').scrollTop = document.getElementById('resultTableScrollParent').scrollHeight;|]
 
 curateCols :: [Text] -> [Text] -> [Text]
 curateCols summaryCols cols = sortBy sortAccordingly filteredCols
@@ -378,23 +380,23 @@ logItemRows_ pid requests curatedCols colIdxMap nextLogsURL source = do
   forM_ requests \reqVec -> do
     let (logItemPath, _reqId) = fromMaybe ("", "") $ requestDumpLogItemUrlPath pid reqVec colIdxMap
     let (_, errCount, errClass) = errorClass True reqVec colIdxMap
-    tr_ [class_ "cursor-pointer divide-x b--b2 ", [__|on click toggle .hidden on next <tr/> then toggle .expanded-log on me|]]
-      $ forM_ curatedCols (td_ . logItemCol_ source pid reqVec colIdxMap)
-    tr_ [class_ "hidden  "] $ do
+    tr_ [class_ "cursor-pointer divide-x b--b2", [__|on click toggle .hidden on next <tr/> then toggle .expanded-log on me|]] $
+      forM_ curatedCols (td_ . logItemCol_ source pid reqVec colIdxMap)
+    tr_ [class_ "hidden"] $ do
       -- used for when a row is expanded.
       td_ $ a_ [class_ $ "inline-block h-full " <> errClass, term "data-tippy-content" $ show errCount <> " errors attached to this request"] ""
       td_ [colspan_ $ show $ length curatedCols - 1] $ div_ [hxGet_ $ logItemPath <> "?source=" <> source, hxTrigger_ "intersect once", hxSwap_ "outerHTML"] $ span_ [class_ "loading loading-dots loading-md"] ""
-  when (Vector.length requests > 199)
-    $ tr_
-    $ td_ [colspan_ $ show $ length curatedCols]
-    $ a_
-      [ class_ "cursor-pointer inline-flex justify-center py-1 px-56 ml-36 blue-800 bg-blue-100 hover:bg-blue-200 gap-3 items-center"
-      , hxTrigger_ "click, intersect once"
-      , hxSwap_ "outerHTML"
-      , hxGet_ nextLogsURL
-      , hxTarget_ "closest tr"
-      ]
-      (span_ [class_ "inline-block"] "LOAD MORE " >> span_ [class_ "loading loading-dots loading-sm inline-block pl-3"] "")
+  when (Vector.length requests > 199) $
+    tr_ $
+      td_ [colspan_ $ show $ length curatedCols] $
+        a_
+          [ class_ "cursor-pointer inline-flex justify-center py-1 px-56 ml-36 blue-800 bg-blue-100 hover:bg-blue-200 gap-3 items-center"
+          , hxTrigger_ "click, intersect once"
+          , hxSwap_ "outerHTML"
+          , hxGet_ nextLogsURL
+          , hxTarget_ "closest tr"
+          ]
+          (span_ [class_ "inline-block"] "LOAD MORE " >> span_ [class_ "loading loading-dots loading-sm inline-block pl-3"] "")
 
 
 errorClass :: Bool -> V.Vector Value -> HM.HashMap Text Int -> (Int, Int, Text)
@@ -436,7 +438,7 @@ logTableHeading_ pid isLogEventB col = logTableHeadingWrapper_ pid col $ toHtml 
 
 logTableHeadingWrapper_ :: Projects.ProjectId -> Text -> Html () -> Html ()
 logTableHeadingWrapper_ pid title child = td_
-  [ class_ $ "bg-base-200 cursor-pointer p-0 m-0 " <> if title == "_" then "w-4" else ""
+  [ class_ $ "bg-base-200 cursor-pointer p-0 m-0 " <> if title == "_" then "w-3" else ""
   ]
   $ div_
     [class_ "dropdown", term "data-tippy-content" title]
@@ -444,11 +446,11 @@ logTableHeadingWrapper_ pid title child = td_
       div_ [tabindex_ "0", role_ "button", class_ "py-1 px-3 block"] child
       ul_ [tabindex_ "0", class_ "dropdown-content z-[1] menu p-2 shadow bg-base-100 rounded-box min-w-[15rem]"] do
         li_ [class_ "underline underline-offset-2"] $ toHtml title
-        li_
-          $ a_
+        li_ $
+          a_
             [ hxGet_ $ "/p/" <> pid.toText <> "/log_explorer"
             , hxPushUrl_ "true"
-            , hxVals_ $ "js:{query:params().query,cols:removeNamedColumnToSummary('" <> title <> "'),layout:'resultTable',, source: params().source}"
+            , hxVals_ $ "js:{query:params().query,cols:removeNamedColumnToSummary('" <> title <> "'),layout:'resultTable'}"
             , hxTarget_ "#resultTable"
             , hxSwap_ "outerHTML"
             ]
@@ -481,10 +483,12 @@ logItemCol_ _ _ reqVec colIdxMap "duration" = span_ [class_ "badge badge-sm badg
 logItemCol_ _ _ reqVec colIdxMap "span_name" = span_ [class_ "badge badge-sm badge-ghost whitespace-nowrap", term "data-tippy-content" "span name"] $ toHtml $ fromMaybe "" $ lookupVecTextByKey reqVec colIdxMap "span_name"
 logItemCol_ _ _ reqVec colIdxMap "kind" = do
   let kind = fromMaybe "" $ lookupVecTextByKey reqVec colIdxMap "kind"
-  span_ [class_ $ "badge badge-sm " <> getKindColor kind, term "data-tippy-content" "span kind"] $ toHtml kind
+  span_ [class_ $ "badge badge-sm " <> getKindColor kind, term "data-tippy-content" "span kind"] $ toHtml $ kind
 logItemCol_ _ _ reqVec colIdxMap "status" = do
   let sts = fromMaybe "" $ lookupVecTextByKey reqVec colIdxMap "status"
-  span_ [class_ $ "badge badge-sm " <> getSpanStatusColor sts, term "data-tippy-content" "status"] $ toHtml sts
+  span_ [class_ $ "badge badge-sm " <> getSpanStatusColor sts, term "data-tippy-content" "status"] $ toHtml $ sts
+
+-- logItemCol_ _ _ reqVec colIdxMap "body" =
 logItemCol_ source pid reqVec colIdxMap key@"rest" = div_ [class_ "space-x-2 whitespace-nowrap max-w-8xl overflow-x-hidden "] do
   case source of
     "logs" -> do
@@ -506,9 +510,9 @@ logItemCol_ source pid reqVec colIdxMap key@"rest" = div_ [class_ "space-x-2 whi
       span_ [] $ toHtml $ maybe "" unwrapJsonPrimValue (lookupVecByKey reqVec colIdxMap key)
 logItemCol_ _ _ reqVec colIdxMap "body" = p_ [class_ "space-x-2 whitespace-nowrap max-w-8xl overflow-x-hidden"] $ toHtml $ fromMaybe "" $ lookupVecTextByKey reqVec colIdxMap "body"
 logItemCol_ _ _ reqVec colIdxMap key =
-  div_ [class_ "xwhitespace-nowrap overflow-x-hidden max-w-lg ", term "data-tippy-content" key]
-    $ toHtml
-    $ maybe "" unwrapJsonPrimValue (lookupVecByKey reqVec colIdxMap key)
+  div_ [class_ "xwhitespace-nowrap overflow-x-hidden max-w-lg ", term "data-tippy-content" key] $
+    toHtml $
+      maybe "" unwrapJsonPrimValue (lookupVecByKey reqVec colIdxMap key)
 
 
 requestDumpLogItemUrlPath :: Projects.ProjectId -> V.Vector Value -> HM.HashMap Text Int -> Maybe (Text, Text)
@@ -531,7 +535,7 @@ jsonTreeAuxillaryCode pid = do
           , id_ "menu-item-0"
           , hxGet_ $ "/p/" <> pid.toText <> "/log_explorer"
           , hxPushUrl_ "true"
-          , hxVals_ "js:{query:params().query,cols:toggleColumnToSummary(event),layout:'resultTable', since: getTimeRange().since, from: getTimeRange().from, to:getTimeRange().to, source: params().source}"
+          , hxVals_ "js:{query:params().query,cols:toggleColumnToSummary(event),layout:'resultTable', since: getTimeRange().since, from: getTimeRange().from, to:getTimeRange().to}"
           , hxTarget_ "#resultTable"
           , hxSwap_ "outerHTML"
           , -- , hxIndicator_ "#query-indicator"

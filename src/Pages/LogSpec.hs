@@ -22,7 +22,7 @@ spec = aroundAll withTestResources do
   describe "Check Log Page" do
     it "should return an empty list" \TestResources{..} -> do
       pg <-
-        toServantResponse trATCtx trSessAndHeader trLogger $ Log.apiLogH testPid Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
+        toServantResponse trATCtx trSessAndHeader trLogger $ Log.apiLogH testPid Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
 
       case pg of
         Log.LogPage (PageCtx _ content) -> do
@@ -48,7 +48,7 @@ spec = aroundAll withTestResources do
       res <- runTestBackground trATCtx $ processRequestMessages msgs
       length res `shouldBe` 202
       pg <-
-        toServantResponse trATCtx trSessAndHeader trLogger $ Log.apiLogH testPid Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
+        toServantResponse trATCtx trSessAndHeader trLogger $ Log.apiLogH testPid Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
 
       case pg of
         Log.LogPage (PageCtx _ content) -> do
@@ -57,9 +57,9 @@ spec = aroundAll withTestResources do
           content.cols `shouldBe` ["id", "created_at", "rest"]
           length content.requestVecs `shouldBe` 200
 
-          let cur = content.cursor
+          let cur = textToUTCTime $ fromMaybe "" content.cursor
           pg2 <-
-            toServantResponse trATCtx trSessAndHeader trLogger $ Log.apiLogH testPid Nothing Nothing Nothing cur Nothing (Just "loadmore") Nothing (Just "true") Nothing
+            toServantResponse trATCtx trSessAndHeader trLogger $ Log.apiLogH testPid Nothing Nothing cur Nothing Nothing Nothing (Just "loadmore") Nothing (Just "true") Nothing
           case pg2 of
             Log.LogsGetRows pid requestVecs curatedColNames colIdxMap nextLogsURL source -> do
               pid `shouldBe` testPid
