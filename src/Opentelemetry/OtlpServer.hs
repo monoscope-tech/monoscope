@@ -5,6 +5,7 @@ module Opentelemetry.OtlpServer (runServer, processList) where
 import Data.Aeson (object, (.=))
 import Data.Aeson qualified as AE
 import Data.Aeson.Key qualified as AEK
+import Data.Aeson.KeyMap qualified as KEM
 import Data.ByteString qualified as BS
 import Data.ByteString.Base16 qualified as B16
 import Data.ByteString.Base64 qualified as B64
@@ -124,8 +125,8 @@ byteStringToHexText bs = decodeUtf8 (B16.encode bs)
 -- Convert a list of KeyValue to a JSONB object
 keyValueToJSONB :: V.Vector KeyValue -> AE.Value
 keyValueToJSONB kvs =
-  AE.object
-    $ V.foldr (\kv acc -> (AEK.fromText $ LT.toStrict kv.keyValueKey, convertAnyValue kv.keyValueValue) : acc) [] kvs
+  AE.object $
+    V.foldr (\kv acc -> (AEK.fromText $ LT.toStrict kv.keyValueKey, convertAnyValue kv.keyValueValue) : acc) [] kvs
 
 
 convertAnyValue :: Maybe AnyValue -> AE.Value
@@ -174,6 +175,12 @@ convertScopeLog :: Maybe Resource -> ScopeLogs -> V.Vector Telemetry.LogRecord
 convertScopeLog resource sl = V.map (convertLogRecord resource sl.scopeLogsScope) sl.scopeLogsLogRecords
 
 
+removeProjectId :: AE.Value -> AE.Value
+removeProjectId (AE.Object v) = AE.Object $ KEM.delete "at-project-key" $ KEM.delete "at-project-id" v
+removeProjectId (AE.Array v) = AE.Array $ V.map removeProjectId v
+removeProjectId v = v
+
+
 anyValueToString :: AnyValueValue -> Maybe Text
 anyValueToString (AnyValueValueStringValue val) = Just $ toStrict val
 anyValueToString _ = Nothing
@@ -206,8 +213,8 @@ convertLogRecord resource scope lr =
     , severityText = parseSeverityLevel $ toText lr.logRecordSeverityText
     , severityNumber = fromIntegral $ (either id HsProtobuf.fromProtoEnum . HsProtobuf.enumerated) lr.logRecordSeverityNumber
     , body = convertAnyValue lr.logRecordBody
-    , attributes = keyValueToJSONB lr.logRecordAttributes
-    , resource = resourceToJSONB resource
+    , attributes = removeProjectId $ keyValueToJSONB lr.logRecordAttributes
+    , resource = removeProjectId $ resourceToJSONB resource
     , instrumentationScope = instrumentationScopeToJSONB scope
     }
   where
@@ -231,10 +238,10 @@ convertSpanRecord resource scope sp =
     , kind = parseSpanKind (HsProtobuf.enumerated sp.spanKind)
     , status = parseSpanStatus sp.spanStatus
     , statusMessage = (\s -> Just $ toText s.statusMessage) =<< sp.spanStatus
-    , attributes = keyValueToJSONB sp.spanAttributes
+    , attributes = removeProjectId $ keyValueToJSONB sp.spanAttributes
     , events = eventsToJSONB $ V.toList sp.spanEvents
     , links = linksToJSONB $ V.toList sp.spanLinks
-    , resource = resourceToJSONB resource
+    , resource = removeProjectId $ resourceToJSONB resource
     , instrumentationScope = instrumentationScopeToJSONB scope
     , spanDurationNs = 0
     }
@@ -295,31 +302,31 @@ parseSpanStatus st = case st of
 
 eventsToJSONB :: [Span_Event] -> AE.Value
 eventsToJSONB spans =
-  AE.toJSON
-    $ ( \sp ->
-          object
-            [ "event_name" .= toText sp.span_EventName
-            , "event_time" .= nanosecondsToUTC sp.span_EventTimeUnixNano
-            , "event_attributes" .= keyValueToJSONB sp.span_EventAttributes
-            , "event_dropped_attributes_count" .= fromIntegral sp.span_EventDroppedAttributesCount
-            ]
-      )
-    <$> spans
+  AE.toJSON $
+    ( \sp ->
+        object
+          [ "event_name" .= toText sp.span_EventName
+          , "event_time" .= nanosecondsToUTC sp.span_EventTimeUnixNano
+          , "event_attributes" .= keyValueToJSONB sp.span_EventAttributes
+          , "event_dropped_attributes_count" .= fromIntegral sp.span_EventDroppedAttributesCount
+          ]
+    )
+      <$> spans
 
 
 linksToJSONB :: [Span_Link] -> AE.Value
 linksToJSONB lnks =
-  AE.toJSON
-    $ ( \lnk ->
-          object
-            [ "link_span_id" .= (decodeUtf8 lnk.span_LinkSpanId :: Text)
-            , "link_trace_id" .= (decodeUtf8 lnk.span_LinkTraceId :: Text)
-            , "link_attributes" .= keyValueToJSONB lnk.span_LinkAttributes
-            , "link_dropped_attributes_count" .= fromIntegral lnk.span_LinkDroppedAttributesCount
-            , "link_flags" .= fromIntegral lnk.span_LinkFlags
-            ]
-      )
-    <$> lnks
+  AE.toJSON $
+    ( \lnk ->
+        object
+          [ "link_span_id" .= (decodeUtf8 lnk.span_LinkSpanId :: Text)
+          , "link_trace_id" .= (decodeUtf8 lnk.span_LinkTraceId :: Text)
+          , "link_attributes" .= keyValueToJSONB lnk.span_LinkAttributes
+          , "link_dropped_attributes_count" .= fromIntegral lnk.span_LinkDroppedAttributesCount
+          , "link_flags" .= fromIntegral lnk.span_LinkFlags
+          ]
+    )
+      <$> lnks
 
 
 ---------------------------------------------------------------------------------------
