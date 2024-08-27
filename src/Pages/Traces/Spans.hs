@@ -10,6 +10,7 @@ import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Telemetry (SpanRecord (..))
 import Models.Telemetry.Telemetry qualified as Telemetry
 import Relude
+import Utils
 
 
 expandedSpanItem :: Projects.ProjectId -> Telemetry.SpanRecord -> Html ()
@@ -28,9 +29,7 @@ expandedSpanItem pid sp = do
             span_ [class_ "text-sm font-normal badge badge-ghost"] $ toHtml $ take 19 $ show sp.startTime
           div_ [class_ "font-medium"] do
             span_ "Duration"
-            span_ [class_ "text-sm font-normal badge badge-ghost"]
-              $ show sp.spanDuration
-              <> " ms"
+            span_ [class_ "text-sm font-normal badge badge-ghost"] $ toHtml $ getDurationNSMS sp.spanDurationNs
 
     div_ [class_ "grid gap-6 p-6"] $ do
       div_ [class_ "grid gap-3"] $ do

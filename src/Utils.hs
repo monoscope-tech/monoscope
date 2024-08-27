@@ -34,6 +34,7 @@ module Utils (
   getSpanStatusColor,
   getKindColor,
   displayTimestamp,
+  getDurationNSMS,
 )
 where
 
@@ -229,6 +230,14 @@ lookupVecByKey vec colIdxMap key = HM.lookup key colIdxMap >>= (vec V.!?)
 
 listToIndexHashMap :: Hashable a => [a] -> HM.HashMap a Int
 listToIndexHashMap list = HM.fromList [(x, i) | (x, i) <- zip list [0 ..]]
+
+
+getDurationNSMS :: Integer -> Text
+getDurationNSMS duration
+  | duration > 1000000000 = toText $ show (duration `div` 1000000000) <> " s"
+  | duration > 1000000 = toText $ show (duration `div` 1000000) <> " ms"
+  | duration > 1000 = toText $ show (duration `div` 1000) <> " µs"
+  | otherwise = toText $ show duration <> " ns"
 
 
 displayTimestamp :: Text -> Text

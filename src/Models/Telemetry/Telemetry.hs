@@ -3,10 +3,12 @@ module Models.Telemetry.Telemetry (
   logRecordByProjectAndId,
   spanRecordByProjectAndId,
   SpanRecord (..),
+  Trace (..),
   SeverityLevel (..),
   SpanStatus (..),
   SpanKind (..),
   bulkInsertLogs,
+  getTraceDetails,
   bulkInsertSpans,
   SpanEvent (..),
   SpanLink (..),
@@ -71,13 +73,24 @@ data SpanKind = SKInternal | SKServer | SKClient | SKProducer | SKConsumer | SKU
   deriving (ToField, FromField) via WrappedEnum "SK" SpanKind
 
 
+data Trace = Trace
+  { traceId :: Text
+  , traceStartTime :: UTCTime
+  , traceDurationNs :: Integer
+  , totalSpans :: Int
+  }
+  deriving (Show, Generic)
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake Trace
+  deriving anyclass (NFData, FromRow)
+
+
 data LogRecord = LogRecord
   { projectId :: UUID
   , id :: Maybe UUID
   , timestamp :: UTCTime
   , observedTimestamp :: UTCTime
   , traceId :: Text
-  , spanId :: Maybe Text -- Hex representation
+  , spanId :: Maybe Text
   , severityText :: Maybe SeverityLevel
   , severityNumber :: Int
   , body :: AE.Value
@@ -119,7 +132,7 @@ data SpanRecord = SpanRecord
   , links :: AE.Value
   , resource :: AE.Value
   , instrumentationScope :: AE.Value
-  , spanDuration :: Int
+  , spanDurationNs :: Integer
   }
   deriving (Show, Generic)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake SpanRecord
@@ -151,6 +164,21 @@ data SpanLink = SpanLink
   deriving (ToField, FromField) via Aeson SpanLink
 
 
+getTraceDetails :: DB :> es => Projects.ProjectId -> Text -> Eff es (Maybe Trace)
+getTraceDetails pid trId = dbtToEff $ queryOne Select q (pid, trId)
+  where
+    q =
+      [sql| SELECT
+              trace_id,
+              MIN(start_time) AS trace_start_time,
+              CAST(EXTRACT(EPOCH FROM (MAX(end_time) - MIN(start_time))) * 1000000000 AS BIGINT) AS trace_duration_ns,
+              COUNT(span_id) AS total_spans
+            FROM telemetry.spans
+            WHERE  project_id = ? AND trace_id = ?
+            GROUP BY trace_id;
+        |]
+
+
 logRecordByProjectAndId :: DB :> es => Projects.ProjectId -> UTCTime -> UUID.UUID -> Eff es (Maybe LogRecord)
 logRecordByProjectAndId pid createdAt rdId = dbtToEff $ queryOne Select q (createdAt, pid, rdId)
   where
@@ -166,7 +194,7 @@ spanRecordByProjectAndId pid createdAt rdId = dbtToEff $ queryOne Select q (crea
     q =
       [sql| SELECT project_id, timestamp, trace_id::text, span_id::text, parent_span_id::text, trace_state,
                      span_name, start_time, end_time, kind, status, status_message, attributes,
-                     events, links, resource, instrumentation_scope, CAST(EXTRACT(EPOCH FROM (end_time - start_time)) * 1000 AS INTEGER) as span_duration
+                     events, links, resource, instrumentation_scope, CAST(EXTRACT(EPOCH FROM (end_time - start_time)) * 1000000000 AS BIGINT) as span_duration
               FROM telemetry.spans where (timestamp=?)  and project_id=? and id=? LIMIT 1|]
 
 

@@ -38,8 +38,8 @@ spec = aroundAll withTestResources do
       let reqMsg1 = Unsafe.fromJust $ convert $ msg1 nowTxt
       let reqMsg2 = Unsafe.fromJust $ convert $ testRequestMsgs.reqMsg2 nowTxt
       let msgs =
-            concat
-              $ replicate
+            concat $
+              replicate
                 5
                 [ ("m1", reqMsg1)
                 , ("m2", reqMsg2)
@@ -52,7 +52,7 @@ spec = aroundAll withTestResources do
         toServantResponse trATCtx trSessAndHeader trLogger $ LogItem.apiLogItemH testPid logId currentTime Nothing
 
       case pg of
-        LogItem.ApiLogItem _logId item urlPath source -> do
+        LogItem.ApiLogItem pid lId item urlPath source -> do
           item ^? key "urlPath" . _String `shouldBe` Just "/hello"
           item ^? key "rawUrl" . _String `shouldBe` Just "/hello?hi=byebye"
           item ^? key "method" . _String `shouldBe` Just "GET"
@@ -83,5 +83,5 @@ msg1 timestamp =
             "status_code":200,
             "msg_id": "00000000-0000-0000-0000-000000000000",
             "timestamp": #{timestamp},
-            "url_path":"/hello","errors":[],"tags":[]} 
+            "url_path":"/hello","errors":[],"tags":[]}
       |]
