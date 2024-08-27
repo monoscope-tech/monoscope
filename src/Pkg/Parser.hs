@@ -370,6 +370,7 @@ defaultSelectSqlQuery (Just SSpans) =
 defaultSelectSqlQuery (Just SRequests) =
   [ "id::text as id"
   , timestampLogFmt "created_at"
+  , "CAST(duration_ns / 1000000 AS INTEGER) as duration"
   , "request_type"
   , "host"
   , "status_code"

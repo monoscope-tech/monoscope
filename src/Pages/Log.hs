@@ -504,6 +504,7 @@ logItemCol_ source pid reqVec colIdxMap key@"rest" = div_ [class_ "space-x-2 whi
       if lookupVecTextByKey reqVec colIdxMap "request_type" == Just "Incoming"
         then span_ [class_ "text-center w-3 inline-flex ", term "data-tippy-content" "Incoming Request"] $ faSprite_ "arrow-down-left" "solid" "h-3 w-3 text-gray-400"
         else span_ [class_ "text-center w-3 inline-flex ", term "data-tippy-content" "Outgoing Request"] $ faSprite_ "arrow-up-right" "solid" "h-3 w-3 text-red-800"
+      logItemCol_ source pid reqVec colIdxMap "duration"
       logItemCol_ source pid reqVec colIdxMap "status_code"
       logItemCol_ source pid reqVec colIdxMap "method"
       span_ [class_ "badge badge-sm badge-ghost ", term "data-tippy-content" "URL Path"] $ toHtml $ fromMaybe "" $ lookupVecTextByKey reqVec colIdxMap "url_path"
