@@ -354,11 +354,10 @@ defaultSelectSqlQuery (Just SLogs) =
   [ "id"
   , timestampLogFmt "timestamp"
   , "severity_text"
-  , "body as rest"
+  , "body"
   , [fmt|LEFT(
         CONCAT(
-            'body=', COALESCE(body, 'null'),
-            ' attributes=', COALESCE(attributes, 'null')
+            COALESCE(attributes, 'null')
         ),
         255
     ) as rest|]
