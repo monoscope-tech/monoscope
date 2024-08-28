@@ -2,6 +2,7 @@ module Models.Telemetry.Telemetry (
   LogRecord (..),
   logRecordByProjectAndId,
   spanRecordByProjectAndId,
+  getSpandRecordsByTraceId,
   SpanRecord (..),
   Trace (..),
   SeverityLevel (..),
@@ -23,7 +24,7 @@ import Data.Time (UTCTime)
 import Data.UUID (UUID)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
-import Database.PostgreSQL.Entity.DBT (QueryNature (..), executeMany, queryOne)
+import Database.PostgreSQL.Entity.DBT (QueryNature (..), executeMany, query, queryOne)
 import Database.PostgreSQL.Simple (FromRow, ResultError (..), ToRow)
 import Database.PostgreSQL.Simple.FromField (FromField (..), fromField, returnError)
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
@@ -186,6 +187,18 @@ logRecordByProjectAndId pid createdAt rdId = dbtToEff $ queryOne Select q (creat
       [sql|SELECT project_id, id, timestamp, observed_timestamp, trace_id, span_id, severity_text,
                   severity_number, body, attributes, resource, instrumentation_scope
              FROM telemetry.logs where (timestamp=?)  and project_id=? and id=? LIMIT 1|]
+
+
+getSpandRecordsByTraceId :: DB :> es => Projects.ProjectId -> Text -> Eff es (V.Vector SpanRecord)
+getSpandRecordsByTraceId pid trId = dbtToEff $ query Select q (pid, trId)
+  where
+    q =
+      [sql|
+      SELECT project_id, timestamp, trace_id::text, span_id::text, parent_span_id::text, trace_state,
+                     span_name, start_time, end_time, kind, status, status_message, attributes,
+                     events, links, resource, instrumentation_scope, CAST(EXTRACT(EPOCH FROM (end_time - start_time)) * 1000000000 AS BIGINT) as span_duration
+              FROM telemetry.spans where project_id=? and trace_id=?
+    |]
 
 
 spanRecordByProjectAndId :: DB :> es => Projects.ProjectId -> UTCTime -> UUID.UUID -> Eff es (Maybe SpanRecord)

@@ -16,7 +16,7 @@ import Utils
 expandedSpanItem :: Projects.ProjectId -> Telemetry.SpanRecord -> Html ()
 expandedSpanItem pid sp = do
   div_ [class_ "w-full"] $ do
-    div_ [class_ "flex flex-col space-y-1.5 p-6 bg-gray-50 px-6 py-4"] $ do
+    div_ [class_ "flex flex-col space-y-1.5 bg-gray-50 py-4"] $ do
       div_ [class_ "flex flex-col gap-4"] $ do
         div_ [class_ "grid gap-1"] $ do
           h3_ [class_ "whitespace-nowrap text-2xl font-semibold leading-none tracking-tight"] $ toHtml sp.spanName
@@ -30,13 +30,11 @@ expandedSpanItem pid sp = do
           div_ [class_ "font-medium"] do
             span_ "Duration"
             span_ [class_ "text-sm font-normal badge badge-ghost"] $ toHtml $ getDurationNSMS sp.spanDurationNs
-
-    div_ [class_ "grid gap-6 p-6"] $ do
+    div_ [class_ "grid gap-6"] $ do
       div_ [class_ "grid gap-3"] $ do
         div_ [class_ "font-semibold"] "Tags"
         div_ [class_ "flex gap-3 flex-wrap"] $ do
           displaySpanJson sp.attributes
-
       div_ [class_ "grid gap-3"] $ do
         div_ [class_ "font-semibold"] "Logs"
         div_ [class_ "flex flex-col gap-1 w-full"] do
