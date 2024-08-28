@@ -171,7 +171,7 @@ getTraceDetails pid trId = dbtToEff $ queryOne Select q (pid, trId)
       [sql| SELECT
               trace_id,
               MIN(start_time) AS trace_start_time,
-              CAST(EXTRACT(EPOCH FROM (MAX(end_time) - MIN(start_time))) * 1000000000 AS BIGINT) AS trace_duration_ns,
+              CAST(EXTRACT(EPOCH FROM (MAX(COALESCE(end_time, start_time)) - MIN(start_time))) * 1000000000 AS BIGINT) AS trace_duration_ns,
               COUNT(span_id) AS total_spans,
               ARRAY_AGG(DISTINCT jsonb_extract_path_text(resource, 'service.name')) AS service_names
             FROM telemetry.spans
