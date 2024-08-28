@@ -6,22 +6,25 @@ import Network.GRPC.HighLevel (AuthContext)
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
 
 import Control.Error.Util (hush)
+import Data.Aeson ((.=))
 import Data.Aeson qualified as AE
 import Data.Containers.ListUtils (nubOrd)
 import Data.Time (defaultTimeLocale)
 import Data.Time.Format (formatTime)
 import Data.Vector qualified as V
+import Deriving.Aeson.Stock qualified as DAE
 import Lucid.Hyperscript (__)
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Telemetry qualified as Telemetry
 import Models.Users.Sessions qualified as Sessions
+import NeatInterpolation (text)
 import Pages.Log qualified as Log
 import Pages.Traces.Spans qualified as Spans
 import Pkg.Parser (pSource)
 import Relude
 import Text.Megaparsec (parseMaybe)
-import Utils (faSprite_, getDurationNSMS, listToIndexHashMap)
+import Utils (faSprite_, getDurationNSMS, listToIndexHashMap, utcTimeToNanoseconds)
 
 
 traceH :: Projects.ProjectId -> Text -> Maybe Text -> ATAuthCtx (RespHeaders TraceDetailsGet)
@@ -85,7 +88,7 @@ tracePage p = do
       div_ [] do
         div_ [role_ "tablist", class_ "tabs tabs-boxed"] $ do
           input_ [type_ "radio", name_ "my_tabs_2", role_ "tab", class_ "tab", term "aria-label" "Flame Graph", checked_]
-          div_ [role_ "tabpanel", class_ "tab-content bg-base-100 border-base-300 rounded-box p-6 h-48"] "Tab content 1"
+          div_ [role_ "tabpanel", class_ "tab-content bg-base-100 border-base-300 rounded-box p-6 h-48", id_ "trace_viz"] pass
           input_ [type_ "radio", name_ "my_tabs_2", role_ "tab", class_ "tab", term "aria-label" "Span List"]
           div_ [role_ "tabpanel", class_ "tab-content bg-base-100 border-base-300 rounded-box h-48 overflow-auto"] do
             case p.spanVec of
@@ -116,6 +119,20 @@ tracePage p = do
         div_ [class_ "flex flex-col gap-4 px-4", id_ "span-details"] do
           let tSp = fromMaybe (V.head p.spanRecords) (V.find (\s -> s.spanId == sId) p.spanRecords)
           Spans.expandedSpanItem pid tSp
+      let spanJson =
+            decodeUtf8 $
+              AE.encode $
+                p.spanRecords
+                  <&> ( \sp ->
+                          AE.object
+                            [ "span_id" .= sp.spanId
+                            , "name" .= sp.spanName
+                            , "value" .= sp.spanDurationNs
+                            , "start" .= utcTimeToNanoseconds sp.startTime
+                            , "parent_id" .= sp.parentSpanId
+                            ]
+                      )
+      script_ [text|flameGraphChart($spanJson, 'trace_viz')|]
 
 
 selectHead :: Text -> Text -> V.Vector Text -> Text -> Maybe Text -> Html ()

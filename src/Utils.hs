@@ -34,6 +34,7 @@ module Utils (
   getSpanStatusColor,
   getKindColor,
   displayTimestamp,
+  utcTimeToNanoseconds,
   getDurationNSMS,
 )
 where
@@ -46,6 +47,7 @@ import Data.Text (replace)
 import Data.Text qualified as T
 import Data.Time (ZonedTime, defaultTimeLocale, parseTimeM)
 import Data.Time.Clock (UTCTime)
+import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
 import Data.Time.Format (formatTime)
 import Data.Time.Format.ISO8601 (iso8601ParseM)
 import Data.Vector qualified as V
@@ -230,6 +232,12 @@ lookupVecByKey vec colIdxMap key = HM.lookup key colIdxMap >>= (vec V.!?)
 
 listToIndexHashMap :: Hashable a => [a] -> HM.HashMap a Int
 listToIndexHashMap list = HM.fromList [(x, i) | (x, i) <- zip list [0 ..]]
+
+
+utcTimeToNanoseconds :: UTCTime -> Integer
+utcTimeToNanoseconds utcTime =
+  let posixTime = utcTimeToPOSIXSeconds utcTime
+   in round (posixTime * 1e9)
 
 
 getDurationNSMS :: Integer -> Text
