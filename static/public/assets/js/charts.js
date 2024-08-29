@@ -337,7 +337,6 @@ function flameGraphChart(data, renderAt) {
     const recur = (item, start = 0, level = 0) => {
       const temp = {
         name: item.name,
-        // [level, start_val, end_val, name, percentage]
         value: [level, start, start + item.value, item.name, (item.value / rootVal) * 100],
         itemStyle: {
           color: ColorTypes[item.name.split(' ')[0]],
@@ -350,7 +349,9 @@ function flameGraphChart(data, renderAt) {
         prevStart = prevStart + child.value
       }
     }
-    recur(filteredJson)
+    filteredJson.forEach((item) => {
+      recur(item)
+    })
     return data
   }
   const heightOfJson = (json) => {
@@ -420,41 +421,12 @@ function flameGraphChart(data, renderAt) {
 
     const levelOfOriginalJson = heightOfJson(stackTrace)
     option = {
-      backgroundColor: {
-        type: 'linear',
-        x: 0,
-        y: 0,
-        x2: 0,
-        y2: 1,
-        colorStops: [
-          {
-            offset: 0.05,
-            color: '#eee',
-          },
-          {
-            offset: 0.95,
-            color: '#eeeeb0',
-          },
-        ],
-      },
       tooltip: {
         formatter: (params) => {
           const samples = params.value[2] - params.value[1]
           return `${params.marker} ${params.value[3]}: (${echarts.format.addCommas(samples)} samples, ${+params.value[4].toFixed(2)}%)`
         },
       },
-      title: [
-        {
-          text: 'Flame Graph',
-          left: 'center',
-          top: 10,
-          textStyle: {
-            fontFamily: 'Verdana',
-            fontWeight: 'normal',
-            fontSize: 20,
-          },
-        },
-      ],
       toolbox: {
         feature: {
           restore: {},
@@ -491,7 +463,6 @@ function flameGraphChart(data, renderAt) {
       })
     })
   }
-  console.log(fData)
   flameGraph(fData)
 }
 
@@ -508,10 +479,12 @@ function buildHierachy(spans) {
   })
   const roots = []
   spans.forEach((span) => {
-    if (span.parent_id != '') {
+    if (span.parent_id) {
       const parent = spanMap.get(span.parent_id)
       if (parent) {
         parent.children.push(span)
+      } else {
+        roots.push(span)
       }
     } else {
       roots.push(span)
