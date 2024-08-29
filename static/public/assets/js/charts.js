@@ -300,17 +300,19 @@ function latencyHistogram(renderAt, pc, data) {
 function flameGraphChart(data, renderAt) {
   const myChart = echarts.init(document.getElementById(renderAt))
   const fData = modifySpansForFlameGraph(data)
-  const ColorTypes = {
-    root: '#8fd3e8',
-    genunix: '#d95850',
-    unix: '#eb8146',
-    ufs: '#ffb248',
-    FSS: '#f2d643',
-    namefs: '#ebdba4',
-    doorfs: '#fcce10',
-    lofs: '#b5c334',
-    zfs: '#1bca93',
-  }
+  const flameGraphColors = [
+    '#EF4444', // Red-500
+    '#F59E0B', // Amber-500
+    '#F97316', // Orange-500
+    '#EAB308', // Yellow-500
+    '#84CC16', // Lime-500
+    '#22C55E', // Green-500
+    '#14B8A6', // Teal-500
+    '#06B6D4', // Cyan-500
+    '#3B82F6', // Blue-500
+    '#A855F7', // Purple-500
+  ]
+
   const filterJson = (json, id) => {
     if (id == null) {
       return json
@@ -335,11 +337,12 @@ function flameGraphChart(data, renderAt) {
     const filteredJson = filterJson(structuredClone(jsonObj), id)
     const rootVal = filteredJson.value
     const recur = (item, start = 0, level = 0) => {
+      const color = flameGraphColors[Math.floor(Math.random() * flameGraphColors.length)]
       const temp = {
         name: item.name,
         value: [level, start, start + item.value, item.name, (item.value / rootVal) * 100],
         itemStyle: {
-          color: ColorTypes[item.name.split(' ')[0]],
+          color,
         },
       }
       data.push(temp)
