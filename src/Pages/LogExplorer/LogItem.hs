@@ -3,6 +3,7 @@ module Pages.LogExplorer.LogItem (expandAPIlogItemH, expandAPIlogItem', apiLogIt
 import Data.Aeson ((.=))
 import Data.Aeson qualified as AE
 import Data.Aeson.KeyMap qualified as AEK
+import Data.Aeson.KeyMap qualified as KEM
 import Data.ByteString.Lazy qualified as BS
 import Data.Char (isDigit)
 import Data.HashMap.Strict qualified as HM
@@ -200,7 +201,7 @@ apiLogItemH pid rdId createdAt sourceM = do
       logItemM <- dbtToEff $ RequestDumps.selectRequestDumpByProjectAndId pid createdAt rdId
       pure $ selectiveReqToJson <$> logItemM
   addRespHeaders $ case logItem of
-    Just req -> ApiLogItem rdId req (requestDumpLogItemUrlPath pid rdId createdAt) source
+    Just req -> ApiLogItem pid rdId req (requestDumpLogItemUrlPath pid rdId createdAt) source
     Nothing -> ApiLogItemNotFound $ "Invalid " <> source <> " ID"
 
 
@@ -209,12 +210,12 @@ requestDumpLogItemUrlPath pid rdId timestamp = "/p/" <> pid.toText <> "/log_expl
 
 
 data ApiLogItem
-  = ApiLogItem UUID.UUID AE.Value Text Text
+  = ApiLogItem Projects.ProjectId UUID.UUID AE.Value Text Text
   | ApiLogItemNotFound Text
 
 
 instance ToHtml ApiLogItem where
-  toHtml (ApiLogItem logId req expandItemPath source) = toHtml $ apiLogItemView logId req expandItemPath source
+  toHtml (ApiLogItem pid logId req expandItemPath source) = toHtml $ apiLogItemView pid logId req expandItemPath source
   toHtml (ApiLogItemNotFound message) = div_ [] $ toHtml message
   toHtmlRaw = toHtml
 
@@ -230,12 +231,13 @@ instance ToHtml ApiItemDetailed where
   toHtmlRaw = toHtml
 
 
-apiLogItemView :: UUID.UUID -> AE.Value -> Text -> Text -> Html ()
-apiLogItemView logId req expandItemPath source = do
+apiLogItemView :: Projects.ProjectId -> UUID.UUID -> AE.Value -> Text -> Text -> Html ()
+apiLogItemView pid logId req expandItemPath source = do
   div_ [class_ "flex items-center gap-2"] do
-    Components.drawerWithURLContent_
-      ("expand-log-drawer-" <> UUID.toText logId)
-      (expandItemPath <> "/detailed?source=" <> source)
+    when (source /= "logs")
+      $ Components.drawerWithURLContent_
+        ("expand-log-drawer-" <> UUID.toText logId)
+        (expandItemPath <> "/detailed?source=" <> source)
       $ span_ [class_ "btn btn-sm btn-outline"] ("Expand" >> faSprite_ "expand" "regular" "h-3 w-3")
     let reqJson = decodeUtf8 $ AE.encode req
     when (source == "requests")
@@ -245,11 +247,14 @@ apiLogItemView logId req expandItemPath source = do
         , onclick_ "window.buildCurlRequest(event)"
         ]
         (span_ [] "Copy as curl" >> faSprite_ "copy" "regular" "h-3 w-3")
-    when (source == "spans")
-      $ Components.drawerWithURLContent_
-        ("expand-log-drawer-" <> UUID.toText logId)
-        (expandItemPath <> "/detailed?source=" <> source)
-      $ span_ [class_ "btn btn-sm btn-outline"] "Expan Trace"
+    let trId = case req of
+          AE.Object o -> case KEM.lookup "trace_id" o of
+            Just (AE.String trid) -> Just trid
+            _ -> Nothing
+          _ -> Nothing
+    when (source == "spans" && isJust trId)
+      $ Components.drawerWithURLContent_ ("expand-log-drawer-trace-" <> UUID.toText logId) ("/p/" <> pid.toText <> "/traces/" <> fromMaybe "" trId)
+      $ span_ [class_ "btn btn-sm btn-outline"] "View Trace"
 
     button_
       [ class_ "btn btn-sm btn-outline"

@@ -8,6 +8,7 @@ import Control.Concurrent.Async (async, waitAnyCancel)
 import Control.Exception.Safe qualified as Safe
 import Data.Aeson qualified as Aeson
 import Data.Pool as Pool (destroyAllResources)
+import Data.Text qualified as T
 import Effectful
 import Effectful.Concurrent (runConcurrent)
 import Effectful.Fail (runFailIO)
@@ -94,7 +95,7 @@ runServer appLogger env = do
           [async $ Safe.withException (Queue.pubsubService appLogger env env.config.requestPubsubTopics processMessages) exceptionLogger | env.config.enablePubsubService]
         , [async $ Safe.withException bgJobWorker exceptionLogger | env.config.enableBackgroundJobs]
         , [async $ Safe.withException (OtlpServer.runServer appLogger env) exceptionLogger]
-        , [async $ Safe.withException (Queue.pubsubService appLogger env env.config.otlpStreamTopics OtlpServer.processList) exceptionLogger | (not . null) env.config.otlpStreamTopics]
+        , [async $ Safe.withException (Queue.pubsubService appLogger env env.config.otlpStreamTopics OtlpServer.processList) exceptionLogger | (not . any T.null) env.config.otlpStreamTopics]
         ]
   void $ liftIO $ waitAnyCancel asyncs
 

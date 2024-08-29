@@ -29,12 +29,12 @@ where
 
 import Data.Aeson (Value)
 import Data.Aeson qualified as AE
-import Utils
 import Data.Default
 import Data.Default.Instances ()
 import Data.Text qualified as T
-import Data.Time (CalendarDiffTime, UTCTime, ZonedTime)
+import Data.Time (CalendarDiffTime, UTCTime, ZonedTime, getCurrentTime)
 import Data.Time.Format
+import Data.Time.Format.ISO8601 (ISO8601 (iso8601Format), formatShow)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity.DBT (QueryNature (Insert, Select), executeMany, query, queryOne)
@@ -340,20 +340,22 @@ requestDumpLogUrlPath
   -> Maybe Text
   -> Maybe Text
   -> Maybe Text
-  -> Maybe UTCTime
-  -> Maybe UTCTime
+  -> Maybe Text
+  -> Maybe Text
+  -> Maybe Text
   -> Maybe Text
   -> Text
   -> Text
-requestDumpLogUrlPath pid q cols sinceM fromM toM layoutM source =
-  [text|/p/$pidT/log_explorer?query=$queryT&cols=$colsT&since=$sinceT&from=$fromT&to=$toT&layout=$layoutT&source=$source|]
+requestDumpLogUrlPath pid q cols cursorM sinceM fromM toM layoutM source =
+  [text|/p/$pidT/log_explorer?query=$queryT&cols=$colsT&cursor=$cursorT&since=$sinceT&from=$fromT&to=$toT&layout=$layoutT&source=$source|]
   where
     pidT = pid.toText
     queryT = fromMaybe "" q
     colsT = fromMaybe "" cols
+    cursorT = fromMaybe "" cursorM
     sinceT = fromMaybe "" sinceM
-    fromT = maybe "" formatUTC fromM
-    toT = maybe "" formatUTC toM
+    fromT = fromMaybe "" fromM
+    toT = fromMaybe "" toM
     layoutT = fromMaybe "" layoutM
 
 
@@ -389,10 +391,10 @@ getRequestDumpsForPreviousReportPeriod pid report_type = query Select (Query $ e
     |]
 
 
-selectLogTable :: (DB :> es, Time.Time :> es) => Projects.ProjectId -> Text -> (Maybe UTCTime, Maybe UTCTime) -> [Text] -> Maybe Sources -> Eff es (Either Text (V.Vector (V.Vector Value), [Text], Int))
-selectLogTable pid extraQuery dateRange projectedColsByUser source = do
+selectLogTable :: (DB :> es, Time.Time :> es) => Projects.ProjectId -> Text -> Maybe UTCTime -> (Maybe UTCTime, Maybe UTCTime) -> [Text] -> Maybe Sources -> Eff es (Either Text (V.Vector (V.Vector Value), [Text], Int))
+selectLogTable pid extraQuery cursorM dateRange projectedColsByUser source = do
   now <- Time.currentTime
-  let resp = parseQueryToComponents ((defSqlQueryCfg pid now source){dateRange, projectedColsByUser, source}) extraQuery
+  let resp = parseQueryToComponents ((defSqlQueryCfg pid now source){cursorM, dateRange, projectedColsByUser, source}) extraQuery
   case resp of
     Left x -> pure $ Left x
     Right (q, queryComponents) -> do
@@ -538,7 +540,7 @@ selectRequestDumpByProjectAndParentId pid parentId = query Select q (pid, parent
 autoCompleteFromRequestDumps :: Projects.ProjectId -> Text -> Text -> DBT IO (V.Vector Text)
 autoCompleteFromRequestDumps pid key prefix = query Select (Query $ encodeUtf8 q) (pid, prefix <> "%")
   where
-    q = [text|SELECT DISTINCT $key from apis.request_dumps WHERE project_id = ? AND created_at > NOW() - interval '14' day AND $key <> ''  AND $key LIKE ? LIMIT 10|]
+    q = [text|SELECT DISTINCT $key from apis.request_dumps WHERE project_id = ? AND created_at > NOW() - interval '14' day AND $key <> ''  AND $key LIKE ?|]
 
 
 getTotalRequestForCurrentMonth :: Projects.ProjectId -> DBT IO Int

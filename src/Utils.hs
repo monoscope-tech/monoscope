@@ -34,6 +34,8 @@ module Utils (
   getSpanStatusColor,
   getKindColor,
   displayTimestamp,
+  utcTimeToNanoseconds,
+  getDurationNSMS,
 )
 where
 
@@ -45,7 +47,9 @@ import Data.Text (replace)
 import Data.Text qualified as T
 import Data.Time (ZonedTime, defaultTimeLocale, parseTimeM)
 import Data.Time.Clock (UTCTime)
+import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
 import Data.Time.Format (formatTime)
+import Data.Time.Format.ISO8601 (iso8601ParseM)
 import Data.Vector qualified as V
 import Database.PostgreSQL.Simple.ToField (ToField (..))
 import Database.PostgreSQL.Transact
@@ -59,7 +63,6 @@ import Relude hiding (show)
 import Servant
 import Text.Regex.TDFA ((=~))
 import Text.Show
-import Data.Time.Format.ISO8601 (iso8601ParseM)
 
 
 -- Added only for satisfying the tests
@@ -231,6 +234,20 @@ listToIndexHashMap :: Hashable a => [a] -> HM.HashMap a Int
 listToIndexHashMap list = HM.fromList [(x, i) | (x, i) <- zip list [0 ..]]
 
 
+utcTimeToNanoseconds :: UTCTime -> Integer
+utcTimeToNanoseconds utcTime =
+  let posixTime = utcTimeToPOSIXSeconds utcTime
+   in round (posixTime * 1e9)
+
+
+getDurationNSMS :: Integer -> Text
+getDurationNSMS duration
+  | duration > 1000000000 = toText $ show (duration `div` 1000000000) <> " s"
+  | duration > 1000000 = toText $ show (duration `div` 1000000) <> " ms"
+  | duration > 1000 = toText $ show (duration `div` 1000) <> " µs"
+  | otherwise = toText $ show duration <> " ns"
+
+
 displayTimestamp :: Text -> Text
 displayTimestamp inputDateString =
   maybe
@@ -238,9 +255,11 @@ displayTimestamp inputDateString =
     (toText . formatTime defaultTimeLocale "%b %d %H:%M:%S")
     (parseTimeM True defaultTimeLocale "%Y-%m-%dT%H:%M:%S%QZ" (toString inputDateString) :: Maybe UTCTime)
 
+
 formatUTC :: UTCTime -> Text
 formatUTC utcTime =
   toText $ formatTime defaultTimeLocale "%Y-%m-%dT%H:%M:%S%QZ" utcTime
+
 
 parseUTC :: Text -> Maybe UTCTime
 parseUTC utcTime = iso8601ParseM (toString utcTime)

@@ -5,7 +5,9 @@ module Opentelemetry.OtlpServer (runServer, processList) where
 import Data.Aeson (object, (.=))
 import Data.Aeson qualified as AE
 import Data.Aeson.Key qualified as AEK
+import Data.Aeson.KeyMap qualified as KEM
 import Data.ByteString qualified as BS
+import Data.ByteString.Base16 qualified as B16
 import Data.ByteString.Base64 qualified as B64
 import Data.HashMap.Strict qualified as HashMap
 import Data.Map qualified as M
@@ -88,13 +90,11 @@ processList msgs attrs = do
 
 
 projectApiKeyFromB64 :: Text -> Text -> ProjectApiKeys.ProjectApiKeyId
-projectApiKeyFromB64 apiKeyEncryptionSecretKey projectKey = do
-  let authTextE = B64.decodeBase64Untyped $ encodeUtf8 $ projectKey
-  case authTextE of
-    Left err -> error err
-    Right authText -> do
-      let decryptedKey = ProjectApiKeys.decryptAPIKey (encodeUtf8 apiKeyEncryptionSecretKey) authText
-      Unsafe.fromJust $ ProjectApiKeys.ProjectApiKeyId <$> UUID.fromASCIIBytes decryptedKey
+projectApiKeyFromB64 apiKeyEncryptionSecretKey projectKey = case (B64.decodeBase64Untyped $ encodeUtf8 projectKey) of
+  Left err -> error err
+  Right authText -> do
+    let decryptedKey = ProjectApiKeys.decryptAPIKey (encodeUtf8 apiKeyEncryptionSecretKey) authText
+    Unsafe.fromJust $ ProjectApiKeys.ProjectApiKeyId <$> UUID.fromASCIIBytes decryptedKey
 
 
 logsServiceExportH
@@ -103,10 +103,10 @@ logsServiceExportH
   -> ServerRequest 'Normal ExportLogsServiceRequest ExportLogsServiceResponse
   -> IO (ServerResponse 'Normal ExportLogsServiceResponse)
 logsServiceExportH appLogger appCtx (ServerNormalRequest meta (ExportLogsServiceRequest req)) = do
-  let projectKey = T.replace "Bearer " "" $ decodeUtf8 $ Unsafe.fromJust $ Safe.headMay =<< M.lookup "authorization" meta.metadata.unMap
-      apiKeyUUID = projectApiKeyFromB64 appCtx.config.apiKeyEncryptionSecretKey projectKey
+  -- let projectKey = T.replace "Bearer " "" $ decodeUtf8 $ Unsafe.fromJust $ Safe.headMay =<< M.lookup "authorization" meta.metadata.unMap
+  --     apiKeyUUID = projectApiKeyFromB64 appCtx.config.apiKeyEncryptionSecretKey projectKey
   _ <- runBackground appLogger appCtx do
-    pApiKey <- dbtToEff $ ProjectApiKeys.getProjectApiKey apiKeyUUID
+    -- pApiKey <- dbtToEff $ ProjectApiKeys.getProjectApiKey apiKeyUUID
     -- No longer inserting the log using project id from api key. Maybe atleast assert the project id at this point?
     let logRecords = join $ V.map convertToLog req
     Telemetry.bulkInsertLogs logRecords
@@ -118,11 +118,15 @@ nanosecondsToUTC :: Word64 -> UTCTime
 nanosecondsToUTC ns = posixSecondsToUTCTime (fromIntegral ns / 1e9)
 
 
+byteStringToHexText :: BS.ByteString -> T.Text
+byteStringToHexText bs = decodeUtf8 (B16.encode bs)
+
+
 -- Convert a list of KeyValue to a JSONB object
 keyValueToJSONB :: V.Vector KeyValue -> AE.Value
 keyValueToJSONB kvs =
-  AE.object $
-    V.foldr (\kv acc -> (AEK.fromText $ LT.toStrict kv.keyValueKey, convertAnyValue kv.keyValueValue) : acc) [] kvs
+  AE.object
+    $ V.foldr (\kv acc -> (AEK.fromText $ LT.toStrict kv.keyValueKey, convertAnyValue kv.keyValueValue) : acc) [] kvs
 
 
 convertAnyValue :: Maybe AnyValue -> AE.Value
@@ -171,6 +175,12 @@ convertScopeLog :: Maybe Resource -> ScopeLogs -> V.Vector Telemetry.LogRecord
 convertScopeLog resource sl = V.map (convertLogRecord resource sl.scopeLogsScope) sl.scopeLogsLogRecords
 
 
+removeProjectId :: AE.Value -> AE.Value
+removeProjectId (AE.Object v) = AE.Object $ KEM.delete "at-project-key" $ KEM.delete "at-project-id" v
+removeProjectId (AE.Array v) = AE.Array $ V.map removeProjectId v
+removeProjectId v = v
+
+
 anyValueToString :: AnyValueValue -> Maybe Text
 anyValueToString (AnyValueValueStringValue val) = Just $ toStrict val
 anyValueToString _ = Nothing
@@ -194,32 +204,33 @@ convertLogRecord :: Maybe Resource -> Maybe InstrumentationScope -> LogRecord ->
 convertLogRecord resource scope lr =
   Telemetry.LogRecord
     { projectId = fromMaybe (error "invalid at-project-id in logs") do
-        let v = resource >>= \r -> find (\kv -> kv.keyValueKey == "at-project-id") r.resourceAttributes >>= (.keyValueValue) >>= (.anyValueValue)
-        UUID.fromText =<< anyValueToString =<< v
+        UUID.fromText =<< anyValueToString =<< pid'
     , id = Nothing
-    , timestamp = nanosecondsToUTC lr.logRecordTimeUnixNano
+    , timestamp = if lr.logRecordTimeUnixNano == 0 then nanosecondsToUTC lr.logRecordObservedTimeUnixNano else nanosecondsToUTC lr.logRecordTimeUnixNano
     , observedTimestamp = nanosecondsToUTC lr.logRecordObservedTimeUnixNano
-    , traceId = decodeUtf8 lr.logRecordTraceId
-    , spanId = if BS.null lr.logRecordSpanId then Nothing else Just (decodeUtf8 lr.logRecordSpanId)
+    , traceId = byteStringToHexText lr.logRecordTraceId
+    , spanId = if BS.null lr.logRecordSpanId then Nothing else Just (byteStringToHexText lr.logRecordSpanId)
     , severityText = parseSeverityLevel $ toText lr.logRecordSeverityText
     , severityNumber = fromIntegral $ (either id HsProtobuf.fromProtoEnum . HsProtobuf.enumerated) lr.logRecordSeverityNumber
     , body = convertAnyValue lr.logRecordBody
-    , attributes = keyValueToJSONB lr.logRecordAttributes
-    , resource = resourceToJSONB resource
+    , attributes = removeProjectId $ keyValueToJSONB lr.logRecordAttributes
+    , resource = removeProjectId $ resourceToJSONB resource
     , instrumentationScope = instrumentationScopeToJSONB scope
     }
+  where
+    pid = resource >>= \r -> find (\kv -> kv.keyValueKey == "at-project-id") r.resourceAttributes >>= (.keyValueValue) >>= (.anyValueValue)
+    pid' = if isJust pid then pid else find (\kv -> kv.keyValueKey == "at-project-id") lr.logRecordAttributes >>= (.keyValueValue) >>= (.anyValueValue)
 
 
 convertSpanRecord :: Maybe Resource -> Maybe InstrumentationScope -> Span -> Telemetry.SpanRecord
 convertSpanRecord resource scope sp =
   Telemetry.SpanRecord
     { projectId = fromMaybe (error "invalid at-project-id in span") do
-        let v = Unsafe.fromJust $ Just sp >>= \s -> find (\kv -> kv.keyValueKey == "at-project-id") s.spanAttributes >>= (.keyValueValue) >>= (.anyValueValue)
-        UUID.fromText =<< anyValueToString v
+        UUID.fromText =<< anyValueToString =<< pid'
     , timestamp = nanosecondsToUTC sp.spanStartTimeUnixNano
-    , traceId = decodeUtf8 sp.spanTraceId
-    , spanId = decodeUtf8 sp.spanSpanId
-    , parentSpanId = if BS.null sp.spanParentSpanId then Nothing else Just $ decodeUtf8 sp.spanParentSpanId
+    , traceId = byteStringToHexText sp.spanTraceId
+    , spanId = byteStringToHexText sp.spanSpanId
+    , parentSpanId = if BS.null sp.spanParentSpanId then Nothing else Just $ byteStringToHexText sp.spanParentSpanId
     , traceState = Just (toText sp.spanTraceState)
     , spanName = toText sp.spanName
     , startTime = nanosecondsToUTC sp.spanStartTimeUnixNano
@@ -227,12 +238,16 @@ convertSpanRecord resource scope sp =
     , kind = parseSpanKind (HsProtobuf.enumerated sp.spanKind)
     , status = parseSpanStatus sp.spanStatus
     , statusMessage = (\s -> Just $ toText s.statusMessage) =<< sp.spanStatus
-    , attributes = keyValueToJSONB sp.spanAttributes
+    , attributes = removeProjectId $ keyValueToJSONB sp.spanAttributes
     , events = eventsToJSONB $ V.toList sp.spanEvents
     , links = linksToJSONB $ V.toList sp.spanLinks
-    , resource = resourceToJSONB resource
+    , resource = removeProjectId $ resourceToJSONB resource
     , instrumentationScope = instrumentationScopeToJSONB scope
+    , spanDurationNs = 0
     }
+  where
+    pid = resource >>= \r -> find (\kv -> kv.keyValueKey == "at-project-id") r.resourceAttributes >>= (.keyValueValue) >>= (.anyValueValue)
+    pid' = if isJust pid then pid else find (\kv -> kv.keyValueKey == "at-project-id") sp.spanAttributes >>= (.keyValueValue) >>= (.anyValueValue)
 
 
 traceServiceExportH
@@ -287,31 +302,31 @@ parseSpanStatus st = case st of
 
 eventsToJSONB :: [Span_Event] -> AE.Value
 eventsToJSONB spans =
-  AE.toJSON $
-    ( \sp ->
-        object
-          [ "event_name" .= toText sp.span_EventName
-          , "event_time" .= nanosecondsToUTC sp.span_EventTimeUnixNano
-          , "event_attributes" .= keyValueToJSONB sp.span_EventAttributes
-          , "event_dropped_attributes_count" .= fromIntegral sp.span_EventDroppedAttributesCount
-          ]
-    )
-      <$> spans
+  AE.toJSON
+    $ ( \sp ->
+          object
+            [ "event_name" .= toText sp.span_EventName
+            , "event_time" .= nanosecondsToUTC sp.span_EventTimeUnixNano
+            , "event_attributes" .= keyValueToJSONB sp.span_EventAttributes
+            , "event_dropped_attributes_count" .= fromIntegral sp.span_EventDroppedAttributesCount
+            ]
+      )
+    <$> spans
 
 
 linksToJSONB :: [Span_Link] -> AE.Value
 linksToJSONB lnks =
-  AE.toJSON $
-    ( \lnk ->
-        object
-          [ "link_span_id" .= (decodeUtf8 lnk.span_LinkSpanId :: Text)
-          , "link_trace_id" .= (decodeUtf8 lnk.span_LinkTraceId :: Text)
-          , "link_attributes" .= keyValueToJSONB lnk.span_LinkAttributes
-          , "link_dropped_attributes_count" .= fromIntegral lnk.span_LinkDroppedAttributesCount
-          , "link_flags" .= fromIntegral lnk.span_LinkFlags
-          ]
-    )
-      <$> lnks
+  AE.toJSON
+    $ ( \lnk ->
+          object
+            [ "link_span_id" .= (decodeUtf8 lnk.span_LinkSpanId :: Text)
+            , "link_trace_id" .= (decodeUtf8 lnk.span_LinkTraceId :: Text)
+            , "link_attributes" .= keyValueToJSONB lnk.span_LinkAttributes
+            , "link_dropped_attributes_count" .= fromIntegral lnk.span_LinkDroppedAttributesCount
+            , "link_flags" .= fromIntegral lnk.span_LinkFlags
+            ]
+      )
+    <$> lnks
 
 
 ---------------------------------------------------------------------------------------
