@@ -440,6 +440,7 @@ function flameGraphChart(data, renderAt) {
       yAxis: {
         show: false,
         max: levelOfOriginalJson,
+        inverse: true,
       },
       series: [
         {
