@@ -335,25 +335,23 @@ function flameGraphChart(data, renderAt) {
   const recursionJson = (jsonObj, id) => {
     const data = []
     const filteredJson = filterJson(structuredClone(jsonObj), id)
-    const rootVal = filteredJson.value
+    const rootVal = filteredJson.sort((a, b) => b.value - a.value)[0].value
     const recur = (item, start = 0, level = 0) => {
       const color = flameGraphColors[Math.floor(Math.random() * flameGraphColors.length)]
       const temp = {
         name: item.name,
-        value: [level, start, start + item.value, item.name, (item.value / rootVal) * 100],
+        value: [level, item.start - start, item.value, item.name, (item.value / rootVal) * 100],
         itemStyle: {
           color,
         },
       }
       data.push(temp)
-      let prevStart = start
       for (const child of item.children || []) {
-        recur(child, prevStart, level + 1)
-        prevStart = prevStart + child.value
+        recur(child, start, level + 1)
       }
     }
     filteredJson.forEach((item) => {
-      recur(item)
+      recur(item, item.start)
     })
     return data
   }
@@ -426,8 +424,8 @@ function flameGraphChart(data, renderAt) {
     option = {
       tooltip: {
         formatter: (params) => {
-          const samples = params.value[2] - params.value[1]
-          return `${params.marker} ${params.value[3]}: (${echarts.format.addCommas(samples)} samples, ${+params.value[4].toFixed(2)}%)`
+          const samples = params.value[2]
+          return `${params.marker} ${params.value[3]}: (${echarts.format.addCommas(Math.round(samples / 1000000))} ms, ${+params.value[4].toFixed(2)}%)`
         },
       },
       toolbox: {
