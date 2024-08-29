@@ -317,8 +317,11 @@ function flameGraphChart(data, renderAt) {
     if (id == null) {
       return json
     }
+    if (Array.isArray(json)) {
+      return json.filter((item) => item.name === id)
+    }
     const recur = (item, id) => {
-      if (item.id === id) {
+      if (item.name === id) {
         return item
       }
       for (const child of item.children || []) {
