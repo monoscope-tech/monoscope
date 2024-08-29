@@ -24,7 +24,6 @@ menu pid =
   , ("Explorer", "/p/" <> pid.toText <> "/log_explorer", "list-tree")
   , ("Changes & Errors", "/p/" <> pid.toText <> "/anomalies", "bug")
   , ("API Tests (Beta)", "/p/" <> pid.toText <> "/testing", "list-check")
-  , ("OpenAPI/Swagger", "/p/" <> pid.toText <> "/documentation", "brackets-curly")
   , ("Reports", "/p/" <> pid.toText <> "/reports", "chart-simple")
   ]
 

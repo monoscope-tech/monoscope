@@ -36,6 +36,7 @@ data Swagger = Swagger
   , createdAt :: ZonedTime
   , updatedAt :: ZonedTime
   , swaggerJson :: Value
+  , host        :: Text
   }
   deriving stock (Show, Generic)
   deriving anyclass (FromRow, ToRow, NFData)
@@ -52,10 +53,11 @@ getSwaggerById :: Text -> DBT IO (Maybe Swagger)
 getSwaggerById id' = selectById (Only id')
 
 
-swaggersByProject :: Projects.ProjectId -> DBT IO (Vector Swagger)
-swaggersByProject = query Select q
+swaggersByProject :: Projects.ProjectId -> Text -> DBT IO (Vector Swagger)
+swaggersByProject pid host = query Select q (pid, host)
   where
-    q = [sql| select id, project_id, created_by, created_at, updated_at, swagger_json from apis.swagger_jsons where project_id=? order by created_at desc|]
+    q = [sql| select id, project_id, created_by, created_at, updated_at, swagger_json, host from apis.swagger_jsons where project_id=? AND host=? order by created_at desc|]
+
 
 
 updateSwagger :: Text -> Value -> DBT IO Int64
@@ -63,3 +65,9 @@ updateSwagger swaggerId swaggerJson = do
   execute Update q (swaggerJson, swaggerId)
   where
     q = [sql| UPDATE apis.swagger_jsons SET swagger_json=? WHERE id=? |]
+
+             
+
+
+
+

@@ -72,7 +72,7 @@ spec = aroundAll withTestResources do
       isJust anm `shouldBe` True
       let anmId = anm & Unsafe.fromJust & (\a -> a.id)
       pg <-
-        toServantResponse trATCtx trSessAndHeader trLogger $ AnomalyList.acknowlegeAnomalyGetH testPid anmId
+        toServantResponse trATCtx trSessAndHeader trLogger $ AnomalyList.acknowlegeAnomalyGetH testPid anmId (Just "")
       case pg of
         AnomalyList.Acknowlege pid anid isack -> do
           pid `shouldBe` testPid
@@ -137,7 +137,7 @@ spec = aroundAll withTestResources do
       let anmId = anm & Unsafe.fromJust & (\a -> a.id)
 
       _ <-
-        toServantResponse trATCtx trSessAndHeader trLogger $ AnomalyList.acknowlegeAnomalyGetH testPid anmId
+        toServantResponse trATCtx trSessAndHeader trLogger $ AnomalyList.acknowlegeAnomalyGetH testPid anmId (Just "")
 
       let reqMsg4 = Unsafe.fromJust $ convert $ msg4 nowTxt
       let msgs =

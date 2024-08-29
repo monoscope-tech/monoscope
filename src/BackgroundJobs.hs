@@ -57,7 +57,7 @@ data BgJobs
   | DailyReports Projects.ProjectId
   | WeeklyReports Projects.ProjectId
   | DailyJob
-  | GenSwagger Projects.ProjectId Users.UserId
+  | GenSwagger Projects.ProjectId Users.UserId  Text
   | ReportUsage Projects.ProjectId
   | QueryMonitorsTriggered (Vector Monitors.QueryMonitorId)
   | RunCollectionTests Testing.CollectionId
@@ -155,7 +155,7 @@ jobsRunner logger authCtx job = when authCtx.config.enableBackgroundJobs $ do
             pass
       DailyReports pid -> dailyReportForProject pid
       WeeklyReports pid -> weeklyReportForProject pid
-      GenSwagger pid uid -> generateSwaggerForProject pid uid
+      GenSwagger pid uid host -> generateSwaggerForProject pid uid host
       ReportUsage pid -> whenJustM (dbtToEff $ Projects.projectById pid) \project -> do
         when (project.paymentPlan == "UsageBased" || project.paymentPlan == "GraduatedPricing") $ whenJust project.firstSubItemId \fSubId -> do
           currentTime <- liftIO getZonedTime
@@ -175,9 +175,9 @@ jobsRunner logger authCtx job = when authCtx.config.enableBackgroundJobs $ do
           else Log.logAttention "RunCollectionTests failed.  Job was sheduled to run over 30 mins ago" $ collectionM <&> \c -> (c.title, c.id)
 
 
-generateSwaggerForProject :: Projects.ProjectId -> Users.UserId -> ATBackgroundCtx ()
-generateSwaggerForProject pid uid = whenJustM (dbtToEff $ Projects.projectById pid) \project -> do
-  endpoints <- dbtToEff $ Endpoints.endpointsByProjectId pid
+generateSwaggerForProject :: Projects.ProjectId -> Users.UserId -> Text ->  ATBackgroundCtx ()
+generateSwaggerForProject pid uid host = whenJustM (dbtToEff $ Projects.projectById pid) \project -> do
+  endpoints <- dbtToEff $ Endpoints.endpointsByProjectId pid host
   let endpoint_hashes = V.map (.hash) endpoints
   shapes <- dbtToEff $ Shapes.shapesByEndpointHashes pid endpoint_hashes
   fields <- dbtToEff $ FieldsQ.fieldsByEndpointHashes pid endpoint_hashes
@@ -195,6 +195,7 @@ generateSwaggerForProject pid uid = whenJustM (dbtToEff $ Projects.projectById p
           , createdAt = currentTime
           , updatedAt = currentTime
           , swaggerJson = swagger
+          , host       = host
           }
   dbtToEff $ Swaggers.addSwagger swaggerToAdd
 
