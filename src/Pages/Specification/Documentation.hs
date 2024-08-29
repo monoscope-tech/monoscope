@@ -342,12 +342,14 @@ documentationGetH pid swagger_id host = do
         let idx = show latest.id.swaggerId
         pure (sw, idx)
     pure (V.reverse swaggers, swaggerVal, swaggerValId)
-
+  let pageTitle = case host of
+        Nothing  -> "OpenAPI/Swagger"
+        Just h   ->  "OpenAPI/Swagger For " <> h  
   let bwconf =
         (def :: BWConfig)
           { sessM = Just sess.persistentSession
           , currProject = Just project
-          , pageTitle = "OpenAPI/Swagger"
+          , pageTitle = pageTitle
           }
   addRespHeaders $ PageCtx bwconf $ DocumentationGet pid swaggers swaggerId (decodeUtf8 (encode swagger))
 
