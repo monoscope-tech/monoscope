@@ -299,6 +299,7 @@ function latencyHistogram(renderAt, pc, data) {
 
 function flameGraphChart(data, renderAt) {
   const myChart = echarts.init(document.getElementById(renderAt))
+  myChart.showLoading()
   const fData = modifySpansForFlameGraph(data)
   const flameGraphColors = [
     '#FCA5A5', // Red-300
@@ -338,7 +339,7 @@ function flameGraphChart(data, renderAt) {
   const recursionJson = (jsonObj, id) => {
     const data = []
     const filteredJson = filterJson(structuredClone(jsonObj), id)
-    const rootVal = filteredJson.sort((a, b) => b.value - a.value)[0].value
+    const rootVal = filteredJson.sort((a, b) => b.value - a.value)[0].value || 1
     const recur = (item, start = 0, level = 0) => {
       const color = flameGraphColors[Math.floor(Math.random() * flameGraphColors.length)]
       const temp = {
@@ -418,7 +419,6 @@ function flameGraphChart(data, renderAt) {
       },
     }
   }
-  myChart.showLoading()
 
   function flameGraph(stackTrace) {
     myChart.hideLoading()

@@ -11,8 +11,11 @@ import Data.Aeson qualified as AE
 import Data.Containers.ListUtils (nubOrd)
 import Data.Time (defaultTimeLocale)
 import Data.Time.Format (formatTime)
+import Data.Time.Format.ISO8601 (formatShow, iso8601Format)
+import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Deriving.Aeson.Stock qualified as DAE
+import Lucid.Htmx (hxGet_, hxSwap_, hxTarget_)
 import Lucid.Hyperscript (__)
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.Projects qualified as Projects
@@ -25,6 +28,7 @@ import Pkg.Parser (pSource)
 import Relude
 import Text.Megaparsec (parseMaybe)
 import Utils (faSprite_, getDurationNSMS, listToIndexHashMap, utcTimeToNanoseconds)
+import Witch.From (from)
 
 
 traceH :: Projects.ProjectId -> Text -> Maybe Text -> ATAuthCtx (RespHeaders TraceDetailsGet)
@@ -34,10 +38,8 @@ traceH pid trId spanIdM = do
   case traceItemM of
     Just traceItem -> do
       spanRecords <- Telemetry.getSpandRecordsByTraceId pid trId
-      tableAsVecE <- RequestDumps.selectLogTable pid ("trace_id==\"" <> trId <> "\"") Nothing (Nothing, Nothing) [] (parseMaybe pSource =<< Just "spans")
-      let tableAsVec = hush tableAsVecE
       let span_id = fromMaybe "" $ if isJust spanIdM then spanIdM else Just ""
-      let pageProps = PageProps pid traceItem span_id spanRecords tableAsVec
+      let pageProps = PageProps pid traceItem span_id spanRecords
       addRespHeaders $ TraceDetails pageProps
     Nothing -> addRespHeaders $ TraceDetailsNotFound "Trace not found"
 
@@ -47,7 +49,6 @@ data PageProps = PageProps
   , traceItem :: Telemetry.Trace
   , span_id :: Text
   , spanRecords :: V.Vector Telemetry.SpanRecord
-  , spanVec :: Maybe (V.Vector (V.Vector AE.Value), [Text], Int)
   }
 
 
@@ -91,32 +92,11 @@ tracePage p = do
           div_ [role_ "tabpanel", class_ "tab-content bg-base-100 border-base-300 rounded-box h-44", id_ traceItem.traceId] pass
           input_ [type_ "radio", name_ "my_tabs_2", role_ "tab", class_ "tab", term "aria-label" "Span List"]
           div_ [role_ "tabpanel", class_ "tab-content bg-base-100 border-base-300 rounded-box h-48 overflow-auto"] do
-            case p.spanVec of
-              Just (vec, colNames, resultCount) -> do
-                let curatedColNames = nubOrd $ Log.curateCols [] colNames
-                    colIdxMap = listToIndexHashMap colNames
-                    page =
-                      Log.ApiLogsPageData
-                        { pid
-                        , resultCount = resultCount
-                        , requestVecs = vec
-                        , cols = curatedColNames
-                        , colIdxMap
-                        , nextLogsURL = ""
-                        , resetLogsURL = ""
-                        , currentRange = Nothing
-                        , exceededFreeTier = False
-                        , query = Nothing
-                        , cursor = Nothing
-                        , isTestLog = Just True
-                        , emptyStateUrl = Nothing
-                        , source = "spans"
-                        }
-                Log.resultTable_ page False
-              _ -> pass
+            renderSpanTable p.spanRecords
+
       div_ [class_ "h-auto overflow-y-scroll mt-8  py-2 rounded-2xl border"] do
         h3_ [class_ "text-xl font-semibold px-4 border-b pb-2"] "Span"
-        div_ [class_ "flex flex-col gap-4 px-4", id_ "span-details"] do
+        div_ [class_ "flex flex-col gap-4 px-4", id_ "trace-span-view"] do
           let tSp = fromMaybe (V.head p.spanRecords) (V.find (\s -> s.spanId == sId) p.spanRecords)
           Spans.expandedSpanItem pid tSp
       let spanJson =
@@ -148,3 +128,36 @@ selectHead title current options baseUrl swapTarget = div_ [class_ "flex flex-co
     div_ [class_ "hidden min-w-36 w-max flex flex-col border shadow-sm left-0 absolute top-8 bg-base-100 z-50 bg-white text-sm rounded-lg"] do
       forM_ options $ \option -> do
         a_ [class_ "px-4 py-1 hover:bg-gray-100", href_ $ baseUrl <> option] $ toHtml option
+
+
+renderSpanRecordRow :: Telemetry.SpanRecord -> Html ()
+renderSpanRecordRow spanRecord = do
+  let pidText = UUID.toText spanRecord.projectId
+  let spanid = maybe "" UUID.toText spanRecord.uSpandId
+  let tme = from @String (formatShow iso8601Format spanRecord.timestamp)
+  tr_
+    [ class_ "bg-white w-full overflow-x-hidden text-xs p-2 cursor-pointer hover:bg-gray-100 border-b-2 last:border-b-0"
+    , hxGet_ $ "/p/" <> pidText <> "/log_explorer/" <> spanid <> "/" <> tme <> "/detailed?source=spans"
+    , hxTarget_ "#trace-span-view"
+    , hxSwap_ "innerHTML"
+    ]
+    $ do
+      td_ [class_ "px-2 py-1 whitespace-nowrap"] $ toHtml $ formatTime defaultTimeLocale "%b %d %Y %H:%M:%S%Q" spanRecord.timestamp
+      td_ [class_ "px-2 py-1 whitespace-nowrap"] $ toHtml spanRecord.spanName
+      td_ [class_ "px-2 py-1 whitespace-nowrap"] $ toHtml $ show spanRecord.kind
+      td_ [class_ "px-2 py-1 whitespace-nowrap"] $ toHtml $ show spanRecord.status
+      td_ [class_ "px-2 py-1 whitespace-nowrap"] $ toHtml $ getDurationNSMS spanRecord.spanDurationNs
+
+
+renderSpanTable :: V.Vector Telemetry.SpanRecord -> Html ()
+renderSpanTable records =
+  table_ [class_ "min-w-full text-sm text-left text-gray-500"] $ do
+    thead_ $
+      tr_ [class_ "text-xs text-gray-600 bg-gray-200 p-2"] $ do
+        th_ [scope_ "col", class_ "px-2 py- font-medium"] "timestamp"
+        th_ [scope_ "col", class_ "px-2 py- font-medium"] "span name"
+        th_ [scope_ "col", class_ "px-2 py- font-medium"] "kind"
+        th_ [scope_ "col", class_ "px-2 py- font-medium"] "status"
+        th_ [scope_ "col", class_ "px-2 py- font-medium"] "duration"
+    tbody_ $
+      mapM_ renderSpanRecordRow records
