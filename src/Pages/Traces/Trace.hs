@@ -88,7 +88,7 @@ tracePage p = do
       div_ [] do
         div_ [role_ "tablist", class_ "tabs tabs-boxed"] $ do
           input_ [type_ "radio", name_ "my_tabs_2", role_ "tab", class_ "tab", term "aria-label" "Flame Graph", checked_]
-          div_ [role_ "tabpanel", class_ "tab-content bg-base-100 border-base-300 rounded-box p-6 h-52", id_ traceItem.traceId] pass
+          div_ [role_ "tabpanel", class_ "tab-content bg-base-100 border-base-300 rounded-box h-44", id_ traceItem.traceId] pass
           input_ [type_ "radio", name_ "my_tabs_2", role_ "tab", class_ "tab", term "aria-label" "Span List"]
           div_ [role_ "tabpanel", class_ "tab-content bg-base-100 border-base-300 rounded-box h-48 overflow-auto"] do
             case p.spanVec of
