@@ -301,16 +301,16 @@ function flameGraphChart(data, renderAt) {
   const myChart = echarts.init(document.getElementById(renderAt))
   const fData = modifySpansForFlameGraph(data)
   const flameGraphColors = [
-    '#EF4444', // Red-500
-    '#F59E0B', // Amber-500
-    '#F97316', // Orange-500
-    '#EAB308', // Yellow-500
-    '#84CC16', // Lime-500
-    '#22C55E', // Green-500
-    '#14B8A6', // Teal-500
-    '#06B6D4', // Cyan-500
-    '#3B82F6', // Blue-500
-    '#A855F7', // Purple-500
+    '#FCA5A5', // Red-300
+    '#FCD34D', // Amber-300
+    '#FDBA74', // Orange-300
+    '#FDE047', // Yellow-300
+    '#BEF264', // Lime-300
+    '#86EFAC', // Green-300
+    '#5EEAD4', // Teal-300
+    '#67E8F9', // Cyan-300
+    '#93C5FD', // Blue-300
+    '#D8B4FE', // Purple-300
   ]
 
   const filterJson = (json, id) => {
