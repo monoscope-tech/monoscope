@@ -1,5 +1,11 @@
 module.exports = {
-  content: ['./src/**/*.{html,js,hs}', './static/public/assets/filtercomponent.js', './static/public/assets/testeditor.js', './static/public/assets/steps-editor.js'],
+  content: [
+    './src/**/*.{html,js,hs}',
+    './static/public/assets/js/charts.js',
+    './static/public/assets/filtercomponent.js',
+    './static/public/assets/testeditor.js',
+    './static/public/assets/steps-editor.js',
+  ],
   daisyui: {
     themes: ['light', 'dark', 'winter', 'dim', 'forest'],
   },

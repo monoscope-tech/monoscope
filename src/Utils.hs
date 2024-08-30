@@ -242,9 +242,9 @@ utcTimeToNanoseconds utcTime =
 
 getDurationNSMS :: Integer -> Text
 getDurationNSMS duration
-  | duration > 1000000000 = toText $ show (duration `div` 1000000000) <> " s"
-  | duration > 1000000 = toText $ show (duration `div` 1000000) <> " ms"
-  | duration > 1000 = toText $ show (duration `div` 1000) <> " µs"
+  | duration >= 1000000000 = toText $ show (duration `div` 1000000000) <> " s"
+  | duration >= 1000000 = toText $ show (duration `div` 1000000) <> " ms"
+  | duration >= 1000 = toText $ show (duration `div` 1000) <> " µs"
   | otherwise = toText $ show duration <> " ns"
 
 

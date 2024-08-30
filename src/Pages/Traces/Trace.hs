@@ -89,14 +89,16 @@ tracePage p = do
       div_ [] do
         div_ [role_ "tablist", class_ "tabs tabs-boxed"] $ do
           input_ [type_ "radio", name_ "my_tabs_2", role_ "tab", class_ "tab", term "aria-label" "Flame Graph", checked_]
-          div_ [role_ "tabpanel", class_ "tab-content bg-base-100 border-base-300 rounded-box h-44", id_ traceItem.traceId] pass
-          input_ [type_ "radio", name_ "my_tabs_2", role_ "tab", class_ "tab", term "aria-label" "Span List"]
+          div_ [role_ "tabpanel", class_ "tab-content p-4"] do
+            div_ [id_ $ "time-container-a" <> traceItem.traceId, class_ "w-full border-b border-b-gray-300 h-6 text-xs relative"] pass
+            div_ [class_ "w-full h-44", id_ $ "a" <> traceItem.traceId] pass
+          input_ [type_ "radio", name_ "my_tabs_2", role_ "tab", class_ "tab border-left", term "aria-label" "Span List"]
           div_ [role_ "tabpanel", class_ "tab-content bg-base-100 border-base-300 rounded-box h-48 overflow-auto"] do
             renderSpanTable p.spanRecords
 
       div_ [class_ "h-auto overflow-y-scroll mt-8  py-2 rounded-2xl border"] do
         h3_ [class_ "text-xl font-semibold px-4 border-b pb-2"] "Span"
-        div_ [class_ "flex flex-col gap-4 px-4", id_ "trace-span-view"] do
+        div_ [class_ "flex flex-col gap-4 px-4", id_ $ "span-" <> traceItem.traceId] do
           let tSp = fromMaybe (V.head p.spanRecords) (V.find (\s -> s.spanId == sId) p.spanRecords)
           Spans.expandedSpanItem pid tSp
       let spanJson =
@@ -113,7 +115,7 @@ tracePage p = do
                             ]
                       )
       let trId = traceItem.traceId
-      script_ [text|flameGraphChart($spanJson, "$trId")|]
+      script_ [text|flameGraphChart($spanJson, "a$trId")|]
 
 
 selectHead :: Text -> Text -> V.Vector Text -> Text -> Maybe Text -> Html ()
@@ -138,7 +140,7 @@ renderSpanRecordRow spanRecord = do
   tr_
     [ class_ "bg-white w-full overflow-x-hidden text-xs p-2 cursor-pointer hover:bg-gray-100 border-b-2 last:border-b-0"
     , hxGet_ $ "/p/" <> pidText <> "/log_explorer/" <> spanid <> "/" <> tme <> "/detailed?source=spans"
-    , hxTarget_ "#trace-span-view"
+    , hxTarget_ $ "#span-" <> spanRecord.traceId
     , hxSwap_ "innerHTML"
     ]
     $ do

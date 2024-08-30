@@ -299,6 +299,7 @@ function latencyHistogram(renderAt, pc, data) {
 
 function flameGraphChart(data, renderAt) {
   const myChart = echarts.init(document.getElementById(renderAt))
+  console.log(document.getElementById(renderAt))
   myChart.showLoading()
   const fData = modifySpansForFlameGraph(data)
   const flameGraphColors = [
@@ -420,9 +421,10 @@ function flameGraphChart(data, renderAt) {
     }
   }
 
-  function flameGraph(stackTrace) {
+  function flameGraph(stackTrace, target) {
     myChart.hideLoading()
-
+    const rootVal = stackTrace.sort((a, b) => b.value - a.value)[0].value || 1
+    generateTimeIntervals(rootVal, target)
     const levelOfOriginalJson = heightOfJson(stackTrace)
     option = {
       tooltip: {
@@ -435,11 +437,12 @@ function flameGraphChart(data, renderAt) {
         feature: {
           restore: {},
         },
-        right: 20,
-        top: 10,
+        right: 5,
+        top: 5,
       },
       xAxis: {
         show: false,
+        max: rootVal,
       },
       yAxis: {
         show: false,
@@ -468,7 +471,7 @@ function flameGraphChart(data, renderAt) {
       })
     })
   }
-  flameGraph(fData)
+  flameGraph(fData, renderAt)
 }
 
 function modifySpansForFlameGraph(data) {
@@ -496,4 +499,38 @@ function buildHierachy(spans) {
     }
   })
   return roots
+}
+
+function generateTimeIntervals(duration, target) {
+  const container = document.getElementById('time-container-' + target)
+  const [durationF, unit] = formatDuration(duration)
+  container.innerHTML = ''
+  const containerWidth = container.offsetWidth
+  const intervalWidth = containerWidth / 11
+  const intervals = []
+  for (let i = 0; i < 12; i++) {
+    const time = Math.floor((i * durationF) / 11)
+    intervals.push(`
+              <div class="absolute bottom-0 text-gray-700 border-left" style="width: ${intervalWidth}px; left: ${i * intervalWidth}px;">
+               <div class="relative" style="height:10px">
+                <div class="bg-gray-300"  style="width:1px; height:10px;"></div>
+                <span class="absolute  left-0 -translate-x-1/2 text-xs" style="top:-13px">${time} ${unit}</span>
+               </div>
+              </div>
+      `)
+  }
+
+  container.innerHTML = intervals.join('')
+}
+
+function formatDuration(duration) {
+  if (duration >= 1000000000) {
+    return [(duration / 1000000000).toFixed(2), 's']
+  } else if (duration >= 1000000) {
+    return [(duration / 1000000).toFixed(2), 'ms']
+  } else if (duration >= 1000) {
+    return [(duration / 1000).toFixed(2), 'µs']
+  } else {
+    return [duration, 'ns']
+  }
 }
