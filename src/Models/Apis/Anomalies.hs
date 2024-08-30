@@ -274,52 +274,6 @@ where
       |]
 
 
--- getAnomalyById :: AnomalyId -> DBT IO (Maybe AnomalyVM)
--- getAnomalyById anomalyId = queryOne Select q (Only anomalyId)
---   where
---     q =
---       [sql|
--- SELECT
---     an.id,
---     an.created_at,
---     an.updated_at,
---     an.project_id,
---     an.acknowleged_at,
---     an.acknowleged_by,
---     an.anomaly_type,
---     an.action,
---     an.target_hash,
---     shapes.id shape_id,
---     coalesce(shapes.new_unique_fields, '{}'::TEXT[]) new_unique_fields,
---     coalesce(shapes.deleted_fields, '{}'::TEXT[]) deleted_fields,
---     coalesce(shapes.updated_field_formats, '{}'::TEXT[]) updated_field_formats,
---     fields.id field_id,
---     fields.key field_key,
---     fields.key_path field_key_path,
---     fields.field_category field_category,
---     fields.format field_format,
---     formats.id format_id,
---     formats.field_type format_type,
---     formats.examples format_examples,
---     endpoints.id endpoint_id,
---     endpoints.method endpoint_method,
---     endpoints.url_path endpoint_url_path,
---     an.archived_at,
---     0,now()
--- FROM
---     apis.anomalies an
---     LEFT JOIN apis.formats on (target_hash = formats.hash AND an.project_id = formats.project_id)
---     LEFT JOIN apis.fields on (
---         ((fields.hash = formats.field_hash ) AND an.project_id = fields.project_id)
---         OR fields.hash = formats.field_hash
---     )
---     LEFT JOIN apis.shapes on (target_hash = shapes.hash AND an.project_id = shapes.project_id)
---     LEFT JOIN apis.endpoints ON (starts_with(an.target_hash, endpoints.hash) AND an.project_id = endpoints.project_id)
--- WHERE
---     an.id = ?
---       |]
-
-
 getShapeParentAnomalyVM :: Projects.ProjectId -> Text -> DBT IO Int
 getShapeParentAnomalyVM pid hash = do
   result <- query Select q (pid, hash)
