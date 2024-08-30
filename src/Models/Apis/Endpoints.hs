@@ -22,6 +22,7 @@ module Models.Apis.Endpoints (
   getProjectHosts,
   insertEndpoints,
   countEndpointInbox,
+  getEndpointsByAnomalyTargetHash,
 )
 where
 
@@ -126,7 +127,7 @@ data EndpointRequestStats = EndpointRequestStats
   , projectId :: Projects.ProjectId
   , urlPath :: Text
   , method :: Text
-  , host     :: Text
+  , host :: Text
   , min :: Double
   , p50 :: Double
   , p75 :: Double
@@ -243,6 +244,13 @@ endpointByHash pid hash = queryOne Select q (pid, hash)
     q = [sql| SELECT id, created_at, updated_at, project_id, url_path, url_params, method, host, hash, outgoing, description from apis.endpoints where project_id=? AND hash=? |]
 
 
+getEndpointsByAnomalyTargetHash :: Projects.ProjectId -> V.Vector Text -> PgT.DBT IO (V.Vector Host)
+getEndpointsByAnomalyTargetHash pid hashes = query Select q (pid, prefixHashes)
+  where
+    q = [sql|select distinct host from apis.endpoints where project_id=? AND hash LIKE ANY(?)|]
+    prefixHashes = (<> "%") <$> hashes
+
+
 data SwEndpoint = SwEndpoint
   { urlPath :: Text
   , urlParams :: AE.Value -- Key value map of key to the type. Needs a bit more figuring out.
@@ -276,11 +284,10 @@ endpointsByProjectId pid host = query Select q (pid, host)
          FROM apis.endpoints enp
          INNER JOIN
          apis.anomalies ann ON (ann.anomaly_type = 'endpoint' AND ann.target_hash = enp.hash)
-         WHERE enp.project_id = ? 
-           AND enp.host = ? 
+         WHERE enp.project_id = ?
+           AND enp.host = ?
            AND ann.acknowleged_at IS NOT NULL
        |]
-
 
 
 insertEndpoints :: [Endpoint] -> DBT IO Int64
