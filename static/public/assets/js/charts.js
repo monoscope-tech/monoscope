@@ -56,7 +56,6 @@ function throughputEChart(renderAt, data, gb, showLegend, theme) {
   if (showLegend) {
     option.grid.bottom = '9%'
   }
-  console.log(option)
   myChart.setOption(option)
 }
 
@@ -298,23 +297,6 @@ function latencyHistogram(renderAt, pc, data) {
 }
 
 function flameGraphChart(data, renderAt) {
-  const myChart = echarts.init(document.getElementById(renderAt))
-  console.log(document.getElementById(renderAt))
-  myChart.showLoading()
-  const fData = modifySpansForFlameGraph(data)
-  const flameGraphColors = [
-    '#FCA5A5', // Red-300
-    '#FCD34D', // Amber-300
-    '#FDBA74', // Orange-300
-    '#FDE047', // Yellow-300
-    '#BEF264', // Lime-300
-    '#86EFAC', // Green-300
-    '#5EEAD4', // Teal-300
-    '#67E8F9', // Cyan-300
-    '#93C5FD', // Blue-300
-    '#D8B4FE', // Purple-300
-  ]
-
   const filterJson = (json, id) => {
     if (id == null) {
       return json
@@ -374,103 +356,99 @@ function flameGraphChart(data, renderAt) {
     }
     return recur(json)
   }
-  const renderItem = (params, api) => {
-    const level = api.value(0)
-    const start = api.coord([api.value(1), level])
-    const end = api.coord([api.value(2), level])
-    const height = ((api.size && api.size([0, 1])) || [0, 20])[1]
-    const width = end[0] - start[0]
-    return {
-      type: 'rect',
-      transition: ['shape'],
-      shape: {
-        x: start[0],
-        y: start[1] - height / 2,
-        width,
-        height: height - 2 /* itemGap */,
-        r: 2,
-      },
-      style: {
-        fill: api.visual('color'),
-      },
-      emphasis: {
-        style: {
-          stroke: '#000',
-        },
-      },
-      textConfig: {
-        position: 'insideLeft',
-      },
-      textContent: {
-        style: {
-          text: api.value(3),
-          fontFamily: 'Verdana',
-          fill: '#000',
-          width: width - 4,
-          overflow: 'truncate',
-          ellipsis: '..',
-          truncateMinChar: 1,
-        },
-        emphasis: {
-          style: {
-            stroke: '#000',
-            lineWidth: 0.5,
-          },
-        },
-      },
-    }
+  const flameGraphColors = [
+    '#FCA5A5', // Red-300
+    '#FCD34D', // Amber-300
+    '#FDBA74', // Orange-300
+    '#FDE047', // Yellow-300
+    '#BEF264', // Lime-300
+    '#86EFAC', // Green-300
+    '#5EEAD4', // Teal-300
+    '#67E8F9', // Cyan-300
+    '#93C5FD', // Blue-300
+    '#D8B4FE', // Purple-300
+  ]
+
+  const renderItem = (item, renderAt, rootVal) => {
+    const [level, xStart, xEnd] = item.value
+    const container = document.getElementById(renderAt)
+
+    if (!container) return
+
+    const containerWidth = container.offsetWidth
+    const startPix = (containerWidth * xStart) / rootVal
+    const width = (containerWidth * xEnd) / rootVal
+
+    const height = 15
+    const yStart = height * level + 2
+
+    const div = document.createElement('div')
+    div.style.position = 'absolute'
+    div.style.left = `${startPix}px`
+    div.style.top = `${yStart}px`
+    div.style.width = `${width}px`
+    div.style.height = `${height}px`
+    div.style.backgroundColor = item.itemStyle.color
+    container.appendChild(div)
   }
 
   function flameGraph(stackTrace, target) {
-    myChart.hideLoading()
     const rootVal = stackTrace.sort((a, b) => b.value - a.value)[0].value || 1
     generateTimeIntervals(rootVal, target)
-    const levelOfOriginalJson = heightOfJson(stackTrace)
-    option = {
-      tooltip: {
-        formatter: (params) => {
-          const samples = params.value[2]
-          return `${params.marker} ${params.value[3]}: (${echarts.format.addCommas(Math.round(samples / 1000000))} ms, ${+params.value[4].toFixed(2)}%)`
-        },
-      },
-      toolbox: {
-        feature: {
-          restore: {},
-        },
-        right: 5,
-        top: 5,
-      },
-      xAxis: {
-        show: false,
-        max: rootVal,
-      },
-      yAxis: {
-        show: false,
-        max: levelOfOriginalJson,
-        inverse: true,
-      },
-      series: [
+    const data = recursionJson(stackTrace)
+
+    const canvas = document.getElementById('c-' + target)
+
+    canvas.width = 800
+    canvas.height = 400
+
+    const flameChart = new FlameChart({
+      canvas, // mandatory
+      data,
+      marks: [
         {
-          type: 'custom',
-          renderItem,
-          encode: {
-            x: [0, 1, 2],
-            y: 0,
-          },
-          data: recursionJson(stackTrace),
+          shortName: 'DCL',
+          fullName: 'DOMContentLoaded',
+          timestamp: 500,
         },
       ],
-    }
-    myChart.setOption(option)
-    myChart.on('click', (params) => {
-      const data = recursionJson(stackTrace, params.data.name)
-      const rootValue = data[0].value[2]
-      myChart.setOption({
-        xAxis: { max: rootValue },
-        series: [{ data }],
-      })
+      waterfall: {
+        /* ... */
+      },
+      timeseries: [
+        /* ... */
+      ],
+      timeframeTimeseries: [
+        /* ... */
+      ],
+      colors: {
+        task: '#FFFFFF',
+        'sub-task': '#000000',
+      },
+      settings: {
+        hotkeys: {
+          active: true, // enable navigation using arrow keys
+          scrollSpeed: 0.5, // scroll speed (ArrowLeft, ArrowRight)
+          zoomSpeed: 0.001, // zoom speed (ArrowUp, ArrowDown, -, +)
+          fastMultiplayer: 5, // speed multiplier when zooming and scrolling (activated by Shift key)
+        },
+        options: {
+          tooltip: () => {
+            /*...*/
+          }, // see section "Custom Tooltip" below
+          timeUnits: 'ms',
+        },
+        styles: customStyles, // see section "Styles" below
+      },
     })
+
+    // data.forEach((item) => {
+    //   renderItem(item, target, rootVal)
+    // })
   }
+
+  const fData = modifySpansForFlameGraph(data)
+
   flameGraph(fData, renderAt)
 }
 
@@ -519,7 +497,6 @@ function generateTimeIntervals(duration, target) {
               </div>
       `)
   }
-
   container.innerHTML = intervals.join('')
 }
 

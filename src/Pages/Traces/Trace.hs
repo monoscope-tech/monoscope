@@ -91,7 +91,8 @@ tracePage p = do
           input_ [type_ "radio", name_ "my_tabs_2", role_ "tab", class_ "tab", term "aria-label" "Flame Graph", checked_]
           div_ [role_ "tabpanel", class_ "tab-content p-4"] do
             div_ [id_ $ "time-container-a" <> traceItem.traceId, class_ "w-full border-b border-b-gray-300 h-6 text-xs relative"] pass
-            div_ [class_ "w-full h-44", id_ $ "a" <> traceItem.traceId] pass
+            -- div_ [class_ "w-full min-h-44 max-h-60 overflow-y-auto relative", id_ $ "a" <> traceItem.traceId] pass
+            canvas_ [class_ "w-full min-h-44 max-h-60 overflow-y-auto relative", id_ $ "c-a" <> traceItem.traceId] pass
           input_ [type_ "radio", name_ "my_tabs_2", role_ "tab", class_ "tab border-left", term "aria-label" "Span List"]
           div_ [role_ "tabpanel", class_ "tab-content bg-base-100 border-base-300 rounded-box h-48 overflow-auto"] do
             renderSpanTable p.spanRecords
