@@ -104,6 +104,28 @@ bodyWrapper BWConfig{sessM, currProject, pageTitle, menuItem, hasIntegrated, nav
       script_ [src_ "/assets/js/charts.js"] ("" :: Text)
       script_ [src_ "https://cdn.jsdelivr.net/npm/flame-chart-js@3.3.0/dist/index.min.js"] ("" :: Text)
       script_ [type_ "module", src_ "https://cdn.jsdelivr.net/npm/flame-chart-js/dist/index.min.js"] ("" :: Text)
+      script_ [type_ "module"] [text|
+        // Dynamically import the module
+        import * as FlameChartModule from './path/to/your-original-flamechart.js';
+
+        // Attach the needed exports to the window object
+        window.EVENT_NAMES = FlameChartModule.EVENT_NAMES;
+        window.FlameChart = FlameChartModule.FlameChart;
+        window.FlameChartContainer = FlameChartModule.FlameChartContainer;
+        window.FlameChartPlugin = FlameChartModule.FlameChartPlugin;
+        window.MarksPlugin = FlameChartModule.MarksPlugin;
+        window.TimeGridPlugin = FlameChartModule.TimeGridPlugin;
+        window.TimeframeSelectorPlugin = FlameChartModule.TimeframeSelectorPlugin;
+        window.TimeseriesPlugin = FlameChartModule.TimeseriesPlugin;
+        window.TogglePlugin = FlameChartModule.TogglePlugin;
+        window.UIPlugin = FlameChartModule.UIPlugin;
+        window.WaterfallPlugin = FlameChartModule.WaterfallPlugin;
+        window.defaultPatterns = FlameChartModule.defaultPatterns;
+
+        // Now you can access FlameChart and other exports from the window object
+        const flameChart = new window.FlameChart(/* constructor arguments */);
+        // Initialize and use flameChart as needed
+        |]
       script_ [src_ "https://cdn.jsdelivr.net/npm/@easepick/bundle@1.2.0/dist/index.umd.min.js"] ("" :: Text)
       script_ [src_ "https://cdn.jsdelivr.net/npm/lodash@4.17.21/lodash.min.js"] ("" :: Text)
       script_ [src_ "https://kit.fontawesome.com/e0cb5637ed.js", crossorigin_ "anonymous"] ("" :: Text)

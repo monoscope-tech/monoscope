@@ -402,7 +402,7 @@ function flameGraphChart(data, renderAt) {
     canvas.width = 800
     canvas.height = 400
 
-    const flameChart = new FlameChart({
+    const flameChart = new window.FlameChart({
       canvas, // mandatory
       data,
       marks: [
