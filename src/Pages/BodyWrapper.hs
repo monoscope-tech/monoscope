@@ -106,7 +106,7 @@ bodyWrapper BWConfig{sessM, currProject, pageTitle, menuItem, hasIntegrated, nav
       script_ [type_ "module", src_ "https://cdn.jsdelivr.net/npm/flame-chart-js/dist/index.min.js"] ("" :: Text)
       script_ [type_ "module"] [text|
         // Dynamically import the module
-        import * as FlameChartModule from './path/to/your-original-flamechart.js';
+        import * as FlameChartModule from 'https://cdn.jsdelivr.net/npm/flame-chart-js/dist/index.min.js';
 
         // Attach the needed exports to the window object
         window.EVENT_NAMES = FlameChartModule.EVENT_NAMES;
