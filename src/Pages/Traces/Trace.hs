@@ -9,6 +9,7 @@ import Control.Error.Util (hush)
 import Data.Aeson ((.=))
 import Data.Aeson qualified as AE
 import Data.Containers.ListUtils (nubOrd)
+import Data.Text qualified as T
 import Data.Time (defaultTimeLocale)
 import Data.Time.Format (formatTime)
 import Data.Time.Format.ISO8601 (formatShow, iso8601Format)
@@ -86,14 +87,14 @@ tracePage p = do
         whenJust traceItem.serviceNames \s -> selectHead "Services" "All Services" s "services" (Just sId)
         selectHead "Status" "All Statuses" ["OK", "ERROR", "UNSET"] "statuses" (Just sId)
         selectHead "Kinds" "All Kinds" ["CLIENT", "INTERNAL", "SERVER", "PRODUCER", "CONSUMER"] "Kinds" (Just sId)
-      div_ [] do
-        div_ [role_ "tablist", class_ "tabs tabs-boxed"] $ do
+      div_ [class_ "border rounded-2xl overflow-x-hidden"] do
+        div_ [role_ "tablist", class_ "tabs tabs-bordered bg-white"] $ do
           input_ [type_ "radio", name_ "my_tabs_2", role_ "tab", class_ "tab", term "aria-label" "Flame Graph", checked_]
-          div_ [role_ "tabpanel", class_ "tab-content p-4"] do
+          div_ [role_ "tabpanel", class_ "tab-content p-4 bg-white"] do
             div_ [id_ $ "time-container-a" <> traceItem.traceId, class_ "w-full border-b border-b-gray-300 h-6 text-xs relative"] pass
-            div_ [class_ "w-full h-44", id_ $ "a" <> traceItem.traceId] pass
+            div_ [class_ "w-full h-48 overflow-x-hidden overflow-y-auto relative", id_ $ "a" <> traceItem.traceId] pass
           input_ [type_ "radio", name_ "my_tabs_2", role_ "tab", class_ "tab border-left", term "aria-label" "Span List"]
-          div_ [role_ "tabpanel", class_ "tab-content bg-base-100 border-base-300 rounded-box h-48 overflow-auto"] do
+          div_ [role_ "tabpanel", class_ "tab-content bg-base-100 border-base-300  h-48 overflow-auto"] do
             renderSpanTable p.spanRecords
 
       div_ [class_ "h-auto overflow-y-scroll mt-8  py-2 rounded-2xl border"] do
@@ -144,11 +145,11 @@ renderSpanRecordRow spanRecord = do
     , hxSwap_ "innerHTML"
     ]
     $ do
-      td_ [class_ "px-2 py-1 whitespace-nowrap"] $ toHtml $ formatTime defaultTimeLocale "%b %d %Y %H:%M:%S%Q" spanRecord.timestamp
-      td_ [class_ "px-2 py-1 whitespace-nowrap"] $ toHtml spanRecord.spanName
-      td_ [class_ "px-2 py-1 whitespace-nowrap"] $ toHtml $ show spanRecord.kind
-      td_ [class_ "px-2 py-1 whitespace-nowrap"] $ toHtml $ show spanRecord.status
-      td_ [class_ "px-2 py-1 whitespace-nowrap"] $ toHtml $ getDurationNSMS spanRecord.spanDurationNs
+      td_ [class_ "px-2 py-1 max-w-48 truncate"] $ toHtml $ formatTime defaultTimeLocale "%b %d %Y %H:%M:%S%Q" spanRecord.timestamp
+      td_ [class_ "px-2 py-1 max-w-48 truncate"] $ toHtml spanRecord.spanName
+      td_ [class_ "px-2 py-1 max-w-48 truncate"] $ toHtml $ T.drop 2 $ maybe "----" show spanRecord.kind
+      td_ [class_ "px-2 py-1 max-w-48 truncate"] $ toHtml $ T.drop 2 $ maybe "----" show spanRecord.status
+      td_ [class_ "px-2 py-1 max-w-48 truncate"] $ toHtml $ getDurationNSMS spanRecord.spanDurationNs
 
 
 renderSpanTable :: V.Vector Telemetry.SpanRecord -> Html ()
