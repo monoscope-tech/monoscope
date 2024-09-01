@@ -94,32 +94,39 @@ tracePage p = do
         div_ [class_ "font-medium"] do
           span_ "Duration"
           span_ [class_ "text-sm font-normal badge badge-ghost"] $ toHtml $ getDurationNSMS traceItem.traceDurationNs
-      div_ [class_ "flex gap-2 w-full"] $ do
-        div_ [class_ "border rounded-2xl  w-[70%]"] do
+      div_ [class_ "flex gap-1 w-full mt-8"] $ do
+        div_ [class_ "w-full"] do
           div_ [role_ "tablist", class_ "tabs tabs-bordered bg-white"] $ do
             input_ [type_ "radio", name_ "my_tabs_2", role_ "tab", class_ "tab after:pb-2", term "aria-label" "Flame Graph", checked_]
-            div_ [role_ "tabpanel", class_ "tab-content px-2 pt-4 bg-white"] do
-              div_ [id_ $ "time-container-a" <> traceItem.traceId, class_ "w-full border-b border-b-gray-300 h-6 text-xs relative"] pass
-              div_ [class_ "w-full h-48 overflow-x-hidden overflow-y-auto relative", id_ $ "a" <> traceItem.traceId] pass
+            div_ [role_ "tabpanel", class_ "tab-content w-full bg-white"] do
+              div_ [class_ "flex gap-2 w-full pt-2"] do
+                div_ [class_ "w-[65%] px-4 pt-4 border rounded-2xl overflow-x-hidden"] do
+                  div_ [id_ $ "time-container-a" <> traceItem.traceId, class_ "w-full border-b border-b-gray-300 h-6 text-xs relative"] pass
+                  div_ [class_ "w-full h-48 overflow-x-hidden overflow-y-auto relative", id_ $ "a" <> traceItem.traceId] pass
+                div_ [class_ "border rounded-2xl w-[35%] overflow-x-hidden"] do
+                  h3_ [class_ "w-full flex p-2 font-medium justify-between items-center border-b"] do
+                    span_ [] "Services"
+                    span_ [] "Exec Time %"
+                  div_ [class_ "w-full h-[200px] overflow-x-hidden text-sm text-gray-600 overflow-y-auto", id_ $ "services-" <> traceItem.traceId] do
+                    forM_ serviceNames $ \s -> do
+                      let spans = filter (\x -> x.name == s) serviceData
+                          duration = sum $ (.duration) <$> spans
+                          allDur = sum $ (.duration) <$> serviceData
+                          percent = show $ (fromIntegral duration / fromIntegral allDur) * 100
+                          color = getServiceColor s serviceColors
+                      div_ [class_ "flex items-center justify-between px-2 py-1"] $ do
+                        div_ [class_ "flex gap-1 items-center"] $ do
+                          div_ [class_ "w-3 h-3 rounded", style_ $ "background-color:" <> color] pass
+                          span_ [class_ ""] $ toHtml s
+                        div_ [class_ "flex gap-1 items-center"] $ do
+                          span_ [class_ "text-xs max-w-52 truncate"] $ toHtml $ T.take 4 percent <> "%"
+                          div_ [class_ "w-[100px] h-3 bg-gray-200 rounded overflow-hidden"] $
+                            div_ [class_ "h-full pl-2 text-xs font-medium", style_ $ "width:" <> percent <> "%; background-color:" <> color] pass
+
             input_ [type_ "radio", name_ "my_tabs_2", role_ "tab", class_ "tab after:pb-2", term "aria-label" "Span List"]
-            div_ [role_ "tabpanel", class_ "tab-content  h-[230px] overflow-auto"] do
-              renderSpanTable p.spanRecords
-        div_ [class_ "border rounded-2xl w-[30%] overflow-x-hidden"] do
-          h3_ [class_ "w-full flex p-2 font-medium justify-between items-center border-b"] do
-            span_ [] "Services"
-            span_ [] "Exec Time %"
-          div_ [class_ "w-full h-[230px] overflow-x-hidden text-sm text-gray-600 overflow-y-auto", id_ $ "services-" <> traceItem.traceId] do
-            forM_ serviceNames $ \s -> do
-              let spans = filter (\x -> x.name == s) serviceData
-              let duration = sum $ (.duration) <$> spans
-              let allDur = sum $ (.duration) <$> serviceData
-              let percent = show $ (fromIntegral duration / fromIntegral allDur) * 100
-              div_ [class_ "flex items-center justify-between px-2 py-1"] $ do
-                span_ [class_ ""] $ toHtml s
-                div_ [class_ "flex gap-1 items-center"] $ do
-                  span_ [class_ "text-xs"] $ toHtml $ T.take 4 percent <> "%"
-                  div_ [class_ "w-[100px] h-4 bg-gray-200"] $
-                    div_ [class_ "h-full pl-2 text-xs font-medium", style_ $ "width:" <> percent <> "%; background-color:" <> getServiceColor s serviceColors] pass
+            div_ [role_ "tabpanel", class_ "tab-content pt-2"] do
+              div_ [class_ "border w-full rounded-2xl h-[230px] overflow-auto overflow-x-hidden "] do
+                renderSpanTable p.spanRecords
 
       div_ [class_ "h-auto overflow-y-scroll mt-8  py-2 rounded-2xl border"] do
         h3_ [class_ "text-xl font-semibold px-4 border-b pb-2"] "Span"

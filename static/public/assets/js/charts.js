@@ -354,10 +354,10 @@ function flameGraphChart(data, renderAt, colorsMap) {
     const startPix = (containerWidth * xStart) / rootVal
     const width = (containerWidth * xEnd) / rootVal
 
-    const height = 25
+    const height = 20
     const yStart = height * level + (level + 1) * 3
 
-    const div = elt('div', { class: 'absolute hover:z-[999] flex items-center justify-between flex-nowrap overflow-hidden hover:border hover:border-black' })
+    const div = elt('div', { class: 'absolute hover:z-[999] flex rounded items-center justify-between flex-nowrap overflow-hidden hover:border hover:border-black' })
     div.style.left = `${startPix}px`
     div.style.top = `${yStart}px`
     div.style.width = `${width}px`
@@ -377,8 +377,9 @@ function flameGraphChart(data, renderAt, colorsMap) {
     const rootVal = stackTrace.sort((a, b) => b.value - a.value)[0].value || 1
     generateTimeIntervals(rootVal, target)
     const data = recursionJson(stackTrace)
+    const sortedData = data.sort((a, b) => b.value[2] - a.value[2])
 
-    data.forEach((item) => {
+    sortedData.forEach((item) => {
       renderItem(item, target, rootVal)
     })
   }
@@ -468,19 +469,4 @@ function elt(type, props, ...children) {
     else dom.appendChild(document.createTextNode(child))
   }
   return dom
-}
-
-function getServiceHtml(name, serviceColor, durationPercent) {
-  const container = elt('div', { class: 'flex items-center justify-between px-2 py-1' })
-  const nameSpan = elt('span', { class: '' }, name)
-  const durationDiv = elt('div', { class: 'flex gap-1 items-center' })
-  const durationSpan = elt('span', { class: 'text-sm' }, `${durationPercent}%`)
-  const durationBar = elt('div', { class: 'w-[100px] h-4 bg-gray-200' })
-  const durationBarInner = elt('div', { class: 'h-full', style: `background-color: ${serviceColor}; width: ${durationPercent}%` })
-  durationDiv.appendChild(durationSpan)
-  durationDiv.appendChild(durationBar)
-  durationBar.appendChild(durationBarInner)
-  container.appendChild(nameSpan)
-  container.appendChild(durationDiv)
-  return container
 }
