@@ -14,6 +14,7 @@ import Data.Aeson.KeyMap qualified as KEM
 import Data.Containers.ListUtils (nubOrd)
 import Data.HashMap.Internal.Strict qualified as HM
 import Data.List.Extra (nub)
+import Data.Scientific (toBoundedInteger)
 import Data.Text qualified as T
 import Data.Time (defaultTimeLocale)
 import Data.Time.Format (formatTime)
@@ -32,8 +33,9 @@ import Pages.Log qualified as Log
 import Pages.Traces.Spans qualified as Spans
 import Pkg.Parser (pSource)
 import Relude
+import Relude.Unsafe (read)
 import Text.Megaparsec (parseMaybe)
-import Utils (faSprite_, getDurationNSMS, getServiceColors, listToIndexHashMap, utcTimeToNanoseconds)
+import Utils (faSprite_, getDurationNSMS, getServiceColors, getStatusColor, listToIndexHashMap, utcTimeToNanoseconds)
 import Witch.From (from)
 
 
@@ -79,6 +81,7 @@ tracePage p = do
       sId = p.span_id
       serviceData = V.toList $ getServiceData <$> p.spanRecords
       serviceNames = V.fromList $ ordNub $ (.name) <$> serviceData
+      reqDetails = getRequestDetails (V.head p.spanRecords)
       serviceColors = getServiceColors serviceNames
   div_ [class_ "w-full h-full"] $ do
     div_ [class_ "flex flex-col w-full gap-4 h-full"] $ do
@@ -89,15 +92,31 @@ tracePage p = do
           faSprite_ "arrow-right" "regular" "w-4 h-4 font-bold"
           h4_ [class_ "text-xl font-medium"] $ toHtml $ if not (null p.spanRecords) then (V.head p.spanRecords).spanName else "Unknown Span"
         div_ [class_ "flex items-end border rounded"] do
-          span_ [class_ "text-sm text-gray-500 font-medium border-r px-3 py-1"] "Trace ID"
-          span_ [class_ "text-sm px-3 py-1"] $ toHtml traceItem.traceId
-      div_ [class_ "flex gap-4"] $ do
-        div_ [class_ "font-medium"] do
-          span_ "Timestamp"
-          span_ [class_ "text-sm font-normal badge badge-ghost"] $ toHtml $ formatTime defaultTimeLocale "%b %d %Y %H:%M:%S%Q" traceItem.traceStartTime
-        div_ [class_ "font-medium"] do
-          span_ "Duration"
-          span_ [class_ "text-sm font-normal badge badge-ghost"] $ toHtml $ getDurationNSMS traceItem.traceDurationNs
+          span_ [class_ "text-sm text-gray-500 font-medium border-r px-2 py-1"] "Trace ID"
+          span_ [class_ "text-sm px-2 py-1"] $ toHtml traceItem.traceId
+      div_ [class_ "flex gap-4 items-center justify-between text-gray-600"] $ do
+        div_ [class_ "flex gap-4 items-center"] do
+          div_ [class_ "font-medium flex shrink-0 items-center rounded gap-1 border px-2 py-1.5 text-gray-600"] do
+            faSprite_ "clock" "regular" "w-3 h-3"
+            span_ [class_ "text-sm font-medium"] $ toHtml $ getDurationNSMS traceItem.traceDurationNs
+          div_ [class_ "flex items-center gap-4"] do
+            whenJust reqDetails $ \case
+              HTTPSpan (scheme, method, path, status) -> do
+                span_ [class_ "text-sm font-medium border rounded px-2 py-1.5"] $ toHtml scheme
+                div_ [class_ "flex border rounded overflow-hidden"] do
+                  span_ [class_ "text-sm px-2 py-1.5 border-r bg-gray-200"] $ toHtml method
+                  span_ [class_ "text-sm px-2 py-1.5 max-w-96 truncate"] $ toHtml path
+                  let extraClass = getStatusColor status
+                  span_ [class_ $ "text-sm px-2 py-1.5 " <> extraClass] $ toHtml $ T.take 3 $ show status
+              GRPCSpan (scheme, method, path, status) -> do
+                span_ [class_ "text-sm font-medium border rounded px-2 py-1.5"] $ toHtml scheme
+                div_ [class_ "flex border rounded overflow-hidden"] do
+                  span_ [class_ "text-sm px-2 py-1.5 max-w-44 truncate bg-gray-200 border-r"] $ toHtml method
+                  span_ [class_ "text-sm px-2 py-1.5 max-w-96 truncate"] $ toHtml path
+                  span_ [class_ "text-sm px-2 py-1.5 border-l"] $ toHtml $ show status
+
+        span_ [class_ "text-sm"] $ toHtml $ formatTime defaultTimeLocale "%b %d %Y %H:%M:%S%Q" traceItem.traceStartTime
+
       div_ [class_ "flex gap-1 w-full mt-8"] $ do
         div_ [class_ "w-full"] do
           div_ [role_ "tablist", class_ "tabs tabs-bordered bg-white"] $ do
@@ -218,3 +237,27 @@ renderSpanTable records =
         th_ [scope_ "col", class_ "px-2 py- font-medium"] "duration"
     tbody_ $
       mapM_ renderSpanRecordRow records
+
+
+data SpanScheme = HTTPSpan (Text, Text, Text, Int) | GRPCSpan (Text, Text, Text, Int)
+  deriving (Show)
+
+
+getRequestDetails :: Telemetry.SpanRecord -> Maybe SpanScheme
+getRequestDetails spanRecord = case spanRecord.attributes of
+  AE.Object r -> case KEM.lookup "http.method" r of
+    Just (AE.String method) -> Just $ HTTPSpan ("HTTP", method, fromMaybe "/" $ getText "http.url" r, fromMaybe 0 $ getInt "http.status_code" r)
+    _ -> case KEM.lookup "rpc.system" r of
+      Just (AE.String "grpc") -> Just $ GRPCSpan ("GRPC", fromMaybe "" $ getText "rpc.service" r, fromMaybe "" $ getText "rpc.method" r, fromMaybe 0 $ getInt "rpc.grpc.status_code" r)
+      _ -> Nothing
+  _ -> Nothing
+  where
+    getText :: Text -> AE.Object -> Maybe Text
+    getText key v = case KEM.lookup (AEKey.fromText key) v of
+      Just (AE.String s) -> Just s
+      _ -> Nothing
+    getInt :: Text -> AE.Object -> Maybe Int
+    getInt key v = case KEM.lookup (AEKey.fromText key) v of
+      Just (AE.Number n) -> toBoundedInteger n
+      Just (AE.String s) -> readMaybe $ toString s
+      _ -> Nothing
