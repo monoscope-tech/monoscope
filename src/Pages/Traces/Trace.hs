@@ -1,6 +1,6 @@
 module Pages.Traces.Trace (traceH, TraceDetailsGet (..)) where
 
-import Data.Text
+import Data.Text (Text)
 import Lucid
 import Network.GRPC.HighLevel (AuthContext)
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
@@ -8,7 +8,12 @@ import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
 import Control.Error.Util (hush)
 import Data.Aeson ((.=))
 import Data.Aeson qualified as AE
+import Data.Aeson.Key qualified as AEKey
+import Data.Aeson.KeyMap qualified as KEM
+
 import Data.Containers.ListUtils (nubOrd)
+import Data.HashMap.Internal.Strict qualified as HM
+import Data.List.Extra (nub)
 import Data.Text qualified as T
 import Data.Time (defaultTimeLocale)
 import Data.Time.Format (formatTime)
@@ -28,7 +33,7 @@ import Pages.Traces.Spans qualified as Spans
 import Pkg.Parser (pSource)
 import Relude
 import Text.Megaparsec (parseMaybe)
-import Utils (faSprite_, getDurationNSMS, listToIndexHashMap, utcTimeToNanoseconds)
+import Utils (faSprite_, getDurationNSMS, getServiceColors, listToIndexHashMap, utcTimeToNanoseconds)
 import Witch.From (from)
 
 
@@ -58,6 +63,9 @@ data TraceDetailsGet
   | TraceDetailsNotFound Text
 
 
+data ServiceData = ServiceData {name :: Text, duration :: Integer}
+
+
 instance ToHtml TraceDetailsGet where
   toHtml (TraceDetails p) = toHtml $ tracePage p
   toHtml (TraceDetailsNotFound msg) = toHtml msg
@@ -69,8 +77,11 @@ tracePage p = do
   let pid = p.pid
       traceItem = p.traceItem
       sId = p.span_id
+      serviceData = V.toList $ getServiceData <$> p.spanRecords
+      serviceNames = V.fromList $ ordNub $ (.name) <$> serviceData
+      serviceColors = getServiceColors serviceNames
   div_ [class_ "w-full h-full"] $ do
-    div_ [class_ "flex flex-col gap-4 h-full"] $ do
+    div_ [class_ "flex flex-col w-full gap-4 h-full"] $ do
       div_ [class_ "flex items-end gap-6"] $ do
         h3_ [class_ "whitespace-nowrap text-3xl font-bold leading-none tracking-tight"] "Trace"
         div_ [class_ "flex items-end"] do
@@ -83,40 +94,72 @@ tracePage p = do
         div_ [class_ "font-medium"] do
           span_ "Duration"
           span_ [class_ "text-sm font-normal badge badge-ghost"] $ toHtml $ getDurationNSMS traceItem.traceDurationNs
-      div_ [class_ "mt-5 flex items-center w-full gap-10 pb-5 border-b"] do
-        whenJust traceItem.serviceNames \s -> selectHead "Services" "All Services" s "services" (Just sId)
-        selectHead "Status" "All Statuses" ["OK", "ERROR", "UNSET"] "statuses" (Just sId)
-        selectHead "Kinds" "All Kinds" ["CLIENT", "INTERNAL", "SERVER", "PRODUCER", "CONSUMER"] "Kinds" (Just sId)
-      div_ [class_ "border rounded-2xl overflow-x-hidden"] do
-        div_ [role_ "tablist", class_ "tabs tabs-bordered bg-white"] $ do
-          input_ [type_ "radio", name_ "my_tabs_2", role_ "tab", class_ "tab", term "aria-label" "Flame Graph", checked_]
-          div_ [role_ "tabpanel", class_ "tab-content p-4 bg-white"] do
-            div_ [id_ $ "time-container-a" <> traceItem.traceId, class_ "w-full border-b border-b-gray-300 h-6 text-xs relative"] pass
-            div_ [class_ "w-full h-48 overflow-x-hidden overflow-y-auto relative", id_ $ "a" <> traceItem.traceId] pass
-          input_ [type_ "radio", name_ "my_tabs_2", role_ "tab", class_ "tab border-left", term "aria-label" "Span List"]
-          div_ [role_ "tabpanel", class_ "tab-content bg-base-100 border-base-300  h-48 overflow-auto"] do
-            renderSpanTable p.spanRecords
+      div_ [class_ "flex gap-2 w-full"] $ do
+        div_ [class_ "border rounded-2xl  w-[70%]"] do
+          div_ [role_ "tablist", class_ "tabs tabs-bordered bg-white"] $ do
+            input_ [type_ "radio", name_ "my_tabs_2", role_ "tab", class_ "tab after:pb-2", term "aria-label" "Flame Graph", checked_]
+            div_ [role_ "tabpanel", class_ "tab-content px-2 pt-4 bg-white"] do
+              div_ [id_ $ "time-container-a" <> traceItem.traceId, class_ "w-full border-b border-b-gray-300 h-6 text-xs relative"] pass
+              div_ [class_ "w-full h-48 overflow-x-hidden overflow-y-auto relative", id_ $ "a" <> traceItem.traceId] pass
+            input_ [type_ "radio", name_ "my_tabs_2", role_ "tab", class_ "tab after:pb-2", term "aria-label" "Span List"]
+            div_ [role_ "tabpanel", class_ "tab-content  h-[230px] overflow-auto"] do
+              renderSpanTable p.spanRecords
+        div_ [class_ "border rounded-2xl w-[30%] overflow-x-hidden"] do
+          h3_ [class_ "w-full flex p-2 font-medium justify-between items-center border-b"] do
+            span_ [] "Services"
+            span_ [] "Exec Time %"
+          div_ [class_ "w-full h-[230px] overflow-x-hidden text-sm text-gray-600 overflow-y-auto", id_ $ "services-" <> traceItem.traceId] do
+            forM_ serviceNames $ \s -> do
+              let spans = filter (\x -> x.name == s) serviceData
+              let duration = sum $ (.duration) <$> spans
+              let allDur = sum $ (.duration) <$> serviceData
+              let percent = show $ (fromIntegral duration / fromIntegral allDur) * 100
+              div_ [class_ "flex items-center justify-between px-2 py-1"] $ do
+                span_ [class_ ""] $ toHtml s
+                div_ [class_ "flex gap-1 items-center"] $ do
+                  span_ [class_ "text-xs"] $ toHtml $ T.take 4 percent <> "%"
+                  div_ [class_ "w-[100px] h-4 bg-gray-200"] $
+                    div_ [class_ "h-full pl-2 text-xs font-medium", style_ $ "width:" <> percent <> "%; background-color:" <> getServiceColor s serviceColors] pass
 
       div_ [class_ "h-auto overflow-y-scroll mt-8  py-2 rounded-2xl border"] do
         h3_ [class_ "text-xl font-semibold px-4 border-b pb-2"] "Span"
         div_ [class_ "flex flex-col gap-4 px-4", id_ $ "span-" <> traceItem.traceId] do
           let tSp = fromMaybe (V.head p.spanRecords) (V.find (\s -> s.spanId == sId) p.spanRecords)
           Spans.expandedSpanItem pid tSp
-      let spanJson =
-            decodeUtf8 $
-              AE.encode $
-                p.spanRecords
-                  <&> ( \sp ->
-                          AE.object
-                            [ "span_id" .= sp.spanId
-                            , "name" .= sp.spanName
-                            , "value" .= sp.spanDurationNs
-                            , "start" .= utcTimeToNanoseconds sp.startTime
-                            , "parent_id" .= sp.parentSpanId
-                            ]
-                      )
+      let spanJson = decodeUtf8 $ AE.encode $ p.spanRecords <&> getSpanJson
+      let colorsJson = decodeUtf8 $ AE.encode $ AE.object [AEKey.fromText k .= v | (k, v) <- HM.toList serviceColors]
       let trId = traceItem.traceId
-      script_ [text|flameGraphChart($spanJson, "a$trId")|]
+      script_ [text|flameGraphChart($spanJson, "a$trId", $colorsJson);|]
+
+
+getSpanJson :: Telemetry.SpanRecord -> AE.Value
+getSpanJson sp =
+  AE.object
+    [ "span_id" .= sp.spanId
+    , "name" .= sp.spanName
+    , "value" .= sp.spanDurationNs
+    , "start" .= utcTimeToNanoseconds sp.startTime
+    , "parent_id" .= sp.parentSpanId
+    , "service_name" .= getServiceName sp
+    ]
+
+
+getServiceName :: Telemetry.SpanRecord -> Text
+getServiceName sp = case sp.resource of
+  AE.Object r -> maybe "Unknown" serviceNameString $ KEM.lookup "service.name" r
+  _ -> "Unknown"
+  where
+    serviceNameString :: AE.Value -> Text
+    serviceNameString (AE.String s) = s
+    serviceNameString _ = "Unknown"
+
+
+getServiceData :: Telemetry.SpanRecord -> ServiceData
+getServiceData sp = ServiceData{name = getServiceName sp, duration = sp.spanDurationNs}
+
+
+getServiceColor :: Text -> HashMap Text Text -> Text
+getServiceColor s serviceColors = fromMaybe "#000000" $ HM.lookup s serviceColors
 
 
 selectHead :: Text -> Text -> V.Vector Text -> Text -> Maybe Text -> Html ()

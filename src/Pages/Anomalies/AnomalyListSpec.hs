@@ -18,8 +18,9 @@ import Pkg.TestUtils
 import ProcessMessage (processRequestMessages)
 import Relude
 import Relude.Unsafe qualified as Unsafe
-import RequestMessages (RequestMessage (..), replaceNullChars, toXXHash, valueToFields)
+import RequestMessages (RequestMessage (..), replaceNullChars, valueToFields)
 import Test.Hspec (Spec, aroundAll, describe, it, shouldBe)
+import Utils (toXXHash)
 
 
 testPid :: Projects.ProjectId
@@ -197,7 +198,7 @@ msg3 timestamp =
             "sdk_type":"JsExpress",
             "status_code":200,
             "timestamp": #{timestamp},
-            "url_path":"/","errors":[],"tags":[]} 
+            "url_path":"/","errors":[],"tags":[]}
       |]
 
 
@@ -223,5 +224,5 @@ msg4 timestamp =
             "sdk_type":"JsExpress",
             "status_code":200,
             "timestamp": #{timestamp},
-            "url_path":"/","errors":[],"tags":[]} 
+            "url_path":"/","errors":[],"tags":[]}
       |]

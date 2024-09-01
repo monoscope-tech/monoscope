@@ -13,8 +13,8 @@ import ProcessMessage (processRequestMessages)
 
 import Relude
 import Relude.Unsafe qualified as Unsafe
-import RequestMessages (toXXHash)
 import Test.Hspec (Spec, aroundAll, describe, it, shouldBe)
+import Utils (toXXHash)
 
 
 testPid :: Projects.ProjectId
@@ -38,8 +38,8 @@ spec = aroundAll withTestResources do
       let reqMsg1 = Unsafe.fromJust $ convert $ testRequestMsgs.reqMsg1 nowTxt
       let reqMsg2 = Unsafe.fromJust $ convert $ testRequestMsgs.reqMsg2 nowTxt
       let msgs =
-            concat
-              $ replicate
+            concat $
+              replicate
                 100
                 [ ("m1", reqMsg1)
                 , ("m2", reqMsg2)

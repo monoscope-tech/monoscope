@@ -7,7 +7,6 @@ module RequestMessages (
   valueToFormatStr,
   valueToFields,
   redactJSON,
-  toXXHash,
   replaceNullChars,
 )
 where
@@ -49,7 +48,7 @@ import Numeric (showHex)
 import Relude
 import Relude.Unsafe as Unsafe (read)
 import Text.Regex.TDFA ((=~))
-import Utils (DBField ())
+import Utils (DBField (), toXXHash)
 
 
 -- $setup
@@ -133,14 +132,6 @@ redactJSON paths' = redactJSON' (V.map stripPrefixDot paths')
 
 replaceNullChars :: Text -> Text
 replaceNullChars = T.replace "\\u0000" ""
-
-
-leftPad :: Int -> Text -> Text
-leftPad len txt = T.justifyRight len '0' (T.take len txt)
-
-
-toXXHash :: Text -> Text
-toXXHash input = leftPad 8 $ fromString $ showHex (xxHash $ encodeUtf8 input) ""
 
 
 processErrors :: Projects.ProjectId -> RequestDumps.SDKTypes -> Text -> Text -> RequestDumps.ATError -> (RequestDumps.ATError, Query, [DBField])
@@ -246,8 +237,8 @@ requestMsgToDumpAndEndpoint pjc rM now dumpIDOriginal = do
             -- A shape is a deterministic representation of a request-response combination for a given endpoint.
             -- We usually expect multiple shapes per endpoint. Eg a shape for a success request-response and another for an error response.
             -- Shapes are dependent on the endpoint, statusCode and the unique fields in that shape.
-            Just
-              $ Shapes.Shape
+            Just $
+              Shapes.Shape
                 { id = Shapes.ShapeId dumpID
                 , createdAt = timestampUTC
                 , updatedAt = now

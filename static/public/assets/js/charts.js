@@ -297,22 +297,7 @@ function latencyHistogram(renderAt, pc, data) {
   myChart.setOption(option)
 }
 
-function flameGraphChart(data, renderAt) {
-  const myChart = echarts.init(document.getElementById(renderAt))
-  myChart.showLoading()
-  const flameGraphColors = [
-    '#FCA5A5', // Red-300
-    '#FCD34D', // Amber-300
-    '#FDBA74', // Orange-300
-    '#FDE047', // Yellow-300
-    '#BEF264', // Lime-300
-    '#86EFAC', // Green-300
-    '#5EEAD4', // Teal-300
-    '#67E8F9', // Cyan-300
-    '#93C5FD', // Blue-300
-    '#D8B4FE', // Purple-300
-  ]
-
+function flameGraphChart(data, renderAt, colorsMap) {
   const filterJson = (json, id) => {
     if (id == null) {
       return json
@@ -340,7 +325,7 @@ function flameGraphChart(data, renderAt) {
     const filteredJson = filterJson(structuredClone(jsonObj), id)
     const rootVal = filteredJson.sort((a, b) => b.value - a.value)[0].value || 1
     const recur = (item, start = 0, level = 0) => {
-      const color = flameGraphColors[Math.floor(Math.random() * flameGraphColors.length)]
+      const color = colorsMap[item.service_name] || '#000000'
       const temp = {
         name: item.name,
         value: [level, item.start - start, item.value, item.name, (item.value / rootVal) * 100],
@@ -357,20 +342,6 @@ function flameGraphChart(data, renderAt) {
       recur(item, item.start)
     })
     return data
-  }
-  const heightOfJson = (json) => {
-    const recur = (item, level = 0) => {
-      if ((item.children || []).length === 0) {
-        return level
-      }
-      let maxLevel = level
-      for (const child of item.children) {
-        const tempLevel = recur(child, level + 1)
-        maxLevel = Math.max(maxLevel, tempLevel)
-      }
-      return maxLevel
-    }
-    return recur(json)
   }
 
   const renderItem = (item, renderAt, rootVal) => {
@@ -403,55 +374,9 @@ function flameGraphChart(data, renderAt) {
   }
 
   function flameGraph(stackTrace, target) {
-    myChart.hideLoading()
     const rootVal = stackTrace.sort((a, b) => b.value - a.value)[0].value || 1
     generateTimeIntervals(rootVal, target)
     const data = recursionJson(stackTrace)
-
-    // const canvas = document.getElementById('c-' + target)
-
-    // canvas.width = 800
-    // canvas.height = 400
-
-    // const flameChart = new window.FlameChart({
-    //   canvas, // mandatory
-    //   data,
-    //   marks: [
-    //     {
-    //       shortName: 'DCL',
-    //       fullName: 'DOMContentLoaded',
-    //       timestamp: 500,
-    //     },
-    //   ],
-    //   waterfall: {
-    //     /* ... */
-    //   },
-    //   timeseries: [
-    //     /* ... */
-    //   ],
-    //   timeframeTimeseries: [
-    //     /* ... */
-    //   ],
-    //   colors: {
-    //     task: '#FFFFFF',
-    //     'sub-task': '#000000',
-    //   },
-    //   settings: {
-    //     hotkeys: {
-    //       active: true, // enable navigation using arrow keys
-    //       scrollSpeed: 0.5, // scroll speed (ArrowLeft, ArrowRight)
-    //       zoomSpeed: 0.001, // zoom speed (ArrowUp, ArrowDown, -, +)
-    //       fastMultiplayer: 5, // speed multiplier when zooming and scrolling (activated by Shift key)
-    //     },
-    //     options: {
-    //       tooltip: () => {
-    //         /*...*/
-    //       }, // see section "Custom Tooltip" below
-    //       timeUnits: 'ms',
-    //     },
-    //     styles: customStyles, // see section "Styles" below
-    //   },
-    // })
 
     data.forEach((item) => {
       renderItem(item, target, rootVal)
@@ -495,12 +420,12 @@ function generateTimeIntervals(duration, target) {
   const [durationF, unit] = formatDuration(duration)
   container.innerHTML = ''
   const containerWidth = container.offsetWidth
-  const intervalWidth = containerWidth / 11
+  const intervalWidth = containerWidth / 9
   const intervals = []
-  for (let i = 0; i < 12; i++) {
-    const time = Math.floor((i * durationF) / 11)
+  for (let i = 0; i < 10; i++) {
+    const time = Math.floor((i * durationF) / 9)
     intervals.push(`
-              <div class="absolute bottom-0 text-gray-700 border-left" style="width: ${intervalWidth}px; left: ${i * intervalWidth}px;">
+              <div class="absolute bottom-0 text-gray-700 border-left overflow-x-visible" style="width: ${intervalWidth}px; left: ${i * intervalWidth}px;">
                <div class="relative" style="height:10px">
                 <div class="bg-gray-300"  style="width:1px; height:10px;"></div>
                 <span class="absolute  left-0 -translate-x-1/2 text-xs" style="top:-13px">${time} ${unit}</span>
@@ -543,4 +468,19 @@ function elt(type, props, ...children) {
     else dom.appendChild(document.createTextNode(child))
   }
   return dom
+}
+
+function getServiceHtml(name, serviceColor, durationPercent) {
+  const container = elt('div', { class: 'flex items-center justify-between px-2 py-1' })
+  const nameSpan = elt('span', { class: '' }, name)
+  const durationDiv = elt('div', { class: 'flex gap-1 items-center' })
+  const durationSpan = elt('span', { class: 'text-sm' }, `${durationPercent}%`)
+  const durationBar = elt('div', { class: 'w-[100px] h-4 bg-gray-200' })
+  const durationBarInner = elt('div', { class: 'h-full', style: `background-color: ${serviceColor}; width: ${durationPercent}%` })
+  durationDiv.appendChild(durationSpan)
+  durationDiv.appendChild(durationBar)
+  durationBar.appendChild(durationBarInner)
+  container.appendChild(nameSpan)
+  container.appendChild(durationDiv)
+  return container
 }
