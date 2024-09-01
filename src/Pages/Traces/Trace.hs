@@ -82,11 +82,15 @@ tracePage p = do
       serviceColors = getServiceColors serviceNames
   div_ [class_ "w-full h-full"] $ do
     div_ [class_ "flex flex-col w-full gap-4 h-full"] $ do
-      div_ [class_ "flex items-end gap-6"] $ do
-        h3_ [class_ "whitespace-nowrap text-3xl font-bold leading-none tracking-tight"] "Trace"
-        div_ [class_ "flex items-end"] do
-          span_ [class_ "text-sm text-gray-500 font-medium"] "ID"
-          span_ [class_ "text-sm badge badge-ghost"] $ toHtml traceItem.traceId
+      div_ [class_ "flex items-center gap-4"] $ do
+        h3_ [class_ "whitespace-nowrap text-xl font-bold pr-4 border-r border-r-2"] "Trace"
+        div_ [class_ "flex items-center gap-4"] $ do
+          h4_ [class_ "text-xl font-medium"] $ toHtml $ if not (null serviceNames) then V.head serviceNames else "Unknown Service"
+          faSprite_ "arrow-right" "regular" "w-4 h-4 font-bold"
+          h4_ [class_ "text-xl font-medium"] $ toHtml $ if not (null p.spanRecords) then (V.head p.spanRecords).spanName else "Unknown Span"
+        div_ [class_ "flex items-end border rounded"] do
+          span_ [class_ "text-sm text-gray-500 font-medium border-r px-3 py-1"] "Trace ID"
+          span_ [class_ "text-sm px-3 py-1"] $ toHtml traceItem.traceId
       div_ [class_ "flex gap-4"] $ do
         div_ [class_ "font-medium"] do
           span_ "Timestamp"
