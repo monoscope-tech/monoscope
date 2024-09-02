@@ -102,7 +102,7 @@ tracePage p = do
           div_ [class_ "flex items-center gap-4"] do
             whenJust reqDetails $ \case
               ("HTTP", method, path, status) -> do
-                span_ [class_ "text-sm font-medium border rounded px-2 py-1.5"] $ "HTTP"
+                span_ [class_ "text-sm font-medium border rounded px-2 py-1.5"] "HTTP"
                 div_ [class_ "flex border rounded overflow-hidden"] do
                   span_ [class_ "text-sm px-2 py-1.5 border-r bg-gray-200"] $ toHtml method
                   span_ [class_ "text-sm px-2 py-1.5 max-w-96 truncate"] $ toHtml path
@@ -117,16 +117,16 @@ tracePage p = do
 
         span_ [class_ "text-sm"] $ toHtml $ formatTime defaultTimeLocale "%b %d %Y %H:%M:%S%Q" traceItem.traceStartTime
 
-      div_ [class_ "flex gap-1 w-full mt-8"] $ do
+      div_ [class_ "flex gap-1 w-full mt-5"] $ do
         div_ [class_ "w-full"] do
           div_ [role_ "tablist", class_ "tabs tabs-bordered bg-white"] $ do
             input_ [type_ "radio", name_ "my_tabs_2", role_ "tab", class_ "tab after:pb-2", term "aria-label" "Flame Graph", checked_]
             div_ [role_ "tabpanel", class_ "tab-content w-full bg-white"] do
               div_ [class_ "flex gap-2 w-full pt-2"] do
-                div_ [class_ "w-[65%] px-4 pt-4 border rounded-2xl overflow-x-hidden"] do
+                div_ [class_ "w-[65%] px-4 pt-4 border rounded-lg overflow-x-hidden"] do
                   div_ [id_ $ "time-container-a" <> traceItem.traceId, class_ "w-full border-b border-b-gray-300 h-6 text-xs relative"] pass
                   div_ [class_ "w-full h-48 overflow-x-hidden overflow-y-auto relative", id_ $ "a" <> traceItem.traceId] pass
-                div_ [class_ "border rounded-2xl w-[35%] overflow-x-hidden"] do
+                div_ [class_ "border rounded-lg w-[35%] overflow-x-hidden"] do
                   h3_ [class_ "w-full flex p-2 font-medium justify-between items-center border-b"] do
                     span_ [] "Services"
                     span_ [] "Exec Time %"
@@ -148,10 +148,10 @@ tracePage p = do
 
             input_ [type_ "radio", name_ "my_tabs_2", role_ "tab", class_ "tab after:pb-2", term "aria-label" "Span List"]
             div_ [role_ "tabpanel", class_ "tab-content pt-2"] do
-              div_ [class_ "border w-full rounded-2xl h-[230px] overflow-auto overflow-x-hidden "] do
-                renderSpanTable p.spanRecords
+              div_ [class_ "border w-full rounded-lg min-h-[230px] max-h-[330px] overflow-auto overflow-x-hidden "] do
+                renderSpanTable serviceNames serviceColors p.spanRecords
 
-      div_ [class_ "h-auto overflow-y-scroll mt-8  py-2 rounded-2xl border"] do
+      div_ [class_ "h-auto overflow-y-scroll mt-5 py-2 rounded-lg border"] do
         h3_ [class_ "text-xl font-semibold px-4 border-b pb-2"] "Span"
         div_ [class_ "flex flex-col gap-4 px-4", id_ $ "span-" <> traceItem.traceId] do
           let tSp = fromMaybe (V.head p.spanRecords) (V.find (\s -> s.spanId == sId) p.spanRecords)
@@ -206,37 +206,57 @@ selectHead title current options baseUrl swapTarget = div_ [class_ "flex flex-co
         a_ [class_ "px-4 py-1 hover:bg-gray-100", href_ $ baseUrl <> option] $ toHtml option
 
 
-renderSpanRecordRow :: Telemetry.SpanRecord -> Html ()
-renderSpanRecordRow spanRecord = do
-  let pidText = UUID.toText spanRecord.projectId
-  let spanid = maybe "" UUID.toText spanRecord.uSpandId
-  let tme = from @String (formatShow iso8601Format spanRecord.timestamp)
+renderSpanRecordRow :: V.Vector Telemetry.SpanRecord -> HashMap Text Text -> Text -> Html ()
+renderSpanRecordRow spanRecords colors service = do
+  let totalDuration = sum $ (.spanDurationNs) <$> spanRecords
+  let filterRecords = V.filter (\x -> getServiceName x == service) spanRecords
+  let listLen = V.length filterRecords
+  let duration = sum $ (.spanDurationNs) <$> filterRecords
   tr_
-    [ class_ "bg-white w-full overflow-x-hidden text-xs p-2 cursor-pointer hover:bg-gray-100 border-b-2 last:border-b-0"
-    , hxGet_ $ "/p/" <> pidText <> "/log_explorer/" <> spanid <> "/" <> tme <> "/detailed?source=spans"
-    , hxTarget_ $ "#span-" <> spanRecord.traceId
-    , hxSwap_ "innerHTML"
+    [ class_ "bg-white w-full overflow-x-hidden p-2 cursor-pointer font-medium hover:bg-gray-100 border-b-2 last:border-b-0"
+    , [__|on click toggle .hidden on next <tr/> then toggle .rotate-90 on the first <svg/> in the first <td/> in me|]
     ]
-    $ do
-      td_ [class_ "px-2 py-1 max-w-48 truncate"] $ toHtml $ formatTime defaultTimeLocale "%b %d %Y %H:%M:%S%Q" spanRecord.timestamp
-      td_ [class_ "px-2 py-1 max-w-48 truncate"] $ toHtml spanRecord.spanName
-      td_ [class_ "px-2 py-1 max-w-48 truncate"] $ toHtml $ T.drop 2 $ maybe "----" show spanRecord.kind
-      td_ [class_ "px-2 py-1 max-w-48 truncate"] $ toHtml $ T.drop 2 $ maybe "----" show spanRecord.status
-      td_ [class_ "px-2 py-1 max-w-48 truncate"] $ toHtml $ getDurationNSMS spanRecord.spanDurationNs
+    do
+      td_ [class_ "px-2 py-1 w-[500px] truncate flex items-center gap-1"] do
+        faSprite_ "chevron-right" "regular" "h-3 w-3 mr-2 text-gray-500"
+        div_ [class_ "w-3 h-3 rounded", style_ $ "background-color:" <> getServiceColor service colors] pass
+        span_ [] $ toHtml service
+      td_ [class_ "px-2 py-1 max-w-48 truncate pl-4"] $ toHtml $ show listLen
+      td_ [class_ "px-2 py-1 max-w-48 truncate pl-4"] $ toHtml $ getDurationNSMS $ duration `div` toInteger listLen
+      td_ [class_ "px-2 py-1 max-w-48 truncate pl-4"] $ toHtml $ getDurationNSMS duration
+      td_ [class_ "px-2 py-1 max-w-48 truncate pl-4"] $ toHtml $ show (duration * 100 `div` totalDuration) <> "%"
+  tr_ [class_ "hidden p-0 m-0", [__|on click halt|]] do
+    td_ [colspan_ "5", class_ "pl-[13px] overflow-x-hidden"] do
+      div_ [class_ "w-full border-l-2"] do
+        forM_ filterRecords $ \spanRecord -> do
+          let pidText = UUID.toText spanRecord.projectId
+          let spanid = maybe "" UUID.toText spanRecord.uSpandId
+          let tme = from @String (formatShow iso8601Format spanRecord.timestamp)
+          div_
+            [ class_ "bg-white w-full overflow-x-hidden p-2 cursor-pointer hover:bg-gray-100 b--b2 last:border-b-0"
+            , hxGet_ $ "/p/" <> pidText <> "/log_explorer/" <> spanid <> "/" <> tme <> "/detailed?source=spans"
+            , hxTarget_ $ "#span-" <> spanRecord.traceId
+            , hxSwap_ "innerHTML"
+            ]
+            $ do
+              span_ [class_ "px-2 py-1 w-96 truncate"] $ toHtml spanRecord.spanName
+              span_ [class_ "px-2 py-1 max-w-48 truncate"] $ toHtml $ T.drop 2 $ maybe "----" show spanRecord.kind
+              span_ [class_ "px-2 py-1 max-w-48 truncate"] $ toHtml $ T.drop 2 $ maybe "----" show spanRecord.status
+              span_ [class_ "px-2 py-1 max-w-48 truncate"] $ toHtml $ getDurationNSMS spanRecord.spanDurationNs
 
 
-renderSpanTable :: V.Vector Telemetry.SpanRecord -> Html ()
-renderSpanTable records =
-  table_ [class_ "min-w-full text-sm text-left text-gray-500"] $ do
-    thead_ $
-      tr_ [class_ "text-xs text-gray-600 bg-gray-200 p-2"] $ do
-        th_ [scope_ "col", class_ "px-2 py- font-medium"] "timestamp"
-        th_ [scope_ "col", class_ "px-2 py- font-medium"] "span name"
-        th_ [scope_ "col", class_ "px-2 py- font-medium"] "kind"
-        th_ [scope_ "col", class_ "px-2 py- font-medium"] "status"
-        th_ [scope_ "col", class_ "px-2 py- font-medium"] "duration"
-    tbody_ $
-      mapM_ renderSpanRecordRow records
+renderSpanTable :: V.Vector Text -> HashMap Text Text -> V.Vector Telemetry.SpanRecord -> Html ()
+renderSpanTable services colors records =
+  table_ [class_ "w-full table table-pin-rows table-pin-cols overflow-x-hidden"] $ do
+    thead_ [class_ "border-b bg-gray-50"] $ do
+      tr_ [class_ "p-2"] $ do
+        th_ "Resource"
+        th_ "Spans"
+        th_ "Avg. Duration"
+        th_ "Exec. Time"
+        th_ "%Exec. Time"
+    tbody_ [class_ "space-y-0"] $
+      mapM_ (renderSpanRecordRow records colors) services
 
 
 getRequestDetails :: Telemetry.SpanRecord -> Maybe (Text, Text, Text, Int)
