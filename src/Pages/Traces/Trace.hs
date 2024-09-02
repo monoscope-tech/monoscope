@@ -101,14 +101,14 @@ tracePage p = do
             span_ [class_ "text-sm font-medium"] $ toHtml $ getDurationNSMS traceItem.traceDurationNs
           div_ [class_ "flex items-center gap-4"] do
             whenJust reqDetails $ \case
-              HTTPSpan (scheme, method, path, status) -> do
-                span_ [class_ "text-sm font-medium border rounded px-2 py-1.5"] $ toHtml scheme
+              ("HTTP", method, path, status) -> do
+                span_ [class_ "text-sm font-medium border rounded px-2 py-1.5"] $ "HTTP"
                 div_ [class_ "flex border rounded overflow-hidden"] do
                   span_ [class_ "text-sm px-2 py-1.5 border-r bg-gray-200"] $ toHtml method
                   span_ [class_ "text-sm px-2 py-1.5 max-w-96 truncate"] $ toHtml path
                   let extraClass = getStatusColor status
                   span_ [class_ $ "text-sm px-2 py-1.5 " <> extraClass] $ toHtml $ T.take 3 $ show status
-              GRPCSpan (scheme, method, path, status) -> do
+              (scheme, method, path, status) -> do
                 span_ [class_ "text-sm font-medium border rounded px-2 py-1.5"] $ toHtml scheme
                 div_ [class_ "flex border rounded overflow-hidden"] do
                   span_ [class_ "text-sm px-2 py-1.5 max-w-44 truncate bg-gray-200 border-r"] $ toHtml method
@@ -239,16 +239,12 @@ renderSpanTable records =
       mapM_ renderSpanRecordRow records
 
 
-data SpanScheme = HTTPSpan (Text, Text, Text, Int) | GRPCSpan (Text, Text, Text, Int)
-  deriving (Show)
-
-
-getRequestDetails :: Telemetry.SpanRecord -> Maybe SpanScheme
+getRequestDetails :: Telemetry.SpanRecord -> Maybe (Text, Text, Text, Int)
 getRequestDetails spanRecord = case spanRecord.attributes of
   AE.Object r -> case KEM.lookup "http.method" r of
-    Just (AE.String method) -> Just $ HTTPSpan ("HTTP", method, fromMaybe "/" $ getText "http.url" r, fromMaybe 0 $ getInt "http.status_code" r)
+    Just (AE.String method) -> Just ("HTTP", method, fromMaybe "/" $ getText "http.url" r, fromMaybe 0 $ getInt "http.status_code" r)
     _ -> case KEM.lookup "rpc.system" r of
-      Just (AE.String "grpc") -> Just $ GRPCSpan ("GRPC", fromMaybe "" $ getText "rpc.service" r, fromMaybe "" $ getText "rpc.method" r, fromMaybe 0 $ getInt "rpc.grpc.status_code" r)
+      Just (AE.String "grpc") -> Just ("GRPC", fromMaybe "" $ getText "rpc.service" r, fromMaybe "" $ getText "rpc.method" r, fromMaybe 0 $ getInt "rpc.grpc.status_code" r)
       _ -> Nothing
   _ -> Nothing
   where
