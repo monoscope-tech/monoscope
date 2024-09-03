@@ -38,6 +38,7 @@ module Utils (
   getDurationNSMS,
   toXXHash,
   getServiceColors,
+  getGrpcStatusColor,
 )
 where
 
@@ -150,10 +151,17 @@ getMethodColor _ = " badge badge-outline "
 
 getStatusColor :: Int -> Text
 getStatusColor status
-  | status < 200 = "text-slate-500 bg-slate-800 border border-slate-200 "
+  | status < 200 = "text-slate-600 bg-slate-50 border border-slate-200 "
   | status >= 200 && status < 300 = "text-green-800 bg-green-50 border border-green-200"
   | status >= 300 && status < 400 = "text-amber-800 bg-yellow-50 border border-yellow-200"
   | otherwise = "text-red-800 bg-red-50 border border-red-200"
+
+
+getGrpcStatusColor :: Int -> Text
+getGrpcStatusColor status
+  | status == 0 = "text-green-800 bg-green-50 border border-green-200" -- OK
+  | status >= 1 && status <= 16 = "text-red-800 bg-red-50 border border-red-200" -- Errors (1 to 16 are error codes)
+  | otherwise = "text-slate-500 bg-slate-800 border border-slate-200"
 
 
 getSeverityColor :: Text -> Text

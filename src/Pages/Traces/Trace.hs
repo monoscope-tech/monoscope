@@ -35,7 +35,7 @@ import Pkg.Parser (pSource)
 import Relude
 import Relude.Unsafe (read)
 import Text.Megaparsec (parseMaybe)
-import Utils (faSprite_, getDurationNSMS, getServiceColors, getStatusColor, listToIndexHashMap, utcTimeToNanoseconds)
+import Utils (faSprite_, getDurationNSMS, getGrpcStatusColor, getServiceColors, getStatusColor, listToIndexHashMap, utcTimeToNanoseconds)
 import Witch.From (from)
 
 
@@ -149,7 +149,7 @@ tracePage p = do
             input_ [type_ "radio", name_ "my_tabs_2", role_ "tab", class_ "tab after:pb-2", term "aria-label" "Span List"]
             div_ [role_ "tabpanel", class_ "tab-content pt-2"] do
               div_ [class_ "border w-full rounded-lg min-h-[230px] max-h-[330px] overflow-auto overflow-x-hidden "] do
-                renderSpanTable serviceNames serviceColors p.spanRecords
+                renderSpanListTable serviceNames serviceColors p.spanRecords
 
       div_ [class_ "h-auto overflow-y-scroll mt-5 py-2 rounded-lg border"] do
         h3_ [class_ "text-xl font-semibold px-4 border-b pb-2"] "Span"
@@ -217,7 +217,7 @@ renderSpanRecordRow spanRecords colors service = do
     , [__|on click toggle .hidden on next <tr/> then toggle .rotate-90 on the first <svg/> in the first <td/> in me|]
     ]
     do
-      td_ [class_ "px-2 py-1 w-[500px] truncate flex items-center gap-1"] do
+      td_ [class_ "px-2 py-1 w-[600px] truncate flex items-center gap-1"] do
         faSprite_ "chevron-right" "regular" "h-3 w-3 mr-2 text-gray-500"
         div_ [class_ "w-3 h-3 rounded", style_ $ "background-color:" <> getServiceColor service colors] pass
         span_ [] $ toHtml service
@@ -227,29 +227,14 @@ renderSpanRecordRow spanRecords colors service = do
       td_ [class_ "px-2 py-1 max-w-48 truncate pl-4"] $ toHtml $ show (duration * 100 `div` totalDuration) <> "%"
   tr_ [class_ "hidden p-0 m-0", [__|on click halt|]] do
     td_ [colspan_ "5", class_ "pl-[13px] overflow-x-hidden"] do
-      div_ [class_ "w-full border-l-2"] do
-        forM_ filterRecords $ \spanRecord -> do
-          let pidText = UUID.toText spanRecord.projectId
-          let spanid = maybe "" UUID.toText spanRecord.uSpandId
-          let tme = from @String (formatShow iso8601Format spanRecord.timestamp)
-          div_
-            [ class_ "bg-white w-full overflow-x-hidden p-2 cursor-pointer hover:bg-gray-100 b--b2 last:border-b-0"
-            , hxGet_ $ "/p/" <> pidText <> "/log_explorer/" <> spanid <> "/" <> tme <> "/detailed?source=spans"
-            , hxTarget_ $ "#span-" <> spanRecord.traceId
-            , hxSwap_ "innerHTML"
-            ]
-            $ do
-              span_ [class_ "px-2 py-1 w-96 truncate"] $ toHtml spanRecord.spanName
-              span_ [class_ "px-2 py-1 max-w-48 truncate"] $ toHtml $ T.drop 2 $ maybe "----" show spanRecord.kind
-              span_ [class_ "px-2 py-1 max-w-48 truncate"] $ toHtml $ T.drop 2 $ maybe "----" show spanRecord.status
-              span_ [class_ "px-2 py-1 max-w-48 truncate"] $ toHtml $ getDurationNSMS spanRecord.spanDurationNs
+      spanTable filterRecords
 
 
-renderSpanTable :: V.Vector Text -> HashMap Text Text -> V.Vector Telemetry.SpanRecord -> Html ()
-renderSpanTable services colors records =
-  table_ [class_ "w-full table table-pin-rows table-pin-cols overflow-x-hidden"] $ do
-    thead_ [class_ "border-b bg-gray-50"] $ do
-      tr_ [class_ "p-2"] $ do
+renderSpanListTable :: V.Vector Text -> HashMap Text Text -> V.Vector Telemetry.SpanRecord -> Html ()
+renderSpanListTable services colors records =
+  table_ [class_ "w-full overflow-x-hidden"] $ do
+    thead_ [class_ "border-b bg-gray-100"] $ do
+      tr_ [class_ "p-2 border-b  font-normal bg-gray-100"] $ do
         th_ "Resource"
         th_ "Spans"
         th_ "Avg. Duration"
@@ -257,6 +242,43 @@ renderSpanTable services colors records =
         th_ "%Exec. Time"
     tbody_ [class_ "space-y-0"] $
       mapM_ (renderSpanRecordRow records colors) services
+
+
+spanTable :: V.Vector Telemetry.SpanRecord -> Html ()
+spanTable records =
+  div_ [class_ "border-l-2 flex flex-col pb-2 gap-1"] do
+    div_
+      [ class_ "bg-white pl-2 w-full text-xs font-medium  bg-gray-50 pb-1 text-gray-500 overflow-x-hidden items-center flex gap-3 cursor-pointer flex-nowrap  border-b border-b-gray-50"
+      ]
+      $ do
+        span_ [class_ "px-2 w-[200px] truncate"] "Time"
+        span_ [class_ "px-2 w-[400px] truncate"] "Span Name"
+        span_ [class_ "px-2 w-28 truncate"] "Event Type"
+        span_ [class_ "px-2 w-28 truncate"] "Span Kind"
+        span_ [class_ "px-1 w-16 text-center "] "Status"
+        span_ [class_ "px-2 w-28 truncate"] "Exec. Time"
+    forM_ records $ \spanRecord -> do
+      let pidText = UUID.toText spanRecord.projectId
+          spanid = maybe "" UUID.toText spanRecord.uSpandId
+          tme = from @String (formatShow iso8601Format spanRecord.timestamp)
+          (reqType, _, _, status_code) = fromMaybe ("", "", "", 0) $ getRequestDetails spanRecord
+
+      div_
+        [ class_ "bg-white pl-2 w-full overflow-x-hidden text-gray-700 items-center flex gap-3 cursor-pointer text-sm flex-nowrap hover:bg-gray-100 border-b border-b-gray-50 last:border-b-0"
+        , hxGet_ $ "/p/" <> pidText <> "/log_explorer/" <> spanid <> "/" <> tme <> "/detailed?source=spans"
+        , hxTarget_ $ "#span-" <> spanRecord.traceId
+        , hxSwap_ "innerHTML"
+        ]
+        $ do
+          span_ [class_ "px-2 py-1 w-[200px] truncate"] $ toHtml $ formatTime defaultTimeLocale "%b %d %Y %H:%M:%S%Q" spanRecord.timestamp
+          span_ [class_ "px-2 py-1 w-[400px] truncate"] $ toHtml spanRecord.spanName
+          span_ [class_ "px-2 py-1 w-28 truncate"] $ toHtml reqType
+          span_ [class_ "px-2 py-1 w-28 truncate"] $ toHtml $ T.drop 2 $ maybe "" show spanRecord.kind
+          let xcls = getStatusColor status_code
+              gcls = getGrpcStatusColor status_code
+              fcls = if reqType == "HTTP" then xcls else gcls
+          span_ [class_ $ "p-1 w-16 text-center " <> fcls] $ toHtml $ show status_code
+          span_ [class_ "px-2 py-1 w-28 truncate"] $ toHtml $ getDurationNSMS spanRecord.spanDurationNs
 
 
 getRequestDetails :: Telemetry.SpanRecord -> Maybe (Text, Text, Text, Int)
