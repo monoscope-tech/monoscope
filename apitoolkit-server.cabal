@@ -68,6 +68,7 @@ library
       Pages.Dashboard
       Pages.DashboardSpec
       Pages.Endpoints.ApiCatalog
+      Pages.Endpoints.ApiCatalogSpec
       Pages.Endpoints.EndpointComponents
       Pages.Endpoints.EndpointDetails
       Pages.Endpoints.EndpointDetailsSpec
@@ -134,7 +135,9 @@ library
       Pages.Specification.Server
       Pages.Survey
       Pages.SurveySpec
+      Pages.Traces.Routes
       Pages.Traces.Spans
+      Pages.Traces.Trace
       Pkg.Components
       Pkg.Components.ExternalHeadScripts
       Pkg.Components.ItemsList
