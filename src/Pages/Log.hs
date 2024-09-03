@@ -221,29 +221,8 @@ data ApiLogsPageData = ApiLogsPageData
 
 apiLogsPage :: ApiLogsPageData -> Html ()
 apiLogsPage page = do
-  section_ [class_ "mx-auto px-6 py-2 gap-2 w-full flex flex-col h-[98%] overflow-hidden ", id_ "apiLogsPage"] do
+  section_ [class_ "mx-auto px-6 gap-2 w-full flex flex-col h-full overflow-hidden ", id_ "apiLogsPage"] do
     when page.exceededFreeTier $ freeTierLimitExceededBanner page.pid.toText
-    div_
-      [ style_ "z-index:26"
-      , class_ "fixed hidden right-0 top-0 justify-end left-0 bottom-0 w-full bg-black bg-opacity-5"
-      , [__|on click remove .show-log-modal from #expand-log-modal|]
-      , id_ "expand-log-modal"
-      ]
-      do
-        div_ [class_ "relative ml-auto w-full", style_ ""] do
-          div_ [class_ "flex justify-end  w-full p-4 "] $
-            button_ [[__|on click add .hidden to #expand-log-modal|]] $
-              faSprite_ "xmark" "regular" "h-8"
-          form_
-            [ hxPost_ $ "/p/" <> page.pid.toText <> "/share/"
-            , hxSwap_ "innerHTML"
-            , hxTarget_ "#copy_share_link"
-            , id_ "share_log_form"
-            ]
-            do
-              input_ [type_ "hidden", value_ "1 hour", name_ "expiresIn", id_ "expire_input"]
-              input_ [type_ "hidden", value_ "", name_ "reqId", id_ "req_id_input"]
-              input_ [type_ "hidden", value_ "", name_ "reqCreatedAt", id_ "req_created_at_input"]
     script_
       []
       [text|
