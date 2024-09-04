@@ -29,7 +29,7 @@ spec = aroundAll withTestResources do
           length hostsAndEvents `shouldBe` 0
         _ -> error "Unexpected response"
 
-    it "should return a populated list" \TestResources{..} -> do
+    it "should return incoming hosts list and outgoing host list" \TestResources{..} -> do
       currentTime <- getCurrentTime
       let nowTxt = toText $ formatTime defaultTimeLocale "%FT%T%QZ" currentTime
       let reqMsg1 = Unsafe.fromJust $ convert $ testRequestMsgs.reqMsg1 nowTxt
@@ -45,7 +45,7 @@ spec = aroundAll withTestResources do
       _ <- runAllBackgroundJobs trATCtx
       _ <- withPool trPool $ refreshMaterializedView "apis.endpoint_request_stats"
 
-      host <- toServantResponse trATCtx trSessAndHeader trLogger $ ApiCatalog.apiCatalogH testPid Nothing Nothing
+      host <- toServantResponse trATCtx trSessAndHeader trLogger $ ApiCatalog.apiCatalogH testPid Nothing (Just "Incoming")
       case host of
         PageCtx _ (ItemsList.ItemsPage _ hostsAndEvents) -> do
           length hostsAndEvents `shouldBe` 1 
