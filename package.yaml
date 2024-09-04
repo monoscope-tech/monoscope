@@ -13,7 +13,6 @@ ghc-options:
   - -fwrite-ide-info
   # - "-fwrite-ide-info"
   - "-hiedir=.hie"
-  - "-O3" 
   - -threaded
   - -Weverything
   - -Werror # Treat warnings as errors
