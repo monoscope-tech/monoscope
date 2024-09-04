@@ -295,7 +295,7 @@ resultTableAndMeta_ page = do
 
 
 resultTable_ :: ApiLogsPageData -> Bool -> Html ()
-resultTable_ page mainLog = table_ [class_ "w-full table table-sm table-pin-rows table-pin-cols overflow-x-hidden [contain:strict] [content-visibility:auto]", style_ "height:1px", id_ "resultTable"] do
+resultTable_ page mainLog = table_ [class_ "w-full table table-xs table-pin-rows table-pin-cols overflow-x-hidden [contain:strict] [content-visibility:auto]", style_ "height:1px", id_ "resultTable"] do
   -- height:1px fixes the cell minimum heights somehow.
   let isLogEventB = isLogEvent page.cols
   when (null page.requestVecs && (isNothing page.query || not mainLog)) $ do
