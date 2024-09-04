@@ -90,4 +90,4 @@ renderapiCatalog pid host requestType = div_ [class_ "flex py-4 gap-8 items-cent
       , hxSwap_ "innerHTML"
       ]
       ""
-  div_ [class_ "w-36 flex items-center justify-center"] $ span_ [class_ "tabular-nums text-xl", term "data-tippy-content" "Events for this Anomaly in the last 14days"] $ toHtml  @String $ fmt $ commaizeF host.eventCount
+  div_ [class_ "w-36 flex items-center justify-center"] $ span_ [class_ "tabular-nums text-xl", term "data-tippy-content" "Events for this Anomaly in the last 14days"] $ toHtml @String $ fmt $ commaizeF host.eventCount

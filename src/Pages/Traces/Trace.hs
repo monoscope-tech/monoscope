@@ -143,8 +143,8 @@ tracePage p = do
                           span_ [class_ ""] $ toHtml s
                         div_ [class_ "flex gap-1 items-center"] $ do
                           span_ [class_ "text-xs max-w-52 truncate"] $ toHtml $ T.take 4 percent <> "%"
-                          div_ [class_ "w-[100px] h-3 bg-gray-200 rounded overflow-hidden"] $
-                            div_ [class_ "h-full pl-2 text-xs font-medium", style_ $ "width:" <> percent <> "%; background-color:" <> color] pass
+                          div_ [class_ "w-[100px] h-3 bg-gray-200 rounded overflow-hidden"]
+                            $ div_ [class_ "h-full pl-2 text-xs font-medium", style_ $ "width:" <> percent <> "%; background-color:" <> color] pass
 
             input_ [type_ "radio", name_ "my_tabs_2", role_ "tab", class_ "tab after:pb-2", term "aria-label" "Span List"]
             div_ [role_ "tabpanel", class_ "tab-content pt-2"] do
@@ -255,8 +255,8 @@ renderSpanTable services colors records =
         th_ "Avg. Duration"
         th_ "Exec. Time"
         th_ "%Exec. Time"
-    tbody_ [class_ "space-y-0"] $
-      mapM_ (renderSpanRecordRow records colors) services
+    tbody_ [class_ "space-y-0"]
+      $ mapM_ (renderSpanRecordRow records colors) services
 
 
 getRequestDetails :: Telemetry.SpanRecord -> Maybe (Text, Text, Text, Int)
