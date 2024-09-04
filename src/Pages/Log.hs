@@ -295,7 +295,7 @@ resultTableAndMeta_ page = do
 
 
 resultTable_ :: ApiLogsPageData -> Bool -> Html ()
-resultTable_ page mainLog = table_ [class_ "w-full table table-sm table-pin-rows table-pin-cols overflow-x-hidden", style_ "height:1px", id_ "resultTable"] do
+resultTable_ page mainLog = table_ [class_ "w-full table table-sm table-pin-rows table-pin-cols overflow-x-hidden [contain:strict] [content-visibility:auto]", style_ "height:1px", id_ "resultTable"] do
   -- height:1px fixes the cell minimum heights somehow.
   let isLogEventB = isLogEvent page.cols
   when (null page.requestVecs && (isNothing page.query || not mainLog)) $ do
@@ -318,7 +318,7 @@ resultTable_ page mainLog = table_ [class_ "w-full table table-sm table-pin-rows
         else section_ [class_ "w-max mx-auto"] $ p_ "This request has no outgoing requests yet."
   unless (null page.requestVecs) $ do
     thead_ $ tr_ [class_ "divide-x b--b2"] $ forM_ page.cols $ logTableHeading_ page.pid isLogEventB
-    tbody_ [id_ "w-full log-item-table-body"] $ logItemRows_ page.pid page.requestVecs page.cols page.colIdxMap page.nextLogsURL page.source
+    tbody_ [id_ "w-full log-item-table-body [content-visibility:auto]"] $ logItemRows_ page.pid page.requestVecs page.cols page.colIdxMap page.nextLogsURL page.source
 
 
 curateCols :: [Text] -> [Text] -> [Text]
