@@ -1,4 +1,5 @@
-module Pages.Traces.Utils (getServiceName, getServiceColor, getRequestDetails) where
+module Pages.Traces.Utils (getServiceName, getServiceColor, getRequestDetails)
+where
 
 import Data.Aeson qualified as AE
 import Data.Aeson.Key qualified as AEKey
