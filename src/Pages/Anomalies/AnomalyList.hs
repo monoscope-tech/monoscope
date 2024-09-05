@@ -442,7 +442,7 @@ anomalyDetailsPage issue shapesWithFieldsMap fields prvFormatsM currTime modal =
           Anomalies.IDNewShapeIssue issueD -> do
             div_ [class_ "flex flex-col gap-4 shrink-0"] do
               a_ [class_ "inline-block font-bold text-blue-700 space-x-2"] do
-                img_ [src_ "/assets/svgs/anomalies/fields.svg", class_ "inline w-6 h-6 -mt-1"]
+                img_ [src_ "/public/assets/svgs/anomalies/fields.svg", class_ "inline w-6 h-6 -mt-1"]
                 span_ [class_ "text-2xl"] "New Request Shape"
               div_ [class_ "flex items-center gap-3"] do
                 let methodColor = Utils.getMethodColor issueD.endpointMethod
@@ -454,7 +454,7 @@ anomalyDetailsPage issue shapesWithFieldsMap fields prvFormatsM currTime modal =
           Anomalies.IDNewFormatIssue issueD -> do
             div_ [class_ "flex flex-col gap-4 shrink-0"] do
               a_ [class_ "inline-block font-bold text-blue-700 space-x-2"] do
-                img_ [src_ "/assets/svgs/anomalies/fields.svg", class_ "inline w-6 h-6 -mt-1"]
+                img_ [src_ "/public/assets/svgs/anomalies/fields.svg", class_ "inline w-6 h-6 -mt-1"]
                 span_ [class_ "text-2xl"] "Modified field"
               div_ [class_ "flex items-center gap-3"] do
                 let methodColor = Utils.getMethodColor issueD.endpointMethod
@@ -464,7 +464,7 @@ anomalyDetailsPage issue shapesWithFieldsMap fields prvFormatsM currTime modal =
           Anomalies.IDNewRuntimeExceptionIssue issueD -> do
             div_ [class_ "flex flex-col gap-4 shrink-0"] do
               a_ [class_ "inline-block font-bold text-blue-700 space-x-2"] do
-                img_ [src_ "/assets/svgs/anomalies/fields.svg", class_ "inline w-6 h-6 -mt-1"]
+                img_ [src_ "/public/assets/svgs/anomalies/fields.svg", class_ "inline w-6 h-6 -mt-1"]
                 span_ [class_ "text-2xl"] $ toHtml issueD.errorType
               p_ $ toHtml issueD.message
           _ -> pass
@@ -590,12 +590,12 @@ anomalyFormatOverview formatData prevFormats =
 
 issueDisplayConfig :: Anomalies.IssueL -> (Text, Text)
 issueDisplayConfig issue = case issue.issueData of
-  Anomalies.IDNewFieldIssue _ -> ("New Field Found", "/assets/svgs/anomalies/fields.svg")
-  Anomalies.IDNewShapeIssue _ -> ("New Request Shape", "/assets/svgs/anomalies/fields.svg")
-  Anomalies.IDNewEndpointIssue _ -> ("New Endpoint", "/assets/svgs/anomalies/endpoint.svg")
-  Anomalies.IDNewFormatIssue _ -> ("Modified field", "/assets/svgs/anomalies/fields.svg")
-  Anomalies.IDNewRuntimeExceptionIssue err -> (err.errorType, "/assets/svgs/anomalies/fields.svg")
-  Anomalies.IDEmpty -> ("Unknown anomaly", "/assets/svgs/anomalies/fields.svg")
+  Anomalies.IDNewFieldIssue _ -> ("New Field Found", "/public/assets/svgs/anomalies/fields.svg")
+  Anomalies.IDNewShapeIssue _ -> ("New Request Shape", "/public/assets/svgs/anomalies/fields.svg")
+  Anomalies.IDNewEndpointIssue _ -> ("New Endpoint", "/public/assets/svgs/anomalies/endpoint.svg")
+  Anomalies.IDNewFormatIssue _ -> ("Modified field", "/public/assets/svgs/anomalies/fields.svg")
+  Anomalies.IDNewRuntimeExceptionIssue err -> (err.errorType, "/public/assets/svgs/anomalies/fields.svg")
+  Anomalies.IDEmpty -> ("Unknown anomaly", "/public/assets/svgs/anomalies/fields.svg")
 
 
 data IssueVM = IssueVM Bool UTCTime Anomalies.IssueL

@@ -40,11 +40,11 @@ navBar = do
       a_ [href_ "https://apitoolkit.io", class_ "flex items-center text-gray-500 hover:text-gray-700"] do
         img_
           [ class_ "h-12 sd-hidden"
-          , src_ "/assets/svgs/logo.svg"
+          , src_ "/public/assets/svgs/logo.svg"
           ]
         img_
           [ class_ "h-12 w-10 hidden sd-show"
-          , src_ "/assets/svgs/logo_mini.svg"
+          , src_ "/public/assets/svgs/logo_mini.svg"
           ]
 
 
