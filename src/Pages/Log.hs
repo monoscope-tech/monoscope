@@ -86,8 +86,8 @@ apiLogH pid queryM cols' cursorM' sinceM fromM toM layoutM sourceM hxRequestM hx
   let tableAsVecM = hush tableAsVecE
 
   freeTierExceeded <-
-    dbtToEff
-      $ if project.paymentPlan == "Free"
+    dbtToEff $
+      if project.paymentPlan == "Free"
         then do
           totalRequest <- RequestDumps.getLastSevenDaysTotalRequest pid
           return $ totalRequest > 5000
@@ -187,9 +187,9 @@ logQueryBox_ pid currentRange =
       div_ [class_ "flex-1"] do
         div_ [id_ "queryEditor", class_ "h-14 hidden overflow-hidden bg-gray-200"] pass
         div_ [id_ "queryBuilder"] $ termRaw "filter-element" [id_ "filterElement"] ("" :: Text)
-      div_ [class_ "form-control"]
-        $ label_ [class_ "label cursor-pointer space-x-2"]
-        $ input_ [type_ "checkbox", class_ "toggle tooltip tooltip-left", id_ "toggleQueryEditor", onclick_ "toggleQueryBuilder()", term "data-tip" "toggle query editor"]
+      div_ [class_ "form-control"] $
+        label_ [class_ "label cursor-pointer space-x-2"] $
+          input_ [type_ "checkbox", class_ "toggle tooltip tooltip-left", id_ "toggleQueryEditor", onclick_ "toggleQueryBuilder()", term "data-tip" "toggle query editor"]
       button_
         [type_ "submit", class_ "btn btn-sm btn-success"]
         do
@@ -218,6 +218,11 @@ data ApiLogsPageData = ApiLogsPageData
 
 apiLogsPage :: ApiLogsPageData -> Html ()
 apiLogsPage page = do
+  -- drawerWithURLContent_ : Used when you expand a log item
+  -- using the drawer as a global is a workaround since to separate the logs scope from other content and improve scroll performance.
+  Components.drawerWithURLContent_ "global-data-drawer" Nothing ""
+  -- the loader is used and displayed while loading the content for the global drawer
+  template_ [id_ "loader-tmp"] $ span_ [class_ "loading loading-dots loading-md"] ""
   section_ [class_ "mx-auto pt-2 px-6 gap-2 w-full flex flex-col h-full overflow-hidden ", id_ "apiLogsPage"] do
     when page.exceededFreeTier $ freeTierLimitExceededBanner page.pid.toText
     div_
@@ -228,9 +233,9 @@ apiLogsPage page = do
       ]
       do
         div_ [class_ "relative ml-auto w-full", style_ ""] do
-          div_ [class_ "flex justify-end  w-full p-4 "]
-            $ button_ [[__|on click add .hidden to #expand-log-modal|]]
-            $ faSprite_ "xmark" "regular" "h-8"
+          div_ [class_ "flex justify-end  w-full p-4 "] $
+            button_ [[__|on click add .hidden to #expand-log-modal|]] $
+              faSprite_ "xmark" "regular" "h-8"
           form_
             [ hxPost_ $ "/p/" <> page.pid.toText <> "/share/"
             , hxSwap_ "innerHTML"
@@ -378,23 +383,23 @@ logItemRows_ pid requests curatedCols colIdxMap nextLogsURL source = do
   forM_ requests \reqVec -> do
     let (logItemPath, _reqId) = fromMaybe ("", "") $ requestDumpLogItemUrlPath pid reqVec colIdxMap
     let (_, errCount, errClass) = errorClass True reqVec colIdxMap
-    tr_ [class_ "cursor-pointer divide-x b--b2", [__|on click toggle .hidden on next <tr/> then toggle .expanded-log on me|]]
-      $ forM_ curatedCols (td_ . logItemCol_ source pid reqVec colIdxMap)
+    tr_ [class_ "cursor-pointer divide-x b--b2", [__|on click toggle .hidden on next <tr/> then toggle .expanded-log on me|]] $
+      forM_ curatedCols (td_ . logItemCol_ source pid reqVec colIdxMap)
     tr_ [class_ "hidden"] $ do
       -- used for when a row is expanded.
       td_ $ a_ [class_ $ "inline-block h-full " <> errClass, term "data-tippy-content" $ show errCount <> " errors attached to this request"] ""
       td_ [colspan_ $ show $ length curatedCols - 1] $ div_ [hxGet_ $ logItemPath <> "?source=" <> source, hxTrigger_ "intersect once", hxSwap_ "outerHTML"] $ span_ [class_ "loading loading-dots loading-md"] ""
-  when (Vector.length requests > 199)
-    $ tr_
-    $ td_ [colspan_ $ show $ length curatedCols]
-    $ a_
-      [ class_ "cursor-pointer inline-flex justify-center py-1 px-56 ml-36 blue-800 bg-blue-100 hover:bg-blue-200 gap-3 items-center"
-      , hxTrigger_ "click, intersect once"
-      , hxSwap_ "outerHTML"
-      , hxGet_ nextLogsURL
-      , hxTarget_ "closest tr"
-      ]
-      (span_ [class_ "inline-block"] "LOAD MORE " >> span_ [class_ "loading loading-dots loading-sm inline-block pl-3"] "")
+  when (Vector.length requests > 199) $
+    tr_ $
+      td_ [colspan_ $ show $ length curatedCols] $
+        a_
+          [ class_ "cursor-pointer inline-flex justify-center py-1 px-56 ml-36 blue-800 bg-blue-100 hover:bg-blue-200 gap-3 items-center"
+          , hxTrigger_ "click, intersect once"
+          , hxSwap_ "outerHTML"
+          , hxGet_ nextLogsURL
+          , hxTarget_ "closest tr"
+          ]
+          (span_ [class_ "inline-block"] "LOAD MORE " >> span_ [class_ "loading loading-dots loading-sm inline-block pl-3"] "")
 
 
 errorClass :: Bool -> V.Vector Value -> HM.HashMap Text Int -> (Int, Int, Text)
@@ -444,8 +449,8 @@ logTableHeadingWrapper_ pid title child = td_
       div_ [tabindex_ "0", role_ "button", class_ "py-1 px-3 block"] child
       ul_ [tabindex_ "0", class_ "dropdown-content z-[1] menu p-2 shadow bg-base-100 rounded-box min-w-[15rem]"] do
         li_ [class_ "underline underline-offset-2"] $ toHtml title
-        li_
-          $ a_
+        li_ $
+          a_
             [ hxGet_ $ "/p/" <> pid.toText <> "/log_explorer"
             , hxPushUrl_ "true"
             , hxVals_ $ "js:{query:params().query,cols:removeNamedColumnToSummary('" <> title <> "'),layout:'resultTable'}"
@@ -463,13 +468,19 @@ logItemCol_ :: Text -> Projects.ProjectId -> V.Vector Value -> HM.HashMap Text I
 logItemCol_ source pid reqVec colIdxMap "id" = do
   let (status, errCount, errClass) = errorClass False reqVec colIdxMap
   let severityClass = barSeverityClass reqVec colIdxMap
-  let (logItemPath, reqId) = fromMaybe ("", "") $ requestDumpLogItemUrlPath pid reqVec colIdxMap
+  let (logItemPath, _reqId) = fromMaybe ("", "") $ requestDumpLogItemUrlPath pid reqVec colIdxMap
+  let logItemPathDetailed = logItemPath <> "/detailed?source=" <> source
   div_ [class_ "grid grid-cols-4 items-center max-w-12 min-w-9"] do
     a_ [class_ $ "col-span-1 shrink-0 inline-block h-full w-1 " <> if source == "logs" then severityClass else errClass, term "data-tippy-content" $ show errCount <> " errors attached to this request; status " <> show status] " "
-    div_ [class_ "col-span-2"]
-      $ Components.drawerWithURLContent_
-        ("expand-log-drawer-" <> reqId)
-        (logItemPath <> "/detailed" <> "?source=" <> source)
+    label_
+      [ class_ "col-span-2 cursor-pointer"
+      , term "_" $
+          [text|on mousedown or click fetch $logItemPathDetailed 
+                  then set #global-data-drawer-content.innerHTML to #loader-tmp.innerHTML 
+                  then set #global-data-drawer.checked to true 
+                  then set #global-data-drawer-content.innerHTML to it 
+                  then htmx.process(#global-data-drawer-content) then _hyperscript.processNode(#global-data-drawer-content)|]
+      ]
       $ faSprite_ "link" "solid" "h-2 text-blue-500"
     faSprite_ "chevron-right" "solid" "h-3 col-span-1 text-gray-500 chevron log-chevron "
 logItemCol_ _ _ reqVec colIdxMap "created_at" = span_ [class_ "monospace whitespace-nowrap ", term "data-tippy-content" "timestamp"] $ toHtml $ displayTimestamp $ fromMaybe "" $ lookupVecTextByKey reqVec colIdxMap "created_at"
@@ -505,9 +516,9 @@ logItemCol_ source pid reqVec colIdxMap key@"rest" = div_ [class_ "space-x-2 whi
       span_ [class_ "badge badge-sm badge-ghost ", term "data-tippy-content" "Host"] $ toHtml $ fromMaybe "" $ lookupVecTextByKey reqVec colIdxMap "host"
       span_ [] $ toHtml $ maybe "" unwrapJsonPrimValue (lookupVecByKey reqVec colIdxMap key)
 logItemCol_ _ _ reqVec colIdxMap key =
-  div_ [class_ "xwhitespace-nowrap overflow-x-hidden max-w-lg ", term "data-tippy-content" key]
-    $ toHtml
-    $ maybe "" unwrapJsonPrimValue (lookupVecByKey reqVec colIdxMap key)
+  div_ [class_ "xwhitespace-nowrap overflow-x-hidden max-w-lg ", term "data-tippy-content" key] $
+    toHtml $
+      maybe "" unwrapJsonPrimValue (lookupVecByKey reqVec colIdxMap key)
 
 
 requestDumpLogItemUrlPath :: Projects.ProjectId -> V.Vector Value -> HM.HashMap Text Int -> Maybe (Text, Text)
@@ -527,7 +538,6 @@ jsonTreeAuxillaryCode pid = do
           [ class_ "cursor-pointer text-slate-700 block px-4 py-1 text-sm hover:bg-gray-100 hover:text-slate-900"
           , role_ "menuitem"
           , tabindex_ "-1"
-          , id_ "menu-item-0"
           , hxGet_ $ "/p/" <> pid.toText <> "/log_explorer"
           , hxPushUrl_ "true"
           , hxVals_ "js:{query:params().query,cols:toggleColumnToSummary(event),layout:'resultTable', since: getTimeRange().since, from: getTimeRange().from, to:getTimeRange().to, source: params().source}"
@@ -542,7 +552,6 @@ jsonTreeAuxillaryCode pid = do
           [ class_ "cursor-pointer text-slate-700 block px-4 py-1 text-sm hover:bg-gray-100 hover:text-slate-900"
           , role_ "menuitem"
           , tabindex_ "-1"
-          , id_ "menu-item-1"
           , [__|on click if 'clipboard' in window.navigator then
                     call navigator.clipboard.writeText((previous <.log-item-field-value/>)'s innerText)
                     send successToast(value:['Value has been added to the Clipboard']) to <body/>
@@ -554,7 +563,6 @@ jsonTreeAuxillaryCode pid = do
           [ class_ "cursor-pointer w-full text-left text-slate-700 block px-4 py-1 text-sm hover:bg-gray-100 hover:text-slate-900"
           , role_ "menuitem"
           , tabindex_ "-1"
-          , id_ "menu-item-2"
           , onclick_ "filterByField(event, '==')"
           ]
           "Filter by field"
@@ -562,7 +570,6 @@ jsonTreeAuxillaryCode pid = do
           [ class_ "cursor-pointer w-full text-left text-slate-700 block px-4 py-1 text-sm hover:bg-gray-100 hover:text-slate-900"
           , role_ "menuitem"
           , tabindex_ "-1"
-          , id_ "menu-item-3"
           , onclick_ "filterByField(event, '!=')"
           ]
           "Exclude field"
@@ -572,19 +579,6 @@ jsonTreeAuxillaryCode pid = do
       document.getElementById("log_explorer_form").addEventListener("keydown", function(e) {
         if (e.key === "Enter") {e.preventDefault()}
       });
-
-    function downloadJson(event) {
-         event.stopPropagation()
-         const json = event.currentTarget.dataset.reqjson
-         var blob = new Blob([json], { type: "application/json" });
-         var a = document.createElement("a");
-         a.href = URL.createObjectURL(blob);
-         a.download = "request-data-" + (new Date().toString()) + ".json";
-         a.textContent = "";
-         document.body.appendChild(a);
-         a.click();
-         document.body.removeChild(a);
-       }
 
     function filterByField(event, operation) {
        const target = event.target.parentNode.parentNode.parentNode
@@ -728,4 +722,5 @@ function updateMarkAreas(chartId, warningVal, incidentVal) {
   // Apply the updated options back to the chart
   myChart.setOption({series: options.series}, false);
 }
+
     |]

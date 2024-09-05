@@ -12,7 +12,7 @@ window.buildCurlRequest = function buildCurlRequest(event) {
       curlHeaders = Object.entries(request_headers)
         .map(([key, value]) => '-H "' + key + ' ' + value + '" \\\n')
         .join('')
-    } catch (error) {}
+    } catch (error) { }
   }
   if (curlHeaders != '') curlCommand += curlHeaders
   let reqBody = ''
@@ -47,6 +47,20 @@ window.getQueryFromEditor = () => {
   const toggler = document.getElementById('toggleQueryEditor')
   if (toggler.checked) return window.editor.getValue()
   return window.queryBuilderValue || ''
+}
+
+
+window.downloadJson = function(event) {
+  event.stopPropagation()
+  const json = event.currentTarget.dataset.reqjson
+  var blob = new Blob([json], { type: "application/json" });
+  var a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = "request-data-" + (new Date().toString()) + ".json";
+  a.textContent = "";
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
 }
 
 // Unified Timepicker

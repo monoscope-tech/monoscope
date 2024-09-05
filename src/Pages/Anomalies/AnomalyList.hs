@@ -336,7 +336,7 @@ issueItem hideByDefault currTime issue icon title subTitle content = do
             anomalyArchiveButton issue.projectId issue.id (isJust issue.archivedAt)
             anomalyAcknowlegeButton issue.projectId issue.id (isJust issue.acknowlegedAt) ""
             let modalEndpoint = "/p/" <> issue.projectId.toText <> "/anomalies/by_hash/" <> issue.targetHash <> "?modal=True"
-            Components.drawerWithURLContent_ ("expand-log-drawer-" <> issue.targetHash) modalEndpoint $ span_ [class_ "flex items-center justify-center cursor-pointer py-2 px-3 rounded border border-gray-200 text-xs hover:shadow shadow-blue-100"] (faSprite_ "expand" "regular" "w-3 h-3")
+            Components.drawerWithURLContent_ ("expand-log-drawer-" <> issue.targetHash) (Just modalEndpoint) $ span_ [class_ "flex items-center justify-center cursor-pointer py-2 px-3 rounded border border-gray-200 text-xs hover:shadow shadow-blue-100"] (faSprite_ "expand" "regular" "w-3 h-3")
         fromMaybe (toHtml @String "") content
     let issueQueryPartial = buildQueryForAnomaly issue.anomalyType issue.targetHash
     div_ [class_ "flex items-center justify-center "]
