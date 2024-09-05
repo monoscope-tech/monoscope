@@ -25,11 +25,8 @@ spec :: Spec
 spec = aroundAll withTestResources do
   describe "Check Api Catalog List" do
     it "should return an empty list" \TestResources{..} -> do
-      host <- toServantResponse trATCtx trSessAndHeader trLogger $ ApiCatalog.apiCatalogH testPid Nothing Nothing
-      case host of
-        PageCtx _ (ItemsList.ItemsPage _ hostsAndEvents) -> do
-          length hostsAndEvents `shouldBe` 0
-        _ -> error "Unexpected response"
+      PageCtx _ (ItemsList.ItemsPage _ hostsAndEvents) <- toServantResponse trATCtx trSessAndHeader trLogger $ ApiCatalog.apiCatalogH testPid Nothing Nothing
+      length hostsAndEvents `shouldBe` 0
 
     it "should return incoming hosts list and outgoing host list" \TestResources{..} -> do
       currentTime <- getCurrentTime
@@ -47,8 +44,5 @@ spec = aroundAll withTestResources do
       _ <- runAllBackgroundJobs trATCtx
       _ <- withPool trPool $ refreshMaterializedView "apis.endpoint_request_stats"
 
-      host <- toServantResponse trATCtx trSessAndHeader trLogger $ ApiCatalog.apiCatalogH testPid Nothing (Just "Incoming")
-      case host of
-        PageCtx _ (ItemsList.ItemsPage _ hostsAndEvents) -> do
-          length hostsAndEvents `shouldBe` 1
-        _ -> error "Unexpected response"
+      PageCtx _ (ItemsList.ItemsPage _ hostsAndEvents) <- toServantResponse trATCtx trSessAndHeader trLogger $ ApiCatalog.apiCatalogH testPid Nothing (Just "Incoming")
+      length hostsAndEvents `shouldBe` 1

@@ -326,8 +326,7 @@ groupEndpointsByUrlPath endpoints =
             (_, _) ->
               AEKey.fromText (T.toLower $ method mergedEndpoint)
                 .= object
-                  ( ("responses" .= groupShapesByStatusCode (shapes mergedEndpoint)) : (["description" .= description mergedEndpoint | T.length mergedEndpoint.description > 0])
-                  )
+                  (("responses" .= groupShapesByStatusCode (shapes mergedEndpoint)) : (["description" .= description mergedEndpoint | T.length mergedEndpoint.description > 0]))
        in endPointJSON
 
 
