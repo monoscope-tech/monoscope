@@ -134,7 +134,9 @@ library
       Pages.Specification.Server
       Pages.Survey
       Pages.SurveySpec
+      Pages.Traces.Routes
       Pages.Traces.Spans
+      Pages.Traces.Trace
       Pkg.Components
       Pkg.Components.ExternalHeadScripts
       Pkg.Components.ItemsList

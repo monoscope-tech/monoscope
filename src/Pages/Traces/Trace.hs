@@ -156,10 +156,10 @@ tracePage p = do
         div_ [class_ "flex flex-col gap-4 px-4", id_ $ "span-" <> traceItem.traceId] do
           let tSp = fromMaybe (V.head p.spanRecords) (V.find (\s -> s.spanId == sId) p.spanRecords)
           Spans.expandedSpanItem pid tSp
-      let spanJson = decodeUtf8 $ AE.encode $ p.spanRecords <&> getSpanJson
-      let colorsJson = decodeUtf8 $ AE.encode $ AE.object [AEKey.fromText k .= v | (k, v) <- HM.toList serviceColors]
-      let trId = traceItem.traceId
-      script_ [text|flameGraphChart($spanJson, "a$trId", $colorsJson);|]
+          let spanJson = decodeUtf8 $ AE.encode $ p.spanRecords <&> getSpanJson
+          let colorsJson = decodeUtf8 $ AE.encode $ AE.object [AEKey.fromText k .= v | (k, v) <- HM.toList serviceColors]
+          let trId = traceItem.traceId
+          script_ [text|flameGraphChart($spanJson, "a$trId", $colorsJson);|]
 
 
 getSpanJson :: Telemetry.SpanRecord -> AE.Value

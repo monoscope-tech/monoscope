@@ -240,7 +240,7 @@ SELECT
     an.action,
     an.target_hash,
     shapes.id shape_id,
-    coalesce(shapes.new_unique_fields, '{}'::TEXT[]) new_unique_fields, 
+    coalesce(shapes.new_unique_fields, '{}'::TEXT[]) new_unique_fields,
     coalesce(shapes.deleted_fields, '{}'::TEXT[]) deleted_fields,
     coalesce(shapes.updated_field_formats, '{}'::TEXT[]) updated_field_formats,
     fields.id field_id,
@@ -282,7 +282,7 @@ getShapeParentAnomalyVM pid hash = do
     v -> return $ length v
   where
     q =
-      [sql|SELECT COUNT(*) 
+      [sql|SELECT COUNT(*)
            FROM apis.issues iss JOIN apis.anomalies aan ON iss.id = aan.id
            WHERE iss.project_id = ? AND ? LIKE iss.target_hash ||'%' AND iss.anomaly_type='endpoint' AND aan.acknowleged_at IS NULL
       |]
@@ -297,8 +297,8 @@ getFormatParentAnomalyVM pid hash = do
   where
     q =
       [sql|
-              SELECT COUNT(*) 
-              FROM apis.issues iss 
+              SELECT COUNT(*)
+              FROM apis.issues iss
               JOIN apis.anomalies aan ON iss.id = aan.id
               WHERE iss.project_id = ? AND ? LIKE iss.target_hash ||'%' AND iss.anomaly_type != 'format' AND aan.acknowleged_at IS NULL
       |]
@@ -330,12 +330,12 @@ selectIssues pid endpointM isAcknowleged isArchived sortM limitM skipM = query S
 
     q =
       [text|
-SELECT id, created_at, updated_at, project_id, acknowleged_at, anomaly_type, target_hash, issue_data, 
+SELECT id, created_at, updated_at, project_id, acknowleged_at, anomaly_type, target_hash, issue_data,
     endpoint_id, acknowleged_by, archived_at,
-    CASE 
+    CASE
       WHEN anomaly_type='endpoint' THEN (select (count(*), COALESCE(max(created_at), iss.created_at)) from apis.request_dumps where project_id=iss.project_id AND endpoint_hash=iss.target_hash AND created_at > current_timestamp - interval '14d' )
       WHEN anomaly_type='shape' THEN (select (count(*), COALESCE(max(created_at), iss.created_at)) from apis.request_dumps where project_id=iss.project_id AND shape_hash=iss.target_hash AND created_at > current_timestamp - interval '14d' )
-      -- Format requires a CONTAINS query which is not covered by the regular indexes. GIN index can't have created_at compound indexes, so its a slow query 
+      -- Format requires a CONTAINS query which is not covered by the regular indexes. GIN index can't have created_at compound indexes, so its a slow query
       -- WHEN anomaly_type='format' THEN (select (count(*), COALESCE(max(created_at), iss.created_at)) from apis.request_dumps where project_id=iss.project_id AND iss.target_hash=ANY(format_hashes) AND created_at > current_timestamp - interval '14d' )
       WHEN anomaly_type='runtime_exception' THEN (select (count(*), COALESCE(max(created_at), iss.created_at)) from apis.request_dumps where project_id=iss.project_id AND errors @> ('[{"hash": "' || iss.target_hash || '"}]')::jsonb AND created_at > current_timestamp - interval '14d')
       ELSE (0, NOW()::TEXT)
@@ -349,9 +349,9 @@ selectIssueByHash pid targetHash = queryOne Select q (pid, targetHash)
   where
     q =
       [sql|
-SELECT id, created_at, updated_at, project_id, acknowleged_at, anomaly_type, target_hash, issue_data, 
+SELECT id, created_at, updated_at, project_id, acknowleged_at, anomaly_type, target_hash, issue_data,
     endpoint_id, acknowleged_by, archived_at,
-    CASE 
+    CASE
       WHEN anomaly_type='endpoint' THEN (select (count(*), COALESCE(max(created_at), iss.created_at)) from apis.request_dumps where project_id=iss.project_id AND endpoint_hash=iss.target_hash AND created_at > current_timestamp - interval '14d' )
       WHEN anomaly_type='shape' THEN (select (count(*), COALESCE(max(created_at), iss.created_at)) from apis.request_dumps where project_id=iss.project_id AND shape_hash=iss.target_hash AND created_at > current_timestamp - interval '14d' )
       WHEN anomaly_type='format' THEN (select (count(*), COALESCE(max(created_at), iss.created_at)) from apis.request_dumps where project_id=iss.project_id AND iss.target_hash=ANY(format_hashes) AND created_at > current_timestamp - interval '14d' )
@@ -368,12 +368,12 @@ getReportAnomalies pid report_type = query Select (Query $ encodeUtf8 q) pid
     report_interval = if report_type == "daily" then ("'24 hours'" :: Text) else "'7 days'"
     q =
       [text|
-  SELECT id, created_at, updated_at, project_id, acknowleged_at, anomaly_type, target_hash, issue_data, 
+  SELECT id, created_at, updated_at, project_id, acknowleged_at, anomaly_type, target_hash, issue_data,
     endpoint_id, acknowleged_by, archived_at,
-    CASE 
+    CASE
       WHEN anomaly_type='endpoint' THEN (select (count(*), COALESCE(max(created_at), iss.created_at)) from apis.request_dumps where project_id=iss.project_id AND endpoint_hash=iss.target_hash AND created_at > current_timestamp - interval '14d' )
       WHEN anomaly_type='shape' THEN (select (count(*), COALESCE(max(created_at), iss.created_at)) from apis.request_dumps where project_id=iss.project_id AND shape_hash=iss.target_hash AND created_at > current_timestamp - interval '14d' )
-      -- Format requires a CONTAINS query which is not covered by the regular indexes. GIN index can't have created_at compound indexes, so its a slow query 
+      -- Format requires a CONTAINS query which is not covered by the regular indexes. GIN index can't have created_at compound indexes, so its a slow query
       -- WHEN anomaly_type='format' THEN (select (count(*), COALESCE(max(created_at), iss.created_at)) from apis.request_dumps where project_id=iss.project_id AND iss.target_hash=ANY(format_hashes) AND created_at > current_timestamp - interval '14d' )
       WHEN anomaly_type='runtime_exception' THEN (select (count(*), COALESCE(max(created_at), iss.created_at)) from apis.request_dumps where project_id=iss.project_id AND errors @> ('[{"hash": "' || iss.target_hash || '"}]')::jsonb AND created_at > current_timestamp - interval '14d')
       ELSE (0, NOW()::TEXT)
@@ -697,5 +697,5 @@ insertIssue = execute Insert q
     q =
       [sql|insert into apis.issues (id, created_at, updated_at, project_id, acknowleged_at, anomaly_type, target_hash,
                       issue_data, endpoint_id, acknowleged_by, archived_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                      ON CONFLICT (project_id, target_hash) DO NOTHING; 
+                      ON CONFLICT (project_id, target_hash) DO NOTHING;
                       |]

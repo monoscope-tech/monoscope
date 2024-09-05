@@ -361,7 +361,7 @@ generateSwagger projectTitle projectDescription endpoints shapes fields formats 
 generateGetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders AE.Value)
 generateGetH pid = do
   (sess, project) <- Sessions.sessionAndProject pid
-  endpoints <- dbtToEff $ Endpoints.endpointsByProjectId pid
+  endpoints <- dbtToEff $ Endpoints.endpointsByProjectId pid "jsonplaceholder.typicode.com"
   let endpoint_hashes = V.map (.hash) endpoints
   shapes <- dbtToEff $ Shapes.shapesByEndpointHashes pid endpoint_hashes
   fields <- dbtToEff $ Fields.fieldsByEndpointHashes pid endpoint_hashes
