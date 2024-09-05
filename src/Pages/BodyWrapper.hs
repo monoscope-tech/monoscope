@@ -24,7 +24,6 @@ menu pid =
   , ("Explorer", "/p/" <> pid.toText <> "/log_explorer", "list-tree")
   , ("Changes & Errors", "/p/" <> pid.toText <> "/anomalies", "bug")
   , ("API Tests (Beta)", "/p/" <> pid.toText <> "/testing", "list-check")
-  , ("OpenAPI/Swagger", "/p/" <> pid.toText <> "/documentation", "brackets-curly")
   , ("Reports", "/p/" <> pid.toText <> "/reports", "chart-simple")
   ]
 
@@ -125,35 +124,35 @@ bodyWrapper BWConfig{sessM, currProject, pageTitle, menuItem, hasIntegrated, nav
 
       script_
         [raw|
-              window.initialCloseSideMenu = localStorage.getItem('close-sidemenu');
-              var currentISOTimeStringVar = ((new Date()).toISOString().split(".")[0])+"+00:00";
-              document.addEventListener('DOMContentLoaded', function(){
-                if (window.initialCloseSideMenu == 'true'){
-                   document.getElementById('side-nav-menu').classList.add('hidden-side-nav-menu');
-                }
+        window.initialCloseSideMenu = localStorage.getItem('close-sidemenu');
+        var currentISOTimeStringVar = ((new Date()).toISOString().split(".")[0])+"+00:00";
+        document.addEventListener('DOMContentLoaded', function(){
+          if (window.initialCloseSideMenu == 'true'){
+             document.getElementById('side-nav-menu').classList.add('hidden-side-nav-menu');
+          }
 
-                // htmx.config.useTemplateFragments = true
-                tippy('[data-tippy-content]');
-                var notyf = new Notyf({
-                    duration: 5000,
-                    position: {
-                    x: 'right',
-                    y: 'top',
-                  },
-                });
-                document.body.addEventListener("successToast", (e)=> {e.detail.value.map(v=>notyf.success(v));});
-                document.body.addEventListener("errorToast", (e)=> {e.detail.value.map(v=>notyf.error(v));});
+          // htmx.config.useTemplateFragments = true
+          tippy('[data-tippy-content]');
+          var notyf = new Notyf({
+              duration: 5000,
+              position: {
+                x: 'right',
+                y: 'top',
+            },
+          });
+          document.body.addEventListener("successToast", (e)=> {e.detail.value.map(v=>notyf.success(v));});
+          document.body.addEventListener("errorToast", (e)=> {e.detail.value.map(v=>notyf.error(v));});
+        });
+
+
+        if("serviceWorker" in navigator) {
+            window.addEventListener("load", () => {
+              navigator.serviceWorker.register("/public/sw.js?v=7").then(swReg => {}).catch(err => {
+                  console.error('Service Worker Error', err);
               });
-
-
-              if("serviceWorker" in navigator) {
-                  window.addEventListener("load", () => {
-                    navigator.serviceWorker.register("/public/sw.js?v=7").then(swReg => {}).catch(err => {
-                        console.error('Service Worker Error', err);
-                    });
-                });
-              }
-            |]
+          });
+        }
+      |]
       script_
         [type_ "text/hyperscript"]
         [text|
@@ -171,10 +170,10 @@ bodyWrapper BWConfig{sessM, currProject, pageTitle, menuItem, hasIntegrated, nav
 
         |]
 
-    body_ [class_ "text-gray-900 h-full w-full bg-base-100 fixed", term "data-theme" "winter", term "hx-ext" "multi-swap,preload"] do
+    body_ [class_ "text-gray-900 h-full w-full bg-base-100 ", term "data-theme" "winter", term "hx-ext" "multi-swap,preload"] do
       div_
         [ style_ "z-index:99999"
-        , class_ "fixed pt-24 sm:hidden justify-center z-50 w-full p-4 bg-gray-50 overflow-y-auto inset-0 h-full max-h-full"
+        , class_ "pt-24 sm:hidden justify-center z-50 w-full p-4 bg-gray-50 overflow-y-auto inset-0 h-full max-h-full"
         , tabindex_ "-1"
         ]
         do
@@ -200,9 +199,9 @@ bodyWrapper BWConfig{sessM, currProject, pageTitle, menuItem, hasIntegrated, nav
               sideNav' = currProject & maybe "" \project -> sideNav sess project pageTitle menuItem hasIntegrated
            in section_ [class_ "flex flex-row h-screen overflow-hidden"] do
                 sideNav'
-                section_ [class_ "flex flex-col grow h-screen overflow-y-hidden"] do
+                section_ [class_ "h-screen overflow-y-hidden grow"] do
                   navbar currUser pageTitle navTabs pageActions
-                  section_ [class_ "flex-1 overflow-y-hidden h-full grow"] child
+                  section_ [class_ "pt-14 pb-2 overflow-y-hidden h-full "] child
       externalHeadScripts_
       alerts_
       script_ [async_ "true", src_ "https://www.googletagmanager.com/gtag/js?id=AW-11285541899"] ("" :: Text)
@@ -292,7 +291,7 @@ projectsDropDown currProject projects = do
 
 
 sideNav :: Sessions.PersistentSession -> Projects.Project -> Text -> Maybe Text -> Maybe Bool -> Html ()
-sideNav sess project pageTitle menuItem hasIntegrated = aside_ [class_ "shrink-0 top-0 border-r bg-base-100 border-gray-200 w-14 text-sm h-screen transition-all duration-200 ease-in-out flex flex-col justify-between", id_ "side-nav-menu"] do
+sideNav sess project pageTitle menuItem hasIntegrated = aside_ [class_ "border-r bg-base-100 border-gray-200 w-14 text-sm h-screen transition-all duration-200 ease-in-out flex flex-col justify-between", id_ "side-nav-menu"] do
   script_ [text|if (window.initialCloseSideMenu == 'true'){document.getElementById('side-nav-menu').classList.add('hidden-side-nav-menu');}|]
   div_ do
     a_ [href_ "/", class_ "px-2 py-2 inline-flex items-center justify-center"] do
@@ -363,7 +362,7 @@ sideNav sess project pageTitle menuItem hasIntegrated = aside_ [class_ "shrink-0
 
 navbar :: Users.User -> Text -> Maybe (Html ()) -> Maybe (Html ()) -> Html ()
 navbar currUser pageTitle tabsM pageActionsM =
-  nav_ [id_ "main-navbar", class_ "sticky z-20 top-0 w-full px-6 py-1 flex flex-row border-b border-gray-200 h-12"] do
+  nav_ [id_ "main-navbar", class_ "fixed bg-base-100 z-20 top-0 w-full px-6 py-1 flex flex-row border-b border-gray-200 h-12"] do
     a_
       [ id_ "side_nav_toggler"
       , class_ "cursor-pointer flex items-center "

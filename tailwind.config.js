@@ -7,7 +7,7 @@ module.exports = {
     './static/public/assets/steps-editor.js',
   ],
   daisyui: {
-    themes: ['light', 'dark', 'winter', 'dim', 'forest'],
+    themes: ['winter'],
   },
   theme: {
     extend: {

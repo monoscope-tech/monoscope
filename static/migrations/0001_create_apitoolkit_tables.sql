@@ -176,6 +176,7 @@ CREATE TABLE IF NOT EXISTS apis.swagger_jsons
 
 SELECT manage_updated_at('apis.swagger_jsons');
 CREATE INDEX IF NOT EXISTS idx_swagger_jsons_project_id ON apis.swagger_jsons(project_id);
+ALTER TABLE apis.swagger_jsons ADD COLUMN host TEXT NOT NULL DEFAULT ''::TEXT;
 
 -----------------------------------------------------------------------
 -- ENDPOINTS table
@@ -426,7 +427,7 @@ CREATE MATERIALIZED VIEW IF NOT EXISTS apis.endpoint_request_stats AS
  WITH request_dump_stats as (
       SELECT
           project_id, url_path, method,
-          endpoint_hash,
+          endpoint_hash, host,
           percentile_agg(EXTRACT(epoch FROM duration)) as agg,
           sum(EXTRACT(epoch FROM duration))  as total_time,
           count(1)  as total_requests,
@@ -434,13 +435,13 @@ CREATE MATERIALIZED VIEW IF NOT EXISTS apis.endpoint_request_stats AS
           sum(count(*)) OVER (partition by project_id) as total_requests_proj
       FROM apis.request_dumps
       where created_at > NOW() - interval '14' day
-      GROUP BY project_id, url_path, method, endpoint_hash
+      GROUP BY project_id, url_path, method, endpoint_hash, host
     )
     SELECT
         enp.id endpoint_id,
         enp.hash endpoint_hash,
         rds.project_id,
-        rds.url_path, rds.method,
+        rds.url_path, rds.method, rds.host,
         coalesce(approx_percentile(0,    agg)/1000000, 0) min,
         coalesce(approx_percentile(0.50, agg)/1000000, 0) p50,
         coalesce(approx_percentile(0.75, agg)/1000000, 0) p75,
