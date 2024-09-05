@@ -22,6 +22,7 @@ import Pkg.Components.ItemsList qualified as ItemsList
 import PyF qualified
 import Relude hiding (ask, asks)
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
+import Utils
 import Utils qualified
 
 
@@ -50,7 +51,7 @@ endpointListGetH pid pageM layoutM filterTM hostM requestTypeM sortM hxRequestM 
   let host = fromMaybe "" $ hostM >>= \t -> if t == "" then Nothing else Just t
   let page = fromMaybe 0 $ readMaybe (toString $ fromMaybe "" pageM)
   endpointStats <- dbtToEff $ Endpoints.endpointRequestStatsByProject pid ackd archived (Just host) sortM searchM page (fromMaybe "" requestTypeM)
-  inboxCount <- dbtToEff $ Endpoints.countEndpointInbox pid host
+  inboxCount <- dbtToEff $ Endpoints.countEndpointInbox pid host (fromMaybe "Incoming" requestTypeM)
   let requestType = fromMaybe "Incoming" requestTypeM
   let currentURL = [PyF.fmt|/p/{pid.toText}/endpoints?layout={fromMaybe "false" layoutM}&filter={fromMaybe "" filterTM}&sort={fromMaybe "event" sortM}&request_type={requestType}&host={host}|]
   let pageTitleHost = "Endpoint For " <> host
@@ -59,6 +60,10 @@ endpointListGetH pid pageM layoutM filterTM hostM requestTypeM sortM hxRequestM 
           { sessM = Just sess.persistentSession
           , currProject = Just project
           , pageTitle = pageTitleHost
+          , pageActions =
+              Just
+                $ a_ [class_ "btn btn-sm btn-primary space-x-2", href_ $ "/p/" <> pid.toText <> "/documentation?host=" <> host] do
+                  Utils.faSprite_ "plus" "regular" "h-4" >> "OpenAPI/Swagger"
           , navTabs =
               Just
                 $ toHtml
@@ -153,8 +158,9 @@ renderEndpoint activePage currTime enp = do
         a_ [class_ "text-blue-500 text-sm hover:text-slate-600", href_ ("/p/" <> enp.projectId.toText <> "/log_explorer?query=" <> "url_path==\"" <> enp.urlPath <> "\"")] "View logs"
       unless activePage do
         div_ [class_ "flex items-center gap-2 mt-5"] do
+          let host = enp.host
           AnomalyList.anomalyArchiveButton enp.projectId (Anomalies.AnomalyId enp.anomalyId) (isJust enp.archivedAt)
-          AnomalyList.anomalyAcknowlegeButton enp.projectId (Anomalies.AnomalyId enp.anomalyId) (isJust enp.acknowlegedAt)
+          AnomalyList.anomalyAcknowlegeButton enp.projectId (Anomalies.AnomalyId enp.anomalyId) (isJust enp.acknowlegedAt) host
     div_ [class_ "flex items-center justify-center "]
       $ div_
         [ class_ "w-56 h-12 px-3"

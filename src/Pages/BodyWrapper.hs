@@ -24,7 +24,6 @@ menu pid =
   , ("Explorer", "/p/" <> pid.toText <> "/log_explorer", "list-tree")
   , ("Changes & Errors", "/p/" <> pid.toText <> "/anomalies", "bug")
   , ("API Tests (Beta)", "/p/" <> pid.toText <> "/testing", "list-check")
-  , ("OpenAPI/Swagger", "/p/" <> pid.toText <> "/documentation", "brackets-curly")
   , ("Reports", "/p/" <> pid.toText <> "/reports", "chart-simple")
   ]
 
@@ -363,7 +362,7 @@ sideNav sess project pageTitle menuItem hasIntegrated = aside_ [class_ "border-r
 
 navbar :: Users.User -> Text -> Maybe (Html ()) -> Maybe (Html ()) -> Html ()
 navbar currUser pageTitle tabsM pageActionsM =
-  nav_ [id_ "main-navbar", class_ "fixed bg-base-100 z-20 top-0 w-full px-6 py-1 flex flex-row border-b border-gray-200 h-12"] do
+  nav_ [id_ "main-navbar", class_ "sticky bg-base-100 z-20 top-0 w-full px-6 py-1 flex flex-row border-b border-gray-200 h-12"] do
     a_
       [ id_ "side_nav_toggler"
       , class_ "cursor-pointer flex items-center "

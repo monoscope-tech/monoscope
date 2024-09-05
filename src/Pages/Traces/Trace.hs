@@ -31,6 +31,7 @@ import Models.Users.Sessions qualified as Sessions
 import NeatInterpolation (text)
 import Pages.Log qualified as Log
 import Pages.Traces.Spans qualified as Spans
+import Pages.Traces.Utils
 import Pkg.Parser (pSource)
 import Relude
 import Relude.Unsafe (read)
@@ -143,8 +144,8 @@ tracePage p = do
                           span_ [class_ ""] $ toHtml s
                         div_ [class_ "flex gap-1 items-center"] $ do
                           span_ [class_ "text-xs max-w-52 truncate"] $ toHtml $ T.take 4 percent <> "%"
-                          div_ [class_ "w-[100px] h-3 bg-gray-200 rounded overflow-hidden"] $
-                            div_ [class_ "h-full pl-2 text-xs font-medium", style_ $ "width:" <> percent <> "%; background-color:" <> color] pass
+                          div_ [class_ "w-[100px] h-3 bg-gray-200 rounded overflow-hidden"]
+                            $ div_ [class_ "h-full pl-2 text-xs font-medium", style_ $ "width:" <> percent <> "%; background-color:" <> color] pass
 
             input_ [type_ "radio", name_ "my_tabs_2", role_ "tab", class_ "tab after:pb-2", term "aria-label" "Span List"]
             div_ [role_ "tabpanel", class_ "tab-content pt-2"] do
@@ -152,14 +153,13 @@ tracePage p = do
                 renderSpanListTable serviceNames serviceColors p.spanRecords
 
       div_ [class_ "h-auto overflow-y-scroll mt-5 py-2 rounded-lg border"] do
-        h3_ [class_ "text-xl font-semibold px-4 border-b pb-2"] "Span"
         div_ [class_ "flex flex-col gap-4 px-4", id_ $ "span-" <> traceItem.traceId] do
           let tSp = fromMaybe (V.head p.spanRecords) (V.find (\s -> s.spanId == sId) p.spanRecords)
           Spans.expandedSpanItem pid tSp
-      let spanJson = decodeUtf8 $ AE.encode $ p.spanRecords <&> getSpanJson
-      let colorsJson = decodeUtf8 $ AE.encode $ AE.object [AEKey.fromText k .= v | (k, v) <- HM.toList serviceColors]
-      let trId = traceItem.traceId
-      script_ [text|flameGraphChart($spanJson, "a$trId", $colorsJson);|]
+          let spanJson = decodeUtf8 $ AE.encode $ p.spanRecords <&> getSpanJson
+          let colorsJson = decodeUtf8 $ AE.encode $ AE.object [AEKey.fromText k .= v | (k, v) <- HM.toList serviceColors]
+          let trId = traceItem.traceId
+          script_ [text|flameGraphChart($spanJson, "a$trId", $colorsJson);|]
 
 
 getSpanJson :: Telemetry.SpanRecord -> AE.Value
@@ -174,37 +174,18 @@ getSpanJson sp =
     ]
 
 
-getServiceName :: Telemetry.SpanRecord -> Text
-getServiceName sp = case sp.resource of
-  AE.Object r -> maybe "Unknown" serviceNameString $ KEM.lookup "service.name" r
-  _ -> "Unknown"
-  where
-    serviceNameString :: AE.Value -> Text
-    serviceNameString (AE.String s) = s
-    serviceNameString _ = "Unknown"
-
-
-getServiceData :: Telemetry.SpanRecord -> ServiceData
-getServiceData sp = ServiceData{name = getServiceName sp, duration = sp.spanDurationNs}
-
-
-getServiceColor :: Text -> HashMap Text Text -> Text
-getServiceColor s serviceColors = fromMaybe "#000000" $ HM.lookup s serviceColors
-
-
-selectHead :: Text -> Text -> V.Vector Text -> Text -> Maybe Text -> Html ()
-selectHead title current options baseUrl swapTarget = div_ [class_ "flex flex-col gap-1"] do
-  div_ [class_ "flex flex-col gap-1"] $ do
-    span_ [class_ "text-sm text-gray-700 font-semibold"] $ toHtml title
-  div_ [class_ "relative text-gray-600"] do
-    button_ [class_ "border flex items-center justify-between border w-36 hover:bg-gray-100 rounded-lg px-2 py-1.5 text-sm", [__|on click toggle .hidden on the next <div/>|]] do
-      span_ [class_ ""] $ toHtml current
-      span_ [] do
-        faSprite_ "chevron-down" "regular" "h-3 w-3"
-    div_ [class_ "hidden min-w-36 w-max flex flex-col border shadow-sm left-0 absolute top-8 bg-base-100 z-50 bg-white text-sm rounded-lg"] do
-      forM_ options $ \option -> do
-        a_ [class_ "px-4 py-1 hover:bg-gray-100", href_ $ baseUrl <> option] $ toHtml option
-
+-- selectHead :: Text -> Text -> V.Vector Text -> Text -> Maybe Text -> Html ()
+-- selectHead title current options baseUrl swapTarget = div_ [class_ "flex flex-col gap-1"] do
+--   div_ [class_ "flex flex-col gap-1"] $ do
+--     span_ [class_ "text-sm text-gray-700 font-semibold"] $ toHtml title
+--   div_ [class_ "relative text-gray-600"] do
+--     button_ [class_ "border flex items-center justify-between border w-36 hover:bg-gray-100 rounded-lg px-2 py-1.5 text-sm", [__|on click toggle .hidden on the next <div/>|]] do
+--       span_ [class_ ""] $ toHtml current
+--       span_ [] do
+--         faSprite_ "chevron-down" "regular" "h-3 w-3"
+--     div_ [class_ "hidden min-w-36 w-max flex flex-col border shadow-sm left-0 absolute top-8 bg-base-100 z-50 bg-white text-sm rounded-lg"] do
+--       forM_ options $ \option -> do
+--         a_ [class_ "px-4 py-1 hover:bg-gray-100", href_ $ baseUrl <> option] $ toHtml option
 
 renderSpanRecordRow :: V.Vector Telemetry.SpanRecord -> HashMap Text Text -> Text -> Html ()
 renderSpanRecordRow spanRecords colors service = do
@@ -240,8 +221,8 @@ renderSpanListTable services colors records =
         th_ "Avg. Duration"
         th_ "Exec. Time"
         th_ "%Exec. Time"
-    tbody_ [class_ "space-y-0"] $
-      mapM_ (renderSpanRecordRow records colors) services
+    tbody_ [class_ "space-y-0"]
+      $ mapM_ (renderSpanRecordRow records colors) services
 
 
 spanTable :: V.Vector Telemetry.SpanRecord -> Html ()
@@ -281,21 +262,5 @@ spanTable records =
           span_ [class_ "px-2 py-1 w-28 truncate"] $ toHtml $ getDurationNSMS spanRecord.spanDurationNs
 
 
-getRequestDetails :: Telemetry.SpanRecord -> Maybe (Text, Text, Text, Int)
-getRequestDetails spanRecord = case spanRecord.attributes of
-  AE.Object r -> case KEM.lookup "http.method" r of
-    Just (AE.String method) -> Just ("HTTP", method, fromMaybe "/" $ getText "http.url" r, fromMaybe 0 $ getInt "http.status_code" r)
-    _ -> case KEM.lookup "rpc.system" r of
-      Just (AE.String "grpc") -> Just ("GRPC", fromMaybe "" $ getText "rpc.service" r, fromMaybe "" $ getText "rpc.method" r, fromMaybe 0 $ getInt "rpc.grpc.status_code" r)
-      _ -> Nothing
-  _ -> Nothing
-  where
-    getText :: Text -> AE.Object -> Maybe Text
-    getText key v = case KEM.lookup (AEKey.fromText key) v of
-      Just (AE.String s) -> Just s
-      _ -> Nothing
-    getInt :: Text -> AE.Object -> Maybe Int
-    getInt key v = case KEM.lookup (AEKey.fromText key) v of
-      Just (AE.Number n) -> toBoundedInteger n
-      Just (AE.String s) -> readMaybe $ toString s
-      _ -> Nothing
+getServiceData :: Telemetry.SpanRecord -> ServiceData
+getServiceData sp = ServiceData{name = getServiceName sp, duration = sp.spanDurationNs}
