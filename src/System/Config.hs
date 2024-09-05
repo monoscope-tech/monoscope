@@ -45,17 +45,6 @@ data EnvConfig = EnvConfig
   , smtpUsername :: Text
   , smtpPassword :: Text
   , smtpSender :: Text
-  , paddleSandbox :: Bool
-  , paddleSandboxVendorId :: Text
-  , paddleSandboxApiKey :: Text
-  , paddleVendorId :: Text
-  , paddleApiKey :: Text
-  , paddleSandboxStartup :: Text
-  , paddleStartup :: Text
-  , paddleSandboxGrowth :: Text
-  , paddleGrowth :: Text
-  , paddleSandboxHobby :: Text
-  , paddleHobby :: Text
   , orttoApiKey :: Text
   , googleServiceAccountB64 :: LT.Text
   , convertkitApiKey :: Text
