@@ -17,7 +17,6 @@ import Data.Aeson.Key qualified as AEKey
 import Data.Aeson.KeyMap qualified as AEK
 import Data.Aeson.Types qualified as AET
 import Data.ByteString.Base64 qualified as B64
-import Data.Digest.XXHash (xxHash)
 import Data.HashMap.Strict qualified as HM
 import Data.HashTable.Class qualified as HTC
 import Data.HashTable.ST.Cuckoo qualified as HT
@@ -44,7 +43,6 @@ import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Apis.Shapes qualified as Shapes
 import Models.Projects.Projects qualified as Projects
 import NeatInterpolation (text)
-import Numeric (showHex)
 import Relude
 import Relude.Unsafe as Unsafe (read)
 import Text.Regex.TDFA ((=~))

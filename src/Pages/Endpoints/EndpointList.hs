@@ -22,8 +22,8 @@ import Pkg.Components.ItemsList qualified as ItemsList
 import PyF qualified
 import Relude hiding (ask, asks)
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
-import Utils
 import Utils qualified
+import Debug.Pretty.Simple
 
 
 endpointListGetH
@@ -48,7 +48,7 @@ endpointListGetH pid pageM layoutM filterTM hostM requestTypeM sortM hxRequestM 
         Just "Archived" -> (False, True, "Archived")
         _ -> (True, False, "Active")
 
-  let host = fromMaybe "" $ hostM >>= \t -> if t == "" then Nothing else Just t
+  let host = maybeToMonoid $ hostM >>= \t -> if t == "" then Nothing else Just t
   let page = fromMaybe 0 $ readMaybe (toString $ fromMaybe "" pageM)
   endpointStats <- dbtToEff $ Endpoints.endpointRequestStatsByProject pid ackd archived (Just host) sortM searchM page (fromMaybe "" requestTypeM)
   inboxCount <- dbtToEff $ Endpoints.countEndpointInbox pid host (fromMaybe "Incoming" requestTypeM)

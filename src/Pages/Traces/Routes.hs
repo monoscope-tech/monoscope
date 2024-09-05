@@ -1,7 +1,5 @@
 module Pages.Traces.Routes (Routes, Routes' (..), server) where
 
-import Data.Time (UTCTime)
-import Data.UUID qualified as UUID
 import Models.Projects.Projects qualified as Projects
 import Pages.Traces.Trace qualified as Trace
 import Relude (Generic, Text)
@@ -15,11 +13,7 @@ import Servant (
   type (:>),
  )
 import Servant.HTML.Lucid (HTML)
-import Servant.Htmx (HXBoosted, HXRequest)
 import System.Types (ATAuthCtx, RespHeaders)
-
-
-type QPU a = QueryParam a UTCTime
 
 
 type QPT a = QueryParam a Text

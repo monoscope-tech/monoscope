@@ -153,7 +153,7 @@ data EndpointRequestStats = EndpointRequestStats
 -- FIXME: Include and return a boolean flag to show if fields that have annomalies.
 -- FIXME: return endpoint_hash as well.
 endpointRequestStatsByProject :: Projects.ProjectId -> Bool -> Bool -> Maybe Text -> Maybe Text -> Maybe Text -> Int -> Text -> PgT.DBT IO (V.Vector EndpointRequestStats)
-endpointRequestStatsByProject pid ackd archived pHostM sortM searchM page requestType = query Select (Query $ encodeUtf8 q) queryParams
+endpointRequestStatsByProject pid ackd archived pHostM sortM searchM page requestType = query Select (Query $ encodeUtf8 $ q) queryParams
   where
     -- Construct the list of parameters conditionally
     pHostParams = maybe [] (\h -> [toField h]) pHostM
@@ -182,8 +182,8 @@ endpointRequestStatsByProject pid ackd archived pHostM sortM searchM page reques
         ann.id
      from apis.endpoints enp
      left join apis.endpoint_request_stats ers on (enp.id=ers.endpoint_id)
-     left join apis.anomalies ann on (ann.anomaly_type='endpoint' AND ann.target_hash=enp.hash)
-     where enp.project_id=? and enp.outgoing=? and ann.id is not null $ackdAt $archivedAt $pHostQuery $search
+     left join apis.issues ann on (ann.anomaly_type='endpoint' AND ann.target_hash=enp.hash)
+     where enp.project_id=? and enp.outgoing=? $ackdAt $archivedAt $pHostQuery $search
      order by $orderBy , url_path ASC
      offset ? limit 30;
      ;

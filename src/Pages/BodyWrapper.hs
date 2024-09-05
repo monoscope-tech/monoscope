@@ -144,7 +144,6 @@ bodyWrapper BWConfig{sessM, currProject, pageTitle, menuItem, hasIntegrated, nav
           document.body.addEventListener("errorToast", (e)=> {e.detail.value.map(v=>notyf.error(v));});
         });
 
-
         if("serviceWorker" in navigator) {
             window.addEventListener("load", () => {
               navigator.serviceWorker.register("/public/sw.js?v=7").then(swReg => {}).catch(err => {
@@ -167,8 +166,7 @@ bodyWrapper BWConfig{sessM, currProject, pageTitle, menuItem, hasIntegrated, nav
               end
             end
           end
-
-        |]
+    |]
 
     body_ [class_ "text-gray-900 h-full w-full bg-base-100 ", term "data-theme" "winter", term "hx-ext" "multi-swap,preload"] do
       div_
@@ -201,38 +199,34 @@ bodyWrapper BWConfig{sessM, currProject, pageTitle, menuItem, hasIntegrated, nav
                 sideNav'
                 section_ [class_ "h-screen overflow-y-hidden grow"] do
                   navbar currUser pageTitle navTabs pageActions
-                  section_ [class_ "pt-14 pb-2 overflow-y-hidden h-full "] child
+                  section_ [class_ "pt-2 pb-2 overflow-y-hidden h-full "] child
       externalHeadScripts_
       alerts_
       script_ [async_ "true", src_ "https://www.googletagmanager.com/gtag/js?id=AW-11285541899"] ("" :: Text)
       script_
         [text|
-            window.dataLayer = window.dataLayer || [];
-            function gtag(){dataLayer.push(arguments);}
-            gtag('js', new Date());
-            gtag('config', 'AW-11285541899');
+          window.dataLayer = window.dataLayer || [];
+          function gtag(){dataLayer.push(arguments);}
+          gtag('js', new Date());
+          gtag('config', 'AW-11285541899');
 
-            function gtag_report_conversion(url) {
-              var callback = function () {
-                if (typeof(url) != 'undefined') {
-                  window.location = url;
-                }
-              };
-              gtag('event', 'conversion', {
-                  'send_to': 'AW-11285541899/IUBqCKOA-8sYEIvoroUq',
-                  'event_callback': callback
-              });
-              return false;
-            }
+          function gtag_report_conversion(url) {
+            var callback = function () {
+              if (typeof(url) != 'undefined') {window.location = url;}
+            };
+            gtag('event', 'conversion', {
+                'send_to': 'AW-11285541899/IUBqCKOA-8sYEIvoroUq',
+                'event_callback': callback
+            });
+            return false;
+          }
 
-
-      document.body.addEventListener('htmx:afterSwap', function (event) {
-        window.requestAnimationFrame(() => {
-          hljs.highlightAll();
-        });
-      });
-
-          |]
+          document.body.addEventListener('htmx:afterSwap', function (event) {
+            window.requestAnimationFrame(() => {
+              hljs.highlightAll();
+            });
+          });
+      |]
       let email = show $ maybe "" ((.user.getUser.email)) sessM
       let name = maybe "" (\sess -> sess.user.getUser.firstName <> " " <> sess.user.getUser.lastName) sessM
       script_

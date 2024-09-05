@@ -1,43 +1,27 @@
 module Pages.Traces.Trace (traceH, TraceDetailsGet (..)) where
 
-import Data.Text (Text)
 import Lucid
-import Network.GRPC.HighLevel (AuthContext)
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
-
-import Control.Error.Util (hush)
 import Data.Aeson ((.=))
 import Data.Aeson qualified as AE
 import Data.Aeson.Key qualified as AEKey
-import Data.Aeson.KeyMap qualified as KEM
-
-import Data.Containers.ListUtils (nubOrd)
 import Data.HashMap.Internal.Strict qualified as HM
-import Data.List.Extra (nub)
-import Data.Scientific (toBoundedInteger)
 import Data.Text qualified as T
 import Data.Time (defaultTimeLocale)
 import Data.Time.Format (formatTime)
 import Data.Time.Format.ISO8601 (formatShow, iso8601Format)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
-import Deriving.Aeson.Stock qualified as DAE
 import Lucid.Htmx (hxGet_, hxSwap_, hxTarget_)
 import Lucid.Hyperscript (__)
-import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Telemetry qualified as Telemetry
 import Models.Users.Sessions qualified as Sessions
 import NeatInterpolation (text)
-import Pages.Log qualified as Log
 import Pages.Traces.Spans qualified as Spans
 import Pages.Traces.Utils
-import Pkg.Parser (pSource)
 import Relude
-import Relude.Unsafe (read)
-import Text.Megaparsec (parseMaybe)
-import Utils (faSprite_, getDurationNSMS, getGrpcStatusColor, getServiceColors, getStatusColor, listToIndexHashMap, utcTimeToNanoseconds)
-import Witch.From (from)
+import Utils (faSprite_, getDurationNSMS, getGrpcStatusColor, getServiceColors, getStatusColor, utcTimeToNanoseconds)
 
 
 traceH :: Projects.ProjectId -> Text -> Maybe Text -> ATAuthCtx (RespHeaders TraceDetailsGet)
@@ -241,7 +225,7 @@ spanTable records =
     forM_ records $ \spanRecord -> do
       let pidText = UUID.toText spanRecord.projectId
           spanid = maybe "" UUID.toText spanRecord.uSpandId
-          tme = from @String (formatShow iso8601Format spanRecord.timestamp)
+          tme = fromString (formatShow iso8601Format spanRecord.timestamp)
           (reqType, _, _, status_code) = fromMaybe ("", "", "", 0) $ getRequestDetails spanRecord
 
       div_

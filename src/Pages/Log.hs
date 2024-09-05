@@ -9,7 +9,6 @@ where
 
 import Control.Error (hush)
 import Data.Aeson (Value)
-import Data.Char
 import Data.Containers.ListUtils (nubOrd)
 import Data.Default (def)
 import Data.HashMap.Strict qualified as HM
@@ -18,13 +17,11 @@ import Data.Text qualified as T
 import Data.Time (
   UTCTime,
   addUTCTime,
-  getCurrentTime,
   secondsToNominalDiffTime,
  )
 import Data.Time.Format (
   defaultTimeLocale,
   formatTime,
-  parseTimeM,
  )
 import Data.Time.Format.ISO8601 (iso8601ParseM)
 import Data.Vector qualified as V

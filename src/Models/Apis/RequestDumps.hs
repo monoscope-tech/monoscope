@@ -32,9 +32,8 @@ import Data.Aeson qualified as AE
 import Data.Default
 import Data.Default.Instances ()
 import Data.Text qualified as T
-import Data.Time (CalendarDiffTime, UTCTime, ZonedTime, getCurrentTime)
+import Data.Time (CalendarDiffTime, UTCTime, ZonedTime)
 import Data.Time.Format
-import Data.Time.Format.ISO8601 (ISO8601 (iso8601Format), formatShow)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity.DBT (QueryNature (Insert, Select), executeMany, query, queryOne)

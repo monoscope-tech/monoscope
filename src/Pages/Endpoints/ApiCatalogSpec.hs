@@ -2,9 +2,7 @@ module Pages.Endpoints.ApiCatalogSpec (spec) where
 
 import Data.Time (defaultTimeLocale, formatTime, getCurrentTime)
 import Data.UUID qualified as UUID
-import Data.UUID.V4 qualified as UUID
 import Database.PostgreSQL.Entity.DBT (withPool)
-import Models.Apis.Endpoints qualified as Endpoints
 import Models.Projects.Projects qualified as Projects
 import Pages.BodyWrapper (PageCtx (..))
 import Pages.Endpoints.ApiCatalog qualified as ApiCatalog
@@ -14,7 +12,6 @@ import ProcessMessage (processRequestMessages)
 import Relude
 import Relude.Unsafe qualified as Unsafe
 import Test.Hspec (Spec, aroundAll, describe, it, shouldBe)
-import Utils (toXXHash)
 
 
 testPid :: Projects.ProjectId
