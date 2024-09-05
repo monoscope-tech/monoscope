@@ -45,7 +45,6 @@ data EnvConfig = EnvConfig
   , smtpUsername :: Text
   , smtpPassword :: Text
   , smtpSender :: Text
-  , orttoApiKey :: Text
   , googleServiceAccountB64 :: LT.Text
   , convertkitApiKey :: Text
   , convertkitApiSecret :: Text
