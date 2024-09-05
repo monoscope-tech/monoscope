@@ -60,10 +60,10 @@ endpointListGetH pid pageM layoutM filterTM hostM requestTypeM sortM hxRequestM 
           { sessM = Just sess.persistentSession
           , currProject = Just project
           , pageTitle = pageTitleHost
-          , pageActions = 
-              Just 
+          , pageActions =
+              Just
                 $ a_ [class_ "btn btn-sm btn-primary space-x-2", href_ $ "/p/" <> pid.toText <> "/documentation?host=" <> host] do
-                      Utils.faSprite_ "plus" "regular" "h-4" >> "OpenAPI/Swagger"
+                  Utils.faSprite_ "plus" "regular" "h-4" >> "OpenAPI/Swagger"
           , navTabs =
               Just
                 $ toHtml
@@ -76,7 +76,6 @@ endpointListGetH pid pageM layoutM filterTM hostM requestTypeM sortM hxRequestM 
                       , Components.TabFilterOpt{name = "Archived", count = Nothing}
                       ]
                   }
-                
           }
 
   let nextFetchUrl = currentURL <> "&page=" <> show (page + 1) <> "&load_more=true"

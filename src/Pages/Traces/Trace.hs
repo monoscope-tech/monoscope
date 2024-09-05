@@ -120,18 +120,18 @@ tracePage p = do
           let tSp = fromMaybe (V.head p.spanRecords) (V.find (\s -> s.spanId == sId) p.spanRecords)
           Spans.expandedSpanItem pid tSp
       let spanJson =
-            decodeUtf8 $
-              AE.encode $
-                p.spanRecords
-                  <&> ( \sp ->
-                          AE.object
-                            [ "span_id" .= sp.spanId
-                            , "name" .= sp.spanName
-                            , "value" .= sp.spanDurationNs
-                            , "start" .= utcTimeToNanoseconds sp.startTime
-                            , "parent_id" .= sp.parentSpanId
-                            ]
-                      )
+            decodeUtf8
+              $ AE.encode
+              $ p.spanRecords
+              <&> ( \sp ->
+                      AE.object
+                        [ "span_id" .= sp.spanId
+                        , "name" .= sp.spanName
+                        , "value" .= sp.spanDurationNs
+                        , "start" .= utcTimeToNanoseconds sp.startTime
+                        , "parent_id" .= sp.parentSpanId
+                        ]
+                  )
       let trId = traceItem.traceId
       script_ [text|flameGraphChart($spanJson, "$trId")|]
 

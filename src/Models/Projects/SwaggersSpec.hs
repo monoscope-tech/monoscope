@@ -29,7 +29,7 @@ createSwagger projectId createdBy swaggerJson = do
           , createdAt = currentTime
           , updatedAt = currentTime
           , swaggerJson = swaggerJson
-          , host       = ""
+          , host = ""
           }
   addSwagger swagger
   pure swagger
@@ -52,7 +52,7 @@ spec = aroundAll TestUtils.withSetup $ describe "Models.Projects.Swaggers" $ do
               , createdAt = currentTime
               , updatedAt = currentTime
               , swaggerJson = swaggerJson'
-              , host       = ""
+              , host = ""
               }
       result <- withPool pool $ do
         _ <- addSwagger swagger

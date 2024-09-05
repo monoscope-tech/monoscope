@@ -28,7 +28,7 @@ module Models.Apis.Anomalies (
   acknowlegeCascade,
   acknowledgeAnomalies,
   getShapeParentAnomalyVM,
-  getFormatParentAnomalyVM
+  getFormatParentAnomalyVM,
 )
 where
 
@@ -405,8 +405,6 @@ acknowledgeAnomalies uid aids = do
   where
     qIssues = [sql| update apis.issues set acknowleged_by=?, acknowleged_at=NOW() where id=ANY(?::uuid[]) RETURNING target_hash; |]
     q = [sql| update apis.anomalies set acknowleged_by=?, acknowleged_at=NOW() where id=ANY(?::uuid[]) RETURNING target_hash; |]
-
-
 
 
 acknowlegeCascade :: Users.UserId -> Vector Text -> DBT IO Int64

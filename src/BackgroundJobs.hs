@@ -57,7 +57,7 @@ data BgJobs
   | DailyReports Projects.ProjectId
   | WeeklyReports Projects.ProjectId
   | DailyJob
-  | GenSwagger Projects.ProjectId Users.UserId  Text
+  | GenSwagger Projects.ProjectId Users.UserId Text
   | ReportUsage Projects.ProjectId
   | QueryMonitorsTriggered (Vector Monitors.QueryMonitorId)
   | RunCollectionTests Testing.CollectionId
@@ -175,7 +175,7 @@ jobsRunner logger authCtx job = when authCtx.config.enableBackgroundJobs $ do
           else Log.logAttention "RunCollectionTests failed.  Job was sheduled to run over 30 mins ago" $ collectionM <&> \c -> (c.title, c.id)
 
 
-generateSwaggerForProject :: Projects.ProjectId -> Users.UserId -> Text ->  ATBackgroundCtx ()
+generateSwaggerForProject :: Projects.ProjectId -> Users.UserId -> Text -> ATBackgroundCtx ()
 generateSwaggerForProject pid uid host = whenJustM (dbtToEff $ Projects.projectById pid) \project -> do
   endpoints <- dbtToEff $ Endpoints.endpointsByProjectId pid host
   let endpoint_hashes = V.map (.hash) endpoints
@@ -195,7 +195,7 @@ generateSwaggerForProject pid uid host = whenJustM (dbtToEff $ Projects.projectB
           , createdAt = currentTime
           , updatedAt = currentTime
           , swaggerJson = swagger
-          , host       = host
+          , host = host
           }
   dbtToEff $ Swaggers.addSwagger swaggerToAdd
 
