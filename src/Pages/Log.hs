@@ -218,7 +218,7 @@ data ApiLogsPageData = ApiLogsPageData
 
 apiLogsPage :: ApiLogsPageData -> Html ()
 apiLogsPage page = do
-  section_ [class_ "mx-auto px-6 gap-2 w-full flex flex-col h-full overflow-hidden ", id_ "apiLogsPage"] do
+  section_ [class_ "mx-auto pt-2 px-6 gap-2 w-full flex flex-col h-full overflow-hidden ", id_ "apiLogsPage"] do
     when page.exceededFreeTier $ freeTierLimitExceededBanner page.pid.toText
     div_
       [ style_ "z-index:26"

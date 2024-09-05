@@ -328,12 +328,12 @@ selectIssues pid endpointM isAcknowleged isArchived sortM limitM skipM = query S
     limit = maybe "" (\x -> "limit " <> show x) limitM
     skip = "offset " <> show skipM <> " "
 
+    -- Exclude endpoints from anomaly list 
     q =
       [text|
 SELECT id, created_at, updated_at, project_id, acknowleged_at, anomaly_type, target_hash, issue_data,
     endpoint_id, acknowleged_by, archived_at,
     CASE
-      WHEN anomaly_type='endpoint' THEN (select (count(*), COALESCE(max(created_at), iss.created_at)) from apis.request_dumps where project_id=iss.project_id AND endpoint_hash=iss.target_hash AND created_at > current_timestamp - interval '14d' )
       WHEN anomaly_type='shape' THEN (select (count(*), COALESCE(max(created_at), iss.created_at)) from apis.request_dumps where project_id=iss.project_id AND shape_hash=iss.target_hash AND created_at > current_timestamp - interval '14d' )
       -- Format requires a CONTAINS query which is not covered by the regular indexes. GIN index can't have created_at compound indexes, so its a slow query
       -- WHEN anomaly_type='format' THEN (select (count(*), COALESCE(max(created_at), iss.created_at)) from apis.request_dumps where project_id=iss.project_id AND iss.target_hash=ANY(format_hashes) AND created_at > current_timestamp - interval '14d' )
@@ -341,6 +341,7 @@ SELECT id, created_at, updated_at, project_id, acknowleged_at, anomaly_type, tar
       ELSE (0, NOW()::TEXT)
     END as req_count
     FROM apis.issues iss WHERE project_id = ? $cond
+    AND anomaly_type!='endpoint' 
     ORDER BY $orderBy $skip $limit |]
 
 

@@ -23,7 +23,6 @@ import PyF qualified
 import Relude hiding (ask, asks)
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
 import Utils qualified
-import Debug.Pretty.Simple
 
 
 endpointListGetH

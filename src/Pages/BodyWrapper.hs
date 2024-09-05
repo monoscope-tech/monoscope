@@ -199,7 +199,7 @@ bodyWrapper BWConfig{sessM, currProject, pageTitle, menuItem, hasIntegrated, nav
                 sideNav'
                 section_ [class_ "h-screen overflow-y-hidden grow"] do
                   navbar currUser pageTitle navTabs pageActions
-                  section_ [class_ "pt-2 pb-2 overflow-y-hidden h-full "] child
+                  section_ [class_ "overflow-y-hidden h-full "] child
       externalHeadScripts_
       alerts_
       script_ [async_ "true", src_ "https://www.googletagmanager.com/gtag/js?id=AW-11285541899"] ("" :: Text)
