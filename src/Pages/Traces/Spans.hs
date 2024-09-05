@@ -3,46 +3,92 @@ module Pages.Traces.Spans (expandedSpanItem) where
 import Data.Aeson qualified as AE
 import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap qualified as KM
+import Data.Text qualified as T
+import Data.Time.Format (defaultTimeLocale, formatTime)
 import Data.Vector qualified as V
 import Lucid
 import Lucid.Hyperscript (__)
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Telemetry (SpanRecord (..))
 import Models.Telemetry.Telemetry qualified as Telemetry
+import NeatInterpolation (text)
+import Pages.Traces.Utils (getRequestDetails, getServiceName)
 import Relude
 import Utils
 
 
 expandedSpanItem :: Projects.ProjectId -> Telemetry.SpanRecord -> Html ()
 expandedSpanItem pid sp = do
+  let reqDetails = getRequestDetails sp
+  script_
+    [type_ "text/hyperscript"]
+    [text|
+      behavior Navigatable(content)
+         on click remove .tab-active from .span-tab
+            then add .tab-active to me
+            then add .hidden to .span-tab-content
+            then remove .hidden from content
+      end
+    |]
   div_ [class_ "w-full"] $ do
-    div_ [class_ "flex flex-col space-y-1.5 bg-gray-50 py-4"] $ do
-      div_ [class_ "flex flex-col gap-4"] $ do
-        div_ [class_ "grid gap-1"] $ do
-          h3_ [class_ "whitespace-nowrap text-2xl font-semibold leading-none tracking-tight"] $ toHtml sp.spanName
+    div_ [class_ "flex flex-col gap-2 bg-gray-50 py-2"] $ do
+      div_ [class_ "flex items-center gap-4"] $ do
+        h3_ [class_ "whitespace-nowrap text-xl font-bold pr-4 border-r border-r-2"] "Span"
+        div_ [class_ "flex items-center gap-4"] $ do
+          h4_ [class_ "text-xl font-medium"] $ toHtml $ getServiceName sp
+          faSprite_ "arrow-right" "regular" "w-4 h-4 font-bold"
+          h4_ [class_ "text-xl font-medium max-w-96 truncate"] $ toHtml sp.spanName
+      div_ [class_ "flex gap-4 items-center justify-between text-gray-600"] $ do
+        div_ [class_ "flex gap-4 items-center"] do
+          div_ [class_ "font-medium flex shrink-0 items-center rounded gap-1 border px-2 py-1.5 text-gray-600"] do
+            faSprite_ "clock" "regular" "w-3 h-3"
+            span_ [class_ "text-sm font-medium"] $ toHtml $ getDurationNSMS sp.spanDurationNs
           div_ [class_ "flex items-center gap-4"] do
-            span_ [class_ "text-sm text-gray-500"] $ "Span ID: " <> toHtml sp.spanId
-            span_ [class_ "text-sm text-gray-500"] $ "Trace ID: " <> toHtml sp.traceId
-        div_ [class_ "flex gap-4"] $ do
-          div_ [class_ "font-medium"] do
-            span_ "Timestamp"
-            span_ [class_ "text-sm font-normal badge badge-ghost"] $ toHtml $ take 19 $ show sp.startTime
-          div_ [class_ "font-medium"] do
-            span_ "Duration"
-            span_ [class_ "text-sm font-normal badge badge-ghost"] $ toHtml $ getDurationNSMS sp.spanDurationNs
-    div_ [class_ "grid gap-6"] $ do
-      div_ [class_ "grid gap-3"] $ do
+            whenJust reqDetails $ \case
+              ("HTTP", method, path, status) -> do
+                span_ [class_ "text-sm font-medium border rounded px-2 py-1.5"] "HTTP"
+                div_ [class_ "flex border rounded overflow-hidden"] do
+                  span_ [class_ "text-sm px-2 py-1.5 border-r bg-gray-200"] $ toHtml method
+                  span_ [class_ "text-sm px-2 py-1.5 max-w-96 truncate"] $ toHtml path
+                  let extraClass = getStatusColor status
+                  span_ [class_ $ "text-sm px-2 py-1.5 " <> extraClass] $ toHtml $ T.take 3 $ show status
+              (scheme, method, path, status) -> do
+                span_ [class_ "text-sm font-medium border rounded px-2 py-1.5"] $ toHtml scheme
+                div_ [class_ "flex border rounded overflow-hidden"] do
+                  span_ [class_ "text-sm px-2 py-1.5 max-w-44 truncate bg-gray-200 border-r"] $ toHtml method
+                  span_ [class_ "text-sm px-2 py-1.5 max-w-96 truncate"] $ toHtml path
+                  let extraClass = getGrpcStatusColor status
+                  span_ [class_ $ "text-sm px-2 py-1.5 border-l " <> extraClass] $ toHtml $ show status
+        span_ [class_ "text-sm"] $ toHtml $ formatTime defaultTimeLocale "%b %d %Y %H:%M:%S%Q" sp.timestamp
+      div_ [class_ "flex gap-4 items-center mt-3"] do
+        div_ [class_ "flex items-end border rounded"] do
+          span_ [class_ "text-sm text-gray-500 font-medium border-r px-2 py-1"] "Span ID"
+          span_ [class_ "text-sm px-2 py-1"] $ toHtml sp.spanId
+        div_ [class_ "flex items-end border rounded"] do
+          span_ [class_ "text-sm text-gray-500 font-medium border-r px-2 py-1"] "Trace ID"
+          span_ [class_ "text-sm px-2 py-1"] $ toHtml sp.traceId
+
+    div_ [class_ "tabs tabs-lifted w-max mt-8", [__|on click halt|]] $ do
+      a_ [class_ "tab span-tab tab-active", [__| install Navigatable(content: .attributes-content)|]] "Attributes"
+      a_ [class_ "tab span-tab", [__| install Navigatable(content: .process-content)|]] $ do
+        "Process"
+      a_ [class_ "tab span-tab", [__| install Navigatable(content: .logs-content)|]] $ do
+        "Logs"
+        div_ [class_ "badge badge-ghost badge-sm"] $ show $ numberOfEvents sp.events
+
+    div_ [class_ "grid mt-4"] $ do
+      div_ [class_ "grid gap-3 span-tab-content attributes-content"] $ do
         div_ [class_ "font-semibold"] "Tags"
         div_ [class_ "flex gap-3 flex-wrap"] $ do
           displaySpanJson sp.attributes
-      div_ [class_ "grid gap-3"] $ do
-        div_ [class_ "font-semibold"] "Logs"
-        div_ [class_ "flex flex-col gap-1 w-full"] do
-          displayLogsSection sp.events
-      div_ [class_ "grid gap-3"] $ do
+      div_ [class_ "grid gap-3 span-tab-content hidden process-content"] $ do
         div_ [class_ "font-semibold"] "Metadata"
         div_ [class_ "flex gap-3 flex-wrap"] $ do
           displaySpanJson sp.resource
+      div_ [class_ "grid gap-3 span-tab-content hidden logs-content"] $ do
+        div_ [class_ "font-semibold"] "Logs"
+        div_ [class_ "flex flex-col gap-1 w-full"] do
+          displayLogsSection sp.events
 
 
 tagItem :: Text -> Text -> Text -> Html ()
@@ -84,3 +130,8 @@ displayEventItem (AE.Object obj) = do
         _ -> div_ [] "event = "
     div_ [class_ "expand-log max-h-96 hidden overflow-y-auto bg-red-500 w-full py-8"] $ pass
 displayEventItem _ = pass
+
+
+numberOfEvents :: AE.Value -> Int
+numberOfEvents (AE.Array obj) = length obj
+numberOfEvents _ = 0

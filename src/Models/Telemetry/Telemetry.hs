@@ -115,7 +115,8 @@ instance AE.ToJSON ByteString where
 
 
 data SpanRecord = SpanRecord
-  { projectId :: UUID
+  { uSpandId :: Maybe UUID
+  , projectId :: UUID
   , timestamp :: UTCTime
   , traceId :: Text
   , spanId :: Text
@@ -194,10 +195,10 @@ getSpandRecordsByTraceId pid trId = dbtToEff $ query Select q (pid, trId)
   where
     q =
       [sql|
-      SELECT project_id, timestamp, trace_id::text, span_id::text, parent_span_id::text, trace_state,
+      SELECT id, project_id, timestamp, trace_id::text, span_id::text, parent_span_id::text, trace_state,
                      span_name, start_time, end_time, kind, status, status_message, attributes,
                      events, links, resource, instrumentation_scope, CAST(EXTRACT(EPOCH FROM (end_time - start_time)) * 1000000000 AS BIGINT) as span_duration
-              FROM telemetry.spans where project_id=? and trace_id=?
+              FROM telemetry.spans where project_id=? and trace_id=? ORDER BY start_time ASC;
     |]
 
 
@@ -205,7 +206,7 @@ spanRecordByProjectAndId :: DB :> es => Projects.ProjectId -> UTCTime -> UUID.UU
 spanRecordByProjectAndId pid createdAt rdId = dbtToEff $ queryOne Select q (createdAt, pid, rdId)
   where
     q =
-      [sql| SELECT project_id, timestamp, trace_id::text, span_id::text, parent_span_id::text, trace_state,
+      [sql| SELECT id, project_id, timestamp, trace_id::text, span_id::text, parent_span_id::text, trace_state,
                      span_name, start_time, end_time, kind, status, status_message, attributes,
                      events, links, resource, instrumentation_scope, CAST(EXTRACT(EPOCH FROM (end_time - start_time)) * 1000000000 AS BIGINT) as span_duration
               FROM telemetry.spans where (timestamp=?)  and project_id=? and id=? LIMIT 1|]

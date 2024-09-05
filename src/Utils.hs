@@ -36,12 +36,17 @@ module Utils (
   displayTimestamp,
   utcTimeToNanoseconds,
   getDurationNSMS,
+  toXXHash,
+  getServiceColors,
+  getGrpcStatusColor,
 )
 where
 
 import Data.Aeson (Value)
 import Data.Aeson qualified as AE
+import Data.Digest.XXHash (xxHash)
 import Data.HashMap.Strict qualified as HM
+import Data.List (notElem, (!!))
 import Data.Scientific (toBoundedInteger)
 import Data.Text (replace)
 import Data.Text qualified as T
@@ -59,7 +64,8 @@ import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Session
 import Network.URI (escapeURIString, isUnescapedInURI)
-import Relude hiding (show)
+import Numeric (showHex)
+import Relude hiding (notElem, show)
 import Servant
 import Text.Regex.TDFA ((=~))
 import Text.Show
@@ -145,10 +151,17 @@ getMethodColor _ = " badge badge-outline "
 
 getStatusColor :: Int -> Text
 getStatusColor status
-  | status < 200 = "text-slate-500 bg-slate-800 border border-slate-200 "
+  | status < 200 = "text-slate-600 bg-slate-50 border border-slate-200 "
   | status >= 200 && status < 300 = "text-green-800 bg-green-50 border border-green-200"
   | status >= 300 && status < 400 = "text-amber-800 bg-yellow-50 border border-yellow-200"
   | otherwise = "text-red-800 bg-red-50 border border-red-200"
+
+
+getGrpcStatusColor :: Int -> Text
+getGrpcStatusColor status
+  | status == 0 = "text-green-800 bg-green-50 border border-green-200" -- OK
+  | status >= 1 && status <= 16 = "text-red-800 bg-red-50 border border-red-200" -- Errors (1 to 16 are error codes)
+  | otherwise = "text-slate-500 bg-slate-800 border border-slate-200"
 
 
 getSeverityColor :: Text -> Text
@@ -242,9 +255,9 @@ utcTimeToNanoseconds utcTime =
 
 getDurationNSMS :: Integer -> Text
 getDurationNSMS duration
-  | duration > 1000000000 = toText $ show (duration `div` 1000000000) <> " s"
-  | duration > 1000000 = toText $ show (duration `div` 1000000) <> " ms"
-  | duration > 1000 = toText $ show (duration `div` 1000) <> " µs"
+  | duration >= 1000000000 = toText $ show (duration `div` 1000000000) <> " s"
+  | duration >= 1000000 = toText $ show (duration `div` 1000000) <> " ms"
+  | duration >= 1000 = toText $ show (duration `div` 1000) <> " µs"
   | otherwise = toText $ show duration <> " ns"
 
 
@@ -270,6 +283,55 @@ freeTierLimitExceededBanner pid =
   div_ [class_ "flex w-full text-center items-center px-4 gap-4 py-2 bg-red-600 text-white rounded-lg justify-center"] do
     p_ [] "You have exceeded the free tier requests limit for this month, new requests will not be processed."
     a_ [class_ "font-semibold text-red-700 bg-white px-2 py-1 rounded-lg", href_ $ "/p/" <> pid <> "/settings"] "upgrade now"
+
+
+serviceColors :: V.Vector Text
+serviceColors =
+  V.fromList
+    [ "#FCA5A5" -- Red-300
+    , "#FCD34D" -- Amber-300
+    , "#FDBA74" -- Orange-300
+    , "#FDE047" -- Yellow-300
+    , "#BEF264" -- Lime-300
+    , "#86EFAC" -- Green-300
+    , "#5EEAD4" -- Teal-300
+    , "#67E8F9" -- Cyan-300
+    , "#93C5FD" -- Blue-300
+    , "#D8B4FE" -- Purple-300
+    , "#A78BFA" -- Violet-300
+    , "#F9A8D4" -- Pink-300
+    , "#FDB5C4" -- Rose-300
+    , "#B8FFC4" -- Mint-300
+    , "#BBF7D0" -- Emerald-300
+    , "#F0ABFC" -- Fuchsia-300
+    , "#C4B5FD" -- Indigo-300
+    , "#FCA6FF" -- Magenta-300
+    , "#FFD9D9" -- Coral-300
+    , "#FFE699" -- Gold-300
+    ]
+
+
+getServiceColors :: V.Vector Text -> HashMap Text Text
+getServiceColors services = go services HM.empty []
+  where
+    go :: V.Vector Text -> HashMap Text Text -> [Text] -> HashMap Text Text
+    go svcs assignedColors usedColors
+      | V.null svcs = assignedColors
+      | otherwise =
+          let service = V.head svcs
+              availableColors' = filter (`notElem` usedColors) (V.toList serviceColors)
+              availableColors = if null availableColors' then V.toList serviceColors else availableColors'
+              colorIdx = sum (map ord $ toString $ toXXHash service) `mod` length availableColors
+              selectedColor = availableColors !! colorIdx
+           in go (V.tail svcs) (HM.insert service selectedColor assignedColors) (selectedColor : usedColors)
+
+
+toXXHash :: Text -> Text
+toXXHash input = leftPad 8 $ fromString $ showHex (xxHash $ encodeUtf8 input) ""
+
+
+leftPad :: Int -> Text -> Text
+leftPad len txt = T.justifyRight len '0' (T.take len txt)
 
 
 -- "https://apitoolkit.lemonsqueezy.com/buy/b982b83b-66cc-4169-b5cb-f7d1d8a96a18?embed=1&media=0&logo=0&desc=0&checkout[custom][project_id]="

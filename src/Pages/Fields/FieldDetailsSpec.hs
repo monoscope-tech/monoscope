@@ -14,7 +14,7 @@ import Models.Apis.Formats qualified as Formats
 import Pages.Fields.FieldDetails qualified as FieldDetails
 import ProcessMessage (processRequestMessages)
 import Relude.Unsafe qualified as Unsafe
-import RequestMessages (toXXHash)
+import Utils (toXXHash)
 
 
 testPid :: Projects.ProjectId
@@ -31,8 +31,8 @@ spec = aroundAll withTestResources do
         let reqMsg1 = Unsafe.fromJust $ convert $ testRequestMsgs.reqMsg1 nowTxt
         let reqMsg2 = Unsafe.fromJust $ convert $ testRequestMsgs.reqMsg2 nowTxt
         let msgs =
-              concat
-                $ replicate
+              concat $
+                replicate
                   2
                   [ ("m1", reqMsg1)
                   , ("m2", reqMsg2)

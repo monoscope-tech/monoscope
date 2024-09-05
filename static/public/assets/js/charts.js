@@ -297,28 +297,16 @@ function latencyHistogram(renderAt, pc, data) {
   myChart.setOption(option)
 }
 
-function flameGraphChart(data, renderAt) {
-  const myChart = echarts.init(document.getElementById(renderAt))
-  const fData = modifySpansForFlameGraph(data)
-  const flameGraphColors = [
-    '#FCA5A5', // Red-300
-    '#FCD34D', // Amber-300
-    '#FDBA74', // Orange-300
-    '#FDE047', // Yellow-300
-    '#BEF264', // Lime-300
-    '#86EFAC', // Green-300
-    '#5EEAD4', // Teal-300
-    '#67E8F9', // Cyan-300
-    '#93C5FD', // Blue-300
-    '#D8B4FE', // Purple-300
-  ]
-
+function flameGraphChart(data, renderAt, colorsMap) {
   const filterJson = (json, id) => {
     if (id == null) {
       return json
     }
+    if (Array.isArray(json)) {
+      return json.filter((item) => item.name === id)
+    }
     const recur = (item, id) => {
-      if (item.id === id) {
+      if (item.name === id) {
         return item
       }
       for (const child of item.children || []) {
@@ -335,9 +323,9 @@ function flameGraphChart(data, renderAt) {
   const recursionJson = (jsonObj, id) => {
     const data = []
     const filteredJson = filterJson(structuredClone(jsonObj), id)
-    const rootVal = filteredJson.sort((a, b) => b.value - a.value)[0].value
+    const rootVal = filteredJson.sort((a, b) => b.value - a.value)[0].value || 1
     const recur = (item, start = 0, level = 0) => {
-      const color = flameGraphColors[Math.floor(Math.random() * flameGraphColors.length)]
+      const color = colorsMap[item.service_name] || '#000000'
       const temp = {
         name: item.name,
         value: [level, item.start - start, item.value, item.name, (item.value / rootVal) * 100],
@@ -355,117 +343,50 @@ function flameGraphChart(data, renderAt) {
     })
     return data
   }
-  const heightOfJson = (json) => {
-    const recur = (item, level = 0) => {
-      if ((item.children || []).length === 0) {
-        return level
-      }
-      let maxLevel = level
-      for (const child of item.children) {
-        const tempLevel = recur(child, level + 1)
-        maxLevel = Math.max(maxLevel, tempLevel)
-      }
-      return maxLevel
-    }
-    return recur(json)
-  }
-  const renderItem = (params, api) => {
-    const level = api.value(0)
-    const start = api.coord([api.value(1), level])
-    const end = api.coord([api.value(2), level])
-    const height = ((api.size && api.size([0, 1])) || [0, 20])[1]
-    const width = end[0] - start[0]
-    return {
-      type: 'rect',
-      transition: ['shape'],
-      shape: {
-        x: start[0],
-        y: start[1] - height / 2,
-        width,
-        height: height - 2 /* itemGap */,
-        r: 2,
-      },
-      style: {
-        fill: api.visual('color'),
-      },
-      emphasis: {
-        style: {
-          stroke: '#000',
-        },
-      },
-      textConfig: {
-        position: 'insideLeft',
-      },
-      textContent: {
-        style: {
-          text: api.value(3),
-          fontFamily: 'Verdana',
-          fill: '#000',
-          width: width - 4,
-          overflow: 'truncate',
-          ellipsis: '..',
-          truncateMinChar: 1,
-        },
-        emphasis: {
-          style: {
-            stroke: '#000',
-            lineWidth: 0.5,
-          },
-        },
-      },
-    }
-  }
-  myChart.showLoading()
 
-  function flameGraph(stackTrace) {
-    myChart.hideLoading()
+  const renderItem = (item, renderAt, rootVal) => {
+    const [level, xStart, xEnd] = item.value
+    const container = document.getElementById(renderAt)
 
-    const levelOfOriginalJson = heightOfJson(stackTrace)
-    option = {
-      tooltip: {
-        formatter: (params) => {
-          const samples = params.value[2]
-          return `${params.marker} ${params.value[3]}: (${echarts.format.addCommas(Math.round(samples / 1000000))} ms, ${+params.value[4].toFixed(2)}%)`
-        },
-      },
-      toolbox: {
-        feature: {
-          restore: {},
-        },
-        right: 20,
-        top: 10,
-      },
-      xAxis: {
-        show: false,
-      },
-      yAxis: {
-        show: false,
-        max: levelOfOriginalJson,
-        inverse: true,
-      },
-      series: [
-        {
-          type: 'custom',
-          renderItem,
-          encode: {
-            x: [0, 1, 2],
-            y: 0,
-          },
-          data: recursionJson(stackTrace),
-        },
-      ],
-    }
-    myChart.setOption(option)
-    myChart.on('click', (params) => {
-      const data = recursionJson(stackTrace, params.data.name)
-      const rootValue = data[0].value[2]
-      myChart.setOption({
-        xAxis: { max: rootValue },
-        series: [{ data }],
-      })
+    if (!container) return
+
+    const containerWidth = container.offsetWidth
+    const startPix = (containerWidth * xStart) / rootVal
+    const width = (containerWidth * xEnd) / rootVal
+
+    const height = 20
+    const yStart = height * level + (level + 1) * 3
+
+    const div = elt('div', { class: 'absolute hover:z-[999] flex rounded items-center justify-between flex-nowrap overflow-hidden hover:border hover:border-black' })
+    div.style.left = `${startPix}px`
+    div.style.top = `${yStart}px`
+    div.style.width = `${width}px`
+    div.style.height = `${height}px`
+    div.style.backgroundColor = item.itemStyle.color
+
+    const text = elt('span', { class: 'text-black ml-1 shrink-0 mr-4 text-xs' }, item.name)
+    const [t, u] = formatDuration(item.value[2])
+    const tim = elt('span', { class: 'text-black text-xs shrink-0' }, `${Math.floor(t)} ${u}`)
+    div.appendChild(text)
+    div.appendChild(tim)
+
+    container.appendChild(div)
+  }
+
+  function flameGraph(stackTrace, target) {
+    const rootVal = stackTrace.sort((a, b) => b.value - a.value)[0].value || 1
+    generateTimeIntervals(rootVal, target)
+    const data = recursionJson(stackTrace)
+    const sortedData = data.sort((a, b) => b.value[2] - a.value[2])
+
+    sortedData.forEach((item) => {
+      renderItem(item, target, rootVal)
     })
   }
-  flameGraph(fData)
+
+  const fData = modifySpansForFlameGraph(data)
+
+  flameGraph(fData, renderAt)
 }
 
 function modifySpansForFlameGraph(data) {
@@ -493,4 +414,59 @@ function buildHierachy(spans) {
     }
   })
   return roots
+}
+
+function generateTimeIntervals(duration, target) {
+  const container = document.getElementById('time-container-' + target)
+  const [durationF, unit] = formatDuration(duration)
+  container.innerHTML = ''
+  const containerWidth = container.offsetWidth
+  const intervalWidth = containerWidth / 9
+  const intervals = []
+  for (let i = 0; i < 10; i++) {
+    const time = Math.floor((i * durationF) / 9)
+    intervals.push(`
+              <div class="absolute bottom-0 text-gray-700 border-left overflow-x-visible" style="width: ${intervalWidth}px; left: ${i * intervalWidth}px;">
+               <div class="relative" style="height:10px">
+                <div class="bg-gray-300"  style="width:1px; height:10px;"></div>
+                <span class="absolute  left-0 -translate-x-1/2 text-xs" style="top:-13px">${time} ${unit}</span>
+               </div>
+              </div>
+      `)
+  }
+
+  container.innerHTML = intervals.join('')
+}
+
+function formatDuration(duration) {
+  if (duration >= 1000000000) {
+    return [(duration / 1000000000).toFixed(2), 's']
+  } else if (duration >= 1000000) {
+    return [(duration / 1000000).toFixed(2), 'ms']
+  } else if (duration >= 1000) {
+    return [(duration / 1000).toFixed(2), 'µs']
+  } else {
+    return [duration, 'ns']
+  }
+}
+
+function elt(type, props, ...children) {
+  let dom = document.createElement(type)
+  if (props) {
+    for (let prop in props) {
+      if (prop === 'class') {
+        dom.className = props[prop]
+      } else if (prop.startsWith('on') && typeof props[prop] === 'function') {
+        const eventName = prop.substring(2).toLowerCase()
+        dom.addEventListener(eventName, props[prop])
+      } else {
+        dom.setAttribute(prop, props[prop])
+      }
+    }
+  }
+  for (let child of children) {
+    if (typeof child != 'string') dom.appendChild(child)
+    else dom.appendChild(document.createTextNode(child))
+  }
+  return dom
 }
