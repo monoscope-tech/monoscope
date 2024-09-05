@@ -136,7 +136,7 @@ tracePage p = do
               div_ [class_ "border w-full rounded-lg min-h-[230px] max-h-[330px] overflow-auto overflow-x-hidden "] do
                 renderSpanListTable serviceNames serviceColors p.spanRecords
 
-      div_ [class_ "h-auto overflow-y-scroll mt-5 py-2 rounded-lg border"] do
+      div_ [class_ "h-auto overflow-y-auto mt-5 py-2 rounded-lg border"] do
         div_ [class_ "flex flex-col gap-4 px-4", id_ $ "span-" <> traceItem.traceId] do
           let tSp = fromMaybe (V.head p.spanRecords) (V.find (\s -> s.spanId == sId) p.spanRecords)
           Spans.expandedSpanItem pid tSp
@@ -157,19 +157,6 @@ getSpanJson sp =
     , "service_name" .= getServiceName sp
     ]
 
-
--- selectHead :: Text -> Text -> V.Vector Text -> Text -> Maybe Text -> Html ()
--- selectHead title current options baseUrl swapTarget = div_ [class_ "flex flex-col gap-1"] do
---   div_ [class_ "flex flex-col gap-1"] $ do
---     span_ [class_ "text-sm text-gray-700 font-semibold"] $ toHtml title
---   div_ [class_ "relative text-gray-600"] do
---     button_ [class_ "border flex items-center justify-between border w-36 hover:bg-gray-100 rounded-lg px-2 py-1.5 text-sm", [__|on click toggle .hidden on the next <div/>|]] do
---       span_ [class_ ""] $ toHtml current
---       span_ [] do
---         faSprite_ "chevron-down" "regular" "h-3 w-3"
---     div_ [class_ "hidden min-w-36 w-max flex flex-col border shadow-sm left-0 absolute top-8 bg-base-100 z-50 bg-white text-sm rounded-lg"] do
---       forM_ options $ \option -> do
---         a_ [class_ "px-4 py-1 hover:bg-gray-100", href_ $ baseUrl <> option] $ toHtml option
 
 renderSpanRecordRow :: V.Vector Telemetry.SpanRecord -> HashMap Text Text -> Text -> Html ()
 renderSpanRecordRow spanRecords colors service = do

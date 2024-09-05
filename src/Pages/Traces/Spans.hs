@@ -30,7 +30,7 @@ expandedSpanItem pid sp = do
             then remove .hidden from content
       end
     |]
-  div_ [class_ "w-full"] $ do
+  div_ [class_ "w-full pb-2"] $ do
     div_ [class_ "flex flex-col gap-2 bg-gray-50 py-2"] $ do
       div_ [class_ "flex items-center gap-4"] $ do
         h3_ [class_ "whitespace-nowrap text-xl font-bold pr-4 border-r border-r-2"] "Span"
@@ -38,7 +38,14 @@ expandedSpanItem pid sp = do
           h4_ [class_ "text-xl font-medium"] $ toHtml $ getServiceName sp
           faSprite_ "arrow-right" "regular" "w-4 h-4 font-bold"
           h4_ [class_ "text-xl font-medium max-w-96 truncate"] $ toHtml sp.spanName
-      div_ [class_ "flex gap-4 items-center justify-between text-gray-600"] $ do
+      div_ [class_ "flex gap-4 items-center"] do
+        div_ [class_ "flex items-end border rounded"] do
+          span_ [class_ "text-sm text-gray-500 font-medium border-r px-2 py-1"] "Span ID"
+          span_ [class_ "text-sm px-2 py-1 text-gray-600"] $ toHtml sp.spanId
+        div_ [class_ "flex items-end border rounded"] do
+          span_ [class_ "text-sm text-gray-500 font-medium border-r px-2 py-1"] "Trace ID"
+          span_ [class_ "text-sm px-2 py-1 text-gray-600"] $ toHtml sp.traceId
+      div_ [class_ "flex gap-4 items-center justify-between text-gray-600  mt-3"] $ do
         div_ [class_ "flex gap-4 items-center"] do
           div_ [class_ "font-medium flex shrink-0 items-center rounded gap-1 border px-2 py-1.5 text-gray-600"] do
             faSprite_ "clock" "regular" "w-3 h-3"
@@ -60,15 +67,8 @@ expandedSpanItem pid sp = do
                   let extraClass = getGrpcStatusColor status
                   span_ [class_ $ "text-sm px-2 py-1.5 border-l " <> extraClass] $ toHtml $ show status
         span_ [class_ "text-sm"] $ toHtml $ formatTime defaultTimeLocale "%b %d %Y %H:%M:%S%Q" sp.timestamp
-      div_ [class_ "flex gap-4 items-center mt-3"] do
-        div_ [class_ "flex items-end border rounded"] do
-          span_ [class_ "text-sm text-gray-500 font-medium border-r px-2 py-1"] "Span ID"
-          span_ [class_ "text-sm px-2 py-1"] $ toHtml sp.spanId
-        div_ [class_ "flex items-end border rounded"] do
-          span_ [class_ "text-sm text-gray-500 font-medium border-r px-2 py-1"] "Trace ID"
-          span_ [class_ "text-sm px-2 py-1"] $ toHtml sp.traceId
 
-    div_ [class_ "tabs tabs-lifted w-max mt-8", [__|on click halt|]] $ do
+    div_ [class_ "tabs tabs-boxed tabs-sm w-max mt-8", [__|on click halt|]] $ do
       a_ [class_ "tab span-tab tab-active", [__| install Navigatable(content: .attributes-content)|]] "Attributes"
       a_ [class_ "tab span-tab", [__| install Navigatable(content: .process-content)|]] $ do
         "Process"

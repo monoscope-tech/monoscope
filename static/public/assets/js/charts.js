@@ -357,7 +357,7 @@ function flameGraphChart(data, renderAt, colorsMap) {
     const height = 20
     const yStart = height * level + (level + 1) * 3
 
-    const div = elt('div', { class: 'absolute hover:z-[999] flex rounded items-center justify-between flex-nowrap overflow-hidden hover:border hover:border-black' })
+    const div = elt('div', { class: 'absolute hover:z-[999] flex rounded items-center cursor-pointer justify-between flex-nowrap overflow-hidden hover:border hover:border-black' })
     div.style.left = `${startPix}px`
     div.style.top = `${yStart}px`
     div.style.width = `${width}px`
