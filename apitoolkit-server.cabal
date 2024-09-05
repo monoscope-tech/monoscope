@@ -68,6 +68,7 @@ library
       Pages.Dashboard
       Pages.DashboardSpec
       Pages.Endpoints.ApiCatalog
+      Pages.Endpoints.ApiCatalogSpec
       Pages.Endpoints.EndpointComponents
       Pages.Endpoints.EndpointDetails
       Pages.Endpoints.EndpointDetailsSpec
