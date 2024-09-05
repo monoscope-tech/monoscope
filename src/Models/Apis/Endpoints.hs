@@ -373,10 +373,8 @@ countEndpointInbox pid host requestType = do
     q =
       [text|
         SELECT COUNT(*)
-        FROM
-            apis.endpoints enp
-        LEFT JOIN
-            apis.anomalies ann ON (ann.anomaly_type = 'endpoint' AND ann.target_hash = enp.hash)
+        FROM apis.endpoints enp
+        LEFT JOIN apis.issues ann ON (ann.anomaly_type = 'endpoint' AND ann.target_hash = enp.hash)
         WHERE
             enp.project_id = ?
             AND $showCountBaseOnRequestType

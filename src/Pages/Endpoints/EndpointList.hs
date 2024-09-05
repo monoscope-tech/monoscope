@@ -53,12 +53,11 @@ endpointListGetH pid pageM layoutM filterTM hostM requestTypeM sortM hxRequestM 
   inboxCount <- dbtToEff $ Endpoints.countEndpointInbox pid host (fromMaybe "Incoming" requestTypeM)
   let requestType = fromMaybe "Incoming" requestTypeM
   let currentURL = [PyF.fmt|/p/{pid.toText}/endpoints?layout={fromMaybe "false" layoutM}&filter={fromMaybe "" filterTM}&sort={fromMaybe "event" sortM}&request_type={requestType}&host={host}|]
-  let pageTitleHost = "Endpoint For " <> host
   let bwconf =
         (def :: BWConfig)
           { sessM = Just sess.persistentSession
           , currProject = Just project
-          , pageTitle = pageTitleHost
+          , pageTitle = "Endpoints for " <> host 
           , pageActions =
               Just
                 $ a_ [class_ "btn btn-sm btn-primary space-x-2", href_ $ "/p/" <> pid.toText <> "/documentation?host=" <> host] do

@@ -202,7 +202,7 @@ dStats pid projReqStats@Projects.ProjectRequestStats{..} reqLatenciesRolledBySte
       span_ [class_ "text-lg text-slate-700"] "Analytics"
 
     div_ [class_ "reqResSubSection space-y-5"] do
-      div_ [class_ "grid grid-cols-5 gap-5"] do
+      div_ [class_ "grid grid-cols-5 gap-5 overflow-x-hidden"] do
         statBox (Just pid) "Requests (14d)" "Total requests in the last 2 weeks" projReqStats.totalRequests Nothing
         statBox (Just pid) "Anomalies" "Total anomalies still active this week vs last week" projReqStats.totalAnomalies (Just projReqStats.totalAnomaliesLastWeek)
         statBox (Just pid) "Endpoints" "Total endpoints now vs last week" projReqStats.totalEndpoints (Just projReqStats.totalEndpointsLastWeek)

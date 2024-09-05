@@ -70,6 +70,7 @@ import Text.Megaparsec
 import Text.Megaparsec.Char
 import Text.Megaparsec.Char.Lexer qualified as L
 import Utils
+import Debug.Pretty.Simple
 
 
 newtype AnomalyId = AnomalyId {unAnomalyId :: UUID.UUID}
@@ -305,7 +306,7 @@ getFormatParentAnomalyVM pid hash = do
 
 
 selectIssues :: Projects.ProjectId -> Maybe Endpoints.EndpointId -> Maybe Bool -> Maybe Bool -> Maybe Text -> Maybe Int -> Int -> DBT IO (Vector IssueL)
-selectIssues pid endpointM isAcknowleged isArchived sortM limitM skipM = query Select (Query $ encodeUtf8 q) (MkDBField pid : paramList)
+selectIssues pid endpointM isAcknowleged isArchived sortM limitM skipM = query Select (Query $ encodeUtf8 $ pTraceShowId q) (pTraceShowId $ MkDBField pid : paramList)
   where
     boolToNullSubQ a = if a then " not " else ""
     condlist =
