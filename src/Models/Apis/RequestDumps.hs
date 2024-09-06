@@ -204,7 +204,8 @@ removeQueryParams statusCode urlPath =
 
 
 data ATError = ATError
-  { when :: ZonedTime
+  { projectId :: Maybe Projects.ProjectId
+  , when :: UTCTime 
   , errorType :: Text
   , rootErrorType :: Text
   , message :: Text

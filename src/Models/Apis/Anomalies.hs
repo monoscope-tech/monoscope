@@ -15,6 +15,7 @@ module Models.Apis.Anomalies (
   NewShapeIssue (..),
   NewFormatIssue (..),
   selectIssueByHash,
+  bulkInsertErrors,
   insertErrorQueryAndParams,
   selectIssues,
   parseAnomalyTypes,
@@ -38,6 +39,7 @@ import Data.Default (Default, def)
 import Data.Time
 import Data.UUID qualified as UUID
 import Data.Vector (Vector)
+import Data.Vector qualified as V
 import Database.PostgreSQL.Entity
 import Database.PostgreSQL.Entity.DBT (QueryNature (Insert, Select, Update), execute, query, queryOne)
 import Database.PostgreSQL.Entity.Types (CamelToSnake, FieldModifiers, GenericEntity, PrimaryKey, Schema, TableName, field)
@@ -48,10 +50,12 @@ import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.Time (parseUTCTime)
 import Database.PostgreSQL.Simple.ToField (Action (Escape), ToField, toField)
 import Database.PostgreSQL.Simple.Types (Query (Query))
-import Database.PostgreSQL.Transact (DBT)
+import Database.PostgreSQL.Transact (DBT, executeMany)
+import Debug.Pretty.Simple
 import Deriving.Aeson qualified as DAE
+import Effectful
+import Effectful.PostgreSQL.Transact.Effect (DB, dbtToEff)
 import Models.Apis.Endpoints qualified as Endpoints
-import Models.Apis.Fields ()
 import Models.Apis.Fields.Types qualified as Fields (
   FieldCategoryEnum,
   FieldId,
@@ -70,7 +74,6 @@ import Text.Megaparsec
 import Text.Megaparsec.Char
 import Text.Megaparsec.Char.Lexer qualified as L
 import Utils
-import Debug.Pretty.Simple
 
 
 newtype AnomalyId = AnomalyId {unAnomalyId :: UUID.UUID}
@@ -306,7 +309,7 @@ getFormatParentAnomalyVM pid hash = do
 
 
 selectIssues :: Projects.ProjectId -> Maybe Endpoints.EndpointId -> Maybe Bool -> Maybe Bool -> Maybe Text -> Maybe Int -> Int -> DBT IO (Vector IssueL)
-selectIssues pid endpointM isAcknowleged isArchived sortM limitM skipM = query Select (Query $ encodeUtf8 $ pTraceShowId q) (pTraceShowId $ MkDBField pid : paramList)
+selectIssues pid endpointM isAcknowleged isArchived sortM limitM skipM = query Select (Query $ encodeUtf8 $ q) (MkDBField pid : paramList)
   where
     boolToNullSubQ a = if a then " not " else ""
     condlist =
@@ -329,7 +332,7 @@ selectIssues pid endpointM isAcknowleged isArchived sortM limitM skipM = query S
     limit = maybe "" (\x -> "limit " <> show x) limitM
     skip = "offset " <> show skipM <> " "
 
-    -- Exclude endpoints from anomaly list 
+    -- Exclude endpoints from anomaly list
     q =
       [text|
 SELECT id, created_at, updated_at, project_id, acknowleged_at, anomaly_type, target_hash, issue_data,
@@ -668,9 +671,9 @@ data ATError = ATError
   }
   deriving stock (Show, Generic)
   deriving anyclass (FromRow, ToRow, NFData, Default)
-  deriving (AE.FromJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] ATError
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] ATError
   deriving (Entity) via (GenericEntity '[Schema "apis", TableName "errors", PrimaryKey "id", FieldModifiers '[CamelToSnake]] ATError)
-  deriving (FromField) via Aeson ATError
+  deriving (FromField, ToField) via Aeson ATError
 
 
 errorByHash :: Text -> DBT IO (Maybe ATError)
@@ -691,6 +694,23 @@ insertErrorQueryAndParams pid err = (q, params)
       , MkDBField err.message
       , MkDBField err
       ]
+
+
+bulkInsertErrors :: DB :> es => V.Vector RequestDumps.ATError -> Eff es ()
+bulkInsertErrors errors = void $ dbtToEff $ executeMany q (V.toList rowsToInsert)
+  where
+    q =
+      [sql| INSERT into apis.errors  (project_id,created_at, hash, error_type, message, error_data) 
+            VALUES (?,?,?,?,?,?) ON CONFLICT DO NOTHING; |]
+    rowsToInsert =
+      errors <&> \err ->
+        ( Unsafe.fromJust err.projectId
+          , err.when
+        , Unsafe.fromJust err.hash -- Nothing state should never happen
+        , err.errorType
+        , err.message
+        , err
+        )
 
 
 insertIssue :: Issue -> DBT IO Int64

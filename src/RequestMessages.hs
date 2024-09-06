@@ -47,6 +47,7 @@ import Relude
 import Relude.Unsafe as Unsafe (read)
 import Text.Regex.TDFA ((=~))
 import Utils (DBField (), toXXHash)
+import Debug.Pretty.Simple
 
 
 -- $setup
@@ -138,7 +139,8 @@ processErrors pid sdkType method urlPath err = (normalizedError, q, params)
     (q, params) = Anomalies.insertErrorQueryAndParams pid normalizedError
     normalizedError =
       err
-        { RequestDumps.hash = Just $ fromMaybe (toXXHash (pid.toText <> err.errorType <> err.message <> show sdkType)) err.hash
+        { RequestDumps.projectId = Just pid
+        , RequestDumps.hash = Just $ fromMaybe (toXXHash (pid.toText <> err.errorType <> err.message <> show sdkType)) err.hash
         , RequestDumps.technology = Just sdkType
         , RequestDumps.requestMethod = Just method
         , RequestDumps.requestPath = Just urlPath
