@@ -14,6 +14,14 @@ import Pkg.Components.ExternalHeadScripts (externalHeadScripts_)
 import PyF
 import Relude
 import Utils (faSprite_)
+import Crypto.Hash (SHA256, hashlazy)
+import Data.ByteString.Lazy qualified as BL
+import Data.Text qualified as T
+import Data.Text.Encoding qualified as TE
+import Language.Haskell.TH qualified as TH
+import Language.Haskell.TH.Syntax qualified as TH
+import Data.ByteString.Base16 qualified as B16
+import Pages.HashAssets
 
 
 menu :: Projects.ProjectId -> [(Text, Text, Text)]
@@ -75,8 +83,8 @@ bodyWrapper BWConfig{sessM, currProject, pageTitle, menuItem, hasIntegrated, nav
       link_ [rel_ "mask-icon", href_ "/public/safari-pinned-tab.svg", term "color" "#5bbad5"]
       meta_ [name_ "msapplication-TileColor", content_ "#da532c"]
       meta_ [name_ "theme-color", content_ "#ffffff"]
-      link_ [rel_ "stylesheet", type_ "text/css", href_ "/assets/css/tailwind.min.css?v=4"]
-      link_ [rel_ "stylesheet", type_ "text/css", href_ "/assets/css/thirdparty/notyf3.min.css"]
+      link_ [rel_ "stylesheet", type_ "text/css", href_ $(hashAssetFile "/public/assets/css/tailwind.min.css")]
+      link_ [rel_ "stylesheet", type_ "text/css", href_ $(hashAssetFile "/public/assets/css/thirdparty/notyf3.min.css")]
       link_ [rel_ "preconnect", href_ "https://rsms.me/"]
       link_ [rel_ "stylesheet", href_ "https://rsms.me/inter/inter.css"]
       link_ [rel_ "stylesheet", href_ "https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/atom-one-dark.min.css"]
@@ -85,22 +93,22 @@ bodyWrapper BWConfig{sessM, currProject, pageTitle, menuItem, hasIntegrated, nav
 
       -- SCRIPTS
       script_ [src_ "https://cdn.jsdelivr.net/npm/echarts@5.4.1/dist/echarts.min.js"] ("" :: Text)
-      script_ [src_ "/assets/roma-echarts.js", defer_ "true"] ("" :: Text)
-      script_ [src_ "/assets/js/thirdparty/notyf3.min.js", defer_ "true"] ("" :: Text)
-      script_ [src_ "/assets/js/thirdparty/htmx1_9_10.min.js", defer_ "true"] ("" :: Text)
-      script_ [src_ "/assets/deps/htmx/multi-swap.js", defer_ "true"] ("" :: Text)
-      script_ [src_ "/assets/deps/htmx/preload.js", defer_ "true"] ("" :: Text)
-      script_ [src_ "/assets/deps/htmx/json-enc.js", defer_ "true"] ("" :: Text)
-      script_ [src_ "/assets/deps/lit/lit-html.js", type_ "module", defer_ "true"] ("" :: Text)
+      script_ [src_ $(hashAssetFile "/public/assets/roma-echarts.js"), defer_ "true"] ("" :: Text)
+      script_ [src_ $(hashAssetFile "/public/assets/js/thirdparty/notyf3.min.js"), defer_ "true"] ("" :: Text)
+      script_ [src_ $(hashAssetFile "/public/assets/js/thirdparty/htmx1_9_10.min.js"), defer_ "true"] ("" :: Text)
+      script_ [src_ $(hashAssetFile "/public/assets/deps/htmx/multi-swap.js"), defer_ "true"] ("" :: Text)
+      script_ [src_ $(hashAssetFile "/public/assets/deps/htmx/preload.js"), defer_ "true"] ("" :: Text)
+      script_ [src_ $(hashAssetFile "/public/assets/deps/htmx/json-enc.js"), defer_ "true"] ("" :: Text)
+      script_ [src_ $(hashAssetFile "/public/assets/deps/lit/lit-html.js"), type_ "module", defer_ "true"] ("" :: Text)
       script_ [src_ "https://unpkg.com/htmx.org/dist/ext/debug.js", defer_ "true"] ("" :: Text)
-      script_ [src_ "/assets/js/thirdparty/_hyperscript_web0_9_5.min.js", defer_ "true"] ("" :: Text)
-      script_ [src_ "/assets/js/thirdparty/_hyperscript_template.js", defer_ "true"] ("" :: Text)
-      script_ [src_ "/assets/js/thirdparty/luxon.min.js", defer_ "true"] ("" :: Text)
-      script_ [src_ "/assets/js/thirdparty/popper2_11_4.min.js", defer_ "true"] ("" :: Text)
-      script_ [src_ "/assets/js/thirdparty/tippy6_3_7.umd.min.js", defer_ "true"] ("" :: Text)
-      script_ [src_ "/assets/js/thirdparty/instantpage5_1_0.js", type_ "module", defer_ "true"] ("" :: Text)
-      script_ [src_ "/assets/js/monaco/vs/loader.js", defer_ "true"] ("" :: Text)
-      script_ [src_ "/assets/js/charts.js"] ("" :: Text)
+      script_ [src_ $(hashAssetFile "/public/assets/js/thirdparty/_hyperscript_web0_9_5.min.js"), defer_ "true"] ("" :: Text)
+      script_ [src_ $(hashAssetFile "/public/assets/js/thirdparty/_hyperscript_template.js"), defer_ "true"] ("" :: Text)
+      script_ [src_ $(hashAssetFile "/public/assets/js/thirdparty/luxon.min.js"), defer_ "true"] ("" :: Text)
+      script_ [src_ $(hashAssetFile "/public/assets/js/thirdparty/popper2_11_4.min.js"), defer_ "true"] ("" :: Text)
+      script_ [src_ $(hashAssetFile "/public/assets/js/thirdparty/tippy6_3_7.umd.min.js"), defer_ "true"] ("" :: Text)
+      script_ [src_ $(hashAssetFile "/public/assets/js/thirdparty/instantpage5_1_0.js"), type_ "module", defer_ "true"] ("" :: Text)
+      script_ [src_ $(hashAssetFile "/public/assets/js/monaco/vs/loader.js"), defer_ "true"] ("" :: Text)
+      script_ [src_ $(hashAssetFile "/public/assets/js/charts.js")] ("" :: Text)
       script_ [src_ "https://cdn.jsdelivr.net/npm/@easepick/bundle@1.2.0/dist/index.umd.min.js"] ("" :: Text)
       script_ [src_ "https://cdn.jsdelivr.net/npm/lodash@4.17.21/lodash.min.js"] ("" :: Text)
       script_ [src_ "https://kit.fontawesome.com/e0cb5637ed.js", crossorigin_ "anonymous"] ("" :: Text)
@@ -112,8 +120,8 @@ bodyWrapper BWConfig{sessM, currProject, pageTitle, menuItem, hasIntegrated, nav
       script_ [src_ "https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/python.min.js"] ("" :: Text)
       script_ [src_ "https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.63.0/codemirror.min.js"] ("" :: Text)
       script_ [src_ "https://cdnjs.cloudflare.com/ajax/libs/codemirror/6.65.7/mode/javascript/javascript.min.js"] ("" :: Text)
-      script_ [type_ "module", src_ "/assets/filtercomponent.js"] ("" :: Text)
-      script_ [src_ "/assets/js/main.js"] ("" :: Text)
+      script_ [type_ "module", src_ $(hashAssetFile "/public/assets/filtercomponent.js")] ("" :: Text)
+      script_ [src_ "/public/assets/js/main.js"] ("" :: Text)
 
       script_
         [text|
@@ -289,8 +297,8 @@ sideNav sess project pageTitle menuItem hasIntegrated = aside_ [class_ "border-r
   script_ [text|if (window.initialCloseSideMenu == 'true'){document.getElementById('side-nav-menu').classList.add('hidden-side-nav-menu');}|]
   div_ do
     a_ [href_ "/", class_ "px-2 py-2 inline-flex items-center justify-center"] do
-      img_ [class_ "h-10 w-40 mt-2 sd-hidden pl-2", src_ "/assets/svgs/logo.svg"]
-      img_ [class_ "h-10 w-10 mt-2 hidden sd-show", src_ "/assets/logo-mini.png"]
+      img_ [class_ "h-10 w-40 mt-2 sd-hidden pl-2", src_ "/public/assets/svgs/logo.svg"]
+      img_ [class_ "h-10 w-10 mt-2 hidden sd-show", src_ "/public/assets/logo-mini.png"]
     div_ [class_ "sm:p-4 border-y sd-px-0 dropdown block"] do
       a_
         [ class_ "flex flex-row bg-blue-50 hover:bg-blue-100 text-blue-900 p-6 justify-center rounded-md cursor-pointer"

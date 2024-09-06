@@ -218,11 +218,6 @@ data ApiLogsPageData = ApiLogsPageData
 
 apiLogsPage :: ApiLogsPageData -> Html ()
 apiLogsPage page = do
-  -- drawerWithURLContent_ : Used when you expand a log item
-  -- using the drawer as a global is a workaround since to separate the logs scope from other content and improve scroll performance.
-  Components.drawerWithURLContent_ "global-data-drawer" Nothing ""
-  -- the loader is used and displayed while loading the content for the global drawer
-  template_ [id_ "loader-tmp"] $ span_ [class_ "loading loading-dots loading-md"] ""
   section_ [class_ "mx-auto pt-2 px-6 gap-2 w-full flex flex-col h-full overflow-hidden ", id_ "apiLogsPage"] do
     when page.exceededFreeTier $ freeTierLimitExceededBanner page.pid.toText
     div_
@@ -296,7 +291,12 @@ apiLogsPage page = do
           ]
           ""
       resultTableAndMeta_ page
-      jsonTreeAuxillaryCode page.pid
+  jsonTreeAuxillaryCode page.pid
+  -- drawerWithURLContent_ : Used when you expand a log item
+  -- using the drawer as a global is a workaround since to separate the logs scope from other content and improve scroll performance.
+  Components.drawerWithURLContent_ "global-data-drawer" Nothing ""
+  -- the loader is used and displayed while loading the content for the global drawer
+  template_ [id_ "loader-tmp"] $ span_ [class_ "loading loading-dots loading-md"] ""
 
 
 resultTableAndMeta_ :: ApiLogsPageData -> Html ()

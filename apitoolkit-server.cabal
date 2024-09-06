@@ -78,6 +78,7 @@ library
       Pages.Endpoints.Server
       Pages.Fields.FieldDetails
       Pages.Fields.FieldDetailsSpec
+      Pages.HashAssets
       Pages.IntegrationDemos.AdonisJS
       Pages.IntegrationDemos.Django
       Pages.IntegrationDemos.DotNet
@@ -279,6 +280,7 @@ library
     , servant-lucid
     , servant-server
     , strict-containers
+    , template-haskell
     , text
     , text-display
     , time

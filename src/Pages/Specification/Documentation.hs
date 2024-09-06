@@ -649,7 +649,7 @@ documentationsPage pid swaggers swaggerID jsonString = do
   script_
     [text|
       document.addEventListener('DOMContentLoaded', function(){
-        require.config({ paths: { vs: '/assets/js/monaco/vs' } });
+        require.config({ paths: { vs: '/public/assets/js/monaco/vs' } });
         require.config({ paths: { 'vs': 'https://unpkg.com/monaco-editor/min/vs' } });
 		  	require(['vs/editor/editor.main'], function () {
         monaco.editor.defineTheme('nightOwl', {
@@ -697,9 +697,9 @@ documentationsPage pid swaggers swaggerID jsonString = do
       })
    |]
 
-  script_ [src_ "/assets/js/thirdparty/swagger-ui-bundle.js"] ("" :: Text)
-  script_ [src_ "/assets/js/swagger_endpoints.js"] ("" :: Text)
-  script_ [src_ "/assets/js/parse_swagger.js"] ("" :: Text)
+  script_ [src_ "/public/assets/js/thirdparty/swagger-ui-bundle.js"] ("" :: Text)
+  script_ [src_ "/public/assets/js/swagger_endpoints.js"] ("" :: Text)
+  script_ [src_ "/public/assets/js/parse_swagger.js"] ("" :: Text)
   script_ [src_ "https://unpkg.com/js-yaml/dist/js-yaml.min.js", crossorigin_ "true"] ("" :: Text)
   script_
     [text|

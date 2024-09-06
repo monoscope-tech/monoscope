@@ -11,6 +11,7 @@ import Data.Aeson.Types (KeyValue ((.=)), object)
 import Data.ByteString.Lazy.Char8 qualified as BL
 import Data.Cache qualified as Cache
 import Data.List (unzip7)
+import Models.Apis.Anomalies qualified as Anomalies
 import Data.Text qualified as T
 import Data.UUID.V4 (nextRandom)
 import Data.Vector qualified as V
@@ -144,12 +145,13 @@ processRequestMessages msgs = do
       Right (rd, enp, s, f, fo, err) -> Right (rd, enp, s, f, fo, err, rmAckId)
 
   let !(failures, successes) = partitionEithers processed
-      !(reqDumps, endpoints, shapes, fields, formats, _errs, rmAckIds) = unzip7 successes
+      !(reqDumps, endpoints, shapes, fields, formats, errs, rmAckIds) = unzip7 successes
   let !reqDumpsFinal = catMaybes reqDumps
   let !endpointsFinal = VAA.nubBy (comparing (.hash)) $ V.fromList $ catMaybes endpoints
   let !shapesFinal = VAA.nubBy (comparing (.hash)) $ V.fromList $ catMaybes shapes
   let !fieldsFinal = VAA.nubBy (comparing (.hash)) $ V.concat fields
   let !formatsFinal = VAA.nubBy (comparing (.hash)) $ V.concat formats
+  let !errsFinal = VAA.nubBy (comparing (.hash)) $ V.concat errs 
 
   forM_ failures $ \(err, rmAckId, msg) ->
     Log.logAttention "Error processing message" (object ["Error" .= err, "AckId" .= rmAckId, "OriginalMsg" .= msg])
@@ -161,6 +163,7 @@ processRequestMessages msgs = do
     unless (null shapesFinal) $ Shapes.bulkInsertShapes shapesFinal
     unless (null fieldsFinal) $ Fields.bulkInsertFields fieldsFinal
     unless (null formatsFinal) $ Formats.bulkInsertFormat formatsFinal
+    unless (null errsFinal) $ Anomalies.bulkInsertErrors errsFinal 
   endTime <- liftIO $ getTime Monotonic
   let processingTime = toNanoSecs (diffTimeSpec startTime afterProcessing) `div` 1000
   let queryTime = toNanoSecs (diffTimeSpec afterProcessing endTime) `div` 1000
