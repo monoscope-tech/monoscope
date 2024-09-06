@@ -1,4 +1,4 @@
-module Pages.LogExplorer.LogItem (expandAPIlogItemH, expandAPIlogItem', apiLogItemH, ApiLogItem (..), jsonValueToHtmlTree, ApiItemDetailed (..)) where
+module Pages.LogExplorer.LogItem (expandAPIlogItemH, expandAPIlogItem', apiLogItemH, ApiLogItem (..), ApiItemDetailed (..)) where
 
 import Data.Aeson ((.=))
 import Data.Aeson qualified as AE
@@ -22,15 +22,15 @@ import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Telemetry qualified as Telemetry
 import Models.Users.Sessions qualified as Sessions
+import NeatInterpolation (text)
 import Network.URI (escapeURIString, isUnescapedInURI)
 import Pages.Components qualified as Components
 import Pages.Traces.Spans qualified as Spans
 import PyF (fmt)
 import Relude
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
-import Utils (faSprite_, getMethodColor, getStatusColor, unwrapJsonPrimValue)
+import Utils (faSprite_, getMethodColor, getStatusColor, jsonValueToHtmlTree, unwrapJsonPrimValue)
 import Witch (from)
-import NeatInterpolation (text)
 
 
 expandAPIlogItemH :: Projects.ProjectId -> UUID.UUID -> UTCTime -> Maybe Text -> ATAuthCtx (RespHeaders ApiItemDetailed)
@@ -242,10 +242,10 @@ apiLogItemView pid logId req expandItemPath source = do
       a_
         [ class_ "btn btn-sm btn-outline"
         , term "_" $
-            [text|on mousedown or click fetch $logItemPathDetailed 
-                  then set #global-data-drawer-content.innerHTML to #loader-tmp.innerHTML 
-                  then set #global-data-drawer.checked to true 
-                  then set #global-data-drawer-content.innerHTML to it 
+            [text|on mousedown or click fetch $logItemPathDetailed
+                  then set #global-data-drawer-content.innerHTML to #loader-tmp.innerHTML
+                  then set #global-data-drawer.checked to true
+                  then set #global-data-drawer-content.innerHTML to it
                   then htmx.process(#global-data-drawer-content) then _hyperscript.processNode(#global-data-drawer-content)|]
         ]
         ("Expand" >> faSprite_ "expand" "regular" "h-3 w-3")
@@ -303,56 +303,4 @@ selectiveReqToJson req =
       ]
 
 
--- >>> replaceNumbers "response_body.0.completed"
--- "response_body[*].completed"
---
-replaceNumbers :: Text -> Text
-replaceNumbers input = T.replace ".[*]" "[*]" $ T.intercalate "." (map replaceDigitPart parts)
-  where
-    parts = T.splitOn "." input
-    replaceDigitPart :: Text -> Text
-    replaceDigitPart part
-      | T.all isDigit part = "[*]"
-      | otherwise = T.concatMap replaceDigitWithAsterisk part
-
-    replaceDigitWithAsterisk :: Char -> Text
-    replaceDigitWithAsterisk ch
-      | isDigit ch = "[*]"
-      | otherwise = one ch
-
-
 -- | jsonValueToHtmlTree takes an aeson json object and renders it as a collapsible html tree, with hyperscript for interactivity.
-jsonValueToHtmlTree :: AE.Value -> Html ()
-jsonValueToHtmlTree val = jsonValueToHtmlTree' ("", "", val)
-  where
-    jsonValueToHtmlTree' :: (Text, Text, AE.Value) -> Html ()
-    jsonValueToHtmlTree' (path, key, AE.Object v) = renderParentType "{" "}" key (length v) (AEK.toHashMapText v & HM.toList & sort & mapM_ (\(kk, vv) -> jsonValueToHtmlTree' (path <> "." <> key, kk, vv)))
-    jsonValueToHtmlTree' (path, key, AE.Array v) = renderParentType "[" "]" key (length v) (iforM_ v \i item -> jsonValueToHtmlTree' (path <> "." <> key, show i, item))
-    jsonValueToHtmlTree' (path, key, value) = do
-      let fullFieldPath = if T.isSuffixOf "[*]" path then path else path <> "." <> key
-      let fullFieldPath' = fromMaybe fullFieldPath $ T.stripPrefix ".." fullFieldPath
-      div_
-        [ class_ "relative log-item-field-parent"
-        , term "data-field-path" $ replaceNumbers fullFieldPath'
-        , term "data-field-value" $ unwrapJsonPrimValue value
-        ]
-        $ a_
-          [class_ "block hover:bg-blue-50 cursor-pointer pl-6 relative log-item-field-anchor ", [__|install LogItemMenuable|]]
-          do
-            span_ $ toHtml key
-            span_ [class_ "text-blue-800"] ":"
-            span_ [class_ "text-blue-800 ml-2.5 log-item-field-value", term "data-field-path" fullFieldPath'] $ toHtml $ unwrapJsonPrimValue value
-
-    renderParentType :: Text -> Text -> Text -> Int -> Html () -> Html ()
-    renderParentType opening closing key count child = div_ [class_ (if key == "" then "" else "collapsed")] do
-      a_
-        [ class_ "inline-block cursor-pointer"
-        , onclick_ "this.parentNode.classList.toggle('collapsed')"
-        ]
-        do
-          span_ [class_ "log-item-tree-chevron "] "▾"
-          span_ [] $ toHtml $ if key == "" then opening else key <> ": " <> opening
-      div_ [class_ "pl-5 children "] do
-        span_ [class_ "tree-children-count"] $ show count
-        div_ [class_ "tree-children"] child
-      span_ [class_ "pl-5 closing-token"] $ toHtml closing

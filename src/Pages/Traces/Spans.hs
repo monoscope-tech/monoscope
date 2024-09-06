@@ -121,14 +121,15 @@ displayLogsSection _ = pass
 displayEventItem :: AE.Value -> Html ()
 displayEventItem (AE.Object obj) = do
   div_ [class_ "w-full", [__| on click halt|]] do
-    div_ [class_ "flex items-center justify-between w-full px-2 py-1 bg-gray-100", [__|on click toggle .hidden on the next <div/>|]] $ do
+    div_ [class_ "flex items-center justify-between w-full cursor-pointer px-2 py-1 bg-gray-100", [__|on click toggle .hidden on the next <div/>|]] $ do
       let evnt = KM.lookup "event_name" obj
       case evnt of
         Just (AE.String v) -> do
           div_ [] $ toHtml $ "event = " <> toText v
           div_ [] pass
         _ -> div_ [] "event = "
-    div_ [class_ "expand-log max-h-96 hidden overflow-y-auto bg-red-500 w-full py-8"] $ pass
+    div_ [class_ "expand-log max-h-96 hidden overflow-y-auto w-full py-8"] do
+      jsonValueToHtmlTree (AE.Object obj)
 displayEventItem _ = pass
 
 
