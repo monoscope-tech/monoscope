@@ -5,6 +5,11 @@ packages:
 ghc-options:
   "grpc-haskell-core": -Wno-x-partial
 
+extra-include-dirs:
+  - /opt/homebrew/Cellar/grpc/1.62.2_4/include
+extra-lib-dirs:
+  - /opt/homebrew/Cellar/grpc/1.62.2_4/lib
+
 extra-deps:
   - ./rust-interop
   - ./otlp
