@@ -35,13 +35,6 @@ jobs:
         run: |
           export OPENSSL_INCLUDE_DIR=$(pkg-config --variable=includedir openssl)
           export OPENSSL_LIB_DIR=$(pkg-config --variable=libdir openssl)
-      - run: make prepare-rust-interop
-      - run: stack --no-terminal build --dependencies-only
-
-      # - run: stack install --local-bin-path=. --ghc-options '-optl-static -fPIC'
-      - run: stack install --local-bin-path=. --flag pg-entity:prod --ghc-options "-O3"
-      # - run: stack test
-
       - name: Setup node env
         uses: actions/setup-node@v4
         with:
@@ -51,6 +44,13 @@ jobs:
       # - run: npx postcss-cli ./static/public/assets/css/tailwind.css -o ./static/public/assets/css/tailwind.min.css
 
 
+
+      - run: make prepare-rust-interop
+      - run: stack --no-terminal build --dependencies-only
+
+      # - run: stack install --local-bin-path=. --ghc-options '-optl-static -fPIC'
+      - run: stack install --local-bin-path=. --flag pg-entity:prod --ghc-options "-O3"
+      # - run: stack test
       - name: Login to Container Registry
         uses: docker/login-action@v2
         with:

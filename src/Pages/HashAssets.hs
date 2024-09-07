@@ -1,13 +1,9 @@
 module Pages.HashAssets (hashAssetFile) where
 
-import Crypto.Hash (SHA256, hashlazy)
 import Data.ByteString.Lazy qualified as BL
 import Data.Text qualified as T
-import Data.Text.Encoding qualified as TE
 import Language.Haskell.TH qualified as TH
 import Language.Haskell.TH.Syntax qualified as TH
-import Relude (FilePath, ($), (.), (<>))
-import Data.ByteString.Base16 qualified as B16
 import Data.Digest.XXHash (xxHash)
 import Numeric (showHex)
 import Relude

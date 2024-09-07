@@ -47,7 +47,6 @@ import Relude
 import Relude.Unsafe as Unsafe (read)
 import Text.Regex.TDFA ((=~))
 import Utils (DBField (), toXXHash)
-import Debug.Pretty.Simple
 
 
 -- $setup
