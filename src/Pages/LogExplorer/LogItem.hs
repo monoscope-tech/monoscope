@@ -24,7 +24,6 @@ import Models.Telemetry.Telemetry qualified as Telemetry
 import Models.Users.Sessions qualified as Sessions
 import NeatInterpolation (text)
 import Network.URI (escapeURIString, isUnescapedInURI)
-import Pages.Components qualified as Components
 import Pages.Traces.Spans qualified as Spans
 import PyF (fmt)
 import Relude
@@ -262,9 +261,15 @@ apiLogItemView pid logId req expandItemPath source = do
             Just (AE.String trid) -> Just trid
             _ -> Nothing
           _ -> Nothing
-    when (source == "spans" && isJust trId) $
-      Components.drawerWithURLContent_ ("expand-log-drawer-trace-" <> UUID.toText logId) (Just $ "/p/" <> pid.toText <> "/traces/" <> fromMaybe "" trId) $
-        span_ [class_ "btn btn-sm btn-outline"] "View Trace"
+    when (source == "spans" && isJust trId) do
+      let tracePathDetailed = "/p/" <> pid.toText <> "/traces/" <> fromMaybe "" trId
+      a_ [class_ "btn btn-sm btn-outline", term "_" $
+            [text|on mousedown or click fetch $tracePathDetailed 
+                  then set #global-data-drawer-content.innerHTML to #loader-tmp.innerHTML 
+                  then set #global-data-drawer.checked to true 
+                  then set #global-data-drawer-content.innerHTML to it 
+                  then htmx.process(#global-data-drawer-content) then _hyperscript.processNode(#global-data-drawer-content)|]
+            ] "View Trace"
 
     button_
       [ class_ "btn btn-sm btn-outline"
