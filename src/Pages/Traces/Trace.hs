@@ -109,8 +109,8 @@ tracePage p = do
             div_ [role_ "tabpanel", class_ "tab-content w-full bg-white"] do
               div_ [class_ "flex gap-2 w-full pt-2"] do
                 div_ [class_ "w-[65%] px-4 pt-4 border rounded-lg overflow-x-hidden overflow-y-auto"] do
-                  div_ [class_ $ "w-full border-b border-b-gray-300 h-6 text-xs relative " <> "time-container-a" <> traceItem.traceId] pass
-                  div_ [class_ $ "w-full h-48 overflow-x-hidden relative " <> "a" <> traceItem.traceId] pass
+                  div_ [class_ $ "w-full border-b border-b-gray-300 h-6 text-xs relative", id_ $ "time-container-a" <> traceItem.traceId] pass
+                  div_ [class_ $ "w-full h-48 overflow-x-hidden relative ", id_ $ "a" <> traceItem.traceId] pass
                 div_ [class_ "border rounded-lg w-[35%] overflow-x-hidden"] do
                   h3_ [class_ "w-full flex p-2 font-medium justify-between items-center border-b"] do
                     span_ [] "Services"
@@ -140,10 +140,10 @@ tracePage p = do
         div_ [class_ "flex flex-col gap-4 px-4", id_ $ "span-" <> traceItem.traceId] do
           let tSp = fromMaybe (V.head p.spanRecords) (V.find (\s -> s.spanId == sId) p.spanRecords)
           Spans.expandedSpanItem pid tSp
-          let spanJson = decodeUtf8 $ AE.encode $ p.spanRecords <&> getSpanJson
-          let colorsJson = decodeUtf8 $ AE.encode $ AE.object [AEKey.fromText k .= v | (k, v) <- HM.toList serviceColors]
-          let trId = traceItem.traceId
-          script_ [text|flameGraphChart($spanJson, "a$trId", $colorsJson);|]
+  let spanJson = decodeUtf8 $ AE.encode $ p.spanRecords <&> getSpanJson
+  let colorsJson = decodeUtf8 $ AE.encode $ AE.object [AEKey.fromText k .= v | (k, v) <- HM.toList serviceColors]
+  let trId = traceItem.traceId
+  script_ [text|flameGraphChart($spanJson, "a$trId", $colorsJson);|]
 
 
 getSpanJson :: Telemetry.SpanRecord -> AE.Value
@@ -184,9 +184,9 @@ renderSpanRecordRow spanRecords colors service = do
 
 renderSpanListTable :: V.Vector Text -> HashMap Text Text -> V.Vector Telemetry.SpanRecord -> Html ()
 renderSpanListTable services colors records =
-  table_ [class_ "w-full overflow-x-hidden"] $ do
+  table_ [class_ "w-full table table-sm overflow-x-hidden"] $ do
     thead_ [class_ "border-b bg-gray-100"] $ do
-      tr_ [class_ "p-2 border-b  font-normal bg-gray-100"] $ do
+      tr_ [class_ "p-2 border-b font-normal bg-gray-100"] $ do
         th_ "Resource"
         th_ "Spans"
         th_ "Avg. Duration"
