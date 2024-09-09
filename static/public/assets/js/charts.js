@@ -296,6 +296,8 @@ function latencyHistogram(renderAt, pc, data) {
   myChart.setOption(option)
 }
 
+const SCROLL_BAR_WIDTH = 7
+
 function flameGraphChart(data, renderAt, colorsMap) {
   const filterJson = (json, id) => {
     if (id == null) {
@@ -315,7 +317,7 @@ function flameGraphChart(data, renderAt, colorsMap) {
       }
       for (const child of item.children || []) {
         const temp = recur(child, id)
-        if (temp.length > 0) {
+        if (temp && temp.length > 0) {
           const temp2 = temp[0]
           temp.start = 0
           item.children = [temp2]
@@ -335,6 +337,7 @@ function flameGraphChart(data, renderAt, colorsMap) {
       const color = colorsMap[item.service_name] || '#000000'
       const temp = {
         name: item.name,
+        span_id: item.span_id,
         value: [level, item.start - start, item.value, item.name, (item.value / rootVal) * 100],
         itemStyle: {
           color,
@@ -353,12 +356,27 @@ function flameGraphChart(data, renderAt, colorsMap) {
 
   const fData = modifySpansForFlameGraph(data)
 
+  const heightOfJson = (json) => {
+    const recur = (item, level = 0) => {
+      if ((item.children || []).length === 0) {
+        return level
+      }
+      let maxLevel = level
+      for (const child of item.children) {
+        const tempLevel = recur(child, level + 1)
+        maxLevel = Math.max(maxLevel, tempLevel)
+      }
+      return maxLevel
+    }
+    return recur(json)
+  }
+
   const renderItem = (item, renderAt, rootVal) => {
     const [level, xStart, xEnd] = item.value
     const container = document.querySelector('#' + renderAt)
 
     if (!container) return
-    const containerWidth = container.offsetWidth
+    const containerWidth = container.offsetWidth - SCROLL_BAR_WIDTH
     const startPix = (containerWidth * xStart) / rootVal
     const width = (containerWidth * xEnd) / rootVal
     const height = 20
@@ -366,9 +384,14 @@ function flameGraphChart(data, renderAt, colorsMap) {
 
     const div = elt('div', {
       class: 'absolute hover:z-[999] flex rounded items-center cursor-pointer  grow-0 justify-between flex-nowrap overflow-hidden hover:border hover:border-black',
+      id: item.span_id,
       onclick: (e) => {
         const data = filterJson(structuredClone(fData), item.name)
         flameGraph(data, renderAt)
+        const target = document.getElementById(item.span_id)
+        if (target) {
+          target.scrollIntoView()
+        }
       },
     })
     div.style.left = `${startPix}px`
@@ -389,6 +412,7 @@ function flameGraphChart(data, renderAt, colorsMap) {
     const container = document.querySelector('#' + target)
     container.innerHTML = ''
     const rootVal = stackTrace.sort((a, b) => b.value - a.value)[0].value || 1
+    const maxheight = heightOfJson(stackTrace)
     generateTimeIntervals(rootVal, target)
     const data = recursionJson(stackTrace)
     const sortedData = data.sort((a, b) => b.value[2] - a.value[2])
@@ -431,7 +455,7 @@ function generateTimeIntervals(duration, target) {
   const container = document.querySelector('#time-container-' + target)
   const [durationF, unit] = formatDuration(duration)
   container.innerHTML = ''
-  const containerWidth = container.offsetWidth
+  const containerWidth = container.offsetWidth - SCROLL_BAR_WIDTH
   const intervalWidth = containerWidth / 9
   const intervals = []
   for (let i = 0; i < 10; i++) {

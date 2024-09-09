@@ -108,14 +108,14 @@ tracePage p = do
             input_ [type_ "radio", name_ "my_tabs_2", role_ "tab", class_ "tab after:pb-2", term "aria-label" "Flame Graph", checked_]
             div_ [role_ "tabpanel", class_ "tab-content w-full bg-white"] do
               div_ [class_ "flex gap-2 w-full pt-2"] do
-                div_ [class_ "w-[65%] px-4 pt-4 border rounded-lg overflow-x-hidden overflow-y-auto"] do
-                  div_ [class_ $ "w-full border-b border-b-gray-300 h-6 text-xs relative", id_ $ "time-container-a" <> traceItem.traceId] pass
-                  div_ [class_ $ "w-full h-48 overflow-x-hidden relative ", id_ $ "a" <> traceItem.traceId] pass
+                div_ [class_ "w-[65%] px-3 pt-4 border flex flex-col rounded-lg overflow-x-hidden overflow-y-auto"] do
+                  div_ [class_ "w-full sticky top-0 border-b border-b-gray-300 h-6 text-xs relative", id_ $ "time-container-a" <> traceItem.traceId] pass
+                  div_ [class_ "w-full  overflow-x-hidden h-48 c-scroll relative", id_ $ "a" <> traceItem.traceId] pass
                 div_ [class_ "border rounded-lg w-[35%] overflow-x-hidden"] do
                   h3_ [class_ "w-full flex p-2 font-medium justify-between items-center border-b"] do
                     span_ [] "Services"
                     span_ [] "Exec Time %"
-                  div_ [class_ "w-full h-[200px] overflow-x-hidden text-sm text-gray-600 overflow-y-auto", id_ $ "services-" <> traceItem.traceId] do
+                  div_ [class_ "w-full h-[200px] overflow-x-hidden text-sm text-gray-600 overflow-y-auto c-scroll", id_ $ "services-" <> traceItem.traceId] do
                     forM_ serviceNames $ \s -> do
                       let spans = filter (\x -> x.name == s) serviceData
                           duration = sum $ (.duration) <$> spans
@@ -128,8 +128,8 @@ tracePage p = do
                           span_ [class_ ""] $ toHtml s
                         div_ [class_ "flex gap-1 items-center"] $ do
                           span_ [class_ "text-xs max-w-52 truncate"] $ toHtml $ T.take 4 percent <> "%"
-                          div_ [class_ "w-[100px] h-3 bg-gray-200 rounded overflow-hidden"]
-                            $ div_ [class_ "h-full pl-2 text-xs font-medium", style_ $ "width:" <> percent <> "%; background-color:" <> color] pass
+                          div_ [class_ "w-[100px] h-3 bg-gray-200 rounded overflow-hidden"] $
+                            div_ [class_ "h-full pl-2 text-xs font-medium", style_ $ "width:" <> percent <> "%; background-color:" <> color] pass
 
             input_ [type_ "radio", name_ "my_tabs_2", role_ "tab", class_ "tab after:pb-2", term "aria-label" "Span List"]
             div_ [role_ "tabpanel", class_ "tab-content pt-2"] do
@@ -192,8 +192,8 @@ renderSpanListTable services colors records =
         th_ "Avg. Duration"
         th_ "Exec. Time"
         th_ "%Exec. Time"
-    tbody_ [class_ "space-y-0"]
-      $ mapM_ (renderSpanRecordRow records colors) services
+    tbody_ [class_ "space-y-0"] $
+      mapM_ (renderSpanRecordRow records colors) services
 
 
 spanTable :: V.Vector Telemetry.SpanRecord -> Html ()
