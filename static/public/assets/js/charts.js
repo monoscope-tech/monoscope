@@ -56,7 +56,6 @@ function throughputEChart(renderAt, data, gb, showLegend, theme) {
   if (showLegend) {
     option.grid.bottom = '9%'
   }
-  console.log(option)
   myChart.setOption(option)
 }
 
@@ -303,18 +302,26 @@ function flameGraphChart(data, renderAt, colorsMap) {
       return json
     }
     if (Array.isArray(json)) {
-      return json.filter((item) => item.name === id)
+      for (const item of json) {
+        const data = filterJson(item, id)
+        if (data.length > 0) {
+          return data
+        }
+      }
     }
     const recur = (item, id) => {
       if (item.name === id) {
-        return item
+        return [item]
       }
       for (const child of item.children || []) {
         const temp = recur(child, id)
-        if (temp) {
-          item.children = [temp]
-          item.value = temp.value // change the parents' values
-          return item
+        if (temp.length > 0) {
+          const temp2 = temp[0]
+          temp.start = 0
+          item.children = [temp2]
+          item.value = temp2.value // change the parents' values
+          item.start = temp2.start
+          return [item]
         }
       }
     }
@@ -344,20 +351,27 @@ function flameGraphChart(data, renderAt, colorsMap) {
     return data
   }
 
+  const fData = modifySpansForFlameGraph(data)
+
   const renderItem = (item, renderAt, rootVal) => {
     const [level, xStart, xEnd] = item.value
     const container = document.getElementById(renderAt)
 
     if (!container) return
-
-    const containerWidth = container.offsetWidth
+    const containerWidth = container.clientWidth
     const startPix = (containerWidth * xStart) / rootVal
     const width = (containerWidth * xEnd) / rootVal
 
     const height = 20
     const yStart = height * level + (level + 1) * 3
 
-    const div = elt('div', { class: 'absolute hover:z-[999] flex rounded items-center cursor-pointer justify-between flex-nowrap overflow-hidden hover:border hover:border-black' })
+    const div = elt('div', {
+      class: 'absolute hover:z-[999] flex rounded items-center cursor-pointer  grow-0 justify-between flex-nowrap overflow-hidden hover:border hover:border-black',
+      onclick: (e) => {
+        const data = filterJson(fData, item.name)
+        flameGraph(data, renderAt)
+      },
+    })
     div.style.left = `${startPix}px`
     div.style.top = `${yStart}px`
     div.style.width = `${width}px`
@@ -369,11 +383,12 @@ function flameGraphChart(data, renderAt, colorsMap) {
     const tim = elt('span', { class: 'text-black text-xs shrink-0' }, `${Math.floor(t)} ${u}`)
     div.appendChild(text)
     div.appendChild(tim)
-
     container.appendChild(div)
   }
 
   function flameGraph(stackTrace, target) {
+    const container = document.getElementById(target)
+    container.innerHTML = 'loading...'
     const rootVal = stackTrace.sort((a, b) => b.value - a.value)[0].value || 1
     generateTimeIntervals(rootVal, target)
     const data = recursionJson(stackTrace)
@@ -383,8 +398,6 @@ function flameGraphChart(data, renderAt, colorsMap) {
       renderItem(item, target, rootVal)
     })
   }
-
-  const fData = modifySpansForFlameGraph(data)
 
   flameGraph(fData, renderAt)
 }
@@ -420,7 +433,7 @@ function generateTimeIntervals(duration, target) {
   const container = document.getElementById('time-container-' + target)
   const [durationF, unit] = formatDuration(duration)
   container.innerHTML = ''
-  const containerWidth = container.offsetWidth
+  const containerWidth = container.clientWidth
   const intervalWidth = containerWidth / 9
   const intervals = []
   for (let i = 0; i < 10; i++) {
