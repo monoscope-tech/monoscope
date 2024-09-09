@@ -2,17 +2,12 @@ module Pages.LogExplorer.LogItem (expandAPIlogItemH, expandAPIlogItem', apiLogIt
 
 import Data.Aeson ((.=))
 import Data.Aeson qualified as AE
-import Data.Aeson.KeyMap qualified as AEK
 import Data.Aeson.KeyMap qualified as KEM
 import Data.ByteString.Lazy qualified as BS
-import Data.Char (isDigit)
-import Data.HashMap.Strict qualified as HM
-import Data.Text qualified as T
 import Data.Time (UTCTime)
 import Data.Time.Format (defaultTimeLocale, formatTime)
 import Data.Time.Format.ISO8601 (ISO8601 (iso8601Format), formatShow)
 import Data.UUID qualified as UUID
-import Data.Vector (iforM_)
 import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
 import Lucid
 import Lucid.Aria qualified as Aria
@@ -28,7 +23,7 @@ import Pages.Traces.Spans qualified as Spans
 import PyF (fmt)
 import Relude
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
-import Utils (faSprite_, getMethodColor, getStatusColor, jsonValueToHtmlTree, unwrapJsonPrimValue)
+import Utils (faSprite_, getMethodColor, getStatusColor, jsonValueToHtmlTree)
 import Witch (from)
 
 
@@ -52,7 +47,7 @@ expandAPIlogItemH pid rdId createdAt sourceM = do
 expandAPIlogItem' :: Projects.ProjectId -> RequestDumps.RequestDumpLogItem -> Bool -> Html ()
 expandAPIlogItem' pid req modal = do
   div_ [class_ "flex flex-col w-full gap-4 pb-[100px]"] do
-    div_ [class_ "w-full flex flex-col gap-2 gap-4"] do
+    div_ [class_ "w-full flex flex-col gap-4"] do
       let methodColor = getMethodColor req.method
       let statusColor = getStatusColor req.statusCode
       div_ [class_ "flex gap-4 items-center"] do
@@ -238,14 +233,15 @@ apiLogItemView pid logId req expandItemPath source = do
   let logItemPathDetailed = expandItemPath <> "/detailed?source=" <> source
   div_ [class_ "flex items-center gap-2"] do
     when (source /= "logs") $
-      a_
+      label_
         [ class_ "btn btn-sm btn-outline"
+        , Lucid.for_ "global-data-drawer"
         , term "_" $
             [text|on mousedown or click fetch $logItemPathDetailed
                   then set #global-data-drawer-content.innerHTML to #loader-tmp.innerHTML
                   then set #global-data-drawer.checked to true
                   then set #global-data-drawer-content.innerHTML to it
-                  then htmx.process(#global-data-drawer-content) then _hyperscript.processNode(#global-data-drawer-content)|]
+                  then htmx.process(#global-data-drawer-content) then _hyperscript.processNode(#global-data-drawer-content) then window.evalScriptsFromContent(#global-data-drawer-content)|]
         ]
         ("Expand" >> faSprite_ "expand" "regular" "h-3 w-3")
     let reqJson = decodeUtf8 $ AE.encode req
@@ -263,15 +259,14 @@ apiLogItemView pid logId req expandItemPath source = do
           _ -> Nothing
     when (source == "spans" && isJust trId) do
       let tracePathDetailed = "/p/" <> pid.toText <> "/traces/" <> fromMaybe "" trId
-      a_
+      label_
         [ class_ "btn btn-sm btn-outline"
+        , Lucid.for_ "global-data-drawer"
         , term "_" $
-            [text|on mousedown or click
-                  set #global-data-drawer-content.innerHTML to #loader-tmp.innerHTML
-                  then set #global-data-drawer.checked to true
-                  then fetch $tracePathDetailed
-                  then set #global-data-drawer-content.innerHTML to it
-                  then htmx.process(#global-data-drawer-content) then _hyperscript.processNode(#global-data-drawer-content)|]
+            [text|on mousedown or click fetch $tracePathDetailed 
+                  then set #global-data-drawer-content.innerHTML to #loader-tmp.innerHTML 
+                  then set #global-data-drawer-content.innerHTML to it 
+                  then htmx.process(#global-data-drawer-content) then _hyperscript.processNode(#global-data-drawer-content) then window.evalScriptsFromContent(#global-data-drawer-content)|]
         ]
         "View Trace"
 

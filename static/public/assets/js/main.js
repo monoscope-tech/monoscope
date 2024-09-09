@@ -63,6 +63,21 @@ window.downloadJson = function(event) {
   document.body.removeChild(a);
 }
 
+
+window.evalScriptsFromContent = function (container) {
+  container.querySelectorAll('script').forEach(oldScript => {
+    const newScript = document.createElement('script');
+    newScript.text = oldScript.textContent || oldScript.innerHTML;
+
+    // Copy attributes using the spread operator
+    [...oldScript.attributes].forEach(attr => newScript.setAttribute(attr.name, attr.value));
+
+    // Append and remove to execute
+    document.body.append(newScript);
+    newScript.remove();
+  });
+}
+
 // Unified Timepicker
 //
 window.picker = new easepick.create({

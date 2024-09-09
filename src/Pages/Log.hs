@@ -463,12 +463,12 @@ logItemCol_ source pid reqVec colIdxMap "id" = do
     a_ [class_ $ "col-span-1 shrink-0 inline-block h-full w-1 " <> if source == "logs" then severityClass else errClass, term "data-tippy-content" $ show errCount <> " errors attached to this request; status " <> show status] " "
     label_
       [ class_ "col-span-2 cursor-pointer"
+      , Lucid.for_ "global-data-drawer"
       , term "_" $
           [text|on mousedown or click fetch $logItemPathDetailed 
                   then set #global-data-drawer-content.innerHTML to #loader-tmp.innerHTML 
-                  then set #global-data-drawer.checked to true 
                   then set #global-data-drawer-content.innerHTML to it 
-                  then htmx.process(#global-data-drawer-content) then _hyperscript.processNode(#global-data-drawer-content)|]
+                  then htmx.process(#global-data-drawer-content) then _hyperscript.processNode(#global-data-drawer-content) then window.evalScriptsFromContent(#global-data-drawer-content)|]
       ]
       $ faSprite_ "link" "solid" "h-2 text-blue-500"
     faSprite_ "chevron-right" "solid" "h-3 col-span-1 text-gray-500 chevron log-chevron "
