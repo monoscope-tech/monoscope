@@ -1,7 +1,5 @@
 module Pages.Traces.Trace (traceH, TraceDetailsGet (..)) where
 
-import Lucid
-import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
 import Data.Aeson ((.=))
 import Data.Aeson qualified as AE
 import Data.Aeson.Key qualified as AEKey
@@ -12,6 +10,7 @@ import Data.Time.Format (formatTime)
 import Data.Time.Format.ISO8601 (formatShow, iso8601Format)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
+import Lucid
 import Lucid.Htmx (hxGet_, hxSwap_, hxTarget_)
 import Lucid.Hyperscript (__)
 import Models.Projects.Projects qualified as Projects
@@ -21,6 +20,7 @@ import NeatInterpolation (text)
 import Pages.Traces.Spans qualified as Spans
 import Pages.Traces.Utils
 import Relude
+import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
 import Utils (faSprite_, getDurationNSMS, getGrpcStatusColor, getServiceColors, getStatusColor, utcTimeToNanoseconds)
 
 
@@ -108,9 +108,9 @@ tracePage p = do
             input_ [type_ "radio", name_ "my_tabs_2", role_ "tab", class_ "tab after:pb-2", term "aria-label" "Flame Graph", checked_]
             div_ [role_ "tabpanel", class_ "tab-content w-full bg-white"] do
               div_ [class_ "flex gap-2 w-full pt-2"] do
-                div_ [class_ "w-[65%] px-4 pt-4 border rounded-lg overflow-x-hidden"] do
-                  div_ [id_ $ "time-container-a" <> traceItem.traceId, class_ "w-full border-b border-b-gray-300 h-6 text-xs relative"] pass
-                  div_ [class_ "w-full h-48 overflow-x-hidden overflow-y-auto relative", id_ $ "a" <> traceItem.traceId] pass
+                div_ [class_ "w-[65%] px-4 pt-4 border rounded-lg overflow-x-hidden overflow-y-auto"] do
+                  div_ [class_ $ "w-full border-b border-b-gray-300 h-6 text-xs relative " <> "time-container-a" <> traceItem.traceId] pass
+                  div_ [class_ $ "w-full h-48 overflow-x-hidden relative " <> "a" <> traceItem.traceId] pass
                 div_ [class_ "border rounded-lg w-[35%] overflow-x-hidden"] do
                   h3_ [class_ "w-full flex p-2 font-medium justify-between items-center border-b"] do
                     span_ [] "Services"
@@ -128,8 +128,8 @@ tracePage p = do
                           span_ [class_ ""] $ toHtml s
                         div_ [class_ "flex gap-1 items-center"] $ do
                           span_ [class_ "text-xs max-w-52 truncate"] $ toHtml $ T.take 4 percent <> "%"
-                          div_ [class_ "w-[100px] h-3 bg-gray-200 rounded overflow-hidden"]
-                            $ div_ [class_ "h-full pl-2 text-xs font-medium", style_ $ "width:" <> percent <> "%; background-color:" <> color] pass
+                          div_ [class_ "w-[100px] h-3 bg-gray-200 rounded overflow-hidden"] $
+                            div_ [class_ "h-full pl-2 text-xs font-medium", style_ $ "width:" <> percent <> "%; background-color:" <> color] pass
 
             input_ [type_ "radio", name_ "my_tabs_2", role_ "tab", class_ "tab after:pb-2", term "aria-label" "Span List"]
             div_ [role_ "tabpanel", class_ "tab-content pt-2"] do
@@ -192,8 +192,8 @@ renderSpanListTable services colors records =
         th_ "Avg. Duration"
         th_ "Exec. Time"
         th_ "%Exec. Time"
-    tbody_ [class_ "space-y-0"]
-      $ mapM_ (renderSpanRecordRow records colors) services
+    tbody_ [class_ "space-y-0"] $
+      mapM_ (renderSpanRecordRow records colors) services
 
 
 spanTable :: V.Vector Telemetry.SpanRecord -> Html ()

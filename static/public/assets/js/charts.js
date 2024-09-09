@@ -355,13 +355,13 @@ function flameGraphChart(data, renderAt, colorsMap) {
 
   const renderItem = (item, renderAt, rootVal) => {
     const [level, xStart, xEnd] = item.value
-    const container = document.getElementById(renderAt)
+    const containers = document.querySelectorAll('.' + renderAt)
 
-    if (!container) return
-    const containerWidth = container.clientWidth
+    if (!containers || containers.length == 0) return
+    const container = containers[0]
+    const containerWidth = container.offsetWidth
     const startPix = (containerWidth * xStart) / rootVal
     const width = (containerWidth * xEnd) / rootVal
-
     const height = 20
     const yStart = height * level + (level + 1) * 3
 
@@ -383,12 +383,16 @@ function flameGraphChart(data, renderAt, colorsMap) {
     const tim = elt('span', { class: 'text-black text-xs shrink-0' }, `${Math.floor(t)} ${u}`)
     div.appendChild(text)
     div.appendChild(tim)
-    container.appendChild(div)
+    containers.forEach((c) => {
+      c.appendChild(div)
+    })
   }
 
   function flameGraph(stackTrace, target) {
-    const container = document.getElementById(target)
-    container.innerHTML = 'loading...'
+    const containers = document.querySelectorAll('.' + target)
+    containers.forEach((c) => {
+      c.innerHTML = ''
+    })
     const rootVal = stackTrace.sort((a, b) => b.value - a.value)[0].value || 1
     generateTimeIntervals(rootVal, target)
     const data = recursionJson(stackTrace)
@@ -430,10 +434,12 @@ function buildHierachy(spans) {
 }
 
 function generateTimeIntervals(duration, target) {
-  const container = document.getElementById('time-container-' + target)
+  const containers = document.querySelectorAll('.time-container-' + target)
   const [durationF, unit] = formatDuration(duration)
-  container.innerHTML = ''
-  const containerWidth = container.clientWidth
+  containers.forEach((c) => (c.innerHTML = ''))
+  if (containers.length == 0) return
+  const container = containers[0]
+  const containerWidth = container.offsetWidth
   const intervalWidth = containerWidth / 9
   const intervals = []
   for (let i = 0; i < 10; i++) {
@@ -447,8 +453,7 @@ function generateTimeIntervals(duration, target) {
               </div>
       `)
   }
-
-  container.innerHTML = intervals.join('')
+  containers.forEach((c) => (c.innerHTML = intervals.join('')))
 }
 
 function formatDuration(duration) {
