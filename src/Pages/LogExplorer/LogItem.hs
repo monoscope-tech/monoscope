@@ -263,13 +263,17 @@ apiLogItemView pid logId req expandItemPath source = do
           _ -> Nothing
     when (source == "spans" && isJust trId) do
       let tracePathDetailed = "/p/" <> pid.toText <> "/traces/" <> fromMaybe "" trId
-      a_ [class_ "btn btn-sm btn-outline", term "_" $
-            [text|on mousedown or click fetch $tracePathDetailed 
-                  then set #global-data-drawer-content.innerHTML to #loader-tmp.innerHTML 
-                  then set #global-data-drawer.checked to true 
-                  then set #global-data-drawer-content.innerHTML to it 
+      a_
+        [ class_ "btn btn-sm btn-outline"
+        , term "_" $
+            [text|on mousedown or click
+                  set #global-data-drawer-content.innerHTML to #loader-tmp.innerHTML
+                  then set #global-data-drawer.checked to true
+                  then fetch $tracePathDetailed
+                  then set #global-data-drawer-content.innerHTML to it
                   then htmx.process(#global-data-drawer-content) then _hyperscript.processNode(#global-data-drawer-content)|]
-            ] "View Trace"
+        ]
+        "View Trace"
 
     button_
       [ class_ "btn btn-sm btn-outline"
