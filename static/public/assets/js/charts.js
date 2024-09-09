@@ -367,7 +367,7 @@ function flameGraphChart(data, renderAt, colorsMap) {
     const div = elt('div', {
       class: 'absolute hover:z-[999] flex rounded items-center cursor-pointer  grow-0 justify-between flex-nowrap overflow-hidden hover:border hover:border-black',
       onclick: (e) => {
-        const data = filterJson(fData, item.name)
+        const data = filterJson(structuredClone(fData), item.name)
         flameGraph(data, renderAt)
       },
     })
@@ -445,7 +445,7 @@ function generateTimeIntervals(duration, target) {
               </div>
       `)
   }
-  containers.forEach((c) => (c.innerHTML = intervals.join('')))
+  container.innerHTML = intervals.join('')
 }
 
 function formatDuration(duration) {
