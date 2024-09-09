@@ -195,7 +195,7 @@ dependencyEndpointsRequestStatsByProject pid host ack arch sortM searchM page = 
   where
     q =
       [text|
-      SELECT enp.id endpoint_id, enp.hash endpoint_hash, enp.project_id, enp.url_path, enp.method, coalesce(min,0),  coalesce(p50,0),  coalesce(p75,0),  coalesce(p90,0), coalesce(p95,0),  coalesce(p99,0),  coalesce(max,0) ,
+      SELECT enp.id endpoint_id, enp.hash endpoint_hash, enp.project_id, enp.url_path, enp.method, enp.host, coalesce(min,0),  coalesce(p50,0),  coalesce(p75,0),  coalesce(p90,0), coalesce(p95,0),  coalesce(p99,0),  coalesce(max,0) ,
          coalesce(total_time,0), coalesce(total_time_proj,0), coalesce(total_requests,0), coalesce(total_requests_proj,0),
          (SELECT count(*) from apis.issues
                  where project_id=enp.project_id AND acknowleged_at is null AND archived_at is null AND anomaly_type != 'field'
@@ -220,8 +220,9 @@ endpointRequestStatsByEndpoint :: EndpointId -> PgT.DBT IO (Maybe EndpointReques
 endpointRequestStatsByEndpoint eid = queryOne Select q (eid, eid)
   where
     q =
-      [sql| SELECT endpoint_id, endpoint_hash, project_id, url_path, method, min, p50, p75, p90, p95, p99, max,
-                   total_time, total_time_proj, total_requests, total_requests_proj,
+      [sql| SELECT endpoint_id, endpoint_hash, project_id, url_path, method, host, coalesce(min, 0), coalesce(p50, 0), coalesce(p75, 0), coalesce(p90, 0), coalesce(p95, 0), coalesce(p99, 0), coalesce
+      (max, 0),
+                   coalesce(total_time, 0), coalesce(total_time_proj,0), coalesce(total_requests,0), coalesce(total_requests_proj,0),
                    (SELECT count(*) from apis.anomalies
                            where endpoint_id=? AND acknowleged_at is null AND archived_at is null AND anomaly_type != 'field'
                    ) ongoing_anomalies,
