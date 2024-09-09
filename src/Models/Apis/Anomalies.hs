@@ -704,7 +704,7 @@ bulkInsertErrors errors = void $ dbtToEff $ executeMany q (V.toList rowsToInsert
     rowsToInsert =
       errors <&> \err ->
         ( Unsafe.fromJust err.projectId
-          , err.when
+        , err.when
         , Unsafe.fromJust err.hash -- Nothing state should never happen
         , err.errorType
         , err.message

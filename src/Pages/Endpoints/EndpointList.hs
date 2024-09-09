@@ -57,7 +57,7 @@ endpointListGetH pid pageM layoutM filterTM hostM requestTypeM sortM hxRequestM 
         (def :: BWConfig)
           { sessM = Just sess.persistentSession
           , currProject = Just project
-          , pageTitle = "Endpoints for " <> host 
+          , pageTitle = "Endpoints for " <> host
           , pageActions =
               Just
                 $ a_ [class_ "btn btn-sm btn-primary space-x-2", href_ $ "/p/" <> pid.toText <> "/documentation?host=" <> host] do

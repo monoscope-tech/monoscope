@@ -91,7 +91,6 @@ processList msgs attrs = do
 --     let decryptedKey = ProjectApiKeys.decryptAPIKey (encodeUtf8 apiKeyEncryptionSecretKey) authText
 --     Unsafe.fromJust $ ProjectApiKeys.ProjectApiKeyId <$> UUID.fromASCIIBytes decryptedKey
 
-
 logsServiceExportH
   :: Log.Logger
   -> AuthContext

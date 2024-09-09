@@ -1,12 +1,13 @@
 module Pages.HashAssets (hashAssetFile) where
 
 import Data.ByteString.Lazy qualified as BL
+import Data.Digest.XXHash (xxHash)
 import Data.Text qualified as T
 import Language.Haskell.TH qualified as TH
 import Language.Haskell.TH.Syntax qualified as TH
-import Data.Digest.XXHash (xxHash)
 import Numeric (showHex)
 import Relude
+
 
 -- adds a version hash to file paths, to force cache invalidation when a new version appears
 hashAssetFile :: FilePath -> TH.Q TH.Exp

@@ -10,11 +10,11 @@ import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
 import Models.Users.Users qualified as Users
 import NeatInterpolation (text)
+import Pages.HashAssets
 import Pkg.Components.ExternalHeadScripts (externalHeadScripts_)
 import PyF
 import Relude
 import Utils (faSprite_)
-import Pages.HashAssets
 
 
 menu :: Projects.ProjectId -> [(Text, Text, Text)]
