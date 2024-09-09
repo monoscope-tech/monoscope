@@ -189,7 +189,7 @@ logQueryBox_ pid currentRange =
         div_ [id_ "queryBuilder"] $ termRaw "filter-element" [id_ "filterElement"] ("" :: Text)
       div_ [class_ "form-control"] $
         label_ [class_ "label cursor-pointer space-x-2"] $
-          input_ [type_ "checkbox", class_ "toggle tooltip tooltip-left", id_ "toggleQueryEditor", onclick_ "toggleQueryBuilder()", term "data-tip" "toggle query editor"]
+          input_ [type_ "checkbox", class_ "toggle toggle-sm tooltip tooltip-left", id_ "toggleQueryEditor", onclick_ "toggleQueryBuilder()", term "data-tip" "toggle query editor"]
       button_
         [type_ "submit", class_ "btn btn-sm btn-success"]
         do
@@ -265,21 +265,10 @@ apiLogsPage page = do
 
     div_ [class_ "card-round w-full  grow divide-y flex flex-col text-sm h-full overflow-hidden group/result"] do
       div_ [class_ "flex-1 "] do
-        div_ [class_ "pl-3 py-1 flex flex-row justify-between"] do
+        div_ [class_ "pl-3 py-1 flex flex-row justify-end"] do
           label_ [class_ "flex items-center cursor-pointer space-x-2 p-1"] do
             input_ [type_ "checkbox", class_ "toggle toggle-sm toggle-chart", checked_]
             small_ "toggle chart"
-          a_
-            [ class_ "cursor-pointer flex gap-2 items-center pr-3"
-            , hxGet_ page.resetLogsURL
-            , hxTarget_ "#log-item-table-body"
-            , hxSwap_ "innerHTML scroll:#log-item-table-body:top"
-            , hxIndicator_ "#refresh-indicator"
-            ]
-            do
-              span_ [id_ "refresh-indicator", class_ "refresh-indicator htmx-indicator query-indicator loading loading-dots loading-md"] ""
-              faSprite_ "arrows-rotate" "regular" "h-3 w-3 inline-block"
-              span_ [] "refresh"
         div_
           [ id_ "reqsChartsECP"
           , class_ "px-5 hidden group-has-[.toggle-chart:checked]/result:block"
