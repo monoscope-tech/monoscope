@@ -108,7 +108,7 @@ tracePage p = do
             input_ [type_ "radio", name_ "my_tabs_2", role_ "tab", class_ "tab after:pb-2", term "aria-label" "Flame Graph", checked_]
             div_ [role_ "tabpanel", class_ "tab-content w-full bg-white"] do
               div_ [class_ "flex gap-2 w-full pt-2"] do
-                div_ [class_ "w-[65%] px-3 pt-4 border flex flex-col rounded-lg overflow-x-hidden overflow-y-auto"] do
+                div_ [class_ "w-[65%] px-2 pt-4 border flex flex-col rounded-lg overflow-x-hidden overflow-y-auto"] do
                   div_ [class_ "w-full sticky top-0 border-b border-b-gray-300 h-6 text-xs relative", id_ $ "time-container-a" <> traceItem.traceId] pass
                   div_ [class_ "w-full  overflow-x-hidden h-48 c-scroll relative", id_ $ "a" <> traceItem.traceId] pass
                 div_ [class_ "border rounded-lg w-[35%] overflow-x-hidden"] do

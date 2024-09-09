@@ -412,7 +412,6 @@ function flameGraphChart(data, renderAt, colorsMap) {
     const container = document.querySelector('#' + target)
     container.innerHTML = ''
     const rootVal = stackTrace.sort((a, b) => b.value - a.value)[0].value || 1
-    const maxheight = heightOfJson(stackTrace)
     generateTimeIntervals(rootVal, target)
     const data = recursionJson(stackTrace)
     const sortedData = data.sort((a, b) => b.value[2] - a.value[2])
@@ -453,13 +452,16 @@ function buildHierachy(spans) {
 
 function generateTimeIntervals(duration, target) {
   const container = document.querySelector('#time-container-' + target)
-  const [durationF, unit] = formatDuration(duration)
   container.innerHTML = ''
   const containerWidth = container.offsetWidth - SCROLL_BAR_WIDTH
   const intervalWidth = containerWidth / 9
   const intervals = []
   for (let i = 0; i < 10; i++) {
-    const time = Math.floor((i * durationF) / 9)
+    const t = Math.floor((i * duration) / 9)
+    let [durationF, unit] = formatDuration(t)
+    const time = durationF
+    unit = t === 0 ? '' : unit
+
     intervals.push(`
               <div class="absolute bottom-0 text-gray-700 border-left overflow-x-visible" style="width: ${intervalWidth}px; left: ${i * intervalWidth}px;">
                <div class="relative" style="height:10px">
@@ -474,11 +476,11 @@ function generateTimeIntervals(duration, target) {
 
 function formatDuration(duration) {
   if (duration >= 1000000000) {
-    return [(duration / 1000000000).toFixed(2), 's']
+    return [(duration / 1000000000).toFixed(1), 's']
   } else if (duration >= 1000000) {
-    return [(duration / 1000000).toFixed(2), 'ms']
+    return [(duration / 1000000).toFixed(1), 'ms']
   } else if (duration >= 1000) {
-    return [(duration / 1000).toFixed(2), 'µs']
+    return [(duration / 1000).toFixed(1), 'µs']
   } else {
     return [duration, 'ns']
   }
