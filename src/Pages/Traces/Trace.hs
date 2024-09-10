@@ -128,20 +128,28 @@ tracePage p = do
                           span_ [class_ ""] $ toHtml s
                         div_ [class_ "flex gap-1 items-center"] $ do
                           span_ [class_ "text-xs max-w-52 truncate"] $ toHtml $ T.take 4 percent <> "%"
-                          div_ [class_ "w-[100px] h-3 bg-gray-200 rounded overflow-hidden"]
-                            $ div_ [class_ "h-full pl-2 text-xs font-medium", style_ $ "width:" <> percent <> "%; background-color:" <> color] pass
+                          div_ [class_ "w-[100px] h-3 bg-gray-200 rounded overflow-hidden"] $
+                            div_ [class_ "h-full pl-2 text-xs font-medium", style_ $ "width:" <> percent <> "%; background-color:" <> color] pass
 
             input_ [type_ "radio", name_ "my_tabs_2", role_ "tab", class_ "tab after:pb-2", term "aria-label" "Span List"]
             div_ [role_ "tabpanel", class_ "tab-content pt-2"] do
               div_ [class_ "border w-full rounded-lg min-h-[230px] max-h-[330px] overflow-auto overflow-x-hidden "] do
                 renderSpanListTable serviceNames serviceColors p.spanRecords
 
-            input_ [type_ "radio", name_ "my_tabs_2", role_ "tab", class_ "tab after:pb-2", term "aria-label" "Water Fall"]
-            div_ [role_ "tabpanel", class_ "tab-content pt-2"] do
-              div_ [class_ "border w-full rounded-lg min-h-[230px] max-h-[330px] overflow-auto overflow-x-hidden "] do
-                div_ [class_ "w-full sticky top-0 border-b border-b-gray-300 h-6 text-xs relative", id_ $ "w-time-container-a" <> traceItem.traceId] pass
-                div_ [class_ "w-full  overflow-x-hidden h-48 c-scroll relative", id_ $ "w" <> traceItem.traceId] do
-                  "Cooking..."
+            -- input_ [type_ "radio", name_ "my_tabs_2", role_ "tab", class_ "tab after:pb-2", term "aria-label" "Water Fall"]
+            -- div_ [role_ "tabpanel", class_ "tab-content pt-2"] do
+            --   div_ [class_ "border grid grid-cols-12 w-full rounded-lg min-h-[230px] max-h-[330px] c-scroll overflow-auto overflow-x-hidden"] do
+            --     div_ [class_ "flex col-span-4 flex-col border-b border-r"] do
+            --       div_ [class_ "h-6"] pass
+            --       forM_ p.spanRecords $ \s -> do
+            --         div_ [class_ "text-xs flex items-center gap-2 h-6 px-2 border-t w-full"] do
+            --           span_ [class_ "whitespace-nowrap truncate w-[calc(100%-4px)] h-full flex items-center"] $ toHtml s.spanName
+            --           let service = getServiceName s
+            --           let color = getServiceColor service serviceColors
+            --           div_ [class_ $ "h-full w-[4px] bg-red-500 rounded shrink-0 " <> color] pass
+            --     div_ [class_ "flex flex-col col-span-8"] do
+            --       div_ [class_ "w-full border-b border-b-gray-300 h-6 text-xs relative", id_ $ "w-time-container-a" <> traceItem.traceId] pass
+            --       div_ [class_ "w-full overflow-x-hidden h-[calc(100%-24px)]", id_ $ "w-a" <> traceItem.traceId] pass
 
       div_ [class_ "h-auto overflow-y-auto mt-5 py-2 rounded-lg border"] do
         div_ [class_ "flex flex-col gap-4 px-4", id_ $ "span-" <> traceItem.traceId] do
@@ -199,8 +207,8 @@ renderSpanListTable services colors records =
         th_ "Avg. Duration"
         th_ "Exec. Time"
         th_ "%Exec. Time"
-    tbody_ [class_ "space-y-0"]
-      $ mapM_ (renderSpanRecordRow records colors) services
+    tbody_ [class_ "space-y-0"] $
+      mapM_ (renderSpanRecordRow records colors) services
 
 
 spanTable :: V.Vector Telemetry.SpanRecord -> Html ()
