@@ -392,6 +392,7 @@ function flameGraphChart(data, renderAt, colorsMap) {
         if (target) {
           target.scrollIntoView()
         }
+          htmx.trigger('#sp-list-' + item.span_id, 'click')
       },
     })
     div.style.left = `${startPix}px`

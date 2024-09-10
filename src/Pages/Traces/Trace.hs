@@ -235,6 +235,7 @@ spanTable records =
         , hxGet_ $ "/p/" <> pidText <> "/log_explorer/" <> spanid <> "/" <> tme <> "/detailed?source=spans"
         , hxTarget_ $ "#span-" <> spanRecord.traceId
         , hxSwap_ "innerHTML"
+        , id_ $ "sp-list-" <> spanRecord.spanId
         ]
         $ do
           span_ [class_ "px-2 py-1 w-[200px] truncate"] $ toHtml $ formatTime defaultTimeLocale "%b %d %Y %H:%M:%S%Q" spanRecord.timestamp
