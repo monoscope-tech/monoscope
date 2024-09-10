@@ -232,7 +232,7 @@ apiLogItemView :: Projects.ProjectId -> UUID.UUID -> AE.Value -> Text -> Text ->
 apiLogItemView pid logId req expandItemPath source = do
   let logItemPathDetailed = expandItemPath <> "/detailed?source=" <> source
   div_ [class_ "flex items-center gap-2"] do
-    when (source /= "logs")
+    when (source == "requests")
       $ label_
         [ class_ "btn btn-sm btn-outline"
         , Lucid.for_ "global-data-drawer"
@@ -244,14 +244,6 @@ apiLogItemView pid logId req expandItemPath source = do
                   then htmx.process(#global-data-drawer-content) then _hyperscript.processNode(#global-data-drawer-content) then window.evalScriptsFromContent(#global-data-drawer-content)|]
         ]
         ("Expand" >> faSprite_ "expand" "regular" "h-3 w-3")
-    let reqJson = decodeUtf8 $ AE.encode req
-    when (source == "requests")
-      $ button_
-        [ class_ "btn btn-sm btn-outline"
-        , term "data-reqJson" reqJson
-        , onclick_ "window.buildCurlRequest(event)"
-        ]
-        (span_ [] "Copy as curl" >> faSprite_ "copy" "regular" "h-3 w-3")
     let trId = case req of
           AE.Object o -> case KEM.lookup "trace_id" o of
             Just (AE.String trid) -> Just trid
@@ -263,12 +255,21 @@ apiLogItemView pid logId req expandItemPath source = do
         [ class_ "btn btn-sm btn-outline"
         , Lucid.for_ "global-data-drawer"
         , term "_"
-            $ [text|on mousedown or click fetch $tracePathDetailed 
-                  then set #global-data-drawer-content.innerHTML to #loader-tmp.innerHTML 
-                  then set #global-data-drawer-content.innerHTML to it 
+            $ [text|on mousedown or click fetch $tracePathDetailed
+                  then set #global-data-drawer-content.innerHTML to #loader-tmp.innerHTML
+                  then set #global-data-drawer-content.innerHTML to it
                   then htmx.process(#global-data-drawer-content) then _hyperscript.processNode(#global-data-drawer-content) then window.evalScriptsFromContent(#global-data-drawer-content)|]
         ]
-        "View Trace"
+        "Expand"
+
+    let reqJson = decodeUtf8 $ AE.encode req
+    when (source == "requests")
+      $ button_
+        [ class_ "btn btn-sm btn-outline"
+        , term "data-reqJson" reqJson
+        , onclick_ "window.buildCurlRequest(event)"
+        ]
+        (span_ [] "Copy as curl" >> faSprite_ "copy" "regular" "h-3 w-3")
 
     button_
       [ class_ "btn btn-sm btn-outline"
