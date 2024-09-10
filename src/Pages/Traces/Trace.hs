@@ -69,7 +69,7 @@ tracePage p = do
       reqDetails = getRequestDetails (V.head p.spanRecords)
       serviceColors = getServiceColors serviceNames
   div_ [class_ "w-full h-full"] $ do
-    div_ [class_ "flex flex-col w-full gap-4 h-full"] $ do
+    div_ [class_ "flex flex-col w-full gap-4 h-full pb-4"] $ do
       div_ [class_ "flex items-center gap-4"] $ do
         h3_ [class_ "whitespace-nowrap text-xl font-bold pr-4 border-r border-r-2"] "Trace"
         div_ [class_ "flex items-center gap-4"] $ do
@@ -128,8 +128,8 @@ tracePage p = do
                           span_ [class_ ""] $ toHtml s
                         div_ [class_ "flex gap-1 items-center"] $ do
                           span_ [class_ "text-xs max-w-52 truncate"] $ toHtml $ T.take 4 percent <> "%"
-                          div_ [class_ "w-[100px] h-3 bg-gray-200 rounded overflow-hidden"]
-                            $ div_ [class_ "h-full pl-2 text-xs font-medium", style_ $ "width:" <> percent <> "%; background-color:" <> color] pass
+                          div_ [class_ "w-[100px] h-3 bg-gray-200 rounded overflow-hidden"] $
+                            div_ [class_ "h-full pl-2 text-xs font-medium", style_ $ "width:" <> percent <> "%; background-color:" <> color] pass
 
             input_ [type_ "radio", name_ "my_tabs_2", role_ "tab", class_ "tab after:pb-2", term "aria-label" "Span List"]
             div_ [role_ "tabpanel", class_ "tab-content pt-2"] do
@@ -151,7 +151,7 @@ tracePage p = do
       --       div_ [class_ "w-full border-b border-b-gray-300 h-6 text-xs relative", id_ $ "w-time-container-a" <> traceItem.traceId] pass
       --       div_ [class_ "w-full overflow-x-hidden h-[calc(100%-24px)]", id_ $ "w-a" <> traceItem.traceId] pass
 
-      div_ [class_ "h-auto overflow-y-auto mt-5 py-2 rounded-lg border"] do
+      div_ [class_ "my-5 py-2 rounded-lg border"] do
         div_ [class_ "flex flex-col gap-4 px-4", id_ $ "span-" <> traceItem.traceId] do
           let tSp = fromMaybe (V.head p.spanRecords) (V.find (\s -> s.spanId == sId) p.spanRecords)
           Spans.expandedSpanItem pid tSp
@@ -207,8 +207,8 @@ renderSpanListTable services colors records =
         th_ "Avg. Duration"
         th_ "Exec. Time"
         th_ "%Exec. Time"
-    tbody_ [class_ "space-y-0"]
-      $ mapM_ (renderSpanRecordRow records colors) services
+    tbody_ [class_ "space-y-0"] $
+      mapM_ (renderSpanRecordRow records colors) services
 
 
 spanTable :: V.Vector Telemetry.SpanRecord -> Html ()
