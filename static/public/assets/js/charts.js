@@ -392,7 +392,7 @@ function flameGraphChart(data, renderAt, colorsMap) {
         if (target) {
           target.scrollIntoView()
         }
-          htmx.trigger('#sp-list-' + item.span_id, 'click')
+        htmx.trigger('#sp-list-' + item.span_id, 'click')
       },
     })
     div.style.left = `${startPix}px`
@@ -409,10 +409,12 @@ function flameGraphChart(data, renderAt, colorsMap) {
     container.appendChild(div)
   }
 
+  let maxDuration = 0
   function flameGraph(stackTrace, target) {
     const container = document.querySelector('#' + target)
     container.innerHTML = ''
     const rootVal = stackTrace.sort((a, b) => b.value - a.value)[0].value || 1
+    maxDuration = rootVal
     generateTimeIntervals(rootVal, target)
     const data = recursionJson(stackTrace)
     const sortedData = data.sort((a, b) => b.value[2] - a.value[2])
@@ -422,6 +424,32 @@ function flameGraphChart(data, renderAt, colorsMap) {
   }
 
   flameGraph(fData, renderAt)
+
+  const flameGraphContainer = document.querySelector('#flame-graph-container')
+
+  flameGraphContainer.addEventListener('mousemove', (e) => {
+    const boundingX = e.currentTarget.getBoundingClientRect().x
+    const lineContainer = document.querySelector('#time-bar-indicator')
+    const time = document.querySelector('#line-time')
+    const container = document.querySelector('#time-container')
+    if (container) {
+      const left = e.clientX - boundingX
+      const containerWidth = container.offsetWidth - SCROLL_BAR_WIDTH
+      const currTime = (maxDuration * (left - 8)) / containerWidth
+      const [f, u] = formatDuration(currTime)
+      time.textContent = `${f}${u}`
+      lineContainer.style.left = `${left}px`
+      if (left < 9 || left > containerWidth + 8) {
+        lineContainer.style.display = 'none'
+      } else {
+        lineContainer.style.display = 'block'
+      }
+    }
+  })
+  flameGraphContainer.addEventListener('mouseleave', (e) => {
+    const lineContainer = document.querySelector('#time-bar-indicator')
+    lineContainer.style.display = 'none'
+  })
 }
 
 function modifySpansForFlameGraph(data) {
@@ -452,7 +480,7 @@ function buildHierachy(spans) {
 }
 
 function generateTimeIntervals(duration, target) {
-  const container = document.querySelector('#time-container-' + target)
+  const container = document.querySelector('#time-container')
   container.innerHTML = ''
   const containerWidth = container.offsetWidth - SCROLL_BAR_WIDTH
   const intervalWidth = containerWidth / 9
