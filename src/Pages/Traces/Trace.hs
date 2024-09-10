@@ -136,6 +136,13 @@ tracePage p = do
               div_ [class_ "border w-full rounded-lg min-h-[230px] max-h-[330px] overflow-auto overflow-x-hidden "] do
                 renderSpanListTable serviceNames serviceColors p.spanRecords
 
+            input_ [type_ "radio", name_ "my_tabs_2", role_ "tab", class_ "tab after:pb-2", term "aria-label" "Water Fall"]
+            div_ [role_ "tabpanel", class_ "tab-content pt-2"] do
+              div_ [class_ "border w-full rounded-lg min-h-[230px] max-h-[330px] overflow-auto overflow-x-hidden "] do
+                div_ [class_ "w-full sticky top-0 border-b border-b-gray-300 h-6 text-xs relative", id_ $ "w-time-container-a" <> traceItem.traceId] pass
+                div_ [class_ "w-full  overflow-x-hidden h-48 c-scroll relative", id_ $ "w" <> traceItem.traceId] do
+                  "Cooking..."
+
       div_ [class_ "h-auto overflow-y-auto mt-5 py-2 rounded-lg border"] do
         div_ [class_ "flex flex-col gap-4 px-4", id_ $ "span-" <> traceItem.traceId] do
           let tSp = fromMaybe (V.head p.spanRecords) (V.find (\s -> s.spanId == sId) p.spanRecords)
