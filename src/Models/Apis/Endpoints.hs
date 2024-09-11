@@ -22,6 +22,7 @@ module Models.Apis.Endpoints (
   getProjectHosts,
   insertEndpoints,
   countEndpointInbox,
+  getEndpointsByAnomalyTargetHash,
 )
 where
 
@@ -126,6 +127,7 @@ data EndpointRequestStats = EndpointRequestStats
   , projectId :: Projects.ProjectId
   , urlPath :: Text
   , method :: Text
+  , host :: Text
   , min :: Double
   , p50 :: Double
   , p75 :: Double
@@ -151,7 +153,7 @@ data EndpointRequestStats = EndpointRequestStats
 -- FIXME: Include and return a boolean flag to show if fields that have annomalies.
 -- FIXME: return endpoint_hash as well.
 endpointRequestStatsByProject :: Projects.ProjectId -> Bool -> Bool -> Maybe Text -> Maybe Text -> Maybe Text -> Int -> Text -> PgT.DBT IO (V.Vector EndpointRequestStats)
-endpointRequestStatsByProject pid ackd archived pHostM sortM searchM page requestType = query Select (Query $ encodeUtf8 q) queryParams
+endpointRequestStatsByProject pid ackd archived pHostM sortM searchM page requestType = query Select (Query $ encodeUtf8 $ q) queryParams
   where
     -- Construct the list of parameters conditionally
     pHostParams = maybe [] (\h -> [toField h]) pHostM
@@ -167,7 +169,7 @@ endpointRequestStatsByProject pid ackd archived pHostM sortM searchM page reques
     -- TODO This query to get the anomalies for the anomalies page might be too complex.
     -- Does it make sense yet to remove the call to endpoint_request_stats? since we're using async charts already
     q =
-      [text| SELECT enp.id endpoint_id, enp.hash endpoint_hash, enp.project_id, enp.url_path, enp.method, coalesce(min,0),  coalesce(p50,0),  coalesce(p75,0),  coalesce(p90,0),  coalesce(p95,0),  coalesce(p99,0),  coalesce(max,0) ,
+      [text| SELECT enp.id endpoint_id, enp.hash endpoint_hash, enp.project_id, enp.url_path, enp.method, enp.host, coalesce(min,0),  coalesce(p50,0),  coalesce(p75,0),  coalesce(p90,0),  coalesce(p95,0),  coalesce(p99,0),  coalesce(max,0) ,
          coalesce(total_time,0), coalesce(total_time_proj,0), coalesce(ers.total_requests,0), coalesce(total_requests_proj,0),
          (SELECT count(*) from apis.issues
                  where project_id=enp.project_id AND acknowleged_at is null AND archived_at is null AND anomaly_type != 'field'
@@ -180,8 +182,8 @@ endpointRequestStatsByProject pid ackd archived pHostM sortM searchM page reques
         ann.id
      from apis.endpoints enp
      left join apis.endpoint_request_stats ers on (enp.id=ers.endpoint_id)
-     left join apis.anomalies ann on (ann.anomaly_type='endpoint' AND ann.target_hash=enp.hash)
-     where enp.project_id=? and enp.outgoing=? and ann.id is not null $ackdAt $archivedAt $pHostQuery $search
+     left join apis.issues ann on (ann.anomaly_type='endpoint' AND ann.target_hash=enp.hash)
+     where enp.project_id=? and enp.outgoing=? $ackdAt $archivedAt $pHostQuery $search
      order by $orderBy , url_path ASC
      offset ? limit 30;
      ;
@@ -193,7 +195,7 @@ dependencyEndpointsRequestStatsByProject pid host ack arch sortM searchM page = 
   where
     q =
       [text|
-      SELECT enp.id endpoint_id, enp.hash endpoint_hash, enp.project_id, enp.url_path, enp.method, coalesce(min,0),  coalesce(p50,0),  coalesce(p75,0),  coalesce(p90,0), coalesce(p95,0),  coalesce(p99,0),  coalesce(max,0) ,
+      SELECT enp.id endpoint_id, enp.hash endpoint_hash, enp.project_id, enp.url_path, enp.method, enp.host, coalesce(min,0),  coalesce(p50,0),  coalesce(p75,0),  coalesce(p90,0), coalesce(p95,0),  coalesce(p99,0),  coalesce(max,0) ,
          coalesce(total_time,0), coalesce(total_time_proj,0), coalesce(total_requests,0), coalesce(total_requests_proj,0),
          (SELECT count(*) from apis.issues
                  where project_id=enp.project_id AND acknowleged_at is null AND archived_at is null AND anomaly_type != 'field'
@@ -218,8 +220,9 @@ endpointRequestStatsByEndpoint :: EndpointId -> PgT.DBT IO (Maybe EndpointReques
 endpointRequestStatsByEndpoint eid = queryOne Select q (eid, eid)
   where
     q =
-      [sql| SELECT endpoint_id, endpoint_hash, project_id, url_path, method, min, p50, p75, p90, p95, p99, max,
-                   total_time, total_time_proj, total_requests, total_requests_proj,
+      [sql| SELECT endpoint_id, endpoint_hash, project_id, url_path, method, host, coalesce(min, 0), coalesce(p50, 0), coalesce(p75, 0), coalesce(p90, 0), coalesce(p95, 0), coalesce(p99, 0), coalesce
+      (max, 0),
+                   coalesce(total_time, 0), coalesce(total_time_proj,0), coalesce(total_requests,0), coalesce(total_requests_proj,0),
                    (SELECT count(*) from apis.anomalies
                            where endpoint_id=? AND acknowleged_at is null AND archived_at is null AND anomaly_type != 'field'
                    ) ongoing_anomalies,
@@ -240,6 +243,13 @@ endpointByHash :: Projects.ProjectId -> Text -> PgT.DBT IO (Maybe Endpoint)
 endpointByHash pid hash = queryOne Select q (pid, hash)
   where
     q = [sql| SELECT id, created_at, updated_at, project_id, url_path, url_params, method, host, hash, outgoing, description from apis.endpoints where project_id=? AND hash=? |]
+
+
+getEndpointsByAnomalyTargetHash :: Projects.ProjectId -> V.Vector Text -> PgT.DBT IO (V.Vector Host)
+getEndpointsByAnomalyTargetHash pid hashes = query Select q (pid, prefixHashes)
+  where
+    q = [sql|select distinct host from apis.endpoints where project_id=? AND hash LIKE ANY(?)|]
+    prefixHashes = (<> "%") <$> hashes
 
 
 data SwEndpoint = SwEndpoint
@@ -266,8 +276,8 @@ data HostEvents = HostEvents
   deriving anyclass (ToRow, FromRow, NFData)
 
 
-endpointsByProjectId :: Projects.ProjectId -> PgT.DBT IO (V.Vector SwEndpoint)
-endpointsByProjectId pid = query Select q (Only pid)
+endpointsByProjectId :: Projects.ProjectId -> Text -> PgT.DBT IO (V.Vector SwEndpoint)
+endpointsByProjectId pid host = query Select q (pid, host)
   where
     q =
       [sql|
@@ -275,7 +285,9 @@ endpointsByProjectId pid = query Select q (Only pid)
          FROM apis.endpoints enp
          INNER JOIN
          apis.anomalies ann ON (ann.anomaly_type = 'endpoint' AND ann.target_hash = enp.hash)
-         WHERE enp.project_id = ? AND ann.acknowleged_at IS NOT NULL
+         WHERE enp.project_id = ?
+           AND enp.host = ?
+           AND ann.acknowleged_at IS NOT NULL
        |]
 
 
@@ -348,23 +360,25 @@ WHERE ep.project_id = ?
       |]
 
 
-countEndpointInbox :: Projects.ProjectId -> Text -> DBT IO Int
-countEndpointInbox pid host = do
+countEndpointInbox :: Projects.ProjectId -> Text -> Text -> DBT IO Int
+countEndpointInbox pid host requestType = do
   result <- query Select (Query $ encodeUtf8 q) (pid, host)
   case result of
     [Only count] -> return count
     v -> return $ length v
   where
+    showCountBaseOnRequestType = case requestType of
+      "Outgoing" -> "enp.outgoing = true"
+      "Incoming" -> "enp.outgoing = false"
+      _ -> "ep.outgoing =  false"
     q =
       [text|
         SELECT COUNT(*)
-        FROM
-            apis.endpoints enp
-        LEFT JOIN
-            apis.anomalies ann ON (ann.anomaly_type = 'endpoint' AND ann.target_hash = enp.hash)
+        FROM apis.endpoints enp
+        LEFT JOIN apis.issues ann ON (ann.anomaly_type = 'endpoint' AND ann.target_hash = enp.hash)
         WHERE
             enp.project_id = ?
-            AND enp.outgoing = false
+            AND $showCountBaseOnRequestType
             AND ann.id IS NOT NULL
             AND ann.acknowleged_at IS NULL
             AND host = ?

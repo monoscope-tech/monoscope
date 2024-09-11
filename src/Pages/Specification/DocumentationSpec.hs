@@ -28,7 +28,7 @@ spec = aroundAll withTestResources do
 
     it "should get swagger" \TestResources{..} -> do
       (PageCtx _ (Documentation.DocumentationGet pid swaggers swaggerID jsonString)) <-
-        toServantResponse trATCtx trSessAndHeader trLogger $ Documentation.documentationGetH testPid Nothing
+        toServantResponse trATCtx trSessAndHeader trLogger $ Documentation.documentationGetH testPid Nothing Nothing
       let jsonVal = decodeStrict (encodeUtf8 jsonString)
       let swagVal = decodeStrict (encodeUtf8 swg1)
       swagVal `shouldBe` jsonVal

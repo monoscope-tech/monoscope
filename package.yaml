@@ -13,7 +13,6 @@ ghc-options:
   - -fwrite-ide-info
   # - "-fwrite-ide-info"
   - "-hiedir=.hie"
-  - "-O3" 
   - -threaded
   - -Weverything
   - -Werror # Treat warnings as errors
@@ -181,6 +180,7 @@ library:
     - grpc-haskell
     - proto3-suite
     - proto3-wire
+    - template-haskell
 
 executables:
   apitoolkit-server-exe:

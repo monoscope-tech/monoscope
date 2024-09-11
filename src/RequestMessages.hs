@@ -17,7 +17,6 @@ import Data.Aeson.Key qualified as AEKey
 import Data.Aeson.KeyMap qualified as AEK
 import Data.Aeson.Types qualified as AET
 import Data.ByteString.Base64 qualified as B64
-import Data.Digest.XXHash (xxHash)
 import Data.HashMap.Strict qualified as HM
 import Data.HashTable.Class qualified as HTC
 import Data.HashTable.ST.Cuckoo qualified as HT
@@ -44,7 +43,6 @@ import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Apis.Shapes qualified as Shapes
 import Models.Projects.Projects qualified as Projects
 import NeatInterpolation (text)
-import Numeric (showHex)
 import Relude
 import Relude.Unsafe as Unsafe (read)
 import Text.Regex.TDFA ((=~))
@@ -140,7 +138,8 @@ processErrors pid sdkType method urlPath err = (normalizedError, q, params)
     (q, params) = Anomalies.insertErrorQueryAndParams pid normalizedError
     normalizedError =
       err
-        { RequestDumps.hash = Just $ fromMaybe (toXXHash (pid.toText <> err.errorType <> err.message <> show sdkType)) err.hash
+        { RequestDumps.projectId = Just pid
+        , RequestDumps.hash = Just $ fromMaybe (toXXHash (pid.toText <> err.errorType <> err.message <> show sdkType)) err.hash
         , RequestDumps.technology = Just sdkType
         , RequestDumps.requestMethod = Just method
         , RequestDumps.requestPath = Just urlPath
@@ -237,8 +236,8 @@ requestMsgToDumpAndEndpoint pjc rM now dumpIDOriginal = do
             -- A shape is a deterministic representation of a request-response combination for a given endpoint.
             -- We usually expect multiple shapes per endpoint. Eg a shape for a success request-response and another for an error response.
             -- Shapes are dependent on the endpoint, statusCode and the unique fields in that shape.
-            Just $
-              Shapes.Shape
+            Just
+              $ Shapes.Shape
                 { id = Shapes.ShapeId dumpID
                 , createdAt = timestampUTC
                 , updatedAt = now

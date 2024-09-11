@@ -1,18 +1,13 @@
-module Pages.LogExplorer.LogItem (expandAPIlogItemH, expandAPIlogItem', apiLogItemH, ApiLogItem (..), jsonValueToHtmlTree, ApiItemDetailed (..)) where
+module Pages.LogExplorer.LogItem (expandAPIlogItemH, expandAPIlogItem', apiLogItemH, ApiLogItem (..), ApiItemDetailed (..)) where
 
 import Data.Aeson ((.=))
 import Data.Aeson qualified as AE
-import Data.Aeson.KeyMap qualified as AEK
 import Data.Aeson.KeyMap qualified as KEM
 import Data.ByteString.Lazy qualified as BS
-import Data.Char (isDigit)
-import Data.HashMap.Strict qualified as HM
-import Data.Text qualified as T
 import Data.Time (UTCTime)
 import Data.Time.Format (defaultTimeLocale, formatTime)
 import Data.Time.Format.ISO8601 (ISO8601 (iso8601Format), formatShow)
 import Data.UUID qualified as UUID
-import Data.Vector (iforM_)
 import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
 import Lucid
 import Lucid.Aria qualified as Aria
@@ -22,13 +17,13 @@ import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Telemetry qualified as Telemetry
 import Models.Users.Sessions qualified as Sessions
+import NeatInterpolation (text)
 import Network.URI (escapeURIString, isUnescapedInURI)
-import Pages.Components qualified as Components
 import Pages.Traces.Spans qualified as Spans
 import PyF (fmt)
 import Relude
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
-import Utils (faSprite_, getMethodColor, getStatusColor, unwrapJsonPrimValue)
+import Utils (faSprite_, getMethodColor, getStatusColor, jsonValueToHtmlTree)
 import Witch (from)
 
 
@@ -52,7 +47,7 @@ expandAPIlogItemH pid rdId createdAt sourceM = do
 expandAPIlogItem' :: Projects.ProjectId -> RequestDumps.RequestDumpLogItem -> Bool -> Html ()
 expandAPIlogItem' pid req modal = do
   div_ [class_ "flex flex-col w-full gap-4 pb-[100px]"] do
-    div_ [class_ "w-full flex flex-col gap-2 gap-4"] do
+    div_ [class_ "w-full flex flex-col gap-4"] do
       let methodColor = getMethodColor req.method
       let statusColor = getStatusColor req.statusCode
       div_ [class_ "flex gap-4 items-center"] do
@@ -224,6 +219,8 @@ data ApiItemDetailed
   = LogItemExpanded Projects.ProjectId RequestDumps.RequestDumpLogItem Bool
   | SpanItemExpanded Projects.ProjectId Telemetry.SpanRecord
   | ItemDetailedNotFound Text
+
+
 instance ToHtml ApiItemDetailed where
   toHtml (LogItemExpanded pid log_item is_modal) = toHtml $ expandAPIlogItem' pid log_item is_modal
   toHtml (SpanItemExpanded pid span_item) = toHtml $ Spans.expandedSpanItem pid span_item
@@ -233,12 +230,38 @@ instance ToHtml ApiItemDetailed where
 
 apiLogItemView :: Projects.ProjectId -> UUID.UUID -> AE.Value -> Text -> Text -> Html ()
 apiLogItemView pid logId req expandItemPath source = do
+  let logItemPathDetailed = expandItemPath <> "/detailed?source=" <> source
   div_ [class_ "flex items-center gap-2"] do
-    when (source /= "logs")
-      $ Components.drawerWithURLContent_
-        ("expand-log-drawer-" <> UUID.toText logId)
-        (expandItemPath <> "/detailed?source=" <> source)
-      $ span_ [class_ "btn btn-sm btn-outline"] ("Expand" >> faSprite_ "expand" "regular" "h-3 w-3")
+    when (source == "requests")
+      $ label_
+        [ class_ "btn btn-sm btn-outline"
+        , Lucid.for_ "global-data-drawer"
+        , term "_"
+            $ [text|on mousedown or click fetch $logItemPathDetailed
+                  then set #global-data-drawer-content.innerHTML to #loader-tmp.innerHTML
+                  then set #global-data-drawer.checked to true
+                  then set #global-data-drawer-content.innerHTML to it
+                  then htmx.process(#global-data-drawer-content) then _hyperscript.processNode(#global-data-drawer-content) then window.evalScriptsFromContent(#global-data-drawer-content)|]
+        ]
+        ("Expand" >> faSprite_ "expand" "regular" "h-3 w-3")
+    let trId = case req of
+          AE.Object o -> case KEM.lookup "trace_id" o of
+            Just (AE.String trid) -> Just trid
+            _ -> Nothing
+          _ -> Nothing
+    when (source == "spans" && isJust trId) do
+      let tracePathDetailed = "/p/" <> pid.toText <> "/traces/" <> fromMaybe "" trId
+      label_
+        [ class_ "btn btn-sm btn-outline"
+        , Lucid.for_ "global-data-drawer"
+        , term "_"
+            $ [text|on mousedown or click fetch $tracePathDetailed
+                  then set #global-data-drawer-content.innerHTML to #loader-tmp.innerHTML
+                  then set #global-data-drawer-content.innerHTML to it
+                  then htmx.process(#global-data-drawer-content) then _hyperscript.processNode(#global-data-drawer-content) then window.evalScriptsFromContent(#global-data-drawer-content)|]
+        ]
+        "Expand"
+
     let reqJson = decodeUtf8 $ AE.encode req
     when (source == "requests")
       $ button_
@@ -247,18 +270,10 @@ apiLogItemView pid logId req expandItemPath source = do
         , onclick_ "window.buildCurlRequest(event)"
         ]
         (span_ [] "Copy as curl" >> faSprite_ "copy" "regular" "h-3 w-3")
-    let trId = case req of
-          AE.Object o -> case KEM.lookup "trace_id" o of
-            Just (AE.String trid) -> Just trid
-            _ -> Nothing
-          _ -> Nothing
-    when (source == "spans" && isJust trId)
-      $ Components.drawerWithURLContent_ ("expand-log-drawer-trace-" <> UUID.toText logId) ("/p/" <> pid.toText <> "/traces/" <> fromMaybe "" trId)
-      $ span_ [class_ "btn btn-sm btn-outline"] "View Trace"
 
     button_
       [ class_ "btn btn-sm btn-outline"
-      , onclick_ "downloadJson(event)"
+      , onclick_ "window.downloadJson(event)"
       , term "data-reqJson" reqJson
       ]
       (span_ [] "Download" >> faSprite_ "arrow-down-to-line" "regular" "h-3 w-3")
@@ -293,56 +308,4 @@ selectiveReqToJson req =
       ]
 
 
--- >>> replaceNumbers "response_body.0.completed"
--- "response_body[*].completed"
---
-replaceNumbers :: Text -> Text
-replaceNumbers input = T.replace ".[*]" "[*]" $ T.intercalate "." (map replaceDigitPart parts)
-  where
-    parts = T.splitOn "." input
-    replaceDigitPart :: Text -> Text
-    replaceDigitPart part
-      | T.all isDigit part = "[*]"
-      | otherwise = T.concatMap replaceDigitWithAsterisk part
-
-    replaceDigitWithAsterisk :: Char -> Text
-    replaceDigitWithAsterisk ch
-      | isDigit ch = "[*]"
-      | otherwise = one ch
-
-
 -- | jsonValueToHtmlTree takes an aeson json object and renders it as a collapsible html tree, with hyperscript for interactivity.
-jsonValueToHtmlTree :: AE.Value -> Html ()
-jsonValueToHtmlTree val = jsonValueToHtmlTree' ("", "", val)
-  where
-    jsonValueToHtmlTree' :: (Text, Text, AE.Value) -> Html ()
-    jsonValueToHtmlTree' (path, key, AE.Object v) = renderParentType "{" "}" key (length v) (AEK.toHashMapText v & HM.toList & sort & mapM_ (\(kk, vv) -> jsonValueToHtmlTree' (path <> "." <> key, kk, vv)))
-    jsonValueToHtmlTree' (path, key, AE.Array v) = renderParentType "[" "]" key (length v) (iforM_ v \i item -> jsonValueToHtmlTree' (path <> "." <> key, show i, item))
-    jsonValueToHtmlTree' (path, key, value) = do
-      let fullFieldPath = if T.isSuffixOf "[*]" path then path else path <> "." <> key
-      let fullFieldPath' = fromMaybe fullFieldPath $ T.stripPrefix ".." fullFieldPath
-      div_
-        [ class_ "relative log-item-field-parent"
-        , term "data-field-path" $ replaceNumbers fullFieldPath'
-        , term "data-field-value" $ unwrapJsonPrimValue value
-        ]
-        $ a_
-          [class_ "block hover:bg-blue-50 cursor-pointer pl-6 relative log-item-field-anchor ", [__|install LogItemMenuable|]]
-          do
-            span_ $ toHtml key
-            span_ [class_ "text-blue-800"] ":"
-            span_ [class_ "text-blue-800 ml-2.5 log-item-field-value", term "data-field-path" fullFieldPath'] $ toHtml $ unwrapJsonPrimValue value
-
-    renderParentType :: Text -> Text -> Text -> Int -> Html () -> Html ()
-    renderParentType opening closing key count child = div_ [class_ (if key == "" then "" else "collapsed")] do
-      a_
-        [ class_ "inline-block cursor-pointer"
-        , onclick_ "this.parentNode.classList.toggle('collapsed')"
-        ]
-        do
-          span_ [class_ "log-item-tree-chevron "] "▾"
-          span_ [] $ toHtml $ if key == "" then opening else key <> ": " <> opening
-      div_ [class_ "pl-5 children "] do
-        span_ [class_ "tree-children-count"] $ show count
-        div_ [class_ "tree-children"] child
-      span_ [class_ "pl-5 closing-token"] $ toHtml closing

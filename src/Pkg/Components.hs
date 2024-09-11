@@ -40,11 +40,11 @@ navBar = do
       a_ [href_ "https://apitoolkit.io", class_ "flex items-center text-gray-500 hover:text-gray-700"] do
         img_
           [ class_ "h-12 sd-hidden"
-          , src_ "/assets/svgs/logo.svg"
+          , src_ "/public/assets/svgs/logo.svg"
           ]
         img_
           [ class_ "h-12 w-10 hidden sd-show"
-          , src_ "/assets/svgs/logo_mini.svg"
+          , src_ "/public/assets/svgs/logo_mini.svg"
           ]
 
 
@@ -186,5 +186,4 @@ timepicker_ submitForm currentRange = div_ [class_ "relative"] do
               ]
               $ toHtml title
       a_ [class_ "block text-gray-900 relative cursor-pointer select-none py-2 pl-3 pr-9 hover:bg-gray-200 ", [__| on click toggle .hidden on #timepickerSidebar |]] "Custom date range"
-    div_ [class_ "inline-block relative hidden", id_ "timepickerSidebar"] do
-      div_ [id_ "startTime", class_ "hidden"] ""
+    div_ [class_ "inline-block relative hidden", id_ "timepickerSidebar"] $ div_ [id_ "startTime", class_ "hidden"] ""
