@@ -85,6 +85,7 @@ endpointListGetH pid pageM layoutM filterTM hostM requestTypeM sortM hxRequestM 
               { projectId = pid
               , nextFetchUrl = Just nextFetchUrl
               , sort = Just $ ItemsList.SortCfg{current = fromMaybe "events" sortM}
+              , filter = Nothing
               , bulkActions =
                   [ ItemsList.BulkAction{icon = Just "check", title = "acknowlege", uri = "/p/" <> pid.toText <> "/anomalies/bulk_actions/acknowlege"}
                   , ItemsList.BulkAction{icon = Just "inbox-full", title = "archive", uri = "/p/" <> pid.toText <> "/anomalies/bulk_actions/archive"}

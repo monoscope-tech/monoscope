@@ -183,6 +183,7 @@ anomalyListGetH pid layoutM filterTM sortM pageM loadM endpointM hxRequestM hxBo
           { projectId = pid
           , nextFetchUrl
           , sort = Just $ ItemsList.SortCfg{current = fromMaybe "events" sortM}
+          , filter = Nothing
           , search = Just $ ItemsList.SearchCfg{viaQueryParam = Nothing} -- FIXME: search actual db
           , heading = Nothing
           , bulkActions =
