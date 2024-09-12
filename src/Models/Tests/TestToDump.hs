@@ -103,6 +103,8 @@ runTestAndLog pid colId collectionSteps = do
       msg_id <- liftIO UUIDV4.nextRandom
       let response = AE.toJSON stepResults
       _ <- dbtToEff $ Testing.updateCollectionLastRun colId (Just response) passed failed
+      let isPassed = failed == 0
+      let logMsg = if isPassed then "PASSED:  multistep API test succeeded" else "FAILED:  multistep API test failed"
       let log =
             LogRecord
               {  projectId = pid.unProjectId
@@ -110,15 +112,20 @@ runTestAndLog pid colId collectionSteps = do
                 , timestamp = currentTime
                 , observedTimestamp = currentTime
                 , traceId = ""
-                , spanId = Just ""
-                , severityText = Just SLInfo
-                , severityNumber = 1
-                , body = "TEST_RUN"
+                , spanId = Nothing
+                , severityText = if isPassed then Just SLInfo else  Just  SLError 
+                , severityNumber = if isPassed then 1 else 9
+                , body = logMsg
                 , attributes = AE.object []
-                , resource = AE.object []
-                , instrumentationScope = AE.object []
+                , resource = AE.object
+                     [ 
+                       "service.name" AE..= ("system.monitors" :: Text)
+                      , "service.namespace" AE..= ("apitoolkit" :: Text)
+                        ]
+                , instrumentationScope = AE.object ["name" AE..= ("system.monitors" :: Text)]
               }
       let requestMessages = V.toList (stepResults <&> \sR -> ("", testRunToRequestMsg pid currentTime msg_id sR))
       _ <- ProcessMessage.processRequestMessages $ requestMessages
       _ <- bulkInsertLogs [log]
       pure $ Right stepResults
+
