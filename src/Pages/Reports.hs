@@ -81,8 +81,6 @@ import System.Types (ATAuthCtx, RespHeaders, addRespHeaders, addSuccessToast)
 import Text.Printf (printf)
 
 
--- import Debug.Trace (traceShow)
-
 data PerformanceReport = PerformanceReport
   { urlPath :: Text
   , method :: Text
@@ -291,30 +289,6 @@ reportsPage pid reports nextUrl daily weekly =
   div_ [class_ "mx-auto w-full flex flex-col px-16 pt-10 pb-24  overflow-y-scroll h-full"] do
     h3_ [class_ "text-xl text-slate-700 flex place-items-center font-bold pb-4 border-b"] "Reports History"
     div_ [class_ "mt-4 grid grid-cols-12 gap-4"] do
-      --   div_ [class_ "flex flex-col col-span-2 border h-max rounded-lg overflow-hidden mt-16"] do
-      --     h5_ [class_ "text-lg font-semibold text-slate-700 pb-1 bg-gray-200 p-2"] "Email notifications"
-      --     div_ [class_ "p-2 flex items-center justify-between w-full hover:bg-gray-100"] do
-      --       label_ [class_ "inline-flex items-center w-full", Lucid.for_ "e-daily"] "Daily reports"
-      --       input_
-      --         [ type_ "checkbox"
-      --         , id_ "e-daily"
-      --         , name_ "daily-reports"
-      --         , if daily then checked_ else value_ "off"
-      --         , hxPost_ $ "/p/" <> show pid.unProjectId <> "/reports_notif/daily"
-      --         , hxTrigger_ "change"
-      --         , class_ "checkbox checkbox-success checkbox-sm"
-      --         ]
-      --     div_ [class_ "p-2 flex items-center justify-between w-full hover:bg-gray-100"] do
-      --       label_ [class_ "inline-flex items-center w-full", Lucid.for_ "e-weekly"] "Weekly reports"
-      --       input_
-      --         [ type_ "checkbox"
-      --         , id_ "e-weekly"
-      --         , name_ "weekly-reports"
-      --         , if weekly then checked_ else value_ "off"
-      --         , hxPost_ $ "/p/" <> show pid.unProjectId <> "/reports_notif/weekly"
-      --         , hxTrigger_ "change"
-      --         , class_ "checkbox checkbox-success checkbox-sm"
-      --         ]
       div_ [class_ "col-span-8"] do
         reportListItems pid reports nextUrl
 
@@ -323,10 +297,6 @@ reportListItems :: Projects.ProjectId -> Vector Reports.ReportListItem -> Text -
 reportListItems pid reports nextUrl =
   div_ [class_ "space-y-4"] do
     forM_ reports $ \report -> do
-      -- Renders Conditionally...
-      -- Only if reportType matches a condition
-      -- putStrLn report.reportType
-
       when (report.reportType == "weekly") $ do
         div_ [class_ "mx-auto rounded-lg border max-w-[1000px]"] do
           a_ [class_ "bg-gray-100 px-4 py-3 flex justify-between", href_ $ "/p/" <> show pid.unProjectId <> "/reports/" <> show report.id.reportId] do

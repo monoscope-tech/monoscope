@@ -6,16 +6,16 @@ import Data.Vector qualified as V
 import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
 import Effectful.Time qualified as Time
 import Lucid
-import Lucid.Htmx (hxGet_, hxSwap_, hxTrigger_) 
+import Lucid.Htmx (hxGet_, hxSwap_, hxTrigger_)
 import Models.Apis.Endpoints qualified as Endpoints
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
 import Pages.Anomalies.AnomalyList qualified as AnomalyList
 import Pages.BodyWrapper (BWConfig (currProject, pageTitle, sessM), PageCtx (..), navTabs)
-import Pkg.Components.ItemsList qualified as ItemsList 
-import PyF qualified 
-import Relude hiding (ask, asks) 
-import System.Types (ATAuthCtx, RespHeaders, addRespHeaders) 
+import Pkg.Components.ItemsList qualified as ItemsList
+import PyF qualified
+import Relude hiding (ask, asks)
+import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
 
 
 apiCatalogH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders (PageCtx (ItemsList.ItemsPage HostEventsVM)))
@@ -41,15 +41,13 @@ apiCatalogH pid sortM timeFilter requestTypeM = do
           , currentURL = currentURL
           , currTime
           , bulkActions =
-              [ 
-                ItemsList.BulkAction{icon = Just "check", title = "acknowledge", uri = "/p/" <> pid.toText <> "/anomalies/bulk_actions/acknowledge"}
+              [ ItemsList.BulkAction{icon = Just "check", title = "acknowledge", uri = "/p/" <> pid.toText <> "/anomalies/bulk_actions/acknowledge"}
               , ItemsList.BulkAction{icon = Just "inbox-full", title = "archive", uri = "/p/" <> pid.toText <> "/anomalies/bulk_actions/archive"}
               ]
           , search = Just $ ItemsList.SearchCfg{viaQueryParam = Nothing}
           , nextFetchUrl = Nothing
           , heading = Nothing
-          , zeroState 
-            =
+          , zeroState =
               Just
                 $ ItemsList.ZeroState
                   { icon = "empty-set"
@@ -63,7 +61,7 @@ apiCatalogH pid sortM timeFilter requestTypeM = do
 
   let bwconf =
         def
-          { sessM = Just sess.persistentSession 
+          { sessM = Just sess.persistentSession
           , currProject = Just project
           , pageTitle = "API Catalog"
           , navTabs = Just $ div_ [class_ "tabs tabs-boxed border"] do
@@ -79,9 +77,9 @@ data HostEventsVM = HostEventsVM Projects.ProjectId Endpoints.HostEvents Text Te
 
 instance ToHtml HostEventsVM where
   toHtml :: Monad m => HostEventsVM -> HtmlT m ()
-  toHtml (HostEventsVM pid he timeFilter requestType) = toHtmlRaw $ renderapiCatalog pid he timeFilter requestType 
+  toHtml (HostEventsVM pid he timeFilter requestType) = toHtmlRaw $ renderapiCatalog pid he timeFilter requestType
   toHtmlRaw :: Monad m => HostEventsVM -> HtmlT m ()
-  toHtmlRaw = toHtml 
+  toHtmlRaw = toHtml
 
 
 renderapiCatalog :: Projects.ProjectId -> Endpoints.HostEvents -> Text -> Text -> Html ()
@@ -100,8 +98,7 @@ renderapiCatalog pid host timeFilter requestType = div_ [class_ "flex py-4 gap-8
     div_
       [ class_ "w-56 h-12 px-3"
       , hxGet_ $ "/charts_html?pid=" <> pid.toText <> "&since=" <> (if timeFilter == "14d" then "14D" else "24h") <> "&query_raw=" <> AnomalyList.escapedQueryPartial [PyF.fmt|host=="{host.host}" | timechart [1d]|]
-      , 
-        hxTrigger_ "intersect once"
+      , hxTrigger_ "intersect once"
       , hxSwap_ "innerHTML"
       ]
       ""

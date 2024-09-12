@@ -38,22 +38,20 @@ data ItemsListCfg = ItemsListCfg
   }
 
 
-
 data SearchCfg = SearchCfg
-  {viaQueryParam :: Maybe Text} 
+  {viaQueryParam :: Maybe Text}
 
 
 data BulkAction = BulkAction
-  { icon :: Maybe Text 
-  , title :: Text 
-  , uri :: Text 
+  { icon :: Maybe Text
+  , title :: Text
+  , uri :: Text
   }
 
 
 data SortCfg = SortCfg
-  { current :: Text 
+  { current :: Text
   }
-
 
 
 data ZeroState = ZeroState
@@ -61,7 +59,7 @@ data ZeroState = ZeroState
   , title :: Text
   , description :: Text
   , actionText :: Text
-  , destination :: Either Text Text 
+  , destination :: Either Text Text
   }
 
 
