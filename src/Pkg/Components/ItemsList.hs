@@ -22,6 +22,7 @@ import Models.Projects.Projects qualified as Projects
 import Relude
 import Utils (deleteParam, faSprite_)
 
+
 data ItemsListCfg = ItemsListCfg
   { currentURL :: Text
   , sort :: Maybe SortCfg
@@ -36,14 +37,17 @@ data ItemsListCfg = ItemsListCfg
   , heading :: Maybe (Html ())
   }
 
+
 data SearchCfg = SearchCfg
   {viaQueryParam :: Maybe Text}
+
 
 data BulkAction = BulkAction
   { icon :: Maybe Text
   , title :: Text
   , uri :: Text
   }
+
 
 data SortCfg = SortCfg
   { current :: Text
@@ -55,19 +59,23 @@ data ZeroState = ZeroState
   , title :: Text
   , description :: Text
   , actionText :: Text
-  , destination :: Either Text Text 
+  , destination :: Either Text Text
   }
+
 
 type role ItemsPage representational
 data ItemsPage a = ItemsPage ItemsListCfg (V.Vector a)
+
 
 instance ToHtml a => ToHtml (ItemsPage a) where
   toHtml (ItemsPage cfg items) = toHtmlRaw $ itemsPage_ cfg items
   toHtmlRaw (ItemsPage cfg items) = toHtmlRaw $ itemsPage_ cfg items
 
+
 itemsPage_ :: ToHtml a => ItemsListCfg -> V.Vector a -> Html ()
 itemsPage_ listCfg items = div_ [class_ "w-full mx-auto px-6 pt-2 pb-16 overflow-y-scroll h-full space-y-6", id_ "itemsListPage"] $ do
   itemsList_ listCfg items
+
 
 itemsList_ :: ToHtml a => ItemsListCfg -> V.Vector a -> Html ()
 itemsList_ listCfg items =
@@ -157,9 +165,9 @@ itemsList_ listCfg items =
         div_ [class_ "flex justify-center font-base w-60 content-between gap-14"] do
           span_ "GRAPH"
           div_ [class_ "space-x-2 font-base text-sm"] do
-            let selectedFilter = fromMaybe "14d" listCfg.filter  -- Default to "14d" if Nothing
-            a_ [ class_ $ "cursor-pointer " <> (if selectedFilter == "24h" then "text-base font-bold" else "")  , href_ $ currentURL' <> "&since=24h"] "24h"
-            a_ [ class_ $ "cursor-pointer " <> (if selectedFilter == "14d" then "text-base font-bold" else ""), href_ $ currentURL' <> "&since=14d"] "14d"
+            let selectedFilter = fromMaybe "14d" listCfg.filter -- Default to "14d" if Nothing
+            a_ [class_ $ "cursor-pointer " <> (if selectedFilter == "24h" then "text-base font-bold" else ""), href_ $ currentURL' <> "&since=24h"] "24h"
+            a_ [class_ $ "cursor-pointer " <> (if selectedFilter == "14d" then "text-base font-bold" else ""), href_ $ currentURL' <> "&since=14d"] "14d"
         div_ [class_ "w-36 flex items-center justify-center"] $ span_ [class_ "font-base"] "EVENTS"
         div_
           [ class_ "p-12 fixed rounded-lg shadow bg-base-100 top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 htmx-indicator loading loading-dots loading-md"
@@ -180,12 +188,15 @@ itemsList_ listCfg items =
         span_ [id_ "searchIndicator", class_ "htmx-indicator loading loading-sm loading-dots mx-auto"] ""
         div_ [id_ "rowsContainer", class_ "divide-y"] $ itemRows_ listCfg.nextFetchUrl items
 
+
 type role ItemsRows representational
 data ItemsRows a = ItemsRows (Maybe Text) (V.Vector a) -- Text represents nextFetchUrl
+
 
 instance ToHtml a => ToHtml (ItemsRows a) where
   toHtml (ItemsRows nextFetchUrl items) = toHtmlRaw $ itemRows_ nextFetchUrl items
   toHtmlRaw (ItemsRows nextFetchUrl items) = toHtmlRaw $ itemRows_ nextFetchUrl items
+
 
 itemRows_ :: (Monad m, ToHtml a) => Maybe Text -> V.Vector a -> HtmlT m ()
 itemRows_ nextFetchUrl items = do

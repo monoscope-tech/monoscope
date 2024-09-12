@@ -80,6 +80,7 @@ import Relude
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders, addSuccessToast)
 import Text.Printf (printf)
 
+
 data PerformanceReport = PerformanceReport
   { urlPath :: Text
   , method :: Text

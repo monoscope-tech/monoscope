@@ -18,6 +18,7 @@ import PyF qualified
 import Relude hiding (ask, asks)
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
 
+
 apiCatalogH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders (PageCtx (ItemsList.ItemsPage HostEventsVM)))
 apiCatalogH pid sortM timeFilter requestTypeM = do
   (sess, project) <- Sessions.sessionAndProject pid
@@ -41,8 +42,7 @@ apiCatalogH pid sortM timeFilter requestTypeM = do
           , currentURL = currentURL
           , currTime
           , bulkActions =
-              [ 
-                ItemsList.BulkAction{icon = Just "check", title = "acknowledge", uri = "/p/" <> pid.toText <> "/anomalies/bulk_actions/acknowledge"}
+              [ ItemsList.BulkAction{icon = Just "check", title = "acknowledge", uri = "/p/" <> pid.toText <> "/anomalies/bulk_actions/acknowledge"}
               , ItemsList.BulkAction{icon = Just "inbox-full", title = "archive", uri = "/p/" <> pid.toText <> "/anomalies/bulk_actions/archive"}
               ]
           , search = Just $ ItemsList.SearchCfg{viaQueryParam = Nothing}
@@ -82,6 +82,7 @@ instance ToHtml HostEventsVM where
   toHtmlRaw :: Monad m => HostEventsVM -> HtmlT m ()
   toHtmlRaw = toHtml
 
+
 renderapiCatalog :: Projects.ProjectId -> Endpoints.HostEvents -> Text -> Text -> Html ()
 renderapiCatalog pid host timeFilter requestType = div_ [class_ "flex py-4 gap-8 items-center itemsListItem"] do
   div_ [class_ "h-4 flex space-x-3 w-8 "] do
@@ -103,5 +104,8 @@ renderapiCatalog pid host timeFilter requestType = div_ [class_ "flex py-4 gap-8
       ]
       ""
 
-  div_ [class_ "w-36 flex items-center justify-center"] $
-    span_ [class_ "tabular-nums text-xl", term "data-tippy-content" "Events for this Anomaly in the last 14 days"] $ toHtml @String $ fmt $ commaizeF host.eventCount
+  div_ [class_ "w-36 flex items-center justify-center"]
+    $ span_ [class_ "tabular-nums text-xl", term "data-tippy-content" "Events for this Anomaly in the last 14 days"]
+    $ toHtml @String
+    $ fmt
+    $ commaizeF host.eventCount
