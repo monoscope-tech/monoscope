@@ -150,8 +150,8 @@ itemsList_ listCfg items =
           span_ "GRAPH"
           div_ [class_ "space-x-2 font-base text-sm"] do
             let selectedFilter = fromMaybe "14d" listCfg.filter  -- Default to "14d" if Nothing
-            a_ [ class_ $ "cursor-pointer " <> (if selectedFilter == "24h" then "text-base font-bold text-blue-800" else "")  , href_ $ currentURL' <> "&since=24h"] "24h"
-            a_ [ class_ $ "cursor-pointer " <> (if selectedFilter == "14d" then "text-base font-bold text-blue-800" else ""), href_ $ currentURL' <> "&since=14d"] "14d"
+            a_ [ class_ $ "cursor-pointer " <> (if selectedFilter == "24h" then "text-base font-bold" else "")  , href_ $ currentURL' <> "&since=24h"] "24h"
+            a_ [ class_ $ "cursor-pointer " <> (if selectedFilter == "14d" then "text-base font-bold" else ""), href_ $ currentURL' <> "&since=14d"] "14d"
         div_ [class_ "w-36 flex items-center justify-center"] $ span_ [class_ "font-base"] "EVENTS"
         div_ [ class_ "p-12 fixed rounded-lg shadow bg-base-100 top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 htmx-indicator loading loading-dots loading-md"
              , id_ "sortLoader"

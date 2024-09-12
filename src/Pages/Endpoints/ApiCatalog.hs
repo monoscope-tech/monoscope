@@ -69,7 +69,7 @@ apiCatalogH pid sortM timeFilter requestTypeM = do
               a_ [href_ $ "/p/" <> pid.toText <> "/api_catalog?sort=" <> sortV <> "&request_type=Incoming", role_ "tab", class_ $ "tab " <> if requestType == "Incoming" then "tab-active" else ""] "Incoming"
               a_ [href_ $ "/p/" <> pid.toText <> "/api_catalog?sort=" <> sortV <> "&request_type=Outgoing", role_ "tab", class_ $ "tab " <> if requestType == "Outgoing" then "tab-active" else ""] "Outgoing"
           }
-  
+
   addRespHeaders $ PageCtx bwconf (ItemsList.ItemsPage listCfg $ V.map (\host -> HostEventsVM pid host filterV requestType) hostsAndEvents)
 
 
@@ -78,9 +78,9 @@ data HostEventsVM = HostEventsVM Projects.ProjectId Endpoints.HostEvents Text Te
 
 instance ToHtml HostEventsVM where
   toHtml :: Monad m => HostEventsVM -> HtmlT m ()
-  toHtml (HostEventsVM pid he timeFilter requestType) = toHtmlRaw $ renderapiCatalog pid he timeFilter requestType -- Convert HostEventsVM to HTML using renderapiCatalog function.
+  toHtml (HostEventsVM pid he timeFilter requestType) = toHtmlRaw $ renderapiCatalog pid he timeFilter requestType
   toHtmlRaw :: Monad m => HostEventsVM -> HtmlT m ()
-  toHtmlRaw = toHtml 
+  toHtmlRaw = toHtml
 
 renderapiCatalog :: Projects.ProjectId -> Endpoints.HostEvents -> Text -> Text -> Html ()
 renderapiCatalog pid host timeFilter requestType = div_ [class_ "flex py-4 gap-8 items-center itemsListItem"] do
@@ -97,7 +97,7 @@ renderapiCatalog pid host timeFilter requestType = div_ [class_ "flex py-4 gap-8
   div_ [class_ "flex items-center justify-center "] $ do
     div_ 
       [ class_ "w-56 h-12 px-3"
-      , hxGet_ $ "/charts_html?pid=" <> pid.toText <> "&since=" <> (if timeFilter == "14d" then "14D" else "24h") <> "&query_raw=" <> AnomalyList.escapedQueryPartial [PyF.fmt|host=="{host.host}" | timechart [1d]|] -- Fetch the chart for this host.
+      , hxGet_ $ "/charts_html?pid=" <> pid.toText <> "&since=" <> (if timeFilter == "14d" then "14D" else "24h") <> "&query_raw=" <> AnomalyList.escapedQueryPartial [PyF.fmt|host=="{host.host}" | timechart [1d]|]
       , hxTrigger_ "intersect once"
       , hxSwap_ "innerHTML"
       ]
