@@ -24,7 +24,7 @@ import PyF (fmt)
 import Relude
 import Safe qualified
 import Text.Megaparsec (choice, errorBundlePretty, parse, sepBy)
-import Text.Megaparsec.Char (char, space, space1, string)
+import Text.Megaparsec.Char (char, space, string)
 
 
 -- Example queries

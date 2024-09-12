@@ -38,12 +38,11 @@ import Models.Tests.Testing qualified as Testing
 import Models.Users.Sessions qualified as Sessions
 import NeatInterpolation (text)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
-import Pages.LogExplorer.LogItem (jsonValueToHtmlTree)
 import Pkg.Components.Modals qualified as Components
 import PyF (fmt)
 import Relude hiding (ask)
 import System.Types (ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders, addSuccessToast)
-import Utils (faSprite_, getStatusColor)
+import Utils (faSprite_, getStatusColor, jsonValueToHtmlTree)
 
 
 data CollectionStepUpdateForm = CollectionStepUpdateForm
@@ -259,8 +258,8 @@ collectionPage pid col col_rn respJson = do
                     span_ [class_ "loading loading-dots loading-lg"] ""
         jsonTreeAuxillaryCode
 
-    script_ [src_ "/assets/testeditor-utils.js"] ("" :: Text)
-    script_ [type_ "module", src_ "/assets/steps-editor.js"] ("" :: Text)
+    script_ [src_ "/public/assets/testeditor-utils.js"] ("" :: Text)
+    script_ [type_ "module", src_ "/public/assets/steps-editor.js"] ("" :: Text)
     script_
       [text|
 
@@ -406,4 +405,4 @@ editorExtraElements = do
     option_ [value_ "exists"] ""
     option_ [value_ "date"] ""
     option_ [value_ "notEmpty"] ""
-  script_ [src_ "/assets/js/thirdparty/jsyaml.min.js", crossorigin_ "true"] ("" :: Text)
+  script_ [src_ "/public/assets/js/thirdparty/jsyaml.min.js", crossorigin_ "true"] ("" :: Text)

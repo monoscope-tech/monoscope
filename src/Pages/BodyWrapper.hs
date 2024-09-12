@@ -10,6 +10,7 @@ import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
 import Models.Users.Users qualified as Users
 import NeatInterpolation (text)
+import Pages.HashAssets
 import Pkg.Components.ExternalHeadScripts (externalHeadScripts_)
 import PyF
 import Relude
@@ -24,7 +25,6 @@ menu pid =
   , ("Explorer", "/p/" <> pid.toText <> "/log_explorer", "list-tree")
   , ("Changes & Errors", "/p/" <> pid.toText <> "/anomalies", "bug")
   , ("API Tests (Beta)", "/p/" <> pid.toText <> "/testing", "list-check")
-  , ("OpenAPI/Swagger", "/p/" <> pid.toText <> "/documentation", "brackets-curly")
   , ("Reports", "/p/" <> pid.toText <> "/reports", "chart-simple")
   ]
 
@@ -76,8 +76,8 @@ bodyWrapper BWConfig{sessM, currProject, pageTitle, menuItem, hasIntegrated, nav
       link_ [rel_ "mask-icon", href_ "/public/safari-pinned-tab.svg", term "color" "#5bbad5"]
       meta_ [name_ "msapplication-TileColor", content_ "#da532c"]
       meta_ [name_ "theme-color", content_ "#ffffff"]
-      link_ [rel_ "stylesheet", type_ "text/css", href_ "/assets/css/tailwind.min.css?v=4"]
-      link_ [rel_ "stylesheet", type_ "text/css", href_ "/assets/css/thirdparty/notyf3.min.css"]
+      link_ [rel_ "stylesheet", type_ "text/css", href_ $(hashAssetFile "/public/assets/css/tailwind.min.css")]
+      link_ [rel_ "stylesheet", type_ "text/css", href_ $(hashAssetFile "/public/assets/css/thirdparty/notyf3.min.css")]
       link_ [rel_ "preconnect", href_ "https://rsms.me/"]
       link_ [rel_ "stylesheet", href_ "https://rsms.me/inter/inter.css"]
       link_ [rel_ "stylesheet", href_ "https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/atom-one-dark.min.css"]
@@ -86,22 +86,22 @@ bodyWrapper BWConfig{sessM, currProject, pageTitle, menuItem, hasIntegrated, nav
 
       -- SCRIPTS
       script_ [src_ "https://cdn.jsdelivr.net/npm/echarts@5.4.1/dist/echarts.min.js"] ("" :: Text)
-      script_ [src_ "/assets/roma-echarts.js", defer_ "true"] ("" :: Text)
-      script_ [src_ "/assets/js/thirdparty/notyf3.min.js", defer_ "true"] ("" :: Text)
-      script_ [src_ "/assets/js/thirdparty/htmx1_9_10.min.js", defer_ "true"] ("" :: Text)
-      script_ [src_ "/assets/deps/htmx/multi-swap.js", defer_ "true"] ("" :: Text)
-      script_ [src_ "/assets/deps/htmx/preload.js", defer_ "true"] ("" :: Text)
-      script_ [src_ "/assets/deps/htmx/json-enc.js", defer_ "true"] ("" :: Text)
-      script_ [src_ "/assets/deps/lit/lit-html.js", type_ "module", defer_ "true"] ("" :: Text)
+      script_ [src_ $(hashAssetFile "/public/assets/roma-echarts.js"), defer_ "true"] ("" :: Text)
+      script_ [src_ $(hashAssetFile "/public/assets/js/thirdparty/notyf3.min.js"), defer_ "true"] ("" :: Text)
+      script_ [src_ $(hashAssetFile "/public/assets/js/thirdparty/htmx1_9_10.min.js"), defer_ "true"] ("" :: Text)
+      script_ [src_ $(hashAssetFile "/public/assets/deps/htmx/multi-swap.js"), defer_ "true"] ("" :: Text)
+      script_ [src_ $(hashAssetFile "/public/assets/deps/htmx/preload.js"), defer_ "true"] ("" :: Text)
+      script_ [src_ $(hashAssetFile "/public/assets/deps/htmx/json-enc.js"), defer_ "true"] ("" :: Text)
+      script_ [src_ $(hashAssetFile "/public/assets/deps/lit/lit-html.js"), type_ "module", defer_ "true"] ("" :: Text)
       script_ [src_ "https://unpkg.com/htmx.org/dist/ext/debug.js", defer_ "true"] ("" :: Text)
-      script_ [src_ "/assets/js/thirdparty/_hyperscript_web0_9_5.min.js", defer_ "true"] ("" :: Text)
-      script_ [src_ "/assets/js/thirdparty/_hyperscript_template.js", defer_ "true"] ("" :: Text)
-      script_ [src_ "/assets/js/thirdparty/luxon.min.js", defer_ "true"] ("" :: Text)
-      script_ [src_ "/assets/js/thirdparty/popper2_11_4.min.js", defer_ "true"] ("" :: Text)
-      script_ [src_ "/assets/js/thirdparty/tippy6_3_7.umd.min.js", defer_ "true"] ("" :: Text)
-      script_ [src_ "/assets/js/thirdparty/instantpage5_1_0.js", type_ "module", defer_ "true"] ("" :: Text)
-      script_ [src_ "/assets/js/monaco/vs/loader.js", defer_ "true"] ("" :: Text)
-      script_ [src_ "/assets/js/charts.js"] ("" :: Text)
+      script_ [src_ $(hashAssetFile "/public/assets/js/thirdparty/_hyperscript_web0_9_5.min.js"), defer_ "true"] ("" :: Text)
+      script_ [src_ $(hashAssetFile "/public/assets/js/thirdparty/_hyperscript_template.js"), defer_ "true"] ("" :: Text)
+      script_ [src_ $(hashAssetFile "/public/assets/js/thirdparty/luxon.min.js"), defer_ "true"] ("" :: Text)
+      script_ [src_ $(hashAssetFile "/public/assets/js/thirdparty/popper2_11_4.min.js"), defer_ "true"] ("" :: Text)
+      script_ [src_ $(hashAssetFile "/public/assets/js/thirdparty/tippy6_3_7.umd.min.js"), defer_ "true"] ("" :: Text)
+      script_ [src_ $(hashAssetFile "/public/assets/js/thirdparty/instantpage5_1_0.js"), type_ "module", defer_ "true"] ("" :: Text)
+      script_ [src_ $(hashAssetFile "/public/assets/js/monaco/vs/loader.js"), defer_ "true"] ("" :: Text)
+      script_ [src_ $(hashAssetFile "/public/assets/js/charts.js")] ("" :: Text)
       script_ [src_ "https://cdn.jsdelivr.net/npm/@easepick/bundle@1.2.0/dist/index.umd.min.js"] ("" :: Text)
       script_ [src_ "https://cdn.jsdelivr.net/npm/lodash@4.17.21/lodash.min.js"] ("" :: Text)
       script_ [src_ "https://kit.fontawesome.com/e0cb5637ed.js", crossorigin_ "anonymous"] ("" :: Text)
@@ -113,8 +113,8 @@ bodyWrapper BWConfig{sessM, currProject, pageTitle, menuItem, hasIntegrated, nav
       script_ [src_ "https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/python.min.js"] ("" :: Text)
       script_ [src_ "https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.63.0/codemirror.min.js"] ("" :: Text)
       script_ [src_ "https://cdnjs.cloudflare.com/ajax/libs/codemirror/6.65.7/mode/javascript/javascript.min.js"] ("" :: Text)
-      script_ [type_ "module", src_ "/assets/filtercomponent.js"] ("" :: Text)
-      script_ [src_ "/assets/js/main.js"] ("" :: Text)
+      script_ [type_ "module", src_ $(hashAssetFile "/public/assets/filtercomponent.js")] ("" :: Text)
+      script_ [src_ "/public/assets/js/main.js"] ("" :: Text)
 
       script_
         [text|
@@ -125,35 +125,34 @@ bodyWrapper BWConfig{sessM, currProject, pageTitle, menuItem, hasIntegrated, nav
 
       script_
         [raw|
-              window.initialCloseSideMenu = localStorage.getItem('close-sidemenu');
-              var currentISOTimeStringVar = ((new Date()).toISOString().split(".")[0])+"+00:00";
-              document.addEventListener('DOMContentLoaded', function(){
-                if (window.initialCloseSideMenu == 'true'){
-                   document.getElementById('side-nav-menu').classList.add('hidden-side-nav-menu');
-                }
+        window.initialCloseSideMenu = localStorage.getItem('close-sidemenu');
+        var currentISOTimeStringVar = ((new Date()).toISOString().split(".")[0])+"+00:00";
+        document.addEventListener('DOMContentLoaded', function(){
+          if (window.initialCloseSideMenu == 'true'){
+             document.getElementById('side-nav-menu').classList.add('hidden-side-nav-menu');
+          }
 
-                // htmx.config.useTemplateFragments = true
-                tippy('[data-tippy-content]');
-                var notyf = new Notyf({
-                    duration: 5000,
-                    position: {
-                    x: 'right',
-                    y: 'top',
-                  },
-                });
-                document.body.addEventListener("successToast", (e)=> {e.detail.value.map(v=>notyf.success(v));});
-                document.body.addEventListener("errorToast", (e)=> {e.detail.value.map(v=>notyf.error(v));});
+          // htmx.config.useTemplateFragments = true
+          tippy('[data-tippy-content]');
+          var notyf = new Notyf({
+              duration: 5000,
+              position: {
+                x: 'right',
+                y: 'top',
+            },
+          });
+          document.body.addEventListener("successToast", (e)=> {e.detail.value.map(v=>notyf.success(v));});
+          document.body.addEventListener("errorToast", (e)=> {e.detail.value.map(v=>notyf.error(v));});
+        });
+
+        if("serviceWorker" in navigator) {
+            window.addEventListener("load", () => {
+              navigator.serviceWorker.register("/public/sw.js?v=7").then(swReg => {}).catch(err => {
+                  console.error('Service Worker Error', err);
               });
-
-
-              if("serviceWorker" in navigator) {
-                  window.addEventListener("load", () => {
-                    navigator.serviceWorker.register("/public/sw.js?v=7").then(swReg => {}).catch(err => {
-                        console.error('Service Worker Error', err);
-                    });
-                });
-              }
-            |]
+          });
+        }
+      |]
       script_
         [type_ "text/hyperscript"]
         [text|
@@ -168,13 +167,12 @@ bodyWrapper BWConfig{sessM, currProject, pageTitle, menuItem, hasIntegrated, nav
               end
             end
           end
+    |]
 
-        |]
-
-    body_ [class_ "text-gray-900 h-full w-full bg-base-100 fixed", term "data-theme" "winter", term "hx-ext" "multi-swap,preload"] do
+    body_ [class_ "text-gray-900 h-full w-full bg-base-100 ", term "data-theme" "winter", term "hx-ext" "multi-swap,preload"] do
       div_
         [ style_ "z-index:99999"
-        , class_ "fixed pt-24 sm:hidden justify-center z-50 w-full p-4 bg-gray-50 overflow-y-auto inset-0 h-full max-h-full"
+        , class_ "pt-24 sm:hidden justify-center z-50 w-full p-4 bg-gray-50 overflow-y-auto inset-0 h-full max-h-full"
         , tabindex_ "-1"
         ]
         do
@@ -200,40 +198,36 @@ bodyWrapper BWConfig{sessM, currProject, pageTitle, menuItem, hasIntegrated, nav
               sideNav' = currProject & maybe "" \project -> sideNav sess project pageTitle menuItem hasIntegrated
            in section_ [class_ "flex flex-row h-screen overflow-hidden"] do
                 sideNav'
-                section_ [class_ "flex flex-col grow h-screen overflow-y-hidden"] do
+                section_ [class_ "h-screen overflow-y-hidden grow"] do
                   navbar currUser pageTitle navTabs pageActions
-                  section_ [class_ "flex-1 overflow-y-hidden h-full grow"] child
+                  section_ [class_ "overflow-y-hidden h-full "] child
       externalHeadScripts_
       alerts_
       script_ [async_ "true", src_ "https://www.googletagmanager.com/gtag/js?id=AW-11285541899"] ("" :: Text)
       script_
         [text|
-            window.dataLayer = window.dataLayer || [];
-            function gtag(){dataLayer.push(arguments);}
-            gtag('js', new Date());
-            gtag('config', 'AW-11285541899');
+          window.dataLayer = window.dataLayer || [];
+          function gtag(){dataLayer.push(arguments);}
+          gtag('js', new Date());
+          gtag('config', 'AW-11285541899');
 
-            function gtag_report_conversion(url) {
-              var callback = function () {
-                if (typeof(url) != 'undefined') {
-                  window.location = url;
-                }
-              };
-              gtag('event', 'conversion', {
-                  'send_to': 'AW-11285541899/IUBqCKOA-8sYEIvoroUq',
-                  'event_callback': callback
-              });
-              return false;
-            }
+          function gtag_report_conversion(url) {
+            var callback = function () {
+              if (typeof(url) != 'undefined') {window.location = url;}
+            };
+            gtag('event', 'conversion', {
+                'send_to': 'AW-11285541899/IUBqCKOA-8sYEIvoroUq',
+                'event_callback': callback
+            });
+            return false;
+          }
 
-
-      document.body.addEventListener('htmx:afterSwap', function (event) {
-        window.requestAnimationFrame(() => {
-          hljs.highlightAll();
-        });
-      });
-
-          |]
+          document.body.addEventListener('htmx:afterSwap', function (event) {
+            window.requestAnimationFrame(() => {
+              hljs.highlightAll();
+            });
+          });
+      |]
       let email = show $ maybe "" ((.user.getUser.email)) sessM
       let name = maybe "" (\sess -> sess.user.getUser.firstName <> " " <> sess.user.getUser.lastName) sessM
       script_
@@ -292,12 +286,12 @@ projectsDropDown currProject projects = do
 
 
 sideNav :: Sessions.PersistentSession -> Projects.Project -> Text -> Maybe Text -> Maybe Bool -> Html ()
-sideNav sess project pageTitle menuItem hasIntegrated = aside_ [class_ "shrink-0 top-0 border-r bg-base-100 border-gray-200 w-14 text-sm h-screen transition-all duration-200 ease-in-out flex flex-col justify-between", id_ "side-nav-menu"] do
+sideNav sess project pageTitle menuItem hasIntegrated = aside_ [class_ "border-r bg-base-100 border-gray-200 w-14 text-sm h-screen transition-all duration-200 ease-in-out flex flex-col justify-between", id_ "side-nav-menu"] do
   script_ [text|if (window.initialCloseSideMenu == 'true'){document.getElementById('side-nav-menu').classList.add('hidden-side-nav-menu');}|]
   div_ do
     a_ [href_ "/", class_ "px-2 py-2 inline-flex items-center justify-center"] do
-      img_ [class_ "h-10 w-40 mt-2 sd-hidden pl-2", src_ "/assets/svgs/logo.svg"]
-      img_ [class_ "h-10 w-10 mt-2 hidden sd-show", src_ "/assets/logo-mini.png"]
+      img_ [class_ "h-10 w-40 mt-2 sd-hidden pl-2", src_ "/public/assets/svgs/logo.svg"]
+      img_ [class_ "h-10 w-10 mt-2 hidden sd-show", src_ "/public/assets/logo-mini.png"]
     div_ [class_ "sm:p-4 border-y sd-px-0 dropdown block"] do
       a_
         [ class_ "flex flex-row bg-blue-50 hover:bg-blue-100 text-blue-900 p-6 justify-center rounded-md cursor-pointer"
@@ -363,7 +357,7 @@ sideNav sess project pageTitle menuItem hasIntegrated = aside_ [class_ "shrink-0
 
 navbar :: Users.User -> Text -> Maybe (Html ()) -> Maybe (Html ()) -> Html ()
 navbar currUser pageTitle tabsM pageActionsM =
-  nav_ [id_ "main-navbar", class_ "sticky z-20 top-0 w-full px-6 py-1 flex flex-row border-b border-gray-200 h-12"] do
+  nav_ [id_ "main-navbar", class_ "sticky bg-base-100 z-20 top-0 w-full px-6 py-1 flex flex-row border-b border-gray-200 h-12"] do
     a_
       [ id_ "side_nav_toggler"
       , class_ "cursor-pointer flex items-center "

@@ -265,7 +265,7 @@ documentationPutH pid SaveSwaggerForm{updated_swagger, swagger_id, endpoints, di
     case swagger_id of
       "" -> do
         swaggerId <- Swaggers.SwaggerId <$> liftIO UUIDV4.nextRandom
-        let swaggerToAdd = Swaggers.Swagger{id = swaggerId, projectId = pid, createdBy = sess.persistentSession.userId, createdAt = utcToZonedTime utc currentTime, updatedAt = utcToZonedTime utc currentTime, swaggerJson = value}
+        let swaggerToAdd = Swaggers.Swagger{id = swaggerId, projectId = pid, createdBy = sess.persistentSession.userId, createdAt = utcToZonedTime utc currentTime, updatedAt = utcToZonedTime utc currentTime, swaggerJson = value, host = ""}
         Swaggers.addSwagger swaggerToAdd
       _ -> void $ Swaggers.updateSwagger swagger_id value
 
@@ -289,6 +289,7 @@ documentationPostH pid SwaggerForm{swagger_json, from} = do
               , createdAt = currentTime
               , updatedAt = currentTime
               , swaggerJson = value
+              , host = ""
               }
       _ <- dbtToEff $ Swaggers.addSwagger swaggerToAdd
       addSuccessToast "Swagger uploaded Successfully" Nothing
@@ -314,11 +315,11 @@ instance ToHtml DocumentationGet where
   toHtmlRaw = toHtml
 
 
-documentationGetH :: Projects.ProjectId -> Maybe Text -> ATAuthCtx (RespHeaders (PageCtx DocumentationGet))
-documentationGetH pid swagger_id = do
+documentationGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders (PageCtx DocumentationGet))
+documentationGetH pid swagger_id host = do
   (sess, project) <- Sessions.sessionAndProject pid
   (swaggers, swagger, swaggerId) <- dbtToEff do
-    swaggers <- Swaggers.swaggersByProject pid
+    swaggers <- Swaggers.swaggersByProject pid (fromMaybe "" host)
     currentSwagger <- join <$> mapM Swaggers.getSwaggerById swagger_id
     (swaggerVal, swaggerValId) <- case (swaggers, currentSwagger) of
       (_, Just swg) -> do
@@ -341,12 +342,14 @@ documentationGetH pid swagger_id = do
         let idx = show latest.id.swaggerId
         pure (sw, idx)
     pure (V.reverse swaggers, swaggerVal, swaggerValId)
-
+  let pageTitle = case host of
+        Nothing -> "OpenAPI/Swagger"
+        Just h -> "OpenAPI/Swagger For " <> h
   let bwconf =
         (def :: BWConfig)
           { sessM = Just sess.persistentSession
           , currProject = Just project
-          , pageTitle = "OpenAPI/Swagger"
+          , pageTitle = pageTitle
           }
   addRespHeaders $ PageCtx bwconf $ DocumentationGet pid swaggers swaggerId (decodeUtf8 (encode swagger))
 
@@ -646,7 +649,7 @@ documentationsPage pid swaggers swaggerID jsonString = do
   script_
     [text|
       document.addEventListener('DOMContentLoaded', function(){
-        require.config({ paths: { vs: '/assets/js/monaco/vs' } });
+        require.config({ paths: { vs: '/public/assets/js/monaco/vs' } });
         require.config({ paths: { 'vs': 'https://unpkg.com/monaco-editor/min/vs' } });
 		  	require(['vs/editor/editor.main'], function () {
         monaco.editor.defineTheme('nightOwl', {
@@ -694,9 +697,9 @@ documentationsPage pid swaggers swaggerID jsonString = do
       })
    |]
 
-  script_ [src_ "/assets/js/thirdparty/swagger-ui-bundle.js"] ("" :: Text)
-  script_ [src_ "/assets/js/swagger_endpoints.js"] ("" :: Text)
-  script_ [src_ "/assets/js/parse_swagger.js"] ("" :: Text)
+  script_ [src_ "/public/assets/js/thirdparty/swagger-ui-bundle.js"] ("" :: Text)
+  script_ [src_ "/public/assets/js/swagger_endpoints.js"] ("" :: Text)
+  script_ [src_ "/public/assets/js/parse_swagger.js"] ("" :: Text)
   script_ [src_ "https://unpkg.com/js-yaml/dist/js-yaml.min.js", crossorigin_ "true"] ("" :: Text)
   script_
     [text|

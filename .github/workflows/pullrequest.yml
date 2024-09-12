@@ -18,6 +18,8 @@ jobs:
     steps:
       - uses: actions/checkout@v3
       - uses: haskell-actions/run-fourmolu@v9
+        with:
+          version: "0.16.2.0"
       - uses: freckle/stack-cache-action@main
       - uses: haskell/actions/setup@v1
         with:

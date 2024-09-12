@@ -92,7 +92,7 @@ data CollectionStepData = CollectionStepData
 stepDataMethod :: CollectionStepData -> Maybe (Text, Text)
 stepDataMethod stepData =
   asum
-    . map (\(method, url) -> fmap (\u -> (method, u)) url)
+    . map (\(method, url) -> fmap (method,) url)
     $ [ ("GET", stepData.get)
       , ("POST", stepData.post)
       , ("UPDATE", stepData.update)

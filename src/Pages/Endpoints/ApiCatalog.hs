@@ -5,6 +5,7 @@ import Data.Text qualified as T
 import Data.Vector qualified as V
 import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
 import Effectful.Time qualified as Time
+import Fmt (commaizeF, fmt)
 import Lucid
 import Lucid.Htmx (hxGet_, hxSwap_, hxTrigger_)
 import Models.Apis.Endpoints qualified as Endpoints
@@ -103,6 +104,6 @@ renderapiCatalog pid host timeFilter requestType = div_ [class_ "flex py-4 gap-8
       ]
       ""
 
-  div_ [class_ "w-36 flex items-center justify-center"]
-    $ span_ [class_ "tabular-nums text-xl", term "data-tippy-content" "Events for this Anomaly in the last 14 days"]
-    $ toHtml (show host.eventCount)
+  -- Display the number of events for this anomaly in the last 14 days.
+  div_ [class_ "w-36 flex items-center justify-center"] $
+    span_ [class_ "tabular-nums text-xl", term "data-tippy-content" "Events for this Anomaly in the last 14 days"] $ toHtml @String $ fmt $ commaizeF host.eventCount

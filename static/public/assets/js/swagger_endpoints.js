@@ -137,7 +137,7 @@ class SwaggerEndPointsUI {
         ),
         this.elt("img", {
           class: "collpase-icon",
-          src: "/assets/svgs/up_chevron.svg",
+          src: "/public/assets/svgs/up_chevron.svg",
         })
       );
 
@@ -244,7 +244,7 @@ class SwaggerEndPointsUI {
       ),
       this.elt("img", {
         class: "collpase-icon",
-        src: "/assets/svgs/up_chevron.svg",
+        src: "/public/assets/svgs/up_chevron.svg",
       })
     );
 

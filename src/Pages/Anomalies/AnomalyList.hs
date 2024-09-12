@@ -77,14 +77,15 @@ newtype AnomalyBulkForm = AnomalyBulk
   deriving anyclass (FromForm)
 
 
-acknowlegeAnomalyGetH :: Projects.ProjectId -> Anomalies.AnomalyId -> ATAuthCtx (RespHeaders AnomalyAction)
-acknowlegeAnomalyGetH pid aid = do
+acknowlegeAnomalyGetH :: Projects.ProjectId -> Anomalies.AnomalyId -> Maybe Text -> ATAuthCtx (RespHeaders AnomalyAction)
+acknowlegeAnomalyGetH pid aid hostM = do
   (sess, project) <- Sessions.sessionAndProject pid
+  let host = fromMaybe "" hostM
   appCtx <- ask @AuthContext
   let text_id = V.fromList [UUID.toText aid.unAnomalyId]
   v <- dbtToEff $ Anomalies.acknowledgeAnomalies sess.user.id text_id
   _ <- dbtToEff $ Anomalies.acknowlegeCascade sess.user.id v
-  _ <- liftIO $ withResource appCtx.pool \conn -> createJob conn "background_jobs" $ BackgroundJobs.GenSwagger pid sess.user.id
+  _ <- liftIO $ withResource appCtx.pool \conn -> createJob conn "background_jobs" $ BackgroundJobs.GenSwagger pid sess.user.id host
   addRespHeaders $ Acknowlege pid aid True
 
 
@@ -125,7 +126,7 @@ data AnomalyAction
 
 
 instance ToHtml AnomalyAction where
-  toHtml (Acknowlege pid aid is_ack) = toHtml $ anomalyAcknowlegeButton pid aid is_ack
+  toHtml (Acknowlege pid aid is_ack) = toHtml $ anomalyAcknowlegeButton pid aid is_ack ""
   toHtml (Archive pid aid is_arch) = toHtml $ anomalyArchiveButton pid aid is_arch
   toHtml Bulk = ""
   toHtmlRaw = toHtml
@@ -141,8 +142,10 @@ anomalyBulkActionsPostH pid action items = do
     "acknowlege" -> do
       v <- dbtToEff $ Anomalies.acknowledgeAnomalies sess.user.id (V.fromList items.anomalyId)
       _ <- dbtToEff $ Anomalies.acknowlegeCascade sess.user.id v
-      _ <- liftIO $ withResource appCtx.pool \conn -> createJob conn "background_jobs" $ BackgroundJobs.GenSwagger pid sess.user.id
-      pass
+      hosts <- dbtToEff $ Endpoints.getEndpointsByAnomalyTargetHash pid v
+      forM_ hosts \h -> do
+        _ <- liftIO $ withResource appCtx.pool \conn -> createJob conn "background_jobs" do BackgroundJobs.GenSwagger pid sess.user.id h.host
+        pass
     "archive" -> do
       _ <- dbtToEff $ execute Update [sql| update apis.anomalies set archived_at=NOW() where id=ANY(?::uuid[]) |] (Only $ V.fromList items.anomalyId)
       pass
@@ -332,9 +335,9 @@ issueItem hideByDefault currTime issue icon title subTitle content = do
               span_ [class_ "decoration-black underline", term "data-tippy-content" $ "last seen: " <> show issue.eventsAgg.lastSeen] $ toHtml $ prettyTimeAuto currTime issue.eventsAgg.lastSeen
           div_ [class_ "flex items-center gap-2 mt-5"] do
             anomalyArchiveButton issue.projectId issue.id (isJust issue.archivedAt)
-            anomalyAcknowlegeButton issue.projectId issue.id (isJust issue.acknowlegedAt)
+            anomalyAcknowlegeButton issue.projectId issue.id (isJust issue.acknowlegedAt) ""
             let modalEndpoint = "/p/" <> issue.projectId.toText <> "/anomalies/by_hash/" <> issue.targetHash <> "?modal=True"
-            Components.drawerWithURLContent_ ("expand-log-drawer-" <> issue.targetHash) modalEndpoint $ span_ [class_ "flex items-center justify-center cursor-pointer py-2 px-3 rounded border border-gray-200 text-xs hover:shadow shadow-blue-100"] (faSprite_ "expand" "regular" "w-3 h-3")
+            Components.drawerWithURLContent_ ("expand-log-drawer-" <> issue.targetHash) (Just modalEndpoint) $ span_ [class_ "flex items-center justify-center cursor-pointer py-2 px-3 rounded border border-gray-200 text-xs hover:shadow shadow-blue-100"] (faSprite_ "expand" "regular" "w-3 h-3")
         fromMaybe (toHtml @String "") content
     let issueQueryPartial = buildQueryForAnomaly issue.anomalyType issue.targetHash
     div_ [class_ "flex items-center justify-center "]
@@ -440,7 +443,7 @@ anomalyDetailsPage issue shapesWithFieldsMap fields prvFormatsM currTime modal =
           Anomalies.IDNewShapeIssue issueD -> do
             div_ [class_ "flex flex-col gap-4 shrink-0"] do
               a_ [class_ "inline-block font-bold text-blue-700 space-x-2"] do
-                img_ [src_ "/assets/svgs/anomalies/fields.svg", class_ "inline w-6 h-6 -mt-1"]
+                img_ [src_ "/public/assets/svgs/anomalies/fields.svg", class_ "inline w-6 h-6 -mt-1"]
                 span_ [class_ "text-2xl"] "New Request Shape"
               div_ [class_ "flex items-center gap-3"] do
                 let methodColor = Utils.getMethodColor issueD.endpointMethod
@@ -452,7 +455,7 @@ anomalyDetailsPage issue shapesWithFieldsMap fields prvFormatsM currTime modal =
           Anomalies.IDNewFormatIssue issueD -> do
             div_ [class_ "flex flex-col gap-4 shrink-0"] do
               a_ [class_ "inline-block font-bold text-blue-700 space-x-2"] do
-                img_ [src_ "/assets/svgs/anomalies/fields.svg", class_ "inline w-6 h-6 -mt-1"]
+                img_ [src_ "/public/assets/svgs/anomalies/fields.svg", class_ "inline w-6 h-6 -mt-1"]
                 span_ [class_ "text-2xl"] "Modified field"
               div_ [class_ "flex items-center gap-3"] do
                 let methodColor = Utils.getMethodColor issueD.endpointMethod
@@ -462,7 +465,7 @@ anomalyDetailsPage issue shapesWithFieldsMap fields prvFormatsM currTime modal =
           Anomalies.IDNewRuntimeExceptionIssue issueD -> do
             div_ [class_ "flex flex-col gap-4 shrink-0"] do
               a_ [class_ "inline-block font-bold text-blue-700 space-x-2"] do
-                img_ [src_ "/assets/svgs/anomalies/fields.svg", class_ "inline w-6 h-6 -mt-1"]
+                img_ [src_ "/public/assets/svgs/anomalies/fields.svg", class_ "inline w-6 h-6 -mt-1"]
                 span_ [class_ "text-2xl"] $ toHtml issueD.errorType
               p_ $ toHtml issueD.message
           _ -> pass
@@ -501,7 +504,7 @@ anomalyDetailsPage issue shapesWithFieldsMap fields prvFormatsM currTime modal =
             "Expand Page" >> faSprite_ "expand" "regular" "w-3 h-3"
         else do
           anomalyArchiveButton issue.projectId issue.id (isJust issue.archivedAt)
-          anomalyAcknowlegeButton issue.projectId issue.id (isJust issue.acknowlegedAt)
+          anomalyAcknowlegeButton issue.projectId issue.id (isJust issue.acknowlegedAt) ""
 
     div_ [class_ "mt-6 space-y-4"] do
       div_ [class_ "tabs tabs-bordered", role_ "tablist"] do
@@ -588,12 +591,12 @@ anomalyFormatOverview formatData prevFormats =
 
 issueDisplayConfig :: Anomalies.IssueL -> (Text, Text)
 issueDisplayConfig issue = case issue.issueData of
-  Anomalies.IDNewFieldIssue _ -> ("New Field Found", "/assets/svgs/anomalies/fields.svg")
-  Anomalies.IDNewShapeIssue _ -> ("New Request Shape", "/assets/svgs/anomalies/fields.svg")
-  Anomalies.IDNewEndpointIssue _ -> ("New Endpoint", "/assets/svgs/anomalies/endpoint.svg")
-  Anomalies.IDNewFormatIssue _ -> ("Modified field", "/assets/svgs/anomalies/fields.svg")
-  Anomalies.IDNewRuntimeExceptionIssue err -> (err.errorType, "/assets/svgs/anomalies/fields.svg")
-  Anomalies.IDEmpty -> ("Unknown anomaly", "/assets/svgs/anomalies/fields.svg")
+  Anomalies.IDNewFieldIssue _ -> ("New Field Found", "/public/assets/svgs/anomalies/fields.svg")
+  Anomalies.IDNewShapeIssue _ -> ("New Request Shape", "/public/assets/svgs/anomalies/fields.svg")
+  Anomalies.IDNewEndpointIssue _ -> ("New Endpoint", "/public/assets/svgs/anomalies/endpoint.svg")
+  Anomalies.IDNewFormatIssue _ -> ("Modified field", "/public/assets/svgs/anomalies/fields.svg")
+  Anomalies.IDNewRuntimeExceptionIssue err -> (err.errorType, "/public/assets/svgs/anomalies/fields.svg")
+  Anomalies.IDEmpty -> ("Unknown anomaly", "/public/assets/svgs/anomalies/fields.svg")
 
 
 data IssueVM = IssueVM Bool UTCTime Anomalies.IssueL
@@ -651,9 +654,9 @@ renderIssue hideByDefault currTime issue = do
     _ -> error "Anomalies.ATField issue should never show up in practice "
 
 
-anomalyAcknowlegeButton :: Projects.ProjectId -> Anomalies.AnomalyId -> Bool -> Html ()
-anomalyAcknowlegeButton pid aid acked = do
-  let acknowlegeAnomalyEndpoint = "/p/" <> pid.toText <> "/anomalies/" <> Anomalies.anomalyIdText aid <> if acked then "/unacknowlege" else "/acknowlege"
+anomalyAcknowlegeButton :: Projects.ProjectId -> Anomalies.AnomalyId -> Bool -> Text -> Html ()
+anomalyAcknowlegeButton pid aid acked host = do
+  let acknowlegeAnomalyEndpoint = "/p/" <> pid.toText <> "/anomalies/" <> Anomalies.anomalyIdText aid <> if acked then "/unacknowlege" else "/acknowlege?host=" <> host
   a_
     [ class_
         $ "inline-block child-hover cursor-pointer py-2 px-3 rounded border border-gray-200 text-xs hover:shadow shadow-blue-100 "
