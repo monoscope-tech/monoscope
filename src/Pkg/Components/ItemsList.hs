@@ -80,7 +80,7 @@ instance ToHtml a => ToHtml (ItemsPage a) where
 
 -- Function to render a page of items
 itemsPage_ :: ToHtml a => ItemsListCfg -> V.Vector a -> Html ()
-itemsPage_ listCfg items = div_ [class_ "w-full mx-auto px-8 pt-10 pb-24 overflow-y-scroll h-full space-y-6", id_ "itemsListPage"] $ do
+itemsPage_ listCfg items = div_ [class_ "w-full mx-auto px-6 pt-2 pb-16 overflow-y-scroll h-full space-y-6", id_ "itemsListPage"] $ do
   itemsList_ listCfg items
 
 -- Main function to render the items list

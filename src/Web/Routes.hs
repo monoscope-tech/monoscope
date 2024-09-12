@@ -75,8 +75,7 @@ type role Routes nominal
 
 
 data Routes mode = Routes
-  { assets :: mode :- "assets" :> Servant.Raw
-  , public :: mode :- "public" :> Servant.Raw
+  { public :: mode :- "public" :> Servant.Raw
   , cookieProtected :: mode :- AuthProtect "optional-cookie-auth" :> Servant.NamedRoutes CookieProtectedRoutes
   , ping :: mode :- "ping" :> Get '[PlainText] Text
   , status :: mode :- "status" :> Get '[JSON] Status
@@ -97,8 +96,7 @@ server
   -> Routes (AsServerT ATBaseCtx)
 server pool =
   Routes
-    { assets = Servant.serveDirectoryWebApp "./static/public/assets"
-    , public = Servant.serveDirectoryWebApp "./static/public"
+    { public = Servant.serveDirectoryWebApp "./static/public"
     , ping = pingH
     , status = statusH
     , login = Auth.loginH

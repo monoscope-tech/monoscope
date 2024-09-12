@@ -3,6 +3,7 @@
 
 module Utils (
   eitherStrToText,
+  jsonValueToHtmlTree,
   userIsProjectMember,
   GetOrRedirect,
   redirect,
@@ -38,11 +39,14 @@ module Utils (
   getDurationNSMS,
   toXXHash,
   getServiceColors,
+  getGrpcStatusColor,
 )
 where
 
 import Data.Aeson (Value)
 import Data.Aeson qualified as AE
+import Data.Aeson.KeyMap qualified as AEK
+import Data.Char (isDigit)
 import Data.Digest.XXHash (xxHash)
 import Data.HashMap.Strict qualified as HM
 import Data.List (notElem, (!!))
@@ -58,6 +62,7 @@ import Data.Vector qualified as V
 import Database.PostgreSQL.Simple.ToField (ToField (..))
 import Database.PostgreSQL.Transact
 import Lucid
+import Lucid.Hyperscript (__)
 import Lucid.Svg qualified as Svg
 import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects qualified as Projects
@@ -105,7 +110,7 @@ instance ToField DBField where
 
 
 faSprite_ :: Text -> Text -> Text -> Html ()
-faSprite_ mIcon faType classes = svg_ [class_ $ "inline-block icon " <> classes] $ Svg.use_ [href_ $ "/assets/svgs/fa-sprites/" <> faType <> ".svg#" <> mIcon]
+faSprite_ mIcon faType classes = svg_ [class_ $ "inline-block icon " <> classes] $ Svg.use_ [href_ $ "/public/assets/svgs/fa-sprites/" <> faType <> ".svg#" <> mIcon]
 
 
 -- DO NOT USE. Copy the svg into static/public/assets/svgs/fa-sprites/regular.svg or solid.svg
@@ -150,10 +155,17 @@ getMethodColor _ = " badge badge-outline "
 
 getStatusColor :: Int -> Text
 getStatusColor status
-  | status < 200 = "text-slate-500 bg-slate-800 border border-slate-200 "
+  | status < 200 = "text-slate-600 bg-slate-50 border border-slate-200 "
   | status >= 200 && status < 300 = "text-green-800 bg-green-50 border border-green-200"
   | status >= 300 && status < 400 = "text-amber-800 bg-yellow-50 border border-yellow-200"
   | otherwise = "text-red-800 bg-red-50 border border-red-200"
+
+
+getGrpcStatusColor :: Int -> Text
+getGrpcStatusColor status
+  | status == 0 = "text-green-800 bg-green-50 border border-green-200" -- OK
+  | status >= 1 && status <= 16 = "text-red-800 bg-red-50 border border-red-200" -- Errors (1 to 16 are error codes)
+  | otherwise = "text-slate-500 bg-slate-800 border border-slate-200"
 
 
 getSeverityColor :: Text -> Text
@@ -165,6 +177,60 @@ getSeverityColor "critical" = "text-red-700 bg-red-200 font-bold"
 getSeverityColor "notice" = "text-green-500 bg-green-100"
 getSeverityColor "alert" = "text-orange-600 bg-orange-100 font-bold"
 getSeverityColor _ = "text-black bg-gray-50"
+
+
+-- >>> replaceNumbers "response_body.0.completed"
+-- "response_body[*].completed"
+--
+replaceNumbers :: Text -> Text
+replaceNumbers input = T.replace ".[*]" "[*]" $ T.intercalate "." (map replaceDigitPart parts)
+  where
+    parts = T.splitOn "." input
+    replaceDigitPart :: Text -> Text
+    replaceDigitPart part
+      | T.all isDigit part = "[*]"
+      | otherwise = T.concatMap replaceDigitWithAsterisk part
+
+    replaceDigitWithAsterisk :: Char -> Text
+    replaceDigitWithAsterisk ch
+      | isDigit ch = "[*]"
+      | otherwise = one ch
+
+
+jsonValueToHtmlTree :: AE.Value -> Html ()
+jsonValueToHtmlTree val = jsonValueToHtmlTree' ("", "", val)
+  where
+    jsonValueToHtmlTree' :: (Text, Text, AE.Value) -> Html ()
+    jsonValueToHtmlTree' (path, key, AE.Object v) = renderParentType "{" "}" key (length v) (AEK.toHashMapText v & HM.toList & sort & mapM_ (\(kk, vv) -> jsonValueToHtmlTree' (path <> "." <> key, kk, vv)))
+    jsonValueToHtmlTree' (path, key, AE.Array v) = renderParentType "[" "]" key (length v) (V.iforM_ v \i item -> jsonValueToHtmlTree' (path <> "." <> key, toText $ show i, item))
+    jsonValueToHtmlTree' (path, key, value) = do
+      let fullFieldPath = if T.isSuffixOf "[*]" path then path else path <> "." <> key
+      let fullFieldPath' = fromMaybe fullFieldPath $ T.stripPrefix ".." fullFieldPath
+      div_
+        [ class_ "relative log-item-field-parent"
+        , term "data-field-path" $ replaceNumbers fullFieldPath'
+        , term "data-field-value" $ unwrapJsonPrimValue value
+        ]
+        $ a_
+          [class_ "block hover:bg-blue-50 cursor-pointer pl-6 relative log-item-field-anchor ", [__|install LogItemMenuable|]]
+          do
+            span_ $ toHtml key
+            span_ [class_ "text-blue-800"] ":"
+            span_ [class_ "text-blue-800 ml-2.5 log-item-field-value", term "data-field-path" fullFieldPath'] $ toHtml $ unwrapJsonPrimValue value
+
+    renderParentType :: Text -> Text -> Text -> Int -> Html () -> Html ()
+    renderParentType opening closing key count child = div_ [class_ (if key == "" then "" else "collapsed")] do
+      a_
+        [ class_ "inline-block cursor-pointer"
+        , onclick_ "this.parentNode.classList.toggle('collapsed')"
+        ]
+        do
+          span_ [class_ "log-item-tree-chevron "] "▾"
+          span_ [] $ toHtml $ if key == "" then opening else key <> ": " <> opening
+      div_ [class_ "pl-5 children "] do
+        span_ [class_ "tree-children-count"] $ toHtml $ show count
+        div_ [class_ "tree-children"] child
+      span_ [class_ "pl-5 closing-token"] $ toHtml closing
 
 
 getSpanStatusColor :: Text -> Text

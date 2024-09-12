@@ -781,7 +781,7 @@ tabs current_tab =
         , id_ "express"
         ]
         do
-          img_ [src_ "/assets/framework-logos/express-logo.png", alt_ "Express Js", class_ "w-full"]
+          img_ [src_ "/public/assets/framework-logos/express-logo.png", alt_ "Express Js", class_ "w-full"]
     li_ [class_ "shrink-0"] $ do
       button_
         [ class_ $ if current_tab == "adonis" then "sdk_tab sdk_tab_active" else "sdk_tab"
@@ -789,7 +789,7 @@ tabs current_tab =
         , id_ "adonis"
         ]
         do
-          img_ [src_ "/assets/framework-logos/adonis-logo.png", alt_ "adonis", class_ "w-full"]
+          img_ [src_ "/public/assets/framework-logos/adonis-logo.png", alt_ "adonis", class_ "w-full"]
     li_ [class_ "shrink-0"] do
       button_
         [ class_ $ if current_tab == "gin" then "sdk_tab sdk_tab_active" else "sdk_tab"
@@ -797,7 +797,7 @@ tabs current_tab =
         , id_ "gin"
         ]
         do
-          img_ [src_ "/assets/framework-logos/gin-logo.png", alt_ "Gin", class_ "w-full"]
+          img_ [src_ "/public/assets/framework-logos/gin-logo.png", alt_ "Gin", class_ "w-full"]
     li_ [class_ "shrink-0"] do
       button_
         [ class_ $ if current_tab == "laravel" then "sdk_tab sdk_tab_active" else "sdk_tab"
@@ -805,7 +805,7 @@ tabs current_tab =
         , id_ "laravel"
         ]
         do
-          img_ [src_ "/assets/framework-logos/laravel-logo.png", alt_ "", class_ "w-full"]
+          img_ [src_ "/public/assets/framework-logos/laravel-logo.png", alt_ "", class_ "w-full"]
 
     li_ [class_ "shrink-0"] do
       button_
@@ -814,7 +814,7 @@ tabs current_tab =
         , id_ "flask"
         ]
         do
-          img_ [src_ "/assets/framework-logos/flask-logo.png", alt_ "", class_ "w-full"]
+          img_ [src_ "/public/assets/framework-logos/flask-logo.png", alt_ "", class_ "w-full"]
 
     li_ [class_ "shrink-0"] do
       button_
@@ -823,7 +823,7 @@ tabs current_tab =
         , id_ "fastapi"
         ]
         do
-          img_ [src_ "/assets/framework-logos/fastapi-logo.png", alt_ "", class_ "w-full"]
+          img_ [src_ "/public/assets/framework-logos/fastapi-logo.png", alt_ "", class_ "w-full"]
     li_ [class_ "shrink-0"] do
       button_
         [ class_ $ if current_tab == "django" then "sdk_tab sdk_tab_active" else "sdk_tab"
@@ -831,7 +831,7 @@ tabs current_tab =
         , id_ "django"
         ]
         do
-          img_ [src_ "/assets/framework-logos/django-logo.png", alt_ "", class_ "w-full"]
+          img_ [src_ "/public/assets/framework-logos/django-logo.png", alt_ "", class_ "w-full"]
     li_ [class_ "shrink-0"] do
       button_
         [ class_ $ if current_tab == "gorilla" then "sdk_tab sdk_tab_active" else "sdk_tab"
@@ -839,7 +839,7 @@ tabs current_tab =
         , id_ "gorilla"
         ]
         do
-          img_ [src_ "/assets/framework-logos/mux-logo.png", alt_ "", class_ "w-full"]
+          img_ [src_ "/public/assets/framework-logos/mux-logo.png", alt_ "", class_ "w-full"]
 
     li_ [class_ "shrink-0"] do
       button_
@@ -848,7 +848,7 @@ tabs current_tab =
         , id_ "symfony"
         ]
         do
-          img_ [src_ "/assets/framework-logos/symfony-logo.png", alt_ "", class_ "w-full"]
+          img_ [src_ "/public/assets/framework-logos/symfony-logo.png", alt_ "", class_ "w-full"]
     li_ [class_ "shrink-0"] do
       button_
         [ class_ $ if current_tab == "net" then "sdk_tab sdk_tab_active" else "sdk_tab"
@@ -856,7 +856,7 @@ tabs current_tab =
         , id_ "net"
         ]
         do
-          img_ [src_ "/assets/framework-logos/net-logo.png", alt_ "", class_ "w-full"]
+          img_ [src_ "/public/assets/framework-logos/net-logo.png", alt_ "", class_ "w-full"]
     li_ [class_ "shrink-0"] do
       button_
         [ class_ $ if current_tab == "echo" then "sdk_tab sdk_tab_active" else "sdk_tab"
@@ -864,7 +864,7 @@ tabs current_tab =
         , id_ "phoenix"
         ]
         do
-          img_ [src_ "/assets/framework-logos/phoenix.png", alt_ "", class_ "w-full"]
+          img_ [src_ "/public/assets/framework-logos/phoenix.png", alt_ "", class_ "w-full"]
     li_ [class_ "shrink-0"] do
       button_
         [ class_ $ if current_tab == "fastify" then "sdk_tab sdk_tab_active" else "sdk_tab"
@@ -872,7 +872,7 @@ tabs current_tab =
         , id_ "fastify"
         ]
         do
-          img_ [src_ "/assets/framework-logos/fastify-logo.png", alt_ "", class_ "w-full"]
+          img_ [src_ "/public/assets/framework-logos/fastify-logo.png", alt_ "", class_ "w-full"]
     li_ [class_ "shrink-0"] do
       button_
         [ class_ $ if current_tab == "springboot" then "sdk_tab sdk_tab_active" else "sdk_tab"
@@ -880,7 +880,7 @@ tabs current_tab =
         , id_ "springboot"
         ]
         do
-          img_ [src_ "/assets/framework-logos/spring-logo.svg", alt_ "", class_ "w-full"]
+          img_ [src_ "/public/assets/framework-logos/spring-logo.svg", alt_ "", class_ "w-full"]
 
 
 contentHeader :: Text -> Html ()

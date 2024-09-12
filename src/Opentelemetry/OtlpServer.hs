@@ -8,23 +8,19 @@ import Data.Aeson.Key qualified as AEK
 import Data.Aeson.KeyMap qualified as KEM
 import Data.ByteString qualified as BS
 import Data.ByteString.Base16 qualified as B16
-import Data.ByteString.Base64 qualified as B64
 import Data.HashMap.Strict qualified as HashMap
-import Data.Map qualified as M
 import Data.Scientific
 import Data.Text qualified as T
 import Data.Text.Lazy qualified as LT
 import Data.Time (UTCTime)
 import Data.Time.Clock.POSIX
 import Data.UUID qualified as UUID
-import Data.UUID.V4 qualified as UUID
 import Data.Vector qualified as V
 import Effectful
-import Effectful.PostgreSQL.Transact.Effect (DB, dbtToEff)
+import Effectful.PostgreSQL.Transact.Effect (DB)
 import Effectful.Reader.Static (ask)
 import Effectful.Reader.Static qualified as Eff
 import Log qualified
-import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
 import Models.Telemetry.Telemetry (SpanKind (..), SpanStatus (..))
 import Models.Telemetry.Telemetry qualified as Telemetry
 import Network.GRPC.HighLevel.Client as HsGRPC
@@ -52,8 +48,6 @@ import Proto3.Suite.Types qualified as HsProtobuf
 import Proto3.Wire qualified as HsProtobuf
 import Proto3.Wire.Decode qualified as HsProtobuf
 import Relude hiding (ask)
-import Relude.Unsafe qualified as Unsafe
-import Safe qualified
 import System.Config
 import System.Types (runBackground)
 
@@ -90,13 +84,12 @@ processList msgs attrs = do
     _ -> error "unsupported opentelemetry data type"
 
 
-projectApiKeyFromB64 :: Text -> Text -> ProjectApiKeys.ProjectApiKeyId
-projectApiKeyFromB64 apiKeyEncryptionSecretKey projectKey = case (B64.decodeBase64Untyped $ encodeUtf8 projectKey) of
-  Left err -> error err
-  Right authText -> do
-    let decryptedKey = ProjectApiKeys.decryptAPIKey (encodeUtf8 apiKeyEncryptionSecretKey) authText
-    Unsafe.fromJust $ ProjectApiKeys.ProjectApiKeyId <$> UUID.fromASCIIBytes decryptedKey
-
+-- projectApiKeyFromB64 :: Text -> Text -> ProjectApiKeys.ProjectApiKeyId
+-- projectApiKeyFromB64 apiKeyEncryptionSecretKey projectKey = case (B64.decodeBase64Untyped $ encodeUtf8 projectKey) of
+--   Left err -> error err
+--   Right authText -> do
+--     let decryptedKey = ProjectApiKeys.decryptAPIKey (encodeUtf8 apiKeyEncryptionSecretKey) authText
+--     Unsafe.fromJust $ ProjectApiKeys.ProjectApiKeyId <$> UUID.fromASCIIBytes decryptedKey
 
 logsServiceExportH
   :: Log.Logger
@@ -126,8 +119,8 @@ byteStringToHexText bs = decodeUtf8 (B16.encode bs)
 -- Convert a list of KeyValue to a JSONB object
 keyValueToJSONB :: V.Vector KeyValue -> AE.Value
 keyValueToJSONB kvs =
-  AE.object $
-    V.foldr (\kv acc -> (AEK.fromText $ LT.toStrict kv.keyValueKey, convertAnyValue kv.keyValueValue) : acc) [] kvs
+  AE.object
+    $ V.foldr (\kv acc -> (AEK.fromText $ LT.toStrict kv.keyValueKey, convertAnyValue kv.keyValueValue) : acc) [] kvs
 
 
 convertAnyValue :: Maybe AnyValue -> AE.Value
@@ -304,31 +297,31 @@ parseSpanStatus st = case st of
 
 eventsToJSONB :: [Span_Event] -> AE.Value
 eventsToJSONB spans =
-  AE.toJSON $
-    ( \sp ->
-        object
-          [ "event_name" .= toText sp.span_EventName
-          , "event_time" .= nanosecondsToUTC sp.span_EventTimeUnixNano
-          , "event_attributes" .= keyValueToJSONB sp.span_EventAttributes
-          , "event_dropped_attributes_count" .= fromIntegral sp.span_EventDroppedAttributesCount
-          ]
-    )
-      <$> spans
+  AE.toJSON
+    $ ( \sp ->
+          object
+            [ "event_name" .= toText sp.span_EventName
+            , "event_time" .= nanosecondsToUTC sp.span_EventTimeUnixNano
+            , "event_attributes" .= keyValueToJSONB sp.span_EventAttributes
+            , "event_dropped_attributes_count" .= fromIntegral sp.span_EventDroppedAttributesCount
+            ]
+      )
+    <$> spans
 
 
 linksToJSONB :: [Span_Link] -> AE.Value
 linksToJSONB lnks =
-  AE.toJSON $
-    ( \lnk ->
-        object
-          [ "link_span_id" .= (decodeUtf8 lnk.span_LinkSpanId :: Text)
-          , "link_trace_id" .= (decodeUtf8 lnk.span_LinkTraceId :: Text)
-          , "link_attributes" .= keyValueToJSONB lnk.span_LinkAttributes
-          , "link_dropped_attributes_count" .= fromIntegral lnk.span_LinkDroppedAttributesCount
-          , "link_flags" .= fromIntegral lnk.span_LinkFlags
-          ]
-    )
-      <$> lnks
+  AE.toJSON
+    $ ( \lnk ->
+          object
+            [ "link_span_id" .= (decodeUtf8 lnk.span_LinkSpanId :: Text)
+            , "link_trace_id" .= (decodeUtf8 lnk.span_LinkTraceId :: Text)
+            , "link_attributes" .= keyValueToJSONB lnk.span_LinkAttributes
+            , "link_dropped_attributes_count" .= fromIntegral lnk.span_LinkDroppedAttributesCount
+            , "link_flags" .= fromIntegral lnk.span_LinkFlags
+            ]
+      )
+    <$> lnks
 
 
 ---------------------------------------------------------------------------------------

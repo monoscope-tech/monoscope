@@ -24,7 +24,7 @@ import PyF (fmt)
 import Relude
 import Safe qualified
 import Text.Megaparsec (choice, errorBundlePretty, parse, sepBy)
-import Text.Megaparsec.Char (char, space, space1, string)
+import Text.Megaparsec.Char (char, space, string)
 
 
 -- Example queries
@@ -370,6 +370,8 @@ defaultSelectSqlQuery (Just SSpans) =
   , "status"
   , "span_name"
   , "CAST(EXTRACT(EPOCH FROM (end_time - start_time)) * 1000 AS INTEGER) as duration"
+  , "resource->>'service.name' as service"
+  , "span_id as latency_breakdown"
   , [fmt|LEFT(
         CONCAT(
             'attributes=', COALESCE(attributes, 'null'),

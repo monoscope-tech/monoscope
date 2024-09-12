@@ -13,7 +13,7 @@ export class StepsEditor extends LitElement {
     this.collectionResults = window.collectionResults || []
     this.saveErrors = []
 
-    require.config({ paths: { vs: '/assets/js/monaco/vs' } })
+    require.config({ paths: { vs: '/public/assets/js/monaco/vs' } })
     require.config({ paths: { vs: 'https://unpkg.com/monaco-editor/min/vs' } })
     require(['vs/editor/editor.main'], () => {
       this.initializeEditor(monaco)
@@ -202,17 +202,17 @@ export class StepsEditor extends LitElement {
         <input type="checkbox" id="stepState-${idx}" class="hidden stepState" />
         <div class="flex flex-row items-center bg-gray-50">
           <div class="h-full shrink bg-gray-50 p-3 border-r border-r-slate-200">
-            <svg class="h-4 w-4"><use href="/assets/svgs/fa-sprites/solid.svg#grip-dots-vertical"></use></svg>
+            <svg class="h-4 w-4"><use href="/public/assets/svgs/fa-sprites/solid.svg#grip-dots-vertical"></use></svg>
           </div>
           <div class="flex-1 flex flex-row items-center gap-1 bg-base-100 pr-5 py-3">
             <label for="stepState-${idx}" class="p-3 cursor-pointer text-xs text-slate-700">${idx + 1}</label>
             <label for="stepState-${idx}" class="p-3 cursor-pointer">
-              <svg class="h-4 w-3 group-has-[.stepState:checked]/item:rotate-90"><use href="/assets/svgs/fa-sprites/solid.svg#chevron-right"></use></svg>
+              <svg class="h-4 w-3 group-has-[.stepState:checked]/item:rotate-90"><use href="/public/assets/svgs/fa-sprites/solid.svg#chevron-right"></use></svg>
             </label>
             <div class="w-full space-y-1 relative">
               <div class="absolute right-0 items-center gap-3 text-xs text-gray-600 hidden group-hover/item:flex">
                 <a class="text-red-700" @click="${() => (this.collectionSteps = this.collectionSteps.filter((_, i) => i != idx))}">
-                  <svg class="w-2 h-3"><use href="/assets/svgs/fa-sprites/solid.svg#xmark"></use></svg>
+                  <svg class="w-2 h-3"><use href="/public/assets/svgs/fa-sprites/solid.svg#xmark"></use></svg>
                 </a>
               </div>
               <input class="text-lg w-full" placeholder="Untitled" .value="${stepData.title || ''}" id="title-${idx}" @change=${(e) => this.updateValue(e, idx, null, null, 'title')} />
@@ -269,7 +269,7 @@ export class StepsEditor extends LitElement {
             <div class="flex gap-2 items-center mb-2">
               <h5 class="label-text">Assertions</h5>
               <a href="https://apitoolkit.io/docs/dashboard/dashboard-pages/api-tests/#test-definition-syntax" class="" target="_blank">
-                <svg class="w-3 h-3 text-slate-700"><use href="/assets/svgs/fa-sprites/regular.svg#circle-info"></use></svg>
+                <svg class="w-3 h-3 text-slate-700"><use href="/public/assets/svgs/fa-sprites/regular.svg#circle-info"></use></svg>
               </a>
             </div>
             <div class="text-sm space-y-2 px-2 paramRows [&_.assertIndicator]:inline-block" id="[${idx}][asserts]">
@@ -291,15 +291,15 @@ export class StepsEditor extends LitElement {
     let error = result?.err?.advice || ''
 
     if (hasPassed) {
-      return html` <svg class="icon w-3 h-3 text-green-500"><use href="/assets/svgs/fa-sprites/solid.svg#check"></use></svg>`
+      return html` <svg class="icon w-3 h-3 text-green-500"><use href="/public/assets/svgs/fa-sprites/solid.svg#check"></use></svg>`
     }
     if (!hasPassed && !notRun) {
       return html`<span title="${error}"
-        ><svg class="icon w-3 h-3 text-red-500"><use href="/assets/svgs/fa-sprites/solid.svg#xmark"></use></svg><span></span
+        ><svg class="icon w-3 h-3 text-red-500"><use href="/public/assets/svgs/fa-sprites/solid.svg#xmark"></use></svg><span></span
       ></span>`
     }
     return html`<span title="${error}" class="opacity-0"
-      ><svg class="icon w-3 h-3 text-red-500"><use href="/assets/svgs/fa-sprites/solid.svg#xmark"></use></svg><span></span
+      ><svg class="icon w-3 h-3 text-red-500"><use href="/public/assets/svgs/fa-sprites/solid.svg#xmark"></use></svg><span></span
     ></span>`
   }
 
@@ -329,7 +329,7 @@ export class StepsEditor extends LitElement {
           <span class="text-xs text-red-500">${error}</span>
         </div>
         <a class="cursor-pointer text-slate-600" @click=${(e) => this.deleteKey(e, idx, type, aidx, key)}>
-          <svg class="inline-block icon w-3 h-3 "><use href="/assets/svgs/fa-sprites/solid.svg#xmark"></use></svg>
+          <svg class="inline-block icon w-3 h-3 "><use href="/public/assets/svgs/fa-sprites/solid.svg#xmark"></use></svg>
         </a>
       </div>
     `
@@ -470,7 +470,7 @@ export class StepsEditor extends LitElement {
           </div>
           <div class="p-4 pt-2">
             <a class="btn btn-outline btn-neutral btn-sm items-center cursor-pointer" @click=${() => (this.collectionSteps = [...this.collectionSteps, {}])}>
-              <svg class="inline-block icon w-3 h-3"><use href="/assets/svgs/fa-sprites/solid.svg#plus"></use></svg>
+              <svg class="inline-block icon w-3 h-3"><use href="/public/assets/svgs/fa-sprites/solid.svg#plus"></use></svg>
               Add a step to test
             </a>
           </div>

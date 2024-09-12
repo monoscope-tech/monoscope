@@ -56,7 +56,6 @@ function throughputEChart(renderAt, data, gb, showLegend, theme) {
   if (showLegend) {
     option.grid.bottom = '9%'
   }
-  console.log(option)
   myChart.setOption(option)
 }
 
@@ -297,24 +296,34 @@ function latencyHistogram(renderAt, pc, data) {
   myChart.setOption(option)
 }
 
+const SCROLL_BAR_WIDTH = 7
+
 function flameGraphChart(data, renderAt, colorsMap) {
   const filterJson = (json, id) => {
     if (id == null) {
       return json
     }
     if (Array.isArray(json)) {
-      return json.filter((item) => item.name === id)
+      for (const item of json) {
+        const data = filterJson(item, id)
+        if (data.length > 0) {
+          return data
+        }
+      }
     }
     const recur = (item, id) => {
       if (item.name === id) {
-        return item
+        return [item]
       }
       for (const child of item.children || []) {
         const temp = recur(child, id)
-        if (temp) {
-          item.children = [temp]
-          item.value = temp.value // change the parents' values
-          return item
+        if (temp && temp.length > 0) {
+          const temp2 = temp[0]
+          temp.start = 0
+          item.children = [temp2]
+          item.value = temp2.value // change the parents' values
+          item.start = temp2.start
+          return [item]
         }
       }
     }
@@ -328,6 +337,7 @@ function flameGraphChart(data, renderAt, colorsMap) {
       const color = colorsMap[item.service_name] || '#000000'
       const temp = {
         name: item.name,
+        span_id: item.span_id,
         value: [level, item.start - start, item.value, item.name, (item.value / rootVal) * 100],
         itemStyle: {
           color,
@@ -344,20 +354,47 @@ function flameGraphChart(data, renderAt, colorsMap) {
     return data
   }
 
+  const fData = modifySpansForFlameGraph(data)
+
+  const heightOfJson = (json) => {
+    const recur = (item, level = 0) => {
+      if ((item.children || []).length === 0) {
+        return level
+      }
+      let maxLevel = level
+      for (const child of item.children) {
+        const tempLevel = recur(child, level + 1)
+        maxLevel = Math.max(maxLevel, tempLevel)
+      }
+      return maxLevel
+    }
+    return recur(json)
+  }
+
   const renderItem = (item, renderAt, rootVal) => {
     const [level, xStart, xEnd] = item.value
-    const container = document.getElementById(renderAt)
+    const container = document.querySelector('#' + renderAt)
 
     if (!container) return
-
-    const containerWidth = container.offsetWidth
+    const containerWidth = container.offsetWidth - SCROLL_BAR_WIDTH
     const startPix = (containerWidth * xStart) / rootVal
     const width = (containerWidth * xEnd) / rootVal
-
     const height = 20
     const yStart = height * level + (level + 1) * 3
 
-    const div = elt('div', { class: 'absolute hover:z-[999] flex rounded items-center justify-between flex-nowrap overflow-hidden hover:border hover:border-black' })
+    const div = elt('div', {
+      class: 'absolute hover:z-[999] flex rounded items-center cursor-pointer  grow-0 justify-between flex-nowrap overflow-hidden hover:border hover:border-black',
+      id: item.span_id,
+      onclick: (e) => {
+        const data = filterJson(structuredClone(fData), item.name)
+        flameGraph(data, renderAt)
+        const target = document.getElementById(item.span_id)
+        if (target) {
+          target.scrollIntoView()
+        }
+        htmx.trigger('#sp-list-' + item.span_id, 'click')
+      },
+    })
     div.style.left = `${startPix}px`
     div.style.top = `${yStart}px`
     div.style.width = `${width}px`
@@ -369,24 +406,50 @@ function flameGraphChart(data, renderAt, colorsMap) {
     const tim = elt('span', { class: 'text-black text-xs shrink-0' }, `${Math.floor(t)} ${u}`)
     div.appendChild(text)
     div.appendChild(tim)
-
     container.appendChild(div)
   }
 
+  let maxDuration = 0
   function flameGraph(stackTrace, target) {
+    const container = document.querySelector('#' + target)
+    container.innerHTML = ''
     const rootVal = stackTrace.sort((a, b) => b.value - a.value)[0].value || 1
+    maxDuration = rootVal
     generateTimeIntervals(rootVal, target)
     const data = recursionJson(stackTrace)
     const sortedData = data.sort((a, b) => b.value[2] - a.value[2])
-
     sortedData.forEach((item) => {
       renderItem(item, target, rootVal)
     })
   }
 
-  const fData = modifySpansForFlameGraph(data)
-
   flameGraph(fData, renderAt)
+
+  const flameGraphContainer = document.querySelector('#flame-graph-container')
+
+  flameGraphContainer.addEventListener('mousemove', (e) => {
+    const boundingX = e.currentTarget.getBoundingClientRect().x
+    const lineContainer = document.querySelector('#time-bar-indicator')
+    const time = document.querySelector('#line-time')
+    const container = document.querySelector('#time-container')
+    if (container) {
+      const left = e.clientX - boundingX
+      const containerWidth = container.offsetWidth - SCROLL_BAR_WIDTH
+      const currTime = (maxDuration * (left - 8)) / containerWidth
+      const [f, u] = formatDuration(currTime)
+      time.textContent = `${f}${u}`
+      lineContainer.style.left = `${left}px`
+      if (left < 9 || left > containerWidth + 8) {
+        lineContainer.style.display = 'none'
+      } else {
+        lineContainer.style.display = 'block'
+      }
+    }
+  })
+  flameGraphContainer.addEventListener('mouseleave', (e) => {
+    const lineContainer = document.querySelector('#time-bar-indicator')
+    lineContainer.style.display = 'none'
+  })
 }
 
 function modifySpansForFlameGraph(data) {
@@ -417,14 +480,17 @@ function buildHierachy(spans) {
 }
 
 function generateTimeIntervals(duration, target) {
-  const container = document.getElementById('time-container-' + target)
-  const [durationF, unit] = formatDuration(duration)
+  const container = document.querySelector('#time-container')
   container.innerHTML = ''
-  const containerWidth = container.offsetWidth
+  const containerWidth = container.offsetWidth - SCROLL_BAR_WIDTH
   const intervalWidth = containerWidth / 9
   const intervals = []
   for (let i = 0; i < 10; i++) {
-    const time = Math.floor((i * durationF) / 9)
+    const t = Math.floor((i * duration) / 9)
+    let [durationF, unit] = formatDuration(t)
+    const time = durationF
+    unit = t === 0 ? '' : unit
+
     intervals.push(`
               <div class="absolute bottom-0 text-gray-700 border-left overflow-x-visible" style="width: ${intervalWidth}px; left: ${i * intervalWidth}px;">
                <div class="relative" style="height:10px">
@@ -434,17 +500,16 @@ function generateTimeIntervals(duration, target) {
               </div>
       `)
   }
-
   container.innerHTML = intervals.join('')
 }
 
 function formatDuration(duration) {
   if (duration >= 1000000000) {
-    return [(duration / 1000000000).toFixed(2), 's']
+    return [(duration / 1000000000).toFixed(1), 's']
   } else if (duration >= 1000000) {
-    return [(duration / 1000000).toFixed(2), 'ms']
+    return [(duration / 1000000).toFixed(1), 'ms']
   } else if (duration >= 1000) {
-    return [(duration / 1000).toFixed(2), 'µs']
+    return [(duration / 1000).toFixed(1), 'µs']
   } else {
     return [duration, 'ns']
   }

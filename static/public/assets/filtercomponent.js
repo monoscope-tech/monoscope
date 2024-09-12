@@ -121,7 +121,7 @@ export class MyElement extends LitElement {
       <div class="relative w-full" @click=${(e) => e.stopPropagation()}>
         <div class="flex items-center flex-wrap gap-2 border border-1  px-4 py-2 w-ful rounded-lg">
           <i class="fa-regular fa-filter h-4 w-4 text-gray-500"></i>
-          <!-- <svg class="h-4 w-4 text-gray-500"><use href="/assets/svgs/fa-sprites/regular.svg#filter"></use></svg> -->
+          <!-- <svg class="h-4 w-4 text-gray-500"><use href="/public/assets/svgs/fa-sprites/regular.svg#filter"></use></svg> -->
           <div class="flex flex-wrap gap-2">
             ${this.filters.map((filter, index) => {
               return html`
@@ -137,7 +137,7 @@ export class MyElement extends LitElement {
             ${this.filters.length == 0
               ? html`<button type="button" @click=${() => (this.showFilterSearch = !this.showFilterSearch)} class="text-gray-500">Click to add filter...</button>`
               : html`<button type="button" @click=${() => (this.showFilterSearch = !this.showFilterSearch)} class="px-2 py-1 border rounded text-gray-500 hover:bg-gray-100">
-                  <svg class="inline-block icon h-4 w-4"><use href="/assets/svgs/fa-sprites/regular.svg#plus"></use></svg>
+                  <svg class="inline-block icon h-4 w-4"><use href="/public/assets/svgs/fa-sprites/regular.svg#plus"></use></svg>
                 </button>`}
           </div>
         </div>
@@ -308,7 +308,7 @@ class FilterItem extends LitElement {
     }
     </div>
     ${html`<span class="px-2 hover:bg-blue-100 rounded-r-full py-1" @click=${() => this.removeFilter(this.pos)}>
-      <svg class="inline-block icon h-3 w-3"><use href="/assets/svgs/fa-sprites/regular.svg#xmark"></use></svg>
+      <svg class="inline-block icon h-3 w-3"><use href="/public/assets/svgs/fa-sprites/regular.svg#xmark"></use></svg>
     </span>`}
   </div>`
   }

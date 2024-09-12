@@ -144,13 +144,13 @@ surveyPage pid full_name phoneNumber = do
                       span_ [class_ "text-red-400"] " *"
                     div_ [id_ "stack", name_ "stack", required_ "required", class_ "px-2 py-2"] do
                       div_ [class_ "grid grid-cols-6 gap-6 space-y-2"] $ forM_ stackOptions $ \(value, label, img) -> do
-                        let bg = "url('/assets/framework-logos/" <> img <> "')"
+                        let bg = "url('/public/assets/framework-logos/" <> img <> "')"
                         label_
                           [ class_ $ "cursor-pointer relative flex justify-center items-center column border rounded-lg text-[14px] bg-center p-2 bg-contain bg-no-repeat " <> bg
                           , Lucid.for_ value
                           ]
                           do
-                            img_ [src_ $ "/assets/framework-logos/" <> img, class_ "max-h-[80px] my-auto"]
+                            img_ [src_ $ "/public/assets/framework-logos/" <> img, class_ "max-h-[80px] my-auto"]
                             div_ [class_ "absolute z-10 left-0 top-0 block group p-2 hover:bg-slate-100"] do
                               input_ [class_ "mr-3", type_ "checkbox", id_ value, name_ "stack", value_ value]
                               span_ [class_ "hidden group-hover:inline"] $ toHtml label
