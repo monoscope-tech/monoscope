@@ -23,30 +23,30 @@ import Relude
 import Utils (deleteParam, faSprite_)
 
 data ItemsListCfg = ItemsListCfg
-  { currentURL :: Text         
-  , sort :: Maybe SortCfg     
-  , filter :: Maybe Text       
-  , projectId :: Projects.ProjectId  
-  , currTime :: UTCTime        
-  , elemID :: Text            
-  , nextFetchUrl :: Maybe Text  
-  , zeroState :: Maybe ZeroState 
-  , bulkActions :: [BulkAction] 
-  , search :: Maybe SearchCfg  
-  , heading :: Maybe (Html ()) 
+  { currentURL :: Text
+  , sort :: Maybe SortCfg
+  , filter :: Maybe Text
+  , projectId :: Projects.ProjectId
+  , currTime :: UTCTime
+  , elemID :: Text
+  , nextFetchUrl :: Maybe Text
+  , zeroState :: Maybe ZeroState
+  , bulkActions :: [BulkAction]
+  , search :: Maybe SearchCfg
+  , heading :: Maybe (Html ())
   }
 
 data SearchCfg = SearchCfg
   {viaQueryParam :: Maybe Text}
 
 data BulkAction = BulkAction
-  { icon :: Maybe Text 
-  , title :: Text      
-  , uri :: Text        
+  { icon :: Maybe Text
+  , title :: Text
+  , uri :: Text
   }
 
 data SortCfg = SortCfg
-  { current :: Text    
+  { current :: Text
   }
 
 
