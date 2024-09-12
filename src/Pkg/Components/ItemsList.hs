@@ -1,4 +1,3 @@
--- This module defines components for rendering and managing lists of items
 module Pkg.Components.ItemsList (
   itemsList_,
   itemsPage_,
@@ -13,7 +12,6 @@ module Pkg.Components.ItemsList (
 )
 where
 
--- Import necessary modules and libraries
 import Data.Time (UTCTime)
 import Data.Tuple.Extra (fst3)
 import Data.Vector qualified as V
@@ -24,66 +22,53 @@ import Models.Projects.Projects qualified as Projects
 import Relude
 import Utils (deleteParam, faSprite_)
 
--- Configuration for the items list
 data ItemsListCfg = ItemsListCfg
-  { currentURL :: Text          -- Current URL of the page
-  , sort :: Maybe SortCfg       -- Sorting configuration
-  , filter :: Maybe Text        -- Filter Configuration (for now)
-  , projectId :: Projects.ProjectId  -- ID of the current project
-  , currTime :: UTCTime         -- Current time
-  , elemID :: Text              -- ID of the main element
-  , nextFetchUrl :: Maybe Text  -- URL for fetching next set of items
-  , zeroState :: Maybe ZeroState -- Configuration for empty state
-  , bulkActions :: [BulkAction] -- List of bulk actions
-  , search :: Maybe SearchCfg   -- Search configuration
-  , heading :: Maybe (Html ())  -- Optional heading HTML
+  { currentURL :: Text         
+  , sort :: Maybe SortCfg     
+  , filter :: Maybe Text       
+  , projectId :: Projects.ProjectId  
+  , currTime :: UTCTime        
+  , elemID :: Text            
+  , nextFetchUrl :: Maybe Text  
+  , zeroState :: Maybe ZeroState 
+  , bulkActions :: [BulkAction] 
+  , search :: Maybe SearchCfg  
+  , heading :: Maybe (Html ()) 
   }
 
--- Configuration for search functionality
 data SearchCfg = SearchCfg
-  {viaQueryParam :: Maybe Text} -- Query parameter for search
+  {viaQueryParam :: Maybe Text}
 
--- Representation of a bulk action
 data BulkAction = BulkAction
-  { icon :: Maybe Text  -- Icon for the action
-  , title :: Text       -- Title of the action
-  , uri :: Text         -- URI to trigger the action
+  { icon :: Maybe Text 
+  , title :: Text      
+  , uri :: Text        
   }
 
--- Configuration for sorting
 data SortCfg = SortCfg
-  { current :: Text    -- Current sort option
+  { current :: Text    
   }
 
--- Configuration for filtering
--- data FilterCfg = FilterCfg{
---     current:: Text
---   }
 
--- Configuration for zero state (empty list)
 data ZeroState = ZeroState
   { icon :: Text
   , title :: Text
   , description :: Text
   , actionText :: Text
-  , destination :: Either Text Text -- Either LabelID or URL
+  , destination :: Either Text Text 
   }
 
--- Represents a page of items
 type role ItemsPage representational
 data ItemsPage a = ItemsPage ItemsListCfg (V.Vector a)
 
--- Implementation of ToHtml for ItemsPage
 instance ToHtml a => ToHtml (ItemsPage a) where
   toHtml (ItemsPage cfg items) = toHtmlRaw $ itemsPage_ cfg items
   toHtmlRaw (ItemsPage cfg items) = toHtmlRaw $ itemsPage_ cfg items
 
--- Function to render a page of items
 itemsPage_ :: ToHtml a => ItemsListCfg -> V.Vector a -> Html ()
 itemsPage_ listCfg items = div_ [class_ "w-full mx-auto px-6 pt-2 pb-16 overflow-y-scroll h-full space-y-6", id_ "itemsListPage"] $ do
   itemsList_ listCfg items
 
--- Main function to render the items list
 itemsList_ :: ToHtml a => ItemsListCfg -> V.Vector a -> Html ()
 itemsList_ listCfg items =
   div_ [class_ "grid card-round overflow-hidden group/grid", id_ "anomalyListBelowTab", hxGet_ listCfg.currentURL, hxSwap_ "outerHTML", hxTrigger_ "refreshMain"] do
@@ -96,9 +81,7 @@ itemsList_ listCfg items =
             ]
               :: [(Text, Text, Text)]
 
-      -- Render the header with bulk actions, search, and sort options
       div_ [class_ "flex py-3 gap-8 items-center  bg-gray-50"] do
-        -- Checkbox for selecting all items
         div_ [class_ "h-4 flex space-x-3 w-8 items-center"] do
           span_ [class_ " w-2 h-full"] ""
           input_ [ term "aria-label" "Select Issue"
@@ -107,7 +90,6 @@ itemsList_ listCfg items =
                  , [__| on click set .bulkactionItemCheckbox.checked to my.checked |]
                  ]
 
-        -- Bulk actions
         div_ [class_ " grow flex flex-row gap-2"] do
           forM_ listCfg.bulkActions \blkA -> button_
             [ class_ "btn btn-sm  border-black hover:shadow-2xl btn-disabled group-has-[.bulkactionItemCheckbox:checked]/grid:!btn-outline group-has-[.bulkactionItemCheckbox:checked]/grid:!pointer-events-auto  "
@@ -117,7 +99,6 @@ itemsList_ listCfg items =
               whenJust blkA.icon \icon -> faSprite_ icon "solid" "h-4 w-4 inline-block"
               span_ (toHtml blkA.title)
 
-          -- Search input
           whenJust listCfg.search \search -> do
             label_ [class_ "input input-sm input-bordered flex  overflow-hidden items-center gap-2"] do
               case search.viaQueryParam of
@@ -142,7 +123,6 @@ itemsList_ listCfg items =
                          ]
               faSprite_ "magnifying-glass" "regular" "w-4 h-4 opacity-70"
 
-        -- Sort options
         whenJust listCfg.sort \sortCfg -> do
           let currentSortTitle = maybe "First Seen" fst3 $ find (\(_, _, identifier) -> identifier == sortCfg.current) sortMenu
           div_ [class_ "dropdown dropdown-end inline-block"] do
@@ -166,7 +146,6 @@ itemsList_ listCfg items =
                     span_ [class_ "block text-lg"] $ toHtml title
                     span_ [class_ "block "] $ toHtml desc
 
-        -- Graph and events display
         div_ [class_ "flex justify-center font-base w-60 content-between gap-14"] do
           span_ "GRAPH"
           div_ [class_ "space-x-2 font-base text-sm"] do
@@ -178,7 +157,6 @@ itemsList_ listCfg items =
              , id_ "sortLoader"
              ] ""
 
-      -- Render zero state if the list is empty
       when (null items) $ whenJust listCfg.zeroState \zeroState -> section_ [class_ "mx-auto w-max p-5 sm:py-10 sm:px-16 items-center flex my-10 gap-16"] do
         div_ [] $ faSprite_ zeroState.icon "solid" "h-24 w-24"
         div_ [class_ "flex flex-col gap-2"] do
@@ -188,21 +166,17 @@ itemsList_ listCfg items =
             Right destination -> a_ [href_ destination, class_ "w-max btn btn-indigo -ml-1 text-md"] $ toHtml zeroState.actionText
             Left labelId -> label_ [Lucid.for_ labelId, class_ "w-max btn btn-indigo -ml-1 text-md"] $ toHtml zeroState.actionText
 
-      -- Render the list of items
       div_ [class_ "w-full flex flex-col"] do
         span_ [id_ "searchIndicator", class_ "htmx-indicator loading loading-sm loading-dots mx-auto"] ""
         div_ [id_ "rowsContainer", class_ "divide-y"] $ itemRows_ listCfg.nextFetchUrl items
 
--- Represents rows of items
 type role ItemsRows representational
 data ItemsRows a = ItemsRows (Maybe Text) (V.Vector a) -- Text represents nextFetchUrl
 
--- Implementation of ToHtml for ItemsRows
 instance ToHtml a => ToHtml (ItemsRows a) where
   toHtml (ItemsRows nextFetchUrl items) = toHtmlRaw $ itemRows_ nextFetchUrl items
   toHtmlRaw (ItemsRows nextFetchUrl items) = toHtmlRaw $ itemRows_ nextFetchUrl items
 
--- Function to render rows of items
 itemRows_ :: (Monad m, ToHtml a) => Maybe Text -> V.Vector a -> HtmlT m ()
 itemRows_ nextFetchUrl items = do
   mapM_ toHtml items
