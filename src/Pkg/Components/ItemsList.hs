@@ -84,18 +84,20 @@ itemsList_ listCfg items =
       div_ [class_ "flex py-3 gap-8 items-center  bg-gray-50"] do
         div_ [class_ "h-4 flex space-x-3 w-8 items-center"] do
           span_ [class_ " w-2 h-full"] ""
-          input_ [ term "aria-label" "Select Issue"
-                 , type_ "checkbox"
-                 , class_ "checkbox  checkbox-md checked:checkbox-primary"
-                 , [__| on click set .bulkactionItemCheckbox.checked to my.checked |]
-                 ]
+          input_
+            [ term "aria-label" "Select Issue"
+            , type_ "checkbox"
+            , class_ "checkbox  checkbox-md checked:checkbox-primary"
+            , [__| on click set .bulkactionItemCheckbox.checked to my.checked |]
+            ]
 
         div_ [class_ " grow flex flex-row gap-2"] do
           forM_ listCfg.bulkActions \blkA -> button_
             [ class_ "btn btn-sm  border-black hover:shadow-2xl btn-disabled group-has-[.bulkactionItemCheckbox:checked]/grid:!btn-outline group-has-[.bulkactionItemCheckbox:checked]/grid:!pointer-events-auto  "
             , hxPost_ blkA.uri
             , hxSwap_ "none"
-            ] do
+            ]
+            do
               whenJust blkA.icon \icon -> faSprite_ icon "solid" "h-4 w-4 inline-block"
               span_ (toHtml blkA.title)
 
@@ -103,24 +105,26 @@ itemsList_ listCfg items =
             label_ [class_ "input input-sm input-bordered flex  overflow-hidden items-center gap-2"] do
               case search.viaQueryParam of
                 Just param ->
-                  input_ [ type_ "text"
-                         , class_ "grow"
-                         , name_ "search"
-                         , id_ "search_box"
-                         , placeholder_ "Search"
-                         , hxTrigger_ "keyup changed delay:500ms"
-                         , hxGet_ currentURL'
-                         , hxTarget_ "#rowsContainer"
-                         , hxSwap_ "innerHTML"
-                         , id_ "searchThing"
-                         , hxIndicator_ "#searchIndicator"
-                         ]
+                  input_
+                    [ type_ "text"
+                    , class_ "grow"
+                    , name_ "search"
+                    , id_ "search_box"
+                    , placeholder_ "Search"
+                    , hxTrigger_ "keyup changed delay:500ms"
+                    , hxGet_ currentURL'
+                    , hxTarget_ "#rowsContainer"
+                    , hxSwap_ "innerHTML"
+                    , id_ "searchThing"
+                    , hxIndicator_ "#searchIndicator"
+                    ]
                 Nothing -> do
-                  input_ [ type_ "text"
-                         , class_ "grow"
-                         , placeholder_ "Search"
-                         , [__| on input show .itemsListItem in #itemsListPage when its textContent.toLowerCase() contains my value.toLowerCase() |]
-                         ]
+                  input_
+                    [ type_ "text"
+                    , class_ "grow"
+                    , placeholder_ "Search"
+                    , [__| on input show .itemsListItem in #itemsListPage when its textContent.toLowerCase() contains my value.toLowerCase() |]
+                    ]
               faSprite_ "magnifying-glass" "regular" "w-4 h-4 opacity-70"
 
         whenJust listCfg.sort \sortCfg -> do
@@ -129,22 +133,26 @@ itemsList_ listCfg items =
             a_ [class_ "btn btn-sm btn-outline border-black hover:shadow-2xl", tabindex_ "0"] do
               faSprite_ "sort" "solid" "h-4 w-4"
               span_ $ toHtml currentSortTitle
-            div_ [ id_ "sortMenuDiv"
-                 , hxBoost_ "true"
-                 , class_ "dropdown-content bg-base-100 p-1 text-sm border border-black-30 z-50 mt-2 w-72 origin-top-right rounded-md shadow-lg "
-                 , tabindex_ "0"
-                 ] do
-              sortMenu & mapM_ \(title, desc, identifier) -> do
-                let isActive = sortCfg.current == identifier || (sortCfg.current == "" && identifier == "first_seen")
-                a_ [ class_ $ "block flex flex-row px-3 py-2 hover:bg-blue-50 rounded-md cursor-pointer " <> (if isActive then " text-blue-800 " else "")
-                   , href_ $ currentURL' <> "&sort=" <> identifier
-                   , hxIndicator_ "#sortLoader"
-                   ] do
-                  div_ [class_ "flex flex-col items-center justify-center px-3"]
-                    $ if isActive then faSprite_ "icon-checkmark4" "solid" "w-4 h-5" else div_ [class_ "w-4 h-5"] ""
-                  div_ [class_ "grow space-y-1"] do
-                    span_ [class_ "block text-lg"] $ toHtml title
-                    span_ [class_ "block "] $ toHtml desc
+            div_
+              [ id_ "sortMenuDiv"
+              , hxBoost_ "true"
+              , class_ "dropdown-content bg-base-100 p-1 text-sm border border-black-30 z-50 mt-2 w-72 origin-top-right rounded-md shadow-lg "
+              , tabindex_ "0"
+              ]
+              do
+                sortMenu & mapM_ \(title, desc, identifier) -> do
+                  let isActive = sortCfg.current == identifier || (sortCfg.current == "" && identifier == "first_seen")
+                  a_
+                    [ class_ $ "block flex flex-row px-3 py-2 hover:bg-blue-50 rounded-md cursor-pointer " <> (if isActive then " text-blue-800 " else "")
+                    , href_ $ currentURL' <> "&sort=" <> identifier
+                    , hxIndicator_ "#sortLoader"
+                    ]
+                    do
+                      div_ [class_ "flex flex-col items-center justify-center px-3"]
+                        $ if isActive then faSprite_ "icon-checkmark4" "solid" "w-4 h-5" else div_ [class_ "w-4 h-5"] ""
+                      div_ [class_ "grow space-y-1"] do
+                        span_ [class_ "block text-lg"] $ toHtml title
+                        span_ [class_ "block "] $ toHtml desc
 
         div_ [class_ "flex justify-center font-base w-60 content-between gap-14"] do
           span_ "GRAPH"
@@ -153,9 +161,11 @@ itemsList_ listCfg items =
             a_ [ class_ $ "cursor-pointer " <> (if selectedFilter == "24h" then "text-base font-bold" else "")  , href_ $ currentURL' <> "&since=24h"] "24h"
             a_ [ class_ $ "cursor-pointer " <> (if selectedFilter == "14d" then "text-base font-bold" else ""), href_ $ currentURL' <> "&since=14d"] "14d"
         div_ [class_ "w-36 flex items-center justify-center"] $ span_ [class_ "font-base"] "EVENTS"
-        div_ [ class_ "p-12 fixed rounded-lg shadow bg-base-100 top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 htmx-indicator loading loading-dots loading-md"
-             , id_ "sortLoader"
-             ] ""
+        div_
+          [ class_ "p-12 fixed rounded-lg shadow bg-base-100 top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 htmx-indicator loading loading-dots loading-md"
+          , id_ "sortLoader"
+          ]
+          ""
 
       when (null items) $ whenJust listCfg.zeroState \zeroState -> section_ [class_ "mx-auto w-max p-5 sm:py-10 sm:px-16 items-center flex my-10 gap-16"] do
         div_ [] $ faSprite_ zeroState.icon "solid" "h-24 w-24"
@@ -182,11 +192,13 @@ itemRows_ nextFetchUrl items = do
   mapM_ toHtml items
   whenJust nextFetchUrl \url ->
     when (length items > 9)
-      $ a_ [ class_ "cursor-pointer flex justify-center items-center block p-1 blue-800 bg-blue-100 hover:bg-blue-200 text-center"
-           , hxTrigger_ "click, intersect once"
-           , hxSwap_ "outerHTML"
-           , hxGet_ url
-           , hxIndicator_ "#rowsIndicator"
-           ] do
-        "Load more"
-        span_ [id_ "rowsIndicator", class_ "ml-2 htmx-indicator loading loading-dots loading-md"] ""
+      $ a_
+        [ class_ "cursor-pointer flex justify-center items-center block p-1 blue-800 bg-blue-100 hover:bg-blue-200 text-center"
+        , hxTrigger_ "click, intersect once"
+        , hxSwap_ "outerHTML"
+        , hxGet_ url
+        , hxIndicator_ "#rowsIndicator"
+        ]
+        do
+          "Load more"
+          span_ [id_ "rowsIndicator", class_ "ml-2 htmx-indicator loading loading-dots loading-md"] ""

@@ -95,11 +95,13 @@ renderapiCatalog pid host timeFilter requestType = div_ [class_ "flex py-4 gap-8
         a_ [href_ $ "/p/" <> pid.toText <> "/log_explorer?query=host%3D%3D" <> "\"" <> host.host <> "\"", class_ "text-blue-500 hover:text-slate-600 text-xs"] "View logs"
 
   div_ [class_ "flex items-center justify-center "] $ do
-    div_ 
+    div_
       [ class_ "w-56 h-12 px-3"
       , hxGet_ $ "/charts_html?pid=" <> pid.toText <> "&since=" <> (if timeFilter == "14d" then "14D" else "24h") <> "&query_raw=" <> AnomalyList.escapedQueryPartial [PyF.fmt|host=="{host.host}" | timechart [1d]|]
       , hxTrigger_ "intersect once"
       , hxSwap_ "innerHTML"
       ]
       ""
-  div_ [class_ "w-36 flex items-center justify-center"] $ span_ [class_ "tabular-nums text-xl", term "data-tippy-content" "Events for this Anomaly in the last 14days"] $ toHtml @String $ fmt $ commaizeF host.eventCount
+
+  div_ [class_ "w-36 flex items-center justify-center"] $
+    span_ [class_ "tabular-nums text-xl", term "data-tippy-content" "Events for this Anomaly in the last 14 days"] $ toHtml @String $ fmt $ commaizeF host.eventCount

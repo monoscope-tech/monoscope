@@ -36,36 +36,37 @@ import Data.Time.LocalTime (LocalTime (localDay), ZonedTime (zonedTimeToLocalTim
 import Data.Vector (Vector)
 import Data.Vector qualified as V
 import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
-import Lucid
-    ( Html,
-      ToHtml(..),
-      a_,
-      checked_,
-      class_,
-      div_,
-      for_,
-      h3_,
-      h4_,
-      h5_,
-      href_,
-      id_,
-      img_,
-      input_,
-      label_,
-      name_,
-      p_,
-      small_,
-      span_,
-      src_,
-      style_,
-      table_,
-      tbody_,
-      td_,
-      th_,
-      thead_,
-      tr_,
-      type_,
-      value_ )
+import Lucid (
+  Html,
+  ToHtml (..),
+  a_,
+  checked_,
+  class_,
+  div_,
+  for_,
+  h3_,
+  h4_,
+  h5_,
+  href_,
+  id_,
+  img_,
+  input_,
+  label_,
+  name_,
+  p_,
+  small_,
+  span_,
+  src_,
+  style_,
+  table_,
+  tbody_,
+  td_,
+  th_,
+  thead_,
+  tr_,
+  type_,
+  value_,
+ )
 import Lucid.Htmx (hxGet_, hxPost_, hxSwap_, hxTrigger_)
 import Models.Apis.Anomalies qualified as Anomalies
 import Models.Apis.Fields.Types (textFieldTypeToText)
@@ -295,15 +296,16 @@ reportListItems :: Projects.ProjectId -> Vector Reports.ReportListItem -> Text -
 reportListItems pid reports nextUrl =
   div_ [class_ "space-y-4"] do
     forM_ reports $ \report -> do
-        when (report.reportType == "weekly") $ do
-          div_ [class_ "mx-auto rounded-lg border max-w-[1000px]"] do
-            a_ [class_ "bg-gray-100 px-4 py-3 flex justify-between", href_ $ "/p/" <> show pid.unProjectId <> "/reports/" <> show report.id.reportId] do
-              h4_ [class_ "text-xl font-medium capitalize"] $ toHtml report.reportType <> " report"
-              span_ [] $ show $ localDay (zonedTimeToLocalTime report.createdAt)
-            div_ [class_ "px-4 py-3 space-y-8"] pass
+      when (report.reportType == "weekly") $ do
+        div_ [class_ "mx-auto rounded-lg border max-w-[1000px]"] do
+          a_ [class_ "bg-gray-100 px-4 py-3 flex justify-between", href_ $ "/p/" <> show pid.unProjectId <> "/reports/" <> show report.id.reportId] do
+            h4_ [class_ "text-xl font-medium capitalize"] $ toHtml report.reportType <> " report"
+            span_ [] $ show $ localDay (zonedTimeToLocalTime report.createdAt)
+          div_ [class_ "px-4 py-3 space-y-8"] pass
     if length reports < 20
       then pass
       else a_ [class_ "max-w-[800px] mx-auto cursor-pointer block p-1 blue-800 bg-blue-100 hover:bg-blue-200 text-center", hxTrigger_ "click", hxSwap_ "outerHTML", hxGet_ nextUrl] "LOAD MORE"
+
 
 renderEndpointRow :: PerformanceReport -> Html ()
 renderEndpointRow endpoint = tr_ do
