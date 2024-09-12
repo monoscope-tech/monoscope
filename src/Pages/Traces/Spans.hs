@@ -1,19 +1,22 @@
-module Pages.Traces.Spans (expandedSpanItem) where
+module Pages.Traces.Spans (expandedSpanItem, spanLatencyBreakdownGet, SpanBreakdown (..)) where
 
 import Data.Aeson qualified as AE
 import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap qualified as KM
+import Data.HashMap.Strict qualified as HM
 import Data.Text qualified as T
 import Data.Time.Format (defaultTimeLocale, formatTime)
 import Data.Vector qualified as V
+import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
 import Lucid
 import Lucid.Hyperscript (__)
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Telemetry (SpanRecord (..))
 import Models.Telemetry.Telemetry qualified as Telemetry
 import NeatInterpolation (text)
-import Pages.Traces.Utils (getRequestDetails, getServiceName)
+import Pages.Traces.Utils (getRequestDetails, getServiceColor, getServiceName)
 import Relude
+import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
 import Utils
 
 
@@ -136,3 +139,33 @@ displayEventItem _ = pass
 numberOfEvents :: AE.Value -> Int
 numberOfEvents (AE.Array obj) = length obj
 numberOfEvents _ = 0
+
+
+spanLatencyBreakdownGet :: Projects.ProjectId -> Text -> ATAuthCtx (RespHeaders SpanBreakdown)
+spanLatencyBreakdownGet pid spid = do
+  spans <- Telemetry.getChildSpans pid spid
+  addRespHeaders $ SpanBreakdown spans
+
+
+newtype SpanBreakdown = SpanBreakdown (V.Vector Telemetry.SpanRecord)
+
+
+instance ToHtml SpanBreakdown where
+  toHtml (SpanBreakdown spans) = toHtml $ spanLatencyBreakdown spans
+  toHtmlRaw = toHtml
+
+
+spanLatencyBreakdown :: V.Vector Telemetry.SpanRecord -> Html ()
+spanLatencyBreakdown spans = do
+  let colors = getServiceColors $ (.spanName) <$> spans
+  let totalDuration = sum $ (.spanDurationNs) <$> spans
+  div_ [class_ "flex h-6  w-[150px]"] $ do
+    V.forM_ spans $ \sp -> do
+      let wdth = 150 * totalDuration `div` sp.spanDurationNs
+      let color = fromMaybe "#000000" $ HM.lookup sp.spanName colors
+      div_
+        [ class_ "h-full overflow-hidden"
+        , style_ $ "width:" <> show wdth <> "px;" <> "background-color:" <> color
+        , term "data-tippy-content" sp.spanName
+        ]
+        ""
