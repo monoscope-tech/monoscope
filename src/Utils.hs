@@ -362,7 +362,6 @@ serviceColors =
     , "bg-emerald-400"
     , "bg-fuchsia-400"
     , "bg-indigo-400"
-    , "bg-magenta-400"
     , "bg-sky-400"
     ]
 
