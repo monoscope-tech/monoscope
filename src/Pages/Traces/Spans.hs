@@ -159,13 +159,14 @@ spanLatencyBreakdown :: V.Vector Telemetry.SpanRecord -> Html ()
 spanLatencyBreakdown spans = do
   let colors = getServiceColors $ (.spanName) <$> spans
   let totalDuration = sum $ (.spanDurationNs) <$> spans
-  div_ [class_ "flex h-6  w-[150px]"] $ do
+  div_ [class_ "flex h-6 w-[150px]"] $ do
     V.forM_ spans $ \sp -> do
       let wdth = 150 * totalDuration `div` sp.spanDurationNs
       let color = fromMaybe "#000000" $ HM.lookup sp.spanName colors
       div_
-        [ class_ "h-full overflow-hidden"
-        , style_ $ "width:" <> show wdth <> "px;" <> "background-color:" <> color
-        , term "data-tippy-content" sp.spanName
+        [ class_ $ "h-full overflow-hidden tooltip tooltip-open " <> color
+        , style_ $ "width:" <> show wdth <> "px;"
+        , term "data-tip" sp.spanName
         ]
-        ""
+        do
+          div_ [class_ "h-full "] ""

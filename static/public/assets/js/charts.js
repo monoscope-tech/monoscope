@@ -334,7 +334,7 @@ function flameGraphChart(data, renderAt, colorsMap) {
     const filteredJson = filterJson(structuredClone(jsonObj), id)
     const rootVal = filteredJson.sort((a, b) => b.value - a.value)[0].value || 1
     const recur = (item, start = 0, level = 0) => {
-      const color = colorsMap[item.service_name] || '#000000'
+      const color = colorsMap[item.service_name] || 'bg-black'
       const temp = {
         name: item.name,
         span_id: item.span_id,
@@ -383,7 +383,7 @@ function flameGraphChart(data, renderAt, colorsMap) {
     const yStart = height * level + (level + 1) * 3
 
     const div = elt('div', {
-      class: 'absolute hover:z-[999] flex rounded items-center cursor-pointer  grow-0 justify-between flex-nowrap overflow-hidden hover:border hover:border-black',
+      class: item.itemStyle.color + ' absolute hover:z-[999] flex rounded items-center cursor-pointer  grow-0 justify-between flex-nowrap overflow-hidden hover:border hover:border-black',
       id: item.span_id,
       onclick: (e) => {
         const data = filterJson(structuredClone(fData), item.name)
@@ -399,7 +399,6 @@ function flameGraphChart(data, renderAt, colorsMap) {
     div.style.top = `${yStart}px`
     div.style.width = `${width}px`
     div.style.height = `${height}px`
-    div.style.backgroundColor = item.itemStyle.color
 
     const text = elt('span', { class: 'text-black ml-1 shrink-0 mr-4 text-xs' }, item.name)
     const [t, u] = formatDuration(item.value[2])

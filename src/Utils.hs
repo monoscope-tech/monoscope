@@ -156,8 +156,8 @@ getMethodColor _ = " badge badge-outline "
 getStatusColor :: Int -> Text
 getStatusColor status
   | status < 200 = "text-slate-600 bg-slate-50 border border-slate-200 "
-  | status >= 200 && status < 300 = "text-green-800 bg-green-50 border border-green-200"
-  | status >= 300 && status < 400 = "text-amber-800 bg-yellow-50 border border-yellow-200"
+  | status >= 200 && status < 400 = "text-green-800 bg-green-50 border border-green-200"
+  | status >= 400 && status < 400 = "text-amber-800 bg-yellow-50 border border-yellow-200"
   | otherwise = "text-red-800 bg-red-50 border border-red-200"
 
 
@@ -346,26 +346,24 @@ freeTierLimitExceededBanner pid =
 serviceColors :: V.Vector Text
 serviceColors =
   V.fromList
-    [ "#FCA5A5" -- Red-300
-    , "#FCD34D" -- Amber-300
-    , "#FDBA74" -- Orange-300
-    , "#FDE047" -- Yellow-300
-    , "#BEF264" -- Lime-300
-    , "#86EFAC" -- Green-300
-    , "#5EEAD4" -- Teal-300
-    , "#67E8F9" -- Cyan-300
-    , "#93C5FD" -- Blue-300
-    , "#D8B4FE" -- Purple-300
-    , "#A78BFA" -- Violet-300
-    , "#F9A8D4" -- Pink-300
-    , "#FDB5C4" -- Rose-300
-    , "#B8FFC4" -- Mint-300
-    , "#BBF7D0" -- Emerald-300
-    , "#F0ABFC" -- Fuchsia-300
-    , "#C4B5FD" -- Indigo-300
-    , "#FCA6FF" -- Magenta-300
-    , "#FFD9D9" -- Coral-300
-    , "#FFE699" -- Gold-300
+    [ "bg-red-400"
+    , "bg-amber-400"
+    , "bg-orange-400"
+    , "bg-yellow-400"
+    , "bg-lime-400"
+    , "bg-green-400"
+    , "bg-teal-400"
+    , "bg-cyan-400"
+    , "bg-blue-400"
+    , "bg-purple-400"
+    , "bg-violet-400"
+    , "bg-pink-400"
+    , "bg-rose-400"
+    , "bg-emerald-400"
+    , "bg-fuchsia-400"
+    , "bg-indigo-400"
+    , "bg-magenta-400"
+    , "bg-sky-400"
     ]
 
 

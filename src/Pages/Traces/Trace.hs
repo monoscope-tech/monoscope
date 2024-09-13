@@ -132,7 +132,7 @@ tracePage p = do
                           color = getServiceColor s serviceColors
                       div_ [class_ "flex items-center justify-between px-2 py-1"] $ do
                         div_ [class_ "flex gap-1 items-center"] $ do
-                          div_ [class_ "w-3 h-3 rounded", style_ $ "background-color:" <> color] pass
+                          div_ [class_ $ "w-3 h-3 rounded " <> color] pass
                           span_ [class_ ""] $ toHtml s
                         div_ [class_ "flex gap-1 items-center"] $ do
                           span_ [class_ "text-xs max-w-52 truncate"] $ toHtml $ T.take 4 percent <> "%"
