@@ -263,7 +263,7 @@ apiLogsPage page = do
       |]
     logQueryBox_ page.pid page.currentRange
 
-    div_ [class_ "w-full grow divide-y flex flex-col text-sm h-full overflow-hidden group/result"] do
+    div_ [class_ "card-round w-full grow divide-y flex flex-col text-sm h-full overflow-hidden group/result"] do
       div_ [class_ "flex-1 "] do
         div_ [class_ "pl-3 py-1 flex flex-row justify-end"] do
           label_ [class_ "flex items-center cursor-pointer space-x-2 p-1"] do
