@@ -263,8 +263,8 @@ apiLogsPage page = do
       |]
     logQueryBox_ page.pid page.currentRange
 
-    div_ [class_ "card-round w-full grow divide-y flex flex-col text-sm h-full overflow-hidden group/result"] do
-      div_ [class_ "flex-1 "] do
+    div_ [class_ "card-round w-full  divide-y flex flex-col text-sm h-[88%] overflow-hidden group/result"] do
+      div_ [class_ ""] do
         div_ [class_ "pl-3 py-1 flex flex-row justify-end"] do
           label_ [class_ "flex items-center cursor-pointer space-x-2 p-1"] do
             input_ [type_ "checkbox", class_ "toggle toggle-sm toggle-chart", checked_]
@@ -318,7 +318,7 @@ apiLogsPage page = do
 
 resultTableAndMeta_ :: ApiLogsPageData -> Html ()
 resultTableAndMeta_ page = do
-  section_ [class_ " w-full h-full overflow-hidden"] $ section_ [class_ " w-full tabs tabs-bordered items-start overflow-hidden h-full place-content-start", role_ "tablist"] do
+  section_ [class_ " w-full h-auto overflow-hidden"] $ section_ [class_ " w-full tabs tabs-bordered items-start overflow-hidden h-full place-content-start", role_ "tablist"] do
     input_ [type_ "radio", name_ "logExplorerMain", role_ "tab", class_ "tab", checked_, Aria.label_ $ "Query results (" <> fmt (commaizeF page.resultCount) <> ")"]
     div_ [class_ "relative overflow-y-scroll overflow-x-hidden h-full w-full tab-content", role_ "tabpanel"] do
       resultTable_ page True
