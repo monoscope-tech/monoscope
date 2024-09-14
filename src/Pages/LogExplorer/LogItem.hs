@@ -263,7 +263,7 @@ apiLogItemView pid logId req expandItemPath source = do
         "Expand"
 
     let reqJson = decodeUtf8 $ AE.encode req
-    when (source == "requests") $
+    when (source /= "logs" && source /= "spans") $
       button_
         [ class_ "btn btn-sm btn-outline"
         , term "data-reqJson" reqJson
