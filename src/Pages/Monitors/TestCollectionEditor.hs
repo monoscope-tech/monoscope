@@ -8,7 +8,8 @@ module Pages.Monitors.TestCollectionEditor (
   CollectionGet,
   CollectionRunTest,
   CollectionMut (..),
-) where
+)
+where
 
 import Data.Aeson (encode)
 import Data.Aeson qualified as AE
@@ -38,6 +39,8 @@ import Models.Tests.Testing qualified as Testing
 import Models.Users.Sessions qualified as Sessions
 import NeatInterpolation (text)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
+import Pages.Monitors.MetricMonitors qualified as MetricMonitors
+import Pkg.Components qualified as Components
 import Pkg.Components.Modals qualified as Components
 import PyF (fmt)
 import Relude hiding (ask)
@@ -193,6 +196,49 @@ testSettingsModalContent_ isUpdate col = div_ [class_ "space-y-5 w-96"] do
   div_ $ button_ [class_ "btn btn-bordered btn-primary", type_ "submit"] $ if isUpdate then "Update" else "Create Test"
 
 
+-- Timeline steps
+
+timelineSteps :: Projects.ProjectId -> Components.TimelineSteps
+timelineSteps pid =
+  Components.TimelineSteps $
+    [ Components.TimelineStep "Name of test" nameOfTest_
+    , Components.TimelineStep "Define steps" defineTestSteps_
+    , -- , Components.TimelineStep "Select locations" (defineTheMetric_ pid)
+      Components.TimelineStep "Define retry confitions" (MetricMonitors.configureNotificationMessage_)
+    , Components.TimelineStep "Define Scheduling and alert conditions" (MetricMonitors.configureNotificationChannels_)
+    ]
+
+
+nameOfTest_ :: Html ()
+nameOfTest_ = div_ [class_ "form-control w-full"] do
+  label_ [class_ "label hidden"] $ span_ [class_ "label-text"] "Name"
+  input_ [placeholder_ "Give your test a name", class_ "input input-md input-bordered  w-full", name_ "subject", value_ ""]
+
+
+defineTestSteps_ :: Html ()
+defineTestSteps_ = do
+  div_ [class_ "shrink p-4 flex justify-between items-center"] do
+    div_ [class_ "flex items-center space-x-4"] ""
+    div_ [class_ "space-x-4 flex items-center"] do
+      a_ [href_ "https://apitoolkit.io/docs/dashboard/dashboard-pages/api-tests/", target_ "_blank", class_ "text-sm flex items-center gap-1 text-blue-500"] do
+        faSprite_ "link-simple" "regular" "w-4 h-4" >> "Docs"
+      button_
+        [ class_ "btn btn-sm btn-success"
+        , hxPatch_ ""
+        , hxParams_ "stepsData"
+        , hxExt_ "json-enc"
+        , hxVals_ "js:{stepsData: saveStepData()}"
+        , hxTarget_ "#step-results-parent"
+        , hxSwap_ "innerHTML"
+        , hxIndicator_ "#step-results-indicator"
+        ]
+        (span_ "Run all" >> faSprite_ "play" "solid" "w-3 h-3")
+      button_ [class_ "btn btn-sm btn-warning ", type_ "submit"] (span_ "Save" >> faSprite_ "floppy-disk" "solid" "w-3 h-3")
+      label_ [class_ "relative inline-flex items-center cursor-pointer space-x-2"] do
+        input_ [type_ "checkbox", class_ "toggle editormode", onchange_ "codeToggle(event)"] >> span_ [class_ "text-sm"] "Code"
+  div_ [class_ "h-[26rem] overflow-y-hidden flex-1 "] $ termRaw "steps-editor" [id_ "stepsEditor"] ""
+
+
 collectionPage :: Projects.ProjectId -> Testing.Collection -> Maybe (V.Vector Testing.StepResult) -> String -> Html ()
 collectionPage pid col col_rn respJson = do
   let collectionStepsJSON = encode col.collectionSteps
@@ -205,14 +251,15 @@ collectionPage pid col col_rn respJson = do
   section_ [class_ "h-full overflow-y-hidden"] do
     form_
       [ id_ "stepsForm"
-      , class_ "grid grid-cols-2 h-full divide-x divide-gray-200 group/colform overflow-y-hidden"
+      , class_ "grid grid-cols-5 h-full divide-x divide-gray-200 group/colform overflow-y-hidden"
       , hxPost_ ""
       , hxSwap_ "none"
       , hxExt_ "json-enc"
       , hxVals_ "js:{stepsData: saveStepData()}"
       ]
       do
-        div_ [class_ "col-span-1 h-full divide-y flex flex-col overflow-y-hidden"] do
+        div_ [class_ "col-span-3 px-8 py-5 overflow-y-scroll"] $ toHtml $ timelineSteps pid
+        div_ [class_ "hidden col-span-1 h-full divide-y flex flex-col overflow-y-hidden"] do
           div_ [class_ "shrink flex items-center justify-between"] do
             div_ [class_ " pb-5 p-5 space-y-2"] do
               h2_ [class_ "text-base font-semibold leading-6 text-gray-900 flex items-end"] do
@@ -222,7 +269,7 @@ collectionPage pid col col_rn respJson = do
             div_ [class_ ""] do
               span_ [class_ "badge badge-success"] "Active"
               div_ [class_ "inline-block"] $ Components.modal_ "test-settings-modal" (span_ [class_ "p-3"] $ Utils.faSprite_ "sliders" "regular" "h-4") $ testSettingsModalContent_ True col
-          div_ [class_ "shrink p-4 flex justify-between items-center"] do
+          div_ [class_ "shrink flex justify-between items-center"] do
             div_ [class_ "flex items-center space-x-4"] do
               h4_ [class_ "font-semibold text-2xl font-medium "] "Steps"
               a_ [href_ "https://apitoolkit.io/docs/dashboard/dashboard-pages/api-tests/", target_ "_blank", class_ "text-sm flex items-center gap-1 text-blue-500"] do
@@ -244,7 +291,7 @@ collectionPage pid col col_rn respJson = do
                 input_ [type_ "checkbox", class_ "toggle editormode", onchange_ "codeToggle(event)"] >> span_ [class_ "text-sm"] "Code"
           div_ [class_ "h-full overflow-y-hidden flex-1"] $ termRaw "steps-editor" [id_ "stepsEditor"] ""
 
-        div_ [class_ "col-span-1 h-full border-r border-gray-200 overflow-y-auto"] do
+        div_ [class_ "col-span-2 h-full border-r border-gray-200 overflow-y-auto"] do
           div_ [class_ "max-h-full h-full overflow-y-auto space-y-4 relative", id_ "step-results-parent"] do
             case col_rn of
               Just res -> do
@@ -310,13 +357,13 @@ collectionStepResult_ idx stepResult = section_ [class_ "p-1"] do
     p_ [class_ $ "block badge badge-sm " <> getStatusColor stepResult.request.resp.status, term "data-tippy-content" "status"] $ show stepResult.request.resp.status
   div_ [role_ "tablist", class_ "tabs tabs-lifted"] do
     input_ [type_ "radio", name_ $ "step-result-tabs-" <> show idx, role_ "tab", class_ "tab", Aria.label_ "Response Log", checked_]
-    div_ [role_ "tabpanel", class_ "tab-content bg-base-100 border-base-300 rounded-box p-6"]
-      $ toHtmlRaw
-      $ textToHTML stepResult.stepLog
+    div_ [role_ "tabpanel", class_ "tab-content bg-base-100 border-base-300 rounded-box p-6"] $
+      toHtmlRaw $
+        textToHTML stepResult.stepLog
 
     input_ [type_ "radio", name_ $ "step-result-tabs-" <> show idx, role_ "tab", class_ "tab", Aria.label_ "Response Headers"]
-    div_ [role_ "tabpanel", class_ "tab-content bg-base-100 border-base-300 rounded-box p-6 "]
-      $ table_ [class_ "table table-xs"] do
+    div_ [role_ "tabpanel", class_ "tab-content bg-base-100 border-base-300 rounded-box p-6 "] $
+      table_ [class_ "table table-xs"] do
         thead_ [] $ tr_ [] $ th_ [] "Name" >> th_ [] "Value"
         tbody_ $ forM_ (M.toList stepResult.request.resp.headers) $ \(k, v) -> tr_ [] do
           td_ [] $ toHtml k

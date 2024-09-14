@@ -9,9 +9,12 @@ module Pkg.Components.ItemsList (
   ItemsListCfg (..),
   SortCfg (..),
   SearchCfg (..),
+  TimelineSteps (..),
+  TimelineStep (..),
 )
 where
 
+import Data.Foldable.WithIndex (iforM_)
 import Data.Time (UTCTime)
 import Data.Tuple.Extra (fst3)
 import Data.Vector qualified as V
@@ -156,8 +159,8 @@ itemsList_ listCfg items =
                     , hxIndicator_ "#sortLoader"
                     ]
                     do
-                      div_ [class_ "flex flex-col items-center justify-center px-3"]
-                        $ if isActive then faSprite_ "icon-checkmark4" "solid" "w-4 h-5" else div_ [class_ "w-4 h-5"] ""
+                      div_ [class_ "flex flex-col items-center justify-center px-3"] $
+                        if isActive then faSprite_ "icon-checkmark4" "solid" "w-4 h-5" else div_ [class_ "w-4 h-5"] ""
                       div_ [class_ "grow space-y-1"] do
                         span_ [class_ "block text-lg"] $ toHtml title
                         span_ [class_ "block "] $ toHtml desc
@@ -202,8 +205,8 @@ itemRows_ :: (Monad m, ToHtml a) => Maybe Text -> V.Vector a -> HtmlT m ()
 itemRows_ nextFetchUrl items = do
   mapM_ toHtml items
   whenJust nextFetchUrl \url ->
-    when (length items > 9)
-      $ a_
+    when (length items > 9) $
+      a_
         [ class_ "cursor-pointer flex justify-center items-center block p-1 blue-800 bg-blue-100 hover:bg-blue-200 text-center"
         , hxTrigger_ "click, intersect once"
         , hxSwap_ "outerHTML"
@@ -213,3 +216,40 @@ itemRows_ nextFetchUrl items = do
         do
           "Load more"
           span_ [id_ "rowsIndicator", class_ "ml-2 htmx-indicator loading loading-dots loading-md"] ""
+
+
+---------------------------------------------------------------------
+--   TimelineSteps
+---------------------------------------------------------------------
+
+-- TimelineSteps is used to render numbered timeline sections
+-- where each section has a number a title and content
+newtype TimelineSteps = TimelineSteps [TimelineStep]
+
+
+data TimelineStep = TimelineStep
+  { title :: Text
+  , content :: Html ()
+  }
+
+
+instance ToHtml TimelineSteps where
+  toHtmlRaw = toHtml
+  toHtml (TimelineSteps steps) = toHtml $ timelineSteps_ steps
+
+
+timelineSteps_ :: [TimelineStep] -> Html ()
+timelineSteps_ steps = do
+  ul_ [class_ "timeline timeline-snap-icon timeline-vertical timeline-compact"] $ do
+    iforM_ steps $ \idx step -> li_ [] $ do
+      when (idx > 0) $ hr_ []
+      div_ [class_ "timeline-middle"] $
+        span_
+          [class_ "inline-block rounded-full bg-primary text-base-100 h-7 w-7 flex items-center justify-center text-sm"]
+          (toHtml $ show $ idx + 1)
+      div_ [class_ "timeline-end space-y-5 w-full"] $ do
+        h2_ [] $ do
+          faSprite_ "chevron-down" "regular" "h-4 w-4 mx-2"
+          span_ [] (toHtml step.title)
+        div_ [class_ "pl-8 pb-8 space-y-3"] step.content
+      when (idx < (length steps - 1)) $ hr_ []

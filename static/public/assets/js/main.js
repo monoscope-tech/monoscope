@@ -87,6 +87,50 @@ window.evalScriptsFromContent = function (container) {
   })
 }
 
+var params = () => new Proxy(new URLSearchParams(window.location.search), {
+  get: (searchParams, prop) => searchParams.get(prop)??"",
+});
+window.params = params;
+
+
+var getTimeRange = function () {
+  const rangeInput = document.getElementById("custom_range_input")
+  const range = rangeInput.value.split("/")
+  if (range.length == 2)  {
+     return {from: range[0], to: range[1], since: ''}
+  }
+  if (range[0]!=''){
+    return {since: range[0], from: '', to: ''}
+   }
+   if (params().since==''){
+    return {since: '14D', from: params().from, to: params().to}
+  }
+   return {since: params().since, from: params().from, to: params().to}
+}
+window.getTimeRange = getTimeRange;
+
+
+var toggleColumnToSummary = (e)=>{
+  const cols = (params().cols??"").split(",").filter(x=>x!="");
+  const subject = e.target.closest('.log-item-field-parent').dataset.fieldPath;
+  if (cols.includes(subject)) {
+    return [...new Set(cols.filter(x=>x!=subject))].join(",");
+  }
+  cols.push(subject)
+  return [... new Set (cols)].join (",")
+}
+
+
+var removeNamedColumnToSummary = (namedCol) => {
+  console.log(params())
+  const cols = (params().cols ?? '').split(',').filter((x) => x != '')
+  const subject = namedCol
+
+  cols.forEach((x) => console.log(subject, x.replaceAll('.', '•').replaceAll('[', '❲').replaceAll(']', '❳')))
+
+  return [...new Set(cols.filter((x) => subject.toLowerCase() != x.replaceAll('.', '•').replaceAll('[', '❲').replaceAll(']', '❳').toLowerCase()))].join(',')
+}
+
 // Unified Timepicker
 //
 window.picker = new easepick.create({

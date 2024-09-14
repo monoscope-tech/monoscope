@@ -6,6 +6,14 @@ module.exports = {
     './static/public/assets/testeditor.js',
     './static/public/assets/steps-editor.js',
   ],
+  safelist: [
+    'group-has-[.errors:checked]/pg:block',
+    'group-has-[.api-changes:checked]/pg:block',
+    'group-has-[.healthcheckpings:checked]/pg:block',
+    'group-has-[.multistep-api-test:checked]/pg:block',
+    'group-has-[.throughput:checked]/pg:block',
+    'group-has-[.error-logs:checked]/pg:block',
+  ],
   daisyui: {
     themes: ['winter'],
   },

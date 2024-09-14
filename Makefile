@@ -21,6 +21,9 @@ live-reload:
 	# ghcid --command 'stack ghci apitoolkit-server --ghc-options=-w' --test ':run Start.startApp' --warnings
 	ghcid --command 'stack ghci apitoolkit-server --ghc-options="-w -j4 +RTS -A128m -n2m -RTS"' --test ':run Start.startApp' --warnings
 
+watch:
+	ghciwatch --test-ghci Start.startApp  --before-startup-shell hpack --clear 
+
 
 live-test-reload:
 	ghcid --command 'stack ghci apitoolkit-server:apitoolkit-server-test --ghc-options=-w' --test ':run Main.main' --warnings

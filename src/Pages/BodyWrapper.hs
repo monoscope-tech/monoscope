@@ -10,7 +10,7 @@ import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
 import Models.Users.Users qualified as Users
 import NeatInterpolation (text)
-import Pages.HashAssets
+import Pkg.THUtils
 import Pkg.Components.ExternalHeadScripts (externalHeadScripts_)
 import PyF
 import Relude
@@ -24,7 +24,7 @@ menu pid =
   , ("API Catalog", "/p/" <> pid.toText <> "/api_catalog", "swap")
   , ("Explorer", "/p/" <> pid.toText <> "/log_explorer", "list-tree")
   , ("Changes & Errors", "/p/" <> pid.toText <> "/anomalies", "bug")
-  , ("API Tests (Beta)", "/p/" <> pid.toText <> "/testing", "list-check")
+  , ("Monitors (Beta)", "/p/" <> pid.toText <> "/monitors", "list-check")
   , ("Reports", "/p/" <> pid.toText <> "/reports", "chart-simple")
   ]
 

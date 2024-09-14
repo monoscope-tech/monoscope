@@ -4,6 +4,7 @@ module Pages.Log (
   ApiLogsPageData (..),
   resultTable_,
   curateCols,
+  logQueryBox_,
 )
 where
 
@@ -40,7 +41,7 @@ import Models.Users.Sessions qualified as Sessions
 import NeatInterpolation (text)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), currProject, pageActions, pageTitle, sessM)
 import Pages.Components qualified as Components
-import Pages.Monitors.Alerts qualified as Alerts
+-- import Pages.Monitors.Alerts qualified as Alerts
 import Pkg.Components qualified as Components
 import Pkg.Parser (pSource)
 import Relude hiding (ask)
@@ -337,7 +338,7 @@ resultTableAndMeta_ page = do
 
     input_ [type_ "radio", name_ "logExplorerMain", role_ "tab", class_ "tab", Aria.label_ "Save as Alert"]
     div_ [class_ "relative overflow-y-scroll overflow-x-hidden h-full tab-content p-3", role_ "tabpanel"] do
-      Alerts.editAlert_ page.pid Nothing
+      -- Alerts.editAlert_ page.pid Nothing
       div_ [style_ "width:2000px"] pass
 
 
@@ -655,12 +656,7 @@ jsonTreeAuxillaryCode pid = do
             }
           htmx.trigger("#log_explorer_form", "submit")
         }
-
     }
-
-    var params = () => new Proxy(new URLSearchParams(window.location.search), {
-      get: (searchParams, prop) => searchParams.get(prop)??"",
-    });
 
     var toggleColumnToSummary = (e)=>{
       const cols = (params().cols??"").split(",").filter(x=>x!="");
