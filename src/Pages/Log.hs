@@ -335,30 +335,36 @@ resultTableAndMeta_ page = do
 
 
 resultTable_ :: ApiLogsPageData -> Bool -> Html ()
-resultTable_ page mainLog = table_ [class_ "w-full table table-xs table-pin-rows table-pin-cols overflow-x-hidden [contain:strict] [content-visibility:auto]", style_ "height:1px", id_ "resultTable"] do
-  -- height:1px fixes the cell minimum heights somehow.
-  let isLogEventB = isLogEvent page.cols
-  when (null page.requestVecs && (isNothing page.query || not mainLog)) $ do
-    whenJust page.isTestLog $ \query -> do
-      section_ [class_ "w-max  mx-auto my-16 p-5 sm:py-14 sm:px-24 items-center flex gap-16"] do
-        div_ [] $ faSprite_ "empty-set" "solid" "h-24 w-24"
-        div_ [class_ "flex flex-col gap-2"] do
-          h2_ [class_ "text-2xl font-bold"] "Waiting for Test run events..."
-          p_ "You're currently not running any tests yet."
-          a_ [href_ $ fromMaybe "" page.emptyStateUrl, class_ "w-max btn btn-indigo -ml-1 text-md"] "Go to test editor"
-    unless (isJust page.isTestLog) $ do
-      if mainLog
-        then do
-          section_ [class_ "w-max  mx-auto my-16 p-5 sm:py-14 sm:px-24 items-center flex gap-16"] do
-            div_ [] $ faSprite_ "empty-set" "solid" "h-24 w-24"
-            div_ [class_ "flex flex-col gap-2"] do
-              h2_ [class_ "text-2xl font-bold"] "Waiting for events..."
-              p_ "You're currently not sending any data to APItoolkit from your backends yet."
-              a_ [href_ $ "/p/" <> page.pid.toText <> "/integration_guides", class_ "w-max btn btn-indigo -ml-1 text-md"] "Read the setup guide"
-        else section_ [class_ "w-max mx-auto"] $ p_ "This request has no outgoing requests yet."
-  unless (null page.requestVecs) $ do
-    thead_ $ tr_ [class_ "divide-x b--b2"] $ forM_ page.cols $ logTableHeading_ page.pid isLogEventB
-    tbody_ [id_ "w-full log-item-table-body [content-visibility:auto]"] $ logItemRows_ page.pid page.requestVecs page.cols page.colIdxMap page.nextLogsURL page.source
+resultTable_ page mainLog = table_
+  [ class_ "w-full table table-xs table-pin-rows table-pin-cols overflow-x-hidden [contain:strict] [content-visibility:auto]"
+  , style_ "height:1px"
+  , id_ "resultTable"
+  , term "data-source" page.source
+  ]
+  do
+    -- height:1px fixes the cell minimum heights somehow.
+    let isLogEventB = isLogEvent page.cols
+    when (null page.requestVecs && (isNothing page.query || not mainLog)) $ do
+      whenJust page.isTestLog $ \query -> do
+        section_ [class_ "w-max  mx-auto my-16 p-5 sm:py-14 sm:px-24 items-center flex gap-16"] do
+          div_ [] $ faSprite_ "empty-set" "solid" "h-24 w-24"
+          div_ [class_ "flex flex-col gap-2"] do
+            h2_ [class_ "text-2xl font-bold"] "Waiting for Test run events..."
+            p_ "You're currently not running any tests yet."
+            a_ [href_ $ fromMaybe "" page.emptyStateUrl, class_ "w-max btn btn-indigo -ml-1 text-md"] "Go to test editor"
+      unless (isJust page.isTestLog) $ do
+        if mainLog
+          then do
+            section_ [class_ "w-max  mx-auto my-16 p-5 sm:py-14 sm:px-24 items-center flex gap-16"] do
+              div_ [] $ faSprite_ "empty-set" "solid" "h-24 w-24"
+              div_ [class_ "flex flex-col gap-2"] do
+                h2_ [class_ "text-2xl font-bold"] "Waiting for events..."
+                p_ "You're currently not sending any data to APItoolkit from your backends yet."
+                a_ [href_ $ "/p/" <> page.pid.toText <> "/integration_guides", class_ "w-max btn btn-indigo -ml-1 text-md"] "Read the setup guide"
+          else section_ [class_ "w-max mx-auto"] $ p_ "This request has no outgoing requests yet."
+    unless (null page.requestVecs) $ do
+      thead_ $ tr_ [class_ "divide-x b--b2"] $ forM_ page.cols $ logTableHeading_ page.pid isLogEventB
+      tbody_ [id_ "w-full log-item-table-body [content-visibility:auto]"] $ logItemRows_ page.pid page.requestVecs page.cols page.colIdxMap page.nextLogsURL page.source
 
 
 curateCols :: [Text] -> [Text] -> [Text]
