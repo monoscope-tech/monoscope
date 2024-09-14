@@ -41,8 +41,8 @@ apiCatalogH pid sortM requestTypeM = do
           , nextFetchUrl = Nothing
           , heading = Nothing
           , zeroState =
-              Just
-                $ ItemsList.ZeroState
+              Just $
+                ItemsList.ZeroState
                   { icon = "empty-set"
                   , title = "No " <> requestType <> " Requests Monitored."
                   , description = "You're currently not monitoring your " <> T.toLower requestType <> " integrations."
@@ -82,10 +82,10 @@ renderapiCatalog pid host requestType = div_ [class_ "flex py-4 gap-8 items-cent
       a_ [class_ "inline-block font-bold space-x-2"] $ do
         a_ [href_ $ "/p/" <> pid.toText <> "/endpoints?host=" <> host.host <> "&request_type=" <> requestType, class_ " hover:text-slate-600"] $ toHtml (T.replace "http://" "" $ T.replace "https://" "" host.host)
         a_ [href_ $ "/p/" <> pid.toText <> "/log_explorer?query=host%3D%3D" <> "\"" <> host.host <> "\"", class_ "text-blue-500 hover:text-slate-600 text-xs"] "View logs"
-  div_ [class_ "flex items-center justify-center "]
-    $ div_
+  div_ [class_ "flex items-center justify-center "] $
+    div_
       [ class_ "w-56 h-12 px-3"
-      , hxGet_ $ "/charts_html?pid=" <> pid.toText <> "&since=14D&query_raw=" <> AnomalyList.escapedQueryPartial [PyF.fmt|host=="{host.host}" | timechart [1d]|]
+      , hxGet_ $ "/charts_html?pid=" <> pid.toText <> "&since=14D&show_axes=false&query_raw=" <> AnomalyList.escapedQueryPartial [PyF.fmt|host=="{host.host}" | timechart [1d]|]
       , hxTrigger_ "intersect once"
       , hxSwap_ "innerHTML"
       ]

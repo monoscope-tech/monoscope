@@ -341,6 +341,7 @@ data ChartExp
   | Theme Text
   | IdE Text
   | ShowLegendE
+  | HideAexs
   | RawE Text
   deriving stock (Show)
 
@@ -375,3 +376,4 @@ lazy queries =
     runChartExp (IdE ide) = "id=" <> toString ide
     runChartExp (RawE q) = "query_raw=" <> toString q
     runChartExp ShowLegendE = "show_legend=true"
+    runChartExp HideAexs = "show_axes=false"
