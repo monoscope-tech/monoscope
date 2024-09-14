@@ -232,7 +232,7 @@ apiLogItemView :: Projects.ProjectId -> UUID.UUID -> AE.Value -> Text -> Text ->
 apiLogItemView pid logId req expandItemPath source = do
   let logItemPathDetailed = expandItemPath <> "/detailed?source=" <> source
   div_ [class_ "flex items-center gap-2"] do
-    when (source == "requests") $
+    when (source /= "logs" && source /= "spans") $
       label_
         [ class_ "btn btn-sm btn-outline"
         , Lucid.for_ "global-data-drawer"
