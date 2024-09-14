@@ -286,7 +286,7 @@ apiLogsPage page = do
             , style_ "height:150px"
             , term "data-source" page.source
             , hxGet_ $ "/charts_html?id=reqsChartsErr&theme=roma&show_legend=true&pid=" <> page.pid.toText
-            , hxTrigger_ "intersect,  htmx:beforeRequest from:#log_explorer_form"
+            , hxTrigger_ "intersect, from:#log_explorer_form"
             , hxVals_ "js:{query_raw:window.getQueryFromEditor('errors'), since: getTimeRange().since, from: getTimeRange().from, to:getTimeRange().to, cols:params().cols, layout:'all', source: params().source}"
             , hxSwap_ "innerHTML"
             ]
@@ -296,7 +296,7 @@ apiLogsPage page = do
             , class_ "px-5 hidden group-has-[.toggle-chart:checked]/result:block"
             , style_ "height:150px"
             , hxGet_ $ "/charts_html?id=reqsChartsLat&chart_type=LineCT&group_by=GBDurationPercentile&show_legend=true&pid=" <> page.pid.toText
-            , hxTrigger_ "intersect,  htmx:beforeRequest from:#log_explorer_form"
+            , hxTrigger_ "intersect, from:#log_explorer_form"
             , hxVals_ "js:{query_raw:window.getQueryFromEditor('latency'), since: getTimeRange().since, from: getTimeRange().from, to:getTimeRange().to, cols:params().cols, layout:'all', source: params().source}"
             , hxSwap_ "innerHTML"
             ]
