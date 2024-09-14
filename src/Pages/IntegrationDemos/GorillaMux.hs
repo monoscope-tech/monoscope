@@ -44,32 +44,43 @@ initCode apiKey =
 package main
 
 import (
-	"context"
-	"net/http"
-	"github.com/gorilla/mux"
-	apitoolkit "github.com/apitoolkit/apitoolkit-go"
+  "context"
+  "net/http"
+
+  "github.com/gorilla/mux"
+  apitoolkit "github.com/apitoolkit/apitoolkit-go/gorilla"
 )
 
 func main() {
-	ctx := context.Background()
+  ctx := context.Background()
 
-	// Initialize the client using your generated apikey
-	apitoolkitClient, err := apitoolkit.NewClient(ctx, apitoolkit.Config{APIKey: $apiKey})
-	if err != nil {
-		panic(err)
-	}
+  // Initialize the APItoolkit client
+  apitoolkitClient, err := apitoolkit.NewClient(
+    ctx,
+    apitoolkit.Config{
+      APIKey: "$apiKey",
+    },
+  )
+  if err != nil {
+    panic(err)
+  }
 
-	r := mux.NewRouter()
-	// Register middleware
-	r.Use(apitoolkitClient.GorillaMuxMiddleware)
-	r.HandleFunc("/{slug}/test",func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("ok"))
-	})
+  router := mux.NewRouter()
 
-	http.ListenAndServe(":8080", r)
-}
-|]
+  // Register APItoolkit's middleware
+  router.Use(apitoolkit.GorillaMuxMiddleware(apitoolkitClient))
+
+  // router.Use(...)
+  // Other middleware
+
+  router.HandleFunc("/test", func(w http.ResponseWriter, r *http.Request) {
+    w.WriteHeader(http.StatusOK)
+    w.Write([]byte("ok"))
+  })
+
+  http.Handle("/", router)
+  http.ListenAndServe(":8080", router)
+}|]
 
 
 configOptions :: Text
@@ -96,39 +107,47 @@ configOptions =
 errorReportingCode :: Text -> Text
 errorReportingCode apiKey =
   [text|
+package main
+
 import (
-    "context"
-    "net/http"
-	"github.com/gorilla/mux"
-  	apitoolkit "github.com/apitoolkit/apitoolkit-go"
+  "context"
+  "fmt"
+  "net/http"
+  "os"
+  "log"
+
+  "github.com/gorilla/mux"
+  apitoolkit "github.com/apitoolkit/apitoolkit-go/gorilla"
 )
 
 func main() {
-	r := mux.NewRouter()
-	ctx := context.Background()
+  ctx := context.Background()
+  apitoolkitClient, err := apitoolkit.NewClient(
+    ctx,
+    apitoolkit.Config{APIKey: "$apiKey"},
+  )
+  if err != nil {
+    panic(err)
+  }
 
-	apitoolkitClient, err := apitoolkit.NewClient(ctx, apitoolkit.Config{APIKey: "$apiKey"})
-	if err != nil {
-		panic(err)
-	}
-	r.Use(apitoolkitClient.GorillaMuxMiddleware)
-	r.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		_, err := os.Open("non-existing-file.json")
-		if err != nil {
-			// Report the error to apitoolkit
-			apitoolkit.ReportError(r.Context(), err)
-		}
-		fmt.Fprintln(w, "Hello, World!")
-	})
+  router := mux.NewRouter()
+  router.Use(apitoolkit.GorillaMuxMiddleware(apitoolkitClient))
 
-	server := &http.Server{Addr: ":8080", Handler: r}
-	err = server.ListenAndServe()
-	if err != nil {
-		fmt.Println(err)
-	}
+  router.HandleFunc("/", hello)
+
+  http.Handle("/", router)
+  log.Fatal(http.ListenAndServe(":8080", nil))
 }
 
-|]
+func hello(w http.ResponseWriter, r *http.Request) {
+  // Attempt to open a non-existing file
+  _, err := os.Open("non-existing-file.txt")
+  if err != nil {
+    // Report the error to APItoolkit
+    apitoolkit.ReportError(r.Context(), err)
+  }
+  fmt.Fprintln(w, "Hello, World!")
+}|]
 
 
 outgoingRequest :: Text -> Text
@@ -137,33 +156,45 @@ outgoingRequest apiKey =
 package main
 
 import (
-    "context"
-	"net/http"
-	"github.com/gorilla/mux"
-  	 apitoolkit "github.com/apitoolkit/apitoolkit-go"
+  "context"
+  "log"
+  "net/http"
+
+  "github.com/gorilla/mux"
+  apitoolkit "github.com/apitoolkit/apitoolkit-go/gorilla"
 )
 
 func main() {
+  ctx := context.Background()
 
- 	apitoolkitClient, err := apitoolkit.NewClient(context.Background(), apitoolkit.Config{APIKey: "$apiKey"})
-	if err != nil {
-		panic(err)
-	}
+  apitoolkitClient, err := apitoolkit.NewClient(
+    ctx,
+    apitoolkit.Config{APIKey: "$apiKey"},
+  )
+  if err != nil {
+    panic(err)
+  }
 
-	handlerFn := func(w http.ResponseWriter, r *http.Request) {
-		HTTPClient := http.DefaultClient
-		HTTPClient.Transport = client.WrapRoundTripper(
-			r.Context(), HTTPClient.Transport,
-			WithRedactHeaders([]string{}),
-		)
-		_, _ = HTTPClient.Get("https://jsonplaceholder.typicode.com/posts/1")
+  router := mux.NewRouter()
+  router.Use(apitoolkit.GorillaMuxMiddleware(apitoolkitClient))
 
-		w.WriteHeader(http.StatusAccepted)
-		w.Write([]byte("Hello world"))
-	}
-	r := mux.NewRouter()
-	r.Use(client.GorillaMuxMiddleware)
-	r.HandleFunc("/:slug/test", handlerFn).Methods(http.MethodPost)
+  router.HandleFunc("/{slug}/test", func(w http.ResponseWriter, r *http.Request) {
+    // Create a new HTTP client
+    HTTPClient := apitoolkit.HTTPClient(
+      r.Context(),
+      apitoolkit.WithRedactHeaders("content-type", "Authorization", "HOST"),
+      apitoolkit.WithRedactRequestBody("$.user.email", "$.user.addresses"),
+      apitoolkit.WithRedactResponseBody("$.users[*].email", "$.users[*].credit_card"),
+    )
+
+    // Make an outgoing HTTP request using the modified HTTPClient
+    _, _ = HTTPClient.Get("https://jsonplaceholder.typicode.com/posts/1")
+
+    // Respond to the request
+    w.WriteHeader(http.StatusOK)
+    w.Write([]byte("Ok, success!"))
+  }).Methods(http.MethodPost)
+
+  log.Fatal(http.ListenAndServe(":8080", router))
 }
-
 |]

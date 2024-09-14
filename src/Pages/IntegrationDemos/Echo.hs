@@ -43,33 +43,45 @@ initCode apiKey =
 package main
 
 import (
-	"context"
-	"github.com/labstack/echo/v4"
-	apitoolkit "github.com/apitoolkit/apitoolkit-go"
+  "context"
+  "log"
+  "net/http"
+
+  "github.com/labstack/echo/v4"
+  apitoolkit "github.com/apitoolkit/apitoolkit-go/echo"
 )
 
 func main() {
-	ctx := context.Background()
+  ctx := context.Background()
 
-	// Initialize the client using your apitoolkit.io generated apikey
-	apitoolkitClient, err := apitoolkit.NewClient(ctx, apitoolkit.Config{APIKey: "$apiKey"})
-	if err != nil {
-		panic(err)
-	}
+  // Initialize the client
+  apitoolkitClient, err := apitoolkit.NewClient(
+    ctx,
+    apitoolkit.Config{
+      APIKey: "$apiKey",
+      Debug = false,
+      Tags = []string{"environment: production", "region: us-east-1"},
+      ServiceVersion: "v2.0",
+    },
+  )
+  if err != nil {
+    panic(err)
+  }
 
-	e := echo.New()
+  router := echo.New()
 
-	// Register with the corresponding middleware of your choice.
-	// Assuming apitoolkit provides an EchoMiddleware function for the echo framework.
-	e.Use(apitoolkitClient.EchoMiddleware)
+  // Register APItoolkit's middleware
+  router.Use(apitoolkit.EchoMiddleware(apitoolkitClient))
 
-	e.POST("/:slug/test", func(c echo.Context) error {
-		return c.String(http.StatusOK, "ok")
-	})
+  // router.Use(...)
+  // Other middleware
 
-	e.Start(":8080")
+  router.POST("/:slug/test", func(c echo.Context) error {
+    return c.String(http.StatusOK, "Ok, success!")
+  })
+
+  router.Start(":8080")
 }
-
 |]
 
 
@@ -92,34 +104,44 @@ errorReportingCode apiKey =
 package main
 
 import (
-	"context"
-	"github.com/labstack/echo/v4"
-	apitoolkit "github.com/apitoolkit/apitoolkit-go"
+  "context"
+  "net/http"
+  "os"
+
+  "github.com/labstack/echo/v4"
+  apitoolkit "github.com/apitoolkit/apitoolkit-go/echo"
 )
+
 func main() {
-	e := echo.New()
-	ctx := context.Background()
+  ctx := context.Background()
 
-	apitoolkitClient, err := apitoolkit.NewClient(ctx, apitoolkit.Config{APIKey: "$apiKey"})
-	if err != nil {
-		panic(err)
-	}
+  // Initialize the client
+  apitoolkitClient, err := apitoolkit.NewClient(
+    ctx,
+    apitoolkit.Config{APIKey: "$apiKey"},
+  )
+  if err != nil {
+    panic(err)
+  }
 
-	e.Use(apitoolkitClient.EchoMiddleware)
+  router := echo.New()
+  router.Use(apitoolkit.EchoMiddleware(apitoolkitClient))
 
-	e.GET("/", hello)
+  router.GET("/", hello)
 
-	e.Logger.Fatal(e.Start(":1323"))
+  router.Start(":8080")
 }
 
 func hello(c echo.Context) error {
-	file, err := os.Open("non-existing-file.txt")
-	if err != nil {
-		apitoolkit.ReportError(c.Request().Context(), err)
-	}
-	return c.String(http.StatusOK, "Hello, World!")
+  // Attempt to open a non-existing file
+  file, err := os.Open("non-existing-file.txt")
+  if (err != nil) {
+    // Report the error to APItoolkit
+    apitoolkit.ReportError(c.Request().Context(), err)
+    return c.String(http.StatusInternalServerError, "Something went wrong")
+  }
+  return c.String(http.StatusOK, "File: " + file.Name())
 }
-
 |]
 
 
@@ -129,37 +151,44 @@ outgoingRequest apiKey =
 package main
 
 import (
-    "github.com/labstack/echo/v4"
-    "net/http"
-    apitoolkit "github.com/apitoolkit/apitoolkit-go"
+  "context"
+  "net/http"
+
+  "github.com/labstack/echo/v4"
+  apitoolkit "github.com/apitoolkit/apitoolkit-go/echo"
 )
 
 func main() {
-    router := echo.New()
+  ctx := context.Background()
 
-    apitoolkitClient, err := apitoolkit.NewClient(ctx, apitoolkit.Config{APIKey: "$apiKey"})
-	if err != nil {
-		panic(err)
-	}
+  // Initialize the client
+  apitoolkitClient, err := apitoolkit.NewClient(
+    ctx,
+    apitoolkit.Config{APIKey: "$apiKey"},
+  )
+  if err != nil {
+    panic(err)
+  }
 
-    router.Use(apitoolkitClient.EchoMiddleware)
+  router := echo.New()
+  router.Use(apitoolkit.EchoMiddleware(apitoolkitClient))
 
-    router.POST("/:slug/test", func(c echo.Context) (err error) {
-        // Create a new HTTP client
-        HTTPClient := http.DefaultClient
+  router.POST("/:slug/test", func(c echo.Context) (err error) {
 
-        // Replace the transport with the custom roundtripper
-        HTTPClient.Transport = client.WrapRoundTripper(
-            c.Request().Context(),
-            HTTPClient.Transport,
-            WithRedactHeaders([]string{}),
-        )
+    // Create a new HTTP client
+    HTTPClient := apitoolkit.HTTPClient(
+      c.Request().Context(),
+      apitoolkit.WithRedactHeaders("content-type", "Authorization", "HOST"),
+      apitoolkit.WithRedactRequestBody("$.user.email", "$.user.addresses"),
+      apitoolkit.WithRedactResponseBody("$.users[*].email", "$.users[*].credit_card"),
+    )
 
-        // Make an outgoing HTTP request using the modified HTTPClient
-        _, _ = HTTPClient.Get("http://localhost:3000/monitored-outgoing-request")
+    // Make an outgoing HTTP request using the modified HTTPClient
+    _, _ = HTTPClient.Get("https://jsonplaceholder.typicode.com/posts/1")
 
-        // Respond to the request
-        c.String(http.StatusOK, "ok")
-    })
-}
-|]
+    // Respond to the request
+    return c.String(http.StatusOK, "Ok, success!")
+  })
+
+  router.Start(":8080")
+}|]

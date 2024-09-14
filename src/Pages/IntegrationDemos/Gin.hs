@@ -1,6 +1,7 @@
 module Pages.IntegrationDemos.Gin (ginGuide) where
 
 import Lucid
+import NeatInterpolation (text)
 import Pkg.Components
 import Relude
 
@@ -38,134 +39,159 @@ ginGuide apikey = do
 
 initCode :: Text -> Text
 initCode apiKey =
-  unlines
-    [ "package main"
-    , ""
-    , "import ("
-    , "\tcontext"
-    , ""
-    , "\tapitoolkit \"github.com/apitoolkit/apitoolkit-go\""
-    , "\tgithub.com/gin-gonic/gin\""
-    , ")"
-    , ""
-    , "func main() {"
-    , "\tapitoolkitCfg := apitoolkit.Config{"
-    , "\t\tAPIKey: \"" <> apiKey <> "\","
-    , "\t}"
-    , ""
-    , "\t// Initialize the client using your apitoolkit generated apikey"
-    , "\tapitoolkitClient, _ := apitoolkit.NewClient(context.Background(), apitoolkitCfg)"
-    , "\trouter := gin.New()"
-    , ""
-    , "\t// Register with the corresponding middleware of your choice. For Gin router, we use the GinMiddleware method."
-    , "\trouter.Use(apitoolkitClient.GinMiddleware)"
-    , ""
-    , "\t// Register your handlers and run the gin server as usual."
-    , "\trouter.POST(\"/:slug/test\", func(c *gin.Context) {"
-    , "\t\tc.JSON(200, gin.H{\"message\": \"Hello world\"})"
-    , "\t})"
-    , "\trouter.Run(\":8080\")"
-    , "}"
-    ]
+  [text|
+package main
+
+import (
+  "context"
+  "net/http"
+
+  "github.com/gin-gonic/gin"
+  apitoolkit "github.com/apitoolkit/apitoolkit-go/gin"
+)
+
+func main() {
+  ctx := context.Background()
+
+  // Initialize the APItoolkit client
+  apitoolkitClient, err := apitoolkit.NewClient(
+    ctx,
+    apitoolkit.Config{
+      APIKey: "$apiKey",
+      Debug = false,
+      Tags = []string{"environment: production", "region: us-east-1"},
+      ServiceVersion: "v2.0",
+    },
+  )
+  if err != nil {
+    panic(err)
+  }
+
+  router := gin.New()
+
+  // Register APItoolkit's middleware
+  router.Use(apitoolkit.GinMiddleware(apitoolkitClient))
+
+  router.GET("/:slug/test", func(c *gin.Context) {
+    c.JSON(http.StatusOK, gin.H{"message": "hello world"})
+  })
+
+  router.Run(":8080")
+}
+    |]
 
 
 configOptions :: Text
 configOptions =
-  unlines
-    [ "apitoolkit.Config{"
-    , "\t// Your apikey, the only required field"
-    , "\tAPIKey: \"<API_KEY>\""
-    , "\t// Redacting both request and response headers"
-    , "\tRedactHeaders: []string{\"Content-Type\", \"Authorization\", \"Cookies\"},"
-    , "\t// A jsonpath list of request body fields to redact"
-    , "\tRedactRequestBody: []string{\"$.user.password\", \"$.user.creditCard.number\"},"
-    , "\t// A jsonpath list of response body fields to redact"
-    , "\tRedactResponseBody: []string{\"$.message.error\"},"
-    , "\t// Set to true to enable debug mode"
-    , "\tDebug: false"
-    , "\t// The current version of your api service"
-    , "\tServiceVersion: \"1.0.1\","
-    , "\t// Allows you to add tags for this service"
-    , "\tTags: []"
-    , "}"
-    ]
+  [text|
+apitoolkit.Config{
+	// Your apikey, the only required field
+	APIKey: "<API_KEY>"
+	// Redacting both request and response headers
+	RedactHeaders: []string{"Content-Type", "Authorization", "Cookies"},
+	// A jsonpath list of request body fields to redact
+	RedactRequestBody: []string{"$.user.password", "$.user.creditCard.number"},
+	// A jsonpath list of response body fields to redact
+	RedactResponseBody: []string{"$.message.error"},
+	// Set to true to enable debug mode
+	Debug: false
+	// The current version of your api service
+	ServiceVersion: "1.0.1",
+	// Allows you to add tags for this service
+	Tags: []
+}    |]
 
 
 errorReportingCode :: Text -> Text
 errorReportingCode apiKey =
-  unlines
-    [ "package main"
-    , ""
-    , "import ("
-    , "\t\"github.com/gin-gonic/gin\""
-    , "\t\"context\""
-    , "\tapitoolkit \"github.com/apitoolkit/apitoolkit-go\""
-    , ")"
-    , ""
-    , "func main() {"
-    , "\tr := gin.Default()"
-    , "\tapitoolkitClient, err := apitoolkit.NewClient(context.Background(), apitoolkit.Config{APIKey: \"" <> apiKey <> "\"})"
-    , "\tif err != nil {"
-    , "\t\tpanic(err)"
-    , "\t}"
-    , ""
-    , "\tr.Use(apitoolkitClient.GinMiddleware)"
-    , ""
-    , "\tr.GET(\"/\", func(c *gin.Context) {"
-    , "\t\tfile, err := os.Open(\"non-existing-file.txt\")"
-    , "\t\tif err != nil {"
-    , "\t\t\t// Report an error to apitoolkit"
-    , "\t\t\tapitoolkit.ReportError(c.Request.Context(), err)"
-    , "\t\t}"
-    , "\t\tc.String(http.StatusOK, \"Hello, World!\")"
-    , "\t})"
-    , ""
-    , "\tr.Run(\":8080\")"
-    , "}"
-    ]
+  [text|
+package main
+
+import (
+  "context"
+  "net/http"
+  "os"
+
+  "github.com/gin-gonic/gin"
+  apitoolkit "github.com/apitoolkit/apitoolkit-go/gin"
+)
+
+func main() {
+  ctx := context.Background()
+
+  // Initialize the client
+  apitoolkitClient, err := apitoolkit.NewClient(
+    ctx,
+    apitoolkit.Config{APIKey: "$apiKey"},
+  )
+  if err != nil {
+    panic(err)
+  }
+
+  router := gin.New()
+
+  // Register APItoolkit's middleware
+  router.Use(apitoolkit.GinMiddleware(apitoolkitClient))
+
+  router.GET("/", hello)
+
+  router.Run(":8000")
+}
+
+func hello(c *gin.Context) {
+  // Attempt to open a non-existing file
+  file, err := os.Open("non-existing-file.txt")
+  if err != nil {
+    // Report the error to APItoolkit
+    apitoolkit.ReportError(c.Request.Context(), err)
+    c.JSON(http.StatusInternalServerError, gin.H{"message": "Something went wrong"})
+    return
+  }
+  c.JSON(http.StatusOK, gin.H{"message": file.Name()})
+}
+    |]
 
 
 outgoingRequest :: Text -> Text
 outgoingRequest apiKey =
-  unlines
-    [ "package main"
-    , ""
-    , "import ("
-    , "\t\"context\""
-    , "\t\"net/http\""
-    , ""
-    , "\tapitoolkit \"github.com/apitoolkit/apitoolkit-go\""
-    , "\t\"github.com/gin-gonic/gin\""
-    , ")"
-    , ""
-    , "func main() {"
-    , ""
-    , "\tapitoolkitClient, err := apitoolkit.NewClient(context.Background(), apitoolkit.Config{APIKey: \"" <> apiKey <> "\"})"
-    , "\tif err != nil {"
-    , "\t\tpanic(err)"
-    , "\t}"
-    , ""
-    , "\trouter := gin.New()"
-    , ""
-    , "\t// Register with the corresponding middleware of your choice. For Gin router, we use the GinMiddleware method."
-    , "\trouter.Use(apitoolkitClient.GinMiddleware)"
-    , ""
-    , "\trouter.POST(\"/:slug/test\", func(c *gin.Context) (err error) {"
-    , "\t\t// Create a new HTTP client"
-    , "\t\tHTTPClient := http.DefaultClient"
-    , ""
-    , "\t\t// Replace the transport with the custom roundtripper"
-    , "\t\tHTTPClient.Transport = client.WrapRoundTripper("
-    , "\t\t\tc.Request().Context(),"
-    , "\t\t\tHTTPClient.Transport,"
-    , "\t\t\tWithRedactHeaders([]string{})"
-    , "\t\t)"
-    , ""
-    , "\t\t// Make an outgoing HTTP request using the modified HTTPClient"
-    , "\t\t_, _ = HTTPClient.Get(\"https://jsonplaceholder.typicode.com/posts/1\")"
-    , ""
-    , "\t\t// Respond to the request"
-    , "\t\tc.JSON(http.StatusOK, gin.H{\"message\": \"outgoing request monitored\"})"
-    , "\t})"
-    , "}"
-    ]
+  [text|
+package main
+
+import (
+  "context"
+  "net/http"
+
+  "github.com/gin-gonic/gin"
+  apitoolkit "github.com/apitoolkit/apitoolkit-go/gin"
+)
+
+func main() {
+  ctx := context.Background()
+  apitoolkitClient, err := apitoolkit.NewClient(
+    ctx,
+    apitoolkit.Config{APIKey: "$apiKey"},
+  )
+  if err != nil {
+    panic(err)
+  }
+
+  router := gin.New()
+  router.Use(apitoolkit.GinMiddleware(apitoolkitClient))
+
+  router.GET("/test", func(c *gin.Context) {
+    // Create a new HTTP client
+    HTTPClient := apitoolkit.HTTPClient(
+      c.Request.Context(),
+      apitoolkit.WithRedactHeaders("content-type", "Authorization", "HOST"),
+      apitoolkit.WithRedactRequestBody("$.user.email", "$.user.addresses"),
+      apitoolkit.WithRedactResponseBody("$.users[*].email", "$.users[*].credit_card"),
+    )
+
+    // Make an outgoing HTTP request using the modified HTTPClient
+    _, _ = HTTPClient.Get("https://jsonplaceholder.typicode.com/posts/1")
+
+    c.String(http.StatusOK, "Ok, success!")
+  })
+
+  router.Run(":8088")
+}      |]
