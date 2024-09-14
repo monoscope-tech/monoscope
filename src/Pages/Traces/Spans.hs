@@ -165,8 +165,8 @@ spanLatencyBreakdown spans = do
       let color = fromMaybe "#000000" $ HM.lookup sp.spanName colors
       div_
         [ class_ $ "h-full overflow-hidden tooltip tooltip-open " <> color
-        , style_ $ "width:" <> show wdth <> "px;"
-        , term "data-tip" sp.spanName
+        , term "data-tip" $ "Span name: " <> sp.spanName <> " Duration: " <> getDurationNSMS sp.spanDurationNs
+        , title_ $ "Span name: " <> sp.spanName <> " Duration: " <> getDurationNSMS sp.spanDurationNs
         ]
         do
-          div_ [class_ "h-full "] ""
+          div_ [class_ "h-full", style_ $ "width:" <> show wdth <> "px;"] ""
