@@ -269,38 +269,44 @@ apiLogsPage page = do
           label_ [class_ "flex items-center cursor-pointer space-x-2 p-1"] do
             input_ [type_ "checkbox", class_ "toggle toggle-sm toggle-chart", checked_]
             small_ "toggle chart"
-        div_ [class_ "grid grid-cols-3 gap-0"] do
-          div_
-            [ id_ "reqsChartsECP"
-            , class_ "px-5 hidden group-has-[.toggle-chart:checked]/result:block"
-            , style_ "height:150px"
-            , hxGet_ $ "/charts_html?id=reqsChartsEC&show_legend=true&pid=" <> page.pid.toText
-            , hxTrigger_ "intersect,  htmx:beforeRequest from:#log_explorer_form"
-            , hxVals_ "js:{query_raw:window.getQueryFromEditor(), since: getTimeRange().since, from: getTimeRange().from, to:getTimeRange().to, cols:params().cols, layout:'all', source: params().source}"
-            , hxSwap_ "innerHTML"
-            ]
-            ""
-          div_
-            [ id_ "reqsChartsErr"
-            , class_ "px-5 hidden group-has-[.toggle-chart:checked]/result:block"
-            , style_ "height:150px"
-            , term "data-source" page.source
-            , hxGet_ $ "/charts_html?id=reqsChartsErr&theme=roma&show_legend=true&pid=" <> page.pid.toText
-            , hxTrigger_ "intersect, from:#log_explorer_form"
-            , hxVals_ "js:{query_raw:window.getQueryFromEditor('errors'), since: getTimeRange().since, from: getTimeRange().from, to:getTimeRange().to, cols:params().cols, layout:'all', source: params().source}"
-            , hxSwap_ "innerHTML"
-            ]
-            ""
-          div_
-            [ id_ "reqsChartsLat"
-            , class_ "px-5 hidden group-has-[.toggle-chart:checked]/result:block"
-            , style_ "height:150px"
-            , hxGet_ $ "/charts_html?id=reqsChartsLat&chart_type=LineCT&group_by=GBDurationPercentile&show_legend=true&pid=" <> page.pid.toText
-            , hxTrigger_ "intersect, from:#log_explorer_form"
-            , hxVals_ "js:{query_raw:window.getQueryFromEditor('latency'), since: getTimeRange().since, from: getTimeRange().from, to:getTimeRange().to, cols:params().cols, layout:'all', source: params().source}"
-            , hxSwap_ "innerHTML"
-            ]
-            ""
+        div_ [class_ "grid grid-cols-3 gap-0 mb-2"] do
+          div_ [class_ "w-full"] do
+            div_ [class_ "pl-6 text-xs text-gray-500"] "All requests"
+            div_
+              [ id_ "reqsChartsECP"
+              , class_ "px-5 hidden group-has-[.toggle-chart:checked]/result:block"
+              , style_ "height:150px"
+              , hxGet_ $ "/charts_html?id=reqsChartsEC&show_legend=false&pid=" <> page.pid.toText
+              , hxTrigger_ "intersect,  htmx:beforeRequest from:#log_explorer_form"
+              , hxVals_ "js:{query_raw:window.getQueryFromEditor(), since: getTimeRange().since, from: getTimeRange().from, to:getTimeRange().to, cols:params().cols, layout:'all', source: params().source}"
+              , hxSwap_ "innerHTML"
+              ]
+              ""
+          div_ [class_ "w-full"] do
+            div_ [class_ "pl-6 text-xs text-gray-500"] "Errors"
+            div_
+              [ id_ "reqsChartsE"
+              , class_ "px-5 hidden group-has-[.toggle-chart:checked]/result:block"
+              , style_ "height:150px"
+              , term "data-source" page.source
+              , hxGet_ $ "/charts_html?id=reqsChartsE&group_by=GBStatusCode&theme=roma&show_legend=false&pid=" <> page.pid.toText
+              , hxTrigger_ "intersect, from:#log_explorer_form"
+              , hxVals_ "js:{query_raw:window.getQueryFromEditor('errors'), since: getTimeRange().since, from: getTimeRange().from, to:getTimeRange().to, cols:params().cols, layout:'all', source: params().source}"
+              , hxSwap_ "innerHTML"
+              ]
+              ""
+          div_ [class_ "w-full"] do
+            div_ [class_ "pl-6 text-xs text-gray-500"] "Latency"
+            div_
+              [ id_ "reqsChartsLat"
+              , class_ "px-5 hidden group-has-[.toggle-chart:checked]/result:block"
+              , style_ "height:150px"
+              , hxGet_ $ "/charts_html?id=reqsChartsLat&chart_type=LineCT&group_by=GBDurationPercentile&show_legend=false&pid=" <> page.pid.toText
+              , hxTrigger_ "intersect, from:#log_explorer_form"
+              , hxVals_ "js:{query_raw:window.getQueryFromEditor('latency'), since: getTimeRange().since, from: getTimeRange().from, to:getTimeRange().to, cols:params().cols, layout:'all', source: params().source}"
+              , hxSwap_ "innerHTML"
+              ]
+              ""
       resultTableAndMeta_ page
   jsonTreeAuxillaryCode page.pid
   -- drawerWithURLContent_ : Used when you expand a log item

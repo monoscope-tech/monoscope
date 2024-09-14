@@ -195,14 +195,14 @@ buildReqDumpSQL exps = (q, join qByArgs, mFrom, mTo)
 type M = Maybe
 
 
-chartsGetH :: M ChartType -> M Text -> M Projects.ProjectId -> M GroupBy -> M [QueryBy] -> M Int -> M Int -> M Text -> M Text -> M Bool -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))
-chartsGetH typeM Nothing pidM groupByM queryByM slotsM limitsM themeM idM showLegendM sinceM fromM toM sourceM = chartsGetDef typeM Nothing pidM groupByM queryByM slotsM limitsM themeM idM showLegendM sinceM fromM toM sourceM
-chartsGetH typeM (Just queryRaw) pidM groupByM queryByM slotsM limitsM themeM idM showLegendM sinceM fromM toM sourceM = chartsGetRaw typeM queryRaw pidM groupByM queryByM slotsM limitsM themeM idM showLegendM sinceM fromM toM sourceM
+chartsGetH :: M ChartType -> M Text -> M Projects.ProjectId -> M GroupBy -> M [QueryBy] -> M Int -> M Int -> M Text -> M Text -> M Bool -> M Bool -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))
+chartsGetH typeM Nothing pidM groupByM queryByM slotsM limitsM themeM idM showLegendM showAxesM sinceM fromM toM sourceM = chartsGetDef typeM Nothing pidM groupByM queryByM slotsM limitsM themeM idM showLegendM showAxesM sinceM fromM toM sourceM
+chartsGetH typeM (Just queryRaw) pidM groupByM queryByM slotsM limitsM themeM idM showLegendM showAxesM sinceM fromM toM sourceM = chartsGetRaw typeM queryRaw pidM groupByM queryByM slotsM limitsM themeM idM showLegendM showAxesM sinceM fromM toM sourceM
 
 
 --  FIXME: chartsGetRaw and chartGetDef should be refactored and merged.
-chartsGetRaw :: M ChartType -> Text -> M Projects.ProjectId -> M GroupBy -> M [QueryBy] -> M Int -> M Int -> M Text -> M Text -> M Bool -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))
-chartsGetRaw typeM queryRaw pidM groupByM queryByM slotsM limitsM themeM idM showLegendM sinceM fromM toM sourceM = do
+chartsGetRaw :: M ChartType -> Text -> M Projects.ProjectId -> M GroupBy -> M [QueryBy] -> M Int -> M Int -> M Text -> M Text -> M Bool -> M Bool -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))
+chartsGetRaw typeM queryRaw pidM groupByM queryByM slotsM limitsM themeM idM showLegendM showAxesM sinceM fromM toM sourceM = do
   randomID <- liftIO UUIDV4.nextRandom
   now <- liftIO getCurrentTime
 
@@ -234,20 +234,21 @@ chartsGetRaw typeM queryRaw pidM groupByM queryByM slotsM limitsM themeM idM sho
       groupedDataJSON = decodeUtf8 $ AE.encode $ transpose groupedData
       idAttr = fromMaybe (UUID.toText randomID) idM
       showLegend = toLower $ show $ fromMaybe False showLegendM
+      showAxes = toLower $ show $ fromMaybe True showAxesM
       chartThemeTxt = fromMaybe "" themeM
       fromDStr = maybe "" formatUTC fromD
       toDStr = maybe "" formatUTC toD
       cType = case fromMaybe BarCT typeM of
         BarCT -> "bar"
         LineCT -> "line"
-      scriptContent = [text| throughputEChartTable("$idAttr",$headersJSON, $groupedDataJSON, ["Endpoint"], $showLegend, "$chartThemeTxt", "$fromDStr", "$toDStr", "$cType") |]
+      scriptContent = [text| throughputEChartTable("$idAttr",$headersJSON, $groupedDataJSON, ["Endpoint"], $showLegend, $showAxes, "$chartThemeTxt", "$fromDStr", "$toDStr", "$cType") |]
   addRespHeaders do
     div_ [id_ $ toText idAttr, class_ "w-full h-full"] ""
     script_ scriptContent
 
 
-chartsGetDef :: M ChartType -> M Text -> M Projects.ProjectId -> M GroupBy -> M [QueryBy] -> M Int -> M Int -> M Text -> M Text -> M Bool -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))
-chartsGetDef typeM queryRaw pidM groupByM queryByM slotsM limitsM themeM idM showLegendM sinceM _fromM _toM sourceM = do
+chartsGetDef :: M ChartType -> M Text -> M Projects.ProjectId -> M GroupBy -> M [QueryBy] -> M Int -> M Int -> M Text -> M Text -> M Bool -> M Bool -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))
+chartsGetDef typeM queryRaw pidM groupByM queryByM slotsM limitsM themeM idM showLegendM showAxesM sinceM _fromM _toM sourceM = do
   let chartExps =
         catMaybes
           [ TypeE <$> typeM
@@ -270,13 +271,14 @@ chartsGetDef typeM queryRaw pidM groupByM queryByM slotsM limitsM themeM idM sho
       groupedDataJSON = decodeUtf8 $ AE.encode $ transpose groupedData
       idAttr = fromMaybe (UUID.toText randomID) idM
       showLegend = toLower $ show $ fromMaybe False showLegendM
+      showAxes = toLower $ show $ fromMaybe True showAxesM
       chartThemeTxt = fromMaybe "" themeM
       fromDStr = maybe "" formatUTC fromM
       toDStr = maybe "" formatUTC toM
       cType = case fromMaybe BarCT typeM of
         BarCT -> "bar"
         LineCT -> "line"
-      scriptContent = [text| throughputEChartTable("$idAttr",$headersJSON, $groupedDataJSON, ["Endpoint"], $showLegend, "$chartThemeTxt", "$fromDStr", "$toDStr", "$cType") |]
+      scriptContent = [text| throughputEChartTable("$idAttr",$headersJSON, $groupedDataJSON, ["Endpoint"], $showLegend, $showAxes, "$chartThemeTxt", "$fromDStr", "$toDStr", "$cType") |]
 
   addRespHeaders do
     div_ [id_ $ toText idAttr, class_ "w-full h-full"] ""

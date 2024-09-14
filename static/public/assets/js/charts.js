@@ -1,4 +1,4 @@
-function throughputEChart(renderAt, data, gb, showLegend, theme) {
+function throughputEChart(renderAt, data, gb, showLegend, showAxes, theme) {
   let backgroundStyle = {
     color: 'rgba(240,248,255, 0.4)',
   }
@@ -49,8 +49,8 @@ function throughputEChart(renderAt, data, gb, showLegend, theme) {
     tooltip: {
       trigger: 'axis',
     },
-    xAxis: { show: showLegend, type: 'time', scale: true },
-    yAxis: { show: showLegend, scale: true },
+    xAxis: { show: showAxes, type: 'time', scale: true },
+    yAxis: { show: showAxes, scale: true },
     series: series,
   }
   if (showLegend) {
@@ -122,7 +122,7 @@ function durationFormatter(params) {
   return result
 }
 
-function throughputEChartTable(renderAt, categories, data, gb, showLegend, theme, from, to, chartType) {
+function throughputEChartTable(renderAt, categories, data, gb, showLegend, showAxes, theme, from, to, chartType) {
   let backgroundStyle = {
     color: 'rgba(240,248,255, 0.4)',
   }
@@ -184,11 +184,11 @@ function throughputEChartTable(renderAt, categories, data, gb, showLegend, theme
       max: to,
       boundaryGap: [0, 0.01],
       axisLabel: {
-        show: showLegend,
+        show: showAxes,
       },
     },
     yAxis: {
-      show: showLegend,
+      show: showAxes,
       maxInterval: 3600 * 1000 * 24, // 1day
       type: 'value',
       min: 0,
@@ -221,7 +221,7 @@ function throughputEChartTable(renderAt, categories, data, gb, showLegend, theme
       return `${Math.trunc(params)}`
     }
   }
-  if (!showLegend) {
+  if (!showAxes) {
     option.yAxis.axisLabel = {
       formatter: function (value, index) {
         // Only show the label for the maximum value
