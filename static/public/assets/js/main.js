@@ -40,6 +40,7 @@ window.buildCurlRequest = function buildCurlRequest(event) {
 window.setQueryParamAndReload = (key, value) => {
   const url = new URL(window.location.href)
   url.searchParams.set(key, value)
+  url.searchParams.delete('query')
   window.location.href = url.toString()
 }
 
