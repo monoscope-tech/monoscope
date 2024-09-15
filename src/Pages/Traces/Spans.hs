@@ -161,12 +161,14 @@ spanLatencyBreakdown spans = do
   let totalDuration = sum $ (.spanDurationNs) <$> spans
   div_ [class_ "flex h-6 w-[150px]"] $ do
     V.forM_ spans $ \sp -> do
-      let wdth = 150 * totalDuration `div` sp.spanDurationNs
+      -- use percentage of total duration to determine width of bar
+      let wdth = (fromIntegral sp.spanDurationNs / fromIntegral totalDuration) * 150
       let color = fromMaybe "#000000" $ HM.lookup sp.spanName colors
       div_
-        [ class_ $ "h-full overflow-hidden tooltip tooltip-open " <> color
-        , term "data-tip" $ "Span name: " <> sp.spanName <> " Duration: " <> getDurationNSMS sp.spanDurationNs
-        , title_ $ "Span name: " <> sp.spanName <> " Duration: " <> getDurationNSMS sp.spanDurationNs
+        [ class_ $ "h-full overflow-hidden tooltip " <> color
+        , style_ $ "width:" <> show wdth <> "px;"
+        , term "data-tip" $ "Span name: " <> sp.spanName <> " Duration: " <> toText (getDurationNSMS sp.spanDurationNs)
+        , title_ $ "Span name: " <> sp.spanName <> " Duration: " <> toText (getDurationNSMS sp.spanDurationNs)
         ]
         do
-          div_ [class_ "h-full", style_ $ "width:" <> show wdth <> "px;"] ""
+          div_ [class_ "h-full w-full"] ""

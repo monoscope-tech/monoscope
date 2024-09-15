@@ -71,6 +71,7 @@ import Network.URI (escapeURIString, isUnescapedInURI)
 import Numeric (showHex)
 import Relude hiding (notElem, show)
 import Servant
+import Text.Printf (printf)
 import Text.Regex.TDFA ((=~))
 import Text.Show
 
@@ -311,12 +312,12 @@ utcTimeToNanoseconds utcTime =
    in round (posixTime * 1e9)
 
 
-getDurationNSMS :: Integer -> Text
+getDurationNSMS :: Integer -> String
 getDurationNSMS duration
-  | duration >= 1000000000 = toText $ show (duration `div` 1000000000) <> " s"
-  | duration >= 1000000 = toText $ show (duration `div` 1000000) <> " ms"
-  | duration >= 1000 = toText $ show (duration `div` 1000) <> " µs"
-  | otherwise = toText $ show duration <> " ns"
+  | duration >= 1000000000 = printf "%.1f s" (fromIntegral duration / 1000000000)
+  | duration >= 1000000 = printf "%.1f ms" (fromIntegral duration / 1000000)
+  | duration >= 1000 = printf "%.1f µs" (fromIntegral duration / 1000)
+  | otherwise = printf "%.1f ns" duration
 
 
 displayTimestamp :: Text -> Text
