@@ -369,13 +369,18 @@ class Filter extends LitElement {
     matches: {},
     inputVal: {},
     fetchAutocomplete: {},
+    source: {},
+    sourceFields: {},
   }
 
   constructor() {
     super()
     this.inputVal = ''
     this.fetchAutocomplete = false
-    this.matches = FIELDS
+    const source = document.querySelector('#resultTable').dataset.source
+    this.source = source
+    this.sourceFields = source == 'logs' ? TRACES_FIELDS : source == 'spans' ? TRACES_FIELDS : FIELDS
+    this.matches = this.sourceFields
     this.projectId = window.location.pathname.split('/')[2]
     const builderContainer = document.getElementById('queryBuilder')
     if (builderContainer) {
@@ -553,14 +558,11 @@ class Filter extends LitElement {
 
   handleChange(val) {
     this.inputVal = val.trim()
-    const source = document.querySelector('#resultTable').dataset.source
-    console.log(source)
-    const targetFields = source == 'logs' ? TRACES_FIELDS : source == 'spans' ? TRACES_FIELDS : FIELDS
     if (!this.inputVal) {
-      this.matches = targetFields
+      this.matches = this.sourceFields
       return
     }
-    let filters = targetFields.filter((v) => v.startsWith(this.inputVal) || this.inputVal.startsWith(v))
+    let filters = this.sourceFields.filter((v) => v.startsWith(this.inputVal) || this.inputVal.startsWith(v))
     let auto_complete = []
     filters.forEach((filter) => {
       let target = filter
