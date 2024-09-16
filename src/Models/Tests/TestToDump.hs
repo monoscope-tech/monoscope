@@ -83,6 +83,52 @@ runCollectionTest collectionSteps cold_id = do
   pure $ mapLeft (\e -> fromString e <> toText tkResp) $ AE.eitherDecodeStrictText (toText tkResp)
 
 
+-- runTestAndLog
+--   :: (IOE :> es, Time.Time :> es, Reader.Reader Config.AuthContext :> es, DB :> es, Log :> es)
+--   => Projects.ProjectId
+--   -> Testing.CollectionId
+--   -> V.Vector Testing.CollectionStepData
+--   -> Eff es (Either Text (V.Vector Testing.StepResult))
+-- runTestAndLog pid colId collectionSteps = do
+--   stepResultsE <- runCollectionTest collectionSteps colId
+--   case stepResultsE of
+--     Left e -> do
+--       Log.logAttention "unable to run test collection" (AE.object ["error" AE..= e, "steps" AE..= collectionSteps])
+--       pure $ Left e
+--     Right stepResults -> do
+--       currentTime <- Time.currentTime
+--       let (passed, failed) = Testing.getCollectionRunStatus stepResults
+
+--       -- Create a parent request for to act as parent for current test run
+--       msg_id <- liftIO UUIDV4.nextRandom
+--       let response = AE.toJSON stepResults
+--       _ <- dbtToEff $ Testing.updateCollectionLastRun colId (Just response) passed failed
+--       let isPassed = failed == 0
+--       let logMsg = if isPassed then "PASSED:  multistep API test succeeded" else "FAILED:  multistep API test failed"
+--       let log =
+--             LogRecord
+--               {  projectId = pid.unProjectId
+--                 , id = Nothing 
+--                 , timestamp = currentTime
+--                 , observedTimestamp = currentTime
+--                 , traceId = ""
+--                 , spanId = Nothing
+--                 , severityText = if isPassed then Just SLInfo else  Just  SLError 
+--                 , severityNumber = if isPassed then 1 else 9
+--                 , body = logMsg
+--                 , attributes = AE.object []
+--                 , resource = AE.object
+--                      [ 
+--                        "service.name" AE..= ("system.monitors" :: Text)
+--                       , "service.namespace" AE..= ("apitoolkit" :: Text)
+--                         ]
+--                 , instrumentationScope = AE.object ["name" AE..= ("system.monitors" :: Text)]
+--               }
+--       let requestMessages = V.toList (stepResults <&> \sR -> ("", testRunToRequestMsg pid currentTime msg_id sR))
+--       _ <- ProcessMessage.processRequestMessages $ requestMessages
+--       _ <- bulkInsertLogs [log]
+--       pure $ Right stepResults
+
 runTestAndLog
   :: (IOE :> es, Time.Time :> es, Reader.Reader Config.AuthContext :> es, DB :> es, Log :> es)
   => Projects.ProjectId
@@ -98,34 +144,32 @@ runTestAndLog pid colId collectionSteps = do
     Right stepResults -> do
       currentTime <- Time.currentTime
       let (passed, failed) = Testing.getCollectionRunStatus stepResults
-
-      -- Create a parent request for to act as parent for current test run
-      msg_id <- liftIO UUIDV4.nextRandom
+      msgIds <- liftIO $ V.replicateM (V.length stepResults) UUIDV4.nextRandom
+      let childRequestIds = AE.toJSON $ V.toList $ V.map UUID.toText msgIds
       let response = AE.toJSON stepResults
       _ <- dbtToEff $ Testing.updateCollectionLastRun colId (Just response) passed failed
-      let isPassed = failed == 0
-      let logMsg = if isPassed then "PASSED:  multistep API test succeeded" else "FAILED:  multistep API test failed"
+      let logMsg = if failed == 0 then "PASSED: multistep API test succeeded" else "FAILED: multistep API test failed"
       let log =
             LogRecord
-              {  projectId = pid.unProjectId
-                , id = Nothing 
-                , timestamp = currentTime
-                , observedTimestamp = currentTime
-                , traceId = ""
-                , spanId = Nothing
-                , severityText = if isPassed then Just SLInfo else  Just  SLError 
-                , severityNumber = if isPassed then 1 else 9
-                , body = logMsg
-                , attributes = AE.object []
-                , resource = AE.object
-                     [ 
-                       "service.name" AE..= ("system.monitors" :: Text)
-                      , "service.namespace" AE..= ("apitoolkit" :: Text)
-                        ]
-                , instrumentationScope = AE.object ["name" AE..= ("system.monitors" :: Text)]
+              { projectId = pid.unProjectId
+              , id = Nothing
+              , timestamp = currentTime
+              , observedTimestamp = currentTime
+              , traceId = ""
+              , spanId = Nothing
+              , severityText = if failed == 0 then Just SLInfo else Just SLError
+              , severityNumber = if failed == 0 then 1 else 9
+              , body = logMsg
+              , attributes = AE.object
+                  [ "system.child_requests" AE..= childRequestIds
+                  ]
+              , resource = AE.object
+                  [ "service.name" AE..= ("system.monitors" :: Text)
+                  , "service.namespace" AE..= ("apitoolkit" :: Text)
+                  ]
+              , instrumentationScope = AE.object ["name" AE..= ("system.monitors" :: Text)]
               }
-      let requestMessages = V.toList (stepResults <&> \sR -> ("", testRunToRequestMsg pid currentTime msg_id sR))
-      _ <- ProcessMessage.processRequestMessages $ requestMessages
+      let requestMessages = V.toList $ V.zipWith (\sR msgId -> ("", testRunToRequestMsg pid currentTime msgId sR)) stepResults msgIds
+      _ <- ProcessMessage.processRequestMessages requestMessages
       _ <- bulkInsertLogs [log]
       pure $ Right stepResults
-
