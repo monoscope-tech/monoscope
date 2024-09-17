@@ -13,6 +13,11 @@ export class StepsEditor extends LitElement {
     this.collectionResults = window.collectionResults || []
     this.saveErrors = []
 
+    // Ensure there's at least one step
+    if (this.collectionSteps.length === 0) {
+      this.collectionSteps = [{}];
+    }
+
     require.config({ paths: { vs: '/public/assets/js/monaco/vs' } })
     require.config({ paths: { vs: 'https://unpkg.com/monaco-editor/min/vs' } })
     require(['vs/editor/editor.main'], () => {
@@ -45,6 +50,10 @@ export class StepsEditor extends LitElement {
     window.updateEditorVal = () => {
       this.updateEditorContent()
     }
+  }
+
+  shouldExpandStep(idx, stepData) {
+    return idx === 0 && this.collectionSteps.length === 1 && Object.keys(stepData).length === 0;
   }
 
   initializeEditor(monaco) {
@@ -199,7 +208,7 @@ export class StepsEditor extends LitElement {
         @dragleave="${this._onDragLeave}"
         data-index="${idx}"
       >
-        <input type="checkbox" id="stepState-${idx}" class="hidden stepState" />
+        <input type="checkbox" id="stepState-${idx}" class="hidden stepState" ?checked="${this.shouldExpandStep(idx, stepData)}" />
         <div class="flex flex-row items-center bg-gray-50">
           <div class="h-full shrink bg-gray-50 p-3 border-r border-r-slate-200">
             <svg class="h-4 w-4"><use href="/public/assets/svgs/fa-sprites/solid.svg#grip-dots-vertical"></use></svg>
@@ -462,9 +471,9 @@ export class StepsEditor extends LitElement {
           transform: translateY(-20px);
         }
       </style>
-      <div id="collectionStepsContainer" class="h-full overflow-y-auto">
-        <div id="steps-codeEditor" class="h-full max-h-screen hidden group-has-[.editormode:checked]/colform:block"></div>
-        <div class="h-full group-has-[.editormode:checked]/colform:hidden">
+      <div id="collectionStepsContainer" class="overflow-y-auto">
+        <div id="steps-codeEditor" class="min-h-[28rem] max-h-screen hidden group-has-[.editormode:checked]/colform:block"></div>
+        <div class="group-has-[.editormode:checked]/colform:hidden">
           <div id="collectionStepsContainer" class=" p-4 space-y-4 collectionSteps">
             ${this.collectionSteps.map((stepData, idx) => this.renderCollectionStep(stepData, idx, this.collectionResults[idx], this.saveErrors[idx]) || undefined)}
           </div>

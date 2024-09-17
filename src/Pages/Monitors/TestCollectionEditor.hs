@@ -233,10 +233,9 @@ defineTestSteps_ = do
         , hxIndicator_ "#step-results-indicator"
         ]
         (span_ "Run all" >> faSprite_ "play" "solid" "w-3 h-3")
-      button_ [class_ "btn btn-sm btn-warning ", type_ "submit"] (span_ "Save" >> faSprite_ "floppy-disk" "solid" "w-3 h-3")
       label_ [class_ "relative inline-flex items-center cursor-pointer space-x-2"] do
         input_ [type_ "checkbox", class_ "toggle editormode", onchange_ "codeToggle(event)"] >> span_ [class_ "text-sm"] "Code"
-  div_ [class_ "h-[26rem] overflow-y-hidden flex-1 "] $ termRaw "steps-editor" [id_ "stepsEditor"] ""
+  div_ [class_ "overflow-y-hidden flex-1 "] $ termRaw "steps-editor" [id_ "stepsEditor"] ""
 
 
 collectionPage :: Projects.ProjectId -> Testing.Collection -> Maybe (V.Vector Testing.StepResult) -> String -> Html ()
