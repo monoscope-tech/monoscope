@@ -89,6 +89,7 @@ testingGetH pid filterTM = do
           , sort = Nothing
           , currentURL
           , currTime
+          , filter = Nothing
           , nextFetchUrl = Nothing
           , search = Just $ ItemsList.SearchCfg{viaQueryParam = Nothing}
           , heading = Nothing
