@@ -60,7 +60,7 @@ data AlertUpsertForm = AlertUpsertForm
 convertToQueryMonitor :: Projects.ProjectId -> UTCTime -> Monitors.QueryMonitorId -> AlertUpsertForm -> Monitors.QueryMonitor
 convertToQueryMonitor projectId now queryMonitorId alertForm =
   -- FIXME: handle errors correctly, not crashing
-  let sqlQueryCfg = (defSqlQueryCfg projectId fixedUTCTime Nothing){presetRollup = Just "5m"}
+  let sqlQueryCfg = (defSqlQueryCfg projectId fixedUTCTime Nothing Nothing){presetRollup = Just "5m"}
       (_, qc) = fromRight' $ parseQueryToComponents sqlQueryCfg alertForm.query
       warningThresholdInt = readMaybe . toString =<< alertForm.warningThreshold
       alertConfig =
@@ -158,11 +158,11 @@ editAlert_ pid monitorM = do
     , hxVals_ "js:{query:getQueryFromEditor(), since: getTimeRange().since, from: getTimeRange().from, to:getTimeRange().to, cols:params().cols, layout:'all'}"
     , hxSwap_ "none"
     , termRaw "hx-on::after-request" "this.reset()"
-    , [__|on intersection(intersecting) having threshold 0.5 
-              if intersecting 
+    , [__|on intersection(intersecting) having threshold 0.5
+              if intersecting
                  updateMarkAreas('reqsChartsEC',#warningThreshold.value, #alertThreshold.value)
-                 set #custom_range_input's value to '24H' 
-                 then set #currentRange's innerText to 'Last 24 Hours' 
+                 set #custom_range_input's value to '24H'
+                 then set #currentRange's innerText to 'Last 24 Hours'
                  then htmx.trigger('#log_explorer_form', 'submit')
               end
           on htmx:afterSettle from #reqsChartsECP
@@ -192,8 +192,8 @@ editAlert_ pid monitorM = do
               [ class_ "select select-bordered inline-block mx-2 "
               , [__| on change log me.value then
                       if me.value=='5' set :val to '24H' else if me.value=='60' set :val to '7D' end
-                       then set #custom_range_input's value to :val 
-                       then set #currentRange's innerText to ('Last '+:val) 
+                       then set #custom_range_input's value to :val
+                       then set #currentRange's innerText to ('Last '+:val)
                        then htmx.trigger('#log_explorer_form', 'submit') |]
               ]
               do
@@ -325,7 +325,7 @@ queryMonitors_ monitors = do
         let editAction =
               [__|
 on click
-if ('URLSearchParams' in window) 
+if ('URLSearchParams' in window)
     make a URLSearchParams from window.location.search called :searchParams
     call :searchParams.set("foo", "bar")
     set :newRelativePathQuery to window.location.pathname + '?' + :searchParams.toString()

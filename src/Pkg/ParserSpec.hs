@@ -23,7 +23,7 @@ spec :: Spec
 spec = do
   describe "parseQueryToSQL" do
     it "basic query eq query" do
-      let (query, _) = fromRight' $ parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime Nothing) "method==\"GET\""
+      let (query, _) = fromRight' $ parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing) "method==\"GET\""
       let expected =
             [text|
       SELECT json_build_array(id::text,
@@ -32,28 +32,28 @@ spec = do
       LEFT( CONCAT(
         'url=', COALESCE(raw_url, 'null'),
         ' response_body=', COALESCE(response_body, 'null'),
-        ' request_body=', COALESCE(request_body, 'null') 
-      ), 255 
-      )) FROM apis.request_dumps 
-      WHERE project_id='00000000-0000-0000-0000-000000000000'::uuid  
-      and ( created_at > NOW() - interval '14 days' AND (method='GET') ) 
+        ' request_body=', COALESCE(request_body, 'null')
+      ), 255
+      )) FROM apis.request_dumps
+      WHERE project_id='00000000-0000-0000-0000-000000000000'::uuid
+      and ( created_at > NOW() - interval '14 days' AND (method='GET') )
       ORDER BY created_at desc limit 200|]
       normT query `shouldBe` normT expected
     it "timechart query query" do
-      let (_, c) = fromRight' $ parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime Nothing) "method==\"GET\""
+      let (_, c) = fromRight' $ parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing) "method==\"GET\""
       let expected =
             [text|
-SELECT extract(epoch from time_bucket('1h', created_at))::integer as timeB, count(*)::integer as count, 'Throughput' 
-FROM apis.request_dumps WHERE project_id='00000000-0000-0000-0000-000000000000'::uuid 
+SELECT extract(epoch from time_bucket('1h', created_at))::integer as timeB, count(*)::integer as count, 'Throughput'
+FROM apis.request_dumps WHERE project_id='00000000-0000-0000-0000-000000000000'::uuid
 and ( created_at > NOW() - interval '14 days' AND (method='GET') ) GROUP BY timeB
       |]
       normT (fromMaybe "" c.finalTimechartQuery) `shouldBe` normT expected
     it "timechart query query 1d" do
-      let (_, c) = fromRight' $ parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime Nothing) "method==\"GET\" | timechart count(*) [1d]"
+      let (_, c) = fromRight' $ parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing) "method==\"GET\" | timechart count(*) [1d]"
       let expected =
             [text|
-SELECT extract(epoch from time_bucket('1d', created_at))::integer as timeB, count(*)::integer as count, 'Throughput' 
-FROM apis.request_dumps WHERE project_id='00000000-0000-0000-0000-000000000000'::uuid 
+SELECT extract(epoch from time_bucket('1d', created_at))::integer as timeB, count(*)::integer as count, 'Throughput'
+FROM apis.request_dumps WHERE project_id='00000000-0000-0000-0000-000000000000'::uuid
 and ( created_at > NOW() - interval '14 days' AND (method='GET') ) GROUP BY timeB
       |]
       normT (fromMaybe "" c.finalTimechartQuery) `shouldBe` normT expected

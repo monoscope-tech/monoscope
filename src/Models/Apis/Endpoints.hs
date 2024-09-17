@@ -183,7 +183,7 @@ endpointRequestStatsByProject pid ackd archived pHostM sortM searchM page reques
      from apis.endpoints enp
      left join apis.endpoint_request_stats ers on (enp.id=ers.endpoint_id)
      left join apis.issues ann on (ann.anomaly_type='endpoint' AND ann.target_hash=enp.hash)
-     where enp.project_id=? and enp.outgoing=? $ackdAt $archivedAt $pHostQuery $search
+     where enp.project_id=? and ann.id is not null and enp.outgoing=? $ackdAt $archivedAt $pHostQuery $search
      order by $orderBy , url_path ASC
      offset ? limit 30;
      ;

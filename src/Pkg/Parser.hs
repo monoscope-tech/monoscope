@@ -10,6 +10,7 @@ import Data.Time.Clock (UTCTime (..), diffUTCTime, nominalDiffTimeToSeconds, sec
 import Data.Time.Format.ISO8601 (iso8601Show)
 import GHC.Records (HasField (getField))
 import Models.Projects.Projects qualified as Projects
+import NeatInterpolation (text)
 import Pkg.Parser.Expr (pExpr, pSubject)
 import Pkg.Parser.Stats (pStatsSection, pTimeChartSection)
 import Pkg.Parser.Types (
@@ -146,6 +147,7 @@ data SqlQueryCfg = SqlQueryCfg
   , currentTime :: UTCTime
   , defaultSelect :: [Text]
   , source :: Maybe Sources
+  , targetSpansM :: Maybe Text
   }
   deriving stock (Show, Generic)
   deriving anyclass (Default)
@@ -169,7 +171,13 @@ sqlFromQueryComponents sqlCfg qc =
           pure $ display subJ <> " as " <> normalizeKeyPath entire
       selectedCols = if null qc.select then projectedColsProcessed <> sqlCfg.defaultSelect else qc.select
       selectClause = T.intercalate "," $ colsNoAsClause selectedCols
-      whereClause = maybe "" (\whereC -> " AND (" <> whereC <> ")") qc.whereClause
+      where' = maybe "" (\whereC -> " AND (" <> whereC <> ")") qc.whereClause
+      whereClause = case sqlCfg.source of
+        Just SSpans -> case sqlCfg.targetSpansM of
+          Just "root-spans" -> where' <> " AND parent_span_id IS NULL"
+          Just "service-entry-spans" -> where'
+          _ -> where'
+        _ -> where'
       groupByClause = if null qc.groupByClause then "" else " GROUP BY " <> T.intercalate "," qc.groupByClause
       dateRangeStr = case sqlCfg.dateRange of
         (Nothing, Just b) -> "AND " <> timestampCol <> " BETWEEN NOW() AND '" <> fmtTime b <> "'"
@@ -178,13 +186,22 @@ sqlFromQueryComponents sqlCfg qc =
 
       (fromT, toT) = bimap (fromMaybe sqlCfg.currentTime) (fromMaybe sqlCfg.currentTime) sqlCfg.dateRange
       timeDiffSecs = abs $ nominalDiffTimeToSeconds $ diffUTCTime fromT toT
-
-      finalSqlQuery =
-        [fmt|SELECT json_build_array({selectClause}) FROM {fromTable}
-          WHERE project_id='{sqlCfg.pid.toText}'::uuid  and ( {timestampCol} > NOW() - interval '14 days'
-          {cursorT} {dateRangeStr} {whereClause} )
-          {groupByClause} ORDER BY {timestampCol} desc limit 200 |]
-
+      finalSqlQuery = case sqlCfg.targetSpansM of
+        Just "service-entry-spans" ->
+          [fmt|WITH ranked_spans AS (SELECT *, resource->>'service.name' AS service_name,
+                ROW_NUMBER() OVER (PARTITION BY trace_id, resource->>'service.name' ORDER BY start_time) AS rn
+                FROM telemetry.spans where project_id='{sqlCfg.pid.toText}'::uuid  and (
+                {timestampCol} > NOW() - interval '14 days'
+                {cursorT} {dateRangeStr} {whereClause} )
+                {groupByClause}
+                )
+               SELECT json_build_array({selectClause}) FROM ranked_spans
+                  WHERE rn = 1 ORDER BY {timestampCol} desc limit 200 |]
+        _ ->
+          [fmt|SELECT json_build_array({selectClause}) FROM {fromTable}
+             WHERE project_id='{sqlCfg.pid.toText}'::uuid  and ( {timestampCol} > NOW() - interval '14 days'
+             {cursorT} {dateRangeStr} {whereClause} )
+             {groupByClause} ORDER BY {timestampCol} desc limit 200 |]
       countQuery =
         [fmt|SELECT count(*) FROM {fromTable}
           WHERE project_id='{sqlCfg.pid.toText}'::uuid  and ( {timestampCol} > NOW() - interval '14 days'
@@ -328,14 +345,15 @@ fixedUTCTime :: UTCTime
 fixedUTCTime = UTCTime (fromGregorian 2020 1 1) (secondsToDiffTime 0)
 
 
-defSqlQueryCfg :: Projects.ProjectId -> UTCTime -> Maybe Sources -> SqlQueryCfg
-defSqlQueryCfg pid currentTime source =
+defSqlQueryCfg :: Projects.ProjectId -> UTCTime -> Maybe Sources -> Maybe Text -> SqlQueryCfg
+defSqlQueryCfg pid currentTime source spanT =
   SqlQueryCfg
     { pid = pid
     , presetRollup = Nothing
     , cursorM = Nothing
     , dateRange = (Nothing, Nothing)
     , source = source
+    , targetSpansM = spanT
     , projectedColsByUser = []
     , currentTime
     , defaultSelect = defaultSelectSqlQuery source
