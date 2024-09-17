@@ -22,7 +22,7 @@ spec :: Spec
 spec = aroundAll withTestResources do
   describe "Check Api Catalog List" do
     it "should return an empty list" \TestResources{..} -> do
-      PageCtx _ (ItemsList.ItemsPage _ hostsAndEvents) <- toServantResponse trATCtx trSessAndHeader trLogger $ ApiCatalog.apiCatalogH testPid Nothing Nothing
+      PageCtx _ (ItemsList.ItemsPage _ hostsAndEvents) <- toServantResponse trATCtx trSessAndHeader trLogger $ ApiCatalog.apiCatalogH testPid Nothing Nothing Nothing
       length hostsAndEvents `shouldBe` 0
 
     it "should return incoming hosts list and outgoing host list" \TestResources{..} -> do
@@ -41,5 +41,5 @@ spec = aroundAll withTestResources do
       _ <- runAllBackgroundJobs trATCtx
       _ <- withPool trPool $ refreshMaterializedView "apis.endpoint_request_stats"
 
-      PageCtx _ (ItemsList.ItemsPage _ hostsAndEvents) <- toServantResponse trATCtx trSessAndHeader trLogger $ ApiCatalog.apiCatalogH testPid Nothing (Just "Incoming")
+      PageCtx _ (ItemsList.ItemsPage _ hostsAndEvents) <- toServantResponse trATCtx trSessAndHeader trLogger $ ApiCatalog.apiCatalogH testPid Nothing Nothing (Just "Incoming")
       length hostsAndEvents `shouldBe` 1

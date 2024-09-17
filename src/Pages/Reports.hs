@@ -36,7 +36,37 @@ import Data.Time.LocalTime (LocalTime (localDay), ZonedTime (zonedTimeToLocalTim
 import Data.Vector (Vector)
 import Data.Vector qualified as V
 import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
-import Lucid
+import Lucid (
+  Html,
+  ToHtml (..),
+  a_,
+  checked_,
+  class_,
+  div_,
+  for_,
+  h3_,
+  h4_,
+  h5_,
+  href_,
+  id_,
+  img_,
+  input_,
+  label_,
+  name_,
+  p_,
+  small_,
+  span_,
+  src_,
+  style_,
+  table_,
+  tbody_,
+  td_,
+  th_,
+  thead_,
+  tr_,
+  type_,
+  value_,
+ )
 import Lucid.Htmx (hxGet_, hxPost_, hxSwap_, hxTrigger_)
 import Models.Apis.Anomalies qualified as Anomalies
 import Models.Apis.Fields.Types (textFieldTypeToText)
@@ -259,30 +289,6 @@ reportsPage pid reports nextUrl daily weekly =
   div_ [class_ "mx-auto w-full flex flex-col px-16 pt-10 pb-24  overflow-y-scroll h-full"] do
     h3_ [class_ "text-xl text-slate-700 flex place-items-center font-bold pb-4 border-b"] "Reports History"
     div_ [class_ "mt-4 grid grid-cols-12 gap-4"] do
-      div_ [class_ "flex flex-col col-span-2 border h-max rounded-lg overflow-hidden mt-16"] do
-        h5_ [class_ "text-lg font-semibold text-slate-700 pb-1 bg-gray-200 p-2"] "Email notifications"
-        div_ [class_ "p-2 flex items-center justify-between w-full hover:bg-gray-100"] do
-          label_ [class_ "inline-flex items-center w-full", Lucid.for_ "e-daily"] "Daily reports"
-          input_
-            [ type_ "checkbox"
-            , id_ "e-daily"
-            , name_ "daily-reports"
-            , if daily then checked_ else value_ "off"
-            , hxPost_ $ "/p/" <> show pid.unProjectId <> "/reports_notif/daily"
-            , hxTrigger_ "change"
-            , class_ "checkbox checkbox-success checkbox-sm"
-            ]
-        div_ [class_ "p-2 flex items-center justify-between w-full hover:bg-gray-100"] do
-          label_ [class_ "inline-flex items-center w-full", Lucid.for_ "e-weekly"] "Weekly reports"
-          input_
-            [ type_ "checkbox"
-            , id_ "e-weekly"
-            , name_ "weekly-reports"
-            , if weekly then checked_ else value_ "off"
-            , hxPost_ $ "/p/" <> show pid.unProjectId <> "/reports_notif/weekly"
-            , hxTrigger_ "change"
-            , class_ "checkbox checkbox-success checkbox-sm"
-            ]
       div_ [class_ "col-span-8"] do
         reportListItems pid reports nextUrl
 
@@ -291,11 +297,12 @@ reportListItems :: Projects.ProjectId -> Vector Reports.ReportListItem -> Text -
 reportListItems pid reports nextUrl =
   div_ [class_ "space-y-4"] do
     forM_ reports $ \report -> do
-      div_ [class_ "mx-auto rounded-lg border max-w-[1000px]"] do
-        a_ [class_ "bg-gray-100 px-4 py-3 flex justify-between", href_ $ "/p/" <> show pid.unProjectId <> "/reports/" <> show report.id.reportId] do
-          h4_ [class_ "text-xl font-medium capitalize"] $ toHtml report.reportType <> " report"
-          span_ [] $ show $ localDay (zonedTimeToLocalTime report.createdAt)
-        div_ [class_ "px-4 py-3 space-y-8"] pass
+      when (report.reportType == "weekly") $ do
+        div_ [class_ "mx-auto rounded-lg border max-w-[1000px]"] do
+          a_ [class_ "bg-gray-100 px-4 py-3 flex justify-between", href_ $ "/p/" <> show pid.unProjectId <> "/reports/" <> show report.id.reportId] do
+            h4_ [class_ "text-xl font-medium capitalize"] $ toHtml report.reportType <> " report"
+            span_ [] $ show $ localDay (zonedTimeToLocalTime report.createdAt)
+          div_ [class_ "px-4 py-3 space-y-8"] pass
     if length reports < 20
       then pass
       else a_ [class_ "max-w-[800px] mx-auto cursor-pointer block p-1 blue-800 bg-blue-100 hover:bg-blue-200 text-center", hxTrigger_ "click", hxSwap_ "outerHTML", hxGet_ nextUrl] "LOAD MORE"
