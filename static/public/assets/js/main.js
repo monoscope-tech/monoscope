@@ -41,6 +41,7 @@ window.setQueryParamAndReload = (key, value) => {
   const url = new URL(window.location.href)
   url.searchParams.set(key, value)
   url.searchParams.delete('query')
+  url.searchParams.delete('target-spans')
   window.location.href = url.toString()
 }
 
