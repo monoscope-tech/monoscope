@@ -243,7 +243,6 @@ apiLogItemView pid logId req expandItemPath source = do
         , Lucid.for_ "global-data-drawer"
         , term "_"
             $ [text|on mousedown or click fetch $logItemPathDetailed
-
                   then set #global-data-drawer-content.innerHTML to #loader-tmp.innerHTML
                   then set #global-data-drawer.checked to true
                   then set #global-data-drawer-content.innerHTML to it
