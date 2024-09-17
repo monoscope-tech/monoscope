@@ -66,14 +66,15 @@ testingPostH pid colF = do
   if project.paymentPlan == "Free" && isJust colF.scheduleNumberUnit && colF.scheduleNumberUnit /= Just "days"
     then addErrorToast "You are using the free plan. You can only schedule collections to run once a day." Nothing
     else addSuccessToast "Collection added Successfully" Nothing
-  testingGetH pid Nothing
+  testingGetH pid Nothing Nothing
 
 
 testingGetH
   :: Projects.ProjectId
   -> Maybe Text
+  -> Maybe Text
   -> ATAuthCtx (RespHeaders (PageCtx (ItemsList.ItemsPage CollectionListItemVM)))
-testingGetH pid filterTM = do
+testingGetH pid filterTM timeFilter = do
   (sess, project) <- Sessions.sessionAndProject pid
   let (currentFilterTab, tabStatus) = case filterTM of
         Just "Active" -> ("Active", Testing.Active)
@@ -89,7 +90,7 @@ testingGetH pid filterTM = do
           , sort = Nothing
           , currentURL
           , currTime
-          , filter = Nothing
+          , filter = timeFilter
           , nextFetchUrl = Nothing
           , search = Just $ ItemsList.SearchCfg{viaQueryParam = Nothing}
           , heading = Nothing
