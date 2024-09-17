@@ -63,10 +63,10 @@ spec = aroundAll withTestResources do
           enp1.endpointHash `shouldBe` toXXHash (testPid.toText <> "172.31.29.11" <> "GET" <> "/")
           enp2.endpointHash `shouldBe` toXXHash (testPid.toText <> "api.test.com" <> "POST" <> "/api/v1/user/login")
           pg <-
-            toServantResponse trATCtx trSessAndHeader trLogger $ AnomalyList.anomalyListGetH testPid Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
+            toServantResponse trATCtx trSessAndHeader trLogger $ AnomalyList.anomalyListGetH testPid Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
           case pg of
             AnomalyList.ALItemsPage (PageCtx _ (ItemsList.ItemsPage _ anomalies)) -> do
-              let endpointAnomalies = V.filter (\(AnomalyList.IssueVM _ _ c) -> c.anomalyType == ATEndpoint) anomalies <&> (\(AnomalyList.IssueVM a b issue) -> anomalyIdText issue.id)
+              let endpointAnomalies = V.filter (\(AnomalyList.IssueVM _ _ _ c) -> c.anomalyType == ATEndpoint) anomalies <&> (\(AnomalyList.IssueVM a b c issue) -> anomalyIdText issue.id)
               let bulkFrm = AnomalyList.AnomalyBulk{anomalyId = V.toList endpointAnomalies}
               _ <- toServantResponse trATCtx trSessAndHeader trLogger $ AnomalyList.anomalyBulkActionsPostH testPid "acknowlege" bulkFrm
               pass
