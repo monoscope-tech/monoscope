@@ -132,7 +132,9 @@ apiLogH pid queryM cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM 
               , isTestLog = Nothing
               , emptyStateUrl = Nothing
               , source
+              , targetSpans = targetSpansM
               }
+
       case (layoutM, hxRequestM, hxBoostedM) of
         (Just "loadmore", Just "true", _) -> addRespHeaders $ LogsGetRows pid requestVecs curatedColNames colIdxMap nextLogsURL source
         (Just "resultTable", Just "true", _) -> addRespHeaders $ LogsGetResultTable page False
@@ -170,8 +172,8 @@ instance ToHtml LogsGet where
   toHtmlRaw = toHtml
 
 
-logQueryBox_ :: Projects.ProjectId -> Maybe Text -> Text -> Html ()
-logQueryBox_ pid currentRange source =
+logQueryBox_ :: Projects.ProjectId -> Maybe Text -> Text -> Maybe Text -> Html ()
+logQueryBox_ pid currentRange source targetSpan =
   form_
     [ class_ "card-round w-full text-sm flex gap-3 items-center p-1"
     , hxGet_ $ "/p/" <> pid.toText <> "/log_explorer"
@@ -188,12 +190,13 @@ logQueryBox_ pid currentRange source =
         div_ [id_ "queryEditor", class_ "h-14 hidden overflow-hidden bg-gray-200"] pass
         div_ [id_ "queryBuilder"] $ termRaw "filter-element" [id_ "filterElement"] ("" :: Text)
       when (source == "spans") do
-        div_ [class_ "self-end mb-1 flex items-center"] do
+        let target = fromMaybe "all-spans" targetSpan
+        div_ [class_ "self-end mb-1 gap-[2px] flex items-center"] do
           span_ "In"
           select_ [class_ "ml-1 select select-sm select-bordered w-full max-w-[150px]", name_ "target-spans"] $ do
-            option_ [value_ "all-spans", selected_ "true"] "All spans"
-            option_ [value_ "root-spans"] "Trace Root Spans"
-            option_ [value_ "service-entry-spans"] "Service Entry Spans"
+            option_ (value_ "all-spans" : ([selected_ "true" | target == "all-spans"])) "All spans"
+            option_ (value_ "root-spans" : ([selected_ "true" | target == "root-spans"])) "Trace Root Spans"
+            option_ (value_ "service-entry-spans" : ([selected_ "true" | target == "service-entry-spans"])) "Service Entry Spans"
       button_
         [type_ "submit", class_ "btn self-end btn-sm btn-success mb-1"]
         do
@@ -217,6 +220,7 @@ data ApiLogsPageData = ApiLogsPageData
   , isTestLog :: Maybe Bool
   , emptyStateUrl :: Maybe Text
   , source :: Text
+  , targetSpans :: Maybe Text
   }
 
 
@@ -265,7 +269,7 @@ apiLogsPage page = do
        return {since: params().since, from: params().from, to: params().to}
     }
       |]
-    logQueryBox_ page.pid page.currentRange page.source
+    logQueryBox_ page.pid page.currentRange page.source page.targetSpans
 
     div_ [class_ "card-round w-full  divide-y flex flex-col text-sm overflow-hidden group/result"] do
       div_ [class_ ""] do
