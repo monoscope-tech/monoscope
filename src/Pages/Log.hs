@@ -58,8 +58,8 @@ import Witch (from)
 -- >>> import Data.Aeson
 
 
-apiLogH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe UTCTime -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders LogsGet)
-apiLogH pid queryM cols' cursorM' sinceM fromM toM layoutM sourceM hxRequestM hxBoostedM = do
+apiLogH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe UTCTime -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders LogsGet)
+apiLogH pid queryM cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM hxRequestM hxBoostedM = do
   (sess, project) <- Sessions.sessionAndProject pid
   let source = fromMaybe "requests" sourceM
   let summaryCols = T.splitOn "," (fromMaybe "" cols')
@@ -80,7 +80,7 @@ apiLogH pid queryM cols' cursorM' sinceM fromM toM layoutM sourceM hxRequestM hx
                 _ -> Nothing
           (f, t, range)
 
-  tableAsVecE <- RequestDumps.selectLogTable pid query cursorM' (fromD, toD) summaryCols (parseMaybe pSource =<< sourceM)
+  tableAsVecE <- RequestDumps.selectLogTable pid query cursorM' (fromD, toD) summaryCols (parseMaybe pSource =<< sourceM) targetSpansM
 
   -- FIXME: we're silently ignoring parse errors and the likes.
   let tableAsVecM = hush tableAsVecE
@@ -170,8 +170,8 @@ instance ToHtml LogsGet where
   toHtmlRaw = toHtml
 
 
-logQueryBox_ :: Projects.ProjectId -> Maybe Text -> Html ()
-logQueryBox_ pid currentRange =
+logQueryBox_ :: Projects.ProjectId -> Maybe Text -> Text -> Html ()
+logQueryBox_ pid currentRange source =
   form_
     [ class_ "card-round w-full text-sm flex gap-3 items-center p-1"
     , hxGet_ $ "/p/" <> pid.toText <> "/log_explorer"
@@ -185,13 +185,20 @@ logQueryBox_ pid currentRange =
     ]
     do
       div_ [class_ "flex-1"] do
+        div_ [class_ "form-control w-max"] $
+          label_ [class_ "label cursor-pointer w-max space-x-2"] $
+            input_ [type_ "checkbox", class_ "toggle toggle-xs tooltip tooltip-right", id_ "toggleQueryEditor", onclick_ "toggleQueryBuilder()", term "data-tip" "toggle query editor"]
         div_ [id_ "queryEditor", class_ "h-14 hidden overflow-hidden bg-gray-200"] pass
         div_ [id_ "queryBuilder"] $ termRaw "filter-element" [id_ "filterElement"] ("" :: Text)
-      div_ [class_ "form-control"] $
-        label_ [class_ "label cursor-pointer space-x-2"] $
-          input_ [type_ "checkbox", class_ "toggle toggle-sm tooltip tooltip-left", id_ "toggleQueryEditor", onclick_ "toggleQueryBuilder()", term "data-tip" "toggle query editor"]
+      when (source == "spans") do
+        div_ [class_ "self-end mb-1 flex items-center"] do
+          span_ "In"
+          select_ [class_ "ml-1 select select-sm select-bordered w-full max-w-[150px]", name_ "target-spans"] $ do
+            option_ [value_ "all-spans", selected_ "true"] "All spans"
+            option_ [value_ "root-spans"] "Trace Root Spans"
+            option_ [value_ "service-entry-spans"] "Service Entry Spans"
       button_
-        [type_ "submit", class_ "btn btn-sm btn-success"]
+        [type_ "submit", class_ "btn self-end btn-sm btn-success mb-1"]
         do
           span_ [id_ "run-query-indicator", class_ "refresh-indicator htmx-indicator query-indicator loading loading-dots loading-md"] ""
           faSprite_ "sparkles" "regular" "h-3 w-3 inline-block"
@@ -261,7 +268,7 @@ apiLogsPage page = do
        return {since: params().since, from: params().from, to: params().to}
     }
       |]
-    logQueryBox_ page.pid page.currentRange
+    logQueryBox_ page.pid page.currentRange page.source
 
     div_ [class_ "card-round w-full  divide-y flex flex-col text-sm overflow-hidden group/result"] do
       div_ [class_ ""] do

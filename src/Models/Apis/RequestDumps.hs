@@ -391,13 +391,14 @@ getRequestDumpsForPreviousReportPeriod pid report_type = query Select (Query $ e
     |]
 
 
-selectLogTable :: (DB :> es, Time.Time :> es) => Projects.ProjectId -> Text -> Maybe UTCTime -> (Maybe UTCTime, Maybe UTCTime) -> [Text] -> Maybe Sources -> Eff es (Either Text (V.Vector (V.Vector Value), [Text], Int))
-selectLogTable pid extraQuery cursorM dateRange projectedColsByUser source = do
+selectLogTable :: (DB :> es, Time.Time :> es) => Projects.ProjectId -> Text -> Maybe UTCTime -> (Maybe UTCTime, Maybe UTCTime) -> [Text] -> Maybe Sources -> Maybe Text -> Eff es (Either Text (V.Vector (V.Vector Value), [Text], Int))
+selectLogTable pid extraQuery cursorM dateRange projectedColsByUser source targetSpansM = do
   now <- Time.currentTime
-  let resp = parseQueryToComponents ((defSqlQueryCfg pid now source){cursorM, dateRange, projectedColsByUser, source}) extraQuery
+  let resp = parseQueryToComponents ((defSqlQueryCfg pid now source targetSpansM){cursorM, dateRange, projectedColsByUser, source, targetSpansM}) extraQuery
   case resp of
     Left x -> pure $ Left x
     Right (q, queryComponents) -> do
+      traceShowM q
       logItems <- queryToValues q
       Only count <- fromMaybe (Only 0) <$> queryCount queryComponents.countQuery
       let logItemsV = V.mapMaybe valueToVector logItems

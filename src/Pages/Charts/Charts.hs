@@ -222,7 +222,7 @@ chartsGetRaw typeM queryRaw pidM groupByM queryByM slotsM limitsM themeM idM sho
           (f, t, range)
 
   let sqlQueryComponents =
-        (defSqlQueryCfg (Unsafe.fromJust pidM) now (parseMaybe pSource =<< sourceM))
+        (defSqlQueryCfg (Unsafe.fromJust pidM) now (parseMaybe pSource =<< sourceM) Nothing)
           { dateRange = (fromD, toD)
           }
   let (_, qc) = fromRight' $ parseQueryToComponents sqlQueryComponents queryRaw
