@@ -172,9 +172,11 @@ sqlFromQueryComponents sqlCfg qc =
       selectedCols = if null qc.select then projectedColsProcessed <> sqlCfg.defaultSelect else qc.select
       selectClause = T.intercalate "," $ colsNoAsClause selectedCols
       where' = maybe "" (\whereC -> " AND (" <> whereC <> ")") qc.whereClause
-      whereClause = case sqlCfg.targetSpansM of
-        Just "root-spans" -> where' <> " AND parent_span_id IS NULL"
-        Just "service-entry-spans" -> where'
+      whereClause = case sqlCfg.source of
+        Just SSpans -> case sqlCfg.targetSpansM of
+          Just "root-spans" -> where' <> " AND parent_span_id IS NULL"
+          Just "service-entry-spans" -> where'
+          _ -> where'
         _ -> where'
       groupByClause = if null qc.groupByClause then "" else " GROUP BY " <> T.intercalate "," qc.groupByClause
       dateRangeStr = case sqlCfg.dateRange of
