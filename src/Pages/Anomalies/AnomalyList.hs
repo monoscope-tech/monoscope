@@ -35,7 +35,7 @@ import Effectful.Reader.Static (ask)
 import Lucid
 import Lucid.Aria qualified as Aria
 import Lucid.Base (termRaw)
-import Lucid.Htmx (hxGet_, hxSwap_, hxTarget_, hxTrigger_)
+import Lucid.Htmx (hxGet_, hxSwap_, hxTrigger_, hxTarget_)
 import Lucid.Hyperscript (__)
 import Models.Apis.Anomalies qualified as Anomalies
 import Models.Apis.Endpoints qualified as Endpoints
@@ -316,9 +316,8 @@ issueItem hideByDefault currTime issue icon title subTitle content = do
     div_ [class_ "space-y-3 grow"] do
       div_ [class_ "space-x-3"] do
         let modalEndpoint = "/p/" <> issue.projectId.toText <> "/anomalies/by_hash/" <> issue.targetHash <> "?modal=True"
-        a_ [hxGet_ modalEndpoint, hxTarget_ ("#expand-log-drawer-" <> issue.targetHash), hxTrigger_ "click", class_ "inline-block font-bold text-blue-700 space-x-2 cursor-pointer", termRaw "preload" "mouseover"]
-          $ do
-            img_ [src_ icon, class_ "inline w-4 h-4"]
+        a_ [ hxGet_ modalEndpoint, hxTarget_ ("#expand-log-drawer-" <> issue.targetHash) , hxTrigger_ "click"   , class_ "inline-block font-bold text-blue-700 space-x-2 cursor-pointer"   , termRaw "preload" "mouseover"   ] $ do
+          img_ [src_ icon, class_ "inline w-4 h-4"]
           >> span_ (toHtml title)
         small_ [class_ "inline-block text-gray-800"] $ fromMaybe (toHtml @String "") subTitle
       div_ [class_ "flex flex-row gap-8"] do
