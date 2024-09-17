@@ -230,7 +230,12 @@ instance ToHtml ApiItemDetailed where
 
 apiLogItemView :: Projects.ProjectId -> UUID.UUID -> AE.Value -> Text -> Text -> Html ()
 apiLogItemView pid logId req expandItemPath source = do
-  let logItemPathDetailed = expandItemPath <> "/detailed?source=" <> source
+  let trId = case req of
+        AE.Object o -> case KEM.lookup "trace_id" o of
+          Just (AE.String trid) -> Just trid
+          _ -> Nothing
+        _ -> Nothing
+  let logItemPathDetailed = if source == "spans" then "/p/" <> pid.toText <> "/traces/" <> fromMaybe "" trId else expandItemPath <> "/detailed?source=" <> source
   div_ [class_ "flex items-center gap-2"] do
     when (source == "requests")
       $ label_
@@ -238,6 +243,7 @@ apiLogItemView pid logId req expandItemPath source = do
         , Lucid.for_ "global-data-drawer"
         , term "_"
             $ [text|on mousedown or click fetch $logItemPathDetailed
+
                   then set #global-data-drawer-content.innerHTML to #loader-tmp.innerHTML
                   then set #global-data-drawer.checked to true
                   then set #global-data-drawer-content.innerHTML to it

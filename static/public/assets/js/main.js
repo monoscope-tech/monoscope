@@ -12,7 +12,7 @@ window.buildCurlRequest = function buildCurlRequest(event) {
       curlHeaders = Object.entries(request_headers)
         .map(([key, value]) => '-H "' + key + ' ' + value + '" \\\n')
         .join('')
-    } catch (error) { }
+    } catch (error) {}
   }
   if (curlHeaders != '') curlCommand += curlHeaders
   let reqBody = ''
@@ -40,42 +40,51 @@ window.buildCurlRequest = function buildCurlRequest(event) {
 window.setQueryParamAndReload = (key, value) => {
   const url = new URL(window.location.href)
   url.searchParams.set(key, value)
+  url.searchParams.delete('query')
   window.location.href = url.toString()
 }
 
-window.getQueryFromEditor = () => {
+window.getQueryFromEditor = (target) => {
   const toggler = document.getElementById('toggleQueryEditor')
-  if (toggler.checked) return window.editor.getValue()
-  return window.queryBuilderValue || ''
+  let val = ''
+  if (toggler.checked) {
+    val = window.editor.getValue()
+  } else {
+    val = window.queryBuilderValue || ''
+  }
+  if (target === 'errors') {
+    let source = document.querySelector('#reqsChartsE').dataset.source
+    let srcErrs = source === 'logs' ? `severityText == "ERROR" OR severityText == "FATAL"` : source === 'spans' ? `status == "ERROR"` : 'status_code > 399'
+    val = val.length === 0 ? srcErrs : `${val} AND ${srcErrs}`
+  }
+  return val
 }
 
-
-window.downloadJson = function(event) {
+window.downloadJson = function (event) {
   event.stopPropagation()
   const json = event.currentTarget.dataset.reqjson
-  var blob = new Blob([json], { type: "application/json" });
-  var a = document.createElement("a");
-  a.href = URL.createObjectURL(blob);
-  a.download = "request-data-" + (new Date().toString()) + ".json";
-  a.textContent = "";
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
+  var blob = new Blob([json], { type: 'application/json' })
+  var a = document.createElement('a')
+  a.href = URL.createObjectURL(blob)
+  a.download = 'request-data-' + new Date().toString() + '.json'
+  a.textContent = ''
+  document.body.appendChild(a)
+  a.click()
+  document.body.removeChild(a)
 }
 
-
 window.evalScriptsFromContent = function (container) {
-  container.querySelectorAll('script').forEach(oldScript => {
-    const newScript = document.createElement('script');
-    newScript.text = oldScript.textContent || oldScript.innerHTML;
+  container.querySelectorAll('script').forEach((oldScript) => {
+    const newScript = document.createElement('script')
+    newScript.text = oldScript.textContent || oldScript.innerHTML
 
     // Copy attributes using the spread operator
-    [...oldScript.attributes].forEach(attr => newScript.setAttribute(attr.name, attr.value));
+    ;[...oldScript.attributes].forEach((attr) => newScript.setAttribute(attr.name, attr.value))
 
     // Append and remove to execute
-    document.body.append(newScript);
-    newScript.remove();
-  });
+    document.body.append(newScript)
+    newScript.remove()
+  })
 }
 
 // Unified Timepicker

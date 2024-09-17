@@ -320,6 +320,8 @@ customElements.define('filter-item', FilterItem)
 
 const FIELDS_WITH_KEYPATHS = ['request_header', 'response_header', 'request_body', 'response_body', 'query_param', 'path_param']
 
+const TRACES_FIELDS = ['trace_id', 'span_name', 'kind', 'status', 'start_time', 'span_id', 'status_message']
+
 const FIELDS = ['method', 'status_code', 'url_path', 'duration_ns', 'has_errors', 'host', 'raw_url', ...FIELDS_WITH_KEYPATHS, 'referer', 'query_param', 'path_param', 'request_type', 'service_version']
 const string_operators = ['==', '!=']
 const number_operators = ['==', '>', '<', '!=', '>=', '<=']
@@ -350,6 +352,12 @@ const filterAutoComplete = {
     type: 'boolean',
     values: ['true', 'false'],
   },
+  kind: { operators: string_operators, type: 'string', values: ['CLIENT', 'SERVER', 'INTERNAL'] },
+  status: {
+    operators: string_operators,
+    type: 'string',
+    values: ['OK', 'ERROR', 'UNSET'],
+  },
 }
 
 class Filter extends LitElement {
@@ -361,13 +369,18 @@ class Filter extends LitElement {
     matches: {},
     inputVal: {},
     fetchAutocomplete: {},
+    source: {},
+    sourceFields: {},
   }
 
   constructor() {
     super()
     this.inputVal = ''
     this.fetchAutocomplete = false
-    this.matches = FIELDS
+    const source = document.querySelector('#resultTable').dataset.source
+    this.source = source
+    this.sourceFields = source == 'logs' ? TRACES_FIELDS : source == 'spans' ? TRACES_FIELDS : FIELDS
+    this.matches = this.sourceFields
     this.projectId = window.location.pathname.split('/')[2]
     const builderContainer = document.getElementById('queryBuilder')
     if (builderContainer) {
@@ -546,10 +559,10 @@ class Filter extends LitElement {
   handleChange(val) {
     this.inputVal = val.trim()
     if (!this.inputVal) {
-      this.matches = FIELDS
+      this.matches = this.sourceFields
       return
     }
-    let filters = FIELDS.filter((v) => v.startsWith(this.inputVal) || this.inputVal.startsWith(v))
+    let filters = this.sourceFields.filter((v) => v.startsWith(this.inputVal) || this.inputVal.startsWith(v))
     let auto_complete = []
     filters.forEach((filter) => {
       let target = filter

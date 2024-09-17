@@ -49,8 +49,8 @@ apiCatalogH pid sortM timeFilter requestTypeM = do
           , nextFetchUrl = Nothing
           , heading = Nothing
           , zeroState =
-              Just
-                $ ItemsList.ZeroState
+              Just $
+                ItemsList.ZeroState
                   { icon = "empty-set"
                   , title = "No " <> requestType <> " Requests Monitored."
                   , description = "You're currently not monitoring your " <> T.toLower requestType <> " integrations."
