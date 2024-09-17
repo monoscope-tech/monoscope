@@ -87,7 +87,6 @@ dashboardGetH pid fromDStr toDStr sinceStr' = do
     let steps' = (maxV `quot` 100) :: Int
     let steps = if steps' == 0 then 100 else steps'
     reqLatenciesRolledBySteps <- RequestDumps.selectReqLatenciesRolledByStepsForProject maxV steps pid (fromD, toD)
-
     freeTierExceeded <-
       if project.paymentPlan == "Free"
         then do
@@ -116,8 +115,8 @@ dashboardPage pid paramInput currTime projectStats newEndpoints reqLatenciesRoll
   let bulkActionBase = "/p/" <> pid.toText <> "/anomalies/bulk_actions"
   section_ [class_ "  mx-auto px-6 w-full space-y-12 pb-24 overflow-y-scroll  h-full"] do
     when exceededFreeTier $ freeTierLimitExceededBanner pid.toText
-    unless (null newEndpoints)
-      $ div_ [id_ "modalContainer"] do
+    unless (null newEndpoints) $
+      div_ [id_ "modalContainer"] do
         input_ [type_ "checkbox", id_ "newEndpointsModal", class_ "modal-toggle"]
         div_ [class_ "modal", role_ "dialog", hxSwap_ "outerHTML"] do
           form_
@@ -197,8 +196,8 @@ dStats pid projReqStats@Projects.ProjectRequestStats{..} reqLatenciesRolledBySte
           p_ "You're currently not sending any data to APItoolkit from your backends yet."
           a_ [href_ $ "/p/" <> pid.toText <> "/integration_guides", class_ "w-max btn btn-indigo -ml-1 text-md"] "Read the setup guide"
     div_ [class_ "flex justify-between mt-4"] $ div_ [class_ "flex flex-row"] do
-      a_ [class_ "cursor-pointer", [__|on click toggle .neg-rotate-90 on me then toggle .hidden on (next .reqResSubSection)|]]
-        $ faSprite_ "chevron-down" "regular" "h-4 w-4 mr-3 inline-block"
+      a_ [class_ "cursor-pointer", [__|on click toggle .neg-rotate-90 on me then toggle .hidden on (next .reqResSubSection)|]] $
+        faSprite_ "chevron-down" "regular" "h-4 w-4 mr-3 inline-block"
       span_ [class_ "text-lg text-slate-700"] "Analytics"
 
     div_ [class_ "reqResSubSection space-y-5"] do
