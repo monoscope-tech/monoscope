@@ -250,23 +250,6 @@ apiLogItemView pid logId req expandItemPath source = do
                   then htmx.process(#global-data-drawer-content) then _hyperscript.processNode(#global-data-drawer-content) then window.evalScriptsFromContent(#global-data-drawer-content)|]
         ]
         ("Expand" >> faSprite_ "expand" "regular" "h-3 w-3")
-    -- let trId = case req of
-    --       AE.Object o -> case KEM.lookup "trace_id" o of
-    --         Just (AE.String trid) -> Just trid
-    --         _ -> Nothing
-    --       _ -> Nothing
-    -- when (source == "spans" && isJust trId) do
-    --   let tracePathDetailed = "/p/" <> pid.toText <> "/traces/" <> fromMaybe "" trId
-    --   label_
-    --     [ class_ "btn btn-sm btn-outline"
-    --     , Lucid.for_ "global-data-drawer"
-    --     , term "_"
-    --         $ [text|on mousedown or click fetch $tracePathDetailed
-    --               then set #global-data-drawer-content.innerHTML to #loader-tmp.innerHTML
-    --               then set #global-data-drawer-content.innerHTML to it
-    --               then htmx.process(#global-data-drawer-content) then _hyperscript.processNode(#global-data-drawer-content) then window.evalScriptsFromContent(#global-data-drawer-content)|]
-    --     ]
-    --     "Expand"
 
     let reqJson = decodeUtf8 $ AE.encode req
     when (source /= "logs" && source /= "spans")
