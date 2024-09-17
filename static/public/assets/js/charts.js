@@ -1,4 +1,4 @@
-function throughputEChart(renderAt, data, gb, showLegend, theme) {
+function throughputEChart(renderAt, data, gb, showLegend, showAxes, theme) {
   let backgroundStyle = {
     color: 'rgba(240,248,255, 0.4)',
   }
@@ -49,8 +49,8 @@ function throughputEChart(renderAt, data, gb, showLegend, theme) {
     tooltip: {
       trigger: 'axis',
     },
-    xAxis: { show: showLegend, type: 'time', scale: true },
-    yAxis: { show: showLegend, scale: true },
+    xAxis: { show: showAxes, type: 'time', scale: true },
+    yAxis: { show: showAxes, scale: true },
     series: series,
   }
   if (showLegend) {
@@ -122,7 +122,7 @@ function durationFormatter(params) {
   return result
 }
 
-function throughputEChartTable(renderAt, categories, data, gb, showLegend, theme, from, to, chartType) {
+function throughputEChartTable(renderAt, categories, data, gb, showLegend, showAxes, theme, from, to, chartType) {
   let backgroundStyle = {
     color: 'rgba(240,248,255, 0.4)',
   }
@@ -184,11 +184,11 @@ function throughputEChartTable(renderAt, categories, data, gb, showLegend, theme
       max: to,
       boundaryGap: [0, 0.01],
       axisLabel: {
-        show: showLegend,
+        show: showAxes,
       },
     },
     yAxis: {
-      show: showLegend,
+      show: showAxes,
       maxInterval: 3600 * 1000 * 24, // 1day
       type: 'value',
       min: 0,
@@ -221,7 +221,7 @@ function throughputEChartTable(renderAt, categories, data, gb, showLegend, theme
       return `${Math.trunc(params)}`
     }
   }
-  if (!showLegend) {
+  if (!showAxes) {
     option.yAxis.axisLabel = {
       formatter: function (value, index) {
         // Only show the label for the maximum value
@@ -334,7 +334,7 @@ function flameGraphChart(data, renderAt, colorsMap) {
     const filteredJson = filterJson(structuredClone(jsonObj), id)
     const rootVal = filteredJson.sort((a, b) => b.value - a.value)[0].value || 1
     const recur = (item, start = 0, level = 0) => {
-      const color = colorsMap[item.service_name] || '#000000'
+      const color = colorsMap[item.service_name] || 'bg-black'
       const temp = {
         name: item.name,
         span_id: item.span_id,
@@ -383,7 +383,7 @@ function flameGraphChart(data, renderAt, colorsMap) {
     const yStart = height * level + (level + 1) * 3
 
     const div = elt('div', {
-      class: 'absolute hover:z-[999] flex rounded items-center cursor-pointer  grow-0 justify-between flex-nowrap overflow-hidden hover:border hover:border-black',
+      class: item.itemStyle.color + ' absolute hover:z-[999] flex rounded items-center cursor-pointer  grow-0 justify-between flex-nowrap overflow-hidden hover:border hover:border-black',
       id: item.span_id,
       onclick: (e) => {
         const data = filterJson(structuredClone(fData), item.name)
@@ -399,7 +399,6 @@ function flameGraphChart(data, renderAt, colorsMap) {
     div.style.top = `${yStart}px`
     div.style.width = `${width}px`
     div.style.height = `${height}px`
-    div.style.backgroundColor = item.itemStyle.color
 
     const text = elt('span', { class: 'text-black ml-1 shrink-0 mr-4 text-xs' }, item.name)
     const [t, u] = formatDuration(item.value[2])

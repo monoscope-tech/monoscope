@@ -43,26 +43,38 @@ initCode apiKey =
 package main
 
 import (
-	"net/http"
-	"context"
-	apitoolkit "github.com/apitoolkit/apitoolkit-go"
+  "context"
+  "log"
+  "net/http"
+
+  apitoolkit "github.com/apitoolkit/apitoolkit-go/native"
 )
 
 func main() {
-	// Initialize APIToolkit client with your generated API key
-	ctx := context.Background()
-	apitoolkitClient, err := apitoolkit.NewClient(ctx, apitoolkit.Config{APIKey: "$apiKey"})
-	if err != nil {
-		panic(err)
-	}
+  ctx := context.Background()
 
-	http.Handle("/", apitoolkitClient.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte("Hello, World!"))
-	})))
+  // Initialize the APItoolkit client
+  apitoolkitClient, err := apitoolkit.NewClient(
+    ctx,
+    apitoolkit.Config{
+      APIKey: "{ENTER_YOUR_API_KEY_HERE}",
+      Debug = false,
+      Tags = []string{"environment: production", "region: us-east-1"},
+      ServiceVersion: "v2.0",
+    },
+  )
+  if err != nil {
+    panic(err)
+  }
 
-	http.ListenAndServe(":8080", nil)
-}
-|]
+  // Register APItoolkit's middleware
+  http.Handle("/", apitoolkit.Middleware(apitoolkitClient)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+    w.WriteHeader(http.StatusOK)
+    w.Write([]byte("Hello, World!"))
+  })))
+
+  log.Fatal(http.ListenAndServe(":8080", nil))
+}|]
 
 
 configOptions :: Text
@@ -92,34 +104,41 @@ errorReportingCode apiKey =
 package main
 
 import (
-	"fmt"
-	"net/http"
-	apitoolkit "github.com/apitoolkit/apitoolkit-go"
+  "context"
+  "fmt"
+  "net/http"
+  "os"
+
+  apitoolkit "github.com/apitoolkit/apitoolkit-go/native"
 )
 
 func main() {
-	ctx := context.Background()
-	apitoolkitClient, err := apitoolkit.NewClient(ctx, apitoolkit.Config{APIKey: "$apiKey"})
-	if err != nil {
-		panic(err)
-	}
+  ctx := context.Background()
 
-	helloHandler := func(w http.ResponseWriter, r *http.Request) {
-		file, err := os.Open("non-existing-file.txt")
-		if err!= nil {
-			// Report the error to apitoolkit
-			apitoolkit.ReportError(r.Context(), err)
-		}
-		fmt.Fprintln(w, "{\"Hello\": \"World!\"}")
-	}
+  apitoolkitClient, err := apitoolkit.NewClient(
+    ctx,
+    apitoolkit.Config{APIKey: "$apiKey"},
+  )
+  if err != nil {
+    panic(err)
+  }
 
-	http.Handle("/", apitoolkitClient.Middleware(http.HandlerFunc(helloHandler)))
+  helloHandler := func(w http.ResponseWriter, r *http.Request) {
+    // Attempt to open a non-existing file
+    file, err := os.Open("non-existing-file.txt")
+    if err != nil {
+      // Report the error to APItoolkit
+      apitoolkit.ReportError(r.Context(), err)
+    }
+    fmt.Fprintln(w, "{\"Hello\": \"World!\"}")
+  }
 
-	if err := http.ListenAndServe(":8089", nil); err != nil {
-		fmt.Println("Server error:", err)
-	}
-}
-|]
+  http.Handle("/", apitoolkit.Middleware(apitoolkitClient)(http.HandlerFunc(helloHandler)))
+
+  if err := http.ListenAndServe(":8089", nil); err != nil {
+    fmt.Println("Server error:", err)
+  }
+}|]
 
 
 outgoingRequest :: Text -> Text
@@ -128,31 +147,41 @@ outgoingRequest apiKey =
 package main
 
 import (
-	"context"
-	"net/http"
-	apitoolkit "github.com/apitoolkit/apitoolkit-go"
+  "context"
+  "log"
+  "net/http"
+
+  apitoolkit "github.com/apitoolkit/apitoolkit-go/native"
 )
 
 func main() {
- 	apitoolkitClient, err := apitoolkit.NewClient(context.Background(), apitoolkit.Config{APIKey: "$apiKey"})
-	if err != nil {
-		panic(err)
-	}
+  ctx := context.Background()
 
-	http.HandleFunc("/:slug/test", apitoolkitClient.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-        // Create a new HTTP client
-        HTTPClient := http.DefaultClient
+  apitoolkitClient, err := apitoolkit.NewClient(
+    ctx,
+    apitoolkit.Config{APIKey: "{ENTER_YOUR_API_KEY_HERE}"},
+  )
+  if err != nil {
+    panic(err)
+  }
 
-        // Replace the transport with the custom roundtripper
-        HTTPClient.Transport = client.WrapRoundTripper(
-            r.Context(),
-            HTTPClient.Transport,
-            WithRedactHeaders([]string{}),
-        )
+  http.HandleFunc("/test", apitoolkit.Middleware(apitoolkitClient)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 
-        // Make an outgoing HTTP request using the modified HTTPClient
-        resp, err = HTTPClient.Get("http://localhost:3000/monitored-outgoing-request")
-		w.Write([]byte("Hello, World!"))
-	})))
-}
-|]
+    // Create a new HTTP client
+    HTTPClient := apitoolkit.HTTPClient(
+      r.Context(),
+      apitoolkit.WithRedactHeaders("content-type", "Authorization", "HOST"),
+      apitoolkit.WithRedactRequestBody("$.user.email", "$.user.addresses"),
+      apitoolkit.WithRedactResponseBody("$.users[*].email", "$.users[*].credit_card"),
+    )
+
+    // Make an outgoing HTTP request using the modified HTTPClient
+    _, _ = HTTPClient.Get("https://jsonplaceholder.typicode.com/posts/1")
+
+    // Respond to the request
+    w.WriteHeader(http.StatusOK)
+    w.Write([]byte("Hello, World!"))
+  })))
+
+  http.ListenAndServe(":8080", nil)
+}|]

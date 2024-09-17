@@ -163,7 +163,7 @@ renderEndpoint activePage currTime enp = do
     div_ [class_ "flex items-center justify-center "]
       $ div_
         [ class_ "w-56 h-12 px-3"
-        , hxGet_ $ "/charts_html?pid=" <> enp.projectId.toText <> "&since=14D&query_raw=" <> Utils.escapedQueryPartial [PyF.fmt|endpoint_hash=="{enp.endpointHash}" | timechart [1d]|]
+        , hxGet_ $ "/charts_html?pid=" <> enp.projectId.toText <> "&since=14D&show_axes=false&query_raw=" <> Utils.escapedQueryPartial [PyF.fmt|endpoint_hash=="{enp.endpointHash}" | timechart [1d]|]
         , hxTrigger_ "intersect once"
         , hxSwap_ "innerHTML"
         ]

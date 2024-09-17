@@ -218,7 +218,7 @@ data ApiLogsPageData = ApiLogsPageData
 
 apiLogsPage :: ApiLogsPageData -> Html ()
 apiLogsPage page = do
-  section_ [class_ "mx-auto pt-2 px-6 gap-2 w-full flex flex-col h-full overflow-hidden ", id_ "apiLogsPage"] do
+  section_ [class_ "mx-auto pt-2 px-6 gap-2 w-full flex flex-col h-full overflow-hidden pb-12", id_ "apiLogsPage"] do
     when page.exceededFreeTier $ freeTierLimitExceededBanner page.pid.toText
     div_
       [ style_ "z-index:26"
@@ -263,22 +263,50 @@ apiLogsPage page = do
       |]
     logQueryBox_ page.pid page.currentRange
 
-    div_ [class_ "card-round w-full grow divide-y flex flex-col text-sm h-full overflow-hidden group/result"] do
-      div_ [class_ "flex-1 "] do
+    div_ [class_ "card-round w-full  divide-y flex flex-col text-sm overflow-hidden group/result"] do
+      div_ [class_ ""] do
         div_ [class_ "pl-3 py-1 flex flex-row justify-end"] do
           label_ [class_ "flex items-center cursor-pointer space-x-2 p-1"] do
             input_ [type_ "checkbox", class_ "toggle toggle-sm toggle-chart", checked_]
             small_ "toggle chart"
-        div_
-          [ id_ "reqsChartsECP"
-          , class_ "px-5 hidden group-has-[.toggle-chart:checked]/result:block"
-          , style_ "height:150px"
-          , hxGet_ $ "/charts_html?id=reqsChartsEC&show_legend=true&pid=" <> page.pid.toText
-          , hxTrigger_ "intersect,  htmx:beforeRequest from:#log_explorer_form"
-          , hxVals_ "js:{query_raw:window.getQueryFromEditor(), since: getTimeRange().since, from: getTimeRange().from, to:getTimeRange().to, cols:params().cols, layout:'all', source: params().source}"
-          , hxSwap_ "innerHTML"
-          ]
-          ""
+        div_ [class_ "grid grid-cols-3 gap-0 mb-2"] do
+          div_ [class_ "w-full"] do
+            div_ [class_ "pl-6 text-xs text-gray-500"] "All requests"
+            div_
+              [ id_ "reqsChartsECP"
+              , class_ "px-5 hidden group-has-[.toggle-chart:checked]/result:block"
+              , style_ "height:150px"
+              , hxGet_ $ "/charts_html?id=reqsChartsEC&show_legend=false&pid=" <> page.pid.toText
+              , hxTrigger_ "intersect,  htmx:beforeRequest from:#log_explorer_form"
+              , hxVals_ "js:{query_raw:window.getQueryFromEditor(), since: getTimeRange().since, from: getTimeRange().from, to:getTimeRange().to, cols:params().cols, layout:'all', source: params().source}"
+              , hxSwap_ "innerHTML"
+              ]
+              ""
+          div_ [class_ "w-full"] do
+            div_ [class_ "pl-6 text-xs text-gray-500"] "Errors"
+            div_
+              [ id_ "reqsChartsE"
+              , class_ "px-5 hidden group-has-[.toggle-chart:checked]/result:block"
+              , style_ "height:150px"
+              , term "data-source" page.source
+              , hxGet_ $ "/charts_html?id=reqsChartsE&group_by=GBStatusCode&theme=roma&show_legend=false&pid=" <> page.pid.toText
+              , hxTrigger_ "intersect, from:#log_explorer_form"
+              , hxVals_ "js:{query_raw:window.getQueryFromEditor('errors'), since: getTimeRange().since, from: getTimeRange().from, to:getTimeRange().to, cols:params().cols, layout:'all', source: params().source}"
+              , hxSwap_ "innerHTML"
+              ]
+              ""
+          div_ [class_ "w-full"] do
+            div_ [class_ "pl-6 text-xs text-gray-500"] "Latency"
+            div_
+              [ id_ "reqsChartsLat"
+              , class_ "px-5 hidden group-has-[.toggle-chart:checked]/result:block"
+              , style_ "height:150px"
+              , hxGet_ $ "/charts_html?id=reqsChartsLat&chart_type=LineCT&group_by=GBDurationPercentile&show_legend=false&pid=" <> page.pid.toText
+              , hxTrigger_ "intersect, from:#log_explorer_form"
+              , hxVals_ "js:{query_raw:window.getQueryFromEditor('latency'), since: getTimeRange().since, from: getTimeRange().from, to:getTimeRange().to, cols:params().cols, layout:'all', source: params().source}"
+              , hxSwap_ "innerHTML"
+              ]
+              ""
       resultTableAndMeta_ page
   jsonTreeAuxillaryCode page.pid
   -- drawerWithURLContent_ : Used when you expand a log item
@@ -290,7 +318,7 @@ apiLogsPage page = do
 
 resultTableAndMeta_ :: ApiLogsPageData -> Html ()
 resultTableAndMeta_ page = do
-  section_ [class_ " w-full h-full overflow-hidden"] $ section_ [class_ " w-full tabs tabs-bordered items-start overflow-hidden h-full place-content-start", role_ "tablist"] do
+  section_ [class_ " w-full h-auto overflow-hidden"] $ section_ [class_ " w-full tabs tabs-bordered items-start overflow-hidden h-full place-content-start", role_ "tablist"] do
     input_ [type_ "radio", name_ "logExplorerMain", role_ "tab", class_ "tab", checked_, Aria.label_ $ "Query results (" <> fmt (commaizeF page.resultCount) <> ")"]
     div_ [class_ "relative overflow-y-scroll overflow-x-hidden h-full w-full tab-content", role_ "tabpanel"] do
       resultTable_ page True
@@ -307,30 +335,36 @@ resultTableAndMeta_ page = do
 
 
 resultTable_ :: ApiLogsPageData -> Bool -> Html ()
-resultTable_ page mainLog = table_ [class_ "w-full table table-xs table-pin-rows table-pin-cols overflow-x-hidden [contain:strict] [content-visibility:auto]", style_ "height:1px", id_ "resultTable"] do
-  -- height:1px fixes the cell minimum heights somehow.
-  let isLogEventB = isLogEvent page.cols
-  when (null page.requestVecs && (isNothing page.query || not mainLog)) $ do
-    whenJust page.isTestLog $ \query -> do
-      section_ [class_ "w-max  mx-auto my-16 p-5 sm:py-14 sm:px-24 items-center flex gap-16"] do
-        div_ [] $ faSprite_ "empty-set" "solid" "h-24 w-24"
-        div_ [class_ "flex flex-col gap-2"] do
-          h2_ [class_ "text-2xl font-bold"] "Waiting for Test run events..."
-          p_ "You're currently not running any tests yet."
-          a_ [href_ $ fromMaybe "" page.emptyStateUrl, class_ "w-max btn btn-indigo -ml-1 text-md"] "Go to test editor"
-    unless (isJust page.isTestLog) $ do
-      if mainLog
-        then do
-          section_ [class_ "w-max  mx-auto my-16 p-5 sm:py-14 sm:px-24 items-center flex gap-16"] do
-            div_ [] $ faSprite_ "empty-set" "solid" "h-24 w-24"
-            div_ [class_ "flex flex-col gap-2"] do
-              h2_ [class_ "text-2xl font-bold"] "Waiting for events..."
-              p_ "You're currently not sending any data to APItoolkit from your backends yet."
-              a_ [href_ $ "/p/" <> page.pid.toText <> "/integration_guides", class_ "w-max btn btn-indigo -ml-1 text-md"] "Read the setup guide"
-        else section_ [class_ "w-max mx-auto"] $ p_ "This request has no outgoing requests yet."
-  unless (null page.requestVecs) $ do
-    thead_ $ tr_ [class_ "divide-x b--b2"] $ forM_ page.cols $ logTableHeading_ page.pid isLogEventB
-    tbody_ [id_ "w-full log-item-table-body [content-visibility:auto]"] $ logItemRows_ page.pid page.requestVecs page.cols page.colIdxMap page.nextLogsURL page.source
+resultTable_ page mainLog = table_
+  [ class_ "w-full table table-xs table-pin-rows table-pin-cols overflow-x-hidden [contain:strict] [content-visibility:auto]"
+  , style_ "height:1px"
+  , id_ "resultTable"
+  , term "data-source" page.source
+  ]
+  do
+    -- height:1px fixes the cell minimum heights somehow.
+    let isLogEventB = isLogEvent page.cols
+    when (null page.requestVecs && (isNothing page.query || not mainLog)) $ do
+      whenJust page.isTestLog $ \query -> do
+        section_ [class_ "w-max  mx-auto my-16 p-5 sm:py-14 sm:px-24 items-center flex gap-16"] do
+          div_ [] $ faSprite_ "empty-set" "solid" "h-24 w-24"
+          div_ [class_ "flex flex-col gap-2"] do
+            h2_ [class_ "text-2xl font-bold"] "Waiting for Test run events..."
+            p_ "You're currently not running any tests yet."
+            a_ [href_ $ fromMaybe "" page.emptyStateUrl, class_ "w-max btn btn-indigo -ml-1 text-md"] "Go to test editor"
+      unless (isJust page.isTestLog) $ do
+        if mainLog
+          then do
+            section_ [class_ "w-max  mx-auto my-16 p-5 sm:py-14 sm:px-24 items-center flex gap-16"] do
+              div_ [] $ faSprite_ "empty-set" "solid" "h-24 w-24"
+              div_ [class_ "flex flex-col gap-2"] do
+                h2_ [class_ "text-2xl font-bold"] "Waiting for events..."
+                p_ "You're currently not sending any data to APItoolkit from your backends yet."
+                a_ [href_ $ "/p/" <> page.pid.toText <> "/integration_guides", class_ "w-max btn btn-indigo -ml-1 text-md"] "Read the setup guide"
+          else section_ [class_ "w-max mx-auto"] $ p_ "This request has no outgoing requests yet."
+    unless (null page.requestVecs) $ do
+      thead_ $ tr_ [class_ "divide-x b--b2"] $ forM_ page.cols $ logTableHeading_ page.pid isLogEventB
+      tbody_ [id_ "w-full log-item-table-body [content-visibility:auto]"] $ logItemRows_ page.pid page.requestVecs page.cols page.colIdxMap page.nextLogsURL page.source
 
 
 curateCols :: [Text] -> [Text] -> [Text]
@@ -479,7 +513,7 @@ logItemCol_ _ _ reqVec colIdxMap "method" = span_ [class_ $ "min-w-[4rem] badge 
 logItemCol_ _ _ reqVec colIdxMap "severity_text" = span_ [class_ $ "badge badge-sm " <> getSeverityColor (T.toLower $ fromMaybe "" $ lookupVecTextByKey reqVec colIdxMap "severity_text")] $ toHtml $ fromMaybe "" $ lookupVecTextByKey reqVec colIdxMap "severity_text"
 logItemCol_ _ _ reqVec colIdxMap "duration" = span_ [class_ "badge badge-sm badge-ghost whitespace-nowrap", term "data-tippy-content" "duration"] $ toHtml $ show (lookupVecIntByKey reqVec colIdxMap "duration") <> " ms"
 logItemCol_ _ _ reqVec colIdxMap "span_name" = span_ [class_ "badge badge-sm badge-ghost whitespace-nowrap", term "data-tippy-content" "span name"] $ toHtml $ fromMaybe "" $ lookupVecTextByKey reqVec colIdxMap "span_name"
-logItemCol_ _ _ reqVec colIdxMap "service" = span_ [class_ "badge badge-sm badge-ghost whitespace-nowrap", term "data-tippy-content" "resource"] $ toHtml $ fromMaybe "" $ lookupVecTextByKey reqVec colIdxMap "service"
+logItemCol_ _ _ reqVec colIdxMap "service" = span_ [class_ "badge badge-sm badge-ghost whitespace-nowrap", term "data-tippy-content" "service name"] $ toHtml $ fromMaybe "" $ lookupVecTextByKey reqVec colIdxMap "service"
 logItemCol_ _ pid reqVec colIdxMap "latency_breakdown" = do
   let spanId = lookupVecTextByKey reqVec colIdxMap "latency_breakdown"
   whenJust spanId $ \spid -> do

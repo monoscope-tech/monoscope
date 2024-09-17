@@ -132,12 +132,12 @@ tracePage p = do
                           color = getServiceColor s serviceColors
                       div_ [class_ "flex items-center justify-between px-2 py-1"] $ do
                         div_ [class_ "flex gap-1 items-center"] $ do
-                          div_ [class_ "w-3 h-3 rounded", style_ $ "background-color:" <> color] pass
+                          div_ [class_ $ "w-3 h-3 rounded " <> color] pass
                           span_ [class_ ""] $ toHtml s
                         div_ [class_ "flex gap-1 items-center"] $ do
                           span_ [class_ "text-xs max-w-52 truncate"] $ toHtml $ T.take 4 percent <> "%"
                           div_ [class_ "w-[100px] h-3 bg-gray-200 rounded overflow-hidden"]
-                            $ div_ [class_ "h-full pl-2 text-xs font-medium", style_ $ "width:" <> percent <> "%; background-color:" <> color] pass
+                            $ div_ [class_ $ "h-full pl-2 text-xs font-medium " <> color, style_ $ "width:" <> percent <> "%"] pass
 
             input_ [type_ "radio", name_ "my_tabs_2", role_ "tab", class_ "tab after:pb-2", term "aria-label" "Span List"]
             div_ [role_ "tabpanel", class_ "tab-content pt-2"] do

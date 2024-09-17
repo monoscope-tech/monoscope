@@ -98,7 +98,7 @@ renderapiCatalog pid host timeFilter requestType = div_ [class_ "flex py-4 gap-8
   div_ [class_ "flex items-center justify-center "] $ do
     div_
       [ class_ "w-56 h-12 px-3"
-      , hxGet_ $ "/charts_html?pid=" <> pid.toText <> "&since=" <> (if timeFilter == "14d" then "14D" else "24h") <> "&query_raw=" <> AnomalyList.escapedQueryPartial [PyF.fmt|host=="{host.host}" | timechart [1d]|]
+      , hxGet_ $ "/charts_html?pid=" <> pid.toText <> "&since=" <> (if timeFilter == "14d" then "14D" else "24h") <> "&show_axes=false&query_raw=" <> AnomalyList.escapedQueryPartial [PyF.fmt|host=="{host.host}" | timechart [1d]|]
       , hxTrigger_ "intersect once"
       , hxSwap_ "innerHTML"
       ]

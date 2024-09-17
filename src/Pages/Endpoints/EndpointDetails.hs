@@ -372,11 +372,11 @@ endpointDetails pid paramInput currTime endpoint endpointStats shapesWithFieldsM
 
     script_
       [type_ "text/hyperscript"]
-      [text| 
+      [text|
         def collapseUntil(elem, level)
           set nxtElem to (next <[data-depth]/> from elem) then
-          if nxtElem's @data-depth is greater than level 
-            then toggle .hidden on nxtElem 
+          if nxtElem's @data-depth is greater than level
+            then toggle .hidden on nxtElem
             then collapseUntil(nxtElem, level)
         end
         |]
@@ -484,13 +484,13 @@ apiDocsSubPage shapesWithFieldsMap shapeHashM = do
     reqResSection "Response" False shapesWithFieldsMap targetIndex
   script_
     [type_ "text/hyperscript"]
-    [text| 
+    [text|
         def selectShape(elem, position)
           if position is (#toggle_shapes_btn @data-current)
             exit
           end
           remove (<span/> in #toggle_shapes_btn)
-          set (#toggle_shapes_btn @data-current) to position 
+          set (#toggle_shapes_btn @data-current) to position
           append (<span /> in elem) as HTML to #toggle_shapes_btn
           add .hidden to .Response_fields
           add .hidden to .Request_fields
@@ -500,17 +500,17 @@ apiDocsSubPage shapesWithFieldsMap shapeHashM = do
           remove .hidden from it
           put (position + "/" + (#toggle_shapes_btn @data-total)) into #current_indicator
         end
-      
+
         def slideReqRes(action)
           set current to (#toggle_shapes_btn @data-current)
           if (current is (#toggle_shapes_btn @data-total) and action is "next") or (current is "1" and action is "prev")
-            exit 
+            exit
           end
-          if action == "next" 
-            then set position to ((current as Int) + 1) 
+          if action == "next"
+            then set position to ((current as Int) + 1)
             else set position to ((current as Int) - 1)
           end
-          set (#toggle_shapes_btn @data-current) to position 
+          set (#toggle_shapes_btn @data-current) to position
           call document.querySelector("#status_" + position)
           remove (<span/> in #toggle_shapes_btn)
           append (<span /> in it) as HTML to #toggle_shapes_btn

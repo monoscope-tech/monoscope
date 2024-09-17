@@ -159,13 +159,16 @@ spanLatencyBreakdown :: V.Vector Telemetry.SpanRecord -> Html ()
 spanLatencyBreakdown spans = do
   let colors = getServiceColors $ (.spanName) <$> spans
   let totalDuration = sum $ (.spanDurationNs) <$> spans
-  div_ [class_ "flex h-6  w-[150px]"] $ do
+  div_ [class_ "flex h-6 w-[150px]"] $ do
     V.forM_ spans $ \sp -> do
-      let wdth = 150 * totalDuration `div` sp.spanDurationNs
+      -- use percentage of total duration to determine width of bar
+      let wdth = (fromIntegral sp.spanDurationNs / fromIntegral totalDuration) * 150
       let color = fromMaybe "#000000" $ HM.lookup sp.spanName colors
       div_
-        [ class_ "h-full overflow-hidden"
-        , style_ $ "width:" <> show wdth <> "px;" <> "background-color:" <> color
-        , term "data-tippy-content" sp.spanName
+        [ class_ $ "h-full overflow-hidden tooltip " <> color
+        , style_ $ "width:" <> show wdth <> "px;"
+        , term "data-tip" $ "Span name: " <> sp.spanName <> " Duration: " <> toText (getDurationNSMS sp.spanDurationNs)
+        , title_ $ "Span name: " <> sp.spanName <> " Duration: " <> toText (getDurationNSMS sp.spanDurationNs)
         ]
-        ""
+        do
+          div_ [class_ "h-full w-full"] ""

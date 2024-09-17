@@ -343,7 +343,7 @@ issueItem hideByDefault currTime issue icon title subTitle content = do
     div_ [class_ "flex items-center justify-center "]
       $ div_
         [ class_ "w-60 h-16 px-3"
-        , hxGet_ $ "/charts_html?pid=" <> issue.projectId.toText <> "&since=14D&query_raw=" <> escapedQueryPartial [fmt|{issueQueryPartial} | timechart [1d]|]
+        , hxGet_ $ "/charts_html?pid=" <> issue.projectId.toText <> "&since=14D&show_axes=false&query_raw=" <> escapedQueryPartial [fmt|{issueQueryPartial} | timechart [1d]|]
         , hxTrigger_ "intersect once"
         , hxSwap_ "innerHTML"
         ]
