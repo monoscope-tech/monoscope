@@ -309,7 +309,7 @@ apiLogsPage page = do
               , class_ "log-chart px-5 hidden group-has-[.toggle-chart:checked]/result:block"
               , style_ "height:150px"
               , term "data-source" page.source
-              , hxGet_ $ "/charts_html?id=reqsChartsErrP&theme=roma&show_legend=false&pid=" <> page.pid.toText
+              , hxGet_ $ "/charts_html?id=reqsChartsErr&theme=roma&show_legend=false&pid=" <> page.pid.toText
               , hxTrigger_ "intersect"
               , hxVals_ "js:{query_raw:window.getQueryFromEditor('errors'), since: getTimeRange().since, from: getTimeRange().from, to:getTimeRange().to, cols:params().cols, layout:'all', source: params().source}"
               , hxSwap_ "innerHTML"
