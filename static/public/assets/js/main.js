@@ -54,10 +54,7 @@ window.getQueryFromEditor = (target) => {
     val = window.queryBuilderValue || ''
   }
   if (target === 'errors') {
-    let source = document.querySelector('#reqsChartsE').dataset.source
-    // if (source === 'spans') {
-    //   let sp = document.querySelector('#spans-toggle')
-    // }
+    let source = document.querySelector('#reqsChartsErrP').dataset.source
     let srcErrs = source === 'logs' ? `severityText == "ERROR" OR severityText == "FATAL"` : source === 'spans' ? `status == "ERROR"` : 'status_code > 399'
     val = val.length === 0 ? srcErrs : `${val} AND ${srcErrs}`
   }
