@@ -193,10 +193,16 @@ logQueryBox_ pid currentRange source targetSpan =
         let target = fromMaybe "all-spans" targetSpan
         div_ [class_ "self-end mb-1 gap-[2px] flex items-center"] do
           span_ "In"
-          select_ [class_ "ml-1 select select-sm select-bordered w-full max-w-[150px]", name_ "target-spans"] $ do
-            option_ (value_ "all-spans" : ([selected_ "true" | target == "all-spans"])) "All spans"
-            option_ (value_ "root-spans" : ([selected_ "true" | target == "root-spans"])) "Trace Root Spans"
-            option_ (value_ "service-entry-spans" : ([selected_ "true" | target == "service-entry-spans"])) "Service Entry Spans"
+          select_
+            [ class_ "ml-1 select select-sm select-bordered w-full max-w-[150px]"
+            , name_ "target-spans"
+            , id_ "spans-toggle"
+            , onchange_ "htmx.trigger('#log_explorer_form', 'submit')"
+            ]
+            $ do
+              option_ (value_ "all-spans" : ([selected_ "true" | target == "all-spans"])) "All spans"
+              option_ (value_ "root-spans" : ([selected_ "true" | target == "root-spans"])) "Trace Root Spans"
+              option_ (value_ "service-entry-spans" : ([selected_ "true" | target == "service-entry-spans"])) "Service Entry Spans"
       button_
         [type_ "submit", class_ "btn self-end btn-sm btn-success mb-1"]
         do
