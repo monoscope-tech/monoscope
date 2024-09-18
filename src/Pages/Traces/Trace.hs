@@ -73,7 +73,7 @@ tracePage p = do
         h3_ [class_ "whitespace-nowrap text-xl font-bold pr-4 border-r border-r-2"] "Trace"
         div_ [class_ "flex items-center gap-4"] $ do
           h4_ [class_ "text-xl font-medium"] $ toHtml $ if not (null serviceNames) then V.head serviceNames else "Unknown Service"
-          faSprite_ "arrow-right" "regular" "w-4 h-4 font-bold"
+          faSprite_ "caret-up" "solid" "w-5 h-5 rotate-90 font-bold"
           h4_ [class_ "text-xl font-medium"] $ toHtml $ if not (null p.spanRecords) then (V.head p.spanRecords).spanName else "Unknown Span"
         div_ [class_ "flex items-end border rounded"] do
           span_ [class_ "text-sm text-gray-500 font-medium border-r px-2 py-1"] "Trace ID"
@@ -136,8 +136,8 @@ tracePage p = do
                           span_ [class_ ""] $ toHtml s
                         div_ [class_ "flex gap-1 items-center"] $ do
                           span_ [class_ "text-xs max-w-52 truncate"] $ toHtml $ T.take 4 percent <> "%"
-                          div_ [class_ "w-[100px] h-3 bg-gray-200 rounded overflow-hidden"]
-                            $ div_ [class_ $ "h-full pl-2 text-xs font-medium " <> color, style_ $ "width:" <> percent <> "%"] pass
+                          div_ [class_ "w-[100px] h-3 bg-gray-200 rounded overflow-hidden"] $
+                            div_ [class_ $ "h-full pl-2 text-xs font-medium " <> color, style_ $ "width:" <> percent <> "%"] pass
 
             input_ [type_ "radio", name_ "my_tabs_2", role_ "tab", class_ "tab after:pb-2", term "aria-label" "Span List"]
             div_ [role_ "tabpanel", class_ "tab-content pt-2"] do
@@ -200,8 +200,8 @@ renderSpanListTable services colors records =
         th_ "Avg. Duration"
         th_ "Exec. Time"
         th_ "%Exec. Time"
-    tbody_ [class_ "space-y-0"]
-      $ mapM_ (renderSpanRecordRow records colors) services
+    tbody_ [class_ "space-y-0"] $
+      mapM_ (renderSpanRecordRow records colors) services
 
 
 spanTable :: V.Vector Telemetry.SpanRecord -> Html ()
