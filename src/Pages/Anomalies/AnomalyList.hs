@@ -161,11 +161,12 @@ anomalyListGetH
   -> Maybe Text
   -> Maybe Text
   -> Maybe Text
+  -> Maybe Text
   -> Maybe Endpoints.EndpointId
   -> Maybe Text
   -> Maybe Text
   -> ATAuthCtx (RespHeaders AnomalyListGet)
-anomalyListGetH pid layoutM filterTM sortM pageM loadM endpointM hxRequestM hxBoostedM = do
+anomalyListGetH pid layoutM filterTM sortM timeFilter pageM loadM endpointM hxRequestM hxBoostedM = do
   (sess, project) <- Sessions.sessionAndProject pid
   let (ackd, archived, currentFilterTab) = case filterTM of
         Just "Inbox" -> (False, False, "Inbox")
@@ -174,6 +175,8 @@ anomalyListGetH pid layoutM filterTM sortM pageM loadM endpointM hxRequestM hxBo
         _ -> (False, False, "Inbox")
 
   let fLimit = 10
+  let filterV = fromMaybe "14d" timeFilter
+
   let pageInt = maybe 0 (Unsafe.read . toString) pageM
   issues <- dbtToEff $ Anomalies.selectIssues pid endpointM (Just ackd) (Just archived) sortM (Just fLimit) (pageInt * fLimit)
   currTime <- liftIO getCurrentTime
@@ -186,7 +189,7 @@ anomalyListGetH pid layoutM filterTM sortM pageM loadM endpointM hxRequestM hxBo
           { projectId = pid
           , nextFetchUrl
           , sort = Just $ ItemsList.SortCfg{current = fromMaybe "events" sortM}
-          , filter = Nothing
+          , filter = timeFilter
           , search = Just $ ItemsList.SearchCfg{viaQueryParam = Nothing} -- FIXME: search actual db
           , heading = Nothing
           , bulkActions =
@@ -224,9 +227,9 @@ anomalyListGetH pid layoutM filterTM sortM pageM loadM endpointM hxRequestM hxBo
                       ]
                   }
           }
-      issuesVM = V.map (IssueVM False currTime) issues
+      issuesVM = V.map (IssueVM False currTime filterV) issues
   addRespHeaders $ case (layoutM, hxRequestM, hxBoostedM, loadM) of
-    (Just "slider", Just "true", _, _) -> ALSlider currTime pid endpointM (Just $ V.map (IssueVM True currTime) issues)
+    (Just "slider", Just "true", _, _) -> ALSlider currTime pid endpointM (Just $ V.map (IssueVM True currTime filterV) issues)
     (_, _, _, Just "true") -> ALItemsRows $ ItemsList.ItemsRows nextFetchUrl issuesVM
     _ -> ALItemsPage $ PageCtx bwconf (ItemsList.ItemsPage listCfg issuesVM)
 
@@ -254,7 +257,7 @@ anomalyListSlider _ pid eid Nothing = do
         span_ [class_ "text-lg text-slate-700"] "Ongoing Issues and Monitors"
       div_ [class_ "flex flex-row mt-2"] ""
 anomalyListSlider currTime _ _ (Just issues) = do
-  let anomalyIds = replace "\"" "'" $ show $ fmap (Anomalies.anomalyIdText . (\(IssueVM _ _ issue) -> issue.id)) issues
+  let anomalyIds = replace "\"" "'" $ show $ fmap (Anomalies.anomalyIdText . (\(IssueVM _ _ _ issue) -> issue.id)) issues
   let totalAnomaliesTxt = toText $ if length issues > 10 then ("10+" :: Text) else show (length issues)
   div_ do
     script_ [text| var rem = (x,y)=>((x%y)==0?1:(x%y)); |]
@@ -306,8 +309,8 @@ anomalyAccentColor True False = "bg-green-200"
 anomalyAccentColor False False = "bg-red-800"
 
 
-issueItem :: Bool -> UTCTime -> Anomalies.IssueL -> Text -> Text -> Maybe (Html ()) -> Maybe (Html ()) -> Html ()
-issueItem hideByDefault currTime issue icon title subTitle content = do
+issueItem :: Bool -> UTCTime -> Anomalies.IssueL -> Text -> Text -> Text -> Maybe (Html ()) -> Maybe (Html ()) -> Html ()
+issueItem hideByDefault currTime issue timeFilter icon title subTitle content = do
   let issueId = Anomalies.anomalyIdText issue.id
   div_ [class_ $ "flex py-4 gap-8 items-center itemsListItem " <> if hideByDefault then "card-round px-5" else "", style_ (if hideByDefault then "display:none" else ""), id_ issueId] do
     div_ [class_ $ "h-4 flex space-x-3 w-8 items-center justify-center " <> if hideByDefault then "hidden" else ""] do
@@ -346,8 +349,9 @@ issueItem hideByDefault currTime issue icon title subTitle content = do
     div_ [class_ "flex items-center justify-center "]
       $ div_
         [ class_ "w-60 h-16 px-3"
-        , hxGet_ $ "/charts_html?pid=" <> issue.projectId.toText <> "&since=14D&show_axes=false&query_raw=" <> escapedQueryPartial [fmt|{issueQueryPartial} | timechart [1d]|]
-        , hxTrigger_ "intersect once"
+        , hxGet_ $ "/charts_html?pid=" <> issue.projectId.toText <> "&since=" <> (if timeFilter == "14d" then "14D" else "24h") <> "&show_axes=false&query_raw=" <> escapedQueryPartial [fmt|{issueQueryPartial} | timechart [1d]|]
+        , -- , hxGet_ $ "/charts_html?pid=" <> issue.projectId.toText <> "&since=14D&show_axes=false&query_raw=" <> escapedQueryPartial [fmt|{issueQueryPartial} | timechart [1d]|]
+          hxTrigger_ "intersect once"
         , hxSwap_ "innerHTML"
         ]
         ""
@@ -378,39 +382,39 @@ anomalyDetailsGetH pid targetHash hxBoostedM = do
           fields <- dbtToEff $ Fields.selectFields pid targetHash
           let shapesWithFieldsMap = V.map (`getShapeFields` fields) shapes
           case hxBoostedM of
-            Just _ -> addRespHeaders $ AnomalyDetailsBoosted (issue, Just shapesWithFieldsMap, Nothing, Nothing, currTime, True)
-            Nothing -> addRespHeaders $ AnomalyDetailsMain $ PageCtx bwconf (issue, Just shapesWithFieldsMap, Nothing, Nothing, currTime, False)
+            Just _ -> addRespHeaders $ AnomalyDetailsBoosted (issue, Just shapesWithFieldsMap, Nothing, Nothing, currTime, Nothing, True)
+            Nothing -> addRespHeaders $ AnomalyDetailsMain $ PageCtx bwconf (issue, Just shapesWithFieldsMap, Nothing, Nothing, currTime, Nothing, False)
         Anomalies.IDNewShapeIssue issueD -> do
           newF <- dbtToEff $ Fields.selectFieldsByHashes pid issueD.newUniqueFields
           updF <- dbtToEff $ Fields.selectFieldsByHashes pid (T.take 16 <$> issueD.updatedFieldFormats)
           delF <- dbtToEff $ Fields.selectFieldsByHashes pid issueD.deletedFields
           let anFields = (groupFieldsByCategory newF, groupFieldsByCategory updF, groupFieldsByCategory delF)
           case hxBoostedM of
-            Just _ -> addRespHeaders $ AnomalyDetailsBoosted (issue, Nothing, Just anFields, Nothing, currTime, True)
-            Nothing -> addRespHeaders $ AnomalyDetailsMain $ PageCtx bwconf (issue, Nothing, Just anFields, Nothing, currTime, False)
+            Just _ -> addRespHeaders $ AnomalyDetailsBoosted (issue, Nothing, Just anFields, Nothing, currTime, Nothing, True)
+            Nothing -> addRespHeaders $ AnomalyDetailsMain $ PageCtx bwconf (issue, Nothing, Just anFields, Nothing, currTime, Nothing, False)
         Anomalies.IDNewFormatIssue issueD -> do
           anFormats <-
             dbtToEff
               $ Fields.getFieldsByEndpointKeyPathAndCategory pid issueD.endpointId.toText issueD.fieldKeyPath issueD.fieldCategory
           case hxBoostedM of
-            Just _ -> addRespHeaders $ AnomalyDetailsBoosted (issue, Nothing, Nothing, Just anFormats, currTime, True)
-            Nothing -> addRespHeaders $ AnomalyDetailsMain $ PageCtx bwconf (issue, Nothing, Nothing, Just anFormats, currTime, False)
+            Just _ -> addRespHeaders $ AnomalyDetailsBoosted (issue, Nothing, Nothing, Just anFormats, currTime, Nothing, True)
+            Nothing -> addRespHeaders $ AnomalyDetailsMain $ PageCtx bwconf (issue, Nothing, Nothing, Just anFormats, currTime, Nothing, False)
         Anomalies.IDNewRuntimeExceptionIssue issueD -> do
           case hxBoostedM of
-            Just _ -> addRespHeaders $ AnomalyDetailsBoosted (issue, Nothing, Nothing, Nothing, currTime, True)
-            Nothing -> addRespHeaders $ AnomalyDetailsMain $ PageCtx bwconf (issue, Nothing, Nothing, Nothing, currTime, False)
+            Just _ -> addRespHeaders $ AnomalyDetailsBoosted (issue, Nothing, Nothing, Nothing, currTime, Nothing, True)
+            Nothing -> addRespHeaders $ AnomalyDetailsMain $ PageCtx bwconf (issue, Nothing, Nothing, Nothing, currTime, Nothing, False)
         _ -> addRespHeaders $ AnomalyDetailsNoFound $ PageCtx bwconf ()
 
 
 data AnomalyDetails
-  = AnomalyDetailsMain (PageCtx (Anomalies.IssueL, Maybe (V.Vector Shapes.ShapeWithFields), Maybe (Map Fields.FieldCategoryEnum [Fields.Field], Map Fields.FieldCategoryEnum [Fields.Field], Map Fields.FieldCategoryEnum [Fields.Field]), Maybe (V.Vector Text), UTCTime, Bool))
-  | AnomalyDetailsBoosted (Anomalies.IssueL, Maybe (V.Vector Shapes.ShapeWithFields), Maybe (Map Fields.FieldCategoryEnum [Fields.Field], Map Fields.FieldCategoryEnum [Fields.Field], Map Fields.FieldCategoryEnum [Fields.Field]), Maybe (V.Vector Text), UTCTime, Bool)
+  = AnomalyDetailsMain (PageCtx (Anomalies.IssueL, Maybe (V.Vector Shapes.ShapeWithFields), Maybe (Map Fields.FieldCategoryEnum [Fields.Field], Map Fields.FieldCategoryEnum [Fields.Field], Map Fields.FieldCategoryEnum [Fields.Field]), Maybe (V.Vector Text), UTCTime, Maybe Text, Bool))
+  | AnomalyDetailsBoosted (Anomalies.IssueL, Maybe (V.Vector Shapes.ShapeWithFields), Maybe (Map Fields.FieldCategoryEnum [Fields.Field], Map Fields.FieldCategoryEnum [Fields.Field], Map Fields.FieldCategoryEnum [Fields.Field]), Maybe (V.Vector Text), UTCTime, Maybe Text, Bool)
   | AnomalyDetailsNoFound (PageCtx ())
 
 
 instance ToHtml AnomalyDetails where
-  toHtml (AnomalyDetailsMain (PageCtx bwconf (issue, shapesWithFieldsMap, fields, prvFormatsM, currTime, modal))) = toHtml $ PageCtx bwconf $ anomalyDetailsPageM issue shapesWithFieldsMap fields prvFormatsM currTime modal
-  toHtml (AnomalyDetailsBoosted (issue, shapesWithFieldsMap, fields, prvFormatsM, currTime, modal)) = toHtml $ anomalyDetailsPage issue shapesWithFieldsMap fields prvFormatsM currTime modal
+  toHtml (AnomalyDetailsMain (PageCtx bwconf (issue, shapesWithFieldsMap, fields, prvFormatsM, currTime, timeFilter, modal))) = toHtml $ PageCtx bwconf $ anomalyDetailsPageM issue shapesWithFieldsMap fields prvFormatsM currTime modal timeFilter
+  toHtml (AnomalyDetailsBoosted (issue, shapesWithFieldsMap, fields, prvFormatsM, currTime, timeFilter, modal)) = toHtml $ anomalyDetailsPage issue shapesWithFieldsMap fields prvFormatsM currTime timeFilter modal
   toHtml (AnomalyDetailsNoFound (PageCtx bwconf ())) = toHtml $ PageCtx bwconf notFoundPage
   toHtmlRaw = toHtml
 
@@ -420,16 +424,17 @@ notFoundPage = do
   h4_ [] "ANOMALY NOT FOUND"
 
 
-anomalyDetailsPageM :: Anomalies.IssueL -> Maybe (V.Vector Shapes.ShapeWithFields) -> Maybe (Map Fields.FieldCategoryEnum [Fields.Field], Map Fields.FieldCategoryEnum [Fields.Field], Map Fields.FieldCategoryEnum [Fields.Field]) -> Maybe (V.Vector Text) -> UTCTime -> Bool -> Html ()
-anomalyDetailsPageM issue shapesWithFieldsMap fields prvFormatsM currTime modal = do
+anomalyDetailsPageM :: Anomalies.IssueL -> Maybe (V.Vector Shapes.ShapeWithFields) -> Maybe (Map Fields.FieldCategoryEnum [Fields.Field], Map Fields.FieldCategoryEnum [Fields.Field], Map Fields.FieldCategoryEnum [Fields.Field]) -> Maybe (V.Vector Text) -> UTCTime -> Bool -> Maybe Text -> Html ()
+anomalyDetailsPageM issue shapesWithFieldsMap fields prvFormatsM currTime modal timeFilter = do
   div_ [class_ "w-full px-32 overflow-y-scroll h-full"] do
     h1_ [class_ "my-10 py-2 border-b w-full text-lg font-semibold"] "Anomaly Details"
-    anomalyDetailsPage issue shapesWithFieldsMap fields prvFormatsM currTime modal
+    anomalyDetailsPage issue shapesWithFieldsMap fields prvFormatsM currTime timeFilter modal
 
 
-anomalyDetailsPage :: Anomalies.IssueL -> Maybe (V.Vector Shapes.ShapeWithFields) -> Maybe (Map Fields.FieldCategoryEnum [Fields.Field], Map Fields.FieldCategoryEnum [Fields.Field], Map Fields.FieldCategoryEnum [Fields.Field]) -> Maybe (V.Vector Text) -> UTCTime -> Bool -> Html ()
-anomalyDetailsPage issue shapesWithFieldsMap fields prvFormatsM currTime modal = do
+anomalyDetailsPage :: Anomalies.IssueL -> Maybe (V.Vector Shapes.ShapeWithFields) -> Maybe (Map Fields.FieldCategoryEnum [Fields.Field], Map Fields.FieldCategoryEnum [Fields.Field], Map Fields.FieldCategoryEnum [Fields.Field]) -> Maybe (V.Vector Text) -> UTCTime -> Maybe Text -> Bool -> Html ()
+anomalyDetailsPage issue shapesWithFieldsMap fields prvFormatsM currTime timeFilter modal = do
   let anomalyQueryPartial = buildQueryForAnomaly issue.anomalyType issue.targetHash
+  let filterV = fromMaybe "14d" timeFilter
   div_ [class_ "w-full "] do
     div_ [class_ "w-full"] do
       div_ [class_ "flex items-center justify-between gap-2 flex-wrap"] do
@@ -495,7 +500,7 @@ anomalyDetailsPage issue shapesWithFieldsMap fields prvFormatsM currTime modal =
             [ id_ "reqsChartsEC"
             , class_ "w-[200px] h-[80px] mt-4 shrink-0"
             , style_ "height:100px"
-            , hxGet_ $ "/charts_html?pid=" <> issue.projectId.toText <> "&since=14D&query_raw=" <> escapedQueryPartial [fmt|{anomalyQueryPartial} | timechart [1d]|]
+            , hxGet_ $ "/charts_html?pid=" <> issue.projectId.toText <> "&since=" <> (if filterV == "14d" then "14D" else "24h") <> "&query_raw=" <> escapedQueryPartial [fmt|{anomalyQueryPartial} | timechart [1d]|]
             , hxTrigger_ "intersect"
             , hxSwap_ "innerHTML"
             ]
@@ -602,18 +607,18 @@ issueDisplayConfig issue = case issue.issueData of
   Anomalies.IDEmpty -> ("Unknown anomaly", "/public/assets/svgs/anomalies/fields.svg")
 
 
-data IssueVM = IssueVM Bool UTCTime Anomalies.IssueL
+data IssueVM = IssueVM Bool UTCTime Text Anomalies.IssueL
   deriving stock (Show)
 
 
 instance ToHtml IssueVM where
   {-# INLINE toHtml #-}
-  toHtml (IssueVM hideByDefault currTime issue) = toHtmlRaw $ renderIssue hideByDefault currTime issue
+  toHtml (IssueVM hideByDefault currTime timeFilter issue) = toHtmlRaw $ renderIssue hideByDefault currTime timeFilter issue
   toHtmlRaw = toHtml
 
 
-renderIssue :: Bool -> UTCTime -> Anomalies.IssueL -> Html ()
-renderIssue hideByDefault currTime issue = do
+renderIssue :: Bool -> UTCTime -> Text -> Anomalies.IssueL -> Html ()
+renderIssue hideByDefault currTime timeFilter issue = do
   let (issueTitle, icon) = issueDisplayConfig issue
   case issue.issueData of
     Anomalies.IDNewEndpointIssue issueD -> do
@@ -622,7 +627,7 @@ renderIssue hideByDefault currTime issue = do
             a_ [class_ "cursor-pointer"] $ toHtml endpointTitle
             span_ [] "from"
             span_ [] $ toHtml issueD.host
-      issueItem hideByDefault currTime issue icon issueTitle (Just subTitle) Nothing
+      issueItem hideByDefault currTime issue timeFilter icon issueTitle (Just subTitle) Nothing
     Anomalies.IDNewShapeIssue issueD -> do
       let endpointTitle = issueD.endpointMethod <> "  " <> issueD.endpointUrlPath
       let subTitle = span_ [class_ "space-x-2"] do
@@ -630,7 +635,7 @@ renderIssue hideByDefault currTime issue = do
             span_ [] "in"
             span_ [] $ toHtml endpointTitle
       let shapeContent = shapeParameterStats_ (length issueD.newUniqueFields) (length issueD.deletedFields) (length issueD.updatedFieldFormats)
-      issueItem hideByDefault currTime issue icon issueTitle (Just subTitle) (Just shapeContent)
+      issueItem hideByDefault currTime issue timeFilter icon issueTitle (Just subTitle) (Just shapeContent)
     Anomalies.IDNewFormatIssue issueD -> do
       let endpointTitle = toHtml $ issueD.endpointMethod <> "  " <> issueD.endpointUrlPath
       let subTitle = span_ [class_ "space-x-2"] do
@@ -648,12 +653,12 @@ renderIssue hideByDefault currTime issue = do
               div_ do
                 small_ "examples: "
                 small_ $ toHtml $ maybe "" (T.intercalate ", " . V.toList) issueD.examples
-      issueItem hideByDefault currTime issue icon issueTitle (Just subTitle) (Just formatContent)
+      issueItem hideByDefault currTime issue timeFilter icon issueTitle (Just subTitle) (Just formatContent)
     Anomalies.IDNewRuntimeExceptionIssue issueD -> do
       let subTitle = span_ [class_ "space-x-2"] do
             a_ [class_ "cursor-pointer"] $ toHtml @Text $ issueD.rootErrorType
       let body = div_ [class_ "block"] $ p_ [] $ toHtml issueD.message
-      issueItem hideByDefault currTime issue icon issueTitle (Just subTitle) (Just body)
+      issueItem hideByDefault currTime issue timeFilter icon issueTitle (Just subTitle) (Just body)
     _ -> error "Anomalies.ATField issue should never show up in practice "
 
 
