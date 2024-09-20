@@ -286,7 +286,7 @@ reportListItems :: Projects.ProjectId -> Vector Reports.ReportListItem -> Text -
 reportListItems pid reports nextUrl =
   div_ [class_ "space-y-1 w-full"] do
     forM_ reports $ \report -> do
-      -- when (report.reportType == "weekly") $ do
+      when (report.reportType == "weekly") $ do
         div_ [class_ "w-full rounded-sm"] do
           a_
             [ class_ "w-full bg-gray-100 px-4 py-3 flex justify-between hover:bg-gray-200 transition-colors duration-200"
