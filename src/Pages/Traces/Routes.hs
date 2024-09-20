@@ -1,7 +1,6 @@
 module Pages.Traces.Routes (Routes, Routes' (..), server) where
 
 import Models.Projects.Projects qualified as Projects
-import Pages.Traces.Spans (SpanBreakdown, spanLatencyBreakdownGet)
 import Pages.Traces.Trace qualified as Trace
 import Relude (Generic, Text)
 import Servant (
@@ -28,7 +27,6 @@ type Routes = NamedRoutes Routes'
 
 data Routes' mode = Routes'
   { tracesGet :: mode :- "traces" :> Capture "trace_id" Text :> QPT "span_id" :> Get '[HTML] (RespHeaders Trace.TraceDetailsGet)
-  , latencyBreakDown :: mode :- "child-spans" :> Capture "spand_id" Text :> Get '[HTML] (RespHeaders SpanBreakdown)
   }
   deriving stock (Generic)
 
@@ -37,5 +35,4 @@ server :: Projects.ProjectId -> Servant.ServerT Routes ATAuthCtx
 server pid =
   Routes'
     { tracesGet = Trace.traceH pid
-    , latencyBreakDown = spanLatencyBreakdownGet pid
     }

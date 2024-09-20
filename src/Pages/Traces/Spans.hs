@@ -1,4 +1,4 @@
-module Pages.Traces.Spans (expandedSpanItem, spanLatencyBreakdownGet, SpanBreakdown (..)) where
+module Pages.Traces.Spans (expandedSpanItem, spanLatencyBreakdown) where
 
 import Data.Aeson qualified as AE
 import Data.Aeson.Key qualified as Key
@@ -139,20 +139,6 @@ displayEventItem _ = pass
 numberOfEvents :: AE.Value -> Int
 numberOfEvents (AE.Array obj) = length obj
 numberOfEvents _ = 0
-
-
-spanLatencyBreakdownGet :: Projects.ProjectId -> Text -> ATAuthCtx (RespHeaders SpanBreakdown)
-spanLatencyBreakdownGet pid spid = do
-  spans <- Telemetry.getChildSpans pid spid
-  addRespHeaders $ SpanBreakdown spans
-
-
-newtype SpanBreakdown = SpanBreakdown (V.Vector Telemetry.SpanRecord)
-
-
-instance ToHtml SpanBreakdown where
-  toHtml (SpanBreakdown spans) = toHtml $ spanLatencyBreakdown spans
-  toHtmlRaw = toHtml
 
 
 spanLatencyBreakdown :: V.Vector Telemetry.SpanRecord -> Html ()
