@@ -284,10 +284,10 @@ reportsPage pid reports nextUrl daily weekly =
 
 reportListItems :: Projects.ProjectId -> Vector Reports.ReportListItem -> Text -> Html ()
 reportListItems pid reports nextUrl =
-  div_ [class_ "space-y-1"] do
+  div_ [class_ "space-y-1 w-full"] do
     forM_ reports $ \report -> do
-      when (report.reportType == "weekly") $ do
-        div_ [class_ "hover:bg-sky-700 w-full rounded-sm"] do
+      -- when (report.reportType == "weekly") $ do
+        div_ [class_ "w-full rounded-sm"] do
           a_
             [ class_ "w-full bg-gray-100 px-4 py-3 flex justify-between hover:bg-gray-200 transition-colors duration-200"
             , hxGet_ $ "/p/" <> show pid.unProjectId <> "/reports/" <> show report.id.reportId
@@ -304,7 +304,7 @@ reportListItems pid reports nextUrl =
 
     when (length reports < 20) $ do
       div_ [class_ "w-full h-16 center-item my-200"] do
-        p_ [class_ "text-center text-blue-600"] "The End. No more report to display"
+        p_ [class_ "text-center text-blue-600"] "The End: No more report to display"
 
     unless (length reports < 20) $ do
       a_ [class_ "w-full cursor-pointer block p-1 blue-800 bg-blue-100 hover:bg-blue-200 text-center mb-4", hxTrigger_ "click", hxSwap_ "outerHTML", hxGet_ nextUrl] "LOAD MORE"
