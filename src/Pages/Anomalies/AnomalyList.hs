@@ -425,13 +425,13 @@ notFoundPage = do
 
 
 anomalyDetailsPageM :: Anomalies.IssueL -> Maybe (V.Vector Shapes.ShapeWithFields) -> Maybe (Map Fields.FieldCategoryEnum [Fields.Field], Map Fields.FieldCategoryEnum [Fields.Field], Map Fields.FieldCategoryEnum [Fields.Field]) -> Maybe (V.Vector Text) -> UTCTime -> Bool -> Maybe Text -> Html ()
-anomalyDetailsPageM issue shapesWithFieldsMap fields prvFormatsM currTime  modal timeFilter= do
+anomalyDetailsPageM issue shapesWithFieldsMap fields prvFormatsM currTime modal timeFilter = do
   div_ [class_ "w-full px-32 overflow-y-scroll h-full"] do
     h1_ [class_ "my-10 py-2 border-b w-full text-lg font-semibold"] "Anomaly Details"
     anomalyDetailsPage issue shapesWithFieldsMap fields prvFormatsM currTime timeFilter modal
 
 
-anomalyDetailsPage :: Anomalies.IssueL -> Maybe (V.Vector Shapes.ShapeWithFields) -> Maybe (Map Fields.FieldCategoryEnum [Fields.Field], Map Fields.FieldCategoryEnum [Fields.Field], Map Fields.FieldCategoryEnum [Fields.Field]) -> Maybe (V.Vector Text) -> UTCTime -> Maybe Text-> Bool -> Html ()
+anomalyDetailsPage :: Anomalies.IssueL -> Maybe (V.Vector Shapes.ShapeWithFields) -> Maybe (Map Fields.FieldCategoryEnum [Fields.Field], Map Fields.FieldCategoryEnum [Fields.Field], Map Fields.FieldCategoryEnum [Fields.Field]) -> Maybe (V.Vector Text) -> UTCTime -> Maybe Text -> Bool -> Html ()
 anomalyDetailsPage issue shapesWithFieldsMap fields prvFormatsM currTime timeFilter modal = do
   let anomalyQueryPartial = buildQueryForAnomaly issue.anomalyType issue.targetHash
   let filterV = fromMaybe "14d" timeFilter
