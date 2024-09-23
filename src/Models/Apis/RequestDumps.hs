@@ -24,6 +24,7 @@ module Models.Apis.RequestDumps (
   getLastSevenDaysTotalRequest,
   hasRequest,
   getTotalRequestToReport,
+  parseSDKType,
 )
 where
 
@@ -97,6 +98,35 @@ instance ToField SDKTypes where
   toField sdkType = toField @String (show sdkType)
 
 
+parseSDKType :: Text -> SDKTypes
+parseSDKType "GoGin" = GoGin
+parseSDKType "GoBuiltIn" = GoBuiltIn
+parseSDKType "GoGorillaMux" = GoGorillaMux
+parseSDKType "GoFiber" = GoFiber
+parseSDKType "GoDefault" = GoDefault
+parseSDKType "GoOutgoing" = GoOutgoing
+parseSDKType "PhpLaravel" = PhpLaravel
+parseSDKType "PhpSymfony" = PhpSymfony
+parseSDKType "JsNest" = JsNest
+parseSDKType "JsFastify" = JsFastify
+parseSDKType "JavaSpringBoot" = JavaSpringBoot
+parseSDKType "JsAxiosOutgoing" = JsAxiosOutgoing
+parseSDKType "DotNet" = DotNet
+parseSDKType "PythonFastApi" = PythonFastApi
+parseSDKType "PythonFlask" = PythonFlask
+parseSDKType "PythonDjango" = PythonDjango
+parseSDKType "PythonOutgoing" = PythonOutgoing
+parseSDKType "JsAdonis" = JsAdonis
+parseSDKType "PhpSlim" = PhpSlim
+parseSDKType "GuzzleOutgoing" = GuzzleOutgoing
+parseSDKType "ElixirPhoenix" = ElixirPhoenix
+parseSDKType "PythonPyramid" = PythonPyramid
+parseSDKType "DotNetOutgoing" = DotNetOutgoing
+parseSDKType "TestkitOutgoing" = TestkitOutgoing
+parseSDKType "JavaSpring" = JavaSpring
+parseSDKType "JavaApacheOutgoing" = JavaApacheOutgoing
+parseSDKType "JavaVertx" = JavaVertx
+parseSDKType _ = JsExpress
 instance FromField SDKTypes where
   fromField f mdata = do
     str <- fromField f mdata

@@ -12,15 +12,18 @@ import Data.HashMap.Strict qualified as HashMap
 import Data.Scientific
 import Data.Text qualified as T
 import Data.Text.Lazy qualified as LT
-import Data.Time (UTCTime)
+import Data.Time (TimeZone (..), UTCTime, utcToZonedTime, zonedTimeToUTC)
 import Data.Time.Clock.POSIX
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Effectful
+import Effectful.Log (Log)
 import Effectful.PostgreSQL.Transact.Effect (DB)
 import Effectful.Reader.Static (ask)
 import Effectful.Reader.Static qualified as Eff
+import Effectful.Time (Time)
 import Log qualified
+import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Telemetry.Telemetry (SpanKind (..), SpanStatus (..))
 import Models.Telemetry.Telemetry qualified as Telemetry
 import Network.GRPC.HighLevel.Client as HsGRPC
@@ -43,16 +46,18 @@ import Opentelemetry.Proto.Trace.V1.Trace (
   Status_StatusCode (..),
   scopeSpansSpans,
  )
+import ProcessMessage qualified
 import Proto3.Suite.Class qualified as HsProtobuf
 import Proto3.Suite.Types qualified as HsProtobuf
 import Proto3.Wire qualified as HsProtobuf
 import Proto3.Wire.Decode qualified as HsProtobuf
 import Relude hiding (ask)
+import RequestMessages (RequestMessage (..))
 import System.Config
 import System.Types (runBackground)
 
 
-processList :: (Eff.Reader AuthContext :> es, DB :> es) => [(Text, ByteString)] -> HashMap Text Text -> Eff es [Text]
+processList :: (Eff.Reader AuthContext :> es, DB :> es, Log :> es, IOE :> es, Time :> es) => [(Text, ByteString)] -> HashMap Text Text -> Eff es [Text]
 processList [] _ = pure []
 processList msgs attrs = do
   let msgs' = V.fromList msgs
@@ -75,8 +80,14 @@ processList msgs attrs = do
               case res of
                 Left err -> error $ "unable to parse traces service request with err " <> show err
                 Right (ExportTraceServiceRequest a) -> (ackId, join $ V.map convertToSpan a)
-      let (ackIds, spans) = V.unzip results
-      Telemetry.bulkInsertSpans $ join spans
+      let (ackIds, spansVec) = V.unzip results
+          spans = join spansVec
+          apitoolkitSpan = V.find (\s -> s.spanName == "apitoolkit-custom-span") spans
+      whenJust apitoolkitSpan $ \sp -> do
+        let req = convertSpanToRequestMessage sp
+        _ <- ProcessMessage.processRequestMessages [("", req)]
+        pass
+      Telemetry.bulkInsertSpans $ V.filter (\s -> s.spanName /= "apitoolkit-custom-span") spans
       pure $ V.toList ackIds
     Just "org.opentelemetry.otlp.metrics.v1" -> do
       let (ackIds, _) = V.unzip $ V.fromList msgs
@@ -119,8 +130,8 @@ byteStringToHexText bs = decodeUtf8 (B16.encode bs)
 -- Convert a list of KeyValue to a JSONB object
 keyValueToJSONB :: V.Vector KeyValue -> AE.Value
 keyValueToJSONB kvs =
-  AE.object
-    $ V.foldr (\kv acc -> (AEK.fromText $ LT.toStrict kv.keyValueKey, convertAnyValue kv.keyValueValue) : acc) [] kvs
+  AE.object $
+    V.foldr (\kv acc -> (AEK.fromText $ LT.toStrict kv.keyValueKey, convertAnyValue kv.keyValueValue) : acc) [] kvs
 
 
 convertAnyValue :: Maybe AnyValue -> AE.Value
@@ -288,40 +299,84 @@ parseSpanStatus st = case st of
   _ -> Nothing
 
 
--- data Span_Event = Span_Event
---   { span_EventTimeUnixNano :: Hs.Word64
---   , span_EventName :: Hs.Text
---   , span_EventAttributes :: (Hs.Vector Opentelemetry.Proto.Common.V1.Common.KeyValue)
---   , span_EventDroppedAttributesCount :: Hs.Word32
---   }
+convertSpanToRequestMessage :: Telemetry.SpanRecord -> RequestMessage
+convertSpanToRequestMessage sp =
+  RequestMessage
+    { duration = fromInteger sp.spanDurationNs
+    , host = host
+    , method = method
+    , pathParams = pathParams
+    , projectId = sp.projectId
+    , protoMajor = 1
+    , protoMinor = 1
+    , queryParams = queryParams
+    , rawUrl = rawUrl
+    , referer = referer
+    , requestBody = requestBody
+    , requestHeaders = requestHeaders
+    , responseBody = responseBody
+    , responseHeaders = responseHeaders
+    , statusCode = responseStatus
+    , sdkType = sdkType
+    , msgId = Nothing
+    , parentId = Nothing
+    , errors = Nothing
+    , tags = Nothing
+    , urlPath = urlPath
+    , timestamp = utcToZonedTime (TimeZone 0 False "UTC+0") sp.timestamp
+    , serviceVersion = Nothing
+    }
+  where
+    host = getSpanAttribute "http.apt.host" sp.attributes
+    method = fromMaybe "" $ getSpanAttribute "http.apt.method" sp.attributes
+    pathParams = fromMaybe (AE.object []) (AE.decode $ encodeUtf8 $ fromMaybe "" $ getSpanAttribute "http.apt.path_params" sp.attributes)
+    queryParams = fromMaybe (AE.object []) (AE.decode $ encodeUtf8 $ fromMaybe "" $ getSpanAttribute "http.apt.query_params" sp.attributes)
+    rawUrl = fromMaybe "" $ getSpanAttribute "http.apt.raw_url" sp.attributes
+    referer = Just $ Left (fromMaybe "" $ getSpanAttribute "http.apt.referer" sp.attributes) :: Maybe (Either Text [Text])
+    requestBody = fromMaybe "" $ getSpanAttribute "http.apt.req_body" sp.attributes
+    requestHeaders = fromMaybe (AE.object []) (AE.decode $ encodeUtf8 $ fromMaybe "" $ getSpanAttribute "http.apt.req_headers" sp.attributes)
+    responseBody = fromMaybe "" $ getSpanAttribute "http.apt.res_body" sp.attributes
+    responseHeaders = fromMaybe (AE.object []) (AE.decode $ encodeUtf8 $ fromMaybe "" $ getSpanAttribute "http.apt.res_headers" sp.attributes)
+    responseStatus = fromMaybe 0 $ readMaybe . toString =<< getSpanAttribute "http.apt.status_code" sp.attributes
+    sdkType = RequestDumps.parseSDKType $ fromMaybe "" $ getSpanAttribute "http.apt.sdk_type" sp.attributes
+    urlPath = getSpanAttribute "http.apt.url_path" sp.attributes
+
+
+getSpanAttribute :: Text -> AE.Value -> Maybe Text
+getSpanAttribute key attr = case attr of
+  AE.Object o -> case KEM.lookup (AEK.fromText key) o of
+    Just (AE.String v) -> Just v
+    _ -> Nothing
+  _ -> Nothing
+
 
 eventsToJSONB :: [Span_Event] -> AE.Value
 eventsToJSONB spans =
-  AE.toJSON
-    $ ( \sp ->
-          object
-            [ "event_name" .= toText sp.span_EventName
-            , "event_time" .= nanosecondsToUTC sp.span_EventTimeUnixNano
-            , "event_attributes" .= keyValueToJSONB sp.span_EventAttributes
-            , "event_dropped_attributes_count" .= fromIntegral sp.span_EventDroppedAttributesCount
-            ]
-      )
-    <$> spans
+  AE.toJSON $
+    ( \sp ->
+        object
+          [ "event_name" .= toText sp.span_EventName
+          , "event_time" .= nanosecondsToUTC sp.span_EventTimeUnixNano
+          , "event_attributes" .= keyValueToJSONB sp.span_EventAttributes
+          , "event_dropped_attributes_count" .= fromIntegral sp.span_EventDroppedAttributesCount
+          ]
+    )
+      <$> spans
 
 
 linksToJSONB :: [Span_Link] -> AE.Value
 linksToJSONB lnks =
-  AE.toJSON
-    $ ( \lnk ->
-          object
-            [ "link_span_id" .= (decodeUtf8 lnk.span_LinkSpanId :: Text)
-            , "link_trace_id" .= (decodeUtf8 lnk.span_LinkTraceId :: Text)
-            , "link_attributes" .= keyValueToJSONB lnk.span_LinkAttributes
-            , "link_dropped_attributes_count" .= fromIntegral lnk.span_LinkDroppedAttributesCount
-            , "link_flags" .= fromIntegral lnk.span_LinkFlags
-            ]
-      )
-    <$> lnks
+  AE.toJSON $
+    ( \lnk ->
+        object
+          [ "link_span_id" .= (decodeUtf8 lnk.span_LinkSpanId :: Text)
+          , "link_trace_id" .= (decodeUtf8 lnk.span_LinkTraceId :: Text)
+          , "link_attributes" .= keyValueToJSONB lnk.span_LinkAttributes
+          , "link_dropped_attributes_count" .= fromIntegral lnk.span_LinkDroppedAttributesCount
+          , "link_flags" .= fromIntegral lnk.span_LinkFlags
+          ]
+    )
+      <$> lnks
 
 
 ---------------------------------------------------------------------------------------
