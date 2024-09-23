@@ -41,6 +41,7 @@ window.setQueryParamAndReload = (key, value) => {
   const url = new URL(window.location.href)
   url.searchParams.set(key, value)
   url.searchParams.delete('query')
+  url.searchParams.delete('target-spans')
   window.location.href = url.toString()
 }
 
@@ -53,7 +54,7 @@ window.getQueryFromEditor = (target) => {
     val = window.queryBuilderValue || ''
   }
   if (target === 'errors') {
-    let source = document.querySelector('#reqsChartsE').dataset.source
+    let source = document.querySelector('#reqsChartsErrP').dataset.source
     let srcErrs = source === 'logs' ? `severityText == "ERROR" OR severityText == "FATAL"` : source === 'spans' ? `status == "ERROR"` : 'status_code > 399'
     val = val.length === 0 ? srcErrs : `${val} AND ${srcErrs}`
   }

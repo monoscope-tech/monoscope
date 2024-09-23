@@ -73,7 +73,7 @@ tracePage p = do
         h3_ [class_ "whitespace-nowrap text-xl font-bold pr-4 border-r border-r-2"] "Trace"
         div_ [class_ "flex items-center gap-4"] $ do
           h4_ [class_ "text-xl font-medium"] $ toHtml $ if not (null serviceNames) then V.head serviceNames else "Unknown Service"
-          faSprite_ "arrow-right" "regular" "w-4 h-4 font-bold"
+          faSprite_ "caret-up" "solid" "w-5 h-5 rotate-90 font-bold"
           h4_ [class_ "text-xl font-medium"] $ toHtml $ if not (null p.spanRecords) then (V.head p.spanRecords).spanName else "Unknown Span"
         div_ [class_ "flex items-end border rounded"] do
           span_ [class_ "text-sm text-gray-500 font-medium border-r px-2 py-1"] "Trace ID"
