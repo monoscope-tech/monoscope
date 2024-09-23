@@ -287,11 +287,11 @@ reportListItems pid reports nextUrl =
   div_ [class_ "space-y-1 w-full"] do
     forM_ reports $ \report -> do
       let isWeeklyData = report.reportType == "weekly"
-      
-      div_ [class_ $ if isWeeklyData then "w-full" else "w-full flex justify-end"] do
-        div_ [class_ $ if isWeeklyData then "w-full" else "w-4/5 bg-gray-100"] do
+
+      div_ [class_ $ "w-full flex flex-col"] do
+        div_ [class_ $ if isWeeklyData then "w-full" else "w-11/12 self-end bg-gray-100"] do
           a_
-            [ class_ "w-full px-4 py-3 flex justify-between hover:bg-gray-200 transition-colors duration-200"
+            [ class_ "w-full px-4 py-3 flex justify-between hover:bg-gray-200 cursor-pointer"
             , hxGet_ $ "/p/" <> show pid.unProjectId <> "/reports/" <> show report.id.reportId
             , hxTarget_ "#detailSidebar"
             , hxSwap_ "innerHTML"
