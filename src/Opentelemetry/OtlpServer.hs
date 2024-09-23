@@ -249,11 +249,12 @@ convertSpanRecord resource scope sp =
     , links = linksToJSONB $ V.toList sp.spanLinks
     , resource = removeProjectId $ resourceToJSONB resource
     , instrumentationScope = instrumentationScopeToJSONB scope
-    , spanDurationNs = 0
+    , spanDurationNs = durr
     }
   where
     pid = resource >>= \r -> find (\kv -> kv.keyValueKey == "at-project-id") r.resourceAttributes >>= (.keyValueValue) >>= (.anyValueValue)
     pid' = if isJust pid then pid else find (\kv -> kv.keyValueKey == "at-project-id") sp.spanAttributes >>= (.keyValueValue) >>= (.anyValueValue)
+    durr = fromIntegral $ sp.spanEndTimeUnixNano - sp.spanStartTimeUnixNano
 
 
 traceServiceExportH
@@ -264,6 +265,11 @@ traceServiceExportH
 traceServiceExportH appLogger appCtx (ServerNormalRequest _meta (ExportTraceServiceRequest req)) = do
   _ <- runBackground appLogger appCtx do
     let spanRecords = join $ V.map convertToSpan req
+        apitoolkitSpan = V.find (\s -> s.spanName == "apitoolkit-custom-span") spanRecords
+    whenJust apitoolkitSpan $ \sp -> do
+      let r = convertSpanToRequestMessage sp
+      _ <- ProcessMessage.processRequestMessages [("", r)]
+      pass
     Telemetry.bulkInsertSpans spanRecords
   return (ServerNormalResponse (ExportTraceServiceResponse Nothing) mempty StatusOk "")
 
@@ -316,7 +322,7 @@ convertSpanToRequestMessage sp =
     , requestHeaders = requestHeaders
     , responseBody = responseBody
     , responseHeaders = responseHeaders
-    , statusCode = responseStatus
+    , statusCode = status
     , sdkType = sdkType
     , msgId = Nothing
     , parentId = Nothing
@@ -328,7 +334,7 @@ convertSpanToRequestMessage sp =
     }
   where
     host = getSpanAttribute "http.apt.host" sp.attributes
-    method = fromMaybe "" $ getSpanAttribute "http.apt.method" sp.attributes
+    method = fromMaybe "GET" $ getSpanAttribute "http.apt.method" sp.attributes
     pathParams = fromMaybe (AE.object []) (AE.decode $ encodeUtf8 $ fromMaybe "" $ getSpanAttribute "http.apt.path_params" sp.attributes)
     queryParams = fromMaybe (AE.object []) (AE.decode $ encodeUtf8 $ fromMaybe "" $ getSpanAttribute "http.apt.query_params" sp.attributes)
     rawUrl = fromMaybe "" $ getSpanAttribute "http.apt.raw_url" sp.attributes
@@ -337,7 +343,8 @@ convertSpanToRequestMessage sp =
     requestHeaders = fromMaybe (AE.object []) (AE.decode $ encodeUtf8 $ fromMaybe "" $ getSpanAttribute "http.apt.req_headers" sp.attributes)
     responseBody = fromMaybe "" $ getSpanAttribute "http.apt.res_body" sp.attributes
     responseHeaders = fromMaybe (AE.object []) (AE.decode $ encodeUtf8 $ fromMaybe "" $ getSpanAttribute "http.apt.res_headers" sp.attributes)
-    responseStatus = fromMaybe 0 $ readMaybe . toString =<< getSpanAttribute "http.apt.status_code" sp.attributes
+    responseStatus = (readMaybe . toString =<< getSpanAttribute "http.apt.status_code" sp.attributes) :: Maybe Double
+    status = round $ fromMaybe 0.0 $ responseStatus
     sdkType = RequestDumps.parseSDKType $ fromMaybe "" $ getSpanAttribute "http.apt.sdk_type" sp.attributes
     urlPath = getSpanAttribute "http.apt.url_path" sp.attributes
 
@@ -346,6 +353,7 @@ getSpanAttribute :: Text -> AE.Value -> Maybe Text
 getSpanAttribute key attr = case attr of
   AE.Object o -> case KEM.lookup (AEK.fromText key) o of
     Just (AE.String v) -> Just v
+    Just (AE.Number v) -> Just $ show v
     _ -> Nothing
   _ -> Nothing
 
