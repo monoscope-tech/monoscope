@@ -286,20 +286,22 @@ reportListItems :: Projects.ProjectId -> Vector Reports.ReportListItem -> Text -
 reportListItems pid reports nextUrl =
   div_ [class_ "space-y-1 w-full"] do
     forM_ reports $ \report -> do
-      when (report.reportType == "weekly") $ do
-        div_ [class_ "w-full rounded-sm"] do
+      let isWeeklyData = report.reportType == "weekly"
+      
+      div_ [class_ $ if isWeeklyData then "w-full" else "w-full flex justify-end"] do
+        div_ [class_ $ if isWeeklyData then "w-full" else "w-4/5 bg-gray-100"] do
           a_
-            [ class_ "w-full bg-gray-100 px-4 py-3 flex justify-between hover:bg-gray-200 transition-colors duration-200"
+            [ class_ "w-full px-4 py-3 flex justify-between hover:bg-gray-200 transition-colors duration-200"
             , hxGet_ $ "/p/" <> show pid.unProjectId <> "/reports/" <> show report.id.reportId
             , hxTarget_ "#detailSidebar"
             , hxSwap_ "innerHTML"
             ]
             do
               div_ [class_ "flex flex-col flex-grow"] do
-                h4_ [class_ "text-xl font-medium capitalize"] $ toHtml report.reportType <> " report"
-                span_ [class_ "text-sm text-gray-500"] $ show $ localDay (zonedTimeToLocalTime report.createdAt)
+                h4_ [class_ "text-xl font-medium capitalize"] $ toHtml report.reportType <> " Report"
+                span_ [class_ "text-sm text-gray-500"] $ toHtml $ formatTime defaultTimeLocale "%a, %b %d %Y" (zonedTimeToLocalTime report.createdAt)
 
-              div_ [class_ "ml-4"] do
+              div_ [class_ "ml-4 flex items-center"] do
                 i_ [class_ "fa fa-arrow-right text-gray-500"] mempty
 
     when (length reports < 20) $ do
