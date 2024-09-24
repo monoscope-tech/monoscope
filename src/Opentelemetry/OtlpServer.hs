@@ -9,6 +9,7 @@ import Data.Aeson.KeyMap qualified as KEM
 import Data.ByteString qualified as BS
 import Data.ByteString.Base16 qualified as B16
 import Data.HashMap.Strict qualified as HashMap
+
 import Data.Scientific
 import Data.Text qualified as T
 import Data.Text.Lazy qualified as LT
@@ -265,7 +266,14 @@ traceServiceExportH
 traceServiceExportH appLogger appCtx (ServerNormalRequest _meta (ExportTraceServiceRequest req)) = do
   _ <- runBackground appLogger appCtx do
     let spanRecords = join $ V.map convertToSpan req
-        apitoolkitSpan = V.find (\s -> s.spanName == "apitoolkit-custom-span") spanRecords
+        apitoolkitSpan =
+          V.find
+            ( \s ->
+                Just "@opentelemetry/instrumentation-http" == case s.instrumentationScope of
+                  AE.Object v -> KEM.lookup "name" v
+                  _ -> Nothing
+            )
+            spanRecords
     whenJust apitoolkitSpan $ \sp -> do
       let r = convertSpanToRequestMessage sp
       _ <- ProcessMessage.processRequestMessages [("", r)]
@@ -273,14 +281,6 @@ traceServiceExportH appLogger appCtx (ServerNormalRequest _meta (ExportTraceServ
     Telemetry.bulkInsertSpans spanRecords
   return (ServerNormalResponse (ExportTraceServiceResponse Nothing) mempty StatusOk "")
 
-
--- -- Convert nanoseconds to UTCTime
--- nanosecondsToUTC :: Int64 -> UTCTime
--- nanosecondsToUTC ns = posixSecondsToUTCTime (fromIntegral ns / 1e9)
-
--- -- Convert a list of KeyValue to a JSONB object
--- keyValueToJSONB :: [Logs.KeyValue] -> Value
--- keyValueToJSONB kvs = object [(unpack kv.key, kv.value) | kv <- kvs]
 
 -- Convert Protobuf kind to SpanKind
 parseSpanKind :: Either Int32 Span_SpanKind -> Maybe SpanKind
@@ -333,20 +333,27 @@ convertSpanToRequestMessage sp =
     , serviceVersion = Nothing
     }
   where
-    host = getSpanAttribute "http.apt.host" sp.attributes
-    method = fromMaybe "GET" $ getSpanAttribute "http.apt.method" sp.attributes
-    pathParams = fromMaybe (AE.object []) (AE.decode $ encodeUtf8 $ fromMaybe "" $ getSpanAttribute "http.apt.path_params" sp.attributes)
-    queryParams = fromMaybe (AE.object []) (AE.decode $ encodeUtf8 $ fromMaybe "" $ getSpanAttribute "http.apt.query_params" sp.attributes)
-    rawUrl = fromMaybe "" $ getSpanAttribute "http.apt.raw_url" sp.attributes
-    referer = Just $ Left (fromMaybe "" $ getSpanAttribute "http.apt.referer" sp.attributes) :: Maybe (Either Text [Text])
-    requestBody = fromMaybe "" $ getSpanAttribute "http.apt.req_body" sp.attributes
-    requestHeaders = fromMaybe (AE.object []) (AE.decode $ encodeUtf8 $ fromMaybe "" $ getSpanAttribute "http.apt.req_headers" sp.attributes)
-    responseBody = fromMaybe "" $ getSpanAttribute "http.apt.res_body" sp.attributes
-    responseHeaders = fromMaybe (AE.object []) (AE.decode $ encodeUtf8 $ fromMaybe "" $ getSpanAttribute "http.apt.res_headers" sp.attributes)
-    responseStatus = (readMaybe . toString =<< getSpanAttribute "http.apt.status_code" sp.attributes) :: Maybe Double
-    status = round $ fromMaybe 0.0 $ responseStatus
+    host = getSpanAttribute "net.host.name" sp.attributes
+    method = fromMaybe "GET" $ getSpanAttribute "http.method" sp.attributes
+    pathParams = fromMaybe (AE.object []) (AE.decode $ encodeUtf8 $ fromMaybe "" $ getSpanAttribute "http.request.path_params" sp.attributes)
+    queryParams = fromMaybe (AE.object []) (AE.decode $ encodeUtf8 $ fromMaybe "" $ getSpanAttribute "http.request.query_params" sp.attributes)
+    rawUrl = fromMaybe "" $ getSpanAttribute "http.request.target" sp.attributes
+    referer = Just $ Left (fromMaybe "" $ getSpanAttribute "http.request.headers.referer" sp.attributes) :: Maybe (Either Text [Text])
+    requestBody = fromMaybe "" $ getSpanAttribute "http.request.body" sp.attributes
+    (requestHeaders, responseHeaders) = case sp.attributes of
+      AE.Object v -> (getValsWithPrefix "http.request.header." v, getValsWithPrefix "http.response.header." v)
+      _ -> (AE.object [], AE.object [])
+    responseBody = fromMaybe "" $ getSpanAttribute "http.response.body" sp.attributes
+    responseStatus = (readMaybe . toString =<< getSpanAttribute "http.response.status_code" sp.attributes) :: Maybe Double
+    status = round $ fromMaybe 0.0 responseStatus
     sdkType = RequestDumps.parseSDKType $ fromMaybe "" $ getSpanAttribute "http.apt.sdk_type" sp.attributes
-    urlPath = getSpanAttribute "http.apt.url_path" sp.attributes
+    urlPath = getSpanAttribute "http.request.route" sp.attributes
+
+
+getValsWithPrefix :: Text -> AE.Object -> AE.Value
+getValsWithPrefix prefix obj = AE.object $ map (\k -> (AEK.fromText (T.replace prefix "" $ AEK.toText k), fromMaybe (AE.object []) $ KEM.lookup k obj)) keys
+  where
+    keys = filter (\k -> prefix `T.isPrefixOf` AEK.toText k) (KEM.keys obj)
 
 
 getSpanAttribute :: Text -> AE.Value -> Maybe Text
