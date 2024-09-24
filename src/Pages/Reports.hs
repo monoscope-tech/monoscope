@@ -289,7 +289,7 @@ reportListItems pid reports nextUrl =
       let isWeeklyData = report.reportType == "weekly"
 
       div_ [class_ $ "w-full flex flex-col"] do
-        div_ [class_ $ if isWeeklyData then "w-full" else "w-11/12 self-end bg-gray-100"] do
+        div_ [class_ $ if isWeeklyData then "w-full bg-gray-100" else "w-11/12 self-end "] do
           a_
             [ class_ "w-full px-4 py-3 flex justify-between hover:bg-gray-200 cursor-pointer"
             , hxGet_ $ "/p/" <> show pid.unProjectId <> "/reports/" <> show report.id.reportId
@@ -306,7 +306,7 @@ reportListItems pid reports nextUrl =
 
     when (length reports < 20) $ do
       div_ [class_ "w-full h-16 center-item my-200"] do
-        p_ [class_ "text-center text-blue-600"] "The End: No more report to display"
+        p_ [class_ "text-center text-blue-100"] "The End: No more report to display"
 
     unless (length reports < 20) $ do
       a_ [class_ "w-full cursor-pointer block p-1 blue-800 bg-blue-100 hover:bg-blue-200 text-center mb-4", hxTrigger_ "click", hxSwap_ "outerHTML", hxGet_ nextUrl] "LOAD MORE"
