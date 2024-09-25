@@ -131,8 +131,8 @@ byteStringToHexText bs = decodeUtf8 (B16.encode bs)
 -- Convert a list of KeyValue to a JSONB object
 keyValueToJSONB :: V.Vector KeyValue -> AE.Value
 keyValueToJSONB kvs =
-  AE.object $
-    V.foldr (\kv acc -> (AEK.fromText $ LT.toStrict kv.keyValueKey, convertAnyValue kv.keyValueValue) : acc) [] kvs
+  AE.object
+    $ V.foldr (\kv acc -> (AEK.fromText $ LT.toStrict kv.keyValueKey, convertAnyValue kv.keyValueValue) : acc) [] kvs
 
 
 convertAnyValue :: Maybe AnyValue -> AE.Value
@@ -337,7 +337,7 @@ convertSpanToRequestMessage sp =
     method = fromMaybe "GET" $ getSpanAttribute "http.method" sp.attributes
     pathParams = fromMaybe (AE.object []) (AE.decode $ encodeUtf8 $ fromMaybe "" $ getSpanAttribute "http.request.path_params" sp.attributes)
     queryParams = fromMaybe (AE.object []) (AE.decode $ encodeUtf8 $ fromMaybe "" $ getSpanAttribute "http.request.query_params" sp.attributes)
-    rawUrl = fromMaybe "" $ getSpanAttribute "http.request.target" sp.attributes
+    rawUrl = fromMaybe "" $ getSpanAttribute "http.target" sp.attributes
     referer = Just $ Left (fromMaybe "" $ getSpanAttribute "http.request.headers.referer" sp.attributes) :: Maybe (Either Text [Text])
     requestBody = fromMaybe "" $ getSpanAttribute "http.request.body" sp.attributes
     (requestHeaders, responseHeaders) = case sp.attributes of
@@ -347,7 +347,7 @@ convertSpanToRequestMessage sp =
     responseStatus = (readMaybe . toString =<< getSpanAttribute "http.response.status_code" sp.attributes) :: Maybe Double
     status = round $ fromMaybe 0.0 responseStatus
     sdkType = RequestDumps.parseSDKType $ fromMaybe "" $ getSpanAttribute "http.apt.sdk_type" sp.attributes
-    urlPath = getSpanAttribute "http.request.route" sp.attributes
+    urlPath = getSpanAttribute "http.route" sp.attributes
 
 
 getValsWithPrefix :: Text -> AE.Object -> AE.Value
@@ -367,31 +367,31 @@ getSpanAttribute key attr = case attr of
 
 eventsToJSONB :: [Span_Event] -> AE.Value
 eventsToJSONB spans =
-  AE.toJSON $
-    ( \sp ->
-        object
-          [ "event_name" .= toText sp.span_EventName
-          , "event_time" .= nanosecondsToUTC sp.span_EventTimeUnixNano
-          , "event_attributes" .= keyValueToJSONB sp.span_EventAttributes
-          , "event_dropped_attributes_count" .= fromIntegral sp.span_EventDroppedAttributesCount
-          ]
-    )
-      <$> spans
+  AE.toJSON
+    $ ( \sp ->
+          object
+            [ "event_name" .= toText sp.span_EventName
+            , "event_time" .= nanosecondsToUTC sp.span_EventTimeUnixNano
+            , "event_attributes" .= keyValueToJSONB sp.span_EventAttributes
+            , "event_dropped_attributes_count" .= fromIntegral sp.span_EventDroppedAttributesCount
+            ]
+      )
+    <$> spans
 
 
 linksToJSONB :: [Span_Link] -> AE.Value
 linksToJSONB lnks =
-  AE.toJSON $
-    ( \lnk ->
-        object
-          [ "link_span_id" .= (decodeUtf8 lnk.span_LinkSpanId :: Text)
-          , "link_trace_id" .= (decodeUtf8 lnk.span_LinkTraceId :: Text)
-          , "link_attributes" .= keyValueToJSONB lnk.span_LinkAttributes
-          , "link_dropped_attributes_count" .= fromIntegral lnk.span_LinkDroppedAttributesCount
-          , "link_flags" .= fromIntegral lnk.span_LinkFlags
-          ]
-    )
-      <$> lnks
+  AE.toJSON
+    $ ( \lnk ->
+          object
+            [ "link_span_id" .= (decodeUtf8 lnk.span_LinkSpanId :: Text)
+            , "link_trace_id" .= (decodeUtf8 lnk.span_LinkTraceId :: Text)
+            , "link_attributes" .= keyValueToJSONB lnk.span_LinkAttributes
+            , "link_dropped_attributes_count" .= fromIntegral lnk.span_LinkDroppedAttributesCount
+            , "link_flags" .= fromIntegral lnk.span_LinkFlags
+            ]
+      )
+    <$> lnks
 
 
 ---------------------------------------------------------------------------------------

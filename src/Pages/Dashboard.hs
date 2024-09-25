@@ -2,12 +2,18 @@ module Pages.Dashboard (dashboardGetH, DashboardGet (..)) where
 
 import Data.Aeson qualified as AE
 import Data.Default (def)
+import Data.Text qualified as T
 import Data.Time (
+  NominalDiffTime,
   UTCTime,
   addUTCTime,
+  diffUTCTime,
   formatTime,
   getCurrentTime,
+  getCurrentTimeZone,
+  getZonedTime,
   secondsToNominalDiffTime,
+  zonedTimeToUTC,
  )
 import Data.Time.Format (defaultTimeLocale)
 import Data.Time.Format.ISO8601 (iso8601ParseM)
@@ -37,7 +43,7 @@ import Pkg.Components qualified as Components
 import Relude hiding (max, min)
 import System.Types
 import Text.Interpolation.Nyan (int, rmode')
-import Utils (faSprite_, freeTierLimitExceededBanner)
+import Utils (convertToDHMS, faSprite_, freeTierLimitExceededBanner)
 import Witch (from)
 
 
@@ -49,12 +55,12 @@ data ParamInput = ParamInput
 
 
 data DashboardGet = DashboardGet
-  { unwrap :: (Projects.ProjectId, ParamInput, UTCTime, Projects.ProjectRequestStats, Vector.Vector Endpoints.EndpointRequestStats, Text, (Maybe UTCTime, Maybe UTCTime), Bool, Bool)
+  { unwrap :: (Projects.ProjectId, ParamInput, UTCTime, Projects.ProjectRequestStats, Vector.Vector Endpoints.EndpointRequestStats, Text, Text, (Maybe UTCTime, Maybe UTCTime), Bool, Bool)
   }
 
 
 instance ToHtml DashboardGet where
-  toHtml (DashboardGet (pid, paramInput, now, stats, endpoints, lastRequestTime, (fromD, toD), exceededFree, hasRequest)) = toHtml $ dashboardPage pid paramInput now stats endpoints lastRequestTime (fromD, toD) exceededFree hasRequest
+  toHtml (DashboardGet (pid, paramInput, now, stats, endpoints, lastRequestTime, daysLeft, (fromD, toD), exceededFree, hasRequest)) = toHtml $ dashboardPage pid paramInput now stats endpoints lastRequestTime daysLeft (fromD, toD) exceededFree hasRequest
   toHtmlRaw = toHtml
 
 
@@ -105,16 +111,26 @@ dashboardGetH pid fromDStr toDStr sinceStr' = do
           , pageActions = Just $ Components.timepicker_ Nothing currentRange
           }
   currTime <- liftIO getCurrentTime
-  let currentURL = "/p/" <> pid.toText <> "?&from=" <> fromMaybe "" fromDStr <> "&to=" <> fromMaybe "" toDStr
-  let paramInput = ParamInput{currentURL = currentURL, sinceStr = sinceStr, dateRange = (fromD, toD)}
-  addRespHeaders $ PageCtx bwconf $ DashboardGet (pid, paramInput, currTime, projectRequestStats, newEndpoints, reqLatenciesRolledByStepsJ, (fromD, toD), freeTierExceeded, hasRequests)
+  let createdUTc = zonedTimeToUTC project.createdAt
+      (days, hours, minutes, _seconds) = convertToDHMS $ diffUTCTime currTime createdUTc
+      daysLeft =
+        if days >= 0 && project.paymentPlan /= "Free"
+          then show days <> " days, " <> show hours <> " hours, " <> show minutes <> " minutes"
+          else "-"
+      currentURL = "/p/" <> pid.toText <> "?&from=" <> fromMaybe "" fromDStr <> "&to=" <> fromMaybe "" toDStr
+      paramInput = ParamInput{currentURL = currentURL, sinceStr = sinceStr, dateRange = (fromD, toD)}
+  addRespHeaders $ PageCtx bwconf $ DashboardGet (pid, paramInput, currTime, projectRequestStats, newEndpoints, reqLatenciesRolledByStepsJ, daysLeft, (fromD, toD), freeTierExceeded, hasRequests)
 
 
-dashboardPage :: Projects.ProjectId -> ParamInput -> UTCTime -> Projects.ProjectRequestStats -> Vector.Vector Endpoints.EndpointRequestStats -> Text -> (Maybe UTCTime, Maybe UTCTime) -> Bool -> Bool -> Html ()
-dashboardPage pid paramInput currTime projectStats newEndpoints reqLatenciesRolledByStepsJ dateRange exceededFreeTier hasRequest = do
+dashboardPage :: Projects.ProjectId -> ParamInput -> UTCTime -> Projects.ProjectRequestStats -> Vector.Vector Endpoints.EndpointRequestStats -> Text -> Text -> (Maybe UTCTime, Maybe UTCTime) -> Bool -> Bool -> Html ()
+dashboardPage pid paramInput currTime projectStats newEndpoints reqLatenciesRolledByStepsJ daysLeft dateRange exceededFreeTier hasRequest = do
   let bulkActionBase = "/p/" <> pid.toText <> "/anomalies/bulk_actions"
   section_ [class_ "  mx-auto px-6 w-full space-y-12 pb-24 overflow-y-scroll  h-full"] do
     when exceededFreeTier $ freeTierLimitExceededBanner pid.toText
+    when (daysLeft /= "-")
+      $ div_ [class_ "w-full  py-1 mt-2 rounded text-green-600 text-center"] do
+        "Free trial ends in "
+        span_ [class_ "font-bold"] $ toHtml daysLeft
     unless (null newEndpoints)
       $ div_ [id_ "modalContainer"] do
         input_ [type_ "checkbox", id_ "newEndpointsModal", class_ "modal-toggle"]

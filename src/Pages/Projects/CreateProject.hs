@@ -377,42 +377,12 @@ createProjectBody sess envCfg isUpdate cp cpe = do
               p_ [class_ "text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70 mb-2"] do
                 "Please select a plan"
                 span_ [class_ "text-red-400"] " *"
-              div_ [class_ "grid sm:grid-cols-2 md:grid-cols-2 gap-10 border-1"] do
-                ( [ ("Free", "20k", "$0", "2", cp.paymentPlan == "Free", "Free")
-                  ]
-                    :: [(Text, Text, Text, Text, Bool, Text)]
-                  )
-                  & mapM_ \(title, included, price, team, isSelected, value) -> do
-                    let isSelectedTxt = toLower $ show isSelected
-                    a_
-                      [ class_ $ "payment-plans cursor-pointer space-y-1 border border-1  block p-2  rounded-md " <> if isSelected then " border-2 border-blue-300 shadow-lg" else ""
-                      , term
-                          "_"
-                          [text|
-                          init if $isSelectedTxt then set window.paymentPlan to $value end
-                          on click  set window.paymentPlan to $value
-                               then set #paymentPlanEl.value to "$value"
-                               then remove .border-2 .border-blue-300 .shadow-lg from .payment-plans
-                               then remove .payment-radio-active from .payment-radio
-                               then add .payment-radio-active to (.payment-radio in me)
-                               then add .border-2 .border-blue-300 .shadow-lg to me
-                               |]
-                      ]
-                      do
-                        div_ [class_ "flex items-center justify-between border-b border-b-1 p-2"] do
-                          h4_ [class_ "text-xl font-medium text-slate-700"] $ toHtml title
-                        div_ [class_ "text-lg py-3 px-2"] do
-                          span_ [class_ "text-2xl text-blue-700"] $ toHtml price
-                          case value of
-                            "Free" -> do
-                              span_ [class_ "text-slate-500"] "/20K request per month"
-                            _ -> span_ [class_ "text-slate-500"] "/10k requests"
-                        checkList value team
-                let isSelected = paymentPlan == "GraduatedPricing"
-                let isSelectedTxt = toLower $ show $ isSelected
+              div_ [class_ "grid gap-10 border-1"] do
+                let isSelected = True
+                let isSelectedTxt = toLower $ show isSelected
                 let value = "GraduatedPricing"
                 a_
-                  [ class_ $ "payment-plans cursor-pointer space-y-1 border border-1 block p-2 rounded-md " <> if isSelected then " border-2 border-blue-300 shadow-lg" else ""
+                  [ class_ $ "payment-plans cursor-pointer space-y-1 border border-1 block p-8 rounded-md " <> if isSelected then " border-2 border-blue-300 shadow-lg" else ""
                   , term
                       "_"
                       [text|
