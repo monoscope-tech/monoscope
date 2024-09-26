@@ -32,6 +32,7 @@ module Utils (
   freeTierLimitExceededBanner,
   isDemoAndNotSudo,
   escapedQueryPartial,
+  convertToDHMS,
   getSpanStatusColor,
   getKindColor,
   displayTimestamp,
@@ -53,7 +54,7 @@ import Data.List (notElem, (!!))
 import Data.Scientific (toBoundedInteger)
 import Data.Text (replace)
 import Data.Text qualified as T
-import Data.Time (ZonedTime, defaultTimeLocale, parseTimeM)
+import Data.Time (NominalDiffTime, ZonedTime, defaultTimeLocale, parseTimeM)
 import Data.Time.Clock (UTCTime)
 import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
 import Data.Time.Format (formatTime)
@@ -388,6 +389,15 @@ toXXHash input = leftPad 8 $ fromString $ showHex (xxHash $ encodeUtf8 input) ""
 
 leftPad :: Int -> Text -> Text
 leftPad len txt = T.justifyRight len '0' (T.take len txt)
+
+
+convertToDHMS :: NominalDiffTime -> (Int, Int, Int, Int)
+convertToDHMS diffTime =
+  let totalSeconds = floor diffTime :: Int
+      (days, rem1) = (totalSeconds `divMod` 86400)
+      (hours, rem2) = rem1 `divMod` 3600
+      (minutes, seconds) = rem2 `divMod` 60
+   in (7 - days, hours, minutes, seconds)
 
 
 -- "https://apitoolkit.lemonsqueezy.com/buy/b982b83b-66cc-4169-b5cb-f7d1d8a96a18?embed=1&media=0&logo=0&desc=0&checkout[custom][project_id]="

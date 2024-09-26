@@ -268,6 +268,7 @@ dashboardPage pid cid steps passed failed schedule reqsVecM =
                     , source = "requests"
                     , targetSpans = Nothing
                     , childSpans = []
+                    , daysCountDown = Nothing
                     }
             Log.resultTable_ page False
           _ -> pass

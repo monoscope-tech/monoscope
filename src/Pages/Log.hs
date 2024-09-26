@@ -17,7 +17,10 @@ import Data.Text qualified as T
 import Data.Time (
   UTCTime,
   addUTCTime,
+  diffUTCTime,
+  getCurrentTime,
   secondsToNominalDiffTime,
+  zonedTimeToUTC,
  )
 import Data.Time.Format (
   defaultTimeLocale,
@@ -107,6 +110,13 @@ apiLogH pid queryM cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM 
               a_ [onclick_ "window.setQueryParamAndReload('source', 'spans')", role_ "tab", class_ $ "tab " <> if source == "spans" then "tab-active" else ""] "Traces"
               -- a_ [onclick_ "window.setQueryParamAndReload('source', 'metrics')", role_ "tab", class_ $ "tab " <> if source == "metrics" then "tab-active" else ""] "Metrics"
           }
+  currTime <- liftIO getCurrentTime
+  let createdUTc = zonedTimeToUTC project.createdAt
+      (days, hours, minutes, _seconds) = convertToDHMS $ diffUTCTime currTime createdUTc
+      daysLeft =
+        if days >= 0 && project.paymentPlan /= "Free"
+          then Just $ show days <> " days, " <> show hours <> " hours, " <> show minutes <> " minutes"
+          else Nothing
   case tableAsVecM of
     Just tableAsVec -> do
       let (requestVecs, colNames, resultCount) = tableAsVec
@@ -141,6 +151,7 @@ apiLogH pid queryM cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM 
               , source
               , targetSpans = targetSpansM
               , childSpans = childSpans
+              , daysCountDown = daysLeft
               }
       case (layoutM, hxRequestM, hxBoostedM) of
         (Just "loadmore", Just "true", _) -> addRespHeaders $ LogsGetRows pid requestVecs curatedColNames colIdxMap nextLogsURL source childSpans
@@ -235,6 +246,7 @@ data ApiLogsPageData = ApiLogsPageData
   , source :: Text
   , targetSpans :: Maybe Text
   , childSpans :: V.Vector Telemetry.SpanRecord
+  , daysCountDown :: Maybe Text
   }
 
 
@@ -242,6 +254,11 @@ apiLogsPage :: ApiLogsPageData -> Html ()
 apiLogsPage page = do
   section_ [class_ "mx-auto pt-2 px-6 gap-2 w-full flex flex-col h-full overflow-hidden pb-12", id_ "apiLogsPage"] do
     when page.exceededFreeTier $ freeTierLimitExceededBanner page.pid.toText
+    whenJust page.daysCountDown $ \daysCountDown -> do
+      div_ [class_ "w-full py-1 mt-2 rounded text-green-600 text-center"] do
+        "Free trial ends in "
+        span_ [class_ "font-bold"] $ toHtml daysCountDown
+
     div_
       [ style_ "z-index:26"
       , class_ "fixed hidden right-0 top-0 justify-end left-0 bottom-0 w-full bg-black bg-opacity-5"

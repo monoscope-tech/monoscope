@@ -38,7 +38,7 @@ spec = aroundAll withTestResources do
 
       (PageCtx _ dat) <-
         toServantResponse trATCtx trSessAndHeader trLogger $ dashboardGetH testPid Nothing Nothing Nothing
-      let (pid, _paramInput, _currTime, projectRequestStats, newEndpoints, _reqLatenciesRolledByStepsJ, (_fromD, _toD), freeTierExceeded, hasRequests) = dat.unwrap
+      let (pid, _paramInput, _currTime, projectRequestStats, newEndpoints, _reqLatenciesRolledByStepsJ, _, (_fromD, _toD), freeTierExceeded, hasRequests) = dat.unwrap
 
       testPid `shouldBe` pid
       projectRequestStats.totalRequests `shouldBe` 200
