@@ -65,7 +65,7 @@ apiCatalogH pid sortM timeFilter requestTypeM = do
           { sessM = Just sess.persistentSession
           , currProject = Just project
           , pageTitle = "API Catalog"
-          , navTabs = Just $ div_ [class_ "tabs tabs-boxed border"] do
+          , navTabs = Just $ div_ [class_ "tabs tabs-boxed tabs-outline items-center border"] do
               a_ [href_ $ "/p/" <> pid.toText <> "/api_catalog?sort=" <> sortV <> "&request_type=Incoming", role_ "tab", class_ $ "tab " <> if requestType == "Incoming" then "tab-active" else ""] "Incoming"
               a_ [href_ $ "/p/" <> pid.toText <> "/api_catalog?sort=" <> sortV <> "&request_type=Outgoing", role_ "tab", class_ $ "tab " <> if requestType == "Outgoing" then "tab-active" else ""] "Outgoing"
           }

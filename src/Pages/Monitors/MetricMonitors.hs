@@ -44,6 +44,7 @@ data MonitorType = MonitorType
   , uri :: Text
   }
 
+
 monitorCreateGetH :: Projects.ProjectId -> Maybe Text -> ATAuthCtx (RespHeaders (PageCtx MonitorCreate))
 monitorCreateGetH pid monitorType = do
   (sess, project) <- Sessions.sessionAndProject pid
@@ -141,20 +142,18 @@ errorLogsContent =
 
 -- Timeline steps
 
-timelineSteps :: Projects.ProjectId ->  Components.TimelineSteps
+timelineSteps :: Projects.ProjectId -> Components.TimelineSteps
 timelineSteps pid =
   Components.TimelineSteps $
-    [ Components.TimelineStep "Choose the detection method" chooseDetectionMethod_ 
+    [ Components.TimelineStep "Choose the detection method" chooseDetectionMethod_
     , Components.TimelineStep "Define the metric" (defineTheMetric_ pid)
     , Components.TimelineStep "Set alert conditions" alertConditions_
-    , Components.TimelineStep "Configure notification message" configureNotificationMessage_ 
-    , Components.TimelineStep "Configure notification Channels" configureNotificationChannels_ 
+    , Components.TimelineStep "Configure notification message" configureNotificationMessage_
+    , Components.TimelineStep "Configure notification Channels" configureNotificationChannels_
     ]
 
 
 -- Content placeholders for TimelineSteps
-
-
 
 chooseDetectionMethod_ :: Html ()
 chooseDetectionMethod_ = do
@@ -167,8 +166,8 @@ chooseDetectionMethod_ = do
 
 
 defineTheMetric_ :: Projects.ProjectId -> Html ()
-defineTheMetric_ pid =  do
-  div_ [class_ " max-w-[750px]"] $ LogList.logQueryBox_ pid Nothing
+defineTheMetric_ pid = do
+  div_ [class_ " max-w-[750px]"] $ LogList.logQueryBox_ pid Nothing "requests"
   div_ [class_ "border-l-2 border-l-slate-300 pl-4 space-y-2"] do
     h3_ [class_ "font-normal text-base"] "Evaluation Details"
     div_ [class_ "flex items-center gap-2"] do
@@ -182,7 +181,7 @@ defineTheMetric_ pid =  do
 
 configureNotificationMessage_ :: Html ()
 configureNotificationMessage_ = do
-  let monitor = (def :: Monitors.QueryMonitor) 
+  let monitor = (def :: Monitors.QueryMonitor)
   div_ [class_ "space-y-4 max-w-[700px]"] do
     div_ [class_ "form-control w-full"] do
       label_ [class_ "label"] $ span_ [class_ "label-text"] "Severity"
@@ -268,11 +267,13 @@ addRecipientEmailAllTmpl_ =
     a_ [class_ "badge badge-base", [__|on click remove the closest parent <label/>|]] $ faSprite_ "xmark" "solid" "w-3 h-3"
 
 
-
 -- Helper functions
 
 groupedMonitorTypes :: [MonitorType] -> [(Text, [MonitorType])]
-groupedMonitorTypes = map (\ms -> ((Unsafe.head ms).group, ms)) . groupBy (\a b -> a.group == b.group)
+groupedMonitorTypes = map toGroup . groupBy (\a b -> a.group == b.group)
+  where
+    toGroup [] = error "Unexpected empty group"
+    toGroup ms@(m : _) = (m.group, ms)
 
 
 inputRadio_ :: Text -> Text -> Html ()
@@ -282,12 +283,12 @@ inputRadio_ name label = div_ [class_ "form-control"] $ label_ [class_ "label cu
 
 
 monitorTypeDetail_ :: MonitorType -> Html ()
-monitorTypeDetail_ MonitorType{..} = do
-  let slug = slugify label
+monitorTypeDetail_ m = do
+  let slug = slugify m.label
   div_ [class_ [text|border divide-y divide-gray-100 rounded-md hidden group-has-[.${slug}:checked]/pg:block |]] $ do
-    h3_ [class_ "bg-base-200 px-4 py-2 text-lg"] $ toHtml label
-    div_ [class_ "prose px-4 py-4"] content
-    div_ [class_ "text-right px-4 py-3"] $ a_ [class_ "btn btn-sm btn-success", href_ uri] "Continue"
+    h3_ [class_ "bg-base-200 px-4 py-2 text-lg"] $ toHtml m.label
+    div_ [class_ "prose px-4 py-4"] m.content
+    div_ [class_ "text-right px-4 py-3"] $ a_ [class_ "btn btn-sm btn-success", href_ m.uri] "Continue"
 
 
 -- Reusable components
@@ -368,7 +369,6 @@ monitorSelectType_ = section_ [class_ "px-8 py-5 space-y-5 group/pg"] $ do
 
 monitorMetric_ :: Projects.ProjectId -> Maybe Monitors.QueryMonitor -> Html ()
 monitorMetric_ pid monitorM = section_ [class_ "px-8 py-5 space-y-5 group/pg overflow-y-scroll h-full"] $ do
-  let monitor = fromMaybe (def :: Monitors.QueryMonitor) monitorM
   div_
     [ id_ "reqsChartsECP"
     , class_ "px-5 mt-5"
@@ -389,5 +389,3 @@ monitorMetric_ pid monitorM = section_ [class_ "px-8 py-5 space-y-5 group/pg ove
 
 monitorAPITests_ :: Projects.ProjectId -> Maybe Monitors.QueryMonitor -> Html ()
 monitorAPITests_ _ _ = div_ "API tests"
-
-

@@ -128,7 +128,7 @@ data TabFilterOpt = TabFilterOpt
 
 instance ToHtml TabFilter where
   toHtmlRaw = toHtml
-  toHtml tf = div_ [class_ "tabs tabs-boxed border"] do
+  toHtml tf = div_ [class_ "tabs tabs-boxed tabs-outline items-center border"] do
     let uri = deleteParam "filter" tf.currentURL
     forM_ tf.options \opt ->
       a_
@@ -159,13 +159,12 @@ timepicker_ submitForm currentRange = div_ [class_ "relative"] do
   input_ [type_ "hidden", id_ "since_input"]
   input_ [type_ "hidden", id_ "custom_range_input"]
   a_
-    [ class_ "relative btn btn-sm btn-outline"
+    [ class_ "relative select select-sm select-bordered"
     , [__| on click toggle .hidden on #timepickerBox|]
     ]
-    do
-      faSprite_ "clock" "regular" "h-4 w-4"
+    $ div_ [class_ "flex items-center gap-1"] do
+      faSprite_ "clock" "regular" "h-3 w-3"
       span_ [class_ "inline-block", id_ "currentRange"] $ toHtml (fromMaybe "Last 14 Days" currentRange)
-      faSprite_ "chevron-down" "regular" "h-3 w-3 inline-block"
   div_ [id_ "timepickerBox", class_ "hidden absolute z-10 mt-1  rounded-md flex"] do
     div_ [class_ "inline-block w-84 overflow-auto bg-base-100 py-1 text-base shadow-lg ring-1 ring-black ring-opacity-5 focus:outline-none sm:text-sm"] do
       timePickerItems

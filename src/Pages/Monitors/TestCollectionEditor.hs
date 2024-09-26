@@ -33,6 +33,7 @@ import Lucid.Htmx (
   hxTarget_,
   hxVals_,
  )
+import Lucid.Hyperscript (__)
 import Models.Projects.Projects qualified as Projects
 import Models.Tests.TestToDump qualified as TestToDump
 import Models.Tests.Testing qualified as Testing
@@ -100,7 +101,7 @@ castToStepResult v = case AE.eitherDecodeStrictText (decodeUtf8 $ AE.encode v) o
 
 pageTabs :: Text -> Html ()
 pageTabs url = do
-  div_ [class_ "tabs tabs-boxed border"] do
+  div_ [class_ "tabs tabs-boxed tabs-outline items-center border"] do
     a_ [href_ $ url <> "/overview", role_ "tab", class_ "tab"] "Overview"
     a_ [href_ url, role_ "tab", class_ "tab tab-active"] "Test editor"
 
@@ -201,10 +202,10 @@ testSettingsModalContent_ isUpdate col = div_ [class_ "space-y-5 w-96"] do
 timelineSteps :: Projects.ProjectId -> Components.TimelineSteps
 timelineSteps pid =
   Components.TimelineSteps $
-    [ Components.TimelineStep "Name of test" nameOfTest_
-    , Components.TimelineStep "Define steps" defineTestSteps_
+    [ Components.TimelineStep "Define API test" defineTestSteps_
+    , Components.TimelineStep "Name and tag your test" nameOfTest_
     , -- , Components.TimelineStep "Select locations" (defineTheMetric_ pid)
-      Components.TimelineStep "Define retry confitions" (MetricMonitors.configureNotificationMessage_)
+      Components.TimelineStep "Define retry conditions" (MetricMonitors.configureNotificationMessage_)
     , Components.TimelineStep "Define Scheduling and alert conditions" (MetricMonitors.configureNotificationChannels_)
     ]
 
@@ -212,11 +213,18 @@ timelineSteps pid =
 nameOfTest_ :: Html ()
 nameOfTest_ = div_ [class_ "form-control w-full"] do
   label_ [class_ "label hidden"] $ span_ [class_ "label-text"] "Name"
-  input_ [placeholder_ "Give your test a name", class_ "input input-md input-bordered  w-full", name_ "subject", value_ ""]
+  input_ [placeholder_ "Give your test a name", class_ "input input-sm input-bordered  w-full", name_ "subject", value_ ""]
 
 
 defineTestSteps_ :: Html ()
 defineTestSteps_ = do
+  div_ [class_ "alert"] do
+    faSprite_ "sparkles" "regular" "w-7 h-7 text-success "
+    div_ [] do
+      p_ [] "Link multiple steps by creating variables from the request response data."
+      p_ [] "When using variables, remember that step order matters"
+    div_ [] do
+      a_ [[__|on click remove the closest parent <.alert/>|]] $ faSprite_ "xmark" "regular" "w-5 h-5"
   div_ [class_ "shrink p-4 flex justify-between items-center"] do
     div_ [class_ "flex items-center space-x-4"] ""
     div_ [class_ "space-x-4 flex items-center"] do
@@ -235,6 +243,7 @@ defineTestSteps_ = do
         (span_ "Run all" >> faSprite_ "play" "solid" "w-3 h-3")
       label_ [class_ "relative inline-flex items-center cursor-pointer space-x-2"] do
         input_ [type_ "checkbox", class_ "toggle editormode", onchange_ "codeToggle(event)"] >> span_ [class_ "text-sm"] "Code"
+  div_ [class_ "overflow-y-hidden flex-1 "] $ termRaw "assertion-builder" [id_ ""] ""
   div_ [class_ "overflow-y-hidden flex-1 "] $ termRaw "steps-editor" [id_ "stepsEditor"] ""
 
 
@@ -250,14 +259,14 @@ collectionPage pid col col_rn respJson = do
   section_ [class_ "h-full overflow-y-hidden"] do
     form_
       [ id_ "stepsForm"
-      , class_ "grid grid-cols-5 h-full divide-x divide-gray-200 group/colform overflow-y-hidden"
+      , class_ "grid grid-cols-3 h-full divide-x divide-gray-200 group/colform overflow-y-hidden"
       , hxPost_ ""
       , hxSwap_ "none"
       , hxExt_ "json-enc"
       , hxVals_ "js:{stepsData: saveStepData()}"
       ]
       do
-        div_ [class_ "col-span-3 px-8 py-5 overflow-y-scroll"] $ toHtml $ timelineSteps pid
+        div_ [class_ "col-span-2 px-8 pt-5 pb-12 overflow-y-scroll"] $ toHtml $ timelineSteps pid
         div_ [class_ "hidden col-span-1 h-full divide-y flex flex-col overflow-y-hidden"] do
           div_ [class_ "shrink flex items-center justify-between"] do
             div_ [class_ " pb-5 p-5 space-y-2"] do
@@ -290,7 +299,7 @@ collectionPage pid col col_rn respJson = do
                 input_ [type_ "checkbox", class_ "toggle editormode", onchange_ "codeToggle(event)"] >> span_ [class_ "text-sm"] "Code"
           div_ [class_ "h-full overflow-y-hidden flex-1"] $ termRaw "steps-editor" [id_ "stepsEditor"] ""
 
-        div_ [class_ "col-span-2 h-full border-r border-gray-200 overflow-y-auto"] do
+        div_ [class_ "col-span-1 h-full border-r border-gray-200 overflow-y-auto"] do
           div_ [class_ "max-h-full h-full overflow-y-auto space-y-4 relative", id_ "step-results-parent"] do
             case col_rn of
               Just res -> do
@@ -306,6 +315,7 @@ collectionPage pid col col_rn respJson = do
 
     script_ [src_ "/public/assets/testeditor-utils.js"] ("" :: Text)
     script_ [type_ "module", src_ "/public/assets/steps-editor.js"] ("" :: Text)
+    script_ [type_ "module", src_ "/public/assets/steps-assertions.js"] ("" :: Text)
     script_
       [text|
 

@@ -440,7 +440,6 @@ monitorMetric_ :: Projects.ProjectId -> Maybe Monitors.QueryMonitor -> Html ()
 monitorMetric_ pid monitorM = section_ [class_ "px-8 py-5 space-y-5 group/pg overflow-y-scroll h-full"] do
   let monitor = fromMaybe (def :: Monitors.QueryMonitor) monitorM
   -- let isNewMonitor = UUID.null monitor.id.unQueryMonitorId
-  let currentRange = Just "Last 24 Hours"
 
   div_
     [ id_ "reqsChartsECP"
@@ -475,7 +474,7 @@ monitorMetric_ pid monitorM = section_ [class_ "px-8 py-5 space-y-5 group/pg ove
           faSprite_ "chevron-down" "regular" "h-4 w-4 mx-2"
           span_ [] "Define the metric"
         div_ [class_ "pl-8 pb-8 space-y-3 min-w-[750px]"] do
-          LogList.logQueryBox_ pid Nothing
+          LogList.logQueryBox_ pid Nothing "requests"
           div_ [class_ "border-l-2 border-l-slate-300 pl-4 space-y-2"] do
             h3_ [class_ "font-normal text-base"] "Evaluation Details"
             div_ [class_ "flex items-center gap-2"] do

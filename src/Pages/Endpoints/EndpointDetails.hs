@@ -151,7 +151,7 @@ fieldDetailsView field formats = do
                 textarea_ [id_ "description", name_ "description", class_ "text-sm border p-2 rounded-lg text-gray-600"] $ toHtml field.description
           div_ [class_ "flex w-full justify-end items-center p-6 gap-4 space-x-2 border-t border-gray-200 rounded-b"] do
             button_
-              [ class_ "btn btn-primary"
+              [ class_ "btn btn-outline"
               , type_ "submit"
               ]
               "Save"

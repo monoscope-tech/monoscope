@@ -71,7 +71,7 @@ expandedSpanItem pid sp = do
                   span_ [class_ $ "text-sm px-2 py-1.5 border-l " <> extraClass] $ toHtml $ show status
         span_ [class_ "text-sm"] $ toHtml $ formatTime defaultTimeLocale "%b %d %Y %H:%M:%S%Q" sp.timestamp
 
-    div_ [class_ "tabs tabs-boxed tabs-sm w-max mt-8", [__|on click halt|]] $ do
+    div_ [class_ "tabs tabs-boxed tabs-outline items-center border tabs-sm w-max mt-8", [__|on click halt|]] $ do
       a_ [class_ "tab span-tab tab-active", [__| install Navigatable(content: .attributes-content)|]] "Attributes"
       a_ [class_ "tab span-tab", [__| install Navigatable(content: .process-content)|]] $ do
         "Process"

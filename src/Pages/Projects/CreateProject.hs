@@ -428,7 +428,7 @@ createProjectBody sess envCfg isUpdate cp cpe = do
                   do
                     div_ [class_ "flex items-center justify-between border-b border-b-1 p-1"] do
                       h4_ [class_ "text-xl font-medium text-slate-700"] $ toHtml "Pay as you use"
-                      div_ [role_ "tablist", class_ "tabs tabs-boxed"] $ do
+                      div_ [role_ "tablist", class_ "tabs tabs-boxed tabs-outline items-center border"] $ do
                         input_ [onchange_ "handlePlanToggle()", value_ "month", type_ "radio", name_ "plans", role_ "tab", class_ "tab", term "aria-label" "Monthly", checked_]
                         input_ [onchange_ "handlePlanToggle()", value_ "annual", type_ "radio", name_ "plans", role_ "tab", class_ "tab", term "aria-label" "Annual"]
                     div_ [class_ "text-lg py-3 px-2"] do
