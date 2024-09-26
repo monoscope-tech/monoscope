@@ -83,10 +83,17 @@ processList msgs attrs = do
                 Right (ExportTraceServiceRequest a) -> (ackId, join $ V.map convertToSpan a)
       let (ackIds, spansVec) = V.unzip results
           spans = join spansVec
-          apitoolkitSpan = V.find (\s -> s.spanName == "apitoolkit-custom-span") spans
+          apitoolkitSpan =
+            V.find
+              ( \s ->
+                  Just "@opentelemetry/instrumentation-http" == case s.instrumentationScope of
+                    AE.Object v -> KEM.lookup "name" v
+                    _ -> Nothing
+              )
+              spans
       whenJust apitoolkitSpan $ \sp -> do
-        let req = convertSpanToRequestMessage sp
-        _ <- ProcessMessage.processRequestMessages [("", req)]
+        let r = convertSpanToRequestMessage sp
+        _ <- ProcessMessage.processRequestMessages [("", r)]
         pass
       Telemetry.bulkInsertSpans $ V.filter (\s -> s.spanName /= "apitoolkit-custom-span") spans
       pure $ V.toList ackIds
@@ -131,8 +138,8 @@ byteStringToHexText bs = decodeUtf8 (B16.encode bs)
 -- Convert a list of KeyValue to a JSONB object
 keyValueToJSONB :: V.Vector KeyValue -> AE.Value
 keyValueToJSONB kvs =
-  AE.object
-    $ V.foldr (\kv acc -> (AEK.fromText $ LT.toStrict kv.keyValueKey, convertAnyValue kv.keyValueValue) : acc) [] kvs
+  AE.object $
+    V.foldr (\kv acc -> (AEK.fromText $ LT.toStrict kv.keyValueKey, convertAnyValue kv.keyValueValue) : acc) [] kvs
 
 
 convertAnyValue :: Maybe AnyValue -> AE.Value
@@ -278,7 +285,7 @@ traceServiceExportH appLogger appCtx (ServerNormalRequest _meta (ExportTraceServ
       let r = convertSpanToRequestMessage sp
       _ <- ProcessMessage.processRequestMessages [("", r)]
       pass
-    Telemetry.bulkInsertSpans spanRecords
+    Telemetry.bulkInsertSpans $ V.filter (\s -> s.spanName /= "apitoolkit-custom-span") spanRecords
   return (ServerNormalResponse (ExportTraceServiceResponse Nothing) mempty StatusOk "")
 
 
@@ -367,31 +374,31 @@ getSpanAttribute key attr = case attr of
 
 eventsToJSONB :: [Span_Event] -> AE.Value
 eventsToJSONB spans =
-  AE.toJSON
-    $ ( \sp ->
-          object
-            [ "event_name" .= toText sp.span_EventName
-            , "event_time" .= nanosecondsToUTC sp.span_EventTimeUnixNano
-            , "event_attributes" .= keyValueToJSONB sp.span_EventAttributes
-            , "event_dropped_attributes_count" .= fromIntegral sp.span_EventDroppedAttributesCount
-            ]
-      )
-    <$> spans
+  AE.toJSON $
+    ( \sp ->
+        object
+          [ "event_name" .= toText sp.span_EventName
+          , "event_time" .= nanosecondsToUTC sp.span_EventTimeUnixNano
+          , "event_attributes" .= keyValueToJSONB sp.span_EventAttributes
+          , "event_dropped_attributes_count" .= fromIntegral sp.span_EventDroppedAttributesCount
+          ]
+    )
+      <$> spans
 
 
 linksToJSONB :: [Span_Link] -> AE.Value
 linksToJSONB lnks =
-  AE.toJSON
-    $ ( \lnk ->
-          object
-            [ "link_span_id" .= (decodeUtf8 lnk.span_LinkSpanId :: Text)
-            , "link_trace_id" .= (decodeUtf8 lnk.span_LinkTraceId :: Text)
-            , "link_attributes" .= keyValueToJSONB lnk.span_LinkAttributes
-            , "link_dropped_attributes_count" .= fromIntegral lnk.span_LinkDroppedAttributesCount
-            , "link_flags" .= fromIntegral lnk.span_LinkFlags
-            ]
-      )
-    <$> lnks
+  AE.toJSON $
+    ( \lnk ->
+        object
+          [ "link_span_id" .= (decodeUtf8 lnk.span_LinkSpanId :: Text)
+          , "link_trace_id" .= (decodeUtf8 lnk.span_LinkTraceId :: Text)
+          , "link_attributes" .= keyValueToJSONB lnk.span_LinkAttributes
+          , "link_dropped_attributes_count" .= fromIntegral lnk.span_LinkDroppedAttributesCount
+          , "link_flags" .= fromIntegral lnk.span_LinkFlags
+          ]
+    )
+      <$> lnks
 
 
 ---------------------------------------------------------------------------------------
