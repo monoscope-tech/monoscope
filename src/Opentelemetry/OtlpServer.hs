@@ -83,18 +83,16 @@ processList msgs attrs = do
                 Right (ExportTraceServiceRequest a) -> (ackId, join $ V.map convertToSpan a)
       let (ackIds, spansVec) = V.unzip results
           spans = join spansVec
-          apitoolkitSpan =
-            V.find
+          apitoolkitSpans =
+            V.filter
               ( \s ->
                   Just "@opentelemetry/instrumentation-http" == case s.instrumentationScope of
                     AE.Object v -> KEM.lookup "name" v
                     _ -> Nothing
               )
               spans
-      whenJust apitoolkitSpan $ \sp -> do
-        let r = convertSpanToRequestMessage sp
-        _ <- ProcessMessage.processRequestMessages [("", r)]
-        pass
+          r = (\x -> ("", convertSpanToRequestMessage x)) <$> apitoolkitSpans
+      _ <- ProcessMessage.processRequestMessages $ V.toList r
       Telemetry.bulkInsertSpans $ V.filter (\s -> s.spanName /= "apitoolkit-custom-span") spans
       pure $ V.toList ackIds
     Just "org.opentelemetry.otlp.metrics.v1" -> do
@@ -273,18 +271,16 @@ traceServiceExportH
 traceServiceExportH appLogger appCtx (ServerNormalRequest _meta (ExportTraceServiceRequest req)) = do
   _ <- runBackground appLogger appCtx do
     let spanRecords = join $ V.map convertToSpan req
-        apitoolkitSpan =
-          V.find
+        apitoolkitSpans =
+          V.filter
             ( \s ->
                 Just "@opentelemetry/instrumentation-http" == case s.instrumentationScope of
                   AE.Object v -> KEM.lookup "name" v
                   _ -> Nothing
             )
             spanRecords
-    whenJust apitoolkitSpan $ \sp -> do
-      let r = convertSpanToRequestMessage sp
-      _ <- ProcessMessage.processRequestMessages [("", r)]
-      pass
+        r = (\x -> ("", convertSpanToRequestMessage x)) <$> apitoolkitSpans
+    _ <- ProcessMessage.processRequestMessages $ V.toList r
     Telemetry.bulkInsertSpans $ V.filter (\s -> s.spanName /= "apitoolkit-custom-span") spanRecords
   return (ServerNormalResponse (ExportTraceServiceResponse Nothing) mempty StatusOk "")
 
