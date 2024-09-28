@@ -328,7 +328,7 @@ convertSpanToRequestMessage sp =
     , statusCode = status
     , sdkType = sdkType
     , msgId = messageId
-    , parentId = Nothing
+    , parentId = parentId
     , errors
     , tags = Nothing
     , urlPath = urlPath
@@ -342,6 +342,7 @@ convertSpanToRequestMessage sp =
     queryParams = fromMaybe (AE.object []) (AE.decode $ encodeUtf8 $ fromMaybe "" $ getSpanAttribute "http.request.query_params" sp.attributes)
     errors = AE.decode $ encodeUtf8 $ fromMaybe "" $ getSpanAttribute "apitoolkit.errors" sp.attributes
     messageId = UUID.fromText $ fromMaybe "" $ getSpanAttribute "apitoolkit.msg_id" sp.attributes
+    parentId = UUID.fromText $ fromMaybe "" $ getSpanAttribute "apitoolkit.parent_id" sp.attributes
     rawUrl = fromMaybe "" $ getSpanAttribute "http.target" sp.attributes
     referer = Just $ Left (fromMaybe "" $ getSpanAttribute "http.request.headers.referer" sp.attributes) :: Maybe (Either Text [Text])
     requestBody = fromMaybe "" $ getSpanAttribute "http.request.body" sp.attributes

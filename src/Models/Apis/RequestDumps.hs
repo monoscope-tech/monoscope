@@ -74,6 +74,7 @@ data SDKTypes
   | JsFastify
   | JavaSpringBoot
   | JsAxiosOutgoing
+  | JsOutgoing
   | DotNet
   | PythonFastApi
   | PythonFlask
@@ -126,6 +127,7 @@ parseSDKType "TestkitOutgoing" = TestkitOutgoing
 parseSDKType "JavaSpring" = JavaSpring
 parseSDKType "JavaApacheOutgoing" = JavaApacheOutgoing
 parseSDKType "JavaVertx" = JavaVertx
+parseSDKType "JsOutgoing" = JsOutgoing
 parseSDKType _ = JsExpress
 instance FromField SDKTypes where
   fromField f mdata = do
@@ -204,6 +206,7 @@ normalizeUrlPath TestkitOutgoing statusCode _method urlPath = removeQueryParams 
 normalizeUrlPath JavaSpring statusCode _method urlPath = removeQueryParams statusCode urlPath
 normalizeUrlPath JavaApacheOutgoing statusCode _method urlPath = removeQueryParams statusCode urlPath
 normalizeUrlPath JavaVertx statusCode _method urlPath = removeQueryParams statusCode urlPath
+normalizeUrlPath JsOutgoing statusCode _method urlPath = removeQueryParams statusCode urlPath
 
 
 -- getRequestType ...
