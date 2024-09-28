@@ -348,7 +348,7 @@ convertSpanToRequestMessage sp =
       _ -> (AE.object [], AE.object [])
     responseBody = fromMaybe "" $ getSpanAttribute "http.response.body" sp.attributes
     responseStatus = (readMaybe . toString =<< getSpanAttribute "http.response.status_code" sp.attributes) :: Maybe Double
-    responseStatus' = (readMaybe . toString =<< getSpanAttribute "httP.status_code" sp.attributes) :: Maybe Double
+    responseStatus' = (readMaybe . toString =<< getSpanAttribute "http.status_code" sp.attributes) :: Maybe Double
     status = round $ fromMaybe (fromMaybe 0.0 responseStatus') responseStatus
     sdkType = RequestDumps.parseSDKType $ fromMaybe "" $ getSpanAttribute "http.apt.sdk_type" sp.attributes
     urlPath = getSpanAttribute "http.route" sp.attributes
