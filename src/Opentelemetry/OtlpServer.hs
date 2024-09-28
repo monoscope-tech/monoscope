@@ -86,9 +86,9 @@ processList msgs attrs = do
           apitoolkitSpans =
             V.filter
               ( \s ->
-                  Just "@opentelemetry/instrumentation-http" == case s.instrumentationScope of
-                    AE.Object v -> KEM.lookup "name" v
-                    _ -> Nothing
+                  case s.instrumentationScope of
+                    AE.Object v -> KEM.lookup "name" v == Just "@opentelemetry/instrumentation-undici" || KEM.lookup "name" v == Just "@opentelemetry/instrumentation-http"
+                    _ -> False
               )
               spans
           r = (\x -> ("", convertSpanToRequestMessage x)) <$> apitoolkitSpans
@@ -274,9 +274,9 @@ traceServiceExportH appLogger appCtx (ServerNormalRequest _meta (ExportTraceServ
         apitoolkitSpans =
           V.filter
             ( \s ->
-                Just "@opentelemetry/instrumentation-http" == case s.instrumentationScope of
-                  AE.Object v -> KEM.lookup "name" v
-                  _ -> Nothing
+                case s.instrumentationScope of
+                  AE.Object v -> KEM.lookup "name" v == Just "@opentelemetry/instrumentation-undici" || KEM.lookup "name" v == Just "@opentelemetry/instrumentation-http"
+                  _ -> False
             )
             spanRecords
         r = (\x -> ("", convertSpanToRequestMessage x)) <$> apitoolkitSpans
