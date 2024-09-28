@@ -337,7 +337,7 @@ convertSpanToRequestMessage sp =
     }
   where
     host = getSpanAttribute "net.host.name" sp.attributes
-    method = fromMaybe "GET" $ getSpanAttribute "http.method" sp.attributes
+    method = fromMaybe (fromMaybe "GET" $ getSpanAttribute "http.request.method" sp.attributes) $ getSpanAttribute "http.method" sp.attributes
     pathParams = fromMaybe (AE.object []) (AE.decode $ encodeUtf8 $ fromMaybe "" $ getSpanAttribute "http.request.path_params" sp.attributes)
     queryParams = fromMaybe (AE.object []) (AE.decode $ encodeUtf8 $ fromMaybe "" $ getSpanAttribute "http.request.query_params" sp.attributes)
     rawUrl = fromMaybe "" $ getSpanAttribute "http.target" sp.attributes
@@ -348,7 +348,8 @@ convertSpanToRequestMessage sp =
       _ -> (AE.object [], AE.object [])
     responseBody = fromMaybe "" $ getSpanAttribute "http.response.body" sp.attributes
     responseStatus = (readMaybe . toString =<< getSpanAttribute "http.response.status_code" sp.attributes) :: Maybe Double
-    status = round $ fromMaybe 0.0 responseStatus
+    responseStatus' = (readMaybe . toString =<< getSpanAttribute "httP.status_code" sp.attributes) :: Maybe Double
+    status = round $ fromMaybe (fromMaybe 0.0 responseStatus') responseStatus
     sdkType = RequestDumps.parseSDKType $ fromMaybe "" $ getSpanAttribute "http.apt.sdk_type" sp.attributes
     urlPath = getSpanAttribute "http.route" sp.attributes
 
