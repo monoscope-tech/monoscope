@@ -353,7 +353,7 @@ convertSpanToRequestMessage sp =
     responseStatus = (readMaybe . toString =<< getSpanAttribute "http.response.status_code" sp.attributes) :: Maybe Double
     responseStatus' = (readMaybe . toString =<< getSpanAttribute "http.status_code" sp.attributes) :: Maybe Double
     status = round $ fromMaybe (fromMaybe 0.0 responseStatus') responseStatus
-    sdkType = RequestDumps.parseSDKType $ fromMaybe "" $ getSpanAttribute "http.apt.sdk_type" sp.attributes
+    sdkType = RequestDumps.parseSDKType $ fromMaybe "" $ getSpanAttribute "apitoolkit.sdk_type" sp.attributes
     urlPath = getSpanAttribute "http.route" sp.attributes
 
 
