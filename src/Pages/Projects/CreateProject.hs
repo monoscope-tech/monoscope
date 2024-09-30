@@ -404,10 +404,7 @@ createProjectBody sess envCfg isUpdate cp cpe = do
                     div_ [class_ "text-lg py-3 px-2"] do
                       span_ [class_ "text-2xl text-blue-700", id_ "price"] $ toHtml "$34"
                       span_ [class_ "text-slate-500", id_ "num_requests"] "/400k"
-                      span_ [class_ "text-slate-500 mr-3"] " requests"
-                      p_ [class_ "text-blue-500 inline-block mt-0 text-sm text-green-500 font-semibold"] do
-                        span_ [] "save "
-                        span_ [id_ "save_container"] "$1/month"
+                      span_ [class_ "text-slate-500 mr-3"] " requests per month"
                       span_ [class_ "text-blue-500 text-sm block mt-2"] "then $1 per 20k requests"
                     div_ [] do
                       input_ [type_ "range", min_ "0", max_ "6", step_ "1", value_ "0", class_ "range range-primary range-sm", id_ "price_range"]
