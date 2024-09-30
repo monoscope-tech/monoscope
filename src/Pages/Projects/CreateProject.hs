@@ -402,7 +402,7 @@ createProjectBody sess envCfg isUpdate cp cpe = do
                         input_ [onchange_ "handlePlanToggle()", value_ "month", type_ "radio", name_ "plans", role_ "tab", class_ "tab", term "aria-label" "Monthly", checked_]
                         input_ [onchange_ "handlePlanToggle()", value_ "annual", type_ "radio", name_ "plans", role_ "tab", class_ "tab", term "aria-label" "Annual"]
                     div_ [class_ "text-lg py-3 px-2"] do
-                      span_ [class_ "text-2xl text-blue-700", id_ "price"] $ toHtml "$19"
+                      span_ [class_ "text-2xl text-blue-700", id_ "price"] $ toHtml "$34"
                       span_ [class_ "text-slate-500", id_ "num_requests"] "/400k"
                       span_ [class_ "text-slate-500 mr-3"] " requests"
                       p_ [class_ "text-blue-500 inline-block mt-0 text-sm text-green-500 font-semibold"] do
