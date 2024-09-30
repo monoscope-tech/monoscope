@@ -504,22 +504,18 @@ createProjectBody sess envCfg isUpdate cp cpe = do
                const urlsAnnual = $lmnUrlAnnual
                const priceContainer = document.querySelector("#price")
                const reqsContainer = document.querySelector("#num_requests")
-               const saveContainer = document.querySelector("#save_container")
                function priceChange() {
                  const value = price_indicator.value
                  let price = prices[value]
                  let num_reqs = reqs[value]
-                 let sav = saves[value] + "/month"
                  window.graduatedRangeUrl = urls[value]
                  if(plan === "annual") {
                     price = pricesYr[value]
                     num_reqs = reqsYr[value]
-                    sav = savesYr[value] + "/year"
                     window.graduatedRangeUrl = urlsAnnual[value]
                   }
                  priceContainer.innerText = "$" + price
                  reqsContainer.innerText = "/" + num_reqs
-                 saveContainer.innerText = "$" + sav
 
                }
                price_indicator.addEventListener('input', priceChange)
