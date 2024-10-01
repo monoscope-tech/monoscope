@@ -1,4 +1,4 @@
-module Pages.Traces.Spans (expandedSpanItem, spanLatencyBreakdownGet, SpanBreakdown (..)) where
+module Pages.Traces.Spans (expandedSpanItem, spanLatencyBreakdown) where
 
 import Data.Aeson qualified as AE
 import Data.Aeson.Key qualified as Key
@@ -39,7 +39,7 @@ expandedSpanItem pid sp = do
         h3_ [class_ "whitespace-nowrap text-xl font-bold pr-4 border-r border-r-2"] "Span"
         div_ [class_ "flex items-center gap-4"] $ do
           h4_ [class_ "text-xl font-medium"] $ toHtml $ getServiceName sp
-          faSprite_ "arrow-right" "regular" "w-4 h-4 font-bold"
+          faSprite_ "caret-up" "solid" "w-5 h-5 rotate-90 font-bold"
           h4_ [class_ "text-xl font-medium max-w-96 truncate"] $ toHtml sp.spanName
       div_ [class_ "flex gap-4 items-center"] do
         div_ [class_ "flex items-end border rounded"] do
@@ -139,20 +139,6 @@ displayEventItem _ = pass
 numberOfEvents :: AE.Value -> Int
 numberOfEvents (AE.Array obj) = length obj
 numberOfEvents _ = 0
-
-
-spanLatencyBreakdownGet :: Projects.ProjectId -> Text -> ATAuthCtx (RespHeaders SpanBreakdown)
-spanLatencyBreakdownGet pid spid = do
-  spans <- Telemetry.getChildSpans pid spid
-  addRespHeaders $ SpanBreakdown spans
-
-
-newtype SpanBreakdown = SpanBreakdown (V.Vector Telemetry.SpanRecord)
-
-
-instance ToHtml SpanBreakdown where
-  toHtml (SpanBreakdown spans) = toHtml $ spanLatencyBreakdown spans
-  toHtmlRaw = toHtml
 
 
 spanLatencyBreakdown :: V.Vector Telemetry.SpanRecord -> Html ()

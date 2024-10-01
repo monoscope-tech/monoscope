@@ -78,7 +78,7 @@ spec = aroundAll withTestResources do
   describe "Check Test Collections" do
     it "should return an empty list" \TestResources{..} -> do
       (PageCtx _ (ItemsList.ItemsPage _ collections)) <-
-        toServantResponse trATCtx trSessAndHeader trLogger $ Testing.testingGetH testPid Nothing
+        toServantResponse trATCtx trSessAndHeader trLogger $ Testing.testingGetH testPid Nothing Nothing
       length collections `shouldBe` 0
 
     it "should add test collection" \TestResources{..} -> do
@@ -88,12 +88,12 @@ spec = aroundAll withTestResources do
 
     it "should get inactive collections" \TestResources{..} -> do
       (PageCtx _ (ItemsList.ItemsPage _ collections)) <-
-        toServantResponse trATCtx trSessAndHeader trLogger $ Testing.testingGetH testPid (Just "Inactive")
+        toServantResponse trATCtx trSessAndHeader trLogger $ Testing.testingGetH testPid (Just "Inactive") Nothing
       length collections `shouldBe` 0
 
     it "should not allow schedule unit less than a day with free plan" \TestResources{..} -> do
       (PageCtx _ (ItemsList.ItemsPage _ collections)) <-
-        toServantResponse trATCtx trSessAndHeader trLogger $ Testing.testingGetH testPid Nothing
+        toServantResponse trATCtx trSessAndHeader trLogger $ Testing.testingGetH testPid Nothing Nothing
       length collections `shouldBe` 1
       let col = V.head $ (\(Testing.CollectionListItemVM _ co _) -> co) <$> collections
       res <-
@@ -104,7 +104,7 @@ spec = aroundAll withTestResources do
 
     it "should get active collections and disable collection" \TestResources{..} -> do
       (PageCtx _ (ItemsList.ItemsPage _ collections)) <-
-        toServantResponse trATCtx trSessAndHeader trLogger $ Testing.testingGetH testPid Nothing
+        toServantResponse trATCtx trSessAndHeader trLogger $ Testing.testingGetH testPid Nothing Nothing
       length collections `shouldBe` 1
       let col = V.head $ (\(Testing.CollectionListItemVM _ co _) -> co) <$> collections
       col.title `shouldBe` "Test Collection"
@@ -121,7 +121,7 @@ spec = aroundAll withTestResources do
         _ -> do pass
     it "should get inative collections" \TestResources{..} -> do
       (PageCtx _ (ItemsList.ItemsPage _ collections)) <-
-        toServantResponse trATCtx trSessAndHeader trLogger $ Testing.testingGetH testPid (Just "Inactive")
+        toServantResponse trATCtx trSessAndHeader trLogger $ Testing.testingGetH testPid (Just "Inactive") Nothing
       length collections `shouldBe` 1
       let col = V.head $ (\(Testing.CollectionListItemVM _ co _) -> co) <$> collections
       col.title `shouldBe` "Test Collection"

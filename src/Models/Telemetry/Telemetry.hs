@@ -213,14 +213,14 @@ spanRecordByProjectAndId pid createdAt rdId = dbtToEff $ queryOne Select q (crea
               FROM telemetry.spans where (timestamp=?)  and project_id=? and id=? LIMIT 1|]
 
 
-getChildSpans :: DB :> es => Projects.ProjectId -> Text -> Eff es (V.Vector SpanRecord)
-getChildSpans pid spanId = dbtToEff $ query Select q (pid, spanId)
+getChildSpans :: DB :> es => Projects.ProjectId -> V.Vector Text -> Eff es (V.Vector SpanRecord)
+getChildSpans pid spanIds = dbtToEff $ query Select q (pid, spanIds)
   where
     q =
       [sql| SELECT id, project_id, timestamp, trace_id::text, span_id::text, parent_span_id::text, trace_state,
                      span_name, start_time, end_time, kind, status, status_message, attributes,
                      events, links, resource, instrumentation_scope, CAST(EXTRACT(EPOCH FROM (end_time - start_time)) * 1000000000 AS BIGINT) as span_duration
-              FROM telemetry.spans where project_id =? AND parent_span_id=?|]
+              FROM telemetry.spans where project_id =? AND parent_span_id=Any(?)|]
 
 
 -- Function to insert multiple log entries

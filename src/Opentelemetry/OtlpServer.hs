@@ -9,18 +9,22 @@ import Data.Aeson.KeyMap qualified as KEM
 import Data.ByteString qualified as BS
 import Data.ByteString.Base16 qualified as B16
 import Data.HashMap.Strict qualified as HashMap
+
 import Data.Scientific
 import Data.Text qualified as T
 import Data.Text.Lazy qualified as LT
-import Data.Time (UTCTime)
+import Data.Time (TimeZone (..), UTCTime, utcToZonedTime, zonedTimeToUTC)
 import Data.Time.Clock.POSIX
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Effectful
+import Effectful.Log (Log)
 import Effectful.PostgreSQL.Transact.Effect (DB)
 import Effectful.Reader.Static (ask)
 import Effectful.Reader.Static qualified as Eff
+import Effectful.Time (Time)
 import Log qualified
+import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Telemetry.Telemetry (SpanKind (..), SpanStatus (..))
 import Models.Telemetry.Telemetry qualified as Telemetry
 import Network.GRPC.HighLevel.Client as HsGRPC
@@ -43,16 +47,18 @@ import Opentelemetry.Proto.Trace.V1.Trace (
   Status_StatusCode (..),
   scopeSpansSpans,
  )
+import ProcessMessage qualified
 import Proto3.Suite.Class qualified as HsProtobuf
 import Proto3.Suite.Types qualified as HsProtobuf
 import Proto3.Wire qualified as HsProtobuf
 import Proto3.Wire.Decode qualified as HsProtobuf
 import Relude hiding (ask)
+import RequestMessages (RequestMessage (..))
 import System.Config
 import System.Types (runBackground)
 
 
-processList :: (Eff.Reader AuthContext :> es, DB :> es) => [(Text, ByteString)] -> HashMap Text Text -> Eff es [Text]
+processList :: (Eff.Reader AuthContext :> es, DB :> es, Log :> es, IOE :> es, Time :> es) => [(Text, ByteString)] -> HashMap Text Text -> Eff es [Text]
 processList [] _ = pure []
 processList msgs attrs = do
   let msgs' = V.fromList msgs
@@ -75,8 +81,25 @@ processList msgs attrs = do
               case res of
                 Left err -> error $ "unable to parse traces service request with err " <> show err
                 Right (ExportTraceServiceRequest a) -> (ackId, join $ V.map convertToSpan a)
-      let (ackIds, spans) = V.unzip results
-      Telemetry.bulkInsertSpans $ join spans
+      let (ackIds, spansVec) = V.unzip results
+          spans = join spansVec
+          apitoolkitSpans =
+            V.map
+              ( \s ->
+                  case s.instrumentationScope of
+                    AE.Object v -> if httpScope then Just $ convertSpanToRequestMessage s scopeName else Nothing
+                      where
+                        y = KEM.lookup "name" v
+                        scopeName =
+                          if y == Just "@opentelemetry/instrumentation-undici"
+                            then "@opentelemetry/instrumentation-undici"
+                            else "@opentelemetry/instrumentation-http"
+                        httpScope = y == Just "@opentelemetry/instrumentation-undici" || y == Just "@opentelemetry/instrumentation-http"
+                    _ -> Nothing
+              )
+              spans
+      _ <- ProcessMessage.processRequestMessages $ V.toList $ V.catMaybes apitoolkitSpans <&> ("",)
+      Telemetry.bulkInsertSpans $ V.filter (\s -> s.spanName /= "apitoolkit-custom-span") spans
       pure $ V.toList ackIds
     Just "org.opentelemetry.otlp.metrics.v1" -> do
       let (ackIds, _) = V.unzip $ V.fromList msgs
@@ -119,8 +142,8 @@ byteStringToHexText bs = decodeUtf8 (B16.encode bs)
 -- Convert a list of KeyValue to a JSONB object
 keyValueToJSONB :: V.Vector KeyValue -> AE.Value
 keyValueToJSONB kvs =
-  AE.object
-    $ V.foldr (\kv acc -> (AEK.fromText $ LT.toStrict kv.keyValueKey, convertAnyValue kv.keyValueValue) : acc) [] kvs
+  AE.object $
+    V.foldr (\kv acc -> (AEK.fromText $ LT.toStrict kv.keyValueKey, convertAnyValue kv.keyValueValue) : acc) [] kvs
 
 
 convertAnyValue :: Maybe AnyValue -> AE.Value
@@ -238,11 +261,12 @@ convertSpanRecord resource scope sp =
     , links = linksToJSONB $ V.toList sp.spanLinks
     , resource = removeProjectId $ resourceToJSONB resource
     , instrumentationScope = instrumentationScopeToJSONB scope
-    , spanDurationNs = 0
+    , spanDurationNs = durr
     }
   where
     pid = resource >>= \r -> find (\kv -> kv.keyValueKey == "at-project-id") r.resourceAttributes >>= (.keyValueValue) >>= (.anyValueValue)
     pid' = if isJust pid then pid else find (\kv -> kv.keyValueKey == "at-project-id") sp.spanAttributes >>= (.keyValueValue) >>= (.anyValueValue)
+    durr = fromIntegral $ sp.spanEndTimeUnixNano - sp.spanStartTimeUnixNano
 
 
 traceServiceExportH
@@ -253,17 +277,25 @@ traceServiceExportH
 traceServiceExportH appLogger appCtx (ServerNormalRequest _meta (ExportTraceServiceRequest req)) = do
   _ <- runBackground appLogger appCtx do
     let spanRecords = join $ V.map convertToSpan req
-    Telemetry.bulkInsertSpans spanRecords
+        apitoolkitSpans =
+          V.map
+            ( \s ->
+                case s.instrumentationScope of
+                  AE.Object v -> if httpScope then Just $ convertSpanToRequestMessage s scopeName else Nothing
+                    where
+                      y = KEM.lookup "name" v
+                      scopeName =
+                        if y == Just "@opentelemetry/instrumentation-undici"
+                          then "@opentelemetry/instrumentation-undici"
+                          else "@opentelemetry/instrumentation-http"
+                      httpScope = y == Just "@opentelemetry/instrumentation-undici" || y == Just "@opentelemetry/instrumentation-http"
+                  _ -> Nothing
+            )
+            spanRecords
+    _ <- ProcessMessage.processRequestMessages $ V.toList $ V.catMaybes apitoolkitSpans <&> ("",)
+    Telemetry.bulkInsertSpans $ V.filter (\s -> s.spanName /= "apitoolkit-custom-span") spanRecords
   return (ServerNormalResponse (ExportTraceServiceResponse Nothing) mempty StatusOk "")
 
-
--- -- Convert nanoseconds to UTCTime
--- nanosecondsToUTC :: Int64 -> UTCTime
--- nanosecondsToUTC ns = posixSecondsToUTCTime (fromIntegral ns / 1e9)
-
--- -- Convert a list of KeyValue to a JSONB object
--- keyValueToJSONB :: [Logs.KeyValue] -> Value
--- keyValueToJSONB kvs = object [(unpack kv.key, kv.value) | kv <- kvs]
 
 -- Convert Protobuf kind to SpanKind
 parseSpanKind :: Either Int32 Span_SpanKind -> Maybe SpanKind
@@ -288,40 +320,103 @@ parseSpanStatus st = case st of
   _ -> Nothing
 
 
--- data Span_Event = Span_Event
---   { span_EventTimeUnixNano :: Hs.Word64
---   , span_EventName :: Hs.Text
---   , span_EventAttributes :: (Hs.Vector Opentelemetry.Proto.Common.V1.Common.KeyValue)
---   , span_EventDroppedAttributesCount :: Hs.Word32
---   }
+convertSpanToRequestMessage :: Telemetry.SpanRecord -> Text -> RequestMessage
+convertSpanToRequestMessage sp instrumentationScope =
+  RequestMessage
+    { duration = fromInteger sp.spanDurationNs
+    , host = host
+    , method = method
+    , pathParams = pathParams
+    , projectId = sp.projectId
+    , protoMajor = 1
+    , protoMinor = 1
+    , queryParams = queryParams
+    , rawUrl = rawUrl
+    , referer = referer
+    , requestBody = requestBody
+    , requestHeaders = requestHeaders
+    , responseBody = responseBody
+    , responseHeaders = responseHeaders
+    , statusCode = status
+    , sdkType = sdkType
+    , msgId = messageId
+    , parentId = parentId
+    , errors
+    , tags = Nothing
+    , urlPath = urlPath
+    , timestamp = utcToZonedTime (TimeZone 0 False "UTC+0") sp.timestamp
+    , serviceVersion = Nothing
+    }
+  where
+    host = getSpanAttribute "net.host.name" sp.attributes
+    method = fromMaybe (fromMaybe "GET" $ getSpanAttribute "http.request.method" sp.attributes) $ getSpanAttribute "http.method" sp.attributes
+    pathParams = fromMaybe (AE.object []) (AE.decode $ encodeUtf8 $ fromMaybe "" $ getSpanAttribute "http.request.path_params" sp.attributes)
+    queryParams = fromMaybe (AE.object []) (AE.decode $ encodeUtf8 $ fromMaybe "" $ getSpanAttribute "http.request.query_params" sp.attributes)
+    errors = AE.decode $ encodeUtf8 $ fromMaybe "" $ getSpanAttribute "apitoolkit.errors" sp.attributes
+    messageId = UUID.fromText $ fromMaybe "" $ getSpanAttribute "apitoolkit.msg_id" sp.attributes
+    parentId = UUID.fromText $ fromMaybe "" $ getSpanAttribute "apitoolkit.parent_id" sp.attributes
+    referer = Just $ Left (fromMaybe "" $ getSpanAttribute "http.request.headers.referer" sp.attributes) :: Maybe (Either Text [Text])
+    requestBody = fromMaybe "" $ getSpanAttribute "http.request.body" sp.attributes
+    (requestHeaders, responseHeaders) = case sp.attributes of
+      AE.Object v -> (getValsWithPrefix "http.request.header." v, getValsWithPrefix "http.response.header." v)
+      _ -> (AE.object [], AE.object [])
+    responseBody = fromMaybe "" $ getSpanAttribute "http.response.body" sp.attributes
+    responseStatus = (readMaybe . toString =<< getSpanAttribute "http.response.status_code" sp.attributes) :: Maybe Double
+    responseStatus' = (readMaybe . toString =<< getSpanAttribute "http.status_code" sp.attributes) :: Maybe Double
+    status = round $ fromMaybe (fromMaybe 0.0 responseStatus') responseStatus
+    sdkType = RequestDumps.parseSDKType $ fromMaybe "" $ getSpanAttribute "apitoolkit.sdk_type" sp.attributes
+    urlPath' = getSpanAttribute "http.route" sp.attributes
+    undUrlPath = getSpanAttribute "url.path" sp.attributes
+    urlPath = if instrumentationScope == "@opentelemetry/instrumentation-undici" then undUrlPath else urlPath'
+    rawUrl' = fromMaybe "" $ getSpanAttribute "http.target" sp.attributes
+    rawUrl =
+      if instrumentationScope == "@opentelemetry/instrumentation-undici"
+        then fromMaybe "" undUrlPath <> fromMaybe "" (getSpanAttribute "url.query" sp.attributes)
+        else rawUrl'
+
+
+getValsWithPrefix :: Text -> AE.Object -> AE.Value
+getValsWithPrefix prefix obj = AE.object $ map (\k -> (AEK.fromText (T.replace prefix "" $ AEK.toText k), fromMaybe (AE.object []) $ KEM.lookup k obj)) keys
+  where
+    keys = filter (\k -> prefix `T.isPrefixOf` AEK.toText k) (KEM.keys obj)
+
+
+getSpanAttribute :: Text -> AE.Value -> Maybe Text
+getSpanAttribute key attr = case attr of
+  AE.Object o -> case KEM.lookup (AEK.fromText key) o of
+    Just (AE.String v) -> Just v
+    Just (AE.Number v) -> Just $ show v
+    _ -> Nothing
+  _ -> Nothing
+
 
 eventsToJSONB :: [Span_Event] -> AE.Value
 eventsToJSONB spans =
-  AE.toJSON
-    $ ( \sp ->
-          object
-            [ "event_name" .= toText sp.span_EventName
-            , "event_time" .= nanosecondsToUTC sp.span_EventTimeUnixNano
-            , "event_attributes" .= keyValueToJSONB sp.span_EventAttributes
-            , "event_dropped_attributes_count" .= fromIntegral sp.span_EventDroppedAttributesCount
-            ]
-      )
-    <$> spans
+  AE.toJSON $
+    ( \sp ->
+        object
+          [ "event_name" .= toText sp.span_EventName
+          , "event_time" .= nanosecondsToUTC sp.span_EventTimeUnixNano
+          , "event_attributes" .= keyValueToJSONB sp.span_EventAttributes
+          , "event_dropped_attributes_count" .= fromIntegral sp.span_EventDroppedAttributesCount
+          ]
+    )
+      <$> spans
 
 
 linksToJSONB :: [Span_Link] -> AE.Value
 linksToJSONB lnks =
-  AE.toJSON
-    $ ( \lnk ->
-          object
-            [ "link_span_id" .= (decodeUtf8 lnk.span_LinkSpanId :: Text)
-            , "link_trace_id" .= (decodeUtf8 lnk.span_LinkTraceId :: Text)
-            , "link_attributes" .= keyValueToJSONB lnk.span_LinkAttributes
-            , "link_dropped_attributes_count" .= fromIntegral lnk.span_LinkDroppedAttributesCount
-            , "link_flags" .= fromIntegral lnk.span_LinkFlags
-            ]
-      )
-    <$> lnks
+  AE.toJSON $
+    ( \lnk ->
+        object
+          [ "link_span_id" .= (decodeUtf8 lnk.span_LinkSpanId :: Text)
+          , "link_trace_id" .= (decodeUtf8 lnk.span_LinkTraceId :: Text)
+          , "link_attributes" .= keyValueToJSONB lnk.span_LinkAttributes
+          , "link_dropped_attributes_count" .= fromIntegral lnk.span_LinkDroppedAttributesCount
+          , "link_flags" .= fromIntegral lnk.span_LinkFlags
+          ]
+    )
+      <$> lnks
 
 
 ---------------------------------------------------------------------------------------

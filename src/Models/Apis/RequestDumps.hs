@@ -24,6 +24,7 @@ module Models.Apis.RequestDumps (
   getLastSevenDaysTotalRequest,
   hasRequest,
   getTotalRequestToReport,
+  parseSDKType,
 )
 where
 
@@ -73,6 +74,7 @@ data SDKTypes
   | JsFastify
   | JavaSpringBoot
   | JsAxiosOutgoing
+  | JsOutgoing
   | DotNet
   | PythonFastApi
   | PythonFlask
@@ -97,6 +99,36 @@ instance ToField SDKTypes where
   toField sdkType = toField @String (show sdkType)
 
 
+parseSDKType :: Text -> SDKTypes
+parseSDKType "GoGin" = GoGin
+parseSDKType "GoBuiltIn" = GoBuiltIn
+parseSDKType "GoGorillaMux" = GoGorillaMux
+parseSDKType "GoFiber" = GoFiber
+parseSDKType "GoDefault" = GoDefault
+parseSDKType "GoOutgoing" = GoOutgoing
+parseSDKType "PhpLaravel" = PhpLaravel
+parseSDKType "PhpSymfony" = PhpSymfony
+parseSDKType "JsNest" = JsNest
+parseSDKType "JsFastify" = JsFastify
+parseSDKType "JavaSpringBoot" = JavaSpringBoot
+parseSDKType "JsAxiosOutgoing" = JsAxiosOutgoing
+parseSDKType "DotNet" = DotNet
+parseSDKType "PythonFastApi" = PythonFastApi
+parseSDKType "PythonFlask" = PythonFlask
+parseSDKType "PythonDjango" = PythonDjango
+parseSDKType "PythonOutgoing" = PythonOutgoing
+parseSDKType "JsAdonis" = JsAdonis
+parseSDKType "PhpSlim" = PhpSlim
+parseSDKType "GuzzleOutgoing" = GuzzleOutgoing
+parseSDKType "ElixirPhoenix" = ElixirPhoenix
+parseSDKType "PythonPyramid" = PythonPyramid
+parseSDKType "DotNetOutgoing" = DotNetOutgoing
+parseSDKType "TestkitOutgoing" = TestkitOutgoing
+parseSDKType "JavaSpring" = JavaSpring
+parseSDKType "JavaApacheOutgoing" = JavaApacheOutgoing
+parseSDKType "JavaVertx" = JavaVertx
+parseSDKType "JsOutgoing" = JsOutgoing
+parseSDKType _ = JsExpress
 instance FromField SDKTypes where
   fromField f mdata = do
     str <- fromField f mdata
@@ -174,6 +206,7 @@ normalizeUrlPath TestkitOutgoing statusCode _method urlPath = removeQueryParams 
 normalizeUrlPath JavaSpring statusCode _method urlPath = removeQueryParams statusCode urlPath
 normalizeUrlPath JavaApacheOutgoing statusCode _method urlPath = removeQueryParams statusCode urlPath
 normalizeUrlPath JavaVertx statusCode _method urlPath = removeQueryParams statusCode urlPath
+normalizeUrlPath JsOutgoing statusCode _method urlPath = removeQueryParams statusCode urlPath
 
 
 -- getRequestType ...
@@ -398,7 +431,6 @@ selectLogTable pid extraQuery cursorM dateRange projectedColsByUser source targe
   case resp of
     Left x -> pure $ Left x
     Right (q, queryComponents) -> do
-      traceShowM q
       logItems <- queryToValues q
       Only count <- fromMaybe (Only 0) <$> queryCount queryComponents.countQuery
       let logItemsV = V.mapMaybe valueToVector logItems

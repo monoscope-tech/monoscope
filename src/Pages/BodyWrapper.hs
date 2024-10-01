@@ -2,6 +2,7 @@ module Pages.BodyWrapper (bodyWrapper, BWConfig (..), PageCtx (..)) where
 
 import Data.CaseInsensitive qualified as CI
 import Data.Default (Default)
+import Data.Time (getCurrentTime)
 import Data.Vector qualified as Vector
 import Lucid
 import Lucid.Htmx (hxGet_)

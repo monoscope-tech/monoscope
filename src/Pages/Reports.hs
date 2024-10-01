@@ -36,38 +36,15 @@ import Data.Time.LocalTime (LocalTime (localDay), ZonedTime (zonedTimeToLocalTim
 import Data.Vector (Vector)
 import Data.Vector qualified as V
 import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
-import Lucid (
-  Html,
-  ToHtml (..),
-  a_,
-  checked_,
-  class_,
-  div_,
-  for_,
-  h3_,
-  h4_,
-  h5_,
-  href_,
-  id_,
-  img_,
-  input_,
-  label_,
-  name_,
-  p_,
-  small_,
-  span_,
-  src_,
-  style_,
-  table_,
-  tbody_,
-  td_,
-  th_,
-  thead_,
-  tr_,
-  type_,
-  value_,
+import Lucid
+import Lucid.Html5 (
+  aside_,
+  h2_,
+  li_,
+  placeholder_,
+  ul_,
  )
-import Lucid.Htmx (hxGet_, hxPost_, hxSwap_, hxTrigger_)
+import Lucid.Htmx (hxGet_, hxPost_, hxSwap_, hxTarget_, hxTrigger_)
 import Models.Apis.Anomalies qualified as Anomalies
 import Models.Apis.Fields.Types (textFieldTypeToText)
 import Models.Apis.Reports qualified as Reports
@@ -79,6 +56,7 @@ import Pages.BodyWrapper (BWConfig, PageCtx (..), currProject, pageTitle, sessM)
 import Relude
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders, addSuccessToast)
 import Text.Printf (printf)
+import Utils (faSprite_)
 
 
 data PerformanceReport = PerformanceReport
@@ -187,16 +165,17 @@ data ReportsGet
   | ReportsGetSingle (PageCtx (Projects.ProjectId, Maybe Reports.Report))
 
 
+-- this one has no PageCtx wrapping
 instance ToHtml ReportsGet where
   toHtml (ReportsGetMain (PageCtx conf (pid, reports, next, daily, weekly))) = toHtml $ PageCtx conf $ reportsPage pid reports next daily weekly
   toHtml (ReportsGetList pid reports next) = toHtml $ reportListItems pid reports next
-  toHtml (ReportsGetSingle (PageCtx conf (pid, report))) = toHtml $ PageCtx conf $ singleReportPage pid report
+  toHtml (ReportsGetSingle (PageCtx _ (pid, report))) = toHtml $ singleReportPage pid report
   toHtmlRaw = toHtml
 
 
 singleReportPage :: Projects.ProjectId -> Maybe Reports.Report -> Html ()
 singleReportPage pid report =
-  div_ [class_ "mx-auto w-full flex flex-col px-16 pt-10 pb-24  overflow-y-scroll h-full"] do
+  div_ [class_ "mx-auto w-full flex flex-col overflow-y-scroll h-full"] do
     h3_ [class_ "text-xl text-slate-700 flex place-items-center font-bold pb-4 border-b"] "Anomaly and Performance Report"
     case report of
       Just report' -> do
@@ -286,26 +265,51 @@ shapeParameterStats_ newF deletedF updatedFF = div_ [class_ "inline-block"] do
 
 reportsPage :: Projects.ProjectId -> Vector Reports.ReportListItem -> Text -> Bool -> Bool -> Html ()
 reportsPage pid reports nextUrl daily weekly =
-  div_ [class_ "mx-auto w-full flex flex-col px-16 pt-10 pb-24  overflow-y-scroll h-full"] do
-    h3_ [class_ "text-xl text-slate-700 flex place-items-center font-bold pb-4 border-b"] "Reports History"
-    div_ [class_ "mt-4 grid grid-cols-12 gap-4"] do
-      div_ [class_ "col-span-8"] do
+  div_ [class_ "flex flex-row h-screen bg-white"] do
+    div_ [class_ "w-1/3 border-r border-gray-200 p-4 overflow-y-auto"] do
+      div_ [class_ "mt-4"] do
         reportListItems pid reports nextUrl
 
+    div_ [class_ "w-2/3 p-4 overflow-y-auto"] do
+      div_ [class_ "flex items-center justify-center h-full", id_ "detailSidebar"] do
+        div_ [class_ "text-center"] do
+          faSprite_ "clapperboard" "light" "w-36 h-36 mx-auto"
+          h3_ [class_ "text-xl font-bold mb-4 text-slate-700"] "View Each Report Details here"
+          h3_ [class_ "mt-2 text-lg font-medium text-slate-900"] "But nothing is selected yet"
+          p_ [class_ "mt-1 text-sm text-slate-500"] "Select a field or similar item on the left"
+          p_ [class_ "mt-1 text-sm text-slate-500"] "to view more details about it here."
+
+
+-- div_ [class_ "w-5 bg-gray-200"] ""
 
 reportListItems :: Projects.ProjectId -> Vector Reports.ReportListItem -> Text -> Html ()
 reportListItems pid reports nextUrl =
-  div_ [class_ "space-y-4"] do
+  div_ [class_ "space-y-1 w-full"] do
     forM_ reports $ \report -> do
-      when (report.reportType == "weekly") $ do
-        div_ [class_ "mx-auto rounded-lg border max-w-[1000px]"] do
-          a_ [class_ "bg-gray-100 px-4 py-3 flex justify-between", href_ $ "/p/" <> show pid.unProjectId <> "/reports/" <> show report.id.reportId] do
-            h4_ [class_ "text-xl font-medium capitalize"] $ toHtml report.reportType <> " report"
-            span_ [] $ show $ localDay (zonedTimeToLocalTime report.createdAt)
-          div_ [class_ "px-4 py-3 space-y-8"] pass
-    if length reports < 20
-      then pass
-      else a_ [class_ "max-w-[800px] mx-auto cursor-pointer block p-1 blue-800 bg-blue-100 hover:bg-blue-200 text-center", hxTrigger_ "click", hxSwap_ "outerHTML", hxGet_ nextUrl] "LOAD MORE"
+      let isWeeklyData = report.reportType == "weekly"
+
+      div_ [class_ $ "w-full flex flex-col"] do
+        div_ [class_ $ if isWeeklyData then "w-full bg-gray-100" else "w-11/12 self-end "] do
+          a_
+            [ class_ "w-full px-4 py-3 flex justify-between hover:bg-gray-200 cursor-pointer"
+            , hxGet_ $ "/p/" <> show pid.unProjectId <> "/reports/" <> show report.id.reportId
+            , hxTarget_ "#detailSidebar"
+            , hxSwap_ "innerHTML"
+            ]
+            do
+              div_ [class_ "flex flex-col flex-grow"] do
+                h4_ [class_ "text-xl font-medium capitalize"] $ toHtml report.reportType <> " Report"
+                span_ [class_ "text-sm text-gray-500"] $ toHtml $ formatTime defaultTimeLocale "%a, %b %d %Y" (zonedTimeToLocalTime report.createdAt)
+
+              div_ [class_ "ml-4 flex items-center"] do
+                i_ [class_ "fa fa-arrow-right text-gray-500"] mempty
+
+    when (length reports < 20) $ do
+      div_ [class_ "w-full h-16 center-item my-200"] do
+        p_ [class_ "text-center text-blue-100"] "The End: No more report to display"
+
+    unless (length reports < 20) $ do
+      a_ [class_ "w-full cursor-pointer block p-1 blue-800 bg-blue-100 hover:bg-blue-200 text-center mb-4", hxTrigger_ "click", hxSwap_ "outerHTML", hxGet_ nextUrl] "LOAD MORE"
 
 
 renderEndpointRow :: PerformanceReport -> Html ()
