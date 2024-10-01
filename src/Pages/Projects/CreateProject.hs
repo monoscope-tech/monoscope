@@ -402,12 +402,9 @@ createProjectBody sess envCfg isUpdate cp cpe = do
                         input_ [onchange_ "handlePlanToggle()", value_ "month", type_ "radio", name_ "plans", role_ "tab", class_ "tab", term "aria-label" "Monthly", checked_]
                         input_ [onchange_ "handlePlanToggle()", value_ "annual", type_ "radio", name_ "plans", role_ "tab", class_ "tab", term "aria-label" "Annual"]
                     div_ [class_ "text-lg py-3 px-2"] do
-                      span_ [class_ "text-2xl text-blue-700", id_ "price"] $ toHtml "$19"
+                      span_ [class_ "text-2xl text-blue-700", id_ "price"] $ toHtml "$34"
                       span_ [class_ "text-slate-500", id_ "num_requests"] "/400k"
-                      span_ [class_ "text-slate-500 mr-3"] " requests"
-                      p_ [class_ "text-blue-500 inline-block mt-0 text-sm text-green-500 font-semibold"] do
-                        span_ [] "save "
-                        span_ [id_ "save_container"] "$1/month"
+                      span_ [class_ "text-slate-500 mr-3"] " requests per month"
                       span_ [class_ "text-blue-500 text-sm block mt-2"] "then $1 per 20k requests"
                     div_ [] do
                       input_ [type_ "range", min_ "0", max_ "6", step_ "1", value_ "0", class_ "range range-primary range-sm", id_ "price_range"]
@@ -499,32 +496,26 @@ createProjectBody sess envCfg isUpdate cp cpe = do
                const price_indicator = document.querySelector("#price_range");
                window.graduatedRangeUrl = "$graduatedCheckoutOne"
                let plan = "month";
-               const prices = [19, 49, 88, 215, 420, 615, 800]
-               const saves = [1, 6, 12, 35, 80, 135, 200]
-               const reqs = ["400k","1.1M", "2M", "5M", "10M", "15M", "10M"]
-               const pricesYr = [200, 588, 1056, 2580, 5000, 5000, 5000]
-               const savesYr = [28, 72,144,420,960,960,960]
-               const reqsYr = ["4.8M", "13.2M", "24M", "60M", "120M", "120M", "120M"]
+               const prices = [34, 49, 88, 215, 420, 615, 800]
+               const reqs = ["400k","1.1M", "2M", "5M", "10M", "15M", "20M"]
+               const pricesYr = [29, 34, 61, 150, 294, 294, 294]
+               const reqsYr = ["400k","1.1M", "2M", "5M", "10M", "10M", "10M"]
                const urls = $lmnUrls
                const urlsAnnual = $lmnUrlAnnual
                const priceContainer = document.querySelector("#price")
                const reqsContainer = document.querySelector("#num_requests")
-               const saveContainer = document.querySelector("#save_container")
                function priceChange() {
                  const value = price_indicator.value
                  let price = prices[value]
                  let num_reqs = reqs[value]
-                 let sav = saves[value] + "/month"
                  window.graduatedRangeUrl = urls[value]
                  if(plan === "annual") {
                     price = pricesYr[value]
                     num_reqs = reqsYr[value]
-                    sav = savesYr[value] + "/year"
                     window.graduatedRangeUrl = urlsAnnual[value]
                   }
                  priceContainer.innerText = "$" + price
                  reqsContainer.innerText = "/" + num_reqs
-                 saveContainer.innerText = "$" + sav
 
                }
                price_indicator.addEventListener('input', priceChange)
