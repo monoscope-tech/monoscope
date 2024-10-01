@@ -286,24 +286,27 @@ reportListItems :: Projects.ProjectId -> Vector Reports.ReportListItem -> Text -
 reportListItems pid reports nextUrl =
   div_ [class_ "space-y-1 w-full"] do
     forM_ reports $ \report -> do
-      when (report.reportType == "weekly") $ do
-        a_
-          [ class_ "w-full rounded bg-gray-100 px-4 py-3 flex justify-between hover:bg-gray-200 cursor-pointer"
-          , hxGet_ $ "/p/" <> show pid.unProjectId <> "/reports/" <> show report.id.reportId
-          , hxTarget_ "#detailSidebar"
-          , hxSwap_ "innerHTML"
-          ]
-          do
-            div_ [class_ "flex flex-col flex-grow"] do
-              h4_ [class_ "text-xl font-medium capitalize"] $ toHtml report.reportType <> " report"
-              span_ [class_ "text-sm text-gray-500"] $ show $ localDay (zonedTimeToLocalTime report.createdAt)
+      let isWeeklyData = report.reportType == "weekly"
 
-            div_ [class_ "ml-4"] do
-              faSprite_ "arrow-right" "regular" "text-gray-500"
+      div_ [class_ $ "w-full flex flex-col"] do
+        div_ [class_ $ if isWeeklyData then "w-full bg-gray-100" else "w-11/12 self-end "] do
+          a_
+            [ class_ "w-full px-4 py-3 flex justify-between hover:bg-gray-200 cursor-pointer"
+            , hxGet_ $ "/p/" <> show pid.unProjectId <> "/reports/" <> show report.id.reportId
+            , hxTarget_ "#detailSidebar"
+            , hxSwap_ "innerHTML"
+            ]
+            do
+              div_ [class_ "flex flex-col flex-grow"] do
+                h4_ [class_ "text-xl font-medium capitalize"] $ toHtml report.reportType <> " Report"
+                span_ [class_ "text-sm text-gray-500"] $ toHtml $ formatTime defaultTimeLocale "%a, %b %d %Y" (zonedTimeToLocalTime report.createdAt)
 
-    -- when (length reports < 20) $ do
-    --   div_ [class_ "w-full h-16 center-item my-200"] do
-    --     p_ [class_ "text-center text-blue-600"] "The End: No more report to display"
+              div_ [class_ "ml-4 flex items-center"] do
+                i_ [class_ "fa fa-arrow-right text-gray-500"] mempty
+
+    when (length reports < 20) $ do
+      div_ [class_ "w-full h-16 center-item my-200"] do
+        p_ [class_ "text-center text-blue-100"] "The End: No more report to display"
 
     unless (length reports < 20) $ do
       a_ [class_ "w-full cursor-pointer block p-1 blue-800 bg-blue-100 hover:bg-blue-200 text-center mb-4", hxTrigger_ "click", hxSwap_ "outerHTML", hxGet_ nextUrl] "LOAD MORE"

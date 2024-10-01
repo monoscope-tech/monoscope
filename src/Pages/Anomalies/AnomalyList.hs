@@ -319,10 +319,9 @@ issueItem hideByDefault currTime issue timeFilter icon title subTitle content = 
     div_ [class_ "space-y-3 grow"] do
       div_ [class_ "space-x-3"] do
         let modalEndpoint = "/p/" <> issue.projectId.toText <> "/anomalies/by_hash/" <> issue.targetHash <> "?modal=True"
-        a_ [hxGet_ modalEndpoint, hxTarget_ ("#expand-log-drawer-" <> issue.targetHash), hxTrigger_ "click", class_ "inline-block font-bold text-blue-700 space-x-2 cursor-pointer", termRaw "preload" "mouseover"]
-          $ do
-            img_ [src_ icon, class_ "inline w-4 h-4"]
-          >> span_ (toHtml title)
+        Components.drawerWithURLContent_ ("expand-log-drawer-" <> issue.targetHash) (Just modalEndpoint) $ span_ [class_ "flex items-center justify-center cursor-pointer py-2 px-3 rounded border border-gray-200 text-xs hover:shadow shadow-blue-100"] do
+          img_ [src_ icon, class_ "inline w-4 h-4"]
+          span_ (toHtml title)
         small_ [class_ "inline-block text-gray-800"] $ fromMaybe (toHtml @String "") subTitle
       div_ [class_ "flex flex-row gap-8"] do
         div_ do
