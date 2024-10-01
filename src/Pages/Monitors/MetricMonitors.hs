@@ -144,13 +144,13 @@ errorLogsContent =
 
 timelineSteps :: Projects.ProjectId -> Components.TimelineSteps
 timelineSteps pid =
-  Components.TimelineSteps $
-    [ Components.TimelineStep "Choose the detection method" chooseDetectionMethod_
-    , Components.TimelineStep "Define the metric" (defineTheMetric_ pid)
-    , Components.TimelineStep "Set alert conditions" alertConditions_
-    , Components.TimelineStep "Configure notification message" configureNotificationMessage_
-    , Components.TimelineStep "Configure notification Channels" configureNotificationChannels_
-    ]
+  Components.TimelineSteps
+    $ [ Components.TimelineStep "Choose the detection method" chooseDetectionMethod_
+      , Components.TimelineStep "Define the metric" (defineTheMetric_ pid)
+      , Components.TimelineStep "Set alert conditions" alertConditions_
+      , Components.TimelineStep "Configure notification message" configureNotificationMessage_
+      , Components.TimelineStep "Configure notification Channels" configureNotificationChannels_
+      ]
 
 
 -- Content placeholders for TimelineSteps

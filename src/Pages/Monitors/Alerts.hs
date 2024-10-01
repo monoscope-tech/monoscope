@@ -288,8 +288,8 @@ editAlert_ pid monitorM = do
             forM_ monitor.alertConfig.slackChannels addRecipientSlackTmpl_
 
       div_ [class_ "py-5"] do
-        button_ [type_ "submit", class_ "btn btn-success"] $
-          if isNewMonitor
+        button_ [type_ "submit", class_ "btn btn-success"]
+          $ if isNewMonitor
             then "Create Alert"
             else "Update Alert"
 
@@ -430,6 +430,7 @@ instance ToHtml MonitorCreate where
   toHtml MCSelectType = toHtml monitorSelectType_
   toHtml (MCMetric pid metricType) = toHtml $ monitorMetric_ pid Nothing
   toHtml (MCAPITests pid metricType) = toHtml $ monitorAPITests_ pid Nothing
+
 
 monitorAPITests_ :: Projects.ProjectId -> Maybe Monitors.QueryMonitor -> Html ()
 monitorAPITests_ pid monitorM = do
@@ -572,7 +573,6 @@ monitorMetric_ pid monitorM = section_ [class_ "px-8 py-5 space-y-5 group/pg ove
       button_ [class_ "btn btn-sm btn-secondary"] "Create"
 
 
-
 monitorSelectType_ :: Html ()
 monitorSelectType_ = section_ [class_ "px-8 py-5 space-y-5 group/pg"] do
   h2_ [class_ "text-2xl py-3"] "Select a Monitor type"
@@ -684,7 +684,7 @@ monitorCreatePostH pid monitorType = do
           { sessM = Just sess.persistentSession
           , currProject = Just project
           , pageTitle = "Create Monitor"
-          , pageActions = Just $ Components.timepicker_ (Just "log_explorer_form") Nothing 
+          , pageActions = Just $ Components.timepicker_ (Just "log_explorer_form") Nothing
           }
   case monitorType of
     Just "errors" -> addRespHeaders $ PageCtx bwconf (MCMetric pid "errors")

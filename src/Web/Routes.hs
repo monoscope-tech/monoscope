@@ -60,41 +60,44 @@ import Web.ClientMetadata qualified as ClientMetadata
 import Web.Cookie (SetCookie)
 import Web.Error
 
+
 type role Routes nominal
 
+
 data Routes mode = Routes
-  { public :: mode :- "public" :> Servant.Raw,
-    cookieProtected :: mode :- AuthProtect "optional-cookie-auth" :> Servant.NamedRoutes CookieProtectedRoutes,
-    ping :: mode :- "ping" :> Get '[PlainText] Text,
-    status :: mode :- "status" :> Get '[JSON] Status,
-    login :: mode :- "login" :> GetRedirect '[HTML] (Headers '[Header "Location" Text, Header "Set-Cookie" SetCookie] NoContent),
-    toLogin :: mode :- "to_login" :> GetRedirect '[HTML] (Headers '[Header "Location" Text, Header "Set-Cookie" SetCookie] NoContent),
-    logout :: mode :- "logout" :> GetRedirect '[HTML] (Headers '[Header "Location" Text, Header "Set-Cookie" SetCookie] NoContent),
-    authCallback :: mode :- "auth_callback" :> QPT "code" :> QPT "state" :> GetRedirect '[HTML] (Headers '[Header "Location" Text, Header "Set-Cookie" SetCookie] (Html ())),
-    shareLinkGet :: mode :- "share" :> "r" :> Capture "shareID" UUID.UUID :> Get '[HTML] Share.ShareLinkGet,
-    slackLinkProjectGet :: mode :- "slack" :> "oauth" :> "callback" :> Capture "project_id" Projects.ProjectId :> QPT "code" :> Get '[HTML] SlackInstall.SlackLink,
-    clientMetadata :: mode :- "api" :> "client_metadata" :> Header "Authorization" Text :> Get '[JSON] ClientMetadata.ClientMetadata,
-    lemonWebhook :: mode :- "webhook" :> "lemon-squeezy" :> Header "X-Signature" Text :> ReqBody '[JSON] LemonSqueezy.WebhookData :> Post '[HTML] (Html ())
+  { public :: mode :- "public" :> Servant.Raw
+  , cookieProtected :: mode :- AuthProtect "optional-cookie-auth" :> Servant.NamedRoutes CookieProtectedRoutes
+  , ping :: mode :- "ping" :> Get '[PlainText] Text
+  , status :: mode :- "status" :> Get '[JSON] Status
+  , login :: mode :- "login" :> GetRedirect '[HTML] (Headers '[Header "Location" Text, Header "Set-Cookie" SetCookie] NoContent)
+  , toLogin :: mode :- "to_login" :> GetRedirect '[HTML] (Headers '[Header "Location" Text, Header "Set-Cookie" SetCookie] NoContent)
+  , logout :: mode :- "logout" :> GetRedirect '[HTML] (Headers '[Header "Location" Text, Header "Set-Cookie" SetCookie] NoContent)
+  , authCallback :: mode :- "auth_callback" :> QPT "code" :> QPT "state" :> GetRedirect '[HTML] (Headers '[Header "Location" Text, Header "Set-Cookie" SetCookie] (Html ()))
+  , shareLinkGet :: mode :- "share" :> "r" :> Capture "shareID" UUID.UUID :> Get '[HTML] Share.ShareLinkGet
+  , slackLinkProjectGet :: mode :- "slack" :> "oauth" :> "callback" :> Capture "project_id" Projects.ProjectId :> QPT "code" :> Get '[HTML] SlackInstall.SlackLink
+  , clientMetadata :: mode :- "api" :> "client_metadata" :> Header "Authorization" Text :> Get '[JSON] ClientMetadata.ClientMetadata
+  , lemonWebhook :: mode :- "webhook" :> "lemon-squeezy" :> Header "X-Signature" Text :> ReqBody '[JSON] LemonSqueezy.WebhookData :> Post '[HTML] (Html ())
   }
   deriving stock (Generic)
 
-server ::
-  Pool PG.Connection ->
-  Routes (AsServerT ATBaseCtx)
+
+server
+  :: Pool PG.Connection
+  -> Routes (AsServerT ATBaseCtx)
 server pool =
   Routes
-    { public = Servant.serveDirectoryWebApp "./static/public",
-      ping = pingH,
-      status = statusH,
-      login = Auth.loginH,
-      toLogin = Auth.loginRedirectH,
-      logout = Auth.logoutH,
-      authCallback = Auth.authCallbackH,
-      shareLinkGet = Share.shareLinkGetH,
-      slackLinkProjectGet = SlackInstall.linkProjectGetH,
-      clientMetadata = ClientMetadata.clientMetadataH,
-      lemonWebhook = LemonSqueezy.webhookPostH,
-      cookieProtected = \sessionWithCookies ->
+    { public = Servant.serveDirectoryWebApp "./static/public"
+    , ping = pingH
+    , status = statusH
+    , login = Auth.loginH
+    , toLogin = Auth.loginRedirectH
+    , logout = Auth.logoutH
+    , authCallback = Auth.authCallbackH
+    , shareLinkGet = Share.shareLinkGetH
+    , slackLinkProjectGet = SlackInstall.linkProjectGetH
+    , clientMetadata = ClientMetadata.clientMetadataH
+    , lemonWebhook = LemonSqueezy.webhookPostH
+    , cookieProtected = \sessionWithCookies ->
         Servant.hoistServerWithContext
           (Proxy @(Servant.NamedRoutes CookieProtectedRoutes))
           (Proxy @'[APItoolkitAuthContext])
@@ -107,7 +110,9 @@ server pool =
           cookieProtectedServer
     }
 
+
 type role CookieProtectedRoutes nominal
+
 
 data CookieProtectedRoutes mode = CookieProtectedRoutes
   { dashboardGet :: mode :- "p" :> ProjectId :> QPT "from" :> QPT "to" :> QPT "since" :> Get '[HTML] (RespHeaders (PageCtx Dashboard.DashboardGet))
@@ -139,36 +144,38 @@ data CookieProtectedRoutes mode = CookieProtectedRoutes
   }
   deriving stock (Generic)
 
+
 cookieProtectedServer :: Servant.ServerT (Servant.NamedRoutes CookieProtectedRoutes) ATAuthCtx
 cookieProtectedServer =
   CookieProtectedRoutes
-    { dashboardGet = Dashboard.dashboardGetH,
-      projects = ProjectsRoutes.server,
-      onboardingGet = Onboarding.onboardingGetH,
-      logExplorer = LogExplorerRoutes.server,
-      anomalies = AnomaliesRoutes.server,
-      endpoints = EndpointsRoutes.server,
-      monitors = MonitorsRoutes.server,
-      specification = SpecificationRoutes.server,
-      traces = TracesRoutes.server,
-      apiGet = Api.apiGetH,
-      apiDelete = Api.apiDeleteH,
-      apiPost = Api.apiPostH,
-      slackInstallPost = SlackInstall.postH,
-      slackUpdateWebhook = SlackInstall.updateWebHook,
-      reportsGet = Reports.reportsGetH,
-      reportsSingleGet = Reports.singleReportGetH,
-      reportsPost = Reports.reportsPostH,
-      shareLinkPost = Share.shareLinkPostH,
-      queryBuilderAutocomplete = AutoComplete.getH,
-      swaggerGenerateGet = GenerateSwagger.generateGetH,
-      chartsGet = Charts.chartsGetH,
-      surveyPut = Survey.surveyPutH,
-      surveyGet = Survey.surveyGetH,
-      editField = FieldDetails.fieldPutH,
-      integrationGuides = IntegrationGuides.getH,
-      manageBillingGet = LemonSqueezy.manageBillingGetH
+    { dashboardGet = Dashboard.dashboardGetH
+    , projects = ProjectsRoutes.server
+    , onboardingGet = Onboarding.onboardingGetH
+    , logExplorer = LogExplorerRoutes.server
+    , anomalies = AnomaliesRoutes.server
+    , endpoints = EndpointsRoutes.server
+    , monitors = MonitorsRoutes.server
+    , specification = SpecificationRoutes.server
+    , traces = TracesRoutes.server
+    , apiGet = Api.apiGetH
+    , apiDelete = Api.apiDeleteH
+    , apiPost = Api.apiPostH
+    , slackInstallPost = SlackInstall.postH
+    , slackUpdateWebhook = SlackInstall.updateWebHook
+    , reportsGet = Reports.reportsGetH
+    , reportsSingleGet = Reports.singleReportGetH
+    , reportsPost = Reports.reportsPostH
+    , shareLinkPost = Share.shareLinkPostH
+    , queryBuilderAutocomplete = AutoComplete.getH
+    , swaggerGenerateGet = GenerateSwagger.generateGetH
+    , chartsGet = Charts.chartsGetH
+    , surveyPut = Survey.surveyPutH
+    , surveyGet = Survey.surveyGetH
+    , editField = FieldDetails.fieldPutH
+    , integrationGuides = IntegrationGuides.getH
+    , manageBillingGet = LemonSqueezy.manageBillingGetH
     }
+
 
 -- | The context that will be made available to request handlers. We supply the
 -- "cookie-auth"-tagged request handler defined above, so that the 'HasServer' instance
@@ -176,9 +183,11 @@ cookieProtectedServer =
 genAuthServerContext :: Logger -> AuthContext -> Servant.Context '[APItoolkitAuthContext, Servant.ErrorFormatters]
 genAuthServerContext logger env = authHandler logger env :. errorFormatters env :. EmptyContext
 
+
 errorFormatters :: AuthContext -> Servant.ErrorFormatters
 errorFormatters env =
-  Servant.defaultErrorFormatters {Servant.notFoundErrorFormatter = notFoundPage env}
+  Servant.defaultErrorFormatters{Servant.notFoundErrorFormatter = notFoundPage env}
+
 
 notFoundPage :: AuthContext -> Servant.NotFoundErrorFormatter
 notFoundPage env _req =
@@ -187,15 +196,17 @@ notFoundPage env _req =
         Left err -> err
         Right _ -> Servant.err404
 
+
 data Status = Status
-  { dbVersion :: Maybe Text,
-    gitHash :: Text,
-    gitCommitDate :: Text
+  { dbVersion :: Maybe Text
+  , gitHash :: Text
+  , gitCommitDate :: Text
   }
   deriving stock (Generic)
   deriving
     (FromJSON, ToJSON)
     via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] Status
+
 
 statusH :: ATBaseCtx Status
 statusH = do
@@ -205,14 +216,16 @@ statusH = do
   let gi = $$tGitInfoCwd
   pure
     Status
-      { dbVersion = version,
-        gitHash = toText $ giHash gi,
-        gitCommitDate = toText $ giCommitDate gi
+      { dbVersion = version
+      , gitHash = toText $ giHash gi
+      , gitCommitDate = toText $ giCommitDate gi
       }
+
 
 pingH :: ATBaseCtx Text
 pingH = do
   pure "pong"
+
 
 -- When bystring is returned for json, simply return the bytestring
 instance Servant.MimeRender JSON ByteString where
