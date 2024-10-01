@@ -7,16 +7,14 @@ import Data.HashMap.Strict qualified as HM
 import Data.Text qualified as T
 import Data.Time.Format (defaultTimeLocale, formatTime)
 import Data.Vector qualified as V
-import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
 import Lucid
 import Lucid.Hyperscript (__)
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Telemetry (SpanRecord (..))
 import Models.Telemetry.Telemetry qualified as Telemetry
 import NeatInterpolation (text)
-import Pages.Traces.Utils (getRequestDetails, getServiceColor, getServiceName)
+import Pages.Traces.Utils (getRequestDetails, getServiceName)
 import Relude
-import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
 import Utils
 
 

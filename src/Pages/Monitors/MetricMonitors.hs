@@ -2,16 +2,8 @@ module Pages.Monitors.MetricMonitors (monitorCreateGetH, MonitorCreate, configur
 
 import Data.CaseInsensitive qualified as CI
 import Data.Default
-import Data.Either.Extra (fromRight')
 import Data.List (groupBy)
-import Data.Time.Clock (UTCTime)
-import Data.UUID qualified as UUID
-import Data.UUID.V4 qualified as UUID
-import Data.Vector qualified as V
-import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
-import Effectful.Time qualified as Time
 import Lucid
-import Lucid.Base
 import Lucid.Htmx
 import Lucid.Hyperscript (__)
 import Models.Apis.Monitors qualified as Monitors
@@ -21,14 +13,11 @@ import NeatInterpolation (text)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
 import Pages.Log qualified as LogList
 import Pkg.Components qualified as Components
-import Pkg.Parser (defSqlQueryCfg, finalAlertQuery, fixedUTCTime, parseQueryToComponents, presetRollup)
 import Pkg.THUtils qualified as THUtils
 import Relude
-import Relude.Unsafe qualified as Unsafe
 import System.Types
 import Text.Slugify
 import Utils
-import Web.FormUrlEncoded (FromForm)
 
 
 data MonitorCreate
@@ -167,7 +156,7 @@ chooseDetectionMethod_ = do
 
 defineTheMetric_ :: Projects.ProjectId -> Html ()
 defineTheMetric_ pid = do
-  div_ [class_ " max-w-[750px]"] $ LogList.logQueryBox_ pid Nothing "requests"
+  div_ [class_ " max-w-[750px]"] $ LogList.logQueryBox_ pid Nothing "requests" Nothing
   div_ [class_ "border-l-2 border-l-slate-300 pl-4 space-y-2"] do
     h3_ [class_ "font-normal text-base"] "Evaluation Details"
     div_ [class_ "flex items-center gap-2"] do
