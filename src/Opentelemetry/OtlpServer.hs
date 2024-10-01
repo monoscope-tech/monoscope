@@ -84,15 +84,21 @@ processList msgs attrs = do
       let (ackIds, spansVec) = V.unzip results
           spans = join spansVec
           apitoolkitSpans =
-            V.filter
+            V.map
               ( \s ->
                   case s.instrumentationScope of
-                    AE.Object v -> KEM.lookup "name" v == Just "@opentelemetry/instrumentation-undici" || KEM.lookup "name" v == Just "@opentelemetry/instrumentation-http"
-                    _ -> False
+                    AE.Object v -> if httpScope then Just $ convertSpanToRequestMessage s scopeName else Nothing
+                      where
+                        y = KEM.lookup "name" v
+                        scopeName =
+                          if y == Just "@opentelemetry/instrumentation-undici"
+                            then "@opentelemetry/instrumentation-undici"
+                            else "@opentelemetry/instrumentation-http"
+                        httpScope = y == Just "@opentelemetry/instrumentation-undici" || y == Just "@opentelemetry/instrumentation-http"
+                    _ -> Nothing
               )
               spans
-          r = (\x -> ("", convertSpanToRequestMessage x)) <$> apitoolkitSpans
-      _ <- ProcessMessage.processRequestMessages $ V.toList r
+      _ <- ProcessMessage.processRequestMessages $ V.toList $ V.catMaybes apitoolkitSpans <&> ("",)
       Telemetry.bulkInsertSpans $ V.filter (\s -> s.spanName /= "apitoolkit-custom-span") spans
       pure $ V.toList ackIds
     Just "org.opentelemetry.otlp.metrics.v1" -> do
@@ -272,15 +278,21 @@ traceServiceExportH appLogger appCtx (ServerNormalRequest _meta (ExportTraceServ
   _ <- runBackground appLogger appCtx do
     let spanRecords = join $ V.map convertToSpan req
         apitoolkitSpans =
-          V.filter
+          V.map
             ( \s ->
                 case s.instrumentationScope of
-                  AE.Object v -> KEM.lookup "name" v == Just "@opentelemetry/instrumentation-undici" || KEM.lookup "name" v == Just "@opentelemetry/instrumentation-http"
-                  _ -> False
+                  AE.Object v -> if httpScope then Just $ convertSpanToRequestMessage s scopeName else Nothing
+                    where
+                      y = KEM.lookup "name" v
+                      scopeName =
+                        if y == Just "@opentelemetry/instrumentation-undici"
+                          then "@opentelemetry/instrumentation-undici"
+                          else "@opentelemetry/instrumentation-http"
+                      httpScope = y == Just "@opentelemetry/instrumentation-undici" || y == Just "@opentelemetry/instrumentation-http"
+                  _ -> Nothing
             )
             spanRecords
-        r = (\x -> ("", convertSpanToRequestMessage x)) <$> apitoolkitSpans
-    _ <- ProcessMessage.processRequestMessages $ V.toList r
+    _ <- ProcessMessage.processRequestMessages $ V.toList $ V.catMaybes apitoolkitSpans <&> ("",)
     Telemetry.bulkInsertSpans $ V.filter (\s -> s.spanName /= "apitoolkit-custom-span") spanRecords
   return (ServerNormalResponse (ExportTraceServiceResponse Nothing) mempty StatusOk "")
 
@@ -308,8 +320,8 @@ parseSpanStatus st = case st of
   _ -> Nothing
 
 
-convertSpanToRequestMessage :: Telemetry.SpanRecord -> RequestMessage
-convertSpanToRequestMessage sp =
+convertSpanToRequestMessage :: Telemetry.SpanRecord -> Text -> RequestMessage
+convertSpanToRequestMessage sp instrumentationScope =
   RequestMessage
     { duration = fromInteger sp.spanDurationNs
     , host = host
@@ -343,7 +355,6 @@ convertSpanToRequestMessage sp =
     errors = AE.decode $ encodeUtf8 $ fromMaybe "" $ getSpanAttribute "apitoolkit.errors" sp.attributes
     messageId = UUID.fromText $ fromMaybe "" $ getSpanAttribute "apitoolkit.msg_id" sp.attributes
     parentId = UUID.fromText $ fromMaybe "" $ getSpanAttribute "apitoolkit.parent_id" sp.attributes
-    rawUrl = fromMaybe "" $ getSpanAttribute "http.target" sp.attributes
     referer = Just $ Left (fromMaybe "" $ getSpanAttribute "http.request.headers.referer" sp.attributes) :: Maybe (Either Text [Text])
     requestBody = fromMaybe "" $ getSpanAttribute "http.request.body" sp.attributes
     (requestHeaders, responseHeaders) = case sp.attributes of
@@ -354,7 +365,14 @@ convertSpanToRequestMessage sp =
     responseStatus' = (readMaybe . toString =<< getSpanAttribute "http.status_code" sp.attributes) :: Maybe Double
     status = round $ fromMaybe (fromMaybe 0.0 responseStatus') responseStatus
     sdkType = RequestDumps.parseSDKType $ fromMaybe "" $ getSpanAttribute "apitoolkit.sdk_type" sp.attributes
-    urlPath = getSpanAttribute "http.route" sp.attributes
+    urlPath' = getSpanAttribute "http.route" sp.attributes
+    undUrlPath = getSpanAttribute "url.path" sp.attributes
+    urlPath = if instrumentationScope == "@opentelemetry/instrumentation-undici" then undUrlPath else urlPath'
+    rawUrl' = fromMaybe "" $ getSpanAttribute "http.target" sp.attributes
+    rawUrl =
+      if instrumentationScope == "@opentelemetry/instrumentation-undici"
+        then fromMaybe "" undUrlPath <> fromMaybe "" (getSpanAttribute "url.query" sp.attributes)
+        else rawUrl'
 
 
 getValsWithPrefix :: Text -> AE.Object -> AE.Value
