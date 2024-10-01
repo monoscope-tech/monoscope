@@ -8,7 +8,8 @@ module Pages.Monitors.TestCollectionEditor (
   CollectionGet,
   CollectionRunTest,
   CollectionMut (..),
-) where
+)
+where
 
 import Data.Aeson (encode)
 import Data.Aeson qualified as AE
@@ -32,12 +33,15 @@ import Lucid.Htmx (
   hxTarget_,
   hxVals_,
  )
+import Lucid.Hyperscript (__)
 import Models.Projects.Projects qualified as Projects
 import Models.Tests.TestToDump qualified as TestToDump
 import Models.Tests.Testing qualified as Testing
 import Models.Users.Sessions qualified as Sessions
 import NeatInterpolation (text)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
+import Pages.Monitors.MetricMonitors qualified as MetricMonitors
+import Pkg.Components qualified as Components
 import Pkg.Components.Modals qualified as Components
 import PyF (fmt)
 import Relude hiding (ask)
@@ -97,7 +101,7 @@ castToStepResult v = case AE.eitherDecodeStrictText (decodeUtf8 $ AE.encode v) o
 
 pageTabs :: Text -> Html ()
 pageTabs url = do
-  div_ [class_ "tabs tabs-boxed border"] do
+  div_ [class_ "tabs tabs-boxed tabs-outline items-center border"] do
     a_ [href_ $ url <> "/overview", role_ "tab", class_ "tab"] "Overview"
     a_ [href_ url, role_ "tab", class_ "tab tab-active"] "Test editor"
 
@@ -193,6 +197,56 @@ testSettingsModalContent_ isUpdate col = div_ [class_ "space-y-5 w-96"] do
   div_ $ button_ [class_ "btn btn-bordered btn-primary", type_ "submit"] $ if isUpdate then "Update" else "Create Test"
 
 
+-- Timeline steps
+
+timelineSteps :: Projects.ProjectId -> Components.TimelineSteps
+timelineSteps pid =
+  Components.TimelineSteps
+    $ [ Components.TimelineStep "Define API test" defineTestSteps_
+      , Components.TimelineStep "Name and tag your test" nameOfTest_
+      , -- , Components.TimelineStep "Select locations" (defineTheMetric_ pid)
+        Components.TimelineStep "Define retry conditions" (MetricMonitors.configureNotificationMessage_)
+      , Components.TimelineStep "Define Scheduling and alert conditions" (MetricMonitors.configureNotificationChannels_)
+      ]
+
+
+nameOfTest_ :: Html ()
+nameOfTest_ = div_ [class_ "form-control w-full"] do
+  label_ [class_ "label hidden"] $ span_ [class_ "label-text"] "Name"
+  input_ [placeholder_ "Give your test a name", class_ "input input-sm input-bordered  w-full", name_ "subject", value_ ""]
+
+
+defineTestSteps_ :: Html ()
+defineTestSteps_ = do
+  div_ [class_ "alert"] do
+    faSprite_ "sparkles" "regular" "w-7 h-7 text-success "
+    div_ [] do
+      p_ [] "Link multiple steps by creating variables from the request response data."
+      p_ [] "When using variables, remember that step order matters"
+    div_ [] do
+      a_ [[__|on click remove the closest parent <.alert/>|]] $ faSprite_ "xmark" "regular" "w-5 h-5"
+  div_ [class_ "shrink p-4 flex justify-between items-center"] do
+    div_ [class_ "flex items-center space-x-4"] ""
+    div_ [class_ "space-x-4 flex items-center"] do
+      a_ [href_ "https://apitoolkit.io/docs/dashboard/dashboard-pages/api-tests/", target_ "_blank", class_ "text-sm flex items-center gap-1 text-blue-500"] do
+        faSprite_ "link-simple" "regular" "w-4 h-4" >> "Docs"
+      button_
+        [ class_ "btn btn-sm btn-success"
+        , hxPatch_ ""
+        , hxParams_ "stepsData"
+        , hxExt_ "json-enc"
+        , hxVals_ "js:{stepsData: saveStepData()}"
+        , hxTarget_ "#step-results-parent"
+        , hxSwap_ "innerHTML"
+        , hxIndicator_ "#step-results-indicator"
+        ]
+        (span_ "Run all" >> faSprite_ "play" "solid" "w-3 h-3")
+      label_ [class_ "relative inline-flex items-center cursor-pointer space-x-2"] do
+        input_ [type_ "checkbox", class_ "toggle editormode", onchange_ "codeToggle(event)"] >> span_ [class_ "text-sm"] "Code"
+  div_ [class_ "overflow-y-hidden flex-1 "] $ termRaw "assertion-builder" [id_ ""] ""
+  div_ [class_ "overflow-y-hidden flex-1 "] $ termRaw "steps-editor" [id_ "stepsEditor"] ""
+
+
 collectionPage :: Projects.ProjectId -> Testing.Collection -> Maybe (V.Vector Testing.StepResult) -> String -> Html ()
 collectionPage pid col col_rn respJson = do
   let collectionStepsJSON = encode col.collectionSteps
@@ -205,14 +259,15 @@ collectionPage pid col col_rn respJson = do
   section_ [class_ "h-full overflow-y-hidden"] do
     form_
       [ id_ "stepsForm"
-      , class_ "grid grid-cols-2 h-full divide-x divide-gray-200 group/colform overflow-y-hidden"
+      , class_ "grid grid-cols-3 h-full divide-x divide-gray-200 group/colform overflow-y-hidden"
       , hxPost_ ""
       , hxSwap_ "none"
       , hxExt_ "json-enc"
       , hxVals_ "js:{stepsData: saveStepData()}"
       ]
       do
-        div_ [class_ "col-span-1 h-full divide-y flex flex-col overflow-y-hidden"] do
+        div_ [class_ "col-span-2 px-8 pt-5 pb-12 overflow-y-scroll"] $ toHtml $ timelineSteps pid
+        div_ [class_ "hidden col-span-1 h-full divide-y flex flex-col overflow-y-hidden"] do
           div_ [class_ "shrink flex items-center justify-between"] do
             div_ [class_ " pb-5 p-5 space-y-2"] do
               h2_ [class_ "text-base font-semibold leading-6 text-gray-900 flex items-end"] do
@@ -222,7 +277,7 @@ collectionPage pid col col_rn respJson = do
             div_ [class_ ""] do
               span_ [class_ "badge badge-success"] "Active"
               div_ [class_ "inline-block"] $ Components.modal_ "test-settings-modal" (span_ [class_ "p-3"] $ Utils.faSprite_ "sliders" "regular" "h-4") $ testSettingsModalContent_ True col
-          div_ [class_ "shrink p-4 flex justify-between items-center"] do
+          div_ [class_ "shrink flex justify-between items-center"] do
             div_ [class_ "flex items-center space-x-4"] do
               h4_ [class_ "font-semibold text-2xl font-medium "] "Steps"
               a_ [href_ "https://apitoolkit.io/docs/dashboard/dashboard-pages/api-tests/", target_ "_blank", class_ "text-sm flex items-center gap-1 text-blue-500"] do
@@ -260,6 +315,7 @@ collectionPage pid col col_rn respJson = do
 
     script_ [src_ "/public/assets/testeditor-utils.js"] ("" :: Text)
     script_ [type_ "module", src_ "/public/assets/steps-editor.js"] ("" :: Text)
+    script_ [type_ "module", src_ "/public/assets/steps-assertions.js"] ("" :: Text)
     script_
       [text|
 

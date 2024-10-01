@@ -4,7 +4,6 @@ import Data.Aeson
 import Data.Aeson qualified as AE
 import Data.Map qualified as Map
 import Data.Pool (Pool)
-import Data.Time (UTCTime)
 import Data.UUID qualified as UUID
 import Database.PostgreSQL.Simple qualified as PG
 import Database.PostgreSQL.Simple.SqlQQ (sql)
@@ -17,7 +16,6 @@ import Effectful.State.Static.Local qualified as State
 import GitHash (giCommitDate, giHash, tGitInfoCwd)
 import Log (Logger)
 import Lucid (Html)
-import Models.Apis.Endpoints qualified as Endpoints
 import Models.Apis.Fields.Types qualified as Fields (FieldId)
 import Models.Apis.Reports qualified as ReportsM
 import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
@@ -37,7 +35,6 @@ import Pages.IntegrationGuides qualified as IntegrationGuides
 import Pages.LemonSqueezy qualified as LemonSqueezy
 import Pages.LogExplorer.Routes qualified as LogExplorerRoutes
 import Pages.Monitors.Routes qualified as MonitorsRoutes
-import Pages.Monitors.Server qualified as MonitorsRoutes
 import Pages.Onboarding qualified as Onboarding
 import Pages.Projects.Routes qualified as ProjectsRoutes
 import Pages.Projects.Server qualified as ProjectsRoutes
@@ -49,10 +46,9 @@ import Pages.Specification.Routes qualified as SpecificationRoutes
 import Pages.Specification.Server qualified as SpecificationRoutes
 import Pages.Survey qualified as Survey
 import Pages.Traces.Routes qualified as TracesRoutes
+import Pkg.RouteUtils
 import Relude
-import Servant (AuthProtect, Capture, Context (..), Delete, FormUrlEncoded, Get, Header, Headers, JSON, NoContent, PlainText, Post, QueryParam, ReqBody, StdMethod (GET), Verb, (:>))
-import Servant qualified
-import Servant.API.Generic
+import Servant
 import Servant.HTML.Lucid (HTML)
 import Servant.Htmx
 import Servant.Server.Generic (AsServerT)
@@ -63,12 +59,6 @@ import Web.Auth qualified as Auth
 import Web.ClientMetadata qualified as ClientMetadata
 import Web.Cookie (SetCookie)
 import Web.Error
-
-
-type QPT a = QueryParam a Text
-
-
-type GetRedirect = Verb 'GET 302
 
 
 type role Routes nominal
@@ -240,21 +230,3 @@ pingH = do
 -- When bystring is returned for json, simply return the bytestring
 instance Servant.MimeRender JSON ByteString where
   mimeRender _ = fromStrict
-
-
-type QP a b = QueryParam a b
-
-
-type QPU a = QueryParam a UTCTime
-
-
-type QPB a = QueryParam a Bool
-
-
-type QPI a = QueryParam a Int
-
-
-type QEID a = QueryParam a Endpoints.EndpointId
-
-
-type ProjectId = Capture "projectID" Projects.ProjectId

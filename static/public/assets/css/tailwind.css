@@ -21,6 +21,17 @@
   }
 }
 
+@layer components {
+  .tabs-outline :is(.tab-active, [aria-selected="true"]):not(.tab-disabled):not([disabled]),
+  .tabs-outline :is(.tab-active, [aria-selected="true"]):not(.tab-disabled):not([disabled]):hover {
+    --tw-bg-opacity: 1;
+    background-color: var(--fallback-b1, oklch(var(--b1) / var(--tw-bg-opacity)));
+    color: var(--fallback-bc, oklch(var(--bc) / var(--tw-text-opacity)));
+    border-color: currentColor;
+    border-width: 1px;
+  }
+}
+
 :root,
 [data-theme] {
   --backgroundPrimary: #fff;
@@ -165,16 +176,19 @@
 
 @layer components {
   :root {
-    font-family: Inter, sans-serif;
-    font-feature-settings: 'liga' 1, 'calt' 1;
+    /*font-family: Inter, sans-serif;
+    font-feature-settings: 'liga' 1, 'calt' 1;*/
     /* fix for Chrome */
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial,
+        'Noto Sans', sans-serif, 'Apple Color Emoji', 'Segoe UI Emoji', 'Segoe UI Symbol',
+        'Noto Color Emoji';
   }
 
-  @supports (font-variation-settings: normal) {
-    :root {
-      font-family: InterVariable, sans-serif;
-    }
-  }
+  /* @supports (font-variation-settings: normal) { */
+  /*   :root { */
+  /*     font-family: InterVariable, sans-serif; */
+  /*   } */
+  /* } */
 
 
   .inconsolata {

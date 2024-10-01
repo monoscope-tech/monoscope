@@ -221,9 +221,9 @@ anomalyListGetH pid layoutM filterTM sortM timeFilter pageM loadM endpointM hxRe
                   { current = currentFilterTab
                   , currentURL
                   , options =
-                      [ Components.TabFilterOpt{name = "Inbox", count = Nothing}
-                      , Components.TabFilterOpt{name = "Acknowleged", count = Nothing}
-                      , Components.TabFilterOpt{name = "Archived", count = Nothing}
+                      [ Components.TabFilterOpt "Inbox" Nothing
+                      , Components.TabFilterOpt "Acknowleged" Nothing
+                      , Components.TabFilterOpt "Archived" Nothing
                       ]
                   }
           }

@@ -115,7 +115,7 @@ testingGetH pid filterTM timeFilter = do
           , pageTitle = "Multistep API Tests (Beta)"
           , pageActions =
               Just
-                $ Components.modal_ "test-settings-modal" (span_ [class_ "btn btn-sm btn-primary space-x-2"] $ Utils.faSprite_ "plus" "regular" "h-4" >> "new tests")
+                $ Components.modal_ "test-settings-modal" (span_ [class_ "btn btn-sm btn-outline space-x-2"] $ Utils.faSprite_ "plus" "regular" "h-4" >> "new tests")
                 $ form_
                   [ hxPost_ $ "/p/" <> pid.toText <> "/testing"
                   , class_ "w-full"
@@ -204,7 +204,7 @@ collectionCard pid col currTime = do
 
 pageTabs :: Text -> Html ()
 pageTabs url = do
-  div_ [class_ "tabs tabs-boxed border"] do
+  div_ [class_ "tabs tabs-boxed tabs-outline items-center border"] do
     a_ [href_ $ url <> "/overview", role_ "tab", class_ "tab tab-active"] "Overview"
     a_ [href_ url, role_ "tab", class_ "tab"] "Test editor"
 

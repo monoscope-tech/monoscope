@@ -4,6 +4,7 @@ module Pages.Log (
   ApiLogsPageData (..),
   resultTable_,
   curateCols,
+  logQueryBox_,
 )
 where
 
@@ -104,7 +105,7 @@ apiLogH pid queryM cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM 
           , currProject = Just project
           , pageTitle = "Explorer"
           , pageActions = Just $ Components.timepicker_ (Just "log_explorer_form") currentRange
-          , navTabs = Just $ div_ [class_ "tabs tabs-boxed border"] do
+          , navTabs = Just $ div_ [class_ "tabs tabs-boxed tabs-outline items-center border"] do
               a_ [onclick_ "window.setQueryParamAndReload('source', 'requests')", role_ "tab", class_ $ "tab " <> if source == "requests" then "tab-active" else ""] "Requests"
               a_ [onclick_ "window.setQueryParamAndReload('source', 'logs')", role_ "tab", class_ $ "tab " <> if source == "logs" then "tab-active" else ""] "Logs"
               a_ [onclick_ "window.setQueryParamAndReload('source', 'spans')", role_ "tab", class_ $ "tab " <> if source == "spans" then "tab-active" else ""] "Traces"
@@ -375,7 +376,7 @@ resultTableAndMeta_ page = do
 
     input_ [type_ "radio", name_ "logExplorerMain", role_ "tab", class_ "tab", Aria.label_ "Save as Alert"]
     div_ [class_ "relative overflow-y-scroll overflow-x-hidden h-full tab-content p-3", role_ "tabpanel"] do
-      Alerts.editAlert_ page.pid Nothing
+      -- Alerts.editAlert_ page.pid Nothing
       div_ [style_ "width:2000px"] pass
 
 
@@ -687,12 +688,7 @@ jsonTreeAuxillaryCode pid = do
             }
           htmx.trigger("#log_explorer_form", "submit")
         }
-
     }
-
-    var params = () => new Proxy(new URLSearchParams(window.location.search), {
-      get: (searchParams, prop) => searchParams.get(prop)??"",
-    });
 
     var toggleColumnToSummary = (e)=>{
       const cols = (params().cols??"").split(",").filter(x=>x!="");

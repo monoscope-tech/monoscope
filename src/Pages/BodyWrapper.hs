@@ -11,8 +11,8 @@ import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
 import Models.Users.Users qualified as Users
 import NeatInterpolation (text)
-import Pages.HashAssets
 import Pkg.Components.ExternalHeadScripts (externalHeadScripts_)
+import Pkg.THUtils
 import PyF
 import Relude
 import Utils (faSprite_)
@@ -25,7 +25,7 @@ menu pid =
   , ("API Catalog", "/p/" <> pid.toText <> "/api_catalog", "swap")
   , ("Explorer", "/p/" <> pid.toText <> "/log_explorer", "list-tree")
   , ("Changes & Errors", "/p/" <> pid.toText <> "/anomalies", "bug")
-  , ("API Tests (Beta)", "/p/" <> pid.toText <> "/testing", "list-check")
+  , ("Monitors & Alerts (Beta)", "/p/" <> pid.toText <> "/monitors", "list-check")
   , ("Reports", "/p/" <> pid.toText <> "/reports", "chart-simple")
   ]
 
@@ -170,7 +170,7 @@ bodyWrapper BWConfig{sessM, currProject, pageTitle, menuItem, hasIntegrated, nav
           end
     |]
 
-    body_ [class_ "text-gray-900 h-full w-full bg-base-100 ", term "data-theme" "winter", term "hx-ext" "multi-swap,preload"] do
+    body_ [class_ "text-gray-900 h-full w-full bg-base-100 ", term "data-theme" "antdtheme", term "hx-ext" "multi-swap,preload"] do
       div_
         [ style_ "z-index:99999"
         , class_ "pt-24 sm:hidden justify-center z-50 w-full p-4 bg-gray-50 overflow-y-auto inset-0 h-full max-h-full"
@@ -291,11 +291,11 @@ sideNav sess project pageTitle menuItem hasIntegrated = aside_ [class_ "border-r
   script_ [text|if (window.initialCloseSideMenu == 'true'){document.getElementById('side-nav-menu').classList.add('hidden-side-nav-menu');}|]
   div_ do
     a_ [href_ "/", class_ "px-2 py-2 inline-flex items-center justify-center"] do
-      img_ [class_ "h-10 w-40 mt-2 sd-hidden pl-2", src_ "/public/assets/svgs/logo.svg"]
-      img_ [class_ "h-10 w-10 mt-2 hidden sd-show", src_ "/public/assets/logo-mini.png"]
+      img_ [class_ "h-[2.12rem] w-40 sd-hidden pl-2", src_ "/public/assets/svgs/logo.svg"]
+      img_ [class_ "h-10 w-10 hidden sd-show", src_ "/public/assets/logo-mini.png"]
     div_ [class_ "sm:p-4 border-y sd-px-0 dropdown block"] do
       a_
-        [ class_ "flex flex-row bg-blue-50 hover:bg-blue-100 text-blue-900 p-6 justify-center rounded-md cursor-pointer"
+        [ class_ "flex flex-row border shadow-sm hover:bg-blue-100 text-blue-900 p-6 justify-center rounded-md cursor-pointer"
         , tabindex_ "0"
         ]
         do
@@ -358,7 +358,7 @@ sideNav sess project pageTitle menuItem hasIntegrated = aside_ [class_ "border-r
 
 navbar :: Users.User -> Text -> Maybe (Html ()) -> Maybe (Html ()) -> Html ()
 navbar currUser pageTitle tabsM pageActionsM =
-  nav_ [id_ "main-navbar", class_ "sticky bg-base-100 z-20 top-0 w-full px-6 py-1 flex flex-row border-b border-gray-200 h-12"] do
+  nav_ [id_ "main-navbar", class_ "sticky bg-base-100 z-20 top-0 w-full px-6 py-1 flex flex-row border-b border-gray-200 h-[3.2rem]"] do
     a_
       [ id_ "side_nav_toggler"
       , class_ "cursor-pointer flex items-center "

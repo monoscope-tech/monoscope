@@ -47,6 +47,13 @@ packages:
   original:
     hackage: lucid-hyperscript-0.1.0.2@sha256:c3b048424e75c0e9cbadc30f7ebeb6abc164c2b45b2c995fd0674d4cc57be216,2035
 - completed:
+    hackage: slugify-0.1.0.2@sha256:b16f953401390212faf0450f6044f9c9a44ee07370995ab01dc46d3394e14c7a,1396
+    pantry-tree:
+      sha256: a8069e3ad41fa69077b342c7f5e1500852176bda095482347f89a83ef188a5bd
+      size: 431
+  original:
+    hackage: slugify-0.1.0.2@sha256:b16f953401390212faf0450f6044f9c9a44ee07370995ab01dc46d3394e14c7a,1396
+- completed:
     hackage: lucid-svg-0.7.1.1@sha256:52f3842a4fdec8a0f2661b437305fbedae480568428daef93aead58a91ef2c67,1107
     pantry-tree:
       sha256: facc77cf18b4ece25185279f6041cb273b7e3be59afece0b08db549887abddc7

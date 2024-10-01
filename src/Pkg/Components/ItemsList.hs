@@ -9,9 +9,12 @@ module Pkg.Components.ItemsList (
   ItemsListCfg (..),
   SortCfg (..),
   SearchCfg (..),
+  TimelineSteps (..),
+  TimelineStep (..),
 )
 where
 
+import Data.Foldable.WithIndex (iforM_)
 import Data.Time (UTCTime)
 import Data.Tuple.Extra (fst3)
 import Data.Vector qualified as V
@@ -64,6 +67,8 @@ data ZeroState = ZeroState
 
 
 type role ItemsPage representational
+
+
 data ItemsPage a = ItemsPage ItemsListCfg (V.Vector a)
 
 
@@ -190,6 +195,8 @@ itemsList_ listCfg items =
 
 
 type role ItemsRows representational
+
+
 data ItemsRows a = ItemsRows (Maybe Text) (V.Vector a) -- Text represents nextFetchUrl
 
 
@@ -204,7 +211,7 @@ itemRows_ nextFetchUrl items = do
   whenJust nextFetchUrl \url ->
     when (length items > 9)
       $ a_
-        [ class_ "cursor-pointer flex justify-center items-center block p-1 blue-800 bg-blue-100 hover:bg-blue-200 text-center"
+        [ class_ "cursor-pointer flex justify-center items-center p-1 blue-800 bg-blue-100 hover:bg-blue-200 text-center"
         , hxTrigger_ "click, intersect once"
         , hxSwap_ "outerHTML"
         , hxGet_ url
@@ -213,3 +220,41 @@ itemRows_ nextFetchUrl items = do
         do
           "Load more"
           span_ [id_ "rowsIndicator", class_ "ml-2 htmx-indicator loading loading-dots loading-md"] ""
+
+
+---------------------------------------------------------------------
+--   TimelineSteps
+---------------------------------------------------------------------
+
+-- TimelineSteps is used to render numbered timeline sections
+-- where each section has a number a title and content
+newtype TimelineSteps = TimelineSteps [TimelineStep]
+
+
+data TimelineStep = TimelineStep
+  { title :: Text
+  , content :: Html ()
+  }
+
+
+instance ToHtml TimelineSteps where
+  toHtmlRaw = toHtml
+  toHtml (TimelineSteps steps) = toHtml $ timelineSteps_ steps
+
+
+timelineSteps_ :: [TimelineStep] -> Html ()
+timelineSteps_ steps = do
+  ul_ [class_ "timeline timeline-snap-icon timeline-vertical timeline-compact"] $ do
+    iforM_ steps $ \idx step -> li_ [class_ "group/tm"] $ do
+      when (idx > 0) $ hr_ []
+      div_ [class_ "timeline-middle "] do
+        span_
+          [class_ "rounded-full bg-primary text-base-100 h-7 w-7 flex items-center justify-center text-sm"]
+          (toHtml $ show $ idx + 1)
+      div_ [class_ "timeline-end space-y-5 w-full"] $ do
+        label_ [class_ "text-xl flex items-center pt-1"] $ do
+          input_ ([type_ "checkbox", class_ "hidden tm-toggle"] <> [checked_ | idx == 0])
+          faSprite_ "chevron-right" "regular" "h-4 w-4 mx-2 text-blue-800 text-primary group-has-[.tm-toggle:checked]/tm:rotate-90"
+          span_ [] (toHtml step.title)
+        div_ [class_ "pl-8 pb-8 space-y-3 hidden group-has-[.tm-toggle:checked]/tm:block"] step.content
+      when (idx < (length steps - 1)) $ hr_ []

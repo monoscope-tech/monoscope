@@ -2,37 +2,12 @@ module Pages.Components (statBox, drawerWithURLContent_) where
 
 import Data.Text qualified as T
 import Fmt (commaizeF, fmt, (+|))
-import Lucid (
-  Html,
-  Term (term),
-  ToHtml (toHtml),
-  a_,
-  class_,
-  div_,
-  for_,
-  href_,
-  id_,
-  input_,
-  label_,
-  small_,
-  span_,
-  strong_,
-  style_,
-  type_,
- )
+import Lucid
 import Lucid.Aria qualified as Aria
 import Lucid.Htmx (hxGet_, hxSwap_, hxTrigger_)
 import Lucid.Hyperscript (__)
 import Models.Projects.Projects (ProjectId)
-import Relude (
-  Int,
-  Maybe (..),
-  Semigroup ((<>)),
-  Text,
-  maybe,
-  not,
-  ($),
- )
+import Relude
 import Utils (faSprite_)
 
 

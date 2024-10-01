@@ -1,17 +1,22 @@
-module Pages.Monitors.Routes (Routes, Routes' (..)) where
+module Pages.Monitors.Routes (server, Routes, Routes' (..)) where
 
 import Lucid
 import Models.Apis.Monitors qualified as Monitors
+import Models.Projects.Projects qualified as Projects
 import Models.Tests.Testing qualified as TestingM
 import Pages.BodyWrapper (PageCtx (..))
 import Pages.Monitors.Alerts qualified as Alerts
+import Pages.Monitors.MetricMonitors qualified as MetricMonitors
+import Pages.Monitors.TestCollectionEditor qualified as TestCollectionEditor
 import Pages.Monitors.TestCollectionEditor qualified as Testing
 import Pages.Monitors.Testing qualified as Testing
 import Pkg.Components.ItemsList qualified as ItemsList
+import Pkg.RouteUtils
 import Relude
 import Servant (Capture, FormUrlEncoded, GenericMode (type (:-)), Get, JSON, NamedRoutes, Patch, Post, QueryParam, ReqBody, type (:>))
+import Servant qualified
 import Servant.HTML.Lucid (HTML)
-import System.Types (RespHeaders)
+import System.Types (ATAuthCtx, RespHeaders)
 
 
 type Routes = NamedRoutes Routes'
@@ -25,7 +30,8 @@ data Routes' mode = Routes'
   , alertListGet :: mode :- "alerts" :> Get '[HTML] (RespHeaders Alerts.Alert)
   , alertSingleGet :: mode :- "alerts" :> Capture "alert_id" Monitors.QueryMonitorId :> Get '[HTML] (RespHeaders Alerts.Alert)
   , alertSingleToggleActive :: mode :- "alerts" :> Capture "alert_id" Monitors.QueryMonitorId :> "toggle_active" :> Post '[HTML] (RespHeaders Alerts.Alert)
-  , collectionsGet :: mode :- "testing" :> QueryParam "filter" Text :> QueryParam "since" Text :> Get '[HTML] (RespHeaders (PageCtx (ItemsList.ItemsPage Testing.CollectionListItemVM)))
+  , monitorListGet :: mode :- "monitors" :> QueryParam "filter" Text :> Get '[HTML] (RespHeaders (PageCtx (ItemsList.ItemsPage Testing.CollectionListItemVM)))
+  , monitorCreatePost :: mode :- "monitors" :> "create" :> QPT "monitor-type" :> Get '[HTML] (RespHeaders (PageCtx MetricMonitors.MonitorCreate))
   , newCollectionPost :: mode :- "testing" :> ReqBody '[JSON] Testing.CollectionStepUpdateForm :> Post '[HTML] (RespHeaders (PageCtx (ItemsList.ItemsPage Testing.CollectionListItemVM)))
   , collectionGet :: mode :- "testing" :> Capture "collection_id" TestingM.CollectionId :> Get '[HTML] (RespHeaders Testing.CollectionGet)
   , collectionDashboardGet :: mode :- "testing" :> Capture "collection_id" TestingM.CollectionId :> "overview" :> Get '[HTML] (RespHeaders (PageCtx (Html ())))
@@ -33,3 +39,20 @@ data Routes' mode = Routes'
   , collectionRunTests :: mode :- "testing" :> Capture "collection_id" TestingM.CollectionId :> QueryParam "step_index" Int :> ReqBody '[JSON] Testing.CollectionStepUpdateForm :> Patch '[HTML] (RespHeaders Testing.CollectionRunTest)
   }
   deriving stock (Generic)
+
+
+server :: Projects.ProjectId -> Servant.ServerT Routes ATAuthCtx
+server pid =
+  Routes'
+    { alertUpsertPost = Alerts.alertUpsertPostH pid
+    , alertListGet = Alerts.alertListGetH pid
+    , alertSingleGet = Alerts.alertSingleGetH pid
+    , alertSingleToggleActive = Alerts.alertSingleToggleActiveH pid
+    , monitorListGet = Testing.testingGetH pid
+    , monitorCreatePost = MetricMonitors.monitorCreateGetH pid
+    , newCollectionPost = Testing.testingPostH pid
+    , collectionGet = TestCollectionEditor.collectionGetH pid
+    , collectionStepsUpdate = TestCollectionEditor.collectionStepsUpdateH pid
+    , collectionRunTests = TestCollectionEditor.collectionRunTestsH pid
+    , collectionDashboardGet = Testing.collectionDashboard pid
+    }

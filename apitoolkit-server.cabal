@@ -78,7 +78,6 @@ library
       Pages.Endpoints.Server
       Pages.Fields.FieldDetails
       Pages.Fields.FieldDetailsSpec
-      Pages.HashAssets
       Pages.IntegrationDemos.AdonisJS
       Pages.IntegrationDemos.Django
       Pages.IntegrationDemos.DotNet
@@ -107,8 +106,8 @@ library
       Pages.LogSpec
       Pages.Monitors.Alerts
       Pages.Monitors.AlertsSpec
+      Pages.Monitors.MetricMonitors
       Pages.Monitors.Routes
-      Pages.Monitors.Server
       Pages.Monitors.TestCollectionEditor
       Pages.Monitors.Testing
       Pages.Monitors.TestingSpec
@@ -154,7 +153,9 @@ library
       Pkg.Parser.Types
       Pkg.ParserSpec
       Pkg.Queue
+      Pkg.RouteUtils
       Pkg.TestUtils
+      Pkg.THUtils
       ProcessMessage
       ProcessMessageSpec
       RequestMessages
@@ -238,6 +239,7 @@ library
     , http-api-data
     , http-client
     , http-types
+    , indexed-traversable
     , lens
     , lens-aeson
     , log-base
@@ -248,6 +250,7 @@ library
     , lucid-hyperscript >=0.1.0.2
     , lucid-svg >=0.7.1.1
     , megaparsec
+    , mmark
     , monad-time-effectful
     , mtl
     , neat-interpolation
@@ -279,6 +282,7 @@ library
     , servant-htmx
     , servant-lucid
     , servant-server
+    , slugify
     , strict-containers
     , template-haskell
     , text

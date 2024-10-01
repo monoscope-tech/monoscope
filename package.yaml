@@ -117,7 +117,9 @@ library:
     - dotenv
     - envy
     - errors
+    - mmark
     - extra
+    - slugify
     - fmt
     - PyF
     - generic-lens
@@ -166,6 +168,7 @@ library:
     - wreq
     - xxhash
     - pretty-relative-time
+    - indexed-traversable
     - nyan-interpolation
     - pretty-simple
     - tmp-postgres
