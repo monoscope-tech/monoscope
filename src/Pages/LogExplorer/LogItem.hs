@@ -239,7 +239,7 @@ apiLogItemView pid logId req expandItemPath source = do
   div_ [class_ "flex items-center gap-2"] do
     when (source /= "logs")
       $ label_
-        [ class_ "btn btn-sm btn-outline"
+        [ class_ "btn btn-sm bg-base-100"
         , Lucid.for_ "global-data-drawer"
         , term "_"
             $ [text|on mousedown or click fetch $logItemPathDetailed
@@ -253,14 +253,14 @@ apiLogItemView pid logId req expandItemPath source = do
     let reqJson = decodeUtf8 $ AE.encode req
     when (source /= "logs" && source /= "spans")
       $ button_
-        [ class_ "btn btn-sm btn-outline"
+        [ class_ "btn btn-sm bg-base-100"
         , term "data-reqJson" reqJson
         , onclick_ "window.buildCurlRequest(event)"
         ]
         (span_ [] "Copy as curl" >> faSprite_ "copy" "regular" "h-3 w-3")
 
     button_
-      [ class_ "btn btn-sm btn-outline"
+      [ class_ "btn btn-sm bg-base-100"
       , onclick_ "window.downloadJson(event)"
       , term "data-reqJson" reqJson
       ]

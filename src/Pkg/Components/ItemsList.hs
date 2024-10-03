@@ -243,8 +243,8 @@ instance ToHtml TimelineSteps where
 
 
 timelineSteps_ :: [TimelineStep] -> Html ()
-timelineSteps_ steps = do
-  ul_ [class_ "timeline timeline-snap-icon timeline-vertical timeline-compact"] $ do
+timelineSteps_ steps = 
+  ul_ [class_ "timeline timeline-snap-icon timeline-vertical timeline-compact pb-8"] $ do
     iforM_ steps $ \idx step -> li_ [class_ "group/tm"] $ do
       when (idx > 0) $ hr_ []
       div_ [class_ "timeline-middle "] do

@@ -34,7 +34,6 @@ import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
 import Effectful.Time qualified as Time
 import Fmt (commaizeF, fmt)
 import Lucid
-import Lucid.Aria qualified as Aria
 import Lucid.Base (TermRaw (termRaw))
 import Lucid.Htmx
 import Lucid.Hyperscript (__)
@@ -307,32 +306,32 @@ apiLogsPage page = do
         div_ [class_ "flex items-center justify-end gap-2"] do
           div_ [class_ "form-control w-max"]
             $ label_ [class_ "label flex items-center cursor-pointer w-max space-x-2"] do
-              input_ [type_ "checkbox", class_ "toggle toggle-sm", id_ "toggleQueryEditor", onclick_ "toggleQueryBuilder()"]
+              input_ [type_ "checkbox", class_ "toggle toggle-xs", id_ "toggleQueryEditor", onclick_ "toggleQueryBuilder()"]
               small_ "toggle query editor"
 
           div_ [class_ "pl-3 py-1 flex flex-row justify-end"] do
             label_ [class_ "flex items-center cursor-pointer space-x-2 p-1"] do
-              input_ [type_ "checkbox", class_ "toggle toggle-sm toggle-chart", checked_]
+              input_ [type_ "checkbox", class_ "toggle toggle-xs toggle-chart", checked_]
               small_ "toggle charts"
         div_ [class_ "grid grid-cols-3 gap-0 mb-2"] do
-          div_ [class_ "w-full"] do
-            div_ [class_ "pl-6 text-xs text-gray-500"] "All requests"
+          div_ [class_ "w-full space-y-2"] do
+            div_ [class_ "pl-5 text-sm text-gray-500"] do
+              "Requests "
+              small_ [] $ toHtml @Text $ "(" <> fmt (commaizeF page.resultCount) <> " total)"
             div_
               [ id_ "reqsChartsECP"
-              , class_ "log-chart px-5 hidden group-has-[.toggle-chart:checked]/result:block"
-              , style_ "height:150px"
+              , class_ "log-chart px-5 hidden group-has-[.toggle-chart:checked]/result:block aspect-[5/1]"
               , hxGet_ $ "/charts_html?id=reqsChartsEC&show_legend=false&pid=" <> page.pid.toText
               , hxTrigger_ "intersect,  htmx:beforeRequest from:#log_explorer_form"
               , hxVals_ "js:{query_raw:window.getQueryFromEditor(), since: getTimeRange().since, from: getTimeRange().from, to:getTimeRange().to, cols:params().cols, layout:'all', source: params().source}"
               , hxSwap_ "innerHTML"
               ]
               ""
-          div_ [class_ "w-full"] do
-            div_ [class_ "pl-6 text-xs text-gray-500"] "Errors"
+          div_ [class_ "w-full space-y-2"] do
+            div_ [class_ "pl-5 text-sm text-gray-500"] "Errors"
             div_
               [ id_ "reqsChartsErrP"
-              , class_ "log-chart px-5 hidden group-has-[.toggle-chart:checked]/result:block"
-              , style_ "height:150px"
+              , class_ "log-chart px-5 hidden group-has-[.toggle-chart:checked]/result:block aspect-[5/1]"
               , term "data-source" page.source
               , hxGet_ $ "/charts_html?id=reqsChartsErr&theme=roma&show_legend=false&pid=" <> page.pid.toText
               , hxTrigger_ "intersect"
@@ -340,12 +339,11 @@ apiLogsPage page = do
               , hxSwap_ "innerHTML"
               ]
               ""
-          div_ [class_ "w-full"] do
-            div_ [class_ "pl-6 text-xs text-gray-500"] "Latency"
+          div_ [class_ "w-full space-y-2"] do
+            div_ [class_ "pl-5 text-sm text-gray-500"] "Latency"
             div_
               [ id_ "reqsChartsLatP"
-              , class_ "log-chart px-5 hidden group-has-[.toggle-chart:checked]/result:block"
-              , style_ "height:150px"
+              , class_ "log-chart px-5 hidden group-has-[.toggle-chart:checked]/result:block aspect-[5/1]"
               , hxGet_ $ "/charts_html?id=reqsChartsLat&chart_type=LineCT&group_by=GBDurationPercentile&show_legend=false&pid=" <> page.pid.toText
               , hxTrigger_ "intersect, htmx:beforeRequest from:#log_explorer_form"
               , hxVals_ "js:{query_raw:window.getQueryFromEditor('latency'), since: getTimeRange().since, from: getTimeRange().from, to:getTimeRange().to, cols:params().cols, layout:'all', source: params().source}"
@@ -362,27 +360,16 @@ apiLogsPage page = do
 
 
 resultTableAndMeta_ :: ApiLogsPageData -> Html ()
-resultTableAndMeta_ page = do
-  section_ [class_ " w-full h-auto overflow-hidden"] $ section_ [class_ " w-full tabs tabs-bordered items-start overflow-hidden h-full place-content-start", role_ "tablist"] do
-    input_ [type_ "radio", name_ "logExplorerMain", role_ "tab", class_ "tab", checked_, Aria.label_ $ "Query results (" <> fmt (commaizeF page.resultCount) <> ")"]
-    div_ [class_ "relative overflow-y-scroll overflow-x-hidden h-full w-full tab-content", role_ "tabpanel"] do
+resultTableAndMeta_ page = 
+    div_ [class_ "relative overflow-y-scroll overflow-x-hidden h-full w-full"] $
       resultTable_ page True
-      div_ [style_ "width:2000px"] pass
 
-    input_ [type_ "radio", name_ "logExplorerMain", role_ "tab", class_ "tab", Aria.label_ "Alerts"]
-    div_ [class_ "relative overflow-y-scroll h-full tab-content", role_ "tabpanel"] do
-      div_ [hxGet_ $ "/p/" <> page.pid.toText <> "/alerts", hxTrigger_ "intersect", hxSwap_ "innerHTML", id_ "alertsListContainer"] ""
-
-    input_ [type_ "radio", name_ "logExplorerMain", role_ "tab", class_ "tab", Aria.label_ "Save as Alert"]
-    div_ [class_ "relative overflow-y-scroll overflow-x-hidden h-full tab-content p-3", role_ "tabpanel"] do
-      -- Alerts.editAlert_ page.pid Nothing
-      div_ [style_ "width:2000px"] pass
 
 
 resultTable_ :: ApiLogsPageData -> Bool -> Html ()
 resultTable_ page mainLog = table_
   [ class_ "w-full table table-xs table-pin-rows table-pin-cols overflow-x-hidden [contain:strict] [content-visibility:auto]"
-  , style_ "height:1px"
+  , style_ "height:1px; --rounded-box:0"
   , id_ "resultTable"
   , term "data-source" page.source
   ]

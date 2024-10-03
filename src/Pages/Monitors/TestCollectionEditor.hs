@@ -110,7 +110,7 @@ collectionGetH :: Projects.ProjectId -> Testing.CollectionId -> ATAuthCtx (RespH
 collectionGetH pid colId = do
   (sess, project) <- Sessions.sessionAndProject pid
   collectionM <- dbtToEff $ Testing.getCollectionById colId
-  let url = "/p/" <> pid.toText <> "/testing/" <> colId.toText
+  let url = "/p/" <> pid.toText <> "/monitors/" <> colId.toText
   let bwconf =
         (def :: BWConfig)
           { sessM = Just sess.persistentSession
@@ -204,9 +204,8 @@ timelineSteps pid =
   Components.TimelineSteps
     $ [ Components.TimelineStep "Define API test" defineTestSteps_
       , Components.TimelineStep "Name and tag your test" nameOfTest_
-      , -- , Components.TimelineStep "Select locations" (defineTheMetric_ pid)
-        Components.TimelineStep "Define retry conditions" (MetricMonitors.configureNotificationMessage_)
       , Components.TimelineStep "Define Scheduling and alert conditions" (MetricMonitors.configureNotificationChannels_)
+      , Components.TimelineStep "Set Alert Message and Recovery Threshold" (MetricMonitors.configureNotificationMessage_)
       ]
 
 

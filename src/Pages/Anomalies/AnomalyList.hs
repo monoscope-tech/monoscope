@@ -497,8 +497,7 @@ anomalyDetailsPage issue shapesWithFieldsMap fields prvFormatsM currTime timeFil
               span_ [class_ "decoration-black underline", term "data-tippy-content" $ "last seen: " <> show issue.eventsAgg.lastSeen] $ toHtml $ prettyTimeAuto currTime issue.eventsAgg.lastSeen
           div_
             [ id_ "reqsChartsEC"
-            , class_ "w-[200px] h-[80px] mt-4 shrink-0"
-            , style_ "height:100px"
+            , class_ "w-[200px] mt-4 shrink-0 aspect-[4/1]"
             , hxGet_ $ "/charts_html?pid=" <> issue.projectId.toText <> "&since=" <> (if filterV == "14d" then "14D" else "24h") <> "&query_raw=" <> escapedQueryPartial [fmt|{anomalyQueryPartial} | timechart [1d]|]
             , hxTrigger_ "intersect"
             , hxSwap_ "innerHTML"

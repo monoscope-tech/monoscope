@@ -209,6 +209,15 @@ configureNotificationChannels_ :: Html ()
 configureNotificationChannels_ = do
   let monitor = (def :: Monitors.QueryMonitor)
   div_ do
+    p_ [class_ "space-x-2"] do
+      "Run your test every"
+      input_ [class_ "input input-bordered w-24 text-center", type_ "number", value_ "1", name_ "scheduleCount"]
+      select_ [class_ "select select-bordered", name_ "scheduleUnits"] do 
+        option_ "seconds"
+        option_ "minutes"
+        option_ "hours"
+        option_ "days"
+  div_ do
     p_ "Add individuals, teams or channels that should be notified when this alert triggers"
     p_ "Alert rules with no recipients will still be triggered and can be viewed form the Changes and Errors page"
   section_ [class_ "relative space-y-4 space-x-4 py-3", id_ "recipientListParent"] do
@@ -360,8 +369,7 @@ monitorMetric_ :: Projects.ProjectId -> Maybe Monitors.QueryMonitor -> Html ()
 monitorMetric_ pid monitorM = section_ [class_ "px-8 py-5 space-y-5 group/pg overflow-y-scroll h-full"] $ do
   div_
     [ id_ "reqsChartsECP"
-    , class_ "px-5 mt-5"
-    , style_ "height:250px"
+    , class_ "px-5 mt-5 aspect-[4/1]"
     , hxGet_ $ "/charts_html?id=reqsChartsEC&show_legend=true&pid=" <> pid.toText
     , hxTrigger_ "load,  htmx:beforeRequest from:#log_explorer_form"
     , hxVals_ "js:{query_raw:window.getQueryFromEditor(), since: getTimeRange().since, from: getTimeRange().from, to:getTimeRange().to, cols:params().cols, layout:'all', source: params().source}"

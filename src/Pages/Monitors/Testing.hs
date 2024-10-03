@@ -80,7 +80,7 @@ testingGetH pid filterTM timeFilter = do
         Just "Active" -> ("Active", Testing.Active)
         Just "Inactive" -> ("Inactive", Testing.Inactive)
         _ -> ("Active", Testing.Active)
-  let currentURL = "/p/" <> pid.toText <> "/testing?"
+  let currentURL = "/p/" <> pid.toText <> "/monitors?"
   currTime <- Time.currentTime
   colls <- dbtToEff $ Testing.getCollections pid tabStatus
   inactiveColsCount <- dbtToEff $ Testing.inactiveCollectionsCount pid
@@ -117,7 +117,7 @@ testingGetH pid filterTM timeFilter = do
               Just
                 $ Components.modal_ "test-settings-modal" (span_ [class_ "btn btn-sm btn-outline space-x-2"] $ Utils.faSprite_ "plus" "regular" "h-4" >> "new tests")
                 $ form_
-                  [ hxPost_ $ "/p/" <> pid.toText <> "/testing"
+                  [ hxPost_ $ "/p/" <> pid.toText <> "/monitors"
                   , class_ "w-full"
                   , hxTarget_ "#itemsListPage"
                   , hxSelect_ "#itemsListPage"
@@ -165,11 +165,11 @@ collectionCard pid col currTime = do
       div_ [class_ "space-y-3 grow"] do
         div_ [class_ "flex gap-10 items-center"] do
           a_
-            [ href_ $ "/p/" <> pid.toText <> "/testing/" <> col.id.toText <> "/overview"
+            [ href_ $ "/p/" <> pid.toText <> "/monitors/" <> col.id.toText <> "/overview"
             , class_ "text-xl font-medium text-blue-700"
             ]
             $ toHtml col.title
-          a_ [href_ $ "/p/" <> pid.toText <> "/testing/" <> col.id.toText] do
+          a_ [href_ $ "/p/" <> pid.toText <> "/monitors/" <> col.id.toText] do
             faSprite_ "pen-to-square" "regular" "h-5 w-5 -mt-2"
 
         div_ [class_ "mt-2 flex gap-2 items-center"] do
@@ -216,7 +216,7 @@ collectionDashboard pid cid = do
   tableAsVecE <- RequestDumps.selectLogTable pid query Nothing (Nothing, Nothing) [""] Nothing Nothing
   collectionM <- dbtToEff $ Testing.getCollectionById cid
   let tableAsVecM = hush tableAsVecE
-  let url = "/p/" <> pid.toText <> "/testing/" <> cid.toText
+  let url = "/p/" <> pid.toText <> "/monitors/" <> cid.toText
 
   let bwconf =
         (def :: BWConfig)
@@ -264,7 +264,7 @@ dashboardPage pid cid steps passed failed schedule reqsVecM =
                     , query
                     , cursor = Nothing
                     , isTestLog = Just True
-                    , emptyStateUrl = Just $ "/p/" <> pid.toText <> "/testing/" <> cid.toText
+                    , emptyStateUrl = Just $ "/p/" <> pid.toText <> "/monitors/" <> cid.toText
                     , source = "requests"
                     , targetSpans = Nothing
                     , childSpans = []
