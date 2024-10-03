@@ -240,7 +240,7 @@ class FilterItem extends LitElement {
                 }
               }}
             />
-            <div class="max-h-48 overflow-y-auto">
+            <div class="max-h-56 overflow-y-auto">
               <div class="flex flex-col">
                 ${this.fields.map((field) => {
                   return html`<button type="button" class="flex items-center gap-2 px-2 py-1 hover:bg-gray-100" @click=${(e) => this.triggerFilterChange(field, operator, value)}>${field}</button>`
@@ -261,7 +261,7 @@ class FilterItem extends LitElement {
     ${
       this.showOperatoinModal
         ? html`<div style="heigh" class="absolute z-50 bg-white border rounded w-56 text-gray-500 font-normal top-10 left-0" @click=${(e) => e.stopPropagation()}>
-            <div class="max-h-48 overflow-y-auto">
+            <div class="max-h-56 overflow-y-auto">
               <div class="flex flex-col">
                 ${this.operators.map((op) => {
                   return html`<button type="button" class="flex items-center gap-2 px-2 py-1 hover:bg-gray-100" @click=${(e) => this.triggerFilterChange(field, op, value)}>${op}</button>`
@@ -296,12 +296,10 @@ class FilterItem extends LitElement {
                 }
               }}
             />
-            <div class="max-h-48 overflow-y-auto">
-              <div class="flex flex-col">
-                ${this.values.map((v) => {
-                  return html`<button type="button" class="flex items-center gap-2 px-2 py-1 hover:bg-gray-100" @click=${(e) => this.triggerFilterChange(field, operator, v)}>${v}</button>`
-                })}
-              </div>
+            <div class="max-h-56 overflow-y-auto flex flex-col">
+              ${this.values.map((v) => {
+                return html`<button type="button" class="flex items-center gap-2 px-2 py-1 hover:bg-gray-100" @click=${(e) => this.triggerFilterChange(field, operator, v)}>${v}</button>`
+              })}
             </div>
           </div>`
         : null

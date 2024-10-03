@@ -164,7 +164,7 @@ timepicker_ submitForm currentRange = div_ [class_ "relative"] do
     ]
     $ div_ [class_ "flex items-center gap-1"] do
       faSprite_ "clock" "regular" "h-3 w-3"
-      span_ [class_ "inline-block", id_ "currentRange"] $ toHtml (fromMaybe "Last 14 Days" currentRange)
+      span_ [class_ "inline-block", id_ "currentRange"] $ toHtml (fromMaybe "Last 24 Hours" currentRange)
   div_ [id_ "timepickerBox", class_ "hidden absolute z-10 mt-1  rounded-md flex"] do
     div_ [class_ "inline-block w-84 overflow-auto bg-base-100 py-1 text-base shadow-lg ring-1 ring-black ring-opacity-5 focus:outline-none sm:text-sm"] do
       timePickerItems

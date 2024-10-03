@@ -211,7 +211,7 @@
     fill: currentColor;
   }
 
-  .checkbox, .input, .btn, .select {
+  .checkbox, .input, .btn, .select, .textarea {
     @apply shadow;
   }
 

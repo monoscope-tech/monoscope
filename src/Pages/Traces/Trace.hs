@@ -113,7 +113,7 @@ tracePage p = do
                   ]
                   do
                     div_ [class_ "w-full sticky top-0 border-b border-b-gray-300 h-6 text-xs relative", id_ $ "time-container"] pass
-                    div_ [class_ "w-full overflow-x-hidden h-48 c-scroll relative", id_ $ "a" <> traceItem.traceId] pass
+                    div_ [class_ "w-full overflow-x-hidden h-56 c-scroll relative", id_ $ "a" <> traceItem.traceId] pass
                     div_ [class_ "h-full top-0  absolute z-50 hidden", id_ "time-bar-indicator"] do
                       div_ [class_ "relative h-full"] do
                         div_ [class_ "text-xs top-[-18px] absolute -translate-x-1/2 whitespace-nowrap", id_ "line-time"] "2 ms"
