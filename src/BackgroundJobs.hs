@@ -48,12 +48,15 @@ import System.Config qualified as Config
 import System.Types (ATBackgroundCtx, runBackground)
 
 
+type TargetHash = Text
+
 data BgJobs
   = InviteUserToProject Users.UserId Projects.ProjectId Text Text
   | CreatedProjectSuccessfully Users.UserId Projects.ProjectId Text Text
   | SendDiscordData Users.UserId Projects.ProjectId Text [Text] Text
-  | -- NewAnomaly Projects.ProjectId Anomalies.AnomalyTypes Anomalies.AnomalyActions TargetHash
-    NewAnomaly Projects.ProjectId ZonedTime Text Text Text
+  | NewAnomaly Projects.ProjectId ZonedTime Text Text TargetHash
+  -- | NewAnomaly Projects.ProjectId ZonedTime Anomalies.AnomalyTypes Anomalies.AnomalyActions TargetHash
+  -- | NewAnomaly Projects.ProjectId ZonedTime Text Text Text
   | DailyReports Projects.ProjectId
   | WeeklyReports Projects.ProjectId
   | DailyJob
@@ -460,7 +463,89 @@ Endpoint: `{endpointPath}`
                         ]
                 sendPostmarkEmail (CI.original u.email) "anomaly-endpoint" templateVars
     Anomalies.ATShape -> do
-      pass
+      -- pass 
+
+      -- Check if there's already an endpoint anomaly for this shape
+      hasEndpointAnomaly <- dbtToEff $ Anomalies.getShapeParentAnomalyVM pid targetHash
+
+      when (hasEndpointAnomaly == 0) $ do
+        mAnomaly <- dbtToEff $ Anomalies.getAnomalyVM pid targetHash
+        
+        forM_ mAnomaly \anomaly -> do
+          endpointInfo <- dbtToEff $ Endpoints.endpointByHash pid $ T.take 8 targetHash
+          
+          -- Get all existing shapes for this endpoint
+          let getShapesQuery = [sql| SELECT hash, field_hashes, field_formats FROM apis.shapes WHERE project_id = ? AND endpoint_hash = ? |]
+          existingShapes <- dbtToEff $ query Select getShapesQuery (pid, T.take 8 targetHash)
+          
+          let currentShape = fromMaybe (error "Current shape not found") $ find (\(hash, _, _) -> hash == targetHash) existingShapes
+              (_, currentFields, currentFormats) = currentShape
+              otherShapes = filter (\(hash, _, _) -> hash /= targetHash) existingShapes
+              otherFields = concatMap (\(_, fields, _) -> fields) otherShapes
+              otherFormats = concatMap (\(_, _, formats) -> formats) otherShapes
+          
+          let newFields = filter (`notElem` otherFields) currentFields
+              updatedFields = filter (\(field, format) -> 
+                    field `elem` otherFields && 
+                    format /= fromMaybe format (lookup field otherFormats)
+                    ) (zip currentFields currentFormats)
+              deletedFields = filter (`notElem` currentFields) $
+                    foldl' intersect (head otherFields) (tail otherFields)
+          
+          let breakingChanges = deletedFields ++
+                [field | (field, newFormat) <- updatedFields, isBreakingChange (fromMaybe newFormat (lookup field otherFormats)) newFormat]
+          
+          let incrementalChanges = newFields ++
+                [field | (field, newFormat) <- updatedFields, not (isBreakingChange (fromMaybe newFormat (lookup field otherFormats)) newFormat)]
+          
+                -- old data
+                -- let issueData = Anomalies.IDShapeAnomaly
+                -- { endpoint = endpointInfo
+                -- , newFields = newFields //  fields that appear in the current shape but not in any previous shapes
+                -- , updatedFields = updatedFields // fields that exist in both current and previous shapes but have changed format
+                -- , deletedFields = deletedFields //fields that existed in previous shapes but are not in the current shape
+                -- , breakingChanges = breakingChanges //
+                -- , incrementalChanges = incrementalChanges // new fields and updated fields [ change != "breaking"].
+                -- }
+          -- Create the issue data
+          let issueData = Anomalies.IDShapeAnomaly
+                { endpoint = endpointInfo
+                , newFields = newFields
+                , breakingChanges = breakingChanges
+                , incrementalChanges = incrementalChanges -- new fields and old 
+                }
+          
+          -- Generate a new issue ID and insert the new issue
+          issueId <- liftIO $ Anomalies.AnomalyId <$> UUIDV4.nextRandom
+          _ <- dbtToEff $ Anomalies.insertIssue $ Anomalies.Issue
+            { id = issueId
+            , createdAt = anomaly.createdAt
+            , updatedAt = anomaly.updatedAt
+            , projectId = pid
+            , anomalyType = Anomalies.ATShape
+            , targetHash = targetHash
+            , issueData = issueData
+            , acknowledgedAt = Nothing
+            , acknowledgedBy = Nothing
+            , endpointId = Just (T.take 8 targetHash)
+            , archivedAt = Nothing
+            }
+          
+          -- Fetch project and user information for notifications
+          project <- Unsafe.fromJust <$> dbtToEff (Projects.projectById pid)
+          users <- dbtToEff $ Projects.usersByProjectId pid
+          
+          -- Send notifications
+          forM_ project.notificationsChannel \case
+            Projects.NSlack -> sendSlackNotification project endpointInfo breakingChanges incrementalChanges targetHash
+            Projects.NDiscord -> sendDiscordNotification project endpointInfo breakingChanges incrementalChanges targetHash
+            _ -> sendEmailNotifications users project endpointInfo breakingChanges incrementalChanges targetHash
+
+      -- Helper functions for notifications (implementations not shown for brevity)
+      sendSlackNotification :: Project -> EndpointInfo -> [BreakingChange] -> [IncrementalChange] -> TargetHash -> Eff eff ()
+      sendDiscordNotification :: Project -> EndpointInfo -> [BreakingChange] -> [IncrementalChange] -> TargetHash -> Eff eff ()
+      sendEmailNotifications :: [User] -> Project -> EndpointInfo -> [BreakingChange] -> [IncrementalChange] -> TargetHash -> Eff eff ()
+
     -- hasEndpointAnomaly <- dbtToEff $ Anomalies.getShapeParentAnomalyVM pid targetHash
     -- when (hasEndpointAnomaly == 0) $ whenJustM (dbtToEff $ Anomalies.getAnomalyVM pid targetHash) \anomaly -> do
     --   endp <- dbtToEff $ Endpoints.endpointByHash pid $ T.take 8 targetHash
@@ -498,7 +583,102 @@ Endpoint: `{endpointPath}`
     --               ]
     --       sendPostmarkEmail (CI.original u.email) "anomaly-shape" templateVars
     Anomalies.ATFormat -> do
-      pass
+      -- pass
+      -- Check if there's already an endpoint anomaly for this format
+      hasEndpointAnomaly <- dbtToEff $ Anomalies.getFormatParentAnomalyVM pid targetHash
+      
+      when (hasEndpointAnomaly == 0) $ do
+        -- Fetch the current anomaly from the db
+        mAnomaly <- dbtToEff $ Anomalies.getAnomalyVM pid targetHash
+        
+        forM_ mAnomaly \anomaly -> do
+          -- Fetch endpoint information from the db
+          endpointInfo <- dbtToEff $ Endpoints.endpointByHash pid $ T.take 8 targetHash
+          
+          -- Fetch the old and new formats from the db
+          oldFormat <- dbtToEff $ Anomalies.getOldFieldFormat pid targetHash
+          newFormat <- dbtToEff $ Anomalies.getNewFieldFormat pid targetHash
+          
+          -- Determine if the change is breaking
+          let isBreaking = isBreakingChange oldFormat newFormat
+          
+          -- Create the issue data
+          let issueData = Anomalies.IDFormatAnomaly
+                { endpoint = endpointInfo
+                , fieldName = anomaly.fieldName
+                , oldFormat = oldFormat
+                , newFormat = newFormat
+                , isBreakingChange = isBreaking
+                }
+          
+          -- Generate a new issue ID
+          issueId <- liftIO $ Anomalies.AnomalyId <$> UUIDV4.nextRandom
+          
+          -- Insert the new issue
+          _ <- dbtToEff $ Anomalies.insertIssue $ Anomalies.Issue
+            { id = issueId
+            , createdAt = anomaly.createdAt
+            , updatedAt = anomaly.updatedAt
+            , projectId = pid
+            , anomalyType = Anomalies.ATFormat
+            , targetHash = targetHash
+            , issueData = issueData
+            , acknowledgedAt = Nothing
+            , acknowledgedBy = Nothing
+            , endpointId = Just (T.take 8 targetHash)
+            , archivedAt = Nothing
+            }
+          
+          -- Fetch project and user information for notifications
+          project <- Unsafe.fromJust <$> dbtToEff (Projects.projectById pid)
+          users <- dbtToEff $ Projects.usersByProjectId pid
+          
+          -- Send notifications
+          forM_ project.notificationsChannel \case
+            Projects.NSlack ->
+              sendSlackMessage
+                pid
+                [fmtTrim|
+                  🤖 *New Field Format Anomaly Detected for `{project.title}`*
+                  
+                  We detected a change in the format/type of a field in your API for endpoint: `{endpointInfo.method} {endpointInfo.urlPath}`
+                  
+                  Field: `{anomaly.fieldName}`
+                  Old Format: `{oldFormat}`
+                  New Format: `{newFormat}`
+                  #{if isBreaking then "*This is a breaking change!*" else "This is a non-breaking change."}
+                  
+                  <https://app.apitoolkit.io/p/{pid.toText}/anomalies/by_hash/{targetHash}|View Details on APItoolkit>
+                |]
+            
+            Projects.NDiscord -> do
+              let msg = [fmtTrim|
+                🤖 **New Field Format Anomaly Detected for `{project.title}`**
+                
+                We detected a change in the format/type of a field in your API for endpoint: `{endpointInfo.method} {endpointInfo.urlPath}`
+                
+                Field: `{anomaly.fieldName}`
+                Old Format: `{oldFormat}`
+                New Format: `{newFormat}`
+                #{if isBreaking then "**This is a breaking change!**" else "This is a non-breaking change."}
+                
+                [View Details on APItoolkit](https://app.apitoolkit.io/p/{pid.toText}/anomalies/by_hash/{targetHash})
+              |]
+              whenJust project.discordUrl (`sendDiscordNotif` msg)
+            
+            _ -> forM_ users \u -> do
+              let templateVars = object
+                    [ "user_name" .= u.firstName
+                    , "project_name" .= project.title
+                    , "endpoint_info" .= (endpointInfo.method <> " " <> endpointInfo.urlPath)
+                    , "field_name" .= anomaly.fieldName
+                    , "old_format" .= oldFormat
+                    , "new_format" .= newFormat
+                    , "is_breaking" .= isBreaking
+                    , "anomaly_url" .= ("https://app.apitoolkit.io/p/" <> pid.toText <> "/anomalies/by_hash/" <> targetHash)
+                    ]
+              sendPostmarkEmail (CI.original u.email) "anomaly-format-detailed" templateVars
+      
     -- -- Send an email about the new shape anomaly but only if there was no endpoint anomaly logged
     -- hasEndpointAnomaly <- dbtToEff $ Anomalies.getFormatParentAnomalyVM pid targetHash
     -- when (hasEndpointAnomaly == 0) $ whenJustM (dbtToEff $ Anomalies.getAnomalyVM pid targetHash) \anomaly -> do
@@ -581,3 +761,38 @@ A new runtime exception has been detected. click the link below to see more deta
           sendPostmarkEmail (CI.original u.email) "anomaly-field" templateVars
     Anomalies.ATField -> pass
     Anomalies.ATUnknown -> pass
+
+
+-- Helper function to determine if a type change is breaking
+isBreakingChange :: Text -> Text -> Bool
+isBreakingChange oldFormat newFormat
+  | oldFormat == newFormat = False
+  | otherwise = case (oldFormat, newFormat) of
+    ("Integer", "Float") -> False
+    ("Float", "Integer") -> True
+    ("Number", "Text") -> True
+    ("Text", "Number") -> True
+    ("Boolean", _) -> True
+    (_, "Boolean") -> True
+    ("Array", _) -> True
+    (_, "Array") -> True
+    ("Object", _) -> True
+    (_, "Object") -> True
+    ("Nullable", "NonNullable") -> True
+    ("Date", _) -> True
+    (_, "Date") -> True
+    ("Int32", "Int64") -> False
+    ("Int64", "Int32") -> True
+    ("String", "Char") -> True
+    _ -> False  -- really risky (TO Confirm with Mr Anthony)
+
+-- Helper function to format the list of changes for notifications
+formatChangeList :: [Text] -> Text
+formatChangeList [] = "No changes detected."
+formatChangeList changes
+  | length changes <= 5 = T.intercalate "\n" $ map ("- " <>) changes
+  | otherwise = T.unlines
+      [ T.intercalate "\n" $ map ("- " <>) (take 5 changes)
+      , "..."
+      , T.pack $ "And " ++ show (length changes - 5) ++ " more changes."
+      ]
