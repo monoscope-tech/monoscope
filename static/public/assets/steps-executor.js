@@ -114,8 +114,9 @@ export function renderJsonWithIndentation(json, path = '', depth = 0) {
     ${Object.entries(json).map(([key, value]) => {
       const currentPath = `${path}.${key}`
       return html`
-        <div class="hover:bg-yellow-200 cursor-pointer" style="padding-left: ${padding};">
-          <span @click="${(e) => addAssertion(e, 'body', currentPath)}"> ${key}: ${typeof value === 'object' && value ? '' : JSON.stringify(value)} </span><br />
+        <div style="padding-left: ${padding};">
+          <span class="hover:bg-yellow-200 cursor-pointer" @click="${(e) => addAssertion(e, 'body', currentPath)}"> ${key}: ${typeof value === 'object' && value ? '' : JSON.stringify(value)} </span
+          ><br />
           ${typeof value === 'object' && value ? renderJsonWithIndentation(value, currentPath, depth + 1) : ''}
         </div>
       `
