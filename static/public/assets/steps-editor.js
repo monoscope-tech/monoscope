@@ -402,7 +402,7 @@ ${stepData._requestBody}</textarea
               ${
                 stepResult && stepResult.resp
                   ? html`
-                      <div class="py-3">The request responded with a status of ${stepResult.resp.status} and took <strong>${stepResult.resp.duration_ms}</strong> ms</div>
+                      <div class="py-3">The request responded with a status of <strong>${stepResult.resp.status}</strong>and took <strong>${stepResult.resp.duration_ms}</strong> ms</div>
                       <h3 class="text-xl py-3">Request Preview</h3>
                       <div class="bg-base-200 p-3">${unsafeHTML(generateRequestPreviewFromObject(this.collectionSteps[idx]))}</div>
                     `
@@ -423,7 +423,7 @@ ${stepData._requestBody}</textarea
                 ${
                   stepResult && stepResult.resp
                     ? html`
-                        <div role="tablist" class="tabs tabs-boxed">
+                        <div role="tablist" class="tabs tabs-boxed max-h-96 overflow-y-auto">
                           <input type="radio" name="resp-items" role="tab" class="tab" aria-label="Response Headers" checked />
                           <div role="tabpanel" class="tab-content bg-base-100 p-3">
                             ${Object.entries(stepResult.resp.headers).map(
