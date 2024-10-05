@@ -16,7 +16,7 @@ const baseOperations = [
 // Additional Operations for Body Type
 const bodyAdditionalOperations = [
   { value: 'jsonpath', label: 'jsonpath' },
-  { value: 'jsonschema', label: 'jsonschema' },
+  // { value: 'jsonschema', label: 'jsonschema' },
 ];
 
 const renderInput = (type, value, onChange, placeholder, className) => html`
@@ -64,7 +64,7 @@ function renderInputs(assertion, index, updateAssertion) {
 
   if (assertion.operation === 'jsonpath') {
     inputs.push(
-      renderInput('text', assertion.jsonpath || '', update('jsonpath'), "JSON path"),
+      renderInput('text', assertion.jsonpath || '', update('jsonpath'), "JSON path example .user.id "),
       renderDropdown(
         baseOperations,
         assertion.subOperation,
