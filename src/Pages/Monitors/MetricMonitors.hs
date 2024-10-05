@@ -212,7 +212,7 @@ configureNotificationChannels_ = do
     p_ [class_ "space-x-2"] do
       "Run your test every"
       input_ [class_ "input input-bordered w-24 text-center", type_ "number", value_ "1", name_ "scheduleCount"]
-      select_ [class_ "select select-bordered", name_ "scheduleUnits"] do 
+      select_ [class_ "select select-bordered", name_ "scheduleUnits"] do
         option_ "seconds"
         option_ "minutes"
         option_ "hours"
