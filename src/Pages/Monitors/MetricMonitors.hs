@@ -72,8 +72,8 @@ errorsContent =
       [text|
            Errors are groups of exceptions that have a similar stacktrace. Set an alert for new issues, when an issue changes state, frequency of errors, or users affected by an issue.
            ![](/public/pages/monitors/alerts-wizard-issues.022643ec283774262884.svg)
-           Examples 
-            - When an errorr was seen over 100times in the last 2 days 
+           Examples
+            - When an errorr was seen over 100times in the last 2 days
             - Send an email and a slack message to the team
           |]
    )
@@ -82,8 +82,8 @@ apiChangesContent =
       [text|
            Errors are groups of exceptions that have a similar stacktrace. Set an alert for new issues, when an issue changes state, frequency of errors, or users affected by an issue.
            ![](/public/pages/monitors/alerts-wizard-issues.022643ec283774262884.svg)
-           Examples 
-            - When an errorr was seen over 100times in the last 2 days 
+           Examples
+            - When an errorr was seen over 100times in the last 2 days
             - Send an email and a slack message to the team
           |]
    )
@@ -92,8 +92,8 @@ healthcheckContent =
       [text|
            Errors are groups of exceptions that have a similar stacktrace. Set an alert for new issues, when an issue changes state, frequency of errors, or users affected by an issue.
            ![](/public/pages/monitors/alerts-wizard-issues.022643ec283774262884.svg)
-           Examples 
-            - When an errorr was seen over 100times in the last 2 days 
+           Examples
+            - When an errorr was seen over 100times in the last 2 days
             - Send an email and a slack message to the team
           |]
    )
@@ -102,8 +102,8 @@ multistepApiTestContent =
       [text|
            Errors are groups of exceptions that have a similar stacktrace. Set an alert for new issues, when an issue changes state, frequency of errors, or users affected by an issue.
            ![](/public/pages/monitors/alerts-wizard-issues.022643ec283774262884.svg)
-           Examples 
-            - When an errorr was seen over 100times in the last 2 days 
+           Examples
+            - When an errorr was seen over 100times in the last 2 days
             - Send an email and a slack message to the team
           |]
    )
@@ -112,8 +112,8 @@ throughputContent =
       [text|
            Errors are groups of exceptions that have a similar stacktrace. Set an alert for new issues, when an issue changes state, frequency of errors, or users affected by an issue.
            ![](/public/pages/monitors/alerts-wizard-issues.022643ec283774262884.svg)
-           Examples 
-            - When an errorr was seen over 100times in the last 2 days 
+           Examples
+            - When an errorr was seen over 100times in the last 2 days
             - Send an email and a slack message to the team
           |]
    )
@@ -122,8 +122,8 @@ errorLogsContent =
       [text|
            Errors are groups of exceptions that have a similar stacktrace. Set an alert for new issues, when an issue changes state, frequency of errors, or users affected by an issue.
            ![](/public/pages/monitors/alerts-wizard-issues.022643ec283774262884.svg)
-           Examples 
-            - When an errorr was seen over 100times in the last 2 days 
+           Examples
+            - When an errorr was seen over 100times in the last 2 days
             - Send an email and a slack message to the team
           |]
    )
@@ -207,39 +207,40 @@ configureNotificationMessage_ = do
 
 configureNotificationChannels_ :: Html ()
 configureNotificationChannels_ = do
-  let monitor = (def :: Monitors.QueryMonitor)
+  -- let monitor = (def :: Monitors.QueryMonitor)
   div_ do
     p_ [class_ "space-x-2"] do
       "Run your test every"
       input_ [class_ "input input-bordered w-24 text-center", type_ "number", value_ "1", name_ "scheduleCount"]
-      select_ [class_ "select select-bordered", name_ "scheduleUnits"] do 
+      select_ [class_ "select select-bordered", name_ "scheduleUnits"] do
         option_ "seconds"
         option_ "minutes"
         option_ "hours"
         option_ "days"
-  div_ do
-    p_ "Add individuals, teams or channels that should be notified when this alert triggers"
-    p_ "Alert rules with no recipients will still be triggered and can be viewed form the Changes and Errors page"
-  section_ [class_ "relative space-y-4 space-x-4 py-3", id_ "recipientListParent"] do
-    div_ [class_ "dropdown", id_ "addRecipientDropdown"] do
-      div_
-        [ tabindex_ "0"
-        , role_ "button"
-        , class_ "btn m-1"
-        -- [__|on click toggle .dropdown-open on the closest .dropdown|]
-        ]
-        "Add recipient"
-      ul_ [tabindex_ "0", style_ "bottom:100%;top:auto", class_ "bottom-full top-auto dropdown-content z-[1] menu p-2 shadow bg-base-100 rounded-box w-52 in-w-[15rem]"] do
-        li_ $ a_ [[__|on click put #addRecipientEmailAllTmpl.innerHTML after #addRecipientDropdown then _hyperscript.processNode(#recipientListParent) |]] "Email everyone"
-        li_ $ a_ [[__|on click put #addRecipientEmailTmpl.innerHTML after #addRecipientDropdown then _hyperscript.processNode(#recipientListParent) |]] "Email ..."
-        li_ $ a_ [[__|on click put #addRecipientSlackTmpl.innerHTML after #addRecipientDropdown then _hyperscript.processNode(#recipientListParent) |]] "To default Slack channel"
-    when monitor.alertConfig.emailAll addRecipientEmailAllTmpl_
-    forM_ monitor.alertConfig.emails addRecipientEmailTmpl_
-    forM_ monitor.alertConfig.slackChannels addRecipientSlackTmpl_
-    template_ [id_ "addRecipientSlackTmpl"] $ addRecipientSlackTmpl_ ""
-    template_ [id_ "addRecipientEmailTmpl"] $ addRecipientEmailTmpl_ (CI.mk "")
-    template_ [id_ "addRecipientEmailAllTmpl"] addRecipientEmailAllTmpl_
 
+
+-- div_ do
+--   p_ "Add individuals, teams or channels that should be notified when this alert triggers"
+--   p_ "Alert rules with no recipients will still be triggered and can be viewed form the Changes and Errors page"
+-- section_ [class_ "relative space-y-4 space-x-4 py-3", id_ "recipientListParent"] do
+--   div_ [class_ "dropdown", id_ "addRecipientDropdown"] do
+--     div_
+--       [ tabindex_ "0"
+--       , role_ "button"
+--       , class_ "btn m-1"
+--       -- [__|on click toggle .dropdown-open on the closest .dropdown|]
+--       ]
+--       "Add recipient"
+--     ul_ [tabindex_ "0", style_ "bottom:100%;top:auto", class_ "bottom-full top-auto dropdown-content z-[1] menu p-2 shadow bg-base-100 rounded-box w-52 in-w-[15rem]"] do
+--       li_ $ a_ [[__|on click put #addRecipientEmailAllTmpl.innerHTML after #addRecipientDropdown then _hyperscript.processNode(#recipientListParent) |]] "Email everyone"
+--       li_ $ a_ [[__|on click put #addRecipientEmailTmpl.innerHTML after #addRecipientDropdown then _hyperscript.processNode(#recipientListParent) |]] "Email ..."
+--       li_ $ a_ [[__|on click put #addRecipientSlackTmpl.innerHTML after #addRecipientDropdown then _hyperscript.processNode(#recipientListParent) |]] "To default Slack channel"
+--   when monitor.alertConfig.emailAll addRecipientEmailAllTmpl_
+--   forM_ monitor.alertConfig.emails addRecipientEmailTmpl_
+--   forM_ monitor.alertConfig.slackChannels addRecipientSlackTmpl_
+--   template_ [id_ "addRecipientSlackTmpl"] $ addRecipientSlackTmpl_ ""
+--   template_ [id_ "addRecipientEmailTmpl"] $ addRecipientEmailTmpl_ (CI.mk "")
+--   template_ [id_ "addRecipientEmailAllTmpl"] addRecipientEmailAllTmpl_
 
 addRecipientSlackTmpl_ :: Text -> Html ()
 addRecipientSlackTmpl_ channel =

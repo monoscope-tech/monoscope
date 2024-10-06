@@ -49,6 +49,21 @@ export class StepsEditor extends LitElement {
       this.requestUpdate()
     }
 
+    window.addAssertion = (assertionObj, step_indx, ass_indx) => {
+      const stepData = this.collectionSteps[step_indx]
+      console.log(stepData)
+      if (stepData) {
+        if (!ass_indx) {
+          stepData._assertions = [...stepData._assertions, assertionObj]
+        } else {
+          stepData._assertions[ass_indx] = assertionObj
+        }
+        this.collectionSteps[step_indx] = stepData
+        window.collectionSteps = this.collectionSteps
+      }
+      this.requestUpdate()
+    }
+
     window.updateCollectionResults = (results) => {
       if (results && Array.isArray(results)) {
         this.collectionResults = results
@@ -434,7 +449,7 @@ ${stepData._requestBody}</textarea
                           <input type="radio" name="resp-items" role="tab" class="tab" aria-label="Response Body" />
                           <div role="tabpanel" class="tab-content bg-base-100 p-3">
                             <div>{</div>
-                            <div class="pl-3">${renderJsonWithIndentation(stepResult.resp.json, '$')}</div>
+                            <div class="pl-3">${renderJsonWithIndentation(stepResult.resp.json, idx, '$')}</div>
                             <div>}</div>
                           </div>
 

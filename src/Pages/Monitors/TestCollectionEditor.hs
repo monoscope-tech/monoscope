@@ -204,15 +204,27 @@ timelineSteps pid =
   Components.TimelineSteps
     $ [ Components.TimelineStep "Define API test" defineTestSteps_
       , Components.TimelineStep "Name and tag your test" nameOfTest_
-      , Components.TimelineStep "Define Scheduling and alert conditions" (MetricMonitors.configureNotificationChannels_)
-      , Components.TimelineStep "Set Alert Message and Recovery Threshold" (MetricMonitors.configureNotificationMessage_)
+      , Components.TimelineStep "Define Scheduling and alert conditions" MetricMonitors.configureNotificationChannels_
+      , Components.TimelineStep "Set Alert Message and Recovery Threshold" MetricMonitors.configureNotificationMessage_
       ]
 
 
 nameOfTest_ :: Html ()
-nameOfTest_ = div_ [class_ "form-control w-full"] do
-  label_ [class_ "label hidden"] $ span_ [class_ "label-text"] "Name"
-  input_ [placeholder_ "Give your test a name", class_ "input input-sm input-bordered  w-full", name_ "subject", value_ ""]
+nameOfTest_ = div_ [class_ "form-control w-full flex flex-col"] do
+  label_ [class_ "label"] $ span_ [class_ "label-text"] "Name"
+  input_ [placeholder_ "Give your test a name", class_ "input input-sm input-bordered mb-2  w-full", name_ "name", value_ ""]
+  label_ [class_ "label"] $ span_ [class_ "label-text"] "Tags"
+  input_ [placeholder_ "Add tags", value_ "", id_ "tags_input"]
+
+  script_
+    [text|
+    document.addEventListener('DOMContentLoaded', function() {
+      var inputElem = document.querySelector('#tags_input')
+      console.log(inputElem)
+      var tagify = new Tagify(inputElem)
+      console.log(tagify)
+    })
+  |]
 
 
 defineTestSteps_ :: Html ()

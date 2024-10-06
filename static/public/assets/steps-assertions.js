@@ -1,4 +1,4 @@
-import { html } from './js/thirdparty/lit.js';
+import { html } from './js/thirdparty/lit.js'
 
 // Base Operations List
 const baseOperations = [
@@ -11,133 +11,98 @@ const baseOperations = [
   { value: 'gt', label: 'is greater than' },
   { value: 'lt', label: 'is less than' },
   { value: 'isUndefined', label: 'is undefined' },
-];
+]
 
 // Additional Operations for Body Type
 const bodyAdditionalOperations = [
   { value: 'jsonpath', label: 'jsonpath' },
   { value: 'jsonschema', label: 'jsonschema' },
-];
+]
 
 const renderInput = (type, value, onChange, placeholder, className) => html`
-  <input
-    type=${type}
-    placeholder=${placeholder}
-    class="input input-sm input-bordered grow ${className}"
-    .value=${value}
-    @input=${onChange}
-  />
-`;
+  <input type=${type} placeholder=${placeholder} class="input input-sm input-bordered grow ${className}" .value=${value} @input=${onChange} />
+`
 
 const renderTextarea = (value, onChange, placeholder) => html`
-  <textarea
-    placeholder=${placeholder}
-    class="textarea textarea-sm textarea-bordered h-24 grow"
-    .value=${value}
-    @input=${onChange}
-  ></textarea>
-`;
+  <textarea placeholder=${placeholder} class="textarea textarea-sm textarea-bordered h-24 grow" .value=${value} @input=${onChange}></textarea>
+`
 
 const renderDropdown = (options, value, onChange, className) => html`
   <select class="select select-sm select-bordered max-w-xs ${className}" .value=${value} @change=${onChange}>
-    ${options.map(option => html`
-      <option value=${option.value} ?selected=${option.value === value}>${option.label}</option>
-    `)}
+    ${options.map((option) => html` <option value=${option.value} ?selected=${option.value === value}>${option.label}</option> `)}
   </select>
-`;
+`
 
 // Main renderInputs function
 function renderInputs(assertion, index, updateAssertion) {
-  const update = (field) => (e) => updateAssertion(index, { [field]: e.target.value });
-  const inputs = [];
+  const update = (field) => (e) => updateAssertion(index, { [field]: e.target.value })
+  const inputs = []
   if (assertion.type === 'responseTime') {
-    inputs.push(renderDropdown(
-      [
-        { value: 'includeDNS', label: 'Including DNS' },
-        { value: 'excludeDNS', label: 'Excluding DNS' }
-      ],
-      assertion.includeDNS ? 'includeDNS' : 'excludeDNS',
-      (e) => updateAssertion(index, { includeDNS: e.target.value === 'includeDNS' }),
-      "select select-bordered w-48"
-    ));
+    inputs.push(
+      renderDropdown(
+        [
+          { value: 'includeDNS', label: 'Including DNS' },
+          { value: 'excludeDNS', label: 'Excluding DNS' },
+        ],
+        assertion.includeDNS ? 'includeDNS' : 'excludeDNS',
+        (e) => updateAssertion(index, { includeDNS: e.target.value === 'includeDNS' }),
+        'select select-bordered w-48'
+      )
+    )
   }
 
   if (assertion.operation === 'jsonpath') {
-    inputs.push(
-      renderInput('text', assertion.jsonpath || '', update('jsonpath'), "JSON path"),
-      renderDropdown(
-        baseOperations,
-        assertion.subOperation,
-        update('subOperation')
-      )
-    );
+    inputs.push(renderInput('text', assertion.jsonpath || '', update('jsonpath'), 'JSON path'), renderDropdown(baseOperations, assertion.subOperation, update('subOperation')))
 
     if (assertion.subOperation !== 'isUndefined') {
-      inputs.push(renderInput('text', assertion.value || '', update('value'), "Value"));
+      inputs.push(renderInput('text', assertion.value || '', update('value'), 'Value'))
     }
   } else if (assertion.operation === 'jsonschema') {
-    inputs.push(renderTextarea(assertion.value || '', update('value'), "JSON Schema"));
+    inputs.push(renderTextarea(assertion.value || '', update('value'), 'JSON Schema'))
   } else if (assertion.operation !== 'isUndefined') {
     const inputConfig = {
-      header: { type: 'number', placeholder: 'Header Value', className: 'w-5' },
+      header: { type: 'text', placeholder: 'Header Value', className: 'w-5' },
       statusCode: { type: 'number', placeholder: 'Status Code', className: 'w-5' },
       responseTime: { type: 'number', placeholder: 'Time (ms)', className: 'w-32' },
-      default: { type: 'text', placeholder: 'Value', className: 'w-64' }
-    };
+      default: { type: 'text', placeholder: 'Value', className: 'w-64' },
+    }
 
-    const config = inputConfig[assertion.type] || inputConfig.default;
+    const config = inputConfig[assertion.type] || inputConfig.default
 
     inputs.push(
       assertion.type == 'body'
         ? renderTextarea(assertion.value || '', update('value', config.placeholder), 'Body content')
-        : renderInput(
-          config.type,
-          assertion.value || '',
-          update('value'),
-          config.placeholder,
-          config.className
-        )
-    );
+        : renderInput(config.type, assertion.value || '', update('value'), config.placeholder, config.className)
+    )
   }
 
-  return html`<div class="${assertion.type == 'body' ? "basis-full" : ""} grow inline-flex gap-2">${inputs}</div>`;
+  return html`<div class="${assertion.type == 'body' ? 'basis-full' : ''} grow inline-flex gap-2">${inputs}</div>`
 }
 
 // Generic function to render assertion content
 function renderAssertionContent(assertion, index, updateAssertion) {
-  const isBodyType = assertion.type === 'body';
+  const isBodyType = assertion.type === 'body'
 
   // Determine operations based on type
-  const operationOptions = isBodyType
-    ? [...baseOperations, ...bodyAdditionalOperations]
-    : baseOperations;
-  const inputs = [];
+  const operationOptions = isBodyType ? [...baseOperations, ...bodyAdditionalOperations] : baseOperations
+  const inputs = []
 
   if (assertion.type === 'header') {
-    inputs.push(renderInput("text",
-      assertion.headerName || '',
-      (e) => updateAssertion(index, { headerName: e.target.value }),
-      "Header name",
-      ""
-    ))
+    inputs.push(renderInput('text', assertion.headerName || '', (e) => updateAssertion(index, { headerName: e.target.value }), 'Header name', ''))
   }
 
-  inputs.push(renderDropdown(
-    operationOptions,
-    assertion.operation,
-    (e) => updateAssertion(index, { operation: e.target.value })
-  ));
+  inputs.push(renderDropdown(operationOptions, assertion.operation, (e) => updateAssertion(index, { operation: e.target.value })))
 
   // Additional Inputs based on Operation
-  inputs.push(renderInputs(assertion, index, updateAssertion));
+  inputs.push(renderInputs(assertion, index, updateAssertion))
 
-  return html`${inputs}`;
+  return html`${inputs}`
 }
 
 // Placeholder for assertion evaluation logic
 function evaluateAssertion(assertion, response) {
   // Implement your assertion evaluation logic here
-  return assertion.status === 'PASSED';
+  return assertion.status === 'PASSED'
 }
 
 // Main Render Function
@@ -150,37 +115,36 @@ export function renderAssertionBuilder({
   return html`
     <div class="px-4 divide-y">
       ${assertions.map((assertion, index) => {
-    return html`
+        return html`
           <div class="flex py-2 space-x-2 border-b">
-            <strong class="block w-16 text-right mr-2 flex-shrink-0 pt-2">${index == 0 ? "When" : "And"}</strong>
+            <strong class="block w-16 text-right mr-2 flex-shrink-0 pt-2">${index == 0 ? 'When' : 'And'}</strong>
             <div class="flex flex-wrap items-center gap-2 grow ">
-      ${renderDropdown(
-      [
-        { value: 'body', label: 'body' },
-        { value: 'header', label: 'header' },
-        { value: 'statusCode', label: 'status code' },
-        { value: 'responseTime', label: 'response time' },
-      ],
-      assertion.type,
-      (e) => updateAssertion(index, { type: e.target.value, operation: undefined, jsonpath: undefined, subOperation: undefined, value: undefined, status: undefined }),
-      ''
-    )}
-    ${renderAssertionContent(assertion, index, updateAssertion)}
+              ${renderDropdown(
+                [
+                  { value: 'body', label: 'body' },
+                  { value: 'header', label: 'header' },
+                  { value: 'statusCode', label: 'status code' },
+                  { value: 'responseTime', label: 'response time' },
+                ],
+                assertion.type,
+                (e) => updateAssertion(index, { type: e.target.value, operation: undefined, jsonpath: undefined, subOperation: undefined, value: undefined, status: undefined }),
+                ''
+              )}
+              ${renderAssertionContent(assertion, index, updateAssertion)}
             </div>
-            <div class="flex-shrink-0 "><div class="flex gap-3 pt-2 items-center">
-    ${evaluateAssertion(assertion, result)
-        ? html`<span class="text-success ">PASSED</span>`
-        : html`<span class="text-error">FAILED</span>`}
-            <a class="cursor-pointer text-slate-600">${faSprite_('trash', 'regular', 'w-3 h-3')}</a>
+            <div class="flex-shrink-0 ">
+              <div class="flex gap-3 pt-2 items-center">
+                ${evaluateAssertion(assertion, result) ? html`<span class="text-success ">PASSED</span>` : html`<span class="text-error">FAILED</span>`}
+                <a class="cursor-pointer text-slate-600">${faSprite_('trash', 'regular', 'w-3 h-3')}</a>
+              </div>
+            </div>
           </div>
-        </div>
-      `;
-  })}
-      <div class="py-2"><button class="btn btn-outline btn-xs" @click=${addAssertion}>${faSprite_("plus", "regular", "w-4 h-4")} New Assertion</button></div>
+        `
+      })}
+      <div class="py-2"><button class="btn btn-outline btn-xs" @click=${addAssertion}>${faSprite_('plus', 'regular', 'w-4 h-4')} New Assertion</button></div>
     </div>
-  `;
+  `
 }
-
 
 function faSprite_(iconName, kind, classes) {
   return html`<svg class="${classes}"><use href="/public/assets/svgs/fa-sprites/${kind}.svg#${iconName}"></use></svg>`
