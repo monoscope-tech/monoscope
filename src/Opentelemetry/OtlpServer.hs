@@ -221,7 +221,7 @@ convertLogRecord :: Maybe Resource -> Maybe InstrumentationScope -> LogRecord ->
 convertLogRecord resource scope lr =
   Telemetry.LogRecord
     { projectId = fromMaybe (error "invalid at-project-id in logs") do
-        UUID.fromText =<< anyValueToString =<< pid'
+        UUID.fromText =<< anyValueToString =<< pid
     , id = Nothing
     , timestamp = if lr.logRecordTimeUnixNano == 0 then nanosecondsToUTC lr.logRecordObservedTimeUnixNano else nanosecondsToUTC lr.logRecordTimeUnixNano
     , observedTimestamp = nanosecondsToUTC lr.logRecordObservedTimeUnixNano
@@ -236,7 +236,6 @@ convertLogRecord resource scope lr =
     }
   where
     pid = resource >>= \r -> find (\kv -> kv.keyValueKey == "at-project-id") r.resourceAttributes >>= (.keyValueValue) >>= (.anyValueValue)
-    pid' = if isJust pid then pid else find (\kv -> kv.keyValueKey == "at-project-id") lr.logRecordAttributes >>= (.keyValueValue) >>= (.anyValueValue)
 
 
 convertSpanRecord :: Maybe Resource -> Maybe InstrumentationScope -> Span -> Telemetry.SpanRecord
@@ -244,7 +243,7 @@ convertSpanRecord resource scope sp =
   Telemetry.SpanRecord
     { uSpandId = Nothing
     , projectId = fromMaybe (error "invalid at-project-id in span") do
-        UUID.fromText =<< anyValueToString =<< pid'
+        UUID.fromText =<< anyValueToString =<< pid
     , timestamp = nanosecondsToUTC sp.spanStartTimeUnixNano
     , traceId = byteStringToHexText sp.spanTraceId
     , spanId = byteStringToHexText sp.spanSpanId
@@ -265,7 +264,6 @@ convertSpanRecord resource scope sp =
     }
   where
     pid = resource >>= \r -> find (\kv -> kv.keyValueKey == "at-project-id") r.resourceAttributes >>= (.keyValueValue) >>= (.anyValueValue)
-    pid' = if isJust pid then pid else find (\kv -> kv.keyValueKey == "at-project-id") sp.spanAttributes >>= (.keyValueValue) >>= (.anyValueValue)
     durr = fromIntegral $ sp.spanEndTimeUnixNano - sp.spanStartTimeUnixNano
 
 

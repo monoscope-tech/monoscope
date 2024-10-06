@@ -112,16 +112,17 @@ export function renderJsonWithIndentation(json, step_indx, path = '', depth = 0)
   return html`
     ${Object.entries(json).map(([key, value]) => {
       const currentPath = Array.isArray(json) ? `${path}.[${key}]` : `${path}.${key}`
-      const assertionObj = { type: 'body', operation: 'jsonpath', jsonpath: currentPath, value: typeof value !== 'object' ? value : '', status: 'PASSED' }
+      const assertionObj = {
+        type: 'body',
+        operation: 'jsonpath',
+        jsonpath: currentPath,
+        subOperation: 'equals',
+        value: typeof value !== 'object' ? value : '',
+        status: 'PASSED',
+      }
       return html`
         <div style="padding-left: ${padding};">
-          <span
-            class="hover:bg-yellow-200 cursor-pointer"
-            @click="${(e) => {
-              console.log('hello world', assertionObj)
-              window.addAssertion(assertionObj, step_indx)
-            }}"
-          >
+          <span class="hover:bg-gray-200 cursor-pointer" @click="${(e) => window.addAssertion(assertionObj, step_indx)}">
             ${key}: ${typeof value === 'object' && value ? '' : JSON.stringify(value)} </span
           ><br />
           ${typeof value === 'object' && value ? renderJsonWithIndentation(value, step_indx, currentPath, depth + 1) : ''}

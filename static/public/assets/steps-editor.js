@@ -51,7 +51,6 @@ export class StepsEditor extends LitElement {
 
     window.addAssertion = (assertionObj, step_indx, ass_indx) => {
       const stepData = this.collectionSteps[step_indx]
-      console.log(stepData)
       if (stepData) {
         if (!ass_indx) {
           stepData._assertions = [...stepData._assertions, assertionObj]
@@ -59,8 +58,9 @@ export class StepsEditor extends LitElement {
           stepData._assertions[ass_indx] = assertionObj
         }
         this.collectionSteps[step_indx] = stepData
-        window.collectionSteps = this.collectionSteps
+        window.collectionSteps = [...this.collectionSteps]
       }
+      window.updateCollectionResults()
       this.requestUpdate()
     }
 

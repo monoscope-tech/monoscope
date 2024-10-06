@@ -54,7 +54,6 @@ function renderInputs(assertion, index, updateAssertion) {
 
   if (assertion.operation === 'jsonpath') {
     inputs.push(renderInput('text', assertion.jsonpath || '', update('jsonpath'), 'JSON path'), renderDropdown(baseOperations, assertion.subOperation, update('subOperation')))
-
     if (assertion.subOperation !== 'isUndefined') {
       inputs.push(renderInput('text', assertion.value || '', update('value'), 'Value'))
     }
@@ -116,6 +115,7 @@ export function renderAssertionBuilder({
   return html`
     <div class="px-4 divide-y">
       ${assertions.map((assertion, index) => {
+        console.log(assertion, index, '====----====')
         return html`
           <div class="flex py-2 space-x-2 border-b">
             <strong class="block w-16 text-right mr-2 flex-shrink-0 pt-2">${index == 0 ? 'When' : 'And'}</strong>
