@@ -201,12 +201,11 @@ testSettingsModalContent_ isUpdate col = div_ [class_ "space-y-5 w-96"] do
 
 timelineSteps :: Projects.ProjectId -> Components.TimelineSteps
 timelineSteps pid =
-  Components.TimelineSteps
-    $ [ Components.TimelineStep "Define API test" defineTestSteps_
-      , Components.TimelineStep "Name and tag your test" nameOfTest_
-      , Components.TimelineStep "Define Scheduling and alert conditions" MetricMonitors.configureNotificationChannels_
-      , Components.TimelineStep "Set Alert Message and Recovery Threshold" MetricMonitors.configureNotificationMessage_
-      ]
+  Components.TimelineSteps $
+    [ Components.TimelineStep "Define API test" defineTestSteps_
+    , Components.TimelineStep "Name and tag your test" nameOfTest_
+    , Components.TimelineStep "Set Alert Message and Recovery Threshold" (MetricMonitors.configureNotificationMessage_)
+    ]
 
 
 nameOfTest_ :: Html ()
@@ -229,6 +228,14 @@ nameOfTest_ = div_ [class_ "form-control w-full flex flex-col"] do
 
 defineTestSteps_ :: Html ()
 defineTestSteps_ = do
+  p_ [class_ "space-x-2"] do
+    "Run the test every"
+    input_ [class_ "ml-3 input input-sm input-bordered w-24 text-center", type_ "number", value_ "1", name_ "scheduleCount"]
+    select_ [class_ "select select-sm select-bordered", name_ "scheduleUnits"] do
+      option_ "seconds"
+      option_ "minutes"
+      option_ "hours"
+      option_ "days"
   div_ [class_ "alert"] do
     faSprite_ "sparkles" "regular" "w-7 h-7 text-success "
     div_ [] do
@@ -377,13 +384,13 @@ collectionStepResult_ idx stepResult = section_ [class_ "p-1"] do
     p_ [class_ $ "block badge badge-sm " <> getStatusColor stepResult.request.resp.status, term "data-tippy-content" "status"] $ show stepResult.request.resp.status
   div_ [role_ "tablist", class_ "tabs tabs-lifted"] do
     input_ [type_ "radio", name_ $ "step-result-tabs-" <> show idx, role_ "tab", class_ "tab", Aria.label_ "Response Log", checked_]
-    div_ [role_ "tabpanel", class_ "tab-content bg-base-100 border-base-300 rounded-box p-6"]
-      $ toHtmlRaw
-      $ textToHTML stepResult.stepLog
+    div_ [role_ "tabpanel", class_ "tab-content bg-base-100 border-base-300 rounded-box p-6"] $
+      toHtmlRaw $
+        textToHTML stepResult.stepLog
 
     input_ [type_ "radio", name_ $ "step-result-tabs-" <> show idx, role_ "tab", class_ "tab", Aria.label_ "Response Headers"]
-    div_ [role_ "tabpanel", class_ "tab-content bg-base-100 border-base-300 rounded-box p-6 "]
-      $ table_ [class_ "table table-xs"] do
+    div_ [role_ "tabpanel", class_ "tab-content bg-base-100 border-base-300 rounded-box p-6 "] $
+      table_ [class_ "table table-xs"] do
         thead_ [] $ tr_ [] $ th_ [] "Name" >> th_ [] "Value"
         tbody_ $ forM_ (M.toList stepResult.request.resp.headers) $ \(k, v) -> tr_ [] do
           td_ [] $ toHtml k

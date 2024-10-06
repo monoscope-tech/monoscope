@@ -17,6 +17,7 @@ const baseOperations = [
 const bodyAdditionalOperations = [
   { value: 'jsonpath', label: 'jsonpath' },
   { value: 'jsonschema', label: 'jsonschema' },
+  // { value: 'jsonschema', label: 'jsonschema' },
 ]
 
 const renderInput = (type, value, onChange, placeholder, className) => html`

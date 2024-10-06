@@ -90,8 +90,8 @@ apiLogH pid queryM cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM 
   let tableAsVecM = hush tableAsVecE
 
   freeTierExceeded <-
-    dbtToEff
-      $ if project.paymentPlan == "Free"
+    dbtToEff $
+      if project.paymentPlan == "Free"
         then do
           totalRequest <- RequestDumps.getLastSevenDaysTotalRequest pid
           return $ totalRequest > 5000
@@ -192,7 +192,7 @@ instance ToHtml LogsGet where
 logQueryBox_ :: Projects.ProjectId -> Maybe Text -> Text -> Maybe Text -> Html ()
 logQueryBox_ pid currentRange source targetSpan =
   form_
-    [ class_ "card-round w-full text-sm flex gap-3 items-center p-1"
+    [ class_ "w-full text-sm flex gap-3 items-center justify-center"
     , hxGet_ $ "/p/" <> pid.toText <> "/log_explorer"
     , hxPushUrl_ "true"
     , hxVals_ "js:{query:window.getQueryFromEditor(), since: getTimeRange().since, from: getTimeRange().from, to:getTimeRange().to, cols:params().cols, layout:'all', source: params().source}"
@@ -208,7 +208,7 @@ logQueryBox_ pid currentRange source targetSpan =
         div_ [id_ "queryBuilder"] $ termRaw "filter-element" [id_ "filterElement"] ("" :: Text)
       when (source == "spans") do
         let target = fromMaybe "all-spans" targetSpan
-        div_ [class_ "self-end mb-1 gap-[2px] flex items-center"] do
+        div_ [class_ "gap-[2px] flex items-center"] do
           span_ "In"
           select_
             [ class_ "ml-1 select select-sm select-bordered w-full max-w-[150px]"
@@ -216,12 +216,12 @@ logQueryBox_ pid currentRange source targetSpan =
             , id_ "spans-toggle"
             , onchange_ "htmx.trigger('#log_explorer_form', 'submit')"
             ]
-            $ do
+            do
               option_ (value_ "all-spans" : ([selected_ "true" | target == "all-spans"])) "All spans"
               option_ (value_ "root-spans" : ([selected_ "true" | target == "root-spans"])) "Trace Root Spans"
               option_ (value_ "service-entry-spans" : ([selected_ "true" | target == "service-entry-spans"])) "Service Entry Spans"
       button_
-        [type_ "submit", class_ "btn self-end btn-sm btn-success mb-1"]
+        [type_ "submit", class_ "btn btn-sm btn-success"]
         do
           span_ [id_ "run-query-indicator", class_ "refresh-indicator htmx-indicator query-indicator loading loading-dots loading-md"] ""
           faSprite_ "sparkles" "regular" "h-3 w-3 inline-block"
@@ -251,7 +251,7 @@ data ApiLogsPageData = ApiLogsPageData
 
 apiLogsPage :: ApiLogsPageData -> Html ()
 apiLogsPage page = do
-  section_ [class_ "mx-auto pt-2 px-6 gap-2 w-full flex flex-col h-full overflow-hidden pb-12", id_ "apiLogsPage"] do
+  section_ [class_ "mx-auto pt-2 px-6 gap-2 w-full flex flex-col h-full overflow-hidden pb-12  group/pg", id_ "apiLogsPage"] do
     when page.exceededFreeTier $ freeTierLimitExceededBanner page.pid.toText
     whenJust page.daysCountDown $ \daysCountDown -> do
       div_ [class_ "w-full py-1 mt-2 rounded text-green-600 text-center"] do
@@ -266,9 +266,9 @@ apiLogsPage page = do
       ]
       do
         div_ [class_ "relative ml-auto w-full", style_ ""] do
-          div_ [class_ "flex justify-end  w-full p-4 "]
-            $ button_ [[__|on click add .hidden to #expand-log-modal|]]
-            $ faSprite_ "xmark" "regular" "h-8"
+          div_ [class_ "flex justify-end  w-full p-4 "] $
+            button_ [[__|on click add .hidden to #expand-log-modal|]] $
+              faSprite_ "xmark" "regular" "h-8"
           form_
             [ hxPost_ $ "/p/" <> page.pid.toText <> "/share/"
             , hxSwap_ "innerHTML"
@@ -297,13 +297,24 @@ apiLogsPage page = do
        return {since: params().since, from: params().from, to: params().to}
     }
       |]
-    logQueryBox_ page.pid page.currentRange page.source page.targetSpans
+    div_ do
+      logQueryBox_ page.pid page.currentRange page.source page.targetSpans
+      div_ [class_ "flex items-center  gap-2 text-sm"] do
+        div_ [class_ "py-1 flex flex-row justify-end"] do
+          label_ [class_ "flex items-center cursor-pointer space-x-2 p-1"] do
+            input_ [type_ "checkbox", class_ "toggle toggle-xs toggle-chart"]
+            small_ "charts"
+        span_ [class_ "text-slate-300"] "|"
+        div_ [class_ "form-control w-max"] $
+          label_ [class_ "label flex items-center cursor-pointer w-max space-x-2"] do
+            input_ [type_ "checkbox", class_ "toggle toggle-xs", id_ "toggleQueryEditor", onclick_ "toggleQueryBuilder()"]
+            small_ "query editor"
 
-    div_ [class_ "card-round w-full  divide-y flex flex-col text-sm overflow-hidden group/result"] do
+    div_ [class_ "card-round w-full  divide-y flex flex-col text-sm overflow-hidden pt-2"] do
       div_ [class_ ""] do
         div_ [class_ "flex items-center justify-end gap-2"] do
-          div_ [class_ "form-control w-max"]
-            $ label_ [class_ "label flex items-center cursor-pointer w-max space-x-2"] do
+          div_ [class_ "form-control w-max"] $
+            label_ [class_ "label flex items-center cursor-pointer w-max space-x-2"] do
               input_ [type_ "checkbox", class_ "toggle toggle-xs", id_ "toggleQueryEditor", onclick_ "toggleQueryBuilder()"]
               small_ "toggle query editor"
 
@@ -321,7 +332,7 @@ apiLogsPage page = do
               small_ [] $ toHtml @Text $ "(" <> fmt (commaizeF page.resultCount) <> " total)"
             div_
               [ id_ "reqsChartsECP"
-              , class_ $ "log-chart px-5 hidden group-has-[.toggle-chart:checked]/result:block " <> (chartAspectRatio page.source)
+              , class_ $ "log-chart px-5 group-has-[.toggle-chart:checked]/pg:hidden " <> (chartAspectRatio page.source)
               , hxGet_ $ "/charts_html?id=reqsChartsEC&show_legend=false&pid=" <> page.pid.toText
               , hxTrigger_ "intersect,  htmx:beforeRequest from:#log_explorer_form"
               , hxVals_ "js:{query_raw:window.getQueryFromEditor(), since: getTimeRange().since, from: getTimeRange().from, to:getTimeRange().to, cols:params().cols, layout:'all', source: params().source}"
@@ -332,7 +343,7 @@ apiLogsPage page = do
             div_ [class_ "pl-5 text-sm text-gray-500"] "Errors"
             div_
               [ id_ "reqsChartsErrP"
-              , class_ $ "log-chart px-5 hidden group-has-[.toggle-chart:checked]/result:block " <> (chartAspectRatio page.source)
+              , class_ $ "log-chart px-5 group-has-[.toggle-chart:checked]/pg:hidden " <> (chartAspectRatio page.source)
               , term "data-source" page.source
               , hxGet_ $ "/charts_html?id=reqsChartsErr&theme=roma&show_legend=false&pid=" <> page.pid.toText
               , hxTrigger_ "intersect"
@@ -344,7 +355,7 @@ apiLogsPage page = do
             div_ [class_ "pl-5 text-sm text-gray-500"] "Latency"
             div_
               [ id_ "reqsChartsLatP"
-              , class_ $ "log-chart px-5 hidden group-has-[.toggle-chart:checked]/result:block " <> (chartAspectRatio page.source)
+              , class_ $ "log-chart px-5 group-has-[.toggle-chart:checked]/pg:hidden " <> (chartAspectRatio page.source)
               , hxGet_ $ "/charts_html?id=reqsChartsLat&chart_type=LineCT&group_by=GBDurationPercentile&show_legend=false&pid=" <> page.pid.toText
               , hxTrigger_ "intersect, htmx:beforeRequest from:#log_explorer_form"
               , hxVals_ "js:{query_raw:window.getQueryFromEditor('latency'), since: getTimeRange().since, from: getTimeRange().from, to:getTimeRange().to, cols:params().cols, layout:'all', source: params().source}"
@@ -362,8 +373,8 @@ apiLogsPage page = do
 
 resultTableAndMeta_ :: ApiLogsPageData -> Html ()
 resultTableAndMeta_ page =
-  div_ [class_ "relative overflow-y-scroll overflow-x-hidden h-full w-full"]
-    $ resultTable_ page True
+  div_ [class_ "relative overflow-y-scroll overflow-x-hidden h-full w-full"] $
+    resultTable_ page True
 
 
 resultTable_ :: ApiLogsPageData -> Bool -> Html ()
@@ -376,7 +387,7 @@ resultTable_ page mainLog = table_
   do
     -- height:1px fixes the cell minimum heights somehow.
     let isLogEventB = isLogEvent page.cols
-    when (null page.requestVecs && (isNothing page.query || not mainLog)) $ do
+    when (null page.requestVecs && (isNothing page.query || not mainLog)) do
       whenJust page.isTestLog $ \query -> do
         section_ [class_ "w-max  mx-auto my-16 p-5 sm:py-14 sm:px-24 items-center flex gap-16"] do
           div_ [] $ faSprite_ "empty-set" "solid" "h-24 w-24"
@@ -384,7 +395,7 @@ resultTable_ page mainLog = table_
             h2_ [class_ "text-2xl font-bold"] "Waiting for Test run events..."
             p_ "You're currently not running any tests yet."
             a_ [href_ $ fromMaybe "" page.emptyStateUrl, class_ "w-max btn btn-indigo -ml-1 text-md"] "Go to test editor"
-      unless (isJust page.isTestLog) $ do
+      unless (isJust page.isTestLog) do
         if mainLog
           then do
             section_ [class_ "w-max  mx-auto my-16 p-5 sm:py-14 sm:px-24 items-center flex gap-16"] do
@@ -394,7 +405,7 @@ resultTable_ page mainLog = table_
                 p_ "You're currently not sending any data to APItoolkit from your backends yet."
                 a_ [href_ $ "/p/" <> page.pid.toText <> "/integration_guides", class_ "w-max btn btn-indigo -ml-1 text-md"] "Read the setup guide"
           else section_ [class_ "w-max mx-auto"] $ p_ "This request has no outgoing requests yet."
-    unless (null page.requestVecs) $ do
+    unless (null page.requestVecs) do
       thead_ $ tr_ [class_ "divide-x b--b2"] $ forM_ page.cols $ logTableHeading_ page.pid isLogEventB
       tbody_ [id_ "w-full log-item-table-body [content-visibility:auto]"] $ logItemRows_ page.pid page.requestVecs page.cols page.colIdxMap page.nextLogsURL page.source page.childSpans
 
@@ -438,24 +449,24 @@ logItemRows_ pid requests curatedCols colIdxMap nextLogsURL source chSpns = do
   forM_ requests \reqVec -> do
     let (logItemPath, _reqId) = fromMaybe ("", "") $ requestDumpLogItemUrlPath pid reqVec colIdxMap
     let (_, errCount, errClass) = errorClass True reqVec colIdxMap
-    tr_ [class_ "cursor-pointer divide-x b--b2", [__|on click toggle .hidden on next <tr/> then toggle .expanded-log on me|]]
-      $ forM_ curatedCols \c -> td_ [] do
+    tr_ [class_ "cursor-pointer divide-x b--b2", [__|on click toggle .hidden on next <tr/> then toggle .expanded-log on me|]] $
+      forM_ curatedCols \c -> td_ [] do
         logItemCol_ source pid reqVec colIdxMap c chSpns
-    tr_ [class_ "hidden"] $ do
+    tr_ [class_ "hidden"] do
       -- used for when a row is expanded.
       td_ $ a_ [class_ $ "inline-block h-full " <> errClass, term "data-tippy-content" $ show errCount <> " errors attached to this request"] ""
       td_ [colspan_ $ show $ length curatedCols - 1] $ div_ [hxGet_ $ logItemPath <> "?source=" <> source, hxTrigger_ "intersect once", hxSwap_ "outerHTML"] $ span_ [class_ "loading loading-dots loading-md"] ""
-  when (Vector.length requests > 199)
-    $ tr_
-    $ td_ [colspan_ $ show $ length curatedCols]
-    $ a_
-      [ class_ "cursor-pointer inline-flex justify-center py-1 px-56 ml-36 blue-800 bg-blue-100 hover:bg-blue-200 gap-3 items-center"
-      , hxTrigger_ "click, intersect once"
-      , hxSwap_ "outerHTML"
-      , hxGet_ nextLogsURL
-      , hxTarget_ "closest tr"
-      ]
-      (span_ [class_ "inline-block"] "LOAD MORE " >> span_ [class_ "loading loading-dots loading-sm inline-block pl-3"] "")
+  when (Vector.length requests > 199) $
+    tr_ $
+      td_ [colspan_ $ show $ length curatedCols] $
+        a_
+          [ class_ "cursor-pointer inline-flex justify-center py-1 px-56 ml-36 blue-800 bg-blue-100 hover:bg-blue-200 gap-3 items-center"
+          , hxTrigger_ "click, intersect once"
+          , hxSwap_ "outerHTML"
+          , hxGet_ nextLogsURL
+          , hxTarget_ "closest tr"
+          ]
+          (span_ [class_ "inline-block"] "LOAD MORE " >> span_ [class_ "loading loading-dots loading-sm inline-block pl-3"] "")
 
 
 errorClass :: Bool -> V.Vector Value -> HM.HashMap Text Int -> (Int, Int, Text)
@@ -492,6 +503,7 @@ logTableHeading_ pid True "id" = logTableHeadingWrapper_ pid "_" $ toHtml @Text 
 logTableHeading_ pid True "status_code" = logTableHeadingWrapper_ pid "status_code" $ toHtml @Text "status"
 logTableHeading_ pid True "created_at" = logTableHeadingWrapper_ pid "created_at" $ toHtml @Text "timestamp (UTC)"
 logTableHeading_ pid True "timestamp" = logTableHeadingWrapper_ pid "timestamp" $ toHtml @Text "timestamp (UTC)"
+logTableHeading_ pid True "rest" = logTableHeadingWrapper_ pid "rest" $ toHtml @Text "summary"
 logTableHeading_ pid isLogEventB col = logTableHeadingWrapper_ pid col $ toHtml $ Unsafe.last $ T.splitOn "•" col
 
 
@@ -505,8 +517,8 @@ logTableHeadingWrapper_ pid title child = td_
       div_ [tabindex_ "0", role_ "button", class_ "py-1 px-3 block"] child
       ul_ [tabindex_ "0", class_ "dropdown-content z-[1] menu p-2 shadow bg-base-100 rounded-box min-w-[15rem]"] do
         li_ [class_ "underline underline-offset-2"] $ toHtml title
-        li_
-          $ a_
+        li_ $
+          a_
             [ hxGet_ $ "/p/" <> pid.toText <> "/log_explorer"
             , hxPushUrl_ "true"
             , hxVals_ $ "js:{query:params().query,cols:removeNamedColumnToSummary('" <> title <> "'),layout:'resultTable'}"
@@ -531,8 +543,8 @@ logItemCol_ source pid reqVec colIdxMap "id" chSpns = do
     label_
       [ class_ "col-span-2 cursor-pointer"
       , Lucid.for_ "global-data-drawer"
-      , term "_"
-          $ [text|on mousedown or click fetch $logItemPathDetailed
+      , term "_" $
+          [text|on mousedown or click fetch $logItemPathDetailed
                   then set #global-data-drawer-content.innerHTML to #loader-tmp.innerHTML
                   then set #global-data-drawer-content.innerHTML to it
                   then htmx.process(#global-data-drawer-content) then _hyperscript.processNode(#global-data-drawer-content) then window.evalScriptsFromContent(#global-data-drawer-content)|]
@@ -576,9 +588,9 @@ logItemCol_ source pid reqVec colIdxMap key@"rest" _ = div_ [class_ "space-x-2 w
       span_ [class_ "badge badge-sm badge-ghost ", term "data-tippy-content" "Host"] $ toHtml $ fromMaybe "" $ lookupVecTextByKey reqVec colIdxMap "host"
       span_ [] $ toHtml $ maybe "" unwrapJsonPrimValue (lookupVecByKey reqVec colIdxMap key)
 logItemCol_ _ _ reqVec colIdxMap key _ =
-  div_ [class_ "xwhitespace-nowrap overflow-x-hidden max-w-lg ", term "data-tippy-content" key]
-    $ toHtml
-    $ maybe "" unwrapJsonPrimValue (lookupVecByKey reqVec colIdxMap key)
+  div_ [class_ "xwhitespace-nowrap overflow-x-hidden max-w-lg ", term "data-tippy-content" key] $
+    toHtml $
+      maybe "" unwrapJsonPrimValue (lookupVecByKey reqVec colIdxMap key)
 
 
 requestDumpLogItemUrlPath :: Projects.ProjectId -> V.Vector Value -> HM.HashMap Text Int -> Maybe (Text, Text)

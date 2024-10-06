@@ -119,7 +119,7 @@ export class MyElement extends LitElement {
   render() {
     return html`
       <div class="relative w-full" @click=${(e) => e.stopPropagation()}>
-        <div class="flex items-center flex-wrap gap-2 border border-1  px-4 py-2 w-ful rounded-lg">
+        <div class="shadow-sm flex items-center flex-wrap gap-2 border border-1  px-4 py-2 w-ful rounded-lg">
           <i class="fa-regular fa-filter h-4 w-4 text-gray-500"></i>
           <!-- <svg class="h-4 w-4 text-gray-500"><use href="/public/assets/svgs/fa-sprites/regular.svg#filter"></use></svg> -->
           <div class="flex flex-wrap gap-2">
