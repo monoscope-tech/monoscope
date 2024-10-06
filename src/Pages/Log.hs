@@ -312,16 +312,6 @@ apiLogsPage page = do
 
     div_ [class_ "card-round w-full  divide-y flex flex-col text-sm overflow-hidden pt-2"] do
       div_ [class_ ""] do
-        div_ [class_ "flex items-center justify-end gap-2"] do
-          div_ [class_ "form-control w-max"] $
-            label_ [class_ "label flex items-center cursor-pointer w-max space-x-2"] do
-              input_ [type_ "checkbox", class_ "toggle toggle-xs", id_ "toggleQueryEditor", onclick_ "toggleQueryBuilder()"]
-              small_ "toggle query editor"
-
-          div_ [class_ "pl-3 py-1 flex flex-row justify-end"] do
-            label_ [class_ "flex items-center cursor-pointer space-x-2 p-1"] do
-              input_ [type_ "checkbox", class_ "toggle toggle-xs toggle-chart", checked_]
-              small_ "toggle charts"
         div_ [class_ "flex flex-row gap-0 mb-2"] do
           let chartAspectRatio "logs" = "aspect-[12/1]"
               chartAspectRatio _ = "aspect-[5/1]"
