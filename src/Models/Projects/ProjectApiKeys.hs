@@ -12,6 +12,7 @@ module Models.Projects.ProjectApiKeys (
   countProjectApiKeysByProjectId,
   revokeApiKey,
   getProjectApiKey,
+  projectIdsByProjectApiKeys,
 ) where
 
 import Crypto.Cipher.AES (AES256)
@@ -79,6 +80,12 @@ insertProjectApiKey = insert @ProjectApiKey
 
 projectApiKeysByProjectId :: Projects.ProjectId -> DBT IO (Vector ProjectApiKey)
 projectApiKeysByProjectId projectId = do selectManyByField @ProjectApiKey [field| project_id |] projectId
+
+
+projectIdsByProjectApiKeys :: [Text] -> DBT IO (Vector (UUID.UUID, Text))
+projectIdsByProjectApiKeys = query Select q
+  where
+    q = [sql| select project_id,  key_prefix from projects.project_api_keys where key_prefix = Any(?) and active=true |]
 
 
 revokeApiKey :: ProjectApiKeyId -> DBT IO Int64
