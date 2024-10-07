@@ -107,7 +107,7 @@ export function generateRequestPreviewFromObject(requestObject) {
 }
 
 // Recursive function to render JSON with padding
-export function renderJsonWithIndentation(json, step_indx, path = '', depth = 0) {
+export function renderJsonWithIndentation(json, addAssertion, path = '', depth = 0) {
   const padding = `${depth * 20}px`
   return html`
     ${Object.entries(json).map(([key, value]) => {
@@ -122,10 +122,8 @@ export function renderJsonWithIndentation(json, step_indx, path = '', depth = 0)
       }
       return html`
         <div style="padding-left: ${padding};">
-          <span class="hover:bg-gray-200 cursor-pointer" @click="${(e) => window.addAssertion(assertionObj, step_indx)}">
-            ${key}: ${typeof value === 'object' && value ? '' : JSON.stringify(value)} </span
-          ><br />
-          ${typeof value === 'object' && value ? renderJsonWithIndentation(value, step_indx, currentPath, depth + 1) : ''}
+          <span class="hover:bg-gray-200 cursor-pointer" @click="${(e) => addAssertion(e, assertionObj)}"> ${key}: ${typeof value === 'object' && value ? '' : JSON.stringify(value)} </span><br />
+          ${typeof value === 'object' && value ? renderJsonWithIndentation(value, addAssertion, currentPath, depth + 1) : ''}
         </div>
       `
     })}

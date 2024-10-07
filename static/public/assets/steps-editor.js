@@ -456,7 +456,7 @@ ${stepData._requestBody}</textarea
                           <input type="radio" name="resp-items" role="tab" class="tab" aria-label="Response Body" />
                           <div role="tabpanel" class="tab-content bg-base-100 p-3">
                             <div>{</div>
-                            <div class="pl-3">${renderJsonWithIndentation(stepResult.resp.json, idx, '$')}</div>
+                            <div class="pl-3">${renderJsonWithIndentation(stepResult.resp.json, (e, assertionObj) => this.addAssertion(e, idx, assertionObj), '$')}</div>
                             <div>}</div>
                           </div>
 
