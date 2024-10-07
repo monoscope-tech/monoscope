@@ -58,9 +58,9 @@ export class StepsEditor extends LitElement {
           stepData._assertions[ass_indx] = assertionObj
         }
         this.collectionSteps[step_indx] = stepData
-        window.collectionSteps = [...this.collectionSteps]
+        this.collectionSteps = [...this.collectionSteps]
+        window.collectionSteps = this.collectionSteps
       }
-      window.updateCollectionResults()
       this.requestUpdate()
     }
 
@@ -441,9 +441,16 @@ ${stepData._requestBody}</textarea
                         <div role="tablist" class="tabs tabs-boxed max-h-96 overflow-y-auto">
                           <input type="radio" name="resp-items" role="tab" class="tab" aria-label="Response Headers" checked />
                           <div role="tabpanel" class="tab-content bg-base-100 p-3">
-                            ${Object.entries(stepResult.resp.headers).map(
-                              ([key, value]) => html` <span class="hover:bg-yellow-200 cursor-pointer" @click="${(e) => addAssertion(e, 'header', value)}"> ${key}: ${value} </span><br /> `
-                            )}
+                            ${Object.entries(stepResult.resp.headers).map(([key, value]) => {
+                              let assertionObj = {
+                                type: 'header',
+                                operation: 'equals',
+                                headerName: key,
+                                value: value,
+                                status: 'PASSED',
+                              }
+                              return html` <span class="hover:bg-yellow-200 cursor-pointer" @click="${(e) => this.addAssertion(e, idx, assertionObj)}"> ${key}: ${value} </span><br /> `
+                            })}
                           </div>
 
                           <input type="radio" name="resp-items" role="tab" class="tab" aria-label="Response Body" />
@@ -697,17 +704,9 @@ ${stepData._requestBody}</textarea
     this.requestUpdate()
   }
 
-  addAssertion(e, idx) {
+  addAssertion(e, idx, assertion_obj) {
     e.preventDefault()
-    this.collectionSteps[idx]._assertions = [
-      ...this.collectionSteps[idx]._assertions,
-      {
-        type: 'body',
-        operation: 'equals',
-        value: '',
-        status: 'PASSED',
-      },
-    ]
+    this.collectionSteps[idx]._assertions = [...this.collectionSteps[idx]._assertions, assertion_obj]
     this.requestUpdate()
   }
 

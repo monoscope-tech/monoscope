@@ -115,7 +115,6 @@ export function renderAssertionBuilder({
   return html`
     <div class="px-4 divide-y">
       ${assertions.map((assertion, index) => {
-        console.log(assertion, index, '====----====')
         return html`
           <div class="flex py-2 space-x-2 border-b">
             <strong class="block w-16 text-right mr-2 flex-shrink-0 pt-2">${index == 0 ? 'When' : 'And'}</strong>
