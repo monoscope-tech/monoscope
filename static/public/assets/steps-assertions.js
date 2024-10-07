@@ -111,6 +111,7 @@ export function renderAssertionBuilder({
   result,
   updateAssertion, // Single update function
   addAssertion,
+  removeAssertion,
 }) {
   return html`
     <div class="px-4 divide-y">
@@ -135,7 +136,7 @@ export function renderAssertionBuilder({
             <div class="flex-shrink-0 ">
               <div class="flex gap-3 pt-2 items-center">
                 ${evaluateAssertion(assertion, result) ? html`<span class="text-success ">PASSED</span>` : html`<span class="text-error">FAILED</span>`}
-                <a class="cursor-pointer text-slate-600">${faSprite_('trash', 'regular', 'w-3 h-3')}</a>
+                <a class="cursor-pointer text-slate-600" @click=${removeAssertion(index)}>${faSprite_('trash', 'regular', 'w-3 h-3')}</a>
               </div>
             </div>
           </div>

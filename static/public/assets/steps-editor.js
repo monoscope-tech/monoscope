@@ -471,7 +471,8 @@ ${stepData._requestBody}</textarea
             assertions: this.collectionSteps[idx]._assertions || [],
             result: this.collectionResults[idx],
             updateAssertion: (index, updates) => this.updateAssertion(idx, index, updates),
-            addAssertion: (e) => this.addAssertion(e, idx),
+            addAssertion: (e) => this.addAssertion(e, idx, { type: 'body', operation: 'equals', value: '' }),
+            removeAssertion: (index) => (e) => this.removeAssertion(idx, index),
           })}
               </div>
             </details>
@@ -707,6 +708,11 @@ ${stepData._requestBody}</textarea
   addAssertion(e, idx, assertion_obj) {
     e.preventDefault()
     this.collectionSteps[idx]._assertions = [...this.collectionSteps[idx]._assertions, assertion_obj]
+    this.requestUpdate()
+  }
+
+  removeAssertion(idx, index) {
+    this.collectionSteps[idx]._assertions.splice(index, 1)
     this.requestUpdate()
   }
 
