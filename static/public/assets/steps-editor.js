@@ -14,7 +14,7 @@ export class StepsEditor extends LitElement {
 
   constructor() {
     super()
-    this.collectionSteps = window.collectionSteps || []
+    this.collectionSteps = convertTestkitToCollectionSteps(window.collectionSteps) || []
     this.collectionResults = window.collectionResults || []
     this.saveErrors = []
     this.isSendingRequest = false
@@ -266,7 +266,7 @@ export class StepsEditor extends LitElement {
                   </label>
                   <label for="actions-data" class="flex-1 text-sm font-medium form-control w-full flex flex-row items-center gap-1">
                     <input
-                      type="text" id="actions-data-${idx}" class="input input-sm input-bordered w-full" @change=${(e) => this.updateValue(e, idx, null, null, '_url')}
+                      type="text" id="actions-data-${idx}" .value=${stepData._url} class="input input-sm input-bordered w-full" @change=${(e) => this.updateValue(e, idx, null, null, '_url')}
                     />
                     ${saveError.url ? html`<span class="text-red-700 text-xs">${saveError.url}</span>` : ''}
                   </label>
@@ -582,7 +582,6 @@ ${stepData._requestBody}</textarea
     if (type == null) {
       updateObject(stepData, oldKey, newKey)
       this.requestUpdate()
-      console.log('updateKey resp: ids=>${idx}, type=>${type}, aidx=>${aidx} => this.collectionSteps[${idx}] => ', this.collectionSteps[idx])
       return
     }
 
@@ -605,7 +604,6 @@ ${stepData._requestBody}</textarea
       updateObject(stepData[type], oldKey, newKey)
     }
     this.requestUpdate()
-    console.log(`updateKey resp: ids=>${idx}, type=>${type}, aidx=>${aidx} => this.collectionSteps[${idx}] => `, this.collectionSteps[idx])
   }
 
   deleteKey(_event, idx, type, aidx, oldKey) {
@@ -625,7 +623,6 @@ ${stepData._requestBody}</textarea
     if (type == null) {
       this.collectionSteps[idx][key] = value
       this.requestUpdate()
-      console.log(`updateValue resp: ids=>${idx}, type=>${type}, aidx=>${aidx}, key=${key}  this.collectionSteps[${idx}] => `, this.collectionSteps[idx])
       return
     }
     if (aidx != null) {
@@ -638,7 +635,6 @@ ${stepData._requestBody}</textarea
       this.collectionSteps[idx][type][key] = value
     }
     this.requestUpdate()
-    console.log(`updateValue resp: ids=>${idx}, type=>${type}, aidx=>${aidx}, key=${key}  this.collectionSteps[${idx}] => `, this.collectionSteps[idx])
   }
 
   render() {

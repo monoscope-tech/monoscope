@@ -679,6 +679,7 @@ create index if not exists idx_apis_testing_project_Id on tests.collections(proj
 ALTER TABLE tests.collections ADD COLUMN last_run_response jsonb DEFAULT NULL;
 ALTER TABLE tests.collections ADD COLUMN last_run_passed INT DEFAULT 0;
 ALTER TABLE tests.collections ADD COLUMN last_run_failed INT DEFAULT 0;
+ALTER TABLE tests.collections ADD COLUMN tags TEXT[] NOT NULL DEFAULT '{}'::text[];
 
 
 CREATE TABLE IF NOT EXISTS monitors.query_monitors

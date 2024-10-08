@@ -104,8 +104,8 @@ stepDataMethod stepData =
 
 instance AE.ToJSON CollectionStepData where
   toJSON csd =
-    AE.object
-      $ catMaybes
+    AE.object $
+      catMaybes
         [ Just $ "title" .= csd.title
         , fmap ("POST" .=) csd.post -- Change the key to "POST" here for the output JSON
         , fmap ("GET" .=) csd.get
@@ -266,11 +266,11 @@ updateCollectionLastRun id' lastRunResponse' passed failed = execute Update q pa
     q = [sql| UPDATE tests.collections SET last_run=NOW(), last_run_response=?, last_run_passed=?, last_run_failed=? WHERE id=? |]
 
 
-updateCollection :: Projects.ProjectId -> CollectionId -> Text -> Text -> Bool -> Text -> V.Vector CollectionStepData -> DBT IO Int64
-updateCollection pid cid title description scheduled scheduleInterval collectionSteps = execute Update q params
+updateCollection :: Projects.ProjectId -> CollectionId -> Text -> Text -> Bool -> Text -> V.Vector Text -> V.Vector CollectionStepData -> DBT IO Int64
+updateCollection pid cid title description scheduled scheduleInterval tags collectionSteps = execute Update q params
   where
-    params = (title, description, scheduleInterval, scheduled, CollectionSteps collectionSteps, pid, cid)
-    q = [sql| UPDATE tests.collections SET title=?, description=?, schedule=?, is_scheduled=?,  collection_steps=? WHERE project_id=? AND id=? |]
+    params = (title, description, scheduleInterval, scheduled, tags, CollectionSteps collectionSteps, pid, cid)
+    q = [sql| UPDATE tests.collections SET title=?, description=?, schedule=?, is_scheduled=?, tags=?, collection_steps=? WHERE project_id=? AND id=? |]
 
 
 getCollectionById :: CollectionId -> DBT IO (Maybe Collection)

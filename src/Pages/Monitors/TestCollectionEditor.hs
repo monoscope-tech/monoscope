@@ -53,6 +53,7 @@ data CollectionStepUpdateForm = CollectionStepUpdateForm
   { stepsData :: V.Vector Testing.CollectionStepData
   , title :: Maybe Text
   , description :: Maybe Text
+  , tags :: V.Vector Text
   , scheduled :: Maybe Text
   , scheduleNumber :: Maybe Text
   , scheduleNumberUnit :: Maybe Text
@@ -71,7 +72,7 @@ collectionStepsUpdateH pid colId colF = do
       addErrorToast "You are on Free plan. You can't schedule collection to run more than once a day" Nothing
       addRespHeaders CollectionMutError
     else do
-      _ <- dbtToEff $ Testing.updateCollection pid colId (fromMaybe "" colF.title) (fromMaybe "" colF.description) isScheduled scheduleTxt colF.stepsData
+      _ <- dbtToEff $ Testing.updateCollection pid colId (fromMaybe "" colF.title) (fromMaybe "" colF.description) isScheduled scheduleTxt colF.tags colF.stepsData
       addSuccessToast "Collection's steps updated successfully" Nothing
       addRespHeaders CollectionMutSuccess
 
@@ -201,11 +202,11 @@ testSettingsModalContent_ isUpdate col = div_ [class_ "space-y-5 w-96"] do
 
 timelineSteps :: Projects.ProjectId -> Components.TimelineSteps
 timelineSteps pid =
-  Components.TimelineSteps
-    $ [ Components.TimelineStep "Define API test" defineTestSteps_
-      , Components.TimelineStep "Name and tag your test" nameOfTest_
-      , Components.TimelineStep "Set Alert Message and Recovery Threshold" (MetricMonitors.configureNotificationMessage_)
-      ]
+  Components.TimelineSteps $
+    [ Components.TimelineStep "Define API test" defineTestSteps_
+    , Components.TimelineStep "Name and tag your test" nameOfTest_
+    , Components.TimelineStep "Set Alert Message and Recovery Threshold" (MetricMonitors.configureNotificationMessage_)
+    ]
 
 
 nameOfTest_ :: Html ()
@@ -219,9 +220,8 @@ nameOfTest_ = div_ [class_ "form-control w-full flex flex-col"] do
     [text|
     document.addEventListener('DOMContentLoaded', function() {
       var inputElem = document.querySelector('#tags_input')
-      console.log(inputElem)
       var tagify = new Tagify(inputElem)
-      console.log(tagify)
+      window.tagify = tagify
     })
   |]
 
@@ -278,13 +278,16 @@ collectionPage pid col col_rn respJson = do
     form_
       [ id_ "stepsForm"
       , class_ "grid grid-cols-3 h-full divide-x divide-gray-200 group/colform overflow-y-hidden"
-      , hxPost_ ""
+      , hxPost_ $ "/p/" <> pid.toText <> "/monitors/" <> col.id.toText
       , hxSwap_ "none"
       , hxExt_ "json-enc"
-      , hxVals_ "js:{stepsData: saveStepData()}"
+      , hxVals_ "js:{stepsData: saveStepData(), tags: getTags()}"
       ]
       do
-        div_ [class_ "col-span-2 px-8 pt-5 pb-12 overflow-y-scroll"] $ toHtml $ timelineSteps pid
+        div_ [class_ "col-span-2 px-8 pt-5 pb-12 overflow-y-scroll"] do
+          toHtml $ timelineSteps pid
+          div_ [class_ "w-full flex justify-end px-2"] do
+            button_ [class_ "btn btn-primary ml-auto fixed top-[90%] z-[999999] ", type_ "submit"] "Save"
         div_ [class_ "hidden col-span-1 h-full divide-y flex flex-col overflow-y-hidden"] do
           div_ [class_ "shrink flex items-center justify-between"] do
             div_ [class_ " pb-5 p-5 space-y-2"] do
@@ -357,11 +360,16 @@ collectionPage pid col col_rn respJson = do
 
      function saveStepData()  {
        const data = document.getElementById('stepsEditor').collectionSteps
-       const check = validateYaml(data)
-       if(check === undefined) {
+       const parsedData = validateYaml(data)
+       if(parsedData === undefined) {
           return undefined
         }
-       return data;
+       return parsedData;
+      }
+
+      function getTags() {
+        const tag = window.tagify.value
+        return tag.map(tag => tag.value);
       }
     |]
     let res = toText respJson
@@ -384,13 +392,13 @@ collectionStepResult_ idx stepResult = section_ [class_ "p-1"] do
     p_ [class_ $ "block badge badge-sm " <> getStatusColor stepResult.request.resp.status, term "data-tippy-content" "status"] $ show stepResult.request.resp.status
   div_ [role_ "tablist", class_ "tabs tabs-lifted"] do
     input_ [type_ "radio", name_ $ "step-result-tabs-" <> show idx, role_ "tab", class_ "tab", Aria.label_ "Response Log", checked_]
-    div_ [role_ "tabpanel", class_ "tab-content bg-base-100 border-base-300 rounded-box p-6"]
-      $ toHtmlRaw
-      $ textToHTML stepResult.stepLog
+    div_ [role_ "tabpanel", class_ "tab-content bg-base-100 border-base-300 rounded-box p-6"] $
+      toHtmlRaw $
+        textToHTML stepResult.stepLog
 
     input_ [type_ "radio", name_ $ "step-result-tabs-" <> show idx, role_ "tab", class_ "tab", Aria.label_ "Response Headers"]
-    div_ [role_ "tabpanel", class_ "tab-content bg-base-100 border-base-300 rounded-box p-6 "]
-      $ table_ [class_ "table table-xs"] do
+    div_ [role_ "tabpanel", class_ "tab-content bg-base-100 border-base-300 rounded-box p-6 "] $
+      table_ [class_ "table table-xs"] do
         thead_ [] $ tr_ [] $ th_ [] "Name" >> th_ [] "Value"
         tbody_ $ forM_ (M.toList stepResult.request.resp.headers) $ \(k, v) -> tr_ [] do
           td_ [] $ toHtml k

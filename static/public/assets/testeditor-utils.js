@@ -115,6 +115,7 @@ function getAssertErrors(asserts) {
 }
 
 function validateYaml(data) {
+  data = convertCollectionStepsToTestkitFormat(data)
   try {
     if (!Array.isArray(data)) {
       triggerToastEvent(getEvent('errorToast', { value: ['Array of steps expected'] }))
@@ -134,6 +135,7 @@ function validateYaml(data) {
         step.json = typeof step.json === 'string' ? step.json : JSON.stringify(step.json)
       }
     })
+    console.log(data)
     return data
   } catch (error) {
     const event = getEvent('errorToast', { value: ['Invalid yaml'] })
@@ -142,21 +144,32 @@ function validateYaml(data) {
   }
 }
 
+function getStepMethod(step) {
+  const httpMethodKeys = Object.keys(step).filter((key) => METHODS.includes(key))
+  if (httpMethodKeys.length === 0) {
+    return 'GET'
+  }
+  return httpMethodKeys[0]
+}
+
 function convertTestkitToCollectionSteps(testkitSteps) {
   const collectionSteps = []
   if (Array.isArray(testkitSteps)) {
     testkitSteps.forEach((step) => {
       const assertions = []
-      step.assertions.forEach((assertion) => {
-        const tka = convertTestkitAssertions(assertion)
-        if (tka) {
-          assertions.push()
-        }
-      })
+      if (step.asserts && Array.isArray(step.asserts)) {
+        step.asserts.forEach((assertion) => {
+          const tka = convertTestkitAssertions(assertion)
+          if (tka) {
+            assertions.push(tka)
+          }
+        })
+      }
+      const method = getStepMethod(step)
       const collectionStep = {
         title: step.title || '',
-        _method: step.GET ? 'GET' : step.POST ? 'POST' : step.PUT ? 'PUT' : step.PATCH ? 'PATCH' : step.DELETE ? 'DELETE' : step.HEAD ? 'HEAD' : step.OPTIONS ? 'OPTIONS' : 'TRACE',
-        _url: step.GET || step.POST || step.PUT || step.PATCH || step.DELETE || step.HEAD || step.OPTIONS || step.TRACE || '',
+        _method: method,
+        _url: step[method],
         headers: step.headers || {},
         _assertions: assertions,
         _exports: step.exports || {},
@@ -178,7 +191,7 @@ function convertTestkitAssertions(assertion) {
         return {
           type: 'body',
           operation: 'jsonpath',
-          jsonpath: jsonpath,
+          jsonpath: jsonpath.replace('.resp.json', ''),
           subOperation: operation,
           value: val,
         }
@@ -229,7 +242,7 @@ function convertCollectionStepsToTestkitFormat(collectionSteps) {
         [step._method || 'GET']: step._url,
         headers: step.headers || {},
         exports: step._exports || {},
-        assertions: assertions || [],
+        asserts: assertions || [],
       }
       testkitSteps.push(testkitStep)
     })
