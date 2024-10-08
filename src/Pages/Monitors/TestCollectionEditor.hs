@@ -324,17 +324,25 @@ collectionPage pid col col_rn respJson = do
           div_ [class_ "h-full overflow-y-hidden flex-1"] $ termRaw "steps-editor" [id_ "stepsEditor"] ""
 
         div_ [class_ "col-span-1 h-full border-r border-gray-200 overflow-y-auto"] do
-          div_ [class_ "max-h-full h-full overflow-y-auto space-y-4 relative", id_ "step-results-parent"] do
-            case col_rn of
-              Just res -> do
-                V.iforM_ res collectionStepResult_
-              Nothing -> do
-                div_ [id_ "step-results-indicator", class_ "steps-indicator flex flex-col justify-center items-center h-full text-slate-400 text-xl space-y-4"] do
-                  div_ [class_ "w-full flex flex-col gap-2 items-center empty-state"] do
-                    Utils.faSprite_ "objects-column" "solid" "w-16 h-16"
-                    p_ [class_ "text-slate-500"] "Run tests to view the results here."
-                  div_ [class_ "hidden loading-indicator flex justify-center"] do
-                    span_ [class_ "loading loading-dots loading-lg"] ""
+          div_ [role_ "tablist", class_ "tabs tabs-bordered w-full"] do
+            input_ [type_ "radio", name_ "side-tabs", role_ "tab", class_ "tab", term "aria-label" "Variables", checked_]
+            div_ [role_ "tabpanel", class_ "tab-content"] "Steps"
+
+            input_ [type_ "radio", name_ "side-tabs", role_ "tab", class_ "tab", term "aria-label" "Test Results Log"]
+            div_ [role_ "tabpanel", class_ "tab-content max-h-full h-full overflow-y-auto space-y-4 relative", id_ "step-results-parent"] do
+              case col_rn of
+                Just res -> do
+                  V.iforM_ res collectionStepResult_
+                Nothing -> do
+                  div_ [id_ "step-results-indicator", class_ "steps-indicator flex flex-col justify-center items-center h-full text-slate-400 text-xl space-y-4"] do
+                    div_ [class_ "w-full flex flex-col gap-2 items-center empty-state"] do
+                      Utils.faSprite_ "objects-column" "solid" "w-16 h-16"
+                      p_ [class_ "text-slate-500"] "Run tests to view the results here."
+                    div_ [class_ "hidden loading-indicator flex justify-center"] do
+                      span_ [class_ "loading loading-dots loading-lg"] ""
+
+            input_ [type_ "radio", name_ "side-tabs", role_ "tab", class_ "tab", term "aria-label" "Resources"]
+            div_ [role_ "tabpanel", class_ "tab-content max-h-full h-full overflow-y-auto space-y-4 relative"] "Hello world"
         jsonTreeAuxillaryCode
 
     script_ [src_ "/public/assets/testeditor-utils.js"] ("" :: Text)
