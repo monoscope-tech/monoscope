@@ -77,6 +77,7 @@ data AuthContext = AuthContext
   , pool :: Pool.Pool Connection
   , jobsPool :: Pool.Pool Connection
   , projectCache :: Cache Projects.ProjectId Projects.ProjectCache
+  , projectKeyCache :: Cache Text (Maybe Projects.ProjectId)
   , config :: EnvConfig
   }
 

@@ -147,8 +147,6 @@ logsServiceExportH appLogger appCtx (ServerNormalRequest meta (ExportLogsService
   -- let projectKey = T.replace "Bearer " "" $ decodeUtf8 $ Unsafe.fromJust $ Safe.headMay =<< M.lookup "authorization" meta.metadata.unMap
   --     apiKeyUUID = projectApiKeyFromB64 appCtx.config.apiKeyEncryptionSecretKey projectKey
   _ <- runBackground appLogger appCtx do
-    -- pApiKey <- dbtToEff $ ProjectApiKeys.getProjectApiKey apiKeyUUID
-    -- No longer inserting the log using project id from api key. Maybe atleast assert the project id at this point?
     let projectKey = fromMaybe (error "Missing project key") $ getLogAttributeValue "at-project-key" req
     projectIdM <- ProjectApiKeys.getProjectIdByApiKey projectKey
     let pid = fromMaybe (error $ "project API Key is invalid pid" ) projectIdM

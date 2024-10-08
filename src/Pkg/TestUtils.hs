@@ -159,6 +159,7 @@ data TestResources = TestResources
 withTestResources :: (TestResources -> IO ()) -> IO ()
 withTestResources f = withSetup $ \pool -> LogBulk.withBulkStdOutLogger \logger -> do
   projectCache <- newCache (Just $ TimeSpec (60 * 60) 0)
+  projectKeyCache <- newCache (Just $ TimeSpec (60 * 60) 0)
   sessAndHeader <- testSessionHeader pool
   let atAuthCtx =
         AuthContext
@@ -166,6 +167,7 @@ withTestResources f = withSetup $ \pool -> LogBulk.withBulkStdOutLogger \logger 
           pool
           pool
           projectCache
+          projectKeyCache
           ( (def :: EnvConfig)
               { apiKeyEncryptionSecretKey = "apitoolkit123456123456apitoolkit"
               , convertkitApiKey = ""

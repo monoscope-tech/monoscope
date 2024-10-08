@@ -21,24 +21,27 @@ import Crypto.Cipher.Types (BlockCipher (..), Cipher (..), nullIV)
 import Crypto.Error (throwCryptoError)
 import Data.Default (Default)
 import Data.Time (UTCTime)
+import Data.Cache qualified as Cache
 import Data.UUID qualified as UUID
 import Data.Vector (Vector)
 import Database.PostgreSQL.Entity
-import Effectful.PostgreSQL.Transact.Effect (DB, dbtToEff)
-import Database.PostgreSQL.Entity.DBT (QueryNature (..), execute, query, queryOne)
+import Database.PostgreSQL.Entity.DBT (QueryNature (..), execute, query, queryOne, withPool)
 import Database.PostgreSQL.Entity.Types
 import Database.PostgreSQL.Simple (FromRow, Only (Only), ToRow)
 import Database.PostgreSQL.Simple.FromField (FromField)
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.ToField (ToField)
 import Database.PostgreSQL.Transact (DBT)
-import Effectful (Eff, type (:>))
+import Effectful (Eff, IOE, type (:>))
+import Effectful.PostgreSQL.Transact.Effect (DB, dbtToEff, getPool)
+import Effectful.Reader.Static qualified as Effectful
 import Effectful.Time (Time)
 import Effectful.Time qualified as Time
 import GHC.Records (HasField (getField))
 import Models.Projects.Projects qualified as Projects
-import Relude hiding (id)
+import Relude hiding (id, ask)
 import Servant.API (FromHttpApiData)
+import System.Config qualified as Config
 
 
 newtype ProjectApiKeyId = ProjectApiKeyId {unProjectApiKeyId :: UUID.UUID}
@@ -108,8 +111,13 @@ getProjectApiKey = queryOne Select q
     q = [sql|select id, created_at, updated_at, deleted_at, active, project_id,  title, key_prefix from projects.project_api_keys where id=? and active=true |]
 
 
-getProjectIdByApiKey :: DB :> es => Text -> Eff es (Maybe Projects.ProjectId )
-getProjectIdByApiKey pid = dbtToEff $ queryOne Select q (Only pid)
+getProjectIdByApiKey :: (DB :> es, IOE :> es, Effectful.Reader Config.AuthContext :> es) => Text -> Eff es (Maybe Projects.ProjectId)
+getProjectIdByApiKey projectKey = do
+  pool <- getPool
+  appCtx <- Effectful.ask @Config.AuthContext
+  projectCacheVal <- liftIO $ Cache.fetchWithCache appCtx.projectKeyCache projectKey \_ ->
+    withPool pool $ queryOne Select q (Only projectKey)
+  pure projectCacheVal
   where
     q = [sql| select project from projects.project_api_keys where key_prefix=?|]
 

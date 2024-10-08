@@ -10,7 +10,6 @@ import Data.Time.Clock (UTCTime (..), diffUTCTime, nominalDiffTimeToSeconds, sec
 import Data.Time.Format.ISO8601 (iso8601Show)
 import GHC.Records (HasField (getField))
 import Models.Projects.Projects qualified as Projects
-import NeatInterpolation (text)
 import Pkg.Parser.Expr (pExpr, pSubject)
 import Pkg.Parser.Stats (pStatsSection, pTimeChartSection)
 import Pkg.Parser.Types (
