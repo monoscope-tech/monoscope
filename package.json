@@ -7,6 +7,7 @@
     "tailwindcss": "^3.4.4"
   },
   "dependencies": {
+    "@opentelemetry/auto-instrumentations-node": "^0.50.0",
     "@tailwindcss/typography": "^0.5.10",
     "workbox-cli": "^6.5.4"
   },

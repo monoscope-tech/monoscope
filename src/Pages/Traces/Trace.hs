@@ -15,7 +15,6 @@ import Lucid.Htmx (hxGet_, hxSwap_, hxTarget_)
 import Lucid.Hyperscript (__)
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Telemetry qualified as Telemetry
-import Models.Users.Sessions qualified as Sessions
 import NeatInterpolation (text)
 import Pages.Traces.Spans qualified as Spans
 import Pages.Traces.Utils

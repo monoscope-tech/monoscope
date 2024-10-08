@@ -75,6 +75,7 @@ migrate db = do
   -- Create a nil user and projects to make subsequent tests easier
   let q =
         [sql| INSERT into users.users (id, first_name, last_name, email) VALUES ('00000000-0000-0000-0000-000000000000', 'FN', 'LN', 'test@apitoolkit.io');
+        insert into projects.project_api_keys (active, project_id, title, key_prefix) VALUES (True, '00000000-0000-0000-0000-000000000000', 'test', 'z6YeJcRJNH0zy9JOg6ZsQzxM9GHBHdSeu+7ugOpZ9jtR94qV');
         |]
   _ <- execute conn q ()
   pass
@@ -158,6 +159,7 @@ data TestResources = TestResources
 withTestResources :: (TestResources -> IO ()) -> IO ()
 withTestResources f = withSetup $ \pool -> LogBulk.withBulkStdOutLogger \logger -> do
   projectCache <- newCache (Just $ TimeSpec (60 * 60) 0)
+  projectKeyCache <- newCache (Just $ TimeSpec (60 * 60) 0)
   sessAndHeader <- testSessionHeader pool
   let atAuthCtx =
         AuthContext
@@ -165,6 +167,7 @@ withTestResources f = withSetup $ \pool -> LogBulk.withBulkStdOutLogger \logger 
           pool
           pool
           projectCache
+          projectKeyCache
           ( (def :: EnvConfig)
               { apiKeyEncryptionSecretKey = "apitoolkit123456123456apitoolkit"
               , convertkitApiKey = ""
