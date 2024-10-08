@@ -21,18 +21,17 @@ export class StepsEditor extends LitElement {
 
     // Ensure there's at least one step
     if (this.collectionSteps.length === 0) {
-      this.collectionSteps = [{ _expanded: true }]
+      this.collectionSteps = [
+        {
+          _expanded: true,
+          _method: 'GET',
+          assertions: [{ equal: ['$.resp.status', 200] }],
+          _assertions: [{ type: 'statusCode', operation: 'equals', value: 200, status: 'PASSED' }],
+        },
+      ]
     } else if (this.collectionSteps.length == 1) {
       this.collectionSteps[0]._expanded = true
     }
-    this.collectionSteps = [
-      {
-        _expanded: true,
-        assertions: [{ equal: ['$.resp.status', 200] }],
-        _assertions: [{ type: 'statusCode', operation: 'equals', value: 200, status: 'PASSED' }],
-      },
-    ]
-
     require.config({ paths: { vs: '/public/assets/js/monaco/vs' } })
     require.config({ paths: { vs: 'https://unpkg.com/monaco-editor/min/vs' } })
     require(['vs/editor/editor.main'], () => {
@@ -46,21 +45,6 @@ export class StepsEditor extends LitElement {
       stepData.asserts = asserts
       this.collectionSteps[step] = stepData
       window.collectionSteps = this.collectionSteps
-      this.requestUpdate()
-    }
-
-    window.addAssertion = (assertionObj, step_indx, ass_indx) => {
-      const stepData = this.collectionSteps[step_indx]
-      if (stepData) {
-        if (!ass_indx) {
-          stepData._assertions = [...stepData._assertions, assertionObj]
-        } else {
-          stepData._assertions[ass_indx] = assertionObj
-        }
-        this.collectionSteps[step_indx] = stepData
-        this.collectionSteps = [...this.collectionSteps]
-        window.collectionSteps = this.collectionSteps
-      }
       this.requestUpdate()
     }
 
@@ -78,7 +62,7 @@ export class StepsEditor extends LitElement {
       this.requestUpdate()
     }
     window.updateEditorVal = () => {
-      this.updateEditorContent()
+      // this.updateEditorContent()
     }
   }
 
@@ -125,21 +109,22 @@ export class StepsEditor extends LitElement {
     })
 
     const model = this.editor.getModel()
-    model.onDidChangeContent(() => {
-      try {
-        const newCollectionSteps = jsyaml.load(model.getValue())
-        if (this.collectionSteps != newCollectionSteps) {
-          this.collectionSteps = newCollectionSteps
-          this.requestUpdate()
-        }
-      } catch (e) {
-        console.error('Invalid YAML input', e)
-      }
-    })
+    // model.onDidChangeContent(() => {
+    //   try {
+    //     const newCollectionSteps = jsyaml.load(model.getValue())
+    //     if (this.collectionSteps != newCollectionSteps) {
+    //       this.collectionSteps = newCollectionSteps
+    //       this.requestUpdate()
+    //     }
+    //   } catch (e) {
+    //     console.error('Invalid YAML input', e)
+    //   }
+    // })
   }
 
   updateEditorContent() {
-    const editorContent = jsyaml.dump(this.collectionSteps, { ident: 2 })
+    const testkitContent = convertCollectionStepsToTestkitFormat(this.collectionSteps)
+    const editorContent = jsyaml.dump(testkitContent, { ident: 2 })
     if (this.editor && this.editor.getModel().getValue() != editorContent) {
       this.editor.getModel().setValue(editorContent)
     }
@@ -657,6 +642,7 @@ ${stepData._requestBody}</textarea
   }
 
   render() {
+    this.updateEditorContent()
     return html`
       <style>
         .draggable {

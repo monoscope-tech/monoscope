@@ -141,3 +141,57 @@ function validateYaml(data) {
     return undefined
   }
 }
+
+function convertCollectionStepsToTestkitFormat(collectionSteps) {
+  const testkitSteps = []
+  if (Array.isArray(collectionSteps)) {
+    collectionSteps.forEach((step) => {
+      const assertions = []
+      step._assertions?.forEach((assertion) => {
+        assertions.push(convertToTestkitAssertion(assertion))
+      })
+      const testkitStep = {
+        title: step.title || '',
+        [step._method || 'GET']: step._url,
+        headers: step.headers || {},
+        exports: step._exports || {},
+        assertions: assertions || [],
+      }
+      testkitSteps.push(testkitStep)
+    })
+  }
+  return testkitSteps
+}
+
+function convertToTestkitAssertion(assertion) {
+  let jsonpath = ''
+  let operation = 'ok'
+  let evalOperation = '=='
+
+  if (assertion.type === 'header') {
+    jsonpath = `$.resp.headers.${assertion.headerName}`
+  } else if (assertion.type === 'body') {
+    jsonpath = `$.resp.json.${assertion.jsonpath.substring(2)}`
+  } else if (assertion.type === 'statusCode') {
+    jsonpath = `$.resp.status`
+  } else if (assertion.type === 'responseTime') {
+    jsonpath = `$.resp.duration_ms`
+  }
+
+  if (assertion.operation === 'equals') {
+    evalOperation = '=='
+  } else if (assertion.operation === 'notEquals') {
+    evalOperation = '!='
+  } else if (assertion.operation === 'greaterThan') {
+    evalOperation = '>'
+  } else if (assertion.operation === 'lessThan') {
+    evalOperation = '<'
+  } else if (assertion.operation === 'greaterThanOrEqual') {
+    evalOperation = '>='
+  } else if (assertion.operation === 'lessThanOrEqual') {
+    evalOperation = '<='
+  }
+  return {
+    [operation]: `${jsonpath} ${evalOperation} ${assertion.value}`,
+  }
+}
