@@ -142,6 +142,80 @@ function validateYaml(data) {
   }
 }
 
+function convertTestkitToCollectionSteps(testkitSteps) {
+  const collectionSteps = []
+  if (Array.isArray(testkitSteps)) {
+    testkitSteps.forEach((step) => {
+      const assertions = []
+      step.assertions.forEach((assertion) => {
+        const tka = convertTestkitAssertions(assertion)
+        if (tka) {
+          assertions.push()
+        }
+      })
+      const collectionStep = {
+        title: step.title || '',
+        _method: step.GET ? 'GET' : step.POST ? 'POST' : step.PUT ? 'PUT' : step.PATCH ? 'PATCH' : step.DELETE ? 'DELETE' : step.HEAD ? 'HEAD' : step.OPTIONS ? 'OPTIONS' : 'TRACE',
+        _url: step.GET || step.POST || step.PUT || step.PATCH || step.DELETE || step.HEAD || step.OPTIONS || step.TRACE || '',
+        headers: step.headers || {},
+        _assertions: assertions,
+        _exports: step.exports || {},
+      }
+      collectionSteps.push(collectionStep)
+    })
+  }
+  return collectionSteps
+}
+
+function convertTestkitAssertions(assertion) {
+  const keys = Object.keys(assertion)
+  if (keys.length > 0) {
+    const value = assertion[keys[0]]
+    if (keys[0] === 'ok') {
+      const [jsonpath, evalOperation, val] = value.split(' ')
+      const operation = getTextOperation(evalOperation)
+      if (jsonpath.startsWith('$.resp.json')) {
+        return {
+          type: 'body',
+          operation: 'jsonpath',
+          jsonpath: jsonpath,
+          subOperation: operation,
+          value: val,
+        }
+      } else if (jsonpath.startsWith('$.resp.headers')) {
+        return {
+          type: 'header',
+          operation: operation,
+          headerName: jsonpath.substring(14),
+          value: value,
+        }
+      }
+      return {
+        type: 'statusCode',
+        operation: operation,
+        value: value,
+      }
+    }
+  }
+  return undefined
+}
+
+function getTextOperation(operation) {
+  if (operation === '==') {
+    return 'equals'
+  } else if (operation === '!=') {
+    return 'notEquals'
+  } else if (operation === '>') {
+    return 'greaterThan'
+  } else if (operation === '<') {
+    return 'lessThan'
+  } else if (operation === '>=') {
+    return 'greaterThanOrEqual'
+  } else if (operation === '<=') {
+    return 'lessThanOrEqual'
+  }
+}
+
 function convertCollectionStepsToTestkitFormat(collectionSteps) {
   const testkitSteps = []
   if (Array.isArray(collectionSteps)) {
