@@ -54,7 +54,9 @@ library
       Models.Users.Users
       MonitoringSpec
       Network.Wai.Middleware.Heartbeat
+      Opentelemetry.OtlpMockValues
       Opentelemetry.OtlpServer
+      Opentelemetry.OtlpServerSpec
       Pages.Anomalies.AnomalyList
       Pages.Anomalies.AnomalyListSpec
       Pages.Anomalies.Routes

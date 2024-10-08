@@ -2,14 +2,16 @@
 
 module Opentelemetry.OtlpServer (runServer, processList) where
 
+import Control.Lens hiding ((.=))
 import Data.Aeson (object, (.=))
 import Data.Aeson qualified as AE
 import Data.Aeson.Key qualified as AEK
 import Data.Aeson.KeyMap qualified as KEM
+import Data.Base64.Types qualified as B64
 import Data.ByteString qualified as BS
 import Data.ByteString.Base16 qualified as B16
+import Data.ByteString.Base64 qualified as B64
 import Data.HashMap.Strict qualified as HashMap
-
 import Data.Scientific
 import Data.Text qualified as T
 import Data.Text.Lazy qualified as LT
@@ -24,9 +26,11 @@ import Effectful.Reader.Static (ask)
 import Effectful.Reader.Static qualified as Eff
 import Effectful.Time (Time)
 import Log qualified
+import Models.Projects.Projects qualified as Projects
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Telemetry.Telemetry (SpanKind (..), SpanStatus (..))
 import Models.Telemetry.Telemetry qualified as Telemetry
+import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
 import Network.GRPC.HighLevel.Client as HsGRPC
 import Network.GRPC.HighLevel.Generated as HsGRPC
 import Network.GRPC.HighLevel.Server as HsGRPC hiding (serverLoop)
@@ -56,6 +60,32 @@ import Relude hiding (ask)
 import RequestMessages (RequestMessage (..))
 import System.Config
 import System.Types (runBackground)
+import Effectful.Error.Static (throwError)
+import Control.Monad.Extra (fromMaybeM)
+
+
+getSpanAttributeValue :: Text -> V.Vector ResourceSpans -> Maybe Text
+getSpanAttributeValue attribute rss = listToMaybe $ V.toList $ V.mapMaybe (\rs -> getResourceAttr rs <|> getSpanAttr rs) rss
+  where
+    getResourceAttr rs = rs.resourceSpansResource >>= getAttr . resourceAttributes
+    getSpanAttr rs = rs.resourceSpansScopeSpans & listToMaybe . V.toList . V.mapMaybe (getAttr . spanAttributes) . V.concatMap (scopeSpansSpans) 
+
+    getAttr :: V.Vector KeyValue -> Maybe Text
+    getAttr = V.find ((== attribute) . toText . keyValueKey) >=> keyValueValue >=> anyValueValue >=> anyValueToString >=> (Just . toText) 
+
+
+getLogAttributeValue :: Text -> V.Vector ResourceLogs -> Maybe Text
+getLogAttributeValue attribute rls = listToMaybe $ V.toList $ V.mapMaybe (\rl -> getResourceAttr rl <|> getLogAttr rl) rls
+  where
+    -- Extract attribute from resource-level logs
+    getResourceAttr rl = rl.resourceLogsResource >>= getAttr . resourceAttributes
+
+    -- Extract attribute from log records
+    getLogAttr rl = rl.resourceLogsScopeLogs & listToMaybe . V.toList . V.mapMaybe (getAttr . logRecordAttributes) . V.concatMap (scopeLogsLogRecords)
+
+    -- Helper function to extract attribute values from KeyValue pairs
+    getAttr :: V.Vector KeyValue -> Maybe Text
+    getAttr = V.find ((== attribute) . toText . keyValueKey) >=> keyValueValue >=> anyValueValue >=> anyValueToString >=> (Just . toText)
 
 
 processList :: (Eff.Reader AuthContext :> es, DB :> es, Log :> es, IOE :> es, Time :> es) => [(Text, ByteString)] -> HashMap Text Text -> Eff es [Text]
@@ -65,54 +95,48 @@ processList msgs attrs = do
   appCtx <- ask @AuthContext
   case HashMap.lookup "ce-type" attrs of
     Just "org.opentelemetry.otlp.logs.v1" -> do
-      let results =
-            msgs' & V.map \(ackId, msg) -> do
-              let resp = HsProtobuf.fromByteString msg :: Either HsProtobuf.ParseError ExportLogsServiceRequest
-              case resp of
-                Left err -> error $ "unable to parse logs service request with err " <> show err
-                Right (ExportLogsServiceRequest a) -> (ackId, join $ V.map convertToLog a)
+      results <-
+            V.forM msgs' \(ackId, msg) -> case (HsProtobuf.fromByteString msg :: Either HsProtobuf.ParseError ExportLogsServiceRequest) of
+              Left err -> error $ "unable to parse logs service request with err " <> show err
+              Right (ExportLogsServiceRequest logReq) -> do
+                let projectKey = fromMaybe (error "Missing project key") $ getLogAttributeValue "at-project-key" logReq
+                projectIdM <- ProjectApiKeys.getProjectIdByApiKey projectKey
+                let pid = fromMaybe (error $ "project API Key is invalid pid: " <> show projectKey ) projectIdM
+                pure (ackId, join $ V.map (convertToLog pid) logReq)
       let (ackIds, logs) = V.unzip results
       Telemetry.bulkInsertLogs $ join logs
       pure $ V.toList ackIds
     Just "org.opentelemetry.otlp.traces.v1" -> do
-      let results =
-            msgs' & V.map \(ackId, msg) -> do
-              let res = HsProtobuf.fromByteString msg :: Either HsProtobuf.ParseError ExportTraceServiceRequest
-              case res of
-                Left err -> error $ "unable to parse traces service request with err " <> show err
-                Right (ExportTraceServiceRequest a) -> (ackId, join $ V.map convertToSpan a)
+      results <-
+        V.forM msgs' \(ackId, msg) -> do
+          case (HsProtobuf.fromByteString msg :: Either HsProtobuf.ParseError ExportTraceServiceRequest) of
+            Left err -> error $ "unable to parse traces service request with err " <> show err
+            Right (ExportTraceServiceRequest traceReq) -> do
+              let projectKey = fromMaybe (error "Missing project key") $ getSpanAttributeValue "at-project-key" traceReq
+              projectIdM <- ProjectApiKeys.getProjectIdByApiKey projectKey 
+              let pid = fromMaybe (error $ "project API Key is invalid pid: " <> show projectKey ) projectIdM
+              pure (ackId, join $ V.map (convertToSpan pid) traceReq)
       let (ackIds, spansVec) = V.unzip results
           spans = join spansVec
-          apitoolkitSpans =
-            V.map
-              ( \s ->
-                  case s.instrumentationScope of
-                    AE.Object v -> if httpScope then Just $ convertSpanToRequestMessage s scopeName else Nothing
-                      where
-                        y = KEM.lookup "name" v
-                        scopeName =
-                          if y == Just "@opentelemetry/instrumentation-undici"
-                            then "@opentelemetry/instrumentation-undici"
-                            else "@opentelemetry/instrumentation-http"
-                        httpScope = y == Just "@opentelemetry/instrumentation-undici" || y == Just "@opentelemetry/instrumentation-http"
-                    _ -> Nothing
-              )
-              spans
+          apitoolkitSpans = flip V.map spans \s ->
+            case s.instrumentationScope of
+              AE.Object v -> if httpScope then Just $ convertSpanToRequestMessage s scopeName else Nothing
+                where
+                  y = KEM.lookup "name" v
+                  scopeName =
+                    if y == Just "@opentelemetry/instrumentation-undici"
+                      then "@opentelemetry/instrumentation-undici"
+                      else "@opentelemetry/instrumentation-http"
+                  httpScope = y == Just "@opentelemetry/instrumentation-undici" || y == Just "@opentelemetry/instrumentation-http"
+              _ -> Nothing
       _ <- ProcessMessage.processRequestMessages $ V.toList $ V.catMaybes apitoolkitSpans <&> ("",)
-      Telemetry.bulkInsertSpans $ V.filter (\s -> s.spanName /= "apitoolkit-custom-span") spans
+      Telemetry.bulkInsertSpans spans
       pure $ V.toList ackIds
     Just "org.opentelemetry.otlp.metrics.v1" -> do
       let (ackIds, _) = V.unzip $ V.fromList msgs
       pure $ V.toList ackIds
     _ -> error "unsupported opentelemetry data type"
 
-
--- projectApiKeyFromB64 :: Text -> Text -> ProjectApiKeys.ProjectApiKeyId
--- projectApiKeyFromB64 apiKeyEncryptionSecretKey projectKey = case (B64.decodeBase64Untyped $ encodeUtf8 projectKey) of
---   Left err -> error err
---   Right authText -> do
---     let decryptedKey = ProjectApiKeys.decryptAPIKey (encodeUtf8 apiKeyEncryptionSecretKey) authText
---     Unsafe.fromJust $ ProjectApiKeys.ProjectApiKeyId <$> UUID.fromASCIIBytes decryptedKey
 
 logsServiceExportH
   :: Log.Logger
@@ -125,7 +149,11 @@ logsServiceExportH appLogger appCtx (ServerNormalRequest meta (ExportLogsService
   _ <- runBackground appLogger appCtx do
     -- pApiKey <- dbtToEff $ ProjectApiKeys.getProjectApiKey apiKeyUUID
     -- No longer inserting the log using project id from api key. Maybe atleast assert the project id at this point?
-    let logRecords = join $ V.map convertToLog req
+    let projectKey = fromMaybe (error "Missing project key") $ getLogAttributeValue "at-project-key" req
+    projectIdM <- ProjectApiKeys.getProjectIdByApiKey projectKey
+    let pid = fromMaybe (error $ "project API Key is invalid pid" ) projectIdM
+
+    let logRecords = join $ V.map (convertToLog pid) req
     Telemetry.bulkInsertLogs logRecords
   return (ServerNormalResponse (ExportLogsServiceResponse Nothing) mempty StatusOk "")
 
@@ -142,8 +170,8 @@ byteStringToHexText bs = decodeUtf8 (B16.encode bs)
 -- Convert a list of KeyValue to a JSONB object
 keyValueToJSONB :: V.Vector KeyValue -> AE.Value
 keyValueToJSONB kvs =
-  AE.object
-    $ V.foldr (\kv acc -> (AEK.fromText $ LT.toStrict kv.keyValueKey, convertAnyValue kv.keyValueValue) : acc) [] kvs
+  AE.object $
+    V.foldr (\kv acc -> (AEK.fromText $ LT.toStrict kv.keyValueKey, convertAnyValue kv.keyValueValue) : acc) [] kvs
 
 
 convertAnyValue :: Maybe AnyValue -> AE.Value
@@ -184,12 +212,12 @@ instrumentationScopeToJSONB Nothing = AE.Null
 
 
 -- Convert ExportLogsServiceRequest to [Log]
-convertToLog :: ResourceLogs -> V.Vector Telemetry.LogRecord
-convertToLog resourceLogs = join $ V.map (convertScopeLog resourceLogs.resourceLogsResource) resourceLogs.resourceLogsScopeLogs
+convertToLog :: Projects.ProjectId -> ResourceLogs -> V.Vector Telemetry.LogRecord
+convertToLog pid resourceLogs = join $ V.map (convertScopeLog  pid resourceLogs.resourceLogsResource) resourceLogs.resourceLogsScopeLogs
 
 
-convertScopeLog :: Maybe Resource -> ScopeLogs -> V.Vector Telemetry.LogRecord
-convertScopeLog resource sl = V.map (convertLogRecord resource sl.scopeLogsScope) sl.scopeLogsLogRecords
+convertScopeLog :: Projects.ProjectId -> Maybe Resource -> ScopeLogs -> V.Vector Telemetry.LogRecord
+convertScopeLog pid resource sl = V.map (convertLogRecord pid resource sl.scopeLogsScope) sl.scopeLogsLogRecords
 
 
 removeProjectId :: AE.Value -> AE.Value
@@ -203,25 +231,18 @@ anyValueToString (AnyValueValueStringValue val) = Just $ toStrict val
 anyValueToString _ = Nothing
 
 
-convertScopeSpan :: Maybe Resource -> ScopeSpans -> V.Vector Telemetry.SpanRecord
-convertScopeSpan resource sl =
-  V.map (convertSpanRecord resource sl.scopeSpansScope) sl.scopeSpansSpans
+convertScopeSpan :: Projects.ProjectId -> Maybe Resource -> ScopeSpans -> V.Vector Telemetry.SpanRecord
+convertScopeSpan pid resource sl =
+  V.map (convertSpanRecord pid resource sl.scopeSpansScope) sl.scopeSpansSpans
 
 
--- Convert ExportTraceServiceRequest to [Trace]
-convertToSpan :: ResourceSpans -> V.Vector Telemetry.SpanRecord
-convertToSpan resourceSpans = join $ V.map (convertScopeSpan resourceSpans.resourceSpansResource) resourceSpans.resourceSpansScopeSpans
+convertToSpan :: Projects.ProjectId -> ResourceSpans -> V.Vector Telemetry.SpanRecord
+convertToSpan pid resourceSpans = join $ V.map (convertScopeSpan pid resourceSpans.resourceSpansResource) resourceSpans.resourceSpansScopeSpans
 
-
--- fromMaybe (error "invalid at-project-id in logs") do
---         let v = Unsafe.fromJust $ resource >>= \r -> find (\kv -> kv.keyValueKey == "at-project-id") r.resourceAttributes >>= (.keyValueValue) >>= (.anyValueValue)
---         UUID.fromText =<< anyValueToString v
-
-convertLogRecord :: Maybe Resource -> Maybe InstrumentationScope -> LogRecord -> Telemetry.LogRecord
-convertLogRecord resource scope lr =
+convertLogRecord :: Projects.ProjectId -> Maybe Resource -> Maybe InstrumentationScope -> LogRecord -> Telemetry.LogRecord
+convertLogRecord pid resource scope lr =
   Telemetry.LogRecord
-    { projectId = fromMaybe (error "invalid at-project-id in logs") do
-        UUID.fromText =<< anyValueToString =<< pid
+    { projectId = pid.unProjectId
     , id = Nothing
     , timestamp = if lr.logRecordTimeUnixNano == 0 then nanosecondsToUTC lr.logRecordObservedTimeUnixNano else nanosecondsToUTC lr.logRecordTimeUnixNano
     , observedTimestamp = nanosecondsToUTC lr.logRecordObservedTimeUnixNano
@@ -234,16 +255,12 @@ convertLogRecord resource scope lr =
     , resource = removeProjectId $ resourceToJSONB resource
     , instrumentationScope = instrumentationScopeToJSONB scope
     }
-  where
-    pid = resource >>= \r -> find (\kv -> kv.keyValueKey == "at-project-id") r.resourceAttributes >>= (.keyValueValue) >>= (.anyValueValue)
 
-
-convertSpanRecord :: Maybe Resource -> Maybe InstrumentationScope -> Span -> Telemetry.SpanRecord
-convertSpanRecord resource scope sp =
+convertSpanRecord :: Projects.ProjectId -> Maybe Resource -> Maybe InstrumentationScope -> Span -> Telemetry.SpanRecord
+convertSpanRecord pid resource scope sp =
   Telemetry.SpanRecord
     { uSpandId = Nothing
-    , projectId = fromMaybe (error "invalid at-project-id in span") do
-        UUID.fromText =<< anyValueToString =<< pid
+    , projectId = pid.unProjectId
     , timestamp = nanosecondsToUTC sp.spanStartTimeUnixNano
     , traceId = byteStringToHexText sp.spanTraceId
     , spanId = byteStringToHexText sp.spanSpanId
@@ -260,11 +277,8 @@ convertSpanRecord resource scope sp =
     , links = linksToJSONB $ V.toList sp.spanLinks
     , resource = removeProjectId $ resourceToJSONB resource
     , instrumentationScope = instrumentationScopeToJSONB scope
-    , spanDurationNs = durr
+    , spanDurationNs = fromIntegral $ sp.spanEndTimeUnixNano - sp.spanStartTimeUnixNano
     }
-  where
-    pid = resource >>= \r -> find (\kv -> kv.keyValueKey == "at-project-id") r.resourceAttributes >>= (.keyValueValue) >>= (.anyValueValue)
-    durr = fromIntegral $ sp.spanEndTimeUnixNano - sp.spanStartTimeUnixNano
 
 
 traceServiceExportH
@@ -274,22 +288,21 @@ traceServiceExportH
   -> IO (ServerResponse 'Normal ExportTraceServiceResponse)
 traceServiceExportH appLogger appCtx (ServerNormalRequest _meta (ExportTraceServiceRequest req)) = do
   _ <- runBackground appLogger appCtx do
-    let spanRecords = join $ V.map convertToSpan req
-        apitoolkitSpans =
-          V.map
-            ( \s ->
-                case s.instrumentationScope of
-                  AE.Object v -> if httpScope then Just $ convertSpanToRequestMessage s scopeName else Nothing
-                    where
-                      y = KEM.lookup "name" v
-                      scopeName =
-                        if y == Just "@opentelemetry/instrumentation-undici"
-                          then "@opentelemetry/instrumentation-undici"
-                          else "@opentelemetry/instrumentation-http"
-                      httpScope = y == Just "@opentelemetry/instrumentation-undici" || y == Just "@opentelemetry/instrumentation-http"
-                  _ -> Nothing
-            )
-            spanRecords
+    let projectKey = fromMaybe (error "Missing project key") $ getSpanAttributeValue "at-project-key" req
+    projectIdM <- ProjectApiKeys.getProjectIdByApiKey projectKey
+    let pid = fromMaybe (error $ "project API Key is invalid pid" ) projectIdM
+    let spanRecords = join $ V.map (convertToSpan pid) req
+        apitoolkitSpans = flip V.map spanRecords \s ->
+          case s.instrumentationScope of
+            AE.Object v -> if httpScope then Just $ convertSpanToRequestMessage s scopeName else Nothing
+              where
+                y = KEM.lookup "name" v
+                scopeName =
+                  if y == Just "@opentelemetry/instrumentation-undici"
+                    then "@opentelemetry/instrumentation-undici"
+                    else "@opentelemetry/instrumentation-http"
+                httpScope = y == Just "@opentelemetry/instrumentation-undici" || y == Just "@opentelemetry/instrumentation-http"
+            _ -> Nothing
     _ <- ProcessMessage.processRequestMessages $ V.toList $ V.catMaybes apitoolkitSpans <&> ("",)
     Telemetry.bulkInsertSpans $ V.filter (\s -> s.spanName /= "apitoolkit-custom-span") spanRecords
   return (ServerNormalResponse (ExportTraceServiceResponse Nothing) mempty StatusOk "")
@@ -390,31 +403,30 @@ getSpanAttribute key attr = case attr of
 
 eventsToJSONB :: [Span_Event] -> AE.Value
 eventsToJSONB spans =
-  AE.toJSON
-    $ ( \sp ->
-          object
-            [ "event_name" .= toText sp.span_EventName
-            , "event_time" .= nanosecondsToUTC sp.span_EventTimeUnixNano
-            , "event_attributes" .= keyValueToJSONB sp.span_EventAttributes
-            , "event_dropped_attributes_count" .= fromIntegral sp.span_EventDroppedAttributesCount
-            ]
-      )
-    <$> spans
+  AE.toJSON $
+    ( \sp ->
+        object
+          [ "event_name" .= toText sp.span_EventName
+          , "event_time" .= nanosecondsToUTC sp.span_EventTimeUnixNano
+          , "event_attributes" .= keyValueToJSONB sp.span_EventAttributes
+          , "event_dropped_attributes_count" .= fromIntegral sp.span_EventDroppedAttributesCount
+          ]
+    )
+      <$> spans
 
 
 linksToJSONB :: [Span_Link] -> AE.Value
 linksToJSONB lnks =
-  AE.toJSON
-    $ ( \lnk ->
-          object
-            [ "link_span_id" .= (decodeUtf8 lnk.span_LinkSpanId :: Text)
-            , "link_trace_id" .= (decodeUtf8 lnk.span_LinkTraceId :: Text)
-            , "link_attributes" .= keyValueToJSONB lnk.span_LinkAttributes
-            , "link_dropped_attributes_count" .= fromIntegral lnk.span_LinkDroppedAttributesCount
-            , "link_flags" .= fromIntegral lnk.span_LinkFlags
-            ]
-      )
-    <$> lnks
+  AE.toJSON $
+    lnks
+      <&> \lnk ->
+        object
+          [ "link_span_id" .= (decodeUtf8 lnk.span_LinkSpanId :: Text)
+          , "link_trace_id" .= (decodeUtf8 lnk.span_LinkTraceId :: Text)
+          , "link_attributes" .= keyValueToJSONB lnk.span_LinkAttributes
+          , "link_dropped_attributes_count" .= fromIntegral lnk.span_LinkDroppedAttributesCount
+          , "link_flags" .= fromIntegral lnk.span_LinkFlags
+          ]
 
 
 ---------------------------------------------------------------------------------------

@@ -5,6 +5,7 @@ module Models.Projects.ProjectApiKeys (
   ProjectApiKey (..),
   ProjectApiKeyId (..),
   encryptAPIKey,
+  getProjectIdByApiKey,
   decryptAPIKey,
   newProjectApiKeys,
   insertProjectApiKey,
@@ -12,7 +13,8 @@ module Models.Projects.ProjectApiKeys (
   countProjectApiKeysByProjectId,
   revokeApiKey,
   getProjectApiKey,
-) where
+)
+where
 
 import Crypto.Cipher.AES (AES256)
 import Crypto.Cipher.Types (BlockCipher (..), Cipher (..), nullIV)
@@ -22,6 +24,7 @@ import Data.Time (UTCTime)
 import Data.UUID qualified as UUID
 import Data.Vector (Vector)
 import Database.PostgreSQL.Entity
+import Effectful.PostgreSQL.Transact.Effect (DB, dbtToEff)
 import Database.PostgreSQL.Entity.DBT (QueryNature (..), execute, query, queryOne)
 import Database.PostgreSQL.Entity.Types
 import Database.PostgreSQL.Simple (FromRow, Only (Only), ToRow)
@@ -103,6 +106,12 @@ getProjectApiKey :: ProjectApiKeyId -> DBT IO (Maybe ProjectApiKey)
 getProjectApiKey = queryOne Select q
   where
     q = [sql|select id, created_at, updated_at, deleted_at, active, project_id,  title, key_prefix from projects.project_api_keys where id=? and active=true |]
+
+
+getProjectIdByApiKey :: DB :> es => Text -> Eff es (Maybe Projects.ProjectId )
+getProjectIdByApiKey pid = dbtToEff $ queryOne Select q (Only pid)
+  where
+    q = [sql| select project from projects.project_api_keys where key_prefix=?|]
 
 
 -- AES256 encryption
