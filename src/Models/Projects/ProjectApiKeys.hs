@@ -19,9 +19,9 @@ where
 import Crypto.Cipher.AES (AES256)
 import Crypto.Cipher.Types (BlockCipher (..), Cipher (..), nullIV)
 import Crypto.Error (throwCryptoError)
+import Data.Cache qualified as Cache
 import Data.Default (Default)
 import Data.Time (UTCTime)
-import Data.Cache qualified as Cache
 import Data.UUID qualified as UUID
 import Data.Vector (Vector)
 import Database.PostgreSQL.Entity
@@ -39,7 +39,7 @@ import Effectful.Time (Time)
 import Effectful.Time qualified as Time
 import GHC.Records (HasField (getField))
 import Models.Projects.Projects qualified as Projects
-import Relude hiding (id, ask)
+import Relude hiding (ask, id)
 import Servant.API (FromHttpApiData)
 import System.Config qualified as Config
 

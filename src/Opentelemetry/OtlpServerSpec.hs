@@ -19,8 +19,8 @@ spec = aroundAll TestUtils.withSetup do
       let otlpTraceB64A' = B64.decodeBase64 $ B64.assertBase64 @'B64.StdPadded $ encodeUtf8 otlpTraceB64A
       authCtx <- testAuthContext pool
       resp <-
-        TestUtils.runTestBackground authCtx $
-          OtlpServer.processList [("A", otlpTraceB64A')] (HashMap.fromList [("ce-type", "org.opentelemetry.otlp.traces.v1")])
+        TestUtils.runTestBackground authCtx
+          $ OtlpServer.processList [("A", otlpTraceB64A')] (HashMap.fromList [("ce-type", "org.opentelemetry.otlp.traces.v1")])
       traceShowM resp
       pass
 

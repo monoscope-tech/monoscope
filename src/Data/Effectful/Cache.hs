@@ -1,9 +1,10 @@
 module Data.Effectful.Cache where
 
+import Data.Cache qualified as C
 import Effectful
 import Effectful.Dispatch.Dynamic
 import Relude
-import qualified Data.Cache as C
+
 
 -- type role Cache phantom nominal
 
@@ -22,6 +23,6 @@ fetchWithCache
   -> Eff es v
 fetchWithCache key action = send $ FetchWithCache key action
 
--- runCacheIO :: IOE :> es => C.Cache k v -> Eff (Cache ': es ) a -> Eff es a 
--- runCacheIO cache= interpret $ \_ -> case 
+-- runCacheIO :: IOE :> es => C.Cache k v -> Eff (Cache ': es ) a -> Eff es a
+-- runCacheIO cache= interpret $ \_ -> case
 --   FetchWithCache key action -> liftIO $ C.fetchWithCache cache key action
