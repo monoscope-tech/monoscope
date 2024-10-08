@@ -119,7 +119,7 @@ getProjectIdByApiKey projectKey = do
     withPool pool $ queryOne Select q (Only projectKey)
   pure projectCacheVal
   where
-    q = [sql| select project from projects.project_api_keys where key_prefix=?|]
+    q = [sql| select project_id from projects.project_api_keys where key_prefix=?|]
 
 
 -- AES256 encryption
