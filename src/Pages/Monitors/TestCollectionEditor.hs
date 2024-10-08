@@ -200,42 +200,45 @@ testSettingsModalContent_ isUpdate col = div_ [class_ "space-y-5 w-96"] do
 
 -- Timeline steps
 
-timelineSteps :: Projects.ProjectId -> Components.TimelineSteps
-timelineSteps pid =
+timelineSteps :: Projects.ProjectId -> Testing.Collection -> Components.TimelineSteps
+timelineSteps pid col =
   Components.TimelineSteps $
-    [ Components.TimelineStep "Define API test" defineTestSteps_
-    , Components.TimelineStep "Name and tag your test" nameOfTest_
-    , Components.TimelineStep "Set Alert Message and Recovery Threshold" (MetricMonitors.configureNotificationMessage_)
+    [ Components.TimelineStep "Define API test" $ defineTestSteps_ col
+    , Components.TimelineStep "Name and tag your test" $ nameOfTest_ col.title col.tags
+    , Components.TimelineStep "Set Alert Message and Recovery Threshold" MetricMonitors.configureNotificationMessage_
     ]
 
 
-nameOfTest_ :: Html ()
-nameOfTest_ = div_ [class_ "form-control w-full flex flex-col"] do
+nameOfTest_ :: Text -> V.Vector Text -> Html ()
+nameOfTest_ name tags = div_ [class_ "form-control w-full flex flex-col"] do
   label_ [class_ "label"] $ span_ [class_ "label-text"] "Name"
-  input_ [placeholder_ "Give your test a name", class_ "input input-sm input-bordered mb-2  w-full", name_ "name", value_ ""]
+  input_ [placeholder_ "Give your test a name", class_ "input input-sm input-bordered mb-2  w-full", name_ "name", value_ name]
   label_ [class_ "label"] $ span_ [class_ "label-text"] "Tags"
   input_ [placeholder_ "Add tags", value_ "", id_ "tags_input"]
-
+  let tgs = decodeUtf8 $ encode $ V.toList tags
   script_
     [text|
-    document.addEventListener('DOMContentLoaded', function() {
+     document.addEventListener('DOMContentLoaded', function() {
       var inputElem = document.querySelector('#tags_input')
       var tagify = new Tagify(inputElem)
+      tagify.addTags($tgs);
       window.tagify = tagify
     })
   |]
 
 
-defineTestSteps_ :: Html ()
-defineTestSteps_ = do
+defineTestSteps_ :: Testing.Collection -> Html ()
+defineTestSteps_ col = do
+  let (scheduleNumber, scheduleNumberUnit) = case words col.schedule of
+        [num, unit] -> (num, unit)
+        _ -> ("1", "minutes")
   p_ [class_ "space-x-2"] do
     "Run the test every"
-    input_ [class_ "ml-3 input input-sm input-bordered w-24 text-center", type_ "number", value_ "1", name_ "scheduleCount"]
-    select_ [class_ "select select-sm select-bordered", name_ "scheduleUnits"] do
-      option_ "seconds"
-      option_ "minutes"
-      option_ "hours"
-      option_ "days"
+    input_ [class_ "ml-3 input input-sm input-bordered w-24 text-center", type_ "number", value_ scheduleNumber, name_ "scheduleNumber"]
+    select_ [class_ "select select-sm select-bordered", name_ "scheduleNumberUnit"] do
+      option_ [selected_ "" | scheduleNumberUnit == "minutes"] "Minutes"
+      option_ [selected_ "" | scheduleNumberUnit == "hours"] "Hours"
+      option_ [selected_ "" | scheduleNumberUnit == "days"] "Days"
   div_ [class_ "alert"] do
     faSprite_ "sparkles" "regular" "w-7 h-7 text-success "
     div_ [] do
@@ -285,7 +288,7 @@ collectionPage pid col col_rn respJson = do
       ]
       do
         div_ [class_ "col-span-2 px-8 pt-5 pb-12 overflow-y-scroll"] do
-          toHtml $ timelineSteps pid
+          toHtml $ timelineSteps pid col
           div_ [class_ "w-full flex justify-end px-2"] do
             button_ [class_ "btn btn-primary ml-auto fixed top-[90%] z-[999999] ", type_ "submit"] "Save"
         div_ [class_ "hidden col-span-1 h-full divide-y flex flex-col overflow-y-hidden"] do
@@ -297,7 +300,7 @@ collectionPage pid col col_rn respJson = do
               p_ [class_ "text-sm"] $ toHtml col.description
             div_ [class_ ""] do
               span_ [class_ "badge badge-success"] "Active"
-              div_ [class_ "inline-block"] $ Components.modal_ "test-settings-modal" (span_ [class_ "p-3"] $ Utils.faSprite_ "sliders" "regular" "h-4") $ testSettingsModalContent_ True col
+          -- div_ [class_ "inline-block"] $ Components.modal_ "test-settings-modal" (span_ [class_ "p-3"] $ Utils.faSprite_ "sliders" "regular" "h-4") $ testSettingsModalContent_ True col
           div_ [class_ "shrink flex justify-between items-center"] do
             div_ [class_ "flex items-center space-x-4"] do
               h4_ [class_ "font-semibold text-2xl font-medium "] "Steps"

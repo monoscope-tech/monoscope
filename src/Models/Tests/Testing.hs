@@ -161,6 +161,7 @@ data Collection = Collection
   , lastRunResponse :: Maybe AE.Value
   , lastRunPassed :: Int
   , lastRunFailed :: Int
+  , tags :: V.Vector Text
   }
   deriving stock (Show, Generic)
   deriving anyclass (FromRow, ToRow, AE.ToJSON, AE.FromJSON, NFData, Default)
@@ -282,7 +283,7 @@ getCollectionById id' = queryOne Select q (Only id')
                       WHEN EXTRACT(DAY FROM schedule) > 0 THEN CONCAT(EXTRACT(DAY FROM schedule)::TEXT, ' days')
                       WHEN EXTRACT(HOUR FROM schedule) > 0 THEN CONCAT(EXTRACT(HOUR FROM schedule)::TEXT, ' hours')
                       ELSE CONCAT(EXTRACT(MINUTE FROM schedule)::TEXT, ' minutes')
-                  END as schedule, is_scheduled, collection_steps, last_run_response, last_run_passed, last_run_failed
+                  END as schedule, is_scheduled, collection_steps, last_run_response, last_run_passed, last_run_failed, tags
                   FROM tests.collections t WHERE id=?|]
 
 
