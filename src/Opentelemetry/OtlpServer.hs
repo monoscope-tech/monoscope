@@ -99,8 +99,8 @@ processList msgs attrs = do
         V.forM msgs' \(ackId, msg) -> case (HsProtobuf.fromByteString msg :: Either HsProtobuf.ParseError ExportLogsServiceRequest) of
           Left err -> error $ "unable to parse logs service request with err " <> show err
           Right (ExportLogsServiceRequest logReq) -> do
-            pidM <- join <$> forM (getLogAttributeValue "at-project-key" logReq) ProjectApiKeys.getProjectIdByApiKey 
-            let pid2M =  Projects.projectIdFromText =<< getLogAttributeValue "at-project-id" logReq 
+            pidM <- join <$> forM (getLogAttributeValue "at-project-key" logReq) ProjectApiKeys.getProjectIdByApiKey
+            let pid2M = Projects.projectIdFromText =<< getLogAttributeValue "at-project-id" logReq
             let pid = fromMaybe (error $ "project API Key and project ID not available in trace") $ pidM <|> pid2M
             pure (ackId, join $ V.map (convertToLog pid) logReq)
       let (ackIds, logs) = V.unzip results
@@ -112,8 +112,8 @@ processList msgs attrs = do
           case (HsProtobuf.fromByteString msg :: Either HsProtobuf.ParseError ExportTraceServiceRequest) of
             Left err -> error $ "unable to parse traces service request with err " <> show err
             Right (ExportTraceServiceRequest traceReq) -> do
-              pidM <- join <$> forM (getSpanAttributeValue "at-project-key" traceReq) ProjectApiKeys.getProjectIdByApiKey 
-              let pid2M =  Projects.projectIdFromText =<< getSpanAttributeValue "at-project-id" traceReq
+              pidM <- join <$> forM (getSpanAttributeValue "at-project-key" traceReq) ProjectApiKeys.getProjectIdByApiKey
+              let pid2M = Projects.projectIdFromText =<< getSpanAttributeValue "at-project-id" traceReq
               let pid = fromMaybe (error $ "project API Key and project ID not available in trace") $ pidM <|> pid2M
               pure (ackId, join $ V.map (convertToSpan pid) traceReq)
       let (ackIds, spansVec) = V.unzip results

@@ -680,6 +680,7 @@ ALTER TABLE tests.collections ADD COLUMN last_run_response jsonb DEFAULT NULL;
 ALTER TABLE tests.collections ADD COLUMN last_run_passed INT DEFAULT 0;
 ALTER TABLE tests.collections ADD COLUMN last_run_failed INT DEFAULT 0;
 ALTER TABLE tests.collections ADD COLUMN tags TEXT[] NOT NULL DEFAULT '{}'::text[];
+ALTER TABLE tests.collections ADD COLUMN collection_variables JSONB NOT NULL DEFAULT '[]'::jsonb;
 
 
 CREATE TABLE IF NOT EXISTS monitors.query_monitors

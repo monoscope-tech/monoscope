@@ -98,7 +98,7 @@ export class StepsEditor extends LitElement {
     })
 
     this.editor = monaco.editor.create(editorContainer, {
-      value: jsyaml.dump(this.collectionSteps, { ident: 2 }),
+      value: jsyaml.dump(convertCollectionStepsToTestkitFormat(this.collectionSteps), { ident: 2 }),
       language: 'yaml',
       theme: 'nightOwl',
       fontSize: 14,
@@ -112,7 +112,7 @@ export class StepsEditor extends LitElement {
     // model.onDidChangeContent(() => {
     //   try {
     //     const newCollectionSteps = jsyaml.load(model.getValue())
-    //     if (this.collectionSteps != newCollectionSteps) {
+    //     if (this.collectionSteps != convertTestkitToCollectionSteps(newCollectionSteps)) {
     //       this.collectionSteps = newCollectionSteps
     //       this.requestUpdate()
     //     }
@@ -125,7 +125,7 @@ export class StepsEditor extends LitElement {
   updateEditorContent() {
     const testkitContent = convertCollectionStepsToTestkitFormat(this.collectionSteps)
     const editorContent = jsyaml.dump(testkitContent, { ident: 2 })
-    if (this.editor && this.editor.getModel().getValue() != editorContent) {
+    if (this.editor) {
       this.editor.getModel().setValue(editorContent)
     }
   }
@@ -264,7 +264,7 @@ export class StepsEditor extends LitElement {
                     </select>
                     ${saveError.method ? html`<span class="text-red-700 text-xs">${saveError.method}</span>` : ''}
                   </label>
-                  <label for="actions-data" class="flex-1 text-sm font-medium form-control w-full flex flex-row items-center gap-1">
+                  <label for="actions-data-${idx}" class="flex-1 text-sm font-medium form-control w-full flex flex-row items-center gap-1">
                     <input
                       type="text" id="actions-data-${idx}" .value=${stepData._url} class="input input-sm input-bordered w-full" @change=${(e) => this.updateValue(e, idx, null, null, '_url')}
                     />

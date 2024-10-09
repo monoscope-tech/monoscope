@@ -2,9 +2,11 @@ module Pages.Monitors.TestCollectionEditor (
   collectionGetH,
   CollectionStepUpdateForm (..),
   collectionRunTestsH,
+  collectionStepVariablesUpdateH,
   collectionPage,
   collectionStepsUpdateH,
   testSettingsModalContent_,
+  CollectionVariableForm (..),
   CollectionGet,
   CollectionRunTest,
   CollectionMut (..),
@@ -31,6 +33,7 @@ import Lucid.Htmx (
   hxPost_,
   hxSwap_,
   hxTarget_,
+  hxTrigger_,
   hxVals_,
  )
 import Lucid.Hyperscript (__)
@@ -48,18 +51,28 @@ import Relude hiding (ask)
 import System.Types (ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders, addSuccessToast)
 import Utils (faSprite_, getStatusColor, jsonValueToHtmlTree)
 
+import Web.FormUrlEncoded (FromForm)
+
 
 data CollectionStepUpdateForm = CollectionStepUpdateForm
   { stepsData :: V.Vector Testing.CollectionStepData
   , title :: Maybe Text
   , description :: Maybe Text
-  , tags :: V.Vector Text
+  , tags :: Maybe (V.Vector Text)
   , scheduled :: Maybe Text
   , scheduleNumber :: Maybe Text
   , scheduleNumberUnit :: Maybe Text
   }
   deriving stock (Show, Generic)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields] CollectionStepUpdateForm
+
+
+data CollectionVariableForm = CollectionVariableForm
+  { variableName :: Text
+  , variableValue :: Text
+  }
+  deriving stock (Show, Generic)
+  deriving anyclass (FromForm)
 
 
 collectionStepsUpdateH :: Projects.ProjectId -> Testing.CollectionId -> CollectionStepUpdateForm -> ATAuthCtx (RespHeaders CollectionMut)
@@ -72,9 +85,27 @@ collectionStepsUpdateH pid colId colF = do
       addErrorToast "You are on Free plan. You can't schedule collection to run more than once a day" Nothing
       addRespHeaders CollectionMutError
     else do
-      _ <- dbtToEff $ Testing.updateCollection pid colId (fromMaybe "" colF.title) (fromMaybe "" colF.description) isScheduled scheduleTxt colF.tags colF.stepsData
+      _ <- dbtToEff $ Testing.updateCollection pid colId (fromMaybe "" colF.title) (fromMaybe "" colF.description) isScheduled scheduleTxt (fromMaybe [] colF.tags) colF.stepsData
       addSuccessToast "Collection's steps updated successfully" Nothing
       addRespHeaders CollectionMutSuccess
+
+
+collectionStepVariablesUpdateH :: Projects.ProjectId -> Testing.CollectionId -> CollectionVariableForm -> ATAuthCtx (RespHeaders (Html ()))
+collectionStepVariablesUpdateH pid colId colF = do
+  (_, project) <- Sessions.sessionAndProject pid
+  coll <- dbtToEff $ Testing.getCollectionById colId
+  case coll of
+    Nothing -> do
+      addErrorToast "Collection not found" Nothing
+      addRespHeaders ""
+    Just col -> do
+      let Testing.CollectionVariables vars = col.collectionVariables
+          vs = V.filter (\v -> v.variableName /= colF.variableName) vars
+      let colVar = Testing.CollectionVariablesItem{variableName = colF.variableName, variableValue = colF.variableValue}
+      let updatedVars = vs <> [colVar]
+      _ <- dbtToEff $ Testing.updateCollectionVariables pid colId (Testing.CollectionVariables updatedVars)
+      addSuccessToast "Collection's variables updated successfully" Nothing
+      addRespHeaders ""
 
 
 collectionRunTestsH :: Projects.ProjectId -> Testing.CollectionId -> Maybe Int -> CollectionStepUpdateForm -> ATAuthCtx (RespHeaders CollectionRunTest)
@@ -202,17 +233,17 @@ testSettingsModalContent_ isUpdate col = div_ [class_ "space-y-5 w-96"] do
 
 timelineSteps :: Projects.ProjectId -> Testing.Collection -> Components.TimelineSteps
 timelineSteps pid col =
-  Components.TimelineSteps $
-    [ Components.TimelineStep "Define API test" $ defineTestSteps_ col
-    , Components.TimelineStep "Name and tag your test" $ nameOfTest_ col.title col.tags
-    , Components.TimelineStep "Set Alert Message and Recovery Threshold" MetricMonitors.configureNotificationMessage_
-    ]
+  Components.TimelineSteps
+    $ [ Components.TimelineStep "Define API test" $ defineTestSteps_ col
+      , Components.TimelineStep "Name and tag your test" $ nameOfTest_ col.title col.tags
+      , Components.TimelineStep "Set Alert Message and Recovery Threshold" MetricMonitors.configureNotificationMessage_
+      ]
 
 
 nameOfTest_ :: Text -> V.Vector Text -> Html ()
 nameOfTest_ name tags = div_ [class_ "form-control w-full flex flex-col"] do
   label_ [class_ "label"] $ span_ [class_ "label-text"] "Name"
-  input_ [placeholder_ "Give your test a name", class_ "input input-sm input-bordered mb-2  w-full", name_ "name", value_ name]
+  input_ [placeholder_ "Give your test a name", class_ "input input-sm input-bordered mb-2  w-full", name_ "title", value_ name]
   label_ [class_ "label"] $ span_ [class_ "label-text"] "Tags"
   input_ [placeholder_ "Add tags", value_ "", id_ "tags_input"]
   let tgs = decodeUtf8 $ encode $ V.toList tags
@@ -236,9 +267,9 @@ defineTestSteps_ col = do
     "Run the test every"
     input_ [class_ "ml-3 input input-sm input-bordered w-24 text-center", type_ "number", value_ scheduleNumber, name_ "scheduleNumber"]
     select_ [class_ "select select-sm select-bordered", name_ "scheduleNumberUnit"] do
-      option_ [selected_ "" | scheduleNumberUnit == "minutes"] "Minutes"
-      option_ [selected_ "" | scheduleNumberUnit == "hours"] "Hours"
-      option_ [selected_ "" | scheduleNumberUnit == "days"] "Days"
+      option_ (value_ "minutes" : [selected_ "" | scheduleNumberUnit == "minutes"]) "Minutes"
+      option_ (value_ "hours" : [selected_ "" | scheduleNumberUnit == "hours"]) "Hours"
+      option_ (value_ "days" : [selected_ "" | scheduleNumberUnit == "days"]) "Days"
   div_ [class_ "alert"] do
     faSprite_ "sparkles" "regular" "w-7 h-7 text-success "
     div_ [] do
@@ -290,7 +321,7 @@ collectionPage pid col col_rn respJson = do
         div_ [class_ "col-span-2 px-8 pt-5 pb-12 overflow-y-scroll"] do
           toHtml $ timelineSteps pid col
           div_ [class_ "w-full flex justify-end px-2"] do
-            button_ [class_ "btn btn-primary ml-auto fixed top-[90%] z-[999999] ", type_ "submit"] "Save"
+            button_ [class_ "btn btn-primary ml-auto fixed top-[90%] z-10 ", type_ "submit"] "Save"
         div_ [class_ "hidden col-span-1 h-full divide-y flex flex-col overflow-y-hidden"] do
           div_ [class_ "shrink flex items-center justify-between"] do
             div_ [class_ " pb-5 p-5 space-y-2"] do
@@ -300,7 +331,6 @@ collectionPage pid col col_rn respJson = do
               p_ [class_ "text-sm"] $ toHtml col.description
             div_ [class_ ""] do
               span_ [class_ "badge badge-success"] "Active"
-          -- div_ [class_ "inline-block"] $ Components.modal_ "test-settings-modal" (span_ [class_ "p-3"] $ Utils.faSprite_ "sliders" "regular" "h-4") $ testSettingsModalContent_ True col
           div_ [class_ "shrink flex justify-between items-center"] do
             div_ [class_ "flex items-center space-x-4"] do
               h4_ [class_ "font-semibold text-2xl font-medium "] "Steps"
@@ -326,7 +356,9 @@ collectionPage pid col col_rn respJson = do
         div_ [class_ "col-span-1 h-full border-r border-gray-200 overflow-y-auto"] do
           div_ [role_ "tablist", class_ "tabs tabs-bordered w-full"] do
             input_ [type_ "radio", name_ "side-tabs", role_ "tab", class_ "tab", term "aria-label" "Variables", checked_]
-            div_ [role_ "tabpanel", class_ "tab-content"] "Steps"
+            div_ [role_ "tabpanel", class_ "tab-content"] do
+              let Testing.CollectionVariables v = col.collectionVariables
+              variablesDialog pid col.id v
 
             input_ [type_ "radio", name_ "side-tabs", role_ "tab", class_ "tab", term "aria-label" "Test Results Log"]
             div_ [role_ "tabpanel", class_ "tab-content max-h-full h-full overflow-y-auto space-y-4 relative", id_ "step-results-parent"] do
@@ -393,6 +425,44 @@ collectionPage pid col col_rn respJson = do
       |]
 
 
+variablesDialog :: Projects.ProjectId -> Testing.CollectionId -> V.Vector Testing.CollectionVariablesItem -> Html ()
+variablesDialog pid cid vars = do
+  div_ [class_ "w-full text-center pt-4", [__|on click halt|], id_ "test-variables-content"] do
+    div_ [class_ "w-full flex flex-col gap-2"] do
+      forM_ vars $ \var -> do
+        div_ [class_ "flex items-center justify-between"] do
+          div_ [class_ "flex items-center"] $ toHtml var.variableName
+          div_ [class_ "flex items-center"] $ toHtml var.variableValue
+    when (V.null vars) $ do
+      div_ [class_ "w-full pt-24 text-center"] do
+        h4_ [class_ "text-lg font-medium"] "Create Local Variables"
+        p_ [class_ "text-gray-500"] "Create local variables to be used in your test steps."
+
+    label_ [Lucid.for_ "my_modal_7", class_ "btn btn-success btn-sm mx-auto"] do
+      faSprite_ "plus" "solid" "w-4 h-4" >> "Variable"
+    input_ [type_ "checkbox", id_ "my_modal_7", class_ "modal-toggle"]
+    div_ [class_ "modal", role_ "dialog"] $ do
+      div_
+        [ class_ "modal-box"
+        , hxPost_ $ "/p/" <> pid.toText <> "/monitors/" <> cid.toText <> "/variables"
+        , hxTarget_ "#test-variables"
+        , hxSwap_ "outerHTML"
+        , id_ "test-variables"
+        , hxTrigger_ "click"
+        ]
+        $ do
+          h3_ [class_ "text-lg font-bold text-left"] "New Variable"
+          div_ [class_ "modal-action", [__|on click halt|]] do
+            div_ [class_ "form-control w-full"] do
+              label_ [class_ "label"] $ span_ [class_ "label-text"] "Name"
+              input_ [type_ "text", placeholder_ "Variable name", class_ "input input-sm input-bordered w-full ", name_ "name", value_ ""]
+              label_ [class_ "label"] $ span_ [class_ "label-text"] "Value"
+              input_ [type_ "text", placeholder_ "Value", class_ "input input-sm input-bordered w-full ", name_ "value", value_ ""]
+          div_ [class_ "modal-action"] do
+            button_ [class_ "btn btn-sm btn-success", type_ "button", [__|on click halt then htmx.trigger('#test-variables','click')|]] "Save"
+      label_ [class_ "modal-backdrop", Lucid.for_ "my_modal_7"] "Close"
+
+
 collectionStepResult_ :: Int -> Testing.StepResult -> Html ()
 collectionStepResult_ idx stepResult = section_ [class_ "p-1"] do
   when (idx == 0) $ div_ [id_ "step-results-indicator", class_ "absolute top-1/2 z-10 left-1/2 -translate-x-1/2 rounded-sm -translate-y-1/2 steps-indicator text-slate-400"] do
@@ -403,13 +473,13 @@ collectionStepResult_ idx stepResult = section_ [class_ "p-1"] do
     p_ [class_ $ "block badge badge-sm " <> getStatusColor stepResult.request.resp.status, term "data-tippy-content" "status"] $ show stepResult.request.resp.status
   div_ [role_ "tablist", class_ "tabs tabs-lifted"] do
     input_ [type_ "radio", name_ $ "step-result-tabs-" <> show idx, role_ "tab", class_ "tab", Aria.label_ "Response Log", checked_]
-    div_ [role_ "tabpanel", class_ "tab-content bg-base-100 border-base-300 rounded-box p-6"] $
-      toHtmlRaw $
-        textToHTML stepResult.stepLog
+    div_ [role_ "tabpanel", class_ "tab-content bg-base-100 border-base-300 rounded-box p-6"]
+      $ toHtmlRaw
+      $ textToHTML stepResult.stepLog
 
     input_ [type_ "radio", name_ $ "step-result-tabs-" <> show idx, role_ "tab", class_ "tab", Aria.label_ "Response Headers"]
-    div_ [role_ "tabpanel", class_ "tab-content bg-base-100 border-base-300 rounded-box p-6 "] $
-      table_ [class_ "table table-xs"] do
+    div_ [role_ "tabpanel", class_ "tab-content bg-base-100 border-base-300 rounded-box p-6 "]
+      $ table_ [class_ "table table-xs"] do
         thead_ [] $ tr_ [] $ th_ [] "Name" >> th_ [] "Value"
         tbody_ $ forM_ (M.toList stepResult.request.resp.headers) $ \(k, v) -> tr_ [] do
           td_ [] $ toHtml k

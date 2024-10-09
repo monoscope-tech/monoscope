@@ -1,16 +1,16 @@
 module Pages.Monitors.TestingSpec (spec) where
 
+import Data.UUID qualified as UUID
 import Data.Vector qualified as V
+import Models.Projects.Projects qualified as Projects
 import Models.Tests.Testing
-import Test.Hspec
+import Pages.BodyWrapper (PageCtx (..))
 import Pages.Monitors.TestCollectionEditor qualified as TestCollectionEditor
 import Pages.Monitors.Testing qualified as Testing
-import Data.UUID qualified as UUID
-import Models.Projects.Projects qualified as Projects
-import Pages.BodyWrapper (PageCtx (..))
+import Pkg.Components.ItemsList qualified as ItemsList
 import Pkg.TestUtils
 import Relude
-import Pkg.Components.ItemsList qualified as ItemsList
+import Test.Hspec
 
 
 testPid :: Projects.ProjectId
@@ -43,7 +43,7 @@ collection =
     , scheduleNumber = Nothing
     , scheduleNumberUnit = Nothing
     , stepsData = [colStepData]
-    , tags = V.empty
+    , tags = Just V.empty
     }
 
 
@@ -56,7 +56,7 @@ scheduleCollection =
     , scheduleNumber = Just "1"
     , scheduleNumberUnit = Just "days"
     , stepsData = [colStepData]
-    , tags = V.empty
+    , tags = Just V.empty
     }
 
 
@@ -69,7 +69,7 @@ scheduleCollectionMn =
     , scheduleNumber = Just "1"
     , scheduleNumberUnit = Just "hours"
     , stepsData = [colStepData]
-    , tags = V.empty
+    , tags = Just V.empty
     }
 
 

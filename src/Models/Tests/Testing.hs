@@ -9,6 +9,8 @@ module Models.Tests.Testing (
   CollectionStepId (..),
   CollectionStepData (..),
   CollectionSteps (..),
+  CollectionVariablesItem (..),
+  CollectionVariables (..),
   stepDataMethod,
   updateCollection,
   addCollection,
@@ -17,6 +19,7 @@ module Models.Tests.Testing (
   getCollectionById,
   getCollectionsId,
   TabStatus (..),
+  updateCollectionVariables,
   getCollectionRunStatus,
   inactiveCollectionsCount,
 )
@@ -24,6 +27,7 @@ where
 
 import Data.Aeson (KeyValue ((.=)), (.:?))
 import Data.Aeson qualified as AE
+import Data.Aeson.Types
 import Data.Default (Default)
 import Data.Default.Instances ()
 import Data.Time (UTCTime)
@@ -140,10 +144,26 @@ instance AE.FromJSON CollectionStepData where
     return CollectionStepData{..}
 
 
+data CollectionVariablesItem = CollectionVariablesItem
+  { variableName :: Text
+  , variableValue :: Text
+  }
+  deriving stock (Show, Generic)
+  deriving anyclass (AE.FromJSON, AE.ToJSON, NFData, Default)
+  deriving (FromField) via Aeson CollectionVariablesItem
+  deriving (ToField) via Aeson CollectionVariablesItem
+
+
 newtype CollectionSteps = CollectionSteps (V.Vector CollectionStepData)
   deriving stock (Show, Generic)
   deriving anyclass (AE.ToJSON, AE.FromJSON, NFData, Default)
   deriving (FromField, ToField) via Aeson CollectionSteps
+
+
+newtype CollectionVariables = CollectionVariables (V.Vector CollectionVariablesItem)
+  deriving stock (Show, Generic)
+  deriving anyclass (AE.ToJSON, AE.FromJSON, NFData, Default)
+  deriving (FromField, ToField) via Aeson CollectionVariables
 
 
 data Collection = Collection
@@ -162,6 +182,7 @@ data Collection = Collection
   , lastRunPassed :: Int
   , lastRunFailed :: Int
   , tags :: V.Vector Text
+  , collectionVariables :: CollectionVariables
   }
   deriving stock (Show, Generic)
   deriving anyclass (FromRow, ToRow, AE.ToJSON, AE.FromJSON, NFData, Default)
@@ -283,7 +304,7 @@ getCollectionById id' = queryOne Select q (Only id')
                       WHEN EXTRACT(DAY FROM schedule) > 0 THEN CONCAT(EXTRACT(DAY FROM schedule)::TEXT, ' days')
                       WHEN EXTRACT(HOUR FROM schedule) > 0 THEN CONCAT(EXTRACT(HOUR FROM schedule)::TEXT, ' hours')
                       ELSE CONCAT(EXTRACT(MINUTE FROM schedule)::TEXT, ' minutes')
-                  END as schedule, is_scheduled, collection_steps, last_run_response, last_run_passed, last_run_failed, tags
+                  END as schedule, is_scheduled, collection_steps, last_run_response, last_run_passed, last_run_failed, tags, collection_variables
                   FROM tests.collections t WHERE id=?|]
 
 
@@ -310,6 +331,13 @@ getCollections pid tabStatus = query Select q (pid, statusValue)
            WHERE t.project_id = ? AND t.is_scheduled = ?
            ORDER BY t.updated_at DESC;
     |]
+
+
+updateCollectionVariables :: Projects.ProjectId -> CollectionId -> CollectionVariables -> DBT IO Int64
+updateCollectionVariables pid cid variables = execute Update q params
+  where
+    params = (variables, pid, cid)
+    q = [sql| UPDATE tests.collections SET variables = ? WHERE project_id = ? AND id = ? |]
 
 
 inactiveCollectionsCount :: Projects.ProjectId -> DBT IO Int

@@ -37,6 +37,7 @@ data Routes' mode = Routes'
   , collectionDashboardGet :: mode :- "monitors" :> Capture "collection_id" TestingM.CollectionId :> "overview" :> Get '[HTML] (RespHeaders (PageCtx (Html ())))
   , collectionStepsUpdate :: mode :- "monitors" :> Capture "collection_id" TestingM.CollectionId :> ReqBody '[JSON] Testing.CollectionStepUpdateForm :> Post '[HTML] (RespHeaders Testing.CollectionMut)
   , collectionRunTests :: mode :- "monitors" :> Capture "collection_id" TestingM.CollectionId :> QueryParam "step_index" Int :> ReqBody '[JSON] Testing.CollectionStepUpdateForm :> Patch '[HTML] (RespHeaders Testing.CollectionRunTest)
+  , collectionVarsPost :: mode :- "monitors" :> Capture "collection_id" TestingM.CollectionId :> "variables" :> ReqBody '[FormUrlEncoded] TestCollectionEditor.CollectionVariableForm :> Post '[HTML] (RespHeaders (Html ()))
   }
   deriving stock (Generic)
 
@@ -55,4 +56,5 @@ server pid =
     , collectionStepsUpdate = TestCollectionEditor.collectionStepsUpdateH pid
     , collectionRunTests = TestCollectionEditor.collectionRunTestsH pid
     , collectionDashboardGet = Testing.collectionDashboard pid
+    , collectionVarsPost = TestCollectionEditor.collectionStepVariablesUpdateH pid
     }

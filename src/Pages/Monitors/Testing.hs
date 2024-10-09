@@ -61,6 +61,8 @@ testingPostH pid colF = do
           , lastRunResponse = Nothing
           , lastRunPassed = 0
           , lastRunFailed = 0
+          , tags = V.empty
+          , collectionVariables = Testing.CollectionVariables V.empty
           }
   _ <- dbtToEff $ Testing.addCollection coll
   if project.paymentPlan == "Free" && isJust colF.scheduleNumberUnit && colF.scheduleNumberUnit /= Just "days"

@@ -21,7 +21,6 @@ spec = aroundAll TestUtils.withSetup do
       resp <-
         TestUtils.runTestBackground authCtx
           $ OtlpServer.processList [("A", otlpTraceB64A')] (HashMap.fromList [("ce-type", "org.opentelemetry.otlp.traces.v1")])
-      traceShowM resp
       pass
 
 --   it "processes trace messages correctly" $ do

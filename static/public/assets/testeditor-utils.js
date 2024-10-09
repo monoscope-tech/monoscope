@@ -206,7 +206,7 @@ function convertTestkitAssertions(assertion) {
       return {
         type: 'statusCode',
         operation: operation,
-        value: value,
+        value: val,
       }
     }
   }
