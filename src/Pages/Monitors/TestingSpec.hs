@@ -37,39 +37,48 @@ colStepData =
 collection :: TestCollectionEditor.CollectionStepUpdateForm
 collection =
   TestCollectionEditor.CollectionStepUpdateForm
-    { title = Just "Test Collection"
+    { title = "Test Collection"
     , description = Just "get todos"
     , scheduled = Nothing
     , scheduleNumber = Nothing
     , scheduleNumberUnit = Nothing
     , stepsData = [colStepData]
     , tags = Just V.empty
+    , alertMessage = Nothing
+    , alertSeverity = Nothing
+    , alertSubject = Nothing
     }
 
 
 scheduleCollection :: TestCollectionEditor.CollectionStepUpdateForm
 scheduleCollection =
   TestCollectionEditor.CollectionStepUpdateForm
-    { title = Just "Test Collection"
+    { title = "Test Collection"
     , description = Just "get todos"
     , scheduled = Nothing
     , scheduleNumber = Just "1"
     , scheduleNumberUnit = Just "days"
     , stepsData = [colStepData]
     , tags = Just V.empty
+    , alertMessage = Nothing
+    , alertSeverity = Nothing
+    , alertSubject = Nothing
     }
 
 
 scheduleCollectionMn :: TestCollectionEditor.CollectionStepUpdateForm
 scheduleCollectionMn =
   TestCollectionEditor.CollectionStepUpdateForm
-    { title = Just "Test Collection"
+    { title = "Test Collection"
     , description = Just "get todos"
     , scheduled = Just "on"
     , scheduleNumber = Just "1"
     , scheduleNumberUnit = Just "hours"
     , stepsData = [colStepData]
     , tags = Just V.empty
+    , alertMessage = Nothing
+    , alertSeverity = Nothing
+    , alertSubject = Nothing
     }
 
 

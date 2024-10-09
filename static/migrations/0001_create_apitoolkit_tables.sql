@@ -681,6 +681,9 @@ ALTER TABLE tests.collections ADD COLUMN last_run_passed INT DEFAULT 0;
 ALTER TABLE tests.collections ADD COLUMN last_run_failed INT DEFAULT 0;
 ALTER TABLE tests.collections ADD COLUMN tags TEXT[] NOT NULL DEFAULT '{}'::text[];
 ALTER TABLE tests.collections ADD COLUMN collection_variables JSONB NOT NULL DEFAULT '[]'::jsonb;
+ALTER TABLE tests.collections ADD COLUMN alert_severity TEXT NOT NULL DEFAULT '';
+ALTER TABLE tests.collections ADD COLUMN alert_message TEXT NOT NULL DEFAULT '';
+ALTER TABLE tests.collections ADD COLUMN alert_subject TEXT NOT NULL DEFAULT '';
 
 
 CREATE TABLE IF NOT EXISTS monitors.query_monitors

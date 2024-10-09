@@ -68,6 +68,7 @@ export class StepsEditor extends LitElement {
 
   initializeEditor(monaco) {
     const editorContainer = this.querySelector('#steps-codeEditor')
+    const reqBodyContainer = this.querySelector('#reqBodyContainer')
 
     monaco.editor.defineTheme('nightOwl', {
       base: 'vs-dark',

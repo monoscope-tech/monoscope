@@ -135,7 +135,6 @@ function validateYaml(data) {
         step.json = typeof step.json === 'string' ? step.json : JSON.stringify(step.json)
       }
     })
-    console.log(data)
     return data
   } catch (error) {
     const event = getEvent('errorToast', { value: ['Invalid yaml'] })

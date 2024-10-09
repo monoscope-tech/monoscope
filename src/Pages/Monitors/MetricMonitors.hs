@@ -8,6 +8,7 @@ import Lucid.Htmx
 import Lucid.Hyperscript (__)
 import Models.Apis.Monitors qualified as Monitors
 import Models.Projects.Projects qualified as Projects
+import Models.Tests.Testing qualified as Testing
 import Models.Users.Sessions qualified as Sessions
 import NeatInterpolation (text)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
@@ -133,13 +134,13 @@ errorLogsContent =
 
 timelineSteps :: Projects.ProjectId -> Components.TimelineSteps
 timelineSteps pid =
-  Components.TimelineSteps
-    $ [ Components.TimelineStep "Choose the detection method" chooseDetectionMethod_
-      , Components.TimelineStep "Define the metric" (defineTheMetric_ pid)
-      , Components.TimelineStep "Set alert conditions" alertConditions_
-      , Components.TimelineStep "Configure notification message" configureNotificationMessage_
-      , Components.TimelineStep "Configure notification Channels" configureNotificationChannels_
-      ]
+  Components.TimelineSteps $
+    [ Components.TimelineStep "Choose the detection method" chooseDetectionMethod_
+    , Components.TimelineStep "Define the metric" (defineTheMetric_ pid)
+    , Components.TimelineStep "Set alert conditions" alertConditions_
+    , -- , Components.TimelineStep "Configure notification message" configureNotificationMessage_
+      Components.TimelineStep "Configure notification Channels" configureNotificationChannels_
+    ]
 
 
 -- Content placeholders for TimelineSteps
@@ -168,29 +169,24 @@ defineTheMetric_ pid = do
         select_ [class_ "select select-xs select-bordered"] $ mapM_ (option_ []) ["last 5 minutes", "last 10minutes", "last 15minutes", "last 30minutes", "last 1 hour", "last 1 day", "last 1 week"]
 
 
-configureNotificationMessage_ :: Html ()
-configureNotificationMessage_ = do
-  let monitor = (def :: Monitors.QueryMonitor)
+configureNotificationMessage_ :: Testing.Collection -> Html ()
+configureNotificationMessage_ col = do
   div_ [class_ "space-y-4 max-w-[700px]"] do
     div_ [class_ "form-control w-full"] do
       label_ [class_ "label"] $ span_ [class_ "label-text"] "Severity"
-      select_ [class_ "select select-xs select-bordered w-full", name_ "severity"] do
-        option_ "Info"
-        option_ "Warning"
-        option_ "Error"
-        option_ "Critical"
+      select_ [class_ "select select-xs select-bordered w-full", name_ "alertSeverity"] do
+        option_ [selected_ "" | col.alertSeverity == "Info"] "Info"
+        option_ [selected_ "" | col.alertSeverity == "Warning"] "Warning"
+        option_ [selected_ "" | col.alertSeverity == "Error"] "Error"
+        option_ [selected_ "" | col.alertSeverity == "Critical"] "Critical"
     div_ [class_ "form-control w-full"] do
       label_ [class_ "label"] $ span_ [class_ "label-text"] "Subject"
-      input_ [placeholder_ "Error: Error subject", class_ "input input-xs input-bordered  w-full", name_ "subject", value_ monitor.alertConfig.subject]
+      input_ [placeholder_ "Error: Error subject", class_ "input input-xs input-bordered  w-full", name_ "alertSubject", value_ col.alertSubject]
     div_ [class_ "form-control w-full"] do
       label_ [class_ "label"] $ span_ [class_ "label-text"] "Message"
       textarea_
-        [placeholder_ "Alert Message", class_ "textarea  textarea-bordered textarea-xs w-full", name_ "message"]
-        $ toHtml
-        $ if monitor.alertConfig.message == ""
-          then [text| The alert's value is too high. Check the APItoolkit Alerts to debug |]
-          else monitor.alertConfig.message
-
+        [placeholder_ "Alert Message", class_ "textarea  textarea-bordered textarea-xs w-full", name_ "alertMessage", value_ col.alertMessage]
+        $ toHtml col.alertMessage
     div_ [class_ "border-l-2 border-l-slate-300 pl-4 space-y-2"] do
       h3_ [class_ "font-normal text-base"] "Recovery Thresholds"
       p_ [] "Send notifications for alert status periodically as long as the monitor has not recovered"

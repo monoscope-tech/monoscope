@@ -56,12 +56,15 @@ import Web.FormUrlEncoded (FromForm)
 
 data CollectionStepUpdateForm = CollectionStepUpdateForm
   { stepsData :: V.Vector Testing.CollectionStepData
-  , title :: Maybe Text
+  , title :: Text
   , description :: Maybe Text
   , tags :: Maybe (V.Vector Text)
   , scheduled :: Maybe Text
   , scheduleNumber :: Maybe Text
   , scheduleNumberUnit :: Maybe Text
+  , alertSeverity :: Maybe Text
+  , alertMessage :: Maybe Text
+  , alertSubject :: Maybe Text
   }
   deriving stock (Show, Generic)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields] CollectionStepUpdateForm
@@ -85,7 +88,7 @@ collectionStepsUpdateH pid colId colF = do
       addErrorToast "You are on Free plan. You can't schedule collection to run more than once a day" Nothing
       addRespHeaders CollectionMutError
     else do
-      _ <- dbtToEff $ Testing.updateCollection pid colId (fromMaybe "" colF.title) (fromMaybe "" colF.description) isScheduled scheduleTxt (fromMaybe [] colF.tags) colF.stepsData
+      _ <- dbtToEff $ Testing.updateCollection pid colId colF.title (fromMaybe "" colF.description) isScheduled scheduleTxt (fromMaybe "" colF.alertSeverity) (fromMaybe "" colF.alertMessage) (fromMaybe "" colF.alertSubject) (fromMaybe [] colF.tags) colF.stepsData
       addSuccessToast "Collection's steps updated successfully" Nothing
       addRespHeaders CollectionMutSuccess
 
@@ -233,11 +236,11 @@ testSettingsModalContent_ isUpdate col = div_ [class_ "space-y-5 w-96"] do
 
 timelineSteps :: Projects.ProjectId -> Testing.Collection -> Components.TimelineSteps
 timelineSteps pid col =
-  Components.TimelineSteps
-    $ [ Components.TimelineStep "Define API test" $ defineTestSteps_ col
-      , Components.TimelineStep "Name and tag your test" $ nameOfTest_ col.title col.tags
-      , Components.TimelineStep "Set Alert Message and Recovery Threshold" MetricMonitors.configureNotificationMessage_
-      ]
+  Components.TimelineSteps $
+    [ Components.TimelineStep "Define API test" $ defineTestSteps_ col
+    , Components.TimelineStep "Name and tag your test" $ nameOfTest_ col.title col.tags
+    , Components.TimelineStep "Set Alert Message and Recovery Threshold" $ MetricMonitors.configureNotificationMessage_ col
+    ]
 
 
 nameOfTest_ :: Text -> V.Vector Text -> Html ()
@@ -473,13 +476,13 @@ collectionStepResult_ idx stepResult = section_ [class_ "p-1"] do
     p_ [class_ $ "block badge badge-sm " <> getStatusColor stepResult.request.resp.status, term "data-tippy-content" "status"] $ show stepResult.request.resp.status
   div_ [role_ "tablist", class_ "tabs tabs-lifted"] do
     input_ [type_ "radio", name_ $ "step-result-tabs-" <> show idx, role_ "tab", class_ "tab", Aria.label_ "Response Log", checked_]
-    div_ [role_ "tabpanel", class_ "tab-content bg-base-100 border-base-300 rounded-box p-6"]
-      $ toHtmlRaw
-      $ textToHTML stepResult.stepLog
+    div_ [role_ "tabpanel", class_ "tab-content bg-base-100 border-base-300 rounded-box p-6"] $
+      toHtmlRaw $
+        textToHTML stepResult.stepLog
 
     input_ [type_ "radio", name_ $ "step-result-tabs-" <> show idx, role_ "tab", class_ "tab", Aria.label_ "Response Headers"]
-    div_ [role_ "tabpanel", class_ "tab-content bg-base-100 border-base-300 rounded-box p-6 "]
-      $ table_ [class_ "table table-xs"] do
+    div_ [role_ "tabpanel", class_ "tab-content bg-base-100 border-base-300 rounded-box p-6 "] $
+      table_ [class_ "table table-xs"] do
         thead_ [] $ tr_ [] $ th_ [] "Name" >> th_ [] "Value"
         tbody_ $ forM_ (M.toList stepResult.request.resp.headers) $ \(k, v) -> tr_ [] do
           td_ [] $ toHtml k
