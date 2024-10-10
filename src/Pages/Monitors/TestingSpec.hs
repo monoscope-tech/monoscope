@@ -6,6 +6,7 @@ import Models.Projects.Projects qualified as Projects
 import Models.Tests.Testing
 import Pages.BodyWrapper (PageCtx (..))
 import Pages.Monitors.TestCollectionEditor qualified as TestCollectionEditor
+import Pages.Monitors.TestCollectionEditor qualified as Testing
 import Pages.Monitors.Testing qualified as Testing
 import Pkg.Components.ItemsList qualified as ItemsList
 import Pkg.TestUtils
@@ -47,38 +48,7 @@ collection =
     , alertMessage = Nothing
     , alertSeverity = Nothing
     , alertSubject = Nothing
-    }
-
-
-scheduleCollection :: TestCollectionEditor.CollectionStepUpdateForm
-scheduleCollection =
-  TestCollectionEditor.CollectionStepUpdateForm
-    { title = "Test Collection"
-    , description = Just "get todos"
-    , scheduled = Nothing
-    , scheduleNumber = Just "1"
-    , scheduleNumberUnit = Just "days"
-    , stepsData = [colStepData]
-    , tags = Just V.empty
-    , alertMessage = Nothing
-    , alertSeverity = Nothing
-    , alertSubject = Nothing
-    }
-
-
-scheduleCollectionMn :: TestCollectionEditor.CollectionStepUpdateForm
-scheduleCollectionMn =
-  TestCollectionEditor.CollectionStepUpdateForm
-    { title = "Test Collection"
-    , description = Just "get todos"
-    , scheduled = Just "on"
-    , scheduleNumber = Just "1"
-    , scheduleNumberUnit = Just "hours"
-    , stepsData = [colStepData]
-    , tags = Just V.empty
-    , alertMessage = Nothing
-    , alertSeverity = Nothing
-    , alertSubject = Nothing
+    , collectionId = Nothing
     }
 
 
@@ -91,9 +61,11 @@ spec = aroundAll withTestResources do
       length collections `shouldBe` 0
 
     it "should add test collection" \TestResources{..} -> do
-      (PageCtx _ (ItemsList.ItemsPage _ collections)) <-
-        toServantResponse trATCtx trSessAndHeader trLogger $ Testing.testingPostH testPid collection
-      length collections `shouldBe` 1
+      res <-
+        toServantResponse trATCtx trSessAndHeader trLogger $ TestCollectionEditor.collectionStepsUpdateH testPid collection
+      case res of
+        TestCollectionEditor.CollectionMutSuccess -> fail "Error"
+        _ -> do pass
 
     it "should get inactive collections" \TestResources{..} -> do
       (PageCtx _ (ItemsList.ItemsPage _ collections)) <-
@@ -105,8 +77,23 @@ spec = aroundAll withTestResources do
         toServantResponse trATCtx trSessAndHeader trLogger $ Testing.testingGetH testPid Nothing Nothing
       length collections `shouldBe` 1
       let col = V.head $ (\(Testing.CollectionListItemVM _ co _) -> co) <$> collections
+      let scheduleCollectionMn =
+            TestCollectionEditor.CollectionStepUpdateForm
+              { title = "Test Collection"
+              , description = Just "get todos"
+              , scheduled = Just "on"
+              , scheduleNumber = Just "1"
+              , scheduleNumberUnit = Just "hours"
+              , stepsData = [colStepData]
+              , tags = Just V.empty
+              , alertMessage = Nothing
+              , alertSeverity = Nothing
+              , alertSubject = Nothing
+              , collectionId = Just col.id
+              }
+
       res <-
-        toServantResponse trATCtx trSessAndHeader trLogger $ TestCollectionEditor.collectionStepsUpdateH testPid col.id scheduleCollectionMn
+        toServantResponse trATCtx trSessAndHeader trLogger $ TestCollectionEditor.collectionStepsUpdateH testPid scheduleCollectionMn
       case res of
         TestCollectionEditor.CollectionMutSuccess -> fail "Error"
         _ -> do pass
@@ -122,9 +109,23 @@ spec = aroundAll withTestResources do
       col.schedule `shouldBe` "1 days"
       col.isScheduled `shouldBe` True
       col.description `shouldBe` "get todos"
+      let scheduleCollection =
+            TestCollectionEditor.CollectionStepUpdateForm
+              { title = "Test Collection"
+              , description = Just "get todos"
+              , scheduled = Nothing
+              , scheduleNumber = Just "1"
+              , scheduleNumberUnit = Just "days"
+              , stepsData = [colStepData]
+              , tags = Just V.empty
+              , alertMessage = Nothing
+              , alertSeverity = Nothing
+              , alertSubject = Nothing
+              , collectionId = Just col.id
+              }
 
       res <-
-        toServantResponse trATCtx trSessAndHeader trLogger $ TestCollectionEditor.collectionStepsUpdateH testPid col.id scheduleCollection
+        toServantResponse trATCtx trSessAndHeader trLogger $ TestCollectionEditor.collectionStepsUpdateH testPid scheduleCollection
       case res of
         TestCollectionEditor.CollectionMutError -> fail "Error"
         _ -> do pass

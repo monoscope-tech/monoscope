@@ -1,6 +1,5 @@
 module Pages.Monitors.Testing (
   testingGetH,
-  testingPostH,
   CollectionListItemVM (..),
   collectionDashboard,
 )
@@ -32,46 +31,6 @@ import Relude hiding (ask)
 import System.Types (ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders, addSuccessToast)
 import Text.Time.Pretty (prettyTimeAuto)
 import Utils
-
-
-testingPostH
-  :: Projects.ProjectId
-  -> TestCollectionEditor.CollectionStepUpdateForm
-  -> ATAuthCtx (RespHeaders (PageCtx (ItemsList.ItemsPage CollectionListItemVM)))
-testingPostH pid colF = do
-  (_, project) <- Sessions.sessionAndProject pid
-  currentTime <- Time.currentTime
-  colId <- Testing.CollectionId <$> liftIO UUIDV4.nextRandom
-  let scheduleText = fromMaybe "1" colF.scheduleNumber <> " " <> fromMaybe "days" colF.scheduleNumberUnit
-  let scheduleText' = if project.paymentPlan == "Free" then "1 days" else scheduleText
-
-  let coll =
-        Testing.Collection
-          { id = colId
-          , createdAt = currentTime
-          , projectId = pid
-          , updatedAt = currentTime
-          , lastRun = Nothing
-          , title = colF.title
-          , description = fromMaybe "" colF.description
-          , config = AE.object []
-          , schedule = scheduleText'
-          , isScheduled = True
-          , collectionSteps = Testing.CollectionSteps colF.stepsData
-          , lastRunResponse = Nothing
-          , lastRunPassed = 0
-          , lastRunFailed = 0
-          , tags = V.empty
-          , collectionVariables = Testing.CollectionVariables V.empty
-          , alertSeverity = "Info"
-          , alertMessage = ""
-          , alertSubject = ""
-          }
-  _ <- dbtToEff $ Testing.addCollection coll
-  if project.paymentPlan == "Free" && isJust colF.scheduleNumberUnit && colF.scheduleNumberUnit /= Just "days"
-    then addErrorToast "You are using the free plan. You can only schedule collections to run once a day." Nothing
-    else addSuccessToast "Collection added Successfully" Nothing
-  testingGetH pid Nothing Nothing
 
 
 testingGetH
@@ -118,19 +77,7 @@ testingGetH pid filterTM timeFilter = do
           { sessM = Just sess.persistentSession
           , currProject = Just project
           , pageTitle = "Multistep API Tests (Beta)"
-          , pageActions =
-              Just
-                $ Components.modal_ "test-settings-modal" (span_ [class_ "btn btn-sm btn-outline space-x-2"] $ Utils.faSprite_ "plus" "regular" "h-4" >> "new tests")
-                $ form_
-                  [ hxPost_ $ "/p/" <> pid.toText <> "/monitors"
-                  , class_ "w-full"
-                  , hxTarget_ "#itemsListPage"
-                  , hxSelect_ "#itemsListPage"
-                  , hxVals_ "js:{stepsData: []}"
-                  , hxExt_ "json-enc"
-                  , hxSwap_ "outerHTML"
-                  ]
-                $ TestCollectionEditor.testSettingsModalContent_ False (def :: Testing.Collection)
+          , pageActions = Just $ a_ [href_ $ "/p/" <> pid.toText <> "/monitors/collection", class_ "btn btn-sm btn-outline space-x-2"] $ Utils.faSprite_ "plus" "regular" "h-4" >> "new tests"
           , navTabs =
               Just $
                 toHtml $
@@ -207,10 +154,10 @@ collectionCard pid col currTime = do
             small_ [class_ "block"] "Failed"
 
 
-pageTabs :: Text -> Html ()
-pageTabs url = do
+pageTabs :: Text -> Text -> Html ()
+pageTabs url ov = do
   div_ [class_ "tabs tabs-boxed tabs-outline items-center border"] do
-    a_ [href_ $ url <> "/overview", role_ "tab", class_ "tab tab-active"] "Overview"
+    a_ [href_ ov, role_ "tab", class_ "tab tab-active"] "Overview"
     a_ [href_ url, role_ "tab", class_ "tab"] "Test editor"
 
 
@@ -221,14 +168,15 @@ collectionDashboard pid cid = do
   tableAsVecE <- RequestDumps.selectLogTable pid query Nothing (Nothing, Nothing) [""] Nothing Nothing
   collectionM <- dbtToEff $ Testing.getCollectionById cid
   let tableAsVecM = hush tableAsVecE
-  let url = "/p/" <> pid.toText <> "/monitors/" <> cid.toText
+  let url = "/p/" <> pid.toText <> "/monitors/collection?col_id=" <> cid.toText
+  let overviewUrl = "/p/" <> pid.toText <> "/monitors/" <> cid.toText <> "/overview"
 
   let bwconf =
         (def :: BWConfig)
           { sessM = Just sess.persistentSession
           , currProject = Just project
           , pageTitle = "API Tests (Beta)"
-          , navTabs = Just $ pageTabs url
+          , navTabs = Just $ pageTabs url overviewUrl
           }
   case collectionM of
     Just col -> do

@@ -169,24 +169,27 @@ defineTheMetric_ pid = do
         select_ [class_ "select select-xs select-bordered"] $ mapM_ (option_ []) ["last 5 minutes", "last 10minutes", "last 15minutes", "last 30minutes", "last 1 hour", "last 1 day", "last 1 week"]
 
 
-configureNotificationMessage_ :: Testing.Collection -> Html ()
-configureNotificationMessage_ col = do
+configureNotificationMessage_ :: Maybe Testing.Collection -> Html ()
+configureNotificationMessage_ colM = do
+  let (severity, subject, message) = case colM of
+        Just col -> (col.alertSeverity, col.alertSubject, col.alertMessage)
+        Nothing -> ("Info", "Error: Error subject", "Alert Message")
   div_ [class_ "space-y-4 max-w-[700px]"] do
     div_ [class_ "form-control w-full"] do
       label_ [class_ "label"] $ span_ [class_ "label-text"] "Severity"
       select_ [class_ "select select-xs select-bordered w-full", name_ "alertSeverity"] do
-        option_ [selected_ "" | col.alertSeverity == "Info"] "Info"
-        option_ [selected_ "" | col.alertSeverity == "Warning"] "Warning"
-        option_ [selected_ "" | col.alertSeverity == "Error"] "Error"
-        option_ [selected_ "" | col.alertSeverity == "Critical"] "Critical"
+        option_ [selected_ "" | severity == "Info"] "Info"
+        option_ [selected_ "" | severity == "Warning"] "Warning"
+        option_ [selected_ "" | severity == "Error"] "Error"
+        option_ [selected_ "" | severity == "Critical"] "Critical"
     div_ [class_ "form-control w-full"] do
       label_ [class_ "label"] $ span_ [class_ "label-text"] "Subject"
-      input_ [placeholder_ "Error: Error subject", class_ "input input-xs input-bordered  w-full", name_ "alertSubject", value_ col.alertSubject]
+      input_ [placeholder_ "Error: Error subject", class_ "input input-xs input-bordered  w-full", name_ "alertSubject", value_ subject]
     div_ [class_ "form-control w-full"] do
       label_ [class_ "label"] $ span_ [class_ "label-text"] "Message"
       textarea_
-        [placeholder_ "Alert Message", class_ "textarea  textarea-bordered textarea-xs w-full", name_ "alertMessage", value_ col.alertMessage]
-        $ toHtml col.alertMessage
+        [placeholder_ "Alert Message", class_ "textarea  textarea-bordered textarea-xs w-full", name_ "alertMessage", value_ message]
+        $ toHtml message
     div_ [class_ "border-l-2 border-l-slate-300 pl-4 space-y-2"] do
       h3_ [class_ "font-normal text-base"] "Recovery Thresholds"
       p_ [] "Send notifications for alert status periodically as long as the monitor has not recovered"
