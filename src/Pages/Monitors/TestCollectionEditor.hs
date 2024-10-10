@@ -89,45 +89,50 @@ collectionStepsUpdateH pid colF = do
     then do
       addErrorToast "You are on Free plan. You can't schedule collection to run more than once a day" Nothing
       addRespHeaders CollectionMutError
-    else do
-      let colIdM = colF.collectionId
-      case colIdM of
-        Just colId -> do
-          _ <- dbtToEff $ Testing.updateCollection pid colId colF.title (fromMaybe "" colF.description) isScheduled scheduleTxt (fromMaybe "" colF.alertSeverity) (fromMaybe "" colF.alertMessage) (fromMaybe "" colF.alertSubject) (fromMaybe [] colF.tags) colF.stepsData
-          addSuccessToast "Collection's steps updated successfully" Nothing
-          addRespHeaders CollectionMutSuccess
-        Nothing -> do
-          currentTime <- Time.currentTime
-          colId <- Testing.CollectionId <$> liftIO UUIDV4.nextRandom
-          let scheduleText = fromMaybe "1" colF.scheduleNumber <> " " <> fromMaybe "days" colF.scheduleNumberUnit
-          let scheduleText' = if project.paymentPlan == "Free" then "1 days" else scheduleText
+    else
+      if colF.title == ""
+        then do
+          addErrorToast "Collection name can't not be empty" Nothing
+          addRespHeaders CollectionMutError
+        else do
+          let colIdM = colF.collectionId
+          case colIdM of
+            Just colId -> do
+              _ <- dbtToEff $ Testing.updateCollection pid colId colF.title (fromMaybe "" colF.description) isScheduled scheduleTxt (fromMaybe "" colF.alertSeverity) (fromMaybe "" colF.alertMessage) (fromMaybe "" colF.alertSubject) (fromMaybe [] colF.tags) colF.stepsData
+              addSuccessToast "Collection's steps updated successfully" Nothing
+              addRespHeaders CollectionMutSuccess
+            Nothing -> do
+              currentTime <- Time.currentTime
+              colId <- Testing.CollectionId <$> liftIO UUIDV4.nextRandom
+              let scheduleText = fromMaybe "1" colF.scheduleNumber <> " " <> fromMaybe "days" colF.scheduleNumberUnit
+              let scheduleText' = if project.paymentPlan == "Free" then "1 days" else scheduleText
 
-          let coll =
-                Testing.Collection
-                  { id = colId
-                  , createdAt = currentTime
-                  , projectId = pid
-                  , updatedAt = currentTime
-                  , lastRun = Nothing
-                  , title = colF.title
-                  , description = fromMaybe "" colF.description
-                  , config = AE.object []
-                  , schedule = scheduleText'
-                  , isScheduled = True
-                  , collectionSteps = Testing.CollectionSteps colF.stepsData
-                  , lastRunResponse = Nothing
-                  , lastRunPassed = 0
-                  , lastRunFailed = 0
-                  , tags = V.empty
-                  , collectionVariables = Testing.CollectionVariables V.empty
-                  , alertSeverity = "Info"
-                  , alertMessage = ""
-                  , alertSubject = ""
-                  }
-          _ <- dbtToEff $ Testing.addCollection coll
-          addSuccessToast "Collection saved successfully" Nothing
-          redirectCS $ "/p/" <> pid.toText <> "/monitors/collection/?col_id=" <> colId.toText
-          addRespHeaders $ CollectionMutSuccess
+              let coll =
+                    Testing.Collection
+                      { id = colId
+                      , createdAt = currentTime
+                      , projectId = pid
+                      , updatedAt = currentTime
+                      , lastRun = Nothing
+                      , title = colF.title
+                      , description = fromMaybe "" colF.description
+                      , config = AE.object []
+                      , schedule = scheduleText'
+                      , isScheduled = True
+                      , collectionSteps = Testing.CollectionSteps colF.stepsData
+                      , lastRunResponse = Nothing
+                      , lastRunPassed = 0
+                      , lastRunFailed = 0
+                      , tags = V.empty
+                      , collectionVariables = Testing.CollectionVariables V.empty
+                      , alertSeverity = "Info"
+                      , alertMessage = ""
+                      , alertSubject = ""
+                      }
+              _ <- dbtToEff $ Testing.addCollection coll
+              addSuccessToast "Collection saved successfully" Nothing
+              redirectCS $ "/p/" <> pid.toText <> "/monitors/collection/?col_id=" <> colId.toText
+              addRespHeaders $ CollectionMutSuccess
 
 
 collectionStepVariablesUpdateH :: Projects.ProjectId -> Testing.CollectionId -> CollectionVariableForm -> ATAuthCtx (RespHeaders (Html ()))
