@@ -344,7 +344,7 @@ updateCollectionVariables :: Projects.ProjectId -> CollectionId -> CollectionVar
 updateCollectionVariables pid cid variables = execute Update q params
   where
     params = (variables, pid, cid)
-    q = [sql| UPDATE tests.collections SET variables = ? WHERE project_id = ? AND id = ? |]
+    q = [sql| UPDATE tests.collections SET collection_variables = ? WHERE project_id = ? AND id = ? |]
 
 
 inactiveCollectionsCount :: Projects.ProjectId -> DBT IO Int

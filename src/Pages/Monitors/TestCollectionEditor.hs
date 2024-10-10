@@ -75,7 +75,7 @@ data CollectionVariableForm = CollectionVariableForm
   , variableValue :: Text
   }
   deriving stock (Show, Generic)
-  deriving anyclass (FromForm)
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields] CollectionVariableForm
 
 
 collectionStepsUpdateH :: Projects.ProjectId -> Testing.CollectionId -> CollectionStepUpdateForm -> ATAuthCtx (RespHeaders CollectionMut)
@@ -108,7 +108,7 @@ collectionStepVariablesUpdateH pid colId colF = do
       let updatedVars = vs <> [colVar]
       _ <- dbtToEff $ Testing.updateCollectionVariables pid colId (Testing.CollectionVariables updatedVars)
       addSuccessToast "Collection's variables updated successfully" Nothing
-      addRespHeaders ""
+      addRespHeaders $ variablesDialog pid colId updatedVars
 
 
 collectionRunTestsH :: Projects.ProjectId -> Testing.CollectionId -> Maybe Int -> CollectionStepUpdateForm -> ATAuthCtx (RespHeaders CollectionRunTest)
@@ -430,39 +430,45 @@ collectionPage pid col col_rn respJson = do
 
 variablesDialog :: Projects.ProjectId -> Testing.CollectionId -> V.Vector Testing.CollectionVariablesItem -> Html ()
 variablesDialog pid cid vars = do
-  div_ [class_ "w-full text-center pt-4", [__|on click halt|], id_ "test-variables-content"] do
+  div_ [class_ "w-full text-center pt-4", id_ "test-variables-content"] do
     div_ [class_ "w-full flex flex-col gap-2"] do
       forM_ vars $ \var -> do
-        div_ [class_ "flex items-center justify-between"] do
-          div_ [class_ "flex items-center"] $ toHtml var.variableName
-          div_ [class_ "flex items-center"] $ toHtml var.variableValue
+        div_ [class_ "flex items-center  px-4 gap-2"] do
+          div_ [class_ "flex items-center px-2 rounded-lg text-gray-600 border w-1/2"] $ toHtml var.variableName
+          div_ [class_ "flex items-center px-2 rounded-lg text-gray-600 border w-1/2"] $ toHtml var.variableValue
+          div_ [] do
+            faSprite_ "trash" "regular" "w-3 h-3 shrink-0"
     when (V.null vars) $ do
       div_ [class_ "w-full pt-24 text-center"] do
         h4_ [class_ "text-lg font-medium"] "Create Local Variables"
         p_ [class_ "text-gray-500"] "Create local variables to be used in your test steps."
 
-    label_ [Lucid.for_ "my_modal_7", class_ "btn btn-success btn-sm mx-auto"] do
+    label_ [Lucid.for_ "my_modal_7", class_ "btn btn-success btn-sm mt-8 mx-auto"] do
       faSprite_ "plus" "solid" "w-4 h-4" >> "Variable"
     input_ [type_ "checkbox", id_ "my_modal_7", class_ "modal-toggle"]
     div_ [class_ "modal", role_ "dialog"] $ do
       div_
         [ class_ "modal-box"
-        , hxPost_ $ "/p/" <> pid.toText <> "/monitors/" <> cid.toText <> "/variables"
-        , hxTarget_ "#test-variables"
-        , hxSwap_ "outerHTML"
-        , id_ "test-variables"
-        , hxTrigger_ "click"
+        , [__|on click halt|]
         ]
         $ do
           h3_ [class_ "text-lg font-bold text-left"] "New Variable"
-          div_ [class_ "modal-action", [__|on click halt|]] do
-            div_ [class_ "form-control w-full"] do
-              label_ [class_ "label"] $ span_ [class_ "label-text"] "Name"
-              input_ [type_ "text", placeholder_ "Variable name", class_ "input input-sm input-bordered w-full ", name_ "name", value_ ""]
-              label_ [class_ "label"] $ span_ [class_ "label-text"] "Value"
-              input_ [type_ "text", placeholder_ "Value", class_ "input input-sm input-bordered w-full ", name_ "value", value_ ""]
+          div_
+            [ class_ "modal-action"
+            , hxPost_ $ "/p/" <> pid.toText <> "/monitors/" <> cid.toText <> "/variables"
+            , hxTarget_ "#test-variables-content"
+            , hxSwap_ "outerHTML"
+            , id_ "test-variables"
+            , hxTrigger_ "click from:#var-save"
+            ]
+            do
+              div_ [class_ "form-control w-full"] do
+                label_ [class_ "label"] $ span_ [class_ "label-text"] "Name"
+                input_ [type_ "text", placeholder_ "Variable name", class_ "input input-sm input-bordered w-full ", name_ "variableName", value_ ""]
+                label_ [class_ "label"] $ span_ [class_ "label-text"] "Value"
+                input_ [type_ "text", placeholder_ "Value", class_ "input input-sm input-bordered w-full ", name_ "variableValue", value_ ""]
           div_ [class_ "modal-action"] do
-            button_ [class_ "btn btn-sm btn-success", type_ "button", [__|on click halt then htmx.trigger('#test-variables','click')|]] "Save"
+            button_ [class_ "btn btn-sm btn-success", id_ "var-save", [__|on click halt then htmx.trigger('#test-variables','click')|]] "Save"
       label_ [class_ "modal-backdrop", Lucid.for_ "my_modal_7"] "Close"
 
 
