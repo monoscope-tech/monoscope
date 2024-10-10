@@ -1,7 +1,9 @@
 module Pages.BodyWrapper (bodyWrapper, BWConfig (..), PageCtx (..)) where
 
+import Crypto.Hash.MD5 qualified as MD5
 import Data.CaseInsensitive qualified as CI
 import Data.Default (Default)
+import Data.Text qualified as T
 import Data.Vector qualified as Vector
 import Lucid
 import Lucid.Htmx (hxGet_)
@@ -172,19 +174,19 @@ bodyWrapper BWConfig{sessM, currProject, pageTitle, menuItem, hasIntegrated, nav
           end
     |]
 
-    body_ [class_ "text-gray-900 h-full w-full bg-base-100 ", term "data-theme" "antdtheme", term "hx-ext" "multi-swap,preload"] do
+    body_ [class_ "h-full w-full bg-base-100 text-base-content group/pg", term "data-theme" "antdtheme", term "hx-ext" "multi-swap,preload"] do
       div_
         [ style_ "z-index:99999"
         , class_ "pt-24 sm:hidden justify-center z-50 w-full p-4 bg-gray-50 overflow-y-auto inset-0 h-full max-h-full"
         , tabindex_ "-1"
         ]
         do
-          div_ [class_ "relative mx-auto max-h-full", style_ "width: min(90vw, 500px)"]
-            $ div_ [class_ "bg-base-100 rounded-lg drop-shadow-md border-1 w-full"] do
+          div_ [class_ "relative mx-auto max-h-full", style_ "width: min(90vw, 500px)"] $
+            div_ [class_ "bg-base-100 rounded-lg drop-shadow-md border-1 w-full"] do
               div_ [class_ "flex items-start justify-between p-6 space-x-2  border-b rounded-t"] do
-                h3_ [class_ "text-3xl font-bold text-gray-900"] "Only Desktop Browsers are Supported for now!"
+                h3_ [class_ "text-3xl font-bold "] "Only Desktop Browsers are Supported for now!"
               -- Modal body
-              div_ [class_ "w-full"] $ div_ [class_ "p-6 text-xl space-y-6", style_ "height:50vh; width:100%"] do
+              div_ [class_ "w-full"] $ div_ [class_ "p-6 space-y-6", style_ "height:50vh; width:100%"] do
                 p_ [class_ ""] "Due to the heavy visualization usecases we're solving, APItoolkit is not supported on mobile, and can only be used from a desktop browser at the moment."
                 p_ [class_ ""] "We're diligently working on expanding its availability to other platforms, and we'll keep you updated as we make progress. "
                 p_ [] "Don't hesitate to let us know if this is a very important feature for your team, then we can prioritize it"
@@ -252,7 +254,7 @@ projectsDropDown currProject projects = do
           faSprite_ "folders" "regular" "h-5 w-5 mr-2"
           div_ do
             strong_ [class_ "block"] $ toHtml currProject.title
-            small_ [class_ "block text-blue-800"] $ toHtml currProject.paymentPlan
+            small_ [class_ "block"] $ toHtml currProject.paymentPlan
         nav_ [] do
           a_ [href_ [text| /p/$pidTxt/settings |], class_ "p-3 flex gap-3 items-center rounded-2xl hover:bg-gray-100"] do
             faSprite_ "gear" "regular" "h-5 w-5" >> span_ "Settings"
@@ -262,13 +264,13 @@ projectsDropDown currProject projects = do
             faSprite_ "key" "regular" "h-5 w-5" >> span_ "API Keys"
           a_ [href_ [text| /p/$pidTxt/integrations|], class_ "p-3 flex gap-3 items-center rounded hover:bg-gray-100"] do
             faSprite_ "arrows-turn-right" "regular" "h-5 w-5" >> span_ "Integrations"
-          when (currProject.paymentPlan == "UsageBased" || currProject.paymentPlan == "GraduatedPricing")
-            $ a_
+          when (currProject.paymentPlan == "UsageBased" || currProject.paymentPlan == "GraduatedPricing") $
+            a_
               [class_ "p-3 flex gap-3 items-center rounded hover:bg-gray-100 cursor-pointer", hxGet_ [text| /p/$pidTxt/manage_subscription |]]
               (faSprite_ "dollar-sign" "regular" "h-5 w-5" >> span_ "Manage billing")
       div_ [class_ "border-t border-gray-100 p-2"] do
         div_ [class_ "flex justify-between content-center items-center py-5 mb-2 "] do
-          a_ [href_ "/"] $ h3_ [class_ "text-xl"] "Switch projects"
+          a_ [href_ "/"] $ h3_ [] "Switch projects"
           a_ [class_ "bg-blue-700 flex pl-3 pr-4 py-2 rounded-xl text-white space-x-2", href_ "/p/new"] do
             faSprite_ "plus" "regular" "h-5 w-5 bg-blue-800 rounded-lg" >> span_ [class_ "inline-block px-1"] "Add"
         div_ do
@@ -282,34 +284,33 @@ projectsDropDown currProject projects = do
           div_ [class_ "space-y-2 py-4 text-sm", id_ "projectsContainer"] do
             projects & mapM_ \project -> do
               a_ [class_ "flex justify-between p-2 project_item", href_ $ "/p/" <> project.id.toText] do
-                div_ [class_ "space-x-3"]
-                  $ faSprite_ "folders" "regular" "h-5 w-5 inline-block"
-                  >> span_ [class_ "inline-block"] (toHtml project.title)
+                div_ [class_ "space-x-3"] $
+                  faSprite_ "folders" "regular" "h-5 w-5 inline-block"
+                    >> span_ [class_ "inline-block"] (toHtml project.title)
                 when (currProject.id == project.id) $ faSprite_ "circle-check" "regular" "h-6 w-6 text-green-700"
 
 
 sideNav :: Sessions.PersistentSession -> Projects.Project -> Text -> Maybe Text -> Maybe Bool -> Html ()
-sideNav sess project pageTitle menuItem hasIntegrated = aside_ [class_ "border-r bg-base-100 border-gray-200 w-14 text-sm h-screen transition-all duration-200 ease-in-out flex flex-col justify-between", id_ "side-nav-menu"] do
+sideNav sess project pageTitle menuItem hasIntegrated = aside_ [class_ "border-r bg-base-100 border-gray-200 w-14 group-has-[#sidenav-toggle:checked]/pg:w-60 text-sm h-screen transition-all duration-200 ease-in-out flex flex-col justify-between", id_ "side-nav-menu"] do
   script_ [text|if (window.initialCloseSideMenu == 'true'){document.getElementById('side-nav-menu').classList.add('hidden-side-nav-menu');}|]
   div_ do
-    a_ [href_ "/", class_ "px-2 py-2 inline-flex items-center justify-center"] do
-      img_ [class_ "h-[2.12rem] w-40 sd-hidden pl-2", src_ "/public/assets/svgs/logo.svg"]
-      img_ [class_ "h-10 w-10 hidden sd-show", src_ "/public/assets/logo-mini.png"]
-    div_ [class_ "sm:p-4 border-y sd-px-0 dropdown block"] do
+    div_ [class_ "px-4 py-4 flex justify-between items-center"] do
+      a_ [href_ "/", class_ "inline-flex"] do
+        img_ [class_ "h-5 hidden group-has-[#sidenav-toggle:checked]/pg:block", src_ "/public/assets/svgs/logo.svg"]
+        img_ [class_ "h-10 w-10 hidden sd-show", src_ "/public/assets/logo-mini.png"]
+      label_ [class_ "cursor-pointer"] do
+        input_ [type_ "checkbox", class_ "hidden", id_ "sidenav-toggle", checked_]
+        faSprite_ "side-chevron-left-in-box" "regular" "h-5 w-5 opacity-60 group-has-[#sidenav-toggle:checked]/pg:rotate-180"
+    div_ [class_ "sm:px-4 mt-4 sd-px-0 dropdown block"] do
       a_
-        [ class_ "flex flex-row border shadow-sm hover:bg-blue-100 text-blue-900 p-6 justify-center rounded-md cursor-pointer"
+        [ class_ "flex flex-row border shadow hover:bg-blue-100 gap-2 justify-center rounded-md cursor-pointer py-3 group-has-[#sidenav-toggle:checked]/pg:px-3"
         , tabindex_ "0"
         ]
         do
-          div_ [class_ "space-2 grow sd-hidden overflow-x-hidden"] do
-            strong_ [class_ "block text-slate-900 whitespace-nowrap truncate"] $ toHtml project.title
-            small_ [class_ "block text-slate-900"] $ toHtml project.paymentPlan
-          -- Development?
-          div_ [class_ "flex flex-col"] do
-            faSprite_ "chevron-up" "regular" " h-4 w-4 m-1"
-            faSprite_ "chevron-down" "regular" " h-4 w-4 m-1"
+          strong_ [class_ "grow hidden group-has-[#sidenav-toggle:checked]/pg:block overflow-x-hidden whitespace-nowrap truncate"] $ toHtml project.title
+          faSprite_ "angles-up-down" "regular" " w-4 m-1"
       div_ [tabindex_ "0", class_ "dropdown-content z-[40]"] $ projectsDropDown project (Sessions.getProjects $ Sessions.projects sess)
-    nav_ [class_ "mt-4 text-slate-900 flex flex-col space-between"] do
+    nav_ [class_ "mt-4 flex flex-col space-between"] do
       -- FIXME: reeanable hx-boost hxBoost_ "true"
       menu project.id & mapM_ \(mTitle, mUrl, fIcon) -> do
         let isActive = maybe (pageTitle == mTitle) (== mTitle) menuItem
@@ -321,23 +322,25 @@ sideNav sess project pageTitle menuItem hasIntegrated = aside_ [class_ "border-r
           , class_ $ " gap-3 px-4 py-2 flex no-wrap shrink-0 items-center border-l-4 hover:bg-blue-50 overflow-x-hidden h-[2.5rem]" <> activeCls
           ]
           do
-            faSprite_ fIcon "regular" $ "w-5 h-5 shrink-0 " <> if isActive then "text-blue-900 " else " text-slate-500 "
-            span_ [class_ "sd-hidden whitespace-nowrap truncate"] $ toHtml mTitle
+            faSprite_ fIcon "regular" "w-5 h-5 shrink-0 "
+            span_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:block whitespace-nowrap truncate"] $ toHtml mTitle
 
-  div_ [class_ "border-t py-8"] do
+  div_ [class_ "py-8"] do
     let currUser = sess.user.getUser
     let userIdentifier =
           if currUser.firstName /= "" || currUser.lastName /= ""
             then currUser.firstName <> " " <> currUser.lastName
             else CI.original currUser.email
+    let emailMd5 = decodeUtf8 $ MD5.hash $ encodeUtf8 $ CI.original currUser.email
+    let sanitizedID = T.replace " " "+" userIdentifier
     div_ [tabindex_ "0", role_ "button", class_ "cursor-pointer pl-4 space-x-2 flex items-center mb-3"] do
       img_
         [ class_ "inline-block w-9 h-9 rounded-lg bg-gray-300"
         , term "data-tippy-placement" "right"
         , term "data-tippy-content" userIdentifier
-        , src_ currUser.displayImageUrl
+        , src_ $ [text|https://www.gravatar.com/avatar/${emailMd5}?d=https%3A%2F%2Fui-avatars.com%2Fapi%2F/${sanitizedID}/128|]
         ]
-      span_ [class_ "inline-block sd-hidden overflow-hidden"] $ toHtml userIdentifier
+      span_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:inline-block overflow-hidden"] $ toHtml userIdentifier
     a_
       [ class_ "gap-3 px-4 py-2 flex no-wrap shrink-0 items-center border-l-4 hover:bg-blue-50 overflow-x-hidden h-[2.5rem]"
       , target_ "blank"
@@ -346,7 +349,7 @@ sideNav sess project pageTitle menuItem hasIntegrated = aside_ [class_ "border-r
       , href_ "https://apitoolkit.io/docs/"
       ]
       do
-        faSprite_ "question" "regular" "h-5 w-5 shrink-0" >> span_ [class_ "sd-hidden whitespace-nowrap truncate"] "Documentation"
+        faSprite_ "question" "regular" "h-4 w-4 shrink-0" >> span_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:block whitespace-nowrap truncate"] "Documentation"
     a_
       [ class_ "gap-3 px-4 py-2 flex no-wrap shrink-0 items-center border-l-4 hover:bg-blue-50 overflow-x-hidden h-[2.5rem]"
       , term "data-tippy-placement" "right"
@@ -355,27 +358,13 @@ sideNav sess project pageTitle menuItem hasIntegrated = aside_ [class_ "border-r
       , [__| on click js posthog.reset(); end |]
       ]
       do
-        faSprite_ "arrow-right-from-bracket" "regular" "h-5 w-5 shrink-0" >> span_ [class_ "sd-hidden whitespace-nowrap truncate"] "Logout"
+        faSprite_ "arrow-right-from-bracket" "regular" "h-4 w-4 shrink-0" >> span_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:block whitespace-nowrap truncate"] "Logout"
 
 
 navbar :: Users.User -> Text -> Maybe (Html ()) -> Maybe (Html ()) -> Html ()
 navbar currUser pageTitle tabsM pageActionsM =
   nav_ [id_ "main-navbar", class_ "sticky bg-base-100 z-20 top-0 w-full px-6 py-1 flex flex-row border-b border-gray-200 h-[3.2rem]"] do
-    a_
-      [ id_ "side_nav_toggler"
-      , class_ "cursor-pointer flex items-center "
-      , [__|
-      on click
-        if (localStorage.getItem('close-sidemenu') != 'true') then
-          add .hidden-side-nav-menu to #side-nav-menu then
-          call localStorage.setItem('close-sidemenu', 'true')
-        else remove  .hidden-side-nav-menu from #side-nav-menu then
-          call localStorage.removeItem('close-sidemenu')
-        end
-        |]
-      ]
-      $ faSprite_ "bars-sort" "regular" "w-5 h-5 text-gray-500"
-    div_ [class_ "flex-1 pl-5 flex items-center text-lg font-medium"] $ toHtml pageTitle
+    div_ [class_ "flex-1 flex items-center"] $ toHtml pageTitle
     whenJust tabsM id
     div_ [class_ "flex-1 flex items-center justify-end"] $ whenJust pageActionsM id
 

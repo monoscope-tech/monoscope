@@ -217,6 +217,7 @@ library
     , colourista
     , containers
     , cookie
+    , cryptohash-md5
     , cryptonite
     , data-default
     , deriving-aeson
