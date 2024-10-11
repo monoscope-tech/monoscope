@@ -80,7 +80,7 @@ surveyPutH pid survey = do
           addSuccessToast "Thanks for taking the survey!" Nothing
           _ <- liftIO $ withResource appCtx.pool \conn ->
             createJob conn "background_jobs" $ BackgroundJobs.SendDiscordData sess.user.id pid fullName stack foundUsFrom
-          redirectCS ("/p/" <> show pid.unProjectId <> "/onboarding")
+          redirectCS ("/p/" <> show pid.unProjectId <> "/")
           addRespHeaders SurveyPut
 
 

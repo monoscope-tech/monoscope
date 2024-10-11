@@ -184,6 +184,7 @@ library:
     - proto3-suite
     - proto3-wire
     - template-haskell
+    - cryptohash-md5
 
 executables:
   apitoolkit-server-exe:

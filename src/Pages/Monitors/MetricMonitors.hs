@@ -218,52 +218,6 @@ configureNotificationChannels_ = do
         option_ "days"
 
 
--- div_ do
---   p_ "Add individuals, teams or channels that should be notified when this alert triggers"
---   p_ "Alert rules with no recipients will still be triggered and can be viewed form the Changes and Errors page"
--- section_ [class_ "relative space-y-4 space-x-4 py-3", id_ "recipientListParent"] do
---   div_ [class_ "dropdown", id_ "addRecipientDropdown"] do
---     div_
---       [ tabindex_ "0"
---       , role_ "button"
---       , class_ "btn m-1"
---       -- [__|on click toggle .dropdown-open on the closest .dropdown|]
---       ]
---       "Add recipient"
---     ul_ [tabindex_ "0", style_ "bottom:100%;top:auto", class_ "bottom-full top-auto dropdown-content z-[1] menu p-2 shadow bg-base-100 rounded-box w-52 in-w-[15rem]"] do
---       li_ $ a_ [[__|on click put #addRecipientEmailAllTmpl.innerHTML after #addRecipientDropdown then _hyperscript.processNode(#recipientListParent) |]] "Email everyone"
---       li_ $ a_ [[__|on click put #addRecipientEmailTmpl.innerHTML after #addRecipientDropdown then _hyperscript.processNode(#recipientListParent) |]] "Email ..."
---       li_ $ a_ [[__|on click put #addRecipientSlackTmpl.innerHTML after #addRecipientDropdown then _hyperscript.processNode(#recipientListParent) |]] "To default Slack channel"
---   when monitor.alertConfig.emailAll addRecipientEmailAllTmpl_
---   forM_ monitor.alertConfig.emails addRecipientEmailTmpl_
---   forM_ monitor.alertConfig.slackChannels addRecipientSlackTmpl_
---   template_ [id_ "addRecipientSlackTmpl"] $ addRecipientSlackTmpl_ ""
---   template_ [id_ "addRecipientEmailTmpl"] $ addRecipientEmailTmpl_ (CI.mk "")
---   template_ [id_ "addRecipientEmailAllTmpl"] addRecipientEmailAllTmpl_
-
-addRecipientSlackTmpl_ :: Text -> Html ()
-addRecipientSlackTmpl_ channel =
-  label_ [class_ "input input-bordered inline-flex items-center gap-2"] do
-    "Slack"
-    input_ [class_ "grow", class_ "input", placeholder_ "#channelName", type_ "text", required_ "", name_ "recipientSlack"]
-    a_ [class_ "badge badge-base", [__|on click remove the closest parent <label/>|]] $ faSprite_ "xmark" "solid" "w-3 h-3"
-
-
-addRecipientEmailTmpl_ :: CI.CI Text -> Html ()
-addRecipientEmailTmpl_ email =
-  label_ [class_ "input input-bordered inline-flex items-center gap-2"] do
-    "Email"
-    input_ [class_ "grow", class_ "input", placeholder_ "name@site.com", type_ "email", required_ "", name_ "recipientEmail"]
-    a_ [class_ "badge badge-base", [__|on click remove the closest parent <label/>|]] $ faSprite_ "xmark" "solid" "w-3 h-3"
-
-
-addRecipientEmailAllTmpl_ :: Html ()
-addRecipientEmailAllTmpl_ =
-  label_ [class_ "input input-bordered inline-flex items-center gap-2"] do
-    "Email Everyone"
-    input_ [class_ "grow", class_ "input", placeholder_ "name@site.com", type_ "hidden", value_ "True", name_ "recipientEmailAll"]
-    a_ [class_ "badge badge-base", [__|on click remove the closest parent <label/>|]] $ faSprite_ "xmark" "solid" "w-3 h-3"
-
 
 -- Helper functions
 

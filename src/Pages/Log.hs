@@ -302,12 +302,12 @@ apiLogsPage page = do
       div_ [class_ "flex items-center  gap-2 text-sm"] do
         div_ [class_ "py-1 flex flex-row justify-end"] do
           label_ [class_ "flex items-center cursor-pointer space-x-2 p-1"] do
-            input_ [type_ "checkbox", class_ "toggle toggle-xs toggle-chart"]
+            input_ [type_ "checkbox", class_ "checkbox checkbox-xs rounded toggle-chart"]
             small_ "charts"
         span_ [class_ "text-slate-300"] "|"
         div_ [class_ "form-control w-max"]
           $ label_ [class_ "label flex items-center cursor-pointer w-max space-x-2"] do
-            input_ [type_ "checkbox", class_ "toggle toggle-xs", id_ "toggleQueryEditor", onclick_ "toggleQueryBuilder()"]
+            input_ [type_ "checkbox", class_ "checkbox checkbox-xs rounded", id_ "toggleQueryEditor", onclick_ "toggleQueryBuilder()"]
             small_ "query editor"
 
     div_ [class_ "card-round w-full  divide-y flex flex-col text-sm overflow-hidden pt-2"] do

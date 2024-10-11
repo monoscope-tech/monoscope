@@ -35,7 +35,6 @@ import Pages.IntegrationGuides qualified as IntegrationGuides
 import Pages.LemonSqueezy qualified as LemonSqueezy
 import Pages.LogExplorer.Routes qualified as LogExplorerRoutes
 import Pages.Monitors.Routes qualified as MonitorsRoutes
-import Pages.Onboarding qualified as Onboarding
 import Pages.Projects.Routes qualified as ProjectsRoutes
 import Pages.Projects.Server qualified as ProjectsRoutes
 import Pages.Reports qualified as Reports
@@ -117,7 +116,6 @@ type role CookieProtectedRoutes nominal
 data CookieProtectedRoutes mode = CookieProtectedRoutes
   { dashboardGet :: mode :- "p" :> ProjectId :> QPT "from" :> QPT "to" :> QPT "since" :> Get '[HTML] (RespHeaders (PageCtx Dashboard.DashboardGet))
   , projects :: mode :- ProjectsRoutes.Routes
-  , onboardingGet :: mode :- "p" :> ProjectId :> "onboarding" :> QPB "polling" :> QPB "redirected" :> QPT "current_tab" :> Get '[HTML] (RespHeaders Onboarding.OnboardingGet)
   , anomalies :: mode :- "p" :> ProjectId :> "anomalies" :> AnomaliesRoutes.Routes
   , logExplorer :: mode :- "p" :> ProjectId :> LogExplorerRoutes.Routes
   , endpoints :: mode :- "p" :> ProjectId :> EndpointsRoutes.Routes
@@ -150,7 +148,6 @@ cookieProtectedServer =
   CookieProtectedRoutes
     { dashboardGet = Dashboard.dashboardGetH
     , projects = ProjectsRoutes.server
-    , onboardingGet = Onboarding.onboardingGetH
     , logExplorer = LogExplorerRoutes.server
     , anomalies = AnomaliesRoutes.server
     , endpoints = EndpointsRoutes.server

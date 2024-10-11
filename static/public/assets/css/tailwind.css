@@ -248,28 +248,8 @@
     visibility: visible;
   }
 
-  .hidden-side-nav-menu .sd-hidden {
-    display: none;
-  }
-
-  .hidden-side-nav-menu .sd-show {
-    display: inline-block;
-  }
-  .hidden-side-nav-menu .sd-px-0 {
-    padding-left: 0;
-    padding-right: 0;
-  }
 }
 
-@layer utilities {
-  #side-nav-menu:not(.hidden-side-nav-menu) {
-    @apply w-60;
-  }
-
-  .hidden-side-nav-menu #side-nav-menu {
-    @apply w-16;
-  }
-}
 
 /* HERE SINCE IT"S BASICALLY AN OVERRIDE.  Its for the log items rows */
 .expanded-log {
