@@ -21,12 +21,11 @@ import Utils (faSprite_)
 
 menu :: Projects.ProjectId -> [(Text, Text, Text)]
 menu pid =
-  [ ("Get Started", "/p/" <> pid.toText <> "/onboarding", "list-check")
-  , ("Dashboard", "/p/" <> pid.toText <> "/", "qrcode")
+  [ ("Dashboard", "/p/" <> pid.toText <> "/", "qrcode")
+  , ("Explore", "/p/" <> pid.toText <> "/log_explorer", "explore")
   , ("API Catalog", "/p/" <> pid.toText <> "/api_catalog", "swap")
-  , ("Explorer", "/p/" <> pid.toText <> "/log_explorer", "list-tree")
   , ("Changes & Errors", "/p/" <> pid.toText <> "/anomalies", "bug")
-  , ("Monitors & Alerts (Beta)", "/p/" <> pid.toText <> "/monitors", "list-check")
+  , ("Monitors & Alerts", "/p/" <> pid.toText <> "/monitors", "list-check")
   , ("Reports", "/p/" <> pid.toText <> "/reports", "chart-simple")
   ]
 
@@ -130,13 +129,28 @@ bodyWrapper BWConfig{sessM, currProject, pageTitle, menuItem, hasIntegrated, nav
 
       script_
         [raw|
-        window.initialCloseSideMenu = localStorage.getItem('close-sidemenu');
+        function setCookie(cname, cvalue, exdays = 365) {
+            const d = new Date();
+            d.setTime(d.getTime() + (exdays * 24 * 60 * 60 * 1000));
+            const expires = "expires=" + d.toUTCString();
+            document.cookie = `${cname}=${cvalue};${expires};path=/`;
+        }
+
+        function getCookie(cname) {
+            const name = `${cname}=`;
+            const decodedCookie = decodeURIComponent(document.cookie);
+            const ca = decodedCookie.split(';');
+            for (let i = 0; i < ca.length; i++) {
+                let c = ca[i].trim();
+                if (c.startsWith(name)) {
+                    return c.substring(name.length);
+                }
+            }
+            return "";
+        }
+
         var currentISOTimeStringVar = ((new Date()).toISOString().split(".")[0])+"+00:00";
         document.addEventListener('DOMContentLoaded', function(){
-          if (window.initialCloseSideMenu == 'true'){
-             document.getElementById('side-nav-menu').classList.add('hidden-side-nav-menu');
-          }
-
           // htmx.config.useTemplateFragments = true
           tippy('[data-tippy-content]');
           var notyf = new Notyf({
@@ -292,15 +306,15 @@ projectsDropDown currProject projects = do
 
 sideNav :: Sessions.PersistentSession -> Projects.Project -> Text -> Maybe Text -> Maybe Bool -> Html ()
 sideNav sess project pageTitle menuItem hasIntegrated = aside_ [class_ "border-r bg-base-100 border-gray-200 w-14 group-has-[#sidenav-toggle:checked]/pg:w-60 text-sm h-screen transition-all duration-200 ease-in-out flex flex-col justify-between", id_ "side-nav-menu"] do
-  script_ [text|if (window.initialCloseSideMenu == 'true'){document.getElementById('side-nav-menu').classList.add('hidden-side-nav-menu');}|]
   div_ do
     div_ [class_ "px-4 py-4 flex justify-between items-center"] do
       a_ [href_ "/", class_ "inline-flex"] do
         img_ [class_ "h-5 hidden group-has-[#sidenav-toggle:checked]/pg:block", src_ "/public/assets/svgs/logo.svg"]
         img_ [class_ "h-10 w-10 hidden sd-show", src_ "/public/assets/logo-mini.png"]
       label_ [class_ "cursor-pointer"] do
-        input_ [type_ "checkbox", class_ "hidden", id_ "sidenav-toggle", checked_]
-        faSprite_ "side-chevron-left-in-box" "regular" "h-5 w-5 opacity-60 group-has-[#sidenav-toggle:checked]/pg:rotate-180"
+        input_ [type_ "checkbox", class_ "hidden", id_ "sidenav-toggle", [__|on change call setCookie("isSidebarClosed", `${me.checked}`)|]]
+        script_ [text|document.getElementById("sidenav-toggle").checked= getCookie("isSidebarClosed")=="true" |]
+        faSprite_ "side-chevron-left-in-box" "regular" "h-5 w-5 opacity-60 rotate-180 group-has-[#sidenav-toggle:checked]/pg:rotate-0"
     div_ [class_ "sm:px-4 mt-4 sd-px-0 dropdown block"] do
       a_
         [ class_ "flex flex-row border shadow hover:bg-blue-100 gap-2 justify-center rounded-md cursor-pointer py-3 group-has-[#sidenav-toggle:checked]/pg:px-3"
@@ -333,7 +347,7 @@ sideNav sess project pageTitle menuItem hasIntegrated = aside_ [class_ "border-r
             else CI.original currUser.email
     let emailMd5 = decodeUtf8 $ MD5.hash $ encodeUtf8 $ CI.original currUser.email
     let sanitizedID = T.replace " " "+" userIdentifier
-    div_ [tabindex_ "0", role_ "button", class_ "cursor-pointer pl-4 space-x-2 flex items-center mb-3"] do
+    div_ [tabindex_ "0", role_ "button", class_ "cursor-pointer group-has-[#sidenav-toggle:checked]/pg:pl-4 space-x-2 flex justify-center group-has-[#sidenav-toggle:checked]/pg:justify-start  items-center mb-3"] do
       img_
         [ class_ "inline-block w-9 h-9 rounded-lg bg-gray-300"
         , term "data-tippy-placement" "right"

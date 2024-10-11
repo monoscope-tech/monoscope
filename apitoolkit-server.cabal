@@ -114,8 +114,6 @@ library
       Pages.Monitors.Testing
       Pages.Monitors.TestingSpec
       Pages.NonMember
-      Pages.Onboarding
-      Pages.OnboardingSpec
       Pages.Projects.CreateProject
       Pages.Projects.Integrations
       Pages.Projects.ListProjects
