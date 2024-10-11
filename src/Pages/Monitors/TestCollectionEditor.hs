@@ -1,6 +1,5 @@
 module Pages.Monitors.TestCollectionEditor (
   collectionGetH,
-  CollectionStepUpdateForm (..),
   collectionRunTestsH,
   collectionStepVariablesUpdateH,
   collectionPage,
@@ -55,23 +54,6 @@ import Effectful.Time qualified as Time
 import Web.FormUrlEncoded (FromForm)
 
 
-data CollectionStepUpdateForm = CollectionStepUpdateForm
-  { stepsData :: V.Vector Testing.CollectionStepData
-  , collectionId :: Maybe Testing.CollectionId
-  , title :: Text
-  , description :: Maybe Text
-  , tags :: Maybe (V.Vector Text)
-  , scheduled :: Maybe Text
-  , scheduleNumber :: Maybe Text
-  , scheduleNumberUnit :: Maybe Text
-  , alertSeverity :: Maybe Text
-  , alertMessage :: Maybe Text
-  , alertSubject :: Maybe Text
-  }
-  deriving stock (Show, Generic)
-  deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields] CollectionStepUpdateForm
-
-
 data CollectionVariableForm = CollectionVariableForm
   { variableName :: Text
   , variableValue :: Text
@@ -80,11 +62,9 @@ data CollectionVariableForm = CollectionVariableForm
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields] CollectionVariableForm
 
 
-collectionStepsUpdateH :: Projects.ProjectId -> CollectionStepUpdateForm -> ATAuthCtx (RespHeaders CollectionMut)
+collectionStepsUpdateH :: Projects.ProjectId -> Testing.CollectionStepUpdateForm -> ATAuthCtx (RespHeaders CollectionMut)
 collectionStepsUpdateH pid colF = do
   (_, project) <- Sessions.sessionAndProject pid
-  let isScheduled = colF.scheduled == Just "on"
-  let scheduleTxt = fromMaybe "" colF.scheduleNumber <> " " <> fromMaybe "" colF.scheduleNumberUnit
   if project.paymentPlan == "Free" && isJust colF.scheduleNumberUnit && colF.scheduleNumberUnit /= Just "days"
     then do
       addErrorToast "You are on Free plan. You can't schedule collection to run more than once a day" Nothing
@@ -92,13 +72,13 @@ collectionStepsUpdateH pid colF = do
     else
       if colF.title == ""
         then do
-          addErrorToast "Collection name can't not be empty" Nothing
+          addErrorToast "Collection name can not be empty" Nothing
           addRespHeaders CollectionMutError
         else do
           let colIdM = colF.collectionId
           case colIdM of
             Just colId -> do
-              _ <- dbtToEff $ Testing.updateCollection pid colId colF.title (fromMaybe "" colF.description) isScheduled scheduleTxt (fromMaybe "" colF.alertSeverity) (fromMaybe "" colF.alertMessage) (fromMaybe "" colF.alertSubject) (fromMaybe [] colF.tags) colF.stepsData
+              _ <- dbtToEff $ Testing.updateCollection pid colId colF
               addSuccessToast "Collection's steps updated successfully" Nothing
               addRespHeaders CollectionMutSuccess
             Nothing -> do
@@ -128,6 +108,10 @@ collectionStepsUpdateH pid colF = do
                       , alertSeverity = "Info"
                       , alertMessage = ""
                       , alertSubject = ""
+                      , notifyAfter = "6hours"
+                      , notifyAfterCheck = False
+                      , stopAfter = "0"
+                      , stopAfterCheck = False
                       }
               _ <- dbtToEff $ Testing.addCollection coll
               addSuccessToast "Collection saved successfully" Nothing
@@ -154,7 +138,7 @@ collectionStepVariablesUpdateH pid colId colF = do
       addRespHeaders $ variablesDialog pid c
 
 
-collectionRunTestsH :: Projects.ProjectId -> Testing.CollectionId -> Maybe Int -> CollectionStepUpdateForm -> ATAuthCtx (RespHeaders CollectionRunTest)
+collectionRunTestsH :: Projects.ProjectId -> Testing.CollectionId -> Maybe Int -> Testing.CollectionStepUpdateForm -> ATAuthCtx (RespHeaders CollectionRunTest)
 collectionRunTestsH pid colId runIdxM stepsForm = do
   stepResultsE <- TestToDump.runTestAndLog pid colId stepsForm.stepsData
   case stepResultsE of

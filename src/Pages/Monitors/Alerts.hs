@@ -288,8 +288,8 @@ editAlert_ pid monitorM = do
             forM_ monitor.alertConfig.slackChannels addRecipientSlackTmpl_
 
       div_ [class_ "py-5"] do
-        button_ [type_ "submit", class_ "btn btn-success"]
-          $ if isNewMonitor
+        button_ [type_ "submit", class_ "btn btn-success"] $
+          if isNewMonitor
             then "Create Alert"
             else "Update Alert"
 
@@ -526,13 +526,13 @@ monitorMetric_ pid monitorM = section_ [class_ "px-8 py-5 space-y-5 group/pg ove
               h3_ [class_ "font-normal text-base"] "Recovery Thresholds"
               p_ [] "Send notifications for alert status periodically as long as the monitor has not recovered"
               div_ [class_ "flex items-center gap-2"] do
-                input_ [class_ "toggle toggle-sm", type_ "checkbox"]
+                input_ [class_ "toggle toggle-sm", type_ "checkbox", name_ "notifyAfterCheck"]
                 span_ "If this monitor is not acknowleged or resoved, notify renotify every"
-                select_ [class_ "select select-xs select-bordered"] $ mapM_ (option_ []) ["10mins", "20mins", "30mins", "1hour", "6hours", "24hours"]
+                select_ [class_ "select select-xs select-bordered", name_ "notifyAfter"] $ mapM_ (option_ []) ["10mins", "20mins", "30mins", "1hour", "6hours", "24hours"]
               div_ [class_ "flex items-center gap-2"] do
-                input_ [class_ "toggle toggle-sm", type_ "checkbox"]
+                input_ [class_ "toggle toggle-sm", type_ "checkbox", name_ "stopAfterCheck"]
                 span_ "Stop renotifying after "
-                input_ [type_ "text", value_ "0"]
+                input_ [type_ "text", value_ "0", name_ "stopAfter"]
                 span_ "occurences."
       hr_ []
     li_ [] do
@@ -592,8 +592,8 @@ monitorSelectType_ = section_ [class_ "px-8 py-5 space-y-5 group/pg"] do
             [text|
            Errors are groups of exceptions that have a similar stacktrace. Set an alert for new issues, when an issue changes state, frequency of errors, or users affected by an issue.
            ![](/public/pages/monitors/alerts-wizard-issues.022643ec283774262884.svg)
-           Examples 
-            - When an errorr was seen over 100times in the last 2 days 
+           Examples
+            - When an errorr was seen over 100times in the last 2 days
             - Send an email and a slack message to the team
           |]
          )
@@ -604,8 +604,8 @@ monitorSelectType_ = section_ [class_ "px-8 py-5 space-y-5 group/pg"] do
             [text|
            Errors are groups of exceptions that have a similar stacktrace. Set an alert for new issues, when an issue changes state, frequency of errors, or users affected by an issue.
            ![](/public/pages/monitors/alerts-wizard-issues.022643ec283774262884.svg)
-           Examples 
-            - When an errorr was seen over 100times in the last 2 days 
+           Examples
+            - When an errorr was seen over 100times in the last 2 days
             - Send an email and a slack message to the team
           |]
          )
@@ -616,8 +616,8 @@ monitorSelectType_ = section_ [class_ "px-8 py-5 space-y-5 group/pg"] do
             [text|
            Errors are groups of exceptions that have a similar stacktrace. Set an alert for new issues, when an issue changes state, frequency of errors, or users affected by an issue.
            ![](/public/pages/monitors/alerts-wizard-issues.022643ec283774262884.svg)
-           Examples 
-            - When an errorr was seen over 100times in the last 2 days 
+           Examples
+            - When an errorr was seen over 100times in the last 2 days
             - Send an email and a slack message to the team
           |]
          )
@@ -628,8 +628,8 @@ monitorSelectType_ = section_ [class_ "px-8 py-5 space-y-5 group/pg"] do
             [text|
            Errors are groups of exceptions that have a similar stacktrace. Set an alert for new issues, when an issue changes state, frequency of errors, or users affected by an issue.
            ![](/public/pages/monitors/alerts-wizard-issues.022643ec283774262884.svg)
-           Examples 
-            - When an errorr was seen over 100times in the last 2 days 
+           Examples
+            - When an errorr was seen over 100times in the last 2 days
             - Send an email and a slack message to the team
           |]
          )
@@ -640,8 +640,8 @@ monitorSelectType_ = section_ [class_ "px-8 py-5 space-y-5 group/pg"] do
             [text|
            Errors are groups of exceptions that have a similar stacktrace. Set an alert for new issues, when an issue changes state, frequency of errors, or users affected by an issue.
            ![](/public/pages/monitors/alerts-wizard-issues.022643ec283774262884.svg)
-           Examples 
-            - When an errorr was seen over 100times in the last 2 days 
+           Examples
+            - When an errorr was seen over 100times in the last 2 days
             - Send an email and a slack message to the team
           |]
          )
@@ -652,8 +652,8 @@ monitorSelectType_ = section_ [class_ "px-8 py-5 space-y-5 group/pg"] do
             [text|
            Errors are groups of exceptions that have a similar stacktrace. Set an alert for new issues, when an issue changes state, frequency of errors, or users affected by an issue.
            ![](/public/pages/monitors/alerts-wizard-issues.022643ec283774262884.svg)
-           Examples 
-            - When an errorr was seen over 100times in the last 2 days 
+           Examples
+            - When an errorr was seen over 100times in the last 2 days
             - Send an email and a slack message to the team
           |]
          )

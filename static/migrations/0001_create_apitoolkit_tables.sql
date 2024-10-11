@@ -684,6 +684,11 @@ ALTER TABLE tests.collections ADD COLUMN collection_variables JSONB NOT NULL DEF
 ALTER TABLE tests.collections ADD COLUMN alert_severity TEXT NOT NULL DEFAULT '';
 ALTER TABLE tests.collections ADD COLUMN alert_message TEXT NOT NULL DEFAULT '';
 ALTER TABLE tests.collections ADD COLUMN alert_subject TEXT NOT NULL DEFAULT '';
+ALTER TABLE tests.collections ADD COLUMN notify_after Text NOT NULL DEFAULT '6hours';
+ALTER TABLE tests.collections ADD COLUMN notify_after_check BOOL NOT NULL DEFAULT 'f';
+ALTER TABLE tests.collections ADD COLUMN stop_after TEXT NOT NULL DEFAULT "0";
+ALTER TABLE tests.collections ADD COLUMN stop_after_check BOOL NOT NULL DEFAULT 'f';
+
 
 
 CREATE TABLE IF NOT EXISTS monitors.query_monitors

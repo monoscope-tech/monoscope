@@ -35,9 +35,9 @@ colStepData =
     , raw = Nothing
     , asserts = Nothing
     }
-collection :: TestCollectionEditor.CollectionStepUpdateForm
+collection :: CollectionStepUpdateForm
 collection =
-  TestCollectionEditor.CollectionStepUpdateForm
+  CollectionStepUpdateForm
     { title = "Test Collection"
     , description = Just "get todos"
     , scheduled = Nothing
@@ -49,6 +49,10 @@ collection =
     , alertSeverity = Nothing
     , alertSubject = Nothing
     , collectionId = Nothing
+    , notifyAfter = Nothing
+    , notifyAfterCheck = Nothing
+    , stopAfter = Nothing
+    , stopAfterCheck = Nothing
     }
 
 
@@ -78,7 +82,7 @@ spec = aroundAll withTestResources do
       length collections `shouldBe` 1
       let col = V.head $ (\(Testing.CollectionListItemVM _ co _) -> co) <$> collections
       let scheduleCollectionMn =
-            TestCollectionEditor.CollectionStepUpdateForm
+            CollectionStepUpdateForm
               { title = "Test Collection"
               , description = Just "get todos"
               , scheduled = Just "on"
@@ -90,6 +94,10 @@ spec = aroundAll withTestResources do
               , alertSeverity = Nothing
               , alertSubject = Nothing
               , collectionId = Just col.id
+              , notifyAfter = Nothing
+              , notifyAfterCheck = Nothing
+              , stopAfter = Nothing
+              , stopAfterCheck = Nothing
               }
 
       res <-
@@ -110,7 +118,7 @@ spec = aroundAll withTestResources do
       col.isScheduled `shouldBe` True
       col.description `shouldBe` "get todos"
       let scheduleCollection =
-            TestCollectionEditor.CollectionStepUpdateForm
+            CollectionStepUpdateForm
               { title = "Test Collection"
               , description = Just "get todos"
               , scheduled = Nothing
@@ -122,6 +130,10 @@ spec = aroundAll withTestResources do
               , alertSeverity = Nothing
               , alertSubject = Nothing
               , collectionId = Just col.id
+              , notifyAfter = Nothing
+              , notifyAfterCheck = Nothing
+              , stopAfter = Nothing
+              , stopAfterCheck = Nothing
               }
 
       res <-

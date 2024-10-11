@@ -194,13 +194,13 @@ configureNotificationMessage_ colM = do
       h3_ [class_ "font-normal text-base"] "Recovery Thresholds"
       p_ [] "Send notifications for alert status periodically as long as the monitor has not recovered"
       div_ [class_ "flex items-center gap-2"] do
-        input_ [class_ "toggle toggle-sm", type_ "checkbox"]
+        input_ [class_ "toggle toggle-sm", type_ "checkbox", name_ "notifyAfterCheck"]
         span_ "If this monitor is not acknowleged or resoved, notify renotify every"
-        select_ [class_ "select select-xs select-bordered"] $ mapM_ (option_ []) ["10mins", "20mins", "30mins", "1hour", "6hours", "24hours"]
+        select_ [class_ "select select-xs select-bordered", name_ "notifyAfter"] $ mapM_ (option_ []) ["10 mins", "20 mins", "30 mins", "1 hour", "6 hours", "24 hours"]
       div_ [class_ "flex items-center gap-2"] do
-        input_ [class_ "toggle toggle-sm", type_ "checkbox"]
+        input_ [class_ "toggle toggle-sm", type_ "checkbox", name_ "stopAfterCheck"]
         span_ "Stop renotifying after "
-        input_ [type_ "text", value_ "0"]
+        input_ [type_ "number", value_ "0", name_ "stopAfter"]
         span_ "occurences."
 
 
@@ -216,7 +216,6 @@ configureNotificationChannels_ = do
         option_ "minutes"
         option_ "hours"
         option_ "days"
-
 
 
 -- Helper functions

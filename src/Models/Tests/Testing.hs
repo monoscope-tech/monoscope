@@ -11,6 +11,7 @@ module Models.Tests.Testing (
   CollectionSteps (..),
   CollectionVariablesItem (..),
   CollectionVariables (..),
+  CollectionStepUpdateForm (..),
   stepDataMethod,
   updateCollection,
   addCollection,
@@ -186,6 +187,10 @@ data Collection = Collection
   , alertSeverity :: Text
   , alertMessage :: Text
   , alertSubject :: Text
+  , notifyAfter :: Text
+  , notifyAfterCheck :: Bool
+  , stopAfter :: Text
+  , stopAfterCheck :: Bool
   }
   deriving stock (Show, Generic)
   deriving anyclass (FromRow, ToRow, AE.ToJSON, AE.FromJSON, NFData, Default)
@@ -271,6 +276,27 @@ data StepResult = StepResult
 data TabStatus = Active | Inactive
 
 
+data CollectionStepUpdateForm = CollectionStepUpdateForm
+  { stepsData :: V.Vector CollectionStepData
+  , collectionId :: Maybe CollectionId
+  , title :: Text
+  , description :: Maybe Text
+  , tags :: Maybe (V.Vector Text)
+  , scheduled :: Maybe Text
+  , scheduleNumber :: Maybe Text
+  , scheduleNumberUnit :: Maybe Text
+  , alertSeverity :: Maybe Text
+  , alertMessage :: Maybe Text
+  , alertSubject :: Maybe Text
+  , notifyAfter :: Maybe Text
+  , notifyAfterCheck :: Maybe Text
+  , stopAfter :: Maybe Text
+  , stopAfterCheck :: Maybe Text
+  }
+  deriving stock (Show, Generic)
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields] CollectionStepUpdateForm
+
+
 getCollectionRunStatus :: V.Vector StepResult -> (Int, Int)
 getCollectionRunStatus steps = (passed, failed)
   where
@@ -291,13 +317,44 @@ updateCollectionLastRun id' lastRunResponse' passed failed = execute Update q pa
     q = [sql| UPDATE tests.collections SET last_run=NOW(), last_run_response=?, last_run_passed=?, last_run_failed=? WHERE id=? |]
 
 
-updateCollection :: Projects.ProjectId -> CollectionId -> Text -> Text -> Bool -> Text -> Text -> Text -> Text -> V.Vector Text -> V.Vector CollectionStepData -> DBT IO Int64
-updateCollection pid cid title description scheduled scheduleInterval sv msg sub tags collectionSteps = execute Update q params
+updateCollection :: Projects.ProjectId -> CollectionId -> CollectionStepUpdateForm -> DBT IO Int64
+updateCollection pid cid colF = execute Update q params
   where
-    params = (title, description, scheduleInterval, scheduled, sv, msg, sub, tags, CollectionSteps collectionSteps, pid, cid)
+    scheduled = colF.scheduled == Just "on"
+    stopAfterCheck = colF.stopAfterCheck == Just "on"
+    notifyAfterCheck = colF.notifyAfterCheck == Just "on"
+    notifyAfter = fromMaybe "6hours" colF.notifyAfter
+    stopAfter = fromMaybe "0" colF.stopAfter
+    scheduleTxt = fromMaybe "" colF.scheduleNumber <> " " <> fromMaybe "" colF.scheduleNumberUnit
+    title = colF.title
+    description = fromMaybe "" colF.description
+    scheduleInterval = scheduleTxt
+    sv = colF.alertSeverity
+    msg = colF.alertMessage
+    sub = colF.alertSubject
+    tags = colF.tags
+    collectionSteps = colF.stepsData
+    params =
+      ( title
+      , description
+      , scheduleInterval
+      , scheduled
+      , sv
+      , msg
+      , sub
+      , notifyAfter
+      , notifyAfterCheck
+      , stopAfter
+      , stopAfterCheck
+      , tags
+      , AE.toJSON collectionSteps
+      , pid
+      , cid
+      )
     q =
       [sql| UPDATE tests.collections SET title=?, description=?, schedule=?,
               is_scheduled=?, alert_severity=?, alert_message=?, alert_subject=?,
+              notify_after=?, notify_after_check=?, stop_after=?, stop_after_check=?,
               tags=?, collection_steps=? WHERE project_id=? AND id=? |]
 
 
@@ -311,7 +368,8 @@ getCollectionById id' = queryOne Select q (Only id')
                       WHEN EXTRACT(HOUR FROM schedule) > 0 THEN CONCAT(EXTRACT(HOUR FROM schedule)::TEXT, ' hours')
                       ELSE CONCAT(EXTRACT(MINUTE FROM schedule)::TEXT, ' minutes')
                   END as schedule, is_scheduled, collection_steps, last_run_response, last_run_passed, last_run_failed, tags,
-                  collection_variables, alert_severity, alert_message, alert_subject
+                  collection_variables, alert_severity, alert_message, alert_subject, notify_after,
+                  notify_after_check, stop_after, stop_after_check
                   FROM tests.collections t WHERE id=?|]
 
 
