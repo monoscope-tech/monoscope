@@ -22,7 +22,7 @@ import Utils (faSprite_)
 menu :: Projects.ProjectId -> [(Text, Text, Text)]
 menu pid =
   [ ("Dashboard", "/p/" <> pid.toText <> "/", "qrcode")
-  , ("Explore", "/p/" <> pid.toText <> "/log_explorer", "explore")
+  , ("Explorer", "/p/" <> pid.toText <> "/log_explorer", "explore")
   , ("API Catalog", "/p/" <> pid.toText <> "/api_catalog", "swap")
   , ("Changes & Errors", "/p/" <> pid.toText <> "/anomalies", "bug")
   , ("Monitors & Alerts", "/p/" <> pid.toText <> "/monitors", "list-check")
