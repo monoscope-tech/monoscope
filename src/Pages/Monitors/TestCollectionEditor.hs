@@ -132,7 +132,7 @@ collectionStepsUpdateH pid colF = do
               _ <- dbtToEff $ Testing.addCollection coll
               addSuccessToast "Collection saved successfully" Nothing
               redirectCS $ "/p/" <> pid.toText <> "/monitors/collection/?col_id=" <> colId.toText
-              addRespHeaders $ CollectionMutSuccess
+              addRespHeaders CollectionMutSuccess
 
 
 collectionStepVariablesUpdateH :: Projects.ProjectId -> Testing.CollectionId -> CollectionVariableForm -> ATAuthCtx (RespHeaders (Html ()))
@@ -354,36 +354,6 @@ collectionPage pid colM col_rn respJson = do
             input_ [type_ "hidden", name_ "collectionId", value_ col.id.toText]
           div_ [class_ "w-full flex p-2 bg-white"] do
             button_ [class_ "btn btn-primary w-full btn-sm sticky top-[90%] z-10 ", type_ "submit"] "Save"
-        -- div_ [class_ "hidden col-span-1 h-full divide-y flex flex-col overflow-y-hidden"] do
-        --   div_ [class_ "shrink flex items-center justify-between"] do
-        --     div_ [class_ " pb-5 p-5 space-y-2"] do
-        --       h2_ [class_ "text-base font-semibold leading-6 text-gray-900 flex items-end"] do
-        --         toHtml col.title
-        --         small_ [class_ "inline-block ml-2 truncate text-sm text-gray-500"] "created  2024/01/23"
-        --       p_ [class_ "text-sm"] $ toHtml col.description
-        --     div_ [class_ ""] do
-        --       span_ [class_ "badge badge-success"] "Active"
-        --   div_ [class_ "shrink flex justify-between items-center"] do
-        --     div_ [class_ "flex items-center space-x-4"] do
-        --       h4_ [class_ "font-semibold text-2xl font-medium "] "Steps"
-        --       a_ [href_ "https://apitoolkit.io/docs/dashboard/dashboard-pages/api-tests/", target_ "_blank", class_ "text-sm flex items-center gap-1 text-blue-500"] do
-        --         faSprite_ "link-simple" "regular" "w-4 h-4" >> "Docs"
-        --     div_ [class_ "space-x-4 flex items-center"] do
-        --       button_
-        --         [ class_ "btn btn-sm btn-success"
-        --         , hxPatch_ ""
-        --         , hxParams_ "stepsData"
-        --         , hxExt_ "json-enc"
-        --         , hxVals_ "js:{stepsData: saveStepData()}"
-        --         , hxTarget_ "#step-results-parent"
-        --         , hxSwap_ "innerHTML"
-        --         , hxIndicator_ "#step-results-indicator"
-        --         ]
-        --         (span_ "Run all" >> faSprite_ "play" "solid" "w-3 h-3")
-        --       button_ [class_ "btn btn-sm btn-warning ", type_ "submit"] (span_ "Save" >> faSprite_ "floppy-disk" "solid" "w-3 h-3")
-        --       label_ [class_ "relative inline-flex items-center cursor-pointer space-x-2"] do
-        --         input_ [type_ "checkbox", class_ "toggle editormode", onchange_ "codeToggle(event)"] >> span_ [class_ "text-sm"] "Code"
-        --   div_ [class_ "h-full overflow-y-hidden flex-1"] $ termRaw "steps-editor" [id_ "stepsEditor"] ""
 
         div_ [class_ "col-span-1 h-full border-r border-gray-200 overflow-y-auto"] do
           div_ [role_ "tablist", class_ "tabs tabs-bordered w-full"] do
