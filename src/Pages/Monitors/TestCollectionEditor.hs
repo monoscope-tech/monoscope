@@ -357,8 +357,8 @@ collectionPage pid colM col_rn respJson = do
                     div_ [class_ "hidden loading-indicator flex justify-center"] do
                       span_ [class_ "loading loading-dots loading-lg"] ""
 
-            input_ [type_ "radio", name_ "side-tabs", role_ "tab", class_ "tab", term "aria-label" "Resources"]
-            div_ [role_ "tabpanel", class_ "tab-content max-h-full h-full overflow-y-auto space-y-4 relative"] "Hello world"
+        -- input_ [type_ "radio", name_ "side-tabs", role_ "tab", class_ "tab", term "aria-label" "Resources"]
+        -- div_ [role_ "tabpanel", class_ "tab-content max-h-full h-full overflow-y-auto space-y-4 relative"] "Hello world"
         jsonTreeAuxillaryCode
 
     script_ [src_ "/public/assets/testeditor-utils.js"] ("" :: Text)
