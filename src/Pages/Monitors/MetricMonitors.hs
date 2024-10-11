@@ -171,9 +171,9 @@ defineTheMetric_ pid = do
 
 configureNotificationMessage_ :: Maybe Testing.Collection -> Html ()
 configureNotificationMessage_ colM = do
-  let (severity, subject, message) = case colM of
-        Just col -> (col.alertSeverity, col.alertSubject, col.alertMessage)
-        Nothing -> ("Info", "Error: Error subject", "Alert Message")
+  let (severity, subject, message, naf, saf, nfc, sfc) = case colM of
+        Just col -> (col.alertSeverity, col.alertSubject, col.alertMessage, col.notifyAfter, col.stopAfter, col.notifyAfterCheck, col.stopAfterCheck)
+        Nothing -> ("Info", "Error: Error subject", "Alert Message", "10 minutes", "0", False, False)
   div_ [class_ "space-y-4 max-w-[700px]"] do
     div_ [class_ "form-control w-full"] do
       label_ [class_ "label"] $ span_ [class_ "label-text"] "Severity"
@@ -194,13 +194,14 @@ configureNotificationMessage_ colM = do
       h3_ [class_ "font-normal text-base"] "Recovery Thresholds"
       p_ [] "Send notifications for alert status periodically as long as the monitor has not recovered"
       div_ [class_ "flex items-center gap-2"] do
-        input_ [class_ "toggle toggle-sm", type_ "checkbox", name_ "notifyAfterCheck"]
+        input_ $ [class_ "toggle toggle-sm", type_ "checkbox", name_ "notifyAfterCheck"] ++ [checked_ | nfc]
         span_ "If this monitor is not acknowleged or resoved, notify renotify every"
-        select_ [class_ "select select-xs select-bordered", name_ "notifyAfter"] $ mapM_ (option_ []) ["10 mins", "20 mins", "30 mins", "1 hour", "6 hours", "24 hours"]
+        select_ [class_ "select select-xs select-bordered", name_ "notifyAfter"] $
+          mapM_ (\v -> option_ [selected_ "" | v == naf] $ toHtml v) ["10 mins", "20 mins", "30 mins", "1 hour", "6 hours", "24 hours"]
       div_ [class_ "flex items-center gap-2"] do
-        input_ [class_ "toggle toggle-sm", type_ "checkbox", name_ "stopAfterCheck"]
+        input_ $ [class_ "toggle toggle-sm", type_ "checkbox", name_ "stopAfterCheck"] ++ [checked_ | sfc]
         span_ "Stop renotifying after "
-        input_ [type_ "number", value_ "0", name_ "stopAfter"]
+        input_ [type_ "number", value_ saf, name_ "stopAfter"]
         span_ "occurences."
 
 
