@@ -279,7 +279,7 @@ data TabStatus = Active | Inactive
 data CollectionStepUpdateForm = CollectionStepUpdateForm
   { stepsData :: V.Vector CollectionStepData
   , collectionId :: Maybe CollectionId
-  , title :: Text
+  , title :: Maybe Text
   , description :: Maybe Text
   , tags :: Maybe (V.Vector Text)
   , scheduled :: Maybe Text

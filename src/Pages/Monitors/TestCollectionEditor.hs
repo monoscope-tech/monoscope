@@ -70,7 +70,7 @@ collectionStepsUpdateH pid colF = do
       addErrorToast "You are on Free plan. You can't schedule collection to run more than once a day" Nothing
       addRespHeaders CollectionMutError
     else
-      if colF.title == ""
+      if colF.title == Just ""
         then do
           addErrorToast "Collection name can not be empty" Nothing
           addRespHeaders CollectionMutError
@@ -94,7 +94,7 @@ collectionStepsUpdateH pid colF = do
                       , projectId = pid
                       , updatedAt = currentTime
                       , lastRun = Nothing
-                      , title = colF.title
+                      , title = fromMaybe "[TITLE]" colF.title
                       , description = fromMaybe "" colF.description
                       , config = AE.object []
                       , schedule = scheduleText'
@@ -256,7 +256,7 @@ timelineSteps pid col =
 nameOfTest_ :: Text -> V.Vector Text -> Html ()
 nameOfTest_ name tags = div_ [class_ "form-control w-full flex flex-col"] do
   label_ [class_ "label"] $ span_ [class_ "label-text"] "Name"
-  input_ [placeholder_ "Give your test a name", class_ "input input-sm input-bordered mb-2  w-full", name_ "title", value_ name]
+  input_ [placeholder_ "Give your test a name", id_ "test_title", class_ "input input-sm input-bordered mb-2  w-full", name_ "title", value_ name]
   label_ [class_ "label"] $ span_ [class_ "label-text"] "Tags"
   input_ [placeholder_ "Add tags", value_ "", id_ "tags_input"]
   let tgs = decodeUtf8 $ encode $ V.toList tags
@@ -300,17 +300,18 @@ defineTestSteps_ colM = do
     div_ [class_ "space-x-4 flex items-center"] do
       a_ [href_ "https://apitoolkit.io/docs/dashboard/dashboard-pages/api-tests/", target_ "_blank", class_ "text-sm flex items-center gap-1 text-blue-500"] do
         faSprite_ "link-simple" "regular" "w-4 h-4" >> "Docs"
-      button_
-        [ class_ "btn btn-sm btn-success"
-        , hxPatch_ ""
-        , hxParams_ "stepsData"
-        , hxExt_ "json-enc"
-        , hxVals_ "js:{stepsData: saveStepData()}"
-        , hxTarget_ "#step-results-parent"
-        , hxSwap_ "innerHTML"
-        , hxIndicator_ "#step-results-indicator"
-        ]
-        (span_ "Run all" >> faSprite_ "play" "solid" "w-3 h-3")
+      whenJust colM $ \col ->
+        button_
+          [ class_ "btn btn-sm btn-success"
+          , hxPatch_ $ "/p/" <> col.projectId.toText <> "/monitors/" <> col.id.toText
+          , hxParams_ "stepsData"
+          , hxExt_ "json-enc"
+          , hxVals_ "js:{stepsData: saveStepData()}"
+          , hxTarget_ "#step-results-parent"
+          , hxSwap_ "innerHTML"
+          , hxIndicator_ "#step-results-indicator"
+          ]
+          (span_ "Run all" >> faSprite_ "play" "solid" "w-3 h-3")
       label_ [class_ "relative inline-flex items-center cursor-pointer space-x-2"] do
         input_ [type_ "checkbox", class_ "toggle editormode", onchange_ "codeToggle(event)"] >> span_ [class_ "text-sm"] "Code"
   div_ [class_ "overflow-y-hidden flex-1 "] $ termRaw "assertion-builder" [id_ ""] ""

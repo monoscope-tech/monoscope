@@ -38,7 +38,7 @@ colStepData =
 collection :: CollectionStepUpdateForm
 collection =
   CollectionStepUpdateForm
-    { title = "Test Collection"
+    { title = Just "Test Collection"
     , description = Just "get todos"
     , scheduled = Nothing
     , scheduleNumber = Nothing
@@ -83,7 +83,7 @@ spec = aroundAll withTestResources do
       let col = V.head $ (\(Testing.CollectionListItemVM _ co _) -> co) <$> collections
       let scheduleCollectionMn =
             CollectionStepUpdateForm
-              { title = "Test Collection"
+              { title = Just "Test Collection"
               , description = Just "get todos"
               , scheduled = Just "on"
               , scheduleNumber = Just "1"
@@ -119,7 +119,7 @@ spec = aroundAll withTestResources do
       col.description `shouldBe` "get todos"
       let scheduleCollection =
             CollectionStepUpdateForm
-              { title = "Test Collection"
+              { title = Just "Test Collection"
               , description = Just "get todos"
               , scheduled = Nothing
               , scheduleNumber = Just "1"
