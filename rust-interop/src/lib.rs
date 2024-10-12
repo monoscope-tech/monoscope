@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use hs_bindgen::*;
 use serde::Serialize;
 use serde_json::{json, to_string};
@@ -13,7 +15,7 @@ fn to_json_string(obj: &impl Serialize) -> String {
 }
 
 #[hs_bindgen]
-fn run_testkit(file: &str, col: &str) -> String {
+fn run_testkit(file: &str, col: &str, local_vars: &str) -> String {
     let ctx = TestContext {
         plan: Some("plan".into()),
         file_source: "file source".into(),
@@ -23,9 +25,17 @@ fn run_testkit(file: &str, col: &str) -> String {
         step_index: 0,
         should_log: false,
     };
+    let local_vars_map: HashMap<String, String> =
+        serde_json::from_str(local_vars).unwrap_or_default();
 
     let result = tokio::runtime::Runtime::new().unwrap().block_on(async {
-        base_request::run_json(ctx, file.to_string(), Some(col.to_string())).await
+        base_request::run_json(
+            ctx,
+            file.to_string(),
+            Some(col.to_string()),
+            Some(local_vars_map),
+        )
+        .await
     });
 
     match result {

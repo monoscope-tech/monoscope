@@ -27,8 +27,8 @@ import System.Config qualified as Config
 
 methodPath :: Testing.CollectionStepData -> Maybe (Text, Text)
 methodPath stepData =
-  listToMaybe
-    $ catMaybes
+  listToMaybe $
+    catMaybes
       [ ("POST",) <$> stepData.post
       , ("GET",) <$> stepData.get
       , ("PUT",) <$> stepData.put
@@ -69,16 +69,17 @@ testRunToRequestMsg (Projects.ProjectId pid) currentTime parent_id sr = do
     }
 
 
-callRunTestkit :: String -> String -> IO String
-callRunTestkit hsString hsColid = withCString hsString $ \cstr -> do
-  withCString hsColid $ \cstr2 -> do
-    resultCString <- run_testkit cstr cstr2
-    peekCString resultCString
+callRunTestkit :: String -> String -> String -> IO String
+callRunTestkit hsString hsVars hsColid = withCString hsString $ \cstr -> do
+  withCString hsVars $ \cstr1 -> do
+    withCString hsColid $ \cstr2 -> do
+      resultCString <- run_testkit cstr cstr2 cstr1
+      peekCString resultCString
 
 
-runCollectionTest :: IOE :> es => V.Vector Testing.CollectionStepData -> Testing.CollectionId -> Eff es (Either Text (V.Vector Testing.StepResult))
-runCollectionTest collectionSteps cold_id = do
-  tkResp <- liftIO $ callRunTestkit (decodeUtf8 $ AE.encode collectionSteps) (toString cold_id.toText)
+runCollectionTest :: IOE :> es => V.Vector Testing.CollectionStepData -> V.Vector Testing.CollectionVariablesItem -> Testing.CollectionId -> Eff es (Either Text (V.Vector Testing.StepResult))
+runCollectionTest collection_steps col_vars cold_id = do
+  tkResp <- liftIO $ callRunTestkit (decodeUtf8 $ AE.encode collection_steps) (decodeUtf8 $ AE.encode col_vars) (toString cold_id.toText)
   pure $ mapLeft (\e -> fromString e <> toText tkResp) $ AE.eitherDecodeStrictText (toText tkResp)
 
 
@@ -87,9 +88,10 @@ runTestAndLog
   => Projects.ProjectId
   -> Testing.CollectionId
   -> V.Vector Testing.CollectionStepData
+  -> V.Vector Testing.CollectionVariablesItem
   -> Eff es (Either Text (V.Vector Testing.StepResult))
-runTestAndLog pid colId collectionSteps = do
-  stepResultsE <- runCollectionTest collectionSteps colId
+runTestAndLog pid colId collectionSteps colVars = do
+  stepResultsE <- runCollectionTest collectionSteps colVars colId
   case stepResultsE of
     Left e -> do
       Log.logAttention "unable to run test collection" (AE.object ["error" AE..= e, "steps" AE..= collectionSteps])

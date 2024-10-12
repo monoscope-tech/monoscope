@@ -140,7 +140,11 @@ collectionStepVariablesUpdateH pid colId colF = do
 
 collectionRunTestsH :: Projects.ProjectId -> Testing.CollectionId -> Maybe Int -> Testing.CollectionStepUpdateForm -> ATAuthCtx (RespHeaders CollectionRunTest)
 collectionRunTestsH pid colId runIdxM stepsForm = do
-  stepResultsE <- TestToDump.runTestAndLog pid colId stepsForm.stepsData
+  col <- dbtToEff $ Testing.getCollectionById colId
+  let Testing.CollectionVariables vars = case col of
+        Just c -> c.collectionVariables
+        Nothing -> Testing.CollectionVariables V.empty
+  stepResultsE <- TestToDump.runTestAndLog pid colId stepsForm.stepsData vars
   case stepResultsE of
     Right stepResults -> do
       let tkRespJson = decodeUtf8 @Text $ AE.encode stepResults
