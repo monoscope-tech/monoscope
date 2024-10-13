@@ -171,7 +171,7 @@ function convertTestkitToCollectionSteps(testkitSteps) {
         _url: step[method],
         headers: step.headers || {},
         _assertions: assertions,
-        _exports: step.exports || {},
+        exports: step.exports || {},
       }
       collectionSteps.push(collectionStep)
     })
@@ -240,7 +240,7 @@ function convertCollectionStepsToTestkitFormat(collectionSteps) {
         title: step.title || '',
         [step._method || 'GET']: step._url,
         headers: step.headers || {},
-        exports: step._exports || {},
+        exports: step.exports || {},
         asserts: assertions || [],
       }
       testkitSteps.push(testkitStep)
