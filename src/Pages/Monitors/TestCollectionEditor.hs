@@ -273,21 +273,24 @@ nameOfTest_ name tags = div_ [class_ "form-control w-full flex flex-col"] do
 
 defineTestSteps_ :: Maybe Testing.Collection -> Html ()
 defineTestSteps_ colM = do
-  let (scheduleNumber, scheduleNumberUnit) =
+  let (scheduled, scheduleNumber, scheduleNumberUnit) =
         maybe
-          ("1", "minutes")
+          (True, "1", "minutes")
           ( \col -> case words col.schedule of
-              [num, unit] -> (num, unit)
-              _ -> ("1", "minutes")
+              [num, unit] -> (col.isScheduled, num, unit)
+              _ -> (True, "1", "minutes")
           )
           colM
-  p_ [class_ "space-x-2"] do
-    "Run the test every"
-    input_ [class_ "ml-3 input input-sm input-bordered w-24 text-center", type_ "number", value_ scheduleNumber, name_ "scheduleNumber"]
-    select_ [class_ "select select-sm select-bordered", name_ "scheduleNumberUnit"] do
-      option_ (value_ "minutes" : [selected_ "" | scheduleNumberUnit == "minutes"]) "Minutes"
-      option_ (value_ "hours" : [selected_ "" | scheduleNumberUnit == "hours"]) "Hours"
-      option_ (value_ "days" : [selected_ "" | scheduleNumberUnit == "days"]) "Days"
+  div_ [] do
+    label_ [class_ "relative inline-flex items-center cursor-pointer space-x-2"] do
+      input_ ([checked_ | scheduled] ++ [type_ "checkbox", class_ "toggle", name_ "scheduled"]) >> span_ [class_ "text-sm"] "Schedule test"
+    p_ [class_ "space-x-2"] do
+      "Run the test every"
+      input_ [class_ "ml-3 input input-sm input-bordered w-24 text-center", type_ "number", value_ scheduleNumber, name_ "scheduleNumber"]
+      select_ [class_ "select select-sm select-bordered", name_ "scheduleNumberUnit"] do
+        option_ (value_ "minutes" : [selected_ "" | scheduleNumberUnit == "minutes"]) "Minutes"
+        option_ (value_ "hours" : [selected_ "" | scheduleNumberUnit == "hours"]) "Hours"
+        option_ (value_ "days" : [selected_ "" | scheduleNumberUnit == "days"]) "Days"
   div_ [class_ "alert"] do
     faSprite_ "sparkles" "regular" "w-7 h-7 text-success "
     div_ [] do
