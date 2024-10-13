@@ -5,6 +5,7 @@ use serde::Serialize;
 use serde_json::{json, to_string};
 use testkit;
 use testkit::base_request;
+use testkit::base_request::ConfigVariable;
 use testkit::base_request::TestContext;
 
 fn to_json_string(obj: &impl Serialize) -> String {
@@ -25,8 +26,7 @@ fn run_testkit(file: &str, col: &str, local_vars: &str) -> String {
         step_index: 0,
         should_log: false,
     };
-    let local_vars_map: HashMap<String, String> =
-        serde_json::from_str(local_vars).unwrap_or_default();
+    let local_vars_map: Vec<ConfigVariable> = serde_json::from_str(local_vars).unwrap_or_default();
 
     let result = tokio::runtime::Runtime::new().unwrap().block_on(async {
         base_request::run_json(

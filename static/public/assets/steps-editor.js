@@ -4,6 +4,12 @@ import { makeRequestAndProcessResponse, generateRequestPreviewFromObject, render
 
 const validMethods = ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'HEAD', 'OPTIONS', 'TRACE', 'CONNECT']
 
+const DEFAULT_STEP = {
+  _expanded: false,
+  _method: 'GET',
+  _url: '',
+  _assertions: [],
+}
 export class StepsEditor extends LitElement {
   static properties = {
     collectionSteps: [],
@@ -668,7 +674,7 @@ ${stepData._requestBody}</textarea
             ${this.collectionSteps.map((stepData, idx) => this.renderCollectionStep(stepData, idx, this.collectionResults[idx], this.saveErrors[idx]) || undefined)}
           </div>
           <div class="p-4 pt-2">
-            <a class="btn btn-outline btn-neutral btn-sm items-center cursor-pointer" @click=${() => (this.collectionSteps = [...this.collectionSteps, {}])}>
+            <a class="btn btn-outline btn-neutral btn-sm items-center cursor-pointer" @click=${() => (this.collectionSteps = [...this.collectionSteps, DEFAULT_STEP])}>
               <svg class="inline-block icon w-3 h-3"><use href="/public/assets/svgs/fa-sprites/solid.svg#plus"></use></svg>
               Add a step to test
             </a>

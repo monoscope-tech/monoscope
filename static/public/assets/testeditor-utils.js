@@ -256,7 +256,7 @@ function convertToTestkitAssertion(assertion) {
 
   if (assertion.type === 'header') {
     jsonpath = `$.resp.headers.${assertion.headerName}`
-  } else if (assertion.type === 'body') {
+  } else if (assertion.type === 'body' && assertion.jsonpath) {
     jsonpath = `$.resp.json.${assertion.jsonpath.substring(2)}`
   } else if (assertion.type === 'statusCode') {
     jsonpath = `$.resp.status`

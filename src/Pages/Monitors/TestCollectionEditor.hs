@@ -144,6 +144,7 @@ collectionRunTestsH pid colId runIdxM stepsForm = do
   let Testing.CollectionVariables vars = case col of
         Just c -> c.collectionVariables
         Nothing -> Testing.CollectionVariables V.empty
+  traceShowM vars
   stepResultsE <- TestToDump.runTestAndLog pid colId stepsForm.stepsData vars
   case stepResultsE of
     Right stepResults -> do
