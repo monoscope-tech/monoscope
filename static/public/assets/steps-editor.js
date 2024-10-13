@@ -702,6 +702,9 @@ ${stepData._requestBody}</textarea
 
   removeAssertion(idx, index) {
     this.collectionSteps[idx]._assertions.splice(index, 1)
+    if (this.collectionResults && this.collectionResults[idx]) {
+      this.collectionResults[idx].assert_results?.splice(index, 1)
+    }
     this.requestUpdate()
   }
 

@@ -100,8 +100,10 @@ function renderAssertionContent(assertion, index, updateAssertion) {
 }
 
 // Placeholder for assertion evaluation logic
-function evaluateAssertion(assertion, response) {
-  // Implement your assertion evaluation logic here
+function evaluateAssertion(assertion, result) {
+  if (result && result.ok && result.ok === true) {
+    return true
+  }
   return assertion.status === 'PASSED'
 }
 
@@ -116,29 +118,34 @@ export function renderAssertionBuilder({
   return html`
     <div class="px-4 divide-y">
       ${assertions.map((assertion, index) => {
+        let aResult = result ? result.assert_results[index] : undefined
+        let error = aResult ? aResult.err?.advice : ''
         return html`
-          <div class="flex py-2 space-x-2 border-b">
-            <strong class="block w-16 text-right mr-2 flex-shrink-0 pt-2">${index == 0 ? 'When' : 'And'}</strong>
-            <div class="flex flex-wrap items-center gap-2 grow ">
-              ${renderDropdown(
-                [
-                  { value: 'body', label: 'body' },
-                  { value: 'header', label: 'header' },
-                  { value: 'statusCode', label: 'status code' },
-                  { value: 'responseTime', label: 'response time' },
-                ],
-                assertion.type,
-                (e) => updateAssertion(index, { type: e.target.value, operation: undefined, jsonpath: undefined, subOperation: undefined, value: undefined, status: undefined }),
-                ''
-              )}
-              ${renderAssertionContent(assertion, index, updateAssertion)}
-            </div>
-            <div class="flex-shrink-0 ">
-              <div class="flex gap-3 pt-2 items-center">
-                ${evaluateAssertion(assertion, result) ? html`<span class="text-success ">PASSED</span>` : html`<span class="text-error">FAILED</span>`}
-                <a class="cursor-pointer text-slate-600" @click=${removeAssertion(index)}>${faSprite_('trash', 'regular', 'w-3 h-3')}</a>
+          <div class="border-b py-2">
+            <div class="flex space-x-2">
+              <strong class="block w-16 text-right  flex-shrink-0 pt-2">${index == 0 ? 'When' : 'And'}</strong>
+              <div class="flex flex-wrap items-center gap-2 grow ">
+                ${renderDropdown(
+                  [
+                    { value: 'body', label: 'body' },
+                    { value: 'header', label: 'header' },
+                    { value: 'statusCode', label: 'status code' },
+                    { value: 'responseTime', label: 'response time' },
+                  ],
+                  assertion.type,
+                  (e) => updateAssertion(index, { type: e.target.value, operation: undefined, jsonpath: undefined, subOperation: undefined, value: undefined, status: undefined }),
+                  ''
+                )}
+                ${renderAssertionContent(assertion, index, updateAssertion)}
+              </div>
+              <div class="flex-shrink-0 ">
+                <div class="flex gap-3 pt-2 items-center">
+                  ${evaluateAssertion(assertion, aResult) ? html`<span class="text-success ">PASSED</span>` : html`<span class="text-error">FAILED</span>`}
+                  <a class="cursor-pointer text-slate-600" @click=${removeAssertion(index)}>${faSprite_('trash', 'regular', 'w-3 h-3')}</a>
+                </div>
               </div>
             </div>
+            <p class="text-sm text-red-500 text-center">${error}</p>
           </div>
         `
       })}
