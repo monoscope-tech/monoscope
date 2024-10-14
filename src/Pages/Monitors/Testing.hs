@@ -121,7 +121,7 @@ collectionCard pid col currTime = do
             , class_ "text-xl font-medium text-blue-700"
             ]
             $ toHtml col.title
-          a_ [href_ $ "/p/" <> pid.toText <> "/monitors/" <> col.id.toText] do
+          a_ [href_ $ "/p/" <> pid.toText <> "/monitors/collection?col_id=" <> col.id.toText] do
             faSprite_ "pen-to-square" "regular" "h-5 w-5 -mt-2"
 
         div_ [class_ "mt-2 flex gap-2 items-center"] do
