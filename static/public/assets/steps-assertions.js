@@ -3,14 +3,16 @@ import { html } from './js/thirdparty/lit.js'
 // Base Operations List
 const baseOperations = [
   { value: 'equals', label: 'equals' },
-  { value: 'notEqual', label: 'does not equal' },
-  { value: 'contains', label: 'contains' },
-  { value: 'notContains', label: 'does not contain' },
-  { value: 'regexMatch', label: 'matches regex' },
-  { value: 'noRegexMatch', label: 'does not match regex' },
-  { value: 'gt', label: 'is greater than' },
-  { value: 'lt', label: 'is less than' },
-  { value: 'isUndefined', label: 'is undefined' },
+  { value: 'notEquals', label: 'does not equal' },
+  // { value: 'contains', label: 'contains' },
+  // { value: 'notContains', label: 'does not contain' },
+  // { value: 'regexMatch', label: 'matches regex' },
+  // { value: 'noRegexMatch', label: 'does not match regex' },
+  { value: 'greaterThan', label: 'is greater than' },
+  { value: 'lessThan', label: 'is less than' },
+  { value: 'greaterThanOrEqual', label: 'is greater than' },
+  { value: 'lessThanOrEqual', label: 'is less than' },
+  // { value: 'isUndefined', label: 'is undefined' },
 ]
 
 // Additional Operations for Body Type
