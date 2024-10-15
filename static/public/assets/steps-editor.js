@@ -8,8 +8,17 @@ const DEFAULT_STEP = {
   _expanded: false,
   _method: 'GET',
   _url: '',
-  _assertions: [],
+  assertions: [{ equal: ['$.resp.status', 200] }],
+  _assertions: [
+    {
+      type: 'statusCode',
+      operation: 'equals',
+      value: 200,
+      status: 'PASSED',
+    },
+  ],
 }
+
 export class StepsEditor extends LitElement {
   static properties = {
     collectionSteps: [],
@@ -250,7 +259,10 @@ export class StepsEditor extends LitElement {
             </label>
             <div class="w-full space-y-1 relative">
               <div class="absolute right-0 items-center gap-3 text-xs text-gray-600 hidden group-hover/item:flex">
-                <a class="text-red-700 cursor-pointer" @click="${() => (this.collectionSteps = this.collectionSteps.filter((_, i) => i != idx))}">
+                <a class="text-red-700 cursor-pointer" @click="${() => {
+                  this.collectionSteps = this.collectionSteps.filter((_, i) => i != idx)
+                  this.collectionResults = this.collectionResults.filter((_, i) => i != idx)
+                }}">
                   ${faSprite_('trash', 'regular', 'w-2 h-3')}
                 </a>
               </div>
