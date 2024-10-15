@@ -198,8 +198,8 @@ function convertTestkitAssertions(assertion) {
         return {
           type: 'header',
           operation: operation,
-          headerName: jsonpath.substring(14),
-          value: value,
+          headerName: jsonpath.replace('$.resp.headers.', ''),
+          value: val,
         }
       }
       return {
@@ -209,6 +209,7 @@ function convertTestkitAssertions(assertion) {
       }
     } else {
       const operation = keys[0]
+      const jsonpath = value
       if (jsonpath.startsWith('$.resp.json')) {
         return {
           type: 'body',
@@ -221,7 +222,7 @@ function convertTestkitAssertions(assertion) {
         return {
           type: 'header',
           operation: operation,
-          headerName: jsonpath.substring(14),
+          headerName: jsonpath.replace('$.resp.headers.', ''),
           value: '',
         }
       }
@@ -265,6 +266,7 @@ function getOperationFromText(operation) {
   } else if (operation === 'lessThanOrEqual') {
     return '<='
   }
+  return '=='
 }
 
 function convertCollectionStepsToTestkitFormat(collectionSteps) {
@@ -291,7 +293,6 @@ function convertCollectionStepsToTestkitFormat(collectionSteps) {
 function convertToTestkitAssertion(assertion) {
   let jsonpath = ''
   let operation = 'ok'
-  let evalOperation = '=='
 
   if (assertion.type === 'header') {
     jsonpath = `$.resp.headers.${assertion.headerName}`
@@ -303,14 +304,15 @@ function convertToTestkitAssertion(assertion) {
     jsonpath = `$.resp.duration_ms`
   }
 
-  if (['equals', 'notEquals', 'greaterThan', 'lessThan', 'greaterThanOrEqual', 'lessThanOrEqual'].includes(assertion.operation)) {
-    return {
-      [assertion.operation]: `${jsonpath}`,
-    }
-  } else {
-    evalOperation = getOperationFromText(assertion.operation)
+  if (['equals', 'notEquals', 'greaterThan', 'lessThan', 'greaterThanOrEqual', 'lessThanOrEqual'].includes(assertion.operation === 'jsonpath' ? assertion.subOperation : assertion.operation)) {
+    const evalOperation = getOperationFromText(assertion.operation === 'jsonpath' ? assertion.subOperation : assertion.operation)
     return {
       [operation]: `${jsonpath} ${evalOperation} ${assertion.value}`,
+    }
+  } else {
+    const operation = assertion.operation
+    return {
+      [operation === 'jsonpath' ? assertion.subOperation : operation]: `${jsonpath}`,
     }
   }
 }
