@@ -12,7 +12,7 @@ import Pages.Monitors.Testing qualified as Testing
 import Pkg.Components.ItemsList qualified as ItemsList
 import Pkg.RouteUtils
 import Relude
-import Servant (Capture, FormUrlEncoded, GenericMode (type (:-)), Get, JSON, NamedRoutes, Patch, Post, QueryParam, ReqBody, type (:>))
+import Servant (Capture, Delete, FormUrlEncoded, GenericMode (type (:-)), Get, JSON, NamedRoutes, Patch, Post, QueryParam, ReqBody, type (:>))
 import Servant qualified
 import Servant.HTML.Lucid (HTML)
 import System.Types (ATAuthCtx, RespHeaders)
@@ -36,6 +36,7 @@ data Routes' mode = Routes'
   , collectionStepsUpdate :: mode :- "monitors" :> "collection" :> ReqBody '[JSON] TestingM.CollectionStepUpdateForm :> Post '[HTML] (RespHeaders TestCollectionEditor.CollectionMut)
   , collectionRunTests :: mode :- "monitors" :> Capture "collection_id" TestingM.CollectionId :> QueryParam "step_index" Int :> ReqBody '[JSON] TestingM.CollectionStepUpdateForm :> Patch '[HTML] (RespHeaders TestCollectionEditor.CollectionRunTest)
   , collectionVarsPost :: mode :- "monitors" :> Capture "collection_id" TestingM.CollectionId :> "variables" :> ReqBody '[JSON] TestCollectionEditor.CollectionVariableForm :> Post '[HTML] (RespHeaders (Html ()))
+  , collectionVarsDelete :: mode :- "monitors" :> Capture "collection_id" TestingM.CollectionId :> "variables" :> Capture "variable_name" Text :> Delete '[HTML] (RespHeaders (Html ()))
   }
   deriving stock (Generic)
 
@@ -54,4 +55,5 @@ server pid =
     , collectionRunTests = TestCollectionEditor.collectionRunTestsH pid
     , collectionDashboardGet = Testing.collectionDashboard pid
     , collectionVarsPost = TestCollectionEditor.collectionStepVariablesUpdateH pid
+    , collectionVarsDelete = TestCollectionEditor.collectionStepVariablesDeleteH pid
     }

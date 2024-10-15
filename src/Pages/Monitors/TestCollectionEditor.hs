@@ -4,6 +4,7 @@ module Pages.Monitors.TestCollectionEditor (
   collectionStepVariablesUpdateH,
   collectionPage,
   collectionStepsUpdateH,
+  collectionStepVariablesDeleteH,
   CollectionVariableForm (..),
   CollectionGet,
   CollectionRunTest,
@@ -24,6 +25,7 @@ import Lucid
 import Lucid.Aria qualified as Aria
 import Lucid.Base (TermRaw (termRaw))
 import Lucid.Htmx (
+  hxDelete_,
   hxExt_,
   hxIndicator_,
   hxParams_,
@@ -133,6 +135,22 @@ collectionStepVariablesUpdateH pid colId colF = do
       let colVar = Testing.CollectionVariablesItem{variableName = colF.variableName, variableValue = colF.variableValue}
       let updatedVars = vs <> [colVar]
       _ <- dbtToEff $ Testing.updateCollectionVariables pid colId (Testing.CollectionVariables updatedVars)
+      c <- dbtToEff $ Testing.getCollectionById colId
+      addSuccessToast "Collection's variables updated successfully" Nothing
+      addRespHeaders $ variablesDialog pid c
+
+
+collectionStepVariablesDeleteH :: Projects.ProjectId -> Testing.CollectionId -> Text -> ATAuthCtx (RespHeaders (Html ()))
+collectionStepVariablesDeleteH pid colId varName = do
+  coll <- dbtToEff $ Testing.getCollectionById colId
+  case coll of
+    Nothing -> do
+      addErrorToast "Collection not found" Nothing
+      addRespHeaders ""
+    Just col -> do
+      let Testing.CollectionVariables vars = col.collectionVariables
+          vs = V.filter (\v -> v.variableName /= varName) vars
+      _ <- dbtToEff $ Testing.updateCollectionVariables pid colId (Testing.CollectionVariables vs)
       c <- dbtToEff $ Testing.getCollectionById colId
       addSuccessToast "Collection's variables updated successfully" Nothing
       addRespHeaders $ variablesDialog pid c
@@ -424,11 +442,18 @@ variablesDialog pid colM = do
       let Testing.CollectionVariables vars = col.collectionVariables
       div_ [class_ "w-full flex flex-col gap-2"] do
         forM_ vars $ \var -> do
-          div_ [class_ "flex items-center  px-4 gap-2"] do
-            div_ [class_ "flex items-center px-2 rounded-lg text-gray-600 border w-1/2"] $ toHtml var.variableName
-            div_ [class_ "flex items-center px-2 rounded-lg text-gray-600 border w-1/2"] $ toHtml var.variableValue
-            div_ [] do
-              faSprite_ "trash" "regular" "w-3 h-3 shrink-0"
+          div_ [class_ "flex items-center px-4 gap-2 text-sm"] do
+            div_ [class_ "input input-sm"] $ toHtml var.variableName
+            div_ [class_ "input input-sm"] "="
+            div_ [class_ "input input-sm"] $ toHtml var.variableValue
+            div_
+              [ class_ "shrink-0"
+              , hxDelete_ $ "/p/" <> pid.toText <> "/monitors/" <> col.id.toText <> "/variables/" <> var.variableName
+              , hxTarget_ "#test-variables-content"
+              , hxSwap_ "outerHTML"
+              ]
+              do
+                faSprite_ "trash" "regular" "w-4 h-4 shrink-0"
     when (isNothing colM) $ do
       div_ [class_ "w-full pt-24 text-center"] do
         h4_ [class_ "text-lg font-medium"] "Save New Test Collection To Create Local Variables"
