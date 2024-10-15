@@ -9,7 +9,7 @@ function getEvent(eventName, value) {
   return event
 }
 
-const METHODS = ['GET', 'POST', 'PATCH', 'PUT', 'DELETE', 'HEAD', 'OPTIONS']
+const METHODS = ['GET', 'POST', 'PATCH', 'PUT', 'DELETE', 'HEAD', 'OPTIONS', 'CONNECT', 'TRACE']
 const ASSERTS = ['exists', 'number', 'string', 'array', 'date', 'boolean', 'ok', 'empty', 'notEmpty', 'null']
 
 function triggerToastEvent(event) {
@@ -207,6 +207,29 @@ function convertTestkitAssertions(assertion) {
         operation: operation,
         value: val,
       }
+    } else {
+      const operation = keys[0]
+      if (jsonpath.startsWith('$.resp.json')) {
+        return {
+          type: 'body',
+          operation: 'jsonpath',
+          jsonpath: jsonpath.replace('.resp.json', ''),
+          subOperation: operation,
+          value: '',
+        }
+      } else if (jsonpath.startsWith('$.resp.headers')) {
+        return {
+          type: 'header',
+          operation: operation,
+          headerName: jsonpath.substring(14),
+          value: '',
+        }
+      }
+      return {
+        type: 'statusCode',
+        operation: operation,
+        value: '',
+      }
     }
   }
   return undefined
@@ -225,6 +248,22 @@ function getTextOperation(operation) {
     return 'greaterThanOrEqual'
   } else if (operation === '<=') {
     return 'lessThanOrEqual'
+  }
+}
+
+function getOperationFromText(operation) {
+  if (operation === 'equals') {
+    return '=='
+  } else if (operation === 'notEquals') {
+    return '!='
+  } else if (operation === 'greaterThan') {
+    return '>'
+  } else if (operation === 'lessThan') {
+    return '<'
+  } else if (operation === 'greaterThanOrEqual') {
+    return '>='
+  } else if (operation === 'lessThanOrEqual') {
+    return '<='
   }
 }
 
@@ -264,20 +303,14 @@ function convertToTestkitAssertion(assertion) {
     jsonpath = `$.resp.duration_ms`
   }
 
-  if (assertion.operation === 'equals') {
-    evalOperation = '=='
-  } else if (assertion.operation === 'notEquals') {
-    evalOperation = '!='
-  } else if (assertion.operation === 'greaterThan') {
-    evalOperation = '>'
-  } else if (assertion.operation === 'lessThan') {
-    evalOperation = '<'
-  } else if (assertion.operation === 'greaterThanOrEqual') {
-    evalOperation = '>='
-  } else if (assertion.operation === 'lessThanOrEqual') {
-    evalOperation = '<='
-  }
-  return {
-    [operation]: `${jsonpath} ${evalOperation} ${assertion.value}`,
+  if (['equals', 'notEquals', 'greaterThan', 'lessThan', 'greaterThanOrEqual', 'lessThanOrEqual'].includes(assertion.operation)) {
+    return {
+      [assertion.operation]: `${jsonpath}`,
+    }
+  } else {
+    evalOperation = getOperationFromText(assertion.operation)
+    return {
+      [operation]: `${jsonpath} ${evalOperation} ${assertion.value}`,
+    }
   }
 }

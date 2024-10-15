@@ -4,21 +4,25 @@ import { html } from './js/thirdparty/lit.js'
 const baseOperations = [
   { value: 'equals', label: 'equals' },
   { value: 'notEquals', label: 'does not equal' },
-  // { value: 'contains', label: 'contains' },
-  // { value: 'notContains', label: 'does not contain' },
-  // { value: 'regexMatch', label: 'matches regex' },
-  // { value: 'noRegexMatch', label: 'does not match regex' },
   { value: 'greaterThan', label: 'is greater than' },
   { value: 'lessThan', label: 'is less than' },
   { value: 'greaterThanOrEqual', label: 'is greater than' },
   { value: 'lessThanOrEqual', label: 'is less than' },
-  // { value: 'isUndefined', label: 'is undefined' },
+  { value: 'isNull', label: 'is null' },
+  { value: 'exists', label: 'exists' },
+  { value: 'empty', label: 'is empty' },
+  { value: 'notEmpty', label: 'is not empty' },
+  { value: 'boolean', label: 'is boolean' },
+  { value: 'number', label: 'is number' },
+  { value: 'string', label: 'is string' },
+  { value: 'array', label: 'is array' },
+  { value: 'date', label: 'is date' },
 ]
 
 // Additional Operations for Body Type
 const bodyAdditionalOperations = [
   { value: 'jsonpath', label: 'jsonpath' },
-  { value: 'jsonschema', label: 'jsonschema' },
+  // { value: 'jsonschema', label: 'jsonschema' },
   // { value: 'jsonschema', label: 'jsonschema' },
 ]
 
