@@ -1564,7 +1564,9 @@ dependencies = [
 
 [[package]]
 name = "testkit"
-version = "0.1.8"
+version = "0.1.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "37fe7d687bc9f99d0a0a0e36aeb7afbceb72fccfe2161d23d7ca46e31df117b8"
 dependencies = [
  "anyhow",
  "chrono",
