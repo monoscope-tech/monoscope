@@ -126,7 +126,10 @@ export function renderAssertionBuilder({
   return html`
     <div class="px-4 divide-y">
       ${assertions.map((assertion, index) => {
-        let aResult = result ? result.assert_results[index] : undefined
+        let aResult = undefined
+        if (result && result.assert_results) {
+          aResult = result.assert_results[index]
+        }
         let error = aResult ? aResult.err?.advice : ''
         return html`
           <div class="border-b py-2">
