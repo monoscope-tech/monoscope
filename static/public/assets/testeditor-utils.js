@@ -316,3 +316,22 @@ function convertToTestkitAssertion(assertion) {
     }
   }
 }
+
+function replaceVariables(expression) {
+  // regex to match {{VALUE}}
+  const regex = /{{(.*?)}}/g
+  const matches = expression.match(regex)
+  const variables = window.testVariables || []
+  if (matches) {
+    for (const match of matches) {
+      const variable = match.replace('{{', '').replace('}}', '')
+      if (variables && Array.isArray(variables)) {
+        const variableValue = variables.find((v) => v.variableName === variable)
+        if (variableValue) {
+          expression = expression.replace(match, variableValue.variableValue)
+        }
+      }
+    }
+  }
+  return expression
+}

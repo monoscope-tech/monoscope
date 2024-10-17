@@ -454,6 +454,11 @@ variablesDialog pid colM = do
               ]
               do
                 faSprite_ "trash" "regular" "w-4 h-4 shrink-0"
+      let varsJson = decodeUtf8 $ encode $ V.toList vars
+      script_
+        [text|
+          window.testVariables  = $varsJson;
+      |]
     when (isNothing colM) $ do
       div_ [class_ "w-full pt-24 text-center"] do
         h4_ [class_ "text-lg font-medium"] "Save New Test Collection To Create Local Variables"

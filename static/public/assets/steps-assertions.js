@@ -108,11 +108,41 @@ function renderAssertionContent(assertion, index, updateAssertion) {
 }
 
 // Placeholder for assertion evaluation logic
-function evaluateAssertion(assertion, result) {
-  if (result && result.ok && result.ok === true) {
-    return true
+function evaluateAssertion(assertion, result, response) {
+  try {
+    if (response) {
+      if (assertion.type === 'statusCode') {
+        const operation = getOperationFromText(assertion.operation)
+        const expression = `${response.status} ${operation} ${assertion.value}`
+        return eval(expression)
+      }
+      if (assertion.type === 'header') {
+        const operation = getOperationFromText(assertion.operation)
+        const expression = `${response.headers[assertion.headerName]} ${operation} ${assertion.value}`
+        return eval(expression)
+      }
+      if (assertion.type === 'body') {
+        if (assertion.operation === 'jsonpath') {
+          const operation = getOperationFromText(assertion.subOperation)
+          return true
+        } else {
+          const operation = getOperationFromText(assertion.operation)
+          return eval(`${response.raw} ${operation} ${assertion.value}`)
+        }
+      }
+      if (assertion.type === 'responseTime') {
+        const operation = getOperationFromText(assertion.operation)
+        return eval(`${response.duration_ms} ${operation} ${assertion.value}`)
+      }
+    }
+
+    if (result && result.ok && result.ok === true) {
+      return true
+    }
+    return assertion.status === 'PASSED'
+  } catch (e) {
+    return false
   }
-  return assertion.status === 'PASSED'
 }
 
 // Main Render Function
@@ -130,6 +160,7 @@ export function renderAssertionBuilder({
         if (result && result.assert_results) {
           aResult = result.assert_results[index]
         }
+
         let error = aResult ? aResult.err?.advice : ''
         return html`
           <div class="border-b py-2">
@@ -151,7 +182,7 @@ export function renderAssertionBuilder({
               </div>
               <div class="flex-shrink-0 ">
                 <div class="flex gap-3 pt-2 items-center">
-                  ${evaluateAssertion(assertion, aResult) ? html`<span class="text-success ">PASSED</span>` : html`<span class="text-error">FAILED</span>`}
+                  ${evaluateAssertion(assertion, aResult, result ? result.resp : undefined) ? html`<span class="text-success ">PASSED</span>` : html`<span class="text-error">FAILED</span>`}
                   <a class="cursor-pointer text-slate-600" @click=${removeAssertion(index)}>${faSprite_('trash', 'regular', 'w-3 h-3')}</a>
                 </div>
               </div>

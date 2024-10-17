@@ -215,11 +215,22 @@ export class StepsEditor extends LitElement {
   sendStepRequest(e, idx) {
     e.preventDefault()
     this.isSendingRequest = true
-    makeRequestAndProcessResponse(this.collectionSteps[idx]).then((resp) => {
-      this.isSendingRequest = false
-      this.collectionResults[idx] = resp
-      this.requestUpdate()
-    })
+    makeRequestAndProcessResponse(this.collectionSteps[idx])
+      .then((resp) => {
+        this.isSendingRequest = false
+        const stepResult = this.collectionResults[idx]
+        if (stepResult) {
+          this.collectionResults[idx] = { ...stepResult, ...resp }
+        } else {
+          this.collectionResults[idx] = { ...resp }
+        }
+
+        this.requestUpdate()
+      })
+      .catch((err) => {
+        this.isSendingRequest = false
+        this.requestUpdate()
+      })
   }
 
   renderCollectionStep(stepData, idx, result, saveError) {
