@@ -118,7 +118,7 @@ function evaluateAssertion(assertion, result, response) {
       }
       if (assertion.type === 'header') {
         const operation = getOperationFromText(assertion.operation)
-        const expression = `${response.headers[assertion.headerName]} ${operation} ${assertion.value}`
+        const expression = `"${response.headers[assertion.headerName]}" ${operation} "${assertion.value}"`
         return eval(expression)
       }
       if (assertion.type === 'body') {
@@ -141,6 +141,7 @@ function evaluateAssertion(assertion, result, response) {
     }
     return assertion.status === 'PASSED'
   } catch (e) {
+    console.log(e)
     return false
   }
 }
