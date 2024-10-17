@@ -1,4 +1,4 @@
-module Pkg.THUtils (hashAssetFile, markdown) where
+module Pkg.THUtils (hashAssetFile, hashFile,  markdown) where
 
 import Data.ByteString.Lazy qualified as BL
 import Data.Digest.XXHash (xxHash)
@@ -18,6 +18,12 @@ hashAssetFile path = do
   content <- TH.runIO $ BL.readFile ("static" <> path)
   let hash = fromString $ showHex (xxHash content) ""
   [|$(TH.lift path) <> "?v=" <> $(TH.lift (T.unpack hash))|]
+
+hashFile :: FilePath -> TH.Q TH.Exp
+hashFile path = do
+  content <- TH.runIO $ BL.readFile ("static" <> path)
+  let hash = fromString $ showHex (xxHash content) ""
+  [|$(TH.lift (T.unpack hash))|]
 
 
 markdown :: Text -> TH.Q TH.Exp

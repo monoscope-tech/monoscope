@@ -70,6 +70,7 @@ import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Session
 import Network.URI (escapeURIString, isUnescapedInURI)
 import Numeric (showHex)
+import Pkg.THUtils (hashFile)
 import Relude hiding (notElem, show)
 import Servant
 import Text.Printf (printf)
@@ -112,7 +113,12 @@ instance ToField DBField where
 
 
 faSprite_ :: Text -> Text -> Text -> Html ()
-faSprite_ mIcon faType classes = svg_ [class_ $ "inline-block icon " <> classes] $ Svg.use_ [href_ $ "/public/assets/svgs/fa-sprites/" <> faType <> ".svg#" <> mIcon]
+faSprite_ mIcon faType classes = svg_ [class_ $ "inline-block icon " <> classes] $ Svg.use_ [href_ $ "/public/assets/svgs/fa-sprites/" <> faType <> ".svg?v=" <> fileHash <> "#" <> mIcon]
+  where
+    fileHash = case faType of
+      "regular" -> $(hashFile "/public/assets/svgs/fa-sprites/regular.svg")
+      "solid" -> $(hashFile "/public/assets/svgs/fa-sprites/solid.svg")
+      _ -> $(hashFile "/public/assets/svgs/fa-sprites/regular.svg")
 
 
 -- DO NOT USE. Copy the svg into static/public/assets/svgs/fa-sprites/regular.svg or solid.svg
@@ -147,27 +153,27 @@ userIsProjectMember sess pid = do
 
 
 getMethodColor :: Text -> Text
-getMethodColor "POST" = " badge badge-warning "
-getMethodColor "PUT" = " badge badge-info "
-getMethodColor "DELETE" = " badge badge-error "
-getMethodColor "PATCH" = " badge badge-info "
-getMethodColor "GET" = " badge badge-success "
-getMethodColor _ = " badge badge-outline "
+getMethodColor "POST" = " cbadge-sm badge-pink "
+getMethodColor "PUT" = " cbadge-sm badge-lime "
+getMethodColor "DELETE" = " cbadge-sm badge-error "
+getMethodColor "PATCH" = " cbadge-sm badge-cyan "
+getMethodColor "GET" = " cbadge-sm badge-blue"
+getMethodColor _ = " cbadge-sm badge-neutral"
 
 
 getStatusColor :: Int -> Text
 getStatusColor status
-  | status < 200 = "text-slate-600 bg-slate-50 border border-slate-200 "
-  | status >= 200 && status < 400 = "text-green-800 bg-green-50 border border-green-200"
-  | status >= 400 && status < 400 = "text-amber-800 bg-yellow-50 border border-yellow-200"
-  | otherwise = "text-red-800 bg-red-50 border border-red-200"
+  | status < 200 = "cbadge-sm badge-neutral"
+  | status >= 200 && status < 300 = "cbadge-sm badge-2xx"
+  | status >= 300 && status < 400 = "cbadge-sm badge-3xx"
+  | otherwise = "cbadge-sm badge-4xx"
 
 
 getGrpcStatusColor :: Int -> Text
 getGrpcStatusColor status
-  | status == 0 = "text-green-800 bg-green-50 border border-green-200" -- OK
-  | status >= 1 && status <= 16 = "text-red-800 bg-red-50 border border-red-200" -- Errors (1 to 16 are error codes)
-  | otherwise = "text-slate-500 bg-slate-800 border border-slate-200"
+  | status == 0 = "text-green-800 bg-green-50" -- OK
+  | status >= 1 && status <= 16 = "text-red-800 bg-red-50" -- Errors (1 to 16 are error codes)
+  | otherwise = "text-slate-500 bg-slate-800"
 
 
 getSeverityColor :: Text -> Text
@@ -254,7 +260,7 @@ getKindColor _ = "badge-outline"
 
 unwrapJsonPrimValue :: AE.Value -> Text
 unwrapJsonPrimValue (AE.Bool True) = "true"
-unwrapJsonPrimValue (AE.Bool False) = "true"
+unwrapJsonPrimValue (AE.Bool False) = "false"
 unwrapJsonPrimValue (AE.String v) = "\"" <> toText v <> "\""
 unwrapJsonPrimValue (AE.Number v) = toText @String $ show v
 unwrapJsonPrimValue AE.Null = "null"

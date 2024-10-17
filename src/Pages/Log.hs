@@ -90,8 +90,8 @@ apiLogH pid queryM cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM 
   let tableAsVecM = hush tableAsVecE
 
   freeTierExceeded <-
-    dbtToEff
-      $ if project.paymentPlan == "Free"
+    dbtToEff $
+      if project.paymentPlan == "Free"
         then do
           totalRequest <- RequestDumps.getLastSevenDaysTotalRequest pid
           return $ totalRequest > 5000
@@ -192,7 +192,7 @@ instance ToHtml LogsGet where
 logQueryBox_ :: Projects.ProjectId -> Maybe Text -> Text -> Maybe Text -> Html ()
 logQueryBox_ pid currentRange source targetSpan =
   form_
-    [ class_ "w-full text-sm flex gap-3 items-center justify-center"
+    [ class_ "w-full text-sm flex gap-2 items-stretch justify-center "
     , hxGet_ $ "/p/" <> pid.toText <> "/log_explorer"
     , hxPushUrl_ "true"
     , hxVals_ "js:{query:window.getQueryFromEditor(), since: getTimeRange().since, from: getTimeRange().from, to:getTimeRange().to, cols:params().cols, layout:'all', source: params().source}"
@@ -203,29 +203,31 @@ logQueryBox_ pid currentRange source targetSpan =
     , hxIndicator_ "#run-query-indicator"
     ]
     do
-      div_ [class_ "flex-1"] do
-        div_ [id_ "queryEditor", class_ "h-14 hidden overflow-hidden bg-gray-200"] pass
-        div_ [id_ "queryBuilder"] $ termRaw "filter-element" [id_ "filterElement"] ("" :: Text)
-      when (source == "spans") do
-        let target = fromMaybe "all-spans" targetSpan
-        div_ [class_ "gap-[2px] flex items-center"] do
-          span_ "In"
-          select_
-            [ class_ "ml-1 select select-sm select-bordered w-full max-w-[150px]"
-            , name_ "target-spans"
-            , id_ "spans-toggle"
-            , onchange_ "htmx.trigger('#log_explorer_form', 'submit')"
-            ]
-            do
-              option_ (value_ "all-spans" : ([selected_ "true" | target == "all-spans"])) "All spans"
-              option_ (value_ "root-spans" : ([selected_ "true" | target == "root-spans"])) "Trace Root Spans"
-              option_ (value_ "service-entry-spans" : ([selected_ "true" | target == "service-entry-spans"])) "Service Entry Spans"
-      button_
-        [type_ "submit", class_ "btn btn-sm btn-success"]
-        do
-          span_ [id_ "run-query-indicator", class_ "refresh-indicator htmx-indicator query-indicator loading loading-dots loading-md"] ""
-          faSprite_ "sparkles" "regular" "h-3 w-3 inline-block"
-          span_ "Search"
+      div_ [class_ "cursor-pointer relative bg-slate-100 rounded-xl border border-slate-200 inline-flex justify-center"] do
+        div_ [class_ "flex gap-2 justify-center items-center px-2"] $ "Saved queries" >> faSprite_ "chevron-down" "regular" "w-3 h-3"
+      div_ [class_ "p-1 pl-3 flex-1 flex gap-2 bg-slate-100 rounded-xl border border-slate-200 justify-between items-stretch"] do
+        div_ [id_ "queryEditor", class_ "h-14 hidden overflow-hidden bg-gray-200 flex-1 flex items-center"] pass
+        div_ [id_ "queryBuilder", class_ "flex-1 flex items-center"] $ termRaw "filter-element" [id_ "filterElement"] ("" :: Text)
+        when (source == "spans") do
+          let target = fromMaybe "all-spans" targetSpan
+          div_ [class_ "gap-[2px] flex items-center"] do
+            span_ "In"
+            select_
+              [ class_ "ml-1 select select-sm select-bordered w-full max-w-[150px]"
+              , name_ "target-spans"
+              , id_ "spans-toggle"
+              , onchange_ "htmx.trigger('#log_explorer_form', 'submit')"
+              ]
+              do
+                option_ (value_ "all-spans" : ([selected_ "true" | target == "all-spans"])) "All spans"
+                option_ (value_ "root-spans" : ([selected_ "true" | target == "root-spans"])) "Trace Root Spans"
+                option_ (value_ "service-entry-spans" : ([selected_ "true" | target == "service-entry-spans"])) "Service Entry Spans"
+        button_ [class_ "rounded-lg p-2 bg-slate-200 text-slate-500 inline-flex items-center"] $ faSprite_ "floppy-disk" "regular" "h-4 w-4"
+        button_
+          [type_ "submit", class_ "btn btn-sm bg-gradient-to-b from-[#067cff] to-[#0850c5] text-white"]
+          do
+            span_ [id_ "run-query-indicator", class_ "refresh-indicator htmx-indicator query-indicator loading loading-dots loading-md"] ""
+            faSprite_ "magnifying-glass" "regular" "h-3 w-3 inline-block"
 
 
 data ApiLogsPageData = ApiLogsPageData
@@ -251,7 +253,7 @@ data ApiLogsPageData = ApiLogsPageData
 
 apiLogsPage :: ApiLogsPageData -> Html ()
 apiLogsPage page = do
-  section_ [class_ "mx-auto pt-2 px-6 gap-2 w-full flex flex-col h-full overflow-hidden pb-12  group/pg", id_ "apiLogsPage"] do
+  section_ [class_ "mx-auto pt-2 px-6 gap-3.5 w-full flex flex-col h-full overflow-hidden pb-12  group/pg", id_ "apiLogsPage"] do
     when page.exceededFreeTier $ freeTierLimitExceededBanner page.pid.toText
     whenJust page.daysCountDown $ \daysCountDown -> do
       div_ [class_ "w-full py-1 mt-2 rounded text-green-600 text-center"] do
@@ -266,9 +268,9 @@ apiLogsPage page = do
       ]
       do
         div_ [class_ "relative ml-auto w-full", style_ ""] do
-          div_ [class_ "flex justify-end  w-full p-4 "]
-            $ button_ [[__|on click add .hidden to #expand-log-modal|]]
-            $ faSprite_ "xmark" "regular" "h-8"
+          div_ [class_ "flex justify-end  w-full p-4 "] $
+            button_ [[__|on click add .hidden to #expand-log-modal|]] $
+              faSprite_ "xmark" "regular" "h-8"
           form_
             [ hxPost_ $ "/p/" <> page.pid.toText <> "/share/"
             , hxSwap_ "innerHTML"
@@ -297,7 +299,7 @@ apiLogsPage page = do
        return {since: params().since, from: params().from, to: params().to}
     }
       |]
-    div_ do
+    div_ [class_ ""] do
       logQueryBox_ page.pid page.currentRange page.source page.targetSpans
       div_ [class_ "flex items-center  gap-2 text-sm"] do
         div_ [class_ "py-1 flex flex-row justify-end"] do
@@ -305,54 +307,91 @@ apiLogsPage page = do
             input_ [type_ "checkbox", class_ "checkbox checkbox-xs rounded toggle-chart"]
             small_ "charts"
         span_ [class_ "text-slate-300"] "|"
-        div_ [class_ "form-control w-max"]
-          $ label_ [class_ "label flex items-center cursor-pointer w-max space-x-2"] do
+        div_ [class_ "form-control w-max"] $
+          label_ [class_ "label flex items-center cursor-pointer w-max space-x-2"] do
             input_ [type_ "checkbox", class_ "checkbox checkbox-xs rounded", id_ "toggleQueryEditor", onclick_ "toggleQueryBuilder()"]
             small_ "query editor"
 
-    div_ [class_ "card-round w-full  divide-y flex flex-col text-sm overflow-hidden pt-2"] do
-      div_ [class_ ""] do
-        div_ [class_ "flex flex-row gap-0 mb-2"] do
-          let chartAspectRatio "logs" = "aspect-[12/1]"
-              chartAspectRatio _ = "aspect-[5/1]"
+      div_ [class_ "flex flex-row gap-4 mt-3"] do
+        let chartAspectRatio "logs" = "aspect-[12/1]"
+            chartAspectRatio _ = "aspect-[3/1]"
 
-          div_ [class_ "flex-1 space-y-2"] do
-            div_ [class_ "pl-5 text-sm text-gray-500"] do
-              if page.source == "logs" then "Log Lines " else "Requests "
-              small_ [] $ toHtml @Text $ "(" <> fmt (commaizeF page.resultCount) <> " total)"
-            div_
-              [ id_ "reqsChartsECP"
-              , class_ $ "log-chart px-5 group-has-[.toggle-chart:checked]/pg:hidden " <> (chartAspectRatio page.source)
-              , hxGet_ $ "/charts_html?id=reqsChartsEC&show_legend=false&pid=" <> page.pid.toText
-              , hxTrigger_ "intersect,  htmx:beforeRequest from:#log_explorer_form"
-              , hxVals_ "js:{query_raw:window.getQueryFromEditor(), since: getTimeRange().since, from: getTimeRange().from, to:getTimeRange().to, cols:params().cols, layout:'all', source: params().source}"
-              , hxSwap_ "innerHTML"
-              ]
-              ""
-          unless (page.source == "logs") $ div_ [class_ "flex-1 space-y-2"] do
-            div_ [class_ "pl-5 text-sm text-gray-500"] "Errors"
-            div_
-              [ id_ "reqsChartsErrP"
-              , class_ $ "log-chart px-5 group-has-[.toggle-chart:checked]/pg:hidden " <> (chartAspectRatio page.source)
-              , term "data-source" page.source
-              , hxGet_ $ "/charts_html?id=reqsChartsErr&theme=roma&show_legend=false&pid=" <> page.pid.toText
-              , hxTrigger_ "intersect"
-              , hxVals_ "js:{query_raw:window.getQueryFromEditor('errors'), since: getTimeRange().since, from: getTimeRange().from, to:getTimeRange().to, cols:params().cols, layout:'all', source: params().source}"
-              , hxSwap_ "innerHTML"
-              ]
-              ""
-          unless (page.source == "logs") $ div_ [class_ "flex-1 space-y-2"] do
-            div_ [class_ "pl-5 text-sm text-gray-500"] "Latency"
-            div_
-              [ id_ "reqsChartsLatP"
-              , class_ $ "log-chart px-5 group-has-[.toggle-chart:checked]/pg:hidden " <> (chartAspectRatio page.source)
-              , hxGet_ $ "/charts_html?id=reqsChartsLat&chart_type=LineCT&group_by=GBDurationPercentile&show_legend=false&pid=" <> page.pid.toText
-              , hxTrigger_ "intersect, htmx:beforeRequest from:#log_explorer_form"
-              , hxVals_ "js:{query_raw:window.getQueryFromEditor('latency'), since: getTimeRange().since, from: getTimeRange().from, to:getTimeRange().to, cols:params().cols, layout:'all', source: params().source}"
-              , hxSwap_ "innerHTML"
-              ]
-              ""
-      resultTableAndMeta_ page
+        div_ [class_ "flex-1 space-y-1.5"] do
+          div_ [class_ "leading-none text-sm flex justify-between items-center"] do
+            div_ [class_ "gap-2 flex items-center"] do
+              if page.source == "logs" then "Log Lines " else "All Requests "
+              span_ [class_ "leading-tight font-semibold text-slate-500 bg-slate-200 rounded-3xl  px-2 py-0.5 text-xs"] $ toHtml @Text $ fmt (commaizeF page.resultCount)
+              span_ [class_ "text-xs text-slate-800 hidden"] "5/secs"
+            label_ [class_ "rounded-full border border-slate-300 p-2 inline-flex cursor-pointer"] $ faSprite_ "up-right-and-down-left-from-center" "regular" "w-3 h-3"
+          div_
+            [ id_ "reqsChartsECP"
+            , class_ $ "rounded-2xl border border-slate-200 log-chart p-3  group-has-[.toggle-chart:checked]/pg:hidden " <> (chartAspectRatio page.source)
+            , hxGet_ $ "/charts_html?id=reqsChartsEC&show_legend=false&pid=" <> page.pid.toText
+            , hxTrigger_ "intersect,  htmx:beforeRequest from:#log_explorer_form"
+            , hxVals_ "js:{query_raw:window.getQueryFromEditor(), since: getTimeRange().since, from: getTimeRange().from, to:getTimeRange().to, cols:params().cols, layout:'all', source: params().source}"
+            , hxSwap_ "innerHTML"
+            ]
+            ""
+        unless (page.source == "logs") $ div_ [class_ "flex-1 space-y-1.5"] do
+          div_ [class_ "leading-none text-sm flex justify-between items-center"] do
+            "Errors"
+            label_ [class_ "rounded-full border border-slate-300 p-2 inline-flex cursor-pointer"] $ faSprite_ "up-right-and-down-left-from-center" "regular" "w-3 h-3"
+          div_
+            [ id_ "reqsChartsErrP"
+            , class_ $ "rounded-2xl border border-slate-200 log-chart p-3 group-has-[.toggle-chart:checked]/pg:hidden " <> (chartAspectRatio page.source)
+            , term "data-source" page.source
+            , hxGet_ $ "/charts_html?id=reqsChartsErr&theme=roma&show_legend=false&pid=" <> page.pid.toText
+            , hxTrigger_ "intersect"
+            , hxVals_ "js:{query_raw:window.getQueryFromEditor('errors'), since: getTimeRange().since, from: getTimeRange().from, to:getTimeRange().to, cols:params().cols, layout:'all', source: params().source}"
+            , hxSwap_ "innerHTML"
+            ]
+            ""
+        unless (page.source == "logs") $ div_ [class_ "flex-1 space-y-1.5"] do
+          div_ [class_ "leading-none text-sm flex justify-between items-center"] do
+            "Latency"
+            label_ [class_ "rounded-full border border-slate-300 p-2 inline-flex cursor-pointer"] $ faSprite_ "up-right-and-down-left-from-center" "regular" "w-3 h-3"
+          div_
+            [ id_ "reqsChartsLatP"
+            , class_ $ "rounded-2xl border border-slate-200 log-chart p-3 group-has-[.toggle-chart:checked]/pg:hidden " <> (chartAspectRatio page.source)
+            , hxGet_ $ "/charts_html?id=reqsChartsLat&chart_type=LineCT&group_by=GBDurationPercentile&show_legend=false&pid=" <> page.pid.toText
+            , hxTrigger_ "intersect, htmx:beforeRequest from:#log_explorer_form"
+            , hxVals_ "js:{query_raw:window.getQueryFromEditor('latency'), since: getTimeRange().since, from: getTimeRange().from, to:getTimeRange().to, cols:params().cols, layout:'all', source: params().source}"
+            , hxSwap_ "innerHTML"
+            ]
+            ""
+
+    div_ [class_ "flex gap-3.5 overflow-hidden"] do
+      div_ [class_ "card-round w-1/5 shrink-0 flex flex-col gap-2 p-2 text-sm group-has-[.toggle-filters:checked]/pg:hidden "] do
+        input_ [placeholder_ "Search filter", class_ "rounded-2xl bg-slate-50 px-4 py-2 border border-slate-300 "]
+        div_ [class_ "divide-y gap-3"] do
+          div_ [class_ "flex flex-col gap-1.5 py-3"] do
+            div_ [class_ "flex justify-between items-center text-slate-950 pb-2"] $ span_ "Status" >> faSprite_ "chevron-down" "regular" "w-3 h-3"
+            div_ [class_ "flex justify-between items-center"] do
+              div_ [class_ "flex gap-1.5 items-center text-slate-950"] $ input_ [type_ "checkbox", class_ "checkbox "] >> span_ [class_ "bg-green-500 shrink-0 w-1 h-5 rounded"] " " >> span_ [] "200"
+              span_ "121231"
+            div_ [class_ "flex justify-between items-center"] do
+              div_ [class_ "flex gap-1.5 items-center  text-slate-950"] $ input_ [type_ "checkbox", class_ "checkbox "] >> span_ [class_ "bg-red-600 shrink-0 w-1 h-5 rounded"] " " >> span_ [] "200"
+              span_ "121231"
+          div_ [class_ "flex flex-col gap-1.5 py-3"] do
+            div_ [class_ "flex justify-between items-center text-slate-950 pb-2"] $ span_ "Status" >> faSprite_ "chevron-down" "regular" "w-3 h-3"
+            div_ [class_ "flex justify-between"] do
+              div_ [class_ "flex gap-1.5 items-center  text-slate-950"] $ input_ [type_ "checkbox", class_ "checkbox "] >> span_ [class_ "bg-[#067cff] shrink-0 w-1 h-5 rounded"] " " >> span_ [] "200"
+              span_ "121231"
+            div_ [class_ "flex justify-between"] do
+              div_ [class_ "flex gap-1.5 items-center  text-slate-950"] $ input_ [type_ "checkbox", class_ "checkbox "] >> span_ [class_ "text-green-500 shrink-0 w-1 h-5 rounded"] " " >> span_ [] "200"
+              span_ "121231"
+
+      div_ [class_ "grow flex-1 space-y-3 overflow-hidden"] do
+        div_ [class_ "flex gap-2 text-sm pt-1"] do
+          label_ [class_ "gap-1 flex items-center cursor-pointer"] do
+            faSprite_ "side-chevron-left-in-box" "regular" "w-4 h-4"
+            span_ [class_ "hidden group-has-[.toggle-filters:checked]/pg:block"] "Show"
+            span_ [class_ "group-has-[.toggle-filters:checked]/pg:hidden"] "Hide"
+            "filters"
+            input_ [type_ "checkbox", class_ "toggle-filters hidden", checked_]
+          span_ [class_ "text-slate-200"] "|"
+          div_ [class_ ""] $ span_ [class_ "text-slate-950"] (toHtml @Text $ fmt $ commaizeF page.resultCount) >> span_ " spans found"
+        div_ [class_ "card-round divide-y flex flex-col h-full overflow-hidden"] $ resultTableAndMeta_ page
   jsonTreeAuxillaryCode page.pid
   -- drawerWithURLContent_ : Used when you expand a log item
   -- using the drawer as a global is a workaround since to separate the logs scope from other content and improve scroll performance.
@@ -363,13 +402,13 @@ apiLogsPage page = do
 
 resultTableAndMeta_ :: ApiLogsPageData -> Html ()
 resultTableAndMeta_ page =
-  div_ [class_ "relative overflow-y-scroll overflow-x-hidden h-full w-full"]
-    $ resultTable_ page True
+  div_ [class_ "relative overflow-y-scroll overflow-x-hidden h-full w-full"] $
+    resultTable_ page True
 
 
 resultTable_ :: ApiLogsPageData -> Bool -> Html ()
 resultTable_ page mainLog = table_
-  [ class_ "w-full table table-xs table-pin-rows table-pin-cols overflow-x-hidden [contain:strict] [content-visibility:auto]"
+  [ class_ "w-full text-sm table-auto ctable table-pin-rows table-pin-cols overflow-x-hidden [contain:strict] [content-visibility:auto]"
   , style_ "height:1px; --rounded-box:0"
   , id_ "resultTable"
   , term "data-source" page.source
@@ -396,7 +435,7 @@ resultTable_ page mainLog = table_
                 a_ [href_ $ "/p/" <> page.pid.toText <> "/integration_guides", class_ "w-max btn btn-indigo -ml-1 text-md"] "Read the setup guide"
           else section_ [class_ "w-max mx-auto"] $ p_ "This request has no outgoing requests yet."
     unless (null page.requestVecs) do
-      thead_ $ tr_ [class_ "divide-x b--b2"] $ forM_ page.cols $ logTableHeading_ page.pid isLogEventB
+      thead_ $ tr_ [class_ "text-slate-500"] $ forM_ page.cols $ logTableHeading_ page.pid isLogEventB
       tbody_ [id_ "w-full log-item-table-body [content-visibility:auto]"] $ logItemRows_ page.pid page.requestVecs page.cols page.colIdxMap page.nextLogsURL page.source page.childSpans
 
 
@@ -439,24 +478,23 @@ logItemRows_ pid requests curatedCols colIdxMap nextLogsURL source chSpns = do
   forM_ requests \reqVec -> do
     let (logItemPath, _reqId) = fromMaybe ("", "") $ requestDumpLogItemUrlPath pid reqVec colIdxMap
     let (_, errCount, errClass) = errorClass True reqVec colIdxMap
-    tr_ [class_ "cursor-pointer divide-x b--b2", [__|on click toggle .hidden on next <tr/> then toggle .expanded-log on me|]]
-      $ forM_ curatedCols \c -> td_ [] do
-        logItemCol_ source pid reqVec colIdxMap c chSpns
+    tr_ [class_ "cursor-pointer overflow-hidden", [__|on click toggle .hidden on next <tr/> then toggle .expanded-log on me|]] $
+      forM_ curatedCols \c -> td_ [class_ "px-2"] $ logItemCol_ source pid reqVec colIdxMap c chSpns
     tr_ [class_ "hidden"] do
       -- used for when a row is expanded.
-      td_ $ a_ [class_ $ "inline-block h-full " <> errClass, term "data-tippy-content" $ show errCount <> " errors attached to this request"] ""
+      td_ [class_ "pl-4"] $ a_ [class_ $ "inline-block h-full " <> errClass, term "data-tippy-content" $ show errCount <> " errors attached to this request"] ""
       td_ [colspan_ $ show $ length curatedCols - 1] $ div_ [hxGet_ $ logItemPath <> "?source=" <> source, hxTrigger_ "intersect once", hxSwap_ "outerHTML"] $ span_ [class_ "loading loading-dots loading-md"] ""
-  when (Vector.length requests > 199)
-    $ tr_
-    $ td_ [colspan_ $ show $ length curatedCols]
-    $ a_
-      [ class_ "cursor-pointer inline-flex justify-center py-1 px-56 ml-36 blue-800 bg-blue-100 hover:bg-blue-200 gap-3 items-center"
-      , hxTrigger_ "click, intersect once"
-      , hxSwap_ "outerHTML"
-      , hxGet_ nextLogsURL
-      , hxTarget_ "closest tr"
-      ]
-      (span_ [class_ "inline-block"] "LOAD MORE " >> span_ [class_ "loading loading-dots loading-sm inline-block pl-3"] "")
+  when (Vector.length requests > 199) $
+    tr_ $
+      td_ [colspan_ $ show $ length curatedCols] $
+        a_
+          [ class_ "cursor-pointer inline-flex justify-center py-1 px-56 ml-36 blue-800 bg-blue-100 hover:bg-blue-200 gap-3 items-center"
+          , hxTrigger_ "click, intersect once"
+          , hxSwap_ "outerHTML"
+          , hxGet_ nextLogsURL
+          , hxTarget_ "closest tr"
+          ]
+          (span_ [class_ "inline-block"] "LOAD MORE " >> span_ [class_ "loading loading-dots loading-sm inline-block pl-3"] "")
 
 
 errorClass :: Bool -> V.Vector Value -> HM.HashMap Text Int -> (Int, Int, Text)
@@ -468,7 +506,7 @@ errorClass expandedSection reqVec colIdxMap =
           | errCount > 0 -> " w-1 bg-red-500 "
           | status >= 400 -> " w-1 bg-warning "
           | expandedSection -> " w-1 bg-blue-200 "
-          | otherwise -> " w-1 bg-transparent status-indicator "
+          | otherwise -> " w-1 bg-blue-200 status-indicator "
    in ( status
       , errCount
       , errClass
@@ -489,98 +527,107 @@ barSeverityClass reqVec colIdxMap =
 
 
 logTableHeading_ :: Projects.ProjectId -> Bool -> Text -> Html ()
-logTableHeading_ pid True "id" = logTableHeadingWrapper_ pid "_" $ toHtml @Text ""
+logTableHeading_ pid True "id" = td_ [class_ "p-0 m-0 whitespace-nowrap w-3"]  ""
 logTableHeading_ pid True "status_code" = logTableHeadingWrapper_ pid "status_code" $ toHtml @Text "status"
-logTableHeading_ pid True "created_at" = logTableHeadingWrapper_ pid "created_at" $ toHtml @Text "timestamp (UTC)"
-logTableHeading_ pid True "timestamp" = logTableHeadingWrapper_ pid "timestamp" $ toHtml @Text "timestamp (UTC)"
+logTableHeading_ pid True "created_at" = logTableHeadingWrapper_ pid "created_at" $ toHtml @Text "timestamp" >> small_ " (UTC)"
+logTableHeading_ pid True "timestamp" = logTableHeadingWrapper_ pid "timestamp" $ toHtml @Text "timestamp" >> small_ " (UTC)"
 logTableHeading_ pid True "rest" = logTableHeadingWrapper_ pid "rest" $ toHtml @Text "summary"
 logTableHeading_ pid isLogEventB col = logTableHeadingWrapper_ pid col $ toHtml $ Unsafe.last $ T.splitOn "•" col
 
 
 logTableHeadingWrapper_ :: Projects.ProjectId -> Text -> Html () -> Html ()
 logTableHeadingWrapper_ pid title child = td_
-  [ class_ $ "bg-base-200 cursor-pointer p-0 m-0 " <> if title == "_" then "w-3" else ""
+  [ class_ $ "cursor-pointer p-0 m-0 whitespace-nowrap"
   ]
-  $ div_
-    [class_ "dropdown", term "data-tippy-content" title]
-    do
-      div_ [tabindex_ "0", role_ "button", class_ "py-1 px-3 block"] child
-      ul_ [tabindex_ "0", class_ "dropdown-content z-[1] menu p-2 shadow bg-base-100 rounded-box min-w-[15rem]"] do
-        li_ [class_ "underline underline-offset-2"] $ toHtml title
-        li_
-          $ a_
-            [ hxGet_ $ "/p/" <> pid.toText <> "/log_explorer"
-            , hxPushUrl_ "true"
-            , hxVals_ $ "js:{query:params().query,cols:removeNamedColumnToSummary('" <> title <> "'),layout:'resultTable'}"
-            , hxTarget_ "#resultTable"
-            , hxSwap_ "outerHTML"
-            ]
-            "Hide column"
+  do
+    span_ [class_ "text-slate-200"] "|"
+    div_
+      [class_ "dropdown", term "data-tippy-content" title]
+      do
+        div_ [tabindex_ "0", role_ "button", class_ "py-2"] do
+          child
+          span_ [class_ "ml-1 p-0.5 border border-slate-200 rounded inline-flex"] $ faSprite_ "chevron-down" "regular" "w-3 h-3"
+        ul_ [tabindex_ "0", class_ "dropdown-content z-[1] menu p-2 shadow bg-slate-50 rounded-box min-w-[15rem]"] do
+          li_ [class_ "underline underline-offset-2"] $ toHtml title
+          li_ $
+            a_
+              [ hxGet_ $ "/p/" <> pid.toText <> "/log_explorer"
+              , hxPushUrl_ "true"
+              , hxVals_ $ "js:{query:params().query,cols:removeNamedColumnToSummary('" <> title <> "'),layout:'resultTable'}"
+              , hxTarget_ "#resultTable"
+              , hxSwap_ "outerHTML"
+              ]
+              "Hide column"
 
 
 isLogEvent :: [Text] -> Bool
 isLogEvent cols = all @[] (`elem` cols) ["id", "created_at"] || all @[] (`elem` cols) ["id", "timestamp"]
 
 
+-- Helper functions
+renderBadge :: Text -> Text -> Text -> Html ()
+renderBadge className content tip = span_ [class_ className, term "data-tippy-content" tip] $ toHtml content
+
+renderLogBadge :: Text -> V.Vector Value -> HM.HashMap Text Int -> Text -> Html ()
+renderLogBadge key reqVec colIdxMap className = renderBadge (className <> " cbadge ") (fromMaybe "" $ lookupVecTextByKey reqVec colIdxMap key) key
+
+renderMethod :: V.Vector Value -> HM.HashMap Text Int -> Html ()
+renderMethod reqVec colIdxMap = 
+  let method = fromMaybe "/" $ lookupVecTextByKey reqVec colIdxMap "method"
+  in renderBadge ("min-w-[4rem] cbadge " <> maybe "badge-ghost" getMethodColor (lookupVecTextByKey reqVec colIdxMap "method")) method "method"
+
+renderTimestamp :: Text -> V.Vector Value -> HM.HashMap Text Int -> Html ()
+renderTimestamp key reqVec colIdxMap =
+  renderBadge "monospace whitespace-nowrap" (displayTimestamp $ fromMaybe "" $ lookupVecTextByKey reqVec colIdxMap key) "timestamp"
+
+renderStatusCode :: V.Vector Value -> HM.HashMap Text Int -> Html ()
+renderStatusCode reqVec colIdxMap =
+  renderBadge (getStatusColor $ lookupVecIntByKey reqVec colIdxMap "status_code") (show @Text $ lookupVecIntByKey reqVec colIdxMap "status_code") "status"
+
+renderIconWithTippy :: Text -> Text -> Html () -> Html ()
+renderIconWithTippy iconClass tip content = 
+  a_ [class_ $ "shrink-0 inline-flex " <> iconClass, term "data-tippy-content" tip] content
+
+-- Main function
 logItemCol_ :: Text -> Projects.ProjectId -> V.Vector Value -> HM.HashMap Text Int -> Text -> V.Vector Telemetry.SpanRecord -> Html ()
 logItemCol_ source pid reqVec colIdxMap "id" chSpns = do
   let (status, errCount, errClass) = errorClass False reqVec colIdxMap
   let severityClass = barSeverityClass reqVec colIdxMap
-  let (logItemPath, _reqId) = fromMaybe ("", "") $ requestDumpLogItemUrlPath pid reqVec colIdxMap
+  let (logItemPath, _) = fromMaybe ("", "") $ requestDumpLogItemUrlPath pid reqVec colIdxMap
   let logItemPathDetailed = logItemPath <> "/detailed?source=" <> source
-  div_ [class_ "grid grid-cols-4 items-center max-w-12 min-w-9"] do
-    a_ [class_ $ "col-span-1 shrink-0 inline-block h-full w-1 " <> if source == "logs" then severityClass else errClass, term "data-tippy-content" $ show errCount <> " errors attached to this request; status " <> show status] " "
-    label_
-      [ class_ "col-span-2 cursor-pointer"
-      , Lucid.for_ "global-data-drawer"
-      , term "_"
-          $ [text|on mousedown or click fetch $logItemPathDetailed
-                  then set #global-data-drawer-content.innerHTML to #loader-tmp.innerHTML
-                  then set #global-data-drawer-content.innerHTML to it
-                  then htmx.process(#global-data-drawer-content) then _hyperscript.processNode(#global-data-drawer-content) then window.evalScriptsFromContent(#global-data-drawer-content)|]
-      ]
-      $ faSprite_ "link" "solid" "h-2 text-blue-500"
+  div_ [class_ "grid grid-cols-3 items-center max-w-12 min-w-10"] do
+    span_ [class_ "col-span-1 h-5 rounded flex"] $ renderIconWithTippy (if source == "logs" then severityClass else errClass) (show errCount <> " errors attached; status " <> show status) " "
     faSprite_ "chevron-right" "solid" "h-3 col-span-1 text-gray-500 chevron log-chevron "
-logItemCol_ _ _ reqVec colIdxMap "created_at" _ = span_ [class_ "monospace whitespace-nowrap ", term "data-tippy-content" "timestamp"] $ toHtml $ displayTimestamp $ fromMaybe "" $ lookupVecTextByKey reqVec colIdxMap "created_at"
-logItemCol_ _ _ reqVec colIdxMap "timestamp" _ = span_ [class_ "monospace whitespace-nowrap w-max ", term "data-tippy-content" "timestamp"] $ toHtml $ displayTimestamp $ fromMaybe "" $ lookupVecTextByKey reqVec colIdxMap "timestamp"
-logItemCol_ _ _ reqVec colIdxMap "status_code" _ = span_ [class_ $ "badge badge-sm ph-` " <> getStatusColor (lookupVecIntByKey reqVec colIdxMap "status_code"), term "data-tippy-content" "status"] $ toHtml $ show @Text $ lookupVecIntByKey reqVec colIdxMap "status_code"
-logItemCol_ _ _ reqVec colIdxMap "method" _ = span_ [class_ $ "min-w-[4rem] badge badge-sm  " <> maybe "badge-ghost" getMethodColor (lookupVecTextByKey reqVec colIdxMap "method"), term "data-tippy-content" "method"] $ toHtml $ fromMaybe "/" $ lookupVecTextByKey reqVec colIdxMap "method"
-logItemCol_ _ _ reqVec colIdxMap "severity_text" _ = span_ [class_ $ "badge badge-sm " <> getSeverityColor (T.toLower $ fromMaybe "" $ lookupVecTextByKey reqVec colIdxMap "severity_text")] $ toHtml $ fromMaybe "" $ lookupVecTextByKey reqVec colIdxMap "severity_text"
-logItemCol_ _ _ reqVec colIdxMap "duration" _ = span_ [class_ "badge badge-sm badge-ghost whitespace-nowrap", term "data-tippy-content" "duration"] $ toHtml $ show (lookupVecIntByKey reqVec colIdxMap "duration") <> " ms"
-logItemCol_ _ _ reqVec colIdxMap "span_name" _ = span_ [class_ "badge badge-sm badge-ghost whitespace-nowrap", term "data-tippy-content" "span name"] $ toHtml $ fromMaybe "" $ lookupVecTextByKey reqVec colIdxMap "span_name"
-logItemCol_ _ _ reqVec colIdxMap "service" _ = span_ [class_ "badge badge-sm badge-ghost whitespace-nowrap", term "data-tippy-content" "service name"] $ toHtml $ fromMaybe "" $ lookupVecTextByKey reqVec colIdxMap "service"
+logItemCol_ _ _ reqVec colIdxMap "created_at" _ = renderTimestamp "created_at" reqVec colIdxMap
+logItemCol_ _ _ reqVec colIdxMap "timestamp" _ = renderTimestamp "timestamp" reqVec colIdxMap
+logItemCol_ _ _ reqVec colIdxMap "status_code" _ = renderStatusCode reqVec colIdxMap
+logItemCol_ _ _ reqVec colIdxMap "method" _ = renderMethod reqVec colIdxMap
+logItemCol_ _ _ reqVec colIdxMap "severity_text" _ = renderLogBadge "severity_text" reqVec colIdxMap (getSeverityColor $ T.toLower $ fromMaybe "" $ lookupVecTextByKey reqVec colIdxMap "severity_text")
+logItemCol_ _ _ reqVec colIdxMap "duration" _ = renderBadge "cbadge-sm badge-neutral" (show (lookupVecIntByKey reqVec colIdxMap "duration") <> " ms") "duration"
+logItemCol_ _ _ reqVec colIdxMap "span_name" _ = renderLogBadge "span_name" reqVec colIdxMap "cbadge-sm badge-neutral"
+logItemCol_ _ _ reqVec colIdxMap "service" _ = renderLogBadge "service" reqVec colIdxMap "cbadge-sm badge-neutral"
 logItemCol_ _ pid reqVec colIdxMap "latency_breakdown" childSpans = do
   let spanId = lookupVecTextByKey reqVec colIdxMap "latency_breakdown"
   Spans.spanLatencyBreakdown $ V.filter (\s -> s.parentSpanId == spanId) childSpans
-logItemCol_ _ _ reqVec colIdxMap "body" _ = span_ [class_ "space-x-2 whitespace-nowrap"] $ toHtml $ fromMaybe "" $ lookupVecTextByKey reqVec colIdxMap "body"
-logItemCol_ _ _ reqVec colIdxMap "kind" _ = do
-  let kind = fromMaybe "" $ lookupVecTextByKey reqVec colIdxMap "kind"
-  span_ [class_ $ "badge badge-sm min-w-[4.5rem] " <> getKindColor kind, term "data-tippy-content" "span kind"] $ toHtml kind
-logItemCol_ _ _ reqVec colIdxMap "status" _ = do
-  let sts = fromMaybe "" $ lookupVecTextByKey reqVec colIdxMap "status"
-  span_ [class_ $ "badge badge-sm min-w-[4rem] " <> getSpanStatusColor sts, term "data-tippy-content" "status"] $ toHtml sts
-logItemCol_ source pid reqVec colIdxMap key@"rest" _ = div_ [class_ "space-x-2 whitespace-nowrap max-w-8xl overflow-x-hidden "] do
+logItemCol_ _ _ reqVec colIdxMap "body" _ = renderLogBadge "body" reqVec colIdxMap "space-x-2 whitespace-nowrap"
+logItemCol_ _ _ reqVec colIdxMap "kind" _ = renderLogBadge "kind" reqVec colIdxMap (getKindColor $ fromMaybe "" $ lookupVecTextByKey reqVec colIdxMap "kind")
+logItemCol_ _ _ reqVec colIdxMap "status" _ = renderLogBadge "status" reqVec colIdxMap (getSpanStatusColor $ fromMaybe "" $ lookupVecTextByKey reqVec colIdxMap "status")
+logItemCol_ source pid reqVec colIdxMap "rest" _ = div_ [class_ "space-x-2 whitespace-nowrap max-w-8xl overflow-hidden "] do
+  let key = "rest"
   case source of
-    "logs" -> do
-      mapM_ (\v -> logItemCol_ source pid reqVec colIdxMap v []) ["severity_text", "body"]
-      span_ [] $ toHtml $ fromMaybe "" $ lookupVecTextByKey reqVec colIdxMap key
-    "spans" -> do
-      mapM_ (\v -> logItemCol_ source pid reqVec colIdxMap v []) ["status", "kind", "duration", "span_name"]
-      span_ [] $ toHtml $ maybe "" unwrapJsonPrimValue (lookupVecByKey reqVec colIdxMap key)
+    "logs" -> mapM_ (\v -> logItemCol_ source pid reqVec colIdxMap v []) ["severity_text", "body"]
+    "spans" -> mapM_ (\v -> logItemCol_ source pid reqVec colIdxMap v []) ["status", "kind", "duration", "span_name"]
     _ -> do
       if lookupVecTextByKey reqVec colIdxMap "request_type" == Just "Incoming"
-        then span_ [class_ "text-center w-3 inline-flex ", term "data-tippy-content" "Incoming Request"] $ faSprite_ "arrow-down-left" "solid" "h-2 text-gray-400"
-        else span_ [class_ "text-center w-3 inline-flex ", term "data-tippy-content" "Outgoing Request"] $ faSprite_ "arrow-up-right" "solid" "h-2 text-red-800"
+        then renderIconWithTippy "text-gray-400 rounded-full p-1 cbadge-sm badge-neutral" "Incoming Request" (faSprite_ "arrow-down-left" "solid" "h-3")
+        else renderIconWithTippy "text-red-800 rounded-full p-1 cbadge-sm badge-neutral" "Outgoing Request" (faSprite_ "arrow-up-right" "solid" "h-3")
       logItemCol_ source pid reqVec colIdxMap "status_code" []
       logItemCol_ source pid reqVec colIdxMap "method" []
-      span_ [class_ "badge badge-sm badge-ghost ", term "data-tippy-content" "URL Path"] $ toHtml $ fromMaybe "" $ lookupVecTextByKey reqVec colIdxMap "url_path"
+      renderLogBadge "url_path" reqVec colIdxMap "cbadge-sm badge-neutral"
       logItemCol_ source pid reqVec colIdxMap "duration" []
-      span_ [class_ "badge badge-sm badge-ghost ", term "data-tippy-content" "Host"] $ toHtml $ fromMaybe "" $ lookupVecTextByKey reqVec colIdxMap "host"
-      span_ [] $ toHtml $ maybe "" unwrapJsonPrimValue (lookupVecByKey reqVec colIdxMap key)
-logItemCol_ _ _ reqVec colIdxMap key _ =
-  div_ [class_ "xwhitespace-nowrap overflow-x-hidden max-w-lg ", term "data-tippy-content" key]
-    $ toHtml
-    $ maybe "" unwrapJsonPrimValue (lookupVecByKey reqVec colIdxMap key)
+      renderLogBadge "host" reqVec colIdxMap "cbadge-sm badge-neutral"
+      toHtml $ maybe "" unwrapJsonPrimValue (lookupVecByKey reqVec colIdxMap key)
+logItemCol_ _ _ reqVec colIdxMap key _ = renderBadge "space-nowrap overflow-x-hidden max-w-lg" (maybe "" unwrapJsonPrimValue (lookupVecByKey reqVec colIdxMap key)) key
 
 
 requestDumpLogItemUrlPath :: Projects.ProjectId -> V.Vector Value -> HM.HashMap Text Int -> Maybe (Text, Text)
@@ -594,7 +641,7 @@ requestDumpLogItemUrlPath pid rd colIdxMap = do
 jsonTreeAuxillaryCode :: Projects.ProjectId -> Html ()
 jsonTreeAuxillaryCode pid = do
   template_ [id_ "log-item-context-menu-tmpl"] do
-    div_ [id_ "log-item-context-menu", class_ "log-item-context-menu text-sm origin-top-right absolute left-0 mt-2 w-56 rounded-md shadow-md shadow-slate-300 bg-base-100 ring-1 ring-black ring-opacity-5 divide-y divide-gray-100 focus:outline-none z-10", role_ "menu", tabindex_ "-1"] do
+    div_ [id_ "log-item-context-menu", class_ "log-item-context-menu text-sm origin-top-right absolute left-0 mt-2 w-56 rounded-md shadow-md shadow-slate-300 bg-slate-50 ring-1 ring-black ring-opacity-5 divide-y divide-gray-100 focus:outline-none z-10", role_ "menu", tabindex_ "-1"] do
       div_ [class_ "py-1", role_ "none"] do
         a_
           [ class_ "cursor-pointer text-slate-700 block px-4 py-1 text-sm hover:bg-gray-100 hover:text-slate-900"

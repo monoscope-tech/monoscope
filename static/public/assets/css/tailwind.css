@@ -16,7 +16,7 @@
   }
 
   .card-round {
-    @apply bg-base-100 border border-slate-200 rounded-xl shadow-sm shadow-slate-200;
+    @apply bg-slate-50/80 border border-slate-200 rounded-2xl;
     /*overflow-hidden;*/
   }
 }
@@ -206,7 +206,6 @@
     display: inline-block;
     width: 1em;
     height: 1em;
-    stroke-width: 0;
     stroke: currentColor;
     fill: currentColor;
   }
@@ -371,4 +370,55 @@
 
 .tab:is(input[type="radio"]) {
   width: max-content;
+}
+
+@layer components {
+  .cbadge-sm {
+   @apply  px-2 py-1 text-xs rounded-xl;
+  }
+  .badge-2xx {
+    @apply bg-green-100 text-green-700;
+  }
+  .badge-3xx {
+    @apply bg-amber-100 text-amber-800;
+  }
+  .badge-2xx {
+    @apply bg-green-100 text-green-700;
+  }
+  .badge-4xx {
+    @apply  bg-red-50 text-red-800;
+  }
+  .badge-neutral {
+    @apply  bg-slate-200/60 text-slate-500;
+  }
+  .badge-blue {
+    @apply text-blue-500 bg-[#d6efff];
+  }
+  .badge-green {
+    @apply text-green-500 bg-green-100;
+  }
+  .badge-green {
+    @apply text-amber-500 bg-amber-100;
+  }
+  .badge-lime {
+    @apply bg-lime-200 text-lime-600; 
+  }
+  .badge-pink {
+    @apply bg-pink-100 text-pink-600; 
+  }
+  .badge-cyan {
+    @apply bg-cyan-100 text-cyan-600; 
+  }
+  .ctable :where(.table-pin-rows thead tr) {
+    @apply sticky top-0 z-10 bg-slate-50/80; 
+  }
+  .ctable :where(.table-pin-cols tr th) {
+    @apply sticky left-0 right-0 z-10; 
+  }
+  .ctable td > div {
+    @apply px-2 py-1;
+  }
+  .bg-slate-50 {
+    @apply bg-slate-50/80;
+  }
 }

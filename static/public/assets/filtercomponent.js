@@ -119,14 +119,13 @@ export class MyElement extends LitElement {
   render() {
     return html`
       <div class="relative w-full" @click=${(e) => e.stopPropagation()}>
-        <div class="shadow-sm flex items-center flex-wrap gap-2 border border-1  px-4 py-2 w-ful rounded-lg">
-          <i class="fa-regular fa-filter h-4 w-4 text-gray-500"></i>
-          <!-- <svg class="h-4 w-4 text-gray-500"><use href="/public/assets/svgs/fa-sprites/regular.svg#filter"></use></svg> -->
-          <div class="flex flex-wrap gap-2">
+        <div class="flex items-center flex-wrap gap-2 ">
+          <svg class="h-4 w-4 icon"><use href="/public/assets/svgs/fa-sprites/regular.svg#filter"></use></svg>
+          <div class="flex flex-wrap">
             ${this.filters.map((filter, index) => {
               return html`
                 ${filter === 'AND' || filter === 'OR'
-                  ? html`<button type="button" @click=${() => this.toggleJoinOperator(index)} class="text-gray-500 bg-gray-100 text-xs  px-2 py-1 rounded-full">
+                  ? html`<button type="button" @click=${() => this.toggleJoinOperator(index)} class=" bg-gray-100 text-xs  px-2 py-1 rounded-full">
                       ${filter.toLowerCase()}
                       <i class="fa-solid fa-sliders-simple"></i>
                     </button>`
@@ -135,8 +134,8 @@ export class MyElement extends LitElement {
             })}
             ${this.showFilterSearch ? html`<filter-suggestions></filter-suggestions>` : null}
             ${this.filters.length == 0
-              ? html`<button type="button" @click=${() => (this.showFilterSearch = !this.showFilterSearch)} class="text-gray-500">Click to add filter...</button>`
-              : html`<button type="button" @click=${() => (this.showFilterSearch = !this.showFilterSearch)} class="px-2 py-1 border rounded text-gray-500 hover:bg-gray-100">
+              ? html`<button type="button" @click=${() => (this.showFilterSearch = !this.showFilterSearch)} class="">Click to add filter...</button>`
+              : html`<button type="button" @click=${() => (this.showFilterSearch = !this.showFilterSearch)} class="px-2 py-1 border rounded  hover:bg-gray-100">
                   <svg class="inline-block icon h-4 w-4"><use href="/public/assets/svgs/fa-sprites/regular.svg#plus"></use></svg>
                 </button>`}
           </div>
@@ -222,7 +221,7 @@ class FilterItem extends LitElement {
     <span>${field}</span>
     ${
       this.showFieldModal
-        ? html`<div style="heigh" class="absolute z-50 bg-white border rounded w-56 text-gray-500 font-normal top-10 left-0" @click=${(e) => e.stopPropagation()}>
+        ? html`<div style="heigh" class="absolute z-50 bg-white border rounded w-56  font-normal top-10 left-0" @click=${(e) => e.stopPropagation()}>
             <input
               type="text"
               class="w-full border-b text-sm outline-none focus:outline-none px-2 py-1"
@@ -243,7 +242,7 @@ class FilterItem extends LitElement {
             <div class="max-h-56 overflow-y-auto">
               <div class="flex flex-col">
                 ${this.fields.map((field) => {
-                  return html`<button type="button" class="flex items-center gap-2 px-2 py-1 hover:bg-gray-100" @click=${(e) => this.triggerFilterChange(field, operator, value)}>${field}</button>`
+                  return html`<button type="button" class="flex items-center gap-2 px-2 py-1 hover:bg-slate-100" @click=${(e) => this.triggerFilterChange(field, operator, value)}>${field}</button>`
                 })}
               </div>
             </div>
@@ -260,11 +259,11 @@ class FilterItem extends LitElement {
     <span>${operator}<span>
     ${
       this.showOperatoinModal
-        ? html`<div style="heigh" class="absolute z-50 bg-white border rounded w-56 text-gray-500 font-normal top-10 left-0" @click=${(e) => e.stopPropagation()}>
+        ? html`<div style="heigh" class="absolute z-50 bg-white border rounded w-56  font-normal top-10 left-0" @click=${(e) => e.stopPropagation()}>
             <div class="max-h-56 overflow-y-auto">
               <div class="flex flex-col">
                 ${this.operators.map((op) => {
-                  return html`<button type="button" class="flex items-center gap-2 px-2 py-1 hover:bg-gray-100" @click=${(e) => this.triggerFilterChange(field, op, value)}>${op}</button>`
+                  return html`<button type="button" class="flex items-center gap-2 px-2 py-1 hover:bg-slate-100" @click=${(e) => this.triggerFilterChange(field, op, value)}>${op}</button>`
                 })}
               </div>
             </div>
@@ -281,7 +280,7 @@ class FilterItem extends LitElement {
     <span>${value}<span>
     ${
       this.showValueModal
-        ? html`<div style="heigh" class="absolute z-50 bg-white border rounded w-56 text-gray-500 font-normal top-10 left-0" @click=${(e) => e.stopPropagation()}>
+        ? html`<div style="heigh" class="absolute z-50 bg-white border rounded w-56  font-normal top-10 left-0" @click=${(e) => e.stopPropagation()}>
             <input
               type="text"
               class="w-full border-b text-sm outline-none focus:outline-none px-2 py-1"
@@ -298,7 +297,7 @@ class FilterItem extends LitElement {
             />
             <div class="max-h-56 overflow-y-auto flex flex-col">
               ${this.values.map((v) => {
-                return html`<button type="button" class="flex items-center gap-2 px-2 py-1 hover:bg-gray-100" @click=${(e) => this.triggerFilterChange(field, operator, v)}>${v}</button>`
+                return html`<button type="button" class="flex items-center gap-2 px-2 py-1 hover:bg-slate-100" @click=${(e) => this.triggerFilterChange(field, operator, v)}>${v}</button>`
               })}
             </div>
           </div>`
@@ -391,7 +390,7 @@ class Filter extends LitElement {
   inputRef = createRef()
   render() {
     return html`
-      <div class="relative text-gray-500">
+      <div class="relative ">
         <div class="h-4"></div>
         <div
           style="z-index:99"
@@ -419,7 +418,7 @@ class Filter extends LitElement {
               (match) => html`
                 <button
                   type="button"
-                  class="match_buttons px-2 py-1 text-sm text-left hover:bg-gray-100"
+                  class="match_buttons px-2 py-1 text-sm text-left hover:bg-slate-100"
                   @click=${(e) => {
                     this.autoCompleteInput(match)
                     this.adjustInputWidthAndFocus()
