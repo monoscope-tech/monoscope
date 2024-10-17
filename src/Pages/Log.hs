@@ -204,7 +204,8 @@ logQueryBox_ pid currentRange source targetSpan =
     ]
     do
       div_ [class_ "cursor-pointer relative bg-slate-100 rounded-xl border border-slate-200 inline-flex justify-center"] do
-        div_ [class_ "flex gap-2 justify-center items-center px-2"] $ "Saved queries" >> faSprite_ "chevron-down" "regular" "w-3 h-3"
+        -- TODO: unhide
+        div_ [class_ "flex gap-2 justify-center items-center px-2 hidden"] $ "Saved queries" >> faSprite_ "chevron-down" "regular" "w-3 h-3"
       div_ [class_ "p-1 pl-3 flex-1 flex gap-2 bg-slate-100 rounded-xl border border-slate-200 justify-between items-stretch"] do
         div_ [id_ "queryEditor", class_ "h-14 hidden overflow-hidden bg-gray-200 flex-1 flex items-center"] pass
         div_ [id_ "queryBuilder", class_ "flex-1 flex items-center"] $ termRaw "filter-element" [id_ "filterElement"] ("" :: Text)
@@ -383,7 +384,7 @@ apiLogsPage page = do
 
       div_ [class_ "grow flex-1 space-y-3 overflow-hidden"] do
         div_ [class_ "flex gap-2 text-sm pt-1"] do
-          label_ [class_ "gap-1 flex items-center cursor-pointer"] do
+          label_ [class_ "hidden gap-1 flex items-center cursor-pointer"] do
             faSprite_ "side-chevron-left-in-box" "regular" "w-4 h-4"
             span_ [class_ "hidden group-has-[.toggle-filters:checked]/pg:block"] "Show"
             span_ [class_ "group-has-[.toggle-filters:checked]/pg:hidden"] "Hide"
@@ -620,7 +621,7 @@ logItemCol_ source pid reqVec colIdxMap "rest" _ = div_ [class_ "space-x-2 white
     _ -> do
       if lookupVecTextByKey reqVec colIdxMap "request_type" == Just "Incoming"
         then renderIconWithTippy "text-gray-400 rounded-full p-1 cbadge-sm badge-neutral" "Incoming Request" (faSprite_ "arrow-down-left" "solid" "h-3")
-        else renderIconWithTippy "text-red-800 rounded-full p-1 cbadge-sm badge-neutral" "Outgoing Request" (faSprite_ "arrow-up-right" "solid" "h-3")
+        else renderIconWithTippy "text-gray-400 rounded-full p-1 cbadge-sm badge-neutral" "Outgoing Request" (faSprite_ "arrow-up-right" "solid" "h-3")
       logItemCol_ source pid reqVec colIdxMap "status_code" []
       logItemCol_ source pid reqVec colIdxMap "method" []
       renderLogBadge "url_path" reqVec colIdxMap "cbadge-sm badge-neutral"

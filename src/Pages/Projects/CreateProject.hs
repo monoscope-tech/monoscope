@@ -533,11 +533,6 @@ createProjectBody sess envCfg isUpdate cp cpe = do
             |]
 
             div_ [class_ "p-5 flex w-full justify-end"] do
-              -- if isUpdate then
-              --     button_ [class_ "inline-block py-2 px-5 bg-blue-700  text-[white] text-sm rounded-xl cursor-pointer"
-              --       , type_ "Submit"
-              --       ] "Submit"
-              --   else
               a_
                 [ class_ "lemonsqueezy-button py-2 px-5 w-max bg-blue-700 flex items-center text-[white] text-sm rounded-xl cursor-pointer"
                 , [__|on click call window.payLemon() |]
