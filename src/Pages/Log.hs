@@ -594,8 +594,6 @@ logItemCol_ :: Text -> Projects.ProjectId -> V.Vector Value -> HM.HashMap Text I
 logItemCol_ source pid reqVec colIdxMap "id" chSpns = do
   let (status, errCount, errClass) = errorClass False reqVec colIdxMap
   let severityClass = barSeverityClass reqVec colIdxMap
-  let (logItemPath, _) = fromMaybe ("", "") $ requestDumpLogItemUrlPath pid reqVec colIdxMap
-  let logItemPathDetailed = logItemPath <> "/detailed?source=" <> source
   div_ [class_ "grid grid-cols-3 items-center max-w-12 min-w-10"] do
     span_ [class_ "col-span-1 h-5 rounded flex"] $ renderIconWithTippy (if source == "logs" then severityClass else errClass) (show errCount <> " errors attached; status " <> show status) " "
     faSprite_ "chevron-right" "solid" "h-3 col-span-1 text-gray-500 chevron log-chevron "
