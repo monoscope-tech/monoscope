@@ -1,5 +1,5 @@
 import { html } from './js/thirdparty/lit.js'
-
+import jsonpath from './js/thirdparty/jsonpath.js'
 // Base Operations List
 const baseOperations = [
   { value: 'equals', label: 'equals' },
@@ -124,7 +124,15 @@ function evaluateAssertion(assertion, result, response) {
       if (assertion.type === 'body') {
         if (assertion.operation === 'jsonpath') {
           const operation = getOperationFromText(assertion.subOperation)
-          return true
+
+          const val = jsonpath.query(response.json, assertion.jsonpath)
+          for (let v of val) {
+            const expression = `${v} ${operation} ${assertion.value}`
+            if (eval(expression)) {
+              return true
+            }
+          }
+          return false
         } else {
           const operation = getOperationFromText(assertion.operation)
           return eval(`${response.raw} ${operation} ${assertion.value}`)
@@ -161,8 +169,9 @@ export function renderAssertionBuilder({
         if (result && result.assert_results) {
           aResult = result.assert_results[index]
         }
+        const passed = evaluateAssertion(assertion, aResult, result ? result.resp : undefined)
 
-        let error = aResult ? aResult.err?.advice : ''
+        let error = passed ? '' : aResult ? aResult.err?.advice : ''
         return html`
           <div class="border-b py-2">
             <div class="flex space-x-2">
@@ -183,7 +192,7 @@ export function renderAssertionBuilder({
               </div>
               <div class="flex-shrink-0 ">
                 <div class="flex gap-3 pt-2 items-center">
-                  ${evaluateAssertion(assertion, aResult, result ? result.resp : undefined) ? html`<span class="text-success ">PASSED</span>` : html`<span class="text-error">FAILED</span>`}
+                  ${passed ? html`<span class="text-success ">PASSED</span>` : html`<span class="text-error">FAILED</span>`}
                   <a class="cursor-pointer text-slate-600" @click=${removeAssertion(index)}>${faSprite_('trash', 'regular', 'w-3 h-3')}</a>
                 </div>
               </div>
