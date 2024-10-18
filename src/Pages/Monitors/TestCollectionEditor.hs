@@ -356,6 +356,7 @@ collectionPage pid colM col_rn respJson = do
       , hxSwap_ "none"
       , hxExt_ "json-enc"
       , hxVals_ "js:{stepsData: saveStepData(), tags: getTags()}"
+      , hxIndicator_ "#save-indicator"
       ]
       do
         div_ [class_ "col-span-2 px-8 pt-5 pb-12 overflow-y-scroll"] do
@@ -363,7 +364,9 @@ collectionPage pid colM col_rn respJson = do
           whenJust colM $ \col -> do
             input_ [type_ "hidden", name_ "collectionId", value_ col.id.toText]
           div_ [class_ "w-full flex p-2 bg-white"] do
-            button_ [class_ "btn btn-primary w-full btn-sm sticky top-[90%] z-10 ", type_ "submit"] "Save"
+            button_ [class_ "btn btn-primary w-full btn-sm sticky top-[90%] z-10 ", type_ "submit"] do
+              span_ [id_ "save-indicator", class_ "refresh-indicator htmx-indicator query-indicator loading loading-dots loading-md"] ""
+              "Save"
 
         div_ [class_ "col-span-1 border-r border-gray-200 overflow-y-auto"] do
           div_ [role_ "tablist", class_ "tabs tabs-bordered w-full"] do
