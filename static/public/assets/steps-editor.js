@@ -125,17 +125,17 @@ export class StepsEditor extends LitElement {
     })
 
     const model = this.editor.getModel()
-    // model.onDidChangeContent(() => {
-    //   try {
-    //     const newCollectionSteps = jsyaml.load(model.getValue())
-    //     if (this.collectionSteps != convertTestkitToCollectionSteps(newCollectionSteps)) {
-    //       this.collectionSteps = newCollectionSteps
-    //       this.requestUpdate()
-    //     }
-    //   } catch (e) {
-    //     console.error('Invalid YAML input', e)
-    //   }
-    // })
+    model.onDidChangeContent(() => {
+      try {
+        const newCollectionSteps = jsyaml.load(model.getValue())
+        if (this.collectionSteps != convertTestkitToCollectionSteps(newCollectionSteps)) {
+          this.collectionSteps = convertTestkitToCollectionSteps(newCollectionSteps)
+          this.requestUpdate()
+        }
+      } catch (e) {
+        console.error('Invalid YAML input', e)
+      }
+    })
   }
 
   updateEditorContent() {
@@ -668,7 +668,6 @@ ${stepData._requestBody}</textarea
   }
 
   render() {
-    this.updateEditorContent()
     return html`
       <style>
         .draggable {
