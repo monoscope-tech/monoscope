@@ -351,7 +351,7 @@ collectionPage pid colM col_rn respJson = do
   section_ [class_ "h-full overflow-y-hidden"] do
     form_
       [ id_ "stepsForm"
-      , class_ "grid grid-cols-3 h-full divide-x divide-gray-200 group/colform overflow-y-hidden"
+      , class_ "grid grid-cols-3 h-[calc(100%-10px)] pb-14 divide-x divide-gray-200 group/colform overflow-y-hidden"
       , hxPost_ $ "/p/" <> pid.toText <> "/monitors/collection/"
       , hxSwap_ "none"
       , hxExt_ "json-enc"
@@ -363,8 +363,8 @@ collectionPage pid colM col_rn respJson = do
           toHtml $ timelineSteps pid colM
           whenJust colM $ \col -> do
             input_ [type_ "hidden", name_ "collectionId", value_ col.id.toText]
-          div_ [class_ "w-full flex p-2 bg-white"] do
-            button_ [class_ "btn btn-primary w-full btn-sm sticky top-[90%] z-10 ", type_ "submit"] do
+          div_ [class_ "flex"] do
+            button_ [class_ "fixed w-96 top-[95%] z-10 btn btn-primary btn-sm", type_ "submit"] do
               span_ [id_ "save-indicator", class_ "refresh-indicator htmx-indicator query-indicator loading loading-dots loading-md"] ""
               "Save"
 
