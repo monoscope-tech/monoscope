@@ -609,7 +609,7 @@ logItemCol_ _ pid reqVec colIdxMap "latency_breakdown" childSpans = do
   let spanId = lookupVecTextByKey reqVec colIdxMap "latency_breakdown"
   Spans.spanLatencyBreakdown $ V.filter (\s -> s.parentSpanId == spanId) childSpans
 logItemCol_ _ _ reqVec colIdxMap "body" _ = renderLogBadge "body" reqVec colIdxMap "space-x-2 whitespace-nowrap"
-logItemCol_ _ _ reqVec colIdxMap "kind" _ = renderLogBadge "kind" reqVec colIdxMap (getKindColor $ fromMaybe "" $ lookupVecTextByKey reqVec colIdxMap "kind")
+logItemCol_ _ _ reqVec colIdxMap "kind" _ = renderBadge "cbadge-sm badge-neutral" (fromMaybe "" $ lookupVecTextByKey reqVec colIdxMap "kind") "kind"
 logItemCol_ _ _ reqVec colIdxMap "status" _ = renderLogBadge "status" reqVec colIdxMap (getSpanStatusColor $ fromMaybe "" $ lookupVecTextByKey reqVec colIdxMap "status")
 logItemCol_ source pid reqVec colIdxMap "rest" _ = div_ [class_ "space-x-2 whitespace-nowrap max-w-8xl overflow-hidden "] do
   let key = "rest"

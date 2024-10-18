@@ -242,9 +242,9 @@ jsonValueToHtmlTree val = jsonValueToHtmlTree' ("", "", val)
 
 
 getSpanStatusColor :: Text -> Text
-getSpanStatusColor "ERROR" = "badge-error"
-getSpanStatusColor "OK" = "badge-success"
-getSpanStatusColor _ = "text-gray-500 bg-gray-100"
+getSpanStatusColor "ERROR" = "cbadge-sm badge-error"
+getSpanStatusColor "OK" = "cbadge-sm badge-success"
+getSpanStatusColor _ = "cbadge-sm badge-neutral"
 
 
 -- data SpanKind = SKInternal | SKServer | SKClient | SKProducer | SKConsumer | SKUnspecified

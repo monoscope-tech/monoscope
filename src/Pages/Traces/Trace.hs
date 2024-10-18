@@ -237,7 +237,7 @@ spanTable records =
           let xcls = getStatusColor status_code
               gcls = getGrpcStatusColor status_code
               fcls = if reqType == "HTTP" then xcls else gcls
-          span_ [class_ $ "p-1 w-16 text-center " <> fcls] $ toHtml $ show status_code
+          span_ [class_ $ "p-1 w-16 text-center cbadge-sm badge-neutral " <> fcls] $ toHtml $ show status_code
           span_ [class_ "px-2 py-1 w-28 truncate"] $ toHtml $ getDurationNSMS spanRecord.spanDurationNs
 
 
