@@ -351,7 +351,7 @@ collectionPage pid colM col_rn respJson = do
   section_ [class_ "h-full overflow-y-hidden"] do
     form_
       [ id_ "stepsForm"
-      , class_ "grid grid-cols-3 h-[calc(100%-10px)] pb-14 divide-x divide-gray-200 group/colform overflow-y-hidden"
+      , class_ "grid grid-cols-3 h-[100%] pb-14 divide-x divide-gray-200 group/colform overflow-y-hidden"
       , hxPost_ $ "/p/" <> pid.toText <> "/monitors/collection/"
       , hxSwap_ "none"
       , hxExt_ "json-enc"
@@ -371,10 +371,10 @@ collectionPage pid colM col_rn respJson = do
         div_ [class_ "col-span-1 border-r border-gray-200 overflow-y-auto"] do
           div_ [role_ "tablist", class_ "tabs tabs-bordered w-full"] do
             input_ [type_ "radio", name_ "side-tabs", role_ "tab", class_ "tab", term "aria-label" "Variables", checked_]
-            div_ [role_ "tabpanel", class_ "tab-content max-h-[calc(100vh-3.2rem)] h-[calc(100vh-3.2rem)] overflow-y-auto"] do
+            div_ [role_ "tabpanel", class_ "tab-content"] do
               variablesDialog pid colM
             input_ [type_ "radio", name_ "side-tabs", role_ "tab", class_ "tab", term "aria-label" "Test Results Log"]
-            div_ [role_ "tabpanel", class_ "tab-content max-h-[calc(100vh-3.2rem)] h-[calc(100vh-3.2rem)] overflow-y-auto space-y-4 relative", id_ "step-results-parent"] do
+            div_ [role_ "tabpanel", class_ "tab-content space-y-4 relative", id_ "step-results-parent"] do
               case col_rn of
                 Just res -> do
                   V.iforM_ res collectionStepResult_
