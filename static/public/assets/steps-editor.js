@@ -241,7 +241,7 @@ export class StepsEditor extends LitElement {
     saveError = saveError ? saveError : {}
     const configuredOptions = {
       'request-options': (stepData.headers ? Object.keys(stepData.headers) : []).length,
-      'query-params': (stepData.params || []).length,
+      'query-params': (stepData.params ? Object.keys(stepData.params) : []).length,
       'request-body': stepData.json || stepData.raw || stepData._requestBody ? 1 : 0,
       ignoreSSLErrors: stepData.ignoreSSLErrors ? 1 : 0,
       followRedirects: stepData.followRedirects ? 1 : 0,
@@ -252,6 +252,7 @@ export class StepsEditor extends LitElement {
       this.collectionSteps[idx].activeTab = tab
       this.requestUpdate()
     }
+    console.log(configuredOptions)
 
     const totalConfigured = Object.values(configuredOptions).reduce((a, b) => a + b, 0)
     return html`
