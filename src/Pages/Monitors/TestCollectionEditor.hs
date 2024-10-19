@@ -334,7 +334,7 @@ defineTestSteps_ colM = do
           ]
           (span_ "Run all" >> faSprite_ "play" "solid" "w-3 h-3")
       label_ [class_ "relative inline-flex items-center cursor-pointer space-x-2"] do
-        input_ [type_ "checkbox", class_ "toggle editormode", onchange_ "codeToggle(event)"] >> span_ [class_ "text-sm"] "Code"
+        input_ [type_ "checkbox", class_ "toggle editormode", id_ "test-code-toggle", onchange_ "codeToggle(event)"] >> span_ [class_ "text-sm"] "Code"
   div_ [class_ "overflow-y-hidden flex-1 "] $ termRaw "assertion-builder" [id_ ""] ""
   div_ [class_ "overflow-y-hidden flex-1 "] $ termRaw "steps-editor" [id_ "stepsEditor"] ""
 

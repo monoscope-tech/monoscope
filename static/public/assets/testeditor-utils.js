@@ -173,7 +173,8 @@ function convertTestkitToCollectionSteps(testkitSteps) {
         params: step.params || {},
         _assertions: assertions,
         exports: step.exports || {},
-        _requestBody: step.json,
+        _json: step.json,
+        _requestBody: step.requestBody,
         followRedirects: step.followRedirects || true,
         allowRedirects: step.allowRedirects || true,
         ignoreSSLErrors: step.ignoreSSLErrors || false,
@@ -280,7 +281,6 @@ function convertCollectionStepsToTestkitFormat(collectionSteps) {
   const testkitSteps = []
   if (Array.isArray(collectionSteps)) {
     collectionSteps.forEach((step) => {
-      console.log(step)
       const assertions = []
       step._assertions?.forEach((assertion) => {
         assertions.push(convertToTestkitAssertion(assertion))
@@ -292,12 +292,26 @@ function convertCollectionStepsToTestkitFormat(collectionSteps) {
         exports: step.exports || {},
         asserts: assertions || [],
         params: step.params || {},
-        httpVersion: step.httpVersion || 'http1',
-        timeout: step.timeout || 60,
-        followRedirects: step.followRedirects || true,
-        allowRedirects: step.allowRedirects || true,
-        ignoreSSLErrors: step.ignoreSSLErrors || false,
-        json: step._requestBody,
+      }
+      if (!step._requestType) {
+        step._requestType = 'application/json'
+      }
+      if (step._requestType === 'application/json') {
+        testkitStep.json = step._json
+      } else if (step._requestType === 'application/x-www-form-urlencoded') {
+        testkitStep.requestBody = step._requestBody
+      }
+      if (step.followRedirects) {
+        testkitStep.followRedirects = true
+      }
+      if (step.ignoreSSLErrors) {
+        testkitStep.ignoreSSLErrors = true
+      }
+      if (step.timeout && step.timeout !== 60) {
+        testkitStep.timeout = step.timeout
+      }
+      if (step.httpVersion && step.httpVersion !== 'http2-http1') {
+        testkitStep.httpVersion = step.httpVersion
       }
       testkitSteps.push(testkitStep)
     })

@@ -528,7 +528,7 @@ barSeverityClass reqVec colIdxMap =
 
 
 logTableHeading_ :: Projects.ProjectId -> Bool -> Text -> Html ()
-logTableHeading_ pid True "id" = td_ [class_ "p-0 m-0 whitespace-nowrap w-3"]  ""
+logTableHeading_ pid True "id" = td_ [class_ "p-0 m-0 whitespace-nowrap w-3"] ""
 logTableHeading_ pid True "status_code" = logTableHeadingWrapper_ pid "status_code" $ toHtml @Text "status"
 logTableHeading_ pid True "created_at" = logTableHeadingWrapper_ pid "created_at" $ toHtml @Text "timestamp" >> small_ " (UTC)"
 logTableHeading_ pid True "timestamp" = logTableHeadingWrapper_ pid "timestamp" $ toHtml @Text "timestamp" >> small_ " (UTC)"
@@ -569,25 +569,31 @@ isLogEvent cols = all @[] (`elem` cols) ["id", "created_at"] || all @[] (`elem` 
 renderBadge :: Text -> Text -> Text -> Html ()
 renderBadge className content tip = span_ [class_ className, term "data-tippy-content" tip] $ toHtml content
 
+
 renderLogBadge :: Text -> V.Vector Value -> HM.HashMap Text Int -> Text -> Html ()
 renderLogBadge key reqVec colIdxMap className = renderBadge (className <> " cbadge ") (fromMaybe "" $ lookupVecTextByKey reqVec colIdxMap key) key
 
+
 renderMethod :: V.Vector Value -> HM.HashMap Text Int -> Html ()
-renderMethod reqVec colIdxMap = 
+renderMethod reqVec colIdxMap =
   let method = fromMaybe "/" $ lookupVecTextByKey reqVec colIdxMap "method"
-  in renderBadge ("min-w-[4rem] cbadge " <> maybe "badge-ghost" getMethodColor (lookupVecTextByKey reqVec colIdxMap "method")) method "method"
+   in renderBadge ("min-w-[4rem] cbadge " <> maybe "badge-ghost" getMethodColor (lookupVecTextByKey reqVec colIdxMap "method")) method "method"
+
 
 renderTimestamp :: Text -> V.Vector Value -> HM.HashMap Text Int -> Html ()
 renderTimestamp key reqVec colIdxMap =
   renderBadge "monospace whitespace-nowrap" (displayTimestamp $ fromMaybe "" $ lookupVecTextByKey reqVec colIdxMap key) "timestamp"
 
+
 renderStatusCode :: V.Vector Value -> HM.HashMap Text Int -> Html ()
 renderStatusCode reqVec colIdxMap =
   renderBadge (getStatusColor $ lookupVecIntByKey reqVec colIdxMap "status_code") (show @Text $ lookupVecIntByKey reqVec colIdxMap "status_code") "status"
 
+
 renderIconWithTippy :: Text -> Text -> Html () -> Html ()
-renderIconWithTippy iconClass tip content = 
+renderIconWithTippy iconClass tip content =
   a_ [class_ $ "shrink-0 inline-flex " <> iconClass, term "data-tippy-content" tip] content
+
 
 -- Main function
 logItemCol_ :: Text -> Projects.ProjectId -> V.Vector Value -> HM.HashMap Text Int -> Text -> V.Vector Telemetry.SpanRecord -> Html ()
@@ -736,7 +742,6 @@ jsonTreeAuxillaryCode pid = do
 
 
     var removeNamedColumnToSummary = (namedCol) => {
-      console.log(params())
       const cols = (params().cols ?? '').split(',').filter((x) => x != '')
       const subject = namedCol
 

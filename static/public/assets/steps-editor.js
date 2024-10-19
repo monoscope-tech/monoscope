@@ -128,9 +128,11 @@ export class StepsEditor extends LitElement {
     model.onDidChangeContent(() => {
       try {
         const newCollectionSteps = jsyaml.load(model.getValue())
+        const toggler = document.querySelector('#test-code-toggle')
         if (this.collectionSteps != convertTestkitToCollectionSteps(newCollectionSteps)) {
-          this.collectionSteps = convertTestkitToCollectionSteps(newCollectionSteps)
-          this.requestUpdate()
+          if (toggler && toggler.checked) {
+            this.collectionSteps = convertTestkitToCollectionSteps(newCollectionSteps)
+          }
         }
       } catch (e) {
         console.error('Invalid YAML input', e)
@@ -252,8 +254,6 @@ export class StepsEditor extends LitElement {
       this.collectionSteps[idx].activeTab = tab
       this.requestUpdate()
     }
-    console.log(configuredOptions)
-
     const totalConfigured = Object.values(configuredOptions).reduce((a, b) => a + b, 0)
     return html`
       <div
@@ -411,8 +411,15 @@ ${stepData?.headers?.Cookie || ''}</textarea
                           ? html`
                               <div class="form-control">
                                 <div class="label items-start gap-2"><span class="label-text">Body Type</span></div>
-                                <select class="select select-sm select-bordered max-w-xs" @change=${(e) => (this.collectionSteps[idx]._requestType = e.target.value)}>
-                                  <option selected>application/json</option>
+                                <select
+                                  class="select select-sm select-bordered max-w-xs"
+                                  .value=${stepData._requestType || 'application/json'}
+                                  @change=${(e) => {
+                                    this.collectionSteps[idx]._requestType = e.target.value
+                                    this.requestUpdate()
+                                  }}
+                                >
+                                  <option>application/json</option>
                                   <option>application/x-www-form-urlencoded</option>
                                   <option>text/html</option>
                                   <option>raw</option>
@@ -424,9 +431,19 @@ ${stepData?.headers?.Cookie || ''}</textarea
                                   <span class="label-text">Request Body</span>
                                   <p class="label-text text-xs">Insert variables using the syntax {{variableName}}</p>
                                 </div>
-                                <textarea class="w-full border border-slate-200" name="[${idx}][json]" @change=${(e) => (this.collectionSteps[idx]._requestBody = e.target.value)}>
-${stepData._requestBody}</textarea
-                                >
+                                ${this.collectionSteps[idx]._requestType === 'application/x-www-form-urlencoded'
+                                  ? this.renderParamsRows(stepData, idx, '_requestBody')
+                                  : html`
+                                      <textarea
+                                        class="w-full border border-slate-200"
+                                        name="[${idx}][json]"
+                                        @change=${(e) => {
+                                          this.collectionSteps[idx]._json = e.target.value
+                                        }}
+                                      >
+${stepData._json}</textarea
+                                      >
+                                    `}
                               </div>
                             `
                           : nothing
@@ -676,6 +693,10 @@ ${stepData._requestBody}</textarea
   }
 
   render() {
+    const toggler = document.querySelector('#test-code-toggle')
+    if (toggler && !toggler.checked) {
+      this.updateEditorContent()
+    }
     return html`
       <style>
         .draggable {
