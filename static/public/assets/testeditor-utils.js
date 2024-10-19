@@ -173,6 +173,11 @@ function convertTestkitToCollectionSteps(testkitSteps) {
         _assertions: assertions,
         exports: step.exports || {},
         _requestBody: step.json,
+        followRedirects: step.followRedirects || true,
+        allowRedirects: step.allowRedirects || true,
+        ignoreSSLErrors: step.ignoreSSLErrors || false,
+        timeout: step.timeout || 60,
+        httpVersion: step.httpVersion || 'http1',
       }
       collectionSteps.push(collectionStep)
     })
@@ -274,6 +279,7 @@ function convertCollectionStepsToTestkitFormat(collectionSteps) {
   const testkitSteps = []
   if (Array.isArray(collectionSteps)) {
     collectionSteps.forEach((step) => {
+      console.log(step)
       const assertions = []
       step._assertions?.forEach((assertion) => {
         assertions.push(convertToTestkitAssertion(assertion))
@@ -284,6 +290,11 @@ function convertCollectionStepsToTestkitFormat(collectionSteps) {
         headers: step.headers || {},
         exports: step.exports || {},
         asserts: assertions || [],
+        httpVersion: step.httpVersion || 'http1',
+        timeout: step.timeout || 60,
+        followRedirects: step.followRedirects || true,
+        allowRedirects: step.allowRedirects || true,
+        ignoreSSLErrors: step.ignoreSSLErrors || false,
         json: step._requestBody,
       }
       testkitSteps.push(testkitStep)

@@ -240,9 +240,12 @@ export class StepsEditor extends LitElement {
     const svErr = saveError !== undefined
     saveError = saveError ? saveError : {}
     const configuredOptions = {
-      'request-options': (stepData.headers || []).length,
+      'request-options': (stepData.headers ? Object.keys(stepData.headers) : []).length,
       'query-params': (stepData.params || []).length,
       'request-body': stepData.json || stepData.raw || stepData._requestBody ? 1 : 0,
+      ignoreSSLErrors: stepData.ignoreSSLErrors ? 1 : 0,
+      followRedirects: stepData.followRedirects ? 1 : 0,
+      timeout: stepData.timeout !== 60 ? 1 : 0,
     }
     const activeTab = this.collectionSteps[idx].activeTab || 'request-options'
     const setActiveTab = (tab) => {
@@ -303,7 +306,7 @@ export class StepsEditor extends LitElement {
                 </div>
               </div>
               <details>
-                <summary class="cursor-pointer text-sm">Advanced Options (${totalConfigured ? totalConfigured : 0} configured)</summary
+                <summary class="cursor-pointer text-sm">Advanced Options ${totalConfigured} configured</summary
                 <div>
                   <div class="mt-4 border-l-2 border-l-slate-300 pl-4 pb-3 bg-base-100">
                     <div role="tablist" class="tabs tabs-bordered pt-1">
@@ -323,7 +326,13 @@ export class StepsEditor extends LitElement {
                           ? html`
                               <div class="form-control w-full">
                                 <div class="label"><span class="label-text">HTTP Version</span></div>
-                                <select class="select select-sm select-bordered max-w-xs" @change=${(e) => this.updateValue(e, idx, null, null, 'httpVersion')}>
+                                <select
+                                  class="select select-sm select-bordered max-w-xs"
+                                  .value=${this.collectionSteps[idx].httpVersion}
+                                  @change=${(e) => {
+                                    this.collectionSteps[idx].httpVersion = e.target.value
+                                  }}
+                                >
                                   <option value="http2-http1">HTTP/2 fallback to HTTP/1.1</option>
                                   <option value="http2">HTTP/2 Only</option>
                                   <option value="http1">HTTP/1.1</option>
@@ -346,8 +355,8 @@ export class StepsEditor extends LitElement {
                                     <input
                                       type="checkbox"
                                       class="checkbox checkbox-sm"
-                                      ?checked=${stepData.ignoreCertificateError}
-                                      @change=${(e) => (this.collectionSteps[idx].ignoreCertificateError = e.target.value == 'on')}
+                                      ?checked=${stepData.ignoreSSLErrors}
+                                      @change=${(e) => (this.collectionSteps[idx].ignoreSSLErrors = e.target.value == 'on')}
                                     />
                                     <span class="label-text">Ignore server certificate error</span>
                                   </label>

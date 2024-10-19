@@ -87,11 +87,25 @@ data CollectionStepData = CollectionStepData
   , json :: Maybe AE.Value
   , raw :: Maybe Text
   , asserts :: Maybe (V.Vector (Map Text AE.Value))
+  , httpVersion :: Maybe Text
+  , timeout :: Maybe Int
+  , followRedirects :: Maybe Bool
+  , allowRedirects :: Maybe Bool
+  , ignoreSSLErrors :: Maybe Bool
   }
   deriving stock (Show, Generic)
   deriving anyclass (NFData, Default)
   deriving (FromField) via Aeson CollectionStepData
   deriving (ToField) via Aeson CollectionStepData
+
+
+data CollectionStepConfig = CollectionStepConfig
+  {
+  }
+  deriving stock (Show, Generic)
+  deriving anyclass (AE.FromJSON, AE.ToJSON, NFData, Default)
+  deriving (FromField) via Aeson CollectionStepConfig
+  deriving (ToField) via Aeson CollectionStepConfig
 
 
 stepDataMethod :: CollectionStepData -> Maybe (Text, Text)
@@ -124,6 +138,11 @@ instance AE.ToJSON CollectionStepData where
         , fmap ("json" .=) csd.json
         , fmap ("raw" .=) csd.raw
         , fmap ("asserts" .=) csd.asserts
+        , fmap ("httpVersion" .=) csd.httpVersion
+        , fmap ("timeout" .=) csd.timeout
+        , fmap ("followRedirects" .=) csd.followRedirects
+        , fmap ("allowRedirects" .=) csd.allowRedirects
+        , fmap ("ignoreSSLErrors" .=) csd.ignoreSSLErrors
         ]
 
 
@@ -142,6 +161,11 @@ instance AE.FromJSON CollectionStepData where
     json <- v .:? "json"
     raw <- v .:? "raw"
     asserts <- v .:? "asserts"
+    httpVersion <- v .:? "httpVersion"
+    timeout <- v .:? "timeout"
+    followRedirects <- v .:? "followRedirects"
+    allowRedirects <- v .:? "allowRedirects"
+    ignoreSSLErrors <- v .:? "ignoreSSLErrors"
     return CollectionStepData{..}
 
 

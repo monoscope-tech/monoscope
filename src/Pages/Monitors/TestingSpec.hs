@@ -34,6 +34,11 @@ colStepData =
     , json = Nothing
     , raw = Nothing
     , asserts = Nothing
+    , httpVersion = Nothing
+    , timeout = Nothing
+    , followRedirects = Nothing
+    , allowRedirects = Nothing
+    , ignoreSSLErrors = Nothing
     }
 collection :: CollectionStepUpdateForm
 collection =
