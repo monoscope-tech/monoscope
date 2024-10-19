@@ -172,6 +172,7 @@ function convertTestkitToCollectionSteps(testkitSteps) {
         headers: step.headers || {},
         _assertions: assertions,
         exports: step.exports || {},
+        _requestBody: step.json,
       }
       collectionSteps.push(collectionStep)
     })
@@ -279,10 +280,11 @@ function convertCollectionStepsToTestkitFormat(collectionSteps) {
       })
       const testkitStep = {
         title: step.title || '',
-        [step._method || 'GET']: step._url,
+        [step._method || 'GET']: step._url || '',
         headers: step.headers || {},
         exports: step.exports || {},
         asserts: assertions || [],
+        json: step._requestBody,
       }
       testkitSteps.push(testkitStep)
     })

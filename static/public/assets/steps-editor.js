@@ -611,27 +611,25 @@ ${stepData._requestBody}</textarea
 
     if (type == null) {
       updateObject(stepData, oldKey, newKey)
-      this.requestUpdate()
-      return
-    }
+    } else {
+      stepData[type] = stepData[type] || (aidx === null ? {} : [])
 
-    stepData[type] = stepData[type] || (aidx != null ? [] : {})
-
-    if (aidx != null) {
-      const arrayItem = stepData[type][aidx] || {}
-      const values = Object.entries(arrayItem)
-      if (values.length > 0) {
-        const val = values[0][1]
-        stepData[type][aidx] = {
-          [newKey]: val,
+      if (aidx != null) {
+        const arrayItem = stepData[type][aidx] || {}
+        const values = Object.entries(arrayItem)
+        if (values.length > 0) {
+          const val = values[0][1]
+          stepData[type][aidx] = {
+            [newKey]: val,
+          }
+        } else {
+          stepData[type][aidx] = {
+            [newKey]: '',
+          }
         }
       } else {
-        stepData[type][aidx] = {
-          [newKey]: '',
-        }
+        updateObject(stepData[type], oldKey, newKey)
       }
-    } else {
-      updateObject(stepData[type], oldKey, newKey)
     }
     this.requestUpdate()
   }
