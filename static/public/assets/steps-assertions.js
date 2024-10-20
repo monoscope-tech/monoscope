@@ -149,7 +149,6 @@ function evaluateAssertion(assertion, result, response) {
     }
     return assertion.status === 'PASSED'
   } catch (e) {
-    console.log(e)
     return false
   }
 }

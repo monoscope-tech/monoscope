@@ -299,7 +299,7 @@ function convertCollectionStepsToTestkitFormat(collectionSteps) {
       if (step._requestType === 'application/json') {
         testkitStep.json = step._json
       } else if (step._requestType === 'application/x-www-form-urlencoded') {
-        testkitStep.requestBody = step._requestBody
+        testkitStep.requestBody = step._requestBody || {}
       }
       if (step.followRedirects) {
         testkitStep.followRedirects = true

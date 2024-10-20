@@ -1,30 +1,33 @@
 import { html } from './js/thirdparty/lit.js'
 
 export async function makeRequestAndProcessResponse(requestObject) {
-  // Extract necessary information from the requestObject
-  const url = replaceVariables(requestObject._url)
-  const method = requestObject._requestType === 'raw' ? 'POST' : 'GET' // Default to GET if not raw
-  const headers = requestObject.headers || {}
-  const rawBody = requestObject._requestBody || null
-
-  // Prepare the fetch options
-  const options = {
-    method: method,
-    headers: headers,
-    body: rawBody ? rawBody : undefined,
-    redirect: requestObject.followRedirects ? 'follow' : 'manual',
-  }
-  // Manually add headers typically injected by fetch (for display purposes only)
-  const injectedHeaders = {
-    'user-agent': navigator.userAgent || 'CustomAgent/1.0', // Example value
-    accept: '*/*',
-    connection: 'keep-alive',
-    host: url.host,
-  }
-
-  const startTime = performance.now()
-  // Make the fetch request
   try {
+    // Extract necessary information from the requestObject
+    const url = replaceVariables(requestObject._url)
+    const method = requestObject._method
+    const headers = requestObject.headers || {}
+    const rawBody = requestObject._requestBody ? requestObject._requestBody : requestObject._json || null
+
+    // Prepare the fetch options
+    const options = {
+      method: method,
+      headers: { ...headers, contentType: requestObject._requestType },
+      redirect: requestObject.followRedirects ? 'follow' : 'manual',
+    }
+    if (method !== 'GET') {
+      options.body = rawBody
+    }
+
+    // Manually add headers typically injected by fetch (for display purposes only)
+    const injectedHeaders = {
+      'user-agent': navigator.userAgent || 'CustomAgent/1.0', // Example value
+      accept: '*/*',
+      connection: 'keep-alive',
+      host: url.host,
+    }
+
+    const startTime = performance.now()
+    // Make the fetch request
     const response = await fetch(url, options)
     const endTime = performance.now()
     const duration_ms = endTime - startTime
@@ -63,6 +66,7 @@ export async function makeRequestAndProcessResponse(requestObject) {
     }
   } catch (error) {
     // Handle errors and return a meaningful error object
+    console.log(error)
     return {
       error: `Request failed: ${error.message}`,
     }

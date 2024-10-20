@@ -400,7 +400,6 @@ alerts_ = do
     document.addEventListener('DOMContentLoaded', function(){
       document.body.addEventListener('triggerToast', function(e){
           e.detail.value.forEach(function(toastEvent){
-            console.log(toastEvent, "toastEvent")
             const template = document.getElementById(toastEvent[0].toLowerCase()+'ToastTmpl');
             const clone = document.importNode(template.content, true);
             clone.querySelector('.title').textContent = toastEvent[1];
