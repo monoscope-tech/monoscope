@@ -299,7 +299,14 @@ function convertCollectionStepsToTestkitFormat(collectionSteps) {
       if (step._requestType === 'application/json') {
         testkitStep.json = step._json
       } else if (step._requestType === 'application/x-www-form-urlencoded') {
-        testkitStep.requestBody = step._requestBody || {}
+        let requestBody = {}
+        const keys = Object.keys(step._requestBody ? step._requestBody : {})
+        if (keys.length > 0) {
+          keys.forEach((key) => {
+            requestBody[key] = step._requestBody[key]
+          })
+          testkitStep.requestBody = requestBody
+        }
       }
       if (step.followRedirects) {
         testkitStep.followRedirects = true

@@ -39,6 +39,7 @@ colStepData =
     , followRedirects = Nothing
     , allowRedirects = Nothing
     , ignoreSSLErrors = Nothing
+    , requestBody = Nothing
     }
 collection :: CollectionStepUpdateForm
 collection =

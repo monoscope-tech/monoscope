@@ -432,7 +432,7 @@ ${stepData?.headers?.Cookie || ''}</textarea
                                   <p class="label-text text-xs">Insert variables using the syntax {{variableName}}</p>
                                 </div>
                                 ${this.collectionSteps[idx]._requestType === 'application/x-www-form-urlencoded'
-                                  ? this.renderParamsRows(stepData, idx, '_requestBody')
+                                  ? html`<div class="flex flex-col gap-1">${this.renderParamsRows(stepData, idx, '_requestBody')}</div>`
                                   : html`
                                       <textarea
                                         class="w-full border border-slate-200"

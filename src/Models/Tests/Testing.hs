@@ -86,6 +86,7 @@ data CollectionStepData = CollectionStepData
   , exports :: Maybe (Map Text Text)
   , json :: Maybe AE.Value
   , raw :: Maybe Text
+  , requestBody :: Maybe (Map Text Text)
   , asserts :: Maybe (V.Vector (Map Text AE.Value))
   , httpVersion :: Maybe Text
   , timeout :: Maybe Int
@@ -143,6 +144,7 @@ instance AE.ToJSON CollectionStepData where
         , fmap ("followRedirects" .=) csd.followRedirects
         , fmap ("allowRedirects" .=) csd.allowRedirects
         , fmap ("ignoreSSLErrors" .=) csd.ignoreSSLErrors
+        , fmap ("requestBody" .=) csd.requestBody
         ]
 
 
@@ -166,6 +168,7 @@ instance AE.FromJSON CollectionStepData where
     followRedirects <- v .:? "followRedirects"
     allowRedirects <- v .:? "allowRedirects"
     ignoreSSLErrors <- v .:? "ignoreSSLErrors"
+    requestBody <- v .:? "requestBody"
     return CollectionStepData{..}
 
 
