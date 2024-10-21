@@ -124,8 +124,8 @@ stepDataMethod stepData =
 
 instance AE.ToJSON CollectionStepData where
   toJSON csd =
-    AE.object
-      $ catMaybes
+    AE.object $
+      catMaybes
         [ Just $ "title" .= csd.title
         , fmap ("POST" .=) csd.post -- Change the key to "POST" here for the output JSON
         , fmap ("GET" .=) csd.get
@@ -234,11 +234,13 @@ data CollectionListItem = CollectionListItem
   , lastRun :: Maybe UTCTime
   , title :: Text
   , description :: Text
+  , tags :: V.Vector Text
   , stepsCount :: Int
   , schedule :: Text
   , isScheduled :: Bool
   , passed :: Int
   , failed :: Int
+  , urls :: V.Vector Text
   }
   deriving stock (Show, Generic)
   deriving anyclass (FromRow, ToRow, NFData)
@@ -410,7 +412,7 @@ getCollections pid tabStatus = query Select q (pid, statusValue)
     q =
       [sql|
            SELECT t.id, t.created_at, t.updated_at, t.project_id, t.last_run,
-                  t.title, t.description, jsonb_array_length(t.collection_steps),
+                  t.title, t.description, t.tags, jsonb_array_length(t.collection_steps),
                   CASE
                     WHEN EXTRACT(DAY FROM t.schedule) > 0 THEN CONCAT(EXTRACT(DAY FROM t.schedule)::TEXT, ' days')
                     WHEN EXTRACT(HOUR FROM t.schedule) > 0 THEN CONCAT(EXTRACT(HOUR FROM t.schedule)::TEXT, ' hours')
@@ -418,7 +420,21 @@ getCollections pid tabStatus = query Select q (pid, statusValue)
                   END as schedule,
                   t.is_scheduled,
                   t.last_run_passed as passed,
-                  t.last_run_failed as failed
+                  t.last_run_failed as failed,
+          COALESCE( (
+             SELECT array_remove(array_agg(http_method), NULL) AS http_methods_array
+             FROM (
+               SELECT step->>'POST' AS http_method FROM jsonb_array_elements(t.collection_steps) AS step
+               UNION ALL
+               SELECT step->>'GET' AS http_method FROM jsonb_array_elements(t.collection_steps) AS step
+               UNION ALL
+               SELECT step->>'PUT' AS http_method FROM jsonb_array_elements(t.collection_steps) AS step
+               UNION ALL
+               SELECT step->>'DELETE' AS http_method FROM jsonb_array_elements(t.collection_steps) AS step
+               UNION ALL
+               SELECT step->>'PATCH' AS http_method FROM jsonb_array_elements(t.collection_steps) AS step
+             ) AS http_methods_subquery
+           ), ARRAY[]::text[]) as urls
            FROM tests.collections t
            WHERE t.project_id = ? AND t.is_scheduled = ?
            ORDER BY t.updated_at DESC;
