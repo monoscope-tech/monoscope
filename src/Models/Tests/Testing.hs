@@ -249,7 +249,7 @@ data CollectionListItem = CollectionListItem
 
 data StepResponse = StepResponse
   { status :: Int
-  , headers :: Map Text [Text]
+  , headers :: Maybe (Map Text [Text])
   , raw :: Text
   , json :: AE.Value
   }
