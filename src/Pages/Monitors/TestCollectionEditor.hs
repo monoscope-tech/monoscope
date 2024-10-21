@@ -520,9 +520,11 @@ collectionStepResult_ idx stepResult = section_ [class_ "p-1"] do
     div_ [role_ "tabpanel", class_ "tab-content bg-base-100 border-base-300 rounded-box p-6 "] $
       table_ [class_ "table table-xs"] do
         thead_ [] $ tr_ [] $ th_ [] "Name" >> th_ [] "Value"
-        tbody_ $ forM_ (M.toList stepResult.request.resp.headers) $ \(k, v) -> tr_ [] do
-          td_ [] $ toHtml k
-          td_ [] $ toHtml $ T.intercalate "," v
+        tbody_  do
+         whenJust stepResult.request.resp.headers $ \headers -> do
+           forM_ (M.toList headers) $ \(k, v) -> tr_ [] do
+            td_ [] $ toHtml k
+            td_ [] $ toHtml $ T.intercalate "," v
 
     input_ [type_ "radio", name_ $ "step-result-tabs-" <> show idx, role_ "tab", class_ "tab", Aria.label_ "Response Body"]
     div_ [role_ "tabpanel", id_ $ "res-container-" <> show idx, class_ "tab-content bg-base-100 bg-base-100 border-base-300 rounded-box p-6", term "data-step" (show idx)] do
