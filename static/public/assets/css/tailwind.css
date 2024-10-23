@@ -385,6 +385,13 @@
   .badge-2xx {
     @apply bg-green-100 text-green-700;
   }
+  .badge-success {
+    @apply bg-green-100 text-green-700 font-medium;
+
+  }
+  .badge-error {
+    @apply bg-red-100 text-red-700 font-medium;
+  }
   .badge-3xx {
     @apply bg-amber-100 text-amber-800;
   }

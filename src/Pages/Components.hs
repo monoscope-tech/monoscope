@@ -38,10 +38,10 @@ statBox pid title helpInfo val bckupValM = do
 
 statBox_ :: Maybe ProjectId -> Maybe (Text, Text, Text) -> Text -> Text -> Text -> Maybe Int -> Html ()
 statBox_ pid iconM title helpInfo val bckupValM = do
-  let tl = getTargetPage title
-  let pidT = case pid of
-        Just p -> p.toText
-        Nothing -> ""
+  -- let tl = getTargetPage title
+  -- let pidT = case pid of
+  --       Just p -> p.toText
+  --       Nothing -> ""
   div_ [class_ "bg-[#F1F5F9] rounded-3xl flex flex-col gap-3 p-5 border border-[#E2E8F0]"] do
     whenJust iconM $ \(icon, kind, color) -> do
       div_ [class_ "flex items-center justify-center h-10 w-10 bg-white rounded-[12px]"] do

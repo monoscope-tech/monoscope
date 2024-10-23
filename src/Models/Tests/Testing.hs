@@ -283,10 +283,12 @@ instance AE.FromJSON AssertResult where
   parseJSON = AE.withObject "AssertResult" $ \obj -> do
     okValue <- obj AE..:? "Ok"
     errValue <- obj AE..:? "Err"
+    ok <- obj AE..:? "ok"
+    err <- obj AE..:? "err"
     return
       AssertResult
-        { ok = okValue
-        , err = errValue
+        { ok = if isNothing okValue then ok else okValue
+        , err = if isNothing errValue then err else errValue
         }
 
 

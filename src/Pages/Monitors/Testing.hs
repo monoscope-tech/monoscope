@@ -11,7 +11,8 @@ import Data.Default (def)
 import Data.List (nubBy)
 import Data.List.Extra (nubOrd)
 import Data.Map qualified as Map
-import Data.Text (Text, pack)
+import Data.Text (Text, pack, splitOn)
+import Data.Text qualified as T
 import Data.Time (UTCTime)
 import Data.UUID.V4 qualified as UUIDV4
 import Data.Vector qualified as V
@@ -127,7 +128,7 @@ collectionCard pid col currTime = do
         a_ [href_ $ "/p/" <> pid.toText <> "/monitors/" <> col.id.toText <> "/overview", class_ "font-medium text-gray-800 text-xl"] $ toHtml col.title
         div_ [class_ "flex gap-2 items-center text-sm"] do
           forM_ col.tags $ \tag -> do
-            span_ [class_ "badge bg-sky-100 text-sky-600"] $ toHtml tag
+            span_ [class_ "badge badge-blue"] $ toHtml tag
       div_ [class_ "w-full flex"] do
         div_ [class_ "flex flex-col gap-6 w-1/3"] do
           div_ [class_ "flex gap-2 items-center w-full"] do
@@ -136,8 +137,8 @@ collectionCard pid col currTime = do
               span_ [class_ "badge badge-ghost"] $ toHtml url
           div_ [class_ "flex gap-4 w-full items-center"] do
             if col.failed > 0
-              then span_ [class_ "badge bg-red-100 text-red-700"] "Failing"
-              else span_ [class_ "badge bg-green-100 text-green-700"] "Passing"
+              then span_ [class_ "badge badge-error"] "Failing"
+              else span_ [class_ "badge badge-success"] "Passing"
             div_ [class_ "flex items-center shrink-0 gap-1"] do
               faSprite_ "clock" "regular" "h-4 w-4"
               span_ [class_ "shrink-0 text-sm"] $ toHtml $ "every " <> col.schedule
@@ -220,7 +221,7 @@ dashboardPage pid col reqsVecM = do
       div_ [class_ "flex flex-col gap-2"] do
         div_ [class_ "flex gap-2 items-center text-sm"] do
           forM_ col.tags $ \tag -> do
-            span_ [class_ "badge bg-sky-100 text-sky-600"] $ toHtml tag
+            span_ [class_ "badge badge-blue"] $ toHtml tag
         div_ [] do
           forM_ hostnames $ \host -> do
             span_ [class_ "badge badge-ghost"] $ toHtml host
@@ -309,11 +310,11 @@ renderStepIll_ st stepResult ind = do
         assertionRes = (\(i, r) -> getAssertionResult r (V.fromList stepRes.assertResults V.!? i)) <$> V.indexed (fromMaybe [] st.asserts)
         totalPass = V.length $ V.filter fst assertionRes
     div_ [] do
-      div_ [class_ "flex items-center gap-2", [__|on click toggle .hidden on the next .step-body|]] do
-        faSprite_ "chevron-up" "regular" "h-5 w-5 border rounded p-1 cursor-pointer"
-        span_ [[__|on click halt|], class_ "text-gray-800 text-sm font-medium"] $ "Step " <> show ind
-        span_ [[__|on click halt|], class_ "badge bg-green-100 text-green-700 font-medium"] $ show totalPass <> "/" <> show (V.length assertionRes) <> " passed"
-        span_ [[__|on click halt|], class_ "text-gray-500 text-sm flex items-center gap-1"] do
+      div_ [class_ "flex items-center gap-2 cursor-pointer", [__|on click toggle .hidden on the next .step-body|]] do
+        faSprite_ "chevron-up" "regular" "h-5 w-5 border rounded p-1"
+        span_ [class_ "text-gray-800 text-sm font-medium"] $ "Step " <> show (ind + 1)
+        span_ [class_ "badge badge-success"] $ show totalPass <> "/" <> show (V.length assertionRes) <> " Passed"
+        span_ [class_ "text-gray-500 text-sm flex items-center gap-1"] do
           faSprite_ "chevron-right" "regular" "h-3 w-3"
           toHtml $ fromMaybe "" title
       div_ [class_ "step-body ml-2"] do
@@ -321,16 +322,19 @@ renderStepIll_ st stepResult ind = do
         div_ [class_ "flex"] do
           div_ [class_ "border-t w-8"] pass
           div_ [] do
-            div_ [class_ "flex gap-1 -mt-2", [__|on click toggle .hidden on the next .assert-body|]] do
-              faSprite_ "chevron-up" "regular" "h-5 w-5 border rounded p-1 cursor-pointer"
-              span_ [[__| on click halt|], class_ "font-medium text-sm text-gray-800"] "Assertions"
-            div_ [class_ "border-l pt-4 ml-2 flex flex-col gap-2 assert-body"] do
+            div_ [class_ "flex gap-1 -mt-2 cursor-pointer", [__|on click toggle .hidden on the next .assert-body|]] do
+              faSprite_ "chevron-up" "regular" "h-5 w-5 border rounded p-1"
+              span_ [class_ "font-medium text-sm text-gray-800"] "Assertions"
+            div_ [class_ "border-l pt-4 ml-2 flex flex-col gap-3 assert-body"] do
               forM_ assertionRes $ \(success, resultText) -> do
-                div_ [class_ "flex gap-2 items-center"] do
-                  span_ [class_ "w-10 border-t"] pass
+                div_ [class_ "flex gap-3 items-center"] do
+                  span_
+                    [ class_ "w-10 relative border-t after:content-[''] after:-top-1 after:absolute after:h-1 after:w-1 after:rounded-full after:bg-gray-200 after:-right-1 after:z-10"
+                    ]
+                    pass
                   if success
-                    then span_ [class_ "badge bg-green-100 text-green-500 font-semibold"] "passed"
-                    else span_ [class_ "badge  bg-red-100 text-red-500 font-semibold"] "Failed"
+                    then span_ [class_ "badge badge-success"] "Passed"
+                    else span_ [class_ "badge badge-error"] "Failed"
                   span_ [class_ "text-sm"] $ toHtml resultText
 
 
@@ -338,10 +342,59 @@ getAssertionResult :: Map Text AE.Value -> Maybe Testing.AssertResult -> (Bool, 
 getAssertionResult st stepResult =
   case Map.toList st of
     [(key, val)] ->
-      let resultText = key <> ": " <> toText (show val)
-          success = maybe False (\x -> isJust x.ok) stepResult
+      let v = case val of
+            AE.String s -> s
+            _ -> show val
+          resultText = convertAssertText key (toText v)
+          success = maybe False (\x -> (x.ok == Just True) && isNothing x.err) stepResult
        in (success, resultText)
-    _ -> (False, "Invalid state: Map contains zero or multiple entries")
+    _ -> (False, "Something went wrong")
+
+
+convertAssertText :: Text -> Text -> Text
+convertAssertText key val =
+  case key of
+    "ok" ->
+      let (left, right, op) = splitOnAny ["==", "!=", ">", "<", ">=", "<="] val
+          (cat, t) = getAssertCategory left
+       in cat <> " " <> t <> " " <> operationText (fromMaybe "" op) <> " " <> right
+    _ -> key <> ": " <> val
+
+
+getAssertCategory :: Text -> (Text, Text)
+getAssertCategory key
+  | T.isPrefixOf "$.resp.status" key = ("Status code", T.replace "$.resp.status" "" key)
+  | T.isPrefixOf "$.resp.headers" key = ("Header", T.replace "$.resp.headers." "" key)
+  | T.isPrefixOf "$.resp.json" key = ("Json path", T.replace ".resp.json" "" key)
+  | otherwise = ("Body", key)
+
+
+operationText :: Text -> Text
+operationText "==" = "equals"
+operationText "!=" = "does not equal"
+operationText ">" = "is greater than"
+operationText "<" = "is less than"
+operationText ">=" = "is greater than or equal to"
+operationText "<=" = "is less than or equal to"
+operationText op = op
+
+
+splitOnAny :: [Text] -> Text -> (Text, Text, Maybe Text)
+splitOnAny delimiters val =
+  case findDelimiter delimiters val of
+    Just delimiter ->
+      let parts = splitOn delimiter val
+       in case parts of
+            [left, right] -> (T.strip left, T.strip right, Just delimiter)
+            _ -> (val, "", Nothing) -- Fallback in case splitting fails
+    Nothing -> (val, "", Nothing)
+
+
+findDelimiter :: [Text] -> Text -> Maybe Text
+findDelimiter [] _ = Nothing
+findDelimiter (d : ds) val
+  | d `T.isInfixOf` val = Just d
+  | otherwise = findDelimiter ds val
 
 
 dStats :: Projects.ProjectId -> Int -> Int -> Int -> Text -> Html ()
