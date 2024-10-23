@@ -10,6 +10,8 @@ import Data.Aeson qualified as AE
 import Data.Default (def)
 import Data.List (nubBy)
 import Data.List.Extra (nubOrd)
+import Data.Map qualified as Map
+import Data.Text (Text, pack)
 import Data.Time (UTCTime)
 import Data.UUID.V4 qualified as UUIDV4
 import Data.Vector qualified as V
@@ -19,15 +21,18 @@ import Fmt.Internal.Core (fmt)
 import Fmt.Internal.Numeric (commaizeF)
 import Lucid
 import Lucid.Htmx (hxExt_, hxPost_, hxSelect_, hxSwap_, hxTarget_, hxVals_)
+import Lucid.Hyperscript (__)
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.Projects qualified as Projects
 import Models.Tests.Testing qualified as Testing
 import Models.Users.Sessions qualified as Sessions
+import NeatInterpolation (text)
 import Network.URI (URIAuth (uriRegName), parseURI, uriAuthority)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
 import Pages.Components (statBox, statBox_)
 import Pages.Log (ApiLogsPageData (isTestLog))
 import Pages.Log qualified as Log
+import Pages.Monitors.TestCollectionEditor (castToStepResult)
 import Pages.Monitors.TestCollectionEditor qualified as TestCollectionEditor
 import Pkg.Components qualified as Components
 import Pkg.Components.ItemsList qualified as ItemsList
@@ -210,7 +215,7 @@ dashboardPage pid col reqsVecM = do
       stepsCount = V.length steps
       urls = catMaybes $ join $ V.toList $ (\x -> [x.get, x.post, x.patch, x.delete, x.put] :: [Maybe Text]) <$> steps
       hostnames = extractHostnames urls
-  section_ [class_ "pt-2 mx-auto px-14 w-full flex flex-col gap-4 pb-24 h-full"] do
+  section_ [class_ "pt-2 mx-auto px-14 w-full flex flex-col gap-4 h-full"] do
     div_ [class_ "flex justify-between items-center"] do
       div_ [class_ "flex flex-col gap-2"] do
         div_ [class_ "flex gap-2 items-center text-sm"] do
@@ -219,55 +224,134 @@ dashboardPage pid col reqsVecM = do
         div_ [] do
           forM_ hostnames $ \host -> do
             span_ [class_ "badge badge-ghost"] $ toHtml host
-
       stepsBox_ stepsCount passed failed
     div_ [class_ "relative p-1 flex gap-10 items-start"] do
       dStats pid stepsCount passed failed schedule
-    div_ [class_ "card-round p-4 h-auto overflow-y-scroll"] do
-      h6_ [class_ "font-medium"] "Test run logs"
-      div_ [class_ "overflow-x-hidden"] do
-        case reqsVecM of
-          Just reqVec -> do
-            let (requestVecs, colNames, requestsCount) = reqVec
-                query = Just "sdk_type=\"TestkitOutgoing\""
-                colIdxMap = listToIndexHashMap colNames
-                reqLastCreatedAtM = (\r -> lookupVecTextByKey r colIdxMap "created_at") =<< (requestVecs V.!? (V.length requestVecs - 1))
-                curatedColNames = nubOrd $ Log.curateCols [""] colNames
-                nextLogsURL = RequestDumps.requestDumpLogUrlPath pid query reqLastCreatedAtM Nothing Nothing Nothing Nothing (Just "loadmore") "requests"
-                resetLogsURL = RequestDumps.requestDumpLogUrlPath pid query Nothing Nothing Nothing Nothing Nothing Nothing "requests"
-                page =
-                  Log.ApiLogsPageData
-                    { pid
-                    , resultCount = requestsCount
-                    , requestVecs
-                    , cols = curatedColNames
-                    , colIdxMap
-                    , nextLogsURL
-                    , resetLogsURL
-                    , currentRange = Nothing
-                    , exceededFreeTier = False
-                    , query
-                    , cursor = Nothing
-                    , isTestLog = Just True
-                    , emptyStateUrl = Just $ "/p/" <> pid.toText <> "/monitors/" <> col.id.toText
-                    , source = "requests"
-                    , targetSpans = Nothing
-                    , childSpans = []
-                    , daysCountDown = Nothing
-                    }
-            Log.resultTable_ page False
-          _ -> pass
+    div_ [role_ "tablist", class_ "w-full rounded-3xl border"] do
+      div_ [class_ "w-full flex"] do
+        button_
+          [ class_ "cursor-pointer t-tab px-5 pt-2 pb-1.5 text-sm text-gray-600 border-b t-tab-active"
+          , role_ "tab"
+          , term "aria-label" "Overview"
+          , [__|
+           on click remove .t-tab-active from .t-tab
+            then add .t-tab-active to me
+            then add .hidden to #logs-t
+            then remove .hidden from #results-t
+            |]
+          ]
+          "Results"
+        button_
+          [ class_ "cursor-pointer t-tab px-5 pt-2 pb-1.5 text-sm text-gray-600 border-b"
+          , role_ "tab"
+          , term "aria-label" "Logs"
+          , [__|
+           on click remove .t-tab-active from .t-tab
+            then add .t-tab-active to me
+            then add .hidden to #results-t
+            then remove .hidden from #logs-t
+          |]
+          ]
+          "Logs"
+        div_ [class_ "w-full border-b"] pass
+      div_ [role_ "tabpanel", class_ "h-[65vh] overflow-y-auto", id_ "results-t"] do
+        let result = col.lastRunResponse >>= castToStepResult
+        let Testing.CollectionSteps stepsD = col.collectionSteps
+        testResultDiagram_ stepsD result
+      div_ [class_ "hidden h-[65vh] overflow-y-auto", id_ "logs-t"] do
+        div_ [class_ "overflow-x-hidden"] do
+          case reqsVecM of
+            Just reqVec -> do
+              let (requestVecs, colNames, requestsCount) = reqVec
+                  query = Just "sdk_type=\"TestkitOutgoing\""
+                  colIdxMap = listToIndexHashMap colNames
+                  reqLastCreatedAtM = (\r -> lookupVecTextByKey r colIdxMap "created_at") =<< (requestVecs V.!? (V.length requestVecs - 1))
+                  curatedColNames = nubOrd $ Log.curateCols [""] colNames
+                  nextLogsURL = RequestDumps.requestDumpLogUrlPath pid query reqLastCreatedAtM Nothing Nothing Nothing Nothing (Just "loadmore") "requests"
+                  resetLogsURL = RequestDumps.requestDumpLogUrlPath pid query Nothing Nothing Nothing Nothing Nothing Nothing "requests"
+                  page =
+                    Log.ApiLogsPageData
+                      { pid
+                      , resultCount = requestsCount
+                      , requestVecs
+                      , cols = curatedColNames
+                      , colIdxMap
+                      , nextLogsURL
+                      , resetLogsURL
+                      , currentRange = Nothing
+                      , exceededFreeTier = False
+                      , query
+                      , cursor = Nothing
+                      , isTestLog = Just True
+                      , emptyStateUrl = Just $ "/p/" <> pid.toText <> "/monitors/" <> col.id.toText
+                      , source = "requests"
+                      , targetSpans = Nothing
+                      , childSpans = []
+                      , daysCountDown = Nothing
+                      }
+              Log.resultTable_ page False
+            _ -> pass
+
+
+testResultDiagram_ :: V.Vector Testing.CollectionStepData -> Maybe (V.Vector Testing.StepResult) -> Html ()
+testResultDiagram_ steps result = do
+  whenJust result $ \res -> do
+    div_ [class_ "p-6 flex flex-col gap-8"] do
+      forM_ (V.indexed steps) $ \(i, st) -> do
+        let stepResult = res V.!? i
+        renderStepIll_ st stepResult i
+
+
+renderStepIll_ :: Testing.CollectionStepData -> Maybe Testing.StepResult -> Int -> Html ()
+renderStepIll_ st stepResult ind = do
+  whenJust stepResult $ \stepRes -> do
+    let title = st.title
+        assertionRes = (\(i, r) -> getAssertionResult r (V.fromList stepRes.assertResults V.!? i)) <$> V.indexed (fromMaybe [] st.asserts)
+        totalPass = V.length $ V.filter fst assertionRes
+    div_ [] do
+      div_ [class_ "flex items-center gap-2", [__|on click toggle .hidden on the next .step-body|]] do
+        faSprite_ "chevron-up" "regular" "h-5 w-5 border rounded p-1 cursor-pointer"
+        span_ [[__|on click halt|], class_ "text-gray-800 text-sm font-medium"] $ "Step " <> show ind
+        span_ [[__|on click halt|], class_ "badge bg-green-100 text-green-700 font-medium"] $ show totalPass <> "/" <> show (V.length assertionRes) <> " passed"
+        span_ [[__|on click halt|], class_ "text-gray-500 text-sm flex items-center gap-1"] do
+          faSprite_ "chevron-right" "regular" "h-3 w-3"
+          toHtml $ fromMaybe "" title
+      div_ [class_ "step-body ml-2"] do
+        div_ [class_ "border-l h-8"] pass
+        div_ [class_ "flex"] do
+          div_ [class_ "border-t w-8"] pass
+          div_ [] do
+            div_ [class_ "flex gap-1 -mt-2", [__|on click toggle .hidden on the next .assert-body|]] do
+              faSprite_ "chevron-up" "regular" "h-5 w-5 border rounded p-1 cursor-pointer"
+              span_ [[__| on click halt|], class_ "font-medium text-sm text-gray-800"] "Assertions"
+            div_ [class_ "border-l pt-4 ml-2 flex flex-col gap-2 assert-body"] do
+              forM_ assertionRes $ \(success, resultText) -> do
+                div_ [class_ "flex gap-2 items-center"] do
+                  span_ [class_ "w-10 border-t"] pass
+                  if success
+                    then span_ [class_ "badge bg-green-100 text-green-500 font-semibold"] "passed"
+                    else span_ [class_ "badge  bg-red-100 text-red-500 font-semibold"] "Failed"
+                  span_ [class_ "text-sm"] $ toHtml resultText
+
+
+getAssertionResult :: Map Text AE.Value -> Maybe Testing.AssertResult -> (Bool, Text)
+getAssertionResult st stepResult =
+  case Map.toList st of
+    [(key, val)] ->
+      let resultText = key <> ": " <> toText (show val)
+          success = maybe False (\x -> isJust x.ok) stepResult
+       in (success, resultText)
+    _ -> (False, "Invalid state: Map contains zero or multiple entries")
 
 
 dStats :: Projects.ProjectId -> Int -> Int -> Int -> Text -> Html ()
 dStats pid steps passed failed freq = do
   section_ [class_ "space-y-3 shrink-0 w-1/2"] do
-    div_ [class_ "reqResSubSection space-y-5"] do
-      div_ [class_ "flex gap-4"] do
-        statBox_ (Just pid) Nothing "Steps" "Total number of steps" (fmt (commaizeF steps)) Nothing
-        statBox_ (Just pid) Nothing "Passed" "Total number of steps passed in the last test run" (fmt (commaizeF passed)) Nothing
-        statBox_ (Just pid) Nothing "Failed" "Total number of steps failed in the last test run" (fmt (commaizeF failed)) Nothing
-        statBox_ (Just pid) Nothing "Frequency" "Frequency of collection test runs" freq Nothing
+    div_ [class_ "flex gap-2"] do
+      statBox_ (Just pid) Nothing "Steps" "Total number of steps" (fmt (commaizeF steps)) Nothing
+      statBox_ (Just pid) Nothing "Passed" "Total number of steps passed in the last test run" (fmt (commaizeF passed)) Nothing
+      statBox_ (Just pid) Nothing "Failed" "Total number of steps failed in the last test run" (fmt (commaizeF failed)) Nothing
+      statBox_ (Just pid) Nothing "Frequency" "Frequency of collection test runs" freq Nothing
 
 
 extractHostname :: Text -> Maybe Text

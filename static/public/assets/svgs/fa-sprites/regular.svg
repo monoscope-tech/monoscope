@@ -305,4 +305,8 @@
       d="M8.16666 1.5H11.1667M11.1667 1.5V4.5M11.1667 1.5L7.66666 5M5.16666 10.5H2.16666M2.16666 10.5V7.5M2.16666 10.5L5.66666 7"
       stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" />
   </symbol>
+  <symbol viewBox="0 0 6 11" id="f-arrow-right">
+    <path d="M1 9.5L5 5.5L1 1.5" stroke="#64748B" stroke-width="1.66667" stroke-linecap="round"
+      stroke-linejoin="round" />
+  </symbol>
 </svg>

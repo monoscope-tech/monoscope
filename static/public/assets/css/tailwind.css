@@ -139,6 +139,7 @@
   @apply hover:bg-gray-100 py-3 px-2 w-full items-center justify-between;
 }
 
+
 .htmx-indicator {
   display: none;
 }
@@ -367,12 +368,17 @@
 .sdk_tab_active {
   @apply border-blue-500 border ring ring-blue-500 shadow-lg;
 }
+.t-tab-active {
+  @apply font-medium border-blue-400
+}
+
 
 .tab:is(input[type="radio"]) {
   width: max-content;
 }
 
 @layer components {
+
   .cbadge-sm {
    @apply  px-2 py-1 text-xs rounded-xl;
   }
@@ -401,19 +407,19 @@
     @apply text-amber-500 bg-amber-100;
   }
   .badge-lime {
-    @apply bg-lime-200 text-lime-600; 
+    @apply bg-lime-200 text-lime-600;
   }
   .badge-pink {
-    @apply bg-pink-100 text-pink-600; 
+    @apply bg-pink-100 text-pink-600;
   }
   .badge-cyan {
-    @apply bg-cyan-100 text-cyan-600; 
+    @apply bg-cyan-100 text-cyan-600;
   }
   .ctable :where(.table-pin-rows thead tr) {
-    @apply sticky top-0 z-10 bg-slate-50/80; 
+    @apply sticky top-0 z-10 bg-slate-50/80;
   }
   .ctable :where(.table-pin-cols tr th) {
-    @apply sticky left-0 right-0 z-10; 
+    @apply sticky left-0 right-0 z-10;
   }
   .ctable td > div {
     @apply px-2 py-1;
