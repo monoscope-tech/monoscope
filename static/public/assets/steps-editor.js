@@ -255,61 +255,76 @@ export class StepsEditor extends LitElement {
       this.requestUpdate()
     }
     const totalConfigured = Object.values(configuredOptions).reduce((a, b) => a + b, 0)
+    //  ${
+    //   hasFailingAssertions || svErr ? 'border-red-500' : hasResults ? 'border-green-500' : 'border-slate-200'
+    // }
     return html`
       <div
-        class="rounded-lg overflow-hidden border group/item collectionStep bg-base-100 draggable shadow-md ${
-          hasFailingAssertions || svErr ? 'border-red-500' : hasResults ? 'border-green-500' : 'border-slate-200'
-        }"
+        class="rounded-2xl overflow-hidden group/item collectionStep border border-slate-200 draggable"
         data-index="${idx}"
       >
-        <div class="flex flex-row items-center bg-gray-50">
-          <div class="h-full shrink bg-gray-50 p-3 border-r border-r-slate-200 cursor-move "
+        <div class="flex flex-row items-center bg-slate-100">
+          <div class="h-full shrink p-3 cursor-move"
             draggable="true"
             @dragstart="${(e) => e.dataTransfer.setData('text/plain', e.target.dataset.index)}"
           >${faSprite_('grip-dots-vertical', 'solid', 'h-4 w-4')}</div>
-          <div class="flex-1 flex flex-row items-center gap-1 bg-base-100 pr-5 py-3">
-            <label for="stepState-${idx}" class="p-3 cursor-pointer text-xs text-slate-700" @click="${() => this.toggleExpanded(idx)}">${idx + 1}</label>
-            <label for="stepState-${idx}" class="p-3 cursor-pointer" @click="${() => this.toggleExpanded(idx)}">
-              ${faSprite_('chevron-right', 'solid', 'h-4 w-3 ' + (stepData._expanded ? 'rotate-90' : ''))}
-            </label>
-            <div class="w-full space-y-1 relative">
-              <div class="absolute right-0 items-center gap-3 text-xs text-gray-600 hidden group-hover/item:flex">
-                <a class="text-red-700 cursor-pointer" @click="${() => {
+          <div class="flex-1 flex flex-row items-center gap-1 pr-5 py-3" @click="${() => this.toggleExpanded(idx)}">
+            <label
+             for="stepState-${idx}" class="flex items-center whitespace-nowrap gap-1 w-max text-xs bg-slate-500 badge text-white">Step ${idx + 1}</label>
+            <div class="w-full space-y-1 shrink" @click="${(e) => e.stopPropagation()}">
+              <input
+              class="text-lg w-full pl-2 bg-transparent outline-none focus:outline-none" placeholder="Give your step a name*"
+               .value="${stepData.title || ''}" id="title-${idx}" @change=${(e) => this.updateValue(e, idx, null, null, 'title')} />
+            </div>
+            <div class="items-center w-max shrink-0 gap-3 text-xs text-slate-600 hidden group-hover/item:flex">
+                <input
+                  @click="${(e) => e.stopPropagation()}"
+                  @change="${(e) => {
+                    this.collectionSteps[idx].active = e.target.checked
+                    this.requestUpdate()
+                  }}"
+                  type="checkbox"
+                  class="toggle toggle-sm  ${stepData.active ? 'border-green-500 bg-white [--tglbg:#22c55e]' : 'border-slate-200 bg-white [--tglbg:#e2e8f0]'}"
+                  ${stepData.active ? '' : 'checked'} />
+                <button class="text-red-700 cursor-pointer" @click="${(e) => {
+                  e.stopPropagation()
                   this.collectionSteps = this.collectionSteps.filter((_, i) => i != idx)
                   this.collectionResults = this.collectionResults.filter((_, i) => i != idx)
                 }}">
-                  ${faSprite_('trash', 'regular', 'w-2 h-3')}
-                </a>
+                  ${faSprite_('trash', 'regular', 'w-4 h-4 stroke-red-700')}
+                </button>
+                <button class="text-slate-400 transition-all ${stepData._expanded ? 'rotate-90' : ''}">
+                  ${faSprite_('f-chevron-right', 'solid', 'w-4 h-4')}
+                </button>
               </div>
-              <input class="text-lg w-full pl-2" placeholder="Give your step a name*" .value="${stepData.title || ''}" id="title-${idx}" @change=${(e) =>
-      this.updateValue(e, idx, null, null, 'title')} />
-            </div>
           </div>
         </div>
-        <div class="border-t border-t-slate-200  p-3 ${stepData._expanded ? 'block' : 'hidden'} ">
+        <div class="p-4 pt-0 bg-slate-100 ${stepData._expanded ? 'block' : 'hidden'} ">
+        <div class="rounded-xl p-4 bg-white">
           <div>
-            <div class="space-y-2 bg-base-200 p-4">
-              <div class="form-control">
-                <div class="label label-text"><div>URL<span class="text-error">*</span></div></div>
+            <div class="p-0 m-0s">
+              <div class="">
+                <div class="text-sm text-slate-700"><div>URL<span class="text-error">*</span></div></div>
                 <div class="relative flex flex-row gap-2 items-center">
                   <label for="actions-list-input-${idx}" class="w-28 shrink text-sm font-medium form-control">
-                    <select id="actions-list-input-${idx}" class="select select-sm select-bordered w-full" @change=${(e) => this.updateValue(e, idx, null, null, '_method')}>
+                    <select id="actions-list-input-${idx}" class="select select-sm select-bordered shadow-none w-full" @change=${(e) => this.updateValue(e, idx, null, null, '_method')}>
                       ${validMethods.map((methodItem) => html`<option ?selected=${methodItem == stepData._method}>${methodItem}</option>`)}
                     </select>
                     ${saveError.method ? html`<span class="text-red-700 text-xs">${saveError.method}</span>` : ''}
                   </label>
                   <label for="actions-data-${idx}" class="flex-1 text-sm font-medium form-control w-full flex flex-row items-center gap-1">
                     <input
-                      type="text" id="actions-data-${idx}" .value=${stepData._url} class="input input-sm input-bordered w-full" @change=${(e) => this.updateValue(e, idx, null, null, '_url')}
+                      type="text" id="actions-data-${idx}" .value=${stepData._url} class="input input-sm shadow-none input-bordered w-full" @change=${(e) =>
+      this.updateValue(e, idx, null, null, '_url')}
                     />
                     ${saveError.url ? html`<span class="text-red-700 text-xs">${saveError.url}</span>` : ''}
                   </label>
                 </div>
               </div>
-              <details>
-                <summary class="cursor-pointer text-sm">Advanced Options ${totalConfigured} configured</summary
-                <div>
-                  <div class="mt-4 border-l-2 border-l-slate-300 pl-4 pb-3 bg-base-100">
+              <details class="mt-4">
+                <summary class="cursor-pointer text-sm text-slate-700 font-medium">Advanced Options (${totalConfigured} configured)</summary
+                 <div>
+                  <div class="mt-4 pb-3 border rounded-xl">
                     <div role="tablist" class="tabs tabs-bordered pt-1">
                       <a role="tab" class="tab ${activeTab === 'request-options' ? 'tab-active' : ''}" @click=${() => setActiveTab('request-options')}>
                         Request Options ${configuredOptions['request-options'] > 0 ? html`<span class="badge badge-sm badge-ghost">${configuredOptions['request-options']}</span>` : ''}
@@ -321,14 +336,14 @@ export class StepsEditor extends LitElement {
                         Request Body ${configuredOptions['request-body'] > 0 ? html`<span class="badge badge-sm badge-ghost">${configuredOptions['request-body']}</span>` : ''}
                       </a>
                     </div>
-                    <div class="border-b border-x border-base-300 p-4 rounded-b-lg space-y-3">
+                    <div class="p-4 space-y-3">
                       ${
                         activeTab === 'request-options'
                           ? html`
                               <div class="form-control w-full">
                                 <div class="label"><span class="label-text">HTTP Version</span></div>
                                 <select
-                                  class="select select-sm select-bordered max-w-xs"
+                                  class="select select-sm select-bordered max-w-xs shadow-none"
                                   .value=${this.collectionSteps[idx].httpVersion}
                                   @change=${(e) => {
                                     this.collectionSteps[idx].httpVersion = e.target.value
@@ -339,7 +354,7 @@ export class StepsEditor extends LitElement {
                                   <option value="http1">HTTP/1.1</option>
                                 </select>
                               </div>
-                              <div>
+                              <div class="flex gap-4 items-center">
                                 <div class="form-control">
                                   <label class="label cursor-pointer justify-start gap-3">
                                     <input
@@ -348,7 +363,7 @@ export class StepsEditor extends LitElement {
                                       ?checked=${stepData.followRedirects}
                                       @change=${(e) => (this.collectionSteps[idx].followRedirects = e.target.value == 'on')}
                                     />
-                                    <span class="label-text">Follow redirects</span>
+                                    <span class="text-slate-700 font-medium">Follow redirects</span>
                                   </label>
                                 </div>
                                 <div class="form-control">
@@ -359,20 +374,20 @@ export class StepsEditor extends LitElement {
                                       ?checked=${stepData.ignoreSSLErrors}
                                       @change=${(e) => (this.collectionSteps[idx].ignoreSSLErrors = e.target.value == 'on')}
                                     />
-                                    <span class="label-text">Ignore server certificate error</span>
+                                    <span class="text-slate-700 font-medium">Ignore server certificate error</span>
                                   </label>
                                 </div>
                               </div>
 
-                              <div class="flex items-center gap-3 label-text">
+                              <div class="flex items-center gap-2 text-slate-700 font-medium">
                                 <span class="">Time out after</span>
                                 <input
                                   type="number"
                                   value=${stepData.timeout || 60}
-                                  class="input input-bordered input-sm w-20"
+                                  class="input input-bordered input-sm w-20 shadow-none"
                                   @change=${(e) => (this.collectionSteps[idx].timeout = parseInt(e.target.value))}
                                 />
-                                <span class="text-sm">seconds</span>
+                                <span>seconds</span>
                               </div>
                               <div class="form-control w-full">
                                 <div class="label"><span class="label-text">Request Headers</span></div>
@@ -433,17 +448,15 @@ ${stepData?.headers?.Cookie || ''}</textarea
                                 </div>
                                 ${this.collectionSteps[idx]._requestType === 'application/x-www-form-urlencoded'
                                   ? html`<div class="flex flex-col gap-1">${this.renderParamsRows(stepData, idx, '_requestBody')}</div>`
-                                  : html`
-                                      <textarea
-                                        class="w-full border border-slate-200"
-                                        name="[${idx}][json]"
-                                        @change=${(e) => {
-                                          this.collectionSteps[idx]._json = e.target.value
-                                        }}
-                                      >
+                                  : html` <textarea
+                                      class="w-full border border-slate-200"
+                                      name="[${idx}][json]"
+                                      @change=${(e) => {
+                                        this.collectionSteps[idx]._json = e.target.value
+                                      }}
+                                    >
 ${stepData._json}</textarea
-                                      >
-                                    `}
+                                    >`}
                               </div>
                             `
                           : nothing
@@ -459,9 +472,11 @@ ${stepData._json}</textarea
               ${
                 stepResult && stepResult.resp
                   ? html`
-                      <div class="py-3">The request responded with a status of <strong>${stepResult.resp.status}</strong> and took <strong>${stepResult.resp.duration_ms}</strong> ms</div>
-                      <h3 class="text-xl py-3">Request Preview</h3>
-                      <div class="bg-base-200 p-3">${unsafeHTML(generateRequestPreviewFromObject(this.collectionSteps[idx]))}</div>
+                      <div class="py-3 text-sm font-medium">
+                        The request responded with a status of <strong>${stepResult.resp.status}</strong> and took <strong>${stepResult.resp.duration_ms}</strong> ms
+                      </div>
+                      <h3 class="text-slate-500 text-sm font-bold py-2">Request Preview</h3>
+                      <div class="bg-slate-50 rounded-xl p-4 flex flex-col gap-1">${unsafeHTML(generateRequestPreviewFromObject(this.collectionSteps[idx]))}</div>
                     `
                   : nothing
               }
@@ -469,7 +484,7 @@ ${stepData._json}</textarea
 
             <details class="mt-8" ?open=${stepResult && stepResult.resp}>
               <summary class="label-text text-lg mb-2 cursor-pointer">
-                <div class="inline-flex gap-2 items-center">
+                <div class="inline-flex gap-2 items-center cursor-pointer text-slate-700 font-medium">
                   Add Assertions (optional)
                   <a href="https://apitoolkit.io/docs/dashboard/dashboard-pages/api-tests/#test-definition-syntax" class="" target="_blank">
                     ${faSprite_('circle-info', 'regular', 'w-3 h-3 text-slate-700')}
@@ -480,9 +495,9 @@ ${stepData._json}</textarea
                 ${
                   stepResult && stepResult.resp
                     ? html`
-                        <div role="tablist" class="tabs tabs-boxed max-h-96 overflow-y-auto">
+                        <div role="tablist" class="tabs tabs-bordered max-h-96 overflow-y-auto border border-slate-200 rounded-xl">
                           <input type="radio" name="resp-items" role="tab" class="tab" aria-label="Response Headers" checked />
-                          <div role="tabpanel" class="tab-content bg-base-100 p-3">
+                          <div role="tabpanel" class="tab-content p-4">
                             ${Object.entries(stepResult.resp.headers).map(([key, value]) => {
                               let assertionObj = {
                                 type: 'header',
@@ -491,24 +506,24 @@ ${stepData._json}</textarea
                                 value: value,
                                 status: 'PASSED',
                               }
-                              return html` <span class="hover:bg-yellow-200 cursor-pointer" @click="${(e) => this.addAssertion(e, idx, assertionObj)}"> ${key}: ${value} </span><br /> `
+                              return html` <span class="hover:bg-gray-200 cursor-pointer" @click="${(e) => this.addAssertion(e, idx, assertionObj)}"> ${key}: ${value} </span><br /> `
                             })}
                           </div>
 
                           <input type="radio" name="resp-items" role="tab" class="tab" aria-label="Response Body" />
-                          <div role="tabpanel" class="tab-content bg-base-100 p-3">
+                          <div role="tabpanel" class="tab-content p-4">
                             <div>{</div>
                             <div class="pl-3">${renderJsonWithIndentation(stepResult.resp.json, (e, assertionObj) => this.addAssertion(e, idx, assertionObj), '$')}</div>
                             <div>}</div>
                           </div>
 
                           <input type="radio" name="resp-items" role="tab" class="tab" aria-label="Response Status Code" />
-                          <div role="tabpanel" class="tab-content bg-base-100 p-3">${stepResult.resp.status}</div>
+                          <div role="tabpanel" class="tab-content p-4">${stepResult.resp.status}</div>
                         </div>
                       `
                     : nothing
                 }
-                <p class="mt-5">Your step is successful:</p>
+                <p class="mt-10 text-xs font-semibold">Your step is successful:</p>
           ${renderAssertionBuilder({
             assertions: this.collectionSteps[idx]._assertions || [],
             result: this.collectionResults[idx],
@@ -519,13 +534,15 @@ ${stepData._json}</textarea
               </div>
             </details>
             <details class="mt-5">
-              <summary class="label-text text-lg mb-2 cursor-pointer"><div class="inline-flex gap-2 items-center ">Extract variables from the response (optional)</div></summary>
+              <summary class="label-text text-lg mb-2 cursor-pointer">
+                <div class="inline-flex gap-2 items-center cursor-pointer text-slate-700 font-medium">Extract variables from the response (optional)</div></summary>
               <div class="text-sm space-y-2 px-2 paramRows" id="[${idx}][exports]">
                 <p>Variables consist of a variable name and a json path pointing to the variable in the response.</p>
                 ${this.renderParamsRows(stepData, idx, 'exports')}
               </div>
             </div>
           </div>
+        </div>
         </div>
       </div>
     `
@@ -561,13 +578,13 @@ ${stepData._json}</textarea
       <div class="flex flex-row gap-2 w-full paramRow">
         <span class="shrink hidden assertIndicator"> ${this.renderAssertResult(result)} </span>
         <div class="flex flex-col w-1/3">
-          <input class="input input-bordered input-xs w-full" list="${type}DataList" placeholder="Key" .value="${key}" @change=${(e) => this.updateKey(e, idx, type, aidx)} />
+          <input class="input input-bordered input-xs shadow-none w-full" list="${type}DataList" placeholder="Key" .value="${key}" @change=${(e) => this.updateKey(e, idx, type, aidx)} />
           <span class="text-xs text-red-500 w-full">${keyError}</span>
         </div>
         <div class="shrink w-full flex flex-col">
           <input
             list="${type === 'asserts' ? 'assertAutocomplete-' + idx : ''}"
-            class="input input-bordered ${error ? 'input-error' : ''} input-xs w-full"
+            class="input input-bordered shadow-none ${error ? 'input-error' : ''} input-xs w-full"
             placeholder="Value"
             .value="${value}"
             @input=${(e) => this.updateValue(e, idx, type, aidx, key)}

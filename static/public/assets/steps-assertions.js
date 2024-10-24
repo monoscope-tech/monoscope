@@ -29,15 +29,15 @@ const bodyAdditionalOperations = [
 ]
 
 const renderInput = (type, value, onChange, placeholder, className) => html`
-  <input type=${type} placeholder=${placeholder} class="input input-sm input-bordered grow ${className}" .value=${value} @input=${onChange} />
+  <input type=${type} placeholder=${placeholder} class="input input-sm input-bordered grow shadow-none ${className}" .value=${value} @input=${onChange} />
 `
 
 const renderTextarea = (value, onChange, placeholder) => html`
-  <textarea placeholder=${placeholder} class="textarea textarea-sm textarea-bordered h-24 grow" .value=${value} @input=${onChange}></textarea>
+  <textarea placeholder=${placeholder} class="textarea textarea-sm textarea-bordered h-24 grow shadow-none" .value=${value} @input=${onChange}></textarea>
 `
 
 const renderDropdown = (options, value, onChange, className) => html`
-  <select class="select select-sm select-bordered max-w-xs ${className}" .value=${value} @change=${onChange}>
+  <select class="select select-sm select-bordered max-w-xs shadow-none ${className}" .value=${value} @change=${onChange}>
     ${options.map((option) => html` <option value=${option.value} ?selected=${option.value === value}>${option.label}</option> `)}
   </select>
 `
@@ -162,7 +162,7 @@ export function renderAssertionBuilder({
   removeAssertion,
 }) {
   return html`
-    <div class="px-4 divide-y">
+    <div class="">
       ${assertions.map((assertion, index) => {
         let aResult = undefined
         if (result && result.assert_results) {
@@ -172,9 +172,9 @@ export function renderAssertionBuilder({
 
         let error = passed ? '' : aResult ? aResult.err?.advice : ''
         return html`
-          <div class="border-b py-2">
-            <div class="flex space-x-2">
-              <strong class="block w-16 text-right  flex-shrink-0 pt-2">${index == 0 ? 'When' : 'And'}</strong>
+          <div class="py-2">
+            <div class="flex gap-2 items-center">
+              <strong class="block w-12 shrink-0 pt-2">${index == 0 ? 'When' : 'And'}</strong>
               <div class="flex flex-wrap items-center gap-2 grow ">
                 ${renderDropdown(
                   [
@@ -189,10 +189,10 @@ export function renderAssertionBuilder({
                 )}
                 ${renderAssertionContent(assertion, index, updateAssertion)}
               </div>
-              <div class="flex-shrink-0 ">
+              <div class="flex-shrink-0">
                 <div class="flex gap-3 pt-2 items-center">
-                  ${passed ? html`<span class="text-success ">PASSED</span>` : html`<span class="text-error">FAILED</span>`}
-                  <a class="cursor-pointer text-slate-600" @click=${removeAssertion(index)}>${faSprite_('trash', 'regular', 'w-3 h-3')}</a>
+                  ${passed ? html`<span class="badge badge-success">Passed</span>` : html`<span class="badge badge-error">Failed</span>`}
+                  <a class="cursor-pointer text-slate-600" @click=${removeAssertion(index)}> ${faSprite_('trash', 'regular', 'rounded-full bg-white shadow p-1 w-5 h-5 stroke-red-500')} </a>
                 </div>
               </div>
             </div>

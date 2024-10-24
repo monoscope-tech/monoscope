@@ -80,14 +80,14 @@ export function generateRequestPreviewFromObject(requestObject) {
   const httpVersion = requestObject.httpVersion || 'HTTP/1.1' // Default to HTTP/1.1 if not provided
 
   // Build the request preview with method, URL, and HTTP version
-  let requestPreview = `${method.toUpperCase()} ${url.href} ${httpVersion}<br/>`
+  let requestPreview = `<p>${method.toUpperCase()} ${url.href} ${httpVersion}<p/>`
 
   // Add HTTP/2 pseudo-headers if HTTP/2.0 is used
   let headersPreview = ''
   if (httpVersion === 'HTTP/2.0') {
-    headersPreview += `:authority: ${url.host}<br/>`
-    headersPreview += `:method: ${method.toUpperCase()}<br/>`
-    headersPreview += `:path: ${url.pathname}<br/>`
+    headersPreview += `<p>:authority: ${url.host}<p/>`
+    headersPreview += `<p>:method: ${method.toUpperCase()}<p/>`
+    headersPreview += `<p>:path: ${url.pathname}<p/>`
   }
 
   // Simulate browser-injected headers
@@ -103,7 +103,7 @@ export function generateRequestPreviewFromObject(requestObject) {
 
   // Add combined headers to the preview
   Object.entries(allHeaders).forEach(([key, value]) => {
-    headersPreview += `${key.toLowerCase()}: ${value}<br/>`
+    headersPreview += `<p>${key.toLowerCase()}: ${value}<p/>`
   })
 
   // Full request preview string
