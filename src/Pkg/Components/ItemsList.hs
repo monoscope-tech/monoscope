@@ -22,6 +22,7 @@ import Lucid
 import Lucid.Htmx
 import Lucid.Hyperscript (__)
 import Models.Projects.Projects qualified as Projects
+import Models.Tests.Testing qualified as Testing
 import Relude
 import Utils (deleteParam, faSprite_)
 
@@ -161,8 +162,8 @@ itemsList_ listCfg items =
                     , hxIndicator_ "#sortLoader"
                     ]
                     do
-                      div_ [class_ "flex flex-col items-center justify-center px-3"]
-                        $ if isActive then faSprite_ "icon-checkmark4" "solid" "w-4 h-5" else div_ [class_ "w-4 h-5"] ""
+                      div_ [class_ "flex flex-col items-center justify-center px-3"] $
+                        if isActive then faSprite_ "icon-checkmark4" "solid" "w-4 h-5" else div_ [class_ "w-4 h-5"] ""
                       div_ [class_ "grow space-y-1"] do
                         span_ [class_ "block text-lg"] $ toHtml title
                         span_ [class_ "block "] $ toHtml desc
@@ -209,8 +210,8 @@ itemRows_ :: (Monad m, ToHtml a) => Maybe Text -> V.Vector a -> HtmlT m ()
 itemRows_ nextFetchUrl items = do
   mapM_ toHtml items
   whenJust nextFetchUrl \url ->
-    when (length items > 9)
-      $ a_
+    when (length items > 9) $
+      a_
         [ class_ "cursor-pointer flex justify-center items-center p-1 blue-800 bg-blue-100 hover:bg-blue-200 text-center"
         , hxTrigger_ "click, intersect once"
         , hxSwap_ "outerHTML"
@@ -228,7 +229,7 @@ itemRows_ nextFetchUrl items = do
 
 -- TimelineSteps is used to render numbered timeline sections
 -- where each section has a number a title and content
-newtype TimelineSteps = TimelineSteps [TimelineStep]
+data TimelineSteps = TimelineSteps [TimelineStep] (Maybe Testing.Collection)
 
 
 data TimelineStep = TimelineStep
@@ -239,11 +240,11 @@ data TimelineStep = TimelineStep
 
 instance ToHtml TimelineSteps where
   toHtmlRaw = toHtml
-  toHtml (TimelineSteps steps) = toHtml $ timelineSteps_ steps
+  toHtml (TimelineSteps steps colM) = toHtml $ timelineSteps_ steps colM
 
 
-timelineSteps_ :: [TimelineStep] -> Html ()
-timelineSteps_ steps =
+timelineSteps_ :: [TimelineStep] -> Maybe Testing.Collection -> Html ()
+timelineSteps_ steps colM =
   ul_ [class_ "timeline timeline-snap-icon timeline-vertical timeline-compact pb-8"] $ do
     iforM_ steps $ \idx step -> li_ [class_ "group/tm"] $ do
       when (idx > 0) $ hr_ []
@@ -252,9 +253,29 @@ timelineSteps_ steps =
           [class_ "rounded-full bg-primary text-base-100 h-7 w-7 flex items-center justify-center text-sm"]
           (toHtml $ show $ idx + 1)
       div_ [class_ "timeline-end space-y-5 w-full"] $ do
-        label_ [class_ "text-xl flex items-center pt-1"] $ do
-          input_ ([type_ "checkbox", class_ "hidden tm-toggle"] <> [checked_ | idx == 0])
-          faSprite_ "chevron-right" "regular" "h-4 w-4 mx-2 text-blue-800 text-primary group-has-[.tm-toggle:checked]/tm:rotate-90"
-          span_ [] (toHtml step.title)
+        div_ [class_ "flex items-center justify-between"] do
+          label_ [class_ "text-lg flex gap-2 items-center pt-1"] $ do
+            span_ [class_ "font-medium ml-2 text-gray-900"] (toHtml step.title)
+            input_ ([type_ "checkbox", class_ "hidden tm-toggle"] <> [checked_ | idx == 0])
+            faSprite_ "chevron-up" "regular" "h-4 rounded-full rotate-180 bg-blue-500 p-1 w-4 text-white group-has-[.tm-toggle:checked]/tm:rotate-0"
+          when (idx == 0) $ do
+            whenJust colM $ \col ->
+              div_ [class_ "flex items-center gap-4"] do
+                label_ [class_ "relative inline-flex items-center cursor-pointer space-x-1"] do
+                  input_ [type_ "checkbox", class_ "checkbox checkbox-sm editormode", id_ "test-code-toggle", onchange_ "codeToggle(event)"] >> span_ [class_ "text-sm font-medium"] "Code editor"
+                button_
+                  [ class_ "border flex items-center gap-1 text-sm font-medium rounded-lg border-blue-500 text-blue-500 px-2 py-1"
+                  , hxPatch_ $ "/p/" <> col.projectId.toText <> "/monitors/" <> col.id.toText
+                  , hxParams_ "stepsData"
+                  , hxExt_ "json-enc"
+                  , hxVals_ "js:{stepsData: saveStepData()}"
+                  , hxTarget_ "#step-results-parent"
+                  , hxSwap_ "innerHTML"
+                  , hxIndicator_ "#step-results-indicator"
+                  ]
+                  do
+                    span_ "Run all"
+                    faSprite_ "play" "regular" "h-4 w-4 fill-none stroke-blue-500"
+
         div_ [class_ "pl-8 pb-8 space-y-3 hidden group-has-[.tm-toggle:checked]/tm:block"] step.content
       when (idx < (length steps - 1)) $ hr_ []

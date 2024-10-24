@@ -265,11 +265,12 @@ collectionNotFoundPage = div_ [class_ "w-full h-full flex items-center justify-c
 
 timelineSteps :: Projects.ProjectId -> Maybe Testing.Collection -> Components.TimelineSteps
 timelineSteps pid col =
-  Components.TimelineSteps $
+  Components.TimelineSteps
     [ Components.TimelineStep "Define API test" $ defineTestSteps_ col
     , Components.TimelineStep "Name and tag your test" $ nameOfTest_ (maybe "" (.title) col) (maybe V.empty (.tags) col)
     , Components.TimelineStep "Set Alert Message and Recovery Threshold" $ MetricMonitors.configureNotificationMessage_ col
     ]
+    col
 
 
 nameOfTest_ :: Text -> V.Vector Text -> Html ()
@@ -292,6 +293,21 @@ nameOfTest_ name tags = div_ [class_ "form-control w-full flex flex-col"] do
 
 defineTestSteps_ :: Maybe Testing.Collection -> Html ()
 defineTestSteps_ colM = do
+  div_ [class_ "flex flex-col ml-4 notif bg-blue-100 bg-opacity-60 rounded-xl"] do
+    div_ [class_ "self-end rounded-full shadow-sm bg-white flex justify-center items-center h-5 w-5 m-1.5 mb-0"] do
+      a_ [[__|on click remove the closest parent <.notif/>|]] $ faSprite_ "xmark" "regular" "w-2 h-2 text-blue-500"
+    div_ [class_ "flex items-center gap-4 pb-4 px-8"] do
+      faSprite_ "circle-info" "regular" "w-5 h-5 fill-none stroke-blue-500"
+      div_ [class_ "text-sm font-medium text-gray-500"] do
+        p_ [] "Link multiple steps by creating variables from the request response data."
+        p_ [] "When using variables, remember that step order matters"
+  div_ [class_ "overflow-y-hidden flex-1 "] $ termRaw "assertion-builder" [id_ ""] ""
+  div_ [class_ "overflow-y-hidden flex-1 "] $ termRaw "steps-editor" [id_ "stepsEditor"] ""
+
+
+collectionPage :: Projects.ProjectId -> Maybe Testing.Collection -> Maybe (V.Vector Testing.StepResult) -> String -> Html ()
+collectionPage pid colM col_rn respJson = do
+  let collectionStepsJSON = encode $ maybe (Testing.CollectionSteps []) (.collectionSteps) colM
   let (scheduled, scheduleNumber, scheduleNumberUnit) =
         maybe
           (True, "1", "minutes")
@@ -300,49 +316,6 @@ defineTestSteps_ colM = do
               _ -> (True, "1", "minutes")
           )
           colM
-  div_ [] do
-    label_ [class_ "relative inline-flex items-center cursor-pointer space-x-2"] do
-      input_ ([checked_ | scheduled] ++ [type_ "checkbox", class_ "toggle", name_ "scheduled"]) >> span_ [class_ "text-sm"] "Schedule test"
-    p_ [class_ "space-x-2"] do
-      "Run the test every"
-      input_ [class_ "ml-3 input input-sm input-bordered w-24 text-center", type_ "number", value_ scheduleNumber, name_ "scheduleNumber"]
-      select_ [class_ "select select-sm select-bordered", name_ "scheduleNumberUnit"] do
-        option_ (value_ "minutes" : [selected_ "" | scheduleNumberUnit == "minutes"]) "Minutes"
-        option_ (value_ "hours" : [selected_ "" | scheduleNumberUnit == "hours"]) "Hours"
-        option_ (value_ "days" : [selected_ "" | scheduleNumberUnit == "days"]) "Days"
-  div_ [class_ "alert"] do
-    faSprite_ "sparkles" "regular" "w-7 h-7 text-success "
-    div_ [] do
-      p_ [] "Link multiple steps by creating variables from the request response data."
-      p_ [] "When using variables, remember that step order matters"
-    div_ [] do
-      a_ [[__|on click remove the closest parent <.alert/>|]] $ faSprite_ "xmark" "regular" "w-5 h-5"
-  div_ [class_ "shrink p-4 flex justify-between items-center"] do
-    div_ [class_ "flex items-center space-x-4"] ""
-    div_ [class_ "space-x-4 flex items-center"] do
-      a_ [href_ "https://apitoolkit.io/docs/dashboard/dashboard-pages/api-tests/", target_ "_blank", class_ "text-sm flex items-center gap-1 text-blue-500"] do
-        faSprite_ "link-simple" "regular" "w-4 h-4" >> "Docs"
-      whenJust colM $ \col ->
-        button_
-          [ class_ "btn btn-sm btn-success"
-          , hxPatch_ $ "/p/" <> col.projectId.toText <> "/monitors/" <> col.id.toText
-          , hxParams_ "stepsData"
-          , hxExt_ "json-enc"
-          , hxVals_ "js:{stepsData: saveStepData()}"
-          , hxTarget_ "#step-results-parent"
-          , hxSwap_ "innerHTML"
-          , hxIndicator_ "#step-results-indicator"
-          ]
-          (span_ "Run all" >> faSprite_ "play" "solid" "w-3 h-3")
-      label_ [class_ "relative inline-flex items-center cursor-pointer space-x-2"] do
-        input_ [type_ "checkbox", class_ "toggle editormode", id_ "test-code-toggle", onchange_ "codeToggle(event)"] >> span_ [class_ "text-sm"] "Code"
-  div_ [class_ "overflow-y-hidden flex-1 "] $ termRaw "assertion-builder" [id_ ""] ""
-  div_ [class_ "overflow-y-hidden flex-1 "] $ termRaw "steps-editor" [id_ "stepsEditor"] ""
-
-
-collectionPage :: Projects.ProjectId -> Maybe Testing.Collection -> Maybe (V.Vector Testing.StepResult) -> String -> Html ()
-collectionPage pid colM col_rn respJson = do
-  let collectionStepsJSON = encode $ maybe (Testing.CollectionSteps []) (.collectionSteps) colM
   script_
     []
     [fmt|
@@ -361,6 +334,24 @@ collectionPage pid colM col_rn respJson = do
       ]
       do
         div_ [class_ "col-span-2 px-8 pt-5 pb-12 overflow-y-scroll"] do
+          div_ [class_ "flex items-centers justify-between mb-4"] do
+            div_ [class_ "flex items-center gap-2"] do
+              span_ [class_ "text-gray-900 font-medium"] "Run the test every"
+              input_ [class_ "ml-3 input input-sm input-bordered shadow-none w-14 text-center", type_ "number", value_ scheduleNumber, name_ "scheduleNumber"]
+              select_ [class_ "select select-sm select-bordered shadow-none", name_ "scheduleNumberUnit"] do
+                option_ (value_ "minutes" : [selected_ "" | scheduleNumberUnit == "minutes"]) "minutes"
+                option_ (value_ "hours" : [selected_ "" | scheduleNumberUnit == "hours"]) "hours"
+                option_ (value_ "days" : [selected_ "" | scheduleNumberUnit == "days"]) "days"
+            div_ [class_ "flex items-center gap-2"] do
+              span_ [class_ "text-sm text-gray-500 font-medium"] "Status"
+              let extrcls = if scheduled then "bg-green-100 text-green-700" else "bg-gray-100 text-gray-600"
+              select_ [class_ $ "select select-sm rounded-lg shadow-none " <> extrcls, name_ "scheduled"] do
+                option_ (value_ "on" : [selected_ "" | scheduled]) "Active"
+                option_ (value_ "off" : [selected_ "" | not scheduled]) "Inactive"
+
+          -- label_ [class_ "relative inline-flex items-center cursor-pointer space-x-2"] do
+          --   input_ ([checked_ | scheduled] ++ [type_ "checkbox", class_ "toggle", name_ "scheduled"]) >> span_ [class_ "text-sm"] "Schedule test"
+
           toHtml $ timelineSteps pid colM
           whenJust colM $ \col -> do
             input_ [type_ "hidden", name_ "collectionId", value_ col.id.toText]

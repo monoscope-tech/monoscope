@@ -135,12 +135,13 @@ errorLogsContent =
 timelineSteps :: Projects.ProjectId -> Components.TimelineSteps
 timelineSteps pid =
   Components.TimelineSteps
-    $ [ Components.TimelineStep "Choose the detection method" chooseDetectionMethod_
-      , Components.TimelineStep "Define the metric" (defineTheMetric_ pid)
-      , Components.TimelineStep "Set alert conditions" alertConditions_
-      , -- , Components.TimelineStep "Configure notification message" configureNotificationMessage_
-        Components.TimelineStep "Configure notification Channels" configureNotificationChannels_
-      ]
+    [ Components.TimelineStep "Choose the detection method" chooseDetectionMethod_
+    , Components.TimelineStep "Define the metric" (defineTheMetric_ pid)
+    , Components.TimelineStep "Set alert conditions" alertConditions_
+    , -- , Components.TimelineStep "Configure notification message" configureNotificationMessage_
+      Components.TimelineStep "Configure notification Channels" configureNotificationChannels_
+    ]
+    Nothing
 
 
 -- Content placeholders for TimelineSteps
@@ -196,8 +197,8 @@ configureNotificationMessage_ colM = do
       div_ [class_ "flex items-center gap-2"] do
         input_ $ [class_ "toggle toggle-sm", type_ "checkbox", name_ "notifyAfterCheck"] ++ [checked_ | nfc]
         span_ "If this monitor is not acknowleged or resoved, notify renotify every"
-        select_ [class_ "select select-xs select-bordered", name_ "notifyAfter"]
-          $ mapM_ (\v -> option_ [selected_ "" | v == naf] $ toHtml v) ["10 mins", "20 mins", "30 mins", "1 hour", "6 hours", "24 hours"]
+        select_ [class_ "select select-xs select-bordered", name_ "notifyAfter"] $
+          mapM_ (\v -> option_ [selected_ "" | v == naf] $ toHtml v) ["10 mins", "20 mins", "30 mins", "1 hour", "6 hours", "24 hours"]
       div_ [class_ "flex items-center gap-2"] do
         input_ $ [class_ "toggle toggle-sm", type_ "checkbox", name_ "stopAfterCheck"] ++ [checked_ | sfc]
         span_ "Stop renotifying after "

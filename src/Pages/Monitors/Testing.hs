@@ -150,7 +150,7 @@ collectionCard pid col currTime = do
                 span_ [class_ "text-gray-500"] "Started"
                 span_ [class_ "text-sm font-medium text-gray-800"] $ toHtml $ prettyTimeAuto currTime col.createdAt
             div_ [class_ "flex gap-1.5 items-center"] do
-              faSprite_ "play" "regular" "h-6 w-6 fill-none"
+              faSprite_ "play" "regular" "h-6 w-6 fill-none text-[#64748B]"
               div_ [class_ "flex flex-col"] do
                 span_ [class_ "text-gray-500"] "Last run"
                 span_ [class_ "text-sm font-medium text-gray-800"] do
@@ -329,7 +329,7 @@ renderStepIll_ st stepResult ind = do
               forM_ assertionRes $ \(success, resultText) -> do
                 div_ [class_ "flex gap-3 items-center"] do
                   span_
-                    [ class_ "w-10 relative border-t after:content-[''] after:-top-1 after:absolute after:h-1 after:w-1 after:rounded-full after:bg-gray-200 after:-right-1 after:z-10"
+                    [ class_ "w-10 relative border-t after:content-[''] after:top-[-2px] after:absolute after:h-1 after:w-1 after:rounded-full after:bg-gray-200 after:right-[-2px] after:z-10"
                     ]
                     pass
                   if success

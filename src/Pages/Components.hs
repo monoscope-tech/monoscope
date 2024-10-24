@@ -46,11 +46,11 @@ statBox_ pid iconM title helpInfo val bckupValM = do
     whenJust iconM $ \(icon, kind, color) -> do
       div_ [class_ "flex items-center justify-center h-10 w-10 bg-white rounded-[12px]"] do
         faSprite_ icon kind $ "w-4 h-4 " <> color
-    div_ [class_ "flex flex-col gap-.5"] do
+    div_ [class_ "flex flex-col gap-1"] do
       span_ [class_ "font-bold text-4xl text-gray-800"] $ toHtml val
-      div_ [class_ "flex gap-1 items-center text-sm text-gray-500"] do
+      div_ [class_ "flex gap-2 items-center text-sm text-gray-500"] do
         p_ [] $ toHtml title
-        span_ [class_ "inline-block tooltip", term "data-tip" helpInfo] $ faSprite_ "circle-info" "regular" "w-4 h-4"
+        span_ [term "data-tip" helpInfo] $ faSprite_ "circle-info" "regular" "w-4 mt-[-2px]"
 
 
 getTargetPage :: Text -> Text
