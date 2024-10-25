@@ -274,14 +274,14 @@ timelineSteps pid col =
 
 
 nameOfTest_ :: Text -> V.Vector Text -> Html ()
-nameOfTest_ name tags =
+nameOfTest_ name tags = do
+  let tgs = decodeUtf8 $ encode $ V.toList tags
   div_ [class_ "form-control w-full p-4 bg-slate-100 rounded-2xl"] do
     div_ [class_ "flex flex-col rounded-xl p-4 bg-white"] do
       label_ [class_ "label"] $ span_ [class_ "text-slate-500 text-sm font-semibold"] "Name"
       input_ [placeholder_ "Give your test a name", id_ "test_title", class_ "input input-sm input-bordered mb-2 shadow-none w-full", name_ "title", value_ name]
       label_ [class_ "label"] $ span_ [class_ "text-slate-500 text-sm font-semibold"] "Tags"
-      input_ [placeholder_ "Add tags", value_ "", id_ "tags_input"]
-      let tgs = decodeUtf8 $ encode $ V.toList tags
+      input_ [placeholder_ "Add tags", id_ "tags_input", class_ "rounded-lg shadow-none w-full", value_ tgs]
       script_
         [text|
      document.addEventListener('DOMContentLoaded', function() {
@@ -362,13 +362,37 @@ collectionPage pid colM col_rn respJson = do
               span_ [id_ "save-indicator", class_ "refresh-indicator htmx-indicator query-indicator loading loading-dots loading-md"] ""
               "Save"
 
-        div_ [class_ "col-span-1 border-r border-gray-200 overflow-y-auto"] do
-          div_ [role_ "tablist", class_ "tabs tabs-bordered w-full"] do
-            input_ [type_ "radio", name_ "side-tabs", role_ "tab", class_ "tab", term "aria-label" "Variables", checked_]
-            div_ [role_ "tabpanel", class_ "tab-content"] do
+        div_ [class_ "p-4 col-span-1 overflow-y-auto"] do
+          div_ [role_ "tablist", class_ "w-full h-full"] do
+            div_ [class_ "w-full flex rounded-t-2xl border"] do
+              button_
+                [ class_ "cursor-pointer t-tab px-4 py-1 text-sm text-gray-600 border-b t-tab-active"
+                , role_ "tab"
+                , type_ "button"
+                , [__|
+                 on click remove .t-tab-active from .t-tab
+                  then add .t-tab-active to me
+                  then add .hidden to #step-results-parent
+                  then remove .hidden from #vars-t
+                  |]
+                ]
+                "Variables"
+              button_
+                [ class_ "cursor-pointer t-tab px-4 py-2 text-sm whitespace-nowrap text-gray-600 border-b"
+                , role_ "tab"
+                , type_ "button"
+                , [__|
+                 on click remove .t-tab-active from .t-tab
+                  then add .t-tab-active to me
+                  then add .hidden to #vars-t
+                  then remove .hidden from #step-results-parent
+                |]
+                ]
+                "Result Log"
+              div_ [class_ "w-full border-b"] pass
+            div_ [role_ "tabpanel", class_ "h-[calc(100%-30px)] max-h-[calc(100%-30px)] rounded-b-2xl border border-t-0", id_ "vars-t"] do
               variablesDialog pid colM
-            input_ [type_ "radio", name_ "side-tabs", role_ "tab", class_ "tab", term "aria-label" "Test Results Log"]
-            div_ [role_ "tabpanel", class_ "tab-content space-y-4 relative", id_ "step-results-parent"] do
+            div_ [role_ "tabpanel", class_ "hidden relative space-y-4 h-[calc(100%-30px)] max-h-[calc(100%-30px)] rounded-b-2xl border border-t-0 overflow-y-scroll", id_ "step-results-parent"] do
               case col_rn of
                 Just res -> do
                   V.iforM_ res collectionStepResult_

@@ -255,12 +255,10 @@ export class StepsEditor extends LitElement {
       this.requestUpdate()
     }
     const totalConfigured = Object.values(configuredOptions).reduce((a, b) => a + b, 0)
-    //  ${
-    //   hasFailingAssertions || svErr ? 'border-red-500' : hasResults ? 'border-green-500' : 'border-slate-200'
-    // }
+
     return html`
       <div
-        class="rounded-2xl overflow-hidden group/item collectionStep border border-slate-200 draggable"
+        class="rounded-2xl overflow-hidden group/item collectionStep border draggable  ${hasFailingAssertions || svErr ? 'border-red-500' : hasResults ? 'border-green-500' : 'border-slate-200'}"
         data-index="${idx}"
       >
         <div class="flex flex-row items-center bg-slate-100">

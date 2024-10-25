@@ -247,7 +247,7 @@ timelineSteps_ :: [TimelineStep] -> Maybe Testing.Collection -> Html ()
 timelineSteps_ steps colM =
   ul_ [class_ "timeline timeline-snap-icon timeline-vertical timeline-compact pb-8"] $ do
     iforM_ steps $ \idx step -> li_ [class_ "group/tm"] $ do
-      when (idx > 0) $ hr_ []
+      when (idx > 0) $ hr_ [style_ "width:2px"]
       div_ [class_ "timeline-middle "] do
         span_
           [class_ "rounded-full bg-primary text-base-100 h-7 w-7 flex items-center justify-center text-sm"]
@@ -278,4 +278,4 @@ timelineSteps_ steps colM =
                     faSprite_ "play" "regular" "h-4 w-4 fill-none stroke-blue-500"
 
         div_ [class_ "pl-2 pb-8 space-y-3 hidden group-has-[.tm-toggle:checked]/tm:block"] step.content
-      when (idx < (length steps - 1)) $ hr_ []
+      when (idx < (length steps - 1)) $ hr_ [style_ "width:2px"]
