@@ -277,5 +277,5 @@ timelineSteps_ steps colM =
                     span_ "Run all"
                     faSprite_ "play" "regular" "h-4 w-4 fill-none stroke-blue-500"
 
-        div_ [class_ "pl-8 pb-8 space-y-3 hidden group-has-[.tm-toggle:checked]/tm:block"] step.content
+        div_ [class_ "pl-2 pb-8 space-y-3 hidden group-has-[.tm-toggle:checked]/tm:block"] step.content
       when (idx < (length steps - 1)) $ hr_ []

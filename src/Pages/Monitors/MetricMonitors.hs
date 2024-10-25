@@ -175,35 +175,37 @@ configureNotificationMessage_ colM = do
   let (severity, subject, message, naf, saf, nfc, sfc) = case colM of
         Just col -> (col.alertSeverity, col.alertSubject, col.alertMessage, col.notifyAfter, col.stopAfter, col.notifyAfterCheck, col.stopAfterCheck)
         Nothing -> ("Info", "Error: Error subject", "Alert Message", "10 minutes", "0", False, False)
-  div_ [class_ "space-y-4 max-w-[700px]"] do
-    div_ [class_ "form-control w-full"] do
-      label_ [class_ "label"] $ span_ [class_ "label-text"] "Severity"
-      select_ [class_ "select select-xs select-bordered w-full", name_ "alertSeverity"] do
-        option_ [selected_ "" | severity == "Info"] "Info"
-        option_ [selected_ "" | severity == "Warning"] "Warning"
-        option_ [selected_ "" | severity == "Error"] "Error"
-        option_ [selected_ "" | severity == "Critical"] "Critical"
-    div_ [class_ "form-control w-full"] do
-      label_ [class_ "label"] $ span_ [class_ "label-text"] "Subject"
-      input_ [placeholder_ "Error: Error subject", class_ "input input-xs input-bordered  w-full", name_ "alertSubject", value_ subject]
-    div_ [class_ "form-control w-full"] do
-      label_ [class_ "label"] $ span_ [class_ "label-text"] "Message"
-      textarea_
-        [placeholder_ "Alert Message", class_ "textarea  textarea-bordered textarea-xs w-full", name_ "alertMessage", value_ message]
-        $ toHtml message
-    div_ [class_ "border-l-2 border-l-slate-300 pl-4 space-y-2"] do
-      h3_ [class_ "font-normal text-base"] "Recovery Thresholds"
-      p_ [] "Send notifications for alert status periodically as long as the monitor has not recovered"
-      div_ [class_ "flex items-center gap-2"] do
-        input_ $ [class_ "toggle toggle-sm", type_ "checkbox", name_ "notifyAfterCheck"] ++ [checked_ | nfc]
-        span_ "If this monitor is not acknowleged or resoved, notify renotify every"
-        select_ [class_ "select select-xs select-bordered", name_ "notifyAfter"] $
-          mapM_ (\v -> option_ [selected_ "" | v == naf] $ toHtml v) ["10 mins", "20 mins", "30 mins", "1 hour", "6 hours", "24 hours"]
-      div_ [class_ "flex items-center gap-2"] do
-        input_ $ [class_ "toggle toggle-sm", type_ "checkbox", name_ "stopAfterCheck"] ++ [checked_ | sfc]
-        span_ "Stop renotifying after "
-        input_ [type_ "number", value_ saf, name_ "stopAfter"]
-        span_ "occurences."
+  div_ [class_ "space-y-4 bg-slate-100 p-4 rounded-2xl"] do
+    div_ [class_ "p-4 bg-white rounded-xl"] do
+      div_ [class_ "flex items-center w-full gap-2"] do
+        div_ [class_ "form-control"] do
+          label_ [class_ "label"] $ span_ [class_ "label-text font-medium"] "Severity"
+          select_ [class_ "select select-bordered select-sm shadow-none w-28", name_ "alertSeverity"] do
+            option_ [selected_ "" | severity == "Info"] "Info"
+            option_ [selected_ "" | severity == "Warning"] "Warning"
+            option_ [selected_ "" | severity == "Error"] "Error"
+            option_ [selected_ "" | severity == "Critical"] "Critical"
+        div_ [class_ "form-control w-full"] do
+          label_ [class_ "label"] $ span_ [class_ "label-text font-medium"] "Subject"
+          input_ [placeholder_ "Error: Error subject", class_ "input shadow-none input-bordered  input-sm w-full", name_ "alertSubject", value_ subject]
+      div_ [class_ "form-control w-full my-3"] do
+        label_ [class_ "label"] $ span_ [class_ "label-text"] "Message"
+        textarea_
+          [placeholder_ "Alert Message", class_ "textarea  textarea-bordered shadow-none p-2 rounded-2xl textarea-xs w-full", name_ "alertMessage", value_ message]
+          $ toHtml message
+      div_ [class_ "space-y-2 py-4"] do
+        h3_ [class_ "text-slate-600 font-medium"] "Recovery Thresholds"
+        p_ [class_ "text-sm font-medium"] "Send notifications for alert status periodically as long as the monitor has not recovered"
+        div_ [class_ "flex items-center gap-2 pt-4"] do
+          input_ $ [class_ "checkbox checkbox-sm", type_ "checkbox", name_ "notifyAfterCheck"] ++ [checked_ | nfc]
+          span_ "If this monitor is not acknowleged or resoved, notify renotify every"
+          select_ [class_ "select select-xs select-bordered shadow-none", name_ "notifyAfter"] $
+            mapM_ (\v -> option_ [selected_ "" | v == naf] $ toHtml v) ["10 mins", "20 mins", "30 mins", "1 hour", "6 hours", "24 hours"]
+        div_ [class_ "flex items-center gap-2"] do
+          input_ $ [class_ "checkbox checkbox-sm", type_ "checkbox", name_ "stopAfterCheck"] ++ [checked_ | sfc]
+          span_ "Stop renotifying after "
+          input_ [type_ "number", class_ "input input-bordered input-xs shadow-none w-20", value_ saf, name_ "stopAfter"]
+          span_ "occurences."
 
 
 configureNotificationChannels_ :: Html ()

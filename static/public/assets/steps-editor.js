@@ -287,13 +287,14 @@ export class StepsEditor extends LitElement {
                   class="toggle toggle-sm  ${stepData.active ? 'border-green-500 bg-white [--tglbg:#22c55e]' : 'border-slate-200 bg-white [--tglbg:#e2e8f0]'}"
                   ${stepData.active ? '' : 'checked'} />
                 <button class="text-red-700 cursor-pointer" @click="${(e) => {
+                  e.preventDefault()
                   e.stopPropagation()
                   this.collectionSteps = this.collectionSteps.filter((_, i) => i != idx)
                   this.collectionResults = this.collectionResults.filter((_, i) => i != idx)
                 }}">
                   ${faSprite_('trash', 'regular', 'w-4 h-4 stroke-red-700')}
                 </button>
-                <button class="text-slate-400 transition-all ${stepData._expanded ? 'rotate-90' : ''}">
+                <button type="button" class="text-slate-400 transition-all ${stepData._expanded ? 'rotate-90' : ''}">
                   ${faSprite_('f-chevron-right', 'solid', 'w-4 h-4')}
                 </button>
               </div>
@@ -592,7 +593,7 @@ ${stepData._json}</textarea
           <span class="text-xs text-red-500">${error}</span>
         </div>
         <a class="cursor-pointer text-slate-600" @click=${(e) => this.deleteKey(e, idx, type, aidx, key)}>
-          <svg class="inline-block icon w-3 h-3 "><use href="/public/assets/svgs/fa-sprites/regular.svg#trash"></use></svg>
+          <svg class="inline-block icon w-5 h-5 p-1 rounded-full shadow border stroke-red-500  "><use href="/public/assets/svgs/fa-sprites/regular.svg#trash"></use></svg>
         </a>
       </div>
     `
@@ -741,8 +742,8 @@ ${stepData._json}</textarea
           >
             ${this.collectionSteps.map((stepData, idx) => this.renderCollectionStep(stepData, idx, this.collectionResults[idx], this.saveErrors[idx]) || undefined)}
           </div>
-          <div class="p-4 pt-2">
-            <a class="btn btn-outline btn-neutral btn-sm items-center cursor-pointer" @click=${() => (this.collectionSteps = [...this.collectionSteps, DEFAULT_STEP])}>
+          <div class="p-4 pt-4">
+            <a class="btn border-blue-500 btn-sm  text-blue-500 font-medium items-center cursor-pointer" @click=${() => (this.collectionSteps = [...this.collectionSteps, DEFAULT_STEP])}>
               <svg class="inline-block icon w-3 h-3"><use href="/public/assets/svgs/fa-sprites/solid.svg#plus"></use></svg>
               Add a step to test
             </a>
