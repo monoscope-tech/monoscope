@@ -378,7 +378,12 @@
 }
 
 @layer components {
-
+ .blue-gr-btn {
+  @apply bg-gradient-to-b text-white font-medium from-blue-500 to-blue-600
+ }
+ .blue-outline-btn {
+  @apply border-blue-500 text-blue-500 font-medium
+ }
   .cbadge-sm {
    @apply  px-2 py-1 text-xs rounded-xl;
   }

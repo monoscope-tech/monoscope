@@ -464,7 +464,7 @@ ${stepData._json}</textarea
                   </div>
                 </details>
               </div>
-              <button class="btn btn-sm btn-primary mt-5" ?disabled=${!stepData._url} @click=${(e) => this.sendStepRequest(e, idx)}>
+              <button class="btn btn-sm mt-5 blue-gr-btn" ?disabled=${!stepData._url} @click=${(e) => this.sendStepRequest(e, idx)}>
               ${this.isSendingRequest ? html`<span class="loading loading-dots loading-sm"></span>` : 'Send'}
               </button>
               <br/>
@@ -741,7 +741,7 @@ ${stepData._json}</textarea
             ${this.collectionSteps.map((stepData, idx) => this.renderCollectionStep(stepData, idx, this.collectionResults[idx], this.saveErrors[idx]) || undefined)}
           </div>
           <div class="p-4 pt-4">
-            <a class="btn border-blue-500 btn-sm  text-blue-500 font-medium items-center cursor-pointer" @click=${() => (this.collectionSteps = [...this.collectionSteps, DEFAULT_STEP])}>
+            <a class="btn btn-sm blue-outline-btn items-center cursor-pointer" @click=${() => (this.collectionSteps = [...this.collectionSteps, DEFAULT_STEP])}>
               <svg class="inline-block icon w-3 h-3"><use href="/public/assets/svgs/fa-sprites/solid.svg#plus"></use></svg>
               Add a step to test
             </a>

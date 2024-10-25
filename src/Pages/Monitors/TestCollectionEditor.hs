@@ -357,10 +357,11 @@ collectionPage pid colM col_rn respJson = do
           toHtml $ timelineSteps pid colM
           whenJust colM $ \col -> do
             input_ [type_ "hidden", name_ "collectionId", value_ col.id.toText]
-          div_ [class_ "flex"] do
-            button_ [class_ "fixed w-96 top-[95%] z-10 btn btn-primary btn-sm", type_ "submit"] do
+          div_ [class_ "flex justify-center"] do
+            button_ [class_ "px-6 py-3 rounded-2xl blue-gr-btn", type_ "submit"] do
               span_ [id_ "save-indicator", class_ "refresh-indicator htmx-indicator query-indicator loading loading-dots loading-md"] ""
-              "Save"
+              "Save changes"
+              faSprite_ "save" "regular" "w-4 h-4 ml-2 stroke-white"
 
         div_ [class_ "p-4 col-span-1 overflow-y-auto"] do
           div_ [role_ "tablist", class_ "w-full h-full"] do
@@ -463,18 +464,17 @@ variablesDialog pid colM = do
       let Testing.CollectionVariables vars = col.collectionVariables
       div_ [class_ "w-full flex flex-col gap-2"] do
         forM_ vars $ \var -> do
-          div_ [class_ "flex items-center px-4 gap-2 text-sm"] do
-            div_ [class_ "input input-sm"] $ toHtml var.variableName
-            div_ [class_ "input input-sm"] "="
-            div_ [class_ "input input-sm"] $ toHtml var.variableValue
+          div_ [class_ "flex items-center w-full px-4 gap-2 text-sm relative"] do
+            div_ [class_ "input text-left truncate ellipsis input-sm w-full input-bordered shadow-none"] $ toHtml var.variableName
+            div_ [class_ "input text-left truncate ellipsis input-sm w-full input-bordered shadow-none"] $ toHtml var.variableValue
             div_
-              [ class_ "shrink-0"
+              [ class_ "absolute -top-2 right-2 cursor-pointer h-5 w-5 flex justify-center items-center rounded-full bg-white shadow border"
               , hxDelete_ $ "/p/" <> pid.toText <> "/monitors/" <> col.id.toText <> "/variables/" <> var.variableName
               , hxTarget_ "#test-variables-content"
               , hxSwap_ "outerHTML"
               ]
               do
-                faSprite_ "trash" "regular" "w-4 h-4 shrink-0"
+                faSprite_ "trash" "regular" "w-3 h-3 stroke-red-500"
       let varsJson = decodeUtf8 $ encode $ V.toList vars
       script_
         [text|
@@ -490,8 +490,7 @@ variablesDialog pid colM = do
         div_ [class_ "w-full pt-24 text-center"] do
           h4_ [class_ "text-lg font-medium"] "Create Local Variables"
           p_ [class_ "text-gray-500"] "Create local variables to be used in your test steps."
-
-      label_ [Lucid.for_ "my_modal_7", class_ "btn btn-success btn-sm mt-8 mx-auto"] do
+      label_ [Lucid.for_ "my_modal_7", class_ "btn blue-outline-btn btn-sm mt-8 mx-auto"] do
         faSprite_ "plus" "solid" "w-4 h-4" >> "Variable"
       input_ [type_ "checkbox", id_ "my_modal_7", class_ "modal-toggle"]
       div_ [class_ "modal", role_ "dialog"] $ do
