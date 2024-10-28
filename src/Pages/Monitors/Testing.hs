@@ -30,7 +30,7 @@ import Models.Users.Sessions qualified as Sessions
 import NeatInterpolation (text)
 import Network.URI (URIAuth (uriRegName), parseURI, uriAuthority)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
-import Pages.Components (statBox, statBox_)
+import Pages.Components (emptyState_, statBox_)
 import Pages.Log (ApiLogsPageData (isTestLog))
 import Pages.Log qualified as Log
 import Pages.Monitors.TestCollectionEditor (castToStepResult)
@@ -88,7 +88,7 @@ testingGetH pid filterTM timeFilter = do
           { sessM = Just sess.persistentSession
           , currProject = Just project
           , pageTitle = "Multistep API Tests (Beta)"
-          , pageActions = Just $ a_ [href_ $ "/p/" <> pid.toText <> "/monitors/collection", class_ "btn btn-sm btn-outline space-x-2"] $ Utils.faSprite_ "plus" "regular" "h-4" >> "new tests"
+          , pageActions = Just $ a_ [href_ $ "/p/" <> pid.toText <> "/monitors/collection", class_ "btn btn-sm blue-outline-btn space-x-2"] $ Utils.faSprite_ "plus" "regular" "h-4" >> "new tests"
           , navTabs =
               Just $
                 toHtml $
@@ -114,7 +114,7 @@ instance ToHtml CollectionListItemVM where
 
 collectionCard :: Projects.ProjectId -> Testing.CollectionListItem -> UTCTime -> Html ()
 collectionCard pid col currTime = do
-  div_ [class_ "border-b flex p-4 gap-4"] do
+  div_ [class_ "border-b flex p-4 gap-4 itemsListItem"] do
     div_ [class_ "mt-2 shrink-0"] do
       input_
         [ term "aria-label" "Select Issue"
@@ -258,7 +258,7 @@ dashboardPage pid col reqsVecM = do
       div_ [role_ "tabpanel", class_ "h-[65vh] overflow-y-auto", id_ "results-t"] do
         let result = col.lastRunResponse >>= castToStepResult
         let Testing.CollectionSteps stepsD = col.collectionSteps
-        testResultDiagram_ stepsD result
+        testResultDiagram_ pid col.id stepsD result
       div_ [class_ "hidden h-[65vh] overflow-y-auto", id_ "logs-t"] do
         div_ [class_ "overflow-x-hidden"] do
           case reqsVecM of
@@ -284,7 +284,7 @@ dashboardPage pid col reqsVecM = do
                       , query
                       , cursor = Nothing
                       , isTestLog = Just True
-                      , emptyStateUrl = Just $ "/p/" <> pid.toText <> "/monitors/" <> col.id.toText
+                      , emptyStateUrl = Just $ "/p/" <> pid.toText <> "/monitors/collection?col_id=" <> col.id.toText
                       , source = "requests"
                       , targetSpans = Nothing
                       , childSpans = []
@@ -294,8 +294,12 @@ dashboardPage pid col reqsVecM = do
             _ -> pass
 
 
-testResultDiagram_ :: V.Vector Testing.CollectionStepData -> Maybe (V.Vector Testing.StepResult) -> Html ()
-testResultDiagram_ steps result = do
+testResultDiagram_ :: Projects.ProjectId -> Testing.CollectionId -> V.Vector Testing.CollectionStepData -> Maybe (V.Vector Testing.StepResult) -> Html ()
+testResultDiagram_ pid cid steps result = do
+  when (isNothing result) $ do
+    let subTxt = "You are currently not running this test collection yet."
+        url = Just $ "/p/" <> pid.toText <> "/monitors/collection?col_id=" <> cid.toText
+    emptyState_ "Waiting for test run events" subTxt url "Go to test editor"
   whenJust result $ \res -> do
     div_ [class_ "p-6 flex flex-col gap-8"] do
       forM_ (V.indexed steps) $ \(i, st) -> do

@@ -59,21 +59,21 @@ endpointListGetH pid pageM layoutM filterTM hostM requestTypeM sortM hxRequestM 
           , currProject = Just project
           , pageTitle = "Endpoints for " <> host
           , pageActions =
-              Just
-                $ a_ [class_ "btn btn-sm btn-primary space-x-2", href_ $ "/p/" <> pid.toText <> "/documentation?host=" <> host] do
+              Just $
+                a_ [class_ "btn btn-sm btn-primary space-x-2", href_ $ "/p/" <> pid.toText <> "/documentation?host=" <> host] do
                   Utils.faSprite_ "plus" "regular" "h-4" >> "OpenAPI/Swagger"
           , navTabs =
-              Just
-                $ toHtml
-                $ Components.TabFilter
-                  { current = currentFilterTab
-                  , currentURL
-                  , options =
-                      [ Components.TabFilterOpt{name = "Active", count = Nothing}
-                      , Components.TabFilterOpt{name = "Inbox", count = Just inboxCount}
-                      , Components.TabFilterOpt{name = "Archived", count = Nothing}
-                      ]
-                  }
+              Just $
+                toHtml $
+                  Components.TabFilter
+                    { current = currentFilterTab
+                    , currentURL
+                    , options =
+                        [ Components.TabFilterOpt{name = "Active", count = Nothing}
+                        , Components.TabFilterOpt{name = "Inbox", count = Just inboxCount}
+                        , Components.TabFilterOpt{name = "Archived", count = Nothing}
+                        ]
+                    }
           }
 
   let nextFetchUrl = currentURL <> "&page=" <> show (page + 1) <> "&load_more=true"
@@ -99,8 +99,8 @@ endpointListGetH pid pageM layoutM filterTM hostM requestTypeM sortM hxRequestM 
                     Nothing -> "Endpoints"
               , search = Just $ ItemsList.SearchCfg{viaQueryParam = Just (fromMaybe "" searchM)}
               , zeroState =
-                  Just
-                    $ ItemsList.ZeroState
+                  Just $
+                    ItemsList.ZeroState
                       { icon = "empty-set"
                       , title = "Waiting for events"
                       , description = "You're currently not sending any data to APItoolkit from your backends yet."
@@ -160,12 +160,12 @@ renderEndpoint activePage currTime enp = do
           let host = enp.host
           AnomalyList.anomalyArchiveButton enp.projectId (Anomalies.AnomalyId enp.anomalyId) (isJust enp.archivedAt)
           AnomalyList.anomalyAcknowlegeButton enp.projectId (Anomalies.AnomalyId enp.anomalyId) (isJust enp.acknowlegedAt) host
-    div_ [class_ "flex items-center justify-center "]
-      $ div_
+    div_ [class_ "w-36 flex items-center justify-center"] $ span_ [class_ "tabular-nums text-xl", term "data-tippy-content" "Events for this Anomaly in the last 14days"] $ toHtml @String $ fmt $ commaizeF enp.totalRequests
+    div_ [class_ "flex items-center justify-center "] $
+      div_
         [ class_ "w-56 h-12 px-3"
         , hxGet_ $ "/charts_html?pid=" <> enp.projectId.toText <> "&since=14D&show_axes=false&query_raw=" <> Utils.escapedQueryPartial [PyF.fmt|endpoint_hash=="{enp.endpointHash}" | timechart [1d]|]
         , hxTrigger_ "intersect once"
         , hxSwap_ "innerHTML"
         ]
         ""
-    div_ [class_ "w-36 flex items-center justify-center"] $ span_ [class_ "tabular-nums text-xl", term "data-tippy-content" "Events for this Anomaly in the last 14days"] $ toHtml @String $ fmt $ commaizeF enp.totalRequests

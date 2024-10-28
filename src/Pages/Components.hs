@@ -1,4 +1,4 @@
-module Pages.Components (statBox, drawerWithURLContent_, statBox_) where
+module Pages.Components (statBox, drawerWithURLContent_, statBox_, emptyState_) where
 
 import Data.Text qualified as T
 import Fmt (commaizeF, fmt, (+|))
@@ -51,6 +51,16 @@ statBox_ pid iconM title helpInfo val bckupValM = do
       div_ [class_ "flex gap-2 items-center text-sm text-gray-500"] do
         p_ [] $ toHtml title
         span_ [term "data-tip" helpInfo] $ faSprite_ "circle-info" "regular" "w-4 mt-[-2px]"
+
+
+emptyState_ :: Text -> Text -> Maybe Text -> Text -> Html ()
+emptyState_ title subTxt url btnText = do
+  section_ [class_ "w-max mx-auto my-8 text-center p-5 sm:py-14 sm:px-24 flex flex-col gap-4"] do
+    div_ [] $ faSprite_ "empty" "regular" "h-24 w-24 stroke-blue-500 fill-blue-500"
+    div_ [class_ "flex flex-col gap-2"] do
+      h2_ [class_ "text-xl text-slate-800 font-bold"] $ toHtml title
+      p_ [class_ "text-sm font-medium text-gray-500"] $ toHtml subTxt
+      a_ [href_ $ fromMaybe "" url, class_ "btn text-sm w-max mx-auto blue-gr-btn"] $ toHtml btnText
 
 
 getTargetPage :: Text -> Text
