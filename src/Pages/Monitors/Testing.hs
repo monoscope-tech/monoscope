@@ -79,7 +79,7 @@ testingGetH pid filterTM timeFilter = do
                   , title = "No Multistep Test/Monitor yet."
                   , description = "You're can create one to start monitoring your services."
                   , actionText = "Create Monitor"
-                  , destination = Left "test-settings-modal"
+                  , destination = Right $ "/p/" <> pid.toText <> "/monitors/collection/"
                   }
           , elemID = "anomalyListForm"
           }

@@ -37,7 +37,7 @@ import Pages.BodyWrapper (
  )
 import Pages.Charts.Charts qualified as C
 import Pages.Charts.Charts qualified as Charts
-import Pages.Components (statBox)
+import Pages.Components (emptyState_, statBox)
 import Pages.Endpoints.EndpointList (renderEndpoint)
 import Pkg.Components qualified as Components
 import Relude hiding (max, min)
@@ -132,8 +132,8 @@ dashboardPage pid paramInput currTime projectStats newEndpoints reqLatenciesRoll
     --  $ div_ [class_ "w-full  py-1 mt-2 rounded text-green-600 text-center"] do
     --    "Free trial ends in "
     --    span_ [class_ "font-bold"] $ toHtml daysLeft
-    unless (null newEndpoints)
-      $ div_ [id_ "modalContainer"] do
+    unless (null newEndpoints) $
+      div_ [id_ "modalContainer"] do
         input_ [type_ "checkbox", id_ "newEndpointsModal", class_ "modal-toggle"]
         div_ [class_ "modal", role_ "dialog", hxSwap_ "outerHTML"] do
           form_
@@ -205,16 +205,13 @@ dStats :: Projects.ProjectId -> Projects.ProjectRequestStats -> Text -> (Maybe U
 dStats pid projReqStats@Projects.ProjectRequestStats{..} reqLatenciesRolledByStepsJ dateRange@(fromD, toD) hasRequest = do
   section_ [class_ "space-y-3"] do
     unless hasRequest do
-      section_ [class_ "card-round p-5 sm:py-14 sm:px-24 items-center flex gap-16"] do
-        div_ [] do
-          faSprite_ "empty-set" "solid" "h-24 w-24"
-        div_ [class_ "flex flex-col gap-2"] do
-          h2_ [class_ "text-2xl font-bold"] "Waiting for events..."
-          p_ "You're currently not sending any data to APItoolkit from your backends yet."
-          a_ [href_ $ "/p/" <> pid.toText <> "/integration_guides", class_ "w-max btn btn-indigo -ml-1 text-md"] "Read the setup guide"
+      let url = Just $ "/p/" <> pid.toText <> "/integration_guides"
+          subTxt = "You're currently not sending any data to APItoolkit from your backends yet."
+      emptyState_ "Waiting for events..." subTxt url "Read the setup guide"
+
     div_ [class_ "flex justify-between mt-4"] $ div_ [class_ "flex flex-row"] do
-      a_ [class_ "cursor-pointer", [__|on click toggle .neg-rotate-90 on me then toggle .hidden on (next .reqResSubSection)|]]
-        $ faSprite_ "chevron-down" "regular" "h-4 w-4 mr-3 inline-block"
+      a_ [class_ "cursor-pointer", [__|on click toggle .neg-rotate-90 on me then toggle .hidden on (next .reqResSubSection)|]] $
+        faSprite_ "chevron-down" "regular" "h-4 w-4 mr-3 inline-block"
       span_ [class_ "text-lg text-slate-700"] "Analytics"
 
     div_ [class_ "reqResSubSection space-y-5"] do

@@ -23,6 +23,7 @@ import Lucid.Htmx
 import Lucid.Hyperscript (__)
 import Models.Projects.Projects qualified as Projects
 import Models.Tests.Testing qualified as Testing
+import Pages.Components (emptyState_)
 import Relude
 import Utils (deleteParam, faSprite_)
 
@@ -179,14 +180,11 @@ itemsList_ listCfg items = do
           ]
           ""
 
-      when (null items) $ whenJust listCfg.zeroState \zeroState -> section_ [class_ "mx-auto w-max p-5 sm:py-10 sm:px-16 items-center flex my-10 gap-16"] do
-        div_ [] $ faSprite_ zeroState.icon "solid" "h-24 w-24"
-        div_ [class_ "flex flex-col gap-2"] do
-          h2_ [class_ "text-2xl font-bold"] $ toHtml zeroState.title
-          p_ $ toHtml zeroState.description
-          case zeroState.destination of
-            Right destination -> a_ [href_ destination, class_ "w-max btn btn-indigo -ml-1 text-md"] $ toHtml zeroState.actionText
-            Left labelId -> label_ [Lucid.for_ labelId, class_ "w-max btn btn-indigo -ml-1 text-md"] $ toHtml zeroState.actionText
+      when (null items) $ whenJust listCfg.zeroState \zeroState -> do
+        let url = case zeroState.destination of
+              Left labelId -> labelId
+              Right destination -> destination
+        emptyState_ zeroState.title zeroState.description (Just url) zeroState.actionText
 
       div_ [class_ "w-full flex flex-col"] do
         span_ [id_ "searchIndicator", class_ "htmx-indicator loading loading-sm loading-dots mx-auto"] ""
