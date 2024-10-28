@@ -118,19 +118,9 @@ processList msgs attrs = do
               pure (ackId, join $ V.map (convertToSpan pid) traceReq)
       let (ackIds, spansVec) = V.unzip results
           spans = join spansVec
-          apitoolkitSpans = flip V.map spans \s ->
-            case s.instrumentationScope of
-              AE.Object v -> if httpScope then Just $ convertSpanToRequestMessage s scopeName else Nothing
-                where
-                  y = KEM.lookup "name" v
-                  scopeName =
-                    if y == Just "@opentelemetry/instrumentation-undici"
-                      then "@opentelemetry/instrumentation-undici"
-                      else "@opentelemetry/instrumentation-http"
-                  httpScope = y == Just "@opentelemetry/instrumentation-undici" || y == Just "@opentelemetry/instrumentation-http"
-              _ -> Nothing
+          apitoolkitSpans = V.map mapHTTPSpan spans
       _ <- ProcessMessage.processRequestMessages $ V.toList $ V.catMaybes apitoolkitSpans <&> ("",)
-      Telemetry.bulkInsertSpans spans
+      Telemetry.bulkInsertSpans $ V.filter (\s -> s.spanName /= "apitoolkit-http-span") spans
       pure $ V.toList ackIds
     Just "org.opentelemetry.otlp.metrics.v1" -> do
       let (ackIds, _) = V.unzip $ V.fromList msgs
@@ -168,8 +158,8 @@ byteStringToHexText bs = decodeUtf8 (B16.encode bs)
 -- Convert a list of KeyValue to a JSONB object
 keyValueToJSONB :: V.Vector KeyValue -> AE.Value
 keyValueToJSONB kvs =
-  AE.object
-    $ V.foldr (\kv acc -> (AEK.fromText $ LT.toStrict kv.keyValueKey, convertAnyValue kv.keyValueValue) : acc) [] kvs
+  AE.object $
+    V.foldr (\kv acc -> (AEK.fromText $ LT.toStrict kv.keyValueKey, convertAnyValue kv.keyValueValue) : acc) [] kvs
 
 
 convertAnyValue :: Maybe AnyValue -> AE.Value
@@ -292,20 +282,31 @@ traceServiceExportH appLogger appCtx (ServerNormalRequest _meta (ExportTraceServ
     projectIdM <- ProjectApiKeys.getProjectIdByApiKey projectKey
     let pid = fromMaybe (error $ "project API Key is invalid pid") projectIdM
     let spanRecords = join $ V.map (convertToSpan pid) req
-        apitoolkitSpans = flip V.map spanRecords \s ->
-          case s.instrumentationScope of
-            AE.Object v -> if httpScope then Just $ convertSpanToRequestMessage s scopeName else Nothing
-              where
-                y = KEM.lookup "name" v
-                scopeName =
-                  if y == Just "@opentelemetry/instrumentation-undici"
-                    then "@opentelemetry/instrumentation-undici"
-                    else "@opentelemetry/instrumentation-http"
-                httpScope = y == Just "@opentelemetry/instrumentation-undici" || y == Just "@opentelemetry/instrumentation-http"
-            _ -> Nothing
+        apitoolkitSpans = V.map mapHTTPSpan spanRecords
     _ <- ProcessMessage.processRequestMessages $ V.toList $ V.catMaybes apitoolkitSpans <&> ("",)
-    Telemetry.bulkInsertSpans $ V.filter (\s -> s.spanName /= "apitoolkit-custom-span") spanRecords
+    Telemetry.bulkInsertSpans $ V.filter (\s -> s.spanName /= "apitoolkit-http-span") spanRecords
   return (ServerNormalResponse (ExportTraceServiceResponse Nothing) mempty StatusOk "")
+
+
+mapHTTPSpan :: Telemetry.SpanRecord -> Maybe RequestMessage
+mapHTTPSpan s = do
+  case s.instrumentationScope of
+    AE.Object v ->
+      if apitoolkitSpan
+        then Just $ convertSpanToRequestMessage s "apitoolkit-http-span"
+        else
+          if httpScope
+            then Just $ convertSpanToRequestMessage s scopeName
+            else Nothing
+      where
+        y = KEM.lookup "name" v
+        scopeName =
+          if y == Just "@opentelemetry/instrumentation-undici"
+            then "@opentelemetry/instrumentation-undici"
+            else "@opentelemetry/instrumentation-http"
+        httpScope = y == Just "@opentelemetry/instrumentation-undici" || y == Just "@opentelemetry/instrumentation-http"
+        apitoolkitSpan = s.spanName == "apitoolkit-http-span"
+    _ -> Nothing
 
 
 -- Convert Protobuf kind to SpanKind
@@ -403,30 +404,30 @@ getSpanAttribute key attr = case attr of
 
 eventsToJSONB :: [Span_Event] -> AE.Value
 eventsToJSONB spans =
-  AE.toJSON
-    $ ( \sp ->
-          object
-            [ "event_name" .= toText sp.span_EventName
-            , "event_time" .= nanosecondsToUTC sp.span_EventTimeUnixNano
-            , "event_attributes" .= keyValueToJSONB sp.span_EventAttributes
-            , "event_dropped_attributes_count" .= fromIntegral sp.span_EventDroppedAttributesCount
-            ]
-      )
-    <$> spans
+  AE.toJSON $
+    ( \sp ->
+        object
+          [ "event_name" .= toText sp.span_EventName
+          , "event_time" .= nanosecondsToUTC sp.span_EventTimeUnixNano
+          , "event_attributes" .= keyValueToJSONB sp.span_EventAttributes
+          , "event_dropped_attributes_count" .= fromIntegral sp.span_EventDroppedAttributesCount
+          ]
+    )
+      <$> spans
 
 
 linksToJSONB :: [Span_Link] -> AE.Value
 linksToJSONB lnks =
-  AE.toJSON
-    $ lnks
-    <&> \lnk ->
-      object
-        [ "link_span_id" .= (decodeUtf8 lnk.span_LinkSpanId :: Text)
-        , "link_trace_id" .= (decodeUtf8 lnk.span_LinkTraceId :: Text)
-        , "link_attributes" .= keyValueToJSONB lnk.span_LinkAttributes
-        , "link_dropped_attributes_count" .= fromIntegral lnk.span_LinkDroppedAttributesCount
-        , "link_flags" .= fromIntegral lnk.span_LinkFlags
-        ]
+  AE.toJSON $
+    lnks
+      <&> \lnk ->
+        object
+          [ "link_span_id" .= (decodeUtf8 lnk.span_LinkSpanId :: Text)
+          , "link_trace_id" .= (decodeUtf8 lnk.span_LinkTraceId :: Text)
+          , "link_attributes" .= keyValueToJSONB lnk.span_LinkAttributes
+          , "link_dropped_attributes_count" .= fromIntegral lnk.span_LinkDroppedAttributesCount
+          , "link_flags" .= fromIntegral lnk.span_LinkFlags
+          ]
 
 
 ---------------------------------------------------------------------------------------
