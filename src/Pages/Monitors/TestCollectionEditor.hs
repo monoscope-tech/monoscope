@@ -295,10 +295,10 @@ nameOfTest_ name tags = do
 
 defineTestSteps_ :: Maybe Testing.Collection -> Html ()
 defineTestSteps_ colM = do
-  div_ [class_ "flex flex-col ml-4 notif bg-blue-100 bg-opacity-60 rounded-xl"] do
-    div_ [class_ "self-end rounded-full shadow-sm bg-white flex justify-center items-center h-5 w-5 m-1.5 mb-0"] do
+  div_ [class_ "flex flex-col ml-4 notif bg-blue-100 bg-opacity-60 rounded-xl relative"] do
+    div_ [class_ "self-end rounded-full absolute shadow-sm bg-white flex justify-center items-center h-5 w-5  top-1.5 right-1.5 mb-0"] do
       a_ [[__|on click remove the closest parent <.notif/>|]] $ faSprite_ "xmark" "regular" "w-2 h-2 text-blue-500"
-    div_ [class_ "flex items-center gap-4 pb-4 px-8"] do
+    div_ [class_ "flex items-center gap-4 py-4 px-8"] do
       faSprite_ "circle-info" "regular" "w-5 h-5 fill-none stroke-blue-500"
       div_ [class_ "text-sm font-medium text-gray-500"] do
         p_ [] "Link multiple steps by creating variables from the request response data."
@@ -327,7 +327,7 @@ collectionPage pid colM col_rn respJson = do
   section_ [class_ "h-full overflow-y-hidden"] do
     form_
       [ id_ "stepsForm"
-      , class_ "grid grid-cols-3 h-[100%] pb-14 divide-x divide-gray-200 group/colform overflow-y-hidden"
+      , class_ "grid grid-cols-3 h-[100%] overflow-y-scroll pb-14 group/colform overflow-y-hidden"
       , hxPost_ $ "/p/" <> pid.toText <> "/monitors/collection/"
       , hxSwap_ "none"
       , hxExt_ "json-enc"
@@ -335,7 +335,7 @@ collectionPage pid colM col_rn respJson = do
       , hxIndicator_ "#save-indicator"
       ]
       do
-        div_ [class_ "col-span-2 px-8 pt-5 pb-12 overflow-y-scroll"] do
+        div_ [class_ "col-span-2 px-8 pt-5 pb-12"] do
           div_ [class_ "flex items-centers justify-between mb-4"] do
             div_ [class_ "flex items-center gap-2"] do
               span_ [class_ "text-gray-900 font-medium"] "Run the test every"
@@ -363,7 +363,7 @@ collectionPage pid colM col_rn respJson = do
               "Save changes"
               faSprite_ "save" "regular" "w-4 h-4 ml-2 stroke-white"
 
-        div_ [class_ "p-4 col-span-1 overflow-y-auto"] do
+        div_ [class_ "fixed bg-white right-10 w-[25%] h-[80%] top-1/2 -translate-y-1/2"] do
           div_ [role_ "tablist", class_ "w-full h-full"] do
             div_ [class_ "w-full flex rounded-t-2xl border"] do
               button_

@@ -126,7 +126,7 @@ collectionCard pid col currTime = do
     div_ [class_ "w-full flex flex-col gap-2 shrink-1"] do
       div_ [class_ "flex gap-10 items-center"] do
         a_ [href_ $ "/p/" <> pid.toText <> "/monitors/" <> col.id.toText <> "/overview", class_ "font-medium text-gray-800 text-xl"] $ toHtml col.title
-        div_ [class_ "flex gap-2 items-center text-sm"] do
+        div_ [class_ "flex gap-1 items-center text-sm"] do
           forM_ col.tags $ \tag -> do
             span_ [class_ "badge badge-blue"] $ toHtml tag
       div_ [class_ "w-full flex"] do
@@ -167,13 +167,13 @@ stepsBox_ :: Int -> Int -> Int -> Html ()
 stepsBox_ total passed failed = do
   div_ [class_ "flex gap-2 px-6 py-2 items-center border rounded-3xl"] do
     div_ [class_ "p-2 text-center"] do
-      div_ [class_ "text-gray-800 text-base font-medium"] $ show total
+      div_ [class_ "text-gray-800 text-lg text-base font-medium"] $ show total
       small_ [class_ "block"] "Steps"
     div_ [class_ "p-2 text-center"] do
-      div_ [class_ "font-medium text-green-700"] $ show passed
+      div_ [class_ "font-medium  text-lg text-green-700"] $ show passed
       small_ [class_ "block"] "Passed"
     div_ [class_ "p-2 text-center"] do
-      div_ [class_ "font-medium text-red-700"] $ show failed
+      div_ [class_ "font-medium text-lg text-red-700"] $ show failed
       small_ [class_ "block"] "Failed"
 
 

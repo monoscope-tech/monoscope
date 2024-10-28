@@ -86,7 +86,7 @@ itemsPage_ listCfg items = div_ [class_ "w-full mx-auto px-6 pt-2 pb-16 overflow
 itemsList_ :: ToHtml a => ItemsListCfg -> V.Vector a -> Html ()
 itemsList_ listCfg items =
   div_ [class_ "grid card-round overflow-hidden group/grid", id_ "anomalyListBelowTab", hxGet_ listCfg.currentURL, hxSwap_ "outerHTML", hxTrigger_ "refreshMain"] do
-    form_ [class_ "flex flex-col bg-base-100 divide-y w-full ", id_ listCfg.elemID, onkeydown_ "return event.key != 'Enter';"] do
+    form_ [class_ "flex flex-col divide-y w-full ", id_ listCfg.elemID, onkeydown_ "return event.key != 'Enter';"] do
       let currentURL' = deleteParam "sort" listCfg.currentURL
       let sortMenu =
             [ ("First Seen", "First time the issue occured", "first_seen")
