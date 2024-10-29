@@ -80,7 +80,7 @@ instance ToHtml a => ToHtml (ItemsPage a) where
 
 
 itemsPage_ :: ToHtml a => ItemsListCfg -> V.Vector a -> Html ()
-itemsPage_ listCfg items = div_ [class_ "w-full mx-auto px-6 pt-2 pb-16 overflow-y-scroll h-full space-y-6", id_ "itemsListPage"] $ do
+itemsPage_ listCfg items = div_ [class_ "w-full mx-auto px-6 pt-4 space-y-4 pb-16 overflow-y-scroll h-full", id_ "itemsListPage"] $ do
   itemsList_ listCfg items
 
 
@@ -88,7 +88,7 @@ itemsList_ :: ToHtml a => ItemsListCfg -> V.Vector a -> Html ()
 itemsList_ listCfg items = do
   let currentURL' = deleteParam "sort" listCfg.currentURL
   whenJust listCfg.search \search -> do
-    label_ [class_ "input input-sm input-bordered flex bg-slate-100 mt-2 border-slate-200 shadow-none overflow-hidden items-center gap-2"] do
+    label_ [class_ "input input-sm input-bordered flex bg-slate-100 border-slate-200 shadow-none overflow-hidden items-center gap-2"] do
       faSprite_ "magnifying-glass" "regular" "w-4 h-4 opacity-70"
       case search.viaQueryParam of
         Just param ->
@@ -168,12 +168,12 @@ itemsList_ listCfg items = do
                         span_ [class_ "block text-lg"] $ toHtml title
                         span_ [class_ "block "] $ toHtml desc
         div_ [class_ "w-36 flex items-center justify-center"] $ span_ [class_ "font-base text-sm"] "Events"
-        div_ [class_ "flex justify-center items-center text-sm w-60 content-between gap-1"] do
-          span_ "Graph"
-          div_ [class_ "rounded-lg border bg-slate-200 overflow-hidden"] do
+        div_ [class_ "flex justify-center w-60 items-center text-sm  content-between gap-2"] do
+          span_ [] "Chart"
+          div_ [class_ "rounded-lg border grid grid-cols-2 w-max h-7 bg-slate-200 overflow-hidden"] do
             let selectedFilter = fromMaybe "14d" listCfg.filter -- Default to "14d" if Nothing
-            a_ [class_ $ "cursor-pointer px-1 py-2 rounded-lg " <> (if selectedFilter == "24h" then "bg-white" else ""), href_ $ currentURL' <> "&since=24h"] "24h"
-            a_ [class_ $ "cursor-pointer px-1 py-2 rounded-lg " <> (if selectedFilter == "14d" then "bg-white" else ""), href_ $ currentURL' <> "&since=14d"] "14d"
+            a_ [class_ $ "cursor-pointer px-1.5 flex items-center text-xs h-full rounded " <> (if selectedFilter == "24h" then "bg-white" else ""), href_ $ currentURL' <> "&since=24h"] "24h"
+            a_ [class_ $ "cursor-pointer px-1.5 flex items-center text-xs h-full rounded " <> (if selectedFilter == "14d" then "bg-white" else ""), href_ $ currentURL' <> "&since=14d"] "14d"
         div_
           [ class_ "p-12 fixed rounded-lg shadow bg-base-100 top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 htmx-indicator loading loading-dots loading-md"
           , id_ "sortLoader"
