@@ -141,32 +141,33 @@ itemsList_ listCfg items = do
               whenJust blkA.icon \icon -> faSprite_ icon "solid" "h-4 w-4 inline-block"
               span_ (toHtml blkA.title)
 
-        whenJust listCfg.sort \sortCfg -> do
-          let currentSortTitle = maybe "First Seen" fst3 $ find (\(_, _, identifier) -> identifier == sortCfg.current) sortMenu
-          div_ [class_ "dropdown dropdown-end inline-block"] do
-            a_ [class_ "btn btn-sm btn-outline border-black hover:shadow-2xl", tabindex_ "0"] do
-              faSprite_ "sort" "solid" "h-4 w-4"
-              span_ $ toHtml currentSortTitle
-            div_
-              [ id_ "sortMenuDiv"
-              , hxBoost_ "true"
-              , class_ "dropdown-content bg-base-100 p-1 text-sm border border-black-30 z-50 mt-2 w-72 origin-top-right rounded-md shadow-lg "
-              , tabindex_ "0"
-              ]
-              do
-                sortMenu & mapM_ \(title, desc, identifier) -> do
-                  let isActive = sortCfg.current == identifier || (sortCfg.current == "" && identifier == "first_seen")
-                  a_
-                    [ class_ $ "block flex flex-row px-3 py-2 hover:bg-blue-50 rounded-md cursor-pointer " <> (if isActive then " text-blue-800 " else "")
-                    , href_ $ currentURL' <> "&sort=" <> identifier
-                    , hxIndicator_ "#sortLoader"
-                    ]
-                    do
-                      div_ [class_ "flex flex-col items-center justify-center px-3"] $
-                        if isActive then faSprite_ "icon-checkmark4" "solid" "w-4 h-5" else div_ [class_ "w-4 h-5"] ""
-                      div_ [class_ "grow space-y-1"] do
-                        span_ [class_ "block text-lg"] $ toHtml title
-                        span_ [class_ "block "] $ toHtml desc
+          whenJust listCfg.sort \sortCfg -> do
+            let currentSortTitle = maybe "First Seen" fst3 $ find (\(_, _, identifier) -> identifier == sortCfg.current) sortMenu
+            div_ [class_ "dropdown dropdown-end inline-block"] do
+              a_ [class_ "btn btn-sm shadow-none text-sm font-medium bg-slate-100 border text-slate-600 border-slate-300 ", tabindex_ "0"] do
+                span_ $ toHtml currentSortTitle
+                faSprite_ "sort" "solid" "h-4 w-4"
+
+              div_
+                [ id_ "sortMenuDiv"
+                , hxBoost_ "true"
+                , class_ "dropdown-content bg-base-100 p-1 text-sm border border-black-30 z-50 mt-2 w-72 origin-top-right rounded-md shadow-lg "
+                , tabindex_ "0"
+                ]
+                do
+                  sortMenu & mapM_ \(title, desc, identifier) -> do
+                    let isActive = sortCfg.current == identifier || (sortCfg.current == "" && identifier == "first_seen")
+                    a_
+                      [ class_ $ "block flex flex-row px-3 py-2 hover:bg-blue-50 rounded-md cursor-pointer " <> (if isActive then " text-blue-800 " else "")
+                      , href_ $ currentURL' <> "&sort=" <> identifier
+                      , hxIndicator_ "#sortLoader"
+                      ]
+                      do
+                        div_ [class_ "flex flex-col items-center justify-center px-3"] $
+                          if isActive then faSprite_ "icon-checkmark4" "solid" "w-4 h-5" else div_ [class_ "w-4 h-5"] ""
+                        div_ [class_ "grow space-y-1"] do
+                          span_ [class_ "block text-lg"] $ toHtml title
+                          span_ [class_ "block "] $ toHtml desc
         div_ [class_ "w-36 flex items-center justify-center"] $ span_ [class_ "font-base text-sm"] "Events"
         div_ [class_ "flex justify-center w-60 items-center text-sm  content-between gap-2"] do
           span_ [] "Chart"
