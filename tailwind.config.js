@@ -39,7 +39,7 @@ module.exports = {
         // "--rounded-badge": "0.4rem",
         // "--tab-radius": "0.4rem",
         // "--btn-text-case": "none", // Sentence case for buttons
-        "--font-family": "system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Helvetica, 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', SimSun, sans-serif;",
+        // "--font-family": "system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Helvetica, 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', SimSun, sans-serif;",
       },
     }],
   },

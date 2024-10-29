@@ -37,7 +37,7 @@ loader =
 
 navBar :: Html ()
 navBar = do
-  nav_ [id_ "main-navbar", class_ "fixed z-20 top-0 w-full w-full px-6 py-4 border-b bg-base-100 flex flex-row justify-between"] do
+  nav_ [id_ "main-navbar", class_ "fixed z-20 top-0 w-full w-full px-6 py-4 bg-base-100 flex flex-row justify-between"] do
     div_ [class_ "flex justify-between items-center gap-4 w-[1000px] mx-auto"] do
       a_ [href_ "https://apitoolkit.io", class_ "flex items-center text-gray-500 hover:text-gray-700"] do
         img_
@@ -80,7 +80,7 @@ codeExample code = do
           div_ [class_ "w-2.5 h-2.5 bg-slate-600 rounded-full"] ""
           div_ [class_ "w-2.5 h-2.5 bg-slate-600 rounded-full"] ""
         button_
-          [ class_ "text-gray-500 text-sm font-bold mr-6"
+          [ class_ "text-gray-500  font-bold mr-6"
           , term "data-code" code
           , [__|
               on click
@@ -166,7 +166,7 @@ timepicker_ submitForm currentRange = div_ [class_ "relative"] do
       faSprite_ "clock" "regular" "h-3 w-3"
       span_ [class_ "inline-block", id_ "currentRange"] $ toHtml (fromMaybe "Last 24 Hours" currentRange)
   div_ [id_ "timepickerBox", class_ "hidden absolute z-10 mt-1  rounded-md flex"] do
-    div_ [class_ "inline-block w-84 overflow-auto bg-base-100 py-1 text-base shadow-lg ring-1 ring-black ring-opacity-5 focus:outline-none sm:text-sm"] do
+    div_ [class_ "inline-block w-84 overflow-auto bg-base-100 py-1 text-base shadow-lg ring-1 ring-black ring-opacity-5 focus:outline-none sm:"] do
       timePickerItems
         & mapM_ \(val, title) ->
           let action = maybe "window.setQueryParamAndReload('since', my @data-value)" (\fm -> [fmt|htmx.trigger("#{fm}", "submit")|]) submitForm

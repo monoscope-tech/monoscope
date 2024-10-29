@@ -345,11 +345,11 @@ createProjectBody sess envCfg isUpdate cp cpe = do
             input_ [name_ "projectId", type_ "hidden", value_ cp.projectId]
             input_ [name_ "paymentPlan", type_ "hidden", value_ paymentPlan, id_ "paymentPlanEl"]
             div_ do
-              label_ [class_ "text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70"] do
+              label_ [class_ " font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70"] do
                 "Title"
                 span_ [class_ "text-red-400"] " *"
               input_
-                [ class_ "flex h-9 w-full rounded-lg border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                [ class_ "flex h-9 w-full rounded-lg border border-input bg-transparent px-3 py-1  shadow-sm transition-colors placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                 , type_ "text"
                 , id_ "title"
                 , name_ "title"
@@ -358,14 +358,14 @@ createProjectBody sess envCfg isUpdate cp cpe = do
                 ]
             input_ [type_ "hidden", id_ "orderId", name_ "orderId", value_ ""]
             div_ [class_ "flex flex-col gap-1 mt-5"] do
-              label_ [class_ "text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70"] do
+              label_ [class_ " font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70"] do
                 "Timezone"
               select_ [name_ "timeZone", id_ "timezone", class_ "px-4 py-2 border bg-gray-100 rounded-lg"] do
                 option_ [value_ cp.timeZone] $ toHtml cp.timeZone
             div_ [class_ "mt-5 "] do
-              label_ [class_ "text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70"] "Description"
+              label_ [class_ " font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70"] "Description"
               textarea_
-                [ class_ " flex min-h-[60px] w-full rounded-lg border border-input bg-transparent px-3 py-2 text-sm shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50 "
+                [ class_ " flex min-h-[60px] w-full rounded-lg border border-input bg-transparent px-3 py-2  shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50 "
                 , rows_ "4"
                 , placeholder_ "Description"
                 , id_ "description"
@@ -374,7 +374,7 @@ createProjectBody sess envCfg isUpdate cp cpe = do
                 $ toHtml cp.description
 
             div_ [class_ "mt-5"] do
-              p_ [class_ "text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70 mb-2"] do
+              p_ [class_ " font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70 mb-2"] do
                 "Please select a plan"
                 span_ [class_ "text-red-400"] " *"
               div_ [class_ "grid gap-10 border-1"] do
@@ -405,19 +405,19 @@ createProjectBody sess envCfg isUpdate cp cpe = do
                       span_ [class_ "text-2xl text-blue-700", id_ "price"] $ toHtml "$34"
                       span_ [class_ "text-slate-500", id_ "num_requests"] "/400k"
                       span_ [class_ "text-slate-500 mr-3"] " requests per month"
-                      span_ [class_ "text-blue-500 text-sm block mt-2"] "then $1 per 20k requests"
+                      span_ [class_ "text-blue-500  block mt-2"] "then $1 per 20k requests"
                     div_ [] do
                       input_ [type_ "range", min_ "0", max_ "6", step_ "1", value_ "0", class_ "range range-primary range-sm", id_ "price_range"]
 
                     checkList "GR" "Unlimited"
 
             div_ [class_ $ "mt-10 " <> if isUpdate then "hidden" else ""] do
-              p_ [class_ "text-slate-400 mx-2 font-light text-sm"] "Invite a project member"
+              p_ [class_ "text-slate-400 mx-2 font-light "] "Invite a project member"
               section_ [id_ "inviteMemberSection"] do
                 template_ [id_ "inviteTmpl"] do
                   div_ [class_ "flex flex-row space-x-2"] do
-                    input_ [name_ "emails", class_ "w-2/3 h-10 px-5 my-2 w-full text-sm bg-base-100 text-slate-700 font-light border-solid border border-gray-200 rounded-2xl border-0 ", placeholder_ "name@example.com"]
-                    select_ [name_ "permissions", class_ "w-1/3 h-10 px-5  my-2 w-full text-sm bg-base-100 text-zinc-500 border-solid border border-gray-200 rounded-2xl border-0"] do
+                    input_ [name_ "emails", class_ "w-2/3 h-10 px-5 my-2 w-full  bg-base-100 text-slate-700 font-light border-solid border border-gray-200 rounded-2xl border-0 ", placeholder_ "name@example.com"]
+                    select_ [name_ "permissions", class_ "w-1/3 h-10 px-5  my-2 w-full  bg-base-100 text-zinc-500 border-solid border border-gray-200 rounded-2xl border-0"] do
                       option_ [class_ "text-slate-500", value_ "edit"] "Can Edit"
                       option_ [class_ "text-slate-500", value_ "view"] "Can View"
                     button_
@@ -432,7 +432,7 @@ createProjectBody sess envCfg isUpdate cp cpe = do
                 ]
                 do
                   faSprite_ "plus" "regular" "mx-2 w-4 h-4 text-blue-700"
-                  span_ [class_ "text-blue-700 font-medium text-sm "] "Add member"
+                  span_ [class_ "text-blue-700 font-medium  "] "Add member"
 
             -- LEMON SQUEEZY PAYMENT
 
@@ -534,7 +534,7 @@ createProjectBody sess envCfg isUpdate cp cpe = do
 
             div_ [class_ "p-5 flex w-full justify-end"] do
               a_
-                [ class_ "lemonsqueezy-button py-2 px-5 w-max bg-blue-700 flex items-center text-[white] text-sm rounded-xl cursor-pointer"
+                [ class_ "lemonsqueezy-button py-2 px-5 w-max bg-blue-700 flex items-center text-[white]  rounded-xl cursor-pointer"
                 , [__|on click call window.payLemon() |]
                 ]
                 do

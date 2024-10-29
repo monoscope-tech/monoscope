@@ -68,11 +68,11 @@ projectItem_ project = li_ do
     div_ [class_ "px-4 py-4 flex items-center sm:px-6"] do
       div_ [class_ "min-w-0 flex-1 sm:flex sm:items-center sm:justify-between"] do
         div_ [class_ "truncate"] do
-          div_ [class_ "text-sm"] do
+          div_ [class_ ""] do
             p_ [class_ "block font-medium text-indigo-600 truncate py-2"] $ toHtml project.title
             p_ [class_ "block flex-shrink-0 font-normal text-gray-500"] $ toHtml project.description
           div_ [class_ "mt-2 flex"] do
-            div_ [class_ "flex items-center text-sm text-gray-500"] do
+            div_ [class_ "flex items-center  text-gray-500"] do
               small_ do
                 span_ "Created on "
                 time_ [datetime_ $ fmt $ dateDashF project.createdAt] $ toHtml @Text $ fmt $ dateDashF project.createdAt

@@ -159,8 +159,8 @@ manageMembersBody projMembers =
               ]
               do
                 faSprite_ "plus" "regular" "mt-1 mx-2 w-3 h-3 text-blue-700"
-                span_ [class_ "text-blue-700 font-medium text-sm "] "Add member"
-          button_ [class_ "py-2 px-5 bg-blue-700 absolute m-5 flex items-center bottom-0 right-0 text-[white] text-sm rounded-xl cursor-pointer", type_ "submit"] do
+                span_ [class_ "text-blue-700 font-medium  "] "Add member"
+          button_ [class_ "py-2 px-5 bg-blue-700 absolute m-5 flex items-center bottom-0 right-0 text-[white]  rounded-xl cursor-pointer", type_ "submit"] do
             "Submit"
             span_ [id_ "submitIndicator", class_ "loading loading-dots loading-sm htmx-indicator"] ""
 
@@ -170,12 +170,12 @@ projectMemberRow projMembersM =
   div_ [class_ "flex flex-row space-x-2"] do
     input_
       [ name_ "emails"
-      , class_ "w-2/3 h-10 px-5 my-2 w-full text-sm bg-base-100 text-slate-700 font-light border-solid border border-gray-200 rounded-2xl border-0 "
+      , class_ "w-2/3 h-10 px-5 my-2 w-full  bg-base-100 text-slate-700 font-light border-solid border border-gray-200 rounded-2xl border-0 "
       , placeholder_ "name@example.com"
       , value_ (maybe "" (original . (.email)) projMembersM)
       ]
     let permission = maybe ProjectMembers.PView (.permission) projMembersM
-    select_ [name_ "permissions", class_ "w-1/3 h-10 px-5  my-2 w-full text-sm bg-base-100 text-zinc-500 border-solid border border-gray-200 rounded-2xl border-0"] do
+    select_ [name_ "permissions", class_ "w-1/3 h-10 px-5  my-2 w-full  bg-base-100 text-zinc-500 border-solid border border-gray-200 rounded-2xl border-0"] do
       option_ ([class_ "text-gray-500", value_ "admin"] <> selectedIf ProjectMembers.PAdmin permission) "Admin"
       option_ ([class_ "text-gray-500", value_ "edit"] <> selectedIf ProjectMembers.PEdit permission) "Can Edit"
       option_ ([class_ "text-gray-500", value_ "view"] <> selectedIf ProjectMembers.PView permission) "Can View"

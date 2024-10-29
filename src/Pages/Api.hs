@@ -134,13 +134,13 @@ apiKeysPage pid apiKeys = do
                 div_ [class_ "mt-3 text-center sm:mt-0 sm:ml-4 sm:text-left grow"] do
                   h3_ [class_ "text-lg leading-6 font-medium text-gray-900", id_ "modal-title"] "Generate an API Key"
                   div_ [class_ "mt-6 space-y-2"] do
-                    p_ [class_ "text-sm text-gray-500"] "Please input a title for your API Key."
+                    p_ [class_ " text-gray-500"] "Please input a title for your API Key."
                     div_ $ input_ [class_ "input-txt px-4 py-2  border w-full", type_ "text", placeholder_ "API Key Title", name_ "title", autofocus_]
               div_ [class_ "mt-5 sm:mt-4 sm:flex sm:flex-row-reverse"] do
-                button_ [type_ "submit", class_ "w-full inline-flex justify-center rounded-md border border-transparent shadow-sm px-4 py-2 bg-red-600 text-base font-medium text-white hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500 sm:ml-3 sm:w-auto sm:text-sm"] "Submit"
+                button_ [type_ "submit", class_ "w-full inline-flex justify-center rounded-md border border-transparent shadow-sm px-4 py-2 bg-red-600 text-base font-medium text-white hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500 sm:ml-3 sm:w-auto sm:"] "Submit"
                 button_
                   [ type_ "button"
-                  , class_ "mt-3 w-full inline-flex justify-center rounded-md border border-gray-300 shadow-sm px-4 py-2 bg-base-100 text-base font-medium text-gray-700 hover:text-gray-500 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 sm:mt-0 sm:w-auto sm:text-sm"
+                  , class_ "mt-3 w-full inline-flex justify-center rounded-md border border-gray-300 shadow-sm px-4 py-2 bg-base-100 text-base font-medium text-gray-700 hover:text-gray-500 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 sm:mt-0 sm:w-auto sm:"
                   , [__|on click add .hidden to #generateApiKeyDialog|]
                   ]
                   "Cancel"
@@ -163,8 +163,8 @@ mainContent pid apiKeys newKeyM = section_ [id_ "main-content"] do
             tbody_ [class_ "bg-base-100 divide-y divide-gray-200"] do
               V.indexed apiKeys & mapM_ \(i, apiKey) -> do
                 tr_ [] do
-                  td_ [class_ "px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900"] $ toHtml apiKey.title
-                  td_ [class_ "px-6 py-4 whitespace-nowrap text-sm text-gray-500 w-[500px]"] do
+                  td_ [class_ "px-6 py-4 whitespace-nowrap  font-medium text-gray-900"] $ toHtml apiKey.title
+                  td_ [class_ "px-6 py-4 whitespace-nowrap  text-gray-500 w-[500px]"] do
                     span_
                       [class_ "mr-2 w-full"]
                       $ toHtml
@@ -196,7 +196,7 @@ mainContent pid apiKeys newKeyM = section_ [id_ "main-content"] do
                         |]
                       ]
                       "copy"
-                  td_ [class_ "px-6 py-4 whitespace-nowrap text-right text-sm font-medium"] $ do
+                  td_ [class_ "px-6 py-4 whitespace-nowrap text-right  font-medium"] $ do
                     if apiKey.active
                       then do
                         button_
@@ -227,14 +227,14 @@ copyNewApiKey newKeyM hasNext =
             div_ [class_ "flex-shrink-0"] do
               faSprite_ "circle-check" "regular" "h-5 w-5 text-green-400"
             div_ [class_ "ml-3"] do
-              h3_ [class_ "text-sm font-medium text-green-800"] "API Key was generated successfully"
-              div_ [class_ "mt-2 text-sm text-green-700 py-2"] do
+              h3_ [class_ " font-medium text-green-800"] "API Key was generated successfully"
+              div_ [class_ "mt-2  text-green-700 py-2"] do
                 strong_ [class_ "block pt-2", id_ "newKey"] $ toHtml newKey
               div_ [class_ "mt-4"] do
                 div_ [class_ "-mx-2 -my-1.5 flex"] do
                   button_
                     [ type_ "button"
-                    , class_ "bg-green-500 px-2 py-1.5 text-white rounded-md text-sm font-medium text-green-800 hover:bg-green-300 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-green-50 focus:ring-green-600"
+                    , class_ "bg-green-500 px-2 py-1.5 text-white rounded-md  font-medium text-green-800 hover:bg-green-300 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-green-50 focus:ring-green-600"
                     , [__|
                       on click
                         if 'clipboard' in window.navigator then
@@ -248,7 +248,7 @@ copyNewApiKey newKeyM hasNext =
                     then do
                       button_
                         [ type_ "button"
-                        , class_ "ml-3 bg-green-50 px-2 py-1.5 rounded-md text-sm font-medium text-green-800 hover:bg-green-100 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-green-50 focus:ring-green-600"
+                        , class_ "ml-3 bg-green-50 px-2 py-1.5 rounded-md  font-medium text-green-800 hover:bg-green-100 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-green-50 focus:ring-green-600"
                         , [__|on click remove #apiFeedbackSection|]
                         ]
                         "Dismiss"

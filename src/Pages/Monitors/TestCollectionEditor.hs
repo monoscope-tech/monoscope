@@ -552,10 +552,10 @@ collectionStepResult_ idx stepResult = section_ [class_ "p-1"] do
 jsonTreeAuxillaryCode :: Html ()
 jsonTreeAuxillaryCode = do
   template_ [id_ "log-item-context-menu-tmpl"] do
-    div_ [id_ "log-item-context-menu", class_ "log-item-context-menu text-sm origin-top-right absolute left-0 mt-2 rounded-md shadow-md shadow-slate-300 bg-base-100 ring-1 ring-black ring-opacity-5 divide-y divide-gray-100 focus:outline-none z-10", role_ "menu", tabindex_ "-1"] do
+    div_ [id_ "log-item-context-menu", class_ "log-item-context-menu  origin-top-right absolute left-0 mt-2 rounded-md shadow-md shadow-slate-300 bg-base-100 ring-1 ring-black ring-opacity-5 divide-y divide-gray-100 focus:outline-none z-10", role_ "menu", tabindex_ "-1"] do
       div_ [class_ "py-1 w-max", role_ "none"] do
         button_
-          [ class_ "cursor-pointer w-full text-left text-slate-700 block px-4 py-1 text-sm hover:bg-gray-100 hover:text-slate-900"
+          [ class_ "cursor-pointer w-full text-left text-slate-700 block px-4 py-1  hover:bg-gray-100 hover:text-slate-900"
           , role_ "menuitem"
           , tabindex_ "-1"
           , id_ "menu-item-1"
@@ -564,7 +564,7 @@ jsonTreeAuxillaryCode = do
           ]
           "Add an equals to assertion"
         button_
-          [ class_ "cursor-pointer w-full text-left text-slate-700 block px-4 py-1 text-sm hover:bg-gray-100 hover:text-slate-900"
+          [ class_ "cursor-pointer w-full text-left text-slate-700 block px-4 py-1  hover:bg-gray-100 hover:text-slate-900"
           , role_ "menuitem"
           , tabindex_ "-1"
           , id_ "menu-item-2"
@@ -573,7 +573,7 @@ jsonTreeAuxillaryCode = do
           ]
           "Add a not equals assertion"
         button_
-          [ class_ "cursor-pointer w-full text-left text-slate-700 block px-4 py-1 text-sm hover:bg-gray-100 hover:text-slate-900"
+          [ class_ "cursor-pointer w-full text-left text-slate-700 block px-4 py-1  hover:bg-gray-100 hover:text-slate-900"
           , role_ "menuitem"
           , tabindex_ "-1"
           , onclick_ "addToAssertions(event, 'ok', '>')"
@@ -581,7 +581,7 @@ jsonTreeAuxillaryCode = do
           ]
           "Add a greater than assertions"
         button_
-          [ class_ "cursor-pointer w-full text-left text-slate-700 block px-4 py-1 text-sm hover:bg-gray-100 hover:text-slate-900"
+          [ class_ "cursor-pointer w-full text-left text-slate-700 block px-4 py-1  hover:bg-gray-100 hover:text-slate-900"
           , role_ "menuitem"
           , tabindex_ "-1"
           , id_ "menu-item-4"
@@ -591,7 +591,7 @@ jsonTreeAuxillaryCode = do
           "Add an is string assertions"
 
         button_
-          [ class_ "cursor-pointer w-full text-left text-slate-700 block px-4 py-1 text-sm hover:bg-gray-100 hover:text-slate-900"
+          [ class_ "cursor-pointer w-full text-left text-slate-700 block px-4 py-1  hover:bg-gray-100 hover:text-slate-900"
           , role_ "menuitem"
           , tabindex_ "-1"
           , id_ "menu-item-4"

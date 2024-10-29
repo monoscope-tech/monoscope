@@ -69,7 +69,7 @@ expandAPIlogItem' pid req modal = do
                 , class_ "w-full flex gap-2 text-slate-600 justify_between items-center cursor-pointer px-2 py-1 border rounded focus:ring-2 focus:ring-blue-200 active:ring-2 active:ring-blue-200"
                 ]
                 do
-                  p_ [style_ "width: calc(100% - 25px)", class_ "text-sm truncate ..."] "Expires in: 1 hour"
+                  p_ [style_ "width: calc(100% - 25px)", class_ " truncate ..."] "Expires in: 1 hour"
                   faSprite_ "chevron-down" "regular" "h-3 w-3"
               div_ [id_ "expire_container", class_ "absolute hidden bg-base-100 border shadow w-full overflow-y-auto", style_ "top:100%; max-height: 300px; z-index:9"] do
                 forM_ (["1 hour", "8 hours", "1 day"] :: [Text]) \sw -> do
@@ -125,14 +125,14 @@ expandAPIlogItem' pid req modal = do
     when (req.errorsCount > 0) $ div_ [class_ "border rounded-lg mt-8"] do
       div_ [class_ "flex w-full bg-gray-100 px-4 py-2 gap-4 items-center"] do
         p_ [class_ "font-bold"] "Errors"
-        p_ [class_ "text-sm text-red-500 font-bold"] $ show req.errorsCount
+        p_ [class_ " text-red-500 font-bold"] $ show req.errorsCount
       div_ [class_ "px-4 flex gap-10 border-b text-gray-500"] do
         jsonValueToHtmlTree req.errors
 
     -- outgoing request details
     div_ [class_ "flex w-full bg-gray-100 px-4 py-2 flex-col gap-2"] do
       p_ [class_ "font-bold"] "Outgoing requests"
-    div_ [class_ "grow overflow-y-auto py-2 px-1 max-h-[500px] whitespace-nowrap text-sm divide-y overflow-x-hidden"] do
+    div_ [class_ "grow overflow-y-auto py-2 px-1 max-h-[500px] whitespace-nowrap  divide-y overflow-x-hidden"] do
       let createdAt = toText $ formatTime defaultTimeLocale "%FT%T%6QZ" req.createdAt
       let escapedQueryPartial = toText $ escapeURIString isUnescapedInURI $ toString [fmt|parent_id=="{UUID.toText req.id}" AND created_at<="{createdAt}"|]
       let events_url = "/p/" <> pid.toText <> "/log_explorer?layout=resultTable&query=" <> escapedQueryPartial

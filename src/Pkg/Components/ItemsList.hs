@@ -247,7 +247,7 @@ timelineSteps_ steps colM =
       when (idx > 0) $ hr_ [style_ "width:2px"]
       div_ [class_ "timeline-middle "] do
         span_
-          [class_ "rounded-full bg-primary text-base-100 h-7 w-7 flex items-center justify-center text-sm"]
+          [class_ "rounded-full bg-primary text-base-100 h-7 w-7 flex items-center justify-center "]
           (toHtml $ show $ idx + 1)
       div_ [class_ "timeline-end space-y-5 w-full"] $ do
         div_ [class_ "flex items-center justify-between"] do

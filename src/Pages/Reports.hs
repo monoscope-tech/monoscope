@@ -223,7 +223,7 @@ singleReportPage pid report =
                                   img_ [class_ "inline w-4 h-4", src_ "/public/assets/svgs/anomalies/fields.svg"]
                                   span_ [class_ "inline-block"] "Modified field"
                                 small_ [] $ toHtml $ keyPath <> " in " <> endpointMethod <> "  " <> endpointUrlPath
-                                div_ [class_ "text-sm"] do
+                                div_ [class_ ""] do
                                   div_ [] do
                                     small_ "current format: "
                                     span_ $ toHtml $ textFieldTypeToText formatType
@@ -276,8 +276,8 @@ reportsPage pid reports nextUrl daily weekly =
           faSprite_ "clapperboard" "light" "w-36 h-36 mx-auto"
           h3_ [class_ "text-xl font-bold mb-4 text-slate-700"] "View Each Report Details here"
           h3_ [class_ "mt-2 text-lg font-medium text-slate-900"] "But nothing is selected yet"
-          p_ [class_ "mt-1 text-sm text-slate-500"] "Select a field or similar item on the left"
-          p_ [class_ "mt-1 text-sm text-slate-500"] "to view more details about it here."
+          p_ [class_ "mt-1  text-slate-500"] "Select a field or similar item on the left"
+          p_ [class_ "mt-1  text-slate-500"] "to view more details about it here."
 
 
 -- div_ [class_ "w-5 bg-gray-200"] ""
@@ -299,7 +299,7 @@ reportListItems pid reports nextUrl =
             do
               div_ [class_ "flex flex-col flex-grow"] do
                 h4_ [class_ "text-xl font-medium capitalize"] $ toHtml report.reportType <> " Report"
-                span_ [class_ "text-sm text-gray-500"] $ toHtml $ formatTime defaultTimeLocale "%a, %b %d %Y" (zonedTimeToLocalTime report.createdAt)
+                span_ [class_ " text-gray-500"] $ toHtml $ formatTime defaultTimeLocale "%a, %b %d %Y" (zonedTimeToLocalTime report.createdAt)
 
               div_ [class_ "ml-4 flex items-center"] do
                 i_ [class_ "fa fa-arrow-right text-gray-500"] mempty
@@ -320,9 +320,9 @@ renderEndpointRow endpoint = tr_ do
           else ("text-green-500", show (durationDiffPct endpoint) <> "%")
   let avg_dur_ms = (fromInteger (round $ ((fromInteger endpoint.averageDuration :: Double) / 1000000.0) * 100) :: Double) / 100
   let dur_diff_ms = (fromInteger (round $ ((fromInteger endpoint.durationDiff :: Double) / 1000000.0) * 100) :: Double) / 100
-  td_ [class_ "px-6 py-2 border-b text-gray-500 text-sm"] $ toHtml $ method endpoint <> " " <> urlPath endpoint
-  td_ [class_ "px-6 py-2 border-b text-gray-500 text-sm"] $ show avg_dur_ms <> "ms"
-  td_ [class_ "px-6 py-2 border-b text-gray-500 text-sm"] $ show dur_diff_ms <> "ms"
+  td_ [class_ "px-6 py-2 border-b text-gray-500 "] $ toHtml $ method endpoint <> " " <> urlPath endpoint
+  td_ [class_ "px-6 py-2 border-b text-gray-500 "] $ show avg_dur_ms <> "ms"
+  td_ [class_ "px-6 py-2 border-b text-gray-500 "] $ show dur_diff_ms <> "ms"
   td_ [class_ $ "px-6 py-2 border-b " <> pcls] $ toHtml prc
 
 

@@ -291,11 +291,11 @@ projectsDropDown currProject projects = do
           div_ [class_ "relative"] do
             div_ [class_ "absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none"] $ faSprite_ "magnifying-glass" "regular" "h-6 w-4"
             input_
-              [ class_ "pl-12 w-full text-sm bg-gray-100 rounded-2xl border-0 p-3"
+              [ class_ "pl-12 w-full  bg-gray-100 rounded-2xl border-0 p-3"
               , placeholder_ "Search Projects"
               , [__|on input show .project_item in #projectsContainer when its textContent.toLowerCase() contains my value.toLowerCase()|]
               ]
-          div_ [class_ "space-y-2 py-4 text-sm", id_ "projectsContainer"] do
+          div_ [class_ "space-y-2 py-4 ", id_ "projectsContainer"] do
             projects & mapM_ \project -> do
               a_ [class_ "flex justify-between p-2 project_item", href_ $ "/p/" <> project.id.toText] do
                 div_ [class_ "space-x-3"] $
@@ -305,7 +305,7 @@ projectsDropDown currProject projects = do
 
 
 sideNav :: Sessions.PersistentSession -> Projects.Project -> Text -> Maybe Text -> Maybe Bool -> Html ()
-sideNav sess project pageTitle menuItem hasIntegrated = aside_ [class_ "border-r bg-slate-100 border-slate-200 w-15 group-has-[#sidenav-toggle:checked]/pg:w-64 text-sm h-screen transition-all duration-200 ease-in-out flex flex-col justify-between", id_ "side-nav-menu"] do
+sideNav sess project pageTitle menuItem hasIntegrated = aside_ [class_ "border-r bg-slate-100 border-slate-200 w-15 group-has-[#sidenav-toggle:checked]/pg:w-68  h-screen transition-all duration-200 ease-in-out flex flex-col justify-between", id_ "side-nav-menu"] do
   div_ [class_ "px-2 group-has-[#sidenav-toggle:checked]/pg:px-6"] do
     div_ [class_ "py-4 flex justify-center group-has-[#sidenav-toggle:checked]/pg:justify-between items-center"] do
       a_ [href_ "/", class_ "inline-flex"] do

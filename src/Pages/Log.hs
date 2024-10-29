@@ -193,7 +193,7 @@ instance ToHtml LogsGet where
 logQueryBox_ :: Projects.ProjectId -> Maybe Text -> Text -> Maybe Text -> Html ()
 logQueryBox_ pid currentRange source targetSpan =
   form_
-    [ class_ "w-full text-sm flex gap-2 items-stretch justify-center "
+    [ class_ "w-full  flex gap-2 items-stretch justify-center "
     , hxGet_ $ "/p/" <> pid.toText <> "/log_explorer"
     , hxPushUrl_ "true"
     , hxVals_ "js:{query:window.getQueryFromEditor(), since: getTimeRange().since, from: getTimeRange().from, to:getTimeRange().to, cols:params().cols, layout:'all', source: params().source}"
@@ -205,8 +205,7 @@ logQueryBox_ pid currentRange source targetSpan =
     ]
     do
       div_ [class_ "cursor-pointer relative bg-slate-100 rounded-xl border border-slate-200 inline-flex justify-center"] do
-        -- TODO: unhide
-        div_ [class_ "flex gap-2 justify-center items-center px-2 hidden"] $ "Saved queries" >> faSprite_ "chevron-down" "regular" "w-3 h-3"
+        div_ [class_ "flex gap-2 justify-center items-center px-2"] $ "Saved queries" >> faSprite_ "chevron-down" "regular" "w-3 h-3"
       div_ [class_ "p-1 pl-3 flex-1 flex gap-2 bg-slate-100 rounded-xl border border-slate-200 justify-between items-stretch"] do
         div_ [id_ "queryEditor", class_ "h-14 hidden overflow-hidden bg-gray-200 flex-1 flex items-center"] pass
         div_ [id_ "queryBuilder", class_ "flex-1 flex items-center"] $ termRaw "filter-element" [id_ "filterElement"] ("" :: Text)
@@ -303,7 +302,7 @@ apiLogsPage page = do
       |]
     div_ [class_ ""] do
       logQueryBox_ page.pid page.currentRange page.source page.targetSpans
-      div_ [class_ "flex items-center  gap-2 text-sm"] do
+      div_ [class_ "flex items-center  gap-2 "] do
         div_ [class_ "py-1 flex flex-row justify-end"] do
           label_ [class_ "flex items-center cursor-pointer space-x-2 p-1"] do
             input_ [type_ "checkbox", class_ "checkbox checkbox-xs rounded toggle-chart"]
@@ -319,7 +318,7 @@ apiLogsPage page = do
             chartAspectRatio _ = "aspect-[3/1]"
 
         div_ [class_ "flex-1 space-y-1.5"] do
-          div_ [class_ "leading-none text-sm flex justify-between items-center"] do
+          div_ [class_ "leading-none  flex justify-between items-center"] do
             div_ [class_ "gap-2 flex items-center"] do
               if page.source == "logs" then "Log Lines " else "All Requests "
               span_ [class_ "leading-tight font-semibold text-slate-500 bg-slate-200 rounded-3xl  px-2 py-0.5 text-xs"] $ toHtml @Text $ fmt (commaizeF page.resultCount)
@@ -335,7 +334,7 @@ apiLogsPage page = do
             ]
             ""
         unless (page.source == "logs") $ div_ [class_ "flex-1 space-y-1.5"] do
-          div_ [class_ "leading-none text-sm flex justify-between items-center"] do
+          div_ [class_ "leading-none  flex justify-between items-center"] do
             "Errors"
             label_ [class_ "rounded-full border border-slate-300 p-2 inline-flex cursor-pointer"] $ faSprite_ "up-right-and-down-left-from-center" "regular" "w-3 h-3"
           div_
@@ -349,7 +348,7 @@ apiLogsPage page = do
             ]
             ""
         unless (page.source == "logs") $ div_ [class_ "flex-1 space-y-1.5"] do
-          div_ [class_ "leading-none text-sm flex justify-between items-center"] do
+          div_ [class_ "leading-none  flex justify-between items-center"] do
             "Latency"
             label_ [class_ "rounded-full border border-slate-300 p-2 inline-flex cursor-pointer"] $ faSprite_ "up-right-and-down-left-from-center" "regular" "w-3 h-3"
           div_
@@ -363,7 +362,7 @@ apiLogsPage page = do
             ""
 
     div_ [class_ "flex gap-3.5 overflow-hidden"] do
-      div_ [class_ "card-round w-1/5 shrink-0 flex flex-col gap-2 p-2 text-sm group-has-[.toggle-filters:checked]/pg:hidden "] do
+      div_ [class_ "card-round w-1/5 shrink-0 flex flex-col gap-2 p-2  group-has-[.toggle-filters:checked]/pg:hidden "] do
         input_ [placeholder_ "Search filter", class_ "rounded-2xl bg-slate-50 px-4 py-2 border border-slate-300 "]
         div_ [class_ "divide-y gap-3"] do
           div_ [class_ "flex flex-col gap-1.5 py-3"] do
@@ -384,13 +383,13 @@ apiLogsPage page = do
               span_ "121231"
 
       div_ [class_ "grow flex-1 space-y-3 overflow-hidden"] do
-        div_ [class_ "flex gap-2 text-sm pt-1"] do
-          label_ [class_ "hidden gap-1 flex items-center cursor-pointer"] do
+        div_ [class_ "flex gap-2  pt-1"] do
+          label_ [class_ "gap-1 flex items-center cursor-pointer"] do
             faSprite_ "side-chevron-left-in-box" "regular" "w-4 h-4"
             span_ [class_ "hidden group-has-[.toggle-filters:checked]/pg:block"] "Show"
             span_ [class_ "group-has-[.toggle-filters:checked]/pg:hidden"] "Hide"
             "filters"
-            input_ [type_ "checkbox", class_ "toggle-filters hidden", checked_]
+            input_ [type_ "checkbox", class_ "toggle-filters hidden"]
           span_ [class_ "text-slate-200"] "|"
           div_ [class_ ""] $ span_ [class_ "text-slate-950"] (toHtml @Text $ fmt $ commaizeF page.resultCount) >> span_ " spans found"
         div_ [class_ "card-round divide-y flex flex-col h-full overflow-hidden"] $ resultTableAndMeta_ page
@@ -410,7 +409,7 @@ resultTableAndMeta_ page =
 
 resultTable_ :: ApiLogsPageData -> Bool -> Html ()
 resultTable_ page mainLog = table_
-  [ class_ "w-full text-sm table-auto ctable table-pin-rows table-pin-cols overflow-x-hidden [contain:strict] [content-visibility:auto]"
+  [ class_ "w-full  table-auto ctable table-pin-rows table-pin-cols overflow-x-hidden [contain:strict] [content-visibility:auto]"
   , style_ "height:1px; --rounded-box:0"
   , id_ "resultTable"
   , term "data-source" page.source
@@ -639,10 +638,10 @@ requestDumpLogItemUrlPath pid rd colIdxMap = do
 jsonTreeAuxillaryCode :: Projects.ProjectId -> Html ()
 jsonTreeAuxillaryCode pid = do
   template_ [id_ "log-item-context-menu-tmpl"] do
-    div_ [id_ "log-item-context-menu", class_ "log-item-context-menu text-sm origin-top-right absolute left-0 mt-2 w-56 rounded-md shadow-md shadow-slate-300 bg-slate-50 ring-1 ring-black ring-opacity-5 divide-y divide-gray-100 focus:outline-none z-10", role_ "menu", tabindex_ "-1"] do
+    div_ [id_ "log-item-context-menu", class_ "log-item-context-menu  origin-top-right absolute left-0 mt-2 w-56 rounded-md shadow-md shadow-slate-300 bg-slate-50 ring-1 ring-black ring-opacity-5 divide-y divide-gray-100 focus:outline-none z-10", role_ "menu", tabindex_ "-1"] do
       div_ [class_ "py-1", role_ "none"] do
         a_
-          [ class_ "cursor-pointer text-slate-700 block px-4 py-1 text-sm hover:bg-gray-100 hover:text-slate-900"
+          [ class_ "cursor-pointer text-slate-700 block px-4 py-1  hover:bg-gray-100 hover:text-slate-900"
           , role_ "menuitem"
           , tabindex_ "-1"
           , hxGet_ $ "/p/" <> pid.toText <> "/log_explorer"
@@ -656,7 +655,7 @@ jsonTreeAuxillaryCode pid = do
           ]
           "Add field as Column"
         a_
-          [ class_ "cursor-pointer text-slate-700 block px-4 py-1 text-sm hover:bg-gray-100 hover:text-slate-900"
+          [ class_ "cursor-pointer text-slate-700 block px-4 py-1  hover:bg-gray-100 hover:text-slate-900"
           , role_ "menuitem"
           , tabindex_ "-1"
           , [__|on click if 'clipboard' in window.navigator then
@@ -667,14 +666,14 @@ jsonTreeAuxillaryCode pid = do
           ]
           "Copy field value"
         button_
-          [ class_ "cursor-pointer w-full text-left text-slate-700 block px-4 py-1 text-sm hover:bg-gray-100 hover:text-slate-900"
+          [ class_ "cursor-pointer w-full text-left text-slate-700 block px-4 py-1  hover:bg-gray-100 hover:text-slate-900"
           , role_ "menuitem"
           , tabindex_ "-1"
           , onclick_ "filterByField(event, '==')"
           ]
           "Filter by field"
         button_
-          [ class_ "cursor-pointer w-full text-left text-slate-700 block px-4 py-1 text-sm hover:bg-gray-100 hover:text-slate-900"
+          [ class_ "cursor-pointer w-full text-left text-slate-700 block px-4 py-1  hover:bg-gray-100 hover:text-slate-900"
           , role_ "menuitem"
           , tabindex_ "-1"
           , onclick_ "filterByField(event, '!=')"

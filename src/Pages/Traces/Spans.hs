@@ -41,33 +41,33 @@ expandedSpanItem pid sp = do
           h4_ [class_ "text-xl font-medium max-w-96 truncate"] $ toHtml sp.spanName
       div_ [class_ "flex gap-4 items-center"] do
         div_ [class_ "flex items-end border rounded"] do
-          span_ [class_ "text-sm text-gray-500 font-medium border-r px-2 py-1"] "Span ID"
-          span_ [class_ "text-sm px-2 py-1 text-gray-600"] $ toHtml sp.spanId
+          span_ [class_ " text-gray-500 font-medium border-r px-2 py-1"] "Span ID"
+          span_ [class_ " px-2 py-1 text-gray-600"] $ toHtml sp.spanId
         div_ [class_ "flex items-end border rounded"] do
-          span_ [class_ "text-sm text-gray-500 font-medium border-r px-2 py-1"] "Trace ID"
-          span_ [class_ "text-sm px-2 py-1 text-gray-600"] $ toHtml sp.traceId
+          span_ [class_ " text-gray-500 font-medium border-r px-2 py-1"] "Trace ID"
+          span_ [class_ " px-2 py-1 text-gray-600"] $ toHtml sp.traceId
       div_ [class_ "flex gap-4 items-center justify-between text-gray-600  mt-3"] $ do
         div_ [class_ "flex gap-4 items-center"] do
           div_ [class_ "font-medium flex shrink-0 items-center rounded gap-1 border px-2 py-1.5 text-gray-600"] do
             faSprite_ "clock" "regular" "w-3 h-3"
-            span_ [class_ "text-sm font-medium"] $ toHtml $ getDurationNSMS sp.spanDurationNs
+            span_ [class_ " font-medium"] $ toHtml $ getDurationNSMS sp.spanDurationNs
           div_ [class_ "flex items-center gap-4"] do
             whenJust reqDetails $ \case
               ("HTTP", method, path, status) -> do
-                span_ [class_ "text-sm font-medium border rounded px-2 py-1.5"] "HTTP"
+                span_ [class_ " font-medium border rounded px-2 py-1.5"] "HTTP"
                 div_ [class_ "flex border rounded overflow-hidden"] do
-                  span_ [class_ "text-sm px-2 py-1.5 border-r bg-gray-200"] $ toHtml method
-                  span_ [class_ "text-sm px-2 py-1.5 max-w-96 truncate"] $ toHtml path
+                  span_ [class_ " px-2 py-1.5 border-r bg-gray-200"] $ toHtml method
+                  span_ [class_ " px-2 py-1.5 max-w-96 truncate"] $ toHtml path
                   let extraClass = getStatusColor status
-                  span_ [class_ $ "text-sm px-2 py-1.5 " <> extraClass] $ toHtml $ T.take 3 $ show status
+                  span_ [class_ $ " px-2 py-1.5 " <> extraClass] $ toHtml $ T.take 3 $ show status
               (scheme, method, path, status) -> do
-                span_ [class_ "text-sm font-medium border rounded px-2 py-1.5"] $ toHtml scheme
+                span_ [class_ " font-medium border rounded px-2 py-1.5"] $ toHtml scheme
                 div_ [class_ "flex border rounded overflow-hidden"] do
-                  span_ [class_ "text-sm px-2 py-1.5 max-w-44 truncate bg-gray-200 border-r"] $ toHtml method
-                  span_ [class_ "text-sm px-2 py-1.5 max-w-96 truncate"] $ toHtml path
+                  span_ [class_ " px-2 py-1.5 max-w-44 truncate bg-gray-200 border-r"] $ toHtml method
+                  span_ [class_ " px-2 py-1.5 max-w-96 truncate"] $ toHtml path
                   let extraClass = getGrpcStatusColor status
-                  span_ [class_ $ "text-sm px-2 py-1.5 border-l " <> extraClass] $ toHtml $ show status
-        span_ [class_ "text-sm"] $ toHtml $ formatTime defaultTimeLocale "%b %d %Y %H:%M:%S%Q" sp.timestamp
+                  span_ [class_ $ " px-2 py-1.5 border-l " <> extraClass] $ toHtml $ show status
+        span_ [class_ ""] $ toHtml $ formatTime defaultTimeLocale "%b %d %Y %H:%M:%S%Q" sp.timestamp
 
     div_ [class_ "tabs tabs-boxed tabs-outline items-center border tabs-sm w-max mt-8", [__|on click halt|]] $ do
       a_ [class_ "tab span-tab tab-active", [__| install Navigatable(content: .attributes-content)|]] "Attributes"
@@ -94,7 +94,7 @@ expandedSpanItem pid sp = do
 
 tagItem :: Text -> Text -> Text -> Html ()
 tagItem key val cls =
-  div_ [class_ "flex items-center gap-2 rounded-md bg-gray-100 px-3 py-1 text-sm"] $ do
+  div_ [class_ "flex items-center gap-2 rounded-md bg-gray-100 px-3 py-1 "] $ do
     div_ [class_ "h-1 w-1 rounded-full bg-slate-700 shrink-0"] ""
     div_ [class_ "flex items-center"] do
       span_ [] $ toHtml key

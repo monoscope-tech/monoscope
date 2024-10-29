@@ -433,13 +433,13 @@ documentationsPage pid swaggers swaggerID jsonString = do
                 div_ [onclick_ "toggleFontSize(event)", class_ "relative"] do
                   button_ [id_ "toggle_font", class_ "font-semibold"] "Aa"
                   div_ [id_ "toggle_dropdown_container", class_ "absolute hidden flex flex-col justify-between bg-base-100 shadow bottom-0 rounded-b overflow-hidden", style_ "bottom:-105px;left:-50px; height: 100px;width:100px; z-index:999"] do
-                    span_ [id_ "toggle_sm", class_ "cursor-pointer text-sm w-full px-3 py-2 hover:bg-blue-100"] "Small"
+                    span_ [id_ "toggle_sm", class_ "cursor-pointer  w-full px-3 py-2 hover:bg-blue-100"] "Small"
                     span_ [id_ "toggle_md", class_ "font_toggle_active cursor-pointer w-full px-3 py-2 hover:bg-blue-100"] "Medium"
                     span_ [id_ "toggle_lg", class_ "cursor-pointer text-lg w-full px-3 py-2 hover:bg-blue-100"] "Large"
                 form_ [hxPost_ $ "/p/" <> pid.toText <> "/documentation/save"] do
                   input_ [id_ "save_swagger_input_id", name_ "swagger_id", type_ "hidden", value_ (toText swaggerID)]
                   input_ [id_ "save_swagger_input_data", name_ "updated_swagger", type_ "hidden", value_ (toText jsonString)]
-              --  button_ [type_ "submit", id_ "save_swagger_btn", class_ "bg-gray-200 text-sm py-2 px-4 rounded active:bg-green-600"] "Save"
+              --  button_ [type_ "submit", id_ "save_swagger_btn", class_ "bg-gray-200  py-2 px-4 rounded active:bg-green-600"] "Save"
               div_ [id_ "swaggerEditor", class_ "w-full overflow-y-auto", style_ "height: calc(100% - 40px)"] pass
             div_ [onmousedown_ "mouseDown(event)", id_ "editor_resizer", class_ "h-full bg-neutral-400", style_ "width: 2px; cursor: col-resize; background-color: rgb(209 213 219);"] pass
           div_ [id_ "details_container", class_ "flex-auto overflow-y-auto", style_ "width:30%; height:100%"] do

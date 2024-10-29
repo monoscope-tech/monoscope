@@ -75,30 +75,30 @@ tracePage p = do
           faSprite_ "caret-up" "solid" "w-5 h-5 rotate-90 font-bold"
           h4_ [class_ "text-xl font-medium"] $ toHtml $ if not (null p.spanRecords) then (V.head p.spanRecords).spanName else "Unknown Span"
         div_ [class_ "flex items-end border rounded"] do
-          span_ [class_ "text-sm text-gray-500 font-medium border-r px-2 py-1"] "Trace ID"
-          span_ [class_ "text-sm px-2 py-1"] $ toHtml traceItem.traceId
+          span_ [class_ " text-gray-500 font-medium border-r px-2 py-1"] "Trace ID"
+          span_ [class_ " px-2 py-1"] $ toHtml traceItem.traceId
       div_ [class_ "flex gap-4 items-center justify-between text-gray-600"] $ do
         div_ [class_ "flex gap-4 items-center"] do
           div_ [class_ "font-medium flex shrink-0 items-center rounded gap-1 border px-2 py-1.5 text-gray-600"] do
             faSprite_ "clock" "regular" "w-3 h-3"
-            span_ [class_ "text-sm font-medium"] $ toHtml $ getDurationNSMS traceItem.traceDurationNs
+            span_ [class_ " font-medium"] $ toHtml $ getDurationNSMS traceItem.traceDurationNs
           div_ [class_ "flex items-center gap-4"] do
             whenJust reqDetails $ \case
               ("HTTP", method, path, status) -> do
-                span_ [class_ "text-sm font-medium border rounded px-2 py-1.5"] "HTTP"
+                span_ [class_ " font-medium border rounded px-2 py-1.5"] "HTTP"
                 div_ [class_ "flex border rounded overflow-hidden"] do
-                  span_ [class_ "text-sm px-2 py-1.5 border-r bg-gray-200"] $ toHtml method
-                  span_ [class_ "text-sm px-2 py-1.5 max-w-96 truncate"] $ toHtml path
+                  span_ [class_ " px-2 py-1.5 border-r bg-gray-200"] $ toHtml method
+                  span_ [class_ " px-2 py-1.5 max-w-96 truncate"] $ toHtml path
                   let extraClass = getStatusColor status
-                  span_ [class_ $ "text-sm px-2 py-1.5 " <> extraClass] $ toHtml $ T.take 3 $ show status
+                  span_ [class_ $ " px-2 py-1.5 " <> extraClass] $ toHtml $ T.take 3 $ show status
               (scheme, method, path, status) -> do
-                span_ [class_ "text-sm font-medium border rounded px-2 py-1.5"] $ toHtml scheme
+                span_ [class_ " font-medium border rounded px-2 py-1.5"] $ toHtml scheme
                 div_ [class_ "flex border rounded overflow-hidden"] do
-                  span_ [class_ "text-sm px-2 py-1.5 max-w-44 truncate bg-gray-200 border-r"] $ toHtml method
-                  span_ [class_ "text-sm px-2 py-1.5 max-w-96 truncate"] $ toHtml path
-                  span_ [class_ "text-sm px-2 py-1.5 border-l"] $ toHtml $ show status
+                  span_ [class_ " px-2 py-1.5 max-w-44 truncate bg-gray-200 border-r"] $ toHtml method
+                  span_ [class_ " px-2 py-1.5 max-w-96 truncate"] $ toHtml path
+                  span_ [class_ " px-2 py-1.5 border-l"] $ toHtml $ show status
 
-        span_ [class_ "text-sm"] $ toHtml $ formatTime defaultTimeLocale "%b %d %Y %H:%M:%S%Q" traceItem.traceStartTime
+        span_ [class_ ""] $ toHtml $ formatTime defaultTimeLocale "%b %d %Y %H:%M:%S%Q" traceItem.traceStartTime
 
       div_ [class_ "flex gap-1 w-full mt-5"] $ do
         div_ [class_ "w-full"] do
@@ -122,7 +122,7 @@ tracePage p = do
                   h3_ [class_ "w-full flex p-2 font-medium justify-between items-center border-b"] do
                     span_ [] "Services"
                     span_ [] "Exec Time %"
-                  div_ [class_ "w-full h-[200px] overflow-x-hidden text-sm text-gray-600 overflow-y-auto c-scroll", id_ $ "services-" <> traceItem.traceId] do
+                  div_ [class_ "w-full h-[200px] overflow-x-hidden  text-gray-600 overflow-y-auto c-scroll", id_ $ "services-" <> traceItem.traceId] do
                     forM_ serviceNames $ \s -> do
                       let spans = filter (\x -> x.name == s) serviceData
                           duration = sum $ (.duration) <$> spans
@@ -223,7 +223,7 @@ spanTable records =
           (reqType, _, _, status_code) = fromMaybe ("", "", "", 0) $ getRequestDetails spanRecord
 
       div_
-        [ class_ "bg-white pl-2 w-full overflow-x-hidden text-gray-700 items-center flex gap-3 cursor-pointer text-sm flex-nowrap hover:bg-gray-100 border-b border-b-gray-50 last:border-b-0"
+        [ class_ "bg-white pl-2 w-full overflow-x-hidden text-gray-700 items-center flex gap-3 cursor-pointer  flex-nowrap hover:bg-gray-100 border-b border-b-gray-50 last:border-b-0"
         , hxGet_ $ "/p/" <> pidText <> "/log_explorer/" <> spanid <> "/" <> tme <> "/detailed?source=spans"
         , hxTarget_ $ "#span-" <> spanRecord.traceId
         , hxSwap_ "innerHTML"

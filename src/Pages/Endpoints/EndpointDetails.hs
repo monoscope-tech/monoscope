@@ -125,19 +125,19 @@ fieldDetailsView field formats = do
           div_ [class_ "w-full py-3"] do
             div_ [class_ "text-xl space-y-6 overflow-y-auto", style_ "min-height:30vh;max-height:70vh; width:100%"] do
               div_ [class_ "flex items-center gap-4"] do
-                label_ [Lucid.for_ "is_required", class_ "text-gray-700 text-sm font-semibold"] "Required"
+                label_ [Lucid.for_ "is_required", class_ "text-gray-700  font-semibold"] "Required"
                 input_ [class_ "checkbox checkbox-success checkbox-sm", id_ "is_required", name_ "isRequired", type_ "checkbox", if field.isRequired then checked_ else value_ "off"]
               div_ [class_ "flex items-center gap-4"] do
-                label_ [Lucid.for_ "is_enum", class_ "text-gray-700 text-sm font-semibold"] "Enum"
+                label_ [Lucid.for_ "is_enum", class_ "text-gray-700  font-semibold"] "Enum"
                 input_ [class_ "checkbox checkbox-success checkbox-sm", id_ "is_enum", name_ "isEnum", type_ "checkbox", if field.isEnum then checked_ else value_ "off"]
               div_ [class_ "flex flex-col gap-2"] do
-                span_ [class_ "text-gray-700 text-sm font-semibold"] "Formats"
+                span_ [class_ "text-gray-700  font-semibold"] "Formats"
                 div_ [class_ "flex flex-col gap-2"] do
                   div_ [id_ "formats", class_ "flex flex-col gap-1 px-2 [&>input]:input [&>input]:input-sm [&>input]:input-bordered [&>input]:input-success [&>input]:w-full [&>input]:max-w-xs"] do
                     formats & mapM_ \f -> do
                       input_ [type_ "text", name_ "formats", value_ f.fieldFormat]
                   button_
-                    [ class_ "rounded-full py-1 px-2 w-max bg-blue-100 text-blue-500 text-sm mt-2 flex items-center gap-1"
+                    [ class_ "rounded-full py-1 px-2 w-max bg-blue-100 text-blue-500  mt-2 flex items-center gap-1"
                     , onclick_ ""
                     , type_ "button"
                     , [__| on click append "<input type=\"text\" name=\"formats\">"  to #formats|]
@@ -147,8 +147,8 @@ fieldDetailsView field formats = do
                       faSprite_ "plus" "solid" "h-3 w-3"
 
               div_ [class_ "flex flex-col gap-1"] do
-                label_ [Lucid.for_ "description", class_ "text-gray-700 text-sm font-semibold"] "Description"
-                textarea_ [id_ "description", name_ "description", class_ "text-sm border p-2 rounded-lg text-gray-600"] $ toHtml field.description
+                label_ [Lucid.for_ "description", class_ "text-gray-700  font-semibold"] "Description"
+                textarea_ [id_ "description", name_ "description", class_ " border p-2 rounded-lg text-gray-600"] $ toHtml field.description
           div_ [class_ "flex w-full justify-end items-center p-6 gap-4 space-x-2 border-t border-gray-200 rounded-b"] do
             button_
               [ class_ "btn btn-outline"
@@ -178,7 +178,7 @@ fieldDetailsView field formats = do
         span_ [class_ "px-2 rounded-xl bg-green-100 text-green-800 monospace"] "enum"
 
     div_ do
-      h5_ [class_ "text-sm text-slate-800"] "DETECTED FIELD FORMATS AND TYPES"
+      h5_ [class_ " text-slate-800"] "DETECTED FIELD FORMATS AND TYPES"
       div_ [class_ "space-y-2"]
         $ formats
         & mapM_ \formatV -> do
@@ -193,20 +193,20 @@ fieldDetailsView field formats = do
             h6_ [class_ "text-slate-600 mt-4 text-xs"] $ if field.isEnum then "ENUM VALUES" else "EXAMPLE VALUES"
             ul_ [class_ "list-disc"] do
               formatV.examples & mapM_ \ex -> do
-                li_ [class_ "ml-10 text-slate-800 text-sm"] $ toHtml $ aesonValueToText ex
+                li_ [class_ "ml-10 text-slate-800 "] $ toHtml $ aesonValueToText ex
     div_ [class_ "flex flex-row justify-between mt-10 "] do
       div_ [class_ " "] do
-        h4_ [class_ "text-sm text-slate-800 mb-2"] "CREATION DATE"
+        h4_ [class_ " text-slate-800 mb-2"] "CREATION DATE"
         div_ [class_ "flex border border-gray-200 m-1 rounded-xl p-2"] do
           faSprite_ "regular-calendar-days-clock" "regular" "h-4 mr-2 w-4"
           span_ [class_ "text-xs"] $ toHtml $ formatTime defaultTimeLocale "%b %d, %Y %R" field.createdAt
       div_ [class_ " "] do
-        h4_ [class_ "text-sm text-slate-800 mb-2"] "LAST CHANGE"
+        h4_ [class_ " text-slate-800 mb-2"] "LAST CHANGE"
         div_ [class_ "flex border border-gray-200 m-1 justify-between rounded-xl p-2"] do
           faSprite_ "regular-calendar-days-clock" "regular" "h-4 mr-2 w-4"
           span_ [class_ "text-xs"] $ toHtml $ formatTime defaultTimeLocale "%b %d, %Y %R" field.updatedAt
-    h6_ [class_ "mt-5 text-sm text-slate-800 mb-2"] "DESCRIPTION"
-    p_ [class_ "text-slate-800 text-sm"] $ toHtml field.description
+    h6_ [class_ "mt-5  text-slate-800 mb-2"] "DESCRIPTION"
+    p_ [class_ "text-slate-800 "] $ toHtml field.description
 
 
 aesonValueToText :: AE.Value -> Text
@@ -342,14 +342,14 @@ endpointDetails pid paramInput currTime endpoint endpointStats shapesWithFieldsM
               span_ [class_ $ "p-1 endpoint endpoint-" <> toLower endpoint.method] $ toHtml $ endpoint.method <> " "
               strong_ [class_ "inconsolata text-xl"] $ toHtml endpoint.urlPath
             faSprite_ "chevron-down" "light" " h-4 w-4 m-2"
-          p_ [class_ "text-gray-500 text-sm ml-2"] $ toHtml endpoint.description
+          p_ [class_ "text-gray-500  ml-2"] $ toHtml endpoint.description
         nav_ [class_ " space-x-4"] do
           subPageMenu
             & mapM_ \(title, slug) ->
               a_
                 [ href_ $ currentURLSubPage <> "&subpage=" <> slug
                 , class_
-                    $ "cursor-pointer px-3 py-2 font-medium text-sm rounded-md "
+                    $ "cursor-pointer px-3 py-2 font-medium  rounded-md "
                     <> if slug == paramInput.subPage then " bg-indigo-100 text-indigo-700 " else " text-slate-500 hover:text-gray-700"
                 ]
                 $ toHtml title
@@ -367,8 +367,8 @@ endpointDetails pid paramInput currTime endpoint endpointStats shapesWithFieldsM
         div_ [class_ "h-full flex flex-col items-center justify-center"] do
           faSprite_ "clapperboard" "light" "w-36 h-36"
           h3_ [class_ "mt-2 text-lg font-medium text-slate-900"] "Nothing selected"
-          p_ [class_ "mt-1 text-sm text-slate-500"] "Select a field or similar item on the left"
-          p_ [class_ "mt-1 text-sm text-slate-500"] "to view more details about it here."
+          p_ [class_ "mt-1  text-slate-500"] "Select a field or similar item on the left"
+          p_ [class_ "mt-1  text-slate-500"] "to view more details about it here."
 
     script_
       [type_ "text/hyperscript"]
@@ -394,7 +394,7 @@ shapesSubPage pid shapesList shapesWithFields currentURL = do
             a_ [href_ $ currentURL <> "&subpage=api_docs" <> "&shape=" <> shape.sHash, class_ "w-full items-start justify-between gap-10 flex text-slate-700"] do
               let statuscls = getStatusColor shape.status
               span_ [class_ $ "mt-10 px-3 py-1 " <> statuscls] $ show shape.status
-              span_ [class_ "mt-12 text-sm text-gray-500"] $ toHtml shape.sHash
+              span_ [class_ "mt-12  text-gray-500"] $ toHtml shape.sHash
               let request_body_keypaths = (\f -> f.keyPath) <$> fromMaybe [] (Map.lookup Fields.FCRequestBody shape.fieldsMap)
               let response_body_keypaths = (\f -> f.keyPath) <$> fromMaybe [] (Map.lookup Fields.FCResponseBody shape.fieldsMap)
               let shapeJson =
@@ -406,7 +406,7 @@ shapesSubPage pid shapesList shapesWithFields currentURL = do
                       , "response_body" .= convertKeyPathsToJson response_body_keypaths (fromMaybe [] (Map.lookup Fields.FCResponseBody shape.fieldsMap)) ""
                       ]
               let shapeJsonStr = aesonValueToText shapeJson
-              div_ [class_ "text-sm text-gray-500 p-4 bg-gray-100 whitespace-prerap w-2/3 h-[200px] overflow-auto flex flex-col gap-1 shape_json", style_ "font-family: monospace", term "data-json" shapeJsonStr] pass
+              div_ [class_ " text-gray-500 p-4 bg-gray-100 whitespace-prerap w-2/3 h-[200px] overflow-auto flex flex-col gap-1 shape_json", style_ "font-family: monospace", term "data-json" shapeJsonStr] pass
             div_ [class_ "mt-10"] do
               -- let chartQuery = Just $ Charts.QBShapeHash shape.sHash
               -- div_ [class_ "flex items-center justify-center "] $ div_ [class_ "w-60 h-16 px-3"] $ Charts.throughput pid shape.sHash chartQuery Nothing 14 Nothing False (Nothing, Nothing) Nothing
@@ -452,14 +452,14 @@ apiDocsSubPage shapesWithFieldsMap shapeHashM = do
             , class_ "w-full flex text-slate-600 justify_between items-center cursor-pointer px-2 py-1"
             ]
             do
-              let prm = "px-2 py-1 rounded text-white text-sm "
+              let prm = "px-2 py-1 rounded text-white  "
               let statusCls = if st < 400 then prm <> "bg-green-500" else prm <> "bg-red-500"
               span_ [class_ statusCls] $ show st
-              span_ [class_ "ml-1 text-sm text-slate-600"] $ toHtml hs
+              span_ [class_ "ml-1  text-slate-600"] $ toHtml hs
           faSprite_ "chevron-down" "light" "h-4 w-4"
           div_ [id_ "shapes_container", class_ "absolute hidden bg-base-100 border shadow w-full overflow-y-auto", style_ "top:100%; max-height: 300px; z-index:9"] do
             forM_ (zip [(1 :: Int) ..] shapesWithFieldsMap) $ \(index, s) -> do
-              let prm = "px-2 py-1 rounded text-white text-sm "
+              let prm = "px-2 py-1 rounded text-white  "
               let statusCls = if s.status < 400 then prm <> "bg-green-500" else prm <> "bg-red-500"
               let prm = "p-2 w-full text-left truncate ... hover:bg-blue-100 hover:text-black"
               button_
@@ -472,7 +472,7 @@ apiDocsSubPage shapesWithFieldsMap shapeHashM = do
                 ]
                 do
                   span_ [class_ statusCls] $ show s.status
-                  span_ [class_ "ml-2 text-sm text-slate-600"] $ toHtml s.sHash
+                  span_ [class_ "ml-2  text-slate-600"] $ toHtml s.sHash
 
       div_ [class_ "flex items-center"] do
         a_ [href_ "#", onclick_ "slideReqRes('prev')"] $ faSprite_ "arrow-left" "regular" "h-6 w-6 m-2 cursor-pointer"
@@ -538,7 +538,7 @@ apiOverviewSubPage pid paramInput currTime endpoint fieldsM reqLatenciesRolledBy
         span_ [class_ "inline-block"] $ toHtml paramInput.currentPickerTxt
         faSprite_ "chevron-down" "light" "h-4 w-4 inline-block"
     div_ [id_ "timepickerBox", class_ "hidden absolute z-10 mt-1  rounded-md flex"] do
-      div_ [class_ "inline-block w-84 overflow-auto bg-base-100 py-1 text-base shadow-lg ring-1 ring-black ring-opacity-5 focus:outline-none sm:text-sm"] do
+      div_ [class_ "inline-block w-84 overflow-auto bg-base-100 py-1 text-base shadow-lg ring-1 ring-black ring-opacity-5 focus:outline-none sm:"] do
         forM_ timePickerItems \(val, title) ->
           a_
             [ class_ "block text-slate-900 relative cursor-pointer select-none py-2 pl-3 pr-9 hover:bg-gray-200 "
@@ -672,9 +672,9 @@ subSubSection title fieldsM descriptionM =
       div_ [class_ "space-y-1 mb-4"] do
         div_ [class_ "flex flex-row items-center"] do
           a_ [href_ "#", [__|on click toggle .neg-rotate-90 on me then toggle .hidden on (next .subSectionContent)|]] $ faSprite_ "chevron-down" "regular" "h-6 mr-3 w-6 p-1 cursor-pointer"
-          div_ [class_ "flex flex-row gap-2 bg-gray-100 px-10 rounded-xl w-full p-4 text-sm text-slate-900 "] do
+          div_ [class_ "flex flex-row gap-2 bg-gray-100 px-10 rounded-xl w-full p-4  text-slate-900 "] do
             toHtml title
-            p_ [class_ "text-sm text-gray-700"] $ toHtml $ fromMaybe "" descriptionM
+            p_ [class_ " text-gray-700"] $ toHtml $ fromMaybe "" descriptionM
         div_ [class_ "space-y-1 subSectionContent"] do
           -- pTraceShowM $ fields
           -- pTraceShowM "========================"
@@ -696,8 +696,8 @@ subSubSection title fieldsM descriptionM =
                     faSprite_ "chevron-down" "light" "h-6 w-6 mr-1 chevron cursor-pointer p-1"
                     div_ [class_ "border flex flex-row border-gray-100 px-5 py-2 rounded-xl w-full"] do
                       input_ [type_ "checkbox", class_ " mr-12"]
-                      span_ [class_ "text-sm text-slate-800 inline-flex items-center"] $ toHtml displayKey
-                      span_ [class_ "text-sm text-slate-600 inline-flex items-center ml-4"] do
+                      span_ [class_ " text-slate-800 inline-flex items-center"] $ toHtml displayKey
+                      span_ [class_ " text-slate-600 inline-flex items-center ml-4"] do
                         if "[*]" `isSuffixOf` key
                           then EndpointComponents.fieldTypeToDisplay Fields.FTList
                           else EndpointComponents.fieldTypeToDisplay Fields.FTObject
@@ -714,9 +714,9 @@ subSubSection title fieldsM descriptionM =
                     div_ [class_ "border flex flex-row border-gray-100 px-5 py-2 rounded-xl w-full items-center"] do
                       input_ [type_ "checkbox", class_ " mr-12"]
                       div_ [class_ "flex gap-2 items-center grow"] do
-                        span_ [class_ "text-sm text-slate-800 inline-flex items-center"] $ toHtml displayKey
+                        span_ [class_ " text-slate-800 inline-flex items-center"] $ toHtml displayKey
                         when field.isRequired do span_ [class_ "text-red-500", term "data-tippy-content" "required field"] "*"
-                      span_ [class_ "text-sm text-slate-600 mx-12 inline-flex items-center"] $ EndpointComponents.fieldTypeToDisplay field.fieldType
+                      span_ [class_ " text-slate-600 mx-12 inline-flex items-center"] $ EndpointComponents.fieldTypeToDisplay field.fieldType
                       faSprite_ "octagon-exclamation" "regular" " mr-8 ml-4 h-5 text-red-400"
                       faSprite_ "ellipsis-vertical" "light" "mx-5 h-5"
 

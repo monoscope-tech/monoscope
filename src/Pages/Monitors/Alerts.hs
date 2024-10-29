@@ -453,7 +453,7 @@ monitorMetric_ pid monitorM = section_ [class_ "px-8 py-5 space-y-5 group/pg ove
     ""
   ul_ [class_ "timeline timeline-snap-icon timeline-vertical timeline-compact"] do
     li_ [] do
-      div_ [class_ "timeline-middle"] $ span_ [class_ "inline-block rounded-full bg-primary text-base-100 h-7 w-7 flex items-center justify-center text-sm"] "1"
+      div_ [class_ "timeline-middle"] $ span_ [class_ "inline-block rounded-full bg-primary text-base-100 h-7 w-7 flex items-center justify-center "] "1"
       div_ [class_ "timeline-end space-y-5"] do
         h2_ [class_ ""] do
           faSprite_ "chevron-down" "regular" "h-4 w-4 mx-2"
@@ -468,7 +468,7 @@ monitorMetric_ pid monitorM = section_ [class_ "px-8 py-5 space-y-5 group/pg ove
       hr_ []
     li_ [] do
       hr_ []
-      div_ [class_ "timeline-middle"] $ span_ [class_ "inline-block rounded-full bg-primary text-base-100 h-7 w-7 flex items-center justify-center text-sm"] "2"
+      div_ [class_ "timeline-middle"] $ span_ [class_ "inline-block rounded-full bg-primary text-base-100 h-7 w-7 flex items-center justify-center "] "2"
       div_ [class_ "timeline-end space-y-5"] do
         h2_ [class_ ""] do
           faSprite_ "chevron-down" "regular" "h-4 w-4 mx-2"
@@ -487,21 +487,21 @@ monitorMetric_ pid monitorM = section_ [class_ "px-8 py-5 space-y-5 group/pg ove
       hr_ []
     li_ [] do
       hr_ []
-      div_ [class_ "timeline-middle"] $ span_ [class_ "inline-block rounded-full bg-primary text-base-100 h-7 w-7 flex items-center justify-center text-sm"] "3"
+      div_ [class_ "timeline-middle"] $ span_ [class_ "inline-block rounded-full bg-primary text-base-100 h-7 w-7 flex items-center justify-center "] "3"
       div_ [class_ "timeline-end space-y-5"] do
         h2_ [class_ ""] do
           faSprite_ "chevron-down" "regular" "h-4 w-4 mx-2"
           span_ [] "Set alert conditions"
-        div_ [class_ "pl-8 pb-8 space-y-3 text-sm"] alertConditions_
+        div_ [class_ "pl-8 pb-8 space-y-3 "] alertConditions_
       hr_ []
     li_ [] do
       hr_ []
-      div_ [class_ "timeline-middle"] $ span_ [class_ "inline-block rounded-full bg-primary text-base-100 h-7 w-7 flex items-center justify-center text-sm"] "4"
+      div_ [class_ "timeline-middle"] $ span_ [class_ "inline-block rounded-full bg-primary text-base-100 h-7 w-7 flex items-center justify-center "] "4"
       div_ [class_ "timeline-end space-y-5"] do
         h2_ [class_ ""] do
           faSprite_ "chevron-down" "regular" "h-4 w-4 mx-2"
           span_ [] "Configure notification message"
-        div_ [class_ "pl-8 pb-8 space-y-3 text-sm"] do
+        div_ [class_ "pl-8 pb-8 space-y-3 "] do
           div_ [class_ "space-y-4"] do
             div_ [class_ "form-control w-full"] do
               label_ [class_ "label"] $ span_ [class_ "label-text"] "Severity"
@@ -537,12 +537,12 @@ monitorMetric_ pid monitorM = section_ [class_ "px-8 py-5 space-y-5 group/pg ove
       hr_ []
     li_ [] do
       hr_ []
-      div_ [class_ "timeline-middle"] $ span_ [class_ "inline-block rounded-full bg-primary text-base-100 h-7 w-7 flex items-center justify-center text-sm"] "5"
+      div_ [class_ "timeline-middle"] $ span_ [class_ "inline-block rounded-full bg-primary text-base-100 h-7 w-7 flex items-center justify-center "] "5"
       div_ [class_ "timeline-end space-y-5"] do
         h2_ [class_ ""] do
           faSprite_ "chevron-down" "regular" "h-4 w-4 mx-2"
           span_ [] "Configure notification Channels"
-        div_ [class_ "pl-8 pb-8 space-y-3 text-sm"] do
+        div_ [class_ "pl-8 pb-8 space-y-3 "] do
           div_ do
             p_ "Add individuals, teams or channels that should be notified when this alert triggers"
             p_ "Alert rules with no recipients will still be triggered and can be viewed form the Changes and Errors page"

@@ -83,11 +83,11 @@ integrationsPage pid sdk apiKey errReportM reqMonM = do
           a_ [href_ "https://apitoolkit.io/docs/get-started/quickstarts/", target_ "_BLANK", class_ "rounded-lg border px-4 py-2"] "See Full Documentation"
       div_ [class_ "flex items-center gap-4"] do
         div_ [class_ "relative"] do
-          button_ [class_ "border flex items-center justify-between border-blue-500 w-36 rounded-lg px-2 py-1.5 text-sm font-medium", [__|on click toggle .hidden on #sdk_list|]] do
+          button_ [class_ "border flex items-center justify-between border-blue-500 w-36 rounded-lg px-2 py-1.5  font-medium", [__|on click toggle .hidden on #sdk_list|]] do
             span_ [class_ "b"] $ toHtml $ getTitle sdk
             span_ [] do
               faSprite_ "chevron-down" "regular" "h-3 w-3"
-          div_ [class_ "hidden w-full flex flex-col left-0 absolute shadow top-8 bg-base-100 text-sm rounded", id_ "sdk_list"] do
+          div_ [class_ "hidden w-full flex flex-col left-0 absolute shadow top-8 bg-base-100  rounded", id_ "sdk_list"] do
             -- .NET
             a_ [class_ "px-2 py-1 hover:bg-gray-200", href_ $ baseUrl <> "sdk=dotnet"] ".NET"
             -- Elixir
@@ -115,17 +115,17 @@ integrationsPage pid sdk apiKey errReportM reqMonM = do
             a_ [class_ "px-2 py-1 hover:bg-gray-200", href_ $ baseUrl <> "sdk=pyramid"] "Python Pyramid"
 
         button_
-          [ class_ "rounded-lg flex items-center gap-2 border px-4 py-1.5 font-medium text-sm hover:bg-gray-100"
+          [ class_ "rounded-lg flex items-center gap-2 border px-4 py-1.5 font-medium  hover:bg-gray-100"
           , [__|on click go to the top of #requests-monitoring|]
           ]
           "Request monitoring"
         button_
-          [ class_ "rounded-lg flex items-center gap-2 border px-4 py-1.5 font-medium text-sm hover:bg-gray-100"
+          [ class_ "rounded-lg flex items-center gap-2 border px-4 py-1.5 font-medium  hover:bg-gray-100"
           , [__|on click go to the top of #errors-monitoring|]
           ]
           "Error Reporting"
         button_
-          [ class_ "rounded-lg flex items-center gap-2 border px-4 py-1.5 font-medium text-sm hover:bg-gray-100"
+          [ class_ "rounded-lg flex items-center gap-2 border px-4 py-1.5 font-medium  hover:bg-gray-100"
           , [__|on click go to the top of #outgoing-request-monitoring|]
           ]
           "Outgoing request monitoring"

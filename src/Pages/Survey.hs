@@ -137,7 +137,7 @@ surveyPage pid full_name phoneNumber = do
                     label_ [class_ "font-medium mt-2"] do
                       "What's your full name?"
                       span_ [class_ "text-red-400"] " *"
-                    input_ [type_ "text", name_ "fullName", required_ "required", value_ full_name, class_ "flex h-9 w-full rounded-lg border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"]
+                    input_ [type_ "text", name_ "fullName", required_ "required", value_ full_name, class_ "flex h-9 w-full rounded-lg border border-input bg-transparent px-3 py-1  shadow-sm transition-colors placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"]
                   div_ [class_ "flex flex-col gap-2"] do
                     span_ [class_ "font-medium"] do
                       "What API/Web frameworks do you plan to integrate?"
@@ -156,7 +156,7 @@ surveyPage pid full_name phoneNumber = do
                               span_ [class_ "hidden group-hover:inline"] $ toHtml label
                       div_ [class_ "flex flex-col gap-2 mt-8"] do
                         label_ [class_ "font-medium mt-2"] "Other (please specify):"
-                        input_ [type_ "text", name_ "stack", class_ "px-3 py-1 text-sm bg-slate-50 border border-gray-300 text-gray-900 focus:outline-none rounded-lg focus:ring-blue-500 focus:border-blue-500 block w-full"]
+                        input_ [type_ "text", name_ "stack", class_ "px-3 py-1  bg-slate-50 border border-gray-300 text-gray-900 focus:outline-none rounded-lg focus:ring-blue-500 focus:border-blue-500 block w-full"]
 
                   div_ [class_ "flex flex-col gap-2"] do
                     label_ [class_ "font-medium"] do
@@ -186,7 +186,7 @@ surveyPage pid full_name phoneNumber = do
                             toHtml label
                       div_ [class_ "flex flex-col w-96 gap-2 pl-2"] do
                         label_ [class_ ""] "Other (please specify):"
-                        input_ [type_ "text", name_ "foundUsFrom", class_ "px-3 py-1 text-sm bg-slate-50 border border-gray-300 text-gray-900 focus:outline-none rounded-lg focus:ring-blue-500 focus:border-blue-500 block w-full"]
+                        input_ [type_ "text", name_ "foundUsFrom", class_ "px-3 py-1  bg-slate-50 border border-gray-300 text-gray-900 focus:outline-none rounded-lg focus:ring-blue-500 focus:border-blue-500 block w-full"]
 
                 -- div_ [class_ "flex flex-col gap-2 w-full"] do
                 --   label_ [class_ "font-medium"] "What's your phone number?"
@@ -263,7 +263,7 @@ foundUsFromOptions =
 
 progressSteps :: Html ()
 progressSteps = do
-  ol_ [class_ "flex items-center w-full text-sm font-medium text-center text-gray-500 dark:text-gray-400 sm:text-base"] do
+  ol_ [class_ "flex items-center w-full  font-medium text-center text-gray-500 dark:text-gray-400 sm:text-base"] do
     li_ [class_ "flex md:w-full items-center text-blue-600 dark:text-blue-500 sm:after:content-[''] after:w-1/2 after:h-1 after:border-b after:border-blue-600 after:border-1 after:hidden sm:after:inline-block after:mx-6 xl:after:mx-10"] do
       span_ [class_ "flex items-center"] do
         svg_ [class_ "w-3.5 h-3.5 sm:w-4 sm:h-4 mr-2.5", style_ "aria-hidden: true", xmlns_ "http://www.w3.org/2000/svg", fill_ "currentColor", viewBox_ "0 0 20 20"] do

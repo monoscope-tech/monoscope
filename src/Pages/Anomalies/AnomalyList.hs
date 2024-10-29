@@ -446,7 +446,7 @@ anomalyDetailsPage issue shapesWithFieldsMap fields prvFormatsM currTime timeFil
                 span_ [class_ "text-2xl"] "New Endpoint"
               div_ [class_ "flex items-center gap-3"] do
                 let methodColor = Utils.getMethodColor issueD.endpointMethod
-                div_ [class_ $ "px-4 py-1 text-sm rounded-lg font-semibold " <> methodColor] $ toHtml issueD.endpointMethod
+                div_ [class_ $ "px-4 py-1  rounded-lg font-semibold " <> methodColor] $ toHtml issueD.endpointMethod
                 span_ [] $ toHtml issueD.endpointUrlPath
           Anomalies.IDNewShapeIssue issueD -> do
             div_ [class_ "flex flex-col gap-4 shrink-0"] do
@@ -456,7 +456,7 @@ anomalyDetailsPage issue shapesWithFieldsMap fields prvFormatsM currTime timeFil
               div_ [class_ "flex items-center gap-3"] do
                 let methodColor = Utils.getMethodColor issueD.endpointMethod
                 p_ [class_ "italic"] "in"
-                div_ [class_ $ "px-4 py-1 text-sm rounded-lg font-semibold " <> methodColor] $ toHtml issueD.endpointMethod
+                div_ [class_ $ "px-4 py-1  rounded-lg font-semibold " <> methodColor] $ toHtml issueD.endpointMethod
                 span_ [] $ toHtml issueD.endpointUrlPath
               div_ [class_ "mt-4"] do
                 shapeParameterStats_ (length issueD.newUniqueFields) (length issueD.deletedFields) (length issueD.updatedFieldFormats)
@@ -468,7 +468,7 @@ anomalyDetailsPage issue shapesWithFieldsMap fields prvFormatsM currTime timeFil
               div_ [class_ "flex items-center gap-3"] do
                 let methodColor = Utils.getMethodColor issueD.endpointMethod
                 p_ [class_ "italic"] "in"
-                div_ [class_ $ "px-4 py-1 text-sm rounded-lg font-semibold " <> methodColor] $ toHtml issueD.endpointMethod
+                div_ [class_ $ "px-4 py-1  rounded-lg font-semibold " <> methodColor] $ toHtml issueD.endpointMethod
                 span_ [] $ toHtml issueD.endpointUrlPath
           Anomalies.IDNewRuntimeExceptionIssue issueD -> do
             div_ [class_ "flex flex-col gap-4 shrink-0"] do
@@ -524,7 +524,7 @@ anomalyDetailsPage issue shapesWithFieldsMap fields prvFormatsM currTime timeFil
             _ -> ""
 
         input_ [type_ "radio", name_ $ "anomaly-events-tabs-" <> issue.targetHash, role_ "tab", class_ "tab", Aria.label_ "Events"]
-        div_ [role_ "tabpanel", class_ "tab-content grow whitespace-nowrap text-sm divide-y overflow-x-hidden ", id_ "events_content"] do
+        div_ [role_ "tabpanel", class_ "tab-content grow whitespace-nowrap  divide-y overflow-x-hidden ", id_ "events_content"] do
           let events_url = "/p/" <> UUID.toText (Projects.unProjectId issue.projectId) <> "/log_explorer?layout=resultTable&query=" <> escapedQueryPartial anomalyQueryPartial
           div_ [hxGet_ events_url, hxTrigger_ "intersect once", hxSwap_ "outerHTML"] $ span_ [class_ "loading loading-dots loading-md"] ""
 
@@ -571,29 +571,29 @@ anomalyFormatOverview formatData prevFormats =
   section_ [class_ "space-y-10"] do
     div_ [class_ "flex items-center gap-6"] do
       -- div_ do
-      --   h6_ [class_ "text-sm text-slate-800"] "FIELD NAME"
+      --   h6_ [class_ " text-slate-800"] "FIELD NAME"
       --   h3_ [class_ "text-base text-slate-800"] $ toHtml $ formatData.fieldKey
       div_ do
-        h6_ [class_ "text-sm text-slate-800 "] "FIELD PATH"
+        h6_ [class_ " text-slate-800 "] "FIELD PATH"
         h3_ [class_ "text-base text-slate-800 monospace"] $ toHtml formatData.fieldKeyPath
     -- div_ do
-    --   h6_ [class_ "text-sm text-slate-800"] "FIELD CATEGORY"
+    --   h6_ [class_ " text-slate-800"] "FIELD CATEGORY"
     --   h4_ [class_ "text-base text-slate-800"] $ EndpointComponents.fieldCategoryToDisplay $ fromMaybe FCRequestBody an.fieldCategory
     div_ [class_ "flex items-center gap-6"] do
       div_ do
-        h5_ [class_ "text-sm text-slate-800"] "NEW FIELD FORMAT"
+        h5_ [class_ " text-slate-800"] "NEW FIELD FORMAT"
         h3_ [class_ "text-base text-slate-800 monospace"] $ toHtml $ fieldTypeToText formatData.formatType
       div_ do
-        h5_ [class_ "text-sm text-slate-800"] "PREVIOUS FIELD FORMATS"
+        h5_ [class_ " text-slate-800"] "PREVIOUS FIELD FORMATS"
         ul_ [class_ "list-disc"] do
           prevFormats & mapM_ \f -> do
-            li_ [class_ "ml-10 text-slate-800 text-sm"] $ toHtml f
+            li_ [class_ "ml-10 text-slate-800 "] $ toHtml f
     div_ do
-      h6_ [class_ "text-slate-600 mt-4 text-sm"] "EXAMPLE VALUES"
+      h6_ [class_ "text-slate-600 mt-4 "] "EXAMPLE VALUES"
       ul_ [class_ "list-disc"] do
         formatData.examples & mapM_ \exs -> do
           forM_ exs \ex -> do
-            li_ [class_ "ml-10 text-slate-800 text-sm"] $ toHtml ex
+            li_ [class_ "ml-10 text-slate-800 "] $ toHtml ex
 
 
 issueDisplayConfig :: Anomalies.IssueL -> (Text, Text)
@@ -642,7 +642,7 @@ renderIssue hideByDefault currTime timeFilter issue = do
             span_ [] "in"
             span_ [] $ toHtml endpointTitle
       let formatContent = div_ [class_ "block"] do
-            div_ [class_ "text-sm"] do
+            div_ [class_ ""] do
               div_ do
                 small_ "current format: "
                 span_ $ toHtml issueD.formatType.toText
@@ -720,7 +720,7 @@ subSubSection title fieldsM = whenJust fieldsM \fields -> do
   div_ [class_ "space-y-1 mb-4"] do
     div_ [class_ "flex flex-row items-center"] do
       a_ [class_ "cursor-pointer", [__|on click toggle .neg-rotate-90 on me then toggle .hidden on (next .subSectionContent)|]] $ faSprite_ "chevron-down" "regular" "h-6 mr-3 w-6 p-1 cursor-pointer"
-      div_ [class_ "px-4 rounded-xl w-full font-bold text-sm text-slate-900"] $ toHtml title
+      div_ [class_ "px-4 rounded-xl w-full font-bold  text-slate-900"] $ toHtml title
     div_ [class_ "space-y-1 subSectionContent"] do
       fieldsToNormalized fields & mapM_ \(key, fieldM) -> do
         let segments = T.splitOn "." key
@@ -737,8 +737,8 @@ subSubSection title fieldsM = whenJust fieldsM \fields -> do
               do
                 faSprite_ "chevron-down" "light" "h-6 w-6 mr-1 chevron cursor-pointer p-1"
                 div_ [class_ "border flex flex-row border-gray-100 px-5 py-2 rounded-xl w-full"] do
-                  span_ [class_ "text-sm text-slate-800 inline-flex items-center"] $ toHtml displayKey
-                  span_ [class_ "text-sm text-slate-600 inline-flex items-center ml-4"] do
+                  span_ [class_ " text-slate-800 inline-flex items-center"] $ toHtml displayKey
+                  span_ [class_ " text-slate-600 inline-flex items-center ml-4"] do
                     if "[*]" `T.isSuffixOf` key
                       then EndpointComponents.fieldTypeToDisplay Fields.FTList
                       else EndpointComponents.fieldTypeToDisplay Fields.FTObject
@@ -746,5 +746,5 @@ subSubSection title fieldsM = whenJust fieldsM \fields -> do
             a_ [class_ "flex flex-row cursor-pointer", style_ depthPadding, term "data-depth" $ show depth] do
               faSprite_ "chevron-down" "light" "h-4 mr-3 mt-4 w-4 invisible"
               div_ [class_ "border-b flex flex-row border-gray-100 px-5 py-2 rounded-xl w-full items-center"] do
-                span_ [class_ "grow text-sm text-slate-800 inline-flex items-center"] $ toHtml displayKey
-                span_ [class_ "text-sm text-slate-600 mx-12 inline-flex items-center"] $ EndpointComponents.fieldTypeToDisplay field.fieldType
+                span_ [class_ "grow  text-slate-800 inline-flex items-center"] $ toHtml displayKey
+                span_ [class_ " text-slate-600 mx-12 inline-flex items-center"] $ EndpointComponents.fieldTypeToDisplay field.fieldType
