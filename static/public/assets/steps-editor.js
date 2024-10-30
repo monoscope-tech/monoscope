@@ -240,6 +240,8 @@ export class StepsEditor extends LitElement {
     const hasResults = !!result
     const hasFailingAssertions = result?.assert_results?.some((a) => !a.ok || a.ok === false) || false
     const svErr = saveError !== undefined
+    const failed = (!stepData.disabled && (hasFailingAssertions || svErr ))
+    const passed = (!stepData.disabled && hasResults && !hasFailingAssertions && !svErr)
     saveError = saveError ? saveError : {}
     const configuredOptions = {
       'request-options': (stepData.headers ? Object.keys(stepData.headers) : []).length,
@@ -258,7 +260,7 @@ export class StepsEditor extends LitElement {
 
     return html`
       <div
-        class="rounded-2xl overflow-hidden group/item collectionStep border draggable  ${hasFailingAssertions || svErr ? 'border-red-500' : hasResults ? 'border-green-500' : 'border-slate-200'}"
+        class="rounded-2xl overflow-hidden group/item collectionStep border draggable  ${failed ? 'border-red-500' : passed ? 'border-green-500' : 'border-slate-200'}"
         data-index="${idx}"
       >
         <div class="flex flex-row items-center bg-slate-100">
