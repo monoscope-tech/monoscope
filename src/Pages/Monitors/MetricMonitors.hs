@@ -176,7 +176,7 @@ configureNotificationMessage_ colM = do
         Just col -> (col.alertSeverity, col.alertSubject, col.alertMessage, col.notifyAfter, col.stopAfter, col.notifyAfterCheck, col.stopAfterCheck)
         Nothing -> ("Info", "Error: Error subject", "Alert Message", "10 minutes", "0", False, False)
   div_ [class_ "space-y-4 bg-slate-100 p-4 rounded-2xl"] do
-    div_ [class_ "p-4 bg-white rounded-xl"] do
+    div_ [class_ "p-4 bg-slate-50 rounded-xl"] do
       div_ [class_ "flex items-center w-full gap-2"] do
         div_ [class_ "form-control"] do
           label_ [class_ "label"] $ span_ [class_ "label-text font-medium"] "Severity"

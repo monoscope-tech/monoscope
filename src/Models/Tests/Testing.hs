@@ -141,6 +141,7 @@ instance AE.ToJSON CollectionStepData where
         , fmap ("raw" .=) csd.raw
         , fmap ("asserts" .=) csd.asserts
         , fmap ("httpVersion" .=) csd.httpVersion
+        , fmap ("disabled" .=) csd.disabled
         , fmap ("timeout" .=) csd.timeout
         , fmap ("followRedirects" .=) csd.followRedirects
         , fmap ("allowRedirects" .=) csd.allowRedirects
@@ -170,6 +171,7 @@ instance AE.FromJSON CollectionStepData where
     allowRedirects <- v .:? "allowRedirects"
     ignoreSSLErrors <- v .:? "ignoreSSLErrors"
     requestBody <- v .:? "requestBody"
+    disabled <- v .:? "disabled"
     return CollectionStepData{..}
 
 

@@ -281,9 +281,10 @@ export class StepsEditor extends LitElement {
                     this.collectionSteps[idx].disabled = !e.target.checked
                     this.requestUpdate()
                   }}"
+                  ?checked="${stepData.disabled === undefined ? true : stepData.disabled ? false : true}"
                   type="checkbox"
                   class="toggle toggle-sm  ${stepData.disabled ? 'border-red-500 bg-white [--tglbg:#ef4444]': 'border-green-500 bg-white [--tglbg:#22c55e]'}"
-                  ${stepData.active ? '' : 'checked'} />
+                   />
                 <button class="text-red-700 cursor-pointer" @click="${(e) => {
                   e.preventDefault()
                   e.stopPropagation()
@@ -299,7 +300,7 @@ export class StepsEditor extends LitElement {
           </div>
         </div>
         <div class="p-4 pt-0 bg-slate-100 ${stepData._expanded ? 'block' : 'hidden'} ">
-        <div class="rounded-xl p-4 bg-white">
+        <div class="rounded-xl p-4 bg-slate-50">
           <div>
             <div class="p-0 m-0s">
               <div class="">

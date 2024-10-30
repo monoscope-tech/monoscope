@@ -277,7 +277,7 @@ nameOfTest_ :: Text -> V.Vector Text -> Html ()
 nameOfTest_ name tags = do
   let tgs = decodeUtf8 $ encode $ V.toList tags
   div_ [class_ "form-control w-full p-4 bg-slate-100 rounded-2xl"] do
-    div_ [class_ "flex flex-col rounded-xl p-4 bg-white"] do
+    div_ [class_ "flex flex-col rounded-xl p-4 bg-slate-50"] do
       label_ [class_ "label"] $ span_ [class_ "text-slate-500 text-sm font-semibold"] "Name"
       input_ [placeholder_ "Give your test a name", id_ "test_title", class_ "input input-sm input-bordered mb-2 shadow-none w-full", name_ "title", value_ name]
       label_ [class_ "label"] $ span_ [class_ "text-slate-500 text-sm font-semibold"] "Tags"
@@ -363,7 +363,7 @@ collectionPage pid colM col_rn respJson = do
               "Save changes"
               faSprite_ "save" "regular" "w-4 h-4 ml-2 stroke-white"
 
-        div_ [class_ "fixed bg-white right-10 w-[25%] h-[80%] top-1/2 -translate-y-1/2"] do
+        div_ [class_ "fixed bg-transparent right-10 w-[25%] h-[80%] top-1/2 -translate-y-1/2"] do
           div_ [role_ "tablist", class_ "w-full h-full"] do
             div_ [class_ "w-full flex rounded-t-2xl border"] do
               button_
@@ -465,8 +465,8 @@ variablesDialog pid colM = do
       div_ [class_ "w-full flex flex-col gap-2"] do
         forM_ vars $ \var -> do
           div_ [class_ "flex items-center w-full px-4 gap-2 text-sm relative"] do
-            div_ [class_ "input text-left truncate ellipsis input-sm w-full input-bordered shadow-none"] $ toHtml var.variableName
-            div_ [class_ "input text-left truncate ellipsis input-sm w-full input-bordered shadow-none"] $ toHtml var.variableValue
+            div_ [class_ "input text-left truncate ellipsis input-sm w-full input-bordered bg-transparent"] $ toHtml var.variableName
+            div_ [class_ "input text-left truncate ellipsis input-sm w-full input-bordered bg-transparent"] $ toHtml var.variableValue
             div_
               [ class_ "absolute -top-2 right-2 cursor-pointer h-5 w-5 flex justify-center items-center rounded-full bg-white shadow border"
               , hxDelete_ $ "/p/" <> pid.toText <> "/monitors/" <> col.id.toText <> "/variables/" <> var.variableName
