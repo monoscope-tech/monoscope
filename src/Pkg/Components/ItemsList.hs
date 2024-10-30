@@ -146,7 +146,7 @@ itemsList_ listCfg items = do
             div_ [class_ "dropdown dropdown-end inline-block"] do
               a_ [class_ "btn btn-sm shadow-none text-sm font-medium bg-slate-100 border text-slate-600 border-slate-300 ", tabindex_ "0"] do
                 span_ $ toHtml currentSortTitle
-                faSprite_ "sort" "solid" "h-4 w-4"
+                faSprite_ "sort" "regular" "h-4 w-4 stroke-slate-600"
 
               div_
                 [ id_ "sortMenuDiv"

@@ -24,7 +24,8 @@ import Data.Map qualified as Map
 import Data.Pool (withResource)
 import Data.Text (replace)
 import Data.Text qualified as T
-import Data.Time (UTCTime, getCurrentTime, zonedTimeToUTC)
+import Data.Time (UTCTime, ZonedTime, defaultTimeLocale, getCurrentTime, zonedTimeToUTC)
+import Data.Time.Format (formatTime)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity.DBT (QueryNature (Update), execute)
@@ -33,6 +34,7 @@ import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
 import Effectful.Reader.Static (ask)
 import Lucid
+import Lucid (ToHtml (toHtml))
 import Lucid.Aria qualified as Aria
 import Lucid.Base (termRaw)
 import Lucid.Htmx (hxGet_, hxSwap_, hxTarget_, hxTrigger_)
@@ -56,6 +58,7 @@ import Models.Users.Users (User (id))
 import NeatInterpolation (text)
 import OddJobs.Job (createJob)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
+import Pages.Components (statBox, statBox_)
 import Pages.Components qualified as Components
 import Pages.Endpoints.EndpointComponents qualified as EndpointComponents
 import Pkg.Components qualified as Components
@@ -65,7 +68,7 @@ import Relude hiding (ask)
 import Relude.Unsafe qualified as Unsafe
 import System.Config (AuthContext (pool))
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders, addSuccessToast)
-import Text.Time.Pretty (prettyTimeAuto)
+import Text.Time.Pretty (prettyTimeAuto, prettyTimeAutoFromNow)
 import Utils (escapedQueryPartial, faSprite_, getMethodColor)
 import Web.FormUrlEncoded (FromForm)
 
@@ -296,10 +299,21 @@ anomalyListSlider currTime _ _ (Just issues) = do
 
 
 shapeParameterStats_ :: Int -> Int -> Int -> Html ()
-shapeParameterStats_ newF deletedF updatedFF = div_ [class_ "stats stats-vertical lg:stats-horizontal shadow"] do
-  div_ [class_ "stat p-3 px-4"] $ div_ [class_ "text-2xl font-medium text-green-800"] (toHtml @String $ show newF) >> small_ [class_ "stat-title"] "new fields"
-  div_ [class_ "stat p-3 px-4"] $ div_ [class_ "text-2xl font-medium text-slate-800"] (toHtml @String $ show updatedFF) >> small_ [class_ "stat-title"] "updated"
-  div_ [class_ "stat p-3 px-4"] $ div_ [class_ "text-2xl font-medium text-red-800"] (toHtml @String $ show deletedF) >> small_ [class_ "stat-title"] "deleted"
+shapeParameterStats_ newF deletedF updatedFF = div_ [class_ "flex items-center gap-2"] do
+  span_ [] "Fields:"
+  div_ [class_ "flex items-center gap-2 "] do
+    fieldStats newF "new" "text-green-600"
+    fieldStats updatedFF "updated" "text-blue-500"
+    fieldStats deletedF "deleted" "text-red-500"
+
+
+fieldStats :: Int -> Text -> Text -> Html ()
+fieldStats newF field cls = div_ [class_ "flex items-center gap-2 "] do
+  div_ [class_ $ "text-center text-lg font-medium " <> cls] do
+    toHtml @String $ show newF
+    small_ [class_ "ml-2 text-slate-500"] $ toHtml field
+  when (field /= "deleted") $ do
+    small_ [class_ "text-slate-200 "] "|"
 
 
 -- anomalyAccentColor isAcknowleged isArchived
@@ -309,58 +323,43 @@ anomalyAccentColor True False = "bg-green-200"
 anomalyAccentColor False False = "bg-red-800"
 
 
-issueItem :: Bool -> UTCTime -> Anomalies.IssueL -> Text -> Text -> Text -> Maybe (Html ()) -> Maybe (Html ()) -> Html ()
-issueItem hideByDefault currTime issue timeFilter icon title subTitle content = do
+issueItem :: Bool -> UTCTime -> Anomalies.IssueL -> Text -> Text -> Text -> Text -> Maybe (Html ()) -> Maybe (Html ()) -> Html ()
+issueItem hideByDefault currTime issue timeFilter icon title endpoint subTitle content = do
   let issueId = Anomalies.anomalyIdText issue.id
   div_ [class_ $ "flex py-4 gap-8 items-center itemsListItem " <> if hideByDefault then "card-round px-5" else "", style_ (if hideByDefault then "display:none" else ""), id_ issueId] do
     div_ [class_ $ "h-4 flex space-x-3 w-8 items-center justify-center " <> if hideByDefault then "hidden" else ""] do
       a_ [class_ $ anomalyAccentColor (isJust issue.acknowlegedAt) (isJust issue.archivedAt) <> " w-2 h-full"] ""
       input_ [term "aria-label" "Select Issue", class_ "bulkactionItemCheckbox  checkbox checkbox-md checked:checkbox-primary", type_ "checkbox", name_ "issueId", value_ issueId]
-    div_ [class_ "space-y-3 grow"] do
-      div_ [class_ "space-x-3"] do
-        let modalEndpoint = "/p/" <> issue.projectId.toText <> "/anomalies/by_hash/" <> issue.targetHash <> "?modal=True"
-        Components.drawerWithURLContent_ ("expand-log-drawer-" <> issue.targetHash) (Just modalEndpoint) $ span_ [class_ "flex items-center justify-center cursor-pointer py-2 px-3 rounded border border-gray-200 text-xs hover:shadow shadow-blue-100"] do
-          img_ [src_ icon, class_ "inline w-4 h-4"]
-          span_ (toHtml title)
-        small_ [class_ "inline-block text-gray-800"] $ fromMaybe (toHtml @String "") subTitle
-      div_ [class_ "flex flex-row gap-8"] do
-        div_ do
-          div_ [class_ "text-xs decoration-dotted underline-offset-2 space-x-4 "] do
-            span_ [class_ "bg-red-50 p-1"] "ongoing"
-            span_ [class_ "inline-block space-x-1"] do
-              faSprite_ "clock" "solid" "w-3 h-3"
-              span_
-                [ class_ "decoration-black underline ml-1"
-                , term "data-tippy-content" $ "first seen: " <> show issue.createdAt
-                ]
-                $ toHtml
-                $ prettyTimeAuto currTime
-                $ zonedTimeToUTC issue.createdAt
-              span_ "|"
-              span_ [class_ "decoration-black underline", term "data-tippy-content" $ "last seen: " <> show issue.eventsAgg.lastSeen] $ toHtml $ prettyTimeAuto currTime issue.eventsAgg.lastSeen
-          div_ [class_ "flex items-center gap-2 mt-5"] do
-            anomalyArchiveButton issue.projectId issue.id (isJust issue.archivedAt)
-            anomalyAcknowlegeButton issue.projectId issue.id (isJust issue.acknowlegedAt) ""
-            let modalEndpoint = "/p/" <> issue.projectId.toText <> "/anomalies/by_hash/" <> issue.targetHash <> "?modal=True"
-            Components.drawerWithURLContent_ ("expand-log-drawer-" <> issue.targetHash) (Just modalEndpoint) $ span_ [class_ "flex items-center justify-center cursor-pointer py-2 px-3 rounded border border-gray-200 text-xs hover:shadow shadow-blue-100"] (faSprite_ "expand" "regular" "w-3 h-3")
+    div_ [class_ "space-y-3 w-full flex justify-between items-center"] do
+      div_ [class_ "flex flex-col"] do
+        div_ [class_ "flex flex-row items-center gap-2 mb-2"] do
+          h4_ [class_ "text-lg font-medium text-slate-950"] $ toHtml title
+          span_ [class_ "text-slate-500 text-sm"] $ toHtml endpoint
         fromMaybe (toHtml @String "") content
-    div_ [class_ "w-36 flex items-center justify-center"] $
-      span_ [class_ "tabular-nums text-xl", term "data-tippy-content" "Events for this Anomaly in the last 14days"] $
-        show issue.eventsAgg.count
+        div_ [class_ "flex gap-3 items-center mt-4"] do
+          let modalEndpoint = "/p/" <> issue.projectId.toText <> "/anomalies/by_hash/" <> issue.targetHash <> "?modal=True"
+          Components.drawerWithURLContent_ ("expand-log-drawer-" <> issue.targetHash) (Just modalEndpoint) $ span_ [class_ "flex px-2 py-1 items-center gap-1 bg-green-100 text-sm rounded-lg border border-green-600 text-green-600"] do
+            "Open"
+            faSprite_ "f-chevron-up" "regular" "h-4 w-4 fill-none stroke-green-700 rotate-180"
+          p_ [class_ "text-sm flex  gap-1 items-enter"] do
+            faSprite_ "calendar" "regular" "h-4 w-4 fill-none"
+            span_ [class_ "text-xs font-medium text-slate-950", term "data-tippy-content" $ "first seen: " <> show issue.createdAt] $ toHtml $ prettyTimeAuto currTime $ zonedTimeToUTC issue.createdAt
 
-    let issueQueryPartial = buildQueryForAnomaly issue.anomalyType issue.targetHash
-    div_ [class_ "flex items-center justify-center "] $
-      div_
-        [ class_ "w-60 h-16 px-3"
-        , hxGet_ $ "/charts_html?pid=" <> issue.projectId.toText <> "&since=" <> (if timeFilter == "14d" then "14D" else "24h") <> "&show_axes=false&query_raw=" <> escapedQueryPartial [fmt|{issueQueryPartial} | timechart [1d]|]
-        , -- , hxGet_ $ "/charts_html?pid=" <> issue.projectId.toText <> "&since=14D&show_axes=false&query_raw=" <> escapedQueryPartial [fmt|{issueQueryPartial} | timechart [1d]|]
-          hxTrigger_ "intersect once"
-        , hxSwap_ "innerHTML"
-        ]
-        ""
+      div_ [class_ "flex items-center"] do
+        div_ [class_ "w-36 flex items-center justify-center"] $
+          span_ [class_ "tabular-nums text-xl", term "data-tippy-content" "Events for this Anomaly in the last 14days"] $
+            show issue.eventsAgg.count
+        let issueQueryPartial = buildQueryForAnomaly issue.anomalyType issue.targetHash
+        div_ [class_ "flex items-center justify-center "] $
+          div_
+            [ class_ "w-60 h-16 px-3"
+            , hxGet_ $ "/charts_html?pid=" <> issue.projectId.toText <> "&since=" <> (if timeFilter == "14d" then "14D" else "24h") <> "&show_axes=false&query_raw=" <> escapedQueryPartial [fmt|{issueQueryPartial} | timechart [1d]|]
+            , hxTrigger_ "intersect once"
+            , hxSwap_ "innerHTML"
+            ]
+            ""
 
 
--- anomalyDetailsGetH: either in modal or as a standalone page
 anomalyDetailsGetH :: Projects.ProjectId -> Text -> Maybe Text -> ATAuthCtx (RespHeaders AnomalyDetails)
 anomalyDetailsGetH pid targetHash hxBoostedM = do
   (sess, project) <- Sessions.sessionAndProject pid
@@ -435,83 +434,36 @@ anomalyDetailsPage :: Anomalies.IssueL -> Maybe (V.Vector Shapes.ShapeWithFields
 anomalyDetailsPage issue shapesWithFieldsMap fields prvFormatsM currTime timeFilter modal = do
   let anomalyQueryPartial = buildQueryForAnomaly issue.anomalyType issue.targetHash
   let filterV = fromMaybe "14d" timeFilter
+  --   statBox_ (Just pid) Nothing "Passed" "Total number of steps passed in the last test run" (fmt (commaizeF passed)) Nothing
+
   div_ [class_ "w-full "] do
     div_ [class_ "w-full"] do
-      div_ [class_ "flex items-center justify-between gap-2 flex-wrap"] do
-        case issue.issueData of
-          Anomalies.IDNewEndpointIssue issueD -> do
-            div_ [class_ "flex flex-col gap-4 shrink-0"] do
-              a_ [class_ "inline-block font-bold text-blue-700 space-x-2"] do
-                faSprite_ "arrow-up-arrow-down" "solid" "inline w-6 h-6 -mt-1"
-                span_ [class_ "text-2xl"] "New Endpoint"
-              div_ [class_ "flex items-center gap-3"] do
-                let methodColor = Utils.getMethodColor issueD.endpointMethod
-                div_ [class_ $ "px-4 py-1  rounded-lg font-semibold " <> methodColor] $ toHtml issueD.endpointMethod
-                span_ [] $ toHtml issueD.endpointUrlPath
-          Anomalies.IDNewShapeIssue issueD -> do
-            div_ [class_ "flex flex-col gap-4 shrink-0"] do
-              a_ [class_ "inline-block font-bold text-blue-700 space-x-2"] do
-                img_ [src_ "/public/assets/svgs/anomalies/fields.svg", class_ "inline w-6 h-6 -mt-1"]
-                span_ [class_ "text-2xl"] "New Request Shape"
-              div_ [class_ "flex items-center gap-3"] do
-                let methodColor = Utils.getMethodColor issueD.endpointMethod
-                p_ [class_ "italic"] "in"
-                div_ [class_ $ "px-4 py-1  rounded-lg font-semibold " <> methodColor] $ toHtml issueD.endpointMethod
-                span_ [] $ toHtml issueD.endpointUrlPath
-              div_ [class_ "mt-4"] do
-                shapeParameterStats_ (length issueD.newUniqueFields) (length issueD.deletedFields) (length issueD.updatedFieldFormats)
-          Anomalies.IDNewFormatIssue issueD -> do
-            div_ [class_ "flex flex-col gap-4 shrink-0"] do
-              a_ [class_ "inline-block font-bold text-blue-700 space-x-2"] do
-                img_ [src_ "/public/assets/svgs/anomalies/fields.svg", class_ "inline w-6 h-6 -mt-1"]
-                span_ [class_ "text-2xl"] "Modified field"
-              div_ [class_ "flex items-center gap-3"] do
-                let methodColor = Utils.getMethodColor issueD.endpointMethod
-                p_ [class_ "italic"] "in"
-                div_ [class_ $ "px-4 py-1  rounded-lg font-semibold " <> methodColor] $ toHtml issueD.endpointMethod
-                span_ [] $ toHtml issueD.endpointUrlPath
-          Anomalies.IDNewRuntimeExceptionIssue issueD -> do
-            div_ [class_ "flex flex-col gap-4 shrink-0"] do
-              a_ [class_ "inline-block font-bold text-blue-700 space-x-2"] do
-                img_ [src_ "/public/assets/svgs/anomalies/fields.svg", class_ "inline w-6 h-6 -mt-1"]
-                span_ [class_ "text-2xl"] $ toHtml issueD.errorType
-              p_ $ toHtml issueD.message
-          _ -> pass
-        div_ [class_ "flex items-center gap-8 shrink-0 text-gray-600"] do
-          div_ [class_ "flex items-center gap-6 -mt-4"] do
-            div_ [class_ "flex flex-col gap-2"] do
-              h4_ [class_ "font-semibold"] "Events"
-              span_ [class_ "inline-block space-x-1"] $ show issue.eventsAgg.count
-            div_ [class_ "flex flex-col gap-2"] do
-              h4_ [class_ "font-semibold"] "First seen"
-              span_ [class_ "inline-block space-x-1"] do
-                faSprite_ "clock" "regular" "w-3 h-3"
-                span_
-                  [ class_ "decoration-black underline ml-1"
-                  , term "data-tippy-content" $ "first seen: " <> show issue.createdAt
-                  ]
-                  $ toHtml
-                  $ prettyTimeAuto currTime
-                  $ zonedTimeToUTC issue.createdAt
-            div_ [class_ "flex flex-col gap-2"] do
-              h4_ [class_ "font-semibold"] "Last seen"
-              span_ [class_ "decoration-black underline", term "data-tippy-content" $ "last seen: " <> show issue.eventsAgg.lastSeen] $ toHtml $ prettyTimeAuto currTime issue.eventsAgg.lastSeen
-          div_
-            [ id_ "reqsChartsEC"
-            , class_ "w-[200px] mt-4 shrink-0 aspect-[4/1]"
-            , hxGet_ $ "/charts_html?pid=" <> issue.projectId.toText <> "&since=" <> (if filterV == "14d" then "14D" else "24h") <> "&query_raw=" <> escapedQueryPartial [fmt|{anomalyQueryPartial} | timechart [1d]|]
-            , hxTrigger_ "intersect"
-            , hxSwap_ "innerHTML"
-            ]
-            ""
-    div_ [class_ "w-full flex items-center gap-4 mt-4 overflow-y-auto "] do
-      if modal
-        then do
-          a_ [href_ $ "/p/" <> issue.projectId.toText <> "/anomalies/by_hash/" <> issue.targetHash, term "data-tippy-content" "Go to page", class_ "btn btn-sm btn-outline "] do
-            "Expand Page" >> faSprite_ "expand" "regular" "w-3 h-3"
-        else do
-          anomalyArchiveButton issue.projectId issue.id (isJust issue.archivedAt)
-          anomalyAcknowlegeButton issue.projectId issue.id (isJust issue.acknowlegedAt) ""
+      case issue.issueData of
+        Anomalies.IDNewEndpointIssue issueD -> do
+          detailsHeader "New Endpoint" issueD.endpointMethod 200 issue currTime filterV Nothing
+        Anomalies.IDNewShapeIssue issueD -> do
+          let content = div_ [class_ "flex gap-6 shrink-1"] do
+                statBox_ Nothing Nothing "New fields" "Total number of new field detected" (show $ V.length issueD.newUniqueFields) Nothing
+                statBox_ Nothing Nothing "Updated" "Total number of updated fields detected" (show $ V.length issueD.updatedFieldFormats) Nothing
+                statBox_ Nothing Nothing "Deleted" "Total number of deleted fields detected" (show $ V.length issueD.deletedFields) Nothing
+          detailsHeader "New Request Shape" issueD.endpointMethod 200 issue currTime filterV (Just content)
+        Anomalies.IDNewFormatIssue issueD -> do
+          div_ [class_ "flex flex-col gap-4 shrink-0"] do
+            a_ [class_ "inline-block font-bold text-blue-700 space-x-2"] do
+              img_ [src_ "/public/assets/svgs/anomalies/fields.svg", class_ "inline w-6 h-6 -mt-1"]
+              span_ [class_ "text-2xl"] "Modified field"
+            div_ [class_ "flex items-center gap-3"] do
+              let methodColor = Utils.getMethodColor issueD.endpointMethod
+              p_ [class_ "italic"] "in"
+              div_ [class_ $ "px-4 py-1  rounded-lg font-semibold " <> methodColor] $ toHtml issueD.endpointMethod
+              span_ [] $ toHtml issueD.endpointUrlPath
+        Anomalies.IDNewRuntimeExceptionIssue issueD -> do
+          div_ [class_ "flex flex-col gap-4 shrink-0"] do
+            a_ [class_ "inline-block font-bold text-blue-700 space-x-2"] do
+              img_ [src_ "/public/assets/svgs/anomalies/fields.svg", class_ "inline w-6 h-6 -mt-1"]
+              span_ [class_ "text-2xl"] $ toHtml issueD.errorType
+            p_ $ toHtml issueD.message
+        _ -> pass
 
     div_ [class_ "mt-6 space-y-4"] do
       div_ [class_ "tabs tabs-bordered", role_ "tablist"] do
@@ -527,6 +479,44 @@ anomalyDetailsPage issue shapesWithFieldsMap fields prvFormatsM currTime timeFil
         div_ [role_ "tabpanel", class_ "tab-content grow whitespace-nowrap  divide-y overflow-x-hidden ", id_ "events_content"] do
           let events_url = "/p/" <> UUID.toText (Projects.unProjectId issue.projectId) <> "/log_explorer?layout=resultTable&query=" <> escapedQueryPartial anomalyQueryPartial
           div_ [hxGet_ events_url, hxTrigger_ "intersect once", hxSwap_ "outerHTML"] $ span_ [class_ "loading loading-dots loading-md"] ""
+
+
+detailsHeader :: Text -> Text -> Int -> Anomalies.IssueL -> UTCTime -> Text -> Maybe (Html ()) -> Html ()
+detailsHeader title method statusCode issue currTime filterV content = do
+  let anomalyQueryPartial = buildQueryForAnomaly issue.anomalyType issue.targetHash
+  div_ [class_ "flex flex-col w-full"] do
+    div_ [class_ "flex justify-between"] do
+      div_ [class_ "flex items-center gap-4"] do
+        span_ [class_ "flex items-center rounded-lg px-2 py-1 font-medium gap-2 border border-blue-300 bg-blue-100 text-blue-500"] $ toHtml method
+        span_ [class_ "flex items-center rounded-lg px-2 py-1 font-medium gap-2 border border-green-300 bg-green-100 text-green-500"] $ toHtml $ show statusCode
+        span_ [class_ "flex items-center rounded-lg px-2 py-1 font-medium gap-2 border border-slate-300 bg-slate-100 text-slate-600"] do
+          faSprite_ "calendar" "regular" "w-4 h-4 fill-none"
+          toHtml $ formatTime defaultTimeLocale "%b. %d, %Y %I:%M:%S %p" issue.createdAt
+      anomalyActionButtons issue.projectId issue.id (isJust issue.acknowlegedAt) (isJust issue.archivedAt) ""
+    span_ [class_ "font-medium text-3xl text-slate-600 mt-6"] $ toHtml title
+    div_ [class_ "flex justify-between items-center gap-4 mt-8"] do
+      div_ [class_ "flex flex-col gap-4"] do
+        div_ [class_ "flex items-center w-full gap-9 border border-slate-200 rounded-2xl px-10 py-4"] do
+          stBox "Events" (show issue.eventsAgg.count)
+          stBox "First seen" $ toText $ prettyTimeAuto currTime $ zonedTimeToUTC issue.createdAt
+          stBox "Last seen" $ toText $ prettyTimeAuto currTime issue.eventsAgg.lastSeen
+        whenJust content Relude.id
+      div_ [class_ "flex"] do
+        div_
+          [ id_ "reqsChartsEC"
+          , class_ "w-[550px] mt-4 shrink-0 h-[220px]"
+          , hxGet_ $ "/charts_html?pid=" <> issue.projectId.toText <> "&since=" <> (if filterV == "14d" then "14D" else "24h") <> "&query_raw=" <> escapedQueryPartial [fmt|{anomalyQueryPartial} | timechart [1d]|]
+          , hxTrigger_ "intersect"
+          , hxSwap_ "innerHTML"
+          ]
+          ""
+
+
+stBox :: Text -> Text -> Html ()
+stBox title value =
+  div_ [class_ "flex flex-col items-center py-4 gap-2"] do
+    span_ [class_ "text-slate-950 text-sm font-medium"] $ toHtml value
+    span_ [class_ "font-medium text-slate-500 text-xs"] $ toHtml title
 
 
 buildQueryForAnomaly :: Anomalies.AnomalyTypes -> Text -> Text
@@ -626,7 +616,7 @@ renderIssue hideByDefault currTime timeFilter issue = do
             a_ [class_ "cursor-pointer"] $ toHtml endpointTitle
             span_ [] "from"
             span_ [] $ toHtml issueD.host
-      issueItem hideByDefault currTime issue timeFilter icon issueTitle (Just subTitle) Nothing
+      issueItem hideByDefault currTime issue timeFilter icon issueTitle endpointTitle (Just subTitle) Nothing
     Anomalies.IDNewShapeIssue issueD -> do
       let endpointTitle = issueD.endpointMethod <> "  " <> issueD.endpointUrlPath
       let subTitle = span_ [class_ "space-x-2"] do
@@ -634,9 +624,9 @@ renderIssue hideByDefault currTime timeFilter issue = do
             span_ [] "in"
             span_ [] $ toHtml endpointTitle
       let shapeContent = shapeParameterStats_ (length issueD.newUniqueFields) (length issueD.deletedFields) (length issueD.updatedFieldFormats)
-      issueItem hideByDefault currTime issue timeFilter icon issueTitle (Just subTitle) (Just shapeContent)
+      issueItem hideByDefault currTime issue timeFilter icon issueTitle endpointTitle (Just subTitle) (Just shapeContent)
     Anomalies.IDNewFormatIssue issueD -> do
-      let endpointTitle = toHtml $ issueD.endpointMethod <> "  " <> issueD.endpointUrlPath
+      let endpointTitle = issueD.endpointMethod <> "  " <> issueD.endpointUrlPath
       let subTitle = span_ [class_ "space-x-2"] do
             a_ [class_ "cursor-pointer"] $ toHtml issueD.fieldKeyPath
             span_ [] "in"
@@ -652,13 +642,21 @@ renderIssue hideByDefault currTime timeFilter issue = do
               div_ do
                 small_ "examples: "
                 small_ $ toHtml $ maybe "" (T.intercalate ", " . V.toList) issueD.examples
-      issueItem hideByDefault currTime issue timeFilter icon issueTitle (Just subTitle) (Just formatContent)
+      issueItem hideByDefault currTime issue timeFilter icon issueTitle endpointTitle (Just subTitle) (Just formatContent)
     Anomalies.IDNewRuntimeExceptionIssue issueD -> do
+      let endpointTitle = fromMaybe "" $ issueD.requestMethod <> Just "  " <> issueD.requestPath
       let subTitle = span_ [class_ "space-x-2"] do
             a_ [class_ "cursor-pointer"] $ toHtml @Text $ issueD.rootErrorType
       let body = div_ [class_ "block"] $ p_ [] $ toHtml issueD.message
-      issueItem hideByDefault currTime issue timeFilter icon issueTitle (Just subTitle) (Just body)
+      issueItem hideByDefault currTime issue timeFilter icon issueTitle endpointTitle (Just subTitle) (Just body)
     _ -> error "Anomalies.ATField issue should never show up in practice "
+
+
+anomalyActionButtons :: Projects.ProjectId -> Anomalies.AnomalyId -> Bool -> Bool -> Text -> Html ()
+anomalyActionButtons pid aid acked achved host = do
+  div_ [class_ "flex itms-center gap-2"] do
+    anomalyAcknowlegeButton pid aid acked host
+    anomalyArchiveButton pid aid achved
 
 
 anomalyAcknowlegeButton :: Projects.ProjectId -> Anomalies.AnomalyId -> Bool -> Text -> Html ()
@@ -666,13 +664,15 @@ anomalyAcknowlegeButton pid aid acked host = do
   let acknowlegeAnomalyEndpoint = "/p/" <> pid.toText <> "/anomalies/" <> Anomalies.anomalyIdText aid <> if acked then "/unacknowlege" else "/acknowlege?host=" <> host
   a_
     [ class_ $
-        "inline-block child-hover cursor-pointer py-2 px-3 rounded border border-gray-200 text-xs hover:shadow shadow-blue-100 "
-          <> (if acked then "bg-green-100 text-green-900" else "")
+        "flex items-center gap-2 cursor-pointer py-2 px-3 rounded-xl  "
+          <> (if acked then "bg-green-100 text-green-900" else "blue-gr-btn text-white")
     , term "data-tippy-content" "acknowlege anomaly"
     , hxGet_ acknowlegeAnomalyEndpoint
     , hxSwap_ "outerHTML"
     ]
-    if acked then "✓ Acknowleged" else "✓ Acknowlege"
+    do
+      faSprite_ "check" "regular" "h-4 w-4 mr-2"
+      if acked then "Acknowleged" else "Acknowlege"
 
 
 anomalyArchiveButton :: Projects.ProjectId -> Anomalies.AnomalyId -> Bool -> Html ()
@@ -680,13 +680,15 @@ anomalyArchiveButton pid aid archived = do
   let archiveAnomalyEndpoint = "/p/" <> pid.toText <> "/anomalies/" <> Anomalies.anomalyIdText aid <> if archived then "/unarchive" else "/archive"
   a_
     [ class_ $
-        "inline-block xchild-hover cursor-pointer py-2 px-3 rounded border border-gray-200 text-xs hover:shadow shadow-blue-100 "
-          <> (if archived then " bg-green-100 text-green-900" else "")
+        "flex items-center gap-2 cursor-pointer py-2 px-3 rounded-xl "
+          <> (if archived then " bg-green-100 text-green-900" else "blue-gr-btn text-white")
     , term "data-tippy-content" $ if archived then "unarchive" else "archive"
     , hxGet_ archiveAnomalyEndpoint
     , hxSwap_ "outerHTML"
     ]
-    $ faSprite_ "inbox-full" "solid" "h-4 w-4"
+    do
+      faSprite_ "archive" "regular" "h-4 w-4"
+      if archived then "Unarchive" else "Archive"
 
 
 reqResSection :: Text -> Bool -> [Shapes.ShapeWithFields] -> Html ()

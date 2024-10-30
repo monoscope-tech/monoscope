@@ -277,6 +277,7 @@ traceServiceExportH
   -> ServerRequest 'Normal ExportTraceServiceRequest ExportTraceServiceResponse
   -> IO (ServerResponse 'Normal ExportTraceServiceResponse)
 traceServiceExportH appLogger appCtx (ServerNormalRequest _meta (ExportTraceServiceRequest req)) = do
+  traceShowM $ req
   _ <- runBackground appLogger appCtx do
     let projectKey = fromMaybe (error "Missing project key") $ getSpanAttributeValue "at-project-key" req
     projectIdM <- ProjectApiKeys.getProjectIdByApiKey projectKey
