@@ -159,7 +159,7 @@ timepicker_ submitForm currentRange = div_ [class_ "relative"] do
   input_ [type_ "hidden", id_ "since_input"]
   input_ [type_ "hidden", id_ "custom_range_input"]
   a_
-    [ class_ "relative select select-sm select-bordered"
+    [ class_ "relative select select-md select-bordered bg-transparent "
     , [__| on click toggle .hidden on #timepickerBox|]
     ]
     $ div_ [class_ "flex items-center gap-1"] do

@@ -134,7 +134,7 @@ export class MyElement extends LitElement {
             })}
             ${this.showFilterSearch ? html`<filter-suggestions></filter-suggestions>` : null}
             ${this.filters.length == 0
-              ? html`<button type="button" @click=${() => (this.showFilterSearch = !this.showFilterSearch)} class="">Click to add filter...</button>`
+              ? html`<button type="button" @click=${() => (this.showFilterSearch = !this.showFilterSearch)} class="text-slate-600">Click to add filter...</button>`
               : html`<button type="button" @click=${() => (this.showFilterSearch = !this.showFilterSearch)} class="px-2 py-1 border rounded  hover:bg-gray-100">
                   <svg class="inline-block icon h-4 w-4"><use href="/public/assets/svgs/fa-sprites/regular.svg#plus"></use></svg>
                 </button>`}

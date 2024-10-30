@@ -104,11 +104,11 @@ apiLogH pid queryM cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM 
           , currProject = Just project
           , pageTitle = "Explorer"
           , pageActions = Just $ Components.timepicker_ (Just "log_explorer_form") currentRange
-          , navTabs = Just $ div_ [class_ "tabs tabs-boxed tabs-outline items-center border"] do
-              a_ [onclick_ "window.setQueryParamAndReload('source', 'requests')", role_ "tab", class_ $ "tab " <> if source == "requests" then "tab-active" else ""] "Requests"
-              a_ [onclick_ "window.setQueryParamAndReload('source', 'logs')", role_ "tab", class_ $ "tab " <> if source == "logs" then "tab-active" else ""] "Logs"
-              a_ [onclick_ "window.setQueryParamAndReload('source', 'spans')", role_ "tab", class_ $ "tab " <> if source == "spans" then "tab-active" else ""] "Traces"
-              -- a_ [onclick_ "window.setQueryParamAndReload('source', 'metrics')", role_ "tab", class_ $ "tab " <> if source == "metrics" then "tab-active" else ""] "Metrics"
+          , navTabs = Just $ div_ [class_ "tabs tabs-boxed tabs-md tabs-outline items-center bg-slate-200 text-slate-500"] do
+              a_ [onclick_ "window.setQueryParamAndReload('source', 'requests')", role_ "tab", class_ $ "tab py-1.5 !h-auto " <> if source == "requests" then "tab-active" else ""] "Requests"
+              a_ [onclick_ "window.setQueryParamAndReload('source', 'logs')", role_ "tab", class_ $ "tab py-1.5 !h-auto " <> if source == "logs" then "tab-active" else ""] "Logs"
+              a_ [onclick_ "window.setQueryParamAndReload('source', 'spans')", role_ "tab", class_ $ "tab py-1.5 !h-auto " <> if source == "spans" then "tab-active" else ""] "Traces"
+              -- a_ [onclick_ "window.setQueryParamAndReload('source', 'metrics')", role_ "tab", class_ $ "tab py-1.5 !h-auto " <> if source == "metrics" then "tab-active" else ""] "Metrics"
           }
   currTime <- liftIO getCurrentTime
   let createdUTc = zonedTimeToUTC project.createdAt
@@ -191,10 +191,9 @@ instance ToHtml LogsGet where
 
 
 logQueryBox_ :: Projects.ProjectId -> Maybe Text -> Text -> Maybe Text -> Html ()
-logQueryBox_ pid currentRange source targetSpan =
+logQueryBox_ pid currentRange source targetSpan = do
   form_
-    [ class_ "w-full  flex gap-2 items-stretch justify-center "
-    , hxGet_ $ "/p/" <> pid.toText <> "/log_explorer"
+    [ hxGet_ $ "/p/" <> pid.toText <> "/log_explorer"
     , hxPushUrl_ "true"
     , hxVals_ "js:{query:window.getQueryFromEditor(), since: getTimeRange().since, from: getTimeRange().from, to:getTimeRange().to, cols:params().cols, layout:'all', source: params().source}"
     , termRaw "hx-on::before-request" ""
@@ -204,31 +203,42 @@ logQueryBox_ pid currentRange source targetSpan =
     , hxIndicator_ "#run-query-indicator"
     ]
     do
-      div_ [class_ "cursor-pointer relative bg-slate-100 rounded-xl border border-slate-200 inline-flex justify-center"] do
-        div_ [class_ "flex gap-2 justify-center items-center px-2"] $ "Saved queries" >> faSprite_ "chevron-down" "regular" "w-3 h-3"
-      div_ [class_ "p-1 pl-3 flex-1 flex gap-2 bg-slate-100 rounded-xl border border-slate-200 justify-between items-stretch"] do
-        div_ [id_ "queryEditor", class_ "h-14 hidden overflow-hidden bg-gray-200 flex-1 flex items-center"] pass
-        div_ [id_ "queryBuilder", class_ "flex-1 flex items-center"] $ termRaw "filter-element" [id_ "filterElement"] ("" :: Text)
-        when (source == "spans") do
-          let target = fromMaybe "all-spans" targetSpan
-          div_ [class_ "gap-[2px] flex items-center"] do
-            span_ "In"
-            select_
-              [ class_ "ml-1 select select-sm select-bordered w-full max-w-[150px]"
-              , name_ "target-spans"
-              , id_ "spans-toggle"
-              , onchange_ "htmx.trigger('#log_explorer_form', 'submit')"
-              ]
-              do
-                option_ (value_ "all-spans" : ([selected_ "true" | target == "all-spans"])) "All spans"
-                option_ (value_ "root-spans" : ([selected_ "true" | target == "root-spans"])) "Trace Root Spans"
-                option_ (value_ "service-entry-spans" : ([selected_ "true" | target == "service-entry-spans"])) "Service Entry Spans"
-        button_ [class_ "rounded-lg p-2 bg-slate-200 text-slate-500 inline-flex items-center"] $ faSprite_ "floppy-disk" "regular" "h-4 w-4"
-        button_
-          [type_ "submit", class_ "btn btn-sm bg-gradient-to-b from-[#067cff] to-[#0850c5] text-white"]
-          do
-            span_ [id_ "run-query-indicator", class_ "refresh-indicator htmx-indicator query-indicator loading loading-dots loading-md"] ""
-            faSprite_ "magnifying-glass" "regular" "h-3 w-3 inline-block"
+      div_ [class_ "flex gap-2 items-stretch justify-center "] do
+        div_ [class_ "cursor-pointer relative bg-slate-100 rounded-2xl border border-slate-200 inline-flex justify-center"] do
+          div_ [class_ "flex gap-2 justify-center items-center px-2 text-slate-600 "] $ "Saved queries" >> faSprite_ "chevron-down" "regular" "w-3 h-3"
+        div_ [class_ "p-1 pl-3 flex-1 flex gap-2 bg-slate-100 rounded-2xl border border-slate-200 justify-between items-stretch"] do
+          div_ [id_ "queryEditor", class_ "h-14 hidden overflow-hidden bg-gray-200 flex-1 flex items-center"] pass
+          div_ [id_ "queryBuilder", class_ "flex-1 flex items-center"] $ termRaw "filter-element" [id_ "filterElement", class_ "w-full h-full flex items-center"] ("" :: Text)
+          when (source == "spans") do
+            let target = fromMaybe "all-spans" targetSpan
+            div_ [class_ "gap-[2px] flex items-center"] do
+              span_ "In"
+              select_
+                [ class_ "ml-1 select select-sm select-bordered w-full max-w-[150px]"
+                , name_ "target-spans"
+                , id_ "spans-toggle"
+                , onchange_ "htmx.trigger('#log_explorer_form', 'submit')"
+                ]
+                do
+                  option_ (value_ "all-spans" : ([selected_ "true" | target == "all-spans"])) "All spans"
+                  option_ (value_ "root-spans" : ([selected_ "true" | target == "root-spans"])) "Trace Root Spans"
+                  option_ (value_ "service-entry-spans" : ([selected_ "true" | target == "service-entry-spans"])) "Service Entry Spans"
+          button_ [class_ "rounded-xl p-3 bg-slate-200 text-slate-500 inline-flex items-center"] $ faSprite_ "floppy-disk" "regular" "h-5 w-5"
+          button_
+            [type_ "submit", class_ "leading-none rounded-xl p-3 cursor-pointer bg-gradient-to-b from-[#067cff] to-[#0850c5] text-white"]
+            do
+              span_ [id_ "run-query-indicator", class_ "refresh-indicator htmx-indicator query-indicator loading loading-dots loading-md"] ""
+              faSprite_ "magnifying-glass" "regular" "h-4 w-4 inline-block"
+      div_ ""
+      div_ [class_ "flex justify-end  gap-2 "] do
+        div_ [class_ "py-1 flex flex-row justify-end"] do
+          label_ [class_ "flex items-center cursor-pointer space-x-2 p-1"] do
+            input_ [type_ "checkbox", class_ "checkbox checkbox-sm rounded toggle-chart"]
+            span_ "charts"
+        div_ [class_ "form-control w-max"] $
+          label_ [class_ "label flex items-center cursor-pointer w-max space-x-2"] do
+            input_ [type_ "checkbox", class_ "checkbox checkbox-sm rounded", id_ "toggleQueryEditor", onclick_ "toggleQueryBuilder()"]
+            span_ "query editor"
 
 
 data ApiLogsPageData = ApiLogsPageData
@@ -302,16 +312,6 @@ apiLogsPage page = do
       |]
     div_ [class_ ""] do
       logQueryBox_ page.pid page.currentRange page.source page.targetSpans
-      div_ [class_ "flex items-center  gap-2 "] do
-        div_ [class_ "py-1 flex flex-row justify-end"] do
-          label_ [class_ "flex items-center cursor-pointer space-x-2 p-1"] do
-            input_ [type_ "checkbox", class_ "checkbox checkbox-xs rounded toggle-chart"]
-            small_ "charts"
-        span_ [class_ "text-slate-300"] "|"
-        div_ [class_ "form-control w-max"] $
-          label_ [class_ "label flex items-center cursor-pointer w-max space-x-2"] do
-            input_ [type_ "checkbox", class_ "checkbox checkbox-xs rounded", id_ "toggleQueryEditor", onclick_ "toggleQueryBuilder()"]
-            small_ "query editor"
 
       div_ [class_ "flex flex-row gap-4 mt-3"] do
         let chartAspectRatio "logs" = "aspect-[12/1]"

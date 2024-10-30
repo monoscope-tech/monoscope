@@ -24,18 +24,15 @@
 @layer components {
   .tabs-outline :is(.tab-active, [aria-selected="true"]):not(.tab-disabled):not([disabled]),
   .tabs-outline :is(.tab-active, [aria-selected="true"]):not(.tab-disabled):not([disabled]):hover {
-    --tw-bg-opacity: 1;
-    background-color: var(--fallback-b1, oklch(var(--b1) / var(--tw-bg-opacity)));
     color: var(--fallback-bc, oklch(var(--bc) / var(--tw-text-opacity)));
-    /* border-color: currentColor;*/
-    border-width: 1px;
-    @apply shadow border-slate-300;
+    @apply bg-slate-50 shadow;
   }
 }
 
 :root,
 [data-theme] {
   --backgroundPrimary: #fff;
+  --rounded-btn: 0.85rem;
 }
 
 .c-scroll::-webkit-scrollbar {
@@ -212,9 +209,9 @@
     fill: currentColor;
   }
 
-  .checkbox, .input, .btn, .select, .textarea {
-    @apply shadow;
-  }
+  /* .checkbox, .input, .btn, .select, .textarea { */
+  /*   @apply shadow; */
+  /* } */
 
   .dataTable-search {
     @apply rounded;
@@ -408,7 +405,7 @@
     @apply  bg-red-50 text-red-800;
   }
   .badge-neutral {
-    @apply  bg-slate-200/60 text-slate-500;
+    @apply  bg-slate-100 text-slate-500;
   }
   .badge-blue {
     @apply text-blue-500 bg-[#d6efff];

@@ -286,7 +286,7 @@ projectsDropDown currProject projects = do
         div_ [class_ "flex justify-between content-center items-center py-5 mb-2 "] do
           a_ [href_ "/"] $ h3_ [] "Switch projects"
           a_ [class_ "bg-blue-700 flex pl-3 pr-4 py-2 rounded-xl text-white space-x-2", href_ "/p/new"] do
-            faSprite_ "plus" "regular" "h-5 w-5 bg-blue-800 rounded-lg" >> span_ [class_ "inline-block px-1"] "Add"
+            faSprite_ "plus" "regular" "h-5 w-5 bg-blue-800 rounded-xl" >> span_ [class_ "inline-block px-1"] "Add"
         div_ do
           div_ [class_ "relative"] do
             div_ [class_ "absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none"] $ faSprite_ "magnifying-glass" "regular" "h-6 w-4"
@@ -296,28 +296,26 @@ projectsDropDown currProject projects = do
               , [__|on input show .project_item in #projectsContainer when its textContent.toLowerCase() contains my value.toLowerCase()|]
               ]
           div_ [class_ "space-y-2 py-4 ", id_ "projectsContainer"] do
-            projects & mapM_ \project -> do
+            projects & mapM_ \project ->
               a_ [class_ "flex justify-between p-2 project_item", href_ $ "/p/" <> project.id.toText] do
-                div_ [class_ "space-x-3"] $
-                  faSprite_ "folders" "regular" "h-5 w-5 inline-block"
-                    >> span_ [class_ "inline-block"] (toHtml project.title)
+                div_ [class_ "space-x-3"] (faSprite_ "folders" "regular" "h-5 w-5 inline-block" >> span_ [class_ "inline-block"] (toHtml project.title))
                 when (currProject.id == project.id) $ faSprite_ "circle-check" "regular" "h-6 w-6 text-green-700"
 
 
 sideNav :: Sessions.PersistentSession -> Projects.Project -> Text -> Maybe Text -> Maybe Bool -> Html ()
-sideNav sess project pageTitle menuItem hasIntegrated = aside_ [class_ "border-r bg-slate-100 border-slate-200 w-15 group-has-[#sidenav-toggle:checked]/pg:w-68  h-screen transition-all duration-200 ease-in-out flex flex-col justify-between", id_ "side-nav-menu"] do
+sideNav sess project pageTitle menuItem hasIntegrated = aside_ [class_ "border-r bg-slate-100 border-slate-200 w-15 group-has-[#sidenav-toggle:checked]/pg:w-72  h-screen transition-all duration-200 ease-in-out flex flex-col justify-between", id_ "side-nav-menu"] do
   div_ [class_ "px-2 group-has-[#sidenav-toggle:checked]/pg:px-6"] do
-    div_ [class_ "py-4 flex justify-center group-has-[#sidenav-toggle:checked]/pg:justify-between items-center"] do
+    div_ [class_ "py-5 flex justify-center group-has-[#sidenav-toggle:checked]/pg:justify-between items-center"] do
       a_ [href_ "/", class_ "inline-flex"] do
-        img_ [class_ "h-5 hidden group-has-[#sidenav-toggle:checked]/pg:block", src_ "/public/assets/svgs/logo.svg"]
+        img_ [class_ "h-7 hidden group-has-[#sidenav-toggle:checked]/pg:block", src_ "/public/assets/svgs/logo.svg"]
         img_ [class_ "h-10 w-10 hidden sd-show", src_ "/public/assets/logo-mini.png"]
       label_ [class_ "cursor-pointer text-slate-500"] do
         input_ [type_ "checkbox", class_ "hidden", id_ "sidenav-toggle", [__|on change call setCookie("isSidebarClosed", `${me.checked}`)|]]
         script_ [text|document.getElementById("sidenav-toggle").checked= getCookie("isSidebarClosed")=="true" |]
-        faSprite_ "side-chevron-left-in-box" "regular" " h-5 w-5 opacity-60 rotate-180 group-has-[#sidenav-toggle:checked]/pg:rotate-0"
+        faSprite_ "side-chevron-left-in-box" "regular" " h-5 w-5 rotate-180 group-has-[#sidenav-toggle:checked]/pg:rotate-0"
     div_ [class_ "mt-4 sd-px-0 dropdown block"] do
       a_
-        [ class_ "flex flex-row border border-slate-300 bg-slate-50 text-slate-950 hover:bg-slate-100 gap-2 justify-center rounded-lg cursor-pointer py-2 group-has-[#sidenav-toggle:checked]/pg:px-3"
+        [ class_ "flex flex-row border border-slate-300 bg-slate-50 text-slate-950 hover:bg-slate-100 gap-2 justify-center rounded-xl cursor-pointer py-3 group-has-[#sidenav-toggle:checked]/pg:px-3"
         , tabindex_ "0"
         ]
         do
@@ -328,12 +326,12 @@ sideNav sess project pageTitle menuItem hasIntegrated = aside_ [class_ "border-r
       -- FIXME: reeanable hx-boost hxBoost_ "true"
       menu project.id & mapM_ \(mTitle, mUrl, fIcon) -> do
         let isActive = maybe (pageTitle == mTitle) (== mTitle) menuItem
-        let activeCls = if isActive then " bg-slate-50 text-slate-950 border shadow " else " border-transparent "
+        let activeCls = if isActive then " bg-slate-50 text-slate-950 " else "!border-transparent"
         a_
           [ href_ mUrl
           , term "data-tippy-placement" "right"
           , term "data-tippy-content" mTitle
-          , class_ $ "group-has-[#sidenav-toggle:checked]/pg:px-4 gap-3 py-2 flex no-wrap shrink-0  justify-center group-has-[#sidenav-toggle:checked]/pg:justify-start items-center rounded-lg border-slate-300 hover:shadow hover:border  overflow-x-hidden h-9 overflow-y-hidden " <> activeCls
+          , class_ $ "group-has-[#sidenav-toggle:checked]/pg:px-4 gap-3 py-2 flex no-wrap shrink-0  justify-center group-has-[#sidenav-toggle:checked]/pg:justify-start items-center rounded-xl  border border-slate-300 hover:border overflow-x-hidden overflow-y-hidden " <> activeCls
           ]
           do
             faSprite_ fIcon "regular" "w-4 h-4 shrink-0 "
@@ -377,8 +375,8 @@ sideNav sess project pageTitle menuItem hasIntegrated = aside_ [class_ "border-r
 
 navbar :: Users.User -> Text -> Maybe (Html ()) -> Maybe (Html ()) -> Html ()
 navbar currUser pageTitle tabsM pageActionsM =
-  nav_ [id_ "main-navbar", class_ "sticky z-20 top-0 w-full px-6 py-1 flex flex-row border-b border-slate-200 h-[3.2rem]"] do
-    div_ [class_ "flex-1 flex items-center"] $ toHtml pageTitle
+  nav_ [id_ "main-navbar", class_ "sticky z-20 top-0 w-full px-6 py-2 flex flex-row border-slate-200"] do
+    div_ [class_ "flex-1 flex items-center font-semibold text-2xl text-slate-950 "] $ toHtml pageTitle
     whenJust tabsM id
     div_ [class_ "flex-1 flex items-center justify-end"] $ whenJust pageActionsM id
 
