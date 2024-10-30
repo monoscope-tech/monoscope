@@ -385,11 +385,11 @@ apiLogsPage page = do
       div_ [class_ "grow flex-1 space-y-3 overflow-hidden"] do
         div_ [class_ "flex gap-2  pt-1"] do
           label_ [class_ "gap-1 flex items-center cursor-pointer"] do
-            faSprite_ "side-chevron-left-in-box" "regular" "w-4 h-4"
+            faSprite_ "side-chevron-left-in-box" "regular" "w-4 h-4 group-has-[.toggle-filters:checked]/pg:rotate-180 "
             span_ [class_ "hidden group-has-[.toggle-filters:checked]/pg:block"] "Show"
             span_ [class_ "group-has-[.toggle-filters:checked]/pg:hidden"] "Hide"
             "filters"
-            input_ [type_ "checkbox", class_ "toggle-filters hidden"]
+            input_ [type_ "checkbox", class_ "toggle-filters hidden", checked_]
           span_ [class_ "text-slate-200"] "|"
           div_ [class_ ""] $ span_ [class_ "text-slate-950"] (toHtml @Text $ fmt $ commaizeF page.resultCount) >> span_ " spans found"
         div_ [class_ "card-round divide-y flex flex-col h-full overflow-hidden"] $ resultTableAndMeta_ page
