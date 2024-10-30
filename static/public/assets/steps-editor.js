@@ -278,11 +278,11 @@ export class StepsEditor extends LitElement {
                 <input
                   @click="${(e) => e.stopPropagation()}"
                   @change="${(e) => {
-                    this.collectionSteps[idx].active = e.target.checked
+                    this.collectionSteps[idx].disabled = !e.target.checked
                     this.requestUpdate()
                   }}"
                   type="checkbox"
-                  class="toggle toggle-sm  ${stepData.active ? 'border-green-500 bg-white [--tglbg:#22c55e]' : 'border-red-500 bg-white [--tglbg:#ef4444]'}"
+                  class="toggle toggle-sm  ${stepData.disabled ? 'border-red-500 bg-white [--tglbg:#ef4444]': 'border-green-500 bg-white [--tglbg:#22c55e]'}"
                   ${stepData.active ? '' : 'checked'} />
                 <button class="text-red-700 cursor-pointer" @click="${(e) => {
                   e.preventDefault()

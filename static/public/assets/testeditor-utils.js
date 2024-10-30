@@ -175,6 +175,7 @@ function convertTestkitToCollectionSteps(testkitSteps) {
         exports: step.exports || {},
         _json: step.json,
         _requestBody: step.requestBody,
+        disabled: step.disabled || false,
         followRedirects: step.followRedirects || true,
         allowRedirects: step.allowRedirects || true,
         ignoreSSLErrors: step.ignoreSSLErrors || false,
@@ -292,6 +293,7 @@ function convertCollectionStepsToTestkitFormat(collectionSteps) {
         exports: step.exports || {},
         asserts: assertions || [],
         params: step.params || {},
+        disabled: step.disabled || false,
       }
       if (!step._requestType) {
         step._requestType = 'application/json'

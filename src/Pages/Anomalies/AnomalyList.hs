@@ -448,21 +448,23 @@ anomalyDetailsPage issue shapesWithFieldsMap fields prvFormatsM currTime timeFil
                 statBox_ Nothing Nothing "Deleted" "Total number of deleted fields detected" (show $ V.length issueD.deletedFields) Nothing
           detailsHeader "New Request Shape" issueD.endpointMethod 200 issue currTime filterV (Just content)
         Anomalies.IDNewFormatIssue issueD -> do
-          div_ [class_ "flex flex-col gap-4 shrink-0"] do
-            a_ [class_ "inline-block font-bold text-blue-700 space-x-2"] do
-              img_ [src_ "/public/assets/svgs/anomalies/fields.svg", class_ "inline w-6 h-6 -mt-1"]
-              span_ [class_ "text-2xl"] "Modified field"
-            div_ [class_ "flex items-center gap-3"] do
-              let methodColor = Utils.getMethodColor issueD.endpointMethod
-              p_ [class_ "italic"] "in"
-              div_ [class_ $ "px-4 py-1  rounded-lg font-semibold " <> methodColor] $ toHtml issueD.endpointMethod
-              span_ [] $ toHtml issueD.endpointUrlPath
+          detailsHeader "Modified field" issueD.endpointMethod 200 issue currTime filterV Nothing
+        -- div_ [class_ "flex flex-col gap-4 shrink-0"] do
+        --   a_ [class_ "inline-block font-bold text-blue-700 space-x-2"] do
+        --     img_ [src_ "/public/assets/svgs/anomalies/fields.svg", class_ "inline w-6 h-6 -mt-1"]
+        --     span_ [class_ "text-2xl"] "Modified field"
+        --   div_ [class_ "flex items-center gap-3"] do
+        --     let methodColor = Utils.getMethodColor issueD.endpointMethod
+        --     p_ [class_ "italic"] "in"
+        --     div_ [class_ $ "px-4 py-1  rounded-lg font-semibold " <> methodColor] $ toHtml issueD.endpointMethod
+        --     span_ [] $ toHtml issueD.endpointUrlPath
         Anomalies.IDNewRuntimeExceptionIssue issueD -> do
-          div_ [class_ "flex flex-col gap-4 shrink-0"] do
-            a_ [class_ "inline-block font-bold text-blue-700 space-x-2"] do
-              img_ [src_ "/public/assets/svgs/anomalies/fields.svg", class_ "inline w-6 h-6 -mt-1"]
-              span_ [class_ "text-2xl"] $ toHtml issueD.errorType
-            p_ $ toHtml issueD.message
+          detailsHeader issueD.errorType (fromMaybe "" issueD.requestMethod) 200 issue currTime filterV Nothing
+        -- div_ [class_ "flex flex-col gap-4 shrink-0"] do
+        --   a_ [class_ "inline-block font-bold text-blue-700 space-x-2"] do
+        --     img_ [src_ "/public/assets/svgs/anomalies/fields.svg", class_ "inline w-6 h-6 -mt-1"]
+        --     span_ [class_ "text-2xl"] $ toHtml issueD.errorType
+        --   p_ $ toHtml issueD.message
         _ -> pass
 
     div_ [class_ "mt-6 space-y-4"] do

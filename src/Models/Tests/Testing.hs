@@ -87,6 +87,7 @@ data CollectionStepData = CollectionStepData
   , json :: Maybe AE.Value
   , raw :: Maybe Text
   , requestBody :: Maybe (Map Text Text)
+  , disabled :: Maybe Bool
   , asserts :: Maybe (V.Vector (Map Text AE.Value))
   , httpVersion :: Maybe Text
   , timeout :: Maybe Int
