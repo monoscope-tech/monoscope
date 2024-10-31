@@ -332,7 +332,7 @@ parseQueryToComponents sqlCfg q =
   bimap
     (toText . errorBundlePretty)
     (sqlFromQueryComponents sqlCfg . sectionsToComponents)
-    (parse parseQuery "" q)
+    (traceShowId $ parse parseQuery "" q)
 
 
 defPid :: Projects.ProjectId

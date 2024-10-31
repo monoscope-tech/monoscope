@@ -369,18 +369,18 @@ apiLogsPage page = do
             div_ [class_ "flex justify-between items-center text-slate-950 pb-2"] $ span_ "Status" >> faSprite_ "chevron-down" "regular" "w-3 h-3"
             div_ [class_ "flex justify-between items-center"] do
               div_ [class_ "flex gap-1.5 items-center text-slate-950"] $ input_ [type_ "checkbox", class_ "checkbox "] >> span_ [class_ "bg-green-500 shrink-0 w-1 h-5 rounded"] " " >> span_ [] "200"
-              span_ "121231"
+              span_ "19,833"
             div_ [class_ "flex justify-between items-center"] do
               div_ [class_ "flex gap-1.5 items-center  text-slate-950"] $ input_ [type_ "checkbox", class_ "checkbox "] >> span_ [class_ "bg-red-600 shrink-0 w-1 h-5 rounded"] " " >> span_ [] "200"
-              span_ "121231"
+              span_ "121"
           div_ [class_ "flex flex-col gap-1.5 py-3"] do
-            div_ [class_ "flex justify-between items-center text-slate-950 pb-2"] $ span_ "Status" >> faSprite_ "chevron-down" "regular" "w-3 h-3"
+            div_ [class_ "flex justify-between items-center text-slate-950 pb-2"] $ span_ "MMethos" >> faSprite_ "chevron-down" "regular" "w-3 h-3"
             div_ [class_ "flex justify-between"] do
-              div_ [class_ "flex gap-1.5 items-center  text-slate-950"] $ input_ [type_ "checkbox", class_ "checkbox "] >> span_ [class_ "bg-[#067cff] shrink-0 w-1 h-5 rounded"] " " >> span_ [] "200"
-              span_ "121231"
+              div_ [class_ "flex gap-1.5 items-center  text-slate-950"] $ input_ [type_ "checkbox", class_ "checkbox "] >> span_ [class_ "bg-[#067cff] shrink-0 w-1 h-5 rounded"] " " >> span_ [] "GET"
+              span_ "8,675"
             div_ [class_ "flex justify-between"] do
-              div_ [class_ "flex gap-1.5 items-center  text-slate-950"] $ input_ [type_ "checkbox", class_ "checkbox "] >> span_ [class_ "text-green-500 shrink-0 w-1 h-5 rounded"] " " >> span_ [] "200"
-              span_ "121231"
+              div_ [class_ "flex gap-1.5 items-center  text-slate-950"] $ input_ [type_ "checkbox", class_ "checkbox "] >> span_ [class_ "text-green-500 shrink-0 w-1 h-5 rounded"] " " >> span_ [] "POST"
+              span_ "4,459"
 
       div_ [class_ "grow flex-1 space-y-3 overflow-hidden"] do
         div_ [class_ "flex gap-2  pt-1"] do

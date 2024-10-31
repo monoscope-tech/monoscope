@@ -5,6 +5,7 @@ import Relude
 import Text.Megaparsec (Parsec)
 import Text.Megaparsec.Char (space1)
 import Text.Megaparsec.Char.Lexer qualified as L
+import qualified Data.Aeson as AE
 
 
 -- Example queries
@@ -17,17 +18,20 @@ type Parser = Parsec Void Text
 -- Values is an enum of the list of supported value types.
 -- Num is a text  that represents a float as float covers ints in a lot of cases. But its basically the json num type.
 data Values = Num Text | Str Text | Boolean Bool | Null | List [Values]
-  deriving stock (Eq, Ord, Show)
+  deriving stock (Eq, Ord, Show, Generic)
+  deriving anyclass (AE.FromJSON, AE.ToJSON)
 
 
 -- A subject consists of the primary key, and then the list of fields keys which are delimited by a .
 -- To support jsonpath, we will have more powerfule field keys, so instead of a text array, we could have an enum field key type?
 data Subject = Subject Text Text [FieldKey]
-  deriving stock (Eq, Ord, Show)
+  deriving stock (Eq, Ord, Show, Generic)
+  deriving anyclass (AE.FromJSON, AE.ToJSON)
 
 
 data FieldKey = FieldKey Text | ArrayIndex Text Int | ArrayWildcard Text
-  deriving stock (Eq, Ord, Show)
+  deriving stock (Eq, Ord, Show, Generic)
+  deriving anyclass (AE.FromJSON, AE.ToJSON)
 
 
 data Expr
@@ -44,7 +48,8 @@ data Expr
   --  | Not Expr
   --  | JSONPathExpr Expr
   --  | FunctionCall String [Expr] -- For functions like ANY
-  deriving stock (Eq, Ord, Show)
+  deriving stock (Eq, Ord, Show, Generic)
+  deriving anyclass (AE.FromJSON, AE.ToJSON)
 
 
 -- Modify Aggregation Functions to include optional aliases
@@ -59,20 +64,24 @@ data AggFunction
   | Range Subject (Maybe Text)
   | -- | CustomAgg String [Field] (Maybe String)
     Plain Subject (Maybe Text)
-  deriving stock (Show)
+  deriving stock (Show, Generic)
+  deriving anyclass (AE.FromJSON, AE.ToJSON)
 
 
 -- Define an optional 'by' clause
 data ByClause = ByClause [Subject] -- List of fields to group by
-  deriving stock (Show)
+  deriving stock (Show, Generic)
+  deriving anyclass (AE.FromJSON, AE.ToJSON)
 
 
 data Rollup = Rollup Text
-  deriving stock (Show)
+  deriving stock (Show, Generic)
+  deriving anyclass (AE.FromJSON, AE.ToJSON)
 
 
 data Sources = SRequests | SLogs | STraces | SSpans | SMetrics
-  deriving stock (Show)
+  deriving stock (Show, Generic)
+  deriving anyclass (AE.FromJSON, AE.ToJSON)
 
 
 data Section
@@ -81,7 +90,8 @@ data Section
     StatsCommand [AggFunction] (Maybe ByClause)
   | TimeChartCommand AggFunction (Maybe ByClause) (Maybe Rollup)
   | Source Sources
-  deriving stock (Show)
+  deriving stock (Show, Generic)
+  deriving anyclass (AE.FromJSON, AE.ToJSON)
 
 
 sc :: Parser ()
