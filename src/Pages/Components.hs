@@ -36,8 +36,8 @@ statBox pid title helpInfo val bckupValM = do
         span_ [class_ "inline-block tooltip", term "data-tip" helpInfo] $ faSprite_ "circle-info" "regular" "w-4 h-4"
 
 
-statBox_ :: Maybe ProjectId -> Maybe (Text, Text, Text) -> Text -> Text -> Text -> Maybe Int -> Html ()
-statBox_ pid iconM title helpInfo val bckupValM = do
+statBox_ :: Maybe ProjectId -> Maybe (Text, Text, Text) -> Text -> Text -> Text -> Maybe Int -> Maybe Text -> Html ()
+statBox_ pid iconM title helpInfo val bckupValM valClsM = do
   -- let tl = getTargetPage title
   -- let pidT = case pid of
   --       Just p -> p.toText
@@ -47,7 +47,7 @@ statBox_ pid iconM title helpInfo val bckupValM = do
       div_ [class_ "flex items-center justify-center h-10 w-10 bg-white rounded-[12px]"] do
         faSprite_ icon kind $ "w-4 h-4 " <> color
     div_ [class_ "flex flex-col gap-1"] do
-      span_ [class_ "font-bold text-4xl text-gray-800"] $ toHtml val
+      span_ [class_ $ "font-bold text-4xl " <> fromMaybe "text-gray-800" valClsM] $ toHtml val
       div_ [class_ "flex gap-2 items-center text-sm text-gray-500"] do
         p_ [] $ toHtml title
         span_ [term "data-tip" helpInfo] $ faSprite_ "circle-info" "regular" "w-4 mt-[-2px]"
@@ -76,10 +76,10 @@ drawerWithURLContent_ drawerId urlM trigger = div_ [class_ "drawer drawer-end in
   label_ [Lucid.for_ drawerId, class_ "drawer-button inline-block"] trigger
   div_ [class_ "drawer-side fixed top-0 left-0 w-full h-full flex z-[10000] overflow-y-scroll ", style_ "position:fixed;width:100%;display:flex"] do
     label_ [Lucid.for_ drawerId, Aria.label_ "close modal", class_ "w-full drawer-overlay grow flex-1"] ""
-    div_ [style_ "width: min(90vw, 1200px)", class_ "bg-base-100 h-full clear-both overflow-y-scroll"] do
-      label_ [Lucid.for_ drawerId, Aria.label_ "close modal", class_ "float-right p-3 rounded-full hover:bg-gray-100 text-xl"] "x"
+    div_ [style_ "width: min(90vw, 1200px)", class_ "bg-slate-50 h-full overflow-y-scroll"] do
+      label_ [Lucid.for_ drawerId, Aria.label_ "close modal", class_ "float-right mt-4 h-8 w-8 flex items-center justify-center rounded-full bg-slate-200"] $ faSprite_ "xmark" "solid" "w-4 h-4"
       div_
-        ( [id_ $ drawerId <> "-content", class_ "bg-base-100 h-full overflow-y-auto p-4 flex flex-col", hxSwap_ "innerHTML"]
+        ( [id_ $ drawerId <> "-content", class_ "bg-slate-50 p-4 flex flex-col", hxSwap_ "innerHTML"]
             <> maybe [] (\url -> [hxGet_ url, hxTrigger_ "intersect once"]) urlM
         )
         $ span_ [class_ "loading loading-dots loading-md"] ""

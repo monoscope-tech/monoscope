@@ -24,8 +24,7 @@ import Data.Map qualified as Map
 import Data.Pool (withResource)
 import Data.Text (replace)
 import Data.Text qualified as T
-import Data.Time (UTCTime, ZonedTime, defaultTimeLocale, getCurrentTime, zonedTimeToUTC)
-import Data.Time.Format (formatTime)
+import Data.Time (UTCTime, ZonedTime, defaultTimeLocale, formatTime, getCurrentTime, zonedTimeToUTC)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity.DBT (QueryNature (Update), execute)
@@ -324,7 +323,7 @@ anomalyAccentColor False False = "bg-red-800"
 
 
 issueItem :: Bool -> UTCTime -> Anomalies.IssueL -> Text -> Text -> Text -> Text -> Maybe (Html ()) -> Maybe (Html ()) -> Html ()
-issueItem hideByDefault currTime issue timeFilter icon title endpoint subTitle content = do
+issueItem hideByDefault currTime issue timeFilter icon title endpoint content anButton = do
   let issueId = Anomalies.anomalyIdText issue.id
   div_ [class_ $ "flex py-4 gap-8 items-center itemsListItem " <> if hideByDefault then "card-round px-5" else "", style_ (if hideByDefault then "display:none" else ""), id_ issueId] do
     div_ [class_ $ "h-4 flex space-x-3 w-8 items-center justify-center " <> if hideByDefault then "hidden" else ""] do
@@ -333,7 +332,8 @@ issueItem hideByDefault currTime issue timeFilter icon title endpoint subTitle c
     div_ [class_ "space-y-3 w-full flex justify-between items-center"] do
       div_ [class_ "flex flex-col"] do
         div_ [class_ "flex flex-row items-center gap-2 mb-2"] do
-          h4_ [class_ "text-lg font-medium text-slate-950"] $ toHtml title
+          h4_ [class_ "text-xl font-medium text-slate-950"] $ toHtml title
+          whenJust anButton Relude.id
           span_ [class_ "text-slate-500 text-sm"] $ toHtml endpoint
         fromMaybe (toHtml @String "") content
         div_ [class_ "flex gap-3 items-center mt-4"] do
@@ -440,37 +440,30 @@ anomalyDetailsPage issue shapesWithFieldsMap fields prvFormatsM currTime timeFil
     div_ [class_ "w-full"] do
       case issue.issueData of
         Anomalies.IDNewEndpointIssue issueD -> do
-          detailsHeader "New Endpoint" issueD.endpointMethod 200 issue currTime filterV Nothing
+          detailsHeader "New Endpoint" issueD.endpointMethod 200 issue currTime filterV Nothing Nothing
         Anomalies.IDNewShapeIssue issueD -> do
-          let content = div_ [class_ "flex gap-6 shrink-1"] do
-                statBox_ Nothing Nothing "New fields" "Total number of new field detected" (show $ V.length issueD.newUniqueFields) Nothing
-                statBox_ Nothing Nothing "Updated" "Total number of updated fields detected" (show $ V.length issueD.updatedFieldFormats) Nothing
-                statBox_ Nothing Nothing "Deleted" "Total number of deleted fields detected" (show $ V.length issueD.deletedFields) Nothing
-          detailsHeader "New Request Shape" issueD.endpointMethod 200 issue currTime filterV (Just content)
+          let delF = length issueD.deletedFields
+              updF = length issueD.updatedFieldFormats
+              content = div_ [class_ "flex gap-6 shrink-1"] do
+                statBox_ Nothing Nothing "New fields" "Total number of new field detected" (show $ length issueD.newUniqueFields) Nothing (Just "text-green-500")
+                statBox_ Nothing Nothing "Updated" "Total number of updated fields detected" (show $ length issueD.updatedFieldFormats) Nothing (Just "text-blue-500")
+                statBox_ Nothing Nothing "Deleted" "Total number of deledted fields detected" (show delF) Nothing (Just "text-red-600")
+              anButton :: Html ()
+              anButton =
+                if delF > 0 || updF > 0
+                  then button_ [class_ "btn btn-sm bg-red-500 text-white"] "Breaking"
+                  else button_ [class_ "btn btn-sm bg-slate-950 text-white"] "Incremental"
+          detailsHeader "New Request Shape" issueD.endpointMethod 200 issue currTime filterV (Just content) (Just anButton)
         Anomalies.IDNewFormatIssue issueD -> do
-          detailsHeader "Modified field" issueD.endpointMethod 200 issue currTime filterV Nothing
-        -- div_ [class_ "flex flex-col gap-4 shrink-0"] do
-        --   a_ [class_ "inline-block font-bold text-blue-700 space-x-2"] do
-        --     img_ [src_ "/public/assets/svgs/anomalies/fields.svg", class_ "inline w-6 h-6 -mt-1"]
-        --     span_ [class_ "text-2xl"] "Modified field"
-        --   div_ [class_ "flex items-center gap-3"] do
-        --     let methodColor = Utils.getMethodColor issueD.endpointMethod
-        --     p_ [class_ "italic"] "in"
-        --     div_ [class_ $ "px-4 py-1  rounded-lg font-semibold " <> methodColor] $ toHtml issueD.endpointMethod
-        --     span_ [] $ toHtml issueD.endpointUrlPath
+          detailsHeader "Modified field" issueD.endpointMethod 200 issue currTime filterV Nothing Nothing
         Anomalies.IDNewRuntimeExceptionIssue issueD -> do
-          detailsHeader issueD.errorType (fromMaybe "" issueD.requestMethod) 200 issue currTime filterV Nothing
-        -- div_ [class_ "flex flex-col gap-4 shrink-0"] do
-        --   a_ [class_ "inline-block font-bold text-blue-700 space-x-2"] do
-        --     img_ [src_ "/public/assets/svgs/anomalies/fields.svg", class_ "inline w-6 h-6 -mt-1"]
-        --     span_ [class_ "text-2xl"] $ toHtml issueD.errorType
-        --   p_ $ toHtml issueD.message
+          detailsHeader issueD.errorType (fromMaybe "" issueD.requestMethod) 200 issue currTime filterV Nothing Nothing
         _ -> pass
 
     div_ [class_ "mt-6 space-y-4"] do
-      div_ [class_ "tabs tabs-bordered", role_ "tablist"] do
+      div_ [class_ "tabs tabs-bordered border rounded-3xl overflow-hidden", role_ "tablist"] do
         input_ [type_ "radio", name_ $ "anomaly-events-tabs-" <> issue.targetHash, role_ "tab", class_ "tab", Aria.label_ "Overview", checked_]
-        div_ [role_ "tabpanel", class_ "tab-content w-full bg-base-100 rounded-lg overflow-x-hidden", id_ "overview_content"] do
+        div_ [role_ "tabpanel", class_ "tab-content p-4 w-full bg-base-100 rounded-lg overflow-x-hidden", id_ "overview_content"] do
           case issue.issueData of
             Anomalies.IDNewEndpointIssue _ -> endpointOverview shapesWithFieldsMap
             Anomalies.IDNewShapeIssue _ -> requestShapeOverview fields
@@ -478,13 +471,13 @@ anomalyDetailsPage issue shapesWithFieldsMap fields prvFormatsM currTime timeFil
             _ -> ""
 
         input_ [type_ "radio", name_ $ "anomaly-events-tabs-" <> issue.targetHash, role_ "tab", class_ "tab", Aria.label_ "Events"]
-        div_ [role_ "tabpanel", class_ "tab-content grow whitespace-nowrap  divide-y overflow-x-hidden ", id_ "events_content"] do
+        div_ [role_ "tabpanel", class_ "tab-content grow whitespace-nowrap py-2 divide-y overflow-x-hidden ", id_ "events_content"] do
           let events_url = "/p/" <> UUID.toText (Projects.unProjectId issue.projectId) <> "/log_explorer?layout=resultTable&query=" <> escapedQueryPartial anomalyQueryPartial
           div_ [hxGet_ events_url, hxTrigger_ "intersect once", hxSwap_ "outerHTML"] $ span_ [class_ "loading loading-dots loading-md"] ""
 
 
-detailsHeader :: Text -> Text -> Int -> Anomalies.IssueL -> UTCTime -> Text -> Maybe (Html ()) -> Html ()
-detailsHeader title method statusCode issue currTime filterV content = do
+detailsHeader :: Text -> Text -> Int -> Anomalies.IssueL -> UTCTime -> Text -> Maybe (Html ()) -> Maybe (Html ()) -> Html ()
+detailsHeader title method statusCode issue currTime filterV content anBtn = do
   let anomalyQueryPartial = buildQueryForAnomaly issue.anomalyType issue.targetHash
   div_ [class_ "flex flex-col w-full"] do
     div_ [class_ "flex justify-between"] do
@@ -497,17 +490,35 @@ detailsHeader title method statusCode issue currTime filterV content = do
       anomalyActionButtons issue.projectId issue.id (isJust issue.acknowlegedAt) (isJust issue.archivedAt) ""
     span_ [class_ "font-medium text-3xl text-slate-600 mt-6"] $ toHtml title
     div_ [class_ "flex justify-between items-center gap-4 mt-8"] do
+      let currentURL' = "/charts_html?pid=" <> issue.projectId.toText <> ("&query_raw=" <> escapedQueryPartial [fmt|{anomalyQueryPartial} | timechart [1d]|])
       div_ [class_ "flex flex-col gap-4"] do
         div_ [class_ "flex items-center w-full gap-9 border border-slate-200 rounded-2xl px-10 py-4"] do
           stBox "Events" (show issue.eventsAgg.count)
           stBox "First seen" $ toText $ prettyTimeAuto currTime $ zonedTimeToUTC issue.createdAt
           stBox "Last seen" $ toText $ prettyTimeAuto currTime issue.eventsAgg.lastSeen
         whenJust content Relude.id
-      div_ [class_ "flex"] do
+      div_ [class_ "flex flex-col gap-1"] do
+        div_ [class_ "flex justify-end"] do
+          div_ [class_ "rounded-lg border grid grid-cols-2 w-max h-7 bg-slate-200 overflow-hidden"] do
+            a_
+              [ class_ $ "cursor-pointer px-1.5 flex items-center text-xs h-full rounded " <> (if filterV == "24h" then "bg-white" else "")
+              , hxGet_ $ currentURL' <> "&since=24h"
+              , hxTarget_ "#reqsChartsEC"
+              , hxSwap_ "innerHTML"
+              ]
+              "24h"
+            a_
+              [ class_ $ "cursor-pointer px-1.5 flex items-center text-xs h-full rounded " <> (if filterV == "14d" then "bg-white" else "")
+              , hxGet_ $ currentURL' <> "&since=14d"
+              , hxTarget_ "#reqsChartsEC"
+              , hxSwap_ "innerHTML"
+              ]
+              "14d"
+
         div_
           [ id_ "reqsChartsEC"
-          , class_ "w-[550px] mt-4 shrink-0 h-[220px]"
-          , hxGet_ $ "/charts_html?pid=" <> issue.projectId.toText <> "&since=" <> (if filterV == "14d" then "14D" else "24h") <> "&query_raw=" <> escapedQueryPartial [fmt|{anomalyQueryPartial} | timechart [1d]|]
+          , class_ "w-[550px] mt-4 shrink-0 h-[180px]"
+          , hxGet_ $ currentURL' <> "&since=" <> (if filterV == "14d" then "14D" else "24h")
           , hxTrigger_ "intersect"
           , hxSwap_ "innerHTML"
           ]
@@ -614,26 +625,25 @@ renderIssue hideByDefault currTime timeFilter issue = do
   case issue.issueData of
     Anomalies.IDNewEndpointIssue issueD -> do
       let endpointTitle = issueD.endpointMethod <> "  " <> issueD.endpointUrlPath
-      let subTitle = span_ [class_ "space-x-2"] do
-            a_ [class_ "cursor-pointer"] $ toHtml endpointTitle
-            span_ [] "from"
-            span_ [] $ toHtml issueD.host
-      issueItem hideByDefault currTime issue timeFilter icon issueTitle endpointTitle (Just subTitle) Nothing
+      issueItem hideByDefault currTime issue timeFilter icon issueTitle endpointTitle Nothing Nothing
     Anomalies.IDNewShapeIssue issueD -> do
       let endpointTitle = issueD.endpointMethod <> "  " <> issueD.endpointUrlPath
-      let subTitle = span_ [class_ "space-x-2"] do
-            a_ [class_ "cursor-pointer"] $ toHtml issue.targetHash
-            span_ [] "in"
-            span_ [] $ toHtml endpointTitle
-      let shapeContent = shapeParameterStats_ (length issueD.newUniqueFields) (length issueD.deletedFields) (length issueD.updatedFieldFormats)
-      issueItem hideByDefault currTime issue timeFilter icon issueTitle endpointTitle (Just subTitle) (Just shapeContent)
+          delF = length issueD.deletedFields
+          updF = length issueD.updatedFieldFormats
+          shapeContent = shapeParameterStats_ (length issueD.newUniqueFields) delF (length issueD.updatedFieldFormats)
+          fs = formatTime defaultTimeLocale "%b. %d, %Y %I:%M:%S %p" issue.createdAt
+          ls = formatTime defaultTimeLocale "%b. %d, %Y %I:%M:%S %p" issue.eventsAgg.lastSeen
+          tippy = toText $ "First seen: " <> fs <> " <> Last seen: " <> ls
+          anButton :: Html ()
+          anButton =
+            if delF > 0 || updF > 0
+              then span_ [class_ "btn btn-sm shadow-none bg-red-600 text-white hover:bg-red-600", term "data-tippy-content" tippy] "Breaking"
+              else span_ [class_ "btn btn-sm shadow-none bg-slate-950 text-white hover:bg-slate-800", term "data-tippy-content" tippy] "Incremental"
+
+      issueItem hideByDefault currTime issue timeFilter icon issueTitle endpointTitle (Just shapeContent) (Just anButton)
     Anomalies.IDNewFormatIssue issueD -> do
       let endpointTitle = issueD.endpointMethod <> "  " <> issueD.endpointUrlPath
-      let subTitle = span_ [class_ "space-x-2"] do
-            a_ [class_ "cursor-pointer"] $ toHtml issueD.fieldKeyPath
-            span_ [] "in"
-            span_ [] $ toHtml endpointTitle
-      let formatContent = div_ [class_ "block"] do
+          formatContent = div_ [class_ "block"] do
             div_ [class_ ""] do
               div_ do
                 small_ "current format: "
@@ -644,13 +654,11 @@ renderIssue hideByDefault currTime timeFilter issue = do
               div_ do
                 small_ "examples: "
                 small_ $ toHtml $ maybe "" (T.intercalate ", " . V.toList) issueD.examples
-      issueItem hideByDefault currTime issue timeFilter icon issueTitle endpointTitle (Just subTitle) (Just formatContent)
+      issueItem hideByDefault currTime issue timeFilter icon issueTitle endpointTitle (Just formatContent) Nothing
     Anomalies.IDNewRuntimeExceptionIssue issueD -> do
       let endpointTitle = fromMaybe "" $ issueD.requestMethod <> Just "  " <> issueD.requestPath
-      let subTitle = span_ [class_ "space-x-2"] do
-            a_ [class_ "cursor-pointer"] $ toHtml @Text $ issueD.rootErrorType
-      let body = div_ [class_ "block"] $ p_ [] $ toHtml issueD.message
-      issueItem hideByDefault currTime issue timeFilter icon issueTitle endpointTitle (Just subTitle) (Just body)
+          body = div_ [class_ "block"] $ p_ [] $ toHtml issueD.message
+      issueItem hideByDefault currTime issue timeFilter icon issueTitle endpointTitle (Just body) Nothing
     _ -> error "Anomalies.ATField issue should never show up in practice "
 
 

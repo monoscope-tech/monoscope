@@ -405,10 +405,10 @@ dStats :: Projects.ProjectId -> Int -> Int -> Int -> Text -> Html ()
 dStats pid steps passed failed freq = do
   section_ [class_ "space-y-3 shrink-0 w-1/2"] do
     div_ [class_ "flex gap-2"] do
-      statBox_ (Just pid) Nothing "Steps" "Total number of steps" (fmt (commaizeF steps)) Nothing
-      statBox_ (Just pid) Nothing "Passed" "Total number of steps passed in the last test run" (fmt (commaizeF passed)) Nothing
-      statBox_ (Just pid) Nothing "Failed" "Total number of steps failed in the last test run" (fmt (commaizeF failed)) Nothing
-      statBox_ (Just pid) Nothing "Frequency" "Frequency of collection test runs" freq Nothing
+      statBox_ (Just pid) Nothing "Steps" "Total number of steps" (fmt (commaizeF steps)) Nothing Nothing
+      statBox_ (Just pid) Nothing "Passed" "Total number of steps passed in the last test run" (fmt (commaizeF passed)) Nothing Nothing
+      statBox_ (Just pid) Nothing "Failed" "Total number of steps failed in the last test run" (fmt (commaizeF failed)) Nothing Nothing
+      statBox_ (Just pid) Nothing "Frequency" "Frequency of collection test runs" freq Nothing Nothing
 
 
 extractHostname :: Text -> Maybe Text
