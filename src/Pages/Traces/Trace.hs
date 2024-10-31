@@ -64,41 +64,22 @@ tracePage p = do
       sId = p.span_id
       serviceData = V.toList $ getServiceData <$> p.spanRecords
       serviceNames = V.fromList $ ordNub $ (.name) <$> serviceData
-      reqDetails = getRequestDetails (V.head p.spanRecords)
       serviceColors = getServiceColors serviceNames
-  div_ [class_ "w-full h-full"] $ do
+  div_ [class_ "w-full h-full pt-2"] $ do
     div_ [class_ "flex flex-col w-full gap-4 h-full pb-4"] $ do
-      div_ [class_ "flex items-center gap-4"] $ do
-        h3_ [class_ "whitespace-nowrap text-xl font-bold pr-4 border-r border-r-2"] "Trace"
+      div_ [class_ "flex justify-between items-center"] do
         div_ [class_ "flex items-center gap-4"] $ do
-          h4_ [class_ "text-xl font-medium"] $ toHtml $ if not (null serviceNames) then V.head serviceNames else "Unknown Service"
-          faSprite_ "caret-up" "solid" "w-5 h-5 rotate-90 font-bold"
-          h4_ [class_ "text-xl font-medium"] $ toHtml $ if not (null p.spanRecords) then (V.head p.spanRecords).spanName else "Unknown Span"
-        div_ [class_ "flex items-end border rounded"] do
-          span_ [class_ " text-gray-500 font-medium border-r px-2 py-1"] "Trace ID"
-          span_ [class_ " px-2 py-1"] $ toHtml traceItem.traceId
-      div_ [class_ "flex gap-4 items-center justify-between text-gray-600"] $ do
-        div_ [class_ "flex gap-4 items-center"] do
-          div_ [class_ "font-medium flex shrink-0 items-center rounded gap-1 border px-2 py-1.5 text-gray-600"] do
-            faSprite_ "clock" "regular" "w-3 h-3"
-            span_ [class_ " font-medium"] $ toHtml $ getDurationNSMS traceItem.traceDurationNs
-          div_ [class_ "flex items-center gap-4"] do
-            whenJust reqDetails $ \case
-              ("HTTP", method, path, status) -> do
-                span_ [class_ " font-medium border rounded px-2 py-1.5"] "HTTP"
-                div_ [class_ "flex border rounded overflow-hidden"] do
-                  span_ [class_ " px-2 py-1.5 border-r bg-gray-200"] $ toHtml method
-                  span_ [class_ " px-2 py-1.5 max-w-96 truncate"] $ toHtml path
-                  let extraClass = getStatusColor status
-                  span_ [class_ $ " px-2 py-1.5 " <> extraClass] $ toHtml $ T.take 3 $ show status
-              (scheme, method, path, status) -> do
-                span_ [class_ " font-medium border rounded px-2 py-1.5"] $ toHtml scheme
-                div_ [class_ "flex border rounded overflow-hidden"] do
-                  span_ [class_ " px-2 py-1.5 max-w-44 truncate bg-gray-200 border-r"] $ toHtml method
-                  span_ [class_ " px-2 py-1.5 max-w-96 truncate"] $ toHtml path
-                  span_ [class_ " px-2 py-1.5 border-l"] $ toHtml $ show status
-
-        span_ [class_ ""] $ toHtml $ formatTime defaultTimeLocale "%b %d %Y %H:%M:%S%Q" traceItem.traceStartTime
+          h3_ [class_ "whitespace-nowrap text-lg font-medium text-slate-950"] "Trace"
+          div_ [class_ "flex items-center border border-slate-200 rounded-lg"] do
+            span_ [class_ "text-sm text-slate-950 font-medium border-r border-r-slate-200 px-2 py-1.5"] "Trace ID"
+            span_ [class_ "text-slate-600 text-sm font-medium px-2 py-1.5"] $ toHtml traceItem.traceId
+            faSprite_ "copy" "regular" "w-3 h-3 mr-2 text-slate-500"
+          div_ [class_ "flex items-center gap-1"] do
+            button_ [class_ "cursor-pointer h-8 w-8 flex items-center justify-center rounded-full bg-slate-100 border border-slate-200 text-slate-500"] $ faSprite_ "chevron-left" "regular" "w-4 h-4"
+            button_ [class_ "cursor-pointer h-8 w-8 flex items-center justify-center rounded-full bg-slate-100 border border-slate-200 text-slate-500"] $ faSprite_ "chevron-right" "regular" "w-4 h-4"
+        span_ [class_ "flex items-center rounded-lg px-2 py-1 font-medium gap-2 border border-slate-300 bg-slate-100 text-slate-600"] do
+          faSprite_ "calendar" "regular" "w-5 h-5 fill-none"
+          toHtml $ formatTime defaultTimeLocale "%b. %d, %Y %I:%M:%S %p" traceItem.traceStartTime
 
       div_ [class_ "flex gap-1 w-full mt-5"] $ do
         div_ [class_ "w-full"] do
@@ -135,8 +116,8 @@ tracePage p = do
                           span_ [class_ ""] $ toHtml s
                         div_ [class_ "flex gap-1 items-center"] $ do
                           span_ [class_ "text-xs max-w-52 truncate"] $ toHtml $ T.take 4 percent <> "%"
-                          div_ [class_ "w-[100px] h-3 bg-gray-200 rounded overflow-hidden"]
-                            $ div_ [class_ $ "h-full pl-2 text-xs font-medium " <> color, style_ $ "width:" <> percent <> "%"] pass
+                          div_ [class_ "w-[100px] h-3 bg-gray-200 rounded overflow-hidden"] $
+                            div_ [class_ $ "h-full pl-2 text-xs font-medium " <> color, style_ $ "width:" <> percent <> "%"] pass
 
             input_ [type_ "radio", name_ "my_tabs_2", role_ "tab", class_ "tab after:pb-2", term "aria-label" "Span List"]
             div_ [role_ "tabpanel", class_ "tab-content pt-2"] do
@@ -199,8 +180,8 @@ renderSpanListTable services colors records =
         th_ "Avg. Duration"
         th_ "Exec. Time"
         th_ "%Exec. Time"
-    tbody_ [class_ "space-y-0"]
-      $ mapM_ (renderSpanRecordRow records colors) services
+    tbody_ [class_ "space-y-0"] $
+      mapM_ (renderSpanRecordRow records colors) services
 
 
 spanTable :: V.Vector Telemetry.SpanRecord -> Html ()
