@@ -488,7 +488,7 @@ detailsHeader title method statusCode issue currTime filterV content anBtn = do
           faSprite_ "calendar" "regular" "w-4 h-4 fill-none"
           toHtml $ formatTime defaultTimeLocale "%b. %d, %Y %I:%M:%S %p" issue.createdAt
       anomalyActionButtons issue.projectId issue.id (isJust issue.acknowlegedAt) (isJust issue.archivedAt) ""
-    span_ [class_ "font-medium text-3xl text-slate-600 mt-6"] $ toHtml title
+    span_ [class_ "font-medium text-2xl text-slate-600 mt-6"] $ toHtml title
     div_ [class_ "flex justify-between items-center gap-4 mt-8"] do
       let currentURL' = "/charts_html?pid=" <> issue.projectId.toText <> ("&query_raw=" <> escapedQueryPartial [fmt|{anomalyQueryPartial} | timechart [1d]|])
       div_ [class_ "flex flex-col gap-4"] do
