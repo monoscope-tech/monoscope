@@ -77,7 +77,7 @@ drawerWithURLContent_ drawerId urlM trigger = div_ [class_ "drawer drawer-end in
   div_ [class_ "drawer-side fixed top-0 left-0 w-full h-full flex z-[10000] overflow-y-scroll ", style_ "position:fixed;width:100%;display:flex"] do
     label_ [Lucid.for_ drawerId, Aria.label_ "close modal", class_ "w-full drawer-overlay grow flex-1"] ""
     div_ [style_ "width: min(90vw, 1200px)", class_ "bg-slate-50 h-full overflow-y-scroll"] do
-      label_ [Lucid.for_ drawerId, Aria.label_ "close modal", class_ "float-right mt-4 h-8 w-8 flex items-center justify-center rounded-full bg-slate-200"] $ faSprite_ "xmark" "solid" "w-4 h-4"
+      label_ [Lucid.for_ drawerId, Aria.label_ "close modal", class_ "float-right mt-5 h-10 w-10 flex items-center justify-center rounded-full bg-slate-200"] $ faSprite_ "xmark" "solid" "w-4 h-4"
       div_
         ( [id_ $ drawerId <> "-content", class_ "bg-slate-50 p-4 flex flex-col", hxSwap_ "innerHTML"]
             <> maybe [] (\url -> [hxGet_ url, hxTrigger_ "intersect once"]) urlM
