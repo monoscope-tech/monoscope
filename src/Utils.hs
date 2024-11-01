@@ -229,11 +229,11 @@ jsonValueToHtmlTree val = jsonValueToHtmlTree' ("", "", val)
     renderParentType :: Text -> Text -> Text -> Int -> Html () -> Html ()
     renderParentType opening closing key count child = div_ [class_ (if key == "" then "" else "collapsed")] do
       a_
-        [ class_ "inline-block cursor-pointer"
+        [ class_ "inline-block items-center cursor-pointer"
         , onclick_ "this.parentNode.classList.toggle('collapsed')"
         ]
         do
-          span_ [class_ "log-item-tree-chevron "] "▾"
+          faSprite_ "chevron-right" "regular" "log-item-tree-chevron"
           span_ [] $ toHtml $ if key == "" then opening else key <> ": " <> opening
       div_ [class_ "pl-5 children "] do
         span_ [class_ "tree-children-count"] $ toHtml $ show count

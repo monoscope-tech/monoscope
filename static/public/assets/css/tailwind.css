@@ -263,11 +263,11 @@
 }
 
 .log-item-tree-chevron {
-  @apply cursor-pointer inline-block hover:bg-blue-50 text-blue-800 rounded-md px-1 mr-2;
+  @apply cursor-pointer font-bold h-5 w-5 rotate-90 inline-block p-1 rounded border border-slate-200 mr-1;
 }
 
 .collapsed .log-item-tree-chevron {
-  @apply neg-rotate-90;
+  @apply rotate-0;
 }
 
 .b--b2{

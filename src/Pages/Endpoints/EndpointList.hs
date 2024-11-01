@@ -155,11 +155,6 @@ renderEndpoint activePage currTime enp = do
           span_ [class_ $ "endpoint endpoint-" <> toLower enp.method, data_ "enp-urlMethod" enp.method] $ toHtml enp.method
           span_ [class_ " inconsolata text-base text-slate-700", data_ "enp-urlPath" enp.urlPath] $ toHtml $ if T.null enp.urlPath then "/" else T.take 150 enp.urlPath
         a_ [class_ "text-blue-500  hover:text-slate-600", href_ ("/p/" <> enp.projectId.toText <> "/log_explorer?query=" <> "url_path==\"" <> enp.urlPath <> "\"")] "View logs"
-      unless activePage do
-        div_ [class_ "flex items-center gap-2 mt-5"] do
-          let host = enp.host
-          AnomalyList.anomalyArchiveButton enp.projectId (Anomalies.AnomalyId enp.anomalyId) (isJust enp.archivedAt)
-          AnomalyList.anomalyAcknowlegeButton enp.projectId (Anomalies.AnomalyId enp.anomalyId) (isJust enp.acknowlegedAt) host
     div_ [class_ "w-36 flex items-center justify-center"] $ span_ [class_ "tabular-nums text-xl", term "data-tippy-content" "Events for this Anomaly in the last 14days"] $ toHtml @String $ fmt $ commaizeF enp.totalRequests
     div_ [class_ "flex items-center justify-center "] $
       div_
