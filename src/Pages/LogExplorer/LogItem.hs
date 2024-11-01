@@ -19,6 +19,7 @@ import Models.Telemetry.Telemetry qualified as Telemetry
 import Models.Users.Sessions qualified as Sessions
 import NeatInterpolation (text)
 import Network.URI (escapeURIString, isUnescapedInURI)
+import Pages.Components (statBox_)
 import Pages.Traces.Spans qualified as Spans
 import PyF (fmt)
 import Relude
@@ -50,135 +51,126 @@ expandAPIlogItem' pid req modal = do
     div_ [class_ "w-full flex flex-col gap-4"] do
       let methodColor = getMethodColor req.method
       let statusColor = getStatusColor req.statusCode
-      div_ [class_ "flex gap-4 items-center"] do
-        div_ [class_ $ "font-semibold px-2 py-1 rounded min-w-[70px] text-center h-full " <> methodColor] $ toHtml req.method
-        div_ [class_ $ "text-lg font-bold px-2 " <> statusColor] $ show req.statusCode
-        div_ [class_ "flex border border-gray-200 m-1 rounded-xl p-2"] do
-          faSprite_ "regular-calendar-days-clock" "regular" "h-4 mr-2 w-4"
-          span_ [class_ "text-xs"] $ toHtml $ formatTime defaultTimeLocale "%b %d, %Y %R" req.createdAt
-      when modal do
-        div_
-          [ class_ "flex gap-2 px-4 items-center border border-dashed h-[50px]"
-          , id_ "copy_share_link"
-          ]
-          do
-            div_ [class_ "relative", style_ "width:150px"] do
-              button_
-                [ [__|on click toggle .hidden on #expire_container|]
-                , id_ "toggle_expires_btn"
-                , class_ "w-full flex gap-2 text-slate-600 justify_between items-center cursor-pointer px-2 py-1 border rounded focus:ring-2 focus:ring-blue-200 active:ring-2 active:ring-blue-200"
-                ]
-                do
-                  p_ [style_ "width: calc(100% - 25px)", class_ " truncate ..."] "Expires in: 1 hour"
-                  faSprite_ "chevron-down" "regular" "h-3 w-3"
-              div_ [id_ "expire_container", class_ "absolute hidden bg-base-100 border shadow w-full overflow-y-auto", style_ "top:100%; max-height: 300px; z-index:9"] do
-                forM_ (["1 hour", "8 hours", "1 day"] :: [Text]) \sw -> do
-                  button_
-                    [ [__|on click set #toggle_expires_btn.firstChild.innerText to 'Expires in ' + event.target's @data-expire-value
-                                        then set #expire_input.value to event.target's @data-expire-value|]
-                    , term "data-expire-value" sw
-                    , class_ "p-2 w-full text-left truncate ... hover:bg-blue-100 hover:text-black"
-                    ]
-                    $ toHtml sw
-            button_
-              [ class_ "flex flex-col gap-1 bg-blue-500 px-2 py-1 rounded text-white"
-              , term "data-req-id" (show req.id)
-              , term "data-req-created-at" (toText $ formatTime defaultTimeLocale "%FT%T%6QZ" req.createdAt)
-              , [__|on click set #req_id_input.value to my @data-req-id
-                          then set #req_created_at_input.value to my @data-req-created-at
-                          then call #share_log_form.requestSubmit() |]
+      div_ [class_ "flex  justify-between items-center gap-4"] do
+        div_ [class_ "flex items-center gap-4"] do
+          span_ [class_ $ "flex items-center rounded-lg px-2 py-2 font-medium gap-2 " <> methodColor] $ toHtml req.method
+          span_ [class_ $ "flex items-center rounded-lg px-2 py-2 font-medium gap-2 " <> statusColor] $ toHtml $ show req.statusCode
+          span_ [class_ "flex items-center rounded-lg px-2 py-1 text-sm font-medium gap-2 border border-slate-300 bg-slate-100 text-slate-600"] do
+            faSprite_ "calendar" "regular" "w-4 h-4 fill-none"
+            toHtml $ formatTime defaultTimeLocale "%b. %d, %Y %I:%M:%S %p" req.createdAt
+
+        div_ [class_ "flex items-center"] do
+          when modal do
+            div_
+              [ class_ "flex gap-2 px-4 items-center"
+              , id_ "copy_share_link"
               ]
-              "Get link"
+              do
+                p_ [class_ "text-slate-500 font-medium"] "Expires in: "
+                div_ [class_ "relative w-max flex"] do
+                  button_
+                    [ [__|on click toggle .hidden on #expire_container|]
+                    , id_ "toggle_expires_btn"
+                    , class_ "btn flex gap-2 text-slate-600 font-medium items-center cursor-pointer border border-slate-300 bg-slate-100"
+                    ]
+                    do
+                      "1 hour"
+                      faSprite_ "chevron-down" "regular" "h-3 w-3"
+                  div_ [id_ "expire_container", class_ "absolute hidden bg-base-100 border shadow w-full overflow-y-auto", style_ "top:100%; max-height: 300px; z-index:9"] do
+                    forM_ (["1 hour", "8 hours", "1 day"] :: [Text]) \sw -> do
+                      button_
+                        [ [__|on click set #toggle_expires_btn.firstChild.innerText to event.target's @data-expire-value
+                                            then set #expire_input.value to event.target's @data-expire-value|]
+                        , term "data-expire-value" sw
+                        , class_ "p-2 w-full text-left truncate ... hover:bg-blue-100 hover:text-black"
+                        ]
+                        $ toHtml sw
+                button_
+                  [ class_ "btn blue-gr-btn"
+                  , term "data-req-id" (show req.id)
+                  , term "data-req-created-at" (toText $ formatTime defaultTimeLocale "%FT%T%6QZ" req.createdAt)
+                  , [__|on click set #req_id_input.value to my @data-req-id
+                              then set #req_created_at_input.value to my @data-req-created-at
+                              then call #share_log_form.requestSubmit() |]
+                  ]
+                  "Get link"
 
     -- url, endpoint, latency, request size, repsonse size
-    div_ [class_ "flex flex-col mt-4 p-4 justify-between w-full rounded-xl border"] do
-      div_ [class_ "text-lg mb-2"] do
-        span_ [class_ "text-slate-500 font-semibold"] "Endpoint: "
-        span_ [] $ toHtml req.urlPath
-      div_ [class_ "text-lg"] do
-        span_ [class_ "text-slate-500 font-semibold"] "URL: "
-        span_ [] $ toHtml req.rawUrl
+    div_ [class_ "flex flex-col mt-4 justify-between w-full"] do
+      div_ [class_ "text-base mb-2 flex gap-6 items-center"] do
+        span_ [class_ "text-slate-500 font-medium w-16"] "Endpoint"
+        div_ [class_ "flex gap-1 items-center"] do
+          span_ [class_ "text-slate-800 text-sm w-44 truncate ellipsis", term "data-tippy" req.urlPath] $ toHtml req.urlPath
+          faSprite_ "copy" "regular" "h-8 w-8 border border-slate-300 bg-slate-100 rounded-full p-2 text-slate-500"
+          faSprite_ "arrow-up-right" "regular" "h-8 w-8 p-2 blue-gr-btn rounded-full"
+      div_ [class_ "text-base flex items-center gap-6"] do
+        span_ [class_ "text-slate-500 font-medium w-16"] "URL"
+        div_ [class_ "flex gap-1 items-center"] do
+          span_ [class_ "text-slate-800 text-sm w-44 truncate ellipsis", term "data-tippy" req.rawUrl] $ toHtml req.rawUrl
+          faSprite_ "copy" "regular" "h-8 w-8 border border-slate-300 bg-slate-100 rounded-full p-2 text-slate-500"
+          faSprite_ "arrow-up-right" "regular" "h-8 w-8 p-2 blue-gr-btn rounded-full"
       div_ [class_ "flex gap-2 mt-4"] do
-        div_ [class_ "flex flex-col gap-1 px-4 min-w-[120px] py-3 border border-dashed border-gray-400 m-1 rounded"] do
-          div_ [class_ "flex gap-1 items-center"] do
-            faSprite_ "clock" "regular" "h-4 w-4 text-slate-400"
-            span_ [class_ "text-md font-bold"] $ show (req.durationNs `div` 1000) <> " ms"
-          p_ [class_ "text-slate-500"] "Latency"
-        div_ [class_ "flex flex-col gap-1 px-4 min-w-[120px] py-3 border border-dashed border-gray-400 m-1 rounded"] do
-          div_ [class_ "flex gap-1 items-center"] do
-            faSprite_ "upload" "solid" "h-4 w-4 text-slate-400"
-            let reqSize = BS.length $ AE.encode req.requestBody
-            span_ [class_ "text-md font-bold"] $ show (reqSize - 2) <> " bytes"
-          p_ [class_ "text-slate-500"] "Request size"
-        div_ [class_ "flex flex-col gap-1 px-4 min-w-[120px] py-3 border border-dashed border-gray-400 m-1 rounded"] do
-          div_ [class_ "flex gap-1 items-center"] do
-            faSprite_ "download" "solid" "h-4 w-4 text-slate-400"
-            let respSize = BS.length $ AE.encode req.responseBody
-            span_ [class_ "text-md font-bold"] $ show (respSize - 2) <> " bytes"
-          p_ [class_ "text-slate-500"] "Response size"
-        div_ [class_ "flex flex-col gap-1 px-4 min-w-[120px] py-3 border border-dashed border-gray-400 m-1 rounded"] do
-          div_ [class_ "flex gap-1 items-center"] do
-            faSprite_ "layer-group" "solid" "h-5 w-5 text-slate-400"
-            span_ [class_ "text-md font-bold"] $ show req.sdkType
-          p_ [class_ "text-slate-500"] "Framework"
+        statBox_ Nothing (Just ("clock", "regular", "text-blue-500")) "Latency" "Latency" (show (req.durationNs `div` 1000) <> " ms") Nothing Nothing
+        let reqSize = BS.length $ AE.encode req.requestBody
+        statBox_ Nothing (Just ("upload", "regular", "text-blue-500")) "Request size" "Total request body size in bytes" (show (reqSize - 2)) Nothing Nothing
+        let respSize = BS.length $ AE.encode req.responseBody
+        statBox_ Nothing (Just ("download", "regular", "text-blue-500")) "Response size" "Total response body size in bytes" (show (respSize - 2)) Nothing Nothing
+        statBox_ Nothing (Just ("stack", "regular", "text-blue-500")) "Framework" "Framework used to handle this the request" (show req.sdkType) Nothing Nothing
+
     -- errors
-    when (req.errorsCount > 0) $ div_ [class_ "border rounded-lg mt-8"] do
-      div_ [class_ "flex w-full bg-gray-100 px-4 py-2 gap-4 items-center"] do
-        p_ [class_ "font-bold"] "Errors"
+    when (req.errorsCount > 0) $ div_ [class_ "mt-4"] do
+      div_ [class_ "flex w-full text-slate-950 font-medium gap-2 items-center"] do
+        p_ "Errors"
         p_ [class_ " text-red-500 font-bold"] $ show req.errorsCount
-      div_ [class_ "px-4 flex gap-10 border-b text-gray-500"] do
+      div_ [class_ "p-4 rounded-3xl border border-slate-200 text-gray-500"] do
         jsonValueToHtmlTree req.errors
 
     -- outgoing request details
-    div_ [class_ "flex w-full bg-gray-100 px-4 py-2 flex-col gap-2"] do
-      p_ [class_ "font-bold"] "Outgoing requests"
-    div_ [class_ "grow overflow-y-auto py-2 px-1 max-h-[500px] whitespace-nowrap  divide-y overflow-x-hidden"] do
-      let createdAt = toText $ formatTime defaultTimeLocale "%FT%T%6QZ" req.createdAt
-      let escapedQueryPartial = toText $ escapeURIString isUnescapedInURI $ toString [fmt|parent_id=="{UUID.toText req.id}" AND created_at<="{createdAt}"|]
-      let events_url = "/p/" <> pid.toText <> "/log_explorer?layout=resultTable&query=" <> escapedQueryPartial
-      div_ [hxGet_ events_url, hxTrigger_ "intersect once", hxSwap_ "outerHTML"] $ span_ [class_ "loading loading-dots loading-md"] ""
+    div_ [class_ "flex w-full flex-col gap-1"] do
+      p_ [class_ "font-medium text-slate-950 mb-2"] "Outgoing requests"
+      div_ [class_ "grow rounded-3xl border border-slate-200 overflow-y-auto py-2 px-1 max-h-[500px] whitespace-nowrap  divide-y overflow-x-hidden"] do
+        let createdAt = toText $ formatTime defaultTimeLocale "%FT%T%6QZ" req.createdAt
+        let escapedQueryPartial = toText $ escapeURIString isUnescapedInURI $ toString [fmt|parent_id=="{UUID.toText req.id}" AND created_at<="{createdAt}"|]
+        let events_url = "/p/" <> pid.toText <> "/log_explorer?layout=resultTable&query=" <> escapedQueryPartial
+        div_ [hxGet_ events_url, hxTrigger_ "intersect once", hxSwap_ "outerHTML"] $ span_ [class_ "loading loading-dots loading-md"] ""
 
     -- request details
-    div_ [class_ "border rounded-lg mt-8", id_ "request_detail_container"] do
-      div_ [class_ "flex w-full bg-gray-100 px-4 py-2 flex-col gap-2"] do
-        p_ [class_ "font-bold"] "Request Details"
-
-      div_ [class_ "tabs tabs-bordered place-content-start ", role_ "tablist"] do
+    div_ [class_ "mt-8", id_ "request_detail_container"] do
+      p_ [class_ "text-slate-950 font-medium mb-2"] "Request Details"
+      div_ [class_ "tabs tabs-bordered rounded-3xl border border-slate-200 place-content-start ", role_ "tablist"] do
         input_ [type_ "radio", name_ $ "req-details-tabx-" <> show req.id, role_ "tab", Aria.label_ "Body", class_ "tab w-max", checked_]
-        div_ [class_ "tab-content grow w-full", role_ "tabpanel"]
-          $ div_ [class_ "bg-gray-50 m-4  p-2 rounded-lg border break-all", id_ "req_body_json"]
-          $ jsonValueToHtmlTree req.requestBody
+        div_ [class_ "tab-content grow w-full", role_ "tabpanel"] $
+          div_ [class_ "m-4 rounded-xl p-2 border border-slate-200", id_ "req_body_json"] $
+            jsonValueToHtmlTree req.requestBody
 
         input_ [type_ "radio", name_ $ "req-details-tabx-" <> show req.id, role_ "tab", Aria.label_ "Headers", class_ "tab"]
-        div_ [class_ "tab-content grow w-full", role_ "tabpanel"]
-          $ div_ [class_ "bg-gray-50 m-4 p-2 rounded-lg border break-all", id_ "req_headers_json"]
-          $ jsonValueToHtmlTree req.requestHeaders
+        div_ [class_ "tab-content grow w-full", role_ "tabpanel"] $
+          div_ [class_ "m-4 rounded-xl p-2 border border-slate-200 break-all", id_ "req_headers_json"] $
+            jsonValueToHtmlTree req.requestHeaders
 
         input_ [type_ "radio", name_ $ "req-details-tabx-" <> show req.id, role_ "tab", Aria.label_ "Query Params", class_ "tab break-keep"]
-        div_ [class_ "tab-content grow w-full", role_ "tabpanel"]
-          $ div_ [class_ "bg-gray-50 m-4 p-2 rounded-lg border", id_ "query_params_json"]
-          $ jsonValueToHtmlTree req.queryParams
+        div_ [class_ "tab-content grow w-full", role_ "tabpanel"] $
+          div_ [class_ "m-4 rounded-xl p-2 border border-slate-200", id_ "query_params_json"] $
+            jsonValueToHtmlTree req.queryParams
 
         input_ [type_ "radio", name_ $ "req-details-tabx-" <> show req.id, role_ "tab", Aria.label_ "Path Params", class_ "tab break-keep"]
-        div_ [class_ "tab-content grow w-full", role_ "tabpanel"]
-          $ div_ [class_ "bg-gray-50 m-4 p-2 rounded-lg border", id_ "path_params_json"]
-          $ jsonValueToHtmlTree req.pathParams
+        div_ [class_ "tab-content grow w-full", role_ "tabpanel"] $
+          div_ [class_ "m-4 rounded-xl p-2 border border-slate-200", id_ "path_params_json"] $
+            jsonValueToHtmlTree req.pathParams
 
     -- response details
-    div_ [class_ "border rounded-lg mt-8", id_ "reponse_detail_container"] do
-      div_ [class_ "flex w-full bg-gray-100 px-4 py-2 flex-col gap-2"] do
-        p_ [class_ "font-bold"] "Response Details"
-
-      div_ [class_ "tabs tabs-bordered place-content-start grid grid-flow-col", role_ "tablist"] do
+    div_ [class_ "mt-8", id_ "request_detail_container"] do
+      p_ [class_ "text-slate-950 font-medium mb-2"] "Request Details"
+      div_ [class_ "tabs tabs-bordered rounded-3xl border border-slate-200 place-content-start grid grid-flow-col", role_ "tablist"] do
         input_ [type_ "radio", name_ "resp-details-tab", role_ "tab", Aria.label_ "Body", class_ "tab", checked_]
-        div_ [class_ "tab-content", role_ "tabpanel"]
-          $ div_ [class_ "bg-gray-50 m-4  p-2 rounded-lg border", id_ "res_body_json"]
-          $ jsonValueToHtmlTree req.responseBody
+        div_ [class_ "tab-content", role_ "tabpanel"] $
+          div_ [class_ "m-4 rounded-xl p-2 border border-slate-200", id_ "res_body_json"] $
+            jsonValueToHtmlTree req.responseBody
 
         input_ [type_ "radio", name_ "resp-details-tab", role_ "tab", Aria.label_ "Headers", class_ "tab"]
-        div_ [class_ "tab-content", role_ "tabpanel"]
-          $ div_ [class_ "bg-gray-50 m-4 p-2 rounded-lg border", id_ "res_headers_json"]
-          $ jsonValueToHtmlTree req.responseHeaders
+        div_ [class_ "tab-content", role_ "tabpanel"] $
+          div_ [class_ "m-4 rounded-xl p-2 border border-slate-200", id_ "res_headers_json"] $
+            jsonValueToHtmlTree req.responseHeaders
 
 
 apiLogItemH :: Projects.ProjectId -> UUID.UUID -> UTCTime -> Maybe Text -> ATAuthCtx (RespHeaders ApiLogItem)
@@ -237,12 +229,12 @@ apiLogItemView pid logId req expandItemPath source = do
         _ -> Nothing
   let logItemPathDetailed = if source == "spans" then "/p/" <> pid.toText <> "/traces/" <> fromMaybe "" trId else expandItemPath <> "/detailed?source=" <> source
   div_ [class_ "flex items-center gap-2"] do
-    when (source /= "logs")
-      $ label_
+    when (source /= "logs") $
+      label_
         [ class_ "btn btn-sm bg-base-100"
         , Lucid.for_ "global-data-drawer"
-        , term "_"
-            $ [text|on mousedown or click fetch $logItemPathDetailed
+        , term "_" $
+            [text|on mousedown or click fetch $logItemPathDetailed
                   then set #global-data-drawer-content.innerHTML to #loader-tmp.innerHTML
                   then set #global-data-drawer.checked to true
                   then set #global-data-drawer-content.innerHTML to it
@@ -251,8 +243,8 @@ apiLogItemView pid logId req expandItemPath source = do
         ("Expand" >> faSprite_ "expand" "regular" "h-3 w-3")
 
     let reqJson = decodeUtf8 $ AE.encode req
-    when (source /= "logs" && source /= "spans")
-      $ button_
+    when (source /= "logs" && source /= "spans") $
+      button_
         [ class_ "btn btn-sm bg-base-100"
         , term "data-reqJson" reqJson
         , onclick_ "window.buildCurlRequest(event)"
@@ -271,8 +263,8 @@ apiLogItemView pid logId req expandItemPath source = do
 -- Function to selectively convert RequestDumpLogItem to JSON
 selectiveReqToJson :: RequestDumps.RequestDumpLogItem -> AE.Value
 selectiveReqToJson req =
-  AE.object
-    $ concat @[]
+  AE.object $
+    concat @[]
       [ ["created_at" .= req.createdAt]
       , ["duration_ns" .= req.durationNs]
       , ["errors" .= req.errors]
@@ -298,8 +290,8 @@ selectiveReqToJson req =
 
 selectiveSpanToJson :: Telemetry.SpanRecord -> AE.Value
 selectiveSpanToJson sp =
-  AE.object
-    $ concat @[]
+  AE.object $
+    concat @[]
       [ ["timestamp" .= sp.timestamp]
       , ["span_id" .= sp.spanId]
       , ["span_name" .= sp.spanName]
