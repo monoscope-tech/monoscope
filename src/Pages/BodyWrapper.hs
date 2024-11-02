@@ -64,71 +64,87 @@ data BWConfig = BWConfig
 bodyWrapper :: BWConfig -> Html () -> Html ()
 bodyWrapper BWConfig{sessM, currProject, pageTitle, menuItem, hasIntegrated, navTabs, pageActions} child = do
   doctypehtml_ do
-    head_ do
-      title_ $ toHtml pageTitle
-      meta_ [charset_ "UTF-8"]
-      meta_ [name_ "viewport", content_ "width=device-width, initial-scale=1.0"]
-      meta_ [httpEquiv_ "X-UA-Compatible", content_ "ie=edge"]
-      -- favicon items
-      link_ [rel_ "apple-touch-icon", sizes_ "180x180", href_ "/public/apple-touch-icon.png"]
-      link_ [rel_ "icon", type_ "image/png", sizes_ "32x32", href_ "/public/favicon-32x32.png"]
-      link_ [rel_ "icon", type_ "image/png", sizes_ "16x16", href_ "/public/favicon-16x16.png"]
-      link_ [rel_ "manifest", href_ "/public/site.webmanifest"]
-      link_ [rel_ "mask-icon", href_ "/public/safari-pinned-tab.svg", term "color" "#5bbad5"]
-      meta_ [name_ "msapplication-TileColor", content_ "#da532c"]
-      meta_ [name_ "theme-color", content_ "#ffffff"]
-      link_ [rel_ "stylesheet", type_ "text/css", href_ $(hashAssetFile "/public/assets/css/tailwind.min.css")]
-      link_ [rel_ "stylesheet", type_ "text/css", href_ $(hashAssetFile "/public/assets/css/thirdparty/notyf3.min.css")]
-      link_ [rel_ "preconnect", href_ "https://rsms.me/"]
-      link_ [rel_ "stylesheet", href_ "https://rsms.me/inter/inter.css"]
-      link_ [rel_ "stylesheet", href_ "https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/atom-one-dark.min.css"]
-      link_ [rel_ "stylesheet", href_ "https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.63.0/codemirror.min.css"]
-      link_ [rel_ "stylesheet", href_ "https://cdnjs.cloudflare.com/ajax/libs/codemirror/6.65.7/theme/elegant.min.css"]
-      link_ [href_ "https://cdn.jsdelivr.net/npm/@yaireo/tagify/dist/tagify.css", rel_ "stylesheet", type_ "text/css"]
+    head_
+      do
+        title_ $ toHtml pageTitle
+        meta_ [charset_ "UTF-8"]
+        meta_ [name_ "viewport", content_ "width=device-width, initial-scale=1.0"]
+        meta_ [httpEquiv_ "X-UA-Compatible", content_ "ie=edge"]
+        -- favicon items
+        link_ [rel_ "apple-touch-icon", sizes_ "180x180", href_ "/public/apple-touch-icon.png"]
+        link_ [rel_ "icon", type_ "image/png", sizes_ "32x32", href_ "/public/favicon-32x32.png"]
+        link_ [rel_ "icon", type_ "image/png", sizes_ "16x16", href_ "/public/favicon-16x16.png"]
+        link_ [rel_ "manifest", href_ "/public/site.webmanifest"]
+        link_ [rel_ "mask-icon", href_ "/public/safari-pinned-tab.svg", term "color" "#5bbad5"]
+        meta_ [name_ "msapplication-TileColor", content_ "#da532c"]
+        meta_ [name_ "theme-color", content_ "#ffffff"]
+        link_ [rel_ "stylesheet", type_ "text/css", href_ $(hashAssetFile "/public/assets/css/tailwind.min.css")]
+        link_ [rel_ "stylesheet", type_ "text/css", href_ $(hashAssetFile "/public/assets/css/thirdparty/notyf3.min.css")]
+        link_ [rel_ "preconnect", href_ "https://rsms.me/"]
+        link_ [rel_ "stylesheet", href_ "https://rsms.me/inter/inter.css"]
+        link_ [rel_ "stylesheet", href_ "https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/atom-one-dark.min.css"]
+        link_ [rel_ "stylesheet", href_ "https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.63.0/codemirror.min.css"]
+        link_ [rel_ "stylesheet", href_ "https://cdnjs.cloudflare.com/ajax/libs/codemirror/6.65.7/theme/elegant.min.css"]
+        link_ [href_ "https://cdn.jsdelivr.net/npm/@yaireo/tagify/dist/tagify.css", rel_ "stylesheet", type_ "text/css"]
 
-      -- SCRIPTS
-      script_ [src_ "https://cdn.jsdelivr.net/npm/@yaireo/tagify"] ("" :: Text)
-      script_ [src_ "https://cdn.jsdelivr.net/npm/@yaireo/tagify/dist/tagify.polyfills.min.js"] ("" :: Text)
-      script_ [src_ "https://cdn.jsdelivr.net/npm/echarts@5.4.1/dist/echarts.min.js"] ("" :: Text)
-      script_ [src_ $(hashAssetFile "/public/assets/roma-echarts.js"), defer_ "true"] ("" :: Text)
-      script_ [src_ $(hashAssetFile "/public/assets/js/thirdparty/notyf3.min.js"), defer_ "true"] ("" :: Text)
-      script_ [src_ $(hashAssetFile "/public/assets/js/thirdparty/htmx1_9_10.min.js"), defer_ "true"] ("" :: Text)
-      script_ [src_ $(hashAssetFile "/public/assets/deps/htmx/multi-swap.js"), defer_ "true"] ("" :: Text)
-      script_ [src_ $(hashAssetFile "/public/assets/deps/htmx/preload.js"), defer_ "true"] ("" :: Text)
-      script_ [src_ $(hashAssetFile "/public/assets/deps/htmx/json-enc.js"), defer_ "true"] ("" :: Text)
-      script_ [src_ $(hashAssetFile "/public/assets/deps/lit/lit-html.js"), type_ "module", defer_ "true"] ("" :: Text)
-      script_ [src_ "https://unpkg.com/htmx.org/dist/ext/debug.js", defer_ "true"] ("" :: Text)
-      script_ [src_ $(hashAssetFile "/public/assets/js/thirdparty/_hyperscript_web0_9_5.min.js"), defer_ "true"] ("" :: Text)
-      script_ [src_ $(hashAssetFile "/public/assets/js/thirdparty/_hyperscript_template.js"), defer_ "true"] ("" :: Text)
-      script_ [src_ $(hashAssetFile "/public/assets/js/thirdparty/luxon.min.js"), defer_ "true"] ("" :: Text)
-      script_ [src_ $(hashAssetFile "/public/assets/js/thirdparty/popper2_11_4.min.js"), defer_ "true"] ("" :: Text)
-      script_ [src_ $(hashAssetFile "/public/assets/js/thirdparty/tippy6_3_7.umd.min.js"), defer_ "true"] ("" :: Text)
-      script_ [src_ $(hashAssetFile "/public/assets/js/thirdparty/instantpage5_1_0.js"), type_ "module", defer_ "true"] ("" :: Text)
-      script_ [src_ $(hashAssetFile "/public/assets/js/monaco/vs/loader.js"), defer_ "true"] ("" :: Text)
-      script_ [src_ $(hashAssetFile "/public/assets/js/charts.js")] ("" :: Text)
-      script_ [src_ "https://cdn.jsdelivr.net/npm/@easepick/bundle@1.2.0/dist/index.umd.min.js"] ("" :: Text)
-      script_ [src_ "https://cdn.jsdelivr.net/npm/lodash@4.17.21/lodash.min.js"] ("" :: Text)
-      script_ [src_ "https://kit.fontawesome.com/e0cb5637ed.js", crossorigin_ "anonymous"] ("" :: Text)
-      script_ [src_ "https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"] ("" :: Text)
-      script_ [src_ "https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/go.min.js"] ("" :: Text)
-      script_ [src_ "https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/javascript.min.js"] ("" :: Text)
-      script_ [src_ "https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/php.min.js"] ("" :: Text)
-      script_ [src_ "https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/csharp.min.js"] ("" :: Text)
-      script_ [src_ "https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/python.min.js"] ("" :: Text)
-      script_ [src_ "https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.63.0/codemirror.min.js"] ("" :: Text)
-      script_ [src_ "https://cdnjs.cloudflare.com/ajax/libs/codemirror/6.65.7/mode/javascript/javascript.min.js"] ("" :: Text)
-      script_ [type_ "module", src_ $(hashAssetFile "/public/assets/filtercomponent.js")] ("" :: Text)
-      script_ [src_ "/public/assets/js/main.js"] ("" :: Text)
+        -- SCRIPTS
+        script_ [src_ "https://cdn.jsdelivr.net/npm/@yaireo/tagify"] ("" :: Text)
+        script_ [src_ "https://cdn.jsdelivr.net/npm/@yaireo/tagify/dist/tagify.polyfills.min.js"] ("" :: Text)
+        script_ [src_ "https://cdn.jsdelivr.net/npm/echarts@5.4.1/dist/echarts.min.js"] ("" :: Text)
+        script_ [src_ $(hashAssetFile "/public/assets/roma-echarts.js"), defer_ "true"] ("" :: Text)
+        script_ [src_ $(hashAssetFile "/public/assets/js/thirdparty/notyf3.min.js"), defer_ "true"] ("" :: Text)
+        script_ [src_ $(hashAssetFile "/public/assets/js/thirdparty/htmx1_9_10.min.js"), defer_ "true"] ("" :: Text)
+        script_ [src_ $(hashAssetFile "/public/assets/deps/htmx/multi-swap.js"), defer_ "true"] ("" :: Text)
+        script_ [src_ $(hashAssetFile "/public/assets/deps/htmx/preload.js"), defer_ "true"] ("" :: Text)
+        script_ [src_ $(hashAssetFile "/public/assets/deps/htmx/json-enc.js"), defer_ "true"] ("" :: Text)
+        script_ [src_ $(hashAssetFile "/public/assets/deps/lit/lit-html.js"), type_ "module", defer_ "true"] ("" :: Text)
+        script_ [src_ "https://unpkg.com/htmx.org/dist/ext/debug.js", defer_ "true"] ("" :: Text)
+        script_ [src_ $(hashAssetFile "/public/assets/js/thirdparty/_hyperscript_web0_9_5.min.js"), defer_ "true"] ("" :: Text)
+        script_ [src_ $(hashAssetFile "/public/assets/js/thirdparty/_hyperscript_template.js"), defer_ "true"] ("" :: Text)
+        script_ [src_ $(hashAssetFile "/public/assets/js/thirdparty/luxon.min.js"), defer_ "true"] ("" :: Text)
+        script_ [src_ $(hashAssetFile "/public/assets/js/thirdparty/popper2_11_4.min.js"), defer_ "true"] ("" :: Text)
+        script_ [src_ $(hashAssetFile "/public/assets/js/thirdparty/tippy6_3_7.umd.min.js"), defer_ "true"] ("" :: Text)
+        script_ [src_ $(hashAssetFile "/public/assets/js/thirdparty/instantpage5_1_0.js"), type_ "module", defer_ "true"] ("" :: Text)
+        script_ [src_ $(hashAssetFile "/public/assets/js/monaco/vs/loader.js"), defer_ "true"] ("" :: Text)
+        script_ [src_ $(hashAssetFile "/public/assets/js/charts.js")] ("" :: Text)
+        script_ [src_ "https://cdn.jsdelivr.net/npm/@easepick/bundle@1.2.0/dist/index.umd.min.js"] ("" :: Text)
+        script_ [src_ "https://cdn.jsdelivr.net/npm/lodash@4.17.21/lodash.min.js"] ("" :: Text)
+        script_ [src_ "https://kit.fontawesome.com/e0cb5637ed.js", crossorigin_ "anonymous"] ("" :: Text)
+        script_ [src_ "https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"] ("" :: Text)
+        script_ [src_ "https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/go.min.js"] ("" :: Text)
+        script_ [src_ "https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/javascript.min.js"] ("" :: Text)
+        script_ [src_ "https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/php.min.js"] ("" :: Text)
+        script_ [src_ "https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/csharp.min.js"] ("" :: Text)
+        script_ [src_ "https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/python.min.js"] ("" :: Text)
+        script_ [src_ "https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.63.0/codemirror.min.js"] ("" :: Text)
+        script_ [src_ "https://cdnjs.cloudflare.com/ajax/libs/codemirror/6.65.7/mode/javascript/javascript.min.js"] ("" :: Text)
+        script_ [type_ "module", src_ $(hashAssetFile "/public/assets/filtercomponent.js")] ("" :: Text)
+        script_ [src_ "/public/assets/js/main.js"] ("" :: Text)
 
-      script_
-        [text|
+        script_
+          [text|
       !function(e,t,n,s,u,a){e.twq||(s=e.twq=function(){s.exe?s.exe.apply(s,arguments):s.queue.push(arguments);},s.version='1.1',s.queue=[],u=t.createElement(n),u.async=!0,u.src='https://static.ads-twitter.com/uwt.js',
       a=t.getElementsByTagName(n)[0],a.parentNode.insertBefore(u,a))}(window,document,'script');
       twq('config','om5gt');
       |]
 
-      script_
-        [raw|
+        script_
+          [raw|
+
+
+        function navigatable(me, target, container, activeClass)  {
+            const nav = document.querySelector(container);
+            const tabs = nav.querySelectorAll(".a-tab");
+            const contents = nav.querySelectorAll(".a-tab-content");
+            const targetElement = document.querySelector(target);
+            tabs.forEach(tab => {
+              tab.classList.remove(activeClass);
+            })
+            me.classList.add(activeClass);
+            contents.forEach(content => content.classList.add("hidden"));
+            targetElement.classList.remove("hidden");
+        }
+
         function setCookie(cname, cvalue, exdays = 365) {
             const d = new Date();
             d.setTime(d.getTime() + (exdays * 24 * 60 * 60 * 1000));
@@ -172,9 +188,9 @@ bodyWrapper BWConfig{sessM, currProject, pageTitle, menuItem, hasIntegrated, nav
           });
         }
       |]
-      script_
-        [type_ "text/hyperscript"]
-        [text|
+        script_
+          [type_ "text/hyperscript"]
+          [text|
           behavior LogItemMenuable
             on click
               if I match <.with-context-menu/> then
@@ -186,6 +202,13 @@ bodyWrapper BWConfig{sessM, currProject, pageTitle, menuItem, hasIntegrated, nav
               end
             end
           end
+          behavior Copy(content)
+               on click if 'clipboard' in window.navigator then
+                    call navigator.clipboard.writeText(content's innerText)
+                    send successToast(value:['Value copied to the Clipboard']) to <body/>
+                    halt
+              end
+            end
     |]
 
     body_ [class_ "h-full w-full bg-slate-50 text-slate-500 group/pg", term "data-theme" "antdtheme", term "hx-ext" "multi-swap,preload"] do

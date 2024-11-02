@@ -228,38 +228,28 @@ dashboardPage pid col reqsVecM = do
       stepsBox_ stepsCount passed failed
     div_ [class_ "relative p-1 flex gap-10 items-start"] do
       dStats pid stepsCount passed failed schedule
-    div_ [role_ "tablist", class_ "w-full rounded-3xl border"] do
+    div_ [role_ "tablist", class_ "w-full rounded-3xl border", id_ "t-tabs-container"] do
       div_ [class_ "w-full flex"] do
         button_
-          [ class_ "cursor-pointer t-tab px-5 pt-2 pb-1.5 text-sm text-gray-600 border-b t-tab-active"
+          [ class_ "cursor-pointer t-tab px-5 pt-2 pb-1.5 text-sm text-gray-600 border-b t-tab-active a-tab"
           , role_ "tab"
           , term "aria-label" "Overview"
-          , [__|
-           on click remove .t-tab-active from .t-tab
-            then add .t-tab-active to me
-            then add .hidden to #logs-t
-            then remove .hidden from #results-t
-            |]
+          , onclick_ "navigatable(this, '#results-t', '#t-tabs-container', 't-tab-active')"
           ]
           "Results"
         button_
-          [ class_ "cursor-pointer t-tab px-5 pt-2 pb-1.5 text-sm text-gray-600 border-b"
+          [ class_ "cursor-pointer t-tab px-5 pt-2 pb-1.5 text-sm text-gray-600 border-b a-tab"
           , role_ "tab"
           , term "aria-label" "Logs"
-          , [__|
-           on click remove .t-tab-active from .t-tab
-            then add .t-tab-active to me
-            then add .hidden to #results-t
-            then remove .hidden from #logs-t
-          |]
+          , onclick_ "navigatable(this, '#logs-t', '#t-tabs-container', 't-tab-active')"
           ]
           "Logs"
         div_ [class_ "w-full border-b"] pass
-      div_ [role_ "tabpanel", class_ "h-[65vh] overflow-y-auto", id_ "results-t"] do
+      div_ [role_ "tabpanel", class_ "h-[65vh] overflow-y-auto a-tab-content", id_ "results-t"] do
         let result = col.lastRunResponse >>= castToStepResult
         let Testing.CollectionSteps stepsD = col.collectionSteps
         testResultDiagram_ pid col.id stepsD result
-      div_ [class_ "hidden h-[65vh] overflow-y-auto", id_ "logs-t"] do
+      div_ [class_ "hidden h-[65vh] overflow-y-auto a-tab-content", id_ "logs-t"] do
         div_ [class_ "overflow-x-hidden"] do
           case reqsVecM of
             Just reqVec -> do

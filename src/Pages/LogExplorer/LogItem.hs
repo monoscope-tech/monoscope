@@ -94,20 +94,21 @@ expandAPIlogItem' pid req modal = do
                               then call #share_log_form.requestSubmit() |]
                   ]
                   "Get link"
-
     -- url, endpoint, latency, request size, repsonse size
     div_ [class_ "flex flex-col mt-4 justify-between w-full"] do
       div_ [class_ "text-base mb-2 flex gap-6 items-center"] do
         span_ [class_ "text-slate-500 font-medium w-16"] "Endpoint"
         div_ [class_ "flex gap-1 items-center"] do
-          span_ [class_ "text-slate-800 text-sm w-44 truncate ellipsis", term "data-tippy" req.urlPath] $ toHtml req.urlPath
-          faSprite_ "copy" "regular" "h-8 w-8 border border-slate-300 bg-slate-100 rounded-full p-2 text-slate-500"
+          span_ [class_ "text-slate-800 text-sm truncate ellipsis urlPath", term "data-tippy" req.urlPath] $ toHtml req.urlPath
+          div_ [[__| install Copy(content:.urlPath )|]] do
+            faSprite_ "copy" "regular" "h-8 w-8 border border-slate-300 bg-slate-100 rounded-full p-2 text-slate-500"
           faSprite_ "arrow-up-right" "regular" "h-8 w-8 p-2 blue-gr-btn rounded-full"
       div_ [class_ "text-base flex items-center gap-6"] do
         span_ [class_ "text-slate-500 font-medium w-16"] "URL"
         div_ [class_ "flex gap-1 items-center"] do
-          span_ [class_ "text-slate-800 text-sm w-44 truncate ellipsis", term "data-tippy" req.rawUrl] $ toHtml req.rawUrl
-          faSprite_ "copy" "regular" "h-8 w-8 border border-slate-300 bg-slate-100 rounded-full p-2 text-slate-500"
+          span_ [class_ "text-slate-800 text-sm truncate ellipsis", term "data-tippy" req.rawUrl] $ toHtml req.rawUrl
+          div_ [[__| install Copy(content:.urlPath )|]] do
+            faSprite_ "copy" "regular" "h-8 w-8 border border-slate-300 bg-slate-100 rounded-full p-2 text-slate-500"
           faSprite_ "arrow-up-right" "regular" "h-8 w-8 p-2 blue-gr-btn rounded-full"
       div_ [class_ "flex gap-2 mt-4"] do
         statBox_ Nothing (Just ("clock", "regular", "text-blue-500")) "Latency" "Latency" (show (req.durationNs `div` 1000) <> " ms") Nothing Nothing

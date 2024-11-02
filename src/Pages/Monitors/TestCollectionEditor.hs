@@ -363,37 +363,27 @@ collectionPage pid colM col_rn respJson = do
               "Save changes"
               faSprite_ "save" "regular" "w-4 h-4 ml-2 stroke-white"
 
-        div_ [class_ "fixed bg-transparent right-10 w-[25%] h-[80%] top-1/2 -translate-y-1/2"] do
+        div_ [class_ "fixed bg-transparent right-10 w-[25%] h-[80%] top-1/2 -translate-y-1/2", id_ "v-tabs-container"] do
           div_ [role_ "tablist", class_ "w-full h-full"] do
             div_ [class_ "w-full flex rounded-t-2xl border"] do
               button_
-                [ class_ "cursor-pointer t-tab px-4 py-1 text-sm text-gray-600 border-b t-tab-active"
+                [ class_ "cursor-pointer a-tab px-4 py-1 text-sm text-gray-600 border-b t-tab-active"
                 , role_ "tab"
                 , type_ "button"
-                , [__|
-                 on click remove .t-tab-active from .t-tab
-                  then add .t-tab-active to me
-                  then add .hidden to #step-results-parent
-                  then remove .hidden from #vars-t
-                  |]
+                , onclick_ "navigatable(this, '#vars-t', '#v-tabs-container', 't-tab-active')"
                 ]
                 "Variables"
               button_
-                [ class_ "cursor-pointer t-tab px-4 py-2 text-sm whitespace-nowrap text-gray-600 border-b"
+                [ class_ "cursor-pointer a-tab px-4 py-2 text-sm whitespace-nowrap text-gray-600 border-b"
                 , role_ "tab"
                 , type_ "button"
-                , [__|
-                 on click remove .t-tab-active from .t-tab
-                  then add .t-tab-active to me
-                  then add .hidden to #vars-t
-                  then remove .hidden from #step-results-parent
-                |]
+                , onclick_ "navigatable(this, '#step-results-parent', '#v-tabs-container', 't-tab-active')"
                 ]
                 "Result Log"
               div_ [class_ "w-full border-b"] pass
-            div_ [role_ "tabpanel", class_ "h-[calc(100%-30px)] max-h-[calc(100%-30px)] rounded-b-2xl border border-t-0", id_ "vars-t"] do
+            div_ [role_ "tabpanel", class_ "h-[calc(100%-30px)] max-h-[calc(100%-30px)] rounded-b-2xl border border-t-0 a-tab-content", id_ "vars-t"] do
               variablesDialog pid colM
-            div_ [role_ "tabpanel", class_ "hidden relative space-y-4 h-[calc(100%-30px)] max-h-[calc(100%-30px)] rounded-b-2xl border border-t-0 overflow-y-scroll", id_ "step-results-parent"] do
+            div_ [role_ "tabpanel", class_ "hidden relative space-y-4 h-[calc(100%-30px)] max-h-[calc(100%-30px)] a-tab-content rounded-b-2xl border border-t-0 overflow-y-scroll", id_ "step-results-parent"] do
               case col_rn of
                 Just res -> do
                   V.iforM_ res collectionStepResult_
