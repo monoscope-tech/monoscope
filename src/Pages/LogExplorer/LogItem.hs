@@ -24,7 +24,7 @@ import Pages.Traces.Spans qualified as Spans
 import PyF (fmt)
 import Relude
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
-import Utils (faSprite_, getMethodColor, getStatusColor, jsonValueToHtmlTree, toXXHash)
+import Utils (faSprite_, getDurationNSMS, getMethodColor, getStatusColor, jsonValueToHtmlTree, toXXHash)
 import Witch (from)
 
 
@@ -115,7 +115,7 @@ expandAPIlogItem' pid req modal = do
           a_ [href_ endpointURl] do
             faSprite_ "arrow-up-right" "regular" "h-8 w-8 p-2 blue-gr-btn rounded-full"
       div_ [class_ "flex gap-2 mt-4"] do
-        statBox_ Nothing (Just ("clock", "regular", "text-blue-500")) "Latency" "Latency" (show (req.durationNs `div` 1000) <> " ms") Nothing Nothing
+        statBox_ Nothing (Just ("clock", "regular", "text-blue-500")) "Latency" "Latency" (toText $ getDurationNSMS req.durationNs) Nothing Nothing
         let reqSize = BS.length $ AE.encode req.requestBody
         statBox_ Nothing (Just ("upload", "regular", "text-blue-500")) "Request size" "Total request body size in bytes" (show (reqSize - 2)) Nothing Nothing
         let respSize = BS.length $ AE.encode req.responseBody

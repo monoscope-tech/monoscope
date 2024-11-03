@@ -386,7 +386,7 @@ defaultSelectSqlQuery (Just SSpans) =
   , "kind"
   , "status"
   , "span_name"
-  , "CAST(EXTRACT(EPOCH FROM (end_time - start_time)) * 1000 AS INTEGER) as duration"
+  , "CAST(EXTRACT(EPOCH FROM (end_time - start_time)) * 1_000_000_000 AS INTEGER) as duration"
   , "resource->>'service.name' as service"
   , "span_id as latency_breakdown"
   , [fmt|LEFT(
@@ -400,7 +400,7 @@ defaultSelectSqlQuery (Just SSpans) =
 defaultSelectSqlQuery (Just SRequests) =
   [ "id::text as id"
   , timestampLogFmt "created_at"
-  , "CAST(duration_ns / 1000000 AS INTEGER) as duration"
+  , "duration_ns as duration"
   , "request_type"
   , "host"
   , "status_code"
