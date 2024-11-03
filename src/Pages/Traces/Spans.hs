@@ -21,40 +21,36 @@ import Utils
 expandedSpanItem :: Projects.ProjectId -> Telemetry.SpanRecord -> Html ()
 expandedSpanItem pid sp = do
   let reqDetails = getRequestDetails sp
-  script_
-    [type_ "text/hyperscript"]
-    [text|
-      behavior Navigatable(content)
-         on click remove .tab-active from .span-tab
-            then add .tab-active to me
-            then add .hidden to .span-tab-content
-            then remove .hidden from content
-      end
-    |]
   div_ [class_ "w-full pb-2"] $ do
-    div_ [class_ "flex flex-col gap-2 bg-gray-50 py-2"] $ do
-      div_ [class_ "flex items-center gap-4"] $ do
-        h3_ [class_ "whitespace-nowrap text-xl font-bold pr-4 border-r border-r-2"] "Span"
-        div_ [class_ "flex items-center gap-4"] $ do
-          h4_ [class_ "text-xl font-medium"] $ toHtml $ getServiceName sp
-          faSprite_ "caret-up" "solid" "w-5 h-5 rotate-90 font-bold"
-          h4_ [class_ "text-xl font-medium max-w-96 truncate"] $ toHtml sp.spanName
-      div_ [class_ "flex gap-4 items-center"] do
-        div_ [class_ "flex items-end border rounded"] do
-          span_ [class_ " text-gray-500 font-medium border-r px-2 py-1"] "Span ID"
-          span_ [class_ " px-2 py-1 text-gray-600"] $ toHtml sp.spanId
-        div_ [class_ "flex items-end border rounded"] do
-          span_ [class_ " text-gray-500 font-medium border-r px-2 py-1"] "Trace ID"
-          span_ [class_ " px-2 py-1 text-gray-600"] $ toHtml sp.traceId
-      div_ [class_ "flex gap-4 items-center justify-between text-gray-600  mt-3"] $ do
+    div_ [class_ "flex flex-col gap-1 bg-gray-50 py-2  px-4"] $ do
+      div_ [class_ "flex flex-col w-full gap-4 h-full pb-4"] $ do
+        div_ [class_ "flex justify-between items-center"] do
+          div_ [class_ "flex items-center gap-4"] $ do
+            h3_ [class_ "whitespace-nowrap text-lg font-medium text-slate-950"] "Span"
+            div_ [class_ "flex items-center border border-slate-200 rounded-lg"] do
+              span_ [class_ "text-sm text-slate-950 font-medium border-r border-r-slate-200 px-2 py-1.5"] "Span ID"
+              span_ [class_ "text-slate-600 text-sm font-medium px-2 py-1.5"] $ toHtml sp.spanId
+              faSprite_ "copy" "regular" "w-3 h-3 mr-2 text-slate-500"
+          span_ [class_ "flex items-center rounded-lg px-2 py-1 font-medium gap-2 border border-slate-300 bg-slate-100 text-slate-600"] do
+            faSprite_ "calendar" "regular" "w-5 h-5 fill-none"
+            toHtml $ formatTime defaultTimeLocale "%b. %d, %Y %I:%M:%S %p" sp.startTime
+
+      div_ [class_ "flex items-center gap-4 font-medium text-slate-950"] $ do
+        h4_ [class_ "text-xl "] $ toHtml $ getServiceName sp
+        faSprite_ "chevron-right" "regular" "w-3 h-3 font-bold text-slate"
+        h4_ [class_ "text-xl max-w-96 truncate"] $ toHtml sp.spanName
+
+      div_ [class_ "flex gap-4 items-center justify-between text-slate-600 text-sm mt-3"] $ do
         div_ [class_ "flex gap-4 items-center"] do
-          div_ [class_ "font-medium flex shrink-0 items-center rounded gap-1 border px-2 py-1.5 text-gray-600"] do
-            faSprite_ "clock" "regular" "w-3 h-3"
+          div_ [class_ "font-medium flex shrink-0 items-center font-medium bg-slate-100 rounded-lg gap-1 border border-slate-300 px-2 py-1.5"] do
+            faSprite_ "clock" "regular" "w-4 h-4"
             span_ [class_ " font-medium"] $ toHtml $ getDurationNSMS sp.spanDurationNs
           div_ [class_ "flex items-center gap-4"] do
             whenJust reqDetails $ \case
               ("HTTP", method, path, status) -> do
-                span_ [class_ " font-medium border rounded px-2 py-1.5"] "HTTP"
+                div_ [class_ "flex items-center gap-1 font-medium border border-slate-300 font-medium rounded-lg bg-slate-100 px-2 py-1.5"] do
+                  faSprite_ "web" "regular" "w-4 h-4"
+                  span_ [class_ ""] "HTTP"
                 div_ [class_ "flex border rounded overflow-hidden"] do
                   span_ [class_ " px-2 py-1.5 border-r bg-gray-200"] $ toHtml method
                   span_ [class_ " px-2 py-1.5 max-w-96 truncate"] $ toHtml path
@@ -67,29 +63,28 @@ expandedSpanItem pid sp = do
                   span_ [class_ " px-2 py-1.5 max-w-96 truncate"] $ toHtml path
                   let extraClass = getGrpcStatusColor status
                   span_ [class_ $ " px-2 py-1.5 border-l " <> extraClass] $ toHtml $ show status
-        span_ [class_ ""] $ toHtml $ formatTime defaultTimeLocale "%b %d %Y %H:%M:%S%Q" sp.timestamp
+    div_ [class_ "w-full mt-8", id_ "span-tabs-container"] do
+      div_ [class_ "flex", [__|on click halt|]] $ do
+        button_ [class_ "a-tab border-b border-b-slate-200 px-4 py-1.5 t-tab-active", onclick_ "navigatable(this, '#att-content', '#span-tabs-container', 't-tab-active')"] "Attributes"
+        button_ [class_ "a-tab border-b border-b-slate-200 px-4 py-1.5 ", onclick_ "navigatable(this, '#meta-content', '#span-tabs-container', 't-tab-active')"] "Process"
+        button_ [class_ "a-tab border-b border-b-slate-200 flex items-center gap-1 px-4 py-1.5 ", onclick_ "navigatable(this, '#logs-content', '#span-tabs-container', 't-tab-active')"] $ do
+          "Logs"
+          div_ [class_ "badge badge-ghost badge-sm"] $ show $ numberOfEvents sp.events
+        div_ [class_ "w-full border-b border-b-slate-200"] pass
 
-    div_ [class_ "tabs tabs-boxed tabs-outline items-center border tabs-sm w-max mt-8", [__|on click halt|]] $ do
-      a_ [class_ "tab span-tab tab-active", [__| install Navigatable(content: .attributes-content)|]] "Attributes"
-      a_ [class_ "tab span-tab", [__| install Navigatable(content: .process-content)|]] $ do
-        "Process"
-      a_ [class_ "tab span-tab", [__| install Navigatable(content: .logs-content)|]] $ do
-        "Logs"
-        div_ [class_ "badge badge-ghost badge-sm"] $ show $ numberOfEvents sp.events
-
-    div_ [class_ "grid mt-4"] $ do
-      div_ [class_ "grid gap-3 span-tab-content attributes-content"] $ do
-        div_ [class_ "font-semibold"] "Tags"
-        div_ [class_ "flex gap-3 flex-wrap"] $ do
-          displaySpanJson sp.attributes
-      div_ [class_ "grid gap-3 span-tab-content hidden process-content"] $ do
-        div_ [class_ "font-semibold"] "Metadata"
-        div_ [class_ "flex gap-3 flex-wrap"] $ do
-          displaySpanJson sp.resource
-      div_ [class_ "grid gap-3 span-tab-content hidden logs-content"] $ do
-        div_ [class_ "font-semibold"] "Logs"
-        div_ [class_ "flex flex-col gap-1 w-full"] do
-          displayLogsSection sp.events
+      div_ [class_ "grid mt-4 px-4"] $ do
+        div_ [class_ "grid gap-3 a-tab-content", id_ "att-content"] $ do
+          div_ [class_ "font-semibold"] "Tags"
+          div_ [class_ "flex gap-3 flex-wrap"] $ do
+            displaySpanJson sp.attributes
+        div_ [class_ "grid gap-3 hidden a-tab-content", id_ "meta-content"] $ do
+          div_ [class_ "font-semibold"] "Metadata"
+          div_ [class_ "flex gap-3 flex-wrap"] $ do
+            displaySpanJson sp.resource
+        div_ [class_ "grid gap-3 hidden a-tab-content", id_ "logs-content"] $ do
+          div_ [class_ "font-semibold"] "Logs"
+          div_ [class_ "flex flex-col gap-1 w-full"] do
+            displayLogsSection sp.events
 
 
 tagItem :: Text -> Text -> Text -> Html ()

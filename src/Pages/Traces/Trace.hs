@@ -125,7 +125,7 @@ tracePage p = do
                 renderSpanListTable serviceNames serviceColors p.spanRecords
 
       div_ [class_ "my-5 py-2 rounded-lg border"] do
-        div_ [class_ "flex flex-col gap-4 px-4", id_ $ "span-" <> traceItem.traceId] do
+        div_ [class_ "flex flex-col gap-4", id_ $ "span-" <> traceItem.traceId] do
           let tSp = fromMaybe (V.head p.spanRecords) (V.find (\s -> s.spanId == sId) p.spanRecords)
           Spans.expandedSpanItem pid tSp
   let spanJson = decodeUtf8 $ AE.encode $ p.spanRecords <&> getSpanJson
