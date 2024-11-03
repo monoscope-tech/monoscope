@@ -35,9 +35,9 @@ expandedSpanItem pid sp = do
             faSprite_ "calendar" "regular" "w-5 h-5 fill-none"
             toHtml $ formatTime defaultTimeLocale "%b. %d, %Y %I:%M:%S %p" sp.startTime
 
-      div_ [class_ "flex items-center gap-4 font-medium text-slate-950"] $ do
+      div_ [class_ "flex items-center gap-4 text-sm font-medium text-slate-950"] $ do
         h4_ [class_ "text-xl "] $ toHtml $ getServiceName sp
-        faSprite_ "chevron-right" "regular" "w-3 h-3 font-bold text-slate"
+        faSprite_ "chevron-right" "regular" "w-4 h-4 font-bold text-slate"
         h4_ [class_ "text-xl max-w-96 truncate"] $ toHtml sp.spanName
 
       div_ [class_ "flex gap-4 items-center justify-between text-slate-600 text-sm mt-3"] $ do
@@ -65,26 +65,26 @@ expandedSpanItem pid sp = do
                   span_ [class_ $ " px-2 py-1.5 border-l " <> extraClass] $ toHtml $ show status
     div_ [class_ "w-full mt-8", id_ "span-tabs-container"] do
       div_ [class_ "flex", [__|on click halt|]] $ do
-        button_ [class_ "a-tab border-b border-b-slate-200 px-4 py-1.5 t-tab-active", onclick_ "navigatable(this, '#att-content', '#span-tabs-container', 't-tab-active')"] "Attributes"
-        button_ [class_ "a-tab border-b border-b-slate-200 px-4 py-1.5 ", onclick_ "navigatable(this, '#meta-content', '#span-tabs-container', 't-tab-active')"] "Process"
-        button_ [class_ "a-tab border-b border-b-slate-200 flex items-center gap-1 px-4 py-1.5 ", onclick_ "navigatable(this, '#logs-content', '#span-tabs-container', 't-tab-active')"] $ do
+        button_ [class_ "a-tab border-b-2 border-b-slate-200 px-4 py-1.5 t-tab-active", onclick_ "navigatable(this, '#att-content', '#span-tabs-container', 't-tab-active')"] "Attributes"
+        button_ [class_ "a-tab border-b-2 border-b-slate-200 px-4 py-1.5 ", onclick_ "navigatable(this, '#meta-content', '#span-tabs-container', 't-tab-active')"] "Process"
+        button_ [class_ "a-tab border-b-2 border-b-slate-200 flex items-center gap-1 px-4 py-1.5 ", onclick_ "navigatable(this, '#logs-content', '#span-tabs-container', 't-tab-active')"] $ do
           "Logs"
           div_ [class_ "badge badge-ghost badge-sm"] $ show $ numberOfEvents sp.events
-        div_ [class_ "w-full border-b border-b-slate-200"] pass
+        div_ [class_ "w-full border-b-2 border-b-slate-200"] pass
 
-      div_ [class_ "grid mt-4 px-4"] $ do
-        div_ [class_ "grid gap-3 a-tab-content", id_ "att-content"] $ do
-          div_ [class_ "font-semibold"] "Tags"
-          div_ [class_ "flex gap-3 flex-wrap"] $ do
-            displaySpanJson sp.attributes
-        div_ [class_ "grid gap-3 hidden a-tab-content", id_ "meta-content"] $ do
-          div_ [class_ "font-semibold"] "Metadata"
-          div_ [class_ "flex gap-3 flex-wrap"] $ do
-            displaySpanJson sp.resource
-        div_ [class_ "grid gap-3 hidden a-tab-content", id_ "logs-content"] $ do
-          div_ [class_ "font-semibold"] "Logs"
-          div_ [class_ "flex flex-col gap-1 w-full"] do
-            displayLogsSection sp.events
+      div_ [class_ "grid mt-4 px-4 text-slate-600 font"] $ do
+        div_ [class_ "a-tab-content", id_ "att-content"] $ do
+          div_ [class_ "font-medium mb-1"] "Tags"
+          div_ [class_ "rounded-lg border border-slate-200 p-4"] $ do
+            jsonValueToHtmlTree sp.attributes
+        div_ [class_ "hidden a-tab-content", id_ "meta-content"] $ do
+          div_ [class_ "font-medium mb-1"] "Metadata"
+          div_ [class_ "rounded-lg border border-slate-200 p-4"] $ do
+            jsonValueToHtmlTree sp.resource
+        div_ [class_ "hidden a-tab-content", id_ "logs-content"] $ do
+          div_ [class_ "font-medium mb-1"] "Logs"
+          div_ [class_ "rounded-lg border border-slate-200 p-4"] $ do
+            jsonValueToHtmlTree sp.events
 
 
 tagItem :: Text -> Text -> Text -> Html ()
