@@ -71,16 +71,18 @@ expandAPIlogItem' pid req modal = do
                   button_
                     [ [__|on click toggle .hidden on #expire_container|]
                     , id_ "toggle_expires_btn"
-                    , class_ "btn flex gap-2 text-slate-600 font-medium items-center cursor-pointer border border-slate-300 bg-slate-100"
+                    , class_ "btn px-0 flex w-[100px] nowrap justify-center gap-2 text-slate-600 font-medium items-center cursor-pointer border border-slate-300 bg-slate-100"
                     ]
                     do
-                      "1 hour"
+                      span_ [] "1 hour"
                       faSprite_ "chevron-down" "regular" "h-3 w-3"
                   div_ [id_ "expire_container", class_ "absolute hidden bg-base-100 border shadow w-full overflow-y-auto", style_ "top:100%; max-height: 300px; z-index:9"] do
                     forM_ (["1 hour", "8 hours", "1 day"] :: [Text]) \sw -> do
                       button_
-                        [ [__|on click set #toggle_expires_btn.firstChild.innerText to event.target's @data-expire-value
-                                            then set #expire_input.value to event.target's @data-expire-value|]
+                        [ [__|on click set #toggle_expires_btn.firstElementChild.innerText to event.target's @data-expire-value
+                                            then set #expire_input.value to event.target's @data-expire-value
+                                            then add .hidden to #expire_container
+                                            |]
                         , term "data-expire-value" sw
                         , class_ "p-2 w-full text-left truncate ... hover:bg-blue-100 hover:text-black"
                         ]
