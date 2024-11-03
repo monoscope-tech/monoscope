@@ -16,10 +16,12 @@ module Utils (
   formatUTC,
   parseUTC,
   lookupVecTextByKey,
+  getStatusBorderColor,
   faIcon_,
   deleteParam,
   quoteTxt,
   textToBool,
+  getMethodBorderColor,
   getSeverityColor,
   getMethodColor,
   getStatusColor,
@@ -161,12 +163,29 @@ getMethodColor "GET" = " cbadge-sm badge-blue"
 getMethodColor _ = " cbadge-sm badge-neutral"
 
 
+getMethodBorderColor :: Text -> Text
+getMethodBorderColor "POST" = "border-pink-500"
+getMethodBorderColor "PUT" = "border-lime-500"
+getMethodBorderColor "DELETE" = "border-error-500"
+getMethodBorderColor "PATCH" = "border-cyan-500"
+getMethodBorderColor "GET" = "border-blue-500"
+getMethodBorderColor _ = "border-slate-200"
+
+
 getStatusColor :: Int -> Text
 getStatusColor status
   | status < 200 = "cbadge-sm badge-neutral"
   | status >= 200 && status < 300 = "cbadge-sm badge-2xx"
   | status >= 300 && status < 400 = "cbadge-sm badge-3xx"
   | otherwise = "cbadge-sm badge-4xx"
+
+
+getStatusBorderColor :: Int -> Text
+getStatusBorderColor status
+  | status < 200 = "border-slate-200"
+  | status >= 200 && status < 300 = "border-green-500"
+  | status >= 300 && status < 400 = "border-yellow-500"
+  | otherwise = "border-red-500"
 
 
 getGrpcStatusColor :: Int -> Text

@@ -24,7 +24,7 @@ import Pages.Traces.Spans qualified as Spans
 import PyF (fmt)
 import Relude
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
-import Utils (faSprite_, getDurationNSMS, getMethodColor, getStatusColor, jsonValueToHtmlTree, toXXHash)
+import Utils (faSprite_, getDurationNSMS, getMethodBorderColor, getMethodColor, getStatusBorderColor, getStatusColor, jsonValueToHtmlTree, toXXHash)
 import Witch (from)
 
 
@@ -50,11 +50,14 @@ expandAPIlogItem' pid req modal = do
   div_ [class_ "flex flex-col w-full gap-4 pb-[100px]"] do
     div_ [class_ "w-full flex flex-col gap-4"] do
       let methodColor = getMethodColor req.method
-      let statusColor = getStatusColor req.statusCode
+          statusColor = getStatusColor req.statusCode
+          borderColor = getMethodBorderColor req.method
+          stBorder = getStatusBorderColor req.statusCode
+
       div_ [class_ "flex  justify-between items-center gap-4"] do
         div_ [class_ "flex items-center gap-4"] do
-          span_ [class_ $ "flex items-center rounded-lg px-2 py-2 font-medium gap-2 " <> methodColor] $ toHtml req.method
-          span_ [class_ $ "flex items-center rounded-lg px-2 py-2 font-medium gap-2 " <> statusColor] $ toHtml $ show req.statusCode
+          span_ [class_ $ "flex items-center rounded-lg px-2 py-2 border font-medium gap-2 " <> borderColor <> " " <> methodColor] $ toHtml req.method
+          span_ [class_ $ "flex items-center rounded-lg px-2 py-2 border font-medium gap-2 " <> stBorder <> " " <> statusColor] $ toHtml $ show req.statusCode
           span_ [class_ "flex items-center rounded-lg px-2 py-1 text-sm font-medium gap-2 border border-slate-300 bg-slate-100 text-slate-600"] do
             faSprite_ "calendar" "regular" "w-4 h-4 fill-none"
             toHtml $ formatTime defaultTimeLocale "%b. %d, %Y %I:%M:%S %p" req.createdAt

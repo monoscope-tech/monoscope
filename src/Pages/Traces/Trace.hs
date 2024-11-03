@@ -92,7 +92,7 @@ tracePage p = do
                   , id_ "flame-graph-container"
                   ]
                   do
-                    div_ [class_ "w-full sticky top-0 border-b border-b-gray-300 h-6 text-xs relative", id_ $ "time-container"] pass
+                    div_ [class_ "w-full sticky top-0 border-b border-b-gray-300 h-6 text-xs relative", id_ "time-container"] pass
                     div_ [class_ "w-full overflow-x-hidden h-56 c-scroll relative", id_ $ "a" <> traceItem.traceId] pass
                     div_ [class_ "h-full top-0  absolute z-50 hidden", id_ "time-bar-indicator"] do
                       div_ [class_ "relative h-full"] do

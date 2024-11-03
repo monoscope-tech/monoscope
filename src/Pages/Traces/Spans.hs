@@ -51,11 +51,18 @@ expandedSpanItem pid sp = do
                 div_ [class_ "flex items-center gap-1 font-medium border border-slate-300 font-medium rounded-lg bg-slate-100 px-2 py-1.5"] do
                   faSprite_ "web" "regular" "w-4 h-4"
                   span_ [class_ ""] "HTTP"
-                div_ [class_ "flex border rounded overflow-hidden"] do
-                  span_ [class_ " px-2 py-1.5 border-r bg-gray-200"] $ toHtml method
-                  span_ [class_ " px-2 py-1.5 max-w-96 truncate"] $ toHtml path
-                  let extraClass = getStatusColor status
-                  span_ [class_ $ " px-2 py-1.5 " <> extraClass] $ toHtml $ T.take 3 $ show status
+                let methodClass = getMethodColor method
+                    borderColor = getMethodBorderColor method
+                    extraClass = getStatusColor status
+                    stBorder = getStatusBorderColor status
+                span_ [class_ $ "p-2 rounded-lg border " <> borderColor <> " " <> methodClass] $ toHtml method
+                span_ [class_ $ "p-2 rounded-lg border " <> stBorder <> " " <> extraClass] $ toHtml $ T.take 3 $ show status
+                div_ [class_ "flex items-center"] do
+                  span_ [class_ " px-2 py-1.5 max-w-96 truncate mr-2 urlPath"] $ toHtml path
+                  div_ [[__| install Copy(content:.urlPath )|]] do
+                    faSprite_ "copy" "regular" "h-8 w-8 border border-slate-300 bg-slate-100 rounded-full p-2 text-slate-500"
+                  a_ [href_ "", class_ "ml-1"] do
+                    faSprite_ "arrow-up-right" "regular" "h-8 w-8 p-2 blue-gr-btn rounded-full"
               (scheme, method, path, status) -> do
                 span_ [class_ " font-medium border rounded px-2 py-1.5"] $ toHtml scheme
                 div_ [class_ "flex border rounded overflow-hidden"] do
