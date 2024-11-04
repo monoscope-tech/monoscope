@@ -228,39 +228,40 @@ renderSpanListTable services colors records =
 
 spanTable :: V.Vector Telemetry.SpanRecord -> Html ()
 spanTable records =
-  table_ [class_ "table table-sm w-full"] do
-    thead_ $
-      tr_ [class_ "p-2 border-b font-normal"] $ do
-        td_ "Time"
-        td_ "Span Name"
-        td_ "Event Type"
-        td_ "Span Kind"
-        td_ "Status"
-        td_ "Exec. Time"
-    tbody_ do
-      forM_ records $ \spanRecord -> do
-        let pidText = UUID.toText spanRecord.projectId
-            spanid = maybe "" UUID.toText spanRecord.uSpandId
-            tme = fromString (formatShow iso8601Format spanRecord.timestamp)
-            (reqType, _, _, status_code) = fromMaybe ("", "", "", 0) $ getRequestDetails spanRecord
-        tr_
-          [ hxGet_ $ "/p/" <> pidText <> "/log_explorer/" <> spanid <> "/" <> tme <> "/detailed?source=spans"
-          , hxTarget_ $ "#span-" <> spanRecord.traceId
-          , hxSwap_ "innerHTML"
-          , id_ $ "sp-list-" <> spanRecord.spanId
-          ]
-          $ do
-            td_ $ toHtml $ formatTime defaultTimeLocale "%b %d %Y %H:%M:%S%Q" spanRecord.timestamp
-            td_ $ toHtml spanRecord.spanName
-            td_ $ toHtml reqType
-            td_ $ toHtml $ T.drop 2 $ maybe "" show spanRecord.kind
-            let xcls = getStatusColor status_code
-                gcls = getGrpcStatusColor status_code
-                fcls = if reqType == "HTTP" then xcls else gcls
-            td_ do
-              span_ [class_ fcls] $ toHtml $ show status_code
-            td_ do
-              span_ [class_ "cbadge-sm badge-neutral"] $ toHtml $ getDurationNSMS spanRecord.spanDurationNs
+  div_ [class_ "rounded-2xl m-2 border border-slate-200"] do
+    table_ [class_ "table table-sm w-full"] do
+      thead_ [class_ "border-b border-slate-200"] $
+        tr_ [class_ "p-2 border-b font-normal"] $ do
+          td_ "Time"
+          td_ "Span Name"
+          td_ "Event Type"
+          td_ "Span Kind"
+          td_ "Status"
+          td_ "Exec. Time"
+      tbody_ do
+        forM_ records $ \spanRecord -> do
+          let pidText = UUID.toText spanRecord.projectId
+              spanid = maybe "" UUID.toText spanRecord.uSpandId
+              tme = fromString (formatShow iso8601Format spanRecord.timestamp)
+              (reqType, _, _, status_code) = fromMaybe ("", "", "", 0) $ getRequestDetails spanRecord
+          tr_
+            [ hxGet_ $ "/p/" <> pidText <> "/log_explorer/" <> spanid <> "/" <> tme <> "/detailed?source=spans"
+            , hxTarget_ $ "#span-" <> spanRecord.traceId
+            , hxSwap_ "innerHTML"
+            , id_ $ "sp-list-" <> spanRecord.spanId
+            ]
+            $ do
+              td_ $ toHtml $ formatTime defaultTimeLocale "%b %d %Y %H:%M:%S%Q" spanRecord.timestamp
+              td_ $ toHtml spanRecord.spanName
+              td_ $ toHtml reqType
+              td_ $ toHtml $ T.drop 2 $ maybe "" show spanRecord.kind
+              let xcls = getStatusColor status_code
+                  gcls = getGrpcStatusColor status_code
+                  fcls = if reqType == "HTTP" then xcls else gcls
+              td_ do
+                span_ [class_ fcls] $ toHtml $ show status_code
+              td_ do
+                span_ [class_ "cbadge-sm badge-neutral"] $ toHtml $ getDurationNSMS spanRecord.spanDurationNs
 
 
 getServiceData :: Telemetry.SpanRecord -> ServiceData
