@@ -91,8 +91,8 @@ apiLogH pid queryM cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM 
   let tableAsVecM = hush tableAsVecE
 
   freeTierExceeded <-
-    dbtToEff $
-      if project.paymentPlan == "Free"
+    dbtToEff
+      $ if project.paymentPlan == "Free"
         then do
           totalRequest <- RequestDumps.getLastSevenDaysTotalRequest pid
           return $ totalRequest > 5000
@@ -235,8 +235,8 @@ logQueryBox_ pid currentRange source targetSpan = do
           label_ [class_ "flex items-center cursor-pointer space-x-2 p-1"] do
             input_ [type_ "checkbox", class_ "checkbox checkbox-sm rounded toggle-chart"]
             span_ "charts"
-        div_ [class_ "form-control w-max"] $
-          label_ [class_ "label flex items-center cursor-pointer w-max space-x-2"] do
+        div_ [class_ "form-control w-max"]
+          $ label_ [class_ "label flex items-center cursor-pointer w-max space-x-2"] do
             input_ [type_ "checkbox", class_ "checkbox checkbox-sm rounded", id_ "toggleQueryEditor", onclick_ "toggleQueryBuilder()"]
             span_ "query editor"
 
@@ -279,9 +279,9 @@ apiLogsPage page = do
       ]
       do
         div_ [class_ "relative ml-auto w-full", style_ ""] do
-          div_ [class_ "flex justify-end  w-full p-4 "] $
-            button_ [[__|on click add .hidden to #expand-log-modal|]] $
-              faSprite_ "xmark" "regular" "h-8"
+          div_ [class_ "flex justify-end  w-full p-4 "]
+            $ button_ [[__|on click add .hidden to #expand-log-modal|]]
+            $ faSprite_ "xmark" "regular" "h-8"
           form_
             [ hxPost_ $ "/p/" <> page.pid.toText <> "/share/"
             , hxSwap_ "innerHTML"
@@ -403,8 +403,8 @@ apiLogsPage page = do
 
 resultTableAndMeta_ :: ApiLogsPageData -> Html ()
 resultTableAndMeta_ page =
-  div_ [class_ "relative overflow-y-scroll overflow-x-hidden h-full w-full"] $
-    resultTable_ page True
+  div_ [class_ "relative overflow-y-scroll overflow-x-hidden h-full w-full"]
+    $ resultTable_ page True
 
 
 resultTable_ :: ApiLogsPageData -> Bool -> Html ()
@@ -471,23 +471,23 @@ logItemRows_ pid requests curatedCols colIdxMap nextLogsURL source chSpns = do
   forM_ requests \reqVec -> do
     let (logItemPath, _reqId) = fromMaybe ("", "") $ requestDumpLogItemUrlPath pid reqVec colIdxMap
     let (_, errCount, errClass) = errorClass True reqVec colIdxMap
-    tr_ [class_ "cursor-pointer overflow-hidden", [__|on click toggle .hidden on next <tr/> then toggle .expanded-log on me|]] $
-      forM_ curatedCols \c -> td_ [class_ "px-2"] $ logItemCol_ source pid reqVec colIdxMap c chSpns
+    tr_ [class_ "cursor-pointer overflow-hidden", [__|on click toggle .hidden on next <tr/> then toggle .expanded-log on me|]]
+      $ forM_ curatedCols \c -> td_ [class_ "px-2"] $ logItemCol_ source pid reqVec colIdxMap c chSpns
     tr_ [class_ "hidden"] do
       -- used for when a row is expanded.
       td_ [class_ "pl-4"] $ a_ [class_ $ "inline-block h-full " <> errClass, term "data-tippy-content" $ show errCount <> " errors attached to this request"] ""
       td_ [colspan_ $ show $ length curatedCols - 1] $ div_ [hxGet_ $ logItemPath <> "?source=" <> source, hxTrigger_ "intersect once", hxSwap_ "outerHTML"] $ span_ [class_ "loading loading-dots loading-md"] ""
-  when (Vector.length requests > 199) $
-    tr_ $
-      td_ [colspan_ $ show $ length curatedCols] $
-        a_
-          [ class_ "cursor-pointer inline-flex justify-center py-1 px-56 ml-36 blue-800 bg-blue-100 hover:bg-blue-200 gap-3 items-center"
-          , hxTrigger_ "click, intersect once"
-          , hxSwap_ "outerHTML"
-          , hxGet_ nextLogsURL
-          , hxTarget_ "closest tr"
-          ]
-          (span_ [class_ "inline-block"] "LOAD MORE " >> span_ [class_ "loading loading-dots loading-sm inline-block pl-3"] "")
+  when (Vector.length requests > 199)
+    $ tr_
+    $ td_ [colspan_ $ show $ length curatedCols]
+    $ a_
+      [ class_ "cursor-pointer inline-flex justify-center py-1 px-56 ml-36 blue-800 bg-blue-100 hover:bg-blue-200 gap-3 items-center"
+      , hxTrigger_ "click, intersect once"
+      , hxSwap_ "outerHTML"
+      , hxGet_ nextLogsURL
+      , hxTarget_ "closest tr"
+      ]
+      (span_ [class_ "inline-block"] "LOAD MORE " >> span_ [class_ "loading loading-dots loading-sm inline-block pl-3"] "")
 
 
 errorClass :: Bool -> V.Vector Value -> HM.HashMap Text Int -> (Int, Int, Text)
@@ -542,8 +542,8 @@ logTableHeadingWrapper_ pid title child = td_
           span_ [class_ "ml-1 p-0.5 border border-slate-200 rounded inline-flex"] $ faSprite_ "chevron-down" "regular" "w-3 h-3"
         ul_ [tabindex_ "0", class_ "dropdown-content z-[1] menu p-2 shadow bg-slate-50 rounded-box min-w-[15rem]"] do
           li_ [class_ "underline underline-offset-2"] $ toHtml title
-          li_ $
-            a_
+          li_
+            $ a_
               [ hxGet_ $ "/p/" <> pid.toText <> "/log_explorer"
               , hxPushUrl_ "true"
               , hxVals_ $ "js:{query:params().query,cols:removeNamedColumnToSummary('" <> title <> "'),layout:'resultTable'}"

@@ -1,11 +1,11 @@
 module Pkg.Parser.Types (Parser, Values (..), Subject (..), FieldKey (..), Expr (..), AggFunction (..), ByClause (..), Rollup (..), Section (..), Sources (..), symbol, lexeme, sc)
 where
 
+import Data.Aeson qualified as AE
 import Relude
 import Text.Megaparsec (Parsec)
 import Text.Megaparsec.Char (space1)
 import Text.Megaparsec.Char.Lexer qualified as L
-import qualified Data.Aeson as AE
 
 
 -- Example queries
