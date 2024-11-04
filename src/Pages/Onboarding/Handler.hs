@@ -10,6 +10,7 @@ module Pages.Onboarding.Handler (
   onboardingPricingGetH,
   onboardingCheckInboxGetH,
   onboardingFrameworkGetH,
+  onboardingProfilePostH,
   onboardingNotificationSentGetH,
 ) where
 
@@ -190,7 +191,7 @@ onboardingNotificationSentGetH = do
 --     Invalid errs ->
 --       addRespHeaders $ SignupR $ PageCtx def (sess.persistentSession, appCtx.config, form, Invalid errs)
 
--- -- | Login Handler
+-- | Login Handler
 -- onboardingLoginPostH :: LoginForm -> ATAuthCtx (RespHeaders OnboardingResponse)
 -- onboardingLoginPostH form = do
 --   sess <- Sessions.getSession
@@ -207,22 +208,26 @@ onboardingNotificationSentGetH = do
 --       addErrorToast "Invalid credentials" Nothing
 --       addRespHeaders $ LoginR $ PageCtx def (sess.persistentSession, appCtx.config, form, Invalid [FormError "credentials" "Invalid email or password"])
 
--- -- | Profile Handler
--- onboardingProfilePostH :: ProfileForm -> ATAuthCtx (RespHeaders OnboardingResponse)
--- onboardingProfilePostH form = do
---   sess <- Sessions.getSession
---   appCtx <- ask @AuthContext
---   case validateProfileForm form of
---     Valid validForm -> do
---       -- Update onboarding state
---       dbtToEff $ updateOnboardingProfile sess.user.id validForm
---       addSuccessToast "Profile updated" Nothing
---       redirectCS "/onboarding/hosting"
---       addRespHeaders $ NoContent ""
---     Invalid errs ->
---       addRespHeaders $ ProfileR $ PageCtx def (sess.persistentSession, appCtx.config, form, Invalid errs)
+-- | Profile Handler
+onboardingProfilePostH :: ProfileForm -> ATAuthCtx (RespHeaders OnboardingResponse)
+onboardingProfilePostH form = do
+  traceShowM form
+  sess <- Sessions.getSession
+  traceShowM sess.user.id
+  appCtx <- ask @AuthContext
+  traceShowM appCtx.config
+  case validateProfileForm form of
+    Valid validForm -> do
+      -- Update onboarding state
+      dbtToEff $ updateOnboardingProfile sess.user.id validForm
+      addSuccessToast "Profile updated" Nothing
+      redirectCS "/onboarding/hosting"
+      addRespHeaders $ NoContent ""
+    Invalid errs ->
+      addRespHeaders $ ProfileR $ PageCtx def (sess.persistentSession, appCtx.config, form, Invalid errs)
 
--- -- | Hosting Location Handler
+
+-- | Hosting Location Handler
 -- onboardingHostingPostH :: HostingLocation -> ATAuthCtx (RespHeaders OnboardingResponse)
 -- onboardingHostingPostH location = do
 --   sess <- Sessions.getSession
@@ -231,7 +236,7 @@ onboardingNotificationSentGetH = do
 --   redirectCS "/onboarding/usage"
 --   addRespHeaders $ NoContent ""
 
--- -- | Usage Preferences Handler
+-- | Usage Preferences Handler
 -- onboardingUsagePostH :: UsagePreferences -> ATAuthCtx (RespHeaders OnboardingResponse)
 -- onboardingUsagePostH prefs = do
 --   sess <- Sessions.getSession
@@ -240,7 +245,7 @@ onboardingNotificationSentGetH = do
 --   redirectCS "/onboarding/url-monitor"
 --   addRespHeaders $ NoContent ""
 
--- -- | URL Monitor Handler
+-- | URL Monitor Handler
 -- onboardingUrlMonitorPostH :: URLMonitorConfig -> ATAuthCtx (RespHeaders OnboardingResponse)
 -- onboardingUrlMonitorPostH config = do
 --   sess <- Sessions.getSession
@@ -249,7 +254,7 @@ onboardingNotificationSentGetH = do
 --   redirectCS "/onboarding/notifications"
 --   addRespHeaders $ NoContent ""
 
--- -- | Notification Settings Handler
+-- | Notification Settings Handler
 -- onboardingNotificationsPostH :: NotificationSettings -> ATAuthCtx (RespHeaders OnboardingResponse)
 -- onboardingNotificationsPostH settings = do
 --   sess <- Sessions.getSession
@@ -258,38 +263,36 @@ onboardingNotificationSentGetH = do
 --   -- Process notification channels (Slack, Discord)
 --   forM_ settings.notificationChannels \case {}
 
---   dbtToEff $ updateOnboardingNotifications sess.user.id settings
---   addSuccessToast "Notification settings saved" Nothing
---   redirectCS "/onboarding/team"
---   addRespHeaders $ NoContent ""
+-- dbtToEff $ updateOnboardingNotifications sess.user.id settings
+-- addSuccessToast "Notification settings saved" Nothing
+-- redirectCS "/onboarding/team"
+-- addRespHeaders $ NoContent ""
 
--- -- | Team Invitation Handler
--- onboardingTeamPostH :: TeamInvitation -> ATAuthCtx (RespHeaders OnboardingResponse)
+-- | Team Invitation Handler
+-- onboardingTeamPostH :: TeamInvitationList -> ATAuthCtx (RespHeaders OnboardingResponse)
 -- onboardingTeamPostH invitation = do
 --   sess <- Sessions.getSession
 --   appCtx <- ask @AuthContext
-
 --   -- Process team invitations
 --   forM_ invitation.teamMembers \TeamMember{memberEmail, memberRole} -> do
 --     userIdM <- dbtToEff $ Users.userIdByEmail memberEmail
 --     userId <- case userIdM of
---       Just id -> pure id
+--       Just uid -> pure  $ Just uid
 --       Nothing -> dbtToEff $ Users.createEmptyUser memberEmail
-
 --     -- Create background job for sending invitation
 --     liftIO $ withResource appCtx.pool \conn ->
---       createJob conn "background_jobs"
---         $ BackgroundJobs.InviteUserToProject
+--       createJob conn "background_jobs" $
+--         BackgroundJobs.InviteUserToProject
 --           sess.user.id
 --           (Projects.ProjectId "temp") -- You'll need the actual project ID
 --           memberEmail
 --           "New Project" -- You'll need the actual project title
---   dbtToEff $ updateOnboardingTeam sess.user.id invitation
+--   _ <- dbtToEff $ updateOnboardingTeam sess.user.id invitation
 --   addSuccessToast "Team invitations sent" Nothing
 --   redirectCS "/onboarding/pricing"
 --   addRespHeaders $ NoContent ""
 
--- -- | Pricing Plan Handler
+-- | Pricing Plan Handler
 -- onboardingPricingPostH :: PricingPlan -> ATAuthCtx (RespHeaders OnboardingResponse)
 -- onboardingPricingPostH plan = do
 --   sess <- Sessions.getSession
@@ -306,22 +309,24 @@ onboardingNotificationSentGetH = do
 --     Just state -> do
 --       pass
 
--- -- | Database operations
+-- | Database operations
 -- saveOnboardingState :: Users.UserId -> OnboardingState -> DBT IO ()
 -- saveOnboardingState userId state = pass -- TODO: Implement
 
 -- getOnboardingState :: Users.UserId -> DBT IO (Maybe OnboardingState)
 -- getOnboardingState userId = pass -- TODO: Implement
 
--- updateOnboardingProfile :: Users.UserId -> ProfileForm -> DBT IO ()
--- updateOnboardingProfile userId form = pass -- TODO: Implement
+updateOnboardingProfile :: Users.UserId -> ProfileForm -> DBT IO ()
+updateOnboardingProfile userId form = pass -- TODO: Implement
 
--- -- | Helper functions
--- validateSignupForm :: SignupForm -> FormValidationResult SignupForm
--- validateSignupForm form =
---   case (validateEmail form.signupEmail, validatePassword form.signupPassword) of
---     (Nothing, Nothing) -> Valid form
---     (emailErr, passErr) -> Invalid $ catMaybes [emailErr, passErr]
 
--- validateProfileForm :: ProfileForm -> FormValidationResult ProfileForm
--- validateProfileForm = undefined -- TODO: Implement
+-- | Helper functions
+validateSignupForm :: SignupForm -> FormValidationResult SignupForm
+validateSignupForm form =
+  case (validateEmail form.signupEmail, validatePassword form.signupPassword) of
+    (Nothing, Nothing) -> Valid form
+    (emailErr, passErr) -> Invalid $ catMaybes [emailErr, passErr]
+
+
+validateProfileForm :: ProfileForm -> FormValidationResult ProfileForm
+validateProfileForm = undefined -- TODO: Implement

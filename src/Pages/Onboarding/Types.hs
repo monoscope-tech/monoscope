@@ -6,7 +6,9 @@ import Data.Time (UTCTime)
 import Data.Vector (Vector)
 
 import GHC.Base
+import GHC.Generics (Generic)
 import GHC.Show
+import Web.FormUrlEncoded (FromForm)
 
 
 -- | Signup form data
@@ -31,19 +33,13 @@ data ProfileForm = ProfileForm
   , profileLastName :: Text
   , profileCompanyName :: Text
   , profileCompanySize :: Text
-  , profileReferralSource :: ReferralSource
+  , profileReferralSource :: Text
   }
-  deriving (Show, Eq)
+  deriving stock (Show, Generic)
+  deriving anyclass (FromForm)
 
 
 -- | How the user heard about the service
-data ReferralSource
-  = Google
-  | SocialMedia
-  | FriendColleague
-  | Other Text
-  deriving (Show, Eq)
-
 
 -- | Data hosating location selection
 data HostingLocation
@@ -218,7 +214,7 @@ data OnboardingState = OnboardingState
   , onboardingCompleted :: Bool
   , onboardingLastUpdated :: UTCTime
   }
-  deriving (Show, Eq)
+  deriving (Show)
 
 
 -- Utility functions for form validation
@@ -268,12 +264,8 @@ instance Default ProfileForm where
       , profileLastName = ""
       , profileCompanyName = ""
       , profileCompanySize = ""
-      , profileReferralSource = Google
+      , profileReferralSource = "other"
       }
-
-
-instance Default ReferralSource where
-  def = Google
 
 
 instance Default HostingLocation where
