@@ -225,7 +225,7 @@ data ApiItemDetailed
 
 instance ToHtml ApiItemDetailed where
   toHtml (LogItemExpanded pid log_item is_modal) = toHtml $ expandAPIlogItem' pid log_item is_modal
-  toHtml (SpanItemExpanded pid span_item) = toHtml $ Spans.expandedSpanItem pid span_item
+  toHtml (SpanItemExpanded pid span_item) = toHtml $ Spans.expandedSpanItem pid span_item Nothing Nothing
   toHtml (ItemDetailedNotFound message) = div_ [] $ toHtml message
   toHtmlRaw = toHtml
 

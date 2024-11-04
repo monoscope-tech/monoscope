@@ -1,6 +1,7 @@
-module Pages.Components (statBox, drawerWithURLContent_, statBox_, emptyState_) where
+module Pages.Components (statBox, drawerWithURLContent_, statBox_, emptyState_, dateTime) where
 
 import Data.Text qualified as T
+import Data.Time (UTCTime, defaultTimeLocale, formatTime)
 import Fmt (commaizeF, fmt, (+|))
 import Lucid
 import Lucid.Aria qualified as Aria
@@ -84,3 +85,10 @@ drawerWithURLContent_ drawerId urlM trigger = div_ [class_ "drawer drawer-end in
             <> maybe [] (\url -> [hxGet_ url, hxTrigger_ "intersect once"]) urlM
         )
         $ span_ [class_ "loading loading-dots loading-md"] ""
+
+
+dateTime :: UTCTime -> Html ()
+dateTime t = do
+  span_ [class_ "flex items-center rounded-lg px-2 py-1.5 font-medium gap-2 border border-slate-300 bg-slate-100 text-slate-600"] do
+    faSprite_ "calendar" "regular" "w-5 h-5 fill-none"
+    toHtml $ formatTime defaultTimeLocale "%b. %d, %Y %I:%M:%S %p" t

@@ -57,7 +57,7 @@ import Models.Users.Users (User (id))
 import NeatInterpolation (text)
 import OddJobs.Job (createJob)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
-import Pages.Components (statBox, statBox_)
+import Pages.Components (statBox, statBox_, dateTime)
 import Pages.Components qualified as Components
 import Pages.Endpoints.EndpointComponents qualified as EndpointComponents
 import Pkg.Components qualified as Components
@@ -484,9 +484,7 @@ detailsHeader title method statusCode issue currTime filterV content anBtn = do
       div_ [class_ "flex items-center gap-4"] do
         span_ [class_ "flex items-center rounded-lg px-2 py-1 font-medium gap-2 border border-blue-300 bg-blue-100 text-blue-500"] $ toHtml method
         span_ [class_ "flex items-center rounded-lg px-2 py-1 font-medium gap-2 border border-green-300 bg-green-100 text-green-500"] $ toHtml $ show statusCode
-        span_ [class_ "flex items-center rounded-lg px-2 py-1 font-medium gap-2 border border-slate-300 bg-slate-100 text-slate-600"] do
-          faSprite_ "calendar" "regular" "w-4 h-4 fill-none"
-          toHtml $ formatTime defaultTimeLocale "%b. %d, %Y %I:%M:%S %p" issue.createdAt
+        dateTime $ zonedTimeToUTC issue.createdAt
       anomalyActionButtons issue.projectId issue.id (isJust issue.acknowlegedAt) (isJust issue.archivedAt) ""
     span_ [class_ "font-medium text-2xl text-slate-600 mt-6"] $ toHtml title
     div_ [class_ "flex justify-between items-center gap-4 mt-8"] do

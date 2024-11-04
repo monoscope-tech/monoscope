@@ -32,7 +32,9 @@ getRequestDetails spanRecord = case spanRecord.attributes of
     Just (AE.String method) -> Just ("HTTP", method, fromMaybe "/" $ getText "http.url" r, fromMaybe 0 $ getInt "http.status_code" r)
     _ -> case KEM.lookup "rpc.system" r of
       Just (AE.String "grpc") -> Just ("GRPC", fromMaybe "" $ getText "rpc.service" r, fromMaybe "" $ getText "rpc.method" r, fromMaybe 0 $ getInt "rpc.grpc.status_code" r)
-      _ -> Nothing
+      _ -> case KEM.lookup "http.request.method" r of
+        Just (AE.String method) -> Just ("HTTP", method, fromMaybe "/" $ getText "http.request.url" r, fromMaybe 0 $ getInt "http.response.status_code" r)
+        _ -> Nothing
   _ -> Nothing
   where
     getText :: Text -> AE.Object -> Maybe Text

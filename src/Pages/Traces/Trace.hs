@@ -11,11 +11,12 @@ import Data.Time.Format.ISO8601 (formatShow, iso8601Format)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Lucid
-import Lucid.Htmx (hxGet_, hxSwap_, hxTarget_)
+import Lucid.Htmx (hxGet_, hxSwap_, hxTarget_, hxTrigger_)
 import Lucid.Hyperscript (__)
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Telemetry qualified as Telemetry
 import NeatInterpolation (text)
+import Pages.Components (dateTime)
 import Pages.Traces.Spans qualified as Spans
 import Pages.Traces.Utils
 import Relude
@@ -23,16 +24,32 @@ import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
 import Utils (faSprite_, getDurationNSMS, getGrpcStatusColor, getServiceColors, getStatusColor, utcTimeToNanoseconds)
 
 
-traceH :: Projects.ProjectId -> Text -> Maybe Text -> ATAuthCtx (RespHeaders TraceDetailsGet)
-traceH pid trId spanIdM = do
-  traceItemM <- Telemetry.getTraceDetails pid trId
-  case traceItemM of
-    Just traceItem -> do
+traceH :: Projects.ProjectId -> Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders TraceDetailsGet)
+traceH pid trId spanIdM nav = do
+  if isJust nav
+    then do
       spanRecords <- Telemetry.getSpandRecordsByTraceId pid trId
-      let span_id = fromMaybe "" $ if isJust spanIdM then spanIdM else Just ""
-      let pageProps = PageProps pid traceItem span_id spanRecords
-      addRespHeaders $ TraceDetails pageProps
-    Nothing -> addRespHeaders $ TraceDetailsNotFound "Trace not found"
+      let sid = fromMaybe "" spanIdM
+          targetSpan = fromMaybe (V.head spanRecords) (V.find (\x -> x.spanId == sid) spanRecords)
+          targetIndex = fromMaybe 0 (V.findIndex (\x -> x.spanId == sid) spanRecords)
+          prevSpan =
+            if targetIndex > 0
+              then Just (spanRecords V.! (targetIndex - 1))
+              else Nothing
+          nextSpan =
+            if targetIndex < V.length spanRecords - 1
+              then Just (spanRecords V.! (targetIndex + 1))
+              else Nothing
+      addRespHeaders $ SpanDetails pid targetSpan (prevSpan >>= \s -> Just s.spanId) (nextSpan >>= \s -> Just s.spanId)
+    else do
+      traceItemM <- Telemetry.getTraceDetails pid trId
+      case traceItemM of
+        Just traceItem -> do
+          spanRecords <- Telemetry.getSpandRecordsByTraceId pid trId
+          let span_id = fromMaybe "" $ if isJust spanIdM then spanIdM else Just ""
+          let pageProps = PageProps pid traceItem span_id spanRecords
+          addRespHeaders $ TraceDetails pageProps
+        Nothing -> addRespHeaders $ TraceDetailsNotFound "Trace not found"
 
 
 data PageProps = PageProps
@@ -45,6 +62,7 @@ data PageProps = PageProps
 
 data TraceDetailsGet
   = TraceDetails PageProps
+  | SpanDetails Projects.ProjectId Telemetry.SpanRecord (Maybe Text) (Maybe Text)
   | TraceDetailsNotFound Text
 
 
@@ -53,6 +71,7 @@ data ServiceData = ServiceData {name :: Text, duration :: Integer}
 
 instance ToHtml TraceDetailsGet where
   toHtml (TraceDetails p) = toHtml $ tracePage p
+  toHtml (SpanDetails pid s left right) = toHtml $ Spans.expandedSpanItem pid s left right
   toHtml (TraceDetailsNotFound msg) = toHtml msg
   toHtmlRaw = toHtml
 
@@ -62,10 +81,11 @@ tracePage p = do
   let pid = p.pid
       traceItem = p.traceItem
       sId = p.span_id
+      tSp = fromMaybe (V.head p.spanRecords) (V.find (\s -> s.spanId == sId) p.spanRecords)
       serviceData = V.toList $ getServiceData <$> p.spanRecords
       serviceNames = V.fromList $ ordNub $ (.name) <$> serviceData
       serviceColors = getServiceColors serviceNames
-  div_ [class_ "w-full h-full pt-2"] $ do
+  div_ [class_ "w-full h-full pt-2", id_ "trace_span_container"] $ do
     div_ [class_ "flex flex-col w-full gap-4 h-full pb-4"] $ do
       div_ [class_ "flex justify-between items-center"] do
         div_ [class_ "flex items-center gap-4"] $ do
@@ -75,59 +95,76 @@ tracePage p = do
             span_ [class_ "text-slate-600 text-sm font-medium px-2 py-1.5"] $ toHtml traceItem.traceId
             faSprite_ "copy" "regular" "w-3 h-3 mr-2 text-slate-500"
           div_ [class_ "flex items-center gap-1"] do
-            button_ [class_ "cursor-pointer h-8 w-8 flex items-center justify-center rounded-full bg-slate-100 border border-slate-200 text-slate-500"] $ faSprite_ "chevron-left" "regular" "w-4 h-4"
-            button_ [class_ "cursor-pointer h-8 w-8 flex items-center justify-center rounded-full bg-slate-100 border border-slate-200 text-slate-500"] $ faSprite_ "chevron-right" "regular" "w-4 h-4"
-        span_ [class_ "flex items-center rounded-lg px-2 py-1 font-medium gap-2 border border-slate-300 bg-slate-100 text-slate-600"] do
-          faSprite_ "calendar" "regular" "w-5 h-5 fill-none"
-          toHtml $ formatTime defaultTimeLocale "%b. %d, %Y %I:%M:%S %p" traceItem.traceStartTime
+            button_
+              [ class_ "cursor-pointer h-8 w-8 flex items-center justify-center rounded-full bg-slate-100 border border-slate-200 text-slate-500"
+              , hxGet_ $ "/p/" <> pid.toText <> "/traces/" <> traceItem.traceId <> "/?span_id=" <> tSp.spanId <> "&nav=true"
+              , hxSwap_ "innerHTML"
+              , hxTarget_ "#trace_span_container"
+              , hxTrigger_ "click"
+              ]
+              $ faSprite_ "chevron-left" "regular" "w-4 h-4"
+            button_
+              [ class_ "cursor-pointer h-8 w-8 flex items-center justify-center rounded-full bg-slate-100 border border-slate-200 text-slate-500"
+              , hxGet_ $ "/p/" <> pid.toText <> "/traces/" <> traceItem.traceId <> "/?span_id=" <> tSp.spanId <> "&nav=true"
+              , hxSwap_ "innerHTML"
+              , hxTarget_ "#trace_span_container"
+              , hxTrigger_ "click"
+              ]
+              $ faSprite_ "chevron-right" "regular" "w-4 h-4"
+        dateTime traceItem.traceStartTime
 
       div_ [class_ "flex gap-1 w-full mt-5"] $ do
-        div_ [class_ "w-full"] do
-          div_ [role_ "tablist", class_ "tabs tabs-bordered bg-white"] $ do
-            input_ [type_ "radio", name_ "my_tabs_2", role_ "tab", class_ "tab after:pb-2", term "aria-label" "Flame Graph", checked_]
-            div_ [role_ "tabpanel", class_ "tab-content w-full bg-white"] do
-              div_ [class_ "flex gap-2 w-full pt-2"] do
-                div_
-                  [ class_ "w-[65%] group px-2 pt-4 border relative flex flex-col rounded-lg overflow-hidden"
-                  , id_ "flame-graph-container"
-                  ]
-                  do
-                    div_ [class_ "w-full sticky top-0 border-b border-b-gray-300 h-6 text-xs relative", id_ "time-container"] pass
-                    div_ [class_ "w-full overflow-x-hidden h-56 c-scroll relative", id_ $ "a" <> traceItem.traceId] pass
-                    div_ [class_ "h-full top-0  absolute z-50 hidden", id_ "time-bar-indicator"] do
-                      div_ [class_ "relative h-full"] do
-                        div_ [class_ "text-xs top-[-18px] absolute -translate-x-1/2 whitespace-nowrap", id_ "line-time"] "2 ms"
-                        div_ [class_ "h-[calc(100%-24px)] mt-[24px] w-[1px] bg-gray-200"] pass
+        div_ [role_ "tablist", class_ "w-full", id_ "trace-tabs"] $ do
+          div_ [class_ "flex justify-between mb-2"] do
+            div_ [class_ "flex items-center gap-2 text-slate-500 font-medium"] do
+              button_ [class_ "a-tab text-sm px-3 py-1.5 border-b-2 border-b-transparent t-tab-active", onclick_ "navigatable(this, '#flame_graph', '#trace-tabs', 't-tab-active')"] "Flame Graph"
+              button_ [class_ "a-tab text-sm px-3 border-b-2 border-b-transparent py-1.5", onclick_ "navigatable(this, '#water_fall', '#trace-tabs', 't-tab-active')"] "Waterfall"
+              button_ [class_ "a-tab text-sm px-3 border-b-2 border-b-transparent py-1.5", onclick_ "navigatable(this, '#span_list', '#trace-tabs', 't-tab-active')"] "Spans List"
+            div_ [class_ "flex items-center gap-2"] do
+              stBox "Spans" (show $ length p.spanRecords)
+              stBox "Errors" "0"
+              stBox "Total duration" (toText $ getDurationNSMS traceItem.traceDurationNs)
+          div_ [role_ "tabpanel", class_ "a-tab-content w-full bg-white", id_ "flame_graph"] do
+            div_ [class_ "flex gap-2 w-full pt-2"] do
+              div_
+                [ class_ "w-[65%] group px-2 pt-4 border relative flex flex-col rounded-lg overflow-hidden"
+                , id_ "flame-graph-container"
+                ]
+                do
+                  div_ [class_ "w-full sticky top-0 border-b border-b-gray-300 h-6 text-xs relative", id_ "time-container"] pass
+                  div_ [class_ "w-full overflow-x-hidden h-56 c-scroll relative", id_ $ "a" <> traceItem.traceId] pass
+                  div_ [class_ "h-full top-0  absolute z-50 hidden", id_ "time-bar-indicator"] do
+                    div_ [class_ "relative h-full"] do
+                      div_ [class_ "text-xs top-[-18px] absolute -translate-x-1/2 whitespace-nowrap", id_ "line-time"] "2 ms"
+                      div_ [class_ "h-[calc(100%-24px)] mt-[24px] w-[1px] bg-gray-200"] pass
 
-                div_ [class_ "border rounded-lg w-[35%] overflow-x-hidden"] do
-                  h3_ [class_ "w-full flex p-2 font-medium justify-between items-center border-b"] do
-                    span_ [] "Services"
-                    span_ [] "Exec Time %"
-                  div_ [class_ "w-full h-[200px] overflow-x-hidden  text-gray-600 overflow-y-auto c-scroll", id_ $ "services-" <> traceItem.traceId] do
-                    forM_ serviceNames $ \s -> do
-                      let spans = filter (\x -> x.name == s) serviceData
-                          duration = sum $ (.duration) <$> spans
-                          allDur = sum $ (.duration) <$> serviceData
-                          percent = show $ (fromIntegral duration / fromIntegral allDur) * 100
-                          color = getServiceColor s serviceColors
-                      div_ [class_ "flex items-center justify-between px-2 py-1"] $ do
-                        div_ [class_ "flex gap-1 items-center"] $ do
-                          div_ [class_ $ "w-3 h-3 rounded " <> color] pass
-                          span_ [class_ ""] $ toHtml s
-                        div_ [class_ "flex gap-1 items-center"] $ do
-                          span_ [class_ "text-xs max-w-52 truncate"] $ toHtml $ T.take 4 percent <> "%"
-                          div_ [class_ "w-[100px] h-3 bg-gray-200 rounded overflow-hidden"] $
-                            div_ [class_ $ "h-full pl-2 text-xs font-medium " <> color, style_ $ "width:" <> percent <> "%"] pass
+              div_ [class_ "border rounded-lg w-[35%] overflow-x-hidden"] do
+                h3_ [class_ "w-full flex p-3 font-medium justify-between items-center text-sm border-b"] do
+                  span_ [] "Services"
+                  span_ [] "Exec Time %"
+                div_ [class_ "w-full h-[200px] overflow-x-hidden  text-gray-600 overflow-y-auto c-scroll", id_ $ "services-" <> traceItem.traceId] do
+                  forM_ serviceNames $ \s -> do
+                    let spans = filter (\x -> x.name == s) serviceData
+                        duration = sum $ (.duration) <$> spans
+                        allDur = sum $ (.duration) <$> serviceData
+                        percent = show $ (fromIntegral duration / fromIntegral allDur) * 100
+                        color = getServiceColor s serviceColors
+                    div_ [class_ "flex items-center justify-between px-2 py-1"] $ do
+                      div_ [class_ "flex gap-1 items-center"] $ do
+                        div_ [class_ $ "w-3 h-3 rounded " <> color] pass
+                        span_ [class_ ""] $ toHtml s
+                      div_ [class_ "flex gap-1 items-center"] $ do
+                        span_ [class_ "text-xs max-w-52 truncate"] $ toHtml $ T.take 4 percent <> "%"
+                        div_ [class_ "w-[100px] h-3 bg-gray-200 rounded overflow-hidden"] $
+                          div_ [class_ $ "h-full pl-2 text-xs font-medium " <> color, style_ $ "width:" <> percent <> "%"] pass
 
-            input_ [type_ "radio", name_ "my_tabs_2", role_ "tab", class_ "tab after:pb-2", term "aria-label" "Span List"]
-            div_ [role_ "tabpanel", class_ "tab-content pt-2"] do
-              div_ [class_ "border w-full rounded-lg min-h-[230px] max-h-[330px] overflow-auto overflow-x-hidden "] do
-                renderSpanListTable serviceNames serviceColors p.spanRecords
+          div_ [role_ "tabpanel", class_ "a-tab-content pt-2 hidden", id_ "span_list"] do
+            div_ [class_ "border w-full rounded-lg min-h-[230px] max-h-[330px] overflow-auto overflow-x-hidden "] do
+              renderSpanListTable serviceNames serviceColors p.spanRecords
 
       div_ [class_ "my-5 py-2 rounded-lg border"] do
         div_ [class_ "flex flex-col gap-4", id_ $ "span-" <> traceItem.traceId] do
-          let tSp = fromMaybe (V.head p.spanRecords) (V.find (\s -> s.spanId == sId) p.spanRecords)
-          Spans.expandedSpanItem pid tSp
+          Spans.expandedSpanItem pid tSp Nothing Nothing
   let spanJson = decodeUtf8 $ AE.encode $ p.spanRecords <&> getSpanJson
   let colorsJson = decodeUtf8 $ AE.encode $ AE.object [AEKey.fromText k .= v | (k, v) <- HM.toList serviceColors]
   let trId = traceItem.traceId
@@ -224,3 +261,10 @@ spanTable records =
 
 getServiceData :: Telemetry.SpanRecord -> ServiceData
 getServiceData sp = ServiceData{name = getServiceName sp, duration = sp.spanDurationNs}
+
+
+stBox :: Text -> Text -> Html ()
+stBox title value =
+  div_ [class_ "flex items-center px-2 gap-2 border-r  last:border-r-0"] do
+    span_ [class_ "text-slate-950 font-medium"] $ toHtml value
+    span_ [class_ "font-medium text-slate-500 text-sm"] $ toHtml title

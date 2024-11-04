@@ -26,7 +26,7 @@ type Routes = NamedRoutes Routes'
 
 
 data Routes' mode = Routes'
-  { tracesGet :: mode :- "traces" :> Capture "trace_id" Text :> QPT "span_id" :> Get '[HTML] (RespHeaders Trace.TraceDetailsGet)
+  { tracesGet :: mode :- "traces" :> Capture "trace_id" Text :> QPT "span_id" :> QPT "nav" :> Get '[HTML] (RespHeaders Trace.TraceDetailsGet)
   }
   deriving stock (Generic)
 

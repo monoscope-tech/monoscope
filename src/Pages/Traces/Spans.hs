@@ -8,18 +8,20 @@ import Data.Text qualified as T
 import Data.Time.Format (defaultTimeLocale, formatTime)
 import Data.Vector qualified as V
 import Lucid
+import Lucid.Htmx
 import Lucid.Hyperscript (__)
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Telemetry (SpanRecord (..))
 import Models.Telemetry.Telemetry qualified as Telemetry
 import NeatInterpolation (text)
+import Pages.Components (dateTime)
 import Pages.Traces.Utils (getRequestDetails, getServiceName)
 import Relude
 import Utils
 
 
-expandedSpanItem :: Projects.ProjectId -> Telemetry.SpanRecord -> Html ()
-expandedSpanItem pid sp = do
+expandedSpanItem :: Projects.ProjectId -> Telemetry.SpanRecord -> Maybe Text -> Maybe Text -> Html ()
+expandedSpanItem pid sp leftM rightM = do
   let reqDetails = getRequestDetails sp
   div_ [class_ "w-full pb-2"] $ do
     div_ [class_ "flex flex-col gap-1 bg-gray-50 py-2  px-4"] $ do
@@ -31,9 +33,26 @@ expandedSpanItem pid sp = do
               span_ [class_ "text-sm text-slate-950 font-medium border-r border-r-slate-200 px-2 py-1.5"] "Span ID"
               span_ [class_ "text-slate-600 text-sm font-medium px-2 py-1.5"] $ toHtml sp.spanId
               faSprite_ "copy" "regular" "w-3 h-3 mr-2 text-slate-500"
-          span_ [class_ "flex items-center rounded-lg px-2 py-1 font-medium gap-2 border border-slate-300 bg-slate-100 text-slate-600"] do
-            faSprite_ "calendar" "regular" "w-5 h-5 fill-none"
-            toHtml $ formatTime defaultTimeLocale "%b. %d, %Y %I:%M:%S %p" sp.startTime
+            div_ [class_ "flex items-center gap-1"] do
+              whenJust leftM $ \l -> do
+                button_
+                  [ class_ "cursor-pointer h-8 w-8 flex items-center justify-center rounded-full bg-slate-100 border border-slate-200 text-slate-500"
+                  , hxGet_ $ "/p/" <> pid.toText <> "/traces/" <> sp.traceId <> "/?span_id=" <> l <> "&nav=true"
+                  , hxSwap_ "innerHTML"
+                  , hxTarget_ "#trace_span_container"
+                  , hxTrigger_ "click"
+                  ]
+                  $ faSprite_ "chevron-left" "regular" "w-4 h-4"
+              whenJust rightM $ \r -> do
+                button_
+                  [ class_ "cursor-pointer h-8 w-8 flex items-center justify-center rounded-full bg-slate-100 border border-slate-200 text-slate-500"
+                  , hxGet_ $ "/p/" <> pid.toText <> "/traces/" <> sp.traceId <> "/?span_id=" <> r <> "&nav=true"
+                  , hxSwap_ "innerHTML"
+                  , hxTarget_ "#trace_span_container"
+                  , hxTrigger_ "click"
+                  ]
+                  $ faSprite_ "chevron-right" "regular" "w-4 h-4"
+          dateTime sp.startTime
 
       div_ [class_ "flex items-center gap-4 text-sm font-medium text-slate-950"] $ do
         h4_ [class_ "text-xl "] $ toHtml $ getServiceName sp
