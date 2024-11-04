@@ -185,13 +185,13 @@ getStatusBorderColor status
   | status < 200 = "border-slate-200"
   | status >= 200 && status < 300 = "border-green-500"
   | status >= 300 && status < 400 = "border-yellow-500"
-  | otherwise = "border-red-500"
+  | otherwise = "cbadge-sm badge-neutral"
 
 
 getGrpcStatusColor :: Int -> Text
 getGrpcStatusColor status
-  | status == 0 = "text-green-800 bg-green-50" -- OK
-  | status >= 1 && status <= 16 = "text-red-800 bg-red-50" -- Errors (1 to 16 are error codes)
+  | status == 0 = "cbadge-sm badge-2xx" -- OK
+  | status >= 1 && status <= 16 = "cbadge-sm badge-4xx" -- Errors (1 to 16 are error codes)
   | otherwise = "text-slate-500 bg-slate-800"
 
 

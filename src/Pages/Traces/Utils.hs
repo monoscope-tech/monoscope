@@ -23,7 +23,7 @@ getServiceName sp = case sp.resource of
 
 
 getServiceColor :: Text -> HashMap Text Text -> Text
-getServiceColor s serviceColors = fromMaybe "#000000" $ HM.lookup s serviceColors
+getServiceColor s serviceColors = fromMaybe "bg-black" $ HM.lookup s serviceColors
 
 
 getRequestDetails :: Telemetry.SpanRecord -> Maybe (Text, Text, Text, Int)
