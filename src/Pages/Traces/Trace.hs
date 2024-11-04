@@ -158,6 +158,10 @@ tracePage p = do
                         div_ [class_ "w-[100px] h-3 bg-gray-200 rounded overflow-hidden"] $
                           div_ [class_ $ "h-full pl-2 text-xs font-medium " <> color, style_ $ "width:" <> percent <> "%"] pass
 
+          div_ [role_ "tabpanel", class_ "a-tab-content pt-2 hidden", id_ "water_fall"] do
+            div_ [class_ "border w-full rounded-lg min-h-[230px] max-h-[330px] overflow-auto overflow-x-hidden "] do
+              renderSpanListTable serviceNames serviceColors p.spanRecords
+
           div_ [role_ "tabpanel", class_ "a-tab-content pt-2 hidden", id_ "span_list"] do
             div_ [class_ "border w-full rounded-lg min-h-[230px] max-h-[330px] overflow-auto overflow-x-hidden "] do
               renderSpanListTable serviceNames serviceColors p.spanRecords
@@ -265,6 +269,6 @@ getServiceData sp = ServiceData{name = getServiceName sp, duration = sp.spanDura
 
 stBox :: Text -> Text -> Html ()
 stBox title value =
-  div_ [class_ "flex items-center px-2 gap-2 border-r  last:border-r-0"] do
+  div_ [class_ "flex items-end px-2 gap-2 border-r  last:border-r-0"] do
     span_ [class_ "text-slate-950 font-medium"] $ toHtml value
     span_ [class_ "font-medium text-slate-500 text-sm"] $ toHtml title
