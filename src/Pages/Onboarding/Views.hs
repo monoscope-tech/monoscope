@@ -146,7 +146,7 @@ renderSignupPage form validation =
       -- New Account Button
       button_
         [ type_ "submit"
-        , class_ "w-full px-6 py-4 bg-gradient-to-b from-[#256BF6] to-[#1055DE] text-white text-2xl rounded-2xl shadow-inner shadow-black/[0.14] hover:opacity-90 transition-opacity duration-300 ease-out"
+        , class_ "h-sm w-full px-6 py-4 bg-gradient-to-b from-[#256BF6] to-[#1055DE] text-white text-2xl rounded-2xl shadow-inner shadow-black/[0.14] hover:opacity-90 transition-opacity duration-300 ease-out"
         ]
         "Create free account"
 
@@ -162,7 +162,7 @@ renderSignupPage form validation =
         -- Google Login Button
         button_
           [ type_ "button"
-          , class_ "w-full py-2 px-4 border border-gray-300 rounded-md shadow-sm bg-slate-50 rounded-2xl text-sm font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 flex items-center justify-center space-x-2"
+          , class_ "w-full py-2 px-4  py-[13px] border border-slate-300 shadow-sm bg-slate-50 rounded-2xl text-sm font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 flex items-center justify-center space-x-2"
           ]
           $ do
             img_ [src_ "https://www.google.com/favicon.ico", alt_ "Google", class_ "w-5 h-5"]
@@ -171,7 +171,7 @@ renderSignupPage form validation =
         -- GitHub Login Button
         button_
           [ type_ "button"
-          , class_ "w-full py-2 px-4 border border-gray-300 bg-slate-50 rounded-2xl text-sm font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 flex items-center justify-center space-x-2"
+          , class_ "w-full py-2 px-4 py-[13px]  border border-gray-300 shadow-sm bg-slate-50 rounded-2xl text-sm font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 flex items-center justify-center space-x-2"
           ]
           $ do
             faSprite_ "github" "regular" "h-5 w-5 text-slate-950 "
@@ -282,13 +282,13 @@ renderLoginForm form validation = do
   div_ [class_ "w-full max-w-md space-y-8 mx-auto"] $ do
     -- Logo and welcome section
     div_ [class_ "text-start"] $ do
+<<<<<<< HEAD
       div_ [class_ "text-2xl mb-4"] $
         img_ [src_ "../assets/svgs/logo_mini.svg", alt_ ""]
+=======
+      div_ [class_ "text-2xl mb-4"]
+>>>>>>> ef3ef19e (wip: onboarding)
 
-      h2_ [class_ "text-3xl font-bold text-gray-900"] $ do
-        "Welcome back"
-        br_ []
-        "APIToolkit"
 
       p_ [class_ "mt-2 text-sm text-gray-600"] $ do
         "Don't have an account? "
@@ -383,8 +383,13 @@ renderLoginForm form validation = do
 renderNotificationSettingsForm :: Html ()
 renderNotificationSettingsForm = do
   -- Logo
+<<<<<<< HEAD
   div_ [class_ "text-2xl mb-4 m-4"] $
     img_ [src_ "../assets/svgs/logo.svg", alt_ ""]
+=======
+  div_ [class_ "text-2xl mb-4 m-4"]
+    $ img_ [src_ "/public/assets/svgs/logo_min.svg", alt_ ""]
+>>>>>>> ef3ef19e (wip: onboarding)
 
   div_ [class_ "max-w-md mx-auto"] $ do
     -- Back button
