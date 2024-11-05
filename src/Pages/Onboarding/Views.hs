@@ -30,7 +30,7 @@ import Effectful
 import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
 import Effectful.Reader.Static (ask)
 import Lucid hiding (for_)
-import Lucid.Htmx (hxDelete_, hxGet_, hxPost_, hxSwap_, hxTarget_, hxTrigger_)
+import Lucid.Htmx (hxDelete_, hxGet_, hxPost_, hxPut_, hxSwap_, hxTarget_, hxTrigger_)
 import Lucid.Hyperscript (__)
 import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
 import Models.Projects.Projects qualified as Projects
@@ -99,182 +99,191 @@ renderSignupPage :: SignupForm -> FormValidationResult SignupForm -> Html ()
 renderSignupPage form validation =
   div_ [class_ "max-w-md space-y-8 mx-auto"] $ do
     -- Logo Position
-    div_ [class_ "text-2xl m-4"] $
-      img_ [src_ "/public/assets/svgs/logo_mini.svg", alt_ ""]
+    div_ [class_ "text-2xl"]
+      $ img_ [src_ "/public/assets/svgs/logo_min.svg", alt_ ""]
 
     -- Header
     div_ [class_ "text-start"] $ do
-      h2_ [class_ "text-2xl font-semibold text-gray-900"] "Create a free\nAPIToolkit account"
+      h2_ [class_ "text-2xl font-semibold text-gray-900"] $ do
+        "Create a free"
+        br_ []
+        "APIToolkit account"
       p_ [class_ "mt-2 text-sm text-gray-600"] $ do
         "Already have an account? "
-        a_ [href_ "#", class_ "text-blue-600 hover:text-blue-500"] "Login"
+        a_ [href_ "#", class_ "text-blue-600 hover:text-blue-500 underline"] "Login"
 
     -- Form
     form_ [class_ "mt-8 space-y-6"] $ do
       div_ [class_ "space-y-4"] $ do
-        -- Email Field
-        div_ $ do
+
+        -- Email field
+        div_ [] $ do
           label_ [class_ "block text-sm font-medium text-gray-700"] "Email Address"
-          div_ [class_ "mt-1"] $
+          div_ [class_ "mt-1 relative"] $ do
+            div_ [class_ "absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none"] $ do
+              faSprite_ "envelope" "regular" "h-5 w-5 text-gray-400"
             input_
               [ type_ "email"
+              , name_ "email"
               , placeholder_ "hello.john@email.com"
-              , class_ "w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm placeholder-gray-400 focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+              , class_ "pl-10 w-full px-3 py-3 text-slate-500 text-sm font-normal font-['Inter'] leading-snug border border-gray-300 rounded-xl shadow-sm placeholder-gray-400 focus:outline-none focus:ring-blue-500 focus:border-blue-500"
               ]
 
-        -- Password Field
-        div_ $ do
-          label_ [class_ "block text-sm font-medium text-gray-700"] "Password"
+        -- Password field
+        div_ [] $ do
+          div_ [class_ "flex items-center justify-start"] $ do
+            label_ [class_ "block text-sm font-medium text-gray-700"] "Password"
+
           div_ [class_ "mt-1 relative"] $ do
+            div_ [class_ "absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none"] $ do
+              faSprite_ "lock-closed" "regular" "h-5 w-5 text-gray-400"
+
             input_
               [ type_ "password"
+              , name_ "password"
               , placeholder_ "Enter 8 digit password"
-              , class_ "w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm placeholder-gray-400 focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+              , class_ "pl-10 w-full px-3 py-3 text-slate-500 text-sm font-normal font-['Inter'] leading-snug border border-gray-300 rounded-xl shadow-sm placeholder-gray-400 focus:outline-none focus:ring-blue-500 focus:border-blue-500"
               ]
-            button_ [type_ "button", class_ "absolute inset-y-0 right-0 pr-3 flex items-center"] $
-              do
-                faSprite_ "visible" "regular" "h-5 w-5 text-slate-950"
+
+            button_
+              [ type_ "button"
+              , class_ "absolute inset-y-0 right-0 pr-3 flex items-center"
+              , hxTrigger_ "click"
+              , hxSwap_ "outerHTML"
+              ]
+              $ do
+                faSprite_ "visible" "regular" "h-5 w-5 text-gray-400"
+        
 
         -- Password Requirements
         div_ [class_ "flex flex-wrap gap-2 text-sm text-gray-600"] $ do
-          span_ [class_ "px-2 py-1 bg-gray-100 rounded-md"] "8 characters"
-          span_ [class_ "px-2 py-1 bg-gray-100 rounded-md"] "Number"
-          span_ [class_ "px-2 py-1 bg-gray-100 rounded-md"] "Lowercase"
-          span_ [class_ "px-2 py-1 bg-gray-100 rounded-md"] "Uppercase"
-          span_ [class_ "px-2 py-1 bg-gray-100 rounded-md"] "1 special character"
+
+          span_ [class_ "px-3 py-1 rounded-3xl border border-slate-300 justify-center items-center gap-2.5 text-slate-500 text-sm font-normal"] "8 characters"
+          span_ [class_ "px-3 py-1 rounded-3xl border border-slate-300 justify-center items-center gap-2.5 text-slate-500 text-sm font-normal"] "Number"
+          span_ [class_ "px-3 py-1 rounded-3xl border border-slate-300 justify-center items-center gap-2.5 text-slate-500 text-sm font-normal"] "Lowercase"
+          span_ [class_ "px-3 py-1 rounded-3xl border border-slate-300 justify-center items-center gap-2.5 text-slate-500 text-sm font-normal"] "Uppercase"
+          span_ [class_ "px-3 py-1 rounded-3xl border border-slate-300 justify-center items-center gap-2.5 text-slate-500 text-sm font-normal"] "1 special character"
 
       -- New Account Button
-      button_
-        [ type_ "submit"
-        , class_ "h-sm w-full px-6 py-4 bg-gradient-to-b from-[#256BF6] to-[#1055DE] text-white text-2xl rounded-2xl shadow-inner shadow-black/[0.14] hover:opacity-90 transition-opacity duration-300 ease-out"
-        ]
-        "Create free account"
+      renderCustomButton POST "" "Create free account"
 
       -- Divider
-      div_ [class_ "relative"] $ do
-        div_ [class_ "absolute inset-0 flex items-center"] $
-          div_ [class_ "w-full border-t border-gray-300"] ""
-        div_ [class_ "relative flex justify-center text-sm"] $
-          span_ [class_ "px-2 bg-white text-gray-500"] "or"
+      div_ [class_ "relative w-full py-1"] $ do
+        div_ [class_ "absolute inset-0 flex items-center"] $ 
+            div_ [class_ "w-full border-t border-gray-300"] mempty
+        div_ [class_ "relative flex justify-center"] $
+            span_ [class_ "bg-white px-2 py-2 text-sm text-gray-500 rounded-full border border-gray-300"] "OR"
 
       -- Social Login Buttons
       div_ [class_ "space-y-3"] $ do
         -- Google Login Button
         button_
           [ type_ "button"
-          , class_ "w-full py-2 px-4  py-[13px] border border-slate-300 shadow-sm bg-slate-50 rounded-2xl text-sm font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 flex items-center justify-center space-x-2"
+          , class_ "w-full py-2 px-4  py-3 border border-slate-300 shadow-sm bg-slate-50 rounded-2xl text-sm font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 flex items-center justify-center space-x-2"
           ]
           $ do
-            img_ [src_ "https://www.google.com/favicon.ico", alt_ "Google", class_ "w-5 h-5"]
+            img_ [src_ "/public/assets/svgs/onboarding/google.svg", alt_ "Google", class_ "w-5 h-5"]
             span_ "Continue with Google"
 
         -- GitHub Login Button
         button_
           [ type_ "button"
-          , class_ "w-full py-2 px-4 py-[13px]  border border-gray-300 shadow-sm bg-slate-50 rounded-2xl text-sm font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 flex items-center justify-center space-x-2"
+          , class_ "w-full py-2 px-4 py-3  border border-gray-300 shadow-sm bg-slate-50 rounded-2xl text-sm font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 flex items-center justify-center space-x-2"
           ]
           $ do
-            faSprite_ "github" "regular" "h-5 w-5 text-slate-950 "
+            img_ [src_ "/public/assets/svgs/onboarding/github.svg", alt_ "Github", class_ "w-5 h-5"]
             span_ "Continue with GitHub"
 
 
 renderUserForm :: ProfileForm -> FormValidationResult ProfileForm -> Html ()
 renderUserForm form validation = do
-  -- Logo section
-  div_ [class_ "text-2xl mb-4 m-4"] $
-    img_ [src_ "../assets/images/logo.png", alt_ "Logo"]
+  div_ [class_ "max-w-md space-y-8 mx-auto"] $ do
+    -- Logo section
+    div_ [class_ "text-2xl mb-4 m-4 absolute"]
+      $ img_ [src_ "/public/assets/svgs/logo_min.svg", alt_ "APItoolkit Logo"]
 
-  div_ [class_ "max-w-md mx-auto p-6 pt-40"] $ do
-    -- Back button with placeholder image instead of SVG
-    button_ [class_ "flex items-center gap-2 mb-8 group"] $ do
-      div_ [class_ "w-8 h-8 flex items-center justify-center bg-blue-500 rounded-full"] $
-        faSprite_ "chevron-left-simple" "regular" "w-3 h-3 text-white"
-      span_ [class_ "text-gray-600 text-lg"] "Back"
+    div_ [class_ "max-w-md mx-auto p-6 pt-40 pb-40"] $ do
+      renderBackButton "Back"
 
-    -- Form section
-    div_ [class_ "space-y-8"] $ do
-      h1_ [class_ "text-3xl font-bold"] $ do
-        "Tell us a little bit"
-        br_ []
-        "about you"
+      -- Form section
+      div_ [class_ "space-y-8"] $ do
+        h1_ [class_ "text-3xl font-bold"] $ do
+          "Tell us a little bit"
+          br_ []
+          "about you"
 
-      -- Form with HTMX attributes
-      form_
-        [ class_ "space-y-6"
-        , hxPost_ "/onboarding/profile"
-        , hxSwap_ "outerHTML"
-        , hxTrigger_ "submit"
-        ]
-        $ do
-          -- Name fields
-          div_ [class_ "grid grid-cols-2 gap-4"] $ do
+        -- Form with HTMX attributes
+        form_
+          [ class_ "space-y-6"
+          , hxPost_ "/onboarding/profile"
+          , hxSwap_ "outerHTML"
+          , hxTrigger_ "submit"
+          ]
+          $ do
+            -- Name fields
+            div_ [class_ "grid grid-cols-2 gap-4"] $ do
+              div_ [] $ do
+                label_ [class_ "block text-sm text-gray-600 mb-1"] "First Name"
+                input_
+                  [ type_ "text"
+                  , placeholder_ "e.g Mike"
+                  , name_ "profileFirstName"
+                  , value_ (profileFirstName form)
+                  , class_ "w-full px-3 py-2 border shadow-sm rounded-xl border-slate-300 justify-start items-start gap-2.5 inline-flex placeholder-gray-400 focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+                  ]
+
+              div_ [] $ do
+                label_ [class_ "block text-sm text-gray-600 mb-1"] "Last"
+                input_
+                  [ type_ "text"
+                  , placeholder_ "E.g Abel"
+                  , name_ "profileLastName"
+                  , class_ "w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm placeholder-gray-400 focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+                  ]
+
+            -- Company name
             div_ [] $ do
-              label_ [class_ "block text-sm text-gray-600 mb-1"] "First Name"
+              label_ [class_ "block text-sm text-gray-600 mb-1"] "Company name"
               input_
                 [ type_ "text"
-                , placeholder_ "e.g Mike"
-                , name_ "profileFirstName"
-                , value_ (profileFirstName form)
-                , class_ "w-full px-3 py-2 border shadow-sm rounded-xl border-slate-300 justify-start items-start gap-2.5 inline-flex placeholder-gray-400 focus:outline-none focus:ring-blue-500 focus:border-blue-500"
-                ]
-
-            div_ [] $ do
-              label_ [class_ "block text-sm text-gray-600 mb-1"] "Last"
-              input_
-                [ type_ "text"
-                , placeholder_ "E.g Abel"
-                , name_ "profileLastName"
+                , placeholder_ "Apple, Inc"
+                , name_ "profileCompanyName"
                 , class_ "w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm placeholder-gray-400 focus:outline-none focus:ring-blue-500 focus:border-blue-500"
                 ]
 
-          -- Company name
-          div_ [] $ do
-            label_ [class_ "block text-sm text-gray-600 mb-1"] "Company name"
-            input_
-              [ type_ "text"
-              , placeholder_ "Apple, Inc"
-              , name_ "profileCompanyName"
-              , class_ "w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm placeholder-gray-400 focus:outline-none focus:ring-blue-500 focus:border-blue-500"
-              ]
-
-          -- Company Size
-          div_ [] $ do
-            label_ [class_ "block text-sm text-gray-600 mb-1"] "Company Size"
-            input_
-              [ type_ "text"
-              , placeholder_ "6 employees"
-              , name_ "profileCompanySize"
-              , class_ "w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm placeholder-gray-400 focus:outline-none focus:ring-blue-500 focus:border-blue-500"
-              ]
-
-          -- Where did you hear about us
-          div_ [] $ do
-            label_ [class_ "block text-sm text-gray-600 mb-1"] "Where did you hear about us?"
-            div_ [class_ "relative"] $ do
-              select_
-                [ class_ "w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm appearance-none bg-white focus:outline-none focus:ring-blue-500 focus:border-blue-500"
-                , name_ "profileReferralSource"
+            -- Company Size
+            div_ [] $ do
+              label_ [class_ "block text-sm text-gray-600 mb-1"] "Company Size"
+              input_
+                [ type_ "text"
+                , placeholder_ "6 employees"
+                , name_ "profileCompanySize"
+                , class_ "w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm placeholder-gray-400 focus:outline-none focus:ring-blue-500 focus:border-blue-500"
                 ]
-                $ do
-                  option_ [selected_ "", disabled_ ""] "Select an option"
-                  option_ [] "Google"
-                  option_ [] "Social Media"
-                  option_ [] "Friend/Colleague"
 
-              -- Dropdown arrow as placeholder image instead of SVG
-              div_ [class_ "absolute inset-y-0 right-0 flex items-center pr-3 pointer-events-none"] $
-                img_
-                  [ src_ "/api/placeholder/20/20"
-                  , alt_ "Dropdown arrow"
-                  , class_ "h-5 w-5 text-gray-400"
+            -- Where did you hear about us
+            div_ [] $ do
+              label_ [class_ "block text-sm text-gray-600 mb-1"] "Where did you hear about us?"
+              div_ [class_ "relative"] $ do
+                select_
+                  [ class_ "w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm appearance-none bg-white focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+                  , name_ "profileReferralSource"
                   ]
+                  $ do
+                    option_ [selected_ "", disabled_ ""] "Select an option"
+                    option_ [] "Google"
+                    option_ [] "Social Media"
+                    option_ [] "Friend/Colleague"
 
-          -- Submit button
-          button_
-            [ type_ "submit"
-            , class_ "h-3.7 w-full shadow-inner py-4 px-6 border-2 border-transparent rounded-2xl text-white bg-gradient-to-b from-[#256BF6] to-[#1055DE] hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 mt-8 justify-center items-center gap-2.5 inline-flex"
-            ]
-            "Proceed"
+                div_ [class_ "absolute inset-y-0 right-0 flex items-center pr-3 pointer-events-none"]
+                  $ img_
+                    [ src_ "/api/placeholder/20/20"
+                    , alt_ "Dropdown arrow"
+                    , class_ "h-5 w-5 text-gray-400"
+                    ]
+
+            -- Submit button
+            renderCustomButton POST "" "Proceed"
 
 
 renderLoginForm :: LoginForm -> FormValidationResult LoginForm -> Html ()
@@ -282,13 +291,13 @@ renderLoginForm form validation = do
   div_ [class_ "w-full max-w-md space-y-8 mx-auto"] $ do
     -- Logo and welcome section
     div_ [class_ "text-start"] $ do
-<<<<<<< HEAD
-      div_ [class_ "text-2xl mb-4"] $
-        img_ [src_ "../assets/svgs/logo_mini.svg", alt_ ""]
-=======
       div_ [class_ "text-2xl mb-4"]
->>>>>>> ef3ef19e (wip: onboarding)
+        $ img_ [src_ "/public/assets/svgs/logo_min.svg", alt_ ""]
 
+      h2_ [class_ "text-2xl font-semibold text-gray-900"] $ do
+        "Welcome back"
+        br_ []
+        "APIToolkit"
 
       p_ [class_ "mt-2 text-sm text-gray-600"] $ do
         "Don't have an account? "
@@ -341,14 +350,10 @@ renderLoginForm form validation = do
                 faSprite_ "visible" "regular" "h-5 w-5 text-gray-400"
 
           div_ [class_ "flex items-center justify-end pt-2"] $ do
-            a_ [href_ "#", class_ "text-sm text-gray-600 hover:text-gray-500"] "Forgot Password"
+            a_ [href_ "#", class_ "text-sm text-gray-600 hover:text-gray-500 underline"] "Forgot Password"
 
         -- Sign In button
-        button_
-          [ type_ "submit"
-          , class_ "w-full py-2 px-4 border border-transparent rounded-md shadow-sm text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
-          ]
-          "Sign In"
+        renderCustomButton POST "" "Sign In"
 
         -- Divider
         div_ [class_ "relative"] $ do
@@ -359,44 +364,34 @@ renderLoginForm form validation = do
 
         -- Social login buttons
         div_ [class_ "space-y-3"] $ do
-          -- Google login with placeholder image instead of faSprite
+          -- Google Login Button
           button_
             [ type_ "button"
-            , class_ "w-full py-2 px-4 border border-gray-300 rounded-md shadow-sm bg-white text-sm font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 flex items-center justify-center space-x-2"
-            , hxPost_ "/api/auth/google"
+            , class_ "w-full py-2 px-4  py-3 border border-slate-300 shadow-sm bg-slate-50 rounded-2xl text-sm font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 flex items-center justify-center space-x-2"
             ]
             $ do
-              faSprite_ "google" "regular" "h-5 w-5 text-gray-400"
-              span_ [] "Continue with Google"
+              img_ [src_ "/public/assets/svgs/onboarding/google.svg", alt_ "Google", class_ "w-5 h-5"]
+              span_ "Continue with Google"
 
-          -- GitHub login
+          -- GitHub Login Button
           button_
             [ type_ "button"
-            , class_ "w-full py-2 px-4 border border-gray-300 rounded-2xl bg-white text-sm font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 flex items-center justify-center space-x-2"
-            , hxPost_ "/api/auth/github"
+            , class_ "w-full py-2 px-4 py-3  border border-gray-300 shadow-sm bg-slate-50 rounded-2xl text-sm font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 flex items-center justify-center space-x-2"
             ]
             $ do
-              faSprite_ "github" "regular" "w-5 h-5"
-              span_ [] "Continue with GitHub"
+              img_ [src_ "/public/assets/svgs/onboarding/github.svg", alt_ "Github", class_ "w-5 h-5"]
+              span_ "Continue with GitHub"
 
 
 renderNotificationSettingsForm :: Html ()
 renderNotificationSettingsForm = do
   -- Logo
-<<<<<<< HEAD
-  div_ [class_ "text-2xl mb-4 m-4"] $
-    img_ [src_ "../assets/svgs/logo.svg", alt_ ""]
-=======
   div_ [class_ "text-2xl mb-4 m-4"]
     $ img_ [src_ "/public/assets/svgs/logo_min.svg", alt_ ""]
->>>>>>> ef3ef19e (wip: onboarding)
 
   div_ [class_ "max-w-md mx-auto"] $ do
     -- Back button
-    button_ [class_ "flex items-center gap-2 mb-8 group"] $ do
-      div_ [class_ "w-8 h-8 flex items-center justify-center bg-blue-500 rounded-full"] $
-        faSprite_ "chevron-left" "regular" "w-3 h-3 text-white"
-      span_ [class_ "text-gray-600 text-lg"] "Back"
+    renderBackButton "Back"
 
     -- Main content
     div_ [class_ "space-y-8"] $ do
@@ -455,28 +450,24 @@ renderNotificationSettingsForm = do
               ]
 
       -- Send test notifications button
-      button_
-        [ type_ "button"
-        , class_ "w-full py-2 px-4 border-2 border-transparent rounded-2xl text-white bg-gradient-to-b from-[#256BF6] to-[#1055DE] hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 mt-8"
-        ]
-        "Send test notifications"
+      renderCustomButton POST "" "Send test notifications"
   where
     -- Helper for connection boxes
     connectionBox_ :: Bool -> Text -> Html ()
     connectionBox_ isConnected serviceName =
       div_ [class_ "flex-1 flex items-center justify-start px-3 py-1 border-2 rounded-xl"] $ do
-        div_ [class_ "flex-1 flex"] $
-          div_ [class_ "flex items-center gap-1"] $
-            do
-              -- does fasprite have alt tags?
-              img_ [src_ "/api/placeholder/16/16", alt_ serviceName, class_ "w-4 h-4"]
-              span_ [class_ "text-gray-900 font-medium"] (toHtml serviceName)
+        div_ [class_ "flex-1 flex"]
+          $ div_ [class_ "flex items-center gap-1"]
+          $ do
+            -- does fasprite have alt tags?
+            img_ [src_ "/api/placeholder/16/16", alt_ serviceName, class_ "w-4 h-4"]
+            span_ [class_ "text-gray-900 font-medium"] (toHtml serviceName)
         div_ [class_ "flex-1 flex"] ""
-        div_ [class_ "flex-1 flex"] $
-          if isConnected
+        div_ [class_ "flex-1 flex"]
+          $ if isConnected
             then
-              button_ [] $
-                span_ [class_ "px-2 py-1 text-white text-sm font-medium bg-green-500 rounded-lg"] "Connected"
+              button_ []
+                $ span_ [class_ "px-2 py-1 text-white text-sm font-medium bg-green-500 rounded-lg"] "Connected"
             else button_ [class_ "px-2 py-0 text-blue-600 text-sm font-medium border border-blue-600 rounded-lg hover:bg-blue-50"] "Connect"
 
     -- Helper for email chips
@@ -489,15 +480,12 @@ renderNotificationSettingsForm = do
 
 renderUsageSelectionForm :: Html ()
 renderUsageSelectionForm = do
-  div_ [class_ "text-2xl mb-4 m-4"] $
-    img_ [src_ "./../assets/svgs/logo.svg", alt_ ""]
+  div_ [class_ "text-2xl mb-4 m-4"]
+    $ img_ [src_ "/public/assets/svgs/logo_min.svg", alt_ ""]
 
   div_ [class_ "max-w-lg mx-auto p-6 pt-20"] $ do
     -- Back button
-    button_ [class_ "flex items-center gap-2 mb-8 group"] $ do
-      div_ [class_ "w-8 h-8 flex items-center justify-center bg-blue-500 rounded-full"] $
-        faSprite_ "chevron-left" "regular" "w-3 h-3 text-white"
-      span_ [class_ "text-gray-600 text-lg"] "Back"
+    renderBackButton "Back"
 
     -- Main content
     div_ [class_ "space-y-8"] $ do
@@ -514,11 +502,7 @@ renderUsageSelectionForm = do
         renderOptionBox "Uptime monitoring" "Check if your website works correctly"
 
       -- Proceed button
-      button_
-        [ type_ "button"
-        , class_ "w-full py-2 px-4 border-2 border-transparent rounded-2xl text-white bg-gradient-to-b from-[#256BF6] to-[#1055DE] hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 mt-8"
-        ]
-        "Proceed"
+      renderCustomButton POST "" "Proceed"
   where
     renderOptionBox :: Text -> Text -> Html ()
     renderOptionBox title description =
@@ -533,15 +517,12 @@ renderUsageSelectionForm = do
 
 renderUrlMonitorForm :: Html ()
 renderUrlMonitorForm = do
-  header_ [class_ "p-4"] $
-    img_ [src_ "./../assets/svgs/logo.svg", alt_ "APIToolkit Logo", class_ "h-8"]
+  header_ [class_ "p-4"]
+    $ img_ [src_ "/public/assets/svgs/logo_min.svg", alt_ "APIToolkit Logo", class_ "h-8"]
 
   main_ [class_ "max-w-3xl mx-auto p-6 pt-32"] $ do
     -- Back Button
-    button_ [class_ "flex items-center gap-2 mb-8 group"] $ do
-      div_ [class_ "w-8 h-8 flex items-center justify-center bg-blue-500 rounded-full"] $
-        faSprite_ "chevron-left" "regular" "w-3 h-3 text-white"
-      span_ [class_ "text-gray-600 text-lg"] "Back"
+    renderBackButton "Back"
 
     h1_ [class_ "text-3xl mb-6 text-slate-950 font-semibold font-['Inter'] leading-10"] $ do
       "Let's create your"
@@ -568,28 +549,20 @@ renderUrlMonitorForm = do
       section_ [class_ "space-y-4"] $ do
         div_ [class_ "flex items-center gap-2"] $ do
           span_ [class_ "text-sm font-medium text-gray-700"] "Advanced Options (0 configured)"
-          div_ [class_ "flex items-center justify-center w-5 h-5 rounded-full shadow-lg bg-[#067cff] gap-2.5"] $
-            button_ [type_ "button", class_ "flex items-center rounded-full justify-center w-full h-full text-white"] $
-              faSprite_ "chevron-down" "regular" "w-3 h-3"
+          div_ [class_ "flex items-center justify-center w-5 h-5 rounded-full shadow-lg bg-[#067cff] gap-2.5"]
+            $ button_ [type_ "button", class_ "flex items-center rounded-full justify-center w-full h-full text-white"]
+            $ faSprite_ "chevron-down" "regular" "w-3 h-3"
 
         renderRequestPanel
 
       -- Test Request Button
-      button_
-        [ type_ "button"
-        , class_ "h-8 p-4 bg-gradient-to-b from-[#256bf6] to-[#1055de] justify-center items-center gap-2.5 inline-flex px-4 py-2 text-white bg-blue-600 rounded-md hover:bg-blue-700 focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 text-sm font-medium font-['Inter'] leading-snug"
-        ]
-        "Send"
+      renderCustomButton POST "" "Send"
 
       renderResponseSection
       renderAssertionsSection
 
       -- Submit Button
-      button_
-        [ type_ "button"
-        , class_ "w-2/3 py-2 px-4 border-2 border-transparent rounded-2xl text-white bg-gradient-to-b from-[#256BF6] to-[#1055DE] hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 mt-8"
-        ]
-        "Proceed"
+      renderCustomButton POST "" "Proceed"
   where
     renderRequestPanel =
       div_ [class_ "border rounded-lg"] $ do
@@ -612,9 +585,9 @@ renderUrlMonitorForm = do
               , placeholder_ "Value"
               , class_ "flex-[2] px-3 py-2 text-sm border border-gray-300 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500"
               ]
-            div_ [class_ "flex items-center justify-center w-8 h-8 rounded-full border border-gray-200 shadow px-2"] $
-              button_ [type_ "button", class_ "text-red-500 hover:text-red-600"] $
-                faSprite_ "trash" "regular" "w-4 h-4"
+            div_ [class_ "flex items-center justify-center w-8 h-8 rounded-full border border-gray-200 shadow px-2"]
+              $ button_ [type_ "button", class_ "text-red-500 hover:text-red-600"]
+              $ faSprite_ "trash" "regular" "w-4 h-4"
 
     renderResponseSection =
       section_ [class_ "space-y-4"] $ do
@@ -631,12 +604,12 @@ renderUrlMonitorForm = do
           div_ [class_ "p-4"] $ do
             div_ [class_ "space-y-2 text-sm text-gray-600"] $ do
               div_ [class_ "flex items-center gap-0"] $ do
-                div_ [class_ "flex items-center justify-center w-8 h-8"] $
-                  faSprite_ "circle-info" "regular" "w-4 h-4"
+                div_ [class_ "flex items-center justify-center w-8 h-8"]
+                  $ faSprite_ "circle-info" "regular" "w-4 h-4"
                 span_ [] "Click below to add as an assertion"
 
-              div_ [] $
-                mapM_
+              div_ []
+                $ mapM_
                   renderResponseHeaderItem
                   [ "cache-control: max-age=43200"
                   , "content-type: application/json; charset=utf-8"
@@ -648,17 +621,17 @@ renderUrlMonitorForm = do
     renderResponseHeaderItem header =
       div_ [class_ "flex items-center gap-2"] $ do
         span_ [] (toHtml header)
-        div_ [class_ "flex items-center justify-center w-5 h-5 rounded-full border border-gray-200 shadow"] $
-          button_ [class_ "text-gray-400 hover:text-gray-600"] $
-            faSprite_ "plus" "regular" "w-3 h-3"
+        div_ [class_ "flex items-center justify-center w-5 h-5 rounded-full border border-gray-200 shadow"]
+          $ button_ [class_ "text-gray-400 hover:text-gray-600"]
+          $ faSprite_ "plus" "regular" "w-3 h-3"
 
     renderAssertionsSection =
       section_ [class_ "space-y-4"] $ do
         div_ [class_ "flex items-center justify-start gap-2"] $ do
           span_ [class_ "text-sm font-medium text-gray-700"] "Add Assertion (Optional)"
-          div_ [class_ "flex items-center justify-center w-5 h-5 rounded-full shadow-lg"] $
-            button_ [type_ "button", class_ "flex items-center rounded-full justify-center w-full h-full text-white bg-slate-500"] $
-              faSprite_ "chevron-down" "regular" "w-3 h-3"
+          div_ [class_ "flex items-center justify-center w-5 h-5 rounded-full shadow-lg"]
+            $ button_ [type_ "button", class_ "flex items-center rounded-full justify-center w-full h-full text-white bg-slate-500"]
+            $ faSprite_ "chevron-down" "regular" "w-3 h-3"
 
         div_ [class_ "p-4 border rounded-2xl"] $ do
           p_ [class_ "mb-4 text-sm text-gray-600"] "Your step is successful:"
@@ -674,9 +647,9 @@ renderUrlMonitorForm = do
               option_ [] "greater than"
             input_ [type_ "text", class_ "flex-1 px-3 py-2 text-sm border border-gray-300 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500"]
             span_ [class_ "inline-flex items-center px-3 py-0.5 text-sm font-medium text-green-800 bg-green-100 rounded-full"] "Passed"
-            div_ [class_ "flex items-center justify-center w-8 h-8 rounded-full border border-gray-200 shadow px-2"] $
-              button_ [type_ "button", class_ "text-red-500 hover:text-red-600"] $
-                faSprite_ "trash" "regular" "w-4 h-4"
+            div_ [class_ "flex items-center justify-center w-8 h-8 rounded-full border border-gray-200 shadow px-2"]
+              $ button_ [type_ "button", class_ "text-red-500 hover:text-red-600"]
+              $ faSprite_ "trash" "regular" "w-4 h-4"
 
         button_
           [ type_ "button"
@@ -689,15 +662,12 @@ renderUrlMonitorForm = do
 
 renderPricingPlan :: Html ()
 renderPricingPlan = do
-  div_ [class_ "text-2xl mb-4 m-4"] $
-    img_ [src_ "./../assets/svgs/logo.svg", alt_ ""]
+  div_ [class_ "text-2xl mb-4 m-4"]
+    $ img_ [src_ "/public/assets/svgs/logo_min.svg", alt_ ""]
 
   div_ [class_ "max-w-md mx-auto p-6"] $ do
     -- Back button
-    button_ [class_ "flex items-center gap-2 mb-8 group"] $ do
-      div_ [class_ "w-8 h-8 flex items-center justify-center bg-blue-500 rounded-full"] $
-        faSprite_ "chevron-left" "regular" "w-3 h-3 text-white"
-      span_ [class_ "text-gray-600 text-lg"] "Back"
+    renderBackButton "Back"
 
     -- Main content
     div_ [class_ "space-y-8"] $ do
@@ -716,11 +686,11 @@ renderPricingPlan = do
           div_ [class_ "text-sm text-gray-500"] "then $1 per 20k requests"
 
         -- Slider
-        div_ [class_ "mt-4"] $
-          div_ [class_ "relative w-full h-2 bg-blue-100 rounded"] $
-            do
-              div_ [class_ "absolute left-0 w-1/3 h-full bg-blue-500 rounded"] ""
-              div_ [class_ "absolute left-1/3 -translate-x-1/2 top-1/2 -translate-y-1/2 w-4 h-4 bg-blue-500 rounded-full cursor-pointer"] ""
+        div_ [class_ "mt-4"]
+          $ div_ [class_ "relative w-full h-2 bg-blue-100 rounded"]
+          $ do
+            div_ [class_ "absolute left-0 w-1/3 h-full bg-blue-500 rounded"] ""
+            div_ [class_ "absolute left-1/3 -translate-x-1/2 top-1/2 -translate-y-1/2 w-4 h-4 bg-blue-500 rounded-full cursor-pointer"] ""
 
       -- Features section
       div_ [class_ "rounded-xl border p-6 space-y-6"] $ do
@@ -734,11 +704,7 @@ renderPricingPlan = do
           renderFeature "API live traffic AI-based validations"
 
       -- Start Free Trial button
-      button_
-        [ type_ "button"
-        , class_ "w-full py-2 px-4 border-2 border-transparent rounded-2xl text-white bg-gradient-to-b from-[#256BF6] to-[#1055DE] hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 mt-8"
-        ]
-        "Start Free Trial"
+      renderCustomButton POST "" "Start Free Trial"
   where
     renderFeature :: Text -> Html ()
     renderFeature text =
@@ -749,15 +715,12 @@ renderPricingPlan = do
 
 renderTeamInvite :: Html ()
 renderTeamInvite = do
-  div_ [class_ "text-2xl mb-4 m-4"] $
-    img_ [src_ "./../assets/svgs/logo.svg", alt_ ""]
+  div_ [class_ "text-2xl mb-4 m-4"]
+    $ img_ [src_ "/public/assets/svgs/logo_min.svg", alt_ ""]
 
   div_ [class_ "max-w-lg mx-auto p-6"] $ do
     -- Back button
-    button_ [class_ "flex items-center gap-2 mb-8 group"] $ do
-      div_ [class_ "w-8 h-8 flex items-center justify-center bg-blue-500 rounded-full"] $
-        faSprite_ "chevron-left" "regular" "w-3 h-3 text-white"
-      span_ [class_ "text-gray-600 text-lg"] "Back"
+    renderBackButton "Back"
 
     -- Main content
     div_ [class_ "space-y-8"] $ do
@@ -787,11 +750,7 @@ renderTeamInvite = do
 
       -- Action buttons
       div_ [class_ "space-y-4"] $ do
-        button_
-          [ type_ "button"
-          , class_ "w-full py-2 px-4 border-2 border-transparent rounded-2xl text-white bg-gradient-to-b from-[#256BF6] to-[#1055DE] hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 mt-8"
-          ]
-          "Proceed"
+        renderCustomButton POST "" "Proceed"
 
         button_
           [ type_ "button"
@@ -802,29 +761,29 @@ renderTeamInvite = do
     renderTeamMember :: Text -> Html ()
     renderTeamMember email =
       div_ [class_ "flex items-center gap-2 p-2"] $ do
-        div_ [class_ "flex-1"] $
-          div_ [class_ "border border-gray-200 rounded-lg px-4 py-2"] $
-            span_ [class_ "text-gray-600 text-sm"] (toHtml email)
+        div_ [class_ "flex-1"]
+          $ div_ [class_ "border border-gray-200 rounded-lg px-4 py-2"]
+          $ span_ [class_ "text-gray-600 text-sm"] (toHtml email)
 
         select_ [class_ "text-gray-600 text-sm border border-gray-200 rounded-lg py-2 pl-4 pr-8 hover:border-gray-300 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"] $ do
           option_ [] "Admin"
           option_ [] "Member"
           option_ [] "Viewer"
 
-        div_ [class_ "flex items-center justify-center w-8 h-8 rounded-full bg-gray-100 border border-gray-200 shadow px-2"] $
-          button_ [type_ "button", class_ "text-red-500 hover:text-red-600"] $
-            faSprite_ "trash" "regular" "w-4 h-4"
+        div_ [class_ "flex items-center justify-center w-8 h-8 rounded-full bg-gray-100 border border-gray-200 shadow px-2"]
+          $ button_ [type_ "button", class_ "text-red-500 hover:text-red-600"]
+          $ faSprite_ "trash" "regular" "w-4 h-4"
 
 
 renderCheckInbox :: Html ()
 renderCheckInbox =
   div_ [class_ "max-w-xs mx-auto p-6 text-start my-3 pt-40"] $ do
     -- Logo
-    div_ [class_ "text-2xl mb-4"] $
-      img_ [src_ "./components/svg/logo_mini.svg", alt_ ""]
+    div_ [class_ "text-2xl mb-4 "]
+      $ img_ [src_ "/public/assets/svgs/logo_min.svg", alt_ ""]
 
     -- Header
-    h1_ [class_ "text-3xl font-normal mb-12"] "Check your inbox"
+    h1_ [class_ "text-slate-950 text-3xl font-semibold font-['Inter'] leading-10 pb-8"] "Check your inbox"
 
     -- Email clients
     div_ [class_ "flex justify-between gap-6 mb-8"] $ do
@@ -845,73 +804,73 @@ renderCheckInbox =
         [ href_ url
         , class_ "p-6 border rounded-2xl hover:border-blue-500 transition-colors duration-200 shadow-sm"
         ]
-        $ img_ [src_ ("./components/svg/" <> icon), alt_ alt]
+        $ img_ [src_ ("/public/assets/svgs/onboarding/" <> icon), alt_ alt]
 
 
 renderDataLocationSelect :: Html ()
 renderDataLocationSelect = do
-  div_ [class_ "text-2xl mb-4 m-4"] $
-    img_ [src_ "./../assets/svgs/logo.svg", alt_ ""]
+  div_ [class_ "text-2xl mb-4 m-4"]
+    $ img_ [src_ "/public/assets/svgs/logo_min.svg", alt_ ""]
 
   div_ [class_ "max-w-md mx-auto p-6 pt-40"] $ do
     -- Back button
-    button_ [class_ "flex items-center gap-2 mb-8 group"] $ do
-      div_ [class_ "w-8 h-8 flex items-center justify-center bg-blue-500 rounded-full"] $
-        faSprite_ "chevron-left" "regular" "w-3 h-3 text-white"
-      span_ [class_ "text-gray-600 text-lg"] "Back"
+    renderBackButton "Back"
 
     -- Main content
-    div_ [class_ "space-y-2"] $ do
-      h1_ [class_ "text-3xl font-semibold"] $ do
+    div_ [class_ "space-y-8"] $ do
+      h1_ [class_ "text-slate-950 text-2xl font-semibold font-['Inter'] leading-[33px]"] $ do
         "Where should your"
         br_ []
-        "data be hosted"
+        "data be hosted?"
 
-      -- Location options
-      renderLocation "Europe (EU)" True
-      renderLocation "United State (US)" False
-      renderLocation "Asia" False
+      form_
+        [ class_ "space-y-2"
+        , hxPost_ "/onboarding/hosting"
+        , id_ "pick_data_center_form"
+        , hxSwap_ "outerHTML"
+        , hxTrigger_ "submit"
+        ]
+        $ do
+          -- Location options
+          renderLocation "Europe (EU)" True
+          renderLocation "United State (US)" False
+          renderLocation "Asia" False
 
       -- Proceed button
-      button_
-        [ type_ "button"
-        , class_ "w-full py-2 px-4 border-2 border-transparent rounded-2xl text-white bg-gradient-to-b from-[#256BF6] to-[#1055DE] hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 mt-8"
-        ]
-        "Proceed"
+      renderCustomButton POST "" "Proceed"
   where
     renderLocation :: Text -> Bool -> Html ()
-    renderLocation name isChecked =
-      label_ [class_ "relative block"] $ do
+    renderLocation name isChecked = do
+      label_ [class_ "relative block cursor-pointer"] $ do
         input_
-          [ type_ "radio"
-          , name_ "location"
-          , class_ "sr-only peer"
-          -- , checked_ isChecked
-          ]
-        div_ [class_ "flex items-center justify-between p-4 border rounded-lg cursor-pointer hover:border-blue-500 peer-checked:border-blue-500"] $ do
+          ( [ type_ "radio"
+            , name_ "location"
+            , class_ "sr-only peer"
+            , value_ name
+            ]
+              ++ ([checked_ | isChecked])
+          )
+        div_ [class_ "flex items-center justify-between p-4 border rounded-lg hover:border-blue-500 peer-checked:border-blue-500"] $ do
           span_ [class_ "font-medium"] (toHtml name)
           div_
-            [ class_ $
-                "w-6 h-6 border-2 rounded-full flex items-center justify-center "
-                  <> if isChecked then "border-blue-500" else "border-gray-200"
+            [ class_
+                $ "w-6 h-6 border-2 rounded-full flex items-center justify-center "
+                <> (if isChecked then "border-blue-500" else "border-gray-200")
             ]
             $ do
               div_
-                [ class_ $
-                    "w-3 h-3 rounded-full "
-                      <> if isChecked then "bg-blue-500" else "peer-checked:bg-blue-500"
+                [ class_
+                    $ "w-3 h-3 rounded-full "
+                    <> (if isChecked then "bg-blue-500" else "")
                 ]
-                ""
+                mempty
 
 
 renderNotificationSent :: Html ()
 renderNotificationSent = do
   div_ [class_ "max-w-md mx-auto p-auto pt-40"] $ do
     -- Back button
-    button_ [class_ "flex items-center gap-2 mb-8 group"] $ do
-      div_ [class_ "w-8 h-8 flex items-center justify-center bg-blue-500 rounded-full"] $
-        faSprite_ "chevron-left" "regular" "w-3 h-3 text-white"
-      span_ [class_ "text-gray-600 text-lg"] "Back"
+    renderBackButton "Back"
 
     -- Main content
     div_ [class_ "text-start space-y-8"] $ do
@@ -921,16 +880,12 @@ renderNotificationSent = do
         "to configured channels"
 
       -- Paper plane image
-      div_ [class_ "flex justify-center py-12"] $
-        img_ [src_ "./components/svg/sent.svg", alt_ "Notification sent"]
+      div_ [class_ "flex justify-center py-12"]
+        $ img_ [src_ "/public/assets/svgs/onboarding/sent.svg", alt_ "Notification sent"]
 
       -- Action buttons
       div_ [class_ "space-y-4"] $ do
-        button_
-          [ type_ "button"
-          , class_ "w-full py-2 px-4 border-2 border-transparent rounded-2xl shadow-sm text-white bg-gradient-to-b from-[#256BF6] to-[#1055DE] hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 mt-8"
-          ]
-          "Confirmed"
+        renderCustomButton POST "" "Confirmed"
 
         a_
           [ href_ "#"
@@ -941,34 +896,28 @@ renderNotificationSent = do
 
 renderFrameworkIntegration :: Html ()
 renderFrameworkIntegration =
-  div_ [class_ " mx-auto p-6 pt-40"] $
-    div_ [class_ "grid grid-cols-6  items-start"] $
-      do
-        -- Left Column
-        div_ [class_ "col-span-2 space-y-6 w-80"] $ do
-          renderBackButton
-          renderTitle
-          renderInfoMessage
-          renderSearchBox
-          renderFrameworksList
-          renderActionButtons
+  div_ [class_ "max-w-7xl mx-auto p-6 pt-40 flex"]
+    $ div_ [class_ "grid grid-cols-6  items-start"]
+    $ do
+      -- Left Column
+      div_ [class_ "col-span-2 space-y-6"] $ do
+        renderBackButton "Back"
+        renderTitle
+        renderInfoMessage
+        renderSearchBox
+        renderFrameworksList
+        renderActionButtons
 
-        div_ [class_ "col-span-1"] ""
+      div_ [class_ "col-span-1"] ""
 
-        -- Right Column
-        div_ [class_ "col-span-3 space-y-6 p-40"] $ do
-          h2_
-            [class_ "text-3xl text-slate-950 font-semibold font-['Inter'] leading-10"]
-            "Configure Express SDK"
-          renderTabs
-          renderConfigSection
+      -- Right Column
+      div_ [class_ "col-span-3 space-y-6"] $ do
+        h2_
+          [class_ "text-3xl text-slate-950 font-semibold font-['Inter'] leading-10"]
+          "Configure Express SDK"
+        renderTabs
+        renderConfigSection
   where
-    renderBackButton =
-      button_ [class_ "flex items-center gap-2 mb-8 group mt-8"] $ do
-        div_ [class_ "w-8 h-8 flex items-center justify-center bg-blue-500 rounded-full"] $
-          faSprite_ "chevron-left" "regular" "w-3 h-3 text-white"
-        span_ [class_ "text-gray-600 text-lg"] "Back"
-
     renderTitle =
       h1_ [class_ "self-stretch text-slate-950 text-2xl font-semibold font-['Inter'] leading-10"] $ do
         "What language/"
@@ -986,8 +935,8 @@ renderFrameworkIntegration =
 
     renderSearchBox =
       div_ [class_ "relative w-full flex flex-col justify-between items-start"] $ do
-        div_ [class_ "absolute inset-y-0 left-4 flex items-center pointer-events-none px-4"] $
-          faSprite_ "magnifying-glass" "regular" "h-5 w-5 text-gray-400"
+        div_ [class_ "absolute inset-y-0 left-4 flex items-center pointer-events-none px-4"]
+          $ faSprite_ "magnifying-glass" "regular" "h-5 w-5 text-gray-400 p-3"
         input_
           [ type_ "search"
           , placeholder_ "Search language/framework"
@@ -1006,14 +955,14 @@ renderFrameworkIntegration =
         _ <- div_ [class_ "flex items-center space-x-3"] $ do
           _ <- input_ [type_ "checkbox", name_ lang, class_ "w-4 h-4 rounded border border-slate-300"]
           _ <-
-            div_ [class_ "bg-slate-200 border rounded-lg p-1"] $
-              img_ [src_ ("./components/svg/" <> logo), alt_ lang, class_ "w-6 h-6"]
+            div_ [class_ "bg-slate-200 border rounded-lg p-1"]
+              $ img_ [src_ ("/public/assets/svgs/onboarding/" <> logo), alt_ lang, class_ "w-6 h-6"]
           div_ [] $ do
             _ <- span_ [class_ txtColor] (toHtml lang)
             _ <- span_ [class_ $ txtColor <> " mx-2"] "›"
             span_ [class_ txtColor] (toHtml framework)
         button_
-          [class_ "text-sm hover:bg-gray-50 h-6 px-2 py-[18px] rounded-lg border border-slate-500 justify-center items-center gap-1"]
+          [class_ "text-sm hover:bg-gray-50 h-6 px-2 py-md rounded-lg border border-slate-500 justify-center items-center gap-1"]
           "View doc"
       where
         txtColor =
@@ -1027,11 +976,7 @@ renderFrameworkIntegration =
           [class_ "text-slate-500 text-xs font-medium font-['Inter'] leading-none"]
           "This button below will check if APItoolkit has received telemetry data from the integration."
         div_ [class_ "space-y-4 pt-4"] $ do
-          button_
-            [ type_ "button"
-            , class_ "w-full py-2 px-4 border-2 border-transparent rounded-2xl text-white bg-gradient-to-b from-[#256BF6] to-[#1055DE] hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 mt-8"
-            ]
-            "Confirm Integration and Proceed"
+          renderCustomButton POST "" "Confirm Integration and Proceed"
           div_
             [class_ "text-center text-slate-500 text-sm font-medium font-['Inter'] underline leading-snug"]
             "Skip integration"
@@ -1043,30 +988,30 @@ renderFrameworkIntegration =
         button_ [class_ "px-1 py-2 text-gray-500 hover:text-gray-700"] "Outgoing request monitoring"
 
     renderConfigSection =
-      div_ [class_ "col-span-3 space-y-4"] $ do
+      div_ [class_ "col-span-3 space-y-4 pl-5"] $ do
         h2_ [class_ "text-lg font-semibold"] "Configure Express SDK"
         p_ [class_ "text-gray-600"] "Install the APItoolkit express SDK using npm/bun/pnpm"
 
         -- Installation command
-        div_ [class_ "p-3 flex justify-start w-[593px] h-10 px-3 py-2 bg-slate-100 rounded-xl items-center gap-2"] $ do
+        div_ [class_ "p-3 flex justify-start w-full h-10 px-3 py-2 bg-slate-100 rounded-xl items-center gap-2"] $ do
           code_ [class_ "text-sm text-gray-700"] "$ npm install apitoolkit-express"
-          button_ [class_ "text-gray-400 hover:text-gray-600"] $
-            faSprite_ "copy" "regular" "w-4 h-4"
+          button_ [class_ "text-gray-400 hover:text-gray-600"]
+            $ faSprite_ "copy" "regular" "w-4 h-4"
 
         -- Code example
-        div_ [class_ "flex bg-slate-100 p-4 rounded-md items-start justify-between"] $ do
-          pre_ [class_ "text-slate-500 text-sm font-medium font-['Inter'] leading-snug"] $
-            code_ [] $
-              toHtml expressExample
-          button_ [class_ "text-gray-400 hover:text-gray-600"] $
-            faSprite_ "copy" "regular" "w-4 h-4"
+        div_ [class_ "flex bg-slate-100 p-4 rounded-md items-start justify-between w-full"] $ do
+          pre_ [class_ "text-slate-500 text-sm font-medium font-['Inter'] leading-snug bg-slate-100"]
+            $ code_ []
+            $ toHtml expressExample
+          button_ [class_ "text-gray-400 hover:text-gray-600 bg-slate-100"]
+            $ faSprite_ "copy" "regular" "w-4 h-4"
 
-        div_ [class_ "space-y-2"] $ do
+        div_ [class_ "space-y-2 w-full"] $ do
           div_
             [class_ "text-slate-950 text-xl font-semibold font-['Inter'] leading-7"]
             "Configure Express SDK"
           div_
-            [class_ "text-slate-500 text-sm font-medium font-['Inter'] leading-snug"]
+            [class_ "text-slate-500 text-sm font-medium font-['Inter'] leading-snug "]
             "Install the APItookit express SDK using npm/bun/pnpm"
 
     expressExample :: Text
@@ -1094,3 +1039,31 @@ renderFrameworkIntegration =
         , "  console.log(`Example app listening on port ${port}`);"
         , "});"
         ]
+
+
+-- -- Reusable Components --
+renderBackButton :: Text -> Html ()
+renderBackButton label = do
+  button_ [class_ "flex items-center gap-2 mb-8 group", onclick_ "history.back()"] $ do
+    div_ [class_ "w-8 h-8 flex items-center justify-center bg-blue-500 rounded-full"]
+      $ faSprite_ "chevron-left" "regular" "w-3 h-3 text-white"
+    span_ [class_ "text-gray-600 text-lg"] (toHtml label)
+
+
+renderCustomButton :: HTTPMethod -> Text -> Text -> Html ()
+renderCustomButton method url label = do
+  button_
+    [ type_ "button"
+    , class_ "w-full px-6 py-4 border-2 border-transparent bg-gradient-to-b from-[#256bf6] to-[#1055de] rounded-2xl shadow-inner justify-center items-center gap-2.5 inline-flex hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 mt-8"
+    , customMethodAttribute method url
+    ]
+    $ do
+      span_ [class_ "text-white text-sm font-medium font-['Inter'] leading-snug"] (toHtml label)
+
+
+-- Helper function to select the appropriate HTMX attribute based on HTTP method
+customMethodAttribute :: HTTPMethod -> Text -> Attribute
+customMethodAttribute GET url = hxGet_ url
+customMethodAttribute POST url = hxPost_ url
+customMethodAttribute PUT url = hxPut_ url
+customMethodAttribute DELETE url = hxDelete_ url

@@ -1,14 +1,45 @@
 module Pages.Onboarding.Types where
 
+-- import Data.Default (Default (..), def)
+-- import Data.Text (Text)
+-- import Data.Time (UTCTime)
+-- import Data.Vector (Vector)
+-- import Data.Aeson (FromJSON, ToJSON)
+-- import GHC.Generics ( Generic, Generic )
+
+-- import GHC.Base
+-- import GHC.Show
+-- import Web.FormUrlEncoded (
+--   FromForm (fromForm),
+--   ToForm,
+--   lookupUnique,
+--  )
+-- import Web.Internal.FormUrlEncoded (ToForm (toForm))
+-- import Prelude (Either (..))
+-- import Deriving.Aeson (CustomJSON, OmitNothingFields)
 import Data.Default (Default (..), def)
 import Data.Text (Text)
 import Data.Time (UTCTime)
 import Data.Vector (Vector)
-
+import Data.Aeson (FromJSON, ToJSON)
+import GHC.Generics (Generic)  -- Remove duplicate Generic import
+import Web.FormUrlEncoded (
+  FromForm(fromForm),
+  ToForm(toForm),
+  lookupUnique,
+ )
+-- Remove duplicate ToForm import since it's already in Web.FormUrlEncoded
+-- import Web.Internal.FormUrlEncoded (ToForm (toForm))  
+import Prelude (Either(..))
+import Deriving.Aeson qualified as DA  -- Qualified import for clarity
+import GHC.Show (Show)
+import GHC.Base (Eq)
+import GHC.Base (Bool)
+import GHC.Base (Int)
+import GHC.Base (Maybe)
+import GHC.Base (Maybe(Nothing))
+import GHC.Base (undefined)
 import GHC.Base
-import GHC.Generics (Generic)
-import GHC.Show
-import Web.FormUrlEncoded (FromForm)
 
 
 -- | Signup form data
@@ -46,18 +77,56 @@ data HostingLocation
   = Europe
   | UnitedStates
   | Asia
-  deriving (Show, Eq)
+  deriving (Show, Eq, Generic)
+
+
+-- Convert form data to HostingLocation
+instance FromForm HostingLocation where
+  fromForm form = do
+    locationStr <- lookupUnique "location" form
+    case locationStr of
+      "Europe (EU)" -> Right Europe
+      "United State (US)" -> Right UnitedStates
+      "Asia" -> Right Asia
+      _ -> Left "Invalid hosting location. Must be one of: Europe (EU), United State (US), Asia"
+
+
+-- Convert HostingLocation to form data
+instance ToForm HostingLocation where
+  toForm location =
+    case location of
+      Europe -> [("location", "Europe (EU)")]
+      UnitedStates -> [("location", "United State (US)")]
+      Asia -> [("location", "Asia")]
 
 
 -- | Usage preferences form
+-- data UsagePreferences = UsagePreferences
+--   { uptimeMonitoring :: Bool
+--   , errorTracking :: Bool
+--   , performanceMonitoring :: Bool
+--   , securityTesting :: Bool
+--   }
+--   deriving (Show, Eq)
+--   -- Update the UsagePreferences data type:
+-- data UsagePreferences = UsagePreferences
+--   { uptimeMonitoring :: Bool
+--   , errorTracking :: Bool
+--   , performanceMonitoring :: Bool
+--   , securityTesting :: Bool
+--   }
+--   deriving (Show, Eq, Generic)
+--   deriving (ToJSON, FromJSON) via CustomJSON '[OmitNothingFields] UsagePreferences
+--   deriving anyclass (FromForm)
 data UsagePreferences = UsagePreferences
   { uptimeMonitoring :: Bool
   , errorTracking :: Bool
   , performanceMonitoring :: Bool
   , securityTesting :: Bool
   }
-  deriving (Show, Eq)
-
+  deriving stock (Show, Eq, Generic)
+  deriving (ToJSON, FromJSON) via DA.CustomJSON '[DA.OmitNothingFields] UsagePreferences
+  deriving anyclass (FromForm)
 
 -- | URL Monitor configuration
 data URLMonitorConfig = URLMonitorConfig

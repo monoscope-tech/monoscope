@@ -3,7 +3,9 @@ module Pages.Onboarding.Handler (
   onboardingLoginGetH,
   onboardingProfileGetH,
   onboardingHostingGetH,
+  onboardingHostingPostH,
   onboardingUsageGetH,
+  onboardingUsagePostH,
   onboardingUrlMonitorGetH,
   onboardingNotificationsGetH,
   onboardingTeamGetH,
@@ -16,12 +18,15 @@ module Pages.Onboarding.Handler (
 
 import BackgroundJobs qualified
 import Control.Lens ((^.))
-import Data.Aeson qualified as AE
+import Data.Aeson (encode)
 import Data.Base64.Types qualified as B64
 import Data.ByteString.Base64 qualified as B64
+import Data.ByteString.Lazy qualified as LBS
 import Data.Default (Default (..), def)
+import Data.Map.Strict qualified as Map
 import Data.Pool (withResource)
 import Data.Text qualified as T
+import Data.Text.Encoding qualified as TE
 import Data.Time (UTCTime, getCurrentTime)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
@@ -43,7 +48,9 @@ import Relude hiding (ask, asks)
 import System.Config
 import System.Types
 import Utils (faSprite_, isDemoAndNotSudo)
-import Web.FormUrlEncoded (FromForm)
+import Web.FormUrlEncoded (FromForm (..), ToForm (..), lookupUnique)
+import PyF
+import BackgroundJobs (BgJobs(..))
 
 
 -- | Initial handler
@@ -77,8 +84,6 @@ onboardingProfileGetH :: ATAuthCtx (RespHeaders OnboardingResponse)
 onboardingProfileGetH = do
   sess <- Sessions.getSession
   appCtx <- ask @AuthContext
-  --   onboardingState <- dbtToEff $ getOnboardingState sess.user.id
-  -- Since onboardingState is Nothing, let's just use the default ProfileForm
   let form = def :: ProfileForm
   let bwconf =
         (def :: BWConfig)
@@ -228,22 +233,65 @@ onboardingProfilePostH form = do
 
 
 -- | Hosting Location Handler
--- onboardingHostingPostH :: HostingLocation -> ATAuthCtx (RespHeaders OnboardingResponse)
--- onboardingHostingPostH location = do
---   sess <- Sessions.getSession
---   dbtToEff $ updateOnboardingHosting sess.user.id location
---   addSuccessToast "Hosting location selected" Nothing
---   redirectCS "/onboarding/usage"
---   addRespHeaders $ NoContent ""
+onboardingHostingPostH :: HostingLocation -> ATAuthCtx (RespHeaders OnboardingResponse)
+onboardingHostingPostH location = do
+  traceShowM location
+  sess <- Sessions.getSession
+  traceShowM sess.user.id
+  appCtx <- ask @AuthContext
+  traceShowM appCtx.config
+  -- Convert HostingLocation to Text for session storage
+  let locationKey = "hosting_location"
+      locationValue = case location of
+        Europe -> "Europe (EU)"
+        UnitedStates -> "United State (US)"
+        Asia -> "Asia"
+
+  -- Update session with the new hosting location
+  let updatedSessionData =
+        Sessions.SessionData
+          $ Map.insert locationKey locationValue
+          $ Sessions.getSessionData sess.persistentSession.sessionData
+
+  -- Update the session in the database
+  void
+    $ Sessions.insertSession
+      sess.persistentSession.id
+      sess.persistentSession.userId
+      updatedSessionData
+
+  -- Add success notification and redirect
+  addSuccessToast "Hosting location selected" Nothing
+  redirectCS "/onboarding/usage"
+  addRespHeaders $ NoContent ""
+
 
 -- | Usage Preferences Handler
--- onboardingUsagePostH :: UsagePreferences -> ATAuthCtx (RespHeaders OnboardingResponse)
--- onboardingUsagePostH prefs = do
---   sess <- Sessions.getSession
---   dbtToEff $ updateOnboardingUsage sess.user.id prefs
---   addSuccessToast "Usage preferences saved" Nothing
---   redirectCS "/onboarding/url-monitor"
---   addRespHeaders $ NoContent ""
+onboardingUsagePostH :: UsagePreferences -> ATAuthCtx (RespHeaders OnboardingResponse)
+onboardingUsagePostH prefs = do
+  sess <- Sessions.getSession
+  appCtx <- ask @AuthContext
+
+  -- Store usage preferences in session
+  let usageKey = "usage_preferences"
+      usageValue = decodeUtf8 (encode prefs)
+      updatedSessionData =
+        Sessions.SessionData
+          $ Map.insert usageKey usageValue
+          $ Sessions.getSessionData sess.persistentSession.sessionData
+
+  -- Update session
+  void
+    $ Sessions.insertSession
+      sess.persistentSession.id
+      sess.persistentSession.userId
+      updatedSessionData
+
+  -- Add success notification and redirect
+  addSuccessToast "Usage preferences saved" Nothing
+  redirectCS "/onboarding/url-monitor"
+  addRespHeaders $ NoContent ""
+
 
 -- | URL Monitor Handler
 -- onboardingUrlMonitorPostH :: URLMonitorConfig -> ATAuthCtx (RespHeaders OnboardingResponse)
@@ -268,6 +316,140 @@ onboardingProfilePostH form = do
 -- redirectCS "/onboarding/team"
 -- addRespHeaders $ NoContent ""
 
+
+-- | Notification Settings Handler
+-- onboardingNotificationsPostH :: NotificationSettings -> ATAuthCtx (RespHeaders OnboardingResponse)
+-- onboardingNotificationsPostH settings = do
+--   sess <- Sessions.getSession
+--   appCtx <- ask @AuthContext
+
+--   -- Validate notification settings
+--   case validateNotificationSettings settings of
+--     Invalid errors -> do
+--       addErrorToast "Invalid notification settings" Nothing
+--       addRespHeaders $ NotificationsR $ PageCtx def (sess.persistentSession, appCtx.config, settings)
+
+--     Valid validSettings -> do
+--       -- Process and store notification channels
+--       processResult <- processNotificationChannels sess.user.id validSettings.notificationChannels
+--       case processResult of
+--         Left error -> do
+--           addErrorToast ("Failed to configure channels: " <> error) Nothing
+--           addRespHeaders $ NotificationsR $ PageCtx def (sess.persistentSession, appCtx.config, settings)
+
+--         Right _ -> do
+--           -- Store notification settings in session
+--           let notificationKey = "notification_settings"
+--               notificationValue = decodeUtf8 $ encode settings
+--               updatedSessionData = Sessions.SessionData $
+--                 Map.insert notificationKey notificationValue $
+--                 Sessions.getSessionData sess.persistentSession.sessionData
+
+--           -- Update session with new notification settings
+--           void $ Sessions.insertSession
+--             sess.persistentSession.id
+--             sess.persistentSession.userId
+--             updatedSessionData
+
+--           -- Set up test notifications for all configured channels
+--           whenJustM (dbtToEff $ Projects.projectById sess.project.id) \project -> do
+--             let testMsg = [fmtTrim|🤖 Test notification from APIToolkit for {project.title}|]
+
+--             -- Process email notifications
+--             forM_ settings.notificationEmails \email ->
+--               liftIO $ withResource appCtx.jobsPool \conn ->
+--                 createJob conn "background_jobs" $
+--                   InviteUserToProject
+--                     sess.user.id
+--                     sess.project.id
+--                     email
+--                     "Test Notification"
+
+--             -- Process Slack/Discord notifications
+--             forM_ settings.notificationChannels \case
+--               SlackChannel _ webhookUrl ->
+--                 liftIO $ withResource appCtx.jobsPool \conn ->
+--                   createJob conn "background_jobs" $
+--                     SendDiscordData
+--                       sess.user.id
+--                       sess.project.id
+--                       project.title
+--                       ["Test notification"]
+--                       webhookUrl
+--               DiscordChannel _ webhookUrl ->
+--                 liftIO $ withResource appCtx.jobsPool \conn ->
+--                   createJob conn "background_jobs" $
+--                     SendDiscordData
+--                       sess.user.id
+--                       sess.project.id
+--                       project.title
+--                       ["Test notification"]
+--                       webhookUrl
+
+--           -- Add success notification and redirect
+--           addSuccessToast "Notification settings saved and test notifications queued" Nothing
+--           redirectCS "/onboarding/notification-sent"
+--           addRespHeaders $ NoContent ""
+
+-- -- | Helper function to validate notification settings
+-- validateNotificationSettings :: NotificationSettings -> FormValidationResult NotificationSettings
+-- validateNotificationSettings settings = do
+--   let emailErrors = mapMaybe validateEmail settings.notificationEmails
+--       phoneErrors = maybeToList $ (validatePhoneNumber =<< settings.notificationPhone)
+--       channelErrors = mapMaybe validateChannel settings.notificationChannels
+
+--       allErrors = emailErrors ++ phoneErrors ++ channelErrors
+
+--   if null allErrors
+--     then Valid settings
+--     else Invalid allErrors
+
+-- -- | Helper function to validate a notification channel
+-- validateChannel :: NotificationChannel -> Maybe FormError
+-- validateChannel channel =
+--   if isValidWebhookUrl (getWebhookUrl channel)
+--     then Nothing
+--     else Just $ FormError "webhook" "Invalid webhook URL format"
+
+-- -- | Helper function to check if a webhook URL is valid
+-- isValidWebhookUrl :: Text -> Bool
+-- isValidWebhookUrl url =
+--   let urlText = T.toLower url
+--   in T.isPrefixOf "https://" urlText &&
+--      (T.isInfixOf "slack.com/services/" urlText ||
+--       T.isInfixOf "discord.com/api/webhooks/" urlText)
+
+-- -- | Helper function to process notification channels
+-- processNotificationChannels :: Users.UserId -> [NotificationChannel] -> ATAuthCtx (Either Text ())
+-- processNotificationChannels userId channels = do
+--   results <- forM channels $ \channel -> do
+--     -- Validate webhook URL
+--     if isValidWebhookUrl (getWebhookUrl channel)
+--       then do
+--         -- Store channel configuration in database
+--         dbtToEff $ storeNotificationChannel userId channel
+--         pure $ Right ()
+--       else pure $ Left $ "Invalid webhook URL for " <> getChannelName channel
+
+--   -- Combine results, returning first error if any
+--   pure $ sequence_ results
+
+-- -- | Helper functions to extract channel information
+-- getWebhookUrl :: NotificationChannel -> Text
+-- getWebhookUrl (SlackChannel _ url) = url
+-- getWebhookUrl (DiscordChannel _ url) = url
+
+-- getChannelName :: NotificationChannel -> Text
+-- getChannelName (SlackChannel name _) = name
+-- getChannelName (DiscordChannel name _) = name
+
+-- -- | Database operation to store notification channel
+-- storeNotificationChannel :: Users.UserId -> NotificationChannel -> DBT IO ()
+-- storeNotificationChannel userId channel = do
+--   -- TODO: Implement actual database storage
+--   -- This is a placeholder for the actual database operation
+--   pass
+
 -- | Team Invitation Handler
 -- onboardingTeamPostH :: TeamInvitationList -> ATAuthCtx (RespHeaders OnboardingResponse)
 -- onboardingTeamPostH invitation = do
@@ -291,6 +473,8 @@ onboardingProfilePostH form = do
 --   addSuccessToast "Team invitations sent" Nothing
 --   redirectCS "/onboarding/pricing"
 --   addRespHeaders $ NoContent ""
+
+
 
 -- | Pricing Plan Handler
 -- onboardingPricingPostH :: PricingPlan -> ATAuthCtx (RespHeaders OnboardingResponse)
