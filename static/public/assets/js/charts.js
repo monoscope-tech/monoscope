@@ -1,3 +1,5 @@
+'use strict'
+
 function throughputEChart(renderAt, data, gb, showLegend, showAxes, theme) {
   let backgroundStyle = {
     color: 'rgba(240,248,255, 0.4)',
@@ -414,7 +416,7 @@ function flameGraphChart(data, renderAt, colorsMap) {
     container.innerHTML = ''
     const rootVal = stackTrace.sort((a, b) => b.value - a.value)[0].value || 1
     maxDuration = rootVal
-    generateTimeIntervals(rootVal, target)
+    generateTimeIntervals(rootVal, 'time-container')
     const data = recursionJson(stackTrace)
     const sortedData = data.sort((a, b) => b.value[2] - a.value[2])
     sortedData.forEach((item) => {
@@ -433,11 +435,11 @@ function flameGraphChart(data, renderAt, colorsMap) {
     const container = document.querySelector('#time-container')
     if (container) {
       const left = e.clientX - boundingX
+      lineContainer.style.left = `${left}px`
       const containerWidth = container.offsetWidth - SCROLL_BAR_WIDTH
       const currTime = (maxDuration * (left - 8)) / containerWidth
       const [f, u] = formatDuration(currTime)
       time.textContent = `${f}${u}`
-      lineContainer.style.left = `${left}px`
       if (left < 9 || left > containerWidth + 8) {
         lineContainer.style.display = 'none'
       } else {
@@ -479,9 +481,9 @@ function buildHierachy(spans) {
 }
 
 function generateTimeIntervals(duration, target) {
-  const container = document.querySelector('#time-container')
+  const container = document.querySelector('#' + target)
   container.innerHTML = ''
-  const containerWidth = container.offsetWidth - SCROLL_BAR_WIDTH
+  const containerWidth = target === 'waterfall-time-container' ? 550 : container.offsetWidth - SCROLL_BAR_WIDTH
   const intervalWidth = containerWidth / 9
   const intervals = []
   for (let i = 0; i < 10; i++) {
@@ -489,7 +491,6 @@ function generateTimeIntervals(duration, target) {
     let [durationF, unit] = formatDuration(t)
     const time = durationF
     unit = t === 0 ? '' : unit
-
     intervals.push(`
               <div class="absolute bottom-0 text-gray-700 border-left overflow-x-visible" style="width: ${intervalWidth}px; left: ${i * intervalWidth}px;">
                <div class="relative" style="height:10px">
@@ -533,4 +534,74 @@ function elt(type, props, ...children) {
     else dom.appendChild(document.createTextNode(child))
   }
   return dom
+}
+
+function waterFallGraphChart(fData, renderAt, serviceColors) {
+  const { min, max } = getMinMax(fData)
+  const maxDuration = max - min
+  generateTimeIntervals(maxDuration, 'waterfall-time-container')
+  buildWaterfall(fData, renderAt, serviceColors, min, maxDuration)
+}
+
+function buildWaterfall(spans, target, serviceColors, start, maxDuration) {
+  const container = document.querySelector('#' + target)
+  const containerWidth = 550
+  container.innerHTML = ''
+  spans.forEach((span) => {
+    container.appendChild(buildTree(span, serviceColors, start, maxDuration, containerWidth))
+  })
+}
+
+function buildTree(span, serviceColors, start, rootVal, containerWidth) {
+  const startCurr = span.spanRecord.startTime
+  const st = startCurr - start
+  const startPix = (containerWidth * st) / rootVal
+  const width = (containerWidth * span.spanRecord.spanDurationNs) / rootVal
+  const parentDiv = elt('div', {
+    class: 'flex flex-col',
+  })
+  const spanId = span.spanRecord.spanId
+  const color = serviceColors[span.spanRecord.serviceName] || 'bg-black'
+  const div = elt('div', {
+    class: color + ' flex rounded items-center cursor-pointer h-5 grow-0 justify-between flex-nowrap overflow-hidden hover:border hover:border-black',
+    id: 'waterfall-chart-' + spanId,
+    onclick: (event) => {
+      event.stopPropagation()
+      event.currentTarget.nextSibling.classList.toggle('hidden')
+      const treeTarget = document.querySelector('#waterfall-tree-' + spanId)
+      if (treeTarget) treeTarget.classList.toggle('hidden')
+    },
+  })
+  parentDiv.style.marginLeft = `${startPix}px`
+  div.style.width = `${width}px`
+  const childDiv = elt('div', { class: 'flex flex-col mt-2 gap-1', id: 'waterfall-child-' + spanId })
+  span.children.forEach((child) => {
+    childDiv.appendChild(buildTree(child, serviceColors, startCurr, rootVal, containerWidth))
+  })
+  const text = elt('span', { class: 'text-black ml-1 shrink-0 mr-4 text-xs' }, span.spanRecord.spanName)
+  const [t, u] = formatDuration(span.spanRecord.spanDurationNs)
+  const tim = elt('span', { class: 'text-black text-xs shrink-0' }, `${Math.floor(t)} ${u}`)
+  div.appendChild(text)
+  div.appendChild(tim)
+  parentDiv.appendChild(div)
+  if (span.children.length > 0) {
+    parentDiv.appendChild(childDiv)
+  }
+  return parentDiv
+}
+
+function getMinMax(arr) {
+  let min = Infinity
+  let max = -Infinity
+  function traverse(array) {
+    for (let i = 0; i < array.length; i++) {
+      const nano = array[i].spanRecord.startTime
+      const nano2 = array[i].spanRecord.endTime
+      if (nano < min) min = nano
+      if (nano2 > max) max = nano2
+      if (array[i].children) traverse(array[i].children)
+    }
+  }
+  traverse(arr)
+  return { min, max }
 }

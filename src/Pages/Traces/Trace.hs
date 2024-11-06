@@ -4,8 +4,12 @@ import Data.Aeson ((.=))
 import Data.Aeson qualified as AE
 import Data.Aeson.Key qualified as AEKey
 import Data.HashMap.Internal.Strict qualified as HM
+import Data.Map.Strict (Map)
+import Data.Map.Strict qualified as Map
+import Data.Maybe (catMaybes, fromMaybe)
 import Data.Text qualified as T
 import Data.Time (defaultTimeLocale)
+import Data.Time.Clock (UTCTime)
 import Data.Time.Format (formatTime)
 import Data.Time.Format.ISO8601 (formatShow, iso8601Format)
 import Data.UUID qualified as UUID
@@ -85,6 +89,7 @@ tracePage p = do
       serviceData = V.toList $ getServiceData <$> p.spanRecords
       serviceNames = V.fromList $ ordNub $ (.name) <$> serviceData
       serviceColors = getServiceColors serviceNames
+      rootSpans = buildSpanTree p.spanRecords
   div_ [class_ "w-full h-full pt-2", id_ "trace_span_container"] $ do
     div_ [class_ "flex flex-col w-full gap-4 h-full pb-4"] $ do
       div_ [class_ "flex justify-between items-center"] do
@@ -159,20 +164,32 @@ tracePage p = do
                           div_ [class_ $ "h-full pl-2 text-xs font-medium " <> color, style_ $ "width:" <> percent <> "%"] pass
 
           div_ [role_ "tabpanel", class_ "a-tab-content pt-2 hidden", id_ "water_fall"] do
-            div_ [class_ "border w-full rounded-xl min-h-[230px] max-h-[330px] overflow-auto overflow-x-hidden "] do
-              renderSpanListTable serviceNames serviceColors p.spanRecords
+            div_ [class_ "border border-slate-200 flex w-full rounded-3xl min-h-[230px]  overflow-y-auto overflow-x-hidden "] do
+              div_ [class_ "w-full border-r overflow-x-hidden"] do
+                div_ [class_ "border-b h-10 border-b-slate-200"] pass
+                waterFallTree rootSpans serviceColors
+              div_ [class_ "shrink-0 px-2"] do
+                div_
+                  [ class_ "w-[550px] sticky top-0 border-b border-b-slate-200 h-10 text-xs relative"
+                  , id_ "waterfall-time-container"
+                  ]
+                  pass
+                div_ [class_ "w-[550px] overflow-x-hidden py-2 relative flex flex-col gap-2", id_ $ "waterfall-" <> traceItem.traceId] pass
 
           div_ [role_ "tabpanel", class_ "a-tab-content pt-2 hidden", id_ "span_list"] do
-            div_ [class_ "border w-full rounded-2xl min-h-[230px] max-h-[330px] overflow-auto overflow-x-hidden "] do
+            div_ [class_ "border border-slate-200 w-full rounded-3xl min-h-[230px] max-h-[330px] overflow-auto overflow-x-hidden "] do
               renderSpanListTable serviceNames serviceColors p.spanRecords
 
-      div_ [class_ "my-5 py-2 rounded-lg border"] do
+      div_ [class_ "my-5 py-2 rounded-3xl border overflow-hidden"] do
         div_ [class_ "flex flex-col gap-4", id_ $ "span-" <> traceItem.traceId] do
           Spans.expandedSpanItem pid tSp Nothing Nothing
   let spanJson = decodeUtf8 $ AE.encode $ p.spanRecords <&> getSpanJson
+  let waterFallJson = decodeUtf8 $ AE.encode $ rootSpans
+
   let colorsJson = decodeUtf8 $ AE.encode $ AE.object [AEKey.fromText k .= v | (k, v) <- HM.toList serviceColors]
   let trId = traceItem.traceId
   script_ [text|flameGraphChart($spanJson, "a$trId", $colorsJson);|]
+  script_ [text|waterFallGraphChart($waterFallJson, "waterfall-$trId", $colorsJson);|]
 
 
 getSpanJson :: Telemetry.SpanRecord -> AE.Value
@@ -181,10 +198,12 @@ getSpanJson sp =
     [ "span_id" .= sp.spanId
     , "name" .= sp.spanName
     , "value" .= sp.spanDurationNs
-    , "start" .= utcTimeToNanoseconds sp.startTime
+    , "start" .= start
     , "parent_id" .= sp.parentSpanId
     , "service_name" .= getServiceName sp
     ]
+  where
+    start = utcTimeToNanoseconds sp.startTime
 
 
 renderSpanRecordRow :: V.Vector Telemetry.SpanRecord -> HashMap Text Text -> Text -> Html ()
@@ -228,7 +247,7 @@ renderSpanListTable services colors records =
 
 spanTable :: V.Vector Telemetry.SpanRecord -> Html ()
 spanTable records =
-  div_ [class_ "rounded-2xl m-2 border border-slate-200"] do
+  div_ [class_ "rounded-3xl m-2 border border-slate-200"] do
     table_ [class_ "table table-sm w-full"] do
       thead_ [class_ "border-b border-slate-200"] $
         tr_ [class_ "p-2 border-b font-normal"] $ do
@@ -273,3 +292,88 @@ stBox title value =
   div_ [class_ "flex items-end px-2 gap-2 border-r  last:border-r-0"] do
     span_ [class_ "text-slate-950 font-medium"] $ toHtml value
     span_ [class_ "font-medium text-slate-500 text-sm"] $ toHtml title
+
+
+data SpanMin = SpanMin
+  { parentSpanId :: Maybe Text
+  , spanId :: Text
+  , spanName :: Text
+  , spanDurationNs :: Integer
+  , serviceName :: Text
+  , startTime :: Integer
+  , endTime :: Maybe Integer
+  }
+  deriving stock (Show, Generic)
+  deriving anyclass (AE.ToJSON, AE.FromJSON)
+
+
+data SpanTree = SpanTree
+  { spanRecord :: SpanMin
+  , children :: [SpanTree]
+  }
+  deriving (Show, Generic)
+  deriving anyclass (AE.ToJSON, AE.FromJSON)
+
+
+buildSpanMap :: V.Vector Telemetry.SpanRecord -> Map (Maybe Text) [Telemetry.SpanRecord]
+buildSpanMap = V.foldr (\sp m -> Map.insertWith (++) sp.parentSpanId [sp] m) Map.empty
+
+
+buildTree :: Map (Maybe Text) [Telemetry.SpanRecord] -> Maybe Text -> [SpanTree]
+buildTree spanMap parentId =
+  case Map.lookup parentId spanMap of
+    Nothing -> []
+    Just spans ->
+      [ SpanTree
+        SpanMin
+          { parentSpanId = sp.parentSpanId
+          , spanId = sp.spanId
+          , spanName = sp.spanName
+          , spanDurationNs = sp.spanDurationNs
+          , serviceName = getServiceName sp
+          , startTime = utcTimeToNanoseconds sp.startTime
+          , endTime = utcTimeToNanoseconds <$> sp.endTime
+          }
+        (buildTree spanMap (Just sp.spanId))
+      | sp <- spans
+      ]
+
+
+buildSpanTree :: V.Vector Telemetry.SpanRecord -> [SpanTree]
+buildSpanTree spans =
+  let spanMap = buildSpanMap spans
+   in buildTree spanMap Nothing
+
+
+waterFallTree :: [SpanTree] -> HashMap Text Text -> Html ()
+waterFallTree records scols = do
+  div_ [class_ "pl-2 py-2 flex flex-col gap-2"] do
+    forM_ records \s -> do
+      buildTree_ s 0 scols
+
+
+buildTree_ :: SpanTree -> Int -> HashMap Text Text -> Html ()
+buildTree_ sp level scol = do
+  let hasChildren = not $ null sp.children
+      serviceCol = getServiceColor sp.spanRecord.serviceName scol
+  div_ [class_ "flex flex-col border-slate-200"] do
+    div_
+      [ class_ "w-full flex justify-between items-end h-5 collapsed"
+      , [__| on click toggle .hidden on the next .children_container
+             then toggle .collapsed on me
+             |]
+      , id_ $ "waterfall-span-" <> sp.spanRecord.spanId
+      ]
+      do
+        div_ [class_ "flex items-center gap-2 "] do
+          when hasChildren $ do
+            div_ [class_ "border border-slate-200 w-7 flex justify-between gap-1 items-center rounded px-1"] do
+              faSprite_ "chevron-right" "regular" "h-3 w-3 shrink-0 font-bold text-slate-950 waterfall-item-tree-chevron"
+              span_ [class_ "text-xs "] $ toHtml $ show (length sp.children)
+          span_ [class_ "font-medium text-slate-950"] $ toHtml $ sp.spanRecord.serviceName
+          span_ [class_ "text-slate-500 text-sm whitespace-nowrap"] $ toHtml sp.spanRecord.spanName
+        span_ [class_ $ "w-1 rounded h-full shrink-0 " <> serviceCol] ""
+    when hasChildren $ do
+      div_ [class_ "pl-7 flex flex-col children_container gap-2 mt-2", id_ $ "waterfall-tree-" <> sp.spanRecord.spanId] do
+        forM_ sp.children \c -> do
+          buildTree_ c (level + 1) scol

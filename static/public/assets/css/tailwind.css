@@ -269,6 +269,9 @@
 .collapsed .log-item-tree-chevron {
   @apply rotate-0;
 }
+.collapsed .waterfall-item-tree-chevron {
+  @apply rotate-90;
+}
 
 .b--b2{
   border-color: oklch(var(--b2));
