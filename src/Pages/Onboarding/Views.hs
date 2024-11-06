@@ -110,23 +110,22 @@ renderSignupPage form validation =
         "APIToolkit account"
       p_ [class_ "mt-2 text-sm text-gray-600"] $ do
         "Already have an account? "
-        a_ [href_ "#", class_ "text-blue-600 hover:text-blue-500 underline"] "Login"
+        a_ [href_ "/onboarding/login", class_ "text-blue-600 hover:text-blue-500 underline"] "Login"
 
     -- Form
     form_ [class_ "mt-8 space-y-6"] $ do
       div_ [class_ "space-y-4"] $ do
-
         -- Email field
         div_ [] $ do
           label_ [class_ "block text-sm font-medium text-gray-700"] "Email Address"
           div_ [class_ "mt-1 relative"] $ do
             div_ [class_ "absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none"] $ do
-              faSprite_ "envelope" "regular" "h-5 w-5 text-gray-400"
+              faSprite_ "mail-envelope" "regular" "h-5 w-5 text-slate-500"
             input_
               [ type_ "email"
               , name_ "email"
               , placeholder_ "hello.john@email.com"
-              , class_ "pl-10 w-full px-3 py-3 text-slate-500 text-sm font-normal font-['Inter'] leading-snug border border-gray-300 rounded-xl shadow-sm placeholder-gray-400 focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+              , class_ "pl-10 w-full px-3 py-3  bg-slate-50 text-slate-500 text-sm font-normal font-['Inter'] leading-snug border border-gray-300 rounded-xl shadow-sm placeholder-gray-400 focus:outline-none focus:ring-blue-500 focus:border-blue-500"
               ]
 
         -- Password field
@@ -136,13 +135,13 @@ renderSignupPage form validation =
 
           div_ [class_ "mt-1 relative"] $ do
             div_ [class_ "absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none"] $ do
-              faSprite_ "lock-closed" "regular" "h-5 w-5 text-gray-400"
+              faSprite_ "lock-unlocked" "regular" "h-5 w-5 text-slate-500"
 
             input_
               [ type_ "password"
               , name_ "password"
               , placeholder_ "Enter 8 digit password"
-              , class_ "pl-10 w-full px-3 py-3 text-slate-500 text-sm font-normal font-['Inter'] leading-snug border border-gray-300 rounded-xl shadow-sm placeholder-gray-400 focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+              , class_ "pl-10 w-full px-3 py-3  bg-slate-50 text-slate-500 text-sm font-normal font-['Inter'] leading-snug border border-gray-300 rounded-xl shadow-sm placeholder-gray-400 focus:outline-none focus:ring-blue-500 focus:border-blue-500"
               ]
 
             button_
@@ -152,12 +151,10 @@ renderSignupPage form validation =
               , hxSwap_ "outerHTML"
               ]
               $ do
-                faSprite_ "visible" "regular" "h-5 w-5 text-gray-400"
-        
+                faSprite_ "eye-view" "regular" "h-5 w-5 text-slate-500"
 
         -- Password Requirements
         div_ [class_ "flex flex-wrap gap-2 text-sm text-gray-600"] $ do
-
           span_ [class_ "px-3 py-1 rounded-3xl border border-slate-300 justify-center items-center gap-2.5 text-slate-500 text-sm font-normal"] "8 characters"
           span_ [class_ "px-3 py-1 rounded-3xl border border-slate-300 justify-center items-center gap-2.5 text-slate-500 text-sm font-normal"] "Number"
           span_ [class_ "px-3 py-1 rounded-3xl border border-slate-300 justify-center items-center gap-2.5 text-slate-500 text-sm font-normal"] "Lowercase"
@@ -169,10 +166,10 @@ renderSignupPage form validation =
 
       -- Divider
       div_ [class_ "relative w-full py-1"] $ do
-        div_ [class_ "absolute inset-0 flex items-center"] $ 
-            div_ [class_ "w-full border-t border-gray-300"] mempty
-        div_ [class_ "relative flex justify-center"] $
-            span_ [class_ "bg-white px-2 py-2 text-sm text-gray-500 rounded-full border border-gray-300"] "OR"
+        div_ [class_ "absolute inset-0 flex items-center"]
+          $ div_ [class_ "w-full border-t border-gray-300"] mempty
+        div_ [class_ "relative flex justify-center"]
+          $ span_ [class_ "bg-white px-2 py-2 bg-slate-50 text-sm text-gray-500 rounded-full border border-gray-300"] "OR"
 
       -- Social Login Buttons
       div_ [class_ "space-y-3"] $ do
@@ -197,17 +194,16 @@ renderSignupPage form validation =
 
 renderUserForm :: ProfileForm -> FormValidationResult ProfileForm -> Html ()
 renderUserForm form validation = do
+  -- Logo section
+  div_ [class_ "text-2xl mb-4 m-4 absolute"]
+    $ img_ [src_ "/public/assets/svgs/logo_min.svg", alt_ "APItoolkit Logo"]
   div_ [class_ "max-w-md space-y-8 mx-auto"] $ do
-    -- Logo section
-    div_ [class_ "text-2xl mb-4 m-4 absolute"]
-      $ img_ [src_ "/public/assets/svgs/logo_min.svg", alt_ "APItoolkit Logo"]
-
     div_ [class_ "max-w-md mx-auto p-6 pt-40 pb-40"] $ do
       renderBackButton "Back"
 
       -- Form section
       div_ [class_ "space-y-8"] $ do
-        h1_ [class_ "text-3xl font-bold"] $ do
+        h1_ [class_ "text-3xl font-bold text-slate-950 font-semibold font-['Inter'] leading-10"] $ do
           "Tell us a little bit"
           br_ []
           "about you"
@@ -223,50 +219,50 @@ renderUserForm form validation = do
             -- Name fields
             div_ [class_ "grid grid-cols-2 gap-4"] $ do
               div_ [] $ do
-                label_ [class_ "block text-sm text-gray-600 mb-1"] "First Name"
+                label_ [class_ "block  mb-1 text-slate-500 text-sm font-medium font-['Inter'] leading-snug"] "First Name"
                 input_
                   [ type_ "text"
                   , placeholder_ "e.g Mike"
                   , name_ "profileFirstName"
                   , value_ (profileFirstName form)
-                  , class_ "w-full px-3 py-2 border shadow-sm rounded-xl border-slate-300 justify-start items-start gap-2.5 inline-flex placeholder-gray-400 focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+                  , class_ "w-full px-3 py-2 border shadow-sm rounded-xl bg-slate-50 border-slate-300 justify-start items-start gap-2.5 inline-flex placeholder-gray-400 focus:outline-none focus:ring-blue-500 focus:border-blue-500"
                   ]
 
               div_ [] $ do
-                label_ [class_ "block text-sm text-gray-600 mb-1"] "Last"
+                label_ [class_ "block  mb-1 text-slate-500 text-sm font-medium font-['Inter'] leading-snug"] "Last"
                 input_
                   [ type_ "text"
                   , placeholder_ "E.g Abel"
                   , name_ "profileLastName"
-                  , class_ "w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm placeholder-gray-400 focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+                  , class_ "w-full px-3 py-2 border border-gray-300 rounded-xl bg-slate-50  shadow-sm placeholder-gray-400 focus:outline-none focus:ring-blue-500 focus:border-blue-500"
                   ]
 
             -- Company name
             div_ [] $ do
-              label_ [class_ "block text-sm text-gray-600 mb-1"] "Company name"
+              label_ [class_ "block  mb-1 text-slate-500 text-sm font-medium font-['Inter'] leading-snug"] "Company name"
               input_
                 [ type_ "text"
                 , placeholder_ "Apple, Inc"
                 , name_ "profileCompanyName"
-                , class_ "w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm placeholder-gray-400 focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+                , class_ "w-full px-3 py-2 border border-gray-300 bg-slate-50 rounded-xl shadow-sm placeholder-gray-400 focus:outline-none focus:ring-blue-500 focus:border-blue-500"
                 ]
 
             -- Company Size
             div_ [] $ do
-              label_ [class_ "block text-sm text-gray-600 mb-1"] "Company Size"
+              label_ [class_ "block  mb-1 text-slate-500 text-sm font-medium font-['Inter'] leading-snug"] "Company Size"
               input_
                 [ type_ "text"
                 , placeholder_ "6 employees"
                 , name_ "profileCompanySize"
-                , class_ "w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm placeholder-gray-400 focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+                , class_ "w-full px-3 py-2 border border-gray-300 bg-slate-50  rounded-xl shadow-sm placeholder-gray-400 focus:outline-none focus:ring-blue-500 focus:border-blue-500"
                 ]
 
             -- Where did you hear about us
             div_ [] $ do
-              label_ [class_ "block text-sm text-gray-600 mb-1"] "Where did you hear about us?"
-              div_ [class_ "relative"] $ do
+              label_ [class_ "block  mb-1 text-slate-500 text-sm font-medium font-['Inter'] leading-snug"] "Where did you hear about us?"
+              div_ [class_ "relative bg-slate-50"] $ do
                 select_
-                  [ class_ "w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm appearance-none bg-white focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+                  [ class_ "w-full px-3 py-2 border border-gray-300 bg-slate-50  rounded-xl shadow-sm appearance-none bg-white focus:outline-none focus:ring-blue-500 focus:border-blue-500"
                   , name_ "profileReferralSource"
                   ]
                   $ do
@@ -276,11 +272,7 @@ renderUserForm form validation = do
                     option_ [] "Friend/Colleague"
 
                 div_ [class_ "absolute inset-y-0 right-0 flex items-center pr-3 pointer-events-none"]
-                  $ img_
-                    [ src_ "/api/placeholder/20/20"
-                    , alt_ "Dropdown arrow"
-                    , class_ "h-5 w-5 text-gray-400"
-                    ]
+                  $ faSprite_ "chevron-down" "regular" "h-4 w-4 text-gray-400"
 
             -- Submit button
             renderCustomButton POST "" "Proceed"
@@ -301,7 +293,7 @@ renderLoginForm form validation = do
 
       p_ [class_ "mt-2 text-sm text-gray-600"] $ do
         "Don't have an account? "
-        a_ [href_ "#", class_ "text-blue-600 hover:text-blue-500"] "Sign up for free."
+        a_ [href_ "/onboarding/signup", class_ "text-blue-600 hover:text-blue-500 underline"] "Sign up for free"
 
     -- Form
     form_
@@ -316,12 +308,12 @@ renderLoginForm form validation = do
           label_ [class_ "block text-sm font-medium text-gray-700"] "Email Address"
           div_ [class_ "mt-1 relative"] $ do
             div_ [class_ "absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none"] $ do
-              faSprite_ "envelope" "regular" "h-5 w-5 text-gray-400"
+              faSprite_ "mail-envelope" "regular" "h-5 w-5 text-slate-500"
             input_
               [ type_ "email"
               , name_ "email"
               , placeholder_ "hello.john@email.com"
-              , class_ "pl-10 w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm placeholder-gray-400 focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+              , class_ "pl-10 w-full px-3 py-3  bg-slate-50 text-slate-500 text-sm font-normal font-['Inter'] leading-snug border border-gray-300 rounded-xl shadow-sm placeholder-gray-400 focus:outline-none focus:ring-blue-500 focus:border-blue-500"
               ]
 
         -- Password field
@@ -331,13 +323,13 @@ renderLoginForm form validation = do
 
           div_ [class_ "mt-1 relative"] $ do
             div_ [class_ "absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none"] $ do
-              faSprite_ "lock-closed" "regular" "h-5 w-5 text-gray-400"
+              faSprite_ "lock-unlocked" "regular" "h-5 w-5 text-slate-500"
 
             input_
               [ type_ "password"
               , name_ "password"
               , placeholder_ "Enter 8 digit password"
-              , class_ "pl-10 w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm placeholder-gray-400 focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+              , class_ "pl-10 w-full px-3 py-3  bg-slate-50 text-slate-500 text-sm font-normal font-['Inter'] leading-snug border border-gray-300 rounded-xl shadow-sm placeholder-gray-400 focus:outline-none focus:ring-blue-500 focus:border-blue-500"
               ]
 
             button_
@@ -347,7 +339,7 @@ renderLoginForm form validation = do
               , hxSwap_ "outerHTML"
               ]
               $ do
-                faSprite_ "visible" "regular" "h-5 w-5 text-gray-400"
+                faSprite_ "eye-view" "regular" "h-5 w-5 text-slate-500"
 
           div_ [class_ "flex items-center justify-end pt-2"] $ do
             a_ [href_ "#", class_ "text-sm text-gray-600 hover:text-gray-500 underline"] "Forgot Password"
@@ -356,11 +348,11 @@ renderLoginForm form validation = do
         renderCustomButton POST "" "Sign In"
 
         -- Divider
-        div_ [class_ "relative"] $ do
-          div_ [class_ "absolute inset-0 flex items-center"] $ do
-            div_ [class_ "w-full border-t border-gray-300"] ""
-          div_ [class_ "relative flex justify-center text-sm"] $ do
-            span_ [class_ "px-2 bg-white text-gray-500"] "OR"
+        div_ [class_ "relative w-full py-1"] $ do
+          div_ [class_ "absolute inset-0 flex items-center"]
+            $ div_ [class_ "w-full border-t border-gray-300"] mempty
+          div_ [class_ "relative flex justify-center"]
+            $ span_ [class_ "bg-white px-2 py-2 bg-slate-50 text-sm text-gray-500 rounded-full border border-gray-300"] "OR"
 
         -- Social login buttons
         div_ [class_ "space-y-3"] $ do
@@ -978,8 +970,14 @@ renderFrameworkIntegration =
         div_ [class_ "space-y-4 pt-4"] $ do
           renderCustomButton POST "" "Confirm Integration and Proceed"
           div_
-            [class_ "text-center text-slate-500 text-sm font-medium font-['Inter'] underline leading-snug"]
-            "Skip integration"
+            [class_ "text-center"]
+            $ do
+              button_
+                [ class_ "text-center text-slate-500 text-sm font-medium font-['Inter'] underline leading-snug"
+                , hxGet_ "https://app.apitoolkit.io/"
+                , hxTrigger_ "intersect once, click"
+                ]
+                "Skip integration"
 
     renderTabs =
       div_ [class_ "flex space-x-6 border-b"] $ do

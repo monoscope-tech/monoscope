@@ -16,6 +16,7 @@ module Pages.Onboarding.Handler (
   onboardingNotificationSentGetH,
 ) where
 
+import BackgroundJobs (BgJobs (..))
 import BackgroundJobs qualified
 import Control.Lens ((^.))
 import Data.Aeson (encode)
@@ -44,13 +45,12 @@ import OddJobs.Job (createJob)
 import Pages.BodyWrapper
 import Pages.Onboarding.Types
 import Pages.Onboarding.Views
+import PyF
 import Relude hiding (ask, asks)
 import System.Config
 import System.Types
 import Utils (faSprite_, isDemoAndNotSudo)
 import Web.FormUrlEncoded (FromForm (..), ToForm (..), lookupUnique)
-import PyF
-import BackgroundJobs (BgJobs(..))
 
 
 -- | Initial handler
@@ -316,7 +316,6 @@ onboardingUsagePostH prefs = do
 -- redirectCS "/onboarding/team"
 -- addRespHeaders $ NoContent ""
 
-
 -- | Notification Settings Handler
 -- onboardingNotificationsPostH :: NotificationSettings -> ATAuthCtx (RespHeaders OnboardingResponse)
 -- onboardingNotificationsPostH settings = do
@@ -473,8 +472,6 @@ onboardingUsagePostH prefs = do
 --   addSuccessToast "Team invitations sent" Nothing
 --   redirectCS "/onboarding/pricing"
 --   addRespHeaders $ NoContent ""
-
-
 
 -- | Pricing Plan Handler
 -- onboardingPricingPostH :: PricingPlan -> ATAuthCtx (RespHeaders OnboardingResponse)

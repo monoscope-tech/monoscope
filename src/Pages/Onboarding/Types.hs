@@ -17,29 +17,27 @@ module Pages.Onboarding.Types where
 -- import Web.Internal.FormUrlEncoded (ToForm (toForm))
 -- import Prelude (Either (..))
 -- import Deriving.Aeson (CustomJSON, OmitNothingFields)
+
+import Data.Aeson (FromJSON, ToJSON)
 import Data.Default (Default (..), def)
 import Data.Text (Text)
 import Data.Time (UTCTime)
 import Data.Vector (Vector)
-import Data.Aeson (FromJSON, ToJSON)
-import GHC.Generics (Generic)  -- Remove duplicate Generic import
+import GHC.Generics (Generic) -- Remove duplicate Generic import
 import Web.FormUrlEncoded (
-  FromForm(fromForm),
-  ToForm(toForm),
+  FromForm (fromForm),
+  ToForm (toForm),
   lookupUnique,
  )
+
 -- Remove duplicate ToForm import since it's already in Web.FormUrlEncoded
--- import Web.Internal.FormUrlEncoded (ToForm (toForm))  
-import Prelude (Either(..))
-import Deriving.Aeson qualified as DA  -- Qualified import for clarity
-import GHC.Show (Show)
-import GHC.Base (Eq)
-import GHC.Base (Bool)
-import GHC.Base (Int)
-import GHC.Base (Maybe)
-import GHC.Base (Maybe(Nothing))
-import GHC.Base (undefined)
+-- import Web.Internal.FormUrlEncoded (ToForm (toForm))
+
+import Deriving.Aeson qualified as DA -- Qualified import for clarity
 import GHC.Base
+import GHC.Base (Bool, Eq, Int, Maybe (Nothing), undefined)
+import GHC.Show (Show)
+import Prelude (Either (..))
 
 
 -- | Signup form data
@@ -127,6 +125,7 @@ data UsagePreferences = UsagePreferences
   deriving stock (Show, Eq, Generic)
   deriving (ToJSON, FromJSON) via DA.CustomJSON '[DA.OmitNothingFields] UsagePreferences
   deriving anyclass (FromForm)
+
 
 -- | URL Monitor configuration
 data URLMonitorConfig = URLMonitorConfig
