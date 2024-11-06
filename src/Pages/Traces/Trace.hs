@@ -129,7 +129,7 @@ tracePage p = do
               stBox "Spans" (show $ length p.spanRecords)
               stBox "Errors" "0"
               stBox "Total duration" (toText $ getDurationNSMS traceItem.traceDurationNs)
-          div_ [role_ "tabpanel", class_ "a-tab-content w-full bg-white", id_ "flame_graph"] do
+          div_ [role_ "tabpanel", class_ "a-tab-content w-full", id_ "flame_graph"] do
             div_ [class_ "flex gap-2 w-full pt-2"] do
               div_
                 [ class_ "w-[65%] group px-2 pt-4 border relative flex flex-col rounded-lg overflow-hidden"
@@ -213,7 +213,7 @@ renderSpanRecordRow spanRecords colors service = do
   let listLen = V.length filterRecords
   let duration = sum $ (.spanDurationNs) <$> filterRecords
   tr_
-    [ class_ "bg-white w-full overflow-x-hidden p-2 cursor-pointer font-medium hover:bg-gray-100 border-b-2 last:border-b-0"
+    [ class_ "w-full overflow-x-hidden p-2 cursor-pointer font-medium hover:bg-gray-100 border-b-2 last:border-b-0"
     , [__|on click toggle .hidden on next <tr/> then toggle .rotate-90 on the first <svg/> in the first <td/> in me|]
     ]
     do
@@ -348,31 +348,36 @@ buildSpanTree spans =
 waterFallTree :: [SpanTree] -> HashMap Text Text -> Html ()
 waterFallTree records scols = do
   div_ [class_ "pl-2 py-2 flex flex-col gap-2"] do
-    forM_ records \s -> do
-      buildTree_ s 0 scols
+    forM_ (zip [0 ..] records) \(i, c) -> do
+      buildTree_ c 0 scols True
 
 
-buildTree_ :: SpanTree -> Int -> HashMap Text Text -> Html ()
-buildTree_ sp level scol = do
+buildTree_ :: SpanTree -> Int -> HashMap Text Text -> Bool -> Html ()
+buildTree_ sp level scol isLasChild = do
   let hasChildren = not $ null sp.children
       serviceCol = getServiceColor sp.spanRecord.serviceName scol
   let str = "on click toggle .hidden on the next .children_container then toggle .collapsed on me then toggle .hidden on  #waterfall-child-" <> sp.spanRecord.spanId
-  div_ [class_ "flex flex-col border-slate-200"] do
-    div_
-      [ class_ "w-full flex justify-between items-end h-5 collapsed"
-      , term "_" str
-      , id_ $ "waterfall-span-" <> sp.spanRecord.spanId
-      ]
-      do
-        div_ [class_ "flex items-center gap-2 "] do
-          when hasChildren $ do
-            div_ [class_ "border border-slate-200 w-7 flex justify-between gap-1 items-center rounded px-1"] do
-              faSprite_ "chevron-right" "regular" "h-3 w-3 shrink-0 font-bold text-slate-950 waterfall-item-tree-chevron"
-              span_ [class_ "text-xs "] $ toHtml $ show (length sp.children)
-          span_ [class_ "font-medium text-slate-950"] $ toHtml $ sp.spanRecord.serviceName
-          span_ [class_ "text-slate-500 text-sm whitespace-nowrap"] $ toHtml sp.spanRecord.spanName
-        span_ [class_ $ "w-1 rounded h-full shrink-0 " <> serviceCol] ""
-    when hasChildren $ do
-      div_ [class_ "pl-7 flex flex-col children_container gap-2 mt-2", id_ $ "waterfall-tree-" <> sp.spanRecord.spanId] do
-        forM_ sp.children \c -> do
-          buildTree_ c (level + 1) scol
+  div_ [class_ "flex items-start relative"] do
+    when (level /= 0) $ div_ [class_ "w-4 shrink-0 ml-2 h-[1px] mt-2 bg-slate-200"] pass
+    unless (level == 0) $ div_ [class_ "absolute -top-3 left-2 border-l h-5 border-l-slate-200"] pass
+    unless isLasChild $ div_ [class_ "absolute top-1 left-2 border-l h-full border-l-slate-200"] pass
+    div_ [class_ "flex flex-col w-full border-slate-200 relative"] do
+      when hasChildren $ div_ [class_ "absolute top-1 left-2 border-l h-2 border-l-slate-200"] pass
+      div_
+        [ class_ "w-full flex justify-between items-end h-5 collapsed"
+        , term "_" str
+        , id_ $ "waterfall-span-" <> sp.spanRecord.spanId
+        ]
+        do
+          div_ [class_ "flex items-center"] do
+            when hasChildren $ do
+              div_ [class_ "border border-slate-200 w-7 flex justify-between gap-1 items-center rounded px-1"] do
+                faSprite_ "chevron-right" "regular" "h-2 w-2 shrink-0 font-bold text-slate-950 waterfall-item-tree-chevron"
+                span_ [class_ "text-xs"] $ toHtml $ show (length sp.children)
+            span_ [class_ "font-medium text-slate-950 mx-2 "] $ toHtml $ sp.spanRecord.serviceName
+            span_ [class_ "text-slate-500 text-sm whitespace-nowrap"] $ toHtml sp.spanRecord.spanName
+            span_ [class_ $ "w-1 rounded h-full shrink-0 " <> serviceCol] ""
+      when hasChildren $ do
+        div_ [class_ "flex flex-col children_container gap-2 mt-2", id_ $ "waterfall-tree-" <> sp.spanRecord.spanId] do
+          forM_ (zip [0 ..] sp.children) \(i, c) -> do
+            buildTree_ c (level + 1) scol (i == length sp.children - 1)
