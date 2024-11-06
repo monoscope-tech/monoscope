@@ -356,12 +356,11 @@ buildTree_ :: SpanTree -> Int -> HashMap Text Text -> Html ()
 buildTree_ sp level scol = do
   let hasChildren = not $ null sp.children
       serviceCol = getServiceColor sp.spanRecord.serviceName scol
+  let str = "on click toggle .hidden on the next .children_container then toggle .collapsed on me then toggle .hidden on  #waterfall-child-" <> sp.spanRecord.spanId
   div_ [class_ "flex flex-col border-slate-200"] do
     div_
       [ class_ "w-full flex justify-between items-end h-5 collapsed"
-      , [__| on click toggle .hidden on the next .children_container
-             then toggle .collapsed on me
-             |]
+      , term "_" str
       , id_ $ "waterfall-span-" <> sp.spanRecord.spanId
       ]
       do
