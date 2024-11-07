@@ -578,7 +578,7 @@ function buildTree(span, serviceColors, start, rootVal, containerWidth) {
   span.children.forEach((child) => {
     childDiv.appendChild(buildTree(child, serviceColors, startCurr, rootVal, containerWidth))
   })
-  const text = elt('span', { class: 'text-black ml-1 shrink-0 mr-4 text-xs' }, span.spanRecord.spanName)
+  const text = elt('span', { class: 'text-black ml-1 shrink-0 mr-4 text-xs' }, '')
   const [t, u] = formatDuration(span.spanRecord.spanDurationNs)
   const tim = elt('span', { class: 'text-black text-xs shrink-0' }, `${Math.floor(t)} ${u}`)
   div.appendChild(text)

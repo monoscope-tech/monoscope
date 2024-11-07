@@ -62,7 +62,7 @@ data SeverityLevel = SLDebug | SLInfo | SLWarn | SLError | SLFatal
 
 
 data SpanStatus = SSOk | SSError | SSUnset
-  deriving (Show, Generic, Read)
+  deriving (Show, Generic, Read, Eq)
   deriving anyclass (NFData, AE.FromJSON, AE.ToJSON)
   deriving (ToField, FromField) via WrappedEnum "SS" SpanStatus
 

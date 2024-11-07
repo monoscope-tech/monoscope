@@ -18,6 +18,7 @@ import Lucid
 import Lucid.Htmx (hxGet_, hxSwap_, hxTarget_, hxTrigger_)
 import Lucid.Hyperscript (__)
 import Models.Projects.Projects qualified as Projects
+import Models.Telemetry.Telemetry (SpanStatus (SSError))
 import Models.Telemetry.Telemetry qualified as Telemetry
 import NeatInterpolation (text)
 import Pages.Components (dateTime)
@@ -127,7 +128,7 @@ tracePage p = do
               button_ [class_ "a-tab text-sm px-3 border-b-2 border-b-transparent py-1.5", onclick_ "navigatable(this, '#span_list', '#trace-tabs', 't-tab-active')"] "Spans List"
             div_ [class_ "flex items-center gap-2"] do
               stBox "Spans" (show $ length p.spanRecords)
-              stBox "Errors" "0"
+              stBox "Errors" (show $ length $ V.filter (\s -> s.status == Just SSError) p.spanRecords)
               stBox "Total duration" (toText $ getDurationNSMS traceItem.traceDurationNs)
           div_ [role_ "tabpanel", class_ "a-tab-content w-full", id_ "flame_graph"] do
             div_ [class_ "flex gap-2 w-full pt-2"] do

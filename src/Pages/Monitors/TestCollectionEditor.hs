@@ -302,7 +302,6 @@ defineTestSteps_ colM = do
       faSprite_ "circle-info" "regular" "w-5 h-5 fill-none stroke-blue-500"
       div_ [class_ "text-sm font-medium text-gray-500"] do
         p_ [] "Link multiple steps by creating variables from the request response data."
-        p_ [] "When using variables, remember that step order matters"
   div_ [class_ "overflow-y-hidden flex-1 "] $ termRaw "assertion-builder" [id_ ""] ""
   div_ [class_ "overflow-y-hidden flex-1 "] $ termRaw "steps-editor" [id_ "stepsEditor"] ""
 
