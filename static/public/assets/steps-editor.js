@@ -240,8 +240,8 @@ export class StepsEditor extends LitElement {
     const hasResults = !!result
     const hasFailingAssertions = result?.assert_results?.some((a) => !a.ok || a.ok === false) || false
     const svErr = saveError !== undefined
-    const failed = (!stepData.disabled && (hasFailingAssertions || svErr ))
-    const passed = (!stepData.disabled && hasResults && !hasFailingAssertions && !svErr)
+    const failed = !stepData.disabled && (hasFailingAssertions || svErr)
+    const passed = !stepData.disabled && hasResults && !hasFailingAssertions && !svErr
     saveError = saveError ? saveError : {}
     const configuredOptions = {
       'request-options': (stepData.headers ? Object.keys(stepData.headers) : []).length,
@@ -285,7 +285,7 @@ export class StepsEditor extends LitElement {
                   }}"
                   ?checked="${stepData.disabled === undefined ? true : stepData.disabled ? false : true}"
                   type="checkbox"
-                  class="toggle toggle-sm  ${stepData.disabled ? 'border-red-500 bg-white [--tglbg:#ef4444]': 'border-green-500 bg-white [--tglbg:#22c55e]'}"
+                  class="toggle toggle-sm  ${stepData.disabled ? 'border-red-500 bg-white [--tglbg:#ef4444]' : 'border-green-500 bg-white [--tglbg:#22c55e]'}"
                    />
                 <button class="text-red-700 cursor-pointer" @click="${(e) => {
                   e.preventDefault()
@@ -568,14 +568,35 @@ ${stepData._json}</textarea
     ></span>`
   }
 
-  renderParamRow(key, value, type, idx, aidx, result, saveError) {
+  renderParamRow(key, value, type, idx, aidx, category, result, saveError) {
+    if (type === 'exports') {
+      console.log(key, value, type, idx, aidx, category, result, saveError)
+    }
     let error = result?.err?.advice || ''
     let keyError = ''
     if (saveError) {
       error = saveError.value ? saveError.value : error
       keyError = saveError.key ? saveError.key : ''
     }
-
+    const options = [
+      {
+        value: 'body',
+        label: 'Body',
+      },
+      {
+        value: 'header',
+        label: 'Header',
+      },
+      {
+        value: 'status',
+        label: 'Status Code',
+      },
+      {
+        value: 'responseTime',
+        label: 'Response Time',
+      },
+    ]
+    const noValue = category == 'status' || category == 'responseTime'
     return html`
       <div class="flex flex-row gap-2 w-full paramRow">
         <span class="shrink hidden assertIndicator"> ${this.renderAssertResult(result)} </span>
@@ -583,7 +604,17 @@ ${stepData._json}</textarea
           <input class="input input-bordered input-xs shadow-none w-full" list="${type}DataList" placeholder="Key" .value="${key}" @change=${(e) => this.updateKey(e, idx, type, aidx)} />
           <span class="text-xs text-red-500 w-full">${keyError}</span>
         </div>
-        <div class="shrink w-full flex flex-col">
+        ${type === 'exports'
+          ? html`
+              <div class="flex flex-col w-1/3">
+                <select class="select select-xs select-bordered max-w-xs shadow-none" @change=${(e) => this.updateExportCategory(e, idx, type, aidx, key)}>
+                  ${options.map((option) => html` <option value=${option.value} ?selected=${option.value === category}>${option.label}</option> `)}
+                </select>
+              </div>
+            `
+          : nothing}
+        ${type === 'exports' && !noValue
+          ? html`<div class="shrink w-full flex flex-col">
           <input
             list="${type === 'asserts' ? 'assertAutocomplete-' + idx : ''}"
             class="input input-bordered shadow-none ${error ? 'input-error' : ''} input-xs w-full"
@@ -596,6 +627,8 @@ ${stepData._json}</textarea
         <a class="cursor-pointer text-slate-600" @click=${(e) => this.deleteKey(e, idx, type, aidx, key)}>
           <svg class="inline-block icon w-5 h-5 p-1 rounded-full shadow border stroke-red-500"><use href="/public/assets/svgs/fa-sprites/regular.svg#trash"></use></svg>
         </a>
+      </div>`
+          : nothing}
       </div>
     `
   }
@@ -632,6 +665,14 @@ ${stepData._json}</textarea
           })}
         </datalist>
       `)
+    } else if (type === 'exports') {
+      const data = stepData[type] || []
+      rows = data.map((d, ind) => {
+        return this.renderParamRow(d.key, d.value, type, idx, ind, d.category, undefined, errors[ind])
+      })
+      if (rows.length === 0 || !Object.entries(data).some(([k, v]) => k.trim() === '' && v.trim() === '')) {
+        rows.push(this.renderParamRow('', '', type, idx, rows.length, 'body', undefined, errors[rows.length - 1]))
+      }
     } else {
       const data = stepData[type] || {}
       rows = Object.entries(data)
@@ -659,18 +700,22 @@ ${stepData._json}</textarea
       updateObject(stepData, oldKey, newKey)
     } else {
       stepData[type] = stepData[type] || (aidx === null ? {} : [])
-
       if (aidx != null) {
-        const arrayItem = stepData[type][aidx] || {}
-        const values = Object.entries(arrayItem)
-        if (values.length > 0) {
-          const val = values[0][1]
-          stepData[type][aidx] = {
-            [newKey]: val,
-          }
+        if (type === 'exports') {
+          const val = this.collectionSteps[idx][type][aidx] || { key: '', value: '', category: '' }
+          this.collectionSteps[idx][type][aidx] = { ...val, key: newKey }
         } else {
-          stepData[type][aidx] = {
-            [newKey]: '',
+          const arrayItem = stepData[type][aidx] || {}
+          const values = Object.entries(arrayItem)
+          if (values.length > 0) {
+            const val = values[0][1]
+            stepData[type][aidx] = {
+              [newKey]: val,
+            }
+          } else {
+            stepData[type][aidx] = {
+              [newKey]: '',
+            }
           }
         }
       } else {
@@ -692,6 +737,16 @@ ${stepData._json}</textarea
     this.requestUpdate()
   }
 
+  updateExportCategory(event, idx, type, aidx) {
+    if (type !== 'exports') return
+    const value = event.target.value
+    const stepData = this.collectionSteps[idx]
+    stepData[type] = stepData[type] || []
+    stepData[type][aidx] = stepData[type][aidx] || {}
+    stepData[type][aidx]['category'] = value
+    this.requestUpdate()
+  }
+
   updateValue(event, idx, type, aidx, key) {
     const value = event.target.value
     if (type == null) {
@@ -701,9 +756,19 @@ ${stepData._json}</textarea
     }
     if (aidx != null) {
       if (key === '') {
-        this.collectionSteps[idx][type][aidx] = { ok: value }
+        if (type === 'asserts') {
+          this.collectionSteps[idx][type][aidx] = { ok: value }
+        } else if (type === 'exports') {
+          const val = this.collectionSteps[idx][type][aidx]
+          this.collectionSteps[idx][type][aidx] = { ...val, value: value }
+        }
       } else {
-        this.collectionSteps[idx][type][aidx][key] = value
+        if (type === 'exports') {
+          const val = this.collectionSteps[idx][type][aidx]
+          this.collectionSteps[idx][type][aidx] = { ...val, value: value }
+        } else {
+          this.collectionSteps[idx][type][aidx][key] = value
+        }
       }
     } else {
       this.collectionSteps[idx][type][key] = value

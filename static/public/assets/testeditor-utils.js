@@ -164,6 +164,26 @@ function convertTestkitToCollectionSteps(testkitSteps) {
           }
         })
       }
+
+      const exports = Object.entries(step.exports || {}).map(([key, value]) => {
+        let category = 'body'
+        let prfix = '$.resp.json'
+        if (value) {
+          if (value.startsWith('$.resp.headers')) {
+            category = 'header'
+            prfix = '$.resp.headers'
+          }
+          if (value.startsWith('$.resp.status')) {
+            category = 'status'
+            prfix = '$.resp.status'
+          }
+          if (value.startsWith('$.resp.responseTime')) {
+            category = 'responseTime'
+            prfix = '$.resp.responseTime'
+          }
+        }
+        return { key: key, value: value.replace(prfix, ''), category: category }
+      })
       const method = getStepMethod(step)
       const collectionStep = {
         title: step.title || '',
@@ -172,7 +192,7 @@ function convertTestkitToCollectionSteps(testkitSteps) {
         headers: step.headers || {},
         params: step.params || {},
         _assertions: assertions,
-        exports: step.exports || {},
+        exports: exports,
         _json: step.json,
         _requestBody: step.requestBody,
         disabled: step.disabled || false,
@@ -286,11 +306,25 @@ function convertCollectionStepsToTestkitFormat(collectionSteps) {
       step._assertions?.forEach((assertion) => {
         assertions.push(convertToTestkitAssertion(assertion))
       })
+      const exports = (step.exports || []).reduce((acc, ex) => {
+        console.log(ex)
+        let prefix = '$.resp.json.'
+        if (ex.category === 'header') {
+          prefix = '$.resp.headers.'
+        }
+        if (ex.category === 'status') {
+          prefix = '$.resp.status'
+        }
+        if (ex.category === 'responseTime') {
+          prefix = '$.resp.responseTime'
+        }
+        return { ...acc, [ex.key]: prefix + ex.value }
+      }, {})
       const testkitStep = {
         title: step.title || '',
         [step._method || 'GET']: step._url || '',
         headers: step.headers || {},
-        exports: step.exports || {},
+        exports: exports,
         asserts: assertions || [],
         params: step.params || {},
         disabled: step.disabled || false,
