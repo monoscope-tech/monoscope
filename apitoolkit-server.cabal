@@ -143,14 +143,15 @@ library
       Pkg.Components.ExternalHeadScripts
       Pkg.Components.ItemsList
       Pkg.Components.Modals
+      Pkg.Components.TimePicker
       Pkg.ConvertKit
       Pkg.Google
       Pkg.Mail
       Pkg.Parser
+      Pkg.Parser.Core
       Pkg.Parser.Expr
       Pkg.Parser.ExprSpec
       Pkg.Parser.Stats
-      Pkg.Parser.Types
       Pkg.ParserSpec
       Pkg.Queue
       Pkg.RouteUtils

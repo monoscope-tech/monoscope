@@ -1,35 +1,70 @@
-module Pkg.Parser.Expr (pSubject, pExpr) where
+module Pkg.Parser.Expr (pSubject, pExpr, Subject (..), Values (..), Expr (..)) where
 
 import Control.Monad.Combinators.Expr (
   Operator (InfixL),
   makeExprParser,
  )
+import Data.Aeson qualified as AE
+import Data.Scientific (FPFormat (Fixed), Scientific, formatScientific)
 import Data.Text qualified as T
 import Data.Text.Display (Display, display, displayBuilder, displayParen, displayPrec)
 import Data.Text.Lazy.Builder (Builder)
-import Pkg.Parser.Types
+import Data.Vector qualified as V
+import Pkg.Parser.Core
 import Relude hiding (GT, LT, Sum, many, some)
-import Text.Megaparsec (
-  MonadParsec (try),
-  between,
-  choice,
-  getInput,
-  getOffset,
-  many,
-  manyTill,
-  oneOf,
-  sepBy,
-  some,
- )
+import Text.Megaparsec
 import Text.Megaparsec.Char (alphaNumChar, char, digitChar, space, space1, string)
 import Text.Megaparsec.Char.Lexer qualified as L
 
 
--- Example queries
--- request_body.v1.v2 = "abc" AND (request_body.v3.v4 = 123 OR request_body.v5[].v6=ANY[1,2,3] OR request_body[1].v7 OR NOT request_body[-1].v8 )
--- request_body[1].v7 | {.v7, .v8} |
+-- Values is an enum of the list of supported value types.
+-- Num is a text  that represents a float as float covers ints in a lot of cases. But its basically the json num type.
+data Values = Num Text | Str Text | Boolean Bool | Null | List [Values]
+  deriving stock (Eq, Ord, Show, Generic)
 
--- >>> request_body="jfdshkjfds" | stat field1, field2 by field3
+
+instance AE.FromJSON Values where
+  parseJSON (AE.Number n) = return $ Num (T.pack (formatScientific Fixed Nothing n))
+  parseJSON (AE.String s) = return $ Str s
+  parseJSON (AE.Bool b) = return $ Boolean b
+  parseJSON AE.Null = return Null
+  parseJSON (AE.Array arr) = List <$> traverse AE.parseJSON (V.toList arr)
+  parseJSON (AE.Object _) = fail "Cannot parse Object into Values"
+
+
+instance AE.ToJSON Values where
+  toJSON (Num t) = case readMaybe (T.unpack t) :: Maybe Scientific of
+    Just n -> AE.Number n
+    Nothing -> error $ "Invalid number: " <> show t
+  toJSON (Str s) = AE.String s
+  toJSON (Boolean b) = AE.Bool b
+  toJSON Null = AE.Null
+  toJSON (List xs) = AE.Array (V.fromList (map AE.toJSON xs))
+
+
+-- A subject consists of the primary key, and then the list of fields keys which are delimited by a .
+-- To support jsonpath, we will have more powerfule field keys, so instead of a text array, we could have an enum field key type?
+data Subject = Subject Text Text [FieldKey]
+  deriving stock (Eq, Ord, Show, Generic)
+
+
+-- Custom ToJSON which lets us stick to the jsonpath representation of subjects, when rendering subject to json
+instance AE.ToJSON Subject where
+  toJSON (Subject a _ _) = AE.String a
+
+
+-- Custom FromJSON which lets decodes the jsonpath representation into a subject by parsing it
+instance AE.FromJSON Subject where
+  parseJSON = AE.withText "Subject" \text ->
+    case parse pSubject "" text of
+      Left err -> fail $ "Parse error: " ++ errorBundlePretty err
+      Right subject -> pure subject
+
+
+data FieldKey = FieldKey Text | ArrayIndex Text Int | ArrayWildcard Text
+  deriving stock (Eq, Ord, Show, Generic)
+  deriving anyclass (AE.FromJSON, AE.ToJSON)
+
 
 -- >>> parse pSubject "" "key"
 -- Right (Subject "key" "key" [])
@@ -60,6 +95,30 @@ pSubject = do
   let entire = T.take entireLength restOfInputToProcess
   return $ Subject entire primaryKey $ maybeToList firstField ++ fields
 
+
+data Expr
+  = Eq Subject Values
+  | NotEq Subject Values
+  | GT Subject Values
+  | LT Subject Values
+  | GTEq Subject Values
+  | LTEq Subject Values
+  | Regex Subject Text
+  | Paren Expr
+  | And Expr Expr
+  | Or Expr Expr
+  --  | Not Expr
+  --  | JSONPathExpr Expr
+  --  | FunctionCall String [Expr] -- For functions like ANY
+  deriving stock (Eq, Ord, Show, Generic)
+  deriving anyclass (AE.FromJSON, AE.ToJSON)
+
+
+-- Example queries
+-- request_body.v1.v2 = "abc" AND (request_body.v3.v4 = 123 OR request_body.v5[].v6=ANY[1,2,3] OR request_body[1].v7 OR NOT request_body[-1].v8 )
+-- request_body[1].v7 | {.v7, .v8} |
+
+-- >>> request_body="jfdshkjfds" | stat field1, field2 by field3
 
 -- >>> parse pFieldKey "" "key.abc[1]"
 -- Right (FieldKey "key")
@@ -333,8 +392,8 @@ instance Display Expr where
 -- Helper function to handle the common display logic
 displayExprHelper :: T.Text -> Int -> Subject -> Values -> Builder
 displayExprHelper op prec sub val =
-  displayParen (prec > 0)
-    $ if subjectHasWildcard sub
+  displayParen (prec > 0) $
+    if subjectHasWildcard sub
       then displayPrec prec (jsonPathQuery op sub val)
       else displayPrec prec sub <> displayPrec @T.Text prec op <> displayBuilder val
 
@@ -381,15 +440,3 @@ jsonPathQuery op' (Subject entire base keys) val =
     buildCondition oper (Boolean b) pstfx = " ? (@ " <> oper <> " " <> T.toLower (show b) <> pstfx <> ")"
     buildCondition oper Null pstfx = " ? (@ " <> oper <> " null" <> pstfx <> ")"
     buildCondition oper (List xs) pstfx = " ? (@ " <> oper <> " {" <> (mconcat . intersperse "," . map display) xs <> "}" <> pstfx <> ")"
-
-
-instance Display AggFunction where
-  displayPrec prec (Count sub alias) = displayBuilder $ "count(" <> display sub <> ")"
-  displayPrec prec (Sum sub alias) = displayBuilder $ "sum(" <> display sub <> ")"
-  displayPrec prec (Avg sub alias) = displayBuilder $ "avg(" <> display sub <> ")"
-  displayPrec prec (Min sub alias) = displayBuilder $ "min(" <> display sub <> ")"
-  displayPrec prec (Max sub alias) = displayBuilder $ "max(" <> display sub <> ")"
-  displayPrec prec (Median sub alias) = displayBuilder $ "median(" <> display sub <> ")"
-  displayPrec prec (Stdev sub alias) = displayBuilder $ "stdev(" <> display sub <> ")"
-  displayPrec prec (Range sub alias) = displayBuilder $ "range(" <> display sub <> ")"
-  displayPrec prec (Plain sub alias) = displayBuilder $ "" <> display sub <> ""

@@ -5,12 +5,12 @@ module Pkg.Components (
   codeExample,
   modal_,
   dropDownMenu_,
-  timepicker_,
   codeEmphasis,
   withEmphasisedText,
   TabFilter (..),
   TabFilterOpt (..),
   module Pkg.Components.ItemsList,
+  module Pkg.Components.TimePicker,
 )
 where
 
@@ -21,6 +21,7 @@ import Lucid.Hyperscript
 import Lucid.Svg (d_, fill_, path_, viewBox_)
 import Pkg.Components.ItemsList
 import Pkg.Components.Modals (dropDownMenu_, modal_)
+import Pkg.Components.TimePicker
 import PyF
 import Relude
 import Utils
@@ -139,50 +140,3 @@ instance ToHtml TabFilter where
         do
           span_ $ toHtml opt.name
           whenJust opt.count $ span_ [class_ "absolute top-[1px] -right-[5px] text-white text-xs font-medium rounded-full px-1 bg-red-500"] . show
-
-
------------
---
---
-
-timePickerItems :: [(Text, Text)]
-timePickerItems =
-  [ ("1H", "Last Hour")
-  , ("24H", "Last 24 Hours")
-  , ("7D", "Last 7 days")
-  , ("14D", "Last 14 days")
-  ]
-
-
-timepicker_ :: Maybe Text -> Maybe Text -> Html ()
-timepicker_ submitForm currentRange = div_ [class_ "relative"] do
-  input_ [type_ "hidden", id_ "since_input"]
-  input_ [type_ "hidden", id_ "custom_range_input"]
-  a_
-    [ class_ "relative select select-md select-bordered bg-transparent "
-    , [__| on click toggle .hidden on #timepickerBox|]
-    ]
-    $ div_ [class_ "flex items-center gap-1"] do
-      faSprite_ "clock" "regular" "h-3 w-3"
-      span_ [class_ "inline-block", id_ "currentRange"] $ toHtml (fromMaybe "Last 24 Hours" currentRange)
-  div_ [id_ "timepickerBox", class_ "hidden absolute z-10 mt-1  rounded-md flex"] do
-    div_ [class_ "inline-block w-84 overflow-auto bg-base-100 py-1 text-base shadow-lg ring-1 ring-black ring-opacity-5 focus:outline-none sm:"] do
-      timePickerItems
-        & mapM_ \(val, title) ->
-          let action = maybe "window.setQueryParamAndReload('since', my @data-value)" (\fm -> [fmt|htmx.trigger("#{fm}", "submit")|]) submitForm
-           in a_
-                [ class_ "block text-gray-900 relative cursor-pointer select-none py-2 pl-3 pr-9 hover:bg-gray-200 "
-                , term "data-value" val
-                , term "data-title" title
-                , termRaw
-                    "_"
-                    [fmt|on click set #custom_range_input's value to my @data-value then log my @data-value
-                       then toggle .hidden on #timepickerBox
-                       then set #currentRange's innerText to my @data-title
-                        then {action} 
-                       -- 
-                         |]
-                ]
-                $ toHtml title
-      a_ [class_ "block text-gray-900 relative cursor-pointer select-none py-2 pl-3 pr-9 hover:bg-gray-200 ", [__| on click toggle .hidden on #timepickerSidebar |]] "Custom date range"
-    div_ [class_ "inline-block relative hidden", id_ "timepickerSidebar"] $ div_ [id_ "startTime", class_ "hidden"] ""

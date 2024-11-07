@@ -1,35 +1,44 @@
-module Pkg.Parser.Stats (pTimeChartSection, pStatsSection) where
+module Pkg.Parser.Stats (pTimeChartSection, pStatsSection, AggFunction(..), Section(..), Rollup(..), ByClause(..), Sources(..), parseQuery, pSource) where
 
-import Pkg.Parser.Expr (pSubject)
-import Pkg.Parser.Types (
-  AggFunction (..),
-  ByClause (..),
-  Parser,
-  Rollup (..),
-  Section (StatsCommand, TimeChartCommand),
-  Subject (Subject),
- )
-import Relude (
-  Applicative ((*>), (<*), (<*>)),
-  Maybe (Nothing),
-  Monad (return),
-  Text,
-  ToText (toText),
-  fromMaybe,
-  ($),
-  (.),
-  (<$>),
- )
-import Text.Megaparsec (
-  MonadParsec (try),
-  choice,
-  oneOf,
-  optional,
-  sepBy,
-  some,
-  (<|>),
- )
+import Pkg.Parser.Expr (Subject, pSubject, Expr, pExpr, Subject(..))
+import Pkg.Parser.Core
+import Relude hiding (Sum, some)
+import Text.Megaparsec
 import Text.Megaparsec.Char (alphaNumChar, char, space, string)
+import Data.Aeson qualified as AE
+import Data.Text.Display (Display, display, displayBuilder, displayParen, displayPrec)
+
+
+-- Modify Aggregation Functions to include optional aliases
+data AggFunction
+  = Count Subject (Maybe Text) -- Optional field and alias
+  | Sum Subject (Maybe Text)
+  | Avg Subject (Maybe Text)
+  | Min Subject (Maybe Text)
+  | Max Subject (Maybe Text)
+  | Median Subject (Maybe Text)
+  | Stdev Subject (Maybe Text)
+  | Range Subject (Maybe Text)
+  | -- | CustomAgg String [Field] (Maybe String)
+    Plain Subject (Maybe Text)
+  deriving stock (Show, Generic)
+  deriving anyclass (AE.FromJSON, AE.ToJSON)
+
+
+-- Define an optional 'by' clause
+data ByClause = ByClause [Subject] -- List of fields to group by
+  deriving stock (Show, Generic)
+  deriving anyclass (AE.FromJSON, AE.ToJSON)
+
+
+data Rollup = Rollup Text
+  deriving stock (Show, Generic)
+  deriving anyclass (AE.FromJSON, AE.ToJSON)
+
+
+data Sources = SRequests | SLogs | STraces | SSpans | SMetrics
+  deriving stock (Show, Generic)
+  deriving anyclass (AE.FromJSON, AE.ToJSON)
 
 
 -- Syntax:
@@ -86,6 +95,18 @@ aggFunctionParser =
     , Range <$> (string "range(" *> pSubject <* string ")") <*> optional aliasParser
     , Plain <$> pSubject <*> optional aliasParser
     ]
+
+
+instance Display AggFunction where
+  displayPrec prec (Count sub alias) = displayBuilder $ "count(" <> display sub <> ")"
+  displayPrec prec (Sum sub alias) = displayBuilder $ "sum(" <> display sub <> ")"
+  displayPrec prec (Avg sub alias) = displayBuilder $ "avg(" <> display sub <> ")"
+  displayPrec prec (Min sub alias) = displayBuilder $ "min(" <> display sub <> ")"
+  displayPrec prec (Max sub alias) = displayBuilder $ "max(" <> display sub <> ")"
+  displayPrec prec (Median sub alias) = displayBuilder $ "median(" <> display sub <> ")"
+  displayPrec prec (Stdev sub alias) = displayBuilder $ "stdev(" <> display sub <> ")"
+  displayPrec prec (Range sub alias) = displayBuilder $ "range(" <> display sub <> ")"
+  displayPrec prec (Plain sub alias) = displayBuilder $ "" <> display sub <> ""
 
 
 -- | Utility Parser: Parses an alias
@@ -159,3 +180,88 @@ pTimeChartSection = do
 
 rollupParser :: Parser Rollup
 rollupParser = Rollup . toText <$> (string "[" *> some alphaNumChar <* string "]")
+
+
+----------------------------------------------------------------------
+----
+
+-- Example queries
+-- request_body.v1.v2 == "abc" AND (request_body.v3.v4 == 123 OR request_body.v5[].v6==ANY[1,2,3] OR request_body[1].v7 OR NOT request_body[-1].v8 )
+-- request_body[1].v7 | {.v7, .v8} |
+
+data Section
+  = Search Expr
+  | -- Define the AST for the 'stats' command
+    StatsCommand [AggFunction] (Maybe ByClause)
+  | TimeChartCommand AggFunction (Maybe ByClause) (Maybe Rollup)
+  | Source Sources
+  deriving stock (Show, Generic)
+  deriving anyclass (AE.FromJSON, AE.ToJSON)
+
+
+-- Example queries
+-- request_body.v1.v2 = "abc" AND (request_body.v3.v4 = 123 OR request_body.v5[].v6=ANY[1,2,3] OR request_body[1].v7 OR NOT request_body[-1].v8 )
+-- request_body[1].v7 | {.v7, .v8} |
+--
+
+-- >>> parse pSection "" "traces"
+-- Right (Source STraces)
+--
+-- >>> parse pSection "" "method==\"GET\""
+-- Right (Search (Eq (Subject "method" "method" []) (Str "GET")))
+--
+-- >>> parse pSection "" "method==\"GET\" | traces"
+-- Right (Search (Eq (Subject "method" "method" []) (Str "GET")))
+--
+-- >>> parse pSection "" "traces | method==\"GET\" "
+-- Right (Source STraces)
+--
+-- >>> parse pSection "" " traces | method==\"GET\" "
+-- Right (Source STraces)
+--
+pSection :: Parser Section
+pSection = do
+  _ <- space
+  choice @[]
+    [ pStatsSection
+    , pTimeChartSection
+    , Search <$> pExpr
+    , Source <$> pSource
+    ]
+
+
+-- find what source to use when processing a query. By default, the requests source is used
+--
+-- >>> parse pSource "" "traces"
+-- Right STraces
+--
+-- >>> parse pSource "" "spans"
+-- Right SSpans
+--
+-- >>> parse pSource "" "metrics"
+-- Right SMetrics
+--
+pSource :: Parser Sources
+pSource =
+  choice @[]
+    [ SRequests <$ string "requests"
+    , SLogs <$ string "logs"
+    , STraces <$ string "traces"
+    , SSpans <$ string "spans"
+    , SMetrics <$ string "metrics"
+    ]
+
+
+instance Display Sources where
+  displayPrec prec SRequests = "apis.request_dumps"
+  displayPrec prec SLogs = "telemetry.logs"
+  displayPrec prec STraces = "telemetry.traces"
+  displayPrec prec SSpans = "telemetry.spans"
+  displayPrec prec SMetrics = "telemetry.metrics"
+
+
+--- >>> parse parseQuery "" "method// = bla "
+-- Right []
+--
+parseQuery :: Parser [Section]
+parseQuery = sepBy pSection (space *> char '|' <* space)

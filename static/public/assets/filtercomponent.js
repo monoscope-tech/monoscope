@@ -1,31 +1,50 @@
 import { LitElement, html, ref, createRef } from 'https://cdn.jsdelivr.net/gh/lit/dist@3/all/lit-all.min.js'
+import jsonpath from './js/thirdparty/jsonpath.js'
+const httpStatusCodes = [
+  // 1xx Informational
+  100, 101, 102, 103,
+  // 2xx Success
+  200, 201, 202, 203, 204, 205, 206, 207, 208, 226,
+  // 3xx Redirection
+  300, 301, 302, 303, 304, 305, 307, 308,
+  // 4xx Client Errors
+  400, 401, 402, 403, 404, 405, 406, 407, 408, 409, 410,
+  411, 412, 413, 414, 415, 416, 417, 418, 421, 422, 423,
+  424, 425, 426, 428, 429, 431, 451,
+  // 5xx Server Errors
+  500, 501, 502, 503, 504, 505, 506, 507, 508, 510, 511
+];
+const string_operators = ['==', '!=']
+const number_operators = ['==', '>', '<', '!=', '>=', '<=']
+const reqSchema = [
+  ["method", string_operators, ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS', 'HEAD', 'CONNECT', 'TRACE']],
+  ["status_code", number_operators, httpStatusCodes],
+  ["request_type", string_operators, ["Outgoing", "Incoming"]],
+  ["duration_ns", number_operators, []],
+  ["url_path"],
+  ["duration_ns"],
+  ["has_errors"],
+  ["host"],
+  ["raw_url"],
+  ["request_header"],
+  ["response_header"],
+  ["request_body"],
+  ["response_body"],
+  ["query_param"],
+  ["path_param"]
+]
+const AUTOCOMPLETE_SUPPORTED_FIELDS = ['request_body', 'response_body', 'request_header', 'response_header'];
 
-function getFieldAndValue(filter) {
-  const parts = filter.trim().split(/\s*([=<>!]+)\s*/)
-  if (parts.length !== 3) {
-    return []
-  }
-  const [field, operator, value] = parts
-  return [field, operator, value]
-}
-export class MyElement extends LitElement {
-  static properties = {
-    filters: {},
-    showFilterSearch: {},
-  }
+export class FilterElement extends LitElement {
+  static properties = { ast: { type: Array }, newQuery: { type: Boolean }, qs: { type: Object }, selected: { type: Number }, suggestions: { type: Array }, editingPath: { type: String } };
 
   constructor() {
-    super()
-    this.showFilterSearch = false
-    this.addEventListener('add-filter', this.handleChildEvent)
-    this.addEventListener('remove-filter', (e) => {
-      this.removeFilter(e.detail.filter)
-    })
-    this.addEventListener('close-search', () => {
-      this.showFilterSearch = false
-    })
-    const body = document.querySelector('body')
-    this.filters = []
+    super();
+    this.qs = {};
+    this.selected = 0;
+    this.suggestions = [];
+    this.editingPath = {}
+
     window.setQueryBuilderFromParams = () => {
       const urlSearchParams = new URLSearchParams(window.location.search)
       const query = urlSearchParams.get('query')
@@ -33,590 +52,527 @@ export class MyElement extends LitElement {
         this.setBuilderValue(query)
       }
     }
-
-    body.addEventListener('click', () => {
-      this.showFilterSearch = false
-    })
   }
 
-  setBuilderValue = (value) => {
-    const joiners = value.split(' ').filter((v) => v.toUpperCase() === 'AND' || v.toUpperCase() == 'OR')
-    let current = 0
-    const fls = value.split(/\s+AND\s+|\s+OR\s+/i).flatMap((element, index, array) => {
-      return index < array.length - 1 ? [element, (joiners[current++] || 'AND').toUpperCase()] : [element]
-    })
-    this.upadteFilters(fls)
-  }
+  #ops = new Proxy({
+    Eq: '==', GT: '>', LT: '<', GTE: '>=', LTE: '<=', And: 'and', Or: 'or',
+    '==': 'Eq', '>': 'GT', '<': 'LT', '>=': 'GTE', '<=': 'LTE'
+  }, { get: (t, p) => t[p] ?? p });
 
-  handleChildEvent(event) {
-    let joiner = 'AND'
-    const [newField, newOperator, value] = getFieldAndValue(event.detail.filter)
-    for (let filter of this.filters) {
-      const [field, operator, val] = getFieldAndValue(filter)
-      if (newField == field) {
-        joiner = 'OR'
-      }
-      if (newField === field && newOperator === operator && value === val) {
-        this.showFilterSearch = false
-        return
-      }
-    }
-    if (event.detail.pos) {
-      this.filters[event.detail.pos] = event.detail.filter
-      this.upadteFilters([...this.filters])
-    } else {
-      if (this.filters.length === 0) {
-        this.upadteFilters([event.detail.filter])
-      } else {
-        this.upadteFilters([...this.filters, joiner, event.detail.filter])
+  #remove = (path, e) => {
+    e?.stopPropagation();
+    const [parent, node] = [path.match(/(.*?)\.contents(?:\[\d+\])?$/)?.[1], path]
+      .map(p => p && jsonpath.query(this.ast, `$${p}`)[0])
+      .filter(Boolean);
+
+    if (!parent?.contents) return;
+
+    if (parent.tag === 'Search') {
+      this.ast = []; // If removing from root Search node, clear the whole AST
+    } else if (parent.tag === 'And') {
+      // For And nodes, replace parent with the remaining child
+      const remainingNode = Array.isArray(parent.contents) ?
+        parent.contents.find(n => n !== node) :
+        undefined;
+
+      const grandParentPath = path.match(/(.*?)\.contents\.contents(?:\[\d+\])?$/)?.[1];
+      if (grandParentPath) {
+        jsonpath.apply(this.ast, `$${grandParentPath}`, () => remainingNode);
       }
     }
-    this.showFilterSearch = false
-  }
 
-  upadteFilters(newVal) {
-    this.filters = newVal.filter((v) => v !== '')
-    const val = newVal.join(' ')
-    window.queryBuilderValue = val
-    if (window.editor) {
-      window.editor.setValue(val)
-    }
-  }
+    this.requestUpdate();
+  };
 
-  removeFilter(filter) {
-    const index = this.filters.indexOf(filter)
-    if (index > 0) {
-      this.filters[index - 1] = filter
-    } else {
-      if (this.filters.length > 0) {
-        this.filters[index + 1] = filter
-      }
-    }
-    this.upadteFilters(this.filters.filter((f) => f != filter))
-  }
+  #toggle = (path, _e) => {
+    jsonpath.apply(this.ast, `$${path}`, op => op == 'And' ? 'Or' : 'And')
+    this.requestUpdate();
+  };
 
-  isValidFilter(filter) {
-    const parts = filter.trim().split(/\s*([=<>!]+)\s*/)
-    if (parts.length !== 3) {
-      return false
-    }
-    const [field, operator, value] = parts
-    if (!field || !value) {
-      return false
-    }
-    return true
-  }
 
-  toggleJoinOperator(index) {
-    if (this.filters[index] === 'AND') {
-      this.filters[index] = 'OR'
-    } else {
-      this.filters[index] = 'AND'
-    }
-    this.upadteFilters([...this.filters])
-  }
-
-  render() {
-    return html`
-      <div class="relative w-full" @click=${(e) => e.stopPropagation()}>
-        <div class="flex items-center flex-wrap gap-2 ">
-          <svg class="h-4 w-4 icon"><use href="/public/assets/svgs/fa-sprites/regular.svg#filter"></use></svg>
-          <div class="flex flex-wrap">
-            ${this.filters.map((filter, index) => {
-              return html`
-                ${filter === 'AND' || filter === 'OR'
-                  ? html`<button type="button" @click=${() => this.toggleJoinOperator(index)} class=" bg-gray-100 text-xs  px-2 py-1 rounded-full">
-                      ${filter.toLowerCase()}
-                      <i class="fa-solid fa-sliders-simple"></i>
-                    </button>`
-                  : html`<filter-item filter=${filter} pos=${index}></filter-item>`}
-              `
-            })}
-            ${this.showFilterSearch ? html`<filter-suggestions></filter-suggestions>` : null}
-            ${this.filters.length == 0
-              ? html`<button type="button" @click=${() => (this.showFilterSearch = !this.showFilterSearch)} class="text-slate-600">Click to add filter...</button>`
-              : html`<button type="button" @click=${() => (this.showFilterSearch = !this.showFilterSearch)} class="px-2 py-1 border rounded  hover:bg-gray-100">
-                  <svg class="inline-block icon h-4 w-4"><use href="/public/assets/svgs/fa-sprites/regular.svg#plus"></use></svg>
-                </button>`}
-          </div>
+  render = () => html`
+    <div class="relative flex items-center flex-wrap gap-2" @click=${(e) => e.stopPropagation()}>
+      <svg class="h-4 w-4 icon">
+        <use href="/public/assets/svgs/fa-sprites/regular.svg#filter"/>
+      </svg>
+      <div class="flex flex-wrap gap-2">
+        ${(i => i >= 0 ? this.#renderFilter(this.ast[i].contents, `[${i}].contents`) : '')(this.ast?.findIndex(n => n.tag === 'Search') ?? -1)}
+        <div class="relative inline-block">        
+          <span class="rounded-lg bg-white inline-flex p-2 items-center shadow-sm cursor-pointer" 
+            @click=${() => { this.newQuery = true; this.requestUpdate() }}>
+            <svg class="h-4 w-4 icon"><use href="/public/assets/svgs/fa-sprites/regular.svg#plus"/></svg>
+          </span>
+          ${this.newQuery ? this.#renderQueryInput(null, null, {}) : ''}
         </div>
       </div>
-    `
-  }
-  createRenderRoot() {
-    return this
-  }
-}
+    </div>
+  `;
 
-customElements.define('filter-element', MyElement)
+  // To allow closing the dropdowns when user clicks outside
+  #closeOnClickOutside = e =>
+    this.newQuery && !e.composedPath().find(el => el.classList?.contains('query-input')) &&
+    (this.editingPath = "") &&
+    (this.newQuery = false);
 
-class FilterItem extends LitElement {
-  static properties = {
-    filter: {},
-    pos: {},
-  }
-  constructor() {
-    super()
-    this.showFieldModal = false
-    this.showOperatoinModal = false
-    this.showValueModal = false
-    this.fields = FIELDS
-    this.operators = []
-    this.values = []
-    this.fieldType = 'string'
-
-    const body = document.querySelector('body')
-    body.addEventListener('click', () => {
-      this.showFieldModal = false
-      this.showOperatoinModal = false
-      this.showValueModal = false
-      this.requestUpdate()
-    })
+  connectedCallback() {
+    super.connectedCallback(); window.addEventListener('click', this.#closeOnClickOutside);
   }
 
-  triggerFilterChange(field, op, value) {
-    this.showFieldModal = false
-    this.showOperatoinModal = false
-    this.showValueModal = false
-    let pureVal = this.fieldType === 'string' && !value.startsWith('"') && !value.endsWith('"') ? `"${value}"` : value
-    this.fields = FIELDS
-    const filter = `${field} ${op} ${pureVal}`
-    const event = new CustomEvent('add-filter', {
-      detail: {
-        filter,
-        pos: this.pos,
+  disconnectedCallback() {
+    super.disconnectedCallback(); window.removeEventListener('click', this.#closeOnClickOutside);
+  }
+
+  #renderFilter = (node, path = '') => !node ? null :
+    ['And', 'Or'].includes(node.tag) ? html`
+      <div class="flex flex-wrap gap-2">
+        ${node.contents.flatMap((c, i) => [
+      this.#renderFilter(c, `${path}.contents[${i}]`),
+      i < node.contents.length - 1 && html`
+            <button class="bg-gray-200 text-xs px-2 py-1 rounded-full" type="button" 
+              @click=${(e) => this.#toggle(`${path}.tag`, e)} data-path="${path}.tag">
+              ${this.#ops[node.tag]} <svg class="h-3 w-3 icon"><use href="/public/assets/svgs/fa-sprites/regular.svg#sliders-simple"/></svg>
+            </button>`
+    ]).filter(Boolean)}
+      </div>
+    ` : html`
+      <div class="text-[#067cff] bg-[#edf9ff] rounded-xl border border-[#b5e5ff] justify-start items-center inline-flex px-1"
+        data-path=${path}>
+        <div class="divide-x divide-[#b5e5ff] inline-flex">
+          <div class="relative"><a class="p-1 cursor-pointer hover:bg-[#d5f0ff]" @click=${() => { this.editingPath = `${path}.contents[0]`; this.requestUpdate() }}>
+            ${node.contents[0]}
+          </a>${this.editingPath == `${path}.contents[0]` ? this.#renderQueryInput('field', `${path}.contents[0]`, { field: node.contents[0], ops: node.tag, value: node.contents[1] }) : ''}</div>
+          <div class="relative"><a class="p-1 cursor-pointer hover:bg-[#d5f0ff]"  @click=${() => { this.editingPath = `${path}.tag`; this.requestUpdate() }}>
+            ${this.#ops[node.tag]}
+          </a>${this.editingPath == `${path}.tag` ? this.#renderQueryInput('op', `${path}.tag`, { field: node.contents[0], ops: node.tag, value: node.contents[1] }) : ''}</div>
+          <div class="relative"><a class="p-1 cursor-pointer hover:bg-[#d5f0ff]" @click=${() => { this.editingPath = `${path}.contents[1]`; this.requestUpdate() }}>
+            ${JSON.stringify(node.contents[1])}
+          </a>${this.editingPath == `${path}.contents[1]` ? this.#renderQueryInput('value', `${path}.contents[1]`, { field: node.contents[0], ops: node.tag, value: node.contents[1] }) : ''}</div>
+        </div>
+        <span class="rounded-full bg-white inline-flex p-1 ml-1 cursor-pointer" 
+          @click=${(e) => this.#remove(path, e)}>
+          <svg class="h-3 w-3 icon">
+            <use href="/public/assets/svgs/fa-sprites/regular.svg#xmark"/>
+          </svg>
+        </span>
+      </div>
+    `;
+
+  async #fetchAutocomplete(category, prefix) {
+    try {
+      const response = await fetch(`/p/e3754fd3-565b-4be5-9428-f890f9cc9237/query_builder/autocomplete?category=${category}&prefix=${prefix}`);
+      if (!response.ok) throw new Error('Failed to fetch suggestions');
+      return await response.json();
+    } catch (error) {
+      console.error('Autocomplete fetch error:', error);
+      return [];
+    }
+  }
+  #parseInput = input => {
+    // Enhanced regex patterns to support array paths with wildcards
+    const patterns = [
+      /^([\w.\[\]\*]+)\s*(==|!=|>=|<=|>|<)\s*"?([^"]*)"?$/i,
+      /^([\w.\[\]\*]+)\s+(?:is|equals?|=)\s*"?([^"]*)"?$/i,
+      /^([\w.\[\]\*]+)\s+(?:>|greater|more|above|after)\s*"?([^"]*)"?$/i,
+      /^([\w.\[\]\*]+)\s+(?:<|less|below|before)\s*"?([^"]*)"?$/i,
+      /^([\w.\[\]\*]+)\s*"?([^"]*)"?$/i
+    ];
+
+    for (const pattern of patterns) {
+      const match = input.match(pattern);
+      if (!match) continue;
+      const [_, field, opOrValue, value] = match;
+      const op = pattern === patterns[1] ? '==' :
+        pattern === patterns[2] ? '>' :
+          pattern === patterns[3] ? '<' :
+            opOrValue;
+      return [
+        field.trim(),
+        op?.trim?.() ?? '==',
+        value?.trim() ?? opOrValue?.trim() ?? ''
+      ].map(x => x.replace(/^["']|["']$/g, ''));
+    }
+    return [input.trim()];
+  };
+  async #updateStateFromInput(input) {
+    const [field] = this.#parseInput(input);
+    const baseField = field?.split('.')?.[0];
+
+    // Enhanced autocomplete behavior
+    if (field && AUTOCOMPLETE_SUPPORTED_FIELDS.includes(baseField)) {
+      // If it's just the base field, show all initial paths
+      if (field === baseField) {
+        this.suggestions = await this.#fetchAutocomplete(baseField, '');
+      } else {
+        // For nested paths, use everything after the base field as prefix
+        const pathParts = field.split('.');
+        const prefix = pathParts.slice(1).join('.');
+        this.suggestions = await this.#fetchAutocomplete(baseField, prefix);
+      }
+    } else {
+      this.suggestions = [];
+    }
+
+    // Rest of the validation logic
+    const fieldSchema = reqSchema.find(([f]) => f === baseField);
+    const [_, op, value] = this.#parseInput(input);
+    const validOps = fieldSchema?.[1] ?? string_operators;
+
+    this.qs = {
+      input,
+      field: fieldSchema ? field : null,
+      op: null,
+    };
+
+    if (this.qs.field && validOps.some(validOp => input.includes(validOp))) {
+      this.qs.op = validOps.find(validOp => input.includes(validOp));
+    }
+
+    this.selected = 0;
+    this.requestUpdate();
+  }
+
+  #getCurrentList = () => {
+    if (this.suggestions.length > 0) return this.suggestions;
+
+    // If editing operator, only show valid operators for the field
+    if (this.qs.editType === 'op' && this.qs.field) {
+      const baseField = this.qs.field.split('.')[0];
+      const fieldSchema = reqSchema.find(([f]) => f === baseField);
+      return fieldSchema?.[1] ?? string_operators;
+    }
+
+    // If editing value and field has predefined values, show them
+    if (this.qs.editType === 'value' && this.qs.field) {
+      const baseField = this.qs.field.split('.')[0];
+      const fieldSchema = reqSchema.find(([f]) => f === baseField);
+      return fieldSchema?.[2] ?? [];
+    }
+
+    // Existing logic for new filters
+    if (!this.qs.field) {
+      return reqSchema.filter(([f]) => !this.qs.input || f.includes(this.#parseInput(this.qs.input)[0]));
+    }
+
+    if (!this.qs.op) {
+      const baseField = this.qs.field.split('.')[0];
+      const fieldSchema = reqSchema.find(([f]) => f === baseField);
+      return fieldSchema?.[1] ?? [];
+    }
+
+    const baseField = this.qs.field.split('.')[0];
+    const fieldSchema = reqSchema.find(([f]) => f === baseField);
+    return fieldSchema?.[2] ?? [];
+  };
+
+  #handleKey = e => {
+    const list = this.#getCurrentList();
+    const [field, op, value] = this.#parseInput(this.qs.input ?? '');
+    const baseField = field?.split('.')?.[0];
+    const fieldSchema = reqSchema.find(([f]) => f === baseField);
+    const validOps = fieldSchema?.[1] ?? string_operators; // Default to string ops for nested paths
+
+    const handlers = {
+      ArrowDown: () => this.selected = Math.min((this.selected + 1), list.length - 1),
+      ArrowUp: () => this.selected = Math.max(0, this.selected - 1),
+      Enter: () => {
+        // Direct input mode - complete query
+        if (!this.selected && field && op && value) {
+          // For nested paths, always treat as string unless explicitly number
+          const isNumber = baseField && fieldSchema?.[1] === number_operators;
+          const parsedValue = isNumber ? Number(value) : value;
+
+          if (!isNumber || !isNaN(parsedValue)) {
+            this.#select('value', parsedValue);
+            return;
+          }
+        }
+
+        // Selection mode remains unchanged
+        if (this.selected && list[this.selected - 1]) {
+          if (!this.qs.field) {
+            this.#select('field', list[this.selected - 1][0]);
+          } else if (!this.qs.op) {
+            this.#select('op', list[this.selected - 1]);
+          } else {
+            this.#select('value', list[this.selected - 1]);
+          }
+        }
       },
-      bubbles: true,
-      composed: true,
-    })
-    this.dispatchEvent(event)
-  }
-  removeFilter() {
-    const event = new CustomEvent('remove-filter', {
-      detail: {
-        filter: this.filter,
-        pos: this.pos,
-      },
-      bubbles: true,
-      composed: true,
-    })
-    this.dispatchEvent(event)
-  }
+      Tab: e => { e.preventDefault(); handlers.Enter() },
+      Escape: () => {
+        if (this.selected) {
+          this.selected = 0;
+        } else {
+          this.newQuery = false;
+          this.qs = {};
+        }
+      }
+    };
 
-  render() {
-    const [field, operator, value] = getFieldAndValue(this.filter)
-    this.fieldType = filterAutoComplete[field]?.type || 'string'
-    this.operators = filterAutoComplete[field]?.operators || ['==', '!=']
-    this.values = filterAutoComplete[field]?.values || []
+    handlers[e.key]?.();
+    this.requestUpdate();
+  };
+
+  // Update the suggestion rendering to show full paths
+  #select = async (type, value) => {
+    if (type === 'field') {
+      const baseField = value.split('.')[0];
+      if (AUTOCOMPLETE_SUPPORTED_FIELDS.includes(baseField)) {
+        this.qs = {
+          input: value,
+          field: value,
+          op: null
+        };
+        const prefix = value.split('.').slice(1).join('.');
+        this.suggestions = await this.#fetchAutocomplete(baseField, prefix);
+      } else {
+        this.qs = {
+          input: value,
+          field: value,
+          op: null
+        };
+        this.suggestions = [];
+      }
+    } else if (type === 'value') {
+      const operator = this.qs.op;
+      const opTag = this.#ops[operator] || 'Eq';
+      const newNode = {
+        tag: opTag,
+        contents: [this.qs.field, value]
+      };
+
+      if (!this.ast?.length) {
+        // First node
+        this.ast = [{
+          tag: 'Search',
+          contents: newNode
+        }];
+      } else {
+        // Add to existing tree
+        const currentContents = this.ast[0].contents;
+        this.ast = [{
+          tag: 'Search',
+          contents: {
+            tag: 'And',
+            contents: [currentContents, newNode]
+          }
+        }];
+      }
+
+      this.newQuery = false;
+      this.qs = {};
+      this.suggestions = [];
+    } else {
+      const newInput = `${this.qs.field}${value}`;
+      this.qs = {
+        input: newInput,
+        field: this.qs.field,
+        op: value
+      };
+    }
+
+    this.selected = 0;
+    this.requestUpdate();
+  };
+  #renderQueryInputx = (kind, path) => {
+    const { field, op, input } = this.qs;
+    const [parsedField, parsedOp, parsedValue] = this.#parseInput(input ?? '');
+    const list = this.#getCurrentList();
+    const baseField = parsedField?.split('.')?.[0];
+    const fieldSchema = reqSchema.find(([f]) => f === baseField);
+
+    const isValid = !parsedField || (
+      reqSchema.some(([f]) => parsedField.startsWith(f)) &&
+      (!op || fieldSchema?.[1]?.includes(parsedOp))
+    );
 
     return html`
-    <div class="border flex font-bold shrink-0 text-sm text-blue-500 rounded-full bg-blue-50">
-    <div type="button"  class="cursor-pointer rounded-l-full  relative py-1 px-2 hover:bg-blue-100" @click=${() => {
-      this.showFieldModal = !this.showFieldModal
-      this.showOperatoinModal = false
-      this.showValueModal = false
-      this.requestUpdate()
-    }}
-    >
-    <span>${field}</span>
-    ${
-      this.showFieldModal
-        ? html`<div style="heigh" class="absolute z-50 bg-white border rounded w-56  font-normal top-10 left-0" @click=${(e) => e.stopPropagation()}>
-            <input
-              type="text"
-              class="w-full border-b text-sm outline-none focus:outline-none px-2 py-1"
-              placeholder="Search field"
-              @input=${(e) => {
-                this.fields = this.fields.filter((field) => field.toLowerCase().includes(e.target.value.toLowerCase()))
-                if (e.target.value.length == 0) {
-                  this.fields = FIELDS
-                }
-                this.requestUpdate()
-              }}
-              @keydown=${(e) => {
-                if (e.key === 'Enter') {
-                  this.triggerFilterChange(e.target.value, operator, value)
-                }
-              }}
-            />
-            <div class="max-h-56 overflow-y-auto">
-              <div class="flex flex-col">
-                ${this.fields.map((field) => {
-                  return html`<button type="button" class="flex items-center gap-2 px-2 py-1 hover:bg-slate-100" @click=${(e) => this.triggerFilterChange(field, operator, value)}>${field}</button>`
-                })}
-              </div>
-            </div>
-          </div>`
-        : null
-    }
-    </div>
-    <div type="button"  class="cursor-pointer relative border-l border-r px-2 py-1 hover:bg-blue-100" @click=${() => {
-      this.showFieldModal = false
-      this.showOperatoinModal = !this.showOperatoinModal
-      this.showValueModal = false
-      this.requestUpdate()
-    }}>
-    <span>${operator}<span>
-    ${
-      this.showOperatoinModal
-        ? html`<div style="heigh" class="absolute z-50 bg-white border rounded w-56  font-normal top-10 left-0" @click=${(e) => e.stopPropagation()}>
-            <div class="max-h-56 overflow-y-auto">
-              <div class="flex flex-col">
-                ${this.operators.map((op) => {
-                  return html`<button type="button" class="flex items-center gap-2 px-2 py-1 hover:bg-slate-100" @click=${(e) => this.triggerFilterChange(field, op, value)}>${op}</button>`
-                })}
-              </div>
-            </div>
-          </div>`
-        : null
-    }
-    </div>
-    <div type="button"  class="cursor-pointer relative py-1 px-2 border-r hover:bg-blue-100" @click=${() => {
-      this.showFieldModal = false
-      this.showOperatoinModal = false
-      this.showValueModal = !this.showValueModal
-      this.requestUpdate()
-    }}>
-    <span>${value}<span>
-    ${
-      this.showValueModal
-        ? html`<div style="heigh" class="absolute z-50 bg-white border rounded w-56  font-normal top-10 left-0" @click=${(e) => e.stopPropagation()}>
-            <input
-              type="text"
-              class="w-full border-b text-sm outline-none focus:outline-none px-2 py-1"
-              placeholder="Enter value"
-              @input=${(e) => {
-                this.values = this.values.filter((field) => field.toLowerCase().includes(e.target.value.toLowerCase()))
-                this.requestUpdate()
-              }}
-              @keydown=${(e) => {
-                if (e.key === 'Enter') {
-                  this.triggerFilterChange(field, operator, e.target.value)
-                }
-              }}
-            />
-            <div class="max-h-56 overflow-y-auto flex flex-col">
-              ${this.values.map((v) => {
-                return html`<button type="button" class="flex items-center gap-2 px-2 py-1 hover:bg-slate-100" @click=${(e) => this.triggerFilterChange(field, operator, v)}>${v}</button>`
-              })}
-            </div>
-          </div>`
-        : null
-    }
-    </div>
-    ${html`<span class="px-2 hover:bg-blue-100 rounded-r-full py-1" @click=${() => this.removeFilter(this.pos)}>
-      <svg class="inline-block icon h-3 w-3"><use href="/public/assets/svgs/fa-sprites/regular.svg#xmark"></use></svg>
-    </span>`}
-  </div>`
-  }
-  createRenderRoot() {
-    return this
-  }
-}
-customElements.define('filter-item', FilterItem)
-
-const FIELDS_WITH_KEYPATHS = ['request_header', 'response_header', 'request_body', 'response_body', 'query_param', 'path_param']
-
-const TRACES_FIELDS = ['trace_id', 'span_name', 'kind', 'status', 'start_time', 'span_id', 'status_message']
-
-const FIELDS = ['method', 'status_code', 'url_path', 'duration_ns', 'has_errors', 'host', 'raw_url', ...FIELDS_WITH_KEYPATHS, 'referer', 'query_param', 'path_param', 'request_type', 'service_version']
-const string_operators = ['==', '!=']
-const number_operators = ['==', '>', '<', '!=', '>=', '<=']
-
-const filterAutoComplete = {
-  method: {
-    type: 'string',
-    operators: string_operators,
-    values: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS', 'HEAD', 'CONNECT', 'TRACE'],
-  },
-  status_code: {
-    type: 'number',
-    operators: number_operators,
-    values: [200, 201, 202, 203, 204, 300, 301, 302, 400, 401, 402, 403, 404, 405, 406, 500, 501, 502, 503, 504],
-  },
-  request_type: {
-    type: 'string',
-    operators: string_operators,
-    values: ['Outgoing', 'Incoming'],
-  },
-  duration_ns: {
-    operators: number_operators,
-    type: 'number',
-    values: [],
-  },
-  has_errors: {
-    operators: ['=='],
-    type: 'boolean',
-    values: ['true', 'false'],
-  },
-  kind: { operators: string_operators, type: 'string', values: ['CLIENT', 'SERVER', 'INTERNAL'] },
-  status: {
-    operators: string_operators,
-    type: 'string',
-    values: ['OK', 'ERROR', 'UNSET'],
-  },
-}
-
-class Filter extends LitElement {
-  static properties = {
-    hasQuery: { type: Boolean },
-  }
-
-  static properties = {
-    matches: {},
-    inputVal: {},
-    fetchAutocomplete: {},
-    source: {},
-    sourceFields: {},
-  }
-
-  constructor() {
-    super()
-    this.inputVal = ''
-    this.fetchAutocomplete = false
-    const source = document.querySelector('#resultTable').dataset.source
-    this.source = source
-    this.sourceFields = source == 'logs' ? TRACES_FIELDS : source == 'spans' ? TRACES_FIELDS : FIELDS
-    this.matches = this.sourceFields
-    this.projectId = window.location.pathname.split('/')[2]
-    const builderContainer = document.getElementById('queryBuilder')
-    if (builderContainer) {
-      // const url_paths = JSON.parse(builderContainer.dataset.url_paths)
-      // this.filterAutoComplete.url_path.values = (url_paths || []).sort()
-      // this.filterAutoComplete.raw_url.values = (JSON.parse(builderContainer.dataset.raw_urls) || []).sort()
-    }
-  }
-
-  inputRef = createRef()
-  render() {
-    return html`
-      <div class="relative ">
-        <div class="h-4"></div>
-        <div
-          style="z-index:99"
-          class="${`flex absolute overflow-hidden top-8 flex-col border rounded text-left bg-white min-w-96 max-w-[500px] ${this.hasQuery ? 'left-1/2 -translate-x-1/2' : 'left-0'}`}"
-        >
-          <input
-            type="text"
-            placeholder="Type query..."
-            autofocus
-            ${ref(this.inputRef)}
-            class="border-b px-2 w-full py-1 outline-none focus:outline-0 min-w-96 max-w-[500px]"
-            @input=${(event) => {
-              this.handleChange(event.target.value)
-              this.adjustInputWidthAndFocus()
-            }}
-            .value=${this.inputVal}
-            @keydown=${(e) => {
-              if (e.key === 'Enter') {
-                this.triggerCustomEvent(e.target.value)
-              }
-            }}
-          />
-          <div class="flex flex-col gap-2 w-full overflow-auto" style="max-height:250px;">
-            ${this.matches.map(
-              (match) => html`
-                <button
-                  type="button"
-                  class="match_buttons px-2 py-1 text-sm text-left hover:bg-slate-100"
-                  @click=${(e) => {
-                    this.autoCompleteInput(match)
-                    this.adjustInputWidthAndFocus()
-                  }}
-                  @keydown=${(e) => {
-                    if (e.key === 'Enter') {
-                      this.autoCompleteInput(match)
-                      this.adjustInputWidthAndFocus()
-                    }
-                    if (e.key === 'Tab') {
-                      e.preventDefault()
-                      const buttons = document.querySelectorAll('.match_buttons')
-                      const activeButton = document.activeElement
-                      const index = Array.from(buttons).indexOf(activeButton)
-
-                      if (index !== -1) {
-                        const nextIndex = (index + 1) % buttons.length
-                        buttons[nextIndex].focus()
-                      }
-                    }
-                  }}
-                >
-                  ${match}
-                </button>
-              `
-            )}
-          </div>
+    <div class="query-input absolute z-50 bg-slate-50 border rounded font-normal top-10 left-0">
+      <input type="text" 
+        autofocus
+        ${ref(el => el?.focus())}
+        style="field-sizing: content;"
+        class="w-full min-w-56 border-b text-sm outline-none px-2 py-1 ${isValid ? '' : 'text-red-500'}"
+        .value=${this.qs.input ?? ''} 
+        @input=${e => this.#updateStateFromInput(e.target.value)}
+        @keydown=${this.#handleKey}
+        placeholder="Type query/field ..." />
+      <div class="flex">
+        <div class="min-w-56 max-h-56 overflow-y-auto ${!field ? '' : !op ? 'border-l' : 'border-l'}">
+          ${list.map((item, i) => html`
+            <button class="w-full text-left px-2 py-1 hover:bg-slate-100 flex justify-between
+              ${i === this.selected - 1 ? 'bg-blue-100' : ''}"
+              @mouseenter=${() => this.selected = i + 1}
+              @mouseleave=${() => this.selected = 0}
+              type="button"
+              @click=${() => this.#select(!field ? 'field' : !op ? 'op' : 'value', !field ? (this.suggestions.length ? baseField + '.' + item : item[0]) : item)}>
+              ${!field ? html`
+                ${this.suggestions.length ? baseField + '.' + item : item[0]}
+                ${!this.suggestions.length ? html`
+                  <span class="text-xs text-gray-500">
+                    ${item[1] === number_operators ? 'number' :
+            item[1] === string_operators ? 'string' : 'field'}
+                  </span>` : ''}
+              ` : item}
+            </button>
+          `)}
         </div>
       </div>
-    `
-  }
+    </div>
+  `;
+  };
 
-  createRenderRoot() {
-    return this
-  }
+  #renderQueryInput = (kind, path, { attachedField, attachedOperator }) => {
+    // Determine editing context from kind and path
+    const editContext = kind ? {
+      editType: kind,
+      path: path,
+      currentValue: path ? jsonpath.query(this.ast, `$${path}`)[0] : null
+    } : null;
 
-  adjustInputWidthAndFocus() {
-    const input = this.inputRef.value
-    const inputWidth = Math.max((this.inputVal.length + 1) * 7, 200)
-    this.inputRef.value.style.width = `${inputWidth}px`
-    this.inputRef.value.focus()
-  }
+    const { qField, qOp, input } = this.qs;
+    const field = attachedField ? attachedField : qField;
+    const op = attachedOperator ? attachedOperator : qOp;
+    const [parsedField, parsedOp, parsedValue] = this.#parseInput(input ?? '');
+    const list = this.#getCurrentList();
+    const baseField = parsedField?.split('.')?.[0];
+    const fieldSchema = reqSchema.find(([f]) => f === baseField);
 
-  autoCompleteInput(val) {
-    this.inputVal = val
-    if (this.isValidFilter(val)) {
-      this.triggerCustomEvent(this.inputVal)
-    } else {
-      this.handleChange(val)
-    }
-  }
+    const isValid = !parsedField || (
+      reqSchema.some(([f]) => parsedField.startsWith(f)) &&
+      (!op || fieldSchema?.[1]?.includes(parsedOp))
+    );
 
-  isValidFilter(filter) {
-    const parts = filter.trim().split(/\s*([=<>!]+)\s*/)
-    if (parts.length !== 3) {
-      return false
-    }
-    const [field, operator, value] = parts
-    if (!field || !value) {
-      return false
-    }
-    return true
-  }
-
-  triggerCustomEvent(value) {
-    if (!this.isValidFilter(value)) return
-    const event = new CustomEvent('add-filter', {
-      detail: {
-        filter: value,
-      },
-      bubbles: true,
-      composed: true,
-    })
-    this.dispatchEvent(event)
-  }
-
-  getField(filter) {
-    const parts = filter.trim().split(/\s*([=<>!]+)\s*/)
-    if (parts.length !== 3) {
-      return ''
-    }
-    return parts[0]
-  }
-
-  getOperator(filter) {
-    const parts = filter.trim().split(/\s*([=<>!]+)\s*/)
-    if (parts.length !== 3) {
-      return ''
-    }
-    return parts[1]
-  }
-
-  getValue(filter) {
-    const parts = filter
-      .replace(' ', '')
-      .trim()
-      .split(/\s*([=<>!]+)\s*/)
-    if (parts.length !== 3) {
-      return ''
-    }
-    return parts[2]
-  }
-
-  needsAutoComplete(filter) {
-    if (this.isValidFilter(filter)) {
-      const value = this.getValue(filter).replace(/^"|"$/g, '')
-      if (value.length < 2) return null
-      const field = this.getField(filter)
-      const operator = this.getOperator(filter)
-      if (['host', 'referer', 'raw_url', 'url_path'].includes(field)) {
-        return { key: field, operator, prefix: value }
-      }
-    }
-    return null
-  }
-
-  needsAutoCompleteKeyPath(filter) {
-    let rootEnd = filter.indexOf('.')
-    let field = filter
-    let prefix = ''
-    if (rootEnd !== -1) {
-      field = filter.substring(0, rootEnd)
-      prefix = filter.substring(rootEnd + 1)
-    }
-    if (['request_body', 'response_body', 'request_header', 'response_header', 'query_param', 'path_param'].includes(field)) {
-      return {
-        result: true,
-        field: field,
-        prefix: prefix,
-      }
-    }
-    return { result: false, field: null, prefix: null }
-  }
-
-  handleChange(val) {
-    this.inputVal = val.trim()
-    if (!this.inputVal) {
-      this.matches = this.sourceFields
-      return
-    }
-    let filters = this.sourceFields.filter((v) => v.startsWith(this.inputVal) || this.inputVal.startsWith(v))
-    let auto_complete = []
-    filters.forEach((filter) => {
-      let target = filter
-      let target_info = filterAutoComplete[target]
-      if (!target_info) {
-        const key = this.needsAutoCompleteKeyPath(this.inputVal)
-        target_info = { operators: string_operators, values: [] }
-        if (key.result) {
-          fetch(`/p/${this.projectId}/query_builder/autocomplete?category=${key.field}&prefix=.${key.prefix}`)
-            .then((res) => res.json())
-            .then((data) => {
-              const res = data.map((d) => `${key.field}${d}`)
-              let matches = []
-              res.forEach((match) => {
-                target_info.operators.forEach((op) => {
-                  matches.push(`${match} ${op}`)
-                })
-              })
-              this.matches = matches
-            })
-          return
-        } else {
-          const result = this.needsAutoComplete(this.inputVal)
-          if (result) {
-            fetch(`/p/${this.projectId}/query_builder/autocomplete?category=${result.key}&prefix=${result.prefix}`)
-              .then((res) => res.json())
-              .then((data) => {
-                this.matches = data.map((d) => `${result.key} ${result.operator} "${d}"`)
-              })
-            return
-          }
+    const handleSelection = (type, value) => {
+      if (editContext) {
+        // Handle path-based updates
+        if (editContext.editType === 'field') {
+          jsonpath.apply(this.ast, `$${editContext.path}`, () => value);
+        } else if (editContext.editType === 'op') {
+          jsonpath.apply(this.ast, `$${editContext.path}`, () => this.#ops[value]);
+        } else if (editContext.editType === 'value') {
+          const baseField = editContext.path.split('.')[0];
+          const fieldSchema = reqSchema.find(([f]) => f === baseField);
+          const isNumber = fieldSchema?.[1] === number_operators;
+          const parsedValue = isNumber ? Number(value) : value;
+          jsonpath.apply(this.ast, `$${editContext.path}`, () => parsedValue);
         }
-      }
 
-      if (filter == this.inputVal.trim() || filter.length > this.inputVal.length) {
-        if (FIELDS_WITH_KEYPATHS.includes(filter)) {
-          auto_complete.push(filter)
-        } else {
-          for (let op of target_info.operators) {
-            auto_complete.push(`${filter} ${op} `)
-          }
-        }
+        // Clear the  editingPath state and query input
+        this.editingPath = '';
+        this.qs = {};
+        this.suggestions = [];
       } else {
-        target_info.values.forEach((v) => {
-          const valTyped = this.getValue(this.inputVal)
-          if (String(v).startsWith(valTyped) || `"${v}`.startsWith(valTyped) || `"${v} "`.startsWith(valTyped)) {
-            if (target_info.type === 'number' || target_info.type === 'boolean') {
-              auto_complete.push(`${this.inputVal.replace(valTyped, '')} ${v}`)
+        // Handle new query creation (existing behavior)
+        this.#select(type, value);
+      }
+      this.requestUpdate();
+    };
+
+    const handleKeyDown = (e) => {
+      const list = this.#getCurrentList();
+
+      if (e.key === 'Enter' && !this.selected && editContext) {
+        // Handle direct input for path updates
+        const value = e.target.value;
+        if (editContext.editType === 'field') {
+          const field = value;
+          if (reqSchema.some(([f]) => field.startsWith(f))) {
+            handleSelection('field', field);
+          }
+        } else if (editContext.editType === 'op') {
+          const baseField = jsonpath.query(this.ast, `$${editContext.path.replace('.tag', '.contents[0]')}`)[0];
+          const fieldSchema = reqSchema.find(([f]) => f === baseField?.split('.')?.[0]);
+          const validOps = fieldSchema?.[1] ?? string_operators;
+          if (validOps.includes(value)) {
+            handleSelection('op', value);
+          }
+        } else if (editContext.editType === 'value') {
+          handleSelection('value', value);
+        }
+        return;
+      }
+
+      // Regular key handling
+      const handlers = {
+        ArrowDown: () => this.selected = Math.min((this.selected + 1), list.length - 1),
+        ArrowUp: () => this.selected = Math.max(0, this.selected - 1),
+        Enter: () => {
+          if (this.selected && list[this.selected - 1]) {
+            handleSelection(
+              editContext?.editType || (!field ? 'field' : !op ? 'op' : 'value'),
+              list[this.selected - 1]
+            );
+          }
+        },
+        Tab: e => { e.preventDefault(); handlers.Enter(); },
+        Escape: () => {
+          if (this.selected) {
+            this.selected = 0;
+          } else {
+            if (editContext) {
+              this.editingPath = "";
             } else {
-              auto_complete.push(`${this.inputVal.replace(valTyped, '')} "${v}"`)
+              this.newQuery = false;
             }
+            this.qs = {};
           }
-        })
-      }
-    })
+        }
+      };
 
-    this.matches = auto_complete
-  }
+      handlers[e.key]?.();
+      this.requestUpdate();
+    };
+
+    // Get initial input value based on context
+    const getInitialValue = () => {
+      if (editContext) {
+        return editContext.currentValue || '';
+      }
+      return this.qs.input || '';
+    };
+
+    return html`
+    <div class="query-input absolute z-50 bg-slate-50 border rounded font-normal top-10 left-0">
+      <input type="text" 
+        autofocus
+        ${ref(el => el?.focus())}
+        style="field-sizing: content;"
+        class="w-full min-w-56 border-b text-sm outline-none px-2 py-1 ${isValid ? '' : 'text-red-500'}"
+        .value=${getInitialValue()} 
+        @input=${e => this.#updateStateFromInput(e.target.value)}
+        @keydown=${handleKeyDown}
+        placeholder=${editContext ?
+        `Edit ${editContext.editType}...` :
+        "Type query/field ..."} />
+      <div class="flex">
+        <div class="min-w-56 max-h-56 overflow-y-auto ${!field ? '' : !op ? 'border-l' : 'border-l'}">
+          ${list.map((item, i) => html`
+            <button class="w-full text-left px-2 py-1 hover:bg-slate-100 flex justify-between
+              ${i === this.selected - 1 ? 'bg-blue-100' : ''}"
+              @mouseenter=${() => this.selected = i + 1}
+              @mouseleave=${() => this.selected = 0}
+              type="button"
+              @click=${() => handleSelection(
+          editContext?.editType || (!field ? 'field' : !op ? 'op' : 'value'),
+          !field ? (this.suggestions.length ? baseField + '.' + item : item[0]) : item
+        )}>
+              ${!field ? html`
+                ${this.suggestions.length ? baseField + '.' + item : item[0]}
+                ${!this.suggestions.length ? html`
+                  <span class="text-xs text-gray-500">
+                    ${item[1] === number_operators ? 'number' :
+                item[1] === string_operators ? 'string' : 'field'}
+                  </span>` : ''}
+              ` : item}
+            </button>
+          `)}
+        </div>
+      </div>
+    </div>
+  `;
+  };
+  createRenderRoot() { return this; }
 }
-customElements.define('filter-suggestions', Filter)
+
+customElements.define('filter-element', FilterElement)

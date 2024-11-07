@@ -46,6 +46,7 @@ import Pages.Charts.Charts qualified as C
 import Pages.Charts.Charts qualified as Charts
 import Pages.Components (statBox)
 import Pages.Endpoints.EndpointComponents qualified as EndpointComponents
+import Pkg.Components qualified as Components
 import Relude hiding (ask, asks, max, min)
 import Relude.Unsafe qualified as Unsafe
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders, redirectCS, addErrorToast)
@@ -231,25 +232,10 @@ endpointDetailsWithHashH pid endpoint_hash = do
 -- | endpointDetailsH is the main handler for the endpoint details page.
 -- It reuses the fieldDetailsView as well, which is used for the side navigation on the page and also exposed un the fieldDetailsPartialH endpoint
 endpointDetailsH :: Projects.ProjectId -> Endpoints.EndpointId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders EndpointDetailsGet)
-endpointDetailsH pid eid fromDStr toDStr sinceStr' subPageM shapeHashM = do
+endpointDetailsH pid eid fromDStr toDStr sinceStr subPageM shapeHashM = do
   (sess, project) <- Sessions.sessionAndProject pid
   now <- liftIO getCurrentTime
-  let sinceStr = if (isNothing fromDStr && isNothing toDStr && isNothing sinceStr') || (fromDStr == Just "") then Just "7D" else sinceStr'
-  -- TODO: Replace with a duration parser.
-  let (fromD, toD, _) = case sinceStr of
-        Just "1H" -> (Just $ addUTCTime (negate $ secondsToNominalDiffTime 3600) now, Just now, Just "Last Hour")
-        Just "24H" -> (Just $ addUTCTime (negate $ secondsToNominalDiffTime $ 3600 * 24) now, Just now, Just "Last 24 Hours")
-        Just "7D" -> (Just $ addUTCTime (negate $ secondsToNominalDiffTime $ 3600 * 24 * 7) now, Just now, Just "Last 7 Days")
-        Just "14D" -> (Just $ addUTCTime (negate $ secondsToNominalDiffTime $ 3600 * 24 * 14) now, Just now, Just "Last 14 Days")
-        _ -> do
-          let f = (iso8601ParseM (from @Text $ fromMaybe "" fromDStr) :: Maybe UTCTime)
-          let t = (iso8601ParseM (from @Text $ fromMaybe "" toDStr) :: Maybe UTCTime)
-          let start = toText . formatTime defaultTimeLocale "%F %T" <$> f
-          let end = toText . formatTime defaultTimeLocale "%F %T" <$> t
-          let range = case (start, end) of
-                (Just s, Just e) -> Just (s <> "-" <> e)
-                _ -> Nothing
-          (f, t, range)
+  let (fromD, toD, currentRange) = Components.parseTimeRange now (Components.TimePickerP sinceStr fromDStr toDStr)
   endpointM <- dbtToEff $ Endpoints.endpointById eid
   let bwconf =
         (def :: BWConfig)
@@ -279,14 +265,10 @@ endpointDetailsH pid eid fromDStr toDStr sinceStr' subPageM shapeHashM = do
       shapesList <- dbtToEff do
         if subPage == "shapes" then Shapes.shapesByEndpointHash pid endpoint.hash else pure []
       let reqLatenciesRolledByStepsJ = decodeUtf8 $ AE.encode reqLatenciesRolledByStepsLabeled
-      currTime <- liftIO getCurrentTime
       let currentURL = "/p/" <> pid.toText <> "/endpoints/" <> Endpoints.endpointIdText eid <> "?from=" <> fromMaybe "" fromDStr <> "&to=" <> fromMaybe "" toDStr
       let subPage = fromMaybe "overview" subPageM
-      let currentPickerTxt = case sinceStr of
-            Just a -> a
-            Nothing -> maybe "" (toText . formatTime defaultTimeLocale "%F %T") fromD <> " - " <> maybe "" (toText . formatTime defaultTimeLocale "%F %T") toD
-      let paramInput = ParamInput{currentURL = currentURL, sinceStr = sinceStr, dateRange = (fromD, toD), currentPickerTxt = currentPickerTxt, subPage = subPage}
-      addRespHeaders $ EndpointsDetailsMain $ PageCtx bwconf (pid, paramInput, currTime, endpoint, enpStats, shapesWithFieldsMap, fieldsMap, shapesList, shapeHashM, reqLatenciesRolledByStepsJ, (fromD, toD))
+      let paramInput = ParamInput{currentURL = currentURL, sinceStr, dateRange = (fromD, toD), currentPickerTxt = maybeToMonoid currentRange, subPage = subPage}
+      addRespHeaders $ EndpointsDetailsMain $ PageCtx bwconf (pid, paramInput, now, endpoint, enpStats, shapesWithFieldsMap, fieldsMap, shapesList, shapeHashM, reqLatenciesRolledByStepsJ, (fromD, toD))
 
 
 data EndpointDetailsGet

@@ -1,5 +1,5 @@
 -- Parser implemented with help and code from: https://markkarpov.com/tutorial/megaparsec.html
-module Pkg.Parser (parseQueryStringToWhereClause, parseQueryToComponents, fixedUTCTime, parseQuery, sectionsToComponents, defSqlQueryCfg, defPid, SqlQueryCfg (..), QueryComponents (..), listToColNames, pSource) where
+module Pkg.Parser (parseQueryStringToWhereClause,queryASTToComponents, parseQueryToComponents, fixedUTCTime, parseQuery, sectionsToComponents, defSqlQueryCfg, defPid, SqlQueryCfg (..), QueryComponents (..), listToColNames, pSource, parseQueryToAST) where
 
 import Control.Error (hush)
 import Data.Default (Default (def))
@@ -10,89 +10,13 @@ import Data.Time.Clock (UTCTime (..), diffUTCTime, nominalDiffTimeToSeconds, sec
 import Data.Time.Format.ISO8601 (iso8601Show)
 import GHC.Records (HasField (getField))
 import Models.Projects.Projects qualified as Projects
-import Pkg.Parser.Expr (pExpr, pSubject)
-import Pkg.Parser.Stats (pStatsSection, pTimeChartSection)
-import Pkg.Parser.Types (
-  ByClause (..),
-  Parser,
-  Rollup (..),
-  Section (..),
-  Sources (..),
-  Subject (..),
- )
+import Pkg.Parser.Expr
+import Pkg.Parser.Stats
 import PyF (fmt)
 import Relude
 import Safe qualified
 import Text.Megaparsec (choice, errorBundlePretty, parse, sepBy)
 import Text.Megaparsec.Char (char, space, string)
-
-
--- Example queries
--- request_body.v1.v2 = "abc" AND (request_body.v3.v4 = 123 OR request_body.v5[].v6=ANY[1,2,3] OR request_body[1].v7 OR NOT request_body[-1].v8 )
--- request_body[1].v7 | {.v7, .v8} |
---
-
--- >>> parse pSection "" "traces"
--- Right (Source STraces)
---
--- >>> parse pSection "" "method==\"GET\""
--- Right (Search (Eq (Subject "method" "method" []) (Str "GET")))
---
--- >>> parse pSection "" "method==\"GET\" | traces"
--- Right (Search (Eq (Subject "method" "method" []) (Str "GET")))
---
--- >>> parse pSection "" "traces | method==\"GET\" "
--- Right (Source STraces)
---
--- >>> parse pSection "" " traces | method==\"GET\" "
--- Right (Source STraces)
---
-pSection :: Parser Section
-pSection = do
-  _ <- space
-  choice @[]
-    [ pStatsSection
-    , pTimeChartSection
-    , Search <$> pExpr
-    , Source <$> pSource
-    ]
-
-
--- find what source to use when processing a query. By default, the requests source is used
---
--- >>> parse pSource "" "traces"
--- Right STraces
---
--- >>> parse pSource "" "spans"
--- Right SSpans
---
--- >>> parse pSource "" "metrics"
--- Right SMetrics
---
-pSource :: Parser Sources
-pSource =
-  choice @[]
-    [ SRequests <$ string "requests"
-    , SLogs <$ string "logs"
-    , STraces <$ string "traces"
-    , SSpans <$ string "spans"
-    , SMetrics <$ string "metrics"
-    ]
-
-
-instance Display Sources where
-  displayPrec prec SRequests = "apis.request_dumps"
-  displayPrec prec SLogs = "telemetry.logs"
-  displayPrec prec STraces = "telemetry.traces"
-  displayPrec prec SSpans = "telemetry.spans"
-  displayPrec prec SMetrics = "telemetry.metrics"
-
-
---- >>> parse parseQuery "" "method// = bla "
--- Right []
---
-parseQuery :: Parser [Section]
-parseQuery = sepBy pSection (space *> char '|' <* space)
 
 
 data QueryComponents = QueryComponents
@@ -328,11 +252,15 @@ parseQueryStringToWhereClause q =
 -- Just "jsonb_path_exists(errors, $$$[*].\"error_type\" ? (@ = \"^ab.*c\")$$::jsonpath)"
 --
 parseQueryToComponents :: SqlQueryCfg -> Text -> Either Text (Text, QueryComponents)
-parseQueryToComponents sqlCfg q =
-  bimap
-    (toText . errorBundlePretty)
-    (sqlFromQueryComponents sqlCfg . sectionsToComponents)
-    (parse parseQuery "" q)
+parseQueryToComponents sqlCfg q = bimap (toText . errorBundlePretty) (queryASTToComponents sqlCfg) (parse parseQuery "" q)
+
+
+queryASTToComponents :: SqlQueryCfg -> [Section] -> (Text, QueryComponents)
+queryASTToComponents sqlCfg = sqlFromQueryComponents sqlCfg . sectionsToComponents
+
+
+parseQueryToAST :: Text -> Either Text [Section]
+parseQueryToAST q = bimap (toText . errorBundlePretty) id (parse parseQuery "" q)
 
 
 defPid :: Projects.ProjectId
@@ -380,7 +308,7 @@ defaultSelectSqlQuery (Just SLogs) =
     ) as rest|]
   ]
 defaultSelectSqlQuery (Just SSpans) =
-  [ "id"
+      [ "id"
   , timestampLogFmt "timestamp"
   , "trace_id"
   , "kind"

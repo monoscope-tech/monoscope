@@ -18,6 +18,7 @@ import Data.UUID.V4 qualified as UUIDV4
 import Data.Vector qualified as V
 import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
 import Effectful.Time qualified as Time
+import PyF qualified as PyF
 import Fmt.Internal.Core (fmt)
 import Fmt.Internal.Numeric (commaizeF)
 import Lucid
@@ -37,6 +38,7 @@ import Pages.Monitors.TestCollectionEditor (castToStepResult)
 import Pages.Monitors.TestCollectionEditor qualified as TestCollectionEditor
 import Pkg.Components qualified as Components
 import Pkg.Components.ItemsList qualified as ItemsList
+import Pkg.Parser
 import Relude hiding (ask)
 import System.Types (ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders, addSuccessToast)
 import Text.ParserCombinators.ReadPrec (step)
@@ -184,11 +186,14 @@ pageTabs url ov = do
     a_ [href_ url, role_ "tab", class_ "tab"] "Test editor"
 
 
+-- TODO: can't the log list page endpoint be reused for this info on this page? atleast we shouldnt need to query log table, and rather htmx load the correct log table
 collectionDashboard :: Projects.ProjectId -> Testing.CollectionId -> ATAuthCtx (RespHeaders (PageCtx (Html ())))
 collectionDashboard pid cid = do
   (sess, project) <- Sessions.sessionAndProject pid
-  let query = "sdk_type == \"TestkitOutgoing\" and request_headers.X-Testkit-Collection-ID == \"" <> cid.toText <> "\""
-  tableAsVecE <- RequestDumps.selectLogTable pid query Nothing (Nothing, Nothing) [""] Nothing Nothing
+  queryAST <- case (parseQueryToAST [PyF.fmt|"sdk_type == \"TestkitOutgoing\" and request_headers.X-Testkit-Collection-ID == \"{cid.toText}\""]|]) of
+    Left err -> addErrorToast "Error Parsing Query " (Just err) >> pure []
+    Right ast -> pure ast
+  tableAsVecE <- RequestDumps.selectLogTable pid queryAST Nothing (Nothing, Nothing) [""] Nothing Nothing
   collectionM <- dbtToEff $ Testing.getCollectionById cid
   let tableAsVecM = hush tableAsVecE
   let url = "/p/" <> pid.toText <> "/monitors/collection?col_id=" <> cid.toText
@@ -300,8 +305,7 @@ testResultDiagram_ pid cid steps result = do
 renderStepIll_ :: Testing.CollectionStepData -> Maybe Testing.StepResult -> Int -> Html ()
 renderStepIll_ st stepResult ind = do
   whenJust stepResult $ \stepRes -> do
-    let title = st.title
-        assertionRes = (\(i, r) -> getAssertionResult r (V.fromList stepRes.assertResults V.!? i)) <$> V.indexed (fromMaybe [] st.asserts)
+    let assertionRes = (\(i, r) -> getAssertionResult r (V.fromList stepRes.assertResults V.!? i)) <$> V.indexed (fromMaybe [] st.asserts)
         totalPass = V.length $ V.filter fst assertionRes
     div_ [] do
       div_ [class_ "flex items-center gap-2 cursor-pointer", [__|on click toggle .hidden on the next .step-body|]] do
@@ -310,7 +314,7 @@ renderStepIll_ st stepResult ind = do
         span_ [class_ "badge badge-success"] $ show totalPass <> "/" <> show (V.length assertionRes) <> " Passed"
         span_ [class_ "text-gray-500 text-sm flex items-center gap-1"] do
           faSprite_ "chevron-right" "regular" "h-3 w-3"
-          toHtml $ fromMaybe "" title
+          toHtml $ maybeToMonoid st.title
       div_ [class_ "step-body ml-2"] do
         div_ [class_ "border-l h-8"] pass
         div_ [class_ "flex"] do

@@ -199,8 +199,8 @@ anomalyListGetH pid layoutM filterTM sortM timeFilter pageM loadM endpointM hxRe
               , ItemsList.BulkAction{icon = Just "inbox-full", title = "archive", uri = "/p/" <> pid.toText <> "/anomalies/bulk_actions/archive"}
               ]
           , zeroState =
-              Just $
-                ItemsList.ZeroState
+              Just
+                $ ItemsList.ZeroState
                   { icon = "empty-set"
                   , title = "No Issues Or Errors."
                   , description = "Start monitoring errors that happened during a request."
@@ -217,17 +217,17 @@ anomalyListGetH pid layoutM filterTM sortM timeFilter pageM loadM endpointM hxRe
           , pageTitle = "Issues: Changes, Alerts & Errors"
           , menuItem = Just "Changes & Errors"
           , navTabs =
-              Just $
-                toHtml $
-                  Components.TabFilter
-                    { current = currentFilterTab
-                    , currentURL
-                    , options =
-                        [ Components.TabFilterOpt "Inbox" Nothing
-                        , Components.TabFilterOpt "Acknowleged" Nothing
-                        , Components.TabFilterOpt "Archived" Nothing
-                        ]
-                    }
+              Just
+                $ toHtml
+                $ Components.TabFilter
+                  { current = currentFilterTab
+                  , currentURL
+                  , options =
+                      [ Components.TabFilterOpt "Inbox" Nothing
+                      , Components.TabFilterOpt "Acknowleged" Nothing
+                      , Components.TabFilterOpt "Archived" Nothing
+                      ]
+                  }
           }
       issuesVM = V.map (IssueVM False currTime filterV) issues
   addRespHeaders $ case (layoutM, hxRequestM, hxBoostedM, loadM) of
@@ -393,8 +393,8 @@ anomalyDetailsGetH pid targetHash hxBoostedM = do
             Nothing -> addRespHeaders $ AnomalyDetailsMain $ PageCtx bwconf (issue, Nothing, Just anFields, Nothing, currTime, Nothing, False)
         Anomalies.IDNewFormatIssue issueD -> do
           anFormats <-
-            dbtToEff $
-              Fields.getFieldsByEndpointKeyPathAndCategory pid issueD.endpointId.toText issueD.fieldKeyPath issueD.fieldCategory
+            dbtToEff
+              $ Fields.getFieldsByEndpointKeyPathAndCategory pid issueD.endpointId.toText issueD.fieldKeyPath issueD.fieldCategory
           case hxBoostedM of
             Just _ -> addRespHeaders $ AnomalyDetailsBoosted (issue, Nothing, Nothing, Just anFormats, currTime, Nothing, True)
             Nothing -> addRespHeaders $ AnomalyDetailsMain $ PageCtx bwconf (issue, Nothing, Nothing, Just anFormats, currTime, Nothing, False)
@@ -704,24 +704,24 @@ reqResSection title isRequest shapesWithFieldsMap =
   section_ [class_ "space-y-3"] do
     div_ [class_ "flex justify-between mt-5"] do
       div_ [class_ "flex flex-row"] do
-        a_ [class_ "cursor-pointer", [__|on click toggle .neg-rotate-90 on me then toggle .hidden on (next .reqResSubSection)|]] $
-          faSprite_ "chevron-down" "light" "h-4 mr-3 mt-1 w-4"
+        a_ [class_ "cursor-pointer", [__|on click toggle .neg-rotate-90 on me then toggle .hidden on (next .reqResSubSection)|]]
+          $ faSprite_ "chevron-down" "light" "h-4 mr-3 mt-1 w-4"
         span_ [class_ "text-lg text-slate-800"] $ toHtml title
 
-    div_ [class_ "bg-base-100 border border-gray-100 rounded-xl py-5 px-5 space-y-6 reqResSubSection"] $
-      forM_ (zip [(1 :: Int) ..] shapesWithFieldsMap) $
-        \(index, s) -> do
-          let sh = if index == 1 then title <> "_fields" else title <> "_fields hidden"
-          div_ [class_ sh, id_ $ title <> "_" <> show index] do
-            if isRequest
-              then do
-                subSubSection (title <> " Path Params") (Map.lookup Fields.FCPathParam s.fieldsMap)
-                subSubSection (title <> " Query Params") (Map.lookup Fields.FCQueryParam s.fieldsMap)
-                subSubSection (title <> " Headers") (Map.lookup Fields.FCRequestHeader s.fieldsMap)
-                subSubSection (title <> " Body") (Map.lookup Fields.FCRequestBody s.fieldsMap)
-              else do
-                subSubSection (title <> " Headers") (Map.lookup Fields.FCResponseHeader s.fieldsMap)
-                subSubSection (title <> " Body") (Map.lookup Fields.FCResponseBody s.fieldsMap)
+    div_ [class_ "bg-base-100 border border-gray-100 rounded-xl py-5 px-5 space-y-6 reqResSubSection"]
+      $ forM_ (zip [(1 :: Int) ..] shapesWithFieldsMap)
+      $ \(index, s) -> do
+        let sh = if index == 1 then title <> "_fields" else title <> "_fields hidden"
+        div_ [class_ sh, id_ $ title <> "_" <> show index] do
+          if isRequest
+            then do
+              subSubSection (title <> " Path Params") (Map.lookup Fields.FCPathParam s.fieldsMap)
+              subSubSection (title <> " Query Params") (Map.lookup Fields.FCQueryParam s.fieldsMap)
+              subSubSection (title <> " Headers") (Map.lookup Fields.FCRequestHeader s.fieldsMap)
+              subSubSection (title <> " Body") (Map.lookup Fields.FCRequestBody s.fieldsMap)
+            else do
+              subSubSection (title <> " Headers") (Map.lookup Fields.FCResponseHeader s.fieldsMap)
+              subSubSection (title <> " Body") (Map.lookup Fields.FCResponseBody s.fieldsMap)
 
 
 -- | subSubSection ..

@@ -10,6 +10,7 @@ where
 
 import Control.Error (hush)
 import Data.Aeson (Value)
+import Data.Aeson qualified as AE
 import Data.Containers.ListUtils (nubOrd)
 import Data.Default (def)
 import Data.HashMap.Strict qualified as HM
@@ -47,7 +48,7 @@ import Pages.Components (emptyState_)
 import Pages.Components qualified as Components
 import Pages.Traces.Spans qualified as Spans
 import Pkg.Components qualified as Components
-import Pkg.Parser (pSource)
+import Pkg.Parser (pSource, parseQueryToAST)
 import Relude hiding (ask)
 import Relude.Unsafe qualified as Unsafe
 import System.Types
@@ -63,41 +64,33 @@ import Witch (from)
 -- >>> import Data.Aeson
 
 
-apiLogH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe UTCTime -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders LogsGet)
-apiLogH pid queryM cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM hxRequestM hxBoostedM = do
+apiLogH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe UTCTime -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders LogsGet)
+apiLogH pid queryM queryASTM cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM hxRequestM hxBoostedM = do
   (sess, project) <- Sessions.sessionAndProject pid
   let source = fromMaybe "requests" sourceM
   let summaryCols = T.splitOn "," (fromMaybe "" cols')
-  let query = fromMaybe "" queryM
-  now <- Time.currentTime
-  let (fromD, toD, currentRange) = case sinceM of
-        Just "1H" -> (Just $ addUTCTime (negate $ secondsToNominalDiffTime 3600) now, Just now, Just "Last Hour")
-        Just "24H" -> (Just $ addUTCTime (negate $ secondsToNominalDiffTime $ 3600 * 24) now, Just now, Just "Last 24 Hours")
-        Just "7D" -> (Just $ addUTCTime (negate $ secondsToNominalDiffTime $ 3600 * 24 * 7) now, Just now, Just "Last 7 Days")
-        Just "14D" -> (Just $ addUTCTime (negate $ secondsToNominalDiffTime $ 3600 * 24 * 14) now, Just now, Just "Last 14 Days")
-        _ -> do
-          let f = (iso8601ParseM (from @Text $ fromMaybe "" fromM) :: Maybe UTCTime)
-          let t = (iso8601ParseM (from @Text $ fromMaybe "" toM) :: Maybe UTCTime)
-          let start = toText . formatTime defaultTimeLocale "%F %T" <$> f
-          let end = toText . formatTime defaultTimeLocale "%F %T" <$> t
-          let range = case (start, end) of
-                (Just s, Just e) -> Just (s <> "-" <> e)
-                _ -> Nothing
-          (f, t, range)
+  let query = maybeToMonoid queryM
 
-  tableAsVecE <- RequestDumps.selectLogTable pid query cursorM' (fromD, toD) summaryCols (parseMaybe pSource =<< sourceM) targetSpansM
+  queryAST <- case (parseQueryToAST $ maybeToMonoid queryM) of
+    Left err -> addErrorToast "Error Parsing Query " (Just err) >> pure []
+    Right ast -> pure ast
+
+  traceShowM "==="
+  traceShowM queryAST
+  traceShowM $ AE.encode queryAST
+
+  now <- Time.currentTime
+  let (fromD, toD, currentRange) = Components.parseTimeRange now (Components.TimePickerP sinceM fromM toM)
+  tableAsVecE <- RequestDumps.selectLogTable pid queryAST cursorM' (fromD, toD) summaryCols (parseMaybe pSource =<< sourceM) targetSpansM
 
   -- FIXME: we're silently ignoring parse errors and the likes.
   let tableAsVecM = hush tableAsVecE
 
   freeTierExceeded <-
     dbtToEff $
-      if project.paymentPlan == "Free"
-        then do
-          totalRequest <- RequestDumps.getLastSevenDaysTotalRequest pid
-          return $ totalRequest > 5000
-        else do
-          return False
+      (pure $ project.paymentPlan == "Free") >>= \case
+        True -> (> 5000) <$> RequestDumps.getLastSevenDaysTotalRequest pid
+        False -> return False
   let bwconf =
         (def :: BWConfig)
           { sessM = Just sess.persistentSession
@@ -152,30 +145,29 @@ apiLogH pid queryM cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM 
               , targetSpans = targetSpansM
               , childSpans = childSpans
               , daysCountDown = daysLeft
+              , queryAST = decodeUtf8 $ AE.encode queryAST
               }
       case (layoutM, hxRequestM, hxBoostedM) of
         (Just "loadmore", Just "true", _) -> addRespHeaders $ LogsGetRows pid requestVecs curatedColNames colIdxMap nextLogsURL source childSpans
         (Just "resultTable", Just "true", _) -> addRespHeaders $ LogsGetResultTable page False
         (Just "all", Just "true", _) -> addRespHeaders $ LogsGetResultTable page True
-        _ -> do
-          addRespHeaders $ LogPage $ PageCtx bwconf page
+        _ -> addRespHeaders $ LogPage $ PageCtx bwconf page
     Nothing -> do
       case (layoutM, hxRequestM, hxBoostedM) of
         (Just "loadmore", Just "true", _) -> do
           addErrorToast "Something went wrong" Nothing
           addRespHeaders $ LogsGetErrorSimple ""
-        (Just "resultTable", Just "true", _) -> do
-          addRespHeaders $ LogsGetErrorSimple "Something went wrong"
+        (Just "resultTable", Just "true", _) -> addRespHeaders $ LogsGetErrorSimple "Something went wrong"
         (Just "all", Just "true", _) -> do
           addErrorToast "Something went wrong" Nothing
           addRespHeaders $ LogsGetErrorSimple ""
-        _ -> do
-          addRespHeaders $ LogsGetError $ PageCtx bwconf "Something went wrong"
+        _ -> addRespHeaders $ LogsGetError $ PageCtx bwconf "Something went wrong"
 
 
 data LogsGet
   = LogPage (PageCtx ApiLogsPageData)
-  | LogsGetRows Projects.ProjectId (V.Vector (V.Vector Value)) [Text] (HM.HashMap Text Int) Text Text (V.Vector Telemetry.SpanRecord)
+  | -- TODO: Make the field below a named record
+    LogsGetRows Projects.ProjectId (V.Vector (V.Vector Value)) [Text] (HM.HashMap Text Int) Text Text (V.Vector Telemetry.SpanRecord)
   | LogsGetResultTable ApiLogsPageData Bool
   | LogsGetError (PageCtx Text)
   | LogsGetErrorSimple Text
@@ -195,12 +187,13 @@ logQueryBox_ pid currentRange source targetSpan = do
   form_
     [ hxGet_ $ "/p/" <> pid.toText <> "/log_explorer"
     , hxPushUrl_ "true"
-    , hxVals_ "js:{query:window.getQueryFromEditor(), since: getTimeRange().since, from: getTimeRange().from, to:getTimeRange().to, cols:params().cols, layout:'all', source: params().source}"
+    , hxVals_ "js:{query:window.getQueryFromEditor(), since: params().since, from: params().from, to:params().to, cols:params().cols, layout:'all', source: params().source}"
     , termRaw "hx-on::before-request" ""
     , hxTarget_ "#resultTable"
     , hxSwap_ "outerHTML"
     , id_ "log_explorer_form"
     , hxIndicator_ "#run-query-indicator"
+    , [__| on keydown if event.key is 'Enter' halt |]
     ]
     do
       div_ [class_ "flex gap-2 items-stretch justify-center "] do
@@ -259,6 +252,7 @@ data ApiLogsPageData = ApiLogsPageData
   , targetSpans :: Maybe Text
   , childSpans :: V.Vector Telemetry.SpanRecord
   , daysCountDown :: Maybe Text
+  , queryAST :: Text 
   }
 
 
@@ -292,74 +286,13 @@ apiLogsPage page = do
               input_ [type_ "hidden", value_ "1 hour", name_ "expiresIn", id_ "expire_input"]
               input_ [type_ "hidden", value_ "", name_ "reqId", id_ "req_id_input"]
               input_ [type_ "hidden", value_ "", name_ "reqCreatedAt", id_ "req_created_at_input"]
-    script_
-      []
-      [text|
-    function getTimeRange () {
-      const rangeInput = document.getElementById("custom_range_input")
-      const range = rangeInput.value.split("/")
-      if (range.length == 2)  {
-         return {from: range[0], to: range[1], since: ''}
-      }
-      if (range[0]!=''){
-        return {since: range[0], from: '', to: ''}
-       }
-       if (params().since==''){
-        return {since: '24H', from: params().from, to: params().to}
-      }
-       return {since: params().since, from: params().from, to: params().to}
-    }
-      |]
     div_ [class_ ""] do
       logQueryBox_ page.pid page.currentRange page.source page.targetSpans
 
       div_ [class_ "flex flex-row gap-4 mt-3"] do
-        let chartAspectRatio "logs" = "aspect-[12/1]"
-            chartAspectRatio _ = "aspect-[3/1]"
-
-        div_ [class_ "flex-1 space-y-1.5"] do
-          div_ [class_ "leading-none  flex justify-between items-center"] do
-            div_ [class_ "gap-2 flex items-center"] do
-              if page.source == "logs" then "Log Lines " else "All Requests "
-              span_ [class_ "leading-tight font-semibold text-slate-500 bg-slate-200 rounded-3xl  px-2 py-0.5 text-xs"] $ toHtml @Text $ fmt (commaizeF page.resultCount)
-              span_ [class_ "text-xs text-slate-800 hidden"] "5/secs"
-            label_ [class_ "rounded-full border border-slate-300 p-2 inline-flex cursor-pointer"] $ faSprite_ "up-right-and-down-left-from-center" "regular" "w-3 h-3"
-          div_
-            [ id_ "reqsChartsECP"
-            , class_ $ "rounded-2xl border border-slate-200 log-chart p-3  group-has-[.toggle-chart:checked]/pg:hidden " <> (chartAspectRatio page.source)
-            , hxGet_ $ "/charts_html?id=reqsChartsEC&show_legend=false&pid=" <> page.pid.toText
-            , hxTrigger_ "intersect,  htmx:beforeRequest from:#log_explorer_form"
-            , hxVals_ "js:{query_raw:window.getQueryFromEditor(), since: getTimeRange().since, from: getTimeRange().from, to:getTimeRange().to, cols:params().cols, layout:'all', source: params().source}"
-            , hxSwap_ "innerHTML"
-            ]
-            ""
-        unless (page.source == "logs") $ div_ [class_ "flex-1 space-y-1.5"] do
-          div_ [class_ "leading-none  flex justify-between items-center"] do
-            "Errors"
-            label_ [class_ "rounded-full border border-slate-300 p-2 inline-flex cursor-pointer"] $ faSprite_ "up-right-and-down-left-from-center" "regular" "w-3 h-3"
-          div_
-            [ id_ "reqsChartsErrP"
-            , class_ $ "rounded-2xl border border-slate-200 log-chart p-3 group-has-[.toggle-chart:checked]/pg:hidden " <> (chartAspectRatio page.source)
-            , term "data-source" page.source
-            , hxGet_ $ "/charts_html?id=reqsChartsErr&theme=roma&show_legend=false&pid=" <> page.pid.toText
-            , hxTrigger_ "intersect"
-            , hxVals_ "js:{query_raw:window.getQueryFromEditor('errors'), since: getTimeRange().since, from: getTimeRange().from, to:getTimeRange().to, cols:params().cols, layout:'all', source: params().source}"
-            , hxSwap_ "innerHTML"
-            ]
-            ""
-        unless (page.source == "logs") $ div_ [class_ "flex-1 space-y-1.5"] do
-          div_ [class_ "leading-none  flex justify-between items-center"] do
-            "Latency"
-            label_ [class_ "rounded-full border border-slate-300 p-2 inline-flex cursor-pointer"] $ faSprite_ "up-right-and-down-left-from-center" "regular" "w-3 h-3"
-          div_
-            [ id_ "reqsChartsLatP"
-            , class_ $ "rounded-2xl border border-slate-200 log-chart p-3 group-has-[.toggle-chart:checked]/pg:hidden " <> (chartAspectRatio page.source)
-            , hxGet_ $ "/charts_html?id=reqsChartsLat&chart_type=LineCT&group_by=GBDurationPercentile&show_legend=false&pid=" <> page.pid.toText
-            , hxTrigger_ "intersect, htmx:beforeRequest from:#log_explorer_form"
-            , hxVals_ "js:{query_raw:window.getQueryFromEditor('latency'), since: getTimeRange().since, from: getTimeRange().from, to:getTimeRange().to, cols:params().cols, layout:'all', source: params().source}"
-            , hxSwap_ "innerHTML"
-            ]
-            ""
+        renderChart "reqsChartsECP" page.source page.pid.toText ""
+        unless (page.source == "logs") $ renderChart "reqsChartsErrP" page.source page.pid.toText ", theme:'roma'"
+        unless (page.source == "logs") $ renderChart "reqsChartsLatP" page.source page.pid.toText ", chart_type:'LineCT', group_by:'GBDurationPercentile'"
 
     div_ [class_ "flex gap-3.5 overflow-hidden"] do
       div_ [class_ "card-round w-1/5 shrink-0 flex flex-col gap-2 p-2  group-has-[.toggle-filters:checked]/pg:hidden "] do
@@ -393,12 +326,32 @@ apiLogsPage page = do
           span_ [class_ "text-slate-200"] "|"
           div_ [class_ ""] $ span_ [class_ "text-slate-950"] (toHtml @Text $ fmt $ commaizeF page.resultCount) >> span_ " spans found"
         div_ [class_ "card-round divide-y flex flex-col h-full overflow-hidden"] $ resultTableAndMeta_ page
-  jsonTreeAuxillaryCode page.pid
+  jsonTreeAuxillaryCode page.pid page.queryAST
   -- drawerWithURLContent_ : Used when you expand a log item
   -- using the drawer as a global is a workaround since to separate the logs scope from other content and improve scroll performance.
   Components.drawerWithURLContent_ "global-data-drawer" Nothing ""
   -- the loader is used and displayed while loading the content for the global drawer
   template_ [id_ "loader-tmp"] $ span_ [class_ "loading loading-dots loading-md"] ""
+
+
+renderChart :: Text -> Text -> Text -> Text -> Html ()
+renderChart chartId source pid extraHxVals = do
+  let chartAspectRatio "logs" = "aspect-[12/1]"
+      chartAspectRatio _ = "aspect-[3/1]"
+
+  div_ [class_ "flex-1 space-y-1.5"] do
+    div_ [class_ "leading-none flex justify-between items-center"] do
+      span_ $ toHtml $ if source == "logs" then "Log Lines " else chartId
+      label_ [class_ "rounded-full border border-slate-300 p-2 inline-flex cursor-pointer"] $ faSprite_ "up-right-and-down-left-from-center" "regular" "w-3 h-3"
+    div_
+      [ id_ chartId
+      , class_ $ "rounded-2xl border border-slate-200 log-chart p-3 group-has-[.toggle-chart:checked]/pg:hidden " <> (chartAspectRatio source)
+      , hxGet_ $ "/charts_html?id=" <> chartId <> "&show_legend=false&pid=" <> pid
+      , hxTrigger_ "intersect, htmx:beforeRequest from:#log_explorer_form"
+      , hxVals_ $ "js:{query_raw:window.getQueryFromEditor('" <> chartId <> "'), since: params().since, from: params().from, to:params().to, cols:params().cols, layout:'all', source: params().source" <> extraHxVals <> "}"
+      , hxSwap_ "innerHTML"
+      ]
+      ""
 
 
 resultTableAndMeta_ :: ApiLogsPageData -> Html ()
@@ -635,8 +588,8 @@ requestDumpLogItemUrlPath pid rd colIdxMap = do
 
 
 -- TODO:
-jsonTreeAuxillaryCode :: Projects.ProjectId -> Html ()
-jsonTreeAuxillaryCode pid = do
+jsonTreeAuxillaryCode :: Projects.ProjectId -> Text -> Html ()
+jsonTreeAuxillaryCode pid queryAST= do
   template_ [id_ "log-item-context-menu-tmpl"] do
     div_ [id_ "log-item-context-menu", class_ "log-item-context-menu  origin-top-right absolute left-0 mt-2 w-56 rounded-md shadow-md shadow-slate-300 bg-slate-50 ring-1 ring-black ring-opacity-5 divide-y divide-gray-100 focus:outline-none z-10", role_ "menu", tabindex_ "-1"] do
       div_ [class_ "py-1", role_ "none"] do
@@ -646,12 +599,12 @@ jsonTreeAuxillaryCode pid = do
           , tabindex_ "-1"
           , hxGet_ $ "/p/" <> pid.toText <> "/log_explorer"
           , hxPushUrl_ "true"
-          , hxVals_ "js:{query:params().query,cols:toggleColumnToSummary(event),layout:'resultTable', since: getTimeRange().since, from: getTimeRange().from, to:getTimeRange().to, source: params().source}"
+          , hxVals_ "js:{query:params().query,cols:toggleColumnToSummary(event),layout:'resultTable', since: params().since, from: params().from, to:params().to, source: params().source}"
           , hxTarget_ "#resultTable"
           , hxSwap_ "outerHTML"
           , -- , hxIndicator_ "#query-indicator"
             [__|init set fp to (closest @data-field-path) then
-                  if isFieldInSummary(fp) then set my innerHTML to 'Remove field from summary' end|]
+                  if params().cols.split(",").includes(fp) then set my innerHTML to 'Remove field from summary' end|]
           ]
           "Add field as Column"
         a_
@@ -682,44 +635,15 @@ jsonTreeAuxillaryCode pid = do
 
   script_
     [text|
-      document.getElementById("log_explorer_form").addEventListener("keydown", function(e) {
-        if (e.key === "Enter") {e.preventDefault()}
-      });
-
+    window.queryAST = ${queryAST}
     function filterByField(event, operation) {
-       const target = event.target.parentNode.parentNode.parentNode
-       const path = target.getAttribute('data-field-path');
-       const value = target.getAttribute('data-field-value');
-       const regex = /\[\*\]\.(\d+)\./g;
-       const replacedPath = path.replace(regex, '[*].');
-       const filter = replacedPath + ' ' + operation + ' ' + value
-       let editorVal = ''
-       if(window.queryBuilderValue) {
-        editorVal = window.queryBuilderValue
-        }else if(window.editor) {
-           editorVal = window.editor.getValue()
-        }
-       let newVal = ''
-       if (editorVal.toLowerCase().endsWith("and") || editorVal.toLowerCase().endsWith("or")) {
-           newVal = editorVal + " " + filter
-       }else {
-        if (editorVal.length == 0) {
-            newVal = filter
-          }else {
-            newVal = editorVal + " AND " + filter
-          }
-       }
-
-       if (newVal != "") {
-          const filterComp = document.querySelector('#filterElement')
-          if(filterComp) {
-               filterComp.setBuilderValue(newVal)
-            }
-          if(window.editor) {
-             window.editor.setValue(newVal)
-            }
-          htmx.trigger("#log_explorer_form", "submit")
-        }
+        const { fieldPath: path, fieldValue: value } = event.target.closest('[data-field-path]').dataset,
+              editorVal = window.queryBuilderValue ?? window.editor?.getValue() ?? '',
+              separator = editorVal && !editorVal.toLowerCase().endsWith('and') && !editorVal.toLowerCase().endsWith('or') ? ' AND ' : editorVal ? ' ' : '',
+              newVal = editorVal + separator + `$${path.replace(/\[\*\]\.(\d+)\./g, '[*].')} $${operation} $${value}`;
+        document.querySelector('#filterElement')?.setBuilderValue?.(newVal);
+        window.editor?.setValue?.(newVal);
+        htmx.trigger("#log_explorer_form", "submit");
     }
 
     var toggleColumnToSummary = (e)=>{
@@ -735,43 +659,23 @@ jsonTreeAuxillaryCode pid = do
 
     var removeNamedColumnToSummary = (namedCol) => {
       const cols = (params().cols ?? '').split(',').filter((x) => x != '')
-      const subject = namedCol
-
-      cols.forEach((x) => console.log(subject, x.replaceAll('.', '•').replaceAll('[', '❲').replaceAll(']', '❳')))
-
-      return [...new Set(cols.filter((x) => subject.toLowerCase() != x.replaceAll('.', '•').replaceAll('[', '❲').replaceAll(']', '❳').toLowerCase()))].join(',')
+      return [...new Set(cols.filter((x) => namedCol.toLowerCase() != x.replaceAll('.', '•').replaceAll('[', '❲').replaceAll(']', '❳').toLowerCase()))].join(',')
     }
 
-
-    var isFieldInSummary = field => params().cols.split(",").includes(field);
-
-
-
     function toggleQueryBuilder() {
-     document.getElementById("queryBuilder").classList.toggle("hidden")
-     document.getElementById("queryEditor").classList.toggle("hidden")
-     if(!window.editor) {
-        var codeMirrorEditor = CodeMirror(document.getElementById('queryEditor'), {
-          value: params().query || window.queryBuilderValue || '',
-          mode:  "javascript",
-          theme: "elegant",
-          lineNumbers: true,
+        ["queryBuilder", "queryEditor"].forEach(id => document.getElementById(id).classList.toggle("hidden"));
+        window.editor ??= CodeMirror(document.getElementById('queryEditor'), {
+            value: params().query || window.queryBuilderValue || '',
+            mode: "javascript",
+            theme: "elegant",
+            lineNumbers: true,
         });
-        window.editor = codeMirrorEditor
-     }
-
-     if(!document.getElementById("queryEditor").className.includes("hidden")) {
-          setTimeout(() => {
-            window.editor.setValue(window.queryBuilderValue)
-          },10)
-      }else {
-          const filterComp = document.querySelector('#filterElement')
-          if(filterComp) {
-            setTimeout(()=> {
-             filterComp.setBuilderValue(window.editor.getValue())
-            },10)
-          }
-      }
+        setTimeout(() => {
+            const editorVisible = !document.getElementById("queryEditor").classList.contains("hidden");
+            editorVisible
+                ? window.editor.setValue(window.queryBuilderValue)
+                : document.querySelector('#filterElement')?.setBuilderValue(window.editor.getValue());
+        }, 10);
     }
 
     var execd = false
@@ -779,48 +683,4 @@ jsonTreeAuxillaryCode pid = do
       window.setQueryBuilderFromParams()
     })
 
-
-
-function updateMarkAreas(chartId, warningVal, incidentVal) {
-  warningVal = parseInt(warningVal, 10);
-  incidentVal = parseInt(incidentVal, 10)
-  var myChart = echarts.getInstanceByDom(document.getElementById(chartId));
-
-  // Retrieve the current chart options
-  var options = myChart.getOption();
-
-  // Iterate over each series to update markAreas
-  options.series.forEach((seriesItem) => {
-      // Reset markArea data for clean update
-      seriesItem.markArea = {label:{show:false}, data: []};
-
-      // Define markArea for Warning if warningVal is not null
-      if (warningVal !== null && warningVal!=NaN) {
-          seriesItem.markArea.data.push([{
-              name: 'Warning',
-              yAxis: warningVal,
-              itemStyle: {
-                  color: 'rgba(255, 212, 0, 0.4)'
-              }
-          }, {
-              yAxis: incidentVal
-          }]);
-      }
-
-      // Define markArea for Incident
-      seriesItem.markArea.data.push([{
-          name: 'Incident',
-          yAxis: incidentVal,
-          itemStyle: {
-              color: 'rgba(255, 173, 177, 0.5)'
-          }
-      }, {
-          yAxis: 'max'
-      }]);
-  });
-
-  // Apply the updated options back to the chart
-  myChart.setOption({series: options.series}, false);
-}
-
-    |]
+|]

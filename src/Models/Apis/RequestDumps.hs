@@ -55,7 +55,7 @@ import Models.Apis.Fields.Query ()
 import Models.Projects.Projects qualified as Projects
 import NeatInterpolation (text)
 import Pkg.Parser
-import Pkg.Parser.Types (Sources)
+import Pkg.Parser.Stats (Sources, Section)
 import Relude hiding (many, some)
 import Witch (from)
 
@@ -424,17 +424,14 @@ getRequestDumpsForPreviousReportPeriod pid report_type = query Select (Query $ e
     |]
 
 
-selectLogTable :: (DB :> es, Time.Time :> es) => Projects.ProjectId -> Text -> Maybe UTCTime -> (Maybe UTCTime, Maybe UTCTime) -> [Text] -> Maybe Sources -> Maybe Text -> Eff es (Either Text (V.Vector (V.Vector Value), [Text], Int))
-selectLogTable pid extraQuery cursorM dateRange projectedColsByUser source targetSpansM = do
+selectLogTable :: (DB :> es, Time.Time :> es) => Projects.ProjectId -> [Section] -> Maybe UTCTime -> (Maybe UTCTime, Maybe UTCTime) -> [Text] -> Maybe Sources -> Maybe Text -> Eff es (Either Text (V.Vector (V.Vector Value), [Text], Int))
+selectLogTable pid queryAST cursorM dateRange projectedColsByUser source targetSpansM = do
   now <- Time.currentTime
-  let resp = parseQueryToComponents ((defSqlQueryCfg pid now source targetSpansM){cursorM, dateRange, projectedColsByUser, source, targetSpansM}) extraQuery
-  case resp of
-    Left x -> pure $ Left x
-    Right (q, queryComponents) -> do
-      logItems <- queryToValues q
-      Only count <- fromMaybe (Only 0) <$> queryCount queryComponents.countQuery
-      let logItemsV = V.mapMaybe valueToVector logItems
-      pure $ Right (logItemsV, queryComponents.toColNames, count)
+  let (q, queryComponents) = queryASTToComponents ((defSqlQueryCfg pid now source targetSpansM){cursorM, dateRange, projectedColsByUser, source, targetSpansM}) queryAST
+  logItems <- queryToValues q
+  Only count <- fromMaybe (Only 0) <$> queryCount queryComponents.countQuery
+  let logItemsV = V.mapMaybe valueToVector logItems
+  pure $ Right (logItemsV, queryComponents.toColNames, count)
 
 
 valueToVector :: Only Value -> Maybe (V.Vector Value)
