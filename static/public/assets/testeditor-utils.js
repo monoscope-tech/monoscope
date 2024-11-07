@@ -171,7 +171,7 @@ function convertTestkitToCollectionSteps(testkitSteps) {
         if (value) {
           if (value.startsWith('$.resp.headers')) {
             category = 'header'
-            prfix = '$.resp.headers'
+            prfix = '$.resp.headers.'
           }
           if (value.startsWith('$.resp.status')) {
             category = 'status'
@@ -307,8 +307,7 @@ function convertCollectionStepsToTestkitFormat(collectionSteps) {
         assertions.push(convertToTestkitAssertion(assertion))
       })
       const exports = (step.exports || []).reduce((acc, ex) => {
-        console.log(ex)
-        let prefix = '$.resp.json.'
+        let prefix = '$.resp.json'
         if (ex.category === 'header') {
           prefix = '$.resp.headers.'
         }
@@ -318,7 +317,8 @@ function convertCollectionStepsToTestkitFormat(collectionSteps) {
         if (ex.category === 'responseTime') {
           prefix = '$.resp.responseTime'
         }
-        return { ...acc, [ex.key]: prefix + ex.value }
+        const val = ex.value || ''
+        return { ...acc, [ex.key]: prefix + val }
       }, {})
       const testkitStep = {
         title: step.title || '',
