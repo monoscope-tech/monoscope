@@ -613,7 +613,7 @@ ${stepData._json}</textarea
               </div>
             `
           : nothing}
-        ${type === 'exports' && !noValue
+        ${type != 'exports' || !noValue
           ? html`<div class="shrink w-full flex flex-col">
           <input
             list="${type === 'asserts' ? 'assertAutocomplete-' + idx : ''}"
