@@ -165,10 +165,10 @@ tracePage p = do
                           div_ [class_ $ "h-full pl-2 text-xs font-medium " <> color, style_ $ "width:" <> percent <> "%"] pass
 
           div_ [role_ "tabpanel", class_ "a-tab-content pt-2 hidden", id_ "water_fall"] do
-            div_ [class_ "border border-slate-200 flex w-full rounded-3xl min-h-[230px]  overflow-y-auto overflow-x-hidden "] do
+            div_ [class_ "border border-slate-200 flex w-full rounded-2xl min-h-[230px]  overflow-y-auto overflow-x-hidden "] do
               div_ [class_ "w-full border-r overflow-x-hidden"] do
                 div_ [class_ "border-b h-10 border-b-slate-200"] pass
-                waterFallTree rootSpans serviceColors
+                waterFallTree pid rootSpans traceItem.traceId serviceColors
               div_ [class_ "shrink-0 px-2"] do
                 div_
                   [ class_ "w-[550px] sticky top-0 border-b border-b-slate-200 h-10 text-xs relative"
@@ -178,10 +178,10 @@ tracePage p = do
                 div_ [class_ "w-[550px] overflow-x-hidden py-2 relative flex flex-col gap-2", id_ $ "waterfall-" <> traceItem.traceId] pass
 
           div_ [role_ "tabpanel", class_ "a-tab-content pt-2 hidden", id_ "span_list"] do
-            div_ [class_ "border border-slate-200 w-full rounded-3xl min-h-[230px] max-h-[330px] overflow-auto overflow-x-hidden "] do
+            div_ [class_ "border border-slate-200 w-full rounded-2xl min-h-[230px] max-h-[330px] overflow-auto overflow-x-hidden "] do
               renderSpanListTable serviceNames serviceColors p.spanRecords
 
-      div_ [class_ "my-5 py-2 rounded-3xl border overflow-hidden"] do
+      div_ [class_ "my-5 py-2 rounded-2xl border overflow-hidden"] do
         div_ [class_ "flex flex-col gap-4", id_ $ "span-" <> traceItem.traceId] do
           Spans.expandedSpanItem pid tSp Nothing Nothing
   let spanJson = decodeUtf8 $ AE.encode $ p.spanRecords <&> getSpanJson
@@ -346,39 +346,41 @@ buildSpanTree spans =
    in buildTree spanMap Nothing
 
 
-waterFallTree :: [SpanTree] -> HashMap Text Text -> Html ()
-waterFallTree records scols = do
+waterFallTree :: Projects.ProjectId -> [SpanTree] -> Text -> HashMap Text Text -> Html ()
+waterFallTree pid records trId scols = do
   div_ [class_ "pl-2 py-2 flex flex-col gap-2"] do
     forM_ (zip [0 ..] records) \(i, c) -> do
-      buildTree_ c 0 scols True
+      buildTree_ pid c trId 0 scols True
 
 
-buildTree_ :: SpanTree -> Int -> HashMap Text Text -> Bool -> Html ()
-buildTree_ sp level scol isLasChild = do
+buildTree_ :: Projects.ProjectId -> SpanTree -> Text -> Int -> HashMap Text Text -> Bool -> Html ()
+buildTree_ pid sp trId level scol isLasChild = do
   let hasChildren = not $ null sp.children
       serviceCol = getServiceColor sp.spanRecord.serviceName scol
-  let str = "on click toggle .hidden on the next .children_container then toggle .collapsed on me then toggle .hidden on  #waterfall-child-" <> sp.spanRecord.spanId
-  div_ [class_ "flex items-start relative"] do
+  -- let str = "on click toggle .hidden on the next .children_container then toggle .collapsed on me then toggle .hidden on  #waterfall-child-" <> sp.spanRecord.spanId
+  div_ [class_ "flex items-start w-full relative"] do
     when (level /= 0) $ div_ [class_ "w-4 shrink-0 ml-2 h-[1px] mt-2 bg-slate-200"] pass
     unless (level == 0) $ div_ [class_ "absolute -top-3 left-2 border-l h-5 border-l-slate-200"] pass
     unless isLasChild $ div_ [class_ "absolute top-1 left-2 border-l h-full border-l-slate-200"] pass
-    div_ [class_ "flex flex-col w-full border-slate-200 relative"] do
+    div_ [class_ "flex flex-col w-full grow-1 shrink-1 border-slate-200 relative"] do
       when hasChildren $ div_ [class_ "absolute top-1 left-2 border-l h-2 border-l-slate-200"] pass
       div_
-        [ class_ "w-full flex justify-between items-end h-5 collapsed"
-        , term "_" str
-        , id_ $ "waterfall-span-" <> sp.spanRecord.spanId
+        [ class_ "w-full cursor-pointer flex justify-between max-w-full items-end h-5 collapsed"
+        , hxGet_ $ "/p/" <> pid.toText <> "/spans/" <> trId <> "/" <> sp.spanRecord.spanId
+        , hxTarget_ $ "#span-" <> trId
+        , hxSwap_ "innerHTML"
         ]
         do
-          div_ [class_ "flex items-center"] do
+          div_ [class_ "flex items-center w-[95%] gap-2 overflow-x-hidden"] do
             when hasChildren $ do
-              div_ [class_ "border border-slate-200 w-7 flex justify-between gap-1 items-center rounded px-1"] do
-                faSprite_ "chevron-right" "regular" "h-2 w-2 shrink-0 font-bold text-slate-950 waterfall-item-tree-chevron"
+              div_ [class_ "border border-slate-200 w-7 flex justify-between gap-1 items-center rounded p-0.5"] do
+                faSprite_ "chevron-right" "regular" "h-3 w-3 shrink-0 font-bold text-slate-950 waterfall-item-tree-chevron"
                 span_ [class_ "text-xs"] $ toHtml $ show (length sp.children)
-            span_ [class_ "font-medium text-slate-950 mx-2 "] $ toHtml $ sp.spanRecord.serviceName
+            span_ [class_ "font-medium text-slate-950 "] $ toHtml $ sp.spanRecord.serviceName
+            faSprite_ "chevron-right" "regular" "h-3 w-3 shrink-0 text-slate-950"
             span_ [class_ "text-slate-500 text-sm whitespace-nowrap"] $ toHtml sp.spanRecord.spanName
-            span_ [class_ $ "w-1 rounded h-full shrink-0 " <> serviceCol] ""
+          span_ [class_ $ "w-1 rounded h-5 shrink-0 " <> serviceCol] ""
       when hasChildren $ do
         div_ [class_ "flex flex-col children_container gap-2 mt-2", id_ $ "waterfall-tree-" <> sp.spanRecord.spanId] do
           forM_ (zip [0 ..] sp.children) \(i, c) -> do
-            buildTree_ c (level + 1) scol (i == length sp.children - 1)
+            buildTree_ pid c trId (level + 1) scol (i == length sp.children - 1)

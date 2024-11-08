@@ -1,4 +1,4 @@
-module Pages.Traces.Spans (expandedSpanItem, spanLatencyBreakdown) where
+module Pages.Traces.Spans (expandedSpanItem, spanLatencyBreakdown, spanGetH) where
 
 import Data.Aeson qualified as AE
 import Data.Aeson.Key qualified as Key
@@ -7,6 +7,7 @@ import Data.HashMap.Strict qualified as HM
 import Data.Text qualified as T
 import Data.Time.Format (defaultTimeLocale, formatTime)
 import Data.Vector qualified as V
+import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
 import Lucid
 import Lucid.Htmx
 import Lucid.Hyperscript (__)
@@ -17,7 +18,18 @@ import NeatInterpolation (text)
 import Pages.Components (dateTime)
 import Pages.Traces.Utils (getRequestDetails, getServiceName)
 import Relude
+import System.Types
 import Utils
+
+
+spanGetH :: Projects.ProjectId -> Text -> Text -> ATAuthCtx (RespHeaders (Html ()))
+spanGetH pid trId spanId = do
+  spanRecord <- Telemetry.spanRecordById pid trId spanId
+  case spanRecord of
+    Just sp -> do
+      addRespHeaders $ expandedSpanItem pid sp Nothing Nothing
+    Nothing -> do
+      addRespHeaders $ h1_ [] "Span not found"
 
 
 expandedSpanItem :: Projects.ProjectId -> Telemetry.SpanRecord -> Maybe Text -> Maybe Text -> Html ()
