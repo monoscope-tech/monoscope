@@ -121,15 +121,18 @@ tracePage p = do
 
       div_ [class_ "flex gap-1 w-full mt-5"] $ do
         div_ [role_ "tablist", class_ "w-full", id_ "trace-tabs"] $ do
-          div_ [class_ "flex justify-between mb-2"] do
-            div_ [class_ "flex items-center gap-2 text-slate-500 font-medium"] do
-              button_ [class_ "a-tab text-sm px-3 py-1.5 border-b-2 border-b-transparent t-tab-active", onclick_ "navigatable(this, '#flame_graph', '#trace-tabs', 't-tab-active')"] "Flame Graph"
-              button_ [class_ "a-tab text-sm px-3 border-b-2 border-b-transparent py-1.5", onclick_ "navigatable(this, '#water_fall', '#trace-tabs', 't-tab-active')"] "Waterfall"
-              button_ [class_ "a-tab text-sm px-3 border-b-2 border-b-transparent py-1.5", onclick_ "navigatable(this, '#span_list', '#trace-tabs', 't-tab-active')"] "Spans List"
-            div_ [class_ "flex items-center gap-2"] do
-              stBox "Spans" (show $ length p.spanRecords)
-              stBox "Errors" (show $ length $ V.filter (\s -> s.status == Just SSError) p.spanRecords)
-              stBox "Total duration" (toText $ getDurationNSMS traceItem.traceDurationNs)
+          div_ [class_ "flex flex-col gap-2"] do
+            div_ [class_ "flex justify-between mb-2"] do
+              div_ [class_ "flex items-center gap-2 text-slate-500 font-medium"] do
+                button_ [class_ "a-tab text-sm px-3 py-1.5 border-b-2 border-b-transparent t-tab-active", onclick_ "navigatable(this, '#flame_graph', '#trace-tabs', 't-tab-active')"] "Flame Graph"
+                button_ [class_ "a-tab text-sm px-3 border-b-2 border-b-transparent py-1.5", onclick_ "navigatable(this, '#water_fall', '#trace-tabs', 't-tab-active')"] "Waterfall"
+                button_ [class_ "a-tab text-sm px-3 border-b-2 border-b-transparent py-1.5", onclick_ "navigatable(this, '#span_list', '#trace-tabs', 't-tab-active')"] "Spans List"
+              div_ [class_ "flex items-center gap-2"] do
+                stBox "Spans" (show $ length p.spanRecords)
+                stBox "Errors" (show $ length $ V.filter (\s -> s.status == Just SSError) p.spanRecords)
+                stBox "Total duration" (toText $ getDurationNSMS traceItem.traceDurationNs)
+            div_ [] do
+              input_ [class_ "hidden w-full px-2 py-1.5 rounded-lg border border-slate-200 text-sm text-slate-950", type_ "text", placeholder_ "Search", id_ "search-input"]
           div_ [role_ "tabpanel", class_ "a-tab-content w-full", id_ "flame_graph"] do
             div_ [class_ "flex gap-2 w-full pt-2"] do
               div_
@@ -365,13 +368,13 @@ buildTree_ pid sp trId level scol isLasChild = do
     div_ [class_ "flex flex-col w-full grow-1 shrink-1 border-slate-200 relative"] do
       when hasChildren $ div_ [class_ "absolute top-1 left-2 border-l h-2 border-l-slate-200"] pass
       div_
-        [ class_ "w-full cursor-pointer flex justify-between max-w-full items-end h-5 collapsed"
+        [ class_ "w-full cursor-pointer flex justify-between max-w-full items-center h-5 collapsed"
         , hxGet_ $ "/p/" <> pid.toText <> "/spans/" <> trId <> "/" <> sp.spanRecord.spanId
         , hxTarget_ $ "#span-" <> trId
         , hxSwap_ "innerHTML"
         ]
         do
-          div_ [class_ "flex items-center w-[95%] gap-2 overflow-x-hidden"] do
+          div_ [class_ "flex items-center w-[95%] gap-1 border-blue-300 rounded-lg overflow-x-hidden waterfall-item", [__|on click remove .border from .waterfall-item then add .border to me|]] do
             when hasChildren $ do
               div_ [class_ "border border-slate-200 w-7 flex justify-between gap-1 items-center rounded p-0.5"] do
                 faSprite_ "chevron-right" "regular" "h-3 w-3 shrink-0 font-bold text-slate-950 waterfall-item-tree-chevron"
