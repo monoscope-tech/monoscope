@@ -36,7 +36,7 @@ expandedSpanItem :: Projects.ProjectId -> Telemetry.SpanRecord -> Maybe Text -> 
 expandedSpanItem pid sp leftM rightM = do
   let reqDetails = getRequestDetails sp
   div_ [class_ "w-full pb-2 relative"] $ do
-    span_ [class_ "htmx-indicator query-indicator absolute loading loading-dots absoute z-10 top-10", id_ "loading-span-list"] ""
+    span_ [class_ "htmx-indicator query-indicator absolute loading left-1/2 -translate-x-1/2 loading-dots absoute z-10 top-10", id_ "loading-span-list"] ""
     div_ [class_ "flex flex-col gap-1 bg-gray-50 py-2  px-4"] $ do
       div_ [class_ "flex flex-col w-full gap-4 h-full pb-4"] $ do
         div_ [class_ "flex justify-between items-center"] do
