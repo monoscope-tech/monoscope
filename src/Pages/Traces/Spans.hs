@@ -35,7 +35,8 @@ spanGetH pid trId spanId = do
 expandedSpanItem :: Projects.ProjectId -> Telemetry.SpanRecord -> Maybe Text -> Maybe Text -> Html ()
 expandedSpanItem pid sp leftM rightM = do
   let reqDetails = getRequestDetails sp
-  div_ [class_ "w-full pb-2"] $ do
+  div_ [class_ "w-full pb-2 relative"] $ do
+    span_ [class_ "htmx-indicator query-indicator absolute loading loading-dots absoute z-10 top-10", id_ "loading-span-list"] ""
     div_ [class_ "flex flex-col gap-1 bg-gray-50 py-2  px-4"] $ do
       div_ [class_ "flex flex-col w-full gap-4 h-full pb-4"] $ do
         div_ [class_ "flex justify-between items-center"] do
@@ -43,8 +44,9 @@ expandedSpanItem pid sp leftM rightM = do
             h3_ [class_ "whitespace-nowrap text-lg font-medium text-slate-950"] "Span"
             div_ [class_ "flex items-center border border-slate-200 rounded-lg"] do
               span_ [class_ "text-sm text-slate-950 font-medium border-r border-r-slate-200 px-2 py-1.5"] "Span ID"
-              span_ [class_ "text-slate-600 text-sm font-medium px-2 py-1.5"] $ toHtml sp.spanId
-              faSprite_ "copy" "regular" "w-3 h-3 mr-2 text-slate-500"
+              span_ [class_ "text-slate-600 text-sm font-medium px-2 py-1.5 span_id"] $ toHtml sp.spanId
+              div_ [[__|install Copy(content: .span_id )|], class_ "mr-2"] do
+                faSprite_ "copy" "regular" "w-3 h-3 text-slate-500"
             div_ [class_ "flex items-center gap-1"] do
               whenJust leftM $ \l -> do
                 button_

@@ -385,7 +385,8 @@ function flameGraphChart(data, renderAt, colorsMap) {
     const yStart = height * level + (level + 1) * 3
 
     const div = elt('div', {
-      class: item.itemStyle.color + ' absolute hover:z-[999] flex rounded items-center cursor-pointer  grow-0 justify-between flex-nowrap overflow-hidden hover:border hover:border-black',
+      class:
+        item.itemStyle.color + ' absolute hover:z-[999] flex rounded items-center span-filterble cursor-pointer  grow-0 justify-between flex-nowrap overflow-hidden hover:border hover:border-black',
       id: item.span_id,
       onclick: (e) => {
         const data = filterJson(structuredClone(fData), item.name)
@@ -558,7 +559,7 @@ function buildTree(span, serviceColors, start, rootVal, containerWidth) {
   const startPix = (containerWidth * st) / rootVal
   const width = (containerWidth * span.spanRecord.spanDurationNs) / rootVal
   const parentDiv = elt('div', {
-    class: 'flex flex-col',
+    class: 'flex flex-col span-filterble',
   })
   const spanId = span.spanRecord.spanId
   const color = serviceColors[span.spanRecord.serviceName] || 'bg-black'
@@ -578,9 +579,9 @@ function buildTree(span, serviceColors, start, rootVal, containerWidth) {
   span.children.forEach((child) => {
     childDiv.appendChild(buildTree(child, serviceColors, startCurr, rootVal, containerWidth))
   })
-  const text = elt('span', { class: 'text-black ml-1 shrink-0 mr-4 text-xs' }, '')
+  const text = elt('span', { class: 'text-black ml-1 shrink-0 mr-4 text-xs hidden' }, span.spanRecord.serviceName + span.spanRecord.spanName)
   const [t, u] = formatDuration(span.spanRecord.spanDurationNs)
-  const tim = elt('span', { class: 'text-black text-xs shrink-0' }, `${Math.floor(t)} ${u}`)
+  const tim = elt('span', { class: 'text-black text-xs shrink-0 ml-auto' }, `${Math.floor(t)} ${u}`)
   div.appendChild(text)
   div.appendChild(tim)
   parentDiv.appendChild(div)

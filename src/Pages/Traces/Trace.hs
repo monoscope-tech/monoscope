@@ -15,7 +15,7 @@ import Data.Time.Format.ISO8601 (formatShow, iso8601Format)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Lucid
-import Lucid.Htmx (hxGet_, hxSwap_, hxTarget_, hxTrigger_)
+import Lucid.Htmx (hxGet_, hxIndicator_, hxSwap_, hxTarget_, hxTrigger_)
 import Lucid.Hyperscript (__)
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Telemetry (SpanStatus (SSError))
@@ -98,8 +98,9 @@ tracePage p = do
           h3_ [class_ "whitespace-nowrap text-lg font-medium text-slate-950"] "Trace"
           div_ [class_ "flex items-center border border-slate-200 rounded-lg"] do
             span_ [class_ "text-sm text-slate-950 font-medium border-r border-r-slate-200 px-2 py-1.5"] "Trace ID"
-            span_ [class_ "text-slate-600 text-sm font-medium px-2 py-1.5"] $ toHtml traceItem.traceId
-            faSprite_ "copy" "regular" "w-3 h-3 mr-2 text-slate-500"
+            span_ [class_ "text-slate-600 text-sm font-medium px-2 py-1.5 trace_id"] $ toHtml traceItem.traceId
+            div_ [class_ "mr-2", [__|install Copy(content: .trace_id )|]] do
+              faSprite_ "copy" "regular" "w-3 h-3  text-slate-500"
           div_ [class_ "flex items-center gap-1"] do
             button_
               [ class_ "cursor-pointer h-8 w-8 flex items-center justify-center rounded-full bg-slate-100 border border-slate-200 text-slate-500"
@@ -120,7 +121,7 @@ tracePage p = do
         dateTime traceItem.traceStartTime
 
       div_ [class_ "flex gap-1 w-full mt-5"] $ do
-        div_ [role_ "tablist", class_ "w-full", id_ "trace-tabs"] $ do
+        div_ [role_ "tablist", class_ "w-full flex flex-col gap-2", id_ "trace-tabs"] $ do
           div_ [class_ "flex flex-col gap-2"] do
             div_ [class_ "flex justify-between mb-2"] do
               div_ [class_ "flex items-center gap-2 text-slate-500 font-medium"] do
@@ -131,8 +132,31 @@ tracePage p = do
                 stBox "Spans" (show $ length p.spanRecords)
                 stBox "Errors" (show $ length $ V.filter (\s -> s.status == Just SSError) p.spanRecords)
                 stBox "Total duration" (toText $ getDurationNSMS traceItem.traceDurationNs)
-            div_ [] do
-              input_ [class_ "hidden w-full px-2 py-1.5 rounded-lg border border-slate-200 text-sm text-slate-950", type_ "text", placeholder_ "Search", id_ "search-input"]
+            div_ [class_ "flex gap-2 w-full items-center"] do
+              div_ [class_ "flex items-center gap-2 w-full rounded-xl px-3 grow-1 h-12 border border-slate-200 bg-slate-100"] do
+                faSprite_ "magnifying-glass" "regular" "w-4 h-4 text-slate-500"
+                input_
+                  [ class_ "w-full py text-slate-950 bg-transparent hover:outline-none focus:outline-none"
+                  , type_ "text"
+                  , placeholder_ "Search"
+                  , id_ "search-input"
+                  , [__| on input show .span-filterble in #trace_span_container when its textContent.toLowerCase() contains my value.toLowerCase() |]
+                  ]
+                let spanIds = decodeUtf8 $ AE.encode $ (.spanId) <$> p.spanRecords
+                div_ [class_ "flex items-center gap-1", id_ "currentSpanIndex", term "data-span" "0"] do
+                  button_
+                    [ class_ "h-7 w-7 flex items-center justify-center bg-slate-100 rounded-full font-bold border border-slate-200 text-slate-950  cursor-pointer"
+                    , onclick_ [text|navigateSpans($spanIds, "prev")|]
+                    ]
+                    do
+                      faSprite_ "chevron-up" "regular" "w-4 h-4"
+                  button_
+                    [ class_ "h-7 w-7 flex items-center justify-center rounded-full bg-slate-100 font-bold border border-slate-200 text-slate-950 cursor-pointer"
+                    , onclick_ [text|navigateSpans($spanIds, "next")|]
+                    ]
+                    do
+                      faSprite_ "chevron-down" "regular" "h-4 w-4"
+              button_ [class_ "btn border border-slate-200 bg-slate-100 h-12"] "Reset Zoom"
           div_ [role_ "tabpanel", class_ "a-tab-content w-full", id_ "flame_graph"] do
             div_ [class_ "flex gap-2 w-full pt-2"] do
               div_
@@ -188,7 +212,7 @@ tracePage p = do
         div_ [class_ "flex flex-col gap-4", id_ $ "span-" <> traceItem.traceId] do
           Spans.expandedSpanItem pid tSp Nothing Nothing
   let spanJson = decodeUtf8 $ AE.encode $ p.spanRecords <&> getSpanJson
-  let waterFallJson = decodeUtf8 $ AE.encode $ rootSpans
+  let waterFallJson = decodeUtf8 $ AE.encode rootSpans
 
   let colorsJson = decodeUtf8 $ AE.encode $ AE.object [AEKey.fromText k .= v | (k, v) <- HM.toList serviceColors]
   let trId = traceItem.traceId
@@ -272,6 +296,7 @@ spanTable records =
             , hxTarget_ $ "#span-" <> spanRecord.traceId
             , hxSwap_ "innerHTML"
             , id_ $ "sp-list-" <> spanRecord.spanId
+            , class_ "span-filterble"
             ]
             $ do
               td_ $ toHtml $ formatTime defaultTimeLocale "%b %d %Y %H:%M:%S%Q" spanRecord.timestamp
@@ -361,7 +386,7 @@ buildTree_ pid sp trId level scol isLasChild = do
   let hasChildren = not $ null sp.children
       serviceCol = getServiceColor sp.spanRecord.serviceName scol
   -- let str = "on click toggle .hidden on the next .children_container then toggle .collapsed on me then toggle .hidden on  #waterfall-child-" <> sp.spanRecord.spanId
-  div_ [class_ "flex items-start w-full relative"] do
+  div_ [class_ "flex items-start w-full relative span-filterble"] do
     when (level /= 0) $ div_ [class_ "w-4 shrink-0 ml-2 h-[1px] mt-2 bg-slate-200"] pass
     unless (level == 0) $ div_ [class_ "absolute -top-3 left-2 border-l h-5 border-l-slate-200"] pass
     unless isLasChild $ div_ [class_ "absolute top-1 left-2 border-l h-full border-l-slate-200"] pass
@@ -372,6 +397,8 @@ buildTree_ pid sp trId level scol isLasChild = do
         , hxGet_ $ "/p/" <> pid.toText <> "/spans/" <> trId <> "/" <> sp.spanRecord.spanId
         , hxTarget_ $ "#span-" <> trId
         , hxSwap_ "innerHTML"
+        , hxIndicator_ $ "#loading-span-list"
+        , id_ $ "trigger-span-" <> sp.spanRecord.spanId
         ]
         do
           div_ [class_ "flex items-center w-[95%] gap-1 border-blue-300 rounded-lg overflow-x-hidden waterfall-item", [__|on click remove .border from .waterfall-item then add .border to me|]] do
