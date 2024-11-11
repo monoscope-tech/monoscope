@@ -1,13 +1,14 @@
-module Pages.Traces.Utils (getServiceName, getServiceColor, getRequestDetails)
+module Pages.Traces.Utils (getServiceName, getServiceColor, getRequestDetails, spanHasErrors)
 where
 
 import Data.Aeson qualified as AE
 import Data.Aeson.Key qualified as AEKey
 import Data.Aeson.KeyMap qualified as KEM
-import Data.HashMap.Strict
+import Data.HashMap.Strict hiding (null)
 import Data.HashMap.Strict qualified as HM
 import Data.Scientific (toBoundedInteger)
-import Data.Text
+import Data.Text hiding (null)
+import Data.Vector qualified as V
 import Models.Telemetry.Telemetry qualified as Telemetry
 import Relude
 
@@ -46,3 +47,13 @@ getRequestDetails spanRecord = case spanRecord.attributes of
       Just (AE.Number n) -> toBoundedInteger n
       Just (AE.String s) -> readMaybe $ toString s
       _ -> Nothing
+
+
+spanHasErrors :: Telemetry.SpanRecord -> Bool
+spanHasErrors spanRecord = case spanRecord.events of
+  AE.Array a ->
+    let hasExceptionEvent event = case event of
+          AE.Object obj -> KEM.lookup "event_name" obj == Just (AE.String "exception")
+          _ -> False
+     in Relude.any hasExceptionEvent (V.toList a)
+  _ -> False

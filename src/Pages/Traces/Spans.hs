@@ -124,7 +124,7 @@ expandedSpanItem pid sp leftM rightM = do
         div_ [class_ "hidden a-tab-content", id_ "logs-content"] $ do
           div_ [class_ "font-medium mb-1"] "Logs"
           div_ [class_ "rounded-lg border border-slate-200 p-4"] $ do
-            jsonValueToHtmlTree sp.events
+            jsonValueToHtmlTree $ AE.toJSON sp.events
 
 
 tagItem :: Text -> Text -> Text -> Html ()

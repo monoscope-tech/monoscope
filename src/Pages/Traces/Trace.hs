@@ -345,6 +345,7 @@ data SpanMin = SpanMin
   , spanId :: Text
   , spanName :: Text
   , spanDurationNs :: Integer
+  , hasErrors :: Bool
   , serviceName :: Text
   , startTime :: Integer
   , endTime :: Maybe Integer
@@ -379,6 +380,7 @@ buildTree spanMap parentId =
           , serviceName = getServiceName sp
           , startTime = utcTimeToNanoseconds sp.startTime
           , endTime = utcTimeToNanoseconds <$> sp.endTime
+          , hasErrors = spanHasErrors sp
           }
         (buildTree spanMap (Just sp.spanId))
       | sp <- spans
@@ -414,7 +416,7 @@ buildTree_ pid sp trId level scol isLasChild = do
         , hxGet_ $ "/p/" <> pid.toText <> "/spans/" <> trId <> "/" <> sp.spanRecord.spanId
         , hxTarget_ $ "#span-" <> trId
         , hxSwap_ "innerHTML"
-        , hxIndicator_ $ "#loading-span-list"
+        , hxIndicator_ "#loading-span-list"
         , id_ $ "trigger-span-" <> sp.spanRecord.spanId
         ]
         do

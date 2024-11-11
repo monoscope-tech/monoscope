@@ -564,7 +564,7 @@ function buildTree(span, serviceColors, start, rootVal, containerWidth) {
   const spanId = span.spanRecord.spanId
   const color = serviceColors[span.spanRecord.serviceName] || 'bg-black'
   const div = elt('div', {
-    class: color + ' flex rounded items-center cursor-pointer h-5 grow-0 justify-between flex-nowrap overflow-hidden hover:border hover:border-black',
+    class: color + ' flex rounded items-center cursor-pointer  h-5 grow-0 justify-between flex-nowrap overflow-x-visible hover:border hover:border-black',
     id: 'waterfall-chart-' + spanId,
     onclick: (event) => {
       event.stopPropagation()
@@ -575,13 +575,17 @@ function buildTree(span, serviceColors, start, rootVal, containerWidth) {
   })
   parentDiv.style.marginLeft = `${startPix}px`
   div.style.width = `${width}px`
-  const childDiv = elt('div', { class: 'flex flex-col mt-2 gap-1', id: 'waterfall-child-' + spanId })
+  const childDiv = elt('div', { class: 'flex flex-col gap-2 mt-2 gap-1', id: 'waterfall-child-' + spanId })
   span.children.forEach((child) => {
     childDiv.appendChild(buildTree(child, serviceColors, startCurr, rootVal, containerWidth))
   })
+  const errElm = elt('span', { class: 'bg-red-600 h-full rounded-l px-1 text-white rounded-r flex items-center font-bold' }, '!')
   const text = elt('span', { class: 'text-black ml-1 shrink-0 mr-4 text-xs hidden' }, span.spanRecord.serviceName + span.spanRecord.spanName)
   const [t, u] = formatDuration(span.spanRecord.spanDurationNs)
   const tim = elt('span', { class: 'text-black text-xs shrink-0 ml-auto' }, `${Math.floor(t)} ${u}`)
+  if (span.spanRecord.hasErrors) {
+    div.appendChild(errElm)
+  }
   div.appendChild(text)
   div.appendChild(tim)
   parentDiv.appendChild(div)

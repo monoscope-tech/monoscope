@@ -271,6 +271,19 @@ convertSpanRecord pid resource scope sp =
     }
 
 
+-- convertToSpanEvents :: V.Vector Span_Event -> V.Vector Telemetry.SpanEvent
+-- convertToSpanEvents =
+--   V.map
+--     ( \e ->
+--         Telemetry.SpanEvent
+--           { eventName = toText e.span_EventName
+--           , eventTime = nanosecondsToUTC e.span_EventTimeUnixNano
+--           , eventAttributes = keyValueToJSONB e.span_EventAttributes
+--           , eventDroppedAttributesCount = fromIntegral e.span_EventDroppedAttributesCount
+--           }
+--     )
+
+
 traceServiceExportH
   :: Log.Logger
   -> AuthContext
