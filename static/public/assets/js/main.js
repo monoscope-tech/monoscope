@@ -149,17 +149,3 @@ window.picker = new easepick.create({
     })
   },
 })
-function navigateSpans(spans, direction) {
-  const container = document.querySelector('#currentSpanIndex')
-  const currentSpan = Number(container.dataset.span)
-  if (direction == 'next' && currentSpan >= spans.length) {
-    return
-  }
-  if (direction == 'prev' && currentSpan <= 0) {
-    return
-  }
-  const spandInd = direction == 'next' ? currentSpan + 1 : currentSpan - 1
-  const span = spans[spandInd]
-  container.dataset.span = spandInd
-  htmx.trigger('#trigger-span-' + span, 'click')
-}

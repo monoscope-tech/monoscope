@@ -216,6 +216,23 @@ tracePage p = do
 
   let colorsJson = decodeUtf8 $ AE.encode $ AE.object [AEKey.fromText k .= v | (k, v) <- HM.toList serviceColors]
   let trId = traceItem.traceId
+  script_
+    [text|
+      function navigateSpans(spans, direction) {
+         const container = document.querySelector('#currentSpanIndex')
+         const currentSpan = Number(container.dataset.span)
+         if (direction == 'next' && currentSpan >= spans.length) {
+           return
+         }
+         if (direction == 'prev' && currentSpan <= 0) {
+           return
+         }
+         const spandInd = direction == 'next' ? currentSpan + 1 : currentSpan - 1
+         const span = spans[spandInd]
+         container.dataset.span = spandInd
+         htmx.trigger('#trigger-span-' + span, 'click')
+      }
+  |]
   script_ [text|flameGraphChart($spanJson, "a$trId", $colorsJson);|]
   script_ [text|waterFallGraphChart($waterFallJson, "waterfall-$trId", $colorsJson);|]
 
