@@ -339,6 +339,7 @@ function flameGraphChart(data, renderAt, colorsMap) {
       const color = colorsMap[item.service_name] || 'bg-black'
       const temp = {
         name: item.name,
+        hasErrors: item.has_errors,
         span_id: item.span_id,
         value: [level, item.start - start, item.value, item.name, (item.value / rootVal) * 100],
         itemStyle: {
@@ -386,7 +387,7 @@ function flameGraphChart(data, renderAt, colorsMap) {
 
     const div = elt('div', {
       class:
-        item.itemStyle.color + ' absolute hover:z-[999] flex rounded items-center span-filterble cursor-pointer  grow-0 justify-between flex-nowrap overflow-hidden hover:border hover:border-black',
+        item.itemStyle.color + ' absolute hover:z-[999] flex rounded items-center span-filterble cursor-pointer grow-0 justify-between flex-nowrap overflow-hidden hover:border hover:border-black',
       id: item.span_id,
       onclick: (e) => {
         const data = filterJson(structuredClone(fData), item.name)
@@ -395,7 +396,7 @@ function flameGraphChart(data, renderAt, colorsMap) {
         if (target) {
           target.scrollIntoView()
         }
-        htmx.trigger('#sp-list-' + item.span_id, 'click')
+        htmx.trigger('#trigger-span-' + item.span_id, 'click')
       },
     })
     div.style.left = `${startPix}px`
@@ -403,6 +404,10 @@ function flameGraphChart(data, renderAt, colorsMap) {
     div.style.width = `${width}px`
     div.style.height = `${height}px`
 
+    const errElm = elt('span', { class: 'bg-red-600 h-full rounded-l px-1 text-white text-sm rounded-r flex items-center font-bold' }, '!')
+    if (item.hasErrors) {
+      div.appendChild(errElm)
+    }
     const text = elt('span', { class: 'text-black ml-1 shrink-0 mr-4 text-xs' }, item.name)
     const [t, u] = formatDuration(item.value[2])
     const tim = elt('span', { class: 'text-black text-xs shrink-0' }, `${Math.floor(t)} ${u}`)
@@ -579,7 +584,7 @@ function buildTree(span, serviceColors, start, rootVal, containerWidth) {
   span.children.forEach((child) => {
     childDiv.appendChild(buildTree(child, serviceColors, startCurr, rootVal, containerWidth))
   })
-  const errElm = elt('span', { class: 'bg-red-600 h-full rounded-l px-1 text-white rounded-r flex items-center font-bold' }, '!')
+  const errElm = elt('span', { class: 'bg-red-600 h-full rounded-l px-1 text-white text-sm rounded-r flex items-center font-bold' }, '!')
   const text = elt('span', { class: 'text-black ml-1 shrink-0 mr-4 text-xs hidden' }, span.spanRecord.serviceName + span.spanRecord.spanName)
   const [t, u] = formatDuration(span.spanRecord.spanDurationNs)
   const tim = elt('span', { class: 'text-black text-xs shrink-0 ml-auto' }, `${Math.floor(t)} ${u}`)

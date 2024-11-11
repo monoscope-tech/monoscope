@@ -246,6 +246,7 @@ getSpanJson sp =
     , "start" .= start
     , "parent_id" .= sp.parentSpanId
     , "service_name" .= getServiceName sp
+    , "has_errors" .= spanHasErrors sp
     ]
   where
     start = utcTimeToNanoseconds sp.startTime
