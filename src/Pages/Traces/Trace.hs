@@ -315,6 +315,7 @@ spanTable records =
             , hxSwap_ "innerHTML"
             , id_ $ "sp-list-" <> spanRecord.spanId
             , class_ "span-filterble"
+            , hxIndicator_ "#loading-span-list"
             ]
             $ do
               td_ $ toHtml $ formatTime defaultTimeLocale "%b %d %Y %H:%M:%S%Q" spanRecord.timestamp
