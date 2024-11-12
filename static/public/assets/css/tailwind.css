@@ -22,8 +22,8 @@
 }
 
 @layer components {
-  .tabs-outline :is(.tab-active, [aria-selected="true"]):not(.tab-disabled):not([disabled]),
-  .tabs-outline :is(.tab-active, [aria-selected="true"]):not(.tab-disabled):not([disabled]):hover {
+  .tabs-outline :is(.tab-active, [aria-selected='true']):not(.tab-disabled):not([disabled]),
+  .tabs-outline :is(.tab-active, [aria-selected='true']):not(.tab-disabled):not([disabled]):hover {
     color: var(--fallback-bc, oklch(var(--bc) / var(--tw-text-opacity)));
     @apply bg-slate-50 shadow;
   }
@@ -50,18 +50,18 @@
 }
 
 .c-scroll::-webkit-scrollbar-thumb:hover {
-  @apply bg-gray-300
+  @apply bg-gray-300;
 }
 
 .payment-radio-active {
   @apply bg-blue-500;
 }
 
-.payment-radio-active>div {
+.payment-radio-active > div {
   display: block;
 }
 
-.endpoint-path-collapse>.subpaths-container {
+.endpoint-path-collapse > .subpaths-container {
   display: none;
 }
 
@@ -78,11 +78,11 @@
   @apply flex flex-col pb-4;
 }
 
-.subpaths-container>div {
+.subpaths-container > div {
   @apply px-4 py-2;
 }
 
-.subpaths-container>div:hover {
+.subpaths-container > div:hover {
   @apply bg-gray-100;
 }
 
@@ -136,7 +136,6 @@
   @apply hover:bg-gray-100 py-3 px-2 w-full items-center justify-between;
 }
 
-
 .htmx-indicator {
   display: none;
 }
@@ -145,7 +144,7 @@
   display: flex;
 }
 
-.htmx-request.survey-indicator+button {
+.htmx-request.survey-indicator + button {
   display: none;
 }
 
@@ -153,7 +152,7 @@
   display: flex;
 }
 
-.htmx-request.refresh-indicator~svg {
+.htmx-request.refresh-indicator ~ svg {
   display: none;
 }
 
@@ -161,15 +160,15 @@
   display: flex;
 }
 
-.htmx-request.htmx-indicator~span {
+.htmx-request.htmx-indicator ~ span {
   display: none;
 }
 
-.htmx-request.steps-indicator>.empty-state {
+.htmx-request.steps-indicator > .empty-state {
   display: none;
 }
 
-.htmx-request.steps-indicator>.loading-indicator {
+.htmx-request.steps-indicator > .loading-indicator {
   display: block;
 }
 
@@ -190,14 +189,13 @@
     }
   }
 
-
   .inconsolata {
-    font-family: "Inconsolata", monospace;
+    font-family: 'Inconsolata', monospace;
   }
 
   .monospace {
-    font-family: "Inconsolata", monospace;
-    font-variation-settings: "mono" 1000;
+    font-family: 'Inconsolata', monospace;
+    font-variation-settings: 'mono' 1000;
   }
 
   /* From icomoon app*/
@@ -245,9 +243,7 @@
   .parent-hover:hover .child-hover {
     visibility: visible;
   }
-
 }
-
 
 /* HERE SINCE IT"S BASICALLY AN OVERRIDE.  Its for the log items rows */
 .expanded-log {
@@ -273,10 +269,10 @@
   @apply rotate-90;
 }
 
-.b--b2{
+.b--b2 {
   border-color: oklch(var(--b2));
 }
-.b--b2 > :not([hidden]) ~ :not([hidden]){
+.b--b2 > :not([hidden]) ~ :not([hidden]) {
   border-color: oklch(var(--b2));
 }
 
@@ -370,30 +366,32 @@
   @apply border-blue-500 border ring ring-blue-500 shadow-lg;
 }
 .t-tab-active {
-  @apply font-medium border-blue-400
+  @apply font-medium border-blue-400;
 }
 
-
-.tab:is(input[type="radio"]) {
+.tab:is(input[type='radio']) {
   width: max-content;
 }
 
 @layer components {
- .blue-gr-btn {
-  @apply bg-gradient-to-b text-white font-medium from-blue-500 to-blue-600
- }
- .blue-outline-btn {
-  @apply border-blue-500 text-blue-500 font-medium
- }
+  .blue-gr-btn {
+    @apply bg-gradient-to-b text-white font-medium from-blue-500 to-blue-600;
+  }
+  .blue-outline-btn {
+    @apply border-blue-500 text-blue-500 font-medium;
+  }
+  .cbadge {
+    @apply px-3 py-1.5 text-sm rounded-xl;
+  }
+
   .cbadge-sm {
-   @apply  px-2 py-1 text-xs rounded-xl;
+    @apply px-2 py-1 text-xs rounded-xl;
   }
   .badge-2xx {
     @apply bg-green-100 text-green-700;
   }
   .badge-success {
     @apply bg-green-100 text-green-700 font-medium;
-
   }
   .badge-error {
     @apply bg-red-100 text-red-700 font-medium;
@@ -405,10 +403,10 @@
     @apply bg-green-100 text-green-700;
   }
   .badge-4xx {
-    @apply  bg-red-50 text-red-800;
+    @apply bg-red-50 text-red-800;
   }
   .badge-neutral {
-    @apply  bg-slate-100 text-slate-500;
+    @apply bg-slate-100 text-slate-500;
   }
   .badge-blue {
     @apply text-blue-500 bg-[#d6efff];

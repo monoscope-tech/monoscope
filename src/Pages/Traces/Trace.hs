@@ -101,7 +101,7 @@ tracePage p = do
             span_ [class_ "text-slate-600 text-sm font-medium px-2 py-1.5 trace_id"] $ toHtml traceItem.traceId
             div_ [class_ "mr-2", [__|install Copy(content: .trace_id )|]] do
               faSprite_ "copy" "regular" "w-3 h-3  text-slate-500"
-          div_ [class_ "flex items-center gap-1"] do
+          div_ [class_ "flex items-center font-bold gap-1"] do
             button_
               [ class_ "cursor-pointer h-8 w-8 flex items-center justify-center rounded-full bg-slate-100 border border-slate-200 text-slate-500"
               , hxGet_ $ "/p/" <> pid.toText <> "/traces/" <> traceItem.traceId <> "/?span_id=" <> tSp.spanId <> "&nav=true"
@@ -293,40 +293,36 @@ renderSpanListTable services colors records =
 
 spanTable :: V.Vector Telemetry.SpanRecord -> Html ()
 spanTable records =
-  div_ [class_ "rounded-3xl m-2 border border-slate-200"] do
-    table_ [class_ "table table-sm w-full"] do
+  div_ [class_ "rounded-xl my-2 mx-3 border border-slate-200"] do
+    table_ [class_ "table w-full"] do
       thead_ [class_ "border-b border-slate-200"] $
-        tr_ [class_ "p-2 border-b font-normal"] $ do
+        tr_ [class_ "p-2 border-b font-medium"] $ do
           td_ "Time"
-          td_ "Span Name"
-          td_ "Event Type"
-          td_ "Span Kind"
-          td_ "Status"
-          td_ "Exec. Time"
+          td_ "Span name"
+          td_ "Event type"
+          td_ "Span kind"
+          td_ "Exec. time"
       tbody_ do
         forM_ records $ \spanRecord -> do
           let pidText = UUID.toText spanRecord.projectId
               spanid = maybe "" UUID.toText spanRecord.uSpandId
               tme = fromString (formatShow iso8601Format spanRecord.timestamp)
-              (reqType, _, _, status_code) = fromMaybe ("", "", "", 0) $ getRequestDetails spanRecord
+              (reqType, _, _, _) = fromMaybe ("", "", "", 0) $ getRequestDetails spanRecord
           tr_
             [ hxGet_ $ "/p/" <> pidText <> "/log_explorer/" <> spanid <> "/" <> tme <> "/detailed?source=spans"
             , hxTarget_ $ "#span-" <> spanRecord.traceId
             , hxSwap_ "innerHTML"
             , id_ $ "sp-list-" <> spanRecord.spanId
-            , class_ "span-filterble"
+            , class_ "span-filterble font-medium"
             , hxIndicator_ "#loading-span-list"
             ]
             $ do
               td_ $ toHtml $ formatTime defaultTimeLocale "%b %d %Y %H:%M:%S%Q" spanRecord.timestamp
               td_ $ toHtml spanRecord.spanName
-              td_ $ toHtml reqType
-              td_ $ toHtml $ T.drop 2 $ maybe "" show spanRecord.kind
-              let xcls = getStatusColor status_code
-                  gcls = getGrpcStatusColor status_code
-                  fcls = if reqType == "HTTP" then xcls else gcls
               td_ do
-                span_ [class_ fcls] $ toHtml $ show status_code
+                span_ [class_ "cbadge-sm badge-neutral"] $ toHtml reqType
+              td_ do
+                span_ [class_ "cbadge-sm badge-neutral"] $ toHtml $ T.drop 2 $ maybe "" show spanRecord.kind
               td_ do
                 span_ [class_ "cbadge-sm badge-neutral"] $ toHtml $ getDurationNSMS spanRecord.spanDurationNs
 
