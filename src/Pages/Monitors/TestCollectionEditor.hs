@@ -163,8 +163,9 @@ collectionRunTestsH pid colId runIdxM stepsForm = do
   let Testing.CollectionVariables vars = case col of
         Just c -> c.collectionVariables
         Nothing -> Testing.CollectionVariables V.empty
-  stepResultsE <- TestToDump.runTestAndLog pid colId stepsForm.stepsData vars
-  case stepResultsE of
+  resE <- TestToDump.runCollectionTest stepsForm.stepsData vars colId
+  _ <- TestToDump.logTest pid colId stepsForm.stepsData resE
+  case resE of
     Right stepResults -> do
       let tkRespJson = decodeUtf8 @Text $ AE.encode stepResults
           (passed, failed) = Testing.getCollectionRunStatus stepResults

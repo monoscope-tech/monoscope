@@ -1,4 +1,4 @@
-module Models.Tests.TestToDump (testRunToRequestMsg, runTestAndLog) where
+module Models.Tests.TestToDump (testRunToRequestMsg, logTest, runCollectionTest) where
 
 import Data.Aeson qualified as AE
 import Data.Base64.Types qualified as B64
@@ -27,8 +27,8 @@ import System.Config qualified as Config
 
 methodPath :: Testing.CollectionStepData -> Maybe (Text, Text)
 methodPath stepData =
-  listToMaybe
-    $ catMaybes
+  listToMaybe $
+    catMaybes
       [ ("POST",) <$> stepData.post
       , ("GET",) <$> stepData.get
       , ("PUT",) <$> stepData.put
@@ -83,24 +83,21 @@ runCollectionTest collection_steps col_vars cold_id = do
   pure $ mapLeft (\e -> fromString e <> toText tkResp) $ AE.eitherDecodeStrictText (toText tkResp)
 
 
-runTestAndLog
+logTest
   :: (IOE :> es, Time.Time :> es, Reader.Reader Config.AuthContext :> es, DB :> es, Log :> es)
   => Projects.ProjectId
   -> Testing.CollectionId
   -> V.Vector Testing.CollectionStepData
-  -> V.Vector Testing.CollectionVariablesItem
+  -> Either Text (V.Vector Testing.StepResult)
   -> Eff es (Either Text (V.Vector Testing.StepResult))
-runTestAndLog pid colId collectionSteps colVars = do
-  stepResultsE <- runCollectionTest collectionSteps colVars colId
-  case stepResultsE of
+logTest pid colId collectionSteps stepRes = do
+  case stepRes of
     Left e -> do
       Log.logAttention "unable to run test collection" (AE.object ["error" AE..= e, "steps" AE..= collectionSteps])
       pure $ Left e
     Right stepResults -> do
       currentTime <- Time.currentTime
       let (passed, failed) = Testing.getCollectionRunStatus stepResults
-
-      -- Create a parent request for to act as parent for current test run
       msg_id <- liftIO UUIDV4.nextRandom
       let response = AE.toJSON stepResults
       _ <- dbtToEff $ Testing.updateCollectionLastRun colId (Just response) passed failed

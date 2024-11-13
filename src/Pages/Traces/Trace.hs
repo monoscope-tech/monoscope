@@ -6,7 +6,7 @@ import Data.Aeson.Key qualified as AEKey
 import Data.HashMap.Internal.Strict qualified as HM
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
-import Data.Maybe (catMaybes, fromMaybe)
+import Data.Maybe (catMaybes)
 import Data.Text qualified as T
 import Data.Time (defaultTimeLocale)
 import Data.Time.Clock (UTCTime)

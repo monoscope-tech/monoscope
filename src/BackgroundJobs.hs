@@ -4,6 +4,7 @@ module BackgroundJobs (jobsWorkerInit, jobsRunner, BgJobs (..)) where
 
 import Control.Lens ((.~))
 import Data.Aeson as Aeson
+import Data.Aeson qualified as AE
 import Data.Aeson.QQ (aesonQQ)
 import Data.CaseInsensitive qualified as CI
 import Data.Pool (withResource)
@@ -62,7 +63,8 @@ data BgJobs
   | QueryMonitorsTriggered (Vector Monitors.QueryMonitorId)
   | RunCollectionTests Testing.CollectionId
   | DeletedProject Projects.ProjectId
-  deriving stock (Eq, Show, Generic)
+  | APITestFailed Projects.ProjectId Testing.CollectionId (Vector Testing.StepResult)
+  deriving stock (Show, Generic)
   deriving anyclass (ToJSON, FromJSON)
 
 
@@ -96,7 +98,7 @@ jobsRunner logger authCtx job = when authCtx.config.enableBackgroundJobs $ do
              "project_name": #{projectTitle'},
              "project_url": #{project_url}
           }|]
-          sendPostmarkEmail reciever "project-invite" templateVars
+          sendPostmarkEmail reciever (Just ("project-invite", templateVars)) Nothing
       SendDiscordData userId projectId fullName stack foundUsFrom -> whenJustM (dbtToEff $ Projects.projectById projectId) \project -> do
         users <- dbtToEff $ Projects.usersByProjectId projectId
         let stackString = intercalate ", " $ map toString stack
@@ -127,7 +129,7 @@ jobsRunner logger authCtx job = when authCtx.config.enableBackgroundJobs $ do
             "project_name": #{projectTitle},
             "project_url": #{project_url}
          }|]
-          sendPostmarkEmail reciever "project-created" templateVars
+          sendPostmarkEmail reciever (Just ("project-created", templateVars)) Nothing
       DeletedProject pid -> do
         users <- dbtToEff $ Projects.usersByProjectId pid
         projectM <- dbtToEff $ Projects.projectById pid
@@ -141,7 +143,7 @@ jobsRunner logger authCtx job = when authCtx.config.enableBackgroundJobs $ do
              "user_name": #{firstName},
              "project_name": #{projectTitle}
            }|]
-            sendPostmarkEmail userEmail "project-deleted" templateVars
+            sendPostmarkEmail userEmail (Just ("project-deleted", templateVars)) Nothing
       DailyJob -> do
         currentDay <- utctDay <$> Time.currentTime
         projects <- dbtToEff $ query Select [sql|SELECT id FROM projects.projects WHERE active=? AND deleted_at IS NULL|] (Only True)
@@ -171,9 +173,25 @@ jobsRunner logger authCtx job = when authCtx.config.enableBackgroundJobs $ do
           then whenJust collectionM \collection -> when collection.isScheduled do
             let (Testing.CollectionSteps colStepsV) = collection.collectionSteps
                 Testing.CollectionVariables colV = collection.collectionVariables
-            _ <- TestToDump.runTestAndLog collection.projectId col_id colStepsV colV
-            pass
+            stepResultsE <- TestToDump.runCollectionTest colStepsV colV col_id
+            case stepResultsE of
+              Left e -> do
+                _ <- TestToDump.logTest collection.projectId col_id colStepsV (Left e)
+                pass
+              Right stepResults -> do
+                let (_, failed) = Testing.getCollectionRunStatus stepResults
+                when (failed > 0) do
+                  _ <- liftIO $ withResource authCtx.jobsPool \conn -> do
+                    createJob conn "background_jobs" $ BackgroundJobs.APITestFailed collection.projectId col_id stepResults
+                  pass
+                _ <- TestToDump.logTest collection.projectId col_id colStepsV (Right stepResults)
+                pass
           else Log.logAttention "RunCollectionTests failed.  Job was sheduled to run over 30 mins ago" $ collectionM <&> \c -> (c.title, c.id)
+      APITestFailed pid col_id stepResult -> do
+        collectionM <- dbtToEff $ Testing.getCollectionById col_id
+        whenJust collectionM \collection -> do
+          _ <- sendTestFailedAlert pid col_id collection stepResult
+          pass
 
 
 generateSwaggerForProject :: Projects.ProjectId -> Users.UserId -> Text -> ATBackgroundCtx ()
@@ -199,6 +217,22 @@ generateSwaggerForProject pid uid host = whenJustM (dbtToEff $ Projects.projectB
           , host = host
           }
   dbtToEff $ Swaggers.addSwagger swaggerToAdd
+
+
+sendTestFailedAlert :: Projects.ProjectId -> Testing.CollectionId -> Testing.Collection -> V.Vector Testing.StepResult -> ATBackgroundCtx ()
+sendTestFailedAlert pid col_id collection stepResult = do
+  let
+    -- sv = if collection.alertSeverity == "" then "INFO" else collection.alertSeverity
+    sbjt = collection.title <> ": " <> if collection.alertSubject == "" then "API Test Failed" else collection.alertSubject
+    (Testing.CollectionSteps colStepsV) = collection.collectionSteps
+    failedSteps = Testing.getCollectionFailedSteps colStepsV stepResult
+    msg' = "Failing steps: \n" <> (unwords $ V.toList $ V.catMaybes $ V.map (\(s, rs) -> s.title) failedSteps)
+    msg = if collection.alertMessage == "" then msg' else collection.alertMessage
+  users <- dbtToEff $ Projects.usersByProjectId pid
+  forM_ users \user -> do
+    let email = CI.original user.email
+    sendPostmarkEmail email Nothing (Just (sbjt, msg))
+  pass
 
 
 reportUsageToLemonsqueezy :: Text -> Int -> Text -> IO ()
@@ -260,8 +294,8 @@ handleQueryMonitorThreshold monitorE isAlert = do
 
 jobsWorkerInit :: Log.Logger -> Config.AuthContext -> IO ()
 jobsWorkerInit logger appCtx =
-  startJobRunner
-    $ mkConfig jobLogger "background_jobs" appCtx.jobsPool (MaxConcurrentJobs 1) (jobsRunner logger appCtx) id
+  startJobRunner $
+    mkConfig jobLogger "background_jobs" appCtx.jobsPool (MaxConcurrentJobs 1) (jobsRunner logger appCtx) id
   where
     jobLogger :: LogLevel -> LogEvent -> IO ()
     jobLogger logLevel logEvent = Log.runLogT "OddJobs" logger Log.LogAttention $ Log.logInfo "Background jobs ping." (show @Text logLevel, show @Text logEvent) -- logger show (logLevel, logEvent)
@@ -325,7 +359,7 @@ dailyReportForProject pid = do
                  "start_date": #{day},
                  "end_date": #{day}
           }|]
-          sendPostmarkEmail userEmail "daily-report" templateVars
+          sendPostmarkEmail userEmail (Just ("daily-report", templateVars)) Nothing
 
 
 weeklyReportForProject :: Projects.ProjectId -> ATBackgroundCtx ()
@@ -395,7 +429,7 @@ weeklyReportForProject pid = do
                  "end_date": #{dayEnd},
                  "free_exceeded": #{freeTierLimitExceeded}
           }|]
-          sendPostmarkEmail userEmail "weekly-report" templateVars
+          sendPostmarkEmail userEmail (Just ("weekly-report", templateVars)) Nothing
 
 
 emailQueryMonitorAlert :: Monitors.QueryMonitorEvaled -> CI.CI Text -> Maybe Users.User -> ATBackgroundCtx ()
@@ -450,8 +484,8 @@ Endpoint: `{endpointPath}`
 [View more](https://app.apitoolkit.io/p/{pid.toText}/anomalies/by_hash/{targetHash})|]
             whenJust project.discordUrl (`sendDiscordNotif` msg)
           _ -> do
-            when (totalRequestsCount > 50)
-              $ forM_ users \u -> do
+            when (totalRequestsCount > 50) $
+              forM_ users \u -> do
                 let templateVars =
                       object
                         [ "user_name" .= u.firstName
@@ -459,7 +493,7 @@ Endpoint: `{endpointPath}`
                         , "anomaly_url" .= ("https://app.apitoolkit.io/p/" <> pid.toText <> "/anomalies/by_hash/" <> targetHash)
                         , "endpoint_name" .= endpointPath
                         ]
-                sendPostmarkEmail (CI.original u.email) "anomaly-endpoint" templateVars
+                sendPostmarkEmail (CI.original u.email) (Just ("anomaly-endpoint", templateVars)) Nothing
     Anomalies.ATShape -> do
       pass
     -- hasEndpointAnomaly <- dbtToEff $ Anomalies.getShapeParentAnomalyVM pid targetHash
@@ -535,21 +569,21 @@ Endpoint: `{endpointPath}`
       err <- Unsafe.fromJust <<$>> dbtToEff $ Anomalies.errorByHash targetHash
       issueId <- liftIO $ Anomalies.AnomalyId <$> UUIDV4.nextRandom
       _ <-
-        dbtToEff
-          $ Anomalies.insertIssue
-          $ Anomalies.Issue
-            { id = issueId
-            , createdAt = err.createdAt
-            , updatedAt = err.updatedAt
-            , projectId = pid
-            , anomalyType = Anomalies.ATRuntimeException
-            , targetHash = targetHash
-            , issueData = Anomalies.IDNewRuntimeExceptionIssue err.errorData
-            , acknowlegedAt = Nothing
-            , acknowlegedBy = Nothing
-            , endpointId = Nothing
-            , archivedAt = Nothing
-            }
+        dbtToEff $
+          Anomalies.insertIssue $
+            Anomalies.Issue
+              { id = issueId
+              , createdAt = err.createdAt
+              , updatedAt = err.updatedAt
+              , projectId = pid
+              , anomalyType = Anomalies.ATRuntimeException
+              , targetHash = targetHash
+              , issueData = Anomalies.IDNewRuntimeExceptionIssue err.errorData
+              , acknowlegedAt = Nothing
+              , acknowlegedBy = Nothing
+              , endpointId = Nothing
+              , archivedAt = Nothing
+              }
       forM_ project.notificationsChannel \case
         Projects.NSlack ->
           sendSlackMessage
@@ -579,6 +613,6 @@ A new runtime exception has been detected. click the link below to see more deta
                       "project_name": #{title},
                       "anomaly_url": #{anomaly_url}
                  }|]
-          sendPostmarkEmail (CI.original u.email) "anomaly-field" templateVars
+          sendPostmarkEmail (CI.original u.email) (Just ("anomaly-field", templateVars)) Nothing
     Anomalies.ATField -> pass
     Anomalies.ATUnknown -> pass

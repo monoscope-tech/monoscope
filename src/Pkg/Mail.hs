@@ -24,20 +24,32 @@ import System.Config qualified as Config
 import System.Types (ATBackgroundCtx)
 
 
-sendPostmarkEmail :: Text -> Text -> AE.Value -> ATBackgroundCtx ()
-sendPostmarkEmail reciever template templateVars = do
+sendPostmarkEmail :: Text -> Maybe (Text, AE.Value) -> Maybe (Text, Text) -> ATBackgroundCtx ()
+sendPostmarkEmail reciever tmpOptionsM subMsg = do
   appCtx <- ask @Config.AuthContext
   let url = "https://api.postmarkapp.com/email/withTemplate"
   let apiKey = encodeUtf8 appCtx.config.postmarkToken
-  let payload =
-        [aesonQQ|
-        {
-    "From": "hello@apitoolkit.io",
-    "To": #{reciever},
-    "TemplateAlias": #{template},
-    "TemplateModel": #{templateVars}
-        }
-    |]
+  let (subject, message) = fromMaybe ("", "") subMsg
+  let payload = case tmpOptionsM of
+        Just (template, templateVars) ->
+          [aesonQQ|
+            {
+        "From": "hello@apitoolkit.io",
+        "To": #{reciever},
+        "TemplateAlias": #{template},
+        "TemplateModel": #{templateVars}
+            }
+        |]
+        _ ->
+          [aesonQQ|
+            {
+        "From": "hello@apitoolkit.io",
+        "Subject": #{subject},
+        "To": #{reciever},
+        "TextBody": #{message}
+            }
+        |]
+
   let opts = defaults & header "Content-Type" .~ ["application/json"] & header "Accept" .~ ["application/json"] & header "X-Postmark-Server-Token" .~ [apiKey]
   response <- liftIO $ postWith opts url payload
   pass

@@ -15,6 +15,7 @@ module Models.Tests.Testing (
   stepDataMethod,
   updateCollection,
   addCollection,
+  getCollectionFailedSteps,
   getCollections,
   updateCollectionLastRun,
   getCollectionById,
@@ -336,8 +337,23 @@ getCollectionRunStatus steps = (passed, failed)
   where
     passed = V.length $ V.filter (\x -> hasPassed x.assertResults) steps
     failed = V.length $ V.filter (\x -> not $ hasPassed x.assertResults) steps
-    hasPassed :: [AssertResult] -> Bool
-    hasPassed res = length res == length (filter (\x -> x.ok == Just True) res)
+
+
+-- make it a tupple of step and result (getting only failed steps)
+getCollectionFailedSteps :: V.Vector CollectionStepData -> V.Vector StepResult -> V.Vector (CollectionStepData, StepResult)
+getCollectionFailedSteps steps stepsRes =
+  V.mapMaybe
+    ( \(step, stepRes) ->
+        if not (hasPassed (assertResults stepRes))
+          then Just (step, stepRes)
+          else Nothing
+    )
+    (V.zip steps stepsRes)
+
+
+-- Helper function as defined
+hasPassed :: [AssertResult] -> Bool
+hasPassed res = length res == length (filter (\x -> x.ok == Just True) res)
 
 
 addCollection :: Collection -> DBT IO ()
