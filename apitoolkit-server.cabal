@@ -114,7 +114,10 @@ library
       Pages.Monitors.Testing
       Pages.Monitors.TestingSpec
       Pages.NonMember
+      Pages.Onboarding.Components
       Pages.Onboarding.Handler
+      Pages.Onboarding.Helpers
+      Pages.Onboarding.SessionManager
       Pages.Onboarding.Types
       Pages.Onboarding.Views
       Pages.Projects.CreateProject

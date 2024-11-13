@@ -7,9 +7,13 @@ module Pages.Onboarding.Handler (
   onboardingUsageGetH,
   onboardingUsagePostH,
   onboardingUrlMonitorGetH,
+  onboardingUrlMonitorPostH,
   onboardingNotificationsGetH,
+  onboardingNotificationsPostH,
   onboardingTeamGetH,
+  onboardingTeamPostH,
   onboardingPricingGetH,
+  onboardingPricingPostH,
   onboardingCheckInboxGetH,
   onboardingFrameworkGetH,
   onboardingProfilePostH,
@@ -23,6 +27,7 @@ import Data.Aeson (encode)
 import Data.Base64.Types qualified as B64
 import Data.ByteString.Base64 qualified as B64
 import Data.ByteString.Lazy qualified as LBS
+import Data.Char (isLetter, isSpace)
 import Data.Default (Default (..), def)
 import Data.Map.Strict qualified as Map
 import Data.Pool (withResource)
@@ -32,6 +37,7 @@ import Data.Time (UTCTime, getCurrentTime)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Database.PostgreSQL.Transact (DBT)
+
 import Effectful
 import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
 import Effectful.Reader.Static (ask)
@@ -60,8 +66,7 @@ onboardingSignupGetH = do
   appCtx <- ask @AuthContext
   let bwconf =
         (def :: BWConfig)
-          { sessM = Just sess.persistentSession
-          , pageTitle = "Signup"
+          { pageTitle = "Signup"
           }
   addRespHeaders $ SignupR $ PageCtx bwconf (sess.persistentSession, appCtx.config, def, Valid def)
 
@@ -73,8 +78,7 @@ onboardingLoginGetH = do
   appCtx <- ask @AuthContext
   let bwconf =
         (def :: BWConfig)
-          { sessM = Just sess.persistentSession
-          , pageTitle = "Login"
+          { pageTitle = "Login"
           }
   addRespHeaders $ LoginR $ PageCtx bwconf (sess.persistentSession, appCtx.config, def, Valid def)
 
@@ -85,11 +89,7 @@ onboardingProfileGetH = do
   sess <- Sessions.getSession
   appCtx <- ask @AuthContext
   let form = def :: ProfileForm
-  let bwconf =
-        (def :: BWConfig)
-          { sessM = Just sess.persistentSession
-          , pageTitle = "Complete Profile"
-          }
+  let bwconf = (def :: BWConfig){pageTitle = "Complete Profile"}
   addRespHeaders $ ProfileR $ PageCtx bwconf (sess.persistentSession, appCtx.config, form, Valid form)
 
 
@@ -161,6 +161,7 @@ onboardingFrameworkGetH = do
   appCtx <- ask @AuthContext
   let bwconf = (def :: BWConfig){pageTitle = "Framework Integration"}
   let framework = def :: FrameworkIntegration
+  traceShowM framework
   addRespHeaders $ FrameworkR $ PageCtx bwconf (def, appCtx.config, framework)
 
 
@@ -216,15 +217,27 @@ onboardingNotificationSentGetH = do
 -- | Profile Handler
 onboardingProfilePostH :: ProfileForm -> ATAuthCtx (RespHeaders OnboardingResponse)
 onboardingProfilePostH form = do
-  traceShowM form
+  -- traceShowM form
   sess <- Sessions.getSession
-  traceShowM sess.user.id
   appCtx <- ask @AuthContext
-  traceShowM appCtx.config
   case validateProfileForm form of
     Valid validForm -> do
-      -- Update onboarding state
-      dbtToEff $ updateOnboardingProfile sess.user.id validForm
+      -- Convert form to session data
+      let profileKey = "onboarding_profile"
+          profileValue = decodeUtf8 $ encode validForm
+          updatedSessionData =
+            Sessions.SessionData
+              $ Map.insert profileKey profileValue
+              $ Sessions.getSessionData sess.persistentSession.sessionData
+
+      -- Update session with new profile data
+      void
+        $ Sessions.updateSession
+          sess.persistentSession.id
+          sess.persistentSession.userId
+          updatedSessionData
+
+      -- Add success notification and redirect
       addSuccessToast "Profile updated" Nothing
       redirectCS "/onboarding/hosting"
       addRespHeaders $ NoContent ""
@@ -237,25 +250,18 @@ onboardingHostingPostH :: HostingLocation -> ATAuthCtx (RespHeaders OnboardingRe
 onboardingHostingPostH location = do
   traceShowM location
   sess <- Sessions.getSession
-  traceShowM sess.user.id
   appCtx <- ask @AuthContext
-  traceShowM appCtx.config
-  -- Convert HostingLocation to Text for session storage
+  -- Convert HostingLocation to session data
   let locationKey = "hosting_location"
-      locationValue = case location of
-        Europe -> "Europe (EU)"
-        UnitedStates -> "United State (US)"
-        Asia -> "Asia"
-
-  -- Update session with the new hosting location
-  let updatedSessionData =
+      locationValue = decodeUtf8 $ encode location -- Store the actual HostingLocation value
+      updatedSessionData =
         Sessions.SessionData
           $ Map.insert locationKey locationValue
           $ Sessions.getSessionData sess.persistentSession.sessionData
 
-  -- Update the session in the database
+  -- Update session with new hosting location
   void
-    $ Sessions.insertSession
+    $ Sessions.updateSession
       sess.persistentSession.id
       sess.persistentSession.userId
       updatedSessionData
@@ -268,21 +274,22 @@ onboardingHostingPostH location = do
 
 -- | Usage Preferences Handler
 onboardingUsagePostH :: UsagePreferences -> ATAuthCtx (RespHeaders OnboardingResponse)
-onboardingUsagePostH prefs = do
+onboardingUsagePostH usagePrefs = do
+  traceShowM usagePrefs
   sess <- Sessions.getSession
   appCtx <- ask @AuthContext
 
   -- Store usage preferences in session
   let usageKey = "usage_preferences"
-      usageValue = decodeUtf8 (encode prefs)
+      usageValue = decodeUtf8 (encode usagePrefs)
       updatedSessionData =
         Sessions.SessionData
           $ Map.insert usageKey usageValue
           $ Sessions.getSessionData sess.persistentSession.sessionData
 
-  -- Update session
+  -- Update session with usage preferences
   void
-    $ Sessions.insertSession
+    $ Sessions.updateSession
       sess.persistentSession.id
       sess.persistentSession.userId
       updatedSessionData
@@ -294,13 +301,14 @@ onboardingUsagePostH prefs = do
 
 
 -- | URL Monitor Handler
--- onboardingUrlMonitorPostH :: URLMonitorConfig -> ATAuthCtx (RespHeaders OnboardingResponse)
--- onboardingUrlMonitorPostH config = do
---   sess <- Sessions.getSession
---   dbtToEff $ updateOnboardingMonitor sess.user.id config
---   addSuccessToast "URL Monitor configured" Nothing
---   redirectCS "/onboarding/notifications"
---   addRespHeaders $ NoContent ""
+onboardingUrlMonitorPostH :: URLMonitorConfig -> ATAuthCtx (RespHeaders OnboardingResponse)
+onboardingUrlMonitorPostH config = do
+  sess <- Sessions.getSession
+  -- todo
+  addSuccessToast "URL Monitor configured" Nothing
+  redirectCS "/onboarding/notifications"
+  addRespHeaders $ NoContent ""
+
 
 -- | Notification Settings Handler
 -- onboardingNotificationsPostH :: NotificationSettings -> ATAuthCtx (RespHeaders OnboardingResponse)
@@ -317,78 +325,80 @@ onboardingUsagePostH prefs = do
 -- addRespHeaders $ NoContent ""
 
 -- | Notification Settings Handler
--- onboardingNotificationsPostH :: NotificationSettings -> ATAuthCtx (RespHeaders OnboardingResponse)
--- onboardingNotificationsPostH settings = do
---   sess <- Sessions.getSession
---   appCtx <- ask @AuthContext
+onboardingNotificationsPostH :: NotificationSettings -> ATAuthCtx (RespHeaders OnboardingResponse)
+onboardingNotificationsPostH settings = do
+  traceShowM settings
+  sess <- Sessions.getSession
+  appCtx <- ask @AuthContext
 
---   -- Validate notification settings
---   case validateNotificationSettings settings of
---     Invalid errors -> do
---       addErrorToast "Invalid notification settings" Nothing
---       addRespHeaders $ NotificationsR $ PageCtx def (sess.persistentSession, appCtx.config, settings)
+  --   -- Validate notification settings
+  --   case validateNotificationSettings settings of
+  --     Invalid errors -> do
+  --       addErrorToast "Invalid notification settings" Nothing
+  --       addRespHeaders $ NotificationsR $ PageCtx def (sess.persistentSession, appCtx.config, settings)
 
---     Valid validSettings -> do
---       -- Process and store notification channels
---       processResult <- processNotificationChannels sess.user.id validSettings.notificationChannels
---       case processResult of
---         Left error -> do
---           addErrorToast ("Failed to configure channels: " <> error) Nothing
---           addRespHeaders $ NotificationsR $ PageCtx def (sess.persistentSession, appCtx.config, settings)
+  --     Valid validSettings -> do
+  --       -- Process and store notification channels
+  --       processResult <- processNotificationChannels sess.user.id validSettings.notificationChannels
+  --       case processResult of
+  --         Left error -> do
+  --           addErrorToast ("Failed to configure channels: " <> error) Nothing
+  --           addRespHeaders $ NotificationsR $ PageCtx def (sess.persistentSession, appCtx.config, settings)
 
---         Right _ -> do
---           -- Store notification settings in session
---           let notificationKey = "notification_settings"
---               notificationValue = decodeUtf8 $ encode settings
---               updatedSessionData = Sessions.SessionData $
---                 Map.insert notificationKey notificationValue $
---                 Sessions.getSessionData sess.persistentSession.sessionData
+  --         Right _ -> do
+  --           -- Store notification settings in session
+  --           let notificationKey = "notification_settings"
+  --               notificationValue = decodeUtf8 $ encode settings
+  --               updatedSessionData = Sessions.SessionData $
+  --                 Map.insert notificationKey notificationValue $
+  --                 Sessions.getSessionData sess.persistentSession.sessionData
 
---           -- Update session with new notification settings
---           void $ Sessions.insertSession
---             sess.persistentSession.id
---             sess.persistentSession.userId
---             updatedSessionData
+  --           -- Update session with new notification settings
+  --           void $ Sessions.insertSession
+  --             sess.persistentSession.id
+  --             sess.persistentSession.userId
+  --             updatedSessionData
 
---           -- Set up test notifications for all configured channels
---           whenJustM (dbtToEff $ Projects.projectById sess.project.id) \project -> do
---             let testMsg = [fmtTrim|🤖 Test notification from APIToolkit for {project.title}|]
+  --           -- Set up test notifications for all configured channels
+  --           whenJustM (dbtToEff $ Projects.projectById sess.project.id) \project -> do
+  --             let testMsg = [fmtTrim|🤖 Test notification from APIToolkit for {project.title}|]
 
---             -- Process email notifications
---             forM_ settings.notificationEmails \email ->
---               liftIO $ withResource appCtx.jobsPool \conn ->
---                 createJob conn "background_jobs" $
---                   InviteUserToProject
---                     sess.user.id
---                     sess.project.id
---                     email
---                     "Test Notification"
+  --             -- Process email notifications
+  --             forM_ settings.notificationEmails \email ->
+  --               liftIO $ withResource appCtx.jobsPool \conn ->
+  --                 createJob conn "background_jobs" $
+  --                   InviteUserToProject
+  --                     sess.user.id
+  --                     sess.project.id
+  --                     email
+  --                     "Test Notification"
 
---             -- Process Slack/Discord notifications
---             forM_ settings.notificationChannels \case
---               SlackChannel _ webhookUrl ->
---                 liftIO $ withResource appCtx.jobsPool \conn ->
---                   createJob conn "background_jobs" $
---                     SendDiscordData
---                       sess.user.id
---                       sess.project.id
---                       project.title
---                       ["Test notification"]
---                       webhookUrl
---               DiscordChannel _ webhookUrl ->
---                 liftIO $ withResource appCtx.jobsPool \conn ->
---                   createJob conn "background_jobs" $
---                     SendDiscordData
---                       sess.user.id
---                       sess.project.id
---                       project.title
---                       ["Test notification"]
---                       webhookUrl
+  --             -- Process Slack/Discord notifications
+  --             forM_ settings.notificationChannels \case
+  --               SlackChannel _ webhookUrl ->
+  --                 liftIO $ withResource appCtx.jobsPool \conn ->
+  --                   createJob conn "background_jobs" $
+  --                     SendDiscordData
+  --                       sess.user.id
+  --                       sess.project.id
+  --                       project.title
+  --                       ["Test notification"]
+  --                       webhookUrl
+  --               DiscordChannel _ webhookUrl ->
+  --                 liftIO $ withResource appCtx.jobsPool \conn ->
+  --                   createJob conn "background_jobs" $
+  --                     SendDiscordData
+  --                       sess.user.id
+  --                       sess.project.id
+  --                       project.title
+  --                       ["Test notification"]
+  --                       webhookUrl
 
---           -- Add success notification and redirect
---           addSuccessToast "Notification settings saved and test notifications queued" Nothing
---           redirectCS "/onboarding/notification-sent"
---           addRespHeaders $ NoContent ""
+  -- Add success notification and redirect
+  addSuccessToast "Notification settings saved and test notifications queued" Nothing
+  redirectCS "/onboarding/notification-sent"
+  addRespHeaders $ NoContent ""
+
 
 -- -- | Helper function to validate notification settings
 -- validateNotificationSettings :: NotificationSettings -> FormValidationResult NotificationSettings
@@ -450,45 +460,83 @@ onboardingUsagePostH prefs = do
 --   pass
 
 -- | Team Invitation Handler
--- onboardingTeamPostH :: TeamInvitationList -> ATAuthCtx (RespHeaders OnboardingResponse)
--- onboardingTeamPostH invitation = do
---   sess <- Sessions.getSession
---   appCtx <- ask @AuthContext
---   -- Process team invitations
---   forM_ invitation.teamMembers \TeamMember{memberEmail, memberRole} -> do
---     userIdM <- dbtToEff $ Users.userIdByEmail memberEmail
---     userId <- case userIdM of
---       Just uid -> pure  $ Just uid
---       Nothing -> dbtToEff $ Users.createEmptyUser memberEmail
---     -- Create background job for sending invitation
---     liftIO $ withResource appCtx.pool \conn ->
---       createJob conn "background_jobs" $
---         BackgroundJobs.InviteUserToProject
---           sess.user.id
---           (Projects.ProjectId "temp") -- You'll need the actual project ID
---           memberEmail
---           "New Project" -- You'll need the actual project title
---   _ <- dbtToEff $ updateOnboardingTeam sess.user.id invitation
---   addSuccessToast "Team invitations sent" Nothing
---   redirectCS "/onboarding/pricing"
---   addRespHeaders $ NoContent ""
+onboardingTeamPostH :: TeamInvitationList -> ATAuthCtx (RespHeaders OnboardingResponse)
+onboardingTeamPostH invitation = do
+  -- traceShowM invitation
+  sess <- Sessions.getSession
+  appCtx <- ask @AuthContext
+  -- Process team invitations
+  -- forM_ invitation.teamMembers \TeamMember{memberEmail, memberRole} -> do
+  --   userIdM <- dbtToEff $ Users.userIdByEmail memberEmail
+  --   userId <- case userIdM of
+  --     Just uid -> pure  $ Just uid
+  --     Nothing -> dbtToEff $ Users.createEmptyUser memberEmail
+  --   -- Create background job for sending invitation
+  --   liftIO $ withResource appCtx.pool \conn ->
+  --     createJob conn "background_jobs" $
+  --       BackgroundJobs.InviteUserToProject
+  --         sess.user.id
+  --         (Projects.ProjectId "temp") -- You'll need the actual project ID
+  --         memberEmail
+  --         "New Project" -- You'll need the actual project title
+  -- _ <- dbtToEff $ updateOnboardingTeam sess.user.id invitation
+  addSuccessToast "Team invitations sent" Nothing
+  redirectCS "/onboarding/pricing"
+  addRespHeaders $ NoContent ""
+
 
 -- | Pricing Plan Handler
--- onboardingPricingPostH :: PricingPlan -> ATAuthCtx (RespHeaders OnboardingResponse)
--- onboardingPricingPostH plan = do
+onboardingPricingPostH :: PricingPlan -> ATAuthCtx (RespHeaders OnboardingResponse)
+onboardingPricingPostH plan = do
+  traceShowM plan
+  sess <- Sessions.getSession
+  appCtx <- ask @AuthContext
+
+  -- Store pricing plan in session
+  let pricingKey = "pricing_plan"
+      pricingValue = decodeUtf8 (encode plan)
+      updatedSessionData =
+        Sessions.SessionData
+          $ Map.insert pricingKey pricingValue
+          $ Sessions.getSessionData sess.persistentSession.sessionData
+
+  -- Update session with pricing plan
+  void
+    $ Sessions.updateSession
+      sess.persistentSession.id
+      sess.persistentSession.userId
+      updatedSessionData
+
+  -- Add success notification and redirect
+  addSuccessToast "Plan selected successfully" Nothing -- Fixed the toast message
+  redirectCS "/onboarding/framework"
+  addRespHeaders $ NoContent ""
+
+
+-- onboardingFrameworkPostH :: FrameworkIntegration -> ATAuthCtx (RespHeaders OnboardingResponse)
+-- onboardingFrameworkPostH framework = do
+--   traceShowM framework
 --   sess <- Sessions.getSession
 --   appCtx <- ask @AuthContext
 
---   -- Get the current onboarding state
---   onboardingState <- dbtToEff $ getOnboardingState sess.user.id
+--   -- Store framework selection in session
+--   let frameworkKey = "framework_integration"
+--       frameworkValue = decodeUtf8 (encode framework)
+--       updatedSessionData =
+--         Sessions.SessionData
+--           $ Map.insert frameworkKey frameworkValue
+--           $ Sessions.getSessionData sess.persistentSession.sessionData
 
---   case onboardingState of
---     Nothing -> do
---       addErrorToast "Onboarding state not found" Nothing
---       redirectCS "/onboarding/signup"
---       addRespHeaders $ NoContent ""
---     Just state -> do
---       pass
+--   -- Update session with framework selection
+--   void $ Sessions.updateSession
+--     sess.persistentSession.id
+--     sess.persistentSession.userId
+--     updatedSessionData
+
+--   -- Add success notification and redirect
+--   addSuccessToast "Framework integration saved" Nothing
+--   redirectCS "/onboarding/signup"  -- or wherever you want to redirect after framework selection
+--   addRespHeaders $ NoContent ""
 
 -- | Database operations
 -- saveOnboardingState :: Users.UserId -> OnboardingState -> DBT IO ()
@@ -510,4 +558,51 @@ validateSignupForm form =
 
 
 validateProfileForm :: ProfileForm -> FormValidationResult ProfileForm
-validateProfileForm = undefined -- TODO: Implement
+validateProfileForm form =
+  let errors =
+        catMaybes
+          [ validateName "firstName" form.profileFirstName
+          , validateName "lastName" form.profileLastName
+          , validateCompanyName form.profileCompanyName
+          , validateReferralSource form.profileReferralSource
+          ]
+   in if null errors
+        then Valid form
+        else Invalid errors
+
+
+-- | Validate a name field (first name or last name)
+validateName :: Text -> Text -> Maybe FormError
+validateName fieldName name
+  | T.null (T.strip name) = Just $ FormError fieldName "Name cannot be empty"
+  | T.length name > 50 = Just $ FormError fieldName "Name cannot be longer than 50 characters"
+  | not (T.all (\c -> isLetter c || isSpace c) name) = Just $ FormError fieldName "Name can only contain letters and spaces"
+  | otherwise = Nothing
+
+
+-- | Validate company name
+validateCompanyName :: Text -> Maybe FormError
+validateCompanyName name
+  | T.null (T.strip name) = Just $ FormError "companyName" "Company name cannot be empty"
+  | T.length name > 100 = Just $ FormError "companyName" "Company name cannot be longer than 100 characters"
+  | T.all isSpace name = Just $ FormError "companyName" "Company name cannot be only whitespace"
+  | otherwise = Nothing
+
+
+-- | Parse company size from text (e.g., "50 employees" -> Just 50)
+parseCompanySize :: Text -> Maybe Int
+parseCompanySize text = do
+  let parts = words $ T.toLower text
+  case parts of
+    (n : _) -> readMaybe (toString n)
+    _ -> Nothing
+
+
+-- | Validate referral source
+validateReferralSource :: Text -> Maybe FormError
+validateReferralSource source
+  | T.null (T.strip source) = Just $ FormError "referralSource" "Please select how you heard about us"
+  | source `notElem` validSources = Just $ FormError "referralSource" "Invalid referral source"
+  | otherwise = Nothing
+  where
+    validSources = ["google", "social_media", "friend", "other"]

@@ -2,15 +2,15 @@ module Pages.Onboarding.Views (
   OnboardingResponse (..), -- Export the type and all its constructors
   renderSignupPage,
   renderLoginForm,
-  renderUserForm,
-  renderNotificationSettingsForm,
-  renderUrlMonitorForm,
-  renderPricingPlan,
-  renderTeamInvite,
-  renderCheckInbox,
-  renderDataLocationSelect,
-  renderNotificationSent,
-  renderFrameworkIntegration,
+  renderUserFormPage,
+  renderNotificationSettingsFormPage,
+  renderUrlMonitorFormPage,
+  renderPricingPlanPage,
+  renderTeamInvitePage,
+  renderCheckInboxPage,
+  renderDataLocationSelectPage,
+  renderNotificationSentPage,
+  renderFrameworkIntegrationPage,
 ) where
 
 import BackgroundJobs qualified
@@ -29,15 +29,19 @@ import Database.PostgreSQL.Transact (DBT)
 import Effectful
 import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
 import Effectful.Reader.Static (ask)
-import Lucid hiding (for_)
-import Lucid.Htmx (hxDelete_, hxGet_, hxPost_, hxPut_, hxSwap_, hxTarget_, hxTrigger_)
+import Lucid
+import Lucid.Base (TermRaw (termRaw))
+import Lucid.Htmx (hxDelete_, hxGet_, hxInclude_, hxPost_, hxPut_, hxSwap_, hxTarget_, hxTrigger_)
 import Lucid.Hyperscript (__)
 import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
 import Models.Users.Users qualified as Users
+import NeatInterpolation (text)
 import OddJobs.Job (createJob)
 import Pages.BodyWrapper
+import Pages.Onboarding.Components
+import Pages.Onboarding.Helpers
 import Pages.Onboarding.Types
 import Relude hiding (ask, asks)
 import System.Config
@@ -71,25 +75,25 @@ instance ToHtml OnboardingResponse where
   toHtml (LoginR (PageCtx bwconf (sess, cfg, form, validation))) =
     toHtml $ PageCtx bwconf $ renderLoginForm form validation
   toHtml (ProfileR (PageCtx bwconf (sess, cfg, form, validation))) =
-    toHtml $ PageCtx bwconf $ renderUserForm form validation
+    toHtml $ PageCtx bwconf $ renderUserFormPage form validation
   toHtml (HostingR (PageCtx bwconf (sess, cfg, location))) =
-    toHtml $ PageCtx bwconf $ renderDataLocationSelect
+    toHtml $ PageCtx bwconf $ renderDataLocationSelectPage location
   toHtml (UsageR (PageCtx bwconf (sess, cfg, usage))) =
-    toHtml $ PageCtx bwconf $ renderUsageSelectionForm
+    toHtml $ PageCtx bwconf $ renderUsageSelectionForm usage
   toHtml (URLMonitorR (PageCtx bwconf (sess, cfg, monitor))) =
-    toHtml $ PageCtx bwconf $ renderUrlMonitorForm
+    toHtml $ PageCtx bwconf renderUrlMonitorFormPage
   toHtml (NotificationsR (PageCtx bwconf (sess, cfg, notifications))) =
-    toHtml $ PageCtx bwconf $ renderNotificationSettingsForm
+    toHtml $ PageCtx bwconf $ renderNotificationSettingsFormPage notifications
   toHtml (TeamR (PageCtx bwconf (sess, cfg, team))) =
-    toHtml $ PageCtx bwconf $ renderTeamInvite
+    toHtml $ PageCtx bwconf $ renderTeamInvitePage team
   toHtml (PricingR (PageCtx bwconf (sess, cfg, pricing))) =
-    toHtml $ PageCtx bwconf $ renderPricingPlan
+    toHtml $ PageCtx bwconf $ renderPricingPlanPage pricing
   toHtml (CheckInboxR (PageCtx bwconf (sess, cfg))) =
-    toHtml $ PageCtx bwconf $ renderCheckInbox
+    toHtml $ PageCtx bwconf renderCheckInboxPage
   toHtml (FrameworkR (PageCtx bwconf (sess, cfg, framework))) =
-    toHtml $ PageCtx bwconf $ renderFrameworkIntegration
+    toHtml $ PageCtx bwconf $ renderFrameworkIntegrationPage framework
   toHtml (NotificationSentR (PageCtx bwconf (sess, cfg))) =
-    toHtml $ PageCtx bwconf $ renderNotificationSent
+    toHtml $ PageCtx bwconf renderNotificationSentPage
   toHtml (NoContent msg) =
     div_ [] $ toHtml msg
   toHtmlRaw = toHtml
@@ -97,18 +101,18 @@ instance ToHtml OnboardingResponse where
 
 renderSignupPage :: SignupForm -> FormValidationResult SignupForm -> Html ()
 renderSignupPage form validation =
-  div_ [class_ "max-w-md space-y-8 mx-auto"] $ do
+  div_ [class_ "max-w-md space-y-8 mx-auto pt-32"] $ do
     -- Logo Position
-    div_ [class_ "text-2xl"]
+    div_ [class_ "text-3xl"]
       $ img_ [src_ "/public/assets/svgs/logo_min.svg", alt_ ""]
 
     -- Header
     div_ [class_ "text-start"] $ do
-      h2_ [class_ "text-2xl font-semibold text-gray-900"] $ do
-        "Create a free"
+      h2_ [class_ "text-3xl font-semibold text-slate-900"] $ do
+        "Create a \nfree"
         br_ []
         "APIToolkit account"
-      p_ [class_ "mt-2 text-sm text-gray-600"] $ do
+      p_ [class_ "mt-2 text-sm text-slate-600"] $ do
         "Already have an account? "
         a_ [href_ "/onboarding/login", class_ "text-blue-600 hover:text-blue-500 underline"] "Login"
 
@@ -117,7 +121,7 @@ renderSignupPage form validation =
       div_ [class_ "space-y-4"] $ do
         -- Email field
         div_ [] $ do
-          label_ [class_ "block text-sm font-medium text-gray-700"] "Email Address"
+          label_ [class_ "block text-sm font-medium text-slate-700"] "Email Address"
           div_ [class_ "mt-1 relative"] $ do
             div_ [class_ "absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none"] $ do
               faSprite_ "mail-envelope" "regular" "h-5 w-5 text-slate-500"
@@ -125,13 +129,13 @@ renderSignupPage form validation =
               [ type_ "email"
               , name_ "email"
               , placeholder_ "hello.john@email.com"
-              , class_ "pl-10 w-full px-3 py-3  bg-slate-50 text-slate-500 text-sm font-normal font-['Inter'] leading-snug border border-gray-300 rounded-xl shadow-sm placeholder-gray-400 focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+              , class_ "pl-10 w-full px-3 py-3  bg-slate-50 text-slate-500 text-sm font-normal font-['Inter'] leading-snug border border-slate-300 rounded-xl shadow-sm placeholder-slate-400 focus:outline-none focus:ring-blue-500 focus:border-blue-500"
               ]
 
         -- Password field
         div_ [] $ do
           div_ [class_ "flex items-center justify-start"] $ do
-            label_ [class_ "block text-sm font-medium text-gray-700"] "Password"
+            label_ [class_ "block text-sm font-medium text-slate-700"] "Password"
 
           div_ [class_ "mt-1 relative"] $ do
             div_ [class_ "absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none"] $ do
@@ -141,7 +145,7 @@ renderSignupPage form validation =
               [ type_ "password"
               , name_ "password"
               , placeholder_ "Enter 8 digit password"
-              , class_ "pl-10 w-full px-3 py-3  bg-slate-50 text-slate-500 text-sm font-normal font-['Inter'] leading-snug border border-gray-300 rounded-xl shadow-sm placeholder-gray-400 focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+              , class_ "pl-10 w-full px-3 py-3  bg-slate-50 text-slate-500 text-sm font-normal font-['Inter'] leading-snug border border-slate-300 rounded-xl shadow-sm placeholder-slate-400 focus:outline-none focus:ring-blue-500 focus:border-blue-500"
               ]
 
             button_
@@ -154,7 +158,7 @@ renderSignupPage form validation =
                 faSprite_ "eye-view" "regular" "h-5 w-5 text-slate-500"
 
         -- Password Requirements
-        div_ [class_ "flex flex-wrap gap-2 text-sm text-gray-600"] $ do
+        div_ [class_ "flex flex-wrap gap-2 text-sm text-slate-600"] $ do
           span_ [class_ "px-3 py-1 rounded-3xl border border-slate-300 justify-center items-center gap-2.5 text-slate-500 text-sm font-normal"] "8 characters"
           span_ [class_ "px-3 py-1 rounded-3xl border border-slate-300 justify-center items-center gap-2.5 text-slate-500 text-sm font-normal"] "Number"
           span_ [class_ "px-3 py-1 rounded-3xl border border-slate-300 justify-center items-center gap-2.5 text-slate-500 text-sm font-normal"] "Lowercase"
@@ -162,21 +166,21 @@ renderSignupPage form validation =
           span_ [class_ "px-3 py-1 rounded-3xl border border-slate-300 justify-center items-center gap-2.5 text-slate-500 text-sm font-normal"] "1 special character"
 
       -- New Account Button
-      renderCustomButton POST "" "Create free account"
+      renderPrimaryButton POST "" "Create free account"
 
       -- Divider
       div_ [class_ "relative w-full py-1"] $ do
         div_ [class_ "absolute inset-0 flex items-center"]
-          $ div_ [class_ "w-full border-t border-gray-300"] mempty
+          $ div_ [class_ "w-full border-t border-slate-300"] mempty
         div_ [class_ "relative flex justify-center"]
-          $ span_ [class_ "bg-white px-2 py-2 bg-slate-50 text-sm text-gray-500 rounded-full border border-gray-300"] "OR"
+          $ span_ [class_ "bg-white px-2 py-2 bg-slate-50 text-sm text-slate-500 rounded-full border border-slate-300"] "OR"
 
       -- Social Login Buttons
       div_ [class_ "space-y-3"] $ do
         -- Google Login Button
         button_
           [ type_ "button"
-          , class_ "w-full py-2 px-4  py-3 border border-slate-300 shadow-sm bg-slate-50 rounded-2xl text-sm font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 flex items-center justify-center space-x-2"
+          , class_ "w-full py-2 px-4  py-3 border border-slate-300 shadow-sm bg-slate-50 rounded-2xl text-sm font-medium text-slate-700 hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 flex items-center justify-center space-x-2"
           ]
           $ do
             img_ [src_ "/public/assets/svgs/onboarding/google.svg", alt_ "Google", class_ "w-5 h-5"]
@@ -185,113 +189,27 @@ renderSignupPage form validation =
         -- GitHub Login Button
         button_
           [ type_ "button"
-          , class_ "w-full py-2 px-4 py-3  border border-gray-300 shadow-sm bg-slate-50 rounded-2xl text-sm font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 flex items-center justify-center space-x-2"
+          , class_ "w-full py-2 px-4 py-3  border border-slate-300 shadow-sm bg-slate-50 rounded-2xl text-sm font-medium text-slate-700 hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 flex items-center justify-center space-x-2"
           ]
           $ do
             img_ [src_ "/public/assets/svgs/onboarding/github.svg", alt_ "Github", class_ "w-5 h-5"]
             span_ "Continue with GitHub"
 
 
-renderUserForm :: ProfileForm -> FormValidationResult ProfileForm -> Html ()
-renderUserForm form validation = do
-  -- Logo section
-  div_ [class_ "text-2xl mb-4 m-4 absolute"]
-    $ img_ [src_ "/public/assets/svgs/logo_min.svg", alt_ "APItoolkit Logo"]
-  div_ [class_ "max-w-md space-y-8 mx-auto"] $ do
-    div_ [class_ "max-w-md mx-auto p-6 pt-40 pb-40"] $ do
-      renderBackButton "Back"
-
-      -- Form section
-      div_ [class_ "space-y-8"] $ do
-        h1_ [class_ "text-3xl font-bold text-slate-950 font-semibold font-['Inter'] leading-10"] $ do
-          "Tell us a little bit"
-          br_ []
-          "about you"
-
-        -- Form with HTMX attributes
-        form_
-          [ class_ "space-y-6"
-          , hxPost_ "/onboarding/profile"
-          , hxSwap_ "outerHTML"
-          , hxTrigger_ "submit"
-          ]
-          $ do
-            -- Name fields
-            div_ [class_ "grid grid-cols-2 gap-4"] $ do
-              div_ [] $ do
-                label_ [class_ "block  mb-1 text-slate-500 text-sm font-medium font-['Inter'] leading-snug"] "First Name"
-                input_
-                  [ type_ "text"
-                  , placeholder_ "e.g Mike"
-                  , name_ "profileFirstName"
-                  , value_ (profileFirstName form)
-                  , class_ "w-full px-3 py-2 border shadow-sm rounded-xl bg-slate-50 border-slate-300 justify-start items-start gap-2.5 inline-flex placeholder-gray-400 focus:outline-none focus:ring-blue-500 focus:border-blue-500"
-                  ]
-
-              div_ [] $ do
-                label_ [class_ "block  mb-1 text-slate-500 text-sm font-medium font-['Inter'] leading-snug"] "Last"
-                input_
-                  [ type_ "text"
-                  , placeholder_ "E.g Abel"
-                  , name_ "profileLastName"
-                  , class_ "w-full px-3 py-2 border border-gray-300 rounded-xl bg-slate-50  shadow-sm placeholder-gray-400 focus:outline-none focus:ring-blue-500 focus:border-blue-500"
-                  ]
-
-            -- Company name
-            div_ [] $ do
-              label_ [class_ "block  mb-1 text-slate-500 text-sm font-medium font-['Inter'] leading-snug"] "Company name"
-              input_
-                [ type_ "text"
-                , placeholder_ "Apple, Inc"
-                , name_ "profileCompanyName"
-                , class_ "w-full px-3 py-2 border border-gray-300 bg-slate-50 rounded-xl shadow-sm placeholder-gray-400 focus:outline-none focus:ring-blue-500 focus:border-blue-500"
-                ]
-
-            -- Company Size
-            div_ [] $ do
-              label_ [class_ "block  mb-1 text-slate-500 text-sm font-medium font-['Inter'] leading-snug"] "Company Size"
-              input_
-                [ type_ "text"
-                , placeholder_ "6 employees"
-                , name_ "profileCompanySize"
-                , class_ "w-full px-3 py-2 border border-gray-300 bg-slate-50  rounded-xl shadow-sm placeholder-gray-400 focus:outline-none focus:ring-blue-500 focus:border-blue-500"
-                ]
-
-            -- Where did you hear about us
-            div_ [] $ do
-              label_ [class_ "block  mb-1 text-slate-500 text-sm font-medium font-['Inter'] leading-snug"] "Where did you hear about us?"
-              div_ [class_ "relative bg-slate-50"] $ do
-                select_
-                  [ class_ "w-full px-3 py-2 border border-gray-300 bg-slate-50  rounded-xl shadow-sm appearance-none bg-white focus:outline-none focus:ring-blue-500 focus:border-blue-500"
-                  , name_ "profileReferralSource"
-                  ]
-                  $ do
-                    option_ [selected_ "", disabled_ ""] "Select an option"
-                    option_ [] "Google"
-                    option_ [] "Social Media"
-                    option_ [] "Friend/Colleague"
-
-                div_ [class_ "absolute inset-y-0 right-0 flex items-center pr-3 pointer-events-none"]
-                  $ faSprite_ "chevron-down" "regular" "h-4 w-4 text-gray-400"
-
-            -- Submit button
-            renderCustomButton POST "" "Proceed"
-
-
 renderLoginForm :: LoginForm -> FormValidationResult LoginForm -> Html ()
 renderLoginForm form validation = do
-  div_ [class_ "w-full max-w-md space-y-8 mx-auto"] $ do
+  div_ [class_ "w-full max-w-md space-y-8 mx-auto pt-32"] $ do
     -- Logo and welcome section
     div_ [class_ "text-start"] $ do
-      div_ [class_ "text-2xl mb-4"]
+      div_ [class_ "text-3xl mb-4"]
         $ img_ [src_ "/public/assets/svgs/logo_min.svg", alt_ ""]
 
-      h2_ [class_ "text-2xl font-semibold text-gray-900"] $ do
+      h2_ [class_ "text-3xl font-semibold text-slate-900"] $ do
         "Welcome back"
         br_ []
         "APIToolkit"
 
-      p_ [class_ "mt-2 text-sm text-gray-600"] $ do
+      p_ [class_ "mt-2 text-sm text-slate-600"] $ do
         "Don't have an account? "
         a_ [href_ "/onboarding/signup", class_ "text-blue-600 hover:text-blue-500 underline"] "Sign up for free"
 
@@ -305,7 +223,7 @@ renderLoginForm form validation = do
       $ do
         -- Email field
         div_ [] $ do
-          label_ [class_ "block text-sm font-medium text-gray-700"] "Email Address"
+          label_ [class_ "block text-sm font-medium text-slate-700"] "Email Address"
           div_ [class_ "mt-1 relative"] $ do
             div_ [class_ "absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none"] $ do
               faSprite_ "mail-envelope" "regular" "h-5 w-5 text-slate-500"
@@ -313,13 +231,13 @@ renderLoginForm form validation = do
               [ type_ "email"
               , name_ "email"
               , placeholder_ "hello.john@email.com"
-              , class_ "pl-10 w-full px-3 py-3  bg-slate-50 text-slate-500 text-sm font-normal font-['Inter'] leading-snug border border-gray-300 rounded-xl shadow-sm placeholder-gray-400 focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+              , class_ "pl-10 w-full px-3 py-3  bg-slate-50 text-slate-500 text-sm font-normal font-['Inter'] leading-snug border border-slate-300 rounded-xl shadow-sm placeholder-slate-400 focus:outline-none focus:ring-blue-500 focus:border-blue-500"
               ]
 
         -- Password field
         div_ [] $ do
           div_ [class_ "flex items-center justify-start"] $ do
-            label_ [class_ "block text-sm font-medium text-gray-700"] "Password"
+            label_ [class_ "block text-sm font-medium text-slate-700"] "Password"
 
           div_ [class_ "mt-1 relative"] $ do
             div_ [class_ "absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none"] $ do
@@ -329,7 +247,7 @@ renderLoginForm form validation = do
               [ type_ "password"
               , name_ "password"
               , placeholder_ "Enter 8 digit password"
-              , class_ "pl-10 w-full px-3 py-3  bg-slate-50 text-slate-500 text-sm font-normal font-['Inter'] leading-snug border border-gray-300 rounded-xl shadow-sm placeholder-gray-400 focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+              , class_ "pl-10 w-full px-3 py-3  bg-slate-50 text-slate-500 text-sm font-normal font-['Inter'] leading-snug border border-slate-300 rounded-xl shadow-sm placeholder-slate-400 focus:outline-none focus:ring-blue-500 focus:border-blue-500"
               ]
 
             button_
@@ -342,24 +260,24 @@ renderLoginForm form validation = do
                 faSprite_ "eye-view" "regular" "h-5 w-5 text-slate-500"
 
           div_ [class_ "flex items-center justify-end pt-2"] $ do
-            a_ [href_ "#", class_ "text-sm text-gray-600 hover:text-gray-500 underline"] "Forgot Password"
+            a_ [href_ "#", class_ "text-sm text-slate-600 hover:text-slate-500 underline"] "Forgot Password"
 
         -- Sign In button
-        renderCustomButton POST "" "Sign In"
+        renderPrimaryButton POST "" "Sign In"
 
         -- Divider
         div_ [class_ "relative w-full py-1"] $ do
           div_ [class_ "absolute inset-0 flex items-center"]
-            $ div_ [class_ "w-full border-t border-gray-300"] mempty
+            $ div_ [class_ "w-full border-t border-slate-300"] mempty
           div_ [class_ "relative flex justify-center"]
-            $ span_ [class_ "bg-white px-2 py-2 bg-slate-50 text-sm text-gray-500 rounded-full border border-gray-300"] "OR"
+            $ span_ [class_ "bg-white px-2 py-2 bg-slate-50 text-sm text-slate-500 rounded-full border border-slate-300"] "OR"
 
         -- Social login buttons
         div_ [class_ "space-y-3"] $ do
           -- Google Login Button
           button_
             [ type_ "button"
-            , class_ "w-full py-2 px-4  py-3 border border-slate-300 shadow-sm bg-slate-50 rounded-2xl text-sm font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 flex items-center justify-center space-x-2"
+            , class_ "w-full py-2 px-4  py-3 border border-slate-300 shadow-sm bg-slate-50 rounded-2xl text-sm font-medium text-slate-700 hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 flex items-center justify-center space-x-2"
             ]
             $ do
               img_ [src_ "/public/assets/svgs/onboarding/google.svg", alt_ "Google", class_ "w-5 h-5"]
@@ -368,472 +286,516 @@ renderLoginForm form validation = do
           -- GitHub Login Button
           button_
             [ type_ "button"
-            , class_ "w-full py-2 px-4 py-3  border border-gray-300 shadow-sm bg-slate-50 rounded-2xl text-sm font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 flex items-center justify-center space-x-2"
+            , class_ "w-full py-2 px-4 py-3  border border-slate-300 shadow-sm bg-slate-50 rounded-2xl text-sm font-medium text-slate-700 hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 flex items-center justify-center space-x-2"
             ]
             $ do
               img_ [src_ "/public/assets/svgs/onboarding/github.svg", alt_ "Github", class_ "w-5 h-5"]
               span_ "Continue with GitHub"
 
 
-renderNotificationSettingsForm :: Html ()
-renderNotificationSettingsForm = do
-  -- Logo
-  div_ [class_ "text-2xl mb-4 m-4"]
-    $ img_ [src_ "/public/assets/svgs/logo_min.svg", alt_ ""]
-
-  div_ [class_ "max-w-md mx-auto"] $ do
-    -- Back button
-    renderBackButton "Back"
-
-    -- Main content
+renderUserFormPage :: ProfileForm -> FormValidationResult ProfileForm -> Html ()
+renderUserFormPage form validation = do
+  renderOnboardingWrapper Nothing $ do
     div_ [class_ "space-y-8"] $ do
-      div_ [class_ "w-[393px] text-slate-950 text-2xl font-semibold font-['Inter'] leading-10"] $ do
-        "How should we let you"
-        br_ []
-        "know when something"
-        br_ []
-        "goes wrong?"
+      renderFormQuestion "Tell us a little bit" (Just "about you") Nothing
 
-      div_ [class_ "space-y-4"] $ do
-        -- Slack connections section
-        div_ [class_ "space-y-4"] $ do
-          -- First Row
-          div_ [class_ "justify-between grid grid-cols-2 gap-3"] $ do
-            -- Left Connection
-            connectionBox_ False "slack"
-            -- Right Connection
-            connectionBox_ True "slack"
+      form_
+        [ class_ "space-y-4"
+        , hxPost_ "/onboarding/profile"
+        , hxSwap_ "outerHTML"
+        , hxTrigger_ "submit"
+        ]
+        $ do
+          div_ [class_ "grid grid-cols-2 gap-4"] $ do
+            renderInput
+              "First Name"
+              "profileFirstName"
+              "e.g Mike"
+              ""
+              False
 
-          -- Second Row
-          div_ [class_ "justify-between grid grid-cols-2 gap-3"] $ do
-            connectionBox_ False "slack"
-            connectionBox_ True "slack"
+            renderInput
+              "Last"
+              "profileLastName"
+              "E.g Abel"
+              ""
+              False
 
-          -- Phone Number Input
-          div_ [class_ "space-y-2"] $ do
-            p_ [class_ "text-gray-600"] "Notify phone number"
-            div_ [class_ "relative"] $ do
-              div_ [class_ "flex items-center w-full p-2 border-2 rounded-2xl shadow-sm"] $ do
-                button_ [class_ "flex items-center gap-1 text-gray-600"] $ do
-                  span_ [] "+234"
-                  faSprite_ "chevron-down" "regular" "h-5 w-5"
-                span_ [class_ "text-gray-400 mx-2"] "("
+          renderInput
+            "Company Name"
+            "profileCompanyName"
+            "Apple, Inc"
+            "user-circle"
+            False
+
+          renderSelect
+            "Company Size"
+            "profileCompanySize"
+            [ ("1-2", "1-2 employees")
+            , ("2-10", "2-10 employees")
+            , ("10-50", "10-50 employees")
+            , ("50+", "50+ employees")
+            ]
+
+          renderSelect
+            "Where did you hear about us?"
+            "profileReferralSource"
+            [ ("", "Select an option")
+            , ("google", "Google")
+            , ("social_media", "Social Media")
+            , ("friend", "Friend/Colleague")
+            ]
+
+          renderPrimaryButton POST "" "Proceed"
+
+
+renderNotificationSettingsFormPage :: NotificationSettings -> Html ()
+renderNotificationSettingsFormPage settings =
+  renderOnboardingWrapper Nothing $ do
+    -- Add Tagify CSS from CDN
+    link_ [rel_ "stylesheet", type_ "text/css", href_ "https://unpkg.com/@yaireo/tagify/dist/tagify.css"]
+
+    -- custom Tagify styles
+    style_ [type_ "text/css"] $ toHtmlRaw customTagifyStyles
+
+    div_ [class_ "space-y-8"] $ do
+      renderFormQuestion "How should we let you" (Just "know when something") (Just "goes wrong?")
+
+      form_
+        [ method_ "POST"
+        , action_ ""
+        , id_ "notification-settings"
+        ]
+        $ do
+          div_ [class_ "space-y-4"]
+            $ do
+              section_ [] $ do
+                h2_ [id_ "slack-section-title", class_ "sr-only"] "Slack Connections"
+                div_ [class_ "space-y-4"] $ do
+                  -- Each Row
+                  div_ [class_ "justify-between grid grid-cols-2 gap-3"] $ do
+                    connectionBox_ False "slack" "workspace-1"
+                    connectionBox_ True "slack" "workspace-2"
+
+                  -- Each Row
+                  div_ [class_ "justify-between grid grid-cols-2 gap-3"] $ do
+                    connectionBox_ False "slack" "workspace-3"
+                    connectionBox_ True "slack" "workspace-4"
+
+              -- Phone Number Input Section
+              section_ [] $ div_ [class_ "space-y-2"] $ do
+                label_
+                  [ id_ "phone-section-title"
+                  , class_ "text-[#475467] text-sm font-medium font-['Inter'] leading-snug"
+                  ]
+                  "Notify phone number"
+                div_ [class_ "relative"] $ do
+                  div_ [class_ "flex items-center w-full p-2 border px-3 py-2 rounded-xl"] $ do
+                    button_
+                      [ type_ "button"
+                      , class_ "flex items-center gap-1 text-slate-600"
+                      ]
+                      $ do
+                        span_ [class_ "text-slate-500 text-sm font-normal font-['Inter'] leading-snug"] "+234"
+                        faSprite_ "chevron-down" "regular" "h-3.5 w-3.5"
+                    span_ [class_ "text-slate-400 mx-2"] "("
+                    input_
+                      [ type_ "tel"
+                      , id_ "phone-input"
+                      , name_ "phone"
+                      , value_ (fromMaybe "" settings.notificationPhone)
+                      , class_ "flex-1 outline-none text-slate-700 bg-slate-50"
+                      , pattern_ "[0-9]{10}"
+                      , placeholder_ "Enter phone number"
+                      , required_ ""
+                      ]
+
+              -- Email notifications section
+              section_ [] $ div_ [class_ "space-y-2 h-32"] $ do
+                label_
+                  [ id_ "email-section-title"
+                  , class_ "block text-md text-slate-600"
+                  ]
+                  "Notify the following email addresses"
+                -- div_ [class_ "flex rounded-xl h-28"] $ do
                 input_
-                  [ type_ "tel"
-                  , class_ "flex-1 outline-none text-gray-700 bg-sl"
+                  [ type_ "text"
+                  , id_ "email-tags"
+                  , name_ "email-tags"
+                  , class_ "tagify-email w-full flex flex-wrap mb-4 bg-slate-50 flex rounded-xl"
+                  , placeholder_ "Add email addresses..."
+                  , value_ (T.intercalate "," settings.notificationEmails)
                   ]
 
-        -- Email notifications section
-        div_ [class_ "space-y-2"] $ do
-          label_ [class_ "block text-md text-gray-600"] "Notify the following email addresses"
-          div_ [class_ "p-2 border-2 rounded-xl"] $ do
-            div_ [class_ "flex flex-wrap gap-2 mb-4"] $ do
-              -- Email chips
-              emailChip_ "exodustimthy@gmail.com"
-              emailChip_ "exodustimthy@gmail.com"
-              emailChip_ "gethasalondarea..."
-              emailChip_ "gethasalondared@gmail.com"
-              emailChip_ "docterman223@gmail.com"
+          div_ [class_ ""] do renderPrimaryButton POST "" "Send test notifications"
+    -- Add Tagify script from CDN
+    script_ [src_ "https://unpkg.com/@yaireo/tagify"] ("" :: Text)
 
-            input_
-              [ type_ "email"
-              , placeholder_ "Add more emails..."
-              , class_ "w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm placeholder-gray-400 focus:outline-none focus:ring-blue-500 focus:border-blue-500"
-              ]
-
-      -- Send test notifications button
-      renderCustomButton POST "" "Send test notifications"
+    -- Initialize Tagify
+    script_ [] $ toHtmlRaw emailTagsScript
   where
-    -- Helper for connection boxes
-    connectionBox_ :: Bool -> Text -> Html ()
-    connectionBox_ isConnected serviceName =
-      div_ [class_ "flex-1 flex items-center justify-start px-3 py-1 border-2 rounded-xl"] $ do
+    connectionBox_ :: Bool -> Text -> Text -> Html ()
+    connectionBox_ isConnected serviceName workspaceId =
+      div_ [class_ "flex-1 px-3 py-2 bg-slate-50 rounded-xl border border-slate-300 justify-between items-center inline-flex"] $ do
         div_ [class_ "flex-1 flex"]
           $ div_ [class_ "flex items-center gap-1"]
           $ do
-            -- does fasprite have alt tags?
-            img_ [src_ "/api/placeholder/16/16", alt_ serviceName, class_ "w-4 h-4"]
-            span_ [class_ "text-gray-900 font-medium"] (toHtml serviceName)
+            img_
+              [ src_ "/public/assets/svgs/onboarding/slack.svg"
+              , alt_ (serviceName <> " icon")
+              , class_ "w-16 h-4"
+              ]
         div_ [class_ "flex-1 flex"] ""
         div_ [class_ "flex-1 flex"]
           $ if isConnected
             then
-              button_ []
-                $ span_ [class_ "px-2 py-1 text-white text-sm font-medium bg-green-500 rounded-lg"] "Connected"
-            else button_ [class_ "px-2 py-0 text-blue-600 text-sm font-medium border border-blue-600 rounded-lg hover:bg-blue-50"] "Connect"
+              button_
+                [ type_ "button"
+                , disabled_ ""
+                , class_ "px-2 py-1 text-white text-sm font-medium bg-green-500 rounded-lg"
+                ]
+                "Connected"
+            else
+              button_
+                [ type_ "button"
+                , class_ "px-2 py-0 text-blue-600 text-sm font-medium border border-blue-600 rounded-lg hover:bg-blue-50"
+                ]
+                "Connect"
 
-    -- Helper for email chips
-    emailChip_ :: Text -> Html ()
-    emailChip_ email =
-      div_ [class_ "flex bg-gray-200 rounded-full justify-around items-center"] $ do
-        span_ [class_ "px-1 text-xs"] (toHtml email)
-        faSprite_ "xmark" "regular" "w-4 h-4"
 
-
-renderUsageSelectionForm :: Html ()
-renderUsageSelectionForm = do
-  div_ [class_ "text-2xl mb-4 m-4"]
-    $ img_ [src_ "/public/assets/svgs/logo_min.svg", alt_ ""]
-
-  div_ [class_ "max-w-lg mx-auto p-6 pt-20"] $ do
-    -- Back button
-    renderBackButton "Back"
-
-    -- Main content
+renderUsageSelectionForm :: UsagePreferences -> Html ()
+renderUsageSelectionForm prefs = do
+  renderOnboardingWrapper Nothing $ do
     div_ [class_ "space-y-8"] $ do
-      h1_ [class_ "text-3xl font-normal"] $ do
-        "How would you like"
-        br_ []
-        "to use APIToolkit"
+      renderFormQuestion "How would you like" (Just "to use APIToolkit") Nothing
 
-      -- Selection grid
-      div_ [class_ "grid grid-cols-2 gap-4"] $ do
-        renderOptionBox "Uptime monitoring" "Check if your website works correctly"
-        renderOptionBox "Uptime monitoring" "Check if your website works correctly"
-        renderOptionBox "Uptime monitoring" "Check if your website works correctly"
-        renderOptionBox "Uptime monitoring" "Check if your website works correctly"
+      form_
+        [ method_ "POST"
+        , enctype_ "application/x-www-form-urlencoded"
+        , hxPost_ "/onboarding/usage"
+        , hxSwap_ "outerHTML"
+        , hxTrigger_ "submit"
+        ]
+        $ do
+          div_ [class_ "grid grid-cols-2 gap-4"] $ do
+            renderOptionBox
+              "uptimeMonitoring"
+              "Uptime monitoring"
+              "Check if your website works correctly"
+              (uptimeMonitoring prefs)
+            renderOptionBox
+              "errorTracking"
+              "Error Tracking"
+              "Track and analyze errors in your API"
+              (errorTracking prefs)
+            renderOptionBox
+              "performanceMonitoring"
+              "Performance monitoring"
+              "Monitor API performance metrics"
+              (performanceMonitoring prefs)
+            renderOptionBox
+              "securityTesting"
+              "Security Testing"
+              "Test API security and vulnerabilities"
+              (securityTesting prefs)
 
-      -- Proceed button
-      renderCustomButton POST "" "Proceed"
+          renderPrimaryButton POST "" "Proceed"
   where
-    renderOptionBox :: Text -> Text -> Html ()
-    renderOptionBox title description =
-      label_ [class_ "relative cursor-pointer"] $ do
-        input_ [type_ "checkbox", class_ "peer sr-only"]
-        div_ [class_ "p-4 pb-8 border rounded-lg hover:border-blue-500 peer-checked:border-blue-500 peer-checked:border-2"] $ do
-          div_ [class_ "flex justify-between items-start mb-2"] $ do
-            h3_ [class_ "font-medium"] (toHtml title)
-            div_ [class_ "w-5 h-5 border rounded-md peer-checked:bg-blue-500 peer-checked:border-blue-500"] ""
-          p_ [class_ "text-sm text-gray-600"] (toHtml description)
-
-
-renderUrlMonitorForm :: Html ()
-renderUrlMonitorForm = do
-  header_ [class_ "p-4"]
-    $ img_ [src_ "/public/assets/svgs/logo_min.svg", alt_ "APIToolkit Logo", class_ "h-8"]
-
-  main_ [class_ "max-w-3xl mx-auto p-6 pt-32"] $ do
-    -- Back Button
-    renderBackButton "Back"
-
-    h1_ [class_ "text-3xl mb-6 text-slate-950 font-semibold font-['Inter'] leading-10"] $ do
-      "Let's create your"
-      br_ []
-      "first URL Monitor"
-
-    form_ [class_ "space-y-6"] $ do
-      -- URL Input Section
-      div_ [class_ "space-y-4"] $ do
-        label_ [class_ "block text-sm font-medium text-gray-700"] "URL"
-        div_ [class_ "flex gap-2"] $ do
-          select_ [class_ "w-24 px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500"] $ do
-            option_ [] "Get"
-            option_ [] "Post"
-            option_ [] "Put"
-            option_ [] "Delete"
-          input_
-            [ type_ "url"
-            , value_ "https://jsonplaceholder.typicode.com/todos/1"
-            , class_ "flex-1 px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500"
+    renderOptionBox :: Text -> Text -> Text -> Bool -> Html ()
+    renderOptionBox name title description isChecked =
+      label_ [class_ "relative cursor-pointer h-full"] $ do
+        input_
+          $ [ type_ "checkbox"
+            , name_ name
+            , value_ "true"
+            , class_ "peer sr-only rounded border border-slate-300"
             ]
-
-      -- Advanced Options Section
-      section_ [class_ "space-y-4"] $ do
-        div_ [class_ "flex items-center gap-2"] $ do
-          span_ [class_ "text-sm font-medium text-gray-700"] "Advanced Options (0 configured)"
-          div_ [class_ "flex items-center justify-center w-5 h-5 rounded-full shadow-lg bg-[#067cff] gap-2.5"]
-            $ button_ [type_ "button", class_ "flex items-center rounded-full justify-center w-full h-full text-white"]
-            $ faSprite_ "chevron-down" "regular" "w-3 h-3"
-
-        renderRequestPanel
-
-      -- Test Request Button
-      renderCustomButton POST "" "Send"
-
-      renderResponseSection
-      renderAssertionsSection
-
-      -- Submit Button
-      renderCustomButton POST "" "Proceed"
-  where
-    renderRequestPanel =
-      div_ [class_ "border rounded-lg"] $ do
-        -- Tab Navigation
-        div_ [class_ "flex border-b"] $ do
-          button_ [class_ "px-4 py-2 text-sm font-medium text-gray-600 border-b-2 border-blue-500"] "Request Options"
-          button_ [class_ "px-4 py-2 text-sm font-medium text-gray-600"] "Request Body"
-
-        -- Request Headers
-        div_ [class_ "p-4"] $ do
-          h3_ [class_ "mb-3 text-sm font-medium text-gray-700"] "Request Headers"
-          div_ [class_ "flex gap-2 mb-4"] $ do
-            input_
-              [ type_ "text"
-              , placeholder_ "Key"
-              , class_ "flex-1 px-3 py-2 text-sm border border-gray-300 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500"
-              ]
-            input_
-              [ type_ "text"
-              , placeholder_ "Value"
-              , class_ "flex-[2] px-3 py-2 text-sm border border-gray-300 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500"
-              ]
-            div_ [class_ "flex items-center justify-center w-8 h-8 rounded-full border border-gray-200 shadow px-2"]
-              $ button_ [type_ "button", class_ "text-red-500 hover:text-red-600"]
-              $ faSprite_ "trash" "regular" "w-4 h-4"
-
-    renderResponseSection =
-      section_ [class_ "space-y-4"] $ do
-        div_ [class_ "text-sm text-gray-600"] "The request responded with a status of 200 and took 2304.00 ms"
-
-        div_ [class_ "border rounded-2xl"] $ do
-          -- Response Tabs
-          div_ [class_ "flex gap-6 border-b"] $ do
-            button_ [class_ "px-4 py-2 text-sm font-medium text-gray-600 border-b-2 border-blue-500"] "Response Headers"
-            button_ [class_ "px-4 py-2 text-sm font-medium text-gray-600"] "Response Body"
-            button_ [class_ "px-4 py-2 text-sm font-medium text-gray-600"] "Response Status Code"
-
-          -- Response Content
-          div_ [class_ "p-4"] $ do
-            div_ [class_ "space-y-2 text-sm text-gray-600"] $ do
-              div_ [class_ "flex items-center gap-0"] $ do
-                div_ [class_ "flex items-center justify-center w-8 h-8"]
-                  $ faSprite_ "circle-info" "regular" "w-4 h-4"
-                span_ [] "Click below to add as an assertion"
-
-              div_ []
-                $ mapM_
-                  renderResponseHeaderItem
-                  [ "cache-control: max-age=43200"
-                  , "content-type: application/json; charset=utf-8"
-                  , "expires: -1"
-                  , "pragma: no-cache"
-                  ]
-
-    renderResponseHeaderItem :: Text -> Html ()
-    renderResponseHeaderItem header =
-      div_ [class_ "flex items-center gap-2"] $ do
-        span_ [] (toHtml header)
-        div_ [class_ "flex items-center justify-center w-5 h-5 rounded-full border border-gray-200 shadow"]
-          $ button_ [class_ "text-gray-400 hover:text-gray-600"]
-          $ faSprite_ "plus" "regular" "w-3 h-3"
-
-    renderAssertionsSection =
-      section_ [class_ "space-y-4"] $ do
-        div_ [class_ "flex items-center justify-start gap-2"] $ do
-          span_ [class_ "text-sm font-medium text-gray-700"] "Add Assertion (Optional)"
-          div_ [class_ "flex items-center justify-center w-5 h-5 rounded-full shadow-lg"]
-            $ button_ [type_ "button", class_ "flex items-center rounded-full justify-center w-full h-full text-white bg-slate-500"]
-            $ faSprite_ "chevron-down" "regular" "w-3 h-3"
-
-        div_ [class_ "p-4 border rounded-2xl"] $ do
-          p_ [class_ "mb-4 text-sm text-gray-600"] "Your step is successful:"
-          div_ [class_ "flex items-center gap-2 mb-4"] $ do
-            span_ [] "When"
-            select_ [class_ "px-3 py-2 text-sm border border-gray-300 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500"] $ do
-              option_ [] "Status code"
-              option_ [] "Header"
-              option_ [] "Others"
-            select_ [class_ "px-3 py-2 text-sm border border-gray-300 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500"] $ do
-              option_ [] "less than"
-              option_ [] "equals to"
-              option_ [] "greater than"
-            input_ [type_ "text", class_ "flex-1 px-3 py-2 text-sm border border-gray-300 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500"]
-            span_ [class_ "inline-flex items-center px-3 py-0.5 text-sm font-medium text-green-800 bg-green-100 rounded-full"] "Passed"
-            div_ [class_ "flex items-center justify-center w-8 h-8 rounded-full border border-gray-200 shadow px-2"]
-              $ button_ [type_ "button", class_ "text-red-500 hover:text-red-600"]
-              $ faSprite_ "trash" "regular" "w-4 h-4"
-
-        button_
-          [ type_ "button"
-          , class_ "flex items-center px-4 py-2 hover:text-blue-700 rounded-lg border border-slate-500 justify-center gap-1 text-slate-500 text-sm font-medium font-['Inter'] leading-snug"
-          ]
-          $ do
-            faSprite_ "plus" "regular" "w-4 h-4 mr-1"
-            "New Assertion"
+          ++ [checked_ | isChecked]
+        div_ [class_ "h-full p-4 bg-slate-50 rounded-xl border border-slate-300 hover:border-blue-500 peer-checked:border-blue-500 peer-checked:border-2 flex flex-col"] $ do
+          div_ [class_ "flex justify-between items-start mb-2"] $ do
+            h3_ [class_ "text-black text-sm font-medium font-['Inter'] leading-snug"] (toHtml title)
+            div_ [class_ "w-5 h-5 border rounded-md peer-checked:bg-blue-500 peer-checked:border-blue-500"] ""
+          p_ [class_ "text-[#475467] text-xs font-normal font-['Inter'] leading-2"] (toHtml description)
 
 
-renderPricingPlan :: Html ()
-renderPricingPlan = do
-  div_ [class_ "text-2xl mb-4 m-4"]
-    $ img_ [src_ "/public/assets/svgs/logo_min.svg", alt_ ""]
-
-  div_ [class_ "max-w-md mx-auto p-6"] $ do
-    -- Back button
-    renderBackButton "Back"
-
-    -- Main content
+renderUrlMonitorFormPage :: Html ()
+renderUrlMonitorFormPage = do
+  renderOnboardingWrapper (Just "md:w-2/3 px-40") $ do
     div_ [class_ "space-y-8"] $ do
-      h1_ [class_ "text-3xl font-normal"] $ do
-        "Choose a plan for"
-        br_ []
-        "your team"
+      -- Question
+      renderFormQuestion "Let's create your" (Just "first URL Monitor") Nothing
 
-      -- Pricing section
-      div_ [class_ "rounded-xl border p-6 space-y-6"] $ do
-        h2_ [class_ "font-medium mb-4"] "Pay as you use"
-        div_ [class_ "space-y-2"] $ do
-          div_ [class_ "flex items-baseline"] $ do
-            span_ [class_ "text-3xl font-bold text-blue-600"] "$34"
-            span_ [class_ "text-gray-600 ml-2"] "/ 400k requests per month"
-          div_ [class_ "text-sm text-gray-500"] "then $1 per 20k requests"
+      -- Answer
+      form_
+        [ id_ "url_monitor_test_confirmation"
+        , enctype_ "application/x-www-form-urlencoded"
+        , hxPost_ "/onboarding/url-monitor"
+        , hxSwap_ "outerHTML"
+        , hxTrigger_ "submit"
+        ]
+        $ do
+          div_ [] $ do
+            -- Add hidden input for monitor_tested
+            input_ [type_ "hidden", name_ "monitor_tested", value_ "true"]
+            div_ [class_ "overflow-y-hidden flex-1 "] $ termRaw "assertion-builder" [id_ ""] ""
+            div_ [class_ "overflow-y-hidden flex-1 "] $ termRaw "steps-editor" [id_ "stepsEditor"] ""
 
-        -- Slider
-        div_ [class_ "mt-4"]
-          $ div_ [class_ "relative w-full h-2 bg-blue-100 rounded"]
-          $ do
-            div_ [class_ "absolute left-0 w-1/3 h-full bg-blue-500 rounded"] ""
-            div_ [class_ "absolute left-1/3 -translate-x-1/2 top-1/2 -translate-y-1/2 w-4 h-4 bg-blue-500 rounded-full cursor-pointer"] ""
+            script_ [src_ "/public/assets/testeditor-utils.js"] ("" :: Text)
+            script_ [type_ "module", src_ "/public/assets/steps-editor.js"] ("" :: Text)
+            script_ [type_ "module", src_ "/public/assets/steps-assertions.js"] ("" :: Text)
+            script_
+              [text|
 
-      -- Features section
-      div_ [class_ "rounded-xl border p-6 space-y-6"] $ do
-        h2_ [class_ "font-medium mb-4"] "Features"
-        ul_ [class_ "space-y-3"] $ do
-          renderFeature "Max Unlimited team members"
-          renderFeature "14 days data retention"
-          renderFeature "API testing pipelines"
-          renderFeature "API swagger/OpenAPI hosting"
-          renderFeature "API metrics custom monitors"
-          renderFeature "API live traffic AI-based validations"
+                function codeToggle(e) {
+                  if(e.target.checked) {
+                      window.updateEditorVal()
+                    }
+                }
+                function addToAssertions(event, assertion, operation) {
+                    const parent = event.target.closest(".tab-content")
+                    const step = Number(parent.getAttribute('data-step'));
+                    const target = event.target.parentNode.parentNode.parentNode
+                    const path = target.getAttribute('data-field-path');
+                    const value = target.getAttribute('data-field-value');
+                    let expression = "$.resp.json." + path
+                    if(operation) {
+                      expression +=  ' ' + operation + ' ' + value;
+                      }
+                    window.updateStepAssertions(assertion, expression, step);
+                }
 
-      -- Start Free Trial button
-      renderCustomButton POST "" "Start Free Trial"
-  where
-    renderFeature :: Text -> Html ()
-    renderFeature text =
-      li_ [class_ "flex items-center text-gray-700"] $ do
-        faSprite_ "circle-check" "solid" "w-5 h-5 mr-3 text-blue-500"
-        toHtml text
+            function saveStepData()  {
+              const data = document.getElementById('stepsEditor').collectionSteps
+              const parsedData = validateYaml(data)
+              if(parsedData === undefined) {
+                  return undefined
+                }
+              return parsedData;
+              }
+
+              function getTags() {
+                const tag = window.tagify.value
+                return tag.map(tag => tag.value);
+              }
+            |]
+            let res = toText "respJson" -- todo
+            script_
+              [text|
+                window.collectionResults = $res;
+                document.addEventListener('DOMContentLoaded', function(){{
+                    window.updateCollectionResults($res);
+                }})
+              |]
+
+          div_ [class_ "w-2/3 flex flex-start justify-start"]
+            $ renderPrimaryButton POST "" "Proceed"
 
 
-renderTeamInvite :: Html ()
-renderTeamInvite = do
-  div_ [class_ "text-2xl mb-4 m-4"]
-    $ img_ [src_ "/public/assets/svgs/logo_min.svg", alt_ ""]
-
-  div_ [class_ "max-w-lg mx-auto p-6"] $ do
-    -- Back button
-    renderBackButton "Back"
-
-    -- Main content
+renderPricingPlanPage :: PricingPlan -> Html ()
+renderPricingPlanPage plan =
+  renderOnboardingWrapper Nothing $ do
     div_ [class_ "space-y-8"] $ do
-      h1_ [class_ "text-3xl font-normal"] $ do
-        "Invite a team"
-        br_ []
-        "member"
+      renderFormQuestion "Choose a plan for" (Just "your team") Nothing
 
-      -- Invite form
-      div_ [class_ "space-y-6"] $ do
-        div_ [] $ do
-          label_ [class_ "block text-sm font-medium text-gray-600 mb-2"] "Add team members"
-          div_ [class_ "flex items-center gap-2 border border-gray-200 rounded-xl p-1"] $ do
-            input_
-              [ type_ "email"
-              , placeholder_ "exodustimothy@gmail.com"
-              , class_ "flex-1 px-4 py-2 text-gray-600 placeholder-gray-400 bg-transparent focus:outline-none"
-              ]
-            button_ [class_ "px-8 py-2 bg-blue-500 text-white text-sm font-medium rounded-lg hover:bg-blue-600 focus:outline-none"] "Add"
+      form_
+        [ hxPost_ "/onboarding/pricing"
+        , hxSwap_ "outerHTML"
+        ]
+        $ do
+          div_ [class_ "space-y-8"] $ do
+            input_ [type_ "hidden", name_ "planType", value_ "pay-as-you-go"]
 
-        hr_ []
+            div_ [class_ "rounded-xl border p-6 space-y-6"] $ do
+              h2_ [class_ "text-slate-950 text-sm font-medium font-['Inter'] leading-snug", id_ "pricing-section"] "Pay as you use"
+              div_ [class_ "space-y-2"] $ do
+                div_ [class_ "flex items-baseline"] $ do
+                  span_ [class_ "text-[#067cff] text-3xl font-semibold font-['Inter'] leading-8"] "$34/"
+                  span_ [class_ "text-slate-950 text-base font-medium font-['Inter'] leading-normal"]
+                    $ " "
+                    <> show (planRequestVolume plan)
+                    <> "k requests per month"
+                div_ [class_ "text-[#475467] text-xs font-medium font-['Inter'] leading-3"] "then $1 per 20k requests"
 
-        -- Team members list
-        div_ [class_ "space-y-1"] $ do
-          -- Render multiple team members
-          mapM_ renderTeamMember ["exodustimothy@gmail.com", "exodustimothy@gmail.com", "exodustimothy@gmail.com"]
+              div_ [class_ "mt-4"] $ do
+                label_ [Lucid.for_ "requestVolume"] "Select request volume"
+                div_ [class_ "flex items-center gap-4"] $ do
+                  input_
+                    [ type_ "range"
+                    , name_ "requestVolume"
+                    , class_ "w-full"
+                    , min_ "0"
+                    , max_ "1000000"
+                    , value_ (show $ planRequestVolume plan)
+                    , hxTrigger_ "input"
+                    , hxPost_ "/update-price"
+                    , hxTarget_ "#price-display"
+                    ]
 
-      -- Action buttons
-      div_ [class_ "space-y-4"] $ do
-        renderCustomButton POST "" "Proceed"
+            div_ [class_ "rounded-xl border p-6 space-y-6"] $ do
+              h2_ [class_ "text-slate-950 text-sm font-medium font-['Inter'] leading-snug", id_ "features-section"] "Features"
+              ul_ [class_ "space-y-3"] $ do
+                forM_ (planFeatures plan) renderPlanFeature
 
-        button_
-          [ type_ "button"
-          , class_ "w-full text-center text-gray-600 hover:text-gray-500 underline"
-          ]
-          "I'll invite colleagues later"
+            renderPrimaryButton POST "" "Start Free Trial"
   where
-    renderTeamMember :: Text -> Html ()
-    renderTeamMember email =
-      div_ [class_ "flex items-center gap-2 p-2"] $ do
-        div_ [class_ "flex-1"]
-          $ div_ [class_ "border border-gray-200 rounded-lg px-4 py-2"]
-          $ span_ [class_ "text-gray-600 text-sm"] (toHtml email)
-
-        select_ [class_ "text-gray-600 text-sm border border-gray-200 rounded-lg py-2 pl-4 pr-8 hover:border-gray-300 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"] $ do
-          option_ [] "Admin"
-          option_ [] "Member"
-          option_ [] "Viewer"
-
-        div_ [class_ "flex items-center justify-center w-8 h-8 rounded-full bg-gray-100 border border-gray-200 shadow px-2"]
-          $ button_ [type_ "button", class_ "text-red-500 hover:text-red-600"]
-          $ faSprite_ "trash" "regular" "w-4 h-4"
+    renderPlanFeature :: PlanFeature -> Html ()
+    renderPlanFeature feature =
+      li_ [class_ "flex items-center"] $ do
+        div_ [class_ "w-5 h-5 bg-blue-500 rounded-full mr-3 flex items-center justify-center"] $ do
+          img_ [src_ "/public/assets/svgs/onboarding/check.svg"]
+        p_ [class_ "text-[#475467] text-sm font-normal font-['Inter'] leading-snug"] $ do
+          toHtml $ case feature of
+            UnlimitedTeamMembers -> "Max Unlimited team members"
+            DataRetentionDays days -> show days <> " days data retention"
+            ApiTestingPipelines -> "API testing pipelines"
+            SwaggerHosting -> "API swagger/OpenAPI hosting"
+            CustomMonitors -> "API dmetrics custom monitors"
+            AIValidations -> "API live traffic AI-based validations"
 
 
-renderCheckInbox :: Html ()
-renderCheckInbox =
-  div_ [class_ "max-w-xs mx-auto p-6 text-start my-3 pt-40"] $ do
+renderTeamInvitePage :: TeamInvitationList -> Html ()
+renderTeamInvitePage (TeamInvitationList members) =
+  renderOnboardingWrapper Nothing $ do
+    div_ [class_ "space-y-8"] $ do
+      renderFormQuestion "Invite your team" (Just "Member") Nothing
+
+      form_
+        [ id_ "team-invite-form"
+        , enctype_ "application/x-www-form-urlencoded"
+        , hxPost_ "/onboarding/team"
+        , hxSwap_ "outerHTML"
+        , hxTrigger_ "submit"
+        ]
+        $ do
+          div_ [class_ "space-y-8"] $ do
+            div_ [class_ "space-y-6"] $ do
+              div_ [] $ do
+                label_ [class_ "text-slate-950 text-sm font-medium font-['Inter'] leading-snug"] "Add team members"
+                div_ [class_ "flex items-center gap-2 border border-slate-200 rounded-xl p-1"] $ do
+                  input_
+                    [ type_ "email"
+                    , name_ "new-email"
+                    , placeholder_ "exodustimothy@gmail.com"
+                    , class_ "flex-1 px-4 py-2 text-slate-600 text-[#475467] text-sm font-normal font-['Inter'] leading-snug placeholder-slate-600 bg-transparent focus:outline-none"
+                    ]
+                  button_
+                    [ class_ "px-6 py-2 bg-blue-500 text-white text-sm font-medium rounded-lg hover:bg-blue-600 focus:outline-none"
+                    , type_ "button"
+                    , hxTrigger_ "click"
+                    , hxTarget_ "#team-members-list"
+                    , hxSwap_ "beforeend"
+                    ]
+                    "Add"
+
+              hr_ []
+
+              -- Hidden template for new members
+              template_ [id_ "member-template"] $ renderTeamMember def
+
+              -- Team members list
+              div_ [id_ "team-members-list", class_ "space-y-1"] $ do
+                forM_ members renderTeamMember
+
+            div_ [class_ "space-y-4"] $ do
+              renderPrimaryButton POST "" "Proceed"
+              renderSecondaryButton "" "I'll invite colleagues later"
+
+
+renderTeamMember :: TeamMember -> Html ()
+renderTeamMember member =
+  div_
+    [ class_ "flex items-center gap-2 member-row"
+    ]
+    $ do
+      div_ [class_ "flex-1"]
+        $ div_ [class_ "border border-slate-200 rounded-lg px-4 py-2"]
+        $ do
+          input_
+            [ type_ "hidden"
+            , name_ "members[]"
+            , value_ member.memberEmail
+            , class_ "member-email"
+            ]
+          span_ [class_ "text-slate-600 text-sm"] (toHtml member.memberEmail)
+
+      _ <- select_
+        [ class_ "text-slate-600 text-sm border border-slate-200 rounded-lg py-2 pl-4 shadow pr-8 hover:border-slate-300 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+        , name_ "roles[]"
+        ]
+        $ do
+          option_ ([selected_ "" | member.memberRole == Admin]) "Admin"
+          option_ ([selected_ "" | member.memberRole == Member]) "Member"
+          option_ ([selected_ "" | member.memberRole == Viewer]) "Viewer"
+
+      div_ [class_ "flex items-center justify-center w-8 h-8 rounded-full bg-white border border-slate-200 shadow px-2"]
+        $ button_
+          [ type_ "button"
+          , class_ "text-red-500 hover:text-red-600"
+          , hxTrigger_ "click"
+          , hxSwap_ "outerHTML"
+          , hxTarget_ "closest .member-row"
+          ]
+        $ do
+          img_ [src_ "/public/assets/svgs/onboarding/trash.svg", alt_ "delete"]
+
+
+renderCheckInboxPage :: Html ()
+renderCheckInboxPage =
+  div_ [class_ "max-w-md mx-auto p-6 text-start my-3 pt-40"] $ do
     -- Logo
-    div_ [class_ "text-2xl mb-4 "]
-      $ img_ [src_ "/public/assets/svgs/logo_min.svg", alt_ ""]
+    div_ [class_ "text-3xl mb-4 "]
+      $ img_ [src_ "/public/assets/svgs/logo_min.svg", alt_ "APIToolkit Mini Logo"]
 
     -- Header
-    h1_ [class_ "text-slate-950 text-3xl font-semibold font-['Inter'] leading-10 pb-8"] "Check your inbox"
+    renderFormQuestion "Check your inbox" Nothing Nothing
 
     -- Email clients
-    div_ [class_ "flex justify-between gap-6 mb-8"] $ do
+    div_ [class_ "flex justify-start gap-3 mt-8 mb-8"] $ do
       renderEmailClient "https://gmail.com" "gmail.svg" "Gmail"
       renderEmailClient "https://outlook.com" "outlook.svg" "Outlook"
       renderEmailClient "https://superhuman.com/" "super_human.svg" "Superhuman"
 
     -- Help text
-    p_ [class_ "text-gray-600 text-sm"] $ do
+    p_ [class_ "text-[#475467] text-sm font-medium font-['Inter'] leading-5"] $ do
       "Can't see the e-mail? Please check the"
       br_ []
       "spam folder. Wrong e-mail? "
-      a_ [href_ "#", class_ "text-blue-600 hover:text-blue-700 underline"] "Change"
+      a_ [href_ "#", class_ "text-[#067cff] text-sm font-medium font-['Inter'] underline leading-5 hover:text-blue-700 underline"] "Change"
   where
     renderEmailClient :: Text -> Text -> Text -> Html ()
     renderEmailClient url icon alt =
       a_
         [ href_ url
-        , class_ "p-6 border rounded-2xl hover:border-blue-500 transition-colors duration-200 shadow-sm"
+        , class_ "p-6 border rounded-2xl hover:border-blue-500 transition-colors duration-200"
         ]
         $ img_ [src_ ("/public/assets/svgs/onboarding/" <> icon), alt_ alt]
 
 
-renderDataLocationSelect :: Html ()
-renderDataLocationSelect = do
-  div_ [class_ "text-2xl mb-4 m-4"]
-    $ img_ [src_ "/public/assets/svgs/logo_min.svg", alt_ ""]
-
-  div_ [class_ "max-w-md mx-auto p-6 pt-40"] $ do
-    -- Back button
-    renderBackButton "Back"
-
-    -- Main content
+renderDataLocationSelectPage :: HostingLocation -> Html ()
+renderDataLocationSelectPage location = do
+  renderOnboardingWrapper Nothing $ do
     div_ [class_ "space-y-8"] $ do
-      h1_ [class_ "text-slate-950 text-2xl font-semibold font-['Inter'] leading-[33px]"] $ do
-        "Where should your"
-        br_ []
-        "data be hosted?"
+      renderFormQuestion "Where should your" (Just "data be hosted?") Nothing
 
       form_
-        [ class_ "space-y-2"
+        [ class_ "space-y-4"
         , hxPost_ "/onboarding/hosting"
         , id_ "pick_data_center_form"
         , hxSwap_ "outerHTML"
         , hxTrigger_ "submit"
+        , method_ "POST"
+        , enctype_ "application/x-www-form-urlencoded"
         ]
         $ do
-          -- Location options
-          renderLocation "Europe (EU)" True
-          renderLocation "United State (US)" False
-          renderLocation "Asia" False
+          renderLocation "Europe (EU)" (location == Europe)
+          renderLocation "United State (US)" (location == UnitedStates)
+          renderLocation "Asia" (location == Asia)
 
-      -- Proceed button
-      renderCustomButton POST "" "Proceed"
+          renderPrimaryButton POST "" "Proceed"
   where
     renderLocation :: Text -> Bool -> Html ()
     renderLocation name isChecked = do
-      label_ [class_ "relative block cursor-pointer"] $ do
+      label_ [class_ "relative block cursor-pointer rounded-xl"] $ do
         input_
           ( [ type_ "radio"
             , name_ "location"
@@ -847,7 +809,7 @@ renderDataLocationSelect = do
           div_
             [ class_
                 $ "w-6 h-6 border-2 rounded-full flex items-center justify-center "
-                <> (if isChecked then "border-blue-500" else "border-gray-200")
+                <> (if isChecked then "border-blue-500" else "border-slate-200")
             ]
             $ do
               div_
@@ -858,36 +820,28 @@ renderDataLocationSelect = do
                 mempty
 
 
-renderNotificationSent :: Html ()
-renderNotificationSent = do
+renderNotificationSentPage :: Html ()
+renderNotificationSentPage = do
   div_ [class_ "max-w-md mx-auto p-auto pt-40"] $ do
     -- Back button
     renderBackButton "Back"
 
     -- Main content
-    div_ [class_ "text-start space-y-8"] $ do
-      div_ [class_ "text-slate-950 text-2xl font-semibold font-['Inter'] leading-10"] $ do
-        "Test notification sent"
-        br_ []
-        "to configured channels"
+    renderFormQuestion "Test notification sent" (Just "to configured channels") Nothing
 
-      -- Paper plane image
-      div_ [class_ "flex justify-center py-12"]
-        $ img_ [src_ "/public/assets/svgs/onboarding/sent.svg", alt_ "Notification sent"]
+    -- Paper plane image
+    div_ [class_ "flex justify-center py-12"]
+      $ img_ [src_ "/public/assets/svgs/onboarding/sent.svg", alt_ "Notification sent"]
 
-      -- Action buttons
-      div_ [class_ "space-y-4"] $ do
-        renderCustomButton POST "" "Confirmed"
+    -- Action buttons
+    div_ [class_ "space-y-6"] $ do
+      renderPrimaryButton POST "" "Confirmed"
 
-        a_
-          [ href_ "#"
-          , class_ "block text-center text-gray-600 hover:text-gray-500 underline"
-          ]
-          "Back to notification channels"
+      renderSecondaryButton "/onboarding/notifications" "Back to notification channels"
 
 
-renderFrameworkIntegration :: Html ()
-renderFrameworkIntegration =
+renderFrameworkIntegrationPage :: FrameworkIntegration -> Html ()
+renderFrameworkIntegrationPage integration =
   div_ [class_ "max-w-7xl mx-auto p-6 pt-40 flex"]
     $ div_ [class_ "grid grid-cols-6  items-start"]
     $ do
@@ -895,11 +849,12 @@ renderFrameworkIntegration =
       div_ [class_ "col-span-2 space-y-6"] $ do
         renderBackButton "Back"
         renderTitle
-        renderInfoMessage
+        renderInfoMessage "Integrate at least one service to proceed (dev/local instance is sufficient)."
         renderSearchBox
         renderFrameworksList
         renderActionButtons
 
+      -- Separating Column
       div_ [class_ "col-span-1"] ""
 
       -- Right Column
@@ -911,56 +866,25 @@ renderFrameworkIntegration =
         renderConfigSection
   where
     renderTitle =
-      h1_ [class_ "self-stretch text-slate-950 text-2xl font-semibold font-['Inter'] leading-10"] $ do
-        "What language/"
-        br_ []
-        "frameworks will you be"
-        br_ []
-        "integrating?"
-
-    renderInfoMessage =
-      div_ [class_ "flex items-start space-x-2 text-sm text-gray-600 border p-5 bg-slate-100 rounded-2xl justify-start gap-2"] $ do
-        faSprite_ "circle-info" "regular" "w-5 h-5 text-gray-400 mt-0.5"
-        div_
-          [class_ "text-slate-500 text-sm font-medium font-['Inter'] leading-snug"]
-          "Integrate at least one service to proceed (dev/local instance is sufficient)."
+      renderFormQuestion "What language/" (Just "frameworks will you be") (Just "integrating?")
 
     renderSearchBox =
       div_ [class_ "relative w-full flex flex-col justify-between items-start"] $ do
         div_ [class_ "absolute inset-y-0 left-4 flex items-center pointer-events-none px-4"]
-          $ faSprite_ "magnifying-glass" "regular" "h-5 w-5 text-gray-400 p-3"
+          $ faSprite_ "magnifying-glass" "regular" "h-5 w-5 text-slate-400 p-3"
         input_
           [ type_ "search"
           , placeholder_ "Search language/framework"
-          , class_ "w-full pl-12 pr-4 py-2 bg-slate-50 border-slate-300 border-2 rounded-2xl shadow-sm placeholde-slate-500 font-normal font-['Inter'] leading-snug focus:outline-none focus:ring-2 focus:ring-blue-100 focus:border-blue-200 text-lg text-gray-600"
+          , class_ "w-full pl-12 pr-4 py-2 bg-slate-50 border-slate-300 border-2 rounded-2xl shadow-sm placeholde-slate-500 font-normal font-['Inter'] leading-snug focus:outline-none focus:ring-2 focus:ring-blue-100 focus:border-blue-200 text-lg text-slate-600"
           ]
 
     renderFrameworksList =
-      div_ [class_ "space-y-1 h-96 overflow-y-auto scrollbar-thin scrollbar-thumb-gray-300 scrollbar-track-gray-100 hover:scrollbar-thumb-gray-400"] $ do
-        renderFrameworkItem "Go" "go_logo.svg" "Native" True
-        renderFrameworkItem "JS" "angular_logo.svg" "Angular" False
-        renderFrameworkItem "JS" "angular_logo.svg" "Angular" False
-
-    renderFrameworkItem :: Text -> Text -> Text -> Bool -> Html ()
-    renderFrameworkItem lang logo framework isHighlighted =
-      div_ [class_ "flex items-center justify-between p-3"] $ do
-        _ <- div_ [class_ "flex items-center space-x-3"] $ do
-          _ <- input_ [type_ "checkbox", name_ lang, class_ "w-4 h-4 rounded border border-slate-300"]
-          _ <-
-            div_ [class_ "bg-slate-200 border rounded-lg p-1"]
-              $ img_ [src_ ("/public/assets/svgs/onboarding/" <> logo), alt_ lang, class_ "w-6 h-6"]
-          div_ [] $ do
-            _ <- span_ [class_ txtColor] (toHtml lang)
-            _ <- span_ [class_ $ txtColor <> " mx-2"] "›"
-            span_ [class_ txtColor] (toHtml framework)
-        button_
-          [class_ "text-sm hover:bg-gray-50 h-6 px-2 py-md rounded-lg border border-slate-500 justify-center items-center gap-1"]
-          "View doc"
-      where
-        txtColor =
-          if isHighlighted
-            then "text-[#067cff] text-sm font-medium font-['Inter'] leading-snug"
-            else "text-slate-500 text-sm font-medium font-['Inter'] leading-snug"
+      div_ [class_ "space-y-1 h-96 overflow-y-auto scrollbar-thin scrollbar-thumb-slate-300 scrollbar-track-slate-100 hover:scrollbar-thumb-slate-400"] $ do
+        -- Using the integration value to highlight selected framework
+        let isSelected fw = integration.framework == fw
+        renderFrameworkItem "Go" "go_logo.svg" "Native" (isSelected Native)
+        renderFrameworkItem "JS" "angular_logo.svg" "Express" (isSelected Express)
+        renderFrameworkItem "Python" "django_logo.svg" "Django" (isSelected Django)
 
     renderActionButtons =
       div_ [] $ do
@@ -968,7 +892,7 @@ renderFrameworkIntegration =
           [class_ "text-slate-500 text-xs font-medium font-['Inter'] leading-none"]
           "This button below will check if APItoolkit has received telemetry data from the integration."
         div_ [class_ "space-y-4 pt-4"] $ do
-          renderCustomButton POST "" "Confirm Integration and Proceed"
+          renderPrimaryButton POST "" "Confirm Integration and Proceed"
           div_
             [class_ "text-center"]
             $ do
@@ -979,21 +903,47 @@ renderFrameworkIntegration =
                 ]
                 "Skip integration"
 
+    renderFrameworkItem :: Text -> Text -> Text -> Bool -> Html ()
+    renderFrameworkItem lang logo framework isHighlighted =
+      div_ [class_ "flex items-center justify-between p-3"] $ do
+        div_ [class_ "flex items-center space-x-3"] $ do
+          input_
+            ( [ type_ "checkbox"
+              , name_ lang
+              , class_ "w-4 h-4 rounded border border-slate-300"
+              -- ,
+              ]
+                ++ ([checked_ | isHighlighted])
+            )
+          div_ [class_ "bg-slate-200 border rounded-lg p-1"]
+            $ img_ [src_ ("/public/assets/svgs/onboarding/" <> logo), alt_ lang, class_ "w-6 h-6"]
+          div_ [] $ do
+            span_ [class_ txtColor] (toHtml lang)
+            span_ [class_ $ txtColor <> " mx-2 w-4 h-4"] "›"
+            span_ [class_ $ txtColor <> if isHighlighted then mempty else " text-black"] (toHtml framework)
+        if not isHighlighted
+          then button_ [class_ "text-sm hover:bg-slate-50 h-6 px-2 py-md rounded-lg border border-slate-500 justify-center items-center gap-1"] "View doc"
+          else span_ [] mempty
+      where
+        txtColor =
+          if isHighlighted
+            then "text-[#067cff] text-sm font-medium font-['Inter'] leading-snug"
+            else "text-[#475467] text-sm font-medium font-['Inter'] leading-snug"
     renderTabs =
       div_ [class_ "flex space-x-6 border-b"] $ do
         button_ [class_ "px-1 py-2 border-b-2 border-blue-600 text-blue-600"] "Request monitoring"
-        button_ [class_ "px-1 py-2 text-gray-500 hover:text-gray-700"] "Error Reporting"
-        button_ [class_ "px-1 py-2 text-gray-500 hover:text-gray-700"] "Outgoing request monitoring"
+        button_ [class_ "px-1 py-2 text-slate-500 hover:text-slate-700"] "Error Reporting"
+        button_ [class_ "px-1 py-2 text-slate-500 hover:text-slate-700"] "Outgoing request monitoring"
 
     renderConfigSection =
       div_ [class_ "col-span-3 space-y-4 pl-5"] $ do
         h2_ [class_ "text-lg font-semibold"] "Configure Express SDK"
-        p_ [class_ "text-gray-600"] "Install the APItoolkit express SDK using npm/bun/pnpm"
+        p_ [class_ "text-slate-600"] "Install the APItoolkit express SDK using npm/bun/pnpm"
 
         -- Installation command
         div_ [class_ "p-3 flex justify-start w-full h-10 px-3 py-2 bg-slate-100 rounded-xl items-center gap-2"] $ do
-          code_ [class_ "text-sm text-gray-700"] "$ npm install apitoolkit-express"
-          button_ [class_ "text-gray-400 hover:text-gray-600"]
+          code_ [class_ "text-sm text-slate-700"] "$ npm install apitoolkit-express"
+          button_ [class_ "text-slate-400 hover:text-slate-600"]
             $ faSprite_ "copy" "regular" "w-4 h-4"
 
         -- Code example
@@ -1001,7 +951,7 @@ renderFrameworkIntegration =
           pre_ [class_ "text-slate-500 text-sm font-medium font-['Inter'] leading-snug bg-slate-100"]
             $ code_ []
             $ toHtml expressExample
-          button_ [class_ "text-gray-400 hover:text-gray-600 bg-slate-100"]
+          button_ [class_ "text-slate-400 hover:text-slate-600 bg-slate-100"]
             $ faSprite_ "copy" "regular" "w-4 h-4"
 
         div_ [class_ "space-y-2 w-full"] $ do
@@ -1037,31 +987,3 @@ renderFrameworkIntegration =
         , "  console.log(`Example app listening on port ${port}`);"
         , "});"
         ]
-
-
--- -- Reusable Components --
-renderBackButton :: Text -> Html ()
-renderBackButton label = do
-  button_ [class_ "flex items-center gap-2 mb-8 group", onclick_ "history.back()"] $ do
-    div_ [class_ "w-8 h-8 flex items-center justify-center bg-blue-500 rounded-full"]
-      $ faSprite_ "chevron-left" "regular" "w-3 h-3 text-white"
-    span_ [class_ "text-gray-600 text-lg"] (toHtml label)
-
-
-renderCustomButton :: HTTPMethod -> Text -> Text -> Html ()
-renderCustomButton method url label = do
-  button_
-    [ type_ "button"
-    , class_ "w-full px-6 py-4 border-2 border-transparent bg-gradient-to-b from-[#256bf6] to-[#1055de] rounded-2xl shadow-inner justify-center items-center gap-2.5 inline-flex hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 mt-8"
-    , customMethodAttribute method url
-    ]
-    $ do
-      span_ [class_ "text-white text-sm font-medium font-['Inter'] leading-snug"] (toHtml label)
-
-
--- Helper function to select the appropriate HTMX attribute based on HTTP method
-customMethodAttribute :: HTTPMethod -> Text -> Attribute
-customMethodAttribute GET url = hxGet_ url
-customMethodAttribute POST url = hxPost_ url
-customMethodAttribute PUT url = hxPut_ url
-customMethodAttribute DELETE url = hxDelete_ url

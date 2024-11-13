@@ -14,6 +14,7 @@ module Models.Users.Sessions (
   getSession,
   insertSession,
   deleteSession,
+  updateSession,
   getPersistentSession,
   lookup,
   newPersistentSessionId,
@@ -126,6 +127,15 @@ insertSession pid userId sessionData = void <$> dbtToEff $ DBT.execute Insert q 
   where
     q = [sql| insert into users.persistent_sessions(id, user_id, session_data) VALUES (?, ?, ?) |]
 
+
+-- daniel
+updateSession :: DB :> es => PersistentSessionId -> UserId -> SessionData -> Eff es ()
+updateSession pid userId sessionData = void <$> dbtToEff $ DBT.execute Update q (sessionData, pid)
+  where
+    q = [sql| UPDATE users.persistent_sessions SET session_data = ? WHERE id = ? |]
+
+
+-- end
 
 deleteSession :: PersistentSessionId -> DBT IO ()
 deleteSession sessionId = delete @PersistentSession (Only sessionId)
