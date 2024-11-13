@@ -226,7 +226,7 @@ sendTestFailedAlert pid col_id collection stepResult = do
     sbjt = collection.title <> ": " <> if collection.alertSubject == "" then "API Test Failed" else collection.alertSubject
     (Testing.CollectionSteps colStepsV) = collection.collectionSteps
     failedSteps = Testing.getCollectionFailedSteps colStepsV stepResult
-    msg' = "Failing steps: \n" <> (unwords $ V.toList $ V.catMaybes $ V.map (\(s, rs) -> s.title) failedSteps)
+    msg' = "Failing steps: \n" <> unwords (V.toList $ V.catMaybes $ V.map (\(s, rs) -> s.title) failedSteps)
     msg = if collection.alertMessage == "" then msg' else collection.alertMessage
   users <- dbtToEff $ Projects.usersByProjectId pid
   forM_ users \user -> do

@@ -27,7 +27,7 @@ import System.Types (ATBackgroundCtx)
 sendPostmarkEmail :: Text -> Maybe (Text, AE.Value) -> Maybe (Text, Text) -> ATBackgroundCtx ()
 sendPostmarkEmail reciever tmpOptionsM subMsg = do
   appCtx <- ask @Config.AuthContext
-  let url = "https://api.postmarkapp.com/email/withTemplate"
+  let url = if isJust tmpOptionsM then "https://api.postmarkapp.com/email/withTemplate" else "https://api.postmarkapp.com/email"
   let apiKey = encodeUtf8 appCtx.config.postmarkToken
   let (subject, message) = fromMaybe ("", "") subMsg
   let payload = case tmpOptionsM of
@@ -46,10 +46,11 @@ sendPostmarkEmail reciever tmpOptionsM subMsg = do
         "From": "hello@apitoolkit.io",
         "Subject": #{subject},
         "To": #{reciever},
-        "TextBody": #{message}
+        "TextBody": #{message},
+        "HtmlBody": "<p>#{message}</p>",
+        "MessageStream": "outbound"
             }
         |]
-
   let opts = defaults & header "Content-Type" .~ ["application/json"] & header "Accept" .~ ["application/json"] & header "X-Postmark-Server-Token" .~ [apiKey]
   response <- liftIO $ postWith opts url payload
   pass
