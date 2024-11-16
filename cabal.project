@@ -1,6 +1,6 @@
 packages: . ./rust-interop ./otlp
-with-compiler: ghc-9.8.2
-import: https://www.stackage.org/nightly-2024-08-23/cabal.config
+with-compiler: ghc-9.8.3
+import: https://www.stackage.org/nightly-2024-11-12/cabal.config
 
 source-repository-package
   type: git

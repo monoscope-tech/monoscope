@@ -1,4 +1,4 @@
-import { LitElement, html, ref, createRef } from 'https://cdn.jsdelivr.net/gh/lit/dist@3/all/lit-all.min.js'
+import { LitElement, html, ref } from 'https://cdn.jsdelivr.net/gh/lit/dist@3/all/lit-all.min.js'
 import jsonpath from './js/thirdparty/jsonpath.js'
 const httpStatusCodes = [
   // 1xx Informational
@@ -8,9 +8,7 @@ const httpStatusCodes = [
   // 3xx Redirection
   300, 301, 302, 303, 304, 305, 307, 308,
   // 4xx Client Errors
-  400, 401, 402, 403, 404, 405, 406, 407, 408, 409, 410,
-  411, 412, 413, 414, 415, 416, 417, 418, 421, 422, 423,
-  424, 425, 426, 428, 429, 431, 451,
+  400, 401, 402, 403, 404, 405, 406, 407, 408, 409, 410, 411, 412, 413, 414, 415, 416, 417, 418, 421, 422, 423, 424, 425, 426, 428, 429, 431, 451,
   // 5xx Server Errors
   500, 501, 502, 503, 504, 505, 506, 507, 508, 510, 511
 ];
@@ -39,6 +37,9 @@ const OPERATORS = new Proxy({
 }, { get: (t, p) => t[p] ?? p });
 
 class SuggestionService {
+  static properties = {projectid: { type: String }}
+  constructor(projectid) {this.projectid = projectid}
+
   parseInput = input => {
     input = String(input);
     const patterns = [
@@ -57,7 +58,7 @@ class SuggestionService {
 
   async fetchAutocomplete(category, prefix) {
     try {
-      const response = await fetch(`/p/e3754fd3-565b-4be5-9428-f890f9cc9237/query_builder/autocomplete?category=${category}&prefix=${prefix}`);
+      const response = await fetch(`/p/${this.projectid}/query_builder/autocomplete?category=${category}&prefix=${prefix}`);
       return response.ok ? await response.json() : [];
     } catch (error) {
       console.error('Autocomplete fetch error:', error);
@@ -89,7 +90,6 @@ class SuggestionService {
     const suggestions = field && AUTOCOMPLETE_SUPPORTED_FIELDS.includes(baseField) ?
       await this.fetchAutocomplete(baseField, field === baseField ? '' : field.split('.').slice(1).join('.')) : [];
     const fieldSchema = REQ_SCHEMA.find(([f]) => f === baseField);
-    const [_, op, value] = this.parseInput(input);
     const validOps = fieldSchema?.[1] ?? STRING_OPERATORS;
     return {
       qs: {
@@ -109,9 +109,7 @@ class SuggestionService {
         await this.fetchAutocomplete(baseField, value.split('.').slice(1).join('.')) : [];
       return { qs: { input: value, field: value, op: null }, suggestions };
     }
-    if (type === 'value') {
-      return { newNode: { tag: OPERATORS[currentQs.op] || 'Eq', contents: [currentQs.field, value] } };
-    }
+    if (type === 'value') return { newNode: { tag: OPERATORS[currentQs.op] || 'Eq', contents: [currentQs.field, value] } };
     return { qs: { input: `${currentQs.field}${value}`, field: currentQs.field, op: value } };
   }
 
@@ -127,6 +125,7 @@ class SuggestionService {
 
 export class QueryInputElement extends LitElement {
   static properties = {
+    projectid: {type: String},
     suggestions: { type: Array },
     selected: { type: Number },
     qs: { type: Object },
@@ -136,42 +135,12 @@ export class QueryInputElement extends LitElement {
 
   constructor() {
     super();
-    this.suggestionService = new SuggestionService();
+    this.suggestionService = new SuggestionService(this.projectid);
     this.qs = {};
     this.selected = 0;
     this.suggestions = [];
   }
 
-
-  async #updateStateFromInputx(input) {
-    const [field] = this.suggestionService.parseInput(input);
-    const baseField = field?.split('.')?.[0];
-
-    if (field && AUTOCOMPLETE_SUPPORTED_FIELDS.includes(baseField)) {
-      if (field === baseField) {
-        this.suggestions = await this.suggestionService.fetchAutocomplete(baseField, '');
-      } else {
-        const pathParts = field.split('.');
-        const prefix = pathParts.slice(1).join('.');
-        this.suggestions = await this.suggestionService.fetchAutocomplete(baseField, prefix);
-      }
-    } else {
-      this.suggestions = [];
-    }
-
-    const fieldSchema = REQ_SCHEMA.find(([f]) => f === baseField);
-    const [_, op, value] = this.suggestionService.parseInput(input);
-    const validOps = fieldSchema?.[1] ?? STRING_OPERATORS;
-
-    this.qs = { input, field: fieldSchema ? field : null, op: null };
-    if (this.qs.field && validOps.some(validOp => input.includes(validOp))) {
-      this.qs.op = validOps.find(validOp => input.includes(validOp));
-    }
-
-    this.selected = 0;
-    this.requestUpdate();
-    this.dispatchEvent(new CustomEvent('query-state-change', { detail: this.qs }));
-  }
 
   async #updateStateFromInput(input) {
     const { qs, suggestions } = await this.suggestionService.updateStateFromInput(input);
@@ -236,16 +205,13 @@ export class QueryInputElement extends LitElement {
       this.dispatchEvent(new CustomEvent('update-query', { detail }));
     } else {
       const result = await this.suggestionService.handleSelection(type, value, this.qs);
-
       if (result.qs) {
         this.qs = result.qs;
       }
       if (result.suggestions !== undefined) {
         this.suggestions = result.suggestions;
       }
-      if (result.newNode) {
-        this.dispatchEvent(new CustomEvent('add-query', { detail: result.newNode }));
-      }
+      if (result.newNode) this.dispatchEvent(new CustomEvent('add-query', { detail: result.newNode }))
     }
 
     this.selected = 0;
@@ -253,8 +219,7 @@ export class QueryInputElement extends LitElement {
   };
   render() {
     const list = this.#getCurrentList();
-    const [parsedField, parsedOp] = this.suggestionService.parseInput((this.editContext?.currentValue || this.qs?.input) ?? '');
-    const baseField = (this.editContext ? this.editContext?.exprParts?.field : parsedField?.split('.')?.[0]) ?? '';
+    const [parsedField, _parsedOp] = this.suggestionService.parseInput((this.editContext?.currentValue || this.qs?.input) ?? '');
     const isValid = this.editContext || !parsedField || (REQ_SCHEMA.some(([f]) => parsedField.startsWith(f)));
     const selectionType = this.editContext?.editType || (!this.qs.field ? 'field' : !this.qs.op ? 'op' : 'value');
 
@@ -285,13 +250,13 @@ export class QueryInputElement extends LitElement {
 
   createRenderRoot() { return this; }
 }
-customElements.define('query-input-element', QueryInputElement);
+//customElements.define('query-input-element', QueryInputElement);
 
 // *******************************************************************************
 // FilterElement holds the parent ui for filter elements
 // *******************************************************************************
 export class FilterElement extends LitElement {
-  static properties = { ast: { type: Array }, newQuery: { type: Boolean }, editingPath: { type: String } };
+  static properties = { ast: { type: Array }, newQuery: { type: Boolean }, editingPath: { type: String }, projectid: {type: String} };
 
   constructor() {
     super();
@@ -301,8 +266,10 @@ export class FilterElement extends LitElement {
 
     window.setQueryBuilderFromParams = () => {
       const urlSearchParams = new URLSearchParams(window.location.search)
-      const query = urlSearchParams.get('query')
-      if (query) this.setBuilderValue(query)
+      const queryAST = urlSearchParams.get('query-ast')
+      console.log(queryAST)
+      console.log(JSON.parse(queryAST))
+      if (query) this.setBuilderValue(JSON.parse(queryAST))
     }
   }
 
@@ -413,17 +380,18 @@ export class FilterElement extends LitElement {
   disconnectedCallback() { super.disconnectedCallback(); window.removeEventListener('click', this.#closeOnClickOutside) }
 
   render() {
+    const searchASTIdx = this.ast?.findIndex(n => n.tag === 'Search')
     return html`
       <div class="relative flex items-center flex-wrap gap-2" @click=${(e) => e.stopPropagation()}>
         <svg class="h-4 w-4 icon"><use href="/public/assets/svgs/fa-sprites/regular.svg#filter"/></svg>
         <div class="flex flex-wrap gap-2">
-          ${(i => i >= 0 ? this.#renderFilter(this.ast[i].contents, `[${i}].contents`) : '')
-        (this.ast?.findIndex(n => n.tag === 'Search') ?? -1)}
+          ${searchASTIdx != -1 ? this.#renderFilter(this.ast[searchASTIdx].contents, `[${searchASTIdx}].contents`) : ''}
           <div class="relative inline-block">        
-            <span class="rounded-lg bg-white inline-flex p-2 items-center shadow-sm cursor-pointer" 
-              @click=${() => { this.newQuery = true; this.requestUpdate() }}>
-              <svg class="h-4 w-4 icon"><use href="/public/assets/svgs/fa-sprites/regular.svg#plus"/></svg>
-            </span>
+            ${typeof this.ast[searchASTIdx]?.contents === 'object' ?
+        html`<a class="rounded-lg bg-white inline-flex p-2 items-center shadow-sm cursor-pointer" 
+                  @click=${() => { this.newQuery = true; this.requestUpdate() }}>
+                  <svg class="h-4 w-4 icon"><use href="/public/assets/svgs/fa-sprites/regular.svg#plus"/></svg>
+                </a>` : html`<a @click=${() => { this.newQuery = true; this.requestUpdate() }} class="cursor-pointer p-2 ">Click to add filter...</a>`}
             ${this.newQuery ? html`
               <query-input-element
                 @add-query=${this.#handleAddQuery}
@@ -440,3 +408,259 @@ export class FilterElement extends LitElement {
 }
 
 customElements.define('filter-element', FilterElement);
+
+// Command Service
+class CommandService {
+  constructor(commands = ['count', 'distinct']) {
+    this.commands = commands;
+  }
+
+  parseCommand(input) {
+    const matches = input.match(/^(\w+)(?:\(([\w.]*)\)?)?$/);
+    if (!matches) return { command: '', field: '', isComplete: false };
+    
+    return {
+      command: matches[1] || '',
+      field: matches[2] || '',
+      isComplete: Boolean(matches[2] && input.endsWith(')'))
+    };
+  }
+
+  getSuggestions(parsed, availableFields) {
+    if (!parsed.command || !this.commands.some(cmd => cmd.startsWith(parsed.command))) {
+      return this.commands.filter(cmd => 
+        !parsed.command || cmd.startsWith(parsed.command.toLowerCase())
+      );
+    }
+    
+    if (this.commands.some(cmd => cmd === parsed.command) && !parsed.isComplete) {
+      return availableFields.filter(field => 
+        !parsed.field || field.startsWith(parsed.field.toLowerCase())
+      );
+    }
+
+    return [];
+  }
+
+  formatCommand(command, field) {
+    return `${command}(${field})`;
+  }
+}
+
+// Main Component
+export class QueryInputElement2 extends LitElement {
+  static properties = {
+    projectid: { type: String },
+    suggestions: { type: Array },
+    selected: { type: Number },
+    qs: { type: Object },
+    editContext: { type: Object },
+    ast: { type: Array },
+    mode: { type: String },
+    commandOperations: { type: Array }
+  };
+
+  constructor() {
+    super();
+    this.suggestionService = new SuggestionService(this.projectid);
+    this.commandService = new CommandService();
+    this.qs = {};
+    this.selected = 0;
+    this.suggestions = [];
+    this.mode = 'query';
+    this.commandOperations = ['count', 'distinct'];
+  }
+
+  async #updateStateFromInput(input) {
+    if (this.mode === 'command') {
+      const parsed = this.commandService.parseCommand(input);
+      const availableFields = REQ_SCHEMA.map(([field]) => field);
+      const suggestions = this.commandService.getSuggestions(parsed, availableFields);
+      
+      this.qs = { input, ...parsed };
+      this.suggestions = suggestions;
+      this.selected = 0;
+      
+      this.requestUpdate();
+      this.dispatchEvent(new CustomEvent('query-state-change', { detail: this.qs }));
+      return;
+    }
+
+    const { qs, suggestions } = await this.suggestionService.updateStateFromInput(input);
+    this.qs = qs;
+    this.suggestions = suggestions;
+    this.selected = 0;
+
+    this.requestUpdate();
+    this.dispatchEvent(new CustomEvent('query-state-change', { detail: this.qs }));
+  }
+
+  #getCurrentList = () => {
+    if (this.mode === 'command') {
+      return this.suggestions;
+    }
+    return this.suggestionService.getCurrentList(this.suggestions, this.qs, this.editContext);
+  }
+
+  #handleKey = e => {
+    const list = this.#getCurrentList();
+    
+    if (this.mode === 'command') {
+      const parsed = this.commandService.parseCommand(this.qs.input ?? '');
+      
+      const handlers = {
+        ArrowDown: () => this.selected = Math.min((this.selected + 1), list.length - 1),
+        ArrowUp: () => this.selected = Math.max(0, this.selected - 1),
+        Enter: () => {
+          if (this.selected && list[this.selected - 1]) {
+            const newValue = list[this.selected - 1];
+            
+            if (!parsed.command || !this.commandOperations.some(op => op === parsed.command)) {
+              // Selecting a command
+              this.#updateStateFromInput(`${newValue}(`);
+            } else {
+              // Selecting a field
+              const formattedCommand = this.commandService.formatCommand(parsed.command, newValue);
+              this.#updateStateFromInput(formattedCommand);
+              
+              if (!parsed.isComplete) {
+                this.dispatchEvent(new CustomEvent('add-query', { 
+                  detail: { command: parsed.command, field: newValue }
+                }));
+              }
+            }
+          }
+        },
+        Tab: e => { e.preventDefault(); handlers.Enter() },
+        Escape: () => {
+          if (this.selected) {
+            this.selected = 0;
+          } else {
+            this.dispatchEvent(new CustomEvent('close-query'));
+          }
+        }
+      };
+
+      handlers[e.key]?.();
+      this.requestUpdate();
+      return;
+    }
+
+    // Query mode key handling
+    const [field, op, value] = this.suggestionService.parseInput(this.qs.input ?? '');
+    const baseField = field?.split('.')?.[0];
+    const fieldSchema = REQ_SCHEMA.find(([f]) => f === baseField);
+
+    const handlers = {
+      ArrowDown: () => this.selected = Math.min((this.selected + 1), list.length - 1),
+      ArrowUp: () => this.selected = Math.max(0, this.selected - 1),
+      Enter: () => {
+        if (!this.selected && field && op && value) {
+          const isNumber = baseField && fieldSchema?.[1] === NUMBER_OPERATORS;
+          const parsedValue = isNumber ? Number(value) : value;
+
+          if (!isNumber || !isNaN(parsedValue)) {
+            this.#select('value', parsedValue);
+            return;
+          }
+        }
+
+        if (this.selected && list[this.selected - 1]) {
+          if (!this.qs.field) {
+            this.#select('field', list[this.selected - 1][0]);
+          } else if (!this.qs.op) {
+            this.#select('op', list[this.selected - 1]);
+          } else {
+            this.#select('value', list[this.selected - 1]);
+          }
+        }
+      },
+      Tab: e => { e.preventDefault(); handlers.Enter() },
+      Escape: () => {
+        if (this.selected) {
+          this.selected = 0;
+        } else {
+          this.dispatchEvent(new CustomEvent('close-query'));
+        }
+      }
+    };
+
+    handlers[e.key]?.();
+    this.requestUpdate();
+  };
+
+  #select = async (type, value) => {
+    if (this.editContext) {
+      const detail = this.suggestionService.handleEditContext(this.editContext, value);
+      this.dispatchEvent(new CustomEvent('update-query', { detail }));
+    } else {
+      const result = await this.suggestionService.handleSelection(type, value, this.qs);
+      if (result.qs) {
+        this.qs = result.qs;
+      }
+      if (result.suggestions !== undefined) {
+        this.suggestions = result.suggestions;
+      }
+      if (result.newNode) {
+        this.dispatchEvent(new CustomEvent('add-query', { detail: result.newNode }));
+      }
+    }
+
+    this.selected = 0;
+    this.requestUpdate();
+  };
+
+  render() {
+    const list = this.#getCurrentList();
+    const isCommand = this.mode === 'command';
+    
+    let isValid = true;
+    if (isCommand) {
+      const parsed = this.commandService.parseCommand(this.qs.input ?? '');
+      isValid = !parsed.command || this.commandOperations.some(op => op.startsWith(parsed.command));
+      if (parsed.command && !parsed.isComplete) {
+        isValid = !parsed.field || REQ_SCHEMA.some(([f]) => f.startsWith(parsed.field));
+      }
+    } else {
+      const [parsedField, _parsedOp] = this.suggestionService.parseInput(
+        (this.editContext?.currentValue || this.qs?.input) ?? ''
+      );
+      isValid = this.editContext || !parsedField || (REQ_SCHEMA.some(([f]) => parsedField.startsWith(f)));
+    }
+
+    return html`
+      <div class="query-input absolute z-50 bg-slate-50 border rounded font-normal top-10 left-0">
+        <input type="text" autofocus ${ref(el => el?.focus())} 
+          class="w-full min-w-56 border-b text-sm outline-none px-2 py-1 ${isValid ? '' : 'text-red-500'}"
+          .value=${this.editContext?.currentValue || this.qs.input || ''} 
+          @input=${e => this.#updateStateFromInput(e.target.value)}
+          @keydown=${this.#handleKey}
+          placeholder=${isCommand ? "Type command (e.g. count, distinct)..." : "Type query/field ..."} />
+        <div class="min-w-56 max-h-56 overflow-y-auto">
+          ${list.map((item, i) => html`
+            <a class="w-full text-left px-2 py-1 hover:bg-slate-100 flex justify-between cursor-pointer ${i === this.selected - 1 ? 'bg-blue-100' : ''}"
+              @mouseenter=${() => this.selected = i + 1}
+              @mouseleave=${() => this.selected = 0}
+              @click=${() => isCommand 
+                ? this.#handleKey({ key: 'Enter' }) 
+                : this.#select(
+                    !this.qs.field ? 'field' : !this.qs.op ? 'op' : 'value',
+                    Array.isArray(item) ? item[0] : item
+                  )}>
+              ${Array.isArray(item) ? item[0] : item}
+              ${!this.suggestions.length && Array.isArray(item) && !isCommand ? html`
+                <span class="text-xs text-gray-500">
+                  ${item[1] === NUMBER_OPERATORS ? 'number' : item[1] === STRING_OPERATORS ? 'string' : 'field'}
+                </span>
+              ` : ''}
+            </a>
+          `)}
+        </div>
+      </div>
+    `;
+  }
+
+  createRenderRoot() { return this; }
+}
+
+customElements.define('query-input-element', QueryInputElement2);

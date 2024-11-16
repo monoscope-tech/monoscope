@@ -16,18 +16,8 @@ import Data.Default (def)
 import Data.HashMap.Strict qualified as HM
 import Data.List (elemIndex)
 import Data.Text qualified as T
-import Data.Time (
-  UTCTime,
-  addUTCTime,
-  diffUTCTime,
-  getCurrentTime,
-  secondsToNominalDiffTime,
-  zonedTimeToUTC,
- )
-import Data.Time.Format (
-  defaultTimeLocale,
-  formatTime,
- )
+import Data.Time (UTCTime, addUTCTime, diffUTCTime, getCurrentTime, secondsToNominalDiffTime, zonedTimeToUTC)
+import Data.Time.Format (defaultTimeLocale, formatTime)
 import Data.Time.Format.ISO8601 (iso8601ParseM)
 import Data.Vector qualified as V
 import Data.Vector qualified as Vector
@@ -69,15 +59,15 @@ apiLogH pid queryM queryASTM cols' cursorM' sinceM fromM toM layoutM sourceM tar
   (sess, project) <- Sessions.sessionAndProject pid
   let source = fromMaybe "requests" sourceM
   let summaryCols = T.splitOn "," (fromMaybe "" cols')
+
+  -- Use queryAST if available, else parse the queryM query string into the AST
   let query = maybeToMonoid queryM
-
-  queryAST <- case (parseQueryToAST $ maybeToMonoid queryM) of
-    Left err -> addErrorToast "Error Parsing Query " (Just err) >> pure []
-    Right ast -> pure ast
-
-  traceShowM "==="
-  traceShowM queryAST
-  traceShowM $ AE.encode queryAST
+  let parseQuery q = either (\err -> addErrorToast "Error Parsing Query" (Just err) >> pure []) pure (parseQueryToAST q)
+  queryAST <-
+    maybe
+      (parseQuery query)
+      (either (const $ parseQuery query) pure . AE.eitherDecode . encodeUtf8)
+      queryASTM
 
   now <- Time.currentTime
   let (fromD, toD, currentRange) = Components.parseTimeRange now (Components.TimePickerP sinceM fromM toM)
@@ -88,9 +78,10 @@ apiLogH pid queryM queryASTM cols' cursorM' sinceM fromM toM layoutM sourceM tar
 
   freeTierExceeded <-
     dbtToEff $
-      (pure $ project.paymentPlan == "Free") >>= \case
-        True -> (> 5000) <$> RequestDumps.getLastSevenDaysTotalRequest pid
-        False -> return False
+      if project.paymentPlan == "Free"
+        then (> 5000) <$> RequestDumps.getLastSevenDaysTotalRequest pid
+        else pure False
+
   let bwconf =
         (def :: BWConfig)
           { sessM = Just sess.persistentSession
@@ -182,12 +173,12 @@ instance ToHtml LogsGet where
   toHtmlRaw = toHtml
 
 
-logQueryBox_ :: Projects.ProjectId -> Maybe Text -> Text -> Maybe Text -> Html ()
-logQueryBox_ pid currentRange source targetSpan = do
+logQueryBox_ :: Projects.ProjectId -> Maybe Text -> Text -> Maybe Text -> Text -> Html ()
+logQueryBox_ pid currentRange source targetSpan queryAST = do
   form_
     [ hxGet_ $ "/p/" <> pid.toText <> "/log_explorer"
     , hxPushUrl_ "true"
-    , hxVals_ "js:{query:window.getQueryFromEditor(), since: params().since, from: params().from, to:params().to, cols:params().cols, layout:'all', source: params().source}"
+    , hxVals_ "js:{queryAST:window.getQueryFromEditor(), since: params().since, from: params().from, to:params().to, cols:params().cols, layout:'all', source: params().source}"
     , termRaw "hx-on::before-request" ""
     , hxTarget_ "#resultTable"
     , hxSwap_ "outerHTML"
@@ -201,7 +192,7 @@ logQueryBox_ pid currentRange source targetSpan = do
           div_ [class_ "flex gap-2 justify-center items-center px-2 text-slate-600 "] $ "Saved queries" >> faSprite_ "chevron-down" "regular" "w-3 h-3"
         div_ [class_ "p-1 pl-3 flex-1 flex gap-2 bg-slate-100 rounded-2xl border border-slate-200 justify-between items-stretch"] do
           div_ [id_ "queryEditor", class_ "h-14 hidden overflow-hidden bg-gray-200 flex-1 flex items-center"] pass
-          div_ [id_ "queryBuilder", class_ "flex-1 flex items-center"] $ termRaw "filter-element" [id_ "filterElement", class_ "w-full h-full flex items-center"] ("" :: Text)
+          div_ [id_ "queryBuilder", class_ "flex-1 flex items-center"] $ termRaw "filter-element" [id_ "filterElement", class_ "w-full h-full flex items-center", termRaw "ast" queryAST] ("" :: Text)
           when (source == "spans") do
             let target = fromMaybe "all-spans" targetSpan
             div_ [class_ "gap-[2px] flex items-center"] do
@@ -220,18 +211,17 @@ logQueryBox_ pid currentRange source targetSpan = do
           button_
             [type_ "submit", class_ "leading-none rounded-xl p-3 cursor-pointer bg-gradient-to-b from-[#067cff] to-[#0850c5] text-white"]
             do
-              span_ [id_ "run-query-indicator", class_ "refresh-indicator htmx-indicator query-indicator loading loading-dots loading-md"] ""
+              span_ [id_ "run-query-indicator", class_ "refresh-indicator htmx-indicator query-indicator loading loading-dots loading-sm"] ""
               faSprite_ "magnifying-glass" "regular" "h-4 w-4 inline-block"
-      div_ ""
-      div_ [class_ "flex justify-end  gap-2 "] do
-        div_ [class_ "py-1 flex flex-row justify-end"] do
-          label_ [class_ "flex items-center cursor-pointer space-x-2 p-1"] do
-            input_ [type_ "checkbox", class_ "checkbox checkbox-sm rounded toggle-chart"]
-            span_ "charts"
-        div_ [class_ "form-control w-max"] $
-          label_ [class_ "label flex items-center cursor-pointer w-max space-x-2"] do
-            input_ [type_ "checkbox", class_ "checkbox checkbox-sm rounded", id_ "toggleQueryEditor", onclick_ "toggleQueryBuilder()"]
-            span_ "query editor"
+      div_ [class_ "flex items-between justify-between"] do
+        termRaw "filter-element" [id_ "filterElement", class_ "w-full h-full flex items-center", termRaw "ast" queryAST, termRaw "mode" "command"] ("" :: Text)
+        div_ [class_ "flex justify-end  gap-2 "] do
+          div_ [class_ "py-1 flex flex-row justify-end"] do
+            label_ [class_ "flex items-center cursor-pointer space-x-2 p-1"] do
+              input_ [type_ "checkbox", class_ "checkbox checkbox-sm rounded toggle-chart"] >> span_ "charts"
+          div_ [class_ "form-control w-max"] $
+            label_ [class_ "label flex items-center cursor-pointer w-max space-x-2"] do
+              input_ [type_ "checkbox", class_ "checkbox checkbox-sm rounded", id_ "toggleQueryEditor", onclick_ "toggleQueryBuilder()"] >> span_ "query editor"
 
 
 data ApiLogsPageData = ApiLogsPageData
@@ -252,7 +242,7 @@ data ApiLogsPageData = ApiLogsPageData
   , targetSpans :: Maybe Text
   , childSpans :: V.Vector Telemetry.SpanRecord
   , daysCountDown :: Maybe Text
-  , queryAST :: Text 
+  , queryAST :: Text
   }
 
 
@@ -287,7 +277,7 @@ apiLogsPage page = do
               input_ [type_ "hidden", value_ "", name_ "reqId", id_ "req_id_input"]
               input_ [type_ "hidden", value_ "", name_ "reqCreatedAt", id_ "req_created_at_input"]
     div_ [class_ ""] do
-      logQueryBox_ page.pid page.currentRange page.source page.targetSpans
+      logQueryBox_ page.pid page.currentRange page.source page.targetSpans page.queryAST
 
       div_ [class_ "flex flex-row gap-4 mt-3"] do
         renderChart "reqsChartsECP" page.source page.pid.toText ""
@@ -499,7 +489,7 @@ logTableHeadingWrapper_ pid title child = td_
             a_
               [ hxGet_ $ "/p/" <> pid.toText <> "/log_explorer"
               , hxPushUrl_ "true"
-              , hxVals_ $ "js:{query:params().query,cols:removeNamedColumnToSummary('" <> title <> "'),layout:'resultTable'}"
+              , hxVals_ $ "js:{queryAST:params().queryAST,cols:removeNamedColumnToSummary('" <> title <> "'),layout:'resultTable'}"
               , hxTarget_ "#resultTable"
               , hxSwap_ "outerHTML"
               ]
@@ -589,7 +579,7 @@ requestDumpLogItemUrlPath pid rd colIdxMap = do
 
 -- TODO:
 jsonTreeAuxillaryCode :: Projects.ProjectId -> Text -> Html ()
-jsonTreeAuxillaryCode pid queryAST= do
+jsonTreeAuxillaryCode pid queryAST = do
   template_ [id_ "log-item-context-menu-tmpl"] do
     div_ [id_ "log-item-context-menu", class_ "log-item-context-menu  origin-top-right absolute left-0 mt-2 w-56 rounded-md shadow-md shadow-slate-300 bg-slate-50 ring-1 ring-black ring-opacity-5 divide-y divide-gray-100 focus:outline-none z-10", role_ "menu", tabindex_ "-1"] do
       div_ [class_ "py-1", role_ "none"] do
@@ -599,7 +589,7 @@ jsonTreeAuxillaryCode pid queryAST= do
           , tabindex_ "-1"
           , hxGet_ $ "/p/" <> pid.toText <> "/log_explorer"
           , hxPushUrl_ "true"
-          , hxVals_ "js:{query:params().query,cols:toggleColumnToSummary(event),layout:'resultTable', since: params().since, from: params().from, to:params().to, source: params().source}"
+          , hxVals_ "js:{queryAST:params().queryAST,cols:toggleColumnToSummary(event),layout:'resultTable', since: params().since, from: params().from, to:params().to, source: params().source}"
           , hxTarget_ "#resultTable"
           , hxSwap_ "outerHTML"
           , -- , hxIndicator_ "#query-indicator"
@@ -635,7 +625,6 @@ jsonTreeAuxillaryCode pid queryAST= do
 
   script_
     [text|
-    window.queryAST = ${queryAST}
     function filterByField(event, operation) {
         const { fieldPath: path, fieldValue: value } = event.target.closest('[data-field-path]').dataset,
               editorVal = window.queryBuilderValue ?? window.editor?.getValue() ?? '',
@@ -662,10 +651,11 @@ jsonTreeAuxillaryCode pid queryAST= do
       return [...new Set(cols.filter((x) => namedCol.toLowerCase() != x.replaceAll('.', '•').replaceAll('[', '❲').replaceAll(']', '❳').toLowerCase()))].join(',')
     }
 
+    // TODO: Delete
     function toggleQueryBuilder() {
         ["queryBuilder", "queryEditor"].forEach(id => document.getElementById(id).classList.toggle("hidden"));
         window.editor ??= CodeMirror(document.getElementById('queryEditor'), {
-            value: params().query || window.queryBuilderValue || '',
+            value: params().queryAST || window.queryBuilderValue || '',
             mode: "javascript",
             theme: "elegant",
             lineNumbers: true,

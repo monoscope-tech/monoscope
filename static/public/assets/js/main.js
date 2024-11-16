@@ -32,13 +32,17 @@ window.setQueryParamAndReload = (key, value) => {
   window.location.href = url.toString()
 }
 
+// TODO: implement correctly. errors doesnt work
 window.getQueryFromEditor = (target) => {
   const toggler = document.getElementById('toggleQueryEditor')
+  const queryAST = document.getElementById('filterElement').ast;
+  console.log(queryAST, "getQueryFromEditor", target, )
   let val = ''
   if (toggler.checked) {
     val = window.editor.getValue()
   } else {
-    val = window.queryBuilderValue || ''
+    // val = window.queryBuilderValue || ''
+    return JSON.stringify(queryAST)
   }
   if (target === 'errors') {
     let source = document.querySelector('#reqsChartsErrP').dataset.source
