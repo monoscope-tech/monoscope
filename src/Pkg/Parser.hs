@@ -386,7 +386,7 @@ defaultSelectSqlQuery (Just SSpans) =
   , "kind"
   , "status"
   , "span_name"
-  , "CAST(EXTRACT(EPOCH FROM (end_time - start_time)) * 1_000_000_000 AS INTEGER) as duration"
+  , "CAST(EXTRACT(EPOCH FROM (end_time - start_time)) * 1_000_000_000 AS BIGINT) as duration"
   , "resource->>'service.name' as service"
   , "span_id as latency_breakdown"
   , [fmt|LEFT(

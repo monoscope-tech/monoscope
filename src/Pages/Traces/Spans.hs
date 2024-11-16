@@ -16,7 +16,7 @@ import Models.Telemetry.Telemetry (SpanRecord (..))
 import Models.Telemetry.Telemetry qualified as Telemetry
 import NeatInterpolation (text)
 import Pages.Components (dateTime)
-import Pages.Traces.Utils (getRequestDetails, getServiceName)
+import Pages.Traces.Utils (getErrorDetails, getRequestDetails, getServiceName, getSpanErrors)
 import Relude
 import System.Types
 import Utils
@@ -104,9 +104,14 @@ expandedSpanItem pid sp leftM rightM = do
                   let extraClass = getGrpcStatusColor status
                   span_ [class_ $ " px-2 py-1.5 border-l " <> extraClass] $ toHtml $ show status
     div_ [class_ "w-full mt-8", id_ "span-tabs-container"] do
+      let spanErrors = getSpanErrors sp
       div_ [class_ "flex", [__|on click halt|]] $ do
         button_ [class_ "a-tab border-b-2 border-b-slate-200 px-4 py-1.5 t-tab-active", onclick_ "navigatable(this, '#att-content', '#span-tabs-container', 't-tab-active')"] "Attributes"
         button_ [class_ "a-tab border-b-2 border-b-slate-200 px-4 py-1.5 ", onclick_ "navigatable(this, '#meta-content', '#span-tabs-container', 't-tab-active')"] "Process"
+        unless (null spanErrors) $ do
+          button_ [class_ "a-tab border-b-2 border-b-slate-200 flex items-center gap-1 nowrap px-4 py-1.5 ", onclick_ "navigatable(this, '#errors-content', '#span-tabs-container', 't-tab-active')"] do
+            "Errors"
+            div_ [class_ "badge badge-error badge-sm"] $ show $ length spanErrors
         button_ [class_ "a-tab border-b-2 border-b-slate-200 flex items-center gap-1 px-4 py-1.5 ", onclick_ "navigatable(this, '#logs-content', '#span-tabs-container', 't-tab-active')"] $ do
           "Logs"
           div_ [class_ "badge badge-ghost badge-sm"] $ show $ numberOfEvents sp.events
@@ -114,59 +119,28 @@ expandedSpanItem pid sp leftM rightM = do
 
       div_ [class_ "grid mt-4 px-4 text-slate-600 font"] $ do
         div_ [class_ "a-tab-content", id_ "att-content"] $ do
-          div_ [class_ "font-medium mb-1"] "Tags"
           div_ [class_ "rounded-lg border border-slate-200 p-4"] $ do
             jsonValueToHtmlTree sp.attributes
         div_ [class_ "hidden a-tab-content", id_ "meta-content"] $ do
-          div_ [class_ "font-medium mb-1"] "Metadata"
           div_ [class_ "rounded-lg border border-slate-200 p-4"] $ do
             jsonValueToHtmlTree sp.resource
+        div_ [class_ "hidden a-tab-content", id_ "errors-content"] $ do
+          renderErrors spanErrors
         div_ [class_ "hidden a-tab-content", id_ "logs-content"] $ do
-          div_ [class_ "font-medium mb-1"] "Logs"
           div_ [class_ "rounded-lg border border-slate-200 p-4"] $ do
             jsonValueToHtmlTree $ AE.toJSON sp.events
 
 
-tagItem :: Text -> Text -> Text -> Html ()
-tagItem key val cls =
-  div_ [class_ "flex items-center gap-2 rounded-md bg-gray-100 px-3 py-1 "] $ do
-    div_ [class_ "h-1 w-1 rounded-full bg-slate-700 shrink-0"] ""
-    div_ [class_ "flex items-center"] do
-      span_ [] $ toHtml key
-      span_ [] " = "
-      span_ [] $ toHtml val
-
-
-displaySpanJson :: AE.Value -> Html ()
-displaySpanJson (AE.Object obj) = mapM_ displaySpanList (KM.toList obj)
-displaySpanJson _ = pass
-
-
-displaySpanList :: (KM.Key, AE.Value) -> Html ()
-displaySpanList (key, AE.String v) = tagItem (Key.toText key) v "text-orange-600"
-displaySpanList (key, AE.Number v) = tagItem (Key.toText key) (show v) "text-blue-600"
-displaySpanList (key, AE.Bool v) = tagItem (Key.toText key) (show v) "text-blue-600"
-displaySpanList (key, v) = tagItem (Key.toText key) (show v) "text-orange-600"
-
-
-displayLogsSection :: AE.Value -> Html ()
-displayLogsSection (AE.Array obj) = V.mapM_ displayEventItem obj
-displayLogsSection _ = pass
-
-
-displayEventItem :: AE.Value -> Html ()
-displayEventItem (AE.Object obj) = do
-  div_ [class_ "w-full", [__| on click halt|]] do
-    div_ [class_ "flex items-center justify-between w-full cursor-pointer px-2 py-1 bg-gray-100", [__|on click toggle .hidden on the next <div/>|]] $ do
-      let evnt = KM.lookup "event_name" obj
-      case evnt of
-        Just (AE.String v) -> do
-          div_ [] $ toHtml $ "event = " <> toText v
-          div_ [] pass
-        _ -> div_ [] "event = "
-    div_ [class_ "expand-log max-h-96 hidden overflow-y-auto w-full py-8"] do
-      jsonValueToHtmlTree (AE.Object obj)
-displayEventItem _ = pass
+renderErrors :: [AE.Value] -> Html ()
+renderErrors errs = div_ [class_ "flex flex-col gap-1"] $ do
+  forM_ errs $ \err -> do
+    let (tye, message, stacktrace) = getErrorDetails err
+    div_ [class_ "flex flex-col rounded-lg border overflow-hidden"] $ do
+      div_ [class_ "bg-red-100 text-red-600 px-4 py-2 flex gap-2 items-center"] do
+        span_ [class_ "font-bold"] $ toHtml (tye <> ":")
+        span_ [] $ toHtml message
+      div_ [] do
+        p_ [class_ "whitespace-prewrap px-4 py-2"] $ toHtml stacktrace
 
 
 numberOfEvents :: AE.Value -> Int

@@ -299,11 +299,12 @@ function latencyHistogram(renderAt, pc, data) {
 }
 
 const SCROLL_BAR_WIDTH = 7
-const ERROR_INDICATOR = elt(
-  'span',
-  { class: 'bg-red-600 rounded-l h-full w-5 flex justify-center items-center rounded-r shrink-0 font-bold' },
-  elt('span', { class: 'text-white text-xs h-3 w-3 flex items-center justify-center rounded-full border border-white p-1' }, '!')
-)
+const getErrorIndicator = () =>
+  elt(
+    'span',
+    { class: 'bg-red-600 rounded-l h-full w-5 flex justify-center items-center rounded-r shrink-0 font-bold' },
+    elt('span', { class: 'text-white text-xs h-3 w-3 flex items-center justify-center rounded-full border border-white p-1' }, '!')
+  )
 function flameGraphChart(data, renderAt, colorsMap) {
   const filterJson = (json, id) => {
     if (id == null) {
@@ -390,7 +391,7 @@ function flameGraphChart(data, renderAt, colorsMap) {
     const yStart = height * level + (level + 1) * 3
 
     const div = elt('div', {
-      class: item.itemStyle.color + ' absolute hover:z-[999] flex rounded items-center span-filterble cursor-pointer justify-between flex-nowrap overflow-hidden hover:border hover:border-black',
+      class: item.itemStyle.color + ' absolute hover:z-[999] flex rounded items-center span-filterble cursor-pointer gap-1 flex-nowrap overflow-hidden hover:border hover:border-black',
       id: item.span_id,
       onclick: (e) => {
         const data = filterJson(structuredClone(fData), item.name)
@@ -407,11 +408,11 @@ function flameGraphChart(data, renderAt, colorsMap) {
     div.style.width = `${width}px`
     div.style.height = `${height}px`
     if (item.hasErrors) {
-      div.appendChild(ERROR_INDICATOR)
+      div.appendChild(getErrorIndicator())
     }
     const text = elt('span', { class: 'text-black shrink-0 mr-4 text-xs' }, item.name)
     const [t, u] = formatDuration(item.value[2])
-    const tim = elt('span', { class: 'text-black text-xs shrink-0' }, `${Math.floor(t)} ${u}`)
+    const tim = elt('span', { class: 'text-black text-xs shrink-0 ml-auto' }, `${Math.floor(t)} ${u}`)
     div.appendChild(text)
     div.appendChild(tim)
     container.appendChild(div)
@@ -589,7 +590,7 @@ function buildTree(span, serviceColors, start, rootVal, containerWidth) {
   const [t, u] = formatDuration(span.spanRecord.spanDurationNs)
   const tim = elt('span', { class: 'text-black text-xs shrink-0 ml-auto' }, `${Math.floor(t)} ${u}`)
   if (span.spanRecord.hasErrors) {
-    div.appendChild(ERROR_INDICATOR)
+    div.appendChild(getErrorIndicator())
   }
   div.appendChild(text)
   div.appendChild(tim)

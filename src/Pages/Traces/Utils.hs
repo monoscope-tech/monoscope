@@ -1,4 +1,4 @@
-module Pages.Traces.Utils (getServiceName, getServiceColor, getRequestDetails, spanHasErrors)
+module Pages.Traces.Utils (getServiceName, getServiceColor, getRequestDetails, spanHasErrors, getSpanErrors, getErrorDetails)
 where
 
 import Data.Aeson qualified as AE
@@ -57,3 +57,29 @@ spanHasErrors spanRecord = case spanRecord.events of
           _ -> False
      in Relude.any hasExceptionEvent (V.toList a)
   _ -> False
+
+
+getSpanErrors :: Telemetry.SpanRecord -> [AE.Value]
+getSpanErrors spanRecord = case spanRecord.events of
+  AE.Array a ->
+    let events = V.toList a
+        hasExceptionEvent :: AE.Value -> Bool
+        hasExceptionEvent event = case event of
+          AE.Object obj -> KEM.lookup "event_name" obj == Just (AE.String "exception")
+          _ -> False
+     in Relude.filter hasExceptionEvent events
+  _ -> []
+
+
+getErrorDetails :: AE.Value -> (Text, Text, Text)
+getErrorDetails ae = case ae of
+  AE.Object obj -> case KEM.lookup "event_attributes" obj of
+    Just (AE.Object j) -> (fromMaybe "" $ getText "exception.type" j, fromMaybe "" $ getText "exception.message" j, fromMaybe "" $ getText "exception.stacktrace" j)
+    _ -> ("", "", "")
+  _ -> ("", "", "")
+  where
+    getText :: Text -> AE.Object -> Maybe Text
+    getText key v = case KEM.lookup (AEKey.fromText key) v of
+      Just (AE.String s) -> Just s
+      Just vl -> Just $ show vl
+      _ -> Nothing
