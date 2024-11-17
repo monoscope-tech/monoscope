@@ -12,7 +12,6 @@ spec-version: 0.36.0
 ghc-options:
   - -fwrite-ide-info
   - -hiedir .hiefiles
-
   - "-hidir=.hifiles"
   - -threaded
   - -Weverything

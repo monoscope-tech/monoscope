@@ -232,8 +232,7 @@ bodyWrapper BWConfig{sessM, currProject, pageTitle, menuItem, hasIntegrated, nav
       case sessM of
         Nothing -> do
           section_ [class_ "flex flex-col grow  h-screen overflow-y-hidden"] do
-            -- navbar currUser
-            section_ [class_ "flex-1 overflow-y-auto "] do
+            section_ [class_ "flex-1 overflow-y-auto"] do
               child
         Just sess ->
           let currUser = sess.user.getUser

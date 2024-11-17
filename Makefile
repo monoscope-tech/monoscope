@@ -19,11 +19,12 @@ cypress:
 
 live-reload:
 	# ghcid --command 'stack ghci apitoolkit-server --ghc-options=-w' --test ':run Start.startApp' --warnings
-	ghcid --command 'stack ghci apitoolkit-server --ghc-options="-w -j4 +RTS -A128m -n2m -RTS"' --test ':run Start.startApp' --warnings
-	# ghcid --command 'cabal repl --ghc-options="-w -j4 +RTS -A128m -n2m -RTS"' --test ':run Start.startApp' --warnings
+	# ghcid --command 'stack ghci apitoolkit-server --ghc-options="-w -j4 +RTS -A128m -n2m -RTS"' --test ':run Start.startApp' --warnings
+	ghcid --command 'cabal repl --ghc-options="-w -j4"' --test ':run Start.startApp' --warnings
 
 watch:
-	ghciwatch --test-ghci Start.startApp --error-file errors.err  --before-startup-shell hpack --before-reload-shell async:"fourmolu" --clear  --after-startup-ghci ':set -fdefer-type-errors'
+	# ghciwatch --test-ghci Start.startApp --error-file errors.err  --before-startup-shell hpack --clear  --watch src
+	ghciwatch --command ""
 
 
 live-test-reload:
