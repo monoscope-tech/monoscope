@@ -27,7 +27,6 @@ module Models.Tests.Testing (
 )
 where
 
-import Data.Aeson (KeyValue ((.=)), (.:?))
 import Data.Aeson qualified as AE
 import Data.Aeson.Types
 import Data.Default (Default)

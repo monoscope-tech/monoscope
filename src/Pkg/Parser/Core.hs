@@ -1,6 +1,5 @@
 module Pkg.Parser.Core (Parser, lexeme, symbol, sc) where
 
-import Data.Aeson qualified as AE
 import Relude
 import Text.Megaparsec (Parsec)
 import Text.Megaparsec.Char (space1)

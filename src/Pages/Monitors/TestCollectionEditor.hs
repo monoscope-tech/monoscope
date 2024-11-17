@@ -29,8 +29,6 @@ import Lucid.Htmx (
   hxDelete_,
   hxExt_,
   hxIndicator_,
-  hxParams_,
-  hxPatch_,
   hxPost_,
   hxSwap_,
   hxTarget_,
@@ -46,15 +44,12 @@ import NeatInterpolation (text)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
 import Pages.Monitors.MetricMonitors qualified as MetricMonitors
 import Pkg.Components qualified as Components
-import Pkg.Components.Modals qualified as Components
 import PyF (fmt)
 import Relude hiding (ask)
 import System.Types (ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders, addSuccessToast, redirectCS)
 import Utils (faSprite_, getStatusColor, jsonValueToHtmlTree)
-
 import Data.UUID.V4 qualified as UUIDV4
 import Effectful.Time qualified as Time
-import Web.FormUrlEncoded (FromForm)
 
 
 data CollectionVariableForm = CollectionVariableForm

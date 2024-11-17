@@ -4,7 +4,7 @@ module Pkg.Components.TimePicker (parseTimeRange, timepicker_, TimePickerP (..))
 
 import Data.List (lookup)
 import Data.Text qualified as T
-import Data.Time (NominalDiffTime, UTCTime, addUTCTime, defaultTimeLocale, formatTime, secondsToNominalDiffTime)
+import Data.Time (UTCTime, addUTCTime, defaultTimeLocale, formatTime, secondsToNominalDiffTime)
 import Data.Time.Format.ISO8601 (iso8601ParseM)
 import Lucid
 import Lucid.Base (termRaw)
@@ -12,9 +12,8 @@ import Lucid.Hyperscript (__)
 import NeatInterpolation (text)
 import PyF (fmt)
 import Relude hiding (some)
-import Relude.Unsafe qualified as Unsafe
-import Text.Megaparsec (Parsec, parse, some, try)
-import Text.Megaparsec.Char (digitChar, letterChar, space)
+import Text.Megaparsec (Parsec, parse, some)
+import Text.Megaparsec.Char (letterChar, space)
 import Text.Megaparsec.Char.Lexer (decimal)
 import Utils (faSprite_)
 

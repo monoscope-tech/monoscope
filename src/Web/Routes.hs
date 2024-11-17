@@ -62,7 +62,7 @@ import Web.Error
 
 type role Routes nominal
 
-
+type Routes :: forall {k}. k -> Type
 data Routes mode = Routes
   { public :: mode :- "public" :> Servant.Raw
   , cookieProtected :: mode :- AuthProtect "optional-cookie-auth" :> Servant.NamedRoutes CookieProtectedRoutes
@@ -113,6 +113,7 @@ server pool =
 type role CookieProtectedRoutes nominal
 
 
+type CookieProtectedRoutes :: forall {k}. k -> Type
 data CookieProtectedRoutes mode = CookieProtectedRoutes
   { dashboardGet :: mode :- "p" :> ProjectId :> QPT "from" :> QPT "to" :> QPT "since" :> Get '[HTML] (RespHeaders (PageCtx Dashboard.DashboardGet))
   , projects :: mode :- ProjectsRoutes.Routes

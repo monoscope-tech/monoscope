@@ -4,7 +4,7 @@ module Pkg.Parser (parseQueryStringToWhereClause,queryASTToComponents, parseQuer
 import Control.Error (hush)
 import Data.Default (Default (def))
 import Data.Text qualified as T
-import Data.Text.Display (Display (displayPrec), display)
+import Data.Text.Display (display)
 import Data.Time.Calendar (fromGregorian)
 import Data.Time.Clock (UTCTime (..), diffUTCTime, nominalDiffTimeToSeconds, secondsToDiffTime)
 import Data.Time.Format.ISO8601 (iso8601Show)
@@ -15,8 +15,7 @@ import Pkg.Parser.Stats
 import PyF (fmt)
 import Relude
 import Safe qualified
-import Text.Megaparsec (choice, errorBundlePretty, parse, sepBy)
-import Text.Megaparsec.Char (char, space, string)
+import Text.Megaparsec (errorBundlePretty, parse)
 
 
 data QueryComponents = QueryComponents

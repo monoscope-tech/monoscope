@@ -6,7 +6,7 @@ import Relude hiding (Sum, some)
 import Text.Megaparsec
 import Text.Megaparsec.Char (alphaNumChar, char, space, string)
 import Data.Aeson qualified as AE
-import Data.Text.Display (Display, display, displayBuilder, displayParen, displayPrec)
+import Data.Text.Display (Display, display, displayBuilder, displayPrec)
 
 
 -- Modify Aggregation Functions to include optional aliases

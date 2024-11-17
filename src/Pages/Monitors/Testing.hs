@@ -8,13 +8,11 @@ where
 import Control.Error.Util (hush)
 import Data.Aeson qualified as AE
 import Data.Default (def)
-import Data.List (nubBy)
 import Data.List.Extra (nubOrd)
 import Data.Map qualified as Map
-import Data.Text (Text, pack, splitOn)
+import Data.Text (splitOn)
 import Data.Text qualified as T
 import Data.Time (UTCTime)
-import Data.UUID.V4 qualified as UUIDV4
 import Data.Vector qualified as V
 import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
 import Effectful.Time qualified as Time
@@ -22,26 +20,22 @@ import PyF qualified as PyF
 import Fmt.Internal.Core (fmt)
 import Fmt.Internal.Numeric (commaizeF)
 import Lucid
-import Lucid.Htmx (hxExt_, hxPost_, hxSelect_, hxSwap_, hxTarget_, hxVals_)
 import Lucid.Hyperscript (__)
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.Projects qualified as Projects
 import Models.Tests.Testing qualified as Testing
 import Models.Users.Sessions qualified as Sessions
-import NeatInterpolation (text)
 import Network.URI (URIAuth (uriRegName), parseURI, uriAuthority)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
 import Pages.Components (emptyState_, statBox_)
 import Pages.Log (ApiLogsPageData (isTestLog))
 import Pages.Log qualified as Log
 import Pages.Monitors.TestCollectionEditor (castToStepResult)
-import Pages.Monitors.TestCollectionEditor qualified as TestCollectionEditor
 import Pkg.Components qualified as Components
 import Pkg.Components.ItemsList qualified as ItemsList
 import Pkg.Parser
 import Relude hiding (ask)
-import System.Types (ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders, addSuccessToast)
-import Text.ParserCombinators.ReadPrec (step)
+import System.Types (ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders)
 import Text.Time.Pretty (prettyTimeAuto)
 import Utils
 

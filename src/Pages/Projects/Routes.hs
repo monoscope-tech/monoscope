@@ -1,6 +1,5 @@
 module Pages.Projects.Routes (Routes, Routes' (..)) where
 
-import GHC.Generics (Generic)
 import Lucid (Html)
 import Models.Projects.Projects qualified as Projects
 import Pages.Projects.CreateProject qualified as CreateProject
@@ -10,12 +9,15 @@ import Pages.Projects.ManageMembers qualified as ManageMembers
 import Servant (Capture, FormUrlEncoded, GenericMode (type (:-)), Get, NamedRoutes, Post, ReqBody, type (:>))
 import Servant.HTML.Lucid (HTML)
 import System.Types (RespHeaders)
+import Relude
 
 
 type role Routes' nominal
 
 
 type Routes = NamedRoutes Routes'
+
+type Routes' :: forall {k}. k -> Type
 data Routes' mode = Routes'
   { listGet :: mode :- Get '[HTML] (RespHeaders ListProjects.ListProjectsGet)
   , createGet :: mode :- "p" :> "new" :> Get '[HTML] (RespHeaders CreateProject.CreateProject) -- p represents project

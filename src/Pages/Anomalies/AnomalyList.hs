@@ -35,8 +35,7 @@ import Effectful.Reader.Static (ask)
 import Lucid
 import Lucid (ToHtml (toHtml))
 import Lucid.Aria qualified as Aria
-import Lucid.Base (termRaw)
-import Lucid.Htmx (hxGet_, hxSwap_, hxTarget_, hxTrigger_)
+import Lucid.Htmx (hxGet_, hxSwap_, hxTrigger_)
 import Lucid.Hyperscript (__)
 import Models.Apis.Anomalies qualified as Anomalies
 import Models.Apis.Endpoints qualified as Endpoints

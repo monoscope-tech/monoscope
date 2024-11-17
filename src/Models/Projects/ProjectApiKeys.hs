@@ -33,7 +33,7 @@ import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.ToField (ToField)
 import Database.PostgreSQL.Transact (DBT)
 import Effectful (Eff, IOE, type (:>))
-import Effectful.PostgreSQL.Transact.Effect (DB, dbtToEff, getPool)
+import Effectful.PostgreSQL.Transact.Effect (DB, getPool)
 import Effectful.Reader.Static qualified as Effectful
 import Effectful.Time (Time)
 import Effectful.Time qualified as Time

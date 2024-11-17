@@ -16,9 +16,7 @@ import Data.Default (def)
 import Data.HashMap.Strict qualified as HM
 import Data.List (elemIndex)
 import Data.Text qualified as T
-import Data.Time (UTCTime, addUTCTime, diffUTCTime, getCurrentTime, secondsToNominalDiffTime, zonedTimeToUTC)
-import Data.Time.Format (defaultTimeLocale, formatTime)
-import Data.Time.Format.ISO8601 (iso8601ParseM)
+import Data.Time (UTCTime, diffUTCTime, getCurrentTime, zonedTimeToUTC)
 import Data.Vector qualified as V
 import Data.Vector qualified as Vector
 import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
@@ -44,7 +42,6 @@ import Relude.Unsafe qualified as Unsafe
 import System.Types
 import Text.Megaparsec (parseMaybe)
 import Utils
-import Witch (from)
 
 
 -- $setup

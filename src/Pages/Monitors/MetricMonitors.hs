@@ -1,11 +1,9 @@
 module Pages.Monitors.MetricMonitors (monitorCreateGetH, MonitorCreate, configureNotificationMessage_, configureNotificationChannels_) where
 
-import Data.CaseInsensitive qualified as CI
 import Data.Default
 import Data.List (groupBy)
 import Lucid
 import Lucid.Htmx
-import Lucid.Hyperscript (__)
 import Models.Apis.Monitors qualified as Monitors
 import Models.Projects.Projects qualified as Projects
 import Models.Tests.Testing qualified as Testing
@@ -247,12 +245,6 @@ monitorTypeDetail_ m = do
 
 
 -- Reusable components
-
-formControlSelect_ :: Text -> Text -> [Text] -> Html ()
-formControlSelect_ name label options = div_ [class_ "form-control w-full"] $ do
-  label_ [class_ "label"] $ span_ [class_ "label-text"] (toHtml label)
-  select_ [class_ "select select-xs select-bordered w-full", name_ name] $ forM_ options (option_ [] . toHtml)
-
 
 thresholdInput_ :: Text -> Text -> Maybe Text -> Text -> Html ()
 thresholdInput_ sign label colorM placeholder = div_ [class_ "flex items-center space-x-4"] $ do

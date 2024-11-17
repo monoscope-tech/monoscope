@@ -3,25 +3,21 @@
 module Opentelemetry.OtlpServer (runServer, processList) where
 
 import Control.Lens hiding ((.=))
-import Control.Monad.Extra (fromMaybeM)
 import Data.Aeson (object, (.=))
 import Data.Aeson qualified as AE
 import Data.Aeson.Key qualified as AEK
 import Data.Aeson.KeyMap qualified as KEM
-import Data.Base64.Types qualified as B64
 import Data.ByteString qualified as BS
 import Data.ByteString.Base16 qualified as B16
-import Data.ByteString.Base64 qualified as B64
 import Data.HashMap.Strict qualified as HashMap
 import Data.Scientific
 import Data.Text qualified as T
 import Data.Text.Lazy qualified as LT
-import Data.Time (TimeZone (..), UTCTime, utcToZonedTime, zonedTimeToUTC)
+import Data.Time (TimeZone (..), UTCTime, utcToZonedTime)
 import Data.Time.Clock.POSIX
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Effectful
-import Effectful.Error.Static (throwError)
 import Effectful.Log (Log)
 import Effectful.PostgreSQL.Transact.Effect (DB)
 import Effectful.Reader.Static (ask)
