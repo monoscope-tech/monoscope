@@ -27,6 +27,8 @@ module Pages.Onboarding.Handler (
 import BackgroundJobs (BgJobs (..))
 import BackgroundJobs qualified
 import Control.Lens ((^.))
+import Data.Aeson (encode)
+import Data.Char (isLetter, isNumber, isSpace)
 import Data.Default (Default (..), def)
 import Data.Map.Strict qualified as Map
 import Data.Pool (withResource)
@@ -38,21 +40,20 @@ import Database.PostgreSQL.Transact (DBT)
 import Effectful
 import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
 import Effectful.Reader.Static (ask)
+import Models.Apis.Slack (insertAccessToken)
 import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
 import Models.Users.Users qualified as Users
 import Pages.BodyWrapper
+import Pages.Onboarding.SessionManager
 import Pages.Onboarding.Types
 import Pages.Onboarding.Views
-import Pages.Onboarding.SessionManager
 import Relude hiding (ask, asks)
 import System.Config
 import System.Types
 import Utils (faSprite_, isDemoAndNotSudo)
-import Data.Char (isSpace, isLetter, isNumber)
-import Data.Aeson (encode)
-import Models.Apis.Slack (insertAccessToken)
+
 
 -- | Initial handlers
 onboardingSignupGetH :: ATAuthCtx (RespHeaders OnboardingResponse)
@@ -62,12 +63,14 @@ onboardingSignupGetH = do
   let bwconf = (def :: BWConfig){pageTitle = "Signup"}
   addRespHeaders $ SignupR $ PageCtx bwconf (sess.persistentSession, appCtx.config, def, Valid def)
 
+
 onboardingLoginGetH :: ATAuthCtx (RespHeaders OnboardingResponse)
 onboardingLoginGetH = do
   sess <- Sessions.getSession
   appCtx <- ask @AuthContext
   let bwconf = (def :: BWConfig){pageTitle = "Login"}
   addRespHeaders $ LoginR $ PageCtx bwconf (sess.persistentSession, appCtx.config, def, Valid def)
+
 
 -- | Profile Handlers
 onboardingProfileGetH :: ATAuthCtx (RespHeaders OnboardingResponse)
@@ -77,6 +80,7 @@ onboardingProfileGetH = do
   let form = fromMaybe def $ getProfile sess.persistentSession
   let bwconf = (def :: BWConfig){pageTitle = "Complete Profile"}
   addRespHeaders $ ProfileR $ PageCtx bwconf (sess.persistentSession, appCtx.config, form, Valid form)
+
 
 -- -- | Profile Handler
 onboardingProfilePostH :: ProfileForm -> ATAuthCtx (RespHeaders OnboardingResponse)
@@ -107,7 +111,8 @@ onboardingProfilePostH form = do
       addRespHeaders $ NoContent ""
     Invalid errs ->
       addRespHeaders $ ProfileR $ PageCtx def (sess.persistentSession, appCtx.config, form, Invalid errs)
-      
+
+
 -- onboardingProfilePostH :: ProfileForm -> ATAuthCtx (RespHeaders OnboardingResponse)
 -- onboardingProfilePostH form = do
 --   sess <- Sessions.getSession
@@ -133,6 +138,7 @@ onboardingHostingGetH = do
   let location = fromMaybe def $ getHosting sess.persistentSession
   addRespHeaders $ HostingR $ PageCtx bwconf (sess.persistentSession, appCtx.config, location)
 
+
 onboardingHostingPostH :: HostingLocation -> ATAuthCtx (RespHeaders OnboardingResponse)
 onboardingHostingPostH location = do
   sess <- Sessions.getSession
@@ -143,6 +149,7 @@ onboardingHostingPostH location = do
   redirectCS "/onboarding/usage"
   addRespHeaders $ NoContent ""
 
+
 -- | Usage Preferences Handlers
 onboardingUsageGetH :: ATAuthCtx (RespHeaders OnboardingResponse)
 onboardingUsageGetH = do
@@ -151,6 +158,7 @@ onboardingUsageGetH = do
   let bwconf = (def :: BWConfig){pageTitle = "Usage Preferences"}
   let usage = fromMaybe def $ getUsage sess.persistentSession
   addRespHeaders $ UsageR $ PageCtx bwconf (sess.persistentSession, appCtx.config, usage)
+
 
 onboardingUsagePostH :: UsagePreferences -> ATAuthCtx (RespHeaders OnboardingResponse)
 onboardingUsagePostH prefs = do
@@ -162,6 +170,7 @@ onboardingUsagePostH prefs = do
   redirectCS "/onboarding/url-monitor"
   addRespHeaders $ NoContent ""
 
+
 -- | URL Monitor Handlers
 onboardingUrlMonitorGetH :: ATAuthCtx (RespHeaders OnboardingResponse)
 onboardingUrlMonitorGetH = do
@@ -170,6 +179,7 @@ onboardingUrlMonitorGetH = do
   let bwconf = (def :: BWConfig){pageTitle = "Configure URL Monitor"}
   let monitor = fromMaybe def $ getMonitor sess.persistentSession
   addRespHeaders $ URLMonitorR $ PageCtx bwconf (sess.persistentSession, appCtx.config, monitor)
+
 
 onboardingUrlMonitorPostH :: URLMonitorConfig -> ATAuthCtx (RespHeaders OnboardingResponse)
 onboardingUrlMonitorPostH config = do
@@ -181,6 +191,7 @@ onboardingUrlMonitorPostH config = do
   redirectCS "/onboarding/notifications"
   addRespHeaders $ NoContent ""
 
+
 -- | Notification Settings Handlers
 onboardingNotificationsGetH :: ATAuthCtx (RespHeaders OnboardingResponse)
 onboardingNotificationsGetH = do
@@ -189,6 +200,7 @@ onboardingNotificationsGetH = do
   let bwconf = (def :: BWConfig){pageTitle = "Notification Settings"}
   let notifications = fromMaybe def $ getNotifications sess.persistentSession
   addRespHeaders $ NotificationsR $ PageCtx bwconf (sess.persistentSession, appCtx.config, notifications)
+
 
 -- onboardingNotificationsPostH :: NotificationSettings -> ATAuthCtx (RespHeaders OnboardingResponse)
 -- onboardingNotificationsPostH settings = do
@@ -199,28 +211,31 @@ onboardingNotificationsGetH = do
 --   addSuccessToast "Notification settings saved" Nothing
 --   redirectCS "/onboarding/notification-sent"
 --   addRespHeaders $ NoContent ""
+
 -- | Post handler for notification settings
 onboardingNotificationsPostH :: NotificationSettings -> ATAuthCtx (RespHeaders OnboardingResponse)
 onboardingNotificationsPostH settings = do
   sess <- Sessions.getSession
   appCtx <- ask @AuthContext
-  
+
   -- Handle Slack integrations
   forM_ settings.notificationChannels $ \channel -> case channel of
     SlackChannel{..} -> void $ dbtToEff $ insertAccessToken [channelName] webhookUrl
     _ -> pure ()
 
   -- Update session with notification settings
-  let sessionData = updateAndProgress 
-        sess.persistentSession 
-        storeNotifications 
-        settings
+  let sessionData =
+        updateAndProgress
+          sess.persistentSession
+          storeNotifications
+          settings
 
   -- Store in session
-  void $ Sessions.updateSession 
-    sess.persistentSession.id
-    sess.persistentSession.userId 
-    sessionData
+  void
+    $ Sessions.updateSession
+      sess.persistentSession.id
+      sess.persistentSession.userId
+      sessionData
 
   -- Send test notifications
   sendTestNotifications settings
@@ -230,6 +245,7 @@ onboardingNotificationsPostH settings = do
   redirectCS "/onboarding/notification-sent"
   addRespHeaders $ NoContent ""
 
+
 -- | Notification Sent Handlers
 onboardingNotificationSentGetH :: ATAuthCtx (RespHeaders OnboardingResponse)
 onboardingNotificationSentGetH = do
@@ -237,6 +253,7 @@ onboardingNotificationSentGetH = do
   appCtx <- ask @AuthContext
   let bwconf = (def :: BWConfig){pageTitle = "Notification Sent"}
   addRespHeaders $ NotificationSentR $ PageCtx bwconf (sess.persistentSession, appCtx.config)
+
 
 onboardingNotificationSentPostH :: NotificationConfirmation -> ATAuthCtx (RespHeaders OnboardingResponse)
 onboardingNotificationSentPostH confirmation = do
@@ -248,6 +265,7 @@ onboardingNotificationSentPostH confirmation = do
   redirectCS "/onboarding/team"
   addRespHeaders $ NoContent ""
 
+
 -- | Team Invitation Handlers
 onboardingTeamGetH :: ATAuthCtx (RespHeaders OnboardingResponse)
 onboardingTeamGetH = do
@@ -256,6 +274,7 @@ onboardingTeamGetH = do
   let bwconf = (def :: BWConfig){pageTitle = "Invite Team Members"}
   let team = fromMaybe def $ getTeam sess.persistentSession
   addRespHeaders $ TeamR $ PageCtx bwconf (sess.persistentSession, appCtx.config, team)
+
 
 onboardingTeamPostH :: TeamInvitationList -> ATAuthCtx (RespHeaders OnboardingResponse)
 onboardingTeamPostH invitations = do
@@ -267,6 +286,7 @@ onboardingTeamPostH invitations = do
   redirectCS "/onboarding/pricing"
   addRespHeaders $ NoContent ""
 
+
 -- | Pricing Plan Handlers
 onboardingPricingGetH :: ATAuthCtx (RespHeaders OnboardingResponse)
 onboardingPricingGetH = do
@@ -275,6 +295,7 @@ onboardingPricingGetH = do
   let bwconf = (def :: BWConfig){pageTitle = "Choose Plan"}
   let pricing = fromMaybe def $ getPricing sess.persistentSession
   addRespHeaders $ PricingR $ PageCtx bwconf (sess.persistentSession, appCtx.config, pricing)
+
 
 onboardingPricingPostH :: PricingPlan -> ATAuthCtx (RespHeaders OnboardingResponse)
 onboardingPricingPostH plan = do
@@ -286,6 +307,7 @@ onboardingPricingPostH plan = do
   redirectCS "/onboarding/framework"
   addRespHeaders $ NoContent ""
 
+
 -- | Check Inbox Handler
 onboardingCheckInboxGetH :: ATAuthCtx (RespHeaders OnboardingResponse)
 onboardingCheckInboxGetH = do
@@ -294,7 +316,8 @@ onboardingCheckInboxGetH = do
   let bwconf = (def :: BWConfig){pageTitle = "Check Your Inbox"}
   addRespHeaders $ CheckInboxR $ PageCtx bwconf (sess.persistentSession, appCtx.config)
 
--- | Framework Integration Handler  
+
+-- | Framework Integration Handler
 onboardingFrameworkGetH :: ATAuthCtx (RespHeaders OnboardingResponse)
 onboardingFrameworkGetH = do
   sess <- Sessions.getSession
@@ -303,16 +326,19 @@ onboardingFrameworkGetH = do
   let framework = def :: FrameworkIntegration
   addRespHeaders $ FrameworkR $ PageCtx bwconf (sess.persistentSession, appCtx.config, framework)
 
+
 -- Helper functions
 validateProfileForm :: ProfileForm -> FormValidationResult ProfileForm
 validateProfileForm form =
-  let errors = catMaybes
-        [ validateName "firstName" form.profileFirstName
-        , validateName "lastName" form.profileLastName
-        , validateCompanyName form.profileCompanyName
-        , validateReferralSource form.profileReferralSource
-        ]
+  let errors =
+        catMaybes
+          [ validateName "firstName" form.profileFirstName
+          , validateName "lastName" form.profileLastName
+          , validateCompanyName form.profileCompanyName
+          , validateReferralSource form.profileReferralSource
+          ]
    in if null errors then Valid form else Invalid errors
+
 
 validateName :: Text -> Text -> Maybe FormError
 validateName fieldName name
@@ -321,12 +347,14 @@ validateName fieldName name
   | not (T.all (\c -> isLetter c || isSpace c) name) = Just $ FormError fieldName "Name can only contain letters and spaces"
   | otherwise = Nothing
 
+
 validateCompanyName :: Text -> Maybe FormError
 validateCompanyName name
   | T.null (T.strip name) = Just $ FormError "companyName" "Company name cannot be empty"
   | T.length name > 100 = Just $ FormError "companyName" "Company name cannot be longer than 100 characters"
   | T.all isSpace name = Just $ FormError "companyName" "Company name cannot be only whitespace"
   | otherwise = Nothing
+
 
 validateReferralSource :: Text -> Maybe FormError
 validateReferralSource source
@@ -336,11 +364,12 @@ validateReferralSource source
   where
     validSources = ["google", "social_media", "friend", "other"]
 
+
 -- | Helper to send test notifications
 sendTestNotifications :: NotificationSettings -> ATAuthCtx ()
 sendTestNotifications NotificationSettings{..} = do
   -- Send email notifications
-  forM_ notificationEmails $ \email -> 
+  forM_ notificationEmails $ \email ->
     sendTestEmail email
 
   -- Send SMS if phone number provided
@@ -351,10 +380,11 @@ sendTestNotifications NotificationSettings{..} = do
   -- Send channel notifications (Slack/Discord)
   forM_ notificationChannels $ \channel ->
     case channel of
-      SlackChannel name url -> 
+      SlackChannel name url ->
         sendTestSlackMessage name url
       DiscordChannel name url ->
         sendTestDiscordMessage name url
+
 
 -- | Helper to send test email
 sendTestEmail :: Text -> ATAuthCtx ()
@@ -363,12 +393,14 @@ sendTestEmail email = do
   -- You can use your email service here
   pure ()
 
+
 -- | Helper to send test SMS
 sendTestSMS :: Text -> Text -> ATAuthCtx ()
 sendTestSMS countryCode phone = do
   -- TODO: Implement SMS sending
   -- You can use your SMS service here
   pure ()
+
 
 -- | Helper to send test Slack message
 sendTestSlackMessage :: Text -> Text -> ATAuthCtx ()
@@ -377,6 +409,7 @@ sendTestSlackMessage channelName webhookUrl = do
   -- You can use your Slack integration here
   pure ()
 
+
 -- | Helper to send test Discord message
 sendTestDiscordMessage :: Text -> Text -> ATAuthCtx ()
 sendTestDiscordMessage channelName webhookUrl = do
@@ -384,21 +417,25 @@ sendTestDiscordMessage channelName webhookUrl = do
   -- You can use your Discord integration here
   pure ()
 
+
 -- | Validation helper for notification settings
 validateNotificationSettings :: NotificationSettings -> FormValidationResult NotificationSettings
 validateNotificationSettings settings =
-  let errors = catMaybes
-        [ validateEmails settings.notificationEmails
-        , validatePhone settings.notificationPhone
-        , validateChannels settings.notificationChannels
-        ]
+  let errors =
+        catMaybes
+          [ validateEmails settings.notificationEmails
+          , validatePhone settings.notificationPhone
+          , validateChannels settings.notificationChannels
+          ]
    in if null errors then Valid settings else Invalid errors
+
 
 validateEmails :: [Text] -> Maybe FormError
 validateEmails emails
   | null emails = Just $ FormError "emails" "At least one email address is required"
   | any T.null emails = Just $ FormError "emails" "Email addresses cannot be empty"
   | otherwise = Nothing
+
 
 validatePhone :: Maybe Text -> Maybe FormError
 validatePhone Nothing = Nothing
@@ -408,7 +445,8 @@ validatePhone (Just phone)
   | not (T.all isNumber phone) = Just $ FormError "phone" "Phone number can only contain digits"
   | otherwise = Nothing
 
+
 validateChannels :: [NotificationChannel] -> Maybe FormError
 validateChannels channels
-  | null channels = Nothing  -- Channels are optional
-  | otherwise = Nothing      -- Add specific channel validation if needed
+  | null channels = Nothing -- Channels are optional
+  | otherwise = Nothing -- Add specific channel validation if needed

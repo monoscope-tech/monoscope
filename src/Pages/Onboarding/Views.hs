@@ -1,5 +1,5 @@
 module Pages.Onboarding.Views (
-  OnboardingResponse (..), -- Export the type and all its constructors
+  OnboardingResponse (..),
   renderSignupPage,
   renderLoginForm,
   renderUserFormPage,

@@ -244,10 +244,10 @@ data FrameworkIntegration = FrameworkIntegration
   , language :: ProgrammingLanguage
   }
   deriving (Show, Eq)
+  deriving stock (Generic)
 
 
---   deriving stock (Generic)
---   deriving (ToJSON, FromJSON) via DA.CustomJSON '[DA.OmitNothingFields] FrameworkIntegration
+-- deriving (ToJSON, FromJSON) via DA.CustomJSON '[DA.OmitNothingFields] FrameworkIntegration
 
 -- instance ToJSON Framework where
 --   toJSON = \case
@@ -482,22 +482,6 @@ instance FromForm TeamMember where
     TeamMember
       <$> parseUnique "email" f
       <*> fromForm f
-
-
--- instance FromForm TeamInvitationList where
---   fromForm f = do
---     -- Get email and role values and convert to lists
---     let emails = toList $ lookupAll "email" f
---     let roles = toList $ lookupAll "role" f
-
---     -- Parse each member
---     members <- traverse parseMemberPair (zip emails roles)
---     pure $ TeamInvitationList members
---     where
---       parseMemberPair (email, roleText) =
---         case parseTeamRole roleText of
---           Right role -> Right $ TeamMember email role
---           Left err -> throwError err
 instance FromForm TeamInvitationList where
   fromForm f = do
     -- Get all member emails and roles from the form
@@ -712,16 +696,6 @@ instance Default UsagePreferences where
 
 
 -- instance FromForm URLMonitorConfig where
---   fromForm form = do
---     let tested = fromMaybe False $ do
---           val <- lookupUnique "monitor_tested" form
---           case val of
---             "true" -> Just True
---             _ -> Just False
-
---     pure URLMonitorConfig
---       { monitorTested = tested
---       }
 instance FromForm URLMonitorConfig where
   fromForm form = do
     tested <- case lookupUnique "monitor_tested" form of
