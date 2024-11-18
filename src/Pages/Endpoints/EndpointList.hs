@@ -11,11 +11,9 @@ import Effectful.Time qualified as Time
 import Fmt (commaizeF, fmt)
 import Lucid
 import Lucid.Htmx (hxGet_, hxSwap_, hxTrigger_)
-import Models.Apis.Anomalies qualified as Anomalies
 import Models.Apis.Endpoints qualified as Endpoints
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
-import Pages.Anomalies.AnomalyList qualified as AnomalyList
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
 import Pkg.Components qualified as Components
 import Pkg.Components.ItemsList qualified as ItemsList

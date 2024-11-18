@@ -4,12 +4,9 @@ import Data.Aeson ((.=))
 import Data.Aeson qualified as AE
 import Data.Aeson.Key qualified as AEKey
 import Data.HashMap.Internal.Strict qualified as HM
-import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
-import Data.Maybe (catMaybes)
 import Data.Text qualified as T
 import Data.Time (defaultTimeLocale)
-import Data.Time.Clock (UTCTime)
 import Data.Time.Format (formatTime)
 import Data.Time.Format.ISO8601 (formatShow, iso8601Format)
 import Data.UUID qualified as UUID
@@ -26,7 +23,7 @@ import Pages.Traces.Spans qualified as Spans
 import Pages.Traces.Utils
 import Relude
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
-import Utils (faSprite_, getDurationNSMS, getGrpcStatusColor, getServiceColors, getStatusColor, utcTimeToNanoseconds)
+import Utils (faSprite_, getDurationNSMS, getServiceColors, utcTimeToNanoseconds)
 
 
 traceH :: Projects.ProjectId -> Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders TraceDetailsGet)

@@ -24,7 +24,7 @@ import Data.Map qualified as Map
 import Data.Pool (withResource)
 import Data.Text (replace)
 import Data.Text qualified as T
-import Data.Time (UTCTime, ZonedTime, defaultTimeLocale, formatTime, getCurrentTime, zonedTimeToUTC)
+import Data.Time (UTCTime, defaultTimeLocale, formatTime, getCurrentTime, zonedTimeToUTC)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity.DBT (QueryNature (Update), execute)
@@ -33,9 +33,8 @@ import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
 import Effectful.Reader.Static (ask)
 import Lucid
-import Lucid (ToHtml (toHtml))
 import Lucid.Aria qualified as Aria
-import Lucid.Htmx (hxGet_, hxSwap_, hxTrigger_)
+import Lucid.Htmx (hxGet_, hxSwap_, hxTrigger_, hxTarget_)
 import Lucid.Hyperscript (__)
 import Models.Apis.Anomalies qualified as Anomalies
 import Models.Apis.Endpoints qualified as Endpoints
@@ -56,7 +55,7 @@ import Models.Users.Users (User (id))
 import NeatInterpolation (text)
 import OddJobs.Job (createJob)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
-import Pages.Components (statBox, statBox_, dateTime)
+import Pages.Components (statBox_, dateTime)
 import Pages.Components qualified as Components
 import Pages.Endpoints.EndpointComponents qualified as EndpointComponents
 import Pkg.Components qualified as Components
@@ -66,8 +65,8 @@ import Relude hiding (ask)
 import Relude.Unsafe qualified as Unsafe
 import System.Config (AuthContext (pool))
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders, addSuccessToast)
-import Text.Time.Pretty (prettyTimeAuto, prettyTimeAutoFromNow)
-import Utils (escapedQueryPartial, faSprite_, getMethodColor)
+import Text.Time.Pretty (prettyTimeAuto)
+import Utils (escapedQueryPartial, faSprite_)
 import Web.FormUrlEncoded (FromForm)
 
 

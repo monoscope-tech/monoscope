@@ -1,5 +1,6 @@
 tags
 .stack-work
+static/public/reload.trigger
 */.stack-work
 */.hie
 */dist-newstyle

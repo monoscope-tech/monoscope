@@ -22,6 +22,10 @@ live-reload:
 	# ghcid --command 'stack ghci apitoolkit-server --ghc-options="-w -j4 +RTS -A128m -n2m -RTS"' --test ':run Start.startApp' --warnings
 	ghcid --command 'cabal repl --ghc-options="-w -j4"' --test ':run Start.startApp' --warnings
 
+hot-reload:
+	livereload -f reload.trigger static/public/ & \
+	ghcid --command 'cabal repl --ghc-options="-w -j4"' --test ':run Start.startApp' --test ':! (sleep 1 && touch static/public/reload.trigger)'  --warnings
+
 watch:
 	# https://github.com/MercuryTechnologies/ghciwatch/issues/143 
 	# GHCI currently doesnt support non-terminating test actions like webservers. 

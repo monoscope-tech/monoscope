@@ -544,12 +544,12 @@ logItemCol_ _ _ reqVec colIdxMap "status" _ = renderLogBadge "status" reqVec col
 logItemCol_ source pid reqVec colIdxMap "rest" _ = div_ [class_ "space-x-2 whitespace-nowrap max-w-8xl overflow-hidden "] do
   let key = "rest"
   case source of
-    "logs" -> mapM_ (\v -> logItemCol_ source pid reqVec colIdxMap v []) ["severity_text", "body"]
-    "spans" -> mapM_ (\v -> logItemCol_ source pid reqVec colIdxMap v []) ["status", "kind", "duration", "span_name"]
+    "logs" -> forM_ ["severity_text", "body"] \v -> logItemCol_ source pid reqVec colIdxMap v []
+    "spans" -> forM_ ["status", "kind", "duration", "span_name"] \v -> logItemCol_ source pid reqVec colIdxMap v []
     _ -> do
       if lookupVecTextByKey reqVec colIdxMap "request_type" == Just "Incoming"
-        then renderIconWithTippy "text-gray-400 rounded-full xp-1 xcbadge-sm xbadge-neutral" "Incoming Request" (faSprite_ "arrow-down-left" "solid" "h-3")
-        else renderIconWithTippy "text-gray-400 rounded-full xp-1 xcbadge-sm xbadge-neutral !text-blue-500 " "Outgoing Request" (faSprite_ "arrow-up-right" "solid" "h-3")
+        then renderIconWithTippy "text-slate-500" "Incoming Request" (faSprite_ "arrow-down-left" "solid" "h-3")
+        else renderIconWithTippy "text-blue-700" "Outgoing Request" (faSprite_ "arrow-up-right" "solid" "h-3")
       logItemCol_ source pid reqVec colIdxMap "status_code" []
       logItemCol_ source pid reqVec colIdxMap "method" []
       renderLogBadge "url_path" reqVec colIdxMap "cbadge-sm badge-neutral"
@@ -569,7 +569,7 @@ requestDumpLogItemUrlPath pid rd colIdxMap = do
 -- TODO:
 jsonTreeAuxillaryCode :: Projects.ProjectId -> Text -> Html ()
 jsonTreeAuxillaryCode pid queryAST = do
-  template_ [id_ "log-item-context-menu-tmpl"] do
+  template_ [id_ "log-item-context-menu-tmpl "] do
     div_ [id_ "log-item-context-menu", class_ "log-item-context-menu  origin-top-right absolute left-0 mt-2 w-56 rounded-md shadow-md shadow-slate-300 bg-slate-25 ring-1 ring-black ring-opacity-5 divide-y divide-gray-100 focus:outline-none z-10", role_ "menu", tabindex_ "-1"] do
       div_ [class_ "py-1", role_ "none"] do
         a_
