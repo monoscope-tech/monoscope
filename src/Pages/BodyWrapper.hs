@@ -211,7 +211,7 @@ bodyWrapper BWConfig{sessM, currProject, pageTitle, menuItem, hasIntegrated, nav
             end
     |]
 
-    body_ [class_ "h-full w-full bg-slate-50 text-slate-500 group/pg", term "data-theme" "antdtheme", term "hx-ext" "multi-swap,preload"] do
+    body_ [class_ "h-full w-full bg-slate-25 text-slate-700 group/pg", term "data-theme" "antdtheme", term "hx-ext" "multi-swap,preload"] do
       div_
         [ style_ "z-index:99999"
         , class_ "pt-24 sm:hidden justify-center z-50 w-full p-4 bg-gray-50 overflow-y-auto inset-0 h-full max-h-full"
@@ -331,13 +331,13 @@ sideNav sess project pageTitle menuItem hasIntegrated = aside_ [class_ "border-r
       a_ [href_ "/", class_ "inline-flex"] do
         img_ [class_ "h-7 hidden group-has-[#sidenav-toggle:checked]/pg:block", src_ "/public/assets/svgs/logo.svg"]
         img_ [class_ "h-10 w-10 hidden sd-show", src_ "/public/assets/logo-mini.png"]
-      label_ [class_ "cursor-pointer text-slate-500"] do
+      label_ [class_ "cursor-pointer text-slate-700"] do
         input_ [type_ "checkbox", class_ "hidden", id_ "sidenav-toggle", [__|on change call setCookie("isSidebarClosed", `${me.checked}`)|]]
         script_ [text|document.getElementById("sidenav-toggle").checked= getCookie("isSidebarClosed")=="true" |]
         faSprite_ "side-chevron-left-in-box" "regular" " h-5 w-5 rotate-180 group-has-[#sidenav-toggle:checked]/pg:rotate-0"
     div_ [class_ "mt-4 sd-px-0 dropdown block"] do
       a_
-        [ class_ "flex flex-row border border-slate-300 bg-slate-50 text-slate-950 hover:bg-slate-100 gap-2 justify-center rounded-xl cursor-pointer py-3 group-has-[#sidenav-toggle:checked]/pg:px-3"
+        [ class_ "flex flex-row border border-slate-300 bg-slate-25 text-slate-950 hover:bg-slate-100 gap-2 justify-center rounded-xl cursor-pointer py-3 group-has-[#sidenav-toggle:checked]/pg:px-3"
         , tabindex_ "0"
         ]
         do
@@ -348,7 +348,7 @@ sideNav sess project pageTitle menuItem hasIntegrated = aside_ [class_ "border-r
       -- FIXME: reeanable hx-boost hxBoost_ "true"
       menu project.id & mapM_ \(mTitle, mUrl, fIcon) -> do
         let isActive = maybe (pageTitle == mTitle) (== mTitle) menuItem
-        let activeCls = if isActive then " bg-slate-50 text-slate-950 " else "!border-transparent"
+        let activeCls = if isActive then " bg-slate-25 text-slate-950 " else "!border-transparent"
         a_
           [ href_ mUrl
           , term "data-tippy-placement" "right"

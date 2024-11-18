@@ -156,7 +156,7 @@ surveyPage pid full_name phoneNumber = do
                               span_ [class_ "hidden group-hover:inline"] $ toHtml label
                       div_ [class_ "flex flex-col gap-2 mt-8"] do
                         label_ [class_ "font-medium mt-2"] "Other (please specify):"
-                        input_ [type_ "text", name_ "stack", class_ "px-3 py-1  bg-slate-50 border border-gray-300 text-gray-900 focus:outline-none rounded-lg focus:ring-blue-500 focus:border-blue-500 block w-full"]
+                        input_ [type_ "text", name_ "stack", class_ "px-3 py-1  bg-slate-25 border border-gray-300 text-gray-900 focus:outline-none rounded-lg focus:ring-blue-500 focus:border-blue-500 block w-full"]
 
                   div_ [class_ "flex flex-col gap-2"] do
                     label_ [class_ "font-medium"] do
@@ -186,12 +186,12 @@ surveyPage pid full_name phoneNumber = do
                             toHtml label
                       div_ [class_ "flex flex-col w-96 gap-2 pl-2"] do
                         label_ [class_ ""] "Other (please specify):"
-                        input_ [type_ "text", name_ "foundUsFrom", class_ "px-3 py-1  bg-slate-50 border border-gray-300 text-gray-900 focus:outline-none rounded-lg focus:ring-blue-500 focus:border-blue-500 block w-full"]
+                        input_ [type_ "text", name_ "foundUsFrom", class_ "px-3 py-1  bg-slate-25 border border-gray-300 text-gray-900 focus:outline-none rounded-lg focus:ring-blue-500 focus:border-blue-500 block w-full"]
 
                 -- div_ [class_ "flex flex-col gap-2 w-full"] do
                 --   label_ [class_ "font-medium"] "What's your phone number?"
                 --   div_ [class_ "w-full"] do
-                --     input_ [value_ phoneNumber, class_ "px-2 py-1 bg-slate-50 border border-gray-300 text-gray-900 focus:outline-none rounded-lg focus:ring-blue-500 focus:border-blue-500 block w-full", type_ "text", name_ "phoneNumber"]
+                --     input_ [value_ phoneNumber, class_ "px-2 py-1 bg-slate-25 border border-gray-300 text-gray-900 focus:outline-none rounded-lg focus:ring-blue-500 focus:border-blue-500 block w-full", type_ "text", name_ "phoneNumber"]
 
                 div_ [class_ "flex w-full justify-end items-center px-6 space-x-2 mt-8"] do
                   div_ [id_ "proceedIndicator", class_ "survey-indicator htmx-indicator"] do

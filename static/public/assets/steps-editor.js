@@ -478,7 +478,7 @@ ${stepData._json}</textarea
                         The request responded with a status of <strong>${stepResult.resp.status}</strong> and took <strong>${stepResult.resp.duration_ms}</strong> ms
                       </div>
                       <h3 class="text-slate-500 text-sm font-bold py-2">Request Preview</h3>
-                      <div class="bg-slate-50 rounded-xl p-4 flex flex-col gap-1">${unsafeHTML(generateRequestPreviewFromObject(this.collectionSteps[idx]))}</div>
+                      <div class="bg-slate-25 rounded-xl p-4 flex flex-col gap-1">${unsafeHTML(generateRequestPreviewFromObject(this.collectionSteps[idx]))}</div>
                     `
                   : nothing
               }

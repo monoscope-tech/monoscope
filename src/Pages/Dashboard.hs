@@ -2,7 +2,7 @@ module Pages.Dashboard (dashboardGetH, DashboardGet (..)) where
 
 import Data.Aeson qualified as AE
 import Data.Default (def)
-import Data.Time (UTCTime,diffUTCTime,getCurrentTime,zonedTimeToUTC)
+import Data.Time (UTCTime, diffUTCTime, getCurrentTime, zonedTimeToUTC)
 import Data.Vector qualified as Vector
 import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
 import Effectful.Time qualified as Time

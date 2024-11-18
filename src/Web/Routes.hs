@@ -62,6 +62,7 @@ import Web.Error
 
 type role Routes nominal
 
+
 type Routes :: forall {k}. k -> Type
 data Routes mode = Routes
   { public :: mode :- "public" :> Servant.Raw

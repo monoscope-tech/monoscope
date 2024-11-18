@@ -16,6 +16,7 @@ module.exports = {
     'group-has-[.error-logs:checked]/pg:block',
     'group-has-[.tm-toggle:checked]/tm:rotate-90',
     'basis-full',
+    'w-[16ch] '
   ],
   daisyui: {
     themes: [
@@ -52,6 +53,12 @@ module.exports = {
   },
   theme: {
     extend: {
+      colors: {
+        'gray-25': '#fcfcfd',
+        'gray-150': '#ecedf0',
+        'slate-25': '#fbfcfd',
+        'slate-150': '#e9eef4',
+      },
       gridTemplateColumns: {
         16: 'repeat(16, minmax(0, 1fr))',
       },

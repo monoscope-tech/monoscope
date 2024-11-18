@@ -1,12 +1,12 @@
-module Pkg.Parser.Stats (pTimeChartSection, pStatsSection, AggFunction(..), Section(..), Rollup(..), ByClause(..), Sources(..), parseQuery, pSource) where
+module Pkg.Parser.Stats (pTimeChartSection, pStatsSection, AggFunction (..), Section (..), Rollup (..), ByClause (..), Sources (..), parseQuery, pSource) where
 
-import Pkg.Parser.Expr (Subject, pSubject, Expr, pExpr, Subject(..))
+import Data.Aeson qualified as AE
+import Data.Text.Display (Display, display, displayBuilder, displayPrec)
 import Pkg.Parser.Core
+import Pkg.Parser.Expr (Expr, Subject (..), pExpr, pSubject)
 import Relude hiding (Sum, some)
 import Text.Megaparsec
 import Text.Megaparsec.Char (alphaNumChar, char, space, string)
-import Data.Aeson qualified as AE
-import Data.Text.Display (Display, display, displayBuilder, displayPrec)
 
 
 -- Modify Aggregation Functions to include optional aliases

@@ -236,14 +236,14 @@ jsonValueToHtmlTree val = jsonValueToHtmlTree' ("", "", val)
       div_
         [ class_ "relative log-item-field-parent"
         , term "data-field-path" $ replaceNumbers fullFieldPath'
-        , term "data-field-value" $ unwrapJsonPrimValue value
+        , term "data-field-value" $ unwrapJsonPrimValue False value
         ]
         $ a_
           [class_ "block hover:bg-blue-50 cursor-pointer pl-6 relative log-item-field-anchor ", [__|install LogItemMenuable|]]
           do
             span_ $ toHtml key
             span_ [class_ "text-blue-800"] ":"
-            span_ [class_ "text-blue-800 ml-2.5 log-item-field-value", term "data-field-path" fullFieldPath'] $ toHtml $ unwrapJsonPrimValue value
+            span_ [class_ "text-blue-800 ml-2.5 log-item-field-value", term "data-field-path" fullFieldPath'] $ toHtml $ unwrapJsonPrimValue False value
 
     renderParentType :: Text -> Text -> Text -> Int -> Html () -> Html ()
     renderParentType opening closing key count child = div_ [class_ (if key == "" then "" else "collapsed")] do
@@ -277,18 +277,16 @@ getKindColor "CONSUMER" = "badge-warning"
 getKindColor _ = "badge-outline"
 
 
-unwrapJsonPrimValue :: AE.Value -> Text
-unwrapJsonPrimValue (AE.Bool True) = "true"
-unwrapJsonPrimValue (AE.Bool False) = "false"
-unwrapJsonPrimValue (AE.String v) = "\"" <> toText v <> "\""
-unwrapJsonPrimValue (AE.Number v) = toText @String $ show v
-unwrapJsonPrimValue AE.Null = "null"
-unwrapJsonPrimValue (AE.Object _) = "{..}"
-unwrapJsonPrimValue (AE.Array items) = "[" <> toText (show (length items)) <> "]"
+unwrapJsonPrimValue :: Bool -> AE.Value -> Text
+unwrapJsonPrimValue _ (AE.Bool True) = "true"
+unwrapJsonPrimValue _ (AE.Bool False) = "false"
+unwrapJsonPrimValue False (AE.String v) = "\"" <> toText v <> "\""
+unwrapJsonPrimValue True (AE.String v) = toText v
+unwrapJsonPrimValue _ (AE.Number v) = toText @String $ show v
+unwrapJsonPrimValue _ AE.Null = "null"
+unwrapJsonPrimValue _ (AE.Object _) = "{..}"
+unwrapJsonPrimValue _ (AE.Array items) = "[" <> toText (show (length items)) <> "]"
 
-
--- unwrapJsonPrimValue (AE.Object _) = error "Impossible. unwrapJsonPrimValue should be for primitive types only. got object" -- should never be reached
--- unwrapJsonPrimValue (AE.Array _) = error "Impossible. unwrapJsonPrimValue should be for primitive types only. got array" -- should never be reached
 
 -- FIXME: delete
 lookupMapText :: Text -> HashMap Text Value -> Maybe Text

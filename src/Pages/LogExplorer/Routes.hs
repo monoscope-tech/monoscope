@@ -31,6 +31,7 @@ type role Routes' nominal
 
 type Routes = NamedRoutes Routes'
 
+
 type Routes' :: forall {k}. k -> Type
 data Routes' mode = Routes'
   { logExplorerGet :: mode :- "log_explorer" :> QPT "query" :> QPT "queryAST" :> QPT "cols" :> QPU "cursor" :> QPT "since" :> QPT "from" :> QPT "to" :> QPT "layout" :> QPT "source" :> QPT "target-spans" :> HXRequest :> HXBoosted :> Get '[HTML] (RespHeaders Log.LogsGet)

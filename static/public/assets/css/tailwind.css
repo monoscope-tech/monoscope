@@ -16,7 +16,7 @@
   }
 
   .card-round {
-    @apply bg-slate-50/80 border border-slate-200 rounded-2xl;
+    @apply bg-slate-25 border border-slate-200 rounded-2xl;
     /*overflow-hidden;*/
   }
 }
@@ -25,7 +25,7 @@
   .tabs-outline :is(.tab-active, [aria-selected='true']):not(.tab-disabled):not([disabled]),
   .tabs-outline :is(.tab-active, [aria-selected='true']):not(.tab-disabled):not([disabled]):hover {
     color: var(--fallback-bc, oklch(var(--bc) / var(--tw-text-opacity)));
-    @apply bg-slate-50 shadow;
+    @apply bg-slate-25 shadow;
   }
 }
 
@@ -33,6 +33,10 @@
 [data-theme] {
   --backgroundPrimary: #fff;
   --rounded-btn: 0.85rem;
+}
+
+html, body {
+  @apply overscroll-y-none bg-slate-25;
 }
 
 .c-scroll::-webkit-scrollbar {
@@ -385,7 +389,7 @@
   }
 
   .cbadge-sm {
-    @apply px-2 py-1 text-xs rounded-xl;
+   @apply  px-2 py-1 text-sm rounded-xl;
   }
   .badge-2xx {
     @apply bg-green-100 text-green-700;
@@ -406,7 +410,7 @@
     @apply bg-red-50 text-red-800;
   }
   .badge-neutral {
-    @apply bg-slate-100 text-slate-500;
+    @apply bg-slate-150 text-slate-700;
   }
   .badge-blue {
     @apply text-blue-500 bg-[#d6efff];
@@ -427,15 +431,12 @@
     @apply bg-cyan-100 text-cyan-600;
   }
   .ctable :where(.table-pin-rows thead tr) {
-    @apply sticky top-0 z-10 bg-slate-50/80;
+    @apply sticky top-0 z-10 bg-slate-25;
   }
   .ctable :where(.table-pin-cols tr th) {
     @apply sticky left-0 right-0 z-10;
   }
   .ctable td > div {
-    @apply px-2 py-1;
-  }
-  .bg-slate-50 {
-    @apply bg-slate-50/80;
+    @apply py-1;
   }
 }

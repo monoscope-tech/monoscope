@@ -23,6 +23,7 @@ type Routes = NamedRoutes Routes'
 
 type role Routes' nominal
 
+
 type Routes' :: forall {k}. k -> Type
 data Routes' mode = Routes'
   { alertUpsertPost :: mode :- "alerts" :> ReqBody '[FormUrlEncoded] Alerts.AlertUpsertForm :> Post '[HTML] (RespHeaders Alerts.Alert)

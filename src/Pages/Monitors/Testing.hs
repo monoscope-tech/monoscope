@@ -16,7 +16,6 @@ import Data.Time (UTCTime)
 import Data.Vector qualified as V
 import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
 import Effectful.Time qualified as Time
-import PyF qualified as PyF
 import Fmt.Internal.Core (fmt)
 import Fmt.Internal.Numeric (commaizeF)
 import Lucid
@@ -34,6 +33,7 @@ import Pages.Monitors.TestCollectionEditor (castToStepResult)
 import Pkg.Components qualified as Components
 import Pkg.Components.ItemsList qualified as ItemsList
 import Pkg.Parser
+import PyF qualified as PyF
 import Relude hiding (ask)
 import System.Types (ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders)
 import Text.Time.Pretty (prettyTimeAuto)
@@ -69,8 +69,8 @@ testingGetH pid filterTM timeFilter = do
               [ ItemsList.BulkAction{icon = Just "check", title = "deactivate", uri = "/p/" <> pid.toText <> "/anomalies/bulk_actions/acknowlege"}
               ]
           , zeroState =
-              Just $
-                ItemsList.ZeroState
+              Just
+                $ ItemsList.ZeroState
                   { icon = "empty-set"
                   , title = "No Multistep Test/Monitor yet."
                   , description = "You're can create one to start monitoring your services."
@@ -86,16 +86,16 @@ testingGetH pid filterTM timeFilter = do
           , pageTitle = "Multistep API Tests (Beta)"
           , pageActions = Just $ a_ [href_ $ "/p/" <> pid.toText <> "/monitors/collection", class_ "btn btn-sm blue-outline-btn space-x-2"] $ Utils.faSprite_ "plus" "regular" "h-4" >> "new tests"
           , navTabs =
-              Just $
-                toHtml $
-                  Components.TabFilter
-                    { current = currentFilterTab
-                    , currentURL
-                    , options =
-                        [ Components.TabFilterOpt{name = "Active", count = Nothing}
-                        , Components.TabFilterOpt{name = "Inactive", count = Just inactiveColsCount}
-                        ]
-                    }
+              Just
+                $ toHtml
+                $ Components.TabFilter
+                  { current = currentFilterTab
+                  , currentURL
+                  , options =
+                      [ Components.TabFilterOpt{name = "Active", count = Nothing}
+                      , Components.TabFilterOpt{name = "Inactive", count = Just inactiveColsCount}
+                      ]
+                  }
           }
   addRespHeaders $ PageCtx bwconf (ItemsList.ItemsPage listCfg $ V.map (\col -> CollectionListItemVM pid col currTime) colls)
 
@@ -271,7 +271,7 @@ dashboardPage pid col reqsVecM = do
                       , currentRange = Nothing
                       , exceededFreeTier = False
                       , query
-                      , queryAST = "" 
+                      , queryAST = ""
                       , cursor = Nothing
                       , isTestLog = Just True
                       , emptyStateUrl = Just $ "/p/" <> pid.toText <> "/monitors/collection?col_id=" <> col.id.toText

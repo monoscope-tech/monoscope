@@ -55,7 +55,7 @@ import Models.Apis.Fields.Query ()
 import Models.Projects.Projects qualified as Projects
 import NeatInterpolation (text)
 import Pkg.Parser
-import Pkg.Parser.Stats (Sources, Section)
+import Pkg.Parser.Stats (Section, Sources)
 import Relude hiding (many, some)
 import Witch (from)
 

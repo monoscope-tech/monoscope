@@ -392,8 +392,8 @@ instance Display Expr where
 -- Helper function to handle the common display logic
 displayExprHelper :: T.Text -> Int -> Subject -> Values -> Builder
 displayExprHelper op prec sub val =
-  displayParen (prec > 0) $
-    if subjectHasWildcard sub
+  displayParen (prec > 0)
+    $ if subjectHasWildcard sub
       then displayPrec prec (jsonPathQuery op sub val)
       else displayPrec prec sub <> displayPrec @T.Text prec op <> displayBuilder val
 
