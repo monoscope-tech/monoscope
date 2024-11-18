@@ -150,6 +150,26 @@ renderSelect label name options =
         $ faSprite_ "chevron-down" "regular" "h-4 w-4 text-slate-400"
 
 
+-- renderSelect :: Text -> Text -> [(Text, Text)] -> Maybe Text -> Html ()
+-- renderSelect label name options selectedValue =
+--   div_ [class_ "space-y-2"] $ do
+--     label_ [class_ "text-[#475467] text-sm font-medium font-['Inter'] leading-snug"]
+--       $ toHtml label
+--     div_ [class_ "relative bg-slate-50"] $ do
+--       select_
+--         [ class_ "w-full px-3 py-2 border border-slate-300 bg-slate-50 rounded-xl shadow-sm appearance-none focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+--         , name_ name
+--         ]
+--         $ do
+--           forM_ options $ \(value, label') ->
+--             option_
+--               [ value_ value
+--               , selected_ (Just value == selectedValue)
+--               ]
+--               $ toHtml label'
+--       div_ [class_ "absolute inset-y-0 right-0 flex items-center pr-3 pointer-events-none"]
+--         $ faSprite_ "chevron-down" "regular" "h-4 w-4 text-slate-400"
+
 -- | Divider with optional label
 renderDivider :: Maybe Text -> Html ()
 renderDivider mbLabel =
@@ -179,7 +199,7 @@ renderFeatureItem text =
 renderInfoMessage :: Text -> Html ()
 renderInfoMessage message =
   div_ [class_ "flex items-start space-x-2 text-sm text-slate-600 p-5 bg-slate-100 rounded-2xl justify-start gap-2"] $ do
-    faSprite_ "circle-info" "regular" "w-5 h-5 text-slate-400 mt-0.5"
+    faSprite_ "circle-info" "regular" "w-5 h-5 mt-0.5 text-[#067cff]"
     div_ [class_ "text-slate-500 text-sm font-medium font-['Inter'] leading-snug"]
       $ toHtml message
 

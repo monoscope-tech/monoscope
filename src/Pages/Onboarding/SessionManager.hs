@@ -1,4 +1,33 @@
-module Pages.Onboarding.SessionManager where
+module Pages.Onboarding.SessionManager (
+  -- Types
+  OnboardingSessionKeys (..),
+  OnboardingStep (..),
+  defaultSessionKeys,
+  -- Session storage functions
+  storeInSession,
+  getFromSession,
+  -- Step management
+  getCurrentStep,
+  setCurrentStep,
+  getNextStep,
+  updateAndProgress,
+  -- Store functions
+  storeProfile,
+  storeHosting,
+  storeUsage,
+  storeMonitor,
+  storeNotifications,
+  storeTeam,
+  storePricing,
+  -- Retrieve functions
+  getProfile,
+  getHosting,
+  getUsage,
+  getMonitor,
+  getNotifications,
+  getTeam,
+  getPricing,
+) where
 
 import Data.Aeson (FromJSON, ToJSON, decode, encode)
 import Data.ByteString.Lazy qualified as LBS -- Add this import
@@ -156,3 +185,40 @@ updateAndProgress session storeFunc data_ =
       sessionWithData = storeFunc session data_
       sessionData = Sessions.getSessionData sessionWithData
    in Sessions.SessionData $ Map.insert defaultSessionKeys.currentStepKey (decodeUtf8 $ encode nextStep) sessionData
+
+
+-- Add these functions to SessionManager.hs
+
+-- | Get profile data from session
+getProfile :: Sessions.PersistentSession -> Maybe ProfileForm
+getProfile session = getFromSession session defaultSessionKeys.profileKey
+
+
+-- | Get hosting location from session
+getHosting :: Sessions.PersistentSession -> Maybe HostingLocation
+getHosting session = getFromSession session defaultSessionKeys.hostingKey
+
+
+-- | Get usage preferences from session
+getUsage :: Sessions.PersistentSession -> Maybe UsagePreferences
+getUsage session = getFromSession session defaultSessionKeys.usageKey
+
+
+-- | Get URL monitor config from session
+getMonitor :: Sessions.PersistentSession -> Maybe URLMonitorConfig
+getMonitor session = getFromSession session defaultSessionKeys.monitorKey
+
+
+-- | Get notification settings from session
+getNotifications :: Sessions.PersistentSession -> Maybe NotificationSettings
+getNotifications session = getFromSession session defaultSessionKeys.notificationsKey
+
+
+-- | Get team invitations from session
+getTeam :: Sessions.PersistentSession -> Maybe TeamInvitationList
+getTeam session = getFromSession session defaultSessionKeys.teamKey
+
+
+-- | Get pricing plan from session
+getPricing :: Sessions.PersistentSession -> Maybe PricingPlan
+getPricing session = getFromSession session defaultSessionKeys.pricingKey

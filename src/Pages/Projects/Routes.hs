@@ -53,5 +53,6 @@ data Routes' mode = Routes'
   , onboardingCheckInbox :: mode :- "onboarding" :> "check-inbox" :> Get '[HTML] (RespHeaders OnboardingV.OnboardingResponse)
   , onboardingFrameworkGet :: mode :- "onboarding" :> "framework" :> Get '[HTML] (RespHeaders OnboardingV.OnboardingResponse)
   , onboardingNotificationSentGet :: mode :- "onboarding" :> "notification-sent" :> Get '[HTML] (RespHeaders OnboardingV.OnboardingResponse)
+  , onboardingNotificationSentPost :: mode :- "onboarding" :> "notification-sent" :> ReqBody '[FormUrlEncoded] OnboardingT.NotificationConfirmation :> Post '[HTML] (RespHeaders OnboardingV.OnboardingResponse)
   }
   deriving stock (Generic)

@@ -342,8 +342,10 @@ renderUserFormPage form validation = do
             "profileReferralSource"
             [ ("", "Select an option")
             , ("google", "Google")
-            , ("social_media", "Social Media")
+            , ("linked_in", "LinkedIn")
+            , ("twitter", "Twitter/X")
             , ("friend", "Friend/Colleague")
+            , ("others", "Others")
             ]
 
           renderPrimaryButton POST "" "Proceed"
@@ -365,6 +367,7 @@ renderNotificationSettingsFormPage settings =
         [ method_ "POST"
         , action_ ""
         , id_ "notification-settings"
+        , onsubmit_ "return handleSubmit(event)"
         ]
         $ do
           div_ [class_ "space-y-4"]
@@ -389,26 +392,21 @@ renderNotificationSettingsFormPage settings =
                   , class_ "text-[#475467] text-sm font-medium font-['Inter'] leading-snug"
                   ]
                   "Notify phone number"
-                div_ [class_ "relative"] $ do
-                  div_ [class_ "flex items-center w-full p-2 border px-3 py-2 rounded-xl"] $ do
-                    button_
-                      [ type_ "button"
-                      , class_ "flex items-center gap-1 text-slate-600"
-                      ]
-                      $ do
-                        span_ [class_ "text-slate-500 text-sm font-normal font-['Inter'] leading-snug"] "+234"
-                        faSprite_ "chevron-down" "regular" "h-3.5 w-3.5"
-                    span_ [class_ "text-slate-400 mx-2"] "("
-                    input_
-                      [ type_ "tel"
-                      , id_ "phone-input"
-                      , name_ "phone"
-                      , value_ (fromMaybe "" settings.notificationPhone)
-                      , class_ "flex-1 outline-none text-slate-700 bg-slate-50"
-                      , pattern_ "[0-9]{10}"
-                      , placeholder_ "Enter phone number"
-                      , required_ ""
-                      ]
+                -- div_ [class_ "relative"] $ do
+                div_ [class_ "flex items-center w-full p-2 border px-3 py-2 rounded-xl"] $ do
+                  div_ [class_ "w-1/6 flex items-center shrink-0 gap-1"] $ do
+                    countrySelect fullCountryCodes
+                  span_ [class_ "text-slate-400 mx-4"] "("
+                  input_
+                    [ type_ "tel"
+                    , id_ "phone-input"
+                    , name_ "phone"
+                    , value_ (fromMaybe "" settings.notificationPhone)
+                    , class_ "flex-1 outline-none text-slate-700 bg-slate-50"
+                    , pattern_ "[0-9]{10}"
+                    , placeholder_ "Enter phone number"
+                    , required_ ""
+                    ]
 
               -- Email notifications section
               section_ [] $ div_ [class_ "space-y-2 h-32"] $ do
@@ -417,7 +415,6 @@ renderNotificationSettingsFormPage settings =
                   , class_ "block text-md text-slate-600"
                   ]
                   "Notify the following email addresses"
-                -- div_ [class_ "flex rounded-xl h-28"] $ do
                 input_
                   [ type_ "text"
                   , id_ "email-tags"
@@ -433,6 +430,78 @@ renderNotificationSettingsFormPage settings =
 
     -- Initialize Tagify
     script_ [] $ toHtmlRaw emailTagsScript
+
+    script_
+      [type_ "text/javascript"]
+      [text|
+        function handleSubmit(event) {
+          event.preventDefault();
+          
+          const form = event.target;
+          const input = document.getElementById('email-tags');
+          
+          // Get emails directly as a comma-separated list
+          const tagify = input.tagify;
+          if (!tagify || !tagify.value) {
+            console.error('Tagify not initialized properly');
+            return false;
+          }
+          
+          // Extract just the email values 
+          const emailValues = tagify.value.map(tag => tag.value);
+          
+          // Create hidden input with plain emails
+          const emailInput = document.createElement('input');
+          emailInput.type = 'hidden';
+          emailInput.name = 'email-tags'; // Match the field name in Haskell FromForm instance
+          emailInput.value = emailValues.join(',');
+          
+          // Remove any existing input to avoid duplicates
+          const existing = form.querySelector('input[name="email-tags"]');
+          if (existing) {
+            existing.remove();
+          }
+          
+          form.appendChild(emailInput);
+          form.submit();
+          return false;
+        }
+
+        // Connect handler to the form
+        document.addEventListener('DOMContentLoaded', function() {
+          const form = document.getElementById('notification-settings');
+          if (form) {
+            form.addEventListener('submit', handleSubmit);
+          }
+        });
+      |]
+
+    script_
+      [type_ "text/javascript"]
+      [text|
+        document.addEventListener('DOMContentLoaded', function() {
+        const select = document.querySelector('select');
+    
+          select.addEventListener('change', function() {
+              if (this.value) {
+                  this.options[this.selectedIndex].textContent = this.value;
+              }
+          });
+
+          select.addEventListener('focus', function() {
+              const selectedOption = this.options[this.selectedIndex];
+              if (this.value) {
+                  selectedOption.textContent = selectedOption.dataset.full;
+              }
+          });
+
+          select.addEventListener('blur', function() {
+              if (this.value) {
+                  this.options[this.selectedIndex].textContent = this.value;
+              }
+          });
+      });
+      |]
   where
     connectionBox_ :: Bool -> Text -> Text -> Html ()
     connectionBox_ isConnected serviceName workspaceId =
@@ -490,7 +559,7 @@ renderUsageSelectionForm prefs = do
               (errorTracking prefs)
             renderOptionBox
               "performanceMonitoring"
-              "Performance monitoring"
+              "Perf. monitoring"
               "Monitor API performance metrics"
               (performanceMonitoring prefs)
             renderOptionBox
@@ -515,7 +584,8 @@ renderUsageSelectionForm prefs = do
           div_ [class_ "flex justify-between items-start mb-2"] $ do
             h3_ [class_ "text-black text-sm font-medium font-['Inter'] leading-snug"] (toHtml title)
             div_ [class_ "w-5 h-5 border rounded-md peer-checked:bg-blue-500 peer-checked:border-blue-500"] ""
-          p_ [class_ "text-[#475467] text-xs font-normal font-['Inter'] leading-2"] (toHtml description)
+          p_ [class_ "text-[#475467] text-sm font-normal font-['Inter'] leading-2"] (toHtml description)
+          div_ [class_ "p-4"] mempty
 
 
 renderUrlMonitorFormPage :: Html ()
@@ -614,7 +684,7 @@ renderPricingPlanPage plan =
                     $ " "
                     <> show (planRequestVolume plan)
                     <> "k requests per month"
-                div_ [class_ "text-[#475467] text-xs font-medium font-['Inter'] leading-3"] "then $1 per 20k requests"
+                div_ [class_ "text-[#475467] text-sm font-medium font-['Inter'] leading-3"] "then $1 per 20k requests"
 
               div_ [class_ "mt-4"] $ do
                 label_ [Lucid.for_ "requestVolume"] "Select request volume"
@@ -674,25 +744,46 @@ renderTeamInvitePage (TeamInvitationList members) =
                 div_ [class_ "flex items-center gap-2 border border-slate-200 rounded-xl p-1"] $ do
                   input_
                     [ type_ "email"
+                    , id_ "new-member-email"
                     , name_ "new-email"
                     , placeholder_ "exodustimothy@gmail.com"
                     , class_ "flex-1 px-4 py-2 text-slate-600 text-[#475467] text-sm font-normal font-['Inter'] leading-snug placeholder-slate-600 bg-transparent focus:outline-none"
                     ]
                   button_
-                    [ class_ "px-6 py-2 bg-blue-500 text-white text-sm font-medium rounded-lg hover:bg-blue-600 focus:outline-none"
+                    [ id_ "add-member-btn"
+                    , class_ "px-6 py-2 bg-blue-500 text-white text-sm font-medium rounded-lg hover:bg-blue-600 focus:outline-none"
                     , type_ "button"
-                    , hxTrigger_ "click"
-                    , hxTarget_ "#team-members-list"
-                    , hxSwap_ "beforeend"
                     ]
                     "Add"
 
               hr_ []
 
-              -- Hidden template for new members
-              template_ [id_ "member-template"] $ renderTeamMember def
+              template_ [id_ "member-template"] $ do
+                div_ [class_ "flex items-center gap-2 member-row"] $ do
+                  div_ [class_ "flex-1"] $ do
+                    div_ [class_ "border border-slate-200 rounded-lg px-4 py-2"] $ do
+                      input_
+                        [ type_ "hidden"
+                        , name_ "members[]"
+                        , class_ "member-email"
+                        ]
+                      span_ [class_ "text-slate-600 text-sm member-email-display"] mempty
+                  select_
+                    [ class_ "text-slate-600 text-sm border border-slate-200 rounded-lg py-2 pl-4 shadow pr-8 hover:border-slate-300 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    , name_ "roles[]"
+                    ]
+                    $ do
+                      option_ [value_ "Admin"] "Admin"
+                      option_ [value_ "Member"] "Member"
+                      option_ [value_ "Viewer", selected_ ""] "Viewer"
+                  div_ [class_ "flex items-center justify-center w-8 h-8 rounded-full bg-white border border-slate-200 shadow px-2"] $ do
+                    button_
+                      [ type_ "button"
+                      , class_ "text-red-500 hover:text-red-600"
+                      , onclick_ "this.closest('.member-row').remove()"
+                      ]
+                      $ img_ [src_ "/public/assets/svgs/onboarding/trash.svg", alt_ "delete"]
 
-              -- Team members list
               div_ [id_ "team-members-list", class_ "space-y-1"] $ do
                 forM_ members renderTeamMember
 
@@ -700,43 +791,97 @@ renderTeamInvitePage (TeamInvitationList members) =
               renderPrimaryButton POST "" "Proceed"
               renderSecondaryButton "" "I'll invite colleagues later"
 
+    script_
+      [type_ "text/javascript"]
+      [text|
+document.addEventListener('DOMContentLoaded', function() {
+    console.log('Team invite page initialized');
+    
+    const addButton = document.getElementById('add-member-btn');
+    const membersList = document.getElementById('team-members-list');
+    const newEmailInput = document.getElementById('new-member-email');
+    const template = document.getElementById('member-template');
+
+    if (addButton && membersList && newEmailInput && template) {
+        addButton.addEventListener('click', function(e) {
+            e.preventDefault();
+            
+            const email = newEmailInput.value.trim();
+            
+            // Basic email validation
+            const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+            if (!email || !emailPattern.test(email)) {
+                alert('Please enter a valid email address');
+                return;
+            }
+            
+            // Check for duplicate emails
+            const existingEmails = Array.from(membersList.querySelectorAll('.member-email'))
+                .map(input => input.value);
+            if (existingEmails.includes(email)) {
+                alert('This email has already been added');
+                return;
+            }
+
+            // Clone the template
+            const clone = template.content.cloneNode(true);
+
+            // Set the email in both the hidden input and display span
+            const memberEmailInput = clone.querySelector('.member-email');
+            const memberEmailDisplay = clone.querySelector('.member-email-display');
+            
+            memberEmailInput.value = email;
+            memberEmailDisplay.textContent = email;
+
+            // Add the new member row
+            membersList.appendChild(clone);
+
+            // Clear the input field - force it to empty string
+            document.getElementById('new-member-email').value = '';
+            
+            // Optional: Focus back on the input for next entry
+            document.getElementById('new-member-email').focus();
+        });
+    }
+});
+|]
+
 
 renderTeamMember :: TeamMember -> Html ()
 renderTeamMember member =
-  div_
-    [ class_ "flex items-center gap-2 member-row"
-    ]
-    $ do
-      div_ [class_ "flex-1"]
-        $ div_ [class_ "border border-slate-200 rounded-lg px-4 py-2"]
-        $ do
-          input_
-            [ type_ "hidden"
-            , name_ "members[]"
-            , value_ member.memberEmail
-            , class_ "member-email"
-            ]
-          span_ [class_ "text-slate-600 text-sm"] (toHtml member.memberEmail)
-
-      _ <- select_
-        [ class_ "text-slate-600 text-sm border border-slate-200 rounded-lg py-2 pl-4 shadow pr-8 hover:border-slate-300 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-        , name_ "roles[]"
-        ]
-        $ do
-          option_ ([selected_ "" | member.memberRole == Admin]) "Admin"
-          option_ ([selected_ "" | member.memberRole == Member]) "Member"
-          option_ ([selected_ "" | member.memberRole == Viewer]) "Viewer"
-
-      div_ [class_ "flex items-center justify-center w-8 h-8 rounded-full bg-white border border-slate-200 shadow px-2"]
-        $ button_
-          [ type_ "button"
-          , class_ "text-red-500 hover:text-red-600"
-          , hxTrigger_ "click"
-          , hxSwap_ "outerHTML"
-          , hxTarget_ "closest .member-row"
+  div_ [class_ "flex items-center gap-2 member-row"] $ do
+    div_ [class_ "flex-1"] $ do
+      div_ [class_ "border border-slate-200 rounded-lg px-4 py-2"] $ do
+        input_
+          [ type_ "hidden"
+          , name_ "members[]"
+          , value_ member.memberEmail
+          , class_ "member-email"
           ]
-        $ do
-          img_ [src_ "/public/assets/svgs/onboarding/trash.svg", alt_ "delete"]
+        span_ [class_ "text-slate-600 text-sm"] $ toHtml member.memberEmail
+
+    select_
+      [ class_ "text-slate-600 text-sm border border-slate-200 rounded-lg py-2 pl-4 shadow pr-8 hover:border-slate-300 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+      , name_ "roles[]"
+      ]
+      $ do
+        option_
+          ([value_ "Admin"] ++ [selected_ "" | member.memberRole == Admin])
+          "Admin"
+        option_
+          ([value_ "Member"] ++ [selected_ "" | member.memberRole == Member])
+          "Member"
+        option_
+          ([value_ "Viewer"] ++ [selected_ "" | member.memberRole == Viewer])
+          "Viewer"
+
+    div_ [class_ "flex items-center justify-center w-8 h-8 rounded-full bg-white border border-slate-200 shadow px-2"] $ do
+      button_
+        [ type_ "button"
+        , class_ "text-red-500 hover:text-red-600"
+        , onclick_ "this.closest('.member-row').remove()"
+        ]
+        $ img_ [src_ "/public/assets/svgs/onboarding/trash.svg", alt_ "delete"]
 
 
 renderCheckInboxPage :: Html ()
@@ -833,11 +978,16 @@ renderNotificationSentPage = do
     div_ [class_ "flex justify-center py-12"]
       $ img_ [src_ "/public/assets/svgs/onboarding/sent.svg", alt_ "Notification sent"]
 
-    -- Action buttons
-    div_ [class_ "space-y-6"] $ do
-      renderPrimaryButton POST "" "Confirmed"
-
-      renderSecondaryButton "/onboarding/notifications" "Back to notification channels"
+    -- Action buttons - Now wrapped in a form
+    form_
+      [ hxPost_ "/onboarding/notification-sent"
+      , hxSwap_ "outerHTML"
+      ]
+      $ do
+        input_ [type_ "hidden", name_ "confirmed", value_ "true"]
+        div_ [class_ "space-y-6"] $ do
+          renderPrimaryButton POST "" "Confirmed"
+          renderSecondaryButton "/onboarding/notifications" "Back to notification channels"
 
 
 renderFrameworkIntegrationPage :: FrameworkIntegration -> Html ()
@@ -869,17 +1019,17 @@ renderFrameworkIntegrationPage integration =
       renderFormQuestion "What language/" (Just "frameworks will you be") (Just "integrating?")
 
     renderSearchBox =
-      div_ [class_ "relative w-full flex flex-col justify-between items-start"] $ do
-        div_ [class_ "absolute inset-y-0 left-4 flex items-center pointer-events-none px-4"]
-          $ faSprite_ "magnifying-glass" "regular" "h-5 w-5 text-slate-400 p-3"
+      div_ [class_ "relative w-full"] $ do
+        div_ [class_ "absolute inset-y-0 left-4 flex items-center pointer-events-none"]
+          $ img_ [src_ "/public/assets/svgs/onboarding/search.svg", alt_ "search", class_ "w-5 h-5"]
         input_
           [ type_ "search"
           , placeholder_ "Search language/framework"
-          , class_ "w-full pl-12 pr-4 py-2 bg-slate-50 border-slate-300 border-2 rounded-2xl shadow-sm placeholde-slate-500 font-normal font-['Inter'] leading-snug focus:outline-none focus:ring-2 focus:ring-blue-100 focus:border-blue-200 text-lg text-slate-600"
+          , class_ "w-full pl-12 pr-4 py-2 bg-slate-50 border-slate-300 border-2 rounded-2xl shadow-sm placeholder-slate-500 font-normal font-['Inter'] leading-snug focus:outline-none focus:ring-2 focus:ring-blue-100 focus:border-blue-200 text-lg text-slate-600"
           ]
 
     renderFrameworksList =
-      div_ [class_ "space-y-1 h-96 overflow-y-auto scrollbar-thin scrollbar-thumb-slate-300 scrollbar-track-slate-100 hover:scrollbar-thumb-slate-400"] $ do
+      div_ [class_ "space-y-1 overflow-y-auto scrollbar-thin scrollbar-thumb-slate-300 scrollbar-track-slate-100 hover:scrollbar-thumb-slate-400"] $ do
         -- Using the integration value to highlight selected framework
         let isSelected fw = integration.framework == fw
         renderFrameworkItem "Go" "go_logo.svg" "Native" (isSelected Native)
@@ -889,7 +1039,7 @@ renderFrameworkIntegrationPage integration =
     renderActionButtons =
       div_ [] $ do
         p_
-          [class_ "text-slate-500 text-xs font-medium font-['Inter'] leading-none"]
+          [class_ "text-slate-500 text-sm font-medium font-['Inter'] leading-none"]
           "This button below will check if APItoolkit has received telemetry data from the integration."
         div_ [class_ "space-y-4 pt-4"] $ do
           renderPrimaryButton POST "" "Confirm Integration and Proceed"
@@ -956,7 +1106,7 @@ renderFrameworkIntegrationPage integration =
 
         div_ [class_ "space-y-2 w-full"] $ do
           div_
-            [class_ "text-slate-950 text-xl font-semibold font-['Inter'] leading-7"]
+            [class_ "text-[#131a25] text-xl font-semibold font-['Inter'] leading-7"]
             "Configure Express SDK"
           div_
             [class_ "text-slate-500 text-sm font-medium font-['Inter'] leading-snug "]

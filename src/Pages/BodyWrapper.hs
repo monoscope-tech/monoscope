@@ -121,6 +121,74 @@ bodyWrapper BWConfig{sessM, currProject, pageTitle, menuItem, hasIntegrated, nav
         script_ [type_ "module", src_ $(hashAssetFile "/public/assets/filtercomponent.js")] ("" :: Text)
         script_ [src_ "/public/assets/js/main.js"] ("" :: Text)
 
+        style_
+          [type_ "text/css"]
+          [text|
+          .tagify {
+            --tags-border-color: #d1d5db;
+            --tags-hover-border-color: #9ca3af;
+            --tags-focus-border-color: #3b82f6;
+            --tag-bg: #e2e8f0;
+            --tag-hover: #dbeafe;
+              --tag-text-color: #475467;
+              --tag-text-color--edit: #475467;
+              --tag-pad: 0.125rem 0.125rem;
+              --tag-inset-shadow-size: 1.1em;
+              --tag-invalid-color: #991b1b;
+              --tag-invalid-bg: #fee2e2;
+              --tag-remove-bg: #991b1b;
+              --tag-remove-btn-color: #94a3b8;
+              --tag-remove-btn-bg: none;
+              --tag-remove-btn-bg--hover: #dc2626;
+              font-size: 0.75rem;
+              padding: 0.5rem;
+            }
+            /* Remove button styling */
+            .tagify__tag__removeBtn {
+              width: 1rem;
+              height: 1rem;
+              border-radius: 9999px;
+              background: white;
+              margin-left: 0.25rem;
+              box-shadow: 0 1px 2px 0 rgb(0 0 0 / 0.05);
+              display: inline-flex;
+              align-items: center;
+              justify-content: center;
+            }
+            /* Input placeholder color */
+            .tagify__input {
+              color: #94a3b8;
+            }
+            .tagify--focus {
+              border-color: #e5e7eb !important;
+            }
+            .tagify__tag__removeBtn {
+              width: 0.5rem;
+              height: 0.5rem;
+              border-radius: 9999px;
+              background: white;
+              margin-left: 0.25rem;
+              display: inline-flex;
+              align-items: center;
+              justify-content: center;
+            }
+            /* Tag content layout */
+            .tagify__tag > div {
+              padding: 0.25rem 0.25rem;
+              display: inline-flex;
+              align-items: center;
+              gap: 0rem;
+            }
+            .tagify__tag__removeBtn .tagify__tag__removeBtn__inner::before,
+            .tagify__tag__removeBtn .tagify__tag__removeBtn__inner::after {
+              background: #e2e8f0;
+              width: 0.125rem;
+              height: 0.125rem;
+              padding: 0.125rem;
+
+            }
+            |]
+
         script_
           [text|
       !function(e,t,n,s,u,a){e.twq||(s=e.twq=function(){s.exe?s.exe.apply(s,arguments):s.queue.push(arguments);},s.version='1.1',s.queue=[],u=t.createElement(n),u.async=!0,u.src='https://static.ads-twitter.com/uwt.js',

@@ -1,6 +1,7 @@
 module Pages.Onboarding.Types where
 
-import Data.Aeson (FromJSON, ToJSON, withText)
+import Data.Aeson (FromJSON, ToJSON, decode, withText)
+import Data.ByteString.Lazy.Char8 qualified as BL
 import Data.Default (Default (..), def)
 import Data.Either (either)
 import Data.List (concatMap, lookup, zip, zip3)
@@ -19,7 +20,10 @@ import Web.FormUrlEncoded (
 
 import Control.Applicative ((<$>), (<*>))
 import Control.Monad.Error.Class (MonadError (throwError))
-import Data.Aeson.Types (ToJSON (toJSON))
+import Data.Aeson (Object, Value (..), decode)
+import Data.Aeson.KeyMap qualified as KM
+import Data.Aeson.Types (ToJSON (toJSON), parseMaybe)
+import Data.ByteString.Lazy.Char8 qualified as BL
 import Data.Foldable (toList)
 import Data.Map.Strict qualified as Map
 import Data.Maybe
@@ -302,6 +306,7 @@ data NotificationSettings = NotificationSettings
   { notificationChannels :: [NotificationChannel]
   , notificationEmails :: [Text]
   , notificationPhone :: Maybe Text
+  , notificationCountryCode :: Maybe Text
   }
   deriving stock (Show, Eq, Generic)
   deriving (ToJSON, FromJSON) via DA.CustomJSON '[DA.OmitNothingFields] NotificationSettings
@@ -341,6 +346,7 @@ instance FromForm NotificationChannel where
 
 instance FromForm NotificationSettings where
   fromForm f = do
+    traceShowM f
     -- Parse notification channels
     let channelTypes = lookupAll "type" f
         channelNames = lookupAll "channelName" f
@@ -356,23 +362,46 @@ instance FromForm NotificationSettings where
     -- Parse channels
     channels <- traverse parseChannel channelData
 
-    -- Get emails and phone
-    let emails = toList $ lookupAll "notificationEmail" f
-    let phoneNumbers = toList $ lookupAll "notificationPhone" f
+    -- Parse email-tags JSON string
+    let emailsJson = toList $ lookupAll "email-tags" f
+    let emails = case emailsJson of
+          (jsonStr : _) ->
+            case decode (BL.pack $ toString jsonStr) :: Maybe [Value] of
+              Just values -> mapMaybe extractEmail values
+              Nothing -> []
+          [] -> []
+
+    -- Get phone and country code
+    let phoneNumbers = toList $ lookupAll "phone" f
+    let countryCodes = toList $ lookupAll "country_code" f
+
     let phone = case phoneNumbers of
-          (p : _) -> Just p
-          [] -> Nothing
+          (p : _) | not (T.null p) -> Just p
+          _ -> Nothing
+
+    let countryCode = case countryCodes of
+          (c : _) | not (T.null c) -> Just c
+          _ -> Nothing
 
     pure
       NotificationSettings
         { notificationChannels = channels
         , notificationEmails = emails
         , notificationPhone = phone
+        , notificationCountryCode = countryCode
         }
     where
       parseChannel (typ, name, webhook) = do
         constructor <- either throwError pure $ parseChannelType typ
         pure $ constructor name webhook
+
+      extractEmail :: Value -> Maybe Text
+      extractEmail (Object obj) = do
+        value <- KM.lookup "value" obj
+        case value of
+          String txt -> Just txt
+          _ -> Nothing
+      extractEmail _ = Nothing
 
 
 instance ToForm NotificationChannel where
@@ -395,6 +424,7 @@ instance ToForm NotificationSettings where
       [ mconcat (map toForm notificationChannels)
       , mconcat (map (\email -> [("notificationEmail", email)]) notificationEmails)
       , maybe [] (\phone -> [("notificationPhone", phone)]) notificationPhone
+      , maybe [] (\code -> [("country_code", code)]) notificationCountryCode
       ]
 
 
@@ -454,20 +484,36 @@ instance FromForm TeamMember where
       <*> fromForm f
 
 
+-- instance FromForm TeamInvitationList where
+--   fromForm f = do
+--     -- Get email and role values and convert to lists
+--     let emails = toList $ lookupAll "email" f
+--     let roles = toList $ lookupAll "role" f
+
+--     -- Parse each member
+--     members <- traverse parseMemberPair (zip emails roles)
+--     pure $ TeamInvitationList members
+--     where
+--       parseMemberPair (email, roleText) =
+--         case parseTeamRole roleText of
+--           Right role -> Right $ TeamMember email role
+--           Left err -> throwError err
 instance FromForm TeamInvitationList where
   fromForm f = do
-    -- Get email and role values and convert to lists
-    let emails = toList $ lookupAll "email" f
-    let roles = toList $ lookupAll "role" f
+    -- Get all member emails and roles from the form
+    let memberEmails = toList $ lookupAll "members[]" f
+        memberRoles = toList $ lookupAll "roles[]" f
 
-    -- Parse each member
-    members <- traverse parseMemberPair (zip emails roles)
+    -- Zip emails and roles together and parse each pair
+    members <- traverse parseMember (zip memberEmails memberRoles)
     pure $ TeamInvitationList members
     where
-      parseMemberPair (email, roleText) =
-        case parseTeamRole roleText of
-          Right role -> Right $ TeamMember email role
-          Left err -> throwError err
+      parseMember :: (Text, Text) -> Either Text TeamMember
+      parseMember (email, roleText) = do
+        role <- parseTeamRole roleText
+        if T.null email
+          then Left "Email cannot be empty"
+          else Right $ TeamMember email role
 
 
 instance ToForm TeamRole where
@@ -501,6 +547,22 @@ data PlanFeature
   | AIValidations
   deriving stock (Show, Eq, Generic)
   deriving (ToJSON, FromJSON) via DA.CustomJSON '[DA.OmitNothingFields] PlanFeature
+
+
+-- | Notification confirmation data
+newtype NotificationConfirmation = NotificationConfirmation
+  { confirmed :: Bool
+  }
+  deriving stock (Show, Eq, Generic)
+  deriving (ToJSON, FromJSON) via DA.CustomJSON '[DA.OmitNothingFields] NotificationConfirmation
+
+
+instance FromForm NotificationConfirmation where
+  fromForm form = do
+    confirmed <- case lookupUnique "confirmed" form of
+      Right "true" -> Right True
+      _ -> Right False
+    pure NotificationConfirmation{confirmed}
 
 
 -- Convert form feature string to PlanFeature
@@ -717,6 +779,7 @@ instance Default NotificationSettings where
       { notificationChannels = []
       , notificationEmails = ["exodustimthy@gmail.com", "exodustimthy@gmail.com", "gethasalondarea...", "gethasalondared@gmail.com", "docterman223@gmail.com"]
       , notificationPhone = Nothing
+      , notificationCountryCode = Nothing
       }
 
 

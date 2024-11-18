@@ -48,4 +48,5 @@ server =
     , onboardingCheckInbox = OnboardingH.onboardingCheckInboxGetH
     , onboardingFrameworkGet = OnboardingH.onboardingFrameworkGetH
     , onboardingNotificationSentGet = OnboardingH.onboardingNotificationSentGetH
+    , onboardingNotificationSentPost = OnboardingH.onboardingNotificationSentPostH
     }
