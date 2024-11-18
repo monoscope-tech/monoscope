@@ -184,7 +184,7 @@ logQueryBox_ pid currentRange source targetSpan queryAST = do
     , [__| on keydown if event.key is 'Enter' halt |]
     ]
     do
-      div_ [class_ "flex gap-2 items-stretch justify-center "] do
+      div_ [class_ "flex gap-2 items-stretch justify-center"] do
         div_ [class_ "cursor-pointer relative bg-slate-100 rounded-2xl border border-slate-200 inline-flex justify-center"] do
           div_ [class_ "flex gap-2 justify-center items-center px-2 text-slate-600 "] $ "Saved queries" >> faSprite_ "chevron-down" "regular" "w-3 h-3"
         div_ [class_ "p-1 pl-3 flex-1 flex gap-2 bg-slate-100 rounded-2xl border border-slate-200 justify-between items-stretch"] do
@@ -193,7 +193,7 @@ logQueryBox_ pid currentRange source targetSpan queryAST = do
           when (source == "spans") do
             let target = fromMaybe "all-spans" targetSpan
             div_ [class_ "gap-[2px] flex items-center"] do
-              span_ "In"
+              span_ "in"
               select_
                 [ class_ "ml-1 select select-sm select-bordered w-full max-w-[150px]"
                 , name_ "target-spans"
@@ -277,9 +277,9 @@ apiLogsPage page = do
       logQueryBox_ page.pid page.currentRange page.source page.targetSpans page.queryAST
 
       div_ [class_ "flex flex-row gap-4 mt-3"] do
-        renderChart "reqsChartsECP" page.source page.pid.toText ""
-        unless (page.source == "logs") $ renderChart "reqsChartsErrP" page.source page.pid.toText ", theme:'roma'"
-        unless (page.source == "logs") $ renderChart "reqsChartsLatP" page.source page.pid.toText ", chart_type:'LineCT', group_by:'GBDurationPercentile'"
+        renderChart page.pid "reqsChartsECP" "All requests" (Just $ fmt (commaizeF page.resultCount)) Nothing  page.source ""
+        unless (page.source == "logs") $ renderChart page.pid "reqsChartsErrP" "Errors" Nothing Nothing page.source ", theme:'roma'"
+        unless (page.source == "logs") $ renderChart page.pid "reqsChartsLatP" "Latency" Nothing Nothing page.source ", chart_type:'LineCT', group_by:'GBDurationPercentile'"
 
     div_ [class_ "flex gap-3.5 overflow-hidden"] do
       div_ [class_ "card-round w-1/5 shrink-0 flex flex-col gap-2 p-2  group-has-[.toggle-filters:checked]/pg:hidden "] do
@@ -321,19 +321,22 @@ apiLogsPage page = do
   template_ [id_ "loader-tmp"] $ span_ [class_ "loading loading-dots loading-md"] ""
 
 
-renderChart :: Text -> Text -> Text -> Text -> Html ()
-renderChart chartId source pid extraHxVals = do
+renderChart :: Projects.ProjectId -> Text -> Text -> Maybe Text -> Maybe Text -> Text -> Text -> Html ()
+renderChart pid chartId chartTitle primaryUnitM rateM source extraHxVals = do
   let chartAspectRatio "logs" = "aspect-[12/1]"
       chartAspectRatio _ = "aspect-[3/1]"
 
   div_ [class_ "flex-1 space-y-1.5"] do
     div_ [class_ "leading-none flex justify-between items-center"] do
-      span_ $ toHtml $ if source == "logs" then "Log Lines " else chartId
+      div_ [class_ "inline-flex gap-3 items-center"] do
+        span_ $ toHtml chartTitle 
+        whenJust primaryUnitM \primaryUnit -> span_ [class_ "bg-slate-200 px-2 py-1 rounded-3xl"] (toHtml primaryUnit)
+        whenJust rateM \rate ->  span_ [class_ "text-slate-300"] (toHtml rate)
       label_ [class_ "rounded-full border border-slate-300 p-2 inline-flex cursor-pointer"] $ faSprite_ "up-right-and-down-left-from-center" "regular" "w-3 h-3"
     div_
       [ id_ chartId
       , class_ $ "rounded-2xl border border-slate-200 log-chart p-3 group-has-[.toggle-chart:checked]/pg:hidden " <> (chartAspectRatio source)
-      , hxGet_ $ "/charts_html?id=" <> chartId <> "&show_legend=false&pid=" <> pid
+      , hxGet_ $ "/charts_html?id=" <> chartId <> "&show_legend=false&pid=" <> pid.toText
       , hxTrigger_ "intersect, htmx:beforeRequest from:#log_explorer_form"
       , hxVals_ $ "js:{query_raw:window.getQueryFromEditor('" <> chartId <> "'), since: params().since, from: params().from, to:params().to, cols:params().cols, layout:'all', source: params().source" <> extraHxVals <> "}"
       , hxSwap_ "innerHTML"

@@ -15,10 +15,8 @@ ghc-options:
   - "-hidir=.hifiles"
   - -threaded
   - -Weverything
+  # - -fdefer-type-errors
   - -Werror # Treat warnings as errors
-  - -fdefer-type-errors
-  - -Werror=deferred-type-errors
-  - -Werror=deferred-out-of-scope-variables
   - -fno-defer-typed-holes
   - -Wno-error=deprecations
   - -Wno-error=unused-packages

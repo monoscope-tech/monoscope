@@ -23,8 +23,12 @@ live-reload:
 	ghcid --command 'cabal repl --ghc-options="-w -j4"' --test ':run Start.startApp' --warnings
 
 watch:
-	# ghciwatch --test-ghci Start.startApp --error-file errors.err  --before-startup-shell hpack --clear  --watch src
-	ghciwatch --command ""
+	# https://github.com/MercuryTechnologies/ghciwatch/issues/143 
+	# GHCI currently doesnt support non-terminating test actions like webservers. 
+	# So it should be used only for checking compile time and generating static-ls actions
+	# And for repeatedly running tests on code changes
+	# ghciwatch --test-ghci Start.startApp --error-file errors.err  --before-startup-shell hpack --clear  --watch 
+	ghciwatch --error-file errors.err  --before-startup-shell hpack --clear  --watch 
 
 
 live-test-reload:
