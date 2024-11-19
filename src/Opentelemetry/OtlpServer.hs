@@ -279,7 +279,6 @@ convertSpanRecord pid resource scope sp =
 --           }
 --     )
 
-
 traceServiceExportH
   :: Log.Logger
   -> AuthContext

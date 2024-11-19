@@ -34,7 +34,7 @@ import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
 import Effectful.Reader.Static (ask)
 import Lucid
 import Lucid.Aria qualified as Aria
-import Lucid.Htmx (hxGet_, hxSwap_, hxTrigger_, hxTarget_)
+import Lucid.Htmx (hxGet_, hxSwap_, hxTarget_, hxTrigger_)
 import Lucid.Hyperscript (__)
 import Models.Apis.Anomalies qualified as Anomalies
 import Models.Apis.Endpoints qualified as Endpoints
@@ -55,7 +55,7 @@ import Models.Users.Users (User (id))
 import NeatInterpolation (text)
 import OddJobs.Job (createJob)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
-import Pages.Components (statBox_, dateTime)
+import Pages.Components (dateTime, statBox_)
 import Pages.Components qualified as Components
 import Pages.Endpoints.EndpointComponents qualified as EndpointComponents
 import Pkg.Components qualified as Components
@@ -344,12 +344,12 @@ issueItem hideByDefault currTime issue timeFilter icon title endpoint content an
             span_ [class_ "text-xs font-medium text-slate-950", term "data-tippy-content" $ "first seen: " <> show issue.createdAt] $ toHtml $ prettyTimeAuto currTime $ zonedTimeToUTC issue.createdAt
 
       div_ [class_ "flex items-center"] do
-        div_ [class_ "w-36 flex items-center justify-center"] $
-          span_ [class_ "tabular-nums text-xl", term "data-tippy-content" "Events for this Anomaly in the last 14days"] $
-            show issue.eventsAgg.count
+        div_ [class_ "w-36 flex items-center justify-center"]
+          $ span_ [class_ "tabular-nums text-xl", term "data-tippy-content" "Events for this Anomaly in the last 14days"]
+          $ show issue.eventsAgg.count
         let issueQueryPartial = buildQueryForAnomaly issue.anomalyType issue.targetHash
-        div_ [class_ "flex items-center justify-center "] $
-          div_
+        div_ [class_ "flex items-center justify-center "]
+          $ div_
             [ class_ "w-60 h-16 px-3"
             , hxGet_ $ "/charts_html?pid=" <> issue.projectId.toText <> "&since=" <> (if timeFilter == "14d" then "14D" else "24h") <> "&show_axes=false&query_raw=" <> escapedQueryPartial [fmt|{issueQueryPartial} | timechart [1d]|]
             , hxTrigger_ "intersect once"
@@ -669,9 +669,9 @@ anomalyAcknowlegeButton :: Projects.ProjectId -> Anomalies.AnomalyId -> Bool -> 
 anomalyAcknowlegeButton pid aid acked host = do
   let acknowlegeAnomalyEndpoint = "/p/" <> pid.toText <> "/anomalies/" <> Anomalies.anomalyIdText aid <> if acked then "/unacknowlege" else "/acknowlege?host=" <> host
   a_
-    [ class_ $
-        "flex items-center gap-2 cursor-pointer py-2 px-3 rounded-xl  "
-          <> (if acked then "bg-green-100 text-green-900" else "blue-gr-btn text-white")
+    [ class_
+        $ "flex items-center gap-2 cursor-pointer py-2 px-3 rounded-xl  "
+        <> (if acked then "bg-green-100 text-green-900" else "blue-gr-btn text-white")
     , term "data-tippy-content" "acknowlege anomaly"
     , hxGet_ acknowlegeAnomalyEndpoint
     , hxSwap_ "outerHTML"
@@ -685,9 +685,9 @@ anomalyArchiveButton :: Projects.ProjectId -> Anomalies.AnomalyId -> Bool -> Htm
 anomalyArchiveButton pid aid archived = do
   let archiveAnomalyEndpoint = "/p/" <> pid.toText <> "/anomalies/" <> Anomalies.anomalyIdText aid <> if archived then "/unarchive" else "/archive"
   a_
-    [ class_ $
-        "flex items-center gap-2 cursor-pointer py-2 px-3 rounded-xl "
-          <> (if archived then " bg-green-100 text-green-900" else "blue-gr-btn text-white")
+    [ class_
+        $ "flex items-center gap-2 cursor-pointer py-2 px-3 rounded-xl "
+        <> (if archived then " bg-green-100 text-green-900" else "blue-gr-btn text-white")
     , term "data-tippy-content" $ if archived then "unarchive" else "archive"
     , hxGet_ archiveAnomalyEndpoint
     , hxSwap_ "outerHTML"

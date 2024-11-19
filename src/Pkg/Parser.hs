@@ -307,7 +307,7 @@ defaultSelectSqlQuery (Just SLogs) =
     ) as rest|]
   ]
 defaultSelectSqlQuery (Just SSpans) =
-      [ "id"
+  [ "id"
   , timestampLogFmt "timestamp"
   , "trace_id"
   , "kind"
