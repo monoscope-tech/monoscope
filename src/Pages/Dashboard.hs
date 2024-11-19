@@ -96,13 +96,8 @@ dashboardPage pid paramInput currTime projectStats newEndpoints reqLatenciesRoll
   let bulkActionBase = "/p/" <> pid.toText <> "/anomalies/bulk_actions"
   section_ [class_ "  mx-auto px-6 w-full space-y-12 pb-24 overflow-y-scroll  h-full"] do
     when exceededFreeTier $ freeTierLimitExceededBanner pid.toText
-    -- 7 day Trial is currently disabled
-    -- when (daysLeft /= "-")
-    --  $ div_ [class_ "w-full  py-1 mt-2 rounded text-green-600 text-center"] do
-    --    "Free trial ends in "
-    --    span_ [class_ "font-bold"] $ toHtml daysLeft
-    unless (null newEndpoints)
-      $ div_ [id_ "modalContainer"] do
+    unless (null newEndpoints) $
+      div_ [id_ "modalContainer"] do
         input_ [type_ "checkbox", id_ "newEndpointsModal", class_ "modal-toggle"]
         div_ [class_ "modal", role_ "dialog", hxSwap_ "outerHTML"] do
           form_
