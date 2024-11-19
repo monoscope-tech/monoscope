@@ -216,6 +216,24 @@ export class StepsEditor extends LitElement {
 
   sendStepRequest(e, idx) {
     e.preventDefault()
+    const url = this.collectionSteps[idx]._url
+
+    if (!url || !isValidUrl(url)) {
+      const errorDiv = document.createElement('div')
+      errorDiv.className = 'text-sm text-red-500 mt-2'
+      errorDiv.textContent = 'Please enter a valid URL starting with http:// or https://'
+
+      const button = e.target
+
+      button.parentNode.insertBefore(errorDiv, button.nextSibling)
+
+      setTimeout(() => {
+        errorDiv.remove()
+      }, 3000)
+
+      return
+    }
+
     this.isSendingRequest = true
     makeRequestAndProcessResponse(this.collectionSteps[idx])
       .then((resp) => {
@@ -471,9 +489,11 @@ ${stepData._json}</textarea
                   </div>
                 </details>
               </div>
-              <button class="btn btn-sm mt-5 blue-gr-btn" ?disabled=${!stepData._url} @click=${(e) => this.sendStepRequest(e, idx)}>
-              ${this.isSendingRequest ? html`<span class="loading loading-dots loading-sm"></span>` : 'Send'}
-              </button>
+              <button class="btn btn-sm mt-5 blue-gr-btn ${!stepData._url || !isValidUrl(stepData._url) ? 'opacity-50 cursor-not-allowed' : ''}" 
+          ?disabled=${!stepData._url || !isValidUrl(stepData._url)} 
+          @click=${(e) => this.sendStepRequest(e, idx)}>
+    ${this.isSendingRequest ? html`<span class="loading loading-dots loading-sm"></span>` : 'Send'}
+  </button>
               <br/>
               ${
                 stepResult && stepResult.resp
@@ -724,25 +744,6 @@ ${stepData._json}</textarea
     this.requestUpdate()
   }
 
-  // updateValue(event, idx, type, aidx, key) {
-  //   const value = event.target.value
-  //   if (type == null) {
-  //     this.collectionSteps[idx][key] = value
-  //     this.requestUpdate()
-  //     return
-  //   }
-  //   if (aidx != null) {
-  //     if (key === '') {
-  //       this.collectionSteps[idx][type][aidx] = { ok: value }
-  //     } else {
-  //       this.collectionSteps[idx][type][aidx][key] = value
-  //     }
-  //   } else {
-  //     this.collectionSteps[idx][type][key] = value
-  //   }
-  //   this.requestUpdate()
-  // }
-
   render() {
     const toggler = document.querySelector('#test-code-toggle')
     if (toggler && !toggler.checked) {
@@ -825,3 +826,13 @@ function faSprite_(iconName, kind, classes) {
 }
 
 customElements.define('steps-editor', StepsEditor)
+
+// helper methods
+function isValidUrl(urlString) {
+  try {
+    const url = new URL(urlString)
+    return url.protocol === 'http:' || url.protocol === 'https:'
+  } catch (err) {
+    return false
+  }
+}
