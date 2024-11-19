@@ -208,7 +208,7 @@ logQueryBox_ pid currentRange source targetSpan queryAST = do
               span_ [id_ "run-query-indicator", class_ "refresh-indicator htmx-indicator query-indicator loading loading-dots loading-sm"] ""
               faSprite_ "magnifying-glass" "regular" "h-4 w-4 inline-block"
       div_ [class_ "flex items-between justify-between"] do
-        termRaw "filter-element" [id_ "filterElement", class_ "w-full h-full flex items-center", termRaw "ast" queryAST, termRaw "mode" "command"] ("" :: Text)
+        -- termRaw "filter-element" [id_ "filterElement", class_ "w-full h-full flex items-center", termRaw "ast" queryAST, termRaw "mode" "command"] ("" :: Text)
         div_ [class_ "flex justify-end  gap-2 "] do
           div_ [class_ "py-1 flex flex-row justify-end"] $ label_ [class_ "flex items-center cursor-pointer space-x-2 p-1"] do
             input_ [type_ "checkbox", class_ "checkbox checkbox-sm rounded toggle-chart"] >> span_ "charts"
@@ -555,7 +555,7 @@ logItemCol_ source pid reqVec colIdxMap "rest" _ = div_ [class_ "space-x-2 white
       renderLogBadge "url_path" reqVec colIdxMap "cbadge-sm badge-neutral"
       logItemCol_ source pid reqVec colIdxMap "duration" []
       renderLogBadge "host" reqVec colIdxMap "cbadge-sm badge-neutral"
-      toHtml $ maybe "" (unwrapJsonPrimValue True) (lookupVecByKey reqVec colIdxMap key)
+      p_ $ toHtml $ maybe "" (unwrapJsonPrimValue True) (lookupVecByKey reqVec colIdxMap key)
 logItemCol_ _ _ reqVec colIdxMap key _ = renderBadge "space-nowrap overflow-x-hidden max-w-lg" (maybe "" (unwrapJsonPrimValue True) (lookupVecByKey reqVec colIdxMap key)) key
 
 
