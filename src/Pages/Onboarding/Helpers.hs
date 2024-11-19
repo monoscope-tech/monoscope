@@ -12,6 +12,7 @@ import Lucid.Htmx (hxDelete_, hxGet_, hxPatch_, hxPost_, hxPut_)
 import Pages.Onboarding.Types
 import Utils (faSprite_)
 
+
 -- Helper function to select the appropriate HTMX attribute based on HTTP method
 customMethodAttribute :: HTTPMethod -> Text -> Attribute
 customMethodAttribute GET url = hxGet_ url

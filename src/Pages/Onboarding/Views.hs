@@ -571,21 +571,32 @@ renderUsageSelectionForm prefs = do
           renderPrimaryButton POST "" "Proceed"
   where
     renderOptionBox :: Text -> Text -> Text -> Bool -> Html ()
-    renderOptionBox name title description isChecked =
-      label_ [class_ "relative cursor-pointer h-full"] $ do
-        input_
-          $ [ type_ "checkbox"
-            , name_ name
-            , value_ "true"
-            , class_ "peer sr-only rounded border border-slate-300"
-            ]
-          ++ [checked_ | isChecked]
-        div_ [class_ "h-full p-4 bg-slate-50 rounded-xl border border-slate-300 hover:border-blue-500 peer-checked:border-blue-500 peer-checked:border-2 flex flex-col"] $ do
-          div_ [class_ "flex justify-between items-start mb-2"] $ do
-            h3_ [class_ "text-black text-sm font-medium font-['Inter'] leading-snug"] (toHtml title)
-            div_ [class_ "w-5 h-5 border rounded-md peer-checked:bg-blue-500 peer-checked:border-blue-500"] ""
-          p_ [class_ "text-[#475467] text-sm font-normal font-['Inter'] leading-2"] (toHtml description)
-          div_ [class_ "p-4"] mempty
+    renderOptionBox name title description isChecked = do
+      -- Inline styles
+      style_ [type_ "text/css"] ".card.selected { background-color: #f0f9ff; border-color: #3b82f6; }"
+
+      -- Card container
+      div_ [class_ cardClass, onclick_ ("toggleCard('" <> name <> "')"), id_ name] $ do
+        div_ [class_ "flex justify-between items-center mb-2"] $ do
+          h2_ [class_ "text-black text-sm font-medium font-['Inter'] leading-snug"] $ toHtml title
+          input_
+            ( [ type_ "checkbox"
+              , name_ name
+              , value_ "true"
+              , class_ "h-4 w-4"
+              , onclick_ "event.stopPropagation()"
+              ]
+                ++ [checked_ | isChecked]
+            )
+        p_ [class_ "text-[#475467] text-sm font-normal font-['Inter'] leading-snug"] $ toHtml description
+
+      script_ [type_ "text/javascript"] "function toggleCard(id) { const card = document.getElementById(id); card.classList.toggle('selected'); const checkbox = card.querySelector('input[type=\"checkbox\"]'); checkbox.checked = !checkbox.checked; }"
+      where
+        cardClass =
+          "card border rounded-xl cursor-pointer transition-all p-4 bg-slate-50 border-slate-300"
+            <> if isChecked
+              then " selected border-blue-500 bg-blue-50"
+              else ""
 
 
 renderUrlMonitorFormPage :: Html ()
@@ -866,13 +877,13 @@ renderTeamMember member =
       ]
       $ do
         option_
-          ([value_ "Admin"] ++ [selected_ "" | member.memberRole == Admin])
+          (value_ "Admin" : [selected_ "" | member.memberRole == Admin])
           "Admin"
         option_
-          ([value_ "Member"] ++ [selected_ "" | member.memberRole == Member])
+          (value_ "Member" : [selected_ "" | member.memberRole == Member])
           "Member"
         option_
-          ([value_ "Viewer"] ++ [selected_ "" | member.memberRole == Viewer])
+          (value_ "Viewer" : [selected_ "" | member.memberRole == Viewer])
           "Viewer"
 
     div_ [class_ "flex items-center justify-center w-8 h-8 rounded-full bg-white border border-slate-200 shadow px-2"] $ do

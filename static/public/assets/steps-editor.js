@@ -240,8 +240,8 @@ export class StepsEditor extends LitElement {
     const hasResults = !!result
     const hasFailingAssertions = result?.assert_results?.some((a) => !a.ok || a.ok === false) || false
     const svErr = saveError !== undefined
-    const failed = (!stepData.disabled && (hasFailingAssertions || svErr ))
-    const passed = (!stepData.disabled && hasResults && !hasFailingAssertions && !svErr)
+    const failed = !stepData.disabled && (hasFailingAssertions || svErr)
+    const passed = !stepData.disabled && hasResults && !hasFailingAssertions && !svErr
     saveError = saveError ? saveError : {}
     const configuredOptions = {
       'request-options': (stepData.headers ? Object.keys(stepData.headers) : []).length,
@@ -285,7 +285,7 @@ export class StepsEditor extends LitElement {
                   }}"
                   ?checked="${stepData.disabled === undefined ? true : stepData.disabled ? false : true}"
                   type="checkbox"
-                  class="toggle toggle-sm  ${stepData.disabled ? 'border-red-500 bg-white [--tglbg:#ef4444]': 'border-green-500 bg-white [--tglbg:#22c55e]'}"
+                  class="toggle toggle-sm  ${stepData.disabled ? 'border-red-500 bg-white [--tglbg:#ef4444]' : 'border-green-500 bg-white [--tglbg:#22c55e]'}"
                    />
                 <button class="text-red-700 cursor-pointer" @click="${(e) => {
                   e.preventDefault()
@@ -315,10 +315,14 @@ export class StepsEditor extends LitElement {
                     ${saveError.method ? html`<span class="text-red-700 text-xs">${saveError.method}</span>` : ''}
                   </label>
                   <label for="actions-data-${idx}" class="flex-1 text-sm font-medium form-control w-full flex flex-row items-center gap-1">
-                    <input
-                      type="text" id="actions-data-${idx}" .value=${stepData._url} class="input input-sm shadow-none input-bordered w-full" @change=${(e) =>
-      this.updateValue(e, idx, null, null, '_url')}
-                    />
+                  <input
+                  type="text" 
+                  id="actions-data-${idx}" 
+                  .value=${stepData._url || ''} 
+                  placeholder="Enter the API endpoint URL (e.g. https://api.example.com/v1/users)"
+                  class="input input-sm shadow-none input-bordered w-full" 
+                  @change=${(e) => this.updateValue(e, idx, null, null, '_url')}
+                />
                     ${saveError.url ? html`<span class="text-red-700 text-xs">${saveError.url}</span>` : ''}
                   </label>
                 </div>
@@ -694,22 +698,50 @@ ${stepData._json}</textarea
 
   updateValue(event, idx, type, aidx, key) {
     const value = event.target.value
+
+    const updatedSteps = [...this.collectionSteps]
+    const stepToUpdate = { ...updatedSteps[idx] }
+
     if (type == null) {
-      this.collectionSteps[idx][key] = value
-      this.requestUpdate()
-      return
-    }
-    if (aidx != null) {
+      stepToUpdate[key] = value
+    } else if (aidx != null) {
+      stepToUpdate[type] = stepToUpdate[type] || []
       if (key === '') {
-        this.collectionSteps[idx][type][aidx] = { ok: value }
+        stepToUpdate[type][aidx] = { ok: value }
       } else {
-        this.collectionSteps[idx][type][aidx][key] = value
+        stepToUpdate[type][aidx] = {
+          ...stepToUpdate[type][aidx],
+          [key]: value,
+        }
       }
     } else {
-      this.collectionSteps[idx][type][key] = value
+      stepToUpdate[type] = stepToUpdate[type] || {}
+      stepToUpdate[type][key] = value
     }
+
+    updatedSteps[idx] = stepToUpdate
+    this.collectionSteps = updatedSteps
     this.requestUpdate()
   }
+
+  // updateValue(event, idx, type, aidx, key) {
+  //   const value = event.target.value
+  //   if (type == null) {
+  //     this.collectionSteps[idx][key] = value
+  //     this.requestUpdate()
+  //     return
+  //   }
+  //   if (aidx != null) {
+  //     if (key === '') {
+  //       this.collectionSteps[idx][type][aidx] = { ok: value }
+  //     } else {
+  //       this.collectionSteps[idx][type][aidx][key] = value
+  //     }
+  //   } else {
+  //     this.collectionSteps[idx][type][key] = value
+  //   }
+  //   this.requestUpdate()
+  // }
 
   render() {
     const toggler = document.querySelector('#test-code-toggle')
