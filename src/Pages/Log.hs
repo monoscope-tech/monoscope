@@ -265,12 +265,6 @@ data ApiLogsPageData = ApiLogsPageData
 apiLogsPage :: ApiLogsPageData -> Html ()
 apiLogsPage page = do
   section_ [class_ "mx-auto pt-2 px-6 gap-3.5 w-full flex flex-col h-full overflow-hidden pb-12  group/pg", id_ "apiLogsPage"] do
-    when page.exceededFreeTier $ freeTierLimitExceededBanner page.pid.toText
-    whenJust page.daysCountDown $ \daysCountDown -> do
-      div_ [class_ "w-full py-1 mt-2 rounded text-green-600 text-center"] do
-        "Free trial ends in "
-        span_ [class_ "font-bold"] $ toHtml daysCountDown
-
     div_
       [ style_ "z-index:26"
       , class_ "fixed hidden right-0 top-0 justify-end left-0 bottom-0 w-full bg-black bg-opacity-5"
