@@ -555,7 +555,7 @@ logItemCol_ source pid reqVec colIdxMap "rest" _ = div_ [class_ "space-x-2 white
       renderLogBadge "url_path" reqVec colIdxMap "cbadge-sm badge-neutral"
       logItemCol_ source pid reqVec colIdxMap "duration" []
       renderLogBadge "host" reqVec colIdxMap "cbadge-sm badge-neutral"
-      p_ $ toHtml $ maybe "" (unwrapJsonPrimValue True) (lookupVecByKey reqVec colIdxMap key)
+      span_ $ toHtml $ maybe "" (unwrapJsonPrimValue True) (lookupVecByKey reqVec colIdxMap key)
 logItemCol_ _ _ reqVec colIdxMap key _ = renderBadge "space-nowrap overflow-x-hidden max-w-lg" (maybe "" (unwrapJsonPrimValue True) (lookupVecByKey reqVec colIdxMap key)) key
 
 
