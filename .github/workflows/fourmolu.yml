@@ -1,0 +1,14 @@
+name: fourmolu
+on: push
+jobs:
+  format:
+    runs-on: ubuntu-latest
+    steps:
+      # Note that you must checkout your code before running haskell-actions/run-fourmolu
+      - uses: actions/checkout@v3
+      - uses: haskell-actions/run-fourmolu@v9
+        with:
+          version: "0.15.0.0"
+          pattern: |
+            src/**/*.hs
+            !src/Main.hs
