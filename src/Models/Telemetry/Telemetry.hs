@@ -20,7 +20,7 @@ where
 
 import Data.Aeson qualified as AE
 import Data.ByteString.Base16 qualified as B16
-import Data.Text (toTitle, toUpper)
+import Data.Text qualified as T 
 import Data.Time (UTCTime)
 import Data.UUID (UUID)
 import Data.UUID qualified as UUID
@@ -46,13 +46,13 @@ newtype WrappedEnum (prefix :: Symbol) a = WrappedEnum a
 
 
 instance Show a => ToField (WrappedEnum prefix a) where
-  toField (WrappedEnum a) = toField . toUpper . fromString . drop 2 . show $ a
+  toField (WrappedEnum a) = toField . T.toUpper . fromString . drop 2 . show $ a
 
 
 instance (KnownSymbol prefix, Typeable a, Read a) => FromField (WrappedEnum prefix a) where
   fromField f = \case
     Nothing -> returnError UnexpectedNull f ""
-    Just bss -> pure $ WrappedEnum (Unsafe.read $ symbolVal (Proxy @prefix) <> toString (toTitle (decodeUtf8 bss)))
+    Just bss -> pure $ WrappedEnum (Unsafe.read $ symbolVal (Proxy @prefix) <> toString (T.toTitle (decodeUtf8 bss)))
 
 
 data SeverityLevel = SLDebug | SLInfo | SLWarn | SLError | SLFatal

@@ -54,7 +54,6 @@ import Data.Digest.XXHash (xxHash)
 import Data.HashMap.Strict qualified as HM
 import Data.List (notElem, (!!))
 import Data.Scientific (toBoundedInteger)
-import Data.Text (replace)
 import Data.Text qualified as T
 import Data.Time (NominalDiffTime, ZonedTime, defaultTimeLocale, parseTimeM)
 import Data.Time.Clock (UTCTime)
@@ -131,7 +130,7 @@ faIcon_ faIcon faClasses classes = do
 
 
 deleteParam :: Text -> Text -> Text
-deleteParam key url = if needle == "" then url else replace needle "" url
+deleteParam key url = if needle == "" then url else T.replace needle "" url
   where
     needle = url =~ reg :: Text
     reg = "&" <> key <> "(=[^&]*)?|^" <> key <> "(=[^&]*)?&?" :: Text

@@ -4,7 +4,7 @@ import Crypto.Hash.MD5 qualified as MD5
 import Data.CaseInsensitive qualified as CI
 import Data.Default (Default)
 import Data.Text qualified as T
-import Data.Vector qualified as Vector
+import Data.Vector qualified as V
 import Lucid
 import Lucid.Htmx (hxGet_)
 import Lucid.Hyperscript (__)
@@ -277,7 +277,7 @@ bodyWrapper BWConfig{sessM, currProject, pageTitle, menuItem, hasIntegrated, nav
       });|]
 
 
-projectsDropDown :: Projects.Project -> Vector.Vector Projects.Project -> Html ()
+projectsDropDown :: Projects.Project -> V.Vector Projects.Project -> Html ()
 projectsDropDown currProject projects = do
   let pidTxt = currProject.id.toText
   div_

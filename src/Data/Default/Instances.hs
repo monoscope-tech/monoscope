@@ -4,10 +4,9 @@ import Data.Aeson.Types qualified as AET
 import Data.CaseInsensitive (CI, FoldCase)
 import Data.CaseInsensitive qualified as CI (mk)
 import Data.Default
-import Data.Text qualified as Strict (Text)
-import Data.Text qualified as Strict.Text (empty)
 import Data.Text.Lazy qualified as Lazy (Text)
 import Data.Text.Lazy qualified as Lazy.Text (empty)
+import Data.Text qualified as T
 import Data.Time (UTCTime, ZonedTime)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
@@ -59,8 +58,8 @@ instance (Default s, FoldCase s) => Default (CI s) where
 ----- TEXT
 
 -- | @'def' = 'Strict.Text.empty'@
-instance Default Strict.Text where
-  def = Strict.Text.empty
+instance Default T.Text where
+  def = T.empty
   {-# INLINE def #-}
 
 

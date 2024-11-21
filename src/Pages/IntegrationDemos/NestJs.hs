@@ -1,6 +1,5 @@
 module Pages.IntegrationDemos.NestJs (nestGuide) where
 
-import Data.Text
 import Lucid
 import NeatInterpolation
 import Pkg.Components

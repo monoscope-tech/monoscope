@@ -29,7 +29,6 @@ import Data.Effectful.Wreq qualified as W
 import Data.List.Extra (cons)
 import Data.List.Unique (uniq)
 import Data.Pool (withResource)
-import Data.Text (toLower)
 import Data.Text qualified as T
 import Data.Valor (Valor, check1, failIf, validateM)
 import Data.Valor qualified as Valor
@@ -160,7 +159,7 @@ deleteProjectGetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders CreateProject)
 deleteProjectGetH pid = do
   sess <- Sessions.getSession
   appCtx <- ask @AuthContext
-  if (isDemoAndNotSudo pid sess.user.isSudo)
+  if isDemoAndNotSudo pid sess.user.isSudo
     then do
       addSuccessToast "Can't perform this action on the demon project" Nothing
       addRespHeaders $ PostNoContent ""
@@ -291,7 +290,7 @@ processProjectPostForm cpRaw = do
                       subId' = show target.attributes.firstSubscriptionItem.subscriptionId
                    in (Just subId', Just firstSubItemId')
             Nothing -> (Nothing, Nothing)
-      if (cp.paymentPlan /= "Free" && isNothing firstSubItemId)
+      if cp.paymentPlan /= "Free" && isNothing firstSubItemId
         then do
           addErrorToast "Something went wrong. Please try again" Nothing
           redirectCS ("/p/" <> pid.toText <> "/about_project")
@@ -379,7 +378,7 @@ createProjectBody sess envCfg isUpdate cp cpe = do
                 span_ [class_ "text-red-400"] " *"
               div_ [class_ "grid gap-10 border-1"] do
                 let isSelected = True
-                let isSelectedTxt = toLower $ show isSelected
+                let isSelectedTxt = T.toLower $ show isSelected
                 let value = "GraduatedPricing"
                 a_
                   [ class_ $ "payment-plans cursor-pointer space-y-1 border border-1 block p-8 rounded-md " <> if isSelected then " border-2 border-blue-300 shadow-lg" else ""

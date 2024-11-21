@@ -18,12 +18,10 @@ import Data.Aeson.Text (encodeToLazyText)
 import Data.Default (def)
 import Data.List (elemIndex)
 import Data.Map qualified as Map
-import Data.Text (isSuffixOf, splitOn, toLower)
 import Data.Text qualified as T
 import Data.Time (UTCTime, defaultTimeLocale, formatTime, getCurrentTime)
 import Data.UUID qualified as UUID
-import Data.Vector (Vector)
-import Data.Vector qualified as Vector
+import Data.Vector qualified as V
 import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
 import Fmt (fixedF, fmt)
 import Lucid
@@ -92,7 +90,7 @@ fieldDetailsPartialH pid fid = do
 
 
 data FieldDetails
-  = FieldDetails Fields.Field (Vector Formats.Format)
+  = FieldDetails Fields.Field (V.Vector Formats.Format)
   | FieldDetailsNoContent
 
 
@@ -102,7 +100,7 @@ instance ToHtml FieldDetails where
   toHtmlRaw = toHtml
 
 
-fieldDetailsView :: Fields.Field -> Vector Formats.Format -> Html ()
+fieldDetailsView :: Fields.Field -> V.Vector Formats.Format -> Html ()
 fieldDetailsView field formats = do
   div_ [id_ "modalContainer"] do
     label_ [Lucid.for_ "edit_field", class_ "cursor-pointer"] $ faSprite_ "ellipsis" "regular" "my-2 float-right"
@@ -253,12 +251,12 @@ endpointDetailsH pid eid fromDStr toDStr sinceStr subPageM shapeHashM = do
         shapes <- Shapes.shapesByEndpointHash pid endpoint.hash
         fields <- Fields.selectFields pid endpoint.hash
         let fieldsMap = Fields.groupFieldsByCategory fields
-        let shapesWithFieldsMap = Vector.map (`getShapeFields` fields) shapes
+        let shapesWithFieldsMap = V.map (`getShapeFields` fields) shapes
         let maxV = round enpStats.max :: Int
         let steps = (maxV `quot` 100) :: Int
         let steps' = if steps == 0 then 100 else steps
         reqLatenciesRolledBySteps <- RequestDumps.selectReqLatenciesRolledBySteps maxV steps' pid endpoint.urlPath endpoint.method
-        pure (endpoint, enpStats, Vector.toList shapesWithFieldsMap, fieldsMap, Vector.toList reqLatenciesRolledBySteps)
+        pure (endpoint, enpStats, V.toList shapesWithFieldsMap, fieldsMap, V.toList reqLatenciesRolledBySteps)
       let subPage = fromMaybe "overview" subPageM
       shapesList <- dbtToEff do
         if subPage == "shapes" then Shapes.shapesByEndpointHash pid endpoint.hash else pure []
@@ -279,7 +277,7 @@ data EndpointDetailsGet
           , Endpoints.EndpointRequestStats
           , [Shapes.ShapeWithFields]
           , Map FieldCategoryEnum [Fields.Field]
-          , Vector Shapes.Shape
+          , V.Vector Shapes.Shape
           , Maybe Text
           , Text
           , (Maybe UTCTime, Maybe UTCTime)
@@ -308,7 +306,7 @@ endpointDetails
   -> Endpoints.EndpointRequestStats
   -> [Shapes.ShapeWithFields]
   -> Map FieldCategoryEnum [Fields.Field]
-  -> Vector Shapes.Shape
+  -> V.Vector Shapes.Shape
   -> Maybe Text
   -> Text
   -> (Maybe UTCTime, Maybe UTCTime)
@@ -321,7 +319,7 @@ endpointDetails pid paramInput currTime endpoint endpointStats shapesWithFieldsM
         div_ [class_ "flex flex-col"] do
           div_ [class_ "flex flex-row place-items-center text-lg font-medium"] do
             h3_ [class_ "text-lg text-slate-800"] do
-              span_ [class_ $ "p-1 endpoint endpoint-" <> toLower endpoint.method] $ toHtml $ endpoint.method <> " "
+              span_ [class_ $ "p-1 endpoint endpoint-" <> T.toLower endpoint.method] $ toHtml $ endpoint.method <> " "
               strong_ [class_ "inconsolata text-xl"] $ toHtml endpoint.urlPath
             faSprite_ "chevron-down" "light" " h-4 w-4 m-2"
           p_ [class_ "text-gray-500  ml-2"] $ toHtml endpoint.description
@@ -364,7 +362,7 @@ endpointDetails pid paramInput currTime endpoint endpointStats shapesWithFieldsM
         |]
 
 
-shapesSubPage :: Projects.ProjectId -> Vector Shapes.Shape -> [Shapes.ShapeWithFields] -> Text -> Html ()
+shapesSubPage :: Projects.ProjectId -> V.Vector Shapes.Shape -> [Shapes.ShapeWithFields] -> Text -> Html ()
 shapesSubPage pid shapesList shapesWithFields currentURL = do
   div_ [class_ "space-y-8", id_ "subpage"] do
     div_ [class_ "flex flex-col justify-between mt-2 shadow mx-16 rounded-xl"] do
@@ -662,7 +660,7 @@ subSubSection title fieldsM descriptionM =
           -- pTraceShowM "========================"
           -- pTraceShowM $ fieldsToNormalized fields
           fieldsToNormalized fields & mapM_ \(key, fieldM) -> do
-            let segments = splitOn "." key
+            let segments = T.splitOn "." key
             let depth = length segments
             let depthPadding = "margin-left:" <> show (20 + (depth * 20)) <> "px"
             let displayKey = last ("" :| segments)
@@ -680,7 +678,7 @@ subSubSection title fieldsM descriptionM =
                       input_ [type_ "checkbox", class_ " mr-12"]
                       span_ [class_ " text-slate-800 inline-flex items-center"] $ toHtml displayKey
                       span_ [class_ " text-slate-600 inline-flex items-center ml-4"] do
-                        if "[*]" `isSuffixOf` key
+                        if "[*]" `T.isSuffixOf` key
                           then EndpointComponents.fieldTypeToDisplay Fields.FTList
                           else EndpointComponents.fieldTypeToDisplay Fields.FTObject
               Just field -> do

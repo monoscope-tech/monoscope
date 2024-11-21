@@ -33,7 +33,6 @@ import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Data.Time (UTCTime, defaultTimeLocale, formatTime)
 import Data.Time.LocalTime (LocalTime (localDay), ZonedTime (zonedTimeToLocalTime))
-import Data.Vector (Vector)
 import Data.Vector qualified as V
 import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
 import Lucid
@@ -153,8 +152,8 @@ reportsGetH pid page hxRequest hxBoosted = do
 
 
 data ReportsGet
-  = ReportsGetMain (PageCtx (Projects.ProjectId, Vector Reports.ReportListItem, Text, Bool, Bool))
-  | ReportsGetList Projects.ProjectId (Vector Reports.ReportListItem) Text
+  = ReportsGetMain (PageCtx (Projects.ProjectId, V.Vector Reports.ReportListItem, Text, Bool, Bool))
+  | ReportsGetList Projects.ProjectId (V.Vector Reports.ReportListItem) Text
   | ReportsGetSingle (PageCtx (Projects.ProjectId, Maybe Reports.Report))
 
 
@@ -256,7 +255,7 @@ shapeParameterStats_ newF deletedF updatedFF = div_ [class_ "inline-block"] do
       small_ [class_ "block"] "deleted fields"
 
 
-reportsPage :: Projects.ProjectId -> Vector Reports.ReportListItem -> Text -> Bool -> Bool -> Html ()
+reportsPage :: Projects.ProjectId -> V.Vector Reports.ReportListItem -> Text -> Bool -> Bool -> Html ()
 reportsPage pid reports nextUrl daily weekly =
   div_ [class_ "flex flex-row h-screen bg-white"] do
     div_ [class_ "w-1/3 border-r border-gray-200 p-4 overflow-y-auto"] do
@@ -275,7 +274,7 @@ reportsPage pid reports nextUrl daily weekly =
 
 -- div_ [class_ "w-5 bg-gray-200"] ""
 
-reportListItems :: Projects.ProjectId -> Vector Reports.ReportListItem -> Text -> Html ()
+reportListItems :: Projects.ProjectId -> V.Vector Reports.ReportListItem -> Text -> Html ()
 reportListItems pid reports nextUrl =
   div_ [class_ "space-y-1 w-full"] do
     forM_ reports $ \report -> do
@@ -329,7 +328,7 @@ renderEndpointsTable endpoints = table_ [class_ "table-auto w-full"] do
   tbody_ $ mapM_ renderEndpointRow endpoints
 
 
-buildReportJSON :: Vector Anomalies.IssueL -> Vector RequestForReport -> Vector EndpointPerf -> Aeson.Value
+buildReportJSON :: V.Vector Anomalies.IssueL -> V.Vector RequestForReport -> V.Vector EndpointPerf -> Aeson.Value
 buildReportJSON anomalies endpoints_perf previous_perf =
   let anomalies_json = buildAnomalyJSON anomalies (length anomalies)
       perf_insight = getPerformanceInsight endpoints_perf previous_perf
@@ -346,7 +345,7 @@ buildPerformanceJSON :: V.Vector PerformanceReport -> Aeson.Value
 buildPerformanceJSON pr = Aeson.object ["endpoints" .= pr]
 
 
-buildAnomalyJSON :: Vector Anomalies.IssueL -> Int -> Aeson.Value
+buildAnomalyJSON :: V.Vector Anomalies.IssueL -> Int -> Aeson.Value
 buildAnomalyJSON anomalies total = Aeson.object ["anomalies" .= V.map buildjson anomalies, "anomaliesCount" .= total]
   where
     buildjson :: Anomalies.IssueL -> Aeson.Value
@@ -382,7 +381,7 @@ buildAnomalyJSON anomalies total = Aeson.object ["anomalies" .= V.map buildjson 
       _ -> Aeson.object ["anomaly_type" .= String "unknown"]
 
 
-getAnomaliesEmailTemplate :: Vector Anomalies.IssueL -> Vector Value
+getAnomaliesEmailTemplate :: V.Vector Anomalies.IssueL -> V.Vector Value
 getAnomaliesEmailTemplate anomalies = buildEmailjson <$> anomalies
   where
     buildEmailjson :: Anomalies.IssueL -> Value

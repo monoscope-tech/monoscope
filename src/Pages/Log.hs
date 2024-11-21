@@ -19,7 +19,6 @@ import Data.Text qualified as T
 import Data.Time (UTCTime, diffUTCTime, zonedTimeToUTC)
 import Data.Time.Format.ISO8601 (iso8601Show)
 import Data.Vector qualified as V
-import Data.Vector qualified as Vector
 import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
 import Effectful.Time qualified as Time
 import Fmt (commaizeF, fmt)
@@ -439,7 +438,7 @@ logItemRows_ pid requests curatedCols colIdxMap nextLogsURL source chSpns = do
       -- used for when a row is expanded.
       td_ [class_ "pl-4"] $ a_ [class_ $ "inline-block h-full " <> errClass, term "data-tippy-content" $ show errCount <> " errors attached to this request"] ""
       td_ [colspan_ $ show $ length curatedCols - 1] $ div_ [hxGet_ $ logItemPath <> "?source=" <> source, hxTrigger_ "intersect once", hxSwap_ "outerHTML"] $ span_ [class_ "loading loading-dots loading-md"] ""
-  when (Vector.length requests > 199)
+  when (V.length requests > 199)
     $ tr_
     $ td_ [colspan_ $ show $ length curatedCols]
     $ a_

@@ -1,7 +1,6 @@
 module Pages.Endpoints.EndpointList (endpointListGetH, renderEndpoint, EndpointRequestStatsVM (..), EnpReqStatsVM (..)) where
 
 import Data.Default (def)
-import Data.Text (toLower)
 import Data.Text qualified as T
 import Data.Time (UTCTime)
 import Data.UUID qualified as UUID
@@ -150,7 +149,7 @@ renderEndpoint activePage currTime enp = do
     div_ [class_ "space-y-3 grow"] do
       div_ [class_ "space-x-3"] do
         a_ [class_ "inline-block font-bold text-red-700 space-x-2", href_ ("/p/" <> enp.projectId.toText <> "/endpoints/" <> Endpoints.endpointIdText enp.endpointId)] $ do
-          span_ [class_ $ "endpoint endpoint-" <> toLower enp.method, data_ "enp-urlMethod" enp.method] $ toHtml enp.method
+          span_ [class_ $ "endpoint endpoint-" <> T.toLower enp.method, data_ "enp-urlMethod" enp.method] $ toHtml enp.method
           span_ [class_ " inconsolata text-base text-slate-700", data_ "enp-urlPath" enp.urlPath] $ toHtml $ if T.null enp.urlPath then "/" else T.take 150 enp.urlPath
         a_ [class_ "text-blue-500  hover:text-slate-600", href_ ("/p/" <> enp.projectId.toText <> "/log_explorer?query=" <> "url_path==\"" <> enp.urlPath <> "\"")] "View logs"
     div_ [class_ "w-36 flex items-center justify-center"] $ span_ [class_ "tabular-nums text-xl", term "data-tippy-content" "Events for this Anomaly in the last 14days"] $ toHtml @String $ fmt $ commaizeF enp.totalRequests

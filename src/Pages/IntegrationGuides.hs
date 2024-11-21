@@ -3,21 +3,7 @@ module Pages.IntegrationGuides (getH, IntegrationsGet (..)) where
 import Data.Default (Default (def))
 import Data.Vector qualified as V
 import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
-import Lucid (
-  Html,
-  ToHtml (toHtml, toHtmlRaw),
-  a_,
-  button_,
-  class_,
-  div_,
-  h3_,
-  href_,
-  id_,
-  main_,
-  script_,
-  span_,
-  target_,
- )
+import Lucid
 import Lucid.Hyperscript (__)
 import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
 import Models.Projects.Projects qualified as Projects

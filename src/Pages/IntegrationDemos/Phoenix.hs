@@ -1,6 +1,6 @@
 module Pages.IntegrationDemos.Phoenix (phoenixGuide) where
 
-import Data.Text
+import Relude
 import Lucid
 import NeatInterpolation
 import Pkg.Components

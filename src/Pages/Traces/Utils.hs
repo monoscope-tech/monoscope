@@ -7,7 +7,6 @@ import Data.Aeson.KeyMap qualified as KEM
 import Data.HashMap.Strict hiding (null)
 import Data.HashMap.Strict qualified as HM
 import Data.Scientific (toBoundedInteger)
-import Data.Text hiding (null)
 import Data.Vector qualified as V
 import Models.Telemetry.Telemetry qualified as Telemetry
 import Relude

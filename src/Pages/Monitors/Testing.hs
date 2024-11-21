@@ -10,7 +10,6 @@ import Data.Aeson qualified as AE
 import Data.Default (def)
 import Data.List.Extra (nubOrd)
 import Data.Map qualified as Map
-import Data.Text (splitOn)
 import Data.Text qualified as T
 import Data.Time (UTCTime)
 import Data.Vector qualified as V
@@ -376,7 +375,7 @@ splitOnAny :: [Text] -> Text -> (Text, Text, Maybe Text)
 splitOnAny delimiters val =
   case findDelimiter delimiters val of
     Just delimiter ->
-      let parts = splitOn delimiter val
+      let parts = T.splitOn delimiter val
        in case parts of
             [left, right] -> (T.strip left, T.strip right, Just delimiter)
             _ -> (val, "", Nothing) -- Fallback in case splitting fails

@@ -22,7 +22,6 @@ import BackgroundJobs qualified
 import Data.Default (def)
 import Data.Map qualified as Map
 import Data.Pool (withResource)
-import Data.Text (replace)
 import Data.Text qualified as T
 import Data.Time (UTCTime, defaultTimeLocale, formatTime, getCurrentTime, zonedTimeToUTC)
 import Data.UUID qualified as UUID
@@ -257,7 +256,7 @@ anomalyListSlider _ pid eid Nothing = do
         span_ [class_ "text-lg text-slate-700"] "Ongoing Issues and Monitors"
       div_ [class_ "flex flex-row mt-2"] ""
 anomalyListSlider currTime _ _ (Just issues) = do
-  let anomalyIds = replace "\"" "'" $ show $ fmap (Anomalies.anomalyIdText . (\(IssueVM _ _ _ issue) -> issue.id)) issues
+  let anomalyIds = T.replace "\"" "'" $ show $ fmap (Anomalies.anomalyIdText . (\(IssueVM _ _ _ issue) -> issue.id)) issues
   let totalAnomaliesTxt = toText $ if length issues > 10 then ("10+" :: Text) else show (length issues)
   div_ do
     script_ [text| var rem = (x,y)=>((x%y)==0?1:(x%y)); |]

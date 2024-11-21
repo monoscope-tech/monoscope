@@ -26,7 +26,6 @@ import Data.Aeson (FromJSON (..), ToJSON (toJSON), Value (String))
 import Data.Default
 import Data.Time (ZonedTime)
 import Data.UUID qualified as UUID
-import Data.Vector (Vector)
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity
 import Database.PostgreSQL.Entity.DBT (QueryNature (..), execute, query, queryOne)
@@ -115,7 +114,7 @@ data Project = Project
   , dailyNotif :: Bool
   , weeklyNotif :: Bool
   , timeZone :: Text
-  , notificationsChannel :: Vector NotificationChannel
+  , notificationsChannel :: V.Vector NotificationChannel
   , subId :: Maybe Text
   , firstSubItemId :: Maybe Text
   , orderId :: Maybe Text
@@ -149,7 +148,7 @@ data Project' = Project'
   , dailyNotif :: Bool
   , weeklyNotif :: Bool
   , timeZone :: Text
-  , notificationsChannel :: Vector NotificationChannel
+  , notificationsChannel :: V.Vector NotificationChannel
   , subId :: Maybe Text
   , firstSubItemId :: Maybe Text
   , orderId :: Maybe Text
@@ -157,7 +156,7 @@ data Project' = Project'
   , discordUrl :: Maybe Text
   , billingDay :: Maybe ZonedTime
   , hasIntegrated :: Bool
-  , usersDisplayImages :: Vector Text
+  , usersDisplayImages :: V.Vector Text
   }
   deriving stock (Show, Generic)
   deriving anyclass (FromRow, Default, NFData)
@@ -250,7 +249,7 @@ selectProjectsForUser = query Select q
       |]
 
 
-usersByProjectId :: ProjectId -> DBT IO (Vector Users.User)
+usersByProjectId :: ProjectId -> DBT IO (V.Vector Users.User)
 usersByProjectId pid = query Select q (Only pid)
   where
     q =
@@ -258,7 +257,7 @@ usersByProjectId pid = query Select q (Only pid)
                 from users.users u join projects.project_members pm on (pm.user_id=u.id) where project_id=? and u.active IS True;|]
 
 
-userByProjectId :: ProjectId -> Users.UserId -> DBT IO (Vector Users.User)
+userByProjectId :: ProjectId -> Users.UserId -> DBT IO (V.Vector Users.User)
 userByProjectId pid user_id = query Select q (user_id, pid)
   where
     q =

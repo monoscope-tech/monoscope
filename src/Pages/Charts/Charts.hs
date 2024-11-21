@@ -4,7 +4,6 @@ module Pages.Charts.Charts (chartsGetH, ChartType (..), lazy, ChartExp (..), Que
 
 import Data.Aeson qualified as AE
 import Data.List (groupBy, lookup)
-import Data.Text (toLower)
 import Data.Text qualified as T
 import Data.Time (UTCTime, diffUTCTime)
 import Data.Tuple.Extra (fst3, thd3)
@@ -218,8 +217,8 @@ chartsGetRaw typeM queryM queryASTM pidM groupByM queryByM slotsM limitsM themeM
       headersJSON = decodeUtf8 $ AE.encode headers
       groupedDataJSON = decodeUtf8 $ AE.encode $ transpose groupedData
       idAttr = fromMaybe (UUID.toText randomID) idM
-      showLegend = toLower $ show $ fromMaybe False showLegendM
-      showAxes = toLower $ show $ fromMaybe True showAxesM
+      showLegend = T.toLower $ show $ fromMaybe False showLegendM
+      showAxes = T.toLower $ show $ fromMaybe True showAxesM
       chartThemeTxt = fromMaybe "" themeM
       fromDStr = maybe "" formatUTC fromD
       toDStr = maybe "" formatUTC toD
@@ -255,8 +254,8 @@ chartsGetDef typeM queryRaw pidM groupByM queryByM slotsM limitsM themeM idM sho
       headersJSON = decodeUtf8 $ AE.encode headers
       groupedDataJSON = decodeUtf8 $ AE.encode $ transpose groupedData
       idAttr = fromMaybe (UUID.toText randomID) idM
-      showLegend = toLower $ show $ fromMaybe False showLegendM
-      showAxes = toLower $ show $ fromMaybe True showAxesM
+      showLegend = T.toLower $ show $ fromMaybe False showLegendM
+      showAxes = T.toLower $ show $ fromMaybe True showAxesM
       chartThemeTxt = fromMaybe "" themeM
       fromDStr = maybe "" formatUTC fromM
       toDStr = maybe "" formatUTC toM

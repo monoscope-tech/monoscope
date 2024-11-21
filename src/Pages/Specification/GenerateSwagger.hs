@@ -7,7 +7,6 @@ import Data.Aeson.Types qualified as AET
 import Data.List (groupBy)
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
-import Data.Vector (Vector)
 import Data.Vector qualified as V
 import Effectful.PostgreSQL.Transact.Effect
 import Models.Apis.Endpoints qualified as Endpoints
@@ -181,7 +180,7 @@ convertKeyPathsToJson items categoryFields parentPath = convertToJson' groups
     convertToJson' grps = foldr processGroup (object []) (Map.toList grps)
 
 
-getLeafObject :: Text -> Text -> Text -> Vector Value -> Bool -> Bool -> AE.Value
+getLeafObject :: Text -> Text -> Text -> V.Vector Value -> Bool -> Bool -> AE.Value
 getLeafObject t ft desc examples isEnum isRequired = leafObject
   where
     base = ["description" .= String desc, "type" .= t, "format" .= ft]
@@ -192,7 +191,7 @@ getLeafObject t ft desc examples isEnum isRequired = leafObject
 
 
 -- Helper function to determine type and values
-extractInfo :: Maybe MergedFieldsAndFormats -> [MergedFieldsAndFormats] -> Text -> Text -> (Text, Text, Text, Vector AE.Value, Bool, Bool)
+extractInfo :: Maybe MergedFieldsAndFormats -> [MergedFieldsAndFormats] -> Text -> Text -> (Text, Text, Text, V.Vector AE.Value, Bool, Bool)
 extractInfo Nothing categoryFields parentPath grp =
   let newK = T.replace "[*]" ".[]" (T.tail parentPath <> "." <> grp)
       newF = find (\fi -> newK == fi.field.fKeyPath) categoryFields
@@ -264,7 +263,7 @@ findMatchingFields shape fields =
 
 
 -- For Servers part of the swagger
-getUniqueHosts :: Vector Endpoints.SwEndpoint -> Vector Value
+getUniqueHosts :: V.Vector Endpoints.SwEndpoint -> V.Vector Value
 getUniqueHosts endpoints = V.fromList $ map (\h -> object ["url" .= String h]) $ sortNub $ concatMap (\endpoint -> [endpoint.host]) endpoints
 
 
@@ -347,7 +346,7 @@ mapFunc mShape =
    in show mShape.shape.swStatusCode .= object (["headers" .= headers, "content" .= content] ++ (["description" .= mShape.shape.swResponseDescription | not (T.null mShape.shape.swResponseDescription)]))
 
 
-generateSwagger :: Text -> Text -> Vector Endpoints.SwEndpoint -> Vector Shapes.SwShape -> Vector Fields.SwField -> Vector Formats.SwFormat -> Value
+generateSwagger :: Text -> Text -> V.Vector Endpoints.SwEndpoint -> V.Vector Shapes.SwShape -> V.Vector Fields.SwField -> V.Vector Formats.SwFormat -> Value
 generateSwagger projectTitle projectDescription endpoints shapes fields formats = swagger
   where
     merged = mergeEndpoints endpoints shapes fields formats

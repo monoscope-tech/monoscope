@@ -11,7 +11,7 @@ import Data.Default (Default)
 import Data.Default.Instances ()
 import Data.Time (ZonedTime)
 import Data.UUID qualified as UUID
-import Data.Vector (Vector)
+import Data.Vector qualified as V
 import Database.PostgreSQL.Entity.DBT (QueryNature (..), query)
 import Database.PostgreSQL.Entity.Types
 import Database.PostgreSQL.Simple.SqlQQ (sql)
@@ -19,12 +19,9 @@ import GHC.Records (HasField (getField))
 import Models.Projects.Projects qualified as Projects
 import Relude
 import Web.HttpApiData (FromHttpApiData)
-
-import Data.Aeson as Aeson
+import Data.Aeson qualified as AE
 import Database.PostgreSQL.Entity (insert, selectById)
-
 import Database.PostgreSQL.Simple hiding (execute, query)
-
 import Database.PostgreSQL.Simple.FromField
 import Database.PostgreSQL.Simple.ToField
 import Database.PostgreSQL.Transact (DBT)
@@ -32,7 +29,7 @@ import Database.PostgreSQL.Transact (DBT)
 
 newtype ReportId = ReportId {reportId :: UUID.UUID}
   deriving stock (Generic, Show)
-  deriving newtype (Eq, Ord, ToJSON, FromJSON, FromField, ToField, FromHttpApiData, Default, NFData)
+  deriving newtype (Eq, Ord, AE.ToJSON, AE.FromJSON, FromField, ToField, FromHttpApiData, Default, NFData)
 
 
 instance HasField "toText" ReportId Text where
@@ -45,7 +42,7 @@ data Report = Report
   , updatedAt :: ZonedTime
   , projectId :: Projects.ProjectId
   , reportType :: Text
-  , reportJson :: Value
+  , reportJson :: AE.Value
   }
   deriving stock (Show, Generic)
   deriving anyclass (FromRow, ToRow, NFData)
@@ -75,7 +72,7 @@ getReportById :: ReportId -> DBT IO (Maybe Report)
 getReportById id' = selectById (Only id')
 
 
-reportHistoryByProject :: Projects.ProjectId -> Int -> DBT IO (Vector ReportListItem)
+reportHistoryByProject :: Projects.ProjectId -> Int -> DBT IO (V.Vector ReportListItem)
 reportHistoryByProject pid page = query Select q (pid, offset)
   where
     offset = page * 20

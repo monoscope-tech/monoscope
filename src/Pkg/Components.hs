@@ -14,7 +14,6 @@ module Pkg.Components (
 )
 where
 
-import Data.Text
 import Lucid
 import Lucid.Base
 import Lucid.Hyperscript

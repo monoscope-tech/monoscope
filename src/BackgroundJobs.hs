@@ -8,7 +8,6 @@ import Data.Pool (withResource)
 import Data.Time (DayOfWeek (Monday), UTCTime (utctDay), ZonedTime, addUTCTime, dayOfWeek, getZonedTime)
 import Data.Time.LocalTime (LocalTime (localDay), ZonedTime (zonedTimeToLocalTime), getCurrentTimeZone, utcToZonedTime, zonedTimeToUTC)
 import Data.UUID.V4 qualified as UUIDV4
-import Data.Vector (Vector)
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity.DBT (QueryNature (Select), query)
 import Database.PostgreSQL.Simple (Only (Only))
@@ -57,10 +56,10 @@ data BgJobs
   | DailyJob
   | GenSwagger Projects.ProjectId Users.UserId Text
   | ReportUsage Projects.ProjectId
-  | QueryMonitorsTriggered (Vector Monitors.QueryMonitorId)
+  | QueryMonitorsTriggered (V.Vector Monitors.QueryMonitorId)
   | RunCollectionTests Testing.CollectionId
   | DeletedProject Projects.ProjectId
-  | APITestFailed Projects.ProjectId Testing.CollectionId (Vector Testing.StepResult)
+  | APITestFailed Projects.ProjectId Testing.CollectionId (V.Vector Testing.StepResult)
   deriving stock (Show, Generic)
   deriving anyclass (ToJSON, FromJSON)
 
@@ -258,7 +257,7 @@ reportUsageToLemonsqueezy subItemId quantity apiKey = do
   pass
 
 
-queryMonitorsTriggered :: Vector Monitors.QueryMonitorId -> ATBackgroundCtx ()
+queryMonitorsTriggered :: V.Vector Monitors.QueryMonitorId -> ATBackgroundCtx ()
 queryMonitorsTriggered queryMonitorIds = do
   monitorsEvaled <- dbtToEff $ Monitors.queryMonitorsById queryMonitorIds
   forM_ monitorsEvaled \monitorE ->

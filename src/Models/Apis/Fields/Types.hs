@@ -22,7 +22,7 @@ import Data.List (groupBy)
 import Data.Text qualified as T
 import Data.Time (ZonedTime)
 import Data.UUID qualified as UUID
-import Data.Vector as Vector (Vector, toList)
+import Data.Vector qualified as V 
 import Database.PostgreSQL.Entity.Types (CamelToSnake, Entity, FieldModifiers, GenericEntity, PrimaryKey, Schema, TableName)
 import Database.PostgreSQL.Simple (FromRow, ResultError (..), ToRow)
 import Database.PostgreSQL.Simple.FromField (FromField, fromField, returnError)
@@ -40,7 +40,7 @@ import Web.HttpApiData (FromHttpApiData)
 -- >>> import Relude
 -- >>> import Data.Default
 -- >>> import Data.Vector hiding (fromList)
--- >>> import Data.Vector qualified as Vector
+-- >>> import Data.Vector qualified as V
 
 
 newtype FieldId = FieldId {unFieldId :: UUID.UUID}
@@ -267,11 +267,11 @@ instance Eq Field where
 -- >>> let qparam = (def::Field){fieldCategory=FCQueryParam}
 -- >>> let respB = (def::Field){fieldCategory=FCResponseBody}
 -- >>> let respB2 = (def::Field){fieldCategory=FCResponseBody, key="respBody2"}
--- >>> groupFieldsByCategory $ Vector.fromList [qparam, respB, respB2]
+-- >>> groupFieldsByCategory $ V.fromList [qparam, respB, respB2]
 -- fromList [(FCQueryParam,[Field {id = FieldId {unFieldId = 00000000-0000-0000-0000-000000000000}, createdAt = 2019-08-31 05:14:37.537084021 UTC, updatedAt = 2019-08-31 05:14:37.537084021 UTC, projectId = ProjectId {unProjectId = 00000000-0000-0000-0000-000000000000}, endpointHash = "", key = "", fieldType = FTUnknown, fieldTypeOverride = Nothing, format = "", formatOverride = Nothing, description = "", keyPath = "", fieldCategory = FCQueryParam, hash = ""}]),(FCResponseBody,[Field {id = FieldId {unFieldId = 00000000-0000-0000-0000-000000000000}, createdAt = 2019-08-31 05:14:37.537084021 UTC, updatedAt = 2019-08-31 05:14:37.537084021 UTC, projectId = ProjectId {unProjectId = 00000000-0000-0000-0000-000000000000}, endpointHash = "", key = "", fieldType = FTUnknown, fieldTypeOverride = Nothing, format = "", formatOverride = Nothing, description = "", keyPath = "", fieldCategory = FCResponseBody, hash = ""},Field {id = FieldId {unFieldId = 00000000-0000-0000-0000-000000000000}, createdAt = 2019-08-31 05:14:37.537084021 UTC, updatedAt = 2019-08-31 05:14:37.537084021 UTC, projectId = ProjectId {unProjectId = 00000000-0000-0000-0000-000000000000}, endpointHash = "", key = "respBody2", fieldType = FTUnknown, fieldTypeOverride = Nothing, format = "", formatOverride = Nothing, description = "", keyPath = "", fieldCategory = FCResponseBody, hash = ""}])]
-groupFieldsByCategory :: Vector Field -> Map FieldCategoryEnum [Field]
+groupFieldsByCategory :: V.Vector Field -> Map FieldCategoryEnum [Field]
 groupFieldsByCategory fields = fromList fieldGroupTupple
   where
-    fields' = Vector.toList fields
+    fields' = V.toList fields
     fieldGroup = groupBy (\f1 f2 -> f1.fieldCategory == f2.fieldCategory) fields'
     fieldGroupTupple = map (\f -> ((f !! 0).fieldCategory, f)) fieldGroup

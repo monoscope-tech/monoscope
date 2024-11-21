@@ -3,7 +3,7 @@ module Pages.Dashboard (dashboardGetH, DashboardGet (..)) where
 import Data.Aeson qualified as AE
 import Data.Default (def)
 import Data.Time (UTCTime, diffUTCTime, getCurrentTime, zonedTimeToUTC)
-import Data.Vector qualified as Vector
+import Data.Vector qualified as V
 import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
 import Effectful.Time qualified as Time
 import Fmt (fixedF, fmt)
@@ -40,7 +40,7 @@ data ParamInput = ParamInput
 
 
 newtype DashboardGet = DashboardGet
-  { unwrap :: (Projects.ProjectId, ParamInput, UTCTime, Projects.ProjectRequestStats, Vector.Vector Endpoints.EndpointRequestStats, Text, Text, (Maybe UTCTime, Maybe UTCTime), Bool, Bool)
+  { unwrap :: (Projects.ProjectId, ParamInput, UTCTime, Projects.ProjectRequestStats, V.Vector Endpoints.EndpointRequestStats, Text, Text, (Maybe UTCTime, Maybe UTCTime), Bool, Bool)
   }
 
 
@@ -69,7 +69,7 @@ dashboardGetH pid fromDStr toDStr sinceStr' = do
           return $ totalRequest > 5000
         else do
           return False
-    pure (projectRequestStats, Vector.toList reqLatenciesRolledBySteps, freeTierExceeded)
+    pure (projectRequestStats, V.toList reqLatenciesRolledBySteps, freeTierExceeded)
 
   let reqLatenciesRolledByStepsJ = decodeUtf8 $ AE.encode reqLatenciesRolledByStepsLabeled
   let bwconf =
@@ -91,7 +91,7 @@ dashboardGetH pid fromDStr toDStr sinceStr' = do
   addRespHeaders $ PageCtx bwconf $ DashboardGet (pid, paramInput, currTime, projectRequestStats, newEndpoints, reqLatenciesRolledByStepsJ, daysLeft, (fromD, toD), freeTierExceeded, hasRequests)
 
 
-dashboardPage :: Projects.ProjectId -> ParamInput -> UTCTime -> Projects.ProjectRequestStats -> Vector.Vector Endpoints.EndpointRequestStats -> Text -> Text -> (Maybe UTCTime, Maybe UTCTime) -> Bool -> Bool -> Html ()
+dashboardPage :: Projects.ProjectId -> ParamInput -> UTCTime -> Projects.ProjectRequestStats -> V.Vector Endpoints.EndpointRequestStats -> Text -> Text -> (Maybe UTCTime, Maybe UTCTime) -> Bool -> Bool -> Html ()
 dashboardPage pid paramInput currTime projectStats newEndpoints reqLatenciesRolledByStepsJ daysLeft dateRange exceededFreeTier hasRequest = do
   let bulkActionBase = "/p/" <> pid.toText <> "/anomalies/bulk_actions"
   section_ [class_ "  mx-auto px-6 w-full space-y-12 pb-24 overflow-y-scroll  h-full"] do

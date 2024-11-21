@@ -1,6 +1,5 @@
 module Pages.IntegrationDemos.Springboot (springGuide) where
 
-import Data.Text
 import Lucid
 import NeatInterpolation
 import Pkg.Components

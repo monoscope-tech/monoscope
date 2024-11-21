@@ -1,6 +1,5 @@
 module Models.Apis.Slack (SlackData (..), insertAccessToken, getProjectSlackData) where
 
-import Data.Text
 import Database.PostgreSQL.Entity.DBT (QueryNature (Select), queryOne)
 import Database.PostgreSQL.Simple (FromRow, Only (Only), ToRow)
 import Database.PostgreSQL.Simple.SqlQQ (sql)

@@ -4,7 +4,7 @@ import Data.Aeson as Aeson
 import Data.Default (Default)
 import Data.Time (ZonedTime)
 import Data.UUID qualified as UUID
-import Data.Vector (Vector)
+import Data.Vector qualified as V 
 import Database.PostgreSQL.Entity (Entity, insert, selectById)
 import Database.PostgreSQL.Entity.DBT
 import Database.PostgreSQL.Entity.Types (CamelToSnake, FieldModifiers, GenericEntity, PrimaryKey, Schema, TableName)
@@ -53,7 +53,7 @@ getSwaggerById :: Text -> DBT IO (Maybe Swagger)
 getSwaggerById id' = selectById (Only id')
 
 
-swaggersByProject :: Projects.ProjectId -> Text -> DBT IO (Vector Swagger)
+swaggersByProject :: Projects.ProjectId -> Text -> DBT IO (V.Vector Swagger)
 swaggersByProject pid host = query Select q (pid, host)
   where
     q = [sql| select id, project_id, created_by, created_at, updated_at, swagger_json, host from apis.swagger_jsons where project_id=? AND host=? order by created_at desc|]
