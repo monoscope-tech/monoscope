@@ -9,7 +9,7 @@ import Data.Aeson (
   object,
  )
 import Data.Default (def)
-import Data.List ((!!))
+import Data.List qualified as L 
 import Data.Pool (withResource)
 import Data.Text qualified as T
 import Database.PostgreSQL.Entity.DBT (QueryNature (Update), execute)
@@ -63,8 +63,8 @@ surveyPutH pid survey = do
       addRespHeaders SurveyPut
     else do
       let jsonBytes = encode survey
-      let firstName = nameArr !! 0
-      let lastName = nameArr !! 1
+      let firstName = nameArr L.!! 0
+      let lastName = nameArr L.!! 1
       let fullName = survey.fullName
       let stack = survey.stack
       let phoneNumber = survey.phoneNumber
@@ -74,7 +74,7 @@ surveyPutH pid survey = do
           addErrorToast "Please tell use where you found us from" Nothing
           addRespHeaders SurveyPut
         else do
-          let foundUsFrom = foundF !! 0
+          let foundUsFrom = foundF L.!! 0
           res <- dbtToEff $ execute Update [sql| update projects.projects set questions= ? where id=? |] (jsonBytes, pid)
           u <- dbtToEff $ execute Update [sql| update users.users set first_name= ?, last_name=?, phone_number=? where id=? |] (firstName, lastName, phoneNumber, sess.user.id)
           addSuccessToast "Thanks for taking the survey!" Nothing

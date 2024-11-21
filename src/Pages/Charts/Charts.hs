@@ -3,7 +3,7 @@
 module Pages.Charts.Charts (chartsGetH, ChartType (..), lazy, ChartExp (..), QueryBy (..), GroupBy (..)) where
 
 import Data.Aeson qualified as AE
-import Data.List (groupBy, lookup)
+import Data.List qualified as L
 import Data.Text qualified as T
 import Data.Time (UTCTime, diffUTCTime)
 import Data.Tuple.Extra (fst3, thd3)
@@ -41,7 +41,7 @@ transform :: [String] -> [(Int, Int, String)] -> [Maybe Int]
 transform fields tuples =
   Just timestamp : map getValue fields
   where
-    getValue field = lookup field (map swap_ tuples)
+    getValue field = L.lookup field (map swap_ tuples)
     swap_ (_, a, b) = (b, a)
     timestamp = maybe 0 fst3 (Safe.headMay tuples)
 
@@ -50,7 +50,7 @@ pivot' :: [(Int, Int, String)] -> ([String], [[Maybe Int]])
 pivot' rows = do
   let extractHeaders = ordNub . map thd3 . sortOn thd3
   let headers = extractHeaders rows
-  let grouped = groupBy (\a b -> fst3 a == fst3 b) $ sortOn fst3 rows
+  let grouped = L.groupBy (\a b -> fst3 a == fst3 b) $ sortOn fst3 rows
   let ngrouped = map (transform headers) grouped
   (headers, ngrouped)
 

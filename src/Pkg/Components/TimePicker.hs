@@ -2,7 +2,7 @@
 
 module Pkg.Components.TimePicker (parseTimeRange, timepicker_, TimePickerP (..)) where
 
-import Data.List (lookup)
+import Data.List qualified as L 
 import Data.Time (UTCTime, addUTCTime, defaultTimeLocale, formatTime, secondsToNominalDiffTime)
 import Data.Time.Format.ISO8601 (iso8601ParseM)
 import Lucid
@@ -31,7 +31,7 @@ data TimePickerP = TimePickerP
 -- Mapping of time units to seconds
 unitToSeconds :: String -> Maybe (Int, Text)
 unitToSeconds unit =
-  lookup
+  L.lookup
     unit
     [ ("S", (1, "Seconds"))
     , ("M", (60, "Minutes"))

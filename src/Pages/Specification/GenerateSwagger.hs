@@ -4,7 +4,7 @@ import Data.Aeson
 import Data.Aeson qualified as AE
 import Data.Aeson.Key qualified as AEKey
 import Data.Aeson.Types qualified as AET
-import Data.List (groupBy)
+import Data.List qualified as L
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Data.Vector qualified as V
@@ -253,7 +253,7 @@ findMatchingFields shape fields =
   let fieldHashes = Shapes.swFieldHashes shape
       filteredFields = V.filter (\mfaf -> mfaf.field.fHash `elem` fieldHashes) fields
       fields' = V.toList filteredFields
-      fieldGroup = groupBy (\f1 f2 -> f1.field.fFieldCategory == f2.field.fFieldCategory) fields'
+      fieldGroup = L.groupBy (\f1 f2 -> f1.field.fFieldCategory == f2.field.fFieldCategory) fields'
       fieldGroupTupple = map (\f -> ((f !! 0).field.fFieldCategory, f)) fieldGroup
       groupedMap = Map.fromList fieldGroupTupple
    in MergedShapesAndFields

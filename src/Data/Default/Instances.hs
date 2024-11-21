@@ -4,8 +4,7 @@ import Data.Aeson.Types qualified as AET
 import Data.CaseInsensitive (CI, FoldCase)
 import Data.CaseInsensitive qualified as CI (mk)
 import Data.Default
-import Data.Text.Lazy qualified as Lazy (Text)
-import Data.Text.Lazy qualified as Lazy.Text (empty)
+import Data.Text.Lazy qualified as TL 
 import Data.Text qualified as T
 import Data.Time (UTCTime, ZonedTime)
 import Data.UUID qualified as UUID
@@ -64,8 +63,8 @@ instance Default T.Text where
 
 
 -- | @'def' = 'Lazy.Text.empty'@
-instance Default Lazy.Text where
-  def = Lazy.Text.empty
+instance Default TL.Text where
+  def = TL.empty
   {-# INLINE def #-}
 
 

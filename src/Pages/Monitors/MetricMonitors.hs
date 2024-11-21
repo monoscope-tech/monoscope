@@ -1,7 +1,7 @@
 module Pages.Monitors.MetricMonitors (monitorCreateGetH, MonitorCreate, configureNotificationMessage_, configureNotificationChannels_) where
 
 import Data.Default
-import Data.List (groupBy)
+import Data.List qualified as L
 import Lucid
 import Lucid.Htmx
 import Models.Apis.Monitors qualified as Monitors
@@ -223,7 +223,7 @@ configureNotificationChannels_ = do
 -- Helper functions
 
 groupedMonitorTypes :: [MonitorType] -> [(Text, [MonitorType])]
-groupedMonitorTypes = map toGroup . groupBy (\a b -> a.group == b.group)
+groupedMonitorTypes = map toGroup . L.groupBy (\a b -> a.group == b.group)
   where
     toGroup [] = error "Unexpected empty group"
     toGroup ms@(m : _) = (m.group, ms)

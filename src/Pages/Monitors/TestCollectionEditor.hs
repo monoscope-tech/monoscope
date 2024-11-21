@@ -16,7 +16,7 @@ where
 import Data.Aeson (encode)
 import Data.Aeson qualified as AE
 import Data.Default (def)
-import Data.Map qualified as M
+import Data.Map qualified as Map
 import Data.Text qualified as T
 import Data.UUID.V4 qualified as UUIDV4
 import Data.Vector qualified as V
@@ -524,7 +524,7 @@ collectionStepResult_ idx stepResult = section_ [class_ "p-1"] do
         thead_ [] $ tr_ [] $ th_ [] "Name" >> th_ [] "Value"
         tbody_ do
           whenJust stepResult.request.resp.headers $ \headers -> do
-            forM_ (M.toList headers) $ \(k, v) -> tr_ [] do
+            forM_ (Map.toList headers) $ \(k, v) -> tr_ [] do
               td_ [] $ toHtml k
               td_ [] $ toHtml $ T.intercalate "," v
 

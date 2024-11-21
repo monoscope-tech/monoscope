@@ -14,7 +14,7 @@ import Data.Aeson qualified as AE
 import Data.Containers.ListUtils (nubOrd)
 import Data.Default (def)
 import Data.HashMap.Strict qualified as HM
-import Data.List (elemIndex)
+import Data.List qualified as L 
 import Data.Text qualified as T
 import Data.Time (UTCTime, diffUTCTime, zonedTimeToUTC)
 import Data.Time.Format.ISO8601 (iso8601Show)
@@ -424,7 +424,7 @@ curateCols summaryCols cols = sortBy sortAccordingly filteredCols
       | b == "created_at" && a /= "id" = GT
       | a == "rest" = GT
       | b == "rest" = LT
-      | otherwise = comparing (`elemIndex` filteredCols) a b
+      | otherwise = comparing (`L.elemIndex` filteredCols) a b
 
 
 logItemRows_ :: Projects.ProjectId -> V.Vector (V.Vector Value) -> [Text] -> HM.HashMap Text Int -> Text -> Text -> V.Vector Telemetry.SpanRecord -> Html ()

@@ -22,7 +22,7 @@ import Data.Aeson (
 import Data.Aeson qualified as AE
 import Data.Default (def)
 import Data.Digest.XXHash (xxHash)
-import Data.List (nubBy)
+import Data.List qualified as L 
 import Data.Text qualified as T
 import Data.Time.Clock (UTCTime)
 import Data.Time.LocalTime (getZonedTime, utc, utcToZonedTime)
@@ -254,9 +254,9 @@ documentationPutH pid SaveSwaggerForm{updated_swagger, swagger_id, endpoints, di
       nestedOps = V.map (.opOperations) diffsInfo
       ops = flattenVector (V.toList nestedOps)
       fAndF = V.toList (V.map (getFieldAndFormatFromOpShape pid) ops)
-      fields = nubBy (\x y -> x.hash == y.hash) (map fst fAndF) -- to prevent ON CONFLICT DO UPDATE command cannot affect row a second time
-      formats = nubBy (\x y -> x.hash == y.hash) (map snd fAndF) -- to prevent ON CONFLICT DO UPDATE command cannot affect row a second time
-      shapesSet = nubBy (\x y -> x.hash == y.hash) shapes
+      fields = L.nubBy (\x y -> x.hash == y.hash) (map fst fAndF) -- to prevent ON CONFLICT DO UPDATE command cannot affect row a second time
+      formats = L.nubBy (\x y -> x.hash == y.hash) (map snd fAndF) -- to prevent ON CONFLICT DO UPDATE command cannot affect row a second time
+      shapesSet = L.nubBy (\x y -> x.hash == y.hash) shapes
   Formats.bulkInsertFormat $ V.fromList formats
   res <- dbtToEff do
     Fields.insertFields fields

@@ -16,7 +16,7 @@ import Data.Aeson qualified as AE
 import Data.Aeson.Key qualified as AEKey
 import Data.Aeson.Text (encodeToLazyText)
 import Data.Default (def)
-import Data.List (elemIndex)
+import Data.List qualified as L  
 import Data.Map qualified as Map
 import Data.Text qualified as T
 import Data.Time (UTCTime, defaultTimeLocale, formatTime, getCurrentTime)
@@ -411,7 +411,7 @@ apiDocsSubPage :: [Shapes.ShapeWithFields] -> Maybe Text -> Html ()
 apiDocsSubPage shapesWithFieldsMap shapeHashM = do
   let fstH = viaNonEmpty head shapesWithFieldsMap
   let index = case shapeHashM of
-        Just hash -> elemIndex hash (map Shapes.sHash shapesWithFieldsMap)
+        Just hash -> L.elemIndex hash (map Shapes.sHash shapesWithFieldsMap)
         Nothing -> Nothing
   let (targetShape, targetIndex) = case index of
         Just i -> (Just (shapesWithFieldsMap Unsafe.!! i), i + 1)

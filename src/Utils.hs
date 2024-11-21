@@ -52,7 +52,7 @@ import Data.Aeson.KeyMap qualified as AEK
 import Data.Char (isDigit)
 import Data.Digest.XXHash (xxHash)
 import Data.HashMap.Strict qualified as HM
-import Data.List (notElem, (!!))
+import Data.List qualified as L 
 import Data.Scientific (toBoundedInteger)
 import Data.Text qualified as T
 import Data.Time (NominalDiffTime, ZonedTime, defaultTimeLocale, parseTimeM)
@@ -398,10 +398,10 @@ getServiceColors services = go services HM.empty []
       | V.null svcs = assignedColors
       | otherwise =
           let service = V.head svcs
-              availableColors' = filter (`notElem` usedColors) (V.toList serviceColors)
+              availableColors' = filter (`L.notElem` usedColors) (V.toList serviceColors)
               availableColors = if null availableColors' then V.toList serviceColors else availableColors'
               colorIdx = sum (map ord $ toString $ toXXHash service) `mod` length availableColors
-              selectedColor = availableColors !! colorIdx
+              selectedColor = availableColors L.!! colorIdx
            in go (V.tail svcs) (HM.insert service selectedColor assignedColors) (selectedColor : usedColors)
 
 

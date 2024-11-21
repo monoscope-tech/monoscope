@@ -4,7 +4,7 @@
   - {name: Data.Text, as: T, importStyle: qualified, qualifiedStyle: post, asRequired: true}
   - {name: Data.Text.Lazy, as: TL, importStyle: qualified, qualifiedStyle: post, asRequired: true}
   - {name: Data.ByteString, as: BS, importStyle: qualified, qualifiedStyle: post, asRequired: true}
-  - {name: Data.Map, as: M, importStyle: qualified, qualifiedStyle: post, asRequired: true}
+  - {name: Data.Map, as: Map, importStyle: qualified, qualifiedStyle: post, asRequired: true}
   - {name: Data.List, as: L, importStyle: qualified, qualifiedStyle: post, asRequired: true}
   # - {name: Data.Set, as: S, importStyle: qualified, qualifiedStyle: post, asRequired: true}
   # - {name: Data.Sequence, as: Seq, importStyle: qualified, qualifiedStyle: post, asRequired: true}

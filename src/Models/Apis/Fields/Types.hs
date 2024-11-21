@@ -18,7 +18,7 @@ where
 import Data.Aeson (FromJSON, ToJSON)
 import Data.Aeson qualified as AE
 import Data.Default
-import Data.List (groupBy)
+import Data.List qualified as L 
 import Data.Text qualified as T
 import Data.Time (ZonedTime)
 import Data.UUID qualified as UUID
@@ -273,5 +273,5 @@ groupFieldsByCategory :: V.Vector Field -> Map FieldCategoryEnum [Field]
 groupFieldsByCategory fields = fromList fieldGroupTupple
   where
     fields' = V.toList fields
-    fieldGroup = groupBy (\f1 f2 -> f1.fieldCategory == f2.fieldCategory) fields'
+    fieldGroup = L.groupBy (\f1 f2 -> f1.fieldCategory == f2.fieldCategory) fields'
     fieldGroupTupple = map (\f -> ((f !! 0).fieldCategory, f)) fieldGroup
