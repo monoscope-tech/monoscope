@@ -44,7 +44,7 @@ ghc-options:
   - -j4
   - -Wno-unused-top-binds
   - -Wno-unused-imports
-  - -plugin-package hiedb-plugin -fplugin Plugin.HieDb
+  # - -plugin-package hiedb-plugin -fplugin Plugin.HieDb
   # - "-prof"
   # - -g
   - "-fprof-late"
@@ -190,7 +190,7 @@ library:
     - proto3-wire
     - template-haskell
     - cryptohash-md5
-    - hiedb-plugin
+    #- hiedb-plugin
 
 executables:
   apitoolkit-server-exe:
@@ -207,7 +207,7 @@ executables:
     dependencies:
       - apitoolkit-server
       - rust-interop
-      - hiedb-plugin
+      #- hiedb-plugin
       - name: relude
         version: ">= 1.2.0.0"
         mixin:

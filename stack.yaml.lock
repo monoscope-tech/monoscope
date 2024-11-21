@@ -12,27 +12,6 @@ packages:
   original:
     hackage: pg-entity-0.0.4.4
 - completed:
-    hackage: hiedb-plugin-0.1.0@sha256:480d8836e7d21b91a6205010af534cb739a2079d4bdeac7893cf85c9a4d75f32,1439
-    pantry-tree:
-      sha256: f28fb4d0b21053e6038f7b215d3d0278f867cf943b773d891bf3c0c74a8f0b48
-      size: 269
-  original:
-    hackage: hiedb-plugin-0.1.0@sha256:480d8836e7d21b91a6205010af534cb739a2079d4bdeac7893cf85c9a4d75f32,1439
-- completed:
-    hackage: hiedb-0.6.0.1@sha256:7398fe3115c239f421286dbb1db3b5ac359568955e7585bcf27a45c99420b46f,2962
-    pantry-tree:
-      sha256: 2009246ce99ad0b351454ef4aac746ed80846ae648fa98e7205192e8bde7ba79
-      size: 1020
-  original:
-    hackage: hiedb-0.6.0.1@sha256:7398fe3115c239f421286dbb1db3b5ac359568955e7585bcf27a45c99420b46f,2962
-- completed:
-    hackage: hie-compat-0.3.1.2@sha256:74a8585a90e3c06667134939cd170cff24067d5a988e14829785af0dfa6bd10f,1535
-    pantry-tree:
-      sha256: ae260dbc3c104bca9443d91350c781e1a4d5f93579247c50dfe6944240e5bf4f
-      size: 1019
-  original:
-    hackage: hie-compat-0.3.1.2@sha256:74a8585a90e3c06667134939cd170cff24067d5a988e14829785af0dfa6bd10f,1535
-- completed:
     hackage: Unique-0.4.7.9@sha256:7c37e22b7bb9df935c22112e67043177461aedcebe3a958854f6c0e9ecb54083,2155
     pantry-tree:
       sha256: 67d44a292c49ab6cf09225c05186f1ab64b359e965017d9d389411e4c79f0803
@@ -343,7 +322,7 @@ packages:
     subdir: .
 snapshots:
 - completed:
-    sha256: cc3c93cff178d257962029c944aca6e1408474e63c84d6a48ccc57bd2f5df999
-    size: 653568
-    url: https://raw.githubusercontent.com/commercialhaskell/stackage-snapshots/master/nightly/2024/8/23.yaml
-  original: nightly-2024-08-23
+    sha256: 867086a789eaf6da9f48a56bb5e8bfd6df27b120023c144cc7bbec5c95717915
+    size: 669588
+    url: https://raw.githubusercontent.com/commercialhaskell/stackage-snapshots/master/nightly/2024/10/21.yaml
+  original: nightly-2024-10-21
