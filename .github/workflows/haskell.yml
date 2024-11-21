@@ -13,76 +13,104 @@ jobs:
       id-token: 'write'
     steps:
       - uses: actions/checkout@v4
+
       - name: Setup Rust
         uses: actions-rs/toolchain@v1
         with:
           toolchain: stable
           profile: minimal
           override: true
+
+      - name: Cache Rust Dependencies
+        uses: Swatinem/rust-cache@v2
+
       - uses: actions/cache@v4
         name: Cache ~/.cabal/packages
+        if: always()
         with:
           path: ~/.cabal/packages
           key: ${{ runner.os }}-cabal-packages-${{ hashFiles('cabal.project.freeze') }}
+
       - uses: actions/cache@v4
         name: Cache ~/.cabal/store
+        if: always()
         with:
           path: ~/.cabal/store
           key: ${{ runner.os }}-cabal-store-${{ hashFiles('cabal.project.freeze') }}
+
       - uses: actions/cache@v4
         name: Cache dist-newstyle
+        if: always()
         with:
           path: dist-newstyle
           key: ${{ runner.os }}-dist-newstyle-${{ hashFiles('cabal.project.freeze') }}
+
       - uses: haskell-actions/setup@v2
         with:
           ghc-version: 9.8.2
           cabal-version: 'latest'
+
       - name: Install OpenSSL
-        run: sudo apt-get update && sudo apt-get install -y libssl-dev libgrpc-dev>=1.55
+        run: sudo apt-get update && sudo apt-get install -y libssl-dev libgrpc-dev
+
       - name: Set OpenSSL Paths
         run: |
           export OPENSSL_INCLUDE_DIR=$(pkg-config --variable=includedir openssl)
           export OPENSSL_LIB_DIR=$(pkg-config --variable=libdir openssl)
-      - name: Setup node env
+
+      - name: Setup Node.js Environment
         uses: actions/setup-node@v4
         with:
           node-version: 18
-      - run: npm install
-      - run: npx tailwindcss -i ./static/public/assets/css/tailwind.css -o ./static/public/assets/css/tailwind.min.css
-      - run: make prepare-rust-interop
+
+      - name: Install NPM Dependencies
+        run: npm install
+
+      - name: Build Tailwind CSS
+        run: npx tailwindcss -i ./static/public/assets/css/tailwind.css -o ./static/public/assets/css/tailwind.min.css
+
+      - name: Prepare Rust Interop
+        run: make prepare-rust-interop
+
       - name: Update Cabal Package List
         run: cabal update
-      - name: Build Dependencies
+
+      - name: Build Haskell Dependencies
         run: cabal build --only-dependencies
-      - name: Build Project
+
+      - name: Build Haskell Project
         run: |
           cabal install \
             --installdir=. \
             --install-method=copy \
             --flags="+prod" \
             --ghc-options="-O3"
+
       - name: Login to Container Registry
         uses: docker/login-action@v2
         with:
           registry: ghcr.io
           username: ${{ github.repository_owner }}
           password: ${{ secrets.GH_TOKEN }}
+
       - name: Preset Image Name
-        run: echo "IMAGE_URL=$(echo ghcr.io/${{ github.repository_owner }}/${{ github.event.repository.name }}:$(echo ${{ github.sha }} | cut -c1-7) | tr '[:upper:]' '[:lower:]')" >> $GITHUB_ENV
-      - name: Build and push Docker Image
+        run: echo "IMAGE_URL=$(echo ghcr.io/${{ github.repository_owner }}/${{ github.event.repository.name }}:${{ github.sha::7 }} | tr '[:upper:]' '[:lower:]')" >> $GITHUB_ENV
+
+      - name: Build and Push Docker Image
         uses: docker/build-push-action@v4
         with:
           context: .
           file: ./Dockerfile
           push: true
           tags: ${{ env.IMAGE_URL }}
-      - name: Deploy Image to CapRrover
+
+      - name: Deploy Image to CapRover
         uses: caprover/deploy-from-github@v1.1.2
         with:
           server: "${{ secrets.CAPTAINROVER_SERVER }}"
           app: "${{ secrets.CAPTAINROVER_APP_NAME }}"
           token: "${{ secrets.CAPTAINROVER_APP_TOKEN }}"
           image: "${{ env.IMAGE_URL }}"
+
       - name: Show Output
         run: echo ${{ steps.deploy.outputs.url }}
