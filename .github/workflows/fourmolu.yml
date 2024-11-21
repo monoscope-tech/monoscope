@@ -6,9 +6,9 @@ jobs:
     steps:
       # Note that you must checkout your code before running haskell-actions/run-fourmolu
       - uses: actions/checkout@v3
-      - uses: haskell-actions/run-fourmolu@v9
+      - uses: haskell-actions/run-fourmolu@v11
         with:
-          version: "0.16.0.0"
+          version: "0.16.2.0"
           pattern: |
             src/**/*.hs
             !src/Main.hs
