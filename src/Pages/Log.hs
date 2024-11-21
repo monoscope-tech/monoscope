@@ -16,7 +16,6 @@ import Data.HashMap.Strict qualified as HM
 import Data.List qualified as L
 import Data.Text qualified as T
 import Data.Time (UTCTime, diffUTCTime, zonedTimeToUTC)
-import Data.Time.Format.ISO8601 (iso8601Show)
 import Data.Vector qualified as V
 import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
 import Effectful.Time qualified as Time
@@ -111,7 +110,6 @@ apiLogH pid queryM queryASTM cols' cursorM' sinceM fromM toM layoutM sourceM tar
             if source == "spans"
               then V.map (\v -> lookupVecTextByKey v colIdxMap "latency_breakdown") requestVecs
               else []
-          latestLogsURL = RequestDumps.requestDumpLogUrlPath pid queryM cols' Nothing Nothing Nothing (Just $ toText . iso8601Show $ now) (Just "loadmore") source
           nextLogsURL = RequestDumps.requestDumpLogUrlPath pid queryM cols' reqLastCreatedAtM sinceM fromM toM (Just "loadmore") source
           resetLogsURL = RequestDumps.requestDumpLogUrlPath pid queryM cols' Nothing Nothing Nothing Nothing Nothing source
       childSpans <- Telemetry.getChildSpans pid (V.catMaybes childSpanIds)
@@ -122,7 +120,6 @@ apiLogH pid queryM queryASTM cols' cursorM' sinceM fromM toM layoutM sourceM tar
               , requestVecs
               , cols = curatedColNames
               , colIdxMap
-              , latestLogsURL
               , nextLogsURL
               , resetLogsURL
               , currentRange
@@ -227,7 +224,6 @@ data ApiLogsPageData = ApiLogsPageData
   , requestVecs :: V.Vector (V.Vector AE.Value)
   , cols :: [Text]
   , colIdxMap :: HM.HashMap Text Int
-  , latestLogsURL :: Text
   , nextLogsURL :: Text
   , resetLogsURL :: Text
   , currentRange :: Maybe Text

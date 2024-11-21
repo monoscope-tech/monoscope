@@ -42,6 +42,5 @@ jobs:
 
       - run: make prepare-rust-interop
       - run: stack --no-terminal build --dependencies-only
-
-      # - run: stack install --local-bin-path=. --flag pg-entity:prod --ghc-options "-O0"
-      # - run: stack test
+      - run: stack install --local-bin-path=. --flag pg-entity:prod --ghc-options "-O0"
+      - run: stack test
