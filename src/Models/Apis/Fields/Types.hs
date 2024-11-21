@@ -22,7 +22,7 @@ import Data.List (groupBy)
 import Data.Text qualified as T
 import Data.Time (ZonedTime)
 import Data.UUID qualified as UUID
-import Data.Vector qualified as V 
+import Data.Vector qualified as V
 import Database.PostgreSQL.Entity.Types (CamelToSnake, Entity, FieldModifiers, GenericEntity, PrimaryKey, Schema, TableName)
 import Database.PostgreSQL.Simple (FromRow, ResultError (..), ToRow)
 import Database.PostgreSQL.Simple.FromField (FromField, fromField, returnError)

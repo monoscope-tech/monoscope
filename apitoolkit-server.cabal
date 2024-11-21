@@ -198,6 +198,7 @@ library
       RecordWildCards
       TemplateHaskell
       AllowAmbiguousTypes
+      TupleSections
   ghc-options: -fwrite-ide-info -hiedir .hiefiles -hidir=.hifiles -threaded -Weverything -Werror -fno-defer-typed-holes -Wno-error=deprecations -Wno-error=unused-packages -Wno-error=missing-poly-kind-signatures -Wno-missing-exported-signatures -Wno-missing-import-lists -Wno-missed-specialisations -Wno-all-missed-specialisations -Wno-unsafe -Wno-safe -Wno-missing-local-signatures -Wno-monomorphism-restriction -Wno-missing-safe-haskell-mode -Wno-partial-fields -Wno-prepositive-qualified-module -Wno-missing-export-lists -Wno-orphans -Wno-missing-deriving-strategies -Wno-missing-role-annotations -Wno-unused-matches -Wno-missing-kind-signatures -Wno-type-defaults -rtsopts -j4 -Wno-unused-top-binds -Wno-unused-imports -plugin-package hiedb-plugin -fplugin Plugin.HieDb -fprof-late -finfo-table-map +RTS -N -A128m -n2m -RTS
   build-depends:
       PyF
@@ -294,7 +295,6 @@ library
     , tmp-postgres
     , unliftio
     , unordered-containers
-    , uri-encode
     , uuid
     , valor >=1.0.0.0
     , vector
@@ -335,6 +335,7 @@ executable apitoolkit-server-exe
       RecordWildCards
       TemplateHaskell
       AllowAmbiguousTypes
+      TupleSections
   ghc-options: -fwrite-ide-info -hiedir .hiefiles -hidir=.hifiles -threaded -Weverything -Werror -fno-defer-typed-holes -Wno-error=deprecations -Wno-error=unused-packages -Wno-error=missing-poly-kind-signatures -Wno-missing-exported-signatures -Wno-missing-import-lists -Wno-missed-specialisations -Wno-all-missed-specialisations -Wno-unsafe -Wno-safe -Wno-missing-local-signatures -Wno-monomorphism-restriction -Wno-missing-safe-haskell-mode -Wno-partial-fields -Wno-prepositive-qualified-module -Wno-missing-export-lists -Wno-orphans -Wno-missing-deriving-strategies -Wno-missing-role-annotations -Wno-unused-matches -Wno-missing-kind-signatures -Wno-type-defaults -rtsopts -j4 -Wno-unused-top-binds -Wno-unused-imports -plugin-package hiedb-plugin -fplugin Plugin.HieDb -fprof-late -finfo-table-map +RTS -N -A128m -n2m -RTS -threaded -rtsopts -with-rtsopts=-N -fwrite-ide-info -hiedir=.hie
   build-depends:
       apitoolkit-server
@@ -374,6 +375,7 @@ test-suite doctests
       RecordWildCards
       TemplateHaskell
       AllowAmbiguousTypes
+      TupleSections
   ghc-options: -fwrite-ide-info -hiedir .hiefiles -hidir=.hifiles -threaded -Weverything -Werror -fno-defer-typed-holes -Wno-error=deprecations -Wno-error=unused-packages -Wno-error=missing-poly-kind-signatures -Wno-missing-exported-signatures -Wno-missing-import-lists -Wno-missed-specialisations -Wno-all-missed-specialisations -Wno-unsafe -Wno-safe -Wno-missing-local-signatures -Wno-monomorphism-restriction -Wno-missing-safe-haskell-mode -Wno-partial-fields -Wno-prepositive-qualified-module -Wno-missing-export-lists -Wno-orphans -Wno-missing-deriving-strategies -Wno-missing-role-annotations -Wno-unused-matches -Wno-missing-kind-signatures -Wno-type-defaults -rtsopts -j4 -Wno-unused-top-binds -Wno-unused-imports -plugin-package hiedb-plugin -fplugin Plugin.HieDb -fprof-late -finfo-table-map +RTS -N -A128m -n2m -RTS -threaded -rtsopts -with-rtsopts=-N -fwrite-ide-info -hiedir=.hie
   build-depends:
       apitoolkit-server
@@ -412,6 +414,7 @@ test-suite tests
       RecordWildCards
       TemplateHaskell
       AllowAmbiguousTypes
+      TupleSections
   ghc-options: -fwrite-ide-info -hiedir .hiefiles -hidir=.hifiles -threaded -Weverything -Werror -fno-defer-typed-holes -Wno-error=deprecations -Wno-error=unused-packages -Wno-error=missing-poly-kind-signatures -Wno-missing-exported-signatures -Wno-missing-import-lists -Wno-missed-specialisations -Wno-all-missed-specialisations -Wno-unsafe -Wno-safe -Wno-missing-local-signatures -Wno-monomorphism-restriction -Wno-missing-safe-haskell-mode -Wno-partial-fields -Wno-prepositive-qualified-module -Wno-missing-export-lists -Wno-orphans -Wno-missing-deriving-strategies -Wno-missing-role-annotations -Wno-unused-matches -Wno-missing-kind-signatures -Wno-type-defaults -rtsopts -j4 -Wno-unused-top-binds -Wno-unused-imports -plugin-package hiedb-plugin -fplugin Plugin.HieDb -fprof-late -finfo-table-map +RTS -N -A128m -n2m -RTS
   build-depends:
       apitoolkit-server
