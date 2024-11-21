@@ -431,20 +431,21 @@ weeklyReportForProject pid = do
 
 emailQueryMonitorAlert :: Monitors.QueryMonitorEvaled -> CI.CI Text -> Maybe Users.User -> ATBackgroundCtx ()
 emailQueryMonitorAlert monitorE@Monitors.QueryMonitorEvaled{alertConfig} email userM = whenJust userM (const pass)
-  -- FIXME: implement query alert email using postmark
-  -- sendEmail
-  --   (CI.original email)
-  --   [fmt| 🤖 APITOOLKIT: log monitor triggered `{alertConfig.title}` |]
-  --   [fmtTrim|
-  --     Hi {user.firstName},<br/>
-  --
-  --     The monitor: `{alertConfig.title}` was triggered and got above it's defined threshold.
-  --
-  --     <br/><br/>
-  --     Regards,
-  --     Apitoolkit team
-  --               |]
 
+
+-- FIXME: implement query alert email using postmark
+-- sendEmail
+--   (CI.original email)
+--   [fmt| 🤖 APITOOLKIT: log monitor triggered `{alertConfig.title}` |]
+--   [fmtTrim|
+--     Hi {user.firstName},<br/>
+--
+--     The monitor: `{alertConfig.title}` was triggered and got above it's defined threshold.
+--
+--     <br/><br/>
+--     Regards,
+--     Apitoolkit team
+--               |]
 
 newAnomalyJob :: Projects.ProjectId -> ZonedTime -> Text -> Text -> Text -> ATBackgroundCtx ()
 newAnomalyJob pid createdAt anomalyTypesT anomalyActionsT targetHash = do
