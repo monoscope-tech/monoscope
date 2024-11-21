@@ -48,34 +48,34 @@ jobs:
       - run: make prepare-rust-interop
       - run: stack --no-terminal build --dependencies-only
 
-      # - run: stack install --local-bin-path=. --ghc-options '-optl-static -fPIC'
-      - run: stack install --local-bin-path=. --flag pg-entity:prod --ghc-options "-O3"
-      # - run: stack test
-      - name: Login to Container Registry
-        uses: docker/login-action@v2
-        with:
-              registry: ghcr.io
-              username: ${{ github.repository_owner }}
-              password: ${{ secrets.GH_TOKEN }}
+      # # - run: stack install --local-bin-path=. --ghc-options '-optl-static -fPIC'
+      # - run: stack install --local-bin-path=. --flag pg-entity:prod --ghc-options "-O3"
+      # # - run: stack test
+      # - name: Login to Container Registry
+      #   uses: docker/login-action@v2
+      #   with:
+      #         registry: ghcr.io
+      #         username: ${{ github.repository_owner }}
+      #         password: ${{ secrets.GH_TOKEN }}
 
-      - name: Preset Image Name
-        run: echo "IMAGE_URL=$(echo ghcr.io/${{ github.repository_owner }}/${{ github.event.repository.name }}:$(echo ${{ github.sha }} | cut -c1-7) | tr '[:upper:]' '[:lower:]')" >> $GITHUB_ENV
+      # - name: Preset Image Name
+      #   run: echo "IMAGE_URL=$(echo ghcr.io/${{ github.repository_owner }}/${{ github.event.repository.name }}:$(echo ${{ github.sha }} | cut -c1-7) | tr '[:upper:]' '[:lower:]')" >> $GITHUB_ENV
 
-      - name: Build and push Docker Image
-        uses: docker/build-push-action@v4
-        with:
-          context: .
-          file: ./Dockerfile
-          push: true
-          tags: ${{ env.IMAGE_URL }}
+      # - name: Build and push Docker Image
+      #   uses: docker/build-push-action@v4
+      #   with:
+      #     context: .
+      #     file: ./Dockerfile
+      #     push: true
+      #     tags: ${{ env.IMAGE_URL }}
 
-      - name: Deploy Image to CapRrover
-        uses: caprover/deploy-from-github@v1.1.2
-        with:
-          server: "${{ secrets.CAPTAINROVER_SERVER }}"
-          app: "${{ secrets.CAPTAINROVER_APP_NAME }}"
-          token: "${{ secrets.CAPTAINROVER_APP_TOKEN }}"
-          image: "${{ env.IMAGE_URL }}"
+      # - name: Deploy Image to CapRrover
+      #   uses: caprover/deploy-from-github@v1.1.2
+      #   with:
+      #     server: "${{ secrets.CAPTAINROVER_SERVER }}"
+      #     app: "${{ secrets.CAPTAINROVER_APP_NAME }}"
+      #     token: "${{ secrets.CAPTAINROVER_APP_TOKEN }}"
+      #     image: "${{ env.IMAGE_URL }}"
 
-      - name: Show Output
-        run: echo ${{ steps.deploy.outputs.url }}
+      # - name: Show Output
+      #   run: echo ${{ steps.deploy.outputs.url }}

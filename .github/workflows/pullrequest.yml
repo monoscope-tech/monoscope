@@ -1,6 +1,6 @@
 name:  Build and Test PR
 
-on: push 
+on: pull_request
 
 env:
   LANG: C.UTF-8
