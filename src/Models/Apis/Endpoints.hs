@@ -26,7 +26,6 @@ module Models.Apis.Endpoints (
 )
 where
 
-import Data.Aeson (FromJSON, ToJSON)
 import Data.Aeson qualified as AE
 import Data.Default (Default)
 import Data.Default.Instances ()
@@ -55,7 +54,7 @@ import Web.HttpApiData (FromHttpApiData)
 
 newtype EndpointId = EndpointId {unEndpointId :: UUID.UUID}
   deriving stock (Generic, Show)
-  deriving newtype (ToJSON, FromJSON, Eq, Ord, FromField, ToField, FromHttpApiData, Default, NFData)
+  deriving newtype (AE.ToJSON, AE.FromJSON, Eq, Ord, FromField, ToField, FromHttpApiData, Default, NFData)
   deriving anyclass (FromRow, ToRow)
 
 

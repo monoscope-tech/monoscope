@@ -22,7 +22,7 @@ module Models.Projects.Projects (
 )
 where
 
-import Data.Aeson (FromJSON (..), ToJSON (toJSON), Value (String))
+import Data.Aeson qualified as AE 
 import Data.Default
 import Data.Time (ZonedTime)
 import Data.UUID qualified as UUID
@@ -44,7 +44,7 @@ import Web.HttpApiData
 
 newtype ProjectId = ProjectId {unProjectId :: UUID.UUID}
   deriving stock (Generic, Show, Read)
-  deriving newtype (Eq, Ord, ToJSON, FromJSON, FromField, ToField, FromHttpApiData, Default, Hashable, NFData)
+  deriving newtype (Eq, Ord, AE.ToJSON, AE.FromJSON, FromField, ToField, FromHttpApiData, Default, Hashable, NFData)
   deriving anyclass (FromRow, ToRow)
 
 
@@ -68,16 +68,16 @@ data NotificationChannel
   deriving anyclass (NFData)
 
 
-instance ToJSON NotificationChannel where
-  toJSON NEmail = String "email"
-  toJSON NSlack = String "slack"
-  toJSON NDiscord = String "discord"
+instance AE.ToJSON NotificationChannel where
+  toJSON NEmail = AE.String "email"
+  toJSON NSlack = AE.String "slack"
+  toJSON NDiscord = AE.String "discord"
 
 
-instance FromJSON NotificationChannel where
-  parseJSON (String "email") = pure NEmail
-  parseJSON (String "slack") = pure NSlack
-  parseJSON (String "discord") = pure NDiscord
+instance AE.FromJSON NotificationChannel where
+  parseJSON (AE.String "email") = pure NEmail
+  parseJSON (AE.String "slack") = pure NSlack
+  parseJSON (AE.String "discord") = pure NDiscord
   parseJSON _ = fail "Invalid NotificationChannel value"
 
 
@@ -110,7 +110,7 @@ data Project = Project
   , -- NOTE: We used to have hosts under project, but now hosts should be gotten from the endpoints.
     -- NOTE: If there's heavy need and usage, we caould create a view. Otherwise, the project cache is best, if it meets our needs.
     paymentPlan :: Text
-  , questions :: Maybe Value
+  , questions :: Maybe AE.Value
   , dailyNotif :: Bool
   , weeklyNotif :: Bool
   , timeZone :: Text
@@ -125,7 +125,7 @@ data Project = Project
   deriving stock (Show, Generic)
   deriving anyclass (FromRow, NFData)
   deriving
-    (FromJSON, ToJSON)
+    (AE.FromJSON, AE.ToJSON)
     via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] Project
   deriving
     (Entity)
@@ -144,7 +144,7 @@ data Project' = Project'
   , -- NOTE: We used to have hosts under project, but now hosts should be gotten from the endpoints.
     -- NOTE: If there's heavy need and usage, we caould create a view. Otherwise, the project cache is best, if it meets our needs.
     paymentPlan :: Text
-  , questions :: Maybe Value
+  , questions :: Maybe AE.Value
   , dailyNotif :: Bool
   , weeklyNotif :: Bool
   , timeZone :: Text

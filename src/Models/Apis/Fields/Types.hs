@@ -15,7 +15,6 @@ module Models.Apis.Fields.Types (
 )
 where
 
-import Data.Aeson (FromJSON, ToJSON)
 import Data.Aeson qualified as AE
 import Data.Default
 import Data.List qualified as L 
@@ -47,7 +46,7 @@ newtype FieldId = FieldId {unFieldId :: UUID.UUID}
   deriving stock (Generic, Show)
   deriving newtype (NFData)
   deriving
-    (Eq, Ord, ToJSON, FromJSON, FromField, ToField, FromHttpApiData, Default)
+    (Eq, Ord, AE.ToJSON, AE.FromJSON, FromField, ToField, FromHttpApiData, Default)
     via UUID.UUID
 
 
@@ -67,12 +66,12 @@ data FieldTypes
   deriving anyclass (NFData)
 
 
-instance FromJSON FieldTypes where
+instance AE.FromJSON FieldTypes where
   parseJSON (AE.String v) = maybe empty pure (parseFieldTypes v)
   parseJSON _ = empty
 
 
-instance ToJSON FieldTypes where
+instance AE.ToJSON FieldTypes where
   toJSON = AE.String . fieldTypeToText
 
 
@@ -139,12 +138,12 @@ data FieldCategoryEnum
   deriving anyclass (NFData)
 
 
-instance FromJSON FieldCategoryEnum where
+instance AE.FromJSON FieldCategoryEnum where
   parseJSON (AE.String v) = maybe empty pure (parseFieldCategoryEnum v)
   parseJSON _ = empty
 
 
-instance ToJSON FieldCategoryEnum where
+instance AE.ToJSON FieldCategoryEnum where
   toJSON = AE.String . fieldCategoryEnumToText
 
 

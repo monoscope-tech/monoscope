@@ -11,7 +11,6 @@ module Pages.Endpoints.EndpointDetails (
 )
 where
 
-import Data.Aeson (KeyValue ((.=)))
 import Data.Aeson qualified as AE
 import Data.Aeson.Key qualified as AEKey
 import Data.Aeson.Text (encodeToLazyText)
@@ -379,11 +378,11 @@ shapesSubPage pid shapesList shapesWithFields currentURL = do
               let response_body_keypaths = (\f -> f.keyPath) <$> fromMaybe [] (Map.lookup Fields.FCResponseBody shape.fieldsMap)
               let shapeJson =
                     AE.object
-                      [ "response_headers" .= buildLeafJson (fromMaybe [] (Map.lookup Fields.FCResponseHeader shape.fieldsMap))
-                      , "query_params" .= buildLeafJson (fromMaybe [] (Map.lookup Fields.FCQueryParam shape.fieldsMap))
-                      , "path_params" .= buildLeafJson (fromMaybe [] (Map.lookup Fields.FCPathParam shape.fieldsMap))
-                      , "request_body" .= convertKeyPathsToJson request_body_keypaths (fromMaybe [] (Map.lookup Fields.FCRequestBody shape.fieldsMap)) ""
-                      , "response_body" .= convertKeyPathsToJson response_body_keypaths (fromMaybe [] (Map.lookup Fields.FCResponseBody shape.fieldsMap)) ""
+                      [ "response_headers" AE..= buildLeafJson (fromMaybe [] (Map.lookup Fields.FCResponseHeader shape.fieldsMap))
+                      , "query_params" AE..= buildLeafJson (fromMaybe [] (Map.lookup Fields.FCQueryParam shape.fieldsMap))
+                      , "path_params" AE..= buildLeafJson (fromMaybe [] (Map.lookup Fields.FCPathParam shape.fieldsMap))
+                      , "request_body" AE..= convertKeyPathsToJson request_body_keypaths (fromMaybe [] (Map.lookup Fields.FCRequestBody shape.fieldsMap)) ""
+                      , "response_body" AE..= convertKeyPathsToJson response_body_keypaths (fromMaybe [] (Map.lookup Fields.FCResponseBody shape.fieldsMap)) ""
                       ]
               let shapeJsonStr = aesonValueToText shapeJson
               div_ [class_ " text-gray-500 p-4 bg-gray-100 whitespace-prerap w-2/3 h-[200px] overflow-auto flex flex-col gap-1 shape_json", style_ "font-family: monospace", term "data-json" shapeJsonStr] pass

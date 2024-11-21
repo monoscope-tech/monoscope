@@ -46,7 +46,6 @@ module Utils (
 )
 where
 
-import Data.Aeson (Value)
 import Data.Aeson qualified as AE
 import Data.Aeson.KeyMap qualified as AEK
 import Data.Char (isDigit)
@@ -288,40 +287,40 @@ unwrapJsonPrimValue _ (AE.Array items) = "[" <> toText (show (length items)) <> 
 
 
 -- FIXME: delete
-lookupMapText :: Text -> HashMap Text Value -> Maybe Text
+lookupMapText :: Text -> HashMap Text AE.Value -> Maybe Text
 lookupMapText key hashMap = case HM.lookup key hashMap of
   Just (AE.String textValue) -> Just textValue -- Extract text from Value if it's a String
   _ -> Nothing
 
 
 -- FIXME: delete
-lookupMapInt :: Text -> HashMap Text Value -> Int
+lookupMapInt :: Text -> HashMap Text AE.Value -> Int
 lookupMapInt key hashMap = case HM.lookup key hashMap of
   Just (AE.Number val) -> fromMaybe 0 $ toBoundedInteger val -- Extract text from Value if it's a String
   _ -> 0
 
 
-lookupVecText :: V.Vector Value -> Int -> Maybe Text
+lookupVecText :: V.Vector AE.Value -> Int -> Maybe Text
 lookupVecText vec idx = case vec V.!? idx of
   Just (AE.String textValue) -> Just textValue -- Extract text from Value if it's a String
   _ -> Nothing
 
 
-lookupVecInt :: V.Vector Value -> Int -> Int
+lookupVecInt :: V.Vector AE.Value -> Int -> Int
 lookupVecInt vec idx = case vec V.!? idx of
   Just (AE.Number val) -> fromMaybe 0 $ toBoundedInteger val -- Extract text from Value if it's a String
   _ -> 0
 
 
-lookupVecTextByKey :: V.Vector Value -> HM.HashMap Text Int -> Text -> Maybe Text
+lookupVecTextByKey :: V.Vector AE.Value -> HM.HashMap Text Int -> Text -> Maybe Text
 lookupVecTextByKey vec colIdxMap key = HM.lookup key colIdxMap >>= lookupVecText vec
 
 
-lookupVecIntByKey :: V.Vector Value -> HM.HashMap Text Int -> Text -> Int
+lookupVecIntByKey :: V.Vector AE.Value -> HM.HashMap Text Int -> Text -> Int
 lookupVecIntByKey vec colIdxMap key = (HM.lookup key colIdxMap >>= Just . lookupVecInt vec) & fromMaybe 0
 
 
-lookupVecByKey :: V.Vector Value -> HM.HashMap Text Int -> Text -> Maybe Value
+lookupVecByKey :: V.Vector AE.Value -> HM.HashMap Text Int -> Text -> Maybe AE.Value
 lookupVecByKey vec colIdxMap key = HM.lookup key colIdxMap >>= (vec V.!?)
 
 

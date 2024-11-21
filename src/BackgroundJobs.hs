@@ -1,7 +1,7 @@
 module BackgroundJobs (jobsWorkerInit, jobsRunner, BgJobs (..)) where
 
 import Control.Lens ((.~))
-import Data.Aeson as Aeson
+import Data.Aeson qualified as AE 
 import Data.Aeson.QQ (aesonQQ)
 import Data.CaseInsensitive qualified as CI
 import Data.Pool (withResource)
@@ -61,7 +61,7 @@ data BgJobs
   | DeletedProject Projects.ProjectId
   | APITestFailed Projects.ProjectId Testing.CollectionId (V.Vector Testing.StepResult)
   deriving stock (Show, Generic)
-  deriving anyclass (ToJSON, FromJSON)
+  deriving anyclass (AE.ToJSON, AE.FromJSON)
 
 
 webhookUrl :: String
@@ -70,7 +70,7 @@ webhookUrl = "https://discord.com/api/webhooks/1230980245423788045/JQOJ7w3gmEdua
 
 sendMessageToDiscord :: Text -> ATBackgroundCtx ()
 sendMessageToDiscord msg = do
-  let message = object ["content" .= msg]
+  let message = AE.object ["content" AE..= msg]
   let opts = defaults & header "Content-Type" .~ ["application/json"]
   response <- liftIO $ postWith opts webhookUrl message
   pass
@@ -336,10 +336,10 @@ dailyReportForProject pid = do
           let firstName = user.firstName
           let projectTitle = pr.title
           let userEmail = CI.original user.email
-          let anmls = if total_anomalies == 0 then [Aeson.object ["message" .= "No anomalies detected yet."]] else RP.getAnomaliesEmailTemplate anomalies
+          let anmls = if total_anomalies == 0 then [AE.object ["message" AE..= "No anomalies detected yet."]] else RP.getAnomaliesEmailTemplate anomalies
           let perf = RP.getPerformanceEmailTemplate endpoint_rp previous_day
           let perf_count = V.length perf
-          let perf_shrt = if perf_count == 0 then [Aeson.object ["message" .= "No performance data yet."]] else V.take 10 perf
+          let perf_shrt = if perf_count == 0 then [AE.object ["message" AE..= "No performance data yet."]] else V.take 10 perf
 
           let rp_url = "https://app.apitoolkit.io/p/" <> pid.toText <> "/reports/" <> show report.id.reportId
           let day = show $ localDay (zonedTimeToLocalTime currentTime)
@@ -400,10 +400,10 @@ weeklyReportForProject pid = do
           let firstName = user.firstName
           let projectTitle = pr.title
           let userEmail = CI.original user.email
-          let anmls = if total_anomalies == 0 then [Aeson.object ["message" .= "No anomalies detected yet."]] else RP.getAnomaliesEmailTemplate anomalies
+          let anmls = if total_anomalies == 0 then [AE.object ["message" AE..= "No anomalies detected yet."]] else RP.getAnomaliesEmailTemplate anomalies
           let perf = RP.getPerformanceEmailTemplate endpoint_rp previous_week
           let perf_count = V.length perf
-          let perf_shrt = if perf_count == 0 then [Aeson.object ["message" .= "No performance data yet."]] else V.take 10 perf
+          let perf_shrt = if perf_count == 0 then [AE.object ["message" AE..= "No performance data yet."]] else V.take 10 perf
           let rp_url = "https://app.apitoolkit.io/p/" <> pid.toText <> "/reports/" <> show report.id.reportId
           let dayEnd = show $ localDay (zonedTimeToLocalTime currentTime)
           let currentUTCTime = zonedTimeToUTC currentTime
@@ -483,11 +483,11 @@ Endpoint: `{endpointPath}`
             when (totalRequestsCount > 50)
               $ forM_ users \u -> do
                 let templateVars =
-                      object
-                        [ "user_name" .= u.firstName
-                        , "project_name" .= project.title
-                        , "anomaly_url" .= ("https://app.apitoolkit.io/p/" <> pid.toText <> "/anomalies/by_hash/" <> targetHash)
-                        , "endpoint_name" .= endpointPath
+                      AE.object
+                        [ "user_name" AE..= u.firstName
+                        , "project_name" AE..= project.title
+                        , "anomaly_url" AE..= ("https://app.apitoolkit.io/p/" <> pid.toText <> "/anomalies/by_hash/" <> targetHash)
+                        , "endpoint_name" AE..= endpointPath
                         ]
                 sendPostmarkEmail (CI.original u.email) (Just ("anomaly-endpoint", templateVars)) Nothing
     Anomalies.ATShape -> do

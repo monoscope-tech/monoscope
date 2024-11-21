@@ -1,6 +1,5 @@
 module Web.Routes (server, genAuthServerContext) where
 
-import Data.Aeson
 import Data.Aeson qualified as AE
 import Data.Map qualified as Map
 import Data.Pool (Pool)
@@ -203,7 +202,7 @@ data Status = Status
   }
   deriving stock (Generic)
   deriving
-    (FromJSON, ToJSON)
+    (AE.FromJSON, AE.ToJSON)
     via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] Status
 
 

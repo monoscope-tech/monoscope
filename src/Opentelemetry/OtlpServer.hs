@@ -3,7 +3,6 @@
 module Opentelemetry.OtlpServer (runServer, processList) where
 
 import Control.Lens hiding ((.=))
-import Data.Aeson (object, (.=))
 import Data.Aeson qualified as AE
 import Data.Aeson.Key qualified as AEK
 import Data.Aeson.KeyMap qualified as KEM
@@ -186,10 +185,10 @@ resourceToJSONB Nothing = AE.Null
 -- Convert an instrumentation scope to JSONB
 instrumentationScopeToJSONB :: Maybe InstrumentationScope -> AE.Value
 instrumentationScopeToJSONB (Just scope) =
-  object
-    [ "name" .= scope.instrumentationScopeName
-    , "version" .= scope.instrumentationScopeVersion
-    , "attributes" .= keyValueToJSONB scope.instrumentationScopeAttributes
+  AE.object
+    [ "name" AE..= scope.instrumentationScopeName
+    , "version" AE..= scope.instrumentationScopeVersion
+    , "attributes" AE..= keyValueToJSONB scope.instrumentationScopeAttributes
     ]
 instrumentationScopeToJSONB Nothing = AE.Null
 
@@ -413,11 +412,11 @@ eventsToJSONB :: [Span_Event] -> AE.Value
 eventsToJSONB spans =
   AE.toJSON
     $ ( \sp ->
-          object
-            [ "event_name" .= toText sp.span_EventName
-            , "event_time" .= nanosecondsToUTC sp.span_EventTimeUnixNano
-            , "event_attributes" .= keyValueToJSONB sp.span_EventAttributes
-            , "event_dropped_attributes_count" .= fromIntegral sp.span_EventDroppedAttributesCount
+          AE.object
+            [ "event_name" AE..= toText sp.span_EventName
+            , "event_time" AE..= nanosecondsToUTC sp.span_EventTimeUnixNano
+            , "event_attributes" AE..= keyValueToJSONB sp.span_EventAttributes
+            , "event_dropped_attributes_count" AE..= fromIntegral sp.span_EventDroppedAttributesCount
             ]
       )
     <$> spans
@@ -428,12 +427,12 @@ linksToJSONB lnks =
   AE.toJSON
     $ lnks
     <&> \lnk ->
-      object
-        [ "link_span_id" .= (decodeUtf8 lnk.span_LinkSpanId :: Text)
-        , "link_trace_id" .= (decodeUtf8 lnk.span_LinkTraceId :: Text)
-        , "link_attributes" .= keyValueToJSONB lnk.span_LinkAttributes
-        , "link_dropped_attributes_count" .= fromIntegral lnk.span_LinkDroppedAttributesCount
-        , "link_flags" .= fromIntegral lnk.span_LinkFlags
+      AE.object
+        [ "link_span_id" AE..= (decodeUtf8 lnk.span_LinkSpanId :: Text)
+        , "link_trace_id" AE..= (decodeUtf8 lnk.span_LinkTraceId :: Text)
+        , "link_attributes" AE..= keyValueToJSONB lnk.span_LinkAttributes
+        , "link_dropped_attributes_count" AE..= fromIntegral lnk.span_LinkDroppedAttributesCount
+        , "link_flags" AE..= fromIntegral lnk.span_LinkFlags
         ]
 
 

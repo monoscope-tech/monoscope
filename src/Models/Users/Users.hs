@@ -11,7 +11,7 @@ module Models.Users.Users (
   addUserToAllProjects,
 ) where
 
-import Data.Aeson (FromJSON (parseJSON), ToJSON (toJSON))
+import Data.Aeson qualified as AE 
 import Data.CaseInsensitive qualified as CI
 import Data.Default
 import Data.Default.Instances ()
@@ -42,12 +42,12 @@ import GHC.Records (HasField (getField))
 import Relude
 
 
-instance FromJSON (CI.CI Text) where
-  parseJSON = fmap CI.mk . parseJSON
+instance AE.FromJSON (CI.CI Text) where
+  parseJSON = fmap CI.mk . AE.parseJSON
 
 
-instance ToJSON (CI.CI Text) where
-  toJSON = toJSON . CI.original
+instance AE.ToJSON (CI.CI Text) where
+  toJSON = AE.toJSON . CI.original
 
 
 instance Default Bool where
@@ -57,7 +57,7 @@ instance Default Bool where
 newtype UserId = UserId {getUserId :: UUID.UUID}
   deriving stock (Generic, Show, Eq)
   deriving
-    (Ord, ToJSON, FromJSON, FromField, ToField, Default)
+    (Ord, AE.ToJSON, AE.FromJSON, FromField, ToField, Default)
     via UUID.UUID
   deriving anyclass (FromRow, ToRow)
   deriving newtype (NFData)
@@ -83,7 +83,7 @@ data User = User
   deriving stock (Show, Generic)
   deriving anyclass (FromRow, ToRow, Default, NFData)
   deriving
-    (FromJSON, ToJSON)
+    (AE.FromJSON, AE.ToJSON)
     via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] User
   deriving
     (Entity)

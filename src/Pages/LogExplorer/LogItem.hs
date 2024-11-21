@@ -1,6 +1,5 @@
 module Pages.LogExplorer.LogItem (expandAPIlogItemH, expandAPIlogItem', apiLogItemH, ApiLogItem (..), ApiItemDetailed (..)) where
 
-import Data.Aeson ((.=))
 import Data.Aeson qualified as AE
 import Data.Aeson.KeyMap qualified as KEM
 import Data.ByteString.Lazy qualified as BS
@@ -274,26 +273,26 @@ selectiveReqToJson :: RequestDumps.RequestDumpLogItem -> AE.Value
 selectiveReqToJson req =
   AE.object
     $ concat @[]
-      [ ["created_at" .= req.createdAt]
-      , ["duration_ns" .= req.durationNs]
-      , ["errors" .= req.errors]
-      , ["host" .= req.host]
-      , ["method" .= req.method]
-      , ["parent_id" .= req.parentId]
-      , ["path_params" .= req.pathParams]
-      , ["query_params" .= req.queryParams]
-      , ["raw_url" .= req.rawUrl]
-      , ["referer" .= req.referer]
-      , ["request_body" .= req.requestBody]
-      , ["request_headers" .= req.requestHeaders]
-      , ["request_type" .= req.requestType]
-      , ["response_body" .= req.responseBody]
-      , ["response_headers" .= req.responseHeaders]
-      , ["sdk_type" .= req.sdkType]
-      , ["service_version" .= req.serviceVersion]
-      , ["status_code" .= req.statusCode]
-      , ["tags" .= req.tags]
-      , ["url_path" .= req.urlPath]
+      [ ["created_at" AE..= req.createdAt]
+      , ["duration_ns" AE..= req.durationNs]
+      , ["errors" AE..= req.errors]
+      , ["host" AE..= req.host]
+      , ["method" AE..= req.method]
+      , ["parent_id" AE..= req.parentId]
+      , ["path_params" AE..= req.pathParams]
+      , ["query_params" AE..= req.queryParams]
+      , ["raw_url" AE..= req.rawUrl]
+      , ["referer" AE..= req.referer]
+      , ["request_body" AE..= req.requestBody]
+      , ["request_headers" AE..= req.requestHeaders]
+      , ["request_type" AE..= req.requestType]
+      , ["response_body" AE..= req.responseBody]
+      , ["response_headers" AE..= req.responseHeaders]
+      , ["sdk_type" AE..= req.sdkType]
+      , ["service_version" AE..= req.serviceVersion]
+      , ["status_code" AE..= req.statusCode]
+      , ["tags" AE..= req.tags]
+      , ["url_path" AE..= req.urlPath]
       ]
 
 
@@ -301,20 +300,20 @@ selectiveSpanToJson :: Telemetry.SpanRecord -> AE.Value
 selectiveSpanToJson sp =
   AE.object
     $ concat @[]
-      [ ["timestamp" .= sp.timestamp]
-      , ["span_id" .= sp.spanId]
-      , ["span_name" .= sp.spanName]
-      , ["kind" .= sp.kind]
-      , ["links" .= sp.links]
-      , ["trace_id" .= sp.traceId]
-      , ["start_time" .= sp.startTime]
-      , ["status" .= sp.status]
-      , ["status_message" .= sp.statusMessage]
-      , ["parent_span_id" .= sp.parentSpanId]
-      , ["trace_state" .= sp.traceState]
-      , ["intrumentation_scope" .= sp.instrumentationScope]
-      , ["attributes" .= sp.attributes]
-      , ["resource" .= sp.resource]
+      [ ["timestamp" AE..= sp.timestamp]
+      , ["span_id" AE..= sp.spanId]
+      , ["span_name" AE..= sp.spanName]
+      , ["kind" AE..= sp.kind]
+      , ["links" AE..= sp.links]
+      , ["trace_id" AE..= sp.traceId]
+      , ["start_time" AE..= sp.startTime]
+      , ["status" AE..= sp.status]
+      , ["status_message" AE..= sp.statusMessage]
+      , ["parent_span_id" AE..= sp.parentSpanId]
+      , ["trace_state" AE..= sp.traceState]
+      , ["intrumentation_scope" AE..= sp.instrumentationScope]
+      , ["attributes" AE..= sp.attributes]
+      , ["resource" AE..= sp.resource]
       ]
 
 

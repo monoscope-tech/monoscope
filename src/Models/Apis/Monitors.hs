@@ -11,7 +11,7 @@ module Models.Apis.Monitors (
   updateQMonitorTriggeredState,
 ) where
 
-import Data.Aeson (FromJSON, ToJSON)
+import Data.Aeson qualified as AE 
 import Data.CaseInsensitive qualified as CI
 import Data.Default (Default)
 import Data.Time.Clock (UTCTime)
@@ -60,7 +60,7 @@ import Servant (FromHttpApiData)
 
 newtype QueryMonitorId = QueryMonitorId {unQueryMonitorId :: UUID.UUID}
   deriving stock (Generic, Show)
-  deriving newtype (ToJSON, FromJSON, Eq, Ord, FromField, ToField, FromHttpApiData, NFData, Default)
+  deriving newtype (AE.ToJSON, AE.FromJSON, Eq, Ord, FromField, ToField, FromHttpApiData, NFData, Default)
 
 
 instance HasField "toText" QueryMonitorId Text where
@@ -78,7 +78,7 @@ data MonitorAlertConfig = MonitorAlertConfig
   }
   deriving stock (Generic, Show)
   deriving anyclass (NFData, Default)
-  deriving (FromJSON, ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] MonitorAlertConfig
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] MonitorAlertConfig
   deriving (FromField, ToField) via Aeson MonitorAlertConfig
 
 
@@ -103,7 +103,7 @@ data QueryMonitor = QueryMonitor
   }
   deriving stock (Show, Generic)
   deriving anyclass (FromRow, ToRow, NFData, Default)
-  deriving (FromJSON, ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] QueryMonitor
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] QueryMonitor
   deriving (Entity) via (GenericEntity '[Schema "monitors", TableName "query_monitors", PrimaryKey "id", FieldModifiers '[CamelToSnake]] QueryMonitor)
 
 
@@ -129,7 +129,7 @@ data QueryMonitorEvaled = QueryMonitorEvaled
   }
   deriving stock (Show, Generic)
   deriving anyclass (FromRow, ToRow, NFData, Default)
-  deriving (FromJSON, ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] QueryMonitorEvaled
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] QueryMonitorEvaled
 
 
 queryMonitorUpsert :: QueryMonitor -> DBT IO Int64

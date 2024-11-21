@@ -9,7 +9,6 @@ module Pages.Log (
 where
 
 import Control.Error (hush)
-import Data.Aeson (Value)
 import Data.Aeson qualified as AE
 import Data.Containers.ListUtils (nubOrd)
 import Data.Default (def)
@@ -158,7 +157,7 @@ apiLogH pid queryM queryASTM cols' cursorM' sinceM fromM toM layoutM sourceM tar
 data LogsGet
   = LogPage (PageCtx ApiLogsPageData)
   | -- TODO: Make the field below a named record
-    LogsGetRows Projects.ProjectId (V.Vector (V.Vector Value)) [Text] (HM.HashMap Text Int) Text Text (V.Vector Telemetry.SpanRecord)
+    LogsGetRows Projects.ProjectId (V.Vector (V.Vector AE.Value)) [Text] (HM.HashMap Text Int) Text Text (V.Vector Telemetry.SpanRecord)
   | LogsGetResultTable ApiLogsPageData Bool
   | LogsGetError (PageCtx Text)
   | LogsGetErrorSimple Text
@@ -225,7 +224,7 @@ logQueryBox_ pid currentRange source targetSpan queryAST = do
 data ApiLogsPageData = ApiLogsPageData
   { pid :: Projects.ProjectId
   , resultCount :: Int
-  , requestVecs :: V.Vector (V.Vector Value)
+  , requestVecs :: V.Vector (V.Vector AE.Value)
   , cols :: [Text]
   , colIdxMap :: HM.HashMap Text Int
   , latestLogsURL :: Text
@@ -427,7 +426,7 @@ curateCols summaryCols cols = sortBy sortAccordingly filteredCols
       | otherwise = comparing (`L.elemIndex` filteredCols) a b
 
 
-logItemRows_ :: Projects.ProjectId -> V.Vector (V.Vector Value) -> [Text] -> HM.HashMap Text Int -> Text -> Text -> V.Vector Telemetry.SpanRecord -> Html ()
+logItemRows_ :: Projects.ProjectId -> V.Vector (V.Vector AE.Value) -> [Text] -> HM.HashMap Text Int -> Text -> Text -> V.Vector Telemetry.SpanRecord -> Html ()
 logItemRows_ pid requests curatedCols colIdxMap nextLogsURL source chSpns = do
   forM_ requests \reqVec -> do
     let (logItemPath, _reqId) = fromMaybe ("", "") $ requestDumpLogItemUrlPath pid reqVec colIdxMap
@@ -451,7 +450,7 @@ logItemRows_ pid requests curatedCols colIdxMap nextLogsURL source chSpns = do
       (span_ [class_ "inline-block"] "LOAD MORE " >> span_ [class_ "loading loading-dots loading-sm inline-block pl-3"] "")
 
 
-errorClass :: Bool -> V.Vector Value -> HM.HashMap Text Int -> (Int, Int, Text)
+errorClass :: Bool -> V.Vector AE.Value -> HM.HashMap Text Int -> (Int, Int, Text)
 errorClass expandedSection reqVec colIdxMap =
   let errCount = lookupVecIntByKey reqVec colIdxMap "errors_count"
       status = lookupVecIntByKey reqVec colIdxMap "status_code"
@@ -467,7 +466,7 @@ errorClass expandedSection reqVec colIdxMap =
       )
 
 
-barSeverityClass :: V.Vector Value -> HM.HashMap Text Int -> Text
+barSeverityClass :: V.Vector AE.Value -> HM.HashMap Text Int -> Text
 barSeverityClass reqVec colIdxMap =
   let severity = fromMaybe "INFO" $ lookupVecTextByKey reqVec colIdxMap "severity"
       cls = case severity of
@@ -524,24 +523,24 @@ renderBadge :: Text -> Text -> Text -> Html ()
 renderBadge className content tip = span_ [class_ className, term "data-tippy-content" tip] $ toHtml content
 
 
-renderLogBadge :: Text -> V.Vector Value -> HM.HashMap Text Int -> Text -> Html ()
+renderLogBadge :: Text -> V.Vector AE.Value -> HM.HashMap Text Int -> Text -> Html ()
 renderLogBadge key reqVec colIdxMap className = renderBadge (className <> " cbadge ") (fromMaybe "" $ lookupVecTextByKey reqVec colIdxMap key) key
 
 
-renderMethod :: V.Vector Value -> HM.HashMap Text Int -> Html ()
+renderMethod :: V.Vector AE.Value -> HM.HashMap Text Int -> Html ()
 renderMethod reqVec colIdxMap =
   let method = fromMaybe "/" $ lookupVecTextByKey reqVec colIdxMap "method"
    in renderBadge ("min-w-[4rem] cbadge " <> maybe "badge-ghost" getMethodColor (lookupVecTextByKey reqVec colIdxMap "method")) method "method"
 
 
-renderTimestamp :: Text -> V.Vector Value -> HM.HashMap Text Int -> Html ()
+renderTimestamp :: Text -> V.Vector AE.Value -> HM.HashMap Text Int -> Html ()
 renderTimestamp key reqVec colIdxMap =
   time_ [class_ "monospace whitespace-nowrap text-slate-600 ", term "data-tippy-content" "timestamp", datetime_ timestamp] $ toHtml (displayTimestamp timestamp)
   where
     timestamp = maybeToMonoid $ lookupVecTextByKey reqVec colIdxMap key
 
 
-renderStatusCode :: V.Vector Value -> HM.HashMap Text Int -> Html ()
+renderStatusCode :: V.Vector AE.Value -> HM.HashMap Text Int -> Html ()
 renderStatusCode reqVec colIdxMap =
   renderBadge (getStatusColor $ lookupVecIntByKey reqVec colIdxMap "status_code") (show @Text $ lookupVecIntByKey reqVec colIdxMap "status_code") "status"
 
@@ -550,7 +549,7 @@ renderIconWithTippy :: Text -> Text -> Html () -> Html ()
 renderIconWithTippy iconClass tip = a_ [class_ $ "shrink-0 inline-flex " <> iconClass, term "data-tippy-content" tip]
 
 
-logItemCol_ :: Text -> Projects.ProjectId -> V.Vector Value -> HM.HashMap Text Int -> Text -> V.Vector Telemetry.SpanRecord -> Html ()
+logItemCol_ :: Text -> Projects.ProjectId -> V.Vector AE.Value -> HM.HashMap Text Int -> Text -> V.Vector Telemetry.SpanRecord -> Html ()
 logItemCol_ source pid reqVec colIdxMap "id" chSpns = do
   let (status, errCount, errClass) = errorClass False reqVec colIdxMap
   let severityClass = barSeverityClass reqVec colIdxMap
@@ -589,7 +588,7 @@ logItemCol_ source pid reqVec colIdxMap "rest" _ = div_ [class_ "space-x-2 white
 logItemCol_ _ _ reqVec colIdxMap key _ = renderBadge "space-nowrap overflow-x-hidden max-w-lg" (maybe "" (unwrapJsonPrimValue True) (lookupVecByKey reqVec colIdxMap key)) key
 
 
-requestDumpLogItemUrlPath :: Projects.ProjectId -> V.Vector Value -> HM.HashMap Text Int -> Maybe (Text, Text)
+requestDumpLogItemUrlPath :: Projects.ProjectId -> V.Vector AE.Value -> HM.HashMap Text Int -> Maybe (Text, Text)
 requestDumpLogItemUrlPath pid rd colIdxMap = do
   rdId <- lookupVecTextByKey rd colIdxMap "id"
   rdCreatedAt <- lookupVecTextByKey rd colIdxMap "created_at" <|> lookupVecTextByKey rd colIdxMap "timestamp"

@@ -9,7 +9,7 @@ module System.Logging (
 )
 where
 
-import Data.Aeson qualified as Aeson
+import Data.Aeson qualified as AE 
 import Data.ByteString.Char8 qualified as BS
 import Data.Default (Default (..))
 import Data.Time.Clock as Time (NominalDiffTime, diffUTCTime)
@@ -77,7 +77,7 @@ withJSONFileBackend
   -> Eff es a
 withJSONFileBackend FileBackendConfig{destinationFile} action = withRunInIO $ \unlift -> do
   liftIO $ BS.hPutStrLn stdout $ BS.pack $ "Redirecting logs to " <> destinationFile
-  logger <- liftIO $ Log.mkLogger "file-json" $ \msg -> liftIO $ BS.appendFile destinationFile (toStrict $ Aeson.encode msg <> "\n")
+  logger <- liftIO $ Log.mkLogger "file-json" $ \msg -> liftIO $ BS.appendFile destinationFile (toStrict $ AE.encode msg <> "\n")
   withLogger logger (unlift . action)
 
 

@@ -1,6 +1,6 @@
 module RequestMessagesSpec (spec) where
 
-import Data.Aeson as AE
+import Data.Aeson qualified as AE
 import Data.Aeson.QQ
 import Relude
 import RequestMessages qualified

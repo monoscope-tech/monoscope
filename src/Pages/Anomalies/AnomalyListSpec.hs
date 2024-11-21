@@ -1,6 +1,5 @@
 module Pages.Anomalies.AnomalyListSpec (spec) where
 
-import Data.Aeson (Value)
 import Data.Aeson qualified as AE
 import Data.Aeson.QQ (aesonQQ)
 import Data.ByteString.Base64 qualified as B64
@@ -177,7 +176,7 @@ spec = aroundAll withTestResources do
 
 
 -- Same endpoint as msg1 but with different request body shape, to test shape anomaly detection
-msg3 :: Text -> Value
+msg3 :: Text -> AE.Value
 msg3 timestamp =
   [aesonQQ|{"duration":476434,
             "host":"172.31.29.11",
@@ -203,7 +202,7 @@ msg3 timestamp =
 
 
 -- Test format detection
-msg4 :: Text -> Value
+msg4 :: Text -> AE.Value
 msg4 timestamp =
   [aesonQQ|{"duration":476434,
             "host":"172.31.29.11",

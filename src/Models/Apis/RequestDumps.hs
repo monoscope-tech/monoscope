@@ -28,7 +28,6 @@ module Models.Apis.RequestDumps (
 )
 where
 
-import Data.Aeson (Value)
 import Data.Aeson qualified as AE
 import Data.Default
 import Data.Default.Instances ()
@@ -418,7 +417,7 @@ getRequestDumpsForPreviousReportPeriod pid report_type = query Select (Query $ e
     |]
 
 
-selectLogTable :: (DB :> es, Time.Time :> es) => Projects.ProjectId -> [Section] -> Maybe UTCTime -> (Maybe UTCTime, Maybe UTCTime) -> [Text] -> Maybe Sources -> Maybe Text -> Eff es (Either Text (V.Vector (V.Vector Value), [Text], Int))
+selectLogTable :: (DB :> es, Time.Time :> es) => Projects.ProjectId -> [Section] -> Maybe UTCTime -> (Maybe UTCTime, Maybe UTCTime) -> [Text] -> Maybe Sources -> Maybe Text -> Eff es (Either Text (V.Vector (V.Vector AE.Value), [Text], Int))
 selectLogTable pid queryAST cursorM dateRange projectedColsByUser source targetSpansM = do
   now <- Time.currentTime
   let (q, queryComponents) = queryASTToComponents ((defSqlQueryCfg pid now source targetSpansM){cursorM, dateRange, projectedColsByUser, source, targetSpansM}) queryAST
@@ -428,13 +427,13 @@ selectLogTable pid queryAST cursorM dateRange projectedColsByUser source targetS
   pure $ Right (logItemsV, queryComponents.toColNames, count)
 
 
-valueToVector :: Only Value -> Maybe (V.Vector Value)
+valueToVector :: Only AE.Value -> Maybe (V.Vector AE.Value)
 valueToVector (Only val) = case val of
   AE.Array arr -> Just arr
   _ -> Nothing
 
 
-queryToValues :: DB :> es => Text -> Eff es (V.Vector (Only Value))
+queryToValues :: DB :> es => Text -> Eff es (V.Vector (Only AE.Value))
 queryToValues q = dbtToEff $ V.fromList <$> DBT.query_ (Query $ encodeUtf8 q)
 
 

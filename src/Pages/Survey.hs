@@ -1,13 +1,7 @@
 module Pages.Survey (surveyGetH, surveyPutH, SurveyForm, SurveyGet (..), SurveyPut) where
 
 import BackgroundJobs qualified
-import Data.Aeson (
-  FromJSON,
-  KeyValue ((.=)),
-  ToJSON (toJSON),
-  encode,
-  object,
- )
+import Data.Aeson qualified as AE
 import Data.Default (def)
 import Data.List qualified as L 
 import Data.Pool (withResource)
@@ -39,16 +33,16 @@ data SurveyForm = SurveyForm
   , fullName :: Text
   }
   deriving stock (Show, Generic)
-  deriving anyclass (FromForm, FromJSON)
+  deriving anyclass (FromForm, AE.FromJSON)
 
 
-instance ToJSON SurveyForm where
+instance AE.ToJSON SurveyForm where
   toJSON surveyForm =
-    object
-      [ "stack" .= filter (not . T.null) surveyForm.stack
-      , "functionality" .= filter (not . T.null) surveyForm.functionality
-      , "dataLocation" .= dataLocation surveyForm
-      , "foundUsFrom" .= foundUsFrom surveyForm
+    AE.object
+      [ "stack" AE..= filter (not . T.null) surveyForm.stack
+      , "functionality" AE..= filter (not . T.null) surveyForm.functionality
+      , "dataLocation" AE..= dataLocation surveyForm
+      , "foundUsFrom" AE..= foundUsFrom surveyForm
       ]
 
 
@@ -62,7 +56,7 @@ surveyPutH pid survey = do
       addErrorToast "Invalid full name format." Nothing
       addRespHeaders SurveyPut
     else do
-      let jsonBytes = encode survey
+      let jsonBytes = AE.encode survey
       let firstName = nameArr L.!! 0
       let lastName = nameArr L.!! 1
       let fullName = survey.fullName

@@ -32,7 +32,7 @@ module Data.Effectful.Wreq (
   Patchable,
 ) where
 
-import Data.Aeson hiding (Options)
+import Data.Aeson qualified as AE 
 import Data.ByteString.Lazy qualified as LBS
 import Data.CaseInsensitive qualified as CI
 import Effectful
@@ -187,7 +187,7 @@ data WreqResponse = WreqResponse
   , responseEarlyHints :: [(Text, Text)]
   }
   deriving stock (Show, Generic)
-  deriving anyclass (FromJSON, ToJSON)
+  deriving anyclass (AE.FromJSON, AE.ToJSON)
 
 
 -- Convert HTTP headers to a more serializable form
@@ -234,11 +234,11 @@ getOrCreateGoldenResponse goldenDir fileName action = do
   if exists
     then do
       content <- readFileLBS filePath
-      case decode content of
+      case AE.decode content of
         Just response -> return $ toWreqResponse response
         Nothing -> error $ fromString $ "Failed to decode response from file: " <> filePath
     else do
       createDirectoryIfMissing True goldenDir
       response <- action
-      writeFileLBS filePath (encode $ fromWreqResponse response)
+      writeFileLBS filePath (AE.encode $ fromWreqResponse response)
       return response
