@@ -64,7 +64,7 @@ getH pid sdkM errReportM reqMonM = do
   addRespHeaders $ IntegrationsGet $ PageCtx bwconf (pid, fromMaybe "express" sdkM, key, errReportM, reqMonM)
 
 
-data IntegrationsGet = IntegrationsGet (PageCtx (Projects.ProjectId, Text, Text, Maybe Text, Maybe Text))
+newtype IntegrationsGet = IntegrationsGet (PageCtx (Projects.ProjectId, Text, Text, Maybe Text, Maybe Text))
 
 
 instance ToHtml IntegrationsGet where

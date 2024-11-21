@@ -299,7 +299,7 @@ documentationPostH pid SwaggerForm{swagger_json, from} = do
       addRespHeaders $ DocumentationMut "Swagger upload failed"
 
 
-data DocumentationMut = DocumentationMut Text
+newtype DocumentationMut = DocumentationMut Text
 
 
 instance ToHtml DocumentationMut where

@@ -75,6 +75,7 @@ default-extensions:
   - RecordWildCards
   - TemplateHaskell
   - AllowAmbiguousTypes
+  - TupleSections
 
 extra-source-files:
   - README.md

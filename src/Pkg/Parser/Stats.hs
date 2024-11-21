@@ -26,12 +26,12 @@ data AggFunction
 
 
 -- Define an optional 'by' clause
-data ByClause = ByClause [Subject] -- List of fields to group by
+newtype ByClause = ByClause [Subject] -- List of fields to group by
   deriving stock (Show, Generic)
   deriving anyclass (AE.FromJSON, AE.ToJSON)
 
 
-data Rollup = Rollup Text
+newtype Rollup = Rollup Text
   deriving stock (Show, Generic)
   deriving anyclass (AE.FromJSON, AE.ToJSON)
 

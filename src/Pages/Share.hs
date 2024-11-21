@@ -99,7 +99,7 @@ shareLinkGetH sid = do
   pure $ ShareLinkGet $ PageCtx bwconf reqM
 
 
-data ShareLinkGet = ShareLinkGet (PageCtx (Maybe RequestDumps.RequestDumpLogItem))
+newtype ShareLinkGet = ShareLinkGet (PageCtx (Maybe RequestDumps.RequestDumpLogItem))
 
 
 instance ToHtml ShareLinkGet where

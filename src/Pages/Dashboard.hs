@@ -39,7 +39,7 @@ data ParamInput = ParamInput
   }
 
 
-data DashboardGet = DashboardGet
+newtype DashboardGet = DashboardGet
   { unwrap :: (Projects.ProjectId, ParamInput, UTCTime, Projects.ProjectRequestStats, Vector.Vector Endpoints.EndpointRequestStats, Text, Text, (Maybe UTCTime, Maybe UTCTime), Bool, Bool)
   }
 

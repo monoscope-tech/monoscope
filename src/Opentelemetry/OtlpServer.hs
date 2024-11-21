@@ -12,7 +12,6 @@ import Data.ByteString.Base16 qualified as B16
 import Data.HashMap.Strict qualified as HashMap
 import Data.Scientific
 import Data.Text qualified as T
-import Data.Text.Lazy qualified as LT
 import Data.Time (TimeZone (..), UTCTime, utcToZonedTime)
 import Data.Time.Clock.POSIX
 import Data.UUID qualified as UUID
@@ -64,7 +63,7 @@ getSpanAttributeValue :: Text -> V.Vector ResourceSpans -> Maybe Text
 getSpanAttributeValue attribute rss = listToMaybe $ V.toList $ V.mapMaybe (\rs -> getResourceAttr rs <|> getSpanAttr rs) rss
   where
     getResourceAttr rs = rs.resourceSpansResource >>= getAttr . resourceAttributes
-    getSpanAttr rs = rs.resourceSpansScopeSpans & listToMaybe . V.toList . V.mapMaybe (getAttr . spanAttributes) . V.concatMap (scopeSpansSpans)
+    getSpanAttr rs = rs.resourceSpansScopeSpans & listToMaybe . V.toList . V.mapMaybe (getAttr . spanAttributes) . V.concatMap scopeSpansSpans
 
     getAttr :: V.Vector KeyValue -> Maybe Text
     getAttr = V.find ((== attribute) . toText . keyValueKey) >=> keyValueValue >=> anyValueValue >=> anyValueToString >=> (Just . toText)
@@ -77,7 +76,7 @@ getLogAttributeValue attribute rls = listToMaybe $ V.toList $ V.mapMaybe (\rl ->
     getResourceAttr rl = rl.resourceLogsResource >>= getAttr . resourceAttributes
 
     -- Extract attribute from log records
-    getLogAttr rl = rl.resourceLogsScopeLogs & listToMaybe . V.toList . V.mapMaybe (getAttr . logRecordAttributes) . V.concatMap (scopeLogsLogRecords)
+    getLogAttr rl = rl.resourceLogsScopeLogs & listToMaybe . V.toList . V.mapMaybe (getAttr . logRecordAttributes) . V.concatMap scopeLogsLogRecords
 
     -- Helper function to extract attribute values from KeyValue pairs
     getAttr :: V.Vector KeyValue -> Maybe Text
@@ -97,7 +96,7 @@ processList msgs attrs = do
           Right (ExportLogsServiceRequest logReq) -> do
             pidM <- join <$> forM (getLogAttributeValue "at-project-key" logReq) ProjectApiKeys.getProjectIdByApiKey
             let pid2M = Projects.projectIdFromText =<< getLogAttributeValue "at-project-id" logReq
-            let pid = fromMaybe (error $ "project API Key and project ID not available in trace") $ pidM <|> pid2M
+            let pid = fromMaybe (error "project API Key and project ID not available in trace") $ pidM <|> pid2M
             pure (ackId, join $ V.map (convertToLog pid) logReq)
       let (ackIds, logs) = V.unzip results
       Telemetry.bulkInsertLogs $ join logs
@@ -110,7 +109,7 @@ processList msgs attrs = do
             Right (ExportTraceServiceRequest traceReq) -> do
               pidM <- join <$> forM (getSpanAttributeValue "at-project-key" traceReq) ProjectApiKeys.getProjectIdByApiKey
               let pid2M = Projects.projectIdFromText =<< getSpanAttributeValue "at-project-id" traceReq
-              let pid = fromMaybe (error $ "project API Key and project ID not available in trace") $ pidM <|> pid2M
+              let pid = fromMaybe (error "project API Key and project ID not available in trace") $ pidM <|> pid2M
               pure (ackId, join $ V.map (convertToSpan pid) traceReq)
       let (ackIds, spansVec) = V.unzip results
           spans = join spansVec
@@ -135,7 +134,7 @@ logsServiceExportH appLogger appCtx (ServerNormalRequest meta (ExportLogsService
   _ <- runBackground appLogger appCtx do
     let projectKey = fromMaybe (error "Missing project key") $ getLogAttributeValue "at-project-key" req
     projectIdM <- ProjectApiKeys.getProjectIdByApiKey projectKey
-    let pid = fromMaybe (error $ "project API Key is invalid pid") projectIdM
+    let pid = fromMaybe (error "project API Key is invalid pid") projectIdM
 
     let logRecords = join $ V.map (convertToLog pid) req
     Telemetry.bulkInsertLogs logRecords
@@ -155,7 +154,7 @@ byteStringToHexText bs = decodeUtf8 (B16.encode bs)
 keyValueToJSONB :: V.Vector KeyValue -> AE.Value
 keyValueToJSONB kvs =
   AE.object
-    $ V.foldr (\kv acc -> (AEK.fromText $ LT.toStrict kv.keyValueKey, convertAnyValue kv.keyValueValue) : acc) [] kvs
+    $ V.foldr (\kv acc -> (AEK.fromText $ toText kv.keyValueKey, convertAnyValue kv.keyValueValue) : acc) [] kvs
 
 
 convertAnyValue :: Maybe AnyValue -> AE.Value
@@ -288,7 +287,7 @@ traceServiceExportH appLogger appCtx (ServerNormalRequest _meta (ExportTraceServ
   _ <- runBackground appLogger appCtx do
     let projectKey = fromMaybe (error "Missing project key") $ getSpanAttributeValue "at-project-key" req
     projectIdM <- ProjectApiKeys.getProjectIdByApiKey projectKey
-    let pid = fromMaybe (error $ "project API Key is invalid pid") projectIdM
+    let pid = fromMaybe (error "project API Key is invalid pid") projectIdM
     let spanRecords = join $ V.map (convertToSpan pid) req
         apitoolkitSpans = V.map mapHTTPSpan spanRecords
     _ <- ProcessMessage.processRequestMessages $ V.toList $ V.catMaybes apitoolkitSpans <&> ("",)

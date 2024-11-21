@@ -88,7 +88,7 @@ apiGetH pid = do
   addRespHeaders $ ApiGet $ PageCtx bwconf (pid, apiKeys)
 
 
-data ApiGet = ApiGet (PageCtx (Projects.ProjectId, Vector ProjectApiKeys.ProjectApiKey))
+newtype ApiGet = ApiGet (PageCtx (Projects.ProjectId, Vector ProjectApiKeys.ProjectApiKey))
 
 
 instance ToHtml ApiGet where

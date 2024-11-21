@@ -43,7 +43,7 @@ data ItemsListCfg = ItemsListCfg
   }
 
 
-data SearchCfg = SearchCfg
+newtype SearchCfg = SearchCfg
   {viaQueryParam :: Maybe Text}
 
 
@@ -54,7 +54,7 @@ data BulkAction = BulkAction
   }
 
 
-data SortCfg = SortCfg
+newtype SortCfg = SortCfg
   { current :: Text
   }
 

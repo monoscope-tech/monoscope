@@ -101,7 +101,7 @@ createProjectFormV =
 
 ----------------------------------------------------------------------------------------------------------
 -- createProjectGetH is the handler for the create projects page
-createProjectGetH :: ATAuthCtx (RespHeaders (CreateProject))
+createProjectGetH :: ATAuthCtx (RespHeaders CreateProject)
 createProjectGetH = do
   appCtx <- ask @AuthContext
   sess <- Sessions.getSession
@@ -110,7 +110,7 @@ createProjectGetH = do
           { sessM = Just sess.persistentSession
           , pageTitle = "Create Project"
           }
-  addRespHeaders $ CreateProject $ PageCtx bwconf $ ((sess.persistentSession), appCtx.config, False, def @CreateProjectForm, def @CreateProjectFormError)
+  addRespHeaders $ CreateProject $ PageCtx bwconf (sess.persistentSession, appCtx.config, False, def @CreateProjectForm, def @CreateProjectFormError)
 
 
 data CreateProject
@@ -134,7 +134,7 @@ instance ToHtml CreateProject where
 
 
 ----------------------------------------------------------------------------------------------------------
-projectSettingsGetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders (CreateProject))
+projectSettingsGetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders CreateProject)
 projectSettingsGetH pid = do
   (sess, project) <- Sessions.sessionAndProject pid
   appCtx <- ask @AuthContext
@@ -152,11 +152,11 @@ projectSettingsGetH pid = do
           }
 
   let bwconf = (def :: BWConfig){sessM = Just sess.persistentSession, currProject = Just project, pageTitle = "Settings"}
-  addRespHeaders $ CreateProject $ PageCtx bwconf $ (sess.persistentSession, appCtx.config, True, createProj, def @CreateProjectFormError)
+  addRespHeaders $ CreateProject $ PageCtx bwconf (sess.persistentSession, appCtx.config, True, createProj, def @CreateProjectFormError)
 
 
 ----------------------------------------------------------------------------------------------------------
-deleteProjectGetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders (CreateProject))
+deleteProjectGetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders CreateProject)
 deleteProjectGetH pid = do
   sess <- Sessions.getSession
   appCtx <- ask @AuthContext
@@ -176,13 +176,13 @@ deleteProjectGetH pid = do
 ----------------------------------------------------------------------------------------------------------
 -- createProjectPostH is the handler for the create projects page form handling.
 -- It processes post requests and is expected to return a redirect header and a hyperscript event trigger header.
-createProjectPostH :: CreateProjectForm -> ATAuthCtx (RespHeaders (CreateProject))
+createProjectPostH :: CreateProjectForm -> ATAuthCtx (RespHeaders CreateProject)
 createProjectPostH createP = do
   sess <- Sessions.getSession
   appCtx <- ask @AuthContext
   validationRes <- validateM createProjectFormV createP
   case validationRes of
-    Right cpe -> addRespHeaders $ ProjectPost (sess.persistentSession) appCtx.config createP.isUpdate createP cpe
+    Right cpe -> addRespHeaders $ ProjectPost sess.persistentSession appCtx.config createP.isUpdate createP cpe
     Left cp -> processProjectPostForm cp
 
 
@@ -194,7 +194,7 @@ data FirstSubItem = FirstSubItem
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] FirstSubItem
 
 
-data Attributes = Attributes
+newtype Attributes = Attributes
   { firstSubscriptionItem :: FirstSubItem
   }
   deriving stock (Show, Generic)
@@ -209,7 +209,7 @@ data DataVals = DataVals
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] DataVals
 
 
-data SubResponse = SubResponse
+newtype SubResponse = SubResponse
   { dataVal :: [DataVals]
   }
   deriving stock (Show, Generic)
@@ -236,7 +236,7 @@ getSubscriptionId orderId apiKey = do
           return Nothing
 
 
-processProjectPostForm :: Valor.Valid CreateProjectForm -> ATAuthCtx (RespHeaders (CreateProject))
+processProjectPostForm :: Valor.Valid CreateProjectForm -> ATAuthCtx (RespHeaders CreateProject)
 processProjectPostForm cpRaw = do
   appCtx <- ask @AuthContext
   let envCfg = appCtx.config
@@ -283,7 +283,7 @@ processProjectPostForm cpRaw = do
       subRes <- getSubscriptionId cp.orderId envCfg.lemonSqueezyApiKey
       let (subId, firstSubItemId) = case subRes of
             Just sub ->
-              if length sub.dataVal < 1
+              if null sub.dataVal
                 then (Nothing, Nothing)
                 else
                   let target = sub.dataVal Unsafe.!! 0
@@ -309,7 +309,7 @@ processProjectPostForm cpRaw = do
               ConvertKit.addUserOrganization envCfg.convertkitApiKey email pid.toText cp.title cp.paymentPlan
               when (userId' /= Just sess.user.id) $ whenJust userId' \userId ->
                 liftIO $ withResource appCtx.pool \conn -> void $ createJob conn "background_jobs" $ BackgroundJobs.InviteUserToProject userId pid email cp.title
-              pure $ maybe Nothing (\userId -> Just (email, permission, userId)) userId'
+              pure ((\userId -> Just (email, permission, userId)) =<< userId')
           let projectMembers =
                 newProjectMembers
                   & filter (\(_, _, id') -> id' /= sess.user.id)

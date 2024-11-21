@@ -17,7 +17,6 @@ import Effectful (
   Eff,
   Effect,
   IOE,
-  MonadIO (liftIO),
   MonadUnliftIO (withRunInIO),
   type (:>),
  )
@@ -28,22 +27,7 @@ import Effectful.Time qualified as Time
 import Log (Logger)
 import Log.Backend.StandardOutput.Bulk qualified as LogBulk
 import Log.Internal.Logger (withLogger)
-import Relude (
-  Applicative (pure),
-  Eq,
-  FilePath,
-  Generic,
-  LazyStrict (toStrict),
-  Ord,
-  Read,
-  Semigroup ((<>)),
-  Show,
-  Text,
-  Type,
-  stdout,
-  ($),
-  (.),
- )
+import Relude
 import System.Envy (ReadShowVar (..), Var)
 
 
@@ -79,7 +63,7 @@ makeLogger Json = LogBulk.withBulkJsonStdOutLogger
 makeLogger JSONFile = withJSONFileBackend FileBackendConfig{destinationFile = "logs/apitoolkit.json"}
 
 
-data FileBackendConfig = FileBackendConfig
+newtype FileBackendConfig = FileBackendConfig
   { destinationFile :: FilePath
   }
   deriving stock (Eq, Ord, Show, Generic)

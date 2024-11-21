@@ -111,7 +111,7 @@ reportsPostH pid t = do
   addRespHeaders $ ReportsPost "updated"
 
 
-data ReportsPost = ReportsPost Text
+newtype ReportsPost = ReportsPost Text
 
 
 instance ToHtml ReportsPost where

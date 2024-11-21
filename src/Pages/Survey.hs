@@ -104,7 +104,7 @@ surveyGetH pid = do
   addRespHeaders $ SurveyGet $ PageCtx bwconf (pid, full_name, phoneNumber)
 
 
-data SurveyGet = SurveyGet (PageCtx (Projects.ProjectId, Text, Text))
+newtype SurveyGet = SurveyGet (PageCtx (Projects.ProjectId, Text, Text))
 
 
 instance ToHtml SurveyGet where
