@@ -32,7 +32,7 @@ type role Routes' nominal
 type Routes = NamedRoutes Routes'
 
 
-type Routes' :: forall {k}. k -> Type
+type Routes' :: Type -> Type
 data Routes' mode = Routes'
   { logExplorerGet :: mode :- "log_explorer" :> QPT "query" :> QPT "queryAST" :> QPT "cols" :> QPU "cursor" :> QPT "since" :> QPT "from" :> QPT "to" :> QPT "layout" :> QPT "source" :> QPT "target-spans" :> HXRequest :> HXBoosted :> Get '[HTML] (RespHeaders Log.LogsGet)
   , logExplorerItemGet :: mode :- "log_explorer" :> Capture "logItemID" UUID.UUID :> Capture "createdAt" UTCTime :> QPT "source" :> Get '[HTML] (RespHeaders LogItem.ApiLogItem)

@@ -18,7 +18,7 @@ type role Routes' nominal
 type Routes = NamedRoutes Routes'
 
 
-type Routes' :: forall {k}. k -> Type
+type Routes' :: Type -> Type
 data Routes' mode = Routes'
   { listGet :: mode :- Get '[HTML] (RespHeaders ListProjects.ListProjectsGet)
   , createGet :: mode :- "p" :> "new" :> Get '[HTML] (RespHeaders CreateProject.CreateProject) -- p represents project

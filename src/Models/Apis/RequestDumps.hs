@@ -369,7 +369,7 @@ data RequestDumpLogItem = RequestDumpLogItem
 
 
 requestDumpLogUrlPath :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Text -> Text
-requestDumpLogUrlPath pid q cols cursor since from to layout source =
+requestDumpLogUrlPath pid q cols cursor since fromV toV layout source =
   "/p/" <> pid.toText <> "/log_explorer?" <> T.intercalate "&" params
   where
     params =
@@ -378,8 +378,8 @@ requestDumpLogUrlPath pid q cols cursor since from to layout source =
         , fmap ("cols=" <>) (toQueryParam <$> cols)
         , fmap ("cursor=" <>) (toQueryParam <$> cursor)
         , fmap ("since=" <>) (toQueryParam <$> since)
-        , fmap ("from=" <>) (toQueryParam <$> from)
-        , fmap ("to=" <>) (toQueryParam <$> to)
+        , fmap ("from=" <>) (toQueryParam <$> fromV)
+        , fmap ("to=" <>) (toQueryParam <$> toV)
         , fmap ("layout=" <>) (toQueryParam <$> layout)
         , Just ("source=" <> toQueryParam source)
         ]

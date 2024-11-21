@@ -20,7 +20,7 @@ type Routes = NamedRoutes Routes'
 type role Routes' nominal
 
 
-type Routes' :: forall {k}. k -> Type
+type Routes' :: Type -> Type
 data Routes' mode = Routes'
   { acknowlegeGet :: mode :- Capture "anomalyID" Anomalies.AnomalyId :> "acknowlege" :> QPT "host" :> Get '[HTML] (RespHeaders AnomalyList.AnomalyAction)
   , unAcknowlegeGet :: mode :- Capture "anomalyID" Anomalies.AnomalyId :> "unacknowlege" :> Get '[HTML] (RespHeaders AnomalyList.AnomalyAction)
