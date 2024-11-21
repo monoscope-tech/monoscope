@@ -1,11 +1,9 @@
 module Pages.Monitors.MetricMonitors (monitorCreateGetH, MonitorCreate, configureNotificationMessage_, configureNotificationChannels_) where
 
-import Data.CaseInsensitive qualified as CI
 import Data.Default
-import Data.List (groupBy)
+import Data.List qualified as L
 import Lucid
 import Lucid.Htmx
-import Lucid.Hyperscript (__)
 import Models.Apis.Monitors qualified as Monitors
 import Models.Projects.Projects qualified as Projects
 import Models.Tests.Testing qualified as Testing
@@ -158,7 +156,7 @@ chooseDetectionMethod_ = do
 
 defineTheMetric_ :: Projects.ProjectId -> Html ()
 defineTheMetric_ pid = do
-  div_ [class_ " max-w-[750px]"] $ LogList.logQueryBox_ pid Nothing "requests" Nothing
+  div_ [class_ " max-w-[750px]"] $ LogList.logQueryBox_ pid Nothing "requests" Nothing "{}"
   div_ [class_ "border-l-2 border-l-slate-300 pl-4 space-y-2"] do
     h3_ [class_ "font-normal text-base"] "Evaluation Details"
     div_ [class_ "flex items-center gap-2"] do
@@ -199,8 +197,8 @@ configureNotificationMessage_ colM = do
         div_ [class_ "flex items-center gap-2 pt-4"] do
           input_ $ [class_ "checkbox checkbox-sm", type_ "checkbox", name_ "notifyAfterCheck"] ++ [checked_ | nfc]
           span_ "If this monitor is not acknowleged or resoved, notify renotify every"
-          select_ [class_ "select select-xs select-bordered shadow-none", name_ "notifyAfter"] $
-            mapM_ (\v -> option_ [selected_ "" | v == naf] $ toHtml v) ["10 mins", "20 mins", "30 mins", "1 hour", "6 hours", "24 hours"]
+          select_ [class_ "select select-xs select-bordered shadow-none", name_ "notifyAfter"]
+            $ mapM_ (\v -> option_ [selected_ "" | v == naf] $ toHtml v) ["10 mins", "20 mins", "30 mins", "1 hour", "6 hours", "24 hours"]
         div_ [class_ "flex items-center gap-2"] do
           input_ $ [class_ "checkbox checkbox-sm", type_ "checkbox", name_ "stopAfterCheck"] ++ [checked_ | sfc]
           span_ "Stop renotifying after "
@@ -225,7 +223,7 @@ configureNotificationChannels_ = do
 -- Helper functions
 
 groupedMonitorTypes :: [MonitorType] -> [(Text, [MonitorType])]
-groupedMonitorTypes = map toGroup . groupBy (\a b -> a.group == b.group)
+groupedMonitorTypes = map toGroup . L.groupBy (\a b -> a.group == b.group)
   where
     toGroup [] = error "Unexpected empty group"
     toGroup ms@(m : _) = (m.group, ms)
@@ -247,12 +245,6 @@ monitorTypeDetail_ m = do
 
 
 -- Reusable components
-
-formControlSelect_ :: Text -> Text -> [Text] -> Html ()
-formControlSelect_ name label options = div_ [class_ "form-control w-full"] $ do
-  label_ [class_ "label"] $ span_ [class_ "label-text"] (toHtml label)
-  select_ [class_ "select select-xs select-bordered w-full", name_ name] $ forM_ options (option_ [] . toHtml)
-
 
 thresholdInput_ :: Text -> Text -> Maybe Text -> Text -> Html ()
 thresholdInput_ sign label colorM placeholder = div_ [class_ "flex items-center space-x-4"] $ do
@@ -307,7 +299,7 @@ evaluationOptions_ = div_ [class_ "border-l-2 border-l-slate-300 pl-4 space-y-2"
 
 instance ToHtml MonitorCreate where
   toHtmlRaw = toHtml
-  toHtml MCSelectType = toHtml $ monitorSelectType_
+  toHtml MCSelectType = toHtml monitorSelectType_
   toHtml (MCMetric pid _) = toHtml $ monitorMetric_ pid Nothing
   toHtml (MCAPITests pid _) = toHtml $ monitorAPITests_ pid Nothing
 

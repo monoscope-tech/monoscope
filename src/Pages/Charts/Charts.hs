@@ -3,20 +3,9 @@
 module Pages.Charts.Charts (chartsGetH, ChartType (..), lazy, ChartExp (..), QueryBy (..), GroupBy (..)) where
 
 import Data.Aeson qualified as AE
-import Data.Either.Extra (fromRight')
-import Data.List (groupBy, lookup)
-import Data.Text (toLower)
+import Data.List qualified as L
 import Data.Text qualified as T
-import Data.Time (
-  UTCTime,
-  addUTCTime,
-  defaultTimeLocale,
-  diffUTCTime,
-  formatTime,
-  getCurrentTime,
-  secondsToNominalDiffTime,
- )
-import Data.Time.Format.ISO8601 (iso8601ParseM)
+import Data.Time (UTCTime, diffUTCTime)
 import Data.Tuple.Extra (fst3, thd3)
 import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUIDV4
@@ -24,33 +13,35 @@ import Database.PostgreSQL.Entity.DBT (QueryNature (Select), query)
 import Database.PostgreSQL.Simple.Types (Query (Query))
 import Database.PostgreSQL.Transact qualified as DBT
 import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
+import Effectful.Time qualified as Time
 import Lucid (Html, class_, div_, id_, script_)
 import Lucid.Htmx (hxGet_, hxSwap_, hxTrigger_)
 import Models.Projects.Projects qualified as Projects
 import NeatInterpolation (text)
 import Network.URI (escapeURIString, isUnescapedInURI)
+import Pkg.Components qualified as Components
 import Pkg.Parser (
   QueryComponents (finalTimechartQuery),
   SqlQueryCfg (dateRange),
   defSqlQueryCfg,
   pSource,
-  parseQueryToComponents,
+  parseQueryToAST,
+  queryASTToComponents,
  )
 import Relude
 import Relude.Unsafe qualified as Unsafe
 import Safe qualified
 import Servant (FromHttpApiData (..))
-import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
+import System.Types (ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders)
 import Text.Megaparsec (parseMaybe)
 import Utils (DBField (MkDBField), formatUTC)
-import Witch (from)
 
 
 transform :: [String] -> [(Int, Int, String)] -> [Maybe Int]
 transform fields tuples =
   Just timestamp : map getValue fields
   where
-    getValue field = lookup field (map swap_ tuples)
+    getValue field = L.lookup field (map swap_ tuples)
     swap_ (_, a, b) = (b, a)
     timestamp = maybe 0 fst3 (Safe.headMay tuples)
 
@@ -59,7 +50,7 @@ pivot' :: [(Int, Int, String)] -> ([String], [[Maybe Int]])
 pivot' rows = do
   let extractHeaders = ordNub . map thd3 . sortOn thd3
   let headers = extractHeaders rows
-  let grouped = groupBy (\a b -> fst3 a == fst3 b) $ sortOn fst3 rows
+  let grouped = L.groupBy (\a b -> fst3 a == fst3 b) $ sortOn fst3 rows
   let ngrouped = map (transform headers) grouped
   (headers, ngrouped)
 
@@ -195,46 +186,39 @@ buildReqDumpSQL exps = (q, join qByArgs, mFrom, mTo)
 type M = Maybe
 
 
-chartsGetH :: M ChartType -> M Text -> M Projects.ProjectId -> M GroupBy -> M [QueryBy] -> M Int -> M Int -> M Text -> M Text -> M Bool -> M Bool -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))
-chartsGetH typeM Nothing pidM groupByM queryByM slotsM limitsM themeM idM showLegendM showAxesM sinceM fromM toM sourceM = chartsGetDef typeM Nothing pidM groupByM queryByM slotsM limitsM themeM idM showLegendM showAxesM sinceM fromM toM sourceM
-chartsGetH typeM (Just queryRaw) pidM groupByM queryByM slotsM limitsM themeM idM showLegendM showAxesM sinceM fromM toM sourceM = chartsGetRaw typeM queryRaw pidM groupByM queryByM slotsM limitsM themeM idM showLegendM showAxesM sinceM fromM toM sourceM
+chartsGetH :: M ChartType -> M Text -> M Text -> M Projects.ProjectId -> M GroupBy -> M [QueryBy] -> M Int -> M Int -> M Text -> M Text -> M Bool -> M Bool -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))
+chartsGetH typeM Nothing Nothing pidM groupByM queryByM slotsM limitsM themeM idM showLegendM showAxesM sinceM fromM toM sourceM = chartsGetDef typeM Nothing pidM groupByM queryByM slotsM limitsM themeM idM showLegendM showAxesM sinceM fromM toM sourceM
+chartsGetH typeM queryRawM queryASTM pidM groupByM queryByM slotsM limitsM themeM idM showLegendM showAxesM sinceM fromM toM sourceM = chartsGetRaw typeM queryRawM queryASTM pidM groupByM queryByM slotsM limitsM themeM idM showLegendM showAxesM sinceM fromM toM sourceM
 
 
 --  FIXME: chartsGetRaw and chartGetDef should be refactored and merged.
-chartsGetRaw :: M ChartType -> Text -> M Projects.ProjectId -> M GroupBy -> M [QueryBy] -> M Int -> M Int -> M Text -> M Text -> M Bool -> M Bool -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))
-chartsGetRaw typeM queryRaw pidM groupByM queryByM slotsM limitsM themeM idM showLegendM showAxesM sinceM fromM toM sourceM = do
+chartsGetRaw :: M ChartType -> M Text -> M Text -> M Projects.ProjectId -> M GroupBy -> M [QueryBy] -> M Int -> M Int -> M Text -> M Text -> M Bool -> M Bool -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))
+chartsGetRaw typeM queryM queryASTM pidM groupByM queryByM slotsM limitsM themeM idM showLegendM showAxesM sinceM fromM toM sourceM = do
   randomID <- liftIO UUIDV4.nextRandom
-  now <- liftIO getCurrentTime
 
-  let (fromD, toD, _currentRange) = case sinceM of
-        Just "1H" -> (Just $ addUTCTime (negate $ secondsToNominalDiffTime 3600) now, Just now, Just "Last Hour")
-        Just "24H" -> (Just $ addUTCTime (negate $ secondsToNominalDiffTime $ 3600 * 24) now, Just now, Just "Last 24 Hours")
-        Just "7D" -> (Just $ addUTCTime (negate $ secondsToNominalDiffTime $ 3600 * 24 * 7) now, Just now, Just "Last 7 Days")
-        Just "14D" -> (Just $ addUTCTime (negate $ secondsToNominalDiffTime $ 3600 * 24 * 14) now, Just now, Just "Last 14 Days")
-        _ -> do
-          let f = (iso8601ParseM (from @Text $ fromMaybe "" fromM) :: Maybe UTCTime)
-          let t = (iso8601ParseM (from @Text $ fromMaybe "" toM) :: Maybe UTCTime)
-          let start = toText . formatTime defaultTimeLocale "%F %T" <$> f
-          let end = toText . formatTime defaultTimeLocale "%F %T" <$> t
-          let range = case (start, end) of
-                (Just s, Just e) -> Just (s <> "-" <> e)
-                _ -> Nothing
-          (f, t, range)
+  let parseQuery q = either (\err -> addErrorToast "Error Parsing Query" (Just err) >> pure []) pure (parseQueryToAST q)
+  queryAST <-
+    maybe
+      (parseQuery $ maybeToMonoid queryM)
+      (either (const $ parseQuery $ maybeToMonoid queryM) pure . AE.eitherDecode . encodeUtf8)
+      queryASTM
+
+  now <- Time.currentTime
+  let (fromD, toD, _currentRange) = Components.parseTimeRange now (Components.TimePickerP sinceM fromM toM)
 
   let sqlQueryComponents =
         (defSqlQueryCfg (Unsafe.fromJust pidM) now (parseMaybe pSource =<< sourceM) Nothing)
           { dateRange = (fromD, toD)
           }
-  let (_, qc) = fromRight' $ parseQueryToComponents sqlQueryComponents queryRaw
-
+  let (_, qc) = queryASTToComponents sqlQueryComponents queryAST
   chartData <- dbtToEff $ DBT.query_ (Query $ encodeUtf8 $ fromMaybe "" qc.finalTimechartQuery)
 
   let (headers, groupedData) = pivot' $ toList chartData
       headersJSON = decodeUtf8 $ AE.encode headers
       groupedDataJSON = decodeUtf8 $ AE.encode $ transpose groupedData
       idAttr = fromMaybe (UUID.toText randomID) idM
-      showLegend = toLower $ show $ fromMaybe False showLegendM
-      showAxes = toLower $ show $ fromMaybe True showAxesM
+      showLegend = T.toLower $ show $ fromMaybe False showLegendM
+      showAxes = T.toLower $ show $ fromMaybe True showAxesM
       chartThemeTxt = fromMaybe "" themeM
       fromDStr = maybe "" formatUTC fromD
       toDStr = maybe "" formatUTC toD
@@ -270,8 +254,8 @@ chartsGetDef typeM queryRaw pidM groupByM queryByM slotsM limitsM themeM idM sho
       headersJSON = decodeUtf8 $ AE.encode headers
       groupedDataJSON = decodeUtf8 $ AE.encode $ transpose groupedData
       idAttr = fromMaybe (UUID.toText randomID) idM
-      showLegend = toLower $ show $ fromMaybe False showLegendM
-      showAxes = toLower $ show $ fromMaybe True showAxesM
+      showLegend = T.toLower $ show $ fromMaybe False showLegendM
+      showAxes = T.toLower $ show $ fromMaybe True showAxesM
       chartThemeTxt = fromMaybe "" themeM
       fromDStr = maybe "" formatUTC fromM
       toDStr = maybe "" formatUTC toM

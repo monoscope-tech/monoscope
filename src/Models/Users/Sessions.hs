@@ -27,7 +27,6 @@ import Data.Text.Display
 import Data.Time
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
-import Data.Vector qualified as Vector
 import Database.PostgreSQL.Entity
 import Database.PostgreSQL.Entity.DBT (QueryNature (..))
 import Database.PostgreSQL.Entity.DBT qualified as DBT
@@ -91,11 +90,11 @@ newtype PSUser = PSUser {getUser :: Users.User}
   deriving anyclass (Default)
 
 
-newtype PSProjects = PSProjects {getProjects :: Vector.Vector Projects.Project}
+newtype PSProjects = PSProjects {getProjects :: V.Vector Projects.Project}
   deriving stock (Show, Generic)
   deriving
     (FromField, ToField)
-    via Aeson (Vector.Vector Projects.Project)
+    via Aeson (V.Vector Projects.Project)
   deriving anyclass (Default)
   deriving newtype (NFData)
 

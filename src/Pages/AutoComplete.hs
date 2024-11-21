@@ -1,6 +1,5 @@
 module Pages.AutoComplete (getH) where
 
-import Data.Aeson (ToJSON (toJSON))
 import Data.Aeson qualified as AE
 import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
 import Models.Apis.Fields.Query (autoCompleteFields)
@@ -21,5 +20,5 @@ getH pid fcategory prefix = do
         where
           category = parseFieldCategoryEnum c
       (_, _) -> pure []
-  let jsn = toJSON fields
+  let jsn = AE.toJSON fields
   addRespHeaders jsn

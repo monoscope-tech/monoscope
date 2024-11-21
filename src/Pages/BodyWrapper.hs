@@ -4,7 +4,7 @@ import Crypto.Hash.MD5 qualified as MD5
 import Data.CaseInsensitive qualified as CI
 import Data.Default (Default)
 import Data.Text qualified as T
-import Data.Vector qualified as Vector
+import Data.Vector qualified as V
 import Lucid
 import Lucid.Htmx (hxGet_)
 import Lucid.Hyperscript (__)
@@ -211,15 +211,15 @@ bodyWrapper BWConfig{sessM, currProject, pageTitle, menuItem, hasIntegrated, nav
             end
     |]
 
-    body_ [class_ "h-full w-full bg-slate-50 text-slate-500 group/pg", term "data-theme" "antdtheme", term "hx-ext" "multi-swap,preload"] do
+    body_ [class_ "h-full w-full bg-slate-25 text-slate-700 group/pg", term "data-theme" "antdtheme", term "hx-ext" "multi-swap,preload"] do
       div_
         [ style_ "z-index:99999"
         , class_ "pt-24 sm:hidden justify-center z-50 w-full p-4 bg-gray-50 overflow-y-auto inset-0 h-full max-h-full"
         , tabindex_ "-1"
         ]
         do
-          div_ [class_ "relative mx-auto max-h-full", style_ "width: min(90vw, 500px)"] $
-            div_ [class_ "bg-base-100 rounded-lg drop-shadow-md border-1 w-full"] do
+          div_ [class_ "relative mx-auto max-h-full", style_ "width: min(90vw, 500px)"]
+            $ div_ [class_ "bg-base-100 rounded-lg drop-shadow-md border-1 w-full"] do
               div_ [class_ "flex items-start justify-between p-6 space-x-2  border-b rounded-t"] do
                 h3_ [class_ "text-3xl font-bold "] "Only Desktop Browsers are Supported for now!"
               -- Modal body
@@ -232,8 +232,7 @@ bodyWrapper BWConfig{sessM, currProject, pageTitle, menuItem, hasIntegrated, nav
       case sessM of
         Nothing -> do
           section_ [class_ "flex flex-col grow  h-screen overflow-y-hidden"] do
-            -- navbar currUser
-            section_ [class_ "flex-1 overflow-y-auto "] do
+            section_ [class_ "flex-1 overflow-y-auto"] do
               child
         Just sess ->
           let currUser = sess.user.getUser
@@ -278,7 +277,7 @@ bodyWrapper BWConfig{sessM, currProject, pageTitle, menuItem, hasIntegrated, nav
       });|]
 
 
-projectsDropDown :: Projects.Project -> Vector.Vector Projects.Project -> Html ()
+projectsDropDown :: Projects.Project -> V.Vector Projects.Project -> Html ()
 projectsDropDown currProject projects = do
   let pidTxt = currProject.id.toText
   div_
@@ -301,8 +300,8 @@ projectsDropDown currProject projects = do
             faSprite_ "key" "regular" "h-5 w-5" >> span_ "API Keys"
           a_ [href_ [text| /p/$pidTxt/integrations|], class_ "p-3 flex gap-3 items-center rounded hover:bg-gray-100"] do
             faSprite_ "arrows-turn-right" "regular" "h-5 w-5" >> span_ "Integrations"
-          when (currProject.paymentPlan == "UsageBased" || currProject.paymentPlan == "GraduatedPricing") $
-            a_
+          when (currProject.paymentPlan == "UsageBased" || currProject.paymentPlan == "GraduatedPricing")
+            $ a_
               [class_ "p-3 flex gap-3 items-center rounded hover:bg-gray-100 cursor-pointer", hxGet_ [text| /p/$pidTxt/manage_subscription |]]
               (faSprite_ "dollar-sign" "regular" "h-5 w-5" >> span_ "Manage billing")
       div_ [class_ "border-t border-gray-100 p-2"] do
@@ -332,24 +331,24 @@ sideNav sess project pageTitle menuItem hasIntegrated = aside_ [class_ "border-r
       a_ [href_ "/", class_ "inline-flex"] do
         img_ [class_ "h-7 hidden group-has-[#sidenav-toggle:checked]/pg:block", src_ "/public/assets/svgs/logo.svg"]
         img_ [class_ "h-10 w-10 hidden sd-show", src_ "/public/assets/logo-mini.png"]
-      label_ [class_ "cursor-pointer text-slate-500"] do
+      label_ [class_ "cursor-pointer text-slate-700"] do
         input_ [type_ "checkbox", class_ "hidden", id_ "sidenav-toggle", [__|on change call setCookie("isSidebarClosed", `${me.checked}`)|]]
         script_ [text|document.getElementById("sidenav-toggle").checked= getCookie("isSidebarClosed")=="true" |]
         faSprite_ "side-chevron-left-in-box" "regular" " h-5 w-5 rotate-180 group-has-[#sidenav-toggle:checked]/pg:rotate-0"
     div_ [class_ "mt-4 sd-px-0 dropdown block"] do
       a_
-        [ class_ "flex flex-row border border-slate-300 bg-slate-50 text-slate-950 hover:bg-slate-100 gap-2 justify-center rounded-xl cursor-pointer py-3 group-has-[#sidenav-toggle:checked]/pg:px-3"
+        [ class_ "flex flex-row border border-slate-300 bg-slate-25 text-slate-950 hover:bg-slate-100 gap-2 justify-center rounded-xl cursor-pointer py-3 group-has-[#sidenav-toggle:checked]/pg:px-3"
         , tabindex_ "0"
         ]
         do
           span_ [class_ "grow hidden group-has-[#sidenav-toggle:checked]/pg:block overflow-x-hidden whitespace-nowrap truncate"] $ toHtml project.title
           faSprite_ "angles-up-down" "regular" " w-4 m-1"
       div_ [tabindex_ "0", class_ "dropdown-content z-[40]"] $ projectsDropDown project (Sessions.getProjects $ Sessions.projects sess)
-    nav_ [class_ "mt-5 flex flex-col gap-2.5"] do
+    nav_ [class_ "mt-5 flex flex-col gap-2.5 text-slate-600"] do
       -- FIXME: reeanable hx-boost hxBoost_ "true"
       menu project.id & mapM_ \(mTitle, mUrl, fIcon) -> do
         let isActive = maybe (pageTitle == mTitle) (== mTitle) menuItem
-        let activeCls = if isActive then " bg-slate-50 text-slate-950 " else "!border-transparent"
+        let activeCls = if isActive then " bg-slate-250 text-slate-800 " else "!border-transparent"
         a_
           [ href_ mUrl
           , term "data-tippy-placement" "right"
@@ -373,7 +372,7 @@ sideNav sess project pageTitle menuItem hasIntegrated = aside_ [class_ "border-r
         [ class_ "inline-block w-10 h-10 p-2 rounded-full bg-gray-300"
         , term "data-tippy-placement" "right"
         , term "data-tippy-content" userIdentifier
-        , src_ $ [text|https://www.gravatar.com/avatar/${emailMd5}?d=https%3A%2F%2Fui-avatars.com%2Fapi%2F/${sanitizedID}/128|]
+        , src_ [text|https://www.gravatar.com/avatar/${emailMd5}?d=https%3A%2F%2Fui-avatars.com%2Fapi%2F/${sanitizedID}/128|]
         ]
       span_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:inline-block overflow-hidden"] $ toHtml userIdentifier
     a_

@@ -6,7 +6,7 @@ import BackgroundJobs qualified
 import Colourista.IO (blueMessage)
 import Control.Concurrent.Async (async, waitAnyCancel)
 import Control.Exception.Safe qualified as Safe
-import Data.Aeson qualified as Aeson
+import Data.Aeson qualified as AE
 import Data.Pool as Pool (destroyAllResources)
 import Data.Text qualified as T
 import Effectful
@@ -66,7 +66,7 @@ runServer appLogger env = do
         defaultSettings
           & setPort env.config.port
           & setOnException \mRequest exception -> Log.runLogT "apitoolkit" appLogger Log.LogAttention $ do
-            Log.logAttention "Unhandled exception" $ Aeson.object ["exception" Aeson..= show @String exception]
+            Log.logAttention "Unhandled exception" $ AE.object ["exception" AE..= show @String exception]
             Safe.throw exception
 
   let wrappedServer =

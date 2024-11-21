@@ -22,11 +22,10 @@ module Models.Projects.Projects (
 )
 where
 
-import Data.Aeson (FromJSON (..), ToJSON (toJSON), Value (String))
+import Data.Aeson qualified as AE
 import Data.Default
 import Data.Time (ZonedTime)
 import Data.UUID qualified as UUID
-import Data.Vector (Vector)
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity
 import Database.PostgreSQL.Entity.DBT (QueryNature (..), execute, query, queryOne)
@@ -45,7 +44,7 @@ import Web.HttpApiData
 
 newtype ProjectId = ProjectId {unProjectId :: UUID.UUID}
   deriving stock (Generic, Show, Read)
-  deriving newtype (Eq, Ord, ToJSON, FromJSON, FromField, ToField, FromHttpApiData, Default, Hashable, NFData)
+  deriving newtype (Eq, Ord, AE.ToJSON, AE.FromJSON, FromField, ToField, FromHttpApiData, Default, Hashable, NFData)
   deriving anyclass (FromRow, ToRow)
 
 
@@ -69,16 +68,16 @@ data NotificationChannel
   deriving anyclass (NFData)
 
 
-instance ToJSON NotificationChannel where
-  toJSON NEmail = String "email"
-  toJSON NSlack = String "slack"
-  toJSON NDiscord = String "discord"
+instance AE.ToJSON NotificationChannel where
+  toJSON NEmail = AE.String "email"
+  toJSON NSlack = AE.String "slack"
+  toJSON NDiscord = AE.String "discord"
 
 
-instance FromJSON NotificationChannel where
-  parseJSON (String "email") = pure NEmail
-  parseJSON (String "slack") = pure NSlack
-  parseJSON (String "discord") = pure NDiscord
+instance AE.FromJSON NotificationChannel where
+  parseJSON (AE.String "email") = pure NEmail
+  parseJSON (AE.String "slack") = pure NSlack
+  parseJSON (AE.String "discord") = pure NDiscord
   parseJSON _ = fail "Invalid NotificationChannel value"
 
 
@@ -111,11 +110,11 @@ data Project = Project
   , -- NOTE: We used to have hosts under project, but now hosts should be gotten from the endpoints.
     -- NOTE: If there's heavy need and usage, we caould create a view. Otherwise, the project cache is best, if it meets our needs.
     paymentPlan :: Text
-  , questions :: Maybe Value
+  , questions :: Maybe AE.Value
   , dailyNotif :: Bool
   , weeklyNotif :: Bool
   , timeZone :: Text
-  , notificationsChannel :: Vector NotificationChannel
+  , notificationsChannel :: V.Vector NotificationChannel
   , subId :: Maybe Text
   , firstSubItemId :: Maybe Text
   , orderId :: Maybe Text
@@ -126,7 +125,7 @@ data Project = Project
   deriving stock (Show, Generic)
   deriving anyclass (FromRow, NFData)
   deriving
-    (FromJSON, ToJSON)
+    (AE.FromJSON, AE.ToJSON)
     via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] Project
   deriving
     (Entity)
@@ -145,11 +144,11 @@ data Project' = Project'
   , -- NOTE: We used to have hosts under project, but now hosts should be gotten from the endpoints.
     -- NOTE: If there's heavy need and usage, we caould create a view. Otherwise, the project cache is best, if it meets our needs.
     paymentPlan :: Text
-  , questions :: Maybe Value
+  , questions :: Maybe AE.Value
   , dailyNotif :: Bool
   , weeklyNotif :: Bool
   , timeZone :: Text
-  , notificationsChannel :: Vector NotificationChannel
+  , notificationsChannel :: V.Vector NotificationChannel
   , subId :: Maybe Text
   , firstSubItemId :: Maybe Text
   , orderId :: Maybe Text
@@ -157,7 +156,7 @@ data Project' = Project'
   , discordUrl :: Maybe Text
   , billingDay :: Maybe ZonedTime
   , hasIntegrated :: Bool
-  , usersDisplayImages :: Vector Text
+  , usersDisplayImages :: V.Vector Text
   }
   deriving stock (Show, Generic)
   deriving anyclass (FromRow, Default, NFData)
@@ -250,7 +249,7 @@ selectProjectsForUser = query Select q
       |]
 
 
-usersByProjectId :: ProjectId -> DBT IO (Vector Users.User)
+usersByProjectId :: ProjectId -> DBT IO (V.Vector Users.User)
 usersByProjectId pid = query Select q (Only pid)
   where
     q =
@@ -258,7 +257,7 @@ usersByProjectId pid = query Select q (Only pid)
                 from users.users u join projects.project_members pm on (pm.user_id=u.id) where project_id=? and u.active IS True;|]
 
 
-userByProjectId :: ProjectId -> Users.UserId -> DBT IO (Vector Users.User)
+userByProjectId :: ProjectId -> Users.UserId -> DBT IO (V.Vector Users.User)
 userByProjectId pid user_id = query Select q (user_id, pid)
   where
     q =

@@ -8,38 +8,33 @@ where
 import Control.Error.Util (hush)
 import Data.Aeson qualified as AE
 import Data.Default (def)
-import Data.List (nubBy)
 import Data.List.Extra (nubOrd)
 import Data.Map qualified as Map
-import Data.Text (Text, pack, splitOn)
 import Data.Text qualified as T
 import Data.Time (UTCTime)
-import Data.UUID.V4 qualified as UUIDV4
 import Data.Vector qualified as V
 import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
 import Effectful.Time qualified as Time
 import Fmt.Internal.Core (fmt)
 import Fmt.Internal.Numeric (commaizeF)
 import Lucid
-import Lucid.Htmx (hxExt_, hxPost_, hxSelect_, hxSwap_, hxTarget_, hxVals_)
 import Lucid.Hyperscript (__)
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.Projects qualified as Projects
 import Models.Tests.Testing qualified as Testing
 import Models.Users.Sessions qualified as Sessions
-import NeatInterpolation (text)
 import Network.URI (URIAuth (uriRegName), parseURI, uriAuthority)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
 import Pages.Components (emptyState_, statBox_)
 import Pages.Log (ApiLogsPageData (isTestLog))
 import Pages.Log qualified as Log
 import Pages.Monitors.TestCollectionEditor (castToStepResult)
-import Pages.Monitors.TestCollectionEditor qualified as TestCollectionEditor
 import Pkg.Components qualified as Components
 import Pkg.Components.ItemsList qualified as ItemsList
+import Pkg.Parser
+import PyF qualified
 import Relude hiding (ask)
-import System.Types (ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders, addSuccessToast)
-import Text.ParserCombinators.ReadPrec (step)
+import System.Types (ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders)
 import Text.Time.Pretty (prettyTimeAuto)
 import Utils
 
@@ -73,8 +68,8 @@ testingGetH pid filterTM timeFilter = do
               [ ItemsList.BulkAction{icon = Just "check", title = "deactivate", uri = "/p/" <> pid.toText <> "/anomalies/bulk_actions/acknowlege"}
               ]
           , zeroState =
-              Just $
-                ItemsList.ZeroState
+              Just
+                $ ItemsList.ZeroState
                   { icon = "empty-set"
                   , title = "No Multistep Test/Monitor yet."
                   , description = "You're can create one to start monitoring your services."
@@ -90,16 +85,16 @@ testingGetH pid filterTM timeFilter = do
           , pageTitle = "Multistep API Tests (Beta)"
           , pageActions = Just $ a_ [href_ $ "/p/" <> pid.toText <> "/monitors/collection", class_ "btn btn-sm blue-outline-btn space-x-2"] $ Utils.faSprite_ "plus" "regular" "h-4" >> "new tests"
           , navTabs =
-              Just $
-                toHtml $
-                  Components.TabFilter
-                    { current = currentFilterTab
-                    , currentURL
-                    , options =
-                        [ Components.TabFilterOpt{name = "Active", count = Nothing}
-                        , Components.TabFilterOpt{name = "Inactive", count = Just inactiveColsCount}
-                        ]
-                    }
+              Just
+                $ toHtml
+                $ Components.TabFilter
+                  { current = currentFilterTab
+                  , currentURL
+                  , options =
+                      [ Components.TabFilterOpt{name = "Active", count = Nothing}
+                      , Components.TabFilterOpt{name = "Inactive", count = Just inactiveColsCount}
+                      ]
+                  }
           }
   addRespHeaders $ PageCtx bwconf (ItemsList.ItemsPage listCfg $ V.map (\col -> CollectionListItemVM pid col currTime) colls)
 
@@ -184,11 +179,14 @@ pageTabs url ov = do
     a_ [href_ url, role_ "tab", class_ "tab"] "Test editor"
 
 
+-- TODO: can't the log list page endpoint be reused for this info on this page? atleast we shouldnt need to query log table, and rather htmx load the correct log table
 collectionDashboard :: Projects.ProjectId -> Testing.CollectionId -> ATAuthCtx (RespHeaders (PageCtx (Html ())))
 collectionDashboard pid cid = do
   (sess, project) <- Sessions.sessionAndProject pid
-  let query = "sdk_type == \"TestkitOutgoing\" and request_headers.X-Testkit-Collection-ID == \"" <> cid.toText <> "\""
-  tableAsVecE <- RequestDumps.selectLogTable pid query Nothing (Nothing, Nothing) [""] Nothing Nothing
+  queryAST <- case parseQueryToAST [PyF.fmt|"sdk_type == \"TestkitOutgoing\" and request_headers.X-Testkit-Collection-ID == \"{cid.toText}\""]|] of
+    Left err -> addErrorToast "Error Parsing Query " (Just err) >> pure []
+    Right ast -> pure ast
+  tableAsVecE <- RequestDumps.selectLogTable pid queryAST Nothing (Nothing, Nothing) [""] Nothing Nothing
   collectionM <- dbtToEff $ Testing.getCollectionById cid
   let tableAsVecM = hush tableAsVecE
   let url = "/p/" <> pid.toText <> "/monitors/collection?col_id=" <> cid.toText
@@ -272,6 +270,7 @@ dashboardPage pid col reqsVecM = do
                       , currentRange = Nothing
                       , exceededFreeTier = False
                       , query
+                      , queryAST = ""
                       , cursor = Nothing
                       , isTestLog = Just True
                       , emptyStateUrl = Just $ "/p/" <> pid.toText <> "/monitors/collection?col_id=" <> col.id.toText
@@ -300,8 +299,7 @@ testResultDiagram_ pid cid steps result = do
 renderStepIll_ :: Testing.CollectionStepData -> Maybe Testing.StepResult -> Int -> Html ()
 renderStepIll_ st stepResult ind = do
   whenJust stepResult $ \stepRes -> do
-    let title = st.title
-        assertionRes = (\(i, r) -> getAssertionResult r (V.fromList stepRes.assertResults V.!? i)) <$> V.indexed (fromMaybe [] st.asserts)
+    let assertionRes = (\(i, r) -> getAssertionResult r (V.fromList stepRes.assertResults V.!? i)) <$> V.indexed (fromMaybe [] st.asserts)
         totalPass = V.length $ V.filter fst assertionRes
     div_ [] do
       div_ [class_ "flex items-center gap-2 cursor-pointer", [__|on click toggle .hidden on the next .step-body|]] do
@@ -310,7 +308,7 @@ renderStepIll_ st stepResult ind = do
         span_ [class_ "badge badge-success"] $ show totalPass <> "/" <> show (V.length assertionRes) <> " Passed"
         span_ [class_ "text-gray-500 text-sm flex items-center gap-1"] do
           faSprite_ "chevron-right" "regular" "h-3 w-3"
-          toHtml $ fromMaybe "" title
+          toHtml $ maybeToMonoid st.title
       div_ [class_ "step-body ml-2"] do
         div_ [class_ "border-l h-8"] pass
         div_ [class_ "flex"] do
@@ -377,7 +375,7 @@ splitOnAny :: [Text] -> Text -> (Text, Text, Maybe Text)
 splitOnAny delimiters val =
   case findDelimiter delimiters val of
     Just delimiter ->
-      let parts = splitOn delimiter val
+      let parts = T.splitOn delimiter val
        in case parts of
             [left, right] -> (T.strip left, T.strip right, Just delimiter)
             _ -> (val, "", Nothing) -- Fallback in case splitting fails

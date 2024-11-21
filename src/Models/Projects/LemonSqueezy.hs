@@ -1,6 +1,6 @@
 module Models.Projects.LemonSqueezy (LemonSub (..), LemonSubId (..), addSubscription, getTotalUsage, addDailyUsageReport, upgradeToPaid, downgradeToFree) where
 
-import Data.Aeson as Aeson
+import Data.Aeson qualified as AE
 import Data.Default (Default)
 import Data.Time (UTCTime, ZonedTime)
 import Data.UUID qualified as UUID
@@ -20,7 +20,7 @@ import Servant (FromHttpApiData)
 
 newtype LemonSubId = LemonSubId {lemonSubId :: UUID.UUID}
   deriving stock (Generic, Show)
-  deriving newtype (Eq, Ord, ToJSON, FromJSON, FromField, ToField, FromHttpApiData, Default, NFData)
+  deriving newtype (Eq, Ord, AE.ToJSON, AE.FromJSON, FromField, ToField, FromHttpApiData, Default, NFData)
 
 
 instance HasField "toText" LemonSubId Text where

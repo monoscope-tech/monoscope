@@ -3,25 +3,19 @@
 module Opentelemetry.OtlpServer (runServer, processList) where
 
 import Control.Lens hiding ((.=))
-import Control.Monad.Extra (fromMaybeM)
-import Data.Aeson (object, (.=))
 import Data.Aeson qualified as AE
 import Data.Aeson.Key qualified as AEK
 import Data.Aeson.KeyMap qualified as KEM
-import Data.Base64.Types qualified as B64
 import Data.ByteString qualified as BS
 import Data.ByteString.Base16 qualified as B16
-import Data.ByteString.Base64 qualified as B64
 import Data.HashMap.Strict qualified as HashMap
 import Data.Scientific
 import Data.Text qualified as T
-import Data.Text.Lazy qualified as LT
-import Data.Time (TimeZone (..), UTCTime, utcToZonedTime, zonedTimeToUTC)
+import Data.Time (TimeZone (..), UTCTime, utcToZonedTime)
 import Data.Time.Clock.POSIX
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Effectful
-import Effectful.Error.Static (throwError)
 import Effectful.Log (Log)
 import Effectful.PostgreSQL.Transact.Effect (DB)
 import Effectful.Reader.Static (ask)
@@ -68,7 +62,7 @@ getSpanAttributeValue :: Text -> V.Vector ResourceSpans -> Maybe Text
 getSpanAttributeValue attribute rss = listToMaybe $ V.toList $ V.mapMaybe (\rs -> getResourceAttr rs <|> getSpanAttr rs) rss
   where
     getResourceAttr rs = rs.resourceSpansResource >>= getAttr . resourceAttributes
-    getSpanAttr rs = rs.resourceSpansScopeSpans & listToMaybe . V.toList . V.mapMaybe (getAttr . spanAttributes) . V.concatMap (scopeSpansSpans)
+    getSpanAttr rs = rs.resourceSpansScopeSpans & listToMaybe . V.toList . V.mapMaybe (getAttr . spanAttributes) . V.concatMap scopeSpansSpans
 
     getAttr :: V.Vector KeyValue -> Maybe Text
     getAttr = V.find ((== attribute) . toText . keyValueKey) >=> keyValueValue >=> anyValueValue >=> anyValueToString >=> (Just . toText)
@@ -81,7 +75,7 @@ getLogAttributeValue attribute rls = listToMaybe $ V.toList $ V.mapMaybe (\rl ->
     getResourceAttr rl = rl.resourceLogsResource >>= getAttr . resourceAttributes
 
     -- Extract attribute from log records
-    getLogAttr rl = rl.resourceLogsScopeLogs & listToMaybe . V.toList . V.mapMaybe (getAttr . logRecordAttributes) . V.concatMap (scopeLogsLogRecords)
+    getLogAttr rl = rl.resourceLogsScopeLogs & listToMaybe . V.toList . V.mapMaybe (getAttr . logRecordAttributes) . V.concatMap scopeLogsLogRecords
 
     -- Helper function to extract attribute values from KeyValue pairs
     getAttr :: V.Vector KeyValue -> Maybe Text
@@ -101,7 +95,7 @@ processList msgs attrs = do
           Right (ExportLogsServiceRequest logReq) -> do
             pidM <- join <$> forM (getLogAttributeValue "at-project-key" logReq) ProjectApiKeys.getProjectIdByApiKey
             let pid2M = Projects.projectIdFromText =<< getLogAttributeValue "at-project-id" logReq
-            let pid = fromMaybe (error $ "project API Key and project ID not available in trace") $ pidM <|> pid2M
+            let pid = fromMaybe (error "project API Key and project ID not available in trace") $ pidM <|> pid2M
             pure (ackId, join $ V.map (convertToLog pid) logReq)
       let (ackIds, logs) = V.unzip results
       Telemetry.bulkInsertLogs $ join logs
@@ -114,7 +108,7 @@ processList msgs attrs = do
             Right (ExportTraceServiceRequest traceReq) -> do
               pidM <- join <$> forM (getSpanAttributeValue "at-project-key" traceReq) ProjectApiKeys.getProjectIdByApiKey
               let pid2M = Projects.projectIdFromText =<< getSpanAttributeValue "at-project-id" traceReq
-              let pid = fromMaybe (error $ "project API Key and project ID not available in trace") $ pidM <|> pid2M
+              let pid = fromMaybe (error "project API Key and project ID not available in trace") $ pidM <|> pid2M
               pure (ackId, join $ V.map (convertToSpan pid) traceReq)
       let (ackIds, spansVec) = V.unzip results
           spans = join spansVec
@@ -139,7 +133,7 @@ logsServiceExportH appLogger appCtx (ServerNormalRequest meta (ExportLogsService
   _ <- runBackground appLogger appCtx do
     let projectKey = fromMaybe (error "Missing project key") $ getLogAttributeValue "at-project-key" req
     projectIdM <- ProjectApiKeys.getProjectIdByApiKey projectKey
-    let pid = fromMaybe (error $ "project API Key is invalid pid") projectIdM
+    let pid = fromMaybe (error "project API Key is invalid pid") projectIdM
 
     let logRecords = join $ V.map (convertToLog pid) req
     Telemetry.bulkInsertLogs logRecords
@@ -158,8 +152,8 @@ byteStringToHexText bs = decodeUtf8 (B16.encode bs)
 -- Convert a list of KeyValue to a JSONB object
 keyValueToJSONB :: V.Vector KeyValue -> AE.Value
 keyValueToJSONB kvs =
-  AE.object $
-    V.foldr (\kv acc -> (AEK.fromText $ LT.toStrict kv.keyValueKey, convertAnyValue kv.keyValueValue) : acc) [] kvs
+  AE.object
+    $ V.foldr (\kv acc -> (AEK.fromText $ toText kv.keyValueKey, convertAnyValue kv.keyValueValue) : acc) [] kvs
 
 
 convertAnyValue :: Maybe AnyValue -> AE.Value
@@ -191,10 +185,10 @@ resourceToJSONB Nothing = AE.Null
 -- Convert an instrumentation scope to JSONB
 instrumentationScopeToJSONB :: Maybe InstrumentationScope -> AE.Value
 instrumentationScopeToJSONB (Just scope) =
-  object
-    [ "name" .= scope.instrumentationScopeName
-    , "version" .= scope.instrumentationScopeVersion
-    , "attributes" .= keyValueToJSONB scope.instrumentationScopeAttributes
+  AE.object
+    [ "name" AE..= scope.instrumentationScopeName
+    , "version" AE..= scope.instrumentationScopeVersion
+    , "attributes" AE..= keyValueToJSONB scope.instrumentationScopeAttributes
     ]
 instrumentationScopeToJSONB Nothing = AE.Null
 
@@ -283,7 +277,6 @@ convertSpanRecord pid resource scope sp =
 --           }
 --     )
 
-
 traceServiceExportH
   :: Log.Logger
   -> AuthContext
@@ -293,7 +286,7 @@ traceServiceExportH appLogger appCtx (ServerNormalRequest _meta (ExportTraceServ
   _ <- runBackground appLogger appCtx do
     let projectKey = fromMaybe (error "Missing project key") $ getSpanAttributeValue "at-project-key" req
     projectIdM <- ProjectApiKeys.getProjectIdByApiKey projectKey
-    let pid = fromMaybe (error $ "project API Key is invalid pid") projectIdM
+    let pid = fromMaybe (error "project API Key is invalid pid") projectIdM
     let spanRecords = join $ V.map (convertToSpan pid) req
         apitoolkitSpans = V.map mapHTTPSpan spanRecords
     _ <- ProcessMessage.processRequestMessages $ V.toList $ V.catMaybes apitoolkitSpans <&> ("",)
@@ -417,30 +410,30 @@ getSpanAttribute key attr = case attr of
 
 eventsToJSONB :: [Span_Event] -> AE.Value
 eventsToJSONB spans =
-  AE.toJSON $
-    ( \sp ->
-        object
-          [ "event_name" .= toText sp.span_EventName
-          , "event_time" .= nanosecondsToUTC sp.span_EventTimeUnixNano
-          , "event_attributes" .= keyValueToJSONB sp.span_EventAttributes
-          , "event_dropped_attributes_count" .= fromIntegral sp.span_EventDroppedAttributesCount
-          ]
-    )
-      <$> spans
+  AE.toJSON
+    $ ( \sp ->
+          AE.object
+            [ "event_name" AE..= toText sp.span_EventName
+            , "event_time" AE..= nanosecondsToUTC sp.span_EventTimeUnixNano
+            , "event_attributes" AE..= keyValueToJSONB sp.span_EventAttributes
+            , "event_dropped_attributes_count" AE..= fromIntegral sp.span_EventDroppedAttributesCount
+            ]
+      )
+    <$> spans
 
 
 linksToJSONB :: [Span_Link] -> AE.Value
 linksToJSONB lnks =
-  AE.toJSON $
-    lnks
-      <&> \lnk ->
-        object
-          [ "link_span_id" .= (decodeUtf8 lnk.span_LinkSpanId :: Text)
-          , "link_trace_id" .= (decodeUtf8 lnk.span_LinkTraceId :: Text)
-          , "link_attributes" .= keyValueToJSONB lnk.span_LinkAttributes
-          , "link_dropped_attributes_count" .= fromIntegral lnk.span_LinkDroppedAttributesCount
-          , "link_flags" .= fromIntegral lnk.span_LinkFlags
-          ]
+  AE.toJSON
+    $ lnks
+    <&> \lnk ->
+      AE.object
+        [ "link_span_id" AE..= (decodeUtf8 lnk.span_LinkSpanId :: Text)
+        , "link_trace_id" AE..= (decodeUtf8 lnk.span_LinkTraceId :: Text)
+        , "link_attributes" AE..= keyValueToJSONB lnk.span_LinkAttributes
+        , "link_dropped_attributes_count" AE..= fromIntegral lnk.span_LinkDroppedAttributesCount
+        , "link_flags" AE..= fromIntegral lnk.span_LinkFlags
+        ]
 
 
 ---------------------------------------------------------------------------------------

@@ -11,13 +11,16 @@ spec-version: 0.36.0
 
 ghc-options:
   - -fwrite-ide-info
-  # - "-fwrite-ide-info"
-  - "-hiedir=.hie"
+  - -hiedir .hiefiles
+  - "-hidir=.hifiles"
   - -threaded
   - -Weverything
+  # - -fdefer-type-errors
   - -Werror # Treat warnings as errors
+  - -fno-defer-typed-holes
   - -Wno-error=deprecations
   - -Wno-error=unused-packages
+  - -Wno-error=missing-poly-kind-signatures
   - -Wno-missing-exported-signatures # missing-exported-signatures turns off the more strict -Wmissing-signatures. See https://ghc.haskell.org/trac/ghc/ticket/14794#ticket
   - -Wno-missing-import-lists # Requires explicit imports of _every_ function (e.g. ‘$’); too strict
   - -Wno-missed-specialisations # When GHC can’t specialize a polymorphic function. No big deal and requires fixing underlying libraries to solve.
@@ -41,6 +44,7 @@ ghc-options:
   - -j4
   - -Wno-unused-top-binds
   - -Wno-unused-imports
+  - -plugin-package hiedb-plugin -fplugin Plugin.HieDb
   # - "-prof"
   # - -g
   - "-fprof-late"
@@ -71,6 +75,7 @@ default-extensions:
   - RecordWildCards
   - TemplateHaskell
   - AllowAmbiguousTypes
+  - TupleSections
 
 extra-source-files:
   - README.md
@@ -185,6 +190,7 @@ library:
     - proto3-wire
     - template-haskell
     - cryptohash-md5
+    - hiedb-plugin
 
 executables:
   apitoolkit-server-exe:
@@ -201,6 +207,7 @@ executables:
     dependencies:
       - apitoolkit-server
       - rust-interop
+      - hiedb-plugin
       - name: relude
         version: ">= 1.2.0.0"
         mixin:

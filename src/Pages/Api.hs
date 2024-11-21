@@ -6,7 +6,6 @@ import Data.Default (def)
 import Data.Text qualified as T
 import Data.UUID as UUID (toText)
 import Data.UUID.V4 qualified as UUIDV4
-import Data.Vector (Vector)
 import Data.Vector qualified as V
 import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
 import Effectful.Reader.Static (ask)
@@ -62,7 +61,7 @@ apiDeleteH pid keyid = do
 
 
 data ApiMut
-  = ApiPost Projects.ProjectId (Vector ProjectApiKeys.ProjectApiKey) (Maybe (ProjectApiKeys.ProjectApiKey, Text))
+  = ApiPost Projects.ProjectId (V.Vector ProjectApiKeys.ProjectApiKey) (Maybe (ProjectApiKeys.ProjectApiKey, Text))
   | ApiPostCopy (Maybe (ProjectApiKeys.ProjectApiKey, Text)) Bool
 
 
@@ -88,7 +87,7 @@ apiGetH pid = do
   addRespHeaders $ ApiGet $ PageCtx bwconf (pid, apiKeys)
 
 
-data ApiGet = ApiGet (PageCtx (Projects.ProjectId, Vector ProjectApiKeys.ProjectApiKey))
+newtype ApiGet = ApiGet (PageCtx (Projects.ProjectId, V.Vector ProjectApiKeys.ProjectApiKey))
 
 
 instance ToHtml ApiGet where
@@ -96,7 +95,7 @@ instance ToHtml ApiGet where
   toHtmlRaw = toHtml
 
 
-apiKeysPage :: Projects.ProjectId -> Vector ProjectApiKeys.ProjectApiKey -> Html ()
+apiKeysPage :: Projects.ProjectId -> V.Vector ProjectApiKeys.ProjectApiKey -> Html ()
 apiKeysPage pid apiKeys = do
   section_ [class_ "w-full mx-auto  px-16 py-10 overflow-hidden overflow-y-scroll"] do
     div_ [class_ "flex justify-between mb-6"] do
@@ -146,7 +145,7 @@ apiKeysPage pid apiKeys = do
                   "Cancel"
 
 
-mainContent :: Projects.ProjectId -> Vector ProjectApiKeys.ProjectApiKey -> Maybe (ProjectApiKeys.ProjectApiKey, Text) -> Html ()
+mainContent :: Projects.ProjectId -> V.Vector ProjectApiKeys.ProjectApiKey -> Maybe (ProjectApiKeys.ProjectApiKey, Text) -> Html ()
 mainContent pid apiKeys newKeyM = section_ [id_ "main-content"] do
   copyNewApiKey newKeyM False
   div_ [class_ "flex flex-col"] do

@@ -23,7 +23,7 @@ import Data.Cache qualified as Cache
 import Data.Default (Default)
 import Data.Time (UTCTime)
 import Data.UUID qualified as UUID
-import Data.Vector (Vector)
+import Data.Vector qualified as V
 import Database.PostgreSQL.Entity
 import Database.PostgreSQL.Entity.DBT (QueryNature (..), execute, query, queryOne, withPool)
 import Database.PostgreSQL.Entity.Types
@@ -33,7 +33,7 @@ import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.ToField (ToField)
 import Database.PostgreSQL.Transact (DBT)
 import Effectful (Eff, IOE, type (:>))
-import Effectful.PostgreSQL.Transact.Effect (DB, dbtToEff, getPool)
+import Effectful.PostgreSQL.Transact.Effect (DB, getPool)
 import Effectful.Reader.Static qualified as Effectful
 import Effectful.Time (Time)
 import Effectful.Time qualified as Time
@@ -83,7 +83,7 @@ insertProjectApiKey :: ProjectApiKey -> DBT IO ()
 insertProjectApiKey = insert @ProjectApiKey
 
 
-projectApiKeysByProjectId :: Projects.ProjectId -> DBT IO (Vector ProjectApiKey)
+projectApiKeysByProjectId :: Projects.ProjectId -> DBT IO (V.Vector ProjectApiKey)
 projectApiKeysByProjectId projectId = do selectManyByField @ProjectApiKey [field| project_id |] projectId
 
 
@@ -115,9 +115,8 @@ getProjectIdByApiKey :: (DB :> es, IOE :> es, Effectful.Reader Config.AuthContex
 getProjectIdByApiKey projectKey = do
   pool <- getPool
   appCtx <- Effectful.ask @Config.AuthContext
-  projectCacheVal <- liftIO $ Cache.fetchWithCache appCtx.projectKeyCache projectKey \_ ->
+  liftIO $ Cache.fetchWithCache appCtx.projectKeyCache projectKey \_ ->
     withPool pool $ queryOne Select q (Only projectKey)
-  pure projectCacheVal
   where
     q = [sql| select project_id from projects.project_api_keys where key_prefix=?|]
 

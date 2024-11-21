@@ -1,13 +1,11 @@
 module Pages.Specification.GenerateSwagger (generateGetH, generateSwagger) where
 
-import Data.Aeson
 import Data.Aeson qualified as AE
 import Data.Aeson.Key qualified as AEKey
 import Data.Aeson.Types qualified as AET
-import Data.List (groupBy)
+import Data.List qualified as L
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
-import Data.Vector (Vector)
 import Data.Vector qualified as V
 import Effectful.PostgreSQL.Transact.Effect
 import Models.Apis.Endpoints qualified as Endpoints
@@ -58,7 +56,7 @@ data KeyPathGroup = KeyPathGroup
   deriving stock (Show, Generic)
 
 
-convertQueryParamsToJSON :: [T.Text] -> [MergedFieldsAndFormats] -> Value
+convertQueryParamsToJSON :: [T.Text] -> [MergedFieldsAndFormats] -> AE.Value
 convertQueryParamsToJSON params fields = paramsJSON
   where
     mapQParamsFunc param =
@@ -66,15 +64,15 @@ convertQueryParamsToJSON params fields = paramsJSON
           (des, t, ft, eg) = case fieldM of
             Just f -> (f.field.fDescription, fieldTypeToText f.format.swFieldType, f.field.fFormat, V.head f.format.swExamples)
             Nothing -> ("", "string", "text", "")
-       in object
-            [ "in" .= String "query"
-            , "name" .= T.takeWhile (/= '.') (T.dropWhile (== '.') param)
-            , "description" .= String des
-            , "schema" .= object ["type" .= String t, "format" .= ft, "example" .= eg]
+       in AE.object
+            [ "in" AE..= AE.String "query"
+            , "name" AE..= T.takeWhile (/= '.') (T.dropWhile (== '.') param)
+            , "description" AE..= AE.String des
+            , "schema" AE..= AE.object ["type" AE..= AE.String t, "format" AE..= ft, "example" AE..= eg]
             ]
     paramsJSON =
       let ar = V.fromList $ map mapQParamsFunc params
-       in Array ar
+       in AE.Array ar
 
 
 processItem :: T.Text -> Map.Map T.Text KeyPathGroup -> Map.Map T.Text KeyPathGroup
@@ -114,8 +112,8 @@ processItems (x : xs) groups = processItems xs updatedGroups
     updatedGroups = processItem x groups
 
 
-mergeObjects :: Value -> Value -> Maybe Value
-mergeObjects (Object obj1) (Object obj2) = Just $ Object (obj1 <> obj2)
+mergeObjects :: AE.Value -> AE.Value -> Maybe AE.Value
+mergeObjects (AE.Object obj1) (AE.Object obj2) = Just $ AE.Object (obj1 <> obj2)
 mergeObjects _ _ = Nothing
 
 
@@ -134,7 +132,7 @@ mergeObjects _ _ = Nothing
 -- >>> let resp = convertKeyPathsToJson [""] items2 ""
 -- >>> resp == [aesonQQ| |]
 --
-convertKeyPathsToJson :: [T.Text] -> [MergedFieldsAndFormats] -> Text -> Value
+convertKeyPathsToJson :: [T.Text] -> [MergedFieldsAndFormats] -> Text -> AE.Value
 convertKeyPathsToJson items categoryFields parentPath = convertToJson' groups
   where
     -- Debug logs
@@ -146,7 +144,7 @@ convertKeyPathsToJson items categoryFields parentPath = convertToJson' groups
     safeTail :: T.Text -> T.Text
     safeTail txt = if T.null txt then txt else T.tail txt
 
-    processGroup :: (T.Text, KeyPathGroup) -> Value -> Value
+    processGroup :: (T.Text, KeyPathGroup) -> AE.Value -> AE.Value
     processGroup (grp, keypath) parsedValue =
       let updatedJson =
             if null keypath.subGoups
@@ -164,35 +162,35 @@ convertKeyPathsToJson items categoryFields parentPath = convertToJson' groups
                           , getLeafObject t ft desc examples is_enum is_required
                           )
                     validKey = if key == "" then "schema" else key
-                 in object [AEKey.fromText validKey .= ob]
+                 in AE.object [AEKey.fromText validKey AE..= ob]
               else
                 let (key, t) = if T.isSuffixOf "[*]" grp then (T.takeWhile (/= '[') grp, "array" :: String) else (grp, "object")
                     validKey = if key == "" then "schema" else key
                     ob =
                       if t == "array"
-                        then object [AEKey.fromText validKey .= object ["type" .= String "array", "items" .= object ["type" .= String "object", "properties" .= convertKeyPathsToJson keypath.subGoups categoryFields (parentPath <> "." <> grp)]]]
-                        else object [AEKey.fromText validKey .= object ["properties" .= convertKeyPathsToJson keypath.subGoups categoryFields (parentPath <> "." <> grp), "type" .= String "object"]]
+                        then AE.object [AEKey.fromText validKey AE..= AE.object ["type" AE..= AE.String "array", "items" AE..= AE.object ["type" AE..= AE.String "object", "properties" AE..= convertKeyPathsToJson keypath.subGoups categoryFields (parentPath <> "." <> grp)]]]
+                        else AE.object [AEKey.fromText validKey AE..= AE.object ["properties" AE..= convertKeyPathsToJson keypath.subGoups categoryFields (parentPath <> "." <> grp), "type" AE..= AE.String "object"]]
                  in ob
           updateMap = case mergeObjects updatedJson parsedValue of
             Just obj -> obj
-            Nothing -> object []
+            Nothing -> AE.object []
        in updateMap
-    convertToJson' :: Map.Map T.Text KeyPathGroup -> Value
-    convertToJson' grps = foldr processGroup (object []) (Map.toList grps)
+    convertToJson' :: Map.Map T.Text KeyPathGroup -> AE.Value
+    convertToJson' grps = foldr processGroup (AE.object []) (Map.toList grps)
 
 
-getLeafObject :: Text -> Text -> Text -> Vector Value -> Bool -> Bool -> AE.Value
+getLeafObject :: Text -> Text -> Text -> V.Vector AE.Value -> Bool -> Bool -> AE.Value
 getLeafObject t ft desc examples isEnum isRequired = leafObject
   where
-    base = ["description" .= String desc, "type" .= t, "format" .= ft]
-    enumOb = ["enum" .= examples | isEnum]
-    requiredOb = ["required" .= isRequired | isRequired]
-    exampleOb = ["example" .= V.head examples | V.length examples > 0]
-    leafObject = object $ base ++ enumOb ++ requiredOb ++ exampleOb
+    base = ["description" AE..= AE.String desc, "type" AE..= t, "format" AE..= ft]
+    enumOb = ["enum" AE..= examples | isEnum]
+    requiredOb = ["required" AE..= isRequired | isRequired]
+    exampleOb = ["example" AE..= V.head examples | V.length examples > 0]
+    leafObject = AE.object $ base ++ enumOb ++ requiredOb ++ exampleOb
 
 
 -- Helper function to determine type and values
-extractInfo :: Maybe MergedFieldsAndFormats -> [MergedFieldsAndFormats] -> Text -> Text -> (Text, Text, Text, Vector AE.Value, Bool, Bool)
+extractInfo :: Maybe MergedFieldsAndFormats -> [MergedFieldsAndFormats] -> Text -> Text -> (Text, Text, Text, V.Vector AE.Value, Bool, Bool)
 extractInfo Nothing categoryFields parentPath grp =
   let newK = T.replace "[*]" ".[]" (T.tail parentPath <> "." <> grp)
       newF = find (\fi -> newK == fi.field.fKeyPath) categoryFields
@@ -254,7 +252,7 @@ findMatchingFields shape fields =
   let fieldHashes = Shapes.swFieldHashes shape
       filteredFields = V.filter (\mfaf -> mfaf.field.fHash `elem` fieldHashes) fields
       fields' = V.toList filteredFields
-      fieldGroup = groupBy (\f1 f2 -> f1.field.fFieldCategory == f2.field.fFieldCategory) fields'
+      fieldGroup = L.groupBy (\f1 f2 -> f1.field.fFieldCategory == f2.field.fFieldCategory) fields'
       fieldGroupTupple = map (\f -> ((f !! 0).field.fFieldCategory, f)) fieldGroup
       groupedMap = Map.fromList fieldGroupTupple
    in MergedShapesAndFields
@@ -264,8 +262,8 @@ findMatchingFields shape fields =
 
 
 -- For Servers part of the swagger
-getUniqueHosts :: Vector Endpoints.SwEndpoint -> Vector Value
-getUniqueHosts endpoints = V.fromList $ map (\h -> object ["url" .= String h]) $ sortNub $ concatMap (\endpoint -> [endpoint.host]) endpoints
+getUniqueHosts :: V.Vector Endpoints.SwEndpoint -> V.Vector AE.Value
+getUniqueHosts endpoints = V.fromList $ map (\h -> AE.object ["url" AE..= AE.String h]) $ sortNub $ concatMap (\endpoint -> [endpoint.host]) endpoints
 
 
 -- Make urlPaths openapi compartible
@@ -284,10 +282,10 @@ specCompartiblePath path = toText $ intercalate "/" modifiedSegments
 groupEndpointsByUrlPath :: [MergedEndpoint] -> AE.Value
 groupEndpointsByUrlPath endpoints =
   let grouped = Map.fromListWith (++) [(urlPath ep, [ep]) | ep <- endpoints]
-   in object $ map constructUrlPathEntry (Map.toList grouped)
+   in AE.object $ map constructUrlPathEntry (Map.toList grouped)
   where
     constructUrlPathEntry (urlPath, mergedEndpoints) =
-      AEKey.fromText (if urlPath == "" then "/" else urlPath) .= object (map constructMethodEntry mergedEndpoints)
+      AEKey.fromText (if urlPath == "" then "/" else urlPath) AE..= AE.object (map constructMethodEntry mergedEndpoints)
 
     constructMethodEntry mergedEndpoint =
       let rqShape = V.find (\shape -> length (V.filter (T.isPrefixOf "") shape.shape.swRequestBodyKeypaths) > 1) mergedEndpoint.shapes
@@ -297,64 +295,63 @@ groupEndpointsByUrlPath endpoints =
               let rqProps = convertKeyPathsToJson (V.toList rqS.shape.swRequestBodyKeypaths) (fromMaybe [] (Map.lookup Field.FCRequestBody rqS.sField)) ""
                   qParams = convertQueryParamsToJSON (V.toList qS.shape.swQueryParamsKeypaths) (fromMaybe [] (Map.lookup Field.FCQueryParam qS.sField))
                in AEKey.fromText (T.toLower $ method mergedEndpoint)
-                    .= object
-                      ( [ "parameters" .= qParams
-                        , "responses" .= groupShapesByStatusCode (shapes mergedEndpoint)
-                        , "requestBody" .= object (("content" .= object ["application/json" .= rqProps]) : (["description" .= rqS.shape.swRequestDescription | not (T.null rqS.shape.swRequestDescription)]))
+                    AE..= AE.object
+                      ( [ "parameters" AE..= qParams
+                        , "responses" AE..= groupShapesByStatusCode (shapes mergedEndpoint)
+                        , "requestBody" AE..= AE.object (("content" AE..= AE.object ["application/json" AE..= rqProps]) : (["description" AE..= rqS.shape.swRequestDescription | not (T.null rqS.shape.swRequestDescription)]))
                         ]
-                          ++ (["description" .= description mergedEndpoint | T.length mergedEndpoint.description > 0])
+                          ++ (["description" AE..= description mergedEndpoint | T.length mergedEndpoint.description > 0])
                       )
             (Just rqS, Nothing) ->
               let rqProps = convertKeyPathsToJson (V.toList rqS.shape.swRequestBodyKeypaths) (fromMaybe [] (Map.lookup Field.FCRequestBody rqS.sField)) ""
                in AEKey.fromText (T.toLower $ method mergedEndpoint)
-                    .= object
-                      ( [ "description" .= description mergedEndpoint
-                        , "responses" .= groupShapesByStatusCode (shapes mergedEndpoint)
-                        , "requestBody" .= object (("content" .= object ["application/json" .= rqProps]) : (["description" .= rqS.shape.swRequestDescription | not (T.null rqS.shape.swRequestDescription)]))
+                    AE..= AE.object
+                      ( [ "description" AE..= description mergedEndpoint
+                        , "responses" AE..= groupShapesByStatusCode (shapes mergedEndpoint)
+                        , "requestBody" AE..= AE.object (("content" AE..= AE.object ["application/json" AE..= rqProps]) : (["description" AE..= rqS.shape.swRequestDescription | not (T.null rqS.shape.swRequestDescription)]))
                         ]
-                          ++ (["description" .= description mergedEndpoint | T.length mergedEndpoint.description > 0])
+                          ++ (["description" AE..= description mergedEndpoint | T.length mergedEndpoint.description > 0])
                       )
             (Nothing, Just qS) ->
               let qParams = convertQueryParamsToJSON (V.toList qS.shape.swQueryParamsKeypaths) (fromMaybe [] (Map.lookup Field.FCQueryParam qS.sField))
                in AEKey.fromText (T.toLower $ method mergedEndpoint)
-                    .= object
-                      ( [ "parameters" .= qParams
-                        , "responses" .= groupShapesByStatusCode (shapes mergedEndpoint)
+                    AE..= AE.object
+                      ( [ "parameters" AE..= qParams
+                        , "responses" AE..= groupShapesByStatusCode (shapes mergedEndpoint)
                         ]
-                          ++ (["description" .= description mergedEndpoint | T.length mergedEndpoint.description > 0])
+                          ++ (["description" AE..= description mergedEndpoint | T.length mergedEndpoint.description > 0])
                       )
             (_, _) ->
               AEKey.fromText (T.toLower $ method mergedEndpoint)
-                .= object
-                  (("responses" .= groupShapesByStatusCode (shapes mergedEndpoint)) : (["description" .= description mergedEndpoint | T.length mergedEndpoint.description > 0]))
+                AE..= AE.object
+                  (("responses" AE..= groupShapesByStatusCode (shapes mergedEndpoint)) : (["description" AE..= description mergedEndpoint | T.length mergedEndpoint.description > 0]))
        in endPointJSON
 
 
 groupShapesByStatusCode :: V.Vector MergedShapesAndFields -> AE.Value
 groupShapesByStatusCode shapes =
-  object $ constructStatusCodeEntry (V.toList shapes)
+  AE.object $ constructStatusCodeEntry (V.toList shapes)
 
 
 constructStatusCodeEntry :: [MergedShapesAndFields] -> [AET.Pair]
-constructStatusCodeEntry =
-  map mapFunc
+constructStatusCodeEntry = map mapFunc
 
 
 mapFunc :: MergedShapesAndFields -> AET.Pair
 mapFunc mShape =
-  let content = object ["application/json" .= convertKeyPathsToJson (V.toList mShape.shape.swResponseBodyKeypaths) (fromMaybe [] (Map.lookup Field.FCResponseBody mShape.sField)) ""]
-      headers = object ["content" .= convertKeyPathsToJson (V.toList mShape.shape.swResponseHeadersKeypaths) (fromMaybe [] (Map.lookup Field.FCResponseHeader mShape.sField)) ""]
-   in show mShape.shape.swStatusCode .= object (["headers" .= headers, "content" .= content] ++ (["description" .= mShape.shape.swResponseDescription | not (T.null mShape.shape.swResponseDescription)]))
+  let content = AE.object ["application/json" AE..= convertKeyPathsToJson (V.toList mShape.shape.swResponseBodyKeypaths) (fromMaybe [] (Map.lookup Field.FCResponseBody mShape.sField)) ""]
+      headers = AE.object ["content" AE..= convertKeyPathsToJson (V.toList mShape.shape.swResponseHeadersKeypaths) (fromMaybe [] (Map.lookup Field.FCResponseHeader mShape.sField)) ""]
+   in show mShape.shape.swStatusCode AE..= AE.object (["headers" AE..= headers, "content" AE..= content] ++ (["description" AE..= mShape.shape.swResponseDescription | not (T.null mShape.shape.swResponseDescription)]))
 
 
-generateSwagger :: Text -> Text -> Vector Endpoints.SwEndpoint -> Vector Shapes.SwShape -> Vector Fields.SwField -> Vector Formats.SwFormat -> Value
+generateSwagger :: Text -> Text -> V.Vector Endpoints.SwEndpoint -> V.Vector Shapes.SwShape -> V.Vector Fields.SwField -> V.Vector Formats.SwFormat -> AE.Value
 generateSwagger projectTitle projectDescription endpoints shapes fields formats = swagger
   where
     merged = mergeEndpoints endpoints shapes fields formats
     hosts = getUniqueHosts endpoints
     paths = groupEndpointsByUrlPath $ V.toList merged
-    info = object ["description" .= String projectDescription, "title" .= String projectTitle, "version" .= String "1.0.0", "termsOfService" .= String "https://apitoolkit.io/terms-and-conditions/"]
-    swagger = object ["openapi" .= String "3.0.0", "info" .= info, "servers" .= Array hosts, "paths" .= paths]
+    info = AE.object ["description" AE..= AE.String projectDescription, "title" AE..= AE.String projectTitle, "version" AE..= AE.String "1.0.0", "termsOfService" AE..= AE.String "https://apitoolkit.io/terms-and-conditions/"]
+    swagger = AE.object ["openapi" AE..= AE.String "3.0.0", "info" AE..= info, "servers" AE..= AE.Array hosts, "paths" AE..= paths]
 
 
 generateGetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders AE.Value)

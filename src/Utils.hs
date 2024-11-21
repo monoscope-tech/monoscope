@@ -46,15 +46,13 @@ module Utils (
 )
 where
 
-import Data.Aeson (Value)
 import Data.Aeson qualified as AE
 import Data.Aeson.KeyMap qualified as AEK
 import Data.Char (isDigit)
 import Data.Digest.XXHash (xxHash)
 import Data.HashMap.Strict qualified as HM
-import Data.List (notElem, (!!))
+import Data.List qualified as L
 import Data.Scientific (toBoundedInteger)
-import Data.Text (replace)
 import Data.Text qualified as T
 import Data.Time (NominalDiffTime, ZonedTime, defaultTimeLocale, parseTimeM)
 import Data.Time.Clock (UTCTime)
@@ -131,7 +129,7 @@ faIcon_ faIcon faClasses classes = do
 
 
 deleteParam :: Text -> Text -> Text
-deleteParam key url = if needle == "" then url else replace needle "" url
+deleteParam key url = if needle == "" then url else T.replace needle "" url
   where
     needle = url =~ reg :: Text
     reg = "&" <> key <> "(=[^&]*)?|^" <> key <> "(=[^&]*)?&?" :: Text
@@ -236,14 +234,14 @@ jsonValueToHtmlTree val = jsonValueToHtmlTree' ("", "", val)
       div_
         [ class_ "relative log-item-field-parent"
         , term "data-field-path" $ replaceNumbers fullFieldPath'
-        , term "data-field-value" $ unwrapJsonPrimValue value
+        , term "data-field-value" $ unwrapJsonPrimValue False value
         ]
         $ a_
           [class_ "block hover:bg-blue-50 cursor-pointer pl-6 relative log-item-field-anchor ", [__|install LogItemMenuable|]]
           do
             span_ $ toHtml key
             span_ [class_ "text-blue-800"] ":"
-            span_ [class_ "text-blue-800 ml-2.5 log-item-field-value", term "data-field-path" fullFieldPath'] $ toHtml $ unwrapJsonPrimValue value
+            span_ [class_ "text-blue-800 ml-2.5 log-item-field-value", term "data-field-path" fullFieldPath'] $ toHtml $ unwrapJsonPrimValue False value
 
     renderParentType :: Text -> Text -> Text -> Int -> Html () -> Html ()
     renderParentType opening closing key count child = div_ [class_ (if key == "" then "" else "collapsed")] do
@@ -277,54 +275,52 @@ getKindColor "CONSUMER" = "badge-warning"
 getKindColor _ = "badge-outline"
 
 
-unwrapJsonPrimValue :: AE.Value -> Text
-unwrapJsonPrimValue (AE.Bool True) = "true"
-unwrapJsonPrimValue (AE.Bool False) = "false"
-unwrapJsonPrimValue (AE.String v) = "\"" <> toText v <> "\""
-unwrapJsonPrimValue (AE.Number v) = toText @String $ show v
-unwrapJsonPrimValue AE.Null = "null"
-unwrapJsonPrimValue (AE.Object _) = "{..}"
-unwrapJsonPrimValue (AE.Array items) = "[" <> toText (show (length items)) <> "]"
+unwrapJsonPrimValue :: Bool -> AE.Value -> Text
+unwrapJsonPrimValue _ (AE.Bool True) = "true"
+unwrapJsonPrimValue _ (AE.Bool False) = "false"
+unwrapJsonPrimValue False (AE.String v) = "\"" <> toText v <> "\""
+unwrapJsonPrimValue True (AE.String v) = toText v
+unwrapJsonPrimValue _ (AE.Number v) = toText @String $ show v
+unwrapJsonPrimValue _ AE.Null = "null"
+unwrapJsonPrimValue _ (AE.Object _) = "{..}"
+unwrapJsonPrimValue _ (AE.Array items) = "[" <> toText (show (length items)) <> "]"
 
-
--- unwrapJsonPrimValue (AE.Object _) = error "Impossible. unwrapJsonPrimValue should be for primitive types only. got object" -- should never be reached
--- unwrapJsonPrimValue (AE.Array _) = error "Impossible. unwrapJsonPrimValue should be for primitive types only. got array" -- should never be reached
 
 -- FIXME: delete
-lookupMapText :: Text -> HashMap Text Value -> Maybe Text
+lookupMapText :: Text -> HashMap Text AE.Value -> Maybe Text
 lookupMapText key hashMap = case HM.lookup key hashMap of
   Just (AE.String textValue) -> Just textValue -- Extract text from Value if it's a String
   _ -> Nothing
 
 
 -- FIXME: delete
-lookupMapInt :: Text -> HashMap Text Value -> Int
+lookupMapInt :: Text -> HashMap Text AE.Value -> Int
 lookupMapInt key hashMap = case HM.lookup key hashMap of
   Just (AE.Number val) -> fromMaybe 0 $ toBoundedInteger val -- Extract text from Value if it's a String
   _ -> 0
 
 
-lookupVecText :: V.Vector Value -> Int -> Maybe Text
+lookupVecText :: V.Vector AE.Value -> Int -> Maybe Text
 lookupVecText vec idx = case vec V.!? idx of
   Just (AE.String textValue) -> Just textValue -- Extract text from Value if it's a String
   _ -> Nothing
 
 
-lookupVecInt :: V.Vector Value -> Int -> Int
+lookupVecInt :: V.Vector AE.Value -> Int -> Int
 lookupVecInt vec idx = case vec V.!? idx of
   Just (AE.Number val) -> fromMaybe 0 $ toBoundedInteger val -- Extract text from Value if it's a String
   _ -> 0
 
 
-lookupVecTextByKey :: V.Vector Value -> HM.HashMap Text Int -> Text -> Maybe Text
+lookupVecTextByKey :: V.Vector AE.Value -> HM.HashMap Text Int -> Text -> Maybe Text
 lookupVecTextByKey vec colIdxMap key = HM.lookup key colIdxMap >>= lookupVecText vec
 
 
-lookupVecIntByKey :: V.Vector Value -> HM.HashMap Text Int -> Text -> Int
+lookupVecIntByKey :: V.Vector AE.Value -> HM.HashMap Text Int -> Text -> Int
 lookupVecIntByKey vec colIdxMap key = (HM.lookup key colIdxMap >>= Just . lookupVecInt vec) & fromMaybe 0
 
 
-lookupVecByKey :: V.Vector Value -> HM.HashMap Text Int -> Text -> Maybe Value
+lookupVecByKey :: V.Vector AE.Value -> HM.HashMap Text Int -> Text -> Maybe AE.Value
 lookupVecByKey vec colIdxMap key = HM.lookup key colIdxMap >>= (vec V.!?)
 
 
@@ -401,10 +397,10 @@ getServiceColors services = go services HM.empty []
       | V.null svcs = assignedColors
       | otherwise =
           let service = V.head svcs
-              availableColors' = filter (`notElem` usedColors) (V.toList serviceColors)
+              availableColors' = filter (`L.notElem` usedColors) (V.toList serviceColors)
               availableColors = if null availableColors' then V.toList serviceColors else availableColors'
               colorIdx = sum (map ord $ toString $ toXXHash service) `mod` length availableColors
-              selectedColor = availableColors !! colorIdx
+              selectedColor = availableColors L.!! colorIdx
            in go (V.tail svcs) (HM.insert service selectedColor assignedColors) (selectedColor : usedColors)
 
 

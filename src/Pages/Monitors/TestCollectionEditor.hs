@@ -13,14 +13,15 @@ module Pages.Monitors.TestCollectionEditor (
 )
 where
 
-import Data.Aeson (encode)
 import Data.Aeson qualified as AE
 import Data.Default (def)
-import Data.Map qualified as M
+import Data.Map qualified as Map
 import Data.Text qualified as T
+import Data.UUID.V4 qualified as UUIDV4
 import Data.Vector qualified as V
 import Deriving.Aeson qualified as DAE
 import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
+import Effectful.Time qualified as Time
 import Log qualified
 import Lucid
 import Lucid.Aria qualified as Aria
@@ -29,8 +30,6 @@ import Lucid.Htmx (
   hxDelete_,
   hxExt_,
   hxIndicator_,
-  hxParams_,
-  hxPatch_,
   hxPost_,
   hxSwap_,
   hxTarget_,
@@ -46,15 +45,10 @@ import NeatInterpolation (text)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
 import Pages.Monitors.MetricMonitors qualified as MetricMonitors
 import Pkg.Components qualified as Components
-import Pkg.Components.Modals qualified as Components
 import PyF (fmt)
 import Relude hiding (ask)
 import System.Types (ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders, addSuccessToast, redirectCS)
 import Utils (faSprite_, getStatusColor, jsonValueToHtmlTree)
-
-import Data.UUID.V4 qualified as UUIDV4
-import Effectful.Time qualified as Time
-import Web.FormUrlEncoded (FromForm)
 
 
 data CollectionVariableForm = CollectionVariableForm
@@ -276,7 +270,7 @@ timelineSteps pid col =
 
 nameOfTest_ :: Text -> V.Vector Text -> Html ()
 nameOfTest_ name tags = do
-  let tgs = decodeUtf8 $ encode $ V.toList tags
+  let tgs = decodeUtf8 $ AE.encode $ V.toList tags
   div_ [class_ "form-control w-full p-4 bg-slate-100 rounded-2xl"] do
     div_ [class_ "flex flex-col rounded-xl p-4 bg-slate-50"] do
       label_ [class_ "label"] $ span_ [class_ "text-slate-500 text-sm font-semibold"] "Name"
@@ -309,7 +303,7 @@ defineTestSteps_ colM = do
 
 collectionPage :: Projects.ProjectId -> Maybe Testing.Collection -> Maybe (V.Vector Testing.StepResult) -> String -> Html ()
 collectionPage pid colM col_rn respJson = do
-  let collectionStepsJSON = encode $ maybe (Testing.CollectionSteps []) (.collectionSteps) colM
+  let collectionStepsJSON = AE.encode $ maybe (Testing.CollectionSteps []) (.collectionSteps) colM
   let (scheduled, scheduleNumber, scheduleNumberUnit) =
         maybe
           (True, "1", "minutes")
@@ -465,7 +459,7 @@ variablesDialog pid colM = do
               ]
               do
                 faSprite_ "trash" "regular" "w-3 h-3 stroke-red-500"
-      let varsJson = decodeUtf8 $ encode $ V.toList vars
+      let varsJson = decodeUtf8 $ AE.encode $ V.toList vars
       script_
         [text|
           window.testVariables  = $varsJson;
@@ -519,17 +513,17 @@ collectionStepResult_ idx stepResult = section_ [class_ "p-1"] do
     p_ [class_ $ "block badge badge-sm " <> getStatusColor stepResult.request.resp.status, term "data-tippy-content" "status"] $ show stepResult.request.resp.status
   div_ [role_ "tablist", class_ "tabs tabs-lifted"] do
     input_ [type_ "radio", name_ $ "step-result-tabs-" <> show idx, role_ "tab", class_ "tab", Aria.label_ "Response Log", checked_]
-    div_ [role_ "tabpanel", class_ "tab-content bg-base-100 border-base-300 rounded-box p-6"] $
-      toHtmlRaw $
-        textToHTML stepResult.stepLog
+    div_ [role_ "tabpanel", class_ "tab-content bg-base-100 border-base-300 rounded-box p-6"]
+      $ toHtmlRaw
+      $ textToHTML stepResult.stepLog
 
     input_ [type_ "radio", name_ $ "step-result-tabs-" <> show idx, role_ "tab", class_ "tab", Aria.label_ "Response Headers"]
-    div_ [role_ "tabpanel", class_ "tab-content bg-base-100 border-base-300 rounded-box p-6 "] $
-      table_ [class_ "table table-xs"] do
+    div_ [role_ "tabpanel", class_ "tab-content bg-base-100 border-base-300 rounded-box p-6 "]
+      $ table_ [class_ "table table-xs"] do
         thead_ [] $ tr_ [] $ th_ [] "Name" >> th_ [] "Value"
         tbody_ do
           whenJust stepResult.request.resp.headers $ \headers -> do
-            forM_ (M.toList headers) $ \(k, v) -> tr_ [] do
+            forM_ (Map.toList headers) $ \(k, v) -> tr_ [] do
               td_ [] $ toHtml k
               td_ [] $ toHtml $ T.intercalate "," v
 

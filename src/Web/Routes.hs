@@ -1,6 +1,5 @@
 module Web.Routes (server, genAuthServerContext) where
 
-import Data.Aeson
 import Data.Aeson qualified as AE
 import Data.Map qualified as Map
 import Data.Pool (Pool)
@@ -63,6 +62,7 @@ import Web.Error
 type role Routes nominal
 
 
+type Routes :: Type -> Type
 data Routes mode = Routes
   { public :: mode :- "public" :> Servant.Raw
   , cookieProtected :: mode :- AuthProtect "optional-cookie-auth" :> Servant.NamedRoutes CookieProtectedRoutes
@@ -113,6 +113,7 @@ server pool =
 type role CookieProtectedRoutes nominal
 
 
+type CookieProtectedRoutes :: Type -> Type
 data CookieProtectedRoutes mode = CookieProtectedRoutes
   { dashboardGet :: mode :- "p" :> ProjectId :> QPT "from" :> QPT "to" :> QPT "since" :> Get '[HTML] (RespHeaders (PageCtx Dashboard.DashboardGet))
   , projects :: mode :- ProjectsRoutes.Routes
@@ -133,7 +134,7 @@ data CookieProtectedRoutes mode = CookieProtectedRoutes
   , shareLinkPost :: mode :- "p" :> ProjectId :> "share" :> ReqBody '[FormUrlEncoded] Share.ReqForm :> Post '[HTML] (RespHeaders Share.ShareLinkPost)
   , queryBuilderAutocomplete :: mode :- "p" :> ProjectId :> "query_builder" :> "autocomplete" :> QPT "category" :> QPT "prefix" :> Get '[JSON] (RespHeaders AE.Value)
   , swaggerGenerateGet :: mode :- "p" :> ProjectId :> "generate_swagger" :> Get '[JSON] (RespHeaders AE.Value)
-  , chartsGet :: mode :- "charts_html" :> QP "chart_type" Charts.ChartType :> QPT "query_raw" :> QueryParam "pid" Projects.ProjectId :> QP "group_by" Charts.GroupBy :> QP "query_by" [Charts.QueryBy] :> QP "num_slots" Int :> QP "limit" Int :> QP "theme" Text :> QPT "id" :> QP "show_legend" Bool :> QP "show_axes" Bool :> QPT "since" :> QPT "from" :> QPT "to" :> QPT "source" :> Get '[HTML] (RespHeaders (Html ()))
+  , chartsGet :: mode :- "charts_html" :> QP "chart_type" Charts.ChartType :> QPT "query_raw" :> QPT "queryAST" :> QueryParam "pid" Projects.ProjectId :> QP "group_by" Charts.GroupBy :> QP "query_by" [Charts.QueryBy] :> QP "num_slots" Int :> QP "limit" Int :> QP "theme" Text :> QPT "id" :> QP "show_legend" Bool :> QP "show_axes" Bool :> QPT "since" :> QPT "from" :> QPT "to" :> QPT "source" :> Get '[HTML] (RespHeaders (Html ()))
   , surveyPut :: mode :- "p" :> ProjectId :> "survey" :> ReqBody '[FormUrlEncoded] Survey.SurveyForm :> Post '[HTML] (RespHeaders Survey.SurveyPut)
   , surveyGet :: mode :- "p" :> ProjectId :> "about_project" :> Get '[HTML] (RespHeaders Survey.SurveyGet)
   , editField :: mode :- "p" :> ProjectId :> "fields" :> Capture "field_id" Fields.FieldId :> ReqBody '[FormUrlEncoded] FieldDetails.EditFieldForm :> Post '[HTML] (RespHeaders FieldDetails.FieldPut)
@@ -201,7 +202,7 @@ data Status = Status
   }
   deriving stock (Generic)
   deriving
-    (FromJSON, ToJSON)
+    (AE.FromJSON, AE.ToJSON)
     via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] Status
 
 

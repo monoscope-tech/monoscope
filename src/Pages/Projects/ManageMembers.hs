@@ -227,21 +227,21 @@ data SubUrls = SubUrls
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] SubUrls
 
 
-data Attributes = Attributes
+newtype Attributes = Attributes
   { urls :: SubUrls
   }
   deriving stock (Show, Generic)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] Attributes
 
 
-data DataVals = DataVals
+newtype DataVals = DataVals
   { attributes :: Attributes
   }
   deriving stock (Show, Generic)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] DataVals
 
 
-data SubResponse = SubResponse
+newtype SubResponse = SubResponse
   { dataVal :: DataVals
   }
   deriving stock (Show, Generic)

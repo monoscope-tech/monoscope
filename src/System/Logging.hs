@@ -9,7 +9,7 @@ module System.Logging (
 )
 where
 
-import Data.Aeson qualified as Aeson
+import Data.Aeson qualified as AE
 import Data.ByteString.Char8 qualified as BS
 import Data.Default (Default (..))
 import Data.Time.Clock as Time (NominalDiffTime, diffUTCTime)
@@ -17,7 +17,6 @@ import Effectful (
   Eff,
   Effect,
   IOE,
-  MonadIO (liftIO),
   MonadUnliftIO (withRunInIO),
   type (:>),
  )
@@ -28,22 +27,7 @@ import Effectful.Time qualified as Time
 import Log (Logger)
 import Log.Backend.StandardOutput.Bulk qualified as LogBulk
 import Log.Internal.Logger (withLogger)
-import Relude (
-  Applicative (pure),
-  Eq,
-  FilePath,
-  Generic,
-  LazyStrict (toStrict),
-  Ord,
-  Read,
-  Semigroup ((<>)),
-  Show,
-  Text,
-  Type,
-  stdout,
-  ($),
-  (.),
- )
+import Relude
 import System.Envy (ReadShowVar (..), Var)
 
 
@@ -79,7 +63,7 @@ makeLogger Json = LogBulk.withBulkJsonStdOutLogger
 makeLogger JSONFile = withJSONFileBackend FileBackendConfig{destinationFile = "logs/apitoolkit.json"}
 
 
-data FileBackendConfig = FileBackendConfig
+newtype FileBackendConfig = FileBackendConfig
   { destinationFile :: FilePath
   }
   deriving stock (Eq, Ord, Show, Generic)
@@ -93,7 +77,7 @@ withJSONFileBackend
   -> Eff es a
 withJSONFileBackend FileBackendConfig{destinationFile} action = withRunInIO $ \unlift -> do
   liftIO $ BS.hPutStrLn stdout $ BS.pack $ "Redirecting logs to " <> destinationFile
-  logger <- liftIO $ Log.mkLogger "file-json" $ \msg -> liftIO $ BS.appendFile destinationFile (toStrict $ Aeson.encode msg <> "\n")
+  logger <- liftIO $ Log.mkLogger "file-json" $ \msg -> liftIO $ BS.appendFile destinationFile (toStrict $ AE.encode msg <> "\n")
   withLogger logger (unlift . action)
 
 

@@ -6,7 +6,6 @@ import Models.Projects.Projects qualified as Projects
 import Models.Tests.Testing
 import Pages.BodyWrapper (PageCtx (..))
 import Pages.Monitors.TestCollectionEditor qualified as TestCollectionEditor
-import Pages.Monitors.TestCollectionEditor qualified as Testing
 import Pages.Monitors.Testing qualified as Testing
 import Pkg.Components.ItemsList qualified as ItemsList
 import Pkg.TestUtils

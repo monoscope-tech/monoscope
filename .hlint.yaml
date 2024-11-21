@@ -1,3 +1,20 @@
+- modules:
+  # Base libraries
+  - {name: Data.Vector, as: V, importStyle: qualified, qualifiedStyle: post, asRequired: true}
+  - {name: Data.Text, as: T, importStyle: qualified, qualifiedStyle: post, asRequired: true}
+  - {name: Data.Text.Lazy, as: TL, importStyle: qualified, qualifiedStyle: post, asRequired: true}
+  - {name: Data.ByteString, as: BS, importStyle: qualified, qualifiedStyle: post, asRequired: true}
+  - {name: Data.Map, as: Map, importStyle: qualified, qualifiedStyle: post, asRequired: true}
+  - {name: Data.List, as: L, importStyle: qualified, qualifiedStyle: post, asRequired: true}
+  - {name: Data.Aeson, as: AE, importStyle: qualified, qualifiedStyle: post, asRequired: true}
+  # - {name: Data.Set, as: S, importStyle: qualified, qualifiedStyle: post, asRequired: true}
+  # - {name: Data.Sequence, as: Seq, importStyle: qualified, qualifiedStyle: post, asRequired: true}
+  # - {name: Data.HashMap.Strict, as: HM, importStyle: qualified, qualifiedStyle: post, asRequired: true}
+  # - {name: Data.HashSet, as: HS, importStyle: qualified, qualifiedStyle: post, asRequired: true}
+  # - {name: Control.Monad, as: CM, importStyle: qualified, qualifiedStyle: post, asRequired: true}
+  # - {name: Text.Regex.TDFA, as: Regex, importStyle: qualified, qualifiedStyle: post, asRequired: true}
+  # - {name: System.Directory, as: Dir, importStyle: qualified, qualifiedStyle: post, asRequired: true}
+
 - arguments:
   - "-XConstraintKinds"
   - "-XDeriveGeneric"

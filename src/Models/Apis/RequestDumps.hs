@@ -28,7 +28,6 @@ module Models.Apis.RequestDumps (
 )
 where
 
-import Data.Aeson (Value)
 import Data.Aeson qualified as AE
 import Data.Default
 import Data.Default.Instances ()
@@ -55,8 +54,9 @@ import Models.Apis.Fields.Query ()
 import Models.Projects.Projects qualified as Projects
 import NeatInterpolation (text)
 import Pkg.Parser
-import Pkg.Parser.Types (Sources)
+import Pkg.Parser.Stats (Section, Sources)
 import Relude hiding (many, some)
+import Web.HttpApiData (ToHttpApiData (..))
 import Witch (from)
 
 
@@ -368,28 +368,21 @@ data RequestDumpLogItem = RequestDumpLogItem
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] RequestDumpLogItem
 
 
-requestDumpLogUrlPath
-  :: Projects.ProjectId
-  -> Maybe Text
-  -> Maybe Text
-  -> Maybe Text
-  -> Maybe Text
-  -> Maybe Text
-  -> Maybe Text
-  -> Maybe Text
-  -> Text
-  -> Text
-requestDumpLogUrlPath pid q cols cursorM sinceM fromM toM layoutM source =
-  [text|/p/$pidT/log_explorer?query=$queryT&cols=$colsT&cursor=$cursorT&since=$sinceT&from=$fromT&to=$toT&layout=$layoutT&source=$source|]
+requestDumpLogUrlPath :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Text -> Text
+requestDumpLogUrlPath pid q cols cursor since fromV toV layout source =
+  "/p/" <> pid.toText <> "/log_explorer?" <> T.intercalate "&" params
   where
-    pidT = pid.toText
-    queryT = fromMaybe "" q
-    colsT = fromMaybe "" cols
-    cursorT = fromMaybe "" cursorM
-    sinceT = fromMaybe "" sinceM
-    fromT = fromMaybe "" fromM
-    toT = fromMaybe "" toM
-    layoutT = fromMaybe "" layoutM
+    params =
+      catMaybes
+        [ fmap ("query=" <>) (toQueryParam <$> q)
+        , fmap ("cols=" <>) (toQueryParam <$> cols)
+        , fmap ("cursor=" <>) (toQueryParam <$> cursor)
+        , fmap ("since=" <>) (toQueryParam <$> since)
+        , fmap ("from=" <>) (toQueryParam <$> fromV)
+        , fmap ("to=" <>) (toQueryParam <$> toV)
+        , fmap ("layout=" <>) (toQueryParam <$> layout)
+        , Just ("source=" <> toQueryParam source)
+        ]
 
 
 getRequestDumpForReports :: Projects.ProjectId -> Text -> DBT IO (V.Vector RequestForReport)
@@ -424,26 +417,23 @@ getRequestDumpsForPreviousReportPeriod pid report_type = query Select (Query $ e
     |]
 
 
-selectLogTable :: (DB :> es, Time.Time :> es) => Projects.ProjectId -> Text -> Maybe UTCTime -> (Maybe UTCTime, Maybe UTCTime) -> [Text] -> Maybe Sources -> Maybe Text -> Eff es (Either Text (V.Vector (V.Vector Value), [Text], Int))
-selectLogTable pid extraQuery cursorM dateRange projectedColsByUser source targetSpansM = do
+selectLogTable :: (DB :> es, Time.Time :> es) => Projects.ProjectId -> [Section] -> Maybe UTCTime -> (Maybe UTCTime, Maybe UTCTime) -> [Text] -> Maybe Sources -> Maybe Text -> Eff es (Either Text (V.Vector (V.Vector AE.Value), [Text], Int))
+selectLogTable pid queryAST cursorM dateRange projectedColsByUser source targetSpansM = do
   now <- Time.currentTime
-  let resp = parseQueryToComponents ((defSqlQueryCfg pid now source targetSpansM){cursorM, dateRange, projectedColsByUser, source, targetSpansM}) extraQuery
-  case resp of
-    Left x -> pure $ Left x
-    Right (q, queryComponents) -> do
-      logItems <- queryToValues q
-      Only count <- fromMaybe (Only 0) <$> queryCount queryComponents.countQuery
-      let logItemsV = V.mapMaybe valueToVector logItems
-      pure $ Right (logItemsV, queryComponents.toColNames, count)
+  let (q, queryComponents) = queryASTToComponents ((defSqlQueryCfg pid now source targetSpansM){cursorM, dateRange, projectedColsByUser, source, targetSpansM}) queryAST
+  logItems <- queryToValues q
+  Only count <- fromMaybe (Only 0) <$> queryCount queryComponents.countQuery
+  let logItemsV = V.mapMaybe valueToVector logItems
+  pure $ Right (logItemsV, queryComponents.toColNames, count)
 
 
-valueToVector :: Only Value -> Maybe (V.Vector Value)
+valueToVector :: Only AE.Value -> Maybe (V.Vector AE.Value)
 valueToVector (Only val) = case val of
   AE.Array arr -> Just arr
   _ -> Nothing
 
 
-queryToValues :: DB :> es => Text -> Eff es (V.Vector (Only Value))
+queryToValues :: DB :> es => Text -> Eff es (V.Vector (Only AE.Value))
 queryToValues q = dbtToEff $ V.fromList <$> DBT.query_ (Query $ encodeUtf8 q)
 
 

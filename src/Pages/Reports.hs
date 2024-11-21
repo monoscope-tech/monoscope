@@ -19,32 +19,16 @@ module Pages.Reports (
 )
 where
 
-import Data.Aeson as Aeson (
-  FromJSON,
-  KeyValue ((.=)),
-  ToJSON,
-  Value (Object, String),
-  decode,
-  encode,
-  object,
- )
+import Data.Aeson qualified as AE
 import Data.Default (def)
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Data.Time (UTCTime, defaultTimeLocale, formatTime)
 import Data.Time.LocalTime (LocalTime (localDay), ZonedTime (zonedTimeToLocalTime))
-import Data.Vector (Vector)
 import Data.Vector qualified as V
 import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
 import Lucid
-import Lucid.Html5 (
-  aside_,
-  h2_,
-  li_,
-  placeholder_,
-  ul_,
- )
-import Lucid.Htmx (hxGet_, hxPost_, hxSwap_, hxTarget_, hxTrigger_)
+import Lucid.Htmx (hxGet_, hxSwap_, hxTarget_, hxTrigger_)
 import Models.Apis.Anomalies qualified as Anomalies
 import Models.Apis.Fields.Types (textFieldTypeToText)
 import Models.Apis.Reports qualified as Reports
@@ -68,7 +52,7 @@ data PerformanceReport = PerformanceReport
   , durationDiffPct :: Integer
   }
   deriving stock (Show, Generic)
-  deriving anyclass (ToJSON, FromJSON)
+  deriving anyclass (AE.ToJSON, AE.FromJSON)
 
 
 data ReportAnomalyType
@@ -98,7 +82,7 @@ data ReportAnomalyType
       { endpointUrlPath :: Text
       }
   deriving stock (Show, Generic)
-  deriving anyclass (ToJSON, FromJSON)
+  deriving anyclass (AE.ToJSON, AE.FromJSON)
 
 
 data ReportData = ReportData
@@ -107,7 +91,7 @@ data ReportData = ReportData
   , anomaliesCount :: Int
   }
   deriving stock (Show, Generic)
-  deriving anyclass (FromJSON)
+  deriving anyclass (AE.FromJSON)
 
 
 reportsPostH :: Projects.ProjectId -> Text -> ATAuthCtx (RespHeaders ReportsPost)
@@ -118,7 +102,7 @@ reportsPostH pid t = do
   addRespHeaders $ ReportsPost "updated"
 
 
-data ReportsPost = ReportsPost Text
+newtype ReportsPost = ReportsPost Text
 
 
 instance ToHtml ReportsPost where
@@ -160,8 +144,8 @@ reportsGetH pid page hxRequest hxBoosted = do
 
 
 data ReportsGet
-  = ReportsGetMain (PageCtx (Projects.ProjectId, Vector Reports.ReportListItem, Text, Bool, Bool))
-  | ReportsGetList Projects.ProjectId (Vector Reports.ReportListItem) Text
+  = ReportsGetMain (PageCtx (Projects.ProjectId, V.Vector Reports.ReportListItem, Text, Bool, Bool))
+  | ReportsGetList Projects.ProjectId (V.Vector Reports.ReportListItem) Text
   | ReportsGetSingle (PageCtx (Projects.ProjectId, Maybe Reports.Report))
 
 
@@ -185,7 +169,7 @@ singleReportPage pid report =
               h4_ [class_ "text-xl font-medium capitalize"] $ toHtml report'.reportType <> " report"
               span_ [] $ show $ localDay (zonedTimeToLocalTime report'.createdAt)
             div_ [class_ "px-4 py-3 space-y-8"] do
-              let rep_json = decode (encode report'.reportJson) :: Maybe ReportData
+              let rep_json = AE.decode (AE.encode report'.reportJson) :: Maybe ReportData
               case rep_json of
                 Just v -> do
                   div_ [class_ "anomalies"] do
@@ -263,7 +247,7 @@ shapeParameterStats_ newF deletedF updatedFF = div_ [class_ "inline-block"] do
       small_ [class_ "block"] "deleted fields"
 
 
-reportsPage :: Projects.ProjectId -> Vector Reports.ReportListItem -> Text -> Bool -> Bool -> Html ()
+reportsPage :: Projects.ProjectId -> V.Vector Reports.ReportListItem -> Text -> Bool -> Bool -> Html ()
 reportsPage pid reports nextUrl daily weekly =
   div_ [class_ "flex flex-row h-screen bg-white"] do
     div_ [class_ "w-1/3 border-r border-gray-200 p-4 overflow-y-auto"] do
@@ -282,13 +266,13 @@ reportsPage pid reports nextUrl daily weekly =
 
 -- div_ [class_ "w-5 bg-gray-200"] ""
 
-reportListItems :: Projects.ProjectId -> Vector Reports.ReportListItem -> Text -> Html ()
+reportListItems :: Projects.ProjectId -> V.Vector Reports.ReportListItem -> Text -> Html ()
 reportListItems pid reports nextUrl =
   div_ [class_ "space-y-1 w-full"] do
     forM_ reports $ \report -> do
       let isWeeklyData = report.reportType == "weekly"
 
-      div_ [class_ $ "w-full flex flex-col"] do
+      div_ [class_ "w-full flex flex-col"] do
         div_ [class_ $ if isWeeklyData then "w-full bg-gray-100" else "w-11/12 self-end "] do
           a_
             [ class_ "w-full px-4 py-3 flex justify-between hover:bg-gray-200 cursor-pointer"
@@ -336,108 +320,108 @@ renderEndpointsTable endpoints = table_ [class_ "table-auto w-full"] do
   tbody_ $ mapM_ renderEndpointRow endpoints
 
 
-buildReportJSON :: Vector Anomalies.IssueL -> Vector RequestForReport -> Vector EndpointPerf -> Aeson.Value
+buildReportJSON :: V.Vector Anomalies.IssueL -> V.Vector RequestForReport -> V.Vector EndpointPerf -> AE.Value
 buildReportJSON anomalies endpoints_perf previous_perf =
   let anomalies_json = buildAnomalyJSON anomalies (length anomalies)
       perf_insight = getPerformanceInsight endpoints_perf previous_perf
       perf_json = buildPerformanceJSON perf_insight
       report_json = case anomalies_json of
-        Aeson.Object va -> case perf_json of
-          Aeson.Object vp -> Aeson.Object (vp <> va)
-          _ -> Aeson.object []
-        _ -> Aeson.object []
+        AE.Object va -> case perf_json of
+          AE.Object vp -> AE.Object (vp <> va)
+          _ -> AE.object []
+        _ -> AE.object []
    in report_json
 
 
-buildPerformanceJSON :: V.Vector PerformanceReport -> Aeson.Value
-buildPerformanceJSON pr = Aeson.object ["endpoints" .= pr]
+buildPerformanceJSON :: V.Vector PerformanceReport -> AE.Value
+buildPerformanceJSON pr = AE.object ["endpoints" AE..= pr]
 
 
-buildAnomalyJSON :: Vector Anomalies.IssueL -> Int -> Aeson.Value
-buildAnomalyJSON anomalies total = Aeson.object ["anomalies" .= V.map buildjson anomalies, "anomaliesCount" .= total]
+buildAnomalyJSON :: V.Vector Anomalies.IssueL -> Int -> AE.Value
+buildAnomalyJSON anomalies total = AE.object ["anomalies" AE..= V.map buildjson anomalies, "anomaliesCount" AE..= total]
   where
-    buildjson :: Anomalies.IssueL -> Aeson.Value
+    buildjson :: Anomalies.IssueL -> AE.Value
     buildjson an = case an.issueData of
       Anomalies.IDNewEndpointIssue e ->
-        Aeson.object
-          [ "endpointUrlPath" .= e.endpointUrlPath
-          , "endpointMethod" .= e.endpointMethod
-          , "tag" .= Anomalies.ATEndpoint
-          , "eventsCount" .= an.eventsAgg.count
+        AE.object
+          [ "endpointUrlPath" AE..= e.endpointUrlPath
+          , "endpointMethod" AE..= e.endpointMethod
+          , "tag" AE..= Anomalies.ATEndpoint
+          , "eventsCount" AE..= an.eventsAgg.count
           ]
       Anomalies.IDNewShapeIssue s ->
-        Aeson.object
-          [ "endpointUrlPath" .= s.endpointUrlPath
-          , "endpointMethod" .= s.endpointMethod
-          , "targetHash" .= an.targetHash
-          , "tag" .= Anomalies.ATShape
-          , "newUniqueFields" .= s.newUniqueFields
-          , "updatedFieldFormats" .= s.updatedFieldFormats
-          , "deletedFields" .= s.deletedFields
-          , "eventsCount" .= an.eventsAgg.count
+        AE.object
+          [ "endpointUrlPath" AE..= s.endpointUrlPath
+          , "endpointMethod" AE..= s.endpointMethod
+          , "targetHash" AE..= an.targetHash
+          , "tag" AE..= Anomalies.ATShape
+          , "newUniqueFields" AE..= s.newUniqueFields
+          , "updatedFieldFormats" AE..= s.updatedFieldFormats
+          , "deletedFields" AE..= s.deletedFields
+          , "eventsCount" AE..= an.eventsAgg.count
           ]
       Anomalies.IDNewFormatIssue f ->
-        Aeson.object
-          [ "endpointUrlPath" .= f.endpointUrlPath
-          , "endpointMethod" .= f.endpointMethod
-          , "keyPath" .= f.fieldKeyPath
-          , "tag" .= Anomalies.ATFormat
-          , "formatType" .= f.formatType
-          , "formatExamples" .= f.examples
-          , "eventsCount" .= an.eventsAgg.count
+        AE.object
+          [ "endpointUrlPath" AE..= f.endpointUrlPath
+          , "endpointMethod" AE..= f.endpointMethod
+          , "keyPath" AE..= f.fieldKeyPath
+          , "tag" AE..= Anomalies.ATFormat
+          , "formatType" AE..= f.formatType
+          , "formatExamples" AE..= f.examples
+          , "eventsCount" AE..= an.eventsAgg.count
           ]
-      _ -> Aeson.object ["anomaly_type" .= String "unknown"]
+      _ -> AE.object ["anomaly_type" AE..= AE.String "unknown"]
 
 
-getAnomaliesEmailTemplate :: Vector Anomalies.IssueL -> Vector Value
+getAnomaliesEmailTemplate :: V.Vector Anomalies.IssueL -> V.Vector AE.Value
 getAnomaliesEmailTemplate anomalies = buildEmailjson <$> anomalies
   where
-    buildEmailjson :: Anomalies.IssueL -> Value
+    buildEmailjson :: Anomalies.IssueL -> AE.Value
     buildEmailjson an = case an.issueData of
       Anomalies.IDNewEndpointIssue e ->
-        Aeson.object
-          [ "tag" .= "ATEndpoint"
-          , "title" .= "New Endpoint"
-          , "eventsCount" .= an.eventsAgg.count
-          , "endpointMethod" .= e.endpointMethod
-          , "endpointUrlPath" .= e.endpointUrlPath
-          , "firstSeen" .= formatUTC an.eventsAgg.lastSeen
+        AE.object
+          [ "tag" AE..= "ATEndpoint"
+          , "title" AE..= "New Endpoint"
+          , "eventsCount" AE..= an.eventsAgg.count
+          , "endpointMethod" AE..= e.endpointMethod
+          , "endpointUrlPath" AE..= e.endpointUrlPath
+          , "firstSeen" AE..= formatUTC an.eventsAgg.lastSeen
           ]
       Anomalies.IDNewShapeIssue s ->
-        Aeson.object
-          [ "tag" .= "ATShape"
-          , "title" .= "New Request Shape"
-          , "eventsCount" .= an.eventsAgg.count
-          , "deletedFields" .= length s.deletedFields
-          , "endpointMethod" .= s.endpointMethod
-          , "endpointUrlPath" .= s.endpointUrlPath
-          , "newUniqueFields" .= length s.newUniqueFields
-          , "updatedFields" .= length s.updatedFieldFormats
-          , "firstSeen" .= formatUTC an.eventsAgg.lastSeen
+        AE.object
+          [ "tag" AE..= "ATShape"
+          , "title" AE..= "New Request Shape"
+          , "eventsCount" AE..= an.eventsAgg.count
+          , "deletedFields" AE..= length s.deletedFields
+          , "endpointMethod" AE..= s.endpointMethod
+          , "endpointUrlPath" AE..= s.endpointUrlPath
+          , "newUniqueFields" AE..= length s.newUniqueFields
+          , "updatedFields" AE..= length s.updatedFieldFormats
+          , "firstSeen" AE..= formatUTC an.eventsAgg.lastSeen
           ]
       Anomalies.IDNewFormatIssue f ->
-        Aeson.object
-          [ "tag" .= "ATFormat"
-          , "title" .= "Modified Field"
-          , "eventsCount" .= an.eventsAgg.count
-          , "keyPath" .= f.fieldKeyPath
-          , "formatType" .= f.formatType
-          , "endpointMethod" .= f.endpointMethod
-          , "endpointUrlPath" .= f.endpointUrlPath
-          , "formatExamples" .= f.examples
-          , "firstSeen" .= formatUTC an.eventsAgg.lastSeen
+        AE.object
+          [ "tag" AE..= "ATFormat"
+          , "title" AE..= "Modified Field"
+          , "eventsCount" AE..= an.eventsAgg.count
+          , "keyPath" AE..= f.fieldKeyPath
+          , "formatType" AE..= f.formatType
+          , "endpointMethod" AE..= f.endpointMethod
+          , "endpointUrlPath" AE..= f.endpointUrlPath
+          , "formatExamples" AE..= f.examples
+          , "firstSeen" AE..= formatUTC an.eventsAgg.lastSeen
           ]
       Anomalies.IDNewRuntimeExceptionIssue e ->
-        Aeson.object
-          [ "tag" .= "ATError"
-          , "title" .= e.errorType
-          , "eventsCount" .= an.eventsAgg.count
-          , "errorMessage" .= e.message
-          , "endpointMethod" .= e.requestMethod
-          , "endpointUrlPath" .= e.requestPath
-          , "firstSeen" .= formatUTC an.eventsAgg.lastSeen
+        AE.object
+          [ "tag" AE..= "ATError"
+          , "title" AE..= e.errorType
+          , "eventsCount" AE..= an.eventsAgg.count
+          , "errorMessage" AE..= e.message
+          , "endpointMethod" AE..= e.requestMethod
+          , "endpointUrlPath" AE..= e.requestPath
+          , "firstSeen" AE..= formatUTC an.eventsAgg.lastSeen
           ]
-      _ -> Aeson.object ["message" .= String "unknown"]
+      _ -> AE.object ["message" AE..= AE.String "unknown"]
 
 
 formatUTC :: UTCTime -> String
@@ -452,14 +436,14 @@ getPerformanceInsight req_dumps previous_p =
    in perfInfo
 
 
-getPerformanceEmailTemplate :: V.Vector RequestDumps.RequestForReport -> V.Vector RequestDumps.EndpointPerf -> V.Vector Value
+getPerformanceEmailTemplate :: V.Vector RequestDumps.RequestForReport -> V.Vector RequestDumps.EndpointPerf -> V.Vector AE.Value
 getPerformanceEmailTemplate pr previous_p =
   ( \p ->
-      Aeson.object
-        [ "endpointUrlPath" .= p.urlPath
-        , "endpointMethod" .= p.method
-        , "averageLatency" .= getMs p.averageDuration
-        , "latencyChange" .= ((if p.durationDiff > 0 then "+" else "") <> getMs p.durationDiff <> " (" <> getDesc p.durationDiffPct <> ")")
+      AE.object
+        [ "endpointUrlPath" AE..= p.urlPath
+        , "endpointMethod" AE..= p.method
+        , "averageLatency" AE..= getMs p.averageDuration
+        , "latencyChange" AE..= ((if p.durationDiff > 0 then "+" else "") <> getMs p.durationDiff <> " (" <> getDesc p.durationDiffPct <> ")")
         ]
   )
     <$> getPerformanceInsight pr previous_p
@@ -526,7 +510,7 @@ reportEmail pid report' =
           ]
           "View in browser"
       div_ [style_ "padding: 1rem 1rem 2rem; gap: 2rem;"] do
-        let rep_json = decode (encode report'.reportJson) :: Maybe ReportData
+        let rep_json = AE.decode (AE.encode report'.reportJson) :: Maybe ReportData
         case rep_json of
           Just v -> do
             div_ [style_ "margin-bottom: 2rem;"] do

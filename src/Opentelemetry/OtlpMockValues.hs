@@ -1,13 +1,9 @@
 module Opentelemetry.OtlpMockValues where
 
 import Data.Vector qualified as V
-import Opentelemetry.Proto.Collector.Logs.V1.LogsService (ExportLogsServiceRequest (..))
-import Opentelemetry.Proto.Collector.Metrics.V1.MetricsService (ExportMetricsServiceRequest (..))
-import Opentelemetry.Proto.Collector.Trace.V1.TraceService (ExportTraceServiceRequest (..))
 import Opentelemetry.Proto.Common.V1.Common
 import Opentelemetry.Proto.Resource.V1.Resource
 import Opentelemetry.Proto.Trace.V1.Trace as Trace
-import Proto3.Suite.Class
 import Proto3.Suite.Types
 import Relude
 

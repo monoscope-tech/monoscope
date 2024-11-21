@@ -1,51 +1,46 @@
-name:  Build and test
+name:  Build and Test PR
 
-on:
-  pull_request:
-    branches: [ master ]
+on: push 
 
 env:
   LANG: C.UTF-8
 
 jobs:
   runhaskell:
-    name: Build and test
-    runs-on: ubuntu-latest # or macOS-latest, or windows-latest
-    # container: timescale/timescaledb-ha:pg14-latest 
+    name: Build and test 
+    runs-on: ubuntu-24.04 
     permissions:
       contents: 'read'
       id-token: 'write'
     steps:
-      - uses: actions/checkout@v3
-      - uses: haskell-actions/run-fourmolu@v9
+      - uses: actions/checkout@v4
+      - name: Setup Rust
+        uses: actions-rs/toolchain@v1
         with:
-          version: "0.16.2.0"
+          toolchain: stable
+          profile: minimal
+          override: true
       - uses: freckle/stack-cache-action@main
-      - uses: haskell/actions/setup@v1
+      # - uses: freckle/stack-action@v5
+      - uses: haskell-actions/setup@v2
         with:
-          ghc-version: "9.2.7" # Exact version of ghc to use
-          # cabal-version: 'latest'. Omitted, but defalts to 'latest'
+          ghc-version: 9.8.2 
           enable-stack: true
           stack-version: "latest"
-
-      - run: stack --no-terminal build --dependencies-only
-      - run: stack install --local-bin-path=.
-
-      # https://github.com/marketplace/actions/cache-apt-packages#example-workflow
-      - uses: awalsh128/cache-apt-pkgs-action@latest
+      - name: Install OpenSSL
+        run: sudo apt-get update && sudo apt-get install -y libssl-dev libgrpc-dev>=1.55  # or "brew install openssl" for macOS
+      - name: Set OpenSSL Paths
+        run: |
+          export OPENSSL_INCLUDE_DIR=$(pkg-config --variable=includedir openssl)
+          export OPENSSL_LIB_DIR=$(pkg-config --variable=libdir openssl)
+      - name: Setup node env
+        uses: actions/setup-node@v4
         with:
-          packages:  wget lsb-release gnupg apt-transport-https postgresql-common
-          version: 1.0
-      - name: Install timescaledb
-        run: |
-          sudo /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -v 14 -p -i
-          echo "deb https://packagecloud.io/timescale/timescaledb/ubuntu/ $(lsb_release -c -s) main" | sudo tee /etc/apt/sources.list.d/timescaledb.list
-          wget --quiet -O - https://packagecloud.io/timescale/timescaledb/gpgkey | sudo apt-key add -
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends timescaledb-2-postgresql-14 timescaledb-tools timescaledb-toolkit-postgresql-14
-          sudo timescaledb-tune --quiet --yes
+          node-version: 18
+      - run: npm install
+      - run: npx tailwindcss  -i ./static/public/assets/css/tailwind.css -o ./static/public/assets/css/tailwind.min.css
 
-      - name: stack test
-        run: |
-          export PATH=$PATH:/usr/lib/postgresql/14/bin
-          stack test
+      - run: make prepare-rust-interop
+      - run: stack --no-terminal build --dependencies-only
+      - run: stack install --local-bin-path=. --flag pg-entity:prod --ghc-options "-O0"
+      - run: stack test

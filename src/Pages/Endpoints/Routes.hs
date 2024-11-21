@@ -24,6 +24,7 @@ type Routes = NamedRoutes Routes'
 type role Routes' nominal
 
 
+type Routes' :: Type -> Type
 data Routes' mode = Routes'
   { endpointListGet :: mode :- "endpoints" :> QPT "page" :> QPT "layout" :> QPT "filter" :> QPT "host" :> QPT "request_type" :> QPT "sort" :> HXRequest :> HXBoosted :> HXCurrentURL :> QPT "load_more" :> QPT "search" :> Get '[HTML] (RespHeaders EndpointList.EndpointRequestStatsVM)
   , fieldDetailsPartial :: mode :- "fields" :> Capture "field_id" Fields.FieldId :> Get '[HTML] (RespHeaders EndpointDetails.FieldDetails)

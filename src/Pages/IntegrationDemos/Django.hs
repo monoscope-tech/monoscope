@@ -1,6 +1,5 @@
 module Pages.IntegrationDemos.Django (djangoGuide) where
 
-import Data.Text
 import Lucid
 import NeatInterpolation
 import Pkg.Components

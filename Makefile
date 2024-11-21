@@ -19,10 +19,20 @@ cypress:
 
 live-reload:
 	# ghcid --command 'stack ghci apitoolkit-server --ghc-options=-w' --test ':run Start.startApp' --warnings
-	ghcid --command 'stack ghci apitoolkit-server --ghc-options="-w -j4 +RTS -A128m -n2m -RTS"' --test ':run Start.startApp' --warnings
+	# ghcid --command 'stack ghci apitoolkit-server --ghc-options="-w -j4 +RTS -A128m -n2m -RTS"' --test ':run Start.startApp' --warnings
+	ghcid --command 'cabal repl --ghc-options="-w -j4"' --test ':run Start.startApp' --warnings
+
+hot-reload:
+	livereload -f reload.trigger static/public/ & \
+	ghcid --command 'cabal repl --ghc-options="-w -j4"' --test ':run Start.startApp' --test ':! (sleep 1 && touch static/public/reload.trigger)'  --warnings
 
 watch:
-	ghciwatch --test-ghci Start.startApp  --before-startup-shell hpack --clear 
+	# https://github.com/MercuryTechnologies/ghciwatch/issues/143 
+	# GHCI currently doesnt support non-terminating test actions like webservers. 
+	# So it should be used only for checking compile time and generating static-ls actions
+	# And for repeatedly running tests on code changes
+	# ghciwatch --test-ghci Start.startApp --error-file errors.err  --before-startup-shell hpack --clear  --watch 
+	ghciwatch --error-file errors.err  --before-startup-shell hpack --clear  --watch 
 
 
 live-test-reload:

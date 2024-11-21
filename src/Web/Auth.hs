@@ -18,7 +18,7 @@ import Control.Monad.Except qualified as T
 import Data.Aeson.Lens (key, _String)
 import Data.Effectful.UUID (UUIDEff)
 import Data.Effectful.Wreq (HTTP)
-import Data.List qualified as List
+import Data.List qualified as L
 import Data.Map.Strict qualified as Map
 import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUID
@@ -109,26 +109,26 @@ sessionByID mbPersistentSessionId requestID isSidebarClosed = do
 
 
 getCookies :: Request -> Cookies
-getCookies req = maybe [] parseCookies (List.lookup hCookie $ requestHeaders req)
+getCookies req = maybe [] parseCookies (L.lookup hCookie $ requestHeaders req)
 
 
 getRequestID :: Request -> IO Text
 getRequestID req = do
   let headers = requestHeaders req
-  case List.lookup "X-Request-ID" headers of
+  case L.lookup "X-Request-ID" headers of
     Nothing -> fmap UUID.toText UUID.nextRandom
     Just requestID -> pure $ decodeUtf8 requestID
 
 
 sidebarClosedFromCookie :: Cookies -> Bool
-sidebarClosedFromCookie cookies = case List.lookup "sidebarClosed" cookies of
+sidebarClosedFromCookie cookies = case L.lookup "sidebarClosed" cookies of
   Just "true" -> True
   Just _ -> False
   Nothing -> False
 
 
 getSessionId :: Cookies -> Handler (Maybe Sessions.PersistentSessionId)
-getSessionId cookies = pure $ Sessions.PersistentSessionId <$> (UUID.fromASCIIBytes =<< List.lookup "apitoolkit_session" cookies)
+getSessionId cookies = pure $ Sessions.PersistentSessionId <$> (UUID.fromASCIIBytes =<< L.lookup "apitoolkit_session" cookies)
 
 
 handlerToEff
