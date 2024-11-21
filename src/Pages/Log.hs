@@ -17,6 +17,7 @@ import Data.HashMap.Strict qualified as HM
 import Data.List (elemIndex)
 import Data.Text qualified as T
 import Data.Time (UTCTime, diffUTCTime, zonedTimeToUTC)
+import Data.Time.Format.ISO8601 (iso8601Show)
 import Data.Vector qualified as V
 import Data.Vector qualified as Vector
 import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
@@ -42,7 +43,6 @@ import Relude.Unsafe qualified as Unsafe
 import System.Types
 import Text.Megaparsec (parseMaybe)
 import Utils
-import Data.Time.Format.ISO8601 (iso8601Show)
 
 
 -- $setup
@@ -369,7 +369,8 @@ resultTable_ page mainLog = table_
     unless (null page.requestVecs) do
       thead_ $ tr_ [class_ "text-slate-700 border-b font-medium"] $ forM_ page.cols $ logTableHeading_ page.pid isLogEventB
       tbody_ [id_ "log-item-table-body", class_ "w-full log-item-table-body [content-visibility:auto]"] do
-        script_ [text|
+        script_
+          [text|
           window.latestLogsURLQueryValsFn = function(){
               const datetime = document.querySelector('#log-item-table-body time')?.getAttribute('datetime');
               const updatedTo = datetime
@@ -384,10 +385,10 @@ resultTable_ page mainLog = table_
             , hxTrigger_ "click, every 1s [document.getElementById('streamLiveData').checked]"
             , hxVals_ "js:{queryAST:window.getQueryFromEditor(), since: params().since, cols:params().cols, layout:'all', source: params().source, ...window.latestLogsURLQueryValsFn()}"
             , hxSwap_ "afterend settle:500ms"
-            , hxGet_  $ "/p/" <> page.pid.toText <> "/log_explorer?layout=loadmore"
+            , hxGet_ $ "/p/" <> page.pid.toText <> "/log_explorer?layout=loadmore"
             , hxTarget_ "closest tr"
-            -- using hyperscript instead of hxIndicator_ so the loader isnt distracting by showing up every second and only when clicked
-            , [__| on click remove .hidden from #loadNewIndicator on htmx:afterRequest add .hidden to #loadNewIndicator |] 
+            , -- using hyperscript instead of hxIndicator_ so the loader isnt distracting by showing up every second and only when clicked
+              [__| on click remove .hidden from #loadNewIndicator on htmx:afterRequest add .hidden to #loadNewIndicator |]
             ]
             (span_ [class_ "inline-block"] "check for newer results" >> span_ [id_ "loadNewIndicator", class_ "hidden loading loading-dots loading-sm inline-block pl-3"] "")
         logItemRows_ page.pid page.requestVecs page.cols page.colIdxMap page.nextLogsURL page.source page.childSpans
@@ -536,8 +537,9 @@ renderMethod reqVec colIdxMap =
 
 renderTimestamp :: Text -> V.Vector Value -> HM.HashMap Text Int -> Html ()
 renderTimestamp key reqVec colIdxMap =
-  time_ [class_ "monospace whitespace-nowrap text-slate-600 ", term "data-tippy-content" "timestamp", datetime_ timestamp] $ toHtml (displayTimestamp timestamp) 
-    where timestamp = maybeToMonoid $ lookupVecTextByKey reqVec colIdxMap key
+  time_ [class_ "monospace whitespace-nowrap text-slate-600 ", term "data-tippy-content" "timestamp", datetime_ timestamp] $ toHtml (displayTimestamp timestamp)
+  where
+    timestamp = maybeToMonoid $ lookupVecTextByKey reqVec colIdxMap key
 
 
 renderStatusCode :: V.Vector Value -> HM.HashMap Text Int -> Html ()

@@ -6,8 +6,6 @@ import Data.Aeson qualified as AE
 import Data.List (groupBy, lookup)
 import Data.Text (toLower)
 import Data.Text qualified as T
-import Effectful.Time qualified as Time
-import Pkg.Components qualified as Components
 import Data.Time (UTCTime, diffUTCTime)
 import Data.Tuple.Extra (fst3, thd3)
 import Data.UUID qualified as UUID
@@ -16,24 +14,26 @@ import Database.PostgreSQL.Entity.DBT (QueryNature (Select), query)
 import Database.PostgreSQL.Simple.Types (Query (Query))
 import Database.PostgreSQL.Transact qualified as DBT
 import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
+import Effectful.Time qualified as Time
 import Lucid (Html, class_, div_, id_, script_)
 import Lucid.Htmx (hxGet_, hxSwap_, hxTrigger_)
 import Models.Projects.Projects qualified as Projects
 import NeatInterpolation (text)
 import Network.URI (escapeURIString, isUnescapedInURI)
+import Pkg.Components qualified as Components
 import Pkg.Parser (
   QueryComponents (finalTimechartQuery),
   SqlQueryCfg (dateRange),
   defSqlQueryCfg,
   pSource,
   parseQueryToAST,
-  queryASTToComponents
+  queryASTToComponents,
  )
 import Relude
 import Relude.Unsafe qualified as Unsafe
 import Safe qualified
 import Servant (FromHttpApiData (..))
-import System.Types (ATAuthCtx, RespHeaders, addRespHeaders, addErrorToast)
+import System.Types (ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders)
 import Text.Megaparsec (parseMaybe)
 import Utils (DBField (MkDBField), formatUTC)
 

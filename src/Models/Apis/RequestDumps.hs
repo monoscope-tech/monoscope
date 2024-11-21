@@ -57,8 +57,8 @@ import NeatInterpolation (text)
 import Pkg.Parser
 import Pkg.Parser.Stats (Section, Sources)
 import Relude hiding (many, some)
+import Web.HttpApiData (ToHttpApiData (..))
 import Witch (from)
-import Web.HttpApiData (ToHttpApiData(..))
 
 
 data SDKTypes
@@ -373,16 +373,17 @@ requestDumpLogUrlPath :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe
 requestDumpLogUrlPath pid q cols cursor since from to layout source =
   "/p/" <> pid.toText <> "/log_explorer?" <> T.intercalate "&" params
   where
-    params = catMaybes
-      [ fmap ("query=" <>) (toQueryParam <$> q)
-      , fmap ("cols=" <>) (toQueryParam <$> cols)
-      , fmap ("cursor=" <>) (toQueryParam <$> cursor)
-      , fmap ("since=" <>) (toQueryParam <$> since)
-      , fmap ("from=" <>) (toQueryParam <$> from)
-      , fmap ("to=" <>) (toQueryParam <$> to)
-      , fmap ("layout=" <>) (toQueryParam <$> layout)
-      , Just ("source=" <> toQueryParam source)
-      ]
+    params =
+      catMaybes
+        [ fmap ("query=" <>) (toQueryParam <$> q)
+        , fmap ("cols=" <>) (toQueryParam <$> cols)
+        , fmap ("cursor=" <>) (toQueryParam <$> cursor)
+        , fmap ("since=" <>) (toQueryParam <$> since)
+        , fmap ("from=" <>) (toQueryParam <$> from)
+        , fmap ("to=" <>) (toQueryParam <$> to)
+        , fmap ("layout=" <>) (toQueryParam <$> layout)
+        , Just ("source=" <> toQueryParam source)
+        ]
 
 
 getRequestDumpForReports :: Projects.ProjectId -> Text -> DBT IO (V.Vector RequestForReport)

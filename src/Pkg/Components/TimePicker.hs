@@ -93,7 +93,8 @@ timepicker_ submitForm currentRange = div_ [class_ "relative"] do
   a_
     [ class_ "relative p-2.5 bg-slate-100 border border-slate-300 text-base flex items-center gap-1.5 rounded-xl cursor-pointer"
     , [__| on click toggle .hidden on #timepickerBox |]
-    ] do
+    ]
+    do
       faSprite_ "calendar" "regular" "h-5 w-5"
       span_ [class_ "inline-block leading-none", id_ "currentRange"] $ toHtml (fromMaybe "Last 24 Hours" currentRange)
       faSprite_ "chevron-down" "regular" "h-3 w-3"
