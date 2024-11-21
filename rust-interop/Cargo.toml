@@ -1,6 +1,6 @@
 
 [package]
-name = "Crust-interop"
+name = "rust-interop"
 version = "0.1.0"
 edition = "2021"
 

@@ -3,17 +3,6 @@
 version = 3
 
 [[package]]
-name = "Crust-interop"
-version = "0.1.0"
-dependencies = [
- "hs-bindgen",
- "serde",
- "serde_json",
- "testkit",
- "tokio",
-]
-
-[[package]]
 name = "addr2line"
 version = "0.21.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1199,6 +1188,17 @@ dependencies = [
  "spin",
  "untrusted",
  "windows-sys 0.52.0",
+]
+
+[[package]]
+name = "rust-interop"
+version = "0.1.0"
+dependencies = [
+ "hs-bindgen",
+ "serde",
+ "serde_json",
+ "testkit",
+ "tokio",
 ]
 
 [[package]]

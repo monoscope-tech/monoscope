@@ -43,9 +43,8 @@ version:            0.1.0
 
 -- This let us hook Cabal steps to Setup.lhs script.
 build-type:         Custom
-
 custom-setup
-    setup-depends:  Cabal, base, directory, process, filepath
+    setup-depends:  Cabal, base, directory, process
 
 -- Extra doc files to be distributed with the package, such as a CHANGELOG or a
 -- README.

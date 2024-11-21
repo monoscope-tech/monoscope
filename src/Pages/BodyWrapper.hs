@@ -268,23 +268,6 @@ bodyWrapper BWConfig{sessM, currProject, pageTitle, menuItem, hasIntegrated, nav
               hljs.highlightAll();
             });
           });
-
-          // auto attach data-current attribute to elements with data-page=regex when the regex matches the current url location. 
-          const updateMenu = () => {
-            const path = window.location.pathname.replace(/\/$/, ""); // Normalize trailing slash
-            document.querySelectorAll("[data-page]").forEach(link => {
-              link.toggleAttribute("data-current", new RegExp(link.dataset.page).test(path));
-            });
-          };
-          window.addEventListener("popstate", updateMenu);
-          ["pushState", "replaceState"].forEach(fn => {
-            const original = history[fn];
-            history[fn] = function (...args) {
-              original.apply(this, args);
-              updateMenu();
-            };
-          });
-          document.addEventListener("DOMContentLoaded", updateMenu);
       |]
       let email = show $ maybe "" ((.user.getUser.email)) sessM
       let name = maybe "" (\sess -> sess.user.getUser.firstName <> " " <> sess.user.getUser.lastName) sessM
