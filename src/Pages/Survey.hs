@@ -3,7 +3,7 @@ module Pages.Survey (surveyGetH, surveyPutH, SurveyForm, SurveyGet (..), SurveyP
 import BackgroundJobs qualified
 import Data.Aeson qualified as AE
 import Data.Default (def)
-import Data.List qualified as L 
+import Data.List qualified as L
 import Data.Pool (withResource)
 import Data.Text qualified as T
 import Database.PostgreSQL.Entity.DBT (QueryNature (Update), execute)

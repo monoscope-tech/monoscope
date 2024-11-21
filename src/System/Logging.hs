@@ -9,7 +9,7 @@ module System.Logging (
 )
 where
 
-import Data.Aeson qualified as AE 
+import Data.Aeson qualified as AE
 import Data.ByteString.Char8 qualified as BS
 import Data.Default (Default (..))
 import Data.Time.Clock as Time (NominalDiffTime, diffUTCTime)

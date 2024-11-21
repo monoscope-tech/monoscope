@@ -11,7 +11,7 @@ module Models.Apis.Monitors (
   updateQMonitorTriggeredState,
 ) where
 
-import Data.Aeson qualified as AE 
+import Data.Aeson qualified as AE
 import Data.CaseInsensitive qualified as CI
 import Data.Default (Default)
 import Data.Time.Clock (UTCTime)

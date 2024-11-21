@@ -6,11 +6,11 @@ module ProcessMessage (
 )
 where
 
-import Data.Aeson qualified as AE 
+import Data.Aeson qualified as AE
 import Data.Aeson.Types (KeyValue ((.=)), object)
 import Data.ByteString.Lazy.Char8 qualified as BL
 import Data.Cache qualified as Cache
-import Data.List qualified as L 
+import Data.List qualified as L
 import Data.Text qualified as T
 import Data.UUID.V4 (nextRandom)
 import Data.Vector qualified as V

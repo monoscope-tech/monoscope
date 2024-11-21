@@ -22,7 +22,7 @@ import Data.Aeson (
 import Data.Aeson qualified as AE
 import Data.Default (def)
 import Data.Digest.XXHash (xxHash)
-import Data.List qualified as L 
+import Data.List qualified as L
 import Data.Text qualified as T
 import Data.Time.Clock (UTCTime)
 import Data.Time.LocalTime (getZonedTime, utc, utcToZonedTime)

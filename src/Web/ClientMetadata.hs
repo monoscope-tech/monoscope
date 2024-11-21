@@ -1,6 +1,6 @@
 module Web.ClientMetadata (ClientMetadata (..), clientMetadataH) where
 
-import Data.Aeson qualified as AE 
+import Data.Aeson qualified as AE
 import Data.Aeson.QQ (aesonQQ)
 import Data.Aeson.Types (ToJSON)
 import Data.ByteString.Base64 qualified as B64

@@ -4,7 +4,7 @@ import Data.Aeson qualified as AE
 import Data.Default (Default)
 import Data.Time (ZonedTime)
 import Data.UUID qualified as UUID
-import Data.Vector qualified as V 
+import Data.Vector qualified as V
 import Database.PostgreSQL.Entity (Entity, insert, selectById)
 import Database.PostgreSQL.Entity.DBT
 import Database.PostgreSQL.Entity.Types (CamelToSnake, FieldModifiers, GenericEntity, PrimaryKey, Schema, TableName)

@@ -1,6 +1,6 @@
 module Pages.ShareSpec (spec) where
 
-import Data.Aeson qualified as AE 
+import Data.Aeson qualified as AE
 import Data.Aeson.QQ (aesonQQ)
 import Data.Time (defaultTimeLocale, formatTime, getCurrentTime)
 import Data.UUID qualified as UUID

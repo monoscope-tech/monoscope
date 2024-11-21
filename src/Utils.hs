@@ -51,7 +51,7 @@ import Data.Aeson.KeyMap qualified as AEK
 import Data.Char (isDigit)
 import Data.Digest.XXHash (xxHash)
 import Data.HashMap.Strict qualified as HM
-import Data.List qualified as L 
+import Data.List qualified as L
 import Data.Scientific (toBoundedInteger)
 import Data.Text qualified as T
 import Data.Time (NominalDiffTime, ZonedTime, defaultTimeLocale, parseTimeM)

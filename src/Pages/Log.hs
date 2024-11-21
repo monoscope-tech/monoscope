@@ -13,7 +13,7 @@ import Data.Aeson qualified as AE
 import Data.Containers.ListUtils (nubOrd)
 import Data.Default (def)
 import Data.HashMap.Strict qualified as HM
-import Data.List qualified as L 
+import Data.List qualified as L
 import Data.Text qualified as T
 import Data.Time (UTCTime, diffUTCTime, zonedTimeToUTC)
 import Data.Time.Format.ISO8601 (iso8601Show)

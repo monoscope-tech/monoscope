@@ -2,7 +2,7 @@
 
 module Pkg.Components.TimePicker (parseTimeRange, timepicker_, TimePickerP (..)) where
 
-import Data.List qualified as L 
+import Data.List qualified as L
 import Data.Time (UTCTime, addUTCTime, defaultTimeLocale, formatTime, secondsToNominalDiffTime)
 import Data.Time.Format.ISO8601 (iso8601ParseM)
 import Lucid

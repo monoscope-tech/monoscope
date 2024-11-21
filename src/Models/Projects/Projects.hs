@@ -22,7 +22,7 @@ module Models.Projects.Projects (
 )
 where
 
-import Data.Aeson qualified as AE 
+import Data.Aeson qualified as AE
 import Data.Default
 import Data.Time (ZonedTime)
 import Data.UUID qualified as UUID

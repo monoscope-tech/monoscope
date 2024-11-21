@@ -17,7 +17,7 @@ where
 
 import Data.Aeson qualified as AE
 import Data.Default
-import Data.List qualified as L 
+import Data.List qualified as L
 import Data.Text qualified as T
 import Data.Time (ZonedTime)
 import Data.UUID qualified as UUID

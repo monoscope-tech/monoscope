@@ -20,7 +20,7 @@ where
 
 import Data.Aeson qualified as AE
 import Data.ByteString.Base16 qualified as B16
-import Data.Text qualified as T 
+import Data.Text qualified as T
 import Data.Time (UTCTime)
 import Data.UUID (UUID)
 import Data.UUID qualified as UUID

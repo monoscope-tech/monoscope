@@ -7,24 +7,24 @@ module Models.Apis.Reports (
   getReportById,
 ) where
 
+import Data.Aeson qualified as AE
 import Data.Default (Default)
 import Data.Default.Instances ()
 import Data.Time (ZonedTime)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
+import Database.PostgreSQL.Entity (insert, selectById)
 import Database.PostgreSQL.Entity.DBT (QueryNature (..), query)
 import Database.PostgreSQL.Entity.Types
+import Database.PostgreSQL.Simple hiding (execute, query)
+import Database.PostgreSQL.Simple.FromField
 import Database.PostgreSQL.Simple.SqlQQ (sql)
+import Database.PostgreSQL.Simple.ToField
+import Database.PostgreSQL.Transact (DBT)
 import GHC.Records (HasField (getField))
 import Models.Projects.Projects qualified as Projects
 import Relude
 import Web.HttpApiData (FromHttpApiData)
-import Data.Aeson qualified as AE
-import Database.PostgreSQL.Entity (insert, selectById)
-import Database.PostgreSQL.Simple hiding (execute, query)
-import Database.PostgreSQL.Simple.FromField
-import Database.PostgreSQL.Simple.ToField
-import Database.PostgreSQL.Transact (DBT)
 
 
 newtype ReportId = ReportId {reportId :: UUID.UUID}

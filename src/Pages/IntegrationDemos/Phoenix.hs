@@ -1,9 +1,9 @@
 module Pages.IntegrationDemos.Phoenix (phoenixGuide) where
 
-import Relude
 import Lucid
 import NeatInterpolation
 import Pkg.Components
+import Relude
 
 
 phoenixGuide :: Text -> Html ()

@@ -11,7 +11,7 @@ module Models.Users.Users (
   addUserToAllProjects,
 ) where
 
-import Data.Aeson qualified as AE 
+import Data.Aeson qualified as AE
 import Data.CaseInsensitive qualified as CI
 import Data.Default
 import Data.Default.Instances ()

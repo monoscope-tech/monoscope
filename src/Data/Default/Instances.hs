@@ -4,8 +4,8 @@ import Data.Aeson.Types qualified as AET
 import Data.CaseInsensitive (CI, FoldCase)
 import Data.CaseInsensitive qualified as CI (mk)
 import Data.Default
-import Data.Text.Lazy qualified as TL 
 import Data.Text qualified as T
+import Data.Text.Lazy qualified as TL
 import Data.Time (UTCTime, ZonedTime)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V

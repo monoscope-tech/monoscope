@@ -32,7 +32,7 @@ module Data.Effectful.Wreq (
   Patchable,
 ) where
 
-import Data.Aeson qualified as AE 
+import Data.Aeson qualified as AE
 import Data.ByteString.Lazy qualified as LBS
 import Data.CaseInsensitive qualified as CI
 import Effectful

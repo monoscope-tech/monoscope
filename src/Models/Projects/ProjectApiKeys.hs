@@ -23,7 +23,7 @@ import Data.Cache qualified as Cache
 import Data.Default (Default)
 import Data.Time (UTCTime)
 import Data.UUID qualified as UUID
-import Data.Vector qualified as V 
+import Data.Vector qualified as V
 import Database.PostgreSQL.Entity
 import Database.PostgreSQL.Entity.DBT (QueryNature (..), execute, query, queryOne, withPool)
 import Database.PostgreSQL.Entity.Types
