@@ -1,8 +1,6 @@
 module Pages.Specification.DocumentationSpec (spec) where
 
-import Data.Aeson (
-  decodeStrict,
- )
+import Data.Aeson qualified as AE
 import Data.UUID qualified as UUID
 import Models.Projects.Projects qualified as Projects
 import NeatInterpolation
@@ -29,8 +27,8 @@ spec = aroundAll withTestResources do
     it "should get swagger" \TestResources{..} -> do
       (PageCtx _ (Documentation.DocumentationGet pid swaggers swaggerID jsonString)) <-
         toServantResponse trATCtx trSessAndHeader trLogger $ Documentation.documentationGetH testPid Nothing Nothing
-      let jsonVal = decodeStrict (encodeUtf8 jsonString)
-      let swagVal = decodeStrict (encodeUtf8 swg1)
+      let jsonVal = AE.decodeStrict (encodeUtf8 jsonString)
+      let swagVal = AE.decodeStrict (encodeUtf8 swg1)
       swagVal `shouldBe` jsonVal
       pid `shouldBe` testPid
       length swaggers `shouldBe` 1

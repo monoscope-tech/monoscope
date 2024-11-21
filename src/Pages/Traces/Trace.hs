@@ -1,6 +1,5 @@
 module Pages.Traces.Trace (traceH, TraceDetailsGet (..)) where
 
-import Data.Aeson ((.=))
 import Data.Aeson qualified as AE
 import Data.Aeson.Key qualified as AEKey
 import Data.HashMap.Internal.Strict qualified as HM
@@ -211,7 +210,7 @@ tracePage p = do
   let spanJson = decodeUtf8 $ AE.encode $ p.spanRecords <&> getSpanJson
   let waterFallJson = decodeUtf8 $ AE.encode rootSpans
 
-  let colorsJson = decodeUtf8 $ AE.encode $ AE.object [AEKey.fromText k .= v | (k, v) <- HM.toList serviceColors]
+  let colorsJson = decodeUtf8 $ AE.encode $ AE.object [AEKey.fromText k AE..= v | (k, v) <- HM.toList serviceColors]
   let trId = traceItem.traceId
   script_
     [text|
@@ -237,13 +236,13 @@ tracePage p = do
 getSpanJson :: Telemetry.SpanRecord -> AE.Value
 getSpanJson sp =
   AE.object
-    [ "span_id" .= sp.spanId
-    , "name" .= sp.spanName
-    , "value" .= sp.spanDurationNs
-    , "start" .= start
-    , "parent_id" .= sp.parentSpanId
-    , "service_name" .= getServiceName sp
-    , "has_errors" .= spanHasErrors sp
+    [ "span_id" AE..= sp.spanId
+    , "name" AE..= sp.spanName
+    , "value" AE..= sp.spanDurationNs
+    , "start" AE..= start
+    , "parent_id" AE..= sp.parentSpanId
+    , "service_name" AE..= getServiceName sp
+    , "has_errors" AE..= spanHasErrors sp
     ]
   where
     start = utcTimeToNanoseconds sp.startTime

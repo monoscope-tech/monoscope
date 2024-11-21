@@ -3,7 +3,6 @@
 module Pkg.Mail (sendSlackMessage, sendPostmarkEmail, sendDiscordNotif) where
 
 import Control.Lens ((.~))
-import Data.Aeson (KeyValue ((.=)), object)
 import Data.Aeson qualified as AE
 import Data.Aeson.QQ (aesonQQ)
 import Data.Pool ()
@@ -66,7 +65,7 @@ sendSlackMessage pid message = do
 
 sendDiscordNotif :: IOE :> es => Text -> Text -> Eff es ()
 sendDiscordNotif webhookUrl message = do
-  let msg = object ["content" .= message]
+  let msg = AE.object ["content" AE..= message]
   let opts = defaults & header "Content-Type" .~ ["application/json"]
   response <- liftIO $ postWith opts (toString webhookUrl) msg
   pass

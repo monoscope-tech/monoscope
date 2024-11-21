@@ -16,7 +16,6 @@ where
 
 import BackgroundJobs qualified
 import Control.Lens ((.~), (^.))
-import Data.Aeson (encode)
 import Data.Aeson qualified as AE
 import Data.Base64.Types qualified as B64
 import Data.ByteString.Base64 qualified as B64
@@ -488,8 +487,8 @@ createProjectBody sess envCfg isUpdate cp cpe = do
              timezoneSelect.appendChild(option);
            });
             |]
-            let lmnUrls = decodeUtf8 $ encode $ lemonSqueezyUrls <&> (<> if cp.isUpdate then "&checkout[custom][project_id]=" <> cp.projectId else "")
-            let lmnUrlAnnual = decodeUtf8 $ encode $ lemonSqueezyUrlsAnnual <&> (<> if cp.isUpdate then "&checkout[custom][project_id]=" <> cp.projectId else "")
+            let lmnUrls = decodeUtf8 $ AE.encode $ lemonSqueezyUrls <&> (<> if cp.isUpdate then "&checkout[custom][project_id]=" <> cp.projectId else "")
+            let lmnUrlAnnual = decodeUtf8 $ AE.encode $ lemonSqueezyUrlsAnnual <&> (<> if cp.isUpdate then "&checkout[custom][project_id]=" <> cp.projectId else "")
             script_
               [text|
                const price_indicator = document.querySelector("#price_range");

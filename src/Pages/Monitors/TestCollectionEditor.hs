@@ -13,7 +13,6 @@ module Pages.Monitors.TestCollectionEditor (
 )
 where
 
-import Data.Aeson (encode)
 import Data.Aeson qualified as AE
 import Data.Default (def)
 import Data.Map qualified as Map
@@ -271,7 +270,7 @@ timelineSteps pid col =
 
 nameOfTest_ :: Text -> V.Vector Text -> Html ()
 nameOfTest_ name tags = do
-  let tgs = decodeUtf8 $ encode $ V.toList tags
+  let tgs = decodeUtf8 $ AE.encode $ V.toList tags
   div_ [class_ "form-control w-full p-4 bg-slate-100 rounded-2xl"] do
     div_ [class_ "flex flex-col rounded-xl p-4 bg-slate-50"] do
       label_ [class_ "label"] $ span_ [class_ "text-slate-500 text-sm font-semibold"] "Name"
@@ -304,7 +303,7 @@ defineTestSteps_ colM = do
 
 collectionPage :: Projects.ProjectId -> Maybe Testing.Collection -> Maybe (V.Vector Testing.StepResult) -> String -> Html ()
 collectionPage pid colM col_rn respJson = do
-  let collectionStepsJSON = encode $ maybe (Testing.CollectionSteps []) (.collectionSteps) colM
+  let collectionStepsJSON = AE.encode $ maybe (Testing.CollectionSteps []) (.collectionSteps) colM
   let (scheduled, scheduleNumber, scheduleNumberUnit) =
         maybe
           (True, "1", "minutes")
@@ -460,7 +459,7 @@ variablesDialog pid colM = do
               ]
               do
                 faSprite_ "trash" "regular" "w-3 h-3 stroke-red-500"
-      let varsJson = decodeUtf8 $ encode $ V.toList vars
+      let varsJson = decodeUtf8 $ AE.encode $ V.toList vars
       script_
         [text|
           window.testVariables  = $varsJson;
