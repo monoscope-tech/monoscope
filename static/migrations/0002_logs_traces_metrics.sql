@@ -69,3 +69,28 @@ CREATE INDEX idx_traces_span_name ON telemetry.spans(project_id, span_name, time
 CREATE INDEX idx_traces_status ON telemetry.spans(project_id, status, timestamp DESC);
 CREATE INDEX idx_traces_kind ON telemetry.spans(project_id, kind, timestamp DESC);
 CREATE INDEX idx_traces_resource_service_name ON telemetry.spans (project_id, (resource->>'service.name'), timestamp DESC);
+
+
+CREATE TABLE IF NOT EXISTS telemetry.metrics (
+    id UUID NOT NULL DEFAULT gen_random_uuid(),
+    project_id UUID NOT NULL REFERENCES projects.projects (id) ON DELETE CASCADE,
+    timestamp TIMESTAMPTZ NOT NULL,
+    metric_time TIMESTAMPTZ NOT NULL,
+    metric_name TEXT NOT NULL,
+    metric_type TEXT NOT NULL,
+    attributes JSONB,
+    resource JSONB,
+    instrumentation_scope JSONB,
+    metric_value JSONB,
+    exemplars  JSONB,
+    flags JSONB,
+    PRIMARY KEY(project_id, timestamp, id)
+);
+
+SELECT create_hypertable('telemetry.metrics', by_range('timestamp', INTERVAL '1 hours'), migrate_data => true);
+
+SELECT add_retention_policy('telemetry.metrics', INTERVAL '3 days', true);
+
+CREATE INDEX idx_metrics_project_id_metric_name ON telemetry.metrics (project_id, metric_name, timestamp DESC);
+CREATE INDEX idx_metrics_project_id_attributes ON telemetry.metrics (project_id, (attributes->>'key'), timestamp DESC);
+CREATE INDEX idx_metrics_project_id_resource_service_name ON telemetry.metrics (project_id, (resource->>'service.name'), timestamp DESC);

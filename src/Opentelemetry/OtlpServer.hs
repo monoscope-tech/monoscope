@@ -38,9 +38,11 @@ import Network.GRPC.HighLevel.Generated as HsGRPC
 import Network.GRPC.HighLevel.Server as HsGRPC hiding (serverLoop)
 import Network.GRPC.HighLevel.Server.Unregistered as HsGRPC (serverLoop)
 import Opentelemetry.Proto.Collector.Logs.V1.LogsService
+import Opentelemetry.Proto.Collector.Metrics.V1.MetricsService (ExportMetricsServiceRequest (ExportMetricsServiceRequest), ExportMetricsServiceResponse (ExportMetricsServiceResponse))
 import Opentelemetry.Proto.Collector.Trace.V1.TraceService
 import Opentelemetry.Proto.Common.V1.Common
 import Opentelemetry.Proto.Logs.V1.Logs
+import Opentelemetry.Proto.Metrics.V1.Metrics (ResourceMetrics (..), ScopeMetrics (..))
 import Opentelemetry.Proto.Resource.V1.Resource
 import Opentelemetry.Proto.Trace.V1.Trace (
   ResourceSpans (resourceSpansResource, resourceSpansScopeSpans),
@@ -68,8 +70,7 @@ getSpanAttributeValue :: Text -> V.Vector ResourceSpans -> Maybe Text
 getSpanAttributeValue attribute rss = listToMaybe $ V.toList $ V.mapMaybe (\rs -> getResourceAttr rs <|> getSpanAttr rs) rss
   where
     getResourceAttr rs = rs.resourceSpansResource >>= getAttr . resourceAttributes
-    getSpanAttr rs = rs.resourceSpansScopeSpans & listToMaybe . V.toList . V.mapMaybe (getAttr . spanAttributes) . V.concatMap (scopeSpansSpans)
-
+    getSpanAttr rs = rs.resourceSpansScopeSpans & listToMaybe . V.toList . V.mapMaybe (getAttr . spanAttributes) . V.concatMap scopeSpansSpans
     getAttr :: V.Vector KeyValue -> Maybe Text
     getAttr = V.find ((== attribute) . toText . keyValueKey) >=> keyValueValue >=> anyValueValue >=> anyValueToString >=> (Just . toText)
 
@@ -77,13 +78,16 @@ getSpanAttributeValue attribute rss = listToMaybe $ V.toList $ V.mapMaybe (\rs -
 getLogAttributeValue :: Text -> V.Vector ResourceLogs -> Maybe Text
 getLogAttributeValue attribute rls = listToMaybe $ V.toList $ V.mapMaybe (\rl -> getResourceAttr rl <|> getLogAttr rl) rls
   where
-    -- Extract attribute from resource-level logs
     getResourceAttr rl = rl.resourceLogsResource >>= getAttr . resourceAttributes
+    getLogAttr rl = rl.resourceLogsScopeLogs & listToMaybe . V.toList . V.mapMaybe (getAttr . logRecordAttributes) . V.concatMap scopeLogsLogRecords
+    getAttr :: V.Vector KeyValue -> Maybe Text
+    getAttr = V.find ((== attribute) . toText . keyValueKey) >=> keyValueValue >=> anyValueValue >=> anyValueToString >=> (Just . toText)
 
-    -- Extract attribute from log records
-    getLogAttr rl = rl.resourceLogsScopeLogs & listToMaybe . V.toList . V.mapMaybe (getAttr . logRecordAttributes) . V.concatMap (scopeLogsLogRecords)
 
-    -- Helper function to extract attribute values from KeyValue pairs
+getMetricAttributeValue :: Text -> V.Vector ResourceMetrics -> Maybe Text
+getMetricAttributeValue attribute rms = listToMaybe $ V.toList $ V.mapMaybe getResourceAttr rms
+  where
+    getResourceAttr rm = rm.resourceMetricsResource >>= getAttr . resourceAttributes
     getAttr :: V.Vector KeyValue -> Maybe Text
     getAttr = V.find ((== attribute) . toText . keyValueKey) >=> keyValueValue >=> anyValueValue >=> anyValueToString >=> (Just . toText)
 
@@ -283,7 +287,6 @@ convertSpanRecord pid resource scope sp =
 --           }
 --     )
 
-
 traceServiceExportH
   :: Log.Logger
   -> AuthContext
@@ -299,6 +302,21 @@ traceServiceExportH appLogger appCtx (ServerNormalRequest _meta (ExportTraceServ
     _ <- ProcessMessage.processRequestMessages $ V.toList $ V.catMaybes apitoolkitSpans <&> ("",)
     Telemetry.bulkInsertSpans $ V.filter (\s -> s.spanName /= "apitoolkit-http-span") spanRecords
   return (ServerNormalResponse (ExportTraceServiceResponse Nothing) mempty StatusOk "")
+
+
+metricsServiceExportH
+  :: Log.Logger
+  -> AuthContext
+  -> ServerRequest 'Normal ExportMetricsServiceRequest ExportMetricsServiceResponse
+  -> IO (ServerResponse 'Normal ExportMetricsServiceResponse)
+metricsServiceExportH appLogger appCtx (ServerNormalRequest _meta (ExportMetricsServiceRequest req)) = do
+  traceShowM req
+  _ <- runBackground appLogger appCtx do
+    let projectKey = fromMaybe (error "Missing project key") $ getMetricAttributeValue "at-project-key" req
+    projectIdM <- ProjectApiKeys.getProjectIdByApiKey projectKey
+    let pid = fromMaybe (error $ "project API Key is invalid pid") projectIdM
+    pass
+  return (ServerNormalResponse (ExportMetricsServiceResponse Nothing) mempty StatusOk "")
 
 
 mapHTTPSpan :: Telemetry.SpanRecord -> Maybe RequestMessage
@@ -468,6 +486,9 @@ otlpServer opts appLogger appCtx =
           , HsGRPC.UnaryHandler
               (HsGRPC.MethodName "/opentelemetry.proto.collector.trace.v1.TraceService/Export")
               (HsGRPC.convertGeneratedServerHandler $ traceServiceExportH appLogger appCtx)
+          , HsGRPC.UnaryHandler
+              (HsGRPC.MethodName "/opentelemetry.proto.collector.metrics.v1.MetricsService/Export")
+              (HsGRPC.convertGeneratedServerHandler $ metricsServiceExportH appLogger appCtx)
           ]
       , HsGRPC.optClientStreamHandlers = []
       , HsGRPC.optServerStreamHandlers = []

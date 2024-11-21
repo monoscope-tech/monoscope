@@ -27,7 +27,10 @@ import Data.UUID (UUID)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity.DBT (QueryNature (..), executeMany, query, queryOne)
-import Database.PostgreSQL.Simple (FromRow, ResultError (..), ToRow)
+import Database.PostgreSQL.Simple (ResultError (..))
+import Database.PostgreSQL.Simple.FromRow
+import Database.PostgreSQL.Simple.ToRow
+
 import Database.PostgreSQL.Simple.FromField (FromField (..), fromField, returnError)
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
@@ -38,6 +41,7 @@ import Effectful
 import Effectful.PostgreSQL.Transact.Effect (DB, dbtToEff)
 import GHC.TypeLits
 import Models.Projects.Projects qualified as Projects
+import Opentelemetry.Proto.Metrics.V1.Metrics (MetricData (MetricDataExponentialHistogram))
 import Relude
 import Relude.Unsafe qualified as Unsafe
 
@@ -105,17 +109,6 @@ data LogRecord = LogRecord
   deriving anyclass (NFData, FromRow)
 
 
-instance AE.FromJSON ByteString where
-  parseJSON = AE.withText "ByteString" $ \t ->
-    case B16.decode (TE.encodeUtf8 t) of
-      Right bs -> return bs
-      Left err -> fail $ "Invalid hex-encoded ByteString: " ++ err
-
-
-instance AE.ToJSON ByteString where
-  toJSON = AE.String . TE.decodeUtf8 . B16.encode
-
-
 data SpanRecord = SpanRecord
   { uSpandId :: Maybe UUID
   , projectId :: UUID
@@ -165,6 +158,109 @@ data SpanLink = SpanLink
   deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake SpanLink
   deriving anyclass (NFData, FromRow, ToRow)
   deriving (ToField, FromField) via Aeson SpanLink
+
+
+data MetricRecord = MetricRecord
+  { metricId :: UUID
+  , projectId :: UUID
+  , metricName :: Text
+  , metricType :: MetricType
+  , metricUnit :: Maybe Text
+  , timestamp :: UTCTime
+  , metricTime :: UTCTime
+  , attributes :: AE.Value
+  , resource :: AE.Value
+  , instrumentationScope :: AE.Value
+  , metricValue :: MetricValue
+  , exemplars :: AE.Value
+  , flags :: Int
+  }
+  deriving (Show, Generic)
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake MetricRecord
+
+
+data MetricValue
+  = GaugeValue GaugeSum
+  | SumValue GaugeSum
+  | HistogramValue Histogram
+  | SummaryValue Summary
+  | ExponentialHistogramValue ExponentialHistogram
+  deriving (Show, Generic)
+  deriving (AE.FromJSON, AE.ToJSON)
+
+
+newtype GaugeSum = GaugeSum
+  { value :: Double
+  }
+  deriving (Show, Generic)
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake GaugeSum
+
+
+data Histogram = Histogram
+  { sum :: Maybe Double
+  , count :: Maybe Int
+  , bucketCounts :: V.Vector Int
+  , explicitBounds :: V.Vector Int
+  , pointMin :: Double
+  , pointMax :: Double
+  }
+  deriving (Show, Generic)
+  deriving (AE.FromJSON, AE.ToJSON)
+
+
+data ExponentialHistogram = ExponentialHistogram
+  { sum :: Maybe Double
+  , count :: Maybe Int
+  , pointMin :: Double
+  , pointMax :: Double
+  , zeroCount :: Int
+  , scale :: Int
+  , pointNegative :: V.Vector EHBucket
+  , pointPositive :: V.Vector EHBucket
+  , zeroThreshold :: Double
+  }
+  deriving (Show, Generic)
+  deriving (AE.FromJSON, AE.ToJSON)
+
+
+data EHBucket = EHBucket
+  { bucketOffset :: Int
+  , bucketCounts :: V.Vector Int
+  }
+  deriving (Show, Generic)
+  deriving (AE.FromJSON, AE.ToJSON)
+
+
+data Summary = Summary
+  { sum :: Maybe Double
+  , count :: Maybe Int
+  , quantiles :: V.Vector Quantile
+  }
+  deriving (Show, Generic)
+  deriving (AE.FromJSON, AE.ToJSON)
+
+
+data Quantile = Quantile
+  { quantile :: Double
+  , value :: Double
+  }
+  deriving (Show, Generic)
+  deriving (AE.FromJSON, AE.ToJSON)
+
+
+data Exemplar = Exemplar
+  { value :: Double
+  , timestamp :: UTCTime
+  , attributes :: AE.Value
+  }
+  deriving (Show, Generic)
+  deriving (AE.FromJSON, AE.ToJSON)
+
+
+data MetricType = MTGauge | MTSum | MTHistogram | MTExponentialHistogram | MTSummary
+  deriving (Show, Generic, Read)
+  deriving (AE.FromJSON, AE.ToJSON, NFData)
+  deriving (ToField, FromField) via WrappedEnum "MT" MetricType
 
 
 getTraceDetails :: DB :> es => Projects.ProjectId -> Text -> Eff es (Maybe Trace)
