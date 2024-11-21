@@ -102,7 +102,7 @@ sqlFromQueryComponents sqlCfg qc =
         _ -> where'
       groupByClause = if null qc.groupByClause then "" else " GROUP BY " <> T.intercalate "," qc.groupByClause
       dateRangeStr = case sqlCfg.dateRange of
-        (Nothing, Just b) -> "AND " <> timestampCol <> " BETWEEN NOW() AND '" <> fmtTime b <> "'"
+        (Nothing, Just b) -> "AND " <> timestampCol <> " BETWEEN '" <> fmtTime b <> "' AND NOW() "
         (Just a, Just b) -> "AND " <> timestampCol <> " BETWEEN '" <> fmtTime a <> "' AND '" <> fmtTime b <> "'"
         _ -> ""
 

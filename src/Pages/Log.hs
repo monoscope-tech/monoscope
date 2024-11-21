@@ -16,7 +16,7 @@ import Data.Default (def)
 import Data.HashMap.Strict qualified as HM
 import Data.List (elemIndex)
 import Data.Text qualified as T
-import Data.Time (UTCTime, diffUTCTime, getCurrentTime, zonedTimeToUTC)
+import Data.Time (UTCTime, diffUTCTime, zonedTimeToUTC)
 import Data.Vector qualified as V
 import Data.Vector qualified as Vector
 import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
@@ -42,6 +42,7 @@ import Relude.Unsafe qualified as Unsafe
 import System.Types
 import Text.Megaparsec (parseMaybe)
 import Utils
+import Data.Time.Format.ISO8601 (iso8601Show)
 
 
 -- $setup
@@ -81,16 +82,20 @@ apiLogH pid queryM queryASTM cols' cursorM' sinceM fromM toM layoutM sourceM tar
           { sessM = Just sess.persistentSession
           , currProject = Just project
           , pageTitle = "Explorer"
-          , pageActions = Just $ Components.timepicker_ (Just "log_explorer_form") currentRange
+          , pageActions = Just $ div_ [class_ "inline-flex gap-2"] do
+              label_ [class_ "cursor-pointer bg-slate-100 border border-slate-300 rounded-xl flex"] do
+                input_ [type_ "checkbox", id_ "streamLiveData", class_ "hidden"]
+                span_ [class_ "group-has-[#streamLiveData:checked]/pg:flex hidden py-2 px-3 items-center", term "data-tippy-content" "pause live data stream"] $ faSprite_ "pause" "solid" "h-4 w-4"
+                span_ [class_ "group-has-[#streamLiveData:checked]/pg:hidden flex  py-2 px-3 items-center", term "data-tippy-content" "stream live data"] $ faSprite_ "play" "regular" "h-4 w-4"
+              Components.timepicker_ (Just "log_explorer_form") currentRange
+              a_ [class_ "cursor-pointer bg-slate-100 py-2 px-3 border border-slate-300 rounded-xl", [__|on click htmx.trigger('#log_explorer_form', 'submit') |], term "data-tippy-content" "refresh"] $ faSprite_ "arrows-rotate" "regular" "h-4 w-4"
           , navTabs = Just $ div_ [class_ "tabs tabs-boxed tabs-md tabs-outline items-center bg-slate-200 text-slate-700"] do
               a_ [onclick_ "window.setQueryParamAndReload('source', 'requests')", role_ "tab", class_ $ "tab py-1.5 !h-auto " <> if source == "requests" then "tab-active" else ""] "Requests"
               a_ [onclick_ "window.setQueryParamAndReload('source', 'logs')", role_ "tab", class_ $ "tab py-1.5 !h-auto " <> if source == "logs" then "tab-active" else ""] "Logs"
               a_ [onclick_ "window.setQueryParamAndReload('source', 'spans')", role_ "tab", class_ $ "tab py-1.5 !h-auto " <> if source == "spans" then "tab-active" else ""] "Traces"
               -- a_ [onclick_ "window.setQueryParamAndReload('source', 'metrics')", role_ "tab", class_ $ "tab py-1.5 !h-auto " <> if source == "metrics" then "tab-active" else ""] "Metrics"
           }
-  currTime <- liftIO getCurrentTime
-  let createdUTc = zonedTimeToUTC project.createdAt
-      (days, hours, minutes, _seconds) = convertToDHMS $ diffUTCTime currTime createdUTc
+  let (days, hours, minutes, _seconds) = convertToDHMS $ diffUTCTime now (zonedTimeToUTC project.createdAt)
       daysLeft =
         if days >= 0 && project.paymentPlan /= "Free"
           then Just $ show days <> " days, " <> show hours <> " hours, " <> show minutes <> " minutes"
@@ -108,6 +113,7 @@ apiLogH pid queryM queryASTM cols' cursorM' sinceM fromM toM layoutM sourceM tar
             if source == "spans"
               then V.map (\v -> lookupVecTextByKey v colIdxMap "latency_breakdown") requestVecs
               else []
+          latestLogsURL = RequestDumps.requestDumpLogUrlPath pid queryM cols' Nothing Nothing Nothing (Just $ toText . iso8601Show $ now) (Just "loadmore") source
           nextLogsURL = RequestDumps.requestDumpLogUrlPath pid queryM cols' reqLastCreatedAtM sinceM fromM toM (Just "loadmore") source
           resetLogsURL = RequestDumps.requestDumpLogUrlPath pid queryM cols' Nothing Nothing Nothing Nothing Nothing source
       childSpans <- Telemetry.getChildSpans pid (V.catMaybes childSpanIds)
@@ -118,6 +124,7 @@ apiLogH pid queryM queryASTM cols' cursorM' sinceM fromM toM layoutM sourceM tar
               , requestVecs
               , cols = curatedColNames
               , colIdxMap
+              , latestLogsURL
               , nextLogsURL
               , resetLogsURL
               , currentRange
@@ -222,6 +229,7 @@ data ApiLogsPageData = ApiLogsPageData
   , requestVecs :: V.Vector (V.Vector Value)
   , cols :: [Text]
   , colIdxMap :: HM.HashMap Text Int
+  , latestLogsURL :: Text
   , nextLogsURL :: Text
   , resetLogsURL :: Text
   , currentRange :: Maybe Text
@@ -265,7 +273,7 @@ apiLogsPage page = do
     div_ [] do
       logQueryBox_ page.pid page.currentRange page.source page.targetSpans page.queryAST
 
-      div_ [class_ "flex flex-row gap-4 mt-3"] do
+      div_ [class_ "flex flex-row gap-4 mt-3 group-has-[.toggle-chart:checked]/pg:hidden"] do
         renderChart page.pid "reqsChartsECP" "All requests" (Just $ fmt (commaizeF page.resultCount)) Nothing page.source ""
         unless (page.source == "logs") $ renderChart page.pid "reqsChartsErrP" "Errors" Nothing Nothing page.source ", theme:'roma'"
         unless (page.source == "logs") $ renderChart page.pid "reqsChartsLatP" "Latency" Nothing Nothing page.source ", chart_type:'LineCT', group_by:'GBDurationPercentile'"
@@ -314,7 +322,7 @@ renderChart :: Projects.ProjectId -> Text -> Text -> Maybe Text -> Maybe Text ->
 renderChart pid chartId chartTitle primaryUnitM rateM source extraHxVals = do
   let chartAspectRatio "logs" = "aspect-[12/1]"
       chartAspectRatio _ = "aspect-[3/1]"
-  div_ [class_ "flex-1 space-y-1.5"] do
+  div_ [class_ "flex-1 space-y-1.5 overflow-x-hidden flex-grow"] do
     div_ [class_ "leading-none flex justify-between items-center"] do
       div_ [class_ "inline-flex gap-3 items-center"] do
         span_ $ toHtml chartTitle
@@ -322,11 +330,10 @@ renderChart pid chartId chartTitle primaryUnitM rateM source extraHxVals = do
         whenJust rateM \rate -> span_ [class_ "text-slate-300"] (toHtml rate)
       label_ [class_ "rounded-full border border-slate-300 p-2 inline-flex cursor-pointer"] $ faSprite_ "up-right-and-down-left-from-center" "regular" "w-3 h-3"
     div_
-      [ id_ chartId
-      , class_ $ "rounded-2xl border border-slate-200 log-chart p-3 group-has-[.toggle-chart:checked]/pg:hidden " <> (chartAspectRatio source)
+      [ class_ $ "rounded-2xl border border-slate-200 log-chart p-3  " <> (chartAspectRatio source)
       , hxGet_ $ "/charts_html?id=" <> chartId <> "&show_legend=false&pid=" <> pid.toText
       , hxTrigger_ "intersect, htmx:beforeRequest from:#log_explorer_form"
-      , hxVals_ $ "js:{query_raw:window.getQueryFromEditor('" <> chartId <> "'), since: params().since, from: params().from, to:params().to, cols:params().cols, layout:'all', source: params().source" <> extraHxVals <> "}"
+      , hxVals_ $ "js:{queryAST:window.getQueryFromEditor('" <> chartId <> "'), since: params().since, from: params().from, to:params().to, cols:params().cols, layout:'all', source: params().source" <> extraHxVals <> "}"
       , hxSwap_ "innerHTML"
       ]
       ""
@@ -334,8 +341,9 @@ renderChart pid chartId chartTitle primaryUnitM rateM source extraHxVals = do
 
 resultTableAndMeta_ :: ApiLogsPageData -> Html ()
 resultTableAndMeta_ page =
-  div_ [class_ "relative overflow-y-scroll overflow-x-hidden h-full w-full pb-16"]
-    $ resultTable_ page True
+  div_ [class_ "relative overflow-y-scroll overflow-x-hidden h-full w-full pb-16", id_ "resultTableScroller"] do
+    resultTable_ page True
+    script_ [text|document.getElementById("resultTableScroller").scrollTop = document.querySelector("#resultTableScroller tr").offsetHeight;|]
 
 
 resultTable_ :: ApiLogsPageData -> Bool -> Html ()
@@ -360,7 +368,29 @@ resultTable_ page mainLog = table_
           else section_ [class_ "w-max mx-auto"] $ p_ "This request has no outgoing requests yet."
     unless (null page.requestVecs) do
       thead_ $ tr_ [class_ "text-slate-700 border-b font-medium"] $ forM_ page.cols $ logTableHeading_ page.pid isLogEventB
-      tbody_ [id_ "w-full log-item-table-body [content-visibility:auto]"] $ logItemRows_ page.pid page.requestVecs page.cols page.colIdxMap page.nextLogsURL page.source page.childSpans
+      tbody_ [id_ "log-item-table-body", class_ "w-full log-item-table-body [content-visibility:auto]"] do
+        script_ [text|
+          window.latestLogsURLQueryValsFn = function(){
+              const datetime = document.querySelector('#log-item-table-body time')?.getAttribute('datetime');
+              const updatedTo = datetime
+                  ? new Date(new Date(datetime).getTime() + 1).toISOString() 
+                  : params().to;
+              return {from:params().from, to:updatedTo};
+          }|]
+        tr_
+          $ td_ [colspan_ $ show $ length page.cols]
+          $ a_
+            [ class_ "cursor-pointer inline-flex justify-center py-1 px-56 ml-36 blue-800 bg-blue-100 hover:bg-blue-200 gap-3 items-center"
+            , hxTrigger_ "click, every 1s [document.getElementById('streamLiveData').checked]"
+            , hxVals_ "js:{queryAST:window.getQueryFromEditor(), since: params().since, cols:params().cols, layout:'all', source: params().source, ...window.latestLogsURLQueryValsFn()}"
+            , hxSwap_ "afterend settle:500ms"
+            , hxGet_  $ "/p/" <> page.pid.toText <> "/log_explorer?layout=loadmore"
+            , hxTarget_ "closest tr"
+            -- using hyperscript instead of hxIndicator_ so the loader isnt distracting by showing up every second and only when clicked
+            , [__| on click remove .hidden from #loadNewIndicator on htmx:afterRequest add .hidden to #loadNewIndicator |] 
+            ]
+            (span_ [class_ "inline-block"] "check for newer results" >> span_ [id_ "loadNewIndicator", class_ "hidden loading loading-dots loading-sm inline-block pl-3"] "")
+        logItemRows_ page.pid page.requestVecs page.cols page.colIdxMap page.nextLogsURL page.source page.childSpans
 
 
 curateCols :: [Text] -> [Text] -> [Text]
@@ -402,7 +432,7 @@ logItemRows_ pid requests curatedCols colIdxMap nextLogsURL source chSpns = do
   forM_ requests \reqVec -> do
     let (logItemPath, _reqId) = fromMaybe ("", "") $ requestDumpLogItemUrlPath pid reqVec colIdxMap
     let (_, errCount, errClass) = errorClass True reqVec colIdxMap
-    tr_ [class_ "cursor-pointer overflow-hidden", [__|on click toggle .hidden on next <tr/> then toggle .expanded-log on me|]]
+    tr_ [class_ "log-row cursor-pointer overflow-hidden", [__|on click toggle .hidden on next <tr/> then toggle .expanded-log on me|]]
       $ forM_ curatedCols \c -> td_ [class_ "pl-3"] $ logItemCol_ source pid reqVec colIdxMap c chSpns
     tr_ [class_ "hidden"] do
       -- used for when a row is expanded.
@@ -506,7 +536,8 @@ renderMethod reqVec colIdxMap =
 
 renderTimestamp :: Text -> V.Vector Value -> HM.HashMap Text Int -> Html ()
 renderTimestamp key reqVec colIdxMap =
-  renderBadge "monospace whitespace-nowrap text-slate-600 " (displayTimestamp $ fromMaybe "" $ lookupVecTextByKey reqVec colIdxMap key) "timestamp"
+  time_ [class_ "monospace whitespace-nowrap text-slate-600 ", term "data-tippy-content" "timestamp", datetime_ timestamp] $ toHtml (displayTimestamp timestamp) 
+    where timestamp = maybeToMonoid $ lookupVecTextByKey reqVec colIdxMap key
 
 
 renderStatusCode :: V.Vector Value -> HM.HashMap Text Int -> Html ()

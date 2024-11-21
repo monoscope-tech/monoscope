@@ -58,6 +58,7 @@ import Pkg.Parser
 import Pkg.Parser.Stats (Section, Sources)
 import Relude hiding (many, some)
 import Witch (from)
+import Web.HttpApiData (ToHttpApiData(..))
 
 
 data SDKTypes
@@ -368,28 +369,20 @@ data RequestDumpLogItem = RequestDumpLogItem
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] RequestDumpLogItem
 
 
-requestDumpLogUrlPath
-  :: Projects.ProjectId
-  -> Maybe Text
-  -> Maybe Text
-  -> Maybe Text
-  -> Maybe Text
-  -> Maybe Text
-  -> Maybe Text
-  -> Maybe Text
-  -> Text
-  -> Text
-requestDumpLogUrlPath pid q cols cursorM sinceM fromM toM layoutM source =
-  [text|/p/$pidT/log_explorer?query=$queryT&cols=$colsT&cursor=$cursorT&since=$sinceT&from=$fromT&to=$toT&layout=$layoutT&source=$source|]
+requestDumpLogUrlPath :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Text -> Text
+requestDumpLogUrlPath pid q cols cursor since from to layout source =
+  "/p/" <> pid.toText <> "/log_explorer?" <> T.intercalate "&" params
   where
-    pidT = pid.toText
-    queryT = fromMaybe "" q
-    colsT = fromMaybe "" cols
-    cursorT = fromMaybe "" cursorM
-    sinceT = fromMaybe "" sinceM
-    fromT = fromMaybe "" fromM
-    toT = fromMaybe "" toM
-    layoutT = fromMaybe "" layoutM
+    params = catMaybes
+      [ fmap ("query=" <>) (toQueryParam <$> q)
+      , fmap ("cols=" <>) (toQueryParam <$> cols)
+      , fmap ("cursor=" <>) (toQueryParam <$> cursor)
+      , fmap ("since=" <>) (toQueryParam <$> since)
+      , fmap ("from=" <>) (toQueryParam <$> from)
+      , fmap ("to=" <>) (toQueryParam <$> to)
+      , fmap ("layout=" <>) (toQueryParam <$> layout)
+      , Just ("source=" <> toQueryParam source)
+      ]
 
 
 getRequestDumpForReports :: Projects.ProjectId -> Text -> DBT IO (V.Vector RequestForReport)

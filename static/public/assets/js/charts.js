@@ -38,7 +38,8 @@ function throughputEChart(renderAt, data, gb, showLegend, showAxes, theme) {
     }))
   }
 
-  const myChart = echarts.init(document.getElementById(renderAt), theme)
+  const chartEl = document.getElementById(renderAt);
+  const myChart = echarts.init(chartEl, theme)
   const option = {
     legend: { show: showLegend, type: 'scroll', top: 'bottom' },
     grid: {
@@ -59,6 +60,8 @@ function throughputEChart(renderAt, data, gb, showLegend, showAxes, theme) {
     option.grid.bottom = '9%'
   }
   myChart.setOption(option)
+  const resizeObserver = new ResizeObserver((_entries) => window.requestAnimationFrame(() => myChart.resize()))
+  resizeObserver.observe(chartEl);
 }
 
 function stackedChart(title, series, _data, interp, width = 800, height = 400) {
@@ -206,7 +209,7 @@ function throughputEChartTable(renderAt, categories, data, gb, showLegend, showA
 
   if (chartType == 'line') {
     option.yAxis.axisLabel = {
-      formatter: function (params) {
+      formatter: function(params) {
         if (params >= 1000) {
           return `${Math.trunc(params / 1000)}s`
         }
@@ -216,7 +219,7 @@ function throughputEChartTable(renderAt, categories, data, gb, showLegend, showA
       position: 'inside',
     }
   } else {
-    option.yAxis.axisLabel.formatter = function (params) {
+    option.yAxis.axisLabel.formatter = function(params) {
       if (params >= 1000) {
         return `${Math.trunc(params / 1000)}k`
       }
@@ -225,7 +228,7 @@ function throughputEChartTable(renderAt, categories, data, gb, showLegend, showA
   }
   if (!showAxes) {
     option.yAxis.axisLabel = {
-      formatter: function (value, index) {
+      formatter: function(value, index) {
         // Only show the label for the maximum value
         return value === maxValue ? maxValue : ''
       },
@@ -235,8 +238,11 @@ function throughputEChartTable(renderAt, categories, data, gb, showLegend, showA
     }
   }
 
-  const myChart = echarts.init(document.getElementById(renderAt), theme)
-  myChart.setOption(option)
+  const chartEl = document.getElementById(renderAt);
+  const myChart = echarts.init(chartEl, theme)
+  option.animation = false;
+  myChart.setOption(option);
+  (new ResizeObserver((_entries) => window.requestAnimationFrame(() => echarts.getInstanceByDom(chartEl).resize()))).observe(chartEl);
 }
 
 function latencyHistogram(renderAt, pc, data) {
@@ -249,7 +255,7 @@ function latencyHistogram(renderAt, pc, data) {
       scale: true,
       splitLine: { show: false },
       axisLabel: {
-        formatter: function (params) {
+        formatter: function(params) {
           if (params > 1000) {
             return `${params / 1000}s`
           }

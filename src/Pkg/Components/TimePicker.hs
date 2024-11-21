@@ -91,14 +91,12 @@ timepicker_ submitForm currentRange = div_ [class_ "relative"] do
   input_ [type_ "hidden", id_ "since_input"]
   input_ [type_ "hidden", id_ "custom_range_input"]
   a_
-    [ class_ "relative select select-md select-bordered bg-transparent"
+    [ class_ "relative p-2.5 bg-slate-100 border border-slate-300 text-base flex items-center gap-1.5 rounded-xl cursor-pointer"
     , [__| on click toggle .hidden on #timepickerBox |]
-    ]
-    $ div_ [class_ "flex items-center gap-1"] do
-      faSprite_ "clock" "regular" "h-3 w-3"
-      span_ [class_ "inline-block", id_ "currentRange"]
-        $ toHtml
-        $ fromMaybe "Last 24 Hours" currentRange
+    ] do
+      faSprite_ "calendar" "regular" "h-5 w-5"
+      span_ [class_ "inline-block leading-none", id_ "currentRange"] $ toHtml (fromMaybe "Last 24 Hours" currentRange)
+      faSprite_ "chevron-down" "regular" "h-3 w-3"
   div_ [id_ "timepickerBox", class_ "hidden absolute right-0 z-10 mt-1 rounded-md flex"] do
     div_ [class_ "relative hidden", id_ "timepickerSidebar"] $ div_ [id_ "startTime", class_ "hidden"] ""
     div_

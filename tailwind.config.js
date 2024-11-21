@@ -58,6 +58,7 @@ module.exports = {
         'gray-150': '#ecedf0',
         'slate-25': '#fbfcfd',
         'slate-150': '#e9eef4',
+        'slate-250': '#d6dee8'
       },
       gridTemplateColumns: {
         16: 'repeat(16, minmax(0, 1fr))',

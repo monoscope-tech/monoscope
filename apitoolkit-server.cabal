@@ -294,6 +294,7 @@ library
     , tmp-postgres
     , unliftio
     , unordered-containers
+    , uri-encode
     , uuid
     , valor >=1.0.0.0
     , vector

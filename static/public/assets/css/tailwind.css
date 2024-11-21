@@ -24,8 +24,10 @@
 @layer components {
   .tabs-outline :is(.tab-active, [aria-selected='true']):not(.tab-disabled):not([disabled]),
   .tabs-outline :is(.tab-active, [aria-selected='true']):not(.tab-disabled):not([disabled]):hover {
-    color: var(--fallback-bc, oklch(var(--bc) / var(--tw-text-opacity)));
     @apply bg-slate-25 shadow;
+  }
+  .tabs-outline .tab {
+    @apply !text-slate-800 font-medium;
   }
 }
 
@@ -36,7 +38,7 @@
 }
 
 html, body {
-  @apply overscroll-y-none bg-slate-25;
+  @apply overscroll-none bg-slate-25;
 }
 
 .c-scroll::-webkit-scrollbar {
@@ -438,5 +440,8 @@ html, body {
   }
   .ctable td > div {
     @apply py-1;
+  }
+  .ctable .log-row.htmx-added, .ctable .log-row.htmx-settling {
+    @apply bg-[#d6efff] transition-colors duration-300 ease-in-out;
   }
 }

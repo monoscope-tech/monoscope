@@ -344,11 +344,11 @@ sideNav sess project pageTitle menuItem hasIntegrated = aside_ [class_ "border-r
           span_ [class_ "grow hidden group-has-[#sidenav-toggle:checked]/pg:block overflow-x-hidden whitespace-nowrap truncate"] $ toHtml project.title
           faSprite_ "angles-up-down" "regular" " w-4 m-1"
       div_ [tabindex_ "0", class_ "dropdown-content z-[40]"] $ projectsDropDown project (Sessions.getProjects $ Sessions.projects sess)
-    nav_ [class_ "mt-5 flex flex-col gap-2.5"] do
+    nav_ [class_ "mt-5 flex flex-col gap-2.5 text-slate-600"] do
       -- FIXME: reeanable hx-boost hxBoost_ "true"
       menu project.id & mapM_ \(mTitle, mUrl, fIcon) -> do
         let isActive = maybe (pageTitle == mTitle) (== mTitle) menuItem
-        let activeCls = if isActive then " bg-slate-25 text-slate-950 " else "!border-transparent"
+        let activeCls = if isActive then " bg-slate-250 text-slate-800 " else "!border-transparent"
         a_
           [ href_ mUrl
           , term "data-tippy-placement" "right"

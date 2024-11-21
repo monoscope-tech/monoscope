@@ -3,6 +3,7 @@ tags
 static/public/reload.trigger
 */.stack-work
 */.hie
+.hifiles/
 */dist-newstyle
 */target
 target
