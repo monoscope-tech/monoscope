@@ -78,6 +78,8 @@ CREATE TABLE IF NOT EXISTS telemetry.metrics (
     metric_time TIMESTAMPTZ NOT NULL,
     metric_name TEXT NOT NULL,
     metric_type TEXT NOT NULL,
+    metrice_unit TEXT NOT NULL,
+    metric_description TEXT NOT NULL,
     attributes JSONB,
     resource JSONB,
     instrumentation_scope JSONB,

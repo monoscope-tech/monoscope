@@ -161,13 +161,14 @@ data SpanLink = SpanLink
 
 
 data MetricRecord = MetricRecord
-  { metricId :: UUID
+  { id :: UUID
   , projectId :: UUID
   , metricName :: Text
   , metricType :: MetricType
   , metricUnit :: Maybe Text
-  , timestamp :: UTCTime
+  , metricDescription :: Text
   , metricTime :: UTCTime
+  , timestamp :: UTCTime
   , attributes :: AE.Value
   , resource :: AE.Value
   , instrumentationScope :: AE.Value
