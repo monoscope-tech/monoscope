@@ -1,12 +1,9 @@
-name:  Deploy
-
+name: Deploy
 on:
   push:
     branches: [ master ]
-
 env:
   LANG: C.UTF-8
-
 jobs:
   runhaskell:
     name: Build and test 
@@ -22,15 +19,27 @@ jobs:
           toolchain: stable
           profile: minimal
           override: true
-      - uses: freckle/stack-cache-action@main
-      # - uses: freckle/stack-action@v5
+      - uses: actions/cache@v4
+        name: Cache ~/.cabal/packages
+        with:
+          path: ~/.cabal/packages
+          key: ${{ runner.os }}-cabal-packages-${{ hashFiles('cabal.project.freeze') }}
+      - uses: actions/cache@v4
+        name: Cache ~/.cabal/store
+        with:
+          path: ~/.cabal/store
+          key: ${{ runner.os }}-cabal-store-${{ hashFiles('cabal.project.freeze') }}
+      - uses: actions/cache@v4
+        name: Cache dist-newstyle
+        with:
+          path: dist-newstyle
+          key: ${{ runner.os }}-dist-newstyle-${{ hashFiles('cabal.project.freeze') }}
       - uses: haskell-actions/setup@v2
         with:
           ghc-version: 9.8.2
-          enable-stack: true
-          stack-version: "latest"
+          cabal-version: 'latest'
       - name: Install OpenSSL
-        run: sudo apt-get update && sudo apt-get install -y libssl-dev libgrpc-dev>=1.55  # or "brew install openssl" for macOS
+        run: sudo apt-get update && sudo apt-get install -y libssl-dev libgrpc-dev>=1.55
       - name: Set OpenSSL Paths
         run: |
           export OPENSSL_INCLUDE_DIR=$(pkg-config --variable=includedir openssl)
@@ -40,27 +49,27 @@ jobs:
         with:
           node-version: 18
       - run: npm install
-      - run: npx tailwindcss  -i ./static/public/assets/css/tailwind.css -o ./static/public/assets/css/tailwind.min.css
-      # - run: npx postcss-cli ./static/public/assets/css/tailwind.css -o ./static/public/assets/css/tailwind.min.css
-
-
-
+      - run: npx tailwindcss -i ./static/public/assets/css/tailwind.css -o ./static/public/assets/css/tailwind.min.css
       - run: make prepare-rust-interop
-      - run: stack --no-terminal build --dependencies-only
-
-      # - run: stack install --local-bin-path=. --ghc-options '-optl-static -fPIC'
-      - run: stack install --local-bin-path=. --flag pg-entity:prod --ghc-options "-O3"
-      # - run: stack test
+      - name: Update Cabal Package List
+        run: cabal update
+      - name: Build Dependencies
+        run: cabal build --only-dependencies
+      - name: Build Project
+        run: |
+          cabal install \
+            --installdir=. \
+            --install-method=copy \
+            --flags="+prod" \
+            --ghc-options="-O3"
       - name: Login to Container Registry
         uses: docker/login-action@v2
         with:
-              registry: ghcr.io
-              username: ${{ github.repository_owner }}
-              password: ${{ secrets.GH_TOKEN }}
-
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GH_TOKEN }}
       - name: Preset Image Name
         run: echo "IMAGE_URL=$(echo ghcr.io/${{ github.repository_owner }}/${{ github.event.repository.name }}:$(echo ${{ github.sha }} | cut -c1-7) | tr '[:upper:]' '[:lower:]')" >> $GITHUB_ENV
-
       - name: Build and push Docker Image
         uses: docker/build-push-action@v4
         with:
@@ -68,7 +77,6 @@ jobs:
           file: ./Dockerfile
           push: true
           tags: ${{ env.IMAGE_URL }}
-
       - name: Deploy Image to CapRrover
         uses: caprover/deploy-from-github@v1.1.2
         with:
@@ -76,6 +84,5 @@ jobs:
           app: "${{ secrets.CAPTAINROVER_APP_NAME }}"
           token: "${{ secrets.CAPTAINROVER_APP_TOKEN }}"
           image: "${{ env.IMAGE_URL }}"
-
       - name: Show Output
         run: echo ${{ steps.deploy.outputs.url }}
