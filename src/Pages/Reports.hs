@@ -281,7 +281,7 @@ reportListItems pid reports nextUrl =
     forM_ reports $ \report -> do
       let isWeeklyData = report.reportType == "weekly"
 
-      div_ [class_ $ "w-full flex flex-col"] do
+      div_ [class_ "w-full flex flex-col"] do
         div_ [class_ $ if isWeeklyData then "w-full bg-gray-100" else "w-11/12 self-end "] do
           a_
             [ class_ "w-full px-4 py-3 flex justify-between hover:bg-gray-200 cursor-pointer"

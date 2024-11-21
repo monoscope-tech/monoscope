@@ -33,7 +33,7 @@ import Pages.Monitors.TestCollectionEditor (castToStepResult)
 import Pkg.Components qualified as Components
 import Pkg.Components.ItemsList qualified as ItemsList
 import Pkg.Parser
-import PyF qualified as PyF
+import PyF qualified
 import Relude hiding (ask)
 import System.Types (ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders)
 import Text.Time.Pretty (prettyTimeAuto)
@@ -184,7 +184,7 @@ pageTabs url ov = do
 collectionDashboard :: Projects.ProjectId -> Testing.CollectionId -> ATAuthCtx (RespHeaders (PageCtx (Html ())))
 collectionDashboard pid cid = do
   (sess, project) <- Sessions.sessionAndProject pid
-  queryAST <- case (parseQueryToAST [PyF.fmt|"sdk_type == \"TestkitOutgoing\" and request_headers.X-Testkit-Collection-ID == \"{cid.toText}\""]|]) of
+  queryAST <- case parseQueryToAST [PyF.fmt|"sdk_type == \"TestkitOutgoing\" and request_headers.X-Testkit-Collection-ID == \"{cid.toText}\""]|] of
     Left err -> addErrorToast "Error Parsing Query " (Just err) >> pure []
     Right ast -> pure ast
   tableAsVecE <- RequestDumps.selectLogTable pid queryAST Nothing (Nothing, Nothing) [""] Nothing Nothing

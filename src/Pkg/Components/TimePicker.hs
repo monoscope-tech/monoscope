@@ -3,7 +3,6 @@
 module Pkg.Components.TimePicker (parseTimeRange, timepicker_, TimePickerP (..)) where
 
 import Data.List (lookup)
-import Data.Text qualified as T
 import Data.Time (UTCTime, addUTCTime, defaultTimeLocale, formatTime, secondsToNominalDiffTime)
 import Data.Time.Format.ISO8601 (iso8601ParseM)
 import Lucid
@@ -67,7 +66,7 @@ parseFromAndTo :: UTCTime -> Maybe Text -> Maybe Text -> (Maybe UTCTime, Maybe U
 parseFromAndTo now fromM toM =
   (parseUTCTime fromM, parseUTCTime toM, formatRange fromM toM)
   where
-    parseUTCTime = iso8601ParseM . T.unpack . fromMaybe ""
+    parseUTCTime = iso8601ParseM . toString . fromMaybe ""
     formatRange f t = liftA2 (\start end -> start <> "-" <> end) (formatTime' f) (formatTime' t)
 
     formatTime' :: Maybe Text -> Maybe Text

@@ -115,9 +115,8 @@ getProjectIdByApiKey :: (DB :> es, IOE :> es, Effectful.Reader Config.AuthContex
 getProjectIdByApiKey projectKey = do
   pool <- getPool
   appCtx <- Effectful.ask @Config.AuthContext
-  projectCacheVal <- liftIO $ Cache.fetchWithCache appCtx.projectKeyCache projectKey \_ ->
+  liftIO $ Cache.fetchWithCache appCtx.projectKeyCache projectKey \_ ->
     withPool pool $ queryOne Select q (Only projectKey)
-  pure projectCacheVal
   where
     q = [sql| select project_id from projects.project_api_keys where key_prefix=?|]
 

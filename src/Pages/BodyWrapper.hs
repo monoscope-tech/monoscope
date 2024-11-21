@@ -372,7 +372,7 @@ sideNav sess project pageTitle menuItem hasIntegrated = aside_ [class_ "border-r
         [ class_ "inline-block w-10 h-10 p-2 rounded-full bg-gray-300"
         , term "data-tippy-placement" "right"
         , term "data-tippy-content" userIdentifier
-        , src_ $ [text|https://www.gravatar.com/avatar/${emailMd5}?d=https%3A%2F%2Fui-avatars.com%2Fapi%2F/${sanitizedID}/128|]
+        , src_ [text|https://www.gravatar.com/avatar/${emailMd5}?d=https%3A%2F%2Fui-avatars.com%2Fapi%2F/${sanitizedID}/128|]
         ]
       span_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:inline-block overflow-hidden"] $ toHtml userIdentifier
     a_

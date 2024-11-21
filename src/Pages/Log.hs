@@ -326,11 +326,11 @@ renderChart pid chartId chartTitle primaryUnitM rateM source extraHxVals = do
     div_ [class_ "leading-none flex justify-between items-center"] do
       div_ [class_ "inline-flex gap-3 items-center"] do
         span_ $ toHtml chartTitle
-        whenJust primaryUnitM \primaryUnit -> span_ [class_ "bg-slate-200 px-2 py-1 rounded-3xl"] (toHtml primaryUnit)
-        whenJust rateM \rate -> span_ [class_ "text-slate-300"] (toHtml rate)
+        whenJust primaryUnitM $ span_ [class_ "bg-slate-200 px-2 py-1 rounded-3xl"] . toHtml
+        whenJust rateM $ span_ [class_ "text-slate-300"] . toHtml
       label_ [class_ "rounded-full border border-slate-300 p-2 inline-flex cursor-pointer"] $ faSprite_ "up-right-and-down-left-from-center" "regular" "w-3 h-3"
     div_
-      [ class_ $ "rounded-2xl border border-slate-200 log-chart p-3  " <> (chartAspectRatio source)
+      [ class_ $ "rounded-2xl border border-slate-200 log-chart p-3  " <> chartAspectRatio source
       , hxGet_ $ "/charts_html?id=" <> chartId <> "&show_legend=false&pid=" <> pid.toText
       , hxTrigger_ "intersect, htmx:beforeRequest from:#log_explorer_form"
       , hxVals_ $ "js:{queryAST:window.getQueryFromEditor('" <> chartId <> "'), since: params().since, from: params().from, to:params().to, cols:params().cols, layout:'all', source: params().source" <> extraHxVals <> "}"
@@ -548,8 +548,7 @@ renderStatusCode reqVec colIdxMap =
 
 
 renderIconWithTippy :: Text -> Text -> Html () -> Html ()
-renderIconWithTippy iconClass tip content =
-  a_ [class_ $ "shrink-0 inline-flex " <> iconClass, term "data-tippy-content" tip] content
+renderIconWithTippy iconClass tip = a_ [class_ $ "shrink-0 inline-flex " <> iconClass, term "data-tippy-content" tip]
 
 
 logItemCol_ :: Text -> Projects.ProjectId -> V.Vector Value -> HM.HashMap Text Int -> Text -> V.Vector Telemetry.SpanRecord -> Html ()

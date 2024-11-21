@@ -21,7 +21,6 @@ where
 import Data.Aeson qualified as AE
 import Data.ByteString.Base16 qualified as B16
 import Data.Text (toTitle, toUpper)
-import Data.Text.Encoding qualified as TE
 import Data.Time (UTCTime)
 import Data.UUID (UUID)
 import Data.UUID qualified as UUID
@@ -53,7 +52,7 @@ instance Show a => ToField (WrappedEnum prefix a) where
 instance (KnownSymbol prefix, Typeable a, Read a) => FromField (WrappedEnum prefix a) where
   fromField f = \case
     Nothing -> returnError UnexpectedNull f ""
-    Just bss -> pure $ WrappedEnum (Unsafe.read $ (symbolVal (Proxy @prefix)) <> (toString $ toTitle (decodeUtf8 bss)))
+    Just bss -> pure $ WrappedEnum (Unsafe.read $ symbolVal (Proxy @prefix) <> toString (toTitle (decodeUtf8 bss)))
 
 
 data SeverityLevel = SLDebug | SLInfo | SLWarn | SLError | SLFatal
@@ -107,13 +106,13 @@ data LogRecord = LogRecord
 
 instance AE.FromJSON ByteString where
   parseJSON = AE.withText "ByteString" $ \t ->
-    case B16.decode (TE.encodeUtf8 t) of
+    case B16.decode (encodeUtf8 t) of
       Right bs -> return bs
       Left err -> fail $ "Invalid hex-encoded ByteString: " ++ err
 
 
 instance AE.ToJSON ByteString where
-  toJSON = AE.String . TE.decodeUtf8 . B16.encode
+  toJSON = AE.String . decodeUtf8 . B16.encode
 
 
 data SpanRecord = SpanRecord

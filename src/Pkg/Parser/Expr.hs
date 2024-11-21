@@ -24,7 +24,7 @@ data Values = Num Text | Str Text | Boolean Bool | Null | List [Values]
 
 
 instance AE.FromJSON Values where
-  parseJSON (AE.Number n) = return $ Num (T.pack (formatScientific Fixed Nothing n))
+  parseJSON (AE.Number n) = return $ Num (toText (formatScientific Fixed Nothing n))
   parseJSON (AE.String s) = return $ Str s
   parseJSON (AE.Bool b) = return $ Boolean b
   parseJSON AE.Null = return Null
@@ -33,7 +33,7 @@ instance AE.FromJSON Values where
 
 
 instance AE.ToJSON Values where
-  toJSON (Num t) = case readMaybe (T.unpack t) :: Maybe Scientific of
+  toJSON (Num t) = case readMaybe (toString t) :: Maybe Scientific of
     Just n -> AE.Number n
     Nothing -> error $ "Invalid number: " <> show t
   toJSON (Str s) = AE.String s

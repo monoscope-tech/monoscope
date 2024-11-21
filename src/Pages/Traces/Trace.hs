@@ -421,7 +421,7 @@ buildTree_ pid sp trId level scol isLasChild = do
               div_ [class_ "border border-slate-200 w-7 flex justify-between gap-1 items-center rounded p-0.5"] do
                 faSprite_ "chevron-right" "regular" "h-3 w-3 shrink-0 font-bold text-slate-950 waterfall-item-tree-chevron"
                 span_ [class_ "text-xs"] $ toHtml $ show (length sp.children)
-            span_ [class_ "font-medium text-slate-950 "] $ toHtml $ sp.spanRecord.serviceName
+            span_ [class_ "font-medium text-slate-950 "] $ toHtml sp.spanRecord.serviceName
             faSprite_ "chevron-right" "regular" "h-3 w-3 shrink-0 text-slate-950"
             span_ [class_ "text-slate-500 text-sm whitespace-nowrap"] $ toHtml sp.spanRecord.spanName
           span_ [class_ $ "w-1 rounded h-5 shrink-0 " <> serviceCol] ""

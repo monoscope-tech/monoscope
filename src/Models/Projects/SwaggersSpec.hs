@@ -70,7 +70,7 @@ spec = aroundAll TestUtils.withSetup $ describe "Models.Projects.Swaggers" $ do
       result <- withPool pool $ do
         _ <- createSwagger (ProjectId UUID.nil) (UserId UUID.nil) swaggerJson1
         _ <- createSwagger (ProjectId UUID.nil) (UserId UUID.nil) swaggerJson2
-        swaggersByProject (ProjectId UUID.nil) ("")
+        swaggersByProject (ProjectId UUID.nil) ""
       map (.swaggerJson) (toList result) `shouldBe` [swaggerJson2, swaggerJson1, swaggerJson', swaggerJson']
 
   describe "updateSwagger"

@@ -299,7 +299,7 @@ evaluationOptions_ = div_ [class_ "border-l-2 border-l-slate-300 pl-4 space-y-2"
 
 instance ToHtml MonitorCreate where
   toHtmlRaw = toHtml
-  toHtml MCSelectType = toHtml $ monitorSelectType_
+  toHtml MCSelectType = toHtml monitorSelectType_
   toHtml (MCMetric pid _) = toHtml $ monitorMetric_ pid Nothing
   toHtml (MCAPITests pid _) = toHtml $ monitorAPITests_ pid Nothing
 
