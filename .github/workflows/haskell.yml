@@ -49,6 +49,7 @@ jobs:
           make prepare-rust-interop
           sudo mkdir -p /usr/local/lib
           sudo cp rust-interop/target/release/libCrust_interop.so /usr/local/lib
+          sudo cp rust-interop/target/release/libCrust_interop.so /usr/local/lib/librust_interop.so
 
       - run: stack --no-terminal build --dependencies-only
 
