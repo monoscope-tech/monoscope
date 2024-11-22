@@ -34,7 +34,7 @@ main =
   defaultMainWithHooks
     simpleUserHooks
       { confHook = rustConfHook
-      , buildHook = rustBuildHook
+      -- , buildHook = rustBuildHook
       }
 
 -- This hook could be removed at some point, likely if this issue is resolved
