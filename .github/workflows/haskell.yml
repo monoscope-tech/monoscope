@@ -50,8 +50,14 @@ jobs:
           sudo mkdir -p /usr/local/lib
           sudo cp rust-interop/target/release/libCrust_interop.so /usr/local/lib
           sudo cp rust-interop/target/release/libCrust_interop.so /usr/local/lib/librust_interop.so
+          sudo mkdir -p /usr/lib
+          sudo cp rust-interop/target/release/libCrust_interop.so /usr/lib
+          sudo cp rust-interop/target/release/libCrust_interop.so /usr/lib/librust_interop.so
 
-      - run: stack --no-terminal build --dependencies-only
+
+      - run: |
+          stack --no-terminal build --dependencies-only
+          sudo ls /usr/local/lib/
 
       # - run: stack install --local-bin-path=. --ghc-options '-optl-static -fPIC'
       - run: stack install --local-bin-path=. --flag pg-entity:prod --ghc-options "-O3"
