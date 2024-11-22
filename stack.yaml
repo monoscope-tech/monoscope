@@ -1,5 +1,5 @@
-resolver: nightly-2024-08-23
-# resolver: nightly-2024-11-12
+#resolver: nightly-2024-08-23
+resolver: nightly-2024-11-12
 packages:
   - .
 
@@ -54,7 +54,7 @@ extra-deps:
     subdirs:
       - .
   - git: https://github.com/tonyalaribe/proto3-suite.git 
-    branch: aeson-error-fix 
+    # branch: aeson-error-fix 
     commit: 4076ae6d6a1b2b91d0d4b70625c53754ba12f9b0 
     subdirs: 
       - .

@@ -40,23 +40,21 @@ ghc-options:
   - -Wno-unused-matches
   - -Wno-missing-kind-signatures
   - -Wno-type-defaults
-  - -rtsopts
-  - -j4
   - -Wno-unused-top-binds
   - -Wno-unused-imports
   - -plugin-package hiedb-plugin -fplugin Plugin.HieDb
   # - "-prof"
   # - -g
-  - "-fprof-late"
-  - "-finfo-table-map"
-  - "+RTS -N -A128m -n2m -RTS"
+  # - "-fprof-late"
+  # - "-finfo-table-map"
+  
 
 default-extensions:
   - BlockArguments
   - DataKinds
   - DerivingVia
   - DeriveAnyClass
-  # - DerivingStrategies
+  - DerivingStrategies
   - DuplicateRecordFields
   - ExplicitNamespaces
   - ExtendedDefaultRules
@@ -200,6 +198,8 @@ executables:
       - -threaded
       - -rtsopts
       - -with-rtsopts=-N
+      - -j4
+      - "+RTS -N -A128m -n2m -RTS"
       - -fwrite-ide-info
       - -hiedir=.hie
       # - -O2
