@@ -88,8 +88,8 @@ library
 
 
     -- Libraries that are bundled with the package.
-    -- extra-bundled-libraries: Crust_interop
-    extra-libraries: Crust_interop
+    extra-bundled-libraries: Crust_interop
+    -- extra-libraries: Crust_interop
     -- extra-lib-dirs: ${pkgroot}/target/release
     -- dynamic-library-dirs: ${pkgroot}/target/release
 

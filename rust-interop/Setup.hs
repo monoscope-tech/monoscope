@@ -15,14 +15,8 @@ import Distribution.Simple
     defaultMainWithHooks,
     simpleUserHooks,
   )
-import Distribution.Simple.LocalBuildInfo
-  ( LocalBuildInfo (localPkgDescr),
-  )
-import Distribution.Simple.Setup
-  ( BuildFlags (buildVerbosity),
-    ConfigFlags (configVerbosity),
-    fromFlag,
-  )
+import Distribution.Simple.LocalBuildInfo ( LocalBuildInfo (localPkgDescr))
+import Distribution.Simple.Setup ( BuildFlags (buildVerbosity), ConfigFlags (configVerbosity), fromFlag)
 import Distribution.Simple.UserHooks
   ( UserHooks (buildHook, confHook),
   )
