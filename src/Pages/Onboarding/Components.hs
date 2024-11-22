@@ -44,7 +44,7 @@ renderOnboardingWrapper mStyle content = div_ [] $ do
 renderOnboardingHeaderImage :: Html ()
 renderOnboardingHeaderImage =
   header_ [role_ "banner"] $ do
-    div_ [class_ " mt-10 ml-11"]
+    div_ [class_ " mt-10 ml-10"]
       $ img_ [src_ "/public/assets/svgs/logo.svg", alt_ "APIToolkit Logo"]
 
 

@@ -930,6 +930,50 @@ renderCheckInboxPage =
 renderDataLocationSelectPage :: HostingLocation -> Html ()
 renderDataLocationSelectPage location = do
   renderOnboardingWrapper Nothing $ do
+    style_
+      [type_ "text/css"]
+      [text| 
+        input[type="radio"] {
+    appearance: none;
+    -webkit-appearance: none;
+    width: 20px;
+    height: 20px;
+    background-color: #fff;
+    border-radius: 50%;
+    margin: 0;
+    border: 2px solid #e2e8f0;
+    position: relative;
+    cursor: pointer;
+}
+
+input[type="radio"]:checked {
+    background-color: white;
+    border-color: #3b82f6;
+}
+
+input[type="radio"]:checked::after {
+    content: "";
+    display: block;
+    width: 10px;
+    height: 10px;
+    background-color: #3b82f6;
+    border-radius: 50%;
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+}
+
+input[type="radio"]:checked + label,
+label:has(input[type="radio"]:checked) {
+    border-color: #3b82f6;
+    background-color: white;
+}
+
+input[type="radio"]:focus {
+    outline: none;
+}
+        |]
     div_ [class_ "space-y-8"] $ do
       renderFormQuestion "Where should your" (Just "data be hosted?") Nothing
 
@@ -951,30 +995,21 @@ renderDataLocationSelectPage location = do
   where
     renderLocation :: Text -> Bool -> Html ()
     renderLocation name isChecked = do
-      label_ [class_ "relative block cursor-pointer rounded-xl"] $ do
-        input_
-          ( [ type_ "radio"
-            , name_ "location"
-            , class_ "sr-only peer"
-            , value_ name
-            ]
-              ++ ([checked_ | isChecked])
-          )
-        div_ [class_ "flex items-center justify-between p-4 border rounded-lg hover:border-blue-500 peer-checked:border-blue-500"] $ do
-          span_ [class_ "font-medium"] (toHtml name)
-          div_
-            [ class_
-                $ "w-6 h-6 border-2 rounded-full flex items-center justify-center "
-                <> (if isChecked then "border-blue-500" else "border-slate-200")
-            ]
-            $ do
-              div_
-                [ class_
-                    $ "w-3 h-3 rounded-full "
-                    <> (if isChecked then "bg-blue-500" else "")
-                ]
-                mempty
-
+      label_
+        [ class_ "w-full px-6 py-4 bg-white rounded-xl border border-gray-200 flex justify-between items-center hover:border-blue-100 hover:bg-blue-50 transition-all duration-200 cursor-pointer"
+        ]
+        $ do
+          span_
+            [class_ "font-medium"]
+            (toHtml name)
+          input_
+            ( [ type_ "radio"
+              , name_ "location"
+              , value_ name
+              , class_ "w-5 h-5 rounded-full border-2 border-gray-200 text-blue-500 focus:ring-blue-500"
+              ]
+                ++ ([checked_ | isChecked])
+            )
 
 renderNotificationSentPage :: Html ()
 renderNotificationSentPage = do
