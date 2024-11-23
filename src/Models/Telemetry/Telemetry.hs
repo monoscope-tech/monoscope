@@ -8,9 +8,19 @@ module Models.Telemetry.Telemetry (
   SeverityLevel (..),
   SpanStatus (..),
   SpanKind (..),
+  MetricType (..),
+  MetricRecord (..),
+  ExponentialHistogram (..),
+  GaugeSum (..),
+  Histogram (..),
+  MetricValue (..),
+  Summary (..),
+  EHBucket (..),
+  Quantile (..),
   bulkInsertLogs,
   spanRecordById,
   getTraceDetails,
+  bulkInsertMetrics,
   bulkInsertSpans,
   getChildSpans,
   SpanEvent (..),
@@ -31,6 +41,7 @@ import Database.PostgreSQL.Simple (ResultError (..))
 import Database.PostgreSQL.Simple.FromRow
 import Database.PostgreSQL.Simple.ToRow
 
+import Data.Default (Default)
 import Database.PostgreSQL.Simple.FromField (FromField (..), fromField, returnError)
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
@@ -161,11 +172,11 @@ data SpanLink = SpanLink
 
 
 data MetricRecord = MetricRecord
-  { id :: UUID
+  { id :: Maybe UUID
   , projectId :: UUID
   , metricName :: Text
   , metricType :: MetricType
-  , metricUnit :: Maybe Text
+  , metricUnit :: Text
   , metricDescription :: Text
   , metricTime :: UTCTime
   , timestamp :: UTCTime
@@ -178,6 +189,7 @@ data MetricRecord = MetricRecord
   }
   deriving (Show, Generic)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake MetricRecord
+  deriving anyclass (FromRow, ToRow, NFData)
 
 
 data MetricValue
@@ -187,40 +199,45 @@ data MetricValue
   | SummaryValue Summary
   | ExponentialHistogramValue ExponentialHistogram
   deriving (Show, Generic)
-  deriving (AE.FromJSON, AE.ToJSON)
+  deriving anyclass (NFData)
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake MetricValue
+  deriving (FromField, ToField) via Aeson MetricValue
 
 
 newtype GaugeSum = GaugeSum
   { value :: Double
   }
   deriving (Show, Generic)
+  deriving anyclass (NFData)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake GaugeSum
 
 
 data Histogram = Histogram
-  { sum :: Maybe Double
-  , count :: Maybe Int
+  { sum :: Double
+  , count :: Int
   , bucketCounts :: V.Vector Int
-  , explicitBounds :: V.Vector Int
+  , explicitBounds :: V.Vector Double
   , pointMin :: Double
   , pointMax :: Double
   }
   deriving (Show, Generic)
+  deriving anyclass (NFData)
   deriving (AE.FromJSON, AE.ToJSON)
 
 
 data ExponentialHistogram = ExponentialHistogram
-  { sum :: Maybe Double
-  , count :: Maybe Int
+  { sum :: Double
+  , count :: Int
   , pointMin :: Double
   , pointMax :: Double
   , zeroCount :: Int
   , scale :: Int
-  , pointNegative :: V.Vector EHBucket
-  , pointPositive :: V.Vector EHBucket
+  , pointNegative :: Maybe EHBucket
+  , pointPositive :: Maybe EHBucket
   , zeroThreshold :: Double
   }
   deriving (Show, Generic)
+  deriving anyclass (NFData)
   deriving (AE.FromJSON, AE.ToJSON)
 
 
@@ -229,15 +246,17 @@ data EHBucket = EHBucket
   , bucketCounts :: V.Vector Int
   }
   deriving (Show, Generic)
+  deriving anyclass (NFData)
   deriving (AE.FromJSON, AE.ToJSON)
 
 
 data Summary = Summary
-  { sum :: Maybe Double
-  , count :: Maybe Int
+  { sum :: Double
+  , count :: Int
   , quantiles :: V.Vector Quantile
   }
   deriving (Show, Generic)
+  deriving anyclass (NFData)
   deriving (AE.FromJSON, AE.ToJSON)
 
 
@@ -246,6 +265,7 @@ data Quantile = Quantile
   , value :: Double
   }
   deriving (Show, Generic)
+  deriving anyclass (NFData)
   deriving (AE.FromJSON, AE.ToJSON)
 
 
@@ -388,4 +408,32 @@ bulkInsertSpans spans = void $ dbtToEff $ executeMany Insert q (V.toList rowsToI
       , entry.links
       , entry.resource
       , entry.instrumentationScope
+      )
+
+
+bulkInsertMetrics :: DB :> es => V.Vector MetricRecord -> Eff es ()
+bulkInsertMetrics metrics = void $ dbtToEff $ executeMany Insert q (V.toList rowsToInsert)
+  where
+    q =
+      [sql|
+        INSERT INTO telemetry.metrics
+        (project_id, metric_name, metric_type, metric_unit, metric_description, metric_time, timestamp,
+         attributes, resource, intrumentation_scope, metric_value, exemplars, flags)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     |]
+    rowsToInsert = V.map metricToTuple metrics
+    metricToTuple entry =
+      ( entry.projectId
+      , entry.metricName
+      , entry.metricType
+      , entry.metricUnit
+      , entry.metricDescription
+      , entry.metricTime
+      , entry.timestamp
+      , entry.attributes
+      , entry.resource
+      , entry.instrumentationScope
+      , entry.metricValue
+      , entry.exemplars
+      , entry.flags
       )
