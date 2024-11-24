@@ -202,7 +202,7 @@ export class QueryInputElement extends LitElement {
   #select = async (type, value) => {
     if (this.editContext) {
       const detail = this.suggestionService.handleEditContext(this.editContext, value);
-      this.dispatchEvent(new CustomEvent('update-query', { detail }));
+      this.dispatchEvent(new CustomEvent('update-query', { detail , composed: true, bubbles: true }));
     } else {
       const result = await this.suggestionService.handleSelection(type, value, this.qs);
       if (result.qs) {
@@ -211,7 +211,7 @@ export class QueryInputElement extends LitElement {
       if (result.suggestions !== undefined) {
         this.suggestions = result.suggestions;
       }
-      if (result.newNode) this.dispatchEvent(new CustomEvent('add-query', { detail: result.newNode }))
+      if (result.newNode) this.dispatchEvent(new CustomEvent('add-query', { detail: result.newNode, composed: true, bubbles: true }))
     }
 
     this.selected = 0;
@@ -263,14 +263,6 @@ export class FilterElement extends LitElement {
     this.ast = [];
     this.newQuery = false;
     this.editingPath = "";
-
-    window.setQueryBuilderFromParams = () => {
-      const urlSearchParams = new URLSearchParams(window.location.search)
-      const queryAST = urlSearchParams.get('query-ast')
-      console.log(queryAST)
-      console.log(JSON.parse(queryAST))
-      if (query) this.setBuilderValue(JSON.parse(queryAST))
-    }
   }
 
   #remove = (nodePath, e) => {
@@ -297,14 +289,11 @@ export class FilterElement extends LitElement {
 
   #toggleAndOr = (path, _e) => jsonpath.apply(this.ast, `$${path}`, op => op == 'And' ? 'Or' : 'And') && this.requestUpdate();
 
-  #handleAddQuery = ({ detail: newNode }) => {
-    this.ast = [{
-      tag: 'Search',
-      contents: this.ast?.length ? {
-        tag: 'And',
-        contents: [this.ast[0].contents, newNode]
-      } : newNode
-    }];
+  handleAddQuery = ({ detail: newNode }) => {
+    const search = this.ast.find(e => e.tag === 'Search');
+    search
+      ? search.contents = { tag: 'And', contents: [search.contents, newNode] }
+      : this.ast.push({ tag: 'Search', contents: newNode });
     this.newQuery = false;
     this.requestUpdate();
   };
@@ -394,7 +383,7 @@ export class FilterElement extends LitElement {
                 </a>` : html`<a @click=${() => { this.newQuery = true; this.requestUpdate() }} class="cursor-pointer p-2 ">Click to add filter...</a>`}
             ${this.newQuery ? html`
               <query-input-element
-                @add-query=${this.#handleAddQuery}
+                @add-query=${this.handleAddQuery}
                 @close-query=${this.#handleCloseQuery}>
               </query-input-element>
             ` : ''}

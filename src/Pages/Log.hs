@@ -174,8 +174,8 @@ logQueryBox_ pid currentRange source targetSpan queryAST = do
   form_
     [ hxGet_ $ "/p/" <> pid.toText <> "/log_explorer"
     , hxPushUrl_ "true"
+    , hxTrigger_ "add-query from:#filterElement, update-query from:#filterElement"
     , hxVals_ "js:{queryAST:window.getQueryFromEditor(), since: params().since, from: params().from, to:params().to, cols:params().cols, layout:'all', source: params().source}"
-    , termRaw "hx-on::before-request" ""
     , hxTarget_ "#resultTable"
     , hxSwap_ "outerHTML"
     , id_ "log_explorer_form"
@@ -326,7 +326,7 @@ renderChart pid chartId chartTitle primaryUnitM rateM source extraHxVals = do
     div_
       [ class_ $ "rounded-2xl border border-slate-200 log-chart p-3  " <> chartAspectRatio source
       , hxGet_ $ "/charts_html?id=" <> chartId <> "&show_legend=false&pid=" <> pid.toText
-      , hxTrigger_ "intersect, htmx:beforeRequest from:#log_explorer_form"
+      , hxTrigger_ "intersect, submit from:#log_explorer_form, add-query from:#filterElement, update-query from:#filterElement"
       , hxVals_ $ "js:{queryAST:window.getQueryFromEditor('" <> chartId <> "'), since: params().since, from: params().from, to:params().to, cols:params().cols, layout:'all', source: params().source" <> extraHxVals <> "}"
       , hxSwap_ "innerHTML"
       ]
@@ -594,7 +594,7 @@ requestDumpLogItemUrlPath pid rd colIdxMap = do
 -- TODO:
 jsonTreeAuxillaryCode :: Projects.ProjectId -> Text -> Html ()
 jsonTreeAuxillaryCode pid queryAST = do
-  template_ [id_ "log-item-context-menu-tmpl "] do
+  template_ [id_ "log-item-context-menu-tmpl"] do
     div_ [id_ "log-item-context-menu", class_ "log-item-context-menu  origin-top-right absolute left-0 mt-2 w-56 rounded-md shadow-md shadow-slate-300 bg-slate-25 ring-1 ring-black ring-opacity-5 divide-y divide-gray-100 focus:outline-none z-10", role_ "menu", tabindex_ "-1"] do
       div_ [class_ "py-1", role_ "none"] do
         a_
@@ -626,26 +626,25 @@ jsonTreeAuxillaryCode pid queryAST = do
           [ class_ "cursor-pointer w-full text-left text-slate-700 block px-4 py-1  hover:bg-gray-100 hover:text-slate-900"
           , role_ "menuitem"
           , tabindex_ "-1"
-          , onclick_ "filterByField(event, '==')"
+          , onclick_ "filterByField(event, 'Eq')"
           ]
           "Filter by field"
         button_
           [ class_ "cursor-pointer w-full text-left text-slate-700 block px-4 py-1  hover:bg-gray-100 hover:text-slate-900"
           , role_ "menuitem"
           , tabindex_ "-1"
-          , onclick_ "filterByField(event, '!=')"
+          , onclick_ "filterByField(event, 'NotEq')"
           ]
           "Exclude field"
 
   script_
     [text|
     function filterByField(event, operation) {
-        const { fieldPath: path, fieldValue: value } = event.target.closest('[data-field-path]').dataset,
-              editorVal = window.queryBuilderValue ?? window.editor?.getValue() ?? '',
-              separator = editorVal && !editorVal.toLowerCase().endsWith('and') && !editorVal.toLowerCase().endsWith('or') ? ' AND ' : editorVal ? ' ' : '',
-              newVal = editorVal + separator + `$${path.replace(/\[\*\]\.(\d+)\./g, '[*].')} $${operation} $${value}`;
-        document.querySelector('#filterElement')?.setBuilderValue?.(newVal);
-        window.editor?.setValue?.(newVal);
+        const { fieldPath: path, fieldValue: value } = event.target.closest('[data-field-path]').dataset;
+        document.getElementById("filterElement").handleAddQuery({detail:{
+            "tag": operation,
+            "contents": [path, JSON.parse(value)]
+        }});
         htmx.trigger("#log_explorer_form", "submit");
     }
 
@@ -681,10 +680,4 @@ jsonTreeAuxillaryCode pid queryAST = do
                 : document.querySelector('#filterElement')?.setBuilderValue(window.editor.getValue());
         }, 10);
     }
-
-    var execd = false
-    document.addEventListener('DOMContentLoaded', function(){
-      window.setQueryBuilderFromParams()
-    })
-
 |]

@@ -193,6 +193,7 @@ bodyWrapper BWConfig{sessM, currProject, pageTitle, menuItem, hasIntegrated, nav
           [text|
           behavior LogItemMenuable
             on click
+              log "clicked" then
               if I match <.with-context-menu/> then
                 remove <.log-item-context-menu /> then remove .with-context-menu from <.with-context-menu />
               else
