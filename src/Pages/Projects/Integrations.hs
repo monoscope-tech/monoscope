@@ -150,7 +150,7 @@ integrationsBody sess envCfg isUpdate cp notifChannel slackData = do
               case slackData of
                 Just s -> span_ [class_ "font-bold  mb-2 text-blue-500 block"] "Already connected, but you can add again to change workspace or channel."
                 Nothing -> pass
-              a_ [target_ "_blank", class_ "", href_ $ "https://slack.com/oauth/v2/authorize?client_id=6211090672305.6200958370180&scope=chat:write,incoming-webhook&user_scope=&redirect_uri=" <> envCfg.slackRedirectUri <> pid] do
+              a_ [target_ "_blank", class_ "", href_ $ "https://slack.com/oauth/v2/authorize?client_id=" <> envCfg.slackClientId <> "&scope=chat:write,incoming-webhook&user_scope=&redirect_uri=" <> envCfg.slackRedirectUri <> pid] do
                 img_ [alt_ "Add to slack", height_ "40", width_ "139", src_ "https://platform.slack-edge.com/img/add_to_slack.png", term "srcSet" "https://platform.slack-edge.com/img/add_to_slack.png 1x, https://platform.slack-edge.com/img/add_to_slack@2x.png 2x"]
 
             div_ [class_ "shadow-sm border p-6 rounded-lg"] do

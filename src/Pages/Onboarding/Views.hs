@@ -28,7 +28,7 @@ import Data.Vector qualified as V
 import Database.PostgreSQL.Transact (DBT)
 import Effectful
 import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
-import Effectful.Reader.Static (ask)
+import Effectful.Reader.Static (ask, asks)
 import Lucid
 import Lucid.Base (TermRaw (termRaw))
 import Lucid.Htmx (hxDelete_, hxGet_, hxInclude_, hxPost_, hxPut_, hxSwap_, hxTarget_, hxTrigger_)
@@ -83,7 +83,7 @@ instance ToHtml OnboardingResponse where
   toHtml (URLMonitorR (PageCtx bwconf (sess, cfg, monitor))) =
     toHtml $ PageCtx bwconf renderUrlMonitorFormPage
   toHtml (NotificationsR (PageCtx bwconf (sess, cfg, notifications))) =
-    toHtml $ PageCtx bwconf $ renderNotificationSettingsFormPage notifications
+    toHtml $ PageCtx bwconf $ renderNotificationSettingsFormPage cfg notifications
   toHtml (TeamR (PageCtx bwconf (sess, cfg, team))) =
     toHtml $ PageCtx bwconf $ renderTeamInvitePage team
   toHtml (PricingR (PageCtx bwconf (sess, cfg, pricing))) =
@@ -351,8 +351,8 @@ renderUserFormPage form validation = do
           renderPrimaryButton POST "" "Proceed"
 
 
-renderNotificationSettingsFormPage :: NotificationSettings -> Html ()
-renderNotificationSettingsFormPage settings =
+renderNotificationSettingsFormPage :: EnvConfig -> NotificationSettings -> Html ()
+renderNotificationSettingsFormPage envCfg settings =
   renderOnboardingWrapper Nothing $ do
     -- Add Tagify CSS from CDN
     link_ [rel_ "stylesheet", type_ "text/css", href_ "https://unpkg.com/@yaireo/tagify/dist/tagify.css"]
@@ -525,11 +525,18 @@ renderNotificationSettingsFormPage settings =
                 ]
                 "Connected"
             else
-              button_
-                [ type_ "button"
-                , class_ "px-2 py-0 text-blue-600 text-sm font-medium border border-blue-600 rounded-lg hover:bg-blue-50"
-                ]
-                "Connect"
+              let slackAuthUrl =
+                    "https://slack.com/oauth/v2/authorize?client_id="
+                      <> envCfg.slackClientId
+                      <> "&scope=chat:write,incoming-webhook&redirect_uri="
+                      <> envCfg.slackRedirectUri -- todo
+                      <> "notifications"
+               in button_
+                    [ type_ "button"
+                    , class_ "px-2 py-0 text-blue-600 text-sm font-medium border border-blue-600 rounded-lg hover:bg-blue-50"
+                    , onclick_ $ "window.location.href='" <> slackAuthUrl <> "';"
+                    ]
+                    "Connect"
 
 
 renderUsageSelectionForm :: UsagePreferences -> Html ()
@@ -1010,6 +1017,7 @@ input[type="radio"]:focus {
               ]
                 ++ ([checked_ | isChecked])
             )
+
 
 renderNotificationSentPage :: Html ()
 renderNotificationSentPage = do
