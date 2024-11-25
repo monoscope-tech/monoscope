@@ -278,6 +278,8 @@ dashboardPage pid col reqsVecM = do
                       , targetSpans = Nothing
                       , childSpans = []
                       , daysCountDown = Nothing
+                      , queryLibRecent = V.empty
+                      , queryLibSaved = V.empty
                       }
               Log.resultTable_ page False
             _ -> pass

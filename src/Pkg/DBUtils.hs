@@ -1,4 +1,4 @@
-module Pkg.DBUtils (WrappedEnum (..), WrappedEnumSC(..)) where
+module Pkg.DBUtils (WrappedEnum (..), WrappedEnumSC (..)) where
 
 import Data.Text qualified as T
 import Database.PostgreSQL.Simple (ResultError (..))
@@ -24,7 +24,7 @@ instance (KnownSymbol prefix, Typeable a, Read a) => FromField (WrappedEnum pref
     Just bss -> pure $ WrappedEnum (Unsafe.read $ symbolVal (Proxy @prefix) <> toString (T.toTitle (decodeUtf8 bss)))
 
 
--- Snakecase 
+-- Snakecase
 newtype WrappedEnumSC (prefix :: Symbol) a = WrappedEnumSC a
   deriving (Generic)
 

@@ -46,7 +46,7 @@ import Effectful
 import Effectful.PostgreSQL.Transact.Effect (DB, dbtToEff)
 import GHC.Records (HasField (getField))
 import Models.Users.Users qualified as Users
-import Pkg.DBUtils (WrappedEnumSC(..)) 
+import Pkg.DBUtils (WrappedEnumSC (..))
 import Pkg.Parser.Stats (Section)
 import Relude
 import Web.HttpApiData
