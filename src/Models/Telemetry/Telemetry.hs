@@ -418,7 +418,7 @@ bulkInsertMetrics metrics = void $ dbtToEff $ executeMany Insert q (V.toList row
       [sql|
         INSERT INTO telemetry.metrics
         (project_id, metric_name, metric_type, metric_unit, metric_description, metric_time, timestamp,
-         attributes, resource, intrumentation_scope, metric_value, exemplars, flags)
+         attributes, resource, instrumentation_scope, metric_value, exemplars, flags)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
      |]
     rowsToInsert = V.map metricToTuple metrics
