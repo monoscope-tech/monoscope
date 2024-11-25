@@ -3,14 +3,14 @@ module Pages.LemonSqueezy (webhookPostH, WebhookData, manageBillingGetH, Billing
 import Data.Aeson qualified as AE
 import Data.Default
 import Data.Text qualified as T
-import Data.Time (LocalTime (LocalTime), ZonedTime, getZonedTime, localTimeOfDay, utctDay, zonedTimeToLocalTime, zonedTimeToUTC)
+import Data.Time (getZonedTime, timeOfDayToTime, timeToTimeOfDay)
 import Data.Time.Calendar (fromGregorian, toGregorian)
-import Data.Time.Clock (UTCTime)
-import Data.Time.LocalTime (localTimeToUTC, utc)
+import Data.Time.Clock (UTCTime (..))
 import Data.UUID.V4 qualified as UUIDV4
 import Deriving.Aeson qualified as DAE
 import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
 import Effectful.Reader.Static (asks)
+import Effectful.Time qualified as Time
 import Lucid
 import Lucid.Htmx (hxGet_)
 import Models.Projects.LemonSqueezy qualified as LemonSqueezy
@@ -128,7 +128,7 @@ manageBillingGetH :: Projects.ProjectId -> Maybe Text -> ATAuthCtx (RespHeaders 
 manageBillingGetH pid from = do
   (sess, project) <- Sessions.sessionAndProject pid
   let dat = fromMaybe project.createdAt project.billingDay
-  currentTime <- liftIO getZonedTime
+  currentTime <- Time.currentTime
   let cycleStart = calculateCycleStartDate dat currentTime
   totalRequests <- dbtToEff $ LemonSqueezy.getTotalUsage pid cycleStart
   let estimatedAmount = show $ if totalRequests == 0 then "0.00" else printf "%.2f" (fromIntegral totalRequests / 20_000)
@@ -166,17 +166,16 @@ billingPage pidTxt reqs amount last_reported = div_ [class_ "w-full pt-40"] do
         span_ [data_ "id" "18"] "View on LemonSqueezy"
 
 
-calculateCycleStartDate :: ZonedTime -> ZonedTime -> UTCTime
-calculateCycleStartDate start currentZonedTime =
-  let (_, _, startDay) = toGregorian (utctDay (zonedTimeToUTC start))
-      (currentYear, currentMonth, currentDay) = toGregorian (utctDay (zonedTimeToUTC currentZonedTime))
-      timeOfDay = localTimeOfDay $ zonedTimeToLocalTime start
-      cycleStartDate
+calculateCycleStartDate :: UTCTime -> UTCTime -> UTCTime
+calculateCycleStartDate start current =
+  let (_startYear, _startMonth, startDay) = toGregorian $ utctDay start
+      (currentYear, currentMonth, currentDay) = toGregorian $ utctDay current
+      timeOfDay = timeToTimeOfDay $ utctDayTime start
+      cycleStartDay
         | currentDay > startDay = fromGregorian currentYear currentMonth startDay
-        | otherwise = if currentMonth == 1 then fromGregorian (currentYear - 1) 12 startDay else fromGregorian currentYear (currentMonth - 1) startDay
-      locT = LocalTime cycleStartDate timeOfDay
-      cycleStartTime = localTimeToUTC utc locT
-   in cycleStartTime
+        | currentMonth == 1 = fromGregorian (currentYear - 1) 12 startDay
+        | otherwise = fromGregorian currentYear (currentMonth - 1) startDay
+   in UTCTime cycleStartDay (timeOfDayToTime timeOfDay)
 
 
 formatNumberWithCommas :: Int64 -> String

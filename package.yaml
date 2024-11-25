@@ -189,6 +189,7 @@ library:
     - template-haskell
     - cryptohash-md5
     - hiedb-plugin
+    - casing
 
 executables:
   apitoolkit-server-exe:

@@ -42,6 +42,10 @@ instance AE.ToJSON Values where
   toJSON (List xs) = AE.Array (V.fromList (map AE.toJSON xs))
 
 
+instance ToQueryText Values where
+  toQText v = decodeUtf8 $ AE.encode v
+
+
 -- A subject consists of the primary key, and then the list of fields keys which are delimited by a .
 -- To support jsonpath, we will have more powerfule field keys, so instead of a text array, we could have an enum field key type?
 data Subject = Subject Text Text [FieldKey]
@@ -59,6 +63,10 @@ instance AE.FromJSON Subject where
     case parse pSubject "" text of
       Left err -> fail $ "Parse error: " ++ errorBundlePretty err
       Right subject -> pure subject
+
+
+instance ToQueryText Subject where
+  toQText (Subject a _ _) = a
 
 
 data FieldKey = FieldKey Text | ArrayIndex Text Int | ArrayWildcard Text
@@ -387,6 +395,20 @@ instance Display Expr where
   displayPrec prec (And u1 u2) = displayParen (prec > 0) $ displayPrec prec u1 <> " AND " <> displayBuilder u2
   displayPrec prec (Or u1 u2) = displayParen (prec > 0) $ displayPrec prec u1 <> " OR " <> displayBuilder u2
   displayPrec prec (Regex sub val) = displayPrec prec $ jsonPathQuery "like_regex" sub (Str val)
+
+
+-- To be used when generating the text query given an ast
+instance ToQueryText Expr where
+  toQText (Eq sub val) = toQText sub <> " == " <> toQText val
+  toQText (NotEq sub val) = toQText sub <> " != " <> toQText val
+  toQText (GT sub val) = toQText sub <> " > " <> toQText val
+  toQText (LT sub val) = toQText sub <> " < " <> toQText val
+  toQText (GTEq sub val) = toQText sub <> " >= " <> toQText val
+  toQText (LTEq sub val) = toQText sub <> " <= " <> toQText val
+  toQText (Paren expr) = "(" <> toQText expr <> ")"
+  toQText (And left right) = toQText left <> " AND " <> toQText right
+  toQText (Or left right) = toQText left <> " OR " <> toQText right
+  toQText (Regex sub val) = toQText sub <> " =~ " <> toQText (Str val)
 
 
 -- Helper function to handle the common display logic

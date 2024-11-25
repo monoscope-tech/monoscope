@@ -1,6 +1,7 @@
 module Pkg.Parser.Stats (pTimeChartSection, pStatsSection, AggFunction (..), Section (..), Rollup (..), ByClause (..), Sources (..), parseQuery, pSource) where
 
 import Data.Aeson qualified as AE
+import Data.Text qualified as T
 import Data.Text.Display (Display, display, displayBuilder, displayPrec)
 import Pkg.Parser.Core
 import Pkg.Parser.Expr (Expr, Subject (..), pExpr, pSubject)
@@ -21,23 +22,23 @@ data AggFunction
   | Range Subject (Maybe Text)
   | -- | CustomAgg String [Field] (Maybe String)
     Plain Subject (Maybe Text)
-  deriving stock (Show, Generic)
+  deriving stock (Show, Generic, Eq)
   deriving anyclass (AE.FromJSON, AE.ToJSON)
 
 
 -- Define an optional 'by' clause
 newtype ByClause = ByClause [Subject] -- List of fields to group by
-  deriving stock (Show, Generic)
+  deriving stock (Show, Generic, Eq)
   deriving anyclass (AE.FromJSON, AE.ToJSON)
 
 
 newtype Rollup = Rollup Text
-  deriving stock (Show, Generic)
+  deriving stock (Show, Generic, Eq)
   deriving anyclass (AE.FromJSON, AE.ToJSON)
 
 
 data Sources = SRequests | SLogs | STraces | SSpans | SMetrics
-  deriving stock (Show, Generic)
+  deriving stock (Show, Generic, Eq)
   deriving anyclass (AE.FromJSON, AE.ToJSON)
 
 
@@ -97,6 +98,10 @@ aggFunctionParser =
     ]
 
 
+instance ToQueryText AggFunction where
+  toQText v = display v
+
+
 instance Display AggFunction where
   displayPrec prec (Count sub alias) = displayBuilder $ "count(" <> display sub <> ")"
   displayPrec prec (Sum sub alias) = displayBuilder $ "sum(" <> display sub <> ")"
@@ -111,18 +116,24 @@ instance Display AggFunction where
 
 -- | Utility Parser: Parses an alias
 --
--- >>> parse "" aliasParser "as min_price"
--- "min_price"
+-- >>> parse aliasParser "" " as min_price"
+-- Right "min_price"
 aliasParser :: Parser Text
 aliasParser = toText <$> (string " as" *> space *> some (alphaNumChar <|> oneOf @[] "_-") <* space)
 
 
 -- | Parses the 'by' clause, which can include multiple fields.
 --
--- >>> parse "" byClauseParser "by field1,field2"
--- ByClause [Subject "field1" [],Subject "field2" []]
+-- >>> parse byClauseParser "" "by field1,field2"
+-- Right (ByClause [Subject "field1" "field1" [],Subject "field2" "field2" []])
 byClauseParser :: Parser ByClause
 byClauseParser = ByClause <$> (string "by" *> space *> sepBy pSubject (char ','))
+
+
+-- >>> toQText $ ByClause [Subject "field1" "field1" [],Subject "field2" "field2" []]
+-- "by field1,field2"
+instance ToQueryText ByClause where
+  toQText (ByClause subs) = "by " <> T.intercalate "," (map toQText subs)
 
 
 -- StatsCommand [Count Nothing Nothing] (Just (ByClause [FieldName "field1"]))
@@ -144,6 +155,13 @@ pStatsSection = do
   funcs <- sepBy aggFunctionParser (char ',')
   byClause <- optional $ try (space *> byClauseParser)
   return $ StatsCommand funcs byClause
+
+
+instance ToQueryText Section where
+  toQText (Source source) = toQText source
+  toQText (Search expr) = toQText expr
+  toQText (StatsCommand funcs byClauseM) = "stats " <> T.intercalate "," (map toQText funcs) <> maybeToMonoid (toQText <$> byClauseM)
+  toQText (TimeChartCommand aggF byClauseM rollupM) = "timechart " <> toQText aggF <> maybeToMonoid (toQText <$> byClauseM) <> maybeToMonoid (toQText <$> rollupM)
 
 
 -- TimeChartSection  (Count Nothing Nothing) (Just (ByClause [FieldName "field1"])) (Rollup "1w")
@@ -182,6 +200,10 @@ rollupParser :: Parser Rollup
 rollupParser = Rollup . toText <$> (string "[" *> some alphaNumChar <* string "]")
 
 
+instance ToQueryText Rollup where
+  toQText (Rollup val) = "[" <> val <> "]"
+
+
 ----------------------------------------------------------------------
 ----
 
@@ -195,7 +217,7 @@ data Section
     StatsCommand [AggFunction] (Maybe ByClause)
   | TimeChartCommand AggFunction (Maybe ByClause) (Maybe Rollup)
   | Source Sources
-  deriving stock (Show, Generic)
+  deriving stock (Show, Generic, Eq)
   deriving anyclass (AE.FromJSON, AE.ToJSON)
 
 
@@ -252,6 +274,14 @@ pSource =
     ]
 
 
+instance ToQueryText Sources where
+  toQText SRequests = "requests"
+  toQText SLogs = "logs"
+  toQText STraces = "traces"
+  toQText SSpans = "spans"
+  toQText SMetrics = "metrics"
+
+
 instance Display Sources where
   displayPrec prec SRequests = "apis.request_dumps"
   displayPrec prec SLogs = "telemetry.logs"
@@ -265,3 +295,7 @@ instance Display Sources where
 --
 parseQuery :: Parser [Section]
 parseQuery = sepBy pSection (space *> char '|' <* space)
+
+
+instance ToQueryText [Section] where
+  toQText secs = T.intercalate " | " $ map toQText secs

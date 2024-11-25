@@ -32,6 +32,7 @@ import Data.Map qualified as Map
 import Data.Time.Clock.POSIX (posixSecondsToUTCTime)
 import Data.UUID qualified as UUID
 import Effectful
+import Effectful.Concurrent.Async
 import Effectful.Error.Static (Error, runErrorNoCallStack)
 import Effectful.Log (Log)
 import Effectful.PostgreSQL.Transact.Effect (DB, runDB)
@@ -65,6 +66,7 @@ type CommonWebEffects =
    , DB
    , Time
    , Log
+   , Concurrent
    , Error ServerError
    , Effectful.IOE
    ]
@@ -100,6 +102,7 @@ effToServantHandler env logger app =
     & runDB env.pool
     & runTime
     & Logging.runLog (show env.config.environment) logger
+    & runConcurrent
     & effToHandler
 
 
@@ -114,6 +117,7 @@ effToServantHandlerTest env logger app =
     & runDB env.pool
     & runFrozenTime (posixSecondsToUTCTime 0)
     & Logging.runLog (show env.config.environment) logger
+    & runConcurrent
     & effToHandler
 
 

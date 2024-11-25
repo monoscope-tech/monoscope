@@ -2,7 +2,7 @@ module Pages.Dashboard (dashboardGetH, DashboardGet (..)) where
 
 import Data.Aeson qualified as AE
 import Data.Default (def)
-import Data.Time (UTCTime, diffUTCTime, getCurrentTime, zonedTimeToUTC)
+import Data.Time (UTCTime, diffUTCTime, getCurrentTime)
 import Data.Vector qualified as V
 import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
 import Effectful.Time qualified as Time
@@ -80,8 +80,7 @@ dashboardGetH pid fromDStr toDStr sinceStr' = do
           , pageActions = Just $ Components.timepicker_ Nothing currentRange
           }
   currTime <- liftIO getCurrentTime
-  let createdUTc = zonedTimeToUTC project.createdAt
-      (days, hours, minutes, _seconds) = convertToDHMS $ diffUTCTime currTime createdUTc
+  let (days, hours, minutes, _seconds) = convertToDHMS $ diffUTCTime currTime project.createdAt
       daysLeft =
         if days >= 0 && project.paymentPlan /= "Free"
           then show days <> " days, " <> show hours <> " hours, " <> show minutes <> " minutes"

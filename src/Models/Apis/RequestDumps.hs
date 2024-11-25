@@ -587,7 +587,7 @@ getLastSevenDaysTotalRequest pid = do
       [sql| SELECT count(*) FROM apis.request_dumps WHERE project_id=? AND created_at > NOW() - interval '7' day;|]
 
 
-getTotalRequestToReport :: Projects.ProjectId -> ZonedTime -> DBT IO Int
+getTotalRequestToReport :: Projects.ProjectId -> UTCTime -> DBT IO Int
 getTotalRequestToReport pid lastReported = do
   result <- query Select q (pid, lastReported)
   case result of

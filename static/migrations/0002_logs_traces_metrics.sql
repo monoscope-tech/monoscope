@@ -69,3 +69,26 @@ CREATE INDEX idx_traces_span_name ON telemetry.spans(project_id, span_name, time
 CREATE INDEX idx_traces_status ON telemetry.spans(project_id, status, timestamp DESC);
 CREATE INDEX idx_traces_kind ON telemetry.spans(project_id, kind, timestamp DESC);
 CREATE INDEX idx_traces_resource_service_name ON telemetry.spans (project_id, (resource->>'service.name'), timestamp DESC);
+
+-- =================================================================
+-- Query history and saved queries 
+-- =================================================================
+CREATE TYPE projects.query_library_kind AS ENUM ('history', 'saved');
+CREATE TABLE IF NOT EXISTS projects.query_library (
+  id         UUID NOT NULL DEFAULT gen_random_uuid(),
+  project_id UUID NOT NULL REFERENCES projects.projects (id) ON DELETE CASCADE,
+  created_at TIMESTAMP WITH TIME ZONE       NOT               NULL    DEFAULT current_timestamp,
+  updated_at TIMESTAMP WITH TIME ZONE       NOT               NULL    DEFAULT current_timestamp,  
+  user_id    UUID NOT NULL REFERENCES users.users (id) ON DELETE CASCADE,
+  query_type projects.query_library_kind NOT NULL DEFAULT 'history',
+  query_text TEXT NOT NULL DEFAULT '',
+  query_ast JSONB NOT NULL,
+  title      TEXT,
+  PRIMARY KEY (id)
+);
+SELECT manage_updated_at('projects.query_library');
+CREATE UNIQUE INDEX unique_user_query ON projects.query_library (user_id, query_type, query_text);
+CREATE INDEX idx_user_project_type_created
+ON projects.query_library (user_id, project_id, query_type, created_at DESC);
+CREATE INDEX idx_project_user_type_created
+ON projects.query_library (project_id, user_id, query_type, created_at DESC);

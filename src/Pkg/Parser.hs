@@ -1,5 +1,5 @@
 -- Parser implemented with help and code from: https://markkarpov.com/tutorial/megaparsec.html
-module Pkg.Parser (parseQueryStringToWhereClause, queryASTToComponents, parseQueryToComponents, fixedUTCTime, parseQuery, sectionsToComponents, defSqlQueryCfg, defPid, SqlQueryCfg (..), QueryComponents (..), listToColNames, pSource, parseQueryToAST) where
+module Pkg.Parser (parseQueryStringToWhereClause, queryASTToComponents, parseQueryToComponents, fixedUTCTime, parseQuery, sectionsToComponents, defSqlQueryCfg, defPid, SqlQueryCfg (..), QueryComponents (..), listToColNames, pSource, parseQueryToAST, ToQueryText (..)) where
 
 import Control.Error (hush)
 import Data.Default (Default (def))
@@ -10,6 +10,7 @@ import Data.Time.Clock (UTCTime (..), diffUTCTime, nominalDiffTimeToSeconds, sec
 import Data.Time.Format.ISO8601 (iso8601Show)
 import GHC.Records (HasField (getField))
 import Models.Projects.Projects qualified as Projects
+import Pkg.Parser.Core (ToQueryText (..))
 import Pkg.Parser.Expr
 import Pkg.Parser.Stats
 import PyF (fmt)

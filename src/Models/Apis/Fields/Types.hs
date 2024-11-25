@@ -24,12 +24,13 @@ import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity.Types (CamelToSnake, Entity, FieldModifiers, GenericEntity, PrimaryKey, Schema, TableName)
 import Database.PostgreSQL.Simple (FromRow, ResultError (..), ToRow)
-import Database.PostgreSQL.Simple.FromField (FromField, fromField, returnError)
+import Database.PostgreSQL.Simple.FromField (FromField (fromField), returnError)
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
-import Database.PostgreSQL.Simple.ToField (Action (Escape), ToField, toField)
+import Database.PostgreSQL.Simple.ToField (Action (..), ToField (toField))
 import Deriving.Aeson qualified as DAE
 import GHC.Records (HasField (getField))
 import Models.Projects.Projects qualified as Projects
+import Pkg.DBUtils (WrappedEnum (..))
 import Relude
 import Relude.Unsafe ((!!))
 import Web.HttpApiData (FromHttpApiData)
@@ -62,8 +63,9 @@ data FieldTypes
   | FTObject
   | FTList
   | FTNull
-  deriving stock (Eq, Generic, Show)
+  deriving stock (Eq, Generic, Show, Read)
   deriving anyclass (NFData)
+  deriving (ToField, FromField) via WrappedEnum "FT" FieldTypes
 
 
 instance AE.FromJSON FieldTypes where
@@ -77,10 +79,6 @@ instance AE.ToJSON FieldTypes where
 
 instance Default FieldTypes where
   def = FTUnknown
-
-
-instance ToField FieldTypes where
-  toField = Escape . encodeUtf8 <$> fieldTypeToText
 
 
 instance HasField "toText" FieldTypes Text where
@@ -115,16 +113,6 @@ parseFieldTypes "object" = Just FTObject
 parseFieldTypes "list" = Just FTList
 parseFieldTypes "null" = Just FTNull
 parseFieldTypes _ = Nothing
-
-
-instance FromField FieldTypes where
-  fromField f mdata =
-    case mdata of
-      Nothing -> returnError UnexpectedNull f ""
-      Just bs ->
-        case parseFieldTypes bs of
-          Just a -> pure a
-          Nothing -> returnError ConversionFailed f $ "Conversion error: Expected 'field_type' enum, got " <> decodeUtf8 bs <> " instead."
 
 
 data FieldCategoryEnum

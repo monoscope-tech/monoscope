@@ -1,7 +1,7 @@
 module Pages.LogExplorer.LogItemSpec (spec) where
 
 import Control.Lens ((^?))
-import Data.Aeson qualified as AE 
+import Data.Aeson qualified as AE
 import Data.Aeson.Lens
 import Data.Aeson.QQ (aesonQQ)
 import Data.Time (defaultTimeLocale, formatTime, getCurrentTime)

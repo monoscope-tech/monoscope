@@ -19,7 +19,7 @@ where
 
 import BackgroundJobs (jobsRunner)
 import Control.Exception (bracket_, finally, mask, throwIO)
-import Data.Aeson qualified as AE 
+import Data.Aeson qualified as AE
 import Data.Aeson.QQ (aesonQQ)
 import Data.Cache (Cache (..), newCache)
 import Data.Default (Default (..))

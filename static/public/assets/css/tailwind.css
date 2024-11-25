@@ -26,6 +26,9 @@
   .tabs-outline :is(.tab-active, [aria-selected='true']):not(.tab-disabled):not([disabled]):hover {
     @apply bg-slate-25 shadow;
   }
+  .tabs-boxed :is(input:checked) {
+    @apply bg-slate-25;
+  }
   .tabs-outline .tab {
     @apply !text-slate-800 font-medium;
   }
