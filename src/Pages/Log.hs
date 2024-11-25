@@ -282,13 +282,23 @@ queryLibrary_ pid queryLibSaved queryLibRecent = div_ [class_ "dropdown dropdown
     queryLibraryContent_ :: Text -> V.Vector Projects.QueryLibItem -> Html ()
     queryLibraryContent_ label items = do
       searchBar_ label
-      div_ [class_ "border divide-y rounded-xl p-3"] $ V.forM_ items queryLibItem_
+      div_ [class_ $ "border divide-y rounded-xl p-3 dataLibContent" <> label] $ V.forM_ items queryLibItem_
 
     searchBar_ :: Text -> Html ()
     searchBar_ label = div_ [class_ "flex gap-2 sticky top-0 p-3 bg-base-100 z-20"] do
       label_ [class_ "input input-md input-bordered flex items-center gap-2 flex-1"] $
         faSprite_ "magnifying-glass" "regular" "h-4 w-4 opacity-70"
-          >> input_ [type_ "text", class_ "grow", placeholder_ "Search"]
+          >> input_
+            [ type_ "text"
+            , class_ "grow"
+            , placeholder_ "Search"
+            , term "data-filterParent" $ "dataLibContent" <> label
+            , [__|on keyup
+                     if the event's key is 'Escape'
+                       set my value to '' then trigger keyup
+                     else
+                      show <.group/> in .{@data-filterParent} when its textContent.toLowerCase() contains my value.toLowerCase()|]
+            ]
       when (label == "Saved") do
         label_ [class_ "tabs tabs-md tabs-boxed tabs-outline bg-slate-200 text-slate-50 shrink items-center", role_ "tablist"] do
           input_ [class_ "hidden", type_ "checkbox", id_ "queryLibraryGroup"]
@@ -310,16 +320,17 @@ queryLibItem_ qli =
           $ faSprite_ "play" "regular" "h-4 w-4"
         a_ [class_ "tooltip", term "data-tip" "copy query to clipboard", [__|install Copy(content: (next <.queryText/> ))|]] $ faSprite_ "copy" "regular" "h-4 w-4"
         when qli.byMe $ a_ [class_ "tooltip", term "data-tip" "edit query title", [__|on click set #queryLibId.value to @data-queryId then set #saveQueryMdl.checked to true|], term "data-queryId" qli.id.toText] $ faSprite_ "pen-to-square" "regular" "h-4 w-4"
-        when qli.byMe $  a_
-          [ class_ "tooltip"
-          , term "data-tip" "delete query"
-          , hxGet_ $ "/p/" <> qli.projectId.toText <> "/log_explorer?layout=DeleteQuery&queryLibId=" <> qli.id.toText
-          , hxVals_ "js:{queryAST:window.getQueryFromEditor()}"
-          , hxTarget_ "#queryLibraryTabListEl"
-          , hxSwap_ "outerHTML"
-          , hxSelect_ "#queryLibraryTabListEl"
-          , hxPushUrl_ "false"
-          ]
+        when qli.byMe
+          $ a_
+            [ class_ "tooltip"
+            , term "data-tip" "delete query"
+            , hxGet_ $ "/p/" <> qli.projectId.toText <> "/log_explorer?layout=DeleteQuery&queryLibId=" <> qli.id.toText
+            , hxVals_ "js:{queryAST:window.getQueryFromEditor()}"
+            , hxTarget_ "#queryLibraryTabListEl"
+            , hxSwap_ "outerHTML"
+            , hxSelect_ "#queryLibraryTabListEl"
+            , hxPushUrl_ "false"
+            ]
           $ faSprite_ "trash-can" "regular" "h-4 w-4"
       label_ [class_ ""] do
         input_ [class_ "hidden", type_ "checkbox"]
