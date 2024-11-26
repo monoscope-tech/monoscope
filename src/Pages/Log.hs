@@ -94,8 +94,8 @@ apiLogH pid queryM queryASTM cols' cursorM' sinceM fromM toM layoutM sourceM tar
   (queryLibRecent, queryLibSaved) <- V.partition (\x -> Projects.QLTHistory == (x.queryType)) <$> Projects.queryLibHistoryForUser pid sess.persistentSession.userId
 
   freeTierExceeded <-
-    dbtToEff $
-      if project.paymentPlan == "Free"
+    dbtToEff
+      $ if project.paymentPlan == "Free"
         then (> 5000) <$> RequestDumps.getLastSevenDaysTotalRequest pid
         else pure False
 
@@ -268,8 +268,8 @@ logQueryBox_ pid currentRange source targetSpan queryAST queryLibRecent queryLib
 
 queryLibrary_ :: Projects.ProjectId -> V.Vector Projects.QueryLibItem -> V.Vector Projects.QueryLibItem -> Html ()
 queryLibrary_ pid queryLibSaved queryLibRecent = div_ [class_ "dropdown dropdown-hover dropdown-bottom dropdown-start", id_ "queryLibraryParentEl"] do
-  div_ [class_ "cursor-pointer relative bg-slate-100 text-slate-600 rounded-2xl border border-slate-200 h-full flex gap-2 items-center px-2", tabindex_ "0", role_ "button"] $
-    (toHtml "Query Library" >> faSprite_ "chevron-down" "regular" "w-3 h-3")
+  div_ [class_ "cursor-pointer relative bg-slate-100 text-slate-600 rounded-2xl border border-slate-200 h-full flex gap-2 items-center px-2", tabindex_ "0", role_ "button"]
+    $ (toHtml "Query Library" >> faSprite_ "chevron-down" "regular" "w-3 h-3")
   div_ [class_ "dropdown-content z-20"] $ div_ [class_ "tabs tabs-boxed tabs-md tabs-outline items-center bg-slate-200 h-full", role_ "tablist", id_ "queryLibraryTabListEl"] do
     tabPanel_ "Saved" (queryLibraryContent_ "Saved" queryLibSaved)
     tabPanel_ "Recent" (queryLibraryContent_ "Recent" queryLibRecent)
@@ -286,19 +286,17 @@ queryLibrary_ pid queryLibSaved queryLibRecent = div_ [class_ "dropdown dropdown
 
     searchBar_ :: Text -> Html ()
     searchBar_ label = div_ [class_ "flex gap-2 sticky top-0 p-3 bg-base-100 z-20"] do
-      label_ [class_ "input input-md input-bordered flex items-center gap-2 flex-1"] $
+      label_ [class_ "input input-md input-bordered flex items-center gap-2 flex-1"] do
         faSprite_ "magnifying-glass" "regular" "h-4 w-4 opacity-70"
-          >> input_
-            [ type_ "text"
-            , class_ "grow"
-            , placeholder_ "Search"
-            , term "data-filterParent" $ "dataLibContent" <> label
-            , [__|on keyup
-                     if the event's key is 'Escape'
-                       set my value to '' then trigger keyup
-                     else
-                      show <.group/> in .{@data-filterParent} when its textContent.toLowerCase() contains my value.toLowerCase()|]
-            ]
+        input_
+          [ type_ "text"
+          , class_ "grow"
+          , placeholder_ "Search"
+          , term "data-filterParent" $ "dataLibContent" <> label
+          , [__|on keyup
+                     if the event's key is 'Escape' set my value to '' then trigger keyup
+                     else show <.group/> in .{@data-filterParent} when its textContent.toLowerCase() contains my value.toLowerCase()|]
+          ]
       when (label == "Saved") do
         label_ [class_ "tabs tabs-md tabs-boxed tabs-outline bg-slate-200 text-slate-50 shrink items-center", role_ "tablist"] do
           input_ [class_ "hidden", type_ "checkbox", id_ "queryLibraryGroup"]
@@ -339,9 +337,9 @@ queryLibItem_ qli =
           li_ "Send query to alert"
           li_ "Send query to a dashboard"
     strong_ $ whenJust qli.title \title -> (toHtml title)
-    pre_ $
-      code_ [class_ "language-js !bg-transparent queryText whitespace-pre-wrap break-words"] $
-        toHtml qli.queryText
+    pre_
+      $ code_ [class_ "language-js !bg-transparent queryText whitespace-pre-wrap break-words"]
+      $ toHtml qli.queryText
     div_ [class_ "gap-3 flex"] $ time_ [datetime_ "", term "data-tippy-content" "created on"] (toHtml $ displayTimestamp $ formatUTC qli.createdAt) >> when qli.byMe " by me"
 
 
@@ -380,9 +378,9 @@ apiLogsPage page = do
       ]
       do
         div_ [class_ "relative ml-auto w-full", style_ ""] do
-          div_ [class_ "flex justify-end  w-full p-4 "] $
-            button_ [[__|on click add .hidden to #expand-log-modal|]] $
-              faSprite_ "xmark" "regular" "h-8"
+          div_ [class_ "flex justify-end  w-full p-4 "]
+            $ button_ [[__|on click add .hidden to #expand-log-modal|]]
+            $ faSprite_ "xmark" "regular" "h-8"
           form_
             [ hxPost_ $ "/p/" <> page.pid.toText <> "/share/"
             , hxSwap_ "innerHTML"
@@ -501,20 +499,20 @@ resultTable_ page mainLog = table_
                   : params().to;
               return {from:params().from, to:updatedTo};
           }|]
-        tr_ $
-          td_ [colspan_ $ show $ length page.cols] $
-            a_
-              [ class_ "cursor-pointer inline-flex justify-center py-1 px-56 ml-36 blue-800 bg-blue-100 hover:bg-blue-200 gap-3 items-center"
-              , hxTrigger_ "click, every 1s [document.getElementById('streamLiveData').checked]"
-              , hxVals_ "js:{queryAST:window.getQueryFromEditor(), since: params().since, cols:params().cols, layout:'all', source: params().source, ...window.latestLogsURLQueryValsFn()}"
-              , hxSwap_ "afterend settle:500ms"
-              , hxGet_ $ "/p/" <> page.pid.toText <> "/log_explorer?layout=loadmore"
-              , hxPushUrl_ "false"
-              , hxTarget_ "closest tr"
-              , -- using hyperscript instead of hxIndicator_ so the loader isnt distracting by showing up every second and only when clicked
-                [__| on click remove .hidden from #loadNewIndicator on htmx:afterRequest add .hidden to #loadNewIndicator |]
-              ]
-              (span_ [class_ "inline-block"] "check for newer results" >> span_ [id_ "loadNewIndicator", class_ "hidden loading loading-dots loading-sm inline-block pl-3"] "")
+        tr_
+          $ td_ [colspan_ $ show $ length page.cols]
+          $ a_
+            [ class_ "cursor-pointer inline-flex justify-center py-1 px-56 ml-36 blue-800 bg-blue-100 hover:bg-blue-200 gap-3 items-center"
+            , hxTrigger_ "click, every 1s [document.getElementById('streamLiveData').checked]"
+            , hxVals_ "js:{queryAST:window.getQueryFromEditor(), since: params().since, cols:params().cols, layout:'all', source: params().source, ...window.latestLogsURLQueryValsFn()}"
+            , hxSwap_ "afterend settle:500ms"
+            , hxGet_ $ "/p/" <> page.pid.toText <> "/log_explorer?layout=loadmore"
+            , hxPushUrl_ "false"
+            , hxTarget_ "closest tr"
+            , -- using hyperscript instead of hxIndicator_ so the loader isnt distracting by showing up every second and only when clicked
+              [__| on click remove .hidden from #loadNewIndicator on htmx:afterRequest add .hidden to #loadNewIndicator |]
+            ]
+            (span_ [class_ "inline-block"] "check for newer results" >> span_ [id_ "loadNewIndicator", class_ "hidden loading loading-dots loading-sm inline-block pl-3"] "")
         logItemRows_ page.pid page.requestVecs page.cols page.colIdxMap page.nextLogsURL page.source page.childSpans
 
 
@@ -557,24 +555,24 @@ logItemRows_ pid requests curatedCols colIdxMap nextLogsURL source chSpns = do
   forM_ requests \reqVec -> do
     let (logItemPath, _reqId) = fromMaybe ("", "") $ requestDumpLogItemUrlPath pid reqVec colIdxMap
     let (_, errCount, errClass) = errorClass True reqVec colIdxMap
-    tr_ [class_ "log-row cursor-pointer overflow-hidden", [__|on click toggle .hidden on next <tr/> then toggle .expanded-log on me|]] $
-      forM_ curatedCols \c -> td_ [class_ "pl-3"] $ logItemCol_ source pid reqVec colIdxMap c chSpns
+    tr_ [class_ "log-row cursor-pointer overflow-hidden", [__|on click toggle .hidden on next <tr/> then toggle .expanded-log on me|]]
+      $ forM_ curatedCols \c -> td_ [class_ "pl-3"] $ logItemCol_ source pid reqVec colIdxMap c chSpns
     tr_ [class_ "hidden"] do
       -- used for when a row is expanded.
       td_ [class_ "pl-4"] $ a_ [class_ $ "inline-block h-full " <> errClass, term "data-tippy-content" $ show errCount <> " errors attached to this request"] ""
       td_ [colspan_ $ show $ length curatedCols - 1] $ div_ [hxGet_ $ logItemPath <> "?source=" <> source, hxTrigger_ "intersect once", hxSwap_ "outerHTML"] $ span_ [class_ "loading loading-dots loading-md"] ""
-  when (V.length requests > 199) $
-    tr_ $
-      td_ [colspan_ $ show $ length curatedCols] $
-        a_
-          [ class_ "cursor-pointer inline-flex justify-center py-1 px-56 ml-36 blue-800 bg-blue-100 hover:bg-blue-200 gap-3 items-center"
-          , hxTrigger_ "click, intersect once"
-          , hxSwap_ "outerHTML"
-          , hxGet_ nextLogsURL
-          , hxTarget_ "closest tr"
-          , hxPushUrl_ "false"
-          ]
-          (span_ [class_ "inline-block"] "LOAD MORE " >> span_ [class_ "loading loading-dots loading-sm inline-block pl-3"] "")
+  when (V.length requests > 199)
+    $ tr_
+    $ td_ [colspan_ $ show $ length curatedCols]
+    $ a_
+      [ class_ "cursor-pointer inline-flex justify-center py-1 px-56 ml-36 blue-800 bg-blue-100 hover:bg-blue-200 gap-3 items-center"
+      , hxTrigger_ "click, intersect once"
+      , hxSwap_ "outerHTML"
+      , hxGet_ nextLogsURL
+      , hxTarget_ "closest tr"
+      , hxPushUrl_ "false"
+      ]
+      (span_ [class_ "inline-block"] "LOAD MORE " >> span_ [class_ "loading loading-dots loading-sm inline-block pl-3"] "")
 
 
 errorClass :: Bool -> V.Vector AE.Value -> HM.HashMap Text Int -> (Int, Int, Text)
@@ -631,8 +629,8 @@ logTableHeadingWrapper_ pid title classes child = td_
           span_ [class_ "ml-1 p-0.5 border border-slate-200 rounded inline-flex"] $ faSprite_ "chevron-down" "regular" "w-3 h-3"
         ul_ [tabindex_ "0", class_ "dropdown-content z-[1] menu p-2 shadow bg-slate-25 rounded-box min-w-[15rem]"] do
           li_ [class_ "underline underline-offset-2"] $ toHtml title
-          li_ $
-            a_
+          li_
+            $ a_
               [ hxGet_ $ "/p/" <> pid.toText <> "/log_explorer"
               , hxPushUrl_ "true"
               , hxVals_ $ "js:{queryAST:params().queryAST,cols:removeNamedColumnToSummary('" <> title <> "'),layout:'resultTable'}"

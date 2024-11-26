@@ -444,7 +444,8 @@ queryLibTitleEdit pid uid qId title = void $ dbtToEff $ execute Update q (title,
   where
     q = [sql|UPDATE projects.query_library SET title=? where project_id=? AND user_id=? AND id=?::uuid|]
 
-queryLibItemDelete:: DB :> es => ProjectId -> Users.UserId -> Text -> Eff es ()
+
+queryLibItemDelete :: DB :> es => ProjectId -> Users.UserId -> Text -> Eff es ()
 queryLibItemDelete pid uid qId = void $ dbtToEff $ execute Delete q (pid, uid, qId)
   where
     q = [sql|DELETE from projects.query_library where project_id=? AND user_id=? AND id=?::uuid|]
