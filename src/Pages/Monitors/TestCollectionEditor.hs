@@ -65,7 +65,7 @@ collectionStepsUpdateH pid colF = do
   let (isValid, errMessage) = validateCollectionForm colF project.paymentPlan
   if not isValid
     then do
-      addErrorToast errMessage Nothing
+      forM_ errMessage \m -> addErrorToast m Nothing
       addRespHeaders CollectionMutError
     else do
       let colIdM = colF.collectionId
@@ -608,7 +608,7 @@ editorExtraElements = do
   script_ [src_ "/public/assets/js/thirdparty/jsyaml.min.js", crossorigin_ "true"] ("" :: Text)
 
 
-validateCollectionForm :: Testing.CollectionStepUpdateForm -> Text -> (Bool, Text)
+validateCollectionForm :: Testing.CollectionStepUpdateForm -> Text -> (Bool, [Text])
 validateCollectionForm colF paymentPlan =
   let
     isValidScheduleForPlan = paymentPlan == "Free" && isJust colF.scheduleNumberUnit && colF.scheduleNumberUnit /= Just "days"
@@ -616,14 +616,13 @@ validateCollectionForm colF paymentPlan =
     isScheduleNumberValid =
       case colF.scheduleNumber of
         Just sn -> case readMaybe (toString sn) :: Maybe Int of
-          Just n -> n >= 0
+          Just n -> n > 0
           Nothing -> False
         Nothing -> True
     errorMessages =
-      T.intercalate "\n " $
-        ["Title should not be empty" | not isTitleValid]
-          ++ ["Schedule number should not be less than zero" | not isScheduleNumberValid]
-          ++ ["You're on the free plan, you can't schedule a test to run more than once a day"]
+      ["Title should not be empty" | not isTitleValid]
+        ++ ["Schedule number should not be less than one" | not isScheduleNumberValid]
+        ++ ["You're on the free plan, you can't schedule a test to run more than once a day"]
     isValid = isTitleValid && isScheduleNumberValid && isValidScheduleForPlan
    in
     (isValid, errorMessages)
