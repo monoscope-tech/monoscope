@@ -24,6 +24,8 @@ module Models.Projects.Projects (
   QueryLibItem (..),
   queryLibHistoryForUser,
   queryLibInsert,
+  queryLibTitleEdit,
+  queryLibItemDelete,
 )
 where
 
@@ -435,3 +437,15 @@ WHERE NOT EXISTS (
   LIMIT 1
 );
     |]
+
+
+queryLibTitleEdit :: DB :> es => ProjectId -> Users.UserId -> Text -> Text -> Eff es ()
+queryLibTitleEdit pid uid qId title = void $ dbtToEff $ execute Update q (title, pid, uid, qId)
+  where
+    q = [sql|UPDATE projects.query_library SET title=? where project_id=? AND user_id=? AND id=?::uuid|]
+
+
+queryLibItemDelete :: DB :> es => ProjectId -> Users.UserId -> Text -> Eff es ()
+queryLibItemDelete pid uid qId = void $ dbtToEff $ execute Delete q (pid, uid, qId)
+  where
+    q = [sql|DELETE from projects.query_library where project_id=? AND user_id=? AND id=?::uuid|]

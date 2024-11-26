@@ -50,8 +50,14 @@ import Utils
 -- >>> import Data.Aeson
 
 
-apiLogH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe UTCTime -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders LogsGet)
-apiLogH pid queryM queryASTM cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM queryTitle hxRequestM hxBoostedM = do
+keepNonEmpty :: Maybe Text -> Maybe Text
+keepNonEmpty Nothing = Nothing
+keepNonEmpty (Just "") = Nothing
+keepNonEmpty (Just a) = Just a
+
+
+apiLogH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe UTCTime -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders LogsGet)
+apiLogH pid queryM queryASTM cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM queryLibItemTitle queryLibItemID hxRequestM hxBoostedM = do
   (sess, project) <- Sessions.sessionAndProject pid
   let source = fromMaybe "requests" sourceM
   let summaryCols = T.splitOn "," (fromMaybe "" cols')
@@ -62,12 +68,21 @@ apiLogH pid queryM queryASTM cols' cursorM' sinceM fromM toM layoutM sourceM tar
       (either (const $ parseQuery $ maybeToMonoid queryM) pure . AE.eitherDecode . encodeUtf8)
       queryASTM
   let queryText = toQText queryAST
-  unless (isJust queryTitle) $ Projects.queryLibInsert Projects.QLTHistory pid sess.persistentSession.userId queryText queryAST Nothing
+  unless (isJust queryLibItemTitle) $ Projects.queryLibInsert Projects.QLTHistory pid sess.persistentSession.userId queryText queryAST Nothing
 
   when (layoutM == Just "SaveQuery") do
-    Projects.queryLibInsert Projects.QLTSaved pid sess.persistentSession.userId queryText queryAST queryTitle
-    addSuccessToast "Saved to Query Library successfully" Nothing
+    if (isJust . keepNonEmpty) queryLibItemID && (isJust . keepNonEmpty) queryLibItemTitle
+      then do
+        Projects.queryLibTitleEdit pid sess.persistentSession.userId (maybeToMonoid queryLibItemID) (maybeToMonoid queryLibItemTitle)
+        addSuccessToast "Edited Query title successfully" Nothing
+      else do
+        Projects.queryLibInsert Projects.QLTSaved pid sess.persistentSession.userId queryText queryAST queryLibItemTitle
+        addSuccessToast "Saved to Query Library successfully" Nothing
     addTriggerEvent "closeModal" ""
+
+  when (layoutM == Just "DeleteQuery") do
+    Projects.queryLibItemDelete pid sess.persistentSession.userId (maybeToMonoid queryLibItemID)
+    addSuccessToast "Deleted from Query Library successfully" Nothing
 
   now <- Time.currentTime
   let (fromD, toD, currentRange) = Components.parseTimeRange now (Components.TimePickerP sinceM fromM toM)
@@ -193,9 +208,11 @@ logQueryBox_ pid currentRange source targetSpan queryAST queryLibRecent queryLib
     , hxTarget_ "#queryLibraryParentEl"
     , hxSwap_ "outerHTML"
     , hxSelect_ "#queryLibraryParentEl"
+    , hxPushUrl_ "false"
     ]
     do
       strong_ "Please input a title for your query"
+      input_ [type_ "hidden", value_ "", name_ "queryLibId", id_ "queryLibId"]
       input_ [class_ "input input-bordered input-md", placeholder_ "query title", name_ "queryTitle"]
       button_ [type_ "submit", class_ "btn cursor-pointer bg-gradient-to-b from-[#067cff] to-[#0850c5] text-white"] "Save"
   form_
@@ -250,29 +267,41 @@ logQueryBox_ pid currentRange source targetSpan queryAST queryLibRecent queryLib
 
 
 queryLibrary_ :: Projects.ProjectId -> V.Vector Projects.QueryLibItem -> V.Vector Projects.QueryLibItem -> Html ()
-queryLibrary_ pid queryLibSaved queryLibRecent = div_ [class_ "dropdown dropdown-hover dropdown-bottom dropdown-start ", id_ "queryLibraryParentEl"] do
-  div_ [class_ "cursor-pointer relative bg-slate-100 text-slate-600 rounded-2xl border border-slate-200 h-full flex gap-2 items-center px-2 ", tabindex_ "0", role_ "button"]
-    $ ("Query Library" >> faSprite_ "chevron-down" "regular" "w-3 h-3")
-  div_ [class_ "dropdown-content z-20"] do
-    div_ [class_ "tabs tabs-boxed tabs-md tabs-outline items-center bg-slate-200 h-full", role_ "tablist"] do
-      input_ [type_ "radio", name_ "querylib", role_ "tab", class_ "tab", Aria.label_ "Saved", checked_]
-      div_ [role_ "tabpanel", class_ "tab-content bg-base-100 shadow-lg rounded-box p-3 h-[70vh] w-[40vw] overflow-hidden"] $ div_ [class_ "!flex flex-col"] do
-        div_ [class_ "flex gap-2"] do
-          label_ [class_ "input input-md input-bordered flex items-center gap-2 flex-1"] do
-            faSprite_ "magnifying-glass" "regular" "h-4 w-4 opacity-70" >> input_ [type_ "text", class_ "grow", placeholder_ "Search"]
-          label_ [class_ "tabs tabs-md tabs-boxed tabs-outline bg-slate-200 text-slate-50 shrink items-center", role_ "tablist"] do
-            input_ [class_ "hidden", type_ "checkbox", id_ "queryLibraryGroup"]
-            div_ [role_ "tab", class_ "tab h-full bg-slate-50 group-has-[#queryLibraryGroup:checked]/pg:bg-transparent", term "data-tippy-content" "My Queries"] $ faSprite_ "user" "solid" "w-5 h-5"
-            div_ [role_ "tab", class_ "tab h-full group-has-[#queryLibraryGroup:checked]/pg:bg-slate-50", term "data-tippy-content" "All team Queries"] $ faSprite_ "users" "solid" "w-5 h-5"
-        div_ [class_ "border divide-y mt-2 rounded-xl overflow-hidden grow overflow-y-scroll"] $ V.forM_ queryLibSaved queryLibItem_
+queryLibrary_ pid queryLibSaved queryLibRecent = div_ [class_ "dropdown dropdown-hover dropdown-bottom dropdown-start", id_ "queryLibraryParentEl"] do
+  div_ [class_ "cursor-pointer relative bg-slate-100 text-slate-600 rounded-2xl border border-slate-200 h-full flex gap-2 items-center px-2", tabindex_ "0", role_ "button"]
+    $ (toHtml "Query Library" >> faSprite_ "chevron-down" "regular" "w-3 h-3")
+  div_ [class_ "dropdown-content z-20"] $ div_ [class_ "tabs tabs-boxed tabs-md tabs-outline items-center bg-slate-200 h-full", role_ "tablist", id_ "queryLibraryTabListEl"] do
+    tabPanel_ "Saved" (queryLibraryContent_ "Saved" queryLibSaved)
+    tabPanel_ "Recent" (queryLibraryContent_ "Recent" queryLibRecent)
+  where
+    tabPanel_ :: Text -> Html () -> Html ()
+    tabPanel_ label content = do
+      input_ $ [type_ "radio", name_ "querylib", role_ "tab", class_ "tab", Aria.label_ label] <> [checked_ | label == "Saved"]
+      div_ [role_ "tabpanel", class_ "tab-content bg-base-100 shadow-lg rounded-box h-[70vh] w-[40vw] space-y-2 overflow-y-scroll"] content
 
-      input_ [type_ "radio", name_ "querylib", role_ "tab", class_ "tab", Aria.label_ "Recent"]
-      div_ [role_ "tabpanel", class_ "tab-content bg-base-100 shadow-lg rounded-box p-3 h-[70vh] w-[40vw] overflow-hidden"] $ div_ [class_ "!flex flex-col"] do
-        div_ [class_ "flex gap-2"] do
-          label_ [class_ "input input-md input-bordered flex items-center gap-2 flex-1"] do
-            faSprite_ "magnifying-glass" "regular" "h-4 w-4 opacity-70"
-            input_ [type_ "text", class_ "grow", placeholder_ "Search"]
-        div_ [class_ "border divide-y mt-2 rounded-xl overflow-hidden grow overflow-y-scroll"] $ V.forM_ queryLibRecent queryLibItem_
+    queryLibraryContent_ :: Text -> V.Vector Projects.QueryLibItem -> Html ()
+    queryLibraryContent_ label items = do
+      searchBar_ label
+      div_ [class_ $ "border divide-y rounded-xl p-3 dataLibContent" <> label] $ V.forM_ items queryLibItem_
+
+    searchBar_ :: Text -> Html ()
+    searchBar_ label = div_ [class_ "flex gap-2 sticky top-0 p-3 bg-base-100 z-20"] do
+      label_ [class_ "input input-md input-bordered flex items-center gap-2 flex-1"] do
+        faSprite_ "magnifying-glass" "regular" "h-4 w-4 opacity-70"
+        input_
+          [ type_ "text"
+          , class_ "grow"
+          , placeholder_ "Search"
+          , term "data-filterParent" $ "dataLibContent" <> label
+          , [__|on keyup
+                     if the event's key is 'Escape' set my value to '' then trigger keyup
+                     else show <.group/> in .{@data-filterParent} when its textContent.toLowerCase() contains my value.toLowerCase()|]
+          ]
+      when (label == "Saved") do
+        label_ [class_ "tabs tabs-md tabs-boxed tabs-outline bg-slate-200 text-slate-50 shrink items-center", role_ "tablist"] do
+          input_ [class_ "hidden", type_ "checkbox", id_ "queryLibraryGroup"]
+          div_ [role_ "tab", class_ "tab h-full bg-slate-50 group-has-[#queryLibraryGroup:checked]/pg:bg-transparent", term "data-tippy-content" "My Queries"] $ faSprite_ "user" "solid" "w-5 h-5"
+          div_ [role_ "tab", class_ "tab h-full group-has-[#queryLibraryGroup:checked]/pg:bg-slate-50", term "data-tippy-content" "All team Queries"] $ faSprite_ "users" "solid" "w-5 h-5"
 
 
 queryLibItem_ :: Projects.QueryLibItem -> Html ()
@@ -280,22 +309,38 @@ queryLibItem_ qli =
   div_ [class_ $ "clear p-3 space-y-2 hover:bg-slate-100 cursor-pointer group " <> if qli.byMe then "" else "hidden group-has-[#queryLibraryGroup:checked]/pg:block"] do
     div_ [class_ "inline-flex gap-2 float-right"] do
       div_ [class_ "flex opacity-0 transition-opacity duration-300 group-hover:opacity-100 gap-2"] do
-        a_ [class_ "", term "data-tippy-content" "run query"] $ faSprite_ "play" "regular" "h-4 w-4"
-        a_ [class_ "", term "data-tippy-content" "copy query to clipboard"] $ faSprite_ "copy" "regular" "h-4 w-4"
-        a_ [class_ "", term "data-tippy-content" "edit query title"] $ faSprite_ "pen-to-square" "regular" "h-4 w-4"
-        a_ [class_ "", term "data-tippy-content" "delete query"] $ faSprite_ "trash-can" "regular" "h-4 w-4"
+        a_
+          [ class_ "tooltip"
+          , term "data-tip" "run query"
+          , term "data-queryAST" $ decodeUtf8 $ AE.encode qli.queryAst
+          , [__| on click call #filterElement.handleAddQuery({detail: JSON.parse(@data-queryAST)})|]
+          ]
+          $ faSprite_ "play" "regular" "h-4 w-4"
+        a_ [class_ "tooltip", term "data-tip" "copy query to clipboard", [__|install Copy(content: (next <.queryText/> ))|]] $ faSprite_ "copy" "regular" "h-4 w-4"
+        when qli.byMe $ a_ [class_ "tooltip", term "data-tip" "edit query title", [__|on click set #queryLibId.value to @data-queryId then set #saveQueryMdl.checked to true|], term "data-queryId" qli.id.toText] $ faSprite_ "pen-to-square" "regular" "h-4 w-4"
+        when qli.byMe
+          $ a_
+            [ class_ "tooltip"
+            , term "data-tip" "delete query"
+            , hxGet_ $ "/p/" <> qli.projectId.toText <> "/log_explorer?layout=DeleteQuery&queryLibId=" <> qli.id.toText
+            , hxVals_ "js:{queryAST:window.getQueryFromEditor()}"
+            , hxTarget_ "#queryLibraryTabListEl"
+            , hxSwap_ "outerHTML"
+            , hxSelect_ "#queryLibraryTabListEl"
+            , hxPushUrl_ "false"
+            ]
+          $ faSprite_ "trash-can" "regular" "h-4 w-4"
       label_ [class_ ""] do
         input_ [class_ "hidden", type_ "checkbox"]
         span_ [class_ ""] $ faSprite_ "ellipsis-vertical" "regular" "h-4 w-4"
         ul_ [class_ "hidden peer-checked:block z-30"] do
           li_ "Send query to alert"
           li_ "Send query to a dashboard"
-          li_ "Delete query"
     strong_ $ whenJust qli.title \title -> (toHtml title)
     pre_
-      $ code_ [class_ "language-js !bg-transparent"]
+      $ code_ [class_ "language-js !bg-transparent queryText whitespace-pre-wrap break-words"]
       $ toHtml qli.queryText
-    div_ [class_ "gap-3 flex"] $ time_ [datetime_ "", term "data-tippy-content" "created on"] (toHtml $ displayTimestamp $ formatUTC qli.createdAt) >> (when (qli.byMe) " by me")
+    div_ [class_ "gap-3 flex"] $ time_ [datetime_ "", term "data-tippy-content" "created on"] (toHtml $ displayTimestamp $ formatUTC qli.createdAt) >> when qli.byMe " by me"
 
 
 data ApiLogsPageData = ApiLogsPageData
@@ -462,6 +507,7 @@ resultTable_ page mainLog = table_
             , hxVals_ "js:{queryAST:window.getQueryFromEditor(), since: params().since, cols:params().cols, layout:'all', source: params().source, ...window.latestLogsURLQueryValsFn()}"
             , hxSwap_ "afterend settle:500ms"
             , hxGet_ $ "/p/" <> page.pid.toText <> "/log_explorer?layout=loadmore"
+            , hxPushUrl_ "false"
             , hxTarget_ "closest tr"
             , -- using hyperscript instead of hxIndicator_ so the loader isnt distracting by showing up every second and only when clicked
               [__| on click remove .hidden from #loadNewIndicator on htmx:afterRequest add .hidden to #loadNewIndicator |]
@@ -524,6 +570,7 @@ logItemRows_ pid requests curatedCols colIdxMap nextLogsURL source chSpns = do
       , hxSwap_ "outerHTML"
       , hxGet_ nextLogsURL
       , hxTarget_ "closest tr"
+      , hxPushUrl_ "false"
       ]
       (span_ [class_ "inline-block"] "LOAD MORE " >> span_ [class_ "loading loading-dots loading-sm inline-block pl-3"] "")
 
@@ -727,7 +774,6 @@ jsonTreeAuxillaryCode pid queryAST = do
             "tag": operation,
             "contents": [path, JSON.parse(value)]
         }});
-        htmx.trigger("#log_explorer_form", "submit");
     }
 
     var toggleColumnToSummary = (e)=>{

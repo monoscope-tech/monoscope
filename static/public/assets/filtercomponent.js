@@ -32,8 +32,8 @@ const REQ_SCHEMA = [
 ]
 const AUTOCOMPLETE_SUPPORTED_FIELDS = ['request_body', 'response_body', 'request_header', 'response_header'];
 const OPERATORS = new Proxy({
-  Eq: '==', NotEq: '!=', GT: '>', LT: '<', GTE: '>=', LTE: '<=', And: 'and', Or: 'or',
-  '==': 'Eq', '!=': 'NotEq', '>': 'GT', '<': 'LT', '>=': 'GTE', '<=': 'LTE'
+  Eq: '==', NotEq: '!=', GT: '>', LT: '<', GTEq: '>=', LTEq: '<=', And: 'and', Or: 'or',
+  '==': 'Eq', '!=': 'NotEq', '>': 'GT', '<': 'LT', '>=': 'GTEq', '<=': 'LTEq'
 }, { get: (t, p) => t[p] ?? p });
 
 class SuggestionService {
@@ -290,12 +290,17 @@ export class FilterElement extends LitElement {
   #toggleAndOr = (path, _e) => jsonpath.apply(this.ast, `$${path}`, op => op == 'And' ? 'Or' : 'And') && this.requestUpdate();
 
   handleAddQuery = ({ detail: newNode }) => {
-    const search = this.ast.find(e => e.tag === 'Search');
-    search
-      ? search.contents = { tag: 'And', contents: [search.contents, newNode] }
-      : this.ast.push({ tag: 'Search', contents: newNode });
+    if (Array.isArray(newNode) && newNode.some(item => item.tag === "Search")) {
+      this.ast = newNode
+    } else {
+      const search = this.ast.find(e => e.tag === 'Search');
+      search
+        ? search.contents = { tag: 'And', contents: [search.contents, newNode] }
+        : this.ast.push({ tag: 'Search', contents: newNode });
+    }
     this.newQuery = false;
     this.requestUpdate();
+    this.dispatchEvent(new CustomEvent('add-query', { detail: newNode, composed: true, bubbles: true }))
   };
 
   #handleUpdateQuery = ({ detail: { type, path, value } }) => {
