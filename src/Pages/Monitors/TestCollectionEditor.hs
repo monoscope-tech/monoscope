@@ -507,13 +507,13 @@ collectionStepResult_ idx stepResult = section_ [class_ "p-1"] do
     p_ [class_ $ "block badge badge-sm " <> getStatusColor stepResult.request.resp.status, term "data-tippy-content" "status"] $ show stepResult.request.resp.status
   div_ [role_ "tablist", class_ "tabs tabs-lifted"] do
     input_ [type_ "radio", name_ $ "step-result-tabs-" <> show idx, role_ "tab", class_ "tab", Aria.label_ "Response Log", checked_]
-    div_ [role_ "tabpanel", class_ "tab-content bg-base-100 border-base-300 rounded-box p-6"]
-      $ toHtmlRaw
-      $ textToHTML stepResult.stepLog
+    div_ [role_ "tabpanel", class_ "tab-content bg-base-100 border-base-300 rounded-box p-6"] $
+      toHtmlRaw $
+        textToHTML stepResult.stepLog
 
     input_ [type_ "radio", name_ $ "step-result-tabs-" <> show idx, role_ "tab", class_ "tab", Aria.label_ "Response Headers"]
-    div_ [role_ "tabpanel", class_ "tab-content bg-base-100 border-base-300 rounded-box p-6 "]
-      $ table_ [class_ "table table-xs"] do
+    div_ [role_ "tabpanel", class_ "tab-content bg-base-100 border-base-300 rounded-box p-6 "] $
+      table_ [class_ "table table-xs"] do
         thead_ [] $ tr_ [] $ th_ [] "Name" >> th_ [] "Value"
         tbody_ do
           whenJust stepResult.request.resp.headers $ \headers -> do
@@ -611,7 +611,7 @@ editorExtraElements = do
 validateCollectionForm :: Testing.CollectionStepUpdateForm -> Text -> (Bool, [Text])
 validateCollectionForm colF paymentPlan =
   let
-    isValidScheduleForPlan = paymentPlan == "Free" && isJust colF.scheduleNumberUnit && colF.scheduleNumberUnit /= Just "days"
+    isValidScheduleForPlan = not (paymentPlan == "Free" && isJust colF.scheduleNumberUnit && colF.scheduleNumberUnit /= Just "days")
     isTitleValid = isJust colF.title && colF.title /= Just ""
     isScheduleNumberValid =
       case colF.scheduleNumber of
@@ -622,7 +622,7 @@ validateCollectionForm colF paymentPlan =
     errorMessages =
       ["Title should not be empty" | not isTitleValid]
         ++ ["Schedule number should not be less than one" | not isScheduleNumberValid]
-        ++ ["You're on the free plan, you can't schedule a test to run more than once a day"]
+        ++ ["You're on the free plan, you can't schedule a test to run more than once a day" | not isValidScheduleForPlan]
     isValid = isTitleValid && isScheduleNumberValid && isValidScheduleForPlan
    in
     (isValid, errorMessages)
