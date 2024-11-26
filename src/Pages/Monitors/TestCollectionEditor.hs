@@ -187,6 +187,13 @@ pageTabs url ov = do
     a_ [href_ url, role_ "tab", class_ "tab tab-active"] "Test editor"
 
 
+--  stepName :: Maybe Text
+--   , stepIndex :: Int
+--   , assertResults :: [AssertResult]
+--   , request :: StepRequest
+--   , stepLog :: Text
+--   , stepError :: Maybe Text
+
 collectionGetH :: Projects.ProjectId -> Maybe Testing.CollectionId -> ATAuthCtx (RespHeaders CollectionGet)
 collectionGetH pid colIdM = do
   (sess, project) <- Sessions.sessionAndProject pid
@@ -207,10 +214,8 @@ collectionGetH pid colIdM = do
       case collectionM of
         Nothing -> addRespHeaders $ CollectionNotFound $ PageCtx bwconf ()
         Just col -> do
-          let respJs = decodeUtf8 $ case col.lastRunResponse of
-                Just res -> AE.encode res
-                Nothing -> AE.encode $ AE.Array []
           let runRes = col.lastRunResponse >>= castToStepResult
+              respJs = decodeUtf8 $ AE.encode $ maybe [] (\v -> (\x -> AE.object ["assert_results" AE..= x.assertResults, "step_error" AE..= x.stepError]) <$> v) runRes
           addRespHeaders $ CollectionGet $ PageCtx bwconf (pid, Just col, runRes, respJs)
 
 
@@ -513,13 +518,13 @@ collectionStepResult_ idx stepResult = section_ [class_ "p-1"] do
     p_ [class_ $ "block badge badge-sm " <> getStatusColor stepResult.request.resp.status, term "data-tippy-content" "status"] $ show stepResult.request.resp.status
   div_ [role_ "tablist", class_ "tabs tabs-lifted"] do
     input_ [type_ "radio", name_ $ "step-result-tabs-" <> show idx, role_ "tab", class_ "tab", Aria.label_ "Response Log", checked_]
-    div_ [role_ "tabpanel", class_ "tab-content bg-base-100 border-base-300 rounded-box p-6"]
-      $ toHtmlRaw
-      $ textToHTML stepResult.stepLog
+    div_ [role_ "tabpanel", class_ "tab-content bg-base-100 border-base-300 rounded-box p-6"] $
+      toHtmlRaw $
+        textToHTML stepResult.stepLog
 
     input_ [type_ "radio", name_ $ "step-result-tabs-" <> show idx, role_ "tab", class_ "tab", Aria.label_ "Response Headers"]
-    div_ [role_ "tabpanel", class_ "tab-content bg-base-100 border-base-300 rounded-box p-6 "]
-      $ table_ [class_ "table table-xs"] do
+    div_ [role_ "tabpanel", class_ "tab-content bg-base-100 border-base-300 rounded-box p-6 "] $
+      table_ [class_ "table table-xs"] do
         thead_ [] $ tr_ [] $ th_ [] "Name" >> th_ [] "Value"
         tbody_ do
           whenJust stepResult.request.resp.headers $ \headers -> do

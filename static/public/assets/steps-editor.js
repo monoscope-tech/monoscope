@@ -569,9 +569,6 @@ ${stepData._json}</textarea
   }
 
   renderParamRow(key, value, type, idx, aidx, category, result, saveError) {
-    if (type === 'exports') {
-      console.log(key, value, type, idx, aidx, category, result, saveError)
-    }
     let error = result?.err?.advice || ''
     let keyError = ''
     if (saveError) {
