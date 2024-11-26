@@ -62,58 +62,54 @@ data CollectionVariableForm = CollectionVariableForm
 collectionStepsUpdateH :: Projects.ProjectId -> Testing.CollectionStepUpdateForm -> ATAuthCtx (RespHeaders CollectionMut)
 collectionStepsUpdateH pid colF = do
   (_, project) <- Sessions.sessionAndProject pid
-  if project.paymentPlan == "Free" && isJust colF.scheduleNumberUnit && colF.scheduleNumberUnit /= Just "days"
+  let (isValid, errMessage) = validateCollectionForm colF project.paymentPlan
+  if not isValid
     then do
-      addErrorToast "You are on Free plan. You can't schedule collection to run more than once a day" Nothing
+      addErrorToast errMessage Nothing
       addRespHeaders CollectionMutError
-    else
-      if colF.title == Just ""
-        then do
-          addErrorToast "Collection name can not be empty" Nothing
-          addRespHeaders CollectionMutError
-        else do
-          let colIdM = colF.collectionId
-          case colIdM of
-            Just colId -> do
-              _ <- dbtToEff $ Testing.updateCollection pid colId colF
-              addSuccessToast "Collection's steps updated successfully" Nothing
-              addRespHeaders CollectionMutSuccess
-            Nothing -> do
-              currentTime <- Time.currentTime
-              colId <- Testing.CollectionId <$> liftIO UUIDV4.nextRandom
-              let scheduleText = fromMaybe "1" colF.scheduleNumber <> " " <> fromMaybe "days" colF.scheduleNumberUnit
-              let scheduleText' = if project.paymentPlan == "Free" then "1 days" else scheduleText
+    else do
+      let colIdM = colF.collectionId
+      case colIdM of
+        Just colId -> do
+          _ <- dbtToEff $ Testing.updateCollection pid colId colF
+          addSuccessToast "Collection's steps updated successfully" Nothing
+          addRespHeaders CollectionMutSuccess
+        Nothing -> do
+          currentTime <- Time.currentTime
+          colId <- Testing.CollectionId <$> liftIO UUIDV4.nextRandom
+          let scheduleText = fromMaybe "1" colF.scheduleNumber <> " " <> fromMaybe "days" colF.scheduleNumberUnit
+          let scheduleText' = if project.paymentPlan == "Free" then "1 days" else scheduleText
 
-              let coll =
-                    Testing.Collection
-                      { id = colId
-                      , createdAt = currentTime
-                      , projectId = pid
-                      , updatedAt = currentTime
-                      , lastRun = Nothing
-                      , title = fromMaybe "[TITLE]" colF.title
-                      , description = fromMaybe "" colF.description
-                      , config = AE.object []
-                      , schedule = scheduleText'
-                      , isScheduled = True
-                      , collectionSteps = Testing.CollectionSteps colF.stepsData
-                      , lastRunResponse = Nothing
-                      , lastRunPassed = 0
-                      , lastRunFailed = 0
-                      , tags = V.empty
-                      , collectionVariables = Testing.CollectionVariables V.empty
-                      , alertSeverity = "Info"
-                      , alertMessage = ""
-                      , alertSubject = ""
-                      , notifyAfter = "6hours"
-                      , notifyAfterCheck = False
-                      , stopAfter = "0"
-                      , stopAfterCheck = False
-                      }
-              _ <- dbtToEff $ Testing.addCollection coll
-              addSuccessToast "Collection saved successfully" Nothing
-              redirectCS $ "/p/" <> pid.toText <> "/monitors/collection/?col_id=" <> colId.toText
-              addRespHeaders CollectionMutSuccess
+          let coll =
+                Testing.Collection
+                  { id = colId
+                  , createdAt = currentTime
+                  , projectId = pid
+                  , updatedAt = currentTime
+                  , lastRun = Nothing
+                  , title = fromMaybe "[TITLE]" colF.title
+                  , description = fromMaybe "" colF.description
+                  , config = AE.object []
+                  , schedule = scheduleText'
+                  , isScheduled = True
+                  , collectionSteps = Testing.CollectionSteps colF.stepsData
+                  , lastRunResponse = Nothing
+                  , lastRunPassed = 0
+                  , lastRunFailed = 0
+                  , tags = V.empty
+                  , collectionVariables = Testing.CollectionVariables V.empty
+                  , alertSeverity = "Info"
+                  , alertMessage = ""
+                  , alertSubject = ""
+                  , notifyAfter = "6hours"
+                  , notifyAfterCheck = False
+                  , stopAfter = "0"
+                  , stopAfterCheck = False
+                  }
+          _ <- dbtToEff $ Testing.addCollection coll
+          addSuccessToast "Collection saved successfully" Nothing
+          redirectCS $ "/p/" <> pid.toText <> "/monitors/collection/?col_id=" <> colId.toText
+          addRespHeaders CollectionMutSuccess
 
 
 collectionStepVariablesUpdateH :: Projects.ProjectId -> Testing.CollectionId -> CollectionVariableForm -> ATAuthCtx (RespHeaders (Html ()))
@@ -186,13 +182,6 @@ pageTabs url ov = do
       a_ [href_ v, role_ "tab", class_ "tab"] "Overview"
     a_ [href_ url, role_ "tab", class_ "tab tab-active"] "Test editor"
 
-
---  stepName :: Maybe Text
---   , stepIndex :: Int
---   , assertResults :: [AssertResult]
---   , request :: StepRequest
---   , stepLog :: Text
---   , stepError :: Maybe Text
 
 collectionGetH :: Projects.ProjectId -> Maybe Testing.CollectionId -> ATAuthCtx (RespHeaders CollectionGet)
 collectionGetH pid colIdM = do
@@ -617,3 +606,24 @@ editorExtraElements = do
     option_ [value_ "date"] ""
     option_ [value_ "notEmpty"] ""
   script_ [src_ "/public/assets/js/thirdparty/jsyaml.min.js", crossorigin_ "true"] ("" :: Text)
+
+
+validateCollectionForm :: Testing.CollectionStepUpdateForm -> Text -> (Bool, Text)
+validateCollectionForm colF paymentPlan =
+  let
+    isValidScheduleForPlan = paymentPlan == "Free" && isJust colF.scheduleNumberUnit && colF.scheduleNumberUnit /= Just "days"
+    isTitleValid = isJust colF.title && colF.title /= Just ""
+    isScheduleNumberValid =
+      case colF.scheduleNumber of
+        Just sn -> case readMaybe (toString sn) :: Maybe Int of
+          Just n -> n >= 0
+          Nothing -> False
+        Nothing -> True
+    errorMessages =
+      T.intercalate "\n " $
+        ["Title should not be empty" | not isTitleValid]
+          ++ ["Schedule number should not be less than zero" | not isScheduleNumberValid]
+          ++ ["You're on the free plan, you can't schedule a test to run more than once a day"]
+    isValid = isTitleValid && isScheduleNumberValid && isValidScheduleForPlan
+   in
+    (isValid, errorMessages)
