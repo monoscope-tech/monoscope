@@ -20,7 +20,7 @@ import Models.Users.Sessions qualified as Sessions
 import NeatInterpolation (text)
 import Network.URI (escapeURIString, isUnescapedInURI)
 import Pages.Components (statBox_)
-import Pages.Traces.Spans qualified as Spans
+import Pages.Telemetry.Spans qualified as Spans
 import PyF (fmt)
 import Relude
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)

@@ -1,4 +1,4 @@
-module Pages.Traces.Spans (expandedSpanItem, spanLatencyBreakdown, spanGetH) where
+module Pages.Telemetry.Spans (expandedSpanItem, spanLatencyBreakdown, spanGetH) where
 
 import Data.Aeson qualified as AE
 import Data.Aeson.Key qualified as Key
@@ -16,7 +16,7 @@ import Models.Telemetry.Telemetry (SpanRecord (..))
 import Models.Telemetry.Telemetry qualified as Telemetry
 import NeatInterpolation (text)
 import Pages.Components (dateTime)
-import Pages.Traces.Utils (getErrorDetails, getRequestDetails, getServiceName, getSpanErrors)
+import Pages.Telemetry.Utils (getErrorDetails, getRequestDetails, getServiceName, getSpanErrors)
 import Relude
 import System.Types
 import Utils

@@ -43,7 +43,7 @@ import Pkg.Components qualified as Components
 import Relude hiding (max, min)
 import System.Types
 import Text.Interpolation.Nyan (int, rmode')
-import Utils (convertToDHMS, faSprite_, freeTierLimitExceededBanner)
+import Utils (convertToDHMS, faSprite_, freeTierLimitExceededBanner, parseTime)
 import Witch (from)
 
 
@@ -72,20 +72,7 @@ dashboardGetH pid fromDStr toDStr sinceStr' = do
   hasRequests <- dbtToEff $ RequestDumps.hasRequest pid
   newEndpoints <- dbtToEff $ Endpoints.endpointRequestStatsByProject pid False False Nothing Nothing Nothing 0 "Incoming"
   -- TODO: Replace with a duration parser.
-  let (fromD, toD, currentRange) = case sinceStr of
-        Just "1H" -> (Just $ addUTCTime (negate $ secondsToNominalDiffTime 3600) now, Just now, Just "Last Hour")
-        Just "24H" -> (Just $ addUTCTime (negate $ secondsToNominalDiffTime $ 3600 * 24) now, Just now, Just "Last 24 Hours")
-        Just "7D" -> (Just $ addUTCTime (negate $ secondsToNominalDiffTime $ 3600 * 24 * 7) now, Just now, Just "Last 7 Days")
-        Just "14D" -> (Just $ addUTCTime (negate $ secondsToNominalDiffTime $ 3600 * 24 * 14) now, Just now, Just "Last 14 Days")
-        _ -> do
-          let f = (iso8601ParseM (from @Text $ fromMaybe "" fromDStr) :: Maybe UTCTime)
-          let t = (iso8601ParseM (from @Text $ fromMaybe "" toDStr) :: Maybe UTCTime)
-          let start = toText . formatTime defaultTimeLocale "%F %T" <$> f
-          let end = toText . formatTime defaultTimeLocale "%F %T" <$> t
-          let range = case (start, end) of
-                (Just s, Just e) -> Just (s <> "-" <> e)
-                _ -> Nothing
-          (f, t, range)
+  let (fromD, toD, currentRange) = parseTime fromDStr toDStr sinceStr now
 
   (projectRequestStats, reqLatenciesRolledByStepsLabeled, freeTierExceeded) <- dbtToEff do
     projectRequestStats <- fromMaybe (def :: Projects.ProjectRequestStats) <$> Projects.projectRequestStatsByProject pid

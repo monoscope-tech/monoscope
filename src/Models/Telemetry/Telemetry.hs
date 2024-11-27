@@ -42,17 +42,21 @@ import Database.PostgreSQL.Simple.FromRow
 import Database.PostgreSQL.Simple.ToRow
 
 import Data.Default (Default)
+import Data.Time (formatTime)
+import Data.Time.Format (defaultTimeLocale)
 import Database.PostgreSQL.Simple.FromField (FromField (..), fromField, returnError)
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.ToField (ToField, toField)
+import Database.PostgreSQL.Simple.Types (Query (..))
 import Deriving.Aeson qualified as DAE
 import Deriving.Aeson.Stock qualified as DAE
 import Effectful
 import Effectful.PostgreSQL.Transact.Effect (DB, dbtToEff)
 import GHC.TypeLits
 import Models.Projects.Projects qualified as Projects
-import Opentelemetry.Proto.Metrics.V1.Metrics (MetricData (MetricDataExponentialHistogram))
+import NeatInterpolation (text)
+import Opentelemetry.Proto.Metrics.V1.Metrics (Metric (metricMetadata), MetricData (MetricDataExponentialHistogram))
 import Relude
 import Relude.Unsafe qualified as Unsafe
 
@@ -184,6 +188,7 @@ data MetricRecord = MetricRecord
   , resource :: AE.Value
   , instrumentationScope :: AE.Value
   , metricValue :: MetricValue
+  , metricMetadata :: AE.Value
   , exemplars :: AE.Value
   , flags :: Int
   }
@@ -284,6 +289,17 @@ data MetricType = MTGauge | MTSum | MTHistogram | MTExponentialHistogram | MTSum
   deriving (ToField, FromField) via WrappedEnum "MT" MetricType
 
 
+data MetricDataPoint = MetricDataPoint
+  { metricName :: Text
+  , metricType :: Text
+  , metricUnit :: Text
+  , metricDescription :: Text
+  , dataPointsCount :: Int
+  }
+  deriving (Show, Generic)
+  deriving anyclass (FromRow, ToRow, NFData)
+
+
 getTraceDetails :: DB :> es => Projects.ProjectId -> Text -> Eff es (Maybe Trace)
 getTraceDetails pid trId = dbtToEff $ queryOne Select q (pid, trId)
   where
@@ -349,6 +365,21 @@ getChildSpans pid spanIds = dbtToEff $ query Select q (pid, spanIds)
                      span_name, start_time, end_time, kind, status, status_message, attributes,
                      events, links, resource, instrumentation_scope, CAST(EXTRACT(EPOCH FROM (end_time - start_time)) * 1000000000 AS BIGINT) as span_duration
               FROM telemetry.spans where project_id =? AND parent_span_id=Any(?)|]
+
+
+getDataPointsData :: DB :> es => Projects.ProjectId -> (Maybe UTCTime, Maybe UTCTime) -> Eff es (V.Vector MetricDataPoint)
+getDataPointsData pid dateRange = dbtToEff $ query Select (Query $ encodeUtf8 q) pid
+  where
+    dateRangeStr = toText $ case dateRange of
+      (Nothing, Just b) -> "AND created_at BETWEEN NOW() AND '" <> formatTime defaultTimeLocale "%F %R" b <> "'"
+      (Just a, Just b) -> "AND created_at BETWEEN '" <> formatTime defaultTimeLocale "%F %R" a <> "' AND '" <> formatTime defaultTimeLocale "%F %R" b <> "'"
+      _ -> ""
+    q =
+      [text| SELECT metric_name, metric_type, COUNT(*) AS data_points, JSONB_AGG(DISTINCT resource->"source") AS sources
+      FROM telemetry.metrics WHERE project_id = ? $dateRangeStr
+      GROUP BY metric_name, metric_type
+      ORDER BY metric_name;
+    |]
 
 
 -- Function to insert multiple log entries

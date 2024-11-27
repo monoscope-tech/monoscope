@@ -85,6 +85,7 @@ CREATE TABLE IF NOT EXISTS telemetry.metrics (
     metric_value JSONB,
     exemplars  JSONB,
     flags INT,
+    metricMetadata JSONB,
     PRIMARY KEY(project_id, timestamp, id)
 );
 

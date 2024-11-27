@@ -1,4 +1,4 @@
-module Pages.Traces.Trace (traceH, TraceDetailsGet (..)) where
+module Pages.Telemetry.Trace (traceH, TraceDetailsGet (..)) where
 
 import Data.Aeson ((.=))
 import Data.Aeson qualified as AE
@@ -22,8 +22,8 @@ import Models.Telemetry.Telemetry (SpanStatus (SSError))
 import Models.Telemetry.Telemetry qualified as Telemetry
 import NeatInterpolation (text)
 import Pages.Components (dateTime)
-import Pages.Traces.Spans qualified as Spans
-import Pages.Traces.Utils
+import Pages.Telemetry.Spans qualified as Spans
+import Pages.Telemetry.Utils
 import Relude
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
 import Utils (faSprite_, getDurationNSMS, getGrpcStatusColor, getServiceColors, getStatusColor, utcTimeToNanoseconds)

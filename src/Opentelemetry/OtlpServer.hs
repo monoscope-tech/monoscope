@@ -329,6 +329,7 @@ convertMetricRecord pid resource iscp metric =
         , metricType
         , flags
         , attributes
+        , metricMetadata = keyValueToJSONB metric.metricMetadata
         }
   )
     <$> values

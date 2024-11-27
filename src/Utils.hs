@@ -8,6 +8,7 @@ module Utils (
   GetOrRedirect,
   redirect,
   lookupVecByKey,
+  parseTime,
   DBField (..),
   faSprite_,
   lookupVecInt,
@@ -56,7 +57,7 @@ import Data.List (notElem, (!!))
 import Data.Scientific (toBoundedInteger)
 import Data.Text (replace)
 import Data.Text qualified as T
-import Data.Time (NominalDiffTime, ZonedTime, defaultTimeLocale, parseTimeM)
+import Data.Time (NominalDiffTime, ZonedTime, addUTCTime, defaultTimeLocale, parseTimeM, secondsToNominalDiffTime)
 import Data.Time.Clock (UTCTime)
 import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
 import Data.Time.Format (formatTime)
@@ -78,6 +79,7 @@ import Servant
 import Text.Printf (printf)
 import Text.Regex.TDFA ((=~))
 import Text.Show
+import Witch.From
 
 
 -- Added only for satisfying the tests
@@ -455,3 +457,20 @@ lemonSqueezyUrlsAnnual =
 
 isDemoAndNotSudo :: Projects.ProjectId -> Bool -> Bool
 isDemoAndNotSudo pid isSudo = pid.toText == "00000000-0000-0000-0000-000000000000" && not isSudo
+
+
+parseTime :: Maybe Text -> Maybe Text -> Maybe Text -> UTCTime -> (Maybe UTCTime, Maybe UTCTime, Maybe Text)
+parseTime fromM toM sinceM now = case sinceM of
+  Just "1H" -> (Just $ addUTCTime (negate $ secondsToNominalDiffTime 3600) now, Just now, Just "Last Hour")
+  Just "24H" -> (Just $ addUTCTime (negate $ secondsToNominalDiffTime $ 3600 * 24) now, Just now, Just "Last 24 Hours")
+  Just "7D" -> (Just $ addUTCTime (negate $ secondsToNominalDiffTime $ 3600 * 24 * 7) now, Just now, Just "Last 7 Days")
+  Just "14D" -> (Just $ addUTCTime (negate $ secondsToNominalDiffTime $ 3600 * 24 * 14) now, Just now, Just "Last 14 Days")
+  _ -> do
+    let f = (iso8601ParseM (toString $ fromMaybe "" fromM) :: Maybe UTCTime)
+        t = (iso8601ParseM (toString $ fromMaybe "" toM) :: Maybe UTCTime)
+        start = toText . formatTime defaultTimeLocale "%F %T" <$> f
+        end = toText . formatTime defaultTimeLocale "%F %T" <$> t
+        range = case (start, end) of
+          (Just s, Just e) -> Just (s <> "-" <> e)
+          _ -> Nothing
+     in (f, t, range)

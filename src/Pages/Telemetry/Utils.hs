@@ -1,4 +1,4 @@
-module Pages.Traces.Utils (getServiceName, getServiceColor, getRequestDetails, spanHasErrors, getSpanErrors, getErrorDetails)
+module Pages.Telemetry.Utils (getServiceName, getServiceColor, getRequestDetails, spanHasErrors, getSpanErrors, getErrorDetails)
 where
 
 import Data.Aeson qualified as AE

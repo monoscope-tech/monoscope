@@ -44,7 +44,7 @@ import Pages.Specification.GenerateSwagger qualified as GenerateSwagger
 import Pages.Specification.Routes qualified as SpecificationRoutes
 import Pages.Specification.Server qualified as SpecificationRoutes
 import Pages.Survey qualified as Survey
-import Pages.Traces.Routes qualified as TracesRoutes
+import Pages.Telemetry.Routes qualified as TelemetryRoutes
 import Pkg.RouteUtils
 import Relude
 import Servant
@@ -121,7 +121,7 @@ data CookieProtectedRoutes mode = CookieProtectedRoutes
   , endpoints :: mode :- "p" :> ProjectId :> EndpointsRoutes.Routes
   , monitors :: mode :- "p" :> ProjectId :> MonitorsRoutes.Routes
   , specification :: mode :- "p" :> ProjectId :> SpecificationRoutes.Routes
-  , traces :: mode :- "p" :> ProjectId :> TracesRoutes.Routes
+  , traces :: mode :- "p" :> ProjectId :> TelemetryRoutes.Routes
   , apiGet :: mode :- "p" :> ProjectId :> "apis" :> Get '[HTML] (RespHeaders Api.ApiGet)
   , apiDelete :: mode :- "p" :> ProjectId :> "apis" :> Capture "keyID" ProjectApiKeys.ProjectApiKeyId :> Delete '[HTML] (RespHeaders Api.ApiMut)
   , apiPost :: mode :- "p" :> ProjectId :> "apis" :> ReqBody '[FormUrlEncoded] Api.GenerateAPIKeyForm :> Post '[HTML] (RespHeaders Api.ApiMut)
@@ -153,7 +153,7 @@ cookieProtectedServer =
     , endpoints = EndpointsRoutes.server
     , monitors = MonitorsRoutes.server
     , specification = SpecificationRoutes.server
-    , traces = TracesRoutes.server
+    , traces = TelemetryRoutes.server
     , apiGet = Api.apiGetH
     , apiDelete = Api.apiDeleteH
     , apiPost = Api.apiPostH

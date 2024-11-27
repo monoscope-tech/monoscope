@@ -1,9 +1,10 @@
-module Pages.Traces.Routes (Routes, Routes' (..), server) where
+module Pages.Telemetry.Routes (Routes, Routes' (..), server) where
 
 import Lucid (Html)
 import Models.Projects.Projects qualified as Projects
-import Pages.Traces.Spans qualified as Spans
-import Pages.Traces.Trace qualified as Trace
+import Pages.Telemetry.Metrics
+import Pages.Telemetry.Spans qualified as Spans
+import Pages.Telemetry.Trace qualified as Trace
 import Relude (Generic, Text)
 import Servant (
   Capture,
@@ -15,6 +16,7 @@ import Servant (
   type (:>),
  )
 import Servant.HTML.Lucid (HTML)
+import Servant.Htmx (HXBoosted)
 import System.Types (ATAuthCtx, RespHeaders)
 
 
@@ -30,6 +32,7 @@ type Routes = NamedRoutes Routes'
 data Routes' mode = Routes'
   { tracesGet :: mode :- "traces" :> Capture "trace_id" Text :> QPT "span_id" :> QPT "nav" :> Get '[HTML] (RespHeaders Trace.TraceDetailsGet)
   , spanGetH :: mode :- "spans" :> Capture "trace_id" Text :> Capture "span_id" Text :> Get '[HTML] (RespHeaders (Html ()))
+  , metricsOVGetH :: mode :- "metrics" :> QPT "tab" :> QPT "from" :> QPT "to" :> QPT "since" :> HXBoosted :> Get '[HTML] (RespHeaders MetricsOverViewGet)
   }
   deriving stock (Generic)
 
@@ -39,4 +42,5 @@ server pid =
   Routes'
     { tracesGet = Trace.traceH pid
     , spanGetH = Spans.spanGetH pid
+    , metricsOVGetH = metricsOverViewGetH pid
     }

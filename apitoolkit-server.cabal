@@ -135,10 +135,11 @@ library
       Pages.Specification.Server
       Pages.Survey
       Pages.SurveySpec
-      Pages.Traces.Routes
-      Pages.Traces.Spans
-      Pages.Traces.Trace
-      Pages.Traces.Utils
+      Pages.Telemetry.Metrics
+      Pages.Telemetry.Routes
+      Pages.Telemetry.Spans
+      Pages.Telemetry.Trace
+      Pages.Telemetry.Utils
       Pkg.Components
       Pkg.Components.ExternalHeadScripts
       Pkg.Components.ItemsList
@@ -339,7 +340,7 @@ executable apitoolkit-server-exe
     , rust-interop
   mixins:
       relude (Relude as Prelude)
-    , relude 
+    , relude
   default-language: GHC2021
 
 test-suite doctests
