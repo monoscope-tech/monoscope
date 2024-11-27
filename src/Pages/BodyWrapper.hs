@@ -236,6 +236,7 @@ bodyWrapper BWConfig{sessM, currProject, pageTitle, menuItem, hasIntegrated, nav
         var currentISOTimeStringVar = ((new Date()).toISOString().split(".")[0])+"+00:00";
         document.addEventListener('DOMContentLoaded', function(){
           // htmx.config.useTemplateFragments = true
+          htmx.config.scrollBehavior = 'smooth'
           tippy('[data-tippy-content]');
           var notyf = new Notyf({
               duration: 5000,
