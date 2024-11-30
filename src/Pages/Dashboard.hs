@@ -55,7 +55,7 @@ dashboardGetH pid fromDStr toDStr sinceStr' = do
   now <- Time.currentTime
   hasRequests <- dbtToEff $ RequestDumps.hasRequest pid
   newEndpoints <- dbtToEff $ Endpoints.endpointRequestStatsByProject pid False False Nothing Nothing Nothing 0 "Incoming"
-  let (fromD, toD, currentRange) = Components.parseTimeRange now (Components.TimePickerP sinceStr' fromDStr toDStr)
+  let (fromD, toD, currentRange) = Components.parseTimeRange now (Components.TimePicker sinceStr' fromDStr toDStr)
   (projectRequestStats, reqLatenciesRolledByStepsLabeled, freeTierExceeded) <- dbtToEff do
     projectRequestStats <- fromMaybe (def :: Projects.ProjectRequestStats) <$> Projects.projectRequestStatsByProject pid
     let maxV = round projectRequestStats.p99 :: Int

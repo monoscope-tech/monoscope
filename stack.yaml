@@ -9,6 +9,7 @@ extra-deps:
   - ./rust-interop
   - ./otlp
   - pg-entity-0.0.4.4
+  - deriving-aeson-0.2.10
   - hiedb-plugin-0.1.0@sha256:480d8836e7d21b91a6205010af534cb739a2079d4bdeac7893cf85c9a4d75f32,1439
   - hiedb-0.6.0.1@sha256:7398fe3115c239f421286dbb1db3b5ac359568955e7585bcf27a45c99420b46f,2962
   - hie-compat-0.3.1.2@sha256:74a8585a90e3c06667134939cd170cff24067d5a988e14829785af0dfa6bd10f,1535

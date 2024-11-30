@@ -1,10 +1,12 @@
 {-# LANGUAGE ViewPatterns #-}
 
-module Pkg.Components.TimePicker (parseTimeRange, timepicker_, TimePickerP (..)) where
+module Pkg.Components.TimePicker (parseTimeRange, timepicker_, TimePicker (..)) where
 
+import Data.Aeson qualified as AE
 import Data.List qualified as L
 import Data.Time (UTCTime, addUTCTime, defaultTimeLocale, formatTime, secondsToNominalDiffTime)
 import Data.Time.Format.ISO8601 (iso8601ParseM)
+import Deriving.Aeson.Stock qualified as DAE
 import Lucid
 import Lucid.Base (termRaw)
 import Lucid.Hyperscript (__)
@@ -20,12 +22,13 @@ import Utils (faSprite_)
 type Parser = Parsec Void Text
 
 
-data TimePickerP = TimePickerP
-  { sinceM :: Maybe Text
-  , fromM :: Maybe Text
-  , toM :: Maybe Text
+data TimePicker = TimePicker
+  { since :: Maybe Text
+  , from :: Maybe Text
+  , to :: Maybe Text
   }
-  deriving (Generic)
+  deriving (Show, Generic)
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake TimePicker
 
 
 -- Mapping of time units to seconds
@@ -56,10 +59,10 @@ parseSince now since =
     timeParser = (,) <$> decimal <*> (space *> some letterChar)
 
 
-parseTimeRange :: UTCTime -> TimePickerP -> (Maybe UTCTime, Maybe UTCTime, Maybe Text)
-parseTimeRange now (TimePickerP Nothing fromM toM) = parseFromAndTo now fromM toM
-parseTimeRange now (TimePickerP (Just "") fromM toM) = parseFromAndTo now fromM toM
-parseTimeRange now (TimePickerP sinceM _ _) = parseSince now (maybeToMonoid sinceM)
+parseTimeRange :: UTCTime -> TimePicker -> (Maybe UTCTime, Maybe UTCTime, Maybe Text)
+parseTimeRange now (TimePicker Nothing fromM toM) = parseFromAndTo now fromM toM
+parseTimeRange now (TimePicker (Just "") fromM toM) = parseFromAndTo now fromM toM
+parseTimeRange now (TimePicker sinceM _ _) = parseSince now (maybeToMonoid sinceM)
 
 
 parseFromAndTo :: UTCTime -> Maybe Text -> Maybe Text -> (Maybe UTCTime, Maybe UTCTime, Maybe Text)

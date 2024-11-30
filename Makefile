@@ -18,9 +18,10 @@ cypress:
 	npx cypress run --record --key 2a2372e2-4ba1-4cd5-8bed-f39f4f047b3e
 
 live-reload:
-	# ghcid --command 'stack ghci apitoolkit-server --ghc-options=-w' --test ':run Start.startApp' --warnings
+	# ghcid --command 'stack ghci apitoolkit-server --ghc-options=-w --with-compiler=ghc-9.8.2' --test ':run Start.startApp' --warnings
 	# ghcid --command 'stack ghci apitoolkit-server --ghc-options="-w -j4 +RTS -A128m -n2m -RTS"' --test ':run Start.startApp' --warnings
-	ghcid --command 'cabal repl --ghc-options="-w -j4"' --test ':run Start.startApp' --warnings
+	ghcid --command 'cabal repl --ghc-options="-w -j4" --with-compiler=ghc-9.8.3' --test ':run Start.startApp' --warnings
+
 
 hot-reload:
 	livereload -f reload.trigger static/public/ & \

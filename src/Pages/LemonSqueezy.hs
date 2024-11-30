@@ -8,6 +8,7 @@ import Data.Time.Calendar (fromGregorian, toGregorian)
 import Data.Time.Clock (UTCTime (..))
 import Data.UUID.V4 qualified as UUIDV4
 import Deriving.Aeson qualified as DAE
+import Deriving.Aeson.Stock qualified as DAE
 import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
 import Effectful.Reader.Static (asks)
 import Effectful.Time qualified as Time
@@ -30,20 +31,20 @@ data FirstSubItem = FirstSubItem
   , subscriptionId :: Int
   }
   deriving stock (Show, Generic)
-  deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] FirstSubItem
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake FirstSubItem
 
 
 newtype CustomData = CustomData
   { projectId :: Maybe Text
   }
   deriving stock (Show, Generic)
-  deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] CustomData
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake CustomData
 
 
 data MetaData = MetaData
   {customData :: Maybe CustomData, eventName :: Text}
   deriving stock (Show, Generic)
-  deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] MetaData
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake MetaData
 
 
 data Attributes = Attributes
@@ -53,7 +54,7 @@ data Attributes = Attributes
   , userEmail :: Text
   }
   deriving stock (Show, Generic)
-  deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] Attributes
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake Attributes
 
 
 data DataVals = DataVals
@@ -61,7 +62,7 @@ data DataVals = DataVals
   , attributes :: Attributes
   }
   deriving stock (Show, Generic)
-  deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] DataVals
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake DataVals
 
 
 data WebhookData = WebhookData

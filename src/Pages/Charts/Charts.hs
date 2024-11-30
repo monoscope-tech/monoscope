@@ -204,7 +204,7 @@ chartsGetRaw typeM queryM queryASTM pidM groupByM queryByM slotsM limitsM themeM
       queryASTM
 
   now <- Time.currentTime
-  let (fromD, toD, _currentRange) = Components.parseTimeRange now (Components.TimePickerP sinceM fromM toM)
+  let (fromD, toD, _currentRange) = Components.parseTimeRange now (Components.TimePicker sinceM fromM toM)
 
   let sqlQueryComponents =
         (defSqlQueryCfg (Unsafe.fromJust pidM) now (parseMaybe pSource =<< sourceM) Nothing)

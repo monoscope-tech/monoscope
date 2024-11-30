@@ -27,6 +27,7 @@ import Pages.AutoComplete qualified as AutoComplete
 import Pages.BodyWrapper (PageCtx (..))
 import Pages.Charts.Charts qualified as Charts
 import Pages.Dashboard qualified as Dashboard
+import Pages.Dashboards qualified as Dashboards
 import Pages.Endpoints.Routes qualified as EndpointsRoutes
 import Pages.Endpoints.Server qualified as EndpointsRoutes
 import Pages.Fields.FieldDetails qualified as FieldDetails
@@ -116,6 +117,7 @@ type role CookieProtectedRoutes nominal
 type CookieProtectedRoutes :: Type -> Type
 data CookieProtectedRoutes mode = CookieProtectedRoutes
   { dashboardGet :: mode :- "p" :> ProjectId :> QPT "from" :> QPT "to" :> QPT "since" :> Get '[HTML] (RespHeaders (PageCtx Dashboard.DashboardGet))
+  , dashboardsGet :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> QPT "file" :> QPT "from" :> QPT "to" :> QPT "since" :> Get '[HTML] (RespHeaders (PageCtx Dashboards.DashboardGet))
   , projects :: mode :- ProjectsRoutes.Routes
   , anomalies :: mode :- "p" :> ProjectId :> "anomalies" :> AnomaliesRoutes.Routes
   , logExplorer :: mode :- "p" :> ProjectId :> LogExplorerRoutes.Routes
@@ -148,6 +150,7 @@ cookieProtectedServer :: Servant.ServerT (Servant.NamedRoutes CookieProtectedRou
 cookieProtectedServer =
   CookieProtectedRoutes
     { dashboardGet = Dashboard.dashboardGetH
+    , dashboardsGet = Dashboards.dashboardGetH
     , projects = ProjectsRoutes.server
     , logExplorer = LogExplorerRoutes.server
     , anomalies = AnomaliesRoutes.server
