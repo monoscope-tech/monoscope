@@ -14,9 +14,11 @@ module Models.Telemetry.Telemetry (
   GaugeSum (..),
   Histogram (..),
   MetricValue (..),
+  MetricDataPoint (..),
   Summary (..),
   EHBucket (..),
   Quantile (..),
+  getDataPointsData,
   bulkInsertLogs,
   spanRecordById,
   getTraceDetails,
@@ -295,6 +297,7 @@ data MetricDataPoint = MetricDataPoint
   , metricUnit :: Text
   , metricDescription :: Text
   , dataPointsCount :: Int
+  , serviceNames :: V.Vector Text
   }
   deriving (Show, Generic)
   deriving anyclass (FromRow, ToRow, NFData)
@@ -371,13 +374,13 @@ getDataPointsData :: DB :> es => Projects.ProjectId -> (Maybe UTCTime, Maybe UTC
 getDataPointsData pid dateRange = dbtToEff $ query Select (Query $ encodeUtf8 q) pid
   where
     dateRangeStr = toText $ case dateRange of
-      (Nothing, Just b) -> "AND created_at BETWEEN NOW() AND '" <> formatTime defaultTimeLocale "%F %R" b <> "'"
-      (Just a, Just b) -> "AND created_at BETWEEN '" <> formatTime defaultTimeLocale "%F %R" a <> "' AND '" <> formatTime defaultTimeLocale "%F %R" b <> "'"
+      (Nothing, Just b) -> "AND timestamp BETWEEN NOW() AND '" <> formatTime defaultTimeLocale "%F %R" b <> "'"
+      (Just a, Just b) -> "AND timestamp BETWEEN '" <> formatTime defaultTimeLocale "%F %R" a <> "' AND '" <> formatTime defaultTimeLocale "%F %R" b <> "'"
       _ -> ""
     q =
-      [text| SELECT metric_name, metric_type, COUNT(*) AS data_points, JSONB_AGG(DISTINCT resource->"source") AS sources
+      [text| SELECT metric_name, metric_type, metric_unit, metric_description, COUNT(*) AS data_points, ARRAY_AGG(DISTINCT COALESCE(resource->>'service.name', 'unknown'))::text[] AS service_names
       FROM telemetry.metrics WHERE project_id = ? $dateRangeStr
-      GROUP BY metric_name, metric_type
+      GROUP BY metric_name, metric_type, metric_unit, metric_description
       ORDER BY metric_name;
     |]
 

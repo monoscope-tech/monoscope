@@ -372,7 +372,12 @@
 .tab:is(input[type='radio']) {
   width: max-content;
 }
-
+.tree_opened ~ .children_container {
+  display: flex;
+}
+.tree_opened .toggler {
+  transform: rotate(180deg);
+}
 @layer components {
   .blue-gr-btn {
     @apply bg-gradient-to-b text-white font-medium from-blue-500 to-blue-600;
