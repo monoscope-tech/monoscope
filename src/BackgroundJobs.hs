@@ -148,7 +148,7 @@ jobsRunner logger authCtx job = when authCtx.config.enableBackgroundJobs $ do
             _ <-
               if dayOfWeek currentDay == Monday
                 then createJob conn "background_jobs" $ BackgroundJobs.WeeklyReports p
-                else createJob conn "background_jobs" $ BackgroundJobs.DailyReports p
+                else pass
             _ <- createJob conn "background_jobs" $ BackgroundJobs.ReportUsage p
             pass
       DailyReports pid -> dailyReportForProject pid
@@ -184,10 +184,10 @@ jobsRunner logger authCtx job = when authCtx.config.enableBackgroundJobs $ do
                 pass
           else Log.logAttention "RunCollectionTests failed.  Job was sheduled to run over 30 mins ago" $ collectionM <&> \c -> (c.title, c.id)
       APITestFailed pid col_id stepResult -> do
-        collectionM <- dbtToEff $ Testing.getCollectionById col_id
-        whenJust collectionM \collection -> do
-          _ <- sendTestFailedAlert pid col_id collection stepResult
-          pass
+        -- collectionM <- dbtToEff $ Testing.getCollectionById col_id
+        -- whenJust collectionM \collection -> do
+        --   _ <- sendTestFailedAlert pid col_id collection stepResult
+        pass
 
 
 generateSwaggerForProject :: Projects.ProjectId -> Users.UserId -> Text -> ATBackgroundCtx ()
@@ -290,8 +290,8 @@ handleQueryMonitorThreshold monitorE isAlert = do
 
 jobsWorkerInit :: Log.Logger -> Config.AuthContext -> IO ()
 jobsWorkerInit logger appCtx =
-  startJobRunner
-    $ mkConfig jobLogger "background_jobs" appCtx.jobsPool (MaxConcurrentJobs 1) (jobsRunner logger appCtx) id
+  startJobRunner $
+    mkConfig jobLogger "background_jobs" appCtx.jobsPool (MaxConcurrentJobs 1) (jobsRunner logger appCtx) id
   where
     jobLogger :: LogLevel -> LogEvent -> IO ()
     jobLogger logLevel logEvent = Log.runLogT "OddJobs" logger Log.LogAttention $ Log.logInfo "Background jobs ping." (show @Text logLevel, show @Text logEvent) -- logger show (logLevel, logEvent)
@@ -480,8 +480,8 @@ Endpoint: `{endpointPath}`
 [View more](https://app.apitoolkit.io/p/{pid.toText}/anomalies/by_hash/{targetHash})|]
             whenJust project.discordUrl (`sendDiscordNotif` msg)
           _ -> do
-            when (totalRequestsCount > 50)
-              $ forM_ users \u -> do
+            when (totalRequestsCount > 50) $
+              forM_ users \u -> do
                 let templateVars =
                       AE.object
                         [ "user_name" AE..= u.firstName
@@ -565,21 +565,21 @@ Endpoint: `{endpointPath}`
       err <- Unsafe.fromJust <<$>> dbtToEff $ Anomalies.errorByHash targetHash
       issueId <- liftIO $ Anomalies.AnomalyId <$> UUIDV4.nextRandom
       _ <-
-        dbtToEff
-          $ Anomalies.insertIssue
-          $ Anomalies.Issue
-            { id = issueId
-            , createdAt = err.createdAt
-            , updatedAt = err.updatedAt
-            , projectId = pid
-            , anomalyType = Anomalies.ATRuntimeException
-            , targetHash = targetHash
-            , issueData = Anomalies.IDNewRuntimeExceptionIssue err.errorData
-            , acknowlegedAt = Nothing
-            , acknowlegedBy = Nothing
-            , endpointId = Nothing
-            , archivedAt = Nothing
-            }
+        dbtToEff $
+          Anomalies.insertIssue $
+            Anomalies.Issue
+              { id = issueId
+              , createdAt = err.createdAt
+              , updatedAt = err.updatedAt
+              , projectId = pid
+              , anomalyType = Anomalies.ATRuntimeException
+              , targetHash = targetHash
+              , issueData = Anomalies.IDNewRuntimeExceptionIssue err.errorData
+              , acknowlegedAt = Nothing
+              , acknowlegedBy = Nothing
+              , endpointId = Nothing
+              , archivedAt = Nothing
+              }
       forM_ project.notificationsChannel \case
         Projects.NSlack ->
           sendSlackMessage
