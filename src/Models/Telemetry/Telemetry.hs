@@ -15,6 +15,7 @@ module Models.Telemetry.Telemetry (
   Histogram (..),
   MetricValue (..),
   MetricDataPoint (..),
+  MetricChartListData (..),
   Summary (..),
   EHBucket (..),
   Quantile (..),
@@ -24,6 +25,8 @@ module Models.Telemetry.Telemetry (
   getTraceDetails,
   bulkInsertMetrics,
   bulkInsertSpans,
+  getMetricChartListData,
+  getMetricServiceNames,
   getChildSpans,
   SpanEvent (..),
   SpanLink (..),
@@ -303,6 +306,16 @@ data MetricDataPoint = MetricDataPoint
   deriving anyclass (FromRow, ToRow, NFData)
 
 
+data MetricChartListData = MetricChartListData
+  { metricName :: Text
+  , metricType :: Text
+  , metricUnit :: Text
+  , metricDescription :: Text
+  }
+  deriving (Show, Generic)
+  deriving anyclass (FromRow, ToRow, NFData)
+
+
 getTraceDetails :: DB :> es => Projects.ProjectId -> Text -> Eff es (Maybe Trace)
 getTraceDetails pid trId = dbtToEff $ queryOne Select q (pid, trId)
   where
@@ -383,6 +396,38 @@ getDataPointsData pid dateRange = dbtToEff $ query Select (Query $ encodeUtf8 q)
       GROUP BY metric_name, metric_type, metric_unit, metric_description
       ORDER BY metric_name;
     |]
+
+
+getMetricChartListData :: DB :> es => Projects.ProjectId -> Maybe Text -> Maybe Text -> (Maybe UTCTime, Maybe UTCTime) -> Eff es (V.Vector MetricChartListData)
+getMetricChartListData pid sourceM prefixM dateRange = dbtToEff $ query Select (Query $ encodeUtf8 q) pid
+  where
+    dateRangeStr = toText $ case dateRange of
+      (Nothing, Just b) -> "AND timestamp BETWEEN NOW() AND '" <> formatTime defaultTimeLocale "%F %R" b <> "'"
+      (Just a, Just b) -> "AND timestamp BETWEEN '" <> formatTime defaultTimeLocale "%F %R" a <> "' AND '" <> formatTime defaultTimeLocale "%F %R" b <> "'"
+      _ -> ""
+    sourceFilter = case sourceM of
+      Nothing -> ""
+      Just source -> if source == "" || source == "all" then "" else "AND resource->>'service.name' = '" <> source <> "'"
+    prefixFilter = case prefixM of
+      Nothing -> ""
+      Just prefix -> if prefix == "" || prefix == "all" then "" else "AND metric_name LIKE '" <> prefix <> "%'"
+
+    q =
+      [text|
+        SELECT DISTINCT ON (metric_name) metric_name, metric_type, metric_unit, metric_description
+        FROM telemetry.metrics WHERE project_id = ? $sourceFilter $prefixFilter $dateRangeStr
+     |]
+
+
+instance FromRow Text where
+  fromRow = field
+
+
+getMetricServiceNames :: DB :> es => Projects.ProjectId -> Eff es (V.Vector Text)
+getMetricServiceNames pid = dbtToEff $ query Select q pid
+  where
+    q =
+      [sql| SELECT DISTINCT resource->>'service.name' FROM telemetry.metrics WHERE project_id = ?  AND resource->>'service.name' IS NOT NULL|]
 
 
 -- Function to insert multiple log entries
