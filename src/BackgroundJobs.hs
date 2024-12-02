@@ -147,7 +147,9 @@ jobsRunner logger authCtx job = when authCtx.config.enableBackgroundJobs $ do
           liftIO $ withResource authCtx.jobsPool \conn -> do
             _ <-
               if dayOfWeek currentDay == Monday
-                then createJob conn "background_jobs" $ BackgroundJobs.WeeklyReports p
+                then do
+                  _ <- createJob conn "background_jobs" $ BackgroundJobs.WeeklyReports p
+                  pass
                 else pass
             _ <- createJob conn "background_jobs" $ BackgroundJobs.ReportUsage p
             pass
