@@ -85,7 +85,7 @@ apiLogH pid queryM queryASTM cols' cursorM' sinceM fromM toM layoutM sourceM tar
     addSuccessToast "Deleted from Query Library successfully" Nothing
 
   now <- Time.currentTime
-  let (fromD, toD, currentRange) = Components.parseTimeRange now (Components.TimePickerP sinceM fromM toM)
+  let (fromD, toD, currentRange) = Components.parseTimeRange now (Components.TimePicker sinceM fromM toM)
   tableAsVecE <- RequestDumps.selectLogTable pid queryAST cursorM' (fromD, toD) summaryCols (parseMaybe pSource =<< sourceM) targetSpansM
 
   -- FIXME: we're silently ignoring parse errors and the likes.
@@ -439,6 +439,7 @@ apiLogsPage page = do
   template_ [id_ "loader-tmp"] $ span_ [class_ "loading loading-dots loading-md"] ""
 
 
+-- TODO: centralize to have a single chart rendering component
 renderChart :: Projects.ProjectId -> Text -> Text -> Maybe Text -> Maybe Text -> Text -> Text -> Html ()
 renderChart pid chartId chartTitle primaryUnitM rateM source extraHxVals = do
   let chartAspectRatio "logs" = "aspect-[12/1]"

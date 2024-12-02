@@ -77,9 +77,7 @@ import Utils
 newtype AnomalyId = AnomalyId {unAnomalyId :: UUID.UUID}
   deriving stock (Generic, Show)
   deriving newtype (NFData, AE.FromJSON, AE.ToJSON)
-  deriving
-    (Eq, Ord, FromField, ToField, FromHttpApiData, Default)
-    via UUID.UUID
+  deriving newtype (Eq, Ord, FromField, ToField, FromHttpApiData, Default)
 
 
 anomalyIdText :: AnomalyId -> Text

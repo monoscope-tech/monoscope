@@ -230,7 +230,7 @@ endpointDetailsH :: Projects.ProjectId -> Endpoints.EndpointId -> Maybe Text -> 
 endpointDetailsH pid eid fromDStr toDStr sinceStr subPageM shapeHashM = do
   (sess, project) <- Sessions.sessionAndProject pid
   now <- liftIO getCurrentTime
-  let (fromD, toD, currentRange) = Components.parseTimeRange now (Components.TimePickerP sinceStr fromDStr toDStr)
+  let (fromD, toD, currentRange) = Components.parseTimeRange now (Components.TimePicker sinceStr fromDStr toDStr)
   endpointM <- dbtToEff $ Endpoints.endpointById eid
   let bwconf =
         (def :: BWConfig)

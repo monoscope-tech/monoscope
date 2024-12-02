@@ -85,7 +85,8 @@ bodyWrapper BWConfig{sessM, currProject, pageTitle, menuItem, hasIntegrated, nav
         link_ [rel_ "stylesheet", href_ "https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/atom-one-dark.min.css"]
         link_ [rel_ "stylesheet", href_ "https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.63.0/codemirror.min.css"]
         link_ [rel_ "stylesheet", href_ "https://cdnjs.cloudflare.com/ajax/libs/codemirror/6.65.7/theme/elegant.min.css"]
-        link_ [href_ "https://cdn.jsdelivr.net/npm/@yaireo/tagify/dist/tagify.css", rel_ "stylesheet", type_ "text/css"]
+        link_ [rel_ "stylesheet", href_ "https://cdn.jsdelivr.net/npm/@yaireo/tagify/dist/tagify.css", type_ "text/css"]
+        link_ [rel_ "stylesheet", href_ $(hashAssetFile "/public/assets/deps/gridstack/gridstack.min.css")]
 
         -- SCRIPTS
         script_ [src_ "https://cdn.jsdelivr.net/npm/@yaireo/tagify"] ("" :: Text)
@@ -98,6 +99,7 @@ bodyWrapper BWConfig{sessM, currProject, pageTitle, menuItem, hasIntegrated, nav
         script_ [src_ $(hashAssetFile "/public/assets/deps/htmx/preload.js"), defer_ "true"] ("" :: Text)
         script_ [src_ $(hashAssetFile "/public/assets/deps/htmx/json-enc.js"), defer_ "true"] ("" :: Text)
         script_ [src_ $(hashAssetFile "/public/assets/deps/lit/lit-html.js"), type_ "module", defer_ "true"] ("" :: Text)
+        script_ [src_ $(hashAssetFile "/public/assets/deps/gridstack/gridstack-all.js")] ("" :: Text)
         script_ [src_ "https://unpkg.com/htmx.org/dist/ext/debug.js", defer_ "true"] ("" :: Text)
         script_ [src_ $(hashAssetFile "/public/assets/js/thirdparty/_hyperscript_web0_9_5.min.js"), defer_ "true"] ("" :: Text)
         script_ [src_ $(hashAssetFile "/public/assets/js/thirdparty/_hyperscript_template.js"), defer_ "true"] ("" :: Text)

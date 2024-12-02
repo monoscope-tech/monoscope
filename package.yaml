@@ -190,6 +190,7 @@ library:
     - cryptohash-md5
     - hiedb-plugin
     - casing
+    - yaml
 
 executables:
   apitoolkit-server-exe:

@@ -68,6 +68,7 @@ library
       Pages.Charts.Charts
       Pages.Components
       Pages.Dashboard
+      Pages.Dashboards
       Pages.DashboardSpec
       Pages.Endpoints.ApiCatalog
       Pages.Endpoints.ApiCatalogSpec
@@ -309,6 +310,7 @@ library
     , witch
     , wreq
     , xxhash
+    , yaml
   default-language: GHC2021
 
 executable apitoolkit-server-exe

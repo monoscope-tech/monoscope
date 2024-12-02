@@ -435,7 +435,8 @@ WHERE NOT EXISTS (
   AND query_text = ?
   ORDER BY created_at DESC
   LIMIT 1
-);
+)
+ON CONFLICT DO NOTHING;
     |]
 
 
