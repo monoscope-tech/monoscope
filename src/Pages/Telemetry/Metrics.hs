@@ -72,16 +72,17 @@ overViewTabs pid tab = do
 
 dataPointsPage :: Projects.ProjectId -> V.Vector Telemetry.MetricDataPoint -> Html ()
 dataPointsPage pid metrics = do
-  div_ [class_ "flex flex-col gap-2 px-4 h-[calc(100%-60px)] overflow-y-scroll", id_ "main-content"] $ do
+  div_ [class_ "flex flex-col gap-2 px-6 h-[calc(100%-60px)] overflow-y-scroll", id_ "main-content"] $ do
     overViewTabs pid "datapoints"
     div_
       [ class_ "w-full rounded-2xl mt-4 border flex flex-col"
       ]
       do
-        div_ [class_ "flex px-4 py-3 text-sm font-medium border-b text-slate-900"] $ do
-          div_ [class_ " w-[calc(45vw-46px)]"] "Metric"
-          div_ [class_ "w-[20vw] "] "Sources"
-          div_ [class_ "w-[10vw] ml-2"] "Datapoint"
+        div_ [class_ "flex px-4 justify-between py-3 text-sm font-medium border-b text-slate-900"] $ do
+          div_ [class_ " w-[calc(40vw-46px)]"] "Metric"
+          div_ [class_ "w-[10vw] "] "Sources"
+          div_ [class_ "w-[8vw] ml-2"] "Datapoint"
+        -- div_ [class_ "w-[10vw] ml-2"] "Referenced in"
         div_ [class_ "w-full"] $ do
           let tr = buildMetricTree $ V.toList $ (.metricName) <$> metrics
           let metrMap = Map.fromList $ V.toList $ V.map (\mdp -> (mdp.metricName, mdp)) metrics
@@ -174,12 +175,12 @@ buildTree_ pid sp level isLasChild dp = do
     div_ [class_ "flex flex-col w-full grow-1 shrink-1 border-slate-200 relative"] do
       when hasChildren $ div_ [class_ "absolute top-1 left-2 border-l h-2 border-l-slate-200"] pass
       div_
-        [ class_ "w-full cursor-pointer flex justify-between max-w-full items-center h-5 hover:bg-slate-100"
+        [ class_ "w-full cursor-pointer flex tree_opened justify-between max-w-full items-center h-5 hover:bg-slate-100"
         , [__| on click toggle .tree_opened on me|]
         ]
         do
-          div_ [class_ "flex items-center overflow-x-hidden"] do
-            div_ [class_ "flex items-center overflow-y-hidden", style_ $ "width: calc(45vw - " <> paddingLeft] do
+          div_ [class_ "flex w-full justify-between items-center overflow-x-hidden"] do
+            div_ [class_ "flex items-center overflow-y-hidden", style_ $ "width: calc(40vw - " <> paddingLeft] do
               when hasChildren $ faSprite_ "chevron-up" "regular" "toggler rotate-90 w-4 border border-slate-200 h-4 shadow-sm rounded px-0.5 z-50 bg-slate-50 mr-1 shrink-0 text-slate-950"
               unless (sp.spanRecord.parent == "___root___") $ span_ [class_ "text-slate-400"] $ toHtml $ sp.spanRecord.parent <> "."
               span_ [class_ "text-slate-900 "] $ toHtml sp.spanRecord.current
@@ -188,11 +189,21 @@ buildTree_ pid sp level isLasChild dp = do
               let fullPath = (if sp.spanRecord.parent == "___root___" then "" else sp.spanRecord.parent <> ".") <> sp.spanRecord.current
               let target = Map.lookup fullPath dp
               whenJust target $ \t -> do
-                span_ [class_ "w-[20vw] truncate"] $ toHtml $ T.intercalate ", " $ V.toList t.serviceNames
-                div_ [class_ "w-[10vw]"] do
+                span_ [class_ "w-[10vw] truncate"] $ toHtml $ T.intercalate ", " $ V.toList t.serviceNames
+                div_ [class_ "w-[8vw]"] do
                   span_ [class_ "badge badge-ghost"] $ show t.dataPointsCount
+      -- div_ [class_ "flex w-[10vw] items-center text-xs"] do
+      --   div_ [class_ "flex gap-1 items-center badge badge-ghost"] do
+      --     faSprite_ "dashboard" "regular" "w-4 h-4"
+      --     span_ "0"
+      --   div_ [class_ "flex gap-1 items-center badge badge-ghost"] do
+      --     faSprite_ "dashboard" "regular" "w-4 h-4"
+      --     span_ "10"
+      --   div_ [class_ "flex gap-1 items-center badge badge-ghost"] do
+      --     faSprite_ "caution" "regular" "w-4 h-4"
+      --     span_ "5"
 
       when hasChildren $ do
-        div_ [class_ "flex flex-col children_container hidden gap-2 mt-2"] do
+        div_ [class_ "flex-col hidden children_container gap-2 mt-2"] do
           forM_ (zip [0 ..] sp.children) \(i, c) -> do
             buildTree_ pid c (level + 1) (i == length sp.children - 1) dp
