@@ -28,32 +28,103 @@ variables:
     default: "now"
 
 widgets:
-  - type: "timeseries"
-    title: "GET requests"
-    query: method == "GET" 
-    layout: { w: 3, h: 4 }
+  # - type: "timeseries"
+  #   title: "GET requests"
+  #   query: method == "GET" 
+  #   layout: { w: 3, h: 2 }
+
+  # - type: "timeseries"
+  #   title: "POST requests"
+  #   query: method == "POST"
+  #   layout: { w: 3, h: 2 }
 
   - type: "timeseries"
     title: "POST requests"
-    query: method == "POST" 
-    layout: { w: 9, h: 2 }
+    query: method == "POST" | timechart count(*) by method 
+    layout: { w: 4, h: 2 }
+    eager: true
 
   - type: "timeseries"
-    title: "POST requests 2"
-    query: method == "POST" 
-    layout: { w: 9, h: 2 }
+    title: "POST requests by method"
+    query:  timechart count(*) by method 
+    layout: { w: 4, h: 2 }
+    # eager: true
+
+  # - type: "timeseries"
+  #   title: "Other requests"
+  #   query: status_code >= 300
+  #   layout: { w: 6, h: 3 }
+
+  # - type: "timeseries"
+  #   title: "POST requests"
+  #   query: method == "POST" 
+  #   layout: { w: 9, h: 2 }
+
+  # - type: "timeseries"
+  #   title: "POST requests 2"
+  #   query: method == "POST" 
+  #   layout: { w: 9, h: 2 }
+
+  # - type: "timeseries"
+  #   title: "POST requests 2"
+  #   layout: { w: 9, h: 2 }
+  #   dataset:
+  #     from: 1731528000 
+  #     to: 1731538000
+  #     source:
+  #       - ["time", "0", "200", "201", "304", "308"]
+  #       - [1731528000, 66, 431, 24, "-", 110]
+  #       - [1731531600, 66, 374, 24, "-", 115]
+  #       - [1731535200, 66, 410, 24, "-", 120]
+  #       - [1731538800, 66, 402, 24, "-", 125]
+
+  # - type: "timeseries"
+  #   title: "POST requests 3"
+  #   layout: { w: 3, h: 2 }
+  #   dataset:
+  #     from: 1731528000 
+  #     to: 1731538000
+  #     source:
+  #       - ["time", "0", "200", "201", "304", "308"]
+  #       - [1731528000, 66, 431, 24, "-", 110]
+  #       - [1731531600, 66, 374, 24, "-", 115]
+  #       - [1731535200, 66, 410, 24, "-", 120]
+  #       - [1731538800, 66, 402, 24, "-", 125]
 
   - type: "timeseries"
-    title: "POST requests 2"
-    layout: { w: 9, h: 2 }
+    title: "POST requests 4"
+    layout: { w: 3, h: 2 }
+    y_axis: 
+      label: "Throughput"
     dataset:
+      from: 1731528000
+      to: 1731608000
       source:
-        'time': [1731528000, 1731531600, 1731535200, 1731538800]
-        '0': [66, 66, 66, 66]
-        '200': [431, 374, 410, 402]
-        '201': [24, 24, 24, 24]
-        '304': [null, null, null, null]
-        '308': [110, 115, 120, 125]
+        - ["time", "0", "200", "201", "304", "308"]
+        - [1731528000, 66, 431, 24, "-", 110]
+        - [1731531600, 66, 374, 24, "-", 115]
+        - [1731535200, 66, 410, 24, "-", 120]
+        - [1731538800, 66, 402, 24, "-", 125]
+        - [1731542400, 70, 410, 26, "-", 130]
+        - [1731546000, 68, 430, 25, "-", 135]
+        - [1731549600, 67, 420, 23, "-", 140]
+        - [1731553200, 69, 440, 27, "-", 145]
+        - [1731556800, 70, 450, 29, "-", 150]
+        - [1731560400, 72, 460, 30, "-", 155]
+        - [1731564000, 71, 470, 28, "-", 160]
+        - [1731567600, 73, 480, 31, "-", 165]
+        - [1731571200, 75, 490, 33, "-", 170]
+        - [1731574800, 74, 500, 32, "-", 175]
+        - [1731578400, 76, 510, 35, "-", 180]
+        - [1731582000, 77, 520, 36, "-", 185]
+        - [1731585600, 79, 530, 38, "-", 190]
+        - [1731589200, 78, 540, 37, "-", 195]
+        - [1731592800, 80, 550, 40, "-", 200]
+        - [1731596400, 82, 560, 42, "-", 205]
+        - [1731600000, 81, 570, 41, "-", 210]
+        - [1731603600, 83, 580, 43, "-", 215]
+        - [1731607200, 85, 590, 45, "-", 220]
+        - [1731608000, 84, 600, 44, "-", 225]
 
   # - type: "timeseries"
   #   id: "xxx"

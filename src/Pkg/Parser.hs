@@ -145,9 +145,13 @@ sqlFromQueryComponents sqlCfg qc =
       -- FIXME: render this based on the aggregations
       chartSelect = [fmt| count(*)::integer as count|] :: Text
       timeGroupByClause = " GROUP BY " <> T.intercalate "," ("timeB" : qc.groupByClause)
+      timeGroupSelect =
+        if null qc.groupByClause
+          then "'Throughput'"
+          else T.intercalate "||" (map (<> "::text") qc.groupByClause)
       timeChartQuery =
         [fmt|
-      SELECT {timebucket} {chartSelect}, 'Throughput' FROM {fromTable}
+      SELECT {timebucket} {chartSelect}, {timeGroupSelect} FROM {fromTable}
           WHERE project_id='{sqlCfg.pid.toText}'::uuid  and ( {timestampCol} > NOW() - interval '14 days'
           {cursorT} {dateRangeStr} {whereClause} )
           {timeGroupByClause}

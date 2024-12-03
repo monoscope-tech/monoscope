@@ -504,13 +504,13 @@ resultTable_ page mainLog = table_
           $ td_ [colspan_ $ show $ length page.cols]
           $ a_
             [ class_ "cursor-pointer inline-flex justify-center py-1 px-56 ml-36 blue-800 bg-blue-100 hover:bg-blue-200 gap-3 items-center"
-            , hxTrigger_ "click, every 1s [document.getElementById('streamLiveData').checked]"
+            , hxTrigger_ "click, every 5s [document.getElementById('streamLiveData').checked]"
             , hxVals_ "js:{queryAST:window.getQueryFromEditor(), since: params().since, cols:params().cols, layout:'all', source: params().source, ...window.latestLogsURLQueryValsFn()}"
             , hxSwap_ "afterend settle:500ms"
             , hxGet_ $ "/p/" <> page.pid.toText <> "/log_explorer?layout=loadmore"
             , hxPushUrl_ "false"
             , hxTarget_ "closest tr"
-            , -- using hyperscript instead of hxIndicator_ so the loader isnt distracting by showing up every second and only when clicked
+            , -- using hyperscript instead of hxIndicator_ so the loader isnt distracting by showing up every 5 second and only when clicked
               [__| on click remove .hidden from #loadNewIndicator on htmx:afterRequest add .hidden to #loadNewIndicator |]
             ]
             (span_ [class_ "inline-block"] "check for newer results" >> span_ [id_ "loadNewIndicator", class_ "hidden loading loading-dots loading-sm inline-block pl-3"] "")

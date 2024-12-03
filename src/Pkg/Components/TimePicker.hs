@@ -28,6 +28,7 @@ data TimePicker = TimePicker
   , to :: Maybe Text
   }
   deriving (Show, Generic)
+  deriving anyclass (NFData)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake TimePicker
 
 

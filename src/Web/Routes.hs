@@ -118,6 +118,8 @@ type CookieProtectedRoutes :: Type -> Type
 data CookieProtectedRoutes mode = CookieProtectedRoutes
   { dashboardGet :: mode :- "p" :> ProjectId :> QPT "from" :> QPT "to" :> QPT "since" :> Get '[HTML] (RespHeaders (PageCtx Dashboard.DashboardGet))
   , dashboardsGet :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> QPT "file" :> QPT "from" :> QPT "to" :> QPT "since" :> Get '[HTML] (RespHeaders (PageCtx Dashboards.DashboardGet))
+  , dashboardsGetList :: mode :- "p" :> ProjectId :> "dashboards" :> Get '[HTML] (RespHeaders (PageCtx Dashboards.DashboardsGet))
+  , dashboardsPost :: mode :- "p" :> ProjectId :> "dashboards" :> QPT "file" :> Post '[HTML] (RespHeaders NoContent)
   , projects :: mode :- ProjectsRoutes.Routes
   , anomalies :: mode :- "p" :> ProjectId :> "anomalies" :> AnomaliesRoutes.Routes
   , logExplorer :: mode :- "p" :> ProjectId :> LogExplorerRoutes.Routes
@@ -137,6 +139,7 @@ data CookieProtectedRoutes mode = CookieProtectedRoutes
   , queryBuilderAutocomplete :: mode :- "p" :> ProjectId :> "query_builder" :> "autocomplete" :> QPT "category" :> QPT "prefix" :> Get '[JSON] (RespHeaders AE.Value)
   , swaggerGenerateGet :: mode :- "p" :> ProjectId :> "generate_swagger" :> Get '[JSON] (RespHeaders AE.Value)
   , chartsGet :: mode :- "charts_html" :> QP "chart_type" Charts.ChartType :> QPT "query_raw" :> QPT "queryAST" :> QueryParam "pid" Projects.ProjectId :> QP "group_by" Charts.GroupBy :> QP "query_by" [Charts.QueryBy] :> QP "num_slots" Int :> QP "limit" Int :> QP "theme" Text :> QPT "id" :> QP "show_legend" Bool :> QP "show_axes" Bool :> QPT "since" :> QPT "from" :> QPT "to" :> QPT "source" :> Get '[HTML] (RespHeaders (Html ()))
+  , chartsDataGet :: mode :- "chart_data" :> QueryParam "pid" Projects.ProjectId :> QPT "query_raw" :> QPT "queryAST" :> QPT "since" :> QPT "from" :> QPT "to" :> QPT "source" :> Get '[JSON] Charts.MetricsData
   , surveyPut :: mode :- "p" :> ProjectId :> "survey" :> ReqBody '[FormUrlEncoded] Survey.SurveyForm :> Post '[HTML] (RespHeaders Survey.SurveyPut)
   , surveyGet :: mode :- "p" :> ProjectId :> "about_project" :> Get '[HTML] (RespHeaders Survey.SurveyGet)
   , editField :: mode :- "p" :> ProjectId :> "fields" :> Capture "field_id" Fields.FieldId :> ReqBody '[FormUrlEncoded] FieldDetails.EditFieldForm :> Post '[HTML] (RespHeaders FieldDetails.FieldPut)
@@ -151,6 +154,8 @@ cookieProtectedServer =
   CookieProtectedRoutes
     { dashboardGet = Dashboard.dashboardGetH
     , dashboardsGet = Dashboards.dashboardGetH
+    , dashboardsGetList = Dashboards.dashboardsGetH
+    , dashboardsPost = Dashboards.dashboardsPostH
     , projects = ProjectsRoutes.server
     , logExplorer = LogExplorerRoutes.server
     , anomalies = AnomaliesRoutes.server
@@ -170,6 +175,7 @@ cookieProtectedServer =
     , queryBuilderAutocomplete = AutoComplete.getH
     , swaggerGenerateGet = GenerateSwagger.generateGetH
     , chartsGet = Charts.chartsGetH
+    , chartsDataGet = Charts.queryMetrics
     , surveyPut = Survey.surveyPutH
     , surveyGet = Survey.surveyGetH
     , editField = FieldDetails.fieldPutH

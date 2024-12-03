@@ -89,9 +89,8 @@ bodyWrapper BWConfig{sessM, currProject, pageTitle, menuItem, hasIntegrated, nav
         link_ [rel_ "stylesheet", href_ $(hashAssetFile "/public/assets/deps/gridstack/gridstack.min.css")]
 
         -- SCRIPTS
-        script_ [src_ "https://cdn.jsdelivr.net/npm/@yaireo/tagify"] ("" :: Text)
-        script_ [src_ "https://cdn.jsdelivr.net/npm/@yaireo/tagify/dist/tagify.polyfills.min.js"] ("" :: Text)
-        script_ [src_ "https://cdn.jsdelivr.net/npm/echarts@5.4.1/dist/echarts.min.js"] ("" :: Text)
+        script_ [src_ $(hashAssetFile "/public/assets/deps/tagify/tagify.min.js")] ("" :: Text)
+        script_ [src_ $(hashAssetFile "/public/assets/deps/echarts/echarts.min.js")] ("" :: Text)
         script_ [src_ $(hashAssetFile "/public/assets/roma-echarts.js"), defer_ "true"] ("" :: Text)
         script_ [src_ $(hashAssetFile "/public/assets/js/thirdparty/notyf3.min.js"), defer_ "true"] ("" :: Text)
         script_ [src_ $(hashAssetFile "/public/assets/js/thirdparty/htmx1_9_10.min.js"), defer_ "true"] ("" :: Text)
