@@ -52,10 +52,11 @@ import Pkg.DBUtils (WrappedEnumSC (..))
 import Pkg.Parser.Stats (Section)
 import Relude
 import Web.HttpApiData
+import Language.Haskell.TH.Syntax qualified as THS
 
 
 newtype ProjectId = ProjectId {unProjectId :: UUID.UUID}
-  deriving stock (Generic, Show, Read)
+  deriving stock (Generic, Show, Read, THS.Lift)
   deriving newtype (Eq, Ord, AE.ToJSON, AE.FromJSON, FromField, ToField, FromHttpApiData, Default, Hashable, NFData)
   deriving anyclass (FromRow, ToRow)
 

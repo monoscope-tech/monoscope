@@ -217,20 +217,21 @@ generateSwaggerForProject pid uid host = whenJustM (dbtToEff $ Projects.projectB
   dbtToEff $ Swaggers.addSwagger swaggerToAdd
 
 
-sendTestFailedAlert :: Projects.ProjectId -> Testing.CollectionId -> Testing.Collection -> V.Vector Testing.StepResult -> ATBackgroundCtx ()
-sendTestFailedAlert pid col_id collection stepResult = do
-  let
-    -- sv = if collection.alertSeverity == "" then "INFO" else collection.alertSeverity
-    sbjt = collection.title <> ": " <> if collection.alertSubject == "" then "API Test Failed" else collection.alertSubject
-    (Testing.CollectionSteps colStepsV) = collection.collectionSteps
-    failedSteps = Testing.getCollectionFailedSteps colStepsV stepResult
-    msg' = "Failing steps: \n" <> unwords (V.toList $ V.catMaybes $ V.map (\(s, rs) -> s.title) failedSteps)
-    msg = if collection.alertMessage == "" then msg' else collection.alertMessage
-  users <- dbtToEff $ Projects.usersByProjectId pid
-  forM_ users \user -> do
-    let email = CI.original user.email
-    sendPostmarkEmail email Nothing (Just (sbjt, msg))
-  pass
+-- FIXME: implement inteligent allerting logic, where we pause to ensure users are not alerted too often, or spammed.
+-- sendTestFailedAlert :: Projects.ProjectId -> Testing.CollectionId -> Testing.Collection -> V.Vector Testing.StepResult -> ATBackgroundCtx ()
+-- sendTestFailedAlert pid col_id collection stepResult = do
+--   let
+--     -- sv = if collection.alertSeverity == "" then "INFO" else collection.alertSeverity
+--     sbjt = collection.title <> ": " <> if collection.alertSubject == "" then "API Test Failed" else collection.alertSubject
+--     (Testing.CollectionSteps colStepsV) = collection.collectionSteps
+--     failedSteps = Testing.getCollectionFailedSteps colStepsV stepResult
+--     msg' = "Failing steps: \n" <> unwords (V.toList $ V.catMaybes $ V.map (\(s, rs) -> s.title) failedSteps)
+--     msg = if collection.alertMessage == "" then msg' else collection.alertMessage
+--   users <- dbtToEff $ Projects.usersByProjectId pid
+--   forM_ users \user -> do
+--     let email = CI.original user.email
+--     sendPostmarkEmail email Nothing (Just (sbjt, msg))
+--   pass
 
 
 reportUsageToLemonsqueezy :: Text -> Int -> Text -> IO ()

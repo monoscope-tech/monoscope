@@ -6,6 +6,7 @@ import Data.Aeson qualified as AE
 import Data.List qualified as L
 import Data.Time (UTCTime, addUTCTime, defaultTimeLocale, formatTime, secondsToNominalDiffTime)
 import Data.Time.Format.ISO8601 (iso8601ParseM)
+import Language.Haskell.TH.Syntax qualified as THS
 import Deriving.Aeson.Stock qualified as DAE
 import Lucid
 import Lucid.Base (termRaw)
@@ -27,7 +28,7 @@ data TimePicker = TimePicker
   , from :: Maybe Text
   , to :: Maybe Text
   }
-  deriving (Show, Generic)
+  deriving (Show, Generic, THS.Lift)
   deriving anyclass (NFData)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake TimePicker
 

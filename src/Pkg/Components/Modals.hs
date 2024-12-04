@@ -12,7 +12,6 @@ modal_ modalId btnTrigger contentHtml = do
     [ class_ "modal-toggle"
     , Lucid.id_ modalId
     , Lucid.type_ "checkbox"
-    , checked_
     , [__|on keyup if the event's key is 'Escape' set my.checked to false trigger keyup end
           on closeModal from body set my.checked to false end
       |]

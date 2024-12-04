@@ -40,6 +40,7 @@ library
       Models.Apis.RequestDumps
       Models.Apis.Shapes
       Models.Apis.Slack
+      Models.Projects.Dashboards
       Models.Projects.LemonSqueezy
       Models.Projects.ProjectApiKeys
       Models.Projects.ProjectMembers
@@ -145,6 +146,7 @@ library
       Pkg.Components.ItemsList
       Pkg.Components.Modals
       Pkg.Components.TimePicker
+      Pkg.Components.Widget
       Pkg.ConvertKit
       Pkg.DBUtils
       Pkg.Google
