@@ -1,67 +1,71 @@
 {-# LANGUAGE DerivingVia #-}
 
-module Pages.Charts.Charts (chartsGetH, ChartType (..), lazy, ChartExp (..), QueryBy (..), GroupBy (..)) where
+module Pages.Charts.Charts (chartsGetH, ChartType (..), lazy, ChartExp (..), QueryBy (..), GroupBy (..), queryMetrics, MetricsData (..)) where
 
 import Data.Aeson qualified as AE
-import Data.Either.Extra (fromRight')
-import Data.List (groupBy, lookup)
-import Data.Text (toLower)
 import Data.Text qualified as T
-import Data.Time (
-  UTCTime,
-  addUTCTime,
-  defaultTimeLocale,
-  diffUTCTime,
-  formatTime,
-  getCurrentTime,
-  secondsToNominalDiffTime,
- )
-import Data.Time.Format.ISO8601 (iso8601ParseM)
-import Data.Tuple.Extra (fst3, thd3)
+import Data.Time (UTCTime, diffUTCTime)
+import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
+import Data.Tuple.Extra (fst3, snd3, thd3)
 import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUIDV4
+import Data.Vector qualified as V
+import Data.Vector.Algorithms.Intro qualified as VA
 import Database.PostgreSQL.Entity.DBT (QueryNature (Select), query)
 import Database.PostgreSQL.Simple.Types (Query (Query))
 import Database.PostgreSQL.Transact qualified as DBT
-import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
+import Deriving.Aeson.Stock qualified as DAE
+import Effectful (Eff, (:>))
+import Effectful.Log (Log)
+import Effectful.PostgreSQL.Transact.Effect (DB, dbtToEff)
+import Effectful.State.Static.Local qualified as State
+import Effectful.Time qualified as Time
 import Lucid (Html, class_, div_, id_, script_)
 import Lucid.Htmx (hxGet_, hxSwap_, hxTrigger_)
 import Models.Projects.Projects qualified as Projects
 import NeatInterpolation (text)
 import Network.URI (escapeURIString, isUnescapedInURI)
+import Pkg.Components qualified as Components
 import Pkg.Parser (
   QueryComponents (finalTimechartQuery),
   SqlQueryCfg (dateRange),
   defSqlQueryCfg,
   pSource,
-  parseQueryToComponents,
+  parseQueryToAST,
+  queryASTToComponents,
  )
 import Relude
 import Relude.Unsafe qualified as Unsafe
-import Safe qualified
 import Servant (FromHttpApiData (..))
-import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
+import System.Types
 import Text.Megaparsec (parseMaybe)
 import Utils (DBField (MkDBField), formatUTC)
-import Witch (from)
 
 
-transform :: [String] -> [(Int, Int, String)] -> [Maybe Int]
+pivot' :: V.Vector (Int, Int, Text) -> (V.Vector Text, V.Vector (V.Vector (Maybe Int)), Int, Double)
+pivot' rows =
+  let extractHeaders vec = V.uniq . V.map thd3 . V.modify (\mvec -> VA.sortBy (comparing thd3) mvec) $ vec
+      headers = extractHeaders rows
+      grouped = V.groupBy (\a b -> fst3 a == fst3 b) $ V.modify (\mvec -> VA.sortBy (comparing fst3) mvec) rows
+      ngrouped = map (transform headers) grouped
+      totalSum = V.sum $ V.map snd3 rows
+
+      -- Calculate rate (rows per minute)
+      timeVec = V.map fst3 rows
+      minTime = V.minimum timeVec
+      maxTime = V.maximum timeVec
+      timeSpanMinutes = fromIntegral (maxTime - minTime) / 60.0 -- Convert to minutes
+      numRows = fromIntegral $ V.length rows
+      rate = if timeSpanMinutes > 0 then numRows / timeSpanMinutes else 0.0
+   in (headers, V.fromList ngrouped, totalSum, rate)
+
+
+transform :: V.Vector Text -> V.Vector (Int, Int, Text) -> V.Vector (Maybe Int)
 transform fields tuples =
-  Just timestamp : map getValue fields
+  V.cons (Just timestamp) (V.map getValue fields)
   where
-    getValue field = lookup field (map swap_ tuples)
-    swap_ (_, a, b) = (b, a)
-    timestamp = maybe 0 fst3 (Safe.headMay tuples)
-
-
-pivot' :: [(Int, Int, String)] -> ([String], [[Maybe Int]])
-pivot' rows = do
-  let extractHeaders = ordNub . map thd3 . sortOn thd3
-  let headers = extractHeaders rows
-  let grouped = groupBy (\a b -> fst3 a == fst3 b) $ sortOn fst3 rows
-  let ngrouped = map (transform headers) grouped
-  (headers, ngrouped)
+    getValue field = V.find (\(_, _, b) -> b == field) tuples >>= \(_, a, _) -> Just a
+    timestamp = fromMaybe 0 $ fst3 <$> V.find (const True) tuples
 
 
 -- test the query generation
@@ -95,28 +99,6 @@ buildReqDumpSQL exps = (q, join qByArgs, mFrom, mTo)
     go _ acc = acc
 
     (qByTxtList, qByArgs) = unzip $ runQueryBySql <$> queryBy
-
-    --     WITH RankedGroups AS (
-    --   SELECT
-    --     extract(epoch from time_bucket('"
-    --         , show $ fromMaybe 3600 $ calculateIntervalFromQuery slots (mFrom, mTo) queryBy
-    --         , " seconds', created_at))::integer as timeB,
-    --     COALESCE(COUNT(*), 0) as total_count,
-    --     " -- here goes your grouping fields like method, url_path, etc.
-    --     ,
-    --     ROW_NUMBER() OVER (PARTITION BY timeB ORDER BY COUNT(*) DESC) as group_rank
-    --   FROM apis.request_dumps
-    --   " -- your WHERE clause goes here if needed
-    --   "
-    --   GROUP BY timeB
-    --   " -- plus your other group by fields
-    --   "
-    -- )
-    -- SELECT *
-    -- FROM RankedGroups
-    -- WHERE group_rank <= 20
-    -- ORDER BY timeB
-    -- LIMIT " <> show limit
 
     qDefault =
       T.concat
@@ -195,46 +177,80 @@ buildReqDumpSQL exps = (q, join qByArgs, mFrom, mTo)
 type M = Maybe
 
 
-chartsGetH :: M ChartType -> M Text -> M Projects.ProjectId -> M GroupBy -> M [QueryBy] -> M Int -> M Int -> M Text -> M Text -> M Bool -> M Bool -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))
-chartsGetH typeM Nothing pidM groupByM queryByM slotsM limitsM themeM idM showLegendM showAxesM sinceM fromM toM sourceM = chartsGetDef typeM Nothing pidM groupByM queryByM slotsM limitsM themeM idM showLegendM showAxesM sinceM fromM toM sourceM
-chartsGetH typeM (Just queryRaw) pidM groupByM queryByM slotsM limitsM themeM idM showLegendM showAxesM sinceM fromM toM sourceM = chartsGetRaw typeM queryRaw pidM groupByM queryByM slotsM limitsM themeM idM showLegendM showAxesM sinceM fromM toM sourceM
+chartsGetH :: M ChartType -> M Text -> M Text -> M Projects.ProjectId -> M GroupBy -> M [QueryBy] -> M Int -> M Int -> M Text -> M Text -> M Bool -> M Bool -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))
+chartsGetH typeM Nothing Nothing pidM groupByM queryByM slotsM limitsM themeM idM showLegendM showAxesM sinceM fromM toM sourceM = chartsGetDef typeM Nothing pidM groupByM queryByM slotsM limitsM themeM idM showLegendM showAxesM sinceM fromM toM sourceM
+chartsGetH typeM queryRawM queryASTM pidM groupByM queryByM slotsM limitsM themeM idM showLegendM showAxesM sinceM fromM toM sourceM = chartsGetRaw typeM queryRawM queryASTM pidM groupByM queryByM slotsM limitsM themeM idM showLegendM showAxesM sinceM fromM toM sourceM
 
 
---  FIXME: chartsGetRaw and chartGetDef should be refactored and merged.
-chartsGetRaw :: M ChartType -> Text -> M Projects.ProjectId -> M GroupBy -> M [QueryBy] -> M Int -> M Int -> M Text -> M Text -> M Bool -> M Bool -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))
-chartsGetRaw typeM queryRaw pidM groupByM queryByM slotsM limitsM themeM idM showLegendM showAxesM sinceM fromM toM sourceM = do
-  randomID <- liftIO UUIDV4.nextRandom
-  now <- liftIO getCurrentTime
+data MetricsData = MetricsData
+  { dataset :: V.Vector (V.Vector (Maybe Int))
+  , headers :: V.Vector Text
+  , rowsCount :: Int
+  , rowsPerMin :: Double
+  , from :: Maybe Int
+  , to :: Maybe Int
+  }
+  deriving (Show, Generic)
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake MetricsData
 
-  let (fromD, toD, _currentRange) = case sinceM of
-        Just "1H" -> (Just $ addUTCTime (negate $ secondsToNominalDiffTime 3600) now, Just now, Just "Last Hour")
-        Just "24H" -> (Just $ addUTCTime (negate $ secondsToNominalDiffTime $ 3600 * 24) now, Just now, Just "Last 24 Hours")
-        Just "7D" -> (Just $ addUTCTime (negate $ secondsToNominalDiffTime $ 3600 * 24 * 7) now, Just now, Just "Last 7 Days")
-        Just "14D" -> (Just $ addUTCTime (negate $ secondsToNominalDiffTime $ 3600 * 24 * 14) now, Just now, Just "Last 14 Days")
-        _ -> do
-          let f = (iso8601ParseM (from @Text $ fromMaybe "" fromM) :: Maybe UTCTime)
-          let t = (iso8601ParseM (from @Text $ fromMaybe "" toM) :: Maybe UTCTime)
-          let start = toText . formatTime defaultTimeLocale "%F %T" <$> f
-          let end = toText . formatTime defaultTimeLocale "%F %T" <$> t
-          let range = case (start, end) of
-                (Just s, Just e) -> Just (s <> "-" <> e)
-                _ -> Nothing
-          (f, t, range)
+
+queryMetrics :: (State.State TriggerEvents :> es, Time.Time :> es, DB :> es, Log :> es) => M Projects.ProjectId -> M Text -> M Text -> M Text -> M Text -> M Text -> M Text -> Eff es MetricsData
+queryMetrics pidM queryM queryASTM sinceM fromM toM sourceM = do
+  let parseQuery q = either (\err -> addErrorToast "Error Parsing Query" (Just err) >> pure []) pure (parseQueryToAST q)
+  queryAST <-
+    maybe
+      (parseQuery $ maybeToMonoid queryM)
+      (either (const $ parseQuery $ maybeToMonoid queryM) pure . AE.eitherDecode . encodeUtf8)
+      queryASTM
+
+  now <- Time.currentTime
+  let (fromD, toD, _currentRange) = Components.parseTimeRange now (Components.TimePicker sinceM fromM toM)
 
   let sqlQueryComponents =
         (defSqlQueryCfg (Unsafe.fromJust pidM) now (parseMaybe pSource =<< sourceM) Nothing)
           { dateRange = (fromD, toD)
           }
-  let (_, qc) = fromRight' $ parseQueryToComponents sqlQueryComponents queryRaw
-
+  let (_, qc) = queryASTToComponents sqlQueryComponents queryAST
   chartData <- dbtToEff $ DBT.query_ (Query $ encodeUtf8 $ fromMaybe "" qc.finalTimechartQuery)
+  let (headers, groupedData, rowsCount, rowsPerMin) = pivot' $ V.fromList chartData
+  pure
+    $ MetricsData
+      { dataset = groupedData
+      , headers = V.cons "timestamp" headers
+      , rowsCount
+      , rowsPerMin
+      , from = round . utcTimeToPOSIXSeconds <$> fromD
+      , to = round . utcTimeToPOSIXSeconds <$> toD
+      }
 
-  let (headers, groupedData) = pivot' $ toList chartData
+
+--  FIXME: chartsGetRaw and chartGetDef should be refactored and merged.
+chartsGetRaw :: M ChartType -> M Text -> M Text -> M Projects.ProjectId -> M GroupBy -> M [QueryBy] -> M Int -> M Int -> M Text -> M Text -> M Bool -> M Bool -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))
+chartsGetRaw typeM queryM queryASTM pidM groupByM queryByM slotsM limitsM themeM idM showLegendM showAxesM sinceM fromM toM sourceM = do
+  randomID <- liftIO UUIDV4.nextRandom
+
+  let parseQuery q = either (\err -> addErrorToast "Error Parsing Query" (Just err) >> pure []) pure (parseQueryToAST q)
+  queryAST <-
+    maybe
+      (parseQuery $ maybeToMonoid queryM)
+      (either (const $ parseQuery $ maybeToMonoid queryM) pure . AE.eitherDecode . encodeUtf8)
+      queryASTM
+
+  now <- Time.currentTime
+  let (fromD, toD, _currentRange) = Components.parseTimeRange now (Components.TimePicker sinceM fromM toM)
+
+  let sqlQueryComponents =
+        (defSqlQueryCfg (Unsafe.fromJust pidM) now (parseMaybe pSource =<< sourceM) Nothing)
+          { dateRange = (fromD, toD)
+          }
+  let (_, qc) = queryASTToComponents sqlQueryComponents queryAST
+  chartData <- dbtToEff $ DBT.query_ (Query $ encodeUtf8 $ fromMaybe "" qc.finalTimechartQuery)
+  let (headers, groupedData, _, _) = pivot' $ V.fromList chartData
       headersJSON = decodeUtf8 $ AE.encode headers
-      groupedDataJSON = decodeUtf8 $ AE.encode $ transpose groupedData
+      groupedDataJSON = decodeUtf8 $ AE.encode $ transpose $ V.toList $ V.toList <$> groupedData
       idAttr = fromMaybe (UUID.toText randomID) idM
-      showLegend = toLower $ show $ fromMaybe False showLegendM
-      showAxes = toLower $ show $ fromMaybe True showAxesM
+      showLegend = T.toLower $ show $ fromMaybe False showLegendM
+      showAxes = T.toLower $ show $ fromMaybe True showAxesM
       chartThemeTxt = fromMaybe "" themeM
       fromDStr = maybe "" formatUTC fromD
       toDStr = maybe "" formatUTC toD
@@ -266,12 +282,12 @@ chartsGetDef typeM queryRaw pidM groupByM queryByM slotsM limitsM themeM idM sho
         _ -> buildReqDumpSQL chartExps
   chartData <- dbtToEff $ query Select (Query $ encodeUtf8 q) args
 
-  let (headers, groupedData) = pivot' $ toList chartData
+  let (headers, groupedData, _, _) = pivot' $ chartData
       headersJSON = decodeUtf8 $ AE.encode headers
-      groupedDataJSON = decodeUtf8 $ AE.encode $ transpose groupedData
+      groupedDataJSON = decodeUtf8 $ AE.encode $ transpose $ V.toList $ V.toList <$> groupedData
       idAttr = fromMaybe (UUID.toText randomID) idM
-      showLegend = toLower $ show $ fromMaybe False showLegendM
-      showAxes = toLower $ show $ fromMaybe True showAxesM
+      showLegend = T.toLower $ show $ fromMaybe False showLegendM
+      showAxes = T.toLower $ show $ fromMaybe True showAxesM
       chartThemeTxt = fromMaybe "" themeM
       fromDStr = maybe "" formatUTC fromM
       toDStr = maybe "" formatUTC toM

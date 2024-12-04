@@ -3,9 +3,8 @@ module Pkg.ConvertKit (addUser, addUserOrganization) where
 import Control.Lens ((&), (.~))
 import Data.Aeson.QQ (aesonQQ)
 import Data.Effectful.Wreq
-import Data.Text (Text)
 import Effectful
-import Relude (pass)
+import Relude (Text, pass)
 
 
 -- Function to add user to ConvertKit

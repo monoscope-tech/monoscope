@@ -6,6 +6,7 @@ on:
 
 env:
   LANG: C.UTF-8
+  LD_LIBRARY_PATH: "/usr/local/lib:$LD_LIBRARY_PATH"
 
 jobs:
   runhaskell:
@@ -26,7 +27,7 @@ jobs:
       # - uses: freckle/stack-action@v5
       - uses: haskell-actions/setup@v2
         with:
-          ghc-version: 9.8.1 
+          ghc-version: 9.8.2
           enable-stack: true
           stack-version: "latest"
       - name: Install OpenSSL
@@ -44,8 +45,16 @@ jobs:
       # - run: npx postcss-cli ./static/public/assets/css/tailwind.css -o ./static/public/assets/css/tailwind.min.css
 
 
+      - run: |
+          make prepare-rust-interop
+          sudo mkdir -p /usr/local/lib
+          sudo cp rust-interop/target/release/libCrust_interop.so /usr/local/lib
+          sudo cp rust-interop/target/release/libCrust_interop.so /usr/local/lib/librust_interop.so
+          sudo mkdir -p /usr/lib
+          sudo cp rust-interop/target/release/libCrust_interop.so /usr/lib
+          sudo cp rust-interop/target/release/libCrust_interop.so /usr/lib/librust_interop.so
 
-      - run: make prepare-rust-interop
+
       - run: stack --no-terminal build --dependencies-only
 
       # - run: stack install --local-bin-path=. --ghc-options '-optl-static -fPIC'

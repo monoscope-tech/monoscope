@@ -1,6 +1,6 @@
 module Models.Projects.SwaggersSpec (spec) where
 
-import Data.Aeson (Value (..))
+import Data.Aeson qualified as AE
 import Data.Aeson.QQ (aesonQQ)
 import Data.Maybe
 import Data.Time.LocalTime (getZonedTime)
@@ -17,7 +17,7 @@ import Test.Hspec
 
 
 -- Helper function to create a Swagger value for testing
-createSwagger :: ProjectId -> UserId -> Value -> DBT.DBT IO Swagger
+createSwagger :: ProjectId -> UserId -> AE.Value -> DBT.DBT IO Swagger
 createSwagger projectId createdBy swaggerJson = do
   currentTime <- liftIO getZonedTime
   randUUID <- liftIO UUIDV4.nextRandom
@@ -70,7 +70,7 @@ spec = aroundAll TestUtils.withSetup $ describe "Models.Projects.Swaggers" $ do
       result <- withPool pool $ do
         _ <- createSwagger (ProjectId UUID.nil) (UserId UUID.nil) swaggerJson1
         _ <- createSwagger (ProjectId UUID.nil) (UserId UUID.nil) swaggerJson2
-        swaggersByProject (ProjectId UUID.nil) ("")
+        swaggersByProject (ProjectId UUID.nil) ""
       map (.swaggerJson) (toList result) `shouldBe` [swaggerJson2, swaggerJson1, swaggerJson', swaggerJson']
 
   describe "updateSwagger"

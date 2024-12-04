@@ -13,11 +13,21 @@ Example queries:
     method == "GET" | timechart [1d]
     method == "GET" | timechart count(*) [1d]
     method == "GET" | timechart count(*) by field1, field2 [1d]
+    method == "GET" | timechart average(field1) by field1, field2 [1d]
+
+Goals:
+    - Support creating any arbitrary query with just the builders 
+    - Support adding and selecting queries in the presets 
+    - Support some form of validation. (Basics)
     
 
+Convert query to js/json object 
+builder operations would transform that object 
+convert the object back to query
+
 We have 2 implementation options:
-1. We could parse the query client time into an object. Allquery builder actions can mutate the object. 
-    Then we ccan write code to convert that object into the actual query. 
+1. We could parse the query client time into an object. All query builder actions can mutate the object. 
+    Then we can write code to convert that object into the actual query. 
     Challenge is reimplementing all that parsing logic in js, when its sort of in the haskell already. 
 
 2. We can JSON encode the AST, and encode it into the html, then use it as before. But when the browser needs the text query, eg after a query builder update

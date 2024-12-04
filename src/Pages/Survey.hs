@@ -1,15 +1,9 @@
 module Pages.Survey (surveyGetH, surveyPutH, SurveyForm, SurveyGet (..), SurveyPut) where
 
 import BackgroundJobs qualified
-import Data.Aeson (
-  FromJSON,
-  KeyValue ((.=)),
-  ToJSON (toJSON),
-  encode,
-  object,
- )
+import Data.Aeson qualified as AE
 import Data.Default (def)
-import Data.List ((!!))
+import Data.List qualified as L
 import Data.Pool (withResource)
 import Data.Text qualified as T
 import Database.PostgreSQL.Entity.DBT (QueryNature (Update), execute)
@@ -39,16 +33,16 @@ data SurveyForm = SurveyForm
   , fullName :: Text
   }
   deriving stock (Show, Generic)
-  deriving anyclass (FromForm, FromJSON)
+  deriving anyclass (FromForm, AE.FromJSON)
 
 
-instance ToJSON SurveyForm where
+instance AE.ToJSON SurveyForm where
   toJSON surveyForm =
-    object
-      [ "stack" .= filter (not . T.null) surveyForm.stack
-      , "functionality" .= filter (not . T.null) surveyForm.functionality
-      , "dataLocation" .= dataLocation surveyForm
-      , "foundUsFrom" .= foundUsFrom surveyForm
+    AE.object
+      [ "stack" AE..= filter (not . T.null) surveyForm.stack
+      , "functionality" AE..= filter (not . T.null) surveyForm.functionality
+      , "dataLocation" AE..= dataLocation surveyForm
+      , "foundUsFrom" AE..= foundUsFrom surveyForm
       ]
 
 
@@ -62,9 +56,9 @@ surveyPutH pid survey = do
       addErrorToast "Invalid full name format." Nothing
       addRespHeaders SurveyPut
     else do
-      let jsonBytes = encode survey
-      let firstName = nameArr !! 0
-      let lastName = nameArr !! 1
+      let jsonBytes = AE.encode survey
+      let firstName = nameArr L.!! 0
+      let lastName = nameArr L.!! 1
       let fullName = survey.fullName
       let stack = survey.stack
       let phoneNumber = survey.phoneNumber
@@ -74,7 +68,7 @@ surveyPutH pid survey = do
           addErrorToast "Please tell use where you found us from" Nothing
           addRespHeaders SurveyPut
         else do
-          let foundUsFrom = foundF !! 0
+          let foundUsFrom = foundF L.!! 0
           res <- dbtToEff $ execute Update [sql| update projects.projects set questions= ? where id=? |] (jsonBytes, pid)
           u <- dbtToEff $ execute Update [sql| update users.users set first_name= ?, last_name=?, phone_number=? where id=? |] (firstName, lastName, phoneNumber, sess.user.id)
           addSuccessToast "Thanks for taking the survey!" Nothing
@@ -104,7 +98,7 @@ surveyGetH pid = do
   addRespHeaders $ SurveyGet $ PageCtx bwconf (pid, full_name, phoneNumber)
 
 
-data SurveyGet = SurveyGet (PageCtx (Projects.ProjectId, Text, Text))
+newtype SurveyGet = SurveyGet (PageCtx (Projects.ProjectId, Text, Text))
 
 
 instance ToHtml SurveyGet where
@@ -156,7 +150,7 @@ surveyPage pid full_name phoneNumber = do
                               span_ [class_ "hidden group-hover:inline"] $ toHtml label
                       div_ [class_ "flex flex-col gap-2 mt-8"] do
                         label_ [class_ "font-medium mt-2"] "Other (please specify):"
-                        input_ [type_ "text", name_ "stack", class_ "px-3 py-1  bg-slate-50 border border-gray-300 text-gray-900 focus:outline-none rounded-lg focus:ring-blue-500 focus:border-blue-500 block w-full"]
+                        input_ [type_ "text", name_ "stack", class_ "px-3 py-1  bg-slate-25 border border-gray-300 text-gray-900 focus:outline-none rounded-lg focus:ring-blue-500 focus:border-blue-500 block w-full"]
 
                   div_ [class_ "flex flex-col gap-2"] do
                     label_ [class_ "font-medium"] do
@@ -186,12 +180,12 @@ surveyPage pid full_name phoneNumber = do
                             toHtml label
                       div_ [class_ "flex flex-col w-96 gap-2 pl-2"] do
                         label_ [class_ ""] "Other (please specify):"
-                        input_ [type_ "text", name_ "foundUsFrom", class_ "px-3 py-1  bg-slate-50 border border-gray-300 text-gray-900 focus:outline-none rounded-lg focus:ring-blue-500 focus:border-blue-500 block w-full"]
+                        input_ [type_ "text", name_ "foundUsFrom", class_ "px-3 py-1  bg-slate-25 border border-gray-300 text-gray-900 focus:outline-none rounded-lg focus:ring-blue-500 focus:border-blue-500 block w-full"]
 
                 -- div_ [class_ "flex flex-col gap-2 w-full"] do
                 --   label_ [class_ "font-medium"] "What's your phone number?"
                 --   div_ [class_ "w-full"] do
-                --     input_ [value_ phoneNumber, class_ "px-2 py-1 bg-slate-50 border border-gray-300 text-gray-900 focus:outline-none rounded-lg focus:ring-blue-500 focus:border-blue-500 block w-full", type_ "text", name_ "phoneNumber"]
+                --     input_ [value_ phoneNumber, class_ "px-2 py-1 bg-slate-25 border border-gray-300 text-gray-900 focus:outline-none rounded-lg focus:ring-blue-500 focus:border-blue-500 block w-full", type_ "text", name_ "phoneNumber"]
 
                 div_ [class_ "flex w-full justify-end items-center px-6 space-x-2 mt-8"] do
                   div_ [id_ "proceedIndicator", class_ "survey-indicator htmx-indicator"] do

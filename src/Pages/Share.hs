@@ -1,7 +1,6 @@
 module Pages.Share (ReqForm (..), shareLinkPostH, shareLinkGetH, ShareLinkGet (..), ShareLinkPost (..)) where
 
 import Data.Default (def)
-import Data.Text ()
 import Data.Time (UTCTime, getZonedTime)
 import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUIDV4
@@ -99,7 +98,7 @@ shareLinkGetH sid = do
   pure $ ShareLinkGet $ PageCtx bwconf reqM
 
 
-data ShareLinkGet = ShareLinkGet (PageCtx (Maybe RequestDumps.RequestDumpLogItem))
+newtype ShareLinkGet = ShareLinkGet (PageCtx (Maybe RequestDumps.RequestDumpLogItem))
 
 
 instance ToHtml ShareLinkGet where

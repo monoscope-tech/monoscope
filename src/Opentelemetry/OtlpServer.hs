@@ -3,25 +3,19 @@
 module Opentelemetry.OtlpServer (runServer, processList) where
 
 import Control.Lens hiding ((.=))
-import Control.Monad.Extra (fromMaybeM)
-import Data.Aeson (object, (.=))
 import Data.Aeson qualified as AE
 import Data.Aeson.Key qualified as AEK
 import Data.Aeson.KeyMap qualified as KEM
-import Data.Base64.Types qualified as B64
 import Data.ByteString qualified as BS
 import Data.ByteString.Base16 qualified as B16
-import Data.ByteString.Base64 qualified as B64
 import Data.HashMap.Strict qualified as HashMap
 import Data.Scientific
 import Data.Text qualified as T
-import Data.Text.Lazy qualified as LT
-import Data.Time (TimeZone (..), UTCTime, utcToZonedTime, zonedTimeToUTC)
+import Data.Time (TimeZone (..), UTCTime, utcToZonedTime)
 import Data.Time.Clock.POSIX
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Effectful
-import Effectful.Error.Static (throwError)
 import Effectful.Log (Log)
 import Effectful.PostgreSQL.Transact.Effect (DB)
 import Effectful.Reader.Static (ask)
@@ -100,6 +94,9 @@ getLogAttributeValue attribute rls = listToMaybe $ V.toList $ V.mapMaybe (\rl ->
     getAttr :: V.Vector KeyValue -> Maybe Text
     getAttr = V.find ((== attribute) . toText . keyValueKey) >=> keyValueValue >=> anyValueValue >=> anyValueToString >=> (Just . toText)
 
+    -- Extract attribute from log records
+    getLogAttr rl = rl.resourceLogsScopeLogs & listToMaybe . V.toList . V.mapMaybe (getAttr . logRecordAttributes) . V.concatMap scopeLogsLogRecords
+
 
 getMetricAttributeValue :: Text -> V.Vector ResourceMetrics -> Maybe Text
 getMetricAttributeValue attribute rms = listToMaybe $ V.toList $ V.mapMaybe getResourceAttr rms
@@ -122,7 +119,7 @@ processList msgs attrs = do
           Right (ExportLogsServiceRequest logReq) -> do
             pidM <- join <$> forM (getLogAttributeValue "at-project-key" logReq) ProjectApiKeys.getProjectIdByApiKey
             let pid2M = Projects.projectIdFromText =<< getLogAttributeValue "at-project-id" logReq
-            let pid = fromMaybe (error $ "project API Key and project ID not available in trace") $ pidM <|> pid2M
+            let pid = fromMaybe (error "project API Key and project ID not available in trace") $ pidM <|> pid2M
             pure (ackId, join $ V.map (convertToLog pid) logReq)
       let (ackIds, logs) = V.unzip results
       Telemetry.bulkInsertLogs $ join logs
@@ -135,7 +132,7 @@ processList msgs attrs = do
             Right (ExportTraceServiceRequest traceReq) -> do
               pidM <- join <$> forM (getSpanAttributeValue "at-project-key" traceReq) ProjectApiKeys.getProjectIdByApiKey
               let pid2M = Projects.projectIdFromText =<< getSpanAttributeValue "at-project-id" traceReq
-              let pid = fromMaybe (error $ "project API Key and project ID not available in trace") $ pidM <|> pid2M
+              let pid = fromMaybe (error "project API Key and project ID not available in trace") $ pidM <|> pid2M
               pure (ackId, join $ V.map (convertToSpan pid) traceReq)
       let (ackIds, spansVec) = V.unzip results
           spans = join spansVec
@@ -171,7 +168,7 @@ logsServiceExportH appLogger appCtx (ServerNormalRequest meta (ExportLogsService
   _ <- runBackground appLogger appCtx do
     let projectKey = fromMaybe (error "Missing project key") $ getLogAttributeValue "at-project-key" req
     projectIdM <- ProjectApiKeys.getProjectIdByApiKey projectKey
-    let pid = fromMaybe (error $ "project API Key is invalid pid") projectIdM
+    let pid = fromMaybe (error "project API Key is invalid pid") projectIdM
 
     let logRecords = join $ V.map (convertToLog pid) req
     Telemetry.bulkInsertLogs logRecords
@@ -191,7 +188,7 @@ byteStringToHexText bs = decodeUtf8 (B16.encode bs)
 keyValueToJSONB :: V.Vector KeyValue -> AE.Value
 keyValueToJSONB kvs =
   AE.object $
-    V.foldr (\kv acc -> (AEK.fromText $ LT.toStrict kv.keyValueKey, convertAnyValue kv.keyValueValue) : acc) [] kvs
+    V.foldr (\kv acc -> (AEK.fromText $ toText kv.keyValueKey, convertAnyValue kv.keyValueValue) : acc) [] kvs
 
 
 convertAnyValue :: Maybe AnyValue -> AE.Value
@@ -223,10 +220,10 @@ resourceToJSONB Nothing = AE.Null
 -- Convert an instrumentation scope to JSONB
 instrumentationScopeToJSONB :: Maybe InstrumentationScope -> AE.Value
 instrumentationScopeToJSONB (Just scope) =
-  object
-    [ "name" .= scope.instrumentationScopeName
-    , "version" .= scope.instrumentationScopeVersion
-    , "attributes" .= keyValueToJSONB scope.instrumentationScopeAttributes
+  AE.object
+    [ "name" AE..= scope.instrumentationScopeName
+    , "version" AE..= scope.instrumentationScopeVersion
+    , "attributes" AE..= keyValueToJSONB scope.instrumentationScopeAttributes
     ]
 instrumentationScopeToJSONB Nothing = AE.Null
 
@@ -303,154 +300,17 @@ convertSpanRecord pid resource scope sp =
     }
 
 
-convertToMetric :: Projects.ProjectId -> ResourceMetrics -> V.Vector Telemetry.MetricRecord
-convertToMetric pid resourceMetrics = join $ V.map (convertScopeMetric pid resourceMetrics.resourceMetricsResource) resourceMetrics.resourceMetricsScopeMetrics
-
-
-convertScopeMetric :: Projects.ProjectId -> Maybe Resource -> ScopeMetrics -> V.Vector Telemetry.MetricRecord
-convertScopeMetric pid resource sm = join $ V.map (convertMetricRecord pid resource sm.scopeMetricsScope) sm.scopeMetricsMetrics
-
-
-convertMetricRecord :: Projects.ProjectId -> Maybe Resource -> Maybe InstrumentationScope -> Metric -> V.Vector Telemetry.MetricRecord
-convertMetricRecord pid resource iscp metric =
-  ( \(flags, exemplars, attributes, startTime, metricTime, metricValue, metricType) ->
-      Telemetry.MetricRecord
-        { projectId = pid.unProjectId
-        , id = Nothing
-        , metricName = toText metric.metricName
-        , metricDescription = toText metric.metricDescription
-        , metricUnit = toText metric.metricUnit
-        , timestamp = nanosecondsToUTC startTime
-        , metricTime = nanosecondsToUTC metricTime
-        , resource = removeProjectId $ resourceToJSONB resource
-        , instrumentationScope = instrumentationScopeToJSONB iscp
-        , metricValue
-        , exemplars
-        , metricType
-        , flags
-        , attributes
-        , metricMetadata = keyValueToJSONB metric.metricMetadata
-        }
-  )
-    <$> values
-  where
-    values = case metric.metricData of
-      Just metricData -> case metricData of
-        MetricDataGauge (Gauge gauges) ->
-          ( \gauge ->
-              let attr = keyValueToJSONB gauge.numberDataPointAttributes
-                  stTime = gauge.numberDataPointStartTimeUnixNano
-                  mtTime = gauge.numberDataPointTimeUnixNano
-                  mtValue = case gauge.numberDataPointValue of
-                    Just (NumberDataPointValueAsDouble x) -> Telemetry.GaugeValue Telemetry.GaugeSum{value = x}
-                    Just (NumberDataPointValueAsInt x) -> Telemetry.GaugeValue Telemetry.GaugeSum{value = fromIntegral x}
-                    _ -> Telemetry.GaugeValue Telemetry.GaugeSum{value = 0}
-                  mtType = Telemetry.MTGauge
-                  exems = AE.toJSON gauge.numberDataPointExemplars
-               in (fromIntegral gauge.numberDataPointFlags, exems, attr, stTime, mtTime, mtValue, mtType)
-          )
-            <$> gauges
-        MetricDataSum s ->
-          ( \sm ->
-              let attr = keyValueToJSONB sm.numberDataPointAttributes
-                  stTime = sm.numberDataPointStartTimeUnixNano
-                  mtTime = sm.numberDataPointTimeUnixNano
-                  mtValue = case sm.numberDataPointValue of
-                    Just (NumberDataPointValueAsDouble x) -> Telemetry.SumValue Telemetry.GaugeSum{value = x}
-                    Just (NumberDataPointValueAsInt x) -> Telemetry.SumValue Telemetry.GaugeSum{value = fromIntegral x}
-                    _ -> Telemetry.SumValue Telemetry.GaugeSum{value = 0}
-                  mtType = Telemetry.MTSum
-                  exems = AE.toJSON sm.numberDataPointExemplars
-               in (fromIntegral sm.numberDataPointFlags, exems, attr, stTime, mtTime, mtValue, mtType)
-          )
-            <$> s.sumDataPoints
-        MetricDataHistogram histograms ->
-          ( \histogram ->
-              let attr = keyValueToJSONB histogram.histogramDataPointAttributes
-                  stTime = histogram.histogramDataPointStartTimeUnixNano
-                  mtTime = histogram.histogramDataPointTimeUnixNano
-                  mtValue =
-                    Telemetry.HistogramValue
-                      Telemetry.Histogram
-                        { count = fromIntegral histogram.histogramDataPointCount
-                        , sum = histogram.histogramDataPointSum
-                        , bucketCounts = fromIntegral <$> histogram.histogramDataPointBucketCounts
-                        , explicitBounds = histogram.histogramDataPointExplicitBounds
-                        , pointMin = histogram.histogramDataPointMin
-                        , pointMax = histogram.histogramDataPointMax
-                        }
-                  mtType = Telemetry.MTHistogram
-                  exems = AE.toJSON histogram.histogramDataPointExemplars
-               in (fromIntegral histogram.histogramDataPointFlags, exems, attr, stTime, mtTime, mtValue, mtType)
-          )
-            <$> histograms.histogramDataPoints
-        MetricDataExponentialHistogram histograms ->
-          ( \histogram ->
-              let attr = keyValueToJSONB histogram.exponentialHistogramDataPointAttributes
-                  stTime = histogram.exponentialHistogramDataPointStartTimeUnixNano
-                  mtTime = histogram.exponentialHistogramDataPointTimeUnixNano
-                  pointNegative =
-                    ( \b ->
-                        Just $
-                          Telemetry.EHBucket
-                            { bucketOffset = fromIntegral $ b.exponentialHistogramDataPoint_BucketsOffset
-                            , bucketCounts = fromIntegral <$> b.exponentialHistogramDataPoint_BucketsBucketCounts
-                            }
-                    )
-                      =<< histogram.exponentialHistogramDataPointNegative
-                  pointPositive =
-                    ( \b ->
-                        Just $
-                          Telemetry.EHBucket
-                            { bucketOffset = fromIntegral $ b.exponentialHistogramDataPoint_BucketsOffset
-                            , bucketCounts = fromIntegral <$> b.exponentialHistogramDataPoint_BucketsBucketCounts
-                            }
-                    )
-                      =<< histogram.exponentialHistogramDataPointPositive
-                  mtValue =
-                    Telemetry.ExponentialHistogramValue
-                      Telemetry.ExponentialHistogram
-                        { count = fromIntegral histogram.exponentialHistogramDataPointCount
-                        , sum = histogram.exponentialHistogramDataPointSum
-                        , pointMin = histogram.exponentialHistogramDataPointMin
-                        , pointMax = histogram.exponentialHistogramDataPointMax
-                        , zeroCount = fromIntegral histogram.exponentialHistogramDataPointZeroCount
-                        , scale = fromIntegral histogram.exponentialHistogramDataPointScale
-                        , pointNegative
-                        , pointPositive
-                        , zeroThreshold = histogram.exponentialHistogramDataPointZeroThreshold
-                        }
-                  mtType = Telemetry.MTHistogram
-                  exems = AE.toJSON histogram.exponentialHistogramDataPointExemplars
-               in (fromIntegral histogram.exponentialHistogramDataPointFlags, exems, attr, stTime, mtTime, mtValue, mtType)
-          )
-            <$> histograms.exponentialHistogramDataPoints
-        MetricDataSummary summaries ->
-          ( \summary ->
-              let att = keyValueToJSONB summary.summaryDataPointAttributes
-                  stTime = summary.summaryDataPointStartTimeUnixNano
-                  mtTime = summary.summaryDataPointTimeUnixNano
-                  mtValue =
-                    Telemetry.SummaryValue
-                      Telemetry.Summary
-                        { sum = summary.summaryDataPointSum
-                        , count = fromIntegral summary.summaryDataPointCount
-                        , quantiles =
-                            ( \x ->
-                                Telemetry.Quantile
-                                  { quantile = x.summaryDataPoint_ValueAtQuantileQuantile
-                                  , value = x.summaryDataPoint_ValueAtQuantileValue
-                                  }
-                            )
-                              <$> summary.summaryDataPointQuantileValues
-                        }
-                  mtType = Telemetry.MTSummary
-                  exems = AE.Array []
-               in (fromIntegral summary.summaryDataPointFlags, exems, att, stTime, mtTime, mtValue, mtType)
-          )
-            <$> summaries.summaryDataPoints
-      Nothing -> error "something went wrong" -- TODO: handle this case
-
+-- convertToSpanEvents :: V.Vector Span_Event -> V.Vector Telemetry.SpanEvent
+-- convertToSpanEvents =
+--   V.map
+--     ( \e ->
+--         Telemetry.SpanEvent
+--           { eventName = toText e.span_EventName
+--           , eventTime = nanosecondsToUTC e.span_EventTimeUnixNano
+--           , eventAttributes = keyValueToJSONB e.span_EventAttributes
+--           , eventDroppedAttributesCount = fromIntegral e.span_EventDroppedAttributesCount
+--           }
+--     )
 
 traceServiceExportH
   :: Log.Logger
@@ -461,7 +321,7 @@ traceServiceExportH appLogger appCtx (ServerNormalRequest _meta (ExportTraceServ
   _ <- runBackground appLogger appCtx do
     let projectKey = fromMaybe (error "Missing project key") $ getSpanAttributeValue "at-project-key" req
     projectIdM <- ProjectApiKeys.getProjectIdByApiKey projectKey
-    let pid = fromMaybe (error $ "project API Key is invalid pid") projectIdM
+    let pid = fromMaybe (error "project API Key is invalid pid") projectIdM
     let spanRecords = join $ V.map (convertToSpan pid) req
         apitoolkitSpans = V.map mapHTTPSpan spanRecords
     _ <- ProcessMessage.processRequestMessages $ V.toList $ V.catMaybes apitoolkitSpans <&> ("",)
@@ -603,11 +463,11 @@ eventsToJSONB :: [Span_Event] -> AE.Value
 eventsToJSONB spans =
   AE.toJSON $
     ( \sp ->
-        object
-          [ "event_name" .= toText sp.span_EventName
-          , "event_time" .= nanosecondsToUTC sp.span_EventTimeUnixNano
-          , "event_attributes" .= keyValueToJSONB sp.span_EventAttributes
-          , "event_dropped_attributes_count" .= fromIntegral sp.span_EventDroppedAttributesCount
+        AE.object
+          [ "event_name" AE..= toText sp.span_EventName
+          , "event_time" AE..= nanosecondsToUTC sp.span_EventTimeUnixNano
+          , "event_attributes" AE..= keyValueToJSONB sp.span_EventAttributes
+          , "event_dropped_attributes_count" AE..= fromIntegral sp.span_EventDroppedAttributesCount
           ]
     )
       <$> spans
@@ -618,12 +478,12 @@ linksToJSONB lnks =
   AE.toJSON $
     lnks
       <&> \lnk ->
-        object
-          [ "link_span_id" .= (decodeUtf8 lnk.span_LinkSpanId :: Text)
-          , "link_trace_id" .= (decodeUtf8 lnk.span_LinkTraceId :: Text)
-          , "link_attributes" .= keyValueToJSONB lnk.span_LinkAttributes
-          , "link_dropped_attributes_count" .= fromIntegral lnk.span_LinkDroppedAttributesCount
-          , "link_flags" .= fromIntegral lnk.span_LinkFlags
+        AE.object
+          [ "link_span_id" AE..= (decodeUtf8 lnk.span_LinkSpanId :: Text)
+          , "link_trace_id" AE..= (decodeUtf8 lnk.span_LinkTraceId :: Text)
+          , "link_attributes" AE..= keyValueToJSONB lnk.span_LinkAttributes
+          , "link_dropped_attributes_count" AE..= fromIntegral lnk.span_LinkDroppedAttributesCount
+          , "link_flags" AE..= fromIntegral lnk.span_LinkFlags
           ]
 
 

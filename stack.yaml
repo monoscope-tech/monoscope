@@ -9,6 +9,10 @@ extra-deps:
   - ./rust-interop
   - ./otlp
   - pg-entity-0.0.4.4
+  - deriving-aeson-0.2.10
+  - hiedb-plugin-0.1.0@sha256:480d8836e7d21b91a6205010af534cb739a2079d4bdeac7893cf85c9a4d75f32,1439
+  - hiedb-0.6.0.1@sha256:7398fe3115c239f421286dbb1db3b5ac359568955e7585bcf27a45c99420b46f,2962
+  - hie-compat-0.3.1.2@sha256:74a8585a90e3c06667134939cd170cff24067d5a988e14829785af0dfa6bd10f,1535
   - Unique-0.4.7.9@sha256:7c37e22b7bb9df935c22112e67043177461aedcebe3a958854f6c0e9ecb54083,2155
   - log-effectful-1.0.0.0@sha256:126f328c9325c10998289378191dc69e55b5ffdc37a7845f2d0ee57f6f13392e,2433
   - lucid-aria-0.1.0.1@sha256:d4f37b67a28f2e38eb3cf9fca4cbed5dcc6bf335c880113c618ca50fa933cd40,920
@@ -50,7 +54,7 @@ extra-deps:
     subdirs:
       - .
   - git: https://github.com/tonyalaribe/proto3-suite.git 
-    branch: aeson-error-fix 
+    # branch: aeson-error-fix 
     commit: 4076ae6d6a1b2b91d0d4b70625c53754ba12f9b0 
     subdirs: 
       - .

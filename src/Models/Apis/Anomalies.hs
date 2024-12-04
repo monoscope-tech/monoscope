@@ -38,7 +38,6 @@ import Data.ByteString.Char8 qualified as BSC
 import Data.Default (Default, def)
 import Data.Time
 import Data.UUID qualified as UUID
-import Data.Vector (Vector)
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity
 import Database.PostgreSQL.Entity.DBT (QueryNature (Insert, Select, Update), execute, query, queryOne)
@@ -78,9 +77,7 @@ import Utils
 newtype AnomalyId = AnomalyId {unAnomalyId :: UUID.UUID}
   deriving stock (Generic, Show)
   deriving newtype (NFData, AE.FromJSON, AE.ToJSON)
-  deriving
-    (Eq, Ord, FromField, ToField, FromHttpApiData, Default)
-    via UUID.UUID
+  deriving newtype (Eq, Ord, FromField, ToField, FromHttpApiData, Default)
 
 
 anomalyIdText :: AnomalyId -> Text
@@ -198,9 +195,9 @@ data AnomalyVM = AnomalyVM
   , targetHash :: Text
   , --
     shapeId :: Maybe Shapes.ShapeId
-  , shapeNewUniqueFields :: Vector Text
-  , shapeDeletedFields :: Vector Text
-  , shapeUpdatedFieldFormats :: Vector Text
+  , shapeNewUniqueFields :: V.Vector Text
+  , shapeDeletedFields :: V.Vector Text
+  , shapeUpdatedFieldFormats :: V.Vector Text
   , --
     fieldId :: Maybe Fields.FieldId
   , fieldKey :: Maybe Text
@@ -210,7 +207,7 @@ data AnomalyVM = AnomalyVM
   , --
     formatId :: Maybe Formats.FormatId
   , formatType :: Maybe Fields.FieldTypes -- fieldFormat in the formats table
-  , formatExamples :: Maybe (Vector Text)
+  , formatExamples :: Maybe (V.Vector Text)
   , --
     endpointId :: Maybe Endpoints.EndpointId
   , endpointMethod :: Maybe Text
@@ -307,8 +304,8 @@ getFormatParentAnomalyVM pid hash = do
       |]
 
 
-selectIssues :: Projects.ProjectId -> Maybe Endpoints.EndpointId -> Maybe Bool -> Maybe Bool -> Maybe Text -> Maybe Int -> Int -> DBT IO (Vector IssueL)
-selectIssues pid endpointM isAcknowleged isArchived sortM limitM skipM = query Select (Query $ encodeUtf8 $ q) (MkDBField pid : paramList)
+selectIssues :: Projects.ProjectId -> Maybe Endpoints.EndpointId -> Maybe Bool -> Maybe Bool -> Maybe Text -> Maybe Int -> Int -> DBT IO (V.Vector IssueL)
+selectIssues pid endpointM isAcknowleged isArchived sortM limitM skipM = query Select (Query $ encodeUtf8 q) (MkDBField pid : paramList)
   where
     boolToNullSubQ a = if a then " not " else ""
     condlist =
@@ -366,7 +363,7 @@ SELECT id, created_at, updated_at, project_id, acknowleged_at, anomaly_type, tar
     |]
 
 
-getReportAnomalies :: Projects.ProjectId -> Text -> DBT IO (Vector IssueL)
+getReportAnomalies :: Projects.ProjectId -> Text -> DBT IO (V.Vector IssueL)
 getReportAnomalies pid report_type = query Select (Query $ encodeUtf8 q) pid
   where
     report_interval = if report_type == "daily" then ("'24 hours'" :: Text) else "'7 days'"
@@ -402,16 +399,16 @@ countAnomalies pid report_type = do
      |]
 
 
-acknowledgeAnomalies :: Users.UserId -> Vector Text -> DBT IO (Vector Text)
+acknowledgeAnomalies :: Users.UserId -> V.Vector Text -> DBT IO (V.Vector Text)
 acknowledgeAnomalies uid aids = do
-  _ <- query Update qIssues (uid, aids) :: DBT IO (Vector Text)
+  _ <- query Update qIssues (uid, aids) :: DBT IO (V.Vector Text)
   query Update q (uid, aids)
   where
     qIssues = [sql| update apis.issues set acknowleged_by=?, acknowleged_at=NOW() where id=ANY(?::uuid[]) RETURNING target_hash; |]
     q = [sql| update apis.anomalies set acknowleged_by=?, acknowleged_at=NOW() where id=ANY(?::uuid[]) RETURNING target_hash; |]
 
 
-acknowlegeCascade :: Users.UserId -> Vector Text -> DBT IO Int64
+acknowlegeCascade :: Users.UserId -> V.Vector Text -> DBT IO Int64
 acknowlegeCascade uid targets = do
   _ <- execute Update qIssues (uid, hashes)
   execute Update q (uid, hashes)
@@ -431,9 +428,9 @@ data NewShapeIssue = NewShapeIssue
   , endpointMethod :: Text
   , endpointUrlPath :: Text
   , host :: Text
-  , newUniqueFields :: Vector Text
-  , deletedFields :: Vector Text
-  , updatedFieldFormats :: Vector Text
+  , newUniqueFields :: V.Vector Text
+  , deletedFields :: V.Vector Text
+  , updatedFieldFormats :: V.Vector Text
   }
   deriving stock (Show, Generic)
   deriving anyclass (NFData)
@@ -469,7 +466,7 @@ data NewFormatIssue = NewFormatIssue
   , fieldKeyPath :: Text
   , formatType :: Fields.FieldTypes
   , fieldCategory :: Fields.FieldCategoryEnum
-  , examples :: Maybe (Vector Text)
+  , examples :: Maybe (V.Vector Text)
   }
   deriving stock (Show, Generic)
   deriving anyclass (NFData)

@@ -19,7 +19,7 @@ where
 
 import BackgroundJobs (jobsRunner)
 import Control.Exception (bracket_, finally, mask, throwIO)
-import Data.Aeson (Result (Error, Success), Value, fromJSON)
+import Data.Aeson qualified as AE
 import Data.Aeson.QQ (aesonQQ)
 import Data.Cache (Cache (..), newCache)
 import Data.Default (Default (..))
@@ -201,7 +201,7 @@ toServantResponse trATCtx trSessAndHeader trLogger k = do
     . fromRightShow
 
 
-msg1 :: Text -> Value
+msg1 :: Text -> AE.Value
 msg1 timestamp =
   [aesonQQ|{"duration":476434,
             "host":"172.31.29.11",
@@ -226,7 +226,7 @@ msg1 timestamp =
       |]
 
 
-msg2 :: Text -> Value
+msg2 :: Text -> AE.Value
 msg2 timestamp =
   [aesonQQ|{"timestamp": #{timestamp},
             "request_headers":{
@@ -266,17 +266,17 @@ testRequestMsgs =
 
 
 data TestRequestMessages = RequestMessages
-  { reqMsg1 :: Text -> Value
-  , reqMsg2 :: Text -> Value
+  { reqMsg1 :: Text -> AE.Value
+  , reqMsg2 :: Text -> AE.Value
   }
 
 
 -- FIXME: rename to some clearer. like toRequestMessage.
 -- convert is too general
-convert :: Value -> Maybe RequestMessages.RequestMessage
-convert val = case fromJSON val of
-  Success p -> Just p
-  Error _ -> Nothing
+convert :: AE.Value -> Maybe RequestMessages.RequestMessage
+convert val = case AE.fromJSON val of
+  AE.Success p -> Just p
+  AE.Error _ -> Nothing
 
 
 runAllBackgroundJobs :: AuthContext -> IO (V.Vector Job)

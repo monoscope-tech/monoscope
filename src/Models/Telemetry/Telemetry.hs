@@ -37,14 +37,13 @@ where
 
 import Data.Aeson qualified as AE
 import Data.ByteString.Base16 qualified as B16
-import Data.Text (toTitle, toUpper)
-import Data.Text.Encoding qualified as TE
 import Data.Time (UTCTime)
 import Data.UUID (UUID)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity.DBT (QueryNature (..), executeMany, query, queryOne)
-import Database.PostgreSQL.Simple (ResultError (..))
+import Database.PostgreSQL.Simple (FromRow, ResultError (..), ToRow)
+import Database.PostgreSQL.Simple.FromField (FromField (..))
 import Database.PostgreSQL.Simple.FromRow
 import Database.PostgreSQL.Simple.ToRow
 
@@ -54,32 +53,17 @@ import Data.Time.Format (defaultTimeLocale)
 import Database.PostgreSQL.Simple.FromField (FromField (..), fromField, returnError)
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
-import Database.PostgreSQL.Simple.ToField (ToField, toField)
+import Database.PostgreSQL.Simple.ToField (ToField)
 import Database.PostgreSQL.Simple.Types (Query (..))
 import Deriving.Aeson qualified as DAE
 import Deriving.Aeson.Stock qualified as DAE
 import Effectful
 import Effectful.PostgreSQL.Transact.Effect (DB, dbtToEff)
-import GHC.TypeLits
 import Models.Projects.Projects qualified as Projects
 import NeatInterpolation (text)
 import Opentelemetry.Proto.Metrics.V1.Metrics (Metric (metricMetadata), MetricData (MetricDataExponentialHistogram))
+import Pkg.DBUtils (WrappedEnum (..))
 import Relude
-import Relude.Unsafe qualified as Unsafe
-
-
-newtype WrappedEnum (prefix :: Symbol) a = WrappedEnum a
-  deriving (Generic)
-
-
-instance Show a => ToField (WrappedEnum prefix a) where
-  toField (WrappedEnum a) = toField . toUpper . fromString . drop 2 . show $ a
-
-
-instance (KnownSymbol prefix, Typeable a, Read a) => FromField (WrappedEnum prefix a) where
-  fromField f = \case
-    Nothing -> returnError UnexpectedNull f ""
-    Just bss -> pure $ WrappedEnum (Unsafe.read $ (symbolVal (Proxy @prefix)) <> (toString $ toTitle (decodeUtf8 bss)))
 
 
 data SeverityLevel = SLDebug | SLInfo | SLWarn | SLError | SLFatal
@@ -129,6 +113,17 @@ data LogRecord = LogRecord
   deriving (Show, Generic)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake LogRecord
   deriving anyclass (NFData, FromRow)
+
+
+instance AE.FromJSON ByteString where
+  parseJSON = AE.withText "ByteString" $ \t ->
+    case B16.decode (encodeUtf8 t) of
+      Right bs -> return bs
+      Left err -> fail $ "Invalid hex-encoded ByteString: " ++ err
+
+
+instance AE.ToJSON ByteString where
+  toJSON = AE.String . decodeUtf8 . B16.encode
 
 
 data SpanRecord = SpanRecord

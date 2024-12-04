@@ -1,6 +1,5 @@
 module Pages.LogExplorer.LogItem (expandAPIlogItemH, expandAPIlogItem', apiLogItemH, ApiLogItem (..), ApiItemDetailed (..)) where
 
-import Data.Aeson ((.=))
 import Data.Aeson qualified as AE
 import Data.Aeson.KeyMap qualified as KEM
 import Data.ByteString.Lazy qualified as BS
@@ -10,7 +9,6 @@ import Data.Time.Format.ISO8601 (ISO8601 (iso8601Format), formatShow)
 import Data.UUID qualified as UUID
 import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
 import Lucid
-import Lucid.Aria qualified as Aria
 import Lucid.Htmx (hxGet_, hxSwap_, hxTrigger_)
 import Lucid.Hyperscript (__)
 import Models.Apis.RequestDumps qualified as RequestDumps
@@ -25,7 +23,6 @@ import PyF (fmt)
 import Relude
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
 import Utils (faSprite_, getDurationNSMS, getMethodBorderColor, getMethodColor, getStatusBorderColor, getStatusColor, jsonValueToHtmlTree, toXXHash)
-import Witch (from)
 
 
 expandAPIlogItemH :: Projects.ProjectId -> UUID.UUID -> UTCTime -> Maybe Text -> ATAuthCtx (RespHeaders ApiItemDetailed)
@@ -149,38 +146,38 @@ expandAPIlogItem' pid req modal = do
       p_ [class_ "text-slate-950 font-medium mb-2"] "Request Details"
       div_ [class_ "rounded-3xl border border-slate-200", role_ "tablist"] do
         div_ [class_ "flex w-full text-slate-500"] do
-          button_ [class_ "a-tab whitespace-nowrap px-3 py-2 border-b border-b-slate-200 w-max t-tab-active", onclick_ "navigatable(this, '#req_body_json', '#req-tabs-container', 't-tab-active')"] $ "Body"
-          button_ [class_ "a-tab whitespace-nowrap px-3 py-2 border-b border-b-slate-200 w-max", onclick_ "navigatable(this, '#req_headers_json', '#req-tabs-container', 't-tab-active')"] $ "Headers"
-          button_ [class_ "a-tab whitespace-nowrap px-3 py-2 border-b border-b-slate-200 w-max", onclick_ "navigatable(this, '#query_params_json', '#req-tabs-container', 't-tab-active')"] $ "Query"
-          button_ [class_ "a-tab whitespace-nowrap px-3 py-2 border-b border-b-slate-200 w-max", onclick_ "navigatable(this, '#path_params_json', '#req-tabs-container', 't-tab-active')"] $ "Path Params"
+          button_ [class_ "a-tab whitespace-nowrap px-3 py-2 border-b border-b-slate-200 w-max t-tab-active", onclick_ "navigatable(this, '#req_body_json', '#req-tabs-container', 't-tab-active')"] "Body"
+          button_ [class_ "a-tab whitespace-nowrap px-3 py-2 border-b border-b-slate-200 w-max", onclick_ "navigatable(this, '#req_headers_json', '#req-tabs-container', 't-tab-active')"] "Headers"
+          button_ [class_ "a-tab whitespace-nowrap px-3 py-2 border-b border-b-slate-200 w-max", onclick_ "navigatable(this, '#query_params_json', '#req-tabs-container', 't-tab-active')"] "Query"
+          button_ [class_ "a-tab whitespace-nowrap px-3 py-2 border-b border-b-slate-200 w-max", onclick_ "navigatable(this, '#path_params_json', '#req-tabs-container', 't-tab-active')"] "Path Params"
           button_ [class_ "border-b border-b-slate-200 w-full"] pass
 
-        div_ [class_ "a-tab-content m-4  rounded-xl p-2 border border-slate-200", id_ "req_body_json"] $
-          jsonValueToHtmlTree req.requestBody
+        div_ [class_ "a-tab-content m-4  rounded-xl p-2 border border-slate-200", id_ "req_body_json"]
+          $ jsonValueToHtmlTree req.requestBody
 
-        div_ [class_ "a-tab-content m-4 hidden rounded-xl p-2 border border-slate-200 break-all", id_ "req_headers_json"] $
-          jsonValueToHtmlTree req.requestHeaders
+        div_ [class_ "a-tab-content m-4 hidden rounded-xl p-2 border border-slate-200 break-all", id_ "req_headers_json"]
+          $ jsonValueToHtmlTree req.requestHeaders
 
-        div_ [class_ "a-tab-content m-4 hidden rounded-xl p-2 border border-slate-200", id_ "query_params_json"] $
-          jsonValueToHtmlTree req.queryParams
+        div_ [class_ "a-tab-content m-4 hidden rounded-xl p-2 border border-slate-200", id_ "query_params_json"]
+          $ jsonValueToHtmlTree req.queryParams
 
-        div_ [class_ "a-tab-content m-4 hidden rounded-xl p-2 border border-slate-200", id_ "path_params_json"] $
-          jsonValueToHtmlTree req.pathParams
+        div_ [class_ "a-tab-content m-4 hidden rounded-xl p-2 border border-slate-200", id_ "path_params_json"]
+          $ jsonValueToHtmlTree req.pathParams
 
     -- response details
     div_ [class_ "mt-8", id_ "res-tabs-container"] do
       p_ [class_ "text-slate-950 font-medium mb-2"] "Request Details"
       div_ [class_ "rounded-3xl border border-slate-200", role_ "tablist"] do
         div_ [class_ "flex w-full text-slate-500"] do
-          button_ [class_ "a-tab px-3 border-b border-b-slate-200 py-2 w-max t-tab-active", onclick_ "navigatable(this, '#res_body_json', '#res-tabs-container', 't-tab-active')"] $ "Body"
-          button_ [class_ "a-tab px-3 border-b border-b-slate-200 py-2 w-max", role_ "tab", onclick_ "navigatable(this, '#res_headers_json', '#res-tabs-container', 't-tab-active')"] $ "Headers"
+          button_ [class_ "a-tab px-3 border-b border-b-slate-200 py-2 w-max t-tab-active", onclick_ "navigatable(this, '#res_body_json', '#res-tabs-container', 't-tab-active')"] "Body"
+          button_ [class_ "a-tab px-3 border-b border-b-slate-200 py-2 w-max", role_ "tab", onclick_ "navigatable(this, '#res_headers_json', '#res-tabs-container', 't-tab-active')"] "Headers"
           button_ [class_ "border-b border-b-slate-200 w-full"] pass
 
-        div_ [class_ "a-tab-content m-4 rounded-xl p-2 border border-slate-200", id_ "res_body_json"] $
-          jsonValueToHtmlTree req.responseBody
+        div_ [class_ "a-tab-content m-4 rounded-xl p-2 border border-slate-200", id_ "res_body_json"]
+          $ jsonValueToHtmlTree req.responseBody
 
-        div_ [class_ "a-tab-content m-4 hidden rounded-xl p-2 border border-slate-200", id_ "res_headers_json"] $
-          jsonValueToHtmlTree req.responseHeaders
+        div_ [class_ "a-tab-content m-4 hidden rounded-xl p-2 border border-slate-200", id_ "res_headers_json"]
+          $ jsonValueToHtmlTree req.responseHeaders
 
 
 apiLogItemH :: Projects.ProjectId -> UUID.UUID -> UTCTime -> Maybe Text -> ATAuthCtx (RespHeaders ApiLogItem)
@@ -203,7 +200,7 @@ apiLogItemH pid rdId createdAt sourceM = do
 
 
 requestDumpLogItemUrlPath :: Projects.ProjectId -> UUID.UUID -> UTCTime -> Text
-requestDumpLogItemUrlPath pid rdId timestamp = "/p/" <> pid.toText <> "/log_explorer/" <> UUID.toText rdId <> "/" <> from @String (formatShow iso8601Format timestamp)
+requestDumpLogItemUrlPath pid rdId timestamp = "/p/" <> pid.toText <> "/log_explorer/" <> UUID.toText rdId <> "/" <> fromString (formatShow iso8601Format timestamp)
 
 
 data ApiLogItem
@@ -239,11 +236,12 @@ apiLogItemView pid logId req expandItemPath source = do
         _ -> Nothing
   let logItemPathDetailed = if source == "spans" then "/p/" <> pid.toText <> "/traces/" <> fromMaybe "" trId else expandItemPath <> "/detailed?source=" <> source
   div_ [class_ "flex items-center gap-2"] do
-    when (source /= "logs") $
-      label_
+    when (source /= "logs")
+      $ label_
         [ class_ "btn btn-sm bg-base-100"
         , Lucid.for_ "global-data-drawer"
-        , term "_" $
+        , term
+            "_"
             [text|on mousedown or click fetch $logItemPathDetailed
                   then set #global-data-drawer-content.innerHTML to #loader-tmp.innerHTML
                   then set #global-data-drawer.checked to true
@@ -253,8 +251,8 @@ apiLogItemView pid logId req expandItemPath source = do
         ("Expand" >> faSprite_ "expand" "regular" "h-3 w-3")
 
     let reqJson = decodeUtf8 $ AE.encode req
-    when (source /= "logs" && source /= "spans") $
-      button_
+    when (source /= "logs" && source /= "spans")
+      $ button_
         [ class_ "btn btn-sm bg-base-100"
         , term "data-reqJson" reqJson
         , onclick_ "window.buildCurlRequest(event)"
@@ -273,49 +271,49 @@ apiLogItemView pid logId req expandItemPath source = do
 -- Function to selectively convert RequestDumpLogItem to JSON
 selectiveReqToJson :: RequestDumps.RequestDumpLogItem -> AE.Value
 selectiveReqToJson req =
-  AE.object $
-    concat @[]
-      [ ["created_at" .= req.createdAt]
-      , ["duration_ns" .= req.durationNs]
-      , ["errors" .= req.errors]
-      , ["host" .= req.host]
-      , ["method" .= req.method]
-      , ["parent_id" .= req.parentId]
-      , ["path_params" .= req.pathParams]
-      , ["query_params" .= req.queryParams]
-      , ["raw_url" .= req.rawUrl]
-      , ["referer" .= req.referer]
-      , ["request_body" .= req.requestBody]
-      , ["request_headers" .= req.requestHeaders]
-      , ["request_type" .= req.requestType]
-      , ["response_body" .= req.responseBody]
-      , ["response_headers" .= req.responseHeaders]
-      , ["sdk_type" .= req.sdkType]
-      , ["service_version" .= req.serviceVersion]
-      , ["status_code" .= req.statusCode]
-      , ["tags" .= req.tags]
-      , ["url_path" .= req.urlPath]
+  AE.object
+    $ concat @[]
+      [ ["created_at" AE..= req.createdAt]
+      , ["duration_ns" AE..= req.durationNs]
+      , ["errors" AE..= req.errors]
+      , ["host" AE..= req.host]
+      , ["method" AE..= req.method]
+      , ["parent_id" AE..= req.parentId]
+      , ["path_params" AE..= req.pathParams]
+      , ["query_params" AE..= req.queryParams]
+      , ["raw_url" AE..= req.rawUrl]
+      , ["referer" AE..= req.referer]
+      , ["request_body" AE..= req.requestBody]
+      , ["request_headers" AE..= req.requestHeaders]
+      , ["request_type" AE..= req.requestType]
+      , ["response_body" AE..= req.responseBody]
+      , ["response_headers" AE..= req.responseHeaders]
+      , ["sdk_type" AE..= req.sdkType]
+      , ["service_version" AE..= req.serviceVersion]
+      , ["status_code" AE..= req.statusCode]
+      , ["tags" AE..= req.tags]
+      , ["url_path" AE..= req.urlPath]
       ]
 
 
 selectiveSpanToJson :: Telemetry.SpanRecord -> AE.Value
 selectiveSpanToJson sp =
-  AE.object $
-    concat @[]
-      [ ["timestamp" .= sp.timestamp]
-      , ["span_id" .= sp.spanId]
-      , ["span_name" .= sp.spanName]
-      , ["kind" .= sp.kind]
-      , ["links" .= sp.links]
-      , ["trace_id" .= sp.traceId]
-      , ["start_time" .= sp.startTime]
-      , ["status" .= sp.status]
-      , ["status_message" .= sp.statusMessage]
-      , ["parent_span_id" .= sp.parentSpanId]
-      , ["trace_state" .= sp.traceState]
-      , ["intrumentation_scope" .= sp.instrumentationScope]
-      , ["attributes" .= sp.attributes]
-      , ["resource" .= sp.resource]
+  AE.object
+    $ concat @[]
+      [ ["timestamp" AE..= sp.timestamp]
+      , ["span_id" AE..= sp.spanId]
+      , ["span_name" AE..= sp.spanName]
+      , ["kind" AE..= sp.kind]
+      , ["links" AE..= sp.links]
+      , ["trace_id" AE..= sp.traceId]
+      , ["start_time" AE..= sp.startTime]
+      , ["status" AE..= sp.status]
+      , ["status_message" AE..= sp.statusMessage]
+      , ["parent_span_id" AE..= sp.parentSpanId]
+      , ["trace_state" AE..= sp.traceState]
+      , ["intrumentation_scope" AE..= sp.instrumentationScope]
+      , ["attributes" AE..= sp.attributes]
+      , ["resource" AE..= sp.resource]
       ]
 
 

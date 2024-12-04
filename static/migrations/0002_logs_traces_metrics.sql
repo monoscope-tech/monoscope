@@ -95,3 +95,44 @@ SELECT add_retention_policy('telemetry.metrics', INTERVAL '3 days', true);
 
 CREATE INDEX idx_metrics_project_id_metric_name ON telemetry.metrics (project_id, metric_name, timestamp DESC);
 CREATE INDEX idx_metrics_project_id_resource_service_name ON telemetry.metrics (project_id, (resource->>'service.name'), timestamp DESC);
+
+-- =================================================================
+-- Query history and saved queries
+-- =================================================================
+CREATE TYPE projects.query_library_kind AS ENUM ('history', 'saved');
+CREATE TABLE IF NOT EXISTS projects.query_library (
+  id         UUID NOT NULL DEFAULT gen_random_uuid(),
+  project_id UUID NOT NULL REFERENCES projects.projects (id) ON DELETE CASCADE,
+  created_at TIMESTAMP WITH TIME ZONE       NOT               NULL    DEFAULT current_timestamp,
+  updated_at TIMESTAMP WITH TIME ZONE       NOT               NULL    DEFAULT current_timestamp,
+  user_id    UUID NOT NULL REFERENCES users.users (id) ON DELETE CASCADE,
+  query_type projects.query_library_kind NOT NULL DEFAULT 'history',
+  query_text TEXT NOT NULL DEFAULT '',
+  query_ast JSONB NOT NULL,
+  title      TEXT,
+  PRIMARY KEY (id)
+);
+SELECT manage_updated_at('projects.query_library');
+CREATE UNIQUE INDEX unique_user_query ON projects.query_library (user_id, query_type, query_text);
+CREATE INDEX idx_user_project_type_created ON projects.query_library (user_id, project_id, query_type, created_at DESC);
+CREATE INDEX idx_project_user_type_created ON projects.query_library (project_id, user_id, query_type, created_at DESC);
+
+-- ===================================================================
+-- Custom Dashboards
+-- ===================================================================
+
+CREATE TABLE IF NOT EXISTS projects.dashboards (
+  id      UUID NOT NULL DEFAULT gen_random_uuid(),
+  project_id UUID NOT NULL REFERENCES projects.projects (id) ON DELETE CASCADE,
+  created_at TIMESTAMP WITH TIME ZONE       NOT               NULL    DEFAULT current_timestamp,
+  updated_at TIMESTAMP WITH TIME ZONE       NOT               NULL    DEFAULT current_timestamp,
+  created_by    UUID NOT NULL REFERENCES users.users (id) ON DELETE CASCADE,
+  base_template TEXT,
+  schema JSONB,
+  starred_since TIMESTAMP WITH TIMEZONE,
+  homepage_since TIMESTAMP WITH TIMEZONE,
+  tags TEXT[] NOT NULL DEFAULT '{}',
+  title TEXT NOT NULL DEFAULT 'Untitled',
+  PRIMARY KEY (id)
+);
+SELECT manage_updated_at('projects.dashboards');

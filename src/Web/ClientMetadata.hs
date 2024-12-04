@@ -1,6 +1,6 @@
 module Web.ClientMetadata (ClientMetadata (..), clientMetadataH) where
 
-import Data.Aeson (Value)
+import Data.Aeson qualified as AE
 import Data.Aeson.QQ (aesonQQ)
 import Data.Aeson.Types (ToJSON)
 import Data.ByteString.Base64 qualified as B64
@@ -28,7 +28,7 @@ data ClientMetadata = ClientMetadata
   { projectId :: Projects.ProjectId
   , topicId :: Text
   , pubsubProjectId :: Text
-  , pubsubPushServiceAccount :: Value
+  , pubsubPushServiceAccount :: AE.Value
   }
   deriving stock (Show, Generic)
   deriving
@@ -67,7 +67,7 @@ clientMetadataH (Just authTextB64) = do
               }
 
 
-apitoolkitPusherServiceAccount :: Value
+apitoolkitPusherServiceAccount :: AE.Value
 apitoolkitPusherServiceAccount =
   [aesonQQ|{
   "type": "service_account",

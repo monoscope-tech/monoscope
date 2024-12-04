@@ -14,6 +14,7 @@ type role Routes' nominal
 type Routes = NamedRoutes Routes'
 
 
+type Routes' :: Type -> Type
 data Routes' mode = Routes'
   { documentationPut :: mode :- "documentation" :> "save" :> ReqBody '[JSON] Documentation.SaveSwaggerForm :> Post '[HTML] (RespHeaders Documentation.DocumentationMut)
   , documentationPost :: mode :- "documentation" :> ReqBody '[FormUrlEncoded] Documentation.SwaggerForm :> Post '[HTML] (RespHeaders Documentation.DocumentationMut)

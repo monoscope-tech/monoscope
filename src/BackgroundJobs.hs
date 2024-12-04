@@ -1,9 +1,6 @@
-{-# OPTIONS_GHC -Wno-unrecognised-pragmas #-}
-
 module BackgroundJobs (jobsWorkerInit, jobsRunner, BgJobs (..)) where
 
 import Control.Lens ((.~))
-import Data.Aeson as Aeson
 import Data.Aeson qualified as AE
 import Data.Aeson.QQ (aesonQQ)
 import Data.CaseInsensitive qualified as CI
@@ -11,7 +8,6 @@ import Data.Pool (withResource)
 import Data.Time (DayOfWeek (Monday), UTCTime (utctDay), ZonedTime, addUTCTime, dayOfWeek, getZonedTime)
 import Data.Time.LocalTime (LocalTime (localDay), ZonedTime (zonedTimeToLocalTime), getCurrentTimeZone, utcToZonedTime, zonedTimeToUTC)
 import Data.UUID.V4 qualified as UUIDV4
-import Data.Vector (Vector)
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity.DBT (QueryNature (Select), query)
 import Database.PostgreSQL.Simple (Only (Only))
@@ -60,12 +56,12 @@ data BgJobs
   | DailyJob
   | GenSwagger Projects.ProjectId Users.UserId Text
   | ReportUsage Projects.ProjectId
-  | QueryMonitorsTriggered (Vector Monitors.QueryMonitorId)
+  | QueryMonitorsTriggered (V.Vector Monitors.QueryMonitorId)
   | RunCollectionTests Testing.CollectionId
   | DeletedProject Projects.ProjectId
-  | APITestFailed Projects.ProjectId Testing.CollectionId (Vector Testing.StepResult)
+  | APITestFailed Projects.ProjectId Testing.CollectionId (V.Vector Testing.StepResult)
   deriving stock (Show, Generic)
-  deriving anyclass (ToJSON, FromJSON)
+  deriving anyclass (AE.ToJSON, AE.FromJSON)
 
 
 webhookUrl :: String
@@ -74,7 +70,7 @@ webhookUrl = "https://discord.com/api/webhooks/1230980245423788045/JQOJ7w3gmEdua
 
 sendMessageToDiscord :: Text -> ATBackgroundCtx ()
 sendMessageToDiscord msg = do
-  let message = object ["content" .= msg]
+  let message = AE.object ["content" AE..= msg]
   let opts = defaults & header "Content-Type" .~ ["application/json"]
   response <- liftIO $ postWith opts webhookUrl message
   pass
@@ -151,8 +147,10 @@ jobsRunner logger authCtx job = when authCtx.config.enableBackgroundJobs $ do
           liftIO $ withResource authCtx.jobsPool \conn -> do
             _ <-
               if dayOfWeek currentDay == Monday
-                then createJob conn "background_jobs" $ BackgroundJobs.WeeklyReports p
-                else createJob conn "background_jobs" $ BackgroundJobs.DailyReports p
+                then do
+                  _ <- createJob conn "background_jobs" $ BackgroundJobs.WeeklyReports p
+                  pass
+                else pass
             _ <- createJob conn "background_jobs" $ BackgroundJobs.ReportUsage p
             pass
       DailyReports pid -> dailyReportForProject pid
@@ -188,10 +186,10 @@ jobsRunner logger authCtx job = when authCtx.config.enableBackgroundJobs $ do
                 pass
           else Log.logAttention "RunCollectionTests failed.  Job was sheduled to run over 30 mins ago" $ collectionM <&> \c -> (c.title, c.id)
       APITestFailed pid col_id stepResult -> do
-        collectionM <- dbtToEff $ Testing.getCollectionById col_id
-        whenJust collectionM \collection -> do
-          _ <- sendTestFailedAlert pid col_id collection stepResult
-          pass
+        -- collectionM <- dbtToEff $ Testing.getCollectionById col_id
+        -- whenJust collectionM \collection -> do
+        --   _ <- sendTestFailedAlert pid col_id collection stepResult
+        pass
 
 
 generateSwaggerForProject :: Projects.ProjectId -> Users.UserId -> Text -> ATBackgroundCtx ()
@@ -219,20 +217,21 @@ generateSwaggerForProject pid uid host = whenJustM (dbtToEff $ Projects.projectB
   dbtToEff $ Swaggers.addSwagger swaggerToAdd
 
 
-sendTestFailedAlert :: Projects.ProjectId -> Testing.CollectionId -> Testing.Collection -> V.Vector Testing.StepResult -> ATBackgroundCtx ()
-sendTestFailedAlert pid col_id collection stepResult = do
-  let
-    -- sv = if collection.alertSeverity == "" then "INFO" else collection.alertSeverity
-    sbjt = collection.title <> ": " <> if collection.alertSubject == "" then "API Test Failed" else collection.alertSubject
-    (Testing.CollectionSteps colStepsV) = collection.collectionSteps
-    failedSteps = Testing.getCollectionFailedSteps colStepsV stepResult
-    msg' = "Failing steps: \n" <> unwords (V.toList $ V.catMaybes $ V.map (\(s, rs) -> s.title) failedSteps)
-    msg = if collection.alertMessage == "" then msg' else collection.alertMessage
-  users <- dbtToEff $ Projects.usersByProjectId pid
-  forM_ users \user -> do
-    let email = CI.original user.email
-    sendPostmarkEmail email Nothing (Just (sbjt, msg))
-  pass
+-- FIXME: implement inteligent allerting logic, where we pause to ensure users are not alerted too often, or spammed.
+-- sendTestFailedAlert :: Projects.ProjectId -> Testing.CollectionId -> Testing.Collection -> V.Vector Testing.StepResult -> ATBackgroundCtx ()
+-- sendTestFailedAlert pid col_id collection stepResult = do
+--   let
+--     -- sv = if collection.alertSeverity == "" then "INFO" else collection.alertSeverity
+--     sbjt = collection.title <> ": " <> if collection.alertSubject == "" then "API Test Failed" else collection.alertSubject
+--     (Testing.CollectionSteps colStepsV) = collection.collectionSteps
+--     failedSteps = Testing.getCollectionFailedSteps colStepsV stepResult
+--     msg' = "Failing steps: \n" <> unwords (V.toList $ V.catMaybes $ V.map (\(s, rs) -> s.title) failedSteps)
+--     msg = if collection.alertMessage == "" then msg' else collection.alertMessage
+--   users <- dbtToEff $ Projects.usersByProjectId pid
+--   forM_ users \user -> do
+--     let email = CI.original user.email
+--     sendPostmarkEmail email Nothing (Just (sbjt, msg))
+--   pass
 
 
 reportUsageToLemonsqueezy :: Text -> Int -> Text -> IO ()
@@ -261,7 +260,7 @@ reportUsageToLemonsqueezy subItemId quantity apiKey = do
   pass
 
 
-queryMonitorsTriggered :: Vector Monitors.QueryMonitorId -> ATBackgroundCtx ()
+queryMonitorsTriggered :: V.Vector Monitors.QueryMonitorId -> ATBackgroundCtx ()
 queryMonitorsTriggered queryMonitorIds = do
   monitorsEvaled <- dbtToEff $ Monitors.queryMonitorsById queryMonitorIds
   forM_ monitorsEvaled \monitorE ->
@@ -340,10 +339,10 @@ dailyReportForProject pid = do
           let firstName = user.firstName
           let projectTitle = pr.title
           let userEmail = CI.original user.email
-          let anmls = if total_anomalies == 0 then [Aeson.object ["message" .= "No anomalies detected yet."]] else RP.getAnomaliesEmailTemplate anomalies
+          let anmls = if total_anomalies == 0 then [AE.object ["message" AE..= "No anomalies detected yet."]] else RP.getAnomaliesEmailTemplate anomalies
           let perf = RP.getPerformanceEmailTemplate endpoint_rp previous_day
           let perf_count = V.length perf
-          let perf_shrt = if perf_count == 0 then [Aeson.object ["message" .= "No performance data yet."]] else V.take 10 perf
+          let perf_shrt = if perf_count == 0 then [AE.object ["message" AE..= "No performance data yet."]] else V.take 10 perf
 
           let rp_url = "https://app.apitoolkit.io/p/" <> pid.toText <> "/reports/" <> show report.id.reportId
           let day = show $ localDay (zonedTimeToLocalTime currentTime)
@@ -404,10 +403,10 @@ weeklyReportForProject pid = do
           let firstName = user.firstName
           let projectTitle = pr.title
           let userEmail = CI.original user.email
-          let anmls = if total_anomalies == 0 then [Aeson.object ["message" .= "No anomalies detected yet."]] else RP.getAnomaliesEmailTemplate anomalies
+          let anmls = if total_anomalies == 0 then [AE.object ["message" AE..= "No anomalies detected yet."]] else RP.getAnomaliesEmailTemplate anomalies
           let perf = RP.getPerformanceEmailTemplate endpoint_rp previous_week
           let perf_count = V.length perf
-          let perf_shrt = if perf_count == 0 then [Aeson.object ["message" .= "No performance data yet."]] else V.take 10 perf
+          let perf_shrt = if perf_count == 0 then [AE.object ["message" AE..= "No performance data yet."]] else V.take 10 perf
           let rp_url = "https://app.apitoolkit.io/p/" <> pid.toText <> "/reports/" <> show report.id.reportId
           let dayEnd = show $ localDay (zonedTimeToLocalTime currentTime)
           let currentUTCTime = zonedTimeToUTC currentTime
@@ -433,22 +432,22 @@ weeklyReportForProject pid = do
 
 
 emailQueryMonitorAlert :: Monitors.QueryMonitorEvaled -> CI.CI Text -> Maybe Users.User -> ATBackgroundCtx ()
-emailQueryMonitorAlert monitorE@Monitors.QueryMonitorEvaled{alertConfig} email userM = whenJust userM \user ->
-  -- FIXME: implement query alert email using postmark
-  -- sendEmail
-  --   (CI.original email)
-  --   [fmt| 🤖 APITOOLKIT: log monitor triggered `{alertConfig.title}` |]
-  --   [fmtTrim|
-  --     Hi {user.firstName},<br/>
-  --
-  --     The monitor: `{alertConfig.title}` was triggered and got above it's defined threshold.
-  --
-  --     <br/><br/>
-  --     Regards,
-  --     Apitoolkit team
-  --               |]
-  pass
+emailQueryMonitorAlert monitorE@Monitors.QueryMonitorEvaled{alertConfig} email userM = whenJust userM (const pass)
 
+
+-- FIXME: implement query alert email using postmark
+-- sendEmail
+--   (CI.original email)
+--   [fmt| 🤖 APITOOLKIT: log monitor triggered `{alertConfig.title}` |]
+--   [fmtTrim|
+--     Hi {user.firstName},<br/>
+--
+--     The monitor: `{alertConfig.title}` was triggered and got above it's defined threshold.
+--
+--     <br/><br/>
+--     Regards,
+--     Apitoolkit team
+--               |]
 
 newAnomalyJob :: Projects.ProjectId -> ZonedTime -> Text -> Text -> Text -> ATBackgroundCtx ()
 newAnomalyJob pid createdAt anomalyTypesT anomalyActionsT targetHash = do
@@ -487,11 +486,11 @@ Endpoint: `{endpointPath}`
             when (totalRequestsCount > 50) $
               forM_ users \u -> do
                 let templateVars =
-                      object
-                        [ "user_name" .= u.firstName
-                        , "project_name" .= project.title
-                        , "anomaly_url" .= ("https://app.apitoolkit.io/p/" <> pid.toText <> "/anomalies/by_hash/" <> targetHash)
-                        , "endpoint_name" .= endpointPath
+                      AE.object
+                        [ "user_name" AE..= u.firstName
+                        , "project_name" AE..= project.title
+                        , "anomaly_url" AE..= ("https://app.apitoolkit.io/p/" <> pid.toText <> "/anomalies/by_hash/" <> targetHash)
+                        , "endpoint_name" AE..= endpointPath
                         ]
                 sendPostmarkEmail (CI.original u.email) (Just ("anomaly-endpoint", templateVars)) Nothing
     Anomalies.ATShape -> do

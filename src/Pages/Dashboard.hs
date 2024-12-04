@@ -2,22 +2,8 @@ module Pages.Dashboard (dashboardGetH, DashboardGet (..)) where
 
 import Data.Aeson qualified as AE
 import Data.Default (def)
-import Data.Text qualified as T
-import Data.Time (
-  NominalDiffTime,
-  UTCTime,
-  addUTCTime,
-  diffUTCTime,
-  formatTime,
-  getCurrentTime,
-  getCurrentTimeZone,
-  getZonedTime,
-  secondsToNominalDiffTime,
-  zonedTimeToUTC,
- )
-import Data.Time.Format (defaultTimeLocale)
-import Data.Time.Format.ISO8601 (iso8601ParseM)
-import Data.Vector qualified as Vector
+import Data.Time (UTCTime, diffUTCTime, getCurrentTime)
+import Data.Vector qualified as V
 import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
 import Effectful.Time qualified as Time
 import Fmt (fixedF, fmt)
@@ -43,8 +29,7 @@ import Pkg.Components qualified as Components
 import Relude hiding (max, min)
 import System.Types
 import Text.Interpolation.Nyan (int, rmode')
-import Utils (convertToDHMS, faSprite_, freeTierLimitExceededBanner, parseTime)
-import Witch (from)
+import Utils (convertToDHMS, faSprite_, freeTierLimitExceededBanner)
 
 
 data ParamInput = ParamInput
@@ -54,8 +39,8 @@ data ParamInput = ParamInput
   }
 
 
-data DashboardGet = DashboardGet
-  { unwrap :: (Projects.ProjectId, ParamInput, UTCTime, Projects.ProjectRequestStats, Vector.Vector Endpoints.EndpointRequestStats, Text, Text, (Maybe UTCTime, Maybe UTCTime), Bool, Bool)
+newtype DashboardGet = DashboardGet
+  { unwrap :: (Projects.ProjectId, ParamInput, UTCTime, Projects.ProjectRequestStats, V.Vector Endpoints.EndpointRequestStats, Text, Text, (Maybe UTCTime, Maybe UTCTime), Bool, Bool)
   }
 
 
@@ -68,12 +53,9 @@ dashboardGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text ->
 dashboardGetH pid fromDStr toDStr sinceStr' = do
   (sess, project) <- Sessions.sessionAndProject pid
   now <- Time.currentTime
-  let sinceStr = if isNothing fromDStr && isNothing toDStr && isNothing sinceStr' || fromDStr == Just "" then Just "24H" else sinceStr'
   hasRequests <- dbtToEff $ RequestDumps.hasRequest pid
   newEndpoints <- dbtToEff $ Endpoints.endpointRequestStatsByProject pid False False Nothing Nothing Nothing 0 "Incoming"
-  -- TODO: Replace with a duration parser.
-  let (fromD, toD, currentRange) = parseTime fromDStr toDStr sinceStr now
-
+  let (fromD, toD, currentRange) = Components.parseTimeRange now (Components.TimePicker sinceStr' fromDStr toDStr)
   (projectRequestStats, reqLatenciesRolledByStepsLabeled, freeTierExceeded) <- dbtToEff do
     projectRequestStats <- fromMaybe (def :: Projects.ProjectRequestStats) <$> Projects.projectRequestStatsByProject pid
     let maxV = round projectRequestStats.p99 :: Int
@@ -87,7 +69,7 @@ dashboardGetH pid fromDStr toDStr sinceStr' = do
           return $ totalRequest > 5000
         else do
           return False
-    pure (projectRequestStats, Vector.toList reqLatenciesRolledBySteps, freeTierExceeded)
+    pure (projectRequestStats, V.toList reqLatenciesRolledBySteps, freeTierExceeded)
 
   let reqLatenciesRolledByStepsJ = decodeUtf8 $ AE.encode reqLatenciesRolledByStepsLabeled
   let bwconf =
@@ -98,21 +80,21 @@ dashboardGetH pid fromDStr toDStr sinceStr' = do
           , pageActions = Just $ Components.timepicker_ Nothing currentRange
           }
   currTime <- liftIO getCurrentTime
-  let createdUTc = zonedTimeToUTC project.createdAt
-      (days, hours, minutes, _seconds) = convertToDHMS $ diffUTCTime currTime createdUTc
+  let (days, hours, minutes, _seconds) = convertToDHMS $ diffUTCTime currTime project.createdAt
       daysLeft =
         if days >= 0 && project.paymentPlan /= "Free"
           then show days <> " days, " <> show hours <> " hours, " <> show minutes <> " minutes"
           else "-"
       currentURL = "/p/" <> pid.toText <> "?&from=" <> fromMaybe "" fromDStr <> "&to=" <> fromMaybe "" toDStr
-      paramInput = ParamInput{currentURL = currentURL, sinceStr = sinceStr, dateRange = (fromD, toD)}
+      paramInput = ParamInput{currentURL = currentURL, sinceStr = sinceStr', dateRange = (fromD, toD)}
   addRespHeaders $ PageCtx bwconf $ DashboardGet (pid, paramInput, currTime, projectRequestStats, newEndpoints, reqLatenciesRolledByStepsJ, daysLeft, (fromD, toD), freeTierExceeded, hasRequests)
 
 
-dashboardPage :: Projects.ProjectId -> ParamInput -> UTCTime -> Projects.ProjectRequestStats -> Vector.Vector Endpoints.EndpointRequestStats -> Text -> Text -> (Maybe UTCTime, Maybe UTCTime) -> Bool -> Bool -> Html ()
+dashboardPage :: Projects.ProjectId -> ParamInput -> UTCTime -> Projects.ProjectRequestStats -> V.Vector Endpoints.EndpointRequestStats -> Text -> Text -> (Maybe UTCTime, Maybe UTCTime) -> Bool -> Bool -> Html ()
 dashboardPage pid paramInput currTime projectStats newEndpoints reqLatenciesRolledByStepsJ daysLeft dateRange exceededFreeTier hasRequest = do
   let bulkActionBase = "/p/" <> pid.toText <> "/anomalies/bulk_actions"
   section_ [class_ "  mx-auto px-6 w-full space-y-12 pb-24 overflow-y-scroll  h-full"] do
+    when exceededFreeTier $ freeTierLimitExceededBanner pid.toText
     unless (null newEndpoints) $
       div_ [id_ "modalContainer"] do
         input_ [type_ "checkbox", id_ "newEndpointsModal", class_ "modal-toggle"]
@@ -138,7 +120,6 @@ dashboardPage pid paramInput currTime projectStats newEndpoints reqLatenciesRoll
                   "Acknowledge All"
           label_ [class_ "modal-backdrop", Lucid.for_ "newEndpointsModal"] "Close"
 
-    -- button_ [class_ "", id_ "checkin", onclick_ "window.picker.show()"] "timepicker"
     section_ $ AnomaliesList.anomalyListSlider currTime pid Nothing Nothing
     dStats pid projectStats reqLatenciesRolledByStepsJ dateRange hasRequest
   -- TODO delete most of this
@@ -149,36 +130,12 @@ dashboardPage pid paramInput currTime projectStats newEndpoints reqLatenciesRoll
       document.getElementById("newEndpointsModal").checked = false
       sessionStorage.setItem('closedNewEndpointsModal', 'true')
     }
-
     document.addEventListener('DOMContentLoaded', function() {
        if(!sessionStorage.getItem('closedNewEndpointsModal')) {
            document.getElementById("newEndpointsModal").checked = true
         }
     })
 
-    const picker = new easepick.create({
-      element: '#startTime',
-      css: [
-        'https://cdn.jsdelivr.net/npm/@easepick/bundle@1.2.0/dist/index.css',
-      ],
-      inline: true,
-      plugins: ['RangePlugin', 'TimePlugin'],
-      autoApply: false,
-      setup(picker) {
-        picker.on('select', (e) => {
-          const start = JSON.stringify(e.detail.start).slice(1, -1);
-          const end = JSON.stringify(e.detail.end).slice(1, -1);
-
-          const url = new URL(window.location.href);
-          url.searchParams.set('x', true);
-          url.searchParams.set('from', start);
-          url.searchParams.set('to', end);
-          url.searchParams.delete('since');
-          window.location.href = url.toString();
-        });
-      },
-    });
-    window.picker = picker;
     |]
 
 

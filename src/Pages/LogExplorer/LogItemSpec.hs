@@ -1,7 +1,7 @@
 module Pages.LogExplorer.LogItemSpec (spec) where
 
 import Control.Lens ((^?))
-import Data.Aeson (Value)
+import Data.Aeson qualified as AE
 import Data.Aeson.Lens
 import Data.Aeson.QQ (aesonQQ)
 import Data.Time (defaultTimeLocale, formatTime, getCurrentTime)
@@ -61,7 +61,7 @@ spec = aroundAll withTestResources do
         _ -> error "Unexpected response"
 
 
-msg1 :: Text -> Value
+msg1 :: Text -> AE.Value
 msg1 timestamp =
   [aesonQQ|{"duration":476434,
             "host":"172.31.29.11",

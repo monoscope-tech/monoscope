@@ -15,7 +15,25 @@ module.exports = {
     'group-has-[.throughput:checked]/pg:block',
     'group-has-[.error-logs:checked]/pg:block',
     'group-has-[.tm-toggle:checked]/tm:rotate-90',
+
+    'group-has-[.tmplRadio0:checked]/md:bg-slate-100',
+    'group-has-[.tmplRadio0:checked]/md:border',
+    'group-has-[.tmplRadio0:checked]/md:block',
+    'group-has-[.tmplRadio1:checked]/md:bg-slate-100',
+    'group-has-[.tmplRadio1:checked]/md:border',
+    'group-has-[.tmplRadio1:checked]/md:block',
+    'group-has-[.tmplRadio2:checked]/md:bg-slate-100',
+    'group-has-[.tmplRadio2:checked]/md:border',
+    'group-has-[.tmplRadio2:checked]/md:block',
+    'group-has-[.tmplRadio3:checked]/md:bg-slate-100',
+    'group-has-[.tmplRadio3:checked]/md:border',
+    'group-has-[.tmplRadio3:checked]/md:block',
+    'group-has-[.tmplRadio4:checked]/md:bg-slate-100',
+    'group-has-[.tmplRadio4:checked]/md:border',
+    'group-has-[.tmplRadio4:checked]/md:block',
+
     'basis-full',
+    'w-[16ch] '
   ],
   daisyui: {
     themes: [
@@ -52,6 +70,13 @@ module.exports = {
   },
   theme: {
     extend: {
+      colors: {
+        'gray-25': '#fcfcfd',
+        'gray-150': '#ecedf0',
+        'slate-25': '#fbfcfd',
+        'slate-150': '#e9eef4',
+        'slate-250': '#d6dee8'
+      },
       gridTemplateColumns: {
         16: 'repeat(16, minmax(0, 1fr))',
       },

@@ -24,6 +24,7 @@ type Routes = NamedRoutes Routes'
 type role Routes' nominal
 
 
+type Routes' :: Type -> Type
 data Routes' mode = Routes'
   { alertUpsertPost :: mode :- "alerts" :> ReqBody '[FormUrlEncoded] Alerts.AlertUpsertForm :> Post '[HTML] (RespHeaders Alerts.Alert)
   , alertListGet :: mode :- "alerts" :> Get '[HTML] (RespHeaders Alerts.Alert)

@@ -26,7 +26,6 @@ module Models.Apis.Endpoints (
 )
 where
 
-import Data.Aeson (FromJSON, ToJSON)
 import Data.Aeson qualified as AE
 import Data.Default (Default)
 import Data.Default.Instances ()
@@ -55,7 +54,7 @@ import Web.HttpApiData (FromHttpApiData)
 
 newtype EndpointId = EndpointId {unEndpointId :: UUID.UUID}
   deriving stock (Generic, Show)
-  deriving newtype (ToJSON, FromJSON, Eq, Ord, FromField, ToField, FromHttpApiData, Default, NFData)
+  deriving newtype (AE.ToJSON, AE.FromJSON, Eq, Ord, FromField, ToField, FromHttpApiData, Default, NFData)
   deriving anyclass (FromRow, ToRow)
 
 
@@ -153,7 +152,7 @@ data EndpointRequestStats = EndpointRequestStats
 -- FIXME: Include and return a boolean flag to show if fields that have annomalies.
 -- FIXME: return endpoint_hash as well.
 endpointRequestStatsByProject :: Projects.ProjectId -> Bool -> Bool -> Maybe Text -> Maybe Text -> Maybe Text -> Int -> Text -> PgT.DBT IO (V.Vector EndpointRequestStats)
-endpointRequestStatsByProject pid ackd archived pHostM sortM searchM page requestType = query Select (Query $ encodeUtf8 $ q) queryParams
+endpointRequestStatsByProject pid ackd archived pHostM sortM searchM page requestType = query Select (Query $ encodeUtf8 q) queryParams
   where
     -- Construct the list of parameters conditionally
     pHostParams = maybe [] (\h -> [toField h]) pHostM

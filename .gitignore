@@ -1,7 +1,9 @@
 tags
 .stack-work
+static/public/reload.trigger
 */.stack-work
 */.hie
+.hifiles/
 */dist-newstyle
 */target
 target
@@ -14,6 +16,8 @@ static/assets/.DS_Store
 static/assets/css/tailwind.min.css
 static/public/assets/css/tailwind.min.css
 .hie
+.hiefiles
+.hiedb
 dist-newstyle
 .env
 env
@@ -26,5 +30,7 @@ gha-creds-*.json
 .tmp/
 testkit
 coverage
-
+errors.err
 apitoolkit-server-exe*
+.hiedb-shm
+.hiedb-wal

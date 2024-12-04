@@ -6,11 +6,11 @@ module ProcessMessage (
 )
 where
 
-import Data.Aeson (eitherDecode)
+import Data.Aeson qualified as AE
 import Data.Aeson.Types (KeyValue ((.=)), object)
 import Data.ByteString.Lazy.Char8 qualified as BL
 import Data.Cache qualified as Cache
-import Data.List (unzip7)
+import Data.List qualified as L
 import Data.Text qualified as T
 import Data.UUID.V4 (nextRandom)
 import Data.Vector qualified as V
@@ -115,7 +115,7 @@ processMessages msgs attrs = do
   let msgs' =
         msgs <&> \(ackId, msg) -> do
           let sanitizedJsonStr = replaceNullChars $ decodeUtf8 msg
-          recMsg <- eitherStrToText $ eitherDecode $ BL.fromStrict $ encodeUtf8 sanitizedJsonStr
+          recMsg <- eitherStrToText $ AE.eitherDecode $ BL.fromStrict $ encodeUtf8 sanitizedJsonStr
           Right (ackId, recMsg)
 
   unless (null $ lefts msgs') do
@@ -145,7 +145,7 @@ processRequestMessages msgs = do
       Right (rd, enp, s, f, fo, err) -> Right (rd, enp, s, f, fo, err, rmAckId)
 
   let !(failures, successes) = partitionEithers processed
-      !(reqDumps, endpoints, shapes, fields, formats, errs, rmAckIds) = unzip7 successes
+      !(reqDumps, endpoints, shapes, fields, formats, errs, rmAckIds) = L.unzip7 successes
   let !reqDumpsFinal = catMaybes reqDumps
   let !endpointsFinal = VAA.nubBy (comparing (.hash)) $ V.fromList $ catMaybes endpoints
   let !shapesFinal = VAA.nubBy (comparing (.hash)) $ V.fromList $ catMaybes shapes

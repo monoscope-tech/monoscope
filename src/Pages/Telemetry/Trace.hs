@@ -1,15 +1,11 @@
 module Pages.Telemetry.Trace (traceH, TraceDetailsGet (..)) where
 
-import Data.Aeson ((.=))
 import Data.Aeson qualified as AE
 import Data.Aeson.Key qualified as AEKey
 import Data.HashMap.Internal.Strict qualified as HM
-import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
-import Data.Maybe (catMaybes)
 import Data.Text qualified as T
 import Data.Time (defaultTimeLocale)
-import Data.Time.Clock (UTCTime)
 import Data.Time.Format (formatTime)
 import Data.Time.Format.ISO8601 (formatShow, iso8601Format)
 import Data.UUID qualified as UUID
@@ -26,7 +22,7 @@ import Pages.Telemetry.Spans qualified as Spans
 import Pages.Telemetry.Utils
 import Relude
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
-import Utils (faSprite_, getDurationNSMS, getGrpcStatusColor, getServiceColors, getStatusColor, utcTimeToNanoseconds)
+import Utils (faSprite_, getDurationNSMS, getServiceColors, utcTimeToNanoseconds)
 
 
 traceH :: Projects.ProjectId -> Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders TraceDetailsGet)
@@ -188,8 +184,8 @@ tracePage p = do
                         span_ [class_ ""] $ toHtml s
                       div_ [class_ "flex gap-1 items-center"] $ do
                         span_ [class_ "text-xs max-w-52 truncate"] $ toHtml $ T.take 4 percent <> "%"
-                        div_ [class_ "w-[100px] h-3 bg-gray-200 rounded overflow-hidden"] $
-                          div_ [class_ $ "h-full pl-2 text-xs font-medium " <> color, style_ $ "width:" <> percent <> "%"] pass
+                        div_ [class_ "w-[100px] h-3 bg-gray-200 rounded overflow-hidden"]
+                          $ div_ [class_ $ "h-full pl-2 text-xs font-medium " <> color, style_ $ "width:" <> percent <> "%"] pass
 
           div_ [role_ "tabpanel", class_ "a-tab-content pt-2 hidden", id_ "water_fall"] do
             div_ [class_ "border border-slate-200 flex w-full rounded-2xl min-h-[230px]  overflow-y-auto overflow-x-hidden "] do
@@ -214,7 +210,7 @@ tracePage p = do
   let spanJson = decodeUtf8 $ AE.encode $ p.spanRecords <&> getSpanJson
   let waterFallJson = decodeUtf8 $ AE.encode rootSpans
 
-  let colorsJson = decodeUtf8 $ AE.encode $ AE.object [AEKey.fromText k .= v | (k, v) <- HM.toList serviceColors]
+  let colorsJson = decodeUtf8 $ AE.encode $ AE.object [AEKey.fromText k AE..= v | (k, v) <- HM.toList serviceColors]
   let trId = traceItem.traceId
   script_
     [text|
@@ -240,13 +236,13 @@ tracePage p = do
 getSpanJson :: Telemetry.SpanRecord -> AE.Value
 getSpanJson sp =
   AE.object
-    [ "span_id" .= sp.spanId
-    , "name" .= sp.spanName
-    , "value" .= sp.spanDurationNs
-    , "start" .= start
-    , "parent_id" .= sp.parentSpanId
-    , "service_name" .= getServiceName sp
-    , "has_errors" .= spanHasErrors sp
+    [ "span_id" AE..= sp.spanId
+    , "name" AE..= sp.spanName
+    , "value" AE..= sp.spanDurationNs
+    , "start" AE..= start
+    , "parent_id" AE..= sp.parentSpanId
+    , "service_name" AE..= getServiceName sp
+    , "has_errors" AE..= spanHasErrors sp
     ]
   where
     start = utcTimeToNanoseconds sp.startTime
@@ -287,16 +283,17 @@ renderSpanListTable services colors records =
         th_ "Avg. Duration"
         th_ "Exec. Time"
         th_ "%Exec. Time"
-    tbody_ [class_ "space-y-0"] $
-      mapM_ (renderSpanRecordRow records colors) services
+    tbody_ [class_ "space-y-0"]
+      $ mapM_ (renderSpanRecordRow records colors) services
 
 
 spanTable :: V.Vector Telemetry.SpanRecord -> Html ()
 spanTable records =
   div_ [class_ "rounded-xl my-2 mx-3 border border-slate-200"] do
     table_ [class_ "table w-full"] do
-      thead_ [class_ "border-b border-slate-200"] $
-        tr_ [class_ "p-2 border-b font-medium"] $ do
+      thead_ [class_ "border-b border-slate-200"]
+        $ tr_ [class_ "p-2 border-b font-medium"]
+        $ do
           td_ "Time"
           td_ "Span name"
           td_ "Event type"
@@ -370,17 +367,17 @@ buildTree spanMap parentId =
     Nothing -> []
     Just spans ->
       [ SpanTree
-        SpanMin
-          { parentSpanId = sp.parentSpanId
-          , spanId = sp.spanId
-          , spanName = sp.spanName
-          , spanDurationNs = sp.spanDurationNs
-          , serviceName = getServiceName sp
-          , startTime = utcTimeToNanoseconds sp.startTime
-          , endTime = utcTimeToNanoseconds <$> sp.endTime
-          , hasErrors = spanHasErrors sp
-          }
-        (buildTree spanMap (Just sp.spanId))
+          SpanMin
+            { parentSpanId = sp.parentSpanId
+            , spanId = sp.spanId
+            , spanName = sp.spanName
+            , spanDurationNs = sp.spanDurationNs
+            , serviceName = getServiceName sp
+            , startTime = utcTimeToNanoseconds sp.startTime
+            , endTime = utcTimeToNanoseconds <$> sp.endTime
+            , hasErrors = spanHasErrors sp
+            }
+          (buildTree spanMap (Just sp.spanId))
       | sp <- spans
       ]
 
@@ -423,7 +420,7 @@ buildTree_ pid sp trId level scol isLasChild = do
               div_ [class_ "border border-slate-200 w-7 flex justify-between gap-1 items-center rounded p-0.5"] do
                 faSprite_ "chevron-right" "regular" "h-3 w-3 shrink-0 font-bold text-slate-950 waterfall-item-tree-chevron"
                 span_ [class_ "text-xs"] $ toHtml $ show (length sp.children)
-            span_ [class_ "font-medium text-slate-950 "] $ toHtml $ sp.spanRecord.serviceName
+            span_ [class_ "font-medium text-slate-950 "] $ toHtml sp.spanRecord.serviceName
             faSprite_ "chevron-right" "regular" "h-3 w-3 shrink-0 text-slate-950"
             span_ [class_ "text-slate-500 text-sm whitespace-nowrap"] $ toHtml sp.spanRecord.spanName
           span_ [class_ $ "w-1 rounded h-5 shrink-0 " <> serviceCol] ""

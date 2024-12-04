@@ -32,6 +32,7 @@ import Data.Map qualified as Map
 import Data.Time.Clock.POSIX (posixSecondsToUTCTime)
 import Data.UUID qualified as UUID
 import Effectful
+import Effectful.Concurrent.Async
 import Effectful.Error.Static (Error, runErrorNoCallStack)
 import Effectful.Log (Log)
 import Effectful.PostgreSQL.Transact.Effect (DB, runDB)
@@ -65,6 +66,7 @@ type CommonWebEffects =
    , DB
    , Time
    , Log
+   , Concurrent
    , Error ServerError
    , Effectful.IOE
    ]
@@ -100,6 +102,7 @@ effToServantHandler env logger app =
     & runDB env.pool
     & runTime
     & Logging.runLog (show env.config.environment) logger
+    & runConcurrent
     & effToHandler
 
 
@@ -114,6 +117,7 @@ effToServantHandlerTest env logger app =
     & runDB env.pool
     & runFrozenTime (posixSecondsToUTCTime 0)
     & Logging.runLog (show env.config.environment) logger
+    & runConcurrent
     & effToHandler
 
 
@@ -160,7 +164,7 @@ type RespHeaders =
      ]
 
 
-addRespHeaders :: a -> ATAuthCtx (RespHeaders a)
+addRespHeaders :: (State.State TriggerEvents :> es, State.State HXRedirectDest :> es) => a -> Eff es (RespHeaders a)
 addRespHeaders resp = do
   triggerEvents <- State.get @TriggerEvents
   redirectDest <- State.get @HXRedirectDest
@@ -168,11 +172,11 @@ addRespHeaders resp = do
 
 
 -- redirectCS adds a header to the request, which in turn triggers a client side redirect via HTMX redirect header.
-redirectCS :: Text -> ATAuthCtx ()
+redirectCS :: State.State HXRedirectDest :> es => Text -> Eff es ()
 redirectCS txt = State.modify $ \_ -> Just txt
 
 
-addTriggerEvent :: Text -> AE.Value -> ATAuthCtx ()
+addTriggerEvent :: State.State TriggerEvents :> es => Text -> AE.Value -> Eff es ()
 addTriggerEvent key value = State.modify $ \events ->
   let updatedList = case Map.lookup key events of
         Just values -> values ++ [value] -- If the key exists, append the new value to the list
@@ -180,13 +184,15 @@ addTriggerEvent key value = State.modify $ \events ->
    in Map.insert key updatedList events
 
 
-addToast :: Text -> Text -> Maybe Text -> ATAuthCtx ()
+addToast :: State.State TriggerEvents :> es => Text -> Text -> Maybe Text -> Eff es ()
 addToast toastType title descM = addTriggerEvent "triggerToast" $ AE.toJSON $ [toastType, title] ++ catMaybes [descM]
 
 
-addSuccessToast :: Text -> Maybe Text -> ATAuthCtx ()
+addSuccessToast :: State.State TriggerEvents :> es => Text -> Maybe Text -> Eff es ()
 addSuccessToast = addToast "success"
 
 
-addErrorToast :: Text -> Maybe Text -> ATAuthCtx ()
-addErrorToast = addToast "error"
+addErrorToast :: (State.State TriggerEvents :> es, Log :> es) => Text -> Maybe Text -> Eff es ()
+addErrorToast msg msg2 = do
+  Log.logAttention_ $ "ERROR: " <> msg <> " => " <> maybeToMonoid msg2
+  addToast "error" msg msg2

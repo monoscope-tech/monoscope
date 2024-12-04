@@ -27,7 +27,6 @@ module Models.Tests.Testing (
 )
 where
 
-import Data.Aeson (KeyValue ((.=)), (.:?))
 import Data.Aeson qualified as AE
 import Data.Aeson.Types
 import Data.Default (Default)
@@ -126,8 +125,8 @@ stepDataMethod stepData =
 
 instance AE.ToJSON CollectionStepData where
   toJSON csd =
-    AE.object $
-      catMaybes
+    AE.object
+      $ catMaybes
         [ Just $ "title" .= csd.title
         , fmap ("POST" .=) csd.post -- Change the key to "POST" here for the output JSON
         , fmap ("GET" .=) csd.get

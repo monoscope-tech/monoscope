@@ -11,20 +11,16 @@ module Pages.Endpoints.EndpointDetails (
 )
 where
 
-import Data.Aeson (KeyValue ((.=)))
 import Data.Aeson qualified as AE
 import Data.Aeson.Key qualified as AEKey
 import Data.Aeson.Text (encodeToLazyText)
 import Data.Default (def)
-import Data.List (elemIndex)
+import Data.List qualified as L
 import Data.Map qualified as Map
-import Data.Text (isSuffixOf, splitOn, toLower)
 import Data.Text qualified as T
-import Data.Time (UTCTime, addUTCTime, defaultTimeLocale, formatTime, getCurrentTime, secondsToNominalDiffTime)
-import Data.Time.Format.ISO8601 (iso8601ParseM)
+import Data.Time (UTCTime, defaultTimeLocale, formatTime, getCurrentTime)
 import Data.UUID qualified as UUID
-import Data.Vector (Vector)
-import Data.Vector qualified as Vector
+import Data.Vector qualified as V
 import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
 import Fmt (fixedF, fmt)
 import Lucid
@@ -46,12 +42,12 @@ import Pages.Charts.Charts qualified as C
 import Pages.Charts.Charts qualified as Charts
 import Pages.Components (statBox)
 import Pages.Endpoints.EndpointComponents qualified as EndpointComponents
+import Pkg.Components qualified as Components
 import Relude hiding (ask, asks, max, min)
 import Relude.Unsafe qualified as Unsafe
-import System.Types (ATAuthCtx, RespHeaders, addRespHeaders, redirectCS, addErrorToast)
+import System.Types (ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders, redirectCS)
 import Text.Interpolation.Nyan (int, rmode')
 import Utils (deleteParam, faSprite_, getStatusColor)
-import Witch (from)
 
 
 timePickerItems :: [(Text, Text)]
@@ -93,7 +89,7 @@ fieldDetailsPartialH pid fid = do
 
 
 data FieldDetails
-  = FieldDetails Fields.Field (Vector Formats.Format)
+  = FieldDetails Fields.Field (V.Vector Formats.Format)
   | FieldDetailsNoContent
 
 
@@ -103,7 +99,7 @@ instance ToHtml FieldDetails where
   toHtmlRaw = toHtml
 
 
-fieldDetailsView :: Fields.Field -> Vector Formats.Format -> Html ()
+fieldDetailsView :: Fields.Field -> V.Vector Formats.Format -> Html ()
 fieldDetailsView field formats = do
   div_ [id_ "modalContainer"] do
     label_ [Lucid.for_ "edit_field", class_ "cursor-pointer"] $ faSprite_ "ellipsis" "regular" "my-2 float-right"
@@ -179,21 +175,21 @@ fieldDetailsView field formats = do
 
     div_ do
       h5_ [class_ " text-slate-800"] "DETECTED FIELD FORMATS AND TYPES"
-      div_ [class_ "space-y-2"] $
-        formats
-          & mapM_ \formatV -> do
-            div_ [class_ "border-l-slate-200 border-l-2 pl-2 py-2"] do
-              div_ [class_ "flex flex-row gap-9"] do
-                div_ [class_ "space-y-2"] do
-                  h6_ [class_ "text-slate-800 text-xs"] "TYPE"
-                  h4_ [class_ "text-base text-slate-800"] $ EndpointComponents.fieldTypeToDisplay formatV.fieldType
-                div_ [class_ "mx-5 space-y-2"] do
-                  h6_ [class_ "text-slate-800 text-xs"] "FORMAT"
-                  h4_ [class_ "text-base text-slate-800"] $ toHtml formatV.fieldFormat
-              h6_ [class_ "text-slate-600 mt-4 text-xs"] $ if field.isEnum then "ENUM VALUES" else "EXAMPLE VALUES"
-              ul_ [class_ "list-disc"] do
-                formatV.examples & mapM_ \ex -> do
-                  li_ [class_ "ml-10 text-slate-800 "] $ toHtml $ aesonValueToText ex
+      div_ [class_ "space-y-2"]
+        $ formats
+        & mapM_ \formatV -> do
+          div_ [class_ "border-l-slate-200 border-l-2 pl-2 py-2"] do
+            div_ [class_ "flex flex-row gap-9"] do
+              div_ [class_ "space-y-2"] do
+                h6_ [class_ "text-slate-800 text-xs"] "TYPE"
+                h4_ [class_ "text-base text-slate-800"] $ EndpointComponents.fieldTypeToDisplay formatV.fieldType
+              div_ [class_ "mx-5 space-y-2"] do
+                h6_ [class_ "text-slate-800 text-xs"] "FORMAT"
+                h4_ [class_ "text-base text-slate-800"] $ toHtml formatV.fieldFormat
+            h6_ [class_ "text-slate-600 mt-4 text-xs"] $ if field.isEnum then "ENUM VALUES" else "EXAMPLE VALUES"
+            ul_ [class_ "list-disc"] do
+              formatV.examples & mapM_ \ex -> do
+                li_ [class_ "ml-10 text-slate-800 "] $ toHtml $ aesonValueToText ex
     div_ [class_ "flex flex-row justify-between mt-10 "] do
       div_ [class_ " "] do
         h4_ [class_ " text-slate-800 mb-2"] "CREATION DATE"
@@ -231,25 +227,10 @@ endpointDetailsWithHashH pid endpoint_hash = do
 -- | endpointDetailsH is the main handler for the endpoint details page.
 -- It reuses the fieldDetailsView as well, which is used for the side navigation on the page and also exposed un the fieldDetailsPartialH endpoint
 endpointDetailsH :: Projects.ProjectId -> Endpoints.EndpointId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders EndpointDetailsGet)
-endpointDetailsH pid eid fromDStr toDStr sinceStr' subPageM shapeHashM = do
+endpointDetailsH pid eid fromDStr toDStr sinceStr subPageM shapeHashM = do
   (sess, project) <- Sessions.sessionAndProject pid
   now <- liftIO getCurrentTime
-  let sinceStr = if (isNothing fromDStr && isNothing toDStr && isNothing sinceStr') || (fromDStr == Just "") then Just "7D" else sinceStr'
-  -- TODO: Replace with a duration parser.
-  let (fromD, toD, _) = case sinceStr of
-        Just "1H" -> (Just $ addUTCTime (negate $ secondsToNominalDiffTime 3600) now, Just now, Just "Last Hour")
-        Just "24H" -> (Just $ addUTCTime (negate $ secondsToNominalDiffTime $ 3600 * 24) now, Just now, Just "Last 24 Hours")
-        Just "7D" -> (Just $ addUTCTime (negate $ secondsToNominalDiffTime $ 3600 * 24 * 7) now, Just now, Just "Last 7 Days")
-        Just "14D" -> (Just $ addUTCTime (negate $ secondsToNominalDiffTime $ 3600 * 24 * 14) now, Just now, Just "Last 14 Days")
-        _ -> do
-          let f = (iso8601ParseM (from @Text $ fromMaybe "" fromDStr) :: Maybe UTCTime)
-          let t = (iso8601ParseM (from @Text $ fromMaybe "" toDStr) :: Maybe UTCTime)
-          let start = toText . formatTime defaultTimeLocale "%F %T" <$> f
-          let end = toText . formatTime defaultTimeLocale "%F %T" <$> t
-          let range = case (start, end) of
-                (Just s, Just e) -> Just (s <> "-" <> e)
-                _ -> Nothing
-          (f, t, range)
+  let (fromD, toD, currentRange) = Components.parseTimeRange now (Components.TimePicker sinceStr fromDStr toDStr)
   endpointM <- dbtToEff $ Endpoints.endpointById eid
   let bwconf =
         (def :: BWConfig)
@@ -269,24 +250,20 @@ endpointDetailsH pid eid fromDStr toDStr sinceStr' subPageM shapeHashM = do
         shapes <- Shapes.shapesByEndpointHash pid endpoint.hash
         fields <- Fields.selectFields pid endpoint.hash
         let fieldsMap = Fields.groupFieldsByCategory fields
-        let shapesWithFieldsMap = Vector.map (`getShapeFields` fields) shapes
+        let shapesWithFieldsMap = V.map (`getShapeFields` fields) shapes
         let maxV = round enpStats.max :: Int
         let steps = (maxV `quot` 100) :: Int
         let steps' = if steps == 0 then 100 else steps
         reqLatenciesRolledBySteps <- RequestDumps.selectReqLatenciesRolledBySteps maxV steps' pid endpoint.urlPath endpoint.method
-        pure (endpoint, enpStats, Vector.toList shapesWithFieldsMap, fieldsMap, Vector.toList reqLatenciesRolledBySteps)
+        pure (endpoint, enpStats, V.toList shapesWithFieldsMap, fieldsMap, V.toList reqLatenciesRolledBySteps)
       let subPage = fromMaybe "overview" subPageM
       shapesList <- dbtToEff do
         if subPage == "shapes" then Shapes.shapesByEndpointHash pid endpoint.hash else pure []
       let reqLatenciesRolledByStepsJ = decodeUtf8 $ AE.encode reqLatenciesRolledByStepsLabeled
-      currTime <- liftIO getCurrentTime
       let currentURL = "/p/" <> pid.toText <> "/endpoints/" <> Endpoints.endpointIdText eid <> "?from=" <> fromMaybe "" fromDStr <> "&to=" <> fromMaybe "" toDStr
       let subPage = fromMaybe "overview" subPageM
-      let currentPickerTxt = case sinceStr of
-            Just a -> a
-            Nothing -> maybe "" (toText . formatTime defaultTimeLocale "%F %T") fromD <> " - " <> maybe "" (toText . formatTime defaultTimeLocale "%F %T") toD
-      let paramInput = ParamInput{currentURL = currentURL, sinceStr = sinceStr, dateRange = (fromD, toD), currentPickerTxt = currentPickerTxt, subPage = subPage}
-      addRespHeaders $ EndpointsDetailsMain $ PageCtx bwconf (pid, paramInput, currTime, endpoint, enpStats, shapesWithFieldsMap, fieldsMap, shapesList, shapeHashM, reqLatenciesRolledByStepsJ, (fromD, toD))
+      let paramInput = ParamInput{currentURL = currentURL, sinceStr, dateRange = (fromD, toD), currentPickerTxt = maybeToMonoid currentRange, subPage = subPage}
+      addRespHeaders $ EndpointsDetailsMain $ PageCtx bwconf (pid, paramInput, now, endpoint, enpStats, shapesWithFieldsMap, fieldsMap, shapesList, shapeHashM, reqLatenciesRolledByStepsJ, (fromD, toD))
 
 
 data EndpointDetailsGet
@@ -299,7 +276,7 @@ data EndpointDetailsGet
           , Endpoints.EndpointRequestStats
           , [Shapes.ShapeWithFields]
           , Map FieldCategoryEnum [Fields.Field]
-          , Vector Shapes.Shape
+          , V.Vector Shapes.Shape
           , Maybe Text
           , Text
           , (Maybe UTCTime, Maybe UTCTime)
@@ -328,7 +305,7 @@ endpointDetails
   -> Endpoints.EndpointRequestStats
   -> [Shapes.ShapeWithFields]
   -> Map FieldCategoryEnum [Fields.Field]
-  -> Vector Shapes.Shape
+  -> V.Vector Shapes.Shape
   -> Maybe Text
   -> Text
   -> (Maybe UTCTime, Maybe UTCTime)
@@ -341,7 +318,7 @@ endpointDetails pid paramInput currTime endpoint endpointStats shapesWithFieldsM
         div_ [class_ "flex flex-col"] do
           div_ [class_ "flex flex-row place-items-center text-lg font-medium"] do
             h3_ [class_ "text-lg text-slate-800"] do
-              span_ [class_ $ "p-1 endpoint endpoint-" <> toLower endpoint.method] $ toHtml $ endpoint.method <> " "
+              span_ [class_ $ "p-1 endpoint endpoint-" <> T.toLower endpoint.method] $ toHtml $ endpoint.method <> " "
               strong_ [class_ "inconsolata text-xl"] $ toHtml endpoint.urlPath
             faSprite_ "chevron-down" "light" " h-4 w-4 m-2"
           p_ [class_ "text-gray-500  ml-2"] $ toHtml endpoint.description
@@ -350,9 +327,9 @@ endpointDetails pid paramInput currTime endpoint endpointStats shapesWithFieldsM
             & mapM_ \(title, slug) ->
               a_
                 [ href_ $ currentURLSubPage <> "&subpage=" <> slug
-                , class_ $
-                    "cursor-pointer px-3 py-2 font-medium  rounded-md "
-                      <> if slug == paramInput.subPage then " bg-indigo-100 text-indigo-700 " else " text-slate-500 hover:text-gray-700"
+                , class_
+                    $ "cursor-pointer px-3 py-2 font-medium  rounded-md "
+                    <> if slug == paramInput.subPage then " bg-indigo-100 text-indigo-700 " else " text-slate-500 hover:text-gray-700"
                 ]
                 $ toHtml title
 
@@ -384,7 +361,7 @@ endpointDetails pid paramInput currTime endpoint endpointStats shapesWithFieldsM
         |]
 
 
-shapesSubPage :: Projects.ProjectId -> Vector Shapes.Shape -> [Shapes.ShapeWithFields] -> Text -> Html ()
+shapesSubPage :: Projects.ProjectId -> V.Vector Shapes.Shape -> [Shapes.ShapeWithFields] -> Text -> Html ()
 shapesSubPage pid shapesList shapesWithFields currentURL = do
   div_ [class_ "space-y-8", id_ "subpage"] do
     div_ [class_ "flex flex-col justify-between mt-2 shadow mx-16 rounded-xl"] do
@@ -401,11 +378,11 @@ shapesSubPage pid shapesList shapesWithFields currentURL = do
               let response_body_keypaths = (\f -> f.keyPath) <$> fromMaybe [] (Map.lookup Fields.FCResponseBody shape.fieldsMap)
               let shapeJson =
                     AE.object
-                      [ "response_headers" .= buildLeafJson (fromMaybe [] (Map.lookup Fields.FCResponseHeader shape.fieldsMap))
-                      , "query_params" .= buildLeafJson (fromMaybe [] (Map.lookup Fields.FCQueryParam shape.fieldsMap))
-                      , "path_params" .= buildLeafJson (fromMaybe [] (Map.lookup Fields.FCPathParam shape.fieldsMap))
-                      , "request_body" .= convertKeyPathsToJson request_body_keypaths (fromMaybe [] (Map.lookup Fields.FCRequestBody shape.fieldsMap)) ""
-                      , "response_body" .= convertKeyPathsToJson response_body_keypaths (fromMaybe [] (Map.lookup Fields.FCResponseBody shape.fieldsMap)) ""
+                      [ "response_headers" AE..= buildLeafJson (fromMaybe [] (Map.lookup Fields.FCResponseHeader shape.fieldsMap))
+                      , "query_params" AE..= buildLeafJson (fromMaybe [] (Map.lookup Fields.FCQueryParam shape.fieldsMap))
+                      , "path_params" AE..= buildLeafJson (fromMaybe [] (Map.lookup Fields.FCPathParam shape.fieldsMap))
+                      , "request_body" AE..= convertKeyPathsToJson request_body_keypaths (fromMaybe [] (Map.lookup Fields.FCRequestBody shape.fieldsMap)) ""
+                      , "response_body" AE..= convertKeyPathsToJson response_body_keypaths (fromMaybe [] (Map.lookup Fields.FCResponseBody shape.fieldsMap)) ""
                       ]
               let shapeJsonStr = aesonValueToText shapeJson
               div_ [class_ " text-gray-500 p-4 bg-gray-100 whitespace-prerap w-2/3 h-[200px] overflow-auto flex flex-col gap-1 shape_json", style_ "font-family: monospace", term "data-json" shapeJsonStr] pass
@@ -433,7 +410,7 @@ apiDocsSubPage :: [Shapes.ShapeWithFields] -> Maybe Text -> Html ()
 apiDocsSubPage shapesWithFieldsMap shapeHashM = do
   let fstH = viaNonEmpty head shapesWithFieldsMap
   let index = case shapeHashM of
-        Just hash -> elemIndex hash (map Shapes.sHash shapesWithFieldsMap)
+        Just hash -> L.elemIndex hash (map Shapes.sHash shapesWithFieldsMap)
         Nothing -> Nothing
   let (targetShape, targetIndex) = case index of
         Just i -> (Just (shapesWithFieldsMap Unsafe.!! i), i + 1)
@@ -557,8 +534,8 @@ apiOverviewSubPage pid paramInput currTime endpoint fieldsM reqLatenciesRolledBy
 endpointStats :: Endpoints.EndpointRequestStats -> Text -> (Maybe UTCTime, Maybe UTCTime) -> Html ()
 endpointStats enpStats@Endpoints.EndpointRequestStats{min, p50, p75, p90, p95, p99, max} reqLatenciesRolledByStepsJ dateRange@(fromD, toD) =
   section_ [class_ "space-y-3"] do
-    div_ [class_ "flex justify-between mt-5"] $
-      div_
+    div_ [class_ "flex justify-between mt-5"]
+      $ div_
         [class_ "flex flex-row"]
         do
           a_ [href_ "#", [__|on click toggle .neg-rotate-90 on me then toggle .hidden on (next .endpointStatsSubSection)|]] $ faSprite_ "chevron-down" "regular" "h-4 mr-3 mt-1 w-4 cursor-pointer"
@@ -600,8 +577,8 @@ endpointStats enpStats@Endpoints.EndpointRequestStats{min, p50, p75, p90, p95, p
               Charts.lazy [C.QByE $ [C.QBPId enpStats.projectId, C.QBEndpointHash enpStats.endpointHash] ++ catMaybes [C.QBFrom <$> fromD, C.QBTo <$> toD], C.GByE C.GBEndpoint, C.SlotsE 120, C.ShowLegendE]
 
       div_ [class_ "col-span-3 bg-base-100 border border-gray-100  rounded-xl py-3 px-6"] do
-        div_ [class_ "p-4"] $
-          select_
+        div_ [class_ "p-4"]
+          $ select_
             []
             do
               option_ "Request Latency Distribution"
@@ -645,24 +622,24 @@ reqResSection title isRequest shapesWithFieldsMap targetIndex =
   section_ [class_ "space-y-3"] do
     div_ [class_ "flex justify-between mt-5"] do
       div_ [class_ "flex flex-row"] do
-        a_ [class_ "cursor-pointer", [__|on click toggle .neg-rotate-90 on me then toggle .hidden on (next .reqResSubSection)|]] $
-          faSprite_ "chevron-down" "light" "h-4 mr-3 mt-1 w-4"
+        a_ [class_ "cursor-pointer", [__|on click toggle .neg-rotate-90 on me then toggle .hidden on (next .reqResSubSection)|]]
+          $ faSprite_ "chevron-down" "light" "h-4 mr-3 mt-1 w-4"
         span_ [class_ "text-lg text-slate-800"] $ toHtml title
 
-    div_ [class_ "bg-base-100 border border-gray-100 rounded-xl py-5 px-5 space-y-6 reqResSubSection"] $
-      forM_ (zip [(1 :: Int) ..] shapesWithFieldsMap) $
-        \(index, s) -> do
-          let sh = if index == targetIndex then title <> "_fields" else title <> "_fields hidden"
-          div_ [class_ sh, id_ $ title <> "_" <> show index] do
-            if isRequest
-              then do
-                subSubSection (title <> " Path Params") (Map.lookup Fields.FCPathParam s.fieldsMap) Nothing
-                subSubSection (title <> " Query Params") (Map.lookup Fields.FCQueryParam s.fieldsMap) Nothing
-                subSubSection (title <> " Headers") (Map.lookup Fields.FCRequestHeader s.fieldsMap) Nothing
-                subSubSection (title <> " Body") (Map.lookup Fields.FCRequestBody s.fieldsMap) (Just s.reqDescription)
-              else do
-                subSubSection (title <> " Headers") (Map.lookup Fields.FCResponseHeader s.fieldsMap) Nothing
-                subSubSection (title <> " Body") (Map.lookup Fields.FCResponseBody s.fieldsMap) (Just s.resDescription)
+    div_ [class_ "bg-base-100 border border-gray-100 rounded-xl py-5 px-5 space-y-6 reqResSubSection"]
+      $ forM_ (zip [(1 :: Int) ..] shapesWithFieldsMap)
+      $ \(index, s) -> do
+        let sh = if index == targetIndex then title <> "_fields" else title <> "_fields hidden"
+        div_ [class_ sh, id_ $ title <> "_" <> show index] do
+          if isRequest
+            then do
+              subSubSection (title <> " Path Params") (Map.lookup Fields.FCPathParam s.fieldsMap) Nothing
+              subSubSection (title <> " Query Params") (Map.lookup Fields.FCQueryParam s.fieldsMap) Nothing
+              subSubSection (title <> " Headers") (Map.lookup Fields.FCRequestHeader s.fieldsMap) Nothing
+              subSubSection (title <> " Body") (Map.lookup Fields.FCRequestBody s.fieldsMap) (Just s.reqDescription)
+            else do
+              subSubSection (title <> " Headers") (Map.lookup Fields.FCResponseHeader s.fieldsMap) Nothing
+              subSubSection (title <> " Body") (Map.lookup Fields.FCResponseBody s.fieldsMap) (Just s.resDescription)
 
 
 -- | subSubSection ..
@@ -682,7 +659,7 @@ subSubSection title fieldsM descriptionM =
           -- pTraceShowM "========================"
           -- pTraceShowM $ fieldsToNormalized fields
           fieldsToNormalized fields & mapM_ \(key, fieldM) -> do
-            let segments = splitOn "." key
+            let segments = T.splitOn "." key
             let depth = length segments
             let depthPadding = "margin-left:" <> show (20 + (depth * 20)) <> "px"
             let displayKey = last ("" :| segments)
@@ -700,7 +677,7 @@ subSubSection title fieldsM descriptionM =
                       input_ [type_ "checkbox", class_ " mr-12"]
                       span_ [class_ " text-slate-800 inline-flex items-center"] $ toHtml displayKey
                       span_ [class_ " text-slate-600 inline-flex items-center ml-4"] do
-                        if "[*]" `isSuffixOf` key
+                        if "[*]" `T.isSuffixOf` key
                           then EndpointComponents.fieldTypeToDisplay Fields.FTList
                           else EndpointComponents.fieldTypeToDisplay Fields.FTObject
               Just field -> do

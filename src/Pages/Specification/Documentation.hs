@@ -10,19 +10,10 @@ module Pages.Specification.Documentation (
   DocumentationMut (..),
 ) where
 
-import Data.Aeson (
-  FromJSON,
-  KeyValue ((.=)),
-  ToJSON,
-  Value (Array),
-  decodeStrict,
-  encode,
-  object,
- )
 import Data.Aeson qualified as AE
 import Data.Default (def)
 import Data.Digest.XXHash (xxHash)
-import Data.List (nubBy)
+import Data.List qualified as L
 import Data.Text qualified as T
 import Data.Time.Clock (UTCTime)
 import Data.Time.LocalTime (getZonedTime, utc, utcToZonedTime)
@@ -74,7 +65,7 @@ data FieldOperation = FieldOperation
   , isRequired :: Bool
   }
   deriving stock (Show, Generic)
-  deriving anyclass (FromJSON, ToJSON)
+  deriving anyclass (AE.FromJSON, AE.ToJSON)
 
 
 data KeyPathData = KeyPathData
@@ -83,7 +74,7 @@ data KeyPathData = KeyPathData
   , fkType :: Text
   }
   deriving stock (Show, Generic)
-  deriving anyclass (FromJSON, ToJSON)
+  deriving anyclass (AE.FromJSON, AE.ToJSON)
 
 
 data OpShape = OpShape
@@ -102,7 +93,7 @@ data OpShape = OpShape
   , resDescription :: Text
   }
   deriving stock (Show, Generic)
-  deriving anyclass (FromJSON, ToJSON)
+  deriving anyclass (AE.FromJSON, AE.ToJSON)
 
 
 data OpEndpoint = OpEndpoint
@@ -112,7 +103,7 @@ data OpEndpoint = OpEndpoint
   , endpointDescription :: Text
   }
   deriving stock (Show, Generic)
-  deriving anyclass (FromJSON, ToJSON)
+  deriving anyclass (AE.FromJSON, AE.ToJSON)
 
 
 data SaveSwaggerForm = SaveSwaggerForm
@@ -122,7 +113,7 @@ data SaveSwaggerForm = SaveSwaggerForm
   , diffsInfo :: V.Vector OpShape
   }
   deriving stock (Show, Generic)
-  deriving anyclass (FromJSON, ToJSON)
+  deriving anyclass (AE.FromJSON, AE.ToJSON)
 
 
 getEndpointHash :: Projects.ProjectId -> Text -> Text -> Text -> Text
@@ -248,15 +239,15 @@ documentationPutH :: Projects.ProjectId -> SaveSwaggerForm -> ATAuthCtx (RespHea
 documentationPutH pid SaveSwaggerForm{updated_swagger, swagger_id, endpoints, diffsInfo} = do
   (sess, project) <- Sessions.sessionAndProject pid
   currentTime <- Time.currentTime
-  let value = fromMaybe (error "Failed to parse JSON: ") $ decodeStrict (encodeUtf8 updated_swagger)
+  let value = fromMaybe (error "Failed to parse JSON: ") $ AE.decodeStrict (encodeUtf8 updated_swagger)
   let newEndpoints = V.toList $ V.map (getEndpointFromOpEndpoint pid) endpoints
       shapes = V.toList (V.map (getShapeFromOpShape pid currentTime) (V.filter (.opShapeChanged) diffsInfo))
       nestedOps = V.map (.opOperations) diffsInfo
       ops = flattenVector (V.toList nestedOps)
       fAndF = V.toList (V.map (getFieldAndFormatFromOpShape pid) ops)
-      fields = nubBy (\x y -> x.hash == y.hash) (map fst fAndF) -- to prevent ON CONFLICT DO UPDATE command cannot affect row a second time
-      formats = nubBy (\x y -> x.hash == y.hash) (map snd fAndF) -- to prevent ON CONFLICT DO UPDATE command cannot affect row a second time
-      shapesSet = nubBy (\x y -> x.hash == y.hash) shapes
+      fields = L.nubBy (\x y -> x.hash == y.hash) (map fst fAndF) -- to prevent ON CONFLICT DO UPDATE command cannot affect row a second time
+      formats = L.nubBy (\x y -> x.hash == y.hash) (map snd fAndF) -- to prevent ON CONFLICT DO UPDATE command cannot affect row a second time
+      shapesSet = L.nubBy (\x y -> x.hash == y.hash) shapes
   Formats.bulkInsertFormat $ V.fromList formats
   res <- dbtToEff do
     Fields.insertFields fields
@@ -278,7 +269,7 @@ documentationPostH pid SwaggerForm{swagger_json, from} = do
   (sess, project) <- Sessions.sessionAndProject pid
   swaggerId <- Swaggers.SwaggerId <$> liftIO UUIDV4.nextRandom
   currentTime <- liftIO getZonedTime
-  let valueM = decodeStrict (encodeUtf8 swagger_json)
+  let valueM = AE.decodeStrict (encodeUtf8 swagger_json)
   case valueM of
     Just value -> do
       let swaggerToAdd =
@@ -299,7 +290,7 @@ documentationPostH pid SwaggerForm{swagger_json, from} = do
       addRespHeaders $ DocumentationMut "Swagger upload failed"
 
 
-data DocumentationMut = DocumentationMut Text
+newtype DocumentationMut = DocumentationMut Text
 
 
 instance ToHtml DocumentationMut where
@@ -328,13 +319,13 @@ documentationGetH pid swagger_id host = do
         pure (sw, idx)
       ([], Nothing) -> do
         let info =
-              object
-                [ "description" .= AE.String project.description
-                , "title" .= AE.String "No swagger generated for this project,upload your own swagger or acknowledge endpoints and shapes to trigger swagger generation"
-                , "version" .= AE.String "1.0.0"
-                , "termsOfService" .= AE.String "https://apitoolkit.io/terms-and-conditions/"
+              AE.object
+                [ "description" AE..= AE.String project.description
+                , "title" AE..= AE.String "No swagger generated for this project,upload your own swagger or acknowledge endpoints and shapes to trigger swagger generation"
+                , "version" AE..= AE.String "1.0.0"
+                , "termsOfService" AE..= AE.String "https://apitoolkit.io/terms-and-conditions/"
                 ]
-        let swagger = object ["openapi" .= AE.String "3.0.0", "info" .= info, "servers" .= Array [], "paths" .= object []]
+        let swagger = AE.object ["openapi" AE..= AE.String "3.0.0", "info" AE..= info, "servers" AE..= AE.Array [], "paths" AE..= AE.object []]
         pure (swagger, "")
       (swgrs, Nothing) -> do
         let latest = V.head swgrs
@@ -351,7 +342,7 @@ documentationGetH pid swagger_id host = do
           , currProject = Just project
           , pageTitle = pageTitle
           }
-  addRespHeaders $ PageCtx bwconf $ DocumentationGet pid swaggers swaggerId (decodeUtf8 (encode swagger))
+  addRespHeaders $ PageCtx bwconf $ DocumentationGet pid swaggers swaggerId (decodeUtf8 (AE.encode swagger))
 
 
 documentationsPage :: Projects.ProjectId -> V.Vector Swaggers.Swagger -> String -> String -> Html ()

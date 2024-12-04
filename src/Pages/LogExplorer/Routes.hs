@@ -5,7 +5,7 @@ import Data.UUID qualified as UUID
 import Models.Projects.Projects qualified as Projects
 import Pages.Log qualified as Log
 import Pages.LogExplorer.LogItem qualified as LogItem
-import Relude (Generic, Text)
+import Relude (Generic, Text, Type)
 import Servant (
   Capture,
   GenericMode (type (:-)),
@@ -32,8 +32,10 @@ type role Routes' nominal
 type Routes = NamedRoutes Routes'
 
 
+-- TODO: rename layout to action
+type Routes' :: Type -> Type
 data Routes' mode = Routes'
-  { logExplorerGet :: mode :- "log_explorer" :> QPT "query" :> QPT "cols" :> QPU "cursor" :> QPT "since" :> QPT "from" :> QPT "to" :> QPT "layout" :> QPT "source" :> QPT "target-spans" :> HXRequest :> HXBoosted :> Get '[HTML] (RespHeaders Log.LogsGet)
+  { logExplorerGet :: mode :- "log_explorer" :> QPT "query" :> QPT "queryAST" :> QPT "cols" :> QPU "cursor" :> QPT "since" :> QPT "from" :> QPT "to" :> QPT "layout" :> QPT "source" :> QPT "target-spans" :> QPT "queryTitle" :> QPT "queryLibId" :> HXRequest :> HXBoosted :> Get '[HTML] (RespHeaders Log.LogsGet)
   , logExplorerItemGet :: mode :- "log_explorer" :> Capture "logItemID" UUID.UUID :> Capture "createdAt" UTCTime :> QPT "source" :> Get '[HTML] (RespHeaders LogItem.ApiLogItem)
   , logExplorerItemDetailedGet :: mode :- "log_explorer" :> Capture "logItemID" UUID.UUID :> Capture "createdAt" UTCTime :> "detailed" :> QPT "source" :> Get '[HTML] (RespHeaders LogItem.ApiItemDetailed)
   }

@@ -10,7 +10,7 @@ import Data.Default (Default (..))
 import Data.Default.Instances ()
 import Data.Pool as Pool (Pool, defaultPoolConfig, newPool)
 import Data.Text qualified as T
-import Data.Text.Lazy qualified as LT
+import Data.Text.Lazy qualified as TL
 import Database.PostgreSQL.Simple (Connection)
 import Database.PostgreSQL.Simple qualified as PG
 import Database.PostgreSQL.Simple.Migration qualified as Migrations
@@ -45,7 +45,7 @@ data EnvConfig = EnvConfig
   , smtpUsername :: Text
   , smtpPassword :: Text
   , smtpSender :: Text
-  , googleServiceAccountB64 :: LT.Text
+  , googleServiceAccountB64 :: TL.Text
   , convertkitApiKey :: Text
   , convertkitApiSecret :: Text
   , enableBackgroundJobs :: Bool

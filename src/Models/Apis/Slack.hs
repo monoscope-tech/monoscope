@@ -1,6 +1,5 @@
 module Models.Apis.Slack (SlackData (..), insertAccessToken, getProjectSlackData) where
 
-import Data.Text
 import Database.PostgreSQL.Entity.DBT (QueryNature (Select), queryOne)
 import Database.PostgreSQL.Simple (FromRow, Only (Only), ToRow)
 import Database.PostgreSQL.Simple.SqlQQ (sql)
@@ -31,7 +30,7 @@ insertAccessToken projects webhookUrl = executeMany q params
                VALUES (?,?)
                ON CONFLICT (project_id)
                DO UPDATE SET webhook_url = EXCLUDED.webhook_url |]
-    params = (\p -> (p, webhookUrl)) <$> projects
+    params = (,webhookUrl) <$> projects
 
 
 getProjectSlackData :: DB :> es => Projects.ProjectId -> Eff es (Maybe SlackData)

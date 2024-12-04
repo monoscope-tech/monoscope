@@ -11,13 +11,17 @@ spec-version: 0.36.0
 
 ghc-options:
   - -fwrite-ide-info
-  # - "-fwrite-ide-info"
-  - "-hiedir=.hie"
+  - -hiedir .hiefiles
+  #- "-hidir=.hifiles"
   - -threaded
   - -Weverything
+  # - -fdefer-type-errors
   - -Werror # Treat warnings as errors
+  - -fno-defer-typed-holes
   - -Wno-error=deprecations
   - -Wno-error=unused-packages
+  - -Wno-error=implicit-lift
+  - -Wno-error=missing-poly-kind-signatures
   - -Wno-missing-exported-signatures # missing-exported-signatures turns off the more strict -Wmissing-signatures. See https://ghc.haskell.org/trac/ghc/ticket/14794#ticket
   - -Wno-missing-import-lists # Requires explicit imports of _every_ function (e.g. ‘$’); too strict
   - -Wno-missed-specialisations # When GHC can’t specialize a polymorphic function. No big deal and requires fixing underlying libraries to solve.
@@ -37,22 +41,21 @@ ghc-options:
   - -Wno-unused-matches
   - -Wno-missing-kind-signatures
   - -Wno-type-defaults
-  - -rtsopts
-  - -j4
   - -Wno-unused-top-binds
   - -Wno-unused-imports
+  # - -plugin-package hiedb-plugin -fplugin Plugin.HieDb
   # - "-prof"
   # - -g
-  - "-fprof-late"
-  - "-finfo-table-map"
-  - "+RTS -N -A128m -n2m -RTS"
+  # - "-fprof-late"
+  # - "-finfo-table-map"
+  
 
 default-extensions:
   - BlockArguments
   - DataKinds
   - DerivingVia
   - DeriveAnyClass
-  # - DerivingStrategies
+  - DerivingStrategies
   - DuplicateRecordFields
   - ExplicitNamespaces
   - ExtendedDefaultRules
@@ -71,6 +74,7 @@ default-extensions:
   - RecordWildCards
   - TemplateHaskell
   - AllowAmbiguousTypes
+  - TupleSections
 
 extra-source-files:
   - README.md
@@ -185,6 +189,9 @@ library:
     - proto3-wire
     - template-haskell
     - cryptohash-md5
+    - hiedb-plugin
+    - casing
+    - yaml
 
 executables:
   apitoolkit-server-exe:
@@ -194,13 +201,14 @@ executables:
       - -threaded
       - -rtsopts
       - -with-rtsopts=-N
-      - -fwrite-ide-info
-      - -hiedir=.hie
+      - -j4
+      - "+RTS -N -A128m -n2m -RTS"
       # - -O2
       # - -fPIC
     dependencies:
       - apitoolkit-server
       - rust-interop
+      - hiedb-plugin
       - name: relude
         version: ">= 1.2.0.0"
         mixin:
@@ -215,8 +223,6 @@ tests:
       - -threaded
       - -rtsopts
       - -with-rtsopts=-N
-      - -fwrite-ide-info
-      - -hiedir=.hie
     dependencies:
       - base
       - apitoolkit-server
