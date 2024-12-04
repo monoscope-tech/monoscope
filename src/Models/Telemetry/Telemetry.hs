@@ -23,9 +23,11 @@ module Models.Telemetry.Telemetry (
   bulkInsertLogs,
   spanRecordById,
   getTraceDetails,
+  getMetricData,
   bulkInsertMetrics,
   bulkInsertSpans,
   getMetricChartListData,
+  getMetricLabelValues,
   getMetricServiceNames,
   getChildSpans,
   SpanEvent (..),
@@ -301,6 +303,7 @@ data MetricDataPoint = MetricDataPoint
   , metricDescription :: Text
   , dataPointsCount :: Int
   , serviceNames :: V.Vector Text
+  , metricLabels :: V.Vector Text
   }
   deriving (Show, Generic)
   deriving anyclass (FromRow, ToRow, NFData)
@@ -391,11 +394,36 @@ getDataPointsData pid dateRange = dbtToEff $ query Select (Query $ encodeUtf8 q)
       (Just a, Just b) -> "AND timestamp BETWEEN '" <> formatTime defaultTimeLocale "%F %R" a <> "' AND '" <> formatTime defaultTimeLocale "%F %R" b <> "'"
       _ -> ""
     q =
-      [text| SELECT metric_name, metric_type, metric_unit, metric_description, COUNT(*) AS data_points, ARRAY_AGG(DISTINCT COALESCE(resource->>'service.name', 'unknown'))::text[] AS service_names
-      FROM telemetry.metrics WHERE project_id = ? $dateRangeStr
-      GROUP BY metric_name, metric_type, metric_unit, metric_description
-      ORDER BY metric_name;
+      [text| SELECT metric_name, metric_type, metric_unit, metric_description, COUNT(*) AS data_points,
+             ARRAY_AGG(DISTINCT COALESCE(resource->>'service.name', 'unknown'))::text[] AS service_names, '{}'::text[] AS labels
+             FROM telemetry.metrics WHERE project_id = ? $dateRangeStr
+             GROUP BY metric_name, metric_type, metric_unit, metric_description
+             ORDER BY metric_name;
     |]
+getMetricData :: DB :> es => Projects.ProjectId -> Text -> Eff es (Maybe MetricDataPoint)
+getMetricData pid metricName = dbtToEff $ queryOne Select q (pid, metricName, pid, metricName)
+  where
+    q =
+      [sql|
+      SELECT
+            metric_name,
+            metric_type,
+            metric_unit,
+            metric_description,
+            COUNT(*) AS data_points,
+            ARRAY_AGG(DISTINCT COALESCE(resource->>'service.name', 'unknown'))::text[] AS service_names,
+            (
+                SELECT ARRAY_AGG(DISTINCT key)
+                FROM (
+                    SELECT DISTINCT jsonb_object_keys(attributes) AS key
+                    FROM telemetry.metrics
+                    WHERE project_id = ? AND metric_name = ?
+                ) AS unique_keys
+            ) AS metric_labels
+      FROM telemetry.metrics
+      WHERE project_id = ? AND metric_name = ?
+      GROUP BY metric_name, metric_type, metric_unit, metric_description;
+        |]
 
 
 getMetricChartListData :: DB :> es => Projects.ProjectId -> Maybe Text -> Maybe Text -> (Maybe UTCTime, Maybe UTCTime) -> Eff es (V.Vector MetricChartListData)
@@ -417,6 +445,12 @@ getMetricChartListData pid sourceM prefixM dateRange = dbtToEff $ query Select (
         SELECT DISTINCT ON (metric_name) metric_name, metric_type, metric_unit, metric_description
         FROM telemetry.metrics WHERE project_id = ? $sourceFilter $prefixFilter $dateRangeStr
      |]
+
+
+getMetricLabelValues :: DB :> es => Projects.ProjectId -> Text -> Text -> Eff es (V.Vector Text)
+getMetricLabelValues pid metricName labelName = dbtToEff $ query Select q (labelName, pid, metricName)
+  where
+    q = [sql| SELECT DISTINCT attributes->>? FROM telemetry.metrics WHERE project_id = ? AND metric_name = ?|]
 
 
 instance FromRow Text where

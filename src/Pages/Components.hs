@@ -73,7 +73,7 @@ getTargetPage _ = ""
 
 
 drawerWithURLContent_ :: Text -> Maybe Text -> Html () -> Html ()
-drawerWithURLContent_ drawerId urlM trigger = div_ [class_ "drawer drawer-end inline-block w-auto"] do
+drawerWithURLContent_ drawerId urlM trigger = div_ [class_ "drawer drawer-end inline-block w-auto h-"] do
   input_ [id_ drawerId, type_ "checkbox", class_ "drawer-toggle", [__|on keyup if the event's key is 'Escape' set my.checked to false trigger keyup |]]
   label_ [Lucid.for_ drawerId, class_ "drawer-button inline-block"] trigger
   div_ [class_ "drawer-side fixed top-0 left-0 w-full h-full flex z-[10000] overflow-y-scroll ", style_ "position:fixed;width:100%;display:flex"] do
@@ -81,7 +81,7 @@ drawerWithURLContent_ drawerId urlM trigger = div_ [class_ "drawer drawer-end in
     div_ [style_ "width: min(90vw, 1200px)", class_ "bg-slate-50 h-full overflow-y-scroll"] do
       label_ [Lucid.for_ drawerId, Aria.label_ "close modal", class_ "float-right mt-5 h-10 w-10 flex items-center justify-center rounded-full bg-slate-200"] $ faSprite_ "xmark" "solid" "w-4 h-4"
       div_
-        ( [id_ $ drawerId <> "-content", class_ "bg-slate-50 p-4 flex flex-col", hxSwap_ "innerHTML"]
+        ( [id_ $ drawerId <> "-content", class_ "bg-slate-50 p-4 h-full flex flex-col", hxSwap_ "innerHTML"]
             <> maybe [] (\url -> [hxGet_ url, hxTrigger_ "intersect once"]) urlM
         )
         $ span_ [class_ "loading loading-dots loading-md"] ""

@@ -1,4 +1,4 @@
-module Pages.Telemetry.Metrics (metricsOverViewGetH, MetricsOverViewGet (..)) where
+module Pages.Telemetry.Metrics (metricsOverViewGetH, metricDetailsGetH, MetricsOverViewGet (..), metricBreakdownGetH) where
 
 import Data.Vector qualified as V
 import Effectful.Time qualified as Time
@@ -25,6 +25,9 @@ import Data.Text (Text, unpack)
 import Data.Text qualified as T
 import Lucid.Htmx
 import Lucid.Hyperscript (__)
+import NeatInterpolation (text)
+import Pages.Components qualified as Components
+import Pages.Telemetry.Utils (metricsTree)
 
 
 metricsOverViewGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders MetricsOverViewGet)
@@ -77,6 +80,8 @@ chartsPage pid metricList sources source mFilter = do
   div_ [class_ "flex flex-col gap-6 px-6 py-4 h-[calc(100%-60px)] overflow-y-scroll"] $ do
     overViewTabs pid "charts"
     div_ [class_ "w-full"] do
+      Components.drawerWithURLContent_ "global-data-drawer" Nothing ""
+      template_ [id_ "loader-tmp"] $ span_ [class_ "loading loading-dots loading-md"] ""
       div_ [class_ "w-full flex gap-4 items-end"] do
         div_ [class_ "flex flex-col gap-1"] do
           span_ [class_ "text-slate-900 text-sm"] "Data source"
@@ -87,7 +92,7 @@ chartsPage pid metricList sources source mFilter = do
             do
               option_ ([selected_ "all" | "all" == source] ++ [value_ "all"]) "All"
               forM_ sources $ \s -> option_ ([selected_ s | s == source] ++ [value_ s]) $ toHtml s
-        div_ [class_ "flex items-center gap-2 w-[700px] rounded-xl px-3 h-12 border border-slate-200 bg-slate-100"] do
+        div_ [class_ "flex items-center gap-2 w-full rounded-xl px-3 h-12 border border-slate-200 bg-slate-100"] do
           faSprite_ "magnifying-glass" "regular" "w-4 h-4 text-slate-500"
           input_
             [ class_ "w-full text-slate-950 bg-transparent hover:outline-none focus:outline-none"
@@ -114,9 +119,24 @@ chartsPage pid metricList sources source mFilter = do
     div_ [class_ "w-full grid grid-cols-3 gap-2", id_ "metric_list_container"] $ do
       forM_ metricList $ \metric -> do
         div_ [class_ "w-full flex flex-col gap-2 metric_filterble rounded-lg p-2 border border-slate-200"] do
-          div_ [class_ "w-full flex gap-2 items-center"] do
-            span_ [class_ "w-full flex gap-2 items-center text-sm"] $ toHtml metric.metricName
-            button_ [class_ "btn border border-slate-200 btn-xs btn-circle"] $ faSprite_ "up-right-and-down-left-from-center" "regular" "w-3 h-3 text-slate-500"
+          div_ [class_ "w-full justify-between flex gap-2 items-center"] do
+            div_ [class_ "flex gap-1 items-center"] do
+              span_ [class_ "text-sm"] $ toHtml metric.metricName
+              span_ [term "data-tippy-content" metric.metricDescription] $ faSprite_ "circle-info" "regular" "w-3 h-3 text-slate-500"
+            let detailUrl = "/p/" <> pid.toText <> "/metrics/details/" <> metric.metricName <> "/?source=" <> source
+            button_
+              [ class_ "btn border border-slate-200 btn-xs btn-circle"
+              , term "_" $
+                  [text|on mousedown or click set #global-data-drawer.checked to true
+                  then set #global-data-drawer-content.innerHTML to #loader-tmp.innerHTML
+                  then fetch $detailUrl
+                  then set #global-data-drawer-content.innerHTML to it
+                  then htmx.process(#global-data-drawer-content)
+                  then _hyperscript.processNode(#global-data-drawer-content)
+                  then window.evalScriptsFromContent(#global-data-drawer-content)|]
+              ]
+              do
+                faSprite_ "up-right-and-down-left-from-center" "regular" "w-3 h-3 text-slate-500"
           div_ [class_ "h-48"] pass
 
 
@@ -132,11 +152,10 @@ dataPointsPage pid metrics = do
           div_ [class_ " w-[calc(40vw-46px)]"] "Metric"
           div_ [class_ "w-[10vw] "] "Sources"
           div_ [class_ "w-[8vw] ml-2"] "Datapoint"
-        -- div_ [class_ "w-[10vw] ml-2"] "Referenced in"
+          div_ [class_ "w-[10vw] ml-2"] "Referenced in"
         div_ [class_ "w-full"] $ do
-          let tr = buildMetricTree $ V.toList $ (.metricName) <$> metrics
           let metrMap = Map.fromList $ V.toList $ V.map (\mdp -> (mdp.metricName, mdp)) metrics
-          metricsTree pid tr metrMap
+          metricsTree pid metrics metrMap
 
 
 metricsExploreGet :: Projects.ProjectId -> ATAuthCtx (RespHeaders (Html ()))
@@ -144,116 +163,109 @@ metricsExploreGet pid = do
   addRespHeaders $ div_ [class_ "flex flex-col gap-2"] "Hello world"
 
 
-data MetricNode = MetricNode
-  { parent :: Text
-  , current :: Text
-  }
-  deriving (Show, Eq)
+metricDetailsGetH :: Projects.ProjectId -> Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))
+metricDetailsGetH pid metricName source fromM toM sinceM = do
+  (sess, project) <- Sessions.sessionAndProject pid
+  now <- Time.currentTime
+  let (_, _, currentRange) = parseTime fromM toM sinceM now
+  metricM <- Telemetry.getMetricData pid metricName
+  case metricM of
+    Just metric -> do
+      addRespHeaders $ metricsDetailsPage pid metric.serviceNames metric (fromMaybe "all" source) currentRange
+    Nothing -> do
+      addRespHeaders $ div_ [class_ "flex flex-col gap-2 -10 text-2xl"] "Metric not found"
 
 
-data MetricTree = MetricTree
-  { spanRecord :: MetricNode
-  , children :: [MetricTree]
-  }
-  deriving (Show, Generic)
+metricBreakdownGetH :: Projects.ProjectId -> Text -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))
+metricBreakdownGetH pid metricName labelM = do
+  (sess, project) <- Sessions.sessionAndProject pid
+  let label = fromMaybe "all" labelM
+  if label == "all"
+    then do
+      metricM <- Telemetry.getMetricData pid metricName
+      case metricM of
+        Just metric -> do
+          addRespHeaders $ metricBreakdown pid Nothing metric.metricLabels
+        Nothing -> addRespHeaders $ metricBreakdown pid Nothing []
+    else do
+      lableValues <- Telemetry.getMetricLabelValues pid metricName label
+      addRespHeaders $ metricBreakdown pid labelM lableValues
 
 
-pathToNodes :: Text -> [MetricNode]
-pathToNodes path =
-  let segments = T.splitOn "." path
-   in zipWith toNode ("___root___" : scanl1 combine segments) segments
-  where
-    combine acc segment = acc <> "." <> segment
-    toNode = MetricNode
+metricsDetailsPage :: Projects.ProjectId -> V.Vector Text -> Telemetry.MetricDataPoint -> Text -> Maybe Text -> Html ()
+metricsDetailsPage pid sources metric source currentRange = do
+  div_ [class_ "flex flex-col gap-8 h-full"] do
+    div_ [class_ "flex items-center w-full"] do
+      div_ [class_ "flex flex-col gap-1"] do
+        span_ [class_ "text-slate-900 text-sm font-medium"] "Data source"
+        select_
+          [ class_ "select select-sm bg-slate-100 border border-slate-200 rounded-xl w-36 focus:outline-none"
+          , hxGet_ $ "/p/" <> pid.toText <> "/metrics/details/" <> metric.metricName <> "/"
+          , name_ "metric_source"
+          , hxTarget_ "#global-data-drawer-content"
+          , hxSwap_ "innerHTML"
+          ]
+          do
+            option_ ([selected_ "all" | "all" == source] ++ [value_ "all"]) "All"
+            forM_ sources $ \s -> option_ ([selected_ s | s == source] ++ [value_ s]) $ toHtml s
+    div_ [class_ "w-full border  border-slate-200 rounded-2xl p-2 sticky z-50 bg-slate-50 top-4"] do
+      div_ [class_ "flex items-center text-sm"] $ span_ [] $ toHtml metric.metricName
+      div_ [class_ "h-64 w-full"] pass
+
+    div_ [class_ "flex flex-col gap-2 rounded-2xl border border-slate-200", id_ "metric-tabs-container"] $ do
+      div_ [class_ "flex", [__|on click halt|]] $ do
+        button_ [class_ "a-tab border-b border-b-slate-200 px-4 py-1.5 t-tab-active", onclick_ "navigatable(this, '#ov-content', '#metric-tabs-container', 't-tab-active')"] "Overview"
+        button_ [class_ "a-tab border-b border-b-slate-200 px-4 py-1.5 ", onclick_ "navigatable(this, '#br-content', '#metric-tabs-container', 't-tab-active')"] "Breakdown"
+        button_ [class_ "a-tab border-b w-max whitespace-nowrap border-b-slate-200 px-4 py-1.5 ", onclick_ "navigatable(this, '#rl-content', '#metric-tabs-container', 't-tab-active')"] "Related metrics"
+        div_ [class_ "w-full border-b border-b-slate-200"] pass
+
+      div_ [class_ "grid px-4 pb-4 mt-2 text-slate-600 font-normal"] $ do
+        div_ [class_ "a-tab-content", id_ "ov-content"] $ do
+          div_ [class_ "flex flex-col gap-4"] do
+            div_ [class_ "flex flex-col gap-1"] $ do
+              span_ [class_ "text-slate-900 font-medium"] "Description"
+              span_ [] $ toHtml $ if metric.metricDescription == "" then "No description" else metric.metricDescription
+            div_ [class_ "flex flex-col gap-1"] $ do
+              span_ [class_ "text-slate-900 font-medium"] "Type"
+              span_ [] $ toHtml metric.metricType
+            div_ [class_ "flex flex-col gap-1"] $ do
+              span_ [class_ "text-slate-900 font-medium"] "Unit"
+              span_ [] $ toHtml if metric.metricUnit == "" then "No unit" else metric.metricUnit
+            div_ [class_ "flex flex-col gap-1"] $ do
+              span_ [class_ "text-slate-900 font-medium"] "Labels"
+              div_ [class_ "flex items-center"] do
+                forM_ metric.metricLabels $ \label -> span_ [class_ "badge badge-ghost text-slate-600"] $ toHtml label
+        div_ [class_ "hidden a-tab-content", id_ "br-content"] do
+          div_ [class_ "flex flex-col gap-4"] $ do
+            div_ [class_ "flex flex-col gap-1"] do
+              span_ [class_ "text-slate-900 text-sm font-medium"] "By label"
+              select_
+                [ class_ "select select-sm bg-slate-100 border border-slate-200 rounded-xl w-36 focus:outline-none"
+                , hxGet_ $ "/p/" <> pid.toText <> "/metrics/details/" <> metric.metricName <> "/breakdown"
+                , name_ "label"
+                , hxTarget_ "#breakdown-container"
+                , hxSwap_ "innerHTML"
+                ]
+                do
+                  option_ ([selected_ "all" | "all" == source] ++ [value_ "all"]) "All"
+                  forM_ metric.metricLabels $ \s -> option_ ([selected_ s | s == source] ++ [value_ s]) $ toHtml s
+            div_ [class_ "flex flex-col gap-2", id_ "breakdown-container"] do
+              metricBreakdown pid Nothing metric.metricLabels
+
+        div_ [class_ "hidden a-tab-content", id_ "rl-content"] $ pass
 
 
-buildMetricNodes :: [Text] -> [MetricNode]
-buildMetricNodes = concatMap pathToNodes
-
-
-buildMetricMap :: [MetricNode] -> Map (Maybe Text) [MetricNode]
-buildMetricMap = foldr insertNode Map.empty
-  where
-    insertNode :: MetricNode -> Map (Maybe Text) [MetricNode] -> Map (Maybe Text) [MetricNode]
-    insertNode sp m =
-      let key = if parent sp == "___root___" then Nothing else Just (parent sp)
-          newEntry = [sp]
-       in Map.insertWith
-            (\new old -> if sp `elem` old then old else new ++ old)
-            key
-            newEntry
-            m
-
-
-buildTree :: Map (Maybe Text) [MetricNode] -> Maybe Text -> [MetricTree]
-buildTree metricMap parentId =
-  case Map.lookup parentId metricMap of
-    Nothing -> []
-    Just metrics ->
-      [ MetricTree
-        MetricNode
-          { parent = mt.parent
-          , current = mt.current
-          }
-        (buildTree metricMap (if mt.parent == "___root___" then Just mt.current else Just $ mt.parent <> "." <> mt.current))
-      | mt <- metrics
-      ]
-
-
-buildMetricTree :: [Text] -> [MetricTree]
-buildMetricTree metrics =
-  let metricsNodes = buildMetricNodes metrics
-      metricMap = buildMetricMap metricsNodes
-   in buildTree metricMap Nothing
-
-
-metricsTree :: Projects.ProjectId -> [MetricTree] -> Map Text Telemetry.MetricDataPoint -> Html ()
-metricsTree pid records dp = do
-  div_ [class_ "px-4 py-2 flex flex-col gap-2"] do
-    forM_ (zip [0 ..] records) \(i, c) -> do
-      buildTree_ pid c 0 True dp
-
-
-buildTree_ :: Projects.ProjectId -> MetricTree -> Int -> Bool -> Map Text Telemetry.MetricDataPoint -> Html ()
-buildTree_ pid sp level isLasChild dp = do
-  let hasChildren = not $ null sp.children
-  let paddingLeft = show (35 * level + 46) <> "px)" -- why 35 ? I have no clue
-  div_ [class_ "flex items-start w-full relative span-filterble"] do
-    when (level /= 0) $ div_ [class_ "w-8 shrink-0 ml-2 h-[1px] mt-2 bg-slate-200"] pass
-    unless (level == 0) $ div_ [class_ "absolute -top-3 left-2 border-l h-5 border-l-slate-200"] pass
-    unless isLasChild $ div_ [class_ "absolute top-1 left-2 border-l h-full border-l-slate-200"] pass
-    div_ [class_ "flex flex-col w-full grow-1 shrink-1 border-slate-200 relative"] do
-      when hasChildren $ div_ [class_ "absolute top-1 left-2 border-l h-2 border-l-slate-200"] pass
-      div_
-        [ class_ "w-full cursor-pointer flex tree_opened justify-between max-w-full items-center h-5 hover:bg-slate-100"
-        , [__| on click toggle .tree_opened on me|]
-        ]
-        do
-          div_ [class_ "flex w-full justify-between items-center overflow-x-hidden"] do
-            div_ [class_ "flex items-center overflow-y-hidden", style_ $ "width: calc(40vw - " <> paddingLeft] do
-              when hasChildren $ faSprite_ "chevron-up" "regular" "toggler rotate-90 w-4 border border-slate-200 h-4 shadow-sm rounded px-0.5 z-50 bg-slate-50 mr-1 shrink-0 text-slate-950"
-              unless (sp.spanRecord.parent == "___root___") $ span_ [class_ "text-slate-400"] $ toHtml $ sp.spanRecord.parent <> "."
-              span_ [class_ "text-slate-900 "] $ toHtml sp.spanRecord.current
-              when hasChildren $ span_ [class_ "badge badge-ghost text-xs"] $ toHtml $ show $ length sp.children
-            unless hasChildren $ do
-              let fullPath = (if sp.spanRecord.parent == "___root___" then "" else sp.spanRecord.parent <> ".") <> sp.spanRecord.current
-              let target = Map.lookup fullPath dp
-              whenJust target $ \t -> do
-                span_ [class_ "w-[10vw] truncate"] $ toHtml $ T.intercalate ", " $ V.toList t.serviceNames
-                div_ [class_ "w-[8vw]"] do
-                  span_ [class_ "badge badge-ghost"] $ show t.dataPointsCount
-      -- div_ [class_ "flex w-[10vw] items-center text-xs"] do
-      --   div_ [class_ "flex gap-1 items-center badge badge-ghost"] do
-      --     faSprite_ "dashboard" "regular" "w-4 h-4"
-      --     span_ "0"
-      --   div_ [class_ "flex gap-1 items-center badge badge-ghost"] do
-      --     faSprite_ "dashboard" "regular" "w-4 h-4"
-      --     span_ "10"
-      --   div_ [class_ "flex gap-1 items-center badge badge-ghost"] do
-      --     faSprite_ "caution" "regular" "w-4 h-4"
-      --     span_ "5"
-
-      when hasChildren $ do
-        div_ [class_ "flex-col hidden children_container gap-2 mt-2"] do
-          forM_ (zip [0 ..] sp.children) \(i, c) -> do
-            buildTree_ pid c (level + 1) (i == length sp.children - 1) dp
+metricBreakdown :: Projects.ProjectId -> Maybe Text -> V.Vector Text -> Html ()
+metricBreakdown pid label values = do
+  div_ [class_ "grid grid-cols-2 gap-2"] do
+    forM_ values $ \v -> do
+      div_ [class_ "w-full flex flex-col gap-2 metric_filterble rounded-lg p-2 border border-slate-200"] do
+        div_ [class_ "w-full justify-between flex gap-2 items-center"] do
+          div_ [class_ "flex gap-1 items-center"] do
+            span_ [class_ "text-sm"] $ toHtml v
+          button_
+            [ class_ "btn border border-slate-200 btn-xs btn-circle"
+            ]
+            do
+              faSprite_ "up-right-and-down-left-from-center" "regular" "w-3 h-3 text-slate-500"
+        div_ [class_ "h-48"] pass
