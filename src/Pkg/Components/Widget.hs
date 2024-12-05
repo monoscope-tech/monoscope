@@ -1,19 +1,19 @@
-module Pkg.Components.Widget (Widget(..),WidgetDataset(..), widget_) where
+module Pkg.Components.Widget (Widget (..), WidgetDataset (..), WidgetType (..), widget_, Layout (..)) where
 
-import Relude
-import Lucid
-import qualified Data.Aeson as AE
-import qualified Deriving.Aeson as DAE
-import qualified Deriving.Aeson.Stock as DAES
-import qualified Models.Projects.Projects as Projects
+import Control.Lens
+import Data.Aeson qualified as AE
+import Data.Generics.Labels ()
+import Deriving.Aeson qualified as DAE
+import Deriving.Aeson.Stock qualified as DAES
 import Fmt qualified as Ft
 import Language.Haskell.TH.Syntax qualified as THS
-import Data.Generics.Labels ()
-import Utils qualified
-import Text.Slugify (slugify)
+import Lucid
+import Models.Projects.Projects qualified as Projects
 import NeatInterpolation
-import Control.Lens
+import Relude
 import Text.Printf (printf)
+import Text.Slugify (slugify)
+import Utils qualified
 
 
 data Query = Query
@@ -99,9 +99,9 @@ data WidgetAxis = WidgetAxis
 -- use either index or the xxhash as id
 widget_ :: Widget -> Html ()
 widget_ w =
-  div_ ([class_ "grid-stack-item"] <> attrs)
-    $ div_ [class_ "grid-stack-item-content !overflow-hidden"]
-    $ renderChart (w & #id .~ (slugify <$> w.title))
+  div_ ([class_ "grid-stack-item h-full"] <> attrs) $
+    div_ [class_ "grid-stack-item-content !overflow-hidden h-full"] $
+      renderChart (w & #id .~ (slugify <$> w.title))
   where
     layoutFields = [("x", (.x)), ("y", (.y)), ("w", (.w)), ("h", (.h))]
     attrs = concat [maybe [] (\v -> [term ("gs-" <> name) (show v)]) (w.layout >>= layoutField) | (name, layoutField) <- layoutFields]
@@ -115,8 +115,8 @@ widget_ w =
         div_ [class_ "leading-none flex justify-between items-center"] do
           div_ [class_ "inline-flex gap-3 items-center"] do
             span_ [] $ toHtml $ maybeToMonoid widget.title
-            span_ [class_ $ "bg-slate-200 px-2 py-1 rounded-3xl " <> if hasValue then "" else "hidden", id_ $ chartId <> "Value"]
-              $ whenJust (widget.dataset >>= (.value)) (\x -> toHtml @String $ Ft.fmt $ Ft.commaizeF $ round x)
+            span_ [class_ $ "bg-slate-200 px-2 py-1 rounded-3xl " <> if hasValue then "" else "hidden", id_ $ chartId <> "Value"] $
+              whenJust (widget.dataset >>= (.value)) (\x -> toHtml @String $ Ft.fmt $ Ft.commaizeF $ round x)
             span_ [class_ "text-slate-400 widget-subtitle text-sm", id_ $ chartId <> "Subtitle"] $ toHtml $ maybeToMonoid rateM
           label_ [class_ "rounded-full border border-slate-300 p-2 inline-flex cursor-pointer"] $ Utils.faSprite_ "up-right-and-down-left-from-center" "regular" "w-3 h-3"
         div_ [class_ "flex-1 pb-1"] do
@@ -146,12 +146,9 @@ widget_ w =
                   encode: { x: 0, y: index + 1 }
                 });
                 const updateChartConfiguration = (opt, data, yAxisLabel) => {
-                  console.log("updateChartConfiguration")
                   if (!data) return opt;
                   const columnNames = data[0]?.slice(1);
-                  console.log(columnNames, "columnNames")
                   opt.series = columnNames?.map((name, index) => createSeriesConfig(name, index, yAxisLabel));
-                  console.log("series", opt.series)
                   opt.legend.data = columnNames;
                   return opt;
                 };
@@ -200,8 +197,8 @@ widget_ w =
 
                   if (!opt.dataset.source) {
                     chart.showLoading();
-                    const observer = new IntersectionObserver(entries => { 
-                        if (entries[0]?.isIntersecting) { 
+                    const observer = new IntersectionObserver(entries => {
+                        if (entries[0]?.isIntersecting) {
                            updateChartData(chart, opt,query, true, widgetData)
                            observer.disconnect();
                         }
@@ -209,7 +206,7 @@ widget_ w =
                     observer.observe(document.getElementById(chartId));
                   }
 
-                  ['submit', 'add-query', 'update-query'].forEach(event => 
+                  ['submit', 'add-query', 'update-query'].forEach(event =>
                     document.querySelector(event === 'submit' ? '#log_explorer_form' : '#filterElement')?.addEventListener(event, () => updateChartData(chart, opt, query, true, widgetData))
                   );
 
@@ -222,7 +219,6 @@ widget_ w =
                 init(${echartOpt}, "${chartId}", ${query}, "${theme}", "${yAxisLabel}", ${pid});
               })();
           |]
-
 
 
 -----------------------------------------------------------------------------
@@ -315,5 +311,3 @@ mapWidgetTypeToChartType :: WidgetType -> Text
 mapWidgetTypeToChartType WTTimeseries = "line"
 mapWidgetTypeToChartType WTDistribution = "bar"
 mapWidgetTypeToChartType _ = "bar"
-
-

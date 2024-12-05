@@ -28,6 +28,7 @@ import Lucid.Hyperscript (__)
 import NeatInterpolation (text)
 import Pages.Components qualified as Components
 import Pages.Telemetry.Utils (metricsTree)
+import Pkg.Components.Widget qualified as Widget
 
 
 metricsOverViewGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders MetricsOverViewGet)
@@ -116,28 +117,49 @@ chartsPage pid metricList sources source mFilter = do
                       <$> V.toList metricList
               option_ ([selected_ "all" | "all" == mFilter] ++ [value_ "all"]) "All"
               forM_ (ordNub metricNames) $ \m -> option_ ([selected_ m | m == mFilter] ++ [value_ m]) $ toHtml m
-    div_ [class_ "w-full grid grid-cols-3 gap-2", id_ "metric_list_container"] $ do
+    div_ [class_ "w-full grid grid-cols-3 gap-4", id_ "metric_list_container"] $ do
       forM_ metricList $ \metric -> do
-        div_ [class_ "w-full flex flex-col gap-2 metric_filterble rounded-lg p-2 border border-slate-200"] do
-          div_ [class_ "w-full justify-between flex gap-2 items-center"] do
-            div_ [class_ "flex gap-1 items-center"] do
-              span_ [class_ "text-sm"] $ toHtml metric.metricName
-              span_ [term "data-tippy-content" metric.metricDescription] $ faSprite_ "circle-info" "regular" "w-3 h-3 text-slate-500"
-            let detailUrl = "/p/" <> pid.toText <> "/metrics/details/" <> metric.metricName <> "/?source=" <> source
-            button_
-              [ class_ "btn border border-slate-200 btn-xs btn-circle"
-              , term "_" $
-                  [text|on mousedown or click set #global-data-drawer.checked to true
-                  then set #global-data-drawer-content.innerHTML to #loader-tmp.innerHTML
-                  then fetch $detailUrl
-                  then set #global-data-drawer-content.innerHTML to it
-                  then htmx.process(#global-data-drawer-content)
-                  then _hyperscript.processNode(#global-data-drawer-content)
-                  then window.evalScriptsFromContent(#global-data-drawer-content)|]
-              ]
-              do
-                faSprite_ "up-right-and-down-left-from-center" "regular" "w-3 h-3 text-slate-500"
-          div_ [class_ "h-48"] pass
+        div_ [class_ "w-full flex flex-col gap-2 metric_filterble"] do
+          -- div_ [class_ "w-full justify-between flex gap-2 items-center"] do
+          --   div_ [class_ "flex gap-1 items-center"] do
+          --     span_ [class_ "text-sm"] $ toHtml metric.metricName
+          --     span_ [term "data-tippy-content" metric.metricDescription] $ faSprite_ "circle-info" "regular" "w-3 h-3 text-slate-500"
+          --   let detailUrl = "/p/" <> pid.toText <> "/metrics/details/" <> metric.metricName <> "/?source=" <> source
+          --   button_
+          --     [ class_ "btn border border-slate-200 btn-xs btn-circle"
+          --     , term "_" $
+          --         [text|on mousedown or click set #global-data-drawer.checked to true
+          --         then set #global-data-drawer-content.innerHTML to #loader-tmp.innerHTML
+          --         then fetch $detailUrl
+          --         then set #global-data-drawer-content.innerHTML to it
+          --         then htmx.process(#global-data-drawer-content)
+          --         then _hyperscript.processNode(#global-data-drawer-content)
+          --         then window.evalScriptsFromContent(#global-data-drawer-content)|]
+          --     ]
+          --     do
+          --       faSprite_ "up-right-and-down-left-from-center" "regular" "w-3 h-3 text-slate-500"
+          div_ [class_ "h-52"] $
+            toHtml $
+              Widget.Widget
+                { wType = Widget.WTDistribution
+                , id = Nothing
+                , title = Just metric.metricName
+                , subtitle = Nothing
+                , sql = Nothing
+                , query = Just $ "metric_name = \"" <> metric.metricName <> "\""
+                , queries = Nothing
+                , layout = Just $ Widget.Layout{x = Just 0, y = Just 0, w = Just 2, h = Just 1}
+                , xAxis = Nothing
+                , yAxis = Nothing
+                , unit = Just metric.metricUnit
+                , value = Nothing
+                , wData = Nothing
+                , hideLegend = Just True
+                , theme = Nothing
+                , dataset = Nothing
+                , eager = Just True
+                , _projectId = Just pid
+                }
 
 
 dataPointsPage :: Projects.ProjectId -> V.Vector Telemetry.MetricDataPoint -> Html ()
