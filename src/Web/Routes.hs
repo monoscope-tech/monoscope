@@ -17,6 +17,7 @@ import Log (Logger)
 import Lucid (Html)
 import Models.Apis.Fields.Types qualified as Fields (FieldId)
 import Models.Apis.Reports qualified as ReportsM
+import Models.Projects.Dashboards qualified as Dashboards
 import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
 import Models.Projects.Projects qualified as Projects
 import Network.HTTP.Types (notFound404)
@@ -28,7 +29,6 @@ import Pages.BodyWrapper (PageCtx (..))
 import Pages.Charts.Charts qualified as Charts
 import Pages.Dashboard qualified as Dashboard
 import Pages.Dashboards qualified as Dashboards
-import Models.Projects.Dashboards qualified as Dashboards
 import Pages.Endpoints.Routes qualified as EndpointsRoutes
 import Pages.Endpoints.Server qualified as EndpointsRoutes
 import Pages.Fields.FieldDetails qualified as FieldDetails

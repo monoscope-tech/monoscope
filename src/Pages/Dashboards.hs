@@ -7,7 +7,7 @@ import Data.Effectful.UUID qualified as UUID
 import Data.Effectful.Wreq (HTTP)
 import Data.Effectful.Wreq qualified as W
 import Data.Generics.Labels ()
-import Data.Time (UTCTime, defaultTimeLocale, formatTime)
+import Data.Time (defaultTimeLocale, formatTime)
 import Data.Vector qualified as V
 import Data.Yaml qualified as Yml
 import Database.PostgreSQL.Entity qualified as DBT
@@ -85,7 +85,7 @@ loadDashboardFromVM dashVM =
         Just uri -> loadDashboardURI uri
         Nothing -> pure defaultDashboard
   where
-    defaultDashboard = Dashboards.Dashboard Nothing Nothing Nothing Nothing Nothing [] 
+    defaultDashboard = Dashboards.Dashboard Nothing Nothing Nothing Nothing Nothing []
 
 
 dashboardGetH :: Projects.ProjectId -> Dashboards.DashboardId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders (PageCtx DashboardGet))
@@ -107,23 +107,24 @@ dashboardGetH pid dashId fileM fromDStr toDStr sinceStr = do
     if (widget.eager == Just True)
       then do
         metricsD <- Charts.queryMetrics (Just pid) widget.query Nothing sinceStr fromDStr toDStr Nothing
-        pure $
-          widget
-            & #dataset
-              ?~ Widget.WidgetDataset
-                { source = AE.toJSON $ V.cons (AE.toJSON <$> metricsD.headers) (AE.toJSON <<$>> metricsD.dataset)
-                , rowsPerMin = Just metricsD.rowsPerMin
-                , value = Just $ fromIntegral metricsD.rowsCount
-                , from = metricsD.from
-                , to = metricsD.to
-                }
+        pure
+          $ widget
+          & #dataset
+            ?~ Widget.WidgetDataset
+              { source = AE.toJSON $ V.cons (AE.toJSON <$> metricsD.headers) (AE.toJSON <<$>> metricsD.dataset)
+              , rowsPerMin = Just metricsD.rowsPerMin
+              , value = Just $ fromIntegral metricsD.rowsCount
+              , from = metricsD.from
+              , to = metricsD.to
+              }
       else pure widget
 
   let bwconf =
         (def :: BWConfig)
-          { sessM = Just sess.persistentSession
+          { sessM = Just sess
           , currProject = Just project
-          , pageTitle = "Dashboards > " <> maybeToMonoid dash'.title
+          , prePageTitle = Just "Dashboards"
+          , pageTitle = maybeToMonoid dash'.title
           , pageActions = Just $ Components.timepicker_ Nothing currentRange
           }
   addRespHeaders $ PageCtx bwconf $ DashboardGet pid dash'
@@ -133,18 +134,9 @@ dashboardGetH pid dashId fileM fromDStr toDStr sinceStr = do
 -- Dashboard List
 --
 
-data DashboardItem = DashboardItem
-  { createdAt :: UTCTime
-  , title :: Text
-  , isHome :: Bool
-  , isStared :: Bool
-  , tags :: V.Vector Text
-  }
-  deriving (Show, Generic)
-
-
 data DashboardsGet = DashboardsGet
-  { dashboards :: V.Vector DashboardItem
+  { dashboards :: V.Vector Dashboards.DashboardVM
+  , projectId :: Projects.ProjectId
   }
   deriving (Show, Generic)
 
@@ -203,17 +195,17 @@ dashboardsGet_ dg = do
         input_ [type_ "text", class_ "grow", placeholder_ "Search", [__|on input show .itemsListItem in #itemsListPage when its textContent.toLowerCase() contains my value.toLowerCase()|]]
     -- button_
     div_ [class_ "grid grid-cols-2 gap-5"] do
-      forM_ dg.dashboards \dash -> div_ [class_ "rounded-xl border border-slate-200 gap-3.5 p-4 bg-slate-100 flex"] do
+      forM_ dg.dashboards \dash -> a_ [class_ "rounded-xl border border-slate-200 gap-3.5 p-4 bg-slate-100 flex", href_ $ "/p/" <> dg.projectId.toText <> "/dashboards/" <> dash.id.toText] do
         div_ [class_ "flex-1 space-y-2"] do
           div_ [class_ "flex items-center gap-2"] do
             strong_ [class_ "font-medium"] (toHtml dash.title)
-            a_ [class_ "leading-none", term "data-tippy-content" "This dashboard is currently your homepage."] $ when dash.isHome $ (faSprite_ "house" "regular" "w-4 h-4")
+            span_ [class_ "leading-none", term "data-tippy-content" "This dashboard is currently your homepage."] $ when (isJust dash.homepageSince) $ (faSprite_ "house" "regular" "w-4 h-4")
           div_ [class_ "gap-2 flex items-center"] do
             time_ [class_ "mr-2 text-slate-400", datetime_ $ Utils.formatUTC dash.createdAt] $ toHtml $ formatTime defaultTimeLocale "%eth %b %Y" dash.createdAt
             forM_ dash.tags (a_ [class_ "cbadge-sm badge-neutral cbadge bg-slate-200"] . toHtml @Text)
         div_ [class_ "flex items-center justify-center gap-3"] do
-          a_ [class_ "rounded-full border border-slate-300 p-2 leading-none text-gray-700"] $
-            if dash.isStared
+          button_ [class_ "rounded-full border border-slate-300 p-2 leading-none text-gray-700"]
+            $ if isJust dash.starredSince
               then (faSprite_ "star" "solid" "w-5 h-5")
               else (faSprite_ "star" "regular" "w-5 h-5")
           div_ [class_ "space-x-2"] $ faSprite_ "chart-area" "regular" "w-5 h-5" >> (span_ "4 charts")
@@ -228,24 +220,14 @@ dashboardsGetH pid = do
 
   let bwconf =
         (def :: BWConfig)
-          { sessM = Just sess.persistentSession
+          { sessM = Just sess
           , currProject = Just project
           , pageTitle = "Dashboards"
           , pageActions = Just $ (label_ [Lucid.for_ "newDashboardMdl", class_ "leading-none rounded-xl p-3 cursor-pointer bg-gradient-to-b from-[#067cff] to-[#0850c5] text-white"] "New Dashboard")
           }
-  addRespHeaders $
-    PageCtx bwconf $
-      DashboardsGet
-        { dashboards =
-            dashboards & V.map \dash ->
-              DashboardItem
-                { title = dash.title 
-                , isHome = isJust dash.homepageSince
-                , isStared = isJust dash.starredSince
-                , tags =  dash.tags 
-                , createdAt = now
-                }
-        }
+  addRespHeaders
+    $ PageCtx bwconf
+    $ DashboardsGet{dashboards, projectId = pid}
 
 
 data DashboardForm = DashboardForm
@@ -262,21 +244,21 @@ dashboardsPostH pid form = do
   did <- Dashboards.DashboardId <$> UUID.genUUID
   let dashM = find (\dashboard -> dashboard.file == Just form.file) dashboardTemplates
   let redirectURI = "/p/" <> pid.toText <> "/dashboards/" <> (did.toText)
-  dbtToEff $
-    DBT.insert @Dashboards.DashboardVM $
-      Dashboards.DashboardVM
-        { id = did
-        , projectId = pid
-        , createdAt = now
-        , updatedAt = now
-        , createdBy = sess.user.id
-        , baseTemplate = if form.file == "" then Nothing else Just form.file
-        , schema = Nothing
-        , starredSince = Nothing 
-        , homepageSince = Nothing 
-        , tags = V.fromList $ fromMaybe [] $ dashM >>= (.tags) 
-        , title = fromMaybe [] $ dashM >>= (.title) 
-        }
+  dbtToEff
+    $ DBT.insert @Dashboards.DashboardVM
+    $ Dashboards.DashboardVM
+      { id = did
+      , projectId = pid
+      , createdAt = now
+      , updatedAt = now
+      , createdBy = sess.user.id
+      , baseTemplate = if form.file == "" then Nothing else Just form.file
+      , schema = Nothing
+      , starredSince = Nothing
+      , homepageSince = Nothing
+      , tags = V.fromList $ fromMaybe [] $ dashM >>= (.tags)
+      , title = fromMaybe [] $ dashM >>= (.title)
+      }
   redirectCS redirectURI
   addRespHeaders NoContent
 

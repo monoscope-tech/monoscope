@@ -136,7 +136,7 @@ manageBillingGetH pid from = do
   let last_reported = show project.usageLastReported
   let bwconf =
         (def :: BWConfig)
-          { sessM = Just sess.persistentSession
+          { sessM = Just sess
           , currProject = Just project
           , pageTitle = "Manage Billing"
           }

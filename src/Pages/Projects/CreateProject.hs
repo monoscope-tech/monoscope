@@ -105,7 +105,7 @@ createProjectGetH = do
   sess <- Sessions.getSession
   let bwconf =
         (def :: BWConfig)
-          { sessM = Just sess.persistentSession
+          { sessM = Just sess
           , pageTitle = "Create Project"
           }
   addRespHeaders $ CreateProject $ PageCtx bwconf (sess.persistentSession, appCtx.config, False, def @CreateProjectForm, def @CreateProjectFormError)
@@ -149,7 +149,7 @@ projectSettingsGetH pid = do
           , orderId = project.orderId
           }
 
-  let bwconf = (def :: BWConfig){sessM = Just sess.persistentSession, currProject = Just project, pageTitle = "Settings"}
+  let bwconf = (def :: BWConfig){sessM = Just sess, currProject = Just project, pageTitle = "Settings"}
   addRespHeaders $ CreateProject $ PageCtx bwconf (sess.persistentSession, appCtx.config, True, createProj, def @CreateProjectFormError)
 
 

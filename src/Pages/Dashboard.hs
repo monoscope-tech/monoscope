@@ -74,7 +74,7 @@ dashboardGetH pid fromDStr toDStr sinceStr' = do
   let reqLatenciesRolledByStepsJ = decodeUtf8 $ AE.encode reqLatenciesRolledByStepsLabeled
   let bwconf =
         (def :: BWConfig)
-          { sessM = Just sess.persistentSession
+          { sessM = Just sess
           , currProject = Just project
           , pageTitle = "Dashboard"
           , pageActions = Just $ Components.timepicker_ Nothing currentRange

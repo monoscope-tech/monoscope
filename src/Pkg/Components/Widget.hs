@@ -1,19 +1,19 @@
-module Pkg.Components.Widget (Widget(..),WidgetDataset(..), widget_) where
+module Pkg.Components.Widget (Widget (..), WidgetDataset (..), widget_) where
 
-import Relude
-import Lucid
-import qualified Data.Aeson as AE
-import qualified Deriving.Aeson as DAE
-import qualified Deriving.Aeson.Stock as DAES
-import qualified Models.Projects.Projects as Projects
+import Control.Lens
+import Data.Aeson qualified as AE
+import Data.Generics.Labels ()
+import Deriving.Aeson qualified as DAE
+import Deriving.Aeson.Stock qualified as DAES
 import Fmt qualified as Ft
 import Language.Haskell.TH.Syntax qualified as THS
-import Data.Generics.Labels ()
-import Utils qualified
-import Text.Slugify (slugify)
+import Lucid
+import Models.Projects.Projects qualified as Projects
 import NeatInterpolation
-import Control.Lens
+import Relude
 import Text.Printf (printf)
+import Text.Slugify (slugify)
+import Utils qualified
 
 
 data Query = Query
@@ -224,7 +224,6 @@ widget_ w =
           |]
 
 
-
 -----------------------------------------------------------------------------
 -- Echarts Logic
 -----------------------------------------------------------------------------
@@ -315,5 +314,3 @@ mapWidgetTypeToChartType :: WidgetType -> Text
 mapWidgetTypeToChartType WTTimeseries = "line"
 mapWidgetTypeToChartType WTDistribution = "bar"
 mapWidgetTypeToChartType _ = "bar"
-
-

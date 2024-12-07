@@ -89,7 +89,7 @@ surveyGetH pid = do
   (sess, project) <- Sessions.sessionAndProject pid
   let bwconf =
         (def :: BWConfig)
-          { sessM = Just sess.persistentSession
+          { sessM = Just sess
           , currProject = Just project
           , pageTitle = "About Project"
           }

@@ -120,7 +120,7 @@ manageMembersGetH pid = do
   (sess, project) <- Sessions.sessionAndProject pid
   appCtx <- ask @AuthContext
   projMembers <- dbtToEff $ ProjectMembers.selectActiveProjectMembers pid
-  let bwconf = (def :: BWConfig){sessM = Just sess.persistentSession, pageTitle = "Settings", currProject = Just project}
+  let bwconf = (def :: BWConfig){sessM = Just sess, pageTitle = "Settings", currProject = Just project}
   addRespHeaders $ ManageMembersGet $ PageCtx bwconf projMembers
 
 

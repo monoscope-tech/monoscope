@@ -62,7 +62,7 @@ apiCatalogH pid sortM timeFilter requestTypeM = do
 
   let bwconf =
         def
-          { sessM = Just sess.persistentSession
+          { sessM = Just sess
           , currProject = Just project
           , pageTitle = "API Catalog"
           , navTabs = Just $ div_ [class_ "tabs tabs-boxed tabs-outline items-center border"] do

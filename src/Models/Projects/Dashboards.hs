@@ -7,6 +7,7 @@ import Data.Default
 import Data.Effectful.UUID qualified as UUID
 import Data.List (isSuffixOf)
 import Data.Time (UTCTime)
+import Data.Vector qualified as V
 import Data.Yaml qualified as Yml
 import Database.PostgreSQL.Entity qualified as DBT
 import Database.PostgreSQL.Entity.Types
@@ -26,7 +27,6 @@ import Pkg.Components.Widget (Widget (..))
 import Relude
 import Servant (FromHttpApiData)
 import System.Directory (listDirectory)
-import Data.Vector qualified as V
 
 
 data DashboardVM = DashboardVM
@@ -37,7 +37,7 @@ data DashboardVM = DashboardVM
   , createdBy :: Users.UserId
   , baseTemplate :: Maybe Text
   , schema :: Maybe Dashboard
-  , starredSince :: Maybe UTCTime 
+  , starredSince :: Maybe UTCTime
   , homepageSince :: Maybe UTCTime
   , tags :: V.Vector Text
   , title :: Text
@@ -97,6 +97,6 @@ readDashboardFile dir file = do
     Right content ->
       case Yml.decodeEither' content of
         Left err -> do
-          putStrLn $ "Error decoding JSON in file " ++ filePath ++ ": " ++ show err
+          putStrLn $ "Error decoding JSON in file: " ++ filePath ++ ": " ++ show err
           pure Nothing
         Right dashboard -> pure (Just $ dashboard{file = Just $ fromString file})

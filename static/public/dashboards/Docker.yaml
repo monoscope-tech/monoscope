@@ -1,0 +1,47 @@
+title: Docker 
+refresh_interval: 60s
+time_range:
+  since: 6h 
+  from: now-6h
+  to: now
+variables:
+  - name: airport
+    type: query
+    label: "Airport"
+    query: method == "GET" 
+    default: "JFK"
+
+  - name: airline
+    type: dropdown
+    label: "Airline"
+    options: ["AA", "DL", "UA", "SW"]
+    default: "AA"
+
+  - name: start_time
+    type: datetime
+    label: "Start Time"
+    default: "now-6h"
+
+  - name: end_time
+    type: datetime
+    label: "End Time"
+    default: "now"
+
+widgets:
+  # - type: "timeseries"
+  #   title: "GET requests"
+  #   query: method == "GET" 
+  #   layout: { w: 3, h: 2 }
+
+  # - type: "timeseries"
+  #   title: "POST requests"
+  #   query: method == "POST"
+  #   layout: { w: 3, h: 2 }
+
+  - type: "timeseries"
+    title: "POST requests"
+    query: method == "POST" | timechart count(*) by method 
+    layout: { w: 4, h: 2 }
+    eager: true
+
+

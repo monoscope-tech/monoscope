@@ -25,7 +25,7 @@ listProjectsGetH = do
   (sess, project) <- Sessions.sessionAndProject (Projects.ProjectId UUID.nil)
   let bwconf =
         (def :: BWConfig)
-          { sessM = Just sess.persistentSession
+          { sessM = Just sess
           , pageTitle = "Projects List"
           }
 

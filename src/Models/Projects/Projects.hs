@@ -47,12 +47,12 @@ import Deriving.Aeson qualified as DAE
 import Effectful
 import Effectful.PostgreSQL.Transact.Effect (DB, dbtToEff)
 import GHC.Records (HasField (getField))
+import Language.Haskell.TH.Syntax qualified as THS
 import Models.Users.Users qualified as Users
 import Pkg.DBUtils (WrappedEnumSC (..))
 import Pkg.Parser.Stats (Section)
 import Relude
 import Web.HttpApiData
-import Language.Haskell.TH.Syntax qualified as THS
 
 
 newtype ProjectId = ProjectId {unProjectId :: UUID.UUID}
