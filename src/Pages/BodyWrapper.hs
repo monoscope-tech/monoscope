@@ -401,10 +401,10 @@ sideNav sess project pageTitle menuItem hasIntegrated = aside_ [class_ "border-r
 
 
 navbar :: Maybe Projects.Project -> [(Text, Text, Text)] -> Users.User -> Maybe Text -> Text -> Maybe (Html ()) -> Maybe (Html ()) -> Html ()
-navbar projectM menu currUser prePageTitle pageTitle tabsM pageActionsM =
+navbar projectM menuL currUser prePageTitle pageTitle tabsM pageActionsM =
   nav_ [id_ "main-navbar", class_ "sticky z-20 top-0 w-full px-6 py-2 flex flex-row border-slate-200"] do
     div_ [class_ "flex-1 flex items-center text-slate-950 gap-1"] do
-      whenJust prePageTitle \pt -> whenJust (find (\a -> fst3 a == pt) menu) \(_, _, icon) -> do
+      whenJust prePageTitle \pt -> whenJust (find (\a -> fst3 a == pt) menuL) \(_, _, icon) -> do
         whenJust projectM \p -> a_ [class_ "p-1 hover:bg-slate-100 inline-flex items-center justify-center gap-1 rounded-md", href_ $ "/p/" <> p.id.toText <> "/dashboards"] do
           faSprite_ icon "regular" "w-4 h-4"
           toHtml pt
