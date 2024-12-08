@@ -123,7 +123,7 @@ bodyWrapper BWConfig{sessM, currProject, prePageTitle, pageTitle, menuItem, hasI
         script_ [src_ "https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.63.0/codemirror.min.js"] ("" :: Text)
         script_ [src_ "https://cdnjs.cloudflare.com/ajax/libs/codemirror/6.65.7/mode/javascript/javascript.min.js"] ("" :: Text)
         script_ [type_ "module", src_ $(hashAssetFile "/public/assets/filtercomponent.js")] ("" :: Text)
-        script_ [src_ "/public/assets/js/main.js"] ("" :: Text)
+        script_ [src_ $(hashAssetFile "/public/assets/js/main.js")] ("" :: Text)
 
         script_
           [text|
@@ -162,9 +162,7 @@ bodyWrapper BWConfig{sessM, currProject, prePageTitle, pageTitle, menuItem, hasI
             const ca = decodedCookie.split(';');
             for (let i = 0; i < ca.length; i++) {
                 let c = ca[i].trim();
-                if (c.startsWith(name)) {
-                    return c.substring(name.length);
-                }
+                if (c.startsWith(name)) return c.substring(name.length);
             }
             return "";
         }
@@ -175,10 +173,7 @@ bodyWrapper BWConfig{sessM, currProject, prePageTitle, pageTitle, menuItem, hasI
           tippy('[data-tippy-content]');
           var notyf = new Notyf({
               duration: 5000,
-              position: {
-                x: 'right',
-                y: 'top',
-            },
+              position: {x: 'right', y: 'top'},
           });
           document.body.addEventListener("successToast", (e)=> {e.detail.value.map(v=>notyf.success(v));});
           document.body.addEventListener("errorToast", (e)=> {e.detail.value.map(v=>notyf.error(v));});
@@ -236,9 +231,8 @@ bodyWrapper BWConfig{sessM, currProject, prePageTitle, pageTitle, menuItem, hasI
               div_ [class_ "flex w-full justify-end items-center p-6 space-x-2 border-t border-gray-200 rounded-b"] pass
       case sessM of
         Nothing -> do
-          section_ [class_ "flex flex-col grow  h-screen overflow-y-hidden"] do
-            section_ [class_ "flex-1 overflow-y-auto"] do
-              child
+          section_ [class_ "flex flex-col grow  h-screen overflow-y-hidden"] 
+            $ section_ [class_ "flex-1 overflow-y-auto"] $ child
         Just sess ->
           let currUser = sess.persistentSession.user.getUser
               sideNav' = currProject & maybe "" \project -> sideNav sess project pageTitle menuItem hasIntegrated
@@ -338,7 +332,7 @@ sideNav sess project pageTitle menuItem hasIntegrated = aside_ [class_ "border-r
         img_ [class_ "h-10 w-10 hidden sd-show", src_ "/public/assets/logo-mini.png"]
       label_ [class_ "cursor-pointer text-slate-700"] do
         input_ ([type_ "checkbox", class_ "hidden", id_ "sidenav-toggle", [__|on change call setCookie("isSidebarClosed", `${me.checked}`)|]] <> [checked_ | sess.isSidebarClosed])
-        script_ [text|document.getElementById("sidenav-toggle").checked=(getCookie("isSidebarClosed")=="true") |]
+        -- script_ [text|document.getElementById("sidenav-toggle").checked=(getCookie("isSidebarClosed")=="true") |]
         faSprite_ "side-chevron-left-in-box" "regular" " h-5 w-5 rotate-180 group-has-[#sidenav-toggle:checked]/pg:rotate-0"
     div_ [class_ "mt-4 sd-px-0 dropdown block"] do
       a_
@@ -387,8 +381,7 @@ sideNav sess project pageTitle menuItem hasIntegrated = aside_ [class_ "border-r
       , term "data-tippy-content" "Documentation"
       , href_ "https://apitoolkit.io/docs/"
       ]
-      do
-        span_ [class_ "p-3 rounded-full bg-blue-100 text-blue-500 leading-none"] (faSprite_ "circle-question" "regular" "h-4 w-4") >> span_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:block"] "Documentation"
+        $ span_ [class_ "p-3 rounded-full bg-blue-100 text-blue-500 leading-none"] (faSprite_ "circle-question" "regular" "h-4 w-4") >> span_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:block"] "Documentation"
     a_
       [ class_ "hover:bg-blue-50"
       , term "data-tippy-placement" "right"
@@ -396,8 +389,7 @@ sideNav sess project pageTitle menuItem hasIntegrated = aside_ [class_ "border-r
       , href_ "/logout"
       , [__| on click js posthog.reset(); end |]
       ]
-      do
-        span_ [class_ "p-3 rounded-full bg-red-100 text-red-600 leading-none"] (faSprite_ "arrow-right-from-bracket" "regular" "h-4 w-4") >> span_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:block"] "Logout"
+        $ span_ [class_ "p-3 rounded-full bg-red-100 text-red-600 leading-none"] (faSprite_ "arrow-right-from-bracket" "regular" "h-4 w-4") >> span_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:block"] "Logout"
 
 
 navbar :: Maybe Projects.Project -> [(Text, Text, Text)] -> Users.User -> Maybe Text -> Text -> Maybe (Html ()) -> Maybe (Html ()) -> Html ()
