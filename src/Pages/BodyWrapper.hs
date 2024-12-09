@@ -4,6 +4,7 @@ import Crypto.Hash.MD5 qualified as MD5
 import Data.CaseInsensitive qualified as CI
 import Data.Default (Default)
 import Data.Text qualified as T
+import Data.Tuple.Extra (fst3)
 import Data.Vector qualified as V
 import Lucid
 import Lucid.Htmx (hxGet_)
@@ -22,6 +23,7 @@ import Utils (faSprite_)
 menu :: Projects.ProjectId -> [(Text, Text, Text)]
 menu pid =
   [ ("Dashboard", "/p/" <> pid.toText <> "/", "qrcode")
+  -- , ("Dashboards", "/p/" <> pid.toText <> "/dashboards", "dashboard")
   , ("Explorer", "/p/" <> pid.toText <> "/log_explorer", "explore")
   , ("API Catalog", "/p/" <> pid.toText <> "/api_catalog", "swap")
   , ("Changes & Errors", "/p/" <> pid.toText <> "/anomalies", "bug")
@@ -49,8 +51,9 @@ instance ToHtml a => ToHtml (PageCtx a) where
 
 -- TODO: Rename to pageCtx
 data BWConfig = BWConfig
-  { sessM :: Maybe Sessions.PersistentSession
+  { sessM :: Maybe Sessions.Session
   , currProject :: Maybe Projects.Project
+  , prePageTitle :: Maybe Text
   , pageTitle :: Text
   , menuItem :: Maybe Text -- Use PageTitle if menuItem is not set
   , hasIntegrated :: Maybe Bool
@@ -62,7 +65,7 @@ data BWConfig = BWConfig
 
 
 bodyWrapper :: BWConfig -> Html () -> Html ()
-bodyWrapper BWConfig{sessM, currProject, pageTitle, menuItem, hasIntegrated, navTabs, pageActions} child = do
+bodyWrapper BWConfig{sessM, currProject, prePageTitle, pageTitle, menuItem, hasIntegrated, navTabs, pageActions} child = do
   doctypehtml_ do
     head_
       do
@@ -120,7 +123,7 @@ bodyWrapper BWConfig{sessM, currProject, pageTitle, menuItem, hasIntegrated, nav
         script_ [src_ "https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.63.0/codemirror.min.js"] ("" :: Text)
         script_ [src_ "https://cdnjs.cloudflare.com/ajax/libs/codemirror/6.65.7/mode/javascript/javascript.min.js"] ("" :: Text)
         script_ [type_ "module", src_ $(hashAssetFile "/public/assets/filtercomponent.js")] ("" :: Text)
-        script_ [src_ "/public/assets/js/main.js"] ("" :: Text)
+        script_ [src_ $(hashAssetFile "/public/assets/js/main.js")] ("" :: Text)
 
         script_
           [text|
@@ -159,9 +162,7 @@ bodyWrapper BWConfig{sessM, currProject, pageTitle, menuItem, hasIntegrated, nav
             const ca = decodedCookie.split(';');
             for (let i = 0; i < ca.length; i++) {
                 let c = ca[i].trim();
-                if (c.startsWith(name)) {
-                    return c.substring(name.length);
-                }
+                if (c.startsWith(name)) return c.substring(name.length);
             }
             return "";
         }
@@ -172,10 +173,7 @@ bodyWrapper BWConfig{sessM, currProject, pageTitle, menuItem, hasIntegrated, nav
           tippy('[data-tippy-content]');
           var notyf = new Notyf({
               duration: 5000,
-              position: {
-                x: 'right',
-                y: 'top',
-            },
+              position: {x: 'right', y: 'top'},
           });
           document.body.addEventListener("successToast", (e)=> {e.detail.value.map(v=>notyf.success(v));});
           document.body.addEventListener("errorToast", (e)=> {e.detail.value.map(v=>notyf.error(v));});
@@ -233,16 +231,15 @@ bodyWrapper BWConfig{sessM, currProject, pageTitle, menuItem, hasIntegrated, nav
               div_ [class_ "flex w-full justify-end items-center p-6 space-x-2 border-t border-gray-200 rounded-b"] pass
       case sessM of
         Nothing -> do
-          section_ [class_ "flex flex-col grow  h-screen overflow-y-hidden"] do
-            section_ [class_ "flex-1 overflow-y-auto"] do
-              child
+          section_ [class_ "flex flex-col grow  h-screen overflow-y-hidden"] 
+            $ section_ [class_ "flex-1 overflow-y-auto"] $ child
         Just sess ->
-          let currUser = sess.user.getUser
+          let currUser = sess.persistentSession.user.getUser
               sideNav' = currProject & maybe "" \project -> sideNav sess project pageTitle menuItem hasIntegrated
            in section_ [class_ "flex flex-row h-screen overflow-hidden"] do
                 sideNav'
                 section_ [class_ "h-screen overflow-y-hidden grow"] do
-                  navbar currUser pageTitle navTabs pageActions
+                  navbar currProject (fromMaybe [] (currProject <&> \p -> menu p.id)) currUser prePageTitle pageTitle navTabs pageActions
                   section_ [class_ "overflow-y-hidden h-full "] child
       externalHeadScripts_
       alerts_
@@ -271,8 +268,8 @@ bodyWrapper BWConfig{sessM, currProject, pageTitle, menuItem, hasIntegrated, nav
             });
           });
       |]
-      let email = show $ maybe "" ((.user.getUser.email)) sessM
-      let name = maybe "" (\sess -> sess.user.getUser.firstName <> " " <> sess.user.getUser.lastName) sessM
+      let email = show $ maybe "" ((.persistentSession.user.getUser.email)) sessM
+      let name = maybe "" (\sess -> sess.persistentSession.user.getUser.firstName <> " " <> sess.persistentSession.user.getUser.lastName) sessM
       script_
         [text| window.addEventListener("load", (event) => {
         posthog.people.set_once({email: ${email}, name: "${name}"});
@@ -326,7 +323,7 @@ projectsDropDown currProject projects = do
                 when (currProject.id == project.id) $ faSprite_ "circle-check" "regular" "h-6 w-6 text-green-700"
 
 
-sideNav :: Sessions.PersistentSession -> Projects.Project -> Text -> Maybe Text -> Maybe Bool -> Html ()
+sideNav :: Sessions.Session -> Projects.Project -> Text -> Maybe Text -> Maybe Bool -> Html ()
 sideNav sess project pageTitle menuItem hasIntegrated = aside_ [class_ "border-r bg-slate-100 border-slate-200 w-15 group-has-[#sidenav-toggle:checked]/pg:w-72  h-screen transition-all duration-200 ease-in-out flex flex-col justify-between", id_ "side-nav-menu"] do
   div_ [class_ "px-2 group-has-[#sidenav-toggle:checked]/pg:px-6"] do
     div_ [class_ "py-5 flex justify-center group-has-[#sidenav-toggle:checked]/pg:justify-between items-center"] do
@@ -334,8 +331,7 @@ sideNav sess project pageTitle menuItem hasIntegrated = aside_ [class_ "border-r
         img_ [class_ "h-7 hidden group-has-[#sidenav-toggle:checked]/pg:block", src_ "/public/assets/svgs/logo.svg"]
         img_ [class_ "h-10 w-10 hidden sd-show", src_ "/public/assets/logo-mini.png"]
       label_ [class_ "cursor-pointer text-slate-700"] do
-        input_ [type_ "checkbox", class_ "hidden", id_ "sidenav-toggle", [__|on change call setCookie("isSidebarClosed", `${me.checked}`)|]]
-        script_ [text|document.getElementById("sidenav-toggle").checked= getCookie("isSidebarClosed")=="true" |]
+        input_ ([type_ "checkbox", class_ "hidden", id_ "sidenav-toggle", [__|on change call setCookie("isSidebarClosed", `${me.checked}`)|]] <> [checked_ | sess.isSidebarClosed])
         faSprite_ "side-chevron-left-in-box" "regular" " h-5 w-5 rotate-180 group-has-[#sidenav-toggle:checked]/pg:rotate-0"
     div_ [class_ "mt-4 sd-px-0 dropdown block"] do
       a_
@@ -345,7 +341,7 @@ sideNav sess project pageTitle menuItem hasIntegrated = aside_ [class_ "border-r
         do
           span_ [class_ "grow hidden group-has-[#sidenav-toggle:checked]/pg:block overflow-x-hidden whitespace-nowrap truncate"] $ toHtml project.title
           faSprite_ "angles-up-down" "regular" " w-4 m-1"
-      div_ [tabindex_ "0", class_ "dropdown-content z-[40]"] $ projectsDropDown project (Sessions.getProjects $ Sessions.projects sess)
+      div_ [tabindex_ "0", class_ "dropdown-content z-[40]"] $ projectsDropDown project (Sessions.getProjects $ Sessions.projects sess.persistentSession)
     nav_ [class_ "mt-5 flex flex-col gap-2.5 text-slate-600"] do
       -- FIXME: reeanable hx-boost hxBoost_ "true"
       menu project.id & mapM_ \(mTitle, mUrl, fIcon) -> do
@@ -362,7 +358,7 @@ sideNav sess project pageTitle menuItem hasIntegrated = aside_ [class_ "border-r
             span_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:block whitespace-nowrap truncate"] $ toHtml mTitle
 
   div_ [class_ "py-8 px-2 group-has-[#sidenav-toggle:checked]/pg:px-6 [&>*]:gap-2 [&>*]:whitespace-nowrap [&>*]:truncate flex flex-col gap-2.5 [&>*]:items-center [&>*]:overflow-x-hidden [&>*]:flex &:no-wrap"] do
-    let currUser = sess.user.getUser
+    let currUser = sess.persistentSession.user.getUser
     let userIdentifier =
           if currUser.firstName /= "" || currUser.lastName /= ""
             then currUser.firstName <> " " <> currUser.lastName
@@ -384,8 +380,7 @@ sideNav sess project pageTitle menuItem hasIntegrated = aside_ [class_ "border-r
       , term "data-tippy-content" "Documentation"
       , href_ "https://apitoolkit.io/docs/"
       ]
-      do
-        span_ [class_ "p-3 rounded-full bg-blue-100 text-blue-500 leading-none"] (faSprite_ "circle-question" "regular" "h-4 w-4") >> span_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:block"] "Documentation"
+        $ span_ [class_ "p-3 rounded-full bg-blue-100 text-blue-500 leading-none"] (faSprite_ "circle-question" "regular" "h-4 w-4") >> span_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:block"] "Documentation"
     a_
       [ class_ "hover:bg-blue-50"
       , term "data-tippy-placement" "right"
@@ -393,14 +388,19 @@ sideNav sess project pageTitle menuItem hasIntegrated = aside_ [class_ "border-r
       , href_ "/logout"
       , [__| on click js posthog.reset(); end |]
       ]
-      do
-        span_ [class_ "p-3 rounded-full bg-red-100 text-red-600 leading-none"] (faSprite_ "arrow-right-from-bracket" "regular" "h-4 w-4") >> span_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:block"] "Logout"
+        $ span_ [class_ "p-3 rounded-full bg-red-100 text-red-600 leading-none"] (faSprite_ "arrow-right-from-bracket" "regular" "h-4 w-4") >> span_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:block"] "Logout"
 
 
-navbar :: Users.User -> Text -> Maybe (Html ()) -> Maybe (Html ()) -> Html ()
-navbar currUser pageTitle tabsM pageActionsM =
+navbar :: Maybe Projects.Project -> [(Text, Text, Text)] -> Users.User -> Maybe Text -> Text -> Maybe (Html ()) -> Maybe (Html ()) -> Html ()
+navbar projectM menuL currUser prePageTitle pageTitle tabsM pageActionsM =
   nav_ [id_ "main-navbar", class_ "sticky z-20 top-0 w-full px-6 py-2 flex flex-row border-slate-200"] do
-    div_ [class_ "flex-1 flex items-center font-semibold text-2xl text-slate-950 "] $ toHtml pageTitle
+    div_ [class_ "flex-1 flex items-center text-slate-950 gap-1"] do
+      whenJust prePageTitle \pt -> whenJust (find (\a -> fst3 a == pt) menuL) \(_, _, icon) -> do
+        whenJust projectM \p -> a_ [class_ "p-1 hover:bg-slate-100 inline-flex items-center justify-center gap-1 rounded-md", href_ $ "/p/" <> p.id.toText <> "/dashboards"] do
+          faSprite_ icon "regular" "w-4 h-4"
+          toHtml pt
+        faSprite_ "chevron-right" "regular" "w-3 h-3"
+      strong_ [class_ "font-semibold text-2xl px-1"] $ toHtml pageTitle
     whenJust tabsM id
     div_ [class_ "flex-1 flex items-center justify-end"] $ whenJust pageActionsM id
 

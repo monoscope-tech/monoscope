@@ -6,8 +6,8 @@ import Data.Aeson qualified as AE
 import Data.List qualified as L
 import Data.Time (UTCTime, addUTCTime, defaultTimeLocale, formatTime, secondsToNominalDiffTime)
 import Data.Time.Format.ISO8601 (iso8601ParseM)
-import Language.Haskell.TH.Syntax qualified as THS
 import Deriving.Aeson.Stock qualified as DAE
+import Language.Haskell.TH.Syntax qualified as THS
 import Lucid
 import Lucid.Base (termRaw)
 import Lucid.Hyperscript (__)

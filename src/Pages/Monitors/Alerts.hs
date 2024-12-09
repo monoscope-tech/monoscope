@@ -680,7 +680,7 @@ monitorCreatePostH pid monitorType = do
   (sess, project) <- Sessions.sessionAndProject pid
   let bwconf =
         (def :: BWConfig)
-          { sessM = Just sess.persistentSession
+          { sessM = Just sess
           , currProject = Just project
           , pageTitle = "Create Monitor"
           , pageActions = Just $ Components.timepicker_ (Just "log_explorer_form") Nothing

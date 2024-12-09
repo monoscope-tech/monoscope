@@ -115,7 +115,6 @@ library
       Pages.Monitors.TestCollectionEditor
       Pages.Monitors.Testing
       Pages.Monitors.TestingSpec
-      Pages.NonMember
       Pages.Projects.CreateProject
       Pages.Projects.Integrations
       Pages.Projects.ListProjects

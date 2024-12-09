@@ -190,7 +190,7 @@ collectionGetH pid colIdM = do
   let overviewUrl = (\c -> Just $ "/p/" <> pid.toText <> "/monitors/" <> c.toText <> "/overview") =<< colIdM
   let bwconf =
         (def :: BWConfig)
-          { sessM = Just sess.persistentSession
+          { sessM = Just sess
           , currProject = Just project
           , pageTitle = "Testing"
           , navTabs = Just $ pageTabs editorUrl overviewUrl

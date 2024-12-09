@@ -209,7 +209,7 @@ anomalyListGetH pid layoutM filterTM sortM timeFilter pageM loadM endpointM hxRe
           }
   let bwconf =
         (def :: BWConfig)
-          { sessM = Just sess.persistentSession
+          { sessM = Just sess
           , currProject = Just project
           , pageTitle = "Issues: Changes, Alerts & Errors"
           , menuItem = Just "Changes & Errors"
@@ -363,7 +363,7 @@ anomalyDetailsGetH pid targetHash hxBoostedM = do
   issueM <- dbtToEff $ Anomalies.selectIssueByHash pid targetHash
   let bwconf =
         (def :: BWConfig)
-          { sessM = Just sess.persistentSession
+          { sessM = Just sess
           , currProject = Just project
           , pageTitle = "Anomaly Details"
           }

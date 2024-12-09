@@ -79,7 +79,7 @@ apiGetH pid = do
   requestDumps <- dbtToEff $ RequestDumps.countRequestDumpByProject pid
   let bwconf =
         (def :: BWConfig)
-          { sessM = Just sess.persistentSession
+          { sessM = Just sess
           , currProject = Just project
           , pageTitle = "API Keys"
           , hasIntegrated = Just (requestDumps > 0)

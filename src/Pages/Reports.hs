@@ -116,7 +116,7 @@ singleReportGetH pid rid = do
   report <- dbtToEff $ Reports.getReportById rid
   let bwconf =
         (def :: BWConfig)
-          { sessM = Just sess.persistentSession
+          { sessM = Just sess
           , currProject = Just project
           , pageTitle = "Reports"
           }
@@ -136,7 +136,7 @@ reportsGetH pid page hxRequest hxBoosted = do
     _ -> do
       let bwconf =
             (def :: BWConfig)
-              { sessM = Just sess.persistentSession
+              { sessM = Just sess
               , currProject = Just project
               , pageTitle = "Reports"
               }

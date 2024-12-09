@@ -234,7 +234,7 @@ endpointDetailsH pid eid fromDStr toDStr sinceStr subPageM shapeHashM = do
   endpointM <- dbtToEff $ Endpoints.endpointById eid
   let bwconf =
         (def :: BWConfig)
-          { sessM = Just sess.persistentSession
+          { sessM = Just sess
           , currProject = Just project
           , pageTitle = "Endpoint Details"
           , menuItem = Just "Endpoints"

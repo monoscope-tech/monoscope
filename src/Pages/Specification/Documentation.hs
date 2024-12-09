@@ -338,7 +338,7 @@ documentationGetH pid swagger_id host = do
         Just h -> "OpenAPI/Swagger For " <> h
   let bwconf =
         (def :: BWConfig)
-          { sessM = Just sess.persistentSession
+          { sessM = Just sess
           , currProject = Just project
           , pageTitle = pageTitle
           }

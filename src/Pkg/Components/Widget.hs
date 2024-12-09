@@ -1,4 +1,4 @@
-module Pkg.Components.Widget (Widget (..), WidgetDataset (..), WidgetType (..), widget_, Layout (..)) where
+module Pkg.Components.Widget (Widget (..), WidgetDataset (..), widget_) where
 
 import Control.Lens
 import Data.Aeson qualified as AE

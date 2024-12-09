@@ -80,7 +80,7 @@ testingGetH pid filterTM timeFilter = do
           }
   let bwconf =
         (def :: BWConfig)
-          { sessM = Just sess.persistentSession
+          { sessM = Just sess
           , currProject = Just project
           , pageTitle = "Multistep API Tests (Beta)"
           , pageActions = Just $ a_ [href_ $ "/p/" <> pid.toText <> "/monitors/collection", class_ "btn btn-sm blue-outline-btn space-x-2"] $ Utils.faSprite_ "plus" "regular" "h-4" >> "new tests"
@@ -194,7 +194,7 @@ collectionDashboard pid cid = do
 
   let bwconf =
         (def :: BWConfig)
-          { sessM = Just sess.persistentSession
+          { sessM = Just sess
           , currProject = Just project
           , pageTitle = "API Tests (Beta)"
           , navTabs = Just $ pageTabs url overviewUrl

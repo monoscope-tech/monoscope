@@ -51,7 +51,7 @@ createProjectGetH = do
   sess <- Sessions.getSession
   let bwconf =
         (def :: BWConfig)
-          { sessM = Just sess.persistentSession
+          { sessM = Just sess
           , pageTitle = "Endpoints"
           }
   addRespHeaders $ bodyWrapper bwconf $ integrationsBody sess.persistentSession appCtx.config False (def @CreateProjectForm) Nothing Nothing
@@ -76,7 +76,7 @@ integrationsSettingsGetH pid = do
           }
   slackInfo <- getProjectSlackData pid
 
-  let bwconf = (def :: BWConfig){sessM = Just sess.persistentSession, currProject = Just project, pageTitle = "Integrations"}
+  let bwconf = (def :: BWConfig){sessM = Just sess, currProject = Just project, pageTitle = "Integrations"}
   addRespHeaders $ bodyWrapper bwconf $ integrationsBody sess.persistentSession appCtx.config True createProj (Just project.notificationsChannel) slackInfo
 
 

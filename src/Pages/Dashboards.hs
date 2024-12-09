@@ -4,17 +4,13 @@ import Control.Lens
 import Data.Aeson qualified as AE
 import Data.Default
 import Data.Effectful.UUID qualified as UUID
-import Data.Effectful.Wreq (HTTP)
-import Data.Effectful.Wreq qualified as W
 import Data.Generics.Labels ()
-import Data.Time (UTCTime, defaultTimeLocale, formatTime)
+import Data.Time (defaultTimeLocale, formatTime)
 import Data.Vector qualified as V
-import Data.Yaml qualified as Yml
 import Database.PostgreSQL.Entity qualified as DBT
 import Database.PostgreSQL.Entity.Types qualified as DBT
 import Database.PostgreSQL.Simple (Only (Only))
-import Effectful
-import Effectful.Error.Static (Error, throwError)
+import Effectful.Error.Static (throwError)
 import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
 import Effectful.Time qualified as Time
 import Lucid
@@ -30,8 +26,7 @@ import Pages.Charts.Charts qualified as Charts
 import Pkg.Components qualified as Components
 import Pkg.Components.Widget qualified as Widget
 import Relude
-import Servant (NoContent (NoContent), ServerError, err401, err404, errBody)
-import System.FilePath (takeExtension)
+import Servant (NoContent(..), errBody, err404)
 import System.Types
 import Utils (faIcon_, faSprite_)
 import Utils qualified
@@ -53,43 +48,15 @@ dashboardPage_ pid dash = div_ [class_ "mx-auto pt-2 px-6 gap-3.5 w-full flex fl
   script_ "GridStack.init()"
 
 
-decodeDashboard :: Text -> ByteString -> Either Text Dashboards.Dashboard
-decodeDashboard url content =
-  case takeExtension $ toString url of
-    ".json" -> bimap fromString Relude.id $ AE.eitherDecodeStrict content
-    ".yaml" -> bimap show Relude.id $ Yml.decodeEither' content
-    ".yml" -> bimap show Relude.id $ Yml.decodeEither' content
-    _ -> Left "Unsupported file extension. Use .json or .yaml/.yml."
+
+loadDashboardFromVM :: Dashboards.DashboardVM -> Maybe Dashboards.Dashboard
+loadDashboardFromVM dashVM = case dashVM.schema of
+  Just schema_ -> pure schema_
+  Nothing -> find (\d -> d.file == dashVM.baseTemplate) dashboardTemplates
 
 
--- Utility to load dashboard either from file or fallback
-loadDashboardURI :: (HTTP :> es, Error ServerError :> es) => Text -> Eff es Dashboards.Dashboard
-loadDashboardURI file = do
-  let maybeDashboard = find (\dashboard -> dashboard ^. #file == Just file) dashboardTemplates
-  case maybeDashboard of
-    Just dashboard -> pure dashboard
-    Nothing -> do
-      fileResp <- W.get (toString file)
-      decodeDashboard file (toStrict $ fileResp ^. W.responseBody)
-        & either
-          (\e -> throwError $ err401{errBody = ("Error decoding dashboard: " <> encodeUtf8 e)})
-          pure
-
-
-loadDashboardFromVM :: (HTTP :> es, Error ServerError :> es) => Dashboards.DashboardVM -> Eff es Dashboards.Dashboard
-loadDashboardFromVM dashVM =
-  case dashVM.schema of
-    Just schema_ -> pure schema_
-    Nothing ->
-      case dashVM.baseTemplate of
-        Just uri -> loadDashboardURI uri
-        Nothing -> pure defaultDashboard
-  where
-    defaultDashboard = Dashboards.Dashboard Nothing Nothing Nothing Nothing Nothing [] 
-
-
-dashboardGetH :: Projects.ProjectId -> Dashboards.DashboardId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders (PageCtx DashboardGet))
-dashboardGetH pid dashId fileM fromDStr toDStr sinceStr = do
+dashboardGetH :: Projects.ProjectId -> Dashboards.DashboardId ->Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders (PageCtx DashboardGet))
+dashboardGetH pid dashId fromDStr toDStr sinceStr = do
   (sess, project) <- Sessions.sessionAndProject pid
   now <- Time.currentTime
   let (_fromD, _toD, currentRange) = Components.parseTimeRange now (Components.TimePicker sinceStr fromDStr toDStr)
@@ -98,11 +65,7 @@ dashboardGetH pid dashId fileM fromDStr toDStr sinceStr = do
     (dbtToEff $ DBT.selectById @Dashboards.DashboardVM (Only dashId)) >>= \case
       Just v -> pure v
       Nothing -> throwError $ err404{errBody = ("Dashboard with ID not found. ID:" <> encodeUtf8 dashId.toText)}
-
-  dash <- case fileM of
-    Just file -> loadDashboardURI file
-    Nothing -> loadDashboardFromVM dashVM
-
+  dash <- maybe (throwError $ err404) pure (loadDashboardFromVM dashVM)
   dash' <- forOf (#widgets . traverse) dash \widget ->
     if (widget.eager == Just True)
       then do
@@ -121,9 +84,10 @@ dashboardGetH pid dashId fileM fromDStr toDStr sinceStr = do
 
   let bwconf =
         (def :: BWConfig)
-          { sessM = Just sess.persistentSession
+          { sessM = Just sess
           , currProject = Just project
-          , pageTitle = "Dashboards > " <> maybeToMonoid dash'.title
+          , prePageTitle = Just "Dashboards"
+          , pageTitle = maybeToMonoid dash'.title
           , pageActions = Just $ Components.timepicker_ Nothing currentRange
           }
   addRespHeaders $ PageCtx bwconf $ DashboardGet pid dash'
@@ -133,18 +97,9 @@ dashboardGetH pid dashId fileM fromDStr toDStr sinceStr = do
 -- Dashboard List
 --
 
-data DashboardItem = DashboardItem
-  { createdAt :: UTCTime
-  , title :: Text
-  , isHome :: Bool
-  , isStared :: Bool
-  , tags :: V.Vector Text
-  }
-  deriving (Show, Generic)
-
-
 data DashboardsGet = DashboardsGet
-  { dashboards :: V.Vector DashboardItem
+  { dashboards :: V.Vector Dashboards.DashboardVM
+  , projectId :: Projects.ProjectId
   }
   deriving (Show, Generic)
 
@@ -203,20 +158,23 @@ dashboardsGet_ dg = do
         input_ [type_ "text", class_ "grow", placeholder_ "Search", [__|on input show .itemsListItem in #itemsListPage when its textContent.toLowerCase() contains my value.toLowerCase()|]]
     -- button_
     div_ [class_ "grid grid-cols-2 gap-5"] do
-      forM_ dg.dashboards \dash -> div_ [class_ "rounded-xl border border-slate-200 gap-3.5 p-4 bg-slate-100 flex"] do
-        div_ [class_ "flex-1 space-y-2"] do
-          div_ [class_ "flex items-center gap-2"] do
-            strong_ [class_ "font-medium"] (toHtml dash.title)
-            a_ [class_ "leading-none", term "data-tippy-content" "This dashboard is currently your homepage."] $ when dash.isHome $ (faSprite_ "house" "regular" "w-4 h-4")
-          div_ [class_ "gap-2 flex items-center"] do
-            time_ [class_ "mr-2 text-slate-400", datetime_ $ Utils.formatUTC dash.createdAt] $ toHtml $ formatTime defaultTimeLocale "%eth %b %Y" dash.createdAt
-            forM_ dash.tags (a_ [class_ "cbadge-sm badge-neutral cbadge bg-slate-200"] . toHtml @Text)
-        div_ [class_ "flex items-center justify-center gap-3"] do
-          a_ [class_ "rounded-full border border-slate-300 p-2 leading-none text-gray-700"] $
-            if dash.isStared
-              then (faSprite_ "star" "solid" "w-5 h-5")
-              else (faSprite_ "star" "regular" "w-5 h-5")
-          div_ [class_ "space-x-2"] $ faSprite_ "chart-area" "regular" "w-5 h-5" >> (span_ "4 charts")
+      forM_ dg.dashboards \dashVM -> do
+        let dash = loadDashboardFromVM dashVM
+        a_ [class_ "rounded-xl border border-slate-200 gap-3.5 p-4 bg-slate-100 flex", href_ ("/p/" <> dg.projectId.toText <> "/dashboards/" <> dashVM.id.toText)] do
+          div_ [class_ "flex-1 space-y-2"] do
+            div_ [class_ "flex items-center gap-2"] do
+              strong_ [class_ "font-medium"] (toHtml dashVM.title)
+              span_ [class_ "leading-none", term "data-tippy-content" "This dashboard is currently your homepage."] do
+                when (isJust dashVM.homepageSince) $ (faSprite_ "house" "regular" "w-4 h-4")
+            div_ [class_ "gap-2 flex items-center"] do
+              time_ [class_ "mr-2 text-slate-400", datetime_ $ Utils.formatUTC dashVM.createdAt] $ toHtml $ formatTime defaultTimeLocale "%eth %b %Y" dashVM.createdAt
+              forM_ dashVM.tags (a_ [class_ "cbadge-sm badge-neutral cbadge bg-slate-200"] . toHtml @Text)
+          div_ [class_ "flex items-center justify-center gap-3"] do
+            button_ [class_ "rounded-full border border-slate-300 p-2 leading-none text-gray-700"] $
+              if isJust dashVM.starredSince
+                then (faSprite_ "star" "solid" "w-5 h-5")
+                else (faSprite_ "star" "regular" "w-5 h-5")
+            div_ [class_ "space-x-2"] $ faSprite_ "chart-area" "regular" "w-5 h-5" >> (span_ . toHtml $ maybe "0" (show . length . (.widgets)) dash <> " charts")
 
 
 dashboardsGetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders (PageCtx DashboardsGet))
@@ -228,24 +186,14 @@ dashboardsGetH pid = do
 
   let bwconf =
         (def :: BWConfig)
-          { sessM = Just sess.persistentSession
+          { sessM = Just sess
           , currProject = Just project
           , pageTitle = "Dashboards"
           , pageActions = Just $ (label_ [Lucid.for_ "newDashboardMdl", class_ "leading-none rounded-xl p-3 cursor-pointer bg-gradient-to-b from-[#067cff] to-[#0850c5] text-white"] "New Dashboard")
           }
   addRespHeaders $
     PageCtx bwconf $
-      DashboardsGet
-        { dashboards =
-            dashboards & V.map \dash ->
-              DashboardItem
-                { title = dash.title 
-                , isHome = isJust dash.homepageSince
-                , isStared = isJust dash.starredSince
-                , tags =  dash.tags 
-                , createdAt = now
-                }
-        }
+      DashboardsGet{dashboards, projectId = pid}
 
 
 data DashboardForm = DashboardForm
@@ -272,10 +220,10 @@ dashboardsPostH pid form = do
         , createdBy = sess.user.id
         , baseTemplate = if form.file == "" then Nothing else Just form.file
         , schema = Nothing
-        , starredSince = Nothing 
-        , homepageSince = Nothing 
-        , tags = V.fromList $ fromMaybe [] $ dashM >>= (.tags) 
-        , title = fromMaybe [] $ dashM >>= (.title) 
+        , starredSince = Nothing
+        , homepageSince = Nothing
+        , tags = V.fromList $ fromMaybe [] $ dashM >>= (.tags)
+        , title = fromMaybe [] $ dashM >>= (.title)
         }
   redirectCS redirectURI
   addRespHeaders NoContent
