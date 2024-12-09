@@ -39,7 +39,7 @@ metricsOverViewGetH pid tabM fromM toM sinceM sourceM prefixM = do
   let (from, to, currentRange) = parseTime fromM toM sinceM now
       bwconf =
         (def :: BWConfig)
-          { sessM = Just sess.persistentSession
+          { sessM = Just sess
           , currProject = Just project
           , pageTitle = "Metrics"
           , navTabs = Just $ div_ [class_ "tabs tabs-boxed tabs-md tabs-outline items-center bg-slate-200 text-slate-500"] do
