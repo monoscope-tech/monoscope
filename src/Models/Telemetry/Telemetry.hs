@@ -395,6 +395,8 @@ getDataPointsData pid dateRange = dbtToEff $ query Select (Query $ encodeUtf8 q)
              GROUP BY metric_name, metric_type, metric_unit, metric_description
              ORDER BY metric_name;
     |]
+
+
 getMetricData :: DB :> es => Projects.ProjectId -> Text -> Eff es (Maybe MetricDataPoint)
 getMetricData pid metricName = dbtToEff $ queryOne Select q (pid, metricName, pid, metricName)
   where

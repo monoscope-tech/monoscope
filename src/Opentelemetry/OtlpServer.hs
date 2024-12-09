@@ -469,7 +469,6 @@ metricsServiceExportH
   -> ServerRequest 'Normal ExportMetricsServiceRequest ExportMetricsServiceResponse
   -> IO (ServerResponse 'Normal ExportMetricsServiceResponse)
 metricsServiceExportH appLogger appCtx (ServerNormalRequest _meta (ExportMetricsServiceRequest req)) = do
-  traceShowM req
   _ <- runBackground appLogger appCtx do
     let projectKey = fromMaybe (error "Missing project key") $ getMetricAttributeValue "at-project-key" req
     projectIdM <- ProjectApiKeys.getProjectIdByApiKey projectKey
