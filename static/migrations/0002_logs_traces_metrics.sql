@@ -91,7 +91,7 @@ CREATE TABLE IF NOT EXISTS telemetry.metrics (
 
 SELECT create_hypertable('telemetry.metrics', by_range('timestamp', INTERVAL '1 hours'), migrate_data => true);
 
-SELECT add_retention_policy('telemetry.metrics', INTERVAL '3 days', true);
+SELECT add_retention_policy('telemetry.metrics', INTERVAL '30 days', true);
 
 CREATE INDEX idx_metrics_project_id_metric_name ON telemetry.metrics (project_id, metric_name, timestamp DESC);
 CREATE INDEX idx_metrics_project_id_resource_service_name ON telemetry.metrics (project_id, (resource->>'service.name'), timestamp DESC);
