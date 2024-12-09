@@ -121,7 +121,7 @@ getRequestID req = do
 
 
 sidebarClosedFromCookie :: Cookies -> Bool
-sidebarClosedFromCookie cookies = case L.lookup "sidebarClosed" cookies of
+sidebarClosedFromCookie cookies = case L.lookup "isSidebarClosed" cookies of
   Just "true" -> True
   Just _ -> False
   Nothing -> False

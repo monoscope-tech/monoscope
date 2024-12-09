@@ -65,9 +65,7 @@ dashboardGetH pid dashId fromDStr toDStr sinceStr = do
     (dbtToEff $ DBT.selectById @Dashboards.DashboardVM (Only dashId)) >>= \case
       Just v -> pure v
       Nothing -> throwError $ err404{errBody = ("Dashboard with ID not found. ID:" <> encodeUtf8 dashId.toText)}
-
   dash <- maybe (throwError $ err404) pure (loadDashboardFromVM dashVM)
-
   dash' <- forOf (#widgets . traverse) dash \widget ->
     if (widget.eager == Just True)
       then do

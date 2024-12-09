@@ -332,7 +332,6 @@ sideNav sess project pageTitle menuItem hasIntegrated = aside_ [class_ "border-r
         img_ [class_ "h-10 w-10 hidden sd-show", src_ "/public/assets/logo-mini.png"]
       label_ [class_ "cursor-pointer text-slate-700"] do
         input_ ([type_ "checkbox", class_ "hidden", id_ "sidenav-toggle", [__|on change call setCookie("isSidebarClosed", `${me.checked}`)|]] <> [checked_ | sess.isSidebarClosed])
-        -- script_ [text|document.getElementById("sidenav-toggle").checked=(getCookie("isSidebarClosed")=="true") |]
         faSprite_ "side-chevron-left-in-box" "regular" " h-5 w-5 rotate-180 group-has-[#sidenav-toggle:checked]/pg:rotate-0"
     div_ [class_ "mt-4 sd-px-0 dropdown block"] do
       a_
