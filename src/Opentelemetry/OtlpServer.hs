@@ -486,15 +486,11 @@ mapHTTPSpan s = do
         then Just $ convertSpanToRequestMessage s "apitoolkit-http-span"
         else
           if httpScope
-            then Just $ convertSpanToRequestMessage s scopeName
+            then Just $ convertSpanToRequestMessage s "@opentelemetry/instrumentation-undici"
             else Nothing
       where
         y = KEM.lookup "name" v
-        scopeName =
-          if y == Just "@opentelemetry/instrumentation-undici"
-            then "@opentelemetry/instrumentation-undici"
-            else "@opentelemetry/instrumentation-http"
-        httpScope = y == Just "@opentelemetry/instrumentation-undici" || y == Just "@opentelemetry/instrumentation-http"
+        httpScope = y == Just "@opentelemetry/instrumentation-undici"
         apitoolkitSpan = s.spanName == "apitoolkit-http-span"
     _ -> Nothing
 
