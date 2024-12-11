@@ -423,8 +423,8 @@ getMetricData pid metricName = dbtToEff $ queryOne Select q (pid, metricName, pi
         |]
 
 
-getMetricChartListData :: DB :> es => Projects.ProjectId -> Maybe Text -> Maybe Text -> (Maybe UTCTime, Maybe UTCTime) -> Eff es (V.Vector MetricChartListData)
-getMetricChartListData pid sourceM prefixM dateRange = dbtToEff $ query Select (Query $ encodeUtf8 q) pid
+getMetricChartListData :: DB :> es => Projects.ProjectId -> Maybe Text -> Maybe Text -> (Maybe UTCTime, Maybe UTCTime) -> Int -> Eff es (V.Vector MetricChartListData)
+getMetricChartListData pid sourceM prefixM dateRange cursor = dbtToEff $ query Select (Query $ encodeUtf8 q) pid
   where
     dateRangeStr = toText $ case dateRange of
       (Nothing, Just b) -> "AND timestamp BETWEEN NOW() AND '" <> formatTime defaultTimeLocale "%F %R" b <> "'"
@@ -436,11 +436,11 @@ getMetricChartListData pid sourceM prefixM dateRange = dbtToEff $ query Select (
     prefixFilter = case prefixM of
       Nothing -> ""
       Just prefix -> if prefix == "" || prefix == "all" then "" else "AND metric_name LIKE '" <> prefix <> "%'"
-
+    cursorTxt = show cursor
     q =
       [text|
         SELECT DISTINCT ON (metric_name) metric_name, metric_type, metric_unit, metric_description
-        FROM telemetry.metrics WHERE project_id = ? $sourceFilter $prefixFilter $dateRangeStr
+        FROM telemetry.metrics WHERE project_id = ? $sourceFilter $prefixFilter $dateRangeStr ORDER BY metric_name OFFSET $cursorTxt LIMIT 20;
      |]
 
 

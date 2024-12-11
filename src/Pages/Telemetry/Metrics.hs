@@ -23,6 +23,7 @@ import Data.Function (on)
 import Data.List qualified as L
 import Data.Text (Text, unpack)
 import Data.Text qualified as T
+import Data.Time (UTCTime)
 import Lucid.Htmx
 import Lucid.Hyperscript (__)
 import NeatInterpolation (text)
@@ -31,8 +32,8 @@ import Pages.Telemetry.Utils (metricsTree)
 import Pkg.Components.Widget qualified as Widget
 
 
-metricsOverViewGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders MetricsOverViewGet)
-metricsOverViewGetH pid tabM fromM toM sinceM sourceM prefixM = do
+metricsOverViewGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Int -> ATAuthCtx (RespHeaders MetricsOverViewGet)
+metricsOverViewGetH pid tabM fromM toM sinceM sourceM prefixM cursorM = do
   (sess, project) <- Sessions.sessionAndProject pid
   now <- Time.currentTime
   let tab = maybe "datapoints" (\t -> if t == "datapoints" then t else "charts") tabM
@@ -52,19 +53,33 @@ metricsOverViewGetH pid tabM fromM toM sinceM sourceM prefixM = do
       dataPoints <- Telemetry.getDataPointsData pid (from, to)
       addRespHeaders $ MetricsOVDataPointMain $ PageCtx bwconf (pid, dataPoints)
     else do
-      metricList <- Telemetry.getMetricChartListData pid sourceM prefixM (from, to)
+      let cursor = fromMaybe 0 cursorM
+      metricList <- Telemetry.getMetricChartListData pid sourceM prefixM (from, to) cursor
+      let sourceQ = maybe "" ("&source=" <>) sourceM
+          fromQ = maybe "" ("&from=" <>) fromM
+          toQ = maybe "" ("&from=" <>) toM
+          sinceQ = maybe "" ("&since=" <>) sinceM
+          prfixQ = maybe "" ("&prefix=" <>) prefixM
+          cursorQ = "&cursor=" <> show (cursor + 20)
+      let nextFetchUrl = "/p/" <> pid.toText <> "/metrics?tab=charts" <> sourceQ <> fromQ <> toQ <> sinceQ <> prfixQ <> cursorQ
       serviceNames <- Telemetry.getMetricServiceNames pid
-      addRespHeaders $ MetricsOVChartsMain $ PageCtx bwconf (pid, metricList, serviceNames, fromMaybe "all" sourceM, fromMaybe "all" prefixM)
+      if cursor == 0
+        then do
+          addRespHeaders $ MetricsOVChartsMain $ PageCtx bwconf (pid, metricList, serviceNames, fromMaybe "all" sourceM, fromMaybe "all" prefixM, nextFetchUrl)
+        else do
+          addRespHeaders $ MetricsOVChartsPaginated (pid, metricList, fromMaybe "all" sourceM, nextFetchUrl)
 
 
 data MetricsOverViewGet
   = MetricsOVDataPointMain (PageCtx (Projects.ProjectId, V.Vector Telemetry.MetricDataPoint))
-  | MetricsOVChartsMain (PageCtx (Projects.ProjectId, V.Vector Telemetry.MetricChartListData, V.Vector Text, Text, Text))
+  | MetricsOVChartsMain (PageCtx (Projects.ProjectId, V.Vector Telemetry.MetricChartListData, V.Vector Text, Text, Text, Text))
+  | MetricsOVChartsPaginated (Projects.ProjectId, V.Vector Telemetry.MetricChartListData, Text, Text)
 
 
 instance ToHtml MetricsOverViewGet where
   toHtml (MetricsOVDataPointMain (PageCtx bwconf (pid, datapoints))) = toHtml $ PageCtx bwconf $ dataPointsPage pid datapoints
-  toHtml (MetricsOVChartsMain (PageCtx bwconf (pid, mList, serviceNames, source, prefix))) = toHtml $ PageCtx bwconf $ chartsPage pid mList serviceNames source prefix
+  toHtml (MetricsOVChartsMain (PageCtx bwconf (pid, mList, serviceNames, source, prefix, nextUrl))) = toHtml $ PageCtx bwconf $ chartsPage pid mList serviceNames source prefix nextUrl
+  toHtml (MetricsOVChartsPaginated (pid, mList, source, nextUrl)) = toHtml $ chartList pid source mList nextUrl
   toHtmlRaw = toHtml
 
 
@@ -76,8 +91,8 @@ overViewTabs pid tab = do
       a_ [onclick_ "window.setQueryParamAndReload('tab', 'charts')", role_ "tab", class_ $ "tab py-1.5 !h-auto " <> if tab == "charts" then "tab-active" else ""] "Charts List"
 
 
-chartsPage :: Projects.ProjectId -> V.Vector Telemetry.MetricChartListData -> V.Vector Text -> Text -> Text -> Html ()
-chartsPage pid metricList sources source mFilter = do
+chartsPage :: Projects.ProjectId -> V.Vector Telemetry.MetricChartListData -> V.Vector Text -> Text -> Text -> Text -> Html ()
+chartsPage pid metricList sources source mFilter nextUrl = do
   div_ [class_ "flex flex-col gap-6 px-6 py-4 h-[calc(100%-60px)] overflow-y-scroll"] $ do
     overViewTabs pid "charts"
     div_ [class_ "w-full"] do
@@ -118,48 +133,47 @@ chartsPage pid metricList sources source mFilter = do
               option_ ([selected_ "all" | "all" == mFilter] ++ [value_ "all"]) "All"
               forM_ (ordNub metricNames) $ \m -> option_ ([selected_ m | m == mFilter] ++ [value_ m]) $ toHtml m
     div_ [class_ "w-full grid grid-cols-3 gap-4", id_ "metric_list_container"] $ do
-      forM_ metricList $ \metric -> do
-        div_ [class_ "w-full flex flex-col gap-2 metric_filterble"] do
-          -- div_ [class_ "w-full justify-between flex gap-2 items-center"] do
-          --   div_ [class_ "flex gap-1 items-center"] do
-          --     span_ [class_ "text-sm"] $ toHtml metric.metricName
-          --     span_ [term "data-tippy-content" metric.metricDescription] $ faSprite_ "circle-info" "regular" "w-3 h-3 text-slate-500"
-          --   let detailUrl = "/p/" <> pid.toText <> "/metrics/details/" <> metric.metricName <> "/?source=" <> source
-          --   button_
-          --     [ class_ "btn border border-slate-200 btn-xs btn-circle"
-          --     , term "_" $
-          --         [text|on mousedown or click set #global-data-drawer.checked to true
-          --         then set #global-data-drawer-content.innerHTML to #loader-tmp.innerHTML
-          --         then fetch $detailUrl
-          --         then set #global-data-drawer-content.innerHTML to it
-          --         then htmx.process(#global-data-drawer-content)
-          --         then _hyperscript.processNode(#global-data-drawer-content)
-          --         then window.evalScriptsFromContent(#global-data-drawer-content)|]
-          --     ]
-          --     do
-          --       faSprite_ "up-right-and-down-left-from-center" "regular" "w-3 h-3 text-slate-500"
-          div_ [class_ "h-52"] $
-            toHtml $
-              Widget.Widget
-                { wType = Widget.WTDistribution
-                , id = Nothing
-                , title = Just metric.metricName
-                , subtitle = Nothing
-                , sql = Nothing
-                , query = Just $ "metric_name = \"" <> metric.metricName <> "\""
-                , queries = Nothing
-                , layout = Just $ Widget.Layout{x = Just 0, y = Just 0, w = Just 2, h = Just 1}
-                , xAxis = Nothing
-                , yAxis = Nothing
-                , unit = Just metric.metricUnit
-                , value = Nothing
-                , wData = Nothing
-                , hideLegend = Just True
-                , theme = Nothing
-                , dataset = Nothing
-                , eager = Just True
-                , _projectId = Just pid
-                }
+      chartList pid source metricList nextUrl
+
+
+chartList :: Projects.ProjectId -> Text -> V.Vector Telemetry.MetricChartListData -> Text -> Html ()
+chartList pid source metricList nextUrl = do
+  forM_ metricList $ \metric -> do
+    div_ [class_ "w-full flex flex-col gap-2 metric_filterble"] do
+      let detailUrl = "/p/" <> pid.toText <> "/metrics/details/" <> metric.metricName <> "/?source=" <> source
+      let expandBtn =
+            [text|on mousedown or click set #global-data-drawer.checked to true
+                  then set #global-data-drawer-content.innerHTML to #loader-tmp.innerHTML
+                  then fetch $detailUrl
+                  then set #global-data-drawer-content.innerHTML to it
+                  then htmx.process(#global-data-drawer-content)
+                  then _hyperscript.processNode(#global-data-drawer-content)
+                  then window.evalScriptsFromContent(#global-data-drawer-content)|]
+      div_ [class_ "h-52"] $
+        toHtml $
+          Widget.Widget
+            { wType = Widget.WTDistribution
+            , id = Nothing
+            , title = Just metric.metricName
+            , subtitle = Nothing
+            , sql = Nothing
+            , query = Just $ "metric_name = \"" <> metric.metricName <> "\""
+            , queries = Nothing
+            , layout = Just $ Widget.Layout{x = Just 0, y = Just 0, w = Just 2, h = Just 1}
+            , xAxis = Nothing
+            , yAxis = Nothing
+            , unit = Just metric.metricUnit
+            , value = Nothing
+            , wData = Nothing
+            , hideLegend = Just True
+            , theme = Nothing
+            , dataset = Nothing
+            , eager = Just True
+            , _projectId = Just pid
+            , expandBtnFn = Just expandBtn
+            }
+  when (length metricList > 19) $
+    a_ [hxTrigger_ "intersect once", hxSwap_ "outerHTML", hxGet_ nextUrl] pass
 
 
 dataPointsPage :: Projects.ProjectId -> V.Vector Telemetry.MetricDataPoint -> Html ()

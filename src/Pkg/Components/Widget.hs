@@ -63,6 +63,7 @@ data Widget = Widget
   , -- eager
     eager :: Maybe Bool
   , _projectId :: Maybe Projects.ProjectId
+  , expandBtnFn :: Maybe Text
   }
   deriving stock (Show, Generic, THS.Lift)
   deriving anyclass (NFData)
@@ -118,7 +119,12 @@ widget_ w =
             span_ [class_ $ "bg-slate-200 px-2 py-1 rounded-3xl " <> if hasValue then "" else "hidden", id_ $ chartId <> "Value"] $
               whenJust (widget.dataset >>= (.value)) (\x -> toHtml @String $ Ft.fmt $ Ft.commaizeF $ round x)
             span_ [class_ "text-slate-400 widget-subtitle text-sm", id_ $ chartId <> "Subtitle"] $ toHtml $ maybeToMonoid rateM
-          label_ [class_ "rounded-full border border-slate-300 p-2 inline-flex cursor-pointer"] $ Utils.faSprite_ "up-right-and-down-left-from-center" "regular" "w-3 h-3"
+          button_
+            [ term "_" $ fromMaybe "" widget.expandBtnFn
+            , class_ "rounded-full border border-slate-300 p-2 inline-flex cursor-pointer"
+            ]
+            do
+              Utils.faSprite_ "up-right-and-down-left-from-center" "regular" "w-3 h-3"
         div_ [class_ "flex-1 pb-1"] do
           div_ [class_ "h-full rounded-2xl border border-slate-200 p-3 bg-slate-50", id_ $ maybeToMonoid widget.id] ""
           let theme = maybeToMonoid widget.theme

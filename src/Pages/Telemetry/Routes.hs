@@ -5,7 +5,7 @@ import Models.Projects.Projects qualified as Projects
 import Pages.Telemetry.Metrics qualified as Metrics
 import Pages.Telemetry.Spans qualified as Spans
 import Pages.Telemetry.Trace qualified as Trace
-import Relude (Generic, Text)
+import Relude (Generic, Int, Text)
 import Servant (
   Capture,
   GenericMode (type (:-)),
@@ -21,6 +21,7 @@ import System.Types (ATAuthCtx, RespHeaders)
 
 
 type QPT a = QueryParam a Text
+type QPI a = QueryParam a Int
 
 
 type role Routes' nominal
@@ -32,7 +33,7 @@ type Routes = NamedRoutes Routes'
 data Routes' mode = Routes'
   { tracesGet :: mode :- "traces" :> Capture "trace_id" Text :> QPT "span_id" :> QPT "nav" :> Get '[HTML] (RespHeaders Trace.TraceDetailsGet)
   , spanGetH :: mode :- "spans" :> Capture "trace_id" Text :> Capture "span_id" Text :> Get '[HTML] (RespHeaders (Html ()))
-  , metricsOVGetH :: mode :- "metrics" :> QPT "tab" :> QPT "from" :> QPT "to" :> QPT "since" :> QPT "metric_source" :> QPT "metric_prefix" :> Get '[HTML] (RespHeaders Metrics.MetricsOverViewGet)
+  , metricsOVGetH :: mode :- "metrics" :> QPT "tab" :> QPT "from" :> QPT "to" :> QPT "since" :> QPT "metric_source" :> QPT "metric_prefix" :> QPI "cursor" :> Get '[HTML] (RespHeaders Metrics.MetricsOverViewGet)
   , metricDetailsGetH :: mode :- "metrics" :> "details" :> Capture "metric_name" Text :> QPT "from" :> QPT "to" :> QPT "since" :> QPT "metric_source" :> Get '[HTML] (RespHeaders (Html ()))
   , metricBreakdownGetH :: mode :- "metrics" :> "details" :> Capture "metric_name" Text :> "breakdown" :> QPT "label" :> Get '[HTML] (RespHeaders (Html ()))
   }
