@@ -42,11 +42,18 @@ instance ToHtml DashboardGet where
 
 
 dashboardPage_ :: Projects.ProjectId -> Dashboards.Dashboard -> Html ()
-dashboardPage_ pid dash = div_ [class_ "mx-auto pt-2 px-6 gap-3.5 w-full flex flex-col h-full overflow-hidden pb-12 group/pg", id_ "dashboardPage"] do
-  div_ "" -- variables selector area
-  div_ [class_ "grid-stack"] $ forM_ dash.widgets (\w -> toHtml (w{Widget._projectId = Just pid}))
-  script_ "GridStack.init()"
+dashboardPage_ pid dash = do
+  Components.modal_ "pageTitleModalId" "" $ form_
+    [class_ "flex flex-col p-3 gap-3"]
+    do
+      label_ [class_ "form-control w-full max-w-xs"] do
+        div_ [class_ "label"] $ span_ [class_ "label-text"] "Change Dashboard Title"
+        input_ [class_ "input input-bordered w-full max-w-xs", placeholder_ "Insert new title", value_ $ maybeToMonoid dash.title]
 
+  div_ [class_ "mx-auto pt-2 px-6 gap-3.5 w-full flex flex-col h-full overflow-hidden pb-12 group/pg", id_ "dashboardPage"] do
+    div_ "" -- variables selector area
+    div_ [class_ "grid-stack"] $ forM_ dash.widgets (\w -> toHtml (w{Widget._projectId = Just pid}))
+    script_ "GridStack.init()"
 
 loadDashboardFromVM :: Dashboards.DashboardVM -> Maybe Dashboards.Dashboard
 loadDashboardFromVM dashVM = case dashVM.schema of
@@ -87,6 +94,7 @@ dashboardGetH pid dashId fromDStr toDStr sinceStr = do
           , currProject = Just project
           , prePageTitle = Just "Dashboards"
           , pageTitle = maybeToMonoid dash'.title
+          , pageTitleModalId = Just "dashbordTitleMdl"
           , pageActions = Just $ Components.timepicker_ Nothing currentRange
           }
   addRespHeaders $ PageCtx bwconf $ DashboardGet pid dash'
@@ -149,7 +157,6 @@ dashboardsGet_ dg = do
           div_ [class_ "flex items-center justify-center shrink"] $ button_ [class_ "leading-none rounded-xl p-3 cursor-pointer bg-gradient-to-b from-[#067cff] to-[#0850c5] text-white", type_ "submit"] "Select dashboard"
         div_ [class_ "pt-5"] do
           div_ [class_ "bg-[#1e9cff] px-5 py-8 rounded-xl"] $ img_ [src_ "/public/assets/svgs/screens/dashboard_blank.svg", class_ "w-full"]
-
   div_ [id_ "itemsListPage", class_ "mx-auto px-6 pt-4 gap-8 w-full flex flex-col h-full overflow-hidden pb-12  group/pg"] do
     div_ [class_ "flex"] do
       label_ [class_ "input input-md input-bordered flex-1 flex bg-slate-100 border-slate-200 shadow-none overflow-hidden items-center gap-2"] do
@@ -180,9 +187,7 @@ dashboardsGetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders (PageCtx Dashboar
 dashboardsGetH pid = do
   (sess, project) <- Sessions.sessionAndProject pid
   now <- Time.currentTime
-
   dashboards <- dbtToEff $ DBT.selectManyByField @Dashboards.DashboardVM [DBT.field| project_id |] pid
-
   let bwconf =
         (def :: BWConfig)
           { sessM = Just sess

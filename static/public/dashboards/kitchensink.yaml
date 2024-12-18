@@ -45,6 +45,12 @@ widgets:
     eager: true
 
   - type: "timeseries"
+    title: "GET requests"
+    query: method == "GET" | timechart count(*) by method 
+    layout: { w: 4, h: 2 }
+    eager: true
+
+  - type: "timeseries"
     title: "POST requests by method"
     query:  timechart count(*) by method 
     layout: { w: 4, h: 2 }

@@ -36,7 +36,7 @@ data Layout = Layout
   deriving (AE.FromJSON, AE.ToJSON) via DAES.Snake Layout
 
 
-data WidgetType = WTTimeseries | WTList | WTTopList | WTDistribution | WTGeomap | WTFunnel | WTTreeMap | WTPieChart
+data WidgetType = WTTimeseries | WTTimeseriesStat | WTList | WTTopList | WTDistribution | WTGeomap | WTFunnel | WTTreeMap | WTPieChart
   deriving stock (Show, Generic, Enum, THS.Lift)
   deriving anyclass (NFData)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.ConstructorTagModifier '[DAE.StripPrefix "WT", DAE.CamelToSnake]] WidgetType

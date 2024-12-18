@@ -1,0 +1,22 @@
+title: HTTP Stats 
+refresh_interval: 60s 
+widgets:
+  - type: "timeseries"
+    title: "Requests by status code"
+    query: timechart count(*) by status_code 
+    layout: { w: 6, h: 3 }
+
+  - type: "timeseries"
+    title: "Requests by Latency"
+    query: timechart count(*) by status_code 
+    layout: { w: 6, h: 3 }
+
+  - type: "timeseries"
+    title: "Errors"
+    query: status_code >= 300 | timechart count(*) by status_code 
+    layout: { w: 6, h: 3 }
+
+  - type: "timeseries"
+    title: "Requests by Endpoint"
+    query: timechart count(*) by method,url_path 
+    layout: { w: 6, h: 3 }
