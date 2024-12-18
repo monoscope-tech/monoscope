@@ -72,6 +72,8 @@ data SDKTypes
   | JsExpress
   | JsNest
   | JsFastify
+  | JsAdonis
+  | JsNext
   | JavaSpringBoot
   | JsAxiosOutgoing
   | JsOutgoing
@@ -80,7 +82,6 @@ data SDKTypes
   | PythonFlask
   | PythonDjango
   | PythonOutgoing
-  | JsAdonis
   | PhpSlim
   | GuzzleOutgoing
   | ElixirPhoenix
@@ -128,6 +129,7 @@ parseSDKType "JavaSpring" = JavaSpring
 parseSDKType "JavaApacheOutgoing" = JavaApacheOutgoing
 parseSDKType "JavaVertx" = JavaVertx
 parseSDKType "JsOutgoing" = JsOutgoing
+parseSDKType "JsNext" = JsNext
 parseSDKType _ = JsExpress
 instance FromField SDKTypes where
   fromField f mdata = do
@@ -207,6 +209,7 @@ normalizeUrlPath JavaSpring statusCode _method urlPath = removeQueryParams statu
 normalizeUrlPath JavaApacheOutgoing statusCode _method urlPath = removeQueryParams statusCode urlPath
 normalizeUrlPath JavaVertx statusCode _method urlPath = removeQueryParams statusCode urlPath
 normalizeUrlPath JsOutgoing statusCode _method urlPath = removeQueryParams statusCode urlPath
+normalizeUrlPath JsNext statusCode _method urlPath = removeQueryParams statusCode urlPath
 
 
 -- getRequestType ...
