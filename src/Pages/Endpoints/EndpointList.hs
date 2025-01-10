@@ -92,7 +92,7 @@ endpointListGetH pid pageM layoutM filterTM hostM requestTypeM sortM hxRequestM 
                   ]
               , heading = Just $ do
                   case hostM of
-                    Just h -> span_ [] "Endpoints for dependency: " >> span_ [class_ "text-blue-500 font-bold"] (toHtml h)
+                    Just h -> span_ [] "Endpoints for dependency: " >> span_ [class_ "text-brand font-bold"] (toHtml h)
                     Nothing -> "Endpoints"
               , search = Just $ ItemsList.SearchCfg{viaQueryParam = Just (fromMaybe "" searchM)}
               , zeroState =
@@ -151,7 +151,7 @@ renderEndpoint activePage currTime enp = do
         a_ [class_ "inline-block font-bold text-red-700 space-x-2", href_ ("/p/" <> enp.projectId.toText <> "/endpoints/" <> Endpoints.endpointIdText enp.endpointId)] $ do
           span_ [class_ $ "endpoint endpoint-" <> T.toLower enp.method, data_ "enp-urlMethod" enp.method] $ toHtml enp.method
           span_ [class_ " inconsolata text-base text-slate-700", data_ "enp-urlPath" enp.urlPath] $ toHtml $ if T.null enp.urlPath then "/" else T.take 150 enp.urlPath
-        a_ [class_ "text-blue-500  hover:text-slate-600", href_ ("/p/" <> enp.projectId.toText <> "/log_explorer?query=" <> "url_path==\"" <> enp.urlPath <> "\"")] "View logs"
+        a_ [class_ "text-brand  hover:text-slate-600", href_ ("/p/" <> enp.projectId.toText <> "/log_explorer?query=" <> "url_path==\"" <> enp.urlPath <> "\"")] "View logs"
     div_ [class_ "w-36 flex items-center justify-center"] $ span_ [class_ "tabular-nums text-xl", term "data-tippy-content" "Events for this Anomaly in the last 14days"] $ toHtml @String $ fmt $ commaizeF enp.totalRequests
     div_ [class_ "flex items-center justify-center "]
       $ div_

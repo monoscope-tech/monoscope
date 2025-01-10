@@ -117,12 +117,12 @@ expandAPIlogItem' pid req modal = do
           a_ [href_ endpointURl] do
             faSprite_ "arrow-up-right" "regular" "h-8 w-8 p-2 blue-gr-btn rounded-full"
       div_ [class_ "flex gap-2 mt-4"] do
-        statBox_ Nothing (Just ("clock", "regular", "text-blue-500")) "Latency" "Latency" (toText $ getDurationNSMS req.durationNs) Nothing Nothing
+        statBox_ Nothing (Just ("clock", "regular", "text-brand")) "Latency" "Latency" (toText $ getDurationNSMS req.durationNs) Nothing Nothing
         let reqSize = BS.length $ AE.encode req.requestBody
-        statBox_ Nothing (Just ("upload", "regular", "text-blue-500")) "Request size" "Total request body size in bytes" (show (reqSize - 2)) Nothing Nothing
+        statBox_ Nothing (Just ("upload", "regular", "text-brand")) "Request size" "Total request body size in bytes" (show (reqSize - 2)) Nothing Nothing
         let respSize = BS.length $ AE.encode req.responseBody
-        statBox_ Nothing (Just ("download", "regular", "text-blue-500")) "Response size" "Total response body size in bytes" (show (respSize - 2)) Nothing Nothing
-        statBox_ Nothing (Just ("stack", "regular", "text-blue-500")) "Framework" "Framework used to handle this the request" (show req.sdkType) Nothing Nothing
+        statBox_ Nothing (Just ("download", "regular", "text-brand")) "Response size" "Total response body size in bytes" (show (respSize - 2)) Nothing Nothing
+        statBox_ Nothing (Just ("stack", "regular", "text-brand")) "Framework" "Framework used to handle this the request" (show req.sdkType) Nothing Nothing
 
     -- errors
     when (req.errorsCount > 0) $ div_ [class_ "mt-4"] do

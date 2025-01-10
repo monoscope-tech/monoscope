@@ -261,7 +261,7 @@ timelineSteps_ steps colM =
                 label_ [class_ "relative inline-flex items-center cursor-pointer space-x-1"] do
                   input_ [type_ "checkbox", class_ "checkbox checkbox-sm editormode", id_ "test-code-toggle", onchange_ "codeToggle(event)"] >> span_ [class_ "text-sm font-medium"] "Code editor"
                 button_
-                  [ class_ "border flex items-center gap-1 text-sm font-medium rounded-lg border-blue-500 text-blue-500 px-2 py-1"
+                  [ class_ "border flex items-center gap-1 text-sm font-medium rounded-lg border-blue-500 text-brand px-2 py-1"
                   , hxPatch_ $ "/p/" <> col.projectId.toText <> "/monitors/" <> col.id.toText
                   , hxParams_ "stepsData"
                   , hxExt_ "json-enc"

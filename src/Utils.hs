@@ -197,7 +197,7 @@ getGrpcStatusColor status
 
 getSeverityColor :: Text -> Text
 getSeverityColor "debug" = "text-gray-500 bg-gray-100"
-getSeverityColor "info" = "text-blue-500 bg-blue-100"
+getSeverityColor "info" = "text-brand bg-blue-100"
 getSeverityColor "warning" = "text-yellow-700 bg-yellow-100"
 getSeverityColor "error" = "text-red-500 bg-red-100"
 getSeverityColor "critical" = "text-red-700 bg-red-200 font-bold"

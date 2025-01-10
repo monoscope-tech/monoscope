@@ -170,10 +170,10 @@ mainContent pid apiKeys newKeyM = section_ [id_ "main-content"] do
                       $ T.take 8 apiKey.keyPrefix
                       <> "********************************************"
                     button_
-                      [ class_ "text-blue-500"
+                      [ class_ "text-brand"
                       , term "data-key" apiKey.keyPrefix
                       , term "data-prefix" (T.take 8 apiKey.keyPrefix <> "********************************************")
-                      , [__| on click  if my innerText is "show" 
+                      , [__| on click  if my innerText is "show"
                                  put  @data-key into previous <span/>
                                  put "hide" into me
                                  exit
@@ -186,7 +186,7 @@ mainContent pid apiKeys newKeyM = section_ [id_ "main-content"] do
                       ]
                       "show"
                     button_
-                      [ class_ "text-blue-500 ml-2"
+                      [ class_ "text-brand ml-2"
                       , term "data-key" apiKey.keyPrefix
                       , [__| on click if 'clipboard' in window.navigator then
                           call navigator.clipboard.writeText(my @data-key)
@@ -254,7 +254,7 @@ copyNewApiKey newKeyM hasNext =
                     else do
                       button_
                         [ type_ "button"
-                        , class_ "ml-6 font-medium px-2 py-1.5 rounded-md font-medium text-blue-500"
+                        , class_ "ml-6 font-medium px-2 py-1.5 rounded-md font-medium text-brand"
                         , [__|on click call window.location.reload()|]
                         ]
                         "Next"

@@ -133,7 +133,7 @@ fieldDetailsView field formats = do
                     formats & mapM_ \f -> do
                       input_ [type_ "text", name_ "formats", value_ f.fieldFormat]
                   button_
-                    [ class_ "rounded-full py-1 px-2 w-max bg-blue-100 text-blue-500  mt-2 flex items-center gap-1"
+                    [ class_ "rounded-full py-1 px-2 w-max bg-blue-100 text-brand  mt-2 flex items-center gap-1"
                     , onclick_ ""
                     , type_ "button"
                     , [__| on click append "<input type=\"text\" name=\"formats\">"  to #formats|]

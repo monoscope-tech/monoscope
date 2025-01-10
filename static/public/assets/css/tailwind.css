@@ -26,9 +26,11 @@
   .tabs-outline :is(.tab-active, [aria-selected='true']):not(.tab-disabled):not([disabled]):hover {
     @apply bg-slate-25 shadow;
   }
+
   .tabs-boxed :is(input:checked) {
     @apply bg-slate-25;
   }
+
   .tabs-outline .tab {
     @apply !text-slate-800 font-medium;
   }
@@ -37,11 +39,13 @@
 :root,
 [data-theme] {
   --backgroundPrimary: #fff;
-  --rounded-btn: 0.85rem;
+  --rounded-btn: 0.5rem;
 }
 
-html, body {
+html,
+body {
   @apply overscroll-none bg-slate-25;
+  --brand-color: #0068ff;
 }
 
 .c-scroll::-webkit-scrollbar {
@@ -52,6 +56,7 @@ html, body {
 .c-scroll::-webkit-scrollbar-track {
   background: transparent;
 }
+
 /* Handle */
 .c-scroll::-webkit-scrollbar-thumb {
   @apply bg-gray-200 opacity-70;
@@ -108,7 +113,7 @@ html, body {
 }
 
 .path-method-get {
-  @apply text-blue-500;
+  @apply text-[var(--brand-color)];
 }
 
 .endpoint_active {
@@ -179,6 +184,30 @@ html, body {
 
 .htmx-request.steps-indicator > .loading-indicator {
   display: block;
+}
+
+.text-strong {
+  color: #000626;
+}
+
+.text-weak {
+  color: #000933;
+}
+.text-brand {
+  @apply text-[var(--brand-color)];
+}
+.bg-brand {
+  @apply bg-[var(--brand-color)];
+}
+.input,
+.select,
+.checkbox,
+.textarea {
+  @apply shadow-none;
+  border-color: rgba(0, 13, 77, 0.45);
+}
+.stroke-strong {
+  border-color: rgba(0, 13, 77, 0.45);
 }
 
 @layer components {
@@ -274,6 +303,7 @@ html, body {
 .collapsed .log-item-tree-chevron {
   @apply rotate-0;
 }
+
 .collapsed .waterfall-item-tree-chevron {
   @apply rotate-90;
 }
@@ -281,6 +311,7 @@ html, body {
 .b--b2 {
   border-color: oklch(var(--b2));
 }
+
 .b--b2 > :not([hidden]) ~ :not([hidden]) {
   border-color: oklch(var(--b2));
 }
@@ -374,6 +405,7 @@ html, body {
 .sdk_tab_active {
   @apply border-blue-500 border ring ring-blue-500 shadow-lg;
 }
+
 .t-tab-active {
   @apply font-medium border-blue-400;
 }
@@ -381,75 +413,98 @@ html, body {
 .tab:is(input[type='radio']) {
   width: max-content;
 }
+
 .tree_opened ~ .children_container {
   display: flex;
 }
+
 .tree_opened .toggler {
   transform: rotate(180deg);
 }
+
 @layer components {
   .blue-gr-btn {
     @apply bg-gradient-to-b text-white font-medium from-blue-500 to-blue-600;
   }
+
   .blue-outline-btn {
-    @apply border-blue-500 text-blue-500 font-medium;
+    @apply border-blue-500 text-[var(--brand-color)] font-medium;
   }
+
   .cbadge {
     @apply px-3 py-1.5 text-sm rounded-xl;
   }
 
   .cbadge-sm {
-   @apply  px-2 py-1 text-sm rounded-xl;
+    @apply px-2 py-1 text-sm rounded-xl;
   }
+
   .badge-2xx {
     @apply bg-green-100 text-green-700;
   }
+
   .badge-success {
     @apply bg-green-100 text-green-700 font-medium;
   }
+
   .badge-error {
     @apply bg-red-100 text-red-700 font-medium;
   }
+
   .badge-3xx {
     @apply bg-amber-100 text-amber-800;
   }
+
   .badge-2xx {
     @apply bg-green-100 text-green-700;
   }
+
   .badge-4xx {
     @apply bg-red-50 text-red-800;
   }
+
   .badge-neutral {
     @apply bg-slate-150 text-slate-700;
   }
+
   .badge-blue {
-    @apply text-blue-500 bg-[#d6efff];
+    @apply text-[var(--brand-color)] bg-[#d6efff];
   }
+
   .badge-green {
     @apply text-green-500 bg-green-100;
   }
+
   .badge-green {
     @apply text-amber-500 bg-amber-100;
   }
+
   .badge-lime {
     @apply bg-lime-200 text-lime-600;
   }
+
   .badge-pink {
     @apply bg-pink-100 text-pink-600;
   }
+
   .badge-cyan {
     @apply bg-cyan-100 text-cyan-600;
   }
+
   .ctable :where(.table-pin-rows thead tr) {
     @apply sticky top-0 z-10 bg-slate-25;
   }
+
   .ctable :where(.table-pin-cols tr th) {
     @apply sticky left-0 right-0 z-10;
   }
+
   .ctable td > div {
     @apply py-1;
   }
-  .ctable .log-row.htmx-added, .ctable .log-row.htmx-settling {
+
+  .ctable .log-row.htmx-added,
+  .ctable .log-row.htmx-settling {
     @apply bg-[#d6efff] transition-colors duration-300 ease-in-out;
   }
 }

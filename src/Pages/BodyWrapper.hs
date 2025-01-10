@@ -231,7 +231,7 @@ bodyWrapper BWConfig{sessM, currProject, prePageTitle, pageTitle, menuItem, hasI
               div_ [class_ "flex w-full justify-end items-center p-6 space-x-2 border-t border-gray-200 rounded-b"] pass
       case sessM of
         Nothing -> do
-          section_ [class_ "flex flex-col grow  h-screen overflow-y-hidden"] 
+          section_ [class_ "flex flex-col grow  h-screen overflow-y-hidden"]
             $ section_ [class_ "flex-1 overflow-y-auto"] $ child
         Just sess ->
           let currUser = sess.persistentSession.user.getUser
@@ -324,7 +324,7 @@ projectsDropDown currProject projects = do
 
 
 sideNav :: Sessions.Session -> Projects.Project -> Text -> Maybe Text -> Maybe Bool -> Html ()
-sideNav sess project pageTitle menuItem hasIntegrated = aside_ [class_ "border-r bg-slate-100 border-slate-200 w-15 group-has-[#sidenav-toggle:checked]/pg:w-72  h-screen transition-all duration-200 ease-in-out flex flex-col justify-between", id_ "side-nav-menu"] do
+sideNav sess project pageTitle menuItem hasIntegrated = aside_ [class_ "border-r bg-slate-50 border-slate-200 w-15 group-has-[#sidenav-toggle:checked]/pg:w-72  h-screen transition-all duration-200 ease-in-out flex flex-col justify-between", id_ "side-nav-menu"] do
   div_ [class_ "px-2 group-has-[#sidenav-toggle:checked]/pg:px-6"] do
     div_ [class_ "py-5 flex justify-center group-has-[#sidenav-toggle:checked]/pg:justify-between items-center"] do
       a_ [href_ "/", class_ "inline-flex"] do
@@ -346,7 +346,7 @@ sideNav sess project pageTitle menuItem hasIntegrated = aside_ [class_ "border-r
       -- FIXME: reeanable hx-boost hxBoost_ "true"
       menu project.id & mapM_ \(mTitle, mUrl, fIcon) -> do
         let isActive = maybe (pageTitle == mTitle) (== mTitle) menuItem
-        let activeCls = if isActive then " bg-slate-250 text-slate-800 " else "!border-transparent"
+        let activeCls = if isActive then " bg-[#00157f]/5 text-strong stroke-strong" else "!border-transparent"
         a_
           [ href_ mUrl
           , term "data-tippy-placement" "right"
@@ -380,7 +380,7 @@ sideNav sess project pageTitle menuItem hasIntegrated = aside_ [class_ "border-r
       , term "data-tippy-content" "Documentation"
       , href_ "https://apitoolkit.io/docs/"
       ]
-        $ span_ [class_ "p-3 rounded-full bg-blue-100 text-blue-500 leading-none"] (faSprite_ "circle-question" "regular" "h-4 w-4") >> span_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:block"] "Documentation"
+        $ span_ [class_ "p-3 rounded-full bg-blue-100 text-brand leading-none"] (faSprite_ "circle-question" "regular" "h-4 w-4") >> span_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:block"] "Documentation"
     a_
       [ class_ "hover:bg-blue-50"
       , term "data-tippy-placement" "right"

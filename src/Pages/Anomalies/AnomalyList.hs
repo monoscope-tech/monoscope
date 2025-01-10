@@ -299,7 +299,7 @@ shapeParameterStats_ newF deletedF updatedFF = div_ [class_ "flex items-center g
   span_ [] "Fields:"
   div_ [class_ "flex items-center gap-2 "] do
     fieldStats newF "new" "text-green-600"
-    fieldStats updatedFF "updated" "text-blue-500"
+    fieldStats updatedFF "updated" "text-brand"
     fieldStats deletedF "deleted" "text-red-500"
 
 
@@ -443,7 +443,7 @@ anomalyDetailsPage issue shapesWithFieldsMap fields prvFormatsM currTime timeFil
               updF = length issueD.updatedFieldFormats
               content = div_ [class_ "flex gap-6 shrink-1"] do
                 statBox_ Nothing Nothing "New fields" "Total number of new field detected" (show $ length issueD.newUniqueFields) Nothing (Just "text-green-500")
-                statBox_ Nothing Nothing "Updated" "Total number of updated fields detected" (show $ length issueD.updatedFieldFormats) Nothing (Just "text-blue-500")
+                statBox_ Nothing Nothing "Updated" "Total number of updated fields detected" (show $ length issueD.updatedFieldFormats) Nothing (Just "text-brand")
                 statBox_ Nothing Nothing "Deleted" "Total number of deledted fields detected" (show delF) Nothing (Just "text-red-600")
               anButton :: Html ()
               anButton =
@@ -479,7 +479,7 @@ detailsHeader title method statusCode issue currTime filterV content anBtn = do
   div_ [class_ "flex flex-col w-full"] do
     div_ [class_ "flex justify-between"] do
       div_ [class_ "flex items-center gap-4"] do
-        span_ [class_ "flex items-center rounded-lg px-2 py-1 font-medium gap-2 border border-blue-300 bg-blue-100 text-blue-500"] $ toHtml method
+        span_ [class_ "flex items-center rounded-lg px-2 py-1 font-medium gap-2 border border-blue-300 bg-blue-100 text-brand"] $ toHtml method
         span_ [class_ "flex items-center rounded-lg px-2 py-1 font-medium gap-2 border border-green-300 bg-green-100 text-green-500"] $ toHtml $ show statusCode
         dateTime $ zonedTimeToUTC issue.createdAt
       anomalyActionButtons issue.projectId issue.id (isJust issue.acknowlegedAt) (isJust issue.archivedAt) ""

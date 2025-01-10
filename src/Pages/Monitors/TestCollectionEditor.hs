@@ -286,7 +286,7 @@ defineTestSteps_ :: Maybe Testing.Collection -> Html ()
 defineTestSteps_ colM = do
   div_ [class_ "flex flex-col ml-4 notif bg-blue-100 bg-opacity-60 rounded-xl relative"] do
     div_ [class_ "self-end rounded-full absolute shadow-sm bg-white flex justify-center items-center h-5 w-5  top-1.5 right-1.5 mb-0"] do
-      a_ [[__|on click remove the closest parent <.notif/>|]] $ faSprite_ "xmark" "regular" "w-2 h-2 text-blue-500"
+      a_ [[__|on click remove the closest parent <.notif/>|]] $ faSprite_ "xmark" "regular" "w-2 h-2 text-brand"
     div_ [class_ "flex items-center gap-4 py-4 px-8"] do
       faSprite_ "circle-info" "regular" "w-5 h-5 fill-none stroke-blue-500"
       div_ [class_ "text-sm font-medium text-gray-500"] do

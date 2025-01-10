@@ -258,7 +258,7 @@ foundUsFromOptions =
 progressSteps :: Html ()
 progressSteps = do
   ol_ [class_ "flex items-center w-full  font-medium text-center text-gray-500 dark:text-gray-400 sm:text-base"] do
-    li_ [class_ "flex md:w-full items-center text-blue-600 dark:text-blue-500 sm:after:content-[''] after:w-1/2 after:h-1 after:border-b after:border-blue-600 after:border-1 after:hidden sm:after:inline-block after:mx-6 xl:after:mx-10"] do
+    li_ [class_ "flex md:w-full items-center text-blue-600 dark:text-brand sm:after:content-[''] after:w-1/2 after:h-1 after:border-b after:border-blue-600 after:border-1 after:hidden sm:after:inline-block after:mx-6 xl:after:mx-10"] do
       span_ [class_ "flex items-center"] do
         svg_ [class_ "w-3.5 h-3.5 sm:w-4 sm:h-4 mr-2.5", style_ "aria-hidden: true", xmlns_ "http://www.w3.org/2000/svg", fill_ "currentColor", viewBox_ "0 0 20 20"] do
           path_ [d_ "M10 .5a9.5 9.5 0 1 0 9.5 9.5A9.51 9.51 0 0 0 10 .5Zm3.707 8.207-4 4a1 1 0 0 1-1.414 0l-2-2a1 1 0 0 1 1.414-1.414L9 10.586l3.293-3.293a1 1 0 0 1 1.414 1.414Z"]
