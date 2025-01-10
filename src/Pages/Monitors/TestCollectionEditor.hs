@@ -177,10 +177,10 @@ castToStepResult v = case AE.eitherDecodeStrictText (decodeUtf8 $ AE.encode v) o
 
 pageTabs :: Text -> Maybe Text -> Html ()
 pageTabs url ov = do
-  div_ [class_ "tabs tabs-boxed tabs-outline items-center border"] do
+  div_ [class_ "tabs tabs-boxed tabs-outline items-center p-0 bg-weak text-weak border"] do
     whenJust ov $ \v -> do
       a_ [href_ v, role_ "tab", class_ "tab"] "Overview"
-    a_ [href_ url, role_ "tab", class_ "tab tab-active"] "Test editor"
+    a_ [href_ url, role_ "tab", class_ "tab tab-active text-strong stroke-strong"] "Test editor"
 
 
 collectionGetH :: Projects.ProjectId -> Maybe Testing.CollectionId -> ATAuthCtx (RespHeaders CollectionGet)
@@ -192,6 +192,8 @@ collectionGetH pid colIdM = do
         (def :: BWConfig)
           { sessM = Just sess
           , currProject = Just project
+          , prePageTitle = Just "Monitors"
+          , docsLink = Just "https://apitoolkit.io/docs/dashboard/dashboard-pages/api-tests/"
           , pageTitle = "Testing"
           , navTabs = Just $ pageTabs editorUrl overviewUrl
           }
@@ -346,7 +348,7 @@ collectionPage pid colM col_rn respJson = do
           whenJust colM $ \col -> do
             input_ [type_ "hidden", name_ "collectionId", value_ col.id.toText]
           div_ [class_ "flex justify-center"] do
-            button_ [class_ "px-6 py-3 rounded-2xl blue-gr-btn", type_ "submit"] do
+            button_ [class_ "px-6 py-3 rounded-2xl bg-brand text-white", type_ "submit"] do
               span_ [id_ "save-indicator", class_ "refresh-indicator htmx-indicator query-indicator loading loading-dots loading-md"] ""
               "Save changes"
               faSprite_ "save" "regular" "w-4 h-4 ml-2 stroke-white"
@@ -507,13 +509,13 @@ collectionStepResult_ idx stepResult = section_ [class_ "p-1"] do
     p_ [class_ $ "block badge badge-sm " <> getStatusColor stepResult.request.resp.status, term "data-tippy-content" "status"] $ show stepResult.request.resp.status
   div_ [role_ "tablist", class_ "tabs tabs-lifted"] do
     input_ [type_ "radio", name_ $ "step-result-tabs-" <> show idx, role_ "tab", class_ "tab", Aria.label_ "Response Log", checked_]
-    div_ [role_ "tabpanel", class_ "tab-content bg-base-100 border-base-300 rounded-box p-6"]
-      $ toHtmlRaw
-      $ textToHTML stepResult.stepLog
+    div_ [role_ "tabpanel", class_ "tab-content bg-base-100 border-base-300 rounded-box p-6"] $
+      toHtmlRaw $
+        textToHTML stepResult.stepLog
 
     input_ [type_ "radio", name_ $ "step-result-tabs-" <> show idx, role_ "tab", class_ "tab", Aria.label_ "Response Headers"]
-    div_ [role_ "tabpanel", class_ "tab-content bg-base-100 border-base-300 rounded-box p-6 "]
-      $ table_ [class_ "table table-xs"] do
+    div_ [role_ "tabpanel", class_ "tab-content bg-base-100 border-base-300 rounded-box p-6 "] $
+      table_ [class_ "table table-xs"] do
         thead_ [] $ tr_ [] $ th_ [] "Name" >> th_ [] "Value"
         tbody_ do
           whenJust stepResult.request.resp.headers $ \headers -> do

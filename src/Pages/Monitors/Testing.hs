@@ -68,8 +68,8 @@ testingGetH pid filterTM timeFilter = do
               [ ItemsList.BulkAction{icon = Just "check", title = "deactivate", uri = "/p/" <> pid.toText <> "/anomalies/bulk_actions/acknowlege"}
               ]
           , zeroState =
-              Just
-                $ ItemsList.ZeroState
+              Just $
+                ItemsList.ZeroState
                   { icon = "empty-set"
                   , title = "No Multistep Test/Monitor yet."
                   , description = "You're can create one to start monitoring your services."
@@ -83,18 +83,19 @@ testingGetH pid filterTM timeFilter = do
           { sessM = Just sess
           , currProject = Just project
           , pageTitle = "Multistep API Tests (Beta)"
+          , docsLink = Just "https://apitoolkit.io/docs/monitors/multistep-tests/"
           , pageActions = Just $ a_ [href_ $ "/p/" <> pid.toText <> "/monitors/collection", class_ "btn btn-sm blue-outline-btn space-x-2"] $ Utils.faSprite_ "plus" "regular" "h-4" >> "new tests"
           , navTabs =
-              Just
-                $ toHtml
-                $ Components.TabFilter
-                  { current = currentFilterTab
-                  , currentURL
-                  , options =
-                      [ Components.TabFilterOpt{name = "Active", count = Nothing}
-                      , Components.TabFilterOpt{name = "Inactive", count = Just inactiveColsCount}
-                      ]
-                  }
+              Just $
+                toHtml $
+                  Components.TabFilter
+                    { current = currentFilterTab
+                    , currentURL
+                    , options =
+                        [ Components.TabFilterOpt{name = "Active", count = Nothing}
+                        , Components.TabFilterOpt{name = "Inactive", count = Just inactiveColsCount}
+                        ]
+                    }
           }
   addRespHeaders $ PageCtx bwconf (ItemsList.ItemsPage listCfg $ V.map (\col -> CollectionListItemVM pid col currTime) colls)
 
@@ -174,8 +175,8 @@ stepsBox_ total passed failed = do
 
 pageTabs :: Text -> Text -> Html ()
 pageTabs url ov = do
-  div_ [class_ "tabs tabs-boxed tabs-outline items-center border"] do
-    a_ [href_ ov, role_ "tab", class_ "tab tab-active"] "Overview"
+  div_ [class_ "tabs tabs-boxed tabs-outline items-center border p-0 bg-weak text-weak"] do
+    a_ [href_ ov, role_ "tab", class_ "tab tab-active stroke-strong text-strong"] "Overview"
     a_ [href_ url, role_ "tab", class_ "tab"] "Test editor"
 
 

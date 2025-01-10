@@ -59,13 +59,14 @@ data BWConfig = BWConfig
   , hasIntegrated :: Maybe Bool
   , navTabs :: Maybe (Html ())
   , pageActions :: Maybe (Html ())
+  , docsLink :: Maybe Text
   }
   deriving stock (Show, Generic)
   deriving anyclass (Default)
 
 
 bodyWrapper :: BWConfig -> Html () -> Html ()
-bodyWrapper BWConfig{sessM, currProject, prePageTitle, pageTitle, menuItem, hasIntegrated, navTabs, pageActions} child = do
+bodyWrapper BWConfig{sessM, currProject, prePageTitle, pageTitle, menuItem, hasIntegrated, navTabs, pageActions, docsLink} child = do
   doctypehtml_ do
     head_
       do
@@ -239,7 +240,7 @@ bodyWrapper BWConfig{sessM, currProject, prePageTitle, pageTitle, menuItem, hasI
            in section_ [class_ "flex flex-row h-screen overflow-hidden"] do
                 sideNav'
                 section_ [class_ "h-screen overflow-y-hidden grow"] do
-                  navbar currProject (fromMaybe [] (currProject <&> \p -> menu p.id)) currUser prePageTitle pageTitle navTabs pageActions
+                  navbar currProject (fromMaybe [] (currProject <&> \p -> menu p.id)) currUser prePageTitle pageTitle docsLink navTabs pageActions
                   section_ [class_ "overflow-y-hidden h-full "] child
       externalHeadScripts_
       alerts_
@@ -346,12 +347,12 @@ sideNav sess project pageTitle menuItem hasIntegrated = aside_ [class_ "border-r
       -- FIXME: reeanable hx-boost hxBoost_ "true"
       menu project.id & mapM_ \(mTitle, mUrl, fIcon) -> do
         let isActive = maybe (pageTitle == mTitle) (== mTitle) menuItem
-        let activeCls = if isActive then " bg-[#00157f]/5 text-strong stroke-strong" else "!border-transparent"
+        let activeCls = if isActive then " bg-weak text-strong stroke-strong" else "!border-transparent"
         a_
           [ href_ mUrl
           , term "data-tippy-placement" "right"
           , term "data-tippy-content" mTitle
-          , class_ $ "group-has-[#sidenav-toggle:checked]/pg:px-4 gap-3 py-2 flex no-wrap shrink-0  justify-center group-has-[#sidenav-toggle:checked]/pg:justify-start items-center rounded-xl  border border-slate-300 hover:border overflow-x-hidden overflow-y-hidden " <> activeCls
+          , class_ $ "group-has-[#sidenav-toggle:checked]/pg:px-4 gap-3 py-2 flex no-wrap shrink-0  justify-center group-has-[#sidenav-toggle:checked]/pg:justify-start items-center rounded-lg  border hover:border overflow-x-hidden overflow-y-hidden " <> activeCls
           ]
           do
             faSprite_ fIcon "regular" "w-4 h-4 shrink-0 "
@@ -391,8 +392,8 @@ sideNav sess project pageTitle menuItem hasIntegrated = aside_ [class_ "border-r
         $ span_ [class_ "p-3 rounded-full bg-red-100 text-red-600 leading-none"] (faSprite_ "arrow-right-from-bracket" "regular" "h-4 w-4") >> span_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:block"] "Logout"
 
 
-navbar :: Maybe Projects.Project -> [(Text, Text, Text)] -> Users.User -> Maybe Text -> Text -> Maybe (Html ()) -> Maybe (Html ()) -> Html ()
-navbar projectM menuL currUser prePageTitle pageTitle tabsM pageActionsM =
+navbar :: Maybe Projects.Project -> [(Text, Text, Text)] -> Users.User -> Maybe Text -> Text -> Maybe Text -> Maybe (Html ()) -> Maybe (Html ()) -> Html ()
+navbar projectM menuL currUser prePageTitle pageTitle docsLink tabsM pageActionsM =
   nav_ [id_ "main-navbar", class_ "sticky z-20 top-0 w-full px-6 py-2 flex flex-row border-slate-200"] do
     div_ [class_ "flex-1 flex items-center text-slate-950 gap-1"] do
       whenJust prePageTitle \pt -> whenJust (find (\a -> fst3 a == pt) menuL) \(_, _, icon) -> do
@@ -401,6 +402,7 @@ navbar projectM menuL currUser prePageTitle pageTitle tabsM pageActionsM =
           toHtml pt
         faSprite_ "chevron-right" "regular" "w-3 h-3"
       strong_ [class_ "font-semibold text-2xl px-1"] $ toHtml pageTitle
+      whenJust docsLink \link -> a_ [class_ "text-brand -mt-1", href_ link, term "data-tippy-placement" "right", term "data-tippy-content" "Open Documentation"] $ faSprite_ "circle-question" "regular" "w-4 h-4"
     whenJust tabsM id
     div_ [class_ "flex-1 flex items-center justify-end"] $ whenJust pageActionsM id
 

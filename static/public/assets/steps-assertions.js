@@ -200,7 +200,11 @@ export function renderAssertionBuilder({
           </div>
         `
       })}
-      <div class="py-2"><button class="btn btn-outline btn-xs" @click=${addAssertion}>${faSprite_('plus', 'regular', 'w-4 h-4')} New Assertion</button></div>
+      <div class="py-2"><button class="flex items-center gap-1" @click=${addAssertion}>${faSprite_(
+    'plus',
+    'regular',
+    'w-4 h-4 text-weak'
+  )} <span class="underline text-weak font-semibold">New Assertion<span></button></div>
     </div>
   `
 }

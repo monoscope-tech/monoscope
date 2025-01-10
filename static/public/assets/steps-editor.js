@@ -328,13 +328,13 @@ export class StepsEditor extends LitElement {
                  <div>
                   <div class="mt-4 pb-3 border rounded-xl">
                     <div role="tablist" class="tabs tabs-bordered pt-1">
-                      <a role="tab" class="tab ${activeTab === 'request-options' ? 'tab-active' : ''}" @click=${() => setActiveTab('request-options')}>
+                      <a role="tab" class="tab ${activeTab === 'request-options' ? 'tab-active text-brand font-bold' : ''}" @click=${() => setActiveTab('request-options')}>
                         Request Options ${configuredOptions['request-options'] > 0 ? html`<span class="badge badge-sm badge-ghost">${configuredOptions['request-options']}</span>` : ''}
                       </a>
-                      <a role="tab" class="tab ${activeTab === 'query-params' ? 'tab-active' : ''}" @click=${() => setActiveTab('query-params')}>
+                      <a role="tab" class="tab ${activeTab === 'query-params' ? 'tab-active text-brand font-bold' : ''}" @click=${() => setActiveTab('query-params')}>
                         Query Params ${configuredOptions['query-params'] > 0 ? html`<span class="badge badge-sm badge-ghost">${configuredOptions['query-params']}</span>` : ''}
                       </a>
-                      <a role="tab" class="tab ${activeTab === 'request-body' ? 'tab-active' : ''}" @click=${() => setActiveTab('request-body')}>
+                      <a role="tab" class="tab ${activeTab === 'request-body' ? 'tab-active text-brand font-bold' : ''}" @click=${() => setActiveTab('request-body')}>
                         Request Body ${configuredOptions['request-body'] > 0 ? html`<span class="badge badge-sm badge-ghost">${configuredOptions['request-body']}</span>` : ''}
                       </a>
                     </div>
@@ -451,7 +451,7 @@ ${stepData?.headers?.Cookie || ''}</textarea
                                 ${this.collectionSteps[idx]._requestType === 'application/x-www-form-urlencoded'
                                   ? html`<div class="flex flex-col gap-1">${this.renderParamsRows(stepData, idx, '_requestBody')}</div>`
                                   : html` <textarea
-                                      class="w-full border border-slate-200"
+                                      class="w-full border border-slate-200 textarea"
                                       name="[${idx}][json]"
                                       @change=${(e) => {
                                         this.collectionSteps[idx]._json = e.target.value
@@ -467,8 +467,8 @@ ${stepData._json}</textarea
                   </div>
                 </details>
               </div>
-              <button class="btn btn-sm mt-5 blue-gr-btn" ?disabled=${!stepData._url} @click=${(e) => this.sendStepRequest(e, idx)}>
-              ${this.isSendingRequest ? html`<span class="loading loading-dots loading-sm"></span>` : 'Send'}
+              <button class="btn btn-sm mt-5 bg-brand text-white" ?disabled=${!stepData._url} @click=${(e) => this.sendStepRequest(e, idx)}>
+              ${this.isSendingRequest ? html`<span class="loading loading-dots loading-sm"></span>` : 'Send request'}
               </button>
               <br/>
               ${
@@ -598,7 +598,7 @@ ${stepData._json}</textarea
       <div class="flex flex-row gap-2 w-full paramRow">
         <span class="shrink hidden assertIndicator"> ${this.renderAssertResult(result)} </span>
         <div class="flex flex-col w-1/3">
-          <input class="input input-bordered input-xs shadow-none w-full" list="${type}DataList" placeholder="Key" .value="${key}" @change=${(e) => this.updateKey(e, idx, type, aidx)} />
+          <input class="input input-bordered input-sm shadow-none w-full" list="${type}DataList" placeholder="Key" .value="${key}" @change=${(e) => this.updateKey(e, idx, type, aidx)} />
           <span class="text-xs text-red-500 w-full">${keyError}</span>
         </div>
         ${type === 'exports'
@@ -614,7 +614,7 @@ ${stepData._json}</textarea
           ? html`<div class="shrink w-full flex flex-col">
           <input
             list="${type === 'asserts' ? 'assertAutocomplete-' + idx : ''}"
-            class="input input-bordered shadow-none ${error ? 'input-error' : ''} input-xs w-full"
+            class="input input-bordered shadow-none ${error ? 'input-error' : ''} input-sm w-full"
             placeholder="Value"
             .value="${value}"
             @input=${(e) => this.updateValue(e, idx, type, aidx, key)}

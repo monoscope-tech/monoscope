@@ -104,17 +104,18 @@ apiLogH pid queryM queryASTM cols' cursorM' sinceM fromM toM layoutM sourceM tar
           { sessM = Just sess
           , currProject = Just project
           , pageTitle = "Explorer"
+          , docsLink = Just "https://apitoolkit.io/docs/dashboard/dashboard-pages/openapi-docs/"
           , pageActions = Just $ div_ [class_ "inline-flex gap-2"] do
-              label_ [class_ "cursor-pointer bg-slate-100 border border-slate-300 rounded-xl flex"] do
+              label_ [class_ "cursor-pointer stroke-strong rounded-lg flex shadow"] do
                 input_ [type_ "checkbox", id_ "streamLiveData", class_ "hidden"]
-                span_ [class_ "group-has-[#streamLiveData:checked]/pg:flex hidden py-2 px-3 items-center", term "data-tippy-content" "pause live data stream"] $ faSprite_ "pause" "solid" "h-4 w-4"
-                span_ [class_ "group-has-[#streamLiveData:checked]/pg:hidden flex  py-2 px-3 items-center", term "data-tippy-content" "stream live data"] $ faSprite_ "play" "regular" "h-4 w-4"
+                span_ [class_ "group-has-[#streamLiveData:checked]/pg:flex hidden py-1 px-3 items-center", term "data-tippy-content" "pause live data stream"] $ faSprite_ "pause" "solid" "h-4 w-4"
+                span_ [class_ "group-has-[#streamLiveData:checked]/pg:hidden flex  py-1 px-3 items-center", term "data-tippy-content" "stream live data"] $ faSprite_ "play" "regular" "h-4 w-4"
               Components.timepicker_ (Just "log_explorer_form") currentRange
-              a_ [class_ "cursor-pointer bg-slate-100 py-2 px-3 border border-slate-300 rounded-xl", [__|on click htmx.trigger('#log_explorer_form', 'submit') |], term "data-tippy-content" "refresh"] $ faSprite_ "arrows-rotate" "regular" "h-4 w-4"
-          , navTabs = Just $ div_ [class_ "tabs tabs-boxed tabs-md tabs-outline items-center bg-slate-200 text-slate-700"] do
-              a_ [onclick_ "window.setQueryParamAndReload('source', 'requests')", role_ "tab", class_ $ "tab py-1.5 !h-auto " <> if source == "requests" then "tab-active" else ""] "Requests"
-              a_ [onclick_ "window.setQueryParamAndReload('source', 'logs')", role_ "tab", class_ $ "tab py-1.5 !h-auto " <> if source == "logs" then "tab-active" else ""] "Logs"
-              a_ [onclick_ "window.setQueryParamAndReload('source', 'spans')", role_ "tab", class_ $ "tab py-1.5 !h-auto " <> if source == "spans" then "tab-active" else ""] "Traces"
+              a_ [class_ "cursor-pointer py-1 px-3 stroke-strong rounded-lg shadow", [__|on click htmx.trigger('#log_explorer_form', 'submit') |], term "data-tippy-content" "refresh"] $ faSprite_ "arrows-rotate" "regular" "h-4 w-4"
+          , navTabs = Just $ div_ [class_ "tabs tabs-boxed tabs-md p-0 tabs-outline items-center bg-weak text-weak border"] do
+              a_ [onclick_ "window.setQueryParamAndReload('source', 'requests')", role_ "tab", class_ $ "tab py-1 !h-auto " <> if source == "requests" then "tab-active text-strong stroke-strong " else ""] "Requests"
+              a_ [onclick_ "window.setQueryParamAndReload('source', 'logs')", role_ "tab", class_ $ "tab py-1 !h-auto " <> if source == "logs" then "tab-active text-strong stroke-strong " else ""] "Logs"
+              a_ [onclick_ "window.setQueryParamAndReload('source', 'spans')", role_ "tab", class_ $ "tab py-1 !h-auto " <> if source == "spans" then "tab-active text-strong stroke-strong " else ""] "Traces"
               -- a_ [onclick_ "window.setQueryParamAndReload('source', 'metrics')", role_ "tab", class_ $ "tab py-1.5 !h-auto " <> if source == "metrics" then "tab-active" else ""] "Metrics"
           }
   let (days, hours, minutes, _seconds) = convertToDHMS $ diffUTCTime now project.createdAt
@@ -229,8 +230,8 @@ logQueryBox_ pid currentRange source targetSpan queryAST queryLibRecent queryLib
     do
       div_ [class_ "flex gap-2 items-stretch justify-center"] do
         queryLibrary_ pid queryLibSaved queryLibRecent
-        div_ [class_ "p-1 pl-3 flex-1 flex gap-2 bg-slate-100 rounded-2xl border border-slate-200 justify-between items-stretch"] do
-          div_ [id_ "queryEditor", class_ "h-14 hidden overflow-hidden bg-gray-200 flex-1 flex items-center"] pass
+        div_ [class_ "p-1 pl-3 flex-1 flex gap-2 bg-weak rounded-lg border border-weak justify-between items-stretch"] do
+          div_ [id_ "queryEditor", class_ "h-14 hidden overflow-hidden bg-weak flex-1 flex items-center"] pass
           div_ [id_ "queryBuilder", class_ "flex-1 flex items-center"] $ termRaw "filter-element" [id_ "filterElement", class_ "w-full h-full flex items-center", termRaw "ast" queryAST] ("" :: Text)
           when (source == "spans") do
             let target = fromMaybe "all-spans" targetSpan
@@ -247,13 +248,13 @@ logQueryBox_ pid currentRange source targetSpan queryAST queryLibRecent queryLib
                   option_ (value_ "root-spans" : ([selected_ "true" | target == "root-spans"])) "Trace Root Spans"
                   option_ (value_ "service-entry-spans" : ([selected_ "true" | target == "service-entry-spans"])) "Service Entry Spans"
           div_ [class_ "dropdown dropdown-hover dropdown-bottom dropdown-end"] do
-            div_ [class_ "rounded-xl p-3 bg-slate-200 text-slate-700 inline-flex items-center", tabindex_ "0", role_ "button"] $ faSprite_ "floppy-disk" "regular" "h-5 w-5"
+            div_ [class_ "rounded-lg px-3 py-2 text-slate-700 inline-flex items-center stroke-strong", tabindex_ "0", role_ "button"] $ faSprite_ "floppy-disk" "regular" "h-5 w-5"
             ul_ [tabindex_ "0", class_ "dropdown-content border menu bg-base-100 rounded-box z-[1] w-60 p-2 shadow-lg"] do
               li_ $ label_ [Lucid.for_ "saveQueryMdl"] "Save query to Query Library"
           -- li_ $ a_ [] "Save query as an Alerts"
           -- li_ $ a_ [] "Save result to a dashboard"
           button_
-            [type_ "submit", class_ "leading-none rounded-xl p-3 cursor-pointer bg-gradient-to-b from-[#067cff] to-[#0850c5] text-white"]
+            [type_ "submit", class_ "leading-none rounded-lg px-3 py-2 cursor-pointer bg-brand text-white"]
             do
               span_ [id_ "run-query-indicator", class_ "refresh-indicator htmx-indicator query-indicator loading loading-dots loading-sm"] ""
               faSprite_ "magnifying-glass" "regular" "h-4 w-4 inline-block"
@@ -268,8 +269,8 @@ logQueryBox_ pid currentRange source targetSpan queryAST queryLibRecent queryLib
 
 queryLibrary_ :: Projects.ProjectId -> V.Vector Projects.QueryLibItem -> V.Vector Projects.QueryLibItem -> Html ()
 queryLibrary_ pid queryLibSaved queryLibRecent = div_ [class_ "dropdown dropdown-hover dropdown-bottom dropdown-start", id_ "queryLibraryParentEl"] do
-  div_ [class_ "cursor-pointer relative bg-slate-100 text-slate-600 rounded-2xl border border-slate-200 h-full flex gap-2 items-center px-2", tabindex_ "0", role_ "button"] $
-    (toHtml "Query Library" >> faSprite_ "chevron-down" "regular" "w-3 h-3")
+  div_ [class_ "cursor-pointer relative bg-weak text-weak rounded-lg border border-slate-200 h-full flex gap-2 items-center px-2", tabindex_ "0", role_ "button"] $
+    (toHtml "Presets" >> faSprite_ "chevron-down" "regular" "w-3 h-3")
   div_ [class_ "dropdown-content z-20"] $ div_ [class_ "tabs tabs-boxed tabs-md tabs-outline items-center bg-slate-200 h-full", role_ "tablist", id_ "queryLibraryTabListEl"] do
     tabPanel_ "Saved" (queryLibraryContent_ "Saved" queryLibSaved)
     tabPanel_ "Recent" (queryLibraryContent_ "Recent" queryLibRecent)
@@ -400,8 +401,8 @@ apiLogsPage page = do
         unless (page.source == "logs") $ renderChart page.pid "reqsChartsLatP" "Latency" Nothing Nothing page.source ", chart_type:'LineCT', group_by:'GBDurationPercentile'"
 
     div_ [class_ "flex gap-3.5 overflow-hidden"] do
-      div_ [class_ "card-round w-1/5 shrink-0 flex flex-col gap-2 p-2  group-has-[.toggle-filters:checked]/pg:hidden "] do
-        input_ [placeholder_ "Search filter", class_ "rounded-2xl bg-slate-25 px-4 py-2 border border-slate-300 "]
+      div_ [class_ "w-1/5 shrink-0 flex flex-col gap-2 p-2 hidden  group-has-[.toggle-filters:checked]/pg:hidden "] do
+        input_ [placeholder_ "Search filter", class_ "rounded-lg shadow px-3 py-1 stroke-strong"]
         div_ [class_ "divide-y gap-3"] do
           div_ [class_ "flex flex-col gap-1.5 py-3"] do
             div_ [class_ "flex justify-between items-center text-slate-950 pb-2"] $ span_ "Status" >> faSprite_ "chevron-down" "regular" "w-3 h-3"
@@ -412,7 +413,7 @@ apiLogsPage page = do
               div_ [class_ "flex gap-1.5 items-center  text-slate-950"] $ input_ [type_ "checkbox", class_ "checkbox "] >> span_ [class_ "bg-red-600 shrink-0 w-1 h-5 rounded"] " " >> span_ [] "200"
               span_ "121"
           div_ [class_ "flex flex-col gap-1.5 py-3"] do
-            div_ [class_ "flex justify-between items-center text-slate-950 pb-2"] $ span_ "MMethos" >> faSprite_ "chevron-down" "regular" "w-3 h-3"
+            div_ [class_ "flex justify-between items-center text-slate-950 pb-2"] $ span_ "Methods" >> faSprite_ "chevron-down" "regular" "w-3 h-3"
             div_ [class_ "flex justify-between"] do
               div_ [class_ "flex gap-1.5 items-center  text-slate-950"] $ input_ [type_ "checkbox", class_ "checkbox "] >> span_ [class_ "bg-[#067cff] shrink-0 w-1 h-5 rounded"] " " >> span_ [] "GET"
               span_ "8,675"
@@ -422,15 +423,15 @@ apiLogsPage page = do
 
       div_ [class_ "grow flex-1 space-y-1.5 overflow-hidden"] do
         div_ [class_ "flex gap-2  pt-1"] do
-          label_ [class_ "gap-1 flex items-center cursor-pointer"] do
-            faSprite_ "side-chevron-left-in-box" "regular" "w-4 h-4 group-has-[.toggle-filters:checked]/pg:rotate-180 "
-            span_ [class_ "hidden group-has-[.toggle-filters:checked]/pg:block"] "Show"
-            span_ [class_ "group-has-[.toggle-filters:checked]/pg:hidden"] "Hide"
-            "filters"
-            input_ [type_ "checkbox", class_ "toggle-filters hidden", checked_]
-          span_ [class_ "text-slate-200"] "|"
+          -- label_ [class_ "gap-1 flex items-center cursor-pointer"] do
+          --   faSprite_ "side-chevron-left-in-box" "regular" "w-4 h-4 group-has-[.toggle-filters:checked]/pg:rotate-180 "
+          --   span_ [class_ "hidden group-has-[.toggle-filters:checked]/pg:block"] "Show"
+          --   span_ [class_ "group-has-[.toggle-filters:checked]/pg:hidden"] "Hide"
+          --   "filters"
+          --   input_ [type_ "checkbox", class_ "toggle-filters hidden", checked_]
+          -- span_ [class_ "text-slate-200"] "|"
           div_ [class_ ""] $ span_ [class_ "text-slate-950"] (toHtml @Text $ fmt $ commaizeF page.resultCount) >> span_ [class_ "text-slate-600"] (toHtml (" " <> page.source <> " found"))
-        div_ [class_ "card-round divide-y flex flex-col h-full overflow-hidden"] $ resultTableAndMeta_ page
+        div_ [class_ "divide-y flex flex-col h-full overflow-hidden"] $ resultTableAndMeta_ page
   jsonTreeAuxillaryCode page.pid page.queryAST
   -- drawerWithURLContent_ : Used when you expand a log item
   -- using the drawer as a global is a workaround since to separate the logs scope from other content and improve scroll performance.
@@ -489,7 +490,7 @@ resultTable_ page mainLog = table_
              in emptyState_ "Waiting for  events" subText url "Read the setup guide"
           else section_ [class_ "w-max mx-auto"] $ p_ "This request has no outgoing requests yet."
     unless (null page.requestVecs) do
-      thead_ $ tr_ [class_ "text-slate-700 border-b font-medium"] $ forM_ page.cols $ logTableHeading_ page.pid isLogEventB
+      thead_ $ tr_ [class_ "text-slate-700 border-b font-medium border-y"] $ forM_ page.cols $ logTableHeading_ page.pid isLogEventB
       tbody_ [id_ "log-item-table-body", class_ "w-full log-item-table-body [content-visibility:auto]"] do
         script_
           [text|
@@ -687,14 +688,14 @@ logItemCol_ _ _ reqVec colIdxMap "timestamp" _ = renderTimestamp "timestamp" req
 logItemCol_ _ _ reqVec colIdxMap "status_code" _ = renderStatusCode reqVec colIdxMap
 logItemCol_ _ _ reqVec colIdxMap "method" _ = renderMethod reqVec colIdxMap
 logItemCol_ _ _ reqVec colIdxMap "severity_text" _ = renderLogBadge "severity_text" reqVec colIdxMap (getSeverityColor $ T.toLower $ fromMaybe "" $ lookupVecTextByKey reqVec colIdxMap "severity_text")
-logItemCol_ _ _ reqVec colIdxMap "duration" _ = renderBadge "cbadge-sm badge-neutral" (toText (getDurationNSMS $ toInteger $ lookupVecIntByKey reqVec colIdxMap "duration")) "duration"
-logItemCol_ _ _ reqVec colIdxMap "span_name" _ = renderLogBadge "span_name" reqVec colIdxMap "cbadge-sm badge-neutral"
-logItemCol_ _ _ reqVec colIdxMap "service" _ = renderLogBadge "service" reqVec colIdxMap "cbadge-sm badge-neutral"
+logItemCol_ _ _ reqVec colIdxMap "duration" _ = renderBadge "cbadge-sm badge-neutral border stroke-weak bg-weak" (toText (getDurationNSMS $ toInteger $ lookupVecIntByKey reqVec colIdxMap "duration")) "duration"
+logItemCol_ _ _ reqVec colIdxMap "span_name" _ = renderLogBadge "span_name" reqVec colIdxMap "cbadge-sm badge-neutral border stroke-weak bg-weak"
+logItemCol_ _ _ reqVec colIdxMap "service" _ = renderLogBadge "service" reqVec colIdxMap "cbadge-sm badge-neutral border stroke-weak bg-weak"
 logItemCol_ _ pid reqVec colIdxMap "latency_breakdown" childSpans =
   let spanId = lookupVecTextByKey reqVec colIdxMap "latency_breakdown"
    in Spans.spanLatencyBreakdown $ V.filter (\s -> s.parentSpanId == spanId) childSpans
 logItemCol_ _ _ reqVec colIdxMap "body" _ = renderLogBadge "body" reqVec colIdxMap "space-x-2 whitespace-nowrap"
-logItemCol_ _ _ reqVec colIdxMap "kind" _ = renderBadge "cbadge-sm badge-neutral" (fromMaybe "" $ lookupVecTextByKey reqVec colIdxMap "kind") "kind"
+logItemCol_ _ _ reqVec colIdxMap "kind" _ = renderBadge "cbadge-sm badge-neutral border stroke-weak bg-weak" (fromMaybe "" $ lookupVecTextByKey reqVec colIdxMap "kind") "kind"
 logItemCol_ _ _ reqVec colIdxMap "status" _ = renderLogBadge "status" reqVec colIdxMap (getSpanStatusColor $ fromMaybe "" $ lookupVecTextByKey reqVec colIdxMap "status")
 logItemCol_ source pid reqVec colIdxMap "rest" _ = div_ [class_ "space-x-2 whitespace-nowrap max-w-8xl overflow-hidden "] do
   let key = "rest"
@@ -707,9 +708,9 @@ logItemCol_ source pid reqVec colIdxMap "rest" _ = div_ [class_ "space-x-2 white
         else renderIconWithTippy "text-blue-700" "Outgoing Request" (faSprite_ "arrow-up-right" "solid" "h-3")
       logItemCol_ source pid reqVec colIdxMap "status_code" []
       logItemCol_ source pid reqVec colIdxMap "method" []
-      renderLogBadge "url_path" reqVec colIdxMap "cbadge-sm badge-neutral"
+      renderLogBadge "url_path" reqVec colIdxMap "cbadge-sm badge-neutral border stroke-weak bg-weak"
       logItemCol_ source pid reqVec colIdxMap "duration" []
-      renderLogBadge "host" reqVec colIdxMap "cbadge-sm badge-neutral"
+      renderLogBadge "host" reqVec colIdxMap "cbadge-sm badge-neutral border stroke-weak bg-weak"
       span_ $ toHtml $ maybe "" (unwrapJsonPrimValue True) (lookupVecByKey reqVec colIdxMap key)
 logItemCol_ _ _ reqVec colIdxMap key _ = renderBadge "space-nowrap overflow-x-hidden max-w-lg" (maybe "" (unwrapJsonPrimValue True) (lookupVecByKey reqVec colIdxMap key)) key
 

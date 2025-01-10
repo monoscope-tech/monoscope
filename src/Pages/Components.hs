@@ -62,7 +62,7 @@ emptyState_ title subTxt url btnText = do
     div_ [class_ "flex flex-col gap-2"] do
       h2_ [class_ "text-xl text-slate-800 font-bold"] $ toHtml title
       p_ [class_ "text-sm font-medium text-gray-500"] $ toHtml subTxt
-      a_ [href_ $ fromMaybe "" url, class_ "btn text-sm w-max mx-auto blue-gr-btn"] $ toHtml btnText
+      a_ [href_ $ fromMaybe "" url, class_ "btn text-sm w-max mx-auto bg-brand text-white"] $ toHtml btnText
 
 
 getTargetPage :: Text -> Text

@@ -57,7 +57,7 @@ bashCommand command = do
       span_ $ toHtml command
       button_
         [ termRaw "data-command" command
-        , [__| 
+        , [__|
             on click
               if 'clipboard' in window.navigator then
                 call navigator.clipboard.writeText(my @data-command)
@@ -127,14 +127,19 @@ data TabFilterOpt = TabFilterOpt
 
 instance ToHtml TabFilter where
   toHtmlRaw = toHtml
-  toHtml tf = div_ [class_ "tabs tabs-boxed tabs-outline items-center border"] do
+  toHtml tf = div_ [class_ "tabs tabs-boxed tabs-outline p-0 bg-weak text-weak border items-center border"] do
     let uri = deleteParam "filter" tf.currentURL
     forM_ tf.options \opt ->
       a_
         [ href_ $ uri <> "&filter=" <> escapedQueryPartial opt.name
         , role_ "tab"
-        , class_ $ "tab " <> if opt.name == tf.current then "tab-active" else ""
+        , class_ $ "tab " <> if opt.name == tf.current then "tab-active text-strong stroke-strong" else ""
         ]
         do
           span_ $ toHtml opt.name
           whenJust opt.count $ span_ [class_ "absolute top-[1px] -right-[5px] text-white text-xs font-medium rounded-full px-1 bg-red-500"] . show
+
+-- , navTabs = Just $ div_ [class_ "tabs tabs-boxed tabs-md p-0 tabs-outline items-center bg-weak text-weak border"] do
+--     a_ [onclick_ "window.setQueryParamAndReload('source', 'requests')", role_ "tab", class_ $ "tab py-1 !h-auto " <> if source == "requests" then "tab-active text-strong stroke-strong " else ""] "Requests"
+--     a_ [onclick_ "window.setQueryParamAndReload('source', 'logs')", role_ "tab", class_ $ "tab py-1 !h-auto " <> if source == "logs" then "tab-active text-strong stroke-strong " else ""] "Logs"
+--     a_ [onclick_ "window.setQueryParamAndReload('source', 'spans')", role_ "tab", class_ $ "tab py-1 !h-auto " <> if source == "spans" then "tab-active text-strong stroke-strong " else ""] "Traces"

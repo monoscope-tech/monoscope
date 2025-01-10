@@ -95,7 +95,7 @@ timepicker_ submitForm currentRange = div_ [class_ "relative"] do
   input_ [type_ "hidden", id_ "since_input"]
   input_ [type_ "hidden", id_ "custom_range_input"]
   a_
-    [ class_ "relative p-2.5 bg-slate-100 border border-slate-300 text-base flex items-center gap-1.5 rounded-xl cursor-pointer"
+    [ class_ "relative p-2 shadow-sm stroke-strong text-weak flex items-center gap-1.5 rounded-lg cursor-pointer"
     , [__| on click toggle .hidden on #timepickerBox |]
     ]
     do
@@ -117,7 +117,7 @@ timepicker_ submitForm currentRange = div_ [class_ "relative"] do
               [text|on click set #custom_range_input's value to my @data-value
                        then toggle .hidden on #timepickerBox
                        then set #currentRange's innerText to my @data-title
-                       then call window.setParams({since:@data-value, from:'', to:''}) 
+                       then call window.setParams({since:@data-value, from:'', to:''})
                        then ${action} |]
             timePickerLink val title =
               a_

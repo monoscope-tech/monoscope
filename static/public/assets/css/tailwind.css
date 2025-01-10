@@ -191,7 +191,10 @@ body {
 }
 
 .text-weak {
-  color: #000933;
+  @apply text-[#000933]/60;
+}
+.bg-weak {
+  @apply bg-[#00157f]/5;;
 }
 .text-brand {
   @apply text-[var(--brand-color)];
@@ -207,9 +210,11 @@ body {
   border-color: rgba(0, 13, 77, 0.45);
 }
 .stroke-strong {
-  border-color: rgba(0, 13, 77, 0.45);
+  border: 1px solid rgba(0, 13, 77, 0.45);
 }
-
+.stroke-weak {
+  @apply border-[#001066]/10;
+}
 @layer components {
   :root {
     font-family: Inter, sans-serif;
@@ -464,7 +469,7 @@ body {
   }
 
   .badge-neutral {
-    @apply bg-slate-150 text-slate-700;
+    @apply bg-slate-150 text-[#000933]/60;
   }
 
   .badge-blue {
