@@ -1,5 +1,6 @@
 module Pages.Projects.Server (server) where
 
+import Pages.Onboarding.Onboarding qualified as Onboarding
 import Pages.Projects.CreateProject qualified as CreateProject
 import Pages.Projects.Integrations qualified as Integrations
 import Pages.Projects.ListProjects qualified as ListProjects
@@ -23,4 +24,5 @@ server =
     , membersManageGet = ManageMembers.manageMembersGetH
     , membersManagePost = ManageMembers.manageMembersPostH
     , manageSubscriptionGet = ManageMembers.manageSubGetH
+    , onboading = Onboarding.onboardingGetH
     }

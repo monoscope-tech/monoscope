@@ -25,6 +25,7 @@ export class StepsEditor extends LitElement {
     collectionResults: [],
     saveErrors: [],
     isSendingRequest: false,
+    isOnboarding: false,
   }
 
   constructor() {
@@ -79,8 +80,13 @@ export class StepsEditor extends LitElement {
     window.updateEditorVal = () => {
       // this.updateEditorContent()
     }
+    window.addCollectionStep = () => {
+      this.addStep()
+    }
   }
-
+  addStep() {
+    this.collectionSteps = [...this.collectionSteps, DEFAULT_STEP]
+  }
   initializeEditor(monaco) {
     const editorContainer = this.querySelector('#steps-codeEditor')
     const reqBodyContainer = this.querySelector('#reqBodyContainer')
@@ -823,7 +829,7 @@ ${stepData._json}</textarea
         <div class="group-has-[.editormode:checked]/colform:hidden">
           <div
             id="collectionStepsContainer"
-            class="collectionSteps draggable-container pl-4 space-y-4"
+            class="collectionSteps draggable-container space-y-4"
             @dragover="${this._onDragOver}"
             @drop="${this._onDrop}"
             @dragenter="${this._onDragEnter}"
@@ -831,15 +837,14 @@ ${stepData._json}</textarea
           >
             ${this.collectionSteps.map((stepData, idx) => this.renderCollectionStep(stepData, idx, this.collectionResults[idx], this.saveErrors[idx]) || undefined)}
           </div>
-          <div class="p-4 pt-4">
-            <a
-              class="btn btn-sm blue-outline-btn bg-transparent border-[var(--brand-color)] items-center cursor-pointer"
-              @click=${() => (this.collectionSteps = [...this.collectionSteps, DEFAULT_STEP])}
-            >
-              <svg class="inline-block icon w-3 h-3"><use href="/public/assets/svgs/fa-sprites/solid.svg#plus"></use></svg>
-              Add new step
-            </a>
-          </div>
+          ${this.isOnboarding
+            ? nothing
+            : html`<div class="p-4 pt-4">
+                <a class="btn btn-sm blue-outline-btn bg-transparent border-[var(--brand-color)] items-center cursor-pointer" @click=${() => this.addStep()}>
+                  <svg class="inline-block icon w-3 h-3"><use href="/public/assets/svgs/fa-sprites/solid.svg#plus"></use></svg>
+                  Add new step
+                </a>
+              </div>`}
         </div>
       </div>
     `

@@ -114,7 +114,8 @@ CREATE TABLE IF NOT EXISTS projects.projects
 SELECT manage_updated_at('projects.projects');
 ALTER TABLE projects.projects ADD COLUMN IF NOT EXISTS discord_url TEXT DEFAULT NULL;
 ALTER TABLE projects.projects ADD COLUMN IF NOT EXISTS billing_day TIMESTAMP WITH TIME ZONE DEFAULT current_timestamp;
-
+CREATE TYPE onboarding_steps_enum AS ENUM ('Info', 'Survey', 'CreateMonitor','NotifChannel','Integration', 'Pricing', 'Complete');
+ALTER TABLE projects.projects ADD COLUMN IF NOT EXISTS onboarding_steps_completed TEXT[] DEFAULT ARRAY[]::TEXT[];
 
 
 -----------------------------------------------------------------------

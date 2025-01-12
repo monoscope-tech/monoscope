@@ -5,6 +5,7 @@ module Models.Projects.Projects (
   CreateProject (..),
   ProjectRequestStats (..),
   NotificationChannel (..),
+  OnboardingStep (..),
   insertProject,
   projectIdFromText,
   usersByProjectId,
@@ -29,6 +30,7 @@ module Models.Projects.Projects (
 )
 where
 
+import Data.Aeson (FromJSON)
 import Data.Aeson qualified as AE
 import Data.Default
 import Data.Time (UTCTime, ZonedTime)
@@ -103,6 +105,13 @@ instance ToField NotificationChannel where
 parsePermissions :: (Eq s, IsString s) => s -> NotificationChannel
 parsePermissions "slack" = NSlack
 parsePermissions _ = NEmail
+
+
+-- CREATE TYPE onboarding_step_enum AS ENUM ('info', 'survey', 'create_monitor','notif_channel','integration', 'pricing', 'complete');
+
+data OnboardingStep = Info | Survey | CreateMonitor | NotifChannel | Integration | Pricing | Complete
+  deriving stock (Eq, Generic, Show, Read)
+  deriving (AE.FromJSON, AE.ToJSON, NFData, ToField, FromField) via OnboardingStep
 
 
 instance FromField NotificationChannel where
@@ -416,13 +425,13 @@ queryLibInsert :: DB :> es => QueryLibType -> ProjectId -> Users.UserId -> Text 
 queryLibInsert qKind pid uid qt qast title = void $ dbtToEff $ execute Insert q (pid, uid, qKind, pid, uid, qKind, qt, Aeson qast, title, pid, uid, qKind, qt)
   where
     q =
-      [sql| 
+      [sql|
 WITH removed_old AS (
   DELETE FROM projects.query_library
   WHERE id IN (
     SELECT id
     FROM projects.query_library
-    WHERE project_id = ? AND user_id = ? AND query_type = ? 
+    WHERE project_id = ? AND user_id = ? AND query_type = ?
     ORDER BY created_at ASC
     OFFSET 49
   )
@@ -432,7 +441,7 @@ SELECT ?, ?, ?, ?, ?, ?
 WHERE NOT EXISTS (
   SELECT 1
   FROM projects.query_library
-  WHERE project_id = ? AND user_id = ? AND query_type = ? 
+  WHERE project_id = ? AND user_id = ? AND query_type = ?
   AND query_text = ?
   ORDER BY created_at DESC
   LIMIT 1

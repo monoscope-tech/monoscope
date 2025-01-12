@@ -2,6 +2,7 @@ module Pages.Projects.Routes (Routes, Routes' (..)) where
 
 import Lucid (Html)
 import Models.Projects.Projects qualified as Projects
+import Pages.BodyWrapper (PageCtx)
 import Pages.Projects.CreateProject qualified as CreateProject
 import Pages.Projects.Integrations qualified as Integrations
 import Pages.Projects.ListProjects qualified as ListProjects
@@ -31,5 +32,6 @@ data Routes' mode = Routes'
   , membersManageGet :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "manage_members" :> Get '[HTML] (RespHeaders ManageMembers.ManageMembers)
   , membersManagePost :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "manage_members" :> ReqBody '[FormUrlEncoded] ManageMembers.ManageMembersForm :> Post '[HTML] (RespHeaders ManageMembers.ManageMembers)
   , manageSubscriptionGet :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "manage_subscription" :> Get '[HTML] (RespHeaders (Html ()))
+  , onboading :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "onboarding" :> Get '[HTML] (RespHeaders (PageCtx (Html ())))
   }
   deriving stock (Generic)

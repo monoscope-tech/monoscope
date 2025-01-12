@@ -23,8 +23,8 @@ import Utils (faSprite_)
 menu :: Projects.ProjectId -> [(Text, Text, Text)]
 menu pid =
   [ ("Dashboard", "/p/" <> pid.toText <> "/", "qrcode")
-  -- , ("Dashboards", "/p/" <> pid.toText <> "/dashboards", "dashboard")
-  , ("Explorer", "/p/" <> pid.toText <> "/log_explorer", "explore")
+  , -- , ("Dashboards", "/p/" <> pid.toText <> "/dashboards", "dashboard")
+    ("Explorer", "/p/" <> pid.toText <> "/log_explorer", "explore")
   , ("API Catalog", "/p/" <> pid.toText <> "/api_catalog", "swap")
   , ("Changes & Errors", "/p/" <> pid.toText <> "/anomalies", "bug")
   , ("Monitors & Alerts", "/p/" <> pid.toText <> "/monitors", "list-check")
@@ -132,6 +132,45 @@ bodyWrapper BWConfig{sessM, currProject, prePageTitle, pageTitle, menuItem, hasI
       a=t.getElementsByTagName(n)[0],a.parentNode.insertBefore(u,a))}(window,document,'script');
       twq('config','om5gt');
       |]
+        script_ [src_ "/public/assets/js/thirdparty/jsyaml.min.js", crossorigin_ "true"] ("" :: Text)
+        script_ [src_ "/public/assets/testeditor-utils.js"] ("" :: Text)
+        script_ [type_ "module", src_ "/public/assets/steps-editor.js"] ("" :: Text)
+        script_ [type_ "module", src_ "/public/assets/steps-assertions.js"] ("" :: Text)
+        script_
+          [text|
+
+            function codeToggle(e) {
+              if(e.target.checked) {
+                   window.updateEditorVal()
+                }
+            }
+            function addToAssertions(event, assertion, operation) {
+                const parent = event.target.closest(".tab-content")
+                const step = Number(parent.getAttribute('data-step'));
+                const target = event.target.parentNode.parentNode.parentNode
+                const path = target.getAttribute('data-field-path');
+                const value = target.getAttribute('data-field-value');
+                let expression = "$.resp.json." + path
+                if(operation) {
+                  expression +=  ' ' + operation + ' ' + value;
+                  }
+                window.updateStepAssertions(assertion, expression, step);
+            }
+
+         function saveStepData()  {
+           const data = document.getElementById('stepsEditor').collectionSteps
+           const parsedData = validateYaml(data)
+           if(parsedData === undefined) {
+              return undefined
+            }
+           return parsedData;
+          }
+
+          function getTags() {
+            const tag = window.tagify.value
+            return tag.map(tag => tag.value);
+          }
+        |]
 
         script_
           [raw|
@@ -219,8 +258,8 @@ bodyWrapper BWConfig{sessM, currProject, prePageTitle, pageTitle, menuItem, hasI
         , tabindex_ "-1"
         ]
         do
-          div_ [class_ "relative mx-auto max-h-full", style_ "width: min(90vw, 500px)"]
-            $ div_ [class_ "bg-base-100 rounded-lg drop-shadow-md border-1 w-full"] do
+          div_ [class_ "relative mx-auto max-h-full", style_ "width: min(90vw, 500px)"] $
+            div_ [class_ "bg-base-100 rounded-lg drop-shadow-md border-1 w-full"] do
               div_ [class_ "flex items-start justify-between p-6 space-x-2  border-b rounded-t"] do
                 h3_ [class_ "text-3xl font-bold "] "Only Desktop Browsers are Supported for now!"
               -- Modal body
@@ -232,8 +271,9 @@ bodyWrapper BWConfig{sessM, currProject, prePageTitle, pageTitle, menuItem, hasI
               div_ [class_ "flex w-full justify-end items-center p-6 space-x-2 border-t border-gray-200 rounded-b"] pass
       case sessM of
         Nothing -> do
-          section_ [class_ "flex flex-col grow  h-screen overflow-y-hidden"]
-            $ section_ [class_ "flex-1 overflow-y-auto"] $ child
+          section_ [class_ "flex flex-col grow  h-screen overflow-y-hidden"] $
+            section_ [class_ "flex-1 overflow-y-auto"] $
+              child
         Just sess ->
           let currUser = sess.persistentSession.user.getUser
               sideNav' = currProject & maybe "" \project -> sideNav sess project pageTitle menuItem hasIntegrated
@@ -300,8 +340,8 @@ projectsDropDown currProject projects = do
             faSprite_ "key" "regular" "h-5 w-5" >> span_ "API Keys"
           a_ [href_ [text| /p/$pidTxt/integrations|], class_ "p-3 flex gap-3 items-center rounded hover:bg-gray-100"] do
             faSprite_ "arrows-turn-right" "regular" "h-5 w-5" >> span_ "Integrations"
-          when (currProject.paymentPlan == "UsageBased" || currProject.paymentPlan == "GraduatedPricing")
-            $ a_
+          when (currProject.paymentPlan == "UsageBased" || currProject.paymentPlan == "GraduatedPricing") $
+            a_
               [class_ "p-3 flex gap-3 items-center rounded hover:bg-gray-100 cursor-pointer", hxGet_ [text| /p/$pidTxt/manage_subscription |]]
               (faSprite_ "dollar-sign" "regular" "h-5 w-5" >> span_ "Manage billing")
       div_ [class_ "border-t border-gray-100 p-2"] do
@@ -381,7 +421,7 @@ sideNav sess project pageTitle menuItem hasIntegrated = aside_ [class_ "border-r
       , term "data-tippy-content" "Documentation"
       , href_ "https://apitoolkit.io/docs/"
       ]
-        $ span_ [class_ "p-3 rounded-full bg-blue-100 text-brand leading-none"] (faSprite_ "circle-question" "regular" "h-4 w-4") >> span_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:block"] "Documentation"
+      $ span_ [class_ "p-3 rounded-full bg-blue-100 text-brand leading-none"] (faSprite_ "circle-question" "regular" "h-4 w-4") >> span_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:block"] "Documentation"
     a_
       [ class_ "hover:bg-blue-50"
       , term "data-tippy-placement" "right"
@@ -389,7 +429,7 @@ sideNav sess project pageTitle menuItem hasIntegrated = aside_ [class_ "border-r
       , href_ "/logout"
       , [__| on click js posthog.reset(); end |]
       ]
-        $ span_ [class_ "p-3 rounded-full bg-red-100 text-red-600 leading-none"] (faSprite_ "arrow-right-from-bracket" "regular" "h-4 w-4") >> span_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:block"] "Logout"
+      $ span_ [class_ "p-3 rounded-full bg-red-100 text-red-600 leading-none"] (faSprite_ "arrow-right-from-bracket" "regular" "h-4 w-4") >> span_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:block"] "Logout"
 
 
 navbar :: Maybe Projects.Project -> [(Text, Text, Text)] -> Users.User -> Maybe Text -> Text -> Maybe Text -> Maybe (Html ()) -> Maybe (Html ()) -> Html ()

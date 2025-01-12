@@ -390,44 +390,6 @@ collectionPage pid colM col_rn respJson = do
         -- div_ [role_ "tabpanel", class_ "tab-content max-h-full h-full overflow-y-auto space-y-4 relative"] "Hello world"
         jsonTreeAuxillaryCode
 
-    script_ [src_ "/public/assets/testeditor-utils.js"] ("" :: Text)
-    script_ [type_ "module", src_ "/public/assets/steps-editor.js"] ("" :: Text)
-    script_ [type_ "module", src_ "/public/assets/steps-assertions.js"] ("" :: Text)
-    script_
-      [text|
-
-        function codeToggle(e) {
-          if(e.target.checked) {
-               window.updateEditorVal()
-            }
-        }
-        function addToAssertions(event, assertion, operation) {
-            const parent = event.target.closest(".tab-content")
-            const step = Number(parent.getAttribute('data-step'));
-            const target = event.target.parentNode.parentNode.parentNode
-            const path = target.getAttribute('data-field-path');
-            const value = target.getAttribute('data-field-value');
-            let expression = "$.resp.json." + path
-            if(operation) {
-              expression +=  ' ' + operation + ' ' + value;
-              }
-            window.updateStepAssertions(assertion, expression, step);
-        }
-
-     function saveStepData()  {
-       const data = document.getElementById('stepsEditor').collectionSteps
-       const parsedData = validateYaml(data)
-       if(parsedData === undefined) {
-          return undefined
-        }
-       return parsedData;
-      }
-
-      function getTags() {
-        const tag = window.tagify.value
-        return tag.map(tag => tag.value);
-      }
-    |]
     let res = toText respJson
     script_
       [text|
@@ -610,7 +572,6 @@ editorExtraElements = do
     option_ [value_ "exists"] ""
     option_ [value_ "date"] ""
     option_ [value_ "notEmpty"] ""
-  script_ [src_ "/public/assets/js/thirdparty/jsyaml.min.js", crossorigin_ "true"] ("" :: Text)
 
 
 validateCollectionForm :: Testing.CollectionStepUpdateForm -> Text -> (Bool, [Text])
