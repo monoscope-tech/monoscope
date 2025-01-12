@@ -15,6 +15,7 @@ import Models.Projects.Projects (OnboardingStep (..))
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
 import Models.Users.Users
+import NeatInterpolation (text)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
 import Pages.Components qualified as Components
 import Pkg.Components qualified as Components
@@ -36,7 +37,7 @@ onboardingGetH projectId = do
           }
   -- case onboardingStep of
   --   Info -> do
-  addRespHeaders $ PageCtx bodyConfig $ createMonitorPage
+  addRespHeaders $ PageCtx bodyConfig $ notifChannels
 
 
 -- addRespHeaders $ PageCtx bodyConfig $ div_ [class_ "container"] $ "Hello world"
@@ -98,63 +99,112 @@ onboardingConfPost pid form = do
   addRespHeaders $ "ehllo"
 
 
-createMonitorPage :: Html ()
-createMonitorPage = do
-  div_ [class_ "w-[90vw] mx-auto overflow-hidden"] $ do
-    div_ [class_ "w-[550px] mx-auto mt-[156px] mb-10"] $ do
-      div_ [class_ "flex-col gap-4 flex w-full"] $ do
-        stepIndicator 3 "Let's create your first endpoint monitor"
-        form_ [class_ "flex-col w-full gap-8 flex"] $ do
-          div_ [class_ "w-full"] $ termRaw "assertion-builder" [id_ ""] ""
-          div_ [class_ "w-full"] $ termRaw "steps-editor" [id_ "stepsEditor", term "isOnboarding" "true"] ""
+notifChannels :: Html ()
+notifChannels = do
+  div_ [class_ "w-[550px] mx-auto mt-[156px] mb-10"] $ do
+    div_ [class_ "flex-col gap-4 flex w-full"] $ do
+      stepIndicator 4 "How should we notify you about issues?"
+      form_ [class_ "flex-col w-full gap-8 flex mt-4"] $ do
+        div_ [class_ "w-full flex flex-col gap-8"] $ do
+          div_ [class_ "w-full gap-2 grid grid-cols-2"] $ do
+            div_ [class_ "px-3 py-2 rounded-xl border border-[#001066]/10 bg-weak justify-between items-center flex"] $ do
+              div_ [class_ "items-center gap-1.5 flex overflow-hidden"] $ do
+                img_ [src_ "/public/assets/svgs/slack.svg"]
+                div_ [class_ "text-center text-black text-xl font-semibold"] "Slack"
+              div_ [class_ "px-1 justify-center items-center gap-2 flex"] $
+                button_ [class_ "border px-3 h-8 flex items-center shadow-sm border-[var(--brand-color)] rounded-lg text-brand font-semibold"] "Connect"
+            div_ [class_ "px-3 py-2 rounded-xl border border-[#001066]/10 bg-weak justify-between items-center flex"] $ do
+              div_ [class_ "items-center gap-1.5 flex overflow-hidden"] $ do
+                img_ [src_ "/public/assets/svgs/discord.svg"]
+                div_ [class_ "text-center text-black text-xl font-semibold"] "Discord"
+              div_ [class_ "px-1 justify-center items-center gap-2 flex"] $
+                button_ [class_ "border px-3 h-8 flex items-center shadow-sm border-[var(--brand-color)] rounded-lg text-brand font-semibold"] "Connect"
+            div_ [class_ "px-3 py-2 rounded-xl border border-[#001066]/10 bg-weak justify-between items-center flex"] $ do
+              div_ [class_ "items-center gap-1.5 flex overflow-hidden"] $ do
+                img_ [src_ "/public/assets/svgs/teams.svg"]
+                div_ [class_ "text-center text-black text-xl font-semibold"] "Teams"
+              div_ [class_ "px-1 justify-center items-center gap-2 flex"] $
+                button_ [class_ "border px-3 h-8 flex items-center shadow-sm border-[var(--brand-color)] rounded-lg text-brand font-semibold"] "Connect"
+            div_ [class_ "h-12 px-3 py-2 bg-[#00157f]/0 rounded-xl justify-between items-center flex"] $ do
+              div_ [class_ "w-[63.02px] h-4 relative  overflow-hidden"] ""
+              div_ [class_ "bg-white/0 rounded-lg justify-center items-center flex"] $ do
+                div_ [class_ "px-3 rounded-lg justify-center items-center flex"] $ do
+                  div_ [class_ "px-1 justify-center items-center gap-2 flex"] $
+                    div_ [class_ "text-center text-[#067a57] text-sm font-semibold"] "Connected"
+          div_ [class_ "flex flex-col gap-2"] do
+            div_ [class_ "flex w-full items-center gap-1"] $ do
+              span_ [class_ "text-strong lowercase first-letter:uppercase"] $ "Notify the following email address"
+            input_ [class_ "input w-full h-12", type_ "text", name_ "phoeNumber", required_ "required", value_ ""]
+          div_ [class_ "flex flex-col gap-2"] do
+            div_ [class_ "flex w-full items-center gap-1"] $ do
+              span_ [class_ "text-strong lowercase first-letter:uppercase"] $ "Notify the following email address"
+            textarea_ [class_ "input w-full h-12", type_ "text", name_ $ "emails", required_ "required", id_ "emails_input"] ""
           div_ [class_ "items-center gap-4 flex"] $ do
             button_ [class_ "px-6 h-14 flex items-center bg-brand text-white text-xl font-semibold rounded-lg"] "Proceed"
-            button_
-              [ class_ "px-6 h-14 flex items-center border border-[var(--brand-color)] text-brand text-xl font-semibold rounded-lg"
-              , onclick_ "window.addCollectionStep()"
-              , type_ "button"
-              ]
-              "Add a step"
-            button_ [class_ "px-2 h-14 flex items-center underline text-brand text-xl font-semibold", type_ "button"] "Skip"
+      script_
+        [text|
+     document.addEventListener('DOMContentLoaded', function() {
+      var inputElem = document.querySelector('#emails_input')
+      var tagify = new Tagify(inputElem)
+      window.tagify = tagify
+    })
+  |]
+
+
+createMonitorPage :: Html ()
+createMonitorPage = do
+  div_ [class_ "w-[550px] mx-auto mt-[156px] mb-10"] $ do
+    div_ [class_ "flex-col gap-4 flex w-full"] $ do
+      stepIndicator 3 "Let's create your first endpoint monitor"
+      form_ [class_ "flex-col w-full gap-8 flex"] $ do
+        div_ [class_ "w-full"] $ termRaw "assertion-builder" [id_ ""] ""
+        div_ [class_ "w-full"] $ termRaw "steps-editor" [id_ "stepsEditor", term "isOnboarding" "true"] ""
+        div_ [class_ "items-center gap-4 flex"] $ do
+          button_ [class_ "px-6 h-14 flex items-center bg-brand text-white text-xl font-semibold rounded-lg"] "Proceed"
+          button_
+            [ class_ "px-6 h-14 flex items-center border border-[var(--brand-color)] text-brand text-xl font-semibold rounded-lg"
+            , onclick_ "window.addCollectionStep()"
+            , type_ "button"
+            ]
+            "Add a step"
+          button_ [class_ "px-2 h-14 flex items-center underline text-brand text-xl font-semibold", type_ "button"] "Skip"
 
 
 onboardingInfoBody :: Text -> Text -> Html ()
 onboardingInfoBody firstName lastName = do
-  div_ [class_ "w-[100vw] relative bg-[#fbfcfd] overflow-hidden"] $ do
-    div_ [class_ "w-[448px] mx-auto mt-[156px]"] $ do
-      div_ [class_ "flex-col gap-4 flex w-full"] $ do
-        stepIndicator 1 "Tell us a little bit about you"
-        form_ [class_ "flex-col w-full gap-8 flex"] $ do
-          div_ [class_ "flex-col w-full gap-4 mt-4 flex"] $ do
-            mapM_ createInputField [("First Name" :: Text, firstName), ("Last Name", lastName), ("Company Name", "")]
-            createSelectField "Company Size" [("1 - 4", "1 to 5"), ("5 - 10", "5 to 10"), ("10 - 25", "10 to 25"), ("25+", "25 and above")]
-            createSelectField "Where Did You Hear About Us?" [("google", "Google"), ("twitter", "Twitter"), ("linkedin", "LinkedIn"), ("friend", "Friend"), ("other", "Other")]
-          div_ [class_ "items-center gap-1 flex"] $ do
-            button_ [class_ "px-6 h-14 flex items-center bg-brand text-white text-xl font-semibold rounded-lg"] "Proceed"
+  div_ [class_ "w-[448px] mx-auto mt-[156px]"] $ do
+    div_ [class_ "flex-col gap-4 flex w-full"] $ do
+      stepIndicator 1 "Tell us a little bit about you"
+      form_ [class_ "flex-col w-full gap-8 flex"] $ do
+        div_ [class_ "flex-col w-full gap-4 mt-4 flex"] $ do
+          mapM_ createInputField [("First Name" :: Text, firstName), ("Last Name", lastName), ("Company Name", "")]
+          createSelectField "Company Size" [("1 - 4", "1 to 5"), ("5 - 10", "5 to 10"), ("10 - 25", "10 to 25"), ("25+", "25 and above")]
+          createSelectField "Where Did You Hear About Us?" [("google", "Google"), ("twitter", "Twitter"), ("linkedin", "LinkedIn"), ("friend", "Friend"), ("other", "Other")]
+        div_ [class_ "items-center gap-1 flex"] $ do
+          button_ [class_ "px-6 h-14 flex items-center bg-brand text-white text-xl font-semibold rounded-lg"] "Proceed"
 
 
 onboardingConfigBody :: Html ()
 onboardingConfigBody = do
-  div_ [class_ "w-[100vw] relative bg-[#fbfcfd] overflow-hidden"] $ do
-    div_ [class_ "w-[448px] mx-auto mt-[156px]"] $ do
-      div_ [class_ "flex-col gap-4 flex w-full"] $ do
-        stepIndicator 2 "Let's configure your project"
-        form_ [class_ "flex-col w-full gap-8 flex"] $ do
-          div_ [class_ "flex-col w-full gap-14 mt-4 flex"] $ do
-            div_ [class_ "flex-col gap-2 flex"] $ do
-              div_ [class_ "items-center gap-[2px] flex"] $ do
-                span_ [class_ "text-strong"] "Where should your project be hosted?"
-                span_ [class_ "text-weak"] "*"
-              div_ [class_ "pt-2 flex-col gap-4 flex text-sm text-strong"] $ do
-                forM_ locations $ createBinaryField "radio" "location"
-            div_ [class_ "flex-col gap-2 flex"] $ do
-              div_ [class_ "items-center flex gap-[2px]"] $ do
-                span_ [class_ "text-strong"] "Which APItoolkit features will you be using?"
-                span_ [class_ "text-weak"] "*"
-              div_ [class_ "pt-2 flex-col gap-4 flex"] $ do
-                forM_ functionalities $ createBinaryField "checkbox" "functionality"
-          div_ [class_ "items-center gap-1 flex"] $ do
-            button_ [class_ "px-6 h-14 flex items-center bg-brand text-white text-xl font-semibold rounded-lg"] "Proceed"
+  div_ [class_ "w-[448px] mx-auto mt-[156px]"] $ do
+    div_ [class_ "flex-col gap-4 flex w-full"] $ do
+      stepIndicator 2 "Let's configure your project"
+      form_ [class_ "flex-col w-full gap-8 flex"] $ do
+        div_ [class_ "flex-col w-full gap-14 mt-4 flex"] $ do
+          div_ [class_ "flex-col gap-2 flex"] $ do
+            div_ [class_ "items-center gap-[2px] flex"] $ do
+              span_ [class_ "text-strong"] "Where should your project be hosted?"
+              span_ [class_ "text-weak"] "*"
+            div_ [class_ "pt-2 flex-col gap-4 flex text-sm text-strong"] $ do
+              forM_ locations $ createBinaryField "radio" "location"
+          div_ [class_ "flex-col gap-2 flex"] $ do
+            div_ [class_ "items-center flex gap-[2px]"] $ do
+              span_ [class_ "text-strong"] "Which APItoolkit features will you be using?"
+              span_ [class_ "text-weak"] "*"
+            div_ [class_ "pt-2 flex-col gap-4 flex"] $ do
+              forM_ functionalities $ createBinaryField "checkbox" "functionality"
+        div_ [class_ "items-center gap-1 flex"] $ do
+          button_ [class_ "px-6 h-14 flex items-center bg-brand text-white text-xl font-semibold rounded-lg"] "Proceed"
 
 
 functionalities :: [(Text, Text)]
@@ -195,7 +245,7 @@ createSelectField labelText options = do
 
 createBinaryField :: Text -> Text -> (Text, Text) -> Html ()
 createBinaryField kind name (value, label) = do
-  div_ [class_ " justify-start items-center gap-3 inline-flex"] $ do
+  div_ [class_ " items-center gap-3 inline-flex"] $ do
     input_ $ [class_ "w-6 h-6 rounded", type_ kind, name_ name, value_ value, id_ value] <> [required_ "required" | kind == "radio"]
     label_ [class_ "text-strong text-sm", Lucid.for_ value] $ toHtml label
 

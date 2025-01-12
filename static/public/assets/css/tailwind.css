@@ -46,6 +46,8 @@ html,
 body {
   @apply overscroll-none bg-slate-25;
   --brand-color: #0068ff;
+  --tags-border-color:rgba(0, 13, 77, 0.45);
+  --tags-hover-border-color: rgba(0, 13, 77, 0.45);
 }
 
 .c-scroll::-webkit-scrollbar {
@@ -156,6 +158,10 @@ body {
 
 .htmx-request.htmx-indicator {
   display: flex;
+}
+
+.btn-secondary {
+  @apply text-[var(--brand-color)] border border-[var(--brand-color)] rounded-lg font-semibold;
 }
 
 .htmx-request.survey-indicator + button {
