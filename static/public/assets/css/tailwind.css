@@ -161,6 +161,9 @@ body {
 .htmx-request.survey-indicator + button {
   display: none;
 }
+.htmx-request.htmx-indicator ~ span {
+  display: none;
+}
 
 .htmx-request.query-indicator {
   display: flex;
@@ -365,6 +368,7 @@ body {
   @apply justify-center items-center leading-none;
 }
 
+
 /* ======= CODEMIRROR */
 .tree-children {
   display: block;
@@ -412,7 +416,7 @@ body {
 }
 
 .t-tab-active {
-  @apply font-medium border-blue-400;
+  @apply font-bold border-[var(--brand-color)] text-[var(--brand-color)];
 }
 
 .tab:is(input[type='radio']) {

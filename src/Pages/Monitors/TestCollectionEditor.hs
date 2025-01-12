@@ -196,6 +196,12 @@ collectionGetH pid colIdM = do
           , docsLink = Just "https://apitoolkit.io/docs/dashboard/dashboard-pages/api-tests/"
           , pageTitle = "Testing"
           , navTabs = Just $ pageTabs editorUrl overviewUrl
+          , pageActions = Just $ div_ [class_ "inline-flex gap-2"] do
+              button_ [class_ "h-8 rounded-lg bg-brand text-sm text-white px-3 flex items-center", onclick_ "htmx.trigger('#stepsForm','submit')"] do
+                span_ [id_ "save-indicator", class_ "refresh-indicator px-6 htmx-indicator query-indicator loading loading-dots loading-md"] ""
+                span_ [class_ "flex items-center gap-2"] do
+                  faSprite_ "save" "regular" "w-4 h-4 stroke-white"
+                  span_ [class_ "font-semibold"] "Save changes"
           }
   case colIdM of
     Nothing -> do
@@ -347,30 +353,25 @@ collectionPage pid colM col_rn respJson = do
           toHtml $ timelineSteps pid colM
           whenJust colM $ \col -> do
             input_ [type_ "hidden", name_ "collectionId", value_ col.id.toText]
-          div_ [class_ "flex justify-center"] do
-            button_ [class_ "px-6 py-3 rounded-2xl bg-brand text-white", type_ "submit"] do
-              span_ [id_ "save-indicator", class_ "refresh-indicator htmx-indicator query-indicator loading loading-dots loading-md"] ""
-              "Save changes"
-              faSprite_ "save" "regular" "w-4 h-4 ml-2 stroke-white"
 
         div_ [class_ "fixed bg-transparent right-10 w-[25%] h-[80%] top-1/2 -translate-y-1/2", id_ "v-tabs-container"] do
           div_ [role_ "tablist", class_ "w-full h-full"] do
             div_ [class_ "w-full flex rounded-t-2xl border"] do
               button_
-                [ class_ "cursor-pointer a-tab px-4 py-1 text-sm text-gray-600 border-b t-tab-active"
+                [ class_ "cursor-pointer a-tab px-4 py-3 text-sm text-gray-600 border-b-2 t-tab-active"
                 , role_ "tab"
                 , type_ "button"
                 , onclick_ "navigatable(this, '#vars-t', '#v-tabs-container', 't-tab-active')"
                 ]
                 "Variables"
               button_
-                [ class_ "cursor-pointer a-tab px-4 py-2 text-sm whitespace-nowrap text-gray-600 border-b"
+                [ class_ "cursor-pointer a-tab px-4 py-3 text-sm whitespace-nowrap text-gray-600 border-b-2"
                 , role_ "tab"
                 , type_ "button"
                 , onclick_ "navigatable(this, '#step-results-parent', '#v-tabs-container', 't-tab-active')"
                 ]
                 "Result Log"
-              div_ [class_ "w-full border-b"] pass
+              div_ [class_ "w-full border-b-2"] pass
             div_ [role_ "tabpanel", class_ "h-[calc(100%-30px)] max-h-[calc(100%-30px)] rounded-b-2xl border border-t-0 a-tab-content", id_ "vars-t"] do
               variablesDialog pid colM
             div_ [role_ "tabpanel", class_ "hidden relative space-y-4 h-[calc(100%-30px)] max-h-[calc(100%-30px)] a-tab-content rounded-b-2xl border border-t-0 overflow-y-scroll", id_ "step-results-parent"] do
@@ -446,9 +447,10 @@ variablesDialog pid colM = do
         forM_ vars $ \var -> do
           div_ [class_ "flex items-center w-full px-4 gap-2 text-sm relative"] do
             div_ [class_ "input text-left truncate ellipsis input-sm w-full input-bordered bg-transparent"] $ toHtml var.variableName
+            span_ [] "="
             div_ [class_ "input text-left truncate ellipsis input-sm w-full input-bordered bg-transparent"] $ toHtml var.variableValue
             div_
-              [ class_ "absolute -top-2 right-2 cursor-pointer h-5 w-5 flex justify-center items-center rounded-full bg-white shadow border"
+              [ class_ "acursor-pointer h-5 w-5 flex justify-center items-center rounded-full bg-white shadow border"
               , hxDelete_ $ "/p/" <> pid.toText <> "/monitors/" <> col.id.toText <> "/variables/" <> var.variableName
               , hxTarget_ "#test-variables-content"
               , hxSwap_ "outerHTML"
@@ -470,8 +472,9 @@ variablesDialog pid colM = do
         div_ [class_ "w-full pt-24 text-center"] do
           h4_ [class_ "text-lg font-medium"] "Create Local Variables"
           p_ [class_ "text-gray-500"] "Create local variables to be used in your test steps."
-      label_ [Lucid.for_ "my_modal_7", class_ "btn blue-outline-btn btn-sm mt-8 mx-auto"] do
-        faSprite_ "plus" "solid" "w-4 h-4" >> "Variable"
+      label_ [Lucid.for_ "my_modal_7", class_ "flex items-center mx-4 mt-4 gap-2"] do
+        faSprite_ "plus" "solid" "w-4 h-4"
+        span_ [class_ "underline text-weak font-medium"] "Add new variable"
       input_ [type_ "checkbox", id_ "my_modal_7", class_ "modal-toggle"]
       div_ [class_ "modal", role_ "dialog"] $ do
         div_

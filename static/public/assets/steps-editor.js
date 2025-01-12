@@ -328,13 +328,13 @@ export class StepsEditor extends LitElement {
                  <div>
                   <div class="mt-4 pb-3 border rounded-xl">
                     <div role="tablist" class="tabs tabs-bordered pt-1">
-                      <a role="tab" class="tab ${activeTab === 'request-options' ? 'tab-active text-brand font-bold' : ''}" @click=${() => setActiveTab('request-options')}>
+                      <a role="tab" class="tab  ${activeTab === 'request-options' ? 'tab-active [--bc:var(--brand-color)] text-brand font-bold' : ''}" @click=${() => setActiveTab('request-options')}>
                         Request Options ${configuredOptions['request-options'] > 0 ? html`<span class="badge badge-sm badge-ghost">${configuredOptions['request-options']}</span>` : ''}
                       </a>
-                      <a role="tab" class="tab ${activeTab === 'query-params' ? 'tab-active text-brand font-bold' : ''}" @click=${() => setActiveTab('query-params')}>
+                      <a role="tab" class="tab ${activeTab === 'query-params' ? 'tab-active [--bc:var(--brand-color)] text-brand font-bold' : ''}" @click=${() => setActiveTab('query-params')}>
                         Query Params ${configuredOptions['query-params'] > 0 ? html`<span class="badge badge-sm badge-ghost">${configuredOptions['query-params']}</span>` : ''}
                       </a>
-                      <a role="tab" class="tab ${activeTab === 'request-body' ? 'tab-active text-brand font-bold' : ''}" @click=${() => setActiveTab('request-body')}>
+                      <a role="tab" class="tab ${activeTab === 'request-body' ? 'tab-active [--bc:var(--brand-color)] text-brand font-bold' : ''}" @click=${() => setActiveTab('request-body')}>
                         Request Body ${configuredOptions['request-body'] > 0 ? html`<span class="badge badge-sm badge-ghost">${configuredOptions['request-body']}</span>` : ''}
                       </a>
                     </div>
@@ -467,65 +467,87 @@ ${stepData._json}</textarea
                   </div>
                 </details>
               </div>
-              <button class="btn btn-sm mt-5 bg-brand text-white" ?disabled=${!stepData._url} @click=${(e) => this.sendStepRequest(e, idx)}>
+              <button class="mt-5 bg-brand text-white px-2 py-1 font-medium text-sm rounded-lg" ?disabled=${!stepData._url} @click=${(e) => this.sendStepRequest(e, idx)}>
               ${this.isSendingRequest ? html`<span class="loading loading-dots loading-sm"></span>` : 'Send request'}
               </button>
-              <br/>
               ${
                 stepResult && stepResult.resp
                   ? html`
-                      <div class="py-3 text-sm font-medium">
-                        The request responded with a status of <strong>${stepResult.resp.status}</strong> and took <strong>${stepResult.resp.duration_ms}</strong> ms
+                      <h3 class="text-strong text-lg font-medium py-2 mt-10">
+                        Request Preview
+                        <span class="font-normal text-weak">(took <strong>${stepResult.resp.duration_ms}ms</strong> with status <strong>${stepResult.resp.status}</strong>)</span>
+                      </h3>
+                      <div class="rounded-xl border border-weak p-4 text-strong flex flex-col gap-1">${unsafeHTML(generateRequestPreviewFromObject(this.collectionSteps[idx]))}</div>
+                      <div role="tablist" class="tabs tabs-bordered max-h-96 overflow-y-auto border border-slate-200 rounded-xl mt-6">
+                        <input
+                          type="radio"
+                          name="resp-items"
+                          role="tab"
+                          class="tab checked:[--bc:var(--brand-color)] checked:text-[var(--brand-color)] checked:font-bold"
+                          aria-label="Response Headers"
+                          checked
+                        />
+                        <div role="tabpanel" class="tab-content p-4">
+                          <div class="flex rounded bg-weak px-2 py-1 mb-2 items-center gap-2">
+                            ${faSprite_('circle-info', 'regular', 'w-4 h-4 fill-none stroke-slate-600')}
+                            <span class="text-weak">Click below to add field as an assertion</span>
+                          </div>
+                          ${Object.entries(stepResult.resp.headers).map(([key, value]) => {
+                            let assertionObj = {
+                              type: 'header',
+                              operation: 'equals',
+                              headerName: key,
+                              value: value,
+                              status: 'PASSED',
+                            }
+                            return html`
+                              <div class="flex items-center gap-2">
+                                <span class="text-strong">${key}:</span>
+                                <span class="text-weak">${value}</span>
+                                <button
+                                  data-tippy-content="Add as an assertion"
+                                  class="rounded-full border text-strong shadown-sm p-1.5 bg-white"
+                                  @click="${(e) => this.addAssertion(e, idx, assertionObj)}"
+                                >
+                                  ${faSprite_('plus', 'regular', 'w-3.5 h-3.5 text-weak')}
+                                </button>
+                              </div>
+                            `
+                          })}
+                        </div>
+
+                        <input type="radio" name="resp-items" role="tab" class="tab checked:[--bc:var(--brand-color)] checked:text-[var(--brand-color)] checked:font-bold" aria-label="Response Body" />
+                        <div role="tabpanel" class="tab-content p-4">
+                          <div>{</div>
+                          <div class="pl-3">${renderJsonWithIndentation(stepResult.resp.json, (e, assertionObj) => this.addAssertion(e, idx, assertionObj), '$')}</div>
+                          <div>}</div>
+                        </div>
+
+                        <input
+                          type="radio"
+                          name="resp-items"
+                          role="tab"
+                          class="tab checked:[--bc:var(--brand-color)] checked:text-[var(--brand-color)] checked:font-bold"
+                          aria-label="Response Status Code"
+                        />
+                        <div role="tabpanel" class="tab-content p-4">${stepResult.resp.status}</div>
                       </div>
-                      <h3 class="text-slate-500 text-sm font-bold py-2">Request Preview</h3>
-                      <div class="bg-slate-25 rounded-xl p-4 flex flex-col gap-1">${unsafeHTML(generateRequestPreviewFromObject(this.collectionSteps[idx]))}</div>
                     `
                   : nothing
               }
             </div>
 
-            <details class="mt-8" ?open=${stepResult && stepResult.resp}>
+            <details class="mt-10" ?open=${stepResult && stepResult.resp}>
               <summary class="label-text text-lg mb-2 cursor-pointer">
-                <div class="inline-flex gap-2 items-center cursor-pointer text-slate-700 font-medium">
-                  Add Assertions (optional)
+                <div class="inline-flex text-lg gap-2 items-center cursor-pointer text-strong font-medium">
+                  Add Assertions <span class="font-normal text-weak">(optional)</span>
                   <a href="https://apitoolkit.io/docs/dashboard/dashboard-pages/api-tests/#test-definition-syntax" class="" target="_blank">
                     ${faSprite_('circle-info', 'regular', 'w-3 h-3 text-slate-700')}
                   </a>
                 </div>
               </summary>
-              <div class="text-sm space-y-2 px-2 paramRows [&_.assertIndicator]:inline-block" id="[${idx}][asserts]">
-                ${
-                  stepResult && stepResult.resp
-                    ? html`
-                        <div role="tablist" class="tabs tabs-bordered max-h-96 overflow-y-auto border border-slate-200 rounded-xl">
-                          <input type="radio" name="resp-items" role="tab" class="tab" aria-label="Response Headers" checked />
-                          <div role="tabpanel" class="tab-content p-4">
-                            ${Object.entries(stepResult.resp.headers).map(([key, value]) => {
-                              let assertionObj = {
-                                type: 'header',
-                                operation: 'equals',
-                                headerName: key,
-                                value: value,
-                                status: 'PASSED',
-                              }
-                              return html` <span class="hover:bg-gray-200 cursor-pointer" @click="${(e) => this.addAssertion(e, idx, assertionObj)}"> ${key}: ${value} </span><br /> `
-                            })}
-                          </div>
-
-                          <input type="radio" name="resp-items" role="tab" class="tab" aria-label="Response Body" />
-                          <div role="tabpanel" class="tab-content p-4">
-                            <div>{</div>
-                            <div class="pl-3">${renderJsonWithIndentation(stepResult.resp.json, (e, assertionObj) => this.addAssertion(e, idx, assertionObj), '$')}</div>
-                            <div>}</div>
-                          </div>
-
-                          <input type="radio" name="resp-items" role="tab" class="tab" aria-label="Response Status Code" />
-                          <div role="tabpanel" class="tab-content p-4">${stepResult.resp.status}</div>
-                        </div>
-                      `
-                    : nothing
-                }
-                <p class="mt-10 text-xs font-semibold">Your step is successful:</p>
+              <div class="text-strong space-y-2 px-2 paramRows [&_.assertIndicator]:inline-block" id="[${idx}][asserts]">
+                <p class="">Your step is successful;</p>
           ${renderAssertionBuilder({
             assertions: this.collectionSteps[idx]._assertions || [],
             result: this.collectionResults[idx],
@@ -535,12 +557,16 @@ ${stepData._json}</textarea
           })}
               </div>
             </details>
-            <details class="mt-5">
+            <details class="mt-10">
               <summary class="label-text text-lg mb-2 cursor-pointer">
-                <div class="inline-flex gap-2 items-center cursor-pointer text-slate-700 font-medium">Extract variables from the response (optional)</div></summary>
+                <div class="inline-flex gap-2 items-center cursor-pointer text-lg text-strong font-medium">Extract variables from the response <span class="font-normal text-weak">(optional)</span></div></summary>
               <div class="text-sm space-y-2 px-2 paramRows" id="[${idx}][exports]">
-                <p>Variables consist of a variable name and a json path pointing to the variable in the response.</p>
+                <p class="text-strong">Variables consist of a variable name and a json path pointing to the variable in the response.</p>
                 ${this.renderParamsRows(stepData, idx, 'exports')}
+                <button class="flex items-center gap-1 mt-4" type="button" @click=${() => {}}>
+                ${faSprite_('plus', 'regular', 'w-4 h-4 text-weak')}
+                <span class="underline text-weak font-semibold">New variable<span>
+                </button>
               </div>
             </div>
           </div>
@@ -604,7 +630,7 @@ ${stepData._json}</textarea
         ${type === 'exports'
           ? html`
               <div class="flex flex-col w-1/3">
-                <select class="select select-xs select-bordered max-w-xs shadow-none" @change=${(e) => this.updateExportCategory(e, idx, type, aidx, key)}>
+                <select class="select select-sm select-bordered max-w-xs shadow-none" @change=${(e) => this.updateExportCategory(e, idx, type, aidx, key)}>
                   ${options.map((option) => html` <option value=${option.value} ?selected=${option.value === category}>${option.label}</option> `)}
                 </select>
               </div>
@@ -806,9 +832,12 @@ ${stepData._json}</textarea
             ${this.collectionSteps.map((stepData, idx) => this.renderCollectionStep(stepData, idx, this.collectionResults[idx], this.saveErrors[idx]) || undefined)}
           </div>
           <div class="p-4 pt-4">
-            <a class="btn btn-sm blue-outline-btn items-center cursor-pointer" @click=${() => (this.collectionSteps = [...this.collectionSteps, DEFAULT_STEP])}>
+            <a
+              class="btn btn-sm blue-outline-btn bg-transparent border-[var(--brand-color)] items-center cursor-pointer"
+              @click=${() => (this.collectionSteps = [...this.collectionSteps, DEFAULT_STEP])}
+            >
               <svg class="inline-block icon w-3 h-3"><use href="/public/assets/svgs/fa-sprites/solid.svg#plus"></use></svg>
-              Add a step to test
+              Add new step
             </a>
           </div>
         </div>

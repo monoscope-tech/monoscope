@@ -172,9 +172,9 @@ export function renderAssertionBuilder({
 
         let error = passed ? '' : aResult ? aResult.err?.advice : ''
         return html`
-          <div class="py-2">
+          <div class="pt-2">
             <div class="flex gap-2 items-center">
-              <strong class="block w-12 shrink-0 pt-2">${index == 0 ? 'When' : 'And'}</strong>
+              <span class="block w-12 shrink-0 pt-2">${index == 0 ? 'When' : 'And'}</span>
               <div class="flex flex-wrap items-center gap-2 grow ">
                 ${renderDropdown(
                   [
@@ -200,11 +200,11 @@ export function renderAssertionBuilder({
           </div>
         `
       })}
-      <div class="py-2"><button class="flex items-center gap-1" @click=${addAssertion}>${faSprite_(
+      <button class="flex items-center gap-1 mt-4 text-sm" @click=${addAssertion}>${faSprite_(
     'plus',
     'regular',
     'w-4 h-4 text-weak'
-  )} <span class="underline text-weak font-semibold">New Assertion<span></button></div>
+  )} <span class="underline text-weak font-semibold">New assertion<span></button>
     </div>
   `
 }

@@ -126,10 +126,17 @@ export function renderJsonWithIndentation(json, addAssertion, path = '', depth =
       }
       return html`
         <div style="padding-left: ${padding};">
-          <span class="hover:bg-gray-200 cursor-pointer" @click="${(e) => addAssertion(e, assertionObj)}"> ${key}: ${typeof value === 'object' && value ? '' : JSON.stringify(value)} </span><br />
+          <div class="flex items-center gap-4">
+            <span> ${key}: ${typeof value === 'object' && value ? '' : JSON.stringify(value)} </span>
+            <button class="rounded-full border shadow-sm p-1.5" @click="${(e) => addAssertion(e, assertionObj)}">${faSprite_('plus', 'regular', 'w-3 h-3 stroke-slate-500 text-weak')}</button>
+          </div>
           ${typeof value === 'object' && value ? renderJsonWithIndentation(value, addAssertion, currentPath, depth + 1) : ''}
         </div>
       `
     })}
   `
+}
+
+function faSprite_(iconName, kind, classes) {
+  return html`<svg class="${classes}"><use href="/public/assets/svgs/fa-sprites/${kind}.svg#${iconName}"></use></svg>`
 }
