@@ -72,7 +72,7 @@ spec = aroundAll withTestResources do
 
     it "should add test collection" \TestResources{..} -> do
       res <-
-        toServantResponse trATCtx trSessAndHeader trLogger $ TestCollectionEditor.collectionStepsUpdateH testPid collection
+        toServantResponse trATCtx trSessAndHeader trLogger $ TestCollectionEditor.collectionStepsUpdateH testPid collection Nothing
       case res of
         TestCollectionEditor.CollectionMutSuccess -> fail "Error"
         _ -> do pass
@@ -107,7 +107,7 @@ spec = aroundAll withTestResources do
               }
 
       res <-
-        toServantResponse trATCtx trSessAndHeader trLogger $ TestCollectionEditor.collectionStepsUpdateH testPid scheduleCollectionMn
+        toServantResponse trATCtx trSessAndHeader trLogger $ TestCollectionEditor.collectionStepsUpdateH testPid scheduleCollectionMn Nothing
       case res of
         TestCollectionEditor.CollectionMutSuccess -> fail "Error"
         _ -> do pass
@@ -143,7 +143,7 @@ spec = aroundAll withTestResources do
               }
 
       res <-
-        toServantResponse trATCtx trSessAndHeader trLogger $ TestCollectionEditor.collectionStepsUpdateH testPid scheduleCollection
+        toServantResponse trATCtx trSessAndHeader trLogger $ TestCollectionEditor.collectionStepsUpdateH testPid scheduleCollection Nothing
       case res of
         TestCollectionEditor.CollectionMutError -> fail "Error"
         _ -> do pass

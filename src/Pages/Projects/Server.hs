@@ -25,4 +25,6 @@ server =
     , membersManagePost = ManageMembers.manageMembersPostH
     , manageSubscriptionGet = ManageMembers.manageSubGetH
     , onboading = Onboarding.onboardingGetH
+    , onboardingInfoPost = Onboarding.onboardingInfoPost
+    , onboardingConfPost = Onboarding.onboardingConfPost
     }

@@ -48,7 +48,7 @@ import Pkg.Components qualified as Components
 import PyF (fmt)
 import Relude hiding (ask)
 import System.Types (ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders, addSuccessToast, redirectCS)
-import Utils (faSprite_, getStatusColor, jsonValueToHtmlTree)
+import Utils (faSprite_, getStatusColor, jsonValueToHtmlTree, redirect)
 
 
 data CollectionVariableForm = CollectionVariableForm
@@ -59,8 +59,8 @@ data CollectionVariableForm = CollectionVariableForm
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields] CollectionVariableForm
 
 
-collectionStepsUpdateH :: Projects.ProjectId -> Testing.CollectionStepUpdateForm -> ATAuthCtx (RespHeaders CollectionMut)
-collectionStepsUpdateH pid colF = do
+collectionStepsUpdateH :: Projects.ProjectId -> Testing.CollectionStepUpdateForm -> Maybe Text -> ATAuthCtx (RespHeaders CollectionMut)
+collectionStepsUpdateH pid colF onboardingM = do
   (_, project) <- Sessions.sessionAndProject pid
   let (isValid, errMessage) = validateCollectionForm colF project.paymentPlan
   if not isValid
@@ -107,9 +107,14 @@ collectionStepsUpdateH pid colF = do
                   , stopAfterCheck = False
                   }
           _ <- dbtToEff $ Testing.addCollection coll
-          addSuccessToast "Collection saved successfully" Nothing
-          redirectCS $ "/p/" <> pid.toText <> "/monitors/collection/?col_id=" <> colId.toText
-          addRespHeaders CollectionMutSuccess
+          case onboardingM of
+            Just _ -> do
+              redirectCS $ "/p/" <> pid.toText <> "/onboarding?step=NotifChannel"
+              addRespHeaders CollectionMutSuccess
+            Nothing -> do
+              addSuccessToast "Collection saved successfully" Nothing
+              redirectCS $ "/p/" <> pid.toText <> "/monitors/collection/?col_id=" <> colId.toText
+              addRespHeaders CollectionMutSuccess
 
 
 collectionStepVariablesUpdateH :: Projects.ProjectId -> Testing.CollectionId -> CollectionVariableForm -> ATAuthCtx (RespHeaders (Html ()))

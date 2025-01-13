@@ -3,10 +3,12 @@ module Pages.Projects.Routes (Routes, Routes' (..)) where
 import Lucid (Html)
 import Models.Projects.Projects qualified as Projects
 import Pages.BodyWrapper (PageCtx)
+import Pages.Onboarding.Onboarding qualified as Onboarding
 import Pages.Projects.CreateProject qualified as CreateProject
 import Pages.Projects.Integrations qualified as Integrations
 import Pages.Projects.ListProjects qualified as ListProjects
 import Pages.Projects.ManageMembers qualified as ManageMembers
+import Pkg.RouteUtils (QPT)
 import Relude
 import Servant (Capture, FormUrlEncoded, GenericMode (type (:-)), Get, NamedRoutes, Post, ReqBody, type (:>))
 import Servant.HTML.Lucid (HTML)
@@ -32,6 +34,8 @@ data Routes' mode = Routes'
   , membersManageGet :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "manage_members" :> Get '[HTML] (RespHeaders ManageMembers.ManageMembers)
   , membersManagePost :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "manage_members" :> ReqBody '[FormUrlEncoded] ManageMembers.ManageMembersForm :> Post '[HTML] (RespHeaders ManageMembers.ManageMembers)
   , manageSubscriptionGet :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "manage_subscription" :> Get '[HTML] (RespHeaders (Html ()))
-  , onboading :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "onboarding" :> Get '[HTML] (RespHeaders (PageCtx (Html ())))
+  , onboading :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "onboarding" :> QPT "step" :> Get '[HTML] (RespHeaders (PageCtx (Html ())))
+  , onboardingInfoPost :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "onboarding" :> "info" :> ReqBody '[FormUrlEncoded] Onboarding.OnboardingInfoForm :> Post '[HTML] (RespHeaders (Html ()))
+  , onboardingConfPost :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "onboarding" :> "survey" :> ReqBody '[FormUrlEncoded] Onboarding.OnboardingConfForm :> Post '[HTML] (RespHeaders (Html ()))
   }
   deriving stock (Generic)
