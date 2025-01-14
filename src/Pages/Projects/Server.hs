@@ -27,4 +27,6 @@ server =
     , onboading = Onboarding.onboardingGetH
     , onboardingInfoPost = Onboarding.onboardingInfoPost
     , onboardingConfPost = Onboarding.onboardingConfPost
+    , onboardingDiscordPost = Onboarding.discorPostH
+    , onboardingPhoneEmailsPost = Onboarding.phoneEmailPostH
     }

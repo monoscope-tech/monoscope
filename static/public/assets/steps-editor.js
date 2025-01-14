@@ -473,7 +473,7 @@ ${stepData._json}</textarea
                   </div>
                 </details>
               </div>
-              <button class="mt-5 bg-brand text-white px-2 py-1 font-medium text-sm rounded-lg" ?disabled=${!stepData._url} @click=${(e) => this.sendStepRequest(e, idx)}>
+              <button class="mt-5 btn-primary px-2 py-1 font-medium text-sm rounded-lg" ?disabled=${!stepData._url} @click=${(e) => this.sendStepRequest(e, idx)}>
               ${this.isSendingRequest ? html`<span class="loading loading-dots loading-sm"></span>` : 'Send request'}
               </button>
               ${

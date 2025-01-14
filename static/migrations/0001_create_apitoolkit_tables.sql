@@ -90,6 +90,8 @@ SELECT manage_updated_at('users.persistent_sessions');
 
 CREATE TYPE notification_channel_enum AS ENUM ('email', 'slack');
 ALTER TYPE notification_channel_enum ADD VALUE 'discord';
+ALTER TYPE notification_channel_enum ADD VALUE 'phone';
+
 
 CREATE TABLE IF NOT EXISTS projects.projects
 (
@@ -116,6 +118,8 @@ ALTER TABLE projects.projects ADD COLUMN IF NOT EXISTS discord_url TEXT DEFAULT 
 ALTER TABLE projects.projects ADD COLUMN IF NOT EXISTS billing_day TIMESTAMP WITH TIME ZONE DEFAULT current_timestamp;
 CREATE TYPE onboarding_steps_enum AS ENUM ('Info', 'Survey', 'CreateMonitor','NotifChannel','Integration', 'Pricing', 'Complete');
 ALTER TABLE projects.projects ADD COLUMN IF NOT EXISTS onboarding_steps_completed TEXT[] DEFAULT ARRAY[]::TEXT[];
+ALTER TABLE projects.projects ADD COLUMN IF NOT EXISTS notify_phone_number TEXT DEFAULT NULL;
+ALTER TABLE projects.projects ADD COLUMN IF NOT EXISTS notify_emails TEXT[] DEFAULT ARRAY[]::TEXT[];
 
 
 -----------------------------------------------------------------------

@@ -1,13 +1,27 @@
-module Pages.Onboarding.Onboarding (onboardingGetH, onboardingInfoPost, onboardingConfPost, OnboardingInfoForm (..), OnboardingConfForm (..)) where
+{-# OPTIONS_GHC -Wno-unrecognised-pragmas #-}
+
+{-# HLINT ignore "Use newtype instead of data" #-}
+module Pages.Onboarding.Onboarding (
+  onboardingGetH,
+  onboardingInfoPost,
+  onboardingConfPost,
+  discorPostH,
+  phoneEmailPostH,
+  DiscordForm (..),
+  NotifChannelForm (..),
+  OnboardingInfoForm (..),
+  OnboardingConfForm (..),
+) where
 
 import Data.Aeson qualified as AE
 import Data.Aeson.KeyMap qualified as KM
 import Data.Default (def)
 import Data.Text qualified as T
-import Data.Vector as V (Vector)
+import Data.Vector as V (Vector, fromList, toList)
 import Database.PostgreSQL.Entity.DBT (QueryNature (Update), execute)
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
+import Effectful.Reader.Static (ask)
 import Gogol.PubSub (CreateSnapshotRequest (labels))
 import Lucid
 import Lucid.Base (TermRaw (termRaw))
@@ -18,9 +32,13 @@ import Models.Users.Sessions qualified as Sessions
 import Models.Users.Users
 import NeatInterpolation (text)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
+
+import Lucid.Hyperscript (__)
 import Pages.Components qualified as Components
 import Pkg.Components qualified as Components
-import Relude
+import Pkg.Mail (sendDiscordNotif)
+import Relude hiding (ask)
+import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders, redirectCS)
 import Utils (faSprite_, redirect)
 import Web.FormUrlEncoded
@@ -30,6 +48,7 @@ import Web.FormUrlEncoded
 onboardingGetH :: Projects.ProjectId -> Maybe Text -> ATAuthCtx (RespHeaders (PageCtx (Html ())))
 onboardingGetH pid onboardingStep = do
   (sess, project) <- Sessions.sessionAndProject pid
+  appContx <- ask @AuthContext
   let firstName = sess.user.firstName
       lastName = sess.user.lastName
       -- onboardingStep = project.onboardingStep
@@ -40,7 +59,7 @@ onboardingGetH pid onboardingStep = do
       page = case onboardingStep of
         Just "Survey" -> onboardingConfigBody pid
         Just "CreateMonitor" -> createMonitorPage pid
-        Just "NotifChannel" -> notifChannels pid
+        Just "NotifChannel" -> notifChannels pid appContx.config.slackRedirectUri
         _ -> onboardingInfoBody pid firstName lastName
   addRespHeaders $ PageCtx bodyConfig page
 
@@ -65,6 +84,41 @@ data OnboardingConfForm = OnboardingConForm
   }
   deriving stock (Show, Generic)
   deriving anyclass (FromForm)
+
+
+data DiscordForm = DiscordForm {url :: Text}
+  deriving stock (Show, Generic)
+  deriving anyclass (FromForm)
+
+
+data NotifChannelForm = NotifChannelForm
+  { phoneNumber :: Text
+  , emails :: [Text]
+  }
+  deriving stock (Show, Generic)
+  deriving anyclass (FromForm, AE.FromJSON, AE.ToJSON)
+
+
+discorPostH :: Projects.ProjectId -> DiscordForm -> ATAuthCtx (RespHeaders (Html ()))
+discorPostH pid form = do
+  (sess, project) <- Sessions.sessionAndProject pid
+  let notifs = ordNub $ Projects.parseNotifChannel <$> (V.toList project.notificationsChannel <> [Projects.NDiscord])
+  sendDiscordNotif form.url "APItoolkit connected successfully"
+  _ <- dbtToEff do Projects.updateNotificationsChannel pid notifs (Just form.url)
+  addRespHeaders $ button_ [class_ "text-green-500 font-semibold"] "Connected"
+
+
+phoneEmailPostH :: Projects.ProjectId -> NotifChannelForm -> ATAuthCtx (RespHeaders (Html ()))
+phoneEmailPostH pid form = do
+  (sess, project) <- Sessions.sessionAndProject pid
+  let phone = form.phoneNumber
+      emails = form.emails
+      notifs = if phone /= "" then V.toList project.notificationsChannel <> [Projects.NPhone] else V.toList project.notificationsChannel
+      notifs' = if emails /= [] then notifs <> [Projects.NEmail] else notifs
+      notifsTxt = ordNub $ Projects.parseNotifChannel <$> notifs'
+      q = [sql| update projects.projects set notifications_channel=?::notification_channel_enum[], notify_phone_number=?, notify_emails=?::text[] where id=? |]
+  _ <- dbtToEff $ execute Update q (V.fromList notifsTxt, phone, V.fromList emails, pid)
+  addRespHeaders $ inviteTeamMemberModal pid (V.fromList emails)
 
 
 onboardingInfoPost :: Projects.ProjectId -> OnboardingInfoForm -> ATAuthCtx (RespHeaders (Html ()))
@@ -105,48 +159,54 @@ onboardingConfPost pid form = do
   addRespHeaders ""
 
 
-notifChannels :: Projects.ProjectId -> Html ()
-notifChannels pid = do
+notifChannels :: Projects.ProjectId -> Text -> Html ()
+notifChannels pid slackRedirectUri = do
   div_ [class_ "w-[550px] mx-auto mt-[156px] mb-10"] $ do
+    div_ [id_ "inviteModalContainer"] pass
     div_ [class_ "flex-col gap-4 flex w-full"] $ do
       stepIndicator 4 "How should we notify you about issues?" $ "/p/" <> pid.toText <> "/onboarding?step=CreateMonitor"
-      form_ [class_ "flex-col w-full gap-8 flex mt-4"] $ do
+      div_ [class_ "flex-col w-full gap-8 flex mt-4"] $ do
         div_ [class_ "w-full flex flex-col gap-8"] $ do
           div_ [class_ "w-full gap-2 grid grid-cols-2"] $ do
             div_ [class_ "px-3 py-2 rounded-xl border border-[#001066]/10 bg-weak justify-between items-center flex"] $ do
               div_ [class_ "items-center gap-1.5 flex overflow-hidden"] $ do
                 img_ [src_ "/public/assets/svgs/slack.svg"]
-                div_ [class_ "text-center text-black text-xl font-semibold"] "Slack"
-              div_ [class_ "px-1 justify-center items-center gap-2 flex"] $
-                button_ [class_ "border px-3 h-8 flex items-center shadow-sm border-[var(--brand-color)] rounded-lg text-brand font-semibold"] "Connect"
+                span_ [class_ "text-center text-black text-xl font-semibold"] "Slack"
+              let
+                -- slackDev = "https://slack.com/oauth/v2/authorize?client_id=6187126212950.6193763110659&scope=chat:write,incoming-webhook&user_scope="
+                slackPro = "https://slack.com/oauth/v2/authorize?client_id=6211090672305.6200958370180&scope=chat:write,incoming-webhook&user_scope="
+
+              a_
+                [ target_ "_blank"
+                , class_ "border px-3 h-8 flex items-center shadow-sm border-[var(--brand-color)] rounded-lg text-brand font-semibold"
+                , href_ $ slackPro <> "&redirect_uri=" <> slackRedirectUri <> pid.toText <> "?onboarding=true"
+                ]
+                do
+                  "Connect"
             div_ [class_ "px-3 py-2 rounded-xl border border-[#001066]/10 bg-weak justify-between items-center flex"] $ do
               div_ [class_ "items-center gap-1.5 flex overflow-hidden"] $ do
                 img_ [src_ "/public/assets/svgs/discord.svg"]
                 div_ [class_ "text-center text-black text-xl font-semibold"] "Discord"
-              div_ [class_ "px-1 justify-center items-center gap-2 flex"] $
-                button_ [class_ "border px-3 h-8 flex items-center shadow-sm border-[var(--brand-color)] rounded-lg text-brand font-semibold"] "Connect"
-          -- div_ [class_ "px-3 py-2 rounded-xl border border-[#001066]/10 bg-weak justify-between items-center flex"] $ do
-          --   div_ [class_ "items-center gap-1.5 flex overflow-hidden"] $ do
-          --     img_ [src_ "/public/assets/svgs/teams.svg"]
-          --     div_ [class_ "text-center text-black text-xl font-semibold"] "Teams"
-          --   div_ [class_ "px-1 justify-center items-center gap-2 flex"] $
-          --     button_ [class_ "border px-3 h-8 flex items-center shadow-sm border-[var(--brand-color)] rounded-lg text-brand font-semibold"] "Connect"
-          -- div_ [class_ "h-12 px-3 py-2 bg-[#00157f]/0 rounded-xl justify-between items-center flex"] $ do
-          --   div_ [class_ "w-[63.02px] h-4 relative  overflow-hidden"] ""
-          --   div_ [class_ "bg-white/0 rounded-lg justify-center items-center flex"] $ do
-          --     div_ [class_ "px-3 rounded-lg justify-center items-center flex"] $ do
-          --       div_ [class_ "px-1 justify-center items-center gap-2 flex"] $
-          --         div_ [class_ "text-center text-[#067a57] text-sm font-semibold"] "Connected"
-          div_ [class_ "flex flex-col gap-2"] do
-            div_ [class_ "flex w-full items-center gap-1"] $ do
-              span_ [class_ "text-strong lowercase first-letter:uppercase"] $ "Notify the following email address"
-            input_ [class_ "input w-full h-12", type_ "text", name_ "phoeNumber", required_ "required", value_ ""]
-          div_ [class_ "flex flex-col gap-2"] do
-            div_ [class_ "flex w-full items-center gap-1"] $ do
-              span_ [class_ "text-strong lowercase first-letter:uppercase"] $ "Notify the following email address"
-            textarea_ [class_ "w-full rounded-lg stroke-strong", type_ "text", name_ $ "emails", required_ "required", id_ "emails_input"] ""
-          div_ [class_ "items-center gap-4 flex"] $ do
-            button_ [class_ "px-6 h-14 flex items-center bg-brand text-white text-xl font-semibold rounded-lg"] "Proceed"
+              discordModal pid
+          form_
+            [ class_ "flex flex-col gap-8"
+            , hxPost_ $ "/p/" <> pid.toText <> "/onboarding/phone-emails"
+            , hxExt_ "json-enc"
+            , hxVals_ "js:{phoneNumber: document.getElementById('phone').value , emails: getTags()}"
+            , hxTarget_ "#inviteModalContainer"
+            , hxSwap_ "innerHTML"
+            ]
+            $ do
+              div_ [class_ "flex flex-col gap-2"] do
+                div_ [class_ "flex w-full items-center gap-1"] $ do
+                  span_ [class_ "text-strong lowercase first-letter:uppercase"] "Notify phone number"
+                input_ [class_ "input w-full h-12", type_ "text", name_ "phoneNumber", id_ "phone"]
+              div_ [class_ "flex flex-col gap-2"] do
+                div_ [class_ "flex w-full items-center gap-1"] $ do
+                  span_ [class_ "text-strong lowercase first-letter:uppercase"] "Notify the following email address"
+                textarea_ [class_ "w-full rounded-lg stroke-strong", type_ "text", name_ "emails", id_ "emails_input"] ""
+              div_ [class_ "items-center gap-4 flex"] $ do
+                button_ [class_ "px-6 h-14 flex items-center btn-primary text-xl font-semibold rounded-lg"] "Proceed"
       script_
         [text|
      document.addEventListener('DOMContentLoaded', function() {
@@ -154,6 +214,18 @@ notifChannels pid = do
       var tagify = new Tagify(inputElem)
       window.tagify = tagify
     })
+
+    function appendMember() {
+      const email = document.querySelector('#add-member-input').value
+      const node = document.querySelector("#member-template").cloneNode(true)
+      node.removeAttribute('id')
+      node.querySelector('input').value = email
+      node.querySelector('input').setAttribute('name', 'emails')
+      node.querySelector('span').textContent = email
+      node.classList.remove('hidden')
+      document.querySelector('#members-container').appendChild(node)
+       _hyperscript.processNode(node)
+    }
   |]
 
 
@@ -173,7 +245,7 @@ createMonitorPage pid = do
           div_ [class_ "w-full"] $ termRaw "assertion-builder" [id_ ""] ""
           div_ [class_ "w-full"] $ termRaw "steps-editor" [id_ "stepsEditor", term "isOnboarding" "true"] ""
           div_ [class_ "items-center gap-4 flex"] $ do
-            button_ [class_ "px-6 h-14 flex items-center bg-brand text-white text-xl font-semibold rounded-lg", type_ "submit"] "Proceed"
+            button_ [class_ "px-6 h-14 flex items-center btn-primary text-xl font-semibold rounded-lg", type_ "submit"] "Proceed"
             button_
               [ class_ "px-6 h-14 flex items-center border border-[var(--brand-color)] text-brand text-xl font-semibold rounded-lg"
               , onclick_ "window.addCollectionStep()"
@@ -188,6 +260,30 @@ createMonitorPage pid = do
               "Skip"
 
 
+discordModal :: Projects.ProjectId -> Html ()
+discordModal pid = do
+  div_ [id_ "discord-modal"] $ do
+    label_ [Lucid.for_ "my_modal_6", class_ "border px-3 h-8 flex items-center shadow-sm border-[var(--brand-color)] rounded-lg text-brand font-semibold"] "Connect"
+    input_ [type_ "checkbox", id_ "my_modal_6", class_ "modal-toggle"]
+    div_ [class_ "modal", role_ "dialog"] do
+      div_ [class_ "modal-box"] $ do
+        div_
+          [ hxPost_ $ "/p/" <> pid.toText <> "/onboarding/discord"
+          , hxTarget_ "#discord-modal"
+          , hxSwap_ "innerHTML"
+          , id_ "dscrd"
+          , hxVals_ "js:{url: document.getElementById('discord-url').value}"
+          ]
+          do
+            div_ [[__| on click halt|]] do
+              h3_ [class_ "text-lg font-bold"] "Enter discord webhook URL"
+              p_ [class_ "py-4"] "This modal works with a hidden checkbox!"
+              input_ [type_ "text", class_ "input w-full h-12", id_ "discord-url", name_ "url", required_ "required"]
+            div_ [class_ "modal-action"] do
+              button_ [class_ "btn btn-primary rounded-lg btn-sm", type_ "button", onclick_ "htmx.trigger('#dscrd','submit')"] "Submit"
+      label_ [class_ "modal-backdrop", Lucid.for_ "my_modal_6"] "Close"
+
+
 onboardingInfoBody :: Projects.ProjectId -> Text -> Text -> Html ()
 onboardingInfoBody pid firstName lastName = do
   div_ [class_ "w-[448px] mx-auto mt-[156px]"] $ do
@@ -199,7 +295,7 @@ onboardingInfoBody pid firstName lastName = do
           createSelectField "company Size" [("1 - 4", "1 to 5"), ("5 - 10", "5 to 10"), ("10 - 25", "10 to 25"), ("25+", "25 and above")]
           createSelectField "where Did You Hear About Us" [("google", "Google"), ("twitter", "Twitter"), ("linkedin", "LinkedIn"), ("friend", "Friend"), ("other", "Other")]
         div_ [class_ "items-center gap-1 flex"] $ do
-          button_ [class_ "px-6 h-14 flex items-center bg-brand text-white text-xl font-semibold rounded-lg"] "Proceed"
+          button_ [class_ "px-6 h-14 flex items-center btn-primary text-xl font-semibold rounded-lg"] "Proceed"
 
 
 onboardingConfigBody :: Projects.ProjectId -> Html ()
@@ -222,7 +318,39 @@ onboardingConfigBody pid = do
             div_ [class_ "pt-2 flex-col gap-4 flex"] $ do
               forM_ functionalities $ createBinaryField "checkbox" "functionality"
         div_ [class_ "items-center gap-1 flex"] $ do
-          button_ [class_ "px-6 h-14 flex items-center bg-brand text-white text-xl font-semibold rounded-lg"] "Proceed"
+          button_ [class_ "px-6 h-14 flex items-center btn-primary text-xl font-semibold rounded-lg"] "Proceed"
+
+
+inviteTeamMemberModal :: Projects.ProjectId -> Vector Text -> Html ()
+inviteTeamMemberModal pid emails = do
+  div_ [id_ "invite-modal-container"] $ do
+    input_ [type_ "checkbox", id_ "inviteModal", class_ "modal-toggle", checked_]
+    div_ [class_ "modal p-8", role_ "dialog"] do
+      div_ [class_ "modal-box flex flex-col gap-4"] $ do
+        div_ [class_ "p-3 bg-[#0acc91]/5 rounded-full w-max border-[#067a57]/20 gap-2 inline-flex"] $
+          faSprite_ "circle-check" "regular" "h-6 w-6 text-green-500"
+        span_ [class_ "text-strong text-2xl font-semibold"] "Test notifications sent"
+        div_ [class_ "text-[#000833]/60"] "No notification? Close this modal and verify emails and channels."
+        div_ [class_ "h-1 w-full bg-weak"] pass
+        div_ [class_ "flex-col gap-4 flex"] $ do
+          div_ [class_ "flex-col gap-5 flex"] $ do
+            div_ [class_ "w-full text-[#000833]/60"] "The users below will be added to your project as team members"
+            div_ [class_ "w-full gap-4 flex flex-col"] $ do
+              div_ [class_ "w-full gap-2 flex items-center"] $ do
+                div_ [class_ "flex-col gap-1 inline-flex w-full"] $
+                  div_ [class_ "flex flex-col gap-1 w-full"] $ do
+                    input_ [class_ "input input-sm w-full", placeholder_ "email@example.com", type_ "email", id_ "add-member-input"]
+                button_ [class_ "btn-primary rounded-lg  px-3 h-8 justify-center items-center flex text-white text-sm font-semibold", onclick_ "appendMember()"] "invite"
+              div_ [class_ "w-full"] $ do
+                div_ [class_ "w-full text-strong text-sm font-semibold"] "Members"
+                div_ [class_ "w-full border-t border-weak"] $ do
+                  div_ [class_ "flex-col flex", id_ "members-container"] $ do
+                    inviteMemberItem "hidden"
+                    forM_ emails $ \email -> do
+                      inviteMemberItem email
+        div_ [class_ "modal-action w-full flex items-center justify-start gap-2 mt-2"] do
+          button_ [class_ "btn btn-primary font-semibold rounded-lg", type_ "button"] "Proceed"
+          label_ [class_ "text-brand font-semibold underline", Lucid.for_ "inviteModal"] "Close"
 
 
 functionalities :: [(Text, Text)]
@@ -239,6 +367,25 @@ locations =
   , ("eu", "EU")
   , ("asia", "Asia")
   ]
+
+
+inviteMemberItem :: Text -> Html ()
+inviteMemberItem email = do
+  let hide = email == "hidden"
+  div_ (class_ ("flex  py-1 w-full justify-between items-center border-b border-[#001066]/10 " <> if hide then "hidden" else "") : [id_ "member-template" | hide]) do
+    div_ [class_ "pr-6 py-1  w-full justify-start items-center inline-flex"] do
+      input_ ([type_ "hidden", value_ email] ++ [name_ "emails" | hide])
+      span_ [class_ "text-[#000626]/90 text-sm font-normal"] $
+        toHtml email
+    select_ [name_ "permissions", class_ "select select-xs"] do
+      option_ [class_ "text-gray-500", value_ "admin"] "Admin"
+      option_ [class_ "text-gray-500", value_ "edit"] "Can Edit"
+      option_ [class_ "text-gray-500", value_ "view"] "Can View"
+    button_
+      [ [__| on click remove the closest parent <div/> then halt |]
+      , class_ "text-brand ml-4 font-semibold text-sm underline"
+      ]
+      "remove"
 
 
 createInputField :: (Text, Text) -> Html ()
@@ -274,7 +421,7 @@ stepIndicator step title prevUrl =
     div_ [class_ "flex-col gap-2 flex w-full"] $ do
       div_ [class_ "text-strong text-base font-semibold"] $ "Step " <> show step <> " of 6"
       div_ [class_ "grid grid-cols-6 w-full gap-1"] $ do
-        forM_ [1 .. 6] $ \i -> div_ [class_ $ if step >= i then "bg-brand rounded" else "bg-weak shadow-[inset_0px_1px_4px_0px_rgba(0,0,0,0.08)] border border-[#001066]/10" <> " h-2 w-full rounded"] pass
+        forM_ [1 .. 6] $ \i -> div_ [class_ $ if step >= i then "btn-primary rounded" else "bg-weak shadow-[inset_0px_1px_4px_0px_rgba(0,0,0,0.08)] border border-[#001066]/10" <> " h-2 w-full rounded"] pass
       when (step > 1) $ do
         a_ [class_ "flex items-center gap-3 flex text-brand w-full mt-2", href_ prevUrl] $ do
           faSprite_ "arrow-left" "regular" "h-4 w-4"

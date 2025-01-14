@@ -133,7 +133,7 @@ itemsList_ listCfg items = do
 
         div_ [class_ " grow flex flex-row gap-2"] do
           forM_ listCfg.bulkActions \blkA -> button_
-            [ class_ "btn btn-sm btn-disabled group-has-[.bulkactionItemCheckbox:checked]/grid:!bg-brand text-white group-has-[.bulkactionItemCheckbox:checked]/grid:!pointer-events-auto  "
+            [ class_ "btn btn-sm btn-disabled group-has-[.bulkactionItemCheckbox:checked]/grid:!btn-primary group-has-[.bulkactionItemCheckbox:checked]/grid:!pointer-events-auto  "
             , hxPost_ blkA.uri
             , hxSwap_ "none"
             ]

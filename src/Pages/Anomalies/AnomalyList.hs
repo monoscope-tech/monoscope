@@ -670,7 +670,7 @@ anomalyAcknowlegeButton pid aid acked host = do
   a_
     [ class_ $
         "flex items-center gap-2 cursor-pointer py-2 px-3 rounded-xl  "
-          <> (if acked then "bg-green-100 text-green-900" else "bg-brand text-white")
+          <> (if acked then "bg-green-100 text-green-900" else "btn-primary")
     , term "data-tippy-content" "acknowlege anomaly"
     , hxGet_ acknowlegeAnomalyEndpoint
     , hxSwap_ "outerHTML"
@@ -686,7 +686,7 @@ anomalyArchiveButton pid aid archived = do
   a_
     [ class_ $
         "flex items-center gap-2 cursor-pointer py-2 px-3 rounded-xl "
-          <> (if archived then " bg-green-100 text-green-900" else "bg-brand text-white")
+          <> (if archived then " bg-green-100 text-green-900" else "btn-primary")
     , term "data-tippy-content" $ if archived then "unarchive" else "archive"
     , hxGet_ archiveAnomalyEndpoint
     , hxSwap_ "outerHTML"

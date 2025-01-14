@@ -5,6 +5,7 @@ module Models.Projects.Projects (
   CreateProject (..),
   ProjectRequestStats (..),
   NotificationChannel (..),
+  parseNotifChannel,
   OnboardingStep (..),
   insertProject,
   projectIdFromText,
@@ -79,6 +80,7 @@ data NotificationChannel
   = NEmail
   | NSlack
   | NDiscord
+  | NPhone
   deriving stock (Eq, Generic, Show)
   deriving anyclass (NFData)
 
@@ -87,12 +89,14 @@ instance AE.ToJSON NotificationChannel where
   toJSON NEmail = AE.String "email"
   toJSON NSlack = AE.String "slack"
   toJSON NDiscord = AE.String "discord"
+  toJSON NPhone = AE.String "phone"
 
 
 instance AE.FromJSON NotificationChannel where
   parseJSON (AE.String "email") = pure NEmail
   parseJSON (AE.String "slack") = pure NSlack
   parseJSON (AE.String "discord") = pure NDiscord
+  parseJSON (AE.String "phone") = pure NPhone
   parseJSON _ = fail "Invalid NotificationChannel value"
 
 
@@ -100,11 +104,19 @@ instance ToField NotificationChannel where
   toField NEmail = Escape "email"
   toField NSlack = Escape "slack"
   toField NDiscord = Escape "discord"
+  toField NPhone = Escape "phone"
 
 
 parsePermissions :: (Eq s, IsString s) => s -> NotificationChannel
 parsePermissions "slack" = NSlack
 parsePermissions _ = NEmail
+
+
+parseNotifChannel :: NotificationChannel -> Text
+parseNotifChannel NSlack = "slack"
+parseNotifChannel NDiscord = "discord"
+parseNotifChannel NEmail = "email"
+parseNotifChannel NPhone = "phone"
 
 
 -- CREATE TYPE onboarding_step_enum AS ENUM ('info', 'survey', 'create_monitor','notif_channel','integration', 'pricing', 'complete');
@@ -143,6 +155,9 @@ data Project = Project
   , usageLastReported :: UTCTime
   , discordUrl :: Maybe Text
   , billingDay :: Maybe UTCTime
+  , onboardingStepsCompleted :: V.Vector OnboardingStep
+  , notifyPhoneNumber :: Maybe Text
+  , notifyEmails :: V.Vector Text
   }
   deriving stock (Show, Generic)
   deriving anyclass (FromRow, NFData)
@@ -177,6 +192,9 @@ data Project' = Project'
   , usageLastReported :: UTCTime
   , discordUrl :: Maybe Text
   , billingDay :: Maybe UTCTime
+  , onboardingStepsCompleted :: V.Vector OnboardingStep
+  , notifyPhoneNumber :: Maybe Text
+  , notifyEmails :: V.Vector Text
   , hasIntegrated :: Bool
   , usersDisplayImages :: V.Vector Text
   }

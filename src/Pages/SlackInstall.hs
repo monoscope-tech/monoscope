@@ -18,6 +18,9 @@ import Pages.BodyWrapper (BWConfig, PageCtx (..), currProject, pageTitle, sessM)
 import Pkg.Components (navBar)
 import Pkg.Mail (sendSlackMessage)
 import Relude hiding (ask, asks)
+import Servant.API (Header)
+import Servant.API.ResponseHeaders (Headers, addHeader)
+import Servant.Htmx (HXRedirect)
 import System.Config (AuthContext (env, pool), EnvConfig (slackClientId, slackClientSecret, slackRedirectUri))
 import System.Types (ATAuthCtx, ATBaseCtx, RespHeaders, addRespHeaders, addSuccessToast)
 import Utils (faSprite_)
@@ -90,15 +93,14 @@ postH LinkProjectsForm{projects, webhookUrl} = do
   addRespHeaders $ span_ [] "Projects linked successfully"
 
 
-linkProjectGetH :: Projects.ProjectId -> Maybe Text -> ATBaseCtx SlackLink
-linkProjectGetH pid slack_code = do
-  appCtx <- ask @AuthContext
+linkProjectGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> ATBaseCtx (Headers '[Header "Location" Text] SlackLink)
+linkProjectGetH pid slack_code onboardingM = do
   envCfg <- asks env
   pool <- asks pool
   let client_id = envCfg.slackClientId
   let client_secret = envCfg.slackClientSecret
   let redirect_uri = envCfg.slackRedirectUri
-  token <- liftIO $ exchangeCodeForToken client_id client_secret (redirect_uri <> pid.toText) (fromMaybe "" slack_code)
+  token <- liftIO $ exchangeCodeForToken client_id client_secret (redirect_uri <> pid.toText <> if isJust onboardingM then "?onboarding=true" else "") (fromMaybe "" slack_code)
   let bwconf =
         (def :: BWConfig)
           { sessM = Nothing
@@ -111,18 +113,22 @@ linkProjectGetH pid slack_code = do
       n <- liftIO $ withPool pool do
         insertAccessToken [pid.toText] token'.incomingWebhook.url
       sendSlackMessage pid ("APItoolkit Bot has been linked to your project: " <> project'.title)
-      pure $ SlackLinked $ PageCtx bwconf ()
-    (_, _) -> pure $ NoTokenFound $ PageCtx bwconf ()
+      case onboardingM of
+        Just _ -> pure $ addHeader ("http://localhost:8080/p/" <> pid.toText <> "/onboarding?step=NotifChannel") $ NoContent $ PageCtx bwconf ()
+        Nothing -> pure $ addHeader "" $ SlackLinked $ PageCtx bwconf ()
+    (_, _) -> pure $ addHeader ("/p/" <> pid.toText <> "/onboarding?step=NotifChannel") $ NoTokenFound $ PageCtx bwconf ()
 
 
 data SlackLink
   = SlackLinked (PageCtx ())
   | NoTokenFound (PageCtx ())
+  | NoContent (PageCtx ())
 
 
 instance ToHtml SlackLink where
   toHtml (SlackLinked (PageCtx bwconf ())) = toHtml $ PageCtx bwconf installedSuccess
   toHtml (NoTokenFound (PageCtx bwconf ())) = toHtml $ PageCtx bwconf noTokenFound
+  toHtml (NoContent (PageCtx bwconf ())) = toHtml $ PageCtx bwconf ""
   toHtmlRaw = toHtml
 
 

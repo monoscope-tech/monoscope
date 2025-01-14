@@ -88,7 +88,7 @@ expandAPIlogItem' pid req modal = do
                         ]
                         $ toHtml sw
                 button_
-                  [ class_ "btn bg-brand text-white"
+                  [ class_ "btn btn-primary"
                   , term "data-req-id" (show req.id)
                   , term "data-req-created-at" (toText $ formatTime defaultTimeLocale "%FT%T%6QZ" req.createdAt)
                   , [__|on click set #req_id_input.value to my @data-req-id
@@ -107,7 +107,7 @@ expandAPIlogItem' pid req modal = do
           div_ [[__| install Copy(content:.urlPath )|]] do
             faSprite_ "copy" "regular" "h-8 w-8 border border-slate-300 bg-slate-100 rounded-full p-2 text-slate-500"
           a_ [href_ endpointURl] do
-            faSprite_ "arrow-up-right" "regular" "h-8 w-8 p-2 bg-brand text-white rounded-full"
+            faSprite_ "arrow-up-right" "regular" "h-8 w-8 p-2 btn-primary rounded-full"
       div_ [class_ "text-base flex items-center gap-6"] do
         span_ [class_ "text-slate-500 font-medium w-16"] "URL"
         div_ [class_ "flex gap-1 items-center"] do
@@ -115,7 +115,7 @@ expandAPIlogItem' pid req modal = do
           div_ [[__| install Copy(content:.urlPath )|]] do
             faSprite_ "copy" "regular" "h-8 w-8 border border-slate-300 bg-slate-100 rounded-full p-2 text-slate-500"
           a_ [href_ endpointURl] do
-            faSprite_ "arrow-up-right" "regular" "h-8 w-8 p-2 bg-brand text-white rounded-full"
+            faSprite_ "arrow-up-right" "regular" "h-8 w-8 p-2 btn-primary rounded-full"
       div_ [class_ "flex gap-2 mt-4"] do
         statBox_ Nothing (Just ("clock", "regular", "text-brand")) "Latency" "Latency" (toText $ getDurationNSMS req.durationNs) Nothing Nothing
         let reqSize = BS.length $ AE.encode req.requestBody

@@ -254,7 +254,7 @@ logQueryBox_ pid currentRange source targetSpan queryAST queryLibRecent queryLib
           -- li_ $ a_ [] "Save query as an Alerts"
           -- li_ $ a_ [] "Save result to a dashboard"
           button_
-            [type_ "submit", class_ "leading-none rounded-lg px-3 py-2 cursor-pointer bg-brand text-white"]
+            [type_ "submit", class_ "leading-none rounded-lg px-3 py-2 cursor-pointer btn-primary"]
             do
               span_ [id_ "run-query-indicator", class_ "refresh-indicator htmx-indicator query-indicator loading loading-dots loading-sm"] ""
               faSprite_ "magnifying-glass" "regular" "h-4 w-4 inline-block"

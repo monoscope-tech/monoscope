@@ -202,7 +202,7 @@ collectionGetH pid colIdM = do
           , pageTitle = "Testing"
           , navTabs = Just $ pageTabs editorUrl overviewUrl
           , pageActions = Just $ div_ [class_ "inline-flex gap-2"] do
-              button_ [class_ "h-8 rounded-lg bg-brand text-sm text-white px-3 flex items-center", onclick_ "htmx.trigger('#stepsForm','submit')"] do
+              button_ [class_ "h-8 rounded-lg btn-primary text-sm text-white px-3 flex items-center", onclick_ "htmx.trigger('#stepsForm','submit')"] do
                 span_ [id_ "save-indicator", class_ "refresh-indicator px-6 htmx-indicator query-indicator loading loading-dots loading-md"] ""
                 span_ [class_ "flex items-center gap-2"] do
                   faSprite_ "save" "regular" "w-4 h-4 stroke-white"

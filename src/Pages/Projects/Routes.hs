@@ -10,7 +10,7 @@ import Pages.Projects.ListProjects qualified as ListProjects
 import Pages.Projects.ManageMembers qualified as ManageMembers
 import Pkg.RouteUtils (QPT)
 import Relude
-import Servant (Capture, FormUrlEncoded, GenericMode (type (:-)), Get, NamedRoutes, Post, ReqBody, type (:>))
+import Servant (Capture, FormUrlEncoded, GenericMode (type (:-)), Get, JSON, NamedRoutes, Post, ReqBody, type (:>))
 import Servant.HTML.Lucid (HTML)
 import System.Types (RespHeaders)
 
@@ -37,5 +37,7 @@ data Routes' mode = Routes'
   , onboading :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "onboarding" :> QPT "step" :> Get '[HTML] (RespHeaders (PageCtx (Html ())))
   , onboardingInfoPost :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "onboarding" :> "info" :> ReqBody '[FormUrlEncoded] Onboarding.OnboardingInfoForm :> Post '[HTML] (RespHeaders (Html ()))
   , onboardingConfPost :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "onboarding" :> "survey" :> ReqBody '[FormUrlEncoded] Onboarding.OnboardingConfForm :> Post '[HTML] (RespHeaders (Html ()))
+  , onboardingDiscordPost :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "onboarding" :> "discord" :> ReqBody '[FormUrlEncoded] Onboarding.DiscordForm :> Post '[HTML] (RespHeaders (Html ()))
+  , onboardingPhoneEmailsPost :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "onboarding" :> "phone-emails" :> ReqBody '[JSON] Onboarding.NotifChannelForm :> Post '[HTML] (RespHeaders (Html ()))
   }
   deriving stock (Generic)

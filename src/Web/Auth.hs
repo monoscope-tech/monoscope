@@ -151,24 +151,14 @@ effToHandler computation = do
   either T.throwError pure v
 
 
-logoutH
-  :: ATBaseCtx
-      ( Headers
-          '[Header "Location" Text, Header "Set-Cookie" SetCookie]
-          NoContent
-      )
+logoutH :: ATBaseCtx (Headers '[Header "Location" Text, Header "Set-Cookie" SetCookie] NoContent)
 logoutH = do
   envCfg <- asks env
   let redirectTo = envCfg.auth0Domain <> "/v2/logout?client_id=" <> envCfg.auth0ClientId <> "&returnTo=" <> envCfg.auth0LogoutRedirect
   pure $ addHeader redirectTo $ addHeader Sessions.emptySessionCookie NoContent
 
 
-loginRedirectH
-  :: ATBaseCtx
-      ( Headers
-          '[Header "Location" Text, Header "Set-Cookie" SetCookie]
-          NoContent
-      )
+loginRedirectH :: ATBaseCtx (Headers '[Header "Location" Text, Header "Set-Cookie" SetCookie] NoContent)
 loginRedirectH = do
   let redirectTo = "/login"
   pure $ addHeader redirectTo $ addHeader emptySessionCookie NoContent
@@ -205,8 +195,8 @@ authCallbackH codeM _ = do
   resp <- runExceptT do
     code <- hoistEither $ note "invalid code " codeM
     r <-
-      liftIO
-        $ post
+      liftIO $
+        post
           (toString $ envCfg.config.auth0Domain <> "/oauth/token")
           ( [ "grant_type" := ("authorization_code" :: String)
             , "client_id" := envCfg.config.auth0ClientId
@@ -228,16 +218,16 @@ authCallbackH codeM _ = do
     lift $ authorizeUserAndPersist (Just envCfg.config.convertkitApiKey) firstName lastName picture email
   case resp of
     Left err -> putStrLn ("unable to process auth callback page " <> err) >> (throwError $ err302{errHeaders = [("Location", "/login?auth0_callback_failure")]}) >> pure (noHeader $ noHeader "")
-    Right persistentSessId -> pure
-      $ addHeader "/"
-      $ addHeader
-        (craftSessionCookie persistentSessId True)
-        do
-          html_ do
-            head_ do
-              meta_ [httpEquiv_ "refresh", content_ "1;url=/"]
-            body_ do
-              a_ [href_ "/"] "Continue to APIToolkit"
+    Right persistentSessId -> pure $
+      addHeader "/" $
+        addHeader
+          (craftSessionCookie persistentSessId True)
+          do
+            html_ do
+              head_ do
+                meta_ [httpEquiv_ "refresh", content_ "1;url=/"]
+              body_ do
+                a_ [href_ "/"] "Continue to APIToolkit"
 
 
 authorizeUserAndPersist :: (DB :> es, UUIDEff :> es, HTTP :> es, Time :> es) => Maybe Text -> Text -> Text -> Text -> Text -> Eff es Sessions.PersistentSessionId

@@ -46,6 +46,7 @@ html,
 body {
   @apply overscroll-none bg-slate-25;
   --brand-color: #0068ff;
+  --brand-color-light: #0090f0;
   --tags-border-color:rgba(0, 13, 77, 0.45);
   --tags-hover-border-color: rgba(0, 13, 77, 0.45);
 }
@@ -210,6 +211,9 @@ body {
 }
 .bg-brand {
   @apply bg-[var(--brand-color)];
+}
+.btn-primary {
+  @apply bg-[var(--brand-color)] hover:bg-[var(--brand-color-light)] text-white;
 }
 .input,
 .select,
