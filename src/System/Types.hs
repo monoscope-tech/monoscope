@@ -168,7 +168,6 @@ addRespHeaders :: (State.State TriggerEvents :> es, State.State HXRedirectDest :
 addRespHeaders resp = do
   triggerEvents <- State.get @TriggerEvents
   redirectDest <- State.get @HXRedirectDest
-  traceShowM redirectDest
   pure $ addHeader (decodeUtf8 $ AE.encode triggerEvents) $ maybe noHeader addHeader redirectDest resp
 
 

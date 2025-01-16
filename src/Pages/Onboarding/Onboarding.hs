@@ -7,6 +7,7 @@ module Pages.Onboarding.Onboarding (
   onboardingConfPost,
   discorPostH,
   phoneEmailPostH,
+  checkIntegrationGet,
   DiscordForm (..),
   NotifChannelForm (..),
   OnboardingInfoForm (..),
@@ -18,23 +19,26 @@ import Data.Aeson.KeyMap qualified as KM
 import Data.Default (def)
 import Data.Text qualified as T
 import Data.Vector as V (Vector, fromList, toList)
-import Database.PostgreSQL.Entity.DBT (QueryNature (Update), execute)
+import Database.PostgreSQL.Entity.DBT (QueryNature (Select, Update), execute, query, queryOne)
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
 import Effectful.Reader.Static (ask)
-import Gogol.PubSub (CreateSnapshotRequest (labels))
 import Lucid
 import Lucid.Base (TermRaw (termRaw))
 import Lucid.Htmx
 import Models.Projects.Projects (OnboardingStep (..))
 import Models.Projects.Projects qualified as Projects
+import Models.Telemetry.Telemetry qualified as Telemetry
 import Models.Users.Sessions qualified as Sessions
 import Models.Users.Users
 import NeatInterpolation (text)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
 
+import Database.PostgreSQL.Transact (DBT)
 import Lucid.Hyperscript (__)
 import Pages.Components qualified as Components
+import Pages.IntegrationDemos.ExpressJs (expressGuide)
+import Pages.IntegrationDemos.Javascript (javascriptGuide)
 import Pkg.Components qualified as Components
 import Pkg.Mail (sendDiscordNotif)
 import Relude hiding (ask)
@@ -49,19 +53,50 @@ onboardingGetH :: Projects.ProjectId -> Maybe Text -> ATAuthCtx (RespHeaders (Pa
 onboardingGetH pid onboardingStep = do
   (sess, project) <- Sessions.sessionAndProject pid
   appContx <- ask @AuthContext
-  let firstName = sess.user.firstName
-      lastName = sess.user.lastName
-      -- onboardingStep = project.onboardingStep
-      bodyConfig =
+  -- onboardingStep = project.onboardingStep
+  let bodyConfig =
         (def :: BWConfig)
           { currProject = Nothing
           }
-      page = case onboardingStep of
-        Just "Survey" -> onboardingConfigBody pid
-        Just "CreateMonitor" -> createMonitorPage pid
-        Just "NotifChannel" -> notifChannels pid appContx.config.slackRedirectUri
-        _ -> onboardingInfoBody pid firstName lastName
-  addRespHeaders $ PageCtx bodyConfig page
+  case onboardingStep of
+    Just "Survey" -> do
+      let questions = project.questions
+          (host, func) = case questions of
+            Just (AE.Object q) ->
+              let hst = case KM.lookup "location" q of
+                    Just (AE.String h) -> h
+                    _ -> ""
+                  fun = case KM.lookup "functionality" q of
+                    Just (AE.String f) -> f
+                    _ -> ""
+               in (hst, fun)
+            _ -> ("", "")
+      addRespHeaders $ PageCtx bodyConfig $ onboardingConfigBody pid host func
+    Just "CreateMonitor" -> do
+      addRespHeaders $ PageCtx bodyConfig $ createMonitorPage pid
+    Just "NotifChannel" -> do
+      addRespHeaders $ PageCtx bodyConfig $ notifChannels pid appContx.config.slackRedirectUri
+    Just "Integration" -> do
+      addRespHeaders $ PageCtx bodyConfig $ integrationsPage pid
+    _ -> do
+      let firstName = sess.user.firstName
+          lastName = sess.user.lastName
+          questions = project.questions
+          (companyName, companySize, foundUsfrom) = case questions of
+            Just (AE.Object q) ->
+              let cName = case KM.lookup "companyName" q of
+                    Just (AE.String s) -> s
+                    _ -> ""
+                  cSize = case KM.lookup "companySize" q of
+                    Just (AE.String s) -> s
+                    _ -> ""
+                  fUaM = case KM.lookup "foundUsFrom" q of
+                    Just (AE.String s) -> s
+                    _ -> ""
+               in (cName, cSize, fUaM)
+            _ -> ("", "", "")
+
+      addRespHeaders $ PageCtx bodyConfig $ onboardingInfoBody pid firstName lastName companyName companySize foundUsfrom
 
 
 -- addRespHeaders $ PageCtx bodyConfig $ div_ [class_ "container"] $ "Hello world"
@@ -121,6 +156,17 @@ phoneEmailPostH pid form = do
   addRespHeaders $ inviteTeamMemberModal pid (V.fromList emails)
 
 
+checkIntegrationGet :: Projects.ProjectId -> Text -> ATAuthCtx (RespHeaders (Html ()))
+checkIntegrationGet pid language = do
+  let q = [sql| SELECT * FROM telemetry.spans WHERE project_id = ? and resource ->> 'telemetry.sdk.language' = ?|]
+  v <- dbtToEff (queryOne Select q (pid, language) :: (DBT IO (Maybe Telemetry.SpanRecord)))
+  case v of
+    Nothing -> addRespHeaders $ div_ [class_ "flex items-center gap-2 text-green-500"] do
+      span_ "verified"
+      faSprite_ "circle-check" "regular" "h-4 w-4"
+    _ -> addRespHeaders $ integrationCheck pid language
+
+
 onboardingInfoPost :: Projects.ProjectId -> OnboardingInfoForm -> ATAuthCtx (RespHeaders (Html ()))
 onboardingInfoPost pid form = do
   (sess, project) <- Sessions.sessionAndProject pid
@@ -140,6 +186,78 @@ onboardingInfoPost pid form = do
   u <- dbtToEff $ execute Update [sql| update users.users set first_name= ?, last_name=? where id=? |] (firstName, lastName, sess.user.id)
   redirectCS $ "/p/" <> pid.toText <> "/onboarding?step=Survey"
   addRespHeaders ""
+
+
+integrationsPage :: Projects.ProjectId -> Html ()
+integrationsPage pid =
+  div_ [class_ "w-[1000px]  mx-auto"] $ do
+    div_ [class_ "w-[448px] mt-[156px] mb-10"] $ do
+      div_ [class_ "flex-col gap-4 flex w-full"] $ do
+        stepIndicator 5 "Instrument your apps or servers" $ "/p/" <> pid.toText <> "/onboarding?step=NotifChannel"
+        div_ [class_ "flex-col w-full gap-8 flex mt-4"] do
+          p_ [class_ "text-strong"] "Send Logs, Metrics or Traces. Click proceed when you’re done integrating your applications. learn more"
+          div_ [class_ "flex flex-col gap-4 "] $ do
+            div_ [class_ "flex flex-col gap-2"] do
+              input_ [class_ "w-full input input-sm"]
+              div_ [class_ "w-full"] $ do
+                div_ [class_ "flex items-center justify-between"] $ do
+                  tagItem "All" False
+                  tagItem "Backend" True
+                  tagItem "Frontend" False
+                  tagItem "Database" False
+                  tagItem "Infra" False
+                  tagItem "Others" False
+            div_ [class_ "flex flex-col gap-2"] do
+              languageItem pid "Javascript" "js"
+              languageItem pid "Golang" "go"
+              languageItem pid "Python" "py"
+              languageItem pid "PHP" "php"
+              languageItem pid "C#" "cs"
+          div_ [class_ "flex items-center gap-4"] do
+            button_ [class_ "btn btn-primary"] "Confirm & Proceed"
+            button_ [class_ "font-semibold text-brand underline"] "Skip"
+    script_
+      [text|
+      function toggleCheckbox(event) {
+        event.target.nextSibling.lastChild.classList.toggle('hidden');
+      }
+    |]
+
+    div_ [class_ "fixed top-1/2 -translate-y-1/2 right-[150px] border rounded-2xl border-weak flex justify-between items-center h-[90vh] w-[calc(40vw)]"] do
+      div_ [class_ "w-full h-full overflow-y-auto p-6"] do
+        javascriptGuide "hello"
+
+
+languageItem :: Projects.ProjectId -> Text -> Text -> Html ()
+languageItem pid lang ext =
+  div_ [class_ "h-12 px-3 py-2 bg-[#00157f]/0 rounded-xl border border-[#001066]/10 justify-start items-center gap-3 inline-flex"] do
+    input_ [type_ "checkbox", class_ "checkbox shrink-0", onclick_ "toggleCheckbox(event)"]
+    div_ [class_ "flex w-full items-center justify-between"] do
+      div_ [class_ "flex items-center gap-2"] do
+        img_ [class_ "h-5 w-5", src_ $ "/public/assets/svgs/" <> ext <> ".svg"]
+        span_ [class_ "text-sm font-semibold text-strong"] $ toHtml lang
+      div_ [class_ "hidden text-sm toggle-target", id_ $ "integration-check-container" <> (T.replace "#" "" lang)] do
+        integrationCheck pid lang
+
+
+integrationCheck :: Projects.ProjectId -> Text -> Html ()
+integrationCheck pid language = do
+  div_
+    [ class_ "flex items-center gap-2 "
+    , hxGet_ $ "/p/" <> pid.toText <> "/onboarding/integration-check/" <> language
+    , hxSwap_ "innerHTML"
+    , hxTarget_ $ "#integration-check-container" <> (T.replace "#" "" language)
+    , hxTrigger_ "load delay:5s"
+    ]
+    do
+      span_ [class_ "text-strong"] "waiting for events"
+      faSprite_ "spinner" "regular" "h-4 w-4 animate-spin"
+
+
+tagItem :: Text -> Bool -> Html ()
+tagItem label isActive =
+  div_ [class_ "px-3 py-1 rounded-2xl  border-[#001066]/10 bg-weak"] $
+    span_ [class_ "text-sm"] (toHtml label)
 
 
 onboardingConfPost :: Projects.ProjectId -> OnboardingConfForm -> ATAuthCtx (RespHeaders (Html ()))
@@ -217,6 +335,7 @@ notifChannels pid slackRedirectUri = do
 
     function appendMember() {
       const email = document.querySelector('#add-member-input').value
+      if(email.length < 1) return
       const node = document.querySelector("#member-template").cloneNode(true)
       node.removeAttribute('id')
       node.querySelector('input').value = email
@@ -225,6 +344,7 @@ notifChannels pid slackRedirectUri = do
       node.classList.remove('hidden')
       document.querySelector('#members-container').appendChild(node)
        _hyperscript.processNode(node)
+       document.querySelector('#add-member-input').value = ''
     }
   |]
 
@@ -284,22 +404,22 @@ discordModal pid = do
       label_ [class_ "modal-backdrop", Lucid.for_ "my_modal_6"] "Close"
 
 
-onboardingInfoBody :: Projects.ProjectId -> Text -> Text -> Html ()
-onboardingInfoBody pid firstName lastName = do
+onboardingInfoBody :: Projects.ProjectId -> Text -> Text -> Text -> Text -> Text -> Html ()
+onboardingInfoBody pid firstName lastName cName cSize fUsFrm = do
   div_ [class_ "w-[448px] mx-auto mt-[156px]"] $ do
     div_ [class_ "flex-col gap-4 flex w-full"] $ do
       stepIndicator 1 "Tell us a little bit about you" ""
       form_ [class_ "flex-col w-full gap-8 flex", hxPost_ $ "/p/" <> pid.toText <> "/onboarding/info"] $ do
         div_ [class_ "flex-col w-full gap-4 mt-4 flex"] $ do
-          mapM_ createInputField [("first Name" :: Text, firstName), ("last Name", lastName), ("company Name", "")]
-          createSelectField "company Size" [("1 - 4", "1 to 5"), ("5 - 10", "5 to 10"), ("10 - 25", "10 to 25"), ("25+", "25 and above")]
-          createSelectField "where Did You Hear About Us" [("google", "Google"), ("twitter", "Twitter"), ("linkedin", "LinkedIn"), ("friend", "Friend"), ("other", "Other")]
+          mapM_ createInputField [("first Name" :: Text, firstName), ("last Name", lastName), ("company Name", cName)]
+          createSelectField cSize "company Size" [("1 - 4", "1 to 5"), ("5 - 10", "5 to 10"), ("10 - 25", "10 to 25"), ("25+", "25 and above")]
+          createSelectField fUsFrm "where Did You Hear About Us" [("google", "Google"), ("twitter", "Twitter"), ("linkedin", "LinkedIn"), ("friend", "Friend"), ("other", "Other")]
         div_ [class_ "items-center gap-1 flex"] $ do
           button_ [class_ "px-6 h-14 flex items-center btn-primary text-xl font-semibold rounded-lg"] "Proceed"
 
 
-onboardingConfigBody :: Projects.ProjectId -> Html ()
-onboardingConfigBody pid = do
+onboardingConfigBody :: Projects.ProjectId -> Text -> Text -> Html ()
+onboardingConfigBody pid loca func = do
   div_ [class_ "w-[448px] mx-auto mt-[156px]"] $ do
     div_ [class_ "flex-col gap-4 flex w-full"] $ do
       stepIndicator 2 "Let's configure your project" $ "/p/" <> pid.toText <> "/onboarding?step=Info"
@@ -310,13 +430,13 @@ onboardingConfigBody pid = do
               span_ [class_ "text-strong"] "Where should your project be hosted?"
               span_ [class_ "text-weak"] "*"
             div_ [class_ "pt-2 flex-col gap-4 flex text-sm text-strong"] $ do
-              forM_ locations $ createBinaryField "radio" "location"
+              forM_ locations $ createBinaryField "radio" "location" loca
           div_ [class_ "flex-col gap-2 flex"] $ do
             div_ [class_ "items-center flex gap-[2px]"] $ do
               span_ [class_ "text-strong"] "Which APItoolkit features will you be using?"
               span_ [class_ "text-weak"] "*"
             div_ [class_ "pt-2 flex-col gap-4 flex"] $ do
-              forM_ functionalities $ createBinaryField "checkbox" "functionality"
+              forM_ functionalities $ createBinaryField "checkbox" "functionality" func
         div_ [class_ "items-center gap-1 flex"] $ do
           button_ [class_ "px-6 h-14 flex items-center btn-primary text-xl font-semibold rounded-lg"] "Proceed"
 
@@ -344,12 +464,12 @@ inviteTeamMemberModal pid emails = do
               div_ [class_ "w-full"] $ do
                 div_ [class_ "w-full text-strong text-sm font-semibold"] "Members"
                 div_ [class_ "w-full border-t border-weak"] $ do
-                  div_ [class_ "flex-col flex", id_ "members-container"] $ do
+                  form_ [class_ "flex-col flex", id_ "members-container", hxPost_ $ "/p/" <> pid.toText <> "/manage_members?onboarding=true"] $ do
                     inviteMemberItem "hidden"
                     forM_ emails $ \email -> do
                       inviteMemberItem email
         div_ [class_ "modal-action w-full flex items-center justify-start gap-2 mt-2"] do
-          button_ [class_ "btn btn-primary font-semibold rounded-lg", type_ "button"] "Proceed"
+          button_ [class_ "btn btn-primary font-semibold rounded-lg", type_ "button", onclick_ "htmx.trigger('#members-container', 'submit')"] "Proceed"
           label_ [class_ "text-brand font-semibold underline", Lucid.for_ "inviteModal"] "Close"
 
 
@@ -374,7 +494,7 @@ inviteMemberItem email = do
   let hide = email == "hidden"
   div_ (class_ ("flex  py-1 w-full justify-between items-center border-b border-[#001066]/10 " <> if hide then "hidden" else "") : [id_ "member-template" | hide]) do
     div_ [class_ "pr-6 py-1  w-full justify-start items-center inline-flex"] do
-      input_ ([type_ "hidden", value_ email] ++ [name_ "emails" | hide])
+      input_ ([type_ "hidden", value_ email] ++ [name_ "emails" | not hide])
       span_ [class_ "text-[#000626]/90 text-sm font-normal"] $
         toHtml email
     select_ [name_ "permissions", class_ "select select-xs"] do
@@ -384,6 +504,7 @@ inviteMemberItem email = do
     button_
       [ [__| on click remove the closest parent <div/> then halt |]
       , class_ "text-brand ml-4 font-semibold text-sm underline"
+      , type_ "button"
       ]
       "remove"
 
@@ -397,21 +518,22 @@ createInputField (labelText, value) = do
     input_ [class_ "input w-full h-12", type_ "text", name_ $ T.replace " " "" labelText, required_ "required", value_ value]
 
 
-createSelectField :: Text -> Vector (Text, Text) -> Html ()
-createSelectField labelText options = do
+createSelectField :: Text -> Text -> Vector (Text, Text) -> Html ()
+createSelectField val labelText options = do
   div_ [class_ "flex flex-col gap-1 w-full"] $ do
     div_ [class_ "flex w-full items-center gap-1"] $ do
       span_ [class_ "text-strong lowercase first-letter:uppercase"] $ toHtml labelText
       span_ [class_ "text-weak"] "*"
-    select_ [class_ "select w-full h-12", name_ $ T.replace " " "" labelText, required_ "required"] do
+    select_ [class_ "select w-full h-12", name_ $ T.replace " " "" labelText, required_ "required", value_ val] do
       option_ [value_ ""] ""
       forM_ options $ \(key, value) -> option_ [value_ key] $ toHtml value
 
 
-createBinaryField :: Text -> Text -> (Text, Text) -> Html ()
-createBinaryField kind name (value, label) = do
+createBinaryField :: Text -> Text -> Text -> (Text, Text) -> Html ()
+createBinaryField kind name selectedValue (value, label) = do
   div_ [class_ " items-center gap-3 inline-flex"] $ do
-    input_ $ [class_ "w-6 h-6 rounded", type_ kind, name_ name, value_ value, id_ value] <> [required_ "required" | kind == "radio"]
+    let checked = selectedValue == value
+    input_ $ [class_ "w-6 h-6 rounded", type_ kind, name_ name, value_ value, id_ value] <> [required_ "required" | kind == "radio"] <> [checked_ | checked]
     label_ [class_ "text-strong text-sm", Lucid.for_ value] $ toHtml label
 
 

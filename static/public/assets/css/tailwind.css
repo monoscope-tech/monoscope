@@ -49,6 +49,8 @@ body {
   --brand-color-light: #0090f0;
   --tags-border-color:rgba(0, 13, 77, 0.45);
   --tags-hover-border-color: rgba(0, 13, 77, 0.45);
+  --chkbg: var(--brand-color)
+
 }
 
 .c-scroll::-webkit-scrollbar {
@@ -220,6 +222,7 @@ body {
 .checkbox,
 .textarea {
   @apply shadow-none;
+  --chkbg: var(--brand-color);
   border-color: rgba(0, 13, 77, 0.45);
 }
 .stroke-strong {

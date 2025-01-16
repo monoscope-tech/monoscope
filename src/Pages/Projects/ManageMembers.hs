@@ -44,8 +44,8 @@ data ManageMembersForm = ManageMembersForm
   deriving anyclass (FromForm)
 
 
-manageMembersPostH :: Projects.ProjectId -> ManageMembersForm -> ATAuthCtx (RespHeaders ManageMembers)
-manageMembersPostH pid form = do
+manageMembersPostH :: Projects.ProjectId -> Maybe Text -> ManageMembersForm -> ATAuthCtx (RespHeaders ManageMembers)
+manageMembersPostH pid onboardingM form = do
   (sess, project) <- Sessions.sessionAndProject pid
   appCtx <- ask @AuthContext
   let currUserId = sess.persistentSession.userId
@@ -85,10 +85,10 @@ manageMembersPostH pid form = do
             Just idX -> pure idX
         Just idX -> pure idX
 
-    when (userId' /= currUserId)
-      $ void
-      $ liftIO
-      $ withResource appCtx.pool \conn -> createJob conn "background_jobs" $ BackgroundJobs.InviteUserToProject currUserId pid email project.title -- invite the users to the project (Usually as an email)
+    when (userId' /= currUserId) $
+      void $
+        liftIO $
+          withResource appCtx.pool \conn -> createJob conn "background_jobs" $ BackgroundJobs.InviteUserToProject currUserId pid email project.title -- invite the users to the project (Usually as an email)
     pure (email, permission, userId')
 
   let projectMembers =
@@ -101,18 +101,23 @@ manageMembersPostH pid form = do
   -- TODO: Send a notification via background job, about the users permission having been updated.
   unless (null uAndPOldAndChanged)
     $ void
-    . dbtToEff
+      . dbtToEff
     $ ProjectMembers.updateProjectMembersPermissons uAndPOldAndChanged
 
   -- soft delete project members with id
   unless (null deletedUAndP)
     $ void
-    . dbtToEff
+      . dbtToEff
     $ ProjectMembers.softDeleteProjectMembers deletedUAndP
 
   projMembersLatest <- dbtToEff $ ProjectMembers.selectActiveProjectMembers pid
-  addSuccessToast "Updated Members List Successfully" Nothing
-  addRespHeaders $ ManageMembersPost projMembersLatest
+  if isJust onboardingM
+    then do
+      redirectCS $ "/p/" <> pid.toText <> "/onboarding?step=Integration"
+      addRespHeaders $ ManageMembersPost projMembersLatest
+    else do
+      addSuccessToast "Updated Members List Successfully" Nothing
+      addRespHeaders $ ManageMembersPost projMembersLatest
 
 
 manageMembersGetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders ManageMembers)

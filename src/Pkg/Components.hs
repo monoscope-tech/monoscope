@@ -52,7 +52,7 @@ navBar = do
 bashCommand :: Text -> Html ()
 bashCommand command = do
   div_ [class_ "w-full"] do
-    div_ [class_ "w-full rounded-lg bg-slate-800 px-4 py-2 text-gray-300 flex gap-2 items-start"] do
+    div_ [class_ "w-full rounded-lg bg-slate-100 px-4 py-2 text-slate-700 flex gap-2 items-start"] do
       span_ [class_ "text-gray-400"] "$"
       span_ $ toHtml command
       button_
@@ -71,15 +71,15 @@ bashCommand command = do
 
 codeExample :: Text -> Html ()
 codeExample code = do
-  div_ [class_ "relative overflow-hidden flex bg-slate-800 sm:rounded-xl"] do
+  div_ [class_ "relative overflow-hidden flex bg-slate-100 border border-weak rounded-xl"] do
     div_ [class_ "relative w-full flex flex-col"] do
-      div_ [class_ "flex-none border-b border-slate-500/30 flex justify-between items-center gap-4"] do
+      div_ [class_ "flex-none border-b border-weak flex justify-between items-center gap-4"] do
         div_ [class_ "flex items-center h-8 space-x-1.5 px-3"] do
-          div_ [class_ "w-2.5 h-2.5 bg-slate-600 rounded-full"] ""
-          div_ [class_ "w-2.5 h-2.5 bg-slate-600 rounded-full"] ""
-          div_ [class_ "w-2.5 h-2.5 bg-slate-600 rounded-full"] ""
+          div_ [class_ "w-2.5 h-2.5 bg-red-500 rounded-full"] ""
+          div_ [class_ "w-2.5 h-2.5 bg-yellow-500 rounded-full"] ""
+          div_ [class_ "w-2.5 h-2.5 bg-green-500 rounded-full"] ""
         button_
-          [ class_ "text-gray-500  font-bold mr-6"
+          [ class_ "text-gray-500 font-bold mr-6"
           , term "data-code" code
           , [__|
               on click
@@ -90,9 +90,9 @@ codeExample code = do
            |]
           ]
           $ faSprite_ "copy" "solid" "h-4 w-4 inline-block"
-      div_ [class_ "relative flex-auto flex flex-col"] do
+      div_ [class_ "relative flex-auto flex flex-col bg-slate-100"] do
         pre_ [class_ "flex leading-snug"] do
-          code_ [class_ "flex-auto relative block text-slate-50 py-4 px-4 overflow-auto hljs atom-one-dark"] $ toHtml code
+          code_ [class_ "flex-auto relative block text-strong py-4 px-4 overflow-auto hljs atom-one-light"] $ toHtml code
 
 
 codeEmphasis :: Text -> Html ()

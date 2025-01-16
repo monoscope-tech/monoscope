@@ -29,4 +29,5 @@ server =
     , onboardingConfPost = Onboarding.onboardingConfPost
     , onboardingDiscordPost = Onboarding.discorPostH
     , onboardingPhoneEmailsPost = Onboarding.phoneEmailPostH
+    , onboardingIntegrationCheck = Onboarding.checkIntegrationGet
     }
