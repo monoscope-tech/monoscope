@@ -1,6 +1,7 @@
 {-# OPTIONS_GHC -Wno-unrecognised-pragmas #-}
 
 {-# HLINT ignore "Use newtype instead of data" #-}
+{-# HLINT ignore "Use lambda-case" #-}
 module Pages.Onboarding.Onboarding (
   onboardingGetH,
   onboardingInfoPost,
@@ -44,7 +45,7 @@ import Pkg.Mail (sendDiscordNotif)
 import Relude hiding (ask)
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders, redirectCS)
-import Utils (faSprite_, redirect)
+import Utils (faSprite_, lookupValueText, redirect)
 import Web.FormUrlEncoded
 
 
@@ -58,19 +59,22 @@ onboardingGetH pid onboardingStep = do
         (def :: BWConfig)
           { currProject = Nothing
           }
+      questions = fromMaybe (AE.Object []) project.questions
   case onboardingStep of
     Just "Survey" -> do
-      let questions = project.questions
-          (host, func) = case questions of
-            Just (AE.Object q) ->
-              let hst = case KM.lookup "location" q of
-                    Just (AE.String h) -> h
-                    _ -> ""
-                  fun = case KM.lookup "functionality" q of
-                    Just (AE.String f) -> f
-                    _ -> ""
-               in (hst, fun)
-            _ -> ("", "")
+      let host = fromMaybe "" $ lookupValueText questions "location"
+          func = case questions of
+            (AE.Object q) ->
+              let fun = case KM.lookup "functionality" q of
+                    Just (AE.Array f) ->
+                      ( \x -> case x of
+                          AE.String s -> s
+                          _ -> ""
+                      )
+                        <$> V.toList f
+                    _ -> []
+               in fun
+            _ -> []
       addRespHeaders $ PageCtx bodyConfig $ onboardingConfigBody pid host func
     Just "CreateMonitor" -> do
       addRespHeaders $ PageCtx bodyConfig $ createMonitorPage pid
@@ -81,21 +85,7 @@ onboardingGetH pid onboardingStep = do
     _ -> do
       let firstName = sess.user.firstName
           lastName = sess.user.lastName
-          questions = project.questions
-          (companyName, companySize, foundUsfrom) = case questions of
-            Just (AE.Object q) ->
-              let cName = case KM.lookup "companyName" q of
-                    Just (AE.String s) -> s
-                    _ -> ""
-                  cSize = case KM.lookup "companySize" q of
-                    Just (AE.String s) -> s
-                    _ -> ""
-                  fUaM = case KM.lookup "foundUsFrom" q of
-                    Just (AE.String s) -> s
-                    _ -> ""
-               in (cName, cSize, fUaM)
-            _ -> ("", "", "")
-
+          (companyName, companySize, foundUsfrom) = (fromMaybe "" $ lookupValueText questions "companyName", fromMaybe "" $ lookupValueText questions "companySize", fromMaybe "" $ lookupValueText questions "foundUsFrom")
       addRespHeaders $ PageCtx bodyConfig $ onboardingInfoBody pid firstName lastName companyName companySize foundUsfrom
 
 
@@ -176,15 +166,32 @@ onboardingInfoPost pid form = do
         KM.fromList
           [ ("companyName", AE.toJSON form.companyName)
           , ("companySize", AE.toJSON form.companySize)
-          , ("foundUsfrom", AE.toJSON form.whereDidYouHearAboutUs)
+          , ("foundUsFrom", AE.toJSON form.whereDidYouHearAboutUs)
           ]
       questions = case project.questions of
-        Just (AE.Object o) -> AE.Object $ o <> infoJson
+        Just (AE.Object o) -> AE.Object $ infoJson <> o
         _ -> AE.Object infoJson
       jsonBytes = AE.encode questions
   res <- dbtToEff $ execute Update [sql| update projects.projects set title=?, questions= ? where id=? |] (form.companyName, jsonBytes, pid)
   u <- dbtToEff $ execute Update [sql| update users.users set first_name= ?, last_name=? where id=? |] (firstName, lastName, sess.user.id)
   redirectCS $ "/p/" <> pid.toText <> "/onboarding?step=Survey"
+  addRespHeaders ""
+
+
+onboardingConfPost :: Projects.ProjectId -> OnboardingConfForm -> ATAuthCtx (RespHeaders (Html ()))
+onboardingConfPost pid form = do
+  (sess, project) <- Sessions.sessionAndProject pid
+  let infoJson =
+        KM.fromList
+          [ ("functionality", AE.toJSON form.functionality)
+          , ("location", AE.toJSON form.location)
+          ]
+      questions = case project.questions of
+        Just (AE.Object o) -> AE.Object $ infoJson <> o
+        _ -> AE.Object infoJson
+      jsonBytes = AE.encode questions
+  res <- dbtToEff $ execute Update [sql| update projects.projects set  questions= ? where id=? |] (jsonBytes, pid)
+  redirectCS $ "/p/" <> pid.toText <> "/onboarding?step=CreateMonitor"
   addRespHeaders ""
 
 
@@ -258,23 +265,6 @@ tagItem :: Text -> Bool -> Html ()
 tagItem label isActive =
   div_ [class_ "px-3 py-1 rounded-2xl  border-[#001066]/10 bg-weak"] $
     span_ [class_ "text-sm"] (toHtml label)
-
-
-onboardingConfPost :: Projects.ProjectId -> OnboardingConfForm -> ATAuthCtx (RespHeaders (Html ()))
-onboardingConfPost pid form = do
-  (sess, project) <- Sessions.sessionAndProject pid
-  let infoJson =
-        KM.fromList
-          [ ("functionality", AE.toJSON form.functionality)
-          , ("location", AE.toJSON form.location)
-          ]
-      questions = case project.questions of
-        Just (AE.Object o) -> AE.Object $ o <> infoJson
-        _ -> AE.Object infoJson
-      jsonBytes = AE.encode questions
-  res <- dbtToEff $ execute Update [sql| update projects.projects set  questions= ? where id=? |] (jsonBytes, pid)
-  redirectCS $ "/p/" <> pid.toText <> "/onboarding?step=CreateMonitor"
-  addRespHeaders ""
 
 
 notifChannels :: Projects.ProjectId -> Text -> Html ()
@@ -412,13 +402,13 @@ onboardingInfoBody pid firstName lastName cName cSize fUsFrm = do
       form_ [class_ "flex-col w-full gap-8 flex", hxPost_ $ "/p/" <> pid.toText <> "/onboarding/info"] $ do
         div_ [class_ "flex-col w-full gap-4 mt-4 flex"] $ do
           mapM_ createInputField [("first Name" :: Text, firstName), ("last Name", lastName), ("company Name", cName)]
-          createSelectField cSize "company Size" [("1 - 4", "1 to 5"), ("5 - 10", "5 to 10"), ("10 - 25", "10 to 25"), ("25+", "25 and above")]
+          createSelectField cSize "company Size" [("1 - 4", "1 to 4"), ("5 - 10", "5 to 10"), ("11 - 25", "11 to 25"), ("26+", "26 and above")]
           createSelectField fUsFrm "where Did You Hear About Us" [("google", "Google"), ("twitter", "Twitter"), ("linkedin", "LinkedIn"), ("friend", "Friend"), ("other", "Other")]
         div_ [class_ "items-center gap-1 flex"] $ do
           button_ [class_ "px-6 h-14 flex items-center btn-primary text-xl font-semibold rounded-lg"] "Proceed"
 
 
-onboardingConfigBody :: Projects.ProjectId -> Text -> Text -> Html ()
+onboardingConfigBody :: Projects.ProjectId -> Text -> [Text] -> Html ()
 onboardingConfigBody pid loca func = do
   div_ [class_ "w-[448px] mx-auto mt-[156px]"] $ do
     div_ [class_ "flex-col gap-4 flex w-full"] $ do
@@ -430,7 +420,7 @@ onboardingConfigBody pid loca func = do
               span_ [class_ "text-strong"] "Where should your project be hosted?"
               span_ [class_ "text-weak"] "*"
             div_ [class_ "pt-2 flex-col gap-4 flex text-sm text-strong"] $ do
-              forM_ locations $ createBinaryField "radio" "location" loca
+              forM_ locations $ createBinaryField "radio" "location" [loca]
           div_ [class_ "flex-col gap-2 flex"] $ do
             div_ [class_ "items-center flex gap-[2px]"] $ do
               span_ [class_ "text-strong"] "Which APItoolkit features will you be using?"
@@ -524,15 +514,15 @@ createSelectField val labelText options = do
     div_ [class_ "flex w-full items-center gap-1"] $ do
       span_ [class_ "text-strong lowercase first-letter:uppercase"] $ toHtml labelText
       span_ [class_ "text-weak"] "*"
-    select_ [class_ "select w-full h-12", name_ $ T.replace " " "" labelText, required_ "required", value_ val] do
+    select_ [class_ "select w-full h-12", name_ $ T.replace " " "" labelText, required_ "required"] do
       option_ [value_ ""] ""
-      forM_ options $ \(key, value) -> option_ [value_ key] $ toHtml value
+      forM_ options $ \(key, value) -> option_ ([value_ key] ++ [selected_ val | val == key]) $ toHtml value
 
 
-createBinaryField :: Text -> Text -> Text -> (Text, Text) -> Html ()
-createBinaryField kind name selectedValue (value, label) = do
+createBinaryField :: Text -> Text -> [Text] -> (Text, Text) -> Html ()
+createBinaryField kind name selectedValues (value, label) = do
   div_ [class_ " items-center gap-3 inline-flex"] $ do
-    let checked = selectedValue == value
+    let checked = value `elem` selectedValues
     input_ $ [class_ "w-6 h-6 rounded", type_ kind, name_ name, value_ value, id_ value] <> [required_ "required" | kind == "radio"] <> [checked_ | checked]
     label_ [class_ "text-strong text-sm", Lucid.for_ value] $ toHtml label
 

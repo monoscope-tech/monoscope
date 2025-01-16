@@ -14,6 +14,7 @@ module Utils (
   lookupVecInt,
   lookupVecText,
   lookupVecIntByKey,
+  lookupValueText,
   formatUTC,
   parseUTC,
   lookupVecTextByKey,
@@ -48,6 +49,7 @@ module Utils (
 where
 
 import Data.Aeson qualified as AE
+import Data.Aeson.Key (fromText)
 import Data.Aeson.KeyMap qualified as AEK
 import Data.Char (isDigit)
 import Data.Digest.XXHash (xxHash)
@@ -324,6 +326,13 @@ lookupVecIntByKey vec colIdxMap key = (HM.lookup key colIdxMap >>= Just . lookup
 
 lookupVecByKey :: V.Vector AE.Value -> HM.HashMap Text Int -> Text -> Maybe AE.Value
 lookupVecByKey vec colIdxMap key = HM.lookup key colIdxMap >>= (vec V.!?)
+
+
+lookupValueText :: AE.Value -> Text -> Maybe Text
+lookupValueText (AE.Object obj) key = case AEK.lookup (fromText key) obj of
+  Just (AE.String textValue) -> Just textValue -- Extract text from Value if it's a String
+  _ -> Nothing
+lookupValueText _ _ = Nothing
 
 
 listToIndexHashMap :: Hashable a => [a] -> HM.HashMap a Int
