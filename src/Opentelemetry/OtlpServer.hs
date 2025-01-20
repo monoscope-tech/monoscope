@@ -17,7 +17,7 @@ import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Effectful
 import Effectful.Log (Log)
-import Effectful.PostgreSQL.Transact.Effect (DB)
+import Effectful.PostgreSQL.Transact.Effect (DB, dbtToEff)
 import Effectful.Reader.Static (ask)
 import Effectful.Reader.Static qualified as Eff
 import Effectful.Time (Time)
@@ -127,10 +127,8 @@ processList msgs attrs = do
           case (HsProtobuf.fromByteString msg :: Either HsProtobuf.ParseError ExportTraceServiceRequest) of
             Left err -> error $ "unable to parse traces service request with err " <> show err
             Right (ExportTraceServiceRequest traceReq) -> do
-              pidM <- join <$> forM (getSpanAttributeValue "at-project-key" traceReq) ProjectApiKeys.getProjectIdByApiKey
-              let pid2M = Projects.projectIdFromText =<< getSpanAttributeValue "at-project-id" traceReq
-              let pid = fromMaybe (error "project API Key and project ID not available in trace") $ pidM <|> pid2M
-              pure (ackId, join $ V.map (convertToSpan pid) traceReq)
+              projectIdsAndKeys <- dbtToEff $ ProjectApiKeys.projectIdsByProjectApiKeys $ getApiKeys traceReq
+              pure (ackId, join $ V.map (convertToSpan projectIdsAndKeys) traceReq)
       let (ackIds, spansVec) = V.unzip results
           spans = join spansVec
           apitoolkitSpans = V.map mapHTTPSpan spans
@@ -245,13 +243,13 @@ anyValueToString (AnyValueValueStringValue val) = Just $ toStrict val
 anyValueToString _ = Nothing
 
 
-convertScopeSpan :: Projects.ProjectId -> Maybe Resource -> ScopeSpans -> V.Vector Telemetry.SpanRecord
+convertScopeSpan :: V.Vector (Text, Projects.ProjectId) -> Maybe Resource -> ScopeSpans -> V.Vector Telemetry.SpanRecord
 convertScopeSpan pid resource sl =
-  V.map (convertSpanRecord pid resource sl.scopeSpansScope) sl.scopeSpansSpans
+  V.catMaybes $ V.map (convertSpanRecord pid resource sl.scopeSpansScope) sl.scopeSpansSpans
 
 
-convertToSpan :: Projects.ProjectId -> ResourceSpans -> V.Vector Telemetry.SpanRecord
-convertToSpan pid resourceSpans = join $ V.map (convertScopeSpan pid resourceSpans.resourceSpansResource) resourceSpans.resourceSpansScopeSpans
+convertToSpan :: V.Vector (Text, Projects.ProjectId) -> ResourceSpans -> V.Vector Telemetry.SpanRecord
+convertToSpan pidKey resourceSpans = join $ V.map (convertScopeSpan pidKey resourceSpans.resourceSpansResource) resourceSpans.resourceSpansScopeSpans
 
 
 convertLogRecord :: Projects.ProjectId -> Maybe Resource -> Maybe InstrumentationScope -> LogRecord -> Telemetry.LogRecord
@@ -272,29 +270,41 @@ convertLogRecord pid resource scope lr =
     }
 
 
-convertSpanRecord :: Projects.ProjectId -> Maybe Resource -> Maybe InstrumentationScope -> Span -> Telemetry.SpanRecord
-convertSpanRecord pid resource scope sp =
-  Telemetry.SpanRecord
-    { uSpandId = Nothing
-    , projectId = pid.unProjectId
-    , timestamp = nanosecondsToUTC sp.spanStartTimeUnixNano
-    , traceId = byteStringToHexText sp.spanTraceId
-    , spanId = byteStringToHexText sp.spanSpanId
-    , parentSpanId = if BS.null sp.spanParentSpanId then Nothing else Just $ byteStringToHexText sp.spanParentSpanId
-    , traceState = Just (toText sp.spanTraceState)
-    , spanName = toText sp.spanName
-    , startTime = nanosecondsToUTC sp.spanStartTimeUnixNano
-    , endTime = Just $ nanosecondsToUTC sp.spanEndTimeUnixNano
-    , kind = parseSpanKind (HsProtobuf.enumerated sp.spanKind)
-    , status = parseSpanStatus sp.spanStatus
-    , statusMessage = (\s -> Just $ toText s.statusMessage) =<< sp.spanStatus
-    , attributes = removeProjectId $ keyValueToJSONB sp.spanAttributes
-    , events = eventsToJSONB $ V.toList sp.spanEvents
-    , links = linksToJSONB $ V.toList sp.spanLinks
-    , resource = removeProjectId $ resourceToJSONB resource
-    , instrumentationScope = instrumentationScopeToJSONB scope
-    , spanDurationNs = fromIntegral $ sp.spanEndTimeUnixNano - sp.spanStartTimeUnixNano
-    }
+convertSpanRecord :: V.Vector (Text, Projects.ProjectId) -> Maybe Resource -> Maybe InstrumentationScope -> Span -> Maybe Telemetry.SpanRecord
+convertSpanRecord pidsKeys resource scope sp =
+  pid
+    >>= ( \p ->
+            Just
+              Telemetry.SpanRecord
+                { uSpandId = Nothing
+                , projectId = p.unProjectId
+                , timestamp = nanosecondsToUTC sp.spanStartTimeUnixNano
+                , traceId = byteStringToHexText sp.spanTraceId
+                , spanId = byteStringToHexText sp.spanSpanId
+                , parentSpanId = if BS.null sp.spanParentSpanId then Nothing else Just $ byteStringToHexText sp.spanParentSpanId
+                , traceState = Just (toText sp.spanTraceState)
+                , spanName = toText sp.spanName
+                , startTime = nanosecondsToUTC sp.spanStartTimeUnixNano
+                , endTime = Just $ nanosecondsToUTC sp.spanEndTimeUnixNano
+                , kind = parseSpanKind (HsProtobuf.enumerated sp.spanKind)
+                , status = parseSpanStatus sp.spanStatus
+                , statusMessage = (\s -> Just $ toText s.statusMessage) =<< sp.spanStatus
+                , attributes = removeProjectId $ keyValueToJSONB sp.spanAttributes
+                , events = eventsToJSONB $ V.toList sp.spanEvents
+                , links = linksToJSONB $ V.toList sp.spanLinks
+                , resource = removeProjectId $ resourceToJSONB resource
+                , instrumentationScope = instrumentationScopeToJSONB scope
+                , spanDurationNs = fromIntegral $ sp.spanEndTimeUnixNano - sp.spanStartTimeUnixNano
+                }
+        )
+  where
+    key = maybe "" (fromMaybe "" . anyValueToString) $ resource >>= \r -> find (\kv -> kv.keyValueKey == "at-project-key") r.resourceAttributes >>= (.keyValueValue) >>= (.anyValueValue)
+    pid = case find (\(k, _) -> k == key) pidsKeys of
+      Just (_, v) -> Just v
+      Nothing ->
+        let pidText = maybe "" (fromMaybe "" . anyValueToString) $ resource >>= \r -> find (\kv -> kv.keyValueKey == "at-project-key") r.resourceAttributes >>= (.keyValueValue) >>= (.anyValueValue)
+            uId = UUID.fromText pidText
+         in maybe Nothing (\u -> Just $ Projects.ProjectId u) uId
 
 
 convertToMetric :: Projects.ProjectId -> ResourceMetrics -> V.Vector Telemetry.MetricRecord
@@ -456,7 +466,7 @@ traceServiceExportH appLogger appCtx (ServerNormalRequest _meta (ExportTraceServ
     let projectKey = fromMaybe (error "Missing project key") $ getSpanAttributeValue "at-project-key" req
     projectIdM <- ProjectApiKeys.getProjectIdByApiKey projectKey
     let pid = fromMaybe (error "project API Key is invalid pid") projectIdM
-    let spanRecords = join $ V.map (convertToSpan pid) req
+    let spanRecords = join $ V.map (convertToSpan [(projectKey, pid)]) req
         apitoolkitSpans = V.map mapHTTPSpan spanRecords
     _ <- ProcessMessage.processRequestMessages $ V.toList $ V.catMaybes apitoolkitSpans <&> ("",)
     Telemetry.bulkInsertSpans $ V.filter (\s -> s.spanName /= "apitoolkit-http-span") spanRecords
@@ -476,6 +486,12 @@ metricsServiceExportH appLogger appCtx (ServerNormalRequest _meta (ExportMetrics
     let metricRecords = join $ V.map (convertToMetric pid) req
     Telemetry.bulkInsertMetrics metricRecords
   return (ServerNormalResponse (ExportMetricsServiceResponse Nothing) mempty StatusOk "")
+
+
+getApiKeys :: V.Vector ResourceSpans -> V.Vector Text
+getApiKeys resourceSpans = V.catMaybes $ anyValueToString <$> val
+  where
+    val = V.catMaybes $ V.map (\sp -> sp.resourceSpansResource >>= \r -> find (\kv -> kv.keyValueKey == "at-project-key") r.resourceAttributes >>= (.keyValueValue) >>= (.anyValueValue)) resourceSpans
 
 
 mapHTTPSpan :: Telemetry.SpanRecord -> Maybe RequestMessage
