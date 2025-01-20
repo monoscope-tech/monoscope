@@ -37,11 +37,13 @@ import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
 
 import Database.PostgreSQL.Transact (DBT)
 import Lucid.Hyperscript (__)
+import Models.Tests.Testing qualified as Testing
 import Pages.Components qualified as Components
 import Pages.IntegrationDemos.ExpressJs (expressGuide)
 import Pages.IntegrationDemos.Javascript (javascriptGuide)
 import Pkg.Components qualified as Components
 import Pkg.Mail (sendDiscordNotif)
+import PyF (fmt)
 import Relude hiding (ask)
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders, redirectCS)
@@ -54,7 +56,6 @@ onboardingGetH :: Projects.ProjectId -> Maybe Text -> ATAuthCtx (RespHeaders (Pa
 onboardingGetH pid onboardingStep = do
   (sess, project) <- Sessions.sessionAndProject pid
   appContx <- ask @AuthContext
-  -- onboardingStep = project.onboardingStep
   let bodyConfig =
         (def :: BWConfig)
           { currProject = Nothing
@@ -77,9 +78,12 @@ onboardingGetH pid onboardingStep = do
             _ -> []
       addRespHeaders $ PageCtx bodyConfig $ onboardingConfigBody pid host func
     Just "CreateMonitor" -> do
-      addRespHeaders $ PageCtx bodyConfig $ createMonitorPage pid
+      colsM <- dbtToEff $ Testing.getCollectionByTitle pid "HEALTH CHECK."
+      addRespHeaders $ PageCtx bodyConfig $ createMonitorPage pid colsM
     Just "NotifChannel" -> do
-      addRespHeaders $ PageCtx bodyConfig $ notifChannels pid appContx.config.slackRedirectUri
+      let phone = fromMaybe "" project.notifyPhoneNumber
+          emails = project.notifyEmails
+      addRespHeaders $ PageCtx bodyConfig $ notifChannels pid appContx.config.slackRedirectUri phone emails
     Just "Integration" -> do
       addRespHeaders $ PageCtx bodyConfig $ integrationsPage pid
     _ -> do
@@ -267,8 +271,8 @@ tagItem label isActive =
     span_ [class_ "text-sm"] (toHtml label)
 
 
-notifChannels :: Projects.ProjectId -> Text -> Html ()
-notifChannels pid slackRedirectUri = do
+notifChannels :: Projects.ProjectId -> Text -> Text -> Vector Text -> Html ()
+notifChannels pid slackRedirectUri phone emails = do
   div_ [class_ "w-[550px] mx-auto mt-[156px] mb-10"] $ do
     div_ [id_ "inviteModalContainer"] pass
     div_ [class_ "flex-col gap-4 flex w-full"] $ do
@@ -308,18 +312,20 @@ notifChannels pid slackRedirectUri = do
               div_ [class_ "flex flex-col gap-2"] do
                 div_ [class_ "flex w-full items-center gap-1"] $ do
                   span_ [class_ "text-strong lowercase first-letter:uppercase"] "Notify phone number"
-                input_ [class_ "input w-full h-12", type_ "text", name_ "phoneNumber", id_ "phone"]
+                input_ [class_ "input w-full h-12", type_ "text", name_ "phoneNumber", id_ "phone", value_ phone]
               div_ [class_ "flex flex-col gap-2"] do
                 div_ [class_ "flex w-full items-center gap-1"] $ do
                   span_ [class_ "text-strong lowercase first-letter:uppercase"] "Notify the following email address"
                 textarea_ [class_ "w-full rounded-lg stroke-strong", type_ "text", name_ "emails", id_ "emails_input"] ""
               div_ [class_ "items-center gap-4 flex"] $ do
                 button_ [class_ "px-6 h-14 flex items-center btn-primary text-xl font-semibold rounded-lg"] "Proceed"
+      let tgs = decodeUtf8 $ AE.encode $ V.toList tags
       script_
         [text|
      document.addEventListener('DOMContentLoaded', function() {
       var inputElem = document.querySelector('#emails_input')
       var tagify = new Tagify(inputElem)
+      tagify.addTags($tgs);
       window.tagify = tagify
     })
 
@@ -339,9 +345,11 @@ notifChannels pid slackRedirectUri = do
   |]
 
 
-createMonitorPage :: Projects.ProjectId -> Html ()
-createMonitorPage pid = do
+createMonitorPage :: Projects.ProjectId -> Maybe Testing.Collection -> Html ()
+createMonitorPage pid colM = do
   div_ [class_ "w-[550px] mx-auto mt-[156px] mb-10"] $ do
+    let collectionStepsJSON = AE.encode $ maybe (Testing.CollectionSteps []) (.collectionSteps) colM
+    script_ [fmt| window.collectionSteps = {collectionStepsJSON};|]
     div_ [class_ "flex-col gap-4 flex w-full"] $ do
       stepIndicator 3 "Let's create your first endpoint monitor" $ "/p/" <> pid.toText <> "/onboarding?step=Survey"
       form_
@@ -351,7 +359,9 @@ createMonitorPage pid = do
         , hxVals_ "js:{stepsData: saveStepData()}"
         ]
         $ do
-          input_ [class_ "input w-full h-12", type_ "hidden", name_ "title", value_ "HEALTHCHECK"]
+          input_ [class_ "input w-full h-12", type_ "hidden", name_ "title", value_ "HEALTH CHECK."]
+          whenJust colM $ \col -> do
+            input_ [type_ "hidden", name_ "collectionId", value_ col.id.toText]
           div_ [class_ "w-full"] $ termRaw "assertion-builder" [id_ ""] ""
           div_ [class_ "w-full"] $ termRaw "steps-editor" [id_ "stepsEditor", term "isOnboarding" "true"] ""
           div_ [class_ "items-center gap-4 flex"] $ do

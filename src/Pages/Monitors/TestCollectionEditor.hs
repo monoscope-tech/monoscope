@@ -72,8 +72,13 @@ collectionStepsUpdateH pid colF onboardingM = do
       case colIdM of
         Just colId -> do
           _ <- dbtToEff $ Testing.updateCollection pid colId colF
-          addSuccessToast "Collection's steps updated successfully" Nothing
-          addRespHeaders CollectionMutSuccess
+          case onboardingM of
+            Just _ -> do
+              redirectCS $ "/p/" <> pid.toText <> "/onboarding?step=NotifChannel"
+              addRespHeaders CollectionMutSuccess
+            Nothing -> do
+              addSuccessToast "Collection's steps updated successfully" Nothing
+              addRespHeaders CollectionMutSuccess
         Nothing -> do
           currentTime <- Time.currentTime
           colId <- Testing.CollectionId <$> liftIO UUIDV4.nextRandom
@@ -319,11 +324,7 @@ collectionPage pid colM col_rn respJson = do
               _ -> (True, "1", "minutes")
           )
           colM
-  script_
-    []
-    [fmt|
-        window.collectionSteps = {collectionStepsJSON};
-  |]
+  script_ [fmt| window.collectionSteps = {collectionStepsJSON};|]
   editorExtraElements
   section_ [class_ "h-full overflow-y-hidden"] do
     form_

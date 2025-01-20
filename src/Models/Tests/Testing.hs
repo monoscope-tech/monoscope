@@ -11,6 +11,7 @@ module Models.Tests.Testing (
   CollectionSteps (..),
   CollectionVariablesItem (..),
   CollectionVariables (..),
+  getCollectionByTitle,
   CollectionStepUpdateForm (..),
   stepDataMethod,
   updateCollection,
@@ -125,8 +126,8 @@ stepDataMethod stepData =
 
 instance AE.ToJSON CollectionStepData where
   toJSON csd =
-    AE.object
-      $ catMaybes
+    AE.object $
+      catMaybes
         [ Just $ "title" .= csd.title
         , fmap ("POST" .=) csd.post -- Change the key to "POST" here for the output JSON
         , fmap ("GET" .=) csd.get
@@ -420,6 +421,19 @@ getCollectionById id' = queryOne Select q (Only id')
                   collection_variables, alert_severity, alert_message, alert_subject, notify_after,
                   notify_after_check, stop_after, stop_after_check
                   FROM tests.collections t WHERE id=?|]
+getCollectionByTitle :: Projects.ProjectId -> Text -> DBT IO (Maybe Collection)
+getCollectionByTitle pid title = queryOne Select q (pid, title)
+  where
+    q =
+      [sql| SELECT id, created_at, updated_at, last_run, project_id, title, description, config,
+                  CASE
+                      WHEN EXTRACT(DAY FROM schedule) > 0 THEN CONCAT(EXTRACT(DAY FROM schedule)::TEXT, ' days')
+                      WHEN EXTRACT(HOUR FROM schedule) > 0 THEN CONCAT(EXTRACT(HOUR FROM schedule)::TEXT, ' hours')
+                      ELSE CONCAT(EXTRACT(MINUTE FROM schedule)::TEXT, ' minutes')
+                  END as schedule, is_scheduled, collection_steps, last_run_response, last_run_passed, last_run_failed, tags,
+                  collection_variables, alert_severity, alert_message, alert_subject, notify_after,
+                  notify_after_check, stop_after, stop_after_check
+                  FROM tests.collections t WHERE project_id=? AND title=?|]
 
 
 getCollections :: Projects.ProjectId -> TabStatus -> DBT IO (V.Vector CollectionListItem)
