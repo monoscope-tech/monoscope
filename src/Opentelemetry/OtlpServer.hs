@@ -304,7 +304,7 @@ convertSpanRecord pidsKeys resource scope sp =
       Nothing ->
         let pidText = maybe "" (fromMaybe "" . anyValueToString) $ resource >>= \r -> find (\kv -> kv.keyValueKey == "at-project-id") r.resourceAttributes >>= (.keyValueValue) >>= (.anyValueValue)
             uId = UUID.fromText pidText
-         in maybe Nothing (\u -> Just $ Projects.ProjectId u) uId
+         in ((\u -> Just $ Projects.ProjectId u) =<< uId)
 
 
 convertToMetric :: Projects.ProjectId -> ResourceMetrics -> V.Vector Telemetry.MetricRecord
