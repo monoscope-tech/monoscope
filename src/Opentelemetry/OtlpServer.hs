@@ -302,7 +302,7 @@ convertSpanRecord pidsKeys resource scope sp =
     pid = case find (\(k, _) -> k == key) pidsKeys of
       Just (_, v) -> Just v
       Nothing ->
-        let pidText = maybe "" (fromMaybe "" . anyValueToString) $ resource >>= \r -> find (\kv -> kv.keyValueKey == "at-project-key") r.resourceAttributes >>= (.keyValueValue) >>= (.anyValueValue)
+        let pidText = maybe "" (fromMaybe "" . anyValueToString) $ resource >>= \r -> find (\kv -> kv.keyValueKey == "at-project-id") r.resourceAttributes >>= (.keyValueValue) >>= (.anyValueValue)
             uId = UUID.fromText pidText
          in maybe Nothing (\u -> Just $ Projects.ProjectId u) uId
 
