@@ -11,6 +11,7 @@ module Models.Projects.ProjectApiKeys (
   insertProjectApiKey,
   projectApiKeysByProjectId,
   countProjectApiKeysByProjectId,
+  projectIdsByProjectApiKeys,
   revokeApiKey,
   getProjectApiKey,
 )
@@ -119,6 +120,12 @@ getProjectIdByApiKey projectKey = do
     withPool pool $ queryOne Select q (Only projectKey)
   where
     q = [sql| select project_id from projects.project_api_keys where key_prefix=?|]
+
+
+projectIdsByProjectApiKeys :: V.Vector Text -> DBT IO (V.Vector (Text, Projects.ProjectId))
+projectIdsByProjectApiKeys projectKeys = query Select q (Only projectKeys)
+  where
+    q = [sql| select key_prefix, project_id from projects.project_api_keys where key_prefix in ? |]
 
 
 -- AES256 encryption
