@@ -12,8 +12,8 @@ javascriptGuide :: Text -> Html ()
 javascriptGuide apikey = do
   section_ [class_ "flex flex-col gap-4"] do
     span_ [class_ "text-2xl font-semibold text-strong"] "Integrate Javascript SDK"
-    div_ [class_ "flex items-center gap-2"] do
-      mapM_ featureItem features
+    -- div_ [class_ "flex items-center gap-2"] do
+    --   mapM_ featureItem features
     div_ [class_ "flex flex-col gap-2"] do
       span_ [class_ "text-strong font-semibold"] "Select framework"
       div_ [class_ "flex items-center gap-2"] do

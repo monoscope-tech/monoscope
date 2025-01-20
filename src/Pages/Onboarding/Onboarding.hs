@@ -319,7 +319,7 @@ notifChannels pid slackRedirectUri phone emails = do
                 textarea_ [class_ "w-full rounded-lg stroke-strong", type_ "text", name_ "emails", id_ "emails_input"] ""
               div_ [class_ "items-center gap-4 flex"] $ do
                 button_ [class_ "px-6 h-14 flex items-center btn-primary text-xl font-semibold rounded-lg"] "Proceed"
-      let tgs = decodeUtf8 $ AE.encode $ V.toList tags
+      let tgs = decodeUtf8 $ AE.encode $ V.toList emails
       script_
         [text|
      document.addEventListener('DOMContentLoaded', function() {
