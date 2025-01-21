@@ -60,7 +60,7 @@ fastifyGuide apikey = do
   section_ [class_ "flex flex-col gap-10 js-guide hidden", id_ "Fastify"] do
     div_ [class_ "w-full flex flex-col gap-2"] do
       h3_ [class_ "text-2xl font-semibold"] "Installation"
-      p_ [class_ "text-gray-600 font-medium"] "Run the command below to install the APIToolkit express sdk and Open telemetery API, SDK, and auto instrumentation tools."
+      p_ [class_ "text-gray-600 font-medium"] "Run the command below to install the APIToolkit Fastify sdk and Open telemetery API, SDK, and auto instrumentation tools."
       bashCommand "npm install --save apitoolkit-fastify @opentelemetry/api @opentelemetry/auto-instrumentations-node"
 
     div_ [class_ "w-full flex flex-col gap-2"] do
@@ -69,7 +69,7 @@ fastifyGuide apikey = do
       codeExample $ otelConfig apikey
 
     div_ [class_ "w-full flex flex-col gap-2", id_ "requests-monitoring"] do
-      h3_ [class_ "text-2xl font-semibold"] "Configure & Initialize APItoolkit Express SDK"
+      h3_ [class_ "text-2xl font-semibold"] "Configure & Initialize APItoolkit Fastify SDK"
       p_ [class_ "text-gray-600 font-medium"] "Configure and initialize the SDK to start monitoring incoming http request, errors and outgoing request."
       codeExample initCodeFastify
 
@@ -84,7 +84,7 @@ nextJsGuide apikey = do
   section_ [class_ "flex flex-col gap-10 js-guide hidden", id_ "NextJS"] do
     div_ [class_ "w-full flex flex-col gap-2"] do
       h3_ [class_ "text-2xl font-semibold"] "Installation"
-      p_ [class_ "text-gray-600 font-medium"] "Run the command below to install the APIToolkit express sdk and Open telemetery API, SDK, and auto instrumentation tools."
+      p_ [class_ "text-gray-600 font-medium"] "Run the command below to install the APIToolkit NextJs sdk and Open telemetery API, SDK, and auto instrumentation tools."
       bashCommand "npm install --save apitoolkit-next @opentelemetry/api @vercel/otel"
 
     div_ [class_ "w-full flex flex-col gap-2"] do
@@ -99,7 +99,7 @@ OTEL_EXPORTER_OTLP_PROTOCOL="http/protobuf"
 |]
 
     div_ [class_ "w-full flex flex-col gap-2", id_ "requests-monitoring"] do
-      h3_ [class_ "text-2xl font-semibold"] "Configure & Initialize APItoolkit Express SDK"
+      h3_ [class_ "text-2xl font-semibold"] "Configure & Initialize APItoolkit NextJs SDK"
       p_ [class_ "text-gray-600 font-medium"] "Configure and initialize the SDK to start monitoring incoming http request, errors and outgoing request."
       h4_ [class_ "text-xl font-medium"] "Register the SDK"
       p_ [class_ "text-gray-600 font-medium"] do

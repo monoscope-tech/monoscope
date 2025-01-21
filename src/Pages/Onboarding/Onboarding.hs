@@ -228,7 +228,7 @@ integrationsPage pid =
             button_ [class_ "btn btn-primary"] "Confirm & Proceed"
             button_ [class_ "font-semibold text-brand underline"] "Skip"
     div_ [class_ "w-[700px]"] do
-      div_ [class_ "fixed top-1/2 -translate-y-1/2 w-[700px] border rounded-2xl border-weak flex justify-between items-center h-[90vh]"] do
+      div_ [class_ "fixed top-1/2 -translate-y-1/2 w-[min(48vw,800px)] border rounded-2xl border-weak flex justify-between items-center h-[90vh]"] do
         div_ [class_ "w-full h-full overflow-y-auto p-6"] do
           javascriptGuide "hello"
           golangGuide "hello"
