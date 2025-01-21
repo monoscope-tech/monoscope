@@ -133,7 +133,7 @@ processList msgs attrs = do
           spans = join spansVec
           apitoolkitSpans = V.map mapHTTPSpan spans
       _ <- ProcessMessage.processRequestMessages $ V.toList $ V.catMaybes apitoolkitSpans <&> ("",)
-      Telemetry.bulkInsertSpans $ V.filter (\s -> s.spanName /= "apitoolkit-http-span") spans
+      Telemetry.bulkInsertSpans spans
       pure $ V.toList ackIds
     Just "org.opentelemetry.otlp.metrics.v1" -> do
       results <-
