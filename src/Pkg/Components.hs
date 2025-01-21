@@ -6,6 +6,8 @@ module Pkg.Components (
   modal_,
   dropDownMenu_,
   codeEmphasis,
+  featureItem,
+  frameworkItem,
   withEmphasisedText,
   TabFilter (..),
   TabFilterOpt (..),
@@ -14,10 +16,12 @@ module Pkg.Components (
 )
 where
 
+import Data.Text qualified as T
 import Lucid
 import Lucid.Base
 import Lucid.Hyperscript
 import Lucid.Svg (d_, fill_, path_, viewBox_)
+import NeatInterpolation (text)
 import Pkg.Components.ItemsList
 import Pkg.Components.Modals (dropDownMenu_, modal_)
 import Pkg.Components.TimePicker
@@ -97,6 +101,21 @@ codeExample code = do
 
 codeEmphasis :: Text -> Html ()
 codeEmphasis code = span_ [class_ "text-red-500"] $ toHtml code
+
+
+featureItem :: Text -> Html ()
+featureItem title =
+  div_ [class_ "h-8 px-3 rounded-lg flex justify-center items-center gap-2 stroke-strong"] $ do
+    let featureId = T.replace " " "" title
+    input_ [type_ "checkbox", class_ "checkbox checkbox-sm shrink-0", style_ "--chkbg:#000626E5", id_ featureId]
+    label_ [class_ "text-center text-[#000833]/60 text-sm font-semibold", Lucid.for_ featureId] $ toHtml title
+
+
+frameworkItem :: Text -> Text -> Html ()
+frameworkItem lang title =
+  button_ [class_ "h-8 px-3 rounded-lg flex justify-center items-center gap-2 stroke-strong", term "_" [text|on click add .hidden to <.$lang-guide/> then remove .hidden from $title|]] $ do
+    input_ [type_ "radio", class_ "radio radio-sm hrink-0", name_ "frameworks", style_ "--chkbg:#000626E5", id_ title]
+    label_ [class_ "text-center text-[#000833]/60 text-sm font-semibold", Lucid.for_ title] $ toHtml title
 
 
 withEmphasisedText :: [(Text, Bool)] -> Html ()

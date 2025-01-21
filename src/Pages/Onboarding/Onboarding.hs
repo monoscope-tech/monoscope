@@ -39,7 +39,7 @@ import Database.PostgreSQL.Transact (DBT)
 import Lucid.Hyperscript (__)
 import Models.Tests.Testing qualified as Testing
 import Pages.Components qualified as Components
-import Pages.IntegrationDemos.ExpressJs (expressGuide)
+import Pages.IntegrationDemos.Golang (golangGuide)
 import Pages.IntegrationDemos.Javascript (javascriptGuide)
 import Pkg.Components qualified as Components
 import Pkg.Mail (sendDiscordNotif)
@@ -201,7 +201,7 @@ onboardingConfPost pid form = do
 
 integrationsPage :: Projects.ProjectId -> Html ()
 integrationsPage pid =
-  div_ [class_ "w-[1000px]  mx-auto"] $ do
+  div_ [class_ "w-[1200px] flex justify-between mx-auto"] $ do
     div_ [class_ "w-[448px] mt-[156px] mb-10"] $ do
       div_ [class_ "flex-col gap-4 flex w-full"] $ do
         stepIndicator 5 "Instrument your apps or servers" $ "/p/" <> pid.toText <> "/onboarding?step=NotifChannel"
@@ -227,28 +227,36 @@ integrationsPage pid =
           div_ [class_ "flex items-center gap-4"] do
             button_ [class_ "btn btn-primary"] "Confirm & Proceed"
             button_ [class_ "font-semibold text-brand underline"] "Skip"
+    div_ [class_ "w-[700px]"] do
+      div_ [class_ "fixed top-1/2 -translate-y-1/2 w-[700px] border rounded-2xl border-weak flex justify-between items-center h-[90vh]"] do
+        div_ [class_ "w-full h-full overflow-y-auto p-6"] do
+          javascriptGuide "hello"
+          golangGuide "hello"
     script_
       [text|
       function toggleCheckbox(event) {
+        event.stopPropagation();
         event.target.nextSibling.lastChild.classList.toggle('hidden');
       }
     |]
 
-    div_ [class_ "fixed top-1/2 -translate-y-1/2 right-[150px] border rounded-2xl border-weak flex justify-between items-center h-[90vh] w-[calc(40vw)]"] do
-      div_ [class_ "w-full h-full overflow-y-auto p-6"] do
-        javascriptGuide "hello"
-
 
 languageItem :: Projects.ProjectId -> Text -> Text -> Html ()
-languageItem pid lang ext =
-  div_ [class_ "h-12 px-3 py-2 bg-[#00157f]/0 rounded-xl border border-[#001066]/10 justify-start items-center gap-3 inline-flex"] do
-    input_ [type_ "checkbox", class_ "checkbox shrink-0", onclick_ "toggleCheckbox(event)"]
-    div_ [class_ "flex w-full items-center justify-between"] do
-      div_ [class_ "flex items-center gap-2"] do
-        img_ [class_ "h-5 w-5", src_ $ "/public/assets/svgs/" <> ext <> ".svg"]
-        span_ [class_ "text-sm font-semibold text-strong"] $ toHtml lang
-      div_ [class_ "hidden text-sm toggle-target", id_ $ "integration-check-container" <> (T.replace "#" "" lang)] do
-        integrationCheck pid lang
+languageItem pid lang ext = do
+  let ext_main = ext <> "_main"
+  let clck = [text|on click add .hidden to <.lang-guide/> then remove .hidden from #$ext_main|]
+  button_
+    [ class_ "h-12 px-3 py-2 bg-[#00157f]/0 rounded-xl border border-[#001066]/10 justify-start items-center gap-3 inline-flex"
+    , term "_" clck
+    ]
+    do
+      input_ [type_ "checkbox", class_ "checkbox shrink-0", onclick_ "toggleCheckbox(event)"]
+      div_ [class_ "flex w-full items-center justify-between"] do
+        div_ [class_ "flex items-center gap-2"] do
+          img_ [class_ "h-5 w-5", src_ $ "/public/assets/svgs/" <> ext <> ".svg"]
+          span_ [class_ "text-sm font-semibold text-strong"] $ toHtml lang
+        div_ [class_ "hidden text-sm toggle-target", id_ $ "integration-check-container" <> T.replace "#" "" lang] do
+          integrationCheck pid lang
 
 
 integrationCheck :: Projects.ProjectId -> Text -> Html ()
@@ -406,7 +414,7 @@ discordModal pid = do
 
 onboardingInfoBody :: Projects.ProjectId -> Text -> Text -> Text -> Text -> Text -> Html ()
 onboardingInfoBody pid firstName lastName cName cSize fUsFrm = do
-  div_ [class_ "w-[448px] mx-auto mt-[156px]"] $ do
+  div_ [class_ "w-[550px] mx-auto mt-[156px]"] $ do
     div_ [class_ "flex-col gap-4 flex w-full"] $ do
       stepIndicator 1 "Tell us a little bit about you" ""
       form_ [class_ "flex-col w-full gap-8 flex", hxPost_ $ "/p/" <> pid.toText <> "/onboarding/info"] $ do
@@ -420,7 +428,7 @@ onboardingInfoBody pid firstName lastName cName cSize fUsFrm = do
 
 onboardingConfigBody :: Projects.ProjectId -> Text -> [Text] -> Html ()
 onboardingConfigBody pid loca func = do
-  div_ [class_ "w-[448px] mx-auto mt-[156px]"] $ do
+  div_ [class_ "w-[550px] mx-auto mt-[156px]"] $ do
     div_ [class_ "flex-col gap-4 flex w-full"] $ do
       stepIndicator 2 "Let's configure your project" $ "/p/" <> pid.toText <> "/onboarding?step=Info"
       form_ [class_ "flex-col w-full gap-8 flex", hxPost_ $ "/p/" <> pid.toText <> "/onboarding/survey"] $ do

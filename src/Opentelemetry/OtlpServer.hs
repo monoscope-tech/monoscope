@@ -129,7 +129,7 @@ processList msgs attrs = do
             Right (ExportTraceServiceRequest traceReq) -> do
               pidM <- join <$> forM (getSpanAttributeValue "at-project-key" traceReq) ProjectApiKeys.getProjectIdByApiKey
               let pid2M = Projects.projectIdFromText =<< getSpanAttributeValue "at-project-id" traceReq
-              let pid = fromMaybe (error "project API Key and project ID not available in trace") $ pidM <|> pid2M
+              let pid = fromMaybe (error $ "project API Key and project ID not available in trace" <> show traceReq) $ pidM <|> pid2M
               pure (ackId, join $ V.map (convertToSpan pid) traceReq)
       let (ackIds, spansVec) = V.unzip results
           spans = join spansVec

@@ -375,14 +375,14 @@ updateCollection pid cid colF = execute Update q params
     notifyAfterCheck = colF.notifyAfterCheck == Just "on"
     notifyAfter = fromMaybe "6hours" colF.notifyAfter
     stopAfter = fromMaybe "0" colF.stopAfter
-    scheduleTxt = fromMaybe "" colF.scheduleNumber <> " " <> fromMaybe "" colF.scheduleNumberUnit
+    scheduleTxt = fromMaybe "1" colF.scheduleNumber <> " " <> fromMaybe "hour" colF.scheduleNumberUnit
     title = colF.title
     description = fromMaybe "" colF.description
     scheduleInterval = scheduleTxt
-    sv = colF.alertSeverity
-    msg = colF.alertMessage
-    sub = colF.alertSubject
-    tags = colF.tags
+    sv = fromMaybe "INFO" colF.alertSeverity
+    msg = fromMaybe "" colF.alertMessage
+    sub = fromMaybe "" colF.alertSubject
+    tags = fromMaybe [] colF.tags
     collectionSteps = colF.stepsData
     params =
       ( title
