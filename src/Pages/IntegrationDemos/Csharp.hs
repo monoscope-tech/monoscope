@@ -19,11 +19,11 @@ csharpGuide apikey =
 
 csharpGuideTemplate :: Text -> Html ()
 csharpGuideTemplate apikey = do
-  section_ [class_ $ "flex flex-col gap-10 csharp-guide "] do
+  section_ [class_ "flex flex-col gap-10 csharp-guide "] do
     div_ [class_ "w-full flex flex-col gap-2"] do
       h3_ [class_ "text-2xl font-semibold"] "Installation"
-      p_ [class_ "text-gray-600 font-medium"] $ toHtml $ "Run the command below to install the APItoolkit .NET sdk"
-      bashCommand $ "dotnet add package ApiToolkit.NET"
+      p_ [class_ "text-gray-600 font-medium"] $ toHtml "Run the command below to install the APItoolkit .NET sdk"
+      bashCommand "dotnet add package ApiToolkit.NET"
     div_ [class_ "w-full flex flex-col gap-2"] do
       h3_ [class_ "text-2xl font-semibold"] "Open Telemetry SDK Configuration"
       p_ [] "To instrument a .NET application automatically, download and run the installer script for Linux/Mac"

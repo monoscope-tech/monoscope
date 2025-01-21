@@ -158,7 +158,7 @@ checkIntegrationGet pid language = do
   let q = [sql| SELECT * FROM telemetry.spans WHERE project_id = ? and resource ->> 'telemetry.sdk.language' = ?|]
   v <- dbtToEff (queryOne Select q (pid, language) :: (DBT IO (Maybe Telemetry.SpanRecord)))
   case v of
-    Nothing -> addRespHeaders $ div_ [class_ "flex items-center gap-2 text-green-500"] do
+    Just x -> addRespHeaders $ div_ [class_ "flex items-center gap-2 text-green-500"] do
       span_ "verified"
       faSprite_ "circle-check" "regular" "h-4 w-4"
     _ -> addRespHeaders $ integrationCheck pid language
@@ -212,24 +212,17 @@ integrationsPage pid =
           p_ [class_ "text-strong"] "Send Logs, Metrics or Traces. Click proceed when you’re done integrating your applications. learn more"
           div_ [class_ "flex flex-col gap-4 "] $ do
             div_ [class_ "flex flex-col gap-2"] do
-              input_ [class_ "w-full input input-sm"]
-              div_ [class_ "w-full"] $ do
-                div_ [class_ "flex items-center justify-between"] $ do
-                  tagItem "All" False
-                  tagItem "Backend" True
-                  tagItem "Frontend" False
-                  tagItem "Database" False
-                  tagItem "Infra" False
-                  tagItem "Others" False
-            div_ [class_ "flex flex-col gap-2"] do
-              languageItem pid "Javascript" "js"
-              languageItem pid "Golang" "go"
-              languageItem pid "Python" "py"
-              languageItem pid "PHP" "php"
-              languageItem pid "C#" "cs"
+              let langs = [("js", "Javascript") :: (Text, Text), ("go", "Golang"), ("py", "Python"), ("php", "PHP"), ("cs", "C#")]
+              forM_ langs $ \(lang, langName) -> languageItem pid langName lang
           div_ [class_ "flex items-center gap-4"] do
             button_ [class_ "btn btn-primary"] "Confirm & Proceed"
-            button_ [class_ "font-semibold text-brand underline"] "Skip"
+            a_
+              [ class_ "px-2 h-14 flex items-center underline text-brand text-xl font-semibold"
+              , type_ "button"
+              , href_ $ "/p/" <> pid.toText <> "/onboarding?step=Pricing"
+              ]
+              "Skip"
+
     div_ [class_ "w-[700px]"] do
       div_ [class_ "fixed top-1/2 -translate-y-1/2 w-[min(48vw,800px)] border rounded-2xl border-weak flex justify-between items-center h-[90vh]"] do
         div_ [class_ "w-full h-full overflow-y-auto p-6"] do
