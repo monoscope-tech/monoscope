@@ -19,7 +19,7 @@ import Data.Aeson qualified as AE
 import Data.Aeson.KeyMap qualified as KM
 import Data.Default (def)
 import Data.Text qualified as T
-import Data.Vector as V (Vector, fromList, toList)
+import Data.Vector as V (Vector, fromList, head, toList)
 import Database.PostgreSQL.Entity.DBT (QueryNature (Select, Update), execute, query, queryOne)
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
@@ -50,7 +50,7 @@ import PyF (fmt)
 import Relude hiding (ask)
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders, redirectCS)
-import Utils (faSprite_, lookupValueText, redirect)
+import Utils (faSprite_, lemonSqueezyUrls, lemonSqueezyUrlsAnnual, lookupValueText, redirect)
 import Web.FormUrlEncoded
 
 
@@ -89,6 +89,8 @@ onboardingGetH pid onboardingStep = do
       addRespHeaders $ PageCtx bodyConfig $ notifChannels pid appContx.config.slackRedirectUri phone emails
     Just "Integration" -> do
       addRespHeaders $ PageCtx bodyConfig $ integrationsPage pid
+    Just "Pricing" -> do
+      addRespHeaders $ PageCtx bodyConfig $ pricingPage pid
     _ -> do
       let firstName = sess.user.firstName
           lastName = sess.user.lastName
@@ -200,6 +202,76 @@ onboardingConfPost pid form = do
   res <- dbtToEff $ execute Update [sql| update projects.projects set  questions= ? where id=? |] (jsonBytes, pid)
   redirectCS $ "/p/" <> pid.toText <> "/onboarding?step=CreateMonitor"
   addRespHeaders ""
+
+
+pricingPage :: Projects.ProjectId -> Html ()
+pricingPage pid = do
+  div_ [class_ "w-[800px] mx-auto mt-[70px] mb-10 mx-auto"] $ do
+    div_ [class_ "flex-col gap-8 flex w-full"] $ do
+      div_ [class_ "w-1/2"] $ do
+        stepIndicator 6 "Please pick a plan" $ "/p/" <> pid.toText <> "/onboarding?step=Integration"
+      div_ [class_ "tabs tabs-boxed tabs-md p-0 w-max flex items-center tabs-outline items-center bg-weak text-weak border", id_ "pricing-tabs"] do
+        button_
+          [ class_ "a-tab tab whitespace-nowrap px-3 border-b border-b-slate-200 w-max t-tab-box-active"
+          , onclick_ "navigatable(this, '#req_body_json', '#pricing-tabs', 't-tab-box-active')"
+          ]
+          "Monthly"
+        button_
+          [ class_ "a-tab tab whitespace-nowrap px-3 border-b border-b-slate-200 w-max"
+          , onclick_ "navigatable(this, '#req_headers_json', '#pricing-tabs', 't-tab-box-active')"
+          ]
+          "Annual (2 months free)"
+      div_ [class_ "flex flex-col gap-2 w-full"] do
+        div_ [class_ "flex items-center justify-between w-full gap-4"] do
+          p_ [class_ "text-strong"] "Total requests"
+          p_ [class_ "text-weak"] "200k"
+        input_ [type_ "range", min_ "0", max_ "6", step_ "1", value_ "0", class_ "range range-primary range-sm", id_ "price_range"]
+      div_ [class_ "grid grid-cols-2 gap-8 w-full"] do
+        popularPricing pid
+        systemsPricing pid
+      let graduatedCheckoutOne = V.head lemonSqueezyUrls <> "&checkout[custom][project_id]=" <> pid.toText
+          lmnUrls = decodeUtf8 $ AE.encode $ lemonSqueezyUrls <&> ("&checkout[custom][project_id]=" <> pid.toText)
+          lmnUrlAnnual = decodeUtf8 $ AE.encode $ lemonSqueezyUrlsAnnual <&> ("&checkout[custom][project_id]=" <> pid.toText)
+      script_
+        [text|
+               const price_indicator = document.querySelector("#price_range");
+               window.graduatedRangeUrl = "$graduatedCheckoutOne";
+               let plan = "month";
+               const prices = [34, 49, 88, 215, 420, 615, 800]
+               const reqs = ["400k","1.1M", "2M", "5M", "10M", "15M", "20M"]
+               const pricesYr = [29, 34, 61, 150, 294, 294, 294]
+               const reqsYr = ["400k","1.1M", "2M", "5M", "10M", "10M", "10M"]
+               const urls = $lmnUrls
+               const urlsAnnual = $lmnUrlAnnual
+               const priceContainer = document.querySelector("#price")
+               const reqsContainer = document.querySelector("#num_requests")
+               function priceChange() {
+                 const value = price_indicator.value
+                 let price = prices[value]
+                 let num_reqs = reqs[value]
+                 window.graduatedRangeUrl = urls[value]
+                 if(plan === "annual") {
+                    price = pricesYr[value]
+                    num_reqs = reqsYr[value]
+                    window.graduatedRangeUrl = urlsAnnual[value]
+                  }
+                 priceContainer.innerText = "$" + price
+                 reqsContainer.innerText = "/" + num_reqs
+
+               }
+               price_indicator.addEventListener('input', priceChange)
+
+               function handlePlanToggle() {
+                  const radios = document.getElementsByName("plans")
+                  for(let radio of radios) {
+                    if(radio.checked) {
+                        plan = radio.value
+                        break
+                    }
+                  }
+                  priceChange()
+               }
+            |]
 
 
 integrationsPage :: Projects.ProjectId -> Html ()
@@ -550,9 +622,68 @@ stepIndicator step title prevUrl =
     div_ [class_ "flex-col gap-2 flex w-full"] $ do
       div_ [class_ "text-strong text-base font-semibold"] $ "Step " <> show step <> " of 6"
       div_ [class_ "grid grid-cols-6 w-full gap-1"] $ do
-        forM_ [1 .. 6] $ \i -> div_ [class_ $ if step >= i then "btn-primary rounded" else "bg-weak shadow-[inset_0px_1px_4px_0px_rgba(0,0,0,0.08)] border border-[#001066]/10" <> " h-2 w-full rounded"] pass
+        forM_ [1 .. 6] $ \i -> div_ [class_ $ "h-2 w-full rounded " <> if step >= i then "btn-primary rounded" else "bg-weak shadow-[inset_0px_1px_4px_0px_rgba(0,0,0,0.08)] border border-[#001066]/10"] pass
       when (step > 1) $ do
         a_ [class_ "flex items-center gap-3 flex text-brand w-full mt-2", href_ prevUrl] $ do
           faSprite_ "arrow-left" "regular" "h-4 w-4"
           span_ [class_ "font-semibold"] "Back"
     span_ [class_ "text-strong text-4xl font-semibold mt-4"] $ toHtml title
+
+
+popularPricing :: Projects.ProjectId -> Html ()
+popularPricing projectId = do
+  div_ [class_ "rounded-2xl p-8 border border-[var(--brand-color)] flex-col flex gap-8"] $ do
+    div_ [class_ "flex-col justify-start items-start gap-2 flex"] $ do
+      -- div_ [class_ "relative"] $ do
+      --   span_ [class_ "text-brand font-semibold"] "Most popular!"
+      div_ [class_ "text-center text-strong text-4xl font-bold"] "Pay as you use"
+      div_ [class_ "text-brand text-base font-semibold"] "Start your FREE 30-day trial"
+      div_ [class_ "text-weak text-sm font-medium"] "Starts at €35/monthly"
+
+    div_ [class_ "flex-col justify-start items-start gap-6 flex"] $ do
+      span_ [class_ "text-weak text-base font-semibold"] "What’s Included:"
+      mapM_ featureRow features
+
+    button_
+      [ class_ "btn-primary h-12 rounded mt-auto w-full font-semibold rounded-lg shadow-[0px_1px_2px_0px_rgba(10,13,18,0.05)] shadow-[inset_0px_-2px_0px_0px_rgba(10,13,18,0.05)] shadow-[inset_0px_0px_0px_1px_rgba(10,13,18,0.18)]"
+      , [__|on click call window.payLemon() |]
+      ]
+      "Start 30 day trial"
+  where
+    features =
+      [ "Unlimited events per month"
+      , "Unlimited health checks per day."
+      , "Unlimited team members"
+      , "API swagger/OpenAPI hosting"
+      , "Opentelemetry Logs and Traces"
+      , "Last 14 days data retention"
+      ]
+
+
+systemsPricing :: Projects.ProjectId -> Html ()
+systemsPricing projectId = do
+  div_ [class_ "rounded-2xl p-8 border border-[var(--brand-color)] flex-col flex gap-8"] $ do
+    div_ [class_ "flex-col justify-start items-start gap-2 flex"] $ do
+      -- div_ [class_ "relative"] $ do
+      --   span_ [class_ "text-brand font-semibold"] "Most popular!"
+      div_ [class_ "text-center text-strong text-4xl font-bold"] "Critical Systems"
+      div_ [class_ "text-base font-semibold"] "Business plan"
+      div_ [class_ "text-weak text-sm font-medium"] "Starts at €500/monthly"
+
+    div_ [class_ "flex-col justify-start items-start gap-6 flex"] $ do
+      span_ [class_ "text-weak text-base font-semibold"] "Everything in plus and..."
+      mapM_ featureRow features
+    button_ [class_ "btn-primary h-12 rounded w-full mt-auto font-semibold rounded-lg shadow-[0px_1px_2px_0px_rgba(10,13,18,0.05)] shadow-[inset_0px_-2px_0px_0px_rgba(10,13,18,0.05)] shadow-[inset_0px_0px_0px_1px_rgba(10,13,18,0.18)]"] "Start 30 day trial"
+  where
+    features =
+      [ "250K events per month"
+      , "Limited health checks per day."
+      ]
+
+
+featureRow :: Text -> Html ()
+featureRow feature =
+  div_ [class_ "flex items-center gap-2"] $ do
+    div_ [class_ "rounded-full bg-green-100"] do
+      faSprite_ "check" "regular" "h-4 w-4 text-green-500"
+    p_ [class_ "text-weak"] (toHtml feature)
