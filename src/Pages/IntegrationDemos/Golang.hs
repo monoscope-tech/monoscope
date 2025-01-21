@@ -6,7 +6,6 @@ import NeatInterpolation (text)
 import Pkg.Components
 import Relude
 
-
 golangGuide :: Text -> Html ()
 golangGuide apikey =
   section_ [class_ "flex flex-col gap-4 lang-guide hidden", id_ "go_main"] do

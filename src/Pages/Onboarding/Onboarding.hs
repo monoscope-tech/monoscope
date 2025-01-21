@@ -39,8 +39,11 @@ import Database.PostgreSQL.Transact (DBT)
 import Lucid.Hyperscript (__)
 import Models.Tests.Testing qualified as Testing
 import Pages.Components qualified as Components
+import Pages.IntegrationDemos.Csharp (csharpGuide)
 import Pages.IntegrationDemos.Golang (golangGuide)
 import Pages.IntegrationDemos.Javascript (javascriptGuide)
+import Pages.IntegrationDemos.Php (phpGuide)
+import Pages.IntegrationDemos.Python (pythonGuide)
 import Pkg.Components qualified as Components
 import Pkg.Mail (sendDiscordNotif)
 import PyF (fmt)
@@ -232,6 +235,9 @@ integrationsPage pid =
         div_ [class_ "w-full h-full overflow-y-auto p-6"] do
           javascriptGuide "hello"
           golangGuide "hello"
+          pythonGuide "hello"
+          phpGuide "hello"
+          csharpGuide "hello"
     script_
       [text|
       function toggleCheckbox(event) {
