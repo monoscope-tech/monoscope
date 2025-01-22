@@ -213,25 +213,59 @@ pricingPage pid = do
       div_ [class_ "tabs tabs-boxed tabs-md p-0 w-max flex items-center tabs-outline items-center bg-weak text-weak border", id_ "pricing-tabs"] do
         button_
           [ class_ "a-tab tab whitespace-nowrap px-3 border-b border-b-slate-200 w-max t-tab-box-active"
-          , onclick_ "navigatable(this, '#req_body_json', '#pricing-tabs', 't-tab-box-active')"
+          , onclick_ "handlePlanToggle('monthly')"
+          , id_ "monthly"
           ]
           "Monthly"
         button_
           [ class_ "a-tab tab whitespace-nowrap px-3 border-b border-b-slate-200 w-max"
-          , onclick_ "navigatable(this, '#req_headers_json', '#pricing-tabs', 't-tab-box-active')"
+          , onclick_ "handlePlanToggle('annual')"
+          , id_ "annual"
           ]
           "Annual (2 months free)"
       div_ [class_ "flex flex-col gap-2 w-full"] do
         div_ [class_ "flex items-center justify-between w-full gap-4"] do
           p_ [class_ "text-strong"] "Total requests"
-          p_ [class_ "text-weak"] "200k"
+          p_ [class_ "text-weak", id_ "num_requests"] "200k"
         input_ [type_ "range", min_ "0", max_ "6", step_ "1", value_ "0", class_ "range range-primary range-sm", id_ "price_range"]
-      div_ [class_ "grid grid-cols-2 gap-8 w-full"] do
+      div_ [class_ "grid grid-cols-2 gap-8 mt-6 w-full"] do
         popularPricing pid
         systemsPricing pid
       let graduatedCheckoutOne = V.head lemonSqueezyUrls <> "&checkout[custom][project_id]=" <> pid.toText
-          lmnUrls = decodeUtf8 $ AE.encode $ lemonSqueezyUrls <&> ("&checkout[custom][project_id]=" <> pid.toText)
-          lmnUrlAnnual = decodeUtf8 $ AE.encode $ lemonSqueezyUrlsAnnual <&> ("&checkout[custom][project_id]=" <> pid.toText)
+          lmnUrls = decodeUtf8 $ AE.encode $ lemonSqueezyUrls <&> (<> "&checkout[custom][project_id]=" <> pid.toText)
+          lmnUrlAnnual = decodeUtf8 $ AE.encode $ lemonSqueezyUrlsAnnual <&> (<> "&checkout[custom][project_id]=" <> pid.toText)
+      script_ [src_ "https://assets.lemonsqueezy.com/lemon.js"] ("" :: Text)
+      script_
+        [type_ "text/javascript"]
+        [text|
+             window.payLemon = function(plan) {
+             const sub = document.getElementById("createIndicator")
+             if(sub.classList.contains("htmx-request")) {
+                return
+              }
+             LemonSqueezy.Setup({
+               eventHandler: ({event, data}) => {
+                 if(event === "Checkout.Success") {
+                     document.getElementById("orderId").value = data.order.data.id
+                     LemonSqueezy.Url.Close()
+                     gtag('event', 'conversion', {
+                         'send_to': 'AW-11285541899/rf7NCKzf_9YYEIvoroUq',
+                         'value': 20.0,
+                         'currency': 'EUR',
+                         'transaction_id': '',
+                     });
+                     htmx.trigger("#createUpdateBodyForm", "submit")
+                 }
+               }
+             })
+             if(plan == "GraduatedPricing") {
+                  LemonSqueezy.Url.Open(window.graduatedRangeUrl);
+              }else {
+                LemonSqueezy.Url.Open(window.urls[plan]);
+              }
+             };
+            |]
+
       script_
         [text|
                const price_indicator = document.querySelector("#price_range");
@@ -256,20 +290,19 @@ pricingPage pid = do
                     window.graduatedRangeUrl = urlsAnnual[value]
                   }
                  priceContainer.innerText = "$" + price
-                 reqsContainer.innerText = "/" + num_reqs
+                 reqsContainer.innerText = num_reqs
 
                }
                price_indicator.addEventListener('input', priceChange)
 
-               function handlePlanToggle() {
-                  const radios = document.getElementsByName("plans")
-                  for(let radio of radios) {
-                    if(radio.checked) {
-                        plan = radio.value
-                        break
-                    }
-                  }
+               function handlePlanToggle(p) {
+                  plan = p
                   priceChange()
+                  const tabs = document.querySelectorAll(".a-tab")
+                  for(let tab of tabs)  {
+                    tab.classList.remove("t-tab-box-active")
+                  }
+                  document.querySelector("#" + p).classList.add("t-tab-box-active")
                }
             |]
 
@@ -632,13 +665,22 @@ stepIndicator step title prevUrl =
 
 popularPricing :: Projects.ProjectId -> Html ()
 popularPricing projectId = do
-  div_ [class_ "rounded-2xl p-8 border border-[var(--brand-color)] flex-col flex gap-8"] $ do
+  form_ [class_ "rounded-2xl p-8 border border-[var(--brand-color)] flex-col flex gap-8 relative"] $ do
+    div_ [class_ "absolute -right-8 -top-8"] do
+      div_ [class_ "relative"] do
+        p_ [class_ "font-semibold text-brand"] "Most popular!"
+        img_ [class_ "absolute top-1 -left-1/2 h-14 w-14", src_ "/public/assets/svgs/drawn-arrow.svg"]
+
     div_ [class_ "flex-col justify-start items-start gap-2 flex"] $ do
+      input_ [type_ "hidden", id_ "orderId", name_ "orderId", value_ ""]
       -- div_ [class_ "relative"] $ do
       --   span_ [class_ "text-brand font-semibold"] "Most popular!"
       div_ [class_ "text-center text-strong text-4xl font-bold"] "Pay as you use"
       div_ [class_ "text-brand text-base font-semibold"] "Start your FREE 30-day trial"
-      div_ [class_ "text-weak text-sm font-medium"] "Starts at €35/monthly"
+      div_ [class_ "text-weak text-sm font-medium", id_ "price"] do
+        "Starts at "
+        span_ [class_ "text-brand"] "$34"
+      div_ [class_ "text-weak"] "Then $1 per 20k events"
 
     div_ [class_ "flex-col justify-start items-start gap-6 flex"] $ do
       span_ [class_ "text-weak text-base font-semibold"] "What’s Included:"
@@ -646,9 +688,12 @@ popularPricing projectId = do
 
     button_
       [ class_ "btn-primary h-12 rounded mt-auto w-full font-semibold rounded-lg shadow-[0px_1px_2px_0px_rgba(10,13,18,0.05)] shadow-[inset_0px_-2px_0px_0px_rgba(10,13,18,0.05)] shadow-[inset_0px_0px_0px_1px_rgba(10,13,18,0.18)]"
-      , [__|on click call window.payLemon() |]
+      , [__|on click call window.payLemon("GraduatedPricing") |]
+      , type_ "button"
       ]
-      "Start 30 day trial"
+      do
+        span_ [id_ "createIndicator", class_ "htmx-indicator loading loading-dots loading-md"] pass
+        "Start 30 day trial"
   where
     features =
       [ "Unlimited events per month"
@@ -684,6 +729,6 @@ systemsPricing projectId = do
 featureRow :: Text -> Html ()
 featureRow feature =
   div_ [class_ "flex items-center gap-2"] $ do
-    div_ [class_ "rounded-full bg-green-100"] do
-      faSprite_ "check" "regular" "h-4 w-4 text-green-500"
+    div_ [class_ "rounded-full bg-green-100 h-5 w-5 flex items-center justify-center"] do
+      faSprite_ "check" "regular" "h-3 w-3 text-green-500"
     p_ [class_ "text-weak"] (toHtml feature)
