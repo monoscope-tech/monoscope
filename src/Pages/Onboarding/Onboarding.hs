@@ -234,8 +234,9 @@ pricingPage pid = do
       div_ [class_ "flex flex-col gap-2 w-full"] do
         span_ [class_ "text-strong text-2xl font-semibold mt-20"] "FAQ"
         div_ [class_ "flex flex-col mt-4 w-full"] do
-          faQ "What is an event?" "An event is a single request to your API. For example, a request to your API to retrieve a list of users."
-          faQ "What is a request?" "A request is a single request to your API. For example, a request to your API to retrieve a list of users."
+          faQ "What is an event?" "An event is any of span, log, or metric that you send to APItoolkit."
+          faQ "How do you handle security and sensitive data?" "We employ encryption and authentication measures to ensure the security of your data during transmission and storage. All our SDKs also support redacting data. You can simply specify the JSONPath to the fields that you don't want the SDKs to forward to APItoolkit, and those sensitive fields will be stripped out/redacted before the data even leaves your servers and replaced with the text \"CLIENT REDACTED\" on our end. We will never see anything you don't want us to see."
+          faQ "What makes us better than others?" "Aside the observerbility features like traces, logs, metrics etc. APItoolkit takes it a step further by monitoring request payloads for both incoming and outgoing requests, automatic error reportings like sentry and payload changes detections which gives engineering teams with all the information the need to seamlessly debug and fix issues in their servers."
 
       let graduatedCheckoutOne = V.head lemonSqueezyUrls <> "&checkout[custom][project_id]=" <> pid.toText
           lmnUrls = decodeUtf8 $ AE.encode $ lemonSqueezyUrls <&> (<> "&checkout[custom][project_id]=" <> pid.toText)
@@ -673,7 +674,7 @@ popularPricing :: Projects.ProjectId -> Html ()
 popularPricing pid = do
   form_
     [ class_ "rounded-2xl p-8 border border-[var(--brand-color)] flex-col flex gap-8 relative shadow-[0px_4px_8px_-2px_rgba(0,0,0,0.04)] shadow-[0px_2px_4px_-2px_rgba(0,0,0,0.08)]"
-    , hxPost_ $ "/p" <> pid.toText <> "/onboarding/pricing"
+    , hxPost_ $ "/p/" <> pid.toText <> "/onboarding/pricing"
     , id_ "GraduatedPricing"
     ]
     $ do

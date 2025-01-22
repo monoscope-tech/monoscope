@@ -194,8 +194,9 @@ data FirstSubItem = FirstSubItem
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] FirstSubItem
 
 
-newtype Attributes = Attributes
+data Attributes = Attributes
   { firstSubscriptionItem :: FirstSubItem
+  , productName :: Text
   }
   deriving stock (Show, Generic)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] Attributes
@@ -254,8 +255,9 @@ pricingUpdateH pid PricingUpdateForm{orderId} = do
           let target = sub.dataVal Unsafe.!! 0
               subId = show target.attributes.firstSubscriptionItem.subscriptionId
               firstSubId = show target.attributes.firstSubscriptionItem.id
-          v <- dbtToEff $ Projects.updateProjectPricing pid "" subId firstSubId orderId
-          redirectCS $ "/projects/" <> pid.toText <> "/"
+              productName = target.attributes.productName
+          v <- dbtToEff $ Projects.updateProjectPricing pid productName subId firstSubId orderId
+          redirectCS $ "/p/" <> pid.toText <> "/"
           addRespHeaders ""
     _ -> do
       addErrorToast "Something went wrong while fetching subscription id" Nothing
