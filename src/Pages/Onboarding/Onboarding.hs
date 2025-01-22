@@ -21,6 +21,9 @@ import Data.Default (def)
 import Data.Text qualified as T
 import Data.Vector as V (Vector, fromList, head, toList)
 import Database.PostgreSQL.Entity.DBT (QueryNature (Select, Update), execute, query, queryOne)
+import Database.PostgreSQL.Simple.Types (Query (Query))
+
+import Database.PostgreSQL.Simple (Only (Only))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
 import Effectful.Reader.Static (ask)
@@ -32,6 +35,7 @@ import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Telemetry qualified as Telemetry
 import Models.Users.Sessions qualified as Sessions
 import Models.Users.Users
+
 import NeatInterpolation (text)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
 
@@ -50,8 +54,8 @@ import Pkg.Mail (sendDiscordNotif)
 import PyF (fmt)
 import Relude hiding (ask)
 import System.Config (AuthContext (..), EnvConfig (..))
-import System.Types (ATAuthCtx, RespHeaders, addRespHeaders, redirectCS)
-import Utils (faSprite_, lemonSqueezyUrls, lemonSqueezyUrlsAnnual, lookupValueText, redirect)
+import System.Types (ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders, redirectCS)
+import Utils (faSprite_, getOtelLangVersion, lemonSqueezyUrls, lemonSqueezyUrlsAnnual, lookupValueText, redirect)
 import Web.FormUrlEncoded
 
 
@@ -159,15 +163,30 @@ phoneEmailPostH pid form = do
   addRespHeaders $ inviteTeamMemberModal pid (V.fromList emails)
 
 
-checkIntegrationGet :: Projects.ProjectId -> Text -> ATAuthCtx (RespHeaders (Html ()))
-checkIntegrationGet pid language = do
-  let q = [sql| SELECT * FROM telemetry.spans WHERE project_id = ? and resource ->> 'telemetry.sdk.language' = ?|]
-  v <- dbtToEff (queryOne Select q (pid, language) :: (DBT IO (Maybe Telemetry.SpanRecord)))
-  case v of
-    Just x -> addRespHeaders $ div_ [class_ "flex items-center gap-2 text-green-500"] do
-      span_ "verified"
-      faSprite_ "circle-check" "regular" "h-4 w-4"
-    _ -> addRespHeaders $ integrationCheck pid language
+checkIntegrationGet :: Projects.ProjectId -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))
+checkIntegrationGet pid languageM = do
+  case languageM of
+    Just lg -> do
+      let q = [sql| SELECT span_id, span_name FROM telemetry.spans WHERE project_id = ? and resource ->> 'telemetry.sdk.language' = ?|]
+          language = getOtelLangVersion lg
+      v <- dbtToEff (queryOne Select q (pid, fromMaybe "" language) :: (DBT IO (Maybe (Text, Text))))
+      if isJust v then addRespHeaders verifiedCheck else addRespHeaders $ integrationCheck pid lg
+    _ -> do
+      let q = [sql| SELECT  span_id, span_name  FROM telemetry.spans WHERE project_id = ?|]
+      v <- dbtToEff (queryOne Select q (Only pid) :: (DBT IO (Maybe (Text, Text))))
+      if isJust v
+        then do
+          redirectCS $ "/p/" <> pid.toText <> "/onboarding?step=Pricing"
+          addRespHeaders ""
+        else do
+          addErrorToast "Not integrated, please integrate any language and try again" Nothing
+          addRespHeaders ""
+
+
+verifiedCheck :: Html ()
+verifiedCheck = div_ [class_ "flex items-center gap-2 text-green-500"] do
+  span_ "verified"
+  faSprite_ "circle-check" "regular" "h-4 w-4"
 
 
 onboardingInfoPost :: Projects.ProjectId -> OnboardingInfoForm -> ATAuthCtx (RespHeaders (Html ()))
@@ -331,7 +350,7 @@ integrationsPage pid =
               let langs = [("js", "Javascript") :: (Text, Text), ("go", "Golang"), ("py", "Python"), ("php", "PHP"), ("cs", "C#")]
               forM_ langs $ \(lang, langName) -> languageItem pid langName lang
           div_ [class_ "flex items-center gap-4"] do
-            button_ [class_ "btn btn-primary"] "Confirm & Proceed"
+            button_ [class_ "btn btn-primary", hxGet_ $ "/p/" <> pid.toText <> "/onboarding/integration-check"] "Confirm & Proceed"
             a_
               [ class_ "px-2 h-14 flex items-center underline text-brand text-xl font-semibold"
               , type_ "button"
@@ -378,7 +397,7 @@ integrationCheck :: Projects.ProjectId -> Text -> Html ()
 integrationCheck pid language = do
   div_
     [ class_ "flex items-center gap-2 "
-    , hxGet_ $ "/p/" <> pid.toText <> "/onboarding/integration-check/" <> language
+    , hxGet_ $ "/p/" <> pid.toText <> "/onboarding/integration-check?language=" <> (T.replace "#" "sharp" language)
     , hxSwap_ "innerHTML"
     , hxTarget_ $ "#integration-check-container" <> (T.replace "#" "" language)
     , hxTrigger_ "load delay:5s"

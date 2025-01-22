@@ -32,6 +32,7 @@ module Utils (
   lemonSqueezyUrls,
   lemonSqueezyUrlsAnnual,
   lookupMapText,
+  getOtelLangVersion,
   lookupMapInt,
   freeTierLimitExceededBanner,
   isDemoAndNotSudo,
@@ -351,6 +352,18 @@ getDurationNSMS duration
   | duration >= 1000000 = printf "%.1f ms" (fromIntegral @_ @Double duration / 1000000)
   | duration >= 1000 = printf "%.1f µs" (fromIntegral @_ @Double duration / 1000)
   | otherwise = printf "%.1f ns" (fromIntegral @_ @Double duration)
+
+
+getOtelLangVersion :: Text -> Maybe Text
+getOtelLangVersion "Golang" = Just "go"
+getOtelLangVersion "Python" = Just "python"
+getOtelLangVersion "Java" = Just "java"
+getOtelLangVersion "Ruby" = Just "ruby"
+getOtelLangVersion "Rust" = Just "rust"
+getOtelLangVersion "Csharp" = Just "csharp"
+getOtelLangVersion "PHP" = Just "php"
+getOtelLangVersion "Javascript" = Just "nodejs"
+getOtelLangVersion _ = Nothing
 
 
 displayTimestamp :: Text -> Text

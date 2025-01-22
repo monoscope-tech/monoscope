@@ -206,7 +206,7 @@ body {
   @apply text-[#000933]/60;
 }
 .bg-weak {
-  @apply bg-[#00157f]/5;;
+  @apply bg-[#00157f]/5;
 }
 .text-brand {
   @apply text-[var(--brand-color)];
