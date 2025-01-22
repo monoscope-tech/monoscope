@@ -37,6 +37,7 @@ import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
 
 import Database.PostgreSQL.Transact (DBT)
 import Lucid.Hyperscript (__)
+import Models.Apis.Slack (getProjectSlackData)
 import Models.Tests.Testing qualified as Testing
 import Pages.Components qualified as Components
 import Pages.IntegrationDemos.Csharp (csharpGuide)
@@ -84,9 +85,12 @@ onboardingGetH pid onboardingStep = do
       colsM <- dbtToEff $ Testing.getCollectionByTitle pid "HEALTH CHECK."
       addRespHeaders $ PageCtx bodyConfig $ createMonitorPage pid colsM
     Just "NotifChannel" -> do
+      slack <- getProjectSlackData pid
       let phone = fromMaybe "" project.notifyPhoneNumber
           emails = project.notifyEmails
-      addRespHeaders $ PageCtx bodyConfig $ notifChannels pid appContx.config.slackRedirectUri phone emails
+          hasDiscord = isJust project.discordUrl
+          hasSlack = isJust slack
+      addRespHeaders $ PageCtx bodyConfig $ notifChannels pid appContx.config.slackRedirectUri phone emails hasDiscord hasSlack
     Just "Integration" -> do
       addRespHeaders $ PageCtx bodyConfig $ integrationsPage pid
     Just "Pricing" -> do
@@ -390,8 +394,8 @@ tagItem label isActive =
     span_ [class_ "text-sm"] (toHtml label)
 
 
-notifChannels :: Projects.ProjectId -> Text -> Text -> Vector Text -> Html ()
-notifChannels pid slackRedirectUri phone emails = do
+notifChannels :: Projects.ProjectId -> Text -> Text -> Vector Text -> Bool -> Bool -> Html ()
+notifChannels pid slackRedirectUri phone emails hasDiscord hasSlack = do
   div_ [class_ "w-[550px] mx-auto mt-[156px] mb-10"] $ do
     div_ [id_ "inviteModalContainer"] pass
     div_ [class_ "flex-col gap-4 flex w-full"] $ do
@@ -406,19 +410,25 @@ notifChannels pid slackRedirectUri phone emails = do
               let
                 -- slackDev = "https://slack.com/oauth/v2/authorize?client_id=6187126212950.6193763110659&scope=chat:write,incoming-webhook&user_scope="
                 slackPro = "https://slack.com/oauth/v2/authorize?client_id=6211090672305.6200958370180&scope=chat:write,incoming-webhook&user_scope="
-
-              a_
-                [ target_ "_blank"
-                , class_ "border px-3 h-8 flex items-center shadow-sm border-[var(--brand-color)] rounded-lg text-brand font-semibold"
-                , href_ $ slackPro <> "&redirect_uri=" <> slackRedirectUri <> pid.toText <> "?onboarding=true"
-                ]
-                do
-                  "Connect"
+              if hasSlack
+                then
+                  button_ [class_ "text-green-500 font-semibold"] "Connected"
+                else a_
+                  [ target_ "_blank"
+                  , class_ "border px-3 h-8 flex items-center shadow-sm border-[var(--brand-color)] rounded-lg text-brand font-semibold"
+                  , href_ $ slackPro <> "&redirect_uri=" <> slackRedirectUri <> pid.toText <> "?onboarding=true"
+                  ]
+                  do
+                    "Connect"
             div_ [class_ "px-3 py-2 rounded-xl border border-[#001066]/10 bg-weak justify-between items-center flex"] $ do
               div_ [class_ "items-center gap-1.5 flex overflow-hidden"] $ do
                 img_ [src_ "/public/assets/svgs/discord.svg"]
                 div_ [class_ "text-center text-black text-xl font-semibold"] "Discord"
-              discordModal pid
+              if hasDiscord
+                then
+                  button_ [class_ "text-green-500 font-semibold"] "Connected"
+                else
+                  discordModal pid
           form_
             [ class_ "flex flex-col gap-8"
             , hxPost_ $ "/p/" <> pid.toText <> "/onboarding/phone-emails"
@@ -718,7 +728,7 @@ systemsPricing projectId = do
       --   span_ [class_ "text-brand font-semibold"] "Most popular!"
       div_ [class_ "text-center text-strong text-4xl font-bold"] "Critical Systems"
       div_ [class_ "text-base font-semibold"] "Business plan"
-      div_ [class_ "text-weak text-sm font-medium"] "Starts at €500/monthly"
+      div_ [class_ "text-weak text-sm font-medium"] "Starts at $500/monthly"
 
     div_ [class_ "flex-col justify-start items-start gap-6 flex"] $ do
       span_ [class_ "text-weak text-base font-semibold"] "Everything in plus and..."
