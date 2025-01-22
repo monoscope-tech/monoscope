@@ -704,11 +704,8 @@ popularPricing pid = do
           "Start 30 day trial"
   where
     features =
-      [ "Unlimited events per month"
-      , "Unlimited health checks per day."
-      , "Unlimited team members"
-      , "API swagger/OpenAPI hosting"
-      , "Opentelemetry Logs and Traces"
+      [ "Unlimited team members"
+      , "Opentelemetry Logs, Traces and Metrics"
       , "Last 14 days data retention"
       ]
 
@@ -730,6 +727,7 @@ systemsPricing projectId = do
   where
     features =
       [ "24/7 support from our team of industry experts"
+      , "Last 30 days data retention"
       ]
 
 
