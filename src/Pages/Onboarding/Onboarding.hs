@@ -231,6 +231,12 @@ pricingPage pid = do
       div_ [class_ "grid grid-cols-2 gap-8 mt-6 w-full"] do
         popularPricing pid
         systemsPricing pid
+      div_ [class_ "flex flex-col gap-2 w-full"] do
+        span_ [class_ "text-strong text-2xl font-semibold mt-20"] "FAQ"
+        div_ [class_ "flex flex-col mt-4 w-full"] do
+          faQ "What is an event?" "An event is a single request to your API. For example, a request to your API to retrieve a list of users."
+          faQ "What is a request?" "A request is a single request to your API. For example, a request to your API to retrieve a list of users."
+
       let graduatedCheckoutOne = V.head lemonSqueezyUrls <> "&checkout[custom][project_id]=" <> pid.toText
           lmnUrls = decodeUtf8 $ AE.encode $ lemonSqueezyUrls <&> (<> "&checkout[custom][project_id]=" <> pid.toText)
           lmnUrlAnnual = decodeUtf8 $ AE.encode $ lemonSqueezyUrlsAnnual <&> (<> "&checkout[custom][project_id]=" <> pid.toText)
@@ -254,7 +260,7 @@ pricingPage pid = do
                          'currency': 'EUR',
                          'transaction_id': '',
                      });
-                     htmx.trigger("#createUpdateBodyForm", "submit")
+                     htmx.trigger("#"+ plan, "submit")
                  }
                }
              })
@@ -664,36 +670,37 @@ stepIndicator step title prevUrl =
 
 
 popularPricing :: Projects.ProjectId -> Html ()
-popularPricing projectId = do
-  form_ [class_ "rounded-2xl p-8 border border-[var(--brand-color)] flex-col flex gap-8 relative"] $ do
-    div_ [class_ "absolute -right-8 -top-8"] do
-      div_ [class_ "relative"] do
-        p_ [class_ "font-semibold text-brand"] "Most popular!"
-        img_ [class_ "absolute top-1 -left-1/2 h-14 w-14", src_ "/public/assets/svgs/drawn-arrow.svg"]
+popularPricing pid = do
+  form_
+    [ class_ "rounded-2xl p-8 border border-[var(--brand-color)] flex-col flex gap-8 relative shadow-[0px_4px_8px_-2px_rgba(0,0,0,0.04)] shadow-[0px_2px_4px_-2px_rgba(0,0,0,0.08)]"
+    , hxPost_ $ "/p" <> pid.toText <> "/onboarding/pricing"
+    , id_ "GraduatedPricing"
+    ]
+    $ do
+      div_ [class_ "absolute -right-8 -top-8"] do
+        div_ [class_ "relative"] do
+          p_ [class_ "font-semibold text-brand"] "Most popular!"
+          img_ [class_ "absolute top-1 -left-1/2 h-14 w-14", src_ "/public/assets/svgs/drawn-arrow.svg"]
+      div_ [class_ "flex-col justify-start items-start gap-2 flex"] $ do
+        input_ [type_ "hidden", id_ "orderId", name_ "orderId", value_ ""]
+        div_ [class_ "text-center text-strong text-4xl font-bold"] "Pay as you use"
+        div_ [class_ "text-brand text-base font-semibold"] "Start your FREE 30-day trial"
+        div_ [class_ "text-weak text-sm font-medium"] do
+          "Starts at "
+          span_ [class_ "", id_ "price"] "$34"
+        div_ [class_ "text-weak text-sm"] "then $1 per 20k events"
 
-    div_ [class_ "flex-col justify-start items-start gap-2 flex"] $ do
-      input_ [type_ "hidden", id_ "orderId", name_ "orderId", value_ ""]
-      -- div_ [class_ "relative"] $ do
-      --   span_ [class_ "text-brand font-semibold"] "Most popular!"
-      div_ [class_ "text-center text-strong text-4xl font-bold"] "Pay as you use"
-      div_ [class_ "text-brand text-base font-semibold"] "Start your FREE 30-day trial"
-      div_ [class_ "text-weak text-sm font-medium", id_ "price"] do
-        "Starts at "
-        span_ [class_ "text-brand"] "$34"
-      div_ [class_ "text-weak"] "Then $1 per 20k events"
-
-    div_ [class_ "flex-col justify-start items-start gap-6 flex"] $ do
-      span_ [class_ "text-weak text-base font-semibold"] "What’s Included:"
-      mapM_ featureRow features
-
-    button_
-      [ class_ "btn-primary h-12 rounded mt-auto w-full font-semibold rounded-lg shadow-[0px_1px_2px_0px_rgba(10,13,18,0.05)] shadow-[inset_0px_-2px_0px_0px_rgba(10,13,18,0.05)] shadow-[inset_0px_0px_0px_1px_rgba(10,13,18,0.18)]"
-      , [__|on click call window.payLemon("GraduatedPricing") |]
-      , type_ "button"
-      ]
-      do
-        span_ [id_ "createIndicator", class_ "htmx-indicator loading loading-dots loading-md"] pass
-        "Start 30 day trial"
+      div_ [class_ "flex-col justify-start items-start gap-6 flex"] $ do
+        span_ [class_ "text-weak text-base font-semibold"] "What’s Included:"
+        mapM_ featureRow features
+      button_
+        [ class_ "btn-primary h-12 rounded mt-auto w-full font-semibold rounded-lg shadow-[0px_1px_2px_0px_rgba(10,13,18,0.05)] shadow-[inset_0px_-2px_0px_0px_rgba(10,13,18,0.05)] shadow-[inset_0px_0px_0px_1px_rgba(10,13,18,0.18)]"
+        , [__|on click call window.payLemon("GraduatedPricing") |]
+        , type_ "button"
+        ]
+        do
+          span_ [id_ "createIndicator", class_ "htmx-indicator loading loading-dots loading-md"] pass
+          "Start 30 day trial"
   where
     features =
       [ "Unlimited events per month"
@@ -707,7 +714,7 @@ popularPricing projectId = do
 
 systemsPricing :: Projects.ProjectId -> Html ()
 systemsPricing projectId = do
-  div_ [class_ "rounded-2xl p-8 border border-[var(--brand-color)] flex-col flex gap-8"] $ do
+  div_ [class_ "rounded-2xl p-8 border flex-col flex gap-8 shadow-[0px_4px_8px_-2px_rgba(0,0,0,0.04)] shadow-[0px_2px_4px_-2px_rgba(0,0,0,0.08)]"] $ do
     div_ [class_ "flex-col justify-start items-start gap-2 flex"] $ do
       -- div_ [class_ "relative"] $ do
       --   span_ [class_ "text-brand font-semibold"] "Most popular!"
@@ -721,8 +728,7 @@ systemsPricing projectId = do
     button_ [class_ "btn-primary h-12 rounded w-full mt-auto font-semibold rounded-lg shadow-[0px_1px_2px_0px_rgba(10,13,18,0.05)] shadow-[inset_0px_-2px_0px_0px_rgba(10,13,18,0.05)] shadow-[inset_0px_0px_0px_1px_rgba(10,13,18,0.18)]"] "Start 30 day trial"
   where
     features =
-      [ "250K events per month"
-      , "Limited health checks per day."
+      [ "24/7 support from our team of industry experts"
       ]
 
 
@@ -732,3 +738,12 @@ featureRow feature =
     div_ [class_ "rounded-full bg-green-100 h-5 w-5 flex items-center justify-center"] do
       faSprite_ "check" "regular" "h-3 w-3 text-green-500"
     p_ [class_ "text-weak"] (toHtml feature)
+
+
+faQ :: Text -> Text -> Html ()
+faQ question answer =
+  div_ [class_ "w-full py-4 border-t border-weak flex flex-col"] $ do
+    button_ [class_ "text-strong font-semibold flex w-full justify-between items-center", [__|on click toggle .hidden on the next <div/>|]] do
+      span_ [] $ toHtml question
+      faSprite_ "chevron-down" "regular" "h-4 w-4 text-weak"
+    div_ [class_ "text-weak font-medium w-full hidden"] $ toHtml answer

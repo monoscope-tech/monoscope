@@ -30,4 +30,5 @@ server =
     , onboardingDiscordPost = Onboarding.discorPostH
     , onboardingPhoneEmailsPost = Onboarding.phoneEmailPostH
     , onboardingIntegrationCheck = Onboarding.checkIntegrationGet
+    , onboardingPricingUpdate = CreateProject.pricingUpdateH
     }

@@ -8,6 +8,8 @@ module Pages.Projects.CreateProject (
   createProjectFormV,
   createProjectFormToModel,
   CreateProjectFormError (..),
+  pricingUpdateH,
+  PricingUpdateForm (..),
   projectSettingsGetH,
   deleteProjectGetH,
   CreateProject (..),
@@ -53,7 +55,7 @@ import Relude hiding (ask, asks)
 import Relude.Unsafe qualified as Unsafe
 import System.Config
 import System.Types (ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders, addSuccessToast, redirectCS)
-import Utils (faSprite_, isDemoAndNotSudo, lemonSqueezyUrls, lemonSqueezyUrlsAnnual)
+import Utils (faSprite_, isDemoAndNotSudo, lemonSqueezyUrls, lemonSqueezyUrlsAnnual, redirect)
 import Web.FormUrlEncoded (FromForm)
 
 
@@ -232,6 +234,32 @@ getSubscriptionId orderId apiKey = do
           return $ Just res
         Left err -> do
           return Nothing
+data PricingUpdateForm = PricingUpdateForm
+  { orderId :: Text
+  }
+  deriving stock (Eq, Show, Generic)
+  deriving anyclass (FromForm, Default)
+
+
+pricingUpdateH :: Projects.ProjectId -> PricingUpdateForm -> ATAuthCtx (RespHeaders (Html ()))
+pricingUpdateH pid PricingUpdateForm{orderId} = do
+  sess <- Sessions.getSession
+  appCtx <- ask @AuthContext
+  let envCfg = appCtx.config
+      apiKey = envCfg.lemonSqueezyApiKey
+  subRes <- getSubscriptionId (Just orderId) apiKey
+  case subRes of
+    Just sub
+      | not (null sub.dataVal) -> do
+          let target = sub.dataVal Unsafe.!! 0
+              subId = show target.attributes.firstSubscriptionItem.subscriptionId
+              firstSubId = show target.attributes.firstSubscriptionItem.id
+          v <- dbtToEff $ Projects.updateProjectPricing pid "" subId firstSubId orderId
+          redirectCS $ "/projects/" <> pid.toText <> "/"
+          addRespHeaders ""
+    _ -> do
+      addErrorToast "Something went wrong while fetching subscription id" Nothing
+      addRespHeaders ""
 
 
 processProjectPostForm :: Valor.Valid CreateProjectForm -> ATAuthCtx (RespHeaders CreateProject)

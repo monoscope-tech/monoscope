@@ -15,6 +15,7 @@ module Models.Projects.Projects (
   projectRequestStatsByProject,
   updateProject,
   deleteProject,
+  updateProjectPricing,
   projectById,
   projectCacheById,
   updateProjectReportNotif,
@@ -311,6 +312,13 @@ updateProject cp = do
   where
     q =
       [sql| UPDATE projects.projects SET title=?,  description=?, payment_plan=?, sub_id=?, first_sub_item_id=?, order_id=?, time_zone=? where id=?;|]
+
+
+updateProjectPricing :: ProjectId -> Text -> Text -> Text -> Text -> DBT IO Int64
+updateProjectPricing pid paymentPlan subId firstSubItemId orderId = do
+  execute Update q (paymentPlan, subId, firstSubItemId, orderId, pid)
+  where
+    q = [sql| UPDATE projects.projects SET payment_plan=?, sub_id=?, first_sub_item_id=?, order_id=? where id=?;|]
 
 
 updateProjectReportNotif :: ProjectId -> Text -> DBT IO Int64
