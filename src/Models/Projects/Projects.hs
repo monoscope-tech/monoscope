@@ -13,6 +13,7 @@ module Models.Projects.Projects (
   userByProjectId,
   selectProjectsForUser,
   projectRequestStatsByProject,
+  updateOnboardingStepsCompleted,
   updateProject,
   deleteProject,
   updateProjectPricing,
@@ -120,8 +121,6 @@ parseNotifChannel NEmail = "email"
 parseNotifChannel NPhone = "phone"
 
 
--- CREATE TYPE onboarding_step_enum AS ENUM ('info', 'survey', 'create_monitor','notif_channel','integration', 'pricing', 'complete');
-
 data OnboardingStep = Info | Survey | CreateMonitor | NotifChannel | Integration | Pricing | Complete
   deriving stock (Eq, Generic, Show, Read)
   deriving (AE.FromJSON, AE.ToJSON, NFData, ToField, FromField) via OnboardingStep
@@ -156,7 +155,7 @@ data Project = Project
   , usageLastReported :: UTCTime
   , discordUrl :: Maybe Text
   , billingDay :: Maybe UTCTime
-  , onboardingStepsCompleted :: V.Vector OnboardingStep
+  , onboardingStepsCompleted :: V.Vector Text
   , notifyPhoneNumber :: Maybe Text
   , notifyEmails :: V.Vector Text
   }
@@ -193,7 +192,7 @@ data Project' = Project'
   , usageLastReported :: UTCTime
   , discordUrl :: Maybe Text
   , billingDay :: Maybe UTCTime
-  , onboardingStepsCompleted :: V.Vector OnboardingStep
+  , onboardingStepsCompleted :: V.Vector Text
   , notifyPhoneNumber :: Maybe Text
   , notifyEmails :: V.Vector Text
   , hasIntegrated :: Bool
@@ -314,11 +313,11 @@ updateProject cp = do
       [sql| UPDATE projects.projects SET title=?,  description=?, payment_plan=?, sub_id=?, first_sub_item_id=?, order_id=?, time_zone=? where id=?;|]
 
 
-updateProjectPricing :: ProjectId -> Text -> Text -> Text -> Text -> DBT IO Int64
-updateProjectPricing pid paymentPlan subId firstSubItemId orderId = do
-  execute Update q (paymentPlan, subId, firstSubItemId, orderId, pid)
+updateProjectPricing :: ProjectId -> Text -> Text -> Text -> Text -> V.Vector Text -> DBT IO Int64
+updateProjectPricing pid paymentPlan subId firstSubItemId orderId stepsCompleted = do
+  execute Update q (paymentPlan, subId, firstSubItemId, orderId, stepsCompleted, pid)
   where
-    q = [sql| UPDATE projects.projects SET payment_plan=?, sub_id=?, first_sub_item_id=?, order_id=? where id=?;|]
+    q = [sql| UPDATE projects.projects SET payment_plan=?, sub_id=?, first_sub_item_id=?, order_id=?, onboarding_steps_completed=? where id=?;|]
 
 
 updateProjectReportNotif :: ProjectId -> Text -> DBT IO Int64
@@ -373,6 +372,12 @@ updateNotificationsChannel pid channels discordUrl = execute Update q (list, dis
   where
     list = V.fromList channels
     q = [sql| UPDATE projects.projects SET notifications_channel=?::notification_channel_enum[], discord_url=? WHERE id=?;|]
+
+
+updateOnboardingStepsCompleted :: ProjectId -> V.Vector Text -> DBT IO Int64
+updateOnboardingStepsCompleted pid steps = execute Update q (steps, pid)
+  where
+    q = [sql| UPDATE projects.projects SET onboarding_steps_completed=? WHERE id=?;|]
 
 
 updateUsageLastReported :: ProjectId -> ZonedTime -> DBT IO Int64

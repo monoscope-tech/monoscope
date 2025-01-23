@@ -16,6 +16,7 @@ module Utils (
   lookupVecIntByKey,
   lookupValueText,
   formatUTC,
+  insertIfNotExist,
   parseUTC,
   lookupVecTextByKey,
   getStatusBorderColor,
@@ -492,3 +493,9 @@ parseTime fromM toM sinceM now = case sinceM of
           (Just s, Just e) -> Just (s <> "-" <> e)
           _ -> Nothing
      in (f, t, range)
+
+
+insertIfNotExist :: Eq a => a -> V.Vector a -> V.Vector a
+insertIfNotExist x vec
+  | x `V.elem` vec = vec
+  | otherwise = V.snoc vec x

@@ -49,7 +49,7 @@ import Pkg.Components qualified as Components
 import PyF (fmt)
 import Relude hiding (ask)
 import System.Types (ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders, addSuccessToast, redirectCS)
-import Utils (faSprite_, getStatusColor, jsonValueToHtmlTree, redirect)
+import Utils (faSprite_, getStatusColor, insertIfNotExist, jsonValueToHtmlTree, redirect)
 
 
 data CollectionVariableForm = CollectionVariableForm
@@ -115,6 +115,9 @@ collectionStepsUpdateH pid colF onboardingM = do
           _ <- dbtToEff $ Testing.addCollection coll
           case onboardingM of
             Just _ -> do
+              let steps = project.onboardingStepsCompleted
+                  newStepsComp = insertIfNotExist "Integration" steps
+              _ <- dbtToEff $ Projects.updateOnboardingStepsCompleted pid newStepsComp
               redirectCS $ "/p/" <> pid.toText <> "/onboarding?step=NotifChannel"
               addRespHeaders CollectionMutSuccess
             Nothing -> do

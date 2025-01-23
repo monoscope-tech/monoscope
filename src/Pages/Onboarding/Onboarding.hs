@@ -55,13 +55,20 @@ import PyF (fmt)
 import Relude hiding (ask)
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types (ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders, redirectCS)
-import Utils (faSprite_, getOtelLangVersion, lemonSqueezyUrls, lemonSqueezyUrlsAnnual, lookupValueText, redirect)
+import Utils (faSprite_, getOtelLangVersion, insertIfNotExist, lemonSqueezyUrls, lemonSqueezyUrlsAnnual, lookupValueText)
 import Web.FormUrlEncoded
+
+
+getNextOnboardingStep :: V.Vector Text -> Text
+getNextOnboardingStep steps =
+  case find (`notElem` steps) ["Info", "Survey", "CreateMonitor", "NotifChannel", "Integration", "Pricing", "Complete"] of
+    Just x -> x
+    _ -> "Complete"
 
 
 -- 'Info', 'Survey', 'CreateMonitor','NotifChannel','Integration', 'Pricing', 'Complete'
 onboardingGetH :: Projects.ProjectId -> Maybe Text -> ATAuthCtx (RespHeaders (PageCtx (Html ())))
-onboardingGetH pid onboardingStep = do
+onboardingGetH pid onboardingStepM = do
   (sess, project) <- Sessions.sessionAndProject pid
   appContx <- ask @AuthContext
   let bodyConfig =
@@ -69,8 +76,12 @@ onboardingGetH pid onboardingStep = do
           { currProject = Nothing
           }
       questions = fromMaybe (AE.Object []) project.questions
+      nextStep = getNextOnboardingStep project.onboardingStepsCompleted
+      onboardingStep = fromMaybe nextStep onboardingStepM
   case onboardingStep of
-    Just "Survey" -> do
+    "Complete" -> do
+      addRespHeaders $ PageCtx bodyConfig $ onboardingCompleteBody pid
+    "Survey" -> do
       let host = fromMaybe "" $ lookupValueText questions "location"
           func = case questions of
             (AE.Object q) ->
@@ -85,19 +96,19 @@ onboardingGetH pid onboardingStep = do
                in fun
             _ -> []
       addRespHeaders $ PageCtx bodyConfig $ onboardingConfigBody pid host func
-    Just "CreateMonitor" -> do
+    "CreateMonitor" -> do
       colsM <- dbtToEff $ Testing.getCollectionByTitle pid "HEALTH CHECK."
       addRespHeaders $ PageCtx bodyConfig $ createMonitorPage pid colsM
-    Just "NotifChannel" -> do
+    "NotifChannel" -> do
       slack <- getProjectSlackData pid
       let phone = fromMaybe "" project.notifyPhoneNumber
           emails = project.notifyEmails
           hasDiscord = isJust project.discordUrl
           hasSlack = isJust slack
       addRespHeaders $ PageCtx bodyConfig $ notifChannels pid appContx.config.slackRedirectUri phone emails hasDiscord hasSlack
-    Just "Integration" -> do
+    "Integration" -> do
       addRespHeaders $ PageCtx bodyConfig $ integrationsPage pid
-    Just "Pricing" -> do
+    "Pricing" -> do
       addRespHeaders $ PageCtx bodyConfig $ pricingPage pid
     _ -> do
       let firstName = sess.user.firstName
@@ -146,7 +157,11 @@ discorPostH pid form = do
   (sess, project) <- Sessions.sessionAndProject pid
   let notifs = ordNub $ Projects.parseNotifChannel <$> (V.toList project.notificationsChannel <> [Projects.NDiscord])
   sendDiscordNotif form.url "APItoolkit connected successfully"
+  let stepsCompleted = project.onboardingStepsCompleted
+      newCompleted = insertIfNotExist "NotifChannel" stepsCompleted
+      q = [sql| update projects.projects set onboarding_steps_completed=? where id=? |]
   _ <- dbtToEff do Projects.updateNotificationsChannel pid notifs (Just form.url)
+  _ <- dbtToEff $ execute Update q (newCompleted, pid)
   addRespHeaders $ button_ [class_ "text-green-500 font-semibold"] "Connected"
 
 
@@ -158,27 +173,37 @@ phoneEmailPostH pid form = do
       notifs = if phone /= "" then V.toList project.notificationsChannel <> [Projects.NPhone] else V.toList project.notificationsChannel
       notifs' = if emails /= [] then notifs <> [Projects.NEmail] else notifs
       notifsTxt = ordNub $ Projects.parseNotifChannel <$> notifs'
-      q = [sql| update projects.projects set notifications_channel=?::notification_channel_enum[], notify_phone_number=?, notify_emails=?::text[] where id=? |]
-  _ <- dbtToEff $ execute Update q (V.fromList notifsTxt, phone, V.fromList emails, pid)
+      stepsCompleted = project.onboardingStepsCompleted
+      newCompleted = insertIfNotExist "NotifChannel" stepsCompleted
+      q = [sql| update projects.projects set notifications_channel=?::notification_channel_enum[], notify_phone_number=?, notify_emails=?::text[],onboarding_steps_completed=? where id=? |]
+  _ <- dbtToEff $ execute Update q (V.fromList notifsTxt, phone, V.fromList emails, newCompleted, pid)
   addRespHeaders $ inviteTeamMemberModal pid (V.fromList emails)
 
 
 checkIntegrationGet :: Projects.ProjectId -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))
 checkIntegrationGet pid languageM = do
-  case languageM of
-    Just lg -> do
-      let q = [sql| SELECT span_id, span_name FROM telemetry.spans WHERE project_id = ? and resource ->> 'telemetry.sdk.language' = ?|]
-          language = getOtelLangVersion lg
-      v <- dbtToEff (queryOne Select q (pid, fromMaybe "" language) :: (DBT IO (Maybe (Text, Text))))
-      if isJust v then addRespHeaders verifiedCheck else addRespHeaders $ integrationCheck pid lg
-    _ -> do
-      let q = [sql| SELECT  span_id, span_name  FROM telemetry.spans WHERE project_id = ?|]
-      v <- dbtToEff (queryOne Select q (Only pid) :: (DBT IO (Maybe (Text, Text))))
-      if isJust v
-        then do
+  (sess, project) <- Sessions.sessionAndProject pid
+  let stepsCompleted = project.onboardingStepsCompleted
+      newCompleted = insertIfNotExist "Integration" stepsCompleted
+      extrQ = case languageM of
+        Just lg ->
+          let l = fromMaybe "" (getOtelLangVersion lg)
+           in "and resource ->> 'telemetry.sdk.language' = '" <> l <> "'"
+        _ -> ""
+      q = [text|SELECT span_id, span_name FROM telemetry.spans WHERE project_id = ? $extrQ|]
+  v <- dbtToEff (queryOne Select (Query $ encodeUtf8 q) (Only pid) :: (DBT IO (Maybe (Text, Text))))
+  if isJust v
+    then do
+      _ <- dbtToEff $ execute Update [sql|update projects.projects set onboarding_steps_completed=? where id=?|] (newCompleted, pid)
+      case languageM of
+        Just lg -> addRespHeaders verifiedCheck
+        _ -> do
           redirectCS $ "/p/" <> pid.toText <> "/onboarding?step=Pricing"
           addRespHeaders ""
-        else do
+    else do
+      case languageM of
+        Just lg -> addRespHeaders $ integrationCheck pid lg
+        _ -> do
           addErrorToast "Not integrated, please integrate any language and try again" Nothing
           addRespHeaders ""
 
@@ -204,8 +229,10 @@ onboardingInfoPost pid form = do
         Just (AE.Object o) -> AE.Object $ infoJson <> o
         _ -> AE.Object infoJson
       jsonBytes = AE.encode questions
-  res <- dbtToEff $ execute Update [sql| update projects.projects set title=?, questions= ? where id=? |] (form.companyName, jsonBytes, pid)
-  u <- dbtToEff $ execute Update [sql| update users.users set first_name= ?, last_name=? where id=? |] (firstName, lastName, sess.user.id)
+      stepsCompleted = project.onboardingStepsCompleted
+      newCompleted = insertIfNotExist "Info" stepsCompleted
+  _ <- dbtToEff $ execute Update [sql| update projects.projects set title=?,questions=?,onboarding_steps_completed=? where id=? |] (form.companyName, jsonBytes, newCompleted, pid)
+  _ <- dbtToEff $ execute Update [sql| update users.users set first_name= ?, last_name=? where id=? |] (firstName, lastName, sess.user.id)
   redirectCS $ "/p/" <> pid.toText <> "/onboarding?step=Survey"
   addRespHeaders ""
 
@@ -222,9 +249,25 @@ onboardingConfPost pid form = do
         Just (AE.Object o) -> AE.Object $ infoJson <> o
         _ -> AE.Object infoJson
       jsonBytes = AE.encode questions
-  res <- dbtToEff $ execute Update [sql| update projects.projects set  questions= ? where id=? |] (jsonBytes, pid)
+      stepsCompleted = project.onboardingStepsCompleted
+      newCompleted = insertIfNotExist "Survey" stepsCompleted
+  _ <- dbtToEff $ execute Update [sql| update projects.projects set questions=?, onboarding_steps_completed=? where id=? |] (jsonBytes, newCompleted, pid)
   redirectCS $ "/p/" <> pid.toText <> "/onboarding?step=CreateMonitor"
   addRespHeaders ""
+
+
+onboardingCompleteBody :: Projects.ProjectId -> Html ()
+onboardingCompleteBody pid = do
+  div_ [class_ "w-[550px] h-full flex items-center mx-auto relative"] $ do
+    canvas_ [id_ "drawing_canvas", class_ "absolute top-0 left-0  w-full"] pass
+    div_ [class_ "flex-col gap-4 flex w-full p-14 my-auto border border-weak rounded-2xl"] $ do
+      div_ [class_ "p-3 bg-[#0acc91]/5 rounded-full w-max border-[#067a57]/20 gap-2 inline-flex"] $
+        faSprite_ "circle-check" "regular" "h-8 w-8 text-green-500"
+      div_ [class_ "flex flex-col gap-2"] do
+        h3_ [class_ "text-strong font-semibold text-2xl"] "Onboarding completed!"
+        p_ [class_ "text-weak text-sm"] "You're all set! You can now start using exploring the apitoolkit dashboard by clicking the button below."
+      a_ [class_ "btn-primary py-2 font-semibold rounded-lg text-center mt-1", href_ $ "/p/" <> pid.toText <> "/"] "Go to your dashboard"
+  script_ [src_ "/public/assets/js/confetti.js"] ("" :: Text)
 
 
 pricingPage :: Projects.ProjectId -> Html ()
@@ -730,7 +773,7 @@ popularPricing pid = do
         ]
         do
           span_ [id_ "createIndicator", class_ "htmx-indicator loading loading-dots loading-md"] pass
-          "Start 30 day trial"
+          "Start free 30 day trial"
   where
     features =
       [ "Unlimited team members"
@@ -752,7 +795,10 @@ systemsPricing projectId = do
     div_ [class_ "flex-col justify-start items-start gap-6 flex"] $ do
       span_ [class_ "text-weak text-base font-semibold"] "Everything in plus and..."
       mapM_ featureRow features
-    button_ [class_ "btn-primary h-12 rounded w-full mt-auto font-semibold rounded-lg shadow-[0px_1px_2px_0px_rgba(10,13,18,0.05)] shadow-[inset_0px_-2px_0px_0px_rgba(10,13,18,0.05)] shadow-[inset_0px_0px_0px_1px_rgba(10,13,18,0.18)]"] "Start 30 day trial"
+    button_
+      [ class_ "btn-primary h-12 rounded w-full mt-auto font-semibold rounded-lg shadow-[0px_1px_2px_0px_rgba(10,13,18,0.05)] shadow-[inset_0px_-2px_0px_0px_rgba(10,13,18,0.05)] shadow-[inset_0px_0px_0px_1px_rgba(10,13,18,0.18)]"
+      ]
+      "Start free 30 day trial"
   where
     features =
       [ "24/7 support from our team of industry experts"

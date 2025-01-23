@@ -60,7 +60,7 @@ import Servant.API (Header)
 import Servant.API.ResponseHeaders (Headers)
 import System.Config
 import System.Types (ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders, addSuccessToast, redirectCS)
-import Utils (faSprite_, isDemoAndNotSudo, lemonSqueezyUrls, lemonSqueezyUrlsAnnual, redirect)
+import Utils (faSprite_, insertIfNotExist, isDemoAndNotSudo, lemonSqueezyUrls, lemonSqueezyUrlsAnnual, redirect)
 import Web.FormUrlEncoded (FromForm)
 
 
@@ -275,7 +275,7 @@ data PricingUpdateForm = PricingUpdateForm
 
 pricingUpdateH :: Projects.ProjectId -> PricingUpdateForm -> ATAuthCtx (RespHeaders (Html ()))
 pricingUpdateH pid PricingUpdateForm{orderId} = do
-  sess <- Sessions.getSession
+  (sess, project) <- Sessions.sessionAndProject pid
   appCtx <- ask @AuthContext
   let envCfg = appCtx.config
       apiKey = envCfg.lemonSqueezyApiKey
@@ -287,7 +287,9 @@ pricingUpdateH pid PricingUpdateForm{orderId} = do
               subId = show target.attributes.firstSubscriptionItem.subscriptionId
               firstSubId = show target.attributes.firstSubscriptionItem.id
               productName = target.attributes.productName
-          v <- dbtToEff $ Projects.updateProjectPricing pid productName subId firstSubId orderId
+              steps = project.onboardingStepsCompleted
+              newStepsComp = insertIfNotExist "Integration" steps
+          v <- dbtToEff $ Projects.updateProjectPricing pid productName subId firstSubId orderId newStepsComp
           redirectCS $ "/p/" <> pid.toText <> "/"
           addRespHeaders ""
     _ -> do

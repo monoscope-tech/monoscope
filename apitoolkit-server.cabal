@@ -83,6 +83,7 @@ library
       Pages.Fields.FieldDetails
       Pages.Fields.FieldDetailsSpec
       Pages.IntegrationDemos.AdonisJS
+      Pages.IntegrationDemos.Csharp
       Pages.IntegrationDemos.Django
       Pages.IntegrationDemos.DotNet
       Pages.IntegrationDemos.Echo
@@ -91,12 +92,16 @@ library
       Pages.IntegrationDemos.FastifyJs
       Pages.IntegrationDemos.Flask
       Pages.IntegrationDemos.Gin
+      Pages.IntegrationDemos.Golang
       Pages.IntegrationDemos.GoNative
       Pages.IntegrationDemos.GorillaMux
+      Pages.IntegrationDemos.Javascript
       Pages.IntegrationDemos.Laravel
       Pages.IntegrationDemos.NestJs
       Pages.IntegrationDemos.Phoenix
+      Pages.IntegrationDemos.Php
       Pages.IntegrationDemos.Pyramid
+      Pages.IntegrationDemos.Python
       Pages.IntegrationDemos.Slim
       Pages.IntegrationDemos.Springboot
       Pages.IntegrationDemos.Symfony
