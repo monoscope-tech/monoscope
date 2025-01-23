@@ -350,7 +350,7 @@ integrationsPage pid =
               let langs = [("js", "Javascript") :: (Text, Text), ("go", "Golang"), ("py", "Python"), ("php", "PHP"), ("cs", "C#")]
               forM_ langs $ \(lang, langName) -> languageItem pid langName lang
           div_ [class_ "flex items-center gap-4"] do
-            button_ [class_ "btn btn-primary", hxGet_ $ "/p/" <> pid.toText <> "/onboarding/integration-check"] "Confirm & Proceed"
+            button_ [class_ "btn btn-primary", hxGet_ $ "/p/" <> pid.toText <> "/onboarding/integration-check", hxSwap_ "none"] "Confirm & Proceed"
             a_
               [ class_ "px-2 h-14 flex items-center underline text-brand text-xl font-semibold"
               , type_ "button"
