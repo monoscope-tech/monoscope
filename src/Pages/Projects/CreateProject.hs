@@ -55,6 +55,9 @@ import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
 import Pkg.ConvertKit qualified as ConvertKit
 import Relude hiding (ask, asks)
 import Relude.Unsafe qualified as Unsafe
+import Servant (addHeader)
+import Servant.API (Header)
+import Servant.API.ResponseHeaders (Headers)
 import System.Config
 import System.Types (ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders, addSuccessToast, redirectCS)
 import Utils (faSprite_, isDemoAndNotSudo, lemonSqueezyUrls, lemonSqueezyUrlsAnnual, redirect)
@@ -101,20 +104,30 @@ createProjectFormV =
     <*> check1 description Valor.pass
 
 
-projectOnboarding :: ATAuthCtx (RespHeaders (Html ()))
+projectOnboarding :: ATAuthCtx (Headers '[Header "Location" Text] ((PageCtx (Html ()))))
 projectOnboarding = do
-  (sess, project) <- Sessions.sessionAndProject (Projects.ProjectId UUID.nil)
+  appCtx <- ask @AuthContext
+  let envCfg = appCtx.config
+  sess <- Sessions.getSession
   projects <- dbtToEff $ Projects.selectProjectsForUser sess.persistentSession.userId
   let projectM = V.find (\pr -> pr.paymentPlan == "ONBOARDING") projects
+      bwconf = (def :: BWConfig){sessM = Just sess, currProject = Nothing, pageTitle = "New Project"}
   case projectM of
     Just p -> do
-      redirectCS $ "/p/" <> p.id.toText <> "/onboarding"
+      let h = "/p/" <> p.id.toText <> "/onboarding"
+      pure $ addHeader h $ PageCtx bwconf ""
     _ -> do
       pid <- Projects.ProjectId <$> UUID.genUUID
       let pr = Projects.CreateProject{id = pid, title = "Onboarding Project", description = "", paymentPlan = "ONBOARDING", timeZone = "", subId = Nothing, firstSubItemId = Nothing, orderId = Nothing}
-      _ <- dbtToEff $ Projects.insertProject pr
-      redirectCS $ "/p/" <> pid.toText <> "/onboarding"
-  addRespHeaders ""
+      dbtToEff $ Projects.insertProject pr
+      projectKeyUUID <- UUID.genUUID
+      let encryptedKeyB64 = B64.extractBase64 $ B64.encodeBase64 $ ProjectApiKeys.encryptAPIKey (encodeUtf8 envCfg.apiKeyEncryptionSecretKey) (encodeUtf8 $ UUID.toText projectKeyUUID)
+      pApiKey <- ProjectApiKeys.newProjectApiKeys pid projectKeyUUID "Default API Key" encryptedKeyB64
+      dbtToEff $ ProjectApiKeys.insertProjectApiKey pApiKey
+      let projectMember = ProjectMembers.CreateProjectMembers pid sess.user.id Projects.PAdmin
+      _ <- dbtToEff $ ProjectMembers.insertProjectMembers [projectMember]
+      let h = "/p/" <> pid.toText <> "/onboarding"
+      pure $ addHeader h $ PageCtx bwconf ""
 
 
 ----------------------------------------------------------------------------------------------------------

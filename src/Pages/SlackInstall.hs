@@ -114,7 +114,7 @@ linkProjectGetH pid slack_code onboardingM = do
         insertAccessToken [pid.toText] token'.incomingWebhook.url
       sendSlackMessage pid ("APItoolkit Bot has been linked to your project: " <> project'.title)
       case onboardingM of
-        Just _ -> pure $ addHeader ("http://localhost:8080/p/" <> pid.toText <> "/onboarding?step=NotifChannel") $ NoContent $ PageCtx bwconf ()
+        Just _ -> pure $ addHeader ("/p/" <> pid.toText <> "/onboarding?step=NotifChannel") $ NoContent $ PageCtx bwconf ()
         Nothing -> pure $ addHeader "" $ SlackLinked $ PageCtx bwconf ()
     (_, _) -> pure $ addHeader ("/p/" <> pid.toText <> "/onboarding?step=NotifChannel") $ NoTokenFound $ PageCtx bwconf ()
 

@@ -8,9 +8,11 @@ import Pages.Projects.CreateProject qualified as CreateProject
 import Pages.Projects.Integrations qualified as Integrations
 import Pages.Projects.ListProjects qualified as ListProjects
 import Pages.Projects.ManageMembers qualified as ManageMembers
-import Pkg.RouteUtils (QPT)
+import Pkg.RouteUtils (GetRedirect, QPT)
 import Relude
 import Servant (Capture, FormUrlEncoded, GenericMode (type (:-)), Get, JSON, NamedRoutes, Post, ReqBody, type (:>))
+import Servant.API (Header)
+import Servant.API.ResponseHeaders (Headers, addHeader)
 import Servant.HTML.Lucid (HTML)
 import System.Types (RespHeaders)
 
@@ -24,7 +26,7 @@ type Routes = NamedRoutes Routes'
 type Routes' :: Type -> Type
 data Routes' mode = Routes'
   { listGet :: mode :- Get '[HTML] (RespHeaders ListProjects.ListProjectsGet)
-  , onboardingProject :: mode :- "p" :> "new" :> Get '[HTML] (RespHeaders (Html ())) -- p represents project
+  , onboardingProject :: mode :- "p" :> "new" :> GetRedirect '[HTML] (Headers '[Header "Location" Text] (PageCtx (Html ()))) -- p represents project
   -- , createGet :: mode :- "p" :> "new-project" :> Get '[HTML] (RespHeaders CreateProject.CreateProject) -- p represents project
   , createPost :: mode :- "p" :> "new" :> ReqBody '[FormUrlEncoded] CreateProject.CreateProjectForm :> Post '[HTML] (RespHeaders CreateProject.CreateProject)
   , settingsGet :: mode :- "p" :> Capture "projectID" Projects.ProjectId :> "settings" :> Get '[HTML] (RespHeaders CreateProject.CreateProject)
