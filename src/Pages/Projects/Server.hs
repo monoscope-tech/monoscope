@@ -14,8 +14,9 @@ server :: Servant.ServerT Routes ATAuthCtx
 server =
   Routes'
     { listGet = ListProjects.listProjectsGetH
-    , createGet = CreateProject.createProjectGetH
-    , createPost = CreateProject.createProjectPostH
+    , onboardingProject = CreateProject.projectOnboarding
+    , -- , createGet = CreateProject.createProjectGetH
+      createPost = CreateProject.createProjectPostH
     , settingsGet = CreateProject.projectSettingsGetH
     , integrationGet = Integrations.integrationsSettingsGetH
     , deleteGet = CreateProject.deleteProjectGetH

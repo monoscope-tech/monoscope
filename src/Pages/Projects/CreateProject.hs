@@ -11,6 +11,7 @@ module Pages.Projects.CreateProject (
   pricingUpdateH,
   PricingUpdateForm (..),
   projectSettingsGetH,
+  projectOnboarding,
   deleteProjectGetH,
   CreateProject (..),
 )
@@ -31,6 +32,7 @@ import Data.List.Extra (cons)
 import Data.List.Unique (uniq)
 import Data.Pool (withResource)
 import Data.Text qualified as T
+import Data.UUID qualified as UUID
 import Data.Valor (Valor, check1, failIf, validateM)
 import Data.Valor qualified as Valor
 import Data.Vector qualified as V
@@ -97,6 +99,22 @@ createProjectFormV =
   CreateProjectFormError
     <$> check1 title (failIf ["name can't be empty"] T.null)
     <*> check1 description Valor.pass
+
+
+projectOnboarding :: ATAuthCtx (RespHeaders (Html ()))
+projectOnboarding = do
+  (sess, project) <- Sessions.sessionAndProject (Projects.ProjectId UUID.nil)
+  projects <- dbtToEff $ Projects.selectProjectsForUser sess.persistentSession.userId
+  let projectM = V.find (\pr -> pr.paymentPlan == "ONBOARDING") projects
+  case projectM of
+    Just p -> do
+      redirectCS $ "/p/" <> p.id.toText <> "/onboarding"
+    _ -> do
+      pid <- Projects.ProjectId <$> UUID.genUUID
+      let pr = Projects.CreateProject{id = pid, title = "Onboarding Project", description = "", paymentPlan = "ONBOARDING", timeZone = "", subId = Nothing, firstSubItemId = Nothing, orderId = Nothing}
+      _ <- dbtToEff $ Projects.insertProject pr
+      redirectCS $ "/p/" <> pid.toText <> "/onboarding"
+  addRespHeaders ""
 
 
 ----------------------------------------------------------------------------------------------------------

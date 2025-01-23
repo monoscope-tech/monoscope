@@ -24,7 +24,8 @@ type Routes = NamedRoutes Routes'
 type Routes' :: Type -> Type
 data Routes' mode = Routes'
   { listGet :: mode :- Get '[HTML] (RespHeaders ListProjects.ListProjectsGet)
-  , createGet :: mode :- "p" :> "new" :> Get '[HTML] (RespHeaders CreateProject.CreateProject) -- p represents project
+  , onboardingProject :: mode :- "p" :> "new" :> Get '[HTML] (RespHeaders (Html ())) -- p represents project
+  -- , createGet :: mode :- "p" :> "new-project" :> Get '[HTML] (RespHeaders CreateProject.CreateProject) -- p represents project
   , createPost :: mode :- "p" :> "new" :> ReqBody '[FormUrlEncoded] CreateProject.CreateProjectForm :> Post '[HTML] (RespHeaders CreateProject.CreateProject)
   , settingsGet :: mode :- "p" :> Capture "projectID" Projects.ProjectId :> "settings" :> Get '[HTML] (RespHeaders CreateProject.CreateProject)
   , integrationGet :: mode :- "p" :> Capture "projectID" Projects.ProjectId :> "integrations" :> Get '[HTML] (RespHeaders (Html ()))
