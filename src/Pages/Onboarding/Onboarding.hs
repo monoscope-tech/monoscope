@@ -1,7 +1,5 @@
 {-# OPTIONS_GHC -Wno-unrecognised-pragmas #-}
 
-{-# HLINT ignore "Use newtype instead of data" #-}
-{-# HLINT ignore "Use lambda-case" #-}
 module Pages.Onboarding.Onboarding (
   onboardingGetH,
   onboardingInfoPost,
@@ -731,6 +729,7 @@ createBinaryField kind name selectedValues (value, label) = do
 stepIndicator :: Int -> Text -> Text -> Html ()
 stepIndicator step title prevUrl =
   div_ [class_ "flex-col gap-4 flex w-full"] $ do
+    img_ [class_ "h-7 absolute top-10 left-10", src_ "/public/assets/svgs/logo.svg"]
     div_ [class_ "flex-col gap-2 flex w-full"] $ do
       div_ [class_ "text-strong text-base font-semibold"] $ "Step " <> show step <> " of 6"
       div_ [class_ "grid grid-cols-6 w-full gap-1"] $ do
