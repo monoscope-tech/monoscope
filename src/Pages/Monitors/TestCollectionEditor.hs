@@ -116,7 +116,7 @@ collectionStepsUpdateH pid colF onboardingM = do
           case onboardingM of
             Just _ -> do
               let steps = project.onboardingStepsCompleted
-                  newStepsComp = insertIfNotExist "Integration" steps
+                  newStepsComp = insertIfNotExist "CreateMonitor" steps
               _ <- dbtToEff $ Projects.updateOnboardingStepsCompleted pid newStepsComp
               redirectCS $ "/p/" <> pid.toText <> "/onboarding?step=NotifChannel"
               addRespHeaders CollectionMutSuccess

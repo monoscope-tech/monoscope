@@ -17,7 +17,7 @@ import Data.Aeson qualified as AE
 import Data.Aeson.KeyMap qualified as KM
 import Data.Default (def)
 import Data.Text qualified as T
-import Data.Vector as V (Vector, fromList, head, toList)
+import Data.Vector as V (Vector, fromList, head, length, toList)
 import Database.PostgreSQL.Entity.DBT (QueryNature (Select, Update), execute, query, queryOne)
 import Database.PostgreSQL.Simple.Types (Query (Query))
 
@@ -40,6 +40,7 @@ import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
 import Database.PostgreSQL.Transact (DBT)
 import Lucid.Hyperscript (__)
 import Models.Apis.Slack (getProjectSlackData)
+import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
 import Models.Tests.Testing qualified as Testing
 import Pages.Components qualified as Components
 import Pages.IntegrationDemos.Csharp (csharpGuide)
@@ -105,7 +106,9 @@ onboardingGetH pid onboardingStepM = do
           hasSlack = isJust slack
       addRespHeaders $ PageCtx bodyConfig $ notifChannels pid appContx.config.slackRedirectUri phone emails hasDiscord hasSlack
     "Integration" -> do
-      addRespHeaders $ PageCtx bodyConfig $ integrationsPage pid
+      apiKey <- dbtToEff $ ProjectApiKeys.projectApiKeysByProjectId pid
+      let key = if V.length apiKey > 0 then let defKey = V.head apiKey in defKey.keyPrefix else "<API_KEY>"
+      addRespHeaders $ PageCtx bodyConfig $ integrationsPage pid key
     "Pricing" -> do
       addRespHeaders $ PageCtx bodyConfig $ pricingPage pid
     _ -> do
@@ -310,7 +313,7 @@ pricingPage pid = do
         [type_ "text/javascript"]
         [text|
              window.payLemon = function(plan) {
-             const sub = document.getElementById("createIndicator")
+             const sub = document.getElementById("loadingIndicator")
              if(sub.classList.contains("htmx-request")) {
                 return
               }
@@ -378,35 +381,35 @@ pricingPage pid = do
             |]
 
 
-integrationsPage :: Projects.ProjectId -> Html ()
-integrationsPage pid =
-  div_ [class_ "w-[1200px] flex justify-between mx-auto"] $ do
-    div_ [class_ "w-[448px] mt-[156px] mb-10"] $ do
-      div_ [class_ "flex-col gap-4 flex w-full"] $ do
-        stepIndicator 5 "Instrument your apps or servers" $ "/p/" <> pid.toText <> "/onboarding?step=NotifChannel"
-        div_ [class_ "flex-col w-full gap-8 flex mt-4"] do
-          p_ [class_ "text-strong"] "Send Logs, Metrics or Traces. Click proceed when you’re done integrating your applications. learn more"
-          div_ [class_ "flex flex-col gap-4 "] $ do
-            div_ [class_ "flex flex-col gap-2"] do
-              let langs = [("js", "Javascript") :: (Text, Text), ("go", "Golang"), ("py", "Python"), ("php", "PHP"), ("cs", "C#")]
-              forM_ langs $ \(lang, langName) -> languageItem pid langName lang
-          div_ [class_ "flex items-center gap-4"] do
-            button_ [class_ "btn btn-primary", hxGet_ $ "/p/" <> pid.toText <> "/onboarding/integration-check", hxSwap_ "none"] "Confirm & Proceed"
-            a_
-              [ class_ "px-2 h-14 flex items-center underline text-brand text-xl font-semibold"
-              , type_ "button"
-              , href_ $ "/p/" <> pid.toText <> "/onboarding?step=Pricing"
-              ]
-              "Skip"
-
-    div_ [class_ "w-[700px]"] do
-      div_ [class_ "fixed top-1/2 -translate-y-1/2 w-[min(48vw,800px)] border rounded-2xl border-weak flex justify-between items-center h-[90vh]"] do
+integrationsPage :: Projects.ProjectId -> Text -> Html ()
+integrationsPage pid apikey =
+  div_ [class_ "w-full bg-[#0068ff]/5 flex h-full"] $ do
+    div_ [class_ "w-1/2 bg-white pt-[156px] h-full px-12 border-r border-weak"] do
+      div_ [class_ "w-[550px]  bg-white ml-auto"] $ do
+        div_ [class_ "flex-col gap-4 flex w-full"] $ do
+          stepIndicator 5 "Instrument your apps or servers" $ "/p/" <> pid.toText <> "/onboarding?step=NotifChannel"
+          div_ [class_ "flex-col w-full gap-8 flex mt-4"] do
+            p_ [class_ "text-strong"] "Send Logs, Metrics or Traces. Click proceed when you’re done integrating your applications. learn more"
+            div_ [class_ "flex flex-col gap-4 "] $ do
+              div_ [class_ "flex flex-col gap-2"] do
+                let langs = [("js", "Javascript") :: (Text, Text), ("go", "Golang"), ("py", "Python"), ("php", "PHP"), ("cs", "C#")]
+                forM_ langs $ \(lang, langName) -> languageItem pid langName lang
+            div_ [class_ "flex items-center gap-4"] do
+              button_ [class_ "btn btn-primary", hxGet_ $ "/p/" <> pid.toText <> "/onboarding/integration-check", hxSwap_ "none", hxIndicator_ "#loadingIndicator"] "Confirm & Proceed"
+              a_
+                [ class_ "px-2 h-14 flex items-center underline text-brand text-xl font-semibold"
+                , type_ "button"
+                , href_ $ "/p/" <> pid.toText <> "/onboarding?step=Pricing"
+                ]
+                "Skip"
+    div_ [class_ "w-1/2 flex items-center px-12"] do
+      div_ [class_ "rounded-2xl w-[750px] bg-white flex justify-between items-center h-[90vh]"] do
         div_ [class_ "w-full h-full overflow-y-auto p-6"] do
-          javascriptGuide "hello"
-          golangGuide "hello"
-          pythonGuide "hello"
-          phpGuide "hello"
-          csharpGuide "hello"
+          javascriptGuide apikey
+          golangGuide apikey
+          pythonGuide apikey
+          phpGuide apikey
+          csharpGuide apikey
     script_
       [text|
       function toggleCheckbox(event) {
@@ -496,6 +499,7 @@ notifChannels pid slackRedirectUri phone emails hasDiscord hasSlack = do
             , hxVals_ "js:{phoneNumber: document.getElementById('phone').value , emails: getTags()}"
             , hxTarget_ "#inviteModalContainer"
             , hxSwap_ "innerHTML"
+            , hxIndicator_ "#loadingIndicator"
             ]
             $ do
               div_ [class_ "flex flex-col gap-2"] do
@@ -546,6 +550,7 @@ createMonitorPage pid colM = do
         , hxPost_ $ "/p/" <> pid.toText <> "/monitors/collection?onboarding=true"
         , hxExt_ "json-enc"
         , hxVals_ "js:{stepsData: saveStepData()}"
+        , hxIndicator_ "#loadingIndicator"
         ]
         $ do
           input_ [class_ "input w-full h-12", type_ "hidden", name_ "title", value_ "HEALTH CHECK."]
@@ -586,7 +591,8 @@ discordModal pid = do
           do
             div_ [[__| on click halt|]] do
               h3_ [class_ "text-lg font-bold"] "Enter discord webhook URL"
-              p_ [class_ "py-4"] "This modal works with a hidden checkbox!"
+              p_ [class_ "py-4 flex items-center gap-1"] do
+                "Enter your preferred channels' webhook url. You can find it in the channel settings."
               input_ [type_ "text", class_ "input w-full h-12", id_ "discord-url", name_ "url", required_ "required"]
             div_ [class_ "modal-action"] do
               button_ [class_ "btn btn-primary rounded-lg btn-sm", type_ "button", onclick_ "htmx.trigger('#dscrd','submit')"] "Submit"
@@ -598,7 +604,7 @@ onboardingInfoBody pid firstName lastName cName cSize fUsFrm = do
   div_ [class_ "w-[550px] mx-auto mt-[156px]"] $ do
     div_ [class_ "flex-col gap-4 flex w-full"] $ do
       stepIndicator 1 "Tell us a little bit about you" ""
-      form_ [class_ "flex-col w-full gap-8 flex", hxPost_ $ "/p/" <> pid.toText <> "/onboarding/info"] $ do
+      form_ [class_ "flex-col w-full gap-8 flex", hxPost_ $ "/p/" <> pid.toText <> "/onboarding/info", hxIndicator_ "#loadingIndicator"] $ do
         div_ [class_ "flex-col w-full gap-4 mt-4 flex"] $ do
           mapM_ createInputField [("first Name" :: Text, firstName), ("last Name", lastName), ("company Name", cName)]
           createSelectField cSize "company Size" [("1 - 4", "1 to 4"), ("5 - 10", "5 to 10"), ("11 - 25", "11 to 25"), ("26+", "26 and above")]
@@ -612,7 +618,7 @@ onboardingConfigBody pid loca func = do
   div_ [class_ "w-[550px] mx-auto mt-[156px]"] $ do
     div_ [class_ "flex-col gap-4 flex w-full"] $ do
       stepIndicator 2 "Let's configure your project" $ "/p/" <> pid.toText <> "/onboarding?step=Info"
-      form_ [class_ "flex-col w-full gap-8 flex", hxPost_ $ "/p/" <> pid.toText <> "/onboarding/survey"] $ do
+      form_ [class_ "flex-col w-full gap-8 flex", hxPost_ $ "/p/" <> pid.toText <> "/onboarding/survey", hxIndicator_ "#loadingIndicator"] $ do
         div_ [class_ "flex-col w-full gap-14 mt-4 flex"] $ do
           div_ [class_ "flex-col gap-2 flex"] $ do
             div_ [class_ "items-center gap-[2px] flex"] $ do
@@ -635,6 +641,7 @@ inviteTeamMemberModal pid emails = do
   div_ [id_ "invite-modal-container"] $ do
     input_ [type_ "checkbox", id_ "inviteModal", class_ "modal-toggle", checked_]
     div_ [class_ "modal p-8", role_ "dialog"] do
+      universalIndicator
       div_ [class_ "modal-box flex flex-col gap-4"] $ do
         div_ [class_ "p-3 bg-[#0acc91]/5 rounded-full w-max border-[#067a57]/20 gap-2 inline-flex"] $
           faSprite_ "circle-check" "regular" "h-6 w-6 text-green-500"
@@ -653,10 +660,16 @@ inviteTeamMemberModal pid emails = do
               div_ [class_ "w-full"] $ do
                 div_ [class_ "w-full text-strong text-sm font-semibold"] "Members"
                 div_ [class_ "w-full border-t border-weak"] $ do
-                  form_ [class_ "flex-col flex", id_ "members-container", hxPost_ $ "/p/" <> pid.toText <> "/manage_members?onboarding=true"] $ do
-                    inviteMemberItem "hidden"
-                    forM_ emails $ \email -> do
-                      inviteMemberItem email
+                  form_
+                    [ class_ "flex-col flex"
+                    , id_ "members-container"
+                    , hxPost_ $ "/p/" <> pid.toText <> "/manage_members?onboarding=true"
+                    , hxIndicator_ "#loadingIndicator"
+                    ]
+                    $ do
+                      inviteMemberItem "hidden"
+                      forM_ emails $ \email -> do
+                        inviteMemberItem email
         div_ [class_ "modal-action w-full flex items-center justify-start gap-2 mt-2"] do
           button_ [class_ "btn btn-primary font-semibold rounded-lg", type_ "button", onclick_ "htmx.trigger('#members-container', 'submit')"] "Proceed"
           label_ [class_ "text-brand font-semibold underline", Lucid.for_ "inviteModal"] "Close"
@@ -727,7 +740,8 @@ createBinaryField kind name selectedValues (value, label) = do
 
 
 stepIndicator :: Int -> Text -> Text -> Html ()
-stepIndicator step title prevUrl =
+stepIndicator step title prevUrl = do
+  universalIndicator
   div_ [class_ "flex-col gap-4 flex w-full"] $ do
     img_ [class_ "h-7 absolute top-10 left-10", src_ "/public/assets/svgs/logo.svg"]
     div_ [class_ "flex-col gap-2 flex w-full"] $ do
@@ -747,6 +761,7 @@ popularPricing pid = do
     [ class_ "rounded-2xl p-8 border border-[var(--brand-color)] flex-col flex gap-8 relative shadow-[0px_4px_8px_-2px_rgba(0,0,0,0.04)] shadow-[0px_2px_4px_-2px_rgba(0,0,0,0.08)]"
     , hxPost_ $ "/p/" <> pid.toText <> "/onboarding/pricing"
     , id_ "GraduatedPricing"
+    , hxIndicator_ "#loadingIndicator"
     ]
     $ do
       div_ [class_ "absolute -right-8 -top-8"] do
@@ -771,7 +786,6 @@ popularPricing pid = do
         , type_ "button"
         ]
         do
-          span_ [id_ "createIndicator", class_ "htmx-indicator loading loading-dots loading-md"] pass
           "Start free 30 day trial"
   where
     features =
@@ -820,3 +834,9 @@ faQ question answer =
       span_ [] $ toHtml question
       faSprite_ "chevron-down" "regular" "h-4 w-4 text-weak"
     div_ [class_ "text-weak font-medium w-full hidden"] $ toHtml answer
+
+
+universalIndicator :: Html ()
+universalIndicator =
+  div_ [class_ "fixed  htmx-indicator top-0 left-0 right-0 bottom-0 flex items-center justify-center z-[9999]", id_ "loadingIndicator"] do
+    span_ [class_ "loading loading-dots loading-lg"] ""
