@@ -42,6 +42,7 @@ import Lucid.Hyperscript (__)
 import Models.Apis.Slack (getProjectSlackData)
 import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
 import Models.Tests.Testing qualified as Testing
+import Pages.Components
 import Pages.Components qualified as Components
 import Pages.IntegrationDemos.Csharp (csharpGuide)
 import Pages.IntegrationDemos.Golang (golangGuide)
@@ -54,7 +55,7 @@ import PyF (fmt)
 import Relude hiding (ask)
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types (ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders, redirectCS)
-import Utils (faSprite_, getOtelLangVersion, insertIfNotExist, lemonSqueezyUrls, lemonSqueezyUrlsAnnual, lookupValueText)
+import Utils (faSprite_, getOtelLangVersion, insertIfNotExist, lookupValueText)
 import Web.FormUrlEncoded
 
 
@@ -110,7 +111,9 @@ onboardingGetH pid onboardingStepM = do
       let key = if V.length apiKey > 0 then let defKey = V.head apiKey in defKey.keyPrefix else "<API_KEY>"
       addRespHeaders $ PageCtx bodyConfig $ integrationsPage pid key
     "Pricing" -> do
-      addRespHeaders $ PageCtx bodyConfig $ pricingPage pid
+      let lemonUrl = appContx.config.lemonSqueezyUrl <> "&checkout[custom][project_id]=" <> pid.toText
+          critical = appContx.config.lemonSqueezyCriticalUrl <> "&checkout[custom][project_id]=" <> pid.toText
+      addRespHeaders $ PageCtx bodyConfig $ pricingPage pid lemonUrl critical
     _ -> do
       let firstName = sess.user.firstName
           lastName = sess.user.lastName
@@ -271,48 +274,23 @@ onboardingCompleteBody pid = do
   script_ [src_ "/public/assets/js/confetti.js"] ("" :: Text)
 
 
-pricingPage :: Projects.ProjectId -> Html ()
-pricingPage pid = do
+pricingPage :: Projects.ProjectId -> Text -> Text -> Html ()
+pricingPage pid lemon critical = do
   div_ [class_ "w-[800px] mx-auto mt-[70px] mb-10 mx-auto"] $ do
     div_ [class_ "flex-col gap-8 flex w-full"] $ do
       div_ [class_ "w-1/2"] $ do
         stepIndicator 6 "Please pick a plan" $ "/p/" <> pid.toText <> "/onboarding?step=Integration"
-      div_ [class_ "tabs tabs-boxed tabs-md p-0 w-max flex items-center tabs-outline items-center bg-weak text-weak border", id_ "pricing-tabs"] do
-        button_
-          [ class_ "a-tab tab whitespace-nowrap px-3 border-b border-b-slate-200 w-max t-tab-box-active"
-          , onclick_ "handlePlanToggle('monthly')"
-          , id_ "monthly"
-          ]
-          "Monthly"
-        button_
-          [ class_ "a-tab tab whitespace-nowrap px-3 border-b border-b-slate-200 w-max"
-          , onclick_ "handlePlanToggle('annual')"
-          , id_ "annual"
-          ]
-          "Annual (2 months free)"
-      div_ [class_ "flex flex-col gap-2 w-full"] do
-        div_ [class_ "flex items-center justify-between w-full gap-4"] do
-          p_ [class_ "text-strong"] "Total requests"
-          p_ [class_ "text-weak", id_ "num_requests"] "200k"
-        input_ [type_ "range", min_ "0", max_ "6", step_ "1", value_ "0", class_ "range range-primary range-sm", id_ "price_range"]
-      div_ [class_ "grid grid-cols-2 gap-8 mt-6 w-full"] do
-        popularPricing pid
-        systemsPricing pid
+      paymentPlanPicker pid lemon critical False
       div_ [class_ "flex flex-col gap-2 w-full"] do
         span_ [class_ "text-strong text-2xl font-semibold mt-20"] "FAQ"
         div_ [class_ "flex flex-col mt-4 w-full"] do
           faQ "What is an event?" "An event is any of span, log, or metric that you send to APItoolkit."
           faQ "How do you handle security and sensitive data?" "We employ encryption and authentication measures to ensure the security of your data during transmission and storage. All our SDKs also support redacting data. You can simply specify the JSONPath to the fields that you don't want the SDKs to forward to APItoolkit, and those sensitive fields will be stripped out/redacted before the data even leaves your servers and replaced with the text \"CLIENT REDACTED\" on our end. We will never see anything you don't want us to see."
           faQ "What makes us better than others?" "Aside the observerbility features like traces, logs, metrics etc. APItoolkit takes it a step further by monitoring request payloads for both incoming and outgoing requests, automatic error reportings like sentry and payload changes detections which gives engineering teams with all the information the need to seamlessly debug and fix issues in their servers."
-
-      let graduatedCheckoutOne = V.head lemonSqueezyUrls <> "&checkout[custom][project_id]=" <> pid.toText
-          lmnUrls = decodeUtf8 $ AE.encode $ lemonSqueezyUrls <&> (<> "&checkout[custom][project_id]=" <> pid.toText)
-          lmnUrlAnnual = decodeUtf8 $ AE.encode $ lemonSqueezyUrlsAnnual <&> (<> "&checkout[custom][project_id]=" <> pid.toText)
-      script_ [src_ "https://assets.lemonsqueezy.com/lemon.js"] ("" :: Text)
-      script_
-        [type_ "text/javascript"]
-        [text|
-             window.payLemon = function(plan) {
+    script_
+      [type_ "text/javascript"]
+      [text|
+             window.payLemon = function(plan, url) {
              const sub = document.getElementById("loadingIndicator")
              if(sub.classList.contains("htmx-request")) {
                 return
@@ -320,7 +298,10 @@ pricingPage pid = do
              LemonSqueezy.Setup({
                eventHandler: ({event, data}) => {
                  if(event === "Checkout.Success") {
-                     document.getElementById("orderId").value = data.order.data.id
+                     let inputs = document.querySelectorAll(".orderId")
+                     for (let input of inputs)  {
+                      input.value = data.order.data.id
+                     }
                      LemonSqueezy.Url.Close()
                      gtag('event', 'conversion', {
                          'send_to': 'AW-11285541899/rf7NCKzf_9YYEIvoroUq',
@@ -328,56 +309,12 @@ pricingPage pid = do
                          'currency': 'EUR',
                          'transaction_id': '',
                      });
-                     htmx.trigger("#"+ plan, "submit")
+                     htmx.trigger("#"+ plan, "click")
                  }
                }
              })
-             if(plan == "GraduatedPricing") {
-                  LemonSqueezy.Url.Open(window.graduatedRangeUrl);
-              }else {
-                LemonSqueezy.Url.Open(window.urls[plan]);
-              }
+              LemonSqueezy.Url.Open(url);
              };
-            |]
-
-      script_
-        [text|
-               const price_indicator = document.querySelector("#price_range");
-               window.graduatedRangeUrl = "$graduatedCheckoutOne";
-               let plan = "month";
-               const prices = [34, 49, 88, 215, 420, 615, 800]
-               const reqs = ["400k","1.1M", "2M", "5M", "10M", "15M", "20M"]
-               const pricesYr = [29, 34, 61, 150, 294, 294, 294]
-               const reqsYr = ["400k","1.1M", "2M", "5M", "10M", "10M", "10M"]
-               const urls = $lmnUrls
-               const urlsAnnual = $lmnUrlAnnual
-               const priceContainer = document.querySelector("#price")
-               const reqsContainer = document.querySelector("#num_requests")
-               function priceChange() {
-                 const value = price_indicator.value
-                 let price = prices[value]
-                 let num_reqs = reqs[value]
-                 window.graduatedRangeUrl = urls[value]
-                 if(plan === "annual") {
-                    price = pricesYr[value]
-                    num_reqs = reqsYr[value]
-                    window.graduatedRangeUrl = urlsAnnual[value]
-                  }
-                 priceContainer.innerText = "$" + price
-                 reqsContainer.innerText = num_reqs
-
-               }
-               price_indicator.addEventListener('input', priceChange)
-
-               function handlePlanToggle(p) {
-                  plan = p
-                  priceChange()
-                  const tabs = document.querySelectorAll(".a-tab")
-                  for(let tab of tabs)  {
-                    tab.classList.remove("t-tab-box-active")
-                  }
-                  document.querySelector("#" + p).classList.add("t-tab-box-active")
-               }
             |]
 
 
@@ -753,78 +690,6 @@ stepIndicator step title prevUrl = do
           faSprite_ "arrow-left" "regular" "h-4 w-4"
           span_ [class_ "font-semibold"] "Back"
     span_ [class_ "text-strong text-4xl font-semibold mt-4"] $ toHtml title
-
-
-popularPricing :: Projects.ProjectId -> Html ()
-popularPricing pid = do
-  form_
-    [ class_ "rounded-2xl p-8 border border-[var(--brand-color)] flex-col flex gap-8 relative shadow-[0px_4px_8px_-2px_rgba(0,0,0,0.04)] shadow-[0px_2px_4px_-2px_rgba(0,0,0,0.08)]"
-    , hxPost_ $ "/p/" <> pid.toText <> "/onboarding/pricing"
-    , id_ "GraduatedPricing"
-    , hxIndicator_ "#loadingIndicator"
-    ]
-    $ do
-      div_ [class_ "absolute -right-8 -top-8"] do
-        div_ [class_ "relative"] do
-          p_ [class_ "font-semibold text-brand"] "Most popular!"
-          img_ [class_ "absolute top-1 -left-1/2 h-14 w-14", src_ "/public/assets/svgs/drawn-arrow.svg"]
-      div_ [class_ "flex-col justify-start items-start gap-2 flex"] $ do
-        input_ [type_ "hidden", id_ "orderId", name_ "orderId", value_ ""]
-        div_ [class_ "text-center text-strong text-4xl font-bold"] "Pay as you use"
-        div_ [class_ "text-brand text-base font-semibold"] "Start your FREE 30-day trial"
-        div_ [class_ "text-weak text-sm font-medium"] do
-          "Starts at "
-          span_ [class_ "", id_ "price"] "$34"
-        div_ [class_ "text-weak text-sm"] "then $1 per 20k events"
-
-      div_ [class_ "flex-col justify-start items-start gap-6 flex"] $ do
-        span_ [class_ "text-weak text-base font-semibold"] "What’s Included:"
-        mapM_ featureRow features
-      button_
-        [ class_ "btn-primary h-12 rounded mt-auto w-full font-semibold rounded-lg shadow-[0px_1px_2px_0px_rgba(10,13,18,0.05)] shadow-[inset_0px_-2px_0px_0px_rgba(10,13,18,0.05)] shadow-[inset_0px_0px_0px_1px_rgba(10,13,18,0.18)]"
-        , [__|on click call window.payLemon("GraduatedPricing") |]
-        , type_ "button"
-        ]
-        do
-          "Start free 30 day trial"
-  where
-    features =
-      [ "Unlimited team members"
-      , "Opentelemetry Logs, Traces and Metrics"
-      , "Last 14 days data retention"
-      ]
-
-
-systemsPricing :: Projects.ProjectId -> Html ()
-systemsPricing projectId = do
-  div_ [class_ "rounded-2xl p-8 border flex-col flex gap-8 shadow-[0px_4px_8px_-2px_rgba(0,0,0,0.04)] shadow-[0px_2px_4px_-2px_rgba(0,0,0,0.08)]"] $ do
-    div_ [class_ "flex-col justify-start items-start gap-2 flex"] $ do
-      -- div_ [class_ "relative"] $ do
-      --   span_ [class_ "text-brand font-semibold"] "Most popular!"
-      div_ [class_ "text-center text-strong text-4xl font-bold"] "Critical Systems"
-      div_ [class_ "text-base font-semibold"] "Business plan"
-      div_ [class_ "text-weak text-sm font-medium"] "Starts at $500/monthly"
-
-    div_ [class_ "flex-col justify-start items-start gap-6 flex"] $ do
-      span_ [class_ "text-weak text-base font-semibold"] "Everything in plus and..."
-      mapM_ featureRow features
-    button_
-      [ class_ "btn-primary h-12 rounded w-full mt-auto font-semibold rounded-lg shadow-[0px_1px_2px_0px_rgba(10,13,18,0.05)] shadow-[inset_0px_-2px_0px_0px_rgba(10,13,18,0.05)] shadow-[inset_0px_0px_0px_1px_rgba(10,13,18,0.18)]"
-      ]
-      "Start free 30 day trial"
-  where
-    features =
-      [ "24/7 support from our team of industry experts"
-      , "Last 30 days data retention"
-      ]
-
-
-featureRow :: Text -> Html ()
-featureRow feature =
-  div_ [class_ "flex items-center gap-2"] $ do
-    div_ [class_ "rounded-full bg-green-100 h-5 w-5 flex items-center justify-center"] do
-      faSprite_ "check" "regular" "h-3 w-3 text-green-500"
-    p_ [class_ "text-weak"] (toHtml feature)
 
 
 faQ :: Text -> Text -> Html ()

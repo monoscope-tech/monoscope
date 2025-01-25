@@ -1,5 +1,6 @@
 module Pages.Projects.ProjectsSpec (spec) where
 
+import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects qualified as Projects
@@ -8,7 +9,12 @@ import Pages.Projects.CreateProject qualified as CreateProject
 import Pages.Projects.ListProjects qualified as ListProjects
 import Pkg.TestUtils
 import Relude
+import Relude.Unsafe qualified as Unsafe
 import Test.Hspec
+
+
+testPid :: Projects.ProjectId
+testPid = Unsafe.fromJust $ Projects.ProjectId <$> UUID.fromText "00000000-0000-0000-0000-000000000000"
 
 
 spec :: Spec
@@ -21,14 +27,10 @@ spec = aroundAll withTestResources do
               , description = "Test Description"
               , emails = ["test@apitoolkit.io"]
               , permissions = [ProjectMembers.PAdmin]
-              , isUpdate = False
-              , projectId = ""
-              , paymentPlan = "Free"
               , timeZone = ""
-              , orderId = Nothing
               }
       pg <-
-        toServantResponse trATCtx trSessAndHeader trLogger $ CreateProject.createProjectPostH createPForm
+        toServantResponse trATCtx trSessAndHeader trLogger $ CreateProject.createProjectPostH testPid createPForm
       pg.form.title `shouldBe` "Test Project CI"
       pg.form.description `shouldBe` "Test Description"
 
@@ -51,14 +53,10 @@ spec = aroundAll withTestResources do
               , description = "Test Description2"
               , emails = ["test@apitoolkit.io"]
               , permissions = [ProjectMembers.PAdmin]
-              , isUpdate = True
-              , projectId = "00000000-0000-0000-0000-000000000001"
-              , paymentPlan = "Free"
               , timeZone = "Africa/Accra"
-              , orderId = Nothing
               }
       pg <-
-        toServantResponse trATCtx trSessAndHeader trLogger $ CreateProject.createProjectPostH createPForm
+        toServantResponse trATCtx trSessAndHeader trLogger $ CreateProject.createProjectPostH testPid createPForm
       pg.form.title `shouldBe` "Test Project CI2"
       pg.form.description `shouldBe` "Test Description2"
 
