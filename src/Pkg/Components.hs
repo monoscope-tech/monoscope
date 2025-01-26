@@ -120,11 +120,11 @@ frameworkItem lang title =
 
 withEmphasisedText :: [(Text, Bool)] -> Html ()
 withEmphasisedText [] = mempty
-withEmphasisedText ((text, True) : xs) = do
-  codeEmphasis $ " " <> text <> " "
+withEmphasisedText ((t, True) : xs) = do
+  codeEmphasis $ " " <> t <> " "
   withEmphasisedText xs
-withEmphasisedText ((text, False) : xs) = do
-  toHtml text
+withEmphasisedText ((t, False) : xs) = do
+  toHtml t
   withEmphasisedText xs
 
 

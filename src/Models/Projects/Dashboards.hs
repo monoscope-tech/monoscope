@@ -83,7 +83,7 @@ readDashboardsFromDirectory dir = do
   files <- runIO $ listDirectory dir
   let files' = filter (".yaml" `isSuffixOf`) files
   dashboards <- runIO $ catMaybes <$> mapM (readDashboardFile dir) files'
-  [|dashboards|]
+  THS.lift dashboards
 
 
 readDashboardFile :: FilePath -> FilePath -> IO (Maybe Dashboard)
