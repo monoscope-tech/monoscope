@@ -78,8 +78,7 @@ onboardingGetH pid onboardingStepM = do
           { currProject = Nothing
           }
       questions = fromMaybe (AE.Object []) project.questions
-      nextStep = getNextOnboardingStep project.onboardingStepsCompleted
-      onboardingStep = fromMaybe nextStep onboardingStepM
+      onboardingStep = fromMaybe "Info" onboardingStepM
   case onboardingStep of
     "Complete" -> do
       addRespHeaders $ PageCtx bodyConfig $ onboardingCompleteBody pid
