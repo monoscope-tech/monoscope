@@ -182,8 +182,8 @@ byteStringToHexText bs = decodeUtf8 (B16.encode bs)
 -- Convert a list of KeyValue to a JSONB object
 keyValueToJSONB :: V.Vector KeyValue -> AE.Value
 keyValueToJSONB kvs =
-  AE.object
-    $ V.foldr (\kv acc -> (AEK.fromText $ toText kv.keyValueKey, convertAnyValue kv.keyValueValue) : acc) [] kvs
+  AE.object $
+    V.foldr (\kv acc -> (AEK.fromText $ toText kv.keyValueKey, convertAnyValue kv.keyValueValue) : acc) [] kvs
 
 
 convertAnyValue :: Maybe AnyValue -> AE.Value
@@ -244,8 +244,17 @@ anyValueToString _ = Nothing
 
 
 convertScopeSpan :: V.Vector (Text, Projects.ProjectId) -> Maybe Resource -> ScopeSpans -> V.Vector Telemetry.SpanRecord
-convertScopeSpan pid resource sl =
-  V.catMaybes $ V.map (convertSpanRecord pid resource sl.scopeSpansScope) sl.scopeSpansSpans
+convertScopeSpan pids resource sl =
+  let
+    key = maybe "" (fromMaybe "" . anyValueToString) $ resource >>= \r -> find (\kv -> kv.keyValueKey == "at-project-key") r.resourceAttributes >>= (.keyValueValue) >>= (.anyValueValue)
+    pid = case find (\(k, _) -> k == key) pids of
+      Just (_, v) -> Just v
+      Nothing ->
+        let pidText = maybe "" (fromMaybe "" . anyValueToString) $ resource >>= \r -> find (\kv -> kv.keyValueKey == "at-project-id") r.resourceAttributes >>= (.keyValueValue) >>= (.anyValueValue)
+            uId = UUID.fromText pidText
+         in ((Just . Projects.ProjectId) =<< uId)
+   in
+    V.catMaybes $ V.map (convertSpanRecord pid resource sl.scopeSpansScope) sl.scopeSpansSpans
 
 
 convertToSpan :: V.Vector (Text, Projects.ProjectId) -> ResourceSpans -> V.Vector Telemetry.SpanRecord
@@ -270,8 +279,8 @@ convertLogRecord pid resource scope lr =
     }
 
 
-convertSpanRecord :: V.Vector (Text, Projects.ProjectId) -> Maybe Resource -> Maybe InstrumentationScope -> Span -> Maybe Telemetry.SpanRecord
-convertSpanRecord pidsKeys resource scope sp =
+convertSpanRecord :: Maybe Projects.ProjectId -> Maybe Resource -> Maybe InstrumentationScope -> Span -> Maybe Telemetry.SpanRecord
+convertSpanRecord pid resource scope sp =
   pid
     >>= ( \p ->
             Just
@@ -297,14 +306,6 @@ convertSpanRecord pidsKeys resource scope sp =
                 , spanDurationNs = fromIntegral $ sp.spanEndTimeUnixNano - sp.spanStartTimeUnixNano
                 }
         )
-  where
-    key = maybe "" (fromMaybe "" . anyValueToString) $ resource >>= \r -> find (\kv -> kv.keyValueKey == "at-project-key") r.resourceAttributes >>= (.keyValueValue) >>= (.anyValueValue)
-    pid = case find (\(k, _) -> k == key) pidsKeys of
-      Just (_, v) -> Just v
-      Nothing ->
-        let pidText = maybe "" (fromMaybe "" . anyValueToString) $ resource >>= \r -> find (\kv -> kv.keyValueKey == "at-project-id") r.resourceAttributes >>= (.keyValueValue) >>= (.anyValueValue)
-            uId = UUID.fromText pidText
-         in ((\u -> Just $ Projects.ProjectId u) =<< uId)
 
 
 convertToMetric :: Projects.ProjectId -> ResourceMetrics -> V.Vector Telemetry.MetricRecord
@@ -395,8 +396,8 @@ convertMetricRecord pid resource iscp metric =
                   mtTime = histogram.exponentialHistogramDataPointTimeUnixNano
                   pointNegative =
                     ( \b ->
-                        Just
-                          $ Telemetry.EHBucket
+                        Just $
+                          Telemetry.EHBucket
                             { bucketOffset = fromIntegral $ b.exponentialHistogramDataPoint_BucketsOffset
                             , bucketCounts = fromIntegral <$> b.exponentialHistogramDataPoint_BucketsBucketCounts
                             }
@@ -404,8 +405,8 @@ convertMetricRecord pid resource iscp metric =
                       =<< histogram.exponentialHistogramDataPointNegative
                   pointPositive =
                     ( \b ->
-                        Just
-                          $ Telemetry.EHBucket
+                        Just $
+                          Telemetry.EHBucket
                             { bucketOffset = fromIntegral $ b.exponentialHistogramDataPoint_BucketsOffset
                             , bucketCounts = fromIntegral <$> b.exponentialHistogramDataPoint_BucketsBucketCounts
                             }
@@ -606,30 +607,30 @@ getSpanAttribute key attr = case attr of
 
 eventsToJSONB :: [Span_Event] -> AE.Value
 eventsToJSONB spans =
-  AE.toJSON
-    $ ( \sp ->
-          AE.object
-            [ "event_name" AE..= toText sp.span_EventName
-            , "event_time" AE..= nanosecondsToUTC sp.span_EventTimeUnixNano
-            , "event_attributes" AE..= keyValueToJSONB sp.span_EventAttributes
-            , "event_dropped_attributes_count" AE..= fromIntegral sp.span_EventDroppedAttributesCount
-            ]
-      )
-    <$> spans
+  AE.toJSON $
+    ( \sp ->
+        AE.object
+          [ "event_name" AE..= toText sp.span_EventName
+          , "event_time" AE..= nanosecondsToUTC sp.span_EventTimeUnixNano
+          , "event_attributes" AE..= keyValueToJSONB sp.span_EventAttributes
+          , "event_dropped_attributes_count" AE..= fromIntegral sp.span_EventDroppedAttributesCount
+          ]
+    )
+      <$> spans
 
 
 linksToJSONB :: [Span_Link] -> AE.Value
 linksToJSONB lnks =
-  AE.toJSON
-    $ lnks
-    <&> \lnk ->
-      AE.object
-        [ "link_span_id" AE..= (decodeUtf8 lnk.span_LinkSpanId :: Text)
-        , "link_trace_id" AE..= (decodeUtf8 lnk.span_LinkTraceId :: Text)
-        , "link_attributes" AE..= keyValueToJSONB lnk.span_LinkAttributes
-        , "link_dropped_attributes_count" AE..= fromIntegral lnk.span_LinkDroppedAttributesCount
-        , "link_flags" AE..= fromIntegral lnk.span_LinkFlags
-        ]
+  AE.toJSON $
+    lnks
+      <&> \lnk ->
+        AE.object
+          [ "link_span_id" AE..= (decodeUtf8 lnk.span_LinkSpanId :: Text)
+          , "link_trace_id" AE..= (decodeUtf8 lnk.span_LinkTraceId :: Text)
+          , "link_attributes" AE..= keyValueToJSONB lnk.span_LinkAttributes
+          , "link_dropped_attributes_count" AE..= fromIntegral lnk.span_LinkDroppedAttributesCount
+          , "link_flags" AE..= fromIntegral lnk.span_LinkFlags
+          ]
 
 
 ---------------------------------------------------------------------------------------
