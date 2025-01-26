@@ -6,6 +6,7 @@ import NeatInterpolation (text)
 import Pkg.Components
 import Relude
 
+
 golangGuide :: Text -> Html ()
 golangGuide apikey =
   section_ [class_ "flex flex-col gap-4 lang-guide hidden", id_ "go_main"] do
@@ -28,6 +29,7 @@ golangGuide apikey =
 frameworks :: [Text]
 frameworks = ["Gin", "Echo", "Fiber", "Gorilla", "Native", "Chi"]
 
+
 goGuideTemplate :: Text -> Text -> Text -> Html ()
 goGuideTemplate apikey framework initCode = do
   section_ [class_ $ "flex flex-col gap-10 go-guide " <> if framework == "Gin" then "" else "hidden", id_ framework] do
@@ -44,9 +46,9 @@ goGuideTemplate apikey framework initCode = do
       p_ [class_ "text-gray-600 font-medium"] "Configure and initialize the SDK to start monitoring incoming http request, errors and outgoing request."
       codeExample initCode
       p_ [class_ "text-gray-600 font-medium"] do
-         "In the demo code abovec, the "
-         codeEmphasis "shutdown, err := apitoolkit.ConfigureOpenTelemetry()"
-         " Is only neccesary if you don't have OpenTelemetry configured in your application already."
+        "In the demo code abovec, the "
+        codeEmphasis "shutdown, err := apitoolkit.ConfigureOpenTelemetry()"
+        " Is only neccesary if you don't have OpenTelemetry configured in your application already."
     div_ [class_ "w-full flex flex-col gap-2"] do
       h3_ [class_ "text-xl font-medium"] "Configuration Options"
       p_ [class_ "text-gray-600 font-medium max-w-5xl"] "The SDK accepts the following optional fields to allow you to customize the sdk. Redacting sensitive fields, debug mode etc"
@@ -64,7 +66,8 @@ OTEL_SERVICE_VERSION="0.0.1" # Your application's service version (optional)
 
 
 configOptions :: Text
-configOptions = [text|
+configOptions =
+  [text|
 apitoolkit.Config{
 	RedactHeaders:       []string{"Authorization", "X-Api-Key"},
 	RedactRequestBody:   []string{"password", "credit_card"},
@@ -78,9 +81,9 @@ apitoolkit.Config{
 }|]
 
 
-
 fiberCode :: Text
-fiberCode = [text|
+fiberCode =
+  [text|
 package main
 
 import (
@@ -114,8 +117,10 @@ func main() {
 }
 |]
 
+
 chiCode :: Text
-chiCode = [text|
+chiCode =
+  [text|
 package main
 
 import (
@@ -147,8 +152,10 @@ func main() {
 	http.ListenAndServe(":8000", r)
 }|]
 
+
 gorillaMuxCode :: Text
-gorillaMuxCode = [text|
+gorillaMuxCode =
+  [text|
 package main
 
 import (
@@ -181,8 +188,10 @@ func main() {
 }
 |]
 
+
 nativeCode :: Text
-nativeCode = [text|
+nativeCode =
+  [text|
 package main
 
 import (
@@ -218,8 +227,10 @@ func main() {
 }
 |]
 
+
 ginCode :: Text
-ginCode = [text|
+ginCode =
+  [text|
 package main
 
 import (
@@ -251,8 +262,10 @@ func main() {
 }
 |]
 
+
 echoCode :: Text
-echoCode = [text|
+echoCode =
+  [text|
 package main
 
 import (

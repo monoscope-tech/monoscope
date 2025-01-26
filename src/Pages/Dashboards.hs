@@ -26,7 +26,7 @@ import Pages.Charts.Charts qualified as Charts
 import Pkg.Components qualified as Components
 import Pkg.Components.Widget qualified as Widget
 import Relude
-import Servant (NoContent(..), errBody, err404)
+import Servant (NoContent (..), err404, errBody)
 import System.Types
 import Utils (faIcon_, faSprite_)
 import Utils qualified
@@ -48,14 +48,13 @@ dashboardPage_ pid dash = div_ [class_ "mx-auto pt-2 px-6 gap-3.5 w-full flex fl
   script_ "GridStack.init()"
 
 
-
 loadDashboardFromVM :: Dashboards.DashboardVM -> Maybe Dashboards.Dashboard
 loadDashboardFromVM dashVM = case dashVM.schema of
   Just schema_ -> pure schema_
   Nothing -> find (\d -> d.file == dashVM.baseTemplate) dashboardTemplates
 
 
-dashboardGetH :: Projects.ProjectId -> Dashboards.DashboardId ->Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders (PageCtx DashboardGet))
+dashboardGetH :: Projects.ProjectId -> Dashboards.DashboardId -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders (PageCtx DashboardGet))
 dashboardGetH pid dashId fromDStr toDStr sinceStr = do
   (sess, project) <- Sessions.sessionAndProject pid
   now <- Time.currentTime
@@ -70,16 +69,16 @@ dashboardGetH pid dashId fromDStr toDStr sinceStr = do
     if (widget.eager == Just True)
       then do
         metricsD <- Charts.queryMetrics (Just pid) widget.query Nothing sinceStr fromDStr toDStr Nothing
-        pure $
-          widget
-            & #dataset
-              ?~ Widget.WidgetDataset
-                { source = AE.toJSON $ V.cons (AE.toJSON <$> metricsD.headers) (AE.toJSON <<$>> metricsD.dataset)
-                , rowsPerMin = Just metricsD.rowsPerMin
-                , value = Just $ fromIntegral metricsD.rowsCount
-                , from = metricsD.from
-                , to = metricsD.to
-                }
+        pure
+          $ widget
+          & #dataset
+            ?~ Widget.WidgetDataset
+              { source = AE.toJSON $ V.cons (AE.toJSON <$> metricsD.headers) (AE.toJSON <<$>> metricsD.dataset)
+              , rowsPerMin = Just metricsD.rowsPerMin
+              , value = Just $ fromIntegral metricsD.rowsCount
+              , from = metricsD.from
+              , to = metricsD.to
+              }
       else pure widget
 
   let bwconf =
@@ -170,8 +169,8 @@ dashboardsGet_ dg = do
               time_ [class_ "mr-2 text-slate-400", datetime_ $ Utils.formatUTC dashVM.createdAt] $ toHtml $ formatTime defaultTimeLocale "%eth %b %Y" dashVM.createdAt
               forM_ dashVM.tags (a_ [class_ "cbadge-sm badge-neutral cbadge bg-slate-200"] . toHtml @Text)
           div_ [class_ "flex items-center justify-center gap-3"] do
-            button_ [class_ "rounded-full border border-slate-300 p-2 leading-none text-gray-700"] $
-              if isJust dashVM.starredSince
+            button_ [class_ "rounded-full border border-slate-300 p-2 leading-none text-gray-700"]
+              $ if isJust dashVM.starredSince
                 then (faSprite_ "star" "solid" "w-5 h-5")
                 else (faSprite_ "star" "regular" "w-5 h-5")
             div_ [class_ "space-x-2"] $ faSprite_ "chart-area" "regular" "w-5 h-5" >> (span_ . toHtml $ maybe "0" (show . length . (.widgets)) dash <> " charts")
@@ -191,9 +190,9 @@ dashboardsGetH pid = do
           , pageTitle = "Dashboards"
           , pageActions = Just $ (label_ [Lucid.for_ "newDashboardMdl", class_ "leading-none rounded-xl p-3 cursor-pointer bg-gradient-to-b from-[#067cff] to-[#0850c5] text-white"] "New Dashboard")
           }
-  addRespHeaders $
-    PageCtx bwconf $
-      DashboardsGet{dashboards, projectId = pid}
+  addRespHeaders
+    $ PageCtx bwconf
+    $ DashboardsGet{dashboards, projectId = pid}
 
 
 data DashboardForm = DashboardForm
@@ -210,21 +209,21 @@ dashboardsPostH pid form = do
   did <- Dashboards.DashboardId <$> UUID.genUUID
   let dashM = find (\dashboard -> dashboard.file == Just form.file) dashboardTemplates
   let redirectURI = "/p/" <> pid.toText <> "/dashboards/" <> (did.toText)
-  dbtToEff $
-    DBT.insert @Dashboards.DashboardVM $
-      Dashboards.DashboardVM
-        { id = did
-        , projectId = pid
-        , createdAt = now
-        , updatedAt = now
-        , createdBy = sess.user.id
-        , baseTemplate = if form.file == "" then Nothing else Just form.file
-        , schema = Nothing
-        , starredSince = Nothing
-        , homepageSince = Nothing
-        , tags = V.fromList $ fromMaybe [] $ dashM >>= (.tags)
-        , title = fromMaybe [] $ dashM >>= (.title)
-        }
+  dbtToEff
+    $ DBT.insert @Dashboards.DashboardVM
+    $ Dashboards.DashboardVM
+      { id = did
+      , projectId = pid
+      , createdAt = now
+      , updatedAt = now
+      , createdBy = sess.user.id
+      , baseTemplate = if form.file == "" then Nothing else Just form.file
+      , schema = Nothing
+      , starredSince = Nothing
+      , homepageSince = Nothing
+      , tags = V.fromList $ fromMaybe [] $ dashM >>= (.tags)
+      , title = fromMaybe [] $ dashM >>= (.title)
+      }
   redirectCS redirectURI
   addRespHeaders NoContent
 

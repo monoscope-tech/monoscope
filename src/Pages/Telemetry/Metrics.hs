@@ -149,31 +149,31 @@ chartList pid source metricList nextUrl = do
                   then htmx.process(#global-data-drawer-content)
                   then _hyperscript.processNode(#global-data-drawer-content)
                   then window.evalScriptsFromContent(#global-data-drawer-content)|]
-      div_ [class_ "h-52"] $
-        toHtml $
-          Widget.Widget
-            { wType = Widget.WTDistribution
-            , id = Nothing
-            , title = Just metric.metricName
-            , subtitle = Nothing
-            , sql = Nothing
-            , query = Just $ "metric_name = \"" <> metric.metricName <> "\""
-            , queries = Nothing
-            , layout = Just $ Widget.Layout{x = Just 0, y = Just 0, w = Just 2, h = Just 1}
-            , xAxis = Nothing
-            , yAxis = Nothing
-            , unit = Just metric.metricUnit
-            , value = Nothing
-            , wData = Nothing
-            , hideLegend = Just True
-            , theme = Nothing
-            , dataset = Nothing
-            , eager = Just True
-            , _projectId = Just pid
-            , expandBtnFn = Just expandBtn
-            }
-  when (length metricList > 19) $
-    a_ [hxTrigger_ "intersect once", hxSwap_ "outerHTML", hxGet_ nextUrl] pass
+      div_ [class_ "h-52"]
+        $ toHtml
+        $ Widget.Widget
+          { wType = Widget.WTDistribution
+          , id = Nothing
+          , title = Just metric.metricName
+          , subtitle = Nothing
+          , sql = Nothing
+          , query = Just $ "metric_name = \"" <> metric.metricName <> "\""
+          , queries = Nothing
+          , layout = Just $ Widget.Layout{x = Just 0, y = Just 0, w = Just 2, h = Just 1}
+          , xAxis = Nothing
+          , yAxis = Nothing
+          , unit = Just metric.metricUnit
+          , value = Nothing
+          , wData = Nothing
+          , hideLegend = Just True
+          , theme = Nothing
+          , dataset = Nothing
+          , eager = Just True
+          , _projectId = Just pid
+          , expandBtnFn = Just expandBtn
+          }
+  when (length metricList > 19)
+    $ a_ [hxTrigger_ "intersect once", hxSwap_ "outerHTML", hxGet_ nextUrl] pass
 
 
 dataPointsPage :: Projects.ProjectId -> V.Vector Telemetry.MetricDataPoint -> Html ()

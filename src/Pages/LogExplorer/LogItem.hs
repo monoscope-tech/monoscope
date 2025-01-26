@@ -152,17 +152,17 @@ expandAPIlogItem' pid req modal = do
           button_ [class_ "a-tab whitespace-nowrap px-3 py-2 border-b border-b-slate-200 w-max", onclick_ "navigatable(this, '#path_params_json', '#req-tabs-container', 't-tab-active')"] "Path Params"
           button_ [class_ "border-b border-b-slate-200 w-full"] pass
 
-        div_ [class_ "a-tab-content m-4  rounded-xl p-2 border border-slate-200", id_ "req_body_json"] $
-          jsonValueToHtmlTree req.requestBody
+        div_ [class_ "a-tab-content m-4  rounded-xl p-2 border border-slate-200", id_ "req_body_json"]
+          $ jsonValueToHtmlTree req.requestBody
 
-        div_ [class_ "a-tab-content m-4 hidden rounded-xl p-2 border border-slate-200 break-all", id_ "req_headers_json"] $
-          jsonValueToHtmlTree req.requestHeaders
+        div_ [class_ "a-tab-content m-4 hidden rounded-xl p-2 border border-slate-200 break-all", id_ "req_headers_json"]
+          $ jsonValueToHtmlTree req.requestHeaders
 
-        div_ [class_ "a-tab-content m-4 hidden rounded-xl p-2 border border-slate-200", id_ "query_params_json"] $
-          jsonValueToHtmlTree req.queryParams
+        div_ [class_ "a-tab-content m-4 hidden rounded-xl p-2 border border-slate-200", id_ "query_params_json"]
+          $ jsonValueToHtmlTree req.queryParams
 
-        div_ [class_ "a-tab-content m-4 hidden rounded-xl p-2 border border-slate-200", id_ "path_params_json"] $
-          jsonValueToHtmlTree req.pathParams
+        div_ [class_ "a-tab-content m-4 hidden rounded-xl p-2 border border-slate-200", id_ "path_params_json"]
+          $ jsonValueToHtmlTree req.pathParams
 
     -- response details
     div_ [class_ "mt-8", id_ "res-tabs-container"] do
@@ -173,11 +173,11 @@ expandAPIlogItem' pid req modal = do
           button_ [class_ "a-tab px-3 border-b border-b-slate-200 py-2 w-max", role_ "tab", onclick_ "navigatable(this, '#res_headers_json', '#res-tabs-container', 't-tab-active')"] "Headers"
           button_ [class_ "border-b border-b-slate-200 w-full"] pass
 
-        div_ [class_ "a-tab-content m-4 rounded-xl p-2 border border-slate-200", id_ "res_body_json"] $
-          jsonValueToHtmlTree req.responseBody
+        div_ [class_ "a-tab-content m-4 rounded-xl p-2 border border-slate-200", id_ "res_body_json"]
+          $ jsonValueToHtmlTree req.responseBody
 
-        div_ [class_ "a-tab-content m-4 hidden rounded-xl p-2 border border-slate-200", id_ "res_headers_json"] $
-          jsonValueToHtmlTree req.responseHeaders
+        div_ [class_ "a-tab-content m-4 hidden rounded-xl p-2 border border-slate-200", id_ "res_headers_json"]
+          $ jsonValueToHtmlTree req.responseHeaders
 
 
 apiLogItemH :: Projects.ProjectId -> UUID.UUID -> UTCTime -> Maybe Text -> ATAuthCtx (RespHeaders ApiLogItem)
@@ -236,8 +236,8 @@ apiLogItemView pid logId req expandItemPath source = do
         _ -> Nothing
   let logItemPathDetailed = if source == "spans" then "/p/" <> pid.toText <> "/traces/" <> fromMaybe "" trId else expandItemPath <> "/detailed?source=" <> source
   div_ [class_ "flex items-center gap-2"] do
-    when (source /= "logs") $
-      label_
+    when (source /= "logs")
+      $ label_
         [ class_ "btn btn-sm bg-base-100"
         , Lucid.for_ "global-data-drawer"
         , term
@@ -251,8 +251,8 @@ apiLogItemView pid logId req expandItemPath source = do
         ("Expand" >> faSprite_ "expand" "regular" "h-3 w-3")
 
     let reqJson = decodeUtf8 $ AE.encode req
-    when (source /= "logs" && source /= "spans") $
-      button_
+    when (source /= "logs" && source /= "spans")
+      $ button_
         [ class_ "btn btn-sm bg-base-100"
         , term "data-reqJson" reqJson
         , onclick_ "window.buildCurlRequest(event)"
@@ -271,8 +271,8 @@ apiLogItemView pid logId req expandItemPath source = do
 -- Function to selectively convert RequestDumpLogItem to JSON
 selectiveReqToJson :: RequestDumps.RequestDumpLogItem -> AE.Value
 selectiveReqToJson req =
-  AE.object $
-    concat @[]
+  AE.object
+    $ concat @[]
       [ ["created_at" AE..= req.createdAt]
       , ["duration_ns" AE..= req.durationNs]
       , ["errors" AE..= req.errors]
@@ -298,8 +298,8 @@ selectiveReqToJson req =
 
 selectiveSpanToJson :: Telemetry.SpanRecord -> AE.Value
 selectiveSpanToJson sp =
-  AE.object $
-    concat @[]
+  AE.object
+    $ concat @[]
       [ ["timestamp" AE..= sp.timestamp]
       , ["span_id" AE..= sp.spanId]
       , ["span_name" AE..= sp.spanName]
