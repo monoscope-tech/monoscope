@@ -7,9 +7,14 @@ import Models.Projects.Projects qualified as Projects
 import Pages.BodyWrapper (PageCtx (..))
 import Pages.Dashboard
 import Pkg.TestUtils
+import Servant.Server qualified as ServantS
+
 import ProcessMessage (processRequestMessages)
 import Relude
 import Relude.Unsafe qualified as Unsafe
+import Servant qualified
+
+import System.Types
 import Test.Hspec
 
 
@@ -26,8 +31,8 @@ spec = aroundAll withTestResources do
       let reqMsg1 = Unsafe.fromJust $ convert $ testRequestMsgs.reqMsg1 nowTxt
       let reqMsg2 = Unsafe.fromJust $ convert $ testRequestMsgs.reqMsg2 nowTxt
       let msgs =
-            concat
-              $ replicate
+            concat $
+              replicate
                 100
                 [ ("m1", reqMsg1)
                 , ("m2", reqMsg2)
@@ -37,7 +42,13 @@ spec = aroundAll withTestResources do
       _ <- withPool trPool $ refreshMaterializedView "apis.project_request_stats"
 
       (PageCtx _ dat) <-
-        toServantResponse trATCtx trSessAndHeader trLogger $ dashboardGetH testPid Nothing Nothing Nothing
+        dashboardGetH testPid Nothing Nothing Nothing
+          & atAuthToBase trSessAndHeader
+          & effToServantHandlerTest trATCtx trLogger
+          & ServantS.runHandler
+          <&> Servant.getResponse
+          . fromRightShow
+
       let (pid, _paramInput, _currTime, projectRequestStats, newEndpoints, _reqLatenciesRolledByStepsJ, _, (_fromD, _toD), freeTierExceeded, hasRequests) = dat.unwrap
 
       testPid `shouldBe` pid
