@@ -44,8 +44,8 @@ data ManageMembersForm = ManageMembersForm
   deriving anyclass (FromForm)
 
 
-manageMembersPostH :: Projects.ProjectId -> ManageMembersForm -> ATAuthCtx (RespHeaders ManageMembers)
-manageMembersPostH pid form = do
+manageMembersPostH :: Projects.ProjectId -> Maybe Text -> ManageMembersForm -> ATAuthCtx (RespHeaders ManageMembers)
+manageMembersPostH pid onboardingM form = do
   (sess, project) <- Sessions.sessionAndProject pid
   appCtx <- ask @AuthContext
   let currUserId = sess.persistentSession.userId
@@ -111,8 +111,13 @@ manageMembersPostH pid form = do
     $ ProjectMembers.softDeleteProjectMembers deletedUAndP
 
   projMembersLatest <- dbtToEff $ ProjectMembers.selectActiveProjectMembers pid
-  addSuccessToast "Updated Members List Successfully" Nothing
-  addRespHeaders $ ManageMembersPost projMembersLatest
+  if isJust onboardingM
+    then do
+      redirectCS $ "/p/" <> pid.toText <> "/onboarding?step=Integration"
+      addRespHeaders $ ManageMembersPost projMembersLatest
+    else do
+      addSuccessToast "Updated Members List Successfully" Nothing
+      addRespHeaders $ ManageMembersPost projMembersLatest
 
 
 manageMembersGetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders ManageMembers)

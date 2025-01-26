@@ -100,9 +100,9 @@ data WidgetAxis = WidgetAxis
 -- use either index or the xxhash as id
 widget_ :: Widget -> Html ()
 widget_ w =
-  div_ ([class_ "grid-stack-item h-full"] <> attrs) $
-    div_ [class_ "grid-stack-item-content !overflow-hidden h-full"] $
-      renderChart (w & #id .~ (slugify <$> w.title))
+  div_ ([class_ "grid-stack-item h-full"] <> attrs)
+    $ div_ [class_ "grid-stack-item-content !overflow-hidden h-full"]
+    $ renderChart (w & #id .~ (slugify <$> w.title))
   where
     layoutFields = [("x", (.x)), ("y", (.y)), ("w", (.w)), ("h", (.h))]
     attrs = concat [maybe [] (\v -> [term ("gs-" <> name) (show v)]) (w.layout >>= layoutField) | (name, layoutField) <- layoutFields]
@@ -116,8 +116,8 @@ widget_ w =
         div_ [class_ "leading-none flex justify-between items-center"] do
           div_ [class_ "inline-flex gap-3 items-center"] do
             span_ [] $ toHtml $ maybeToMonoid widget.title
-            span_ [class_ $ "bg-slate-200 px-2 py-1 rounded-3xl " <> if hasValue then "" else "hidden", id_ $ chartId <> "Value"] $
-              whenJust (widget.dataset >>= (.value)) (\x -> toHtml @String $ Ft.fmt $ Ft.commaizeF $ round x)
+            span_ [class_ $ "bg-slate-200 px-2 py-1 rounded-3xl " <> if hasValue then "" else "hidden", id_ $ chartId <> "Value"]
+              $ whenJust (widget.dataset >>= (.value)) (\x -> toHtml @String $ Ft.fmt $ Ft.commaizeF $ round x)
             span_ [class_ "text-slate-400 widget-subtitle text-sm", id_ $ chartId <> "Subtitle"] $ toHtml $ maybeToMonoid rateM
           button_
             [ term "_" $ fromMaybe "" widget.expandBtnFn

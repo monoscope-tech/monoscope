@@ -11,6 +11,7 @@ module Models.Tests.Testing (
   CollectionSteps (..),
   CollectionVariablesItem (..),
   CollectionVariables (..),
+  getCollectionByTitle,
   CollectionStepUpdateForm (..),
   stepDataMethod,
   updateCollection,
@@ -374,14 +375,14 @@ updateCollection pid cid colF = execute Update q params
     notifyAfterCheck = colF.notifyAfterCheck == Just "on"
     notifyAfter = fromMaybe "6hours" colF.notifyAfter
     stopAfter = fromMaybe "0" colF.stopAfter
-    scheduleTxt = fromMaybe "" colF.scheduleNumber <> " " <> fromMaybe "" colF.scheduleNumberUnit
+    scheduleTxt = fromMaybe "1" colF.scheduleNumber <> " " <> fromMaybe "hour" colF.scheduleNumberUnit
     title = colF.title
     description = fromMaybe "" colF.description
     scheduleInterval = scheduleTxt
-    sv = colF.alertSeverity
-    msg = colF.alertMessage
-    sub = colF.alertSubject
-    tags = colF.tags
+    sv = fromMaybe "INFO" colF.alertSeverity
+    msg = fromMaybe "" colF.alertMessage
+    sub = fromMaybe "" colF.alertSubject
+    tags = fromMaybe [] colF.tags
     collectionSteps = colF.stepsData
     params =
       ( title
@@ -420,6 +421,19 @@ getCollectionById id' = queryOne Select q (Only id')
                   collection_variables, alert_severity, alert_message, alert_subject, notify_after,
                   notify_after_check, stop_after, stop_after_check
                   FROM tests.collections t WHERE id=?|]
+getCollectionByTitle :: Projects.ProjectId -> Text -> DBT IO (Maybe Collection)
+getCollectionByTitle pid title = queryOne Select q (pid, title)
+  where
+    q =
+      [sql| SELECT id, created_at, updated_at, last_run, project_id, title, description, config,
+                  CASE
+                      WHEN EXTRACT(DAY FROM schedule) > 0 THEN CONCAT(EXTRACT(DAY FROM schedule)::TEXT, ' days')
+                      WHEN EXTRACT(HOUR FROM schedule) > 0 THEN CONCAT(EXTRACT(HOUR FROM schedule)::TEXT, ' hours')
+                      ELSE CONCAT(EXTRACT(MINUTE FROM schedule)::TEXT, ' minutes')
+                  END as schedule, is_scheduled, collection_steps, last_run_response, last_run_passed, last_run_failed, tags,
+                  collection_variables, alert_severity, alert_message, alert_subject, notify_after,
+                  notify_after_check, stop_after, stop_after_check
+                  FROM tests.collections t WHERE project_id=? AND title=?|]
 
 
 getCollections :: Projects.ProjectId -> TabStatus -> DBT IO (V.Vector CollectionListItem)

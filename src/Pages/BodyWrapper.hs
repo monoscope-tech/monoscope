@@ -23,8 +23,8 @@ import Utils (faSprite_)
 menu :: Projects.ProjectId -> [(Text, Text, Text)]
 menu pid =
   [ ("Dashboard", "/p/" <> pid.toText <> "/", "qrcode")
-  -- , ("Dashboards", "/p/" <> pid.toText <> "/dashboards", "dashboard")
-  , ("Explorer", "/p/" <> pid.toText <> "/log_explorer", "explore")
+  , -- , ("Dashboards", "/p/" <> pid.toText <> "/dashboards", "dashboard")
+    ("Explorer", "/p/" <> pid.toText <> "/log_explorer", "explore")
   , ("API Catalog", "/p/" <> pid.toText <> "/api_catalog", "swap")
   , ("Changes & Errors", "/p/" <> pid.toText <> "/anomalies", "bug")
   , ("Monitors & Alerts", "/p/" <> pid.toText <> "/monitors", "list-check")
@@ -82,15 +82,16 @@ bodyWrapper BWConfig{sessM, currProject, prePageTitle, pageTitle, menuItem, hasI
         link_ [rel_ "mask-icon", href_ "/public/safari-pinned-tab.svg", term "color" "#5bbad5"]
         meta_ [name_ "msapplication-TileColor", content_ "#da532c"]
         meta_ [name_ "theme-color", content_ "#ffffff"]
-        link_ [rel_ "stylesheet", type_ "text/css", href_ $(hashAssetFile "/public/assets/css/tailwind.min.css")]
         link_ [rel_ "stylesheet", type_ "text/css", href_ $(hashAssetFile "/public/assets/css/thirdparty/notyf3.min.css")]
         link_ [rel_ "preconnect", href_ "https://rsms.me/"]
         link_ [rel_ "stylesheet", href_ "https://rsms.me/inter/inter.css"]
-        link_ [rel_ "stylesheet", href_ "https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/atom-one-dark.min.css"]
+        -- link_ [rel_ "stylesheet", href_ "https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/atom-one-dark.min.css"]
+        link_ [rel_ "stylesheet", href_ "https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/atom-one-light.min.css"]
         link_ [rel_ "stylesheet", href_ "https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.63.0/codemirror.min.css"]
         link_ [rel_ "stylesheet", href_ "https://cdnjs.cloudflare.com/ajax/libs/codemirror/6.65.7/theme/elegant.min.css"]
         link_ [rel_ "stylesheet", href_ "https://cdn.jsdelivr.net/npm/@yaireo/tagify/dist/tagify.css", type_ "text/css"]
         link_ [rel_ "stylesheet", href_ $(hashAssetFile "/public/assets/deps/gridstack/gridstack.min.css")]
+        link_ [rel_ "stylesheet", type_ "text/css", href_ $(hashAssetFile "/public/assets/css/tailwind.min.css")]
 
         -- SCRIPTS
         script_ [src_ $(hashAssetFile "/public/assets/deps/tagify/tagify.min.js")] ("" :: Text)
@@ -132,6 +133,45 @@ bodyWrapper BWConfig{sessM, currProject, prePageTitle, pageTitle, menuItem, hasI
       a=t.getElementsByTagName(n)[0],a.parentNode.insertBefore(u,a))}(window,document,'script');
       twq('config','om5gt');
       |]
+        script_ [src_ "/public/assets/js/thirdparty/jsyaml.min.js", crossorigin_ "true"] ("" :: Text)
+        script_ [src_ "/public/assets/testeditor-utils.js"] ("" :: Text)
+        script_ [type_ "module", src_ "/public/assets/steps-editor.js"] ("" :: Text)
+        script_ [type_ "module", src_ "/public/assets/steps-assertions.js"] ("" :: Text)
+        script_
+          [text|
+
+            function codeToggle(e) {
+              if(e.target.checked) {
+                   window.updateEditorVal()
+                }
+            }
+            function addToAssertions(event, assertion, operation) {
+                const parent = event.target.closest(".tab-content")
+                const step = Number(parent.getAttribute('data-step'));
+                const target = event.target.parentNode.parentNode.parentNode
+                const path = target.getAttribute('data-field-path');
+                const value = target.getAttribute('data-field-value');
+                let expression = "$.resp.json." + path
+                if(operation) {
+                  expression +=  ' ' + operation + ' ' + value;
+                  }
+                window.updateStepAssertions(assertion, expression, step);
+            }
+
+         function saveStepData()  {
+           const data = document.getElementById('stepsEditor').collectionSteps
+           const parsedData = validateYaml(data)
+           if(parsedData === undefined) {
+              return undefined
+            }
+           return parsedData;
+          }
+
+          function getTags() {
+            const tag = window.tagify.value
+            return tag.map(tag => tag.value);
+          }
+        |]
 
         script_
           [raw|
@@ -233,7 +273,8 @@ bodyWrapper BWConfig{sessM, currProject, prePageTitle, pageTitle, menuItem, hasI
       case sessM of
         Nothing -> do
           section_ [class_ "flex flex-col grow  h-screen overflow-y-hidden"]
-            $ section_ [class_ "flex-1 overflow-y-auto"] $ child
+            $ section_ [class_ "flex-1 overflow-y-auto"]
+            $ child
         Just sess ->
           let currUser = sess.persistentSession.user.getUser
               sideNav' = currProject & maybe "" \project -> sideNav sess project pageTitle menuItem hasIntegrated
@@ -381,7 +422,8 @@ sideNav sess project pageTitle menuItem hasIntegrated = aside_ [class_ "border-r
       , term "data-tippy-content" "Documentation"
       , href_ "https://apitoolkit.io/docs/"
       ]
-        $ span_ [class_ "p-3 rounded-full bg-blue-100 text-brand leading-none"] (faSprite_ "circle-question" "regular" "h-4 w-4") >> span_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:block"] "Documentation"
+      $ span_ [class_ "p-3 rounded-full bg-blue-100 text-brand leading-none"] (faSprite_ "circle-question" "regular" "h-4 w-4")
+      >> span_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:block"] "Documentation"
     a_
       [ class_ "hover:bg-blue-50"
       , term "data-tippy-placement" "right"
@@ -389,7 +431,8 @@ sideNav sess project pageTitle menuItem hasIntegrated = aside_ [class_ "border-r
       , href_ "/logout"
       , [__| on click js posthog.reset(); end |]
       ]
-        $ span_ [class_ "p-3 rounded-full bg-red-100 text-red-600 leading-none"] (faSprite_ "arrow-right-from-bracket" "regular" "h-4 w-4") >> span_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:block"] "Logout"
+      $ span_ [class_ "p-3 rounded-full bg-red-100 text-red-600 leading-none"] (faSprite_ "arrow-right-from-bracket" "regular" "h-4 w-4")
+      >> span_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:block"] "Logout"
 
 
 navbar :: Maybe Projects.Project -> [(Text, Text, Text)] -> Users.User -> Maybe Text -> Text -> Maybe Text -> Maybe (Html ()) -> Maybe (Html ()) -> Html ()

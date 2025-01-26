@@ -46,6 +46,11 @@ html,
 body {
   @apply overscroll-none bg-slate-25;
   --brand-color: #0068ff;
+  --brand-color-light: #0090f0;
+  --tags-border-color:rgba(0, 13, 77, 0.45);
+  --tags-hover-border-color: rgba(0, 13, 77, 0.45);
+  --chkbg: var(--brand-color)
+
 }
 
 .c-scroll::-webkit-scrollbar {
@@ -158,6 +163,10 @@ body {
   display: flex;
 }
 
+.btn-secondary {
+  @apply text-[var(--brand-color)] border border-[var(--brand-color)] rounded-lg font-semibold;
+}
+
 .htmx-request.survey-indicator + button {
   display: none;
 }
@@ -197,7 +206,7 @@ body {
   @apply text-[#000933]/60;
 }
 .bg-weak {
-  @apply bg-[#00157f]/5;;
+  @apply bg-[#00157f]/5;
 }
 .text-brand {
   @apply text-[var(--brand-color)];
@@ -205,11 +214,15 @@ body {
 .bg-brand {
   @apply bg-[var(--brand-color)];
 }
+.btn-primary {
+  @apply bg-[var(--brand-color)] hover:bg-[var(--brand-color-light)] text-white;
+}
 .input,
 .select,
 .checkbox,
 .textarea {
   @apply shadow-none;
+  --chkbg: var(--brand-color);
   border-color: rgba(0, 13, 77, 0.45);
 }
 .stroke-strong {
@@ -417,6 +430,13 @@ body {
 
 .t-tab-active {
   @apply font-bold border-[var(--brand-color)] text-[var(--brand-color)];
+}
+.t-tab-box-active {
+  @apply tab-active;
+  border: 1px solid rgba(0, 13, 77, 0.45);
+  color: #000626;
+
+
 }
 
 .tab:is(input[type='radio']) {

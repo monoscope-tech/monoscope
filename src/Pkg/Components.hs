@@ -6,6 +6,8 @@ module Pkg.Components (
   modal_,
   dropDownMenu_,
   codeEmphasis,
+  featureItem,
+  frameworkItem,
   withEmphasisedText,
   TabFilter (..),
   TabFilterOpt (..),
@@ -14,10 +16,12 @@ module Pkg.Components (
 )
 where
 
+import Data.Text qualified as T
 import Lucid
 import Lucid.Base
 import Lucid.Hyperscript
 import Lucid.Svg (d_, fill_, path_, viewBox_)
+import NeatInterpolation (text)
 import Pkg.Components.ItemsList
 import Pkg.Components.Modals (dropDownMenu_, modal_)
 import Pkg.Components.TimePicker
@@ -52,7 +56,7 @@ navBar = do
 bashCommand :: Text -> Html ()
 bashCommand command = do
   div_ [class_ "w-full"] do
-    div_ [class_ "w-full rounded-lg bg-slate-800 px-4 py-2 text-gray-300 flex gap-2 items-start"] do
+    div_ [class_ "w-full rounded-lg bg-slate-100 px-4 py-2 text-slate-700 flex gap-2 items-start"] do
       span_ [class_ "text-gray-400"] "$"
       span_ $ toHtml command
       button_
@@ -71,15 +75,15 @@ bashCommand command = do
 
 codeExample :: Text -> Html ()
 codeExample code = do
-  div_ [class_ "relative overflow-hidden flex bg-slate-800 sm:rounded-xl"] do
+  div_ [class_ "relative overflow-hidden flex bg-slate-100 border border-weak rounded-xl"] do
     div_ [class_ "relative w-full flex flex-col"] do
-      div_ [class_ "flex-none border-b border-slate-500/30 flex justify-between items-center gap-4"] do
+      div_ [class_ "flex-none border-b border-weak flex justify-between items-center gap-4"] do
         div_ [class_ "flex items-center h-8 space-x-1.5 px-3"] do
-          div_ [class_ "w-2.5 h-2.5 bg-slate-600 rounded-full"] ""
-          div_ [class_ "w-2.5 h-2.5 bg-slate-600 rounded-full"] ""
-          div_ [class_ "w-2.5 h-2.5 bg-slate-600 rounded-full"] ""
+          div_ [class_ "w-2.5 h-2.5 bg-red-500 rounded-full"] ""
+          div_ [class_ "w-2.5 h-2.5 bg-yellow-500 rounded-full"] ""
+          div_ [class_ "w-2.5 h-2.5 bg-green-500 rounded-full"] ""
         button_
-          [ class_ "text-gray-500  font-bold mr-6"
+          [ class_ "text-gray-500 font-bold mr-6"
           , term "data-code" code
           , [__|
               on click
@@ -90,13 +94,28 @@ codeExample code = do
            |]
           ]
           $ faSprite_ "copy" "solid" "h-4 w-4 inline-block"
-      div_ [class_ "relative flex-auto flex flex-col"] do
+      div_ [class_ "relative flex-auto flex flex-col bg-slate-100"] do
         pre_ [class_ "flex leading-snug"] do
-          code_ [class_ "flex-auto relative block text-slate-50 py-4 px-4 overflow-auto hljs atom-one-dark"] $ toHtml code
+          code_ [class_ "flex-auto relative block text-strong py-4 px-4 overflow-auto hljs atom-one-light"] $ toHtml code
 
 
 codeEmphasis :: Text -> Html ()
 codeEmphasis code = span_ [class_ "text-red-500"] $ toHtml code
+
+
+featureItem :: Text -> Html ()
+featureItem title =
+  div_ [class_ "h-8 px-3 rounded-lg flex justify-center items-center gap-2 stroke-strong"] $ do
+    let featureId = T.replace " " "" title
+    input_ [type_ "checkbox", class_ "checkbox checkbox-sm shrink-0", style_ "--chkbg:#000626E5", id_ featureId]
+    label_ [class_ "text-center text-[#000833]/60 text-sm font-semibold", Lucid.for_ featureId] $ toHtml title
+
+
+frameworkItem :: Text -> Text -> Html ()
+frameworkItem lang title =
+  button_ [class_ "h-8 px-3 rounded-lg flex justify-center items-center gap-2 stroke-strong", term "_" [text|on click add .hidden to <.$lang-guide/> then remove .hidden from $title|]] $ do
+    input_ [type_ "radio", class_ "radio radio-sm hrink-0", name_ "frameworks", style_ "--chkbg:#000626E5", id_ title]
+    label_ [class_ "text-center text-[#000833]/60 text-sm font-semibold", Lucid.for_ title] $ toHtml title
 
 
 withEmphasisedText :: [(Text, Bool)] -> Html ()

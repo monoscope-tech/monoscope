@@ -8,7 +8,10 @@ module Pages.Projects.CreateProject (
   createProjectFormV,
   createProjectFormToModel,
   CreateProjectFormError (..),
+  pricingUpdateH,
+  PricingUpdateForm (..),
   projectSettingsGetH,
+  projectOnboarding,
   deleteProjectGetH,
   CreateProject (..),
 )
@@ -29,6 +32,7 @@ import Data.List.Extra (cons)
 import Data.List.Unique (uniq)
 import Data.Pool (withResource)
 import Data.Text qualified as T
+import Data.UUID qualified as UUID
 import Data.Valor (Valor, check1, failIf, validateM)
 import Data.Valor qualified as Valor
 import Data.Vector qualified as V
@@ -48,12 +52,16 @@ import Models.Users.Users qualified as Users
 import NeatInterpolation (text)
 import OddJobs.Job (createJob)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
+import Pages.Components (paymentPlanPicker)
 import Pkg.ConvertKit qualified as ConvertKit
 import Relude hiding (ask, asks)
 import Relude.Unsafe qualified as Unsafe
+import Servant (addHeader)
+import Servant.API (Header)
+import Servant.API.ResponseHeaders (Headers)
 import System.Config
 import System.Types (ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders, addSuccessToast, redirectCS)
-import Utils (faSprite_, isDemoAndNotSudo, lemonSqueezyUrls, lemonSqueezyUrlsAnnual)
+import Utils (faSprite_, insertIfNotExist, isDemoAndNotSudo, redirect)
 import Web.FormUrlEncoded (FromForm)
 
 
@@ -62,11 +70,7 @@ data CreateProjectForm = CreateProjectForm
   , description :: Text
   , emails :: [Text]
   , permissions :: [ProjectMembers.Permissions]
-  , isUpdate :: Bool
-  , projectId :: Text
-  , paymentPlan :: Text
   , timeZone :: Text
-  , orderId :: Maybe Text
   }
   deriving stock (Eq, Show, Generic)
   deriving anyclass (FromForm, Default)
@@ -80,12 +84,14 @@ data CreateProjectFormError = CreateProjectFormError
   deriving anyclass (Default)
 
 
-createProjectFormToModel :: Projects.ProjectId -> Maybe Text -> Maybe Text -> CreateProjectForm -> Projects.CreateProject
-createProjectFormToModel pid subId firstSubId CreateProjectForm{..} =
+createProjectFormToModel :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Text -> CreateProjectForm -> Projects.CreateProject
+createProjectFormToModel pid subId firstSubId orderId paymentPlan CreateProjectForm{..} =
   Projects.CreateProject
     { id = pid
     , subId = subId
     , firstSubItemId = firstSubId
+    , paymentPlan = paymentPlan
+    , orderId = orderId
     , ..
     }
 
@@ -97,10 +103,36 @@ createProjectFormV =
     <*> check1 description Valor.pass
 
 
+projectOnboarding :: ATAuthCtx (Headers '[Header "Location" Text] ((PageCtx (Html ()))))
+projectOnboarding = do
+  appCtx <- ask @AuthContext
+  let envCfg = appCtx.config
+  sess <- Sessions.getSession
+  projects <- dbtToEff $ Projects.selectProjectsForUser sess.persistentSession.userId
+  let projectM = V.find (\pr -> pr.paymentPlan == "ONBOARDING") projects
+      bwconf = (def :: BWConfig){sessM = Just sess, currProject = Nothing, pageTitle = "New Project"}
+  case projectM of
+    Just p -> do
+      let h = "/p/" <> p.id.toText <> "/onboarding"
+      pure $ addHeader h $ PageCtx bwconf ""
+    _ -> do
+      pid <- Projects.ProjectId <$> UUID.genUUID
+      let pr = Projects.CreateProject{id = pid, title = "Onboarding Project", description = "", paymentPlan = "ONBOARDING", timeZone = "", subId = Nothing, firstSubItemId = Nothing, orderId = Nothing}
+      dbtToEff $ Projects.insertProject pr
+      projectKeyUUID <- UUID.genUUID
+      let encryptedKeyB64 = B64.extractBase64 $ B64.encodeBase64 $ ProjectApiKeys.encryptAPIKey (encodeUtf8 envCfg.apiKeyEncryptionSecretKey) (encodeUtf8 $ UUID.toText projectKeyUUID)
+      pApiKey <- ProjectApiKeys.newProjectApiKeys pid projectKeyUUID "Default API Key" encryptedKeyB64
+      dbtToEff $ ProjectApiKeys.insertProjectApiKey pApiKey
+      let projectMember = ProjectMembers.CreateProjectMembers pid sess.user.id Projects.PAdmin
+      _ <- dbtToEff $ ProjectMembers.insertProjectMembers [projectMember]
+      let h = "/p/" <> pid.toText <> "/onboarding"
+      pure $ addHeader h $ PageCtx bwconf ""
+
+
 ----------------------------------------------------------------------------------------------------------
 -- createProjectGetH is the handler for the create projects page
-createProjectGetH :: ATAuthCtx (RespHeaders CreateProject)
-createProjectGetH = do
+createProjectGetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders CreateProject)
+createProjectGetH pid = do
   appCtx <- ask @AuthContext
   sess <- Sessions.getSession
   let bwconf =
@@ -108,16 +140,16 @@ createProjectGetH = do
           { sessM = Just sess
           , pageTitle = "Create Project"
           }
-  addRespHeaders $ CreateProject $ PageCtx bwconf (sess.persistentSession, appCtx.config, False, def @CreateProjectForm, def @CreateProjectFormError)
+  addRespHeaders $ CreateProject $ PageCtx bwconf (sess.persistentSession, pid, appCtx.config, False, def @CreateProjectForm, def @CreateProjectFormError)
 
 
 data CreateProject
-  = CreateProject (PageCtx (Sessions.PersistentSession, EnvConfig, Bool, CreateProjectForm, CreateProjectFormError))
+  = CreateProject (PageCtx (Sessions.PersistentSession, Projects.ProjectId, EnvConfig, Bool, CreateProjectForm, CreateProjectFormError))
   | PostNoContent Text
   | ProjectPost
       { sess :: Sessions.PersistentSession
+      , pid :: Projects.ProjectId
       , env :: EnvConfig
-      , isUpdate :: Bool
       , form :: CreateProjectForm
       , formError :: CreateProjectFormError
       }
@@ -125,9 +157,9 @@ data CreateProject
 
 
 instance ToHtml CreateProject where
-  toHtml (CreateProject (PageCtx bwconf (sess, config, isUpdate, prf, pref))) = toHtml $ PageCtx bwconf $ createProjectBody sess config isUpdate prf pref
+  toHtml (CreateProject (PageCtx bwconf (sess, pid, config, isUpdate, prf, pref))) = toHtml $ PageCtx bwconf $ createProjectBody sess pid config prf pref
   toHtml (PostNoContent message) = span_ [class_ ""] $ toHtml message
-  toHtml (ProjectPost sess config isUpdate prf pref) = toHtml $ createProjectBody sess config isUpdate prf pref
+  toHtml (ProjectPost sess pid config prf pref) = toHtml $ createProjectBody sess pid config prf pref
   toHtmlRaw = toHtml
 
 
@@ -142,15 +174,11 @@ projectSettingsGetH pid = do
           , description = project.description
           , emails = []
           , permissions = []
-          , isUpdate = True
-          , projectId = pid.toText
-          , paymentPlan = project.paymentPlan
           , timeZone = project.timeZone
-          , orderId = project.orderId
           }
 
   let bwconf = (def :: BWConfig){sessM = Just sess, currProject = Just project, pageTitle = "Settings"}
-  addRespHeaders $ CreateProject $ PageCtx bwconf (sess.persistentSession, appCtx.config, True, createProj, def @CreateProjectFormError)
+  addRespHeaders $ CreateProject $ PageCtx bwconf (sess.persistentSession, pid, appCtx.config, True, createProj, def @CreateProjectFormError)
 
 
 ----------------------------------------------------------------------------------------------------------
@@ -174,14 +202,14 @@ deleteProjectGetH pid = do
 ----------------------------------------------------------------------------------------------------------
 -- createProjectPostH is the handler for the create projects page form handling.
 -- It processes post requests and is expected to return a redirect header and a hyperscript event trigger header.
-createProjectPostH :: CreateProjectForm -> ATAuthCtx (RespHeaders CreateProject)
-createProjectPostH createP = do
+createProjectPostH :: Projects.ProjectId -> CreateProjectForm -> ATAuthCtx (RespHeaders CreateProject)
+createProjectPostH pid createP = do
   sess <- Sessions.getSession
   appCtx <- ask @AuthContext
   validationRes <- validateM createProjectFormV createP
   case validationRes of
-    Right cpe -> addRespHeaders $ ProjectPost sess.persistentSession appCtx.config createP.isUpdate createP cpe
-    Left cp -> processProjectPostForm cp
+    Right cpe -> addRespHeaders $ ProjectPost sess.persistentSession pid appCtx.config createP cpe
+    Left cp -> processProjectPostForm cp pid
 
 
 data FirstSubItem = FirstSubItem
@@ -192,8 +220,9 @@ data FirstSubItem = FirstSubItem
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] FirstSubItem
 
 
-newtype Attributes = Attributes
+data Attributes = Attributes
   { firstSubscriptionItem :: FirstSubItem
+  , productName :: Text
   }
   deriving stock (Show, Generic)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] Attributes
@@ -232,116 +261,135 @@ getSubscriptionId orderId apiKey = do
           return $ Just res
         Left err -> do
           return Nothing
+data PricingUpdateForm = PricingUpdateForm
+  { orderId :: Text
+  }
+  deriving stock (Eq, Show, Generic)
+  deriving anyclass (FromForm, Default)
 
 
-processProjectPostForm :: Valor.Valid CreateProjectForm -> ATAuthCtx (RespHeaders CreateProject)
-processProjectPostForm cpRaw = do
+pricingUpdateH :: Projects.ProjectId -> PricingUpdateForm -> ATAuthCtx (RespHeaders (Html ()))
+pricingUpdateH pid PricingUpdateForm{orderId} = do
+  (sess, project) <- Sessions.sessionAndProject pid
+  appCtx <- ask @AuthContext
+  let envCfg = appCtx.config
+      apiKey = envCfg.lemonSqueezyApiKey
+  subRes <- getSubscriptionId (Just orderId) apiKey
+  case subRes of
+    Just sub
+      | not (null sub.dataVal) -> do
+          let target = sub.dataVal Unsafe.!! 0
+              subId = show target.attributes.firstSubscriptionItem.subscriptionId
+              firstSubId = show target.attributes.firstSubscriptionItem.id
+              productName = target.attributes.productName
+              steps = project.onboardingStepsCompleted
+              newStepsComp = insertIfNotExist "Pricing" steps
+          v <- dbtToEff $ Projects.updateProjectPricing pid productName subId firstSubId orderId newStepsComp
+          redirectCS $ "/p/" <> pid.toText <> "/"
+          addRespHeaders ""
+    _ -> do
+      addErrorToast "Something went wrong while fetching subscription id" Nothing
+      addRespHeaders ""
+
+
+processProjectPostForm :: Valor.Valid CreateProjectForm -> Projects.ProjectId -> ATAuthCtx (RespHeaders CreateProject)
+processProjectPostForm cpRaw pid = do
   appCtx <- ask @AuthContext
   let envCfg = appCtx.config
   sess <- Sessions.getSession
 
   let cp = Valor.unValid cpRaw
-  pid <- maybe (Projects.ProjectId <$> UUID.genUUID) pure (Projects.projectIdFromText cp.projectId)
-  if cp.isUpdate
+  if isDemoAndNotSudo pid sess.user.isSudo
     then do
-      if isDemoAndNotSudo pid sess.user.isSudo
-        then do
-          addErrorToast "Can't perform this action on the demo project" Nothing
-          addRespHeaders $ ProjectPost sess.persistentSession envCfg cp.isUpdate cp (def @CreateProjectFormError)
-        else do
-          project <- dbtToEff $ Projects.projectById pid
-          case project of
-            Just p -> do
-              let checkPaymentPlan = cp.paymentPlan `elem` ["UsageBased", "GraduatedPricing"] && cp.paymentPlan /= p.paymentPlan
-              (subId, firstSubItemId) <-
-                if checkPaymentPlan
-                  then
-                    getSubscriptionId cp.orderId envCfg.lemonSqueezyApiKey >>= \case
-                      Just sub
-                        | not (null sub.dataVal) ->
-                            let target = sub.dataVal Unsafe.!! 0
-                             in pure (Just (show target.attributes.firstSubscriptionItem.subscriptionId), Just (show target.attributes.firstSubscriptionItem.id))
-                      _ -> pure (Nothing, Nothing)
-                  else pure (p.subId, p.firstSubItemId)
-              case (if checkPaymentPlan then (subId, firstSubItemId) else (p.subId, p.firstSubItemId)) of
-                (Just sid, Just fsid) -> do
-                  _ <- dbtToEff $ Projects.updateProject (createProjectFormToModel pid (Just sid) (Just fsid) cp)
-                  addSuccessToast "Updated Project Successfully" Nothing
-                  addRespHeaders $ ProjectPost sess.persistentSession envCfg cp.isUpdate cp (def @CreateProjectFormError)
-                _ -> do
-                  addErrorToast "Something went wrong. Please try again." Nothing
-                  redirectCS ("/p/" <> pid.toText <> "/about_project")
-                  addRespHeaders $ ProjectPost sess.persistentSession envCfg cp.isUpdate cp (def @CreateProjectFormError)
-            Nothing -> do
-              addErrorToast "Something went wrong. Please try again." Nothing
-              redirectCS ("/p/" <> pid.toText <> "/about_project")
-              addRespHeaders $ ProjectPost sess.persistentSession envCfg cp.isUpdate cp (def @CreateProjectFormError)
+      addErrorToast "Can't perform this action on the demo project" Nothing
+      addRespHeaders $ ProjectPost sess.persistentSession pid envCfg cp (def @CreateProjectFormError)
     else do
-      let usersAndPermissions = zip cp.emails cp.permissions & uniq
-      subRes <- getSubscriptionId cp.orderId envCfg.lemonSqueezyApiKey
-      let (subId, firstSubItemId) = case subRes of
-            Just sub ->
-              if null sub.dataVal
-                then (Nothing, Nothing)
-                else
-                  let target = sub.dataVal Unsafe.!! 0
-                      firstSubItemId' = show target.attributes.firstSubscriptionItem.id
-                      subId' = show target.attributes.firstSubscriptionItem.subscriptionId
-                   in (Just subId', Just firstSubItemId')
-            Nothing -> (Nothing, Nothing)
-      if cp.paymentPlan /= "Free" && isNothing firstSubItemId
-        then do
-          addErrorToast "Something went wrong. Please try again" Nothing
+      project <- dbtToEff $ Projects.projectById pid
+      case project of
+        Just p -> do
+          -- let checkPaymentPlan = cp.orderId /= p.orderId
+          -- (subId, firstSubItemId) <-
+          --   if checkPaymentPlan
+          --     then
+          --       getSubscriptionId cp.orderId envCfg.lemonSqueezyApiKey >>= \case
+          --         Just sub
+          --           | not (null sub.dataVal) ->
+          --               let target = sub.dataVal Unsafe.!! 0
+          --                in pure (Just (show target.attributes.firstSubscriptionItem.subscriptionId), Just (show target.attributes.firstSubscriptionItem.id))
+          --         _ -> pure (Nothing, Nothing)
+          --     else pure (p.subId, p.firstSubItemId)
+          -- case (if checkPaymentPlan then (subId, firstSubItemId) else (p.subId, p.firstSubItemId)) of
+          --   (Just sid, Just fsid) -> do
+          _ <- dbtToEff $ Projects.updateProject (createProjectFormToModel pid p.subId p.firstSubItemId p.orderId p.paymentPlan cp)
+          addSuccessToast "Updated Project Successfully" Nothing
+          addRespHeaders $ ProjectPost sess.persistentSession pid envCfg cp (def @CreateProjectFormError)
+        Nothing -> do
+          addErrorToast "Something went wrong. Please try again." Nothing
           redirectCS ("/p/" <> pid.toText <> "/about_project")
-          addRespHeaders $ ProjectPost sess.persistentSession envCfg cp.isUpdate cp (def @CreateProjectFormError)
-        else do
-          dbtToEff $ Projects.insertProject (createProjectFormToModel pid subId firstSubItemId cp)
-          projectKeyUUID <- UUID.genUUID
-          let encryptedKeyB64 = B64.extractBase64 $ B64.encodeBase64 $ ProjectApiKeys.encryptAPIKey (encodeUtf8 envCfg.apiKeyEncryptionSecretKey) (encodeUtf8 $ UUID.toText projectKeyUUID)
-          pApiKey <- ProjectApiKeys.newProjectApiKeys pid projectKeyUUID "Default API Key" encryptedKeyB64
-          dbtToEff $ ProjectApiKeys.insertProjectApiKey pApiKey
-          ConvertKit.addUserOrganization envCfg.convertkitApiKey (CI.original sess.user.email) pid.toText cp.title cp.paymentPlan
-          newProjectMembers <-
-            catMaybes <$> forM usersAndPermissions \(email, permission) -> do
-              userId' <- runMaybeT $ MaybeT (dbtToEff $ Users.userIdByEmail email) <|> MaybeT (dbtToEff $ Users.createEmptyUser email)
-              ConvertKit.addUserOrganization envCfg.convertkitApiKey email pid.toText cp.title cp.paymentPlan
-              when (userId' /= Just sess.user.id) $ whenJust userId' \userId ->
-                liftIO $ withResource appCtx.pool \conn -> void $ createJob conn "background_jobs" $ BackgroundJobs.InviteUserToProject userId pid email cp.title
-              pure ((\userId -> Just (email, permission, userId)) =<< userId')
-          let projectMembers =
-                newProjectMembers
-                  & filter (\(_, _, id') -> id' /= sess.user.id)
-                  & map (\(email, permission, id') -> ProjectMembers.CreateProjectMembers pid id' permission)
-                  & cons (ProjectMembers.CreateProjectMembers pid sess.user.id Projects.PAdmin)
-          _ <- dbtToEff $ ProjectMembers.insertProjectMembers projectMembers
-          _ <- liftIO $ withResource appCtx.pool \conn ->
-            createJob conn "background_jobs" $ BackgroundJobs.CreatedProjectSuccessfully sess.user.id pid (original sess.user.email) cp.title
-          addSuccessToast "Created Project Successfully" Nothing
-          redirectCS ("/p/" <> pid.toText <> "/about_project")
-          addRespHeaders $ ProjectPost sess.persistentSession envCfg cp.isUpdate cp (def @CreateProjectFormError)
+          addRespHeaders $ ProjectPost sess.persistentSession pid envCfg cp (def @CreateProjectFormError)
 
+
+-- else do
+--   let usersAndPermissions = zip cp.emails cp.permissions & uniq
+--   subRes <- getSubscriptionId cp.orderId envCfg.lemonSqueezyApiKey
+--   let (subId, firstSubItemId) = case subRes of
+--         Just sub ->
+--           if null sub.dataVal
+--             then (Nothing, Nothing)
+--             else
+--               let target = sub.dataVal Unsafe.!! 0
+--                   firstSubItemId' = show target.attributes.firstSubscriptionItem.id
+--                   subId' = show target.attributes.firstSubscriptionItem.subscriptionId
+--                in (Just subId', Just firstSubItemId')
+--         Nothing -> (Nothing, Nothing)
+--   if cp.paymentPlan /= "Free" && isNothing firstSubItemId
+--     then do
+--       addErrorToast "Something went wrong. Please try again" Nothing
+--       redirectCS ("/p/" <> pid.toText <> "/about_project")
+--       addRespHeaders $ ProjectPost sess.persistentSession pid envCfg cp.isUpdate cp (def @CreateProjectFormError)
+--     else do
+--       dbtToEff $ Projects.insertProject (createProjectFormToModel pid subId firstSubItemId cp)
+--       projectKeyUUID <- UUID.genUUID
+--       let encryptedKeyB64 = B64.extractBase64 $ B64.encodeBase64 $ ProjectApiKeys.encryptAPIKey (encodeUtf8 envCfg.apiKeyEncryptionSecretKey) (encodeUtf8 $ UUID.toText projectKeyUUID)
+--       pApiKey <- ProjectApiKeys.newProjectApiKeys pid projectKeyUUID "Default API Key" encryptedKeyB64
+--       dbtToEff $ ProjectApiKeys.insertProjectApiKey pApiKey
+--       ConvertKit.addUserOrganization envCfg.convertkitApiKey (CI.original sess.user.email) pid.toText cp.title cp.paymentPlan
+--       newProjectMembers <-
+--         catMaybes <$> forM usersAndPermissions \(email, permission) -> do
+--           userId' <- runMaybeT $ MaybeT (dbtToEff $ Users.userIdByEmail email) <|> MaybeT (dbtToEff $ Users.createEmptyUser email)
+--           ConvertKit.addUserOrganization envCfg.convertkitApiKey email pid.toText cp.title cp.paymentPlan
+--           when (userId' /= Just sess.user.id) $ whenJust userId' \userId ->
+--             liftIO $ withResource appCtx.pool \conn -> void $ createJob conn "background_jobs" $ BackgroundJobs.InviteUserToProject userId pid email cp.title
+--           pure ((\userId -> Just (email, permission, userId)) =<< userId')
+--       let projectMembers =
+--             newProjectMembers
+--               & filter (\(_, _, id') -> id' /= sess.user.id)
+--               & map (\(email, permission, id') -> ProjectMembers.CreateProjectMembers pid id' permission)
+--               & cons (ProjectMembers.CreateProjectMembers pid sess.user.id Projects.PAdmin)
+--       _ <- dbtToEff $ ProjectMembers.insertProjectMembers projectMembers
+--       _ <- liftIO $ withResource appCtx.pool \conn ->
+--         createJob conn "background_jobs" $ BackgroundJobs.CreatedProjectSuccessfully sess.user.id pid (original sess.user.email) cp.title
+--       addSuccessToast "Created Project Successfully" Nothing
+--       redirectCS ("/p/" <> pid.toText <> "/about_project")
+--       addRespHeaders $ ProjectPost sess.persistentSession pid envCfg cp.isUpdate cp (def @CreateProjectFormError)
 
 ----------------------------------------------------------------------------------------------------------
 -- createProjectBody is the core html view
-createProjectBody :: Sessions.PersistentSession -> EnvConfig -> Bool -> CreateProjectForm -> CreateProjectFormError -> Html ()
-createProjectBody sess envCfg isUpdate cp cpe = do
-  let paymentPlan = if cp.paymentPlan == "" then "GraduatedPricing" else cp.paymentPlan
+createProjectBody :: Sessions.PersistentSession -> Projects.ProjectId -> EnvConfig -> CreateProjectForm -> CreateProjectFormError -> Html ()
+createProjectBody sess pid envCfg cp cpe = do
   section_ [id_ "main-content", class_ "p-3 py-5 sm:p-6 overflow-y-scroll h-full"] do
     div_ [class_ "mx-auto", style_ "max-width:800px"] do
-      h2_ [class_ "text-slate-700 text-3xl font-medium mb-5"] $ toHtml @String $ if isUpdate then "Project Settings" else "Create Project"
+      h2_ [class_ "text-slate-700 text-3xl font-medium mb-5"] "Project Settings"
       div_ [class_ "grid gap-5"] do
         form_
           [ class_ "col-span-1 relative px-3 sm:px-10 border border-gray-200 py-10  bg-base-100 rounded-3xl"
-          , hxPost_ "/p/new"
+          , hxPost_ $ "/p/update/" <> pid.toText
           , hxTarget_ "#main-content"
           , hxSwap_ "outerHTML"
           , id_ "createUpdateBodyForm"
           , hxIndicator_ "#createIndicator"
           ]
           do
-            input_ [name_ "isUpdate", type_ "hidden", value_ $ if isUpdate then "true" else "false"]
-            input_ [name_ "projectId", type_ "hidden", value_ cp.projectId]
-            input_ [name_ "paymentPlan", type_ "hidden", value_ paymentPlan, id_ "paymentPlanEl"]
             div_ do
               label_ [class_ " font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70"] do
                 "Title"
@@ -354,7 +402,6 @@ createProjectBody sess envCfg isUpdate cp cpe = do
                 , value_ cp.title
                 , required_ "required"
                 ]
-            input_ [type_ "hidden", id_ "orderId", name_ "orderId", value_ ""]
             div_ [class_ "flex flex-col gap-1 mt-5"] do
               label_ [class_ " font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70"] do
                 "Timezone"
@@ -371,184 +418,25 @@ createProjectBody sess envCfg isUpdate cp cpe = do
                 ]
                 $ toHtml cp.description
 
-            div_ [class_ "mt-5"] do
-              p_ [class_ " font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70 mb-2"] do
-                "Please select a plan"
-                span_ [class_ "text-red-400"] " *"
-              div_ [class_ "grid gap-10 border-1"] do
-                let isSelected = True
-                let isSelectedTxt = T.toLower $ show isSelected
-                let value = "GraduatedPricing"
-                a_
-                  [ class_ $ "payment-plans cursor-pointer space-y-1 border border-1 block p-8 rounded-md " <> if isSelected then " border-2 border-blue-300 shadow-lg" else ""
-                  , term
-                      "_"
-                      [text|
-                          init if $isSelectedTxt then set window.paymentPlan to $value end
-                          on click  set window.paymentPlan to $value
-                               then set #paymentPlanEl.value to "$value"
-                               then remove .border-2 .border-blue-300 .shadow-lg from .payment-plans
-                               then remove .payment-radio-active from .payment-radio
-                               then add .payment-radio-active to (.payment-radio in me)
-                               then add .border-2 .border-blue-300 .shadow-lg to me
-                               |]
-                  ]
-                  do
-                    div_ [class_ "flex items-center justify-between border-b border-b-1 p-1"] do
-                      h4_ [class_ "text-xl font-medium text-slate-700"] $ toHtml "Pay as you use"
-                      div_ [role_ "tablist", class_ "tabs tabs-boxed tabs-outline items-center border"] $ do
-                        input_ [onchange_ "handlePlanToggle()", value_ "month", type_ "radio", name_ "plans", role_ "tab", class_ "tab", term "aria-label" "Monthly", checked_]
-                        input_ [onchange_ "handlePlanToggle()", value_ "annual", type_ "radio", name_ "plans", role_ "tab", class_ "tab", term "aria-label" "Annual"]
-                    div_ [class_ "text-lg py-3 px-2"] do
-                      span_ [class_ "text-2xl text-blue-700", id_ "price"] $ toHtml "$34"
-                      span_ [class_ "text-slate-500", id_ "num_requests"] "/400k"
-                      span_ [class_ "text-slate-500 mr-3"] " requests per month"
-                      span_ [class_ "text-brand  block mt-2"] "then $1 per 20k requests"
-                    div_ [] do
-                      input_ [type_ "range", min_ "0", max_ "6", step_ "1", value_ "0", class_ "range range-primary range-sm", id_ "price_range"]
-
-                    checkList "GR" "Unlimited"
-
-            div_ [class_ $ "mt-10 " <> if isUpdate then "hidden" else ""] do
-              p_ [class_ "text-slate-400 mx-2 font-light "] "Invite a project member"
-              section_ [id_ "inviteMemberSection"] do
-                template_ [id_ "inviteTmpl"] do
-                  div_ [class_ "flex flex-row space-x-2"] do
-                    input_ [name_ "emails", class_ "w-2/3 h-10 px-5 my-2 w-full  bg-base-100 text-slate-700 font-light border-solid border border-gray-200 rounded-2xl border-0 ", placeholder_ "name@example.com"]
-                    select_ [name_ "permissions", class_ "w-1/3 h-10 px-5  my-2 w-full  bg-base-100 text-zinc-500 border-solid border border-gray-200 rounded-2xl border-0"] do
-                      option_ [class_ "text-slate-500", value_ "edit"] "Can Edit"
-                      option_ [class_ "text-slate-500", value_ "view"] "Can View"
-                    button_
-                      [ [__| on click remove the closest parent <div/> then halt |]
-                      , class_ "cursor-pointer"
-                      ]
-                      $ faSprite_ "trash" "regular" "w-4 h-4"
-              a_
-                [ class_ "bg-transparent inline-flex cursor-pointer mt-2"
-                , [__| on click put #inviteTmpl.innerHTML at end of #inviteMemberSection then
-                         _hyperscript.processNode(#inviteMemberSection) then halt |]
-                ]
-                do
-                  faSprite_ "plus" "regular" "mx-2 w-4 h-4 text-blue-700"
-                  span_ [class_ "text-blue-700 font-medium  "] "Add member"
-
             -- LEMON SQUEEZY PAYMENT
 
-            script_ [src_ "https://assets.lemonsqueezy.com/lemon.js"] ("" :: Text)
-            let graduatedCheckoutOne = V.head lemonSqueezyUrls <> if cp.isUpdate then "&checkout[custom][project_id]=" <> cp.projectId else ""
-            script_
-              [type_ "text/javascript"]
-              [text|
-             window.payLemon = function() {
-             const sub = document.getElementById("createIndicator")
-             if(sub.classList.contains("htmx-request")) {
-              return
-              }
-             if (document.getElementById("paymentPlanEl").value == "Free"){
-                gtag('event', 'conversion', {
-                    'send_to': 'AW-11285541899/IUBqCKOA-8sYEIvoroUq',
-                });
-
-                gtag('event', 'conversion', {
-                    'send_to': 'AW-11285541899/rf7NCKzf_9YYEIvoroUq',
-                    'value': 1.0,
-                    'currency': 'EUR',
-                    'transaction_id': '',
-                });
-               document.getElementById("orderId").name = "free"
-               htmx.trigger("#createUpdateBodyForm", "submit")
-               return
-             }
-             LemonSqueezy.Setup({
-               eventHandler: ({event, data}) => {
-                 if(event === "Checkout.Success") {
-                     document.getElementById("orderId").value = data.order.data.id
-                     LemonSqueezy.Url.Close()
-                     gtag('event', 'conversion', {
-                         'send_to': 'AW-11285541899/rf7NCKzf_9YYEIvoroUq',
-                         'value': 20.0,
-                         'currency': 'EUR',
-                         'transaction_id': '',
-                     });
-                     htmx.trigger("#createUpdateBodyForm", "submit")
-                 }
-               }
-             })
-             if(document.getElementById("paymentPlanEl").value == "GraduatedPricing") {
-                  LemonSqueezy.Url.Open(window.graduatedRangeUrl);
-              }
-             };
-           const timezoneSelect = document.getElementById("timezone");
-           const timeZones = Intl.supportedValuesOf('timeZone');
-           timeZones.forEach((tz) => {
-             const option = document.createElement("option");
-             option.value = tz;
-             option.text = tz;
-             timezoneSelect.appendChild(option);
-           });
-            |]
-            let lmnUrls = decodeUtf8 $ AE.encode $ lemonSqueezyUrls <&> (<> if cp.isUpdate then "&checkout[custom][project_id]=" <> cp.projectId else "")
-            let lmnUrlAnnual = decodeUtf8 $ AE.encode $ lemonSqueezyUrlsAnnual <&> (<> if cp.isUpdate then "&checkout[custom][project_id]=" <> cp.projectId else "")
-            script_
-              [text|
-               const price_indicator = document.querySelector("#price_range");
-               window.graduatedRangeUrl = "$graduatedCheckoutOne"
-               let plan = "month";
-               const prices = [34, 49, 88, 215, 420, 615, 800]
-               const reqs = ["400k","1.1M", "2M", "5M", "10M", "15M", "20M"]
-               const pricesYr = [29, 34, 61, 150, 294, 294, 294]
-               const reqsYr = ["400k","1.1M", "2M", "5M", "10M", "10M", "10M"]
-               const urls = $lmnUrls
-               const urlsAnnual = $lmnUrlAnnual
-               const priceContainer = document.querySelector("#price")
-               const reqsContainer = document.querySelector("#num_requests")
-               function priceChange() {
-                 const value = price_indicator.value
-                 let price = prices[value]
-                 let num_reqs = reqs[value]
-                 window.graduatedRangeUrl = urls[value]
-                 if(plan === "annual") {
-                    price = pricesYr[value]
-                    num_reqs = reqsYr[value]
-                    window.graduatedRangeUrl = urlsAnnual[value]
-                  }
-                 priceContainer.innerText = "$" + price
-                 reqsContainer.innerText = "/" + num_reqs
-
-               }
-               price_indicator.addEventListener('input', priceChange)
-
-               function handlePlanToggle() {
-                  const radios = document.getElementsByName("plans")
-                  for(let radio of radios) {
-                    if(radio.checked) {
-                        plan = radio.value
-                        break
-                    }
-                  }
-                  priceChange()
-               }
-            |]
-
             div_ [class_ "p-5 flex w-full justify-end"] do
-              a_
+              button_
                 [ class_ "lemonsqueezy-button py-2 px-5 w-max bg-blue-700 flex items-center text-[white]  rounded-xl cursor-pointer"
-                , [__|on click call window.payLemon() |]
                 ]
                 do
                   span_ [id_ "createIndicator", class_ "htmx-indicator loading loading-dots loading-md"] ""
                   "Proceed"
 
-      when isUpdate do
-        let pid = cp.projectId
-        div_ [class_ "col-span-1 h-full justify-center items-center w-full text-center pt-24"] do
-          h2_ [class_ "text-red-800 font-medium pb-4"] "Delete project. This is dangerous and unreversible."
-          button_
-            [ class_ "btn btn-sm bg-red-800 text-white shadow-md hover:bg-red-700 cursor-pointer rounded-md"
-            , hxGet_ [text|/p/$pid/delete|]
-            , hxConfirm_ "Are you sure you want to delete this project?"
-            ]
-            "Delete Project"
+      let pidText = pid.toText
+      div_ [class_ "col-span-1 h-full justify-center items-center w-full text-center pt-24"] do
+        h2_ [class_ "text-red-800 font-medium pb-4"] "Delete project. This is dangerous and unreversible."
+        button_
+          [ class_ "btn btn-sm bg-red-800 text-white shadow-md hover:bg-red-700 cursor-pointer rounded-md"
+          , hxGet_ [text|/p/$pidText/delete|]
+          , hxConfirm_ "Are you sure you want to delete this project?"
+          ]
+          "Delete Project"
 
 
 checkMark :: Html ()

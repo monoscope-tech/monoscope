@@ -1,13 +1,15 @@
-module Pages.Components (statBox, drawerWithURLContent_, statBox_, emptyState_, dateTime) where
+module Pages.Components (statBox, drawerWithURLContent_, statBox_, emptyState_, dateTime, paymentPlanPicker) where
 
 import Data.Text qualified as T
 import Data.Time (UTCTime, defaultTimeLocale, formatTime)
 import Fmt (commaizeF, fmt, (+|))
 import Lucid
 import Lucid.Aria qualified as Aria
-import Lucid.Htmx (hxGet_, hxSwap_, hxTrigger_)
+import Lucid.Htmx (hxGet_, hxIndicator_, hxPost_, hxSwap_, hxTrigger_, hxVals_)
 import Lucid.Hyperscript (__)
 import Models.Projects.Projects (ProjectId)
+import Models.Projects.Projects qualified as Projects
+import NeatInterpolation (text)
 import Relude
 import Utils (faSprite_)
 
@@ -62,7 +64,7 @@ emptyState_ title subTxt url btnText = do
     div_ [class_ "flex flex-col gap-2"] do
       h2_ [class_ "text-xl text-slate-800 font-bold"] $ toHtml title
       p_ [class_ "text-sm font-medium text-gray-500"] $ toHtml subTxt
-      a_ [href_ $ fromMaybe "" url, class_ "btn text-sm w-max mx-auto bg-brand text-white"] $ toHtml btnText
+      a_ [href_ $ fromMaybe "" url, class_ "btn text-sm w-max mx-auto btn-primary"] $ toHtml btnText
 
 
 getTargetPage :: Text -> Text
@@ -92,3 +94,145 @@ dateTime t = do
   span_ [class_ "flex items-center rounded-lg px-2 py-1.5 font-medium gap-2 border border-slate-300 bg-slate-100 text-slate-600"] do
     faSprite_ "calendar" "regular" "w-5 h-5 fill-none"
     toHtml $ formatTime defaultTimeLocale "%b. %d, %Y %I:%M:%S %p" t
+
+
+paymentPlanPicker :: Projects.ProjectId -> Text -> Text -> Bool -> Html ()
+paymentPlanPicker pid lemonUrl criticalUrl isSettings = do
+  div_ [class_ "flex flex-col gap-8 w-full"] do
+    div_ [class_ "flex flex-col gap-2 w-full"] do
+      div_ [class_ "flex items-center justify-between w-full gap-4"] do
+        p_ [class_ "text-strong"] "Total requests"
+        p_ [class_ "text-weak", id_ "num_requests"] "20 Million"
+      input_ [type_ "range", min_ "20000000", max_ "500000000", step_ "10000000", value_ "0", class_ "range range-primary range-sm", id_ "price_range"]
+    div_ [class_ "grid grid-cols-2 gap-8 mt-6 w-full"] do
+      popularPricing pid lemonUrl isSettings
+      systemsPricing pid criticalUrl isSettings
+    script_ [src_ "https://assets.lemonsqueezy.com/lemon.js"] ("" :: Text)
+    script_
+      [text|
+               const price_indicator = document.querySelector("#price_range");
+               const priceContainer = document.querySelector("#price")
+               const reqsContainer = document.querySelector("#num_requests")
+
+               function priceChange() {
+                 const value = price_indicator.value
+                 let num_reqs = Math.floor(value/1000000)
+                 let calculatedPrice = value <= 20_000_000 ? 32 : 32 + ((value- 20_000_000)/500_000)
+                 priceContainer.innerText = "$" + calculatedPrice
+                 reqsContainer.innerText = num_reqs + " Million"
+               }
+
+               price_indicator.addEventListener('input', priceChange)
+
+               function handlePaymentPlanSelect(event, id) {
+                event.stopPropagation()
+                const target = event.currentTarget
+                if(id === 'popularPlan') {
+                  window.paymentPlanUrl = "$lemonUrl"
+                  target.classList.add('border-[var(--brand-color)]')
+                  document.querySelector('#systemsPlan').classList.remove('border-[var(--brand-color)]')
+                } else {
+                  window.paymentPlanUrl = "$criticalUrl"
+                  target.classList.add('border-[var(--brand-color)]')
+                  document.querySelector('#popularPlan').classList.remove('border-[var(--brand-color)]')
+                }
+               }
+            |]
+
+
+popularPricing :: Projects.ProjectId -> Text -> Bool -> Html ()
+popularPricing pid lemonUrl isSettings = do
+  div_
+    [ class_ "flex flex-col gap-2 h-full w-full"
+    , hxPost_ $ "/p/" <> pid.toText <> "/onboarding/pricing"
+    , id_ "GraduatedPricing"
+    , hxIndicator_ "#loadingIndicator"
+    , hxVals_ "js:{orderId: document.querySelector('#popularPricing').value}"
+    ]
+    $ do
+      div_
+        [ class_ "flex flex-col gap-2 h-full rounded-2xl p-8 border border-[var(--brand-color)] flex-col flex gap-8 relative shadow-[0px_4px_8px_-2px_rgba(0,0,0,0.04)] shadow-[0px_2px_4px_-2px_rgba(0,0,0,0.08)]"
+        , onclick_ "handlePaymentPlanSelect(event, 'popularPlan')"
+        , id_ "popularPlan"
+        ]
+        do
+          div_ [class_ "absolute -right-8 -top-8"] do
+            div_ [class_ "relative"] do
+              p_ [class_ "font-semibold text-brand"] "Most popular!"
+              img_ [class_ "absolute top-1 -left-1/2 h-14 w-14", src_ "/public/assets/svgs/drawn-arrow.svg"]
+          div_ [class_ "flex-col justify-start items-start gap-2 flex"] $ do
+            input_ [type_ "hidden", class_ "orderId", id_ "popularPricing", name_ "ord", value_ ""]
+            div_ [class_ "text-center text-strong text-4xl font-bold"] "Pay as you use"
+            div_ [class_ "text-brand text-base font-semibold"] "Start your FREE 30-day trial"
+            div_ [class_ "text-weak text-sm font-medium"] do
+              "Starts at "
+              span_ [class_ "", id_ "price"] "$34"
+
+          div_ [class_ "flex-col justify-start items-start gap-6 flex"] $ do
+            span_ [class_ "text-weak text-base font-semibold"] "What’s Included:"
+            mapM_ featureRow features
+          unless isSettings do
+            div_ [class_ "flex-col justify-start items-start gap-6 mt-auto flex", [__|on click halt|]] $ do
+              button_
+                [ class_ "btn-primary h-12 rounded w-full font-semibold rounded-lg shadow-[0px_1px_2px_0px_rgba(10,13,18,0.05)] shadow-[inset_0px_-2px_0px_0px_rgba(10,13,18,0.05)] shadow-[inset_0px_0px_0px_1px_rgba(10,13,18,0.18)]"
+                , term "_" [text|on click call window.payLemon("GraduatedPricing","$lemonUrl") |]
+                , type_ "button"
+                ]
+                do
+                  "Start free 30 day trial"
+  where
+    features =
+      [ "Unlimited team members"
+      , "Opentelemetry Logs, Traces and Metrics"
+      , "Last 14 days data retention"
+      ]
+
+
+systemsPricing :: Projects.ProjectId -> Text -> Bool -> Html ()
+systemsPricing pid critical isSettings = do
+  div_
+    [ class_ "flex flex-col gap-2 w-full"
+    , hxPost_ $ "/p/" <> pid.toText <> "/onboarding/pricing"
+    , id_ "SystemsPricing"
+    , hxIndicator_ "#loadingIndicator"
+    , hxVals_ "js:{orderId: document.querySelector('#systemsPricing').value}"
+    ]
+    $ do
+      div_
+        [ class_ "flex flex-col gap-2 h-full rounded-2xl p-8 border flex-col flex gap-8 relative shadow-[0px_4px_8px_-2px_rgba(0,0,0,0.04)] shadow-[0px_2px_4px_-2px_rgba(0,0,0,0.08)]"
+        , onclick_ "handlePaymentPlanSelect(event, 'systemsPlan')"
+        , id_ "systemsPlan"
+        ]
+        do
+          div_ [class_ "flex-col justify-start items-start gap-2 flex"] $ do
+            -- div_ [class_ "relative"] $ do
+            --   span_ [class_ "text-brand font-semibold"] "Most popular!"
+            input_ [type_ "hidden", class_ "orderId", id_ "systemsPricing", name_ "order", value_ ""]
+            div_ [class_ "text-center text-strong text-4xl font-bold"] "Critical Systems"
+            div_ [class_ "text-base font-semibold"] "Business plan"
+            div_ [class_ "text-weak text-sm font-medium"] "Starts at $500/monthly"
+
+          div_ [class_ "flex-col justify-start items-start gap-6 flex"] $ do
+            span_ [class_ "text-weak text-base font-semibold"] "Everything in plus and..."
+            mapM_ featureRow features
+          unless isSettings do
+            div_ [class_ "flex-col justify-start items-start gap-6 mt-auto  flex", [__|on click halt|]] $ do
+              button_
+                [ class_ "btn-primary h-12 rounded w-full font-semibold rounded-lg shadow-[0px_1px_2px_0px_rgba(10,13,18,0.05)] shadow-[inset_0px_-2px_0px_0px_rgba(10,13,18,0.05)] shadow-[inset_0px_0px_0px_1px_rgba(10,13,18,0.18)]"
+                , term "_" [text|on click call window.payLemon("SystemsPricing", "$critical") |]
+                , type_ "button"
+                ]
+                "Start free 30 day trial"
+  where
+    features =
+      [ "24/7 support from our team of industry experts"
+      , "Last 30 days data retention"
+      ]
+
+
+featureRow :: Text -> Html ()
+featureRow feature =
+  div_ [class_ "flex items-center gap-2"] $ do
+    div_ [class_ "rounded-full bg-green-100 h-5 w-5 flex items-center justify-center"] do
+      faSprite_ "check" "regular" "h-3 w-3 text-green-500"
+    p_ [class_ "text-weak"] (toHtml feature)

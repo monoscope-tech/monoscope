@@ -5,14 +5,18 @@ module Models.Projects.Projects (
   CreateProject (..),
   ProjectRequestStats (..),
   NotificationChannel (..),
+  parseNotifChannel,
+  OnboardingStep (..),
   insertProject,
   projectIdFromText,
   usersByProjectId,
   userByProjectId,
   selectProjectsForUser,
   projectRequestStatsByProject,
+  updateOnboardingStepsCompleted,
   updateProject,
   deleteProject,
+  updateProjectPricing,
   projectById,
   projectCacheById,
   updateProjectReportNotif,
@@ -29,6 +33,7 @@ module Models.Projects.Projects (
 )
 where
 
+import Data.Aeson (FromJSON)
 import Data.Aeson qualified as AE
 import Data.Default
 import Data.Time (UTCTime, ZonedTime)
@@ -77,6 +82,7 @@ data NotificationChannel
   = NEmail
   | NSlack
   | NDiscord
+  | NPhone
   deriving stock (Eq, Generic, Show)
   deriving anyclass (NFData)
 
@@ -85,12 +91,14 @@ instance AE.ToJSON NotificationChannel where
   toJSON NEmail = AE.String "email"
   toJSON NSlack = AE.String "slack"
   toJSON NDiscord = AE.String "discord"
+  toJSON NPhone = AE.String "phone"
 
 
 instance AE.FromJSON NotificationChannel where
   parseJSON (AE.String "email") = pure NEmail
   parseJSON (AE.String "slack") = pure NSlack
   parseJSON (AE.String "discord") = pure NDiscord
+  parseJSON (AE.String "phone") = pure NPhone
   parseJSON _ = fail "Invalid NotificationChannel value"
 
 
@@ -98,11 +106,24 @@ instance ToField NotificationChannel where
   toField NEmail = Escape "email"
   toField NSlack = Escape "slack"
   toField NDiscord = Escape "discord"
+  toField NPhone = Escape "phone"
 
 
 parsePermissions :: (Eq s, IsString s) => s -> NotificationChannel
 parsePermissions "slack" = NSlack
 parsePermissions _ = NEmail
+
+
+parseNotifChannel :: NotificationChannel -> Text
+parseNotifChannel NSlack = "slack"
+parseNotifChannel NDiscord = "discord"
+parseNotifChannel NEmail = "email"
+parseNotifChannel NPhone = "phone"
+
+
+data OnboardingStep = Info | Survey | CreateMonitor | NotifChannel | Integration | Pricing | Complete
+  deriving stock (Eq, Generic, Show, Read)
+  deriving (AE.FromJSON, AE.ToJSON, NFData, ToField, FromField) via OnboardingStep
 
 
 instance FromField NotificationChannel where
@@ -134,6 +155,9 @@ data Project = Project
   , usageLastReported :: UTCTime
   , discordUrl :: Maybe Text
   , billingDay :: Maybe UTCTime
+  , onboardingStepsCompleted :: V.Vector Text
+  , notifyPhoneNumber :: Maybe Text
+  , notifyEmails :: V.Vector Text
   }
   deriving stock (Show, Generic)
   deriving anyclass (FromRow, NFData)
@@ -168,6 +192,9 @@ data Project' = Project'
   , usageLastReported :: UTCTime
   , discordUrl :: Maybe Text
   , billingDay :: Maybe UTCTime
+  , onboardingStepsCompleted :: V.Vector Text
+  , notifyPhoneNumber :: Maybe Text
+  , notifyEmails :: V.Vector Text
   , hasIntegrated :: Bool
   , usersDisplayImages :: V.Vector Text
   }
@@ -286,6 +313,13 @@ updateProject cp = do
       [sql| UPDATE projects.projects SET title=?,  description=?, payment_plan=?, sub_id=?, first_sub_item_id=?, order_id=?, time_zone=? where id=?;|]
 
 
+updateProjectPricing :: ProjectId -> Text -> Text -> Text -> Text -> V.Vector Text -> DBT IO Int64
+updateProjectPricing pid paymentPlan subId firstSubItemId orderId stepsCompleted = do
+  execute Update q (paymentPlan, subId, firstSubItemId, orderId, stepsCompleted, pid)
+  where
+    q = [sql| UPDATE projects.projects SET payment_plan=?, sub_id=?, first_sub_item_id=?, order_id=?, onboarding_steps_completed=? where id=?;|]
+
+
 updateProjectReportNotif :: ProjectId -> Text -> DBT IO Int64
 updateProjectReportNotif pid report_type = do
   execute Update q (Only pid)
@@ -338,6 +372,12 @@ updateNotificationsChannel pid channels discordUrl = execute Update q (list, dis
   where
     list = V.fromList channels
     q = [sql| UPDATE projects.projects SET notifications_channel=?::notification_channel_enum[], discord_url=? WHERE id=?;|]
+
+
+updateOnboardingStepsCompleted :: ProjectId -> V.Vector Text -> DBT IO Int64
+updateOnboardingStepsCompleted pid steps = execute Update q (steps, pid)
+  where
+    q = [sql| UPDATE projects.projects SET onboarding_steps_completed=? WHERE id=?;|]
 
 
 updateUsageLastReported :: ProjectId -> ZonedTime -> DBT IO Int64
@@ -416,13 +456,13 @@ queryLibInsert :: DB :> es => QueryLibType -> ProjectId -> Users.UserId -> Text 
 queryLibInsert qKind pid uid qt qast title = void $ dbtToEff $ execute Insert q (pid, uid, qKind, pid, uid, qKind, qt, Aeson qast, title, pid, uid, qKind, qt)
   where
     q =
-      [sql| 
+      [sql|
 WITH removed_old AS (
   DELETE FROM projects.query_library
   WHERE id IN (
     SELECT id
     FROM projects.query_library
-    WHERE project_id = ? AND user_id = ? AND query_type = ? 
+    WHERE project_id = ? AND user_id = ? AND query_type = ?
     ORDER BY created_at ASC
     OFFSET 49
   )
@@ -432,7 +472,7 @@ SELECT ?, ?, ?, ?, ?, ?
 WHERE NOT EXISTS (
   SELECT 1
   FROM projects.query_library
-  WHERE project_id = ? AND user_id = ? AND query_type = ? 
+  WHERE project_id = ? AND user_id = ? AND query_type = ?
   AND query_text = ?
   ORDER BY created_at DESC
   LIMIT 1

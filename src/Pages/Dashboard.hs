@@ -27,6 +27,8 @@ import Pages.Components (emptyState_, statBox)
 import Pages.Endpoints.EndpointList (renderEndpoint)
 import Pkg.Components qualified as Components
 import Relude hiding (max, min)
+import Servant.API (Header)
+import Servant.API.ResponseHeaders (Headers, addHeader)
 import System.Types
 import Text.Interpolation.Nyan (int, rmode')
 import Utils (convertToDHMS, faSprite_, freeTierLimitExceededBanner)
@@ -39,55 +41,66 @@ data ParamInput = ParamInput
   }
 
 
-newtype DashboardGet = DashboardGet
-  { unwrap :: (Projects.ProjectId, ParamInput, UTCTime, Projects.ProjectRequestStats, V.Vector Endpoints.EndpointRequestStats, Text, Text, (Maybe UTCTime, Maybe UTCTime), Bool, Bool)
-  }
+data DashboardGet
+  = DashboardGet
+      { unwrap :: (Projects.ProjectId, ParamInput, UTCTime, Projects.ProjectRequestStats, V.Vector Endpoints.EndpointRequestStats, Text, Text, (Maybe UTCTime, Maybe UTCTime), Bool, Bool)
+      }
+  | DashboardRedirect
 
 
 instance ToHtml DashboardGet where
   toHtml (DashboardGet (pid, paramInput, now, stats, endpoints, lastRequestTime, daysLeft, (fromD, toD), exceededFree, hasRequest)) = toHtml $ dashboardPage pid paramInput now stats endpoints lastRequestTime daysLeft (fromD, toD) exceededFree hasRequest
+  toHtml DashboardRedirect = toHtml $ ""
   toHtmlRaw = toHtml
 
 
-dashboardGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders (PageCtx DashboardGet))
+dashboardGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (Headers '[Header "Location" Text] (PageCtx DashboardGet))
 dashboardGetH pid fromDStr toDStr sinceStr' = do
   (sess, project) <- Sessions.sessionAndProject pid
   now <- Time.currentTime
-  hasRequests <- dbtToEff $ RequestDumps.hasRequest pid
-  newEndpoints <- dbtToEff $ Endpoints.endpointRequestStatsByProject pid False False Nothing Nothing Nothing 0 "Incoming"
-  let (fromD, toD, currentRange) = Components.parseTimeRange now (Components.TimePicker sinceStr' fromDStr toDStr)
-  (projectRequestStats, reqLatenciesRolledByStepsLabeled, freeTierExceeded) <- dbtToEff do
-    projectRequestStats <- fromMaybe (def :: Projects.ProjectRequestStats) <$> Projects.projectRequestStatsByProject pid
-    let maxV = round projectRequestStats.p99 :: Int
-    let steps' = (maxV `quot` 100) :: Int
-    let steps = if steps' == 0 then 100 else steps'
-    reqLatenciesRolledBySteps <- RequestDumps.selectReqLatenciesRolledByStepsForProject maxV steps pid (fromD, toD)
-    freeTierExceeded <-
-      if project.paymentPlan == "Free"
-        then do
-          totalRequest <- RequestDumps.getLastSevenDaysTotalRequest pid
-          return $ totalRequest > 5000
-        else do
-          return False
-    pure (projectRequestStats, V.toList reqLatenciesRolledBySteps, freeTierExceeded)
+  if project.paymentPlan == "ONBOARDING"
+    then do
+      let bwconf =
+            (def :: BWConfig)
+              { pageTitle = "Dashboard"
+              }
+      pure $ addHeader ("/p/" <> pid.toText <> "/onboarding?step=Pricing") $ PageCtx bwconf $ DashboardRedirect
+    else do
+      hasRequests <- dbtToEff $ RequestDumps.hasRequest pid
+      newEndpoints <- dbtToEff $ Endpoints.endpointRequestStatsByProject pid False False Nothing Nothing Nothing 0 "Incoming"
+      let (fromD, toD, currentRange) = Components.parseTimeRange now (Components.TimePicker sinceStr' fromDStr toDStr)
+      (projectRequestStats, reqLatenciesRolledByStepsLabeled, freeTierExceeded) <- dbtToEff do
+        projectRequestStats <- fromMaybe (def :: Projects.ProjectRequestStats) <$> Projects.projectRequestStatsByProject pid
+        let maxV = round projectRequestStats.p99 :: Int
+        let steps' = (maxV `quot` 100) :: Int
+        let steps = if steps' == 0 then 100 else steps'
+        reqLatenciesRolledBySteps <- RequestDumps.selectReqLatenciesRolledByStepsForProject maxV steps pid (fromD, toD)
+        freeTierExceeded <-
+          if project.paymentPlan == "Free"
+            then do
+              totalRequest <- RequestDumps.getLastSevenDaysTotalRequest pid
+              return $ totalRequest > 5000
+            else do
+              return False
+        pure (projectRequestStats, V.toList reqLatenciesRolledBySteps, freeTierExceeded)
 
-  let reqLatenciesRolledByStepsJ = decodeUtf8 $ AE.encode reqLatenciesRolledByStepsLabeled
-  let bwconf =
-        (def :: BWConfig)
-          { sessM = Just sess
-          , currProject = Just project
-          , pageTitle = "Dashboard"
-          , pageActions = Just $ Components.timepicker_ Nothing currentRange
-          }
-  currTime <- liftIO getCurrentTime
-  let (days, hours, minutes, _seconds) = convertToDHMS $ diffUTCTime currTime project.createdAt
-      daysLeft =
-        if days >= 0 && project.paymentPlan /= "Free"
-          then show days <> " days, " <> show hours <> " hours, " <> show minutes <> " minutes"
-          else "-"
-      currentURL = "/p/" <> pid.toText <> "?&from=" <> fromMaybe "" fromDStr <> "&to=" <> fromMaybe "" toDStr
-      paramInput = ParamInput{currentURL = currentURL, sinceStr = sinceStr', dateRange = (fromD, toD)}
-  addRespHeaders $ PageCtx bwconf $ DashboardGet (pid, paramInput, currTime, projectRequestStats, newEndpoints, reqLatenciesRolledByStepsJ, daysLeft, (fromD, toD), freeTierExceeded, hasRequests)
+      let reqLatenciesRolledByStepsJ = decodeUtf8 $ AE.encode reqLatenciesRolledByStepsLabeled
+      let bwconf =
+            (def :: BWConfig)
+              { sessM = Just sess
+              , currProject = Just project
+              , pageTitle = "Dashboard"
+              , pageActions = Just $ Components.timepicker_ Nothing currentRange
+              }
+      currTime <- liftIO getCurrentTime
+      let (days, hours, minutes, _seconds) = convertToDHMS $ diffUTCTime currTime project.createdAt
+          daysLeft =
+            if days >= 0 && project.paymentPlan /= "Free"
+              then show days <> " days, " <> show hours <> " hours, " <> show minutes <> " minutes"
+              else "-"
+          currentURL = "/p/" <> pid.toText <> "?&from=" <> fromMaybe "" fromDStr <> "&to=" <> fromMaybe "" toDStr
+          paramInput = ParamInput{currentURL = currentURL, sinceStr = sinceStr', dateRange = (fromD, toD)}
+      pure $ addHeader "" $ PageCtx bwconf $ DashboardGet (pid, paramInput, currTime, projectRequestStats, newEndpoints, reqLatenciesRolledByStepsJ, daysLeft, (fromD, toD), freeTierExceeded, hasRequests)
 
 
 dashboardPage :: Projects.ProjectId -> ParamInput -> UTCTime -> Projects.ProjectRequestStats -> V.Vector Endpoints.EndpointRequestStats -> Text -> Text -> (Maybe UTCTime, Maybe UTCTime) -> Bool -> Bool -> Html ()

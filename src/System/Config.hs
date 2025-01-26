@@ -58,6 +58,7 @@ data EnvConfig = EnvConfig
   , loggingDestination :: Logging.LoggingDestination
   , lemonSqueezyApiKey :: Text
   , lemonSqueezyUrl :: Text
+  , lemonSqueezyCriticalUrl :: Text
   , postmarkToken :: Text
   , lemonSqueezyWebhookSecret :: Text
   }

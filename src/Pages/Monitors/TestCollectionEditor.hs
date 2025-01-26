@@ -40,6 +40,7 @@ import Lucid.Hyperscript (__)
 import Models.Projects.ProjectApiKeys (projectIdsByProjectApiKeys)
 import Models.Projects.Projects qualified as Projects
 import Models.Tests.TestToDump qualified as TestToDump
+import Models.Tests.Testing (CollectionSteps (..))
 import Models.Tests.Testing qualified as Testing
 import Models.Users.Sessions qualified as Sessions
 import NeatInterpolation (text)
@@ -49,7 +50,7 @@ import Pkg.Components qualified as Components
 import PyF (fmt)
 import Relude hiding (ask)
 import System.Types (ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders, addSuccessToast, redirectCS)
-import Utils (faSprite_, getStatusColor, jsonValueToHtmlTree)
+import Utils (faSprite_, getStatusColor, insertIfNotExist, jsonValueToHtmlTree, redirect)
 
 
 data CollectionVariableForm = CollectionVariableForm
@@ -60,10 +61,12 @@ data CollectionVariableForm = CollectionVariableForm
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields] CollectionVariableForm
 
 
-collectionStepsUpdateH :: Projects.ProjectId -> Testing.CollectionStepUpdateForm -> ATAuthCtx (RespHeaders CollectionMut)
-collectionStepsUpdateH pid colF = do
+collectionStepsUpdateH :: Projects.ProjectId -> Testing.CollectionStepUpdateForm -> Maybe Text -> ATAuthCtx (RespHeaders CollectionMut)
+collectionStepsUpdateH pid colF onboardingM = do
   (_, project) <- Sessions.sessionAndProject pid
   let (isValid, errMessage) = validateCollectionForm colF project.paymentPlan
+      steps = project.onboardingStepsCompleted
+      newStepsComp = insertIfNotExist "CreateMonitor" steps
   if not isValid
     then do
       forM_ errMessage \m -> addErrorToast m Nothing
@@ -73,8 +76,14 @@ collectionStepsUpdateH pid colF = do
       case colIdM of
         Just colId -> do
           _ <- dbtToEff $ Testing.updateCollection pid colId colF
-          addSuccessToast "Collection's steps updated successfully" Nothing
-          addRespHeaders CollectionMutSuccess
+          case onboardingM of
+            Just _ -> do
+              redirectCS $ "/p/" <> pid.toText <> "/onboarding?step=NotifChannel"
+              _ <- dbtToEff $ Projects.updateOnboardingStepsCompleted pid newStepsComp
+              addRespHeaders CollectionMutSuccess
+            Nothing -> do
+              addSuccessToast "Collection's steps updated successfully" Nothing
+              addRespHeaders CollectionMutSuccess
         Nothing -> do
           currentTime <- Time.currentTime
           colId <- Testing.CollectionId <$> liftIO UUIDV4.nextRandom
@@ -108,9 +117,15 @@ collectionStepsUpdateH pid colF = do
                   , stopAfterCheck = False
                   }
           _ <- dbtToEff $ Testing.addCollection coll
-          addSuccessToast "Collection saved successfully" Nothing
-          redirectCS $ "/p/" <> pid.toText <> "/monitors/collection/?col_id=" <> colId.toText
-          addRespHeaders CollectionMutSuccess
+          case onboardingM of
+            Just _ -> do
+              _ <- dbtToEff $ Projects.updateOnboardingStepsCompleted pid newStepsComp
+              redirectCS $ "/p/" <> pid.toText <> "/onboarding?step=NotifChannel"
+              addRespHeaders CollectionMutSuccess
+            Nothing -> do
+              addSuccessToast "Collection saved successfully" Nothing
+              redirectCS $ "/p/" <> pid.toText <> "/monitors/collection/?col_id=" <> colId.toText
+              addRespHeaders CollectionMutSuccess
 
 
 collectionStepVariablesUpdateH :: Projects.ProjectId -> Testing.CollectionId -> CollectionVariableForm -> ATAuthCtx (RespHeaders (Html ()))
@@ -198,7 +213,7 @@ collectionGetH pid colIdM = do
           , pageTitle = "Testing"
           , navTabs = Just $ pageTabs editorUrl overviewUrl
           , pageActions = Just $ div_ [class_ "inline-flex gap-2"] do
-              button_ [class_ "h-8 rounded-lg bg-brand text-sm text-white px-3 flex items-center", onclick_ "htmx.trigger('#stepsForm','submit')"] do
+              button_ [class_ "h-8 rounded-lg btn-primary text-sm text-white px-3 flex items-center", onclick_ "htmx.trigger('#stepsForm','submit')"] do
                 span_ [id_ "save-indicator", class_ "refresh-indicator px-6 htmx-indicator query-indicator loading loading-dots loading-md"] ""
                 span_ [class_ "flex items-center gap-2"] do
                   faSprite_ "save" "regular" "w-4 h-4 stroke-white"
@@ -315,11 +330,7 @@ collectionPage pid colM col_rn respJson = do
               _ -> (True, "1", "minutes")
           )
           colM
-  script_
-    []
-    [fmt|
-        window.collectionSteps = {collectionStepsJSON};
-  |]
+  script_ [fmt| window.collectionSteps = {collectionStepsJSON};|]
   editorExtraElements
   section_ [class_ "h-full overflow-y-hidden"] do
     form_
@@ -391,44 +402,6 @@ collectionPage pid colM col_rn respJson = do
         -- div_ [role_ "tabpanel", class_ "tab-content max-h-full h-full overflow-y-auto space-y-4 relative"] "Hello world"
         jsonTreeAuxillaryCode
 
-    script_ [src_ "/public/assets/testeditor-utils.js"] ("" :: Text)
-    script_ [type_ "module", src_ "/public/assets/steps-editor.js"] ("" :: Text)
-    script_ [type_ "module", src_ "/public/assets/steps-assertions.js"] ("" :: Text)
-    script_
-      [text|
-
-        function codeToggle(e) {
-          if(e.target.checked) {
-               window.updateEditorVal()
-            }
-        }
-        function addToAssertions(event, assertion, operation) {
-            const parent = event.target.closest(".tab-content")
-            const step = Number(parent.getAttribute('data-step'));
-            const target = event.target.parentNode.parentNode.parentNode
-            const path = target.getAttribute('data-field-path');
-            const value = target.getAttribute('data-field-value');
-            let expression = "$.resp.json." + path
-            if(operation) {
-              expression +=  ' ' + operation + ' ' + value;
-              }
-            window.updateStepAssertions(assertion, expression, step);
-        }
-
-     function saveStepData()  {
-       const data = document.getElementById('stepsEditor').collectionSteps
-       const parsedData = validateYaml(data)
-       if(parsedData === undefined) {
-          return undefined
-        }
-       return parsedData;
-      }
-
-      function getTags() {
-        const tag = window.tagify.value
-        return tag.map(tag => tag.value);
-      }
-    |]
     let res = toText respJson
     script_
       [text|
@@ -513,13 +486,13 @@ collectionStepResult_ idx stepResult = section_ [class_ "p-1"] do
     p_ [class_ $ "block badge badge-sm " <> getStatusColor stepResult.request.resp.status, term "data-tippy-content" "status"] $ show stepResult.request.resp.status
   div_ [role_ "tablist", class_ "tabs tabs-lifted"] do
     input_ [type_ "radio", name_ $ "step-result-tabs-" <> show idx, role_ "tab", class_ "tab", Aria.label_ "Response Log", checked_]
-    div_ [role_ "tabpanel", class_ "tab-content bg-base-100 border-base-300 rounded-box p-6"] $
-      toHtmlRaw $
-        textToHTML stepResult.stepLog
+    div_ [role_ "tabpanel", class_ "tab-content bg-base-100 border-base-300 rounded-box p-6"]
+      $ toHtmlRaw
+      $ textToHTML stepResult.stepLog
 
     input_ [type_ "radio", name_ $ "step-result-tabs-" <> show idx, role_ "tab", class_ "tab", Aria.label_ "Response Headers"]
-    div_ [role_ "tabpanel", class_ "tab-content bg-base-100 border-base-300 rounded-box p-6 "] $
-      table_ [class_ "table table-xs"] do
+    div_ [role_ "tabpanel", class_ "tab-content bg-base-100 border-base-300 rounded-box p-6 "]
+      $ table_ [class_ "table table-xs"] do
         thead_ [] $ tr_ [] $ th_ [] "Name" >> th_ [] "Value"
         tbody_ do
           whenJust stepResult.request.resp.headers $ \headers -> do
@@ -611,7 +584,6 @@ editorExtraElements = do
     option_ [value_ "exists"] ""
     option_ [value_ "date"] ""
     option_ [value_ "notEmpty"] ""
-  script_ [src_ "/public/assets/js/thirdparty/jsyaml.min.js", crossorigin_ "true"] ("" :: Text)
 
 
 validateCollectionForm :: Testing.CollectionStepUpdateForm -> Text -> (Bool, [Text])

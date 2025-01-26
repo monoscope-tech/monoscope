@@ -151,24 +151,14 @@ effToHandler computation = do
   either T.throwError pure v
 
 
-logoutH
-  :: ATBaseCtx
-      ( Headers
-          '[Header "Location" Text, Header "Set-Cookie" SetCookie]
-          NoContent
-      )
+logoutH :: ATBaseCtx (Headers '[Header "Location" Text, Header "Set-Cookie" SetCookie] NoContent)
 logoutH = do
   envCfg <- asks env
   let redirectTo = envCfg.auth0Domain <> "/v2/logout?client_id=" <> envCfg.auth0ClientId <> "&returnTo=" <> envCfg.auth0LogoutRedirect
   pure $ addHeader redirectTo $ addHeader Sessions.emptySessionCookie NoContent
 
 
-loginRedirectH
-  :: ATBaseCtx
-      ( Headers
-          '[Header "Location" Text, Header "Set-Cookie" SetCookie]
-          NoContent
-      )
+loginRedirectH :: ATBaseCtx (Headers '[Header "Location" Text, Header "Set-Cookie" SetCookie] NoContent)
 loginRedirectH = do
   let redirectTo = "/login"
   pure $ addHeader redirectTo $ addHeader emptySessionCookie NoContent
