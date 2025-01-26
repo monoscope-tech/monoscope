@@ -64,6 +64,8 @@ collectionStepsUpdateH :: Projects.ProjectId -> Testing.CollectionStepUpdateForm
 collectionStepsUpdateH pid colF onboardingM = do
   (_, project) <- Sessions.sessionAndProject pid
   let (isValid, errMessage) = validateCollectionForm colF project.paymentPlan
+      steps = project.onboardingStepsCompleted
+      newStepsComp = insertIfNotExist "CreateMonitor" steps
   if not isValid
     then do
       forM_ errMessage \m -> addErrorToast m Nothing
@@ -76,6 +78,7 @@ collectionStepsUpdateH pid colF onboardingM = do
           case onboardingM of
             Just _ -> do
               redirectCS $ "/p/" <> pid.toText <> "/onboarding?step=NotifChannel"
+              _ <- dbtToEff $ Projects.updateOnboardingStepsCompleted pid newStepsComp
               addRespHeaders CollectionMutSuccess
             Nothing -> do
               addSuccessToast "Collection's steps updated successfully" Nothing
@@ -115,8 +118,6 @@ collectionStepsUpdateH pid colF onboardingM = do
           _ <- dbtToEff $ Testing.addCollection coll
           case onboardingM of
             Just _ -> do
-              let steps = project.onboardingStepsCompleted
-                  newStepsComp = insertIfNotExist "CreateMonitor" steps
               _ <- dbtToEff $ Projects.updateOnboardingStepsCompleted pid newStepsComp
               redirectCS $ "/p/" <> pid.toText <> "/onboarding?step=NotifChannel"
               addRespHeaders CollectionMutSuccess

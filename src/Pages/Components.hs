@@ -107,9 +107,9 @@ paymentPlanPicker pid lemonUrl criticalUrl isSettings = do
     div_ [class_ "grid grid-cols-2 gap-8 mt-6 w-full"] do
       popularPricing pid lemonUrl isSettings
       systemsPricing pid criticalUrl isSettings
-      script_ [src_ "https://assets.lemonsqueezy.com/lemon.js"] ("" :: Text)
-      script_
-        [text|
+    script_ [src_ "https://assets.lemonsqueezy.com/lemon.js"] ("" :: Text)
+    script_
+      [text|
                const price_indicator = document.querySelector("#price_range");
                const priceContainer = document.querySelector("#price")
                const reqsContainer = document.querySelector("#num_requests")
@@ -143,7 +143,7 @@ paymentPlanPicker pid lemonUrl criticalUrl isSettings = do
 popularPricing :: Projects.ProjectId -> Text -> Bool -> Html ()
 popularPricing pid lemonUrl isSettings = do
   div_
-    [ class_ "flex flex-col gap-2 w-full"
+    [ class_ "flex flex-col gap-2 h-full w-full"
     , hxPost_ $ "/p/" <> pid.toText <> "/onboarding/pricing"
     , id_ "GraduatedPricing"
     , hxIndicator_ "#loadingIndicator"
@@ -151,7 +151,7 @@ popularPricing pid lemonUrl isSettings = do
     ]
     $ do
       div_
-        [ class_ "flex flex-col gap-2 rounded-2xl p-8 border border-[var(--brand-color)] flex-col flex gap-8 relative shadow-[0px_4px_8px_-2px_rgba(0,0,0,0.04)] shadow-[0px_2px_4px_-2px_rgba(0,0,0,0.08)]"
+        [ class_ "flex flex-col gap-2 h-full rounded-2xl p-8 border border-[var(--brand-color)] flex-col flex gap-8 relative shadow-[0px_4px_8px_-2px_rgba(0,0,0,0.04)] shadow-[0px_2px_4px_-2px_rgba(0,0,0,0.08)]"
         , onclick_ "handlePaymentPlanSelect(event, 'popularPlan')"
         , id_ "popularPlan"
         ]
@@ -172,9 +172,9 @@ popularPricing pid lemonUrl isSettings = do
             span_ [class_ "text-weak text-base font-semibold"] "What’s Included:"
             mapM_ featureRow features
           unless isSettings do
-            div_ [class_ "flex-col justify-start items-start gap-6 flex", [__|on click halt|]] $ do
+            div_ [class_ "flex-col justify-start items-start gap-6 mt-auto flex", [__|on click halt|]] $ do
               button_
-                [ class_ "btn-primary h-12 rounded mt-auto w-full font-semibold rounded-lg shadow-[0px_1px_2px_0px_rgba(10,13,18,0.05)] shadow-[inset_0px_-2px_0px_0px_rgba(10,13,18,0.05)] shadow-[inset_0px_0px_0px_1px_rgba(10,13,18,0.18)]"
+                [ class_ "btn-primary h-12 rounded w-full font-semibold rounded-lg shadow-[0px_1px_2px_0px_rgba(10,13,18,0.05)] shadow-[inset_0px_-2px_0px_0px_rgba(10,13,18,0.05)] shadow-[inset_0px_0px_0px_1px_rgba(10,13,18,0.18)]"
                 , term "_" [text|on click call window.payLemon("GraduatedPricing","$lemonUrl") |]
                 , type_ "button"
                 ]
@@ -191,7 +191,7 @@ popularPricing pid lemonUrl isSettings = do
 systemsPricing :: Projects.ProjectId -> Text -> Bool -> Html ()
 systemsPricing pid critical isSettings = do
   div_
-    [ class_ "flex flex-col gap-2 w-full h-full"
+    [ class_ "flex flex-col gap-2 w-full"
     , hxPost_ $ "/p/" <> pid.toText <> "/onboarding/pricing"
     , id_ "SystemsPricing"
     , hxIndicator_ "#loadingIndicator"
@@ -199,7 +199,7 @@ systemsPricing pid critical isSettings = do
     ]
     $ do
       div_
-        [ class_ "flex flex-col gap-2 rounded-2xl p-8 border flex-col flex gap-8 relative shadow-[0px_4px_8px_-2px_rgba(0,0,0,0.04)] shadow-[0px_2px_4px_-2px_rgba(0,0,0,0.08)]"
+        [ class_ "flex flex-col gap-2 h-full rounded-2xl p-8 border flex-col flex gap-8 relative shadow-[0px_4px_8px_-2px_rgba(0,0,0,0.04)] shadow-[0px_2px_4px_-2px_rgba(0,0,0,0.08)]"
         , onclick_ "handlePaymentPlanSelect(event, 'systemsPlan')"
         , id_ "systemsPlan"
         ]
@@ -216,9 +216,9 @@ systemsPricing pid critical isSettings = do
             span_ [class_ "text-weak text-base font-semibold"] "Everything in plus and..."
             mapM_ featureRow features
           unless isSettings do
-            div_ [class_ "flex-col justify-start items-start gap-6 flex", [__|on click halt|]] $ do
+            div_ [class_ "flex-col justify-start items-start gap-6 mt-auto  flex", [__|on click halt|]] $ do
               button_
-                [ class_ "btn-primary h-12 rounded w-full mt-auto font-semibold rounded-lg shadow-[0px_1px_2px_0px_rgba(10,13,18,0.05)] shadow-[inset_0px_-2px_0px_0px_rgba(10,13,18,0.05)] shadow-[inset_0px_0px_0px_1px_rgba(10,13,18,0.18)]"
+                [ class_ "btn-primary h-12 rounded w-full font-semibold rounded-lg shadow-[0px_1px_2px_0px_rgba(10,13,18,0.05)] shadow-[inset_0px_-2px_0px_0px_rgba(10,13,18,0.05)] shadow-[inset_0px_0px_0px_1px_rgba(10,13,18,0.18)]"
                 , term "_" [text|on click call window.payLemon("SystemsPricing", "$critical") |]
                 , type_ "button"
                 ]

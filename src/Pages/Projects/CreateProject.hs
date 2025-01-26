@@ -283,7 +283,7 @@ pricingUpdateH pid PricingUpdateForm{orderId} = do
               firstSubId = show target.attributes.firstSubscriptionItem.id
               productName = target.attributes.productName
               steps = project.onboardingStepsCompleted
-              newStepsComp = insertIfNotExist "Integration" steps
+              newStepsComp = insertIfNotExist "Pricing" steps
           v <- dbtToEff $ Projects.updateProjectPricing pid productName subId firstSubId orderId newStepsComp
           redirectCS $ "/p/" <> pid.toText <> "/"
           addRespHeaders ""

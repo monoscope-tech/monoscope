@@ -201,7 +201,7 @@ window.onload = function () {
       initDrawingCanvas()
       requestAnimationFrame(loop)
     }
-  }, 1100)
+  }, 500)
 }
 
 function loop() {
@@ -213,12 +213,7 @@ function loop() {
   } else if (phase === 1 && exploader.complete) {
     phase = 2
   } else if (phase === 2 && checkParticlesComplete()) {
-    // reset
-    phase = 0
-    loader.reset()
-    exploader.reset()
-    particles.length = 0
-    createParticles()
+    return
   }
 
   requestAnimationFrame(loop)
