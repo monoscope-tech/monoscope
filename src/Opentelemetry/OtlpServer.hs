@@ -233,7 +233,7 @@ convertScopeLog pid resource sl = V.map (convertLogRecord pid resource sl.scopeL
 
 
 removeProjectId :: AE.Value -> AE.Value
-removeProjectId (AE.Object v) = AE.Object $ KEM.delete "at-project-key" $ KEM.delete "at-project-id" v
+removeProjectId (AE.Object v) = AE.Object $ KEM.delete "at-project-id" v
 removeProjectId (AE.Array v) = AE.Array $ V.map removeProjectId v
 removeProjectId v = v
 
@@ -298,7 +298,7 @@ convertSpanRecord pid resource scope sp =
                 , kind = parseSpanKind (HsProtobuf.enumerated sp.spanKind)
                 , status = parseSpanStatus sp.spanStatus
                 , statusMessage = (\s -> Just $ toText s.statusMessage) =<< sp.spanStatus
-                , attributes = removeProjectId $ keyValueToJSONB sp.spanAttributes
+                , attributes = keyValueToJSONB sp.spanAttributes
                 , events = eventsToJSONB $ V.toList sp.spanEvents
                 , links = linksToJSONB $ V.toList sp.spanLinks
                 , resource = removeProjectId $ resourceToJSONB resource
