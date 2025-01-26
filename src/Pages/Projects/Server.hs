@@ -32,4 +32,5 @@ server =
     , onboardingPhoneEmailsPost = Onboarding.phoneEmailPostH
     , onboardingIntegrationCheck = Onboarding.checkIntegrationGet
     , onboardingPricingUpdate = CreateProject.pricingUpdateH
+    , onboardingSkipped = Onboarding.onboardingStepSkipped
     }

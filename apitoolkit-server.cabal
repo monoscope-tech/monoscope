@@ -95,6 +95,7 @@ library
       Pages.IntegrationDemos.Golang
       Pages.IntegrationDemos.GoNative
       Pages.IntegrationDemos.GorillaMux
+      Pages.IntegrationDemos.Java
       Pages.IntegrationDemos.Javascript
       Pages.IntegrationDemos.Laravel
       Pages.IntegrationDemos.NestJs

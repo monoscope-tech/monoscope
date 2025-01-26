@@ -7,6 +7,7 @@ module Pages.Onboarding.Onboarding (
   discorPostH,
   phoneEmailPostH,
   checkIntegrationGet,
+  onboardingStepSkipped,
   DiscordForm (..),
   NotifChannelForm (..),
   OnboardingInfoForm (..),
@@ -168,6 +169,28 @@ discorPostH pid form = do
   _ <- dbtToEff do Projects.updateNotificationsChannel pid notifs (Just form.url)
   _ <- dbtToEff $ execute Update q (newCompleted, pid)
   addRespHeaders $ button_ [class_ "text-green-500 font-semibold"] "Connected"
+
+
+onboardingStepSkipped :: Projects.ProjectId -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))
+onboardingStepSkipped pid stepM = do
+  (sess, project) <- Sessions.sessionAndProject pid
+  case stepM of
+    Just step -> do
+      let stepsCompleted = project.onboardingStepsCompleted
+          newCompleted = insertIfNotExist step stepsCompleted
+      _ <- dbtToEff $ execute Update [sql| update projects.projects set onboarding_steps_completed=? where id=? |] (newCompleted, pid)
+
+      redirectCS $ "/p/" <> pid.toText <> "/onboarding?step=" <> getNextStep step
+      addRespHeaders ""
+    _ -> do
+      redirectCS $ "/p/" <> pid.toText <> "/onboarding?step=Info"
+      addRespHeaders ""
+
+
+getNextStep :: Text -> Text
+getNextStep "CreateMonitor" = "NotifChannel"
+getNextStep "Integration" = "Pricing"
+getNextStep _ = "Info"
 
 
 phoneEmailPostH :: Projects.ProjectId -> NotifChannelForm -> ATAuthCtx (RespHeaders (Html ()))
@@ -337,7 +360,7 @@ integrationsPage pid apikey =
               a_
                 [ class_ "px-2 h-14 flex items-center underline text-brand text-xl font-semibold"
                 , type_ "button"
-                , href_ $ "/p/" <> pid.toText <> "/onboarding?step=Pricing"
+                , hxPost_ $ "/p/" <> pid.toText <> "/onboarding/skip?step=Integration"
                 ]
                 "Skip"
     div_ [class_ "w-1/2 flex items-center px-12"] do
@@ -508,7 +531,7 @@ createMonitorPage pid colM = do
             a_
               [ class_ "px-2 h-14 flex items-center underline text-brand text-xl font-semibold"
               , type_ "button"
-              , href_ $ "/p/" <> pid.toText <> "/onboarding?step=NotifChannel"
+              , hxPost_ $ "/p/" <> pid.toText <> "/onboarding/skip?step=CreateMonitor"
               ]
               "Skip"
 
