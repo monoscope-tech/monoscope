@@ -46,6 +46,7 @@ import Pages.Components
 import Pages.Components qualified as Components
 import Pages.IntegrationDemos.Csharp (csharpGuide)
 import Pages.IntegrationDemos.Golang (golangGuide)
+import Pages.IntegrationDemos.Java (javaGuide)
 import Pages.IntegrationDemos.Javascript (javascriptGuide)
 import Pages.IntegrationDemos.Php (phpGuide)
 import Pages.IntegrationDemos.Python (pythonGuide)
@@ -329,7 +330,7 @@ integrationsPage pid apikey =
             p_ [class_ "text-strong"] "Send Logs, Metrics or Traces. Click proceed when you’re done integrating your applications. learn more"
             div_ [class_ "flex flex-col gap-4 "] $ do
               div_ [class_ "flex flex-col gap-2"] do
-                let langs = [("js", "Javascript") :: (Text, Text), ("go", "Golang"), ("py", "Python"), ("php", "PHP"), ("cs", "C#")]
+                let langs = [("js", "Javascript") :: (Text, Text), ("go", "Golang"), ("py", "Python"), ("php", "PHP"), ("java", "Java"), ("cs", "C#")]
                 forM_ langs $ \(lang, langName) -> languageItem pid langName lang
             div_ [class_ "flex items-center gap-4"] do
               button_ [class_ "btn btn-primary", hxGet_ $ "/p/" <> pid.toText <> "/onboarding/integration-check", hxSwap_ "none", hxIndicator_ "#loadingIndicator"] "Confirm & Proceed"
@@ -347,6 +348,7 @@ integrationsPage pid apikey =
           pythonGuide apikey
           phpGuide apikey
           csharpGuide apikey
+          javaGuide apikey
     script_
       [text|
       function toggleCheckbox(event) {
