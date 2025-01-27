@@ -10,11 +10,11 @@ import Relude
 javascriptGuide :: Text -> Html ()
 javascriptGuide apikey = do
   section_ [class_ "flex flex-col gap-4 lang-guide", id_ "js_main"] do
-    span_ [class_ "text-2xl font-semibold text-strong"] "Integrate Javascript SDK"
+    span_ [class_ "text-2xl font-semibold  text-textStrong"] "Integrate Javascript SDK"
     -- div_ [class_ "flex items-center gap-2"] do
     --   mapM_ featureItem features
     div_ [class_ "flex flex-col gap-2"] do
-      span_ [class_ "text-strong font-semibold"] "Select framework"
+      span_ [class_ " text-textStrong font-semibold"] "Select framework"
       div_ [class_ "flex items-center gap-2"] do
         mapM_ (frameworkItem "js") frameworks
     div_ [class_ "w-full border-b"] pass
@@ -90,8 +90,8 @@ nextJsGuide apikey = do
     div_ [class_ "w-full flex flex-col gap-2"] do
       h3_ [class_ "text-2xl font-semibold"] "Open Telemetry SDK Configuration"
       p_ [class_ "text-gray-600 font-medium"] "Set the neccessary environment variables to configure the SDK"
-      codeExample
-        $ [text|
+      codeExample $
+        [text|
 OTEL_EXPORTER_OTLP_ENDPOINT="http://otelcol.apitoolkit.io:4318"
 OTEL_SERVICE_NAME="my-service" # Specifies the name of the service.
 OTEL_RESOURCE_ATTRIBUTES="at-project-key=$apikey"

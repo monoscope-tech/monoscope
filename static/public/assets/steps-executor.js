@@ -128,7 +128,7 @@ export function renderJsonWithIndentation(json, addAssertion, path = '', depth =
         <div style="padding-left: ${padding};">
           <div class="flex items-center gap-4">
             <span> ${key}: ${typeof value === 'object' && value ? '' : JSON.stringify(value)} </span>
-            <button class="rounded-full border shadow-sm p-1.5" @click="${(e) => addAssertion(e, assertionObj)}">${faSprite_('plus', 'regular', 'w-3 h-3 stroke-slate-500 text-weak')}</button>
+            <button class="rounded-full border shadow-sm p-1.5" @click="${(e) => addAssertion(e, assertionObj)}">${faSprite_('plus', 'regular', 'w-3 h-3 stroke-slate-500  text-textWeak')}</button>
           </div>
           ${typeof value === 'object' && value ? renderJsonWithIndentation(value, addAssertion, currentPath, depth + 1) : ''}
         </div>

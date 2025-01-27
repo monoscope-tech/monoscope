@@ -10,7 +10,7 @@ import Relude
 csharpGuide :: Text -> Html ()
 csharpGuide apikey =
   section_ [class_ "flex flex-col gap-4 lang-guide hidden", id_ "cs_main"] do
-    span_ [class_ "text-2xl font-semibold text-strong"] "Integrate .NET SDK"
+    span_ [class_ "text-2xl font-semibold  text-textStrong"] "Integrate .NET SDK"
     -- div_ [class_ "flex items-center gap-2"] do
     --   mapM_ featureItem features
     div_ [class_ "flex flex-col gap-2"] do

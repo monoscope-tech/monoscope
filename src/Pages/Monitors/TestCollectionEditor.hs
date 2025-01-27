@@ -193,10 +193,10 @@ castToStepResult v = case AE.eitherDecodeStrictText (decodeUtf8 $ AE.encode v) o
 
 pageTabs :: Text -> Maybe Text -> Html ()
 pageTabs url ov = do
-  div_ [class_ "tabs tabs-boxed tabs-outline items-center p-0 bg-weak text-weak border"] do
+  div_ [class_ "tabs tabs-boxed tabs-outline items-center p-0  bg-fillWeak  text-textWeak border"] do
     whenJust ov $ \v -> do
       a_ [href_ v, role_ "tab", class_ "tab"] "Overview"
-    a_ [href_ url, role_ "tab", class_ "tab tab-active text-strong stroke-strong"] "Test editor"
+    a_ [href_ url, role_ "tab", class_ "tab tab-active  text-textStrong border border-strokeStrong"] "Test editor"
 
 
 collectionGetH :: Projects.ProjectId -> Maybe Testing.CollectionId -> ATAuthCtx (RespHeaders CollectionGet)
@@ -448,7 +448,7 @@ variablesDialog pid colM = do
           p_ [class_ "text-gray-500"] "Create local variables to be used in your test steps."
       label_ [Lucid.for_ "my_modal_7", class_ "flex items-center mx-4 mt-4 gap-2"] do
         faSprite_ "plus" "solid" "w-4 h-4"
-        span_ [class_ "underline text-weak font-medium"] "Add new variable"
+        span_ [class_ "underline  text-textWeak font-medium"] "Add new variable"
       input_ [type_ "checkbox", id_ "my_modal_7", class_ "modal-toggle"]
       div_ [class_ "modal", role_ "dialog"] $ do
         div_
@@ -486,13 +486,13 @@ collectionStepResult_ idx stepResult = section_ [class_ "p-1"] do
     p_ [class_ $ "block badge badge-sm " <> getStatusColor stepResult.request.resp.status, term "data-tippy-content" "status"] $ show stepResult.request.resp.status
   div_ [role_ "tablist", class_ "tabs tabs-lifted"] do
     input_ [type_ "radio", name_ $ "step-result-tabs-" <> show idx, role_ "tab", class_ "tab", Aria.label_ "Response Log", checked_]
-    div_ [role_ "tabpanel", class_ "tab-content bg-base-100 border-base-300 rounded-box p-6"]
-      $ toHtmlRaw
-      $ textToHTML stepResult.stepLog
+    div_ [role_ "tabpanel", class_ "tab-content bg-base-100 border-base-300 rounded-box p-6"] $
+      toHtmlRaw $
+        textToHTML stepResult.stepLog
 
     input_ [type_ "radio", name_ $ "step-result-tabs-" <> show idx, role_ "tab", class_ "tab", Aria.label_ "Response Headers"]
-    div_ [role_ "tabpanel", class_ "tab-content bg-base-100 border-base-300 rounded-box p-6 "]
-      $ table_ [class_ "table table-xs"] do
+    div_ [role_ "tabpanel", class_ "tab-content bg-base-100 border-base-300 rounded-box p-6 "] $
+      table_ [class_ "table table-xs"] do
         thead_ [] $ tr_ [] $ th_ [] "Name" >> th_ [] "Value"
         tbody_ do
           whenJust stepResult.request.resp.headers $ \headers -> do

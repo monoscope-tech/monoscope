@@ -88,7 +88,7 @@ itemsList_ :: ToHtml a => ItemsListCfg -> V.Vector a -> Html ()
 itemsList_ listCfg items = do
   let currentURL' = deleteParam "sort" listCfg.currentURL
   whenJust listCfg.search \search -> do
-    label_ [class_ "input input-sm flex bg-weak stroke-strong py-0 shadow-none overflow-hidden items-center gap-2"] do
+    label_ [class_ "input input-sm flex  bg-fillWeak border border-strokeStrong py-0 shadow-none overflow-hidden items-center gap-2"] do
       faSprite_ "magnifying-glass" "regular" "w-4 h-4 opacity-70"
       case search.viaQueryParam of
         Just param ->
@@ -163,8 +163,8 @@ itemsList_ listCfg items = do
                       , hxIndicator_ "#sortLoader"
                       ]
                       do
-                        div_ [class_ "flex flex-col items-center justify-center px-3"]
-                          $ if isActive then faSprite_ "icon-checkmark4" "solid" "w-4 h-5" else div_ [class_ "w-4 h-5"] ""
+                        div_ [class_ "flex flex-col items-center justify-center px-3"] $
+                          if isActive then faSprite_ "icon-checkmark4" "solid" "w-4 h-5" else div_ [class_ "w-4 h-5"] ""
                         div_ [class_ "grow space-y-1"] do
                           span_ [class_ "block text-lg"] $ toHtml title
                           span_ [class_ "block "] $ toHtml desc
@@ -207,8 +207,8 @@ itemRows_ :: (Monad m, ToHtml a) => Maybe Text -> V.Vector a -> HtmlT m ()
 itemRows_ nextFetchUrl items = do
   mapM_ toHtml items
   whenJust nextFetchUrl \url ->
-    when (length items > 9)
-      $ a_
+    when (length items > 9) $
+      a_
         [ class_ "cursor-pointer flex justify-center items-center p-1 blue-800 bg-blue-100 hover:bg-blue-200 text-center"
         , hxTrigger_ "click, intersect once"
         , hxSwap_ "outerHTML"
@@ -254,12 +254,12 @@ timelineSteps_ steps colM =
           label_ [class_ "text-lg flex gap-2 items-center pt-1"] $ do
             span_ [class_ "font-medium ml-2 text-gray-900"] (toHtml step.title)
             input_ ([type_ "checkbox", class_ "hidden tm-toggle"] <> [checked_ | idx == 0])
-            faSprite_ "chevron-up" "regular" "h-4 rounded-full rotate-180 bg-weak text-strong p-1 w-4 text-white group-has-[.tm-toggle:checked]/tm:rotate-0"
+            faSprite_ "chevron-up" "regular" "h-4 rounded-full rotate-180  bg-fillWeak  text-textStrong p-1 w-4 text-white group-has-[.tm-toggle:checked]/tm:rotate-0"
           when (idx == 0) $ do
             whenJust colM $ \col ->
               div_ [class_ "flex items-center gap-6"] do
                 label_ [class_ "relative inline-flex items-center cursor-pointer space-x-1"] do
-                  input_ [type_ "checkbox", class_ "checkbox checkbox-sm rounded editormode", id_ "test-code-toggle", onchange_ "codeToggle(event)"] >> span_ [class_ "text-sm text-weak font-medium"] "Code editor"
+                  input_ [type_ "checkbox", class_ "checkbox checkbox-sm rounded editormode", id_ "test-code-toggle", onchange_ "codeToggle(event)"] >> span_ [class_ "text-sm  text-textWeak font-medium"] "Code editor"
                 button_
                   [ class_ "flex items-center gap-1 font-medium rounded-lg text-brand underline"
                   , hxPatch_ $ "/p/" <> col.projectId.toText <> "/monitors/" <> col.id.toText

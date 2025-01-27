@@ -10,7 +10,7 @@ import Relude
 javaGuide :: Text -> Html ()
 javaGuide apikey =
   section_ [class_ "flex flex-col gap-4 lang-guide hidden", id_ "java_main"] do
-    span_ [class_ "text-2xl font-semibold text-strong"] "Integrate Java SDK"
+    span_ [class_ "text-2xl font-semibold  text-textStrong"] "Integrate Java SDK"
     -- div_ [class_ "flex items-center gap-2"] do
     --   mapM_ featureItem features
     div_ [class_ "flex flex-col gap-2"] do

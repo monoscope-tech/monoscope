@@ -96,7 +96,7 @@ codeExample code = do
           $ faSprite_ "copy" "solid" "h-4 w-4 inline-block"
       div_ [class_ "relative flex-auto flex flex-col bg-slate-100"] do
         pre_ [class_ "flex leading-snug"] do
-          code_ [class_ "flex-auto relative block text-strong py-4 px-4 overflow-auto hljs atom-one-light"] $ toHtml code
+          code_ [class_ "flex-auto relative block  text-textStrong py-4 px-4 overflow-auto hljs atom-one-light"] $ toHtml code
 
 
 codeEmphasis :: Text -> Html ()
@@ -105,7 +105,7 @@ codeEmphasis code = span_ [class_ "text-red-500"] $ toHtml code
 
 featureItem :: Text -> Html ()
 featureItem title =
-  div_ [class_ "h-8 px-3 rounded-lg flex justify-center items-center gap-2 stroke-strong"] $ do
+  div_ [class_ "h-8 px-3 rounded-lg flex justify-center items-center gap-2 border border-strokeStrong"] $ do
     let featureId = T.replace " " "" title
     input_ [type_ "checkbox", class_ "checkbox checkbox-sm shrink-0", style_ "--chkbg:#000626E5", id_ featureId]
     label_ [class_ "text-center text-[#000833]/60 text-sm font-semibold", Lucid.for_ featureId] $ toHtml title
@@ -113,7 +113,7 @@ featureItem title =
 
 frameworkItem :: Text -> Text -> Html ()
 frameworkItem lang title =
-  button_ [class_ "h-8 px-3 rounded-lg flex justify-center items-center gap-2 stroke-strong", term "_" [text|on click add .hidden to <.$lang-guide/> then remove .hidden from $title|]] $ do
+  button_ [class_ "h-8 px-3 rounded-lg flex justify-center items-center gap-2 border border-strokeStrong", term "_" [text|on click add .hidden to <.$lang-guide/> then remove .hidden from $title|]] $ do
     input_ [type_ "radio", class_ "radio radio-sm hrink-0", name_ "frameworks", style_ "--chkbg:#000626E5", id_ title]
     label_ [class_ "text-center text-[#000833]/60 text-sm font-semibold", Lucid.for_ title] $ toHtml title
 
@@ -146,19 +146,19 @@ data TabFilterOpt = TabFilterOpt
 
 instance ToHtml TabFilter where
   toHtmlRaw = toHtml
-  toHtml tf = div_ [class_ "tabs tabs-boxed tabs-outline p-0 bg-weak text-weak border items-center border"] do
+  toHtml tf = div_ [class_ "tabs tabs-boxed tabs-outline p-0  bg-fillWeak  text-textWeak border items-center border"] do
     let uri = deleteParam "filter" tf.currentURL
     forM_ tf.options \opt ->
       a_
         [ href_ $ uri <> "&filter=" <> escapedQueryPartial opt.name
         , role_ "tab"
-        , class_ $ "tab " <> if opt.name == tf.current then "tab-active text-strong stroke-strong" else ""
+        , class_ $ "tab " <> if opt.name == tf.current then "tab-active  text-textStrong border border-strokeStrong" else ""
         ]
         do
           span_ $ toHtml opt.name
           whenJust opt.count $ span_ [class_ "absolute top-[1px] -right-[5px] text-white text-xs font-medium rounded-full px-1 bg-red-500"] . show
 
--- , navTabs = Just $ div_ [class_ "tabs tabs-boxed tabs-md p-0 tabs-outline items-center bg-weak text-weak border"] do
---     a_ [onclick_ "window.setQueryParamAndReload('source', 'requests')", role_ "tab", class_ $ "tab py-1 !h-auto " <> if source == "requests" then "tab-active text-strong stroke-strong " else ""] "Requests"
---     a_ [onclick_ "window.setQueryParamAndReload('source', 'logs')", role_ "tab", class_ $ "tab py-1 !h-auto " <> if source == "logs" then "tab-active text-strong stroke-strong " else ""] "Logs"
---     a_ [onclick_ "window.setQueryParamAndReload('source', 'spans')", role_ "tab", class_ $ "tab py-1 !h-auto " <> if source == "spans" then "tab-active text-strong stroke-strong " else ""] "Traces"
+-- , navTabs = Just $ div_ [class_ "tabs tabs-boxed tabs-md p-0 tabs-outline items-center  bg-fillWeak  text-textWeak border"] do
+--     a_ [onclick_ "window.setQueryParamAndReload('source', 'requests')", role_ "tab", class_ $ "tab py-1 !h-auto " <> if source == "requests" then "tab-active  text-textStrong border border-strokeStrong " else ""] "Requests"
+--     a_ [onclick_ "window.setQueryParamAndReload('source', 'logs')", role_ "tab", class_ $ "tab py-1 !h-auto " <> if source == "logs" then "tab-active  text-textStrong border border-strokeStrong " else ""] "Logs"
+--     a_ [onclick_ "window.setQueryParamAndReload('source', 'spans')", role_ "tab", class_ $ "tab py-1 !h-auto " <> if source == "spans" then "tab-active  text-textStrong border border-strokeStrong " else ""] "Traces"

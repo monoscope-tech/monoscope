@@ -10,11 +10,11 @@ import Relude
 golangGuide :: Text -> Html ()
 golangGuide apikey =
   section_ [class_ "flex flex-col gap-4 lang-guide hidden", id_ "go_main"] do
-    span_ [class_ "text-2xl font-semibold text-strong"] "Integrate Golang SDK"
+    span_ [class_ "text-2xl font-semibold  text-textStrong"] "Integrate Golang SDK"
     -- div_ [class_ "flex items-center gap-2"] do
     --   mapM_ featureItem features
     div_ [class_ "flex flex-col gap-2"] do
-      span_ [class_ "text-strong font-semibold"] "Select framework"
+      span_ [class_ " text-textStrong font-semibold"] "Select framework"
       div_ [class_ "flex items-center gap-2"] do
         mapM_ (frameworkItem "go") frameworks
     div_ [class_ "w-full border-b"] pass

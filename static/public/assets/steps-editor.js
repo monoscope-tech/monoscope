@@ -479,11 +479,11 @@ ${stepData._json}</textarea
               ${
                 stepResult && stepResult.resp
                   ? html`
-                      <h3 class="text-strong text-lg font-medium py-2 mt-10">
+                      <h3 class=" text-textStrong text-lg font-medium py-2 mt-10">
                         Request Preview
-                        <span class="font-normal text-weak">(took <strong>${stepResult.resp.duration_ms}ms</strong> with status <strong>${stepResult.resp.status}</strong>)</span>
+                        <span class="font-normal  text-textWeak">(took <strong>${stepResult.resp.duration_ms}ms</strong> with status <strong>${stepResult.resp.status}</strong>)</span>
                       </h3>
-                      <div class="rounded-xl border border-weak p-4 text-strong flex flex-col gap-1">${unsafeHTML(generateRequestPreviewFromObject(this.collectionSteps[idx]))}</div>
+                      <div class="rounded-xl border border-weak p-4  text-textStrong flex flex-col gap-1">${unsafeHTML(generateRequestPreviewFromObject(this.collectionSteps[idx]))}</div>
                       <div role="tablist" class="tabs tabs-bordered max-h-96 overflow-y-auto border border-slate-200 rounded-xl mt-6">
                         <input
                           type="radio"
@@ -494,9 +494,9 @@ ${stepData._json}</textarea
                           checked
                         />
                         <div role="tabpanel" class="tab-content p-4">
-                          <div class="flex rounded bg-weak px-2 py-1 mb-2 items-center gap-2">
+                          <div class="flex rounded  bg-fillWeak px-2 py-1 mb-2 items-center gap-2">
                             ${faSprite_('circle-info', 'regular', 'w-4 h-4 fill-none stroke-slate-600')}
-                            <span class="text-weak">Click below to add field as an assertion</span>
+                            <span class=" text-textWeak">Click below to add field as an assertion</span>
                           </div>
                           ${Object.entries(stepResult.resp.headers).map(([key, value]) => {
                             let assertionObj = {
@@ -508,14 +508,14 @@ ${stepData._json}</textarea
                             }
                             return html`
                               <div class="flex items-center gap-2">
-                                <span class="text-strong">${key}:</span>
-                                <span class="text-weak">${value}</span>
+                                <span class=" text-textStrong">${key}:</span>
+                                <span class=" text-textWeak">${value}</span>
                                 <button
                                   data-tippy-content="Add as an assertion"
-                                  class="rounded-full border text-strong shadown-sm p-1.5 bg-white"
+                                  class="rounded-full border  text-textStrong shadown-sm p-1.5 bg-white"
                                   @click="${(e) => this.addAssertion(e, idx, assertionObj)}"
                                 >
-                                  ${faSprite_('plus', 'regular', 'w-3.5 h-3.5 text-weak')}
+                                  ${faSprite_('plus', 'regular', 'w-3.5 h-3.5  text-textWeak')}
                                 </button>
                               </div>
                             `
@@ -545,14 +545,14 @@ ${stepData._json}</textarea
 
             <details class="mt-10" ?open=${stepResult && stepResult.resp}>
               <summary class="label-text text-lg mb-2 cursor-pointer">
-                <div class="inline-flex text-lg gap-2 items-center cursor-pointer text-strong font-medium">
-                  Add Assertions <span class="font-normal text-weak">(optional)</span>
+                <div class="inline-flex text-lg gap-2 items-center cursor-pointer  text-textStrong font-medium">
+                  Add Assertions <span class="font-normal  text-textWeak">(optional)</span>
                   <a href="https://apitoolkit.io/docs/dashboard/dashboard-pages/api-tests/#test-definition-syntax" class="" target="_blank">
                     ${faSprite_('circle-info', 'regular', 'w-3 h-3 text-slate-700')}
                   </a>
                 </div>
               </summary>
-              <div class="text-strong space-y-2 px-2 paramRows [&_.assertIndicator]:inline-block" id="[${idx}][asserts]">
+              <div class=" text-textStrong space-y-2 px-2 paramRows [&_.assertIndicator]:inline-block" id="[${idx}][asserts]">
                 <p class="">Your step is successful;</p>
           ${renderAssertionBuilder({
             assertions: this.collectionSteps[idx]._assertions || [],
@@ -565,13 +565,13 @@ ${stepData._json}</textarea
             </details>
             <details class="mt-10">
               <summary class="label-text text-lg mb-2 cursor-pointer">
-                <div class="inline-flex gap-2 items-center cursor-pointer text-lg text-strong font-medium">Extract variables from the response <span class="font-normal text-weak">(optional)</span></div></summary>
+                <div class="inline-flex gap-2 items-center cursor-pointer text-lg  text-textStrong font-medium">Extract variables from the response <span class="font-normal  text-textWeak">(optional)</span></div></summary>
               <div class="text-sm space-y-2 px-2 paramRows" id="[${idx}][exports]">
-                <p class="text-strong">Variables consist of a variable name and a json path pointing to the variable in the response.</p>
+                <p class=" text-textStrong">Variables consist of a variable name and a json path pointing to the variable in the response.</p>
                 ${this.renderParamsRows(stepData, idx, 'exports')}
                 <button class="flex items-center gap-1 mt-4" type="button" @click=${() => {}}>
-                ${faSprite_('plus', 'regular', 'w-4 h-4 text-weak')}
-                <span class="underline text-weak font-semibold">New variable<span>
+                ${faSprite_('plus', 'regular', 'w-4 h-4  text-textWeak')}
+                <span class="underline  text-textWeak font-semibold">New variable<span>
                 </button>
               </div>
             </div>

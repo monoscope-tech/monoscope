@@ -47,10 +47,9 @@ body {
   @apply overscroll-none bg-slate-25;
   --brand-color: #0068ff;
   --brand-color-light: #0090f0;
-  --tags-border-color:rgba(0, 13, 77, 0.45);
+  --tags-border-color: rgba(0, 13, 77, 0.45);
   --tags-hover-border-color: rgba(0, 13, 77, 0.45);
-  --chkbg: var(--brand-color)
-
+  --chkbg: var(--brand-color);
 }
 
 .c-scroll::-webkit-scrollbar {
@@ -198,9 +197,6 @@ body {
   display: block;
 }
 
-.text-strong {
-  color: #000626;
-}
 
 .text-weak {
   @apply text-[#000933]/60;
@@ -381,7 +377,6 @@ body {
   @apply justify-center items-center leading-none;
 }
 
-
 /* ======= CODEMIRROR */
 .tree-children {
   display: block;
@@ -435,8 +430,6 @@ body {
   @apply tab-active;
   border: 1px solid rgba(0, 13, 77, 0.45);
   color: #000626;
-
-
 }
 
 .tab:is(input[type='radio']) {

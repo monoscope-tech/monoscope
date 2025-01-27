@@ -101,8 +101,8 @@ paymentPlanPicker pid lemonUrl criticalUrl isSettings = do
   div_ [class_ "flex flex-col gap-8 w-full"] do
     div_ [class_ "flex flex-col gap-2 w-full"] do
       div_ [class_ "flex items-center justify-between w-full gap-4"] do
-        p_ [class_ "text-strong"] "Total requests"
-        p_ [class_ "text-weak", id_ "num_requests"] "20 Million"
+        p_ [class_ " text-textStrong"] "Total requests"
+        p_ [class_ " text-textWeak", id_ "num_requests"] "20 Million"
       input_ [type_ "range", min_ "20000000", max_ "500000000", step_ "10000000", value_ "0", class_ "range range-primary range-sm", id_ "price_range"]
     div_ [class_ "grid grid-cols-2 gap-8 mt-6 w-full"] do
       popularPricing pid lemonUrl isSettings
@@ -162,14 +162,14 @@ popularPricing pid lemonUrl isSettings = do
               img_ [class_ "absolute top-1 -left-1/2 h-14 w-14", src_ "/public/assets/svgs/drawn-arrow.svg"]
           div_ [class_ "flex-col justify-start items-start gap-2 flex"] $ do
             input_ [type_ "hidden", class_ "orderId", id_ "popularPricing", name_ "ord", value_ ""]
-            div_ [class_ "text-center text-strong text-4xl font-bold"] "Pay as you use"
+            div_ [class_ "text-center  text-textStrong text-4xl font-bold"] "Pay as you use"
             div_ [class_ "text-brand text-base font-semibold"] "Start your FREE 30-day trial"
-            div_ [class_ "text-weak text-sm font-medium"] do
+            div_ [class_ " text-textWeak text-sm font-medium"] do
               "Starts at "
               span_ [class_ "", id_ "price"] "$34"
 
           div_ [class_ "flex-col justify-start items-start gap-6 flex"] $ do
-            span_ [class_ "text-weak text-base font-semibold"] "What’s Included:"
+            span_ [class_ " text-textWeak text-base font-semibold"] "What’s Included:"
             mapM_ featureRow features
           unless isSettings do
             div_ [class_ "flex-col justify-start items-start gap-6 mt-auto flex", [__|on click halt|]] $ do
@@ -208,12 +208,12 @@ systemsPricing pid critical isSettings = do
             -- div_ [class_ "relative"] $ do
             --   span_ [class_ "text-brand font-semibold"] "Most popular!"
             input_ [type_ "hidden", class_ "orderId", id_ "systemsPricing", name_ "order", value_ ""]
-            div_ [class_ "text-center text-strong text-4xl font-bold"] "Critical Systems"
+            div_ [class_ "text-center  text-textStrong text-4xl font-bold"] "Critical Systems"
             div_ [class_ "text-base font-semibold"] "Business plan"
-            div_ [class_ "text-weak text-sm font-medium"] "Starts at $500/monthly"
+            div_ [class_ " text-textWeak text-sm font-medium"] "Starts at $500/monthly"
 
           div_ [class_ "flex-col justify-start items-start gap-6 flex"] $ do
-            span_ [class_ "text-weak text-base font-semibold"] "Everything in plus and..."
+            span_ [class_ " text-textWeak text-base font-semibold"] "Everything in plus and..."
             mapM_ featureRow features
           unless isSettings do
             div_ [class_ "flex-col justify-start items-start gap-6 mt-auto  flex", [__|on click halt|]] $ do
@@ -235,4 +235,4 @@ featureRow feature =
   div_ [class_ "flex items-center gap-2"] $ do
     div_ [class_ "rounded-full bg-green-100 h-5 w-5 flex items-center justify-center"] do
       faSprite_ "check" "regular" "h-3 w-3 text-green-500"
-    p_ [class_ "text-weak"] (toHtml feature)
+    p_ [class_ " text-textWeak"] (toHtml feature)

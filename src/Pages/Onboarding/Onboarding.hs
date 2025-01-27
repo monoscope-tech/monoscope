@@ -291,8 +291,8 @@ onboardingCompleteBody pid = do
       div_ [class_ "p-3 bg-[#0acc91]/5 rounded-full w-max border-[#067a57]/20 gap-2 inline-flex"] $
         faSprite_ "circle-check" "regular" "h-8 w-8 text-green-500"
       div_ [class_ "flex flex-col gap-2"] do
-        h3_ [class_ "text-strong font-semibold text-2xl"] "Onboarding completed!"
-        p_ [class_ "text-weak text-sm"] "You're all set! You can now start using exploring the apitoolkit dashboard by clicking the button below."
+        h3_ [class_ " text-textStrong font-semibold text-2xl"] "Onboarding completed!"
+        p_ [class_ " text-textWeak text-sm"] "You're all set! You can now start using exploring the apitoolkit dashboard by clicking the button below."
       a_ [class_ "btn-primary py-2 font-semibold rounded-lg text-center mt-1", href_ $ "/p/" <> pid.toText <> "/"] "Go to your dashboard"
   script_ [src_ "/public/assets/js/confetti.js"] ("" :: Text)
 
@@ -305,7 +305,7 @@ pricingPage pid lemon critical = do
         stepIndicator 6 "Please pick a plan" $ "/p/" <> pid.toText <> "/onboarding?step=Integration"
       paymentPlanPicker pid lemon critical False
       div_ [class_ "flex flex-col gap-2 w-full"] do
-        span_ [class_ "text-strong text-2xl font-semibold mt-20"] "FAQ"
+        span_ [class_ " text-textStrong text-2xl font-semibold mt-20"] "FAQ"
         div_ [class_ "flex flex-col mt-4 w-full"] do
           faQ "What is an event?" "An event is any of span, log, or metric that you send to APItoolkit."
           faQ "How do you handle security and sensitive data?" "We employ encryption and authentication measures to ensure the security of your data during transmission and storage. All our SDKs also support redacting data. You can simply specify the JSONPath to the fields that you don't want the SDKs to forward to APItoolkit, and those sensitive fields will be stripped out/redacted before the data even leaves your servers and replaced with the text \"CLIENT REDACTED\" on our end. We will never see anything you don't want us to see."
@@ -349,7 +349,7 @@ integrationsPage pid apikey =
         div_ [class_ "flex-col gap-4 flex w-full"] $ do
           stepIndicator 5 "Instrument your apps or servers" $ "/p/" <> pid.toText <> "/onboarding?step=NotifChannel"
           div_ [class_ "flex-col w-full gap-8 flex mt-4"] do
-            p_ [class_ "text-strong"] "Send Logs, Metrics or Traces. Click proceed when you’re done integrating your applications. learn more"
+            p_ [class_ " text-textStrong"] "Send Logs, Metrics or Traces. Click proceed when you’re done integrating your applications. learn more"
             div_ [class_ "flex flex-col gap-4 "] $ do
               div_ [class_ "flex flex-col gap-2"] do
                 let langs = [("js", "Javascript") :: (Text, Text), ("go", "Golang"), ("py", "Python"), ("php", "PHP"), ("java", "Java"), ("cs", "C#")]
@@ -393,7 +393,7 @@ languageItem pid lang ext = do
       div_ [class_ "flex w-full items-center justify-between"] do
         div_ [class_ "flex items-center gap-2"] do
           img_ [class_ "h-5 w-5", src_ $ "/public/assets/svgs/" <> ext <> ".svg"]
-          span_ [class_ "text-sm font-semibold text-strong"] $ toHtml lang
+          span_ [class_ "text-sm font-semibold  text-textStrong"] $ toHtml lang
         div_ [class_ "hidden text-sm toggle-target", id_ $ "integration-check-container" <> T.replace "#" "" lang] do
           integrationCheck pid lang
 
@@ -408,13 +408,13 @@ integrationCheck pid language = do
     , hxTrigger_ "load delay:5s"
     ]
     do
-      span_ [class_ "text-strong"] "waiting for events"
+      span_ [class_ " text-textStrong"] "waiting for events"
       faSprite_ "spinner" "regular" "h-4 w-4 animate-spin"
 
 
 tagItem :: Text -> Bool -> Html ()
 tagItem label isActive =
-  div_ [class_ "px-3 py-1 rounded-2xl  border-[#001066]/10 bg-weak"] $
+  div_ [class_ "px-3 py-1 rounded-2xl  border-[#001066]/10  bg-fillWeak"] $
     span_ [class_ "text-sm"] (toHtml label)
 
 
@@ -427,7 +427,7 @@ notifChannels pid slackRedirectUri phone emails hasDiscord hasSlack = do
       div_ [class_ "flex-col w-full gap-8 flex mt-4"] $ do
         div_ [class_ "w-full flex flex-col gap-8"] $ do
           div_ [class_ "w-full gap-2 grid grid-cols-2"] $ do
-            div_ [class_ "px-3 py-2 rounded-xl border border-[#001066]/10 bg-weak justify-between items-center flex"] $ do
+            div_ [class_ "px-3 py-2 rounded-xl border border-[#001066]/10  bg-fillWeak justify-between items-center flex"] $ do
               div_ [class_ "items-center gap-1.5 flex overflow-hidden"] $ do
                 img_ [src_ "/public/assets/svgs/slack.svg"]
                 span_ [class_ "text-center text-black text-xl font-semibold"] "Slack"
@@ -444,7 +444,7 @@ notifChannels pid slackRedirectUri phone emails hasDiscord hasSlack = do
                   ]
                   do
                     "Connect"
-            div_ [class_ "px-3 py-2 rounded-xl border border-[#001066]/10 bg-weak justify-between items-center flex"] $ do
+            div_ [class_ "px-3 py-2 rounded-xl border border-[#001066]/10  bg-fillWeak justify-between items-center flex"] $ do
               div_ [class_ "items-center gap-1.5 flex overflow-hidden"] $ do
                 img_ [src_ "/public/assets/svgs/discord.svg"]
                 div_ [class_ "text-center text-black text-xl font-semibold"] "Discord"
@@ -465,12 +465,12 @@ notifChannels pid slackRedirectUri phone emails hasDiscord hasSlack = do
             $ do
               div_ [class_ "flex flex-col gap-2"] do
                 div_ [class_ "flex w-full items-center gap-1"] $ do
-                  span_ [class_ "text-strong lowercase first-letter:uppercase"] "Notify phone number"
+                  span_ [class_ " text-textStrong lowercase first-letter:uppercase"] "Notify phone number"
                 input_ [class_ "input w-full h-12", type_ "text", name_ "phoneNumber", id_ "phone", value_ phone]
               div_ [class_ "flex flex-col gap-2"] do
                 div_ [class_ "flex w-full items-center gap-1"] $ do
-                  span_ [class_ "text-strong lowercase first-letter:uppercase"] "Notify the following email address"
-                textarea_ [class_ "w-full rounded-lg stroke-strong", type_ "text", name_ "emails", id_ "emails_input"] ""
+                  span_ [class_ " text-textStrong lowercase first-letter:uppercase"] "Notify the following email address"
+                textarea_ [class_ "w-full rounded-lg border border-strokeStrong", type_ "text", name_ "emails", id_ "emails_input"] ""
               div_ [class_ "items-center gap-4 flex"] $ do
                 button_ [class_ "px-6 h-14 flex items-center btn-primary text-xl font-semibold rounded-lg"] "Proceed"
       let tgs = decodeUtf8 $ AE.encode $ V.toList emails
@@ -583,14 +583,14 @@ onboardingConfigBody pid loca func = do
         div_ [class_ "flex-col w-full gap-14 mt-4 flex"] $ do
           div_ [class_ "flex-col gap-2 flex"] $ do
             div_ [class_ "items-center gap-[2px] flex"] $ do
-              span_ [class_ "text-strong"] "Where should your project be hosted?"
-              span_ [class_ "text-weak"] "*"
-            div_ [class_ "pt-2 flex-col gap-4 flex text-sm text-strong"] $ do
+              span_ [class_ " text-textStrong"] "Where should your project be hosted?"
+              span_ [class_ " text-textWeak"] "*"
+            div_ [class_ "pt-2 flex-col gap-4 flex text-sm  text-textStrong"] $ do
               forM_ locations $ createBinaryField "radio" "location" [loca]
           div_ [class_ "flex-col gap-2 flex"] $ do
             div_ [class_ "items-center flex gap-[2px]"] $ do
-              span_ [class_ "text-strong"] "Which APItoolkit features will you be using?"
-              span_ [class_ "text-weak"] "*"
+              span_ [class_ " text-textStrong"] "Which APItoolkit features will you be using?"
+              span_ [class_ " text-textWeak"] "*"
             div_ [class_ "pt-2 flex-col gap-4 flex"] $ do
               forM_ functionalities $ createBinaryField "checkbox" "functionality" func
         div_ [class_ "items-center gap-1 flex"] $ do
@@ -606,9 +606,9 @@ inviteTeamMemberModal pid emails = do
       div_ [class_ "modal-box flex flex-col gap-4"] $ do
         div_ [class_ "p-3 bg-[#0acc91]/5 rounded-full w-max border-[#067a57]/20 gap-2 inline-flex"] $
           faSprite_ "circle-check" "regular" "h-6 w-6 text-green-500"
-        span_ [class_ "text-strong text-2xl font-semibold"] "Test notifications sent"
+        span_ [class_ " text-textStrong text-2xl font-semibold"] "Test notifications sent"
         div_ [class_ "text-[#000833]/60"] "No notification? Close this modal and verify emails and channels."
-        div_ [class_ "h-1 w-full bg-weak"] pass
+        div_ [class_ "h-1 w-full  bg-fillWeak"] pass
         div_ [class_ "flex-col gap-4 flex"] $ do
           div_ [class_ "flex-col gap-5 flex"] $ do
             div_ [class_ "w-full text-[#000833]/60"] "The users below will be added to your project as team members"
@@ -619,7 +619,7 @@ inviteTeamMemberModal pid emails = do
                     input_ [class_ "input input-sm w-full", placeholder_ "email@example.com", type_ "email", id_ "add-member-input"]
                 button_ [class_ "btn-primary rounded-lg  px-3 h-8 justify-center items-center flex text-white text-sm font-semibold", onclick_ "appendMember()"] "invite"
               div_ [class_ "w-full"] $ do
-                div_ [class_ "w-full text-strong text-sm font-semibold"] "Members"
+                div_ [class_ "w-full  text-textStrong text-sm font-semibold"] "Members"
                 div_ [class_ "w-full border-t border-weak"] $ do
                   form_
                     [ class_ "flex-col flex"
@@ -676,8 +676,8 @@ createInputField :: (Text, Text) -> Html ()
 createInputField (labelText, value) = do
   div_ [class_ "flex flex-col gap-1 w-full"] $ do
     div_ [class_ "flex w-full items-center gap-1"] $ do
-      span_ [class_ "text-strong lowercase first-letter:uppercase"] (toHtml labelText)
-      span_ [class_ "text-weak"] "*"
+      span_ [class_ " text-textStrong lowercase first-letter:uppercase"] (toHtml labelText)
+      span_ [class_ " text-textWeak"] "*"
     input_ [class_ "input w-full h-12", type_ "text", name_ $ T.replace " " "" labelText, required_ "required", value_ value]
 
 
@@ -685,8 +685,8 @@ createSelectField :: Text -> Text -> Vector (Text, Text) -> Html ()
 createSelectField val labelText options = do
   div_ [class_ "flex flex-col gap-1 w-full"] $ do
     div_ [class_ "flex w-full items-center gap-1"] $ do
-      span_ [class_ "text-strong lowercase first-letter:uppercase"] $ toHtml labelText
-      span_ [class_ "text-weak"] "*"
+      span_ [class_ " text-textStrong lowercase first-letter:uppercase"] $ toHtml labelText
+      span_ [class_ " text-textWeak"] "*"
     select_ [class_ "select w-full h-12", name_ $ T.replace " " "" labelText, required_ "required"] do
       option_ [value_ ""] ""
       forM_ options $ \(key, value) -> option_ ([value_ key] ++ [selected_ val | val == key]) $ toHtml value
@@ -697,7 +697,7 @@ createBinaryField kind name selectedValues (value, label) = do
   div_ [class_ " items-center gap-3 inline-flex"] $ do
     let checked = value `elem` selectedValues
     input_ $ [class_ "w-6 h-6 rounded", type_ kind, name_ name, value_ value, id_ value] <> [required_ "required" | kind == "radio"] <> [checked_ | checked]
-    label_ [class_ "text-strong text-sm", Lucid.for_ value] $ toHtml label
+    label_ [class_ " text-textStrong text-sm", Lucid.for_ value] $ toHtml label
 
 
 stepIndicator :: Int -> Text -> Text -> Html ()
@@ -706,23 +706,23 @@ stepIndicator step title prevUrl = do
   div_ [class_ "flex-col gap-4 flex w-full"] $ do
     img_ [class_ "h-7 absolute top-10 left-10", src_ "/public/assets/svgs/logo.svg"]
     div_ [class_ "flex-col gap-2 flex w-full"] $ do
-      div_ [class_ "text-strong text-base font-semibold"] $ "Step " <> show step <> " of 6"
+      div_ [class_ " text-textStrong text-base font-semibold"] $ "Step " <> show step <> " of 6"
       div_ [class_ "grid grid-cols-6 w-full gap-1"] $ do
-        forM_ [1 .. 6] $ \i -> div_ [class_ $ "h-2 w-full rounded " <> if step >= i then "btn-primary rounded" else "bg-weak shadow-[inset_0px_1px_4px_0px_rgba(0,0,0,0.08)] border border-[#001066]/10"] pass
+        forM_ [1 .. 6] $ \i -> div_ [class_ $ "h-2 w-full rounded " <> if step >= i then "btn-primary rounded" else " bg-fillWeak shadow-[inset_0px_1px_4px_0px_rgba(0,0,0,0.08)] border border-[#001066]/10"] pass
       when (step > 1) $ do
         a_ [class_ "flex items-center gap-3 flex text-brand w-full mt-2", href_ prevUrl] $ do
           faSprite_ "arrow-left" "regular" "h-4 w-4"
           span_ [class_ "font-semibold"] "Back"
-    span_ [class_ "text-strong text-4xl font-semibold mt-4"] $ toHtml title
+    span_ [class_ " text-textStrong text-4xl font-semibold mt-4"] $ toHtml title
 
 
 faQ :: Text -> Text -> Html ()
 faQ question answer =
   div_ [class_ "w-full py-4 border-t border-weak flex flex-col"] $ do
-    button_ [class_ "text-strong font-semibold flex w-full justify-between items-center", [__|on click toggle .hidden on the next <div/>|]] do
+    button_ [class_ " text-textStrong font-semibold flex w-full justify-between items-center", [__|on click toggle .hidden on the next <div/>|]] do
       span_ [] $ toHtml question
-      faSprite_ "chevron-down" "regular" "h-4 w-4 text-weak"
-    div_ [class_ "text-weak font-medium w-full hidden"] $ toHtml answer
+      faSprite_ "chevron-down" "regular" "h-4 w-4  text-textWeak"
+    div_ [class_ " text-textWeak font-medium w-full hidden"] $ toHtml answer
 
 
 universalIndicator :: Html ()
