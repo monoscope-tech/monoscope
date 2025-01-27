@@ -126,7 +126,7 @@ processList msgs attrs = do
         V.forM msgs' \(ackId, msg) -> do
           case (HsProtobuf.fromByteString msg :: Either HsProtobuf.ParseError ExportTraceServiceRequest) of
             Left err -> do
-              Log.logInfo_ $ "unable to parse traces service request with err " <> show err
+              Log.logInfo_ $ "unable to parse traces service request with err " <> show err <> (decodeUtf8 msg)
               pure (ackId, [])
             Right (ExportTraceServiceRequest traceReq) -> do
               projectIdsAndKeys <- dbtToEff $ ProjectApiKeys.projectIdsByProjectApiKeys $ getSpanAttributeValue "at-project-key" traceReq
@@ -235,7 +235,7 @@ convertScopeLog pid resource sl = V.map (convertLogRecord pid resource sl.scopeL
 
 
 removeProjectId :: AE.Value -> AE.Value
-removeProjectId (AE.Object v) = AE.Object $ KEM.delete "at-project-id" v
+removeProjectId (AE.Object v) = AE.Object $ KEM.delete "at-project-key" $ KEM.delete "at-project-id" v
 removeProjectId (AE.Array v) = AE.Array $ V.map removeProjectId v
 removeProjectId v = v
 
