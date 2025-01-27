@@ -308,7 +308,7 @@ export class StepsEditor extends LitElement {
               </div>
           </div>
         </div>
-        <div class="p-4 pt-0 bg-slate-100 ${stepData._expanded ? 'block' : 'hidden'} ">
+        <div class="p-4 pt-0 bg-fillWeaker ${stepData._expanded ? 'block' : 'hidden'} ">
         <div class="rounded-xl p-4 bg-slate-50">
           <div>
             <div class="p-0 m-0s">

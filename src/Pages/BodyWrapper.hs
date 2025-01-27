@@ -252,7 +252,7 @@ bodyWrapper BWConfig{sessM, currProject, prePageTitle, pageTitle, menuItem, hasI
             end
     |]
 
-    body_ [class_ "h-full w-full bg-slate-25 text-slate-700 group/pg", term "data-theme" "antdtheme", term "hx-ext" "multi-swap,preload"] do
+    body_ [class_ "h-full w-full bg-bgBase text-slate-700 group/pg", term "data-theme" "antdtheme", term "hx-ext" "multi-swap,preload"] do
       div_
         [ style_ "z-index:99999"
         , class_ "pt-24 sm:hidden justify-center z-50 w-full p-4 bg-gray-50 overflow-y-auto inset-0 h-full max-h-full"
@@ -377,7 +377,7 @@ sideNav sess project pageTitle menuItem hasIntegrated = aside_ [class_ "border-r
         faSprite_ "side-chevron-left-in-box" "regular" " h-5 w-5 rotate-180 group-has-[#sidenav-toggle:checked]/pg:rotate-0"
     div_ [class_ "mt-4 sd-px-0 dropdown block"] do
       a_
-        [ class_ "flex flex-row border border-slate-300 bg-slate-25 text-slate-950 hover:bg-slate-100 gap-2 justify-center rounded-xl cursor-pointer py-3 group-has-[#sidenav-toggle:checked]/pg:px-3"
+        [ class_ "flex flex-row border border-slate-300 bg-bgBase text-textStrong hover:bg-fillWeaker gap-2 justify-center rounded-xl cursor-pointer py-3 group-has-[#sidenav-toggle:checked]/pg:px-3"
         , tabindex_ "0"
         ]
         do
@@ -440,7 +440,7 @@ navbar projectM menuL currUser prePageTitle pageTitle docsLink tabsM pageActions
   nav_ [id_ "main-navbar", class_ "sticky z-20 top-0 w-full px-6 py-2 flex flex-row border-slate-200"] do
     div_ [class_ "flex-1 flex items-center text-slate-950 gap-1"] do
       whenJust prePageTitle \pt -> whenJust (find (\a -> fst3 a == pt) menuL) \(_, _, icon) -> do
-        whenJust projectM \p -> a_ [class_ "p-1 hover:bg-slate-100 inline-flex items-center justify-center gap-1 rounded-md", href_ $ "/p/" <> p.id.toText <> "/dashboards"] do
+        whenJust projectM \p -> a_ [class_ "p-1 hover:bg-fillWeaker inline-flex items-center justify-center gap-1 rounded-md", href_ $ "/p/" <> p.id.toText <> "/dashboards"] do
           faSprite_ icon "regular" "w-4 h-4"
           toHtml pt
         faSprite_ "chevron-right" "regular" "w-3 h-3"

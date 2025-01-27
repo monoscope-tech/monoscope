@@ -239,7 +239,7 @@ shapeParameterStats_ newF deletedF updatedFF = div_ [class_ "inline-block"] do
     div_ [class_ "p-2 py-1 bg-emerald-100 text-emerald-900 border border-emerald-300"] do
       div_ [class_ "text-base"] $ toHtml @String $ show newF
       small_ [class_ "block"] "new fields"
-    div_ [class_ " p-2 py-1 bg-slate-100 text-slate-900 border border-slate-300"] do
+    div_ [class_ " p-2 py-1 bg-fillWeaker text-slate-900 border border-slate-300"] do
       div_ [class_ "text-base"] $ toHtml @String $ show updatedFF
       small_ [class_ "block"] "updated fields"
     div_ [class_ "p-2  py-1  bg-rose-100 text-rose-900 border border-rose-300"] do

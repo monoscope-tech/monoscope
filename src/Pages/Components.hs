@@ -45,7 +45,7 @@ statBox_ pid iconM title helpInfo val bckupValM valClsM = do
   -- let pidT = case pid of
   --       Just p -> p.toText
   --       Nothing -> ""
-  div_ [class_ "bg-slate-100 rounded-3xl flex flex-col gap-3 p-5 border border-slate-200"] do
+  div_ [class_ "bg-fillWeaker rounded-3xl flex flex-col gap-3 p-5 border border-slate-200"] do
     whenJust iconM $ \(icon, kind, color) -> do
       div_ [class_ "flex items-center justify-center h-10 w-10 bg-slate-50 rounded-xl"] do
         faSprite_ icon kind $ "w-4 h-4 " <> color
@@ -91,7 +91,7 @@ drawerWithURLContent_ drawerId urlM trigger = div_ [class_ "drawer drawer-end in
 
 dateTime :: UTCTime -> Html ()
 dateTime t = do
-  span_ [class_ "flex items-center rounded-lg px-2 py-1.5 font-medium gap-2 border border-slate-300 bg-slate-100 text-slate-600"] do
+  span_ [class_ "flex items-center rounded-lg px-2 py-1.5 font-medium gap-2 border border-slate-300 bg-fillWeaker text-slate-600"] do
     faSprite_ "calendar" "regular" "w-5 h-5 fill-none"
     toHtml $ formatTime defaultTimeLocale "%b. %d, %Y %I:%M:%S %p" t
 

@@ -289,7 +289,7 @@ timelineSteps pid col =
 nameOfTest_ :: Text -> V.Vector Text -> Html ()
 nameOfTest_ name tags = do
   let tgs = decodeUtf8 $ AE.encode $ V.toList tags
-  div_ [class_ "form-control w-full p-4 bg-slate-100 rounded-2xl"] do
+  div_ [class_ "form-control w-full p-4 bg-fillWeaker rounded-2xl"] do
     div_ [class_ "flex flex-col rounded-xl p-4 bg-slate-50"] do
       label_ [class_ "label"] $ span_ [class_ "text-slate-500 text-sm font-semibold"] "Name"
       input_ [placeholder_ "Give your test a name", id_ "test_title", class_ "input input-sm input-bordered mb-2 shadow-none w-full", name_ "title", value_ name]

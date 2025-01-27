@@ -45,7 +45,7 @@ expandedSpanItem pid sp leftM rightM = do
             div_ [class_ "flex items-center gap-1"] do
               whenJust leftM $ \l -> do
                 button_
-                  [ class_ "cursor-pointer h-8 w-8 flex items-center justify-center rounded-full bg-slate-100 border border-slate-200 text-slate-500"
+                  [ class_ "cursor-pointer h-8 w-8 flex items-center justify-center rounded-full bg-fillWeaker border border-slate-200 text-slate-500"
                   , hxGet_ $ "/p/" <> pid.toText <> "/traces/" <> sp.traceId <> "/?span_id=" <> l <> "&nav=true"
                   , hxSwap_ "innerHTML"
                   , hxTarget_ "#trace_span_container"
@@ -54,7 +54,7 @@ expandedSpanItem pid sp leftM rightM = do
                   $ faSprite_ "chevron-left" "regular" "w-4 h-4"
               whenJust rightM $ \r -> do
                 button_
-                  [ class_ "cursor-pointer h-8 w-8 flex items-center justify-center rounded-full bg-slate-100 border border-slate-200 text-slate-500"
+                  [ class_ "cursor-pointer h-8 w-8 flex items-center justify-center rounded-full bg-fillWeaker border border-slate-200 text-slate-500"
                   , hxGet_ $ "/p/" <> pid.toText <> "/traces/" <> sp.traceId <> "/?span_id=" <> r <> "&nav=true"
                   , hxSwap_ "innerHTML"
                   , hxTarget_ "#trace_span_container"
@@ -70,13 +70,13 @@ expandedSpanItem pid sp leftM rightM = do
 
       div_ [class_ "flex gap-4 items-center justify-between text-slate-600 text-sm mt-3"] $ do
         div_ [class_ "flex gap-4 items-center"] do
-          div_ [class_ "font-medium flex shrink-0 items-center font-medium bg-slate-100 rounded-lg gap-1 border border-slate-300 px-2 py-1.5"] do
+          div_ [class_ "font-medium flex shrink-0 items-center font-medium bg-fillWeaker rounded-lg gap-1 border border-slate-300 px-2 py-1.5"] do
             faSprite_ "clock" "regular" "w-4 h-4"
             span_ [class_ " font-medium"] $ toHtml $ getDurationNSMS sp.spanDurationNs
           div_ [class_ "flex items-center gap-4"] do
             whenJust reqDetails $ \case
               ("HTTP", method, path, status) -> do
-                div_ [class_ "flex items-center gap-1 font-medium border border-slate-300 font-medium rounded-lg bg-slate-100 px-2 py-1.5"] do
+                div_ [class_ "flex items-center gap-1 font-medium border border-slate-300 font-medium rounded-lg bg-fillWeaker px-2 py-1.5"] do
                   faSprite_ "web" "regular" "w-4 h-4"
                   span_ [class_ ""] "HTTP"
                 let methodClass = getMethodColor method
@@ -88,7 +88,7 @@ expandedSpanItem pid sp leftM rightM = do
                 div_ [class_ "flex items-center"] do
                   span_ [class_ " px-2 py-1.5 max-w-96 truncate mr-2 urlPath"] $ toHtml path
                   div_ [[__| install Copy(content:.urlPath )|]] do
-                    faSprite_ "copy" "regular" "h-8 w-8 border border-slate-300 bg-slate-100 rounded-full p-2 text-slate-500"
+                    faSprite_ "copy" "regular" "h-8 w-8 border border-slate-300 bg-fillWeaker rounded-full p-2 text-slate-500"
                   a_ [href_ "", class_ "ml-1"] do
                     faSprite_ "arrow-up-right" "regular" "h-8 w-8 p-2 btn-primary rounded-full"
               (scheme, method, path, status) -> do

@@ -307,7 +307,7 @@ queryLibrary_ pid queryLibSaved queryLibRecent = div_ [class_ "dropdown dropdown
 
 queryLibItem_ :: Projects.QueryLibItem -> Html ()
 queryLibItem_ qli =
-  div_ [class_ $ "clear p-3 space-y-2 hover:bg-slate-100 cursor-pointer group " <> if qli.byMe then "" else "hidden group-has-[#queryLibraryGroup:checked]/pg:block"] do
+  div_ [class_ $ "clear p-3 space-y-2 hover:bg-fillWeaker cursor-pointer group " <> if qli.byMe then "" else "hidden group-has-[#queryLibraryGroup:checked]/pg:block"] do
     div_ [class_ "inline-flex gap-2 float-right"] do
       div_ [class_ "flex opacity-0 transition-opacity duration-300 group-hover:opacity-100 gap-2"] do
         a_
@@ -629,7 +629,7 @@ logTableHeadingWrapper_ pid title classes child = td_
         div_ [tabindex_ "0", role_ "button", class_ "py-1"] do
           child
           span_ [class_ "ml-1 p-0.5 border border-slate-200 rounded inline-flex"] $ faSprite_ "chevron-down" "regular" "w-3 h-3"
-        ul_ [tabindex_ "0", class_ "dropdown-content z-[1] menu p-2 shadow bg-slate-25 rounded-box min-w-[15rem]"] do
+        ul_ [tabindex_ "0", class_ "dropdown-content z-[1] menu p-2 shadow bg-bgBase rounded-box min-w-[15rem]"] do
           li_ [class_ "underline underline-offset-2"] $ toHtml title
           li_ $
             a_
@@ -726,7 +726,7 @@ requestDumpLogItemUrlPath pid rd colIdxMap = do
 jsonTreeAuxillaryCode :: Projects.ProjectId -> Text -> Html ()
 jsonTreeAuxillaryCode pid queryAST = do
   template_ [id_ "log-item-context-menu-tmpl"] do
-    div_ [id_ "log-item-context-menu", class_ "log-item-context-menu  origin-top-right absolute left-0 mt-2 w-56 rounded-md shadow-md shadow-slate-300 bg-slate-25 ring-1 ring-black ring-opacity-5 divide-y divide-gray-100 focus:outline-none z-10", role_ "menu", tabindex_ "-1"] do
+    div_ [id_ "log-item-context-menu", class_ "log-item-context-menu  origin-top-right absolute left-0 mt-2 w-56 rounded-md shadow-md shadow-slate-300 bg-bgBase ring-1 ring-black ring-opacity-5 divide-y divide-gray-100 focus:outline-none z-10", role_ "menu", tabindex_ "-1"] do
       div_ [class_ "py-1", role_ "none"] do
         a_
           [ class_ "cursor-pointer text-slate-700 block px-4 py-1  hover:bg-gray-100 hover:text-slate-900"

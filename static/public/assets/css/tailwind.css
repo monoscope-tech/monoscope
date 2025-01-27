@@ -16,7 +16,7 @@
   }
 
   .card-round {
-    @apply bg-slate-25 border border-slate-200 rounded-2xl;
+    @apply bg-bgBase border border-slate-200 rounded-2xl;
     /*overflow-hidden;*/
   }
 }
@@ -24,11 +24,11 @@
 @layer components {
   .tabs-outline :is(.tab-active, [aria-selected='true']):not(.tab-disabled):not([disabled]),
   .tabs-outline :is(.tab-active, [aria-selected='true']):not(.tab-disabled):not([disabled]):hover {
-    @apply bg-slate-25 shadow;
+    @apply bg-bgBase shadow;
   }
 
   .tabs-boxed :is(input:checked) {
-    @apply bg-slate-25;
+    @apply bg-bgBase;
   }
 
   .tabs-outline .tab {
@@ -44,7 +44,7 @@
 
 html,
 body {
-  @apply overscroll-none bg-slate-25;
+  @apply overscroll-none bg-bgBase;
   --brand-color: #0068ff;
   --brand-color-light: #0090f0;
   --tags-border-color: rgba(0, 13, 77, 0.45);
@@ -514,7 +514,7 @@ body {
   }
 
   .ctable :where(.table-pin-rows thead tr) {
-    @apply sticky top-0 z-10 bg-slate-25;
+    @apply sticky top-0 z-10 bg-bgBase;
   }
 
   .ctable :where(.table-pin-cols tr th) {

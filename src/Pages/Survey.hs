@@ -145,19 +145,19 @@ surveyPage pid full_name phoneNumber = do
                           ]
                           do
                             img_ [src_ $ "/public/assets/framework-logos/" <> img, class_ "max-h-[80px] my-auto"]
-                            div_ [class_ "absolute z-10 left-0 top-0 block group p-2 hover:bg-slate-100"] do
+                            div_ [class_ "absolute z-10 left-0 top-0 block group p-2 hover:bg-fillWeaker"] do
                               input_ [class_ "mr-3", type_ "checkbox", id_ value, name_ "stack", value_ value]
                               span_ [class_ "hidden group-hover:inline"] $ toHtml label
                       div_ [class_ "flex flex-col gap-2 mt-8"] do
                         label_ [class_ "font-medium mt-2"] "Other (please specify):"
-                        input_ [type_ "text", name_ "stack", class_ "px-3 py-1  bg-slate-25 border border-gray-300 text-gray-900 focus:outline-none rounded-lg focus:ring-blue-500 focus:border-blue-500 block w-full"]
+                        input_ [type_ "text", name_ "stack", class_ "px-3 py-1  bg-bgBase border border-gray-300 text-gray-900 focus:outline-none rounded-lg focus:ring-blue-500 focus:border-blue-500 block w-full"]
 
                   div_ [class_ "flex flex-col gap-2"] do
                     label_ [class_ "font-medium"] do
                       "What APItoolkit features are you most interested in?"
                       span_ [class_ "text-red-400"] " *"
                     div_ [class_ "columns-3"] $ forM_ functionalityOptions $ \(value, label) -> do
-                      label_ [class_ "block hover:bg-slate-100 p-2"] do
+                      label_ [class_ "block hover:bg-fillWeaker p-2"] do
                         input_ [class_ "mr-3", type_ "checkbox", id_ value, name_ "functionality", value_ value]
                         toHtml label
                   div_ [class_ "flex flex-col gap-2"] do
@@ -165,7 +165,7 @@ surveyPage pid full_name phoneNumber = do
                       "Where would you prefer your data to be processed?"
                       span_ [class_ "text-red-400"] " *"
                     div_ [class_ "columns-3"] $ forM_ dataLocationOptions $ \(value, label) -> do
-                      label_ [class_ "block hover:bg-slate-100 p-2"] do
+                      label_ [class_ "block hover:bg-fillWeaker p-2"] do
                         input_ [class_ "mr-3", type_ "radio", id_ value, name_ "dataLocation", value_ value, required_ "required"]
                         toHtml label
                   div_ [class_ "flex flex-col gap-2"] do
@@ -175,17 +175,17 @@ surveyPage pid full_name phoneNumber = do
                     div_ [class_ ""] do
                       div_ [class_ "columns-3"] $ do
                         forM_ foundUsFromOptions $ \(value, label) -> do
-                          label_ [class_ "block hover:bg-slate-100 p-2"] do
+                          label_ [class_ "block hover:bg-fillWeaker p-2"] do
                             input_ [class_ "mr-3", type_ "radio", id_ value, name_ "foundUsFrom", value_ value]
                             toHtml label
                       div_ [class_ "flex flex-col w-96 gap-2 pl-2"] do
                         label_ [class_ ""] "Other (please specify):"
-                        input_ [type_ "text", name_ "foundUsFrom", class_ "px-3 py-1  bg-slate-25 border border-gray-300 text-gray-900 focus:outline-none rounded-lg focus:ring-blue-500 focus:border-blue-500 block w-full"]
+                        input_ [type_ "text", name_ "foundUsFrom", class_ "px-3 py-1  bg-bgBase border border-gray-300 text-gray-900 focus:outline-none rounded-lg focus:ring-blue-500 focus:border-blue-500 block w-full"]
 
                 -- div_ [class_ "flex flex-col gap-2 w-full"] do
                 --   label_ [class_ "font-medium"] "What's your phone number?"
                 --   div_ [class_ "w-full"] do
-                --     input_ [value_ phoneNumber, class_ "px-2 py-1 bg-slate-25 border border-gray-300 text-gray-900 focus:outline-none rounded-lg focus:ring-blue-500 focus:border-blue-500 block w-full", type_ "text", name_ "phoneNumber"]
+                --     input_ [value_ phoneNumber, class_ "px-2 py-1 bg-bgBase border border-gray-300 text-gray-900 focus:outline-none rounded-lg focus:ring-blue-500 focus:border-blue-500 block w-full", type_ "text", name_ "phoneNumber"]
 
                 div_ [class_ "flex w-full justify-end items-center px-6 space-x-2 mt-8"] do
                   div_ [id_ "proceedIndicator", class_ "survey-indicator htmx-indicator"] do

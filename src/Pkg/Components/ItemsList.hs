@@ -133,7 +133,7 @@ itemsList_ listCfg items = do
 
         div_ [class_ " grow flex flex-row gap-2"] do
           forM_ listCfg.bulkActions \blkA -> button_
-            [ class_ "btn btn-sm btn-disabled group-has-[.bulkactionItemCheckbox:checked]/grid:!btn-primary group-has-[.bulkactionItemCheckbox:checked]/grid:!pointer-events-auto  "
+            [ class_ "btn btn-sm btn-disabled group-has-[.bulkactionItemCheckbox:checked]/grid:text-white group-has-[.bulkactionItemCheckbox:checked]/grid:bg-fillBrand-strong group-has-[.bulkactionItemCheckbox:checked]/grid:!pointer-events-auto  "
             , hxPost_ blkA.uri
             , hxSwap_ "none"
             ]
@@ -144,7 +144,7 @@ itemsList_ listCfg items = do
           whenJust listCfg.sort \sortCfg -> do
             let currentSortTitle = maybe "First Seen" fst3 $ find (\(_, _, identifier) -> identifier == sortCfg.current) sortMenu
             div_ [class_ "dropdown dropdown-end inline-block"] do
-              a_ [class_ "btn btn-sm shadow-none text-sm font-medium bg-slate-100 border text-slate-600 border-slate-300 ", tabindex_ "0"] do
+              a_ [class_ "btn btn-sm shadow-none text-sm font-medium bg-fillWeaker border text-slate-600 border-slate-300 ", tabindex_ "0"] do
                 span_ $ toHtml currentSortTitle
                 faSprite_ "sort" "regular" "h-4 w-4 stroke-slate-600"
 

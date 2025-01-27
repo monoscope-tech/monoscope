@@ -82,7 +82,7 @@ testingGetH pid filterTM timeFilter = do
         (def :: BWConfig)
           { sessM = Just sess
           , currProject = Just project
-          , pageTitle = "Multistep API Tests (Beta)"
+          , pageTitle = "API Tests"
           , menuItem = Just "Monitors & Alerts"
           , docsLink = Just "https://apitoolkit.io/docs/monitors/multistep-tests/"
           , pageActions = Just $ a_ [href_ $ "/p/" <> pid.toText <> "/monitors/collection", class_ "btn btn-sm blue-outline-btn space-x-2"] $ Utils.faSprite_ "plus" "regular" "h-4" >> "new tests"
@@ -122,7 +122,7 @@ collectionCard pid col currTime = do
         ]
     div_ [class_ "w-full flex flex-col gap-2 shrink-1"] do
       div_ [class_ "flex gap-10 items-center"] do
-        a_ [href_ $ "/p/" <> pid.toText <> "/monitors/" <> col.id.toText <> "/overview", class_ "font-medium text-gray-800 text-lg"] $ toHtml col.title
+        a_ [href_ $ "/p/" <> pid.toText <> "/monitors/" <> col.id.toText <> "/overview", class_ "font-medium text-gray-800 text-base"] $ toHtml col.title
         div_ [class_ "flex gap-1 items-center text-sm"] do
           forM_ col.tags $ \tag -> do
             span_ [class_ "badge badge-blue"] $ toHtml tag
@@ -134,8 +134,8 @@ collectionCard pid col currTime = do
               span_ [class_ "badge badge-ghost"] $ toHtml url
           div_ [class_ "flex gap-4 w-full items-center"] do
             if col.failed > 0
-              then span_ [class_ "badge badge-error"] "Failing"
-              else span_ [class_ "badge badge-success"] "Passing"
+              then span_ [class_ "badge badge-error text-sm"] "Failing"
+              else span_ [class_ "badge badge-success text-sm"] "Passing"
             div_ [class_ "flex items-center shrink-0 gap-1"] do
               faSprite_ "clock" "regular" "h-4 w-4"
               span_ [class_ "shrink-0 text-sm"] $ toHtml $ "every " <> col.schedule

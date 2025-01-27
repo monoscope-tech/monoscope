@@ -102,13 +102,13 @@ chartsPage pid metricList sources source mFilter nextUrl = do
         div_ [class_ "flex flex-col gap-1"] do
           span_ [class_ "text-slate-900 text-sm"] "Data source"
           select_
-            [ class_ "select bg-slate-100  border border-slate-200 rounded-xl w-36 focus:outline-none"
+            [ class_ "select bg-fillWeaker  border border-slate-200 rounded-xl w-36 focus:outline-none"
             , onchange_ "(() => {window.setQueryParamAndReload('metric_source', this.value)})()"
             ]
             do
               option_ ([selected_ "all" | "all" == source] ++ [value_ "all"]) "All"
               forM_ sources $ \s -> option_ ([selected_ s | s == source] ++ [value_ s]) $ toHtml s
-        div_ [class_ "flex items-center gap-2 w-full rounded-xl px-3 h-12 border border-slate-200 bg-slate-100"] do
+        div_ [class_ "flex items-center gap-2 w-full rounded-xl px-3 h-12 border border-slate-200 bg-fillWeaker"] do
           faSprite_ "magnifying-glass" "regular" "w-4 h-4 text-slate-500"
           input_
             [ class_ "w-full text-slate-950 bg-transparent hover:outline-none focus:outline-none"
@@ -120,7 +120,7 @@ chartsPage pid metricList sources source mFilter nextUrl = do
         div_ [class_ "flex flex-col gap-1"] do
           span_ [class_ "text-slate-900 text-sm"] "View by"
           select_
-            [ class_ "select bg-slate-100  border border-slate-200 rounded-xl w-42 focus:outline-none"
+            [ class_ "select bg-fillWeaker  border border-slate-200 rounded-xl w-42 focus:outline-none"
             , onchange_ "(() => {window.setQueryParamAndReload('metric_prefix', this.value)})()"
             ]
             do
@@ -149,31 +149,31 @@ chartList pid source metricList nextUrl = do
                   then htmx.process(#global-data-drawer-content)
                   then _hyperscript.processNode(#global-data-drawer-content)
                   then window.evalScriptsFromContent(#global-data-drawer-content)|]
-      div_ [class_ "h-52"]
-        $ toHtml
-        $ Widget.Widget
-          { wType = Widget.WTDistribution
-          , id = Nothing
-          , title = Just metric.metricName
-          , subtitle = Nothing
-          , sql = Nothing
-          , query = Just $ "metric_name = \"" <> metric.metricName <> "\""
-          , queries = Nothing
-          , layout = Just $ Widget.Layout{x = Just 0, y = Just 0, w = Just 2, h = Just 1}
-          , xAxis = Nothing
-          , yAxis = Nothing
-          , unit = Just metric.metricUnit
-          , value = Nothing
-          , wData = Nothing
-          , hideLegend = Just True
-          , theme = Nothing
-          , dataset = Nothing
-          , eager = Just True
-          , _projectId = Just pid
-          , expandBtnFn = Just expandBtn
-          }
-  when (length metricList > 19)
-    $ a_ [hxTrigger_ "intersect once", hxSwap_ "outerHTML", hxGet_ nextUrl] pass
+      div_ [class_ "h-52"] $
+        toHtml $
+          Widget.Widget
+            { wType = Widget.WTDistribution
+            , id = Nothing
+            , title = Just metric.metricName
+            , subtitle = Nothing
+            , sql = Nothing
+            , query = Just $ "metric_name = \"" <> metric.metricName <> "\""
+            , queries = Nothing
+            , layout = Just $ Widget.Layout{x = Just 0, y = Just 0, w = Just 2, h = Just 1}
+            , xAxis = Nothing
+            , yAxis = Nothing
+            , unit = Just metric.metricUnit
+            , value = Nothing
+            , wData = Nothing
+            , hideLegend = Just True
+            , theme = Nothing
+            , dataset = Nothing
+            , eager = Just True
+            , _projectId = Just pid
+            , expandBtnFn = Just expandBtn
+            }
+  when (length metricList > 19) $
+    a_ [hxTrigger_ "intersect once", hxSwap_ "outerHTML", hxGet_ nextUrl] pass
 
 
 dataPointsPage :: Projects.ProjectId -> V.Vector Telemetry.MetricDataPoint -> Html ()
@@ -235,7 +235,7 @@ metricsDetailsPage pid sources metric source currentRange = do
       div_ [class_ "flex flex-col gap-1"] do
         span_ [class_ "text-slate-900 text-sm font-medium"] "Data source"
         select_
-          [ class_ "select select-sm bg-slate-100 border border-slate-200 rounded-xl w-36 focus:outline-none"
+          [ class_ "select select-sm bg-fillWeaker border border-slate-200 rounded-xl w-36 focus:outline-none"
           , hxGet_ $ "/p/" <> pid.toText <> "/metrics/details/" <> metric.metricName <> "/"
           , name_ "metric_source"
           , hxTarget_ "#global-data-drawer-content"
@@ -276,7 +276,7 @@ metricsDetailsPage pid sources metric source currentRange = do
             div_ [class_ "flex flex-col gap-1"] do
               span_ [class_ "text-slate-900 text-sm font-medium"] "By label"
               select_
-                [ class_ "select select-sm bg-slate-100 border border-slate-200 rounded-xl w-36 focus:outline-none"
+                [ class_ "select select-sm bg-fillWeaker border border-slate-200 rounded-xl w-36 focus:outline-none"
                 , hxGet_ $ "/p/" <> pid.toText <> "/metrics/details/" <> metric.metricName <> "/breakdown"
                 , name_ "label"
                 , hxTarget_ "#breakdown-container"

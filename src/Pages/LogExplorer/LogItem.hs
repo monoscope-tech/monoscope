@@ -55,7 +55,7 @@ expandAPIlogItem' pid req modal = do
         div_ [class_ "flex items-center gap-4"] do
           span_ [class_ $ "flex items-center rounded-lg px-2 py-2 border font-medium gap-2 " <> borderColor <> " " <> methodColor] $ toHtml req.method
           span_ [class_ $ "flex items-center rounded-lg px-2 py-2 border font-medium gap-2 " <> stBorder <> " " <> statusColor] $ toHtml $ show req.statusCode
-          span_ [class_ "flex items-center rounded-lg px-2 py-1 text-sm font-medium gap-2 border border-slate-300 bg-slate-100 text-slate-600"] do
+          span_ [class_ "flex items-center rounded-lg px-2 py-1 text-sm font-medium gap-2 border border-slate-300 bg-fillWeaker text-slate-600"] do
             faSprite_ "calendar" "regular" "w-4 h-4 fill-none"
             toHtml $ formatTime defaultTimeLocale "%b. %d, %Y %I:%M:%S %p" req.createdAt
 
@@ -71,7 +71,7 @@ expandAPIlogItem' pid req modal = do
                   button_
                     [ [__|on click toggle .hidden on #expire_container|]
                     , id_ "toggle_expires_btn"
-                    , class_ "btn px-0 flex w-[100px] nowrap justify-center gap-2 text-slate-600 font-medium items-center cursor-pointer border border-slate-300 bg-slate-100"
+                    , class_ "btn px-0 flex w-[100px] nowrap justify-center gap-2 text-slate-600 font-medium items-center cursor-pointer border border-slate-300 bg-fillWeaker"
                     ]
                     do
                       span_ [] "1 hour"
@@ -105,7 +105,7 @@ expandAPIlogItem' pid req modal = do
         div_ [class_ "flex gap-1 items-center"] do
           span_ [class_ "text-slate-800 text-sm truncate ellipsis urlPath", term "data-tippy" req.urlPath] $ toHtml req.urlPath
           div_ [[__| install Copy(content:.urlPath )|]] do
-            faSprite_ "copy" "regular" "h-8 w-8 border border-slate-300 bg-slate-100 rounded-full p-2 text-slate-500"
+            faSprite_ "copy" "regular" "h-8 w-8 border border-slate-300 bg-fillWeaker rounded-full p-2 text-slate-500"
           a_ [href_ endpointURl] do
             faSprite_ "arrow-up-right" "regular" "h-8 w-8 p-2 btn-primary rounded-full"
       div_ [class_ "text-base flex items-center gap-6"] do
@@ -113,7 +113,7 @@ expandAPIlogItem' pid req modal = do
         div_ [class_ "flex gap-1 items-center"] do
           span_ [class_ "text-slate-800 text-sm truncate ellipsis", term "data-tippy" req.rawUrl] $ toHtml req.rawUrl
           div_ [[__| install Copy(content:.urlPath )|]] do
-            faSprite_ "copy" "regular" "h-8 w-8 border border-slate-300 bg-slate-100 rounded-full p-2 text-slate-500"
+            faSprite_ "copy" "regular" "h-8 w-8 border border-slate-300 bg-fillWeaker rounded-full p-2 text-slate-500"
           a_ [href_ endpointURl] do
             faSprite_ "arrow-up-right" "regular" "h-8 w-8 p-2 btn-primary rounded-full"
       div_ [class_ "flex gap-2 mt-4"] do
@@ -152,17 +152,17 @@ expandAPIlogItem' pid req modal = do
           button_ [class_ "a-tab whitespace-nowrap px-3 py-2 border-b border-b-slate-200 w-max", onclick_ "navigatable(this, '#path_params_json', '#req-tabs-container', 't-tab-active')"] "Path Params"
           button_ [class_ "border-b border-b-slate-200 w-full"] pass
 
-        div_ [class_ "a-tab-content m-4  rounded-xl p-2 border border-slate-200", id_ "req_body_json"]
-          $ jsonValueToHtmlTree req.requestBody
+        div_ [class_ "a-tab-content m-4  rounded-xl p-2 border border-slate-200", id_ "req_body_json"] $
+          jsonValueToHtmlTree req.requestBody
 
-        div_ [class_ "a-tab-content m-4 hidden rounded-xl p-2 border border-slate-200 break-all", id_ "req_headers_json"]
-          $ jsonValueToHtmlTree req.requestHeaders
+        div_ [class_ "a-tab-content m-4 hidden rounded-xl p-2 border border-slate-200 break-all", id_ "req_headers_json"] $
+          jsonValueToHtmlTree req.requestHeaders
 
-        div_ [class_ "a-tab-content m-4 hidden rounded-xl p-2 border border-slate-200", id_ "query_params_json"]
-          $ jsonValueToHtmlTree req.queryParams
+        div_ [class_ "a-tab-content m-4 hidden rounded-xl p-2 border border-slate-200", id_ "query_params_json"] $
+          jsonValueToHtmlTree req.queryParams
 
-        div_ [class_ "a-tab-content m-4 hidden rounded-xl p-2 border border-slate-200", id_ "path_params_json"]
-          $ jsonValueToHtmlTree req.pathParams
+        div_ [class_ "a-tab-content m-4 hidden rounded-xl p-2 border border-slate-200", id_ "path_params_json"] $
+          jsonValueToHtmlTree req.pathParams
 
     -- response details
     div_ [class_ "mt-8", id_ "res-tabs-container"] do
@@ -173,11 +173,11 @@ expandAPIlogItem' pid req modal = do
           button_ [class_ "a-tab px-3 border-b border-b-slate-200 py-2 w-max", role_ "tab", onclick_ "navigatable(this, '#res_headers_json', '#res-tabs-container', 't-tab-active')"] "Headers"
           button_ [class_ "border-b border-b-slate-200 w-full"] pass
 
-        div_ [class_ "a-tab-content m-4 rounded-xl p-2 border border-slate-200", id_ "res_body_json"]
-          $ jsonValueToHtmlTree req.responseBody
+        div_ [class_ "a-tab-content m-4 rounded-xl p-2 border border-slate-200", id_ "res_body_json"] $
+          jsonValueToHtmlTree req.responseBody
 
-        div_ [class_ "a-tab-content m-4 hidden rounded-xl p-2 border border-slate-200", id_ "res_headers_json"]
-          $ jsonValueToHtmlTree req.responseHeaders
+        div_ [class_ "a-tab-content m-4 hidden rounded-xl p-2 border border-slate-200", id_ "res_headers_json"] $
+          jsonValueToHtmlTree req.responseHeaders
 
 
 apiLogItemH :: Projects.ProjectId -> UUID.UUID -> UTCTime -> Maybe Text -> ATAuthCtx (RespHeaders ApiLogItem)
@@ -236,8 +236,8 @@ apiLogItemView pid logId req expandItemPath source = do
         _ -> Nothing
   let logItemPathDetailed = if source == "spans" then "/p/" <> pid.toText <> "/traces/" <> fromMaybe "" trId else expandItemPath <> "/detailed?source=" <> source
   div_ [class_ "flex items-center gap-2"] do
-    when (source /= "logs")
-      $ label_
+    when (source /= "logs") $
+      label_
         [ class_ "btn btn-sm bg-base-100"
         , Lucid.for_ "global-data-drawer"
         , term
@@ -251,8 +251,8 @@ apiLogItemView pid logId req expandItemPath source = do
         ("Expand" >> faSprite_ "expand" "regular" "h-3 w-3")
 
     let reqJson = decodeUtf8 $ AE.encode req
-    when (source /= "logs" && source /= "spans")
-      $ button_
+    when (source /= "logs" && source /= "spans") $
+      button_
         [ class_ "btn btn-sm bg-base-100"
         , term "data-reqJson" reqJson
         , onclick_ "window.buildCurlRequest(event)"
@@ -271,8 +271,8 @@ apiLogItemView pid logId req expandItemPath source = do
 -- Function to selectively convert RequestDumpLogItem to JSON
 selectiveReqToJson :: RequestDumps.RequestDumpLogItem -> AE.Value
 selectiveReqToJson req =
-  AE.object
-    $ concat @[]
+  AE.object $
+    concat @[]
       [ ["created_at" AE..= req.createdAt]
       , ["duration_ns" AE..= req.durationNs]
       , ["errors" AE..= req.errors]
@@ -298,8 +298,8 @@ selectiveReqToJson req =
 
 selectiveSpanToJson :: Telemetry.SpanRecord -> AE.Value
 selectiveSpanToJson sp =
-  AE.object
-    $ concat @[]
+  AE.object $
+    concat @[]
       [ ["timestamp" AE..= sp.timestamp]
       , ["span_id" AE..= sp.spanId]
       , ["span_name" AE..= sp.spanName]

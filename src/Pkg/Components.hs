@@ -56,7 +56,7 @@ navBar = do
 bashCommand :: Text -> Html ()
 bashCommand command = do
   div_ [class_ "w-full"] do
-    div_ [class_ "w-full rounded-lg bg-slate-100 px-4 py-2 text-slate-700 flex gap-2 items-start"] do
+    div_ [class_ "w-full rounded-lg bg-fillWeaker px-4 py-2 text-slate-700 flex gap-2 items-start"] do
       span_ [class_ "text-gray-400"] "$"
       span_ $ toHtml command
       button_
@@ -75,7 +75,7 @@ bashCommand command = do
 
 codeExample :: Text -> Html ()
 codeExample code = do
-  div_ [class_ "relative overflow-hidden flex bg-slate-100 border border-weak rounded-xl"] do
+  div_ [class_ "relative overflow-hidden flex bg-fillWeaker border border-weak rounded-xl"] do
     div_ [class_ "relative w-full flex flex-col"] do
       div_ [class_ "flex-none border-b border-weak flex justify-between items-center gap-4"] do
         div_ [class_ "flex items-center h-8 space-x-1.5 px-3"] do
@@ -94,7 +94,7 @@ codeExample code = do
            |]
           ]
           $ faSprite_ "copy" "solid" "h-4 w-4 inline-block"
-      div_ [class_ "relative flex-auto flex flex-col bg-slate-100"] do
+      div_ [class_ "relative flex-auto flex flex-col bg-fillWeaker"] do
         pre_ [class_ "flex leading-snug"] do
           code_ [class_ "flex-auto relative block  text-textStrong py-4 px-4 overflow-auto hljs atom-one-light"] $ toHtml code
 

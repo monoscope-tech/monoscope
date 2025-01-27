@@ -174,7 +174,7 @@ configureNotificationMessage_ colM = do
   let (severity, subject, message, naf, saf, nfc, sfc) = case colM of
         Just col -> (col.alertSeverity, col.alertSubject, col.alertMessage, col.notifyAfter, col.stopAfter, col.notifyAfterCheck, col.stopAfterCheck)
         Nothing -> ("Info", "Error: Error subject", "Alert Message", "10 minutes", "0", False, False)
-  div_ [class_ "space-y-4 bg-slate-100 p-4 rounded-2xl"] do
+  div_ [class_ "space-y-4 bg-fillWeaker p-4 rounded-2xl"] do
     div_ [class_ "p-4 bg-slate-50 rounded-xl"] do
       div_ [class_ "flex items-center w-full gap-2"] do
         div_ [class_ "form-control"] do
@@ -198,8 +198,8 @@ configureNotificationMessage_ colM = do
         div_ [class_ "flex items-center gap-2 pt-4"] do
           input_ $ [class_ "checkbox checkbox-sm", type_ "checkbox", name_ "notifyAfterCheck"] ++ [checked_ | nfc]
           span_ "If this monitor is not acknowleged or resoved, notify renotify every"
-          select_ [class_ "select select-xs select-bordered shadow-none", name_ "notifyAfter"]
-            $ mapM_ (\v -> option_ [selected_ "" | v == naf] $ toHtml v) ["10 mins", "20 mins", "30 mins", "1 hour", "6 hours", "24 hours"]
+          select_ [class_ "select select-xs select-bordered shadow-none", name_ "notifyAfter"] $
+            mapM_ (\v -> option_ [selected_ "" | v == naf] $ toHtml v) ["10 mins", "20 mins", "30 mins", "1 hour", "6 hours", "24 hours"]
         div_ [class_ "flex items-center gap-2"] do
           input_ $ [class_ "checkbox checkbox-sm", type_ "checkbox", name_ "stopAfterCheck"] ++ [checked_ | sfc]
           span_ "Stop renotifying after "

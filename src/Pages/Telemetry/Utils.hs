@@ -172,7 +172,7 @@ buildTree_ pid sp level isLasChild dp = do
     div_ [class_ "flex flex-col w-full grow-1 shrink-1 border-slate-200 relative"] do
       when hasChildren $ div_ [class_ "absolute top-1 left-2 border-l h-2 border-l-slate-200"] pass
       div_
-        [ class_ "w-full cursor-pointer flex tree_opened justify-between max-w-full items-center h-5 hover:bg-slate-100"
+        [ class_ "w-full cursor-pointer flex tree_opened justify-between max-w-full items-center h-5 hover:bg-fillWeaker"
         , [__| on click toggle .tree_opened on me|]
         ]
         do
