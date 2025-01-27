@@ -112,6 +112,7 @@ module.exports = {
         },
         fillWeak: '#0015800A',
         fillWeaker: '#00158005',
+        fillStrong: '#000626e5',
         fillWhite: '#FFFFFF',
         fillYellow: '#FEC62E',
         iconBrand: '#0068FFCC',

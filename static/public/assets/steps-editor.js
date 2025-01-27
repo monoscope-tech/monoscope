@@ -1,23 +1,8 @@
-import { LitElement, html, ref, createRef, nothing, unsafeHTML } from './js/thirdparty/lit.js'
+import { LitElement, html, nothing, unsafeHTML, repeat } from './js/thirdparty/lit.js'
 import { renderAssertionBuilder } from './steps-assertions.js'
 import { makeRequestAndProcessResponse, generateRequestPreviewFromObject, renderJsonWithIndentation } from './steps-executor.js'
 
 const validMethods = ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'HEAD', 'OPTIONS', 'TRACE', 'CONNECT']
-
-const DEFAULT_STEP = {
-  _expanded: false,
-  _method: 'GET',
-  _url: '',
-  assertions: [{ equal: ['$.resp.status', 200] }],
-  _assertions: [
-    {
-      type: 'statusCode',
-      operation: 'equals',
-      value: 200,
-      status: 'PASSED',
-    },
-  ],
-}
 
 export class StepsEditor extends LitElement {
   static properties = {
@@ -85,7 +70,23 @@ export class StepsEditor extends LitElement {
     }
   }
   addStep() {
-    this.collectionSteps = [...this.collectionSteps, DEFAULT_STEP]
+    this.collectionSteps = [
+      ...this.collectionSteps,
+      {
+        _expanded: false,
+        _method: 'GET',
+        _url: '',
+        assertions: [{ equal: ['$.resp.status', 200] }],
+        _assertions: [
+          {
+            type: 'statusCode',
+            operation: 'equals',
+            value: 200,
+            status: 'PASSED',
+          },
+        ],
+      },
+    ]
   }
   initializeEditor(monaco) {
     const editorContainer = this.querySelector('#steps-codeEditor')
@@ -266,17 +267,17 @@ export class StepsEditor extends LitElement {
 
     return html`
       <div
-        class="rounded-2xl overflow-hidden group/item collectionStep border draggable  ${failed ? 'border-red-500' : passed ? 'border-green-500' : 'border-slate-200'}"
+        class="rounded-2xl overflow-hidden group/item  bg-fillWeak collectionStep border draggable  ${failed ? 'border-red-500' : passed ? 'border-green-500' : 'border-strokeWeak'}"
         data-index="${idx}"
       >
-        <div class="flex flex-row items-center bg-slate-100">
+        <div class="flex flex-row items-center">
           <div class="h-full shrink p-3 cursor-move"
             draggable="true"
             @dragstart="${(e) => e.dataTransfer.setData('text/plain', e.target.dataset.index)}"
           >${faSprite_('grip-dots-vertical', 'solid', 'h-4 w-4')}</div>
           <div class="flex-1 flex flex-row items-center gap-1 pr-5 py-3" @click="${() => this.toggleExpanded(idx)}">
             <label
-             for="stepState-${idx}" class="flex items-center whitespace-nowrap gap-1 w-max text-xs bg-slate-500 badge text-white">Step ${idx + 1}</label>
+             for="stepState-${idx}" class="flex items-center whitespace-nowrap gap-1 py-1 w-max text-xs bg-fillStrong badge text-textInverse-strong">Step ${idx + 1}</label>
             <div class="w-full space-y-1 shrink" @click="${(e) => e.stopPropagation()}">
               <input
               class="text-lg w-full pl-2 bg-transparent outline-none focus:outline-none" placeholder="Give your step a name*"
@@ -512,10 +513,10 @@ ${stepData._json}</textarea
                                 <span class=" text-textWeak">${value}</span>
                                 <button
                                   data-tippy-content="Add as an assertion"
-                                  class="rounded-full border  text-textStrong shadown-sm p-1.5 bg-white"
+                                  class="rounded-full border fill-textDisabled shadow-[0px_4px_4px_0px_rgba(0,0,0,0.06)] border-strokeWeak shadown-sm p-1.5 bg-bgBase"
                                   @click="${(e) => this.addAssertion(e, idx, assertionObj)}"
                                 >
-                                  ${faSprite_('plus', 'regular', 'w-3.5 h-3.5  text-textWeak')}
+                                  ${faSprite_('plus', 'regular', 'w-3 h-3')}
                                 </button>
                               </div>
                             `
@@ -835,7 +836,8 @@ ${stepData._json}</textarea
             @dragenter="${this._onDragEnter}"
             @dragleave="${this._onDragLeave}"
           >
-            ${this.collectionSteps.map((stepData, idx) => this.renderCollectionStep(stepData, idx, this.collectionResults[idx], this.saveErrors[idx]) || undefined)}
+            <!-- ${this.collectionSteps.map((stepData, idx) => this.renderCollectionStep(stepData, idx, this.collectionResults[idx], this.saveErrors[idx]) || undefined)} -->
+            ${repeat(this.collectionSteps, (stepData, idx) => this.renderCollectionStep(stepData, idx, this.collectionResults[idx], this.saveErrors[idx]) || undefined)}
           </div>
           ${this.isOnboarding
             ? nothing

@@ -347,7 +347,7 @@ collectionPage pid colM col_rn respJson = do
           div_ [class_ "flex items-centers justify-between mb-4"] do
             div_ [class_ "flex items-center gap-2"] do
               span_ [class_ "text-gray-900 font-medium"] "Run the test every"
-              input_ [class_ "ml-3 input input-sm input-bordered shadow-none w-14 text-center", type_ "number", value_ scheduleNumber, name_ "scheduleNumber"]
+              input_ [class_ "ml-3 input input-sm input-bordered shadow-none w-12 text-center", type_ "number", value_ scheduleNumber, name_ "scheduleNumber"]
               select_ [class_ "select select-sm select-bordered shadow-none", name_ "scheduleNumberUnit"] do
                 option_ (value_ "minutes" : [selected_ "" | scheduleNumberUnit == "minutes"]) "minutes"
                 option_ (value_ "hours" : [selected_ "" | scheduleNumberUnit == "hours"]) "hours"
