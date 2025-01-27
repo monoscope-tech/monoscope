@@ -83,6 +83,7 @@ testingGetH pid filterTM timeFilter = do
           { sessM = Just sess
           , currProject = Just project
           , pageTitle = "Multistep API Tests (Beta)"
+          , menuItem = Just "Monitors & Alerts"
           , docsLink = Just "https://apitoolkit.io/docs/monitors/multistep-tests/"
           , pageActions = Just $ a_ [href_ $ "/p/" <> pid.toText <> "/monitors/collection", class_ "btn btn-sm blue-outline-btn space-x-2"] $ Utils.faSprite_ "plus" "regular" "h-4" >> "new tests"
           , navTabs =
@@ -121,7 +122,7 @@ collectionCard pid col currTime = do
         ]
     div_ [class_ "w-full flex flex-col gap-2 shrink-1"] do
       div_ [class_ "flex gap-10 items-center"] do
-        a_ [href_ $ "/p/" <> pid.toText <> "/monitors/" <> col.id.toText <> "/overview", class_ "font-medium text-gray-800 text-xl"] $ toHtml col.title
+        a_ [href_ $ "/p/" <> pid.toText <> "/monitors/" <> col.id.toText <> "/overview", class_ "font-medium text-gray-800 text-lg"] $ toHtml col.title
         div_ [class_ "flex gap-1 items-center text-sm"] do
           forM_ col.tags $ \tag -> do
             span_ [class_ "badge badge-blue"] $ toHtml tag

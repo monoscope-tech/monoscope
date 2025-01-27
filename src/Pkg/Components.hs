@@ -146,13 +146,13 @@ data TabFilterOpt = TabFilterOpt
 
 instance ToHtml TabFilter where
   toHtmlRaw = toHtml
-  toHtml tf = div_ [class_ "tabs tabs-boxed tabs-outline p-0  bg-fillWeak  text-textWeak border items-center border"] do
+  toHtml tf = div_ [class_ "tabs tabs-boxed tabs-outline p-0 bg-fillWeak text-textWeak border items-center border"] do
     let uri = deleteParam "filter" tf.currentURL
     forM_ tf.options \opt ->
       a_
         [ href_ $ uri <> "&filter=" <> escapedQueryPartial opt.name
         , role_ "tab"
-        , class_ $ "tab " <> if opt.name == tf.current then "tab-active  text-textStrong border border-strokeStrong" else ""
+        , class_ $ "tab " <> if opt.name == tf.current then "tab-active text-textStrong border border-strokeStrong" else ""
         ]
         do
           span_ $ toHtml opt.name

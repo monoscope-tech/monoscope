@@ -88,7 +88,7 @@ itemsList_ :: ToHtml a => ItemsListCfg -> V.Vector a -> Html ()
 itemsList_ listCfg items = do
   let currentURL' = deleteParam "sort" listCfg.currentURL
   whenJust listCfg.search \search -> do
-    label_ [class_ "input input-sm flex  bg-fillWeak border border-strokeStrong py-0 shadow-none overflow-hidden items-center gap-2"] do
+    label_ [class_ "input input-sm flex h-10 bg-fillWeak border border-strokeStrong shadow-none overflow-hidden items-center gap-2"] do
       faSprite_ "magnifying-glass" "regular" "w-4 h-4 opacity-70"
       case search.viaQueryParam of
         Just param ->
@@ -127,7 +127,7 @@ itemsList_ listCfg items = do
           input_
             [ term "aria-label" "Select Issue"
             , type_ "checkbox"
-            , class_ "checkbox  checkbox-md checked:checkbox-primary"
+            , class_ "checkbox h-6 w-6 checked:checkbox-primary"
             , [__| on click set .bulkactionItemCheckbox.checked to my.checked |]
             ]
 
