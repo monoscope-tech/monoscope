@@ -144,8 +144,8 @@ widget_ w =
           let yAxisLabel = fromMaybe (maybeToMonoid widget.unit) (widget.yAxis >>= (.label))
           let query = decodeUtf8 $ AE.encode widget.query
           let pid = decodeUtf8 $ AE.encode $ widget._projectId <&> (.toText)
-          let widgetJSON = decodeUtf8 $ AE.encode $ widget
-          let seriesDefault = decodeUtf8 $ AE.encode $ createSeries widget.wType Nothing
+          -- let widgetJSON = decodeUtf8 $ AE.encode $ widget
+          -- let seriesDefault = decodeUtf8 $ AE.encode $ createSeries widget.wType Nothing
           script_
             [type_ "text/javascript"]
             [text|

@@ -88,9 +88,7 @@ library
       Pages.IntegrationDemos.Django
       Pages.IntegrationDemos.DotNet
       Pages.IntegrationDemos.Echo
-      Pages.IntegrationDemos.ExpressJs
       Pages.IntegrationDemos.FastApi
-      Pages.IntegrationDemos.FastifyJs
       Pages.IntegrationDemos.Flask
       Pages.IntegrationDemos.Gin
       Pages.IntegrationDemos.Golang
@@ -122,6 +120,7 @@ library
       Pages.Monitors.TestCollectionEditor
       Pages.Monitors.Testing
       Pages.Monitors.TestingSpec
+      Pages.Onboarding.Onboarding
       Pages.Projects.CreateProject
       Pages.Projects.Integrations
       Pages.Projects.ListProjects
@@ -359,7 +358,7 @@ executable apitoolkit-server-exe
     , rust-interop
   mixins:
       relude (Relude as Prelude)
-    , relude
+    , relude 
   default-language: GHC2021
 
 test-suite doctests

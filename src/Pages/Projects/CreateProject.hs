@@ -14,6 +14,7 @@ module Pages.Projects.CreateProject (
   projectOnboarding,
   deleteProjectGetH,
   CreateProject (..),
+  CreateProjectResp(..),
 )
 where
 
@@ -142,7 +143,7 @@ createProjectGetH pid = do
 
 data CreateProjectResp = CreateProjectResp
   { sess :: Sessions.PersistentSession,
-  , pid :: Projects.ProjectId
+     pid :: Projects.ProjectId, 
     env :: EnvConfig,
     form :: CreateProjectForm,
     formError :: CreateProjectFormError
@@ -163,7 +164,7 @@ instance HasField "unwrapCreateProjectResp" CreateProject (Maybe CreateProjectRe
 instance ToHtml CreateProject where
   toHtml (CreateProject (PageCtx bwconf (sess, pid, config, isUpdate, prf, pref))) = toHtml $ PageCtx bwconf $ createProjectBody sess pid config prf pref
   toHtml (PostNoContent message) = span_ [class_ ""] $ toHtml message
-  toHtml (ProjectPost cpr) = toHtml $ createProjectBody cpr.sess cpr.env cpr.form cpr.formError
+  toHtml (ProjectPost cpr) = toHtml $ createProjectBody cpr.sess cpr.pid cpr.env cpr.form cpr.formError
   toHtmlRaw = toHtml
 
 ----------------------------------------------------------------------------------------------------------
@@ -209,8 +210,8 @@ createProjectPostH pid createP = do
   appCtx <- ask @AuthContext
   validationRes <- validateM createProjectFormV createP
   case validationRes of
-    Right cpe -> addRespHeaders $ ProjectPost (CreateProjectResp sess.persistentSession appCtx.config createP cpe)
-    Left cp -> processProjectPostForm cp
+    Right cpe -> addRespHeaders $ ProjectPost (CreateProjectResp sess.persistentSession pid appCtx.config createP cpe)
+    Left cp -> processProjectPostForm cp pid
 
 data FirstSubItem = FirstSubItem
   { id :: Int,
@@ -219,7 +220,7 @@ data FirstSubItem = FirstSubItem
   deriving stock (Show, Generic)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] FirstSubItem
 
-newtype Attributes = Attributes
+data Attributes = Attributes
   { firstSubscriptionItem :: FirstSubItem
   , productName :: Text
   }
@@ -262,7 +263,6 @@ data PricingUpdateForm = PricingUpdateForm
   deriving stock (Eq, Show, Generic)
   deriving anyclass (FromForm, Default)
 
-<<<<<<< HEAD
 
 pricingUpdateH :: Projects.ProjectId -> PricingUpdateForm -> ATAuthCtx (RespHeaders (Html ()))
 pricingUpdateH pid PricingUpdateForm{orderId} = do
@@ -298,35 +298,7 @@ processProjectPostForm cpRaw pid = do
   if isDemoAndNotSudo pid sess.user.isSudo
     then do
       addErrorToast "Can't perform this action on the demo project" Nothing
-      addRespHeaders $ ProjectPost ( CreateProjectResp sess.persistentSession envCfg cp.isUpdate cp (def @CreateProjectFormError))
-    else do
-          project <- dbtToEff $ Projects.projectById pid
-          case project of
-            Just p -> do
-              let checkPaymentPlan = cp.paymentPlan `elem` ["UsageBased", "GraduatedPricing"] && cp.paymentPlan /= p.paymentPlan
-              (subId, firstSubItemId) <-
-                if checkPaymentPlan
-                  then
-                    getSubscriptionId cp.orderId envCfg.lemonSqueezyApiKey >>= \case
-                      Just sub
-                        | not (null sub.dataVal) ->
-                            let target = sub.dataVal Unsafe.!! 0
-                             in pure (Just (show target.attributes.firstSubscriptionItem.subscriptionId), Just (show target.attributes.firstSubscriptionItem.id))
-                      _ -> pure (Nothing, Nothing)
-                  else pure (p.subId, p.firstSubItemId)
-              case (if checkPaymentPlan then (subId, firstSubItemId) else (p.subId, p.firstSubItemId)) of
-                (Just sid, Just fsid) -> do
-                  _ <- dbtToEff $ Projects.updateProject (createProjectFormToModel pid (Just sid) (Just fsid) cp)
-                  addSuccessToast "Updated Project Successfully" Nothing
-                  addRespHeaders $ ProjectPost  (CreateProjectResp sess.persistentSession envCfg cp.isUpdate cp (def @CreateProjectFormError))
-                _ -> do
-                  addErrorToast "Something went wrong. Please try again." Nothing
-                  redirectCS ("/p/" <> pid.toText <> "/about_project")
-                  addRespHeaders $ ProjectPost  (CreateProjectResp sess.persistentSession envCfg cp.isUpdate cp (def @CreateProjectFormError))
-            Nothing -> do
-              addErrorToast "Something went wrong. Please try again." Nothing
-              redirectCS ("/p/" <> pid.toText <> "/about_project")
-              addRespHeaders $ ProjectPost  (CreateProjectResp sess.persistentSession envCfg cp.isUpdate cp (def @CreateProjectFormError))
+      addRespHeaders $ ProjectPost ( CreateProjectResp sess.persistentSession pid envCfg cp (def @CreateProjectFormError))
     else do
       project <- dbtToEff $ Projects.projectById pid
       case project of
@@ -346,11 +318,11 @@ processProjectPostForm cpRaw pid = do
           --   (Just sid, Just fsid) -> do
           _ <- dbtToEff $ Projects.updateProject (createProjectFormToModel pid p.subId p.firstSubItemId p.orderId p.paymentPlan cp)
           addSuccessToast "Updated Project Successfully" Nothing
-          addRespHeaders $ ProjectPost sess.persistentSession pid envCfg cp (def @CreateProjectFormError)
+          addRespHeaders $ ProjectPost (CreateProjectResp sess.persistentSession pid envCfg cp (def @CreateProjectFormError))
         Nothing -> do
           addErrorToast "Something went wrong. Please try again." Nothing
           redirectCS ("/p/" <> pid.toText <> "/about_project")
-          addRespHeaders $ ProjectPost sess.persistentSession pid envCfg cp (def @CreateProjectFormError)
+          addRespHeaders $ ProjectPost (CreateProjectResp sess.persistentSession pid envCfg cp (def @CreateProjectFormError))
 
 -- else do
 --   let usersAndPermissions = zip cp.emails cp.permissions & uniq

@@ -171,6 +171,8 @@ chartList pid source metricList nextUrl = do
           , eager = Just True
           , _projectId = Just pid
           , expandBtnFn = Just expandBtn
+          , icon = Nothing
+          , timeseriesStatAggregate = Nothing
           }
   when (length metricList > 19)
     $ a_ [hxTrigger_ "intersect once", hxSwap_ "outerHTML", hxGet_ nextUrl] pass
