@@ -4,7 +4,7 @@ module Pages.Charts.Charts (chartsGetH, ChartType (..), lazy, ChartExp (..), Que
 
 import Data.Aeson qualified as AE
 import Data.Text qualified as T
-import Data.Time (UTCTime, diffUTCTime)
+import Data.Time (UTCTime, diffUTCTime, addUTCTime)
 import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
 import Data.Tuple.Extra (fst3, snd3, thd3)
 import Data.UUID qualified as UUID
@@ -219,8 +219,8 @@ queryMetrics pidM queryM queryASTM sinceM fromM toM sourceM = do
       , headers = V.cons "timestamp" headers
       , rowsCount
       , rowsPerMin
-      , from = round . utcTimeToPOSIXSeconds <$> fromD
-      , to = round . utcTimeToPOSIXSeconds <$> toD
+      , from = Just $ round . utcTimeToPOSIXSeconds $ fromMaybe (addUTCTime (-86400) now) fromD
+      , to = Just $ round . utcTimeToPOSIXSeconds $ fromMaybe now toD
       }
 
 

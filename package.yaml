@@ -43,6 +43,7 @@ ghc-options:
   - -Wno-type-defaults
   - -Wno-unused-top-binds
   - -Wno-unused-imports
+  - -Wno-error=incomplete-record-selectors
   # - -plugin-package hiedb-plugin -fplugin Plugin.HieDb
   # - "-prof"
   # - -g

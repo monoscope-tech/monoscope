@@ -1,17 +1,21 @@
 module Pages.Projects.ProjectsSpec (spec) where
 
 import Data.UUID qualified as UUID
+import Control.Lens (preview, (^?), Traversal')
+import Data.Generics.Labels ()
 import Data.Vector qualified as V
 import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects qualified as Projects
 import Pages.BodyWrapper
+import Pages.Projects.CreateProject 
 import Pages.Projects.CreateProject qualified as CreateProject
 import Pages.Projects.ListProjects qualified as ListProjects
 import Pkg.TestUtils
 import Relude
 import Relude.Unsafe qualified as Unsafe
 import Test.Hspec
-
+import Data.Generics.Sum ( _As, AsConstructor(_Ctor) )
+import Data.Generics.Product (HasField(field))
 
 testPid :: Projects.ProjectId
 testPid = Unsafe.fromJust $ Projects.ProjectId <$> UUID.fromText "00000000-0000-0000-0000-000000000000"
@@ -20,7 +24,7 @@ testPid = Unsafe.fromJust $ Projects.ProjectId <$> UUID.fromText "00000000-0000-
 spec :: Spec
 spec = aroundAll withTestResources do
   describe "Check Course Creation, Update and Consumption" do
-    it "Create Project" \TestResources{..} -> do
+    it "Create Project" \TestResources {..} -> do
       let createPForm =
             CreateProject.CreateProjectForm
               { title = "Test Project CI"
@@ -31,10 +35,10 @@ spec = aroundAll withTestResources do
               }
       pg <-
         toServantResponse trATCtx trSessAndHeader trLogger $ CreateProject.createProjectPostH testPid createPForm
-      pg.form.title `shouldBe` "Test Project CI"
-      pg.form.description `shouldBe` "Test Description"
+      (pg.unwrapCreateProjectResp <&> (.form.title)) `shouldBe` (Just @Text "Test Project CI")
+      (pg.unwrapCreateProjectResp <&> (.form.description))  `shouldBe` (Just "Test Description")
 
-    it "Non empty project list" \TestResources{..} -> do
+    it "Non empty project list" \TestResources {..} -> do
       pg <-
         toServantResponse trATCtx trSessAndHeader trLogger ListProjects.listProjectsGetH
       length pg.unwrap.content `shouldBe` 2
@@ -46,7 +50,7 @@ spec = aroundAll withTestResources do
       (pg.unwrap.content V.! 0).description `shouldBe` "Test Description"
     -- TODO: add more checks for the info we we display on list page
 
-    it "Should update project with new details" \TestResources{..} -> do
+    it "Should update project with new details" \TestResources {..} -> do
       let createPForm =
             CreateProject.CreateProjectForm
               { title = "Test Project CI2"
@@ -57,11 +61,11 @@ spec = aroundAll withTestResources do
               }
       pg <-
         toServantResponse trATCtx trSessAndHeader trLogger $ CreateProject.createProjectPostH testPid createPForm
-      pg.form.title `shouldBe` "Test Project CI2"
-      pg.form.description `shouldBe` "Test Description2"
+      (pg.unwrapCreateProjectResp <&> (.form.title)) `shouldBe` (Just @Text "Test Project CI2")
+      (pg.unwrapCreateProjectResp <&> (.form.description))  `shouldBe` (Just "Test Description2")
 
     -- FIXME: marked as pending with xit. Test is faily and should be investigated
-    xit "Project in list should have new details" \TestResources{..} -> do
+    xit "Project in list should have new details" \TestResources {..} -> do
       pg <-
         toServantResponse trATCtx trSessAndHeader trLogger ListProjects.listProjectsGetH
       length pg.unwrap.content `shouldBe` 2

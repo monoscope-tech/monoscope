@@ -148,14 +148,14 @@ sqlFromQueryComponents sqlCfg qc =
       timeGroupSelect =
         if null qc.groupByClause
           then "'Throughput'"
-          else T.intercalate "||" (map (<> "::text") qc.groupByClause)
+          else T.intercalate "||' '|| " (map (<> "::text") qc.groupByClause)
       timeChartQuery =
         [fmt|
       SELECT {timebucket} {chartSelect}, {timeGroupSelect} FROM {fromTable}
           WHERE project_id='{sqlCfg.pid.toText}'::uuid  and ( {timestampCol} > NOW() - interval '14 days'
           {cursorT} {dateRangeStr} {whereClause} )
           {timeGroupByClause}
-    |]
+        |]
 
       -- FIXME: render this based on the aggregations, but without the aliases
       alertSelect = [fmt| count(*)::integer|] :: Text
@@ -166,7 +166,7 @@ sqlFromQueryComponents sqlCfg qc =
       SELECT GREATEST({alertSelect}) FROM {fromTable}
           WHERE project_id='{sqlCfg.pid.toText}'::uuid  and ( {timestampCol} > NOW() - interval '{timeRollup}'
           {whereClause}) {alertGroupByClause}
-    |]
+        |]
    in ( finalSqlQuery
       , qc
           { finalColumns = listToColNames selectedCols

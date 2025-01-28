@@ -26,6 +26,7 @@ import Pages.Anomalies.Server qualified as AnomaliesRoutes
 import Pages.Api qualified as Api
 import Pages.AutoComplete qualified as AutoComplete
 import Pages.BodyWrapper (PageCtx (..))
+import Pages.CP qualified as CP
 import Pages.Charts.Charts qualified as Charts
 import Pages.Dashboard qualified as Dashboard
 import Pages.Dashboards qualified as Dashboards
@@ -69,6 +70,7 @@ data Routes mode = Routes
   { public :: mode :- "public" :> Servant.Raw
   , cookieProtected :: mode :- AuthProtect "optional-cookie-auth" :> Servant.NamedRoutes CookieProtectedRoutes
   , ping :: mode :- "ping" :> Get '[PlainText] Text
+  , cp :: mode :- "cp" :> Get '[HTML] (Html ())
   , status :: mode :- "status" :> Get '[JSON] Status
   , login :: mode :- "login" :> GetRedirect '[HTML] (Headers '[Header "Location" Text, Header "Set-Cookie" SetCookie] NoContent)
   , toLogin :: mode :- "to_login" :> GetRedirect '[HTML] (Headers '[Header "Location" Text, Header "Set-Cookie" SetCookie] NoContent)
@@ -90,6 +92,7 @@ server pool =
     { public = Servant.serveDirectoryWebApp "./static/public"
     , ping = pingH
     , status = statusH
+    , cp = CP.pageH
     , login = Auth.loginH
     , toLogin = Auth.loginRedirectH
     , logout = Auth.logoutH
@@ -118,7 +121,7 @@ type role CookieProtectedRoutes nominal
 type CookieProtectedRoutes :: Type -> Type
 data CookieProtectedRoutes mode = CookieProtectedRoutes
   { dashboardGet :: mode :- "p" :> ProjectId :> QPT "from" :> QPT "to" :> QPT "since" :> GetRedirect '[HTML] (Headers '[Header "Location" Text] (PageCtx Dashboard.DashboardGet))
-  , dashboardsGet :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> QPT "from" :> QPT "to" :> QPT "since" :> Get '[HTML] (RespHeaders (PageCtx Dashboards.DashboardGet))
+  , dashboardsGet :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> QPT "file" :> QPT "from" :> QPT "to" :> QPT "since" :> Get '[HTML] (RespHeaders (PageCtx Dashboards.DashboardGet))
   , dashboardsGetList :: mode :- "p" :> ProjectId :> "dashboards" :> Get '[HTML] (RespHeaders (PageCtx Dashboards.DashboardsGet))
   , dashboardsPost :: mode :- "p" :> ProjectId :> "dashboards" :> ReqBody '[FormUrlEncoded] Dashboards.DashboardForm :> Post '[HTML] (RespHeaders NoContent)
   , projects :: mode :- ProjectsRoutes.Routes

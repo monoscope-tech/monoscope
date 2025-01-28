@@ -13,7 +13,7 @@ import NeatInterpolation
 import Relude
 import Text.Printf (printf)
 import Text.Slugify (slugify)
-import Utils qualified
+import Utils (faSprite_)
 
 
 data Query = Query
@@ -36,8 +36,17 @@ data Layout = Layout
   deriving (AE.FromJSON, AE.ToJSON) via DAES.Snake Layout
 
 
-data WidgetType = WTTimeseries | WTList | WTTopList | WTDistribution | WTGeomap | WTFunnel | WTTreeMap | WTPieChart
-  deriving stock (Show, Generic, Enum, THS.Lift)
+data WidgetType
+  = WTTimeseries
+  | WTTimeseriesStat
+  | WTList
+  | WTTopList
+  | WTDistribution
+  | WTGeomap
+  | WTFunnel
+  | WTTreeMap
+  | WTPieChart
+  deriving stock (Show, Eq, Generic, Enum, THS.Lift)
   deriving anyclass (NFData)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.ConstructorTagModifier '[DAE.StripPrefix "WT", DAE.CamelToSnake]] WidgetType
 
@@ -48,6 +57,8 @@ data Widget = Widget
   , id :: Maybe Text
   , title :: Maybe Text -- Widget title
   , subtitle :: Maybe Text
+  , icon :: Maybe Text
+  , timeseriesStatAggregate :: Maybe Text -- average, min, max, sum, etc
   , sql :: Maybe Text
   , query :: Maybe Text
   , queries :: Maybe [Query] -- Multiple queries for combined visualizations
@@ -104,6 +115,7 @@ widget_ w =
     $ div_ [class_ "grid-stack-item-content !overflow-hidden h-full"]
     $ renderChart (w & #id .~ (slugify <$> w.title))
   where
+    isStat = w.wType == WTTimeseriesStat
     layoutFields = [("x", (.x)), ("y", (.y)), ("w", (.w)), ("h", (.h))]
     attrs = concat [maybe [] (\v -> [term ("gs-" <> name) (show v)]) (w.layout >>= layoutField) | (name, layoutField) <- layoutFields]
 
@@ -113,7 +125,7 @@ widget_ w =
       let chartId = maybeToMonoid widget.id
       let hasValue = isJust $ widget.dataset >>= (.value)
       div_ [class_ "gap-1.5 flex flex-col h-full box-border mb-1"] do
-        div_ [class_ "leading-none flex justify-between items-center"] do
+        unless isStat $ div_ [class_ "leading-none flex justify-between items-center"] do
           div_ [class_ "inline-flex gap-3 items-center"] do
             span_ [] $ toHtml $ maybeToMonoid widget.title
             span_ [class_ $ "bg-slate-200 px-2 py-1 rounded-3xl " <> if hasValue then "" else "hidden", id_ $ chartId <> "Value"]
@@ -132,6 +144,8 @@ widget_ w =
           let yAxisLabel = fromMaybe (maybeToMonoid widget.unit) (widget.yAxis >>= (.label))
           let query = decodeUtf8 $ AE.encode widget.query
           let pid = decodeUtf8 $ AE.encode $ widget._projectId <&> (.toText)
+          -- let widgetJSON = decodeUtf8 $ AE.encode $ widget
+          -- let seriesDefault = decodeUtf8 $ AE.encode $ createSeries widget.wType Nothing
           script_
             [type_ "text/javascript"]
             [text|
@@ -225,95 +239,109 @@ widget_ w =
                 init(${echartOpt}, "${chartId}", ${query}, "${theme}", "${yAxisLabel}", ${pid});
               })();
           |]
-
-
 -----------------------------------------------------------------------------
 -- Echarts Logic
 -----------------------------------------------------------------------------
 
+-- -- -- Helper: Select tooltip formatter
+-- -- selectFormatter :: WidgetType -> Text
+-- -- selectFormatter WTTimeseries = "{a} <br/>{b}: {c}ms"
+-- -- selectFormatter _ = "{a} <br/>{b}: {c}"
+
 -- Function to convert Widget to ECharts options
 widgetToECharts :: Widget -> AE.Value
 widgetToECharts widget =
-  AE.object
-    [ "tooltip"
-        AE..= AE.object
-          [ "trigger" AE..= ("axis" :: Text)
-          , "axisPointer"
-              AE..= AE.object
-                ["type" AE..= ("shadow" :: Text)]
-                -- , "formatter" AE..= selectFormatter widget.wType
-          ]
-    , "legend"
-        AE..= AE.object
-          [ "show" AE..= True
-          , "type" AE..= ("scroll" :: Text)
-          , "top" AE..= ("bottom" :: Text)
-          , "data" AE..= fromMaybe [] (extractLegend widget)
-          ]
-    , "grid"
-        AE..= AE.object
-          [ "width" AE..= ("100%" :: Text)
-          , "left" AE..= ("0%" :: Text)
-          , "top" AE..= ("2%" :: Text)
-          , "bottom" AE..= if fromMaybe False widget.hideLegend then "1.8%" else "22%"
-          , "containLabel" AE..= True
-          ]
-    , "xAxis"
-        AE..= AE.object
-          [ "type" AE..= ("time" :: Text)
-          , "scale" AE..= True
-          , "min" AE..= maybe AE.Null (AE.Number . fromIntegral) (widget ^? #dataset . _Just . #from . _Just)
-          , "max" AE..= maybe AE.Null (AE.Number . fromIntegral) (widget ^? #dataset . _Just . #to . _Just)
-          , "boundaryGap" AE..= ([0, 0.01] :: [Double])
-          , "axisLabel"
-              AE..= AE.object
-                [ "show" AE..= fromMaybe True (widget.xAxis >>= (.showAxisLabel))
-                ]
-          ]
-    , "yAxis"
-        AE..= AE.object
-          [ "type" AE..= ("value" :: Text)
-          , "min" AE..= (0 :: Int)
-          , "splitLine" AE..= AE.object ["show" AE..= True]
-          , "axisLabel"
-              AE..= AE.object
-                [ "show" AE..= fromMaybe True (widget.yAxis >>= (.showAxisLabel))
-                ]
-          ]
-    , "dataset"
-        AE..= AE.object
-          ["source" AE..= fromMaybe AE.Null (widget.dataset <&> (.source))]
-    , "series" AE..= map (createSeries widget.wType) (fromMaybe [] widget.queries)
-    , "animation" AE..= False
-    ]
-
-
--- -- Helper: Select tooltip formatter
--- selectFormatter :: WidgetType -> Text
--- selectFormatter WTTimeseries = "{a} <br/>{b}: {c}ms"
--- selectFormatter _ = "{a} <br/>{b}: {c}"
+  let isStat = widget.wType == WTTimeseriesStat
+      axisVisibility = not isStat
+      gridLinesVisibility = not isStat
+      legendVisibility = not isStat
+  in AE.object
+       [ "tooltip"
+           AE..= AE.object
+             [ "trigger" AE..= ("axis" :: Text)
+             , "axisPointer"
+                 AE..= AE.object
+                   ["type" AE..= ("shadow" :: Text)]
+             ]
+       , "legend"
+           AE..= AE.object
+             [ "show" AE..= legendVisibility
+             , "type" AE..= ("scroll" :: Text)
+             , "top" AE..= ("bottom" :: Text)
+             , "data" AE..= fromMaybe [] (extractLegend widget)
+             ]
+       , "grid"
+           AE..= AE.object
+             [ "width" AE..= ("100%" :: Text)
+             , "left" AE..= ("0%" :: Text)
+             , "top" AE..= ("2%" :: Text)
+             , "bottom" AE..= if fromMaybe False widget.hideLegend then "1.8%" else "22%"
+             , "containLabel" AE..= True
+             , "show" AE..= gridLinesVisibility
+             ]
+       , "xAxis"
+           AE..= AE.object
+             [ "type" AE..= ("time" :: Text)
+             , "scale" AE..= True
+             , "min" AE..= maybe AE.Null (AE.Number . fromIntegral) (widget ^? #dataset . _Just . #from . _Just)
+             , "max" AE..= maybe AE.Null (AE.Number . fromIntegral) (widget ^? #dataset . _Just . #to . _Just)
+             , "boundaryGap" AE..= ([0, 0.01] :: [Double])
+             , "axisLabel" AE..= AE.object ["show" AE..= axisVisibility]
+             , "show" AE..= axisVisibility
+             ]
+       , "yAxis"
+           AE..= AE.object
+             [ "type" AE..= ("value" :: Text)
+             , "min" AE..= (0 :: Int)
+             , "splitLine" AE..= AE.object ["show" AE..= gridLinesVisibility]
+             , "axisLabel" AE..= AE.object ["show" AE..= axisVisibility]
+             , "show" AE..= axisVisibility
+             ]
+       , "dataset"
+           AE..= AE.object
+             ["source" AE..= fromMaybe AE.Null (widget.dataset <&> (.source))]
+       , "series" AE..= map (createSeries widget.wType) []
+       , "animation" AE..= False
+       ]
 
 -- Helper: Extract legend data
 extractLegend :: Widget -> Maybe [Text]
 extractLegend widget = fmap (map (fromMaybe "Unnamed Series" . (.query))) widget.queries
 
-
 -- Helper: Create series
-createSeries :: WidgetType -> Query -> AE.Value
+createSeries :: WidgetType -> Maybe Query -> AE.Value
 createSeries widgetType query =
-  AE.object
-    [ "name" AE..= fromMaybe "Unnamed Series" query.query
-    , "type" AE..= mapWidgetTypeToChartType widgetType
-    , "stack" AE..= ("Endpoints" :: Text)
-    , "showBackground" AE..= True
-    , "backgroundStyle"
-        AE..= AE.object
-          ["color" AE..= ("rgba(240,248,255, 0.4)" :: Text)]
-    ]
-
+  let isStat = widgetType == WTTimeseriesStat
+      gradientStyle =
+        AE.object
+          [ "color"
+              AE..= AE.object
+                [ "type" AE..= ("linear" :: Text)
+                , "x" AE..= (0 :: Int)
+                , "y" AE..= (0 :: Int)
+                , "x2" AE..= (0 :: Int)
+                , "y2" AE..= (1 :: Int)
+                -- , "colorStops"
+                --     AE..= AE. [ AE.object ["offset" AE..= (0 :: Double), "color" AE..= ("rgba(0, 136, 212, 0.7)" :: Text)]
+                --           , AE.object ["offset" AE..= (1 :: Double), "color" AE..= ("rgba(0, 136, 212, 0.1)" :: Text)]
+                --           ]
+                ]
+          ]
+  in AE.object
+       [ "name" AE..= fromMaybe "Unnamed Series" (query >>= (.query))
+       , "type" AE..= mapWidgetTypeToChartType widgetType
+       , "stack" AE..= ("Stack" :: Text)
+       , "showBackground" AE..= not isStat
+       , "backgroundStyle"
+           AE..= AE.object
+             ["color" AE..= ("rgba(240,248,255, 0.4)" :: Text)]
+       , "areaStyle" AE..= if isStat then gradientStyle else AE.Null
+       , "lineStyle" AE..= AE.object ["width" AE..= if isStat then 0 else 1]
+       ]
 
 -- Helper: Map widget type to ECharts chart type
 mapWidgetTypeToChartType :: WidgetType -> Text
-mapWidgetTypeToChartType WTTimeseries = "line"
+mapWidgetTypeToChartType WTTimeseries = "bar"
+mapWidgetTypeToChartType WTTimeseriesStat = "line"
 mapWidgetTypeToChartType WTDistribution = "bar"
 mapWidgetTypeToChartType _ = "bar"

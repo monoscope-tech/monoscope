@@ -55,6 +55,7 @@ data BWConfig = BWConfig
   , currProject :: Maybe Projects.Project
   , prePageTitle :: Maybe Text
   , pageTitle :: Text
+  , pageTitleModalId :: Maybe Text --
   , menuItem :: Maybe Text -- Use PageTitle if menuItem is not set
   , hasIntegrated :: Maybe Bool
   , navTabs :: Maybe (Html ())
