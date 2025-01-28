@@ -63,6 +63,10 @@ instance HasField "toText" UserId Text where
   getField = UUID.toText . getUserId
 
 
+instance Default Bool where
+  def = False
+
+
 data User = User
   { id :: UserId
   , createdAt :: UTCTime
@@ -94,8 +98,8 @@ createUser :: (Time :> es, UUIDEff :> es) => Text -> Text -> Text -> Text -> Eff
 createUser firstName lastName picture email = do
   uid <- createUserId
   now <- currentTime
-  pure
-    $ User
+  pure $
+    User
       { id = uid
       , createdAt = now
       , updatedAt = now
