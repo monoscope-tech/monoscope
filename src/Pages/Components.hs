@@ -22,20 +22,20 @@ statBox pid title helpInfo val bckupValM = do
         Nothing -> ""
   if not (T.null tl)
     then do
-      a_ [href_ $ "/p/" <> pidT <> tl, class_ "col-span-1 card-round p-5 flex flex-row content-between justify-between"] do
+      a_ [href_ $ "/p/" <> pidT <> tl, class_ "col-span-1 p-5 card-round flex flex-row content-between justify-between"] do
         div_ do
           div_ [class_ "inline-block flex flex-row content-between"] do
-            strong_ [class_ "font-bold text-2xl"] $ toHtml @Text $ fmt (commaizeF val)
+            span_ [class_ "font-bold text-textStrong text-2xl"] $ toHtml @Text $ fmt (commaizeF val)
             maybe "" (\bVal -> small_ $ toHtml @Text $ fmt ("/" +| commaizeF bVal)) bckupValM
-          span_ $ toHtml title
+          span_ [class_ "text-textWeak"] $ toHtml title
         span_ [class_ "inline-block tooltip", term "data-tip" helpInfo] $ faSprite_ "circle-info" "regular" "w-4 h-4"
     else do
-      div_ [class_ "col-span-1 card-round p-5 flex flex-row content-between justify-between"] do
+      div_ [class_ "col-span-1 p-5 card-round col-span-1 flex flex-row content-between justify-between"] do
         div_ do
           div_ [class_ "inline-block flex flex-row content-between"] do
-            strong_ [class_ "font-bold text-2xl"] $ toHtml @Text $ fmt (commaizeF val)
+            span_ [class_ "font-bold text-textStrong text-2xl"] $ toHtml @Text $ fmt (commaizeF val)
             maybe "" (\bVal -> small_ $ toHtml @Text $ fmt ("/" +| commaizeF bVal)) bckupValM
-          span_ $ toHtml title
+          span_ [class_ "text-textWeak"] $ toHtml title
         span_ [class_ "inline-block tooltip", term "data-tip" helpInfo] $ faSprite_ "circle-info" "regular" "w-4 h-4"
 
 
@@ -45,7 +45,7 @@ statBox_ pid iconM title helpInfo val bckupValM valClsM = do
   -- let pidT = case pid of
   --       Just p -> p.toText
   --       Nothing -> ""
-  div_ [class_ "bg-fillWeaker rounded-3xl flex flex-col gap-3 p-5 border border-slate-200"] do
+  div_ [class_ "bg-fillWeaker rounded-3xl flex flex-col gap-3 p-5 border border-strokeWeak"] do
     whenJust iconM $ \(icon, kind, color) -> do
       div_ [class_ "flex items-center justify-center h-10 w-10 bg-slate-50 rounded-xl"] do
         faSprite_ icon kind $ "w-4 h-4 " <> color

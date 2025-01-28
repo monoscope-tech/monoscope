@@ -704,7 +704,8 @@ stepIndicator :: Int -> Text -> Text -> Html ()
 stepIndicator step title prevUrl = do
   universalIndicator
   div_ [class_ "flex-col gap-4 flex w-full"] $ do
-    img_ [class_ "h-7 absolute top-10 left-10", src_ "/public/assets/svgs/logo.svg"]
+    a_ [href_ $ "/", class_ "absolute top-10 left-10"] do
+      img_ [class_ "h-7", src_ "/public/assets/svgs/logo.svg"]
     div_ [class_ "flex-col gap-2 flex w-full"] $ do
       div_ [class_ " text-textStrong text-base font-semibold"] $ "Step " <> show step <> " of 6"
       div_ [class_ "grid grid-cols-6 w-full gap-1"] $ do

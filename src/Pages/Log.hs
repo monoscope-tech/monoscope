@@ -230,7 +230,7 @@ logQueryBox_ pid currentRange source targetSpan queryAST queryLibRecent queryLib
     do
       div_ [class_ "flex gap-2 items-stretch justify-center"] do
         queryLibrary_ pid queryLibSaved queryLibRecent
-        div_ [class_ "p-1 pl-3 flex-1 flex gap-2  bg-fillWeak rounded-lg border border-weak justify-between items-stretch"] do
+        div_ [class_ "p-1 pl-3 flex-1 flex gap-2  bg-fillWeaker rounded-lg border border-strokeWeak justify-between items-stretch"] do
           div_ [id_ "queryEditor", class_ "h-14 hidden overflow-hidden  bg-fillWeak flex-1 flex items-center"] pass
           div_ [id_ "queryBuilder", class_ "flex-1 flex items-center"] $ termRaw "filter-element" [id_ "filterElement", class_ "w-full h-full flex items-center", termRaw "ast" queryAST] ("" :: Text)
           when (source == "spans") do
@@ -269,9 +269,9 @@ logQueryBox_ pid currentRange source targetSpan queryAST queryLibRecent queryLib
 
 queryLibrary_ :: Projects.ProjectId -> V.Vector Projects.QueryLibItem -> V.Vector Projects.QueryLibItem -> Html ()
 queryLibrary_ pid queryLibSaved queryLibRecent = div_ [class_ "dropdown dropdown-hover dropdown-bottom dropdown-start", id_ "queryLibraryParentEl"] do
-  div_ [class_ "cursor-pointer relative  bg-fillWeak  text-textWeak rounded-lg border border-slate-200 h-full flex gap-2 items-center px-2", tabindex_ "0", role_ "button"] $
+  div_ [class_ "cursor-pointer relative  bg-fillWeak  text-textWeak rounded-lg border border-strokeWeaker h-full flex gap-2 items-center px-2", tabindex_ "0", role_ "button"] $
     (toHtml "Presets" >> faSprite_ "chevron-down" "regular" "w-3 h-3")
-  div_ [class_ "dropdown-content z-20"] $ div_ [class_ "tabs tabs-boxed tabs-md tabs-outline items-center bg-slate-200 h-full", role_ "tablist", id_ "queryLibraryTabListEl"] do
+  div_ [class_ "dropdown-content z-20"] $ div_ [class_ "tabs tabs-boxed tabs-md tabs-outline items-center bg-fillWeak p-0 h-full", role_ "tablist", id_ "queryLibraryTabListEl"] do
     tabPanel_ "Saved" (queryLibraryContent_ "Saved" queryLibSaved)
     tabPanel_ "Recent" (queryLibraryContent_ "Recent" queryLibRecent)
   where

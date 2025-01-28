@@ -64,7 +64,7 @@ dashboardGetH pid fromDStr toDStr sinceStr' = do
             (def :: BWConfig)
               { pageTitle = "Dashboard"
               }
-      pure $ addHeader ("/p/" <> pid.toText <> "/onboarding?step=Pricing") $ PageCtx bwconf $ DashboardRedirect
+      pure $ addHeader ("/p/" <> pid.toText <> "/onboarding") $ PageCtx bwconf $ DashboardRedirect
     else do
       hasRequests <- dbtToEff $ RequestDumps.hasRequest pid
       newEndpoints <- dbtToEff $ Endpoints.endpointRequestStatsByProject pid False False Nothing Nothing Nothing 0 "Incoming"

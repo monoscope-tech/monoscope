@@ -323,7 +323,8 @@ export class StepsEditor extends LitElement {
                   </label>
                   <label for="actions-data-${idx}" class="flex-1 text-sm font-medium form-control w-full flex flex-row items-center gap-1">
                     <input
-                      type="text" id="actions-data-${idx}" .value=${stepData._url} class="input input-sm shadow-none input-bordered w-full" @change=${(e) =>
+                      placeholder="https://example.com/api/users"
+                      type="text" id="actions-data-${idx}" .value=${stepData._url || ''} class="input input-sm shadow-none input-bordered w-full" @change=${(e) =>
       this.updateValue(e, idx, null, null, '_url')}
                     />
                     ${saveError.url ? html`<span class="text-red-700 text-xs">${saveError.url}</span>` : ''}
