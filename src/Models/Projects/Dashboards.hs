@@ -1,10 +1,13 @@
-module Models.Projects.Dashboards (Dashboard (..), DashboardVM (..), DashboardId (..), readDashboardsFromDirectory) where
+module Models.Projects.Dashboards (Dashboard (..), DashboardVM (..), DashboardId (..), readDashboardsFromDirectory, readDashboardEndpoint) where
 
 import Control.Exception (try)
+import Control.Lens ((^.))
 import Data.Aeson qualified as AE
 import Data.ByteString qualified as B
 import Data.Default
 import Data.Effectful.UUID qualified as UUID
+import Data.Effectful.Wreq (HTTP)
+import Data.Effectful.Wreq qualified as W
 import Data.List (isSuffixOf)
 import Data.Time (UTCTime)
 import Data.Vector qualified as V
@@ -17,6 +20,8 @@ import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Database.PostgreSQL.Simple.ToField
 import Deriving.Aeson qualified as DAE
 import Deriving.Aeson.Stock qualified as DAES
+import Effectful
+import Effectful.Error.Static (Error, throwError)
 import GHC.Records (HasField (getField))
 import Language.Haskell.TH (Exp, Q, runIO)
 import Language.Haskell.TH.Syntax qualified as THS
@@ -25,7 +30,7 @@ import Models.Users.Users qualified as Users
 import Pkg.Components.TimePicker qualified as TimePicker
 import Pkg.Components.Widget (Widget (..))
 import Relude
-import Servant (FromHttpApiData)
+import Servant (FromHttpApiData, ServerError (..), err401)
 import System.Directory (listDirectory)
 
 
@@ -100,3 +105,12 @@ readDashboardFile dir file = do
           putStrLn $ "Error decoding JSON in file: " ++ filePath ++ ": " ++ show err
           pure Nothing
         Right dashboard -> pure (Just $ dashboard{file = Just $ fromString file})
+
+
+readDashboardEndpoint :: (HTTP :> es, Error ServerError :> es) => Text -> Eff es Dashboard
+readDashboardEndpoint uri = do
+  fileResp <- W.get (toString uri)
+  Yml.decodeEither' (toStrict $ fileResp ^. W.responseBody)
+    & either
+      (\e -> throwError $ err401{errBody = ("Error decoding dashboard: " <> show e)})
+      pure

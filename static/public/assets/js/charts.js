@@ -622,3 +622,85 @@ function getMinMax(arr) {
   traverse(arr)
   return { min, max }
 }
+
+
+// NEW Chart Functions
+
+const FETCH_INTERVAL = 5000;
+
+const updateChartConfiguration = w => {
+  const { opt, data, yAxisLabel, seriesDefault,from, to } = w;
+  if (!data) return opt;
+  // Convert timestamps from seconds to milliseconds
+  data.slice(1).forEach(row => row[0] *= 1000);
+
+  const cols = data[0]?.slice(1) || [];
+  opt.series = cols.map((name, i) => ({
+    ...seriesDefault,
+    name,
+    encode: { x: 0, y: i + 1 },
+    stack: yAxisLabel || 'units'
+  }));
+  opt.legend.data = cols;
+  if (!opt.xAxis) {
+    opt.xAxis = {};
+  }
+  opt.xAxis.min = from * 1000;
+  opt.xAxis.max = to * 1000; 
+  console.log(opt)
+  return opt;
+};
+
+const updateChartData = async w => {
+  const { chart, opt, query, pid, chartId } = w;
+  const p = new URLSearchParams(window.location.search);
+  p.set("pid", pid);
+  p.set("query_raw", query);
+  const chart_data = await (await fetch(`/chart_data?${p}`)).json();
+  opt.dataset.source = [chart_data.headers, ...chart_data.dataset];
+  w.data = opt.dataset.source;
+  w.from = chart_data.from;
+  w.to = chart_data.to;
+
+  const subtitleEl = document.getElementById(chartId + 'Subtitle');
+  if (subtitleEl) {
+    subtitleEl.innerHTML = chart_data.rows_per_min.toFixed(2);
+  }
+  const valEl = document.getElementById(chartId + 'Value');
+  if (valEl) {
+    valEl.innerHTML = Number(chart_data.rows_count).toLocaleString();
+    valEl.classList.remove("hidden");
+  }
+
+  chart.hideLoading();
+  chart.setOption(updateChartConfiguration(w));
+};
+
+const initTimeseriesWidget = w => {
+  w.data = w.opt.dataset?.source||null;
+  const cEl = document.getElementById(w.chartId), c = echarts.init(cEl, w.theme);
+  w.chart = c; w.chartEl = cEl;
+  c.setOption(updateChartConfiguration(w));
+
+  const ro = new ResizeObserver(() => requestAnimationFrame(() => echarts.getInstanceByDom(cEl).resize()));
+  ro.observe(cEl);
+
+  const ls = document.getElementById('streamLiveData');
+  let iId = null;
+  ls?.addEventListener('change', () => ls.checked ? iId=setInterval(() => updateChartData(w), FETCH_INTERVAL) : (clearInterval(iId), iId=null));
+
+  if (!w.opt.dataset.source) {
+    c.showLoading();
+    const io = new IntersectionObserver(es => {
+      if (es[0]?.isIntersecting) { updateChartData(w); io.disconnect(); }
+    });
+    io.observe(cEl);
+  }
+
+  ['submit','add-query','update-query'].forEach(ev =>
+    document.querySelector(ev==='submit'?'#log_explorer_form':'#filterElement')
+      ?.addEventListener(ev, () => updateChartData(w))
+  );
+
+  window.addEventListener('unload', () => { clearInterval(iId); ro.disconnect(); });
+};

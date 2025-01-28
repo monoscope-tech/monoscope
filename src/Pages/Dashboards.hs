@@ -50,7 +50,7 @@ dashboardPage_ pid dash = do
         div_ [class_ "label"] $ span_ [class_ "label-text"] "Change Dashboard Title"
         input_ [class_ "input input-bordered w-full max-w-xs", placeholder_ "Insert new title", value_ $ maybeToMonoid dash.title]
 
-  div_ [class_ "mx-auto pt-2 px-6 gap-3.5 w-full flex flex-col h-full overflow-hidden pb-12 group/pg", id_ "dashboardPage"] do
+  div_ [class_ "mx-auto pt-2 pb-6 px-6 gap-3.5 w-full flex flex-col h-full overflow-y-scroll pb-12 group/pg", id_ "dashboardPage"] do
     div_ "" -- variables selector area
     div_ [class_ "grid-stack"] $ forM_ dash.widgets (\w -> toHtml (w{Widget._projectId = Just pid}))
     script_ "GridStack.init()"
@@ -61,8 +61,8 @@ loadDashboardFromVM dashVM = case dashVM.schema of
   Nothing -> find (\d -> d.file == dashVM.baseTemplate) dashboardTemplates
 
 
-dashboardGetH :: Projects.ProjectId -> Dashboards.DashboardId -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders (PageCtx DashboardGet))
-dashboardGetH pid dashId fromDStr toDStr sinceStr = do
+dashboardGetH :: Projects.ProjectId -> Dashboards.DashboardId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders (PageCtx DashboardGet))
+dashboardGetH pid dashId fileM fromDStr toDStr sinceStr = do
   (sess, project) <- Sessions.sessionAndProject pid
   now <- Time.currentTime
   let (_fromD, _toD, currentRange) = Components.parseTimeRange now (Components.TimePicker sinceStr fromDStr toDStr)
@@ -71,7 +71,10 @@ dashboardGetH pid dashId fromDStr toDStr sinceStr = do
     (dbtToEff $ DBT.selectById @Dashboards.DashboardVM (Only dashId)) >>= \case
       Just v -> pure v
       Nothing -> throwError $ err404{errBody = ("Dashboard with ID not found. ID:" <> encodeUtf8 dashId.toText)}
-  dash <- maybe (throwError $ err404) pure (loadDashboardFromVM dashVM)
+
+  dash <- case fileM of
+    Just file -> Dashboards.readDashboardEndpoint file
+    Nothing -> maybe (throwError $ err404) pure (loadDashboardFromVM dashVM)
   dash' <- forOf (#widgets . traverse) dash \widget ->
     if (widget.eager == Just True)
       then do
@@ -158,29 +161,25 @@ dashboardsGet_ dg = do
         div_ [class_ "pt-5"] do
           div_ [class_ "bg-[#1e9cff] px-5 py-8 rounded-xl"] $ img_ [src_ "/public/assets/svgs/screens/dashboard_blank.svg", class_ "w-full"]
   div_ [id_ "itemsListPage", class_ "mx-auto px-6 pt-4 gap-8 w-full flex flex-col h-full overflow-hidden pb-12  group/pg"] do
-    div_ [class_ "flex"] do
-      label_ [class_ "input input-md input-bordered flex-1 flex bg-slate-100 border-slate-200 shadow-none overflow-hidden items-center gap-2"] do
-        faSprite_ "magnifying-glass" "regular" "w-4 h-4 opacity-70"
-        input_ [type_ "text", class_ "grow", placeholder_ "Search", [__|on input show .itemsListItem in #itemsListPage when its textContent.toLowerCase() contains my value.toLowerCase()|]]
+    div_ [class_ "flex"] $ label_ [class_ "input input-md input-bordered flex-1 flex bg-slate-100 border-slate-200 shadow-none overflow-hidden items-center gap-2"] do
+      faSprite_ "magnifying-glass" "regular" "w-4 h-4 opacity-70"
+      input_ [type_ "text", class_ "grow", placeholder_ "Search", [__|on input show .itemsListItem in #itemsListPage when its textContent.toLowerCase() contains my value.toLowerCase()|]]
     -- button_
-    div_ [class_ "grid grid-cols-2 gap-5"] do
-      forM_ dg.dashboards \dashVM -> do
-        let dash = loadDashboardFromVM dashVM
-        a_ [class_ "rounded-xl border border-slate-200 gap-3.5 p-4 bg-slate-100 flex", href_ ("/p/" <> dg.projectId.toText <> "/dashboards/" <> dashVM.id.toText)] do
-          div_ [class_ "flex-1 space-y-2"] do
-            div_ [class_ "flex items-center gap-2"] do
-              strong_ [class_ "font-medium"] (toHtml dashVM.title)
-              span_ [class_ "leading-none", term "data-tippy-content" "This dashboard is currently your homepage."] do
-                when (isJust dashVM.homepageSince) $ (faSprite_ "house" "regular" "w-4 h-4")
-            div_ [class_ "gap-2 flex items-center"] do
-              time_ [class_ "mr-2 text-slate-400", datetime_ $ Utils.formatUTC dashVM.createdAt] $ toHtml $ formatTime defaultTimeLocale "%eth %b %Y" dashVM.createdAt
-              forM_ dashVM.tags (a_ [class_ "cbadge-sm badge-neutral cbadge bg-slate-200"] . toHtml @Text)
-          div_ [class_ "flex items-center justify-center gap-3"] do
-            button_ [class_ "rounded-full border border-slate-300 p-2 leading-none text-gray-700"]
-              $ if isJust dashVM.starredSince
-                then (faSprite_ "star" "solid" "w-5 h-5")
-                else (faSprite_ "star" "regular" "w-5 h-5")
-            div_ [class_ "space-x-2"] $ faSprite_ "chart-area" "regular" "w-5 h-5" >> (span_ . toHtml $ maybe "0" (show . length . (.widgets)) dash <> " charts")
+    div_ [class_ "grid grid-cols-2 gap-5"] $ forM_ dg.dashboards \dashVM -> do
+      let dash = loadDashboardFromVM dashVM
+      a_ [class_ "rounded-xl border border-slate-200 gap-3.5 p-4 bg-slate-100 flex", href_ ("/p/" <> dg.projectId.toText <> "/dashboards/" <> dashVM.id.toText)] do
+        div_ [class_ "flex-1 space-y-2"] do
+          div_ [class_ "flex items-center gap-2"] do
+            strong_ [class_ "font-medium"] (toHtml dashVM.title)
+            span_ [class_ "leading-none", term "data-tippy-content" "This dashboard is currently your homepage."] do
+              when (isJust dashVM.homepageSince) $ (faSprite_ "house" "regular" "w-4 h-4")
+          div_ [class_ "gap-2 flex items-center"] do
+            time_ [class_ "mr-2 text-slate-400", datetime_ $ Utils.formatUTC dashVM.createdAt] $ toHtml $ formatTime defaultTimeLocale "%eth %b %Y" dashVM.createdAt
+            forM_ dashVM.tags (a_ [class_ "cbadge-sm badge-neutral cbadge bg-slate-200"] . toHtml @Text)
+        div_ [class_ "flex items-center justify-center gap-3"] do
+          button_ [class_ "rounded-full border border-slate-300 p-2 leading-none text-gray-700"]
+            $ faSprite_ "star" (bool "regular" "solid" $ isJust dashVM.starredSince) "w-5 h-5"
+          div_ [class_ "space-x-2"] $ faSprite_ "chart-area" "regular" "w-5 h-5" >> (span_ . toHtml $ maybe "0" (show . length . (.widgets)) dash <> " charts")
 
 
 dashboardsGetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders (PageCtx DashboardsGet))

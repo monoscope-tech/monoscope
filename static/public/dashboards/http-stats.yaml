@@ -1,9 +1,16 @@
 title: HTTP Stats 
 refresh_interval: 60s 
 widgets:
+  - type: "timeseries_stat"
+    title: "Requests"
+    query: requests 
+    unit: reqs
+    layout: { w: 3, h: 2 }
+
   - type: "timeseries"
     title: "Requests by status code"
     query: timechart count(*) by status_code 
+    unit: reqs
     layout: { w: 6, h: 3 }
 
   - type: "timeseries"

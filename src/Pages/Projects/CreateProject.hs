@@ -40,6 +40,7 @@ import Deriving.Aeson qualified as DAE
 import Effectful
 import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
 import Effectful.Reader.Static (ask)
+import GHC.Records (HasField (getField))
 import Lucid
 import Lucid.Htmx (hxConfirm_, hxGet_, hxIndicator_, hxPost_, hxSwap_, hxTarget_)
 import Lucid.Hyperscript (__)
@@ -64,7 +65,6 @@ import System.Types (ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders, addS
 import Utils (faSprite_, insertIfNotExist, isDemoAndNotSudo, redirect)
 import Web.FormUrlEncoded (FromForm)
 
-
 data CreateProjectForm = CreateProjectForm
   { title :: Text
   , description :: Text
@@ -75,10 +75,9 @@ data CreateProjectForm = CreateProjectForm
   deriving stock (Eq, Show, Generic)
   deriving anyclass (FromForm, Default)
 
-
 data CreateProjectFormError = CreateProjectFormError
-  { titleE :: Maybe [String]
-  , descriptionE :: Maybe [String]
+  { titleE :: Maybe [String],
+    descriptionE :: Maybe [String]
   }
   deriving stock (Eq, Show, Generic)
   deriving anyclass (Default)
@@ -95,8 +94,7 @@ createProjectFormToModel pid subId firstSubId orderId paymentPlan CreateProjectF
     , ..
     }
 
-
-createProjectFormV :: Monad m => Valor CreateProjectForm m CreateProjectFormError
+createProjectFormV :: (Monad m) => Valor CreateProjectForm m CreateProjectFormError
 createProjectFormV =
   CreateProjectFormError
     <$> check1 title (failIf ["name can't be empty"] T.null)
@@ -137,31 +135,36 @@ createProjectGetH pid = do
   sess <- Sessions.getSession
   let bwconf =
         (def :: BWConfig)
-          { sessM = Just sess
-          , pageTitle = "Create Project"
+          { sessM = Just sess,
+            pageTitle = "Create Project"
           }
   addRespHeaders $ CreateProject $ PageCtx bwconf (sess.persistentSession, pid, appCtx.config, False, def @CreateProjectForm, def @CreateProjectFormError)
 
+data CreateProjectResp = CreateProjectResp
+  { sess :: Sessions.PersistentSession,
+  , pid :: Projects.ProjectId
+    env :: EnvConfig,
+    form :: CreateProjectForm,
+    formError :: CreateProjectFormError
+  }
+  deriving stock (Show, Generic)
 
 data CreateProject
   = CreateProject (PageCtx (Sessions.PersistentSession, Projects.ProjectId, EnvConfig, Bool, CreateProjectForm, CreateProjectFormError))
   | PostNoContent Text
-  | ProjectPost
-      { sess :: Sessions.PersistentSession
-      , pid :: Projects.ProjectId
-      , env :: EnvConfig
-      , form :: CreateProjectForm
-      , formError :: CreateProjectFormError
-      }
-  deriving stock (Show)
+  | ProjectPost CreateProjectResp
+  deriving stock (Show, Generic)
 
+instance HasField "unwrapCreateProjectResp" CreateProject (Maybe CreateProjectResp) where
+  getField (CreateProject _) = Nothing
+  getField (PostNoContent _) = Nothing
+  getField (ProjectPost cpr) = Just cpr
 
 instance ToHtml CreateProject where
   toHtml (CreateProject (PageCtx bwconf (sess, pid, config, isUpdate, prf, pref))) = toHtml $ PageCtx bwconf $ createProjectBody sess pid config prf pref
   toHtml (PostNoContent message) = span_ [class_ ""] $ toHtml message
-  toHtml (ProjectPost sess pid config prf pref) = toHtml $ createProjectBody sess pid config prf pref
+  toHtml (ProjectPost cpr) = toHtml $ createProjectBody cpr.sess cpr.env cpr.form cpr.formError
   toHtmlRaw = toHtml
-
 
 ----------------------------------------------------------------------------------------------------------
 projectSettingsGetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders CreateProject)
@@ -180,7 +183,6 @@ projectSettingsGetH pid = do
   let bwconf = (def :: BWConfig){sessM = Just sess, currProject = Just project, pageTitle = "Settings"}
   addRespHeaders $ CreateProject $ PageCtx bwconf (sess.persistentSession, pid, appCtx.config, True, createProj, def @CreateProjectFormError)
 
-
 ----------------------------------------------------------------------------------------------------------
 deleteProjectGetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders CreateProject)
 deleteProjectGetH pid = do
@@ -198,7 +200,6 @@ deleteProjectGetH pid = do
       redirectCS "/"
       addRespHeaders $ PostNoContent ""
 
-
 ----------------------------------------------------------------------------------------------------------
 -- createProjectPostH is the handler for the create projects page form handling.
 -- It processes post requests and is expected to return a redirect header and a hyperscript event trigger header.
@@ -208,47 +209,41 @@ createProjectPostH pid createP = do
   appCtx <- ask @AuthContext
   validationRes <- validateM createProjectFormV createP
   case validationRes of
-    Right cpe -> addRespHeaders $ ProjectPost sess.persistentSession pid appCtx.config createP cpe
-    Left cp -> processProjectPostForm cp pid
-
+    Right cpe -> addRespHeaders $ ProjectPost (CreateProjectResp sess.persistentSession appCtx.config createP cpe)
+    Left cp -> processProjectPostForm cp
 
 data FirstSubItem = FirstSubItem
-  { id :: Int
-  , subscriptionId :: Int
+  { id :: Int,
+    subscriptionId :: Int
   }
   deriving stock (Show, Generic)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] FirstSubItem
 
-
-data Attributes = Attributes
+newtype Attributes = Attributes
   { firstSubscriptionItem :: FirstSubItem
   , productName :: Text
   }
   deriving stock (Show, Generic)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] Attributes
 
-
 data DataVals = DataVals
-  { id :: Text
-  , attributes :: Attributes
+  { id :: Text,
+    attributes :: Attributes
   }
   deriving stock (Show, Generic)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] DataVals
-
 
 newtype SubResponse = SubResponse
   { dataVal :: [DataVals]
   }
   deriving stock (Show, Generic)
 
-
 instance AE.FromJSON SubResponse where
   parseJSON = AE.withObject "SubResponse" $ \obj -> do
     dataVal <- obj AE..: "data"
-    return (SubResponse{dataVal = dataVal})
+    return (SubResponse {dataVal = dataVal})
 
-
-getSubscriptionId :: HTTP :> es => Maybe Text -> Text -> Eff es (Maybe SubResponse)
+getSubscriptionId :: (HTTP :> es) => Maybe Text -> Text -> Eff es (Maybe SubResponse)
 getSubscriptionId orderId apiKey = do
   case orderId of
     Nothing -> pure Nothing
@@ -267,6 +262,7 @@ data PricingUpdateForm = PricingUpdateForm
   deriving stock (Eq, Show, Generic)
   deriving anyclass (FromForm, Default)
 
+<<<<<<< HEAD
 
 pricingUpdateH :: Projects.ProjectId -> PricingUpdateForm -> ATAuthCtx (RespHeaders (Html ()))
 pricingUpdateH pid PricingUpdateForm{orderId} = do
@@ -302,7 +298,35 @@ processProjectPostForm cpRaw pid = do
   if isDemoAndNotSudo pid sess.user.isSudo
     then do
       addErrorToast "Can't perform this action on the demo project" Nothing
-      addRespHeaders $ ProjectPost sess.persistentSession pid envCfg cp (def @CreateProjectFormError)
+      addRespHeaders $ ProjectPost ( CreateProjectResp sess.persistentSession envCfg cp.isUpdate cp (def @CreateProjectFormError))
+    else do
+          project <- dbtToEff $ Projects.projectById pid
+          case project of
+            Just p -> do
+              let checkPaymentPlan = cp.paymentPlan `elem` ["UsageBased", "GraduatedPricing"] && cp.paymentPlan /= p.paymentPlan
+              (subId, firstSubItemId) <-
+                if checkPaymentPlan
+                  then
+                    getSubscriptionId cp.orderId envCfg.lemonSqueezyApiKey >>= \case
+                      Just sub
+                        | not (null sub.dataVal) ->
+                            let target = sub.dataVal Unsafe.!! 0
+                             in pure (Just (show target.attributes.firstSubscriptionItem.subscriptionId), Just (show target.attributes.firstSubscriptionItem.id))
+                      _ -> pure (Nothing, Nothing)
+                  else pure (p.subId, p.firstSubItemId)
+              case (if checkPaymentPlan then (subId, firstSubItemId) else (p.subId, p.firstSubItemId)) of
+                (Just sid, Just fsid) -> do
+                  _ <- dbtToEff $ Projects.updateProject (createProjectFormToModel pid (Just sid) (Just fsid) cp)
+                  addSuccessToast "Updated Project Successfully" Nothing
+                  addRespHeaders $ ProjectPost  (CreateProjectResp sess.persistentSession envCfg cp.isUpdate cp (def @CreateProjectFormError))
+                _ -> do
+                  addErrorToast "Something went wrong. Please try again." Nothing
+                  redirectCS ("/p/" <> pid.toText <> "/about_project")
+                  addRespHeaders $ ProjectPost  (CreateProjectResp sess.persistentSession envCfg cp.isUpdate cp (def @CreateProjectFormError))
+            Nothing -> do
+              addErrorToast "Something went wrong. Please try again." Nothing
+              redirectCS ("/p/" <> pid.toText <> "/about_project")
+              addRespHeaders $ ProjectPost  (CreateProjectResp sess.persistentSession envCfg cp.isUpdate cp (def @CreateProjectFormError))
     else do
       project <- dbtToEff $ Projects.projectById pid
       case project of
@@ -327,7 +351,6 @@ processProjectPostForm cpRaw pid = do
           addErrorToast "Something went wrong. Please try again." Nothing
           redirectCS ("/p/" <> pid.toText <> "/about_project")
           addRespHeaders $ ProjectPost sess.persistentSession pid envCfg cp (def @CreateProjectFormError)
-
 
 -- else do
 --   let usersAndPermissions = zip cp.emails cp.permissions & uniq
@@ -395,12 +418,12 @@ createProjectBody sess pid envCfg cp cpe = do
                 "Title"
                 span_ [class_ "text-red-400"] " *"
               input_
-                [ class_ "flex h-9 w-full rounded-lg border border-input bg-transparent px-3 py-1  shadow-sm transition-colors placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                , type_ "text"
-                , id_ "title"
-                , name_ "title"
-                , value_ cp.title
-                , required_ "required"
+                [ class_ "flex h-9 w-full rounded-lg border border-input bg-transparent px-3 py-1  shadow-sm transition-colors placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
+                  type_ "text",
+                  id_ "title",
+                  name_ "title",
+                  value_ cp.title,
+                  required_ "required"
                 ]
             div_ [class_ "flex flex-col gap-1 mt-5"] do
               label_ [class_ " font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70"] do
@@ -410,11 +433,11 @@ createProjectBody sess pid envCfg cp cpe = do
             div_ [class_ "mt-5 "] do
               label_ [class_ " font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70"] "Description"
               textarea_
-                [ class_ " flex min-h-[60px] w-full rounded-lg border border-input bg-transparent px-3 py-2  shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50 "
-                , rows_ "4"
-                , placeholder_ "Description"
-                , id_ "description"
-                , name_ "description"
+                [ class_ " flex min-h-[60px] w-full rounded-lg border border-input bg-transparent px-3 py-2  shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50 ",
+                  rows_ "4",
+                  placeholder_ "Description",
+                  id_ "description",
+                  name_ "description"
                 ]
                 $ toHtml cp.description
 
@@ -438,11 +461,9 @@ createProjectBody sess pid envCfg cp cpe = do
           ]
           "Delete Project"
 
-
 checkMark :: Html ()
 checkMark =
   div_ [class_ "flex items-center justify-center text-center font-bold text-green-500 rounded-md w-5 h-5 bg-gray-200"] "✓"
-
 
 checkList :: Text -> Text -> Html ()
 checkList value team =

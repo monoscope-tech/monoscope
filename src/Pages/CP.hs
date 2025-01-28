@@ -129,7 +129,6 @@ page = do
                 i_ [class_ "fa-regular fa-file-circle-check"] ""
                 "Submit corrected data"
           div_ [c "self-stretch grow shrink basis-0 justify-between items-center flex flex-col"] $ do
-            
             div_ [c "self-stretch px-8 flex-col justify-start items-start gap-6 flex"] $ do
               -- Filter Bar
               div_ [class_ "sticky top-0 z-10 px-4 py-3 bg-neutral-50 rounded-xl justify-between items-start flex w-full"] do
@@ -138,7 +137,7 @@ page = do
                   option_ [value_ "birthdayCor"] "Birthday Correction"
                   option_ [value_ "phoneCor"] "Phone Correction"
                   option_ [value_ "emailCor"] "Email Correction"
-                  
+
                 div_ [class_ "flex gap-3"] do
                   button_ [class_ "flex gap-2 items-center px-3.5 py-2.5 bg-white rounded-lg shadow shadow-inner border border-[#d5d6d9]"] do
                     i_ [class_ "fa-regular fa-calendar"] ""
@@ -162,22 +161,21 @@ page = do
                       label_ [] $ span_ "Email" >> input_ [type_ "checkbox", checked_, name_ "colEmail", class_ "checkbox colEmail"]
                       label_ [] $ span_ "Street" >> input_ [type_ "checkbox", checked_, name_ "colStreet", class_ "checkbox colStreet"]
 
-
               div_ [class_ "rounded-xl border w-full grow"] $ table_ [class_ "table table-pin-cols table-pin-rows text-[#535861]"] do
                 thead_ do
                   tr_ [class_ "rounded-lg [&>*]:top-[4.5rem]"] do
                     th_ [class_ " w-6 text-center"] $ input_ [type_ "checkbox", class_ "checkbox rounded-lg", [__|  on click set .contactCheckbox.checked to my.checked |]]
                     th_ [class_ ""] "Contact"
-                    th_ [class_ "hidden group-has-[.colBirthday:checked]/pg:table-cell space-x-2"] $ span_ "Birthday" >> i_ [class_ "fa-regular fa-angles-up-down"] "" 
+                    th_ [class_ "hidden group-has-[.colBirthday:checked]/pg:table-cell space-x-2"] $ span_ "Birthday" >> i_ [class_ "fa-regular fa-angles-up-down"] ""
                     th_ [class_ "hidden group-has-[.correction_option[value='birthdayCor']:checked]/pg:table-cell space-x-2"] $ span_ "Latest Birthday" >> i_ [class_ "fa-regular fa-angles-up-down"] ""
                     th_ [class_ "hidden group-has-[.correction_option[value='birthdayCor']:checked]/pg:table-cell space-x-2"] $ span_ "Initial Birthday" >> i_ [class_ "fa-regular fa-angles-up-down"] ""
-                    th_ [class_ "hidden group-has-[.colPhone:checked]/pg:table-cell space-x-2"] $ span_ "Phone" >> i_ [class_ "fa-regular fa-angles-up-down"] "" 
+                    th_ [class_ "hidden group-has-[.colPhone:checked]/pg:table-cell space-x-2"] $ span_ "Phone" >> i_ [class_ "fa-regular fa-angles-up-down"] ""
                     th_ [class_ "hidden group-has-[.correction_option[value='phoneCor']:checked]/pg:table-cell space-x-2"] $ span_ "Latest Phone" >> i_ [class_ "fa-regular fa-angles-up-down"] ""
                     th_ [class_ "hidden group-has-[.correction_option[value='phoneCor']:checked]/pg:table-cell space-x-2"] $ span_ "Initial Phone" >> i_ [class_ "fa-regular fa-angles-up-down"] ""
-                    th_ [class_ "hidden group-has-[.colEmail:checked]/pg:table-cell space-x-2"] $ span_ "Email" >> i_ [class_ "fa-regular fa-angles-up-down"] "" 
-                    th_ [class_ "hidden group-has-[.correction_option[value='emailCor']:checked]/pg:table-cell space-x-2"] $ span_ "Latest Email" >> i_ [class_ "fa-regular fa-angles-up-down"] "" 
-                    th_ [class_ "hidden group-has-[.correction_option[value='emailCor']:checked]/pg:table-cell space-x-2"] $ span_ "Initial Email" >> i_ [class_ "fa-regular fa-angles-up-down"] "" 
-                    th_ [class_ "hidden group-has-[.colStreet:checked]/pg:table-cell space-x-2"] $ span_ "Street" >> i_ [class_ "fa-regular fa-angles-up-down"] "" 
+                    th_ [class_ "hidden group-has-[.colEmail:checked]/pg:table-cell space-x-2"] $ span_ "Email" >> i_ [class_ "fa-regular fa-angles-up-down"] ""
+                    th_ [class_ "hidden group-has-[.correction_option[value='emailCor']:checked]/pg:table-cell space-x-2"] $ span_ "Latest Email" >> i_ [class_ "fa-regular fa-angles-up-down"] ""
+                    th_ [class_ "hidden group-has-[.correction_option[value='emailCor']:checked]/pg:table-cell space-x-2"] $ span_ "Initial Email" >> i_ [class_ "fa-regular fa-angles-up-down"] ""
+                    th_ [class_ "hidden group-has-[.colStreet:checked]/pg:table-cell space-x-2"] $ span_ "Street" >> i_ [class_ "fa-regular fa-angles-up-down"] ""
                 tbody_ do
                   tableRow1
                   tableRow1

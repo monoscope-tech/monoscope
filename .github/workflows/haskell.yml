@@ -27,7 +27,7 @@ jobs:
       # - uses: freckle/stack-action@v5
       - uses: haskell-actions/setup@v2
         with:
-          ghc-version: 9.8.4
+          ghc-version: 9.10.1
           enable-stack: true
           stack-version: "latest"
       - name: Install OpenSSL

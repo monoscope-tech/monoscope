@@ -1,6 +1,7 @@
 # resolver: nightly-2024-12-16
 # resolver: lts-23.0 
-resolver: nightly-2024-08-23
+# resolver: nightly-2024-08-23
+resolver: nightly-2025-01-20
 packages:
   - .
 
@@ -55,11 +56,15 @@ extra-deps:
     commit: 2d48ee3446858f08a8c75130c90d770c377569bd 
     subdirs:
       - .
-  - git: https://github.com/tonyalaribe/proto3-suite.git 
+  - github: tonyalaribe/proto3-suite
     # branch: aeson-error-fix 
-    commit: f47dbdb800ffb89187059f3b40edae5b1bc5c2c7 
-    subdirs: 
-      - .
+    commit: ecf8330af92941d5a0a0676a719b666ca3970ac4
+  
+  # - github: awakesecurity/proto3-suite
+  #   # branch: aeson-error-fix 
+  #   commit: 54e9d54c44e092710705358fd58e1954f9c7d20e 
+
+
   - git: https://github.com/awakesecurity/gRPC-haskell.git
     commit: 4b3b04d0ac9d1db53033fb4f0b6864f25b6e945d 
     subdirs: 
