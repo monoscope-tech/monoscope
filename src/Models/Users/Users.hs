@@ -63,10 +63,6 @@ instance HasField "toText" UserId Text where
   getField = UUID.toText . getUserId
 
 
-instance Default Bool where
-  def = False
-
-
 data User = User
   { id :: UserId
   , createdAt :: UTCTime

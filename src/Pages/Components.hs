@@ -101,9 +101,9 @@ paymentPlanPicker pid lemonUrl criticalUrl isSettings = do
   div_ [class_ "flex flex-col gap-8 w-full"] do
     div_ [class_ "flex flex-col gap-2 w-full"] do
       div_ [class_ "flex items-center justify-between w-full gap-4"] do
-        p_ [class_ " text-textStrong"] "Total requests"
-        p_ [class_ " text-textWeak", id_ "num_requests"] "20 Million"
-      input_ [type_ "range", min_ "20000000", max_ "500000000", step_ "10000000", value_ "0", class_ "range range-primary range-sm", id_ "price_range"]
+        p_ [class_ " text-textStrong"] "Total events"
+        p_ [class_ " text-textWeak", id_ "num_requests"] "25 Million"
+      input_ [type_ "range", min_ "25000000", max_ "500000000", step_ "10000000", value_ "0", class_ "range range-primary range-sm", id_ "price_range"]
     div_ [class_ "grid grid-cols-2 gap-8 mt-6 w-full"] do
       popularPricing pid lemonUrl isSettings
       systemsPricing pid criticalUrl isSettings
@@ -166,7 +166,7 @@ popularPricing pid lemonUrl isSettings = do
             div_ [class_ "text-brand text-base font-semibold"] "Start your FREE 30-day trial"
             div_ [class_ " text-textWeak text-sm font-medium"] do
               "Starts at "
-              span_ [class_ "", id_ "price"] "$34"
+              span_ [class_ "", id_ "price"] "$49"
 
           div_ [class_ "flex-col justify-start items-start gap-6 flex"] $ do
             span_ [class_ " text-textWeak text-base font-semibold"] "What’s Included:"
