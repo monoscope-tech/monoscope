@@ -50,7 +50,7 @@ data DashboardGet
 
 instance ToHtml DashboardGet where
   toHtml (DashboardGet (pid, paramInput, now, stats, endpoints, lastRequestTime, daysLeft, (fromD, toD), exceededFree, hasRequest)) = toHtml $ dashboardPage pid paramInput now stats endpoints lastRequestTime daysLeft (fromD, toD) exceededFree hasRequest
-  toHtml DashboardRedirect = toHtml $ ""
+  toHtml DashboardRedirect = toHtml $ "l"
   toHtmlRaw = toHtml
 
 

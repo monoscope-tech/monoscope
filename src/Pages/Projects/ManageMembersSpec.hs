@@ -28,7 +28,10 @@ spec = aroundAll withTestResources do
       pg <-
         toServantResponse trATCtx trSessAndHeader trLogger $ ManageMembers.manageMembersPostH testPid Nothing member
       -- Check if the response contains the newly added member
-      "example@gmail.com" `shouldSatisfy` (`elem` (pg.unwrapPost & V.toList & map (.email)))
+      case pg of
+        ManageMembers.ManageMembersPost p -> do
+          "example@gmail.com" `shouldSatisfy` (`elem` (p & V.toList & map (.email)))
+        _ -> fail "Expected ManageMembersPost response"
 
     it "Update member permissions" \TestResources{..} -> do
       let member =
@@ -86,4 +89,7 @@ spec = aroundAll withTestResources do
       pg <-
         toServantResponse trATCtx trSessAndHeader trLogger $ ManageMembers.manageMembersPostH testPid Nothing member
       -- Check if the response contains the newly added member
-      "example@gmail.com" `shouldSatisfy` (`elem` (pg.unwrapPost & V.toList & map (.email)))
+      case pg of
+        ManageMembers.ManageMembersPost p -> do
+          "example@gmail.com" `shouldSatisfy` (`elem` (p & V.toList & map (.email)))
+        _ -> fail "Expected ManageMembersPost response"
