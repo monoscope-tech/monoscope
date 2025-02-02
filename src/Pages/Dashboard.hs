@@ -132,9 +132,9 @@ dashboardPage pid paramInput currTime projectStats newEndpoints reqLatenciesRoll
                   ]
                   "Acknowledge All"
           label_ [class_ "modal-backdrop", Lucid.for_ "newEndpointsModal"] "Close"
-
     section_ $ AnomaliesList.anomalyListSlider currTime pid Nothing Nothing
     dStats pid projectStats reqLatenciesRolledByStepsJ dateRange hasRequest
+
   -- TODO delete most of this
   script_
     [text|

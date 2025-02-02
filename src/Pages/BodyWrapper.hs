@@ -95,6 +95,11 @@ bodyWrapper BWConfig{sessM, currProject, prePageTitle, pageTitle, menuItem, hasI
         link_ [rel_ "stylesheet", type_ "text/css", href_ $(hashAssetFile "/public/assets/css/tailwind.min.css")]
 
         -- SCRIPTS
+        script_
+          [type_ "importmap"]
+          [text|
+              {"imports": {"@lit-labs/virtualizer": "https://cdn.jsdelivr.net/npm/@lit-labs/virtualizer/+esm" }}
+          |]
         script_ [src_ $(hashAssetFile "/public/assets/deps/tagify/tagify.min.js")] ("" :: Text)
         script_ [src_ $(hashAssetFile "/public/assets/deps/echarts/echarts.min.js")] ("" :: Text)
         script_ [src_ $(hashAssetFile "/public/assets/roma-echarts.js"), defer_ "true"] ("" :: Text)
@@ -134,6 +139,7 @@ bodyWrapper BWConfig{sessM, currProject, prePageTitle, pageTitle, menuItem, hasI
       a=t.getElementsByTagName(n)[0],a.parentNode.insertBefore(u,a))}(window,document,'script');
       twq('config','om5gt');
       |]
+
         script_ [src_ "/public/assets/js/thirdparty/jsyaml.min.js", crossorigin_ "true"] ("" :: Text)
         script_ [src_ "/public/assets/testeditor-utils.js"] ("" :: Text)
         script_ [type_ "module", src_ "/public/assets/steps-editor.js"] ("" :: Text)

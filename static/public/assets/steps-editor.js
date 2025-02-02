@@ -837,7 +837,6 @@ ${stepData._json}</textarea
             @dragenter="${this._onDragEnter}"
             @dragleave="${this._onDragLeave}"
           >
-            <!-- ${this.collectionSteps.map((stepData, idx) => this.renderCollectionStep(stepData, idx, this.collectionResults[idx], this.saveErrors[idx]) || undefined)} -->
             ${repeat(this.collectionSteps, (stepData, idx) => this.renderCollectionStep(stepData, idx, this.collectionResults[idx], this.saveErrors[idx]) || undefined)}
           </div>
           ${this.isOnboarding

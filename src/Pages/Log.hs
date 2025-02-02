@@ -370,6 +370,7 @@ data ApiLogsPageData = ApiLogsPageData
 
 apiLogsPage :: ApiLogsPageData -> Html ()
 apiLogsPage page = do
+  script_ [type_ "module", src_ "/public/assets/explorer-list.js"] ("" :: Text)
   section_ [class_ "mx-auto pt-2 px-6 gap-3.5 w-full flex flex-col h-full overflow-hidden pb-12  group/pg", id_ "apiLogsPage"] do
     div_
       [ style_ "z-index:26"
@@ -431,7 +432,17 @@ apiLogsPage page = do
           --   input_ [type_ "checkbox", class_ "toggle-filters hidden", checked_]
           -- span_ [class_ "text-slate-200"] "|"
           div_ [class_ ""] $ span_ [class_ "text-slate-950"] (toHtml @Text $ fmt $ commaizeF page.resultCount) >> span_ [class_ "text-slate-600"] (toHtml (" " <> page.source <> " found"))
-        div_ [class_ "divide-y flex flex-col h-full overflow-hidden"] $ resultTableAndMeta_ page
+        -- div_ [class_ "divide-y flex flex-col  overflow-hidden"] $ resultTableAndMeta_ page
+        termRaw
+          "log-list"
+          [ id_ "logsList"
+          , class_ "w-full divide-y flex flex-col h-full overflow-hidden"
+          , term "data-results" (decodeUtf8 $ AE.encode page.requestVecs)
+          , term "data-columns" (decodeUtf8 $ AE.encode page.cols)
+          , term "data-colIdxMap" (decodeUtf8 $ AE.encode page.colIdxMap)
+          ]
+          ("" :: Text)
+
   jsonTreeAuxillaryCode page.pid page.queryAST
   -- drawerWithURLContent_ : Used when you expand a log item
   -- using the drawer as a global is a workaround since to separate the logs scope from other content and improve scroll performance.
@@ -464,14 +475,14 @@ renderChart pid chartId chartTitle primaryUnitM rateM source extraHxVals = do
 
 resultTableAndMeta_ :: ApiLogsPageData -> Html ()
 resultTableAndMeta_ page =
-  div_ [class_ "relative overflow-y-scroll overflow-x-hidden h-full w-full pb-16", id_ "resultTableScroller"] do
+  div_ [class_ "relative overflow-y-scroll overflow-x-hidden w-full pb-16", id_ "resultTableScroller"] do
     resultTable_ page True
     script_ [text|document.getElementById("resultTableScroller").scrollTop = document.querySelector("#resultTableScroller tr").offsetHeight;|]
 
 
 resultTable_ :: ApiLogsPageData -> Bool -> Html ()
 resultTable_ page mainLog = table_
-  [ class_ "w-full  table-auto ctable table-pin-rows table-pin-cols overflow-x-hidden [contain:strict] [content-visibility:auto]"
+  [ class_ "w-full  table-auto ctable table-pin-rows table-pin-cols overflow-x-hidden"
   , style_ "height:1px; --rounded-box:0"
   , id_ "resultTable"
   , term "data-source" page.source
@@ -515,7 +526,8 @@ resultTable_ page mainLog = table_
                 [__| on click remove .hidden from #loadNewIndicator on htmx:afterRequest add .hidden to #loadNewIndicator |]
               ]
               (span_ [class_ "inline-block"] "check for newer results" >> span_ [id_ "loadNewIndicator", class_ "hidden loading loading-dots loading-sm inline-block pl-3"] "")
-        logItemRows_ page.pid page.requestVecs page.cols page.colIdxMap page.nextLogsURL page.source page.childSpans
+
+        logItemRows_ page.pid (V.take 2 page.requestVecs) page.cols page.colIdxMap page.nextLogsURL page.source page.childSpans
 
 
 curateCols :: [Text] -> [Text] -> [Text]
