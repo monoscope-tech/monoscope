@@ -1,31 +1,95 @@
 'use strict'
-import { LitElement, html } from './js/thirdparty/lit.js'
+import { LitElement, html, repeat } from './js/thirdparty/lit.js'
 import '@lit-labs/virtualizer'
-
+import { virtualize } from '@lit-labs/virtualizer/virtualizer'
 export class LogList extends LitElement {
   static properties = {
     logsData: [],
     logsColumns: [],
+    childSpans: [],
     colIdxMap: {},
+    hasMore: { type: Boolean },
     isLoading: { type: Boolean },
+    nextFetchUrl: { type: String },
     isError: { type: Boolean },
+    fetchError: { type: String },
     source: { type: String },
+    projectId: { type: String },
   }
 
   constructor() {
     super()
     const container = document.querySelector('#logsList')
     this.logsData = JSON.parse(container.dataset.results)
+    this.hasMore = this.logsData.length > 199
     this.logsColumns = JSON.parse(container.dataset.columns)
     this.colIdxMap = JSON.parse(container.dataset.colidxmap)
+    this.childSpans = JSON.parse(container.dataset.childspans)
+    this.projectId = container.dataset.projectid
+    this.nextFetchUrl = container.dataset.nextfetchurl
     this.source = new URLSearchParams(window.location.search).get('source') || 'requests'
     this.isLoading = false
     this.isError = false
+    this.logItemRow = this.logItemRow.bind(this)
+    this.fetchData = this.fetchData.bind(this)
+  }
+
+  firstUpdated() {
+    const loader = document.querySelector('#loader')
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        if (entry.isIntersecting) {
+          this.fetchData(this.nextFetchUrl)
+        }
+      },
+      { threshold: 0.5 }
+    )
+    if (loader) {
+      observer.observe(loader)
+    } else {
+      console.log('loader not found', loader)
+    }
+  }
+
+  logItemRow(rowData) {
+    const [url] = requestDumpLogItemUrlPath(this.projectId, rowData, this.colIdxMap)
+    const [_, errCount, errClass] = errorClass(true, rowData, this.colIdxMap)
+    return html`
+      <tr class="log-row cursor-pointer whitespace-nowrap overflow-hidden" @click=${() => toggleLogRow(url)}>
+        ${this.logsColumns.map((column) => html`<td class="">${logItemCol(rowData, this.source, this.colIdxMap, column, this.childSpans)}</td>`)}
+      </tr>
+    `
+  }
+
+  fetchData(url) {
+    if (this.isLoading) return
+    this.isLoading = true
+    fetch(url)
+      .then((response) => response.json())
+      .then((data) => {
+        if (!data.error) {
+          const { logsData, childSpans, nextUrl } = data
+          this.logsData = this.logsData.concat(logsData)
+          this.childSpans = this.childSpans.concat(childSpans)
+          this.nextFetchUrl = nextUrl
+          this.hasMore = logsData.length > 199
+        } else {
+          this.fetchError = data.error
+        }
+      })
+      .catch((error) => {
+        this.isError = true
+        console.error('Error fetching logs:', error)
+      })
+      .finally(() => {
+        this.isLoading = false
+      })
+    this.requestUpdate()
   }
 
   render() {
     return html`
-      <div class="relative  overflow-y-scroll overflow-x-hidden w-full pb-16">
+      <div class="relative  overflow-y-scroll overflow-x-hidden w-full pb-16 c-scroll">
         <table class="w-full  table-auto ctable table-pin-rows table-pin-cols overflow-x-hidden" style="height:1px; --rounded-box:0">
           <thead>
             <tr class="text-slate-700 border-b font-medium border-y">
@@ -33,9 +97,27 @@ export class LogList extends LitElement {
             </tr>
           </thead>
           <tbody class="w-full log-item-table-body">
-            ${logItemRows(this.logsData, this.colIdxMap, this.logsColumns, this.source)}
+            ${virtualize({
+              items: this.logsData,
+              renderItem: this.logItemRow,
+            })}
+            <!-- <lit-virtualizer .items=${this.logsData} .renderItem=${this.logItemRow}></lit-virtualizer> -->
+            <!-- ${this.logsData.length === 0
+              ? html`<tr>
+                  <td colspan=${this.logsColumns.length} class="text-center">No logs found</td>
+                </tr>`
+              : repeat(this.logsData, this.logItemRow)} -->
           </tbody>
         </table>
+        ${this.hasMore
+          ? html`<div class="w-full flex justify-center items-center" id="loader">
+                ${
+                  this.isLoading
+                    ? html`<div class="mx-auto loading loading-dots loading-md"></div>`
+                    : html` <button class="cursor-pointer text-textBrand underline font-semibold w-max mx-auto" @click=${() => this.fetchData(this.nextFetchUrl)}>Load more</button> `
+                }
+              </tr>`
+          : ''}
       </div>
     `
   }
@@ -92,58 +174,13 @@ function faSprite(iconName, kind, classes) {
   return html`<svg class="${classes}"><use href="/public/assets/svgs/fa-sprites/${kind}.svg#${iconName}"></use></svg>`
 }
 
-// logItemCol_ :: Text -> Projects.ProjectId -> V.Vector AE.Value -> HM.HashMap Text Int -> Text -> V.Vector Telemetry.SpanRecord -> Html ()
-// logItemCol_ source pid reqVec colIdxMap "id" chSpns = do
-//   let (status, errCount, errClass) = errorClass False reqVec colIdxMap
-//   let severityClass = barSeverityClass reqVec colIdxMap
-//   div_ [class_ "grid grid-cols-3 items-center max-w-12 min-w-10"] do
-//     span_ [class_ "col-span-1 h-5 rounded flex"] $ renderIconWithTippy (if source == "logs" then severityClass else errClass) (show errCount <> " errors attached; status " <> show status) " "
-//     faSprite_ "chevron-right" "solid" "h-3 col-span-1 text-gray-500 chevron log-chevron "
-// logItemCol_ _ _ reqVec colIdxMap "created_at" _ = renderTimestamp "created_at" reqVec colIdxMap
-// logItemCol_ _ _ reqVec colIdxMap "timestamp" _ = renderTimestamp "timestamp" reqVec colIdxMap
-// logItemCol_ _ _ reqVec colIdxMap "status_code" _ = renderStatusCode reqVec colIdxMap
-// logItemCol_ _ _ reqVec colIdxMap "method" _ = renderMethod reqVec colIdxMap
-// logItemCol_ _ _ reqVec colIdxMap "severity_text" _ = renderLogBadge "severity_text" reqVec colIdxMap (getSeverityColor $ T.toLower $ fromMaybe "" $ lookupVecTextByKey reqVec colIdxMap "severity_text")
-// logItemCol_ _ _ reqVec colIdxMap "duration" _ = renderBadge "cbadge-sm badge-neutral border  border-strokeWeak  bg-fillWeak" (toText (getDurationNSMS $ toInteger $ lookupVecIntByKey reqVec colIdxMap "duration")) "duration"
-// logItemCol_ _ _ reqVec colIdxMap "span_name" _ = renderLogBadge "span_name" reqVec colIdxMap "cbadge-sm badge-neutral border  border-strokeWeak  bg-fillWeak"
-// logItemCol_ _ _ reqVec colIdxMap "service" _ = renderLogBadge "service" reqVec colIdxMap "cbadge-sm badge-neutral border  border-strokeWeak  bg-fillWeak"
-// logItemCol_ _ pid reqVec colIdxMap "latency_breakdown" childSpans =
-//   let spanId = lookupVecTextByKey reqVec colIdxMap "latency_breakdown"
-//    in Spans.spanLatencyBreakdown $ V.filter (\s -> s.parentSpanId == spanId) childSpans
-// logItemCol_ _ _ reqVec colIdxMap "body" _ = renderLogBadge "body" reqVec colIdxMap "space-x-2 whitespace-nowrap"
-// logItemCol_ _ _ reqVec colIdxMap "kind" _ = renderBadge "cbadge-sm badge-neutral border  border-strokeWeak  bg-fillWeak" (fromMaybe "" $ lookupVecTextByKey reqVec colIdxMap "kind") "kind"
-// logItemCol_ _ _ reqVec colIdxMap "status" _ = renderLogBadge "status" reqVec colIdxMap (getSpanStatusColor $ fromMaybe "" $ lookupVecTextByKey reqVec colIdxMap "status")
-// logItemCol_ source pid reqVec colIdxMap "rest" _ = div_ [class_ "space-x-2 whitespace-nowrap max-w-8xl overflow-hidden "] do
-//   let key = "rest"
-//   case source of
-//     "logs" -> forM_ ["severity_text", "body"] \v -> logItemCol_ source pid reqVec colIdxMap v []
-//     "spans" -> forM_ ["status", "kind", "duration", "span_name"] \v -> logItemCol_ source pid reqVec colIdxMap v []
-//     _ -> do
-//       if lookupVecTextByKey reqVec colIdxMap "request_type" == Just "Incoming"
-//         then renderIconWithTippy "text-slate-500" "Incoming Request" (faSprite_ "arrow-down-left" "solid" "h-3")
-//         else renderIconWithTippy "text-blue-700" "Outgoing Request" (faSprite_ "arrow-up-right" "solid" "h-3")
-//       logItemCol_ source pid reqVec colIdxMap "status_code" []
-//       logItemCol_ source pid reqVec colIdxMap "method" []
-//       renderLogBadge "url_path" reqVec colIdxMap "cbadge-sm badge-neutral border  border-strokeWeak  bg-fillWeak"
-//       logItemCol_ source pid reqVec colIdxMap "duration" []
-//       renderLogBadge "host" reqVec colIdxMap "cbadge-sm badge-neutral border  border-strokeWeak  bg-fillWeak"
-//       span_ $ toHtml $ maybe "" (unwrapJsonPrimValue True) (lookupVecByKey reqVec colIdxMap key)
-// logItemCol_ _ _ reqVec colIdxMap key _ = renderBadge "space-nowrap overflow-x-hidden max-w-lg" (maybe "" (unwrapJsonPrimValue True) (lookupVecByKey reqVec colIdxMap key)) key
-
-// let (status, errCount, errClass) = errorClass False reqVec colIdxMap
-// let severityClass = barSeverityClass reqVec colIdxMap
-// div_ [class_ "grid grid-cols-3 items-center max-w-12 min-w-10"] do
-//   span_ [class_ "col-span-1 h-5 rounded flex"] $ renderIconWithTippy (if source == "logs" then severityClass else errClass) (show errCount <> " errors attached; status " <> show status) " "
-//   faSprite_ "chevron-right" "solid" "h-3 col-span-1 text-gray-500 chevron log-chevron "
-
 function logItemCol(dataArr, source, colIdxMap, key, childSpans) {
   switch (key) {
     case 'id':
       let [status, errCount, errClass] = errorClass(false, dataArr, colIdxMap)
       return html`
-        <div class="flex items-center justify-between w-10">
+        <div class="flex items-center justify-between w-4">
           <span class="col-span-1 h-5 rounded flex"> ${renderIconWithTippy(errClass, `${errCount} errors attached; status ${status}`)} </span>
-          ${faSprite('chevron-right', 'solid', 'h-3 col-span-1 text-gray-500 chevron log-chevron ')}
         </div>
       `
     case 'created_at':
@@ -185,6 +222,10 @@ function logItemCol(dataArr, source, colIdxMap, key, childSpans) {
     case 'kind':
       let kind = lookupVecTextByKey(dataArr, colIdxMap, key)
       return renderBadge('cbadge-sm badge-neutral border border-strokeWeak bg-fillWeak', kind)
+    case 'latency_breakdown':
+      let spanId = lookupVecTextByKey(dataArr, colIdxMap, key)
+      let spans = childSpans.filter((s) => s[1] === spanId)
+      return spanLatencyBreakdown(spans)
     case 'rest':
       let val = lookupVecTextByKey(dataArr, colIdxMap, key)
       return source == 'logs'
@@ -193,41 +234,13 @@ function logItemCol(dataArr, source, colIdxMap, key, childSpans) {
         ? ['status', 'kind', 'duration', 'span_name'].map((k) => logItemCol(dataArr, source, colIdxMap, k))
         : html`
             ${logItemCol(dataArr, source, colIdxMap, 'request_type')} ${logItemCol(dataArr, source, colIdxMap, 'status_code')} ${logItemCol(dataArr, source, colIdxMap, 'method')}
-            ${logItemCol(dataArr, colIdxMap, 'url_path')} ${logItemCol(dataArr, source, colIdxMap, 'duration')} ${logItemCol(dataArr, source, colIdxMap, 'host')}
+            ${logItemCol(dataArr, source, colIdxMap, 'url_path')} ${logItemCol(dataArr, source, colIdxMap, 'duration')} ${logItemCol(dataArr, source, colIdxMap, 'host')}
             <span class="whitespace-nowrap overflow-x-hidden max-w-lg fill-slate-700 ">${val}</span>
           `
     default:
       let v = lookupVecTextByKey(dataArr, colIdxMap, key)
       return renderBadge('cbadge-sm badge-neutral border border-strokeWeak bg-fillWeak', v)
   }
-}
-
-// case source of
-// "logs" -> forM_ ["severity_text", "body"] \v -> logItemCol_ source pid reqVec colIdxMap v []
-// "spans" -> forM_ ["status", "kind", "duration", "span_name"] \v -> logItemCol_ source pid reqVec colIdxMap v []
-// _ -> do
-//   if lookupVecTextByKey reqVec colIdxMap "request_type" == Just "Incoming"
-//     then renderIconWithTippy "text-slate-500" "Incoming Request" (faSprite_ "arrow-down-left" "solid" "h-3")
-//     else renderIconWithTippy "text-blue-700" "Outgoing Request" (faSprite_ "arrow-up-right" "solid" "h-3")
-//   logItemCol_ source pid reqVec colIdxMap "status_code" []
-//   logItemCol_ source pid reqVec colIdxMap "method" []
-//   renderLogBadge "url_path" reqVec colIdxMap "cbadge-sm badge-neutral border  border-strokeWeak  bg-fillWeak"
-//   logItemCol_ source pid reqVec colIdxMap "duration" []
-//   renderLogBadge "host" reqVec colIdxMap "cbadge-sm badge-neutral border  border-strokeWeak  bg-fillWeak"
-//   span_ $ toHtml $ maybe "" (unwrapJsonPrimValue True) (lookupVecByKey reqVec colIdxMap key)
-
-function logItemRows(dataArr, colIdxMap, columns, source, childSpans) {
-  return dataArr.map(
-    (arr) => html`
-      <tr class="log-row cursor-pointer whitespace-nowrap overflow-hidden" _="on click toggle .hidden on next <tr/> then toggle .expanded-log on me">
-        ${columns.map((column) => html`<td class="pl-3">${logItemCol(arr, source, colIdxMap, column, childSpans)}</td>`)}
-      </tr>
-      <tr class="hidden">
-        <td class="pl-4"><a class="inline-block h-full" data-tippy-content=${'0 errors attached to this request'}></a></td>
-        <td colspan=${columns.length - 1}><div class="loading loading-dots loading-md"></div></td>
-      </tr>
-    `
-  )
 }
 
 function displayTimestamp(inputDateString) {
@@ -370,4 +383,41 @@ function getKindColor(kind) {
       CONSUMER: 'badge-warning',
     }[kind] || 'badge-outline'
   )
+}
+
+function spanLatencyBreakdown(spans) {
+  const totalDuration = spans.reduce((sum, sp) => sum + sp[2], 0)
+  return html` <div class="flex h-6 w-[150px]">
+    ${spans.map((sps, i) => {
+      const width = (sps[2] / totalDuration) * 150
+      const color = sps[3] || 'bg-black'
+      const roundL = i === 0 ? 'rounded-l' : ''
+      const roundR = i === spans.length - 1 ? 'rounded-r' : ''
+      const dur = getDurationNSMS(sps[2])
+      return html`
+        <div
+          class=${`h-full overflow-hidden ${roundL} ${roundR} ${color}`}
+          style=${`width:${width}px`}
+          title=${`Span name: ${sps[0]} Duration: ${dur}`}
+          data-tippy-content=${`Span name: ${sps[0]} Duration: ${dur}`}
+        >
+          <div class="h-full w-full"></div>
+        </div>
+      `
+    })}
+  </div>`
+}
+
+function toggleLogRow(source) {
+  htmx.ajax('GET', source, { target: '#logs_side_container', swap: 'innerHTML' })
+}
+
+function requestDumpLogItemUrlPath(pid, rd, colIdxMap) {
+  const rdId = lookupVecTextByKey(rd, colIdxMap, 'id')
+  const rdCreatedAt = lookupVecTextByKey(rd, colIdxMap, 'created_at') || lookupVecTextByKey(rd, colIdxMap, 'timestamp')
+
+  if (rdId && rdCreatedAt) {
+    return [`/p/${pid}/log_explorer/${rdId}/${rdCreatedAt}`, rdId]
+  }
+  return null
 }

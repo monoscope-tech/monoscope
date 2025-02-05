@@ -373,7 +373,7 @@ data RequestDumpLogItem = RequestDumpLogItem
 
 requestDumpLogUrlPath :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Text -> Text
 requestDumpLogUrlPath pid q cols cursor since fromV toV layout source =
-  "/p/" <> pid.toText <> "/log_explorer?" <> T.intercalate "&" params
+  "/p/" <> pid.toText <> "/log_explorer/json?" <> T.intercalate "&" params
   where
     params =
       catMaybes

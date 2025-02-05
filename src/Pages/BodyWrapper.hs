@@ -98,7 +98,7 @@ bodyWrapper BWConfig{sessM, currProject, prePageTitle, pageTitle, menuItem, hasI
         script_
           [type_ "importmap"]
           [text|
-              {"imports": {"@lit-labs/virtualizer": "https://cdn.jsdelivr.net/npm/@lit-labs/virtualizer/+esm" }}
+              {"imports": {"@lit-labs/virtualizer": "https://cdn.jsdelivr.net/npm/@lit-labs/virtualizer/+esm" , "@lit-labs/virtualizer/virtualizer": "https://cdn.jsdelivr.net/npm/@lit-labs/virtualizer/virtualize.js/+esm"}}
           |]
         script_ [src_ $(hashAssetFile "/public/assets/deps/tagify/tagify.min.js")] ("" :: Text)
         script_ [src_ $(hashAssetFile "/public/assets/deps/echarts/echarts.min.js")] ("" :: Text)

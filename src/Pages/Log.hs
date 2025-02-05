@@ -1,5 +1,6 @@
 module Pages.Log (
   apiLogH,
+  apiLogJson,
   LogsGet (..),
   ApiLogsPageData (..),
   resultTable_,
@@ -198,6 +199,57 @@ instance ToHtml LogsGet where
   toHtml (LogsGetError (PageCtx conf err)) = toHtml $ PageCtx conf err
   toHtml (LogsQueryLibrary pid queryLibSaved queryLibRecent) = toHtml $ queryLibrary_ pid queryLibSaved queryLibRecent
   toHtmlRaw = toHtml
+
+
+apiLogJson :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe UTCTime -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders AE.Value)
+apiLogJson pid queryM queryASTM cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM = do
+  (sess, project) <- Sessions.sessionAndProject pid
+  let source = fromMaybe "requests" sourceM
+  let summaryCols = T.splitOn "," (fromMaybe "" cols')
+  let parseQuery q = either (\err -> addErrorToast "Error Parsing Query" (Just err) >> pure []) pure (parseQueryToAST q)
+  queryAST <-
+    maybe
+      (parseQuery $ maybeToMonoid queryM)
+      (either (const $ parseQuery $ maybeToMonoid queryM) pure . AE.eitherDecode . encodeUtf8)
+      queryASTM
+
+  now <- Time.currentTime
+  let (fromD, toD, _) = Components.parseTimeRange now (Components.TimePicker sinceM fromM toM)
+  tableAsVecE <- RequestDumps.selectLogTable pid queryAST cursorM' (fromD, toD) summaryCols (parseMaybe pSource =<< sourceM) targetSpansM
+
+  -- FIXME: we're silently ignoring parse errors and the likes.
+  let tableAsVecM = hush tableAsVecE
+  case tableAsVecM of
+    Just tableAsVec -> do
+      let (requestVecs, colNames, _) = tableAsVec
+          colIdxMap = listToIndexHashMap colNames
+          reqLastCreatedAtM =
+            if source == "requests"
+              then (\r -> lookupVecTextByKey r colIdxMap "created_at") =<< (requestVecs V.!? (V.length requestVecs - 1))
+              else (\r -> lookupVecTextByKey r colIdxMap "timestamp") =<< (requestVecs V.!? (V.length requestVecs - 1))
+          childSpanIds =
+            if source == "spans"
+              then V.map (\v -> lookupVecTextByKey v colIdxMap "latency_breakdown") requestVecs
+              else []
+          nextLogsURL = RequestDumps.requestDumpLogUrlPath pid queryM cols' reqLastCreatedAtM sinceM fromM toM (Just "loadmore") source
+          resetLogsURL = RequestDumps.requestDumpLogUrlPath pid queryM cols' Nothing Nothing Nothing Nothing Nothing source
+      childSpans <- Telemetry.getChildSpans pid (V.catMaybes childSpanIds)
+      let colors = getServiceColors $ (.spanName) <$> childSpans
+          childSps =
+            ( map
+                ( \sp ->
+                    let name = AE.String sp.spanName
+                        parentId = AE.String $ fromMaybe "" sp.parentSpanId
+                        duration = AE.Number $ fromIntegral sp.spanDurationNs
+                        color = AE.String $ fromMaybe "bg-black" $ HM.lookup sp.spanName colors
+                     in AE.toJSON ([name, parentId, duration, color] :: [AE.Value])
+                )
+                $ V.toList childSpans
+            )
+
+      addRespHeaders $ AE.object ["logsData" AE..= requestVecs, "childspans" AE..= childSps, "nextUrl" AE..= nextLogsURL, "resetLogsUrl" AE..= resetLogsURL]
+    Nothing -> do
+      addRespHeaders $ AE.object ["error" AE..= "Something went wrong"]
 
 
 logQueryBox_ :: Projects.ProjectId -> Maybe Text -> Text -> Maybe Text -> Text -> V.Vector Projects.QueryLibItem -> V.Vector Projects.QueryLibItem -> Html ()
@@ -423,25 +475,50 @@ apiLogsPage page = do
               span_ "4,459"
 
       div_ [class_ "grow flex-1 space-y-1.5 overflow-hidden"] do
-        div_ [class_ "flex gap-2  pt-1"] do
-          -- label_ [class_ "gap-1 flex items-center cursor-pointer"] do
-          --   faSprite_ "side-chevron-left-in-box" "regular" "w-4 h-4 group-has-[.toggle-filters:checked]/pg:rotate-180 "
-          --   span_ [class_ "hidden group-has-[.toggle-filters:checked]/pg:block"] "Show"
-          --   span_ [class_ "group-has-[.toggle-filters:checked]/pg:hidden"] "Hide"
-          --   "filters"
-          --   input_ [type_ "checkbox", class_ "toggle-filters hidden", checked_]
-          -- span_ [class_ "text-slate-200"] "|"
-          div_ [class_ ""] $ span_ [class_ "text-slate-950"] (toHtml @Text $ fmt $ commaizeF page.resultCount) >> span_ [class_ "text-slate-600"] (toHtml (" " <> page.source <> " found"))
+        -- div_ [class_ "flex gap-2  pt-1"] do
+        -- label_ [class_ "gap-1 flex items-center cursor-pointer"] do
+        --   faSprite_ "side-chevron-left-in-box" "regular" "w-4 h-4 group-has-[.toggle-filters:checked]/pg:rotate-180 "
+        --   span_ [class_ "hidden group-has-[.toggle-filters:checked]/pg:block"] "Show"
+        --   span_ [class_ "group-has-[.toggle-filters:checked]/pg:hidden"] "Hide"
+        --   "filters"
+        --   input_ [type_ "checkbox", class_ "toggle-filters hidden", checked_]
+        -- span_ [class_ "text-slate-200"] "|"
         -- div_ [class_ "divide-y flex flex-col  overflow-hidden"] $ resultTableAndMeta_ page
-        termRaw
-          "log-list"
-          [ id_ "logsList"
-          , class_ "w-full divide-y flex flex-col h-full overflow-hidden"
-          , term "data-results" (decodeUtf8 $ AE.encode page.requestVecs)
-          , term "data-columns" (decodeUtf8 $ AE.encode page.cols)
-          , term "data-colIdxMap" (decodeUtf8 $ AE.encode page.colIdxMap)
-          ]
-          ("" :: Text)
+        let colors = getServiceColors $ (.spanName) <$> page.childSpans
+            childSps =
+              ( map
+                  ( \sp ->
+                      let name = AE.String sp.spanName
+                          parentId = AE.String $ fromMaybe "" sp.parentSpanId
+                          duration = AE.Number $ fromIntegral sp.spanDurationNs
+                          color = AE.String $ fromMaybe "bg-black" $ HM.lookup sp.spanName colors
+                       in AE.toJSON ([name, parentId, duration, color] :: [AE.Value])
+                  )
+                  $ V.toList page.childSpans
+              )
+        div_ [class_ "flex items-start h-full"] do
+          termRaw
+            "log-list"
+            [ id_ "logsList"
+            , class_ "w-full divide-y flex flex-col h-full overflow-hidden"
+            , term "data-results" (decodeUtf8 $ AE.encode page.requestVecs)
+            , term "data-columns" (decodeUtf8 $ AE.encode page.cols)
+            , term "data-colIdxMap" (decodeUtf8 $ AE.encode page.colIdxMap)
+            , term "data-childSpans" (decodeUtf8 $ AE.encode childSps)
+            , term "data-nextfetchurl" page.nextLogsURL
+            , term "data-projectid" page.pid.toText
+            ]
+            ("" :: Text)
+          div_ [class_ "relative h-full border-l border-strokeWeak overflow-visible"] do
+            div_ [class_ "absolute left-1/2 top-1/2 -translate-x-1/2  px-1 py-0.5 -translate-y-1/2 w-max cursor-ew-resize bg-slate-50 rounded border grid grid-cols-2 gap-1"] do
+              div_ [class_ "bg-slate-400 h-[3px] w-[3px] rounded-full"] ""
+              div_ [class_ "bg-slate-400 h-[3px] w-[3px] rounded-full"] ""
+              div_ [class_ "bg-slate-400 h-[3px] w-[3px] rounded-full"] ""
+              div_ [class_ "bg-slate-400 h-[3px] w-[3px] rounded-full"] ""
+              div_ [class_ "bg-slate-400 h-[3px] w-[3px] rounded-full"] ""
+              div_ [class_ "bg-slate-400 h-[3px] w-[3px] rounded-full"] ""
+
+          div_ [class_ "relative flex flex-col overflow-y-auto h-full w-[700px] c-scroll", id_ "logs_side_container"] ""
 
   jsonTreeAuxillaryCode page.pid page.queryAST
   -- drawerWithURLContent_ : Used when you expand a log item
