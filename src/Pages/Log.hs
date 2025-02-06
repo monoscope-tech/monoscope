@@ -573,9 +573,9 @@ renderChart pid chartId chartTitle primaryUnitM rateM source extraHxVals = do
   --     chartAspectRatio _ = "aspect-[3/1]"
   div_ [class_ "flex-1 space-y-1.5 overflow-x-hidden flex-grow"] do
     div_ [class_ "leading-none flex justify-between items-center"] do
-      div_ [class_ "inline-flex gap-3 items-center"] do
+      div_ [class_ "inline-flex gap-3 items-center text-sm text-textStrong"] do
         span_ $ toHtml chartTitle
-        whenJust primaryUnitM $ span_ [class_ "bg-slate-200 px-2 py-1 rounded-3xl"] . toHtml
+        whenJust primaryUnitM $ span_ [class_ "bg-fillWeak border border-strokeWeak px-2 py-1 rounded-2xl text-xs "] . toHtml
         whenJust rateM $ span_ [class_ "text-slate-300"] . toHtml
       label_ [class_ "rounded-full border border-slate-300 p-2 inline-flex cursor-pointer"] $ faSprite_ "up-right-and-down-left-from-center" "regular" "w-3 h-3"
     div_
