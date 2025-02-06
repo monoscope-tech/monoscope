@@ -450,7 +450,6 @@ apiLogsPage page = do
 
       div_ [class_ "flex flex-row gap-4 mt-3 group-has-[.toggle-chart:checked]/pg:hidden"] do
         renderChart page.pid "reqsChartsECP" "All requests" (Just $ fmt (commaizeF page.resultCount)) Nothing page.source ""
-        unless (page.source == "logs") $ renderChart page.pid "reqsChartsErrP" "Errors" Nothing Nothing page.source ", theme:'roma'"
         unless (page.source == "logs") $ renderChart page.pid "reqsChartsLatP" "Latency" Nothing Nothing page.source ", chart_type:'LineCT', group_by:'GBDurationPercentile'"
 
     div_ [class_ "flex gap-3.5 overflow-hidden"] do
@@ -496,7 +495,7 @@ apiLogsPage page = do
                   )
                   $ V.toList page.childSpans
               )
-        div_ [class_ "flex items-start h-full"] do
+        div_ [class_ "flex items-start h-full", id_ "logs_section_container"] do
           termRaw
             "log-list"
             [ id_ "logsList"
@@ -509,16 +508,55 @@ apiLogsPage page = do
             , term "data-projectid" page.pid.toText
             ]
             ("" :: Text)
-          div_ [class_ "relative h-full border-l border-strokeWeak overflow-visible"] do
-            div_ [class_ "absolute left-1/2 top-1/2 -translate-x-1/2  px-1 py-0.5 -translate-y-1/2 w-max cursor-ew-resize bg-slate-50 rounded border grid grid-cols-2 gap-1"] do
-              div_ [class_ "bg-slate-400 h-[3px] w-[3px] rounded-full"] ""
-              div_ [class_ "bg-slate-400 h-[3px] w-[3px] rounded-full"] ""
-              div_ [class_ "bg-slate-400 h-[3px] w-[3px] rounded-full"] ""
-              div_ [class_ "bg-slate-400 h-[3px] w-[3px] rounded-full"] ""
-              div_ [class_ "bg-slate-400 h-[3px] w-[3px] rounded-full"] ""
-              div_ [class_ "bg-slate-400 h-[3px] w-[3px] rounded-full"] ""
+          div_ [onmousedown_ "mouseDown(event)", class_ "relative h-full flex items-center justify-center w-1 bg-fillWeak  cursor-ew-resize overflow-visible"] do
+            div_ [onmousedown_ "mouseDown(event)", id_ "resizer", class_ "absolute left-1/2 top-1/2 -translate-x-1/2  px-1 py-1 -translate-y-1/2 w-max bg-slate-50 rounded border border-strokeBrand-weak grid grid-cols-2 gap-1"] do
+              div_ [class_ "bg-iconNeutral h-[3px] w-[3px] rounded-full"] ""
+              div_ [class_ "bg-iconNeutral h-[3px] w-[3px] rounded-full"] ""
+              div_ [class_ "bg-iconNeutral h-[3px] w-[3px] rounded-full"] ""
+              div_ [class_ "bg-iconNeutral h-[3px] w-[3px] rounded-full"] ""
+              div_ [class_ "bg-iconNeutral h-[3px] w-[3px] rounded-full"] ""
+              div_ [class_ "bg-iconNeutral h-[3px] w-[3px] rounded-full"] ""
 
-          div_ [class_ "relative flex flex-col overflow-y-auto h-full w-[700px] c-scroll", id_ "logs_side_container"] ""
+          div_ [class_ "relative flex flex-col overflow-y-auto h-full c-scroll", style_ "width:700px", id_ "log_details_container"] ""
+
+          script_
+            [text|
+
+          var logsList = null
+          const logDetails = document.querySelector('#log_details_container')
+          const container = document.querySelector('#logs_section_container')
+          const containerWidth = Number(window.getComputedStyle(container).width.replace('px',''))
+
+          let mouseState = {x: 0}
+          let resizeStart = false
+          let target = ""
+
+          function mouseDown(event) {
+              resizeStart = true
+              container.style.userSelect = "none";
+              mouseState = {x: event.clientX  }
+              target = event.target.id
+          }
+
+          function handleMouseup(event) {
+            resizeStart = false
+            container.style.userSelect = "auto";
+            target = ""
+          }
+
+          function handleMouseMove(event) {
+            if(!resizeStart) return
+            if(!logsList) {
+             logsList = document.querySelector('#logs_list_container')
+            }
+            const diff = event.clientX  - mouseState.x
+            mouseState = {x: event.clientX}
+            const edW = Number(logDetails.style.width.replace('px',''))
+            logDetails.style.width = (edW - diff) + 'px'
+          }
+          window.addEventListener ('mousemove', handleMouseMove)
+          window.addEventListener ('mouseup', handleMouseup)
+          |]
 
   jsonTreeAuxillaryCode page.pid page.queryAST
   -- drawerWithURLContent_ : Used when you expand a log item
@@ -531,8 +569,8 @@ apiLogsPage page = do
 -- TODO: centralize to have a single chart rendering component
 renderChart :: Projects.ProjectId -> Text -> Text -> Maybe Text -> Maybe Text -> Text -> Text -> Html ()
 renderChart pid chartId chartTitle primaryUnitM rateM source extraHxVals = do
-  let chartAspectRatio "logs" = "aspect-[12/1]"
-      chartAspectRatio _ = "aspect-[3/1]"
+  -- let chartAspectRatio "logs" = "aspect-[12/1]"
+  --     chartAspectRatio _ = "aspect-[3/1]"
   div_ [class_ "flex-1 space-y-1.5 overflow-x-hidden flex-grow"] do
     div_ [class_ "leading-none flex justify-between items-center"] do
       div_ [class_ "inline-flex gap-3 items-center"] do
@@ -541,7 +579,8 @@ renderChart pid chartId chartTitle primaryUnitM rateM source extraHxVals = do
         whenJust rateM $ span_ [class_ "text-slate-300"] . toHtml
       label_ [class_ "rounded-full border border-slate-300 p-2 inline-flex cursor-pointer"] $ faSprite_ "up-right-and-down-left-from-center" "regular" "w-3 h-3"
     div_
-      [ class_ $ "rounded-2xl border border-slate-200 log-chart p-3  " <> chartAspectRatio source
+      [ class_ $ "rounded-2xl border border-slate-200 log-chart p-3 "
+      , style_ "height:115px"
       , hxGet_ $ "/charts_html?id=" <> chartId <> "&show_legend=false&pid=" <> pid.toText
       , hxTrigger_ "intersect, submit from:#log_explorer_form, add-query from:#filterElement, update-query from:#filterElement"
       , hxVals_ $ "js:{queryAST:window.getQueryFromEditor('" <> chartId <> "'), since: params().since, from: params().from, to:params().to, cols:params().cols, layout:'all', source: params().source" <> extraHxVals <> "}"

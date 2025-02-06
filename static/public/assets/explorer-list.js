@@ -89,7 +89,7 @@ export class LogList extends LitElement {
 
   render() {
     return html`
-      <div class="relative  overflow-y-scroll overflow-x-hidden w-full pb-16 c-scroll">
+      <div class="relative  overflow-y-scroll overflow-x-hidden w-full pb-16 c-scroll" id="logs_list_container">
         <table class="w-full  table-auto ctable table-pin-rows table-pin-cols overflow-x-hidden" style="height:1px; --rounded-box:0">
           <thead>
             <tr class="text-slate-700 border-b font-medium border-y">
@@ -409,7 +409,7 @@ function spanLatencyBreakdown(spans) {
 }
 
 function toggleLogRow(source) {
-  htmx.ajax('GET', source, { target: '#logs_side_container', swap: 'innerHTML' })
+  htmx.ajax('GET', source, { target: '#log_details_container', swap: 'innerHTML' })
 }
 
 function requestDumpLogItemUrlPath(pid, rd, colIdxMap) {
