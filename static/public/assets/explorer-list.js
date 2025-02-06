@@ -6,7 +6,6 @@ export class LogList extends LitElement {
   static properties = {
     logsData: [],
     logsColumns: [],
-    childSpans: [],
     colIdxMap: {},
     hasMore: { type: Boolean },
     isLoading: { type: Boolean },
@@ -24,7 +23,16 @@ export class LogList extends LitElement {
     this.hasMore = this.logsData.length > 199
     this.logsColumns = JSON.parse(container.dataset.columns)
     this.colIdxMap = JSON.parse(container.dataset.colidxmap)
-    this.childSpans = JSON.parse(container.dataset.childspans)
+    const childSpans = JSON.parse(container.dataset.childspans)
+    this.childSpansMap = new Map()
+    childSpans.forEach((span) => {
+      if (this.childSpansMap.has(span[1])) {
+        this.childSpansMap.get(span[1]).push(span)
+      } else {
+        this.childSpansMap.set(span[1], [span])
+      }
+    })
+
     this.projectId = container.dataset.projectid
     this.nextFetchUrl = container.dataset.nextfetchurl
     this.source = new URLSearchParams(window.location.search).get('source') || 'requests'
@@ -53,10 +61,9 @@ export class LogList extends LitElement {
 
   logItemRow(rowData) {
     const [url] = requestDumpLogItemUrlPath(this.projectId, rowData, this.colIdxMap)
-    const [_, errCount, errClass] = errorClass(true, rowData, this.colIdxMap)
     return html`
-      <tr class="log-row cursor-pointer whitespace-nowrap overflow-hidden" @click=${() => toggleLogRow(url)}>
-        ${this.logsColumns.map((column) => html`<td class="">${logItemCol(rowData, this.source, this.colIdxMap, column, this.childSpans)}</td>`)}
+      <tr class="cursor-pointer whitespace-nowrap overflow-hidden" @click=${() => toggleLogRow(url)}>
+        ${this.logsColumns.map((column) => html`<td>${logItemCol(rowData, this.source, this.colIdxMap, column, this.childSpansMap)}</td>`)}
       </tr>
     `
   }
@@ -70,7 +77,13 @@ export class LogList extends LitElement {
         if (!data.error) {
           const { logsData, childSpans, nextUrl } = data
           this.logsData = this.logsData.concat(logsData)
-          this.childSpans = this.childSpans.concat(childSpans)
+          childSpans.forEach((span) => {
+            if (this.childSpansMap.has(span[1])) {
+              this.childSpansMap.get(span[1]).push(span)
+            } else {
+              this.childSpansMap.set(span[1], [span])
+            }
+          })
           this.nextFetchUrl = nextUrl
           this.hasMore = logsData.length > 199
         } else {
@@ -89,8 +102,8 @@ export class LogList extends LitElement {
 
   render() {
     return html`
-      <div class="relative  overflow-y-scroll overflow-x-hidden w-full pb-16 c-scroll" id="logs_list_container">
-        <table class="w-full  table-auto ctable table-pin-rows table-pin-cols overflow-x-hidden" style="height:1px; --rounded-box:0">
+      <div class="relative overflow-y-scroll overflow-x-auto w-full pb-16 c-scroll" id="logs_list_container">
+        <table class="w-full table-auto ctable table-pin-rows table-pin-cols overflow-x-hidden" style="height:1px; --rounded-box:0;">
           <thead>
             <tr class="text-slate-700 border-b font-medium border-y">
               ${this.logsColumns.map((column) => logTableHeading('', column))}
@@ -101,12 +114,6 @@ export class LogList extends LitElement {
               items: this.logsData,
               renderItem: this.logItemRow,
             })}
-            <!-- <lit-virtualizer .items=${this.logsData} .renderItem=${this.logItemRow}></lit-virtualizer> -->
-            <!-- ${this.logsData.length === 0
-              ? html`<tr>
-                  <td colspan=${this.logsColumns.length} class="text-center">No logs found</td>
-                </tr>`
-              : repeat(this.logsData, this.logItemRow)} -->
           </tbody>
         </table>
         ${this.hasMore
@@ -174,19 +181,19 @@ function faSprite(iconName, kind, classes) {
   return html`<svg class="${classes}"><use href="/public/assets/svgs/fa-sprites/${kind}.svg#${iconName}"></use></svg>`
 }
 
-function logItemCol(dataArr, source, colIdxMap, key, childSpans) {
+function logItemCol(dataArr, source, colIdxMap, key, childSpansMap) {
   switch (key) {
     case 'id':
       let [status, errCount, errClass] = errorClass(false, dataArr, colIdxMap)
       return html`
-        <div class="flex items-center justify-between w-4">
+        <div class="flex items-center justify-between w-3">
           <span class="col-span-1 h-5 rounded flex"> ${renderIconWithTippy(errClass, `${errCount} errors attached; status ${status}`)} </span>
         </div>
       `
     case 'created_at':
     case 'timestamp':
       let timestamp = lookupVecTextByKey(dataArr, colIdxMap, key)
-      return html`<time class="monospace whitespace-nowrap text-slate-600" data-tippy-content="timestamp" datetime=${timestamp}>${displayTimestamp(timestamp)}</time>`
+      return html`<time class="monospace whitespace-nowrap text-slate-600 w-[16ch]" data-tippy-content="timestamp" datetime=${timestamp}>${displayTimestamp(timestamp)}</time>`
     case 'status_code':
       let statusCode = lookupVecTextByKey(dataArr, colIdxMap, 'status_code')
       let statusCls = getStatusColor(Number(statusCode))
@@ -215,16 +222,16 @@ function logItemCol(dataArr, source, colIdxMap, key, childSpans) {
       return renderBadge(statsCls, st)
     case 'span_name':
       let spanName = lookupVecTextByKey(dataArr, colIdxMap, key)
-      return renderBadge('cbadge-sm badge-neutral border  border-strokeWeak  bg-fillWeak', spanName)
+      return renderBadge('cbadge-sm badge-neutral border  border-strokeWeak  bg-fillWeak w-[20ch]', spanName)
     case 'service':
       let service = lookupVecTextByKey(dataArr, colIdxMap, key)
-      return renderBadge('cbadge-sm badge-neutral border  border-strokeWeak  bg-fillWeak', service)
+      return renderBadge('cbadge-sm badge-neutral border  border-strokeWeak w-[20ch] bg-fillWeak', service)
     case 'kind':
       let kind = lookupVecTextByKey(dataArr, colIdxMap, key)
       return renderBadge('cbadge-sm badge-neutral border border-strokeWeak bg-fillWeak', kind)
     case 'latency_breakdown':
       let spanId = lookupVecTextByKey(dataArr, colIdxMap, key)
-      let spans = childSpans.filter((s) => s[1] === spanId)
+      let spans = childSpansMap.get(spanId) || []
       return spanLatencyBreakdown(spans)
     case 'rest':
       let val = lookupVecTextByKey(dataArr, colIdxMap, key)

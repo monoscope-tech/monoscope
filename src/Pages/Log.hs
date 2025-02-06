@@ -242,12 +242,13 @@ apiLogJson pid queryM queryASTM cols' cursorM' sinceM fromM toM layoutM sourceM 
                         parentId = AE.String $ fromMaybe "" sp.parentSpanId
                         duration = AE.Number $ fromIntegral sp.spanDurationNs
                         color = AE.String $ fromMaybe "bg-black" $ HM.lookup sp.spanName colors
-                     in AE.toJSON ([name, parentId, duration, color] :: [AE.Value])
+                        spandId = AE.String $ sp.spanId
+                     in AE.toJSON ([name, parentId, duration, color, spandId] :: [AE.Value])
                 )
                 $ V.toList childSpans
             )
 
-      addRespHeaders $ AE.object ["logsData" AE..= requestVecs, "childspans" AE..= childSps, "nextUrl" AE..= nextLogsURL, "resetLogsUrl" AE..= resetLogsURL]
+      addRespHeaders $ AE.object ["logsData" AE..= requestVecs, "childSpans" AE..= childSps, "nextUrl" AE..= nextLogsURL, "resetLogsUrl" AE..= resetLogsURL]
     Nothing -> do
       addRespHeaders $ AE.object ["error" AE..= "Something went wrong"]
 
@@ -475,13 +476,13 @@ apiLogsPage page = do
 
       div_ [class_ "grow flex-1 space-y-1.5 overflow-hidden"] do
         -- div_ [class_ "flex gap-2  pt-1"] do
-        -- label_ [class_ "gap-1 flex items-center cursor-pointer"] do
-        --   faSprite_ "side-chevron-left-in-box" "regular" "w-4 h-4 group-has-[.toggle-filters:checked]/pg:rotate-180 "
-        --   span_ [class_ "hidden group-has-[.toggle-filters:checked]/pg:block"] "Show"
-        --   span_ [class_ "group-has-[.toggle-filters:checked]/pg:hidden"] "Hide"
-        --   "filters"
-        --   input_ [type_ "checkbox", class_ "toggle-filters hidden", checked_]
-        -- span_ [class_ "text-slate-200"] "|"
+        --   label_ [class_ "gap-1 flex items-center cursor-pointer"] do
+        --     faSprite_ "side-chevron-left-in-box" "regular" "w-4 h-4 group-has-[.toggle-filters:checked]/pg:rotate-180 "
+        --     span_ [class_ "hidden group-has-[.toggle-filters:checked]/pg:block"] "Show"
+        --     span_ [class_ "group-has-[.toggle-filters:checked]/pg:hidden"] "Hide"
+        --     "filters"
+        --     input_ [type_ "checkbox", class_ "toggle-filters hidden", checked_]
+        --   span_ [class_ "text-slate-200"] "|"
         -- div_ [class_ "divide-y flex flex-col  overflow-hidden"] $ resultTableAndMeta_ page
         let colors = getServiceColors $ (.spanName) <$> page.childSpans
             childSps =
@@ -496,20 +497,23 @@ apiLogsPage page = do
                   $ V.toList page.childSpans
               )
         div_ [class_ "flex items-start h-full", id_ "logs_section_container"] do
-          termRaw
-            "log-list"
-            [ id_ "logsList"
-            , class_ "w-full divide-y flex flex-col h-full overflow-hidden"
-            , term "data-results" (decodeUtf8 $ AE.encode page.requestVecs)
-            , term "data-columns" (decodeUtf8 $ AE.encode page.cols)
-            , term "data-colIdxMap" (decodeUtf8 $ AE.encode page.colIdxMap)
-            , term "data-childSpans" (decodeUtf8 $ AE.encode childSps)
-            , term "data-nextfetchurl" page.nextLogsURL
-            , term "data-projectid" page.pid.toText
-            ]
-            ("" :: Text)
+          div_ [class_ "relative flex items-start w-full h-full", id_ "logs_list_container"] do
+            div_ [class_ "absolute top-0 left-0 w-full h-full z-50 bg-white hidden", id_ "trace_expanded_view"] do
+              "hello world"
+            termRaw
+              "log-list"
+              [ id_ "logsList"
+              , class_ "w-full divide-y flex flex-col h-full overflow-hidden"
+              , term "data-results" (decodeUtf8 $ AE.encode page.requestVecs)
+              , term "data-columns" (decodeUtf8 $ AE.encode page.cols)
+              , term "data-colIdxMap" (decodeUtf8 $ AE.encode page.colIdxMap)
+              , term "data-childSpans" (decodeUtf8 $ AE.encode childSps)
+              , term "data-nextfetchurl" page.nextLogsURL
+              , term "data-projectid" page.pid.toText
+              ]
+              ("" :: Text)
           div_ [onmousedown_ "mouseDown(event)", class_ "relative h-full flex items-center justify-center w-1 bg-fillWeak  cursor-ew-resize overflow-visible"] do
-            div_ [onmousedown_ "mouseDown(event)", id_ "resizer", class_ "absolute left-1/2 top-1/2 -translate-x-1/2  px-1 py-1 -translate-y-1/2 w-max bg-slate-50 rounded border border-strokeBrand-weak grid grid-cols-2 gap-1"] do
+            div_ [onmousedown_ "mouseDown(event)", id_ "resizer", class_ "absolute left-1/2 top-1/2 z-[999] -translate-x-1/2  px-1 py-1 -translate-y-1/2 w-max bg-slate-50 rounded border border-strokeBrand-weak grid grid-cols-2 gap-1"] do
               div_ [class_ "bg-iconNeutral h-[3px] w-[3px] rounded-full"] ""
               div_ [class_ "bg-iconNeutral h-[3px] w-[3px] rounded-full"] ""
               div_ [class_ "bg-iconNeutral h-[3px] w-[3px] rounded-full"] ""
