@@ -6,6 +6,7 @@ import Data.HashMap.Internal.Strict qualified as HM
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Data.Time (defaultTimeLocale)
+import Data.Time.Clock (UTCTime)
 import Data.Time.Format (formatTime)
 import Data.Time.Format.ISO8601 (formatShow, iso8601Format)
 import Data.UUID qualified as UUID
@@ -81,40 +82,19 @@ tracePage :: PageProps -> Html ()
 tracePage p = do
   let pid = p.pid
       traceItem = p.traceItem
-      sId = p.span_id
-      tSp = fromMaybe (V.head p.spanRecords) (V.find (\s -> s.spanId == sId) p.spanRecords)
       serviceData = V.toList $ getServiceData <$> p.spanRecords
       serviceNames = V.fromList $ ordNub $ (.name) <$> serviceData
       serviceColors = getServiceColors serviceNames
       rootSpans = buildSpanTree p.spanRecords
-  div_ [class_ "w-full h-full pt-2", id_ "trace_span_container"] $ do
+  div_ [class_ "w-full h-full p-2", id_ "trace_span_container"] $ do
     div_ [class_ "flex flex-col w-full gap-4 h-full pb-4"] $ do
       div_ [class_ "flex justify-between items-center"] do
         div_ [class_ "flex items-center gap-4"] $ do
-          h3_ [class_ "whitespace-nowrap text-lg font-medium text-slate-950"] "Trace"
-          div_ [class_ "flex items-center border border-slate-200 rounded-lg"] do
-            span_ [class_ "text-sm text-slate-950 font-medium border-r border-r-slate-200 px-2 py-1.5"] "Trace ID"
-            span_ [class_ "text-slate-600 text-sm font-medium px-2 py-1.5 trace_id"] $ toHtml traceItem.traceId
-            div_ [class_ "mr-2", [__|install Copy(content: .trace_id )|]] do
-              faSprite_ "copy" "regular" "w-3 h-3  text-slate-500"
-          div_ [class_ "flex items-center font-bold gap-1"] do
-            button_
-              [ class_ "cursor-pointer h-8 w-8 flex items-center justify-center rounded-full bg-fillWeaker border border-slate-200 text-slate-500"
-              , hxGet_ $ "/p/" <> pid.toText <> "/traces/" <> traceItem.traceId <> "/?span_id=" <> tSp.spanId <> "&nav=true"
-              , hxSwap_ "innerHTML"
-              , hxTarget_ "#trace_span_container"
-              , hxTrigger_ "click"
-              ]
-              $ faSprite_ "chevron-left" "regular" "w-4 h-4"
-            button_
-              [ class_ "cursor-pointer h-8 w-8 flex items-center justify-center rounded-full bg-fillWeaker border border-slate-200 text-slate-500"
-              , hxGet_ $ "/p/" <> pid.toText <> "/traces/" <> traceItem.traceId <> "/?span_id=" <> tSp.spanId <> "&nav=true"
-              , hxSwap_ "innerHTML"
-              , hxTarget_ "#trace_span_container"
-              , hxTrigger_ "click"
-              ]
-              $ faSprite_ "chevron-right" "regular" "w-4 h-4"
-        dateTime traceItem.traceStartTime
+          h3_ [class_ "whitespace-nowrap  font-semibold text-textStrong"] "Trace Breakdown"
+        div_ [class_ "flex items-center gap-2"] $ do
+          dateTime traceItem.traceStartTime (Just traceItem.traceEndTime)
+          button_ [class_ "p-0 m-0", [__| on click add .hidden to #trace_expanded_view|]] do
+            faSprite_ "side-chevron-left-in-box" "regular" "w-5 h-5 text-textBrand rotate-180"
 
       div_ [class_ "flex gap-1 w-full mt-5"] $ do
         div_ [role_ "tablist", class_ "w-full flex flex-col gap-2", id_ "trace-tabs"] $ do
@@ -125,9 +105,9 @@ tracePage p = do
                 button_ [class_ "a-tab text-sm px-3 border-b-2 border-b-transparent py-1.5", onclick_ "navigatable(this, '#water_fall', '#trace-tabs', 't-tab-active')"] "Waterfall"
                 button_ [class_ "a-tab text-sm px-3 border-b-2 border-b-transparent py-1.5", onclick_ "navigatable(this, '#span_list', '#trace-tabs', 't-tab-active')"] "Spans List"
               div_ [class_ "flex items-center gap-2"] do
-                stBox "Spans" (show $ length p.spanRecords)
-                stBox "Errors" (show $ length $ V.filter (\s -> s.status == Just SSError) p.spanRecords)
-                stBox "Total duration" (toText $ getDurationNSMS traceItem.traceDurationNs)
+                stBox (show $ length p.spanRecords) Nothing
+                stBox (show $ length $ V.filter (\s -> s.status == Just SSError) p.spanRecords) $ Just (faSprite_ "alert-triangle" "regular" "w-3 h-3 text-red-500")
+                stBox (toText $ getDurationNSMS traceItem.traceDurationNs) $ Just (faSprite_ "clock" "regular" "w-3 h-3 text-textWeak")
             div_ [class_ "flex gap-2 w-full items-center"] do
               div_ [class_ "flex items-center gap-2 w-full rounded-xl px-3 grow-1 h-12 border border-slate-200 bg-fillWeaker"] do
                 faSprite_ "magnifying-glass" "regular" "w-4 h-4 text-slate-500"
@@ -204,9 +184,6 @@ tracePage p = do
             div_ [class_ "border border-slate-200 w-full rounded-2xl min-h-[230px] max-h-[330px] overflow-auto overflow-x-hidden "] do
               renderSpanListTable serviceNames serviceColors p.spanRecords
 
-      div_ [class_ "my-5 py-2 rounded-2xl border overflow-hidden"] do
-        div_ [class_ "flex flex-col gap-4", id_ $ "span-" <> traceItem.traceId] do
-          Spans.expandedSpanItem pid tSp Nothing Nothing
   let spanJson = decodeUtf8 $ AE.encode $ p.spanRecords <&> getSpanJson
   let waterFallJson = decodeUtf8 $ AE.encode rootSpans
 
@@ -302,12 +279,12 @@ spanTable records =
       tbody_ do
         forM_ records $ \spanRecord -> do
           let pidText = UUID.toText spanRecord.projectId
-              spanid = maybe "" UUID.toText spanRecord.uSpandId
+              spanid = UUID.toText spanRecord.uSpanId
               tme = fromString (formatShow iso8601Format spanRecord.timestamp)
               (reqType, _, _, _) = fromMaybe ("", "", "", 0) $ getRequestDetails spanRecord
           tr_
             [ hxGet_ $ "/p/" <> pidText <> "/log_explorer/" <> spanid <> "/" <> tme <> "/detailed?source=spans"
-            , hxTarget_ $ "#span-" <> spanRecord.traceId
+            , hxTarget_ "#log_details_container"
             , hxSwap_ "innerHTML"
             , id_ $ "sp-list-" <> spanRecord.spanId
             , class_ "span-filterble font-medium"
@@ -328,11 +305,12 @@ getServiceData :: Telemetry.SpanRecord -> ServiceData
 getServiceData sp = ServiceData{name = getServiceName sp, duration = sp.spanDurationNs}
 
 
-stBox :: Text -> Text -> Html ()
-stBox title value =
-  div_ [class_ "flex items-end px-2 gap-2 border-r  last:border-r-0"] do
-    span_ [class_ "text-slate-950 font-medium"] $ toHtml value
-    span_ [class_ "font-medium text-slate-500 text-sm"] $ toHtml title
+stBox :: Text -> Maybe (Html ()) -> Html ()
+stBox value iconM =
+  div_ [class_ "flex items-center px-2 gap-2 border-r last:border-r-0"] do
+    whenJust iconM $ id
+    span_ [class_ "text-textStrong text-sm"] $ toHtml value
+    if isNothing iconM then span_ [class_ "font-medium text-textWeak text-xs"] "Spans" else pass
 
 
 data SpanMin = SpanMin
@@ -340,10 +318,12 @@ data SpanMin = SpanMin
   , spanId :: Text
   , spanName :: Text
   , spanDurationNs :: Integer
+  , uSpanId :: UUID.UUID
   , hasErrors :: Bool
   , serviceName :: Text
   , startTime :: Integer
   , endTime :: Maybe Integer
+  , timestamp :: UTCTime
   }
   deriving stock (Show, Generic)
   deriving anyclass (AE.ToJSON, AE.FromJSON)
@@ -367,17 +347,19 @@ buildTree spanMap parentId =
     Nothing -> []
     Just spans ->
       [ SpanTree
-        SpanMin
-          { parentSpanId = sp.parentSpanId
-          , spanId = sp.spanId
-          , spanName = sp.spanName
-          , spanDurationNs = sp.spanDurationNs
-          , serviceName = getServiceName sp
-          , startTime = utcTimeToNanoseconds sp.startTime
-          , endTime = utcTimeToNanoseconds <$> sp.endTime
-          , hasErrors = spanHasErrors sp
-          }
-        (buildTree spanMap (Just sp.spanId))
+          SpanMin
+            { parentSpanId = sp.parentSpanId
+            , spanId = sp.spanId
+            , uSpanId = sp.uSpanId
+            , spanName = sp.spanName
+            , spanDurationNs = sp.spanDurationNs
+            , serviceName = getServiceName sp
+            , startTime = utcTimeToNanoseconds sp.startTime
+            , endTime = utcTimeToNanoseconds <$> sp.endTime
+            , hasErrors = spanHasErrors sp
+            , timestamp = sp.timestamp
+            }
+          (buildTree spanMap (Just sp.spanId))
       | sp <- spans
       ]
 
@@ -406,10 +388,12 @@ buildTree_ pid sp trId level scol isLasChild = do
     unless isLasChild $ div_ [class_ "absolute top-1 left-2 border-l h-full border-l-slate-200"] pass
     div_ [class_ "flex flex-col w-full grow-1 shrink-1 border-slate-200 relative"] do
       when hasChildren $ div_ [class_ "absolute top-1 left-2 border-l h-2 border-l-slate-200"] pass
+      let tme = fromString (formatShow iso8601Format sp.spanRecord.timestamp)
+          spanId = UUID.toText sp.spanRecord.uSpanId
       div_
         [ class_ "w-full cursor-pointer flex justify-between max-w-full items-center h-5 collapsed"
-        , hxGet_ $ "/p/" <> pid.toText <> "/spans/" <> trId <> "/" <> sp.spanRecord.spanId
-        , hxTarget_ $ "#span-" <> trId
+        , hxGet_ $ "/p/" <> pid.toText <> "/log_explorer/" <> spanId <> "/" <> tme <> "/detailed?source=spans"
+        , hxTarget_ "#log_details_container"
         , hxSwap_ "innerHTML"
         , hxIndicator_ "#loading-span-list"
         , id_ $ "trigger-span-" <> sp.spanRecord.spanId

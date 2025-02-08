@@ -89,11 +89,13 @@ drawerWithURLContent_ drawerId urlM trigger = div_ [class_ "drawer drawer-end in
         $ span_ [class_ "loading loading-dots loading-md"] ""
 
 
-dateTime :: UTCTime -> Html ()
-dateTime t = do
-  span_ [class_ "flex items-center rounded-lg px-2 py-1.5 font-medium gap-2 border border-slate-300 bg-fillWeaker text-slate-600"] do
-    faSprite_ "calendar" "regular" "w-5 h-5 fill-none"
-    toHtml $ formatTime defaultTimeLocale "%b. %d, %Y %I:%M:%S %p" t
+dateTime :: UTCTime -> Maybe UTCTime -> Html ()
+dateTime t endTM = do
+  span_ [class_ "flex items-center rounded-lg px-2 py-1.5 text-xs gap-2 border border-strokeWeak bg-fillWeaker text-textStrong"] do
+    faSprite_ "calendar" "regular" "w-4 h-4 fill-none"
+    toHtml $ formatTime defaultTimeLocale "%b. %d, %I:%M:%S %p" t
+    whenJust endTM $ \endT -> do
+      toHtml $ " - " <> formatTime defaultTimeLocale "%b. %d, %I:%M:%S %p" endT
 
 
 paymentPlanPicker :: Projects.ProjectId -> Text -> Text -> Bool -> Html ()

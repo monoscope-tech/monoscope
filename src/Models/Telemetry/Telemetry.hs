@@ -87,6 +87,7 @@ data SpanKind = SKInternal | SKServer | SKClient | SKProducer | SKConsumer | SKU
 data Trace = Trace
   { traceId :: Text
   , traceStartTime :: UTCTime
+  , traceEndTime :: UTCTime
   , traceDurationNs :: Integer
   , totalSpans :: Int
   , serviceNames :: Maybe (V.Vector Text)
@@ -98,7 +99,7 @@ data Trace = Trace
 
 data LogRecord = LogRecord
   { projectId :: UUID
-  , id :: Maybe UUID
+  , id :: UUID
   , timestamp :: UTCTime
   , observedTimestamp :: UTCTime
   , traceId :: Text
@@ -127,7 +128,7 @@ instance AE.ToJSON ByteString where
 
 
 data SpanRecord = SpanRecord
-  { uSpandId :: Maybe UUID
+  { uSpanId :: UUID
   , projectId :: UUID
   , timestamp :: UTCTime
   , traceId :: Text
@@ -321,6 +322,7 @@ getTraceDetails pid trId = dbtToEff $ queryOne Select q (pid, trId)
       [sql| SELECT
               trace_id,
               MIN(start_time) AS trace_start_time,
+              MAX(COALESCE(end_time, start_time)) AS trace_end_time,
               CAST(EXTRACT(EPOCH FROM (MAX(COALESCE(end_time, start_time)) - MIN(start_time))) * 1000000000 AS BIGINT) AS trace_duration_ns,
               COUNT(span_id) AS total_spans,
               ARRAY_REMOVE(ARRAY_AGG(DISTINCT jsonb_extract_path_text(resource, 'service.name')), NULL) AS service_names

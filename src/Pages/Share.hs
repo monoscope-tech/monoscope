@@ -17,6 +17,7 @@ import Pages.LogExplorer.LogItem qualified as LogItem
 import Pkg.Components (navBar)
 import Relude
 import System.Types (ATAuthCtx, ATBaseCtx, RespHeaders, addErrorToast, addRespHeaders)
+import Utils (faSprite_)
 import Web.FormUrlEncoded (FromForm)
 
 
@@ -29,26 +30,19 @@ data ReqForm = ReqForm
   deriving anyclass (FromForm)
 
 
-shareLinkPostH :: Projects.ProjectId -> ReqForm -> ATAuthCtx (RespHeaders ShareLinkPost)
-shareLinkPostH pid reqForm = do
+shareLinkPostH :: Projects.ProjectId -> UUID.UUID -> Maybe Text -> ATAuthCtx (RespHeaders ShareLinkPost)
+shareLinkPostH pid eventId reqTypeM = do
   currentTime <- liftIO getZonedTime
-  let rid = reqForm.reqId
-  let expIn = reqForm.expiresIn
-  let lis = ["1 hour", "8 hours", "1 day"] :: [Text]
-  if expIn `elem` lis
-    then do
-      inId <- liftIO UUIDV4.nextRandom
-      res <-
-        dbtToEff
-          $ execute
-            Insert
-            [sql| INSERT INTO apis.share_requests (id, project_id, expired_at, request_dump_id, request_created_at) 
-                                  VALUES (?,?, current_timestamp + interval ?,?,?) |]
-            (inId, pid, expIn, rid, reqForm.reqCreatedAt)
-      addRespHeaders $ ShareLinkPost $ show inId
-    else do
-      addErrorToast "Invalid expiry interval" Nothing
-      addRespHeaders ShareLinkPostError
+  let eventType = fromMaybe "request" reqTypeM
+  shareId <- liftIO UUIDV4.nextRandom
+  res <-
+    dbtToEff $
+      execute
+        Insert
+        [sql| INSERT INTO apis.share_events (id, project_id, event_id, event_type)
+                              VALUES (?,?,?,?) |]
+        (shareId, pid, eventId, eventType)
+  addRespHeaders $ ShareLinkPost $ show shareId
 
 
 data ShareLinkPost
@@ -64,23 +58,33 @@ instance ToHtml ShareLinkPost where
 
 copyLink :: Text -> Html ()
 copyLink rid = do
-  let url = "https://app.apitoolkit.io/share/r/" <> rid
-  div_ [class_ "flex gap-2 items-center"] do
-    div_ [class_ "mt-2  text-green-700"] do
-      p_ "Secure share url."
-      strong_ [class_ "block pt-2 text-gray-500 truncate ...", id_ "shareURL"] $ toHtml url
-    button_
-      [ type_ "button"
-      , class_ "self-end bg-green-500 px-2 py-1.5 text-white rounded-md  font-medium text-green-800 hover:bg-green-300 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-green-50 focus:ring-green-600"
-      , [__|
-        on click
-          if 'clipboard' in window.navigator then
-            call navigator.clipboard.writeText(#shareURL's innerText)
-            send successToast(value:['URL copied to clipboard']) to <body/>
-          end
-          |]
-      ]
-      "Copy URL"
+  div_ [id_ "invite-modal-container"] $ do
+    input_ [type_ "checkbox", id_ "shareModal", class_ "modal-toggle", checked_]
+    div_ [class_ "modal p-8", role_ "dialog"] do
+      div_ [class_ "modal-box flex flex-col gap-4"] $ do
+        div_ [class_ "p-3 bg-[#0acc91]/5 rounded-full w-max border-[#067a57]/20 gap-2 inline-flex"] $
+          faSprite_ "copy" "regular" "h-6 w-6 text-green-500"
+        span_ [class_ " text-textStrong text-2xl font-semibold"] "Copy Share Link"
+        div_ [class_ "text-[#000833]/60"] "Share this link with anyone to give them access to this event. Lasts for 48 hours only."
+        div_ [class_ "h-1 w-full  bg-fillWeak"] pass
+        div_ [class_ "flex-col gap-6 flex"] $ do
+          let url = "https://app.apitoolkit.io/share/r/" <> rid
+          div_ [class_ "flex flex-col gap-2 items-center"] do
+            div_ [class_ "mt-2  text-green-700"] do
+              strong_ [class_ "block pt-2 text-textWeak text-xs truncate ...", id_ "shareURL"] $ toHtml url
+          button_
+            [ type_ "button"
+            , class_ "self-start bg-green-500 px-2 py-1.5 text-white rounded-md text-sm font-medium hover:bg-green-300"
+            , [__|
+               on click
+                 if 'clipboard' in window.navigator then
+                   call navigator.clipboard.writeText(#shareURL's innerText)
+                   send successToast(value:['URL copied to clipboard']) to <body/>
+                 end
+                 |]
+            ]
+            "Copy url"
+      label_ [class_ "modal-backdrop", Lucid.for_ "shareModal"] "Close"
 
 
 shareLinkGetH :: UUID.UUID -> ATBaseCtx ShareLinkGet

@@ -498,12 +498,11 @@ apiLogsPage page = do
               )
         div_ [class_ "flex items-start h-full", id_ "logs_section_container"] do
           div_ [class_ "relative flex items-start w-full h-full", id_ "logs_list_container"] do
-            div_ [class_ "absolute top-0 left-0 w-full h-full z-50 bg-white hidden", id_ "trace_expanded_view"] do
-              "hello world"
+            div_ [class_ "absolute top-0 right-0 hidden w-full h-full z-50 bg-white transition-all duration-100", id_ "trace_expanded_view"] pass
             termRaw
               "log-list"
               [ id_ "logsList"
-              , class_ "w-full divide-y flex flex-col h-full overflow-hidden"
+              , class_ "w-full divide-y flex flex-col h-full overflow-y-hidden overflow-x-auto"
               , term "data-results" (decodeUtf8 $ AE.encode page.requestVecs)
               , term "data-columns" (decodeUtf8 $ AE.encode page.cols)
               , term "data-colIdxMap" (decodeUtf8 $ AE.encode page.colIdxMap)
@@ -521,7 +520,7 @@ apiLogsPage page = do
               div_ [class_ "bg-iconNeutral h-[3px] w-[3px] rounded-full"] ""
               div_ [class_ "bg-iconNeutral h-[3px] w-[3px] rounded-full"] ""
 
-          div_ [class_ "relative flex flex-col overflow-y-auto h-full c-scroll", style_ "width:700px", id_ "log_details_container"] ""
+          div_ [class_ "relative flex flex-col overflow-y-auto h-full c-scroll transition-all duration-100 px-2", style_ "width:0px", id_ "log_details_container"] ""
 
           script_
             [text|

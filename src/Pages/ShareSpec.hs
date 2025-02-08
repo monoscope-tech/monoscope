@@ -27,19 +27,14 @@ spec = aroundAll withTestResources do
   describe "Check Share Request" do
     it "should create share link" \TestResources{..} -> do
       currentTime <- getCurrentTime
-      let shareForm =
-            Share.ReqForm
-              { expiresIn = "1 hour"
-              , reqId = Unsafe.fromJust $ UUID.fromText "00000000-0000-0000-0000-000000000000"
-              , reqCreatedAt = currentTime
-              }
-      let nowTxt = toText $ formatTime defaultTimeLocale "%FT%T%QZ" currentTime
-      let reqMsg1 = Unsafe.fromJust $ convert $ msg1 nowTxt
-      let msgs = [("m1", reqMsg1)]
+      let reqId = Unsafe.fromJust $ UUID.fromText "00000000-0000-0000-0000-000000000000"
+          nowTxt = toText $ formatTime defaultTimeLocale "%FT%T%QZ" currentTime
+          reqMsg1 = Unsafe.fromJust $ convert $ msg1 nowTxt
+          msgs = [("m1", reqMsg1)]
 
       _ <- runTestBackground trATCtx $ processRequestMessages msgs
 
-      res <- toServantResponse trATCtx trSessAndHeader trLogger $ Share.shareLinkPostH testPid shareForm
+      res <- toServantResponse trATCtx trSessAndHeader trLogger $ Share.shareLinkPostH testPid reqId Nothing
       case res of
         Share.ShareLinkPost shareId -> do
           let share_id = Unsafe.fromJust $ UUID.fromText shareId
@@ -57,13 +52,8 @@ spec = aroundAll withTestResources do
 
     it "should NOT create share link" \TestResources{..} -> do
       currentTime <- getCurrentTime
-      let shareForm =
-            Share.ReqForm
-              { expiresIn = "55 hour"
-              , reqId = Unsafe.fromJust $ UUID.fromText "00000000-0000-0000-0000-000000000000"
-              , reqCreatedAt = currentTime
-              }
-      res <- toServantResponse trATCtx trSessAndHeader trLogger $ Share.shareLinkPostH testPid shareForm
+      let reqId = Unsafe.fromJust $ UUID.fromText "00000000-0000-0000-0000-000000000000"
+      res <- toServantResponse trATCtx trSessAndHeader trLogger $ Share.shareLinkPostH testPid reqId (Just "request")
       case res of
         Share.ShareLinkPostError -> do
           pass
@@ -92,5 +82,5 @@ msg1 timestamp =
             "status_code":200,
             "msg_id": "00000000-0000-0000-0000-000000000000",
             "timestamp": #{timestamp},
-            "url_path":"/","errors":[],"tags":[]} 
+            "url_path":"/","errors":[],"tags":[]}
       |]

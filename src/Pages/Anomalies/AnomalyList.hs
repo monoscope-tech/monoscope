@@ -481,7 +481,7 @@ detailsHeader title method statusCode issue currTime filterV content anBtn = do
       div_ [class_ "flex items-center gap-4"] do
         span_ [class_ "flex items-center rounded-lg px-2 py-1 font-medium gap-2 border border-blue-300 bg-blue-100 text-brand"] $ toHtml method
         span_ [class_ "flex items-center rounded-lg px-2 py-1 font-medium gap-2 border border-green-300 bg-green-100 text-green-500"] $ toHtml $ show statusCode
-        dateTime $ zonedTimeToUTC issue.createdAt
+        dateTime (zonedTimeToUTC issue.createdAt) Nothing
       anomalyActionButtons issue.projectId issue.id (isJust issue.acknowlegedAt) (isJust issue.archivedAt) ""
     span_ [class_ "font-medium text-2xl text-slate-600 mt-6"] $ toHtml title
     div_ [class_ "flex justify-between items-center gap-4 mt-8"] do

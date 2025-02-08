@@ -1,6 +1,7 @@
 module Pages.Telemetry.Spans (expandedSpanItem, spanLatencyBreakdown, spanGetH) where
 
 import Data.Aeson qualified as AE
+import Data.Effectful.UUID qualified as UUID
 import Data.HashMap.Strict qualified as HM
 import Data.Text qualified as T
 import Data.Vector qualified as V
@@ -10,6 +11,7 @@ import Lucid.Hyperscript (__)
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Telemetry (SpanRecord (..))
 import Models.Telemetry.Telemetry qualified as Telemetry
+import NeatInterpolation (text)
 import Pages.Components (dateTime)
 import Pages.Telemetry.Utils (getErrorDetails, getRequestDetails, getServiceName, getSpanErrors)
 import Relude
@@ -31,73 +33,103 @@ expandedSpanItem :: Projects.ProjectId -> Telemetry.SpanRecord -> Maybe Text -> 
 expandedSpanItem pid sp leftM rightM = do
   let reqDetails = getRequestDetails sp
   div_ [class_ "w-full pb-2 relative"] $ do
+    div_ [class_ "flex justify-between items-center", id_ "copy_share_link"] pass
     span_ [class_ "htmx-indicator query-indicator absolute loading left-1/2 -translate-x-1/2 loading-dots absoute z-10 top-10", id_ "loading-span-list"] ""
-    div_ [class_ "flex flex-col gap-1 bg-gray-50 py-2  px-4"] $ do
-      div_ [class_ "flex flex-col w-full gap-4 h-full pb-4"] $ do
-        div_ [class_ "flex justify-between items-center"] do
-          div_ [class_ "flex items-center gap-4"] $ do
-            h3_ [class_ "whitespace-nowrap text-lg font-medium text-slate-950"] "Span"
-            div_ [class_ "flex items-center border border-slate-200 rounded-lg"] do
-              span_ [class_ "text-sm text-slate-950 font-medium border-r border-r-slate-200 px-2 py-1.5"] "Span ID"
-              span_ [class_ "text-slate-600 text-sm font-medium px-2 py-1.5 span_id"] $ toHtml sp.spanId
-              div_ [[__|install Copy(content: .span_id )|], class_ "mr-2"] do
-                faSprite_ "copy" "regular" "w-3 h-3 text-slate-500"
-            div_ [class_ "flex items-center gap-1"] do
-              whenJust leftM $ \l -> do
-                button_
-                  [ class_ "cursor-pointer h-8 w-8 flex items-center justify-center rounded-full bg-fillWeaker border border-slate-200 text-slate-500"
-                  , hxGet_ $ "/p/" <> pid.toText <> "/traces/" <> sp.traceId <> "/?span_id=" <> l <> "&nav=true"
-                  , hxSwap_ "innerHTML"
-                  , hxTarget_ "#trace_span_container"
-                  , hxTrigger_ "click"
-                  ]
-                  $ faSprite_ "chevron-left" "regular" "w-4 h-4"
-              whenJust rightM $ \r -> do
-                button_
-                  [ class_ "cursor-pointer h-8 w-8 flex items-center justify-center rounded-full bg-fillWeaker border border-slate-200 text-slate-500"
-                  , hxGet_ $ "/p/" <> pid.toText <> "/traces/" <> sp.traceId <> "/?span_id=" <> r <> "&nav=true"
-                  , hxSwap_ "innerHTML"
-                  , hxTarget_ "#trace_span_container"
-                  , hxTrigger_ "click"
-                  ]
-                  $ faSprite_ "chevron-right" "regular" "w-4 h-4"
-          dateTime sp.startTime
+    div_ [class_ "flex flex-col gap-4 bg-gray-50 py-2  px-2"] $ do
+      div_ [class_ "flex justify-between items-center"] do
+        div_ [class_ "flex items-center gap-4"] $ do
+          div_ [class_ "flex relative flex-col items-center justify-center"] do
+            span_
+              [ class_ "cursor-pointer absolute -top-[18px] h-max text-textWeak"
+              , hxGet_ $ "/p/" <> pid.toText <> "/traces/" <> sp.traceId <> "/?span_id="
+              , hxSwap_ "innerHTML"
+              , hxTarget_ "#trace_span_container"
+              , hxTrigger_ "click"
+              ]
+              $ faSprite_ "p-chevron-up" "regular" "w-5 h-5"
+            span_
+              [ class_ "cursor-pointer absolute w-max -bottom-[18px] h-max text-textWeak"
+              , hxGet_ $ "/p/" <> pid.toText <> "/traces/" <> sp.traceId <> "/?span_id="
+              , hxSwap_ "innerHTML"
+              , hxTarget_ "#trace_span_container"
+              , hxTrigger_ "click"
+              ]
+              $ faSprite_ "p-chevron-down" "regular" "w-5 h-5"
+          h3_ [class_ "whitespace-nowrap font-semibold text-textStrong"] "Trace Span"
+        div_ [class_ "flex gap-4 items-center"] $ do
+          dateTime sp.startTime Nothing
+          div_ [class_ "flex gap-2 items-center"] do
+            button_ [[__|on click add .hidden to #trace_expanded_view then put '0px' into  #log_details_container.style.width|]] do
+              faSprite_ "xmark" "regular" "w-3 h-3 text-textBrand"
 
       div_ [class_ "flex items-center gap-4 text-sm font-medium text-slate-950"] $ do
-        h4_ [class_ "text-xl "] $ toHtml $ getServiceName sp
-        faSprite_ "chevron-right" "regular" "w-4 h-4 font-bold text-slate"
-        h4_ [class_ "text-xl max-w-96 truncate"] $ toHtml sp.spanName
+        case reqDetails of
+          Just req -> do
+            div_ [class_ "flex items-center gap-2"] do
+              whenJust reqDetails $ \case
+                ("HTTP", method, path, status) -> do
+                  -- div_ [class_ "flex items-center gap-1 font-medium border border-slate-300 font-medium rounded-lg bg-fillWeaker px-2 py-1.5"] do
+                  --   faSprite_ "web" "regular" "w-4 h-4"
+                  --   span_ [class_ ""] "HTTP"
+                  let methodClass = getMethodColor method
+                      borderColor = getMethodBorderColor method
+                      extraClass = getStatusColor status
+                      stBorder = getStatusBorderColor status
+                  span_ [class_ $ "px-2 py-1 rounded-lg text-sm border " <> borderColor <> " " <> methodClass] $ toHtml method
+                  span_ [class_ $ "px-2 py-1 rounded-lg text-sm border " <> stBorder <> " " <> extraClass] $ toHtml $ T.take 3 $ show status
+                  div_ [class_ "flex items-center"] do
+                    span_ [class_ " px-2 py-1.5 max-w-96 truncate mr-2 urlPath"] $ toHtml path
+                    div_ [[__| install Copy(content:.urlPath )|]] do
+                      faSprite_ "copy" "regular" "h-8 w-8 border border-slate-300 bg-fillWeaker rounded-full p-2 text-slate-500"
+                    a_ [href_ "", class_ "ml-1"] do
+                      faSprite_ "arrow-up-right" "regular" "h-8 w-8 p-2 btn-primary rounded-full"
+                (scheme, method, path, status) -> do
+                  -- span_ [class_ " font-medium border rounded px-2 py-1.5"] $ toHtml scheme
+                  div_ [class_ "flex border rounded overflow-hidden"] do
+                    span_ [class_ " px-2 py-1.5 max-w-44 truncate bg-gray-200 border-r"] $ toHtml method
+                    span_ [class_ " px-2 py-1.5 max-w-96 truncate"] $ toHtml path
+                    let extraClass = getGrpcStatusColor status
+                    span_ [class_ $ " px-2 py-1.5 border-l " <> extraClass] $ toHtml $ show status
+          Nothing -> do
+            h4_ [class_ "text-xl max-w-96 truncate"] $ toHtml sp.spanName
 
-      div_ [class_ "flex gap-4 items-center justify-between text-slate-600 text-sm mt-3"] $ do
-        div_ [class_ "flex gap-4 items-center"] do
-          div_ [class_ "font-medium flex shrink-0 items-center font-medium bg-fillWeaker rounded-lg gap-1 border border-slate-300 px-2 py-1.5"] do
-            faSprite_ "clock" "regular" "w-4 h-4"
-            span_ [class_ " font-medium"] $ toHtml $ getDurationNSMS sp.spanDurationNs
-          div_ [class_ "flex items-center gap-4"] do
-            whenJust reqDetails $ \case
-              ("HTTP", method, path, status) -> do
-                div_ [class_ "flex items-center gap-1 font-medium border border-slate-300 font-medium rounded-lg bg-fillWeaker px-2 py-1.5"] do
-                  faSprite_ "web" "regular" "w-4 h-4"
-                  span_ [class_ ""] "HTTP"
-                let methodClass = getMethodColor method
-                    borderColor = getMethodBorderColor method
-                    extraClass = getStatusColor status
-                    stBorder = getStatusBorderColor status
-                span_ [class_ $ "p-2 rounded-lg border " <> borderColor <> " " <> methodClass] $ toHtml method
-                span_ [class_ $ "p-2 rounded-lg border " <> stBorder <> " " <> extraClass] $ toHtml $ T.take 3 $ show status
-                div_ [class_ "flex items-center"] do
-                  span_ [class_ " px-2 py-1.5 max-w-96 truncate mr-2 urlPath"] $ toHtml path
-                  div_ [[__| install Copy(content:.urlPath )|]] do
-                    faSprite_ "copy" "regular" "h-8 w-8 border border-slate-300 bg-fillWeaker rounded-full p-2 text-slate-500"
-                  a_ [href_ "", class_ "ml-1"] do
-                    faSprite_ "arrow-up-right" "regular" "h-8 w-8 p-2 btn-primary rounded-full"
-              (scheme, method, path, status) -> do
-                span_ [class_ " font-medium border rounded px-2 py-1.5"] $ toHtml scheme
-                div_ [class_ "flex border rounded overflow-hidden"] do
-                  span_ [class_ " px-2 py-1.5 max-w-44 truncate bg-gray-200 border-r"] $ toHtml method
-                  span_ [class_ " px-2 py-1.5 max-w-96 truncate"] $ toHtml path
-                  let extraClass = getGrpcStatusColor status
-                  span_ [class_ $ " px-2 py-1.5 border-l " <> extraClass] $ toHtml $ show status
+      div_ [class_ "flex gap-2 flex-wrap"] $ do
+        spanBadge (toText $ getDurationNSMS sp.spanDurationNs) "Span duration"
+        spanBadge (getServiceName sp) "Service"
+        spanBadge ("Spand ID: " <> sp.spanId) "Span ID"
+        spanBadge (maybe "" show sp.kind) "Span Kind"
+        spanBadge (maybe "" show sp.status) "Span Status"
+
+      div_ [class_ "flex gap-2 px-2 items-center text-textBrand font-medium text-xs"] do
+        -- button_ [class_ "flex items-center gap-2"] do
+        --   "Copy requests as curl"
+        --   faSprite_ "copy" "regular" "w-3 h-3"
+        let tracePath = "/p/" <> pid.toText <> "/traces/" <> sp.traceId <> "/"
+        button_
+          [ class_ "flex items-end gap-1"
+          , term
+              "_"
+              [text|on click remove .hidden from #trace_expanded_view
+                    then set #trace_expanded_view.innerHTML to #loader-tmp.innerHTML
+                    then fetch $tracePath
+                    then set #trace_expanded_view.innerHTML to it
+                    then htmx.process(#trace_expanded_view)
+                    then _hyperscript.processNode(#trace_expanded_view) then window.evalScriptsFromContent(#trace_expanded_view)|]
+          ]
+          do
+            "View parent trace"
+            faSprite_ "cross-hair" "regular" "w-4 h-4"
+        let sp_id = UUID.toText sp.uSpanId
+        button_
+          [ class_ "flex items-center gap-2"
+          , hxPost_ $ "/p/" <> pid.toText <> "/share/" <> sp_id <> "?event_type=span"
+          , hxSwap_ "innerHTML"
+          , hxTarget_ "#copy_share_link"
+          ]
+          do
+            "Generate shareable link"
+            faSprite_ "link-simple" "regular" "w-3 h-3"
+
     div_ [class_ "w-full mt-8", id_ "span-tabs-container"] do
       let spanErrors = getSpanErrors sp
       div_ [class_ "flex", [__|on click halt|]] $ do
@@ -162,3 +194,13 @@ spanLatencyBreakdown spans = do
         ]
         do
           div_ [class_ "h-full w-full"] ""
+
+
+spanBadge :: Text -> Text -> Html ()
+spanBadge val key = do
+  div_
+    [ class_ "flex gap-2 items-center text-textStrong bg-fillWeak border border-strokeWeak text-xs rounded-lg whitespace-nowrap px-2 py-1"
+    , term "data-tippy-content" key
+    ]
+    $ do
+      span_ [] $ toHtml val

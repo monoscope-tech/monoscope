@@ -270,7 +270,7 @@ convertLogRecord :: Projects.ProjectId -> Maybe Resource -> Maybe Instrumentatio
 convertLogRecord pid resource scope lr =
   Telemetry.LogRecord
     { projectId = pid.unProjectId
-    , id = Nothing
+    , id = UUID.nil
     , timestamp = if lr.logRecordTimeUnixNano == 0 then nanosecondsToUTC lr.logRecordObservedTimeUnixNano else nanosecondsToUTC lr.logRecordTimeUnixNano
     , observedTimestamp = nanosecondsToUTC lr.logRecordObservedTimeUnixNano
     , traceId = byteStringToHexText lr.logRecordTraceId
@@ -287,7 +287,7 @@ convertLogRecord pid resource scope lr =
 convertSpanRecord :: Projects.ProjectId -> Maybe Resource -> Maybe InstrumentationScope -> Span -> Telemetry.SpanRecord
 convertSpanRecord pid resource scope sp =
   Telemetry.SpanRecord
-    { uSpandId = Nothing
+    { uSpanId = UUID.nil
     , projectId = pid.unProjectId
     , timestamp = nanosecondsToUTC sp.spanStartTimeUnixNano
     , traceId = byteStringToHexText sp.spanTraceId

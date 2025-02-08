@@ -12,7 +12,6 @@ export class LogList extends LitElement {
     nextFetchUrl: { type: String },
     isError: { type: Boolean },
     fetchError: { type: String },
-    source: { type: String },
     projectId: { type: String },
   }
 
@@ -60,7 +59,7 @@ export class LogList extends LitElement {
   }
 
   logItemRow(rowData) {
-    const [url] = requestDumpLogItemUrlPath(this.projectId, rowData, this.colIdxMap)
+    const [url] = requestDumpLogItemUrlPath(this.projectId, rowData, this.colIdxMap, this.source)
     return html`
       <tr class="cursor-pointer whitespace-nowrap overflow-hidden" @click=${() => toggleLogRow(url)}>
         ${this.logsColumns.map((column) => html`<td>${logItemCol(rowData, this.source, this.colIdxMap, column, this.childSpansMap)}</td>`)}
@@ -102,8 +101,8 @@ export class LogList extends LitElement {
 
   render() {
     return html`
-      <div class="relative overflow-y-scroll overflow-x-auto w-full pb-16 c-scroll" id="logs_list_container">
-        <table class="w-full table-auto ctable table-pin-rows table-pin-cols overflow-x-hidden" style="height:1px; --rounded-box:0;">
+      <div class="relative overflow-y-scroll overflow-x-auto w-full pb-16 min-h-full c-scroll" id="logs_list_container">
+        <table class="w-full table-auto ctable min-h-full table-pin-rows table-pin-cols overflow-x-hidden" style="height:1px; --rounded-box:0;">
           <thead>
             <tr class="text-slate-700 border-b font-medium border-y">
               ${this.logsColumns.map((column) => logTableHeading('', column))}
@@ -118,12 +117,10 @@ export class LogList extends LitElement {
         </table>
         ${this.hasMore
           ? html`<div class="w-full flex justify-center items-center" id="loader">
-                ${
-                  this.isLoading
-                    ? html`<div class="mx-auto loading loading-dots loading-md"></div>`
-                    : html` <button class="cursor-pointer text-textBrand underline font-semibold w-max mx-auto" @click=${() => this.fetchData(this.nextFetchUrl)}>Load more</button> `
-                }
-              </tr>`
+              ${this.isLoading
+                ? html`<div class="mx-auto loading loading-dots loading-md"></div>`
+                : html` <button class="cursor-pointer text-textBrand underline font-semibold w-max mx-auto" @click=${() => this.fetchData(this.nextFetchUrl)}>Load more</button> `}
+            </div>`
           : ''}
       </div>
     `
@@ -416,15 +413,15 @@ function spanLatencyBreakdown(spans) {
 }
 
 function toggleLogRow(source) {
+  const sideView = document.querySelector('#log_details_container')
+  if (sideView.style.width === '0px') {
+    sideView.style.width = '800px'
+  }
   htmx.ajax('GET', source, { target: '#log_details_container', swap: 'innerHTML' })
 }
 
-function requestDumpLogItemUrlPath(pid, rd, colIdxMap) {
+function requestDumpLogItemUrlPath(pid, rd, colIdxMap, source) {
   const rdId = lookupVecTextByKey(rd, colIdxMap, 'id')
   const rdCreatedAt = lookupVecTextByKey(rd, colIdxMap, 'created_at') || lookupVecTextByKey(rd, colIdxMap, 'timestamp')
-
-  if (rdId && rdCreatedAt) {
-    return [`/p/${pid}/log_explorer/${rdId}/${rdCreatedAt}`, rdId]
-  }
-  return null
+  return [`/p/${pid}/log_explorer/${rdId}/${rdCreatedAt}/detailed?source=${source}`, rdId]
 }

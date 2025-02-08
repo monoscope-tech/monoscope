@@ -36,6 +36,10 @@
   }
 }
 
+.log_details_expanded {
+  width: 850px;
+}
+
 :root,
 [data-theme] {
   --backgroundPrimary: #fff;

@@ -653,6 +653,16 @@ CREATE TABLE IF NOT EXISTS apis.share_requests
 CREATE INDEX IF NOT EXISTS idx_apis_share_requests_id ON apis.share_requests(id);
 CREATE INDEX IF NOT EXISTS idx_share_requests ON apis.share_requests(request_created_at);
 
+CREATE TABLE IF NOT EXISTS apis.share_events
+ (
+    id                 UUID      NOT        NULL           DEFAULT           gen_random_uuid() PRIMARY KEY,
+    project_id         UUID      NOT        NULL           REFERENCES projects.projects (id)              ON      DELETE CASCADE,
+    created_at         TIMESTAMP WITH       TIME           ZONE       NOT               NULL              DEFAULT current_timestamp,
+    event_id           UUID      NOT        NULL,
+    event_type         TEXT      NOT        NULL,
+);
+CREATE INDEX IF NOT EXISTS idx_apis_share_events_id ON apis.share_events(id);
+
 
 CREATE TABLE IF NOT EXISTS apis.slack
 (
