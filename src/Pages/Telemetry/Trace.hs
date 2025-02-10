@@ -86,8 +86,8 @@ tracePage p = do
       serviceNames = V.fromList $ ordNub $ (.name) <$> serviceData
       serviceColors = getServiceColors serviceNames
       rootSpans = buildSpanTree p.spanRecords
-  div_ [class_ "w-full h-full p-2", id_ "trace_span_container"] $ do
-    div_ [class_ "flex flex-col w-full gap-4 h-full pb-4"] $ do
+  div_ [class_ "w-full p-2", id_ "trace_span_container"] $ do
+    div_ [class_ "flex flex-col w-full gap-4 pb-4"] $ do
       div_ [class_ "flex justify-between items-center"] do
         div_ [class_ "flex items-center gap-4"] $ do
           h3_ [class_ "whitespace-nowrap  font-semibold text-textStrong"] "Trace Breakdown"
@@ -151,7 +151,7 @@ tracePage p = do
                 h3_ [class_ "w-full flex p-3 font-medium justify-between items-center text-sm border-b"] do
                   span_ [] "Services"
                   span_ [] "Exec Time %"
-                div_ [class_ "w-full h-[200px] overflow-x-hidden  text-gray-600 overflow-y-auto c-scroll", id_ $ "services-" <> traceItem.traceId] do
+                div_ [class_ "w-full overflow-x-hidden  text-gray-600", id_ $ "services-" <> traceItem.traceId] do
                   forM_ serviceNames $ \s -> do
                     let spans = filter (\x -> x.name == s) serviceData
                         duration = sum $ (.duration) <$> spans
@@ -181,7 +181,7 @@ tracePage p = do
                 div_ [class_ "w-[550px] overflow-x-hidden py-2 relative flex flex-col gap-2", id_ $ "waterfall-" <> traceItem.traceId] pass
 
           div_ [role_ "tabpanel", class_ "a-tab-content pt-2 hidden", id_ "span_list"] do
-            div_ [class_ "border border-slate-200 w-full rounded-2xl min-h-[230px] max-h-[330px] overflow-auto overflow-x-hidden "] do
+            div_ [class_ "border border-slate-200 w-full rounded-2xl min-h-[230px] overflow-x-hidden "] do
               renderSpanListTable serviceNames serviceColors p.spanRecords
 
   let spanJson = decodeUtf8 $ AE.encode $ p.spanRecords <&> getSpanJson

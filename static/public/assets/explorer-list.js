@@ -101,10 +101,10 @@ export class LogList extends LitElement {
 
   render() {
     return html`
-      <div class="relative overflow-y-scroll overflow-x-auto w-full pb-16 min-h-full c-scroll" id="logs_list_container">
+      <div class="relative overflow-y-scroll overflow-x-hidden w-full pb-16 min-h-full c-scroll" id="logs_list_container">
         <table class="w-full table-auto ctable min-h-full table-pin-rows table-pin-cols overflow-x-hidden" style="height:1px; --rounded-box:0;">
-          <thead>
-            <tr class="text-slate-700 border-b font-medium border-y">
+          <thead class="w-full overflow-hidden">
+            <tr class="text-textStrong border-b font-medium border-y">
               ${this.logsColumns.map((column) => logTableHeading('', column))}
             </tr>
           </thead>
@@ -135,8 +135,6 @@ function logTableHeading(pid, column) {
     case 'id':
       return html`<td class="p-0 m-0 whitespace-nowrap w-3"></td>`
     case 'timestamp':
-      return tableHeadingWrapper(pid, 'timestamp', 'w-[16ch]')
-
     case 'created_at':
       return tableHeadingWrapper(pid, 'timestamp', 'w-[16ch]')
     case 'latency_breakdown':
@@ -190,7 +188,9 @@ function logItemCol(dataArr, source, colIdxMap, key, childSpansMap) {
     case 'created_at':
     case 'timestamp':
       let timestamp = lookupVecTextByKey(dataArr, colIdxMap, key)
-      return html`<time class="monospace whitespace-nowrap text-slate-600 w-[16ch]" data-tippy-content="timestamp" datetime=${timestamp}>${displayTimestamp(timestamp)}</time>`
+      return html`<div class="w-[16ch]">
+        <time class="monospace whitespace-nowrap text-slate-600 w-[16ch]" data-tippy-content="timestamp" datetime=${timestamp}>${displayTimestamp(timestamp)}</time>
+      </div>`
     case 'status_code':
       let statusCode = lookupVecTextByKey(dataArr, colIdxMap, 'status_code')
       let statusCls = getStatusColor(Number(statusCode))
@@ -219,10 +219,10 @@ function logItemCol(dataArr, source, colIdxMap, key, childSpansMap) {
       return renderBadge(statsCls, st)
     case 'span_name':
       let spanName = lookupVecTextByKey(dataArr, colIdxMap, key)
-      return renderBadge('cbadge-sm badge-neutral border  border-strokeWeak  bg-fillWeak w-[20ch]', spanName)
+      return renderBadge('cbadge-sm badge-neutral border  border-strokeWeak  bg-fillWeak', spanName)
     case 'service':
       let service = lookupVecTextByKey(dataArr, colIdxMap, key)
-      return renderBadge('cbadge-sm badge-neutral border  border-strokeWeak w-[20ch] bg-fillWeak', service)
+      return html` <div class="w-[20ch]">${renderBadge('cbadge-sm badge-neutral border  border-strokeWeak bg-fillWeak', service)}</div>`
     case 'kind':
       let kind = lookupVecTextByKey(dataArr, colIdxMap, key)
       return renderBadge('cbadge-sm badge-neutral border border-strokeWeak bg-fillWeak', kind)
@@ -377,38 +377,28 @@ function getSpanStatusColor(status) {
   )
 }
 
-function getKindColor(kind) {
-  return (
-    {
-      INTERNAL: 'badge-info',
-      SERVER: 'badge-success',
-      CLIENT: 'badge-warning',
-      PRODUCER: 'badge-success',
-      CONSUMER: 'badge-warning',
-    }[kind] || 'badge-outline'
-  )
-}
-
 function spanLatencyBreakdown(spans) {
   const totalDuration = spans.reduce((sum, sp) => sum + sp[2], 0)
-  return html` <div class="flex h-6 w-[150px]">
-    ${spans.map((sps, i) => {
-      const width = (sps[2] / totalDuration) * 150
-      const color = sps[3] || 'bg-black'
-      const roundL = i === 0 ? 'rounded-l' : ''
-      const roundR = i === spans.length - 1 ? 'rounded-r' : ''
-      const dur = getDurationNSMS(sps[2])
-      return html`
-        <div
-          class=${`h-full overflow-hidden ${roundL} ${roundR} ${color}`}
-          style=${`width:${width}px`}
-          title=${`Span name: ${sps[0]} Duration: ${dur}`}
-          data-tippy-content=${`Span name: ${sps[0]} Duration: ${dur}`}
-        >
-          <div class="h-full w-full"></div>
-        </div>
-      `
-    })}
+  return html`<div class="w-[20ch] h-4">
+    <div class="flex h-4 w-[150px]">
+      ${spans.map((sps, i) => {
+        const width = (sps[2] / totalDuration) * 150
+        const color = sps[3] || 'bg-black'
+        const roundL = i === 0 ? 'rounded-l' : ''
+        const roundR = i === spans.length - 1 ? 'rounded-r' : ''
+        const dur = getDurationNSMS(sps[2])
+        return html`
+          <div
+            class=${`h-full overflow-hidden ${roundL} ${roundR} ${color}`}
+            style=${`width:${width}px`}
+            title=${`Span name: ${sps[0]} Duration: ${dur}`}
+            data-tippy-content=${`Span name: ${sps[0]} Duration: ${dur}`}
+          >
+            <div class="h-full w-full"></div>
+          </div>
+        `
+      })}
+    </div>
   </div>`
 }
 
