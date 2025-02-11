@@ -9,12 +9,13 @@ import Lucid
 import Lucid.Htmx
 import Lucid.Hyperscript (__)
 import Models.Projects.Projects qualified as Projects
-import Models.Telemetry.Telemetry (SpanRecord (..))
+import Models.Telemetry.Telemetry (SpanRecord (..), convertSpanToRequestMessage)
 import Models.Telemetry.Telemetry qualified as Telemetry
 import NeatInterpolation (text)
 import Pages.Components (dateTime)
 import Pages.Telemetry.Utils (getErrorDetails, getRequestDetails, getServiceName, getSpanErrors)
 import Relude
+import RequestMessages (RequestMessage (..))
 import System.Types
 import Utils
 
@@ -65,7 +66,7 @@ expandedSpanItem pid sp leftM rightM = do
       div_ [class_ "flex items-center gap-4 text-sm font-medium text-slate-950"] $ do
         case reqDetails of
           Just req -> do
-            div_ [class_ "flex items-center gap-2"] do
+            div_ [class_ "flex flex-wrap items-center gap-2"] do
               whenJust reqDetails $ \case
                 ("HTTP", method, path, status) -> do
                   -- div_ [class_ "flex items-center gap-1 font-medium border border-slate-300 font-medium rounded-lg bg-fillWeaker px-2 py-1.5"] do
@@ -78,7 +79,7 @@ expandedSpanItem pid sp leftM rightM = do
                   span_ [class_ $ "px-2 py-1 rounded-lg text-sm border " <> borderColor <> " " <> methodClass] $ toHtml method
                   span_ [class_ $ "px-2 py-1 rounded-lg text-sm border " <> stBorder <> " " <> extraClass] $ toHtml $ T.take 3 $ show status
                   div_ [class_ "flex items-center"] do
-                    span_ [class_ " px-2 py-1.5 max-w-96 truncate mr-2 urlPath"] $ toHtml path
+                    span_ [class_ "shrink-1 px-2 py-1.5 max-w-96 truncate mr-2 urlPath"] $ toHtml path
                     div_ [[__| install Copy(content:.urlPath )|]] do
                       faSprite_ "copy" "regular" "h-8 w-8 border border-slate-300 bg-fillWeaker rounded-full p-2 text-slate-500"
                     a_ [href_ "", class_ "ml-1"] do
@@ -100,7 +101,7 @@ expandedSpanItem pid sp leftM rightM = do
         spanBadge (maybe "" show sp.kind) "Span Kind"
         spanBadge (maybe "" show sp.status) "Span Status"
 
-      div_ [class_ "flex gap-2 px-2 items-center text-textBrand font-medium text-xs"] do
+      div_ [class_ "flex gap-2 items-center text-textBrand font-medium text-xs"] do
         -- button_ [class_ "flex items-center gap-2"] do
         --   "Copy requests as curl"
         --   faSprite_ "copy" "regular" "w-3 h-3"
@@ -129,6 +130,30 @@ expandedSpanItem pid sp leftM rightM = do
           do
             "Generate shareable link"
             faSprite_ "link-simple" "regular" "w-3 h-3"
+
+      whenJust reqDetails $ \case
+        ("HTTP", method, path, status) -> do
+          let httpJson = convertSpanToRequestMessage sp ""
+          div_ [id_ "http-content-container", class_ "flex flex-col gap-3"] do
+            div_ [class_ "bg-fillWeak w-max rounded-lg border border-strokeWeak justify-start items-start inline-flex"] $ do
+              div_ [class_ "justify-start items-start flex text-sm"] $ do
+                button_ [onclick_ "navigatable(this, '#raw_content', '#http-content-container', 't-tab-box-active')", class_ "a-tab px-3 py-1 rounded-lg text-textWeak t-tab-box-active"] "Raw Details"
+                button_ [onclick_ "navigatable(this, '#req_content', '#http-content-container', 't-tab-box-active')", class_ "a-tab px-3 py-1 rounded-lg text-textWeak"] "Req Body"
+                button_ [onclick_ "navigatable(this, '#res_content', '#http-content-container', 't-tab-box-active')", class_ "a-tab px-3 py-1 rounded-lg text-textWeak"] "Res Body"
+                button_ [onclick_ "navigatable(this, '#hed_content', '#http-content-container', 't-tab-box-active')", class_ "a-tab px-3 py-1 rounded-lg text-textWeak"] "Headers"
+                button_ [onclick_ "navigatable(this, '#par_content', '#http-content-container', 't-tab-box-active')", class_ "a-tab px-3 py-1 rounded-lg text-textWeak"] "Params"
+            div_ [] do
+              div_ [id_ "raw_content", class_ "a-tab-content p-2 rounded-lg bg-fillWeaker border w-full overflow-x-auto c-scroll border-strokeWeak"] do
+                jsonValueToHtmlTree $ selectiveReqToJson httpJson
+              div_ [id_ "req_content", class_ "hidden a-tab-content p-2 rounded-lg bg-fillWeaker border w-full overflow-x-auto c-scroll border-strokeWeak"] do
+                jsonValueToHtmlTree $ AE.toJSON httpJson.requestBody
+              div_ [id_ "res_content", class_ "hidden a-tab-content p-2 rounded-lg bg-fillWeaker border w-full overflow-x-auto c-scroll border-strokeWeak"] do
+                jsonValueToHtmlTree $ AE.toJSON httpJson.responseBody
+              div_ [id_ "hed_content", class_ "hidden a-tab-content p-2 rounded-lg bg-fillWeaker border w-full overflow-x-auto c-scroll border-strokeWeak"] do
+                jsonValueToHtmlTree $ AE.object ["request_headers" AE..= httpJson.requestHeaders, "response_headers" AE..= httpJson.responseHeaders]
+              div_ [id_ "par_content", class_ "hidden a-tab-content p-2 rounded-lg bg-fillWeaker border w-full overflow-x-auto c-scroll border-strokeWeak"] do
+                jsonValueToHtmlTree $ AE.object ["query_params" AE..= httpJson.queryParams, "path_params" AE..= httpJson.pathParams]
+        _ -> pass
 
     div_ [class_ "w-full mt-8", id_ "span-tabs-container"] do
       let spanErrors = getSpanErrors sp
@@ -204,3 +229,27 @@ spanBadge val key = do
     ]
     $ do
       span_ [] $ toHtml val
+
+
+selectiveReqToJson :: RequestMessage -> AE.Value
+selectiveReqToJson req =
+  AE.object $
+    concat @[]
+      [ ["created_at" AE..= req.timestamp]
+      , ["errors" AE..= fromMaybe [] req.errors]
+      , ["host" AE..= req.host]
+      , ["method" AE..= req.method]
+      , ["parent_id" AE..= req.parentId]
+      , ["path_params" AE..= req.pathParams]
+      , ["query_params" AE..= req.queryParams]
+      , ["raw_url" AE..= req.rawUrl]
+      , ["referer" AE..= req.referer]
+      , ["request_body" AE..= req.requestBody]
+      , ["request_headers" AE..= req.requestHeaders]
+      , ["response_body" AE..= req.responseBody]
+      , ["response_headers" AE..= req.responseHeaders]
+      , ["service_version" AE..= req.serviceVersion]
+      , ["status_code" AE..= req.statusCode]
+      , ["tags" AE..= req.tags]
+      , ["url_path" AE..= req.urlPath]
+      ]

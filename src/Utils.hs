@@ -241,7 +241,7 @@ jsonValueToHtmlTree val = jsonValueToHtmlTree' ("", "", val)
         , term "data-field-value" $ unwrapJsonPrimValue False value
         ]
         $ a_
-          [class_ "block hover:bg-blue-50 cursor-pointer pl-6 relative log-item-field-anchor ", [__|install LogItemMenuable|]]
+          [class_ "block hover:bg-fillBrandWeak cursor-pointer pl-6 relative log-item-field-anchor ", [__|install LogItemMenuable|]]
           do
             span_ $ toHtml key
             span_ [class_ "text-blue-800"] ":"

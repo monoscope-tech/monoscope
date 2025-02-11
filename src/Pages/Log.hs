@@ -520,11 +520,15 @@ apiLogsPage page = do
               div_ [class_ "bg-iconNeutral h-[3px] w-[3px] rounded-full"] ""
               div_ [class_ "bg-iconNeutral h-[3px] w-[3px] rounded-full"] ""
 
-          div_ [class_ "relative flex flex-col overflow-y-auto h-full c-scroll transition-all duration-100 px-2", style_ "width:0px", id_ "log_details_container"] ""
+          div_ [class_ "relative flex flex-col overflow-y-auto overflow-x-hidden h-full c-scroll transition-all duration-100 px-2", style_ "width:0px", id_ "log_details_container"] ""
 
           script_
             [text|
-
+          function updateUrlState(key, value) {
+            const params = new URLSearchParams(window.location.search)
+            params.set(key, value)
+            window.history.replaceState({}, '', `$${window.location.pathname}?$${params}`)
+          }
           var logsList = null
           const logDetails = document.querySelector('#log_details_container')
           const container = document.querySelector('#logs_section_container')
@@ -556,6 +560,7 @@ apiLogsPage page = do
             mouseState = {x: event.clientX}
             const edW = Number(logDetails.style.width.replace('px',''))
             logDetails.style.width = (edW - diff) + 'px'
+            updateUrlState('details_width', log)
           }
           window.addEventListener ('mousemove', handleMouseMove)
           window.addEventListener ('mouseup', handleMouseup)

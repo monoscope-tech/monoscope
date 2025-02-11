@@ -379,13 +379,13 @@ function getSpanStatusColor(status) {
 
 function spanLatencyBreakdown(spans) {
   const totalDuration = spans.reduce((sum, sp) => sum + sp[2], 0)
-  return html`<div class="w-[20ch] h-4">
-    <div class="flex h-4 w-[150px]">
+  return html`<div class="w-[20ch] h-0 overflow-visible">
+    <div class="flex h-5 w-[200px]">
       ${spans.map((sps, i) => {
-        const width = (sps[2] / totalDuration) * 150
+        const width = (sps[2] / totalDuration) * 200
         const color = sps[3] || 'bg-black'
-        const roundL = i === 0 ? 'rounded-l' : ''
-        const roundR = i === spans.length - 1 ? 'rounded-r' : ''
+        const roundL = i === 0 ? 'rounded-l-sm' : ''
+        const roundR = i === spans.length - 1 ? 'rounded-r-sm' : ''
         const dur = getDurationNSMS(sps[2])
         return html`
           <div
@@ -406,6 +406,7 @@ function toggleLogRow(source) {
   const sideView = document.querySelector('#log_details_container')
   if (sideView.style.width === '0px') {
     sideView.style.width = '800px'
+    updateUrlState('details_width', sideView.style.width)
   }
   htmx.ajax('GET', source, { target: '#log_details_container', swap: 'innerHTML' })
 }

@@ -1,6 +1,6 @@
 # GHC_VERSION := $(shell stack ghc -- --version | awk '{print $$NF}')
 # GHC_VERSION := $(shell stack ghc -- --version | grep -o '[0-9]\+\.[0-9]\+\.[0-9]\+' | head -n 1)
-GHC_VERSION := 9.8.4
+GHC_VERSION := 9.10.1
 ARCH := $(shell uname -m | sed 's/arm64/aarch64/' | tr '[:upper:]' '[:lower:]')
 OS := $(shell uname -s | sed 's/Darwin/osx/' | tr '[:upper:]' '[:lower:]')
 OS_ARCH := $(ARCH)-$(OS)
@@ -28,12 +28,12 @@ hot-reload:
 	ghcid --command 'cabal repl --ghc-options="-w -j4"' --test ':run Start.startApp' --test ':! (sleep 1 && touch static/public/reload.trigger)'  --warnings
 
 watch:
-	# https://github.com/MercuryTechnologies/ghciwatch/issues/143 
-	# GHCI currently doesnt support non-terminating test actions like webservers. 
+	# https://github.com/MercuryTechnologies/ghciwatch/issues/143
+	# GHCI currently doesnt support non-terminating test actions like webservers.
 	# So it should be used only for checking compile time and generating static-ls actions
 	# And for repeatedly running tests on code changes
-	# ghciwatch --test-ghci Start.startApp --error-file errors.err  --before-startup-shell hpack --clear  --watch 
-	ghciwatch --error-file errors.err  --before-startup-shell hpack --clear  --watch 
+	# ghciwatch --test-ghci Start.startApp --error-file errors.err  --before-startup-shell hpack --clear  --watch
+	ghciwatch --error-file errors.err  --before-startup-shell hpack --clear  --watch
 
 
 live-test-reload:

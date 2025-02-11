@@ -25,7 +25,7 @@ import Log qualified
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
 import Models.Projects.Projects qualified as Projects
-import Models.Telemetry.Telemetry (SpanKind (..), SpanStatus (..))
+import Models.Telemetry.Telemetry (SpanKind (..), SpanStatus (..), convertSpanToRequestMessage)
 import Models.Telemetry.Telemetry qualified as Telemetry
 import Network.GRPC.HighLevel.Client as HsGRPC
 import Network.GRPC.HighLevel.Generated as HsGRPC
@@ -527,76 +527,6 @@ parseSpanStatus st = case st of
     Right Status_StatusCodeSTATUS_CODE_OK -> Just SSOk
     Right Status_StatusCodeSTATUS_CODE_ERROR -> Just SSError
     Right Status_StatusCodeSTATUS_CODE_UNSET -> Just SSUnset
-  _ -> Nothing
-
-
-convertSpanToRequestMessage :: Telemetry.SpanRecord -> Text -> RequestMessage
-convertSpanToRequestMessage sp instrumentationScope =
-  RequestMessage
-    { duration = fromInteger sp.spanDurationNs
-    , host = host
-    , method = method
-    , pathParams = pathParams
-    , projectId = sp.projectId
-    , protoMajor = 1
-    , protoMinor = 1
-    , queryParams = queryParams
-    , rawUrl = rawUrl
-    , referer = referer
-    , requestBody = requestBody
-    , requestHeaders = requestHeaders
-    , responseBody = responseBody
-    , responseHeaders = responseHeaders
-    , statusCode = status
-    , sdkType = sdkType
-    , msgId = messageId
-    , parentId = parentId
-    , errors
-    , tags = Nothing
-    , urlPath = urlPath
-    , timestamp = utcToZonedTime (TimeZone 0 False "UTC+0") sp.timestamp
-    , serviceVersion = Nothing
-    }
-  where
-    host = getSpanAttribute "net.host.name" sp.attributes
-    method = fromMaybe (fromMaybe "GET" $ getSpanAttribute "http.request.method" sp.attributes) $ getSpanAttribute "http.method" sp.attributes
-    pathParams = fromMaybe (AE.object []) (AE.decode $ encodeUtf8 $ fromMaybe "" $ getSpanAttribute "http.request.path_params" sp.attributes)
-    queryParams = fromMaybe (AE.object []) (AE.decode $ encodeUtf8 $ fromMaybe "" $ getSpanAttribute "http.request.query_params" sp.attributes)
-    errors = AE.decode $ encodeUtf8 $ fromMaybe "" $ getSpanAttribute "apitoolkit.errors" sp.attributes
-    messageId = UUID.fromText $ fromMaybe "" $ getSpanAttribute "apitoolkit.msg_id" sp.attributes
-    parentId = UUID.fromText $ fromMaybe "" $ getSpanAttribute "apitoolkit.parent_id" sp.attributes
-    referer = Just $ Left (fromMaybe "" $ getSpanAttribute "http.request.headers.referer" sp.attributes) :: Maybe (Either Text [Text])
-    requestBody = fromMaybe "" $ getSpanAttribute "http.request.body" sp.attributes
-    (requestHeaders, responseHeaders) = case sp.attributes of
-      AE.Object v -> (getValsWithPrefix "http.request.header." v, getValsWithPrefix "http.response.header." v)
-      _ -> (AE.object [], AE.object [])
-    responseBody = fromMaybe "" $ getSpanAttribute "http.response.body" sp.attributes
-    responseStatus = (readMaybe . toString =<< getSpanAttribute "http.response.status_code" sp.attributes) :: Maybe Double
-    responseStatus' = (readMaybe . toString =<< getSpanAttribute "http.status_code" sp.attributes) :: Maybe Double
-    status = round $ fromMaybe (fromMaybe 0.0 responseStatus') responseStatus
-    sdkType = RequestDumps.parseSDKType $ fromMaybe "" $ getSpanAttribute "apitoolkit.sdk_type" sp.attributes
-    urlPath' = getSpanAttribute "http.route" sp.attributes
-    undUrlPath = getSpanAttribute "url.path" sp.attributes
-    urlPath = if instrumentationScope == "@opentelemetry/instrumentation-undici" then undUrlPath else urlPath'
-    rawUrl' = fromMaybe "" $ getSpanAttribute "http.target" sp.attributes
-    rawUrl =
-      if instrumentationScope == "@opentelemetry/instrumentation-undici"
-        then fromMaybe "" undUrlPath <> fromMaybe "" (getSpanAttribute "url.query" sp.attributes)
-        else rawUrl'
-
-
-getValsWithPrefix :: Text -> AE.Object -> AE.Value
-getValsWithPrefix prefix obj = AE.object $ map (\k -> (AEK.fromText (T.replace prefix "" $ AEK.toText k), fromMaybe (AE.object []) $ KEM.lookup k obj)) keys
-  where
-    keys = filter (\k -> prefix `T.isPrefixOf` AEK.toText k) (KEM.keys obj)
-
-
-getSpanAttribute :: Text -> AE.Value -> Maybe Text
-getSpanAttribute key attr = case attr of
-  AE.Object o -> case KEM.lookup (AEK.fromText key) o of
-    Just (AE.String v) -> Just v
-    Just (AE.Number v) -> Just $ show v
-    _ -> Nothing
   _ -> Nothing
 
 

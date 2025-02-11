@@ -431,9 +431,7 @@ body {
   @apply font-bold border-[var(--brand-color)] text-[var(--brand-color)];
 }
 .t-tab-box-active {
-  @apply tab-active;
-  border: 1px solid rgba(0, 13, 77, 0.45);
-  color: #000626;
+  @apply tab-active  shadow-[0px_4px_8px_-2px_rgba(0,0,0,0.04)]  text-textStrong border border-strokeStrong bg-bgOverlay;
 }
 
 .tab:is(input[type='radio']) {
