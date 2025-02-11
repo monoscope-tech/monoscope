@@ -6,10 +6,11 @@ import Data.ByteString.Lazy qualified as BS
 import Data.Time (UTCTime)
 import Data.Time.Format (defaultTimeLocale, formatTime)
 import Data.Time.Format.ISO8601 (ISO8601 (iso8601Format), formatShow)
+import Data.Time.LocalTime (zonedTimeToUTC)
 import Data.UUID qualified as UUID
 import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
 import Lucid
-import Lucid.Htmx (hxGet_, hxSwap_, hxTrigger_)
+import Lucid.Htmx (hxGet_, hxPost_, hxSwap_, hxTarget_, hxTrigger_)
 import Lucid.Hyperscript (__)
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.Projects qualified as Projects
@@ -17,7 +18,7 @@ import Models.Telemetry.Telemetry qualified as Telemetry
 import Models.Users.Sessions qualified as Sessions
 import NeatInterpolation (text)
 import Network.URI (escapeURIString, isUnescapedInURI)
-import Pages.Components (statBox_)
+import Pages.Components (dateTime, statBox_)
 import Pages.Telemetry.Spans qualified as Spans
 import PyF (fmt)
 import Relude
@@ -44,7 +45,8 @@ expandAPIlogItemH pid rdId createdAt sourceM = do
 
 expandAPIlogItem' :: Projects.ProjectId -> RequestDumps.RequestDumpLogItem -> Bool -> Html ()
 expandAPIlogItem' pid req modal = do
-  div_ [class_ "flex flex-col w-full gap-4 pb-[100px]"] do
+  div_ [class_ "flex flex-col w-full px-4 gap-4 pb-[100px]"] do
+    div_ [class_ "flex justify-between items-center", id_ "copy_share_link"] pass
     div_ [class_ "w-full flex flex-col gap-4"] do
       let methodColor = getMethodColor req.method
           statusColor = getStatusColor req.statusCode
@@ -53,49 +55,22 @@ expandAPIlogItem' pid req modal = do
 
       div_ [class_ "flex  justify-between items-center gap-4"] do
         div_ [class_ "flex items-center gap-4"] do
-          span_ [class_ $ "flex items-center rounded-lg px-2 py-2 border font-medium gap-2 " <> borderColor <> " " <> methodColor] $ toHtml req.method
-          span_ [class_ $ "flex items-center rounded-lg px-2 py-2 border font-medium gap-2 " <> stBorder <> " " <> statusColor] $ toHtml $ show req.statusCode
-          span_ [class_ "flex items-center rounded-lg px-2 py-1 text-sm font-medium gap-2 border border-slate-300 bg-fillWeaker text-slate-600"] do
-            faSprite_ "calendar" "regular" "w-4 h-4 fill-none"
-            toHtml $ formatTime defaultTimeLocale "%b. %d, %Y %I:%M:%S %p" req.createdAt
+          span_ [class_ $ "flex items-center rounded-lg px-2 py-1 border font-medium gap-2 " <> borderColor <> " " <> methodColor] $ toHtml req.method
+          span_ [class_ $ "flex items-center rounded-lg px-2 py-1 border font-medium gap-2 " <> stBorder <> " " <> statusColor] $ toHtml $ show req.statusCode
 
-        div_ [class_ "flex items-center"] do
-          when modal do
-            div_
-              [ class_ "flex gap-2 px-4 items-center"
-              , id_ "copy_share_link"
-              ]
-              do
-                p_ [class_ "text-slate-500 font-medium"] "Expires in: "
-                div_ [class_ "relative w-max flex"] do
-                  button_
-                    [ [__|on click toggle .hidden on #expire_container|]
-                    , id_ "toggle_expires_btn"
-                    , class_ "btn px-0 flex w-[100px] nowrap justify-center gap-2 text-slate-600 font-medium items-center cursor-pointer border border-slate-300 bg-fillWeaker"
-                    ]
-                    do
-                      span_ [] "1 hour"
-                      faSprite_ "chevron-down" "regular" "h-3 w-3"
-                  div_ [id_ "expire_container", class_ "absolute hidden bg-base-100 border shadow w-full overflow-y-auto", style_ "top:100%; max-height: 300px; z-index:9"] do
-                    forM_ (["1 hour", "8 hours", "1 day"] :: [Text]) \sw -> do
-                      button_
-                        [ [__|on click set #toggle_expires_btn.firstElementChild.innerText to event.target's @data-expire-value
-                                            then set #expire_input.value to event.target's @data-expire-value
-                                            then add .hidden to #expire_container
-                                            |]
-                        , term "data-expire-value" sw
-                        , class_ "p-2 w-full text-left truncate ... hover:bg-blue-100 hover:text-black"
-                        ]
-                        $ toHtml sw
-                button_
-                  [ class_ "btn btn-primary"
-                  , term "data-req-id" (show req.id)
-                  , term "data-req-created-at" (toText $ formatTime defaultTimeLocale "%FT%T%6QZ" req.createdAt)
-                  , [__|on click set #req_id_input.value to my @data-req-id
-                              then set #req_created_at_input.value to my @data-req-created-at
-                              then call #share_log_form.requestSubmit() |]
-                  ]
-                  "Get link"
+        div_ [class_ "flex items-center gap-2"] do
+          dateTime (zonedTimeToUTC req.createdAt) Nothing
+          button_
+            [ class_ "flex items-center gap-2 text-textBrand text-sm"
+            , hxPost_ $ "/p/" <> pid.toText <> "/share/" <> UUID.toText req.id <> "?event_type=request"
+            , hxSwap_ "innerHTML"
+            , hxTarget_ "#copy_share_link"
+            ]
+            do
+              "Get share link"
+              faSprite_ "link-simple" "regular" "w-3 h-3"
+          button_ [class_ "ml-4 p-0 -mt-1", [__|on click add .hidden to #trace_expanded_view then put '0px' into  #log_details_container.style.width|]] do
+            faSprite_ "xmark" "regular" "w-3 h-3 text-textBrand"
     -- url, endpoint, latency, request size, repsonse size
     let endpointHash = toXXHash $ pid.toText <> req.host <> req.method <> req.urlPath
     let endpointURl = "/p/" <> pid.toText <> "/log_explorer/endpoint/" <> endpointHash

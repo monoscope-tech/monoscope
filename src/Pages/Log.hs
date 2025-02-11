@@ -520,7 +520,7 @@ apiLogsPage page = do
               div_ [class_ "bg-iconNeutral h-[3px] w-[3px] rounded-full"] ""
               div_ [class_ "bg-iconNeutral h-[3px] w-[3px] rounded-full"] ""
 
-          div_ [class_ "relative flex flex-col overflow-y-auto overflow-x-hidden h-full c-scroll transition-all duration-100 px-2", style_ "width:0px", id_ "log_details_container"] ""
+          div_ [class_ "relative shrink-0 flex flex-col overflow-y-auto overflow-x-hidden h-full c-scroll transition-all duration-100", style_ "width:0px", id_ "log_details_container"] ""
 
           script_
             [text|

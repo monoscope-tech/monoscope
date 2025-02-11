@@ -33,7 +33,7 @@ spanGetH pid trId spanId = do
 expandedSpanItem :: Projects.ProjectId -> Telemetry.SpanRecord -> Maybe Text -> Maybe Text -> Html ()
 expandedSpanItem pid sp leftM rightM = do
   let reqDetails = getRequestDetails sp
-  div_ [class_ "w-full pb-2 relative"] $ do
+  div_ [class_ "w-full px-2 pb-2 relative"] $ do
     div_ [class_ "flex justify-between items-center", id_ "copy_share_link"] pass
     span_ [class_ "htmx-indicator query-indicator absolute loading left-1/2 -translate-x-1/2 loading-dots absoute z-10 top-10", id_ "loading-span-list"] ""
     div_ [class_ "flex flex-col gap-4 bg-gray-50 py-2  px-2"] $ do
