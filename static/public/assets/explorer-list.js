@@ -408,7 +408,10 @@ function toggleLogRow(source) {
     sideView.style.width = '800px'
     updateUrlState('details_width', sideView.style.width)
   }
-  htmx.ajax('GET', source, { target: '#log_details_container', swap: 'innerHTML' })
+  const indicator = document.querySelector('#details_indicator')
+  indicator.classList.add('htmx-request')
+  htmx.ajax('GET', source, { target: '#log_details_container', swap: 'innerHTML', indicator: '#details_indicator' })
+  // indicator.classList.remove('htmx-request')
 }
 
 function requestDumpLogItemUrlPath(pid, rd, colIdxMap, source) {

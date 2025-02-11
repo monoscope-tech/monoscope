@@ -1,4 +1,4 @@
-module Pages.LogExplorer.LogItem (expandAPIlogItemH, expandAPIlogItem', apiLogItemH, ApiLogItem (..), ApiItemDetailed (..)) where
+module Pages.LogExplorer.LogItem (expandAPIlogItemH, expandAPIlogItem', ApiItemDetailed (..)) where
 
 import Data.Aeson qualified as AE
 import Data.Aeson.KeyMap qualified as KEM
@@ -36,16 +36,22 @@ expandAPIlogItemH pid rdId createdAt sourceM = do
       addRespHeaders $ case spanItem of
         Just spn -> SpanItemExpanded pid spn
         Nothing -> ItemDetailedNotFound "Span not found"
+    "logs" -> do
+      logItem <- Telemetry.logRecordByProjectAndId pid createdAt rdId
+      addRespHeaders $ case logItem of
+        Just req -> LogItemExpanded pid (AE.toJSON req)
+        Nothing -> ItemDetailedNotFound "Log not found"
     _ -> do
       logItemM <- dbtToEff $ RequestDumps.selectRequestDumpByProjectAndId pid createdAt rdId
       addRespHeaders $ case logItemM of
-        Just req -> LogItemExpanded pid req True
+        Just req -> RequestItemExpanded pid req True
         Nothing -> ItemDetailedNotFound "Request not found"
 
 
 expandAPIlogItem' :: Projects.ProjectId -> RequestDumps.RequestDumpLogItem -> Bool -> Html ()
 expandAPIlogItem' pid req modal = do
-  div_ [class_ "flex flex-col w-full px-4 gap-4 pb-[100px]"] do
+  div_ [class_ "relative flex flex-col w-full px-4 gap-4 pb-[100px]"] do
+    span_ [class_ "htmx-indicator query-indicator absolute loading left-1/2 -translate-x-1/2 loading-dots absoute z-10 top-10", id_ "details_indicator"] ""
     div_ [class_ "flex justify-between items-center", id_ "copy_share_link"] pass
     div_ [class_ "w-full flex flex-col gap-4"] do
       let methodColor = getMethodColor req.method
@@ -155,91 +161,34 @@ expandAPIlogItem' pid req modal = do
           jsonValueToHtmlTree req.responseHeaders
 
 
-apiLogItemH :: Projects.ProjectId -> UUID.UUID -> UTCTime -> Maybe Text -> ATAuthCtx (RespHeaders ApiLogItem)
-apiLogItemH pid rdId createdAt sourceM = do
-  let source = fromMaybe "requests" sourceM
-  _ <- Sessions.sessionAndProject pid
-  logItem <- case sourceM of
-    Just "logs" -> do
-      logItem <- Telemetry.logRecordByProjectAndId pid createdAt rdId
-      pure $ AE.toJSON <$> logItem
-    Just "spans" -> do
-      spanItem <- Telemetry.spanRecordByProjectAndId pid createdAt rdId
-      pure $ selectiveSpanToJson <$> spanItem
-    _ -> do
-      logItemM <- dbtToEff $ RequestDumps.selectRequestDumpByProjectAndId pid createdAt rdId
-      pure $ selectiveReqToJson <$> logItemM
-  addRespHeaders $ case logItem of
-    Just req -> ApiLogItem pid rdId req (requestDumpLogItemUrlPath pid rdId createdAt) source
-    Nothing -> ApiLogItemNotFound $ "Invalid " <> source <> " ID"
-
-
 requestDumpLogItemUrlPath :: Projects.ProjectId -> UUID.UUID -> UTCTime -> Text
 requestDumpLogItemUrlPath pid rdId timestamp = "/p/" <> pid.toText <> "/log_explorer/" <> UUID.toText rdId <> "/" <> fromString (formatShow iso8601Format timestamp)
 
 
-data ApiLogItem
-  = ApiLogItem Projects.ProjectId UUID.UUID AE.Value Text Text
-  | ApiLogItemNotFound Text
-
-
-instance ToHtml ApiLogItem where
-  toHtml (ApiLogItem pid logId req expandItemPath source) = toHtml $ apiLogItemView pid logId req expandItemPath source
-  toHtml (ApiLogItemNotFound message) = div_ [] $ toHtml message
-  toHtmlRaw = toHtml
-
-
 data ApiItemDetailed
-  = LogItemExpanded Projects.ProjectId RequestDumps.RequestDumpLogItem Bool
+  = RequestItemExpanded Projects.ProjectId RequestDumps.RequestDumpLogItem Bool
   | SpanItemExpanded Projects.ProjectId Telemetry.SpanRecord
+  | LogItemExpanded Projects.ProjectId AE.Value
   | ItemDetailedNotFound Text
 
 
 instance ToHtml ApiItemDetailed where
-  toHtml (LogItemExpanded pid log_item is_modal) = toHtml $ expandAPIlogItem' pid log_item is_modal
+  toHtml (RequestItemExpanded pid log_item is_modal) = toHtml $ expandAPIlogItem' pid log_item is_modal
   toHtml (SpanItemExpanded pid span_item) = toHtml $ Spans.expandedSpanItem pid span_item Nothing Nothing
+  toHtml (LogItemExpanded pid req) = toHtml $ apiLogItemView pid req
   toHtml (ItemDetailedNotFound message) = div_ [] $ toHtml message
   toHtmlRaw = toHtml
 
 
-apiLogItemView :: Projects.ProjectId -> UUID.UUID -> AE.Value -> Text -> Text -> Html ()
-apiLogItemView pid logId req expandItemPath source = do
-  let trId = case req of
-        AE.Object o -> case KEM.lookup "trace_id" o of
-          Just (AE.String trid) -> Just trid
-          _ -> Nothing
-        _ -> Nothing
-  let logItemPathDetailed = if source == "spans" then "/p/" <> pid.toText <> "/traces/" <> fromMaybe "" trId else expandItemPath <> "/detailed?source=" <> source
-  div_ [class_ "flex items-center gap-2"] do
-    when (source /= "logs") $
-      label_
-        [ class_ "btn btn-sm bg-base-100"
-        , Lucid.for_ "global-data-drawer"
-        , term
-            "_"
-            [text|on mousedown or click fetch $logItemPathDetailed
-                  then set #global-data-drawer-content.innerHTML to #loader-tmp.innerHTML
-                  then set #global-data-drawer.checked to true
-                  then set #global-data-drawer-content.innerHTML to it
-                  then htmx.process(#global-data-drawer-content) then _hyperscript.processNode(#global-data-drawer-content) then window.evalScriptsFromContent(#global-data-drawer-content)|]
-        ]
-        ("Expand" >> faSprite_ "expand" "regular" "h-3 w-3")
-
-    let reqJson = decodeUtf8 $ AE.encode req
-    when (source /= "logs" && source /= "spans") $
-      button_
-        [ class_ "btn btn-sm bg-base-100"
-        , term "data-reqJson" reqJson
-        , onclick_ "window.buildCurlRequest(event)"
-        ]
-        (span_ [] "Copy as curl" >> faSprite_ "copy" "regular" "h-3 w-3")
-
-    button_
-      [ class_ "btn btn-sm bg-base-100"
-      , onclick_ "window.downloadJson(event)"
-      , term "data-reqJson" reqJson
-      ]
-      (span_ [] "Download" >> faSprite_ "arrow-down-to-line" "regular" "h-3 w-3")
+apiLogItemView :: Projects.ProjectId -> AE.Value -> Html ()
+apiLogItemView pid req = do
+  let reqJson = decodeUtf8 $ AE.encode req
+  button_
+    [ class_ "btn btn-sm bg-base-100"
+    , onclick_ "window.downloadJson(event)"
+    , term "data-reqJson" reqJson
+    ]
+    (span_ [] "Download" >> faSprite_ "arrow-down-to-line" "regular" "h-3 w-3")
   jsonValueToHtmlTree req
 
 
