@@ -22,7 +22,6 @@ javascriptGuide apikey = do
     nextJsGuide apikey
 
 
-
 frameworks :: [Text]
 frameworks = ["Express", "Fastify", "NextJS"]
 
@@ -86,8 +85,8 @@ nextJsGuide apikey = do
     div_ [class_ "w-full flex flex-col gap-2"] do
       h3_ [class_ "text-2xl font-semibold"] "Open Telemetry SDK Configuration"
       p_ [class_ "text-gray-600 font-medium"] "Set the neccessary environment variables to configure the SDK"
-      codeExample $
-        [text|
+      codeExample
+        $ [text|
 OTEL_EXPORTER_OTLP_ENDPOINT="http://otelcol.apitoolkit.io:4318"
 OTEL_SERVICE_NAME="my-service" # Specifies the name of the service.
 OTEL_RESOURCE_ATTRIBUTES="at-project-key=$apikey"

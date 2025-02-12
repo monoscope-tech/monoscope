@@ -93,21 +93,21 @@ page = do
     body_ [class_ "h-screen"] do
       div_ [c "w-full h-full bg-white justify-start items-start inline-flex overflow-hidden"] $ do
         -- Left sidebar
-        div_ [c "w-[68px] h-full self-stretch bg-white justify-start items-start flex"] $
-          div_ [c "grow shrink basis-0 self-stretch bg-white border-r border-[#e9e9eb] flex-col justify-between items-start inline-flex"] $
-            do
-              -- Top icon section
-              div_ [c "self-stretch h-[318px] pt-5 flex-col justify-start items-start gap-4 flex"] $ do
-                div_ [c "self-stretch h-8 px-3 flex-col justify-start items-center flex"] $
-                  img_ [c "w-8 h-8", src_ "https://via.placeholder.com/32x32"]
-                div_ [c "self-stretch h-[250px] px-3 flex-col justify-start items-center gap-0.5 flex"] $
-                  ""
+        div_ [c "w-[68px] h-full self-stretch bg-white justify-start items-start flex"]
+          $ div_ [c "grow shrink basis-0 self-stretch bg-white border-r border-[#e9e9eb] flex-col justify-between items-start inline-flex"]
+          $ do
+            -- Top icon section
+            div_ [c "self-stretch h-[318px] pt-5 flex-col justify-start items-start gap-4 flex"] $ do
+              div_ [c "self-stretch h-8 px-3 flex-col justify-start items-center flex"]
+                $ img_ [c "w-8 h-8", src_ "https://via.placeholder.com/32x32"]
+              div_ [c "self-stretch h-[250px] px-3 flex-col justify-start items-center gap-0.5 flex"]
+                $ ""
 
-              -- Bottom icon section
-              div_ [c "self-stretch px-3 pb-5 flex-col justify-start items-center gap-4 flex"] $ do
-                div_ [c "flex-col justify-start items-start gap-0.5 flex"] $
-                  ""
-                userStatusIcon
+            -- Bottom icon section
+            div_ [c "self-stretch px-3 pb-5 flex-col justify-start items-center gap-4 flex"] $ do
+              div_ [c "flex-col justify-start items-start gap-0.5 flex"]
+                $ ""
+              userStatusIcon
 
         -- Main content area
         div_ [c "group/pg grow shrink overflow-y-scroll basis-0 self-stretch bg-white flex-col justify-start items-center gap-8 flex flex-col"] $ do

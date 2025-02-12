@@ -4,7 +4,7 @@ module Pages.Charts.Charts (chartsGetH, ChartType (..), lazy, ChartExp (..), Que
 
 import Data.Aeson qualified as AE
 import Data.Text qualified as T
-import Data.Time (UTCTime, diffUTCTime, addUTCTime)
+import Data.Time (UTCTime, addUTCTime, diffUTCTime)
 import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
 import Data.Tuple.Extra (fst3, snd3, thd3)
 import Data.UUID qualified as UUID
