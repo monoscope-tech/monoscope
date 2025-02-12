@@ -659,7 +659,8 @@ CREATE TABLE IF NOT EXISTS apis.share_events
     project_id         UUID      NOT        NULL           REFERENCES projects.projects (id)              ON      DELETE CASCADE,
     created_at         TIMESTAMP WITH       TIME           ZONE       NOT               NULL              DEFAULT current_timestamp,
     event_id           UUID      NOT        NULL,
-    event_type         TEXT      NOT        NULL
+    event_type         TEXT      NOT        NULL,
+    event_created_at   TIMESTAMP WITH TIME ZONE NOT NULL,
 );
 CREATE INDEX IF NOT EXISTS idx_apis_share_events_projectid_id ON apis.share_events(project_id)
 

@@ -4,6 +4,8 @@ import Data.Aeson qualified as AE
 import Data.Effectful.UUID qualified as UUID
 import Data.HashMap.Strict qualified as HM
 import Data.Text qualified as T
+import Data.Time (formatTime)
+import Data.Time.Format (defaultTimeLocale)
 import Data.Vector qualified as V
 import Lucid
 import Lucid.Htmx
@@ -122,9 +124,10 @@ expandedSpanItem pid sp leftM rightM = do
             "View parent trace"
             faSprite_ "cross-hair" "regular" "w-4 h-4"
         let sp_id = UUID.toText sp.uSpanId
+        let createdAt = toText $ formatTime defaultTimeLocale "%Y-%m-%dT%H:%M:%S%6QZ" $ sp.timestamp
         button_
           [ class_ "flex items-center gap-2"
-          , hxPost_ $ "/p/" <> pid.toText <> "/share/" <> sp_id <> "?event_type=span"
+          , hxPost_ $ "/p/" <> pid.toText <> "/share/" <> sp_id <> "/" <> createdAt <> "?event_type=span"
           , hxSwap_ "innerHTML"
           , hxTarget_ "#copy_share_link"
           ]

@@ -1,5 +1,6 @@
 module Pages.Share (ReqForm (..), shareLinkPostH, shareLinkGetH, ShareLinkGet (..), ShareLinkPost (..)) where
 
+import Data.Aeson qualified as AE
 import Data.Default (def)
 import Data.Time (UTCTime, getZonedTime)
 import Data.UUID qualified as UUID
@@ -12,12 +13,14 @@ import Lucid
 import Lucid.Hyperscript (__)
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.Projects qualified as Projects
+import Models.Telemetry.Telemetry qualified as Telemetry
 import Pages.BodyWrapper (BWConfig, PageCtx (..), currProject, pageTitle, sessM)
 import Pages.LogExplorer.LogItem qualified as LogItem
+import Pages.Telemetry.Spans qualified as Spans
 import Pkg.Components (navBar)
 import Relude
 import System.Types (ATAuthCtx, ATBaseCtx, RespHeaders, addErrorToast, addRespHeaders)
-import Utils (faSprite_)
+import Utils (faSprite_, jsonValueToHtmlTree)
 import Web.FormUrlEncoded (FromForm)
 
 
@@ -30,18 +33,17 @@ data ReqForm = ReqForm
   deriving anyclass (FromForm)
 
 
-shareLinkPostH :: Projects.ProjectId -> UUID.UUID -> Maybe Text -> ATAuthCtx (RespHeaders ShareLinkPost)
-shareLinkPostH pid eventId reqTypeM = do
-  currentTime <- liftIO getZonedTime
+shareLinkPostH :: Projects.ProjectId -> UUID.UUID -> UTCTime -> Maybe Text -> ATAuthCtx (RespHeaders ShareLinkPost)
+shareLinkPostH pid eventId createdAt reqTypeM = do
   let eventType = fromMaybe "request" reqTypeM
   shareId <- liftIO UUIDV4.nextRandom
   res <-
     dbtToEff $
       execute
         Insert
-        [sql| INSERT INTO apis.share_events (id, project_id, event_id, event_type)
-                              VALUES (?,?,?,?) |]
-        (shareId, pid, eventId, eventType)
+        [sql| INSERT INTO apis.share_events (id, project_id, event_id, event_type, event_created_at)
+                              VALUES (?,?,?,?,?) |]
+        (shareId, pid, eventId, eventType, createdAt)
   addRespHeaders $ ShareLinkPost $ show shareId
 
 
@@ -90,19 +92,38 @@ copyLink rid = do
 shareLinkGetH :: UUID.UUID -> ATBaseCtx ShareLinkGet
 shareLinkGetH sid = do
   -- FIXME: handle errors
-  reqM <- dbtToEff $ do
-    Just (createdAt, rId, pId) <- queryOne Select [sql|SELECT request_created_at, request_dump_id, project_id FROM apis.share_requests where id=? limit 1|] (Only sid)
-    RequestDumps.selectRequestDumpByProjectAndId pId createdAt rId
+  r <- dbtToEff $ queryOne Select [sql|SELECT project_id, event_id, event_type, event_created_at FROM apis.share_events where id=? and created_at > current_timestamp - interval '48 hours' limit 1|] (Only sid)
+  uiM <- do
+    case r of
+      Just (pid, eventId, eventType, createdAt) -> do
+        case eventType of
+          "span" -> do
+            spanItem <- Telemetry.spanRecordByProjectAndId pid createdAt eventId
+            pure case spanItem of
+              Just spn -> Just $ Spans.expandedSpanItem pid spn Nothing Nothing
+              Nothing -> Nothing
+          "log" -> do
+            logItem <- Telemetry.logRecordByProjectAndId pid createdAt eventId
+            pure case logItem of
+              Just req -> Just $ apiLogItemView pid (AE.toJSON req)
+              Nothing -> Nothing
+          _ -> do
+            reqM <- dbtToEff $ RequestDumps.selectRequestDumpByProjectAndId pid createdAt eventId
+            pure case reqM of
+              Just rq -> Just $ LogItem.expandAPIlogItem' rq.projectId rq False
+              Nothing -> Nothing
+      Nothing -> pure Nothing
+
   let bwconf =
         (def :: BWConfig)
           { sessM = Nothing
           , currProject = Nothing
           , pageTitle = "Share request log"
           }
-  pure $ ShareLinkGet $ PageCtx bwconf reqM
+  pure $ ShareLinkGet $ PageCtx bwconf uiM
 
 
-newtype ShareLinkGet = ShareLinkGet (PageCtx (Maybe RequestDumps.RequestDumpLogItem))
+newtype ShareLinkGet = ShareLinkGet (PageCtx (Maybe (Html ())))
 
 
 instance ToHtml ShareLinkGet where
@@ -110,13 +131,25 @@ instance ToHtml ShareLinkGet where
   toHtmlRaw = toHtml
 
 
-sharePage :: Maybe RequestDumps.RequestDumpLogItem -> Html ()
+sharePage :: Maybe (Html ()) -> Html ()
 sharePage req = do
   navBar
   section_ [class_ "h-full mt-[80px] w-[1000px] flex flex-col items-center mx-auto"] do
-    h3_ [class_ "text-5xl text-left mb-16 w-full font-semibold my-8"] "Shared Request Log"
+    h3_ [class_ "text-3xl text-left mb-16 w-full font-semibold text-textStrong my-8"] "Shared event"
     case req of
-      Just r -> LogItem.expandAPIlogItem' r.projectId r False
+      Just r -> r
       Nothing -> div_ [class_ "flex flex-col gap-4 mt-[80px] text-center"] do
-        h1_ [class_ "font-bold text-3xl"] "Request Log Not Found"
+        h1_ [class_ "font-bold text-3xl"] "Event Not Found"
         p_ [class_ "text-gray-500 text-xl"] "This shared request log URL does not exist or has expired"
+
+
+apiLogItemView :: Projects.ProjectId -> AE.Value -> Html ()
+apiLogItemView pid req = do
+  let reqJson = decodeUtf8 $ AE.encode req
+  button_
+    [ class_ "btn btn-sm bg-base-100"
+    , onclick_ "window.downloadJson(event)"
+    , term "data-reqJson" reqJson
+    ]
+    (span_ [] "Download" >> faSprite_ "arrow-down-to-line" "regular" "h-3 w-3")
+  jsonValueToHtmlTree req

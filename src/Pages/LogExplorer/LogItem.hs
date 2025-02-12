@@ -66,9 +66,10 @@ expandAPIlogItem' pid req modal = do
 
         div_ [class_ "flex items-center gap-2"] do
           dateTime (zonedTimeToUTC req.createdAt) Nothing
+          let createdAt = toText $ formatTime defaultTimeLocale "%Y-%m-%dT%H:%M:%S%6QZ" req.createdAt
           button_
             [ class_ "flex items-center gap-2 text-textBrand text-sm"
-            , hxPost_ $ "/p/" <> pid.toText <> "/share/" <> UUID.toText req.id <> "?event_type=request"
+            , hxPost_ $ "/p/" <> pid.toText <> "/share/" <> UUID.toText req.id <> "/" <> createdAt <> "?event_type=request"
             , hxSwap_ "innerHTML"
             , hxTarget_ "#copy_share_link"
             ]
