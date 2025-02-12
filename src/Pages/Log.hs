@@ -137,8 +137,8 @@ apiLogH pid queryM queryASTM cols' cursorM' sinceM fromM toM layoutM sourceM tar
             if source == "spans"
               then V.map (\v -> lookupVecTextByKey v colIdxMap "latency_breakdown") requestVecs
               else []
-          nextLogsURL = RequestDumps.requestDumpLogUrlPath pid queryM cols' reqLastCreatedAtM sinceM fromM toM (Just "loadmore") source
-          resetLogsURL = RequestDumps.requestDumpLogUrlPath pid queryM cols' Nothing Nothing Nothing Nothing Nothing source
+          nextLogsURL = RequestDumps.requestDumpLogUrlPath pid queryM cols' reqLastCreatedAtM sinceM fromM toM (Just "loadmore") source queryASTM
+          resetLogsURL = RequestDumps.requestDumpLogUrlPath pid queryM cols' Nothing Nothing Nothing Nothing Nothing source Nothing
       childSpans <- Telemetry.getChildSpans pid (V.catMaybes childSpanIds)
       let page =
             ApiLogsPageData
@@ -194,7 +194,7 @@ data LogsGet
 instance ToHtml LogsGet where
   toHtml (LogPage (PageCtx conf pa_dat)) = toHtml $ PageCtx conf $ apiLogsPage pa_dat
   toHtml (LogsGetRows pid requestVecs cols colIdxMap nextLogsURL source chSpns) = toHtml $ logItemRows_ pid requestVecs cols colIdxMap nextLogsURL source chSpns
-  toHtml (LogsGetResultTable page bol) = toHtml $ resultTable_ page bol
+  toHtml (LogsGetResultTable page bol) = toHtml $ virtualTable page
   toHtml (LogsGetErrorSimple err) = span_ [class_ "text-red-500"] $ toHtml err
   toHtml (LogsGetError (PageCtx conf err)) = toHtml $ PageCtx conf err
   toHtml (LogsQueryLibrary pid queryLibSaved queryLibRecent) = toHtml $ queryLibrary_ pid queryLibSaved queryLibRecent
@@ -231,8 +231,8 @@ apiLogJson pid queryM queryASTM cols' cursorM' sinceM fromM toM layoutM sourceM 
             if source == "spans"
               then V.map (\v -> lookupVecTextByKey v colIdxMap "latency_breakdown") requestVecs
               else []
-          nextLogsURL = RequestDumps.requestDumpLogUrlPath pid queryM cols' reqLastCreatedAtM sinceM fromM toM (Just "loadmore") source
-          resetLogsURL = RequestDumps.requestDumpLogUrlPath pid queryM cols' Nothing Nothing Nothing Nothing Nothing source
+          nextLogsURL = RequestDumps.requestDumpLogUrlPath pid queryM cols' reqLastCreatedAtM sinceM fromM toM (Just "loadmore") source queryASTM
+          resetLogsURL = RequestDumps.requestDumpLogUrlPath pid queryM cols' Nothing Nothing Nothing Nothing Nothing source Nothing
       childSpans <- Telemetry.getChildSpans pid (V.catMaybes childSpanIds)
       let colors = getServiceColors $ (.spanName) <$> childSpans
           childSps =
@@ -421,6 +421,34 @@ data ApiLogsPageData = ApiLogsPageData
   }
 
 
+virtualTable :: ApiLogsPageData -> Html ()
+virtualTable page = do
+  let colors = getServiceColors $ (.spanName) <$> page.childSpans
+      childSps =
+        ( map
+            ( \sp ->
+                let name = AE.String sp.spanName
+                    parentId = AE.String $ fromMaybe "" sp.parentSpanId
+                    duration = AE.Number $ fromIntegral sp.spanDurationNs
+                    color = AE.String $ fromMaybe "bg-black" $ HM.lookup sp.spanName colors
+                 in AE.toJSON ([name, parentId, duration, color] :: [AE.Value])
+            )
+            $ V.toList page.childSpans
+        )
+  termRaw
+    "log-list"
+    [ id_ "resultTable"
+    , class_ "w-full divide-y flex flex-col h-full overflow-y-hidden overflow-x-auto"
+    , term "data-results" (decodeUtf8 $ AE.encode page.requestVecs)
+    , term "data-columns" (decodeUtf8 $ AE.encode page.cols)
+    , term "data-colIdxMap" (decodeUtf8 $ AE.encode page.colIdxMap)
+    , term "data-childSpans" (decodeUtf8 $ AE.encode childSps)
+    , term "data-nextfetchurl" page.nextLogsURL
+    , term "data-projectid" page.pid.toText
+    ]
+    ("" :: Text)
+
+
 apiLogsPage :: ApiLogsPageData -> Html ()
 apiLogsPage page = do
   script_ [type_ "module", src_ "/public/assets/explorer-list.js"] ("" :: Text)
@@ -484,33 +512,11 @@ apiLogsPage page = do
         --     input_ [type_ "checkbox", class_ "toggle-filters hidden", checked_]
         --   span_ [class_ "text-slate-200"] "|"
         -- div_ [class_ "divide-y flex flex-col  overflow-hidden"] $ resultTableAndMeta_ page
-        let colors = getServiceColors $ (.spanName) <$> page.childSpans
-            childSps =
-              ( map
-                  ( \sp ->
-                      let name = AE.String sp.spanName
-                          parentId = AE.String $ fromMaybe "" sp.parentSpanId
-                          duration = AE.Number $ fromIntegral sp.spanDurationNs
-                          color = AE.String $ fromMaybe "bg-black" $ HM.lookup sp.spanName colors
-                       in AE.toJSON ([name, parentId, duration, color] :: [AE.Value])
-                  )
-                  $ V.toList page.childSpans
-              )
         div_ [class_ "flex items-start h-full", id_ "logs_section_container"] do
           div_ [class_ "relative flex items-start w-full h-full", id_ "logs_list_container"] do
             div_ [class_ "absolute top-0 right-0 hidden w-full h-full overflow-scroll c-scroll z-50 bg-white transition-all duration-100", id_ "trace_expanded_view"] pass
-            termRaw
-              "log-list"
-              [ id_ "logsList"
-              , class_ "w-full divide-y flex flex-col h-full overflow-y-hidden overflow-x-auto"
-              , term "data-results" (decodeUtf8 $ AE.encode page.requestVecs)
-              , term "data-columns" (decodeUtf8 $ AE.encode page.cols)
-              , term "data-colIdxMap" (decodeUtf8 $ AE.encode page.colIdxMap)
-              , term "data-childSpans" (decodeUtf8 $ AE.encode childSps)
-              , term "data-nextfetchurl" page.nextLogsURL
-              , term "data-projectid" page.pid.toText
-              ]
-              ("" :: Text)
+            virtualTable page
+
           div_ [onmousedown_ "mouseDown(event)", class_ "relative shrink-0 h-full flex items-center justify-center w-1 bg-fillWeak  cursor-ew-resize overflow-visible"] do
             div_ [onmousedown_ "mouseDown(event)", id_ "resizer", class_ "absolute left-1/2 top-1/2 z-[999] -translate-x-1/2  px-1 py-1 -translate-y-1/2 w-max bg-slate-50 rounded border border-strokeBrand-weak grid grid-cols-2 gap-1"] do
               div_ [class_ "bg-iconNeutral h-[3px] w-[3px] rounded-full"] ""

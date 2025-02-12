@@ -18,7 +18,7 @@ export class LogList extends LitElement {
 
   constructor() {
     super()
-    const container = document.querySelector('#logsList')
+    const container = document.querySelector('#resultTable')
     this.logsData = JSON.parse(container.dataset.results)
     this.hasMore = this.logsData.length > 199
     this.logsColumns = JSON.parse(container.dataset.columns)

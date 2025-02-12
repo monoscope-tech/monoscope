@@ -371,8 +371,8 @@ data RequestDumpLogItem = RequestDumpLogItem
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] RequestDumpLogItem
 
 
-requestDumpLogUrlPath :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Text -> Text
-requestDumpLogUrlPath pid q cols cursor since fromV toV layout source =
+requestDumpLogUrlPath :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Text -> Maybe Text -> Text
+requestDumpLogUrlPath pid q cols cursor since fromV toV layout source queryASTM =
   "/p/" <> pid.toText <> "/log_explorer/json?" <> T.intercalate "&" params
   where
     params =
@@ -384,6 +384,7 @@ requestDumpLogUrlPath pid q cols cursor since fromV toV layout source =
         , fmap ("from=" <>) (toQueryParam <$> fromV)
         , fmap ("to=" <>) (toQueryParam <$> toV)
         , fmap ("layout=" <>) (toQueryParam <$> layout)
+        , fmap ("queryAST=" <>) (toQueryParam <$> queryASTM)
         , Just ("source=" <> toQueryParam source)
         ]
 
