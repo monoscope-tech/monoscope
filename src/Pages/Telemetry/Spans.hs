@@ -40,23 +40,23 @@ expandedSpanItem pid sp leftM rightM = do
     div_ [class_ "flex flex-col gap-4 bg-gray-50 py-2  px-2"] $ do
       div_ [class_ "flex justify-between items-center"] do
         div_ [class_ "flex items-center gap-4"] $ do
-          div_ [class_ "flex relative flex-col items-center justify-center"] do
-            span_
-              [ class_ "cursor-pointer absolute -top-[18px] h-max text-textWeak"
-              , hxGet_ $ "/p/" <> pid.toText <> "/traces/" <> sp.traceId <> "/?span_id="
-              , hxSwap_ "innerHTML"
-              , hxTarget_ "#trace_span_container"
-              , hxTrigger_ "click"
-              ]
-              $ faSprite_ "p-chevron-up" "regular" "w-5 h-5"
-            span_
-              [ class_ "cursor-pointer absolute w-max -bottom-[18px] h-max text-textWeak"
-              , hxGet_ $ "/p/" <> pid.toText <> "/traces/" <> sp.traceId <> "/?span_id="
-              , hxSwap_ "innerHTML"
-              , hxTarget_ "#trace_span_container"
-              , hxTrigger_ "click"
-              ]
-              $ faSprite_ "p-chevron-down" "regular" "w-5 h-5"
+          -- div_ [class_ "flex relative flex-col items-center justify-center"] do
+          --   span_
+          --     [ class_ "cursor-pointer absolute -top-[18px] h-max text-textWeak"
+          --     , hxGet_ $ "/p/" <> pid.toText <> "/traces/" <> sp.traceId <> "/?span_id="
+          --     , hxSwap_ "innerHTML"
+          --     , hxTarget_ "#trace_span_container"
+          --     , hxTrigger_ "click"
+          --     ]
+          --     $ faSprite_ "p-chevron-up" "regular" "w-5 h-5"
+          --   span_
+          --     [ class_ "cursor-pointer absolute w-max -bottom-[18px] h-max text-textWeak"
+          --     , hxGet_ $ "/p/" <> pid.toText <> "/traces/" <> sp.traceId <> "/?span_id="
+          --     , hxSwap_ "innerHTML"
+          --     , hxTarget_ "#trace_span_container"
+          --     , hxTrigger_ "click"
+          --     ]
+          --     $ faSprite_ "p-chevron-down" "regular" "w-5 h-5"
           h3_ [class_ "whitespace-nowrap font-semibold text-textStrong"] "Trace Span"
         div_ [class_ "flex gap-4 items-center"] $ do
           dateTime sp.startTime Nothing

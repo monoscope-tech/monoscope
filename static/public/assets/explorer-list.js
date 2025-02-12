@@ -13,6 +13,7 @@ export class LogList extends LitElement {
     isError: { type: Boolean },
     fetchError: { type: String },
     projectId: { type: String },
+    canLoadMore: { type: Boolean },
   }
 
   constructor() {
@@ -39,6 +40,7 @@ export class LogList extends LitElement {
     this.isError = false
     this.logItemRow = this.logItemRow.bind(this)
     this.fetchData = this.fetchData.bind(this)
+    this.canLoadMore = false
   }
 
   firstUpdated() {
@@ -52,7 +54,9 @@ export class LogList extends LitElement {
       { threshold: 0.5 }
     )
     if (loader) {
-      observer.observe(loader)
+      window.setTimeout(() => {
+        observer.observe(loader)
+      }, 3000)
     } else {
       console.log('loader not found', loader)
     }
@@ -99,16 +103,63 @@ export class LogList extends LitElement {
     this.requestUpdate()
   }
 
+  hideColumn(column) {
+    this.logsColumns = this.logsColumns.filter((col) => col !== column)
+  }
+
+  tableHeadingWrapper(pid, title, column, classes) {
+    return html`
+      <td class=${'cursor-pointer p-0 m-0 whitespace-nowrap ' + classes ? classes : ''}>
+        <span class="text-slate-200">|</span>
+        <div class="dropdown pl-2" data-tippy-content=${title}>
+          <div tabindex="0" role="button" class="py-1">
+            ${title}
+            <span class="ml-1 p-0.5 border border-slate-200 rounded inline-flex"> ${faSprite('chevron-down', 'regular', 'w-3 h-3')} </span>
+          </div>
+          <ul tabindex="0" class="dropdown-content z-[1] menu p-2 shadow bg-bgBase rounded-box min-w-[15rem]">
+            <li>
+              <button @click=${() => this.hideColumn(column)}>Hide column</button>
+            </li>
+          </ul>
+        </div>
+      </td>
+    `
+  }
+
+  logTableHeading(pid, column) {
+    switch (column) {
+      case 'id':
+        return html`<td class="p-0 m-0 whitespace-nowrap w-3"></td>`
+      case 'timestamp':
+      case 'created_at':
+        return this.tableHeadingWrapper(pid, 'timestamp', column, 'w-[16ch]')
+      case 'latency_breakdown':
+        return this.tableHeadingWrapper(pid, 'latency_breakdown', column, 'w-[20ch]')
+      case 'status_code':
+        return this.tableHeadingWrapper(pid, 'status', column)
+      case 'service':
+        return this.tableHeadingWrapper(pid, 'service', column, 'w-[20ch]')
+      case 'rest':
+        return this.tableHeadingWrapper(pid, 'summary', column)
+      default:
+        return this.tableHeadingWrapper(pid, column, column)
+    }
+  }
+  handleVirtualListEvent(e) {
+    console.log('The first visible index is', e.firstVisible)
+    console.log('The last visible index is', e.lastVisible)
+    this.canLoadMore = true
+  }
   render() {
     return html`
       <div class="relative overflow-y-scroll overflow-x-hidden w-full pb-16 min-h-full c-scroll" id="logs_list_container">
         <table class="w-full table-auto ctable min-h-full table-pin-rows table-pin-cols overflow-x-hidden" style="height:1px; --rounded-box:0;">
           <thead class="w-full overflow-hidden">
             <tr class="text-textStrong border-b font-medium border-y">
-              ${this.logsColumns.map((column) => logTableHeading('', column))}
+              ${this.logsColumns.map((column) => this.logTableHeading('', column))}
             </tr>
           </thead>
-          <tbody class="w-full log-item-table-body">
+          <tbody class="w-full log-item-table-body" @rangechanged=${(e) => this.handleVirtualListEvent(e)}>
             ${virtualize({
               items: this.logsData,
               renderItem: this.logItemRow,
@@ -148,26 +199,6 @@ function logTableHeading(pid, column) {
     default:
       return tableHeadingWrapper(pid, column)
   }
-}
-
-function tableHeadingWrapper(pid, title, classes, child) {
-  return html`
-    <td class=${'cursor-pointer p-0 m-0 whitespace-nowrap ' + classes ? classes : ''}>
-      <span class="text-slate-200">|</span>
-      <div class="dropdown pl-2" data-tippy-content=${title}>
-        <div tabindex="0" role="button" class="py-1">
-          ${title}
-          <span class="ml-1 p-0.5 border border-slate-200 rounded inline-flex"> ${faSprite('chevron-down', 'regular', 'w-3 h-3')} </span>
-        </div>
-        <ul tabindex="0" class="dropdown-content z-[1] menu p-2 shadow bg-bgBase rounded-box min-w-[15rem]">
-          <li class="underline underline-offset-2">${title}</li>
-          <li>
-            <a> Hide column </a>
-          </li>
-        </ul>
-      </div>
-    </td>
-  `
 }
 
 customElements.define('log-list', LogList)
@@ -405,7 +436,7 @@ function spanLatencyBreakdown(spans) {
 function toggleLogRow(source) {
   const sideView = document.querySelector('#log_details_container')
   if (sideView.style.width === '0px') {
-    sideView.style.width = '800px'
+    sideView.style.width = '550px'
     updateUrlState('details_width', sideView.style.width)
   }
   const indicator = document.querySelector('#details_indicator')

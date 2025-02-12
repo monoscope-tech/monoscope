@@ -561,7 +561,7 @@ apiLogsPage page = do
             mouseState = {x: event.clientX}
             const edW = Number(logDetails.style.width.replace('px',''))
             logDetails.style.width = (edW - diff) + 'px'
-            updateUrlState('details_width', log)
+            updateUrlState('details_width', logDetails.style.width)
           }
           window.addEventListener ('mousemove', handleMouseMove)
           window.addEventListener ('mouseup', handleMouseup)
