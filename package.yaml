@@ -160,7 +160,7 @@ library:
     - servant-lucid
     - servant-server
     - text
-    - text-display
+    - text-display == 0.0.5.2
     - unliftio
     - time
     - unordered-containers

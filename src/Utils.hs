@@ -79,7 +79,6 @@ import Servant
 import Text.Printf (printf)
 import Text.Regex.TDFA ((=~))
 import Text.Show
-import Witch.From
 
 
 -- Added only for satisfying the tests

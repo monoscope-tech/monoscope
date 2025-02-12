@@ -302,7 +302,7 @@ library
     , strict-containers
     , template-haskell
     , text
-    , text-display
+    , text-display ==0.0.5.2
     , time
     , tmp-postgres
     , unliftio
