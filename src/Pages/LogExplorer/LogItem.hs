@@ -115,13 +115,15 @@ expandAPIlogItem' pid req modal = do
         jsonValueToHtmlTree req.errors
 
     -- outgoing request details
-    div_ [class_ "flex w-full flex-col gap-1"] do
-      p_ [class_ "font-medium text-slate-950 mb-2"] "Outgoing requests"
-      div_ [class_ "grow rounded-3xl border border-slate-200 overflow-y-auto py-2 px-1 max-h-[500px] whitespace-nowrap  divide-y overflow-x-hidden"] do
-        let createdAt = toText $ formatTime defaultTimeLocale "%FT%T%6QZ" req.createdAt
-        let escapedQueryPartial = toText $ escapeURIString isUnescapedInURI $ toString [fmt|parent_id=="{UUID.toText req.id}" AND created_at<="{createdAt}"|]
-        let events_url = "/p/" <> pid.toText <> "/log_explorer?layout=resultTable&query=" <> escapedQueryPartial
-        div_ [hxGet_ events_url, hxTrigger_ "intersect once", hxSwap_ "outerHTML"] $ span_ [class_ "loading loading-dots loading-md"] ""
+    -- div_ [class_ "flex w-full flex-col gap-1"] do
+    --   p_ [class_ "font-medium text-slate-950 mb-2"] "Outgoing requests"
+    --   div_ [class_ "grow rounded-3xl border border-slate-200 overflow-y-auto py-2 px-1 max-h-[500px] whitespace-nowrap  divide-y overflow-x-hidden"] do
+    --     let createdAt = toText $ formatTime defaultTimeLocale "%FT%T%6QZ" req.createdAt
+    --     let escapedQueryPartial = toText $ escapeURIString isUnescapedInURI $ toString [fmt|parent_id=="{UUID.toText req.id}" AND created_at<="{createdAt}"|]
+    --         parentId = UUID.toText req.id
+    --         escapedQueryAST = [text|%5B%7B"tag"%3A"Search"%2C"contents"%3A%7B"tag"%3A"And"%2C"contents"%3A%5B%7B"tag"%3A"Eq"%2C"contents"%3A%5B"parent_id"%2C"$parentId"%5D%7D%2C%7B"tag"%3A"LTEq"%2C"contents"%3A%5B"created_at"%2C"$createdAt"%5D%7D%5D%7D%7D%5D|]
+    --         events_url = "/p/" <> pid.toText <> "/log_explorer?layout=resultTable&query=" <> escapedQueryPartial <> "&queryAST=" <> escapedQueryAST
+    --     div_ [hxGet_ events_url, hxTrigger_ "intersect once", hxSwap_ "outerHTML"] $ span_ [class_ "loading loading-dots loading-md"] ""
 
     -- request details
     div_ [class_ "mt-8", id_ "req-tabs-container"] do
