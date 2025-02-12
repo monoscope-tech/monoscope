@@ -1,6 +1,5 @@
 module Pages.IntegrationDemos.Javascript (javascriptGuide, expressGuide, fastifyGuide, nextJsGuide) where
 
-import Data.Text qualified as T
 import Lucid
 import NeatInterpolation (text)
 import Pkg.Components
@@ -22,9 +21,6 @@ javascriptGuide apikey = do
     fastifyGuide apikey
     nextJsGuide apikey
 
-
-features :: [Text]
-features = ["API Tracking", "Logs", "Traces", "Error Reporting", "Outgoing Request Monitoring"]
 
 
 frameworks :: [Text]

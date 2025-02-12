@@ -33,7 +33,6 @@ module Models.Projects.Projects (
 )
 where
 
-import Data.Aeson (FromJSON)
 import Data.Aeson qualified as AE
 import Data.Default
 import Data.Time (UTCTime, ZonedTime)
