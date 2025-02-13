@@ -94,8 +94,8 @@ createUser :: (Time :> es, UUIDEff :> es) => Text -> Text -> Text -> Text -> Eff
 createUser firstName lastName picture email = do
   uid <- createUserId
   now <- currentTime
-  pure $
-    User
+  pure
+    $ User
       { id = uid
       , createdAt = now
       , updatedAt = now

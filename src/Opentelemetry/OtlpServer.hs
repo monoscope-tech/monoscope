@@ -25,7 +25,7 @@ import Log qualified
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
 import Models.Projects.Projects qualified as Projects
-import Models.Telemetry.Telemetry (SpanKind (..), SpanStatus (..))
+import Models.Telemetry.Telemetry (SpanKind (..), SpanStatus (..), convertSpanToRequestMessage)
 import Models.Telemetry.Telemetry qualified as Telemetry
 import Network.GRPC.HighLevel.Client as HsGRPC
 import Network.GRPC.HighLevel.Generated as HsGRPC
@@ -184,8 +184,8 @@ byteStringToHexText bs = decodeUtf8 (B16.encode bs)
 -- Convert a list of KeyValue to a JSONB object
 keyValueToJSONB :: V.Vector KeyValue -> AE.Value
 keyValueToJSONB kvs =
-  AE.object $
-    V.foldr (\kv acc -> (AEK.fromText $ toText kv.keyValueKey, convertAnyValue kv.keyValueValue) : acc) [] kvs
+  AE.object
+    $ V.foldr (\kv acc -> (AEK.fromText $ toText kv.keyValueKey, convertAnyValue kv.keyValueValue) : acc) [] kvs
 
 
 convertAnyValue :: Maybe AnyValue -> AE.Value
@@ -270,7 +270,7 @@ convertLogRecord :: Projects.ProjectId -> Maybe Resource -> Maybe Instrumentatio
 convertLogRecord pid resource scope lr =
   Telemetry.LogRecord
     { projectId = pid.unProjectId
-    , id = Nothing
+    , id = UUID.nil
     , timestamp = if lr.logRecordTimeUnixNano == 0 then nanosecondsToUTC lr.logRecordObservedTimeUnixNano else nanosecondsToUTC lr.logRecordTimeUnixNano
     , observedTimestamp = nanosecondsToUTC lr.logRecordObservedTimeUnixNano
     , traceId = byteStringToHexText lr.logRecordTraceId
@@ -287,7 +287,7 @@ convertLogRecord pid resource scope lr =
 convertSpanRecord :: Projects.ProjectId -> Maybe Resource -> Maybe InstrumentationScope -> Span -> Telemetry.SpanRecord
 convertSpanRecord pid resource scope sp =
   Telemetry.SpanRecord
-    { uSpandId = Nothing
+    { uSpanId = UUID.nil
     , projectId = pid.unProjectId
     , timestamp = nanosecondsToUTC sp.spanStartTimeUnixNano
     , traceId = byteStringToHexText sp.spanTraceId
@@ -397,8 +397,8 @@ convertMetricRecord pid resource iscp metric =
                   mtTime = histogram.exponentialHistogramDataPointTimeUnixNano
                   pointNegative =
                     ( \b ->
-                        Just $
-                          Telemetry.EHBucket
+                        Just
+                          $ Telemetry.EHBucket
                             { bucketOffset = fromIntegral $ b.exponentialHistogramDataPoint_BucketsOffset
                             , bucketCounts = fromIntegral <$> b.exponentialHistogramDataPoint_BucketsBucketCounts
                             }
@@ -406,8 +406,8 @@ convertMetricRecord pid resource iscp metric =
                       =<< histogram.exponentialHistogramDataPointNegative
                   pointPositive =
                     ( \b ->
-                        Just $
-                          Telemetry.EHBucket
+                        Just
+                          $ Telemetry.EHBucket
                             { bucketOffset = fromIntegral $ b.exponentialHistogramDataPoint_BucketsOffset
                             , bucketCounts = fromIntegral <$> b.exponentialHistogramDataPoint_BucketsBucketCounts
                             }
@@ -530,102 +530,32 @@ parseSpanStatus st = case st of
   _ -> Nothing
 
 
-convertSpanToRequestMessage :: Telemetry.SpanRecord -> Text -> RequestMessage
-convertSpanToRequestMessage sp instrumentationScope =
-  RequestMessage
-    { duration = fromInteger sp.spanDurationNs
-    , host = host
-    , method = method
-    , pathParams = pathParams
-    , projectId = sp.projectId
-    , protoMajor = 1
-    , protoMinor = 1
-    , queryParams = queryParams
-    , rawUrl = rawUrl
-    , referer = referer
-    , requestBody = requestBody
-    , requestHeaders = requestHeaders
-    , responseBody = responseBody
-    , responseHeaders = responseHeaders
-    , statusCode = status
-    , sdkType = sdkType
-    , msgId = messageId
-    , parentId = parentId
-    , errors
-    , tags = Nothing
-    , urlPath = urlPath
-    , timestamp = utcToZonedTime (TimeZone 0 False "UTC+0") sp.timestamp
-    , serviceVersion = Nothing
-    }
-  where
-    host = getSpanAttribute "net.host.name" sp.attributes
-    method = fromMaybe (fromMaybe "GET" $ getSpanAttribute "http.request.method" sp.attributes) $ getSpanAttribute "http.method" sp.attributes
-    pathParams = fromMaybe (AE.object []) (AE.decode $ encodeUtf8 $ fromMaybe "" $ getSpanAttribute "http.request.path_params" sp.attributes)
-    queryParams = fromMaybe (AE.object []) (AE.decode $ encodeUtf8 $ fromMaybe "" $ getSpanAttribute "http.request.query_params" sp.attributes)
-    errors = AE.decode $ encodeUtf8 $ fromMaybe "" $ getSpanAttribute "apitoolkit.errors" sp.attributes
-    messageId = UUID.fromText $ fromMaybe "" $ getSpanAttribute "apitoolkit.msg_id" sp.attributes
-    parentId = UUID.fromText $ fromMaybe "" $ getSpanAttribute "apitoolkit.parent_id" sp.attributes
-    referer = Just $ Left (fromMaybe "" $ getSpanAttribute "http.request.headers.referer" sp.attributes) :: Maybe (Either Text [Text])
-    requestBody = fromMaybe "" $ getSpanAttribute "http.request.body" sp.attributes
-    (requestHeaders, responseHeaders) = case sp.attributes of
-      AE.Object v -> (getValsWithPrefix "http.request.header." v, getValsWithPrefix "http.response.header." v)
-      _ -> (AE.object [], AE.object [])
-    responseBody = fromMaybe "" $ getSpanAttribute "http.response.body" sp.attributes
-    responseStatus = (readMaybe . toString =<< getSpanAttribute "http.response.status_code" sp.attributes) :: Maybe Double
-    responseStatus' = (readMaybe . toString =<< getSpanAttribute "http.status_code" sp.attributes) :: Maybe Double
-    status = round $ fromMaybe (fromMaybe 0.0 responseStatus') responseStatus
-    sdkType = RequestDumps.parseSDKType $ fromMaybe "" $ getSpanAttribute "apitoolkit.sdk_type" sp.attributes
-    urlPath' = getSpanAttribute "http.route" sp.attributes
-    undUrlPath = getSpanAttribute "url.path" sp.attributes
-    urlPath = if instrumentationScope == "@opentelemetry/instrumentation-undici" then undUrlPath else urlPath'
-    rawUrl' = fromMaybe "" $ getSpanAttribute "http.target" sp.attributes
-    rawUrl =
-      if instrumentationScope == "@opentelemetry/instrumentation-undici"
-        then fromMaybe "" undUrlPath <> fromMaybe "" (getSpanAttribute "url.query" sp.attributes)
-        else rawUrl'
-
-
-getValsWithPrefix :: Text -> AE.Object -> AE.Value
-getValsWithPrefix prefix obj = AE.object $ map (\k -> (AEK.fromText (T.replace prefix "" $ AEK.toText k), fromMaybe (AE.object []) $ KEM.lookup k obj)) keys
-  where
-    keys = filter (\k -> prefix `T.isPrefixOf` AEK.toText k) (KEM.keys obj)
-
-
-getSpanAttribute :: Text -> AE.Value -> Maybe Text
-getSpanAttribute key attr = case attr of
-  AE.Object o -> case KEM.lookup (AEK.fromText key) o of
-    Just (AE.String v) -> Just v
-    Just (AE.Number v) -> Just $ show v
-    _ -> Nothing
-  _ -> Nothing
-
-
 eventsToJSONB :: [Span_Event] -> AE.Value
 eventsToJSONB spans =
-  AE.toJSON $
-    ( \sp ->
-        AE.object
-          [ "event_name" AE..= toText sp.span_EventName
-          , "event_time" AE..= nanosecondsToUTC sp.span_EventTimeUnixNano
-          , "event_attributes" AE..= keyValueToJSONB sp.span_EventAttributes
-          , "event_dropped_attributes_count" AE..= fromIntegral sp.span_EventDroppedAttributesCount
-          ]
-    )
-      <$> spans
+  AE.toJSON
+    $ ( \sp ->
+          AE.object
+            [ "event_name" AE..= toText sp.span_EventName
+            , "event_time" AE..= nanosecondsToUTC sp.span_EventTimeUnixNano
+            , "event_attributes" AE..= keyValueToJSONB sp.span_EventAttributes
+            , "event_dropped_attributes_count" AE..= fromIntegral sp.span_EventDroppedAttributesCount
+            ]
+      )
+    <$> spans
 
 
 linksToJSONB :: [Span_Link] -> AE.Value
 linksToJSONB lnks =
-  AE.toJSON $
-    lnks
-      <&> \lnk ->
-        AE.object
-          [ "link_span_id" AE..= (decodeUtf8 lnk.span_LinkSpanId :: Text)
-          , "link_trace_id" AE..= (decodeUtf8 lnk.span_LinkTraceId :: Text)
-          , "link_attributes" AE..= keyValueToJSONB lnk.span_LinkAttributes
-          , "link_dropped_attributes_count" AE..= fromIntegral lnk.span_LinkDroppedAttributesCount
-          , "link_flags" AE..= fromIntegral lnk.span_LinkFlags
-          ]
+  AE.toJSON
+    $ lnks
+    <&> \lnk ->
+      AE.object
+        [ "link_span_id" AE..= (decodeUtf8 lnk.span_LinkSpanId :: Text)
+        , "link_trace_id" AE..= (decodeUtf8 lnk.span_LinkTraceId :: Text)
+        , "link_attributes" AE..= keyValueToJSONB lnk.span_LinkAttributes
+        , "link_dropped_attributes_count" AE..= fromIntegral lnk.span_LinkDroppedAttributesCount
+        , "link_flags" AE..= fromIntegral lnk.span_LinkFlags
+        ]
 
 
 ---------------------------------------------------------------------------------------

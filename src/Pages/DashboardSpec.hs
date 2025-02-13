@@ -31,8 +31,8 @@ spec = aroundAll withTestResources do
       let reqMsg1 = Unsafe.fromJust $ convert $ testRequestMsgs.reqMsg1 nowTxt
       let reqMsg2 = Unsafe.fromJust $ convert $ testRequestMsgs.reqMsg2 nowTxt
       let msgs =
-            concat $
-              replicate
+            concat
+              $ replicate
                 100
                 [ ("m1", reqMsg1)
                 , ("m2", reqMsg2)
@@ -48,14 +48,15 @@ spec = aroundAll withTestResources do
           & ServantS.runHandler
           <&> Servant.getResponse
           . fromRightShow
-
-      let (pid, _paramInput, _currTime, projectRequestStats, newEndpoints, _reqLatenciesRolledByStepsJ, _, (_fromD, _toD), freeTierExceeded, hasRequests) = dat.unwrap
-
-      testPid `shouldBe` pid
-      projectRequestStats.totalRequests `shouldBe` 200
-      length newEndpoints `shouldBe` 2
-      freeTierExceeded `shouldBe` False
-      hasRequests `shouldBe` True
-      projectRequestStats.totalEndpoints `shouldBe` 2
-      projectRequestStats.totalShapes `shouldBe` 2
-      projectRequestStats.totalAnomalies `shouldBe` 2
+      case dat of
+        DashboardGet d -> do
+          let (pid, _paramInput, _currTime, projectRequestStats, newEndpoints, _reqLatenciesRolledByStepsJ, _, (_fromD, _toD), freeTierExceeded, hasRequests) = d
+          testPid `shouldBe` pid
+          projectRequestStats.totalRequests `shouldBe` 200
+          length newEndpoints `shouldBe` 2
+          freeTierExceeded `shouldBe` False
+          hasRequests `shouldBe` True
+          projectRequestStats.totalEndpoints `shouldBe` 2
+          projectRequestStats.totalShapes `shouldBe` 2
+          projectRequestStats.totalAnomalies `shouldBe` 2
+        _ -> error "Unexpected response"

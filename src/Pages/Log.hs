@@ -1,5 +1,6 @@
 module Pages.Log (
   apiLogH,
+  apiLogJson,
   LogsGet (..),
   ApiLogsPageData (..),
   resultTable_,
@@ -94,8 +95,8 @@ apiLogH pid queryM queryASTM cols' cursorM' sinceM fromM toM layoutM sourceM tar
   (queryLibRecent, queryLibSaved) <- V.partition (\x -> Projects.QLTHistory == (x.queryType)) <$> Projects.queryLibHistoryForUser pid sess.persistentSession.userId
 
   freeTierExceeded <-
-    dbtToEff $
-      if project.paymentPlan == "Free"
+    dbtToEff
+      $ if project.paymentPlan == "Free"
         then (> 5000) <$> RequestDumps.getLastSevenDaysTotalRequest pid
         else pure False
 
@@ -136,8 +137,8 @@ apiLogH pid queryM queryASTM cols' cursorM' sinceM fromM toM layoutM sourceM tar
             if source == "spans"
               then V.map (\v -> lookupVecTextByKey v colIdxMap "latency_breakdown") requestVecs
               else []
-          nextLogsURL = RequestDumps.requestDumpLogUrlPath pid queryM cols' reqLastCreatedAtM sinceM fromM toM (Just "loadmore") source
-          resetLogsURL = RequestDumps.requestDumpLogUrlPath pid queryM cols' Nothing Nothing Nothing Nothing Nothing source
+          nextLogsURL = RequestDumps.requestDumpLogUrlPath pid queryM cols' reqLastCreatedAtM sinceM fromM toM (Just "loadmore") source queryASTM
+          resetLogsURL = RequestDumps.requestDumpLogUrlPath pid queryM cols' Nothing Nothing Nothing Nothing Nothing source Nothing
       childSpans <- Telemetry.getChildSpans pid (V.catMaybes childSpanIds)
       let page =
             ApiLogsPageData
@@ -193,11 +194,63 @@ data LogsGet
 instance ToHtml LogsGet where
   toHtml (LogPage (PageCtx conf pa_dat)) = toHtml $ PageCtx conf $ apiLogsPage pa_dat
   toHtml (LogsGetRows pid requestVecs cols colIdxMap nextLogsURL source chSpns) = toHtml $ logItemRows_ pid requestVecs cols colIdxMap nextLogsURL source chSpns
-  toHtml (LogsGetResultTable page bol) = toHtml $ resultTable_ page bol
+  toHtml (LogsGetResultTable page bol) = toHtml $ virtualTable page
   toHtml (LogsGetErrorSimple err) = span_ [class_ "text-red-500"] $ toHtml err
   toHtml (LogsGetError (PageCtx conf err)) = toHtml $ PageCtx conf err
   toHtml (LogsQueryLibrary pid queryLibSaved queryLibRecent) = toHtml $ queryLibrary_ pid queryLibSaved queryLibRecent
   toHtmlRaw = toHtml
+
+
+apiLogJson :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe UTCTime -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders AE.Value)
+apiLogJson pid queryM queryASTM cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM = do
+  (sess, project) <- Sessions.sessionAndProject pid
+  let source = fromMaybe "requests" sourceM
+  let summaryCols = T.splitOn "," (fromMaybe "" cols')
+  let parseQuery q = either (\err -> addErrorToast "Error Parsing Query" (Just err) >> pure []) pure (parseQueryToAST q)
+  queryAST <-
+    maybe
+      (parseQuery $ maybeToMonoid queryM)
+      (either (const $ parseQuery $ maybeToMonoid queryM) pure . AE.eitherDecode . encodeUtf8)
+      queryASTM
+
+  now <- Time.currentTime
+  let (fromD, toD, _) = Components.parseTimeRange now (Components.TimePicker sinceM fromM toM)
+  tableAsVecE <- RequestDumps.selectLogTable pid queryAST cursorM' (fromD, toD) summaryCols (parseMaybe pSource =<< sourceM) targetSpansM
+
+  -- FIXME: we're silently ignoring parse errors and the likes.
+  let tableAsVecM = hush tableAsVecE
+  case tableAsVecM of
+    Just tableAsVec -> do
+      let (requestVecs, colNames, _) = tableAsVec
+          colIdxMap = listToIndexHashMap colNames
+          reqLastCreatedAtM =
+            if source == "requests"
+              then (\r -> lookupVecTextByKey r colIdxMap "created_at") =<< (requestVecs V.!? (V.length requestVecs - 1))
+              else (\r -> lookupVecTextByKey r colIdxMap "timestamp") =<< (requestVecs V.!? (V.length requestVecs - 1))
+          childSpanIds =
+            if source == "spans"
+              then V.map (\v -> lookupVecTextByKey v colIdxMap "latency_breakdown") requestVecs
+              else []
+          nextLogsURL = RequestDumps.requestDumpLogUrlPath pid queryM cols' reqLastCreatedAtM sinceM fromM toM (Just "loadmore") source queryASTM
+          resetLogsURL = RequestDumps.requestDumpLogUrlPath pid queryM cols' Nothing Nothing Nothing Nothing Nothing source Nothing
+      childSpans <- Telemetry.getChildSpans pid (V.catMaybes childSpanIds)
+      let colors = getServiceColors $ (.spanName) <$> childSpans
+          childSps =
+            ( map
+                ( \sp ->
+                    let name = AE.String sp.spanName
+                        parentId = AE.String $ fromMaybe "" sp.parentSpanId
+                        duration = AE.Number $ fromIntegral sp.spanDurationNs
+                        color = AE.String $ fromMaybe "bg-black" $ HM.lookup sp.spanName colors
+                        spandId = AE.String $ sp.spanId
+                     in AE.toJSON ([name, parentId, duration, color, spandId] :: [AE.Value])
+                )
+                $ V.toList childSpans
+            )
+
+      addRespHeaders $ AE.object ["logsData" AE..= requestVecs, "childSpans" AE..= childSps, "nextUrl" AE..= nextLogsURL, "resetLogsUrl" AE..= resetLogsURL]
+    Nothing -> do
+      addRespHeaders $ AE.object ["error" AE..= "Something went wrong"]
 
 
 logQueryBox_ :: Projects.ProjectId -> Maybe Text -> Text -> Maybe Text -> Text -> V.Vector Projects.QueryLibItem -> V.Vector Projects.QueryLibItem -> Html ()
@@ -269,8 +322,8 @@ logQueryBox_ pid currentRange source targetSpan queryAST queryLibRecent queryLib
 
 queryLibrary_ :: Projects.ProjectId -> V.Vector Projects.QueryLibItem -> V.Vector Projects.QueryLibItem -> Html ()
 queryLibrary_ pid queryLibSaved queryLibRecent = div_ [class_ "dropdown dropdown-hover dropdown-bottom dropdown-start", id_ "queryLibraryParentEl"] do
-  div_ [class_ "cursor-pointer relative  bg-fillWeak  text-textWeak rounded-lg border border-strokeWeaker h-full flex gap-2 items-center px-2", tabindex_ "0", role_ "button"] $
-    (toHtml "Presets" >> faSprite_ "chevron-down" "regular" "w-3 h-3")
+  div_ [class_ "cursor-pointer relative  bg-fillWeak  text-textWeak rounded-lg border border-strokeWeaker h-full flex gap-2 items-center px-2", tabindex_ "0", role_ "button"]
+    $ (toHtml "Presets" >> faSprite_ "chevron-down" "regular" "w-3 h-3")
   div_ [class_ "dropdown-content z-20"] $ div_ [class_ "tabs tabs-boxed tabs-md tabs-outline items-center bg-fillWeak p-0 h-full", role_ "tablist", id_ "queryLibraryTabListEl"] do
     tabPanel_ "Saved" (queryLibraryContent_ "Saved" queryLibSaved)
     tabPanel_ "Recent" (queryLibraryContent_ "Recent" queryLibRecent)
@@ -338,9 +391,9 @@ queryLibItem_ qli =
           li_ "Send query to alert"
           li_ "Send query to a dashboard"
     strong_ $ whenJust qli.title \title -> (toHtml title)
-    pre_ $
-      code_ [class_ "language-js !bg-transparent queryText whitespace-pre-wrap break-words"] $
-        toHtml qli.queryText
+    pre_
+      $ code_ [class_ "language-js !bg-transparent queryText whitespace-pre-wrap break-words"]
+      $ toHtml qli.queryText
     div_ [class_ "gap-3 flex"] $ time_ [datetime_ "", term "data-tippy-content" "created on"] (toHtml $ displayTimestamp $ formatUTC qli.createdAt) >> when qli.byMe " by me"
 
 
@@ -368,8 +421,37 @@ data ApiLogsPageData = ApiLogsPageData
   }
 
 
+virtualTable :: ApiLogsPageData -> Html ()
+virtualTable page = do
+  let colors = getServiceColors $ (.spanName) <$> page.childSpans
+      childSps =
+        ( map
+            ( \sp ->
+                let name = AE.String sp.spanName
+                    parentId = AE.String $ fromMaybe "" sp.parentSpanId
+                    duration = AE.Number $ fromIntegral sp.spanDurationNs
+                    color = AE.String $ fromMaybe "bg-black" $ HM.lookup sp.spanName colors
+                 in AE.toJSON ([name, parentId, duration, color] :: [AE.Value])
+            )
+            $ V.toList page.childSpans
+        )
+  termRaw
+    "log-list"
+    [ id_ "resultTable"
+    , class_ "w-full divide-y flex flex-col h-full overflow-y-hidden overflow-x-auto"
+    , term "data-results" (decodeUtf8 $ AE.encode page.requestVecs)
+    , term "data-columns" (decodeUtf8 $ AE.encode page.cols)
+    , term "data-colIdxMap" (decodeUtf8 $ AE.encode page.colIdxMap)
+    , term "data-childSpans" (decodeUtf8 $ AE.encode childSps)
+    , term "data-nextfetchurl" page.nextLogsURL
+    , term "data-projectid" page.pid.toText
+    ]
+    ("" :: Text)
+
+
 apiLogsPage :: ApiLogsPageData -> Html ()
 apiLogsPage page = do
+  script_ [type_ "module", src_ "/public/assets/explorer-list.js"] ("" :: Text)
   section_ [class_ "mx-auto pt-2 px-6 gap-3.5 w-full flex flex-col h-full overflow-hidden pb-12  group/pg", id_ "apiLogsPage"] do
     div_
       [ style_ "z-index:26"
@@ -379,9 +461,9 @@ apiLogsPage page = do
       ]
       do
         div_ [class_ "relative ml-auto w-full", style_ ""] do
-          div_ [class_ "flex justify-end  w-full p-4 "] $
-            button_ [[__|on click add .hidden to #expand-log-modal|]] $
-              faSprite_ "xmark" "regular" "h-8"
+          div_ [class_ "flex justify-end  w-full p-4 "]
+            $ button_ [[__|on click add .hidden to #expand-log-modal|]]
+            $ faSprite_ "xmark" "regular" "h-8"
           form_
             [ hxPost_ $ "/p/" <> page.pid.toText <> "/share/"
             , hxSwap_ "innerHTML"
@@ -397,7 +479,6 @@ apiLogsPage page = do
 
       div_ [class_ "flex flex-row gap-4 mt-3 group-has-[.toggle-chart:checked]/pg:hidden"] do
         renderChart page.pid "reqsChartsECP" "All requests" (Just $ fmt (commaizeF page.resultCount)) Nothing page.source ""
-        unless (page.source == "logs") $ renderChart page.pid "reqsChartsErrP" "Errors" Nothing Nothing page.source ", theme:'roma'"
         unless (page.source == "logs") $ renderChart page.pid "reqsChartsLatP" "Latency" Nothing Nothing page.source ", chart_type:'LineCT', group_by:'GBDurationPercentile'"
 
     div_ [class_ "flex gap-3.5 overflow-hidden"] do
@@ -422,16 +503,76 @@ apiLogsPage page = do
               span_ "4,459"
 
       div_ [class_ "grow flex-1 space-y-1.5 overflow-hidden"] do
-        div_ [class_ "flex gap-2  pt-1"] do
-          -- label_ [class_ "gap-1 flex items-center cursor-pointer"] do
-          --   faSprite_ "side-chevron-left-in-box" "regular" "w-4 h-4 group-has-[.toggle-filters:checked]/pg:rotate-180 "
-          --   span_ [class_ "hidden group-has-[.toggle-filters:checked]/pg:block"] "Show"
-          --   span_ [class_ "group-has-[.toggle-filters:checked]/pg:hidden"] "Hide"
-          --   "filters"
-          --   input_ [type_ "checkbox", class_ "toggle-filters hidden", checked_]
-          -- span_ [class_ "text-slate-200"] "|"
-          div_ [class_ ""] $ span_ [class_ "text-slate-950"] (toHtml @Text $ fmt $ commaizeF page.resultCount) >> span_ [class_ "text-slate-600"] (toHtml (" " <> page.source <> " found"))
-        div_ [class_ "divide-y flex flex-col h-full overflow-hidden"] $ resultTableAndMeta_ page
+        -- div_ [class_ "flex gap-2  pt-1"] do
+        --   label_ [class_ "gap-1 flex items-center cursor-pointer"] do
+        --     faSprite_ "side-chevron-left-in-box" "regular" "w-4 h-4 group-has-[.toggle-filters:checked]/pg:rotate-180 "
+        --     span_ [class_ "hidden group-has-[.toggle-filters:checked]/pg:block"] "Show"
+        --     span_ [class_ "group-has-[.toggle-filters:checked]/pg:hidden"] "Hide"
+        --     "filters"
+        --     input_ [type_ "checkbox", class_ "toggle-filters hidden", checked_]
+        --   span_ [class_ "text-slate-200"] "|"
+        -- div_ [class_ "divide-y flex flex-col  overflow-hidden"] $ resultTableAndMeta_ page
+        div_ [class_ "flex items-start h-full", id_ "logs_section_container"] do
+          div_ [class_ "relative flex items-start w-full h-full", id_ "logs_list_container"] do
+            div_ [class_ "absolute top-0 right-0 hidden w-full h-full overflow-scroll c-scroll z-50 bg-white transition-all duration-100", id_ "trace_expanded_view"] pass
+            virtualTable page
+
+          div_ [onmousedown_ "mouseDown(event)", class_ "relative shrink-0 h-full flex items-center justify-center w-1 bg-fillWeak  cursor-ew-resize overflow-visible"] do
+            div_ [onmousedown_ "mouseDown(event)", id_ "resizer", class_ "absolute left-1/2 top-1/2 z-[999] -translate-x-1/2  px-1 py-1 -translate-y-1/2 w-max bg-slate-50 rounded border border-strokeBrand-weak grid grid-cols-2 gap-1"] do
+              div_ [class_ "bg-iconNeutral h-[3px] w-[3px] rounded-full"] ""
+              div_ [class_ "bg-iconNeutral h-[3px] w-[3px] rounded-full"] ""
+              div_ [class_ "bg-iconNeutral h-[3px] w-[3px] rounded-full"] ""
+              div_ [class_ "bg-iconNeutral h-[3px] w-[3px] rounded-full"] ""
+              div_ [class_ "bg-iconNeutral h-[3px] w-[3px] rounded-full"] ""
+              div_ [class_ "bg-iconNeutral h-[3px] w-[3px] rounded-full"] ""
+
+          div_ [class_ "relative shrink-0 flex flex-col overflow-y-auto overflow-x-hidden h-full c-scroll transition-all duration-100", style_ "width:0px", id_ "log_details_container"] do
+            span_ [class_ "htmx-indicator query-indicator absolute loading left-1/2 -translate-x-1/2 loading-dots absoute z-10 top-10", id_ "details_indicator"] ""
+
+          script_
+            [text|
+          function updateUrlState(key, value) {
+            const params = new URLSearchParams(window.location.search)
+            params.set(key, value)
+            window.history.replaceState({}, '', `$${window.location.pathname}?$${params}`)
+          }
+          var logsList = null
+          const logDetails = document.querySelector('#log_details_container')
+          const container = document.querySelector('#logs_section_container')
+          const containerWidth = Number(window.getComputedStyle(container).width.replace('px',''))
+
+          let mouseState = {x: 0}
+          let resizeStart = false
+          let target = ""
+
+          function mouseDown(event) {
+              resizeStart = true
+              container.style.userSelect = "none";
+              mouseState = {x: event.clientX  }
+              target = event.target.id
+          }
+
+          function handleMouseup(event) {
+            resizeStart = false
+            container.style.userSelect = "auto";
+            target = ""
+          }
+
+          function handleMouseMove(event) {
+            if(!resizeStart) return
+            if(!logsList) {
+             logsList = document.querySelector('#logs_list_container')
+            }
+            const diff = event.clientX  - mouseState.x
+            mouseState = {x: event.clientX}
+            const edW = Number(logDetails.style.width.replace('px',''))
+            logDetails.style.width = (edW - diff) + 'px'
+            updateUrlState('details_width', logDetails.style.width)
+          }
+          window.addEventListener ('mousemove', handleMouseMove)
+          window.addEventListener ('mouseup', handleMouseup)
+          |]
+
   jsonTreeAuxillaryCode page.pid page.queryAST
   -- drawerWithURLContent_ : Used when you expand a log item
   -- using the drawer as a global is a workaround since to separate the logs scope from other content and improve scroll performance.
@@ -443,17 +584,18 @@ apiLogsPage page = do
 -- TODO: centralize to have a single chart rendering component
 renderChart :: Projects.ProjectId -> Text -> Text -> Maybe Text -> Maybe Text -> Text -> Text -> Html ()
 renderChart pid chartId chartTitle primaryUnitM rateM source extraHxVals = do
-  let chartAspectRatio "logs" = "aspect-[12/1]"
-      chartAspectRatio _ = "aspect-[3/1]"
+  -- let chartAspectRatio "logs" = "aspect-[12/1]"
+  --     chartAspectRatio _ = "aspect-[3/1]"
   div_ [class_ "flex-1 space-y-1.5 overflow-x-hidden flex-grow"] do
     div_ [class_ "leading-none flex justify-between items-center"] do
-      div_ [class_ "inline-flex gap-3 items-center"] do
+      div_ [class_ "inline-flex gap-3 items-center text-sm text-textStrong"] do
         span_ $ toHtml chartTitle
-        whenJust primaryUnitM $ span_ [class_ "bg-slate-200 px-2 py-1 rounded-3xl"] . toHtml
+        whenJust primaryUnitM $ span_ [class_ "bg-fillWeak border border-strokeWeak px-2 py-1 rounded-2xl text-xs "] . toHtml
         whenJust rateM $ span_ [class_ "text-slate-300"] . toHtml
       label_ [class_ "rounded-full border border-slate-300 p-2 inline-flex cursor-pointer"] $ faSprite_ "up-right-and-down-left-from-center" "regular" "w-3 h-3"
     div_
-      [ class_ $ "rounded-2xl border border-slate-200 log-chart p-3  " <> chartAspectRatio source
+      [ class_ $ "rounded-2xl border border-slate-200 log-chart p-3 "
+      , style_ "height:115px"
       , hxGet_ $ "/charts_html?id=" <> chartId <> "&show_legend=false&pid=" <> pid.toText
       , hxTrigger_ "intersect, submit from:#log_explorer_form, add-query from:#filterElement, update-query from:#filterElement"
       , hxVals_ $ "js:{queryAST:window.getQueryFromEditor('" <> chartId <> "'), since: params().since, from: params().from, to:params().to, cols:params().cols, layout:'all', source: params().source" <> extraHxVals <> "}"
@@ -464,14 +606,14 @@ renderChart pid chartId chartTitle primaryUnitM rateM source extraHxVals = do
 
 resultTableAndMeta_ :: ApiLogsPageData -> Html ()
 resultTableAndMeta_ page =
-  div_ [class_ "relative overflow-y-scroll overflow-x-hidden h-full w-full pb-16", id_ "resultTableScroller"] do
+  div_ [class_ "relative overflow-y-scroll overflow-x-hidden w-full pb-16", id_ "resultTableScroller"] do
     resultTable_ page True
     script_ [text|document.getElementById("resultTableScroller").scrollTop = document.querySelector("#resultTableScroller tr").offsetHeight;|]
 
 
 resultTable_ :: ApiLogsPageData -> Bool -> Html ()
 resultTable_ page mainLog = table_
-  [ class_ "w-full  table-auto ctable table-pin-rows table-pin-cols overflow-x-hidden [contain:strict] [content-visibility:auto]"
+  [ class_ "w-full  table-auto ctable table-pin-rows table-pin-cols overflow-x-hidden"
   , style_ "height:1px; --rounded-box:0"
   , id_ "resultTable"
   , term "data-source" page.source
@@ -501,21 +643,22 @@ resultTable_ page mainLog = table_
                   : params().to;
               return {from:params().from, to:updatedTo};
           }|]
-        tr_ $
-          td_ [colspan_ $ show $ length page.cols] $
-            a_
-              [ class_ "cursor-pointer inline-flex justify-center py-1 px-56 ml-36 blue-800 bg-blue-100 hover:bg-blue-200 gap-3 items-center"
-              , hxTrigger_ "click, every 5s [document.getElementById('streamLiveData').checked]"
-              , hxVals_ "js:{queryAST:window.getQueryFromEditor(), since: params().since, cols:params().cols, layout:'all', source: params().source, ...window.latestLogsURLQueryValsFn()}"
-              , hxSwap_ "afterend settle:500ms"
-              , hxGet_ $ "/p/" <> page.pid.toText <> "/log_explorer?layout=loadmore"
-              , hxPushUrl_ "false"
-              , hxTarget_ "closest tr"
-              , -- using hyperscript instead of hxIndicator_ so the loader isnt distracting by showing up every 5 second and only when clicked
-                [__| on click remove .hidden from #loadNewIndicator on htmx:afterRequest add .hidden to #loadNewIndicator |]
-              ]
-              (span_ [class_ "inline-block"] "check for newer results" >> span_ [id_ "loadNewIndicator", class_ "hidden loading loading-dots loading-sm inline-block pl-3"] "")
-        logItemRows_ page.pid page.requestVecs page.cols page.colIdxMap page.nextLogsURL page.source page.childSpans
+        tr_
+          $ td_ [colspan_ $ show $ length page.cols]
+          $ a_
+            [ class_ "cursor-pointer inline-flex justify-center py-1 px-56 ml-36 blue-800 bg-blue-100 hover:bg-blue-200 gap-3 items-center"
+            , hxTrigger_ "click, every 5s [document.getElementById('streamLiveData').checked]"
+            , hxVals_ "js:{queryAST:window.getQueryFromEditor(), since: params().since, cols:params().cols, layout:'all', source: params().source, ...window.latestLogsURLQueryValsFn()}"
+            , hxSwap_ "afterend settle:500ms"
+            , hxGet_ $ "/p/" <> page.pid.toText <> "/log_explorer?layout=loadmore"
+            , hxPushUrl_ "false"
+            , hxTarget_ "closest tr"
+            , -- using hyperscript instead of hxIndicator_ so the loader isnt distracting by showing up every 5 second and only when clicked
+              [__| on click remove .hidden from #loadNewIndicator on htmx:afterRequest add .hidden to #loadNewIndicator |]
+            ]
+            (span_ [class_ "inline-block"] "check for newer results" >> span_ [id_ "loadNewIndicator", class_ "hidden loading loading-dots loading-sm inline-block pl-3"] "")
+
+        logItemRows_ page.pid (V.take 2 page.requestVecs) page.cols page.colIdxMap page.nextLogsURL page.source page.childSpans
 
 
 curateCols :: [Text] -> [Text] -> [Text]
@@ -557,24 +700,24 @@ logItemRows_ pid requests curatedCols colIdxMap nextLogsURL source chSpns = do
   forM_ requests \reqVec -> do
     let (logItemPath, _reqId) = fromMaybe ("", "") $ requestDumpLogItemUrlPath pid reqVec colIdxMap
     let (_, errCount, errClass) = errorClass True reqVec colIdxMap
-    tr_ [class_ "log-row cursor-pointer overflow-hidden", [__|on click toggle .hidden on next <tr/> then toggle .expanded-log on me|]] $
-      forM_ curatedCols \c -> td_ [class_ "pl-3"] $ logItemCol_ source pid reqVec colIdxMap c chSpns
+    tr_ [class_ "log-row cursor-pointer overflow-hidden", [__|on click toggle .hidden on next <tr/> then toggle .expanded-log on me|]]
+      $ forM_ curatedCols \c -> td_ [class_ "pl-3"] $ logItemCol_ source pid reqVec colIdxMap c chSpns
     tr_ [class_ "hidden"] do
       -- used for when a row is expanded.
       td_ [class_ "pl-4"] $ a_ [class_ $ "inline-block h-full " <> errClass, term "data-tippy-content" $ show errCount <> " errors attached to this request"] ""
       td_ [colspan_ $ show $ length curatedCols - 1] $ div_ [hxGet_ $ logItemPath <> "?source=" <> source, hxTrigger_ "intersect once", hxSwap_ "outerHTML"] $ span_ [class_ "loading loading-dots loading-md"] ""
-  when (V.length requests > 199) $
-    tr_ $
-      td_ [colspan_ $ show $ length curatedCols] $
-        a_
-          [ class_ "cursor-pointer inline-flex justify-center py-1 px-56 ml-36 blue-800 bg-blue-100 hover:bg-blue-200 gap-3 items-center"
-          , hxTrigger_ "click, intersect once"
-          , hxSwap_ "outerHTML"
-          , hxGet_ nextLogsURL
-          , hxTarget_ "closest tr"
-          , hxPushUrl_ "false"
-          ]
-          (span_ [class_ "inline-block"] "LOAD MORE " >> span_ [class_ "loading loading-dots loading-sm inline-block pl-3"] "")
+  when (V.length requests > 199)
+    $ tr_
+    $ td_ [colspan_ $ show $ length curatedCols]
+    $ a_
+      [ class_ "cursor-pointer inline-flex justify-center py-1 px-56 ml-36 blue-800 bg-blue-100 hover:bg-blue-200 gap-3 items-center"
+      , hxTrigger_ "click, intersect once"
+      , hxSwap_ "outerHTML"
+      , hxGet_ nextLogsURL
+      , hxTarget_ "closest tr"
+      , hxPushUrl_ "false"
+      ]
+      (span_ [class_ "inline-block"] "LOAD MORE " >> span_ [class_ "loading loading-dots loading-sm inline-block pl-3"] "")
 
 
 errorClass :: Bool -> V.Vector AE.Value -> HM.HashMap Text Int -> (Int, Int, Text)
@@ -631,8 +774,8 @@ logTableHeadingWrapper_ pid title classes child = td_
           span_ [class_ "ml-1 p-0.5 border border-slate-200 rounded inline-flex"] $ faSprite_ "chevron-down" "regular" "w-3 h-3"
         ul_ [tabindex_ "0", class_ "dropdown-content z-[1] menu p-2 shadow bg-bgBase rounded-box min-w-[15rem]"] do
           li_ [class_ "underline underline-offset-2"] $ toHtml title
-          li_ $
-            a_
+          li_
+            $ a_
               [ hxGet_ $ "/p/" <> pid.toText <> "/log_explorer"
               , hxPushUrl_ "true"
               , hxVals_ $ "js:{queryAST:params().queryAST,cols:removeNamedColumnToSummary('" <> title <> "'),layout:'resultTable'}"

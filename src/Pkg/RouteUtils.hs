@@ -1,5 +1,6 @@
 module Pkg.RouteUtils (QPT, QP, QPU, QPB, QPI, QEID, ProjectId, GetRedirect) where
 
+import Data.Aeson qualified as AE
 import Data.Time (UTCTime)
 import Models.Apis.Endpoints qualified as Endpoints
 import Models.Projects.Projects qualified as Projects
@@ -23,6 +24,9 @@ type QPI a = QueryParam a Int
 
 
 type QEID a = QueryParam a Endpoints.EndpointId
+
+
+type QPJSON a = QueryParam a AE.Value
 
 
 type ProjectId = Capture "projectID" Projects.ProjectId

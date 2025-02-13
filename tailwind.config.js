@@ -6,6 +6,7 @@ module.exports = {
     './static/public/assets/testeditor.js',
     './static/public/assets/steps-editor.js',
     './static/public/assets/steps-assertions.js',
+    './static/public/assets/explorer-list.js',
   ],
   safelist: [
     'group-has-[.errors:checked]/pg:block',

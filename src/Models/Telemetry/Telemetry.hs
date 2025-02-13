@@ -28,14 +28,20 @@ module Models.Telemetry.Telemetry (
   bulkInsertSpans,
   getMetricChartListData,
   getMetricLabelValues,
+  getValsWithPrefix,
+  getSpanAttribute,
   getMetricServiceNames,
   getChildSpans,
   SpanEvent (..),
   SpanLink (..),
+  convertSpanToRequestMessage,
 )
 where
 
 import Data.Aeson qualified as AE
+import Data.Aeson.Key qualified as AEK
+import Data.Aeson.KeyMap qualified as KEM
+
 import Data.ByteString.Base16 qualified as B16
 import Data.Time (UTCTime)
 import Data.UUID (UUID)
@@ -48,7 +54,8 @@ import Database.PostgreSQL.Simple.FromRow
 import Database.PostgreSQL.Simple.ToRow
 
 import Data.Default (Default)
-import Data.Time (formatTime)
+import Data.Text qualified as T
+import Data.Time (TimeZone (..), UTCTime, formatTime, utcToZonedTime)
 import Data.Time.Format (defaultTimeLocale)
 import Database.PostgreSQL.Simple.FromField (FromField (..), fromField, returnError)
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
@@ -58,12 +65,15 @@ import Database.PostgreSQL.Simple.Types (Query (..))
 import Deriving.Aeson qualified as DAE
 import Deriving.Aeson.Stock qualified as DAE
 import Effectful
+
 import Effectful.PostgreSQL.Transact.Effect (DB, dbtToEff)
+import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.Projects qualified as Projects
 import NeatInterpolation (text)
 import Opentelemetry.Proto.Metrics.V1.Metrics (Metric (metricMetadata), MetricData (MetricDataExponentialHistogram))
 import Pkg.DBUtils (WrappedEnum (..))
 import Relude
+import RequestMessages (RequestMessage (..))
 
 
 data SeverityLevel = SLDebug | SLInfo | SLWarn | SLError | SLFatal
@@ -87,6 +97,7 @@ data SpanKind = SKInternal | SKServer | SKClient | SKProducer | SKConsumer | SKU
 data Trace = Trace
   { traceId :: Text
   , traceStartTime :: UTCTime
+  , traceEndTime :: UTCTime
   , traceDurationNs :: Integer
   , totalSpans :: Int
   , serviceNames :: Maybe (V.Vector Text)
@@ -98,7 +109,7 @@ data Trace = Trace
 
 data LogRecord = LogRecord
   { projectId :: UUID
-  , id :: Maybe UUID
+  , id :: UUID
   , timestamp :: UTCTime
   , observedTimestamp :: UTCTime
   , traceId :: Text
@@ -127,7 +138,7 @@ instance AE.ToJSON ByteString where
 
 
 data SpanRecord = SpanRecord
-  { uSpandId :: Maybe UUID
+  { uSpanId :: UUID
   , projectId :: UUID
   , timestamp :: UTCTime
   , traceId :: Text
@@ -321,6 +332,7 @@ getTraceDetails pid trId = dbtToEff $ queryOne Select q (pid, trId)
       [sql| SELECT
               trace_id,
               MIN(start_time) AS trace_start_time,
+              MAX(COALESCE(end_time, start_time)) AS trace_end_time,
               CAST(EXTRACT(EPOCH FROM (MAX(COALESCE(end_time, start_time)) - MIN(start_time))) * 1000000000 AS BIGINT) AS trace_duration_ns,
               COUNT(span_id) AS total_spans,
               ARRAY_REMOVE(ARRAY_AGG(DISTINCT jsonb_extract_path_text(resource, 'service.name')), NULL) AS service_names
@@ -450,10 +462,6 @@ getMetricLabelValues pid metricName labelName = dbtToEff $ query Select q (label
     q = [sql| SELECT DISTINCT attributes->>? FROM telemetry.metrics WHERE project_id = ? AND metric_name = ?|]
 
 
-instance FromRow Text where
-  fromRow = field
-
-
 getMetricServiceNames :: DB :> es => Projects.ProjectId -> Eff es (V.Vector Text)
 getMetricServiceNames pid = dbtToEff $ query Select q pid
   where
@@ -547,3 +555,73 @@ bulkInsertMetrics metrics = void $ dbtToEff $ executeMany Insert q (V.toList row
       , entry.exemplars
       , entry.flags
       )
+
+
+convertSpanToRequestMessage :: SpanRecord -> Text -> RequestMessage
+convertSpanToRequestMessage sp instrumentationScope =
+  RequestMessage
+    { duration = fromInteger sp.spanDurationNs
+    , host = host
+    , method = method
+    , pathParams = pathParams
+    , projectId = sp.projectId
+    , protoMajor = 1
+    , protoMinor = 1
+    , queryParams = queryParams
+    , rawUrl = rawUrl
+    , referer = referer
+    , requestBody = requestBody
+    , requestHeaders = requestHeaders
+    , responseBody = responseBody
+    , responseHeaders = responseHeaders
+    , statusCode = status
+    , sdkType = sdkType
+    , msgId = messageId
+    , parentId = parentId
+    , errors
+    , tags = Nothing
+    , urlPath = urlPath
+    , timestamp = utcToZonedTime (TimeZone 0 False "UTC+0") sp.timestamp
+    , serviceVersion = Nothing
+    }
+  where
+    host = getSpanAttribute "net.host.name" sp.attributes
+    method = fromMaybe (fromMaybe "GET" $ getSpanAttribute "http.request.method" sp.attributes) $ getSpanAttribute "http.method" sp.attributes
+    pathParams = fromMaybe (AE.object []) (AE.decode $ encodeUtf8 $ fromMaybe "" $ getSpanAttribute "http.request.path_params" sp.attributes)
+    queryParams = fromMaybe (AE.object []) (AE.decode $ encodeUtf8 $ fromMaybe "" $ getSpanAttribute "http.request.query_params" sp.attributes)
+    errors = AE.decode $ encodeUtf8 $ fromMaybe "" $ getSpanAttribute "apitoolkit.errors" sp.attributes
+    messageId = UUID.fromText $ fromMaybe "" $ getSpanAttribute "apitoolkit.msg_id" sp.attributes
+    parentId = UUID.fromText $ fromMaybe "" $ getSpanAttribute "apitoolkit.parent_id" sp.attributes
+    referer = Just $ Left (fromMaybe "" $ getSpanAttribute "http.request.headers.referer" sp.attributes) :: Maybe (Either Text [Text])
+    requestBody = fromMaybe "" $ getSpanAttribute "http.request.body" sp.attributes
+    (requestHeaders, responseHeaders) = case sp.attributes of
+      AE.Object v -> (getValsWithPrefix "http.request.header." v, getValsWithPrefix "http.response.header." v)
+      _ -> (AE.object [], AE.object [])
+    responseBody = fromMaybe "" $ getSpanAttribute "http.response.body" sp.attributes
+    responseStatus = (readMaybe . toString =<< getSpanAttribute "http.response.status_code" sp.attributes) :: Maybe Double
+    responseStatus' = (readMaybe . toString =<< getSpanAttribute "http.status_code" sp.attributes) :: Maybe Double
+    status = round $ fromMaybe (fromMaybe 0.0 responseStatus') responseStatus
+    sdkType = RequestDumps.parseSDKType $ fromMaybe "" $ getSpanAttribute "apitoolkit.sdk_type" sp.attributes
+    urlPath' = getSpanAttribute "http.route" sp.attributes
+    undUrlPath = getSpanAttribute "url.path" sp.attributes
+    urlPath = if instrumentationScope == "@opentelemetry/instrumentation-undici" then undUrlPath else urlPath'
+    rawUrl' = fromMaybe "" $ getSpanAttribute "http.target" sp.attributes
+    rawUrl =
+      if instrumentationScope == "@opentelemetry/instrumentation-undici"
+        then fromMaybe "" undUrlPath <> fromMaybe "" (getSpanAttribute "url.query" sp.attributes)
+        else rawUrl'
+
+
+getValsWithPrefix :: Text -> AE.Object -> AE.Value
+getValsWithPrefix prefix obj = AE.object $ map (\k -> (AEK.fromText (T.replace prefix "" $ AEK.toText k), fromMaybe (AE.object []) $ KEM.lookup k obj)) keys
+  where
+    keys = filter (\k -> prefix `T.isPrefixOf` AEK.toText k) (KEM.keys obj)
+
+
+getSpanAttribute :: Text -> AE.Value -> Maybe Text
+getSpanAttribute key attr = case attr of
+  AE.Object o -> case KEM.lookup (AEK.fromText key) o of
+    Just (AE.String v) -> Just v
+    Just (AE.Number v) -> Just $ show v
+    _ -> Nothing
+  _ -> Nothing

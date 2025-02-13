@@ -38,7 +38,7 @@ function throughputEChart(renderAt, data, gb, showLegend, showAxes, theme) {
     }))
   }
 
-  const chartEl = document.getElementById(renderAt);
+  const chartEl = document.getElementById(renderAt)
   const myChart = echarts.init(chartEl, theme)
   const option = {
     legend: { show: showLegend, type: 'scroll', top: 'bottom' },
@@ -61,7 +61,7 @@ function throughputEChart(renderAt, data, gb, showLegend, showAxes, theme) {
   }
   myChart.setOption(option)
   const resizeObserver = new ResizeObserver((_entries) => window.requestAnimationFrame(() => myChart.resize()))
-  resizeObserver.observe(chartEl);
+  resizeObserver.observe(chartEl)
 }
 
 function stackedChart(title, series, _data, interp, width = 800, height = 400) {
@@ -209,7 +209,7 @@ function throughputEChartTable(renderAt, categories, data, gb, showLegend, showA
 
   if (chartType == 'line') {
     option.yAxis.axisLabel = {
-      formatter: function(params) {
+      formatter: function (params) {
         if (params >= 1000) {
           return `${Math.trunc(params / 1000)}s`
         }
@@ -219,7 +219,7 @@ function throughputEChartTable(renderAt, categories, data, gb, showLegend, showA
       position: 'inside',
     }
   } else {
-    option.yAxis.axisLabel.formatter = function(params) {
+    option.yAxis.axisLabel.formatter = function (params) {
       if (params >= 1000) {
         return `${Math.trunc(params / 1000)}k`
       }
@@ -228,7 +228,7 @@ function throughputEChartTable(renderAt, categories, data, gb, showLegend, showA
   }
   if (!showAxes) {
     option.yAxis.axisLabel = {
-      formatter: function(value, index) {
+      formatter: function (value, index) {
         // Only show the label for the maximum value
         return value === maxValue ? maxValue : ''
       },
@@ -238,11 +238,11 @@ function throughputEChartTable(renderAt, categories, data, gb, showLegend, showA
     }
   }
 
-  const chartEl = document.getElementById(renderAt);
+  const chartEl = document.getElementById(renderAt)
   const myChart = echarts.init(chartEl, theme)
-  option.animation = false;
-  myChart.setOption(option);
-  (new ResizeObserver((_entries) => window.requestAnimationFrame(() => echarts.getInstanceByDom(chartEl).resize()))).observe(chartEl);
+  option.animation = false
+  myChart.setOption(option)
+  new ResizeObserver((_entries) => window.requestAnimationFrame(() => echarts.getInstanceByDom(chartEl).resize())).observe(chartEl)
 }
 
 function latencyHistogram(renderAt, pc, data) {
@@ -255,7 +255,7 @@ function latencyHistogram(renderAt, pc, data) {
       scale: true,
       splitLine: { show: false },
       axisLabel: {
-        formatter: function(params) {
+        formatter: function (params) {
           if (params > 1000) {
             return `${params / 1000}s`
           }
@@ -400,12 +400,13 @@ function flameGraphChart(data, renderAt, colorsMap) {
       class: item.itemStyle.color + ' absolute hover:z-[999] flex rounded items-center span-filterble cursor-pointer gap-1 flex-nowrap overflow-hidden hover:border hover:border-black',
       id: item.span_id,
       onclick: (e) => {
+        e.stopPropagation()
         const data = filterJson(structuredClone(fData), item.name)
         flameGraph(data, renderAt)
-        const target = document.getElementById(item.span_id)
-        if (target) {
-          target.scrollIntoView()
-        }
+        // const target = document.getElementById(item.span_id)
+        // if (target) {
+        //   target.scrollIntoView()
+        // }
         htmx.trigger('#trigger-span-' + item.span_id, 'click')
       },
     })
@@ -623,84 +624,88 @@ function getMinMax(arr) {
   return { min, max }
 }
 
-
 // NEW Chart Functions
 
-const FETCH_INTERVAL = 5000;
+const FETCH_INTERVAL = 5000
 
-const updateChartConfiguration = w => {
-  const { opt, data, yAxisLabel, seriesDefault,from, to } = w;
-  if (!data) return opt;
+const updateChartConfiguration = (w) => {
+  const { opt, data, yAxisLabel, seriesDefault, from, to } = w
+  if (!data) return opt
   // Convert timestamps from seconds to milliseconds
-  data.slice(1).forEach(row => row[0] *= 1000);
+  data.slice(1).forEach((row) => (row[0] *= 1000))
 
-  const cols = data[0]?.slice(1) || [];
+  const cols = data[0]?.slice(1) || []
   opt.series = cols.map((name, i) => ({
     ...seriesDefault,
     name,
     encode: { x: 0, y: i + 1 },
-    stack: yAxisLabel || 'units'
-  }));
-  opt.legend.data = cols;
+    stack: yAxisLabel || 'units',
+  }))
+  opt.legend.data = cols
   if (!opt.xAxis) {
-    opt.xAxis = {};
+    opt.xAxis = {}
   }
-  opt.xAxis.min = from * 1000;
-  opt.xAxis.max = to * 1000; 
+  opt.xAxis.min = from * 1000
+  opt.xAxis.max = to * 1000
   console.log(opt)
-  return opt;
-};
+  return opt
+}
 
-const updateChartData = async w => {
-  const { chart, opt, query, pid, chartId } = w;
-  const p = new URLSearchParams(window.location.search);
-  p.set("pid", pid);
-  p.set("query_raw", query);
-  const chart_data = await (await fetch(`/chart_data?${p}`)).json();
-  opt.dataset.source = [chart_data.headers, ...chart_data.dataset];
-  w.data = opt.dataset.source;
-  w.from = chart_data.from;
-  w.to = chart_data.to;
+const updateChartData = async (w) => {
+  const { chart, opt, query, pid, chartId } = w
+  const p = new URLSearchParams(window.location.search)
+  p.set('pid', pid)
+  p.set('query_raw', query)
+  const chart_data = await (await fetch(`/chart_data?${p}`)).json()
+  opt.dataset.source = [chart_data.headers, ...chart_data.dataset]
+  w.data = opt.dataset.source
+  w.from = chart_data.from
+  w.to = chart_data.to
 
-  const subtitleEl = document.getElementById(chartId + 'Subtitle');
+  const subtitleEl = document.getElementById(chartId + 'Subtitle')
   if (subtitleEl) {
-    subtitleEl.innerHTML = chart_data.rows_per_min.toFixed(2);
+    subtitleEl.innerHTML = chart_data.rows_per_min.toFixed(2)
   }
-  const valEl = document.getElementById(chartId + 'Value');
+  const valEl = document.getElementById(chartId + 'Value')
   if (valEl) {
-    valEl.innerHTML = Number(chart_data.rows_count).toLocaleString();
-    valEl.classList.remove("hidden");
+    valEl.innerHTML = Number(chart_data.rows_count).toLocaleString()
+    valEl.classList.remove('hidden')
   }
 
-  chart.hideLoading();
-  chart.setOption(updateChartConfiguration(w));
-};
+  chart.hideLoading()
+  chart.setOption(updateChartConfiguration(w))
+}
 
-const initTimeseriesWidget = w => {
-  w.data = w.opt.dataset?.source||null;
-  const cEl = document.getElementById(w.chartId), c = echarts.init(cEl, w.theme);
-  w.chart = c; w.chartEl = cEl;
-  c.setOption(updateChartConfiguration(w));
+const initTimeseriesWidget = (w) => {
+  w.data = w.opt.dataset?.source || null
+  const cEl = document.getElementById(w.chartId),
+    c = echarts.init(cEl, w.theme)
+  w.chart = c
+  w.chartEl = cEl
+  c.setOption(updateChartConfiguration(w))
 
-  const ro = new ResizeObserver(() => requestAnimationFrame(() => echarts.getInstanceByDom(cEl).resize()));
-  ro.observe(cEl);
+  const ro = new ResizeObserver(() => requestAnimationFrame(() => echarts.getInstanceByDom(cEl).resize()))
+  ro.observe(cEl)
 
-  const ls = document.getElementById('streamLiveData');
-  let iId = null;
-  ls?.addEventListener('change', () => ls.checked ? iId=setInterval(() => updateChartData(w), FETCH_INTERVAL) : (clearInterval(iId), iId=null));
+  const ls = document.getElementById('streamLiveData')
+  let iId = null
+  ls?.addEventListener('change', () => (ls.checked ? (iId = setInterval(() => updateChartData(w), FETCH_INTERVAL)) : (clearInterval(iId), (iId = null))))
 
   if (!w.opt.dataset.source) {
-    c.showLoading();
-    const io = new IntersectionObserver(es => {
-      if (es[0]?.isIntersecting) { updateChartData(w); io.disconnect(); }
-    });
-    io.observe(cEl);
+    c.showLoading()
+    const io = new IntersectionObserver((es) => {
+      if (es[0]?.isIntersecting) {
+        updateChartData(w)
+        io.disconnect()
+      }
+    })
+    io.observe(cEl)
   }
 
-  ['submit','add-query','update-query'].forEach(ev =>
-    document.querySelector(ev==='submit'?'#log_explorer_form':'#filterElement')
-      ?.addEventListener(ev, () => updateChartData(w))
-  );
+  ;['submit', 'add-query', 'update-query'].forEach((ev) => document.querySelector(ev === 'submit' ? '#log_explorer_form' : '#filterElement')?.addEventListener(ev, () => updateChartData(w)))
 
-  window.addEventListener('unload', () => { clearInterval(iId); ro.disconnect(); });
-};
+  window.addEventListener('unload', () => {
+    clearInterval(iId)
+    ro.disconnect()
+  })
+}

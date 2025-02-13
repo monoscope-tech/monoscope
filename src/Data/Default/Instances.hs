@@ -1,6 +1,7 @@
 module Data.Default.Instances () where
 
 import Data.Aeson.Types qualified as AET
+import Data.Bool (Bool (False))
 import Data.CaseInsensitive (CI, FoldCase)
 import Data.CaseInsensitive qualified as CI (mk)
 import Data.Default
@@ -10,7 +11,6 @@ import Data.Time (UTCTime, ZonedTime)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Relude.Unsafe qualified as Unsafe
-import Data.Bool (Bool(False))
 
 
 instance Default ZonedTime where
@@ -67,9 +67,6 @@ instance Default T.Text where
 instance Default TL.Text where
   def = TL.empty
   {-# INLINE def #-}
-
-instance Default Bool where
-  def = False
 
 
 ----- Vector

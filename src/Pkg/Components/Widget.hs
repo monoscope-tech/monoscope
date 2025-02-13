@@ -239,6 +239,8 @@ widget_ w =
                 init(${echartOpt}, "${chartId}", ${query}, "${theme}", "${yAxisLabel}", ${pid});
               })();
           |]
+
+
 -----------------------------------------------------------------------------
 -- Echarts Logic
 -----------------------------------------------------------------------------
@@ -255,58 +257,60 @@ widgetToECharts widget =
       axisVisibility = not isStat
       gridLinesVisibility = not isStat
       legendVisibility = not isStat
-  in AE.object
-       [ "tooltip"
-           AE..= AE.object
-             [ "trigger" AE..= ("axis" :: Text)
-             , "axisPointer"
-                 AE..= AE.object
-                   ["type" AE..= ("shadow" :: Text)]
-             ]
-       , "legend"
-           AE..= AE.object
-             [ "show" AE..= legendVisibility
-             , "type" AE..= ("scroll" :: Text)
-             , "top" AE..= ("bottom" :: Text)
-             , "data" AE..= fromMaybe [] (extractLegend widget)
-             ]
-       , "grid"
-           AE..= AE.object
-             [ "width" AE..= ("100%" :: Text)
-             , "left" AE..= ("0%" :: Text)
-             , "top" AE..= ("2%" :: Text)
-             , "bottom" AE..= if fromMaybe False widget.hideLegend then "1.8%" else "22%"
-             , "containLabel" AE..= True
-             , "show" AE..= gridLinesVisibility
-             ]
-       , "xAxis"
-           AE..= AE.object
-             [ "type" AE..= ("time" :: Text)
-             , "scale" AE..= True
-             , "min" AE..= maybe AE.Null (AE.Number . fromIntegral) (widget ^? #dataset . _Just . #from . _Just)
-             , "max" AE..= maybe AE.Null (AE.Number . fromIntegral) (widget ^? #dataset . _Just . #to . _Just)
-             , "boundaryGap" AE..= ([0, 0.01] :: [Double])
-             , "axisLabel" AE..= AE.object ["show" AE..= axisVisibility]
-             , "show" AE..= axisVisibility
-             ]
-       , "yAxis"
-           AE..= AE.object
-             [ "type" AE..= ("value" :: Text)
-             , "min" AE..= (0 :: Int)
-             , "splitLine" AE..= AE.object ["show" AE..= gridLinesVisibility]
-             , "axisLabel" AE..= AE.object ["show" AE..= axisVisibility]
-             , "show" AE..= axisVisibility
-             ]
-       , "dataset"
-           AE..= AE.object
-             ["source" AE..= fromMaybe AE.Null (widget.dataset <&> (.source))]
-       , "series" AE..= map (createSeries widget.wType) []
-       , "animation" AE..= False
-       ]
+   in AE.object
+        [ "tooltip"
+            AE..= AE.object
+              [ "trigger" AE..= ("axis" :: Text)
+              , "axisPointer"
+                  AE..= AE.object
+                    ["type" AE..= ("shadow" :: Text)]
+              ]
+        , "legend"
+            AE..= AE.object
+              [ "show" AE..= legendVisibility
+              , "type" AE..= ("scroll" :: Text)
+              , "top" AE..= ("bottom" :: Text)
+              , "data" AE..= fromMaybe [] (extractLegend widget)
+              ]
+        , "grid"
+            AE..= AE.object
+              [ "width" AE..= ("100%" :: Text)
+              , "left" AE..= ("0%" :: Text)
+              , "top" AE..= ("2%" :: Text)
+              , "bottom" AE..= if fromMaybe False widget.hideLegend then "1.8%" else "22%"
+              , "containLabel" AE..= True
+              , "show" AE..= gridLinesVisibility
+              ]
+        , "xAxis"
+            AE..= AE.object
+              [ "type" AE..= ("time" :: Text)
+              , "scale" AE..= True
+              , "min" AE..= maybe AE.Null (AE.Number . fromIntegral) (widget ^? #dataset . _Just . #from . _Just)
+              , "max" AE..= maybe AE.Null (AE.Number . fromIntegral) (widget ^? #dataset . _Just . #to . _Just)
+              , "boundaryGap" AE..= ([0, 0.01] :: [Double])
+              , "axisLabel" AE..= AE.object ["show" AE..= axisVisibility]
+              , "show" AE..= axisVisibility
+              ]
+        , "yAxis"
+            AE..= AE.object
+              [ "type" AE..= ("value" :: Text)
+              , "min" AE..= (0 :: Int)
+              , "splitLine" AE..= AE.object ["show" AE..= gridLinesVisibility]
+              , "axisLabel" AE..= AE.object ["show" AE..= axisVisibility]
+              , "show" AE..= axisVisibility
+              ]
+        , "dataset"
+            AE..= AE.object
+              ["source" AE..= fromMaybe AE.Null (widget.dataset <&> (.source))]
+        , "series" AE..= map (createSeries widget.wType) []
+        , "animation" AE..= False
+        ]
+
 
 -- Helper: Extract legend data
 extractLegend :: Widget -> Maybe [Text]
 extractLegend widget = fmap (map (fromMaybe "Unnamed Series" . (.query))) widget.queries
+
 
 -- Helper: Create series
 createSeries :: WidgetType -> Maybe Query -> AE.Value
@@ -327,17 +331,18 @@ createSeries widgetType query =
                 --           ]
                 ]
           ]
-  in AE.object
-       [ "name" AE..= fromMaybe "Unnamed Series" (query >>= (.query))
-       , "type" AE..= mapWidgetTypeToChartType widgetType
-       , "stack" AE..= ("Stack" :: Text)
-       , "showBackground" AE..= not isStat
-       , "backgroundStyle"
-           AE..= AE.object
-             ["color" AE..= ("rgba(240,248,255, 0.4)" :: Text)]
-       , "areaStyle" AE..= if isStat then gradientStyle else AE.Null
-       , "lineStyle" AE..= AE.object ["width" AE..= if isStat then 0 else 1]
-       ]
+   in AE.object
+        [ "name" AE..= fromMaybe "Unnamed Series" (query >>= (.query))
+        , "type" AE..= mapWidgetTypeToChartType widgetType
+        , "stack" AE..= ("Stack" :: Text)
+        , "showBackground" AE..= not isStat
+        , "backgroundStyle"
+            AE..= AE.object
+              ["color" AE..= ("rgba(240,248,255, 0.4)" :: Text)]
+        , "areaStyle" AE..= if isStat then gradientStyle else AE.Null
+        , "lineStyle" AE..= AE.object ["width" AE..= if isStat then 0 else 1]
+        ]
+
 
 -- Helper: Map widget type to ECharts chart type
 mapWidgetTypeToChartType :: WidgetType -> Text
