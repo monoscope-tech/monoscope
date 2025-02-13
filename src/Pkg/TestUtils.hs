@@ -127,7 +127,7 @@ testSessionHeader pool = do
       & runTime
       & runEff
       & liftIO
-  Auth.sessionByID (Just pSessId) "requestID" False
+  Auth.sessionByID (Just pSessId) "requestID" False Nothing
     & runErrorNoCallStack @Servant.ServerError
     & DB.runDB pool
     & runEff

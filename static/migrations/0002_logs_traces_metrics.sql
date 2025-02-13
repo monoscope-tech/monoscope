@@ -136,3 +136,84 @@ CREATE TABLE IF NOT EXISTS projects.dashboards (
   PRIMARY KEY (id)
 );
 SELECT manage_updated_at('projects.dashboards');
+
+
+CREATE TABLE IF NOT EXISTS telemetry.events (
+    project_id UUID NOT NULL REFERENCES projects.projects (id) ON DELETE CASCADE,
+    id UUID NOT NULL DEFAULT gen_random_uuid(),
+    timestamp TIMESTAMPTZ NOT NULL DEFAULT current_timestamp,
+    trace_id TEXT NOT NULL,
+    span_id TEXT NOT NULL,
+    parent_span_id TEXT DEFAULT NULL,
+    trace_state TEXT DEFAULT '',
+    start_time TIMESTAMPTZ NOT NULL,
+    end_time TIMESTAMPTZ DEFAULT NULL,
+    duration_ns BIGINT NOT NULL DEFAULT 0,
+    span_name TEXT NOT NULL DEFAULT '',
+    span_kind telemetry.span_kind,
+    span_type TEXT NOT NULL DEFAULT 'span',
+
+    -- Status and severity
+    status telemetry.span_status DEFAULT NULL,
+    status_code INTEGER DEFAULT 0,
+    status_message TEXT DEFAULT '',
+    severity_text telemetry.severity_level DEFAULT NULL,
+    severity_number INTEGER DEFAULT 0,
+
+    -- Request specific fields
+    host TEXT NOT NULL DEFAULT '',
+    url_path TEXT NOT NULL DEFAULT '',
+    raw_url TEXT NOT NULL DEFAULT '',
+    method TEXT NOT NULL DEFAULT '',
+    referer TEXT NOT NULL DEFAULT '',
+
+    -- Request/Response data
+    path_params JSONB NOT NULL DEFAULT '{}'::jsonb,
+    query_params JSONB NOT NULL DEFAULT '{}'::jsonb,
+    request_headers JSONB NOT NULL DEFAULT '{}'::jsonb,
+    response_headers JSONB NOT NULL DEFAULT '{}'::jsonb,
+    request_body JSONB NOT NULL DEFAULT '{}'::jsonb,
+    response_body JSONB NOT NULL DEFAULT '{}'::jsonb,
+
+    -- API-specific fields
+    endpoint_hash TEXT NOT NULL DEFAULT '',
+    shape_hash TEXT NOT NULL DEFAULT '',
+    format_hashes TEXT[] NOT NULL DEFAULT '{}'::text[],
+    field_hashes TEXT[] NOT NULL DEFAULT '{}'::text[],
+    sdk_type TEXT NOT NULL DEFAULT '',
+    service_version TEXT DEFAULT NULL,
+
+    -- Common metadata
+    attributes JSONB NOT NULL DEFAULT '{}'::jsonb,
+    events JSONB NOT NULL DEFAULT '{}'::jsonb,
+    links JSONB NOT NULL DEFAULT '{}'::jsonb,
+    resource JSONB NOT NULL DEFAULT '{}'::jsonb,
+    instrumentation_scope JSONB NOT NULL DEFAULT '{}'::jsonb,
+    errors JSONB NOT NULL DEFAULT '{}'::jsonb,
+    tags TEXT[] NOT NULL DEFAULT '{}'::text[],
+
+    PRIMARY KEY (project_id, timestamp, id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_telemetry_events_trace_id
+ON telemetry.events (trace_id);
+
+-- Index for efficient project-trace filtering
+CREATE INDEX IF NOT EXISTS idx_telemetry_events_project_trace
+ON telemetry.events (project_id, trace_id);
+
+-- Index for span relationship lookups
+CREATE INDEX IF NOT EXISTS idx_telemetry_events_parent_span_id
+ON telemetry.events (parent_span_id);
+
+-- Index for efficient time-based queries
+CREATE INDEX IF NOT EXISTS idx_telemetry_events_start_end
+ON telemetry.events (start_time DESC, end_time DESC);
+
+-- Index for full text search
+CREATE INDEX IF NOT EXISTS idx_telemetry_events_body_tsvector
+ON telemetry.events USING gin(body_tsvector);
+
+-- Index for span type filtering
+CREATE INDEX IF NOT EXISTS idx_telemetry_events_span_type
+ON telemetry.events (span_type);
