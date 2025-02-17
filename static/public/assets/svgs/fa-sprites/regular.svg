@@ -480,19 +480,13 @@
   </symbol>
 
 
-  <symbol id="download-f" width="10" height="10" viewBox="0 0 10 10" fill="none"
-    xmlns="http://www.w3.org/2000/svg">
+  <symbol id="download-f" width="10" height="10" viewBox="0 0 10 10" fill="none">
     <g clip-path="url(#clip0_8255_26416)">
       <path
         d="M8.75 6.25V7.91667C8.75 8.13768 8.6622 8.34964 8.50592 8.50592C8.34964 8.6622 8.13768 8.75 7.91667 8.75H2.08333C1.86232 8.75 1.65036 8.6622 1.49408 8.50592C1.3378 8.34964 1.25 8.13768 1.25 7.91667V6.25M2.91667 4.16667L5 6.25M5 6.25L7.08333 4.16667M5 6.25V1.25"
         stroke="#000D4D" stroke-opacity="0.45" stroke-width="1.33" stroke-linecap="round"
         stroke-linejoin="round" />
     </g>
-    <defs>
-      <clipPath id="clip0_8255_26416">
-        <rect width="10" height="10" fill="white" />
-      </clipPath>
-    </defs>
   </symbol>
 
 </svg>

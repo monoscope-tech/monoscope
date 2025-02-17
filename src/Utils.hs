@@ -229,9 +229,27 @@ jsonValueToHtmlTree :: AE.Value -> Html ()
 jsonValueToHtmlTree val = do
   div_ [class_ "p-2 rounded-lg bg-fillWeaker border w-full overflow-x-auto"] do
     div_ [class_ "w-full flex items-center gap-4 text-xs mb-2"] do
-      button_ [class_ "flex items-center gap-1", [__|on click remove .collapsed from <.log-item-with-children/> |]] do
-        span_ [class_ "underline"] "Expand all"
-        faSprite_ "expand" "regular" "w-2 h-2"
+      button_
+        [ id_ "expand_all"
+        , class_ "flex items-center gap-1"
+        , [__|on click remove .collapsed from <.log-item-with-children/>
+              then add .hidden to me
+              then remove .hidden from #collapse_all |]
+        ]
+        do
+          span_ [class_ "underline"] "Expand all"
+          faSprite_ "expand" "regular" "w-2 h-2"
+      button_
+        [ id_ "collapse_all"
+        , class_ "flex hidden items-center gap-1"
+        , [__| on click add .collapsed to <.log-item-with-children/>
+               then add .hidden to me
+               then remove .hidden from #expand_all |]
+        ]
+        do
+          span_ [class_ "underline"] "Collapse all"
+          faSprite_ "expand" "regular" "w-2 h-2"
+
       let json = decodeUtf8 $ AE.encode $ AE.toJSON val
       button_
         [ class_ "flex items-center gap-1"
