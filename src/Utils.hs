@@ -226,7 +226,22 @@ replaceNumbers input = T.replace ".[*]" "[*]" $ T.intercalate "." (map replaceDi
 
 
 jsonValueToHtmlTree :: AE.Value -> Html ()
-jsonValueToHtmlTree val = jsonValueToHtmlTree' ("", "", val)
+jsonValueToHtmlTree val = do
+  div_ [class_ "p-2 rounded-lg bg-fillWeaker border w-full overflow-x-auto"] do
+    div_ [class_ "w-full flex items-center gap-4 text-xs mb-2"] do
+      button_ [class_ "flex items-center gap-1", [__|on click remove .collapsed from <.log-item-with-children/> |]] do
+        span_ [class_ "underline"] "Expand all"
+        faSprite_ "expand" "regular" "w-2 h-2"
+      let json = decodeUtf8 $ AE.encode $ AE.toJSON val
+      button_
+        [ class_ "flex items-center gap-1"
+        , onclick_ "window.downloadJson(event)"
+        , term "data-reqJson" $ json
+        ]
+        do
+          span_ [class_ "underline"] "Download json"
+          faSprite_ "download-f" "regular" "w-2 h-2"
+    jsonValueToHtmlTree' ("", "", val)
   where
     jsonValueToHtmlTree' :: (Text, Text, AE.Value) -> Html ()
     jsonValueToHtmlTree' (path, key, AE.Object v) = renderParentType "{" "}" key (length v) (AEK.toHashMapText v & HM.toList & sort & mapM_ (\(kk, vv) -> jsonValueToHtmlTree' (path <> "." <> key, kk, vv)))
@@ -247,7 +262,7 @@ jsonValueToHtmlTree val = jsonValueToHtmlTree' ("", "", val)
             span_ [class_ "text-blue-800 ml-2.5 log-item-field-value", term "data-field-path" fullFieldPath'] $ toHtml $ unwrapJsonPrimValue False value
 
     renderParentType :: Text -> Text -> Text -> Int -> Html () -> Html ()
-    renderParentType opening closing key count child = div_ [class_ (if key == "" then "" else "collapsed")] do
+    renderParentType opening closing key count child = div_ [class_ (if key == "" then "log-item-with-children" else "log-item-with-children collapsed")] do
       a_
         [ class_ "inline-block items-center cursor-pointer"
         , onclick_ "this.parentNode.classList.toggle('collapsed')"

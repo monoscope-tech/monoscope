@@ -147,15 +147,15 @@ expandedSpanItem pid sp leftM rightM = do
                 button_ [onclick_ "navigatable(this, '#hed_content', '#http-content-container', 't-tab-box-active')", class_ "a-tab px-3 py-1 rounded-lg text-textWeak"] "Headers"
                 button_ [onclick_ "navigatable(this, '#par_content', '#http-content-container', 't-tab-box-active')", class_ "a-tab px-3 py-1 rounded-lg text-textWeak"] "Params"
             div_ [] do
-              div_ [id_ "raw_content", class_ "a-tab-content p-2 rounded-lg bg-fillWeaker border w-full overflow-x-auto c-scroll border-strokeWeak"] do
+              div_ [id_ "raw_content", class_ "a-tab-content"] do
                 jsonValueToHtmlTree $ selectiveReqToJson httpJson
-              div_ [id_ "req_content", class_ "hidden a-tab-content p-2 rounded-lg bg-fillWeaker border w-full overflow-x-auto c-scroll border-strokeWeak"] do
+              div_ [id_ "req_content", class_ "hidden a-tab-content"] do
                 jsonValueToHtmlTree $ AE.toJSON httpJson.requestBody
-              div_ [id_ "res_content", class_ "hidden a-tab-content p-2 rounded-lg bg-fillWeaker border w-full overflow-x-auto c-scroll border-strokeWeak"] do
+              div_ [id_ "res_content", class_ "hidden a-tab-content"] do
                 jsonValueToHtmlTree $ AE.toJSON httpJson.responseBody
-              div_ [id_ "hed_content", class_ "hidden a-tab-content p-2 rounded-lg bg-fillWeaker border w-full overflow-x-auto c-scroll border-strokeWeak"] do
+              div_ [id_ "hed_content", class_ "hidden a-tab-content"] do
                 jsonValueToHtmlTree $ AE.object ["request_headers" AE..= httpJson.requestHeaders, "response_headers" AE..= httpJson.responseHeaders]
-              div_ [id_ "par_content", class_ "hidden a-tab-content p-2 rounded-lg bg-fillWeaker border w-full overflow-x-auto c-scroll border-strokeWeak"] do
+              div_ [id_ "par_content", class_ "hidden a-tab-content"] do
                 jsonValueToHtmlTree $ AE.object ["query_params" AE..= httpJson.queryParams, "path_params" AE..= httpJson.pathParams]
         _ -> pass
 
@@ -237,8 +237,8 @@ spanBadge val key = do
 
 selectiveReqToJson :: RequestMessage -> AE.Value
 selectiveReqToJson req =
-  AE.object
-    $ concat @[]
+  AE.object $
+    concat @[]
       [ ["created_at" AE..= req.timestamp]
       , ["errors" AE..= fromMaybe [] req.errors]
       , ["host" AE..= req.host]
