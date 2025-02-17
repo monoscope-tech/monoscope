@@ -45,21 +45,28 @@ export class LogList extends LitElement {
 
   firstUpdated() {
     const loader = document.querySelector('#loader')
+    const container = document.querySelector('#logs_list_container') // The scrollable parent
+
+    if (!loader || !container) {
+      console.error('Loader or container not found', { loader, container })
+      return
+    }
+
     const observer = new IntersectionObserver(
       ([entry]) => {
         if (entry.isIntersecting) {
           this.fetchData(this.nextFetchUrl)
         }
       },
-      { threshold: 0.5 }
+      {
+        root: container,
+        threshold: 0,
+      }
     )
-    if (loader) {
-      window.setTimeout(() => {
-        observer.observe(loader)
-      }, 3000)
-    } else {
-      console.log('loader not found', loader)
-    }
+
+    setTimeout(() => {
+      observer.observe(loader)
+    }, 3000)
   }
 
   logItemRow(rowData) {
@@ -145,14 +152,10 @@ export class LogList extends LitElement {
         return this.tableHeadingWrapper(pid, column, column)
     }
   }
-  handleVirtualListEvent(e) {
-    console.log('The first visible index is', e.firstVisible)
-    console.log('The last visible index is', e.lastVisible)
-    this.canLoadMore = true
-  }
+
   render() {
     return html`
-      <div class="relative overflow-y-scroll overflow-x-hidden w-full pb-16 min-h-full c-scroll" id="logs_list_container">
+      <div class="relative overflow-y-scroll overflow-x-hidden w-full min-h-full c-scroll" id="logs_list_container">
         <table class="w-full table-auto ctable min-h-full table-pin-rows table-pin-cols overflow-x-hidden" style="height:1px; --rounded-box:0;">
           <thead class="w-full overflow-hidden">
             <tr class="text-textStrong border-b font-medium border-y">
@@ -167,7 +170,8 @@ export class LogList extends LitElement {
           </tbody>
         </table>
         ${this.hasMore
-          ? html`<div class="w-full flex justify-center items-center" id="loader">
+          ? html`<div class="w-full flex justify-center relative">
+              <div class="absolute -top-[450px] left-0 flex flex-col justify-end -z-10 items-center" id="loader"></div>
               ${this.isLoading
                 ? html`<div class="mx-auto loading loading-dots loading-md"></div>`
                 : html` <button class="cursor-pointer text-textBrand underline font-semibold w-max mx-auto" @click=${() => this.fetchData(this.nextFetchUrl)}>Load more</button> `}
@@ -178,26 +182,6 @@ export class LogList extends LitElement {
   }
   createRenderRoot() {
     return this
-  }
-}
-
-function logTableHeading(pid, column) {
-  switch (column) {
-    case 'id':
-      return html`<td class="p-0 m-0 whitespace-nowrap w-3"></td>`
-    case 'timestamp':
-    case 'created_at':
-      return tableHeadingWrapper(pid, 'timestamp', 'w-[16ch]')
-    case 'latency_breakdown':
-      return tableHeadingWrapper(pid, 'latency_breakdown', 'w-[20ch]')
-    case 'status_code':
-      return tableHeadingWrapper(pid, 'status')
-    case 'service':
-      return tableHeadingWrapper(pid, 'service', 'w-[20ch]')
-    case 'rest':
-      return tableHeadingWrapper(pid, 'summary')
-    default:
-      return tableHeadingWrapper(pid, column)
   }
 }
 
