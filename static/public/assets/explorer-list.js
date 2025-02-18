@@ -171,7 +171,7 @@ export class LogList extends LitElement {
         </table>
         ${this.hasMore
           ? html`<div class="w-full flex justify-center relative">
-              <div class="absolute -top-[450px] left-0 flex flex-col justify-end -z-10 items-center" id="loader"></div>
+              <div class="absolute -top-[600px]  w-full h-[600px] -z-10 left-0 flex flex-col justify-end bg-[rgba(0,0,0,0.2)] items-center" id="loader"></div>
               ${this.isLoading
                 ? html`<div class="mx-auto loading loading-dots loading-md"></div>`
                 : html` <button class="cursor-pointer text-textBrand underline font-semibold w-max mx-auto" @click=${() => this.fetchData(this.nextFetchUrl)}>Load more</button> `}
@@ -352,20 +352,6 @@ function errorClass(expandedSection, reqVec, colIdxMap) {
   }
 
   return [status, errCount, errClass]
-}
-
-function barSeverityClass(reqVec, colIdxMap) {
-  const severity = lookupVecTextByKey(reqVec, colIdxMap, 'severity') || 'INFO'
-
-  return (
-    {
-      ERROR: 'bg-red-500',
-      WARNING: 'bg-warning',
-      INFO: 'bg-blue-200',
-      DEBUG: 'bg-gray-300',
-      FATAL: 'bg-purple-500',
-    }[severity] || 'bg-blue-200'
-  )
 }
 
 function getSeverityColor(severity) {
