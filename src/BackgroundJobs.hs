@@ -142,7 +142,7 @@ jobsRunner logger authCtx job = when authCtx.config.enableBackgroundJobs $ do
             sendPostmarkEmail userEmail (Just ("project-deleted", templateVars)) Nothing
       DailyJob -> do
         currentDay <- utctDay <$> Time.currentTime
-        projects <- dbtToEff $ query Select [sql|SELECT id FROM projects.projects WHERE active=? AND deleted_at IS NULL|] (Only True)
+        projects <- dbtToEff $ query Select [sql|SELECT id FROM projects.projects WHERE active=? AND deleted_at IS NULL and payment_plan != 'ONBOARDING'|] (Only True)
         forM_ projects \p -> do
           liftIO $ withResource authCtx.jobsPool \conn -> do
             _ <-
@@ -157,7 +157,7 @@ jobsRunner logger authCtx job = when authCtx.config.enableBackgroundJobs $ do
       WeeklyReports pid -> weeklyReportForProject pid
       GenSwagger pid uid host -> generateSwaggerForProject pid uid host
       ReportUsage pid -> whenJustM (dbtToEff $ Projects.projectById pid) \project -> do
-        when (project.paymentPlan == "UsageBased" || project.paymentPlan == "GraduatedPricing") $ whenJust project.firstSubItemId \fSubId -> do
+        when (project.paymentPlan /= "Free" && project.paymentPlan /= "ONBOARDING") $ whenJust project.firstSubItemId \fSubId -> do
           currentTime <- liftIO getZonedTime
           totalToReport <- dbtToEff $ RequestDumps.getTotalRequestToReport pid project.usageLastReported
           liftIO $ reportUsageToLemonsqueezy fSubId totalToReport authCtx.config.lemonSqueezyApiKey
@@ -292,8 +292,8 @@ handleQueryMonitorThreshold monitorE isAlert = do
 
 jobsWorkerInit :: Log.Logger -> Config.AuthContext -> IO ()
 jobsWorkerInit logger appCtx =
-  startJobRunner
-    $ mkConfig jobLogger "background_jobs" appCtx.jobsPool (MaxConcurrentJobs 1) (jobsRunner logger appCtx) id
+  startJobRunner $
+    mkConfig jobLogger "background_jobs" appCtx.jobsPool (MaxConcurrentJobs 1) (jobsRunner logger appCtx) id
   where
     jobLogger :: LogLevel -> LogEvent -> IO ()
     jobLogger logLevel logEvent = Log.runLogT "OddJobs" logger Log.LogAttention $ Log.logInfo "Background jobs ping." (show @Text logLevel, show @Text logEvent) -- logger show (logLevel, logEvent)
@@ -482,8 +482,8 @@ Endpoint: `{endpointPath}`
 [View more](https://app.apitoolkit.io/p/{pid.toText}/anomalies/by_hash/{targetHash})|]
             whenJust project.discordUrl (`sendDiscordNotif` msg)
           _ -> do
-            when (totalRequestsCount > 50)
-              $ forM_ users \u -> do
+            when (totalRequestsCount > 50) $
+              forM_ users \u -> do
                 let templateVars =
                       AE.object
                         [ "user_name" AE..= u.firstName
@@ -567,21 +567,21 @@ Endpoint: `{endpointPath}`
       err <- Unsafe.fromJust <<$>> dbtToEff $ Anomalies.errorByHash targetHash
       issueId <- liftIO $ Anomalies.AnomalyId <$> UUIDV4.nextRandom
       _ <-
-        dbtToEff
-          $ Anomalies.insertIssue
-          $ Anomalies.Issue
-            { id = issueId
-            , createdAt = err.createdAt
-            , updatedAt = err.updatedAt
-            , projectId = pid
-            , anomalyType = Anomalies.ATRuntimeException
-            , targetHash = targetHash
-            , issueData = Anomalies.IDNewRuntimeExceptionIssue err.errorData
-            , acknowlegedAt = Nothing
-            , acknowlegedBy = Nothing
-            , endpointId = Nothing
-            , archivedAt = Nothing
-            }
+        dbtToEff $
+          Anomalies.insertIssue $
+            Anomalies.Issue
+              { id = issueId
+              , createdAt = err.createdAt
+              , updatedAt = err.updatedAt
+              , projectId = pid
+              , anomalyType = Anomalies.ATRuntimeException
+              , targetHash = targetHash
+              , issueData = Anomalies.IDNewRuntimeExceptionIssue err.errorData
+              , acknowlegedAt = Nothing
+              , acknowlegedBy = Nothing
+              , endpointId = Nothing
+              , archivedAt = Nothing
+              }
       forM_ project.notificationsChannel \case
         Projects.NSlack ->
           sendSlackMessage
@@ -601,16 +601,18 @@ A new runtime exception has been detected. click the link below to see more deta
 [View more](https://app.apitoolkit.io/p/{pid.toText}/anomalies/by_hash/{targetHash})|]
 
           whenJust project.discordUrl (`sendDiscordNotif` msg)
-        _ -> forM_ users \u -> do
-          let firstName = u.firstName
-          let title = project.title
-          let anomaly_url = "https://app.apitoolkit.io/p/" <> pid.toText <> "/anomalies/by_hash/" <> targetHash
-          let templateVars =
-                [aesonQQ|{
-                      "user_name": #{firstName},
-                      "project_name": #{title},
-                      "anomaly_url": #{anomaly_url}
-                 }|]
-          sendPostmarkEmail (CI.original u.email) (Just ("anomaly-field", templateVars)) Nothing
+        _ ->
+          -- forM_ users \u -> do
+          --   let firstName = u.firstName
+          --   let title = project.title
+          --   let anomaly_url = "https://app.apitoolkit.io/p/" <> pid.toText <> "/anomalies/by_hash/" <> targetHash
+          --   let templateVars =
+          --         [aesonQQ|{
+          --               "user_name": #{firstName},
+          --               "project_name": #{title},
+          --               "anomaly_url": #{anomaly_url}
+          --          }|]
+          pass
+    -- sendPostmarkEmail (CI.original u.email) (Just ("anomaly-field", templateVars)) Nothing
     Anomalies.ATField -> pass
     Anomalies.ATUnknown -> pass
