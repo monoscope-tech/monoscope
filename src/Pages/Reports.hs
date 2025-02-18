@@ -207,9 +207,7 @@ singleReportPage pid report =
               h4_ [class_ "text-xl font-medium capitalize"] $ toHtml report'.reportType <> " report"
               span_ [] $ show $ localDay (zonedTimeToLocalTime report'.createdAt)
             div_ [class_ "px-4 py-3 space-y-8"] do
-              let rep_json = case AE.eitherDecode (AE.encode report'.reportJson) of
-                    Left err -> error $ toText $ "JSON decoding failed: " ++ err
-                    Right val -> val :: Maybe ReportData
+              let rep_json = AE.decode (AE.encode report'.reportJson) :: Maybe ReportData
               case rep_json of
                 Just v -> do
                   div_ [class_ "anomalies"] do
