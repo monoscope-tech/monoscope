@@ -20,6 +20,7 @@ module Pages.Reports (
 where
 
 import Data.Aeson qualified as AE
+import Data.Aeson.Types qualified as AEP
 import Data.Default (def)
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
@@ -81,8 +82,45 @@ data ReportAnomalyType
   | ATRuntimeException
       { endpointUrlPath :: Text
       }
+  | UnknownAnomaly
   deriving stock (Show, Generic)
-  deriving anyclass (AE.ToJSON, AE.FromJSON)
+  deriving anyclass (AE.ToJSON)
+
+
+instance AE.FromJSON ReportAnomalyType where
+  parseJSON = AE.withObject "ReportAnomalyType" $ \o -> do
+    anomalyType <- o AE..:? "anomaly_type" :: AEP.Parser (Maybe Text)
+    case anomalyType of
+      Just _ -> pure UnknownAnomaly
+      Nothing -> do
+        tag <- o AE..:? "tag" :: AEP.Parser (Maybe Text)
+        case tag of
+          Just "ATEndpoint" ->
+            ATEndpoint
+              <$> o AE..: "endpointUrlPath"
+              <*> o AE..: "endpointMethod"
+              <*> o AE..: "eventsCount"
+          Just "ATShape" ->
+            ATShape
+              <$> o AE..: "endpointUrlPath"
+              <*> o AE..: "endpointMethod"
+              <*> o AE..: "targetHash"
+              <*> o AE..: "newUniqueFields"
+              <*> o AE..: "updatedFieldFormats"
+              <*> o AE..: "deletedFields"
+              <*> o AE..: "eventsCount"
+          Just "ATFormat" ->
+            ATFormat
+              <$> o AE..: "endpointUrlPath"
+              <*> o AE..: "keyPath"
+              <*> o AE..: "endpointMethod"
+              <*> o AE..: "formatType"
+              <*> o AE..: "formatExamples"
+              <*> o AE..: "eventsCount"
+          Just "ATRuntimeException" ->
+            ATRuntimeException
+              <$> o AE..: "endpointUrlPath"
+          _ -> pure UnknownAnomaly
 
 
 data ReportData = ReportData
@@ -169,7 +207,9 @@ singleReportPage pid report =
               h4_ [class_ "text-xl font-medium capitalize"] $ toHtml report'.reportType <> " report"
               span_ [] $ show $ localDay (zonedTimeToLocalTime report'.createdAt)
             div_ [class_ "px-4 py-3 space-y-8"] do
-              let rep_json = AE.decode (AE.encode report'.reportJson) :: Maybe ReportData
+              let rep_json = case AE.eitherDecode (AE.encode report'.reportJson) of
+                    Left err -> error $ toText $ "JSON decoding failed: " ++ err
+                    Right val -> val :: Maybe ReportData
               case rep_json of
                 Just v -> do
                   div_ [class_ "anomalies"] do
@@ -218,7 +258,7 @@ singleReportPage pid report =
                                     small_ "examples: "
                                     small_ $ toHtml $ T.intercalate ", " formatExamples
                               small_ [] $ show eventsCount <> " requests"
-                          ATRuntimeException _ -> do
+                          _ -> do
                             pass
 
                   div_ [] do
@@ -338,39 +378,42 @@ buildPerformanceJSON pr = AE.object ["endpoints" AE..= pr]
 
 
 buildAnomalyJSON :: V.Vector Anomalies.IssueL -> Int -> AE.Value
-buildAnomalyJSON anomalies total = AE.object ["anomalies" AE..= V.map buildjson anomalies, "anomaliesCount" AE..= total]
+buildAnomalyJSON anomalies total = AE.object ["anomalies" AE..= (V.catMaybes $ V.map buildjson anomalies), "anomaliesCount" AE..= total]
   where
-    buildjson :: Anomalies.IssueL -> AE.Value
+    buildjson :: Anomalies.IssueL -> Maybe AE.Value
     buildjson an = case an.issueData of
       Anomalies.IDNewEndpointIssue e ->
-        AE.object
-          [ "endpointUrlPath" AE..= e.endpointUrlPath
-          , "endpointMethod" AE..= e.endpointMethod
-          , "tag" AE..= Anomalies.ATEndpoint
-          , "eventsCount" AE..= an.eventsAgg.count
-          ]
+        Just $
+          AE.object
+            [ "endpointUrlPath" AE..= e.endpointUrlPath
+            , "endpointMethod" AE..= e.endpointMethod
+            , "tag" AE..= Anomalies.ATEndpoint
+            , "eventsCount" AE..= an.eventsAgg.count
+            ]
       Anomalies.IDNewShapeIssue s ->
-        AE.object
-          [ "endpointUrlPath" AE..= s.endpointUrlPath
-          , "endpointMethod" AE..= s.endpointMethod
-          , "targetHash" AE..= an.targetHash
-          , "tag" AE..= Anomalies.ATShape
-          , "newUniqueFields" AE..= s.newUniqueFields
-          , "updatedFieldFormats" AE..= s.updatedFieldFormats
-          , "deletedFields" AE..= s.deletedFields
-          , "eventsCount" AE..= an.eventsAgg.count
-          ]
+        Just $
+          AE.object
+            [ "endpointUrlPath" AE..= s.endpointUrlPath
+            , "endpointMethod" AE..= s.endpointMethod
+            , "targetHash" AE..= an.targetHash
+            , "tag" AE..= Anomalies.ATShape
+            , "newUniqueFields" AE..= s.newUniqueFields
+            , "updatedFieldFormats" AE..= s.updatedFieldFormats
+            , "deletedFields" AE..= s.deletedFields
+            , "eventsCount" AE..= an.eventsAgg.count
+            ]
       Anomalies.IDNewFormatIssue f ->
-        AE.object
-          [ "endpointUrlPath" AE..= f.endpointUrlPath
-          , "endpointMethod" AE..= f.endpointMethod
-          , "keyPath" AE..= f.fieldKeyPath
-          , "tag" AE..= Anomalies.ATFormat
-          , "formatType" AE..= f.formatType
-          , "formatExamples" AE..= f.examples
-          , "eventsCount" AE..= an.eventsAgg.count
-          ]
-      _ -> AE.object ["anomaly_type" AE..= AE.String "unknown"]
+        Just $
+          AE.object
+            [ "endpointUrlPath" AE..= f.endpointUrlPath
+            , "endpointMethod" AE..= f.endpointMethod
+            , "keyPath" AE..= f.fieldKeyPath
+            , "tag" AE..= Anomalies.ATFormat
+            , "formatType" AE..= f.formatType
+            , "formatExamples" AE..= f.examples
+            , "eventsCount" AE..= an.eventsAgg.count
+            ]
+      _ -> Nothing
 
 
 getAnomaliesEmailTemplate :: V.Vector Anomalies.IssueL -> V.Vector AE.Value
@@ -561,7 +604,7 @@ reportEmail pid report' =
                           small_ [style_ ""] "examples: "
                           small_ [style_ ""] $ toHtml $ T.intercalate ", " formatExamples
                         p_ [style_ ""] $ show eventsCount <> " requests"
-                    ATRuntimeException _ -> pass
+                    _ -> pass
 
             div_ [style_ "width: 100%"] do
               div_ [style_ "width:100%; border-bottom: 1px solid #e5e7eb; padding-bottom: 0.5rem; display:inline"] do
