@@ -250,7 +250,11 @@ function logItemCol(dataArr, source, colIdxMap, key, childSpansMap) {
       return source == 'logs'
         ? html`${logItemCol(dataArr, source, colIdxMap, 'severity_text')} ${logItemCol(dataArr, source, colIdxMap, 'body')}`
         : source === 'spans'
-        ? ['status', 'kind', 'duration', 'span_name'].map((k) => logItemCol(dataArr, source, colIdxMap, k))
+        ? html`<div class="flex items-center w-auto gap-1">
+            <div class="w-[800px] shrink overflow-hidden">${['status', 'kind', 'span_name'].map((k) => logItemCol(dataArr, source, colIdxMap, k))}</div>
+            <div class="w-24 overflow-visible shrink-0">${logItemCol(dataArr, source, colIdxMap, 'duration')}</div>
+            ${logItemCol(dataArr, source, colIdxMap, 'latency_breakdown', childSpansMap)}
+          </div>`
         : html`
             ${logItemCol(dataArr, source, colIdxMap, 'request_type')} ${logItemCol(dataArr, source, colIdxMap, 'status_code')} ${logItemCol(dataArr, source, colIdxMap, 'method')}
             ${logItemCol(dataArr, source, colIdxMap, 'url_path')} ${logItemCol(dataArr, source, colIdxMap, 'duration')} ${logItemCol(dataArr, source, colIdxMap, 'host')}
@@ -380,7 +384,7 @@ function getSpanStatusColor(status) {
 
 function spanLatencyBreakdown(spans) {
   const totalDuration = spans.reduce((sum, sp) => sum + sp[2], 0)
-  return html`<div class="w-[20ch] h-0 overflow-visible">
+  return html`<div class="w-[20ch] -mt-1 shrink-0">
     <div class="flex h-5 w-[200px]">
       ${spans.map((sps, i) => {
         const width = (sps[2] / totalDuration) * 200
