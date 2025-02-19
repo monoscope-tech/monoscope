@@ -336,16 +336,15 @@ dailyReportForProject pid = do
       _ -> do
         users & mapM_ \user -> do
           let firstName = user.firstName
-          let projectTitle = pr.title
-          let userEmail = CI.original user.email
-          let anmls = if total_anomalies == 0 then [AE.object ["message" AE..= "No anomalies detected yet."]] else RP.getAnomaliesEmailTemplate anomalies
-          let perf = RP.getPerformanceEmailTemplate endpoint_rp previous_day
-          let perf_count = V.length perf
-          let perf_shrt = if perf_count == 0 then [AE.object ["message" AE..= "No performance data yet."]] else V.take 10 perf
-
-          let rp_url = "https://app.apitoolkit.io/p/" <> pid.toText <> "/reports/" <> show report.id.reportId
-          let day = show $ localDay (zonedTimeToLocalTime currentTime)
-          let templateVars =
+              projectTitle = pr.title
+              userEmail = CI.original user.email
+              anmls = if total_anomalies == 0 then [AE.object ["message" AE..= "No anomalies detected yet."]] else RP.getAnomaliesEmailTemplate anomalies
+              perf = RP.getPerformanceEmailTemplate endpoint_rp previous_day
+              perf_count = V.length perf
+              perf_shrt = if perf_count == 0 then [AE.object ["message" AE..= "No performance data yet."]] else V.take 10 perf
+              rp_url = "https://app.apitoolkit.io/p/" <> pid.toText <> "/reports/" <> show report.id.reportId
+              day = show $ localDay (zonedTimeToLocalTime currentTime)
+              templateVars =
                 [aesonQQ|{
                  "user_name": #{firstName},
                  "project_name": #{projectTitle},
@@ -398,36 +397,36 @@ weeklyReportForProject pid = do
         whenJust pr.discordUrl \url -> sendDiscordNotif url [fmtTrim|**WEEKLY REPORT**: [{pr.title}]({projectUrl})|]
       _ -> do
         totalRequest <- dbtToEff $ RequestDumps.getLastSevenDaysTotalRequest pid
-        forM_ users \user -> do
-          let firstName = user.firstName
-          let projectTitle = pr.title
-          let userEmail = CI.original user.email
-          let anmls = if total_anomalies == 0 then [AE.object ["message" AE..= "No anomalies detected yet."]] else RP.getAnomaliesEmailTemplate anomalies
-          let perf = RP.getPerformanceEmailTemplate endpoint_rp previous_week
-          let perf_count = V.length perf
-          let perf_shrt = if perf_count == 0 then [AE.object ["message" AE..= "No performance data yet."]] else V.take 10 perf
-          let rp_url = "https://app.apitoolkit.io/p/" <> pid.toText <> "/reports/" <> show report.id.reportId
-          let dayEnd = show $ localDay (zonedTimeToLocalTime currentTime)
-          let currentUTCTime = zonedTimeToUTC currentTime
-          let sevenDaysAgoUTCTime = addUTCTime (negate $ 6 * 86400) currentUTCTime
-          let sevenDaysAgoZonedTime = utcToZonedTime timeZone sevenDaysAgoUTCTime
-          let dayStart = show $ localDay (zonedTimeToLocalTime sevenDaysAgoZonedTime)
-          let freeTierLimitExceeded = pr.paymentPlan == "FREE" && totalRequest > 5000
-
-          let templateVars =
-                [aesonQQ|{
-                 "user_name": #{firstName},
-                 "project_name": #{projectTitle},
-                 "anomalies_count": #{total_anomalies},
-                 "anomalies":  #{anmls},
-                 "report_url": #{rp_url},
-                 "performance_count": #{perf_count},
-                 "performance": #{perf_shrt},
-                 "start_date": #{dayStart},
-                 "end_date": #{dayEnd},
-                 "free_exceeded": #{freeTierLimitExceeded}
-          }|]
-          sendPostmarkEmail userEmail (Just ("weekly-report", templateVars)) Nothing
+        when (totalRequest > 0) do
+          forM_ users \user -> do
+            let firstName = user.firstName
+                projectTitle = pr.title
+                userEmail = CI.original user.email
+                anmls = if total_anomalies == 0 then [AE.object ["message" AE..= "No anomalies detected yet."]] else RP.getAnomaliesEmailTemplate anomalies
+                perf = RP.getPerformanceEmailTemplate endpoint_rp previous_week
+                perf_count = V.length perf
+                perf_shrt = if perf_count == 0 then [AE.object ["message" AE..= "No performance data yet."]] else V.take 10 perf
+                rp_url = "https://app.apitoolkit.io/p/" <> pid.toText <> "/reports/" <> show report.id.reportId
+                dayEnd = show $ localDay (zonedTimeToLocalTime currentTime)
+                currentUTCTime = zonedTimeToUTC currentTime
+                sevenDaysAgoUTCTime = addUTCTime (negate $ 6 * 86400) currentUTCTime
+                sevenDaysAgoZonedTime = utcToZonedTime timeZone sevenDaysAgoUTCTime
+                dayStart = show $ localDay (zonedTimeToLocalTime sevenDaysAgoZonedTime)
+                freeTierLimitExceeded = pr.paymentPlan == "FREE" && totalRequest > 5000
+                templateVars =
+                  [aesonQQ|{
+                   "user_name": #{firstName},
+                   "project_name": #{projectTitle},
+                   "anomalies_count": #{total_anomalies},
+                   "anomalies":  #{anmls},
+                   "report_url": #{rp_url},
+                   "performance_count": #{perf_count},
+                   "performance": #{perf_shrt},
+                   "start_date": #{dayStart},
+                   "end_date": #{dayEnd},
+                   "free_exceeded": #{freeTierLimitExceeded}
+            }|]
+            sendPostmarkEmail userEmail (Just ("weekly-report", templateVars)) Nothing
 
 
 emailQueryMonitorAlert :: Monitors.QueryMonitorEvaled -> CI.CI Text -> Maybe Users.User -> ATBackgroundCtx ()

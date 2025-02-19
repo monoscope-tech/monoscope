@@ -173,18 +173,15 @@ expandedSpanItem pid sp leftM rightM = do
           div_ [class_ "badge badge-ghost badge-sm"] $ show $ numberOfEvents sp.events
         div_ [class_ "w-full border-b-2 border-b-slate-200"] pass
 
-      div_ [class_ "grid mt-4 px-4 text-slate-600 font"] $ do
+      div_ [class_ "grid my-4 text-slate-600 font"] $ do
         div_ [class_ "a-tab-content", id_ "att-content"] $ do
-          div_ [class_ "rounded-lg border border-slate-200 p-4"] $ do
-            jsonValueToHtmlTree sp.attributes
+          jsonValueToHtmlTree sp.attributes
         div_ [class_ "hidden a-tab-content", id_ "meta-content"] $ do
-          div_ [class_ "rounded-lg border border-slate-200 p-4"] $ do
-            jsonValueToHtmlTree sp.resource
+          jsonValueToHtmlTree sp.resource
         div_ [class_ "hidden a-tab-content", id_ "errors-content"] $ do
           renderErrors spanErrors
         div_ [class_ "hidden a-tab-content", id_ "logs-content"] $ do
-          div_ [class_ "rounded-lg border border-slate-200 p-4"] $ do
-            jsonValueToHtmlTree $ AE.toJSON sp.events
+          jsonValueToHtmlTree $ AE.toJSON sp.events
 
 
 renderErrors :: [AE.Value] -> Html ()
