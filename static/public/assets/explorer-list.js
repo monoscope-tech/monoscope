@@ -72,7 +72,7 @@ export class LogList extends LitElement {
   logItemRow(rowData) {
     const [url] = requestDumpLogItemUrlPath(this.projectId, rowData, this.colIdxMap, this.source)
     return html`
-      <tr class="cursor-pointer whitespace-nowrap overflow-hidden" @click=${() => toggleLogRow(url)}>
+      <tr class="item-row cursor-pointer whitespace-nowrap overflow-hidden" @click=${(event) => toggleLogRow(event, url)}>
         ${this.logsColumns.map((column) => html`<td>${logItemCol(rowData, this.source, this.colIdxMap, column, this.childSpansMap)}</td>`)}
       </tr>
     `
@@ -403,12 +403,15 @@ function spanLatencyBreakdown(spans) {
   </div>`
 }
 
-function toggleLogRow(source) {
+function toggleLogRow(event, source) {
   const sideView = document.querySelector('#log_details_container')
   if (sideView.style.width === '0px') {
     sideView.style.width = '550px'
     updateUrlState('details_width', sideView.style.width)
   }
+  const rows = document.querySelectorAll('.item-row.bg-fillBrand-weak')
+  rows.forEach((row) => row.classList.remove('bg-fillBrand-weak'))
+  event.currentTarget.classList.add('bg-fillBrand-weak')
   const indicator = document.querySelector('#details_indicator')
   indicator.classList.add('htmx-request')
   htmx.ajax('GET', source, { target: '#log_details_container', swap: 'innerHTML', indicator: '#details_indicator' })

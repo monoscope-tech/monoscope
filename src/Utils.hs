@@ -227,24 +227,32 @@ replaceNumbers input = T.replace ".[*]" "[*]" $ T.intercalate "." (map replaceDi
 
 jsonValueToHtmlTree :: AE.Value -> Html ()
 jsonValueToHtmlTree val = do
-  div_ [class_ "p-2 rounded-lg bg-fillWeaker border w-full overflow-x-auto"] do
+  div_ [class_ "p-2 rounded-lg bg-fillWeaker border w-full overflow-x-auto json-tree-container"] do
     div_ [class_ "w-full flex items-center gap-4 text-xs mb-2"] do
       button_
-        [ id_ "expand_all"
-        , class_ "flex items-center gap-1"
-        , [__|on click remove .collapsed from <.log-item-with-children/>
-              then add .hidden to me
-              then remove .hidden from #collapse_all |]
+        [ class_ "flex items-center gap-1 expand_all"
+        , [__|on click
+               set container to the closest .json-tree-container to the parentElement of me
+               set items to container.querySelectorAll(".log-item-with-children")
+               remove .collapsed from items
+               add .hidden to me
+               remove .hidden from the next <button/>
+             end
+            |]
         ]
         do
           span_ [class_ "underline"] "Expand all"
           faSprite_ "expand" "regular" "w-2 h-2"
       button_
-        [ id_ "collapse_all"
-        , class_ "flex hidden items-center gap-1"
-        , [__| on click add .collapsed to <.log-item-with-children/>
-               then add .hidden to me
-               then remove .hidden from #expand_all |]
+        [ class_ "flex hidden items-center gap-1 collpase_all"
+        , [__| on click
+               set container to the closest .json-tree-container to the parentElement of me
+               set items to container.querySelectorAll(".log-item-with-children")
+               add .collapsed to items
+               add .hidden to me
+               remove .hidden from the previous <button/>
+             end
+           |]
         ]
         do
           span_ [class_ "underline"] "Collapse all"
