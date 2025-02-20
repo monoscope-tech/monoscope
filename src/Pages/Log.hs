@@ -451,7 +451,6 @@ virtualTable page = do
 
 apiLogsPage :: ApiLogsPageData -> Html ()
 apiLogsPage page = do
-  script_ [type_ "module", src_ "/public/assets/explorer-list.js"] ("" :: Text)
   section_ [class_ "mx-auto pt-2 px-6 gap-3.5 w-full flex flex-col h-full overflow-hidden pb-12  group/pg", id_ "apiLogsPage"] do
     div_
       [ style_ "z-index:26"
