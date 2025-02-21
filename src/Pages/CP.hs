@@ -57,13 +57,17 @@ forceClasses_ :: Html ()
 forceClasses_ = do
   span_ [class_ "colBirthday colPhone colEmail colStreet colHouseNo colZip colCity colAddition "] ""
   span_ [class_ "group-has-[.colBirthday:checked]/pg:table-cell group-has-[.colPhone:checked]/pg:table-cell group-has-[.colEmail:checked]/pg:table-cell group-has-[.colStreet:checked]/pg:table-cell group-has-[.colHouseNo:checked]/pg:table-cell group-has-[.colZip:checked]/pg:table-cell group-has-[.colCity:checked]/pg:table-cell group-has-[.colAddition:checked]/pg:table-cell "] ""
-  span_ [class_ "group-has-[.correction_option[value='colBirthday']:checked]/pg:table-cell group-has-[.correction_option[value='colPhone']:checked]/pg:table-cell group-has-[.correction_option[value='colEmail']:checked]/pg:table-cell"] ""
-  span_ [class_ "group-has-[.correction_option[value='colStreet']:checked]/pg:table-cell group-has-[.correction_option[value='colHouseNo']:checked]/pg:table-cell group-has-[.correction_option[value='colZip']:checked]/pg:table-cell group-has-[.correction_option[value='colCity']:checked]/pg:table-cell"] ""
-  span_ [class_ "group-has-[.correction_option[value='colAddition']:checked]/pg:table-cell "] ""
+  span_ [class_ "group-has-[.fix_option[value='colBirthday']:checked]/pg:table-cell group-has-[.fix_option[value='colPhone']:checked]/pg:table-cell group-has-[.fix_option[value='colEmail']:checked]/pg:table-cell"] ""
+  span_ [class_ "group-has-[.fix_option[value='colStreet']:checked]/pg:table-cell group-has-[.fix_option[value='colHouseNo']:checked]/pg:table-cell group-has-[.fix_option[value='colZip']:checked]/pg:table-cell group-has-[.fix_option[value='colCity']:checked]/pg:table-cell"] ""
+  span_ [class_ "group-has-[.fix_option[value='colAddition']:checked]/pg:table-cell "] ""
 
-  span_ [class_ "group-has-[.correction_option[value='colBirthday']:checked]/pg:flex group-has-[.correction_option[value='colPhone']:checked]/pg:flex group-has-[.correction_option[value='colEmail']:checked]/pg:flex"] ""
-  span_ [class_ "group-has-[.correction_option[value='colStreet']:checked]/pg:flex group-has-[.correction_option[value='colHouseNo']:checked]/pg:flex group-has-[.correction_option[value='colZip']:checked]/pg:flex group-has-[.correction_option[value='colCity']:checked]/pg:flex"] ""
-  span_ [class_ "group-has-[.correction_option[value='colAddition']:checked]/pg:flex"] ""
+  span_ [class_ "group-has-[.fix_option[value='colBirthday']:checked]/pg:flex group-has-[.fix_option[value='colPhone']:checked]/pg:flex group-has-[.fix_option[value='colEmail']:checked]/pg:flex"] ""
+  span_ [class_ "group-has-[.fix_option[value='colStreet']:checked]/pg:flex group-has-[.fix_option[value='colHouseNo']:checked]/pg:flex group-has-[.fix_option[value='colZip']:checked]/pg:flex group-has-[.fix_option[value='colCity']:checked]/pg:flex"] ""
+  span_ [class_ "group-has-[.fix_option[value='colAddition']:checked]/pg:flex"] ""
+
+  span_ [class_ "group-has-[.fix_option[value='colBirthday']:checked]/pg:opacity-100 group-has-[.fix_option[value='colPhone']:checked]/pg:opacity-100 group-has-[.fix_option[value='colEmail']:checked]/pg:opacity-100"] ""
+  span_ [class_ "group-has-[.fix_option[value='colStreet']:checked]/pg:opacity-100 group-has-[.fix_option[value='colHouseNo']:checked]/pg:opacity-100 group-has-[.fix_option[value='colZip']:checked]/pg:opacity-100 group-has-[.fix_option[value='colCity']:checked]/pg:opacity-100"] ""
+  span_ [class_ "group-has-[.fix_option[value='colAddition']:checked]/pg:opacity-100"] ""
 
 
 -- The main rendering
@@ -124,8 +128,8 @@ page = do
             div_ [c "self-stretch px-8 flex-col justify-start items-start gap-6 flex"] $ do
               -- Filter Bar
               div_ [class_ "sticky top-0 z-10 px-4 py-3 bg-neutral-50 rounded-xl justify-between items-start flex w-full"] do
-                select_ [class_ "select select-sm h-auto px-3.5 py-1.5 leading-normal bg-white rounded-lg shadow shadow-inner border !border-[#d5d6d9] rounded-lg min-w-52 correction"] do
-                  option_ "Select Field"
+                select_ [class_ "select select-sm h-auto px-3.5 py-1.5 leading-normal bg-white rounded-lg shadow shadow-inner border !border-[#d5d6d9] rounded-lg min-w-52 fix"] do
+                  option_ [value_ ""] "Select Field"
                   forM_ columns \(title, colId, _) -> option_ [value_ colId] $ toHtml $ title <> " Correction"
 
                 div_ [class_ "flex gap-3"] do
@@ -150,45 +154,123 @@ page = do
                         span_ (toHtml title)
                         input_ [type_ "checkbox", checked_, name_ colId, class_ $ "checkbox " <> colId]
 
-              div_ [class_ "rounded-xl border w-full grow"] $ div_ [class_ "h-full w-full"] $ table_ [class_ "table table-pin-cols table-pin-rows text-[#535861] rounded-xl "] do
-                colgroup_ do
-                  col_ []
-                  forM_ columns \_ -> col_ [class_ "min-w-48"]
-                thead_ do
-                  tr_ [class_ "rounded-lg [&>*]:top-[3.8rem] text-[#535861] font-semibold "] do
-                    th_ [class_ " w-6 text-center"] $ input_ [type_ "checkbox", class_ "checkbox !border-[#D5D7DA] rounded-lg", [__|  on click set .contactCheckbox.checked to my.checked |]]
-                    th_ [class_ "space-x-2"] $ span_ "Contact" >> i_ [class_ "fa-regular fa-angles-up-down"] ""
-                    forM_ columns \(title, colId, _) -> columnTitleGroup_ colId title
-                tbody_ $ forM_ contacts tableRow1
+              div_ [class_ "rounded-xl border w-full grow"] $ div_ [class_ "h-full w-full"] do
+                table_ [id_ "correctionTable", class_ "table table-pin-cols table-pin-rows text-[#535861] rounded-xl "] do
+                  colgroup_ do
+                    col_ []
+                    forM_ columns \(_, colId, _) -> col_ [class_ $ "min-w-48 "]
+                  thead_ do
+                    tr_ [class_ "rounded-lg [&>*]:top-[3.8rem] text-[#717680] font-semibold"] do
+                      th_ [class_ " w-6 text-center"] $ input_ [type_ "checkbox", class_ "checkbox !border-[#D5D7DA] rounded-lg", [__|  on click set .contactCheckbox.checked to my.checked |]]
+                      th_ [class_ "space-x-2 group"] do
+                        span_ "Contact"
+                        span_ [class_ "sortIcon absolute right-2 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 transition-opacity"] "↕"
+                      -- i_ [class_ "fa-regular fa-angles-up-down"] ""
+                      forM_ columns \(title, colId, _) -> columnTitleGroup_ colId title
+                  tbody_ $ forM_ contacts tableRow1
             -- Bottom Buttons
             bottomButtons
+  script_
+    [text|
+
+    const getCellValue = (cell) => {
+      const input = cell.querySelector('input');
+      return input ? input.value.trim() : cell.textContent.trim();
+    };
+    document.addEventListener('DOMContentLoaded', () => {
+        const table = document.getElementById('correctionTable');
+        let currentSort = { col: null, asc: true };
+
+        // Add click handlers to headers
+        table.querySelectorAll('thead th').forEach((th, i) => {
+            th.addEventListener('click', () => {
+                console.log("th click", th)
+                const arrow = th.querySelector('.sortIcon');
+                table.querySelectorAll('thead th .sortIcon').forEach(span => {
+                    span.textContent = '↕';
+                    span.classList.add('opacity-0');
+                });
+                
+                // Update sort direction
+                currentSort = {col: i, asc: currentSort.col === i ? !currentSort.asc : true};
+                
+                if (arrow) {
+                    arrow.textContent = currentSort.asc ? '↑' : '↓';
+                    arrow.classList.remove('opacity-0');
+                }
+
+                const tbody = table.querySelector('tbody');
+
+                // Sort rows
+                const sortedRows = [...tbody.querySelectorAll('tr')]
+                    .sort((a, b) => {
+                        const aVal = getCellValue(a.cells[i]);
+                        const bVal = getCellValue(b.cells[i]);
+                        
+                        // Try number sort
+                        const aNum = parseFloat(aVal);
+                        const bNum = parseFloat(bVal);
+                        if (!isNaN(aNum) && !isNaN(bNum)) {
+                            return currentSort.asc ? aNum - bNum : bNum - aNum;
+                        }
+                        
+                        // Try date sort
+                        const aDate = new Date(aVal);
+                        const bDate = new Date(bVal);
+                        if (aDate.toString() !== 'Invalid Date' && bDate.toString() !== 'Invalid Date') {
+                            return currentSort.asc ? aDate - bDate : bDate - aDate;
+                        }
+                        
+                        // Default to string sort
+                        return currentSort.asc 
+                            ? aVal.localeCompare(bVal) 
+                            : bVal.localeCompare(aVal);
+                    });
+                tbody.innerHTML = '';
+                sortedRows.forEach(tr => tbody.appendChild(tr));
+            });
+        });
+    });
+    |]
 
 
 columnTitleGroup_ :: Text -> Text -> Html ()
 columnTitleGroup_ colId title = do
-  th_ [class_ $ "px-2 hidden group-has-[." <> colId <> ":checked]/pg:table-cell space-x-2"] $ (span_ $ toHtml title) >> i_ [class_ "fa-regular fa-angles-up-down"] ""
-  th_ [class_ $ "px-2 hidden group-has-[.correction_option[value='" <> colId <> "']:checked]/pg:table-cell space-x-2"] do
+  th_ [class_ $ "group px-6 hidden opacity-20 group-has-[.fix_option[value='']:checked]/pg:opacity-100 group-has-[.fix_option[value='" <> colId <> "']:checked]/pg:opacity-100 group-has-[." <> colId <> ":checked]/pg:table-cell space-x-2"] do
+    span_ $ toHtml title
+    span_ [class_ "sortIcon absolute right-2 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 transition-opacity"] "↕"
+  -- i_ [class_ "fa-regular fa-angles-up-down"] ""
+  th_ [class_ $ "px-6 hidden opacity-20 group-has-[.fix_option[value='']:checked]/pg:opacity-100 group-has-[.fix_option[value='" <> colId <> "']:checked]/pg:opacity-100 group-has-[.fix_option[value='" <> colId <> "']:checked]/pg:table-cell space-x-2"] do
     span_ (toHtml $ "Latest " <> title)
     div_ [class_ "inline-block"] $ a_ [termRaw "data-tip" "Latest version of the data as inputed by user", class_ "tooltip tooltip-left"] $ i_ [class_ "fa-regular fa-circle-question text-[#a3a7ae]"] ""
-  th_ [class_ $ "px-2 hidden group-has-[.correction_option[value='" <> colId <> "']:checked]/pg:table-cell space-x-2"] do
+  th_ [class_ $ "px-6 hidden opacity-20 group-has-[.fix_option[value='']:checked]/pg:opacity-100 group-has-[.fix_option[value='" <> colId <> "']:checked]/pg:opacity-100 group-has-[.fix_option[value='" <> colId <> "']:checked]/pg:table-cell space-x-2"] do
     span_ (toHtml $ "Last " <> title)
     a_ [termRaw "data-tip" "Last version of data, if user performed multiple updates", class_ "tooltip tooltip-left"] $ i_ [class_ "fa-regular fa-circle-question text-[#a3a7ae]"] ""
-  th_ [class_ $ "px-2 hidden group-has-[.correction_option[value='" <> colId <> "']:checked]/pg:table-cell space-x-2"] do
+  th_ [class_ $ "px-6 hidden opacity-20 group-has-[.fix_option[value='']:checked]/pg:opacity-100 group-has-[.fix_option[value='" <> colId <> "']:checked]/pg:opacity-100 group-has-[.fix_option[value='" <> colId <> "']:checked]/pg:table-cell space-x-2"] do
     span_ (toHtml $ "Initial " <> title)
     a_ [termRaw "data-tip" "Original version of data before update", class_ "tooltip tooltip-left"] $ i_ [class_ "fa-regular fa-circle-question text-[#a3a7ae]"] ""
 
 
-columnGroup_ :: Text -> Text -> Text -> Text -> Text -> Html ()
-columnGroup_ colId value latestValue lastValue initialValue = do
-  td_ [class_ $ "hidden group-has-[." <> colId <> ":checked]/pg:table-cell px-3"] $ div_ [class_ "flex items-center gap-2"] do
-    input_ [type_ "text", value_ value, class_ "h-full w-full py-2"]
-    div_ [class_ $ "gap-2 hidden group-has-[.correction_option[value='" <> colId <> "']:checked]/pg:flex"] do
-      label_ [class_ "p-1 tooltip", termRaw "data-tip" "Approve"] $ i_ [class_ "fa-regular fa-circle-check text-[#a3a7ae]"] ""
-      label_ [class_ "p-1", termRaw "data-tip" "Delete"] $ i_ [class_ "fa-regular fa-trash-can text-[#a3a7ae]"] ""
-  td_ [class_ $ "group hover:bg-neutral-50  hidden group-has-[.correction_option[value='" <> colId <> "']:checked]/pg:table-cell px-2 space-x-2"] do
+columnGroup_ :: Text -> Text -> Text -> Text -> Text -> Text -> Html ()
+columnGroup_ nativeId colId value latestValue lastValue initialValue = do
+  td_ [class_ $ "group/cg hidden p-0 opacity-20 group-has-[.fix_option[value='']:checked]/pg:opacity-100 group-has-[.fix_option[value='" <> colId <> "']:checked]/pg:opacity-100 group-has-[." <> colId <> ":checked]/pg:table-cell whitespace-nowrap"] $ div_ [class_ "flex items-center gap-2"] do
+    input_ [type_ "text", value_ value, class_ $ "inputValue_" <> nativeId <> colId <> " columnValue h-full w-full py-6 px-6 group-has-[.approved:checked]/cg:bg-[#ecfcf2] group-has-[.approved:checked]/cg:bg-[#ecfcf2]"]
+    div_ [class_ $ "gap-2 hidden group-has-[.fix_option[value='" <> colId <> "']:checked]/pg:flex"] do
+      label_ [class_ "p-1 tooltip cursor-pointer", termRaw "data-tip" "Approve"] do
+        input_ [class_ "hidden approved", type_ "checkbox", name_ $ "approved_" <> nativeId <> colId, id_ $ "approved_" <> nativeId <> colId]
+        i_ [class_ "fa-regular fa-circle-check text-[#a3a7ae]"] ""
+      label_
+        [ class_ "p-1 cursor-pointer"
+        , termRaw "data-tip" "Delete"
+        , [__|on click  set (previous <input.columnValue/>).value to '' |]
+        ]
+        do
+          input_ [class_ "hidden deleted", type_ "checkbox", name_ $ "deleted_" <> nativeId <> colId, id_ $ "deleted_" <> nativeId <> colId]
+          i_ [class_ "fa-regular fa-trash-can text-[#a3a7ae]"] ""
+  td_ [class_ $ "latestValue_" <> nativeId <> colId <> " group opacity-20 group-has-[.fix_option[value='']:checked]/pg:opacity-100 group-has-[.fix_option[value='" <> colId <> "']:checked]/pg:opacity-100 hover:bg-neutral-50  hidden group-has-[.fix_option[value='" <> colId <> "']:checked]/pg:table-cell px-6 space-x-2 whitespace-nowrap"] do
     span_ $ toHtml latestValue
     label_ [class_ "p-1 tooltip hidden group-hover:inline-block", termRaw "data-tip" "Approve"] $ i_ [class_ "fa-regular fa-copy text-[#a3a7ae]"] ""
-  td_ [class_ $ "group hover:bg-neutral-50 hidden group-has-[.correction_option[value='" <> colId <> "']:checked]/pg:table-cell px-2 space-x-2"] do
+  td_ [class_ $ "lastValue_" <> nativeId <> colId <> " group opacity-20 group-has-[.fix_option[value='']:checked]/pg:opacity-100 group-has-[.fix_option[value='" <> colId <> "']:checked]/pg:opacity-100 hover:bg-neutral-50 hidden group-has-[.fix_option[value='" <> colId <> "']:checked]/pg:table-cell px-6 space-x-2 whitespace-nowrap"] do
     span_ $ toHtml lastValue
     label_
       [ class_ "p-1 tooltip hidden group-hover:inline-block"
@@ -200,34 +282,64 @@ columnGroup_ colId value latestValue lastValue initialValue = do
               end|]
       ]
       $ i_ [class_ "fa-regular fa-copy text-[#a3a7ae]"] ""
-  td_ [class_ $ "group hover:bg-neutral-50 hidden group-has-[.correction_option[value='" <> colId <> "']:checked]/pg:table-cell px-2 space-x-2"] do
+  td_ [class_ $ "initialValue_" <> nativeId <> colId <> " group opacity-20 group-has-[.fix_option[value='']:checked]/pg:opacity-100 group-has-[.fix_option[value='" <> colId <> "']:checked]/pg:opacity-100 hover:bg-neutral-50 hidden group-has-[.fix_option[value='" <> colId <> "']:checked]/pg:table-cell px-6 space-x-2 whitespace-nowrap"] do
     span_ $ toHtml initialValue
-    label_ [class_ "p-1 tooltip hidden group-hover:inline-block", termRaw "data-tip" "Approve"] $ i_ [class_ "fa-regular fa-copy text-[#a3a7ae]"] ""
+    label_ [class_ "p-1 tooltip hidden group-hover:inline-block", termRaw "data-tip" "Copy"] do
+      i_ [class_ "fa-regular fa-copy text-[#a3a7ae]"] ""
 
 
 -- The last row of buttons: Approve Data, Take last value, Delete Value
 bottomButtons :: Html ()
 bottomButtons =
   div_ [c "sticky bottom-0 bg-white w-full p-4 justify-center items-center gap-1.5 inline-flex"] do
-    neutralActionButton "fa-regular fa-circle-check" "Approve Data"
-    neutralActionButton "fa-regular fa-rotate-reverse" "Take last value"
-    neutralActionButton "fa-regular fa-trash-can" "Delete Value"
-  where
-    neutralActionButton :: Text -> Text -> Html ()
-    neutralActionButton ic txt =
-      button_ [c "px-3.5 py-2.5 rounded-md border border-[#d5d6d9] justify-center items-center gap-2 flex bg-neutral-50 text-neutral-400 group-has-[.contactCheckbox:checked]/pg:!bg-white group-has-[.contactCheckbox:checked]/pg:!text-[#414651]"] do
-        i_ [class_ ic] ""
-        span_ [c "text-md font-semibold"] (toHtml txt)
+    script_
+      [text|
+    const forEachChecked = callback => {
+      const col = document.querySelector('.fix')?.value;
+      [...document.querySelectorAll('.contactCheckbox:checked')]
+        .map(({ id }) => id.slice(6)).forEach(id => callback(id, col));
+    };
+
+    const approveDataList = () =>
+      forEachChecked((id, col) =>
+        col
+          ? (document.getElementById(`approved_$${id}$${col}`).checked = true)
+          : document
+              .querySelectorAll(`input[id^="approved_$${id}"]`)
+              .forEach(cb => (cb.checked = true))
+      );
+
+    const takeLastValue = () =>
+      forEachChecked((id, col) => {
+        if (col) {
+          const lastValue = document.querySelector(`.lastValue_$${id}$${col} > span`)?.innerText;
+          document.querySelector(`.inputValue_$${id}$${col}`).value = lastValue;
+        }
+      });
+
+    const deleteRowValue = () =>
+      forEachChecked((id, col) => col && (document.querySelector(`.inputValue_$${id}$${col}`).value = ''));
+    |]
+    button_ [c "px-3.5 py-2.5 rounded-md border border-[#d5d6d9] justify-center items-center gap-2 flex bg-neutral-50 text-neutral-400 group-has-[.contactCheckbox:checked]/pg:!bg-white group-has-[.contactCheckbox:checked]/pg:!text-[#414651]", onclick_ "approveDataList()"] do
+      i_ [class_ "fa-regular fa-circle-check"] ""
+      span_ [c "text-md font-semibold"] "Approve Data"
+    button_ [c "px-3.5 py-2.5 rounded-md border border-[#d5d6d9] justify-center items-center gap-2 flex bg-neutral-50 text-neutral-400 group-has-[.contactCheckbox:checked]/pg:!bg-white group-has-[.contactCheckbox:checked]/pg:!text-[#414651]", onclick_ "takeLastValue()"] do
+      i_ [class_ "fa-regular fa-rotate-reverse"] ""
+      span_ [c "text-md font-semibold"] "Take last value"
+    button_ [c "px-3.5 py-2.5 rounded-md border border-[#d5d6d9] justify-center items-center gap-2 flex bg-neutral-50 text-neutral-400 group-has-[.contactCheckbox:checked]/pg:!bg-white group-has-[.contactCheckbox:checked]/pg:!text-[#414651]", onclick_ "deleteRowValue()"] do
+      i_ [class_ "fa-regular fa-trash-can"] ""
+      span_ [c "text-md font-semibold"] "Delete Value"
 
 
 tableRow1 :: Contact -> Html ()
 tableRow1 cc =
   tr_ do
-    th_ [class_ "text-center"] $ input_ [type_ "checkbox", class_ "checkbox !border-[#D5D7DA] rounded-lg contactCheckbox"]
+    th_ [class_ "text-center"] do
+      input_ [type_ "checkbox", class_ "checkbox !border-[#D5D7DA] rounded-lg contactCheckbox", id_ $ "check_" <> c.nativeId]
     th_ [class_ "space-y-1"] do
-      strong_ [class_ "text-[#181d27] text-sm font-medium"] $ toHtml $ cc.title <> "." <> cc.firstName <> " " <> cc.lastName
-      span_ [class_ "text-[#535861] text-sm font-normal block"] $ toHtml $ "#" <> cc.nativeId
-    forM_ columns \(title, colId, fn) -> columnGroup_ colId ((fn cc) !! 0) ((fn cc) !! 1) ((fn cc) !! 2) ((fn cc) !! 3)
+      strong_ [class_ "text-[#181d27] text-sm font-medium"] $ toHtml $ c.title <> "." <> c.firstName <> " " <> c.lastName
+      span_ [class_ "text-[#535861] text-sm font-normal block"] $ toHtml $ "#" <> c.nativeId
+    forM_ columns \(title, colId, fn) -> columnGroup_ c.nativeId colId ((fn c) !! 0) ((fn c) !! 1) ((fn c) !! 2) ((fn c) !! 3)
 
 
 contacts :: [Contact]
@@ -236,7 +348,7 @@ contacts =
       { title = "Mr."
       , firstName = "John"
       , lastName = "Doe"
-      , nativeId = "NID1001"
+      , nativeId = "NID10014"
       , birthday = ["1980-05-15", "15/05/1980", "May 15, 1980", "15 May 1980"]
       , phone = ["+1-202-555-0110", "+1 202 555 0111", "+1.202.555.0112", "+12025550113"]
       , email = ["john.doe@example.com", "j.doe@example.com", "john.d@example.com", "contact@johndoe.com"]
@@ -250,7 +362,7 @@ contacts =
       { title = "Ms."
       , firstName = "Jane"
       , lastName = "Smith"
-      , nativeId = "NID1002"
+      , nativeId = "NID10023"
       , birthday = ["1975-08-22", "22/08/1975", "August 22, 1975", "22 Aug 1975"]
       , phone = ["+1-303-555-0120", "+1 303 555 0121", "+1.303.555.0122", "+13035550123"]
       , email = ["jane.smith@example.com", "j.smith@example.com", "jane.s@example.com", "contact@janesmith.com"]
@@ -264,7 +376,7 @@ contacts =
       { title = "Dr."
       , firstName = "Alice"
       , lastName = "Johnson"
-      , nativeId = "NID1003"
+      , nativeId = "NID10031"
       , birthday = ["1985-12-03", "03/12/1985", "December 3, 1985", "3 Dec 1985"]
       , phone = ["+1-404-555-0130", "+1 404 555 0131", "+1.404.555.0132", "+14045550133"]
       , email = ["alice.johnson@example.com", "a.johnson@example.com", "alicej@example.com", "contact@alicejohnson.com"]
@@ -278,7 +390,7 @@ contacts =
       { title = "Mr."
       , firstName = "Robert"
       , lastName = "Brown"
-      , nativeId = "NID1004"
+      , nativeId = "NID10042"
       , birthday = ["1992-03-10", "10/03/1992", "March 10, 1992", "10 Mar 1992"]
       , phone = ["+1-505-555-0140", "+1 505 555 0141", "+1.505.555.0142", "+15055550143"]
       , email = ["robert.brown@example.com", "r.brown@example.com", "robb@example.com", "contact@robertbrown.com"]
@@ -292,7 +404,7 @@ contacts =
       { title = "Mrs."
       , firstName = "Emily"
       , lastName = "Davis"
-      , nativeId = "NID1005"
+      , nativeId = "NID10051"
       , birthday = ["1978-11-30", "30/11/1978", "November 30, 1978", "30 Nov 1978"]
       , phone = ["+1-606-555-0150", "+1 606 555 0151", "+1.606.555.0152", "+16065550153"]
       , email = ["emily.davis@example.com", "e.davis@example.com", "emilyd@example.com", "contact@emilydavis.com"]
@@ -306,7 +418,7 @@ contacts =
       { title = "Mr."
       , firstName = "Michael"
       , lastName = "Miller"
-      , nativeId = "NID1006"
+      , nativeId = "NID10062"
       , birthday = ["1988-07-07", "07/07/1988", "July 7, 1988", "7 Jul 1988"]
       , phone = ["+1-707-555-0160", "+1 707 555 0161", "+1.707.555.0162", "+17075550163"]
       , email = ["michael.miller@example.com", "m.miller@example.com", "mike@example.com", "contact@michaelmiller.com"]
@@ -320,7 +432,7 @@ contacts =
       { title = "Ms."
       , firstName = "Sarah"
       , lastName = "Wilson"
-      , nativeId = "NID1007"
+      , nativeId = "NID10073"
       , birthday = ["1990-09-25", "25/09/1990", "September 25, 1990", "25 Sep 1990"]
       , phone = ["+1-808-555-0170", "+1 808 555 0171", "+1.808.555.0172", "+18085550173"]
       , email = ["sarah.wilson@example.com", "s.wilson@example.com", "sarahw@example.com", "contact@sarahwilson.com"]
@@ -334,7 +446,7 @@ contacts =
       { title = "Mr."
       , firstName = "David"
       , lastName = "Moore"
-      , nativeId = "NID1008"
+      , nativeId = "NID10084"
       , birthday = ["1982-02-28", "28/02/1982", "February 28, 1982", "28 Feb 1982"]
       , phone = ["+1-909-555-0180", "+1 909 555-0181", "+1.909.555-0182", "+19095550183"]
       , email = ["david.moore@example.com", "d.moore@example.com", "davmoore@example.com", "contact@davidmoore.com"]
@@ -348,7 +460,7 @@ contacts =
       { title = "Ms."
       , firstName = "Laura"
       , lastName = "Taylor"
-      , nativeId = "NID1009"
+      , nativeId = "NID10095"
       , birthday = ["1995-04-18", "18/04/1995", "April 18, 1995", "18 Apr 1995"]
       , phone = ["+1-101-555-0190", "+1 101 555-0191", "+1.101.555.0192", "+11015550193"]
       , email = ["laura.taylor@example.com", "l.taylor@example.com", "laurat@example.com", "contact@laurataylor.com"]
@@ -362,7 +474,7 @@ contacts =
       { title = "Mr."
       , firstName = "Daniel"
       , lastName = "Anderson"
-      , nativeId = "NID1010"
+      , nativeId = "NID10101"
       , birthday = ["1987-06-12", "12/06/1987", "June 12, 1987", "12 Jun 1987"]
       , phone = ["+1-202-555-0200", "+1 202 555-0201", "+1.202.555.0202", "+12025550203"]
       , email = ["daniel.anderson@example.com", "d.anderson@example.com", "daniela@example.com", "contact@danielanderson.com"]
@@ -376,7 +488,7 @@ contacts =
       { title = "Mr."
       , firstName = "John"
       , lastName = "Doe"
-      , nativeId = "NID1001"
+      , nativeId = "NID10012"
       , birthday = ["1980-05-15", "15/05/1980", "May 15, 1980", "15 May 1980"]
       , phone = ["+1-202-555-0110", "+1 202 555 0111", "+1.202.555.0112", "+12025550113"]
       , email = ["john.doe@example.com", "j.doe@example.com", "john.d@example.com", "contact@johndoe.com"]

@@ -194,27 +194,41 @@ data MetricsData = MetricsData
   deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake MetricsData
 
 
-queryMetrics :: (State.State TriggerEvents :> es, Time.Time :> es, DB :> es, Log :> es) => M Projects.ProjectId -> M Text -> M Text -> M Text -> M Text -> M Text -> M Text -> Eff es MetricsData
-queryMetrics pidM queryM queryASTM sinceM fromM toM sourceM = do
-  let parseQuery q = either (\err -> addErrorToast "Error Parsing Query" (Just err) >> pure []) pure (parseQueryToAST q)
-  queryAST <-
-    maybe
-      (parseQuery $ maybeToMonoid queryM)
-      (either (const $ parseQuery $ maybeToMonoid queryM) pure . AE.eitherDecode . encodeUtf8)
-      queryASTM
+queryMetrics :: (State.State TriggerEvents :> es, Time.Time :> es, DB :> es, Log :> es) => M Projects.ProjectId -> M Text -> M Text -> M Text -> M Text -> M Text -> M Text -> M Text -> Eff es MetricsData
+queryMetrics pidM queryM queryASTM querySQLM sinceM fromM toM sourceM = do
+  traceShowM queryM
+  traceShowM "\n"
+  traceShowM "\n"
+  traceShowM querySQLM
+  traceShowM "\n"
+  traceShowM "\n"
+  traceShowM "\n"
+  traceShowM "\n"
 
   now <- Time.currentTime
   let (fromD, toD, _currentRange) = Components.parseTimeRange now (Components.TimePicker sinceM fromM toM)
 
-  let sqlQueryComponents =
-        (defSqlQueryCfg (Unsafe.fromJust pidM) now (parseMaybe pSource =<< sourceM) Nothing)
-          { dateRange = (fromD, toD)
-          }
-  let (_, qc) = queryASTToComponents sqlQueryComponents queryAST
-  chartData <- dbtToEff $ DBT.query_ (Query $ encodeUtf8 $ fromMaybe "" qc.finalTimechartQuery)
+  sqlQuery <- case (queryM, queryASTM, querySQLM) of
+    (_, _, Just querySQL) -> do
+      pure querySQL -- FIXME: risk of sql injection and many other attacks
+    _ -> do
+      let parseQuery q = either (\err -> addErrorToast "Error Parsing Query" (Just err) >> pure []) pure (parseQueryToAST q)
+      queryAST <-
+        maybe
+          (parseQuery $ maybeToMonoid queryM)
+          (either (const $ parseQuery $ maybeToMonoid queryM) pure . AE.eitherDecode . encodeUtf8)
+          queryASTM
+      let sqlQueryComponents =
+            (defSqlQueryCfg (Unsafe.fromJust pidM) now (parseMaybe pSource =<< sourceM) Nothing)
+              { dateRange = (fromD, toD)
+              }
+      let (_, qc) = queryASTToComponents sqlQueryComponents queryAST
+      pure $ fromMaybe "" qc.finalTimechartQuery
+
+  chartData <- dbtToEff $ DBT.query_ (Query $ encodeUtf8 $ sqlQuery)
   let (headers, groupedData, rowsCount, rowsPerMin) = pivot' $ V.fromList chartData
-  pure
-    $ MetricsData
+  pure $
+    MetricsData
       { dataset = groupedData
       , headers = V.cons "timestamp" headers
       , rowsCount
@@ -265,6 +279,7 @@ chartsGetRaw typeM queryM queryASTM pidM groupByM queryByM slotsM limitsM themeM
 
 chartsGetDef :: M ChartType -> M Text -> M Projects.ProjectId -> M GroupBy -> M [QueryBy] -> M Int -> M Int -> M Text -> M Text -> M Bool -> M Bool -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))
 chartsGetDef typeM queryRaw pidM groupByM queryByM slotsM limitsM themeM idM showLegendM showAxesM sinceM _fromM _toM sourceM = do
+  traceShowM "ChartsGetDef === \n\n\n\n\n"
   let chartExps =
         catMaybes
           [ TypeE <$> typeM

@@ -7,12 +7,18 @@ import Pkg.Parser.Core
 import Pkg.Parser.Expr (Expr, Subject (..), pExpr, pSubject)
 import Relude hiding (Sum, some)
 import Text.Megaparsec
-import Text.Megaparsec.Char (alphaNumChar, char, space, string)
+import Text.Megaparsec.Char (alphaNumChar, char, space, space1, string)
 
 
 -- Modify Aggregation Functions to include optional aliases
 data AggFunction
   = Count Subject (Maybe Text) -- Optional field and alias
+  | P50 Subject (Maybe Text)
+  | P75 Subject (Maybe Text)
+  | P90 Subject (Maybe Text)
+  | P95 Subject (Maybe Text)
+  | P99 Subject (Maybe Text)
+  | P100 Subject (Maybe Text)
   | Sum Subject (Maybe Text)
   | Avg Subject (Maybe Text)
   | Min Subject (Maybe Text)
@@ -81,12 +87,21 @@ data Sources = SRequests | SLogs | STraces | SSpans | SMetrics
 -- >>> parse aggFunctionParser "" "range(field) as rangeVal"
 -- Right (Range (Subject "field" "field" []) (Just "rangeVal"))
 --
+-- >>> parse aggFunctionParser "" "p50(field)"
+-- Right (Range (Subject "field" "field" []) (Just "rangeVal"))
+--
 -- >>> parse aggFunctionParser "" "customFunc(field) as custom"
 -- Right (Plain (Subject "customFunc" "customFunc" []) Nothing)
 aggFunctionParser :: Parser AggFunction
 aggFunctionParser =
   choice @[]
     [ Sum <$> (string "sum(" *> pSubject <* string ")") <*> optional aliasParser
+    , P50 <$> (string "p50(" *> pSubject <* string ")") <*> optional aliasParser
+    , P75 <$> (string "p75(" *> pSubject <* string ")") <*> optional aliasParser
+    , P90 <$> (string "p90(" *> pSubject <* string ")") <*> optional aliasParser
+    , P95 <$> (string "p95(" *> pSubject <* string ")") <*> optional aliasParser
+    , P99 <$> (string "p99(" *> pSubject <* string ")") <*> optional aliasParser
+    , P100 <$> (string "p100(" *> pSubject <* string ")") <*> optional aliasParser
     , Count <$> (string "count(" *> pSubject <* string ")") <*> optional aliasParser
     , Avg <$> (string "avg(" *> pSubject <* string ")") <*> optional aliasParser
     , Min <$> (string "min(" *> pSubject <* string ")") <*> optional aliasParser
@@ -101,9 +116,17 @@ aggFunctionParser =
 instance ToQueryText AggFunction where
   toQText v = display v
 
+instance ToQueryText [AggFunction] where 
+  toQText xs= T.intercalate "," $ map toQText xs
 
 instance Display AggFunction where
   displayPrec prec (Count sub alias) = displayBuilder $ "count(" <> display sub <> ")"
+  displayPrec prec (P50 sub alias) = displayBuilder $ "approx_percentile(0.50, percentile_agg(" <> display sub <> "))::int"
+  displayPrec prec (P75 sub alias) = displayBuilder $ "approx_percentile(0.75, percentile_agg(" <> display sub <> "))::int"
+  displayPrec prec (P90 sub alias) = displayBuilder $ "approx_percentile(0.90, percentile_agg(" <> display sub <> "))::int"
+  displayPrec prec (P95 sub alias) = displayBuilder $ "approx_percentile(0.95, percentile_agg(" <> display sub <> "))::int"
+  displayPrec prec (P99 sub alias) = displayBuilder $ "approx_percentile(0.99, percentile_agg(" <> display sub <> "))::int"
+  displayPrec prec (P100 sub alias) = displayBuilder $ "approx_percentile(1, percentile_agg(" <> display sub <> "))::int"
   displayPrec prec (Sum sub alias) = displayBuilder $ "sum(" <> display sub <> ")"
   displayPrec prec (Avg sub alias) = displayBuilder $ "avg(" <> display sub <> ")"
   displayPrec prec (Min sub alias) = displayBuilder $ "min(" <> display sub <> ")"
@@ -119,7 +142,7 @@ instance Display AggFunction where
 -- >>> parse aliasParser "" " as min_price"
 -- Right "min_price"
 aliasParser :: Parser Text
-aliasParser = toText <$> (string " as" *> space *> some (alphaNumChar <|> oneOf @[] "_-") <* space)
+aliasParser = toText <$> (string " as" *> space1 *> some (alphaNumChar <|> oneOf @[] "_-") <* space)
 
 
 -- | Parses the 'by' clause, which can include multiple fields.
@@ -190,10 +213,10 @@ pTimeChartSection :: Parser Section
 pTimeChartSection = do
   _ <- string "timechart"
   space
-  agg <- optional (try aggFunctionParser)
+  agg <- (space *> aggFunctionParser <* space) `sepBy` string ","
   byClauseM <- optional $ try (space *> byClauseParser)
   rollupM <- optional $ try (space *> rollupParser)
-  return $ TimeChartCommand (fromMaybe (Count (Subject "*" "*" []) Nothing) agg) byClauseM rollupM
+  return $ TimeChartCommand (bool agg [Count (Subject "*" "*" []) Nothing] (null agg)) byClauseM rollupM
 
 
 rollupParser :: Parser Rollup
@@ -215,7 +238,7 @@ data Section
   = Search Expr
   | -- Define the AST for the 'stats' command
     StatsCommand [AggFunction] (Maybe ByClause)
-  | TimeChartCommand AggFunction (Maybe ByClause) (Maybe Rollup)
+  | TimeChartCommand [AggFunction] (Maybe ByClause) (Maybe Rollup)
   | Source Sources
   deriving stock (Show, Generic, Eq)
   deriving anyclass (AE.FromJSON, AE.ToJSON)

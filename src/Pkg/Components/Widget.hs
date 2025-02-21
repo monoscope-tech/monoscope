@@ -38,6 +38,7 @@ data Layout = Layout
 
 data WidgetType
   = WTTimeseries
+  | WTTimeseriesLine
   | WTTimeseriesStat
   | WTList
   | WTTopList
@@ -144,6 +145,8 @@ widget_ w =
           let yAxisLabel = fromMaybe (maybeToMonoid widget.unit) (widget.yAxis >>= (.label))
           let query = decodeUtf8 $ AE.encode widget.query
           let pid = decodeUtf8 $ AE.encode $ widget._projectId <&> (.toText)
+          let querySQL = maybeToMonoid widget.sql
+          let chartType = mapWidgetTypeToChartType widget.wType
           -- let widgetJSON = decodeUtf8 $ AE.encode $ widget
           -- let seriesDefault = decodeUtf8 $ AE.encode $ createSeries widget.wType Nothing
           script_
@@ -154,9 +157,10 @@ widget_ w =
                 let intervalId = null;
                 const FETCH_INTERVAL = 5000; // 5sec
                 const DEFAULT_BACKGROUND_STYLE = { color: 'rgba(240,248,255, 0.4)' };
+                const CHART_TYPE = '${chartType}'
 
                 const createSeriesConfig = (name, index, yAxisLabel) => ({
-                  type: 'bar',
+                  type: CHART_TYPE,
                   name,
                   stack: yAxisLabel!='' ? yAxisLabel : 'units',
                   showBackground: true,
@@ -172,13 +176,14 @@ widget_ w =
                   opt.legend.data = columnNames;
                   return opt;
                 };
-                const updateChartData = async (chart, opt, query, shouldFetch, widgetData) => {
+                const updateChartData = async (chart, opt, shouldFetch, widgetData) => {
                   if (!shouldFetch) return;
 
                   try {
                     const paramM = new URLSearchParams(window.location.search);
                     paramM.set("pid", widgetData.pid)
                     paramM.set("query_raw",widgetData.query);
+                    if (widgetData.querySQL!="") paramM.set("query_sql",widgetData.querySQL);
 
                     const response = await (await fetch(`/chart_data?${paramM.toString()}`)).json();
                     opt.dataset.source = [response.headers, ...response.dataset];
@@ -194,7 +199,7 @@ widget_ w =
                     console.error('Failed to fetch new data:', error);
                   }
                 };
-               const init = (opt, chartId, query, theme, yAxisLabel, pid) => {
+               const init = (opt, chartId, query, querySQL, theme, yAxisLabel, pid) => {
                   const chartEl = document.getElementById(chartId);
                   const chart = echarts.init(chartEl, theme);
                   const liveStreamCheckbox = document.getElementById('streamLiveData');
@@ -202,12 +207,12 @@ widget_ w =
 
                   const resizeObserver = new ResizeObserver((_entries) => requestAnimationFrame(() => echarts.getInstanceByDom(chartEl).resize()));
                   resizeObserver.observe(chartEl);
-                  const widgetData = {yAxisLabel, pid, query, chartId}
+                  const widgetData = {yAxisLabel, pid, query,querySQL, chartId}
 
                   if (liveStreamCheckbox) {
                     liveStreamCheckbox.addEventListener('change', () => {
                       if (checkbox.checked) {
-                        intervalId = setInterval(() => updateChartData(chart, opt, query, true, widgetData), FETCH_INTERVAL);
+                        intervalId = setInterval(() => updateChartData(chart, opt, true, widgetData), FETCH_INTERVAL);
                       } else {
                         clearInterval(intervalId);
                         intervalId = null;
@@ -219,7 +224,7 @@ widget_ w =
                     chart.showLoading();
                     const observer = new IntersectionObserver(entries => {
                         if (entries[0]?.isIntersecting) {
-                           updateChartData(chart, opt,query, true, widgetData)
+                           updateChartData(chart, opt,true, widgetData)
                            observer.disconnect();
                         }
                     });
@@ -236,7 +241,9 @@ widget_ w =
                   });
                 };
 
-                init(${echartOpt}, "${chartId}", ${query}, "${theme}", "${yAxisLabel}", ${pid});
+                init(${echartOpt}, "${chartId}", ${query},
+                `${querySQL}`,
+                "${theme}", "${yAxisLabel}", ${pid});
               })();
           |]
 
@@ -347,6 +354,7 @@ createSeries widgetType query =
 -- Helper: Map widget type to ECharts chart type
 mapWidgetTypeToChartType :: WidgetType -> Text
 mapWidgetTypeToChartType WTTimeseries = "bar"
+mapWidgetTypeToChartType WTTimeseriesLine = "line"
 mapWidgetTypeToChartType WTTimeseriesStat = "line"
 mapWidgetTypeToChartType WTDistribution = "bar"
 mapWidgetTypeToChartType _ = "bar"

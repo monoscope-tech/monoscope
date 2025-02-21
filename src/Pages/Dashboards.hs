@@ -52,7 +52,7 @@ dashboardPage_ pid dash = do
 
   div_ [class_ "mx-auto pt-2 pb-6 px-6 gap-3.5 w-full flex flex-col h-full overflow-y-scroll pb-12 group/pg", id_ "dashboardPage"] do
     div_ "" -- variables selector area
-    div_ [class_ "grid-stack"] $ forM_ dash.widgets (\w -> toHtml (w{Widget._projectId = Just pid}))
+    div_ [class_ "grid-stack  gap-3.5"] $ forM_ dash.widgets (\w -> toHtml (w{Widget._projectId = Just pid}))
     script_ "GridStack.init()"
 
 
@@ -75,21 +75,21 @@ dashboardGetH pid dashId fileM fromDStr toDStr sinceStr = do
 
   dash <- case fileM of
     Just file -> Dashboards.readDashboardEndpoint file
-    Nothing -> maybe (throwError $ err404) pure (loadDashboardFromVM dashVM)
+    Nothing -> maybe (throwError err404) pure (loadDashboardFromVM dashVM)
   dash' <- forOf (#widgets . traverse) dash \widget ->
     if (widget.eager == Just True)
       then do
-        metricsD <- Charts.queryMetrics (Just pid) widget.query Nothing sinceStr fromDStr toDStr Nothing
-        pure
-          $ widget
-          & #dataset
-            ?~ Widget.WidgetDataset
-              { source = AE.toJSON $ V.cons (AE.toJSON <$> metricsD.headers) (AE.toJSON <<$>> metricsD.dataset)
-              , rowsPerMin = Just metricsD.rowsPerMin
-              , value = Just $ fromIntegral metricsD.rowsCount
-              , from = metricsD.from
-              , to = metricsD.to
-              }
+        metricsD <- Charts.queryMetrics (Just pid) widget.query Nothing widget.sql sinceStr fromDStr toDStr Nothing
+        pure $
+          widget
+            & #dataset
+              ?~ Widget.WidgetDataset
+                { source = AE.toJSON $ V.cons (AE.toJSON <$> metricsD.headers) (AE.toJSON <<$>> metricsD.dataset)
+                , rowsPerMin = Just metricsD.rowsPerMin
+                , value = Just $ fromIntegral metricsD.rowsCount
+                , from = metricsD.from
+                , to = metricsD.to
+                }
       else pure widget
 
   let bwconf =

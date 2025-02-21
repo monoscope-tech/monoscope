@@ -1,29 +1,48 @@
 title: HTTP Stats 
 refresh_interval: 60s 
 widgets:
-  - type: "timeseries_stat"
-    title: "Requests"
-    query: requests 
-    unit: reqs
-    layout: { w: 3, h: 2 }
+  # - type: "timeseries_stat"
+  #   title: "Requests"
+  #   query: requests 
+  #   unit: reqs
+  #   layout: { w: 3, h: 2 }
 
   - type: "timeseries"
-    title: "Requests by status code"
+    title: "All requests"
     query: timechart count(*) by status_code 
     unit: reqs
-    layout: { w: 6, h: 3 }
+    layout: { w: 6, h: 2 }
 
-  - type: "timeseries"
-    title: "Requests by Latency"
-    query: timechart count(*) by status_code 
-    layout: { w: 6, h: 3 }
+  - type: "timeseries_line"
+    title: "Latency percentiles"
+    # query: timechart count(*) by status_code 
+    query: timechart p50(duration_ns) as p50, p75(duration_ns) as p75, p90(duration_ns) as p90, p95(duration_ns) as p95 by duration_ns
+    sql: |
+      SELECT timeB, value, quantile
+      FROM (
+        SELECT extract(epoch from time_bucket('1h', created_at))::integer AS timeB,
+               ARRAY[
+                 approx_percentile(0.50, percentile_agg(duration_ns))::int,
+                 approx_percentile(0.75, percentile_agg(duration_ns))::int,
+                 approx_percentile(0.90, percentile_agg(duration_ns))::int,
+                 approx_percentile(0.95, percentile_agg(duration_ns))::int
+               ] AS values,
+               ARRAY['p50', 'p75', 'p90', 'p95'] AS quantiles
+        FROM apis.request_dumps
+        WHERE project_id='00000000-0000-0000-0000-000000000000'::uuid
+          AND created_at > NOW() - interval '14 days'
+        GROUP BY timeB
+      ) s,
+      LATERAL unnest(s.values, s.quantiles) AS u(value, quantile);
+    layout: { w: 6, h: 2 }
 
   - type: "timeseries"
     title: "Errors"
-    query: status_code >= 300 | timechart count(*) by status_code 
-    layout: { w: 6, h: 3 }
+    theme: "roma"
+    query: status_code >= 300.0 | timechart count(*) by status_code 
+    layout: { w: 6, h: 2 }
 
   - type: "timeseries"
     title: "Requests by Endpoint"
     query: timechart count(*) by method,url_path 
-    layout: { w: 6, h: 3 }
+    layout: { w: 6, h: 2 }
