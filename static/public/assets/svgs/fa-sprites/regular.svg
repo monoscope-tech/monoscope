@@ -489,4 +489,10 @@
     </g>
   </symbol>
 
+
+  <symbol id="minus" width="10" height="3" viewBox="0 0 10 3" fill="none">
+    <path d="M1.5 1.92285H8.5" stroke="currentColor" stroke-opacity="0.8" stroke-width="2"
+      stroke-linecap="round" stroke-linejoin="round" />
+  </symbol>
+
 </svg>

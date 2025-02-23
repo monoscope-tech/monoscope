@@ -1,5 +1,5 @@
 'use strict'
-import { LitElement, html, repeat } from './js/thirdparty/lit.js'
+import { LitElement, html, nothing } from './js/thirdparty/lit.js'
 import '@lit-labs/virtualizer'
 import { virtualize } from '@lit-labs/virtualizer/virtualizer'
 export class LogList extends LitElement {
@@ -13,34 +13,30 @@ export class LogList extends LitElement {
     isError: { type: Boolean },
     fetchError: { type: String },
     projectId: { type: String },
-    canLoadMore: { type: Boolean },
+    groupedData: [],
+    expandedTraces: {},
   }
 
   constructor() {
     super()
     const container = document.querySelector('#resultTable')
+    this.source = new URLSearchParams(window.location.search).get('source') || 'requests'
+    this.colIdxMap = JSON.parse(container.dataset.colidxmap)
     this.logsData = JSON.parse(container.dataset.results)
     this.hasMore = this.logsData.length > 199
     this.logsColumns = JSON.parse(container.dataset.columns)
-    this.colIdxMap = JSON.parse(container.dataset.colidxmap)
-    const childSpans = JSON.parse(container.dataset.childspans)
-    this.childSpansMap = new Map()
-    childSpans.forEach((span) => {
-      if (this.childSpansMap.has(span[1])) {
-        this.childSpansMap.get(span[1]).push(span)
-      } else {
-        this.childSpansMap.set(span[1], [span])
-      }
-    })
-
+    this.expandedTraces = {}
+    this.spanListTree = this.source === 'spans' ? groupSpans(this.logsData, this.colIdxMap, this.expandedTraces) : []
+    this.serviceColors = JSON.parse(container.dataset.servicecolors)
     this.projectId = container.dataset.projectid
     this.nextFetchUrl = container.dataset.nextfetchurl
-    this.source = new URLSearchParams(window.location.search).get('source') || 'requests'
     this.isLoading = false
     this.isError = false
     this.logItemRow = this.logItemRow.bind(this)
     this.fetchData = this.fetchData.bind(this)
-    this.canLoadMore = false
+    this.renderSpan = this.renderSpan.bind(this)
+    this.renderTrace = this.renderTrace.bind(this)
+    this.expandTrace = this.expandTrace.bind(this)
   }
 
   firstUpdated() {
@@ -69,11 +65,31 @@ export class LogList extends LitElement {
     }, 3000)
   }
 
+  renderTrace(traceData) {
+    return traceData.spans.map((span) => {
+      return this.renderSpan(span)
+    })
+  }
+
+  renderSpan(span) {
+    return html`${this.logItemRow(span)}`
+  }
+
+  expandTrace(tracId) {
+    if (!this.expandedTraces[tracId]) {
+      this.expandedTraces[tracId] = false
+    }
+    this.expandedTraces[tracId] = !this.expandedTraces[tracId]
+    this.spanListTree = groupSpans(this.logsData, this.colIdxMap, this.expandedTraces)
+    this.requestUpdate()
+  }
+
   logItemRow(rowData) {
-    const [url] = requestDumpLogItemUrlPath(this.projectId, rowData, this.colIdxMap, this.source)
+    // result.push({ depth, traceStart, traceEnd, ...span, children: span.children.length })
+    const [url] = requestDumpLogItemUrlPath(this.projectId, this.source === 'spans' ? rowData.data : rowData, this.colIdxMap, this.source)
     return html`
       <tr class="item-row cursor-pointer whitespace-nowrap overflow-hidden" @click=${(event) => toggleLogRow(event, url)}>
-        ${this.logsColumns.map((column) => html`<td>${logItemCol(rowData, this.source, this.colIdxMap, column, this.childSpansMap)}</td>`)}
+        ${this.logsColumns.map((column) => html`<td>${logItemCol(rowData, this.source, this.colIdxMap, column, this.serviceColors, this.expandTrace)}</td>`)}
       </tr>
     `
   }
@@ -85,15 +101,10 @@ export class LogList extends LitElement {
       .then((response) => response.json())
       .then((data) => {
         if (!data.error) {
-          const { logsData, childSpans, nextUrl } = data
+          const { logsData, serviceColors, nextUrl } = data
           this.logsData = this.logsData.concat(logsData)
-          childSpans.forEach((span) => {
-            if (this.childSpansMap.has(span[1])) {
-              this.childSpansMap.get(span[1]).push(span)
-            } else {
-              this.childSpansMap.set(span[1], [span])
-            }
-          })
+          this.spanListTree = this.source === 'spans' ? groupSpans(this.logsData, this.colIdxMap, this.expandedTraces) : []
+          this.serviceColors = { ...serviceColors, ...this.serviceColors }
           this.nextFetchUrl = nextUrl
           this.hasMore = logsData.length > 199
         } else {
@@ -155,7 +166,7 @@ export class LogList extends LitElement {
 
   render() {
     return html`
-      <div class="relative overflow-y-scroll overflow-x-hidden w-full min-h-full c-scroll" id="logs_list_container">
+      <div class="relative overflow-y-scroll overflow-x-hidden w-full min-h-full c-scroll pb-10" id="logs_list_container">
         <table class="w-full table-auto ctable min-h-full table-pin-rows table-pin-cols overflow-x-hidden" style="height:1px; --rounded-box:0;">
           <thead class="w-full overflow-hidden">
             <tr class="text-textStrong border-b font-medium border-y">
@@ -163,10 +174,15 @@ export class LogList extends LitElement {
             </tr>
           </thead>
           <tbody class="w-full log-item-table-body" @rangechanged=${(e) => this.handleVirtualListEvent(e)}>
-            ${virtualize({
-              items: this.logsData,
-              renderItem: this.logItemRow,
-            })}
+            ${this.source === 'spans'
+              ? virtualize({
+                  items: this.spanListTree,
+                  renderItem: this.renderSpan,
+                })
+              : virtualize({
+                  items: this.logsData,
+                  renderItem: this.logItemRow,
+                })}
           </tbody>
         </table>
         ${this.hasMore
@@ -191,7 +207,8 @@ function faSprite(iconName, kind, classes) {
   return html`<svg class="${classes}"><use href="/public/assets/svgs/fa-sprites/${kind}.svg#${iconName}"></use></svg>`
 }
 
-function logItemCol(dataArr, source, colIdxMap, key, childSpansMap) {
+function logItemCol(rowData, source, colIdxMap, key, serviceColors, toggleTrace) {
+  const dataArr = source === 'spans' ? rowData.data : rowData
   switch (key) {
     case 'id':
       let [status, errCount, errClass] = errorClass(false, dataArr, colIdxMap)
@@ -219,8 +236,8 @@ function logItemCol(dataArr, source, colIdxMap, key, childSpansMap) {
       if (requestType === 'Incoming') return renderIconWithTippy('w-4', 'Incoming Request', faSprite('arrow-down-left', 'solid', ' h-3 fill-slate-500'))
       return renderIconWithTippy('w-4', 'Outgoing Request', faSprite('arrow-up-right', 'solid', ' h-3 fill-blue-700'))
     case 'duration':
-      let duration = getDurationNSMS(lookupVecTextByKey(dataArr, colIdxMap, key))
-      return renderBadge('cbadge-sm badge-neutral border border-strokeWeak bg-fillWeak', duration)
+      let dur = getDurationNSMS(lookupVecTextByKey(dataArr, colIdxMap, key))
+      return renderBadge('cbadge-sm badge-neutral border border-strokeWeak bg-fillWeak', dur)
     case 'severity_text':
       let severity = lookupVecTextByKey(dataArr, colIdxMap, key) || 'UNSET'
       let severityClass = getSeverityColor(severity)
@@ -242,22 +259,43 @@ function logItemCol(dataArr, source, colIdxMap, key, childSpansMap) {
       let kind = lookupVecTextByKey(dataArr, colIdxMap, key)
       return renderBadge('cbadge-sm badge-neutral border border-strokeWeak bg-fillWeak', kind)
     case 'latency_breakdown':
-      let spanId = lookupVecTextByKey(dataArr, colIdxMap, key)
-      let spans = childSpansMap.get(spanId) || []
-      return spanLatencyBreakdown(spans)
+      const { traceStart, traceEnd, startNs, duration } = rowData
+      const color = serviceColors[lookupVecTextByKey(dataArr, colIdxMap, 'service')] || 'black'
+      return spanLatencyBreakdown({ start: startNs - traceStart, duration, traceEnd, color })
     case 'rest':
       let val = lookupVecTextByKey(dataArr, colIdxMap, key)
+      const { depth, children, traceId, childErrors, hasErrors, expanded } = rowData
+      const errClas = hasErrors
+        ? 'bg-red-500 text-white fill-white stroke-white'
+        : childErrors
+        ? 'border border-red-500 bg-fillWeak text-textWeak fill-textWeak'
+        : 'border border-strokeWeak bg-fillWeak text-textWeak fill-textWeak'
       return source == 'logs'
-        ? html`${logItemCol(dataArr, source, colIdxMap, 'severity_text')} ${logItemCol(dataArr, source, colIdxMap, 'body')}`
+        ? html`${logItemCol(rowData, source, colIdxMap, 'severity_text')} ${logItemCol(rowData, source, colIdxMap, 'body')}`
         : source === 'spans'
         ? html`<div class="flex items-center w-auto gap-1">
-            <div class="w-[800px] shrink overflow-hidden">${['status', 'kind', 'span_name'].map((k) => logItemCol(dataArr, source, colIdxMap, k))}</div>
-            <div class="w-24 overflow-visible shrink-0">${logItemCol(dataArr, source, colIdxMap, 'duration')}</div>
-            ${logItemCol(dataArr, source, colIdxMap, 'latency_breakdown', childSpansMap)}
+            <div class="w-[800px] overflow-hidden flex items-center">
+              ${depth > 1 ? new Array(depth - 1).fill(1).map(() => html`<div class="ml-[15px] border-l w-4 h-5 shrink-0"></div>`) : nothing}
+              ${depth > 0 ? html`<div class="border-l ml-[15px] w-4 h-5 relative shrink-0"><span class="border-b w-full absolute left-0 top-1/2 -translate-y-1/2"></span></div>` : nothing}
+              ${children > 0
+                ? html`<button
+                    @click=${(e) => {
+                      e.stopPropagation()
+                      if (depth === 0) toggleTrace(traceId)
+                    }}
+                    class=${`rounded shrink-0 w-8 px-1 flex justify-center gap-[2px] text-xs items-center h-5 ${errClas}`}
+                  >
+                    ${depth === 0 ? (expanded ? faSprite('minus', 'regular', 'w-3 h-1 shrink-0') : faSprite('plus', 'regular', 'w-3 h-3 shrink-0')) : nothing} ${children}
+                  </button>`
+                : html`<div class=${`rounded shrink-0 w-3 h-5 ${errClas}`}></div>`}
+              ${['status', 'kind', 'span_name'].map((k) => logItemCol(rowData, source, colIdxMap, k))}
+            </div>
+            <div class="w-24 overflow-visible shrink-0">${logItemCol(rowData, source, colIdxMap, 'duration')}</div>
+            ${logItemCol(rowData, source, colIdxMap, 'latency_breakdown', serviceColors)}
           </div>`
         : html`
-            ${logItemCol(dataArr, source, colIdxMap, 'request_type')} ${logItemCol(dataArr, source, colIdxMap, 'status_code')} ${logItemCol(dataArr, source, colIdxMap, 'method')}
-            ${logItemCol(dataArr, source, colIdxMap, 'url_path')} ${logItemCol(dataArr, source, colIdxMap, 'duration')} ${logItemCol(dataArr, source, colIdxMap, 'host')}
+            ${logItemCol(rowData, source, colIdxMap, 'request_type')} ${logItemCol(rowData, source, colIdxMap, 'status_code')} ${logItemCol(rowData, source, colIdxMap, 'method')}
+            ${logItemCol(rowData, source, colIdxMap, 'url_path')} ${logItemCol(rowData, source, colIdxMap, 'duration')} ${logItemCol(rowData, source, colIdxMap, 'host')}
             <span class="whitespace-nowrap overflow-x-hidden max-w-lg fill-slate-700 ">${val}</span>
           `
     default:
@@ -382,27 +420,14 @@ function getSpanStatusColor(status) {
   )
 }
 
-function spanLatencyBreakdown(spans) {
-  const totalDuration = spans.reduce((sum, sp) => sum + sp[2], 0)
+function spanLatencyBreakdown({ start, duration, traceEnd, color }) {
+  const width = (duration / traceEnd) * 200
+  const left = (start / traceEnd) * 200
   return html`<div class="w-[20ch] -mt-1 shrink-0">
-    <div class="flex h-5 w-[200px]">
-      ${spans.map((sps, i) => {
-        const width = (sps[2] / totalDuration) * 200
-        const color = sps[3] || 'bg-black'
-        const roundL = i === 0 ? 'rounded-l-sm' : ''
-        const roundR = i === spans.length - 1 ? 'rounded-r-sm' : ''
-        const dur = getDurationNSMS(sps[2])
-        return html`
-          <div
-            class=${`h-full overflow-hidden ${roundL} ${roundR} ${color}`}
-            style=${`width:${width}px`}
-            title=${`Span name: ${sps[0]} Duration: ${dur}`}
-            data-tippy-content=${`Span name: ${sps[0]} Duration: ${dur}`}
-          >
-            <div class="h-full w-full"></div>
-          </div>
-        `
-      })}
+    <div class="flex h-5 w-[200px] bg-fillWeak">
+      <div class=${`h-full overflow-hidden  ${color}`} style=${`width:${width}px; margin-left:${left}px`}>
+        <div class="h-full w-full"></div>
+      </div>
     </div>
   </div>`
 }
@@ -426,4 +451,98 @@ function requestDumpLogItemUrlPath(pid, rd, colIdxMap, source) {
   const rdId = lookupVecTextByKey(rd, colIdxMap, 'id')
   const rdCreatedAt = lookupVecTextByKey(rd, colIdxMap, 'created_at') || lookupVecTextByKey(rd, colIdxMap, 'timestamp')
   return [`/p/${pid}/log_explorer/${rdId}/${rdCreatedAt}/detailed?source=${source}`, rdId]
+}
+
+function groupSpans(data, colIdxMap, expandedTraces) {
+  const traceMap = new Map()
+  const TRACE_INDEX = colIdxMap['trace_id']
+  const SPAN_INDEX = colIdxMap['latency_breakdown']
+  const PARENT_SPAN_INDEX = colIdxMap['parent_span_id']
+  const TIMESTAMP_INDEX = colIdxMap['timestamp']
+  const SPAN_DURATION_INDEX = colIdxMap['duration']
+  const START_TIME_NS = colIdxMap['start_time_ns']
+  const ERROR_INDEX = colIdxMap['errors']
+
+  data.forEach((span) => {
+    const traceId = span[TRACE_INDEX]
+    const spanId = span[SPAN_INDEX]
+    const parentSpanId = span[PARENT_SPAN_INDEX]
+    if (!traceMap.has(traceId)) {
+      traceMap.set(traceId, { traceId, spans: new Map(), minStart: Infinity, duration: 0 })
+    }
+    const traceData = traceMap.get(traceId)
+    const timestamp = new Date(span[TIMESTAMP_INDEX])
+    const duration = span[SPAN_DURATION_INDEX]
+    const startTime = span[START_TIME_NS]
+    if (!traceData.trace_start_time || timestamp < traceData.trace_start_time) traceData.trace_start_time = timestamp
+    if (traceData.minStart > startTime) traceData.minStart = startTime
+    if (traceData.duration < duration) traceData.duration = duration
+    traceData.spans.set(spanId, {
+      id: spanId,
+      startNs: span[START_TIME_NS],
+      hasErrors: span[ERROR_INDEX],
+      duration: span[SPAN_DURATION_INDEX],
+      children: [],
+      parent: parentSpanId,
+      data: span,
+    })
+  })
+
+  traceMap.forEach((traceData) => {
+    const spanTree = new Map()
+    traceData.spans.forEach((span, spanId) => {
+      if (traceData.spans.has(span.parent)) {
+        traceData.spans.get(span.parent).children.push(span)
+      } else {
+        spanTree.set(spanId, span)
+      }
+    })
+    traceData.spans = Array.from(spanTree.values()).sort((a, b) => a.startNs - b.startNs)
+  })
+
+  const result = Array.from(traceMap.values()).map((trace) => ({
+    traceId: trace.traceId,
+    spans: Object.values(trace.spans),
+    startTime: trace.minStart,
+    duration: trace.duration,
+  }))
+
+  return flattenSpanTree(result, expandedTraces)
+}
+
+// Turns out leetcode grind ~4 years ago was worth it
+function flattenSpanTree(traceArr, expandedTraces = {}) {
+  let result = []
+  function traverse(span, traceId, traceStart, traceEnd, depth = 0) {
+    let childrenCount = span.children.length
+    let childErrors = false
+    let spanInfo = {
+      depth,
+      traceStart,
+      traceEnd,
+      traceId: traceId,
+      childErrors,
+      expanded: !!expandedTraces[traceId] && depth === 0,
+      ...span,
+      children: childrenCount,
+    }
+    if (expandedTraces[traceId] || depth === 0) result.push(spanInfo)
+    span.children.forEach((span) => {
+      childErrors = span.hasErrors ? true : childErrors
+      const [count, errors] = traverse(span, traceId, traceStart, traceEnd, depth + 1)
+      childrenCount += count
+      childErrors = childErrors || errors
+    })
+    spanInfo.children = childrenCount
+    spanInfo.childErrors = childErrors
+    return [childrenCount, childErrors]
+  }
+
+  traceArr.forEach((trace) => {
+    trace.spans.forEach((span) => {
+      traverse(span, trace.traceId, trace.startTime, trace.duration, 0)
+    })
+  })
+
+  return result
 }

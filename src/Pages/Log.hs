@@ -133,13 +133,13 @@ apiLogH pid queryM queryASTM cols' cursorM' sinceM fromM toM layoutM sourceM tar
             if source == "requests"
               then (\r -> lookupVecTextByKey r colIdxMap "created_at") =<< (requestVecs V.!? (V.length requestVecs - 1))
               else (\r -> lookupVecTextByKey r colIdxMap "timestamp") =<< (requestVecs V.!? (V.length requestVecs - 1))
-          childSpanIds =
+          serviceNames =
             if source == "spans"
-              then V.map (\v -> lookupVecTextByKey v colIdxMap "latency_breakdown") requestVecs
+              then V.map (\v -> lookupVecTextByKey v colIdxMap "service") requestVecs
               else []
+          colors = getServiceColors (V.catMaybes serviceNames)
           nextLogsURL = RequestDumps.requestDumpLogUrlPath pid queryM cols' reqLastCreatedAtM sinceM fromM toM (Just "loadmore") source queryASTM
           resetLogsURL = RequestDumps.requestDumpLogUrlPath pid queryM cols' Nothing Nothing Nothing Nothing Nothing source Nothing
-      childSpans <- Telemetry.getChildSpans pid (V.catMaybes childSpanIds)
       let page =
             ApiLogsPageData
               { pid
@@ -157,7 +157,7 @@ apiLogH pid queryM queryASTM cols' cursorM' sinceM fromM toM layoutM sourceM tar
               , emptyStateUrl = Nothing
               , source
               , targetSpans = targetSpansM
-              , childSpans = childSpans
+              , serviceColors = colors
               , daysCountDown = daysLeft
               , queryAST = decodeUtf8 $ AE.encode queryAST
               , queryLibRecent
@@ -165,7 +165,7 @@ apiLogH pid queryM queryASTM cols' cursorM' sinceM fromM toM layoutM sourceM tar
               }
       case (layoutM, hxRequestM, hxBoostedM) of
         (Just "SaveQuery", _, _) -> addRespHeaders $ LogsQueryLibrary pid queryLibSaved queryLibRecent
-        (Just "loadmore", Just "true", _) -> addRespHeaders $ LogsGetRows pid requestVecs curatedColNames colIdxMap nextLogsURL source childSpans
+        (Just "loadmore", Just "true", _) -> addRespHeaders $ LogsGetRows pid requestVecs curatedColNames colIdxMap nextLogsURL source []
         (Just "resultTable", Just "true", _) -> addRespHeaders $ LogsGetResultTable page False
         (Just "all", Just "true", _) -> addRespHeaders $ LogsGetResultTable page True
         _ -> addRespHeaders $ LogPage $ PageCtx bwconf page
@@ -227,28 +227,14 @@ apiLogJson pid queryM queryASTM cols' cursorM' sinceM fromM toM layoutM sourceM 
             if source == "requests"
               then (\r -> lookupVecTextByKey r colIdxMap "created_at") =<< (requestVecs V.!? (V.length requestVecs - 1))
               else (\r -> lookupVecTextByKey r colIdxMap "timestamp") =<< (requestVecs V.!? (V.length requestVecs - 1))
-          childSpanIds =
+          serviceNames =
             if source == "spans"
-              then V.map (\v -> lookupVecTextByKey v colIdxMap "latency_breakdown") requestVecs
+              then V.map (\v -> lookupVecTextByKey v colIdxMap "service") requestVecs
               else []
           nextLogsURL = RequestDumps.requestDumpLogUrlPath pid queryM cols' reqLastCreatedAtM sinceM fromM toM (Just "loadmore") source queryASTM
           resetLogsURL = RequestDumps.requestDumpLogUrlPath pid queryM cols' Nothing Nothing Nothing Nothing Nothing source Nothing
-      childSpans <- Telemetry.getChildSpans pid (V.catMaybes childSpanIds)
-      let colors = getServiceColors $ (.spanName) <$> childSpans
-          childSps =
-            ( map
-                ( \sp ->
-                    let name = AE.String sp.spanName
-                        parentId = AE.String $ fromMaybe "" sp.parentSpanId
-                        duration = AE.Number $ fromIntegral sp.spanDurationNs
-                        color = AE.String $ fromMaybe "bg-black" $ HM.lookup sp.spanName colors
-                        spandId = AE.String $ sp.spanId
-                     in AE.toJSON ([name, parentId, duration, color, spandId] :: [AE.Value])
-                )
-                $ V.toList childSpans
-            )
-
-      addRespHeaders $ AE.object ["logsData" AE..= requestVecs, "childSpans" AE..= childSps, "nextUrl" AE..= nextLogsURL, "resetLogsUrl" AE..= resetLogsURL]
+      let colors = getServiceColors (V.catMaybes serviceNames)
+      addRespHeaders $ AE.object ["logsData" AE..= requestVecs, "serviceColors" AE..= colors, "nextUrl" AE..= nextLogsURL, "resetLogsUrl" AE..= resetLogsURL]
     Nothing -> do
       addRespHeaders $ AE.object ["error" AE..= "Something went wrong"]
 
@@ -413,7 +399,7 @@ data ApiLogsPageData = ApiLogsPageData
   , emptyStateUrl :: Maybe Text
   , source :: Text
   , targetSpans :: Maybe Text
-  , childSpans :: V.Vector Telemetry.SpanRecord
+  , serviceColors :: HM.HashMap Text Text
   , daysCountDown :: Maybe Text
   , queryAST :: Text
   , queryLibRecent :: V.Vector Projects.QueryLibItem
@@ -423,18 +409,6 @@ data ApiLogsPageData = ApiLogsPageData
 
 virtualTable :: ApiLogsPageData -> Html ()
 virtualTable page = do
-  let colors = getServiceColors $ (.spanName) <$> page.childSpans
-      childSps =
-        ( map
-            ( \sp ->
-                let name = AE.String sp.spanName
-                    parentId = AE.String $ fromMaybe "" sp.parentSpanId
-                    duration = AE.Number $ fromIntegral sp.spanDurationNs
-                    color = AE.String $ fromMaybe "bg-black" $ HM.lookup sp.spanName colors
-                 in AE.toJSON ([name, parentId, duration, color] :: [AE.Value])
-            )
-            $ V.toList page.childSpans
-        )
   termRaw
     "log-list"
     [ id_ "resultTable"
@@ -442,7 +416,7 @@ virtualTable page = do
     , term "data-results" (decodeUtf8 $ AE.encode page.requestVecs)
     , term "data-columns" (decodeUtf8 $ AE.encode page.cols)
     , term "data-colIdxMap" (decodeUtf8 $ AE.encode page.colIdxMap)
-    , term "data-childSpans" (decodeUtf8 $ AE.encode childSps)
+    , term "data-servicecolors" (decodeUtf8 $ AE.encode page.serviceColors)
     , term "data-nextfetchurl" page.nextLogsURL
     , term "data-projectid" page.pid.toText
     ]
@@ -657,7 +631,7 @@ resultTable_ page mainLog = table_
               ]
               (span_ [class_ "inline-block"] "check for newer results" >> span_ [id_ "loadNewIndicator", class_ "hidden loading loading-dots loading-sm inline-block pl-3"] "")
 
-        logItemRows_ page.pid (V.take 2 page.requestVecs) page.cols page.colIdxMap page.nextLogsURL page.source page.childSpans
+        logItemRows_ page.pid (V.take 2 page.requestVecs) page.cols page.colIdxMap page.nextLogsURL page.source []
 
 
 curateCols :: [Text] -> [Text] -> [Text]
@@ -672,6 +646,10 @@ curateCols summaryCols cols = sortBy sortAccordingly filteredCols
       , "request_type"
       , "trace_id"
       , "severity_text"
+      , "parent_span_id"
+      , "latency_breakdown"
+      , "errors"
+      , "start_time_ns"
       , "kind"
       , "span_name"
       , "status"
@@ -681,8 +659,7 @@ curateCols summaryCols cols = sortBy sortAccordingly filteredCols
       , "body"
       ]
     isLogEventB = isLogEvent cols
-    fcols = if "latency_breakdown" `elem` summaryCols then cols else filter (/= "latency_breakdown") cols
-    filteredCols = filter (\c -> not isLogEventB || (c `notElem` defaultSummaryPaths || c `elem` summaryCols)) fcols
+    filteredCols = filter (\c -> not isLogEventB || (c `notElem` defaultSummaryPaths || c `elem` summaryCols)) cols
 
     sortAccordingly :: Text -> Text -> Ordering
     sortAccordingly a b

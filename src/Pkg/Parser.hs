@@ -321,6 +321,9 @@ defaultSelectSqlQuery (Just SSpans) =
   , "CAST(EXTRACT(EPOCH FROM (end_time - start_time)) * 1_000_000_000 AS BIGINT) as duration"
   , "resource->>'service.name' as service"
   , "span_id as latency_breakdown"
+  , "parent_span_id"
+  , "CAST(EXTRACT(EPOCH FROM (start_time)) * 1_000_000_000 AS BIGINT) as start_time_ns"
+  , "EXISTS(SELECT 1 FROM jsonb_array_elements(events) elem  WHERE elem->>'event_name' = 'exception') as errors"
   , [fmt|LEFT(
         CONCAT(
             'attributes=', COALESCE(attributes, 'null'),
