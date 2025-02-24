@@ -23,10 +23,11 @@ export class LogList extends LitElement {
     this.source = new URLSearchParams(window.location.search).get('source') || 'requests'
     this.colIdxMap = JSON.parse(container.dataset.colidxmap)
     this.logsData = JSON.parse(container.dataset.results)
+    this.traceLogs = JSON.parse(container.dataset.tracelogs)
     this.hasMore = this.logsData.length > 199
     this.logsColumns = JSON.parse(container.dataset.columns)
     this.expandedTraces = {}
-    this.spanListTree = this.source === 'spans' ? groupSpans(this.logsData, this.colIdxMap, this.expandedTraces) : []
+    this.spanListTree = this.source === 'spans' ? groupSpans(this.logsData, this.traceLogs, this.colIdxMap, this.expandedTraces) : []
     this.serviceColors = JSON.parse(container.dataset.servicecolors)
     this.projectId = container.dataset.projectid
     this.nextFetchUrl = container.dataset.nextfetchurl
@@ -80,13 +81,13 @@ export class LogList extends LitElement {
       this.expandedTraces[tracId] = false
     }
     this.expandedTraces[tracId] = !this.expandedTraces[tracId]
-    this.spanListTree = groupSpans(this.logsData, this.colIdxMap, this.expandedTraces)
+    this.spanListTree = groupSpans(this.logsData, this.traceLogs, this.colIdxMap, this.expandedTraces)
     this.requestUpdate()
   }
 
   logItemRow(rowData) {
-    // result.push({ depth, traceStart, traceEnd, ...span, children: span.children.length })
-    const [url] = requestDumpLogItemUrlPath(this.projectId, this.source === 'spans' ? rowData.data : rowData, this.colIdxMap, this.source)
+    const s = rowData.type === 'log' ? 'logs' : this.source
+    const [url] = requestDumpLogItemUrlPath(this.projectId, this.source === 'spans' ? rowData.data : rowData, this.colIdxMap, s)
     return html`
       <tr class="item-row cursor-pointer whitespace-nowrap overflow-hidden" @click=${(event) => toggleLogRow(event, url)}>
         ${this.logsColumns.map((column) => html`<td>${logItemCol(rowData, this.source, this.colIdxMap, column, this.serviceColors, this.expandTrace)}</td>`)}
@@ -101,9 +102,10 @@ export class LogList extends LitElement {
       .then((response) => response.json())
       .then((data) => {
         if (!data.error) {
-          const { logsData, serviceColors, nextUrl } = data
+          const { logsData, serviceColors, nextUrl, traceLogs } = data
           this.logsData = this.logsData.concat(logsData)
-          this.spanListTree = this.source === 'spans' ? groupSpans(this.logsData, this.colIdxMap, this.expandedTraces) : []
+          this.traceLogs = this.traceLogs.concat(traceLogs)
+          this.spanListTree = this.source === 'spans' ? groupSpans(this.logsData, this.traceLogs, this.colIdxMap, this.expandedTraces) : []
           this.serviceColors = { ...serviceColors, ...this.serviceColors }
           this.nextFetchUrl = nextUrl
           this.hasMore = logsData.length > 199
@@ -236,7 +238,7 @@ function logItemCol(rowData, source, colIdxMap, key, serviceColors, toggleTrace)
       if (requestType === 'Incoming') return renderIconWithTippy('w-4', 'Incoming Request', faSprite('arrow-down-left', 'solid', ' h-3 fill-slate-500'))
       return renderIconWithTippy('w-4', 'Outgoing Request', faSprite('arrow-up-right', 'solid', ' h-3 fill-blue-700'))
     case 'duration':
-      let dur = getDurationNSMS(lookupVecTextByKey(dataArr, colIdxMap, key))
+      let dur = rowData.type === 'log' ? 'log' : getDurationNSMS(lookupVecTextByKey(dataArr, colIdxMap, key))
       return renderBadge('cbadge-sm badge-neutral border border-strokeWeak bg-fillWeak', dur)
     case 'severity_text':
       let severity = lookupVecTextByKey(dataArr, colIdxMap, key) || 'UNSET'
@@ -264,7 +266,7 @@ function logItemCol(rowData, source, colIdxMap, key, serviceColors, toggleTrace)
       return spanLatencyBreakdown({ start: startNs - traceStart, duration, traceEnd, color })
     case 'rest':
       let val = lookupVecTextByKey(dataArr, colIdxMap, key)
-      const { depth, children, traceId, childErrors, hasErrors, expanded } = rowData
+      const { depth, children, traceId, childErrors, hasErrors, expanded, type } = rowData
       const errClas = hasErrors
         ? 'bg-red-500 text-white fill-white stroke-white'
         : childErrors
@@ -288,7 +290,9 @@ function logItemCol(rowData, source, colIdxMap, key, serviceColors, toggleTrace)
                     ${depth === 0 ? (expanded ? faSprite('minus', 'regular', 'w-3 h-1 shrink-0') : faSprite('plus', 'regular', 'w-3 h-3 shrink-0')) : nothing} ${children}
                   </button>`
                 : html`<div class=${`rounded shrink-0 w-3 h-5 ${errClas}`}></div>`}
-              ${['status', 'kind', 'span_name'].map((k) => logItemCol(rowData, source, colIdxMap, k))}
+              ${type === 'log'
+                ? ['severity_text', 'body'].map((k) => logItemCol(rowData, source, { severity_text: 5, body: 6 }, k))
+                : ['status', 'kind', 'span_name'].map((k) => logItemCol(rowData, source, colIdxMap, k))}
             </div>
             <div class="w-24 overflow-visible shrink-0">${logItemCol(rowData, source, colIdxMap, 'duration')}</div>
             ${logItemCol(rowData, source, colIdxMap, 'latency_breakdown', serviceColors)}
@@ -453,7 +457,8 @@ function requestDumpLogItemUrlPath(pid, rd, colIdxMap, source) {
   return [`/p/${pid}/log_explorer/${rdId}/${rdCreatedAt}/detailed?source=${source}`, rdId]
 }
 
-function groupSpans(data, colIdxMap, expandedTraces) {
+function groupSpans(data, logs, colIdxMap, expandedTraces) {
+  console.log(logs)
   const traceMap = new Map()
   const TRACE_INDEX = colIdxMap['trace_id']
   const SPAN_INDEX = colIdxMap['latency_breakdown']
@@ -468,7 +473,7 @@ function groupSpans(data, colIdxMap, expandedTraces) {
     const spanId = span[SPAN_INDEX]
     const parentSpanId = span[PARENT_SPAN_INDEX]
     if (!traceMap.has(traceId)) {
-      traceMap.set(traceId, { traceId, spans: new Map(), minStart: Infinity, duration: 0 })
+      traceMap.set(traceId, { traceId, spans: new Map(), minStart: Infinity, duration: 0, logs: logs.filter((log) => log[2] === traceId) })
     }
     const traceData = traceMap.get(traceId)
     const timestamp = new Date(span[TIMESTAMP_INDEX])
@@ -485,18 +490,33 @@ function groupSpans(data, colIdxMap, expandedTraces) {
       children: [],
       parent: parentSpanId,
       data: span,
+      type: 'span',
     })
+  })
+
+  logs.forEach((log) => {
+    const traceData = traceMap.get(log[2])
+    traceData.spans.set(log[0], { data: log, type: 'log', spandId: log[3], startNs: log[4], children: [] })
   })
 
   traceMap.forEach((traceData) => {
     const spanTree = new Map()
     traceData.spans.forEach((span, spanId) => {
-      if (traceData.spans.has(span.parent)) {
-        traceData.spans.get(span.parent).children.push(span)
+      if (span.type === 'log') {
+        if (traceData.spans.has(span.spandId)) {
+          traceData.spans.get(span.spandId).children.push(span)
+        } else {
+          spanTree.set(span[0], span)
+        }
       } else {
-        spanTree.set(spanId, span)
+        if (traceData.spans.has(span.parent)) {
+          traceData.spans.get(span.parent).children.push(span)
+        } else {
+          spanTree.set(spanId, span)
+        }
       }
     })
+
     traceData.spans = Array.from(spanTree.values()).sort((a, b) => a.startNs - b.startNs)
   })
 
@@ -510,7 +530,6 @@ function groupSpans(data, colIdxMap, expandedTraces) {
   return flattenSpanTree(result, expandedTraces)
 }
 
-// Turns out leetcode grind ~4 years ago was worth it
 function flattenSpanTree(traceArr, expandedTraces = {}) {
   let result = []
   function traverse(span, traceId, traceStart, traceEnd, depth = 0) {
@@ -543,6 +562,6 @@ function flattenSpanTree(traceArr, expandedTraces = {}) {
       traverse(span, trace.traceId, trace.startTime, trace.duration, 0)
     })
   })
-
+  console.log(result)
   return result
 }

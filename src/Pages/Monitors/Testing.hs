@@ -283,6 +283,7 @@ dashboardPage pid col reqsVecM = do
                       , queryLibRecent = V.empty
                       , queryLibSaved = V.empty
                       , serviceColors = HM.empty
+                      , traceLogs = V.empty
                       }
               Log.resultTable_ page False
             _ -> pass

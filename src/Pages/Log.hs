@@ -140,6 +140,11 @@ apiLogH pid queryM queryASTM cols' cursorM' sinceM fromM toM layoutM sourceM tar
           colors = getServiceColors (V.catMaybes serviceNames)
           nextLogsURL = RequestDumps.requestDumpLogUrlPath pid queryM cols' reqLastCreatedAtM sinceM fromM toM (Just "loadmore") source queryASTM
           resetLogsURL = RequestDumps.requestDumpLogUrlPath pid queryM cols' Nothing Nothing Nothing Nothing Nothing source Nothing
+          traceIDs =
+            if source == "spans"
+              then V.catMaybes $ V.map (\v -> lookupVecTextByKey v colIdxMap "trace_id") requestVecs
+              else []
+      traceLogs <- Telemetry.getLogsByTraceIds pid traceIDs
       let page =
             ApiLogsPageData
               { pid
@@ -156,6 +161,7 @@ apiLogH pid queryM queryASTM cols' cursorM' sinceM fromM toM layoutM sourceM tar
               , isTestLog = Nothing
               , emptyStateUrl = Nothing
               , source
+              , traceLogs
               , targetSpans = targetSpansM
               , serviceColors = colors
               , daysCountDown = daysLeft
@@ -233,8 +239,20 @@ apiLogJson pid queryM queryASTM cols' cursorM' sinceM fromM toM layoutM sourceM 
               else []
           nextLogsURL = RequestDumps.requestDumpLogUrlPath pid queryM cols' reqLastCreatedAtM sinceM fromM toM (Just "loadmore") source queryASTM
           resetLogsURL = RequestDumps.requestDumpLogUrlPath pid queryM cols' Nothing Nothing Nothing Nothing Nothing source Nothing
+          traceIDs =
+            if source == "spans"
+              then V.catMaybes $ V.map (\v -> lookupVecTextByKey v colIdxMap "trace_id") requestVecs
+              else []
+      traceLogs <- Telemetry.getLogsByTraceIds pid traceIDs
       let colors = getServiceColors (V.catMaybes serviceNames)
-      addRespHeaders $ AE.object ["logsData" AE..= requestVecs, "serviceColors" AE..= colors, "nextUrl" AE..= nextLogsURL, "resetLogsUrl" AE..= resetLogsURL]
+      addRespHeaders $
+        AE.object
+          [ "logsData" AE..= requestVecs
+          , "traceLogs" AE..= traceLogs
+          , "serviceColors" AE..= colors
+          , "nextUrl" AE..= nextLogsURL
+          , "resetLogsUrl" AE..= resetLogsURL
+          ]
     Nothing -> do
       addRespHeaders $ AE.object ["error" AE..= "Something went wrong"]
 
@@ -401,6 +419,7 @@ data ApiLogsPageData = ApiLogsPageData
   , targetSpans :: Maybe Text
   , serviceColors :: HM.HashMap Text Text
   , daysCountDown :: Maybe Text
+  , traceLogs :: V.Vector (V.Vector AE.Value)
   , queryAST :: Text
   , queryLibRecent :: V.Vector Projects.QueryLibItem
   , queryLibSaved :: V.Vector Projects.QueryLibItem
@@ -419,6 +438,7 @@ virtualTable page = do
     , term "data-servicecolors" (decodeUtf8 $ AE.encode page.serviceColors)
     , term "data-nextfetchurl" page.nextLogsURL
     , term "data-projectid" page.pid.toText
+    , term "data-tracelogs" (decodeUtf8 $ AE.encode page.traceLogs)
     ]
     ("" :: Text)
 

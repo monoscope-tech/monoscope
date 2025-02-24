@@ -27,6 +27,7 @@ module Models.Telemetry.Telemetry (
   bulkInsertMetrics,
   bulkInsertSpans,
   getMetricChartListData,
+  getLogsByTraceIds,
   getMetricLabelValues,
   getValsWithPrefix,
   getSpanAttribute,
@@ -48,6 +49,12 @@ import Data.UUID (UUID)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity.DBT (QueryNature (..), executeMany, query, queryOne)
+import Database.PostgreSQL.Transact qualified as DBT
+
+import Data.Aeson (Value)
+import Data.Aeson.Types (parseMaybe)
+import Data.ByteString.Lazy (fromStrict)
+import Data.Text.Encoding (encodeUtf8)
 import Database.PostgreSQL.Simple (FromRow, ResultError (..), ToRow)
 import Database.PostgreSQL.Simple.FromField (FromField (..))
 import Database.PostgreSQL.Simple.FromRow
@@ -66,6 +73,7 @@ import Deriving.Aeson qualified as DAE
 import Deriving.Aeson.Stock qualified as DAE
 import Effectful
 
+import Database.PostgreSQL.Simple (Only (..))
 import Effectful.PostgreSQL.Transact.Effect (DB, dbtToEff)
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.Projects qualified as Projects
@@ -128,7 +136,7 @@ data LogRecord = LogRecord
 
 instance AE.FromJSON ByteString where
   parseJSON = AE.withText "ByteString" $ \t ->
-    case B16.decode (encodeUtf8 t) of
+    case B16.decode (Relude.encodeUtf8 t) of
       Right bs -> return bs
       Left err -> fail $ "Invalid hex-encoded ByteString: " ++ err
 
@@ -394,7 +402,7 @@ getChildSpans pid spanIds = dbtToEff $ query Select q (pid, spanIds)
 
 
 getDataPointsData :: DB :> es => Projects.ProjectId -> (Maybe UTCTime, Maybe UTCTime) -> Eff es (V.Vector MetricDataPoint)
-getDataPointsData pid dateRange = dbtToEff $ query Select (Query $ encodeUtf8 q) pid
+getDataPointsData pid dateRange = dbtToEff $ query Select (Query $ Relude.encodeUtf8 q) pid
   where
     dateRangeStr = toText $ case dateRange of
       (Nothing, Just b) -> "AND timestamp BETWEEN NOW() AND '" <> formatTime defaultTimeLocale "%F %R" b <> "'"
@@ -406,6 +414,34 @@ getDataPointsData pid dateRange = dbtToEff $ query Select (Query $ encodeUtf8 q)
              FROM telemetry.metrics WHERE project_id = ? $dateRangeStr
              GROUP BY metric_name, metric_type, metric_unit, metric_description
              ORDER BY metric_name;
+getLogsByTraceIds pid traceIds = dbtToEff $ V.fromList <$> DBT.query q (pid, traceIds)
+  where
+    q =
+      [sql|
+      SELECT project_id, id, timestamp, observed_timestamp, trace_id, span_id, severity_text, severity_number, body
+      FROM telemetry.logs WHERE project_id = ? AND trace_id = ANY(?);
+    |]
+
+
+getLogsByTraceIds :: DB :> es => Projects.ProjectId -> V.Vector Text -> Eff es (V.Vector (V.Vector AE.Value))
+getLogsByTraceIds pid traceIds = do
+  logitems <- queryToValues pid traceIds
+  pure $ V.mapMaybe valueToVector logitems
+
+
+valueToVector :: Only AE.Value -> Maybe (V.Vector AE.Value)
+valueToVector (Only val) = case val of
+  AE.Array arr -> Just arr
+  _ -> Nothing
+
+
+queryToValues :: DB :> es => Projects.ProjectId -> V.Vector Text -> Eff es (V.Vector (Only AE.Value))
+queryToValues pid traceIds = dbtToEff $ V.fromList <$> DBT.query q (pid, traceIds)
+  where
+    q =
+      [sql|
+      SELECT json_build_array(id, timestamp, trace_id, span_id, CAST(EXTRACT(EPOCH FROM (timestamp)) * 1_000_000_000 AS BIGINT), severity_text, body)
+      FROM telemetry.logs WHERE project_id = ? AND trace_id = ANY(?);
     |]
 
 
@@ -436,7 +472,7 @@ getMetricData pid metricName = dbtToEff $ queryOne Select q (pid, metricName, pi
 
 
 getMetricChartListData :: DB :> es => Projects.ProjectId -> Maybe Text -> Maybe Text -> (Maybe UTCTime, Maybe UTCTime) -> Int -> Eff es (V.Vector MetricChartListData)
-getMetricChartListData pid sourceM prefixM dateRange cursor = dbtToEff $ query Select (Query $ encodeUtf8 q) pid
+getMetricChartListData pid sourceM prefixM dateRange cursor = dbtToEff $ query Select (Query $ Relude.encodeUtf8 q) pid
   where
     dateRangeStr = toText $ case dateRange of
       (Nothing, Just b) -> "AND timestamp BETWEEN NOW() AND '" <> formatTime defaultTimeLocale "%F %R" b <> "'"
@@ -587,9 +623,9 @@ convertSpanToRequestMessage sp instrumentationScope =
   where
     host = getSpanAttribute "net.host.name" sp.attributes
     method = fromMaybe (fromMaybe "GET" $ getSpanAttribute "http.request.method" sp.attributes) $ getSpanAttribute "http.method" sp.attributes
-    pathParams = fromMaybe (AE.object []) (AE.decode $ encodeUtf8 $ fromMaybe "" $ getSpanAttribute "http.request.path_params" sp.attributes)
-    queryParams = fromMaybe (AE.object []) (AE.decode $ encodeUtf8 $ fromMaybe "" $ getSpanAttribute "http.request.query_params" sp.attributes)
-    errors = AE.decode $ encodeUtf8 $ fromMaybe "" $ getSpanAttribute "apitoolkit.errors" sp.attributes
+    pathParams = fromMaybe (AE.object []) (AE.decode $ Relude.encodeUtf8 $ fromMaybe "" $ getSpanAttribute "http.request.path_params" sp.attributes)
+    queryParams = fromMaybe (AE.object []) (AE.decode $ Relude.encodeUtf8 $ fromMaybe "" $ getSpanAttribute "http.request.query_params" sp.attributes)
+    errors = AE.decode $ Relude.encodeUtf8 $ fromMaybe "" $ getSpanAttribute "apitoolkit.errors" sp.attributes
     messageId = UUID.fromText $ fromMaybe "" $ getSpanAttribute "apitoolkit.msg_id" sp.attributes
     parentId = UUID.fromText $ fromMaybe "" $ getSpanAttribute "apitoolkit.parent_id" sp.attributes
     referer = Just $ Left (fromMaybe "" $ getSpanAttribute "http.request.headers.referer" sp.attributes) :: Maybe (Either Text [Text])
