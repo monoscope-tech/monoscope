@@ -48,6 +48,7 @@ import Models.Users.Users qualified as Users
 import NeatInterpolation (text)
 import OddJobs.Job (createJob)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
+import Pkg.ConvertKit qualified as ConvertKit
 import Relude hiding (ask, asks)
 import Relude.Unsafe qualified as Unsafe
 import Servant (addHeader)
@@ -311,19 +312,6 @@ processProjectPostForm cpRaw pid = do
       project <- dbtToEff $ Projects.projectById pid
       case project of
         Just p -> do
-          -- let checkPaymentPlan = cp.orderId /= p.orderId
-          -- (subId, firstSubItemId) <-
-          --   if checkPaymentPlan
-          --     then
-          --       getSubscriptionId cp.orderId envCfg.lemonSqueezyApiKey >>= \case
-          --         Just sub
-          --           | not (null sub.dataVal) ->
-          --               let target = sub.dataVal Unsafe.!! 0
-          --                in pure (Just (show target.attributes.firstSubscriptionItem.subscriptionId), Just (show target.attributes.firstSubscriptionItem.id))
-          --         _ -> pure (Nothing, Nothing)
-          --     else pure (p.subId, p.firstSubItemId)
-          -- case (if checkPaymentPlan then (subId, firstSubItemId) else (p.subId, p.firstSubItemId)) of
-          --   (Just sid, Just fsid) -> do
           _ <- dbtToEff $ Projects.updateProject (createProjectFormToModel pid p.subId p.firstSubItemId p.orderId p.paymentPlan cp)
           addSuccessToast "Updated Project Successfully" Nothing
           addRespHeaders $ ProjectPost (CreateProjectResp sess.persistentSession pid envCfg cp (def @CreateProjectFormError))

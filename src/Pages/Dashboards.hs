@@ -63,9 +63,9 @@ dashboardPage_ pid dash = do
     div_ "" -- variables selector area
     div_ [class_ "grid-stack  -m-2 mb-20"] $ forM_ dash.widgets (\w -> toHtml (w{Widget._projectId = Just pid}))
     script_
-      [text| 
+      [text|
       GridStack.init({
-        acceptWidgets: true, 
+        acceptWidgets: true,
         cellHeight: '5rem',
         margin:'0.5rem',
         marginTop: 0,
@@ -149,7 +149,7 @@ dashboardGetH pid dashId fileM fromDStr toDStr sinceStr = do
             then do
               case widget.wType of
                 Widget.WTAnomalies -> do
-                  issues <- dbtToEff $ Anomalies.selectIssues pid Nothing (Just False) (Just False) Nothing (Nothing) (0)
+                  issues <- dbtToEff $ Anomalies.selectIssues pid Nothing (Just False) (Just False) Nothing (Just 10) (0)
                   let issuesVM = V.map (AnomalyList.IssueVM False now "24h") issues
                   pure $
                     widget
@@ -232,10 +232,10 @@ renderDashboardListItem checked tmplClass title value description icon prview = 
   , term "data-description" $ maybeToMonoid description
   , term "data-icon" $ fromMaybe "square-dashed" icon
   , term "data-preview" $ fromMaybe "/public/assets/svgs/screens/dashboard_blank.svg" prview
-  , [__| on mouseover set #dItemPreview.src to my @data-preview 
+  , [__| on mouseover set #dItemPreview.src to my @data-preview
               then set #dItemTitle.innerText to my @data-title
               then set #dItemDescription.innerText to my @data-description
-              then set #dItemIcon.innerHTML to `<svg class='w-8 h-8'><use href='/public/assets/svgs/fa-sprites/regular.svg#${my @data-icon}'></use></svg>` 
+              then set #dItemIcon.innerHTML to `<svg class='w-8 h-8'><use href='/public/assets/svgs/fa-sprites/regular.svg#${my @data-icon}'></use></svg>`
           on mouseout
               put (<.dashboardListItem:has(input:checked)/>) into checkedLabel
               set #dItemPreview.src to checkedLabel's @data-preview
