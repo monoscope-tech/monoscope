@@ -116,8 +116,10 @@ aggFunctionParser =
 instance ToQueryText AggFunction where
   toQText v = display v
 
-instance ToQueryText [AggFunction] where 
-  toQText xs= T.intercalate "," $ map toQText xs
+
+instance ToQueryText [AggFunction] where
+  toQText xs = T.intercalate "," $ map toQText xs
+
 
 instance Display AggFunction where
   displayPrec prec (Count sub alias) = displayBuilder $ "count(" <> display sub <> ")"

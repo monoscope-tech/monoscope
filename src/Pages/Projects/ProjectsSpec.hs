@@ -1,9 +1,6 @@
 module Pages.Projects.ProjectsSpec (spec) where
 
 import Control.Lens (Traversal', preview, (^?))
-import Data.UUID qualified as UUID
-import Control.Lens (preview, (^?), Traversal')
-import Data.UUID qualified as UUID
 import Data.Generics.Labels ()
 import Data.Generics.Product (HasField (field))
 import Data.Generics.Sum (AsConstructor (_Ctor), _As)
@@ -19,6 +16,7 @@ import Pkg.TestUtils
 import Relude
 import Relude.Unsafe qualified as Unsafe
 import Test.Hspec
+
 
 testPid :: Projects.ProjectId
 testPid = Unsafe.fromJust $ Projects.ProjectId <$> UUID.fromText "00000000-0000-0000-0000-000000000000"

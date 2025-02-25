@@ -1,8 +1,10 @@
-module Pkg.Components.Widget (Widget (..), WidgetDataset (..), widget_, Layout (..), WidgetType (..), SummarizeBy(..)) where
+module Pkg.Components.Widget (Widget (..), WidgetDataset (..), widget_, Layout (..), WidgetType (..), SummarizeBy (..)) where
 
 import Control.Lens
 import Data.Aeson qualified as AE
+import Data.Default
 import Data.Generics.Labels ()
+import Data.Text qualified as T
 import Deriving.Aeson qualified as DAE
 import Deriving.Aeson.Stock qualified as DAES
 import Fmt qualified as Ft
@@ -11,8 +13,6 @@ import Lucid
 import Models.Projects.Projects qualified as Projects
 import NeatInterpolation
 import Relude
-import Data.Default
-import Data.Text qualified as T
 import Text.Printf (printf)
 import Text.Slugify (slugify)
 import Utils (faSprite_)
@@ -66,7 +66,8 @@ data SummarizeBy
   deriving anyclass (NFData, Default)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.ConstructorTagModifier '[DAE.StripPrefix "SB", DAE.CamelToSnake]] SummarizeBy
 
-summarizeByPrefix :: SummarizeBy -> Text 
+
+summarizeByPrefix :: SummarizeBy -> Text
 summarizeByPrefix SBSum = ""
 summarizeByPrefix SBMax = "<"
 summarizeByPrefix SBMin = ">"
@@ -159,12 +160,12 @@ widgetHelper_ isChild w = case w.wType of
 
 
 renderWidgetHeader :: Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe (Text, Text) -> Bool -> Html ()
-renderWidgetHeader wId title valueM subValueM expandBtnFn ctaM  hideSub= div_ [class_ "leading-none flex justify-between items-center"] do
+renderWidgetHeader wId title valueM subValueM expandBtnFn ctaM hideSub = div_ [class_ "leading-none flex justify-between items-center"] do
   div_ [class_ "inline-flex gap-3 items-center"] do
     span_ [] $ toHtml $ maybeToMonoid title
-    span_ [class_ $ "bg-fillWeak border border-strokeWeak text-sm font-semibold px-2 py-1 rounded-3xl " <> if (isJust valueM) then "" else "hidden", id_ $ wId <> "Value"] $
-      whenJust valueM toHtml
-    span_ [class_ $ "text-textWeak widget-subtitle text-sm " <> bool "" "hidden" hideSub , id_ $ wId <> "Subtitle"] $ toHtml $ maybeToMonoid subValueM
+    span_ [class_ $ "bg-fillWeak border border-strokeWeak text-sm font-semibold px-2 py-1 rounded-3xl " <> if (isJust valueM) then "" else "hidden", id_ $ wId <> "Value"]
+      $ whenJust valueM toHtml
+    span_ [class_ $ "text-textWeak widget-subtitle text-sm " <> bool "" "hidden" hideSub, id_ $ wId <> "Subtitle"] $ toHtml $ maybeToMonoid subValueM
   div_ [class_ "text-iconNeutral"] do
     whenJust ctaM \(ctaTitle, uri) -> a_ [class_ "underline underline-offset-2 text-textBrand", href_ uri] $ toHtml ctaTitle
     whenJust expandBtnFn \fn ->
@@ -185,15 +186,15 @@ renderChart widget = do
   let chartId = maybeToMonoid widget.id
   let valueM = (widget.dataset >>= (.value) >>= (\x -> Just $ Ft.fmt $ Ft.commaizeF $ round x))
   div_ [class_ "gap-1.5 flex flex-col h-full"] do
-    unless (widget.wType `elem` [WTTimeseriesStat, WTStat]) $
-      renderWidgetHeader chartId widget.title valueM rateM widget.expandBtnFn Nothing (widget.hideSubtitle == Just True) 
+    unless (widget.wType `elem` [WTTimeseriesStat, WTStat])
+      $ renderWidgetHeader chartId widget.title valueM rateM widget.expandBtnFn Nothing (widget.hideSubtitle == Just True)
     div_ [class_ "flex-1 flex"] do
       div_ [class_ "h-full w-full rounded-2xl border border-strokeWeak p-3 bg-fillWeaker flex "] do
         when (widget.wType `elem` [WTTimeseriesStat, WTStat]) $ div_ [class_ "flex flex-col justify-between"] do
           div_ $ whenJust widget.icon \icon -> span_ [class_ "p-3 bg-fillWeak rounded-lg leading-[0] inline-block text-strokeSelected"] $ Utils.faSprite_ icon "regular" "w-5 h-5"
           div_ [class_ "flex flex-col"] do
-            strong_ [class_ "text-textSuccess-strong text-xl"] $
-              whenJust valueM toHtml
+            strong_ [class_ "text-textSuccess-strong text-xl"]
+              $ whenJust valueM toHtml
             div_ [class_ "inline-flex gap-2 items-center justify-center"] do
               span_ [] $ toHtml $ maybeToMonoid widget.title
               span_ [class_ "inline-flex items-center"] $ Utils.faSprite_ "circle-info" "regular" "w-5 h-5"

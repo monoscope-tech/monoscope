@@ -144,7 +144,7 @@ sqlFromQueryComponents sqlCfg qc =
       timebucket = [fmt|extract(epoch from time_bucket('{timeRollup}', {timestampCol}))::integer as timeB, |] :: Text
       -- FIXME: render this based on the aggregations
       chartSelect = [fmt| count(*)::integer as count|] :: Text
-      -- chartSelect = T.intercalate "," qc.select 
+      -- chartSelect = T.intercalate "," qc.select
       timeGroupByClause = " GROUP BY " <> T.intercalate "," ("timeB" : qc.groupByClause)
       timeGroupSelect =
         if null qc.groupByClause
@@ -173,7 +173,7 @@ sqlFromQueryComponents sqlCfg qc =
           { finalColumns = listToColNames selectedCols
           , countQuery
           , finalSqlQuery = finalSqlQuery
-          , finalTimechartQuery =  Just timeChartQuery
+          , finalTimechartQuery = Just timeChartQuery
           , finalAlertQuery = Just alertQuery
           }
       )
