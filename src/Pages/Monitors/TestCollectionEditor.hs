@@ -206,9 +206,9 @@ collectionGetH pid colIdM = do
         (def :: BWConfig)
           { sessM = Just sess
           , currProject = Just project
-          , prePageTitle = Just "Monitors"
           , docsLink = Just "https://apitoolkit.io/docs/dashboard/dashboard-pages/api-tests/"
           , pageTitle = "Testing"
+          , prePageTitle = Just "Monitors & Alerts"
           , navTabs = Just $ pageTabs editorUrl overviewUrl
           , pageActions = Just $ div_ [class_ "inline-flex gap-2"] do
               button_ [class_ "h-8 rounded-lg btn-primary text-sm text-white px-3 flex items-center", onclick_ "htmx.trigger('#stepsForm','submit')"] do

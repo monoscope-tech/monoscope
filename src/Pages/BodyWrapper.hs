@@ -283,7 +283,7 @@ bodyWrapper BWConfig{sessM, currProject, prePageTitle, pageTitle, menuItem, hasI
             $ child
         Just sess ->
           let currUser = sess.persistentSession.user.getUser
-              sideNav' = currProject & maybe "" \project -> sideNav sess project pageTitle menuItem hasIntegrated
+              sideNav' = currProject & maybe "" \project -> sideNav sess project (fromMaybe pageTitle prePageTitle) menuItem hasIntegrated
            in section_ [class_ "flex flex-row grow-0 h-screen overflow-hidden"] do
                 sideNav'
                 section_ [class_ "h-screen overflow-y-hidden grow"] do

@@ -42,6 +42,7 @@ monitorCreateGetH pid monitorType = do
           { sessM = Just sess
           , currProject = Just project
           , pageTitle = "Create Monitor"
+          , prePageTitle = Just "Monitors & Alerts"
           , pageActions = Just $ Components.timepicker_ (Just "log_explorer_form") Nothing
           }
   case monitorType of
