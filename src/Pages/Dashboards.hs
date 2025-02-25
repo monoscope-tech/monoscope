@@ -100,13 +100,13 @@ loadDashboardFromVM dashVM = case dashVM.schema of
 
 -- | Replace all occurrences of {key} in the input text using the provided mapping.
 replacePlaceholders :: M.Map T.Text T.Text -> T.Text -> T.Text
-replacePlaceholders mapping input =
+replacePlaceholders mappng input =
   let regex = "\\{([^}]+)\\}" :: T.Text
       go txt =
         case T.unpack txt =~ T.unpack regex :: (String, String, String, [String]) of
           (before, match, after, [key])
             | not (null match) ->
-                let replacement = M.findWithDefault (T.pack match) (T.pack key) mapping
+                let replacement = M.findWithDefault (T.pack match) (T.pack key) mappng
                  in T.pack before <> replacement <> go (T.pack after)
           _ -> txt
    in go input
@@ -132,7 +132,7 @@ dashboardGetH pid dashId fileM fromDStr toDStr sinceStr = do
       processWidget widgetBase = do
         let fromStr = maybeToMonoid $ Utils.formatUTC <$> fromD
             toStr = maybeToMonoid $ Utils.formatUTC <$> toD
-        let mapping =
+        let mappng =
               M.fromList
                 [ ("project_id", pid.toText)
                 , ("from", fromStr)
@@ -142,8 +142,8 @@ dashboardGetH pid dashId fileM fromDStr toDStr sinceStr = do
                 ]
             widget =
               widgetBase
-                & #sql . _Just %~ replacePlaceholders mapping
-                & #query . _Just %~ replacePlaceholders mapping
+                & #sql . _Just %~ replacePlaceholders mappng
+                & #query . _Just %~ replacePlaceholders mappng
         widget' <-
           if (widget.eager == Just True || widget.wType `elem` [Widget.WTAnomalies])
             then do
@@ -224,14 +224,14 @@ instance ToHtml DashboardsGet where
 
 
 renderDashboardListItem :: Bool -> Text -> Text -> Text -> Maybe Text -> Maybe Text -> Maybe Text -> Html ()
-renderDashboardListItem checked tmplClass title value description icon preview = label_
+renderDashboardListItem checked tmplClass title value description icon prview = label_
   [ class_
       [text| cursor-pointer group/it border border-transparent hover:bg-fillWeaker hover:border-strokeWeak rounded-lg flex p-1.5 gap-2 items-center
       group-has-[input:checked]/it:bg-fillWeaker group-has-[input:checked]/it:border-strokeWeak dashboardListItem|]
   , term "data-title" title
   , term "data-description" $ maybeToMonoid description
   , term "data-icon" $ fromMaybe "square-dashed" icon
-  , term "data-preview" $ fromMaybe "/public/assets/svgs/screens/dashboard_blank.svg" preview
+  , term "data-preview" $ fromMaybe "/public/assets/svgs/screens/dashboard_blank.svg" prview
   , [__| on mouseover set #dItemPreview.src to my @data-preview 
               then set #dItemTitle.innerText to my @data-title
               then set #dItemDescription.innerText to my @data-description

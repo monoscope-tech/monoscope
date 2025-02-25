@@ -298,6 +298,7 @@ queryFloat pidM queryM queryASTM querySQLM sinceM fromM toM sourceM = do
       , rowsPerMin = Nothing 
       , from = Just $ round . utcTimeToPOSIXSeconds $ fromMaybe (addUTCTime (-86400) now) fromD
       , to = Just $ round . utcTimeToPOSIXSeconds $ fromMaybe now toD
+      , stats = Nothing
       }
 
 

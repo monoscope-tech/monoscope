@@ -335,11 +335,11 @@ tableRow1 :: Contact -> Html ()
 tableRow1 cc =
   tr_ do
     th_ [class_ "text-center"] do
-      input_ [type_ "checkbox", class_ "checkbox !border-[#D5D7DA] rounded-lg contactCheckbox", id_ $ "check_" <> c.nativeId]
+      input_ [type_ "checkbox", class_ "checkbox !border-[#D5D7DA] rounded-lg contactCheckbox", id_ $ "check_" <> cc.nativeId]
     th_ [class_ "space-y-1"] do
-      strong_ [class_ "text-[#181d27] text-sm font-medium"] $ toHtml $ c.title <> "." <> c.firstName <> " " <> c.lastName
-      span_ [class_ "text-[#535861] text-sm font-normal block"] $ toHtml $ "#" <> c.nativeId
-    forM_ columns \(title, colId, fn) -> columnGroup_ c.nativeId colId ((fn c) !! 0) ((fn c) !! 1) ((fn c) !! 2) ((fn c) !! 3)
+      strong_ [class_ "text-[#181d27] text-sm font-medium"] $ toHtml $ cc.title <> "." <> cc.firstName <> " " <> cc.lastName
+      span_ [class_ "text-[#535861] text-sm font-normal block"] $ toHtml $ "#" <> cc.nativeId
+    forM_ columns \(title, colId, fn) -> columnGroup_ cc.nativeId colId ((fn cc) !! 0) ((fn cc) !! 1) ((fn cc) !! 2) ((fn cc) !! 3)
 
 
 contacts :: [Contact]

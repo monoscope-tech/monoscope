@@ -23,7 +23,7 @@ data Query = Query
   , sql :: Maybe Text
   }
   deriving stock (Show, Generic, THS.Lift)
-  deriving anyclass (NFData)
+  deriving anyclass (NFData, Default)
   deriving (AE.FromJSON, AE.ToJSON) via DAES.Snake Query
 
 
@@ -34,7 +34,7 @@ data Layout = Layout
   , h :: Maybe Int
   }
   deriving stock (Show, Generic, THS.Lift)
-  deriving anyclass (NFData)
+  deriving anyclass (NFData, Default)
   deriving (AE.FromJSON, AE.ToJSON) via DAES.Snake Layout
 
 
@@ -53,7 +53,7 @@ data WidgetType
   | WTPieChart
   | WTAnomalies
   deriving stock (Show, Eq, Generic, Enum, THS.Lift)
-  deriving anyclass (NFData)
+  deriving anyclass (NFData, Default)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.ConstructorTagModifier '[DAE.StripPrefix "WT", DAE.CamelToSnake]] WidgetType
 
 
@@ -63,7 +63,7 @@ data SummarizeBy
   | SBMin
   | SBCount
   deriving stock (Show, Eq, Generic, Enum, THS.Lift)
-  deriving anyclass (NFData)
+  deriving anyclass (NFData, Default)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.ConstructorTagModifier '[DAE.StripPrefix "SB", DAE.CamelToSnake]] SummarizeBy
 
 summarizeByPrefix :: SummarizeBy -> Text 
@@ -103,7 +103,7 @@ data Widget = Widget
   , html :: Maybe LText
   }
   deriving stock (Show, Generic, THS.Lift)
-  deriving anyclass (NFData)
+  deriving anyclass (NFData, Default)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.StripPrefix "w", DAE.CamelToSnake]] Widget
 
 
@@ -166,7 +166,7 @@ renderWidgetHeader wId title valueM subValueM expandBtnFn ctaM  hideSub= div_ [c
       whenJust valueM toHtml
     span_ [class_ $ "text-textWeak widget-subtitle text-sm " <> bool "" "hidden" hideSub , id_ $ wId <> "Subtitle"] $ toHtml $ maybeToMonoid subValueM
   div_ [class_ "text-iconNeutral"] do
-    whenJust ctaM \(title, uri) -> a_ [class_ "underline underline-offset-2 text-textBrand", href_ uri] $ toHtml title
+    whenJust ctaM \(ctaTitle, uri) -> a_ [class_ "underline underline-offset-2 text-textBrand", href_ uri] $ toHtml ctaTitle
     whenJust expandBtnFn \fn ->
       button_
         [ term "_" $ fn
