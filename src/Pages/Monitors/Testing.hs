@@ -200,6 +200,7 @@ collectionDashboard pid cid = do
           { sessM = Just sess
           , currProject = Just project
           , pageTitle = "API Tests (Beta)"
+          , prePageTitle = Just "Monitors & Alerts"
           , navTabs = Just $ pageTabs url overviewUrl
           }
   case collectionM of
