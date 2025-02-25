@@ -261,9 +261,14 @@ function logItemCol(rowData, source, colIdxMap, key, serviceColors, toggleTrace)
       let kind = lookupVecTextByKey(dataArr, colIdxMap, key)
       return renderBadge('cbadge-sm badge-neutral border border-strokeWeak bg-fillWeak', kind)
     case 'latency_breakdown':
-      const { traceStart, traceEnd, startNs, duration } = rowData
-      const color = serviceColors[lookupVecTextByKey(dataArr, colIdxMap, 'service')] || 'black'
-      return spanLatencyBreakdown({ start: startNs - traceStart, duration, traceEnd, color })
+      const { traceStart, traceEnd, startNs, duration, childrenTimeSpans } = rowData
+      const color = serviceColors[lookupVecTextByKey(dataArr, colIdxMap, 'span_name')] || 'black'
+      const chil = childrenTimeSpans.map(({ start, duration, data }) => ({
+        start: start - traceStart,
+        duration,
+        color: serviceColors[lookupVecTextByKey(data, colIdxMap, 'span_name')] || 'black',
+      }))
+      return spanLatencyBreakdown({ start: startNs - traceStart, duration, traceEnd, color, children: chil })
     case 'rest':
       let val = lookupVecTextByKey(dataArr, colIdxMap, key)
       const { depth, children, traceId, childErrors, hasErrors, expanded, type } = rowData
@@ -424,14 +429,17 @@ function getSpanStatusColor(status) {
   )
 }
 
-function spanLatencyBreakdown({ start, duration, traceEnd, color }) {
+function spanLatencyBreakdown({ start, duration, traceEnd, color, children }) {
   const width = (duration / traceEnd) * 200
   const left = (start / traceEnd) * 200
   return html`<div class="w-[20ch] -mt-1 shrink-0">
-    <div class="flex h-5 w-[200px] bg-fillWeak">
-      <div class=${`h-full overflow-hidden  ${color}`} style=${`width:${width}px; margin-left:${left}px`}>
-        <div class="h-full w-full"></div>
-      </div>
+    <div class="flex h-5 w-[200px] relative bg-fillWeak">
+      <div class=${`h-full absolute top-0 ${color}`} style=${`width:${width}px; left:${left}px`}></div>
+      ${children.map((child) => {
+        const cWidth = (child.duration / traceEnd) * 200
+        const cLeft = (child.start / traceEnd) * 200
+        return html`<div class=${`h-full absolute top-0 ${child.color}`} style=${`width:${cWidth}px; left:${cLeft}px`}></div>`
+      })}
     </div>
   </div>`
 }
@@ -458,7 +466,6 @@ function requestDumpLogItemUrlPath(pid, rd, colIdxMap, source) {
 }
 
 function groupSpans(data, logs, colIdxMap, expandedTraces) {
-  console.log(logs)
   const traceMap = new Map()
   const TRACE_INDEX = colIdxMap['trace_id']
   const SPAN_INDEX = colIdxMap['latency_breakdown']
@@ -505,12 +512,14 @@ function groupSpans(data, logs, colIdxMap, expandedTraces) {
       if (span.type === 'log') {
         if (traceData.spans.has(span.spandId)) {
           traceData.spans.get(span.spandId).children.push(span)
+          traceData.spans.get(span.spandId).children.sort((a, b) => a.startNs - b.startNs)
         } else {
           spanTree.set(span[0], span)
         }
       } else {
         if (traceData.spans.has(span.parent)) {
           traceData.spans.get(span.parent).children.push(span)
+          traceData.spans.get(span.parent).children.sort((a, b) => a.startNs - b.startNs)
         } else {
           spanTree.set(spanId, span)
         }
@@ -544,6 +553,9 @@ function flattenSpanTree(traceArr, expandedTraces = {}) {
       expanded: !!expandedTraces[traceId] && depth === 0,
       ...span,
       children: childrenCount,
+      childrenTimeSpans: span.children.map((child) => {
+        return { startNs: child.startNs, duration: child.duration, data: child.data }
+      }),
     }
     if (expandedTraces[traceId] || depth === 0) result.push(spanInfo)
     span.children.forEach((span) => {
@@ -562,6 +574,5 @@ function flattenSpanTree(traceArr, expandedTraces = {}) {
       traverse(span, trace.traceId, trace.startTime, trace.duration, 0)
     })
   })
-  console.log(result)
   return result
 }
