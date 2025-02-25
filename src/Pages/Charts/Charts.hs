@@ -1,10 +1,12 @@
 {-# LANGUAGE DerivingVia #-}
 {-# LANGUAGE NoFieldSelectors #-}
 
-module Pages.Charts.Charts (chartsGetH, ChartType (..), lazy, ChartExp (..), QueryBy (..), GroupBy (..), queryMetrics, queryFloat, MetricsData (..)) where
+module Pages.Charts.Charts (chartsGetH, ChartType (..), lazy, ChartExp (..), QueryBy (..), GroupBy (..), queryMetrics, queryFloat, MetricsData (..), MetricsStats(..)) where
 
 import Data.Aeson qualified as AE
 import Data.Map.Strict qualified as M
+import Data.Default 
+import Language.Haskell.TH.Syntax qualified as THS
 import Data.Text qualified as T
 import Data.Time (UTCTime, addUTCTime, diffUTCTime)
 import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
@@ -227,7 +229,8 @@ data MetricsStats = MetricsStats
   , mean :: Double
   , mode :: Double
   }
-  deriving (Show, Generic)
+  deriving (Show, Generic, THS.Lift)
+  deriving anyclass (NFData, Default)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake MetricsStats
 
 

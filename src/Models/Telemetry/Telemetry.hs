@@ -49,16 +49,11 @@ import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity.DBT (QueryNature (..), executeMany, query, queryOne)
 import Database.PostgreSQL.Transact qualified as DBT
-
-import Data.Aeson (Value)
-import Data.Aeson.Types (parseMaybe)
-import Data.ByteString.Lazy (fromStrict)
 import Data.Text.Encoding (encodeUtf8)
 import Database.PostgreSQL.Simple (FromRow, ResultError (..), ToRow)
 import Database.PostgreSQL.Simple.FromField (FromField (..))
 import Database.PostgreSQL.Simple.FromRow
 import Database.PostgreSQL.Simple.ToRow
-
 import Data.Default (Default)
 import Data.Text qualified as T
 import Data.Time (TimeZone (..), UTCTime, formatTime, utcToZonedTime)
@@ -77,7 +72,6 @@ import Database.PostgreSQL.Simple.Types (Query (..))
 import Deriving.Aeson qualified as DAE
 import Deriving.Aeson.Stock qualified as DAE
 import Effectful
-
 import Database.PostgreSQL.Simple (Only (..))
 import Effectful.PostgreSQL.Transact.Effect (DB, dbtToEff)
 import Models.Apis.RequestDumps qualified as RequestDumps
