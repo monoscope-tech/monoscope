@@ -51,8 +51,8 @@ pivot' rows
       let extractHeaders vec = V.uniq . V.map thd3 . V.modify (\mvec -> VA.sortBy (comparing thd3) mvec) $ vec
           headers = extractHeaders rows
           grouped =
-            V.groupBy (\a b -> fst3 a == fst3 b) $
-              V.modify (\mvec -> VA.sortBy (comparing fst3) mvec) rows
+            V.groupBy (\a b -> fst3 a == fst3 b)
+              $ V.modify (\mvec -> VA.sortBy (comparing fst3) mvec) rows
           ngrouped = map (transform headers) grouped
           totalSum = V.sum $ V.map snd3 rows
 
@@ -96,8 +96,8 @@ statsTriple v
         doubles
 
     mode =
-      fst $
-        M.foldlWithKey'
+      fst
+        $ M.foldlWithKey'
           ( \acc@(_, cnt') k c ->
               if c > cnt' then (k, c) else acc
           )
@@ -268,8 +268,8 @@ queryMetrics pidM queryM queryASTM querySQLM sinceM fromM toM sourceM = do
   chartData <- dbtToEff $ DBT.query_ (Query $ encodeUtf8 $ sqlQuery)
   let chartsDataV = V.fromList chartData
   let (headers, groupedData, rowsCount, rowsPerMin) = pivot' chartsDataV
-  pure $
-    MetricsData
+  pure
+    $ MetricsData
       { dataset = groupedData
       , dataFloat = Nothing
       , headers = V.cons "timestamp" headers
@@ -303,8 +303,8 @@ queryFloat pidM queryM queryASTM querySQLM sinceM fromM toM sourceM = do
       pure $ fromMaybe "" qc.finalTimechartQuery
 
   chartData <- dbtToEff $ DBT.queryOne_ (Query $ encodeUtf8 $ sqlQuery)
-  pure $
-    MetricsData
+  pure
+    $ MetricsData
       { dataset = V.empty
       , dataFloat = chartData <&> \(Only v) -> v
       , headers = V.empty
