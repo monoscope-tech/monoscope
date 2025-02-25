@@ -23,6 +23,7 @@ import Control.Lens ((.~), (^.))
 import Data.Aeson qualified as AE
 import Data.Base64.Types qualified as B64
 import Data.ByteString.Base64 qualified as B64
+import Data.CaseInsensitive qualified as CI
 import Data.Default (Default (..))
 import Data.Effectful.UUID qualified as UUID
 import Data.Effectful.Wreq
@@ -55,6 +56,7 @@ import Servant (addHeader)
 import Servant.API (Header)
 import Servant.API.ResponseHeaders (Headers)
 import System.Config
+
 import System.Types (ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders, addSuccessToast, redirectCS)
 import Utils (insertIfNotExist, isDemoAndNotSudo)
 import Web.FormUrlEncoded (FromForm)
@@ -290,6 +292,10 @@ pricingUpdateH pid PricingUpdateForm{orderId} = do
               steps = project.onboardingStepsCompleted
               newStepsComp = insertIfNotExist "Pricing" steps
           v <- dbtToEff $ Projects.updateProjectPricing pid productName subId firstSubId orderId newStepsComp
+          when (project.paymentPlan == "ONBOARDING") $ do
+            users <- dbtToEff $ ProjectMembers.selectActiveProjectMembers pid
+            forM_ users \user -> do
+              ConvertKit.addUserOrganization envCfg.convertkitApiKey (CI.original user.email) pid.toText project.title productName
           redirectCS $ "/p/" <> pid.toText <> "/"
           addRespHeaders ""
     _ -> do
