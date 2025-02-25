@@ -46,7 +46,6 @@ export class LogList extends LitElement {
     this.logItemRow = this.logItemRow.bind(this)
     this.fetchData = this.fetchData.bind(this)
     this.renderSpan = this.renderSpan.bind(this)
-    this.renderTrace = this.renderTrace.bind(this)
     this.expandTrace = this.expandTrace.bind(this)
   }
 
@@ -496,7 +495,6 @@ function toggleLogRow(event, source) {
   const indicator = document.querySelector('#details_indicator')
   indicator.classList.add('htmx-request')
   htmx.ajax('GET', source, { target: '#log_details_container', swap: 'innerHTML', indicator: '#details_indicator' })
-  // indicator.classList.remove('htmx-request')
 }
 
 function requestDumpLogItemUrlPath(pid, rd, colIdxMap, source) {
