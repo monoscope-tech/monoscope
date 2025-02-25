@@ -227,12 +227,12 @@ renderDashboardListItem :: Bool -> Text -> Text -> Text -> Maybe Text -> Maybe T
 renderDashboardListItem checked tmplClass title value description icon preview = label_
   [ class_
       [text| cursor-pointer group/it border border-transparent hover:bg-fillWeaker hover:border-strokeWeak rounded-lg flex p-1.5 gap-2 items-center
-      group-has-[input:checked]/it:bg-fillWeaker group-has-[input:checked]/it:border-strokeWeak dashboardListItem|],
-      term "data-title" title, 
-      term "data-description" $ maybeToMonoid description,
-      term "data-icon" $ fromMaybe "square-dashed" icon,
-      term "data-preview" $ fromMaybe "/public/assets/svgs/screens/dashboard_blank.svg" preview,
-      [__| on mouseover set #dItemPreview.src to my @data-preview 
+      group-has-[input:checked]/it:bg-fillWeaker group-has-[input:checked]/it:border-strokeWeak dashboardListItem|]
+  , term "data-title" title
+  , term "data-description" $ maybeToMonoid description
+  , term "data-icon" $ fromMaybe "square-dashed" icon
+  , term "data-preview" $ fromMaybe "/public/assets/svgs/screens/dashboard_blank.svg" preview
+  , [__| on mouseover set #dItemPreview.src to my @data-preview 
               then set #dItemTitle.innerText to my @data-title
               then set #dItemDescription.innerText to my @data-description
               then set #dItemIcon.innerHTML to `<svg class='w-8 h-8'><use href='/public/assets/svgs/fa-sprites/regular.svg#${my @data-icon}'></use></svg>` 
@@ -247,7 +247,7 @@ renderDashboardListItem checked tmplClass title value description icon preview =
   do
     input_ ([class_ $ "hidden " <> tmplClass, type_ "radio", name_ "file", value_ value] <> [checked_ | checked])
     span_ [class_ "p-1 px-2 bg-fillWeak rounded-md"] $ faSprite_ (fromMaybe "square-dashed" icon) "regular" "w-4 h-4"
-    span_ [class_ "grow"] $ toHtml title 
+    span_ [class_ "grow"] $ toHtml title
     span_ [class_ "px-2 p-1 invisible group-has-[input:checked]/it:visible"] $ faSprite_ "chevron-right" "regular" "w-4 h-4"
 
 
@@ -262,10 +262,18 @@ dashboardsGet_ dg = do
         strong_ "Create dashboard"
         label_ [class_ "input input-sm input-bordered flex items-center "] do
           faSprite_ "magnifying-glass" "regular" "w-4 h-4 opacity-70"
-          input_ [type_ "text", class_ "grow pl-2", placeholder_ "Search"]
+          input_
+            [ type_ "text"
+            , class_ "grow pl-2"
+            , placeholder_ "Search"
+            , [__|
+              on keyup
+                if the event's key is 'Escape' set my value to '' then trigger keyup
+                else show <.dashboardListItem/> in #dashListItemParent when its textContent.toLowerCase() contains my value.toLowerCase() |]
+            ]
           kbd_ [class_ "kbd kbd-sm"] "/"
-        div_ [class_ "space-y-1"] do
-          renderDashboardListItem True "tmplRadio0" "Blank dashboard" "" (Just "Get started from a blank slate") (Just "cards-blank") Nothing 
+        div_ [class_ "space-y-1", id_ "dashListItemParent"] do
+          renderDashboardListItem True "tmplRadio0" "Blank dashboard" "" (Just "Get started from a blank slate") (Just "cards-blank") Nothing
           iforM_ dashboardTemplates \idx dashTmpl -> do
             let tmplItemClass = "tmplRadio" <> (show $ idx + 1)
             renderDashboardListItem False tmplItemClass (maybeToMonoid dashTmpl.title) (maybeToMonoid dashTmpl.file) dashTmpl.description dashTmpl.icon dashTmpl.preview
@@ -277,8 +285,9 @@ dashboardsGet_ dg = do
             strong_ [class_ "text-xl", id_ "dItemTitle"] "Custom Dashboard"
             p_ [class_ "text-sm line-clamp-2 min-h-10", id_ "dItemDescription"] "Get started from a blank slate"
           div_ [class_ "flex items-center justify-center shrink"] $ button_ [class_ "leading-none rounded-lg p-3 cursor-pointer bg-fillBrand-strong shadow text-white", type_ "submit"] "Select template"
-        div_ [class_ "pt-5"] $ div_ [class_ "bg-[#1e9cff] px-5 py-8 rounded-xl aspect-square w-full flex items-center"] 
-                $ img_ [src_ "/public/assets/svgs/screens/dashboard_blank.svg", class_ "w-full", id_ "dItemPreview" ]
+        div_ [class_ "pt-5"] $
+          div_ [class_ "bg-[#1e9cff] px-5 py-8 rounded-xl aspect-square w-full flex items-center"] $
+            img_ [src_ "/public/assets/svgs/screens/dashboard_blank.svg", class_ "w-full", id_ "dItemPreview"]
 
   div_ [id_ "itemsListPage", class_ "mx-auto px-6 pt-4 gap-8 w-full flex flex-col h-full overflow-hidden pb-12  group/pg"] do
     div_ [class_ "flex"] do
