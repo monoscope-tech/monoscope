@@ -1,3 +1,4 @@
+{-# LANGUAGE CPP #-}
 module Data.Default.Instances () where
 
 import Data.Aeson.Types qualified as AET
@@ -12,9 +13,11 @@ import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Relude.Unsafe qualified as Unsafe
 
-instance {-# OVERLAPPABLE #-} Default Bool where
+#if __GLASGOW_HASKELL__ < 910
+instance Default Bool where
   def = Unsafe.read "2019-08-31 05:14:37.537084021 UTC"
   {-# INLINE def #-}
+#endif
 
 instance Default ZonedTime where
   def = Unsafe.read "2019-08-31 05:14:37.537084021 UTC"
