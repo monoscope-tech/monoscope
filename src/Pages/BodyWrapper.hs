@@ -321,7 +321,9 @@ bodyWrapper BWConfig{sessM, currProject, prePageTitle, pageTitle, menuItem, hasI
       script_
         [text| window.addEventListener("load", (event) => {
         posthog.people.set_once({email: ${email}, name: "${name}"});
-      });|]
+      });
+      echarts.connect('default');
+      |]
 
 
 projectsDropDown :: Projects.Project -> V.Vector Projects.Project -> Html ()

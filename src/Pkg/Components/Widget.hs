@@ -272,7 +272,12 @@ renderChart widget = do
                  const init = (opt, chartId, query, querySQL, theme, yAxisLabel, pid) => {
                     const chartEl = document.getElementById(chartId);
                     const chart = echarts.init(chartEl, theme);
+                    chart.group = 'default';
                     const liveStreamCheckbox = document.getElementById('streamLiveData');
+
+                    // multiply by 1000 to convert unix timestamp in seconds to milliseconds needed by echarts. Useful for eager charts
+                    opt.dataset.source = opt.dataset?.source?.map(row => [row[0] * 1000, ...row.slice(1)]) ?? null;
+
                     chart.setOption(updateChartConfiguration(opt, opt.dataset.source, yAxisLabel));
 
                     const resizeObserver = new ResizeObserver((_entries) => requestAnimationFrame(() => echarts.getInstanceByDom(chartEl).resize()));
@@ -362,8 +367,8 @@ widgetToECharts widget =
             AE..= AE.object
               [ "type" AE..= ("time" :: Text)
               , "scale" AE..= True
-              , "min" AE..= maybe AE.Null (AE.Number . fromIntegral) (widget ^? #dataset . _Just . #from . _Just)
-              , "max" AE..= maybe AE.Null (AE.Number . fromIntegral) (widget ^? #dataset . _Just . #to . _Just)
+              , "min" AE..= maybe AE.Null (AE.Number . fromIntegral . (*1000)) (widget ^? #dataset . _Just . #from . _Just)
+              , "max" AE..= maybe AE.Null (AE.Number . fromIntegral . (*1000)) (widget ^? #dataset . _Just . #to . _Just)
               , "boundaryGap" AE..= ([0, 0.01] :: [Double])
               , "axisLabel" AE..= AE.object ["show" AE..= axisVisibility]
               , "show" AE..= axisVisibility
