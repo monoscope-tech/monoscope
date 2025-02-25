@@ -1,7 +1,10 @@
 module Pages.LogExplorer.LogItem (expandAPIlogItemH, expandAPIlogItem', ApiItemDetailed (..)) where
 
 import Data.Aeson qualified as AE
+import Data.Aeson.KeyMap qualified as KEM
+import Data.Aeson.Text (encodeToLazyText)
 import Data.ByteString.Lazy qualified as BS
+import Data.Text qualified as T
 import Data.Time (UTCTime)
 import Data.Time.Format (defaultTimeLocale, formatTime)
 import Data.Time.LocalTime (zonedTimeToUTC)
@@ -14,11 +17,12 @@ import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Telemetry qualified as Telemetry
 import Models.Users.Sessions qualified as Sessions
+import NeatInterpolation (text)
 import Pages.Components (dateTime, statBox_)
 import Pages.Telemetry.Spans qualified as Spans
 import Relude
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
-import Utils (faSprite_, getDurationNSMS, getMethodBorderColor, getMethodColor, getStatusBorderColor, getStatusColor, jsonValueToHtmlTree, toXXHash)
+import Utils (faSprite_, getDurationNSMS, getMethodBorderColor, getMethodColor, getSeverityColor, getStatusBorderColor, getStatusColor, jsonValueToHtmlTree, lookupValueText, toXXHash)
 
 
 expandAPIlogItemH :: Projects.ProjectId -> UUID.UUID -> UTCTime -> Maybe Text -> ATAuthCtx (RespHeaders ApiItemDetailed)
@@ -34,7 +38,7 @@ expandAPIlogItemH pid rdId createdAt sourceM = do
     "logs" -> do
       logItem <- Telemetry.logRecordByProjectAndId pid createdAt rdId
       addRespHeaders $ case logItem of
-        Just req -> LogItemExpanded pid (AE.toJSON req)
+        Just lg -> LogItemExpanded pid lg
         Nothing -> ItemDetailedNotFound "Log not found"
     _ -> do
       logItemM <- dbtToEff $ RequestDumps.selectRequestDumpByProjectAndId pid createdAt rdId
@@ -131,17 +135,17 @@ expandAPIlogItem' pid req modal = do
           button_ [class_ "a-tab whitespace-nowrap px-3 py-2 border-b border-b-slate-200 w-max", onclick_ "navigatable(this, '#path_params_json', '#req-tabs-container', 't-tab-active')"] "Path Params"
           button_ [class_ "border-b border-b-slate-200 w-full"] pass
 
-        div_ [class_ "a-tab-content m-4  rounded-xl p-2 border border-slate-200", id_ "req_body_json"]
-          $ jsonValueToHtmlTree req.requestBody
+        div_ [class_ "a-tab-content m-4  rounded-xl p-2 border border-slate-200", id_ "req_body_json"] $
+          jsonValueToHtmlTree req.requestBody
 
-        div_ [class_ "a-tab-content m-4 hidden rounded-xl p-2 border border-slate-200 break-all", id_ "req_headers_json"]
-          $ jsonValueToHtmlTree req.requestHeaders
+        div_ [class_ "a-tab-content m-4 hidden rounded-xl p-2 border border-slate-200 break-all", id_ "req_headers_json"] $
+          jsonValueToHtmlTree req.requestHeaders
 
-        div_ [class_ "a-tab-content m-4 hidden rounded-xl p-2 border border-slate-200", id_ "query_params_json"]
-          $ jsonValueToHtmlTree req.queryParams
+        div_ [class_ "a-tab-content m-4 hidden rounded-xl p-2 border border-slate-200", id_ "query_params_json"] $
+          jsonValueToHtmlTree req.queryParams
 
-        div_ [class_ "a-tab-content m-4 hidden rounded-xl p-2 border border-slate-200", id_ "path_params_json"]
-          $ jsonValueToHtmlTree req.pathParams
+        div_ [class_ "a-tab-content m-4 hidden rounded-xl p-2 border border-slate-200", id_ "path_params_json"] $
+          jsonValueToHtmlTree req.pathParams
 
     -- response details
     div_ [class_ "mt-8", id_ "res-tabs-container"] do
@@ -152,17 +156,17 @@ expandAPIlogItem' pid req modal = do
           button_ [class_ "a-tab px-3 border-b border-b-slate-200 py-2 w-max", role_ "tab", onclick_ "navigatable(this, '#res_headers_json', '#res-tabs-container', 't-tab-active')"] "Headers"
           button_ [class_ "border-b border-b-slate-200 w-full"] pass
 
-        div_ [class_ "a-tab-content m-4 rounded-xl p-2 border border-slate-200", id_ "res_body_json"]
-          $ jsonValueToHtmlTree req.responseBody
+        div_ [class_ "a-tab-content m-4 rounded-xl p-2 border border-slate-200", id_ "res_body_json"] $
+          jsonValueToHtmlTree req.responseBody
 
-        div_ [class_ "a-tab-content m-4 hidden rounded-xl p-2 border border-slate-200", id_ "res_headers_json"]
-          $ jsonValueToHtmlTree req.responseHeaders
+        div_ [class_ "a-tab-content m-4 hidden rounded-xl p-2 border border-slate-200", id_ "res_headers_json"] $
+          jsonValueToHtmlTree req.responseHeaders
 
 
 data ApiItemDetailed
   = RequestItemExpanded Projects.ProjectId RequestDumps.RequestDumpLogItem Bool
   | SpanItemExpanded Projects.ProjectId Telemetry.SpanRecord
-  | LogItemExpanded Projects.ProjectId AE.Value
+  | LogItemExpanded Projects.ProjectId Telemetry.LogRecord
   | ItemDetailedNotFound Text
 
 
@@ -174,8 +178,84 @@ instance ToHtml ApiItemDetailed where
   toHtmlRaw = toHtml
 
 
-apiLogItemView :: Projects.ProjectId -> AE.Value -> Html ()
-apiLogItemView pid req = do
-  div_ [class_ "px-2 flex flex-col w-full items-center gap-2"] do
+apiLogItemView :: Projects.ProjectId -> Telemetry.LogRecord -> Html ()
+apiLogItemView pid lg = do
+  div_ [class_ "w-full flex flex-col gap-2 px-2 pb-2 relative"] $ do
+    div_ [class_ "flex justify-between items-center", id_ "copy_share_link"] pass
     span_ [class_ "htmx-indicator query-indicator absolute loading left-1/2 -translate-x-1/2 loading-dots absoute z-10 top-10", id_ "details_indicator"] ""
-    jsonValueToHtmlTree req
+    div_ [class_ "flex flex-col gap-4 bg-gray-50 py-2  px-2"] $ do
+      div_ [class_ "flex justify-between items-center"] do
+        div_ [class_ "flex items-center gap-4"] $ do
+          h3_ [class_ "whitespace-nowrap font-semibold text-textStrong"] "Trace Log"
+        div_ [class_ "flex gap-4 items-center"] $ do
+          dateTime lg.timestamp Nothing
+          div_ [class_ "flex gap-2 items-center"] do
+            button_ [[__|on click add .hidden to #trace_expanded_view then put '0px' into  #log_details_container.style.width|]] do
+              faSprite_ "xmark" "regular" "w-3 h-3 text-textBrand"
+    div_ [class_ "flex flex-col gap-4"] do
+      div_ [class_ "flex items-center gap-4"] do
+        let svTxt = maybe "UNSET" (\x -> T.toLower $ T.drop 2 $ show x) lg.severityText
+            cls = getSeverityColor $ svTxt
+        span_ [class_ $ "rounded-lg border cbadge-sm text-sm px-2 py-1 shrink-0 " <> cls] $ toHtml $ T.toUpper svTxt
+        h4_ [class_ "text-slate-800 font-medium"] $ toHtml $ case lg.body of
+          AE.String x -> x
+          _ -> toStrict $ encodeToLazyText lg.body
+
+      div_ [class_ "flex gap-2 flex-wrap"] $ do
+        spanBadge (fromMaybe "" $ lookupValueText lg.resource "service.name") "Service"
+        spanBadge ("Spand ID: " <> fromMaybe "" lg.spanId) "Span ID"
+        spanBadge ("Trace ID: " <> lg.traceId) "Span Kind"
+
+      div_ [class_ "flex gap-2 items-center text-textBrand font-medium text-xs"] do
+        let tracePath = "/p/" <> pid.toText <> "/traces/" <> lg.traceId <> "/"
+        button_
+          [ class_ "flex items-end gap-1"
+          , term
+              "_"
+              [text|on click remove .hidden from #trace_expanded_view
+                        then set #trace_expanded_view.innerHTML to #loader-tmp.innerHTML
+                        then fetch $tracePath
+                        then set #trace_expanded_view.innerHTML to it
+                        then htmx.process(#trace_expanded_view)
+                        then _hyperscript.processNode(#trace_expanded_view) then window.evalScriptsFromContent(#trace_expanded_view)|]
+          ]
+          do
+            "View parent trace"
+            faSprite_ "cross-hair" "regular" "w-4 h-4"
+        let lg_id = UUID.toText lg.id
+        let createdAt = toText $ formatTime defaultTimeLocale "%Y-%m-%dT%H:%M:%S%6QZ" $ lg.timestamp
+        button_
+          [ class_ "flex items-center gap-2"
+          , hxPost_ $ "/p/" <> pid.toText <> "/share/" <> lg_id <> "/" <> createdAt <> "?event_type=log"
+          , hxSwap_ "innerHTML"
+          , hxTarget_ "#copy_share_link"
+          ]
+          do
+            "Generate shareable link"
+            faSprite_ "link-simple" "regular" "w-3 h-3"
+
+      div_ [class_ "w-full mt-4", id_ "log-tabs-container"] do
+        div_ [class_ "flex", [__|on click halt|]] $ do
+          button_ [class_ "a-tab border-b-2 border-b-slate-200 px-4 py-1.5 t-tab-active", onclick_ "navigatable(this, '#att-content', '#log-tabs-container', 't-tab-active')"] "Attributes"
+          button_ [class_ "a-tab border-b-2 border-b-slate-200 px-4 py-1.5 ", onclick_ "navigatable(this, '#meta-content', '#log-tabs-container', 't-tab-active')"] "Process"
+          div_ [class_ "w-full border-b-2 border-b-slate-200"] pass
+
+        div_ [class_ "grid my-4 text-slate-600 font"] $ do
+          div_ [class_ "a-tab-content", id_ "att-content"] $ do
+            jsonValueToHtmlTree lg.attributes
+          div_ [class_ "hidden a-tab-content", id_ "meta-content"] $ do
+            jsonValueToHtmlTree lg.resource
+
+
+-- div_ [class_ "px-2 flex flex-col w-full items-center gap-2"] do
+--   span_ [class_ "htmx-indicator query-indicator absolute loading left-1/2 -translate-x-1/2 loading-dots absoute z-10 top-10", id_ "details_indicator"] ""
+--   jsonValueToHtmlTree req
+
+spanBadge :: Text -> Text -> Html ()
+spanBadge val key = do
+  div_
+    [ class_ "flex gap-2 items-center text-textStrong bg-fillWeak border border-strokeWeak text-xs rounded-lg whitespace-nowrap px-2 py-1"
+    , term "data-tippy-content" key
+    ]
+    $ do
+      span_ [] $ toHtml val

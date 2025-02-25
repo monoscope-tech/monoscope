@@ -72,9 +72,6 @@ expandedSpanItem pid sp leftM rightM = do
             div_ [class_ "flex flex-wrap items-center gap-2"] do
               whenJust reqDetails $ \case
                 ("HTTP", method, path, status) -> do
-                  -- div_ [class_ "flex items-center gap-1 font-medium border border-slate-300 font-medium rounded-lg bg-fillWeaker px-2 py-1.5"] do
-                  --   faSprite_ "web" "regular" "w-4 h-4"
-                  --   span_ [class_ ""] "HTTP"
                   let methodClass = getMethodColor method
                       borderColor = getMethodBorderColor method
                       extraClass = getStatusColor status
@@ -234,8 +231,8 @@ spanBadge val key = do
 
 selectiveReqToJson :: RequestMessage -> AE.Value
 selectiveReqToJson req =
-  AE.object
-    $ concat @[]
+  AE.object $
+    concat @[]
       [ ["created_at" AE..= req.timestamp]
       , ["errors" AE..= fromMaybe [] req.errors]
       , ["host" AE..= req.host]
