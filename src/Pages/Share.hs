@@ -2,7 +2,7 @@ module Pages.Share (ReqForm (..), shareLinkPostH, shareLinkGetH, ShareLinkGet (.
 
 import Data.Aeson qualified as AE
 import Data.Default (def)
-import Data.Time (UTCTime, getZonedTime)
+import Data.Time (UTCTime)
 import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUIDV4
 import Database.PostgreSQL.Entity.DBT (QueryNature (Insert, Select), execute, queryOne)
@@ -19,7 +19,7 @@ import Pages.LogExplorer.LogItem qualified as LogItem
 import Pages.Telemetry.Spans qualified as Spans
 import Pkg.Components (navBar)
 import Relude
-import System.Types (ATAuthCtx, ATBaseCtx, RespHeaders, addErrorToast, addRespHeaders)
+import System.Types (ATAuthCtx, ATBaseCtx, RespHeaders, addRespHeaders)
 import Utils (faSprite_, jsonValueToHtmlTree)
 import Web.FormUrlEncoded (FromForm)
 

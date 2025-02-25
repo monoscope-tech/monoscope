@@ -4,12 +4,11 @@ import Data.Aeson qualified as AE
 import Data.ByteString.Lazy qualified as BS
 import Data.Time (UTCTime)
 import Data.Time.Format (defaultTimeLocale, formatTime)
-import Data.Time.Format.ISO8601 (ISO8601 (iso8601Format), formatShow)
 import Data.Time.LocalTime (zonedTimeToUTC)
 import Data.UUID qualified as UUID
 import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
 import Lucid
-import Lucid.Htmx (hxGet_, hxPost_, hxSwap_, hxTarget_, hxTrigger_)
+import Lucid.Htmx (hxPost_, hxSwap_, hxTarget_)
 import Lucid.Hyperscript (__)
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.Projects qualified as Projects
@@ -180,27 +179,3 @@ apiLogItemView pid req = do
   div_ [class_ "px-2 flex flex-col w-full items-center gap-2"] do
     span_ [class_ "htmx-indicator query-indicator absolute loading left-1/2 -translate-x-1/2 loading-dots absoute z-10 top-10", id_ "details_indicator"] ""
     jsonValueToHtmlTree req
-
-
-selectiveSpanToJson :: Telemetry.SpanRecord -> AE.Value
-selectiveSpanToJson sp =
-  AE.object
-    $ concat @[]
-      [ ["timestamp" AE..= sp.timestamp]
-      , ["span_id" AE..= sp.spanId]
-      , ["span_name" AE..= sp.spanName]
-      , ["kind" AE..= sp.kind]
-      , ["links" AE..= sp.links]
-      , ["trace_id" AE..= sp.traceId]
-      , ["start_time" AE..= sp.startTime]
-      , ["status" AE..= sp.status]
-      , ["status_message" AE..= sp.statusMessage]
-      , ["parent_span_id" AE..= sp.parentSpanId]
-      , ["trace_state" AE..= sp.traceState]
-      , ["intrumentation_scope" AE..= sp.instrumentationScope]
-      , ["attributes" AE..= sp.attributes]
-      , ["resource" AE..= sp.resource]
-      ]
-
-
--- | jsonValueToHtmlTree takes an aeson json object and renders it as a collapsible html tree, with hyperscript for interactivity.
