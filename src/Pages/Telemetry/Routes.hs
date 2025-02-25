@@ -5,18 +5,16 @@ import Models.Projects.Projects qualified as Projects
 import Pages.Telemetry.Metrics qualified as Metrics
 import Pages.Telemetry.Spans qualified as Spans
 import Pages.Telemetry.Trace qualified as Trace
-import Relude (Generic, Int, Text)
 import Servant (
   Capture,
   GenericMode (type (:-)),
   Get,
   HasServer (ServerT),
   NamedRoutes,
-  QueryParam,
   type (:>),
  )
 
-import Pkg.RouteUtils (GetRedirect, QPI, QPT)
+import Pkg.RouteUtils (QPI, QPT)
 import Relude
 import Servant.HTML.Lucid (HTML)
 import System.Types (ATAuthCtx, RespHeaders)

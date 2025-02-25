@@ -1,26 +1,21 @@
 module Pages.LogExplorer.LogItem (expandAPIlogItemH, expandAPIlogItem', ApiItemDetailed (..)) where
 
 import Data.Aeson qualified as AE
-import Data.Aeson.KeyMap qualified as KEM
 import Data.ByteString.Lazy qualified as BS
 import Data.Time (UTCTime)
 import Data.Time.Format (defaultTimeLocale, formatTime)
-import Data.Time.Format.ISO8601 (ISO8601 (iso8601Format), formatShow)
 import Data.Time.LocalTime (zonedTimeToUTC)
 import Data.UUID qualified as UUID
 import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
 import Lucid
-import Lucid.Htmx (hxGet_, hxPost_, hxSwap_, hxTarget_, hxTrigger_)
+import Lucid.Htmx (hxPost_, hxSwap_, hxTarget_)
 import Lucid.Hyperscript (__)
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Telemetry qualified as Telemetry
 import Models.Users.Sessions qualified as Sessions
-import NeatInterpolation (text)
-import Network.URI (escapeURIString, isUnescapedInURI)
 import Pages.Components (dateTime, statBox_)
 import Pages.Telemetry.Spans qualified as Spans
-import PyF (fmt)
 import Relude
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
 import Utils (faSprite_, getDurationNSMS, getMethodBorderColor, getMethodColor, getStatusBorderColor, getStatusColor, jsonValueToHtmlTree, toXXHash)
@@ -164,10 +159,6 @@ expandAPIlogItem' pid req modal = do
           $ jsonValueToHtmlTree req.responseHeaders
 
 
-requestDumpLogItemUrlPath :: Projects.ProjectId -> UUID.UUID -> UTCTime -> Text
-requestDumpLogItemUrlPath pid rdId timestamp = "/p/" <> pid.toText <> "/log_explorer/" <> UUID.toText rdId <> "/" <> fromString (formatShow iso8601Format timestamp)
-
-
 data ApiItemDetailed
   = RequestItemExpanded Projects.ProjectId RequestDumps.RequestDumpLogItem Bool
   | SpanItemExpanded Projects.ProjectId Telemetry.SpanRecord
@@ -188,55 +179,3 @@ apiLogItemView pid req = do
   div_ [class_ "px-2 flex flex-col w-full items-center gap-2"] do
     span_ [class_ "htmx-indicator query-indicator absolute loading left-1/2 -translate-x-1/2 loading-dots absoute z-10 top-10", id_ "details_indicator"] ""
     jsonValueToHtmlTree req
-
-
--- Function to selectively convert RequestDumpLogItem to JSON
-selectiveReqToJson :: RequestDumps.RequestDumpLogItem -> AE.Value
-selectiveReqToJson req =
-  AE.object
-    $ concat @[]
-      [ ["created_at" AE..= req.createdAt]
-      , ["duration_ns" AE..= req.durationNs]
-      , ["errors" AE..= req.errors]
-      , ["host" AE..= req.host]
-      , ["method" AE..= req.method]
-      , ["parent_id" AE..= req.parentId]
-      , ["path_params" AE..= req.pathParams]
-      , ["query_params" AE..= req.queryParams]
-      , ["raw_url" AE..= req.rawUrl]
-      , ["referer" AE..= req.referer]
-      , ["request_body" AE..= req.requestBody]
-      , ["request_headers" AE..= req.requestHeaders]
-      , ["request_type" AE..= req.requestType]
-      , ["response_body" AE..= req.responseBody]
-      , ["response_headers" AE..= req.responseHeaders]
-      , ["sdk_type" AE..= req.sdkType]
-      , ["service_version" AE..= req.serviceVersion]
-      , ["status_code" AE..= req.statusCode]
-      , ["tags" AE..= req.tags]
-      , ["url_path" AE..= req.urlPath]
-      ]
-
-
-selectiveSpanToJson :: Telemetry.SpanRecord -> AE.Value
-selectiveSpanToJson sp =
-  AE.object
-    $ concat @[]
-      [ ["timestamp" AE..= sp.timestamp]
-      , ["span_id" AE..= sp.spanId]
-      , ["span_name" AE..= sp.spanName]
-      , ["kind" AE..= sp.kind]
-      , ["links" AE..= sp.links]
-      , ["trace_id" AE..= sp.traceId]
-      , ["start_time" AE..= sp.startTime]
-      , ["status" AE..= sp.status]
-      , ["status_message" AE..= sp.statusMessage]
-      , ["parent_span_id" AE..= sp.parentSpanId]
-      , ["trace_state" AE..= sp.traceState]
-      , ["intrumentation_scope" AE..= sp.instrumentationScope]
-      , ["attributes" AE..= sp.attributes]
-      , ["resource" AE..= sp.resource]
-      ]
-
-
--- | jsonValueToHtmlTree takes an aeson json object and renders it as a collapsible html tree, with hyperscript for interactivity.

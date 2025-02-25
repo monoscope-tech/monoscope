@@ -53,8 +53,13 @@ data WidgetType
   | WTPieChart
   | WTAnomalies
   deriving stock (Show, Eq, Generic, Enum, THS.Lift)
-  deriving anyclass (NFData, Default)
+  deriving anyclass (NFData)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.ConstructorTagModifier '[DAE.StripPrefix "WT", DAE.CamelToSnake]] WidgetType
+
+
+-- TODO: Delete after upgrading > 9.10
+instance Default WidgetType where
+  def = WTTimeseries
 
 
 data SummarizeBy
@@ -63,8 +68,13 @@ data SummarizeBy
   | SBMin
   | SBCount
   deriving stock (Show, Eq, Generic, Enum, THS.Lift)
-  deriving anyclass (NFData, Default)
+  deriving anyclass (NFData)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.ConstructorTagModifier '[DAE.StripPrefix "SB", DAE.CamelToSnake]] SummarizeBy
+
+
+-- TODO: Delete after upgrading > 9.10
+instance Default SummarizeBy where
+  def = SBSum
 
 
 summarizeByPrefix :: SummarizeBy -> Text
@@ -367,8 +377,8 @@ widgetToECharts widget =
             AE..= AE.object
               [ "type" AE..= ("time" :: Text)
               , "scale" AE..= True
-              , "min" AE..= maybe AE.Null (AE.Number . fromIntegral . (*1000)) (widget ^? #dataset . _Just . #from . _Just)
-              , "max" AE..= maybe AE.Null (AE.Number . fromIntegral . (*1000)) (widget ^? #dataset . _Just . #to . _Just)
+              , "min" AE..= maybe AE.Null (AE.Number . fromIntegral . (* 1000)) (widget ^? #dataset . _Just . #from . _Just)
+              , "max" AE..= maybe AE.Null (AE.Number . fromIntegral . (* 1000)) (widget ^? #dataset . _Just . #to . _Just)
               , "boundaryGap" AE..= ([0, 0.01] :: [Double])
               , "axisLabel" AE..= AE.object ["show" AE..= axisVisibility]
               , "show" AE..= axisVisibility

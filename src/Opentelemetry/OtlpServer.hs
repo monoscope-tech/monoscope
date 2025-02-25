@@ -11,7 +11,7 @@ import Data.ByteString.Base16 qualified as B16
 import Data.HashMap.Strict qualified as HashMap
 import Data.Scientific
 import Data.Text qualified as T
-import Data.Time (TimeZone (..), UTCTime, utcToZonedTime)
+import Data.Time (UTCTime)
 import Data.Time.Clock.POSIX
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
@@ -22,7 +22,6 @@ import Effectful.Reader.Static (ask)
 import Effectful.Reader.Static qualified as Eff
 import Effectful.Time (Time)
 import Log qualified
-import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Telemetry (SpanKind (..), SpanStatus (..), convertSpanToRequestMessage)

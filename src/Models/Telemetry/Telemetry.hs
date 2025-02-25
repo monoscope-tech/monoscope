@@ -42,7 +42,6 @@ where
 import Data.Aeson qualified as AE
 import Data.Aeson.Key qualified as AEK
 import Data.Aeson.KeyMap qualified as KEM
-
 import Data.ByteString.Base16 qualified as B16
 import Data.Time (UTCTime)
 import Data.UUID (UUID)

@@ -12,7 +12,7 @@ import Data.Time.Format.ISO8601 (formatShow, iso8601Format)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Lucid
-import Lucid.Htmx (hxGet_, hxIndicator_, hxSwap_, hxTarget_, hxTrigger_)
+import Lucid.Htmx (hxGet_, hxIndicator_, hxSwap_, hxTarget_)
 import Lucid.Hyperscript (__)
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Telemetry (SpanStatus (SSError))
@@ -48,8 +48,8 @@ traceH pid trId spanIdM nav = do
       case traceItemM of
         Just traceItem -> do
           spanRecords <- Telemetry.getSpandRecordsByTraceId pid trId
-          let span_id = fromMaybe "" $ if isJust spanIdM then spanIdM else Just ""
-          let pageProps = PageProps pid traceItem span_id spanRecords
+          let spanid = fromMaybe "" $ if isJust spanIdM then spanIdM else Just ""
+          let pageProps = PageProps pid traceItem spanid spanRecords
           addRespHeaders $ TraceDetails pageProps
         Nothing -> addRespHeaders $ TraceDetailsNotFound "Trace not found"
 
@@ -347,19 +347,19 @@ buildTree spanMap parentId =
     Nothing -> []
     Just spans ->
       [ SpanTree
-          SpanMin
-            { parentSpanId = sp.parentSpanId
-            , spanId = sp.spanId
-            , uSpanId = sp.uSpanId
-            , spanName = sp.spanName
-            , spanDurationNs = sp.spanDurationNs
-            , serviceName = getServiceName sp
-            , startTime = utcTimeToNanoseconds sp.startTime
-            , endTime = utcTimeToNanoseconds <$> sp.endTime
-            , hasErrors = spanHasErrors sp
-            , timestamp = sp.timestamp
-            }
-          (buildTree spanMap (Just sp.spanId))
+        SpanMin
+          { parentSpanId = sp.parentSpanId
+          , spanId = sp.spanId
+          , uSpanId = sp.uSpanId
+          , spanName = sp.spanName
+          , spanDurationNs = sp.spanDurationNs
+          , serviceName = getServiceName sp
+          , startTime = utcTimeToNanoseconds sp.startTime
+          , endTime = utcTimeToNanoseconds <$> sp.endTime
+          , hasErrors = spanHasErrors sp
+          , timestamp = sp.timestamp
+          }
+        (buildTree spanMap (Just sp.spanId))
       | sp <- spans
       ]
 

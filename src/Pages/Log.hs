@@ -597,13 +597,6 @@ renderChart pid chartId chartTitle primaryUnitM rateM source extraHxVals = do
       ""
 
 
-resultTableAndMeta_ :: ApiLogsPageData -> Html ()
-resultTableAndMeta_ page =
-  div_ [class_ "relative overflow-y-scroll overflow-x-hidden w-full pb-16", id_ "resultTableScroller"] do
-    resultTable_ page True
-    script_ [text|document.getElementById("resultTableScroller").scrollTop = document.querySelector("#resultTableScroller tr").offsetHeight;|]
-
-
 resultTable_ :: ApiLogsPageData -> Bool -> Html ()
 resultTable_ page mainLog = table_
   [ class_ "w-full  table-auto ctable table-pin-rows table-pin-cols overflow-x-hidden"

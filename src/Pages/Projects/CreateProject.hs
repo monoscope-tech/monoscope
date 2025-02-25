@@ -23,6 +23,7 @@ import Control.Lens ((.~), (^.))
 import Data.Aeson qualified as AE
 import Data.Base64.Types qualified as B64
 import Data.ByteString.Base64 qualified as B64
+import Data.CaseInsensitive qualified as CI
 import Data.Default (Default (..))
 import Data.Effectful.UUID qualified as UUID
 import Data.Effectful.Wreq
@@ -48,12 +49,14 @@ import Models.Users.Users qualified as Users
 import NeatInterpolation (text)
 import OddJobs.Job (createJob)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
+import Pkg.ConvertKit qualified as ConvertKit
 import Relude hiding (ask, asks)
 import Relude.Unsafe qualified as Unsafe
 import Servant (addHeader)
 import Servant.API (Header)
 import Servant.API.ResponseHeaders (Headers)
 import System.Config
+
 import System.Types (ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders, addSuccessToast, redirectCS)
 import Utils (insertIfNotExist, isDemoAndNotSudo)
 import Web.FormUrlEncoded (FromForm)
@@ -289,6 +292,10 @@ pricingUpdateH pid PricingUpdateForm{orderId} = do
               steps = project.onboardingStepsCompleted
               newStepsComp = insertIfNotExist "Pricing" steps
           v <- dbtToEff $ Projects.updateProjectPricing pid productName subId firstSubId orderId newStepsComp
+          when (project.paymentPlan == "ONBOARDING") $ do
+            users <- dbtToEff $ ProjectMembers.selectActiveProjectMembers pid
+            forM_ users \user -> do
+              ConvertKit.addUserOrganization envCfg.convertkitApiKey (CI.original user.email) pid.toText project.title productName
           redirectCS $ "/p/" <> pid.toText <> "/"
           addRespHeaders ""
     _ -> do
@@ -311,19 +318,6 @@ processProjectPostForm cpRaw pid = do
       project <- dbtToEff $ Projects.projectById pid
       case project of
         Just p -> do
-          -- let checkPaymentPlan = cp.orderId /= p.orderId
-          -- (subId, firstSubItemId) <-
-          --   if checkPaymentPlan
-          --     then
-          --       getSubscriptionId cp.orderId envCfg.lemonSqueezyApiKey >>= \case
-          --         Just sub
-          --           | not (null sub.dataVal) ->
-          --               let target = sub.dataVal Unsafe.!! 0
-          --                in pure (Just (show target.attributes.firstSubscriptionItem.subscriptionId), Just (show target.attributes.firstSubscriptionItem.id))
-          --         _ -> pure (Nothing, Nothing)
-          --     else pure (p.subId, p.firstSubItemId)
-          -- case (if checkPaymentPlan then (subId, firstSubItemId) else (p.subId, p.firstSubItemId)) of
-          --   (Just sid, Just fsid) -> do
           _ <- dbtToEff $ Projects.updateProject (createProjectFormToModel pid p.subId p.firstSubItemId p.orderId p.paymentPlan cp)
           addSuccessToast "Updated Project Successfully" Nothing
           addRespHeaders $ ProjectPost (CreateProjectResp sess.persistentSession pid envCfg cp (def @CreateProjectFormError))

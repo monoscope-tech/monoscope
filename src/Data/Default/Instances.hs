@@ -1,7 +1,8 @@
+{-# LANGUAGE CPP #-}
+
 module Data.Default.Instances () where
 
 import Data.Aeson.Types qualified as AET
-import Data.Bool (Bool (False))
 import Data.CaseInsensitive (CI, FoldCase)
 import Data.CaseInsensitive qualified as CI (mk)
 import Data.Default
@@ -11,6 +12,15 @@ import Data.Time (UTCTime, ZonedTime)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Relude.Unsafe qualified as Unsafe
+
+
+#if __GLASGOW_HASKELL__ < 910
+import Data.Bool (Bool (False))
+
+instance Default Bool where
+  def = False 
+  {-# INLINE def #-}
+#endif
 
 
 instance Default ZonedTime where

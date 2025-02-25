@@ -45,23 +45,25 @@ import Utils (DBField (MkDBField), formatUTC)
 
 
 pivot' :: V.Vector (Int, Double, Text) -> (V.Vector Text, V.Vector (V.Vector (Maybe Double)), Double, Double)
-pivot' rows =
-  let extractHeaders vec = V.uniq . V.map thd3 . V.modify (\mvec -> VA.sortBy (comparing thd3) mvec) $ vec
-      headers = extractHeaders rows
-      grouped =
-        V.groupBy (\a b -> fst3 a == fst3 b)
-          $ V.modify (\mvec -> VA.sortBy (comparing fst3) mvec) rows
-      ngrouped = map (transform headers) grouped
-      totalSum = V.sum $ V.map snd3 rows
+pivot' rows
+  | V.null rows = (V.empty, V.empty, 0.0, 0.0)
+  | otherwise =
+      let extractHeaders vec = V.uniq . V.map thd3 . V.modify (\mvec -> VA.sortBy (comparing thd3) mvec) $ vec
+          headers = extractHeaders rows
+          grouped =
+            V.groupBy (\a b -> fst3 a == fst3 b)
+              $ V.modify (\mvec -> VA.sortBy (comparing fst3) mvec) rows
+          ngrouped = map (transform headers) grouped
+          totalSum = V.sum $ V.map snd3 rows
 
-      -- Calculate rate (rows per minute)
-      timeVec = V.map fst3 rows
-      minTime = V.minimum timeVec
-      maxTime = V.maximum timeVec
-      timeSpanMinutes = fromIntegral (maxTime - minTime) / 60.0
-      numRows = fromIntegral $ V.length rows
-      rate = if timeSpanMinutes > 0 then numRows / timeSpanMinutes else 0.0
-   in (headers, V.fromList ngrouped, totalSum, rate)
+          -- Calculate rate (rows per minute)
+          timeVec = V.map fst3 rows
+          minTime = V.minimum timeVec
+          maxTime = V.maximum timeVec
+          timeSpanMinutes = fromIntegral (maxTime - minTime) / 60.0
+          numRows = fromIntegral $ V.length rows
+          rate = if timeSpanMinutes > 0 then numRows / timeSpanMinutes else 0.0
+       in (headers, V.fromList ngrouped, totalSum, rate)
 
 
 transform :: V.Vector Text -> V.Vector (Int, Double, Text) -> V.Vector (Maybe Double)
