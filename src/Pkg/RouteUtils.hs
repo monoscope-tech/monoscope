@@ -26,9 +26,6 @@ type QPI a = QueryParam a Int
 type QEID a = QueryParam a Endpoints.EndpointId
 
 
-type QPJSON a = QueryParam a AE.Value
-
-
 type ProjectId = Capture "projectID" Projects.ProjectId
 
 

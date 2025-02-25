@@ -1,6 +1,5 @@
 module Pages.Components (statBox, drawerWithURLContent_, statBox_, emptyState_, dateTime, paymentPlanPicker) where
 
-import Data.Aeson qualified as AE
 import Data.Text qualified as T
 import Data.Time (UTCTime, defaultTimeLocale, formatTime)
 import Fmt (commaizeF, fmt, (+|))
@@ -12,7 +11,7 @@ import Models.Projects.Projects (ProjectId)
 import Models.Projects.Projects qualified as Projects
 import NeatInterpolation (text)
 import Relude
-import Utils (faSprite_, jsonValueToHtmlTree)
+import Utils (faSprite_)
 
 
 statBox :: Maybe ProjectId -> Text -> Text -> Int -> Maybe Int -> Html ()
