@@ -16,19 +16,29 @@ export class LogList extends LitElement {
     groupedData: [],
     expandedTraces: {},
   }
-
   constructor() {
     super()
     const container = document.querySelector('#resultTable')
     this.source = new URLSearchParams(window.location.search).get('source') || 'requests'
-    this.colIdxMap = JSON.parse(container.dataset.colidxmap)
-    this.logsData = JSON.parse(container.dataset.results)
-    this.traceLogs = JSON.parse(container.dataset.tracelogs)
+
+    try {
+      this.colIdxMap = JSON.parse(container.dataset.colidxmap || '{}')
+      this.logsData = JSON.parse(container.dataset.results || '[]')
+      this.traceLogs = JSON.parse(container.dataset.tracelogs || '[]')
+      this.logsColumns = JSON.parse(container.dataset.columns || '[]')
+      this.serviceColors = JSON.parse(container.dataset.servicecolors || '{}')
+    } catch (e) {
+      console.error('Error parsing JSON data:', e)
+      this.colIdxMap = {}
+      this.logsData = []
+      this.traceLogs = []
+      this.logsColumns = []
+      this.serviceColors = {}
+    }
+
     this.hasMore = this.logsData.length > 199
-    this.logsColumns = JSON.parse(container.dataset.columns)
     this.expandedTraces = {}
-    this.spanListTree = this.source === 'spans' ? groupSpans(this.logsData, this.traceLogs, this.colIdxMap, this.expandedTraces) : []
-    this.serviceColors = JSON.parse(container.dataset.servicecolors)
+    this.spanListTree = this.source === 'spans' ? this.buildSpanListTree() : []
     this.projectId = container.dataset.projectid
     this.nextFetchUrl = container.dataset.nextfetchurl
     this.isLoading = false
@@ -40,10 +50,15 @@ export class LogList extends LitElement {
     this.expandTrace = this.expandTrace.bind(this)
   }
 
+  connectedCallback() {
+    super.connectedCallback()
+  }
   firstUpdated() {
+    this.setupIntersectionObserver()
+  }
+  setupIntersectionObserver() {
     const loader = document.querySelector('#loader')
-    const container = document.querySelector('#logs_list_container') // The scrollable parent
-
+    const container = document.querySelector('#logs_list_container')
     if (!loader || !container) {
       console.error('Loader or container not found', { loader, container })
       return
@@ -60,18 +75,22 @@ export class LogList extends LitElement {
         threshold: 0,
       }
     )
-
     setTimeout(() => {
       observer.observe(loader)
     }, 3000)
+    this._observer = observer
   }
 
-  renderTrace(traceData) {
-    return traceData.spans.map((span) => {
-      return this.renderSpan(span)
-    })
+  disconnectedCallback() {
+    if (this._observer) {
+      this._observer.disconnect()
+    }
+    super.disconnectedCallback()
   }
 
+  buildSpanListTree() {
+    return groupSpans(this.logsData, this.traceLogs, this.colIdxMap, this.expandedTraces)
+  }
   renderSpan(span) {
     return html`${this.logItemRow(span)}`
   }
@@ -81,7 +100,7 @@ export class LogList extends LitElement {
       this.expandedTraces[tracId] = false
     }
     this.expandedTraces[tracId] = !this.expandedTraces[tracId]
-    this.spanListTree = groupSpans(this.logsData, this.traceLogs, this.colIdxMap, this.expandedTraces)
+    this.spanListTree = this.buildSpanListTree()
     this.requestUpdate()
   }
 
@@ -103,12 +122,12 @@ export class LogList extends LitElement {
       .then((data) => {
         if (!data.error) {
           const { logsData, serviceColors, nextUrl, traceLogs } = data
-          this.logsData = this.logsData.concat(logsData)
-          this.traceLogs = this.traceLogs.concat(traceLogs)
-          this.spanListTree = this.source === 'spans' ? groupSpans(this.logsData, this.traceLogs, this.colIdxMap, this.expandedTraces) : []
-          this.serviceColors = { ...serviceColors, ...this.serviceColors }
+          this.logsData = [...this.logsData, ...logsData]
+          this.traceLogs = [...this.traceLogs, ...traceLogs]
+          this.serviceColors = { ...this.serviceColors, ...serviceColors }
           this.nextFetchUrl = nextUrl
           this.hasMore = logsData.length > 199
+          this.spanListTree = this.source === 'spans' ? this.buildSpanListTree() : []
         } else {
           this.fetchError = data.error
         }
@@ -167,6 +186,7 @@ export class LogList extends LitElement {
   }
 
   render() {
+    const [list, renderFunc] = this.source === 'spans' ? [this.spanListTree, this.renderSpan] : [this.logsData, this.logItemRow]
     return html`
       <div class="relative overflow-y-scroll overflow-x-hidden w-full min-h-full c-scroll pb-10" id="logs_list_container">
         <table class="w-full table-auto ctable min-h-full table-pin-rows table-pin-cols overflow-x-hidden" style="height:1px; --rounded-box:0;">
@@ -175,16 +195,8 @@ export class LogList extends LitElement {
               ${this.logsColumns.map((column) => this.logTableHeading('', column))}
             </tr>
           </thead>
-          <tbody class="w-full log-item-table-body" @rangechanged=${(e) => this.handleVirtualListEvent(e)}>
-            ${this.source === 'spans'
-              ? virtualize({
-                  items: this.spanListTree,
-                  renderItem: this.renderSpan,
-                })
-              : virtualize({
-                  items: this.logsData,
-                  renderItem: this.logItemRow,
-                })}
+          <tbody class="w-full log-item-table-body">
+            ${virtualize({ items: list, renderItem: renderFunc })}
           </tbody>
         </table>
         ${this.hasMore
@@ -263,12 +275,30 @@ function logItemCol(rowData, source, colIdxMap, key, serviceColors, toggleTrace)
     case 'latency_breakdown':
       const { traceStart, traceEnd, startNs, duration, childrenTimeSpans } = rowData
       const color = serviceColors[lookupVecTextByKey(dataArr, colIdxMap, 'span_name')] || 'black'
-      const chil = childrenTimeSpans.map(({ start, duration, data }) => ({
-        start: start - traceStart,
+      const chil = childrenTimeSpans.map(({ startNs, duration, data }) => ({
+        start: startNs - traceStart,
         duration,
         color: serviceColors[lookupVecTextByKey(data, colIdxMap, 'span_name')] || 'black',
       }))
       return spanLatencyBreakdown({ start: startNs - traceStart, duration, traceEnd, color, children: chil })
+    case 'http_attributes':
+      const attributes = lookupVecObjectByKey(dataArr, colIdxMap, key)
+      const { method: m, url, status_code: statusCode_ } = attributes
+      if (m || url || statusCode_) {
+        let k = lookupVecTextByKey(dataArr, colIdxMap, 'kind')
+        let methodCls_ = getMethodColor(m)
+        let statusCls_ = getStatusColor(Number(statusCode_))
+        return html`
+          ${k === 'SERVER'
+            ? renderIconWithTippy('w-4 ml-2', 'Incoming Request', faSprite('arrow-down-left', 'solid', ' h-3 fill-slate-500'))
+            : k === 'CLIENT'
+            ? renderIconWithTippy('w-4 ml-2', 'Outgoing Request', faSprite('arrow-up-right', 'solid', ' h-3 fill-blue-700'))
+            : nothing}
+          ${m ? renderBadge('min-w-[4rem] text-center cbadge cbadge-sm ' + methodCls_, m) : nothing} ${statusCode_ ? renderBadge(statusCls_, statusCode_) : nothing}
+          ${url ? renderBadge('cbadge-sm badge-neutral border border-strokeWeak bg-fillWeak', url) : nothing}
+        `
+      }
+      break
     case 'rest':
       let val = lookupVecTextByKey(dataArr, colIdxMap, key)
       const { depth, children, traceId, childErrors, hasErrors, expanded, type } = rowData
@@ -294,10 +324,12 @@ function logItemCol(rowData, source, colIdxMap, key, serviceColors, toggleTrace)
                   >
                     ${depth === 0 ? (expanded ? faSprite('minus', 'regular', 'w-3 h-1 shrink-0') : faSprite('plus', 'regular', 'w-3 h-3 shrink-0')) : nothing} ${children}
                   </button>`
+                : depth === 0
+                ? nothing
                 : html`<div class=${`rounded shrink-0 w-3 h-5 ${errClas}`}></div>`}
               ${type === 'log'
                 ? ['severity_text', 'body'].map((k) => logItemCol(rowData, source, { severity_text: 5, body: 6 }, k))
-                : ['status', 'kind', 'span_name'].map((k) => logItemCol(rowData, source, colIdxMap, k))}
+                : ['http_attributes', 'status', 'kind', 'span_name'].map((k) => logItemCol(rowData, source, colIdxMap, k))}
             </div>
             <div class="w-24 overflow-visible shrink-0">${logItemCol(rowData, source, colIdxMap, 'duration')}</div>
             ${logItemCol(rowData, source, colIdxMap, 'latency_breakdown', serviceColors)}
@@ -348,6 +380,14 @@ const lookupVecTextByKey = (vec, colIdxMap, key) => {
   }
   const idx = colIdxMap[key]
   return lookupVecText(vec, idx)
+}
+
+const lookupVecObjectByKey = (vec, colIdxMap, key) => {
+  if (!Object.prototype.hasOwnProperty.call(colIdxMap, key)) {
+    return {}
+  }
+  const idx = colIdxMap[key]
+  return lookupVecText(vec, idx) || {}
 }
 
 function getStatusColor(status) {
@@ -434,7 +474,7 @@ function spanLatencyBreakdown({ start, duration, traceEnd, color, children }) {
   const left = (start / traceEnd) * 200
   return html`<div class="w-[20ch] -mt-1 shrink-0">
     <div class="flex h-5 w-[200px] relative bg-fillWeak">
-      <div class=${`h-full absolute top-0 ${color}`} style=${`width:${width}px; left:${left}px`}></div>
+      <div class=${`h-full absolute top-0 ${children.length > 0 ? 'bg-fillWeak' : color}`} style=${`width:${width}px; left:${left}px`}></div>
       ${children.map((child) => {
         const cWidth = (child.duration / traceEnd) * 200
         const cLeft = (child.start / traceEnd) * 200

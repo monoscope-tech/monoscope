@@ -662,6 +662,7 @@ curateCols summaryCols cols = sortBy sortAccordingly filteredCols
       , "parent_span_id"
       , "latency_breakdown"
       , "errors"
+      , "http_attributes"
       , "start_time_ns"
       , "kind"
       , "span_name"
