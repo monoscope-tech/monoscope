@@ -137,11 +137,11 @@ buildTree metricMap parentId =
     Nothing -> []
     Just metrics ->
       [ MetricTree
-          MetricNode
-            { parent = mt.parent
-            , current = mt.current
-            }
-          (buildTree metricMap (if mt.parent == "___root___" then Just mt.current else Just $ mt.parent <> "." <> mt.current))
+        MetricNode
+          { parent = mt.parent
+          , current = mt.current
+          }
+        (buildTree metricMap (if mt.parent == "___root___" then Just mt.current else Just $ mt.parent <> "." <> mt.current))
       | mt <- metrics
       ]
 
