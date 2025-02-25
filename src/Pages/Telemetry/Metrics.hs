@@ -8,22 +8,12 @@ import Models.Telemetry.Telemetry qualified as Telemetry
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
 import Relude
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
-
 import Data.Default
-import Data.List (foldl')
 import Data.Map qualified as Map
 import Data.Text qualified as T
-
 import Models.Users.Sessions qualified as Sessions
 import Pkg.Components qualified as Components
 import Utils (faSprite_, parseTime)
-
-import Data.Aeson qualified as AE
-import Data.Function (on)
-import Data.List qualified as L
-import Data.Text (Text, unpack)
-import Data.Text qualified as T
-import Data.Time (UTCTime)
 import Lucid.Htmx
 import Lucid.Hyperscript (__)
 import NeatInterpolation (text)
@@ -195,10 +185,6 @@ dataPointsPage pid metrics = do
           let metrMap = Map.fromList $ V.toList $ V.map (\mdp -> (mdp.metricName, mdp)) metrics
           metricsTree pid metrics metrMap
 
-
-metricsExploreGet :: Projects.ProjectId -> ATAuthCtx (RespHeaders (Html ()))
-metricsExploreGet pid = do
-  addRespHeaders $ div_ [class_ "flex flex-col gap-2"] "Hello world"
 
 
 metricDetailsGetH :: Projects.ProjectId -> Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))

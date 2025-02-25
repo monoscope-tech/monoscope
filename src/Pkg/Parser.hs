@@ -170,10 +170,10 @@ sqlFromQueryComponents sqlCfg qc =
         |]
    in ( finalSqlQuery
       , qc
-          { finalColumns = traceShowId $ listToColNames selectedCols
+          { finalColumns = listToColNames selectedCols
           , countQuery
-          , finalSqlQuery = traceShowId $ finalSqlQuery
-          , finalTimechartQuery =  traceShowId $ Just timeChartQuery
+          , finalSqlQuery = finalSqlQuery
+          , finalTimechartQuery =  Just timeChartQuery
           , finalAlertQuery = Just alertQuery
           }
       )

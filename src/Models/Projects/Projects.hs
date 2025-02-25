@@ -3,7 +3,6 @@ module Models.Projects.Projects (
   Project' (..),
   ProjectId (..),
   CreateProject (..),
-  ProjectRequestStats (..),
   NotificationChannel (..),
   parseNotifChannel,
   OnboardingStep (..),
@@ -12,7 +11,6 @@ module Models.Projects.Projects (
   usersByProjectId,
   userByProjectId,
   selectProjectsForUser,
-  projectRequestStatsByProject,
   updateOnboardingStepsCompleted,
   updateProject,
   deleteProject,
@@ -335,35 +333,6 @@ deleteProject pid = do
   where
     q =
       [sql| UPDATE projects.projects SET deleted_at=NOW(), active=False where id=?;|]
-
-
-data ProjectRequestStats = ProjectRequestStats
-  { projectId :: ProjectId
-  , min :: Double
-  , p50 :: Double
-  , p75 :: Double
-  , p90 :: Double
-  , p95 :: Double
-  , p99 :: Double
-  , max :: Double
-  , totalTime :: Double
-  , totalRequests :: Int
-  , totalEndpoints :: Int
-  , totalEndpointsLastWeek :: Int
-  , totalShapes :: Int
-  , totalShapesLastWeek :: Int
-  , totalAnomalies :: Int
-  , totalAnomaliesLastWeek :: Int
-  , requestsPerMin :: Int
-  , requestsPerMinLastWeek :: Int
-  }
-  deriving stock (Show, Generic, Eq)
-  deriving anyclass (FromRow, ToRow, Default, NFData)
-  deriving (Entity) via (GenericEntity '[Schema "apis", TableName "project_request_stats", PrimaryKey "project_id", FieldModifiers '[CamelToSnake]] ProjectRequestStats)
-
-
-projectRequestStatsByProject :: ProjectId -> DBT IO (Maybe ProjectRequestStats)
-projectRequestStatsByProject = selectById @ProjectRequestStats
 
 
 updateNotificationsChannel :: ProjectId -> [Text] -> Maybe Text -> DBT IO Int64

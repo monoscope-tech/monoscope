@@ -23,17 +23,12 @@ import Control.Lens ((.~), (^.))
 import Data.Aeson qualified as AE
 import Data.Base64.Types qualified as B64
 import Data.ByteString.Base64 qualified as B64
-import Data.CaseInsensitive (original)
-import Data.CaseInsensitive qualified as CI
 import Data.Default (Default (..))
 import Data.Effectful.UUID qualified as UUID
 import Data.Effectful.Wreq
 import Data.Effectful.Wreq qualified as W
-import Data.List.Extra (cons)
-import Data.List.Unique (uniq)
 import Data.Pool (withResource)
 import Data.Text qualified as T
-import Data.UUID qualified as UUID
 import Data.Valor (Valor, check1, failIf, validateM)
 import Data.Valor qualified as Valor
 import Data.Vector qualified as V
@@ -44,7 +39,6 @@ import Effectful.Reader.Static (ask)
 import GHC.Records (HasField (getField))
 import Lucid
 import Lucid.Htmx (hxConfirm_, hxGet_, hxIndicator_, hxPost_, hxSwap_, hxTarget_)
-import Lucid.Hyperscript (__)
 import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
 import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.ProjectMembers qualified as Projects
@@ -54,8 +48,6 @@ import Models.Users.Users qualified as Users
 import NeatInterpolation (text)
 import OddJobs.Job (createJob)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
-import Pages.Components (paymentPlanPicker)
-import Pkg.ConvertKit qualified as ConvertKit
 import Relude hiding (ask, asks)
 import Relude.Unsafe qualified as Unsafe
 import Servant (addHeader)
@@ -63,7 +55,7 @@ import Servant.API (Header)
 import Servant.API.ResponseHeaders (Headers)
 import System.Config
 import System.Types (ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders, addSuccessToast, redirectCS)
-import Utils (faSprite_, insertIfNotExist, isDemoAndNotSudo, redirect)
+import Utils (insertIfNotExist, isDemoAndNotSudo)
 import Web.FormUrlEncoded (FromForm)
 
 
@@ -449,42 +441,3 @@ createProjectBody sess pid envCfg cp cpe = do
           , hxConfirm_ "Are you sure you want to delete this project?"
           ]
           "Delete Project"
-
-
-checkMark :: Html ()
-checkMark =
-  div_ [class_ "flex items-center justify-center text-center font-bold text-green-500 rounded-md w-5 h-5 bg-gray-200"] "✓"
-
-
-checkList :: Text -> Text -> Html ()
-checkList value team =
-  div_ [class_ "flex flex-col gap-2 p-3"] do
-    div_ [class_ "flex items-center gap-1"] do
-      checkMark
-      small_ "Max "
-      span_ $ toHtml team
-      small_ " team members"
-    if value == "Free"
-      then do
-        div_ [class_ "flex gap-1 items-center"] do
-          checkMark
-          small_ "20k requests per month"
-        div_ [class_ "flex gap-1 items-center"] do
-          checkMark
-          small_ "7 days data retention"
-      else do
-        div_ [class_ "flex gap-1 items-center"] do
-          checkMark
-          small_ "14 days data retention"
-        div_ [class_ "flex gap-1 items-center"] do
-          checkMark
-          small_ "API testing pipelines"
-        div_ [class_ "flex gap-1 items-center"] do
-          checkMark
-          small_ "API swagger/OpenAPI hosting"
-        div_ [class_ "flex gap-1 items-center"] do
-          checkMark
-          small_ "API metrics custom monitors"
-        div_ [class_ "flex gap-1 items-center"] do
-          checkMark
-          small_ "API live traffic AI-based validations"

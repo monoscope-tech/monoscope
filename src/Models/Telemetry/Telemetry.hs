@@ -48,16 +48,14 @@ import Data.UUID (UUID)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity.DBT (QueryNature (..), executeMany, query, queryOne)
-import Database.PostgreSQL.Simple (FromRow, ResultError (..), ToRow)
 import Database.PostgreSQL.Simple.FromField (FromField (..))
 import Database.PostgreSQL.Simple.FromRow
 import Database.PostgreSQL.Simple.ToRow
-
 import Data.Default (Default)
 import Data.Text qualified as T
 import Data.Time (TimeZone (..), UTCTime, formatTime, utcToZonedTime)
+import Data.Time (formatTime)
 import Data.Time.Format (defaultTimeLocale)
-import Database.PostgreSQL.Simple.FromField (FromField (..), fromField, returnError)
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.ToField (ToField)
@@ -70,7 +68,6 @@ import Effectful.PostgreSQL.Transact.Effect (DB, dbtToEff)
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.Projects qualified as Projects
 import NeatInterpolation (text)
-import Opentelemetry.Proto.Metrics.V1.Metrics (Metric (metricMetadata), MetricData (MetricDataExponentialHistogram))
 import Pkg.DBUtils (WrappedEnum (..))
 import Relude
 import RequestMessages (RequestMessage (..))

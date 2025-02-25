@@ -70,6 +70,9 @@ instance HasField "toText" DashboardId Text where
 
 data Dashboard = Dashboard
   { title :: Maybe Text -- Dashboard title
+  , description :: Maybe Text
+  , preview :: Maybe Text
+  , icon :: Maybe Text
   , file :: Maybe Text
   , tags :: Maybe [Text]
   , refreshInterval :: Maybe Text -- Refresh interval
@@ -86,7 +89,7 @@ readDashboardsFromDirectory :: FilePath -> Q Exp
 readDashboardsFromDirectory dir = do
   runIO $ putStrLn $ "Reading dashboards from: " ++ dir
   files <- runIO $ listDirectory dir
-  let files' = filter (".yaml" `isSuffixOf`) files
+  let files' = sort $ filter (".yaml" `isSuffixOf`) files
   dashboards <- runIO $ catMaybes <$> mapM (readDashboardFile dir) files'
   THS.lift dashboards
 

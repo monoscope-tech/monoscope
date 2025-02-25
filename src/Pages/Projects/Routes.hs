@@ -12,7 +12,7 @@ import Pkg.RouteUtils (GetRedirect, QPT)
 import Relude
 import Servant (Capture, FormUrlEncoded, GenericMode (type (:-)), Get, JSON, NamedRoutes, Post, ReqBody, type (:>))
 import Servant.API (Header)
-import Servant.API.ResponseHeaders (Headers, addHeader)
+import Servant.API.ResponseHeaders (Headers)
 import Servant.HTML.Lucid (HTML)
 import System.Types (RespHeaders)
 

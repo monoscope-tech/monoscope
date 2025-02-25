@@ -1,6 +1,7 @@
-title: HTTP Stats 
+title: Overvew 
+icon: qrcode 
 preview: /public/assets/svgs/screens/http-stats.svg
-icon: globe-wifi
+description: General dashboard about events, requests, apis, etc
 refresh_interval: 60s 
 widgets:
   # - type: "timeseries_stat"
@@ -90,6 +91,7 @@ widgets:
 
   - type: "timeseries"
     title: "Errors"
+    eager: true
     theme: "roma"
     query: status_code >= 300.0 | timechart count(*) by status_code 
     layout: { w: 6, h: 4 }

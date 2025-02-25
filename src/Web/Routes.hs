@@ -28,7 +28,6 @@ import Pages.AutoComplete qualified as AutoComplete
 import Pages.BodyWrapper (PageCtx (..))
 import Pages.CP qualified as CP
 import Pages.Charts.Charts qualified as Charts
-import Pages.Dashboard qualified as Dashboard
 import Pages.Dashboards qualified as Dashboards
 import Pages.Endpoints.Routes qualified as EndpointsRoutes
 import Pages.Endpoints.Server qualified as EndpointsRoutes
@@ -120,7 +119,7 @@ type role CookieProtectedRoutes nominal
 
 type CookieProtectedRoutes :: Type -> Type
 data CookieProtectedRoutes mode = CookieProtectedRoutes
-  { dashboardGet :: mode :- "p" :> ProjectId :> QPT "from" :> QPT "to" :> QPT "since" :> GetRedirect '[HTML] (Headers '[Header "Location" Text] (PageCtx Dashboard.DashboardGet))
+  { dashboardGet :: mode :- "p" :> ProjectId :> GetRedirect '[HTML] (Headers '[Header "Location" Text] NoContent)
   , dashboardsGet :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> QPT "file" :> QPT "from" :> QPT "to" :> QPT "since" :> Get '[HTML] (RespHeaders (PageCtx Dashboards.DashboardGet))
   , dashboardsGetList :: mode :- "p" :> ProjectId :> "dashboards" :> Get '[HTML] (RespHeaders (PageCtx Dashboards.DashboardsGet))
   , dashboardsPost :: mode :- "p" :> ProjectId :> "dashboards" :> ReqBody '[FormUrlEncoded] Dashboards.DashboardForm :> Post '[HTML] (RespHeaders NoContent)
@@ -156,7 +155,7 @@ data CookieProtectedRoutes mode = CookieProtectedRoutes
 cookieProtectedServer :: Servant.ServerT (Servant.NamedRoutes CookieProtectedRoutes) ATAuthCtx
 cookieProtectedServer =
   CookieProtectedRoutes
-    { dashboardGet = Dashboard.dashboardGetH
+    { dashboardGet = Dashboards.entrypointGetH
     , dashboardsGet = Dashboards.dashboardGetH
     , dashboardsGetList = Dashboards.dashboardsGetH
     , dashboardsPost = Dashboards.dashboardsPostH

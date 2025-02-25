@@ -37,10 +37,8 @@ import Lucid.Htmx (
   hxVals_,
  )
 import Lucid.Hyperscript (__)
-import Models.Projects.ProjectApiKeys (projectIdsByProjectApiKeys)
 import Models.Projects.Projects qualified as Projects
 import Models.Tests.TestToDump qualified as TestToDump
-import Models.Tests.Testing (CollectionSteps (..))
 import Models.Tests.Testing qualified as Testing
 import Models.Users.Sessions qualified as Sessions
 import NeatInterpolation (text)
@@ -50,7 +48,7 @@ import Pkg.Components qualified as Components
 import PyF (fmt)
 import Relude hiding (ask)
 import System.Types (ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders, addSuccessToast, redirectCS)
-import Utils (faSprite_, getStatusColor, insertIfNotExist, jsonValueToHtmlTree, redirect)
+import Utils (faSprite_, getStatusColor, insertIfNotExist, jsonValueToHtmlTree)
 
 
 data CollectionVariableForm = CollectionVariableForm
