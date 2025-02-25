@@ -393,7 +393,7 @@ widgetToECharts widget =
               ]
         , "dataset"
             AE..= AE.object
-              [] -- "source" AE..= fromMaybe AE.Null (widget.dataset <&> (.source))]
+              ["source" AE..= fromMaybe AE.Null (widget.dataset <&> (.source))]
         , "series" AE..= map (createSeries widget.wType) []
         , "animation" AE..= False
         ]
