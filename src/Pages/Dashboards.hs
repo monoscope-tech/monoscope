@@ -149,7 +149,7 @@ dashboardGetH pid dashId fileM fromDStr toDStr sinceStr = do
             then do
               case widget.wType of
                 Widget.WTAnomalies -> do
-                  issues <- dbtToEff $ Anomalies.selectIssues pid Nothing (Just False) (Just False) Nothing (Nothing) (0)
+                  issues <- dbtToEff $ Anomalies.selectIssues pid Nothing (Just False) (Just False) Nothing (Just 2) (0)
                   let issuesVM = V.map (AnomalyList.IssueVM False now "24h") issues
                   pure
                     $ widget
