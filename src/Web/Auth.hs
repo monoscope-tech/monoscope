@@ -203,8 +203,8 @@ authCallbackH codeM _ redirectToM = do
   resp <- runExceptT do
     code <- hoistEither $ note "invalid code " codeM
     r <-
-      liftIO $
-        post
+      liftIO
+        $ post
           (toString $ envCfg.config.auth0Domain <> "/oauth/token")
           ( [ "grant_type" := ("authorization_code" :: String)
             , "client_id" := envCfg.config.auth0ClientId
@@ -226,16 +226,16 @@ authCallbackH codeM _ redirectToM = do
     lift $ authorizeUserAndPersist (Just envCfg.config.convertkitApiKey) firstName lastName picture email
   case resp of
     Left err -> putStrLn ("unable to process auth callback page " <> err) >> (throwError $ err302{errHeaders = [("Location", "/login?auth0_callback_failure")]}) >> pure (noHeader $ noHeader "")
-    Right persistentSessId -> pure $
-      addHeader (fromMaybe "/" redirectToM) $
-        addHeader
-          (craftSessionCookie persistentSessId True)
-          do
-            html_ do
-              head_ do
-                meta_ [httpEquiv_ "refresh", content_ "1;url=/"]
-              body_ do
-                a_ [href_ $ fromMaybe "/" redirectToM] "Continue to APIToolkit"
+    Right persistentSessId -> pure
+      $ addHeader (fromMaybe "/" redirectToM)
+      $ addHeader
+        (craftSessionCookie persistentSessId True)
+        do
+          html_ do
+            head_ do
+              meta_ [httpEquiv_ "refresh", content_ "1;url=/"]
+            body_ do
+              a_ [href_ $ fromMaybe "/" redirectToM] "Continue to APIToolkit"
 
 
 authorizeUserAndPersist :: (DB :> es, UUIDEff :> es, HTTP :> es, Time :> es) => Maybe Text -> Text -> Text -> Text -> Text -> Eff es Sessions.PersistentSessionId

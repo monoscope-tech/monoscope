@@ -97,29 +97,46 @@ instance AE.FromJSON ReportAnomalyType where
         case tag of
           Just "ATEndpoint" ->
             ATEndpoint
-              <$> o AE..: "endpointUrlPath"
-              <*> o AE..: "endpointMethod"
-              <*> o AE..: "eventsCount"
+              <$> o
+              AE..: "endpointUrlPath"
+              <*> o
+              AE..: "endpointMethod"
+              <*> o
+              AE..: "eventsCount"
           Just "ATShape" ->
             ATShape
-              <$> o AE..: "endpointUrlPath"
-              <*> o AE..: "endpointMethod"
-              <*> o AE..: "targetHash"
-              <*> o AE..: "newUniqueFields"
-              <*> o AE..: "updatedFieldFormats"
-              <*> o AE..: "deletedFields"
-              <*> o AE..: "eventsCount"
+              <$> o
+              AE..: "endpointUrlPath"
+              <*> o
+              AE..: "endpointMethod"
+              <*> o
+              AE..: "targetHash"
+              <*> o
+              AE..: "newUniqueFields"
+              <*> o
+              AE..: "updatedFieldFormats"
+              <*> o
+              AE..: "deletedFields"
+              <*> o
+              AE..: "eventsCount"
           Just "ATFormat" ->
             ATFormat
-              <$> o AE..: "endpointUrlPath"
-              <*> o AE..: "keyPath"
-              <*> o AE..: "endpointMethod"
-              <*> o AE..: "formatType"
-              <*> o AE..: "formatExamples"
-              <*> o AE..: "eventsCount"
+              <$> o
+              AE..: "endpointUrlPath"
+              <*> o
+              AE..: "keyPath"
+              <*> o
+              AE..: "endpointMethod"
+              <*> o
+              AE..: "formatType"
+              <*> o
+              AE..: "formatExamples"
+              <*> o
+              AE..: "eventsCount"
           Just "ATRuntimeException" ->
             ATRuntimeException
-              <$> o AE..: "endpointUrlPath"
+              <$> o
+              AE..: "endpointUrlPath"
           _ -> pure UnknownAnomaly
 
 
@@ -381,16 +398,16 @@ buildAnomalyJSON anomalies total = AE.object ["anomalies" AE..= (V.catMaybes $ V
     buildjson :: Anomalies.IssueL -> Maybe AE.Value
     buildjson an = case an.issueData of
       Anomalies.IDNewEndpointIssue e ->
-        Just $
-          AE.object
+        Just
+          $ AE.object
             [ "endpointUrlPath" AE..= e.endpointUrlPath
             , "endpointMethod" AE..= e.endpointMethod
             , "tag" AE..= Anomalies.ATEndpoint
             , "eventsCount" AE..= an.eventsAgg.count
             ]
       Anomalies.IDNewShapeIssue s ->
-        Just $
-          AE.object
+        Just
+          $ AE.object
             [ "endpointUrlPath" AE..= s.endpointUrlPath
             , "endpointMethod" AE..= s.endpointMethod
             , "targetHash" AE..= an.targetHash
@@ -401,8 +418,8 @@ buildAnomalyJSON anomalies total = AE.object ["anomalies" AE..= (V.catMaybes $ V
             , "eventsCount" AE..= an.eventsAgg.count
             ]
       Anomalies.IDNewFormatIssue f ->
-        Just $
-          AE.object
+        Just
+          $ AE.object
             [ "endpointUrlPath" AE..= f.endpointUrlPath
             , "endpointMethod" AE..= f.endpointMethod
             , "keyPath" AE..= f.fieldKeyPath

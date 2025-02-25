@@ -221,10 +221,10 @@ pTerm =
   (Paren <$> parens pExpr)
     <|> try (Eq <$> pSubject <* space <* void (symbol "==") <* space <*> pValues)
     <|> try (NotEq <$> pSubject <* space <* void (symbol "!=") <* space <*> pValues)
-    <|> try (GT <$> pSubject <* space <* void (symbol ">") <* space <*> pValues)
-    <|> try (LT <$> pSubject <* space <* void (symbol "<") <* space <*> pValues)
     <|> try (GTEq <$> pSubject <* space <* void (symbol ">=") <* space <*> pValues)
     <|> try (LTEq <$> pSubject <* space <* void (symbol "<=") <* space <*> pValues)
+    <|> try (GT <$> pSubject <* space <* void (symbol ">") <* space <*> pValues)
+    <|> try (LT <$> pSubject <* space <* void (symbol "<") <* space <*> pValues)
     <|> try regexParser
 
 

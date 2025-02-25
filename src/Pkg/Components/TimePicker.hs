@@ -62,6 +62,8 @@ parseSince now since =
 
 
 parseTimeRange :: UTCTime -> TimePicker -> (Maybe UTCTime, Maybe UTCTime, Maybe Text)
+parseTimeRange now (TimePicker Nothing Nothing Nothing) = parseSince now "24H"
+parseTimeRange now (TimePicker (Just "") Nothing Nothing) = parseSince now "24H"
 parseTimeRange now (TimePicker Nothing fromM toM) = parseFromAndTo now fromM toM
 parseTimeRange now (TimePicker (Just "") fromM toM) = parseFromAndTo now fromM toM
 parseTimeRange now (TimePicker sinceM _ _) = parseSince now (maybeToMonoid sinceM)

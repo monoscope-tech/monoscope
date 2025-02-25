@@ -46,7 +46,7 @@ applySectionToComponent qc (Search expr) = qc{whereClause = Just $ display expr}
 applySectionToComponent qc (Source source) = qc{fromTable = Just $ display source}
 applySectionToComponent qc (StatsCommand aggs Nothing) = qc{select = qc.select <> map display aggs}
 applySectionToComponent qc (StatsCommand aggs byClauseM) = applyByClauseToQC byClauseM $ qc{select = qc.select <> map display aggs}
-applySectionToComponent qc (TimeChartCommand agg byClauseM rollupM) = applyRollupToQC rollupM $ applyByClauseToQC byClauseM $ qc{select = qc.select <> [display agg]}
+applySectionToComponent qc (TimeChartCommand agg byClauseM rollupM) = applyRollupToQC rollupM $ applyByClauseToQC byClauseM $ qc{select = qc.select <> (map display agg)}
 
 
 applyByClauseToQC :: Maybe ByClause -> QueryComponents -> QueryComponents
@@ -144,6 +144,7 @@ sqlFromQueryComponents sqlCfg qc =
       timebucket = [fmt|extract(epoch from time_bucket('{timeRollup}', {timestampCol}))::integer as timeB, |] :: Text
       -- FIXME: render this based on the aggregations
       chartSelect = [fmt| count(*)::integer as count|] :: Text
+      -- chartSelect = T.intercalate "," qc.select
       timeGroupByClause = " GROUP BY " <> T.intercalate "," ("timeB" : qc.groupByClause)
       timeGroupSelect =
         if null qc.groupByClause
@@ -171,7 +172,7 @@ sqlFromQueryComponents sqlCfg qc =
       , qc
           { finalColumns = listToColNames selectedCols
           , countQuery
-          , finalSqlQuery
+          , finalSqlQuery = finalSqlQuery
           , finalTimechartQuery = Just timeChartQuery
           , finalAlertQuery = Just alertQuery
           }

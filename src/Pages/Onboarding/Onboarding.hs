@@ -19,39 +19,33 @@ import Data.Aeson.KeyMap qualified as KM
 import Data.Default (def)
 import Data.Text qualified as T
 import Data.Vector as V (Vector, fromList, head, length, toList)
-import Database.PostgreSQL.Entity.DBT (QueryNature (Select, Update), execute, query, queryOne)
+import Database.PostgreSQL.Entity.DBT (QueryNature (Select, Update), execute, queryOne)
 import Database.PostgreSQL.Simple.Types (Query (Query))
 
 import Database.PostgreSQL.Simple (Only (Only))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
+import Database.PostgreSQL.Transact (DBT)
 import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
 import Effectful.Reader.Static (ask)
 import Lucid
 import Lucid.Base (TermRaw (termRaw))
 import Lucid.Htmx
-import Models.Projects.Projects (OnboardingStep (..))
-import Models.Projects.Projects qualified as Projects
-import Models.Telemetry.Telemetry qualified as Telemetry
-import Models.Users.Sessions qualified as Sessions
-import Models.Users.Users
-
-import NeatInterpolation (text)
-import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
-
-import Database.PostgreSQL.Transact (DBT)
 import Lucid.Hyperscript (__)
 import Models.Apis.Slack (getProjectSlackData)
 import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
+import Models.Projects.Projects qualified as Projects
 import Models.Tests.Testing qualified as Testing
+import Models.Users.Sessions qualified as Sessions
+import Models.Users.Users
+import NeatInterpolation (text)
+import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
 import Pages.Components
-import Pages.Components qualified as Components
 import Pages.IntegrationDemos.Csharp (csharpGuide)
 import Pages.IntegrationDemos.Golang (golangGuide)
 import Pages.IntegrationDemos.Java (javaGuide)
 import Pages.IntegrationDemos.Javascript (javascriptGuide)
 import Pages.IntegrationDemos.Php (phpGuide)
 import Pages.IntegrationDemos.Python (pythonGuide)
-import Pkg.Components qualified as Components
 import Pkg.Mail (sendDiscordNotif)
 import PyF (fmt)
 import Relude hiding (ask)
@@ -59,13 +53,6 @@ import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types (ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders, redirectCS)
 import Utils (faSprite_, getOtelLangVersion, insertIfNotExist, lookupValueText)
 import Web.FormUrlEncoded
-
-
-getNextOnboardingStep :: V.Vector Text -> Text
-getNextOnboardingStep steps =
-  case find (`notElem` steps) ["Info", "Survey", "CreateMonitor", "NotifChannel", "Integration", "Pricing", "Complete"] of
-    Just x -> x
-    _ -> "Complete"
 
 
 -- 'Info', 'Survey', 'CreateMonitor','NotifChannel','Integration', 'Pricing', 'Complete'
@@ -409,12 +396,6 @@ integrationCheck pid language = do
     do
       span_ [class_ " text-textStrong"] "waiting for events"
       faSprite_ "spinner" "regular" "h-4 w-4 animate-spin"
-
-
-tagItem :: Text -> Bool -> Html ()
-tagItem label isActive =
-  div_ [class_ "px-3 py-1 rounded-2xl  border-[#001066]/10  bg-fillWeak"]
-    $ span_ [class_ "text-sm"] (toHtml label)
 
 
 notifChannels :: Projects.ProjectId -> Text -> Text -> Vector Text -> Bool -> Bool -> Html ()

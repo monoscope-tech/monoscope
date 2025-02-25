@@ -1,6 +1,5 @@
 module Pages.IntegrationDemos.Java (javaGuide) where
 
-import Data.Text qualified as T
 import Lucid
 import NeatInterpolation (text)
 import Pkg.Components

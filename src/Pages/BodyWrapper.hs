@@ -22,9 +22,8 @@ import Utils (faSprite_)
 
 menu :: Projects.ProjectId -> [(Text, Text, Text)]
 menu pid =
-  [ ("Dashboard", "/p/" <> pid.toText <> "/", "qrcode")
-  , -- , ("Dashboards", "/p/" <> pid.toText <> "/dashboards", "dashboard")
-    ("Explorer", "/p/" <> pid.toText <> "/log_explorer", "explore")
+  [ ("Dashboards", "/p/" <> pid.toText <> "/dashboards", "dashboard")
+  , ("Explorer", "/p/" <> pid.toText <> "/log_explorer", "explore")
   , ("API Catalog", "/p/" <> pid.toText <> "/api_catalog", "swap")
   , ("Changes & Errors", "/p/" <> pid.toText <> "/anomalies", "bug")
   , ("Monitors & Alerts", "/p/" <> pid.toText <> "/monitors", "list-check")
@@ -102,7 +101,7 @@ bodyWrapper BWConfig{sessM, currProject, prePageTitle, pageTitle, menuItem, hasI
           |]
         script_ [src_ $(hashAssetFile "/public/assets/deps/tagify/tagify.min.js")] ("" :: Text)
         script_ [src_ $(hashAssetFile "/public/assets/deps/echarts/echarts.min.js")] ("" :: Text)
-        script_ [src_ $(hashAssetFile "/public/assets/roma-echarts.js"), defer_ "true"] ("" :: Text)
+        script_ [src_ $(hashAssetFile "/public/assets/roma-echarts.js")] ("" :: Text)
         script_ [src_ $(hashAssetFile "/public/assets/js/thirdparty/notyf3.min.js"), defer_ "true"] ("" :: Text)
         script_ [src_ $(hashAssetFile "/public/assets/js/thirdparty/htmx1_9_10.min.js"), defer_ "true"] ("" :: Text)
         script_ [src_ $(hashAssetFile "/public/assets/deps/htmx/multi-swap.js"), defer_ "true"] ("" :: Text)
@@ -285,7 +284,7 @@ bodyWrapper BWConfig{sessM, currProject, prePageTitle, pageTitle, menuItem, hasI
               child
         Just sess ->
           let currUser = sess.persistentSession.user.getUser
-              sideNav' = currProject & maybe "" \project -> sideNav sess project pageTitle menuItem hasIntegrated
+              sideNav' = currProject & maybe "" \project -> sideNav sess project (fromMaybe pageTitle prePageTitle) menuItem hasIntegrated
            in section_ [class_ "flex flex-row grow-0 h-screen overflow-hidden"] do
                 sideNav'
                 section_ [class_ "h-screen overflow-y-hidden grow"] do
@@ -323,7 +322,9 @@ bodyWrapper BWConfig{sessM, currProject, prePageTitle, pageTitle, menuItem, hasI
       script_
         [text| window.addEventListener("load", (event) => {
         posthog.people.set_once({email: ${email}, name: "${name}"});
-      });|]
+      });
+      echarts.connect('default');
+      |]
 
 
 projectsDropDown :: Projects.Project -> V.Vector Projects.Project -> Html ()

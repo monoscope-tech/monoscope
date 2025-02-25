@@ -37,10 +37,8 @@ import Lucid.Htmx (
   hxVals_,
  )
 import Lucid.Hyperscript (__)
-import Models.Projects.ProjectApiKeys (projectIdsByProjectApiKeys)
 import Models.Projects.Projects qualified as Projects
 import Models.Tests.TestToDump qualified as TestToDump
-import Models.Tests.Testing (CollectionSteps (..))
 import Models.Tests.Testing qualified as Testing
 import Models.Users.Sessions qualified as Sessions
 import NeatInterpolation (text)
@@ -50,7 +48,7 @@ import Pkg.Components qualified as Components
 import PyF (fmt)
 import Relude hiding (ask)
 import System.Types (ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders, addSuccessToast, redirectCS)
-import Utils (faSprite_, getStatusColor, insertIfNotExist, jsonValueToHtmlTree, redirect)
+import Utils (faSprite_, getStatusColor, insertIfNotExist, jsonValueToHtmlTree)
 
 
 data CollectionVariableForm = CollectionVariableForm
@@ -208,9 +206,9 @@ collectionGetH pid colIdM = do
         (def :: BWConfig)
           { sessM = Just sess
           , currProject = Just project
-          , prePageTitle = Just "Monitors"
           , docsLink = Just "https://apitoolkit.io/docs/dashboard/dashboard-pages/api-tests/"
           , pageTitle = "Testing"
+          , prePageTitle = Just "Monitors & Alerts"
           , navTabs = Just $ pageTabs editorUrl overviewUrl
           , pageActions = Just $ div_ [class_ "inline-flex gap-2"] do
               button_ [class_ "h-8 rounded-lg btn-primary text-sm text-white px-3 flex items-center", onclick_ "htmx.trigger('#stepsForm','submit')"] do

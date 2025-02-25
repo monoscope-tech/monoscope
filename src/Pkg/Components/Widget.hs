@@ -1,8 +1,10 @@
-module Pkg.Components.Widget (Widget (..), WidgetDataset (..), widget_, Layout (..), WidgetType (..)) where
+module Pkg.Components.Widget (Widget (..), WidgetDataset (..), widget_, Layout (..), WidgetType (..), SummarizeBy (..)) where
 
 import Control.Lens
 import Data.Aeson qualified as AE
+import Data.Default
 import Data.Generics.Labels ()
+import Data.Text qualified as T
 import Deriving.Aeson qualified as DAE
 import Deriving.Aeson.Stock qualified as DAES
 import Fmt qualified as Ft
@@ -21,7 +23,7 @@ data Query = Query
   , sql :: Maybe Text
   }
   deriving stock (Show, Generic, THS.Lift)
-  deriving anyclass (NFData)
+  deriving anyclass (NFData, Default)
   deriving (AE.FromJSON, AE.ToJSON) via DAES.Snake Query
 
 
@@ -32,13 +34,16 @@ data Layout = Layout
   , h :: Maybe Int
   }
   deriving stock (Show, Generic, THS.Lift)
-  deriving anyclass (NFData)
+  deriving anyclass (NFData, Default)
   deriving (AE.FromJSON, AE.ToJSON) via DAES.Snake Layout
 
 
 data WidgetType
-  = WTTimeseries
+  = WTGroup
+  | WTTimeseries
+  | WTTimeseriesLine
   | WTTimeseriesStat
+  | WTStat
   | WTList
   | WTTopList
   | WTDistribution
@@ -46,9 +51,27 @@ data WidgetType
   | WTFunnel
   | WTTreeMap
   | WTPieChart
+  | WTAnomalies
   deriving stock (Show, Eq, Generic, Enum, THS.Lift)
-  deriving anyclass (NFData)
+  deriving anyclass (NFData, Default)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.ConstructorTagModifier '[DAE.StripPrefix "WT", DAE.CamelToSnake]] WidgetType
+
+
+data SummarizeBy
+  = SBSum
+  | SBMax
+  | SBMin
+  | SBCount
+  deriving stock (Show, Eq, Generic, Enum, THS.Lift)
+  deriving anyclass (NFData, Default)
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.ConstructorTagModifier '[DAE.StripPrefix "SB", DAE.CamelToSnake]] SummarizeBy
+
+
+summarizeByPrefix :: SummarizeBy -> Text
+summarizeByPrefix SBSum = ""
+summarizeByPrefix SBMax = "<"
+summarizeByPrefix SBMin = ">"
+summarizeByPrefix SBCount = ""
 
 
 -- when processing widgets we'll do them async, so eager queries are loaded upfront
@@ -57,9 +80,11 @@ data Widget = Widget
   , id :: Maybe Text
   , title :: Maybe Text -- Widget title
   , subtitle :: Maybe Text
+  , hideSubtitle :: Maybe Bool
   , icon :: Maybe Text
   , timeseriesStatAggregate :: Maybe Text -- average, min, max, sum, etc
   , sql :: Maybe Text
+  , summarizeBy :: Maybe SummarizeBy
   , query :: Maybe Text
   , queries :: Maybe [Query] -- Multiple queries for combined visualizations
   , layout :: Maybe Layout -- Layout (x, y, w, h)
@@ -75,9 +100,11 @@ data Widget = Widget
     eager :: Maybe Bool
   , _projectId :: Maybe Projects.ProjectId
   , expandBtnFn :: Maybe Text
+  , children :: Maybe [Widget]
+  , html :: Maybe LText
   }
   deriving stock (Show, Generic, THS.Lift)
-  deriving anyclass (NFData)
+  deriving anyclass (NFData, Default)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.StripPrefix "w", DAE.CamelToSnake]] Widget
 
 
@@ -94,7 +121,7 @@ data WidgetDataset = WidgetDataset
   , to :: Maybe Int
   }
   deriving stock (Show, Generic, THS.Lift)
-  deriving anyclass (NFData)
+  deriving anyclass (NFData, Default)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.StripPrefix "w", DAE.CamelToSnake]] WidgetDataset
 
 
@@ -110,135 +137,190 @@ data WidgetAxis = WidgetAxis
 
 -- use either index or the xxhash as id
 widget_ :: Widget -> Html ()
-widget_ w =
-  div_ ([class_ "grid-stack-item h-full"] <> attrs)
-    $ div_ [class_ "grid-stack-item-content !overflow-hidden h-full"]
-    $ renderChart (w & #id .~ (slugify <$> w.title))
+widget_ w = widgetHelper_ False w
+
+
+widgetHelper_ :: Bool -> Widget -> Html ()
+widgetHelper_ isChild w = case w.wType of
+  WTAnomalies -> gridItem_ $ div_ [class_ $ "h-full " <> paddingBtm] do
+    renderWidgetHeader (maybeToMonoid w.id) w.title Nothing Nothing Nothing (Just ("View all", "/p/" <> maybeToMonoid (w._projectId <&> (.toText)) <> "/anomalies")) (w.hideSubtitle == Just True)
+    whenJust w.html toHtmlRaw
+  WTGroup -> gridItem_ $ div_ [class_ $ "h-full" <> paddingBtm] $ div_ [class_ "flex flex-col gap-4"] do
+    div_ [class_ "leading-none flex justify-between items-center"] do
+      div_ [class_ "inline-flex gap-3 items-center"] do
+        whenJust w.icon \icon -> span_ [] $ Utils.faSprite_ icon "regular" "w-4 h-4"
+        span_ [] $ toHtml $ maybeToMonoid w.title
+    div_ [class_ "grid-stack nested-grid  h-full -m-2"] $ forM_ (fromMaybe [] w.children) (widgetHelper_ True)
+  _ -> gridItem_ $ div_ [class_ $ "h-full " <> paddingBtm] $ renderChart (w & #id .~ (slugify <$> w.title))
   where
-    isStat = w.wType == WTTimeseriesStat
     layoutFields = [("x", (.x)), ("y", (.y)), ("w", (.w)), ("h", (.h))]
     attrs = concat [maybe [] (\v -> [term ("gs-" <> name) (show v)]) (w.layout >>= layoutField) | (name, layoutField) <- layoutFields]
+    paddingBtm = bool "pb-8" "pb-4" isChild
+    gridItem_ = div_ ([class_ "grid-stack-item h-full"] <> attrs) . div_ [class_ "grid-stack-item-content h-full"]
 
-    renderChart :: Widget -> Html ()
-    renderChart widget = do
-      let rateM = (widget.dataset >>= (.rowsPerMin)) <&> (\r -> printf "%.2f" r <> " rows/min")
-      let chartId = maybeToMonoid widget.id
-      let hasValue = isJust $ widget.dataset >>= (.value)
-      div_ [class_ "gap-1.5 flex flex-col h-full box-border mb-1"] do
-        unless isStat $ div_ [class_ "leading-none flex justify-between items-center"] do
-          div_ [class_ "inline-flex gap-3 items-center"] do
-            span_ [] $ toHtml $ maybeToMonoid widget.title
-            span_ [class_ $ "bg-slate-200 px-2 py-1 rounded-3xl " <> if hasValue then "" else "hidden", id_ $ chartId <> "Value"]
-              $ whenJust (widget.dataset >>= (.value)) (\x -> toHtml @String $ Ft.fmt $ Ft.commaizeF $ round x)
-            span_ [class_ "text-slate-400 widget-subtitle text-sm", id_ $ chartId <> "Subtitle"] $ toHtml $ maybeToMonoid rateM
-          button_
-            [ term "_" $ fromMaybe "" widget.expandBtnFn
-            , class_ "rounded-full border border-slate-300 p-2 inline-flex cursor-pointer"
-            ]
-            do
-              Utils.faSprite_ "up-right-and-down-left-from-center" "regular" "w-3 h-3"
-        div_ [class_ "flex-1 pb-1"] do
-          div_ [class_ "h-full rounded-2xl border border-slate-200 p-3 bg-slate-50", id_ $ maybeToMonoid widget.id] ""
+
+renderWidgetHeader :: Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe (Text, Text) -> Bool -> Html ()
+renderWidgetHeader wId title valueM subValueM expandBtnFn ctaM hideSub = div_ [class_ "leading-none flex justify-between items-center"] do
+  div_ [class_ "inline-flex gap-3 items-center"] do
+    span_ [] $ toHtml $ maybeToMonoid title
+    span_ [class_ $ "bg-fillWeak border border-strokeWeak text-sm font-semibold px-2 py-1 rounded-3xl " <> if (isJust valueM) then "" else "hidden", id_ $ wId <> "Value"]
+      $ whenJust valueM toHtml
+    span_ [class_ $ "text-textWeak widget-subtitle text-sm " <> bool "" "hidden" hideSub, id_ $ wId <> "Subtitle"] $ toHtml $ maybeToMonoid subValueM
+  div_ [class_ "text-iconNeutral"] do
+    whenJust ctaM \(ctaTitle, uri) -> a_ [class_ "underline underline-offset-2 text-textBrand", href_ uri] $ toHtml ctaTitle
+    whenJust expandBtnFn \fn ->
+      button_
+        [ term "_" $ fn
+        , class_ "p-2 cursor-pointer"
+        ]
+        $ Utils.faSprite_ "expand-icon" "regular" "w-3 h-3"
+    button_
+      [ class_ "p-2 cursor-pointer"
+      ]
+      $ Utils.faSprite_ "ellipsis" "regular" "w-4 h-4"
+
+
+renderChart :: Widget -> Html ()
+renderChart widget = do
+  let rateM = widget.dataset >>= (.rowsPerMin) >>= (\r -> Just $ toText $ printf "%.2f" r <> " rows/min")
+  let chartId = maybeToMonoid widget.id
+  let valueM = (widget.dataset >>= (.value) >>= (\x -> Just $ Ft.fmt $ Ft.commaizeF $ round x))
+  div_ [class_ "gap-1.5 flex flex-col h-full"] do
+    unless (widget.wType `elem` [WTTimeseriesStat, WTStat])
+      $ renderWidgetHeader chartId widget.title valueM rateM widget.expandBtnFn Nothing (widget.hideSubtitle == Just True)
+    div_ [class_ "flex-1 flex"] do
+      div_ [class_ "h-full w-full rounded-2xl border border-strokeWeak p-3 bg-fillWeaker flex "] do
+        when (widget.wType `elem` [WTTimeseriesStat, WTStat]) $ div_ [class_ "flex flex-col justify-between"] do
+          div_ $ whenJust widget.icon \icon -> span_ [class_ "p-3 bg-fillWeak rounded-lg leading-[0] inline-block text-strokeSelected"] $ Utils.faSprite_ icon "regular" "w-5 h-5"
+          div_ [class_ "flex flex-col"] do
+            strong_ [class_ "text-textSuccess-strong text-xl"]
+              $ whenJust valueM toHtml
+            div_ [class_ "inline-flex gap-2 items-center justify-center"] do
+              span_ [] $ toHtml $ maybeToMonoid widget.title
+              span_ [class_ "inline-flex items-center"] $ Utils.faSprite_ "circle-info" "regular" "w-5 h-5"
+        unless (widget.wType == WTStat) $ div_ [class_ "h-full w-full flex-1"] do
+          div_ [class_ "h-full w-full", id_ $ maybeToMonoid widget.id] ""
           let theme = maybeToMonoid widget.theme
           let echartOpt = decodeUtf8 $ AE.encode $ widgetToECharts widget
           let yAxisLabel = fromMaybe (maybeToMonoid widget.unit) (widget.yAxis >>= (.label))
           let query = decodeUtf8 $ AE.encode widget.query
           let pid = decodeUtf8 $ AE.encode $ widget._projectId <&> (.toText)
+          let querySQL = maybeToMonoid widget.sql
+          let chartType = mapWidgetTypeToChartType widget.wType
+          let summarizeBy = T.toLower $ T.drop 2 $ show $ fromMaybe SBSum widget.summarizeBy
+          let summarizeByPfx = summarizeByPrefix $ fromMaybe SBSum widget.summarizeBy
           -- let widgetJSON = decodeUtf8 $ AE.encode $ widget
           -- let seriesDefault = decodeUtf8 $ AE.encode $ createSeries widget.wType Nothing
           script_
             [type_ "text/javascript"]
             [text|
 
-            (()=>{
-                let intervalId = null;
-                const FETCH_INTERVAL = 5000; // 5sec
-                const DEFAULT_BACKGROUND_STYLE = { color: 'rgba(240,248,255, 0.4)' };
+              (()=>{
+                  let intervalId = null;
+                  const FETCH_INTERVAL = 5000; // 5sec
+                  const DEFAULT_BACKGROUND_STYLE = { color: 'rgba(240,248,255, 0.4)' };
+                  const CHART_TYPE = '${chartType}'
+                  const SUMMARIZE_BY = '${summarizeBy}'
+                  const SUMMARIZE_BY_PREFIX = '${summarizeByPfx}'
 
-                const createSeriesConfig = (name, index, yAxisLabel) => ({
-                  type: 'bar',
-                  name,
-                  stack: yAxisLabel!='' ? yAxisLabel : 'units',
-                  showBackground: true,
-                  backgroundStyle: DEFAULT_BACKGROUND_STYLE,
-                  barMaxWidth: '10',
-                  barMinHeight: '1',
-                  encode: { x: 0, y: index + 1 }
-                });
-                const updateChartConfiguration = (opt, data, yAxisLabel) => {
-                  if (!data) return opt;
-                  const columnNames = data[0]?.slice(1);
-                  opt.series = columnNames?.map((name, index) => createSeriesConfig(name, index, yAxisLabel));
-                  opt.legend.data = columnNames;
-                  return opt;
-                };
-                const updateChartData = async (chart, opt, query, shouldFetch, widgetData) => {
-                  if (!shouldFetch) return;
-
-                  try {
-                    const paramM = new URLSearchParams(window.location.search);
-                    paramM.set("pid", widgetData.pid)
-                    paramM.set("query_raw",widgetData.query);
-
-                    const response = await (await fetch(`/chart_data?${paramM.toString()}`)).json();
-                    opt.dataset.source = [response.headers, ...response.dataset];
-                    document.getElementById(widgetData.chartId + "Subtitle").innerHTML = `${response.rows_per_min.toFixed(2)} rows/min`
-                    document.getElementById(widgetData.chartId + "Value").innerHTML = `${Number(response.rows_count).toLocaleString()}`
-                    document.getElementById(widgetData.chartId + "Value").classList.remove("hidden");
-
-                    // How should rowsPerMin and Count be updated? Direct to DOM? Passing the ids as an arg?
-                    const finalOpts = updateChartConfiguration(opt, opt.dataset.source, widgetData.yAxisLabel)
-                    chart.hideLoading();
-                    chart.setOption(finalOpts);
-                  } catch (error) {
-                    console.error('Failed to fetch new data:', error);
-                  }
-                };
-               const init = (opt, chartId, query, theme, yAxisLabel, pid) => {
-                  const chartEl = document.getElementById(chartId);
-                  const chart = echarts.init(chartEl, theme);
-                  const liveStreamCheckbox = document.getElementById('streamLiveData');
-                  chart.setOption(updateChartConfiguration(opt, opt.dataset.source, yAxisLabel));
-
-                  const resizeObserver = new ResizeObserver((_entries) => requestAnimationFrame(() => echarts.getInstanceByDom(chartEl).resize()));
-                  resizeObserver.observe(chartEl);
-                  const widgetData = {yAxisLabel, pid, query, chartId}
-
-                  if (liveStreamCheckbox) {
-                    liveStreamCheckbox.addEventListener('change', () => {
-                      if (checkbox.checked) {
-                        intervalId = setInterval(() => updateChartData(chart, opt, query, true, widgetData), FETCH_INTERVAL);
-                      } else {
-                        clearInterval(intervalId);
-                        intervalId = null;
-                      }
-                    });
-                  }
-
-                  if (!opt.dataset.source) {
-                    chart.showLoading();
-                    const observer = new IntersectionObserver(entries => {
-                        if (entries[0]?.isIntersecting) {
-                           updateChartData(chart, opt,query, true, widgetData)
-                           observer.disconnect();
-                        }
-                    });
-                    observer.observe(document.getElementById(chartId));
-                  }
-
-                  ['submit', 'add-query', 'update-query'].forEach(event =>
-                    document.querySelector(event === 'submit' ? '#log_explorer_form' : '#filterElement')?.addEventListener(event, () => updateChartData(chart, opt, query, true, widgetData))
-                  );
-
-                  window.addEventListener('unload', () => {
-                    clearInterval(intervalId);
-                    resizeObserver.disconnect();
+                  const createSeriesConfig = (name, index, yAxisLabel) => ({
+                    type: CHART_TYPE,
+                    name,
+                    stack: CHART_TYPE == 'line'? undefined : yAxisLabel!='' ? yAxisLabel : 'units',
+                    showSymbol: false,
+                    showBackground: true,
+                    backgroundStyle: DEFAULT_BACKGROUND_STYLE,
+                    barMaxWidth: '10',
+                    barMinHeight: '1',
+                    encode: { x: 0, y: index + 1 }
                   });
-                };
+                  const updateChartConfiguration = (opt, data, yAxisLabel) => {
+                    if (!data) return opt;
+                    const columnNames = data[0]?.slice(1);
+                    opt.series = columnNames?.map((name, index) => createSeriesConfig(name, index, yAxisLabel));
+                    opt.legend.data = columnNames;
+                    return opt;
+                  };
+                  const updateChartData = async (chart, opt, shouldFetch, widgetData) => {
+                    if (!shouldFetch) return;
 
-                init(${echartOpt}, "${chartId}", ${query}, "${theme}", "${yAxisLabel}", ${pid});
-              })();
-          |]
+                    try {
+                      const paramM = new URLSearchParams(window.location.search);
+                      paramM.set("pid", widgetData.pid)
+                      paramM.set("query_raw",widgetData.query);
+                      if (widgetData.querySQL!="") paramM.set("query_sql",widgetData.querySQL);
+
+                      const response = await (await fetch(`/chart_data?${paramM.toString()}`)).json();
+                      opt.xAxis = opt.xAxis || {};
+                      opt.xAxis.min = response.from * 1000;
+                      opt.xAxis.max = response.to * 1000;
+
+                      // opt.dataset.source = [response.headers, ...response.dataset];
+                      opt.dataset.source = [response.headers, ...response.dataset.map(row => [row[0] * 1000, ...row.slice(1)])];
+                      document.getElementById(widgetData.chartId + "Subtitle").innerHTML = `${response.rows_per_min.toFixed(2)} rows/min`
+                      document.getElementById(widgetData.chartId + "Value").innerHTML = `$${SUMMARIZE_BY_PREFIX} ${Number(response.stats[SUMMARIZE_BY]).toLocaleString()}`
+                      document.getElementById(widgetData.chartId + "Value").classList.remove("hidden");
+
+                      // How should rowsPerMin and Count be updated? Direct to DOM? Passing the ids as an arg?
+                      const finalOpts = updateChartConfiguration(opt, opt.dataset.source, widgetData.yAxisLabel)
+                      chart.hideLoading();
+                      chart.setOption(finalOpts);
+                    } catch (error) {
+                      console.error('Failed to fetch new data:', error);
+                    }
+                  };
+                 const init = (opt, chartId, query, querySQL, theme, yAxisLabel, pid) => {
+                    const chartEl = document.getElementById(chartId);
+                    const chart = echarts.init(chartEl, theme);
+                    chart.group = 'default';
+                    const liveStreamCheckbox = document.getElementById('streamLiveData');
+
+                    // multiply by 1000 to convert unix timestamp in seconds to milliseconds needed by echarts. Useful for eager charts
+                    opt.dataset.source = opt.dataset?.source?.map(row => [row[0] * 1000, ...row.slice(1)]) ?? null;
+
+                    chart.setOption(updateChartConfiguration(opt, opt.dataset.source, yAxisLabel));
+
+                    const resizeObserver = new ResizeObserver((_entries) => requestAnimationFrame(() => echarts.getInstanceByDom(chartEl).resize()));
+                    resizeObserver.observe(chartEl);
+                    const widgetData = {yAxisLabel, pid, query,querySQL, chartId}
+
+                    if (liveStreamCheckbox) {
+                      liveStreamCheckbox.addEventListener('change', () => {
+                        if (checkbox.checked) {
+                          intervalId = setInterval(() => updateChartData(chart, opt, true, widgetData), FETCH_INTERVAL);
+                        } else {
+                          clearInterval(intervalId);
+                          intervalId = null;
+                        }
+                      });
+                    }
+
+                    if (!opt.dataset.source) {
+                      chart.showLoading();
+                      const observer = new IntersectionObserver(entries => {
+                          if (entries[0]?.isIntersecting) {
+                             updateChartData(chart, opt,true, widgetData)
+                             observer.disconnect();
+                          }
+                      });
+                      observer.observe(document.getElementById(chartId));
+                    }
+
+                    ['submit', 'add-query', 'update-query'].forEach(event =>
+                      document.querySelector(event === 'submit' ? '#log_explorer_form' : '#filterElement')?.addEventListener(event, () => updateChartData(chart, opt, query, true, widgetData))
+                    );
+
+                    window.addEventListener('unload', () => {
+                      clearInterval(intervalId);
+                      resizeObserver.disconnect();
+                    });
+                  };
+
+                  init(${echartOpt}, "${chartId}", ${query},
+                  `${querySQL}`,
+                  "${theme}", "${yAxisLabel}", ${pid});
+                })();
+            |]
 
 
 -----------------------------------------------------------------------------
@@ -285,8 +367,8 @@ widgetToECharts widget =
             AE..= AE.object
               [ "type" AE..= ("time" :: Text)
               , "scale" AE..= True
-              , "min" AE..= maybe AE.Null (AE.Number . fromIntegral) (widget ^? #dataset . _Just . #from . _Just)
-              , "max" AE..= maybe AE.Null (AE.Number . fromIntegral) (widget ^? #dataset . _Just . #to . _Just)
+              , "min" AE..= maybe AE.Null (AE.Number . fromIntegral . (*1000)) (widget ^? #dataset . _Just . #from . _Just)
+              , "max" AE..= maybe AE.Null (AE.Number . fromIntegral . (*1000)) (widget ^? #dataset . _Just . #to . _Just)
               , "boundaryGap" AE..= ([0, 0.01] :: [Double])
               , "axisLabel" AE..= AE.object ["show" AE..= axisVisibility]
               , "show" AE..= axisVisibility
@@ -347,6 +429,7 @@ createSeries widgetType query =
 -- Helper: Map widget type to ECharts chart type
 mapWidgetTypeToChartType :: WidgetType -> Text
 mapWidgetTypeToChartType WTTimeseries = "bar"
+mapWidgetTypeToChartType WTTimeseriesLine = "line"
 mapWidgetTypeToChartType WTTimeseriesStat = "line"
 mapWidgetTypeToChartType WTDistribution = "bar"
 mapWidgetTypeToChartType _ = "bar"

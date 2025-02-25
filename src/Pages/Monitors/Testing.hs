@@ -84,6 +84,7 @@ testingGetH pid filterTM timeFilter = do
           { sessM = Just sess
           , currProject = Just project
           , pageTitle = "API Tests"
+          , prePageTitle = Just "Monitors & Alerts"
           , menuItem = Just "Monitors & Alerts"
           , docsLink = Just "https://apitoolkit.io/docs/monitors/multistep-tests/"
           , pageActions = Just $ a_ [href_ $ "/p/" <> pid.toText <> "/monitors/collection", class_ "btn btn-sm blue-outline-btn space-x-2"] $ Utils.faSprite_ "plus" "regular" "h-4" >> "new tests"
@@ -200,6 +201,7 @@ collectionDashboard pid cid = do
           { sessM = Just sess
           , currProject = Just project
           , pageTitle = "API Tests (Beta)"
+          , prePageTitle = Just "Monitors & Alerts"
           , navTabs = Just $ pageTabs url overviewUrl
           }
   case collectionM of

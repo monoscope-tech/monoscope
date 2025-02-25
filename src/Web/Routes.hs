@@ -28,7 +28,6 @@ import Pages.AutoComplete qualified as AutoComplete
 import Pages.BodyWrapper (PageCtx (..))
 import Pages.CP qualified as CP
 import Pages.Charts.Charts qualified as Charts
-import Pages.Dashboard qualified as Dashboard
 import Pages.Dashboards qualified as Dashboards
 import Pages.Endpoints.Routes qualified as EndpointsRoutes
 import Pages.Endpoints.Server qualified as EndpointsRoutes
@@ -120,7 +119,7 @@ type role CookieProtectedRoutes nominal
 
 type CookieProtectedRoutes :: Type -> Type
 data CookieProtectedRoutes mode = CookieProtectedRoutes
-  { dashboardGet :: mode :- "p" :> ProjectId :> QPT "from" :> QPT "to" :> QPT "since" :> GetRedirect '[HTML] (Headers '[Header "Location" Text] (PageCtx Dashboard.DashboardGet))
+  { dashboardGet :: mode :- "p" :> ProjectId :> GetRedirect '[HTML] (Headers '[Header "Location" Text] NoContent)
   , dashboardsGet :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> QPT "file" :> QPT "from" :> QPT "to" :> QPT "since" :> Get '[HTML] (RespHeaders (PageCtx Dashboards.DashboardGet))
   , dashboardsGetList :: mode :- "p" :> ProjectId :> "dashboards" :> Get '[HTML] (RespHeaders (PageCtx Dashboards.DashboardsGet))
   , dashboardsPost :: mode :- "p" :> ProjectId :> "dashboards" :> ReqBody '[FormUrlEncoded] Dashboards.DashboardForm :> Post '[HTML] (RespHeaders NoContent)
@@ -143,7 +142,7 @@ data CookieProtectedRoutes mode = CookieProtectedRoutes
   , queryBuilderAutocomplete :: mode :- "p" :> ProjectId :> "query_builder" :> "autocomplete" :> QPT "category" :> QPT "prefix" :> Get '[JSON] (RespHeaders AE.Value)
   , swaggerGenerateGet :: mode :- "p" :> ProjectId :> "generate_swagger" :> Get '[JSON] (RespHeaders AE.Value)
   , chartsGet :: mode :- "charts_html" :> QP "chart_type" Charts.ChartType :> QPT "query_raw" :> QPT "queryAST" :> QueryParam "pid" Projects.ProjectId :> QP "group_by" Charts.GroupBy :> QP "query_by" [Charts.QueryBy] :> QP "num_slots" Int :> QP "limit" Int :> QP "theme" Text :> QPT "id" :> QP "show_legend" Bool :> QP "show_axes" Bool :> QPT "since" :> QPT "from" :> QPT "to" :> QPT "source" :> Get '[HTML] (RespHeaders (Html ()))
-  , chartsDataGet :: mode :- "chart_data" :> QueryParam "pid" Projects.ProjectId :> QPT "query_raw" :> QPT "queryAST" :> QPT "since" :> QPT "from" :> QPT "to" :> QPT "source" :> Get '[JSON] Charts.MetricsData
+  , chartsDataGet :: mode :- "chart_data" :> QueryParam "pid" Projects.ProjectId :> QPT "query_raw" :> QPT "queryAST" :> QPT "query_sql" :> QPT "since" :> QPT "from" :> QPT "to" :> QPT "source" :> Get '[JSON] Charts.MetricsData
   , surveyPut :: mode :- "p" :> ProjectId :> "survey" :> ReqBody '[FormUrlEncoded] Survey.SurveyForm :> Post '[HTML] (RespHeaders Survey.SurveyPut)
   , surveyGet :: mode :- "p" :> ProjectId :> "about_project" :> Get '[HTML] (RespHeaders Survey.SurveyGet)
   , editField :: mode :- "p" :> ProjectId :> "fields" :> Capture "field_id" Fields.FieldId :> ReqBody '[FormUrlEncoded] FieldDetails.EditFieldForm :> Post '[HTML] (RespHeaders FieldDetails.FieldPut)
@@ -156,7 +155,7 @@ data CookieProtectedRoutes mode = CookieProtectedRoutes
 cookieProtectedServer :: Servant.ServerT (Servant.NamedRoutes CookieProtectedRoutes) ATAuthCtx
 cookieProtectedServer =
   CookieProtectedRoutes
-    { dashboardGet = Dashboard.dashboardGetH
+    { dashboardGet = Dashboards.entrypointGetH
     , dashboardsGet = Dashboards.dashboardGetH
     , dashboardsGetList = Dashboards.dashboardsGetH
     , dashboardsPost = Dashboards.dashboardsPostH

@@ -69,9 +69,7 @@ library
       Pages.Charts.Charts
       Pages.Components
       Pages.CP
-      Pages.Dashboard
       Pages.Dashboards
-      Pages.DashboardSpec
       Pages.Endpoints.ApiCatalog
       Pages.Endpoints.ApiCatalogSpec
       Pages.Endpoints.EndpointComponents

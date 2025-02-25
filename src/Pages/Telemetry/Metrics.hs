@@ -1,35 +1,25 @@
 module Pages.Telemetry.Metrics (metricsOverViewGetH, metricDetailsGetH, MetricsOverViewGet (..), metricBreakdownGetH) where
 
+import Data.Default
+import Data.Map qualified as Map
+import Data.Text qualified as T
 import Data.Vector qualified as V
 import Effectful.Time qualified as Time
 import Lucid
-import Models.Projects.Projects qualified as Projects
-import Models.Telemetry.Telemetry qualified as Telemetry
-import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
-import Relude
-import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
-
-import Data.Default
-import Data.List (foldl')
-import Data.Map qualified as Map
-import Data.Text qualified as T
-
-import Models.Users.Sessions qualified as Sessions
-import Pkg.Components qualified as Components
-import Utils (faSprite_, parseTime)
-
-import Data.Aeson qualified as AE
-import Data.Function (on)
-import Data.List qualified as L
-import Data.Text (Text, unpack)
-import Data.Text qualified as T
-import Data.Time (UTCTime)
 import Lucid.Htmx
 import Lucid.Hyperscript (__)
+import Models.Projects.Projects qualified as Projects
+import Models.Telemetry.Telemetry qualified as Telemetry
+import Models.Users.Sessions qualified as Sessions
 import NeatInterpolation (text)
+import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
 import Pages.Components qualified as Components
 import Pages.Telemetry.Utils (metricsTree)
+import Pkg.Components qualified as Components
 import Pkg.Components.Widget qualified as Widget
+import Relude
+import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
+import Utils (faSprite_, parseTime)
 
 
 metricsOverViewGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Int -> ATAuthCtx (RespHeaders MetricsOverViewGet)
@@ -151,28 +141,16 @@ chartList pid source metricList nextUrl = do
                   then window.evalScriptsFromContent(#global-data-drawer-content)|]
       div_ [class_ "h-52"]
         $ toHtml
-        $ Widget.Widget
-          { wType = Widget.WTDistribution
-          , id = Nothing
-          , title = Just metric.metricName
-          , subtitle = Nothing
-          , sql = Nothing
-          , query = Just $ "metric_name = \"" <> metric.metricName <> "\""
-          , queries = Nothing
-          , layout = Just $ Widget.Layout{x = Just 0, y = Just 0, w = Just 2, h = Just 1}
-          , xAxis = Nothing
-          , yAxis = Nothing
-          , unit = Just metric.metricUnit
-          , value = Nothing
-          , wData = Nothing
-          , hideLegend = Just True
-          , theme = Nothing
-          , dataset = Nothing
-          , eager = Just True
-          , _projectId = Just pid
-          , expandBtnFn = Just expandBtn
-          , icon = Nothing
-          , timeseriesStatAggregate = Nothing
+        $ def
+          { Widget.wType = Widget.WTDistribution
+          , Widget.title = Just metric.metricName
+          , Widget.query = Just $ "metric_name = \"" <> metric.metricName <> "\""
+          , Widget.layout = Just $ Widget.Layout{x = Just 0, y = Just 0, w = Just 2, h = Just 1}
+          , Widget.unit = Just metric.metricUnit
+          , Widget.hideLegend = Just True
+          , Widget.eager = Just True
+          , Widget._projectId = Just pid
+          , Widget.expandBtnFn = Just expandBtn
           }
   when (length metricList > 19)
     $ a_ [hxTrigger_ "intersect once", hxSwap_ "outerHTML", hxGet_ nextUrl] pass
@@ -194,11 +172,6 @@ dataPointsPage pid metrics = do
         div_ [class_ "w-full"] $ do
           let metrMap = Map.fromList $ V.toList $ V.map (\mdp -> (mdp.metricName, mdp)) metrics
           metricsTree pid metrics metrMap
-
-
-metricsExploreGet :: Projects.ProjectId -> ATAuthCtx (RespHeaders (Html ()))
-metricsExploreGet pid = do
-  addRespHeaders $ div_ [class_ "flex flex-col gap-2"] "Hello world"
 
 
 metricDetailsGetH :: Projects.ProjectId -> Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))

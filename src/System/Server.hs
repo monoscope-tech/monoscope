@@ -71,8 +71,8 @@ runServer appLogger env = do
 
   let wrappedServer =
         heartbeatMiddleware
-          . loggingMiddleware
-          . const
+          -- . loggingMiddleware
+          -- . const
           $ server
   let bgJobWorker = BackgroundJobs.jobsWorkerInit appLogger env
 
