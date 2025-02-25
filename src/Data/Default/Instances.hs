@@ -3,7 +3,6 @@
 module Data.Default.Instances () where
 
 import Data.Aeson.Types qualified as AET
-import Data.Bool (Bool (False))
 import Data.CaseInsensitive (CI, FoldCase)
 import Data.CaseInsensitive qualified as CI (mk)
 import Data.Default
@@ -16,8 +15,10 @@ import Relude.Unsafe qualified as Unsafe
 
 
 #if __GLASGOW_HASKELL__ < 910
+import Data.Bool (Bool (False))
+
 instance Default Bool where
-  def = Unsafe.read "2019-08-31 05:14:37.537084021 UTC"
+  def = False 
   {-# INLINE def #-}
 #endif
 

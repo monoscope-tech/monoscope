@@ -1,9 +1,6 @@
 module Pages.Projects.ProjectsSpec (spec) where
 
-import Control.Lens (Traversal', preview, (^?))
 import Data.Generics.Labels ()
-import Data.Generics.Product (HasField (field))
-import Data.Generics.Sum (AsConstructor (_Ctor), _As)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Models.Projects.ProjectMembers qualified as ProjectMembers
