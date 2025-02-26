@@ -120,8 +120,6 @@ library
       Pages.Specification.GenerateSwaggerSpec
       Pages.Specification.Routes
       Pages.Specification.Server
-      Pages.Survey
-      Pages.SurveySpec
       Pages.Telemetry.Metrics
       Pages.Telemetry.Routes
       Pages.Telemetry.Spans
