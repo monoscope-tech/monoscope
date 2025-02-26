@@ -35,11 +35,11 @@ getServiceColor s serviceColors = fromMaybe "bg-black" $ HM.lookup s serviceColo
 getRequestDetails :: Telemetry.SpanRecord -> Maybe (Text, Text, Text, Int)
 getRequestDetails spanRecord = case spanRecord.attributes of
   AE.Object r -> case KEM.lookup "http.method" r of
-    Just (AE.String method) -> Just ("HTTP", method, fromMaybe "/" $ getText "http.url" r, fromMaybe 0 $ getInt "http.status_code" r)
+    Just (AE.String method) -> Just ("HTTP", method, getUrl r, getStatus r)
     _ -> case KEM.lookup "rpc.system" r of
-      Just (AE.String "grpc") -> Just ("GRPC", fromMaybe "" $ getText "rpc.service" r, fromMaybe "" $ getText "rpc.method" r, fromMaybe 0 $ getInt "rpc.grpc.status_code" r)
+      Just (AE.String "grpc") -> Just ("GRPC", fromMaybe "" $ getText "rpc.service" r, fromMaybe "" $ getText "rpc.method" r, getStatus r)
       _ -> case KEM.lookup "http.request.method" r of
-        Just (AE.String method) -> Just ("HTTP", method, fromMaybe "/" $ getText "http.request.url" r, fromMaybe 0 $ getInt "http.response.status_code" r)
+        Just (AE.String method) -> Just ("HTTP", method, getUrl r, getStatus r)
         _ -> Nothing
   _ -> Nothing
   where
@@ -52,6 +52,11 @@ getRequestDetails spanRecord = case spanRecord.attributes of
       Just (AE.Number n) -> toBoundedInteger n
       Just (AE.String s) -> readMaybe $ toString s
       _ -> Nothing
+    (<->) = mplus
+    getUrl :: AE.Object -> Text
+    getUrl v = fromMaybe "/" $ getText "http.route" v <-> getText "url.path" v <-> getText "http.url" v <-> getText "http.target" v
+    getStatus :: AE.Object -> Int
+    getStatus v = fromMaybe 0 $ getInt "http.status_code" v <-> getInt "http.response.status_code" v <-> getInt "rpc.grpc.status_code" v
 
 
 spanHasErrors :: Telemetry.SpanRecord -> Bool
@@ -137,11 +142,11 @@ buildTree metricMap parentId =
     Nothing -> []
     Just metrics ->
       [ MetricTree
-        MetricNode
-          { parent = mt.parent
-          , current = mt.current
-          }
-        (buildTree metricMap (if mt.parent == "___root___" then Just mt.current else Just $ mt.parent <> "." <> mt.current))
+          MetricNode
+            { parent = mt.parent
+            , current = mt.current
+            }
+          (buildTree metricMap (if mt.parent == "___root___" then Just mt.current else Just $ mt.parent <> "." <> mt.current))
       | mt <- metrics
       ]
 
