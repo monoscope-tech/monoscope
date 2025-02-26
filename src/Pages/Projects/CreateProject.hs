@@ -58,7 +58,7 @@ import Servant.API.ResponseHeaders (Headers)
 import System.Config
 
 import System.Types (ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders, addSuccessToast, redirectCS)
-import Utils (insertIfNotExist, isDemoAndNotSudo)
+import Utils (insertIfNotExist, isDemoAndNotSudo, lookupValueText)
 import Web.FormUrlEncoded (FromForm)
 
 
@@ -292,7 +292,12 @@ pricingUpdateH pid PricingUpdateForm{orderId} = do
               steps = project.onboardingStepsCompleted
               newStepsComp = insertIfNotExist "Pricing" steps
           v <- dbtToEff $ Projects.updateProjectPricing pid productName subId firstSubId orderId newStepsComp
+          -- onboarding means it's the users first time adding pricing
           when (project.paymentPlan == "ONBOARDING") $ do
+            _ <- liftIO $ withResource appCtx.pool \conn -> do
+              let fullName = sess.user.firstName <> " " <> sess.user.lastName
+                  foundUsFrom = maybe "" (\x -> fromMaybe "" $ lookupValueText x "foundUsFrom") project.questions
+              createJob conn "background_jobs" $ BackgroundJobs.SendDiscordData sess.user.id pid fullName [foundUsFrom] foundUsFrom
             users <- dbtToEff $ ProjectMembers.selectActiveProjectMembers pid
             forM_ users \user -> do
               ConvertKit.addUserOrganization envCfg.convertkitApiKey (CI.original user.email) pid.toText project.title productName
