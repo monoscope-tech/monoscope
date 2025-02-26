@@ -267,6 +267,7 @@ renderChart widget = do
                       opt.xAxis = opt.xAxis || {};
                       opt.xAxis.min = response.from * 1000;
                       opt.xAxis.max = response.to * 1000;
+                      // opt.yAxis.max = response.stats.max;
 
                       // opt.dataset.source = [response.headers, ...response.dataset];
                       opt.dataset.source = [response.headers, ...response.dataset.map(row => [row[0] * 1000, ...row.slice(1)])];
