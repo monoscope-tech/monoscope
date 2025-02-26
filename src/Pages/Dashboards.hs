@@ -149,7 +149,7 @@ dashboardGetH pid dashId fileM fromDStr toDStr sinceStr = do
             then do
               case widget.wType of
                 Widget.WTAnomalies -> do
-                  issues <- dbtToEff $ Anomalies.selectIssues pid Nothing (Just False) (Just False) Nothing (Just 10) (0)
+                  issues <- dbtToEff $ Anomalies.selectIssues pid Nothing (Just False) (Just False) Nothing (Just 2) (0)
                   let issuesVM = V.map (AnomalyList.IssueVM False now "24h") issues
                   pure
                     $ widget
@@ -170,20 +170,21 @@ dashboardGetH pid dashId fileM fromDStr toDStr sinceStr = do
                 _ -> do
                   metricsD <-
                     Charts.queryMetrics (Just pid) widget.query Nothing widget.sql sinceStr fromDStr toDStr Nothing
-                  pure
-                    $ widget
-                    & #dataset
-                      ?~ Widget.WidgetDataset
-                        { source =
-                            AE.toJSON
-                              $ V.cons
-                                (AE.toJSON <$> metricsD.headers)
-                                (AE.toJSON <<$>> metricsD.dataset)
-                        , rowsPerMin = metricsD.rowsPerMin
-                        , value = Just metricsD.rowsCount
-                        , from = metricsD.from
-                        , to = metricsD.to
-                        }
+                  pure $
+                    widget
+                      & #dataset
+                        ?~ Widget.WidgetDataset
+                          { source =
+                              AE.toJSON $
+                                V.cons
+                                  (AE.toJSON <$> metricsD.headers)
+                                  (AE.toJSON <<$>> metricsD.dataset)
+                          , rowsPerMin = metricsD.rowsPerMin
+                          , value = Just metricsD.rowsCount
+                          , from = metricsD.from
+                          , to = metricsD.to
+                          , stats = metricsD.stats
+                          }
             else pure widget
         -- Recursively process child widgets, if any.
         case widget'.children of

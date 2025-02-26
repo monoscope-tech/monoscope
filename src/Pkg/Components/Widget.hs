@@ -14,8 +14,10 @@ import Models.Projects.Projects qualified as Projects
 import NeatInterpolation
 import Relude
 import Text.Printf (printf)
+import Data.Scientific (fromFloatDigits)
 import Text.Slugify (slugify)
 import Utils (faSprite_)
+import Pages.Charts.Charts qualified as Charts
 
 
 data Query = Query
@@ -129,6 +131,7 @@ data WidgetDataset = WidgetDataset
   , value :: Maybe Double
   , from :: Maybe Int
   , to :: Maybe Int
+  , stats :: Maybe Charts.MetricsStats
   }
   deriving stock (Show, Generic, THS.Lift)
   deriving anyclass (NFData, Default)
@@ -264,6 +267,7 @@ renderChart widget = do
                       opt.xAxis = opt.xAxis || {};
                       opt.xAxis.min = response.from * 1000;
                       opt.xAxis.max = response.to * 1000;
+                      // opt.yAxis.max = response.stats.max;
 
                       // opt.dataset.source = [response.headers, ...response.dataset];
                       opt.dataset.source = [response.headers, ...response.dataset.map(row => [row[0] * 1000, ...row.slice(1)])];
@@ -387,6 +391,7 @@ widgetToECharts widget =
             AE..= AE.object
               [ "type" AE..= ("value" :: Text)
               , "min" AE..= (0 :: Int)
+              , "max" AE..= maybe AE.Null (AE.Number . fromFloatDigits) (widget ^? #dataset . _Just . #stats . _Just . #max)
               , "splitLine" AE..= AE.object ["show" AE..= gridLinesVisibility]
               , "axisLabel" AE..= AE.object ["show" AE..= axisVisibility]
               , "show" AE..= axisVisibility

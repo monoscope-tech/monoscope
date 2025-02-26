@@ -43,30 +43,13 @@ import Data.Aeson qualified as AE
 import Data.Aeson.Key qualified as AEK
 import Data.Aeson.KeyMap qualified as KEM
 import Data.ByteString.Base16 qualified as B16
-import Data.Time (UTCTime)
-import Data.UUID (UUID)
-import Data.UUID qualified as UUID
-import Data.Vector qualified as V
-import Database.PostgreSQL.Entity.DBT (QueryNature (..), executeMany, query, queryOne)
-import Database.PostgreSQL.Transact qualified as DBT
-
-import Data.Aeson (Value)
-import Data.Aeson.Types (parseMaybe)
-import Data.ByteString.Lazy (fromStrict)
-import Data.Text.Encoding (encodeUtf8)
-import Database.PostgreSQL.Simple (FromRow, ResultError (..), ToRow)
-import Database.PostgreSQL.Simple.FromField (FromField (..))
-import Database.PostgreSQL.Simple.FromRow
-import Database.PostgreSQL.Simple.ToRow
-
-import Data.Default (Default)
 import Data.Text qualified as T
 import Data.Time (TimeZone (..), UTCTime, formatTime, utcToZonedTime)
 import Data.Time.Format (defaultTimeLocale)
-import Data.UUID (UUID)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity.DBT (QueryNature (..), executeMany, query, queryOne)
+import Database.PostgreSQL.Simple (Only (..))
 import Database.PostgreSQL.Simple.FromField (FromField (..))
 import Database.PostgreSQL.Simple.FromRow
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
@@ -74,6 +57,7 @@ import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.ToField (ToField)
 import Database.PostgreSQL.Simple.ToRow
 import Database.PostgreSQL.Simple.Types (Query (..))
+import Database.PostgreSQL.Transact qualified as DBT
 import Deriving.Aeson qualified as DAE
 import Deriving.Aeson.Stock qualified as DAE
 import Effectful
@@ -121,8 +105,8 @@ data Trace = Trace
 
 
 data LogRecord = LogRecord
-  { projectId :: UUID
-  , id :: UUID
+  { projectId :: UUID.UUID
+  , id :: UUID.UUID
   , timestamp :: UTCTime
   , observedTimestamp :: UTCTime
   , traceId :: Text
@@ -151,8 +135,8 @@ instance AE.ToJSON ByteString where
 
 
 data SpanRecord = SpanRecord
-  { uSpanId :: UUID
-  , projectId :: UUID
+  { uSpanId :: UUID.UUID
+  , projectId :: UUID.UUID
   , timestamp :: UTCTime
   , traceId :: Text
   , spanId :: Text
@@ -202,8 +186,8 @@ data SpanLink = SpanLink
 
 
 data MetricRecord = MetricRecord
-  { id :: Maybe UUID
-  , projectId :: UUID
+  { id :: Maybe UUID.UUID
+  , projectId :: UUID.UUID
   , metricName :: Text
   , metricType :: MetricType
   , metricUnit :: Text
