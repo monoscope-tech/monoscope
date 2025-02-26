@@ -300,6 +300,17 @@ function logItemCol(rowData, source, colIdxMap, key, serviceColors, toggleTrace)
         `
       }
       break
+    case 'db_attributes':
+      const dbAttributes = lookupVecObjectByKey(dataArr, colIdxMap, key)
+      console.log(dbAttributes)
+      const { system, statement } = dbAttributes
+      if (system || statement) {
+        return html`
+          ${system ? renderBadge('cbadge-sm badge-neutral border border-strokeWeak bg-fillWeak', system) : nothing}
+          ${statement ? renderBadge('cbadge-sm badge-neutral border border-strokeWeak bg-fillWeak', statement) : nothing}
+        `
+      }
+      break
     case 'rest':
       let val = lookupVecTextByKey(dataArr, colIdxMap, key)
       const { depth, children, traceId, childErrors, hasErrors, expanded, type } = rowData
@@ -330,7 +341,7 @@ function logItemCol(rowData, source, colIdxMap, key, serviceColors, toggleTrace)
                 : html`<div class=${`rounded shrink-0 w-3 h-5 ${errClas}`}></div>`}
               ${type === 'log'
                 ? ['severity_text', 'body'].map((k) => logItemCol(rowData, source, { severity_text: 5, body: 6 }, k))
-                : ['http_attributes', 'status', 'kind', 'span_name'].map((k) => logItemCol(rowData, source, colIdxMap, k))}
+                : ['http_attributes', 'db_attributes', 'status', 'kind', 'span_name'].map((k) => logItemCol(rowData, source, colIdxMap, k))}
             </div>
             <div class="w-24 overflow-visible shrink-0">${logItemCol(rowData, source, colIdxMap, 'duration')}</div>
             ${logItemCol(rowData, source, colIdxMap, 'latency_breakdown', serviceColors)}

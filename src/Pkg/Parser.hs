@@ -330,6 +330,7 @@ defaultSelectSqlQuery (Just SSpans) =
           'url', COALESCE(attributes->'http.route', attributes->'url.path', attributes->'http.target', attributes->'http.url'),
           'status_code', COALESCE(attributes->'http.status_code', attributes->'http.response.status_code')
           ) as http_attributes |]
+  , [fmt| jsonb_build_object('system', attributes->'db.system','statement', attributes->'db.statement') as db_attributes  |]
   , [fmt|LEFT(
         CONCAT(
             'attributes=', COALESCE(attributes, 'null'),
