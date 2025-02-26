@@ -58,13 +58,14 @@ statBox_ pid iconM title helpInfo val bckupValM valClsM = do
 
 
 emptyState_ :: Text -> Text -> Maybe Text -> Text -> Html ()
-emptyState_ title subTxt url btnText = do
-  section_ [class_ "w-max mx-auto my-8 text-center p-5 sm:py-14 sm:px-24 flex flex-col gap-4"] do
-    div_ [] $ faSprite_ "empty" "regular" "h-24 w-24 stroke-blue-500 fill-blue-500"
-    div_ [class_ "flex flex-col gap-2"] do
-      h2_ [class_ "text-xl text-slate-800 font-bold"] $ toHtml title
-      p_ [class_ "text-sm font-medium text-gray-500"] $ toHtml subTxt
-      a_ [href_ $ fromMaybe "" url, class_ "btn text-sm w-max mx-auto btn-primary"] $ toHtml btnText
+emptyState_ title subTxt url btnText =
+  let (processedUrl, targetAttr) = maybe ("", []) (\u -> (u, [target_ "_blank" | "https://" `T.isPrefixOf` u])) url
+   in section_ [class_ "w-max mx-auto my-8 text-center p-5 sm:py-14 sm:px-24 flex flex-col gap-4"] do
+        div_ [] $ faSprite_ "empty" "regular" "h-24 w-24 stroke-blue-500 fill-blue-500"
+        div_ [class_ "flex flex-col gap-2"] do
+          h2_ [class_ "text-xl text-slate-800 font-bold"] $ toHtml title
+          p_ [class_ "text-sm font-medium text-gray-500"] $ toHtml subTxt
+          a_ ([href_ processedUrl, class_ "btn text-sm w-max mx-auto btn-primary"] ++ targetAttr) $ toHtml btnText
 
 
 getTargetPage :: Text -> Text

@@ -81,30 +81,13 @@ library
       Pages.Endpoints.Server
       Pages.Fields.FieldDetails
       Pages.Fields.FieldDetailsSpec
-      Pages.IntegrationDemos.AdonisJS
       Pages.IntegrationDemos.Csharp
-      Pages.IntegrationDemos.Django
-      Pages.IntegrationDemos.DotNet
-      Pages.IntegrationDemos.Echo
-      Pages.IntegrationDemos.FastApi
-      Pages.IntegrationDemos.Flask
-      Pages.IntegrationDemos.Gin
       Pages.IntegrationDemos.Golang
-      Pages.IntegrationDemos.GoNative
-      Pages.IntegrationDemos.GorillaMux
       Pages.IntegrationDemos.Java
       Pages.IntegrationDemos.Javascript
-      Pages.IntegrationDemos.Laravel
-      Pages.IntegrationDemos.NestJs
       Pages.IntegrationDemos.Phoenix
       Pages.IntegrationDemos.Php
-      Pages.IntegrationDemos.Pyramid
       Pages.IntegrationDemos.Python
-      Pages.IntegrationDemos.Slim
-      Pages.IntegrationDemos.Springboot
-      Pages.IntegrationDemos.Symfony
-      Pages.IntegrationGuides
-      Pages.IntegrationGuidesSpec
       Pages.LemonSqueezy
       Pages.Log
       Pages.LogExplorer.LogItem

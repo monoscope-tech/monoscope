@@ -32,7 +32,6 @@ import Pages.Dashboards qualified as Dashboards
 import Pages.Endpoints.Routes qualified as EndpointsRoutes
 import Pages.Endpoints.Server qualified as EndpointsRoutes
 import Pages.Fields.FieldDetails qualified as FieldDetails
-import Pages.IntegrationGuides qualified as IntegrationGuides
 import Pages.LemonSqueezy qualified as LemonSqueezy
 import Pages.LogExplorer.Routes qualified as LogExplorerRoutes
 import Pages.Monitors.Routes qualified as MonitorsRoutes
@@ -146,7 +145,6 @@ data CookieProtectedRoutes mode = CookieProtectedRoutes
   , surveyPut :: mode :- "p" :> ProjectId :> "survey" :> ReqBody '[FormUrlEncoded] Survey.SurveyForm :> Post '[HTML] (RespHeaders Survey.SurveyPut)
   , surveyGet :: mode :- "p" :> ProjectId :> "about_project" :> Get '[HTML] (RespHeaders Survey.SurveyGet)
   , editField :: mode :- "p" :> ProjectId :> "fields" :> Capture "field_id" Fields.FieldId :> ReqBody '[FormUrlEncoded] FieldDetails.EditFieldForm :> Post '[HTML] (RespHeaders FieldDetails.FieldPut)
-  , integrationGuides :: mode :- "p" :> ProjectId :> "integration_guides" :> QPT "sdk" :> QPT "error_reporting" :> QPT "dependency_monitoring" :> Get '[HTML] (RespHeaders IntegrationGuides.IntegrationsGet)
   , manageBillingGet :: mode :- "p" :> ProjectId :> "manage_billing" :> QPT "from" :> Get '[HTML] (RespHeaders LemonSqueezy.BillingGet)
   }
   deriving stock (Generic)
@@ -182,7 +180,6 @@ cookieProtectedServer =
     , surveyPut = Survey.surveyPutH
     , surveyGet = Survey.surveyGetH
     , editField = FieldDetails.fieldPutH
-    , integrationGuides = IntegrationGuides.getH
     , manageBillingGet = LemonSqueezy.manageBillingGetH
     }
 
