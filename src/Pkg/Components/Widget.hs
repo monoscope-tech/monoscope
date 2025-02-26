@@ -4,6 +4,7 @@ import Control.Lens
 import Data.Aeson qualified as AE
 import Data.Default
 import Data.Generics.Labels ()
+import Data.Scientific (fromFloatDigits)
 import Data.Text qualified as T
 import Deriving.Aeson qualified as DAE
 import Deriving.Aeson.Stock qualified as DAES
@@ -12,12 +13,11 @@ import Language.Haskell.TH.Syntax qualified as THS
 import Lucid
 import Models.Projects.Projects qualified as Projects
 import NeatInterpolation
+import Pages.Charts.Charts qualified as Charts
 import Relude
 import Text.Printf (printf)
-import Data.Scientific (fromFloatDigits)
 import Text.Slugify (slugify)
 import Utils (faSprite_)
-import Pages.Charts.Charts qualified as Charts
 
 
 data Query = Query

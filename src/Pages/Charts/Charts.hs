@@ -1,12 +1,11 @@
 {-# LANGUAGE DerivingVia #-}
 {-# LANGUAGE NoFieldSelectors #-}
 
-module Pages.Charts.Charts (chartsGetH, ChartType (..), lazy, ChartExp (..), QueryBy (..), GroupBy (..), queryMetrics, queryFloat, MetricsData (..), MetricsStats(..)) where
+module Pages.Charts.Charts (chartsGetH, ChartType (..), lazy, ChartExp (..), QueryBy (..), GroupBy (..), queryMetrics, queryFloat, MetricsData (..), MetricsStats (..)) where
 
 import Data.Aeson qualified as AE
+import Data.Default
 import Data.Map.Strict qualified as M
-import Data.Default 
-import Language.Haskell.TH.Syntax qualified as THS
 import Data.Text qualified as T
 import Data.Time (UTCTime, addUTCTime, diffUTCTime)
 import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
@@ -24,6 +23,7 @@ import Effectful.Log (Log)
 import Effectful.PostgreSQL.Transact.Effect (DB, dbtToEff)
 import Effectful.State.Static.Local qualified as State
 import Effectful.Time qualified as Time
+import Language.Haskell.TH.Syntax qualified as THS
 import Lucid (Html, class_, div_, id_, script_)
 import Lucid.Htmx (hxGet_, hxSwap_, hxTrigger_)
 import Models.Projects.Projects qualified as Projects

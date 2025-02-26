@@ -49,8 +49,8 @@ apiCatalogH pid sortM timeFilter requestTypeM = do
           , nextFetchUrl = Nothing
           , heading = Nothing
           , zeroState =
-              Just $
-                ItemsList.ZeroState
+              Just
+                $ ItemsList.ZeroState
                   { icon = "empty-set"
                   , title = "No " <> requestType <> " Requests Monitored."
                   , description = "You're currently not monitoring your " <> T.toLower requestType <> " integrations."
@@ -95,11 +95,11 @@ renderapiCatalog pid host timeFilter requestType = div_ [class_ "flex py-4 gap-8
         a_ [href_ $ "/p/" <> pid.toText <> "/endpoints?host=" <> host.host <> "&request_type=" <> requestType, class_ " hover:text-slate-600"] $ toHtml (T.replace "http://" "" $ T.replace "https://" "" host.host)
         a_ [href_ $ "/p/" <> pid.toText <> "/log_explorer?query=host%3D%3D" <> "\"" <> host.host <> "\"", class_ "text-brand hover:text-slate-600 text-xs"] "View logs"
 
-  div_ [class_ "w-36 flex items-center justify-center"] $
-    span_ [class_ "tabular-nums text-xl", term "data-tippy-content" "Events for this Anomaly in the last 14 days"] $
-      toHtml @String $
-        fmt $
-          commaizeF host.eventCount
+  div_ [class_ "w-36 flex items-center justify-center"]
+    $ span_ [class_ "tabular-nums text-xl", term "data-tippy-content" "Events for this Anomaly in the last 14 days"]
+    $ toHtml @String
+    $ fmt
+    $ commaizeF host.eventCount
 
   div_ [class_ "flex items-center justify-center "] $ do
     div_

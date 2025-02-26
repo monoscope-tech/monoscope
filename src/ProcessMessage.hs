@@ -14,11 +14,8 @@ import Data.ByteString.Lazy.Char8 qualified as BL
 import Data.Cache qualified as Cache
 import Data.Effectful.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUID
-<<<<<<< HEAD
 
 import Data.ByteString.Base64 qualified as B64
-=======
->>>>>>> 22ad7b8f3385f480a2d41eb803a155aab70883f8
 import Data.List qualified as L
 import Data.Text qualified as T
 import Data.Time (addUTCTime, zonedTimeToUTC)
@@ -222,8 +219,8 @@ processRequestMessage recMsg = do
     mpjCache <- withPool appCtx.jobsPool $ Projects.projectCacheById pid'
     pure $ fromMaybe projectCacheDefault mpjCache
   recId <- liftIO nextRandom
-  pure $
-    if False
+  pure
+    $ if False
       then Right (Nothing, Nothing, Nothing, V.empty, V.empty, V.empty)
       else RequestMessages.requestMsgToDumpAndEndpoint projectCacheVal recMsg timestamp recId
 
@@ -263,24 +260,24 @@ convertRequestMessageToSpan rm (spanId, trId) =
 
 createSpanAttributes :: RequestMessages.RequestMessage -> AE.Value
 createSpanAttributes rm =
-  AE.object $
-    [ ("net.host.name", AE.String $ fromMaybe "" rm.host)
-    , ("http.request.method", AE.String $ rm.method)
-    , ("http.request.path_params", AE.String $ Relude.decodeUtf8 $ AE.encode rm.pathParams)
-    , ("http.request.query_params", AE.String $ Relude.decodeUtf8 $ AE.encode rm.queryParams)
-    , ("apitoolkit.msg_id", AE.String $ maybe "" UUID.toText rm.msgId)
-    , ("apitoolkit.parent_id", AE.String $ maybe "" UUID.toText rm.parentId)
-    , ("http.request.body", AE.String $ reqBody)
-    , ("http.response.body", AE.String $ respBody)
-    , ("http.response.status_code", AE.String $ T.pack $ show rm.statusCode)
-    , ("apitoolkit.sdk_type", AE.String $ show rm.sdkType)
-    , ("http.route", maybe (AE.String (T.takeWhile (/= '?') rm.rawUrl)) AE.String rm.urlPath)
-    , ("url.path", AE.String $ rm.rawUrl)
-    ]
-      ++ refererPair
-      ++ errorsPair
-      ++ requestHeaderPairs
-      ++ responseHeaderPairs
+  AE.object
+    $ [ ("net.host.name", AE.String $ fromMaybe "" rm.host)
+      , ("http.request.method", AE.String $ rm.method)
+      , ("http.request.path_params", AE.String $ Relude.decodeUtf8 $ AE.encode rm.pathParams)
+      , ("http.request.query_params", AE.String $ Relude.decodeUtf8 $ AE.encode rm.queryParams)
+      , ("apitoolkit.msg_id", AE.String $ maybe "" UUID.toText rm.msgId)
+      , ("apitoolkit.parent_id", AE.String $ maybe "" UUID.toText rm.parentId)
+      , ("http.request.body", AE.String $ reqBody)
+      , ("http.response.body", AE.String $ respBody)
+      , ("http.response.status_code", AE.String $ T.pack $ show rm.statusCode)
+      , ("apitoolkit.sdk_type", AE.String $ show rm.sdkType)
+      , ("http.route", maybe (AE.String (T.takeWhile (/= '?') rm.rawUrl)) AE.String rm.urlPath)
+      , ("url.path", AE.String $ rm.rawUrl)
+      ]
+    ++ refererPair
+    ++ errorsPair
+    ++ requestHeaderPairs
+    ++ responseHeaderPairs
   where
     refererPair = case rm.referer of
       Just (Left text) -> [("http.request.headers.referer", AE.String text)]
