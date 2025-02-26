@@ -71,7 +71,7 @@ export class LogList extends LitElement {
       },
       {
         root: container,
-        threshold: 0,
+        threshold: [0, 0.2, 0.4, 0.6, 0.8, 1],
       }
     )
     setTimeout(() => {
@@ -99,7 +99,15 @@ export class LogList extends LitElement {
       this.expandedTraces[tracId] = false
     }
     this.expandedTraces[tracId] = !this.expandedTraces[tracId]
-    this.spanListTree = this.buildSpanListTree()
+    const expanded = this.expandedTraces[tracId]
+    const affectedSpans = this.spanListTree.filter((span) => span.traceId === tracId)
+    affectedSpans.forEach((span) => {
+      if (span.depth != 0) {
+        span.show = expanded
+      } else {
+        span.expanded = expanded
+      }
+    })
     this.requestUpdate()
   }
 
@@ -185,7 +193,7 @@ export class LogList extends LitElement {
   }
 
   render() {
-    const [list, renderFunc] = this.source === 'spans' ? [this.spanListTree, this.renderSpan] : [this.logsData, this.logItemRow]
+    const [list, renderFunc] = this.source === 'spans' ? [this.spanListTree.filter((sp) => sp.show), this.renderSpan] : [this.logsData, this.logItemRow]
     return html`
       <div class="relative overflow-y-scroll overflow-x-hidden w-full min-h-full c-scroll pb-10" id="logs_list_container">
         <table class="w-full table-auto ctable min-h-full table-pin-rows table-pin-cols overflow-x-hidden" style="height:1px; --rounded-box:0;">
@@ -302,7 +310,6 @@ function logItemCol(rowData, source, colIdxMap, key, serviceColors, toggleTrace)
       break
     case 'db_attributes':
       const dbAttributes = lookupVecObjectByKey(dataArr, colIdxMap, key)
-      console.log(dbAttributes)
       const { system, statement } = dbAttributes
       if (system || statement) {
         return html`
@@ -545,25 +552,45 @@ function groupSpans(data, logs, colIdxMap, expandedTraces) {
   const START_TIME_NS = colIdxMap['start_time_ns']
   const ERROR_INDEX = colIdxMap['errors']
 
+  const logMap = logs.reduce((map, log) => {
+    if (!map.has(log[2])) map.set(log[2], [])
+    map.get(log[2]).push(log)
+    return map
+  }, new Map())
+
   data.forEach((span) => {
     const traceId = span[TRACE_INDEX]
     const spanId = span[SPAN_INDEX]
     const parentSpanId = span[PARENT_SPAN_INDEX]
-    if (!traceMap.has(traceId)) {
-      traceMap.set(traceId, { traceId, spans: new Map(), minStart: Infinity, duration: 0, logs: logs.filter((log) => log[2] === traceId) })
+
+    let traceData = traceMap.get(traceId)
+    if (!traceData) {
+      traceData = {
+        traceId,
+        spans: new Map(),
+        minStart: Infinity,
+        duration: 0,
+        logs: logMap.get(traceId) || [],
+        trace_start_time: null,
+      }
+      traceMap.set(traceId, traceData)
     }
-    const traceData = traceMap.get(traceId)
+
     const timestamp = new Date(span[TIMESTAMP_INDEX])
     const duration = span[SPAN_DURATION_INDEX]
     const startTime = span[START_TIME_NS]
-    if (!traceData.trace_start_time || timestamp < traceData.trace_start_time) traceData.trace_start_time = timestamp
-    if (traceData.minStart > startTime) traceData.minStart = startTime
-    if (traceData.duration < duration) traceData.duration = duration
+
+    if (!traceData.trace_start_time || timestamp < traceData.trace_start_time) {
+      traceData.trace_start_time = timestamp
+    }
+    traceData.minStart = Math.min(traceData.minStart, startTime)
+    traceData.duration = Math.max(traceData.duration, duration)
+
     traceData.spans.set(spanId, {
       id: spanId,
-      startNs: span[START_TIME_NS],
+      startNs: startTime,
       hasErrors: span[ERROR_INDEX],
-      duration: span[SPAN_DURATION_INDEX],
+      duration,
       children: [],
       parent: parentSpanId,
       data: span,
@@ -573,25 +600,43 @@ function groupSpans(data, logs, colIdxMap, expandedTraces) {
 
   logs.forEach((log) => {
     const traceData = traceMap.get(log[2])
-    traceData.spans.set(log[0], { data: log, type: 'log', spandId: log[3], startNs: log[4], children: [] })
+    if (traceData) {
+      traceData.spans.set(log[0], {
+        data: log,
+        type: 'log',
+        spandId: log[3],
+        startNs: log[4],
+        children: [],
+      })
+    }
   })
 
   traceMap.forEach((traceData) => {
     const spanTree = new Map()
-    traceData.spans.forEach((span, spanId) => {
+    traceData.spans.forEach((span) => {
       if (span.type === 'log') {
-        if (traceData.spans.has(span.spandId)) {
-          traceData.spans.get(span.spandId).children.push(span)
-          traceData.spans.get(span.spandId).children.sort((a, b) => a.startNs - b.startNs)
+        const parentSpan = traceData.spans.get(span.spandId)
+        if (parentSpan) {
+          parentSpan.children.push(span)
+          let i = parentSpan.children.length - 1
+          while (i > 0 && parentSpan.children[i].startNs < parentSpan.children[i - 1].startNs) {
+            ;[parentSpan.children[i], parentSpan.children[i - 1]] = [parentSpan.children[i - 1], parentSpan.children[i]]
+            i--
+          }
         } else {
           spanTree.set(span[0], span)
         }
       } else {
-        if (traceData.spans.has(span.parent)) {
-          traceData.spans.get(span.parent).children.push(span)
-          traceData.spans.get(span.parent).children.sort((a, b) => a.startNs - b.startNs)
+        const parentSpan = traceData.spans.get(span.parent)
+        if (parentSpan) {
+          parentSpan.children.push(span)
+          let i = parentSpan.children.length - 1
+          while (i > 0 && parentSpan.children[i].startNs < parentSpan.children[i - 1].startNs) {
+            ;[parentSpan.children[i], parentSpan.children[i - 1]] = [parentSpan.children[i - 1], parentSpan.children[i]]
+            i--
+          }
         } else {
-          spanTree.set(spanId, span)
+          spanTree.set(span.id, span)
         }
       }
     })
@@ -610,30 +655,38 @@ function groupSpans(data, logs, colIdxMap, expandedTraces) {
 }
 
 function flattenSpanTree(traceArr, expandedTraces = {}) {
-  let result = []
+  const result = []
+
   function traverse(span, traceId, traceStart, traceEnd, depth = 0) {
     let childrenCount = span.children.length
     let childErrors = false
-    let spanInfo = {
+
+    const spanInfo = {
       depth,
       traceStart,
       traceEnd,
-      traceId: traceId,
+      traceId,
       childErrors,
-      expanded: !!expandedTraces[traceId] && depth === 0,
+      show: expandedTraces[traceId] || depth === 0,
+      expanded: expandedTraces[traceId] && depth === 0,
       ...span,
       children: childrenCount,
-      childrenTimeSpans: span.children.map((child) => {
-        return { startNs: child.startNs, duration: child.duration, data: child.data }
-      }),
+      childrenTimeSpans: span.children.map((child) => ({
+        startNs: child.startNs,
+        duration: child.duration,
+        data: child.data,
+      })),
     }
-    if (expandedTraces[traceId] || depth === 0) result.push(spanInfo)
-    span.children.forEach((span) => {
-      childErrors = span.hasErrors ? true : childErrors
-      const [count, errors] = traverse(span, traceId, traceStart, traceEnd, depth + 1)
+
+    result.push(spanInfo)
+
+    span.children.forEach((child) => {
+      childErrors = child.hasErrors || childErrors
+      const [count, errors] = traverse(child, traceId, traceStart, traceEnd, depth + 1)
       childrenCount += count
       childErrors = childErrors || errors
     })
+
     spanInfo.children = childrenCount
     spanInfo.childErrors = childErrors
     return [childrenCount, childErrors]
@@ -644,5 +697,6 @@ function flattenSpanTree(traceArr, expandedTraces = {}) {
       traverse(span, trace.traceId, trace.startTime, trace.duration, 0)
     })
   })
+
   return result
 }
