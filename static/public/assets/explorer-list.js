@@ -59,7 +59,7 @@ export class LogList extends LitElement {
     const loader = document.querySelector('#loader')
     const container = document.querySelector('#logs_list_container')
     if (!loader || !container) {
-      console.error('Loader or container not found', { loader, container })
+      console.warn('Loader or container not found', { loader, container })
       return
     }
 
@@ -194,6 +194,8 @@ export class LogList extends LitElement {
               ${this.logsColumns.map((column) => this.logTableHeading('', column))}
             </tr>
           </thead>
+          ${list.length === 0 ? emptyState(this.source, this.logsColumns.length) : nothing}
+
           <tbody class="w-full log-item-table-body">
             ${virtualize({ items: list, renderItem: renderFunc })}
           </tbody>
@@ -481,6 +483,25 @@ function spanLatencyBreakdown({ start, duration, traceEnd, color, children }) {
       })}
     </div>
   </div>`
+}
+
+function emptyState(source, cols) {
+  let title = `No ${source} found`
+  let subText = `You're either not sending ${source} to APItoolkit yet or no results matched your query/filter`
+  return html`
+    <tr>
+      <td colspan=${String(cols)}>
+        <div class="w-max mx-auto my-8 text-center p-5 sm:py-14 sm:px-24 flex flex-col gap-4">
+          <div>${faSprite('empty', 'regular', 'h-24 w-24 mx-auto stroke-blue-500 fill-blue-500')}</div>
+          <div class="flex flex-col gap-2">
+            <h2 class="text-xl text-slate-800 font-bold">${title}</h2>
+            <p class="text-sm max-w-4xl font-medium text-gray-500">${subText}</p>
+            <a href="https://apitoolkit.io/docs/sdks/" target="_BLANK" class="btn text-sm w-max mx-auto btn-primary">Read integration guides</a>
+          </div>
+        </div>
+      </td>
+    </tr>
+  `
 }
 
 function toggleLogRow(event, source) {
