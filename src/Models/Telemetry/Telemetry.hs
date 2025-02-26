@@ -78,6 +78,7 @@ import Deriving.Aeson qualified as DAE
 import Deriving.Aeson.Stock qualified as DAE
 import Effectful
 
+import Data.ByteString.Base64 qualified as B64
 import Database.PostgreSQL.Simple (Only (..))
 import Effectful.PostgreSQL.Transact.Effect (DB, dbtToEff)
 import Models.Apis.RequestDumps qualified as RequestDumps
@@ -633,11 +634,15 @@ convertSpanToRequestMessage sp instrumentationScope =
     messageId = UUID.fromText $ fromMaybe "" $ getSpanAttribute "apitoolkit.msg_id" sp.attributes
     parentId = UUID.fromText $ fromMaybe "" $ getSpanAttribute "apitoolkit.parent_id" sp.attributes
     referer = Just $ Left (fromMaybe "" $ getSpanAttribute "http.request.headers.referer" sp.attributes) :: Maybe (Either Text [Text])
-    requestBody = fromMaybe "" $ getSpanAttribute "http.request.body" sp.attributes
+    requestBody' = fromMaybe "" $ getSpanAttribute "http.request.body" sp.attributes
+    responseBody' = fromMaybe "" $ getSpanAttribute "http.response.body" sp.attributes
+    reqBodyB64 = B64.decodeBase64Untyped $ Relude.encodeUtf8 requestBody'
+    respBodyB64 = B64.decodeBase64Untyped $ Relude.encodeUtf8 responseBody'
+    requestBody = decodeUtf8 $ fromRight "{}" reqBodyB64
+    responseBody = decodeUtf8 $ fromRight "{}" respBodyB64
     (requestHeaders, responseHeaders) = case sp.attributes of
       AE.Object v -> (getValsWithPrefix "http.request.header." v, getValsWithPrefix "http.response.header." v)
       _ -> (AE.object [], AE.object [])
-    responseBody = fromMaybe "" $ getSpanAttribute "http.response.body" sp.attributes
     responseStatus = (readMaybe . toString =<< getSpanAttribute "http.response.status_code" sp.attributes) :: Maybe Double
     responseStatus' = (readMaybe . toString =<< getSpanAttribute "http.status_code" sp.attributes) :: Maybe Double
     status = round $ fromMaybe (fromMaybe 0.0 responseStatus') responseStatus

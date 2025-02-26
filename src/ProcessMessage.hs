@@ -15,6 +15,7 @@ import Data.Cache qualified as Cache
 import Data.Effectful.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUID
 
+import Data.ByteString.Base64 qualified as B64
 import Data.List qualified as L
 import Data.Strict.HashMap qualified as H
 import Data.Text (pack)
@@ -268,8 +269,8 @@ createSpanAttributes rm =
     , ("http.request.query_params", AE.String $ Relude.decodeUtf8 $ AE.encode rm.queryParams)
     , ("apitoolkit.msg_id", AE.String $ maybe "" UUID.toText rm.msgId)
     , ("apitoolkit.parent_id", AE.String $ maybe "" UUID.toText rm.parentId)
-    , ("http.request.body", AE.String $ rm.requestBody)
-    , ("http.response.body", AE.String $ rm.responseBody)
+    , ("http.request.body", AE.String $ reqBody)
+    , ("http.response.body", AE.String $ respBody)
     , ("http.response.status_code", AE.String $ T.pack $ show rm.statusCode)
     , ("apitoolkit.sdk_type", AE.String $ show rm.sdkType)
     , ("http.route", maybe (AE.String (T.takeWhile (/= '?') rm.rawUrl)) AE.String rm.urlPath)
@@ -288,9 +289,12 @@ createSpanAttributes rm =
     errorsPair = case rm.errors of
       Just errs -> [("apitoolkit.errors", AE.String $ Relude.decodeUtf8 $ AE.encode errs)]
       Nothing -> []
-
     requestHeaderPairs = addHeadersToAttributes "http.request.header." rm.requestHeaders
     responseHeaderPairs = addHeadersToAttributes "http.response.header." rm.responseHeaders
+    reqBodyB64 = B64.decodeBase64Untyped $ encodeUtf8 rm.requestBody
+    respBodyB64 = B64.decodeBase64Untyped $ encodeUtf8 rm.responseBody
+    reqBody = decodeUtf8 $ fromRight "{}" reqBodyB64
+    respBody = decodeUtf8 $ fromRight "{}" respBodyB64
 
 
 addHeadersToAttributes :: Text -> AE.Value -> [(AEK.Key, AE.Value)]

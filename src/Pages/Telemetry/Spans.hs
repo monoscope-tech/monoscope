@@ -147,9 +147,9 @@ expandedSpanItem pid sp leftM rightM = do
               div_ [id_ "raw_content", class_ "a-tab-content"] do
                 jsonValueToHtmlTree $ selectiveReqToJson httpJson
               div_ [id_ "req_content", class_ "hidden a-tab-content"] do
-                jsonValueToHtmlTree $ AE.toJSON httpJson.requestBody
+                jsonValueToHtmlTree $ fromRight (AE.object []) $ AE.eitherDecodeStrict $ encodeUtf8 httpJson.requestBody
               div_ [id_ "res_content", class_ "hidden a-tab-content"] do
-                jsonValueToHtmlTree $ AE.toJSON httpJson.responseBody
+                jsonValueToHtmlTree $ fromRight (AE.object []) $ AE.eitherDecodeStrict $ encodeUtf8 httpJson.responseBody
               div_ [id_ "hed_content", class_ "hidden a-tab-content"] do
                 jsonValueToHtmlTree $ AE.object ["request_headers" AE..= httpJson.requestHeaders, "response_headers" AE..= httpJson.responseHeaders]
               div_ [id_ "par_content", class_ "hidden a-tab-content"] do
@@ -231,8 +231,8 @@ spanBadge val key = do
 
 selectiveReqToJson :: RequestMessage -> AE.Value
 selectiveReqToJson req =
-  AE.object
-    $ concat @[]
+  AE.object $
+    concat @[]
       [ ["created_at" AE..= req.timestamp]
       , ["errors" AE..= fromMaybe [] req.errors]
       , ["host" AE..= req.host]
@@ -242,12 +242,15 @@ selectiveReqToJson req =
       , ["query_params" AE..= req.queryParams]
       , ["raw_url" AE..= req.rawUrl]
       , ["referer" AE..= req.referer]
-      , ["request_body" AE..= req.requestBody]
-      , ["request_headers" AE..= req.requestHeaders]
-      , ["response_body" AE..= req.responseBody]
+      , ["request_body" AE..= reqBody]
+      , ["request_headers" AE..= reqBody]
+      , ["response_body" AE..= respBody]
       , ["response_headers" AE..= req.responseHeaders]
       , ["service_version" AE..= req.serviceVersion]
       , ["status_code" AE..= req.statusCode]
       , ["tags" AE..= req.tags]
       , ["url_path" AE..= req.urlPath]
       ]
+  where
+    reqBody = fromRight (AE.object []) $ AE.eitherDecodeStrict $ encodeUtf8 req.requestBody
+    respBody = fromRight (AE.object []) $ AE.eitherDecodeStrict $ encodeUtf8 req.responseBody
