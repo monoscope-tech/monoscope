@@ -293,7 +293,7 @@ function logItemCol(rowData, source, colIdxMap, key, serviceColors, toggleTrace)
             : k === 'CLIENT'
             ? renderIconWithTippy('w-4 ml-2', 'Outgoing Request', faSprite('arrow-up-right', 'solid', ' h-3 fill-blue-700'))
             : nothing}
-          ${m ? renderBadge('min-w-[4rem] text-center cbadge cbadge-sm ' + methodCls_, m) : nothing} ${statusCode_ ? renderBadge(statusCls_, statusCode_) : nothing}
+          ${statusCode_ ? renderBadge(statusCls_, statusCode_) : nothing} ${m ? renderBadge('min-w-[4rem] text-center cbadge cbadge-sm ' + methodCls_, m) : nothing}
           ${url ? renderBadge('cbadge-sm badge-neutral border border-strokeWeak bg-fillWeak', url) : nothing}
         `
       }
