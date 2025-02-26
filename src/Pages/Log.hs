@@ -36,7 +36,6 @@ import Pages.Components (emptyState_)
 import Pages.Components qualified as Components
 import Pages.Telemetry.Spans qualified as Spans
 import Pkg.Components qualified as Components
-import Pkg.Components.Widget qualified as Widget
 import Pkg.Parser (pSource, parseQueryToAST, toQText)
 import Relude hiding (ask)
 import Relude.Unsafe qualified as Unsafe
@@ -246,8 +245,8 @@ apiLogJson pid queryM queryASTM cols' cursorM' sinceM fromM toM layoutM sourceM 
               else []
       traceLogs <- Telemetry.getLogsByTraceIds pid traceIDs
       let colors = getServiceColors (V.catMaybes serviceNames)
-      addRespHeaders
-        $ AE.object
+      addRespHeaders $
+        AE.object
           [ "logsData" AE..= requestVecs
           , "traceLogs" AE..= traceLogs
           , "serviceColors" AE..= colors

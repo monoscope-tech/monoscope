@@ -14,10 +14,7 @@ import Data.ByteString.Lazy.Char8 qualified as BL
 import Data.Cache qualified as Cache
 import Data.Effectful.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUID
-
 import Data.List qualified as L
-import Data.Strict.HashMap qualified as H
-import Data.Text (pack)
 import Data.Text qualified as T
 import Data.Time (addUTCTime, zonedTimeToUTC)
 import Data.UUID qualified as UUID
