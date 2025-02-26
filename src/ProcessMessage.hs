@@ -7,11 +7,20 @@ module ProcessMessage (
 where
 
 import Data.Aeson qualified as AE
+import Data.Aeson.Key qualified as AEKey
+import Data.Aeson.KeyMap qualified as AEK
 import Data.Aeson.Types (KeyValue ((.=)), object)
 import Data.ByteString.Lazy.Char8 qualified as BL
 import Data.Cache qualified as Cache
+import Data.Effectful.UUID qualified as UUID
+import Data.UUID.V4 qualified as UUID
+
 import Data.List qualified as L
+import Data.Strict.HashMap qualified as H
+import Data.Text (pack)
 import Data.Text qualified as T
+import Data.Time (addUTCTime, zonedTimeToUTC)
+import Data.UUID qualified as UUID
 import Data.UUID.V4 (nextRandom)
 import Data.Vector qualified as V
 import Data.Vector.Algorithms qualified as VAA
@@ -32,6 +41,7 @@ import Models.Apis.Formats qualified as Formats
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Apis.Shapes qualified as Shapes
 import Models.Projects.Projects qualified as Projects
+import Models.Telemetry.Telemetry qualified as Telemetry
 import PyF (fmt)
 import Relude hiding (ask)
 import RequestMessages qualified
@@ -124,7 +134,13 @@ processMessages msgs attrs = do
 
   if null msgs'
     then pure []
-    else processRequestMessages (rights msgs')
+    else do
+      spans <- forM (rights msgs') \(rmAckId, msg) -> do
+        spanId <- liftIO $ UUID.nextRandom
+        trId <- liftIO $ UUID.toText <$> UUID.nextRandom
+        pure $ convertRequestMessageToSpan msg (spanId, trId)
+      Telemetry.bulkInsertSpans $ V.fromList spans
+      processRequestMessages (rights msgs')
 
 
 -- Replace null characters in a Text
@@ -204,7 +220,75 @@ processRequestMessage recMsg = do
     mpjCache <- withPool appCtx.jobsPool $ Projects.projectCacheById pid'
     pure $ fromMaybe projectCacheDefault mpjCache
   recId <- liftIO nextRandom
-  pure
-    $ if False
+  pure $
+    if False
       then Right (Nothing, Nothing, Nothing, V.empty, V.empty, V.empty)
       else RequestMessages.requestMsgToDumpAndEndpoint projectCacheVal recMsg timestamp recId
+
+
+convertRequestMessageToSpan :: RequestMessages.RequestMessage -> (UUID.UUID, Text) -> Telemetry.SpanRecord
+convertRequestMessageToSpan rm (spanId, trId) =
+  Telemetry.SpanRecord
+    { uSpanId = UUID.nil
+    , projectId = rm.projectId
+    , timestamp = zonedTimeToUTC rm.timestamp
+    , traceId = trId
+    , spanId = UUID.toText $ fromMaybe spanId rm.msgId
+    , parentSpanId = maybe Nothing (\x -> Just (UUID.toText x)) rm.parentId
+    , traceState = Nothing
+    , spanName = rm.method <> maybe "" (" " <>) rm.urlPath
+    , startTime = zonedTimeToUTC rm.timestamp
+    , endTime = Just $ addUTCTime (realToFrac (fromIntegral rm.duration / 1000000000)) (zonedTimeToUTC rm.timestamp)
+    , kind = Just Telemetry.SKServer
+    , status = Just $ case rm.statusCode of
+        sc
+          | sc >= 400 -> Telemetry.SSError
+          | otherwise -> Telemetry.SSOk
+    , statusMessage = Nothing
+    , attributes = createSpanAttributes rm
+    , events = AE.Array V.empty
+    , links = AE.Array V.empty
+    , resource = AE.object []
+    , instrumentationScope = AE.object ["name" AE..= "apitoolkit", "version" AE..= "1.0.0"]
+    , spanDurationNs = fromIntegral rm.duration
+    }
+
+
+createSpanAttributes :: RequestMessages.RequestMessage -> AE.Value
+createSpanAttributes rm =
+  AE.object $
+    [ ("net.host.name", AE.String $ fromMaybe "" rm.host)
+    , ("http.method", AE.String $ rm.method)
+    , ("http.request.path_params", AE.String $ Relude.decodeUtf8 $ AE.encode rm.pathParams)
+    , ("http.request.query_params", AE.String $ Relude.decodeUtf8 $ AE.encode rm.queryParams)
+    , ("apitoolkit.msg_id", AE.String $ maybe "" UUID.toText rm.msgId)
+    , ("apitoolkit.parent_id", AE.String $ maybe "" UUID.toText rm.parentId)
+    , ("http.request.body", AE.String $ rm.requestBody)
+    , ("http.response.body", AE.String $ rm.responseBody)
+    , ("http.response.status_code", AE.String $ T.pack $ show rm.statusCode)
+    , ("apitoolkit.sdk_type", AE.String $ show rm.sdkType)
+    , ("http.route", maybe (AE.String (T.takeWhile (/= '?') rm.rawUrl)) AE.String rm.urlPath)
+    , ("http.target", AE.String $ rm.rawUrl)
+    ]
+      ++ refererPair
+      ++ errorsPair
+      ++ requestHeaderPairs
+      ++ responseHeaderPairs
+  where
+    refererPair = case rm.referer of
+      Just (Left text) -> [("http.request.headers.referer", AE.String text)]
+      Just (Right texts) -> [("http.request.headers.referer", AE.String $ T.intercalate "," texts)]
+      Nothing -> []
+
+    errorsPair = case rm.errors of
+      Just errs -> [("apitoolkit.errors", AE.String $ Relude.decodeUtf8 $ AE.encode errs)]
+      Nothing -> []
+
+    requestHeaderPairs = addHeadersToAttributes "http.request.header." rm.requestHeaders
+    responseHeaderPairs = addHeadersToAttributes "http.response.header." rm.responseHeaders
+
+
+addHeadersToAttributes :: Text -> AE.Value -> [(AEK.Key, AE.Value)]
+addHeadersToAttributes prefix (AE.Object obj) =
+  map (\(k, v) -> (AEKey.fromText prefix <> k, v)) $ AEK.toList obj
+addHeadersToAttributes _ _ = []
