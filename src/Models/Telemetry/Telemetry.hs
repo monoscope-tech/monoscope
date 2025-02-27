@@ -355,7 +355,7 @@ getSpandRecordsByTraceId pid trId = dbtToEff $ query Select q (pid, trId)
       [sql|
       SELECT id, project_id, timestamp, trace_id::text, span_id::text, parent_span_id::text, trace_state,
                      span_name, start_time, end_time, kind, status, status_message, attributes,
-                     events, links, resource, instrumentation_scope, CAST(EXTRACT(EPOCH FROM (end_time - start_time)) * 1000000000 AS BIGINT) as span_duration
+                     events, links, resource, instrumentation_scope, duration_ns
               FROM telemetry.spans where project_id=? and trace_id=? ORDER BY start_time ASC;
     |]
 
@@ -366,7 +366,7 @@ spanRecordByProjectAndId pid createdAt rdId = dbtToEff $ queryOne Select q (crea
     q =
       [sql| SELECT id, project_id, timestamp, trace_id::text, span_id::text, parent_span_id::text, trace_state,
                      span_name, start_time, end_time, kind, status, status_message, attributes,
-                     events, links, resource, instrumentation_scope, CAST(EXTRACT(EPOCH FROM (end_time - start_time)) * 1000000000 AS BIGINT) as span_duration
+                     events, links, resource, instrumentation_scope, duration_ns
               FROM telemetry.spans where (timestamp=?)  and project_id=? and id=? LIMIT 1|]
 
 
@@ -376,7 +376,7 @@ spanRecordById pid trId spanId = dbtToEff $ queryOne Select q (pid, trId, spanId
     q =
       [sql| SELECT id, project_id, timestamp, trace_id::text, span_id::text, parent_span_id::text, trace_state,
                      span_name, start_time, end_time, kind, status, status_message, attributes,
-                     events, links, resource, instrumentation_scope, CAST(EXTRACT(EPOCH FROM (end_time - start_time)) * 1000000000 AS BIGINT) as span_duration
+                     events, links, resource, instrumentation_scope, duration_ns
               FROM telemetry.spans where project_id=? and trace_id = ? and span_id=? LIMIT 1|]
 
 
@@ -386,7 +386,7 @@ getChildSpans pid spanIds = dbtToEff $ query Select q (pid, spanIds)
     q =
       [sql| SELECT id, project_id, timestamp, trace_id::text, span_id::text, parent_span_id::text, trace_state,
                      span_name, start_time, end_time, kind, status, status_message, attributes,
-                     events, links, resource, instrumentation_scope, CAST(EXTRACT(EPOCH FROM (end_time - start_time)) * 1000000000 AS BIGINT) as span_duration
+                     events, links, resource, instrumentation_scope, duration_ns
               FROM telemetry.spans where project_id =? AND parent_span_id=Any(?)|]
 
 
@@ -529,8 +529,8 @@ bulkInsertSpans spans = void $ dbtToEff $ executeMany Insert q (V.toList rowsToI
       [sql|
       INSERT INTO telemetry.spans
       (project_id, timestamp, trace_id, span_id, parent_span_id, trace_state, span_name,
-       start_time, end_time, kind, status, status_message, attributes, events, links, resource, instrumentation_scope)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       start_time, end_time, kind, status, status_message, attributes, events, links, resource, instrumentation_scope, duration_ns)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     |]
     rowsToInsert = V.map spanToTuple spans
     spanToTuple entry =
@@ -551,6 +551,7 @@ bulkInsertSpans spans = void $ dbtToEff $ executeMany Insert q (V.toList rowsToI
       , entry.links
       , entry.resource
       , entry.instrumentationScope
+      , entry.spanDurationNs
       )
 
 

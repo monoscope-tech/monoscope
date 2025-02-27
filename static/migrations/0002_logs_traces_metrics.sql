@@ -62,6 +62,45 @@ SELECT create_hypertable('telemetry.spans', by_range('timestamp', INTERVAL '1 ho
 SELECT add_retention_policy('telemetry.spans',INTERVAL '3 days',true);
 ALTER TABLE telemetry.spans ADD COLUMN IF NOT EXISTS id UUID NOT NULL DEFAULT gen_random_uuid();
 
+ALTER TABLE telemetry.spans ADD COLUMN IF NOT EXISTS duration_ns BIGINT NOT NULL DEFAULT 0;
+
+
+ALTER TABLE telemetry.spans
+-- HTTP span fields
+ADD COLUMN IF NOT EXISTS http_status_code INTEGER,
+ADD COLUMN IF NOT EXISTS http_method TEXT,
+ADD COLUMN IF NOT EXISTS http_url TEXT,
+ADD COLUMN IF NOT EXISTS http_path TEXT,
+ADD COLUMN IF NOT EXISTS http_host TEXT,
+
+-- Database span fields
+ADD COLUMN IF NOT EXISTS db_system TEXT,
+ADD COLUMN IF NOT EXISTS db_name TEXT,
+ADD COLUMN IF NOT EXISTS db_statement TEXT,
+ADD COLUMN IF NOT EXISTS db_operation TEXT,
+
+-- Service/component identification
+ADD COLUMN IF NOT EXISTS service_name TEXT,
+
+-- Error details
+ADD COLUMN IF NOT EXISTS error_type TEXT,
+ADD COLUMN IF NOT EXISTS error_message TEXT,
+ADD COLUMN IF NOT EXISTS error_stack TEXT,
+
+-- Additional context
+ADD COLUMN IF NOT EXISTS user_id TEXT,
+ADD COLUMN IF NOT EXISTS session_id TEXT,
+ADD COLUMN IF NOT EXISTS transaction_id TEXT;
+
+-- Create indexes for common query patterns
+CREATE INDEX IF NOT EXISTS idx_spans_http_status_code ON telemetry.spans(project_id, http_status_code);
+CREATE INDEX IF NOT EXISTS idx_spans_http_method ON telemetry.spans(project_id, http_method);
+CREATE INDEX IF NOT EXISTS idx_spans_http_path ON telemetry.spans(project_id, http_path);
+CREATE INDEX IF NOT EXISTS idx_spans_service_name ON telemetry.spans(project_id, service_name);
+CREATE INDEX IF NOT EXISTS idx_spans_db_system ON telemetry.spans(project_id, db_system);
+CREATE INDEX IF NOT EXISTS idx_spans_duration_ms ON telemetry.spans(project_id, duration_ms);
+CREATE INDEX IF NOT EXISTS idx_spans_error_type ON telemetry.spans(project_id, error_type);
+
 -- Indexes for efficient querying
 CREATE INDEX idx_traces_trace_id ON telemetry.spans(project_id, trace_id, timestamp DESC);
 CREATE INDEX idx_traces_parent_span_id ON telemetry.spans(project_id, parent_span_id, timestamp DESC);
@@ -69,6 +108,8 @@ CREATE INDEX idx_traces_span_name ON telemetry.spans(project_id, span_name, time
 CREATE INDEX idx_traces_status ON telemetry.spans(project_id, status, timestamp DESC);
 CREATE INDEX idx_traces_kind ON telemetry.spans(project_id, kind, timestamp DESC);
 CREATE INDEX idx_traces_resource_service_name ON telemetry.spans (project_id, (resource->>'service.name'), timestamp DESC);
+
+
 
 CREATE TABLE IF NOT EXISTS telemetry.metrics (
     id UUID NOT NULL DEFAULT gen_random_uuid(),
@@ -129,8 +170,8 @@ CREATE TABLE IF NOT EXISTS projects.dashboards (
   created_by    UUID NOT NULL REFERENCES users.users (id) ON DELETE CASCADE,
   base_template TEXT,
   schema JSONB,
-  starred_since TIMESTAMP WITH TIMEZONE,
-  homepage_since TIMESTAMP WITH TIMEZONE,
+  starred_since TIMESTAMP WITH TIME ZONE,
+  homepage_since TIMESTAMP WITH TIME ZONE,
   tags TEXT[] NOT NULL DEFAULT '{}',
   title TEXT NOT NULL DEFAULT 'Untitled',
   PRIMARY KEY (id)
