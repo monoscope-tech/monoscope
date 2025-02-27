@@ -282,14 +282,14 @@ function logItemCol(rowData, source, colIdxMap, key, serviceColors, toggleTrace)
       let kind = lookupVecTextByKey(dataArr, colIdxMap, key)
       return renderBadge('cbadge-sm badge-neutral border border-strokeWeak bg-fillWeak', kind)
     case 'latency_breakdown':
-      const { traceStart, traceEnd, startNs, duration, childrenTimeSpans } = rowData
+      const { traceStart, traceEnd, startNs, duration, childrenTimeSpans, depth: d } = rowData
       const color = serviceColors[lookupVecTextByKey(dataArr, colIdxMap, 'span_name')] || 'black'
       const chil = childrenTimeSpans.map(({ startNs, duration, data }) => ({
         start: startNs - traceStart,
         duration,
         color: serviceColors[lookupVecTextByKey(data, colIdxMap, 'span_name')] || 'black',
       }))
-      return spanLatencyBreakdown({ start: startNs - traceStart, duration, traceEnd, color, children: chil })
+      return spanLatencyBreakdown({ start: startNs - traceStart, depth: d, duration, traceEnd, color, children: chil })
     case 'http_attributes':
       const attributes = lookupVecObjectByKey(dataArr, colIdxMap, key)
       const { method: m, url, status_code: statusCode_ } = attributes
@@ -488,12 +488,12 @@ function getSpanStatusColor(status) {
   )
 }
 
-function spanLatencyBreakdown({ start, duration, traceEnd, color, children }) {
+function spanLatencyBreakdown({ start, duration, traceEnd, depth, color, children }) {
   const width = (duration / traceEnd) * 200
   const left = (start / traceEnd) * 200
   return html`<div class="w-[20ch] -mt-1 shrink-0">
     <div class="flex h-5 w-[200px] relative bg-fillWeak">
-      <div class=${`h-full absolute top-0 ${children.length > 0 ? 'bg-fillWeak' : color}`} style=${`width:${width}px; left:${left}px`}></div>
+      <div class=${`h-full absolute top-0 ${depth === 0 || children.length === 0 ? color : ''}`} style=${`width:${width}px; left:${left}px`}></div>
       ${children.map((child) => {
         const cWidth = (child.duration / traceEnd) * 200
         const cLeft = (child.start / traceEnd) * 200
