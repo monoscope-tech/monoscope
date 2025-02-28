@@ -619,8 +619,8 @@ convertSpanToRequestMessage sp instrumentationScope =
     messageId = UUID.fromText $ fromMaybe "" $ getSpanAttribute "apitoolkit.msg_id" sp.attributes
     parentId = UUID.fromText $ fromMaybe "" $ getSpanAttribute "apitoolkit.parent_id" sp.attributes
     referer = Just $ Left (fromMaybe "" $ getSpanAttribute "http.request.headers.referer" sp.attributes) :: Maybe (Either Text [Text])
-    requestBody = fromMaybe "" $ getSpanAttribute "http.request.body" sp.attributes
-    responseBody = fromMaybe "" $ getSpanAttribute "http.response.body" sp.attributes
+    requestBody = fromMaybe "{}" $ getSpanAttribute "http.request.body" sp.attributes
+    responseBody = fromMaybe "{}" $ getSpanAttribute "http.response.body" sp.attributes
     (requestHeaders, responseHeaders) = case sp.attributes of
       AE.Object v -> (getValsWithPrefix "http.request.header." v, getValsWithPrefix "http.response.header." v)
       _ -> (AE.object [], AE.object [])
