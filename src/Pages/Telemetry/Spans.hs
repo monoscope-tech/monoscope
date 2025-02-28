@@ -87,9 +87,9 @@ expandedSpanItem pid sp leftM rightM = do
                       faSprite_ "arrow-up-right" "regular" "h-8 w-8 p-2 btn-primary rounded-full"
                 (scheme, method, path, status) -> do
                   -- span_ [class_ " font-medium border rounded px-2 py-1.5"] $ toHtml scheme
-                  div_ [class_ "flex border rounded overflow-hidden"] do
-                    span_ [class_ " px-2 py-1.5 max-w-44 truncate bg-gray-200 border-r"] $ toHtml method
-                    span_ [class_ " px-2 py-1.5 max-w-96 truncate"] $ toHtml path
+                  div_ [class_ "flex items-center"] do
+                    span_ [class_ "flex gap-2 items-center text-textStrong bg-fillWeak border border-strokeWeak rounded-lg whitespace-nowrap px-2 py-1"] $ toHtml method
+                    span_ [class_ "px-2 py-1.5 max-w-96 truncate"] $ toHtml path
                     let extraClass = getGrpcStatusColor status
                     when (scheme /= "DB") $ span_ [class_ $ " px-2 py-1.5 border-l " <> extraClass] $ toHtml $ show status
           Nothing -> do
