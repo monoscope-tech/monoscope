@@ -429,7 +429,7 @@ queryToValues pid traceIds = dbtToEff $ V.fromList <$> DBT.query q (pid, traceId
   where
     q =
       [sql|
-      SELECT json_build_array(id, timestamp, trace_id, span_id, CAST(EXTRACT(EPOCH FROM (timestamp)) * 1_000_000_000 AS BIGINT), severity_text, body)
+      SELECT json_build_array(id, timestamp, trace_id, span_id, CAST(EXTRACT(EPOCH FROM (timestamp)) * 1_000_000_000 AS BIGINT), severity_text, body, resource->>'service.name')
       FROM telemetry.logs WHERE project_id = ? AND trace_id = ANY(?);
     |]
 

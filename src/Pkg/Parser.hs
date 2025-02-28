@@ -303,6 +303,7 @@ defaultSelectSqlQuery Nothing = defaultSelectSqlQuery (Just SRequests)
 defaultSelectSqlQuery (Just SLogs) =
   [ "id"
   , timestampLogFmt "timestamp"
+  , "resource->>'service.name'  as service"
   , "severity_text"
   , "body"
   , [fmt|LEFT(
