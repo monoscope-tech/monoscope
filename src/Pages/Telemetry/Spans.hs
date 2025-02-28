@@ -91,7 +91,7 @@ expandedSpanItem pid sp leftM rightM = do
                     span_ [class_ " px-2 py-1.5 max-w-44 truncate bg-gray-200 border-r"] $ toHtml method
                     span_ [class_ " px-2 py-1.5 max-w-96 truncate"] $ toHtml path
                     let extraClass = getGrpcStatusColor status
-                    span_ [class_ $ " px-2 py-1.5 border-l " <> extraClass] $ toHtml $ show status
+                    when (scheme /= "DB") $ span_ [class_ $ " px-2 py-1.5 border-l " <> extraClass] $ toHtml $ show status
           Nothing -> do
             h4_ [class_ "text-xl max-w-96 truncate"] $ toHtml sp.spanName
 

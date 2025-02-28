@@ -38,9 +38,11 @@ getRequestDetails spanRecord = case spanRecord.attributes of
     Just (AE.String method) -> Just ("HTTP", method, getUrl r, getStatus r)
     _ -> case KEM.lookup "rpc.system" r of
       Just (AE.String "grpc") -> Just ("GRPC", fromMaybe "" $ getText "rpc.service" r, fromMaybe "" $ getText "rpc.method" r, getStatus r)
-      _ -> case KEM.lookup "http.request.method" r of
-        Just (AE.String method) -> Just ("HTTP", method, getUrl r, getStatus r)
-        _ -> Nothing
+      _ -> case KEM.lookup "db.system" r of
+        Just (AE.String db) -> Just ("DB", db, fromMaybe "" $ getText "db.statement" r, getStatus r)
+        _ -> case KEM.lookup "http.request.method" r of
+          Just (AE.String method) -> Just ("HTTP", method, getUrl r, getStatus r)
+          _ -> Nothing
   _ -> Nothing
   where
     getText :: Text -> AE.Object -> Maybe Text
@@ -142,11 +144,11 @@ buildTree metricMap parentId =
     Nothing -> []
     Just metrics ->
       [ MetricTree
-        MetricNode
-          { parent = mt.parent
-          , current = mt.current
-          }
-        (buildTree metricMap (if mt.parent == "___root___" then Just mt.current else Just $ mt.parent <> "." <> mt.current))
+          MetricNode
+            { parent = mt.parent
+            , current = mt.current
+            }
+          (buildTree metricMap (if mt.parent == "___root___" then Just mt.current else Just $ mt.parent <> "." <> mt.current))
       | mt <- metrics
       ]
 
