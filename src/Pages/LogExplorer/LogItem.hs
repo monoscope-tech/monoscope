@@ -134,32 +134,32 @@ expandAPIlogItem' pid req modal = do
           button_ [class_ "a-tab whitespace-nowrap px-3 py-2 border-b border-b-slate-200 w-max", onclick_ "navigatable(this, '#path_params_json', '#req-tabs-container', 't-tab-active')"] "Path Params"
           button_ [class_ "border-b border-b-slate-200 w-full"] pass
 
-        div_ [class_ "a-tab-content m-4  rounded-xl p-2 border border-slate-200", id_ "req_body_json"]
-          $ jsonValueToHtmlTree req.requestBody
+        div_ [class_ "a-tab-content m-2", id_ "req_body_json"] $
+          jsonValueToHtmlTree req.requestBody
 
-        div_ [class_ "a-tab-content m-4 hidden rounded-xl p-2 border border-slate-200 break-all", id_ "req_headers_json"]
-          $ jsonValueToHtmlTree req.requestHeaders
+        div_ [class_ "a-tab-content m-2 hidden break-all", id_ "req_headers_json"] $
+          jsonValueToHtmlTree req.requestHeaders
 
-        div_ [class_ "a-tab-content m-4 hidden rounded-xl p-2 border border-slate-200", id_ "query_params_json"]
-          $ jsonValueToHtmlTree req.queryParams
+        div_ [class_ "a-tab-content m-2 hidden", id_ "query_params_json"] $
+          jsonValueToHtmlTree req.queryParams
 
-        div_ [class_ "a-tab-content m-4 hidden rounded-xl p-2 border border-slate-200", id_ "path_params_json"]
-          $ jsonValueToHtmlTree req.pathParams
+        div_ [class_ "a-tab-content m-2 hidden", id_ "path_params_json"] $
+          jsonValueToHtmlTree req.pathParams
 
     -- response details
     div_ [class_ "mt-8", id_ "res-tabs-container"] do
-      p_ [class_ "text-slate-950 font-medium mb-2"] "Request Details"
+      p_ [class_ "text-slate-950 font-medium mb-2"] "Response Details"
       div_ [class_ "rounded-3xl border border-slate-200", role_ "tablist"] do
         div_ [class_ "flex w-full text-slate-500"] do
           button_ [class_ "a-tab px-3 border-b border-b-slate-200 py-2 w-max t-tab-active", onclick_ "navigatable(this, '#res_body_json', '#res-tabs-container', 't-tab-active')"] "Body"
           button_ [class_ "a-tab px-3 border-b border-b-slate-200 py-2 w-max", role_ "tab", onclick_ "navigatable(this, '#res_headers_json', '#res-tabs-container', 't-tab-active')"] "Headers"
           button_ [class_ "border-b border-b-slate-200 w-full"] pass
 
-        div_ [class_ "a-tab-content m-4 rounded-xl p-2 border border-slate-200", id_ "res_body_json"]
-          $ jsonValueToHtmlTree req.responseBody
+        div_ [class_ "a-tab-content m-2", id_ "res_body_json"] $
+          jsonValueToHtmlTree req.responseBody
 
-        div_ [class_ "a-tab-content m-4 hidden rounded-xl p-2 border border-slate-200", id_ "res_headers_json"]
-          $ jsonValueToHtmlTree req.responseHeaders
+        div_ [class_ "a-tab-content m-2 hidden", id_ "res_headers_json"] $
+          jsonValueToHtmlTree req.responseHeaders
 
 
 data ApiItemDetailed

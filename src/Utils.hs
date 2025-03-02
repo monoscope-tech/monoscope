@@ -71,6 +71,7 @@ import Lucid.Svg qualified as Svg
 import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Session
+import NeatInterpolation (text)
 import Network.URI (escapeURIString, isUnescapedInURI)
 import Numeric (showHex)
 import Pkg.THUtils (hashFile)
@@ -261,8 +262,23 @@ jsonValueToHtmlTree val = do
       let json = decodeUtf8 $ AE.encode $ AE.toJSON val
       button_
         [ class_ "flex items-center gap-1"
+        , term
+            "_"
+            [text|  on click
+                 if 'clipboard' in window.navigator then
+                   call navigator.clipboard.writeText(my @data-reqjson)
+                   send successToast(value:['Json copied to clipboard']) to <body/>
+                 end|]
+        , term "data-reqjson" $ json
+        ]
+        do
+          span_ [class_ "underline"] "Copy json"
+          faSprite_ "copy" "regular" "w-2 h-2"
+
+      button_
+        [ class_ "flex items-center gap-1"
         , onclick_ "window.downloadJson(event)"
-        , term "data-reqJson" $ json
+        , term "data-reqjson" $ json
         ]
         do
           span_ [class_ "underline"] "Download json"
