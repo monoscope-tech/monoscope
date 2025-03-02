@@ -23,8 +23,8 @@ import Data.Aeson qualified as AE
 import Data.Aeson.QQ (aesonQQ)
 import Data.Cache (Cache (..), newCache)
 import Data.Default (Default (..))
-import Data.Effectful.UUID (runStaticUUID)
-import Data.Effectful.Wreq (runHTTPGolden)
+import Data.Effectful.UUID (runStaticUUID, runUUID)
+import Data.Effectful.Wreq (runHTTPGolden, runHTTPWreq)
 import Data.Either.Extra
 import Data.Pool (Pool, defaultPoolConfig, newPool)
 import Data.UUID qualified as UUID
@@ -130,6 +130,9 @@ testSessionHeader pool = do
   Auth.sessionByID (Just pSessId) "requestID" False Nothing
     & runErrorNoCallStack @Servant.ServerError
     & DB.runDB pool
+    & runTime
+    & runUUID
+    & runHTTPWreq
     & runEff
     & liftIO
     <&> fromRightShow
