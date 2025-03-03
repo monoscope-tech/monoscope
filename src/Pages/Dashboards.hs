@@ -7,7 +7,7 @@ import Data.Effectful.UUID qualified as UUID
 import Data.Generics.Labels ()
 import Data.Map qualified as M
 import Data.Text qualified as T
-import Data.Time (defaultTimeLocale, formatTime)
+import Data.Time (UTCTime, defaultTimeLocale, formatTime)
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity qualified as DBT
 import Database.PostgreSQL.Entity.DBT qualified as DBT
@@ -98,25 +98,66 @@ loadDashboardFromVM dashVM = case dashVM.schema of
   Nothing -> find (\d -> d.file == dashVM.baseTemplate) dashboardTemplates
 
 
--- | Replace all occurrences of {key} in the input text using the provided mapping.
-replacePlaceholders :: M.Map T.Text T.Text -> T.Text -> T.Text
-replacePlaceholders mappng input =
-  let regex = "\\{([^}]+)\\}" :: T.Text
-      go txt =
-        case T.unpack txt =~ T.unpack regex :: (String, String, String, [String]) of
-          (before, match, after, [key])
-            | not (null match) ->
-                let replacement = M.findWithDefault (T.pack match) (T.pack key) mappng
-                 in T.pack before <> replacement <> go (T.pack after)
-          _ -> txt
-   in go input
+-- Process a single widget recursively.
+processWidget :: Projects.ProjectId -> UTCTime -> (Maybe Text, Maybe Text, Maybe Text) -> Widget.Widget -> ATAuthCtx Widget.Widget
+processWidget pid now (sinceStr, fromDStr, toDStr) widgetBase = do
+  let (fromD, toD, _currentRange) = Components.parseTimeRange now (Components.TimePicker sinceStr fromDStr toDStr)
+  let widget = Widget.replaceQueryVariables pid fromD toD widgetBase
+  widget' <-
+    if (widget.eager == Just True || widget.wType `elem` [Widget.WTAnomalies])
+      then do
+        case widget.wType of
+          Widget.WTAnomalies -> do
+            issues <- dbtToEff $ Anomalies.selectIssues pid Nothing (Just False) (Just False) Nothing (Just 2) (0)
+            let issuesVM = V.map (AnomalyList.IssueVM False now "24h") issues
+            pure $
+              widget
+                & #html
+                  ?~ ( renderText do
+                        div_ [class_ "space-y-4"] do
+                          forM_ issuesVM (\x -> div_ [class_ "border border-strokeWeak rounded-2xl overflow-hidden"] $ toHtml x)
+                     )
+          Widget.WTStat -> do
+            stat <- Charts.queryFloat (Just pid) widget.query Nothing widget.sql sinceStr fromDStr toDStr Nothing
+            pure $
+              widget
+                & #dataset
+                  ?~ def
+                    { Widget.source = AE.Null
+                    , Widget.value = stat.dataFloat
+                    }
+          _ -> do
+            metricsD <-
+              Charts.queryMetrics (Just pid) widget.query Nothing widget.sql sinceStr fromDStr toDStr Nothing
+            pure $
+              widget
+                & #dataset
+                  ?~ Widget.WidgetDataset
+                    { source =
+                        AE.toJSON $
+                          V.cons
+                            (AE.toJSON <$> metricsD.headers)
+                            (AE.toJSON <<$>> metricsD.dataset)
+                    , rowsPerMin = metricsD.rowsPerMin
+                    , value = Just metricsD.rowsCount
+                    , from = metricsD.from
+                    , to = metricsD.to
+                    , stats = metricsD.stats
+                    }
+      else pure widget
+  -- Recursively process child widgets, if any.
+  case widget'.children of
+    Nothing -> pure widget'
+    Just childWidgets -> do
+      newChildren <- traverse (processWidget pid now (sinceStr, fromDStr, toDStr)) childWidgets
+      pure $ widget' & #children .~ Just newChildren
 
 
 dashboardGetH :: Projects.ProjectId -> Dashboards.DashboardId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders (PageCtx DashboardGet))
 dashboardGetH pid dashId fileM fromDStr toDStr sinceStr = do
   (sess, project) <- Sessions.sessionAndProject pid
   now <- Time.currentTime
-  let (fromD, toD, currentRange) = Components.parseTimeRange now (Components.TimePicker sinceStr fromDStr toDStr)
+  let (_fromD, _toD, currentRange) = Components.parseTimeRange now (Components.TimePicker sinceStr fromDStr toDStr)
 
   dashVM <-
     (dbtToEff $ DBT.selectById @Dashboards.DashboardVM (Only dashId)) >>= \case
@@ -127,74 +168,8 @@ dashboardGetH pid dashId fileM fromDStr toDStr sinceStr = do
     Just file -> Dashboards.readDashboardEndpoint file
     Nothing -> maybe (throwError err404) pure (loadDashboardFromVM dashVM)
 
-  -- Process a single widget recursively.
-  let processWidget :: Widget.Widget -> ATAuthCtx Widget.Widget
-      processWidget widgetBase = do
-        let fromStr = maybeToMonoid $ Utils.formatUTC <$> fromD
-            toStr = maybeToMonoid $ Utils.formatUTC <$> toD
-        let mappng =
-              M.fromList
-                [ ("project_id", pid.toText)
-                , ("from", fromStr)
-                , ("to", toStr)
-                , ("time_filter", "(timestamp >= '" <> fromStr <> "' AND timestamp <= '" <> toStr <> "')")
-                , ("time_filter_sql_created_at", "(created_at >= '" <> fromStr <> "' AND created_at <= '" <> toStr <> "')")
-                ]
-            widget =
-              widgetBase
-                & #sql . _Just %~ replacePlaceholders mappng
-                & #query . _Just %~ replacePlaceholders mappng
-        widget' <-
-          if (widget.eager == Just True || widget.wType `elem` [Widget.WTAnomalies])
-            then do
-              case widget.wType of
-                Widget.WTAnomalies -> do
-                  issues <- dbtToEff $ Anomalies.selectIssues pid Nothing (Just False) (Just False) Nothing (Just 2) (0)
-                  let issuesVM = V.map (AnomalyList.IssueVM False now "24h") issues
-                  pure
-                    $ widget
-                    & #html
-                      ?~ ( renderText do
-                            div_ [class_ "space-y-4"] do
-                              forM_ issuesVM (\x -> div_ [class_ "border border-strokeWeak rounded-2xl overflow-hidden"] $ toHtml x)
-                         )
-                Widget.WTStat -> do
-                  stat <- Charts.queryFloat (Just pid) widget.query Nothing widget.sql sinceStr fromDStr toDStr Nothing
-                  pure
-                    $ widget
-                    & #dataset
-                      ?~ def
-                        { Widget.source = AE.Null
-                        , Widget.value = stat.dataFloat
-                        }
-                _ -> do
-                  metricsD <-
-                    Charts.queryMetrics (Just pid) widget.query Nothing widget.sql sinceStr fromDStr toDStr Nothing
-                  pure
-                    $ widget
-                    & #dataset
-                      ?~ Widget.WidgetDataset
-                        { source =
-                            AE.toJSON
-                              $ V.cons
-                                (AE.toJSON <$> metricsD.headers)
-                                (AE.toJSON <<$>> metricsD.dataset)
-                        , rowsPerMin = metricsD.rowsPerMin
-                        , value = Just metricsD.rowsCount
-                        , from = metricsD.from
-                        , to = metricsD.to
-                        , stats = metricsD.stats
-                        }
-            else pure widget
-        -- Recursively process child widgets, if any.
-        case widget'.children of
-          Nothing -> pure widget'
-          Just childWidgets -> do
-            newChildren <- traverse processWidget childWidgets
-            pure $ widget' & #children .~ Just newChildren
-
   -- Traverse the top-level widgets in the dashboard.
-  dash' <- forOf (#widgets . traverse) dash processWidget
+  dash' <- forOf (#widgets . traverse) dash (processWidget pid now (sinceStr, fromDStr, toDStr))
 
   let bwconf =
         (def :: BWConfig)
@@ -286,9 +261,9 @@ dashboardsGet_ dg = do
             strong_ [class_ "text-xl", id_ "dItemTitle"] "Custom Dashboard"
             p_ [class_ "text-sm line-clamp-2 min-h-10", id_ "dItemDescription"] "Get started from a blank slate"
           div_ [class_ "flex items-center justify-center shrink"] $ button_ [class_ "leading-none rounded-lg p-3 cursor-pointer bg-fillBrand-strong shadow text-white", type_ "submit"] "Select template"
-        div_ [class_ "pt-5"]
-          $ div_ [class_ "bg-[#1e9cff] px-5 py-8 rounded-xl aspect-square w-full flex items-center"]
-          $ img_ [src_ "/public/assets/svgs/screens/dashboard_blank.svg", class_ "w-full", id_ "dItemPreview"]
+        div_ [class_ "pt-5"] $
+          div_ [class_ "bg-[#1e9cff] px-5 py-8 rounded-xl aspect-square w-full flex items-center"] $
+            img_ [src_ "/public/assets/svgs/screens/dashboard_blank.svg", class_ "w-full", id_ "dItemPreview"]
 
   div_ [id_ "itemsListPage", class_ "mx-auto px-6 pt-4 gap-8 w-full flex flex-col h-full overflow-hidden pb-12  group/pg"] do
     div_ [class_ "flex"] do
@@ -317,8 +292,8 @@ dashboardsGet_ dg = do
               time_ [class_ "mr-2 text-slate-400", term "data-tippy-content" "Date of dashboard creation", datetime_ $ Utils.formatUTC dashVM.createdAt] $ toHtml $ formatTime defaultTimeLocale "%eth %b %Y" dashVM.createdAt
               forM_ dashVM.tags (span_ [class_ "cbadge-sm badge-neutral cbadge bg-fillWeak"] . toHtml @Text)
           div_ [class_ "flex items-end justify-center gap-5"] do
-            button_ [class_ "leading-none", term "data-tippy-content" "click star this dashboard"]
-              $ if isJust dashVM.starredSince
+            button_ [class_ "leading-none", term "data-tippy-content" "click star this dashboard"] $
+              if isJust dashVM.starredSince
                 then (faSprite_ "star" "solid" "w-5 h-5")
                 else (faSprite_ "star" "regular" "w-5 h-5")
             let widgetCount = maybe "0" (show . length . (.widgets)) dash
@@ -337,9 +312,9 @@ dashboardsGetH pid = do
           , pageTitle = "Dashboards"
           , pageActions = Just $ (label_ [Lucid.for_ "newDashboardMdl", class_ "leading-none rounded-xl shadow p-3 cursor-pointer bg-fillBrand-strong text-white"] "New Dashboard")
           }
-  addRespHeaders
-    $ PageCtx bwconf
-    $ DashboardsGet{dashboards, projectId = pid}
+  addRespHeaders $
+    PageCtx bwconf $
+      DashboardsGet{dashboards, projectId = pid}
 
 
 data DashboardForm = DashboardForm
@@ -356,21 +331,21 @@ dashboardsPostH pid form = do
   did <- Dashboards.DashboardId <$> UUID.genUUID
   let dashM = find (\dashboard -> dashboard.file == Just form.file) dashboardTemplates
   let redirectURI = "/p/" <> pid.toText <> "/dashboards/" <> (did.toText)
-  dbtToEff
-    $ DBT.insert @Dashboards.DashboardVM
-    $ Dashboards.DashboardVM
-      { id = did
-      , projectId = pid
-      , createdAt = now
-      , updatedAt = now
-      , createdBy = sess.user.id
-      , baseTemplate = if form.file == "" then Nothing else Just form.file
-      , schema = Nothing
-      , starredSince = Nothing
-      , homepageSince = Nothing
-      , tags = V.fromList $ fromMaybe [] $ dashM >>= (.tags)
-      , title = fromMaybe [] $ dashM >>= (.title)
-      }
+  dbtToEff $
+    DBT.insert @Dashboards.DashboardVM $
+      Dashboards.DashboardVM
+        { id = did
+        , projectId = pid
+        , createdAt = now
+        , updatedAt = now
+        , createdBy = sess.user.id
+        , baseTemplate = if form.file == "" then Nothing else Just form.file
+        , schema = Nothing
+        , starredSince = Nothing
+        , homepageSince = Nothing
+        , tags = V.fromList $ fromMaybe [] $ dashM >>= (.tags)
+        , title = fromMaybe [] $ dashM >>= (.title)
+        }
   redirectCS redirectURI
   addRespHeaders NoContent
 
@@ -390,8 +365,8 @@ entrypointGetH pid = do
       q = [sql|select id::text from projects.dashboards where project_id=? and (homepage_since is not null or base_template='_overview.yaml')|]
       newDashboard = do
         did <- Dashboards.DashboardId <$> UUID.genUUID
-        dbtToEff
-          $ DBT.insert @Dashboards.DashboardVM
+        dbtToEff $
+          DBT.insert @Dashboards.DashboardVM
             Dashboards.DashboardVM
               { id = did
               , projectId = pid

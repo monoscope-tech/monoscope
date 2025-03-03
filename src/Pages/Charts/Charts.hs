@@ -30,6 +30,7 @@ import Models.Projects.Projects qualified as Projects
 import NeatInterpolation (text)
 import Network.URI (escapeURIString, isUnescapedInURI)
 import Pkg.Components qualified as Components
+import Pkg.DBUtils qualified as DBUtils
 import Pkg.Parser (
   QueryComponents (finalTimechartQuery),
   SqlQueryCfg (dateRange),
@@ -38,6 +39,7 @@ import Pkg.Parser (
   parseQueryToAST,
   queryASTToComponents,
  )
+import Pkg.Parser qualified as Parser
 import Relude
 import Relude.Unsafe qualified as Unsafe
 import Servant (FromHttpApiData (..))
@@ -53,8 +55,8 @@ pivot' rows
       let extractHeaders vec = V.uniq . V.map thd3 . V.modify (\mvec -> VA.sortBy (comparing thd3) mvec) $ vec
           headers = extractHeaders rows
           grouped =
-            V.groupBy (\a b -> fst3 a == fst3 b)
-              $ V.modify (\mvec -> VA.sortBy (comparing fst3) mvec) rows
+            V.groupBy (\a b -> fst3 a == fst3 b) $
+              V.modify (\mvec -> VA.sortBy (comparing fst3) mvec) rows
           ngrouped = map (transform headers) grouped
           totalSum = V.sum $ V.map snd3 rows
 
@@ -98,8 +100,8 @@ statsTriple v
         doubles
 
     mode =
-      fst
-        $ M.foldlWithKey'
+      fst $
+        M.foldlWithKey'
           ( \acc@(_, cnt') k c ->
               if c > cnt' then (k, c) else acc
           )
@@ -252,10 +254,25 @@ queryMetrics :: (State.State TriggerEvents :> es, Time.Time :> es, DB :> es, Log
 queryMetrics pidM queryM queryASTM querySQLM sinceM fromM toM sourceM = do
   now <- Time.currentTime
   let (fromD, toD, _currentRange) = Components.parseTimeRange now (Components.TimePicker sinceM fromM toM)
+  let parseQuery q = either (\err -> addErrorToast "Error Parsing Query" (Just err) >> pure []) pure (parseQueryToAST q)
+
   sqlQuery <- case (queryM, queryASTM, querySQLM) of
-    (_, _, Just querySQL) -> pure querySQL -- FIXME: risk of sql injection and many other attacks
+    (_, _, Just querySQL) -> do
+      queryAST <-
+        maybe
+          (parseQuery $ maybeToMonoid queryM)
+          (either (const $ parseQuery $ maybeToMonoid queryM) pure . AE.eitherDecode . encodeUtf8)
+          queryASTM
+      let sqlQueryComponents =
+            (defSqlQueryCfg (Unsafe.fromJust pidM) now (parseMaybe pSource =<< sourceM) Nothing)
+              { dateRange = (fromD, toD)
+              }
+      let (_, qc) = Parser.queryASTToComponents sqlQueryComponents queryAST
+
+      let mappng = M.fromList [("query_ast_filters", maybe "" (" AND " <>) qc.whereClause)]
+
+      pure $ DBUtils.replacePlaceholders mappng querySQL -- FIXME: risk of sql injection and many other attacks
     _ -> do
-      let parseQuery q = either (\err -> addErrorToast "Error Parsing Query" (Just err) >> pure []) pure (parseQueryToAST q)
       queryAST <-
         maybe
           (parseQuery $ maybeToMonoid queryM)
@@ -272,7 +289,7 @@ queryMetrics pidM queryM queryASTM querySQLM sinceM fromM toM sourceM = do
   let chartsDataV = V.fromList chartData
   let (headers, groupedData, rowsCount, rowsPerMin) = pivot' chartsDataV
   pure
-    $ MetricsData
+    MetricsData
       { dataset = groupedData
       , dataFloat = Nothing
       , headers = V.cons "timestamp" headers
@@ -306,8 +323,8 @@ queryFloat pidM queryM queryASTM querySQLM sinceM fromM toM sourceM = do
       pure $ fromMaybe "" qc.finalTimechartQuery
 
   chartData <- dbtToEff $ DBT.queryOne_ (Query $ encodeUtf8 $ sqlQuery)
-  pure
-    $ MetricsData
+  pure $
+    MetricsData
       { dataset = V.empty
       , dataFloat = chartData <&> \(Only v) -> v
       , headers = V.empty

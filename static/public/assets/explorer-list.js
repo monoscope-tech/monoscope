@@ -2,6 +2,7 @@
 import { LitElement, html, nothing } from './js/thirdparty/lit.js'
 import '@lit-labs/virtualizer'
 import { virtualize } from '@lit-labs/virtualizer/virtualizer'
+
 export class LogList extends LitElement {
   static properties = {
     logsData: [],
@@ -52,9 +53,9 @@ export class LogList extends LitElement {
   connectedCallback() {
     super.connectedCallback()
   }
-  firstUpdated() {
-    this.setupIntersectionObserver()
-  }
+
+  firstUpdated = () => this.setupIntersectionObserver()
+
   setupIntersectionObserver() {
     const loader = document.querySelector('#loader')
     const container = document.querySelector('#logs_list_container')
@@ -87,12 +88,8 @@ export class LogList extends LitElement {
     super.disconnectedCallback()
   }
 
-  buildSpanListTree() {
-    return groupSpans(this.logsData, this.traceLogs, this.colIdxMap, this.expandedTraces)
-  }
-  renderSpan(span) {
-    return html`${this.logItemRow(span)}`
-  }
+  buildSpanListTree = () => groupSpans(this.logsData, this.traceLogs, this.colIdxMap, this.expandedTraces)
+  renderSpan = span => html`${this.logItemRow(span)}`
 
   expandTrace(tracId) {
     if (!this.expandedTraces[tracId]) {
@@ -115,8 +112,8 @@ export class LogList extends LitElement {
     const s = rowData.type === 'log' ? 'logs' : this.source
     const [url] = requestDumpLogItemUrlPath(this.projectId, this.source === 'spans' ? rowData.data : rowData, this.colIdxMap, s)
     return html`
-      <tr class="item-row cursor-pointer whitespace-nowrap overflow-hidden" @click=${(event) => toggleLogRow(event, url)}>
-        ${this.logsColumns.map((column) => html`<td>${logItemCol(rowData, this.source, this.colIdxMap, column, this.serviceColors, this.expandTrace)}</td>`)}
+      <tr class="item-row cursor-pointer whitespace-nowrap overflow-hidden" @click=${event => toggleLogRow(event, url)}>
+        ${this.logsColumns.map(column => html`<td>${logItemCol(rowData, this.source, this.colIdxMap, column, this.serviceColors, this.expandTrace)}</td>`)}
       </tr>
     `
   }
@@ -125,8 +122,8 @@ export class LogList extends LitElement {
     if (this.isLoading) return
     this.isLoading = true
     fetch(url)
-      .then((response) => response.json())
-      .then((data) => {
+      .then(response => response.json())
+      .then(data => {
         if (!data.error) {
           const { logsData, serviceColors, nextUrl, traceLogs } = data
           this.logsData = [...this.logsData, ...logsData]
@@ -139,7 +136,7 @@ export class LogList extends LitElement {
           this.fetchError = data.error
         }
       })
-      .catch((error) => {
+      .catch(error => {
         this.isError = true
         console.error('Error fetching logs:', error)
       })
@@ -150,7 +147,7 @@ export class LogList extends LitElement {
   }
 
   hideColumn(column) {
-    this.logsColumns = this.logsColumns.filter((col) => col !== column)
+    this.logsColumns = this.logsColumns.filter(col => col !== column)
   }
 
   tableHeadingWrapper(pid, title, column, classes) {
@@ -199,7 +196,7 @@ export class LogList extends LitElement {
         <table class="w-full table-auto ctable min-h-full table-pin-rows table-pin-cols overflow-x-hidden" style="height:1px; --rounded-box:0;">
           <thead class="w-full overflow-hidden">
             <tr class="text-textStrong border-b font-medium border-y">
-              ${this.logsColumns.map((column) => this.logTableHeading('', column))}
+              ${this.logsColumns.map(column => this.logTableHeading('', column))}
             </tr>
           </thead>
           ${list.length === 0 ? emptyState(this.source, this.logsColumns.length) : nothing}
@@ -213,7 +210,11 @@ export class LogList extends LitElement {
               <div class="absolute -top-[600px]  w-full h-[600px] -z-10 left-0 flex flex-col justify-end bg-[rgba(0,0,0,0.2)] items-center" id="loader"></div>
               ${this.isLoading
                 ? html`<div class="mx-auto loading loading-dots loading-md"></div>`
-                : html` <button class="cursor-pointer text-textBrand underline font-semibold w-max mx-auto" @click=${() => this.fetchData(this.nextFetchUrl)}>Load more</button> `}
+                : html`
+                    <button class="cursor-pointer text-textBrand underline font-semibold w-max mx-auto" @click=${() => this.fetchData(this.nextFetchUrl)}>
+                      Load more
+                    </button>
+                  `}
             </div>`
           : ''}
       </div>
@@ -226,9 +227,7 @@ export class LogList extends LitElement {
 
 customElements.define('log-list', LogList)
 
-function faSprite(iconName, kind, classes) {
-  return html`<svg class="${classes}"><use href="/public/assets/svgs/fa-sprites/${kind}.svg#${iconName}"></use></svg>`
-}
+const faSprite = (iconName, kind, classes) => html`<svg class="${classes}"><use href="/public/assets/svgs/fa-sprites/${kind}.svg#${iconName}"></use></svg>`
 
 function logItemCol(rowData, source, colIdxMap, key, serviceColors, toggleTrace) {
   const dataArr = source === 'spans' ? rowData.data : rowData
@@ -244,7 +243,9 @@ function logItemCol(rowData, source, colIdxMap, key, serviceColors, toggleTrace)
     case 'timestamp':
       let timestamp = lookupVecTextByKey(dataArr, colIdxMap, key)
       return html`<div class="w-[16ch]">
-        <time class="monospace whitespace-nowrap text-slate-600 w-[16ch]" data-tippy-content="timestamp" datetime=${timestamp}>${displayTimestamp(timestamp)}</time>
+        <time class="monospace whitespace-nowrap text-slate-600 w-[16ch]" data-tippy-content="timestamp" datetime=${timestamp}
+          >${displayTimestamp(timestamp)}</time
+        >
       </div>`
     case 'status_code':
       let statusCode = lookupVecTextByKey(dataArr, colIdxMap, 'status_code')
@@ -302,9 +303,10 @@ function logItemCol(rowData, source, colIdxMap, key, serviceColors, toggleTrace)
           ${k === 'SERVER'
             ? renderIconWithTippy('w-4 ml-2', 'Incoming Request', faSprite('arrow-down-left', 'solid', ' h-3 fill-slate-500'))
             : k === 'CLIENT'
-            ? renderIconWithTippy('w-4 ml-2', 'Outgoing Request', faSprite('arrow-up-right', 'solid', ' h-3 fill-blue-700'))
-            : nothing}
-          ${statusCode_ ? renderBadge(statusCls_, statusCode_) : nothing} ${m ? renderBadge('min-w-[4rem] text-center cbadge cbadge-sm ' + methodCls_, m) : nothing}
+              ? renderIconWithTippy('w-4 ml-2', 'Outgoing Request', faSprite('arrow-up-right', 'solid', ' h-3 fill-blue-700'))
+              : nothing}
+          ${statusCode_ ? renderBadge(statusCls_, statusCode_) : nothing}
+          ${m ? renderBadge('min-w-[4rem] text-center cbadge cbadge-sm ' + methodCls_, m) : nothing}
           ${url ? renderBadge('cbadge-sm badge-neutral border border-strokeWeak bg-fillWeak', url) : nothing}
         `
       }
@@ -325,8 +327,8 @@ function logItemCol(rowData, source, colIdxMap, key, serviceColors, toggleTrace)
       const errClas = hasErrors
         ? 'bg-red-500 text-white fill-white stroke-white'
         : childErrors
-        ? 'border border-red-500 bg-fillWeak text-textWeak fill-textWeak'
-        : 'border border-strokeWeak bg-fillWeak text-textWeak fill-textWeak'
+          ? 'border border-red-500 bg-fillWeak text-textWeak fill-textWeak'
+          : 'border border-strokeWeak bg-fillWeak text-textWeak fill-textWeak'
       return source == 'logs'
         ? html`${logItemCol(rowData, source, colIdxMap, 'severity_text')} ${logItemCol(rowData, source, colIdxMap, 'body')}`
         : source === 'spans'
@@ -530,7 +532,7 @@ function toggleLogRow(event, source) {
     updateUrlState('details_width', sideView.style.width)
   }
   const rows = document.querySelectorAll('.item-row.bg-fillBrand-weak')
-  rows.forEach((row) => row.classList.remove('bg-fillBrand-weak'))
+  rows.forEach(row => row.classList.remove('bg-fillBrand-weak'))
   event.currentTarget.classList.add('bg-fillBrand-weak')
   const indicator = document.querySelector('#details_indicator')
   indicator.classList.add('htmx-request')
@@ -599,7 +601,7 @@ function groupSpans(data, logs, colIdxMap, expandedTraces) {
     })
   })
 
-  logs.forEach((log) => {
+  logs.forEach(log => {
     const traceData = traceMap.get(log[2])
     if (traceData) {
       traceData.spans.set(log[0], {
@@ -612,7 +614,7 @@ function groupSpans(data, logs, colIdxMap, expandedTraces) {
     }
   })
 
-  traceMap.forEach((traceData) => {
+  traceMap.forEach(traceData => {
     const spanTree = new Map()
     traceData.spans.forEach((span) => {
       if (span.type === 'log') {
@@ -645,7 +647,7 @@ function groupSpans(data, logs, colIdxMap, expandedTraces) {
     traceData.spans = Array.from(spanTree.values()).sort((a, b) => a.startNs - b.startNs)
   })
 
-  const result = Array.from(traceMap.values()).map((trace) => ({
+  const result = Array.from(traceMap.values()).map(trace => ({
     traceId: trace.traceId,
     spans: Object.values(trace.spans),
     startTime: trace.minStart,
@@ -693,8 +695,8 @@ function flattenSpanTree(traceArr, expandedTraces = {}) {
     return [childrenCount, childErrors]
   }
 
-  traceArr.forEach((trace) => {
-    trace.spans.forEach((span) => {
+  traceArr.forEach(trace => {
+    trace.spans.forEach(span => {
       traverse(span, trace.traceId, trace.startTime, trace.duration, 0)
     })
   })
