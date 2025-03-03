@@ -111,7 +111,7 @@ sessionByID mbPersistentSessionId requestID isSidebarClosed url = do
     _ -> do
       case url of
         Just u -> do
-          if T.isInfixOf "/p/00000000-0000-0000-0000-000000000000" (decodeUtf8 u)
+          if T.isInfixOf "/p/00000000-0000-0000-0000-000000000000" (decodeUtf8 u) || T.isInfixOf "pid=00000000-0000-0000-0000-000000000000" (decodeUtf8 u)
             then do
               sessId <- authorizeUserAndPersist Nothing "Guest" "User" "" "hello@apitoolkit.io"
               mbPess <- join <$> mapM Sessions.getPersistentSession (Just sessId)
