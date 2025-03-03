@@ -1,13 +1,12 @@
 name: apitoolkit-server
 version: 0.1.0.0
-github: "githubuser/apitoolkit-server"
+github: 'githubuser/apitoolkit-server'
 license: BSD3
-author: "Author name here"
-maintainer: "example@example.com"
-copyright: "2021 Author name here"
+author: 'Author name here'
+maintainer: 'example@example.com'
+copyright: '2021 Author name here'
 language: GHC2021
 spec-version: 0.36.0
-
 
 ghc-options:
   - -fwrite-ide-info
@@ -49,7 +48,6 @@ ghc-options:
   # - -g
   # - "-fprof-late"
   # - "-finfo-table-map"
-  
 
 default-extensions:
   - BlockArguments
@@ -76,6 +74,7 @@ default-extensions:
   - TemplateHaskell
   - AllowAmbiguousTypes
   - TupleSections
+  - ViewPatterns
 
 extra-source-files:
   - README.md
@@ -86,7 +85,7 @@ library:
   source-dirs:
     - src
   dependencies:
-    - base 
+    - base
     - relude >= 1.2.0.0
     - rust-interop
     - otlp
@@ -203,7 +202,7 @@ executables:
       - -rtsopts
       - -with-rtsopts=-N
       - -j4
-      - "+RTS -N -A128m -n2m -RTS"
+      - '+RTS -N -A128m -n2m -RTS'
       # - -O2
       # - -fPIC
     dependencies:
@@ -211,10 +210,10 @@ executables:
       - rust-interop
       - hiedb-plugin
       - name: relude
-        version: ">= 1.2.0.0"
+        version: '>= 1.2.0.0'
         mixin:
           - (Relude as Prelude)
-          - ""
+          - ''
 
 tests:
   doctests:

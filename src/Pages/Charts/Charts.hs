@@ -1,4 +1,5 @@
 {-# LANGUAGE DerivingVia #-}
+{-# LANGUAGE ViewPatterns #-}
 {-# LANGUAGE NoFieldSelectors #-}
 
 module Pages.Charts.Charts (chartsGetH, ChartType (..), lazy, ChartExp (..), QueryBy (..), GroupBy (..), queryMetrics, queryFloat, MetricsData (..), MetricsStats (..)) where
@@ -250,8 +251,15 @@ data MetricsData = MetricsData
   deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake MetricsData
 
 
+-- Helper function: converts Just "" to Nothing.
+nonNull :: Maybe Text -> Maybe Text
+nonNull Nothing = Nothing
+nonNull (Just "") = Nothing
+nonNull x = x
+
+
 queryMetrics :: (State.State TriggerEvents :> es, Time.Time :> es, DB :> es, Log :> es) => M Projects.ProjectId -> M Text -> M Text -> M Text -> M Text -> M Text -> M Text -> M Text -> Eff es MetricsData
-queryMetrics pidM queryM queryASTM querySQLM sinceM fromM toM sourceM = do
+queryMetrics pidM (nonNull -> queryM) (nonNull -> queryASTM) (nonNull -> querySQLM) (nonNull -> sinceM) (nonNull -> fromM) (nonNull -> toM) (nonNull -> sourceM) = do
   now <- Time.currentTime
   let (fromD, toD, _currentRange) = Components.parseTimeRange now (Components.TimePicker sinceM fromM toM)
   let parseQuery q = either (\err -> addErrorToast "Error Parsing Query" (Just err) >> pure []) pure (parseQueryToAST q)
@@ -302,7 +310,7 @@ queryMetrics pidM queryM queryASTM querySQLM sinceM fromM toM sourceM = do
 
 
 queryFloat :: (State.State TriggerEvents :> es, Time.Time :> es, DB :> es, Log :> es) => M Projects.ProjectId -> M Text -> M Text -> M Text -> M Text -> M Text -> M Text -> M Text -> Eff es MetricsData
-queryFloat pidM queryM queryASTM querySQLM sinceM fromM toM sourceM = do
+queryFloat pidM (nonNull -> queryM) (nonNull -> queryASTM) (nonNull -> querySQLM) (nonNull -> sinceM) (nonNull -> fromM) (nonNull -> toM) (nonNull -> sourceM) = do
   now <- Time.currentTime
   let (fromD, toD, _currentRange) = Components.parseTimeRange now (Components.TimePicker sinceM fromM toM)
   sqlQuery <- case (queryM, queryASTM, querySQLM) of
