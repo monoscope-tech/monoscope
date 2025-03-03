@@ -479,18 +479,18 @@ apiLogsPage page = do
 
       div_ [class_ "flex flex-row gap-4 mt-3 group-has-[.toggle-chart:checked]/pg:hidden w-full", style_ "aspect-ratio: 10 / 1;"] do
         Widget.widget_ $ (def :: Widget.Widget){Widget.query = Just "timechart count(*)", Widget.unit = Just "reqs", Widget.title = Just "All requests", Widget.hideLegend = Just True, Widget._projectId = Just page.pid, Widget.standalone = Just True}
-        unless (page.source == "logs") $
-          Widget.widget_ $
-            Widget.replaceQueryVariables page.pid page.fromD page.toD $
-              (def :: Widget.Widget)
-                { Widget.wType = WTTimeseriesLine
-                , Widget.standalone = Just True
-                , Widget.title = Just "Latency percentiles (ms)"
-                , Widget.hideSubtitle = Just True
-                , Widget.summarizeBy = Just Widget.SBMax
-                , Widget.sql =
-                    Just
-                      [text|
+        unless (page.source == "logs")
+          $ Widget.widget_
+          $ Widget.replaceQueryVariables page.pid page.fromD page.toD
+          $ (def :: Widget.Widget)
+            { Widget.wType = WTTimeseriesLine
+            , Widget.standalone = Just True
+            , Widget.title = Just "Latency percentiles (ms)"
+            , Widget.hideSubtitle = Just True
+            , Widget.summarizeBy = Just Widget.SBMax
+            , Widget.sql =
+                Just
+                  [text|
                         SELECT timeB, value, quantile
                               FROM (
                                 SELECT extract(epoch from time_bucket('1h', created_at))::integer AS timeB,
@@ -508,10 +508,10 @@ apiLogsPage page = do
                               ) s,
                               LATERAL unnest(s.values, s.quantiles) AS u(value, quantile);
                         |]
-                , Widget.unit = Just "ms"
-                , Widget.hideLegend = Just True
-                , Widget._projectId = Just page.pid
-                }
+            , Widget.unit = Just "ms"
+            , Widget.hideLegend = Just True
+            , Widget._projectId = Just page.pid
+            }
 
     div_ [class_ "flex gap-3.5 overflow-hidden"] do
       div_ [class_ "w-1/5 shrink-0 flex flex-col gap-2 p-2 hidden  group-has-[.toggle-filters:checked]/pg:hidden "] do
