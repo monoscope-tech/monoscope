@@ -47,7 +47,9 @@ export class LogList extends LitElement {
     this.fetchData = this.fetchData.bind(this)
     this.renderSpan = this.renderSpan.bind(this)
     this.expandTrace = this.expandTrace.bind(this)
+    this.renderLoadMore = this.renderLoadMore.bind(this)
     this.updateTableData = this.updateTableData.bind(this)
+    this.loadMoreObserver = null
   }
 
   updateTableData = (ves, cols, colIdxMap, serviceColors, nextFetchUrl, traceLogs) => {
@@ -66,15 +68,24 @@ export class LogList extends LitElement {
   connectedCallback() {
     super.connectedCallback()
   }
+
   firstUpdated() {
     this.setupIntersectionObserver()
     window.logListTable = document.querySelector('#resultTable')
   }
+
   setupIntersectionObserver() {
+    if (this._observer) {
+      this._observer.disconnect()
+    }
+
     const loader = document.querySelector('#loader')
+    const loadBtn = document.querySelector('#loadMoreBtn')
     const container = document.querySelector('#logs_list_container')
     if (!loader || !container) {
-      console.warn('Loader or container not found', { loader, container })
+      setTimeout(() => {
+        this.setupIntersectionObserver()
+      }, 1000)
       return
     }
 
@@ -89,9 +100,10 @@ export class LogList extends LitElement {
         threshold: [0, 0.2, 0.4, 0.6, 0.8, 1],
       }
     )
-    setTimeout(() => {
-      observer.observe(loader)
-    }, 3000)
+    observer.observe(loader)
+    if (loadBtn) {
+      observer.observe(loadBtn)
+    }
     this._observer = observer
   }
 
@@ -106,7 +118,20 @@ export class LogList extends LitElement {
     return groupSpans(this.logsData, this.traceLogs, this.colIdxMap, this.expandedTraces)
   }
   renderSpan(span) {
-    return html`${this.logItemRow(span)}`
+    return span === 'end' ? this.renderLoadMore() : html`${this.logItemRow(span)}`
+  }
+
+  renderLoadMore() {
+    return this.hasMore
+      ? html`<tr class="w-full flex justify-center relative">
+          <td colspan=${String(this.logsColumns.length)} class="relative">
+            <div class="absolute -top-[500px] w-[1px] h-[500px] left-0 flex flex-col justify-end bg-transparent items-center" id="loader"></div>
+            ${this.isLoading
+              ? html`<div class="mx-auto loading loading-dots loading-md"></div>`
+              : html` <button class="cursor-pointer text-textBrand underline font-semibold w-max mx-auto" id="loadMoreBtn" @click=${() => this.fetchData(this.nextFetchUrl)}>Load more</button> `}
+          </td>
+        </tr>`
+      : html`<tr></tr>`
   }
 
   expandTrace(tracId) {
@@ -127,11 +152,19 @@ export class LogList extends LitElement {
   }
 
   logItemRow(rowData) {
+    if (rowData === 'end') return this.renderLoadMore()
     const s = rowData.type === 'log' ? 'logs' : this.source
     const [url] = requestDumpLogItemUrlPath(this.projectId, this.source === 'spans' ? rowData.data : rowData, this.colIdxMap, s)
     return html`
       <tr class="item-row cursor-pointer whitespace-nowrap overflow-hidden" @click=${(event) => toggleLogRow(event, url)}>
-        ${this.logsColumns.map((column) => html`<td>${logItemCol(rowData, this.source, this.colIdxMap, column, this.serviceColors, this.expandTrace)}</td>`)}
+        ${this.logsColumns
+          .filter((v) => v !== 'latency_breakdown')
+          .map((column) => {
+            return column === 'latency_breakdown'
+              ? html`<th>${logItemCol(rowData, this.source, this.colIdxMap, column, this.serviceColors, this.expandTrace)}</th>`
+              : html`<td>${logItemCol(rowData, this.source, this.colIdxMap, column, this.serviceColors, this.expandTrace)}</td>`
+          })}
+        ${this.source === 'spans' ? html`<th>${logItemCol(rowData, this.source, this.colIdxMap, 'latency_breakdown', this.serviceColors, this.expandTrace)}</th>` : nothing}
       </tr>
     `
   }
@@ -195,13 +228,13 @@ export class LogList extends LitElement {
       case 'created_at':
         return this.tableHeadingWrapper(pid, 'timestamp', column, 'w-[16ch]')
       case 'latency_breakdown':
-        return this.tableHeadingWrapper(pid, 'latency_breakdown', column, 'w-[20ch]')
+        return this.tableHeadingWrapper(pid, 'latency_breakdown', column, 'w-[30ch]')
       case 'status_code':
         return this.tableHeadingWrapper(pid, 'status', column)
       case 'service':
         return this.tableHeadingWrapper(pid, 'service', column, 'w-[20ch]')
       case 'rest':
-        return this.tableHeadingWrapper(pid, 'summary', column)
+        return this.tableHeadingWrapper(pid, 'summary', column, 'w-[800px] min-w-0')
       default:
         return this.tableHeadingWrapper(pid, column, column)
     }
@@ -209,28 +242,31 @@ export class LogList extends LitElement {
 
   render() {
     const [list, renderFunc] = this.source === 'spans' ? [this.spanListTree.filter((sp) => sp.show), this.renderSpan] : [this.logsData, this.logItemRow]
+    // end is used to render the load more button
+    list.push('end')
     return html`
-      <div class="relative overflow-y-scroll overflow-x-hidden w-full min-h-full c-scroll pb-10" id="logs_list_container">
-        <table class="w-full table-auto ctable min-h-full table-pin-rows table-pin-cols overflow-x-hidden" style="height:1px; --rounded-box:0;">
-          <thead class="w-full overflow-hidden">
+      <div class="relative h-full w-full" id="logs_list_container">
+        <table class="table-auto w-full min-w-full ctable min-h-full flex flex-col table-pin-rows table-pin-cols" style="height:1px; --rounded-box:0;">
+          <thead class="w-full grow-1 shrink-0 overflow-hidden">
             <tr class="text-textStrong border-b font-medium border-y">
-              ${this.logsColumns.map((column) => this.logTableHeading('', column))}
+              ${this.logsColumns.filter((v) => v !== 'latency_breakdown').map((column) => this.logTableHeading('', column))}
+              ${this.source === 'spans' ? this.logTableHeading('', 'latency_breakdown') : nothing}
             </tr>
           </thead>
           ${list.length === 0 ? emptyState(this.source, this.logsColumns.length) : nothing}
-
-          <tbody class="w-full log-item-table-body">
-            ${virtualize({ items: list, renderItem: renderFunc })}
+          <tbody
+            class="w-full min-w-0 grow-1 shrink-1 c-scroll h-full log-item-table-body relative"
+            @rangeChanged=${() => {
+              this.setupIntersectionObserver()
+            }}
+          >
+            ${virtualize({
+              items: list,
+              renderItem: renderFunc,
+              scroller: true,
+            })}
           </tbody>
         </table>
-        ${this.hasMore
-          ? html`<div class="w-full flex justify-center relative">
-              <div class="absolute -top-[600px]  w-full h-[600px] -z-10 left-0 flex flex-col justify-end bg-[rgba(0,0,0,0.2)] items-center" id="loader"></div>
-              ${this.isLoading
-                ? html`<div class="mx-auto loading loading-dots loading-md"></div>`
-                : html` <button class="cursor-pointer text-textBrand underline font-semibold w-max mx-auto" @click=${() => this.fetchData(this.nextFetchUrl)}>Load more</button> `}
-            </div>`
-          : ''}
       </div>
     `
   }
@@ -305,7 +341,12 @@ function logItemCol(rowData, source, colIdxMap, key, serviceColors, toggleTrace)
         duration,
         color: serviceColors[lookupVecTextByKey(data, colIdxMap, 'span_name')] || 'black',
       }))
-      return spanLatencyBreakdown({ start: startNs - traceStart, depth: d, duration, traceEnd, color, children: chil })
+      return html`
+        <div class="w-full flex items-center gap-1">
+          <div class="w-24 overflow-visible shrink-0">${logItemCol(rowData, source, colIdxMap, 'duration')}</div>
+          ${spanLatencyBreakdown({ start: startNs - traceStart, depth: d, duration, traceEnd, color, children: chil })}
+        </div>
+      `
     case 'http_attributes':
       const attributes = lookupVecObjectByKey(dataArr, colIdxMap, key)
       const { method: m, url, status_code: statusCode_ } = attributes
@@ -366,8 +407,8 @@ function logItemCol(rowData, source, colIdxMap, key, serviceColors, toggleTrace)
                 ? ['severity_text', 'body'].map((k) => logItemCol(rowData, source, { severity_text: 5, body: 6 }, k))
                 : ['http_attributes', 'db_attributes', 'status', 'kind', 'span_name'].map((k) => logItemCol(rowData, source, colIdxMap, k))}
             </div>
-            <div class="w-24 overflow-visible shrink-0">${logItemCol(rowData, source, colIdxMap, 'duration')}</div>
-            ${logItemCol(rowData, source, colIdxMap, 'latency_breakdown', serviceColors)}
+            <!-- <div class="w-24 overflow-visible shrink-0">${logItemCol(rowData, source, colIdxMap, 'duration')}</div>
+            ${logItemCol(rowData, source, colIdxMap, 'latency_breakdown', serviceColors)} -->
           </div>`
         : html`
             ${logItemCol(rowData, source, colIdxMap, 'request_type')} ${logItemCol(rowData, source, colIdxMap, 'status_code')} ${logItemCol(rowData, source, colIdxMap, 'method')}

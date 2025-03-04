@@ -494,7 +494,7 @@ apiLogsPage page = do
         renderChart page.pid "reqsChartsECP" "All requests" (Just $ fmt (commaizeF page.resultCount)) Nothing page.source ""
         unless (page.source == "logs") $ renderChart page.pid "reqsChartsLatP" "Latency" Nothing Nothing page.source ", chart_type:'LineCT', group_by:'GBDurationPercentile'"
 
-    div_ [class_ "flex gap-3.5 overflow-hidden"] do
+    div_ [class_ "flex h-full gap-3.5 overflow-hidden"] do
       div_ [class_ "w-1/5 shrink-0 flex flex-col gap-2 p-2 hidden  group-has-[.toggle-filters:checked]/pg:hidden "] do
         input_ [placeholder_ "Search filter", class_ "rounded-lg shadow px-3 py-1 border border-strokeStrong"]
         div_ [class_ "divide-y gap-3"] do
@@ -515,7 +515,7 @@ apiLogsPage page = do
               div_ [class_ "flex gap-1.5 items-center  text-slate-950"] $ input_ [type_ "checkbox", class_ "checkbox "] >> span_ [class_ "text-green-500 shrink-0 w-1 h-5 rounded"] " " >> span_ [] "POST"
               span_ "4,459"
 
-      div_ [class_ "grow flex-1 space-y-1.5 overflow-hidden"] do
+      div_ [class_ "grow flex-1 h-full space-y-1.5 overflow-hidden"] do
         -- div_ [class_ "flex gap-2  pt-1"] do
         --   label_ [class_ "gap-1 flex items-center cursor-pointer"] do
         --     faSprite_ "side-chevron-left-in-box" "regular" "w-4 h-4 group-has-[.toggle-filters:checked]/pg:rotate-180 "
@@ -680,7 +680,6 @@ curateCols summaryCols cols = sortBy sortAccordingly filteredCols
       , "trace_id"
       , "severity_text"
       , "parent_span_id"
-      , "latency_breakdown"
       , "errors"
       , "http_attributes"
       , "db_attributes"
