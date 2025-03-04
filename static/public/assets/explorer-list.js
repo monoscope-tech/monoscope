@@ -47,6 +47,20 @@ export class LogList extends LitElement {
     this.fetchData = this.fetchData.bind(this)
     this.renderSpan = this.renderSpan.bind(this)
     this.expandTrace = this.expandTrace.bind(this)
+    this.updateTableData = this.updateTableData.bind(this)
+  }
+
+  updateTableData = (ves, cols, colIdxMap, serviceColors, nextFetchUrl, traceLogs) => {
+    this.logsData = [...ves]
+    this.logsColumns = [...cols]
+    this.colIdxMap = { ...colIdxMap }
+    this.traceLogs = [...traceLogs]
+    this.hasMore = ves.length > 199
+    this.serviceColors = { ...serviceColors }
+    this.nextFetchUrl = nextFetchUrl
+    this.spanListTree = this.source === 'spans' ? this.buildSpanListTree() : []
+
+    this.requestUpdate()
   }
 
   connectedCallback() {
@@ -54,6 +68,7 @@ export class LogList extends LitElement {
   }
   firstUpdated() {
     this.setupIntersectionObserver()
+    window.logListTable = document.querySelector('#resultTable')
   }
   setupIntersectionObserver() {
     const loader = document.querySelector('#loader')
