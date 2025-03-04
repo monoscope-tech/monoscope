@@ -36,6 +36,8 @@ import Pages.Components (emptyState_)
 import Pages.Components qualified as Components
 import Pages.Telemetry.Spans qualified as Spans
 import Pkg.Components qualified as Components
+import Pkg.Components.Widget (WidgetType (WTTimeseriesLine))
+import Pkg.Components.Widget qualified as Widget
 import Pkg.Parser (pSource, parseQueryToAST, toQText)
 import Relude hiding (ask)
 import Relude.Unsafe qualified as Unsafe
@@ -168,6 +170,8 @@ apiLogH pid queryM queryASTM cols' cursorM' sinceM fromM toM layoutM sourceM tar
               , queryAST = decodeUtf8 $ AE.encode queryAST
               , queryLibRecent
               , queryLibSaved
+              , fromD
+              , toD
               }
       case (layoutM, hxRequestM, hxBoostedM) of
         (Just "SaveQuery", _, _) -> addRespHeaders $ LogsQueryLibrary pid queryLibSaved queryLibRecent
@@ -276,7 +280,7 @@ logQueryBox_ pid currentRange source targetSpan queryAST queryLibRecent queryLib
   form_
     [ hxGet_ $ "/p/" <> pid.toText <> "/log_explorer"
     , hxPushUrl_ "true"
-    , hxTrigger_ "add-query from:#filterElement, update-query from:#filterElement"
+    , hxTrigger_ "add-query from:#filterElement, update-query from:#filterElement, submit"
     , hxVals_ "js:{queryAST:window.getQueryFromEditor(), since: params().since, from: params().from, to:params().to, cols:params().cols, layout:'all', source: params().source}"
     , hxTarget_ "#resultTableInner"
     , hxSwap_ "outerHTML"
@@ -425,6 +429,8 @@ data ApiLogsPageData = ApiLogsPageData
   , queryAST :: Text
   , queryLibRecent :: V.Vector Projects.QueryLibItem
   , queryLibSaved :: V.Vector Projects.QueryLibItem
+  , fromD :: Maybe UTCTime
+  , toD :: Maybe UTCTime
   }
 
 
@@ -457,6 +463,7 @@ virtualTable page = do
     , term "data-colIdxMap" (decodeUtf8 $ AE.encode page.colIdxMap)
     , term "data-servicecolors" (decodeUtf8 $ AE.encode page.serviceColors)
     , term "data-nextfetchurl" page.nextLogsURL
+    , term "data-resetLogsURL" page.resetLogsURL
     , term "data-projectid" page.pid.toText
     , term "data-tracelogs" (decodeUtf8 $ AE.encode page.traceLogs)
     ]
@@ -490,9 +497,41 @@ apiLogsPage page = do
     div_ [] do
       logQueryBox_ page.pid page.currentRange page.source page.targetSpans page.queryAST page.queryLibRecent page.queryLibSaved
 
-      div_ [class_ "flex flex-row gap-4 mt-3 group-has-[.toggle-chart:checked]/pg:hidden"] do
-        renderChart page.pid "reqsChartsECP" "All requests" (Just $ fmt (commaizeF page.resultCount)) Nothing page.source ""
-        unless (page.source == "logs") $ renderChart page.pid "reqsChartsLatP" "Latency" Nothing Nothing page.source ", chart_type:'LineCT', group_by:'GBDurationPercentile'"
+      div_ [class_ "flex flex-row gap-4 mt-3 group-has-[.toggle-chart:checked]/pg:hidden w-full", style_ "aspect-ratio: 10 / 1;"] do
+        Widget.widget_ $ (def :: Widget.Widget){Widget.query = Just "timechart count(*)", Widget.unit = Just "reqs", Widget.title = Just "All requests", Widget.hideLegend = Just True, Widget._projectId = Just page.pid, Widget.standalone = Just True}
+        unless (page.source == "logs")
+          $ Widget.widget_
+          $ Widget.replaceQueryVariables page.pid page.fromD page.toD
+          $ (def :: Widget.Widget)
+            { Widget.wType = WTTimeseriesLine
+            , Widget.standalone = Just True
+            , Widget.title = Just "Latency percentiles (ms)"
+            , Widget.hideSubtitle = Just True
+            , Widget.summarizeBy = Just Widget.SBMax
+            , Widget.sql =
+                Just
+                  [text|
+                        SELECT timeB, value, quantile
+                              FROM (
+                                SELECT extract(epoch from time_bucket('1h', created_at))::integer AS timeB,
+                                      ARRAY[
+                                        (approx_percentile(0.50, percentile_agg(duration_ns)) / 1000000.0)::float,
+                                        (approx_percentile(0.75, percentile_agg(duration_ns)) / 1000000.0)::float,
+                                        (approx_percentile(0.90, percentile_agg(duration_ns)) / 1000000.0)::float,
+                                        (approx_percentile(0.95, percentile_agg(duration_ns)) / 1000000.0)::float
+                                      ] AS values,
+                                      ARRAY['p50', 'p75', 'p90', 'p95'] AS quantiles
+                                FROM apis.request_dumps
+                                WHERE project_id='{project_id}'::uuid
+                                  {time_filter_sql_created_at} {query_ast_filters}
+                                GROUP BY timeB
+                              ) s,
+                              LATERAL unnest(s.values, s.quantiles) AS u(value, quantile);
+                        |]
+            , Widget.unit = Just "ms"
+            , Widget.hideLegend = Just True
+            , Widget._projectId = Just page.pid
+            }
 
     div_ [class_ "flex h-full gap-3.5 overflow-hidden"] do
       div_ [class_ "w-1/5 shrink-0 flex flex-col gap-2 p-2 hidden  group-has-[.toggle-filters:checked]/pg:hidden "] do
@@ -592,29 +631,6 @@ apiLogsPage page = do
   Components.drawerWithURLContent_ "global-data-drawer" Nothing ""
   -- the loader is used and displayed while loading the content for the global drawer
   template_ [id_ "loader-tmp"] $ span_ [class_ "loading loading-dots loading-md"] ""
-
-
--- TODO: centralize to have a single chart rendering component
-renderChart :: Projects.ProjectId -> Text -> Text -> Maybe Text -> Maybe Text -> Text -> Text -> Html ()
-renderChart pid chartId chartTitle primaryUnitM rateM source extraHxVals = do
-  -- let chartAspectRatio "logs" = "aspect-[12/1]"
-  --     chartAspectRatio _ = "aspect-[3/1]"
-  div_ [class_ "flex-1 space-y-1.5 overflow-x-hidden flex-grow"] do
-    div_ [class_ "leading-none flex justify-between items-center"] do
-      div_ [class_ "inline-flex gap-3 items-center text-sm text-textStrong"] do
-        span_ $ toHtml chartTitle
-        whenJust primaryUnitM $ span_ [class_ "bg-fillWeak border border-strokeWeak px-2 py-1 rounded-2xl text-xs "] . toHtml
-        whenJust rateM $ span_ [class_ "text-slate-300"] . toHtml
-      label_ [class_ "rounded-full border border-slate-300 p-2 inline-flex cursor-pointer"] $ faSprite_ "up-right-and-down-left-from-center" "regular" "w-3 h-3"
-    div_
-      [ class_ $ "rounded-2xl border border-slate-200 log-chart p-3 "
-      , style_ "height:115px"
-      , hxGet_ $ "/charts_html?id=" <> chartId <> "&show_legend=false&pid=" <> pid.toText
-      , hxTrigger_ "intersect, submit from:#log_explorer_form, add-query from:#filterElement, update-query from:#filterElement"
-      , hxVals_ $ "js:{queryAST:window.getQueryFromEditor('" <> chartId <> "'), since: params().since, from: params().from, to:params().to, cols:params().cols, layout:'all', source: params().source" <> extraHxVals <> "}"
-      , hxSwap_ "innerHTML"
-      ]
-      ""
 
 
 resultTable_ :: ApiLogsPageData -> Bool -> Html ()

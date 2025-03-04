@@ -7,7 +7,7 @@ import Data.Effectful.UUID qualified as UUID
 import Data.Generics.Labels ()
 import Data.Map qualified as M
 import Data.Text qualified as T
-import Data.Time (defaultTimeLocale, formatTime)
+import Data.Time (UTCTime, defaultTimeLocale, formatTime)
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity qualified as DBT
 import Database.PostgreSQL.Entity.DBT qualified as DBT
@@ -98,25 +98,66 @@ loadDashboardFromVM dashVM = case dashVM.schema of
   Nothing -> find (\d -> d.file == dashVM.baseTemplate) dashboardTemplates
 
 
--- | Replace all occurrences of {key} in the input text using the provided mapping.
-replacePlaceholders :: M.Map T.Text T.Text -> T.Text -> T.Text
-replacePlaceholders mappng input =
-  let regex = "\\{([^}]+)\\}" :: T.Text
-      go txt =
-        case T.unpack txt =~ T.unpack regex :: (String, String, String, [String]) of
-          (before, match, after, [key])
-            | not (null match) ->
-                let replacement = M.findWithDefault (T.pack match) (T.pack key) mappng
-                 in T.pack before <> replacement <> go (T.pack after)
-          _ -> txt
-   in go input
+-- Process a single widget recursively.
+processWidget :: Projects.ProjectId -> UTCTime -> (Maybe Text, Maybe Text, Maybe Text) -> Widget.Widget -> ATAuthCtx Widget.Widget
+processWidget pid now (sinceStr, fromDStr, toDStr) widgetBase = do
+  let (fromD, toD, _currentRange) = Components.parseTimeRange now (Components.TimePicker sinceStr fromDStr toDStr)
+  let widget = Widget.replaceQueryVariables pid fromD toD widgetBase
+  widget' <-
+    if (widget.eager == Just True || widget.wType `elem` [Widget.WTAnomalies])
+      then do
+        case widget.wType of
+          Widget.WTAnomalies -> do
+            issues <- dbtToEff $ Anomalies.selectIssues pid Nothing (Just False) (Just False) Nothing (Just 2) (0)
+            let issuesVM = V.map (AnomalyList.IssueVM False now "24h") issues
+            pure
+              $ widget
+              & #html
+                ?~ ( renderText do
+                      div_ [class_ "space-y-4"] do
+                        forM_ issuesVM (\x -> div_ [class_ "border border-strokeWeak rounded-2xl overflow-hidden"] $ toHtml x)
+                   )
+          Widget.WTStat -> do
+            stat <- Charts.queryFloat (Just pid) widget.query Nothing widget.sql sinceStr fromDStr toDStr Nothing
+            pure
+              $ widget
+              & #dataset
+                ?~ def
+                  { Widget.source = AE.Null
+                  , Widget.value = stat.dataFloat
+                  }
+          _ -> do
+            metricsD <-
+              Charts.queryMetrics (Just pid) widget.query Nothing widget.sql sinceStr fromDStr toDStr Nothing
+            pure
+              $ widget
+              & #dataset
+                ?~ Widget.WidgetDataset
+                  { source =
+                      AE.toJSON
+                        $ V.cons
+                          (AE.toJSON <$> metricsD.headers)
+                          (AE.toJSON <<$>> metricsD.dataset)
+                  , rowsPerMin = metricsD.rowsPerMin
+                  , value = Just metricsD.rowsCount
+                  , from = metricsD.from
+                  , to = metricsD.to
+                  , stats = metricsD.stats
+                  }
+      else pure widget
+  -- Recursively process child widgets, if any.
+  case widget'.children of
+    Nothing -> pure widget'
+    Just childWidgets -> do
+      newChildren <- traverse (processWidget pid now (sinceStr, fromDStr, toDStr)) childWidgets
+      pure $ widget' & #children .~ Just newChildren
 
 
 dashboardGetH :: Projects.ProjectId -> Dashboards.DashboardId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders (PageCtx DashboardGet))
 dashboardGetH pid dashId fileM fromDStr toDStr sinceStr = do
   (sess, project) <- Sessions.sessionAndProject pid
   now <- Time.currentTime
-  let (fromD, toD, currentRange) = Components.parseTimeRange now (Components.TimePicker sinceStr fromDStr toDStr)
+  let (_fromD, _toD, currentRange) = Components.parseTimeRange now (Components.TimePicker sinceStr fromDStr toDStr)
 
   dashVM <-
     (dbtToEff $ DBT.selectById @Dashboards.DashboardVM (Only dashId)) >>= \case
@@ -127,74 +168,8 @@ dashboardGetH pid dashId fileM fromDStr toDStr sinceStr = do
     Just file -> Dashboards.readDashboardEndpoint file
     Nothing -> maybe (throwError err404) pure (loadDashboardFromVM dashVM)
 
-  -- Process a single widget recursively.
-  let processWidget :: Widget.Widget -> ATAuthCtx Widget.Widget
-      processWidget widgetBase = do
-        let fromStr = maybeToMonoid $ Utils.formatUTC <$> fromD
-            toStr = maybeToMonoid $ Utils.formatUTC <$> toD
-        let mappng =
-              M.fromList
-                [ ("project_id", pid.toText)
-                , ("from", fromStr)
-                , ("to", toStr)
-                , ("time_filter", "(timestamp >= '" <> fromStr <> "' AND timestamp <= '" <> toStr <> "')")
-                , ("time_filter_sql_created_at", "(created_at >= '" <> fromStr <> "' AND created_at <= '" <> toStr <> "')")
-                ]
-            widget =
-              widgetBase
-                & #sql . _Just %~ replacePlaceholders mappng
-                & #query . _Just %~ replacePlaceholders mappng
-        widget' <-
-          if (widget.eager == Just True || widget.wType `elem` [Widget.WTAnomalies])
-            then do
-              case widget.wType of
-                Widget.WTAnomalies -> do
-                  issues <- dbtToEff $ Anomalies.selectIssues pid Nothing (Just False) (Just False) Nothing (Just 2) (0)
-                  let issuesVM = V.map (AnomalyList.IssueVM False now "24h") issues
-                  pure
-                    $ widget
-                    & #html
-                      ?~ ( renderText do
-                            div_ [class_ "space-y-4"] do
-                              forM_ issuesVM (\x -> div_ [class_ "border border-strokeWeak rounded-2xl overflow-hidden"] $ toHtml x)
-                         )
-                Widget.WTStat -> do
-                  stat <- Charts.queryFloat (Just pid) widget.query Nothing widget.sql sinceStr fromDStr toDStr Nothing
-                  pure
-                    $ widget
-                    & #dataset
-                      ?~ def
-                        { Widget.source = AE.Null
-                        , Widget.value = stat.dataFloat
-                        }
-                _ -> do
-                  metricsD <-
-                    Charts.queryMetrics (Just pid) widget.query Nothing widget.sql sinceStr fromDStr toDStr Nothing
-                  pure
-                    $ widget
-                    & #dataset
-                      ?~ Widget.WidgetDataset
-                        { source =
-                            AE.toJSON
-                              $ V.cons
-                                (AE.toJSON <$> metricsD.headers)
-                                (AE.toJSON <<$>> metricsD.dataset)
-                        , rowsPerMin = metricsD.rowsPerMin
-                        , value = Just metricsD.rowsCount
-                        , from = metricsD.from
-                        , to = metricsD.to
-                        , stats = metricsD.stats
-                        }
-            else pure widget
-        -- Recursively process child widgets, if any.
-        case widget'.children of
-          Nothing -> pure widget'
-          Just childWidgets -> do
-            newChildren <- traverse processWidget childWidgets
-            pure $ widget' & #children .~ Just newChildren
-
   -- Traverse the top-level widgets in the dashboard.
-  dash' <- forOf (#widgets . traverse) dash processWidget
+  dash' <- forOf (#widgets . traverse) dash (processWidget pid now (sinceStr, fromDStr, toDStr))
 
   let bwconf =
         (def :: BWConfig)

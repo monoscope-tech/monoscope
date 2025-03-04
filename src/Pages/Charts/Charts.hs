@@ -1,4 +1,5 @@
 {-# LANGUAGE DerivingVia #-}
+{-# LANGUAGE ViewPatterns #-}
 {-# LANGUAGE NoFieldSelectors #-}
 
 module Pages.Charts.Charts (chartsGetH, ChartType (..), lazy, ChartExp (..), QueryBy (..), GroupBy (..), queryMetrics, queryFloat, MetricsData (..), MetricsStats (..)) where
@@ -30,6 +31,7 @@ import Models.Projects.Projects qualified as Projects
 import NeatInterpolation (text)
 import Network.URI (escapeURIString, isUnescapedInURI)
 import Pkg.Components qualified as Components
+import Pkg.DBUtils qualified as DBUtils
 import Pkg.Parser (
   QueryComponents (finalTimechartQuery),
   SqlQueryCfg (dateRange),
@@ -38,6 +40,7 @@ import Pkg.Parser (
   parseQueryToAST,
   queryASTToComponents,
  )
+import Pkg.Parser qualified as Parser
 import Relude
 import Relude.Unsafe qualified as Unsafe
 import Servant (FromHttpApiData (..))
@@ -248,14 +251,36 @@ data MetricsData = MetricsData
   deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake MetricsData
 
 
+-- Helper function: converts Just "" to Nothing.
+nonNull :: Maybe Text -> Maybe Text
+nonNull Nothing = Nothing
+nonNull (Just "") = Nothing
+nonNull x = x
+
+
 queryMetrics :: (State.State TriggerEvents :> es, Time.Time :> es, DB :> es, Log :> es) => M Projects.ProjectId -> M Text -> M Text -> M Text -> M Text -> M Text -> M Text -> M Text -> Eff es MetricsData
-queryMetrics pidM queryM queryASTM querySQLM sinceM fromM toM sourceM = do
+queryMetrics pidM (nonNull -> queryM) (nonNull -> queryASTM) (nonNull -> querySQLM) (nonNull -> sinceM) (nonNull -> fromM) (nonNull -> toM) (nonNull -> sourceM) = do
   now <- Time.currentTime
   let (fromD, toD, _currentRange) = Components.parseTimeRange now (Components.TimePicker sinceM fromM toM)
+  let parseQuery q = either (\err -> addErrorToast "Error Parsing Query" (Just err) >> pure []) pure (parseQueryToAST q)
+
   sqlQuery <- case (queryM, queryASTM, querySQLM) of
-    (_, _, Just querySQL) -> pure querySQL -- FIXME: risk of sql injection and many other attacks
+    (_, _, Just querySQL) -> do
+      queryAST <-
+        maybe
+          (parseQuery $ maybeToMonoid queryM)
+          (either (const $ parseQuery $ maybeToMonoid queryM) pure . AE.eitherDecode . encodeUtf8)
+          queryASTM
+      let sqlQueryComponents =
+            (defSqlQueryCfg (Unsafe.fromJust pidM) now (parseMaybe pSource =<< sourceM) Nothing)
+              { dateRange = (fromD, toD)
+              }
+      let (_, qc) = Parser.queryASTToComponents sqlQueryComponents queryAST
+
+      let mappng = M.fromList [("query_ast_filters", maybe "" (" AND " <>) qc.whereClause)]
+
+      pure $ DBUtils.replacePlaceholders mappng querySQL -- FIXME: risk of sql injection and many other attacks
     _ -> do
-      let parseQuery q = either (\err -> addErrorToast "Error Parsing Query" (Just err) >> pure []) pure (parseQueryToAST q)
       queryAST <-
         maybe
           (parseQuery $ maybeToMonoid queryM)
@@ -272,7 +297,7 @@ queryMetrics pidM queryM queryASTM querySQLM sinceM fromM toM sourceM = do
   let chartsDataV = V.fromList chartData
   let (headers, groupedData, rowsCount, rowsPerMin) = pivot' chartsDataV
   pure
-    $ MetricsData
+    MetricsData
       { dataset = groupedData
       , dataFloat = Nothing
       , headers = V.cons "timestamp" headers
@@ -285,7 +310,7 @@ queryMetrics pidM queryM queryASTM querySQLM sinceM fromM toM sourceM = do
 
 
 queryFloat :: (State.State TriggerEvents :> es, Time.Time :> es, DB :> es, Log :> es) => M Projects.ProjectId -> M Text -> M Text -> M Text -> M Text -> M Text -> M Text -> M Text -> Eff es MetricsData
-queryFloat pidM queryM queryASTM querySQLM sinceM fromM toM sourceM = do
+queryFloat pidM (nonNull -> queryM) (nonNull -> queryASTM) (nonNull -> querySQLM) (nonNull -> sinceM) (nonNull -> fromM) (nonNull -> toM) (nonNull -> sourceM) = do
   now <- Time.currentTime
   let (fromD, toD, _currentRange) = Components.parseTimeRange now (Components.TimePicker sinceM fromM toM)
   sqlQuery <- case (queryM, queryASTM, querySQLM) of

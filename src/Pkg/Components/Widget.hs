@@ -1,11 +1,13 @@
-module Pkg.Components.Widget (Widget (..), WidgetDataset (..), widget_, Layout (..), WidgetType (..), SummarizeBy (..)) where
+module Pkg.Components.Widget (Widget (..), WidgetDataset (..), widget_, Layout (..), WidgetType (..), SummarizeBy (..), replaceQueryVariables) where
 
 import Control.Lens
 import Data.Aeson qualified as AE
 import Data.Default
 import Data.Generics.Labels ()
+import Data.Map qualified as M
 import Data.Scientific (fromFloatDigits)
 import Data.Text qualified as T
+import Data.Time (UTCTime)
 import Deriving.Aeson qualified as DAE
 import Deriving.Aeson.Stock qualified as DAES
 import Fmt qualified as Ft
@@ -14,10 +16,12 @@ import Lucid
 import Models.Projects.Projects qualified as Projects
 import NeatInterpolation
 import Pages.Charts.Charts qualified as Charts
+import Pkg.DBUtils qualified as DBUtils
 import Relude
 import Text.Printf (printf)
+import Text.Regex.TDFA ((=~))
 import Text.Slugify (slugify)
-import Utils (faSprite_)
+import Utils (faSprite_, formatUTC)
 
 
 data Query = Query
@@ -114,6 +118,7 @@ data Widget = Widget
   , expandBtnFn :: Maybe Text
   , children :: Maybe [Widget]
   , html :: Maybe LText
+  , standalone :: Maybe Bool -- Not used in a grid stack
   }
   deriving stock (Show, Generic, THS.Lift)
   deriving anyclass (NFData, Default)
@@ -148,6 +153,42 @@ data WidgetAxis = WidgetAxis
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.StripPrefix "w", DAE.CamelToSnake]] WidgetAxis
 
 
+-- | Replace all occurrences of {key} in the input text using the provided mapping.
+replacePlaceholders :: M.Map T.Text T.Text -> T.Text -> T.Text
+replacePlaceholders mappng input =
+  let regex = "\\{([^}]+)\\}" :: T.Text
+      go txt =
+        case T.unpack txt =~ T.unpack regex :: (String, String, String, [String]) of
+          (before, match, after, [key])
+            | not (null match) ->
+                let replacement = M.findWithDefault (T.pack match) (T.pack key) mappng
+                 in T.pack before <> replacement <> go (T.pack after)
+          _ -> txt
+   in go input
+
+
+replaceQueryVariables :: Projects.ProjectId -> Maybe UTCTime -> Maybe UTCTime -> Widget -> Widget
+replaceQueryVariables pid mf mt widget =
+  let fmt = maybe "" Utils.formatUTC
+      andPrefix = (" AND " <>)
+      clause field = case (mf, mt) of
+        (Nothing, Nothing) -> ""
+        (Just a, Nothing) -> andPrefix $ "(" <> field <> " >= '" <> Utils.formatUTC a <> "')"
+        (Nothing, Just b) -> andPrefix $ "(" <> field <> " <= '" <> Utils.formatUTC b <> "')"
+        (Just a, Just b) -> andPrefix $ "(" <> field <> " >= '" <> Utils.formatUTC a <> "' AND " <> field <> " <= '" <> Utils.formatUTC b <> "')"
+      mappng =
+        M.fromList
+          [ ("project_id", pid.toText)
+          , ("from", andPrefix $ fmt mf)
+          , ("to", andPrefix $ fmt mt)
+          , ("time_filter", clause "timestamp")
+          , ("time_filter_sql_created_at", clause "created_at")
+          ]
+   in widget
+        & #sql . _Just %~ DBUtils.replacePlaceholders mappng
+        & #query . _Just %~ DBUtils.replacePlaceholders mappng
+
+
 -- use either index or the xxhash as id
 widget_ :: Widget -> Html ()
 widget_ w = widgetHelper_ False w
@@ -164,12 +205,12 @@ widgetHelper_ isChild w = case w.wType of
         whenJust w.icon \icon -> span_ [] $ Utils.faSprite_ icon "regular" "w-4 h-4"
         span_ [] $ toHtml $ maybeToMonoid w.title
     div_ [class_ "grid-stack nested-grid  h-full -m-2"] $ forM_ (fromMaybe [] w.children) (widgetHelper_ True)
-  _ -> gridItem_ $ div_ [class_ $ "h-full " <> paddingBtm] $ renderChart (w & #id .~ (slugify <$> w.title))
+  _ -> gridItem_ $ div_ [class_ $ " w-full h-full " <> paddingBtm] $ renderChart (w & #id .~ (slugify <$> w.title))
   where
     layoutFields = [("x", (.x)), ("y", (.y)), ("w", (.w)), ("h", (.h))]
     attrs = concat [maybe [] (\v -> [term ("gs-" <> name) (show v)]) (w.layout >>= layoutField) | (name, layoutField) <- layoutFields]
-    paddingBtm = bool "pb-8" "pb-4" isChild
-    gridItem_ = div_ ([class_ "grid-stack-item h-full"] <> attrs) . div_ [class_ "grid-stack-item-content h-full"]
+    paddingBtm = if w.standalone == Just True then "" else (bool "pb-8" "pb-4" isChild)
+    gridItem_ = div_ ([class_ "grid-stack-item h-full flex-1"] <> attrs) . div_ [class_ "grid-stack-item-content h-full"]
 
 
 renderWidgetHeader :: Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe (Text, Text) -> Bool -> Html ()
@@ -198,7 +239,7 @@ renderChart widget = do
   let rateM = widget.dataset >>= (.rowsPerMin) >>= (\r -> Just $ toText $ printf "%.2f" r <> " rows/min")
   let chartId = maybeToMonoid widget.id
   let valueM = (widget.dataset >>= (.value) >>= (\x -> Just $ Ft.fmt $ Ft.commaizeF $ round x))
-  div_ [class_ "gap-1.5 flex flex-col h-full"] do
+  div_ [class_ "gap-0.5 flex flex-col h-full justify-end"] do
     unless (widget.wType `elem` [WTTimeseriesStat, WTStat])
       $ renderWidgetHeader chartId widget.title valueM rateM widget.expandBtnFn Nothing (widget.hideSubtitle == Just True)
     div_ [class_ "flex-1 flex"] do
@@ -222,118 +263,23 @@ renderChart widget = do
           let chartType = mapWidgetTypeToChartType widget.wType
           let summarizeBy = T.toLower $ T.drop 2 $ show $ fromMaybe SBSum widget.summarizeBy
           let summarizeByPfx = summarizeByPrefix $ fromMaybe SBSum widget.summarizeBy
-          -- let widgetJSON = decodeUtf8 $ AE.encode $ widget
-          -- let seriesDefault = decodeUtf8 $ AE.encode $ createSeries widget.wType Nothing
           script_
             [type_ "text/javascript"]
             [text|
-
               (()=>{
-                  let intervalId = null;
-                  const FETCH_INTERVAL = 5000; // 5sec
-                  const DEFAULT_BACKGROUND_STYLE = { color: 'rgba(240,248,255, 0.4)' };
-                  const CHART_TYPE = '${chartType}'
-                  const SUMMARIZE_BY = '${summarizeBy}'
-                  const SUMMARIZE_BY_PREFIX = '${summarizeByPfx}'
-
-                  const createSeriesConfig = (name, index, yAxisLabel) => ({
-                    type: CHART_TYPE,
-                    name,
-                    stack: CHART_TYPE == 'line'? undefined : yAxisLabel!='' ? yAxisLabel : 'units',
-                    showSymbol: false,
-                    showBackground: true,
-                    backgroundStyle: DEFAULT_BACKGROUND_STYLE,
-                    barMaxWidth: '10',
-                    barMinHeight: '1',
-                    encode: { x: 0, y: index + 1 }
-                  });
-                  const updateChartConfiguration = (opt, data, yAxisLabel) => {
-                    if (!data) return opt;
-                    const columnNames = data[0]?.slice(1);
-                    opt.series = columnNames?.map((name, index) => createSeriesConfig(name, index, yAxisLabel));
-                    opt.legend.data = columnNames;
-                    return opt;
-                  };
-                  const updateChartData = async (chart, opt, shouldFetch, widgetData) => {
-                    if (!shouldFetch) return;
-
-                    try {
-                      const paramM = new URLSearchParams(window.location.search);
-                      paramM.set("pid", widgetData.pid)
-                      paramM.set("query_raw",widgetData.query);
-                      if (widgetData.querySQL!="") paramM.set("query_sql",widgetData.querySQL);
-
-                      const response = await (await fetch(`/chart_data?${paramM.toString()}`)).json();
-                      opt.xAxis = opt.xAxis || {};
-                      opt.xAxis.min = response.from * 1000;
-                      opt.xAxis.max = response.to * 1000;
-                      // opt.yAxis.max = response.stats.max;
-
-                      // opt.dataset.source = [response.headers, ...response.dataset];
-                      opt.dataset.source = [response.headers, ...response.dataset.map(row => [row[0] * 1000, ...row.slice(1)])];
-                      document.getElementById(widgetData.chartId + "Subtitle").innerHTML = `${response.rows_per_min.toFixed(2)} rows/min`
-                      document.getElementById(widgetData.chartId + "Value").innerHTML = `$${SUMMARIZE_BY_PREFIX} ${Number(response.stats[SUMMARIZE_BY]).toLocaleString()}`
-                      document.getElementById(widgetData.chartId + "Value").classList.remove("hidden");
-
-                      // How should rowsPerMin and Count be updated? Direct to DOM? Passing the ids as an arg?
-                      const finalOpts = updateChartConfiguration(opt, opt.dataset.source, widgetData.yAxisLabel)
-                      chart.hideLoading();
-                      chart.setOption(finalOpts);
-                    } catch (error) {
-                      console.error('Failed to fetch new data:', error);
-                    }
-                  };
-                 const init = (opt, chartId, query, querySQL, theme, yAxisLabel, pid) => {
-                    const chartEl = document.getElementById(chartId);
-                    const chart = echarts.init(chartEl, theme);
-                    chart.group = 'default';
-                    const liveStreamCheckbox = document.getElementById('streamLiveData');
-
-                    // multiply by 1000 to convert unix timestamp in seconds to milliseconds needed by echarts. Useful for eager charts
-                    opt.dataset.source = opt.dataset?.source?.map(row => [row[0] * 1000, ...row.slice(1)]) ?? null;
-
-                    chart.setOption(updateChartConfiguration(opt, opt.dataset.source, yAxisLabel));
-
-                    const resizeObserver = new ResizeObserver((_entries) => requestAnimationFrame(() => echarts.getInstanceByDom(chartEl).resize()));
-                    resizeObserver.observe(chartEl);
-                    const widgetData = {yAxisLabel, pid, query,querySQL, chartId}
-
-                    if (liveStreamCheckbox) {
-                      liveStreamCheckbox.addEventListener('change', () => {
-                        if (checkbox.checked) {
-                          intervalId = setInterval(() => updateChartData(chart, opt, true, widgetData), FETCH_INTERVAL);
-                        } else {
-                          clearInterval(intervalId);
-                          intervalId = null;
-                        }
-                      });
-                    }
-
-                    if (!opt.dataset.source) {
-                      chart.showLoading();
-                      const observer = new IntersectionObserver(entries => {
-                          if (entries[0]?.isIntersecting) {
-                             updateChartData(chart, opt,true, widgetData)
-                             observer.disconnect();
-                          }
-                      });
-                      observer.observe(document.getElementById(chartId));
-                    }
-
-                    ['submit', 'add-query', 'update-query'].forEach(event =>
-                      document.querySelector(event === 'submit' ? '#log_explorer_form' : '#filterElement')?.addEventListener(event, () => updateChartData(chart, opt, query, true, widgetData))
-                    );
-
-                    window.addEventListener('unload', () => {
-                      clearInterval(intervalId);
-                      resizeObserver.disconnect();
-                    });
-                  };
-
-                  init(${echartOpt}, "${chartId}", ${query},
-                  `${querySQL}`,
-                  "${theme}", "${yAxisLabel}", ${pid});
-                })();
+                chartWidget({
+                  chartType: '${chartType}',
+                  opt: ${echartOpt},
+                  chartId: "${chartId}",
+                  query: ${query},
+                  querySQL: `${querySQL}`,
+                  theme: "${theme}",
+                  yAxisLabel: "${yAxisLabel}",
+                  pid: ${pid},
+                  summarizeBy: '${summarizeBy}',
+                  summarizeByPrefix: '${summarizeByPfx}'
+                });
+              })();
             |]
 
 
@@ -352,7 +298,7 @@ widgetToECharts widget =
   let isStat = widget.wType == WTTimeseriesStat
       axisVisibility = not isStat
       gridLinesVisibility = not isStat
-      legendVisibility = not isStat
+      legendVisibility = not isStat && widget.hideLegend /= Just True
    in AE.object
         [ "tooltip"
             AE..= AE.object

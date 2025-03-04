@@ -2,6 +2,7 @@
 import { LitElement, html, nothing } from './js/thirdparty/lit.js'
 import '@lit-labs/virtualizer'
 import { virtualize } from '@lit-labs/virtualizer/virtualizer'
+
 export class LogList extends LitElement {
   static properties = {
     logsData: [],
@@ -98,7 +99,7 @@ export class LogList extends LitElement {
       {
         root: container,
         threshold: [0, 0.2, 0.4, 0.6, 0.8, 1],
-      }
+      },
     )
     observer.observe(loader)
     if (loadBtn) {
@@ -128,7 +129,15 @@ export class LogList extends LitElement {
             <div class="absolute -top-[500px] w-[1px] h-[500px] left-0 flex flex-col justify-end bg-transparent items-center" id="loader"></div>
             ${this.isLoading
               ? html`<div class="mx-auto loading loading-dots loading-md"></div>`
-              : html` <button class="cursor-pointer text-textBrand underline font-semibold w-max mx-auto" id="loadMoreBtn" @click=${() => this.fetchData(this.nextFetchUrl)}>Load more</button> `}
+              : html`
+                  <button
+                    class="cursor-pointer text-textBrand underline font-semibold w-max mx-auto"
+                    id="loadMoreBtn"
+                    @click=${() => this.fetchData(this.nextFetchUrl)}
+                  >
+                    Load more
+                  </button>
+                `}
           </td>
         </tr>`
       : html`<tr></tr>`
@@ -140,8 +149,8 @@ export class LogList extends LitElement {
     }
     this.expandedTraces[tracId] = !this.expandedTraces[tracId]
     const expanded = this.expandedTraces[tracId]
-    const affectedSpans = this.spanListTree.filter((span) => span.traceId === tracId)
-    affectedSpans.forEach((span) => {
+    const affectedSpans = this.spanListTree.filter(span => span.traceId === tracId)
+    affectedSpans.forEach(span => {
       if (span.depth != 0) {
         span.show = expanded
       } else {
@@ -156,15 +165,17 @@ export class LogList extends LitElement {
     const s = rowData.type === 'log' ? 'logs' : this.source
     const [url] = requestDumpLogItemUrlPath(this.projectId, this.source === 'spans' ? rowData.data : rowData, this.colIdxMap, s)
     return html`
-      <tr class="item-row cursor-pointer whitespace-nowrap overflow-hidden" @click=${(event) => toggleLogRow(event, url)}>
+      <tr class="item-row cursor-pointer whitespace-nowrap overflow-hidden" @click=${event => toggleLogRow(event, url)}>
         ${this.logsColumns
-          .filter((v) => v !== 'latency_breakdown')
-          .map((column) => {
+          .filter(v => v !== 'latency_breakdown')
+          .map(column => {
             return column === 'latency_breakdown'
               ? html`<th>${logItemCol(rowData, this.source, this.colIdxMap, column, this.serviceColors, this.expandTrace)}</th>`
               : html`<td>${logItemCol(rowData, this.source, this.colIdxMap, column, this.serviceColors, this.expandTrace)}</td>`
           })}
-        ${this.source === 'spans' ? html`<th>${logItemCol(rowData, this.source, this.colIdxMap, 'latency_breakdown', this.serviceColors, this.expandTrace)}</th>` : nothing}
+        ${this.source === 'spans'
+          ? html`<th>${logItemCol(rowData, this.source, this.colIdxMap, 'latency_breakdown', this.serviceColors, this.expandTrace)}</th>`
+          : nothing}
       </tr>
     `
   }
@@ -173,8 +184,8 @@ export class LogList extends LitElement {
     if (this.isLoading) return
     this.isLoading = true
     fetch(url)
-      .then((response) => response.json())
-      .then((data) => {
+      .then(response => response.json())
+      .then(data => {
         if (!data.error) {
           const { logsData, serviceColors, nextUrl, traceLogs } = data
           this.logsData = [...this.logsData, ...logsData]
@@ -187,7 +198,7 @@ export class LogList extends LitElement {
           this.fetchError = data.error
         }
       })
-      .catch((error) => {
+      .catch(error => {
         this.isError = true
         console.error('Error fetching logs:', error)
       })
@@ -198,7 +209,7 @@ export class LogList extends LitElement {
   }
 
   hideColumn(column) {
-    this.logsColumns = this.logsColumns.filter((col) => col !== column)
+    this.logsColumns = this.logsColumns.filter(col => col !== column)
   }
 
   tableHeadingWrapper(pid, title, column, classes) {
@@ -241,7 +252,7 @@ export class LogList extends LitElement {
   }
 
   render() {
-    const [list, renderFunc] = this.source === 'spans' ? [this.spanListTree.filter((sp) => sp.show), this.renderSpan] : [this.logsData, this.logItemRow]
+    const [list, renderFunc] = this.source === 'spans' ? [this.spanListTree.filter(sp => sp.show), this.renderSpan] : [this.logsData, this.logItemRow]
     // end is used to render the load more button
     list.push('end')
     return html`
@@ -249,7 +260,7 @@ export class LogList extends LitElement {
         <table class="table-auto w-full min-w-full ctable min-h-full flex flex-col table-pin-rows table-pin-cols" style="height:1px; --rounded-box:0;">
           <thead class="w-full grow-1 shrink-0 overflow-hidden">
             <tr class="text-textStrong border-b font-medium border-y">
-              ${this.logsColumns.filter((v) => v !== 'latency_breakdown').map((column) => this.logTableHeading('', column))}
+              ${this.logsColumns.filter(v => v !== 'latency_breakdown').map(column => this.logTableHeading('', column))}
               ${this.source === 'spans' ? this.logTableHeading('', 'latency_breakdown') : nothing}
             </tr>
           </thead>
@@ -277,9 +288,7 @@ export class LogList extends LitElement {
 
 customElements.define('log-list', LogList)
 
-function faSprite(iconName, kind, classes) {
-  return html`<svg class="${classes}"><use href="/public/assets/svgs/fa-sprites/${kind}.svg#${iconName}"></use></svg>`
-}
+const faSprite = (iconName, kind, classes) => html`<svg class="${classes}"><use href="/public/assets/svgs/fa-sprites/${kind}.svg#${iconName}"></use></svg>`
 
 function logItemCol(rowData, source, colIdxMap, key, serviceColors, toggleTrace) {
   const dataArr = source === 'spans' ? rowData.data : rowData
@@ -295,7 +304,9 @@ function logItemCol(rowData, source, colIdxMap, key, serviceColors, toggleTrace)
     case 'timestamp':
       let timestamp = lookupVecTextByKey(dataArr, colIdxMap, key)
       return html`<div class="w-[16ch]">
-        <time class="monospace whitespace-nowrap text-slate-600 w-[16ch]" data-tippy-content="timestamp" datetime=${timestamp}>${displayTimestamp(timestamp)}</time>
+        <time class="monospace whitespace-nowrap text-slate-600 w-[16ch]" data-tippy-content="timestamp" datetime=${timestamp}
+          >${displayTimestamp(timestamp)}</time
+        >
       </div>`
     case 'status_code':
       let statusCode = lookupVecTextByKey(dataArr, colIdxMap, 'status_code')
@@ -360,7 +371,8 @@ function logItemCol(rowData, source, colIdxMap, key, serviceColors, toggleTrace)
             : k === 'CLIENT'
             ? renderIconWithTippy('w-4 ml-2', 'Outgoing Request', faSprite('arrow-up-right', 'solid', ' h-3 fill-blue-700'))
             : nothing}
-          ${statusCode_ ? renderBadge(statusCls_, statusCode_) : nothing} ${m ? renderBadge('min-w-[4rem] text-center cbadge cbadge-sm ' + methodCls_, m) : nothing}
+          ${statusCode_ ? renderBadge(statusCls_, statusCode_) : nothing}
+          ${m ? renderBadge('min-w-[4rem] text-center cbadge cbadge-sm ' + methodCls_, m) : nothing}
           ${url ? renderBadge('cbadge-sm badge-neutral border border-strokeWeak bg-fillWeak', url) : nothing}
         `
       }
@@ -389,30 +401,36 @@ function logItemCol(rowData, source, colIdxMap, key, serviceColors, toggleTrace)
         ? html`<div class="flex items-center w-auto gap-1">
             <div class="w-[800px] overflow-hidden flex items-center">
               ${depth > 1 ? new Array(depth - 1).fill(1).map(() => html`<div class="ml-[15px] border-l w-4 h-5 shrink-0"></div>`) : nothing}
-              ${depth > 0 ? html`<div class="border-l ml-[15px] w-4 h-5 relative shrink-0"><span class="border-b w-full absolute left-0 top-1/2 -translate-y-1/2"></span></div>` : nothing}
+              ${depth > 0
+                ? html`<div class="border-l ml-[15px] w-4 h-5 relative shrink-0">
+                    <span class="border-b w-full absolute left-0 top-1/2 -translate-y-1/2"></span>
+                  </div>`
+                : nothing}
               ${children > 0
                 ? html`<button
-                    @click=${(e) => {
+                    @click=${e => {
                       e.stopPropagation()
                       if (depth === 0) toggleTrace(traceId)
                     }}
                     class=${`rounded shrink-0 w-8 px-1 flex justify-center gap-[2px] text-xs items-center h-5 ${errClas}`}
                   >
-                    ${depth === 0 ? (expanded ? faSprite('minus', 'regular', 'w-3 h-1 shrink-0') : faSprite('plus', 'regular', 'w-3 h-3 shrink-0')) : nothing} ${children}
+                    ${depth === 0 ? (expanded ? faSprite('minus', 'regular', 'w-3 h-1 shrink-0') : faSprite('plus', 'regular', 'w-3 h-3 shrink-0')) : nothing}
+                    ${children}
                   </button>`
                 : depth === 0
                 ? nothing
                 : html`<div class=${`rounded shrink-0 w-3 h-5 ${errClas}`}></div>`}
               ${type === 'log'
-                ? ['severity_text', 'body'].map((k) => logItemCol(rowData, source, { severity_text: 5, body: 6 }, k))
-                : ['http_attributes', 'db_attributes', 'status', 'kind', 'span_name'].map((k) => logItemCol(rowData, source, colIdxMap, k))}
+                ? ['severity_text', 'body'].map(k => logItemCol(rowData, source, { severity_text: 5, body: 6 }, k))
+                : ['http_attributes', 'db_attributes', 'status', 'kind', 'span_name'].map(k => logItemCol(rowData, source, colIdxMap, k))}
             </div>
             <!-- <div class="w-24 overflow-visible shrink-0">${logItemCol(rowData, source, colIdxMap, 'duration')}</div>
             ${logItemCol(rowData, source, colIdxMap, 'latency_breakdown', serviceColors)} -->
           </div>`
         : html`
-            ${logItemCol(rowData, source, colIdxMap, 'request_type')} ${logItemCol(rowData, source, colIdxMap, 'status_code')} ${logItemCol(rowData, source, colIdxMap, 'method')}
-            ${logItemCol(rowData, source, colIdxMap, 'url_path')} ${logItemCol(rowData, source, colIdxMap, 'duration')} ${logItemCol(rowData, source, colIdxMap, 'host')}
+            ${logItemCol(rowData, source, colIdxMap, 'request_type')} ${logItemCol(rowData, source, colIdxMap, 'status_code')}
+            ${logItemCol(rowData, source, colIdxMap, 'method')} ${logItemCol(rowData, source, colIdxMap, 'url_path')}
+            ${logItemCol(rowData, source, colIdxMap, 'duration')} ${logItemCol(rowData, source, colIdxMap, 'host')}
             <span class="whitespace-nowrap overflow-x-hidden max-w-lg fill-slate-700 ">${val}</span>
           `
     default:
@@ -551,7 +569,7 @@ function spanLatencyBreakdown({ start, duration, traceEnd, depth, color, childre
   return html`<div class="w-[20ch] -mt-1 shrink-0">
     <div class="flex h-5 w-[200px] relative bg-fillWeak">
       <div class=${`h-full absolute top-0 ${depth === 0 || children.length === 0 ? color : ''}`} style=${`width:${width}px; left:${left}px`}></div>
-      ${children.map((child) => {
+      ${children.map(child => {
         const cWidth = (child.duration / traceEnd) * 200
         const cLeft = (child.start / traceEnd) * 200
         return html`<div class=${`h-full absolute top-0 ${child.color}`} style=${`width:${cWidth}px; left:${cLeft}px`}></div>`
@@ -586,7 +604,7 @@ function toggleLogRow(event, source) {
     updateUrlState('details_width', sideView.style.width)
   }
   const rows = document.querySelectorAll('.item-row.bg-fillBrand-weak')
-  rows.forEach((row) => row.classList.remove('bg-fillBrand-weak'))
+  rows.forEach(row => row.classList.remove('bg-fillBrand-weak'))
   event.currentTarget.classList.add('bg-fillBrand-weak')
   const indicator = document.querySelector('#details_indicator')
   indicator.classList.add('htmx-request')
@@ -615,7 +633,7 @@ function groupSpans(data, logs, colIdxMap, expandedTraces) {
     return map
   }, new Map())
 
-  data.forEach((span) => {
+  data.forEach(span => {
     const traceId = span[TRACE_INDEX]
     const spanId = span[SPAN_INDEX]
     const parentSpanId = span[PARENT_SPAN_INDEX]
@@ -655,7 +673,7 @@ function groupSpans(data, logs, colIdxMap, expandedTraces) {
     })
   })
 
-  logs.forEach((log) => {
+  logs.forEach(log => {
     const traceData = traceMap.get(log[2])
     if (traceData) {
       traceData.spans.set(log[0], {
@@ -668,9 +686,9 @@ function groupSpans(data, logs, colIdxMap, expandedTraces) {
     }
   })
 
-  traceMap.forEach((traceData) => {
+  traceMap.forEach(traceData => {
     const spanTree = new Map()
-    traceData.spans.forEach((span) => {
+    traceData.spans.forEach(span => {
       if (span.type === 'log') {
         const parentSpan = traceData.spans.get(span.spandId)
         if (parentSpan) {
@@ -701,7 +719,7 @@ function groupSpans(data, logs, colIdxMap, expandedTraces) {
     traceData.spans = Array.from(spanTree.values()).sort((a, b) => a.startNs - b.startNs)
   })
 
-  const result = Array.from(traceMap.values()).map((trace) => ({
+  const result = Array.from(traceMap.values()).map(trace => ({
     traceId: trace.traceId,
     spans: Object.values(trace.spans),
     startTime: trace.minStart,
@@ -728,7 +746,7 @@ function flattenSpanTree(traceArr, expandedTraces = {}) {
       expanded: expandedTraces[traceId] && depth === 0,
       ...span,
       children: childrenCount,
-      childrenTimeSpans: span.children.map((child) => ({
+      childrenTimeSpans: span.children.map(child => ({
         startNs: child.startNs,
         duration: child.duration,
         data: child.data,
@@ -737,7 +755,7 @@ function flattenSpanTree(traceArr, expandedTraces = {}) {
 
     result.push(spanInfo)
 
-    span.children.forEach((child) => {
+    span.children.forEach(child => {
       childErrors = child.hasErrors || childErrors
       const [count, errors] = traverse(child, traceId, traceStart, traceEnd, depth + 1)
       childrenCount += count
@@ -749,8 +767,8 @@ function flattenSpanTree(traceArr, expandedTraces = {}) {
     return [childrenCount, childErrors]
   }
 
-  traceArr.forEach((trace) => {
-    trace.spans.forEach((span) => {
+  traceArr.forEach(trace => {
+    trace.spans.forEach(span => {
       traverse(span, trace.traceId, trace.startTime, trace.duration, 0)
     })
   })

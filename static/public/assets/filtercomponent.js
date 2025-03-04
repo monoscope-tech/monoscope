@@ -1,5 +1,6 @@
 import { LitElement, html, ref } from 'https://cdn.jsdelivr.net/gh/lit/dist@3/all/lit-all.min.js'
 import jsonpath from './js/thirdparty/jsonpath.js'
+// prettier-ignore
 const httpStatusCodes = [
   // 1xx Informational
   100, 101, 102, 103,
@@ -14,6 +15,7 @@ const httpStatusCodes = [
 ]
 const STRING_OPERATORS = ['==', '!=']
 const NUMBER_OPERATORS = ['==', '>', '<', '!=', '>=', '<=']
+// prettier-ignore
 const REQ_SCHEMA = [
   ['method', STRING_OPERATORS, ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS', 'HEAD', 'CONNECT', 'TRACE']],
   ['status_code', NUMBER_OPERATORS, httpStatusCodes],
@@ -48,7 +50,7 @@ const OPERATORS = new Proxy(
     '>=': 'GTEq',
     '<=': 'LTEq',
   },
-  { get: (t, p) => t[p] ?? p }
+  { get: (t, p) => t[p] ?? p },
 )
 
 class SuggestionService {
@@ -57,14 +59,14 @@ class SuggestionService {
     this.projectid = projectid
   }
 
-  parseInput = (input) => {
+  parseInput = input => {
     input = String(input)
     const patterns = [/^([\w.\[\]\*]+)\s*(==|!=|>=|<=|>|<)\s*"?([^"]*)"?$/i, /^([\w.\[\]\*]+)\s*"?([^"]*)"?$/i]
     for (const pattern of patterns) {
       const match = input.match(pattern)
       if (!match) continue
       const [_, field, opOrValue, value] = match
-      return [field, opOrValue ?? '==', value ?? opOrValue ?? ''].map((x) => x?.trim()?.replace(/^["']|["']$/g, '') ?? '')
+      return [field, opOrValue ?? '==', value ?? opOrValue ?? ''].map(x => x?.trim()?.replace(/^["']|["']$/g, '') ?? '')
     }
     return [input.trim()]
   }
@@ -94,20 +96,23 @@ class SuggestionService {
     if (qs.editType === 'op' && qs.field) return fieldSchema?.[1] ?? STRING_OPERATORS
     if (qs.editType === 'value' && qs.field) return fieldSchema?.[2] ?? []
     if (!qs.field) return REQ_SCHEMA.filter(([f]) => !qs.input || f.includes(this.parseInput(qs.input)[0]))
-    return !qs.op ? fieldSchema?.[1] ?? [] : fieldSchema?.[2] ?? []
+    return !qs.op ? (fieldSchema?.[1] ?? []) : (fieldSchema?.[2] ?? [])
   }
 
   async updateStateFromInput(input) {
     const [field] = this.parseInput(input)
     const baseField = field?.split('.')?.[0]
-    const suggestions = field && AUTOCOMPLETE_SUPPORTED_FIELDS.includes(baseField) ? await this.fetchAutocomplete(baseField, field === baseField ? '' : field.split('.').slice(1).join('.')) : []
+    const suggestions =
+      field && AUTOCOMPLETE_SUPPORTED_FIELDS.includes(baseField)
+        ? await this.fetchAutocomplete(baseField, field === baseField ? '' : field.split('.').slice(1).join('.'))
+        : []
     const fieldSchema = REQ_SCHEMA.find(([f]) => f === baseField)
     const validOps = fieldSchema?.[1] ?? STRING_OPERATORS
     return {
       qs: {
         input,
         field: fieldSchema ? field : null,
-        op: fieldSchema && validOps.some((validOp) => input.includes(validOp)) ? validOps.find((validOp) => input.includes(validOp)) : null,
+        op: fieldSchema && validOps.some(validOp => input.includes(validOp)) ? validOps.find(validOp => input.includes(validOp)) : null,
       },
       suggestions,
     }
@@ -141,6 +146,9 @@ export class QueryInputElement extends LitElement {
     qs: { type: Object },
     editContext: { type: Object },
     ast: { type: Array },
+    onAddQuery: { type: Function },
+    onUpdateQuery: { type: Function },
+    onCloseQuery: { type: Function },
   }
 
   constructor() {
@@ -164,7 +172,7 @@ export class QueryInputElement extends LitElement {
 
   #getCurrentList = () => this.suggestionService.getCurrentList(this.suggestions, this.qs, this.editContext)
 
-  #handleKey = (e) => {
+  #handleKey = e => {
     const list = this.#getCurrentList()
     const [field, op, value] = this.suggestionService.parseInput(this.qs.input ?? '')
     const baseField = field?.split('.')?.[0]
@@ -194,7 +202,7 @@ export class QueryInputElement extends LitElement {
           }
         }
       },
-      Tab: (e) => {
+      Tab: e => {
         e.preventDefault()
         handlers.Enter()
       },
@@ -202,7 +210,7 @@ export class QueryInputElement extends LitElement {
         if (this.selected) {
           this.selected = 0
         } else {
-          this.dispatchEvent(new CustomEvent('close-query'))
+          this.onCLoseQuery()
         }
       },
     }
@@ -214,7 +222,7 @@ export class QueryInputElement extends LitElement {
   #select = async (type, value) => {
     if (this.editContext) {
       const detail = this.suggestionService.handleEditContext(this.editContext, value)
-      this.dispatchEvent(new CustomEvent('update-query', { detail, composed: true, bubbles: true }))
+      this.onUpdateQuery(detail)
     } else {
       const result = await this.suggestionService.handleSelection(type, value, this.qs)
       if (result.qs) {
@@ -223,7 +231,7 @@ export class QueryInputElement extends LitElement {
       if (result.suggestions !== undefined) {
         this.suggestions = result.suggestions
       }
-      if (result.newNode) this.dispatchEvent(new CustomEvent('add-query', { detail: result.newNode, composed: true, bubbles: true }))
+      if (result.newNode) this.onAddQuery(result.newNode)
     }
 
     this.selected = 0
@@ -240,10 +248,10 @@ export class QueryInputElement extends LitElement {
         <input
           type="text"
           autofocus
-          ${ref((el) => el?.focus())}
+          ${ref(el => el?.focus())}
           class="w-full min-w-56 border-b text-sm outline-none px-2 py-1 ${isValid ? '' : 'text-red-500'}"
           .value=${this.editContext?.currentValue || this.qs.input || ''}
-          @input=${(e) => this.#updateStateFromInput(e.target.value)}
+          @input=${e => this.#updateStateFromInput(e.target.value)}
           @keydown=${this.#handleKey}
           placeholder=${this.editContext ? `Edit ${this.editContext.editType}...` : 'Type query/field ...'}
         />
@@ -258,10 +266,12 @@ export class QueryInputElement extends LitElement {
               >
                 ${Array.isArray(item) ? item[0] : item}
                 ${!this.suggestions.length && Array.isArray(item)
-                  ? html` <span class="text-xs text-gray-500">${item[1] === NUMBER_OPERATORS ? 'number' : item[1] === STRING_OPERATORS ? 'string' : 'field'}</span> `
+                  ? html`
+                      <span class="text-xs text-gray-500">${item[1] === NUMBER_OPERATORS ? 'number' : item[1] === STRING_OPERATORS ? 'string' : 'field'}</span>
+                    `
                   : ''}
               </a>
-            `
+            `,
           )}
         </div>
       </div>
@@ -296,42 +306,67 @@ export class FilterElement extends LitElement {
 
     if (parent.tag === 'Search') {
       this.ast = []
-      return this.requestUpdate()
+    } else {
+      const sibling = parent.contents.find(n => n !== node)
+      if (parentPath) {
+        // Replace the parent's content with the sibling.
+        jsonpath.apply(this.ast, `$${parentPath}`, () => sibling)
+      } else {
+        // If there's no parent path, assume it's the top level under Search.
+        this.ast = [{ tag: 'Search', contents: sibling }]
+      }
     }
-    const sibling = parent.contents.find((n) => n !== node)
-    if (parentPath) {
-      jsonpath.apply(this.ast, `$${parentPath}`, () => sibling)
-      return this.requestUpdate()
-    }
-
-    // If there's no parent, this is the top level under Search
-    this.ast = [{ tag: 'Search', contents: sibling }]
+    this.#updateQueryASTInURI()
+    this.dispatchEvent(
+      new CustomEvent('update-query', {
+        detail: { ast: this.ast },
+        composed: true,
+        bubbles: true,
+      }),
+    )
     this.requestUpdate()
   }
 
-  #toggleAndOr = (path, _e) => jsonpath.apply(this.ast, `$${path}`, (op) => (op == 'And' ? 'Or' : 'And')) && this.requestUpdate()
+  #toggleAndOr = (path, _e) => {
+    jsonpath.apply(this.ast, `$${path}`, op => (op == 'And' ? 'Or' : 'And')) && this.requestUpdate()
+    this.#updateQueryASTInURI()
+    this.dispatchEvent(new CustomEvent('update-query', { detail: { ast: this.ast }, composed: true, bubbles: true }))
+  }
 
-  handleAddQuery = ({ detail: newNode }) => {
-    if (Array.isArray(newNode) && newNode.some((item) => item.tag === 'Search')) {
+  #updateQueryASTInURI = () => {
+    const url = new URL(window.location.href)
+    // Note: using encodeURIComponent ensures the JSON is URL safe.
+    url.searchParams.set('queryAST', encodeURIComponent(JSON.stringify(this.ast)))
+    history.replaceState(null, '', url)
+  }
+
+  _handleAddQuery = newNode => {
+    if (Array.isArray(newNode) && newNode.some(item => item.tag === 'Search')) {
       this.ast = newNode
     } else {
-      const search = this.ast.find((e) => e.tag === 'Search')
+      const search = this.ast.find(e => e.tag === 'Search')
       search ? (search.contents = { tag: 'And', contents: [search.contents, newNode] }) : this.ast.push({ tag: 'Search', contents: newNode })
     }
     this.newQuery = false
+    this.#updateQueryASTInURI()
+    this.dispatchEvent(new CustomEvent('add-query', { detail: { newNode: newNode, ast: this.ast }, composed: true, bubbles: true }))
     this.requestUpdate()
-    this.dispatchEvent(new CustomEvent('add-query', { detail: newNode, composed: true, bubbles: true }))
   }
 
-  #handleUpdateQuery = ({ detail: { type, path, value } }) => {
+  handleAddQuery = this._handleAddQuery
+
+  _handleUpdateQuery = detail => {
     jsonpath.apply(this.ast, `$${path}`, () => (type === 'op' ? OPERATORS[value] : value))
     this.editingPath = ''
+    this.#updateQueryASTInURI()
+    this.dispatchEvent(new CustomEvent('update-query', { detail: { ast: this.ast }, composed: true, bubbles: true }))
     this.requestUpdate()
   }
 
-  #handleCloseQuery = () => {
+  _handleCloseQuery = () => {
     this.newQuery = false
     this.editingPath = ''
+    this.#updateQueryASTInURI()
     this.requestUpdate()
   }
 
@@ -345,13 +380,17 @@ export class FilterElement extends LitElement {
             ${this.#renderFilter(content, `${path}.contents[${i}]`)}
             ${i < node.contents.length - 1
               ? html`
-                  <a class="bg-gray-200 text-xs px-2 py-1 rounded-full cursor-pointer inline-flex items-center gap-1" @click=${() => this.#toggleAndOr(`${path}.tag`)} data-path="${path}.tag">
+                  <a
+                    class="bg-gray-200 text-xs px-2 py-1 rounded-full cursor-pointer inline-flex items-center gap-1"
+                    @click=${() => this.#toggleAndOr(`${path}.tag`)}
+                    data-path="${path}.tag"
+                  >
                     ${OPERATORS[node.tag]}
                     <svg class="h-3 w-3 icon"><use href="/public/assets/svgs/fa-sprites/regular.svg#sliders-simple" /></svg>
                   </a>
                 `
               : ''}
-          `
+          `,
         )}
       </div>`
     }
@@ -369,7 +408,12 @@ export class FilterElement extends LitElement {
         </a>
         ${this.editingPath === fieldPath
           ? html`
-              <query-input-element .editContext=${{ editType, path: fieldPath, currentValue: value, exprParts }} @update-query=${this.#handleUpdateQuery} @close-query=${this.#handleCloseQuery}>
+              <query-input-element
+                .editContext=${{ editType, path: fieldPath, currentValue: value, exprParts }}
+                .onAddQuery=${this._handleAddQuery}
+                .onUpdateQuery=${this._handleUpdateQuery}
+                .onCloseQuery=${this._handleCloseQuery}
+              >
               </query-input-element>
             `
           : ''}
@@ -380,7 +424,8 @@ export class FilterElement extends LitElement {
     return html`
       <div class="text-[#067cff] bg-[#edf9ff] rounded-xl border border-[#b5e5ff] justify-start items-center inline-flex px-1" data-path=${path}>
         <div class="divide-x divide-[#b5e5ff] inline-flex">
-          ${renderEditableField(`${path}.contents[0]`, node.contents[0], 'field', exprParts)} ${renderEditableField(`${path}.tag`, OPERATORS[node.tag], 'op', exprParts)}
+          ${renderEditableField(`${path}.contents[0]`, node.contents[0], 'field', exprParts)}
+          ${renderEditableField(`${path}.tag`, OPERATORS[node.tag], 'op', exprParts)}
           ${renderEditableField(`${path}.contents[1]`, node.contents[1], 'value', exprParts)}
         </div>
         <span class="rounded-full bg-white inline-flex p-1 ml-1 cursor-pointer" @click=${() => this.#remove(path)}>
@@ -390,20 +435,39 @@ export class FilterElement extends LitElement {
     `
   }
 
-  #closeOnClickOutside = (e) => (this.newQuery || this.editingPath) && !e.composedPath().find((el) => el.classList?.contains('query-input')) && (this.editingPath = '') && (this.newQuery = false)
+  #closeOnClickOutside = e =>
+    (this.newQuery || this.editingPath) &&
+    !e.composedPath().find(el => el.classList?.contains('query-input')) &&
+    (this.editingPath = '') &&
+    (this.newQuery = false)
+
   connectedCallback() {
     super.connectedCallback()
     window.addEventListener('click', this.#closeOnClickOutside)
+
+    // Load the component with AST from URI
+    const params = new URLSearchParams(window.location.search)
+    const queryAST = params.get('queryAST')
+    if (queryAST) {
+      try {
+        // Decode and parse the AST
+        this.ast = JSON.parse(decodeURIComponent(params.get('queryAST')))
+        this.requestUpdate()
+      } catch (error) {
+        console.error('Invalid queryAST in URL', error)
+      }
+    }
   }
+
   disconnectedCallback() {
     super.disconnectedCallback()
     window.removeEventListener('click', this.#closeOnClickOutside)
   }
 
   render() {
-    const searchASTIdx = this.ast?.findIndex((n) => n.tag === 'Search')
+    const searchASTIdx = this.ast?.findIndex(n => n.tag === 'Search')
     return html`
-      <div class="relative flex items-center flex-wrap gap-2" @click=${(e) => e.stopPropagation()}>
+      <div class="relative flex items-center flex-wrap gap-2" @click=${e => e.stopPropagation()}>
         <svg class="h-4 w-4 icon"><use href="/public/assets/svgs/fa-sprites/regular.svg#filter" /></svg>
         <div class="flex flex-wrap gap-2">
           ${searchASTIdx != -1 ? this.#renderFilter(this.ast[searchASTIdx].contents, `[${searchASTIdx}].contents`) : ''}
@@ -426,7 +490,12 @@ export class FilterElement extends LitElement {
                   class="cursor-pointer p-2 "
                   >Click to add filter...</a
                 >`}
-            ${this.newQuery ? html` <query-input-element @add-query=${this.handleAddQuery} @close-query=${this.#handleCloseQuery}> </query-input-element> ` : ''}
+            ${this.newQuery
+              ? html`
+                  <query-input-element .onCloseQuery=${this._handleCloseQuery} .onAddQuery=${this._handleAddQuery} .onUpdateQuery=${this._handleUpdateQuery}>
+                  </query-input-element>
+                `
+              : ''}
           </div>
         </div>
       </div>
