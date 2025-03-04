@@ -46,11 +46,10 @@ export class LogList extends LitElement {
     this.isError = false
     this.logItemRow = this.logItemRow.bind(this)
     this.fetchData = this.fetchData.bind(this)
-    this.renderSpan = this.renderSpan.bind(this)
+    // this.renderSpan = this.renderSpan.bind(this)
     this.expandTrace = this.expandTrace.bind(this)
     this.renderLoadMore = this.renderLoadMore.bind(this)
     this.updateTableData = this.updateTableData.bind(this)
-    this.loadMoreObserver = null
   }
 
   updateTableData = (ves, cols, colIdxMap, serviceColors, nextFetchUrl, traceLogs) => {
@@ -81,7 +80,6 @@ export class LogList extends LitElement {
     }
 
     const loader = document.querySelector('#loader')
-    const loadBtn = document.querySelector('#loadMoreBtn')
     const container = document.querySelector('#logs_list_container')
     if (!loader || !container) {
       setTimeout(() => {
@@ -102,9 +100,6 @@ export class LogList extends LitElement {
       },
     )
     observer.observe(loader)
-    if (loadBtn) {
-      observer.observe(loadBtn)
-    }
     this._observer = observer
   }
 
@@ -118,9 +113,6 @@ export class LogList extends LitElement {
   buildSpanListTree() {
     return groupSpans(this.logsData, this.traceLogs, this.colIdxMap, this.expandedTraces)
   }
-  renderSpan(span) {
-    return span === 'end' ? this.renderLoadMore() : html`${this.logItemRow(span)}`
-  }
 
   renderLoadMore() {
     return this.hasMore
@@ -130,11 +122,7 @@ export class LogList extends LitElement {
             ${this.isLoading
               ? html`<div class="mx-auto loading loading-dots loading-md"></div>`
               : html`
-                  <button
-                    class="cursor-pointer text-textBrand underline font-semibold w-max mx-auto"
-                    id="loadMoreBtn"
-                    @click=${() => this.fetchData(this.nextFetchUrl)}
-                  >
+                  <button class="cursor-pointer text-textBrand underline font-semibold w-max mx-auto" @click=${() => this.fetchData(this.nextFetchUrl)}>
                     Load more
                   </button>
                 `}
@@ -252,7 +240,7 @@ export class LogList extends LitElement {
   }
 
   render() {
-    const [list, renderFunc] = this.source === 'spans' ? [this.spanListTree.filter(sp => sp.show), this.renderSpan] : [this.logsData, this.logItemRow]
+    const list = this.source === 'spans' ? this.spanListTree.filter(sp => sp.show) : [...this.logsData]
     // end is used to render the load more button
     list.push('end')
     return html`
@@ -264,7 +252,7 @@ export class LogList extends LitElement {
               ${this.source === 'spans' ? this.logTableHeading('', 'latency_breakdown') : nothing}
             </tr>
           </thead>
-          ${list.length === 0 ? emptyState(this.source, this.logsColumns.length) : nothing}
+          ${list.length === 1 ? emptyState(this.source, this.logsColumns.length) : nothing}
           <tbody
             class="w-full min-w-0 grow-1 shrink-1 c-scroll h-full log-item-table-body relative"
             @rangeChanged=${() => {
@@ -273,7 +261,7 @@ export class LogList extends LitElement {
           >
             ${virtualize({
               items: list,
-              renderItem: renderFunc,
+              renderItem: this.logItemRow,
               scroller: true,
             })}
           </tbody>
