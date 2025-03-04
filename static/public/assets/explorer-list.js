@@ -570,8 +570,8 @@ function emptyState(source, cols) {
   let title = `No ${source} found`
   let subText = `You're either not sending ${source} to APItoolkit yet or no results matched your query/filter`
   return html`
-    <tr>
-      <td colspan=${String(cols)}>
+    <tr class="w-full flex justify-center">
+      <td colspan=${String(cols)} class="w-full mx-auto">
         <div class="w-max mx-auto my-8 text-center p-5 sm:py-14 sm:px-24 flex flex-col gap-4">
           <div>${faSprite('empty', 'regular', 'h-24 w-24 mx-auto stroke-blue-500 fill-blue-500')}</div>
           <div class="flex flex-col gap-2">
