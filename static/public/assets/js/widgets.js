@@ -1,7 +1,8 @@
 'use strict'
-const DEFAULT_BACKGROUND_STYLE = { color: 'rgba(240,248,255, 0.4)' },
-  INITIAL_FETCH_INTERVAL = 5000,
-  $ = id => document.getElementById(id)
+
+const DEFAULT_BACKGROUND_STYLE = { color: 'rgba(240,248,255, 0.4)' }
+const INITIAL_FETCH_INTERVAL = 5000
+const $ = id => document.getElementById(id)
 
 const createSeriesConfig = (chartType, name, i, yAxisLabel) => ({
   type: chartType,
@@ -40,9 +41,9 @@ const updateChartData = async (chart, opt, shouldFetch, widgetData) => {
     opt.xAxis.max = to * 1000
     opt.dataset.source = [headers, ...dataset.map(row => [row[0] * 1000, ...row.slice(1)])]
 
-    $(chartId + 'Subtitle').innerHTML = `${rows_per_min.toFixed(2)} rows/min`
-    $(chartId + 'Value').innerHTML = `${summarizeByPrefix} ${Number(stats[summarizeBy]).toLocaleString()}`
-    $(chartId + 'Value').classList.remove('hidden')
+    $(`${chartId}Subtitle`).innerHTML = `${rows_per_min.toFixed(2)} rows/min`
+    $(`${chartId}Value`).innerHTML = `${summarizeByPrefix} ${Number(stats[summarizeBy]).toLocaleString()}`
+    $(`${chartId}Value`).classList.remove('hidden')
 
     chart.hideLoading()
     chart.setOption(updateChartConfiguration(widgetData, opt, opt.dataset.source))
@@ -99,15 +100,15 @@ const chartWidget = widgetData => {
     ).observe(chartEl)
   }
 
-  ;['submit', 'add-query', 'update-query'].forEach(event =>
-    document.querySelector(event === 'submit' ? '#log_explorer_form' : '#filterElement')?.addEventListener(event, e => {
-      console.log('add-query/update-query events', e)
-      if (e.detail.ast) {
+  ;['submit', 'add-query', 'update-query'].forEach(event => {
+    const selector = event === 'submit' ? '#log_explorer_form' : '#filterElement'
+    document.querySelector(selector)?.addEventListener(event, e => {
+      if (e.detail?.ast) {
         widgetData.queryAST = e.detail.ast
       }
-      return updateChartData(chart, opt, true, widgetData)
-    }),
-  )
+      updateChartData(chart, opt, true, widgetData)
+    })
+  })
 
   window.addEventListener('unload', () => (clearInterval(intervalId), resizeObserver.disconnect()))
 }

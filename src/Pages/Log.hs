@@ -20,7 +20,6 @@ import Data.Time (UTCTime, diffUTCTime)
 import Data.Vector qualified as V
 import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
 import Effectful.Time qualified as Time
-import Fmt (commaizeF, fmt)
 import Lucid
 import Lucid.Aria qualified as Aria
 import Lucid.Base (TermRaw (termRaw))
@@ -500,7 +499,7 @@ apiLogsPage page = do
         Widget.widget_ $ (def :: Widget.Widget){Widget.query = Just "timechart count(*)", Widget.unit = Just "reqs", Widget.title = Just "All requests", Widget.hideLegend = Just True, Widget._projectId = Just page.pid, Widget.standalone = Just True}
         unless (page.source == "logs") $
           Widget.widget_ $
-            Widget.replaceQueryVariables page.pid page.fromD page.toD $
+            Widget.replaceQueryVariables page.pid page.fromD page.toD [] $
               (def :: Widget.Widget)
                 { Widget.wType = WTTimeseriesLine
                 , Widget.standalone = Just True

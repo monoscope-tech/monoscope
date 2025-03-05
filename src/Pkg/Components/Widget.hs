@@ -4,7 +4,6 @@ import Control.Lens
 import Data.Aeson qualified as AE
 import Data.Default
 import Data.Generics.Labels ()
-import Data.Map qualified as M
 import Data.Scientific (fromFloatDigits)
 import Data.Text qualified as T
 import Data.Time (UTCTime)
@@ -16,12 +15,11 @@ import Lucid
 import Models.Projects.Projects qualified as Projects
 import NeatInterpolation
 import Pages.Charts.Charts qualified as Charts
-import Pkg.DBUtils qualified as DBUtils
+import Pkg.DashboardUtils qualified as DashboardUtils
 import Relude
 import Text.Printf (printf)
-import Text.Regex.TDFA ((=~))
 import Text.Slugify (slugify)
-import Utils (faSprite_, formatUTC)
+import Utils (faSprite_)
 
 
 data Query = Query
@@ -153,40 +151,12 @@ data WidgetAxis = WidgetAxis
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.StripPrefix "w", DAE.CamelToSnake]] WidgetAxis
 
 
--- | Replace all occurrences of {key} in the input text using the provided mapping.
-replacePlaceholders :: M.Map T.Text T.Text -> T.Text -> T.Text
-replacePlaceholders mappng input =
-  let regex = "\\{([^}]+)\\}" :: T.Text
-      go txt =
-        case T.unpack txt =~ T.unpack regex :: (String, String, String, [String]) of
-          (before, match, after, [key])
-            | not (null match) ->
-                let replacement = M.findWithDefault (T.pack match) (T.pack key) mappng
-                 in T.pack before <> replacement <> go (T.pack after)
-          _ -> txt
-   in go input
-
-
-replaceQueryVariables :: Projects.ProjectId -> Maybe UTCTime -> Maybe UTCTime -> Widget -> Widget
-replaceQueryVariables pid mf mt widget =
-  let fmt = maybe "" Utils.formatUTC
-      andPrefix = (" AND " <>)
-      clause field = case (mf, mt) of
-        (Nothing, Nothing) -> ""
-        (Just a, Nothing) -> andPrefix $ "(" <> field <> " >= '" <> Utils.formatUTC a <> "')"
-        (Nothing, Just b) -> andPrefix $ "(" <> field <> " <= '" <> Utils.formatUTC b <> "')"
-        (Just a, Just b) -> andPrefix $ "(" <> field <> " >= '" <> Utils.formatUTC a <> "' AND " <> field <> " <= '" <> Utils.formatUTC b <> "')"
-      mappng =
-        M.fromList
-          [ ("project_id", pid.toText)
-          , ("from", andPrefix $ fmt mf)
-          , ("to", andPrefix $ fmt mt)
-          , ("time_filter", clause "timestamp")
-          , ("time_filter_sql_created_at", clause "created_at")
-          ]
+replaceQueryVariables :: Projects.ProjectId -> Maybe UTCTime -> Maybe UTCTime -> [(Text, Maybe Text)] -> Widget -> Widget
+replaceQueryVariables pid mf mt allParams widget =
+  let mappng = DashboardUtils.variablePresets pid.toText mf mt allParams
    in widget
-        & #sql . _Just %~ DBUtils.replacePlaceholders mappng
-        & #query . _Just %~ DBUtils.replacePlaceholders mappng
+        & #sql . _Just %~ DashboardUtils.replacePlaceholders mappng
+        & #query . _Just %~ DashboardUtils.replacePlaceholders mappng
 
 
 -- use either index or the xxhash as id
@@ -217,8 +187,8 @@ renderWidgetHeader :: Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Te
 renderWidgetHeader wId title valueM subValueM expandBtnFn ctaM hideSub = div_ [class_ "leading-none flex justify-between items-center"] do
   div_ [class_ "inline-flex gap-3 items-center"] do
     span_ [] $ toHtml $ maybeToMonoid title
-    span_ [class_ $ "bg-fillWeak border border-strokeWeak text-sm font-semibold px-2 py-1 rounded-3xl " <> if (isJust valueM) then "" else "hidden", id_ $ wId <> "Value"]
-      $ whenJust valueM toHtml
+    span_ [class_ $ "bg-fillWeak border border-strokeWeak text-sm font-semibold px-2 py-1 rounded-3xl " <> if (isJust valueM) then "" else "hidden", id_ $ wId <> "Value"] $
+      whenJust valueM toHtml
     span_ [class_ $ "text-textWeak widget-subtitle text-sm " <> bool "" "hidden" hideSub, id_ $ wId <> "Subtitle"] $ toHtml $ maybeToMonoid subValueM
   div_ [class_ "text-iconNeutral"] do
     whenJust ctaM \(ctaTitle, uri) -> a_ [class_ "underline underline-offset-2 text-textBrand", href_ uri] $ toHtml ctaTitle
@@ -240,15 +210,15 @@ renderChart widget = do
   let chartId = maybeToMonoid widget.id
   let valueM = (widget.dataset >>= (.value) >>= (\x -> Just $ Ft.fmt $ Ft.commaizeF $ round x))
   div_ [class_ "gap-0.5 flex flex-col h-full justify-end"] do
-    unless (widget.wType `elem` [WTTimeseriesStat, WTStat])
-      $ renderWidgetHeader chartId widget.title valueM rateM widget.expandBtnFn Nothing (widget.hideSubtitle == Just True)
+    unless (widget.wType `elem` [WTTimeseriesStat, WTStat]) $
+      renderWidgetHeader chartId widget.title valueM rateM widget.expandBtnFn Nothing (widget.hideSubtitle == Just True)
     div_ [class_ "flex-1 flex"] do
       div_ [class_ "h-full w-full rounded-2xl border border-strokeWeak p-3 bg-fillWeaker flex "] do
         when (widget.wType `elem` [WTTimeseriesStat, WTStat]) $ div_ [class_ "flex flex-col justify-between"] do
           div_ $ whenJust widget.icon \icon -> span_ [class_ "p-3 bg-fillWeak rounded-lg leading-[0] inline-block text-strokeSelected"] $ Utils.faSprite_ icon "regular" "w-5 h-5"
           div_ [class_ "flex flex-col"] do
-            strong_ [class_ "text-textSuccess-strong text-xl"]
-              $ whenJust valueM toHtml
+            strong_ [class_ "text-textSuccess-strong text-xl"] $
+              whenJust valueM toHtml
             div_ [class_ "inline-flex gap-2 items-center justify-center"] do
               span_ [] $ toHtml $ maybeToMonoid widget.title
               span_ [class_ "inline-flex items-center"] $ Utils.faSprite_ "circle-info" "regular" "w-5 h-5"

@@ -1,19 +1,20 @@
-module Pages.Dashboards (dashboardGetH, entrypointGetH, DashboardGet (..), dashboardsGetH, DashboardsGet (..), dashboardsPostH, DashboardForm (..)) where
+module Pages.Dashboards (dashboardGetH, entrypointRedirectGetH, DashboardGet (..), dashboardsGetH, DashboardsGet (..), dashboardsPostH, DashboardForm (..)) where
 
 import Control.Lens
 import Data.Aeson qualified as AE
 import Data.Default
 import Data.Effectful.UUID qualified as UUID
 import Data.Generics.Labels ()
-import Data.Map qualified as M
-import Data.Text qualified as T
+import Data.Text.Encoding qualified as TE
 import Data.Time (UTCTime, defaultTimeLocale, formatTime)
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity qualified as DBT
+import Database.PostgreSQL.Entity.DBT (QueryNature (Select), query_)
 import Database.PostgreSQL.Entity.DBT qualified as DBT
 import Database.PostgreSQL.Entity.Types qualified as DBT
 import Database.PostgreSQL.Simple (Only (Only))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
+import Database.PostgreSQL.Simple.Types (Query (Query))
 import Effectful.Error.Static (throwError)
 import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
 import Effectful.Time qualified as Time
@@ -26,17 +27,18 @@ import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
 import Models.Users.Users
 import NeatInterpolation
+import Network.HTTP.Types.URI qualified as URI
 import Pages.Anomalies.AnomalyList qualified as AnomalyList
 import Pages.BodyWrapper
 import Pages.Charts.Charts qualified as Charts
 import Pkg.Components qualified as Components
 import Pkg.Components.Widget qualified as Widget
 import Relude
+import Relude.Unsafe qualified as Unsafe
 import Servant (NoContent (..), err404, errBody)
 import Servant.API (Header)
 import Servant.API.ResponseHeaders (Headers, addHeader)
 import System.Types
-import Text.Regex.TDFA ((=~))
 import Utils (faSprite_)
 import Utils qualified
 import Web.FormUrlEncoded (FromForm)
@@ -58,6 +60,13 @@ dashboardPage_ pid dash = do
       label_ [class_ "form-control w-full max-w-xs"] do
         div_ [class_ "label"] $ span_ [class_ "label-text"] "Change Dashboard Title"
         input_ [class_ "input input-bordered w-full max-w-xs", placeholder_ "Insert new title", value_ $ maybeToMonoid dash.title]
+
+  whenJust dash.variables \variables ->
+    div_ [] $
+      forM_ variables \var -> label_ [] do
+        span_ $ toHtml $ fromMaybe var.key var.title
+        select_ ([class_ "select select-sm"] <> memptyIfFalse (var.multi == Just True) [multiple_ "true"]) $
+          whenJust var.options \optM -> forM_ optM \opt -> option_ [value_ $ opt Unsafe.!! 0] (toHtml $ fromMaybe (opt Unsafe.!! 0) (opt !!? 1))
 
   section_ [class_ "pb-12 h-full"] $ div_ [class_ "mx-auto pt-5 pb-6 px-6 gap-3.5 w-full flex flex-col h-full overflow-y-scroll pb-12 group/pg", id_ "dashboardPage"] do
     div_ "" -- variables selector area
@@ -95,14 +104,28 @@ dashboardPage_ pid dash = do
 loadDashboardFromVM :: Dashboards.DashboardVM -> Maybe Dashboards.Dashboard
 loadDashboardFromVM dashVM = case dashVM.schema of
   Just schema_ -> pure schema_
-  Nothing -> find (\d -> d.file == dashVM.baseTemplate) dashboardTemplates
+  Nothing -> find (\d -> d.file == dashVM.baseTemplate) (traceShowId dashboardTemplates)
+
+
+-- Process a single dashboard variable recursively.
+processVariable :: Projects.ProjectId -> UTCTime -> (Maybe Text, Maybe Text, Maybe Text) -> [(Text, Maybe Text)] -> Dashboards.Variable -> ATAuthCtx Dashboards.Variable
+processVariable pid now (sinceStr, fromDStr, toDStr) allParams variableBase = do
+  let (fromD, toD, _currentRange) = Components.parseTimeRange now (Components.TimePicker sinceStr fromDStr toDStr)
+  let variable = Dashboards.replaceQueryVariables pid fromD toD allParams variableBase
+  case variable._vType of
+    Dashboards.VTQuery -> case variable.sql of
+      Nothing -> pure variable
+      Just sqlQuery -> do
+        queryResults <- dbtToEff $ query_ Select (Query $ TE.encodeUtf8 sqlQuery)
+        pure variable{Dashboards.options = Just $ V.toList queryResults}
+    _ -> pure variable
 
 
 -- Process a single widget recursively.
-processWidget :: Projects.ProjectId -> UTCTime -> (Maybe Text, Maybe Text, Maybe Text) -> Widget.Widget -> ATAuthCtx Widget.Widget
-processWidget pid now (sinceStr, fromDStr, toDStr) widgetBase = do
+processWidget :: Projects.ProjectId -> UTCTime -> (Maybe Text, Maybe Text, Maybe Text) -> [(Text, Maybe Text)] -> Widget.Widget -> ATAuthCtx Widget.Widget
+processWidget pid now (sinceStr, fromDStr, toDStr) allParams widgetBase = do
   let (fromD, toD, _currentRange) = Components.parseTimeRange now (Components.TimePicker sinceStr fromDStr toDStr)
-  let widget = Widget.replaceQueryVariables pid fromD toD widgetBase
+  let widget = Widget.replaceQueryVariables pid fromD toD allParams widgetBase
   widget' <-
     if (widget.eager == Just True || widget.wType `elem` [Widget.WTAnomalies])
       then do
@@ -110,51 +133,51 @@ processWidget pid now (sinceStr, fromDStr, toDStr) widgetBase = do
           Widget.WTAnomalies -> do
             issues <- dbtToEff $ Anomalies.selectIssues pid Nothing (Just False) (Just False) Nothing (Just 2) (0)
             let issuesVM = V.map (AnomalyList.IssueVM False now "24h") issues
-            pure
-              $ widget
-              & #html
-                ?~ ( renderText do
-                      div_ [class_ "space-y-4"] do
-                        forM_ issuesVM (\x -> div_ [class_ "border border-strokeWeak rounded-2xl overflow-hidden"] $ toHtml x)
-                   )
+            pure $
+              widget
+                & #html
+                  ?~ ( renderText do
+                        div_ [class_ "space-y-4"] do
+                          forM_ issuesVM (\x -> div_ [class_ "border border-strokeWeak rounded-2xl overflow-hidden"] $ toHtml x)
+                     )
           Widget.WTStat -> do
             stat <- Charts.queryFloat (Just pid) widget.query Nothing widget.sql sinceStr fromDStr toDStr Nothing
-            pure
-              $ widget
-              & #dataset
-                ?~ def
-                  { Widget.source = AE.Null
-                  , Widget.value = stat.dataFloat
-                  }
+            pure $
+              widget
+                & #dataset
+                  ?~ def
+                    { Widget.source = AE.Null
+                    , Widget.value = stat.dataFloat
+                    }
           _ -> do
             metricsD <-
               Charts.queryMetrics (Just pid) widget.query Nothing widget.sql sinceStr fromDStr toDStr Nothing
-            pure
-              $ widget
-              & #dataset
-                ?~ Widget.WidgetDataset
-                  { source =
-                      AE.toJSON
-                        $ V.cons
-                          (AE.toJSON <$> metricsD.headers)
-                          (AE.toJSON <<$>> metricsD.dataset)
-                  , rowsPerMin = metricsD.rowsPerMin
-                  , value = Just metricsD.rowsCount
-                  , from = metricsD.from
-                  , to = metricsD.to
-                  , stats = metricsD.stats
-                  }
+            pure $
+              widget
+                & #dataset
+                  ?~ Widget.WidgetDataset
+                    { source =
+                        AE.toJSON $
+                          V.cons
+                            (AE.toJSON <$> metricsD.headers)
+                            (AE.toJSON <<$>> metricsD.dataset)
+                    , rowsPerMin = metricsD.rowsPerMin
+                    , value = Just metricsD.rowsCount
+                    , from = metricsD.from
+                    , to = metricsD.to
+                    , stats = metricsD.stats
+                    }
       else pure widget
   -- Recursively process child widgets, if any.
   case widget'.children of
     Nothing -> pure widget'
     Just childWidgets -> do
-      newChildren <- traverse (processWidget pid now (sinceStr, fromDStr, toDStr)) childWidgets
+      newChildren <- traverse (processWidget pid now (sinceStr, fromDStr, toDStr) allParams) childWidgets
       pure $ widget' & #children .~ Just newChildren
 
 
-dashboardGetH :: Projects.ProjectId -> Dashboards.DashboardId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders (PageCtx DashboardGet))
-dashboardGetH pid dashId fileM fromDStr toDStr sinceStr = do
+dashboardGetH :: Projects.ProjectId -> Dashboards.DashboardId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> [(Text, Maybe Text)] -> ATAuthCtx (RespHeaders (PageCtx DashboardGet))
+dashboardGetH pid dashId fileM fromDStr toDStr sinceStr allParams = do
   (sess, project) <- Sessions.sessionAndProject pid
   now <- Time.currentTime
   let (_fromD, _toD, currentRange) = Components.parseTimeRange now (Components.TimePicker sinceStr fromDStr toDStr)
@@ -168,19 +191,25 @@ dashboardGetH pid dashId fileM fromDStr toDStr sinceStr = do
     Just file -> Dashboards.readDashboardEndpoint file
     Nothing -> maybe (throwError err404) pure (loadDashboardFromVM dashVM)
 
+  traceShowM "BEFORE variables"
+  dash' <- forOf (#variables . traverse . traverse) dash (processVariable pid now (sinceStr, fromDStr, toDStr) allParams)
+  traceShowM dash'
+  traceShowM ""
+  traceShowM ""
+
   -- Traverse the top-level widgets in the dashboard.
-  dash' <- forOf (#widgets . traverse) dash (processWidget pid now (sinceStr, fromDStr, toDStr))
+  dash'' <- forOf (#widgets . traverse) dash' (processWidget pid now (sinceStr, fromDStr, toDStr) allParams)
 
   let bwconf =
         (def :: BWConfig)
           { sessM = Just sess
           , currProject = Just project
           , prePageTitle = Just "Dashboards"
-          , pageTitle = maybeToMonoid dash'.title
+          , pageTitle = maybeToMonoid dash''.title
           , pageTitleModalId = Just "dashbordTitleMdl"
           , pageActions = Just $ Components.timepicker_ Nothing currentRange
           }
-  addRespHeaders $ PageCtx bwconf $ DashboardGet pid dash'
+  addRespHeaders $ PageCtx bwconf $ DashboardGet pid dash''
 
 
 --------------------------------------------------------------------
@@ -261,9 +290,9 @@ dashboardsGet_ dg = do
             strong_ [class_ "text-xl", id_ "dItemTitle"] "Custom Dashboard"
             p_ [class_ "text-sm line-clamp-2 min-h-10", id_ "dItemDescription"] "Get started from a blank slate"
           div_ [class_ "flex items-center justify-center shrink"] $ button_ [class_ "leading-none rounded-lg p-3 cursor-pointer bg-fillBrand-strong shadow text-white", type_ "submit"] "Select template"
-        div_ [class_ "pt-5"]
-          $ div_ [class_ "bg-[#1e9cff] px-5 py-8 rounded-xl aspect-square w-full flex items-center"]
-          $ img_ [src_ "/public/assets/svgs/screens/dashboard_blank.svg", class_ "w-full", id_ "dItemPreview"]
+        div_ [class_ "pt-5"] $
+          div_ [class_ "bg-[#1e9cff] px-5 py-8 rounded-xl aspect-square w-full flex items-center"] $
+            img_ [src_ "/public/assets/svgs/screens/dashboard_blank.svg", class_ "w-full", id_ "dItemPreview"]
 
   div_ [id_ "itemsListPage", class_ "mx-auto px-6 pt-4 gap-8 w-full flex flex-col h-full overflow-hidden pb-12  group/pg"] do
     div_ [class_ "flex"] do
@@ -292,8 +321,8 @@ dashboardsGet_ dg = do
               time_ [class_ "mr-2 text-slate-400", term "data-tippy-content" "Date of dashboard creation", datetime_ $ Utils.formatUTC dashVM.createdAt] $ toHtml $ formatTime defaultTimeLocale "%eth %b %Y" dashVM.createdAt
               forM_ dashVM.tags (span_ [class_ "cbadge-sm badge-neutral cbadge bg-fillWeak"] . toHtml @Text)
           div_ [class_ "flex items-end justify-center gap-5"] do
-            button_ [class_ "leading-none", term "data-tippy-content" "click star this dashboard"]
-              $ if isJust dashVM.starredSince
+            button_ [class_ "leading-none", term "data-tippy-content" "click star this dashboard"] $
+              if isJust dashVM.starredSince
                 then (faSprite_ "star" "solid" "w-5 h-5")
                 else (faSprite_ "star" "regular" "w-5 h-5")
             let widgetCount = maybe "0" (show . length . (.widgets)) dash
@@ -312,9 +341,9 @@ dashboardsGetH pid = do
           , pageTitle = "Dashboards"
           , pageActions = Just $ (label_ [Lucid.for_ "newDashboardMdl", class_ "leading-none rounded-xl shadow p-3 cursor-pointer bg-fillBrand-strong text-white"] "New Dashboard")
           }
-  addRespHeaders
-    $ PageCtx bwconf
-    $ DashboardsGet{dashboards, projectId = pid}
+  addRespHeaders $
+    PageCtx bwconf $
+      DashboardsGet{dashboards, projectId = pid}
 
 
 data DashboardForm = DashboardForm
@@ -331,21 +360,21 @@ dashboardsPostH pid form = do
   did <- Dashboards.DashboardId <$> UUID.genUUID
   let dashM = find (\dashboard -> dashboard.file == Just form.file) dashboardTemplates
   let redirectURI = "/p/" <> pid.toText <> "/dashboards/" <> (did.toText)
-  dbtToEff
-    $ DBT.insert @Dashboards.DashboardVM
-    $ Dashboards.DashboardVM
-      { id = did
-      , projectId = pid
-      , createdAt = now
-      , updatedAt = now
-      , createdBy = sess.user.id
-      , baseTemplate = if form.file == "" then Nothing else Just form.file
-      , schema = Nothing
-      , starredSince = Nothing
-      , homepageSince = Nothing
-      , tags = V.fromList $ fromMaybe [] $ dashM >>= (.tags)
-      , title = fromMaybe [] $ dashM >>= (.title)
-      }
+  dbtToEff $
+    DBT.insert @Dashboards.DashboardVM $
+      Dashboards.DashboardVM
+        { id = did
+        , projectId = pid
+        , createdAt = now
+        , updatedAt = now
+        , createdBy = sess.user.id
+        , baseTemplate = if form.file == "" then Nothing else Just form.file
+        , schema = Nothing
+        , starredSince = Nothing
+        , homepageSince = Nothing
+        , tags = V.fromList $ fromMaybe [] $ dashM >>= (.tags)
+        , title = fromMaybe [] $ dashM >>= (.title)
+        }
   redirectCS redirectURI
   addRespHeaders NoContent
 
@@ -355,34 +384,48 @@ dashboardTemplates :: [Dashboards.Dashboard]
 dashboardTemplates = $(Dashboards.readDashboardsFromDirectory "static/public/dashboards")
 
 
-entrypointGetH
-  :: Projects.ProjectId
+-- THe current /p/:projectId/  handler. Redirects users to the overview dashboard if it exists, or creates it.
+entrypointRedirectGetH
+  :: Text
+  -> Text
+  -> [Text]
+  -> Projects.ProjectId
+  -> [(Text, Maybe Text)]
   -> ATAuthCtx (Headers '[Header "Location" Text] NoContent)
-entrypointGetH pid = do
+entrypointRedirectGetH baseTemplate title tags pid qparams = do
   (sess, project) <- Sessions.sessionAndProject pid
   now <- Time.currentTime
-  let mkPath p d = "/p/" <> pid.toText <> p <> d
-      q = [sql|select id::text from projects.dashboards where project_id=? and (homepage_since is not null or base_template='_overview.yaml')|]
+  let mkPath p d = "/p/" <> pid.toText <> p <> d <> "?" <> toQueryParams qparams
+      q = [sql|select id::text from projects.dashboards where project_id=? and (homepage_since is not null or base_template=?)|]
       newDashboard = do
         did <- Dashboards.DashboardId <$> UUID.genUUID
-        dbtToEff
-          $ DBT.insert @Dashboards.DashboardVM
+        dbtToEff $
+          DBT.insert @Dashboards.DashboardVM
             Dashboards.DashboardVM
               { id = did
               , projectId = pid
               , createdAt = now
               , updatedAt = now
               , createdBy = sess.user.id
-              , baseTemplate = Just "_overview.yaml"
+              , baseTemplate = Just baseTemplate
               , schema = Nothing
               , starredSince = Nothing
               , homepageSince = Nothing
-              , tags = V.fromList ["overview", "http", "logs", "traces", "events"]
-              , title = "Overview"
+              , tags = V.fromList tags
+              , title = title
               }
         pure did.toText
   redirectTo <-
     if project.paymentPlan == "ONBOARDING"
       then pure $ mkPath "/onboarding" ""
-      else (mkPath "/dashboards/") <$> (maybe newDashboard pure =<< dbtToEff (DBT.queryOne DBT.Select q (Only pid)))
+      else (mkPath "/dashboards/") <$> (maybe newDashboard pure =<< dbtToEff (DBT.queryOne DBT.Select q (pid, baseTemplate)))
   pure $ addHeader redirectTo NoContent
+
+
+-- | Convert a list of query parameters into a percent-encoded query string.
+-- For example, [("key", Just "value"), ("empty", Nothing)] becomes "key=value&empty".
+toQueryParams :: [(Text, Maybe Text)] -> Text
+toQueryParams qs =
+  TE.decodeUtf8 $
+    URI.renderQuery False $
+      map (\(k, mv) -> (TE.encodeUtf8 k, fmap TE.encodeUtf8 mv)) qs

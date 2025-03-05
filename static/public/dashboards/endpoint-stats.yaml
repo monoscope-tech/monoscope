@@ -1,7 +1,15 @@
-title: HTTP Stats
+title: Endpoint Analytics
 preview: /public/assets/svgs/screens/http-stats.svg
 icon: globe-wifi
 refresh_interval: 60s
+variables:
+  - key: endpointId
+    title: Endpoint
+    multi: false
+    help_text: Current filtered endpoint
+    type: query_with_title # requires a query that returns 2 fields, an id and a title
+    sql: select id, method || ' ' || url_path from apis.endpoints where project_id='{{project_id}}' limit 500
+
 widgets:
   # - type: "timeseries_stat"
   #   title: "Requests"
