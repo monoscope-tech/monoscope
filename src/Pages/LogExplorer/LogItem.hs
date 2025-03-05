@@ -10,15 +10,17 @@ import Data.Time.LocalTime (zonedTimeToUTC)
 import Data.UUID qualified as UUID
 import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
 import Lucid
-import Lucid.Htmx (hxPost_, hxSwap_, hxTarget_)
+import Lucid.Htmx
 import Lucid.Hyperscript (__)
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Telemetry qualified as Telemetry
 import Models.Users.Sessions qualified as Sessions
 import NeatInterpolation (text)
+import Network.URI (escapeURIString, isUnescapedInURI)
 import Pages.Components (dateTime, statBox_)
 import Pages.Telemetry.Spans qualified as Spans
+import PyF (fmt)
 import Relude
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
 import Utils (faSprite_, getDurationNSMS, getMethodBorderColor, getMethodColor, getSeverityColor, getStatusBorderColor, getStatusColor, jsonValueToHtmlTree, lookupValueText, toXXHash)
@@ -109,24 +111,22 @@ expandAPIlogItem' pid req modal = do
       div_ [class_ "flex w-full text-slate-950 font-medium gap-2 items-center"] do
         p_ "Errors"
         p_ [class_ " text-red-500 font-bold"] $ show req.errorsCount
-      div_ [class_ "p-4 rounded-3xl border border-slate-200 text-gray-500"] do
+      div_ [class_ "p-4 rounded-lg border border-slate-200 text-gray-500"] do
         jsonValueToHtmlTree req.errors
 
     -- outgoing request details
     -- div_ [class_ "flex w-full flex-col gap-1"] do
     --   p_ [class_ "font-medium text-slate-950 mb-2"] "Outgoing requests"
-    --   div_ [class_ "grow rounded-3xl border border-slate-200 overflow-y-auto py-2 px-1 max-h-[500px] whitespace-nowrap  divide-y overflow-x-hidden"] do
+    --   div_ [class_ "grow rounded-lg border border-slate-200 overflow-y-auto py-2 px-1 h-[150px] whitespace-nowrap  divide-y overflow-x-hidden"] do
     --     let createdAt = toText $ formatTime defaultTimeLocale "%FT%T%6QZ" req.createdAt
     --     let escapedQueryPartial = toText $ escapeURIString isUnescapedInURI $ toString [fmt|parent_id=="{UUID.toText req.id}" AND created_at<="{createdAt}"|]
-    --         parentId = UUID.toText req.id
-    --         escapedQueryAST = [text|%5B%7B"tag"%3A"Search"%2C"contents"%3A%7B"tag"%3A"And"%2C"contents"%3A%5B%7B"tag"%3A"Eq"%2C"contents"%3A%5B"parent_id"%2C"$parentId"%5D%7D%2C%7B"tag"%3A"LTEq"%2C"contents"%3A%5B"created_at"%2C"$createdAt"%5D%7D%5D%7D%7D%5D|]
-    --         events_url = "/p/" <> pid.toText <> "/log_explorer?layout=resultTable&query=" <> escapedQueryPartial <> "&queryAST=" <> escapedQueryAST
+    --         events_url = "/p/" <> pid.toText <> "/log_explorer?layout=virtualTable&query=" <> escapedQueryPartial
     --     div_ [hxGet_ events_url, hxTrigger_ "intersect once", hxSwap_ "outerHTML"] $ span_ [class_ "loading loading-dots loading-md"] ""
 
     -- request details
     div_ [class_ "mt-8", id_ "req-tabs-container"] do
       p_ [class_ "text-slate-950 font-medium mb-2"] "Request Details"
-      div_ [class_ "rounded-3xl border border-slate-200", role_ "tablist"] do
+      div_ [class_ "rounded-lg border border-slate-200", role_ "tablist"] do
         div_ [class_ "flex w-full text-slate-500"] do
           button_ [class_ "a-tab whitespace-nowrap px-3 py-2 border-b border-b-slate-200 w-max t-tab-active", onclick_ "navigatable(this, '#req_body_json', '#req-tabs-container', 't-tab-active')"] "Body"
           button_ [class_ "a-tab whitespace-nowrap px-3 py-2 border-b border-b-slate-200 w-max", onclick_ "navigatable(this, '#req_headers_json', '#req-tabs-container', 't-tab-active')"] "Headers"
@@ -134,32 +134,32 @@ expandAPIlogItem' pid req modal = do
           button_ [class_ "a-tab whitespace-nowrap px-3 py-2 border-b border-b-slate-200 w-max", onclick_ "navigatable(this, '#path_params_json', '#req-tabs-container', 't-tab-active')"] "Path Params"
           button_ [class_ "border-b border-b-slate-200 w-full"] pass
 
-        div_ [class_ "a-tab-content m-2", id_ "req_body_json"]
-          $ jsonValueToHtmlTree req.requestBody
+        div_ [class_ "a-tab-content m-2", id_ "req_body_json"] $
+          jsonValueToHtmlTree req.requestBody
 
-        div_ [class_ "a-tab-content m-2 hidden break-all", id_ "req_headers_json"]
-          $ jsonValueToHtmlTree req.requestHeaders
+        div_ [class_ "a-tab-content m-2 hidden break-all", id_ "req_headers_json"] $
+          jsonValueToHtmlTree req.requestHeaders
 
-        div_ [class_ "a-tab-content m-2 hidden", id_ "query_params_json"]
-          $ jsonValueToHtmlTree req.queryParams
+        div_ [class_ "a-tab-content m-2 hidden", id_ "query_params_json"] $
+          jsonValueToHtmlTree req.queryParams
 
-        div_ [class_ "a-tab-content m-2 hidden", id_ "path_params_json"]
-          $ jsonValueToHtmlTree req.pathParams
+        div_ [class_ "a-tab-content m-2 hidden", id_ "path_params_json"] $
+          jsonValueToHtmlTree req.pathParams
 
     -- response details
     div_ [class_ "mt-8", id_ "res-tabs-container"] do
       p_ [class_ "text-slate-950 font-medium mb-2"] "Response Details"
-      div_ [class_ "rounded-3xl border border-slate-200", role_ "tablist"] do
+      div_ [class_ "rounded-lg border border-slate-200", role_ "tablist"] do
         div_ [class_ "flex w-full text-slate-500"] do
           button_ [class_ "a-tab px-3 border-b border-b-slate-200 py-2 w-max t-tab-active", onclick_ "navigatable(this, '#res_body_json', '#res-tabs-container', 't-tab-active')"] "Body"
           button_ [class_ "a-tab px-3 border-b border-b-slate-200 py-2 w-max", role_ "tab", onclick_ "navigatable(this, '#res_headers_json', '#res-tabs-container', 't-tab-active')"] "Headers"
           button_ [class_ "border-b border-b-slate-200 w-full"] pass
 
-        div_ [class_ "a-tab-content m-2", id_ "res_body_json"]
-          $ jsonValueToHtmlTree req.responseBody
+        div_ [class_ "a-tab-content m-2", id_ "res_body_json"] $
+          jsonValueToHtmlTree req.responseBody
 
-        div_ [class_ "a-tab-content m-2 hidden", id_ "res_headers_json"]
-          $ jsonValueToHtmlTree req.responseHeaders
+        div_ [class_ "a-tab-content m-2 hidden", id_ "res_headers_json"] $
+          jsonValueToHtmlTree req.responseHeaders
 
 
 data ApiItemDetailed

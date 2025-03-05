@@ -3,7 +3,7 @@ module Pages.Log (
   apiLogJson,
   LogsGet (..),
   ApiLogsPageData (..),
-  resultTable_,
+  virtualTable,
   curateCols,
   logQueryBox_,
 )
@@ -175,8 +175,8 @@ apiLogH pid queryM queryASTM cols' cursorM' sinceM fromM toM layoutM sourceM tar
               }
       case (layoutM, hxRequestM, hxBoostedM) of
         (Just "SaveQuery", _, _) -> addRespHeaders $ LogsQueryLibrary pid queryLibSaved queryLibRecent
-        (Just "loadmore", Just "true", _) -> addRespHeaders $ LogsGetRows pid requestVecs curatedColNames colIdxMap nextLogsURL source []
         (Just "resultTable", Just "true", _) -> addRespHeaders $ LogsGetResultTable page False
+        (Just "virtualTable", _, _) -> addRespHeaders $ LogsGetVirtuaTable page
         (Just "all", Just "true", _) -> addRespHeaders $ LogsGetResultTable page True
         _ -> addRespHeaders $ LogPage $ PageCtx bwconf page
     Nothing -> do
@@ -193,9 +193,8 @@ apiLogH pid queryM queryASTM cols' cursorM' sinceM fromM toM layoutM sourceM tar
 
 data LogsGet
   = LogPage (PageCtx ApiLogsPageData)
-  | -- TODO: Make the field below a named record
-    LogsGetRows Projects.ProjectId (V.Vector (V.Vector AE.Value)) [Text] (HM.HashMap Text Int) Text Text (V.Vector Telemetry.SpanRecord)
   | LogsGetResultTable ApiLogsPageData Bool
+  | LogsGetVirtuaTable ApiLogsPageData
   | LogsGetError (PageCtx Text)
   | LogsGetErrorSimple Text
   | LogsQueryLibrary Projects.ProjectId (V.Vector Projects.QueryLibItem) (V.Vector Projects.QueryLibItem)
@@ -203,8 +202,8 @@ data LogsGet
 
 instance ToHtml LogsGet where
   toHtml (LogPage (PageCtx conf pa_dat)) = toHtml $ PageCtx conf $ apiLogsPage pa_dat
-  toHtml (LogsGetRows pid requestVecs cols colIdxMap nextLogsURL source chSpns) = toHtml $ logItemRows_ pid requestVecs cols colIdxMap nextLogsURL source chSpns
   toHtml (LogsGetResultTable page bol) = toHtml $ virtualTableTrigger page
+  toHtml (LogsGetVirtuaTable page) = toHtml $ virtualTable page
   toHtml (LogsGetErrorSimple err) = span_ [class_ "text-red-500"] $ toHtml err
   toHtml (LogsGetError (PageCtx conf err)) = toHtml $ PageCtx conf err
   toHtml (LogsQueryLibrary pid queryLibSaved queryLibRecent) = toHtml $ queryLibrary_ pid queryLibSaved queryLibRecent
@@ -499,18 +498,18 @@ apiLogsPage page = do
 
       div_ [class_ "flex flex-row gap-4 mt-3 group-has-[.toggle-chart:checked]/pg:hidden w-full", style_ "aspect-ratio: 10 / 1;"] do
         Widget.widget_ $ (def :: Widget.Widget){Widget.query = Just "timechart count(*)", Widget.unit = Just "reqs", Widget.title = Just "All requests", Widget.hideLegend = Just True, Widget._projectId = Just page.pid, Widget.standalone = Just True}
-        unless (page.source == "logs")
-          $ Widget.widget_
-          $ Widget.replaceQueryVariables page.pid page.fromD page.toD
-          $ (def :: Widget.Widget)
-            { Widget.wType = WTTimeseriesLine
-            , Widget.standalone = Just True
-            , Widget.title = Just "Latency percentiles (ms)"
-            , Widget.hideSubtitle = Just True
-            , Widget.summarizeBy = Just Widget.SBMax
-            , Widget.sql =
-                Just
-                  [text|
+        unless (page.source == "logs") $
+          Widget.widget_ $
+            Widget.replaceQueryVariables page.pid page.fromD page.toD $
+              (def :: Widget.Widget)
+                { Widget.wType = WTTimeseriesLine
+                , Widget.standalone = Just True
+                , Widget.title = Just "Latency percentiles (ms)"
+                , Widget.hideSubtitle = Just True
+                , Widget.summarizeBy = Just Widget.SBMax
+                , Widget.sql =
+                    Just
+                      [text|
                         SELECT timeB, value, quantile
                               FROM (
                                 SELECT extract(epoch from time_bucket('1h', created_at))::integer AS timeB,
@@ -528,10 +527,10 @@ apiLogsPage page = do
                               ) s,
                               LATERAL unnest(s.values, s.quantiles) AS u(value, quantile);
                         |]
-            , Widget.unit = Just "ms"
-            , Widget.hideLegend = Just True
-            , Widget._projectId = Just page.pid
-            }
+                , Widget.unit = Just "ms"
+                , Widget.hideLegend = Just True
+                , Widget._projectId = Just page.pid
+                }
 
     div_ [class_ "flex h-full gap-3.5 overflow-hidden"] do
       div_ [class_ "w-1/5 shrink-0 flex flex-col gap-2 p-2 hidden  group-has-[.toggle-filters:checked]/pg:hidden "] do
@@ -633,56 +632,6 @@ apiLogsPage page = do
   template_ [id_ "loader-tmp"] $ span_ [class_ "loading loading-dots loading-md"] ""
 
 
-resultTable_ :: ApiLogsPageData -> Bool -> Html ()
-resultTable_ page mainLog = table_
-  [ class_ "w-full  table-auto ctable table-pin-rows table-pin-cols overflow-x-hidden"
-  , style_ "height:1px; --rounded-box:0"
-  , id_ "resultTable"
-  , term "data-source" page.source
-  ]
-  do
-    -- height:1px fixes the cell minimum heights somehow.
-    let isLogEventB = isLogEvent page.cols
-    when (null page.requestVecs && (isNothing page.query || not mainLog)) do
-      whenJust page.isTestLog $ \query -> do
-        emptyState_ "Waiting for Test run events..." "You're currently not running any tests yet." page.emptyStateUrl "Go to test editor"
-      unless (isJust page.isTestLog) do
-        if mainLog
-          then
-            let subText = "You're currently not sending any data to APItoolkit from your backends yet."
-                url = Just $ "/p/" <> page.pid.toText <> "/integration_guides"
-             in emptyState_ "Waiting for  events" subText url "Read the setup guide"
-          else section_ [class_ "w-max mx-auto"] $ p_ "This request has no outgoing requests yet."
-    unless (null page.requestVecs) do
-      thead_ $ tr_ [class_ "text-slate-700 border-b font-medium border-y"] $ forM_ page.cols $ logTableHeading_ page.pid isLogEventB
-      tbody_ [id_ "log-item-table-body", class_ "w-full log-item-table-body [content-visibility:auto]"] do
-        script_
-          [text|
-          window.latestLogsURLQueryValsFn = function(){
-              const datetime = document.querySelector('#log-item-table-body time')?.getAttribute('datetime');
-              const updatedTo = datetime
-                  ? new Date(new Date(datetime).getTime() + 1).toISOString()
-                  : params().to;
-              return {from:params().from, to:updatedTo};
-          }|]
-        tr_ $
-          td_ [colspan_ $ show $ length page.cols] $
-            a_
-              [ class_ "cursor-pointer inline-flex justify-center py-1 px-56 ml-36 blue-800 bg-blue-100 hover:bg-blue-200 gap-3 items-center"
-              , hxTrigger_ "click, every 5s [document.getElementById('streamLiveData').checked]"
-              , hxVals_ "js:{queryAST:window.getQueryFromEditor(), since: params().since, cols:params().cols, layout:'all', source: params().source, ...window.latestLogsURLQueryValsFn()}"
-              , hxSwap_ "afterend settle:500ms"
-              , hxGet_ $ "/p/" <> page.pid.toText <> "/log_explorer?layout=loadmore"
-              , hxPushUrl_ "false"
-              , hxTarget_ "closest tr"
-              , -- using hyperscript instead of hxIndicator_ so the loader isnt distracting by showing up every 5 second and only when clicked
-                [__| on click remove .hidden from #loadNewIndicator on htmx:afterRequest add .hidden to #loadNewIndicator |]
-              ]
-              (span_ [class_ "inline-block"] "check for newer results" >> span_ [id_ "loadNewIndicator", class_ "hidden loading loading-dots loading-sm inline-block pl-3"] "")
-
-        logItemRows_ page.pid (V.take 2 page.requestVecs) page.cols page.colIdxMap page.nextLogsURL page.source []
-
-
 curateCols :: [Text] -> [Text] -> [Text]
 curateCols summaryCols cols = sortBy sortAccordingly filteredCols
   where
@@ -720,31 +669,6 @@ curateCols summaryCols cols = sortBy sortAccordingly filteredCols
       | a == "rest" = GT
       | b == "rest" = LT
       | otherwise = comparing (`L.elemIndex` filteredCols) a b
-
-
-logItemRows_ :: Projects.ProjectId -> V.Vector (V.Vector AE.Value) -> [Text] -> HM.HashMap Text Int -> Text -> Text -> V.Vector Telemetry.SpanRecord -> Html ()
-logItemRows_ pid requests curatedCols colIdxMap nextLogsURL source chSpns = do
-  forM_ requests \reqVec -> do
-    let (logItemPath, _reqId) = fromMaybe ("", "") $ requestDumpLogItemUrlPath pid reqVec colIdxMap
-    let (_, errCount, errClass) = errorClass True reqVec colIdxMap
-    tr_ [class_ "log-row cursor-pointer overflow-hidden", [__|on click toggle .hidden on next <tr/> then toggle .expanded-log on me|]] $
-      forM_ curatedCols \c -> td_ [class_ "pl-3"] $ logItemCol_ source pid reqVec colIdxMap c chSpns
-    tr_ [class_ "hidden"] do
-      -- used for when a row is expanded.
-      td_ [class_ "pl-4"] $ a_ [class_ $ "inline-block h-full " <> errClass, term "data-tippy-content" $ show errCount <> " errors attached to this request"] ""
-      td_ [colspan_ $ show $ length curatedCols - 1] $ div_ [hxGet_ $ logItemPath <> "?source=" <> source, hxTrigger_ "intersect once", hxSwap_ "outerHTML"] $ span_ [class_ "loading loading-dots loading-md"] ""
-  when (V.length requests > 199) $
-    tr_ $
-      td_ [colspan_ $ show $ length curatedCols] $
-        a_
-          [ class_ "cursor-pointer inline-flex justify-center py-1 px-56 ml-36 blue-800 bg-blue-100 hover:bg-blue-200 gap-3 items-center"
-          , hxTrigger_ "click, intersect once"
-          , hxSwap_ "outerHTML"
-          , hxGet_ nextLogsURL
-          , hxTarget_ "closest tr"
-          , hxPushUrl_ "false"
-          ]
-          (span_ [class_ "inline-block"] "LOAD MORE " >> span_ [class_ "loading loading-dots loading-sm inline-block pl-3"] "")
 
 
 errorClass :: Bool -> V.Vector AE.Value -> HM.HashMap Text Int -> (Int, Int, Text)
@@ -814,75 +738,6 @@ logTableHeadingWrapper_ pid title classes child = td_
 
 isLogEvent :: [Text] -> Bool
 isLogEvent cols = all @[] (`elem` cols) ["id", "created_at"] || all @[] (`elem` cols) ["id", "timestamp"]
-
-
-renderBadge :: Text -> Text -> Text -> Html ()
-renderBadge className content tip = span_ [class_ className, term "data-tippy-content" tip] $ toHtml content
-
-
-renderLogBadge :: Text -> V.Vector AE.Value -> HM.HashMap Text Int -> Text -> Html ()
-renderLogBadge key reqVec colIdxMap className = renderBadge (className <> " cbadge ") (fromMaybe "" $ lookupVecTextByKey reqVec colIdxMap key) key
-
-
-renderMethod :: V.Vector AE.Value -> HM.HashMap Text Int -> Html ()
-renderMethod reqVec colIdxMap =
-  let method = fromMaybe "/" $ lookupVecTextByKey reqVec colIdxMap "method"
-   in renderBadge ("min-w-[4rem] cbadge " <> maybe "badge-ghost" getMethodColor (lookupVecTextByKey reqVec colIdxMap "method")) method "method"
-
-
-renderTimestamp :: Text -> V.Vector AE.Value -> HM.HashMap Text Int -> Html ()
-renderTimestamp key reqVec colIdxMap =
-  time_ [class_ "monospace whitespace-nowrap text-slate-600 ", term "data-tippy-content" "timestamp", datetime_ timestamp] $ toHtml (displayTimestamp timestamp)
-  where
-    timestamp = maybeToMonoid $ lookupVecTextByKey reqVec colIdxMap key
-
-
-renderStatusCode :: V.Vector AE.Value -> HM.HashMap Text Int -> Html ()
-renderStatusCode reqVec colIdxMap =
-  renderBadge (getStatusColor $ lookupVecIntByKey reqVec colIdxMap "status_code") (show @Text $ lookupVecIntByKey reqVec colIdxMap "status_code") "status"
-
-
-renderIconWithTippy :: Text -> Text -> Html () -> Html ()
-renderIconWithTippy iconClass tip = a_ [class_ $ "shrink-0 inline-flex " <> iconClass, term "data-tippy-content" tip]
-
-
-logItemCol_ :: Text -> Projects.ProjectId -> V.Vector AE.Value -> HM.HashMap Text Int -> Text -> V.Vector Telemetry.SpanRecord -> Html ()
-logItemCol_ source pid reqVec colIdxMap "id" chSpns = do
-  let (status, errCount, errClass) = errorClass False reqVec colIdxMap
-  let severityClass = barSeverityClass reqVec colIdxMap
-  div_ [class_ "grid grid-cols-3 items-center max-w-12 min-w-10"] do
-    span_ [class_ "col-span-1 h-5 rounded flex"] $ renderIconWithTippy (if source == "logs" then severityClass else errClass) (show errCount <> " errors attached; status " <> show status) " "
-    faSprite_ "chevron-right" "solid" "h-3 col-span-1 text-gray-500 chevron log-chevron "
-logItemCol_ _ _ reqVec colIdxMap "created_at" _ = renderTimestamp "created_at" reqVec colIdxMap
-logItemCol_ _ _ reqVec colIdxMap "timestamp" _ = renderTimestamp "timestamp" reqVec colIdxMap
-logItemCol_ _ _ reqVec colIdxMap "status_code" _ = renderStatusCode reqVec colIdxMap
-logItemCol_ _ _ reqVec colIdxMap "method" _ = renderMethod reqVec colIdxMap
-logItemCol_ _ _ reqVec colIdxMap "severity_text" _ = renderLogBadge "severity_text" reqVec colIdxMap (getSeverityColor $ T.toLower $ fromMaybe "" $ lookupVecTextByKey reqVec colIdxMap "severity_text")
-logItemCol_ _ _ reqVec colIdxMap "duration" _ = renderBadge "cbadge-sm badge-neutral border  border-strokeWeak  bg-fillWeak" (toText (getDurationNSMS $ toInteger $ lookupVecIntByKey reqVec colIdxMap "duration")) "duration"
-logItemCol_ _ _ reqVec colIdxMap "span_name" _ = renderLogBadge "span_name" reqVec colIdxMap "cbadge-sm badge-neutral border  border-strokeWeak  bg-fillWeak"
-logItemCol_ _ _ reqVec colIdxMap "service" _ = renderLogBadge "service" reqVec colIdxMap "cbadge-sm badge-neutral border  border-strokeWeak  bg-fillWeak"
-logItemCol_ _ pid reqVec colIdxMap "latency_breakdown" childSpans =
-  let spanId = lookupVecTextByKey reqVec colIdxMap "latency_breakdown"
-   in Spans.spanLatencyBreakdown $ V.filter (\s -> s.parentSpanId == spanId) childSpans
-logItemCol_ _ _ reqVec colIdxMap "body" _ = renderLogBadge "body" reqVec colIdxMap "space-x-2 whitespace-nowrap"
-logItemCol_ _ _ reqVec colIdxMap "kind" _ = renderBadge "cbadge-sm badge-neutral border  border-strokeWeak  bg-fillWeak" (fromMaybe "" $ lookupVecTextByKey reqVec colIdxMap "kind") "kind"
-logItemCol_ _ _ reqVec colIdxMap "status" _ = renderLogBadge "status" reqVec colIdxMap (getSpanStatusColor $ fromMaybe "" $ lookupVecTextByKey reqVec colIdxMap "status")
-logItemCol_ source pid reqVec colIdxMap "rest" _ = div_ [class_ "space-x-2 whitespace-nowrap max-w-8xl overflow-hidden "] do
-  let key = "rest"
-  case source of
-    "logs" -> forM_ ["severity_text", "body"] \v -> logItemCol_ source pid reqVec colIdxMap v []
-    "spans" -> forM_ ["status", "kind", "duration", "span_name"] \v -> logItemCol_ source pid reqVec colIdxMap v []
-    _ -> do
-      if lookupVecTextByKey reqVec colIdxMap "request_type" == Just "Incoming"
-        then renderIconWithTippy "text-slate-500" "Incoming Request" (faSprite_ "arrow-down-left" "solid" "h-3")
-        else renderIconWithTippy "text-blue-700" "Outgoing Request" (faSprite_ "arrow-up-right" "solid" "h-3")
-      logItemCol_ source pid reqVec colIdxMap "status_code" []
-      logItemCol_ source pid reqVec colIdxMap "method" []
-      renderLogBadge "url_path" reqVec colIdxMap "cbadge-sm badge-neutral border  border-strokeWeak  bg-fillWeak"
-      logItemCol_ source pid reqVec colIdxMap "duration" []
-      renderLogBadge "host" reqVec colIdxMap "cbadge-sm badge-neutral border  border-strokeWeak  bg-fillWeak"
-      span_ $ toHtml $ maybe "" (unwrapJsonPrimValue True) (lookupVecByKey reqVec colIdxMap key)
-logItemCol_ _ _ reqVec colIdxMap key _ = renderBadge "space-nowrap overflow-x-hidden max-w-lg" (maybe "" (unwrapJsonPrimValue True) (lookupVecByKey reqVec colIdxMap key)) key
 
 
 requestDumpLogItemUrlPath :: Projects.ProjectId -> V.Vector AE.Value -> HM.HashMap Text Int -> Maybe (Text, Text)
