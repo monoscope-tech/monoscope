@@ -153,13 +153,13 @@ export class LogList extends LitElement {
     const s = this.source === 'spans' && rowData.type === 'log' ? 'logs' : this.source
     const [url] = requestDumpLogItemUrlPath(this.projectId, this.source === 'spans' ? rowData.data : rowData, this.colIdxMap, s)
     return html`
-      <tr class="item-row min-w-0 cursor-pointer whitespace-nowrap overflow-hidden" @click=${event => toggleLogRow(event, url)}>
+      <tr class="item-row w-full flex items-center cursor-pointer whitespace-nowrap overflow-hidden" @click=${event => toggleLogRow(event, url)}>
         ${this.logsColumns
           .filter(v => v !== 'latency_breakdown')
           .map(column => {
-            return column === 'latency_breakdown'
-              ? html`<th>${logItemCol(rowData, this.source, this.colIdxMap, column, this.serviceColors, this.expandTrace)}</th>`
-              : html`<td>${logItemCol(rowData, this.source, this.colIdxMap, column, this.serviceColors, this.expandTrace)}</td>`
+            return html`<td class=${column === 'rest' ? 'w-3/4' : ''}>
+              ${logItemCol(rowData, this.source, this.colIdxMap, column, this.serviceColors, this.expandTrace)}
+            </td>`
           })}
         ${this.source === 'spans'
           ? html`<th>${logItemCol(rowData, this.source, this.colIdxMap, 'latency_breakdown', this.serviceColors, this.expandTrace)}</th>`
@@ -225,15 +225,15 @@ export class LogList extends LitElement {
         return html`<td class="p-0 m-0 whitespace-nowrap w-3"></td>`
       case 'timestamp':
       case 'created_at':
-        return this.tableHeadingWrapper(pid, 'timestamp', column, 'w-[16ch]')
+        return this.tableHeadingWrapper(pid, 'timestamp', column, 'w-[16ch] shrink-0')
       case 'latency_breakdown':
-        return this.tableHeadingWrapper(pid, 'latency_breakdown', column, 'w-[30ch]')
+        return this.tableHeadingWrapper(pid, 'latency_breakdown', column, 'shrink-0 w-[28ch]')
       case 'status_code':
-        return this.tableHeadingWrapper(pid, 'status', column)
+        return this.tableHeadingWrapper(pid, 'status', column, 'shrink-0 w-[10ch]')
       case 'service':
-        return this.tableHeadingWrapper(pid, 'service', column, 'w-[20ch]')
+        return this.tableHeadingWrapper(pid, 'service', column, 'w-[16ch] shrink-0')
       case 'rest':
-        return this.tableHeadingWrapper(pid, 'summary', column, 'w-[800px] min-w-0')
+        return this.tableHeadingWrapper(pid, 'summary', column, 'w-3/4 shrink')
       default:
         return this.tableHeadingWrapper(pid, column, column)
     }
@@ -246,8 +246,8 @@ export class LogList extends LitElement {
     return html`
       <div class="relative h-full w-full" id="logs_list_container">
         <table class="table-auto w-full min-w-full ctable min-h-full flex flex-col table-pin-rows table-pin-cols" style="height:1px; --rounded-box:0;">
-          <thead class="w-full grow-1 shrink-0 overflow-hidden">
-            <tr class="text-textStrong border-b font-medium border-y">
+          <thead class="w-full grow-1 shrink-1 overflow-hidden">
+            <tr class="text-textStrong border-b flex w-full font-medium border-y">
               ${this.logsColumns.filter(v => v !== 'latency_breakdown').map(column => this.logTableHeading('', column))}
               ${this.source === 'spans' ? this.logTableHeading('', 'latency_breakdown') : nothing}
             </tr>
@@ -328,7 +328,7 @@ function logItemCol(rowData, source, colIdxMap, key, serviceColors, toggleTrace)
     case 'service':
       colIdxMap = rowData.type === 'log' ? { ...colIdxMap, service: dataArr.length - 1 } : colIdxMap
       let service = lookupVecTextByKey(dataArr, colIdxMap, key)
-      return html` <div class="w-[20ch]">${renderBadge('cbadge-sm badge-neutral border  border-strokeWeak bg-fillWeak', service)}</div>`
+      return html` <div class="w-[16ch]">${renderBadge('cbadge-sm badge-neutral border  border-strokeWeak bg-fillWeak', service)}</div>`
     case 'kind':
       let kind = lookupVecTextByKey(dataArr, colIdxMap, key)
       return renderBadge('cbadge-sm badge-neutral border border-strokeWeak bg-fillWeak', kind)
@@ -341,8 +341,8 @@ function logItemCol(rowData, source, colIdxMap, key, serviceColors, toggleTrace)
         color: serviceColors[lookupVecTextByKey(data, colIdxMap, 'span_name')] || 'black',
       }))
       return html`
-        <div class="w-full flex items-center gap-1 text-textWeak">
-          <div class="w-24 overflow-visible shrink-0 font-normal">${logItemCol(rowData, source, colIdxMap, 'duration')}</div>
+        <div class="w-[28ch] flex h-10 ml-auto bg-white justify-end items-center gap-1 text-textWeak">
+          <div class="w-24 overflow-visible  shrink-0 font-normal">${logItemCol(rowData, source, colIdxMap, 'duration')}</div>
           ${spanLatencyBreakdown({ start: startNs - traceStart, depth: d, duration, traceEnd, color, children: chil })}
         </div>
       `
@@ -386,8 +386,8 @@ function logItemCol(rowData, source, colIdxMap, key, serviceColors, toggleTrace)
       return source == 'logs'
         ? html`${logItemCol(rowData, source, colIdxMap, 'severity_text')} ${logItemCol(rowData, source, colIdxMap, 'body')}`
         : source === 'spans'
-        ? html`<div class="flex items-center w-auto gap-1">
-            <div class="w-[800px] overflow-hidden flex items-center">
+        ? html`<div class="flex w-full items-center  gap-1">
+            <div class="w-full flex items-center overflow-x-hidden">
               ${depth > 1 ? new Array(depth - 1).fill(1).map(() => html`<div class="ml-[15px] border-l w-4 h-5 shrink-0"></div>`) : nothing}
               ${depth > 0
                 ? html`<div class="border-l ml-[15px] w-4 h-5 relative shrink-0">
@@ -554,7 +554,7 @@ function getSpanStatusColor(status) {
 function spanLatencyBreakdown({ start, duration, traceEnd, depth, color, children }) {
   const width = (duration / traceEnd) * 200
   const left = (start / traceEnd) * 200
-  return html`<div class="w-[20ch] -mt-1 shrink-0">
+  return html`<div class="-mt-1 shrink-0">
     <div class="flex h-5 w-[200px] relative bg-fillWeak">
       <div class=${`h-full absolute top-0 ${depth === 0 || children.length === 0 ? color : ''}`} style=${`width:${width}px; left:${left}px`}></div>
       ${children.map(child => {
