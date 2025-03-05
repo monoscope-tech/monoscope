@@ -153,7 +153,7 @@ export class LogList extends LitElement {
     const s = rowData.type === 'log' ? 'logs' : this.source
     const [url] = requestDumpLogItemUrlPath(this.projectId, this.source === 'spans' ? rowData.data : rowData, this.colIdxMap, s)
     return html`
-      <tr class="item-row cursor-pointer whitespace-nowrap overflow-hidden" @click=${event => toggleLogRow(event, url)}>
+      <tr class="item-row min-w-0 cursor-pointer whitespace-nowrap overflow-hidden" @click=${event => toggleLogRow(event, url)}>
         ${this.logsColumns
           .filter(v => v !== 'latency_breakdown')
           .map(column => {
@@ -254,7 +254,7 @@ export class LogList extends LitElement {
           </thead>
           ${list.length === 1 ? emptyState(this.source, this.logsColumns.length) : nothing}
           <tbody
-            class="w-full min-w-0 grow-1 shrink-1 c-scroll h-full log-item-table-body relative"
+            class="w-full flex flex-col min-w-0 grow-1 shrink-1 c-scroll h-full log-item-table-body relative"
             @rangeChanged=${() => {
               this.setupIntersectionObserver()
             }}
@@ -310,7 +310,7 @@ function logItemCol(rowData, source, colIdxMap, key, serviceColors, toggleTrace)
       return renderIconWithTippy('w-4', 'Outgoing Request', faSprite('arrow-up-right', 'solid', ' h-3 fill-blue-700'))
     case 'duration':
       let dur = rowData.type === 'log' ? 'log' : getDurationNSMS(lookupVecTextByKey(dataArr, colIdxMap, key))
-      return renderBadge('cbadge-sm badge-neutral border border-strokeWeak bg-fillWeak', dur)
+      return renderBadge('cbadge-sm badge-neutral font-normal border border-strokeWeak bg-fillWeak', dur)
     case 'severity_text':
       let severity = lookupVecTextByKey(dataArr, colIdxMap, key) || 'UNSET'
       let severityClass = getSeverityColor(severity)
@@ -341,8 +341,8 @@ function logItemCol(rowData, source, colIdxMap, key, serviceColors, toggleTrace)
         color: serviceColors[lookupVecTextByKey(data, colIdxMap, 'span_name')] || 'black',
       }))
       return html`
-        <div class="w-full flex items-center gap-1">
-          <div class="w-24 overflow-visible shrink-0">${logItemCol(rowData, source, colIdxMap, 'duration')}</div>
+        <div class="w-full flex items-center gap-1 text-textWeak">
+          <div class="w-24 overflow-visible shrink-0 font-normal">${logItemCol(rowData, source, colIdxMap, 'duration')}</div>
           ${spanLatencyBreakdown({ start: startNs - traceStart, depth: d, duration, traceEnd, color, children: chil })}
         </div>
       `
