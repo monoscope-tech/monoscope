@@ -150,7 +150,7 @@ export class LogList extends LitElement {
 
   logItemRow(rowData) {
     if (rowData === 'end') return this.renderLoadMore()
-    const s = rowData.type === 'log' ? 'logs' : this.source
+    const s = this.source === 'spans' && rowData.type === 'log' ? 'logs' : this.source
     const [url] = requestDumpLogItemUrlPath(this.projectId, this.source === 'spans' ? rowData.data : rowData, this.colIdxMap, s)
     return html`
       <tr class="item-row min-w-0 cursor-pointer whitespace-nowrap overflow-hidden" @click=${event => toggleLogRow(event, url)}>
