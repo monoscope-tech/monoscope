@@ -116,53 +116,73 @@ expandAPIlogItem' pid req modal = do
       div_ [class_ "p-4 rounded-lg border border-slate-200 text-gray-500"] do
         jsonValueToHtmlTree req.errors
 
-    -- outgoing request details
-    -- div_ [class_ "flex w-full flex-col gap-1"] do
-    --   p_ [class_ "font-medium text-slate-950 mb-2"] "Outgoing requests"
-    --   div_ [class_ "grow rounded-lg border border-slate-200 overflow-y-auto py-2 px-1 h-[150px] whitespace-nowrap  divide-y overflow-x-hidden"] do
-    --     let createdAt = toText $ formatTime defaultTimeLocale "%FT%T%6QZ" req.createdAt
-    --     let escapedQueryPartial = toText $ escapeURIString isUnescapedInURI $ toString [fmt|parent_id=="{UUID.toText req.id}" AND created_at<="{createdAt}"|]
-    --         events_url = "/p/" <> pid.toText <> "/log_explorer?layout=virtualTable&query=" <> escapedQueryPartial
-    --     div_ [hxGet_ events_url, hxTrigger_ "intersect once", hxSwap_ "outerHTML"] $ span_ [class_ "loading loading-dots loading-md"] ""
+    div_ [id_ "http-content-container", class_ "flex flex-col gap-3"] do
+      div_ [class_ "bg-fillWeak w-max rounded-lg border border-strokeWeak justify-start items-start inline-flex"] $ do
+        div_ [class_ "justify-start items-start flex text-sm"] $ do
+          button_ [onclick_ "navigatable(this, '#raw_content', '#http-content-container', 't-tab-box-active')", class_ "a-tab px-3 py-1 rounded-lg text-textWeak t-tab-box-active"] "Raw Details"
+          button_ [onclick_ "navigatable(this, '#req_content', '#http-content-container', 't-tab-box-active')", class_ "a-tab px-3 py-1 rounded-lg text-textWeak"] "Req Body"
+          button_ [onclick_ "navigatable(this, '#res_content', '#http-content-container', 't-tab-box-active')", class_ "a-tab px-3 py-1 rounded-lg text-textWeak"] "Res Body"
+          button_ [onclick_ "navigatable(this, '#hed_content', '#http-content-container', 't-tab-box-active')", class_ "a-tab px-3 py-1 rounded-lg text-textWeak"] "Headers"
+          button_ [onclick_ "navigatable(this, '#par_content', '#http-content-container', 't-tab-box-active')", class_ "a-tab px-3 py-1 rounded-lg text-textWeak"] "Params"
+      div_ [] do
+        div_ [id_ "raw_content", class_ "a-tab-content"] do
+          jsonValueToHtmlTree $ selectiveReqToJson req
+        div_ [id_ "req_content", class_ "hidden a-tab-content"] do
+          jsonValueToHtmlTree $ req.requestBody
+        div_ [id_ "res_content", class_ "hidden a-tab-content"] do
+          jsonValueToHtmlTree $ req.responseBody
+        div_ [id_ "hed_content", class_ "hidden a-tab-content"] do
+          jsonValueToHtmlTree $ AE.object ["request_headers" AE..= req.requestHeaders, "response_headers" AE..= req.responseHeaders]
+        div_ [id_ "par_content", class_ "hidden a-tab-content"] do
+          jsonValueToHtmlTree $ AE.object ["query_params" AE..= req.queryParams, "path_params" AE..= req.pathParams]
 
-    -- request details
-    div_ [class_ "mt-8", id_ "req-tabs-container"] do
-      p_ [class_ "text-slate-950 font-medium mb-2"] "Request Details"
-      div_ [class_ "rounded-lg border border-slate-200", role_ "tablist"] do
-        div_ [class_ "flex w-full text-slate-500"] do
-          button_ [class_ "a-tab whitespace-nowrap px-3 py-2 border-b border-b-slate-200 w-max t-tab-active", onclick_ "navigatable(this, '#req_body_json', '#req-tabs-container', 't-tab-active')"] "Body"
-          button_ [class_ "a-tab whitespace-nowrap px-3 py-2 border-b border-b-slate-200 w-max", onclick_ "navigatable(this, '#req_headers_json', '#req-tabs-container', 't-tab-active')"] "Headers"
-          button_ [class_ "a-tab whitespace-nowrap px-3 py-2 border-b border-b-slate-200 w-max", onclick_ "navigatable(this, '#query_params_json', '#req-tabs-container', 't-tab-active')"] "Query"
-          button_ [class_ "a-tab whitespace-nowrap px-3 py-2 border-b border-b-slate-200 w-max", onclick_ "navigatable(this, '#path_params_json', '#req-tabs-container', 't-tab-active')"] "Path Params"
-          button_ [class_ "border-b border-b-slate-200 w-full"] pass
 
-        div_ [class_ "a-tab-content m-2", id_ "req_body_json"] $
-          jsonValueToHtmlTree req.requestBody
+-- outgoing request details
+-- div_ [class_ "flex w-full flex-col gap-1"] do
+--   p_ [class_ "font-medium text-slate-950 mb-2"] "Outgoing requests"
+--   div_ [class_ "grow rounded-lg border border-slate-200 overflow-y-auto py-2 px-1 h-[150px] whitespace-nowrap  divide-y overflow-x-hidden"] do
+--     let createdAt = toText $ formatTime defaultTimeLocale "%FT%T%6QZ" req.createdAt
+--     let escapedQueryPartial = toText $ escapeURIString isUnescapedInURI $ toString [fmt|parent_id=="{UUID.toText req.id}" AND created_at<="{createdAt}"|]
+--         events_url = "/p/" <> pid.toText <> "/log_explorer?layout=virtualTable&query=" <> escapedQueryPartial
+--     div_ [hxGet_ events_url, hxTrigger_ "intersect once", hxSwap_ "outerHTML"] $ span_ [class_ "loading loading-dots loading-md"] ""
 
-        div_ [class_ "a-tab-content m-2 hidden break-all", id_ "req_headers_json"] $
-          jsonValueToHtmlTree req.requestHeaders
+-- -- request details
+-- div_ [class_ "mt-8", id_ "req-tabs-container"] do
+--   p_ [class_ "text-slate-950 font-medium mb-2"] "Request Details"
+--   div_ [class_ "rounded-lg border border-slate-200", role_ "tablist"] do
+--     div_ [class_ "flex w-full text-slate-500"] do
+--       button_ [class_ "a-tab whitespace-nowrap px-3 py-2 border-b border-b-slate-200 w-max t-tab-active", onclick_ "navigatable(this, '#req_body_json', '#req-tabs-container', 't-tab-active')"] "Body"
+--       button_ [class_ "a-tab whitespace-nowrap px-3 py-2 border-b border-b-slate-200 w-max", onclick_ "navigatable(this, '#req_headers_json', '#req-tabs-container', 't-tab-active')"] "Headers"
+--       button_ [class_ "a-tab whitespace-nowrap px-3 py-2 border-b border-b-slate-200 w-max", onclick_ "navigatable(this, '#query_params_json', '#req-tabs-container', 't-tab-active')"] "Query"
+--       button_ [class_ "a-tab whitespace-nowrap px-3 py-2 border-b border-b-slate-200 w-max", onclick_ "navigatable(this, '#path_params_json', '#req-tabs-container', 't-tab-active')"] "Path Params"
+--       button_ [class_ "border-b border-b-slate-200 w-full"] pass
 
-        div_ [class_ "a-tab-content m-2 hidden", id_ "query_params_json"] $
-          jsonValueToHtmlTree req.queryParams
+--     div_ [class_ "a-tab-content m-2", id_ "req_body_json"] $
+--       jsonValueToHtmlTree req.requestBody
 
-        div_ [class_ "a-tab-content m-2 hidden", id_ "path_params_json"] $
-          jsonValueToHtmlTree req.pathParams
+--     div_ [class_ "a-tab-content m-2 hidden break-all", id_ "req_headers_json"] $
+--       jsonValueToHtmlTree req.requestHeaders
 
-    -- response details
-    div_ [class_ "mt-8", id_ "res-tabs-container"] do
-      p_ [class_ "text-slate-950 font-medium mb-2"] "Response Details"
-      div_ [class_ "rounded-lg border border-slate-200", role_ "tablist"] do
-        div_ [class_ "flex w-full text-slate-500"] do
-          button_ [class_ "a-tab px-3 border-b border-b-slate-200 py-2 w-max t-tab-active", onclick_ "navigatable(this, '#res_body_json', '#res-tabs-container', 't-tab-active')"] "Body"
-          button_ [class_ "a-tab px-3 border-b border-b-slate-200 py-2 w-max", role_ "tab", onclick_ "navigatable(this, '#res_headers_json', '#res-tabs-container', 't-tab-active')"] "Headers"
-          button_ [class_ "border-b border-b-slate-200 w-full"] pass
+--     div_ [class_ "a-tab-content m-2 hidden", id_ "query_params_json"] $
+--       jsonValueToHtmlTree req.queryParams
 
-        div_ [class_ "a-tab-content m-2", id_ "res_body_json"] $
-          jsonValueToHtmlTree req.responseBody
+--     div_ [class_ "a-tab-content m-2 hidden", id_ "path_params_json"] $
+--       jsonValueToHtmlTree req.pathParams
 
-        div_ [class_ "a-tab-content m-2 hidden", id_ "res_headers_json"] $
-          jsonValueToHtmlTree req.responseHeaders
+-- -- response details
+-- div_ [class_ "mt-8", id_ "res-tabs-container"] do
+--   p_ [class_ "text-slate-950 font-medium mb-2"] "Response Details"
+--   div_ [class_ "rounded-lg border border-slate-200", role_ "tablist"] do
+--     div_ [class_ "flex w-full text-slate-500"] do
+--       button_ [class_ "a-tab px-3 border-b border-b-slate-200 py-2 w-max t-tab-active", onclick_ "navigatable(this, '#res_body_json', '#res-tabs-container', 't-tab-active')"] "Body"
+--       button_ [class_ "a-tab px-3 border-b border-b-slate-200 py-2 w-max", role_ "tab", onclick_ "navigatable(this, '#res_headers_json', '#res-tabs-container', 't-tab-active')"] "Headers"
+--       button_ [class_ "border-b border-b-slate-200 w-full"] pass
 
+--     div_ [class_ "a-tab-content m-2", id_ "res_body_json"] $
+--       jsonValueToHtmlTree req.responseBody
+
+--     div_ [class_ "a-tab-content m-2 hidden", id_ "res_headers_json"] $
+--       jsonValueToHtmlTree req.responseHeaders
 
 data ApiItemDetailed
   = RequestItemExpanded Projects.ProjectId RequestDumps.RequestDumpLogItem Bool
@@ -260,3 +280,31 @@ spanBadge val key = do
     ]
     $ do
       span_ [] $ toHtml val
+
+
+-- Function to selectively convert RequestDumpLogItem to JSON
+selectiveReqToJson :: RequestDumps.RequestDumpLogItem -> AE.Value
+selectiveReqToJson req =
+  AE.object $
+    concat @[]
+      [ ["created_at" AE..= req.createdAt]
+      , ["duration_ns" AE..= req.durationNs]
+      , ["errors" AE..= req.errors]
+      , ["host" AE..= req.host]
+      , ["method" AE..= req.method]
+      , ["parent_id" AE..= req.parentId]
+      , ["path_params" AE..= req.pathParams]
+      , ["query_params" AE..= req.queryParams]
+      , ["raw_url" AE..= req.rawUrl]
+      , ["referer" AE..= req.referer]
+      , ["request_body" AE..= req.requestBody]
+      , ["request_headers" AE..= req.requestHeaders]
+      , ["request_type" AE..= req.requestType]
+      , ["response_body" AE..= req.responseBody]
+      , ["response_headers" AE..= req.responseHeaders]
+      , ["sdk_type" AE..= req.sdkType]
+      , ["service_version" AE..= req.serviceVersion]
+      , ["status_code" AE..= req.statusCode]
+      , ["tags" AE..= req.tags]
+      , ["url_path" AE..= req.urlPath]
+      ]

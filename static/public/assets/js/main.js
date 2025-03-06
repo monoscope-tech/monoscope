@@ -11,7 +11,12 @@ window.buildCurlRequest = function (event) {
       : ''
   curlCommand += curlHeaders
 
-  const reqBody = method.toLowerCase() !== 'get' ? (typeof request_body === 'object' ? ` -d '${JSON.stringify(request_body)}' \\\n` : `-data-raw "${request_body}"  \\\n`) : ''
+  const reqBody =
+    method.toLowerCase() !== 'get'
+      ? typeof request_body === 'object'
+        ? ` -d '${JSON.stringify(request_body)}' \\\n`
+        : `-data-raw "${request_body}"  \\\n`
+      : ''
   if (reqBody) curlCommand += reqBody
 
   navigator.clipboard.writeText(curlCommand).then(() => {
@@ -20,7 +25,7 @@ window.buildCurlRequest = function (event) {
         detail: { value: ['Curl command copied'] },
         bubbles: true,
         composed: true,
-      })
+      }),
     )
   })
 }
@@ -36,7 +41,7 @@ window.setQueryParamAndReload = (key, value) => {
 }
 
 // TODO: implement correctly. errors doesnt work
-window.getQueryFromEditor = (target) => {
+window.getQueryFromEditor = target => {
   const toggler = document.getElementById('toggleQueryEditor')
   const queryAST = document.getElementById('filterElement').ast
   console.log(queryAST, 'getQueryFromEditor', target)
@@ -69,12 +74,12 @@ window.downloadJson = function (event) {
 }
 
 window.evalScriptsFromContent = function (container) {
-  container.querySelectorAll('script').forEach((oldScript) => {
+  container.querySelectorAll('script').forEach(oldScript => {
     const newScript = document.createElement('script')
     newScript.text = oldScript.textContent || oldScript.innerHTML
 
     // Copy attributes using the spread operator
-    ;[...oldScript.attributes].forEach((attr) => newScript.setAttribute(attr.name, attr.value))
+    ;[...oldScript.attributes].forEach(attr => newScript.setAttribute(attr.name, attr.value))
 
     // Append and remove to execute
     document.body.append(newScript)
@@ -104,23 +109,22 @@ var getTimeRange = function () {
 }
 window.getTimeRange = getTimeRange
 
-var toggleColumnToSummary = (e) => {
-  const cols = (params().cols ?? '').split(',').filter((x) => x != '')
+var toggleColumnToSummary = e => {
+  const cols = (params().cols ?? '').split(',').filter(x => x != '')
   const subject = e.target.closest('.log-item-field-parent').dataset.fieldPath
   if (cols.includes(subject)) {
-    return [...new Set(cols.filter((x) => x != subject))].join(',')
+    return [...new Set(cols.filter(x => x != subject))].join(',')
   }
   cols.push(subject)
   return [...new Set(cols)].join(',')
 }
-
-var removeNamedColumnToSummary = (namedCol) => {
-  const cols = (params().cols ?? '').split(',').filter((x) => x != '')
+var removeNamedColumnToSummary = namedCol => {
+  const cols = (params().cols ?? '').split(',').filter(x => x != '')
   const subject = namedCol
 
-  cols.forEach((x) => console.log(subject, x.replaceAll('.', '•').replaceAll('[', '❲').replaceAll(']', '❳')))
+  cols.forEach(x => console.log(subject, x.replaceAll('.', '•').replaceAll('[', '❲').replaceAll(']', '❳')))
 
-  return [...new Set(cols.filter((x) => subject.toLowerCase() != x.replaceAll('.', '•').replaceAll('[', '❲').replaceAll(']', '❳').toLowerCase()))].join(',')
+  return [...new Set(cols.filter(x => subject.toLowerCase() != x.replaceAll('.', '•').replaceAll('[', '❲').replaceAll(']', '❳').toLowerCase()))].join(',')
 }
 
 // Example usage
@@ -136,7 +140,7 @@ window.setParams = (
       new URLSearchParams(
         Object.entries(state)
           .filter(([_key, value]) => value != null)
-          .sort(([keyA], [keyB]) => keyA.localeCompare(keyB))
+          .sort(([keyA], [keyB]) => keyA.localeCompare(keyB)),
       ).toString()
 
     load ? window.location.assign(url) : history.replaceState(null, '', url)
@@ -149,7 +153,7 @@ function updateMarkAreas(chartId, warningVal, incidentVal) {
     myChart = echarts.getInstanceByDom(document.getElementById(chartId)),
     options = myChart.getOption()
 
-  options.series.forEach((series) => {
+  options.series.forEach(series => {
     series.markArea = {
       label: { show: false },
       data: [

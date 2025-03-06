@@ -445,6 +445,7 @@ virtualTableTrigger page = do
 
     script_
       [text|
+         console.log("vvvvvvvvvvvvvvvvvvvvvvvvvvvvv")
         if(window.logListTable) {
            window.logListTable.updateTableData($vecs, $cols, $colIdxMap, $serviceColors, $nextLogsURL, $traceLogs)
           }
@@ -760,7 +761,7 @@ jsonTreeAuxillaryCode pid queryAST = do
           , hxGet_ $ "/p/" <> pid.toText <> "/log_explorer"
           , hxPushUrl_ "true"
           , hxVals_ "js:{queryAST:params().queryAST,cols:toggleColumnToSummary(event),layout:'resultTable', since: params().since, from: params().from, to:params().to, source: params().source}"
-          , hxTarget_ "#resultTable"
+          , hxTarget_ "#resultTableInner"
           , hxSwap_ "outerHTML"
           , -- , hxIndicator_ "#query-indicator"
             [__|init set fp to (closest @data-field-path) then
@@ -805,6 +806,7 @@ jsonTreeAuxillaryCode pid queryAST = do
 
     var toggleColumnToSummary = (e)=>{
       const cols = (params().cols??"").split(",").filter(x=>x!="");
+      console.log(cols)
       const subject = e.target.closest('.log-item-field-parent').dataset.fieldPath;
       if (cols.includes(subject)) {
         return [...new Set(cols.filter(x=>x!=subject))].join(",");

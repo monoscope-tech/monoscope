@@ -157,12 +157,13 @@ export class LogList extends LitElement {
         ${this.logsColumns
           .filter(v => v !== 'latency_breakdown')
           .map(column => {
-            return html`<td class=${column === 'rest' ? 'w-3/4' : ''}>
+            const tableDataWidth = getColumnWidth(column)
+            return html`<td class=${column === 'rest' ? 'w-3/4' : tableDataWidth}>
               ${logItemCol(rowData, this.source, this.colIdxMap, column, this.serviceColors, this.expandTrace)}
             </td>`
           })}
         ${this.source === 'spans'
-          ? html`<th>${logItemCol(rowData, this.source, this.colIdxMap, 'latency_breakdown', this.serviceColors, this.expandTrace)}</th>`
+          ? html`<td>${logItemCol(rowData, this.source, this.colIdxMap, 'latency_breakdown', this.serviceColors, this.expandTrace)}</td>`
           : nothing}
       </tr>
     `
@@ -229,13 +230,18 @@ export class LogList extends LitElement {
       case 'latency_breakdown':
         return this.tableHeadingWrapper(pid, 'latency', column, 'shrink-0 w-[200px]')
       case 'status_code':
-        return this.tableHeadingWrapper(pid, 'status', column, 'shrink-0 w-[10ch]')
+        return this.tableHeadingWrapper(pid, 'status', column, 'shrink-0 w-[12ch]')
+      case 'method':
+        return this.tableHeadingWrapper(pid, 'method', column, 'shrink-0 w-[12ch]')
+      case 'raw_url':
+      case 'url_path':
+        return this.tableHeadingWrapper(pid, column, column, 'w-[25ch] shrink-0')
       case 'service':
         return this.tableHeadingWrapper(pid, 'service', column, 'w-[16ch] shrink-0')
       case 'rest':
         return this.tableHeadingWrapper(pid, 'summary', column, 'w-3/4 shrink')
       default:
-        return this.tableHeadingWrapper(pid, column, column)
+        return this.tableHeadingWrapper(pid, column, column, 'w-[16ch] shrink-0')
     }
   }
 
@@ -763,4 +769,20 @@ function flattenSpanTree(traceArr, expandedTraces = {}) {
   })
 
   return result
+}
+
+function getColumnWidth(column) {
+  if (!['rest', 'service', 'id', 'status', 'method', 'raw_url', 'url_path'].includes(column)) return 'w-[16ch] shrink-0'
+  switch (column) {
+    case 'status':
+    case 'method':
+      return 'w-[12ch] shrink-0'
+    case 'raw_url':
+    case 'url_path':
+      return 'w-[25ch] shrink-0 overflow-hidden'
+    case 'rest':
+      return 'w-3/4'
+    default:
+      return ''
+  }
 }
