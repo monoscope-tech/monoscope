@@ -227,7 +227,7 @@ export class LogList extends LitElement {
       case 'created_at':
         return this.tableHeadingWrapper(pid, 'timestamp', column, 'w-[16ch] shrink-0')
       case 'latency_breakdown':
-        return this.tableHeadingWrapper(pid, 'latency_breakdown', column, 'shrink-0 w-[28ch]')
+        return this.tableHeadingWrapper(pid, 'latency', column, 'shrink-0 w-[200px]')
       case 'status_code':
         return this.tableHeadingWrapper(pid, 'status', column, 'shrink-0 w-[10ch]')
       case 'service':
@@ -341,7 +341,7 @@ function logItemCol(rowData, source, colIdxMap, key, serviceColors, toggleTrace)
         color: serviceColors[lookupVecTextByKey(data, colIdxMap, 'span_name')] || 'black',
       }))
       return html`
-        <div class="w-[28ch] flex h-10 ml-auto bg-white justify-end items-center gap-1 text-textWeak">
+        <div class="w-[200px] flex h-10 ml-auto bg-white justify-end items-center gap-1 text-textWeak">
           <div class="w-24 overflow-visible  shrink-0 font-normal">${logItemCol(rowData, source, colIdxMap, 'duration')}</div>
           ${spanLatencyBreakdown({ start: startNs - traceStart, depth: d, duration, traceEnd, color, children: chil })}
         </div>
@@ -552,14 +552,15 @@ function getSpanStatusColor(status) {
 }
 
 function spanLatencyBreakdown({ start, duration, traceEnd, depth, color, children }) {
-  const width = (duration / traceEnd) * 200
-  const left = (start / traceEnd) * 200
+  const barWidth = 100
+  const width = (duration / traceEnd) * barWidth
+  const left = (start / traceEnd) * barWidth
   return html`<div class="-mt-1 shrink-0">
-    <div class="flex h-5 w-[200px] relative bg-fillWeak">
+    <div class="flex h-5 w-[100px] relative bg-fillWeak">
       <div class=${`h-full absolute top-0 ${depth === 0 || children.length === 0 ? color : ''}`} style=${`width:${width}px; left:${left}px`}></div>
       ${children.map(child => {
-        const cWidth = (child.duration / traceEnd) * 200
-        const cLeft = (child.start / traceEnd) * 200
+        const cWidth = (child.duration / traceEnd) * barWidth
+        const cLeft = (child.start / traceEnd) * barWidth
         return html`<div class=${`h-full absolute top-0 ${child.color}`} style=${`width:${cWidth}px; left:${cLeft}px`}></div>`
       })}
     </div>
