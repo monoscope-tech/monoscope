@@ -88,7 +88,7 @@ expandAPIlogItem' pid req modal = do
           span_ [class_ "text-slate-800 text-sm truncate ellipsis urlPath", term "data-tippy" req.urlPath] $ toHtml req.urlPath
           div_ [[__| install Copy(content:.urlPath )|]] do
             faSprite_ "copy" "regular" "h-8 w-8 border border-slate-300 bg-fillWeaker rounded-full p-2 text-slate-500"
-          a_ [href_ endpointURl] do
+          a_ [hxGet_ endpointURl] do
             faSprite_ "arrow-up-right" "regular" "h-8 w-8 p-2 btn-primary rounded-full"
       div_ [class_ "text-base flex items-center gap-6"] do
         span_ [class_ "text-slate-500 font-medium w-16"] "URL"
