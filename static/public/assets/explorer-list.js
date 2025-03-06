@@ -162,7 +162,7 @@ export class LogList extends LitElement {
               ${logItemCol(rowData, this.source, this.colIdxMap, column, this.serviceColors, this.expandTrace)}
             </td>`
           })}
-        ${this.source === 'spans'
+        ${this.source === 'spans' && this.logsColumns.includes('latency_breakdown')
           ? html`<td>${logItemCol(rowData, this.source, this.colIdxMap, 'latency_breakdown', this.serviceColors, this.expandTrace)}</td>`
           : nothing}
       </tr>
@@ -201,9 +201,9 @@ export class LogList extends LitElement {
     this.logsColumns = this.logsColumns.filter(col => col !== column)
   }
 
-  tableHeadingWrapper(pid, title, column, classes) {
+  tableHeadingWrapper(title, column, classes) {
     return html`
-      <td class=${'cursor-pointer p-0 m-0 whitespace-nowrap ' + classes ? classes : ''}>
+      <td class=${'cursor-pointer p-0 m-0 whitespace-nowrap overflow-y-visible ' + classes ? classes : ''}>
         <span class="text-slate-200">|</span>
         <div class="dropdown pl-2" data-tippy-content=${title}>
           <div tabindex="0" role="button" class="py-1">
@@ -220,28 +220,28 @@ export class LogList extends LitElement {
     `
   }
 
-  logTableHeading(pid, column) {
+  logTableHeading(column) {
     switch (column) {
       case 'id':
         return html`<td class="p-0 m-0 whitespace-nowrap w-3"></td>`
       case 'timestamp':
       case 'created_at':
-        return this.tableHeadingWrapper(pid, 'timestamp', column, 'w-[16ch] shrink-0')
+        return this.tableHeadingWrapper('timestamp', column, 'w-[16ch] shrink-0')
       case 'latency_breakdown':
-        return this.tableHeadingWrapper(pid, 'latency', column, 'shrink-0 w-[200px]')
+        return this.tableHeadingWrapper('latency', column, 'shrink-0 w-[200px]')
       case 'status_code':
-        return this.tableHeadingWrapper(pid, 'status', column, 'shrink-0 w-[12ch]')
+        return this.tableHeadingWrapper('status', column, 'shrink-0 w-[12ch]')
       case 'method':
-        return this.tableHeadingWrapper(pid, 'method', column, 'shrink-0 w-[12ch]')
+        return this.tableHeadingWrapper('method', column, 'shrink-0 w-[12ch]')
       case 'raw_url':
       case 'url_path':
-        return this.tableHeadingWrapper(pid, column, column, 'w-[25ch] shrink-0')
+        return this.tableHeadingWrapper(column, column, 'w-[25ch] shrink-0')
       case 'service':
-        return this.tableHeadingWrapper(pid, 'service', column, 'w-[16ch] shrink-0')
+        return this.tableHeadingWrapper('service', column, 'w-[16ch] shrink-0')
       case 'rest':
-        return this.tableHeadingWrapper(pid, 'summary', column, 'w-3/4 shrink')
+        return this.tableHeadingWrapper('summary', column, 'w-3/4 shrink')
       default:
-        return this.tableHeadingWrapper(pid, column, column, 'w-[16ch] shrink-0')
+        return this.tableHeadingWrapper(column, column, 'w-[16ch] shrink-0')
     }
   }
 
@@ -252,10 +252,10 @@ export class LogList extends LitElement {
     return html`
       <div class="relative h-full w-full" id="logs_list_container">
         <table class="table-auto w-full min-w-full ctable min-h-full flex flex-col table-pin-rows table-pin-cols" style="height:1px; --rounded-box:0;">
-          <thead class="w-full grow-1 shrink-1 overflow-hidden">
-            <tr class="text-textStrong border-b flex w-full font-medium border-y">
-              ${this.logsColumns.filter(v => v !== 'latency_breakdown').map(column => this.logTableHeading('', column))}
-              ${this.source === 'spans' ? this.logTableHeading('', 'latency_breakdown') : nothing}
+          <thead class="w-full grow-1 shrink-1">
+            <tr class="text-textStrong border-b flex w-full overflow-y-visible font-medium border-y">
+              ${this.logsColumns.filter(v => v !== 'latency_breakdown').map(column => this.logTableHeading(column))}
+              ${this.source === 'spans' ? this.logTableHeading('latency_breakdown') : nothing}
             </tr>
           </thead>
           ${list.length === 1 ? emptyState(this.source, this.logsColumns.length) : nothing}
