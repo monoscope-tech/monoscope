@@ -81,6 +81,8 @@ expandAPIlogItem' pid req modal = do
     -- url, endpoint, latency, request size, repsonse size
     let endpointHash = toXXHash $ pid.toText <> req.host <> req.method <> req.urlPath
     let endpointURl = "/p/" <> pid.toText <> "/log_explorer/endpoint/" <> endpointHash
+        query = toText $ escapeURIString isUnescapedInURI $ "raw_url==\"" <> toString req.rawUrl <> "\""
+    let rawUrl = "/p/" <> pid.toText <> "/log_explorer?query=" <> query
     div_ [class_ "flex flex-col mt-4 justify-between w-full"] do
       div_ [class_ "text-base mb-2 flex gap-6 items-center"] do
         span_ [class_ "text-slate-500 font-medium w-16"] "Endpoint"
@@ -96,7 +98,7 @@ expandAPIlogItem' pid req modal = do
           span_ [class_ "text-slate-800 text-sm truncate ellipsis", term "data-tippy" req.rawUrl] $ toHtml req.rawUrl
           div_ [[__| install Copy(content:.urlPath )|]] do
             faSprite_ "copy" "regular" "h-8 w-8 border border-slate-300 bg-fillWeaker rounded-full p-2 text-slate-500"
-          a_ [href_ endpointURl] do
+          a_ [href_ rawUrl] do
             faSprite_ "arrow-up-right" "regular" "h-8 w-8 p-2 btn-primary rounded-full"
       div_ [class_ "flex gap-2 mt-4"] do
         statBox_ Nothing (Just ("clock", "regular", "text-brand")) "Latency" "Latency" (toText $ getDurationNSMS req.durationNs) Nothing Nothing
