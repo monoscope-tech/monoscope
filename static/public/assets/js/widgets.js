@@ -3,23 +3,41 @@
 const DEFAULT_BACKGROUND_STYLE = { color: 'rgba(240,248,255, 0.4)' }
 const INITIAL_FETCH_INTERVAL = 5000
 const $ = id => document.getElementById(id)
+const DEFAULT_PALETTE = ['#1A74A8', '#067A57CC', '#EE6666', '#FAC858', '#73C0DE', '#3BA272', '#FC8452', '#9A60B4', '#ea7ccc']
 
-const createSeriesConfig = (chartType, name, i, yAxisLabel) => ({
-  type: chartType,
-  name,
-  stack: chartType === 'line' ? undefined : yAxisLabel || 'units',
-  showSymbol: false,
-  showBackground: true,
-  backgroundStyle: DEFAULT_BACKGROUND_STYLE,
-  barMaxWidth: '10',
-  barMinHeight: '1',
-  encode: { x: 0, y: i + 1 },
-})
+const createSeriesConfig = (widgetData, name, i, opt) => {
+  const palette = opt.color || DEFAULT_PALETTE
+  const paletteColor = palette[i % palette.length]
 
-const updateChartConfiguration = ({ chartType, yAxisLabel }, opt, data) => {
+  const gradientColor = new echarts.graphic.LinearGradient(0, 0, 0, 1, [
+    { offset: 0, color: echarts.color.modifyAlpha(paletteColor, 1) },
+    { offset: 1, color: echarts.color.modifyAlpha(paletteColor, 0) },
+  ])
+
+  const seriesOpt = {
+    type: widgetData.chartType,
+    name,
+    stack: widgetData.chartType === 'line' ? undefined : widgetData.yAxisLabel || 'units',
+    showSymbol: false,
+    showBackground: true,
+    backgroundStyle: DEFAULT_BACKGROUND_STYLE,
+    barMaxWidth: '10',
+    barMinHeight: '1',
+    encode: { x: 0, y: i + 1 },
+  }
+
+  if (widgetData.widgetType == 'timeseries_stat') {
+    seriesOpt.itemStyle = { color: gradientColor }
+    seriesOpt.areaStyle = { color: gradientColor }
+  }
+
+  return seriesOpt
+}
+
+const updateChartConfiguration = (widgetData, opt, data) => {
   if (!data) return opt
   const cols = data[0]?.slice(1)
-  opt.series = cols?.map((n, i) => createSeriesConfig(chartType, n, i, yAxisLabel))
+  opt.series = cols?.map((n, i) => createSeriesConfig(widgetData, n, i, opt))
   opt.legend.data = cols
   return opt
 }

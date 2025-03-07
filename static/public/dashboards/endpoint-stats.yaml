@@ -7,8 +7,8 @@ variables:
     title: Endpoint
     multi: false
     help_text: Current filtered endpoint
-    type: query_with_title # requires a query that returns 2 fields, an id and a title
-    sql: select id, method || ' ' || url_path from apis.endpoints where project_id='{{project_id}}' limit 500
+    type: query # requires a query that returns 2 fields, an id and a title
+    sql: select id::text, method || ' ' || url_path from apis.endpoints where project_id='{{project_id}}' limit 500
 
 widgets:
   # - type: "timeseries_stat"

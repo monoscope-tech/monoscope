@@ -1,10 +1,12 @@
 module Pages.Dashboards (dashboardGetH, entrypointRedirectGetH, DashboardGet (..), dashboardsGetH, DashboardsGet (..), dashboardsPostH, DashboardForm (..)) where
 
 import Control.Lens
+import Control.Monad ((>=>))
 import Data.Aeson qualified as AE
 import Data.Default
 import Data.Effectful.UUID qualified as UUID
 import Data.Generics.Labels ()
+import Data.Map qualified as M
 import Data.Text.Encoding qualified as TE
 import Data.Time (UTCTime, defaultTimeLocale, formatTime)
 import Data.Vector qualified as V
@@ -54,21 +56,61 @@ instance ToHtml DashboardGet where
 
 dashboardPage_ :: Projects.ProjectId -> Dashboards.Dashboard -> Html ()
 dashboardPage_ pid dash = do
-  Components.modal_ "pageTitleModalId" "" $ form_
-    [class_ "flex flex-col p-3 gap-3"]
-    do
-      label_ [class_ "form-control w-full max-w-xs"] do
-        div_ [class_ "label"] $ span_ [class_ "label-text"] "Change Dashboard Title"
-        input_ [class_ "input input-bordered w-full max-w-xs", placeholder_ "Insert new title", value_ $ maybeToMonoid dash.title]
+  Components.modal_ "pageTitleModalId" ""
+    $ form_
+      [class_ "flex flex-col p-3 gap-3"]
+    $ label_ [class_ "form-control w-full max-w-xs"] do
+      div_ [class_ "label"] $ span_ [class_ "label-text"] "Change Dashboard Title"
+      input_ [class_ "input input-bordered w-full max-w-xs", placeholder_ "Insert new title", value_ $ maybeToMonoid dash.title]
 
-  whenJust dash.variables \variables ->
-    div_ [] $
-      forM_ variables \var -> label_ [] do
-        span_ $ toHtml $ fromMaybe var.key var.title
-        select_ ([class_ "select select-sm"] <> memptyIfFalse (var.multi == Just True) [multiple_ "true"]) $
-          whenJust var.options \optM -> forM_ optM \opt -> option_ [value_ $ opt Unsafe.!! 0] (toHtml $ fromMaybe (opt Unsafe.!! 0) (opt !!? 1))
+  whenJust dash.variables \variables -> do
+    div_ [class_ "flex bg-fillWeaker px-6 py-2"] $
+      forM_ variables \var -> fieldset_ [class_ "border border-strokeStrong bg-fillWeaker p-0 inline-block rounded-lg overflow-hidden dash-variable text-sm"] do
+        legend_ [class_ "px-1 ml-2 text-xs"] $ toHtml $ fromMaybe var.key var.title
+        let whitelist =
+              maybe
+                "[]"
+                ( TE.decodeUtf8
+                    . fromLazy
+                    . AE.encode
+                    . map \opt ->
+                      AE.object
+                        [ "value" AE..= (opt Unsafe.!! 0)
+                        , "name" AE..= fromMaybe (opt Unsafe.!! 0) (opt !!? 1)
+                        ]
+                )
+                var.options
 
-  section_ [class_ "pb-12 h-full"] $ div_ [class_ "mx-auto pt-5 pb-6 px-6 gap-3.5 w-full flex flex-col h-full overflow-y-scroll pb-12 group/pg", id_ "dashboardPage"] do
+        input_ $
+          [ type_ "text"
+          , name_ var.key
+          , class_ "tagify-select-input"
+          , data_ "whitelistjson" whitelist
+          , data_ "enforce-whitelist" "true"
+          , data_ "mode" $ if var.multi == Just True then "" else "select"
+          , value_ $ maybeToMonoid var.value
+          ]
+            <> memptyIfFalse (var.multi == Just True) [data_ "mode" "select"]
+    script_
+      [text|
+  document.querySelectorAll('.tagify-select-input').forEach(input => {
+    return new Tagify(input, {
+      whitelist: JSON.parse(input.dataset.whitelistjson || "[]"),
+      enforceWhitelist: true,
+      tagTextProp: 'name',
+      mode: input.dataset.mode || "",
+      dropdown: { 
+        enabled: 0,
+        mapValueTo: "name",
+        highlightFirst: true,
+        searchKeys: ["name", "value"],
+        placeAbove: false,
+        maxItems: 50
+      },
+    })
+                                                                     });
+    |]
+  section_ [class_ "pb-12 h-full"] $ div_ [class_ "mx-auto pt-5 pb-6 px-6 gap-3.5 w-full flex flex-col h-full overflow-y-scroll pb-2 group/pg", id_ "dashboardPage"] do
     div_ "" -- variables selector area
     div_ [class_ "grid-stack  -m-2 mb-20"] $ forM_ dash.widgets (\w -> toHtml (w{Widget._projectId = Just pid}))
     script_
@@ -104,7 +146,7 @@ dashboardPage_ pid dash = do
 loadDashboardFromVM :: Dashboards.DashboardVM -> Maybe Dashboards.Dashboard
 loadDashboardFromVM dashVM = case dashVM.schema of
   Just schema_ -> pure schema_
-  Nothing -> find (\d -> d.file == dashVM.baseTemplate) (traceShowId dashboardTemplates)
+  Nothing -> find (\d -> d.file == dashVM.baseTemplate) dashboardTemplates
 
 
 -- Process a single dashboard variable recursively.
@@ -112,13 +154,15 @@ processVariable :: Projects.ProjectId -> UTCTime -> (Maybe Text, Maybe Text, May
 processVariable pid now (sinceStr, fromDStr, toDStr) allParams variableBase = do
   let (fromD, toD, _currentRange) = Components.parseTimeRange now (Components.TimePicker sinceStr fromDStr toDStr)
   let variable = Dashboards.replaceQueryVariables pid fromD toD allParams variableBase
-  case variable._vType of
+  let variable' = variable{Dashboards.value = (join $ M.lookup ("var-" <> variable.key) $ M.fromList allParams) <|> variable.value}
+
+  case variable'._vType of
     Dashboards.VTQuery -> case variable.sql of
       Nothing -> pure variable
       Just sqlQuery -> do
         queryResults <- dbtToEff $ query_ Select (Query $ TE.encodeUtf8 sqlQuery)
-        pure variable{Dashboards.options = Just $ V.toList queryResults}
-    _ -> pure variable
+        pure variable'{Dashboards.options = Just $ V.toList queryResults}
+    _ -> pure variable'
 
 
 -- Process a single widget recursively.
@@ -191,13 +235,7 @@ dashboardGetH pid dashId fileM fromDStr toDStr sinceStr allParams = do
     Just file -> Dashboards.readDashboardEndpoint file
     Nothing -> maybe (throwError err404) pure (loadDashboardFromVM dashVM)
 
-  traceShowM "BEFORE variables"
   dash' <- forOf (#variables . traverse . traverse) dash (processVariable pid now (sinceStr, fromDStr, toDStr) allParams)
-  traceShowM dash'
-  traceShowM ""
-  traceShowM ""
-
-  -- Traverse the top-level widgets in the dashboard.
   dash'' <- forOf (#widgets . traverse) dash' (processWidget pid now (sinceStr, fromDStr, toDStr) allParams)
 
   let bwconf =
@@ -208,6 +246,7 @@ dashboardGetH pid dashId fileM fromDStr toDStr sinceStr allParams = do
           , pageTitle = maybeToMonoid dash''.title
           , pageTitleModalId = Just "dashbordTitleMdl"
           , pageActions = Just $ Components.timepicker_ Nothing currentRange
+          , docsLink = Just "https://apitoolkit.io/docs/dashboard/dashboard-pages/dashboard/"
           }
   addRespHeaders $ PageCtx bwconf $ DashboardGet pid dash''
 
@@ -294,7 +333,7 @@ dashboardsGet_ dg = do
           div_ [class_ "bg-[#1e9cff] px-5 py-8 rounded-xl aspect-square w-full flex items-center"] $
             img_ [src_ "/public/assets/svgs/screens/dashboard_blank.svg", class_ "w-full", id_ "dItemPreview"]
 
-  div_ [id_ "itemsListPage", class_ "mx-auto px-6 pt-4 gap-8 w-full flex flex-col h-full overflow-hidden pb-12  group/pg"] do
+  div_ [id_ "itemsListPage", class_ "mx-auto px-6 pt-4 gap-8 w-full flex flex-col h-full overflow-hidden pb-2  group/pg"] do
     div_ [class_ "flex"] do
       label_ [class_ "input input-md input-bordered flex-1 flex bg-fillWeaker border-slate-200 shadow-none overflow-hidden items-center gap-2"] do
         faSprite_ "magnifying-glass" "regular" "w-4 h-4 opacity-70"

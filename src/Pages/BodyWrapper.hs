@@ -292,7 +292,7 @@ bodyWrapper BWConfig{sessM, currProject, prePageTitle, pageTitle, menuItem, hasI
                   when (currUser.email == "hello@apitoolkit.io") $
                     loginBanner
                   navbar currProject (fromMaybe [] (currProject <&> \p -> menu p.id)) currUser prePageTitle pageTitle docsLink navTabs pageActions
-                  section_ [class_ "overflow-y-hidden h-full "] child
+                  section_ [class_ "overflow-y-hidden h-full flex-1"] child
       externalHeadScripts_
       alerts_
       script_ [async_ "true", src_ "https://www.googletagmanager.com/gtag/js?id=AW-11285541899"] ("" :: Text)
@@ -449,17 +449,17 @@ sideNav sess project pageTitle menuItem hasIntegrated = aside_ [class_ "border-r
 
 navbar :: Maybe Projects.Project -> [(Text, Text, Text)] -> Users.User -> Maybe Text -> Text -> Maybe Text -> Maybe (Html ()) -> Maybe (Html ()) -> Html ()
 navbar projectM menuL currUser prePageTitle pageTitle docsLink tabsM pageActionsM =
-  nav_ [id_ "main-navbar", class_ "sticky z-20 top-0 w-full px-6 py-2 flex flex-row border-slate-200"] do
+  nav_ [id_ "main-navbar", class_ "w-full px-6 py-2 flex flex-row border-slate-200"] do
     div_ [class_ "flex-1 flex items-center text-slate-950 gap-1"] do
       whenJust prePageTitle \pt -> whenJust (find (\a -> fst3 a == pt) menuL) \(_, _, icon) -> do
-        whenJust projectM \p -> a_ [class_ "p-1 hover:bg-fillWeaker inline-flex items-center justify-center gap-1 rounded-md", href_ $ "/p/" <> p.id.toText <> "/dashboards"] do
-          faSprite_ icon "regular" "w-4 h-4"
+        whenJust projectM \p -> a_ [class_ "p-1 hover:bg-fillWeaker inline-flex items-center justify-center gap-1 rounded-md text-sm", href_ $ "/p/" <> p.id.toText <> "/dashboards"] do
+          faSprite_ icon "regular" "w-4 h-4 text-strokeStrong"
           toHtml pt
         faSprite_ "chevron-right" "regular" "w-3 h-3"
-      strong_ [class_ "font-semibold text-2xl px-1"] $ toHtml pageTitle
-      whenJust docsLink \link -> a_ [class_ "text-brand -mt-1", href_ link, term "data-tippy-placement" "right", term "data-tippy-content" "Open Documentation"] $ faSprite_ "circle-question" "regular" "w-4 h-4"
+      strong_ [class_ "font-normal text-xl px-1"] $ toHtml pageTitle
+      whenJust docsLink \link -> a_ [class_ "text-iconBrand -mt-1", href_ link, term "data-tippy-placement" "right", term "data-tippy-content" "Open Documentation"] $ faSprite_ "circle-question" "regular" "w-4 h-4"
     whenJust tabsM id
-    div_ [class_ "flex-1 flex items-center justify-end"] $ whenJust pageActionsM id
+    div_ [class_ "flex-1 flex items-center justify-end text-sm"] $ whenJust pageActionsM id
 
 
 alerts_ :: Html ()

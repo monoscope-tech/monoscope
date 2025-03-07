@@ -470,7 +470,7 @@ virtualTable page = do
 
 apiLogsPage :: ApiLogsPageData -> Html ()
 apiLogsPage page = do
-  section_ [class_ "mx-auto pt-2 px-6 gap-3.5 w-full flex flex-col h-full overflow-hidden pb-12  group/pg", id_ "apiLogsPage"] do
+  section_ [class_ "mx-auto pt-2 px-6 gap-3.5 w-full flex flex-col h-full overflow-hidden pb-2  group/pg", id_ "apiLogsPage"] do
     div_
       [ style_ "z-index:26"
       , class_ "fixed hidden right-0 top-0 justify-end left-0 bottom-0 w-full bg-black bg-opacity-5"
@@ -520,8 +520,8 @@ apiLogsPage page = do
                                       ] AS values,
                                       ARRAY['p50', 'p75', 'p90', 'p95'] AS quantiles
                                 FROM apis.request_dumps
-                                WHERE project_id='{project_id}'::uuid
-                                  {time_filter_sql_created_at} {query_ast_filters}
+                                WHERE project_id='{{project_id}}'::uuid
+                                  {{time_filter_sql_created_at}} {{query_ast_filters}}
                                 GROUP BY timeB
                               ) s,
                               LATERAL unnest(s.values, s.quantiles) AS u(value, quantile);

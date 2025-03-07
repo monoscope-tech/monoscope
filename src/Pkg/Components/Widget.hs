@@ -173,7 +173,7 @@ widgetHelper_ isChild w = case w.wType of
     div_ [class_ "leading-none flex justify-between items-center"] do
       div_ [class_ "inline-flex gap-3 items-center"] do
         whenJust w.icon \icon -> span_ [] $ Utils.faSprite_ icon "regular" "w-4 h-4"
-        span_ [] $ toHtml $ maybeToMonoid w.title
+        span_ [class_ "text-sm"] $ toHtml $ maybeToMonoid w.title
     div_ [class_ "grid-stack nested-grid  h-full -m-2"] $ forM_ (fromMaybe [] w.children) (widgetHelper_ True)
   _ -> gridItem_ $ div_ [class_ $ " w-full h-full " <> paddingBtm] $ renderChart (w & #id .~ (slugify <$> w.title))
   where
@@ -186,7 +186,7 @@ widgetHelper_ isChild w = case w.wType of
 renderWidgetHeader :: Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe (Text, Text) -> Bool -> Html ()
 renderWidgetHeader wId title valueM subValueM expandBtnFn ctaM hideSub = div_ [class_ "leading-none flex justify-between items-center"] do
   div_ [class_ "inline-flex gap-3 items-center"] do
-    span_ [] $ toHtml $ maybeToMonoid title
+    span_ [class_ "text-sm"] $ toHtml $ maybeToMonoid title
     span_ [class_ $ "bg-fillWeak border border-strokeWeak text-sm font-semibold px-2 py-1 rounded-3xl " <> if (isJust valueM) then "" else "hidden", id_ $ wId <> "Value"] $
       whenJust valueM toHtml
     span_ [class_ $ "text-textWeak widget-subtitle text-sm " <> bool "" "hidden" hideSub, id_ $ wId <> "Subtitle"] $ toHtml $ maybeToMonoid subValueM
@@ -213,18 +213,18 @@ renderChart widget = do
     unless (widget.wType `elem` [WTTimeseriesStat, WTStat]) $
       renderWidgetHeader chartId widget.title valueM rateM widget.expandBtnFn Nothing (widget.hideSubtitle == Just True)
     div_ [class_ "flex-1 flex"] do
-      div_ [class_ "h-full w-full rounded-2xl border border-strokeWeak p-3 bg-fillWeaker flex "] do
+      div_ [class_ "h-full w-full rounded-2xl border border-strokeWeak p-3 bg-fillWeaker flex flex-col justify-end"] do
         when (widget.wType `elem` [WTTimeseriesStat, WTStat]) $ div_ [class_ "flex flex-col justify-between"] do
-          div_ $ whenJust widget.icon \icon -> span_ [class_ "p-3 bg-fillWeak rounded-lg leading-[0] inline-block text-strokeSelected"] $ Utils.faSprite_ icon "regular" "w-5 h-5"
-          div_ [class_ "flex flex-col"] do
-            strong_ [class_ "text-textSuccess-strong text-xl"] $
+          div_ [class_ "flex flex-col gap-1"] do
+            strong_ [class_ "text-textSuccess-strong text-4xl font-normal"] $
               whenJust valueM toHtml
-            div_ [class_ "inline-flex gap-2 items-center justify-center"] do
-              span_ [] $ toHtml $ maybeToMonoid widget.title
-              span_ [class_ "inline-flex items-center"] $ Utils.faSprite_ "circle-info" "regular" "w-5 h-5"
+            div_ [class_ "inline-flex gap-1 items-center text-sm"] do
+              whenJust widget.icon \icon -> Utils.faSprite_ icon "regular" "w-4 h-4 text-strokeSelected"
+              toHtml $ maybeToMonoid widget.title
+              Utils.faSprite_ "circle-info" "regular" "w-4 h-4 text-iconNeutral"
         unless (widget.wType == WTStat) $ div_ [class_ "h-full w-full flex-1"] do
           div_ [class_ "h-full w-full", id_ $ maybeToMonoid widget.id] ""
-          let theme = maybeToMonoid widget.theme
+          let theme = fromMaybe "default" widget.theme
           let echartOpt = decodeUtf8 $ AE.encode $ widgetToECharts widget
           let yAxisLabel = fromMaybe (maybeToMonoid widget.unit) (widget.yAxis >>= (.label))
           let query = decodeUtf8 $ AE.encode widget.query
@@ -233,12 +233,14 @@ renderChart widget = do
           let chartType = mapWidgetTypeToChartType widget.wType
           let summarizeBy = T.toLower $ T.drop 2 $ show $ fromMaybe SBSum widget.summarizeBy
           let summarizeByPfx = summarizeByPrefix $ fromMaybe SBSum widget.summarizeBy
+          let wType = decodeUtf8 $ AE.encode widget.wType
           script_
             [type_ "text/javascript"]
             [text|
               (()=>{
                 chartWidget({
                   chartType: '${chartType}',
+                  widgetType: ${wType},
                   opt: ${echartOpt},
                   chartId: "${chartId}",
                   query: ${query},
@@ -289,7 +291,7 @@ widgetToECharts widget =
               [ "width" AE..= ("100%" :: Text)
               , "left" AE..= ("0%" :: Text)
               , "top" AE..= ("2%" :: Text)
-              , "bottom" AE..= if fromMaybe False widget.hideLegend then "1.8%" else "22%"
+              , "bottom" AE..= if fromMaybe False widget.hideLegend || widget.wType == WTTimeseriesStat then "1.8%" else "22%"
               , "containLabel" AE..= True
               , "show" AE..= gridLinesVisibility
               ]

@@ -278,7 +278,6 @@ queryMetrics pidM (nonNull -> queryM) (nonNull -> queryASTM) (nonNull -> querySQ
       let (_, qc) = Parser.queryASTToComponents sqlQueryComponents queryAST
 
       let mappng = M.fromList [("query_ast_filters", maybe "" (" AND " <>) qc.whereClause)]
-
       pure $ DashboardUtils.replacePlaceholders mappng querySQL -- FIXME: risk of sql injection and many other attacks
     _ -> do
       queryAST <-
