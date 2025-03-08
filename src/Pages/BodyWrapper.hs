@@ -494,5 +494,5 @@ loginBanner :: Html ()
 loginBanner = do
   div_ [class_ "flex items-center justify-end border-b px-6 py-2 gap-4"] do
     a_ [class_ "underline underline-offset-2 ", href_ "https://apitoolkit.io/docs/onboarding/"] "Documentation"
-    a_ [class_ "btn py-2 px-3 rounded-xl bg-transparent border border-fillBrand-strong text-fillBrand-strong shadow ", href_ "https://calendar.app.google/1a4HG5GZYv1sjjZG6"] "Book a live demo with an engineer"
-    a_ [class_ "btn py-2 px-3 rounded-xl bg-fillBrand-strong text-textInverse-strong shadow ", href_ "/login"] "Start 30 day free trial"
+    a_ [class_ "py-2 px-3 rounded-xl bg-transparent border border-fillBrand-strong text-fillBrand-strong shadow hover:shadow-md", href_ "https://calendar.app.google/1a4HG5GZYv1sjjZG6"] "Book a live demo with an engineer"
+    a_ [class_ "py-2 px-3 rounded-xl bg-fillBrand-strong text-textInverse-strong shadow hover:shadow-md", href_ "/login"] "Start 30 day free trial"
