@@ -32,11 +32,11 @@ variablePresets pid mf mt allParams =
         (Nothing, Just b) -> andPrefix $ "(" <> field <> " <= '" <> Utils.formatUTC b <> "')"
         (Just a, Just b) -> andPrefix $ "(" <> field <> " >= '" <> Utils.formatUTC a <> "' AND " <> field <> " <= '" <> Utils.formatUTC b <> "')"
       allParams' = allParams <&> \(a, bm) -> (a, maybeToMonoid bm)
-   in M.fromList $
-        [ ("project_id", pid)
-        , ("from", andPrefix $ fmt mf)
-        , ("to", andPrefix $ fmt mt)
-        , ("time_filter", clause "timestamp")
-        , ("time_filter_sql_created_at", clause "created_at")
-        ]
-          <> allParams'
+   in M.fromList
+        $ [ ("project_id", pid)
+          , ("from", andPrefix $ fmt mf)
+          , ("to", andPrefix $ fmt mt)
+          , ("time_filter", clause "timestamp")
+          , ("time_filter_sql_created_at", clause "created_at")
+          ]
+        <> allParams'
