@@ -1,12 +1,12 @@
 module Pages.Dashboards (dashboardGetH, entrypointRedirectGetH, DashboardGet (..), dashboardsGetH, DashboardsGet (..), dashboardsPostH, DashboardForm (..)) where
 
 import Control.Lens
-import Control.Monad ((>=>))
 import Data.Aeson qualified as AE
 import Data.Default
 import Data.Effectful.UUID qualified as UUID
 import Data.Generics.Labels ()
 import Data.Map qualified as M
+import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
 import Data.Time (UTCTime, defaultTimeLocale, formatTime)
 import Data.Vector qualified as V
@@ -64,9 +64,9 @@ dashboardPage_ pid dash = do
       input_ [class_ "input input-bordered w-full max-w-xs", placeholder_ "Insert new title", value_ $ maybeToMonoid dash.title]
 
   whenJust dash.variables \variables -> do
-    div_ [class_ "flex bg-fillWeaker px-6 py-2"] $
+    div_ [class_ "flex bg-fillWeaker px-6 py-2 gap-2"] $
       forM_ variables \var -> fieldset_ [class_ "border border-strokeStrong bg-fillWeaker p-0 inline-block rounded-lg overflow-hidden dash-variable text-sm"] do
-        legend_ [class_ "px-1 ml-2 text-xs"] $ toHtml $ fromMaybe var.key var.title
+        legend_ [class_ "px-1 ml-2 text-xs"] $ toHtml $ fromMaybe var.key var.title <> memptyIfFalse (var.required == Just True) " *"
         let whitelist =
               maybe
                 "[]"
@@ -88,13 +88,17 @@ dashboardPage_ pid dash = do
           , data_ "whitelistjson" whitelist
           , data_ "enforce-whitelist" "true"
           , data_ "mode" $ if var.multi == Just True then "" else "select"
+          , data_ "query_sql" $ maybeToMonoid var.sql
+          , data_ "query_raw" $ maybeToMonoid var.query
+          , data_ "reload_on_change" $ maybe "false" (T.toLower . show) var.reloadOnChange
           , value_ $ maybeToMonoid var.value
           ]
             <> memptyIfFalse (var.multi == Just True) [data_ "mode" "select"]
     script_
       [text|
+  const tagifyInstances = new Map();
   document.querySelectorAll('.tagify-select-input').forEach(input => {
-    return new Tagify(input, {
+    const tgfy = new Tagify(input, {
       whitelist: JSON.parse(input.dataset.whitelistjson || "[]"),
       enforceWhitelist: true,
       tagTextProp: 'name',
@@ -108,7 +112,44 @@ dashboardPage_ pid dash = do
         maxItems: 50
       },
     })
-                                                                     });
+    
+    const inputKey = input.getAttribute('name') || input.id;
+    tagifyInstances.set(inputKey, tgfy);
+
+    tgfy.on('change', (e)=>{
+      const varName = e.detail.tagify.DOM.originalInput.getAttribute('name');
+      const url = new URL(window.location);
+      url.searchParams.set('var-'+varName, e.detail?.tagify?.value[0]?.value);
+      history.pushState({}, '', url);
+      window.dispatchEvent(new Event('update-query'));
+    })
+    return tgfy
+  });
+
+  window.addEventListener('update-query', async () => {
+    document.querySelectorAll('.tagify-select-input[data-reload_on_change="true"]').forEach(async input => {
+      const { query_sql, query_raw } = input.dataset;
+      if (!query_sql && !query_raw) return;
+      
+      try {
+        const tagify = tagifyInstances.get(input.getAttribute('name') || input.id);
+        tagify?.loading(true);
+        
+        const params = new URLSearchParams({ ...Object.fromEntries(new URLSearchParams(location.search)), 
+          query_raw, query_sql, data_type: 'text' });
+        
+        const { data_text } = await fetch(`/chart_data?$${params}`).then(res => res.json());
+        
+        if (tagify) {
+          tagify.settings.whitelist = data_text.map(i => i.length === 1 ? i[0] : { value: i[0], name: i[1] });
+          tagify.loading(false);
+        }
+      } catch (e) {
+        console.error(`Error fetching data for ${input.name}:`, e);
+      }
+    });
+  });
+
     |]
   section_ [class_ "pb-12 h-full"] $ div_ [class_ "mx-auto pt-5 pb-6 px-6 gap-3.5 w-full flex flex-col h-full overflow-y-scroll pb-2 group/pg", id_ "dashboardPage"] do
     div_ "" -- variables selector area
@@ -168,8 +209,10 @@ processVariable pid now (sinceStr, fromDStr, toDStr) allParams variableBase = do
 -- Process a single widget recursively.
 processWidget :: Projects.ProjectId -> UTCTime -> (Maybe Text, Maybe Text, Maybe Text) -> [(Text, Maybe Text)] -> Widget.Widget -> ATAuthCtx Widget.Widget
 processWidget pid now (sinceStr, fromDStr, toDStr) allParams widgetBase = do
-  let (fromD, toD, _currentRange) = Components.parseTimeRange now (Components.TimePicker sinceStr fromDStr toDStr)
-  let widget = Widget.replaceQueryVariables pid fromD toD allParams widgetBase
+  let (_fromD, _toD, _currentRange) = Components.parseTimeRange now (Components.TimePicker sinceStr fromDStr toDStr)
+  let widgetBase' = if widgetBase._projectId == Nothing then widgetBase{Widget._projectId = Just pid} else widgetBase
+
+  let widget = widgetBase'
   widget' <-
     if (widget.eager == Just True || widget.wType `elem` [Widget.WTAnomalies])
       then do
@@ -180,12 +223,12 @@ processWidget pid now (sinceStr, fromDStr, toDStr) allParams widgetBase = do
             pure $
               widget
                 & #html
-                  ?~ ( renderText do
-                        div_ [class_ "space-y-4"] do
+                  ?~ ( renderText $
+                        div_ [class_ "space-y-4"] $
                           forM_ issuesVM (\x -> div_ [class_ "border border-strokeWeak rounded-2xl overflow-hidden"] $ toHtml x)
                      )
           Widget.WTStat -> do
-            stat <- Charts.queryFloat (Just pid) widget.query Nothing widget.sql sinceStr fromDStr toDStr Nothing
+            stat <- Charts.queryMetrics (Just Charts.DTFloat) (Just pid) widget.query Nothing widget.sql sinceStr fromDStr toDStr Nothing allParams
             pure $
               widget
                 & #dataset
@@ -195,7 +238,7 @@ processWidget pid now (sinceStr, fromDStr, toDStr) allParams widgetBase = do
                     }
           _ -> do
             metricsD <-
-              Charts.queryMetrics (Just pid) widget.query Nothing widget.sql sinceStr fromDStr toDStr Nothing
+              Charts.queryMetrics (Just Charts.DTMetric) (Just pid) widget.query Nothing widget.sql sinceStr fromDStr toDStr Nothing allParams
             pure $
               widget
                 & #dataset

@@ -20,7 +20,6 @@ import NeatInterpolation (text)
 import Network.URI (escapeURIString, isUnescapedInURI)
 import Pages.Components (dateTime, statBox_)
 import Pages.Telemetry.Spans qualified as Spans
-import PyF (fmt)
 import Relude
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
 import Utils (faSprite_, getDurationNSMS, getMethodBorderColor, getMethodColor, getSeverityColor, getStatusBorderColor, getStatusColor, jsonValueToHtmlTree, lookupValueText, toXXHash)

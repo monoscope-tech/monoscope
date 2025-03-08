@@ -59,9 +59,11 @@ const updateChartData = async (chart, opt, shouldFetch, widgetData) => {
     opt.xAxis.max = to * 1000
     opt.dataset.source = [headers, ...dataset.map(row => [row[0] * 1000, ...row.slice(1)])]
 
-    $(`${chartId}Subtitle`).innerHTML = `${rows_per_min.toFixed(2)} rows/min`
-    $(`${chartId}Value`).innerHTML = `${summarizeByPrefix} ${Number(stats[summarizeBy]).toLocaleString()}`
-    $(`${chartId}Value`).classList.remove('hidden')
+    const subtitle = $(`${chartId}Subtitle`)
+    subtitle && (subtitle.innerHTML = `${rows_per_min.toFixed(2)} rows/min`)
+
+    const value = $(`${chartId}Value`)
+    value && ((value.innerHTML = `${summarizeByPrefix} ${Number(stats[summarizeBy]).toLocaleString()}`), value.classList.remove('hidden'))
 
     chart.hideLoading()
     chart.setOption(updateChartConfiguration(widgetData, opt, opt.dataset.source))
@@ -126,6 +128,12 @@ const chartWidget = widgetData => {
       }
       updateChartData(chart, opt, true, widgetData)
     })
+  })
+  window.addEventListener('update-query', e => {
+    if (e.detail?.ast) {
+      widgetData.queryAST = e.detail.ast
+    }
+    updateChartData(chart, opt, true, widgetData)
   })
 
   window.addEventListener('unload', () => (clearInterval(intervalId), resizeObserver.disconnect()))

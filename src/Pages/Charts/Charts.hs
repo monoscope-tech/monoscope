@@ -2,11 +2,12 @@
 {-# LANGUAGE ViewPatterns #-}
 {-# LANGUAGE NoFieldSelectors #-}
 
-module Pages.Charts.Charts (chartsGetH, ChartType (..), lazy, ChartExp (..), QueryBy (..), GroupBy (..), queryMetrics, queryFloat, MetricsData (..), MetricsStats (..)) where
+module Pages.Charts.Charts (chartsGetH, ChartType (..), lazy, ChartExp (..), QueryBy (..), GroupBy (..), queryMetrics, MetricsData (..), MetricsStats (..), DataType (..)) where
 
 import Data.Aeson qualified as AE
 import Data.Default
 import Data.Map.Strict qualified as M
+import Data.Semigroup (Max (..))
 import Data.Text qualified as T
 import Data.Time (UTCTime, addUTCTime, diffUTCTime)
 import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
@@ -18,6 +19,7 @@ import Data.Vector.Algorithms.Intro qualified as VA
 import Database.PostgreSQL.Entity.DBT (QueryNature (Select), query)
 import Database.PostgreSQL.Simple.Types (Only (..), Query (Query))
 import Database.PostgreSQL.Transact qualified as DBT
+import Deriving.Aeson qualified as DAE
 import Deriving.Aeson.Stock qualified as DAE
 import Effectful (Eff, (:>))
 import Effectful.Log (Log)
@@ -46,7 +48,7 @@ import Relude.Unsafe qualified as Unsafe
 import Servant (FromHttpApiData (..))
 import System.Types
 import Text.Megaparsec (parseMaybe)
-import Utils (DBField (MkDBField), formatUTC)
+import Utils (DBField (MkDBField), JSONHttpApiData (..), formatUTC)
 
 
 pivot' :: V.Vector (Int, Double, Text) -> (V.Vector Text, V.Vector (V.Vector (Maybe Double)), Double, Double)
@@ -240,6 +242,8 @@ data MetricsStats = MetricsStats
 data MetricsData = MetricsData
   { dataset :: V.Vector (V.Vector (Maybe Double))
   , dataFloat :: Maybe Double
+  , dataJSON :: V.Vector (V.Vector AE.Value)
+  , dataText :: V.Vector (V.Vector Text)
   , headers :: V.Vector Text
   , rowsCount :: Double
   , rowsPerMin :: Maybe Double
@@ -251,6 +255,14 @@ data MetricsData = MetricsData
   deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake MetricsData
 
 
+data DataType = DTMetric | DTJson | DTFloat | DTText
+  deriving stock (Show, Eq, Generic, Enum, Bounded, Ord, THS.Lift)
+  deriving anyclass (NFData)
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.ConstructorTagModifier '[DAE.StripPrefix "DT", DAE.CamelToSnake]] DataType
+  deriving (FromHttpApiData) via Utils.JSONHttpApiData DataType
+  deriving (Semigroup, Monoid) via (Max DataType)
+
+
 -- Helper function: converts Just "" to Nothing.
 nonNull :: Maybe Text -> Maybe Text
 nonNull Nothing = Nothing
@@ -258,11 +270,12 @@ nonNull (Just "") = Nothing
 nonNull x = x
 
 
-queryMetrics :: (State.State TriggerEvents :> es, Time.Time :> es, DB :> es, Log :> es) => M Projects.ProjectId -> M Text -> M Text -> M Text -> M Text -> M Text -> M Text -> M Text -> Eff es MetricsData
-queryMetrics pidM (nonNull -> queryM) (nonNull -> queryASTM) (nonNull -> querySQLM) (nonNull -> sinceM) (nonNull -> fromM) (nonNull -> toM) (nonNull -> sourceM) = do
+queryMetrics :: (State.State TriggerEvents :> es, Time.Time :> es, DB :> es, Log :> es) => M DataType -> M Projects.ProjectId -> M Text -> M Text -> M Text -> M Text -> M Text -> M Text -> M Text -> [(Text, Maybe Text)] -> Eff es MetricsData
+queryMetrics (maybeToMonoid -> respDataType) pidM (nonNull -> queryM) (nonNull -> queryASTM) (nonNull -> querySQLM) (nonNull -> sinceM) (nonNull -> fromM) (nonNull -> toM) (nonNull -> sourceM) allParams = do
   now <- Time.currentTime
   let (fromD, toD, _currentRange) = Components.parseTimeRange now (Components.TimePicker sinceM fromM toM)
-  let parseQuery q = either (\err -> addErrorToast "Error Parsing Query" (Just err) >> pure []) pure (parseQueryToAST q)
+  let mappng = DashboardUtils.variablePresets (maybe "" (.toText) pidM) fromD toD allParams
+  let parseQuery q = either (\err -> addErrorToast "Error Parsing Query" (Just err) >> pure []) pure (parseQueryToAST $ DashboardUtils.replacePlaceholders mappng q)
 
   sqlQuery <- case (queryM, queryASTM, querySQLM) of
     (_, _, Just querySQL) -> do
@@ -277,8 +290,8 @@ queryMetrics pidM (nonNull -> queryM) (nonNull -> queryASTM) (nonNull -> querySQ
               }
       let (_, qc) = Parser.queryASTToComponents sqlQueryComponents queryAST
 
-      let mappng = M.fromList [("query_ast_filters", maybe "" (" AND " <>) qc.whereClause)]
-      pure $ DashboardUtils.replacePlaceholders mappng querySQL -- FIXME: risk of sql injection and many other attacks
+      let mappng' = mappng <> M.fromList [("query_ast_filters", maybe "" (" AND " <>) qc.whereClause)]
+      pure $ DashboardUtils.replacePlaceholders mappng' querySQL -- FIXME: risk of sql injection and many other attacks
     _ -> do
       queryAST <-
         maybe
@@ -290,57 +303,71 @@ queryMetrics pidM (nonNull -> queryM) (nonNull -> queryASTM) (nonNull -> querySQ
               { dateRange = (fromD, toD)
               }
       let (_, qc) = queryASTToComponents sqlQueryComponents queryAST
-      pure $ fromMaybe "" qc.finalTimechartQuery
+      pure $ maybeToMonoid qc.finalTimechartQuery
 
-  chartData <- dbtToEff $ DBT.query_ (Query $ encodeUtf8 $ sqlQuery)
-  let chartsDataV = V.fromList chartData
-  let (headers, groupedData, rowsCount, rowsPerMin) = pivot' chartsDataV
-  pure
-    MetricsData
-      { dataset = groupedData
-      , dataFloat = Nothing
-      , headers = V.cons "timestamp" headers
-      , rowsCount
-      , rowsPerMin = Just rowsPerMin
-      , from = Just $ round . utcTimeToPOSIXSeconds $ fromMaybe (addUTCTime (-86400) now) fromD
-      , to = Just $ round . utcTimeToPOSIXSeconds $ fromMaybe now toD
-      , stats = Just $ statsTriple chartsDataV
-      }
-
-
-queryFloat :: (State.State TriggerEvents :> es, Time.Time :> es, DB :> es, Log :> es) => M Projects.ProjectId -> M Text -> M Text -> M Text -> M Text -> M Text -> M Text -> M Text -> Eff es MetricsData
-queryFloat pidM (nonNull -> queryM) (nonNull -> queryASTM) (nonNull -> querySQLM) (nonNull -> sinceM) (nonNull -> fromM) (nonNull -> toM) (nonNull -> sourceM) = do
-  now <- Time.currentTime
-  let (fromD, toD, _currentRange) = Components.parseTimeRange now (Components.TimePicker sinceM fromM toM)
-  sqlQuery <- case (queryM, queryASTM, querySQLM) of
-    (_, _, Just querySQL) -> do
-      pure querySQL -- FIXME: risk of sql injection and many other attacks
-    _ -> do
-      let parseQuery q = either (\err -> addErrorToast "Error Parsing Query" (Just err) >> pure []) pure (parseQueryToAST q)
-      queryAST <-
-        maybe
-          (parseQuery $ maybeToMonoid queryM)
-          (either (const $ parseQuery $ maybeToMonoid queryM) pure . AE.eitherDecode . encodeUtf8)
-          queryASTM
-      let sqlQueryComponents =
-            (defSqlQueryCfg (Unsafe.fromJust pidM) now (parseMaybe pSource =<< sourceM) Nothing)
-              { dateRange = (fromD, toD)
-              }
-      let (_, qc) = queryASTToComponents sqlQueryComponents queryAST
-      pure $ fromMaybe "" qc.finalTimechartQuery
-
-  chartData <- dbtToEff $ DBT.queryOne_ (Query $ encodeUtf8 $ sqlQuery)
-  pure $
-    MetricsData
-      { dataset = V.empty
-      , dataFloat = chartData <&> \(Only v) -> v
-      , headers = V.empty
-      , rowsCount = 1
-      , rowsPerMin = Nothing
-      , from = Just $ round . utcTimeToPOSIXSeconds $ fromMaybe (addUTCTime (-86400) now) fromD
-      , to = Just $ round . utcTimeToPOSIXSeconds $ fromMaybe now toD
-      , stats = Nothing
-      }
+  case respDataType of
+    DTFloat -> do
+      chartData <- dbtToEff $ DBT.queryOne_ (Query $ encodeUtf8 $ sqlQuery)
+      pure $
+        MetricsData
+          { dataset = V.empty
+          , dataFloat = chartData <&> \(Only v) -> v
+          , dataJSON = V.empty
+          , dataText = V.empty
+          , headers = V.empty
+          , rowsCount = 1
+          , rowsPerMin = Nothing
+          , from = Just $ round . utcTimeToPOSIXSeconds $ fromMaybe (addUTCTime (-86400) now) fromD
+          , to = Just $ round . utcTimeToPOSIXSeconds $ fromMaybe now toD
+          , stats = Nothing
+          }
+    DTMetric -> do
+      chartData <- dbtToEff $ DBT.query_ (Query $ encodeUtf8 $ sqlQuery)
+      let chartsDataV = V.fromList chartData
+      let (headers, groupedData, rowsCount, rowsPerMin) = pivot' chartsDataV
+      pure
+        MetricsData
+          { dataset = groupedData
+          , dataFloat = Nothing
+          , dataJSON = V.empty
+          , dataText = V.empty
+          , headers = V.cons "timestamp" headers
+          , rowsCount
+          , rowsPerMin = Just rowsPerMin
+          , from = Just $ round . utcTimeToPOSIXSeconds $ fromMaybe (addUTCTime (-86400) now) fromD
+          , to = Just $ round . utcTimeToPOSIXSeconds $ fromMaybe now toD
+          , stats = Just $ statsTriple chartsDataV
+          }
+    DTText -> do
+      chartData <- dbtToEff $ DBT.query_ (Query $ encodeUtf8 $ sqlQuery)
+      pure $
+        MetricsData
+          { dataset = V.empty
+          , dataFloat = Nothing
+          , dataText = V.fromList chartData
+          , dataJSON = V.empty
+          , headers = V.empty
+          , rowsCount = fromIntegral $ length chartData
+          , rowsPerMin = Nothing
+          , from = Just $ round . utcTimeToPOSIXSeconds $ fromMaybe (addUTCTime (-86400) now) fromD
+          , to = Just $ round . utcTimeToPOSIXSeconds $ fromMaybe now toD
+          , stats = Nothing
+          }
+    DTJson -> do
+      chartData <- dbtToEff $ DBT.query_ (Query $ encodeUtf8 $ sqlQuery)
+      pure $
+        MetricsData
+          { dataset = V.empty
+          , dataFloat = Nothing
+          , dataJSON = V.fromList chartData
+          , dataText = V.empty
+          , headers = V.empty
+          , rowsCount = fromIntegral $ length chartData
+          , rowsPerMin = Nothing
+          , from = Just $ round . utcTimeToPOSIXSeconds $ fromMaybe (addUTCTime (-86400) now) fromD
+          , to = Just $ round . utcTimeToPOSIXSeconds $ fromMaybe now toD
+          , stats = Nothing
+          }
 
 
 --  FIXME: chartsGetRaw and chartGetDef should be refactored and merged.

@@ -6,6 +6,7 @@ module Utils (
   jsonValueToHtmlTree,
   userIsProjectMember,
   GetOrRedirect,
+  JSONHttpApiData (..),
   redirect,
   lookupVecByKey,
   parseTime,
@@ -51,12 +52,15 @@ where
 import Data.Aeson qualified as AE
 import Data.Aeson.Key (fromText)
 import Data.Aeson.KeyMap qualified as AEK
+import Data.ByteString qualified as BS
+import Data.ByteString.Lazy qualified as LBS
 import Data.Char (isDigit)
 import Data.Digest.XXHash (xxHash)
 import Data.HashMap.Strict qualified as HM
 import Data.List qualified as L
 import Data.Scientific (toBoundedInteger)
 import Data.Text qualified as T
+import Data.Text.Encoding qualified as TE
 import Data.Time (NominalDiffTime, ZonedTime, addUTCTime, defaultTimeLocale, parseTimeM, secondsToNominalDiffTime)
 import Data.Time.Clock (UTCTime)
 import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
@@ -525,3 +529,31 @@ insertIfNotExist :: Eq a => a -> V.Vector a -> V.Vector a
 insertIfNotExist x vec
   | x `V.elem` vec = vec
   | otherwise = V.snoc vec x
+
+
+-- A newtype wrapper that uses the FromJSON instance to implement FromHttpApiData,
+-- without requiring quotes for string values in URLs.
+newtype JSONHttpApiData a = JSONHttpApiData a
+
+
+instance AE.FromJSON a => FromHttpApiData (JSONHttpApiData a) where
+  parseUrlPiece t =
+    -- Try to parse assuming it's already a valid JSON string
+    case AE.eitherDecodeStrict' (TE.encodeUtf8 t) of
+      Right a -> Right (JSONHttpApiData a)
+      -- If parsing fails, try wrapping in quotes and parsing as a string
+      Left _ ->
+        case AE.eitherDecodeStrict' (TE.encodeUtf8 $ "\"" <> t <> "\"") of
+          Right a -> Right (JSONHttpApiData a)
+          Left err -> Left (fromString err)
+
+
+instance AE.ToJSON a => ToHttpApiData (JSONHttpApiData a) where
+  toUrlPiece (JSONHttpApiData a) =
+    case LBS.toStrict $ AE.encode a of
+      -- If the encoded value starts and ends with quotes, remove them
+      bs
+        | BS.length bs >= 2 && BS.head bs == 34 && BS.last bs == 34 ->
+            TE.decodeUtf8 $ BS.init $ BS.tail bs
+      -- Otherwise, keep as is
+      bs -> TE.decodeUtf8 bs

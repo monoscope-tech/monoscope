@@ -547,6 +547,10 @@ body {
   padding-right: 1em;
 }
 
+.tagify__dropdown {
+  max-width: 100% !important;
+}
+
 .dash-variable .tagify__tag-text {
   text-wrap-mode: nowrap !important;
 }

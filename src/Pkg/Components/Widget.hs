@@ -1,4 +1,4 @@
-module Pkg.Components.Widget (Widget (..), WidgetDataset (..), widget_, Layout (..), WidgetType (..), SummarizeBy (..), replaceQueryVariables) where
+module Pkg.Components.Widget (Widget (..), WidgetDataset (..), widget_, Layout (..), WidgetType (..), SummarizeBy (..)) where
 
 import Control.Lens
 import Data.Aeson qualified as AE
@@ -6,7 +6,6 @@ import Data.Default
 import Data.Generics.Labels ()
 import Data.Scientific (fromFloatDigits)
 import Data.Text qualified as T
-import Data.Time (UTCTime)
 import Deriving.Aeson qualified as DAE
 import Deriving.Aeson.Stock qualified as DAES
 import Fmt qualified as Ft
@@ -15,7 +14,6 @@ import Lucid
 import Models.Projects.Projects qualified as Projects
 import NeatInterpolation
 import Pages.Charts.Charts qualified as Charts
-import Pkg.DashboardUtils qualified as DashboardUtils
 import Relude
 import Text.Printf (printf)
 import Text.Slugify (slugify)
@@ -151,14 +149,6 @@ data WidgetAxis = WidgetAxis
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.StripPrefix "w", DAE.CamelToSnake]] WidgetAxis
 
 
-replaceQueryVariables :: Projects.ProjectId -> Maybe UTCTime -> Maybe UTCTime -> [(Text, Maybe Text)] -> Widget -> Widget
-replaceQueryVariables pid mf mt allParams widget =
-  let mappng = DashboardUtils.variablePresets pid.toText mf mt allParams
-   in widget
-        & #sql . _Just %~ DashboardUtils.replacePlaceholders mappng
-        & #query . _Just %~ DashboardUtils.replacePlaceholders mappng
-
-
 -- use either index or the xxhash as id
 widget_ :: Widget -> Html ()
 widget_ w = widgetHelper_ False w
@@ -216,10 +206,10 @@ renderChart widget = do
       div_ [class_ "h-full w-full rounded-2xl border border-strokeWeak p-3 bg-fillWeaker flex flex-col justify-end"] do
         when (widget.wType `elem` [WTTimeseriesStat, WTStat]) $ div_ [class_ "flex flex-col justify-between"] do
           div_ [class_ "flex flex-col gap-1"] do
-            strong_ [class_ "text-textSuccess-strong text-4xl font-normal"] $
+            strong_ [class_ "text-textSuccess-strong text-4xl font-normal", id_ $ chartId <> "Value"] $
               whenJust valueM toHtml
             div_ [class_ "inline-flex gap-1 items-center text-sm"] do
-              whenJust widget.icon \icon -> Utils.faSprite_ icon "regular" "w-4 h-4 text-strokeSelected"
+              whenJust widget.icon \icon -> Utils.faSprite_ icon "regular" "w-4 h-4 text-iconBrand"
               toHtml $ maybeToMonoid widget.title
               Utils.faSprite_ "circle-info" "regular" "w-4 h-4 text-iconNeutral"
         unless (widget.wType == WTStat) $ div_ [class_ "h-full w-full flex-1"] do

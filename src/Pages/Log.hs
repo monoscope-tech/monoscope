@@ -31,15 +31,12 @@ import Models.Telemetry.Telemetry qualified as Telemetry
 import Models.Users.Sessions qualified as Sessions
 import NeatInterpolation (text)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), currProject, pageActions, pageTitle, sessM)
-import Pages.Components (emptyState_)
 import Pages.Components qualified as Components
-import Pages.Telemetry.Spans qualified as Spans
 import Pkg.Components qualified as Components
 import Pkg.Components.Widget (WidgetType (WTTimeseriesLine))
 import Pkg.Components.Widget qualified as Widget
 import Pkg.Parser (pSource, parseQueryToAST, toQText)
 import Relude hiding (ask)
-import Relude.Unsafe qualified as Unsafe
 import System.Types
 import Text.Megaparsec (parseMaybe)
 import Utils
@@ -499,16 +496,15 @@ apiLogsPage page = do
         Widget.widget_ $ (def :: Widget.Widget){Widget.query = Just "timechart count(*)", Widget.unit = Just "reqs", Widget.title = Just "All requests", Widget.hideLegend = Just True, Widget._projectId = Just page.pid, Widget.standalone = Just True}
         unless (page.source == "logs") $
           Widget.widget_ $
-            Widget.replaceQueryVariables page.pid page.fromD page.toD [] $
-              (def :: Widget.Widget)
-                { Widget.wType = WTTimeseriesLine
-                , Widget.standalone = Just True
-                , Widget.title = Just "Latency percentiles (ms)"
-                , Widget.hideSubtitle = Just True
-                , Widget.summarizeBy = Just Widget.SBMax
-                , Widget.sql =
-                    Just
-                      [text|
+            (def :: Widget.Widget)
+              { Widget.wType = WTTimeseriesLine
+              , Widget.standalone = Just True
+              , Widget.title = Just "Latency percentiles (ms)"
+              , Widget.hideSubtitle = Just True
+              , Widget.summarizeBy = Just Widget.SBMax
+              , Widget.sql =
+                  Just
+                    [text|
                         SELECT timeB, value, quantile
                               FROM (
                                 SELECT extract(epoch from time_bucket('1h', created_at))::integer AS timeB,
@@ -526,10 +522,10 @@ apiLogsPage page = do
                               ) s,
                               LATERAL unnest(s.values, s.quantiles) AS u(value, quantile);
                         |]
-                , Widget.unit = Just "ms"
-                , Widget.hideLegend = Just True
-                , Widget._projectId = Just page.pid
-                }
+              , Widget.unit = Just "ms"
+              , Widget.hideLegend = Just True
+              , Widget._projectId = Just page.pid
+              }
 
     div_ [class_ "flex h-full gap-3.5 overflow-hidden"] do
       div_ [class_ "w-1/5 shrink-0 flex flex-col gap-2 p-2 hidden  group-has-[.toggle-filters:checked]/pg:hidden "] do
@@ -670,80 +666,8 @@ curateCols summaryCols cols = sortBy sortAccordingly filteredCols
       | otherwise = comparing (`L.elemIndex` filteredCols) a b
 
 
-errorClass :: Bool -> V.Vector AE.Value -> HM.HashMap Text Int -> (Int, Int, Text)
-errorClass expandedSection reqVec colIdxMap =
-  let errCount = lookupVecIntByKey reqVec colIdxMap "errors_count"
-      status = lookupVecIntByKey reqVec colIdxMap "status_code"
-      errClass =
-        if
-          | errCount > 0 -> " w-1 bg-red-500 "
-          | status >= 400 -> " w-1 bg-warning "
-          | expandedSection -> " w-1 bg-blue-200 "
-          | otherwise -> " w-1 bg-blue-200 status-indicator "
-   in ( status
-      , errCount
-      , errClass
-      )
-
-
-barSeverityClass :: V.Vector AE.Value -> HM.HashMap Text Int -> Text
-barSeverityClass reqVec colIdxMap =
-  let severity = fromMaybe "INFO" $ lookupVecTextByKey reqVec colIdxMap "severity"
-      cls = case severity of
-        "ERROR" -> "bg-red-500"
-        "WARNING" -> "bg-warning"
-        "INFO" -> "bg-blue-200"
-        "DEBUG" -> "bg-gray-300"
-        "FATAL" -> "bg-purple-500"
-        _ -> "bg-blue-200"
-   in cls
-
-
-logTableHeading_ :: Projects.ProjectId -> Bool -> Text -> Html ()
-logTableHeading_ pid True "id" = td_ [class_ "p-0 m-0 whitespace-nowrap w-3"] ""
-logTableHeading_ pid True "status_code" = logTableHeadingWrapper_ pid "status_code" Nothing $ toHtml @Text "status"
-logTableHeading_ pid True "created_at" = logTableHeadingWrapper_ pid "created_at" (Just "w-[16ch]") $ toHtml @Text "timestamp" >> small_ " (UTC)"
-logTableHeading_ pid True "timestamp" = logTableHeadingWrapper_ pid "timestamp" (Just "w-[16ch]") $ toHtml @Text "timestamp" >> small_ " (UTC)"
-logTableHeading_ pid True "latency_breakdown" = logTableHeadingWrapper_ pid "latency_breakdown" (Just "w-[16ch]") $ toHtml @Text "latency_breakdown"
-logTableHeading_ pid True "service" = logTableHeadingWrapper_ pid "service" (Just "w-[20ch]") $ toHtml @Text "service"
-logTableHeading_ pid True "rest" = logTableHeadingWrapper_ pid "rest" Nothing $ toHtml @Text "summary"
-logTableHeading_ pid isLogEventB col = logTableHeadingWrapper_ pid col Nothing $ toHtml $ Unsafe.last $ T.splitOn "•" col
-
-
-logTableHeadingWrapper_ :: Projects.ProjectId -> Text -> Maybe Text -> Html () -> Html ()
-logTableHeadingWrapper_ pid title classes child = td_
-  [ class_ $ "cursor-pointer p-0 m-0 whitespace-nowrap " <> maybeToMonoid classes
-  ]
-  do
-    span_ [class_ "text-slate-200"] "|"
-    div_
-      [class_ "dropdown pl-2", term "data-tippy-content" title]
-      do
-        div_ [tabindex_ "0", role_ "button", class_ "py-1"] do
-          child
-          span_ [class_ "ml-1 p-0.5 border border-slate-200 rounded inline-flex"] $ faSprite_ "chevron-down" "regular" "w-3 h-3"
-        ul_ [tabindex_ "0", class_ "dropdown-content z-[1] menu p-2 shadow bg-bgBase rounded-box min-w-[15rem]"] do
-          li_ [class_ "underline underline-offset-2"] $ toHtml title
-          li_ $
-            a_
-              [ hxGet_ $ "/p/" <> pid.toText <> "/log_explorer"
-              , hxPushUrl_ "true"
-              , hxVals_ $ "js:{queryAST:params().queryAST,cols:removeNamedColumnToSummary('" <> title <> "'),layout:'resultTable'}"
-              , hxTarget_ "#resultTable"
-              , hxSwap_ "outerHTML"
-              ]
-              "Hide column"
-
-
 isLogEvent :: [Text] -> Bool
 isLogEvent cols = all @[] (`elem` cols) ["id", "created_at"] || all @[] (`elem` cols) ["id", "timestamp"]
-
-
-requestDumpLogItemUrlPath :: Projects.ProjectId -> V.Vector AE.Value -> HM.HashMap Text Int -> Maybe (Text, Text)
-requestDumpLogItemUrlPath pid rd colIdxMap = do
-  rdId <- lookupVecTextByKey rd colIdxMap "id"
-  rdCreatedAt <- lookupVecTextByKey rd colIdxMap "created_at" <|> lookupVecTextByKey rd colIdxMap "timestamp"
-  pure ("/p/" <> pid.toText <> "/log_explorer/" <> rdId <> "/" <> rdCreatedAt, rdId)
 
 
 -- TODO:

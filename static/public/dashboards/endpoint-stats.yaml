@@ -3,12 +3,22 @@ preview: /public/assets/svgs/screens/http-stats.svg
 icon: globe-wifi
 refresh_interval: 60s
 variables:
-  - key: endpointId
+  - key: host
+    title: Domain
+    required: true
+    multi: false
+    help_text: Domain
+    type: query # requires a query that returns 2 fields, an id and a title
+    sql: select distinct host from apis.endpoints where project_id='{{project_id}}' limit 500
+
+  - key: endpointHash
     title: Endpoint
+    required: true
     multi: false
     help_text: Current filtered endpoint
+    reload_on_change: true
     type: query # requires a query that returns 2 fields, an id and a title
-    sql: select id::text, method || ' ' || url_path from apis.endpoints where project_id='{{project_id}}' limit 500
+    sql: select hash::text, method || ' ' || url_path from apis.endpoints where project_id='{{project_id}}' and host='{{var-host}}' limit 500
 
 widgets:
   # - type: "timeseries_stat"
@@ -19,55 +29,55 @@ widgets:
 
   - type: group
     title: Overview
-    layout: { w: 6, h: 5 }
+    layout: { w: 6, h: 4 }
     children:
       - type: 'timeseries_stat'
         title: 'Requests'
         icon: list-tree
-        query: timechart count(*)
+        query: endpoint_hash=="{{var-endpointHash}}" | timechart count(*)
         unit: reqs
         eager: true
         layout: { w: 7, h: 2 }
 
-      - type: 'stat'
-        title: Errors & anomalies
-        icon: bug
-        sql: select total_anomalies::float from apis.project_request_stats where project_id='{{project_id}}'::uuid
-        unit: reqs
-        eager: true
-        layout: { w: 5, h: 2 }
+      # - type: 'stat'
+      #   title: Errors & anomalies
+      #   icon: bug
+      #   sql: select total_anomalies::float from apis.project_request_stats where project_id='{{project_id}}'::uuid
+      #   unit: reqs
+      #   eager: true
+      #   layout: { w: 5, h: 2 }
+      #
+      # - type: 'stat'
+      #   title: endpoints
+      #   icon: list-check
+      #   sql: select total_endpoints::float from apis.project_request_stats where project_id='{{project_id}}'::uuid
+      #   unit: reqs
+      #   eager: true
+      #   layout: { w: 4, h: 2 }
+      #
+      # - type: 'stat'
+      #   title: Req shapes
+      #   icon: dashboard-list
+      #   sql: select total_shapes::float from apis.project_request_stats where project_id='{{project_id}}'::uuid
+      #   unit: reqs
+      #   eager: true
+      #   layout: { w: 4, h: 2 }
+      #
+      # - type: 'stat'
+      #   title: Reqs per min
+      #   icon: arrow-down-to-line
+      #   sql: select requests_per_min::float from apis.project_request_stats where project_id='{{project_id}}'::uuid
+      #   unit: reqs
+      #   eager: true
+      #   layout: { w: 4, h: 2 }
 
-      - type: 'stat'
-        title: endpoints
-        icon: list-check
-        sql: select total_endpoints::float from apis.project_request_stats where project_id='{{project_id}}'::uuid
-        unit: reqs
-        eager: true
-        layout: { w: 4, h: 2 }
-
-      - type: 'stat'
-        title: Req shapes
-        icon: dashboard-list
-        sql: select total_shapes::float from apis.project_request_stats where project_id='{{project_id}}'::uuid
-        unit: reqs
-        eager: true
-        layout: { w: 4, h: 2 }
-
-      - type: 'stat'
-        title: Reqs per min
-        icon: arrow-down-to-line
-        sql: select requests_per_min::float from apis.project_request_stats where project_id='{{project_id}}'::uuid
-        unit: reqs
-        eager: true
-        layout: { w: 4, h: 2 }
-
-  - type: 'anomalies'
-    title: 'Ongoing issues and monitors'
-    layout: { w: 6, h: 5 }
-
+  # - type: 'anomalies'
+  #   title: 'Ongoing issues and monitors'
+  #   layout: { w: 6, h: 5 }
+  #
   - type: 'timeseries'
     title: 'All requests'
-    query: timechart count(*) by status_code
+    query: endpoint_hash=="{{var-endpointHash}}" | timechart count(*) by status_code
     unit: reqs
     layout: { w: 6, h: 4 }
 
@@ -89,7 +99,7 @@ widgets:
                ] AS values,
                ARRAY['p50', 'p75', 'p90', 'p95'] AS quantiles
         FROM apis.request_dumps
-        WHERE project_id='{{project_id}}'::uuid
+        WHERE project_id='{{project_id}}'::uuid AND endpoint_hash='{{var-endpointHash}}'
           {{time_filter_sql_created_at}}
         GROUP BY timeB
       ) s,
@@ -99,10 +109,5 @@ widgets:
   - type: 'timeseries'
     title: 'Errors'
     theme: 'roma'
-    query: status_code >= 300.0 | timechart count(*) by status_code
-    layout: { w: 6, h: 4 }
-
-  - type: 'timeseries'
-    title: 'Requests by Endpoint'
-    query: timechart count(*) by method,url_path
+    query: status_code >= 300.0 AND endpoint_hash=="{{var-endpointHash}}"  | timechart count(*) by status_code
     layout: { w: 6, h: 4 }

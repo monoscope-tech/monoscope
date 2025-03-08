@@ -98,6 +98,8 @@ data Variable = Variable
   { key :: Text
   , title :: Maybe Text
   , multi :: Maybe Bool
+  , required :: Maybe Bool
+  , reloadOnChange :: Maybe Bool
   , helpText :: Maybe Text
   , _vType :: VariableType
   , sql :: Maybe Text
