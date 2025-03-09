@@ -724,7 +724,7 @@ documentationsPage pid swaggers swaggerID jsonString = do
                }
 
           }catch(e) {
-            console.log(e)
+            console.error(e)
           }
         });   
       };

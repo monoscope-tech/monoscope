@@ -44,7 +44,6 @@ window.setQueryParamAndReload = (key, value) => {
 window.getQueryFromEditor = target => {
   const toggler = document.getElementById('toggleQueryEditor')
   const queryAST = document.getElementById('filterElement').ast
-  console.log(queryAST, 'getQueryFromEditor', target)
   let val = ''
   if (toggler.checked) {
     val = window.editor.getValue()
@@ -121,8 +120,6 @@ var toggleColumnToSummary = e => {
 var removeNamedColumnToSummary = namedCol => {
   const cols = (params().cols ?? '').split(',').filter(x => x != '')
   const subject = namedCol
-
-  cols.forEach(x => console.log(subject, x.replaceAll('.', '•').replaceAll('[', '❲').replaceAll(']', '❳')))
 
   return [...new Set(cols.filter(x => subject.toLowerCase() != x.replaceAll('.', '•').replaceAll('[', '❲').replaceAll(']', '❳').toLowerCase()))].join(',')
 }

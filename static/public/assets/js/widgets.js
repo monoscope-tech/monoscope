@@ -101,7 +101,6 @@ const chartWidget = widgetData => {
 
   if (params().queryAST) {
     widgetData.queryAST = JSON.parse(params().queryAST)
-    console.log('widgetData ', widgetData)
   }
 
   opt.dataset.source = opt.dataset?.source?.map(row => [row[0] * 1000, ...row.slice(1)]) ?? null

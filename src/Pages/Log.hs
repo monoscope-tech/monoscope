@@ -441,7 +441,6 @@ virtualTableTrigger page = do
 
     script_
       [text|
-         console.log("vvvvvvvvvvvvvvvvvvvvvvvvvvvvv")
         if(window.logListTable) {
            window.logListTable.updateTableData($vecs, $cols, $colIdxMap, $serviceColors, $nextLogsURL, $traceLogs)
           }
@@ -730,7 +729,6 @@ jsonTreeAuxillaryCode pid queryAST = do
 
     var toggleColumnToSummary = (e)=>{
       const cols = (params().cols??"").split(",").filter(x=>x!="");
-      console.log(cols)
       const subject = e.target.closest('.log-item-field-parent').dataset.fieldPath;
       if (cols.includes(subject)) {
         return [...new Set(cols.filter(x=>x!=subject))].join(",");

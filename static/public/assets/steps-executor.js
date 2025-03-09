@@ -66,7 +66,7 @@ export async function makeRequestAndProcessResponse(requestObject) {
     }
   } catch (error) {
     // Handle errors and return a meaningful error object
-    console.log(error)
+    console.error(error)
     return {
       error: `Request failed: ${error.message}`,
     }
@@ -130,7 +130,7 @@ export function renderJsonWithIndentation(json, addAssertion, path = '', depth =
             <span> ${key}: ${typeof value === 'object' && value ? '' : JSON.stringify(value)} </span>
             <button
               class="rounded-full border fill-textDisabled shadow-[0px_4px_4px_0px_rgba(0,0,0,0.06)] border-strokeWeak shadown-sm p-1.5 bg-bgBase"
-              @click="${(e) => addAssertion(e, assertionObj)}"
+              @click="${e => addAssertion(e, assertionObj)}"
             >
               ${faSprite_('plus', 'regular', 'w-3 h-3')}
             </button>
