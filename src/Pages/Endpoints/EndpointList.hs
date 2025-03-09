@@ -55,6 +55,7 @@ endpointListGetH pid pageM layoutM filterTM hostM requestTypeM sortM hxRequestM 
         (def :: BWConfig)
           { sessM = Just sess
           , currProject = Just project
+          , prePageTitle = Just "API Catalog"
           , pageTitle = "Endpoints for " <> host
           , pageActions =
               Just $
