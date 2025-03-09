@@ -48,10 +48,38 @@ export class LogList extends LitElement {
     this.isError = false
     this.logItemRow = this.logItemRow.bind(this)
     this.fetchData = this.fetchData.bind(this)
-    // this.renderSpan = this.renderSpan.bind(this)
     this.expandTrace = this.expandTrace.bind(this)
     this.renderLoadMore = this.renderLoadMore.bind(this)
     this.updateTableData = this.updateTableData.bind(this)
+    this.latestLogsURLQueryValsFn = this.latestLogsURLQueryValsFn.bind(this)
+
+    const liveBtn = document.querySelector('#streamLiveData')
+    if (liveBtn) {
+      liveBtn.addEventListener('change', () => {
+        if (liveBtn.checked) {
+          this.isLiveStreaming = true
+          this.liveStreamInterval = setInterval(() => {
+            const url = this.latestLogsURLQueryValsFn(this.nextFetchUrl)
+            this.fetchData(url, true)
+          }, 5000)
+        } else {
+          clearInterval(this.liveStreamInterval)
+          this.isLiveStreaming = false
+        }
+      })
+    }
+  }
+
+  latestLogsURLQueryValsFn() {
+    const datetime = document.querySelector('#log-item-table-body time')?.getAttribute('datetime')
+    const to = datetime ? new Date(new Date(datetime).getTime() + 1).toISOString() : params().to
+    const from = params().from
+    const url = new URL(this.nextFetchUrl, window.location.origin)
+    const p = url.searchParams
+    p.set('from', from)
+    p.delete('cursor')
+    p.set('to', to)
+    return url.toString()
   }
 
   updateTableData = (ves, cols, colIdxMap, serviceColors, nextFetchUrl, traceLogs) => {
@@ -136,21 +164,15 @@ export class LogList extends LitElement {
   fetchRecent() {
     return html`<tr class="w-full flex justify-center relative">
       <td colspan=${String(this.logsColumns.length)} class="relative">
-        ${this.isLoadingRecent
+        ${this.isLiveStreaming
+          ? html`<p>Live streaming latest data</p>`
+          : this.isLoadingRecent
           ? html`<div class="mx-auto loading loading-dots loading-md"></div>`
           : html`
               <button
                 class="cursor-pointer text-textBrand underline font-semibold w-max mx-auto"
                 @click=${() => {
-                  const { from, to } = latestLogsURLQueryValsFn()
-                  const url = new URL(this.nextFetchUrl, window.location.origin) // Ensure absolute URL
-                  const params = url.searchParams
-                  if (from) {
-                    params.set('from', from)
-                  }
-                  params.delete('cursor')
-                  params.set('to', to)
-                  const updatedUrl = url.toString()
+                  const updatedUrl = this.latestLogsURLQueryValsFn()
                   this.fetchData(updatedUrl, true)
                 }}
               >
@@ -828,10 +850,4 @@ function getColumnWidth(column) {
     default:
       return ''
   }
-}
-
-function latestLogsURLQueryValsFn() {
-  const datetime = document.querySelector('#log-item-table-body time')?.getAttribute('datetime')
-  const updatedTo = datetime ? new Date(new Date(datetime).getTime() + 1).toISOString() : params().to
-  return { from: params().from, to: updatedTo }
 }
