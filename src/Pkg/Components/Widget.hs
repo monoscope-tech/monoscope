@@ -350,7 +350,7 @@ widgetToECharts widget =
                     , "inside" AE..= False
                     , "formatter"
                         AE..= if (fromMaybe False $ widget ^? #yAxis . _Just . #showOnlyMaxLabel . _Just)
-                          then "function(value, index) { return value === this.yAxis.max ? formatNumber(this.yAxis.max) : ''; }"
+                          then "function(value, index) { return (value === this.yAxis.max || value == 0) ? formatNumber(value) : ''; }"
                           else "function(value, index) { return formatNumber(value); }"
                     ]
               , "show" AE..= axisVisibility
