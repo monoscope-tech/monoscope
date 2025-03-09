@@ -144,7 +144,6 @@ data CookieProtectedRoutes mode = CookieProtectedRoutes
   , shareLinkPost :: mode :- "p" :> ProjectId :> "share" :> Capture "event_id" UUID.UUID :> Capture "createdAt" UTCTime :> QPT "event_type" :> Post '[HTML] (RespHeaders Share.ShareLinkPost)
   , queryBuilderAutocomplete :: mode :- "p" :> ProjectId :> "query_builder" :> "autocomplete" :> QPT "category" :> QPT "prefix" :> Get '[JSON] (RespHeaders AE.Value)
   , swaggerGenerateGet :: mode :- "p" :> ProjectId :> "generate_swagger" :> Get '[JSON] (RespHeaders AE.Value)
-  , chartsGet :: mode :- "charts_html" :> QP "chart_type" Charts.ChartType :> QPT "query_raw" :> QPT "queryAST" :> QueryParam "pid" Projects.ProjectId :> QP "group_by" Charts.GroupBy :> QP "query_by" [Charts.QueryBy] :> QP "num_slots" Int :> QP "limit" Int :> QP "theme" Text :> QPT "id" :> QP "show_legend" Bool :> QP "show_axes" Bool :> QPT "since" :> QPT "from" :> QPT "to" :> QPT "source" :> Get '[HTML] (RespHeaders (Html ()))
   , chartsDataGet :: mode :- "chart_data" :> QueryParam "data_type" Charts.DataType :> QueryParam "pid" Projects.ProjectId :> QPT "query_raw" :> QPT "queryAST" :> QPT "query_sql" :> QPT "since" :> QPT "from" :> QPT "to" :> QPT "source" :> AllQueryParams :> Get '[JSON] Charts.MetricsData
   , editField :: mode :- "p" :> ProjectId :> "fields" :> Capture "field_id" Fields.FieldId :> ReqBody '[FormUrlEncoded] FieldDetails.EditFieldForm :> Post '[HTML] (RespHeaders FieldDetails.FieldPut)
   , manageBillingGet :: mode :- "p" :> ProjectId :> "manage_billing" :> QPT "from" :> Get '[HTML] (RespHeaders LemonSqueezy.BillingGet)
@@ -179,7 +178,6 @@ cookieProtectedServer =
     , shareLinkPost = Share.shareLinkPostH
     , queryBuilderAutocomplete = AutoComplete.getH
     , swaggerGenerateGet = GenerateSwagger.generateGetH
-    , chartsGet = Charts.chartsGetH
     , chartsDataGet = Charts.queryMetrics
     , editField = FieldDetails.fieldPutH
     , manageBillingGet = LemonSqueezy.manageBillingGetH

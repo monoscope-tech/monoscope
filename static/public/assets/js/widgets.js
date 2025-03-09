@@ -58,6 +58,10 @@ const updateChartData = async (chart, opt, shouldFetch, widgetData) => {
     opt.xAxis.min = from * 1000
     opt.xAxis.max = to * 1000
     opt.dataset.source = [headers, ...dataset.map(row => [row[0] * 1000, ...row.slice(1)])]
+    opt.yAxis.max = stats.max
+    if (widgetData.chartType != 'line') {
+      opt.yAxis.max = stats.max_group_sum
+    }
 
     const subtitle = $(`${chartId}Subtitle`)
     subtitle && (subtitle.innerHTML = `${rows_per_min.toFixed(2)} rows/min`)
@@ -137,4 +141,28 @@ const chartWidget = widgetData => {
   })
 
   window.addEventListener('unload', () => (clearInterval(intervalId), resizeObserver.disconnect()))
+}
+
+function bindFunctionsToObjects(rootObj, obj) {
+  if (!obj || typeof obj !== 'object') return
+
+  Object.keys(obj).forEach(key => {
+    const value = obj[key]
+    if (typeof value === 'function') {
+      obj[key] = value.bind(rootObj)
+    } else if (value && typeof value === 'object') {
+      bindFunctionsToObjects(rootObj, value)
+    }
+  })
+
+  return obj
+}
+
+function formatNumber(num) {
+  if (Number.isInteger(num)) {
+    return num.toString()
+  } else {
+    // toFixed returns a string with exactly 2 decimals, so parseFloat removes trailing zeros.
+    return parseFloat(num.toFixed(2)).toString()
+  }
 }

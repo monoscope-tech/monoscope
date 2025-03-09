@@ -7,14 +7,12 @@ import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
 import Effectful.Time qualified as Time
 import Fmt (commaizeF, fmt)
 import Lucid
-import Lucid.Htmx (hxGet_, hxSwap_, hxTrigger_)
 import Models.Apis.Endpoints qualified as Endpoints
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
-import Pages.Anomalies.AnomalyList qualified as AnomalyList
 import Pages.BodyWrapper (BWConfig (currProject, pageTitle, sessM), PageCtx (..), navTabs)
 import Pkg.Components.ItemsList qualified as ItemsList
-import PyF qualified
+import Pkg.Components.Widget qualified as Widget
 import Relude hiding (ask, asks)
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
 
@@ -49,8 +47,8 @@ apiCatalogH pid sortM timeFilter requestTypeM = do
           , nextFetchUrl = Nothing
           , heading = Nothing
           , zeroState =
-              Just
-                $ ItemsList.ZeroState
+              Just $
+                ItemsList.ZeroState
                   { icon = "empty-set"
                   , title = "No " <> requestType <> " Requests Monitored."
                   , description = "You're currently not monitoring your " <> T.toLower requestType <> " integrations."
@@ -95,17 +93,23 @@ renderapiCatalog pid host timeFilter requestType = div_ [class_ "flex py-4 gap-8
         a_ [href_ $ "/p/" <> pid.toText <> "/endpoints?host=" <> host.host <> "&request_type=" <> requestType, class_ " hover:text-slate-600"] $ toHtml (T.replace "http://" "" $ T.replace "https://" "" host.host)
         a_ [href_ $ "/p/" <> pid.toText <> "/log_explorer?query=host%3D%3D" <> "\"" <> host.host <> "\"", class_ "text-brand hover:text-slate-600 text-xs"] "View logs"
 
-  div_ [class_ "w-36 flex items-center justify-center"]
-    $ span_ [class_ "tabular-nums text-xl", term "data-tippy-content" "Events for this Anomaly in the last 14 days"]
-    $ toHtml @String
-    $ fmt
-    $ commaizeF host.eventCount
+  div_ [class_ "w-36 flex items-center justify-center"] $
+    span_ [class_ "tabular-nums text-xl", term "data-tippy-content" "Events for this Anomaly in the last 14 days"] $
+      toHtml @String $
+        fmt $
+          commaizeF host.eventCount
 
   div_ [class_ "flex items-center justify-center "] $ do
-    div_
-      [ class_ "w-56 h-12 px-3"
-      , hxGet_ $ "/charts_html?pid=" <> pid.toText <> "&since=" <> (if timeFilter == "14d" then "14D" else "24h") <> "&show_axes=false&query_raw=" <> AnomalyList.escapedQueryPartial [PyF.fmt|host=="{host.host}" | timechart [1d]|]
-      , hxTrigger_ "intersect once"
-      , hxSwap_ "innerHTML"
-      ]
-      ""
+    div_ [class_ "w-56 h-12 px-3"] $
+      Widget.widget_ $
+        (def :: Widget.Widget)
+          { Widget.standalone = Just True
+          , Widget.title = Just host.host
+          , Widget.showTooltip = Just False
+          , Widget.naked = Just True
+          , Widget.xAxis = Just (def{Widget.showAxisLabel = Just False})
+          , Widget.yAxis = Just (def{Widget.showOnlyMaxLabel = Just True})
+          , Widget.query = Just $ "host==\"" <> host.host <> "\" | timechart [1h]"
+          , Widget._projectId = Just pid
+          , Widget.hideLegend = Just True
+          }

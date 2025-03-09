@@ -1,4 +1,4 @@
-module Pkg.Components.Widget (Widget (..), WidgetDataset (..), widget_, Layout (..), WidgetType (..), SummarizeBy (..)) where
+module Pkg.Components.Widget (Widget (..), WidgetDataset (..), widget_, Layout (..), WidgetType (..), WidgetAxis (..), SummarizeBy (..)) where
 
 import Control.Lens
 import Data.Aeson qualified as AE
@@ -90,6 +90,8 @@ summarizeByPrefix SBCount = ""
 data Widget = Widget
   { wType :: WidgetType -- Widget type: "timeseries", "table", etc.
   , id :: Maybe Text
+  , naked :: Maybe Bool
+  , showTooltip :: Maybe Bool
   , title :: Maybe Text -- Widget title
   , subtitle :: Maybe Text
   , hideSubtitle :: Maybe Bool
@@ -143,9 +145,10 @@ data WidgetAxis = WidgetAxis
   { label :: Maybe Text
   , showAxisLabel :: Maybe Bool
   , series :: Maybe [WidgetAxis]
+  , showOnlyMaxLabel :: Maybe Bool
   }
   deriving stock (Show, Generic, THS.Lift)
-  deriving anyclass (NFData)
+  deriving anyclass (NFData, Default)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.StripPrefix "w", DAE.CamelToSnake]] WidgetAxis
 
 
@@ -170,15 +173,18 @@ widgetHelper_ isChild w = case w.wType of
     layoutFields = [("x", (.x)), ("y", (.y)), ("w", (.w)), ("h", (.h))]
     attrs = concat [maybe [] (\v -> [term ("gs-" <> name) (show v)]) (w.layout >>= layoutField) | (name, layoutField) <- layoutFields]
     paddingBtm = if w.standalone == Just True then "" else (bool "pb-8" "pb-4" isChild)
-    gridItem_ = div_ ([class_ "grid-stack-item h-full flex-1"] <> attrs) . div_ [class_ "grid-stack-item-content h-full"]
+    gridItem_ =
+      if w.naked == Just True
+        then Relude.id
+        else (div_ ([class_ "grid-stack-item h-full flex-1"] <> attrs) . div_ [class_ "grid-stack-item-content h-full"])
 
 
 renderWidgetHeader :: Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe (Text, Text) -> Bool -> Html ()
 renderWidgetHeader wId title valueM subValueM expandBtnFn ctaM hideSub = div_ [class_ "leading-none flex justify-between items-center"] do
   div_ [class_ "inline-flex gap-3 items-center"] do
     span_ [class_ "text-sm"] $ toHtml $ maybeToMonoid title
-    span_ [class_ $ "bg-fillWeak border border-strokeWeak text-sm font-semibold px-2 py-1 rounded-3xl " <> if (isJust valueM) then "" else "hidden", id_ $ wId <> "Value"]
-      $ whenJust valueM toHtml
+    span_ [class_ $ "bg-fillWeak border border-strokeWeak text-sm font-semibold px-2 py-1 rounded-3xl " <> if (isJust valueM) then "" else "hidden", id_ $ wId <> "Value"] $
+      whenJust valueM toHtml
     span_ [class_ $ "text-textWeak widget-subtitle text-sm " <> bool "" "hidden" hideSub, id_ $ wId <> "Subtitle"] $ toHtml $ maybeToMonoid subValueM
   div_ [class_ "text-iconNeutral"] do
     whenJust ctaM \(ctaTitle, uri) -> a_ [class_ "underline underline-offset-2 text-textBrand", href_ uri] $ toHtml ctaTitle
@@ -196,42 +202,63 @@ renderWidgetHeader wId title valueM subValueM expandBtnFn ctaM hideSub = div_ [c
 
 renderChart :: Widget -> Html ()
 renderChart widget = do
-  let rateM = widget.dataset >>= (.rowsPerMin) >>= (\r -> Just $ toText $ printf "%.2f" r <> " rows/min")
+  let rateM = widget.dataset >>= (.rowsPerMin) >>= \r -> Just $ toText $ printf "%.2f" r <> " rows/min"
   let chartId = maybeToMonoid widget.id
-  let valueM = (widget.dataset >>= (.value) >>= (\x -> Just $ Ft.fmt $ Ft.commaizeF $ round x))
+  let valueM = widget.dataset >>= (.value) >>= \x -> Just $ Ft.fmt $ Ft.commaizeF $ round x
+  let isStat = widget.wType `elem` [WTTimeseriesStat, WTStat]
   div_ [class_ "gap-0.5 flex flex-col h-full justify-end"] do
-    unless (widget.wType `elem` [WTTimeseriesStat, WTStat])
-      $ renderWidgetHeader chartId widget.title valueM rateM widget.expandBtnFn Nothing (widget.hideSubtitle == Just True)
+    unless (widget.naked == Just True || widget.wType `elem` [WTTimeseriesStat, WTStat]) $
+      renderWidgetHeader chartId widget.title valueM rateM widget.expandBtnFn Nothing (widget.hideSubtitle == Just True)
     div_ [class_ "flex-1 flex"] do
-      div_ [class_ "h-full w-full rounded-2xl border border-strokeWeak p-3 bg-fillWeaker flex flex-col justify-end"] do
-        when (widget.wType `elem` [WTTimeseriesStat, WTStat]) $ div_ [class_ "flex flex-col justify-between"] do
-          div_ [class_ "flex flex-col gap-1"] do
-            strong_ [class_ "text-textSuccess-strong text-4xl font-normal", id_ $ chartId <> "Value"]
-              $ whenJust valueM toHtml
-            div_ [class_ "inline-flex gap-1 items-center text-sm"] do
-              whenJust widget.icon \icon -> Utils.faSprite_ icon "regular" "w-4 h-4 text-iconBrand"
-              toHtml $ maybeToMonoid widget.title
-              Utils.faSprite_ "circle-info" "regular" "w-4 h-4 text-iconNeutral"
-        unless (widget.wType == WTStat) $ div_ [class_ "h-full w-full flex-1"] do
-          div_ [class_ "h-full w-full", id_ $ maybeToMonoid widget.id] ""
-          let theme = fromMaybe "default" widget.theme
-          let echartOpt = decodeUtf8 $ AE.encode $ widgetToECharts widget
-          let yAxisLabel = fromMaybe (maybeToMonoid widget.unit) (widget.yAxis >>= (.label))
-          let query = decodeUtf8 $ AE.encode widget.query
-          let pid = decodeUtf8 $ AE.encode $ widget._projectId <&> (.toText)
-          let querySQL = maybeToMonoid widget.sql
-          let chartType = mapWidgetTypeToChartType widget.wType
-          let summarizeBy = T.toLower $ T.drop 2 $ show $ fromMaybe SBSum widget.summarizeBy
-          let summarizeByPfx = summarizeByPrefix $ fromMaybe SBSum widget.summarizeBy
-          let wType = decodeUtf8 $ AE.encode widget.wType
-          script_
-            [type_ "text/javascript"]
-            [text|
+      div_
+        [ class_ $
+            "h-full w-full overflow-hidden flex flex-col justify-end "
+              <> if widget.naked == Just True then "" else " rounded-2xl border border-strokeWeak bg-fillWeaker "
+        ]
+        do
+          when (isStat) $ div_ [class_ "px-3 py-3 flex-1 flex flex-col justify-end "] do
+            div_ [class_ "flex flex-col gap-1"] do
+              strong_ [class_ "text-textSuccess-strong text-4xl font-normal", id_ $ chartId <> "Value"] $
+                whenJust valueM toHtml
+              div_ [class_ "inline-flex gap-1 items-center text-sm"] do
+                whenJust widget.icon \icon -> Utils.faSprite_ icon "regular" "w-4 h-4 text-iconBrand"
+                toHtml $ maybeToMonoid widget.title
+                Utils.faSprite_ "circle-info" "regular" "w-4 h-4 text-iconNeutral"
+          unless (widget.wType == WTStat) $ div_ [class_ $ "h-full w-full flex-1 " <> bool "p-3" "" (isStat || widget.naked == Just True)] do
+            div_ [class_ "h-full w-full", id_ $ maybeToMonoid widget.id] ""
+            let theme = fromMaybe "default" widget.theme
+            let echartOpt = decodeUtf8 $ AE.encode $ widgetToECharts widget
+            let yAxisLabel = fromMaybe (maybeToMonoid widget.unit) (widget.yAxis >>= (.label))
+            let query = decodeUtf8 $ AE.encode widget.query
+            let pid = decodeUtf8 $ AE.encode $ widget._projectId <&> (.toText)
+            let querySQL = maybeToMonoid widget.sql
+            let chartType = mapWidgetTypeToChartType widget.wType
+            let summarizeBy = T.toLower $ T.drop 2 $ show $ fromMaybe SBSum widget.summarizeBy
+            let summarizeByPfx = summarizeByPrefix $ fromMaybe SBSum widget.summarizeBy
+            let wType = decodeUtf8 $ AE.encode widget.wType
+            script_
+              [type_ "text/javascript"]
+              [text|
               (()=>{
+
+                const echartOptTxt = `${echartOpt}`
+                const echartOpt = JSON.parse(echartOptTxt, (key, value) => {
+                  if (typeof value === 'string' && value.trim().startsWith("function(")) {
+                    try {
+                      return eval('(' + value + ')');
+                    } catch (error) {
+                      console.error(`Error evaluating function for key "$${key}":`, error);
+                      return value;
+                    }
+                  }
+                  return value;
+                })
+
+                bindFunctionsToObjects(echartOpt, echartOpt);
                 chartWidget({
                   chartType: '${chartType}',
                   widgetType: ${wType},
-                  opt: ${echartOpt},
+                  opt: echartOpt,
                   chartId: "${chartId}",
                   query: ${query},
                   querySQL: `${querySQL}`,
@@ -264,7 +291,8 @@ widgetToECharts widget =
    in AE.object
         [ "tooltip"
             AE..= AE.object
-              [ "trigger" AE..= ("axis" :: Text)
+              [ "show" AE..= fromMaybe True widget.showTooltip
+              , "trigger" AE..= ("axis" :: Text)
               , "axisPointer"
                   AE..= AE.object
                     ["type" AE..= ("shadow" :: Text)]
@@ -272,18 +300,18 @@ widgetToECharts widget =
         , "legend"
             AE..= AE.object
               [ "show" AE..= legendVisibility
-              , "type" AE..= ("scroll" :: Text)
-              , "top" AE..= ("bottom" :: Text)
+              , "type" AE..= "scroll"
+              , "top" AE..= "bottom"
               , "data" AE..= fromMaybe [] (extractLegend widget)
               ]
         , "grid"
             AE..= AE.object
               [ "width" AE..= ("100%" :: Text)
               , "left" AE..= ("0%" :: Text)
-              , "top" AE..= ("2%" :: Text)
-              , "bottom" AE..= if fromMaybe False widget.hideLegend || widget.wType == WTTimeseriesStat then "1.8%" else "22%"
+              , "top" AE..= if widget.naked == Just True then "10%" else "5%"
+              , "bottom" AE..= if (fromMaybe False widget.hideLegend || widget.wType == WTTimeseriesStat) then "1.8%" else "22%"
               , "containLabel" AE..= True
-              , "show" AE..= gridLinesVisibility
+              , "show" AE..= False
               ]
         , "xAxis"
             AE..= AE.object
@@ -292,16 +320,39 @@ widgetToECharts widget =
               , "min" AE..= maybe AE.Null (AE.Number . fromIntegral . (* 1000)) (widget ^? #dataset . _Just . #from . _Just)
               , "max" AE..= maybe AE.Null (AE.Number . fromIntegral . (* 1000)) (widget ^? #dataset . _Just . #to . _Just)
               , "boundaryGap" AE..= ([0, 0.01] :: [Double])
-              , "axisLabel" AE..= AE.object ["show" AE..= axisVisibility]
-              , "show" AE..= axisVisibility
+              , "splitLine"
+                  AE..= AE.object
+                    [ "show" AE..= False
+                    ]
+              , "axisLine" AE..= AE.object ["show" AE..= axisVisibility, "lineStyle" AE..= AE.object ["color" AE..= "#000833A6", "type" AE..= "solid", "opacity" AE..= 0.1]]
+              , "axisLabel" AE..= AE.object ["show" AE..= (axisVisibility && fromMaybe True (widget ^? #xAxis . _Just . #showAxisLabel . _Just))]
+              , "show" AE..= (axisVisibility || fromMaybe False (widget ^? #xAxis . _Just . #showAxisLabel . _Just))
               ]
         , "yAxis"
             AE..= AE.object
               [ "type" AE..= ("value" :: Text)
               , "min" AE..= (0 :: Int)
-              , "max" AE..= maybe AE.Null (AE.Number . fromFloatDigits) (widget ^? #dataset . _Just . #stats . _Just . #max)
-              , "splitLine" AE..= AE.object ["show" AE..= gridLinesVisibility]
-              , "axisLabel" AE..= AE.object ["show" AE..= axisVisibility]
+              , "max" AE..= maybe AE.Null (AE.Number . fromFloatDigits) (widget ^? #dataset . _Just . #stats . _Just . #maxGroupSum)
+              , "splitLine"
+                  AE..= AE.object
+                    [ "show" AE..= gridLinesVisibility
+                    , "lineStyle" AE..= AE.object ["type" AE..= "dotted", "color" AE..= "#0011661A"]
+                    , "interval"
+                        AE..= if (fromMaybe False $ widget ^? #yAxis . _Just . #showOnlyMaxLabel . _Just)
+                          then "function(index, value) { return value === this.yAxis.max }"
+                          else AE.Null
+                    ]
+              , "axisTick" AE..= AE.object ["show" AE..= False]
+              , "axisLine" AE..= AE.object ["show" AE..= False]
+              , "axisLabel"
+                  AE..= AE.object
+                    [ "show" AE..= (axisVisibility && fromMaybe True (widget ^? #yAxis . _Just . #showAxisLabel . _Just))
+                    , "inside" AE..= False
+                    , "formatter"
+                        AE..= if (fromMaybe False $ widget ^? #yAxis . _Just . #showOnlyMaxLabel . _Just)
+                          then "function(value, index) { return value === this.yAxis.max ? formatNumber(this.yAxis.max) : ''; }"
+                          else "function(value, index) { return formatNumber(value); }"
+                    ]
               , "show" AE..= axisVisibility
               ]
         , "dataset"
