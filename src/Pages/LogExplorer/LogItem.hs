@@ -79,10 +79,10 @@ expandAPIlogItem' pid req modal = do
           button_ [class_ "ml-4 p-0 -mt-1", [__|on click add .hidden to #trace_expanded_view then put '0px' into  #log_details_container.style.width|]] do
             faSprite_ "xmark" "regular" "w-3 h-3 text-textBrand"
     -- url, endpoint, latency, request size, repsonse size
-    let endpointHash = toXXHash $ pid.toText <> req.host <> req.method <> req.urlPath
-    let endpointURl = "/p/" <> pid.toText <> "/log_explorer/endpoint/" <> endpointHash
+    let path = toText $ escapeURIString isUnescapedInURI $ "url_path==\"" <> toString req.urlPath <> "\""
         query = toText $ escapeURIString isUnescapedInURI $ "raw_url==\"" <> toString req.rawUrl <> "\""
-    let rawUrl = "/p/" <> pid.toText <> "/log_explorer?query=" <> query
+        rawUrl = "/p/" <> pid.toText <> "/log_explorer?query=" <> query
+        urlPath = "/p/" <> pid.toText <> "/log_explorer?query=" <> path
     div_ [class_ "flex flex-col mt-4 justify-between w-full"] do
       div_ [class_ "text-base mb-2 flex gap-6 items-center"] do
         span_ [class_ "text-slate-500 font-medium w-16"] "Endpoint"
@@ -90,7 +90,7 @@ expandAPIlogItem' pid req modal = do
           span_ [class_ "text-slate-800 text-sm truncate ellipsis urlPath", term "data-tippy" req.urlPath] $ toHtml req.urlPath
           div_ [[__| install Copy(content:.urlPath )|]] do
             faSprite_ "copy" "regular" "h-8 w-8 border border-slate-300 bg-fillWeaker rounded-full p-2 text-slate-500"
-          a_ [hxGet_ endpointURl] do
+          a_ [href_ urlPath] do
             faSprite_ "arrow-up-right" "regular" "h-8 w-8 p-2 btn-primary rounded-full"
       div_ [class_ "text-base flex items-center gap-6"] do
         span_ [class_ "text-slate-500 font-medium w-16"] "URL"
@@ -142,7 +142,7 @@ expandAPIlogItem' pid req modal = do
 --   p_ [class_ "font-medium text-slate-950 mb-2"] "Outgoing requests"
 --   div_ [class_ "grow rounded-lg border border-slate-200 overflow-y-auto py-2 px-1 h-[150px] whitespace-nowrap  divide-y overflow-x-hidden"] do
 --     let createdAt = toText $ formatTime defaultTimeLocale "%FT%T%6QZ" req.createdAt
---     let escapedQueryPartial = toText $ escapeURIString isUnescapedInURI $ toString [fmt|parent_id=="{UUID.toText req.id}" AND created_at<="{createdAt}"|]
+--         escapedQueryPartial = toText $ escapeURIString isUnescapedInURI $ toString $ "parent_id==\"" <> UUID.toText req.id <> "\" AND " <> "created_at>=\"" <> createdAt <> "\""
 --         events_url = "/p/" <> pid.toText <> "/log_explorer?layout=virtualTable&query=" <> escapedQueryPartial
 --     div_ [hxGet_ events_url, hxTrigger_ "intersect once", hxSwap_ "outerHTML"] $ span_ [class_ "loading loading-dots loading-md"] ""
 
