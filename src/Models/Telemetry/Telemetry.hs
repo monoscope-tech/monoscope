@@ -61,9 +61,6 @@ import Database.PostgreSQL.Transact qualified as DBT
 import Deriving.Aeson qualified as DAE
 import Deriving.Aeson.Stock qualified as DAE
 import Effectful
-
-import Data.ByteString.Base64 qualified as B64
-import Database.PostgreSQL.Simple (Only (..))
 import Effectful.PostgreSQL.Transact.Effect (DB, dbtToEff)
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.Projects qualified as Projects

@@ -1,6 +1,5 @@
-module Pkg.DBUtils (WrappedEnum (..), WrappedEnumSC (..), replacePlaceholders) where
+module Pkg.DBUtils (WrappedEnum (..), WrappedEnumSC (..)) where
 
-import Data.Map qualified as M
 import Data.Text qualified as T
 import Database.PostgreSQL.Simple (ResultError (..))
 import Database.PostgreSQL.Simple.FromField (FromField (..), fromField, returnError)
@@ -9,7 +8,6 @@ import GHC.TypeLits
 import Relude
 import Relude.Unsafe qualified as Unsafe
 import Text.Casing
-import Text.Regex.TDFA ((=~))
 
 
 newtype WrappedEnum (prefix :: Symbol) a = WrappedEnum a
@@ -39,17 +37,3 @@ instance (KnownSymbol prefix, Typeable a, Read a) => FromField (WrappedEnumSC pr
   fromField f = \case
     Nothing -> returnError UnexpectedNull f ""
     Just bss -> pure $ WrappedEnumSC (Unsafe.read $ symbolVal (Proxy @prefix) <> toString (T.toTitle (decodeUtf8 bss)))
-
-
--- | Replace all occurrences of {key} in the input text using the provided mapping.
-replacePlaceholders :: M.Map T.Text T.Text -> T.Text -> T.Text
-replacePlaceholders mappng input =
-  let regex = "\\{([^}]+)\\}" :: T.Text
-      go txt =
-        case T.unpack txt =~ T.unpack regex :: (String, String, String, [String]) of
-          (before, match, after, [key])
-            | not (null match) ->
-                let replacement = M.findWithDefault (T.pack match) (T.pack key) mappng
-                 in T.pack before <> replacement <> go (T.pack after)
-          _ -> txt
-   in go input

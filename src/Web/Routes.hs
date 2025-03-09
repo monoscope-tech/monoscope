@@ -3,6 +3,8 @@ module Web.Routes (server, genAuthServerContext) where
 import Data.Aeson qualified as AE
 import Data.Map qualified as Map
 import Data.Pool (Pool)
+import Data.Text.Encoding qualified as TE
+import Data.Text.Encoding.Error qualified as TE
 import Data.UUID qualified as UUID
 import Database.PostgreSQL.Simple qualified as PG
 import Database.PostgreSQL.Simple.SqlQQ (sql)
@@ -21,6 +23,7 @@ import Models.Projects.Dashboards qualified as Dashboards
 import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
 import Models.Projects.Projects qualified as Projects
 import Network.HTTP.Types (notFound404)
+import Network.Wai (Request, queryString)
 import Pages.Anomalies.Routes qualified as AnomaliesRoutes
 import Pages.Anomalies.Server qualified as AnomaliesRoutes
 import Pages.Api qualified as Api
@@ -29,8 +32,8 @@ import Pages.BodyWrapper (PageCtx (..))
 import Pages.CP qualified as CP
 import Pages.Charts.Charts qualified as Charts
 import Pages.Dashboards qualified as Dashboards
-import Pages.Endpoints.Routes qualified as EndpointsRoutes
-import Pages.Endpoints.Server qualified as EndpointsRoutes
+import Pages.Endpoints.ApiCatalog qualified as ApiCatalog
+import Pages.Endpoints.EndpointList qualified as EndpointList
 import Pages.Fields.FieldDetails qualified as FieldDetails
 import Pages.LemonSqueezy qualified as LemonSqueezy
 import Pages.LogExplorer.Routes qualified as LogExplorerRoutes
@@ -44,12 +47,14 @@ import Pages.Specification.GenerateSwagger qualified as GenerateSwagger
 import Pages.Specification.Routes qualified as SpecificationRoutes
 import Pages.Specification.Server qualified as SpecificationRoutes
 import Pages.Telemetry.Routes qualified as TelemetryRoutes
+import Pkg.Components.ItemsList qualified as ItemsList
 import Pkg.RouteUtils
 import Relude
 import Servant
 import Servant.HTML.Lucid (HTML)
 import Servant.Htmx
 import Servant.Server.Generic (AsServerT)
+import Servant.Server.Internal.Delayed (passToServer)
 import System.Config (AuthContext)
 import System.Types
 import Web.Auth (APItoolkitAuthContext, authHandler)
@@ -117,14 +122,14 @@ type role CookieProtectedRoutes nominal
 
 type CookieProtectedRoutes :: Type -> Type
 data CookieProtectedRoutes mode = CookieProtectedRoutes
-  { dashboardGet :: mode :- "p" :> ProjectId :> GetRedirect '[HTML] (Headers '[Header "Location" Text] NoContent)
-  , dashboardsGet :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> QPT "file" :> QPT "from" :> QPT "to" :> QPT "since" :> Get '[HTML] (RespHeaders (PageCtx Dashboards.DashboardGet))
+  { dashboardRedirectGet :: mode :- "p" :> ProjectId :> AllQueryParams :> GetRedirect '[HTML] (Headers '[Header "Location" Text] NoContent)
+  , endpointDetailsRedirect :: mode :- "p" :> ProjectId :> "endpoints" :> "details" :> AllQueryParams :> GetRedirect '[HTML] (Headers '[Header "Location" Text] NoContent)
+  , dashboardsGet :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> QPT "file" :> QPT "from" :> QPT "to" :> QPT "since" :> AllQueryParams :> Get '[HTML] (RespHeaders (PageCtx Dashboards.DashboardGet))
   , dashboardsGetList :: mode :- "p" :> ProjectId :> "dashboards" :> Get '[HTML] (RespHeaders (PageCtx Dashboards.DashboardsGet))
   , dashboardsPost :: mode :- "p" :> ProjectId :> "dashboards" :> ReqBody '[FormUrlEncoded] Dashboards.DashboardForm :> Post '[HTML] (RespHeaders NoContent)
   , projects :: mode :- ProjectsRoutes.Routes
   , anomalies :: mode :- "p" :> ProjectId :> "anomalies" :> AnomaliesRoutes.Routes
   , logExplorer :: mode :- "p" :> ProjectId :> LogExplorerRoutes.Routes
-  , endpoints :: mode :- "p" :> ProjectId :> EndpointsRoutes.Routes
   , monitors :: mode :- "p" :> ProjectId :> MonitorsRoutes.Routes
   , specification :: mode :- "p" :> ProjectId :> SpecificationRoutes.Routes
   , traces :: mode :- "p" :> ProjectId :> TelemetryRoutes.Routes
@@ -139,10 +144,11 @@ data CookieProtectedRoutes mode = CookieProtectedRoutes
   , shareLinkPost :: mode :- "p" :> ProjectId :> "share" :> Capture "event_id" UUID.UUID :> Capture "createdAt" UTCTime :> QPT "event_type" :> Post '[HTML] (RespHeaders Share.ShareLinkPost)
   , queryBuilderAutocomplete :: mode :- "p" :> ProjectId :> "query_builder" :> "autocomplete" :> QPT "category" :> QPT "prefix" :> Get '[JSON] (RespHeaders AE.Value)
   , swaggerGenerateGet :: mode :- "p" :> ProjectId :> "generate_swagger" :> Get '[JSON] (RespHeaders AE.Value)
-  , chartsGet :: mode :- "charts_html" :> QP "chart_type" Charts.ChartType :> QPT "query_raw" :> QPT "queryAST" :> QueryParam "pid" Projects.ProjectId :> QP "group_by" Charts.GroupBy :> QP "query_by" [Charts.QueryBy] :> QP "num_slots" Int :> QP "limit" Int :> QP "theme" Text :> QPT "id" :> QP "show_legend" Bool :> QP "show_axes" Bool :> QPT "since" :> QPT "from" :> QPT "to" :> QPT "source" :> Get '[HTML] (RespHeaders (Html ()))
-  , chartsDataGet :: mode :- "chart_data" :> QueryParam "pid" Projects.ProjectId :> QPT "query_raw" :> QPT "queryAST" :> QPT "query_sql" :> QPT "since" :> QPT "from" :> QPT "to" :> QPT "source" :> Get '[JSON] Charts.MetricsData
+  , chartsDataGet :: mode :- "chart_data" :> QueryParam "data_type" Charts.DataType :> QueryParam "pid" Projects.ProjectId :> QPT "query_raw" :> QPT "queryAST" :> QPT "query_sql" :> QPT "since" :> QPT "from" :> QPT "to" :> QPT "source" :> AllQueryParams :> Get '[JSON] Charts.MetricsData
   , editField :: mode :- "p" :> ProjectId :> "fields" :> Capture "field_id" Fields.FieldId :> ReqBody '[FormUrlEncoded] FieldDetails.EditFieldForm :> Post '[HTML] (RespHeaders FieldDetails.FieldPut)
   , manageBillingGet :: mode :- "p" :> ProjectId :> "manage_billing" :> QPT "from" :> Get '[HTML] (RespHeaders LemonSqueezy.BillingGet)
+  , endpointListGet :: mode :- "p" :> ProjectId :> "endpoints" :> QPT "page" :> QPT "layout" :> QPT "filter" :> QPT "host" :> QPT "request_type" :> QPT "sort" :> HXRequest :> HXBoosted :> HXCurrentURL :> QPT "load_more" :> QPT "search" :> Get '[HTML] (RespHeaders EndpointList.EndpointRequestStatsVM)
+  , apiCatalogGet :: mode :- "p" :> ProjectId :> "api_catalog" :> QPT "sort" :> QPT "since" :> QPT "request_type" :> Get '[HTML] (RespHeaders (PageCtx (ItemsList.ItemsPage ApiCatalog.HostEventsVM)))
   }
   deriving stock (Generic)
 
@@ -150,14 +156,14 @@ data CookieProtectedRoutes mode = CookieProtectedRoutes
 cookieProtectedServer :: Servant.ServerT (Servant.NamedRoutes CookieProtectedRoutes) ATAuthCtx
 cookieProtectedServer =
   CookieProtectedRoutes
-    { dashboardGet = Dashboards.entrypointGetH
+    { dashboardRedirectGet = Dashboards.entrypointRedirectGetH "_overview.yaml" "Overview" ["overview", "http", "logs", "traces", "events"]
+    , endpointDetailsRedirect = Dashboards.entrypointRedirectGetH "endpoint-stats.yaml" "Endpoint Analytics" ["endpoints", "http", "events"]
     , dashboardsGet = Dashboards.dashboardGetH
     , dashboardsGetList = Dashboards.dashboardsGetH
     , dashboardsPost = Dashboards.dashboardsPostH
     , projects = ProjectsRoutes.server
     , logExplorer = LogExplorerRoutes.server
     , anomalies = AnomaliesRoutes.server
-    , endpoints = EndpointsRoutes.server
     , monitors = MonitorsRoutes.server
     , specification = SpecificationRoutes.server
     , traces = TelemetryRoutes.server
@@ -172,10 +178,11 @@ cookieProtectedServer =
     , shareLinkPost = Share.shareLinkPostH
     , queryBuilderAutocomplete = AutoComplete.getH
     , swaggerGenerateGet = GenerateSwagger.generateGetH
-    , chartsGet = Charts.chartsGetH
     , chartsDataGet = Charts.queryMetrics
     , editField = FieldDetails.fieldPutH
     , manageBillingGet = LemonSqueezy.manageBillingGetH
+    , endpointListGet = EndpointList.endpointListGetH
+    , apiCatalogGet = ApiCatalog.apiCatalogH
     }
 
 
@@ -232,3 +239,36 @@ pingH = do
 -- When bystring is returned for json, simply return the bytestring
 instance Servant.MimeRender JSON ByteString where
   mimeRender _ = fromStrict
+
+
+-- | Our custom combinator, indicating
+--   "this endpoint wants all query parameters."
+data AllQueryParams
+
+
+-- | We add a HasServer instance that says:
+--   - The handler will receive a list of (Text, Maybe Text).
+--   - We pull that out of the WAI `Request` in `route`.
+instance HasServer api ctx => HasServer (AllQueryParams :> api) ctx where
+  type ServerT (AllQueryParams :> api) m = [(Text, Maybe Text)] -> ServerT api m
+
+
+  route _ ctx subserver = route (Proxy :: Proxy api) ctx subserver'
+    where
+      grabAllParams :: Request -> [(Text, Maybe Text)]
+      grabAllParams req =
+        [ ( TE.decodeUtf8With TE.lenientDecode k
+          , (TE.decodeUtf8With TE.lenientDecode) <$> mv
+          )
+        | (k, mv) <- req.queryString
+        ]
+      subserver' = passToServer subserver grabAllParams
+
+
+  hoistServerWithContext
+    :: Proxy (AllQueryParams :> api)
+    -> Proxy ctx
+    -> (forall x. m x -> n x)
+    -> ([(Text, Maybe Text)] -> ServerT api m)
+    -> ([(Text, Maybe Text)] -> ServerT api n)
+  hoistServerWithContext _ pc nat s = \qs -> hoistServerWithContext (Proxy :: Proxy api) pc nat (s qs)

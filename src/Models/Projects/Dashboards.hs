@@ -1,13 +1,14 @@
-module Models.Projects.Dashboards (Dashboard (..), DashboardVM (..), DashboardId (..), readDashboardsFromDirectory, readDashboardEndpoint) where
+module Models.Projects.Dashboards (Dashboard (..), DashboardVM (..), DashboardId (..), Variable (..), VariableType (..), readDashboardsFromDirectory, readDashboardEndpoint, replaceQueryVariables) where
 
 import Control.Exception (try)
-import Control.Lens ((^.))
+import Control.Lens
 import Data.Aeson qualified as AE
 import Data.ByteString qualified as B
 import Data.Default
 import Data.Effectful.UUID qualified as UUID
 import Data.Effectful.Wreq (HTTP)
 import Data.Effectful.Wreq qualified as W
+import Data.Generics.Labels ()
 import Data.List (isSuffixOf)
 import Data.Time (UTCTime)
 import Data.Vector qualified as V
@@ -28,7 +29,8 @@ import Language.Haskell.TH.Syntax qualified as THS
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Users qualified as Users
 import Pkg.Components.TimePicker qualified as TimePicker
-import Pkg.Components.Widget (Widget (..))
+import Pkg.Components.Widget qualified as Widget
+import Pkg.DashboardUtils qualified as DashboardUtils
 import Relude
 import Servant (FromHttpApiData, ServerError (..), err401)
 import System.Directory (listDirectory)
@@ -77,12 +79,37 @@ data Dashboard = Dashboard
   , tags :: Maybe [Text]
   , refreshInterval :: Maybe Text -- Refresh interval
   , timeRange :: Maybe TimePicker.TimePicker
-  , widgets :: [Widget] -- List of widgets
+  , variables :: Maybe [Variable]
+  , widgets :: [Widget.Widget] -- List of widgets
   }
   deriving stock (Show, Generic, THS.Lift)
   deriving (AE.FromJSON, AE.ToJSON) via DAES.Snake Dashboard
   deriving anyclass (NFData)
   deriving (FromField, ToField) via Aeson Dashboard
+
+
+data VariableType = VTQuery | VTValues
+  deriving stock (Show, Eq, Generic, Enum, THS.Lift)
+  deriving anyclass (NFData)
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.ConstructorTagModifier '[DAE.StripPrefix "VT", DAE.CamelToSnake]] VariableType
+
+
+data Variable = Variable
+  { key :: Text
+  , title :: Maybe Text
+  , multi :: Maybe Bool
+  , required :: Maybe Bool
+  , reloadOnChange :: Maybe Bool
+  , helpText :: Maybe Text
+  , _vType :: VariableType
+  , sql :: Maybe Text
+  , query :: Maybe Text
+  , options :: Maybe [[Text]]
+  , value :: Maybe Text
+  }
+  deriving stock (Show, Generic, THS.Lift)
+  deriving anyclass (NFData)
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.StripPrefix "_v", DAE.CamelToSnake]] Variable
 
 
 readDashboardsFromDirectory :: FilePath -> Q Exp
@@ -117,3 +144,11 @@ readDashboardEndpoint uri = do
     & either
       (\e -> throwError $ err401{errBody = ("Error decoding dashboard: " <> show e)})
       pure
+
+
+replaceQueryVariables :: Projects.ProjectId -> Maybe UTCTime -> Maybe UTCTime -> [(Text, Maybe Text)] -> Variable -> Variable
+replaceQueryVariables pid mf mt allParams variable =
+  let mappng = DashboardUtils.variablePresets pid.toText mf mt allParams
+   in variable
+        & #sql . _Just %~ DashboardUtils.replacePlaceholders mappng
+        & #query . _Just %~ DashboardUtils.replacePlaceholders mappng

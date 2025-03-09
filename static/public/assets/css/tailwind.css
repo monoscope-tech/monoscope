@@ -201,7 +201,6 @@ body {
   display: block;
 }
 
-
 .text-weak {
   @apply text-[#000933]/60;
 }
@@ -234,7 +233,9 @@ body {
 @layer components {
   :root {
     font-family: Inter, sans-serif;
-    font-feature-settings: 'liga' 1, 'calt' 1;
+    font-feature-settings:
+      'liga' 1,
+      'calt' 1;
     /* fix for Chrome */
     /* font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, */
     /*     'Noto Sans', sans-serif, 'Apple Color Emoji', 'Segoe UI Emoji', 'Segoe UI Symbol', */
@@ -531,4 +532,30 @@ body {
   .ctable .log-row.htmx-settling {
     @apply bg-[#d6efff] transition-colors duration-300 ease-in-out;
   }
+}
+
+/****** Tagify *****/
+.dash-variable .tagify {
+  margin-top: -0.5rem;
+  --tags-border-color: transparent;
+  --tag-text-color: #000626e6;
+}
+
+.dash-variable .tagify__tag {
+  min-width: 100%;
+  margin-inline-end: 0.5em;
+  padding-right: 1em;
+}
+
+.tagify__dropdown {
+  max-width: 100% !important;
+}
+
+.dash-variable .tagify__tag-text {
+  text-wrap-mode: nowrap !important;
+}
+
+.tagify--select::after {
+  content: '›' !important;
+  color: #000d4d73;
 }

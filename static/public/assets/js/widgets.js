@@ -1,24 +1,43 @@
 'use strict'
-const DEFAULT_BACKGROUND_STYLE = { color: 'rgba(240,248,255, 0.4)' },
-  INITIAL_FETCH_INTERVAL = 5000,
-  $ = id => document.getElementById(id)
 
-const createSeriesConfig = (chartType, name, i, yAxisLabel) => ({
-  type: chartType,
-  name,
-  stack: chartType === 'line' ? undefined : yAxisLabel || 'units',
-  showSymbol: false,
-  showBackground: true,
-  backgroundStyle: DEFAULT_BACKGROUND_STYLE,
-  barMaxWidth: '10',
-  barMinHeight: '1',
-  encode: { x: 0, y: i + 1 },
-})
+const DEFAULT_BACKGROUND_STYLE = { color: 'rgba(240,248,255, 0.4)' }
+const INITIAL_FETCH_INTERVAL = 5000
+const $ = id => document.getElementById(id)
+const DEFAULT_PALETTE = ['#1A74A8', '#067A57CC', '#EE6666', '#FAC858', '#73C0DE', '#3BA272', '#FC8452', '#9A60B4', '#ea7ccc']
 
-const updateChartConfiguration = ({ chartType, yAxisLabel }, opt, data) => {
+const createSeriesConfig = (widgetData, name, i, opt) => {
+  const palette = opt.color || DEFAULT_PALETTE
+  const paletteColor = palette[i % palette.length]
+
+  const gradientColor = new echarts.graphic.LinearGradient(0, 0, 0, 1, [
+    { offset: 0, color: echarts.color.modifyAlpha(paletteColor, 1) },
+    { offset: 1, color: echarts.color.modifyAlpha(paletteColor, 0) },
+  ])
+
+  const seriesOpt = {
+    type: widgetData.chartType,
+    name,
+    stack: widgetData.chartType === 'line' ? undefined : widgetData.yAxisLabel || 'units',
+    showSymbol: false,
+    showBackground: true,
+    backgroundStyle: DEFAULT_BACKGROUND_STYLE,
+    barMaxWidth: '10',
+    barMinHeight: '1',
+    encode: { x: 0, y: i + 1 },
+  }
+
+  if (widgetData.widgetType == 'timeseries_stat') {
+    seriesOpt.itemStyle = { color: gradientColor }
+    seriesOpt.areaStyle = { color: gradientColor }
+  }
+
+  return seriesOpt
+}
+
+const updateChartConfiguration = (widgetData, opt, data) => {
   if (!data) return opt
   const cols = data[0]?.slice(1)
-  opt.series = cols?.map((n, i) => createSeriesConfig(chartType, n, i, yAxisLabel))
+  opt.series = cols?.map((n, i) => createSeriesConfig(widgetData, n, i, opt))
   opt.legend.data = cols
   return opt
 }
@@ -39,10 +58,16 @@ const updateChartData = async (chart, opt, shouldFetch, widgetData) => {
     opt.xAxis.min = from * 1000
     opt.xAxis.max = to * 1000
     opt.dataset.source = [headers, ...dataset.map(row => [row[0] * 1000, ...row.slice(1)])]
+    opt.yAxis.max = stats.max
+    if (widgetData.chartType != 'line') {
+      opt.yAxis.max = stats.max_group_sum
+    }
 
-    $(chartId + 'Subtitle').innerHTML = `${rows_per_min.toFixed(2)} rows/min`
-    $(chartId + 'Value').innerHTML = `${summarizeByPrefix} ${Number(stats[summarizeBy]).toLocaleString()}`
-    $(chartId + 'Value').classList.remove('hidden')
+    const subtitle = $(`${chartId}Subtitle`)
+    subtitle && (subtitle.innerHTML = `${rows_per_min.toFixed(2)} rows/min`)
+
+    const value = $(`${chartId}Value`)
+    value && ((value.innerHTML = `${summarizeByPrefix} ${Number(stats[summarizeBy]).toLocaleString()}`), value.classList.remove('hidden'))
 
     chart.hideLoading()
     chart.setOption(updateChartConfiguration(widgetData, opt, opt.dataset.source))
@@ -99,15 +124,45 @@ const chartWidget = widgetData => {
     ).observe(chartEl)
   }
 
-  ;['submit', 'add-query', 'update-query'].forEach(event =>
-    document.querySelector(event === 'submit' ? '#log_explorer_form' : '#filterElement')?.addEventListener(event, e => {
-      console.log('add-query/update-query events', e)
-      if (e.detail.ast) {
+  ;['submit', 'add-query', 'update-query'].forEach(event => {
+    const selector = event === 'submit' ? '#log_explorer_form' : '#filterElement'
+    document.querySelector(selector)?.addEventListener(event, e => {
+      if (e.detail?.ast) {
         widgetData.queryAST = e.detail.ast
       }
-      return updateChartData(chart, opt, true, widgetData)
-    }),
-  )
+      updateChartData(chart, opt, true, widgetData)
+    })
+  })
+  window.addEventListener('update-query', e => {
+    if (e.detail?.ast) {
+      widgetData.queryAST = e.detail.ast
+    }
+    updateChartData(chart, opt, true, widgetData)
+  })
 
   window.addEventListener('unload', () => (clearInterval(intervalId), resizeObserver.disconnect()))
+}
+
+function bindFunctionsToObjects(rootObj, obj) {
+  if (!obj || typeof obj !== 'object') return
+
+  Object.keys(obj).forEach(key => {
+    const value = obj[key]
+    if (typeof value === 'function') {
+      obj[key] = value.bind(rootObj)
+    } else if (value && typeof value === 'object') {
+      bindFunctionsToObjects(rootObj, value)
+    }
+  })
+
+  return obj
+}
+
+function formatNumber(num) {
+  if (Number.isInteger(num)) {
+    return num.toString()
+  } else {
+    // toFixed returns a string with exactly 2 decimals, so parseFloat removes trailing zeros.
+    return parseFloat(num.toFixed(2)).toString()
+  }
 }

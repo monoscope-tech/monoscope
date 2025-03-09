@@ -9,20 +9,15 @@ module Models.Apis.RequestDumps (
   normalizeUrlPath,
   selectLogTable,
   requestDumpLogUrlPath,
-  selectReqLatenciesRolledBySteps,
-  selectReqLatenciesRolledByStepsForProject,
   selectRequestDumpByProject,
   selectRequestDumpByProjectAndId,
-  selectRequestDumpByProjectAndParentId,
   bulkInsertRequestDumps,
   getRequestDumpForReports,
   getRequestDumpsForPreviousReportPeriod,
   countRequestDumpByProject,
   getRequestType,
   autoCompleteFromRequestDumps,
-  getTotalRequestForCurrentMonth,
   getLastSevenDaysTotalRequest,
-  hasRequest,
   getTotalRequestToReport,
   parseSDKType,
 )
@@ -131,6 +126,8 @@ parseSDKType "JavaVertx" = JavaVertx
 parseSDKType "JsOutgoing" = JsOutgoing
 parseSDKType "JsNext" = JsNext
 parseSDKType _ = JsExpress
+
+
 instance FromField SDKTypes where
   fromField f mdata = do
     str <- fromField f mdata
@@ -484,20 +481,6 @@ countRequestDumpByProject pid = do
     q = [sql| SELECT count(*) FROM apis.request_dumps WHERE project_id=?  AND created_at > NOW() - interval '14 days'|]
 
 
-hasRequest :: Projects.ProjectId -> DBT IO Bool
-hasRequest pid = do
-  result <- query Select q pid
-  case result of
-    [Only count] -> return count
-    v -> return $ not (null v)
-  where
-    q =
-      [sql|SELECT EXISTS(
-  SELECT 1
-  FROM apis.request_dumps where project_id = ?
-) |]
-
-
 bulkInsertRequestDumps :: DB :> es => [RequestDump] -> Eff es ()
 bulkInsertRequestDumps params = void $ dbtToEff $ executeMany Insert q params
   where
@@ -516,69 +499,10 @@ selectRequestDumpByProjectAndId pid createdAt rdId = queryOne Select q (createdA
              FROM apis.request_dumps where (created_at=?)  and project_id=? and id=? LIMIT 1|]
 
 
-selectReqLatenciesRolledBySteps :: Int -> Int -> Projects.ProjectId -> Text -> Text -> DBT IO (V.Vector (Int, Int))
-selectReqLatenciesRolledBySteps maxv steps pid urlPath method = query Select q (maxv, steps, steps, steps, pid, urlPath, method)
-  where
-    q =
-      [sql|
-SELECT duration_steps, count(id)
-	FROM generate_series(0, ?, ?) AS duration_steps
-	LEFT OUTER JOIN apis.request_dumps on (duration_steps = round((EXTRACT(epoch FROM duration)/1000000)/?)*?
-    AND created_at > NOW() - interval '14' day
-    AND project_id=? and url_path=? and method=?)
-	GROUP BY duration_steps
-	ORDER BY duration_steps;
-      |]
-
-
--- TODO: expand this into a view
-selectReqLatenciesRolledByStepsForProject :: Int -> Int -> Projects.ProjectId -> (Maybe UTCTime, Maybe UTCTime) -> DBT IO (V.Vector (Int, Int))
-selectReqLatenciesRolledByStepsForProject maxv steps pid dateRange = query Select (Query $ encodeUtf8 q) (maxv, steps, steps, steps, pid)
-  where
-    dateRangeStr = from @String $ case dateRange of
-      (Nothing, Just b) -> "AND created_at BETWEEN NOW() AND '" <> formatTime defaultTimeLocale "%F %R" b <> "'"
-      (Just a, Just b) -> "AND created_at BETWEEN '" <> formatTime defaultTimeLocale "%F %R" a <> "' AND '" <> formatTime defaultTimeLocale "%F %R" b <> "'"
-      _ -> ""
-    q =
-      [text|
-select duration_steps, count(id)
-	FROM generate_series(0, ?, ?) AS duration_steps
-	LEFT OUTER JOIN apis.request_dumps on (duration_steps = round((EXTRACT(epoch FROM duration)/1000000)/?)*?
-    AND project_id=? $dateRangeStr )
-	GROUP BY duration_steps
-	ORDER BY duration_steps;
-      |]
-
-
-selectRequestDumpByProjectAndParentId :: Projects.ProjectId -> UUID.UUID -> DBT IO (V.Vector RequestDumpLogItem)
-selectRequestDumpByProjectAndParentId pid parentId = query Select q (pid, parentId)
-  where
-    q =
-      [sql|
-     SELECT id,created_at,project_id,host,url_path,method,raw_url,referer,
-                    path_params, status_code,query_params,
-                    request_body,response_body,'{}'::jsonb,'{}'::jsonb,
-                    duration_ns, sdk_type,
-                    parent_id, service_version, JSONB_ARRAY_LENGTH(errors) as errors_count, '{}'::jsonb, tags, request_type
-             FROM apis.request_dumps where project_id=? AND created_at > NOW() - interval '14' day AND parent_id= ? LIMIT 199;
-     |]
-
-
 autoCompleteFromRequestDumps :: Projects.ProjectId -> Text -> Text -> DBT IO (V.Vector Text)
 autoCompleteFromRequestDumps pid key prefix = query Select (Query $ encodeUtf8 q) (pid, prefix <> "%")
   where
     q = [text|SELECT DISTINCT $key from apis.request_dumps WHERE project_id = ? AND created_at > NOW() - interval '14' day AND $key <> ''  AND $key LIKE ?|]
-
-
-getTotalRequestForCurrentMonth :: Projects.ProjectId -> DBT IO Int
-getTotalRequestForCurrentMonth pid = do
-  result <- queryOne Select q pid
-  case fromMaybe (Only 0) result of
-    (Only count) -> return count
-  where
-    q =
-      [sql| SELECT count(*) FROM apis.request_dumps WHERE project_id=? AND EXTRACT(MONTH FROM created_at) = EXTRACT(MONTH FROM CURRENT_DATE)
-              AND EXTRACT(YEAR FROM created_at) = EXTRACT(YEAR FROM CURRENT_DATE);|]
 
 
 getLastSevenDaysTotalRequest :: Projects.ProjectId -> DBT IO Int

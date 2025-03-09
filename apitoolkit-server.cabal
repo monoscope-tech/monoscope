@@ -73,12 +73,8 @@ library
       Pages.Endpoints.ApiCatalog
       Pages.Endpoints.ApiCatalogSpec
       Pages.Endpoints.EndpointComponents
-      Pages.Endpoints.EndpointDetails
-      Pages.Endpoints.EndpointDetailsSpec
       Pages.Endpoints.EndpointList
       Pages.Endpoints.EndpointListSpec
-      Pages.Endpoints.Routes
-      Pages.Endpoints.Server
       Pages.Fields.FieldDetails
       Pages.Fields.FieldDetailsSpec
       Pages.IntegrationDemos.Csharp
@@ -132,6 +128,7 @@ library
       Pkg.Components.TimePicker
       Pkg.Components.Widget
       Pkg.ConvertKit
+      Pkg.DashboardUtils
       Pkg.DBUtils
       Pkg.Google
       Pkg.Mail
