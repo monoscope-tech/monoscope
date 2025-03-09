@@ -150,6 +150,7 @@ export class LogList extends LitElement {
 
   logItemRow(rowData) {
     if (rowData === 'end') return this.renderLoadMore()
+    if (rowData === 'start') return this.fetchRecent()
     const s = this.source === 'spans' && rowData.type === 'log' ? 'logs' : this.source
     const [url] = requestDumpLogItemUrlPath(this.projectId, this.source === 'spans' ? rowData.data : rowData, this.colIdxMap, s)
     return html`
@@ -169,7 +170,21 @@ export class LogList extends LitElement {
     `
   }
 
-  fetchData(url) {
+  fetchRecent() {
+    return html`<tr class="w-full flex justify-center relative">
+      <td colspan=${String(this.logsColumns.length)} class="relative">
+        ${this.isLoading
+          ? html`<div class="mx-auto loading loading-dots loading-md"></div>`
+          : html`
+              <button class="cursor-pointer text-textBrand underline font-semibold w-max mx-auto" @click=${() => this.fetchData(this.nextFetchUrl)}>
+                Load recent
+              </button>
+            `}
+      </td>
+    </tr>`
+  }
+
+  fetchData(url, isNewData = false) {
     if (this.isLoading) return
     this.isLoading = true
     fetch(url)
@@ -177,7 +192,7 @@ export class LogList extends LitElement {
       .then(data => {
         if (!data.error) {
           const { logsData, serviceColors, nextUrl, traceLogs } = data
-          this.logsData = [...this.logsData, ...logsData]
+          this.logsData = isNewData ? [...logsData, ...this.logsData] : [...this.logsData, ...logsData]
           this.traceLogs = [...this.traceLogs, ...traceLogs]
           this.serviceColors = { ...this.serviceColors, ...serviceColors }
           this.nextFetchUrl = nextUrl
@@ -247,7 +262,8 @@ export class LogList extends LitElement {
 
   render() {
     const list = this.source === 'spans' ? this.spanListTree.filter(sp => sp.show) : [...this.logsData]
-    // end is used to render the load more button
+    // end is used to render the load more button"
+    list.unshift('start')
     list.push('end')
     return html`
       <div class="relative h-full w-full" id="logs_list_container">
