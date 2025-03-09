@@ -66,6 +66,7 @@ export class LogList extends LitElement {
           clearInterval(this.liveStreamInterval)
           this.isLiveStreaming = false
         }
+        this.requestUpdate()
       })
     }
   }
