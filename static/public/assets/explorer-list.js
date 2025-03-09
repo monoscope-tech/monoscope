@@ -10,6 +10,7 @@ export class LogList extends LitElement {
     colIdxMap: {},
     hasMore: { type: Boolean },
     isLoading: { type: Boolean },
+    isLoadingRecent: { type: Boolean },
     nextFetchUrl: { type: String },
     isError: { type: Boolean },
     fetchError: { type: String },
@@ -43,6 +44,7 @@ export class LogList extends LitElement {
     this.projectId = container.dataset.projectid
     this.nextFetchUrl = container.dataset.nextfetchurl
     this.isLoading = false
+    this.isLoadingRecent = false
     this.isError = false
     this.logItemRow = this.logItemRow.bind(this)
     this.fetchData = this.fetchData.bind(this)
@@ -131,6 +133,34 @@ export class LogList extends LitElement {
       : html`<tr></tr>`
   }
 
+  fetchRecent() {
+    return html`<tr class="w-full flex justify-center relative">
+      <td colspan=${String(this.logsColumns.length)} class="relative">
+        ${this.isLoadingRecent
+          ? html`<div class="mx-auto loading loading-dots loading-md"></div>`
+          : html`
+              <button
+                class="cursor-pointer text-textBrand underline font-semibold w-max mx-auto"
+                @click=${() => {
+                  const { from, to } = latestLogsURLQueryValsFn()
+                  const url = new URL(this.nextFetchUrl, window.location.origin) // Ensure absolute URL
+                  const params = url.searchParams
+                  if (from) {
+                    params.set('from', from)
+                  }
+                  params.delete('cursor')
+                  params.set('to', to)
+                  const updatedUrl = url.toString()
+                  this.fetchData(updatedUrl, true)
+                }}
+              >
+                Check for recent data
+              </button>
+            `}
+      </td>
+    </tr>`
+  }
+
   expandTrace(tracId) {
     if (!this.expandedTraces[tracId]) {
       this.expandedTraces[tracId] = false
@@ -170,23 +200,13 @@ export class LogList extends LitElement {
     `
   }
 
-  fetchRecent() {
-    return html`<tr class="w-full flex justify-center relative">
-      <td colspan=${String(this.logsColumns.length)} class="relative">
-        ${this.isLoading
-          ? html`<div class="mx-auto loading loading-dots loading-md"></div>`
-          : html`
-              <button class="cursor-pointer text-textBrand underline font-semibold w-max mx-auto" @click=${() => this.fetchData(this.nextFetchUrl)}>
-                Load recent
-              </button>
-            `}
-      </td>
-    </tr>`
-  }
-
   fetchData(url, isNewData = false) {
-    if (this.isLoading) return
-    this.isLoading = true
+    if ((this.isLoading && !isNewData) || (this.isLoadingRecent && isNewData)) return
+    if (isNewData) {
+      this.isLoadingRecent = true
+    } else {
+      this.isLoading = true
+    }
     fetch(url)
       .then(response => response.json())
       .then(data => {
@@ -195,8 +215,10 @@ export class LogList extends LitElement {
           this.logsData = isNewData ? [...logsData, ...this.logsData] : [...this.logsData, ...logsData]
           this.traceLogs = [...this.traceLogs, ...traceLogs]
           this.serviceColors = { ...this.serviceColors, ...serviceColors }
-          this.nextFetchUrl = nextUrl
-          this.hasMore = logsData.length > 199
+          if (!isNewData) {
+            this.hasMore = logsData.length > 199
+            this.nextFetchUrl = nextUrl
+          }
           this.spanListTree = this.source === 'spans' ? this.buildSpanListTree() : []
         } else {
           this.fetchError = data.error
@@ -207,7 +229,11 @@ export class LogList extends LitElement {
         console.error('Error fetching logs:', error)
       })
       .finally(() => {
-        this.isLoading = false
+        if (isNewData) {
+          this.isLoadingRecent = false
+        } else {
+          this.isLoading = false
+        }
       })
     this.requestUpdate()
   }
@@ -276,7 +302,8 @@ export class LogList extends LitElement {
           </thead>
           ${list.length === 1 ? emptyState(this.source, this.logsColumns.length) : nothing}
           <tbody
-            class="w-full flex flex-col min-w-0 grow-1 shrink-1 c-scroll h-full log-item-table-body relative"
+            class="w-full flex flex-col min-w-0 grow-1 shrink-1 c-scroll h-full relative"
+            id="log-item-table-body"
             @rangeChanged=${() => {
               this.setupIntersectionObserver()
             }}
@@ -801,4 +828,10 @@ function getColumnWidth(column) {
     default:
       return ''
   }
+}
+
+function latestLogsURLQueryValsFn() {
+  const datetime = document.querySelector('#log-item-table-body time')?.getAttribute('datetime')
+  const updatedTo = datetime ? new Date(new Date(datetime).getTime() + 1).toISOString() : params().to
+  return { from: params().from, to: updatedTo }
 }
