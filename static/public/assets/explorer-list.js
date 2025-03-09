@@ -189,7 +189,7 @@ export class LogList extends LitElement {
           .filter(v => v !== 'latency_breakdown')
           .map(column => {
             const tableDataWidth = getColumnWidth(column)
-            return html`<td class=${column === 'rest' ? 'w-3/4' : tableDataWidth}>
+            return html`<td class=${column === 'rest' ? 'w-3/4 min-w-0 shrink-1' : tableDataWidth}>
               ${logItemCol(rowData, this.source, this.colIdxMap, column, this.serviceColors, this.expandTrace)}
             </td>`
           })}
@@ -244,7 +244,7 @@ export class LogList extends LitElement {
 
   tableHeadingWrapper(title, column, classes) {
     return html`
-      <td class=${'cursor-pointer p-0 m-0 whitespace-nowrap overflow-y-visible ' + classes ? classes : ''}>
+      <td class=${'cursor-pointer p-0 m-0 whitespace-nowrap ' + classes ? classes : ''}>
         <span class="text-slate-200">|</span>
         <div class="dropdown pl-2" data-tippy-content=${title}>
           <div tabindex="0" role="button" class="py-1">
@@ -280,7 +280,7 @@ export class LogList extends LitElement {
       case 'service':
         return this.tableHeadingWrapper('service', column, 'w-[16ch] shrink-0')
       case 'rest':
-        return this.tableHeadingWrapper('summary', column, 'w-3/4 shrink')
+        return this.tableHeadingWrapper('summary', column, 'w-3/4 shrink-1')
       default:
         return this.tableHeadingWrapper(column, column, 'w-[16ch] shrink-0')
     }
@@ -295,14 +295,14 @@ export class LogList extends LitElement {
       <div class="relative h-full w-full" id="logs_list_container">
         <table class="table-auto w-full min-w-full ctable min-h-full flex flex-col table-pin-rows table-pin-cols" style="height:1px; --rounded-box:0;">
           <thead class="w-full grow-1 shrink-1">
-            <tr class="text-textStrong border-b flex w-full overflow-y-visible font-medium border-y">
+            <tr class="text-textStrong border-b flex w-full font-medium border-y">
               ${this.logsColumns.filter(v => v !== 'latency_breakdown').map(column => this.logTableHeading(column))}
               ${this.source === 'spans' ? this.logTableHeading('latency_breakdown') : nothing}
             </tr>
           </thead>
           ${list.length === 1 ? emptyState(this.source, this.logsColumns.length) : nothing}
           <tbody
-            class="w-full flex flex-col min-w-0 grow-1 shrink-1 c-scroll h-full relative"
+            class="w-full flex flex-col min-w-0 grow-1 shrink-1 pb-16 c-scroll h-full relative"
             id="log-item-table-body"
             @rangeChanged=${() => {
               this.setupIntersectionObserver()
@@ -824,7 +824,7 @@ function getColumnWidth(column) {
     case 'url_path':
       return 'w-[25ch] shrink-0 overflow-hidden'
     case 'rest':
-      return 'w-3/4'
+      return 'w-3/4 shrink-1'
     default:
       return ''
   }
