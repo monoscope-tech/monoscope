@@ -51,8 +51,8 @@ pivot' rows
       let extractHeaders vec = V.uniq . V.map thd3 . V.modify (\mvec -> VA.sortBy (comparing thd3) mvec) $ vec
           headers = extractHeaders rows
           grouped =
-            V.groupBy (\a b -> fst3 a == fst3 b)
-              $ V.modify (\mvec -> VA.sortBy (comparing fst3) mvec) rows
+            V.groupBy (\a b -> fst3 a == fst3 b) $
+              V.modify (\mvec -> VA.sortBy (comparing fst3) mvec) rows
           ngrouped = map (transform headers) grouped
           totalSum = V.sum $ V.map snd3 rows
 
@@ -103,8 +103,8 @@ statsTriple v
         else maximum $ M.elems timestampMap
 
     mode =
-      fst
-        $ M.foldlWithKey'
+      fst $
+        M.foldlWithKey'
           ( \acc@(_, cnt') k c ->
               if c > cnt' then (k, c) else acc
           )
@@ -142,6 +142,7 @@ data MetricsData = MetricsData
   , stats :: Maybe MetricsStats
   }
   deriving (Show, Generic)
+  deriving anyclass (NFData, Default)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake MetricsData
 
 
@@ -195,66 +196,42 @@ queryMetrics (maybeToMonoid -> respDataType) pidM (nonNull -> queryM) (nonNull -
       let (_, qc) = queryASTToComponents sqlQueryComponents queryAST
       pure $ maybeToMonoid qc.finalTimechartQuery
 
+  let baseMetricsData =
+        def
+          { from = Just $ round . utcTimeToPOSIXSeconds $ fromMaybe (addUTCTime (-86400) now) fromD
+          , to = Just $ round . utcTimeToPOSIXSeconds $ fromMaybe now toD
+          }
   case respDataType of
     DTFloat -> do
-      chartData <- dbtToEff $ DBT.queryOne_ (Query $ encodeUtf8 $ sqlQuery)
+      chartData <- dbtToEff $ DBT.queryOne_ (Query $ encodeUtf8 sqlQuery)
       pure
-        $ MetricsData
-          { dataset = V.empty
-          , dataFloat = chartData <&> \(Only v) -> v
-          , dataJSON = V.empty
-          , dataText = V.empty
-          , headers = V.empty
+        baseMetricsData
+          { dataFloat = chartData <&> \(Only v) -> v
           , rowsCount = 1
-          , rowsPerMin = Nothing
-          , from = Just $ round . utcTimeToPOSIXSeconds $ fromMaybe (addUTCTime (-86400) now) fromD
-          , to = Just $ round . utcTimeToPOSIXSeconds $ fromMaybe now toD
-          , stats = Nothing
           }
     DTMetric -> do
-      chartData <- dbtToEff $ DBT.query_ (Query $ encodeUtf8 $ sqlQuery)
+      chartData <- dbtToEff $ DBT.query_ (Query $ encodeUtf8 sqlQuery)
       let chartsDataV = V.fromList chartData
-      let (headers, groupedData, rowsCount, rowsPerMin) = pivot' chartsDataV
+      let (hdrs, groupedData, rowsCount, rpm) = pivot' chartsDataV
       pure
-        MetricsData
+        baseMetricsData
           { dataset = groupedData
-          , dataFloat = Nothing
-          , dataJSON = V.empty
-          , dataText = V.empty
-          , headers = V.cons "timestamp" headers
+          , headers = V.cons "timestamp" hdrs
           , rowsCount
-          , rowsPerMin = Just rowsPerMin
-          , from = Just $ round . utcTimeToPOSIXSeconds $ fromMaybe (addUTCTime (-86400) now) fromD
-          , to = Just $ round . utcTimeToPOSIXSeconds $ fromMaybe now toD
+          , rowsPerMin = Just rpm
           , stats = Just $ statsTriple chartsDataV
           }
     DTText -> do
-      chartData <- dbtToEff $ DBT.query_ (Query $ encodeUtf8 $ sqlQuery)
+      chartData <- dbtToEff $ DBT.query_ (Query $ encodeUtf8 sqlQuery)
       pure
-        $ MetricsData
-          { dataset = V.empty
-          , dataFloat = Nothing
-          , dataText = V.fromList chartData
-          , dataJSON = V.empty
-          , headers = V.empty
+        baseMetricsData
+          { dataText = V.fromList chartData
           , rowsCount = fromIntegral $ length chartData
-          , rowsPerMin = Nothing
-          , from = Just $ round . utcTimeToPOSIXSeconds $ fromMaybe (addUTCTime (-86400) now) fromD
-          , to = Just $ round . utcTimeToPOSIXSeconds $ fromMaybe now toD
-          , stats = Nothing
           }
     DTJson -> do
-      chartData <- dbtToEff $ DBT.query_ (Query $ encodeUtf8 $ sqlQuery)
+      chartData <- dbtToEff $ DBT.query_ (Query $ encodeUtf8 sqlQuery)
       pure
-        $ MetricsData
-          { dataset = V.empty
-          , dataFloat = Nothing
-          , dataJSON = V.fromList chartData
-          , dataText = V.empty
-          , headers = V.empty
+        baseMetricsData
+          { dataJSON = V.fromList chartData
           , rowsCount = fromIntegral $ length chartData
-          , rowsPerMin = Nothing
-          , from = Just $ round . utcTimeToPOSIXSeconds $ fromMaybe (addUTCTime (-86400) now) fromD
-          , to = Just $ round . utcTimeToPOSIXSeconds $ fromMaybe now toD
-          , stats = Nothing
           }
