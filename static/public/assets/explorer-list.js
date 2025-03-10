@@ -207,7 +207,7 @@ export class LogList extends LitElement {
     const s = this.source === 'spans' && rowData.type === 'log' ? 'logs' : this.source
     const [url] = requestDumpLogItemUrlPath(this.projectId, this.source === 'spans' ? rowData.data : rowData, this.colIdxMap, s)
     return html`
-      <tr class="item-row w-full flex items-center cursor-pointer whitespace-nowrap overflow-hidden" @click=${event => toggleLogRow(event, url)}>
+      <tr class="item-row w-full flex items-center cursor-pointer whitespace-nowrap" @click=${event => toggleLogRow(event, url)}>
         ${this.logsColumns
           .filter(v => v !== 'latency_breakdown')
           .map(column => {
@@ -375,18 +375,18 @@ function logItemCol(rowData, source, colIdxMap, key, serviceColors, toggleTrace)
     case 'status_code':
       let statusCode = lookupVecTextByKey(dataArr, colIdxMap, 'status_code')
       let statusCls = getStatusColor(Number(statusCode))
-      return renderBadge(statusCls, statusCode)
+      return renderBadge(statusCls, statusCode, 'status code')
     case 'method':
       let method = lookupVecTextByKey(dataArr, colIdxMap, key)
       let methodCls = getMethodColor(method)
-      return renderBadge('min-w-[4rem] cbadge ' + methodCls, method)
+      return renderBadge('min-w-[4rem] cbadge ' + methodCls, method, 'method')
     case 'request_type':
       let requestType = lookupVecTextByKey(dataArr, colIdxMap, key)
       if (requestType === 'Incoming') return renderIconWithTippy('w-4', 'Incoming Request', faSprite('arrow-down-left', 'solid', ' h-3 fill-slate-500'))
       return renderIconWithTippy('w-4', 'Outgoing Request', faSprite('arrow-up-right', 'solid', ' h-3 fill-blue-700'))
     case 'duration':
       let dur = rowData.type === 'log' ? 'log' : getDurationNSMS(lookupVecTextByKey(dataArr, colIdxMap, key))
-      return renderBadge('cbadge-sm badge-neutral font-normal border border-strokeWeak bg-fillWeak', dur)
+      return renderBadge('cbadge-sm badge-neutral font-normal border border-strokeWeak bg-fillWeak', dur, 'latency')
     case 'severity_text':
       let severity = lookupVecTextByKey(dataArr, colIdxMap, key) || 'UNSET'
       let severityClass = getSeverityColor(severity)
@@ -400,14 +400,14 @@ function logItemCol(rowData, source, colIdxMap, key, serviceColors, toggleTrace)
       return renderBadge(statsCls, st)
     case 'span_name':
       let spanName = lookupVecTextByKey(dataArr, colIdxMap, key)
-      return renderBadge('cbadge-sm badge-neutral border  border-strokeWeak  bg-fillWeak', spanName)
+      return renderBadge('cbadge-sm badge-neutral border  border-strokeWeak  bg-fillWeak', spanName, 'span name')
     case 'service':
       colIdxMap = rowData.type === 'log' ? { ...colIdxMap, service: dataArr.length - 1 } : colIdxMap
       let service = lookupVecTextByKey(dataArr, colIdxMap, key)
-      return html` <div class="w-[16ch]">${renderBadge('cbadge-sm badge-neutral border  border-strokeWeak bg-fillWeak', service)}</div>`
+      return html` <div class="w-[16ch]">${renderBadge('cbadge-sm badge-neutral border  border-strokeWeak bg-fillWeak', service, 'service name')}</div>`
     case 'kind':
       let kind = lookupVecTextByKey(dataArr, colIdxMap, key)
-      return renderBadge('cbadge-sm badge-neutral border border-strokeWeak bg-fillWeak', kind)
+      return renderBadge('cbadge-sm badge-neutral border border-strokeWeak bg-fillWeak', kind, 'span kind')
     case 'latency_breakdown':
       const { traceStart, traceEnd, startNs, duration, childrenTimeSpans, depth: d } = rowData
       const color = serviceColors[lookupVecTextByKey(dataArr, colIdxMap, 'span_name')] || 'black'
@@ -435,9 +435,9 @@ function logItemCol(rowData, source, colIdxMap, key, serviceColors, toggleTrace)
             : k === 'CLIENT'
             ? renderIconWithTippy('w-4 ml-2', 'Outgoing Request', faSprite('arrow-up-right', 'solid', ' h-3 fill-blue-700'))
             : nothing}
-          ${statusCode_ ? renderBadge(statusCls_, statusCode_) : nothing}
-          ${m ? renderBadge('min-w-[4rem] text-center cbadge cbadge-sm ' + methodCls_, m) : nothing}
-          ${url ? renderBadge('cbadge-sm badge-neutral border border-strokeWeak bg-fillWeak', url) : nothing}
+          ${statusCode_ ? renderBadge(statusCls_, statusCode_, 'status code') : nothing}
+          ${m ? renderBadge('min-w-[4rem] text-center cbadge cbadge-sm ' + methodCls_, m, 'method') : nothing}
+          ${url ? renderBadge('cbadge-sm badge-neutral border border-strokeWeak bg-fillWeak', url, 'url') : nothing}
         `
       }
       break
@@ -463,7 +463,7 @@ function logItemCol(rowData, source, colIdxMap, key, serviceColors, toggleTrace)
         ? html`${logItemCol(rowData, source, colIdxMap, 'severity_text')} ${logItemCol(rowData, source, colIdxMap, 'body')}`
         : source === 'spans'
         ? html`<div class="flex w-full items-center  gap-1">
-            <div class="w-full flex items-center overflow-x-hidden">
+            <div class="w-full flex items-center overflow-x-hidden overflow-y-visible">
               ${depth > 1 ? new Array(depth - 1).fill(1).map(() => html`<div class="ml-[15px] border-l w-4 h-5 shrink-0"></div>`) : nothing}
               ${depth > 0
                 ? html`<div class="border-l ml-[15px] w-4 h-5 relative shrink-0">
@@ -499,7 +499,7 @@ function logItemCol(rowData, source, colIdxMap, key, serviceColors, toggleTrace)
           `
     default:
       let v = lookupVecTextByKey(dataArr, colIdxMap, key)
-      return renderBadge('cbadge-sm badge-neutral border border-strokeWeak bg-fillWeak', v)
+      return renderBadge('cbadge-sm badge-neutral border border-strokeWeak bg-fillWeak', v, key)
   }
 }
 
@@ -522,7 +522,7 @@ function displayTimestamp(inputDateString) {
 }
 
 function renderBadge(classes, title, tippy) {
-  return html`<span class=${'ml-2 relative ' + classes}>${title}</span>`
+  return html`<span class=${`ml-2 relative  ${classes} ${tippy ? 'tooltip tooltip-right' : ''}`} data-tip=${tippy}>${title}</span>`
 }
 
 const lookupVecText = (vec, idx) => {
@@ -567,7 +567,7 @@ function getMethodColor(method) {
 }
 
 function renderIconWithTippy(cls, tip, icon) {
-  return html`<span class=${'shrink-0 inline-flex ' + cls} data-tippy-content=${tip}>${icon}</span>`
+  return html`<span class=${'shrink-0 inline-flex tooltip tooltip-right ' + cls} data-tip=${tip}>${icon}</span>`
 }
 
 function getDurationNSMS(duration) {
