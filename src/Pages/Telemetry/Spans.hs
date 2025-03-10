@@ -43,23 +43,6 @@ expandedSpanItem pid sp leftM rightM = do
     div_ [class_ "flex flex-col gap-4 bg-gray-50 py-2  px-2"] $ do
       div_ [class_ "flex justify-between items-center"] do
         div_ [class_ "flex items-center gap-4"] $ do
-          -- div_ [class_ "flex relative flex-col items-center justify-center"] do
-          --   span_
-          --     [ class_ "cursor-pointer absolute -top-[18px] h-max text-textWeak"
-          --     , hxGet_ $ "/p/" <> pid.toText <> "/traces/" <> sp.traceId <> "/?span_id="
-          --     , hxSwap_ "innerHTML"
-          --     , hxTarget_ "#trace_span_container"
-          --     , hxTrigger_ "click"
-          --     ]
-          --     $ faSprite_ "p-chevron-up" "regular" "w-5 h-5"
-          --   span_
-          --     [ class_ "cursor-pointer absolute w-max -bottom-[18px] h-max text-textWeak"
-          --     , hxGet_ $ "/p/" <> pid.toText <> "/traces/" <> sp.traceId <> "/?span_id="
-          --     , hxSwap_ "innerHTML"
-          --     , hxTarget_ "#trace_span_container"
-          --     , hxTrigger_ "click"
-          --     ]
-          --     $ faSprite_ "p-chevron-down" "regular" "w-5 h-5"
           h3_ [class_ "whitespace-nowrap font-semibold text-textStrong"] "Trace Span"
         div_ [class_ "flex gap-4 items-center"] $ do
           dateTime sp.startTime Nothing
@@ -101,9 +84,18 @@ expandedSpanItem pid sp leftM rightM = do
         spanBadge (maybe "" show sp.status) "Span Status"
 
       div_ [class_ "flex gap-2 items-center text-textBrand font-medium text-xs"] do
-        -- button_ [class_ "flex items-center gap-2"] do
-        --   "Copy requests as curl"
-        --   faSprite_ "copy" "regular" "w-3 h-3"
+        whenJust reqDetails $ \case
+          ("HTTP", _, _, _) -> do
+            let json = decodeUtf8 $ AE.encode $ selectiveReqToJson $ convertSpanToRequestMessage sp ""
+            button_
+              [ class_ "flex items-center gap-1"
+              , onclick_ "window.buildCurlRequest(event)"
+              , term "data-reqjson" json
+              ]
+              do
+                "Copy request as curl"
+                faSprite_ "copy" "regular" "w-3 h-3"
+          _ -> pass
         let tracePath = "/p/" <> pid.toText <> "/traces/" <> sp.traceId <> "/"
         button_
           [ class_ "flex items-end gap-1"
@@ -230,8 +222,8 @@ spanBadge val key = do
 
 selectiveReqToJson :: RequestMessage -> AE.Value
 selectiveReqToJson req =
-  AE.object
-    $ concat @[]
+  AE.object $
+    concat @[]
       [ ["created_at" AE..= req.timestamp]
       , ["errors" AE..= fromMaybe [] req.errors]
       , ["host" AE..= req.host]
