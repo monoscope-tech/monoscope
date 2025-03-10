@@ -226,14 +226,6 @@ bodyWrapper BWConfig{sessM, currProject, prePageTitle, pageTitle, menuItem, hasI
           });
           document.body.addEventListener("successToast", (e)=> {e.detail.value.map(v=>notyf.success(v));});
           document.body.addEventListener("errorToast", (e)=> {e.detail.value.map(v=>notyf.error(v));});
-
-        //  const mObserver = new MutationObserver(() => {
-        //    tippy('[data-tippy-content]');
-        //  });
-        //  mObserver.observe(document.getElementById("logs_section_container"), {
-        //    childList: true, 
-        //    subtree: true
-        //  });
         });
 
 

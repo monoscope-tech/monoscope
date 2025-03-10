@@ -331,7 +331,6 @@ export class LogList extends LitElement {
               this.setupIntersectionObserver()
               const tableBody = document.querySelector('#log-item-table-body')
               if (tableBody && tableBody.scrollTop === 0) {
-                // scroll 70px
                 tableBody.scrollTop = 30
               }
             }}
