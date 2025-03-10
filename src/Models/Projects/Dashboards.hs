@@ -84,7 +84,7 @@ data Dashboard = Dashboard
   }
   deriving stock (Show, Generic, THS.Lift)
   deriving (AE.FromJSON, AE.ToJSON) via DAES.Snake Dashboard
-  deriving anyclass (NFData)
+  deriving anyclass (NFData, Default)
   deriving (FromField, ToField) via Aeson Dashboard
 
 

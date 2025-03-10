@@ -20,10 +20,9 @@ import NeatInterpolation (text)
 import Network.URI (escapeURIString, isUnescapedInURI)
 import Pages.Components (dateTime, statBox_)
 import Pages.Telemetry.Spans qualified as Spans
-import PyF (fmt)
 import Relude
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
-import Utils (faSprite_, getDurationNSMS, getMethodBorderColor, getMethodColor, getSeverityColor, getStatusBorderColor, getStatusColor, jsonValueToHtmlTree, lookupValueText, toXXHash)
+import Utils (faSprite_, getDurationNSMS, getMethodBorderColor, getMethodColor, getSeverityColor, getStatusBorderColor, getStatusColor, jsonValueToHtmlTree, lookupValueText)
 
 
 expandAPIlogItemH :: Projects.ProjectId -> UUID.UUID -> UTCTime -> Maybe Text -> ATAuthCtx (RespHeaders ApiItemDetailed)
@@ -258,8 +257,8 @@ spanBadge val key = do
 -- Function to selectively convert RequestDumpLogItem to JSON
 selectiveReqToJson :: RequestDumps.RequestDumpLogItem -> AE.Value
 selectiveReqToJson req =
-  AE.object
-    $ concat @[]
+  AE.object $
+    concat @[]
       [ ["created_at" AE..= req.createdAt]
       , ["duration_ns" AE..= req.durationNs]
       , ["errors" AE..= req.errors]

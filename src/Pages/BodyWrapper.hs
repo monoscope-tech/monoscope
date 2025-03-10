@@ -66,11 +66,11 @@ data BWConfig = BWConfig
 
 
 bodyWrapper :: BWConfig -> Html () -> Html ()
-bodyWrapper BWConfig{sessM, currProject, prePageTitle, pageTitle, menuItem, hasIntegrated, navTabs, pageActions, docsLink} child = do
+bodyWrapper bcfg child = do
   doctypehtml_ do
     head_
       do
-        title_ $ toHtml pageTitle
+        title_ $ toHtml bcfg.pageTitle
         meta_ [charset_ "UTF-8"]
         meta_ [name_ "viewport", content_ "width=device-width, initial-scale=1.0"]
         meta_ [httpEquiv_ "X-UA-Compatible", content_ "ie=edge"]
@@ -287,20 +287,20 @@ bodyWrapper BWConfig{sessM, currProject, prePageTitle, pageTitle, menuItem, hasI
                 p_ [] "Don't hesitate to let us know if this is a very important feature for your team, then we can prioritize it"
               -- Modal footer
               div_ [class_ "flex w-full justify-end items-center p-6 space-x-2 border-t border-gray-200 rounded-b"] pass
-      case sessM of
+      case bcfg.sessM of
         Nothing -> do
           section_ [class_ "flex flex-col grow  h-screen overflow-y-hidden"] $
             section_ [class_ "flex-1 overflow-y-auto"] $
               child
         Just sess ->
           let currUser = sess.persistentSession.user.getUser
-              sideNav' = currProject & maybe "" \project -> sideNav sess project (fromMaybe pageTitle prePageTitle) menuItem hasIntegrated
+              sideNav' = bcfg.currProject & maybe "" \project -> sideNav sess project (fromMaybe bcfg.pageTitle bcfg.prePageTitle) bcfg.menuItem bcfg.hasIntegrated
            in section_ [class_ "flex flex-row grow-0 h-screen overflow-hidden"] do
                 sideNav'
                 section_ [class_ "h-screen overflow-y-hidden grow"] do
                   when (currUser.email == "hello@apitoolkit.io") $
                     loginBanner
-                  navbar currProject (fromMaybe [] (currProject <&> \p -> menu p.id)) currUser prePageTitle pageTitle docsLink navTabs pageActions
+                  navbar bcfg.currProject (fromMaybe [] (bcfg.currProject <&> \p -> menu p.id)) currUser bcfg.prePageTitle bcfg.pageTitle bcfg.pageTitleModalId bcfg.docsLink bcfg.navTabs bcfg.pageActions
                   section_ [class_ "overflow-y-hidden h-full flex-1"] child
       externalHeadScripts_
       alerts_
@@ -329,8 +329,8 @@ bodyWrapper BWConfig{sessM, currProject, prePageTitle, pageTitle, menuItem, hasI
             });
           });
       |]
-      let email = show $ maybe "" ((.persistentSession.user.getUser.email)) sessM
-      let name = maybe "" (\sess -> sess.persistentSession.user.getUser.firstName <> " " <> sess.persistentSession.user.getUser.lastName) sessM
+      let email = show $ maybe "" ((.persistentSession.user.getUser.email)) bcfg.sessM
+      let name = maybe "" (\sess -> sess.persistentSession.user.getUser.firstName <> " " <> sess.persistentSession.user.getUser.lastName) bcfg.sessM
       script_
         [text| window.addEventListener("load", (event) => {
         posthog.people.set_once({email: ${email}, name: "${name}"});
@@ -456,16 +456,16 @@ sideNav sess project pageTitle menuItem hasIntegrated = aside_ [class_ "border-r
         >> span_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:block"] "Logout"
 
 
-navbar :: Maybe Projects.Project -> [(Text, Text, Text)] -> Users.User -> Maybe Text -> Text -> Maybe Text -> Maybe (Html ()) -> Maybe (Html ()) -> Html ()
-navbar projectM menuL currUser prePageTitle pageTitle docsLink tabsM pageActionsM =
+navbar :: Maybe Projects.Project -> [(Text, Text, Text)] -> Users.User -> Maybe Text -> Text -> Maybe Text -> Maybe Text -> Maybe (Html ()) -> Maybe (Html ()) -> Html ()
+navbar projectM menuL currUser prePageTitle pageTitle pageTitleMonadId docsLink tabsM pageActionsM =
   nav_ [id_ "main-navbar", class_ "w-full px-6 py-2 flex flex-row border-slate-200"] do
     div_ [class_ "flex-1 flex items-center text-slate-950 gap-1"] do
       whenJust prePageTitle \pt -> whenJust (find (\a -> fst3 a == pt) menuL) \(_, _, icon) -> do
-        whenJust projectM \p -> a_ [class_ "p-1 hover:bg-fillWeaker inline-flex items-center justify-center gap-1 rounded-md text-sm", href_ $ "/p/" <> p.id.toText <> "/dashboards"] do
+        whenJust projectM \p -> a_ [class_ "p-1 hover:bg-fillWeak inline-flex items-center justify-center gap-1 rounded-md text-sm", href_ $ "/p/" <> p.id.toText <> "/dashboards"] do
           faSprite_ icon "regular" "w-4 h-4 text-strokeStrong"
           toHtml pt
         faSprite_ "chevron-right" "regular" "w-3 h-3"
-      strong_ [class_ "font-normal text-xl px-1"] $ toHtml pageTitle
+      label_ [class_ "font-normal text-xl p-1 rounded-md cursor-pointer hover:bg-fillWeak leading-none", Lucid.for_ $ maybeToMonoid pageTitleMonadId] $ toHtml pageTitle
       whenJust docsLink \link -> a_ [class_ "text-iconBrand -mt-1", href_ link, term "data-tippy-placement" "right", term "data-tippy-content" "Open Documentation"] $ faSprite_ "circle-question" "regular" "w-4 h-4"
     whenJust tabsM id
     div_ [class_ "flex-1 flex items-center justify-end text-sm"] $ whenJust pageActionsM id
