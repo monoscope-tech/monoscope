@@ -66,16 +66,6 @@ expandAPIlogItem' pid req modal = do
 
         div_ [class_ "flex items-center gap-2"] do
           dateTime (zonedTimeToUTC req.createdAt) Nothing
-          let createdAt = toText $ formatTime defaultTimeLocale "%Y-%m-%dT%H:%M:%S%6QZ" req.createdAt
-          button_
-            [ class_ "flex items-center gap-2 text-textBrand text-sm"
-            , hxPost_ $ "/p/" <> pid.toText <> "/share/" <> UUID.toText req.id <> "/" <> createdAt <> "?event_type=request"
-            , hxSwap_ "innerHTML"
-            , hxTarget_ "#copy_share_link"
-            ]
-            do
-              "Get share link"
-              faSprite_ "link-simple" "regular" "w-3 h-3"
           button_ [class_ "ml-4 p-0 -mt-1", [__|on click add .hidden to #trace_expanded_view then put '0px' into  #log_details_container.style.width|]] do
             faSprite_ "xmark" "regular" "w-3 h-3 text-textBrand"
     -- url, endpoint, latency, request size, repsonse size
@@ -117,6 +107,27 @@ expandAPIlogItem' pid req modal = do
         jsonValueToHtmlTree req.errors
 
     div_ [id_ "http-content-container", class_ "flex flex-col gap-3"] do
+      let json = selectiveReqToJson req
+      div_ [class_ "flex items-center gap-2"] do
+        button_
+          [ class_ "flex items-center gap-1 text-sm text-textBrand"
+          , onclick_ "window.buildCurlRequest(event)"
+          , term "data-reqjson" $ decodeUtf8 $ AE.encode json
+          ]
+          do
+            span_ [class_ "underline"] "Copy request as curl"
+            faSprite_ "copy" "regular" "w-2 h-2"
+        let createdAt = toText $ formatTime defaultTimeLocale "%Y-%m-%dT%H:%M:%S%6QZ" req.createdAt
+        button_
+          [ class_ "flex items-center gap-2 text-textBrand text-sm underline"
+          , hxPost_ $ "/p/" <> pid.toText <> "/share/" <> UUID.toText req.id <> "/" <> createdAt <> "?event_type=request"
+          , hxSwap_ "innerHTML"
+          , hxTarget_ "#copy_share_link"
+          ]
+          do
+            "Get shareable link"
+            faSprite_ "link-simple" "regular" "w-3 h-3"
+
       div_ [class_ "bg-fillWeak w-max rounded-lg border border-strokeWeak justify-start items-start inline-flex"] $ do
         div_ [class_ "justify-start items-start flex text-sm"] $ do
           button_ [onclick_ "navigatable(this, '#raw_content', '#http-content-container', 't-tab-box-active')", class_ "a-tab px-3 py-1 rounded-lg text-textWeak t-tab-box-active"] "Raw Details"
@@ -126,7 +137,7 @@ expandAPIlogItem' pid req modal = do
           button_ [onclick_ "navigatable(this, '#par_content', '#http-content-container', 't-tab-box-active')", class_ "a-tab px-3 py-1 rounded-lg text-textWeak"] "Params"
       div_ [] do
         div_ [id_ "raw_content", class_ "a-tab-content"] do
-          jsonValueToHtmlTree $ selectiveReqToJson req
+          jsonValueToHtmlTree json
         div_ [id_ "req_content", class_ "hidden a-tab-content"] do
           jsonValueToHtmlTree $ req.requestBody
         div_ [id_ "res_content", class_ "hidden a-tab-content"] do
