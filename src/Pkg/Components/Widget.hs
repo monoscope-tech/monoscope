@@ -212,7 +212,7 @@ renderChart widget = do
     div_ [class_ "flex-1 flex"] do
       div_
         [ class_ $
-            "h-full w-full overflow-hidden flex flex-col justify-end "
+            "h-full w-full flex flex-col justify-end "
               <> if widget.naked == Just True then "" else " rounded-2xl border border-strokeWeak bg-fillWeaker "
         ]
         do

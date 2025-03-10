@@ -31,7 +31,6 @@ import Models.Telemetry.Telemetry qualified as Telemetry
 import Models.Users.Sessions qualified as Sessions
 import NeatInterpolation (text)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), currProject, pageActions, pageTitle, sessM)
-import Pages.Components qualified as Components
 import Pkg.Components qualified as Components
 import Pkg.Components.Widget (WidgetAxis (..), WidgetType (WTTimeseriesLine))
 import Pkg.Components.Widget qualified as Widget
@@ -107,14 +106,14 @@ apiLogH pid queryM queryASTM cols' cursorM' sinceM fromM toM layoutM sourceM tar
           , pageActions = Just $ div_ [class_ "inline-flex gap-2"] do
               label_ [class_ "cursor-pointer border border-strokeStrong rounded-lg flex shadow"] do
                 input_ [type_ "checkbox", id_ "streamLiveData", class_ "hidden"]
-                span_ [class_ "group-has-[#streamLiveData:checked]/pg:flex hidden py-1 px-3 items-center", term "data-tippy-content" "pause live data stream"] $ faSprite_ "pause" "solid" "h-4 w-4"
-                span_ [class_ "group-has-[#streamLiveData:checked]/pg:hidden flex  py-1 px-3 items-center", term "data-tippy-content" "stream live data"] $ faSprite_ "play" "regular" "h-4 w-4"
+                span_ [class_ "group-has-[#streamLiveData:checked]/pg:flex hidden py-1 px-3 items-center", data_ "tippy-content" "pause live data stream"] $ faSprite_ "pause" "solid" "h-4 w-4"
+                span_ [class_ "group-has-[#streamLiveData:checked]/pg:hidden flex  py-1 px-3 items-center", data_ "tippy-content" "stream live data"] $ faSprite_ "play" "regular" "h-4 w-4"
               Components.timepicker_ (Just "log_explorer_form") currentRange
-              a_ [class_ "cursor-pointer py-1 px-3 border border-strokeStrong rounded-lg shadow", [__|on click htmx.trigger('#log_explorer_form', 'submit') |], term "data-tippy-content" "refresh"] $ faSprite_ "arrows-rotate" "regular" "h-4 w-4"
-          , navTabs = Just $ div_ [class_ "tabs tabs-boxed tabs-md p-0 tabs-outline items-center  bg-fillWeak  text-textWeak border"] do
-              a_ [onclick_ "window.setQueryParamAndReload('source', 'requests')", role_ "tab", class_ $ "tab py-1 !h-auto " <> if source == "requests" then "tab-active  text-textStrong border border-strokeStrong " else ""] "Requests"
-              a_ [onclick_ "window.setQueryParamAndReload('source', 'logs')", role_ "tab", class_ $ "tab py-1 !h-auto " <> if source == "logs" then "tab-active  text-textStrong border border-strokeStrong " else ""] "Logs"
-              a_ [onclick_ "window.setQueryParamAndReload('source', 'spans')", role_ "tab", class_ $ "tab py-1 !h-auto " <> if source == "spans" then "tab-active  text-textStrong border border-strokeStrong " else ""] "Traces"
+              a_ [class_ "cursor-pointer py-1 px-3 border border-strokeStrong rounded-lg shadow", [__|on click htmx.trigger('#log_explorer_form', 'submit') |], data_ "tippy-content" "refresh"] $ faSprite_ "arrows-rotate" "regular" "h-4 w-4"
+          , navTabs = Just $ div_ [class_ "tabs tabs-boxed tabs-md p-0 tabs-outline items-center border"] do
+              a_ [onclick_ "window.setQueryParamAndReload('source', 'requests')", role_ "tab", class_ $ "tab py-1 !h-auto " <> if source == "requests" then "tab-active  text-textStrong " else ""] "Requests"
+              a_ [onclick_ "window.setQueryParamAndReload('source', 'logs')", role_ "tab", class_ $ "tab py-1 !h-auto " <> if source == "logs" then "tab-activetext-textStrong " else ""] "Logs"
+              a_ [onclick_ "window.setQueryParamAndReload('source', 'spans')", role_ "tab", class_ $ "tab py-1 !h-auto " <> if source == "spans" then "tab-active" else ""] "Traces"
               -- a_ [onclick_ "window.setQueryParamAndReload('source', 'metrics')", role_ "tab", class_ $ "tab py-1.5 !h-auto " <> if source == "metrics" then "tab-active" else ""] "Metrics"
           }
   let (days, hours, minutes, _seconds) = convertToDHMS $ diffUTCTime now project.createdAt
@@ -621,11 +620,6 @@ apiLogsPage page = do
           |]
 
   jsonTreeAuxillaryCode page.pid page.queryAST
-  -- drawerWithURLContent_ : Used when you expand a log item
-  -- using the drawer as a global is a workaround since to separate the logs scope from other content and improve scroll performance.
-  Components.drawerWithURLContent_ "global-data-drawer" Nothing ""
-  -- the loader is used and displayed while loading the content for the global drawer
-  template_ [id_ "loader-tmp"] $ span_ [class_ "loading loading-dots loading-md"] ""
 
 
 curateCols :: [Text] -> [Text] -> [Text]

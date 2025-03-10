@@ -336,7 +336,7 @@ issueItem hideByDefault currTime issue timeFilter icon title endpoint content an
         fromMaybe (toHtml @String "") content
         div_ [class_ "flex gap-3 items-center mt-4"] do
           let modalEndpoint = "/p/" <> issue.projectId.toText <> "/anomalies/by_hash/" <> issue.targetHash <> "?modal=True"
-          Components.drawerWithURLContent_ ("expand-log-drawer-" <> issue.targetHash) (Just modalEndpoint) $ span_ [class_ "flex px-2 py-1 items-center gap-1 bg-green-100 text-sm rounded-lg border border-green-600 text-green-600"] do
+          Components.drawer_ ("expand-log-drawer-" <> issue.targetHash) (Just modalEndpoint) Nothing $ span_ [class_ "flex px-2 py-1 items-center gap-1 bg-green-100 text-sm rounded-lg border border-green-600 text-green-600"] do
             "Open"
             faSprite_ "f-chevron-up" "regular" "h-4 w-4 fill-none stroke-green-700 rotate-180"
           p_ [class_ "text-sm flex  gap-1 items-enter"] do
