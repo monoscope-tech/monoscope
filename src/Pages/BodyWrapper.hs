@@ -267,8 +267,8 @@ bodyWrapper BWConfig{sessM, currProject, prePageTitle, pageTitle, menuItem, hasI
         , tabindex_ "-1"
         ]
         do
-          div_ [class_ "relative mx-auto max-h-full", style_ "width: min(90vw, 500px)"] $
-            div_ [class_ "bg-base-100 rounded-lg drop-shadow-md border-1 w-full"] do
+          div_ [class_ "relative mx-auto max-h-full", style_ "width: min(90vw, 500px)"]
+            $ div_ [class_ "bg-base-100 rounded-lg drop-shadow-md border-1 w-full"] do
               div_ [class_ "flex items-start justify-between p-6 space-x-2  border-b rounded-t"] do
                 h3_ [class_ "text-3xl font-bold "] "Only Desktop Browsers are Supported for now!"
               -- Modal body
@@ -280,17 +280,17 @@ bodyWrapper BWConfig{sessM, currProject, prePageTitle, pageTitle, menuItem, hasI
               div_ [class_ "flex w-full justify-end items-center p-6 space-x-2 border-t border-gray-200 rounded-b"] pass
       case sessM of
         Nothing -> do
-          section_ [class_ "flex flex-col grow  h-screen overflow-y-hidden"] $
-            section_ [class_ "flex-1 overflow-y-auto"] $
-              child
+          section_ [class_ "flex flex-col grow  h-screen overflow-y-hidden"]
+            $ section_ [class_ "flex-1 overflow-y-auto"]
+            $ child
         Just sess ->
           let currUser = sess.persistentSession.user.getUser
               sideNav' = currProject & maybe "" \project -> sideNav sess project (fromMaybe pageTitle prePageTitle) menuItem hasIntegrated
            in section_ [class_ "flex flex-row grow-0 h-screen overflow-hidden"] do
                 sideNav'
                 section_ [class_ "h-screen overflow-y-hidden grow"] do
-                  when (currUser.email == "hello@apitoolkit.io") $
-                    loginBanner
+                  when (currUser.email == "hello@apitoolkit.io")
+                    $ loginBanner
                   navbar currProject (fromMaybe [] (currProject <&> \p -> menu p.id)) currUser prePageTitle pageTitle docsLink navTabs pageActions
                   section_ [class_ "overflow-y-hidden h-full flex-1"] child
       externalHeadScripts_
@@ -353,8 +353,8 @@ projectsDropDown currProject projects = do
             faSprite_ "key" "regular" "h-5 w-5" >> span_ "API Keys"
           a_ [href_ [text| /p/$pidTxt/integrations|], class_ "p-3 flex gap-3 items-center rounded hover:bg-gray-100"] do
             faSprite_ "arrows-turn-right" "regular" "h-5 w-5" >> span_ "Integrations"
-          when (currProject.paymentPlan == "UsageBased" || currProject.paymentPlan == "GraduatedPricing") $
-            a_
+          when (currProject.paymentPlan == "UsageBased" || currProject.paymentPlan == "GraduatedPricing")
+            $ a_
               [class_ "p-3 flex gap-3 items-center rounded hover:bg-gray-100 cursor-pointer", hxGet_ [text| /p/$pidTxt/manage_subscription |]]
               (faSprite_ "dollar-sign" "regular" "h-5 w-5" >> span_ "Manage billing")
       div_ [class_ "border-t border-gray-100 p-2"] do
@@ -378,13 +378,13 @@ projectsDropDown currProject projects = do
 
 
 sideNav :: Sessions.Session -> Projects.Project -> Text -> Maybe Text -> Maybe Bool -> Html ()
-sideNav sess project pageTitle menuItem hasIntegrated = aside_ [class_ "border-r bg-fillWeaker border-strokeWeak min-w-15 shrink-0 w-15 group-has-[#sidenav-toggle:checked]/pg:w-72  h-screen transition-all duration-200 ease-in-out flex flex-col justify-between", id_ "side-nav-menu"] do
+sideNav sess project pageTitle menuItem hasIntegrated = aside_ [class_ "border-r bg-fillWeaker border-strokeWeak text-sm min-w-15 shrink-0 w-15 group-has-[#sidenav-toggle:checked]/pg:w-68  h-screen transition-all duration-200 ease-in-out flex flex-col justify-between", id_ "side-nav-menu"] do
   div_ [class_ "px-2 group-has-[#sidenav-toggle:checked]/pg:px-6"] do
     div_ [class_ "py-5 flex justify-center group-has-[#sidenav-toggle:checked]/pg:justify-between items-center"] do
       a_ [href_ "/", class_ "inline-flex"] do
         img_ [class_ "h-7 hidden group-has-[#sidenav-toggle:checked]/pg:block", src_ "/public/assets/svgs/logo.svg"]
         img_ [class_ "h-10 w-10 hidden sd-show", src_ "/public/assets/logo-mini.png"]
-      label_ [class_ "cursor-pointer text-slate-700"] do
+      label_ [class_ "cursor-pointer text-strokeStrong"] do
         input_ ([type_ "checkbox", class_ "hidden", id_ "sidenav-toggle", [__|on change call setCookie("isSidebarClosed", `${me.checked}`)|]] <> [checked_ | sess.isSidebarClosed])
         faSprite_ "side-chevron-left-in-box" "regular" " h-5 w-5 rotate-180 group-has-[#sidenav-toggle:checked]/pg:rotate-0"
     div_ [class_ "mt-4 sd-px-0 dropdown block"] do
@@ -435,7 +435,7 @@ sideNav sess project pageTitle menuItem hasIntegrated = aside_ [class_ "border-r
       , href_ "https://apitoolkit.io/docs/"
       ]
       $ span_ [class_ "p-3 rounded-full bg-blue-100 text-brand leading-none"] (faSprite_ "circle-question" "regular" "h-4 w-4")
-        >> span_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:block"] "Documentation"
+      >> span_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:block"] "Documentation"
     a_
       [ class_ "hover:bg-blue-50"
       , term "data-tippy-placement" "right"
@@ -444,7 +444,7 @@ sideNav sess project pageTitle menuItem hasIntegrated = aside_ [class_ "border-r
       , [__| on click js posthog.reset(); end |]
       ]
       $ span_ [class_ "p-3 rounded-full bg-red-100 text-red-600 leading-none"] (faSprite_ "arrow-right-from-bracket" "regular" "h-4 w-4")
-        >> span_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:block"] "Logout"
+      >> span_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:block"] "Logout"
 
 
 navbar :: Maybe Projects.Project -> [(Text, Text, Text)] -> Users.User -> Maybe Text -> Text -> Maybe Text -> Maybe (Html ()) -> Maybe (Html ()) -> Html ()

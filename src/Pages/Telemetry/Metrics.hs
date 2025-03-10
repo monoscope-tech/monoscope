@@ -86,7 +86,7 @@ chartsPage pid metricList sources source mFilter nextUrl = do
   div_ [class_ "flex flex-col gap-6 px-6 py-4 h-[calc(100%-60px)] overflow-y-scroll"] $ do
     overViewTabs pid "charts"
     div_ [class_ "w-full"] do
-      Components.drawerWithURLContent_ "global-data-drawer" Nothing ""
+      Components.drawer_ "global-data-drawer" Nothing Nothing ""
       template_ [id_ "loader-tmp"] $ span_ [class_ "loading loading-dots loading-md"] ""
       div_ [class_ "w-full flex gap-4 items-end"] do
         div_ [class_ "flex flex-col gap-1"] do

@@ -19,21 +19,33 @@
     @apply bg-bgBase border border-strokeWeak rounded-2xl;
     /*overflow-hidden;*/
   }
+
+  :root {
+    --fallback-b2: #0015800a; /* bg-fillWeak*/
+    --tab-color: #000833a6; /* tab text color textWeak */
+    --fallback-pc: #000626e6; /*bg-textStrong */
+    --fallback-bc: #000d4d73; /*border color strokeStrong*/
+  }
 }
 
 @layer components {
   .tabs-outline :is(.tab-active, [aria-selected='true']):not(.tab-disabled):not([disabled]),
   .tabs-outline :is(.tab-active, [aria-selected='true']):not(.tab-disabled):not([disabled]):hover {
-    @apply bg-bgBase shadow;
+    @apply bg-bgBase shadow border border-strokeStrong text-textStrong;
   }
 
   .tabs-boxed :is(input:checked) {
     @apply bg-bgBase;
   }
 
+  .tab {
+    @apply !h-auto leading-none py-2;
+  }
+
+  /*
   .tabs-outline .tab {
     @apply !text-slate-800 font-medium;
-  }
+  }*/
 }
 
 .log_details_expanded {

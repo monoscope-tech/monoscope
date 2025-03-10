@@ -33,6 +33,7 @@ import Network.HTTP.Types.URI qualified as URI
 import Pages.Anomalies.AnomalyList qualified as AnomalyList
 import Pages.BodyWrapper
 import Pages.Charts.Charts qualified as Charts
+import Pages.Components qualified as Components
 import Pkg.Components qualified as Components
 import Pkg.Components.Widget qualified as Widget
 import Relude
@@ -57,6 +58,13 @@ instance ToHtml DashboardGet where
 dashboardPage_ :: Projects.ProjectId -> Dashboards.Dashboard -> Html ()
 dashboardPage_ pid dash = do
   Components.modal_ "pageTitleModalId" ""
+    $ form_
+      [class_ "flex flex-col p-3 gap-3"]
+    $ label_ [class_ "form-control w-full max-w-xs"] do
+      div_ [class_ "label"] $ span_ [class_ "label-text"] "Change Dashboard Title"
+      input_ [class_ "input input-bordered w-full max-w-xs", placeholder_ "Insert new title", value_ $ maybeToMonoid dash.title]
+
+  Components.modal_ "pageAddWidgetModalId" ""
     $ form_
       [class_ "flex flex-col p-3 gap-3"]
     $ label_ [class_ "form-control w-full max-w-xs"] do
@@ -288,10 +296,90 @@ dashboardGetH pid dashId fileM fromDStr toDStr sinceStr allParams = do
           , prePageTitle = Just "Dashboards"
           , pageTitle = maybeToMonoid dash''.title
           , pageTitleModalId = Just "dashbordTitleMdl"
-          , pageActions = Just $ Components.timepicker_ Nothing currentRange
+          , pageActions = Just $ div_ [class_ "inline-flex gap-3 items-center leading-[0]"] do
+              Components.timepicker_ Nothing currentRange
+              label_
+                [ class_ "cursor-pointer py-2 px-3 border border-strokeStrong rounded-lg shadow"
+                , data_ "tippy-content" "Refresh"
+                , [__| on click trigger 'update-query' on window then
+                    add .animate-spin to the first <svg/> in me then wait 1 seconds then
+                    remove .animate-spin from the first <svg/> in me |]
+                ]
+                $ faSprite_ "arrows-rotate" "regular" "w-3 h-3"
+              span_ [class_ "text-fillDisabled"] "|"
+              Components.drawer_ "global-data-drawer" Nothing (Just $ newWidget_ pid currentRange) $ span_ [class_ "text-iconNeutral cursor-pointer", data_ "tippy-content" "Add a new widget"] $ faSprite_ "plus" "regular" "w-3 h-3"
+              label_ [class_ "text-iconNeutral cursor-pointer", data_ "tippy-content" "Menu"] $ faSprite_ "ellipsis" "regular" "w-4 h-4"
           , docsLink = Just "https://apitoolkit.io/docs/dashboard/dashboard-pages/dashboard/"
           }
   addRespHeaders $ PageCtx bwconf $ DashboardGet pid dash''
+
+
+newWidget_ :: Projects.ProjectId -> Maybe Text -> Html ()
+newWidget_ pid currentRange = div_ [class_ "space-y-8"] do
+  div_ [class_ "flex justify-between"] do
+    div_ [class_ "tabs tabs-boxed tabs-md p-0 tabs-outline items-center border"] do
+      a_ [onclick_ "window.setQueryParamAndReload('source', 'requests')", role_ "tab", class_ $ "tab !h-auto  tab-active "] "Edit"
+      a_ [onclick_ "window.setQueryParamAndReload('source', 'logs')", role_ "tab", class_ $ "tab !h-auto "] "Overview"
+
+    div_ [class_ "inline-flex gap-3 items-center leading-[0]"] do
+      Components.timepicker_ Nothing currentRange
+      label_
+        [ class_ "cursor-pointer py-2 px-3 border border-strokeStrong rounded-lg shadow"
+        , data_ "tippy-content" "Refresh"
+        , [__| on click trigger 'update-query' on window then
+                      add .animate-spin to the first <svg/> in me then wait 1 seconds then
+                      remove .animate-spin from the first <svg/> in me |]
+        ]
+        $ faSprite_ "arrows-rotate" "regular" "w-3 h-3"
+      span_ [class_ "text-fillDisabled"] "|"
+      button_ [class_ "leading-none rounded-lg px-4 py-2 cursor-pointer btn-primary shadow"] $ "Save changes"
+      label_ [class_ "text-iconNeutral cursor-pointer", data_ "tippy-content" "Close Drawer", Lucid.for_ "global-data-drawer"] $ faSprite_ "xmark" "regular" "w-3 h-3"
+  div_ [class_ "w-full aspect-[4/1] p-3 rounded-lg bg-fillWeaker"]
+    $ Widget.widget_
+    $ (def :: Widget.Widget)
+      { Widget.wType = Widget.WTTimeseries
+      , Widget.standalone = Just True
+      , Widget.naked = Just True
+      , Widget.title = Just "Latency percentiles (ms)"
+      , Widget.hideSubtitle = Just True
+      , Widget.query = Just "timechart count(*)"
+      , Widget.unit = Just "ms"
+      , Widget.hideLegend = Just True
+      , Widget._projectId = Just pid
+      }
+  div_ [class_ "space-y-7"] do
+    div_ [class_ "flex gap-3"] do
+      span_ [class_ "inline-block rounded-full bg-fillWeak p-3"] "1"
+      strong_ [class_ "text-lg "] "Select your Visualization"
+    div_ [class_ "grid grid-cols-12 gap-3 px-5"]
+      $ forM_ [("xmark", "Line"), ("xmark", "Bar"), ("xmark", "Pie"), ("xmark", "Scatter")] \(icon, title) ->
+        div_ [class_ "col-span-1 p-4  aspect-square gap-3 flex flex-col border border-strokeWeak rounded-lg items-center justify-center"] do
+          faSprite_ "xmark" "regular" "w-4 h-4"
+          span_ [class_ "text-textWeak"] $ toHtml title
+    div_ [class_ "space-x-8 px-5"] do
+      label_ [class_ "space-x-3"] do
+        span_ "Style:"
+        select_ do
+          option_ [selected_ "selected"] "Solid"
+      label_ [class_ "space-x-3"] do
+        span_ "Select theme:"
+        faSprite_ "classic-theme" "regular" "w-16 h-5 "
+        select_ do
+          option_ [selected_ "selected"] "Classic"
+  div_ [class_ "space-y-7"] do
+    div_ [class_ "flex gap-3"] do
+      span_ [class_ "inline-block rounded-full bg-fillWeak p-3"] "2"
+      strong_ [class_ "text-lg "] "Graph your Data"
+    div_ [class_ "grid grid-cols-12 gap-3 px-5"]
+      $ forM_ [("xmark", "Line"), ("xmark", "Bar"), ("xmark", "Pie"), ("xmark", "Scatter")] \(icon, title) ->
+        div_ [class_ "col-span-1 p-4  aspect-square gap-3 flex flex-col border border-strokeWeak rounded-lg items-center justify-center"] do
+          faSprite_ "xmark" "regular" "w-4 h-4"
+          span_ [class_ "text-textWeak"] $ toHtml title
+  div_ [class_ "space-y-7"] do
+    div_ [class_ "flex gap-3"] do
+      span_ [class_ "inline-block rounded-full bg-fillWeak p-3"] "3"
+      strong_ [class_ "text-lg "] "Give your graph a title"
+    div_ [class_ "space-x-8 px-5"] $ input_ [class_ "p-3 border border-strokeWeak w-full rounded-lg bg-transparent", placeholder_ "Throughput"]
 
 
 --------------------------------------------------------------------

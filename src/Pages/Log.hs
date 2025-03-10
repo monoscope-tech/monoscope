@@ -31,7 +31,6 @@ import Models.Telemetry.Telemetry qualified as Telemetry
 import Models.Users.Sessions qualified as Sessions
 import NeatInterpolation (text)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), currProject, pageActions, pageTitle, sessM)
-import Pages.Components qualified as Components
 import Pkg.Components qualified as Components
 import Pkg.Components.Widget (WidgetAxis (..), WidgetType (WTTimeseriesLine))
 import Pkg.Components.Widget qualified as Widget
@@ -93,8 +92,8 @@ apiLogH pid queryM queryASTM cols' cursorM' sinceM fromM toM layoutM sourceM tar
   (queryLibRecent, queryLibSaved) <- V.partition (\x -> Projects.QLTHistory == (x.queryType)) <$> Projects.queryLibHistoryForUser pid sess.persistentSession.userId
 
   freeTierExceeded <-
-    dbtToEff $
-      if project.paymentPlan == "Free"
+    dbtToEff
+      $ if project.paymentPlan == "Free"
         then (> 5000) <$> RequestDumps.getLastSevenDaysTotalRequest pid
         else pure False
 
@@ -107,14 +106,14 @@ apiLogH pid queryM queryASTM cols' cursorM' sinceM fromM toM layoutM sourceM tar
           , pageActions = Just $ div_ [class_ "inline-flex gap-2"] do
               label_ [class_ "cursor-pointer border border-strokeStrong rounded-lg flex shadow"] do
                 input_ [type_ "checkbox", id_ "streamLiveData", class_ "hidden"]
-                span_ [class_ "group-has-[#streamLiveData:checked]/pg:flex hidden py-1 px-3 items-center", term "data-tippy-content" "pause live data stream"] $ faSprite_ "pause" "solid" "h-4 w-4"
-                span_ [class_ "group-has-[#streamLiveData:checked]/pg:hidden flex  py-1 px-3 items-center", term "data-tippy-content" "stream live data"] $ faSprite_ "play" "regular" "h-4 w-4"
+                span_ [class_ "group-has-[#streamLiveData:checked]/pg:flex hidden py-1 px-3 items-center", data_ "tippy-content" "pause live data stream"] $ faSprite_ "pause" "solid" "h-4 w-4"
+                span_ [class_ "group-has-[#streamLiveData:checked]/pg:hidden flex  py-1 px-3 items-center", data_ "tippy-content" "stream live data"] $ faSprite_ "play" "regular" "h-4 w-4"
               Components.timepicker_ (Just "log_explorer_form") currentRange
-              a_ [class_ "cursor-pointer py-1 px-3 border border-strokeStrong rounded-lg shadow", [__|on click htmx.trigger('#log_explorer_form', 'submit') |], term "data-tippy-content" "refresh"] $ faSprite_ "arrows-rotate" "regular" "h-4 w-4"
-          , navTabs = Just $ div_ [class_ "tabs tabs-boxed tabs-md p-0 tabs-outline items-center  bg-fillWeak  text-textWeak border"] do
-              a_ [onclick_ "window.setQueryParamAndReload('source', 'requests')", role_ "tab", class_ $ "tab py-1 !h-auto " <> if source == "requests" then "tab-active  text-textStrong border border-strokeStrong " else ""] "Requests"
-              a_ [onclick_ "window.setQueryParamAndReload('source', 'logs')", role_ "tab", class_ $ "tab py-1 !h-auto " <> if source == "logs" then "tab-active  text-textStrong border border-strokeStrong " else ""] "Logs"
-              a_ [onclick_ "window.setQueryParamAndReload('source', 'spans')", role_ "tab", class_ $ "tab py-1 !h-auto " <> if source == "spans" then "tab-active  text-textStrong border border-strokeStrong " else ""] "Traces"
+              a_ [class_ "cursor-pointer py-1 px-3 border border-strokeStrong rounded-lg shadow", [__|on click htmx.trigger('#log_explorer_form', 'submit') |], data_ "tippy-content" "refresh"] $ faSprite_ "arrows-rotate" "regular" "h-4 w-4"
+          , navTabs = Just $ div_ [class_ "tabs tabs-boxed tabs-md p-0 tabs-outline items-center border"] do
+              a_ [onclick_ "window.setQueryParamAndReload('source', 'requests')", role_ "tab", class_ $ "tab py-1 !h-auto " <> if source == "requests" then "tab-active  text-textStrong " else ""] "Requests"
+              a_ [onclick_ "window.setQueryParamAndReload('source', 'logs')", role_ "tab", class_ $ "tab py-1 !h-auto " <> if source == "logs" then "tab-activetext-textStrong " else ""] "Logs"
+              a_ [onclick_ "window.setQueryParamAndReload('source', 'spans')", role_ "tab", class_ $ "tab py-1 !h-auto " <> if source == "spans" then "tab-active" else ""] "Traces"
               -- a_ [onclick_ "window.setQueryParamAndReload('source', 'metrics')", role_ "tab", class_ $ "tab py-1.5 !h-auto " <> if source == "metrics" then "tab-active" else ""] "Metrics"
           }
   let (days, hours, minutes, _seconds) = convertToDHMS $ diffUTCTime now project.createdAt
@@ -244,8 +243,8 @@ apiLogJson pid queryM queryASTM cols' cursorM' sinceM fromM toM layoutM sourceM 
               else []
       traceLogs <- Telemetry.getLogsByTraceIds pid traceIDs
       let colors = getServiceColors (V.catMaybes serviceNames)
-      addRespHeaders $
-        AE.object
+      addRespHeaders
+        $ AE.object
           [ "logsData" AE..= requestVecs
           , "traceLogs" AE..= traceLogs
           , "serviceColors" AE..= colors
@@ -327,8 +326,8 @@ logQueryBox_ pid currentRange source targetSpan queryAST queryLibRecent queryLib
 
 queryLibrary_ :: Projects.ProjectId -> V.Vector Projects.QueryLibItem -> V.Vector Projects.QueryLibItem -> Html ()
 queryLibrary_ pid queryLibSaved queryLibRecent = div_ [class_ "dropdown dropdown-hover dropdown-bottom dropdown-start", id_ "queryLibraryParentEl"] do
-  div_ [class_ "cursor-pointer relative  bg-fillWeak  text-textWeak rounded-lg border border-strokeWeaker h-full flex gap-2 items-center px-2", tabindex_ "0", role_ "button"] $
-    (toHtml "Presets" >> faSprite_ "chevron-down" "regular" "w-3 h-3")
+  div_ [class_ "cursor-pointer relative  bg-fillWeak  text-textWeak rounded-lg border border-strokeWeaker h-full flex gap-2 items-center px-2", tabindex_ "0", role_ "button"]
+    $ (toHtml "Presets" >> faSprite_ "chevron-down" "regular" "w-3 h-3")
   div_ [class_ "dropdown-content z-20"] $ div_ [class_ "tabs tabs-boxed tabs-md tabs-outline items-center bg-fillWeak p-0 h-full", role_ "tablist", id_ "queryLibraryTabListEl"] do
     tabPanel_ "Saved" (queryLibraryContent_ "Saved" queryLibSaved)
     tabPanel_ "Recent" (queryLibraryContent_ "Recent" queryLibRecent)
@@ -396,9 +395,9 @@ queryLibItem_ qli =
           li_ "Send query to alert"
           li_ "Send query to a dashboard"
     strong_ $ whenJust qli.title \title -> (toHtml title)
-    pre_ $
-      code_ [class_ "language-js !bg-transparent queryText whitespace-pre-wrap break-words"] $
-        toHtml qli.queryText
+    pre_
+      $ code_ [class_ "language-js !bg-transparent queryText whitespace-pre-wrap break-words"]
+      $ toHtml qli.queryText
     div_ [class_ "gap-3 flex"] $ time_ [datetime_ "", term "data-tippy-content" "created on"] (toHtml $ displayTimestamp $ formatUTC qli.createdAt) >> when qli.byMe " by me"
 
 
@@ -476,9 +475,9 @@ apiLogsPage page = do
       ]
       do
         div_ [class_ "relative ml-auto w-full", style_ ""] do
-          div_ [class_ "flex justify-end  w-full p-4 "] $
-            button_ [[__|on click add .hidden to #expand-log-modal|]] $
-              faSprite_ "xmark" "regular" "h-8"
+          div_ [class_ "flex justify-end  w-full p-4 "]
+            $ button_ [[__|on click add .hidden to #expand-log-modal|]]
+            $ faSprite_ "xmark" "regular" "h-8"
           form_
             [ hxPost_ $ "/p/" <> page.pid.toText <> "/share/"
             , hxSwap_ "innerHTML"
@@ -494,18 +493,18 @@ apiLogsPage page = do
 
       div_ [class_ "flex flex-row gap-4 mt-3 group-has-[.toggle-chart:checked]/pg:hidden w-full", style_ "aspect-ratio: 10 / 1;"] do
         Widget.widget_ $ (def :: Widget.Widget){Widget.query = Just "timechart count(*)", Widget.unit = Just "reqs", Widget.title = Just "All requests", Widget.hideLegend = Just True, Widget._projectId = Just page.pid, Widget.standalone = Just True, Widget.yAxis = Just (def{showOnlyMaxLabel = Just True})}
-        unless (page.source == "logs") $
-          Widget.widget_ $
-            (def :: Widget.Widget)
-              { Widget.wType = WTTimeseriesLine
-              , Widget.standalone = Just True
-              , Widget.title = Just "Latency percentiles (ms)"
-              , Widget.hideSubtitle = Just True
-              , Widget.yAxis = Just (def{showOnlyMaxLabel = Just True})
-              , Widget.summarizeBy = Just Widget.SBMax
-              , Widget.sql =
-                  Just
-                    [text|
+        unless (page.source == "logs")
+          $ Widget.widget_
+          $ (def :: Widget.Widget)
+            { Widget.wType = WTTimeseriesLine
+            , Widget.standalone = Just True
+            , Widget.title = Just "Latency percentiles (ms)"
+            , Widget.hideSubtitle = Just True
+            , Widget.yAxis = Just (def{showOnlyMaxLabel = Just True})
+            , Widget.summarizeBy = Just Widget.SBMax
+            , Widget.sql =
+                Just
+                  [text|
                         SELECT timeB, value, quantile
                               FROM (
                                 SELECT extract(epoch from time_bucket('1h', created_at))::integer AS timeB,
@@ -523,10 +522,10 @@ apiLogsPage page = do
                               ) s,
                               LATERAL unnest(s.values, s.quantiles) AS u(value, quantile);
                         |]
-              , Widget.unit = Just "ms"
-              , Widget.hideLegend = Just True
-              , Widget._projectId = Just page.pid
-              }
+            , Widget.unit = Just "ms"
+            , Widget.hideLegend = Just True
+            , Widget._projectId = Just page.pid
+            }
 
     div_ [class_ "flex h-full gap-3.5 overflow-hidden"] do
       div_ [class_ "w-1/5 shrink-0 flex flex-col gap-2 p-2 hidden  group-has-[.toggle-filters:checked]/pg:hidden "] do
@@ -621,11 +620,6 @@ apiLogsPage page = do
           |]
 
   jsonTreeAuxillaryCode page.pid page.queryAST
-  -- drawerWithURLContent_ : Used when you expand a log item
-  -- using the drawer as a global is a workaround since to separate the logs scope from other content and improve scroll performance.
-  Components.drawerWithURLContent_ "global-data-drawer" Nothing ""
-  -- the loader is used and displayed while loading the content for the global drawer
-  template_ [id_ "loader-tmp"] $ span_ [class_ "loading loading-dots loading-md"] ""
 
 
 curateCols :: [Text] -> [Text] -> [Text]
