@@ -325,10 +325,15 @@ export class LogList extends LitElement {
           </thead>
           ${list.length === 1 ? emptyState(this.source, this.logsColumns.length) : nothing}
           <tbody
-            class="w-full flex flex-col min-w-0 grow-1 shrink-1 pb-16 c-scroll h-full relative"
+            class="w-full flex flex-col min-w-0 grow-1 shrink-1 pb-16  c-scroll h-full relative"
             id="log-item-table-body"
             @rangeChanged=${() => {
               this.setupIntersectionObserver()
+              const tableBody = document.querySelector('#log-item-table-body')
+              if (tableBody && tableBody.scrollTop === 0) {
+                // scroll 70px
+                tableBody.scrollTop = 30
+              }
             }}
           >
             ${virtualize({
@@ -517,8 +522,8 @@ function displayTimestamp(inputDateString) {
   return formatted.replace(',', '')
 }
 
-function renderBadge(classes, title) {
-  return html`<span class=${'ml-2 ' + classes}>${title}</span>`
+function renderBadge(classes, title, tippy) {
+  return html`<span class=${'ml-2 relative ' + classes}>${title}</span>`
 }
 
 const lookupVecText = (vec, idx) => {
@@ -563,7 +568,7 @@ function getMethodColor(method) {
 }
 
 function renderIconWithTippy(cls, tip, icon) {
-  return html` <a class=${'shrink-0 inline-flex ' + cls} data-tippy-content=${tip}>${icon}</span>`
+  return html`<span class=${'shrink-0 inline-flex ' + cls} data-tippy-content=${tip}>${icon}</span>`
 }
 
 function getDurationNSMS(duration) {
