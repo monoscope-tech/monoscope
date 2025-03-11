@@ -188,8 +188,8 @@ renderWidgetHeader :: Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Te
 renderWidgetHeader wId title valueM subValueM expandBtnFn ctaM hideSub = div_ [class_ "leading-none flex justify-between items-center"] do
   div_ [class_ "inline-flex gap-3 items-center"] do
     span_ [class_ "text-sm"] $ toHtml $ maybeToMonoid title
-    span_ [class_ $ "bg-fillWeak border border-strokeWeak text-sm font-semibold px-2 py-1 rounded-3xl " <> if (isJust valueM) then "" else "hidden", id_ $ wId <> "Value"] $
-      whenJust valueM toHtml
+    span_ [class_ $ "bg-fillWeak border border-strokeWeak text-sm font-semibold px-2 py-1 rounded-3xl " <> if (isJust valueM) then "" else "hidden", id_ $ wId <> "Value"]
+      $ whenJust valueM toHtml
     span_ [class_ $ "text-textWeak widget-subtitle text-sm " <> bool "" "hidden" hideSub, id_ $ wId <> "Subtitle"] $ toHtml $ maybeToMonoid subValueM
   div_ [class_ "text-iconNeutral"] do
     whenJust ctaM \(ctaTitle, uri) -> a_ [class_ "underline underline-offset-2 text-textBrand", href_ uri] $ toHtml ctaTitle
@@ -212,19 +212,19 @@ renderChart widget = do
   let valueM = widget.dataset >>= (.value) >>= \x -> Just $ Ft.fmt $ Ft.commaizeF $ round x
   let isStat = widget.wType `elem` [WTTimeseriesStat, WTStat]
   div_ [class_ "gap-0.5 flex flex-col h-full justify-end"] do
-    unless (widget.naked == Just True || widget.wType `elem` [WTTimeseriesStat, WTStat]) $
-      renderWidgetHeader chartId widget.title valueM rateM widget.expandBtnFn Nothing (widget.hideSubtitle == Just True)
+    unless (widget.naked == Just True || widget.wType `elem` [WTTimeseriesStat, WTStat])
+      $ renderWidgetHeader chartId widget.title valueM rateM widget.expandBtnFn Nothing (widget.hideSubtitle == Just True)
     div_ [class_ "flex-1 flex"] do
       div_
-        [ class_ $
-            "h-full w-full flex flex-col justify-end "
-              <> if widget.naked == Just True then "" else " rounded-2xl border border-strokeWeak bg-fillWeaker "
+        [ class_
+            $ "h-full w-full flex flex-col justify-end "
+            <> if widget.naked == Just True then "" else " rounded-2xl border border-strokeWeak bg-fillWeaker "
         ]
         do
           when (isStat) $ div_ [class_ "px-3 py-3 flex-1 flex flex-col justify-end "] do
             div_ [class_ "flex flex-col gap-1"] do
-              strong_ [class_ "text-textSuccess-strong text-4xl font-normal", id_ $ chartId <> "Value"] $
-                whenJust valueM toHtml
+              strong_ [class_ "text-textSuccess-strong text-4xl font-normal", id_ $ chartId <> "Value"]
+                $ whenJust valueM toHtml
               div_ [class_ "inline-flex gap-1 items-center text-sm"] do
                 whenJust widget.icon \icon -> Utils.faSprite_ icon "regular" "w-4 h-4 text-iconBrand"
                 toHtml $ maybeToMonoid widget.title
