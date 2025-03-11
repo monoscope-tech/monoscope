@@ -1,9 +1,10 @@
-module Pages.Dashboards (dashboardGetH, entrypointRedirectGetH, DashboardGet (..), dashboardsGetH, DashboardsGet (..), dashboardsPostH, DashboardForm (..)) where
+module Pages.Dashboards (dashboardGetH, entrypointRedirectGetH, DashboardGet (..), dashboardsGetH, DashboardsGet (..), dashboardsPostH, DashboardForm (..), dashboardWidgetPutH) where
 
 import Control.Lens
 import Data.Aeson qualified as AE
 import Data.Default
 import Data.Effectful.UUID qualified as UUID
+import Data.Effectful.Wreq qualified as Wreq
 import Data.Generics.Labels ()
 import Data.Map qualified as M
 import Data.Text qualified as T
@@ -17,11 +18,12 @@ import Database.PostgreSQL.Entity.Types qualified as DBT
 import Database.PostgreSQL.Simple (Only (Only))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.Types (Query (Query))
-import Effectful.Error.Static (throwError)
-import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
+import Effectful (Eff, (:>))
+import Effectful.Error.Static (Error, throwError)
+import Effectful.PostgreSQL.Transact.Effect (DB, dbtToEff)
 import Effectful.Time qualified as Time
 import Lucid
-import Lucid.Htmx (hxPost_)
+import Lucid.Htmx (hxExt_, hxPost_, hxPut_, hxSwap_, hxTarget_, hxTrigger_, hxVals_)
 import Lucid.Hyperscript (__)
 import Models.Apis.Anomalies qualified as Anomalies
 import Models.Projects.Dashboards qualified as Dashboards
@@ -38,7 +40,7 @@ import Pkg.Components qualified as Components
 import Pkg.Components.Widget qualified as Widget
 import Relude
 import Relude.Unsafe qualified as Unsafe
-import Servant (NoContent (..), err404, errBody)
+import Servant (NoContent (..), ServerError, err404, errBody)
 import Servant.API (Header)
 import Servant.API.ResponseHeaders (Headers, addHeader)
 import System.Types
@@ -72,8 +74,8 @@ dashboardPage_ pid dash = do
       input_ [class_ "input input-bordered w-full max-w-xs", placeholder_ "Insert new title", value_ $ maybeToMonoid dash.title]
 
   whenJust dash.variables \variables -> do
-    div_ [class_ "flex bg-fillWeaker px-6 py-2 gap-2"] $
-      forM_ variables \var -> fieldset_ [class_ "border border-strokeStrong bg-fillWeaker p-0 inline-block rounded-lg overflow-hidden dash-variable text-sm"] do
+    div_ [class_ "flex bg-fillWeaker px-6 py-2 gap-2"]
+      $ forM_ variables \var -> fieldset_ [class_ "border border-strokeStrong bg-fillWeaker p-0 inline-block rounded-lg overflow-hidden dash-variable text-sm"] do
         legend_ [class_ "px-1 ml-2 text-xs"] $ toHtml $ fromMaybe var.key var.title <> memptyIfFalse (var.required == Just True) " *"
         let whitelist =
               maybe
@@ -89,19 +91,19 @@ dashboardPage_ pid dash = do
                 )
                 var.options
 
-        input_ $
-          [ type_ "text"
-          , name_ var.key
-          , class_ "tagify-select-input"
-          , data_ "whitelistjson" whitelist
-          , data_ "enforce-whitelist" "true"
-          , data_ "mode" $ if var.multi == Just True then "" else "select"
-          , data_ "query_sql" $ maybeToMonoid var.sql
-          , data_ "query_raw" $ maybeToMonoid var.query
-          , data_ "reload_on_change" $ maybe "false" (T.toLower . show) var.reloadOnChange
-          , value_ $ maybeToMonoid var.value
-          ]
-            <> memptyIfFalse (var.multi == Just True) [data_ "mode" "select"]
+        input_
+          $ [ type_ "text"
+            , name_ var.key
+            , class_ "tagify-select-input"
+            , data_ "whitelistjson" whitelist
+            , data_ "enforce-whitelist" "true"
+            , data_ "mode" $ if var.multi == Just True then "" else "select"
+            , data_ "query_sql" $ maybeToMonoid var.sql
+            , data_ "query_raw" $ maybeToMonoid var.query
+            , data_ "reload_on_change" $ maybe "false" (T.toLower . show) var.reloadOnChange
+            , value_ $ maybeToMonoid var.value
+            ]
+          <> memptyIfFalse (var.multi == Just True) [data_ "mode" "select"]
     script_
       [text|
   const tagifyInstances = new Map();
@@ -163,7 +165,7 @@ dashboardPage_ pid dash = do
     div_ "" -- variables selector area
     div_ [class_ "grid-stack  -m-2 mb-20"] do
       forM_ dash.widgets (\w -> toHtml (w{Widget._projectId = Just pid}))
-      label_ [class_ "grid-stack-item pb-8 cursor-pointer bg-fillBrand-weak border-2 border-strokeBrand-strong border-dashed text-strokeSelected rounded rounded-lg flex flex-col gap-3 items-center justify-center *:!right-0  *:!bottom-0 ", term "gs-w" "3", term "gs-h" "2", Lucid.for_ "global-data-drawer"] do
+      label_ [id_ "add_a_widget_label", class_ "grid-stack-item pb-8 cursor-pointer bg-fillBrand-weak border-2 border-strokeBrand-strong border-dashed text-strokeSelected rounded rounded-lg flex flex-col gap-3 items-center justify-center *:!right-0  *:!bottom-0 ", term "gs-w" "3", term "gs-h" "2", Lucid.for_ "global-data-drawer"] do
         faSprite_ "plus" "regular" "h-8 w-8"
         span_ "Add a widget"
     script_
@@ -232,40 +234,40 @@ processWidget pid now (sinceStr, fromDStr, toDStr) allParams widgetBase = do
           Widget.WTAnomalies -> do
             issues <- dbtToEff $ Anomalies.selectIssues pid Nothing (Just False) (Just False) Nothing (Just 2) (0)
             let issuesVM = V.map (AnomalyList.IssueVM False now "24h") issues
-            pure $
-              widget
-                & #html
-                  ?~ ( renderText $
-                        div_ [class_ "space-y-4"] $
-                          forM_ issuesVM (\x -> div_ [class_ "border border-strokeWeak rounded-2xl overflow-hidden"] $ toHtml x)
-                     )
+            pure
+              $ widget
+              & #html
+                ?~ ( renderText
+                      $ div_ [class_ "space-y-4"]
+                      $ forM_ issuesVM (\x -> div_ [class_ "border border-strokeWeak rounded-2xl overflow-hidden"] $ toHtml x)
+                   )
           Widget.WTStat -> do
             stat <- Charts.queryMetrics (Just Charts.DTFloat) (Just pid) widget.query Nothing widget.sql sinceStr fromDStr toDStr Nothing allParams
-            pure $
-              widget
-                & #dataset
-                  ?~ def
-                    { Widget.source = AE.Null
-                    , Widget.value = stat.dataFloat
-                    }
+            pure
+              $ widget
+              & #dataset
+                ?~ def
+                  { Widget.source = AE.Null
+                  , Widget.value = stat.dataFloat
+                  }
           _ -> do
             metricsD <-
               Charts.queryMetrics (Just Charts.DTMetric) (Just pid) widget.query Nothing widget.sql sinceStr fromDStr toDStr Nothing allParams
-            pure $
-              widget
-                & #dataset
-                  ?~ Widget.WidgetDataset
-                    { source =
-                        AE.toJSON $
-                          V.cons
-                            (AE.toJSON <$> metricsD.headers)
-                            (AE.toJSON <<$>> metricsD.dataset)
-                    , rowsPerMin = metricsD.rowsPerMin
-                    , value = Just metricsD.rowsCount
-                    , from = metricsD.from
-                    , to = metricsD.to
-                    , stats = metricsD.stats
-                    }
+            pure
+              $ widget
+              & #dataset
+                ?~ Widget.WidgetDataset
+                  { source =
+                      AE.toJSON
+                        $ V.cons
+                          (AE.toJSON <$> metricsD.headers)
+                          (AE.toJSON <<$>> metricsD.dataset)
+                  , rowsPerMin = metricsD.rowsPerMin
+                  , value = Just metricsD.rowsCount
+                  , from = metricsD.from
+                  , to = metricsD.to
+                  , stats = metricsD.stats
+                  }
       else pure widget
   -- Recursively process child widgets, if any.
   case widget'.children of
@@ -275,12 +277,22 @@ processWidget pid now (sinceStr, fromDStr, toDStr) allParams widgetBase = do
       pure $ widget' & #children .~ Just newChildren
 
 
-dashboardGetH :: Projects.ProjectId -> Dashboards.DashboardId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> [(Text, Maybe Text)] -> ATAuthCtx (RespHeaders (PageCtx DashboardGet))
-dashboardGetH pid dashId fileM fromDStr toDStr sinceStr allParams = do
-  (sess, project) <- Sessions.sessionAndProject pid
-  now <- Time.currentTime
-  let (_fromD, _toD, currentRange) = Components.parseTimeRange now (Components.TimePicker sinceStr fromDStr toDStr)
+-- dashboardWdgetPutH adds a widget at the end of
+dashboardWidgetPutH :: Projects.ProjectId -> Dashboards.DashboardId -> Maybe Text -> Widget.Widget -> ATAuthCtx (RespHeaders Widget.Widget)
+dashboardWidgetPutH pid dashId widgetIdM widget = do
+  (_, dash) <- getDashAndVM dashId Nothing
+  uid <- UUID.genUUID >>= pure . UUID.toText
+  let (dash', widget') = case widgetIdM of
+        Just wID -> (dash, widget)
+        Nothing -> do
+          let widgetUpdated = widget{Widget.standalone = Nothing, Widget.naked = Nothing, Widget.id = Just uid}
+          (dash{Dashboards.widgets = dash.widgets <> [widgetUpdated]}, widgetUpdated)
+  _ <- dbtToEff $ DBT.updateFieldsBy @Dashboards.DashboardVM [[DBT.field| schema |]] ([DBT.field| id |], dashId) (Only dash')
+  addRespHeaders $ widget'
 
+
+getDashAndVM :: (DB :> es, Wreq.HTTP :> es, Error ServerError :> es) => Dashboards.DashboardId -> Maybe Text -> Eff es (Dashboards.DashboardVM, Dashboards.Dashboard)
+getDashAndVM dashId fileM = do
   dashVM <-
     (dbtToEff $ DBT.selectById @Dashboards.DashboardVM (Only dashId)) >>= \case
       Just v -> pure v
@@ -290,6 +302,15 @@ dashboardGetH pid dashId fileM fromDStr toDStr sinceStr allParams = do
     Just file -> Dashboards.readDashboardEndpoint file
     Nothing -> pure $ fromMaybe def (loadDashboardFromVM dashVM)
 
+  pure (dashVM, dash)
+
+
+dashboardGetH :: Projects.ProjectId -> Dashboards.DashboardId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> [(Text, Maybe Text)] -> ATAuthCtx (RespHeaders (PageCtx DashboardGet))
+dashboardGetH pid dashId fileM fromDStr toDStr sinceStr allParams = do
+  (sess, project) <- Sessions.sessionAndProject pid
+  now <- Time.currentTime
+  let (_fromD, _toD, currentRange) = Components.parseTimeRange now (Components.TimePicker sinceStr fromDStr toDStr)
+  (_, dash) <- getDashAndVM dashId fileM
   dash' <- forOf (#variables . traverse . traverse) dash (processVariable pid now (sinceStr, fromDStr, toDStr) allParams)
   dash'' <- forOf (#widgets . traverse) dash' (processWidget pid now (sinceStr, fromDStr, toDStr) allParams)
 
@@ -319,7 +340,22 @@ dashboardGetH pid dashId fileM fromDStr toDStr sinceStr allParams = do
 
 
 newWidget_ :: Projects.ProjectId -> Maybe Text -> Html ()
-newWidget_ pid currentRange = div_ [class_ "space-y-8"] do
+newWidget_ pid currentRange = form_ [class_ "space-y-8", hxPut_ "", hxVals_ "js:{...defaultWidgetJSON}", hxExt_ "json-enc", hxSwap_ "beforebegin", hxTarget_ "#add_a_widget_label", hxTrigger_ "submit"] do
+  let defaultWidget =
+        (def :: Widget.Widget)
+          { Widget.wType = Widget.WTTimeseries
+          , Widget.id = Just "newWidget"
+          , Widget.standalone = Just True
+          , Widget.naked = Just True
+          , Widget.title = Just "New Widget"
+          , Widget.hideSubtitle = Just True
+          , Widget.query = Just "timechart count(*)"
+          , Widget.unit = Just "ms"
+          , Widget.hideLegend = Just True
+          , Widget._projectId = Just pid
+          , Widget.layout = Just $ def{Widget.w = Just 3, Widget.h = Just 3}
+          }
+  let defaultWidgetJSON = TE.decodeUtf8 $ fromLazy $ AE.encode defaultWidget
   div_ [class_ "flex justify-between"] do
     div_ [class_ "tabs tabs-boxed tabs-md p-0 tabs-outline items-center border"] do
       a_ [onclick_ "window.setQueryParamAndReload('source', 'requests')", role_ "tab", class_ $ "tab !h-auto  tab-active "] "Edit"
@@ -336,41 +372,38 @@ newWidget_ pid currentRange = div_ [class_ "space-y-8"] do
         ]
         $ faSprite_ "arrows-rotate" "regular" "w-3 h-3"
       span_ [class_ "text-fillDisabled"] "|"
-      button_ [class_ "leading-none rounded-lg px-4 py-2 cursor-pointer btn-primary shadow"] $ "Save changes"
+      button_ [class_ "leading-none rounded-lg px-4 py-2 cursor-pointer btn-primary shadow", type_ "submit"] $ "Save changes"
       label_ [class_ "text-iconNeutral cursor-pointer", data_ "tippy-content" "Close Drawer", Lucid.for_ "global-data-drawer"] $ faSprite_ "xmark" "regular" "w-3 h-3"
-  div_ [class_ "w-full aspect-[4/1] p-3 rounded-lg bg-fillWeaker"] $
-    Widget.widget_ $
-      (def :: Widget.Widget)
-        { Widget.wType = Widget.WTTimeseries
-        , Widget.id = Just "newWidget"
-        , Widget.standalone = Just True
-        , Widget.naked = Just True
-        , Widget.title = Just "New Widget"
-        , Widget.hideSubtitle = Just True
-        , Widget.query = Just "timechart count(*)"
-        , Widget.unit = Just "ms"
-        , Widget.hideLegend = Just True
-        , Widget._projectId = Just pid
-        }
+  div_ [class_ "w-full aspect-[4/1] p-3 rounded-lg bg-fillWeaker"] do
+    script_
+      [class_ "hidden"]
+      [text| var defaultWidgetJSON = ${defaultWidgetJSON} |]
+    div_ [id_ "default-widget-container", class_ "h-full", hxPost_ "/widget", hxTrigger_ "intersect, update-default-widget", hxTarget_ "this", hxSwap_ "innerHTML", hxVals_ "js:{...defaultWidgetJSON}", hxExt_ "json-enc"] ""
   div_ [class_ "space-y-7"] do
     div_ [class_ "flex gap-3"] do
       span_ [class_ "inline-block rounded-full bg-fillWeak p-3"] "1"
       strong_ [class_ "text-lg  font-semibold"] "Select your Visualization"
-    div_ [class_ "grid grid-cols-12 gap-3 px-5"] $
-      let visTypes :: [(Text, Text)]
-          visTypes =
-            [ ("duo-line-chart", "Line")
-            , ("bar-chart", "Bar")
-            , ("duo-pie-chart", "Pie")
-            , ("duo-scatter-chart", "Scatter")
-            , ("hashtag", "Number")
-            , ("guage", "Guage")
-            , ("text", "Text")
-            ]
-       in forM_ visTypes \(icon, title) ->
-            div_ [class_ "col-span-1 p-4  aspect-square gap-3 flex flex-col border border-strokeWeak rounded-lg items-center justify-center"] do
-              span_ [class_ "block"] $ faSprite_ icon "regular" "w-4 h-4"
-              span_ [class_ "text-textWeak block leading-none"] $ toHtml title
+    div_ [class_ "grid grid-cols-12 gap-3 px-5"]
+      $ let visTypes :: [(Text, Text, Text)]
+            visTypes =
+              [ ("bar-chart", "Bar", "timeseries")
+              , ("duo-line-chart", "Line", "timeseries_line")
+              , ("duo-pie-chart", "Pie", "pie_chart")
+              , ("duo-scatter-chart", "Scatter", "distribution")
+              , ("hashtag", "Number", "stat")
+              , ("guage", "Guage", "")
+              , ("text", "Text", "")
+              ]
+         in iforM_ visTypes \idx (icon, title, widgetType) ->
+              label_
+                [ class_ "col-span-1 p-4 aspect-square gap-3 flex flex-col border border-strokeWeak rounded-lg items-center justify-center has-[:checked]:border-strokeBrand-strong has-[:checked]:bg-fillBrand-weak"
+                , data_ "widgetType" widgetType
+                , [__| on click set defaultWidgetJSON.type to @data-widgetType then trigger 'update-default-widget' on #default-widget-container |]
+                ]
+                do
+                  input_ ([class_ "hidden", name_ "widgetType", type_ "radio"] <> if idx == 0 then [checked_] else [])
+                  span_ [class_ "block"] $ faSprite_ icon "regular" "w-4 h-4"
+                  span_ [class_ "text-textWeak block leading-none"] $ toHtml title
     div_ [class_ "space-x-8 px-5"] do
       label_ [class_ "space-x-3"] do
         span_ "Style:"
@@ -390,7 +423,13 @@ newWidget_ pid currentRange = div_ [class_ "space-y-8"] do
     div_ [class_ "flex gap-3"] do
       span_ [class_ "inline-block rounded-full bg-fillWeak p-3"] "3"
       strong_ [class_ "text-lg  font-semibold"] "Give your graph a title"
-    div_ [class_ "space-x-8 px-5"] $ input_ [class_ "p-3 border border-strokeWeak w-full rounded-lg bg-transparent", placeholder_ "Throughput"]
+    div_ [class_ "space-x-8 px-5"]
+      $ input_
+        [ class_ "p-3 border border-strokeWeak w-full rounded-lg bg-transparent"
+        , placeholder_ "Throughput"
+        , required_ "required"
+        , [__| on change set defaultWidgetJSON.title to my value then trigger 'update-default-widget' on #default-widget-container |]
+        ]
 
 
 --------------------------------------------------------------------
@@ -471,9 +510,9 @@ dashboardsGet_ dg = do
             strong_ [class_ "text-xl", id_ "dItemTitle"] "Custom Dashboard"
             p_ [class_ "text-sm line-clamp-2 min-h-10", id_ "dItemDescription"] "Get started from a blank slate"
           div_ [class_ "flex items-center justify-center shrink"] $ button_ [class_ "leading-none rounded-lg p-3 cursor-pointer bg-fillBrand-strong shadow text-white", type_ "submit"] "Select template"
-        div_ [class_ "pt-5"] $
-          div_ [class_ "bg-[#1e9cff] px-5 py-8 rounded-xl aspect-square w-full flex items-center"] $
-            img_ [src_ "/public/assets/svgs/screens/dashboard_blank.svg", class_ "w-full", id_ "dItemPreview"]
+        div_ [class_ "pt-5"]
+          $ div_ [class_ "bg-[#1e9cff] px-5 py-8 rounded-xl aspect-square w-full flex items-center"]
+          $ img_ [src_ "/public/assets/svgs/screens/dashboard_blank.svg", class_ "w-full", id_ "dItemPreview"]
 
   div_ [id_ "itemsListPage", class_ "mx-auto px-6 pt-4 gap-8 w-full flex flex-col h-full overflow-hidden pb-2  group/pg"] do
     div_ [class_ "flex"] do
@@ -495,16 +534,16 @@ dashboardsGet_ dg = do
         div_ [class_ "rounded-xl border border-strokeWeak gap-3.5 p-4 bg-fillWeaker flex itemListItem"] do
           div_ [class_ "flex-1 space-y-2"] do
             div_ [class_ "flex items-center gap-2"] do
-              a_ [class_ "hover:underline underline-offset-2", href_ ("/p/" <> dg.projectId.toText <> "/dashboards/" <> dashVM.id.toText)] $
-                strong_ [class_ "font-medium"] (toHtml $ bool "Untitled" dashVM.title (dashVM.title /= ""))
+              a_ [class_ "hover:underline underline-offset-2", href_ ("/p/" <> dg.projectId.toText <> "/dashboards/" <> dashVM.id.toText)]
+                $ strong_ [class_ "font-medium"] (toHtml $ bool "Untitled" dashVM.title (dashVM.title /= ""))
               span_ [class_ "leading-none", term "data-tippy-content" "This dashboard is currently your homepage."] do
                 when (isJust dashVM.homepageSince) $ (faSprite_ "house" "regular" "w-4 h-4")
             div_ [class_ "gap-2 flex items-center"] do
               time_ [class_ "mr-2 text-slate-400", term "data-tippy-content" "Date of dashboard creation", datetime_ $ Utils.formatUTC dashVM.createdAt] $ toHtml $ formatTime defaultTimeLocale "%eth %b %Y" dashVM.createdAt
               forM_ dashVM.tags (span_ [class_ "cbadge-sm badge-neutral cbadge bg-fillWeak"] . toHtml @Text)
           div_ [class_ "flex items-end justify-center gap-5"] do
-            button_ [class_ "leading-none", term "data-tippy-content" "click star this dashboard"] $
-              if isJust dashVM.starredSince
+            button_ [class_ "leading-none", term "data-tippy-content" "click star this dashboard"]
+              $ if isJust dashVM.starredSince
                 then (faSprite_ "star" "solid" "w-5 h-5")
                 else (faSprite_ "star" "regular" "w-5 h-5")
             let widgetCount = maybe "0" (show . length . (.widgets)) dash
@@ -523,9 +562,9 @@ dashboardsGetH pid = do
           , pageTitle = "Dashboards"
           , pageActions = Just $ (label_ [Lucid.for_ "newDashboardMdl", class_ "leading-none rounded-xl shadow p-3 cursor-pointer bg-fillBrand-strong text-white"] "New Dashboard")
           }
-  addRespHeaders $
-    PageCtx bwconf $
-      DashboardsGet{dashboards, projectId = pid}
+  addRespHeaders
+    $ PageCtx bwconf
+    $ DashboardsGet{dashboards, projectId = pid}
 
 
 data DashboardForm = DashboardForm
@@ -542,21 +581,21 @@ dashboardsPostH pid form = do
   did <- Dashboards.DashboardId <$> UUID.genUUID
   let dashM = find (\dashboard -> dashboard.file == Just form.file) dashboardTemplates
   let redirectURI = "/p/" <> pid.toText <> "/dashboards/" <> (did.toText)
-  dbtToEff $
-    DBT.insert @Dashboards.DashboardVM $
-      Dashboards.DashboardVM
-        { id = did
-        , projectId = pid
-        , createdAt = now
-        , updatedAt = now
-        , createdBy = sess.user.id
-        , baseTemplate = if form.file == "" then Nothing else Just form.file
-        , schema = Nothing
-        , starredSince = Nothing
-        , homepageSince = Nothing
-        , tags = V.fromList $ fromMaybe [] $ dashM >>= (.tags)
-        , title = fromMaybe [] $ dashM >>= (.title)
-        }
+  dbtToEff
+    $ DBT.insert @Dashboards.DashboardVM
+    $ Dashboards.DashboardVM
+      { id = did
+      , projectId = pid
+      , createdAt = now
+      , updatedAt = now
+      , createdBy = sess.user.id
+      , baseTemplate = if form.file == "" then Nothing else Just form.file
+      , schema = Nothing
+      , starredSince = Nothing
+      , homepageSince = Nothing
+      , tags = V.fromList $ fromMaybe [] $ dashM >>= (.tags)
+      , title = fromMaybe [] $ dashM >>= (.title)
+      }
   redirectCS redirectURI
   addRespHeaders NoContent
 
@@ -581,8 +620,8 @@ entrypointRedirectGetH baseTemplate title tags pid qparams = do
       q = [sql|select id::text from projects.dashboards where project_id=? and (homepage_since is not null or base_template=?)|]
       newDashboard = do
         did <- Dashboards.DashboardId <$> UUID.genUUID
-        dbtToEff $
-          DBT.insert @Dashboards.DashboardVM
+        dbtToEff
+          $ DBT.insert @Dashboards.DashboardVM
             Dashboards.DashboardVM
               { id = did
               , projectId = pid
@@ -608,6 +647,6 @@ entrypointRedirectGetH baseTemplate title tags pid qparams = do
 -- For example, [("key", Just "value"), ("empty", Nothing)] becomes "key=value&empty".
 toQueryParams :: [(Text, Maybe Text)] -> Text
 toQueryParams qs =
-  TE.decodeUtf8 $
-    URI.renderQuery False $
-      map (\(k, mv) -> (TE.encodeUtf8 k, fmap TE.encodeUtf8 mv)) qs
+  TE.decodeUtf8
+    $ URI.renderQuery False
+    $ map (\(k, mv) -> (TE.encodeUtf8 k, fmap TE.encodeUtf8 mv)) qs

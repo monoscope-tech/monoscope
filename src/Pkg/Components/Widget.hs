@@ -1,4 +1,4 @@
-module Pkg.Components.Widget (Widget (..), WidgetDataset (..), widget_, Layout (..), WidgetType (..), WidgetAxis (..), SummarizeBy (..)) where
+module Pkg.Components.Widget (Widget (..), WidgetDataset (..), widget_, Layout (..), WidgetType (..), WidgetAxis (..), SummarizeBy (..), widgetPostH) where
 
 import Control.Lens
 import Data.Aeson qualified as AE
@@ -15,6 +15,7 @@ import Models.Projects.Projects qualified as Projects
 import NeatInterpolation
 import Pages.Charts.Charts qualified as Charts
 import Relude
+import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
 import Text.Printf (printf)
 import Text.Slugify (slugify)
 import Utils (faSprite_)
@@ -152,6 +153,10 @@ data WidgetAxis = WidgetAxis
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.StripPrefix "w", DAE.CamelToSnake]] WidgetAxis
 
 
+widgetPostH :: Widget -> ATAuthCtx (RespHeaders (Html ()))
+widgetPostH = addRespHeaders . widget_
+
+
 -- use either index or the xxhash as id
 widget_ :: Widget -> Html ()
 widget_ w = widgetHelper_ False w
@@ -168,7 +173,7 @@ widgetHelper_ isChild w = case w.wType of
         whenJust w.icon \icon -> span_ [] $ Utils.faSprite_ icon "regular" "w-4 h-4"
         span_ [class_ "text-sm"] $ toHtml $ maybeToMonoid w.title
     div_ [class_ "grid-stack nested-grid  h-full -m-2"] $ forM_ (fromMaybe [] w.children) (widgetHelper_ True)
-  _ -> gridItem_ $ div_ [class_ $ " w-full h-full " <> paddingBtm] $ renderChart (w & #id .~ (slugify <$> w.title))
+  _ -> gridItem_ $ div_ [class_ $ " w-full h-full " <> paddingBtm] $ renderChart (w & #id %~ maybe (slugify <$> w.title) Just)
   where
     layoutFields = [("x", (.x)), ("y", (.y)), ("w", (.w)), ("h", (.h))]
     attrs = concat [maybe [] (\v -> [term ("gs-" <> name) (show v)]) (w.layout >>= layoutField) | (name, layoutField) <- layoutFields]

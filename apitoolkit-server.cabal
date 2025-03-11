@@ -66,10 +66,6 @@ library
       Pages.ApiSpec
       Pages.AutoComplete
       Pages.BodyWrapper
-      Pages.BodyWrapper_BACKUP_14501
-      Pages.BodyWrapper_BASE_14501
-      Pages.BodyWrapper_LOCAL_14501
-      Pages.BodyWrapper_REMOTE_14501
       Pages.Charts.Charts
       Pages.Components
       Pages.CP
