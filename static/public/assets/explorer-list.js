@@ -207,17 +207,19 @@ export class LogList extends LitElement {
     const s = this.source === 'spans' && rowData.type === 'log' ? 'logs' : this.source
     const [url] = requestDumpLogItemUrlPath(this.projectId, this.source === 'spans' ? rowData.data : rowData, this.colIdxMap, s)
     return html`
-      <tr class="item-row w-full flex items-center cursor-pointer whitespace-nowrap" @click=${event => toggleLogRow(event, url)}>
+      <tr class="item-row flex items-center cursor-pointer whitespace-nowrap" @click=${event => toggleLogRow(event, url)}>
         ${this.logsColumns
           .filter(v => v !== 'latency_breakdown')
           .map(column => {
             const tableDataWidth = getColumnWidth(column)
-            return html`<td class=${column === 'rest' ? 'w-3/4 min-w-0 shrink-1' : tableDataWidth}>
+            return html`<td class=${column === 'rest' ? 'w-[1400px] overflow-x-hidden grow-1' : tableDataWidth}>
               ${logItemCol(rowData, this.source, this.colIdxMap, column, this.serviceColors, this.expandTrace)}
             </td>`
           })}
         ${this.source === 'spans' && this.logsColumns.includes('latency_breakdown')
-          ? html`<td>${logItemCol(rowData, this.source, this.colIdxMap, 'latency_breakdown', this.serviceColors, this.expandTrace)}</td>`
+          ? html`<td class="bg-white sticky right-0">
+              ${logItemCol(rowData, this.source, this.colIdxMap, 'latency_breakdown', this.serviceColors, this.expandTrace)}
+            </td>`
           : nothing}
       </tr>
     `
@@ -315,8 +317,11 @@ export class LogList extends LitElement {
     list.unshift('start')
     list.push('end')
     return html`
-      <div class="relative h-full w-full" id="logs_list_container">
-        <table class="table-auto w-full min-w-full ctable min-h-full flex flex-col table-pin-rows table-pin-cols" style="height:1px; --rounded-box:0;">
+      <div class="relative h-full w-full overlfow-x-hidden" id="logs_list_container">
+        <table
+          class="table-auto w-full min-w-full overflow-x-hidden ctable min-h-full flex flex-col table-pin-rows table-pin-cols"
+          style="height:1px; --rounded-box:0;"
+        >
           <thead class="w-full grow-1 shrink-1">
             <tr class="text-textStrong border-b flex w-full font-medium border-y">
               ${this.logsColumns.filter(v => v !== 'latency_breakdown').map(column => this.logTableHeading(column))}
@@ -325,7 +330,7 @@ export class LogList extends LitElement {
           </thead>
           ${list.length === 1 ? emptyState(this.source, this.logsColumns.length) : nothing}
           <tbody
-            class="w-full flex flex-col min-w-0 grow-1 shrink-1 pb-16  c-scroll h-full relative"
+            class="w-full flex flex-col min-w-0 grow-1 pb-16  c-scroll h-full relative"
             id="log-item-table-body"
             @rangeChanged=${() => {
               this.setupIntersectionObserver()
@@ -417,7 +422,7 @@ function logItemCol(rowData, source, colIdxMap, key, serviceColors, toggleTrace)
         color: serviceColors[lookupVecTextByKey(data, colIdxMap, 'span_name')] || 'black',
       }))
       return html`
-        <div class="w-[200px] flex h-10 ml-auto bg-white justify-end items-center gap-1 text-textWeak">
+        <div class="w-[200px] flex h-10 justify-end items-center gap-1 text-textWeak">
           <div class="w-24 overflow-visible  shrink-0 font-normal">${logItemCol(rowData, source, colIdxMap, 'duration')}</div>
           ${spanLatencyBreakdown({ start: startNs - traceStart, depth: d, duration, traceEnd, color, children: chil })}
         </div>
@@ -462,8 +467,8 @@ function logItemCol(rowData, source, colIdxMap, key, serviceColors, toggleTrace)
       return source == 'logs'
         ? html`${logItemCol(rowData, source, colIdxMap, 'severity_text')} ${logItemCol(rowData, source, colIdxMap, 'body')}`
         : source === 'spans'
-        ? html`<div class="flex w-full items-center  gap-1">
-            <div class="w-full flex items-center overflow-x-hidden overflow-y-visible">
+        ? html`<div class="flex w-full items-center gap-1">
+            <div class="w-full flex items-center">
               ${depth > 1 ? new Array(depth - 1).fill(1).map(() => html`<div class="ml-[15px] border-l w-4 h-5 shrink-0"></div>`) : nothing}
               ${depth > 0
                 ? html`<div class="border-l ml-[15px] w-4 h-5 relative shrink-0">
