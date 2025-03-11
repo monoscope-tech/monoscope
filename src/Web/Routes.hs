@@ -48,6 +48,7 @@ import Pages.Specification.Routes qualified as SpecificationRoutes
 import Pages.Specification.Server qualified as SpecificationRoutes
 import Pages.Telemetry.Routes qualified as TelemetryRoutes
 import Pkg.Components.ItemsList qualified as ItemsList
+import Pkg.Components.Widget qualified as Widget
 import Pkg.RouteUtils
 import Relude
 import Servant
@@ -127,6 +128,7 @@ data CookieProtectedRoutes mode = CookieProtectedRoutes
   , dashboardsGet :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> QPT "file" :> QPT "from" :> QPT "to" :> QPT "since" :> AllQueryParams :> Get '[HTML] (RespHeaders (PageCtx Dashboards.DashboardGet))
   , dashboardsGetList :: mode :- "p" :> ProjectId :> "dashboards" :> Get '[HTML] (RespHeaders (PageCtx Dashboards.DashboardsGet))
   , dashboardsPost :: mode :- "p" :> ProjectId :> "dashboards" :> ReqBody '[FormUrlEncoded] Dashboards.DashboardForm :> Post '[HTML] (RespHeaders NoContent)
+  , dashboardWidgetPut :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> QPT "widget_id" :> ReqBody '[JSON] Widget.Widget :> Put '[HTML] (RespHeaders (Widget.Widget))
   , projects :: mode :- ProjectsRoutes.Routes
   , anomalies :: mode :- "p" :> ProjectId :> "anomalies" :> AnomaliesRoutes.Routes
   , logExplorer :: mode :- "p" :> ProjectId :> LogExplorerRoutes.Routes
@@ -149,6 +151,7 @@ data CookieProtectedRoutes mode = CookieProtectedRoutes
   , manageBillingGet :: mode :- "p" :> ProjectId :> "manage_billing" :> QPT "from" :> Get '[HTML] (RespHeaders LemonSqueezy.BillingGet)
   , endpointListGet :: mode :- "p" :> ProjectId :> "endpoints" :> QPT "page" :> QPT "layout" :> QPT "filter" :> QPT "host" :> QPT "request_type" :> QPT "sort" :> HXRequest :> HXBoosted :> HXCurrentURL :> QPT "load_more" :> QPT "search" :> Get '[HTML] (RespHeaders EndpointList.EndpointRequestStatsVM)
   , apiCatalogGet :: mode :- "p" :> ProjectId :> "api_catalog" :> QPT "sort" :> QPT "since" :> QPT "request_type" :> Get '[HTML] (RespHeaders (PageCtx (ItemsList.ItemsPage ApiCatalog.HostEventsVM)))
+  , widgetPost :: mode :- "widget" :> ReqBody '[JSON] Widget.Widget :> Post '[HTML] (RespHeaders (Html ()))
   }
   deriving stock (Generic)
 
@@ -161,6 +164,7 @@ cookieProtectedServer =
     , dashboardsGet = Dashboards.dashboardGetH
     , dashboardsGetList = Dashboards.dashboardsGetH
     , dashboardsPost = Dashboards.dashboardsPostH
+    , dashboardWidgetPut = Dashboards.dashboardWidgetPutH
     , projects = ProjectsRoutes.server
     , logExplorer = LogExplorerRoutes.server
     , anomalies = AnomaliesRoutes.server
@@ -183,6 +187,7 @@ cookieProtectedServer =
     , manageBillingGet = LemonSqueezy.manageBillingGetH
     , endpointListGet = EndpointList.endpointListGetH
     , apiCatalogGet = ApiCatalog.apiCatalogH
+    , widgetPost = Widget.widgetPostH
     }
 
 

@@ -1,9 +1,10 @@
-module Pages.Dashboards (dashboardGetH, entrypointRedirectGetH, DashboardGet (..), dashboardsGetH, DashboardsGet (..), dashboardsPostH, DashboardForm (..)) where
+module Pages.Dashboards (dashboardGetH, entrypointRedirectGetH, DashboardGet (..), dashboardsGetH, DashboardsGet (..), dashboardsPostH, DashboardForm (..), dashboardWidgetPutH) where
 
 import Control.Lens
 import Data.Aeson qualified as AE
 import Data.Default
 import Data.Effectful.UUID qualified as UUID
+import Data.Effectful.Wreq qualified as Wreq
 import Data.Generics.Labels ()
 import Data.Map qualified as M
 import Data.Text qualified as T
@@ -17,11 +18,12 @@ import Database.PostgreSQL.Entity.Types qualified as DBT
 import Database.PostgreSQL.Simple (Only (Only))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.Types (Query (Query))
-import Effectful.Error.Static (throwError)
-import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
+import Effectful (Eff, (:>))
+import Effectful.Error.Static (Error, throwError)
+import Effectful.PostgreSQL.Transact.Effect (DB, dbtToEff)
 import Effectful.Time qualified as Time
 import Lucid
-import Lucid.Htmx (hxPost_)
+import Lucid.Htmx (hxExt_, hxPost_, hxPut_, hxSwap_, hxTarget_, hxTrigger_, hxVals_)
 import Lucid.Hyperscript (__)
 import Models.Apis.Anomalies qualified as Anomalies
 import Models.Projects.Dashboards qualified as Dashboards
@@ -38,7 +40,7 @@ import Pkg.Components qualified as Components
 import Pkg.Components.Widget qualified as Widget
 import Relude
 import Relude.Unsafe qualified as Unsafe
-import Servant (NoContent (..), err404, errBody)
+import Servant (NoContent (..), ServerError, err404, errBody)
 import Servant.API (Header)
 import Servant.API.ResponseHeaders (Headers, addHeader)
 import System.Types
@@ -163,7 +165,7 @@ dashboardPage_ pid dash = do
     div_ "" -- variables selector area
     div_ [class_ "grid-stack  -m-2 mb-20"] do
       forM_ dash.widgets (\w -> toHtml (w{Widget._projectId = Just pid}))
-      label_ [class_ "grid-stack-item pb-8 cursor-pointer bg-fillBrand-weak border-2 border-strokeBrand-strong border-dashed text-strokeSelected rounded rounded-lg flex flex-col gap-3 items-center justify-center *:!right-0  *:!bottom-0 ", term "gs-w" "3", term "gs-h" "2", Lucid.for_ "global-data-drawer"] do
+      label_ [id_ "add_a_widget_label", class_ "grid-stack-item pb-8 cursor-pointer bg-fillBrand-weak border-2 border-strokeBrand-strong border-dashed text-strokeSelected rounded rounded-lg flex flex-col gap-3 items-center justify-center *:!right-0  *:!bottom-0 ", term "gs-w" "3", term "gs-h" "2", Lucid.for_ "global-data-drawer"] do
         faSprite_ "plus" "regular" "h-8 w-8"
         span_ "Add a widget"
     script_
@@ -275,12 +277,22 @@ processWidget pid now (sinceStr, fromDStr, toDStr) allParams widgetBase = do
       pure $ widget' & #children .~ Just newChildren
 
 
-dashboardGetH :: Projects.ProjectId -> Dashboards.DashboardId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> [(Text, Maybe Text)] -> ATAuthCtx (RespHeaders (PageCtx DashboardGet))
-dashboardGetH pid dashId fileM fromDStr toDStr sinceStr allParams = do
-  (sess, project) <- Sessions.sessionAndProject pid
-  now <- Time.currentTime
-  let (_fromD, _toD, currentRange) = Components.parseTimeRange now (Components.TimePicker sinceStr fromDStr toDStr)
+-- dashboardWdgetPutH adds a widget at the end of
+dashboardWidgetPutH :: Projects.ProjectId -> Dashboards.DashboardId -> Maybe Text -> Widget.Widget -> ATAuthCtx (RespHeaders Widget.Widget)
+dashboardWidgetPutH pid dashId widgetIdM widget = do
+  (_, dash) <- getDashAndVM dashId Nothing
+  uid <- UUID.genUUID >>= pure . UUID.toText
+  let (dash', widget') = case widgetIdM of
+        Just wID -> (dash, widget)
+        Nothing -> do
+          let widgetUpdated = widget{Widget.standalone = Nothing, Widget.naked = Nothing, Widget.id = Just uid}
+          (dash{Dashboards.widgets = dash.widgets <> [widgetUpdated]}, widgetUpdated)
+  _ <- dbtToEff $ DBT.updateFieldsBy @Dashboards.DashboardVM [[DBT.field| schema |]] ([DBT.field| id |], dashId) (Only dash')
+  addRespHeaders $ widget'
 
+
+getDashAndVM :: (DB :> es, Wreq.HTTP :> es, Error ServerError :> es) => Dashboards.DashboardId -> Maybe Text -> Eff es (Dashboards.DashboardVM, Dashboards.Dashboard)
+getDashAndVM dashId fileM = do
   dashVM <-
     (dbtToEff $ DBT.selectById @Dashboards.DashboardVM (Only dashId)) >>= \case
       Just v -> pure v
@@ -290,6 +302,15 @@ dashboardGetH pid dashId fileM fromDStr toDStr sinceStr allParams = do
     Just file -> Dashboards.readDashboardEndpoint file
     Nothing -> pure $ fromMaybe def (loadDashboardFromVM dashVM)
 
+  pure (dashVM, dash)
+
+
+dashboardGetH :: Projects.ProjectId -> Dashboards.DashboardId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> [(Text, Maybe Text)] -> ATAuthCtx (RespHeaders (PageCtx DashboardGet))
+dashboardGetH pid dashId fileM fromDStr toDStr sinceStr allParams = do
+  (sess, project) <- Sessions.sessionAndProject pid
+  now <- Time.currentTime
+  let (_fromD, _toD, currentRange) = Components.parseTimeRange now (Components.TimePicker sinceStr fromDStr toDStr)
+  (_, dash) <- getDashAndVM dashId fileM
   dash' <- forOf (#variables . traverse . traverse) dash (processVariable pid now (sinceStr, fromDStr, toDStr) allParams)
   dash'' <- forOf (#widgets . traverse) dash' (processWidget pid now (sinceStr, fromDStr, toDStr) allParams)
 
@@ -319,7 +340,22 @@ dashboardGetH pid dashId fileM fromDStr toDStr sinceStr allParams = do
 
 
 newWidget_ :: Projects.ProjectId -> Maybe Text -> Html ()
-newWidget_ pid currentRange = div_ [class_ "space-y-8"] do
+newWidget_ pid currentRange = form_ [class_ "space-y-8", hxPut_ "", hxVals_ "js:{...defaultWidgetJSON}", hxExt_ "json-enc", hxSwap_ "beforebegin", hxTarget_ "#add_a_widget_label", hxTrigger_ "submit"] do
+  let defaultWidget =
+        (def :: Widget.Widget)
+          { Widget.wType = Widget.WTTimeseries
+          , Widget.id = Just "newWidget"
+          , Widget.standalone = Just True
+          , Widget.naked = Just True
+          , Widget.title = Just "New Widget"
+          , Widget.hideSubtitle = Just True
+          , Widget.query = Just "timechart count(*)"
+          , Widget.unit = Just "ms"
+          , Widget.hideLegend = Just True
+          , Widget._projectId = Just pid
+          , Widget.layout = Just $ def{Widget.w = Just 3, Widget.h = Just 3}
+          }
+  let defaultWidgetJSON = TE.decodeUtf8 $ fromLazy $ AE.encode defaultWidget
   div_ [class_ "flex justify-between"] do
     div_ [class_ "tabs tabs-boxed tabs-md p-0 tabs-outline items-center border"] do
       a_ [onclick_ "window.setQueryParamAndReload('source', 'requests')", role_ "tab", class_ $ "tab !h-auto  tab-active "] "Edit"
@@ -336,41 +372,38 @@ newWidget_ pid currentRange = div_ [class_ "space-y-8"] do
         ]
         $ faSprite_ "arrows-rotate" "regular" "w-3 h-3"
       span_ [class_ "text-fillDisabled"] "|"
-      button_ [class_ "leading-none rounded-lg px-4 py-2 cursor-pointer btn-primary shadow"] $ "Save changes"
+      button_ [class_ "leading-none rounded-lg px-4 py-2 cursor-pointer btn-primary shadow", type_ "submit"] $ "Save changes"
       label_ [class_ "text-iconNeutral cursor-pointer", data_ "tippy-content" "Close Drawer", Lucid.for_ "global-data-drawer"] $ faSprite_ "xmark" "regular" "w-3 h-3"
-  div_ [class_ "w-full aspect-[4/1] p-3 rounded-lg bg-fillWeaker"] $
-    Widget.widget_ $
-      (def :: Widget.Widget)
-        { Widget.wType = Widget.WTTimeseries
-        , Widget.id = Just "newWidget"
-        , Widget.standalone = Just True
-        , Widget.naked = Just True
-        , Widget.title = Just "New Widget"
-        , Widget.hideSubtitle = Just True
-        , Widget.query = Just "timechart count(*)"
-        , Widget.unit = Just "ms"
-        , Widget.hideLegend = Just True
-        , Widget._projectId = Just pid
-        }
+  div_ [class_ "w-full aspect-[4/1] p-3 rounded-lg bg-fillWeaker"] do
+    script_
+      [class_ "hidden"]
+      [text| var defaultWidgetJSON = ${defaultWidgetJSON} |]
+    div_ [id_ "default-widget-container", class_ "h-full", hxPost_ "/widget", hxTrigger_ "intersect, update-default-widget", hxTarget_ "this", hxSwap_ "innerHTML", hxVals_ "js:{...defaultWidgetJSON}", hxExt_ "json-enc"] ""
   div_ [class_ "space-y-7"] do
     div_ [class_ "flex gap-3"] do
       span_ [class_ "inline-block rounded-full bg-fillWeak p-3"] "1"
       strong_ [class_ "text-lg  font-semibold"] "Select your Visualization"
     div_ [class_ "grid grid-cols-12 gap-3 px-5"] $
-      let visTypes :: [(Text, Text)]
+      let visTypes :: [(Text, Text, Text)]
           visTypes =
-            [ ("duo-line-chart", "Line")
-            , ("bar-chart", "Bar")
-            , ("duo-pie-chart", "Pie")
-            , ("duo-scatter-chart", "Scatter")
-            , ("hashtag", "Number")
-            , ("guage", "Guage")
-            , ("text", "Text")
+            [ ("bar-chart", "Bar", "timeseries")
+            , ("duo-line-chart", "Line", "timeseries_line")
+            , ("duo-pie-chart", "Pie", "pie_chart")
+            , ("duo-scatter-chart", "Scatter", "distribution")
+            , ("hashtag", "Number", "stat")
+            , ("guage", "Guage", "")
+            , ("text", "Text", "")
             ]
-       in forM_ visTypes \(icon, title) ->
-            div_ [class_ "col-span-1 p-4  aspect-square gap-3 flex flex-col border border-strokeWeak rounded-lg items-center justify-center"] do
-              span_ [class_ "block"] $ faSprite_ icon "regular" "w-4 h-4"
-              span_ [class_ "text-textWeak block leading-none"] $ toHtml title
+       in iforM_ visTypes \idx (icon, title, widgetType) ->
+            label_
+              [ class_ "col-span-1 p-4 aspect-square gap-3 flex flex-col border border-strokeWeak rounded-lg items-center justify-center has-[:checked]:border-strokeBrand-strong has-[:checked]:bg-fillBrand-weak"
+              , data_ "widgetType" widgetType
+              , [__| on click set defaultWidgetJSON.type to @data-widgetType then trigger 'update-default-widget' on #default-widget-container |]
+              ]
+              do
+                input_ ([class_ "hidden", name_ "widgetType", type_ "radio"] <> if idx == 0 then [checked_] else [])
+                span_ [class_ "block"] $ faSprite_ icon "regular" "w-4 h-4"
+                span_ [class_ "text-textWeak block leading-none"] $ toHtml title
     div_ [class_ "space-x-8 px-5"] do
       label_ [class_ "space-x-3"] do
         span_ "Style:"
@@ -390,7 +423,13 @@ newWidget_ pid currentRange = div_ [class_ "space-y-8"] do
     div_ [class_ "flex gap-3"] do
       span_ [class_ "inline-block rounded-full bg-fillWeak p-3"] "3"
       strong_ [class_ "text-lg  font-semibold"] "Give your graph a title"
-    div_ [class_ "space-x-8 px-5"] $ input_ [class_ "p-3 border border-strokeWeak w-full rounded-lg bg-transparent", placeholder_ "Throughput"]
+    div_ [class_ "space-x-8 px-5"] $
+      input_
+        [ class_ "p-3 border border-strokeWeak w-full rounded-lg bg-transparent"
+        , placeholder_ "Throughput"
+        , required_ "required"
+        , [__| on change set defaultWidgetJSON.title to my value then trigger 'update-default-widget' on #default-widget-container |]
+        ]
 
 
 --------------------------------------------------------------------
