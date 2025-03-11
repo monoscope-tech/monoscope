@@ -17,6 +17,7 @@ module Models.Telemetry.Telemetry (
   MetricDataPoint (..),
   MetricChartListData (..),
   Summary (..),
+  EventType (..),
   EHBucket (..),
   Quantile (..),
   getDataPointsData,
@@ -36,6 +37,7 @@ module Models.Telemetry.Telemetry (
   SpanEvent (..),
   SpanLink (..),
   convertSpanToRequestMessage,
+  EventRecord (..),
 )
 where
 
@@ -43,6 +45,7 @@ import Data.Aeson qualified as AE
 import Data.Aeson.Key qualified as AEK
 import Data.Aeson.KeyMap qualified as KEM
 import Data.ByteString.Base16 qualified as B16
+import Data.Default (Default (..))
 import Data.Text qualified as T
 import Data.Time (TimeZone (..), UTCTime, formatTime, utcToZonedTime)
 import Data.Time.Format (defaultTimeLocale)
@@ -62,6 +65,7 @@ import Deriving.Aeson qualified as DAE
 import Deriving.Aeson.Stock qualified as DAE
 import Effectful
 import Effectful.PostgreSQL.Transact.Effect (DB, dbtToEff)
+import Models.Apis.RequestDumps (SDKTypes)
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.Projects qualified as Projects
 import NeatInterpolation (text)
@@ -317,6 +321,76 @@ data MetricChartListData = MetricChartListData
   }
   deriving (Show, Generic)
   deriving anyclass (FromRow, ToRow, NFData)
+
+
+data EventType = ETLog | ETSpan
+  deriving (Show, Generic)
+  deriving anyclass (AE.FromJSON, AE.ToJSON, NFData)
+
+
+instance Default EventType where
+  def = ETSpan
+
+
+data EventRecord = EventRecord
+  { id :: Maybe UUID.UUID
+  , projectId :: Projects.ProjectId
+  , timestamp :: UTCTime
+  , traceId :: Text
+  , spanId :: Maybe Text
+  , eventType :: EventType
+  , -- Span fields
+    spanStatus :: Maybe SpanStatus
+  , endTime :: Maybe UTCTime
+  , durationNs :: Integer
+  , spanName :: Text
+  , spanKind :: Maybe SpanKind
+  , parentSpanId :: Maybe Text
+  , traceState :: Text
+  , hasError :: Bool
+  , -- Log fields
+    severityText :: Maybe SeverityLevel
+  , severityNumber :: Int
+  , body :: Maybe AE.Value
+  , -- Request specific fields
+    httpMethod :: Maybe Text
+  , httpUrl :: Maybe Text
+  , httpRoute :: Maybe Text
+  , httpHost :: Maybe Text
+  , httpStatusCode :: Maybe Int
+  , -- Database-specific fields
+    dbSystem :: Maybe Text
+  , dbName :: Maybe Text
+  , dbStatement :: Maybe Text
+  , dbOperation :: Maybe Text
+  , -- RPC-specific fields
+    rpcSystem :: Maybe Text
+  , rpcService :: Maybe Text
+  , rpcMethod :: Maybe Text
+  , -- Middleware data
+    pathParams :: AE.Value
+  , queryParams :: AE.Value
+  , requestBody :: AE.Value
+  , responseBody :: AE.Value
+  , sdkType :: Maybe SDKTypes
+  , serviceVersion :: Maybe Text
+  , errors :: AE.Value
+  , tags :: [Text]
+  , parentId :: Maybe UUID.UUID
+  , -- API Toolkit-specific fields
+    endpointHash :: Text
+  , shapeHash :: Text
+  , formatHashes :: [Text]
+  , fieldHashes :: [Text]
+  , -- Common metadata
+    attributes :: AE.Value
+  , events :: AE.Value
+  , links :: AE.Value
+  , resource :: AE.Value
+  , instrumentationScope :: AE.Value
+  }
+  deriving (Show, Generic)
+  deriving anyclass (AE.FromJSON, AE.ToJSON, Default, NFData)
 
 
 getTraceDetails :: DB :> es => Projects.ProjectId -> Text -> Eff es (Maybe Trace)

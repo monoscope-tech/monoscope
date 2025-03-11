@@ -180,58 +180,72 @@ SELECT manage_updated_at('projects.dashboards');
 
 
 CREATE TABLE IF NOT EXISTS telemetry.events (
-    project_id UUID NOT NULL REFERENCES projects.projects (id) ON DELETE CASCADE,
+    projectId UUID NOT NULL REFERENCES projects.projects (id) ON DELETE CASCADE,
     id UUID NOT NULL DEFAULT gen_random_uuid(),
     timestamp TIMESTAMPTZ NOT NULL DEFAULT current_timestamp,
-    trace_id TEXT NOT NULL,
-    span_id TEXT NOT NULL,
-    parent_span_id TEXT DEFAULT NULL,
-    trace_state TEXT DEFAULT '',
-    start_time TIMESTAMPTZ NOT NULL,
-    end_time TIMESTAMPTZ DEFAULT NULL,
-    duration_ns BIGINT NOT NULL DEFAULT 0,
-    span_name TEXT NOT NULL DEFAULT '',
-    span_kind telemetry.span_kind,
-    span_type TEXT NOT NULL DEFAULT 'span',
+    traceId TEXT NOT NULL,
+    spanId TEXT NOT NULL,
+    eventType TEXT NOT NULL DEFAULT 'span',
 
-    -- Status and severity
+    -- span fields
     status telemetry.span_status DEFAULT NULL,
-    status_code INTEGER DEFAULT 0,
-    status_message TEXT DEFAULT '',
-    severity_text telemetry.severity_level DEFAULT NULL,
-    severity_number INTEGER DEFAULT 0,
+    endTime TIMESTAMPTZ DEFAULT NULL,
+    durationNs BIGINT NOT NULL DEFAULT 0,
+    spanName TEXT NOT NULL DEFAULT '',
+    spanKind telemetry.span_kind,
+    parentSpanId TEXT DEFAULT NULL,
+    traceState TEXT DEFAULT '',
+    hasError BOOLEAN NOT NULL DEFAULT FALSE,
+
+    -- log fields
+    severityText telemetry.severity_level DEFAULT NULL,
+    severityNumber INTEGER DEFAULT 0,
+    body JSONB,
+    bodyTsvector TSVECTOR GENERATED ALWAYS AS (
+      jsonb_to_tsvector('english', body, '["string", "numeric"]')
+    ) STORED,
 
     -- Request specific fields
-    host TEXT NOT NULL DEFAULT '',
-    url_path TEXT NOT NULL DEFAULT '',
-    raw_url TEXT NOT NULL DEFAULT '',
-    method TEXT NOT NULL DEFAULT '',
-    referer TEXT NOT NULL DEFAULT '',
+    httpMethod TEXT,
+    httpUrl TEXT,
+    httpRoute TEXT,
+    httpHost TEXT,
+    httpStatusCode INT,
 
-    -- Request/Response data
-    path_params JSONB NOT NULL DEFAULT '{}'::jsonb,
-    query_params JSONB NOT NULL DEFAULT '{}'::jsonb,
-    request_headers JSONB NOT NULL DEFAULT '{}'::jsonb,
-    response_headers JSONB NOT NULL DEFAULT '{}'::jsonb,
-    request_body JSONB NOT NULL DEFAULT '{}'::jsonb,
-    response_body JSONB NOT NULL DEFAULT '{}'::jsonb,
+    -- middleware data
+    pathParams JSONB NOT NULL DEFAULT '{}'::jsonb,
+    queryParams JSONB NOT NULL DEFAULT '{}'::jsonb,
+    requestBody JSONB NOT NULL DEFAULT '{}'::jsonb,
+    responseBody JSONB NOT NULL DEFAULT '{}'::jsonb,
+    sdkType TEXT NOT NULL DEFAULT '',
+    serviceVersion TEXT DEFAULT NULL,
+    errors JSONB NOT NULL DEFAULT '{}'::jsonb,
+    tags TEXT[] NOT NULL DEFAULT '{}'::text[],
+    parentId TEXT DEFAULT NULL,
 
-    -- API-specific fields
-    endpoint_hash TEXT NOT NULL DEFAULT '',
-    shape_hash TEXT NOT NULL DEFAULT '',
-    format_hashes TEXT[] NOT NULL DEFAULT '{}'::text[],
-    field_hashes TEXT[] NOT NULL DEFAULT '{}'::text[],
-    sdk_type TEXT NOT NULL DEFAULT '',
-    service_version TEXT DEFAULT NULL,
+     -- Database-specific fields
+    dbSystem TEXT,
+    dbName TEXT,
+    dbStatement TEXT,
+    dbOperation TEXT,
+
+    -- RPC-specific fields
+    rpcSystem TEXT,
+    rpcService TEXT,
+    rpcMethod TEXT,
+
+    -- apitoolkit -specific fields
+    endpointHash TEXT NOT NULL DEFAULT '',
+    shapeHash TEXT NOT NULL DEFAULT '',
+    formatHashes TEXT[] NOT NULL DEFAULT '{}'::text[],
+    fieldHashes TEXT[] NOT NULL DEFAULT '{}'::text[],
 
     -- Common metadata
     attributes JSONB NOT NULL DEFAULT '{}'::jsonb,
     events JSONB NOT NULL DEFAULT '{}'::jsonb,
     links JSONB NOT NULL DEFAULT '{}'::jsonb,
     resource JSONB NOT NULL DEFAULT '{}'::jsonb,
-    instrumentation_scope JSONB NOT NULL DEFAULT '{}'::jsonb,
-    errors JSONB NOT NULL DEFAULT '{}'::jsonb,
-    tags TEXT[] NOT NULL DEFAULT '{}'::text[],
+    instrumentationScope JSONB NOT NULL DEFAULT '{}'::jsonb,
 
     PRIMARY KEY (project_id, timestamp, id)
 );

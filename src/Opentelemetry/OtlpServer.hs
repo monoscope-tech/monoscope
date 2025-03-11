@@ -8,6 +8,7 @@ import Data.Aeson.Key qualified as AEK
 import Data.Aeson.KeyMap qualified as KEM
 import Data.ByteString qualified as BS
 import Data.ByteString.Base16 qualified as B16
+import Data.Default (def)
 import Data.HashMap.Strict qualified as HashMap
 import Data.Scientific
 import Data.Text qualified as T
@@ -22,9 +23,11 @@ import Effectful.Reader.Static (ask)
 import Effectful.Reader.Static qualified as Eff
 import Effectful.Time (Time)
 import Log qualified
+import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
+import Models.Projects.Projects qualified as Projecs
 import Models.Projects.Projects qualified as Projects
-import Models.Telemetry.Telemetry (SpanKind (..), SpanStatus (..), convertSpanToRequestMessage)
+import Models.Telemetry.Telemetry (EventRecord (..), EventType (..), SpanKind (..), SpanStatus (..), convertSpanToRequestMessage)
 import Models.Telemetry.Telemetry qualified as Telemetry
 import Network.GRPC.HighLevel.Client as HsGRPC
 import Network.GRPC.HighLevel.Generated as HsGRPC
@@ -74,6 +77,7 @@ import Relude hiding (ask)
 import RequestMessages (RequestMessage (..))
 import System.Config
 import System.Types (runBackground)
+import Utils (b64ToJson, lookupValueText)
 
 
 getSpanAttributeValue :: Text -> V.Vector ResourceSpans -> V.Vector Text
@@ -183,8 +187,8 @@ byteStringToHexText bs = decodeUtf8 (B16.encode bs)
 -- Convert a list of KeyValue to a JSONB object
 keyValueToJSONB :: V.Vector KeyValue -> AE.Value
 keyValueToJSONB kvs =
-  AE.object
-    $ V.foldr (\kv acc -> (AEK.fromText $ toText kv.keyValueKey, convertAnyValue kv.keyValueValue) : acc) [] kvs
+  AE.object $
+    V.foldr (\kv acc -> (AEK.fromText $ toText kv.keyValueKey, convertAnyValue kv.keyValueValue) : acc) [] kvs
 
 
 convertAnyValue :: Maybe AnyValue -> AE.Value
@@ -275,7 +279,7 @@ convertLogRecord pid resource scope lr =
     , traceId = byteStringToHexText lr.logRecordTraceId
     , spanId = if BS.null lr.logRecordSpanId then Nothing else Just (byteStringToHexText lr.logRecordSpanId)
     , severityText = parseSeverityLevel $ toText lr.logRecordSeverityText
-    , severityNumber = fromIntegral $ (either id HsProtobuf.fromProtoEnum . HsProtobuf.enumerated) lr.logRecordSeverityNumber
+    , severityNumber = fromIntegral $ (either Relude.id HsProtobuf.fromProtoEnum . HsProtobuf.enumerated) lr.logRecordSeverityNumber
     , body = convertAnyValue lr.logRecordBody
     , attributes = removeProjectId $ keyValueToJSONB lr.logRecordAttributes
     , resource = removeProjectId $ resourceToJSONB resource
@@ -396,8 +400,8 @@ convertMetricRecord pid resource iscp metric =
                   mtTime = histogram.exponentialHistogramDataPointTimeUnixNano
                   pointNegative =
                     ( \b ->
-                        Just
-                          $ Telemetry.EHBucket
+                        Just $
+                          Telemetry.EHBucket
                             { bucketOffset = fromIntegral $ b.exponentialHistogramDataPoint_BucketsOffset
                             , bucketCounts = fromIntegral <$> b.exponentialHistogramDataPoint_BucketsBucketCounts
                             }
@@ -405,8 +409,8 @@ convertMetricRecord pid resource iscp metric =
                       =<< histogram.exponentialHistogramDataPointNegative
                   pointPositive =
                     ( \b ->
-                        Just
-                          $ Telemetry.EHBucket
+                        Just $
+                          Telemetry.EHBucket
                             { bucketOffset = fromIntegral $ b.exponentialHistogramDataPoint_BucketsOffset
                             , bucketCounts = fromIntegral <$> b.exponentialHistogramDataPoint_BucketsBucketCounts
                             }
@@ -506,6 +510,86 @@ mapHTTPSpan s = do
     _ -> Nothing
 
 
+convertLogRecordToEventRecord :: Telemetry.LogRecord -> Telemetry.EventRecord
+convertLogRecordToEventRecord log =
+  (def :: Telemetry.EventRecord)
+    { projectId = Projects.ProjectId log.projectId
+    , timestamp = log.timestamp
+    , spanId = log.spanId
+    , eventType = Telemetry.ETLog
+    , traceId = log.traceId
+    , attributes = log.attributes
+    , resource = log.resource
+    , instrumentationScope = log.instrumentationScope
+    , body = Just log.body
+    , severityText = log.severityText
+    , severityNumber = log.severityNumber
+    }
+
+
+convertSpandRecordToEventRecord :: Telemetry.SpanRecord -> Telemetry.EventRecord
+convertSpandRecordToEventRecord sp =
+  (def :: Telemetry.EventRecord)
+    { projectId = Projects.ProjectId sp.projectId
+    , timestamp = sp.timestamp
+    , spanId = Just sp.spanId
+    , traceId = sp.traceId
+    , eventType = Telemetry.ETSpan
+    , spanStatus = sp.status
+    , spanName = sp.spanName
+    , spanKind = sp.kind
+    , endTime = sp.endTime
+    , durationNs = sp.spanDurationNs
+    , parentSpanId = sp.parentSpanId
+    , httpStatusCode = readMaybe (maybe "0" (toString) httpStatus)
+    , httpMethod
+    , httpUrl
+    , httpRoute
+    , httpHost
+    , dbName
+    , dbStatement
+    , dbSystem
+    , dbOperation
+    , rpcMethod
+    , rpcSystem
+    , rpcService
+    , sdkType = Just sdkType
+    , errors = errors
+    , queryParams
+    , pathParams
+    , requestBody
+    , responseBody
+    , parentId
+    , id = messageId
+    , links = sp.links
+    , events = sp.events
+    , attributes = sp.attributes
+    , resource = sp.resource
+    , instrumentationScope = sp.instrumentationScope
+    }
+  where
+    httpStatus = lookupValueText sp.attributes "http.status_code"
+    httpMethod = lookupValueText sp.attributes "http.method"
+    httpUrl = lookupValueText sp.attributes "http.url"
+    httpRoute = lookupValueText sp.attributes "http.route"
+    httpHost = lookupValueText sp.attributes "http.host"
+    dbName = lookupValueText sp.attributes "db.name"
+    dbStatement = lookupValueText sp.attributes "db.statement"
+    dbSystem = lookupValueText sp.attributes "db.system"
+    dbOperation = lookupValueText sp.attributes "db.operation"
+    rpcMethod = lookupValueText sp.attributes "rpc.method"
+    rpcSystem = lookupValueText sp.attributes "rpc.system"
+    rpcService = lookupValueText sp.attributes "rpc.service"
+    sdkType = RequestDumps.parseSDKType $ fromMaybe "" $ lookupValueText sp.attributes "apitoolkit.sdk_type"
+    requestBody = b64ToJson $ fromMaybe "{}" $ lookupValueText sp.attributes "http.request.body"
+    responseBody = b64ToJson $ fromMaybe "{}" $ lookupValueText sp.attributes "http.response.body"
+    pathParams = fromMaybe (AE.object []) (AE.decode $ Relude.encodeUtf8 $ fromMaybe "" $ lookupValueText sp.attributes "http.request.path_params")
+    queryParams = fromMaybe (AE.object []) (AE.decode $ Relude.encodeUtf8 $ fromMaybe "" $ lookupValueText sp.attributes "http.request.query_params")
+    errors = fromMaybe (AE.object []) $ AE.decode $ Relude.encodeUtf8 $ fromMaybe "" $ lookupValueText sp.attributes "apitoolkit.errors"
+    messageId = UUID.fromText $ fromMaybe "" $ lookupValueText sp.attributes "apitoolkit.msg_id"
+    parentId = UUID.fromText $ fromMaybe "" $ lookupValueText sp.attributes "apitoolkit.parent_id"
+
+
 -- Convert Protobuf kind to SpanKind
 parseSpanKind :: Either Int32 Span_SpanKind -> Maybe SpanKind
 parseSpanKind spKind = case spKind of
@@ -531,30 +615,30 @@ parseSpanStatus st = case st of
 
 eventsToJSONB :: [Span_Event] -> AE.Value
 eventsToJSONB spans =
-  AE.toJSON
-    $ ( \sp ->
-          AE.object
-            [ "event_name" AE..= toText sp.span_EventName
-            , "event_time" AE..= nanosecondsToUTC sp.span_EventTimeUnixNano
-            , "event_attributes" AE..= keyValueToJSONB sp.span_EventAttributes
-            , "event_dropped_attributes_count" AE..= fromIntegral sp.span_EventDroppedAttributesCount
-            ]
-      )
-    <$> spans
+  AE.toJSON $
+    ( \sp ->
+        AE.object
+          [ "event_name" AE..= toText sp.span_EventName
+          , "event_time" AE..= nanosecondsToUTC sp.span_EventTimeUnixNano
+          , "event_attributes" AE..= keyValueToJSONB sp.span_EventAttributes
+          , "event_dropped_attributes_count" AE..= fromIntegral sp.span_EventDroppedAttributesCount
+          ]
+    )
+      <$> spans
 
 
 linksToJSONB :: [Span_Link] -> AE.Value
 linksToJSONB lnks =
-  AE.toJSON
-    $ lnks
-    <&> \lnk ->
-      AE.object
-        [ "link_span_id" AE..= (decodeUtf8 lnk.span_LinkSpanId :: Text)
-        , "link_trace_id" AE..= (decodeUtf8 lnk.span_LinkTraceId :: Text)
-        , "link_attributes" AE..= keyValueToJSONB lnk.span_LinkAttributes
-        , "link_dropped_attributes_count" AE..= fromIntegral lnk.span_LinkDroppedAttributesCount
-        , "link_flags" AE..= fromIntegral lnk.span_LinkFlags
-        ]
+  AE.toJSON $
+    lnks
+      <&> \lnk ->
+        AE.object
+          [ "link_span_id" AE..= (decodeUtf8 lnk.span_LinkSpanId :: Text)
+          , "link_trace_id" AE..= (decodeUtf8 lnk.span_LinkTraceId :: Text)
+          , "link_attributes" AE..= keyValueToJSONB lnk.span_LinkAttributes
+          , "link_dropped_attributes_count" AE..= fromIntegral lnk.span_LinkDroppedAttributesCount
+          , "link_flags" AE..= fromIntegral lnk.span_LinkFlags
+          ]
 
 
 ---------------------------------------------------------------------------------------

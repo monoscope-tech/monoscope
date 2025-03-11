@@ -10,6 +10,7 @@ module Utils (
   redirect,
   lookupVecByKey,
   parseTime,
+  b64ToJson,
   DBField (..),
   faSprite_,
   lookupVecInt,
@@ -53,6 +54,7 @@ import Data.Aeson qualified as AE
 import Data.Aeson.Key (fromText)
 import Data.Aeson.KeyMap qualified as AEK
 import Data.ByteString qualified as BS
+import Data.ByteString.Base64 qualified as B64
 import Data.ByteString.Lazy qualified as LBS
 import Data.Char (isDigit)
 import Data.Digest.XXHash (xxHash)
@@ -557,3 +559,8 @@ instance AE.ToJSON a => ToHttpApiData (JSONHttpApiData a) where
             TE.decodeUtf8 $ BS.init $ BS.tail bs
       -- Otherwise, keep as is
       bs -> TE.decodeUtf8 bs
+
+
+b64ToJson :: Text -> AE.Value
+b64ToJson b64Text =
+  fromRight (AE.object []) $ AE.eitherDecodeStrict $ fromRight "{}" $ B64.decodeBase64Untyped $ encodeUtf8 b64Text

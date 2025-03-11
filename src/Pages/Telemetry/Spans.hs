@@ -222,10 +222,9 @@ spanBadge val key = do
 
 selectiveReqToJson :: RequestMessage -> AE.Value
 selectiveReqToJson req =
-  AE.object
-    $ concat @[]
-      [ ["created_at" AE..= req.timestamp]
-      , ["errors" AE..= fromMaybe [] req.errors]
+  AE.object $
+    concat @[]
+      [ ["errors" AE..= fromMaybe [] req.errors]
       , ["host" AE..= req.host]
       , ["method" AE..= req.method]
       , ["parent_id" AE..= req.parentId]
@@ -242,8 +241,3 @@ selectiveReqToJson req =
       , ["tags" AE..= req.tags]
       , ["url_path" AE..= req.urlPath]
       ]
-
-
-b64ToJson :: Text -> AE.Value
-b64ToJson b64Text =
-  fromRight (AE.object []) $ AE.eitherDecodeStrict $ fromRight "{}" $ B64.decodeBase64Untyped $ encodeUtf8 b64Text
