@@ -399,14 +399,7 @@ getDataPointsData pid dateRange = dbtToEff $ query Select (Query $ Relude.encode
              ARRAY_AGG(DISTINCT COALESCE(resource->>'service.name', 'unknown'))::text[] AS service_names, '{}'::text[] AS labels
              FROM telemetry.metrics WHERE project_id = ? $dateRangeStr
              GROUP BY metric_name, metric_type, metric_unit, metric_description
-             ORDER BY metric_name;
-getLogsByTraceIds pid traceIds = dbtToEff $ V.fromList <$> DBT.query q (pid, traceIds)
-  where
-    q =
-      [sql|
-      SELECT project_id, id, timestamp, observed_timestamp, trace_id, span_id, severity_text, severity_number, body
-      FROM telemetry.logs WHERE project_id = ? AND trace_id = ANY(?);
-    |]
+             ORDER BY metric_name|]
 
 
 getLogsByTraceIds :: DB :> es => Projects.ProjectId -> V.Vector Text -> Eff es (V.Vector (V.Vector AE.Value))
