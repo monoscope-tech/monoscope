@@ -340,7 +340,7 @@ data EventRecord = EventRecord
   , projectId :: Projects.ProjectId
   , timestamp :: UTCTime
   , traceId :: Text
-  , spanId :: Maybe Text
+  , spanId :: Text
   , eventType :: EventType
   , -- Span fields
     spanStatus :: Maybe SpanStatus

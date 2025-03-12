@@ -520,7 +520,7 @@ convertLogRecordToEventRecord log =
   (def :: Telemetry.EventRecord)
     { projectId = Projects.ProjectId log.projectId
     , timestamp = log.timestamp
-    , spanId = log.spanId
+    , spanId = fromMaybe "" log.spanId
     , eventType = Telemetry.ETLog
     , traceId = log.traceId
     , attributes = log.attributes
@@ -537,7 +537,7 @@ convertSpandRecordToEventRecord sp =
   (def :: Telemetry.EventRecord)
     { projectId = Projects.ProjectId sp.projectId
     , timestamp = sp.timestamp
-    , spanId = Just sp.spanId
+    , spanId = sp.spanId
     , traceId = sp.traceId
     , eventType = Telemetry.ETSpan
     , spanStatus = sp.status
