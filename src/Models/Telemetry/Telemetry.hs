@@ -32,6 +32,7 @@ module Models.Telemetry.Telemetry (
   getMetricLabelValues,
   getValsWithPrefix,
   getSpanAttribute,
+  bulkInsertEvents,
   getMetricServiceNames,
   getChildSpans,
   SpanEvent (..),
@@ -41,11 +42,13 @@ module Models.Telemetry.Telemetry (
 )
 where
 
+import Control.Lens ((.~))
 import Data.Aeson qualified as AE
 import Data.Aeson.Key qualified as AEK
 import Data.Aeson.KeyMap qualified as KEM
 import Data.ByteString.Base16 qualified as B16
 import Data.Default (Default (..))
+import Data.Effectful.Wreq
 import Data.Text qualified as T
 import Data.Time (TimeZone (..), UTCTime, formatTime, utcToZonedTime)
 import Data.Time.Format (defaultTimeLocale)
@@ -473,7 +476,7 @@ getDataPointsData pid dateRange = dbtToEff $ query Select (Query $ Relude.encode
              ARRAY_AGG(DISTINCT COALESCE(resource->>'service.name', 'unknown'))::text[] AS service_names, '{}'::text[] AS labels
              FROM telemetry.metrics WHERE project_id = ? $dateRangeStr
              GROUP BY metric_name, metric_type, metric_unit, metric_description
-             ORDER BY metric_name;
+             ORDER BY metric_name;]
 getLogsByTraceIds pid traceIds = dbtToEff $ V.fromList <$> DBT.query q (pid, traceIds)
   where
     q =
@@ -654,6 +657,14 @@ bulkInsertMetrics metrics = void $ dbtToEff $ executeMany Insert q (V.toList row
       )
 
 
+bulkInsertEvents :: HTTP :> es => V.Vector EventRecord -> Eff es ()
+bulkInsertEvents events = do
+  let messages = AE.toJSON events
+      opts = defaults & header "Content-Type" .~ ["application/json"]
+  response <- postWith opts "https://timefusion.past3.tech/ingest/batch" messages
+  pass
+
+
 convertSpanToRequestMessage :: SpanRecord -> Text -> RequestMessage
 convertSpanToRequestMessage sp instrumentationScope =
   RequestMessage
@@ -669,7 +680,7 @@ convertSpanToRequestMessage sp instrumentationScope =
     , referer = referer
     , requestBody = requestBody
     , requestHeaders = requestHeaders
-    , responseBody = responseBody
+    , responseBody = respBody
     , responseHeaders = responseHeaders
     , statusCode = status
     , sdkType = sdkType
@@ -691,7 +702,7 @@ convertSpanToRequestMessage sp instrumentationScope =
     parentId = UUID.fromText $ fromMaybe "" $ getSpanAttribute "apitoolkit.parent_id" sp.attributes
     referer = Just $ Left (fromMaybe "" $ getSpanAttribute "http.request.headers.referer" sp.attributes) :: Maybe (Either Text [Text])
     requestBody = fromMaybe "{}" $ getSpanAttribute "http.request.body" sp.attributes
-    responseBody = fromMaybe "{}" $ getSpanAttribute "http.response.body" sp.attributes
+    respBody = fromMaybe "{}" $ getSpanAttribute "http.response.body" sp.attributes
     (requestHeaders, responseHeaders) = case sp.attributes of
       AE.Object v -> (getValsWithPrefix "http.request.header." v, getValsWithPrefix "http.response.header." v)
       _ -> (AE.object [], AE.object [])

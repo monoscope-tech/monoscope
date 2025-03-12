@@ -2,6 +2,7 @@ module Opentelemetry.OtlpServerSpec where
 
 import Data.Base64.Types qualified as B64
 import Data.ByteString.Base64 qualified as B64
+import Data.Effectful.Wreq (runHTTPWreq)
 import Data.HashMap.Strict qualified as HashMap
 import Opentelemetry.OtlpMockValues
 import Opentelemetry.OtlpServer qualified as OtlpServer
@@ -19,8 +20,9 @@ spec = aroundAll TestUtils.withSetup do
       let otlpTraceB64A' = B64.decodeBase64 $ B64.assertBase64 @'B64.StdPadded $ encodeUtf8 otlpTraceB64A
       authCtx <- testAuthContext pool
       resp <-
-        TestUtils.runTestBackground authCtx
-          $ OtlpServer.processList [("A", otlpTraceB64A')] (HashMap.fromList [("ce-type", "org.opentelemetry.otlp.traces.v1")])
+        TestUtils.runTestBackground authCtx $
+          runHTTPWreq $
+            OtlpServer.processList [("A", otlpTraceB64A')] (HashMap.fromList [("ce-type", "org.opentelemetry.otlp.traces.v1")])
       pass
 
 --   it "processes trace messages correctly" $ do

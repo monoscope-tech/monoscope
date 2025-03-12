@@ -7,11 +7,13 @@ import Colourista.IO (blueMessage)
 import Control.Concurrent.Async (async, waitAnyCancel)
 import Control.Exception.Safe qualified as Safe
 import Data.Aeson qualified as AE
+import Data.Effectful.Wreq (HTTP, runHTTPWreq)
 import Data.Pool as Pool (destroyAllResources)
 import Data.Text qualified as T
 import Effectful
 import Effectful.Concurrent (runConcurrent)
 import Effectful.Fail (runFailIO)
+import Effectful.Log (runLog)
 import Effectful.Time (runTime)
 import Log qualified
 import Network.Wai.Handler.Warp (
@@ -71,9 +73,10 @@ runServer appLogger env = do
 
   let wrappedServer =
         heartbeatMiddleware
-          -- . loggingMiddleware
-          -- . const
-          $ server
+        -- . loggingMiddleware
+        -- . const
+        $
+          server
   let bgJobWorker = BackgroundJobs.jobsWorkerInit appLogger env
 
   -- let ojStartArgs =
@@ -87,16 +90,16 @@ runServer appLogger env = do
   -- let ojCfg = OJConfig.mkUIConfig ojLogger ojTable poolConn id
   let exceptionLogger = logException env.config.environment appLogger
   asyncs <-
-    liftIO
-      $ sequence
-      $ concat @[]
-        [ [async $ runSettings warpSettings wrappedServer]
-        , -- , [async $ OJCli.defaultWebUI ojStartArgs ojCfg] -- Uncomment or modify as needed
-          [async $ Safe.withException (Queue.pubsubService appLogger env env.config.requestPubsubTopics processMessages) exceptionLogger | env.config.enablePubsubService]
-        , [async $ Safe.withException bgJobWorker exceptionLogger | env.config.enableBackgroundJobs]
-        , [async $ Safe.withException (OtlpServer.runServer appLogger env) exceptionLogger]
-        , [async $ Safe.withException (Queue.pubsubService appLogger env env.config.otlpStreamTopics OtlpServer.processList) exceptionLogger | (not . any T.null) env.config.otlpStreamTopics]
-        ]
+    liftIO $
+      sequence $
+        concat @[]
+          [ [async $ runSettings warpSettings wrappedServer]
+          , -- , [async $ OJCli.defaultWebUI ojStartArgs ojCfg] -- Uncomment or modify as needed
+            [async $ Safe.withException (Queue.pubsubService appLogger env env.config.requestPubsubTopics processMessages) exceptionLogger | env.config.enablePubsubService]
+          , [async $ Safe.withException bgJobWorker exceptionLogger | env.config.enableBackgroundJobs]
+          , [async $ Safe.withException (OtlpServer.runServer appLogger env) exceptionLogger]
+          , [async $ Safe.withException (Queue.pubsubService appLogger env env.config.otlpStreamTopics (\msgs meta -> runHTTPWreq $ OtlpServer.processList msgs meta)) exceptionLogger | (not . any T.null) env.config.otlpStreamTopics]
+          ]
   void $ liftIO $ waitAnyCancel asyncs
 
 

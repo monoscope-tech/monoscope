@@ -9,6 +9,7 @@ import Data.Aeson.KeyMap qualified as KEM
 import Data.ByteString qualified as BS
 import Data.ByteString.Base16 qualified as B16
 import Data.Default (def)
+import Data.Effectful.Wreq (HTTP)
 import Data.HashMap.Strict qualified as HashMap
 import Data.Scientific
 import Data.Text qualified as T
@@ -106,7 +107,7 @@ getMetricAttributeValue attribute rms = listToMaybe $ V.toList $ V.mapMaybe getR
     getAttr = V.find ((== attribute) . toText . keyValueKey) >=> keyValueValue >=> anyValueValue >=> anyValueToString >=> (Just . toText)
 
 
-processList :: (Eff.Reader AuthContext :> es, DB :> es, Log :> es, IOE :> es, Time :> es) => [(Text, ByteString)] -> HashMap Text Text -> Eff es [Text]
+processList :: (Eff.Reader AuthContext :> es, DB :> es, Log :> es, IOE :> es, HTTP :> es, Time :> es) => [(Text, ByteString)] -> HashMap Text Text -> Eff es [Text]
 processList [] _ = pure []
 processList msgs attrs = do
   let msgs' = V.fromList msgs
@@ -122,7 +123,10 @@ processList msgs attrs = do
             let pid = fromMaybe (error "project API Key and project ID not available in trace") $ pidM <|> pid2M
             pure (ackId, join $ V.map (convertToLog pid) logReq)
       let (ackIds, logs) = V.unzip results
-      Telemetry.bulkInsertLogs $ join logs
+          lgs = join logs
+      Telemetry.bulkInsertLogs $ lgs
+      let logEvents = convertLogRecordToEventRecord <$> lgs
+      Telemetry.bulkInsertEvents logEvents
       pure $ V.toList ackIds
     Just "org.opentelemetry.otlp.traces.v1" -> do
       results <-
@@ -139,6 +143,7 @@ processList msgs attrs = do
           apitoolkitSpans = V.map mapHTTPSpan spans
       _ <- ProcessMessage.processRequestMessages $ V.toList $ V.catMaybes apitoolkitSpans <&> ("",)
       Telemetry.bulkInsertSpans spans
+      Telemetry.bulkInsertEvents $ convertSpandRecordToEventRecord <$> spans
       pure $ V.toList ackIds
     Just "org.opentelemetry.otlp.metrics.v1" -> do
       results <-
@@ -474,7 +479,7 @@ traceServiceExportH appLogger appCtx (ServerNormalRequest _meta (ExportTraceServ
     let spanRecords = join $ V.map (convertToSpan [(projectKey, pid)]) req
         apitoolkitSpans = V.map mapHTTPSpan spanRecords
     _ <- ProcessMessage.processRequestMessages $ V.toList $ V.catMaybes apitoolkitSpans <&> ("",)
-    Telemetry.bulkInsertSpans $ V.filter (\s -> s.spanName /= "apitoolkit-http-span") spanRecords
+    Telemetry.bulkInsertSpans spanRecords
   return (ServerNormalResponse (ExportTraceServiceResponse Nothing) mempty StatusOk "")
 
 
