@@ -669,8 +669,10 @@ function emptyState(source, cols) {
 
 function toggleLogRow(event, source) {
   const sideView = document.querySelector('#log_details_container')
+  const resizer = document.querySelector('#resizer')
   if (sideView.style.width === '0px') {
     sideView.style.width = '550px'
+    resizer.classList.remove('hidden')
     updateUrlState('details_width', sideView.style.width)
   }
   const rows = document.querySelectorAll('.item-row.bg-fillBrand-weak')

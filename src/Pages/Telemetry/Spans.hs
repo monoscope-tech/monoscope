@@ -47,7 +47,7 @@ expandedSpanItem pid sp leftM rightM = do
         div_ [class_ "flex gap-4 items-center"] $ do
           dateTime sp.startTime Nothing
           div_ [class_ "flex gap-2 items-center"] do
-            button_ [[__|on click add .hidden to #trace_expanded_view then put '0px' into  #log_details_container.style.width|]] do
+            button_ [[__|on click add .hidden to #trace_expanded_view then put '0px' into  #log_details_container.style.width then add .hidden to #resizer|]] do
               faSprite_ "xmark" "regular" "w-3 h-3 text-textBrand"
 
       div_ [class_ "flex items-center gap-4 text-sm font-medium text-slate-950"] $ do
@@ -222,8 +222,8 @@ spanBadge val key = do
 
 selectiveReqToJson :: RequestMessage -> AE.Value
 selectiveReqToJson req =
-  AE.object
-    $ concat @[]
+  AE.object $
+    concat @[]
       [ ["created_at" AE..= req.timestamp]
       , ["errors" AE..= fromMaybe [] req.errors]
       , ["host" AE..= req.host]
