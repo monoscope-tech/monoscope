@@ -212,7 +212,7 @@ export class LogList extends LitElement {
           .filter(v => v !== 'latency_breakdown')
           .map(column => {
             const tableDataWidth = getColumnWidth(column)
-            return html`<td class=${column === 'rest' ? 'w-[1200px] shrink-1 overflow-x-hidden grow-1' : tableDataWidth}>
+            return html`<td class=${column === 'rest' ? 'w-[1400px] shrink-1 overflow-x-hidden grow-1' : tableDataWidth}>
               ${logItemCol(rowData, this.source, this.colIdxMap, column, this.serviceColors, this.expandTrace)}
             </td>`
           })}
@@ -305,7 +305,7 @@ export class LogList extends LitElement {
       case 'service':
         return this.tableHeadingWrapper('service', column, 'w-[16ch] shrink-0')
       case 'rest':
-        return this.tableHeadingWrapper('summary', column, 'w-[1200px] shrink-1')
+        return this.tableHeadingWrapper('summary', column, 'w-[1400px] shrink-1')
       default:
         return this.tableHeadingWrapper(column, column, 'w-[16ch] shrink-0')
     }

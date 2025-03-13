@@ -559,7 +559,7 @@ apiLogsPage page = do
         --   span_ [class_ "text-slate-200"] "|"
         -- div_ [class_ "divide-y flex flex-col  overflow-hidden"] $ resultTableAndMeta_ page
         div_ [class_ "flex items-start w-full h-full", id_ "logs_section_container"] do
-          div_ [class_ "relative flex items-start w-full shrink-1 h-full", id_ "logs_list_container"] do
+          div_ [class_ "relative flex items-start w-full overlfow-x-hidden h-full", id_ "logs_list_container"] do
             div_ [class_ "absolute top-0 right-0 hidden w-full h-full overflow-scroll c-scroll z-50 bg-white transition-all duration-100", id_ "trace_expanded_view"] pass
             virtualTable page
 
