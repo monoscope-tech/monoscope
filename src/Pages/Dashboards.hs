@@ -169,49 +169,53 @@ console.error(`Error fetching data for ${input.name}:`, e);
       [ class_ "grid-stack  -m-2 "
       , [__|
              on htmx:afterSettle gridStackInstance.makeWidget('.grid-stack .grid-stack-item:last-child')
-                  then set #global-data-drawer.checked to false
+                  then set #page-data-drawer.checked to false
       |]
       ]
       do
         forM_ dash.widgets (\w -> toHtml (w{Widget._projectId = Just pid}))
-        when (null dash.widgets) $ label_ [id_ "add_a_widget_label", class_ "grid-stack-item pb-8 cursor-pointer bg-fillBrand-weak border-2 border-strokeBrand-strong border-dashed text-strokeSelected rounded rounded-lg flex flex-col gap-3 items-center justify-center *:!right-0  *:!bottom-0 ", term "gs-w" "3", term "gs-h" "2", Lucid.for_ "global-data-drawer"] do
+        when (null dash.widgets) $ label_ [id_ "add_a_widget_label", class_ "grid-stack-item pb-8 cursor-pointer bg-fillBrand-weak border-2 border-strokeBrand-strong border-dashed text-strokeSelected rounded rounded-lg flex flex-col gap-3 items-center justify-center *:!right-0  *:!bottom-0 ", term "gs-w" "3", term "gs-h" "2", Lucid.for_ "page-data-drawer"] do
           faSprite_ "plus" "regular" "h-8 w-8"
           span_ "Add a widget"
     let projectId = pid.toText
     let dashboardId = dashId.toText
     script_
       [text|
-// Initialize the main grid.
-var gridStackInstance = GridStack.init({
-  acceptWidgets: true,
-  cellHeight: '5rem',
-  margin: '0.5rem',
-  marginTop: 0,
-  marginLeft: '0.5rem',
-  marginRight: '0.5rem',
-  marginBottom: '2rem',
-  handleClass: 'grid-stack-handle',
-  styleInHead: true
-},document.querySelector('.grid-stack'));
+        // Initialize the main grid.
+        var gridStackInstance = GridStack.init({
+          column: 12,
+          acceptWidgets: true,
+          cellHeight: '5rem',
+          // margin: '0.5rem',
+          marginTop: '0.05rem',
+          marginLeft: '0.5rem',
+          marginRight: '0.5rem',
+          marginBottom: '2rem',
+          handleClass: 'grid-stack-handle',
+          styleInHead: true,
+          staticGrid: false,
+        },document.querySelector('.grid-stack'));
+         // gridStackInstance.compact()
+        gridStackInstance.on('removed change', debounce(updateWidgetOrder('${projectId}', '${dashboardId}'), 200));
 
-// Whenever the main grid changes, update the order.
-gridStackInstance.on('removed change', debounce(updateWidgetOrder('${projectId}', '${dashboardId}'), 200));
-
-// Initialize nested grids and bind change events.
-document.querySelectorAll('.nested-grid').forEach(nestedEl => {
-  const nestedInstance = GridStack.init({
-    acceptWidgets: true,
-    cellHeight: '4.9rem',
-    margin: '0.5rem',
-    marginTop: '0px',
-    marginLeft: '0.5rem',
-    marginRight: '0.5rem',
-    marginBottom: '1rem',
-    handleClass: 'grid-stack-handle',
-    staticGrid: false,
-  }, nestedEl);
-  nestedInstance.on('removed change', debounce(updateWidgetOrder('${projectId}', '${dashboardId}'), 200));
-});
+        // Initialize nested grids and bind change events.
+        document.querySelectorAll('.nested-grid').forEach(nestedEl => {
+          const nestedInstance = GridStack.init({
+            column: 12,
+            acceptWidgets: true,
+            cellHeight: '4.9rem',
+            // margin: '0.5rem',
+            marginTop: '0.01rem',
+            marginLeft: '0.5rem',
+            marginRight: '0.5rem',
+            marginBottom: '1rem',
+            handleClass: 'grid-stack-handle',
+            styleInHead: true,
+            staticGrid: false,
+          }, nestedEl);
+          // nestedInstance.compact()
+          nestedInstance.on('removed change', debounce(updateWidgetOrder('${projectId}', '${dashboardId}'), 200));
+        });
       |]
 
 
@@ -255,7 +259,7 @@ processWidget pid now (sinceStr, fromDStr, toDStr) allParams widgetBase = do
               widget
                 & #html
                   ?~ ( renderText $
-                        div_ [class_ "space-y-4"] $
+                        div_ [class_ "flex flex-col gap-4 h-full w-full overflow-hidden"] $
                           forM_ issuesVM (\x -> div_ [class_ "border border-strokeWeak rounded-2xl overflow-hidden"] $ toHtml x)
                      )
           Widget.WTStat -> do
@@ -411,7 +415,7 @@ dashboardGetH pid dashId fileM fromDStr toDStr sinceStr allParams = do
                 ]
                 $ faSprite_ "arrows-rotate" "regular" "w-3 h-3"
               span_ [class_ "text-fillDisabled"] "|"
-              Components.drawer_ "global-data-drawer" Nothing (Just $ newWidget_ pid currentRange) $ span_ [class_ "text-iconNeutral cursor-pointer", data_ "tippy-content" "Add a new widget"] $ faSprite_ "plus" "regular" "w-3 h-3"
+              Components.drawer_ "page-data-drawer" Nothing (Just $ newWidget_ pid currentRange) $ span_ [class_ "text-iconNeutral cursor-pointer", data_ "tippy-content" "Add a new widget"] $ faSprite_ "plus" "regular" "w-3 h-3"
               label_ [class_ "text-iconNeutral cursor-pointer", data_ "tippy-content" "Menu"] $ faSprite_ "ellipsis" "regular" "w-4 h-4"
           , docsLink = Just "https://apitoolkit.io/docs/dashboard/dashboard-pages/dashboard/"
           }
@@ -466,7 +470,7 @@ newWidget_ pid currentRange = div_ do
         $ faSprite_ "arrows-rotate" "regular" "w-3 h-3"
       span_ [class_ "text-fillDisabled"] "|"
       button_ [class_ "leading-none rounded-lg px-4 py-2 cursor-pointer btn-primary shadow", type_ "submit", form_ "newWidgetForm"] $ "Save changes"
-      label_ [class_ "text-iconNeutral cursor-pointer", data_ "tippy-content" "Close Drawer", Lucid.for_ "global-data-drawer"] $ faSprite_ "xmark" "regular" "w-3 h-3"
+      label_ [class_ "text-iconNeutral cursor-pointer", data_ "tippy-content" "Close Drawer", Lucid.for_ "page-data-drawer"] $ faSprite_ "xmark" "regular" "w-3 h-3"
   div_ [class_ "w-full aspect-[4/1] p-3 rounded-lg bg-fillWeaker"] do
     script_
       [class_ "hidden"]

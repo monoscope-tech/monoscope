@@ -12,7 +12,7 @@ widgets:
 
   - type: group
     title: Overview
-    layout: { x: 0, y: 0, w: 6, h: 5 }
+    layout: { w: 6, h: 5 }
     children:
       - type: 'timeseries_stat'
         title: 'Requests'
@@ -20,7 +20,7 @@ widgets:
         query: timechart count(*)
         unit: reqs
         eager: true
-        layout: { x: 0, y: 0, w: 7, h: 2 }
+        layout: { w: 7, h: 2 }
 
       - type: 'stat'
         title: Errors & anomalies
@@ -28,7 +28,7 @@ widgets:
         sql: select total_anomalies::float from apis.project_request_stats where project_id='{{project_id}}'::uuid
         unit: reqs
         eager: true
-        layout: { x: 7, y: 0, w: 5, h: 2 }
+        layout: { w: 5, h: 2 }
 
       - type: 'stat'
         title: endpoints
@@ -36,7 +36,7 @@ widgets:
         sql: select total_endpoints::float from apis.project_request_stats where project_id='{{project_id}}'::uuid
         unit: reqs
         eager: true
-        layout: { x: 0, y: 2, w: 4, h: 2 }
+        layout: { w: 4, h: 2 }
 
       - type: 'stat'
         title: Req shapes
@@ -44,7 +44,7 @@ widgets:
         sql: select total_shapes::float from apis.project_request_stats where project_id='{{project_id}}'::uuid
         unit: reqs
         eager: true
-        layout: { x: 4, y: 2, w: 4, h: 2 }
+        layout: { w: 4, h: 2 }
 
       - type: 'stat'
         title: Reqs per min
@@ -52,17 +52,17 @@ widgets:
         sql: select requests_per_min::float from apis.project_request_stats where project_id='{{project_id}}'::uuid
         unit: reqs
         eager: true
-        layout: { x: 8, y: 2, w: 4, h: 2 }
+        layout: { w: 4, h: 2 }
 
   - type: 'anomalies'
     title: 'Ongoing issues and monitors'
-    layout: { x: 6, y: 0, w: 6, h: 5 }
+    layout: { w: 6, h: 5 }
 
   - type: 'timeseries'
     title: 'All requests'
     query: timechart count(*) by status_code
     unit: reqs
-    layout: { x: 0, y: 5, w: 6, h: 4 }
+    layout: { w: 6, h: 4 }
 
   - type: 'timeseries_line'
     title: 'Latency percentiles (ms)'
@@ -87,16 +87,16 @@ widgets:
         GROUP BY timeB
       ) s,
       LATERAL unnest(s.values, s.quantiles) AS u(value, quantile);
-    layout: { x: 6, y: 5, w: 6, h: 4 }
+    layout: { w: 6, h: 4 }
 
   - type: 'timeseries'
     title: 'Errors'
     eager: true
     theme: 'roma'
     query: status_code >= 300.0 | timechart count(*) by status_code
-    layout: { x: 0, y: 9, w: 6, h: 4 }
+    layout: { w: 6, h: 4 }
 
   - type: 'timeseries'
     title: 'Requests by Endpoint'
     query: timechart count(*) by method,url_path
-    layout: { x: 6, y: 9, w: 6, h: 4 }
+    layout: { w: 6, h: 4 }
