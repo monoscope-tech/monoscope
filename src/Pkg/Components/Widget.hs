@@ -163,29 +163,30 @@ widget_ w = widgetHelper_ False w
 
 
 widgetHelper_ :: Bool -> Widget -> Html ()
-widgetHelper_ isChild w = case w.wType of
+widgetHelper_ isChild w' = case w.wType of
   WTAnomalies -> gridItem_ $ div_ [class_ $ "h-full " <> paddingBtm] do
     renderWidgetHeader (maybeToMonoid w.id) w.title Nothing Nothing Nothing (Just ("View all", "/p/" <> maybeToMonoid (w._projectId <&> (.toText)) <> "/anomalies")) (w.hideSubtitle == Just True)
     whenJust w.html toHtmlRaw
   WTGroup -> gridItem_ $ div_ [class_ $ "h-full" <> paddingBtm] $ div_ [class_ "flex flex-col gap-4"] do
-    div_ [class_ "leading-none flex justify-between items-center"] do
+    div_ [class_ "leading-none flex justify-between items-center grid-stack-handle"] do
       div_ [class_ "inline-flex gap-3 items-center"] do
         whenJust w.icon \icon -> span_ [] $ Utils.faSprite_ icon "regular" "w-4 h-4"
         span_ [class_ "text-sm"] $ toHtml $ maybeToMonoid w.title
     div_ [class_ "grid-stack nested-grid  h-full -m-2"] $ forM_ (fromMaybe [] w.children) (widgetHelper_ True)
-  _ -> gridItem_ $ div_ [class_ $ " w-full h-full " <> paddingBtm] $ renderChart (w & #id %~ maybe (slugify <$> w.title) Just)
+  _ -> gridItem_ $ div_ [class_ $ " w-full h-full " <> paddingBtm] $ renderChart w
   where
+    w = (w' & #id %~ maybe (slugify <$> w.title) Just)
     layoutFields = [("x", (.x)), ("y", (.y)), ("w", (.w)), ("h", (.h))]
     attrs = concat [maybe [] (\v -> [term ("gs-" <> name) (show v)]) (w.layout >>= layoutField) | (name, layoutField) <- layoutFields]
     paddingBtm = if w.standalone == Just True then "" else (bool "pb-8" "pb-4" isChild)
     gridItem_ =
       if w.naked == Just True
         then Relude.id
-        else (div_ ([class_ "grid-stack-item h-full flex-1"] <> attrs) . div_ [class_ "grid-stack-item-content h-full"])
+        else (div_ ([class_ "grid-stack-item h-full flex-1 ", id_ $ maybeToMonoid w.id <> "_widgetEl"] <> attrs) . div_ [class_ "grid-stack-item-content h-full"])
 
 
 renderWidgetHeader :: Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe (Text, Text) -> Bool -> Html ()
-renderWidgetHeader wId title valueM subValueM expandBtnFn ctaM hideSub = div_ [class_ "leading-none flex justify-between items-center"] do
+renderWidgetHeader wId title valueM subValueM expandBtnFn ctaM hideSub = div_ [class_ "leading-none flex justify-between items-center grid-stack-handle"] do
   div_ [class_ "inline-flex gap-3 items-center"] do
     span_ [class_ "text-sm"] $ toHtml $ maybeToMonoid title
     span_ [class_ $ "bg-fillWeak border border-strokeWeak text-sm font-semibold px-2 py-1 rounded-3xl " <> if (isJust valueM) then "" else "hidden", id_ $ wId <> "Value"]
@@ -214,7 +215,7 @@ renderChart widget = do
   div_ [class_ "gap-0.5 flex flex-col h-full justify-end"] do
     unless (widget.naked == Just True || widget.wType `elem` [WTTimeseriesStat, WTStat])
       $ renderWidgetHeader chartId widget.title valueM rateM widget.expandBtnFn Nothing (widget.hideSubtitle == Just True)
-    div_ [class_ "flex-1 flex"] do
+    div_ [class_ $ "flex-1 flex " <> bool "" "grid-stack-handle" isStat] do
       div_
         [ class_
             $ "h-full w-full flex flex-col justify-end "

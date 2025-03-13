@@ -165,3 +165,59 @@ function formatNumber(num) {
     return parseFloat(num.toFixed(2)).toString()
   }
 }
+
+// Update the widget order on the server.
+const updateWidgetOrder = (projectId, dashboardId) => (e, item) => {
+  const mainContainer = document.querySelector('.grid-stack')
+  const widgetOrder = buildWidgetOrder(mainContainer)
+  fetch(`/p/${projectId}/dashboards/${dashboardId}/widgets_order`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(widgetOrder),
+  })
+    .then(response => {
+      if (!response.ok) {
+        throw new Error(`HTTP error! Status: ${response.status}`)
+      }
+    })
+    .catch(error => console.error('Error updating widget order:', error))
+}
+
+// Recursively build the widget order from a grid container.
+// It looks for direct children with the class "grid-stack-item" and
+// expects their ids to end with "_widgetEl". If an item contains a nested grid
+// (an element with class "nested-grid"), its order is built recursively.
+function buildWidgetOrder(container) {
+  // Use :scope to select only direct children.
+  const items = container.querySelectorAll(':scope > .grid-stack-item')
+  const order = {}
+  items.forEach(el => {
+    if (!el.id || !el.id.endsWith('_widgetEl')) return
+    const widgetId = el.id.slice(0, -'_widgetEl'.length)
+    console.log(el.gridstackNode)
+    const reorderItem = {
+      x: el.gridstackNode.x,
+      y: el.gridstackNode.y,
+      w: el.gridstackNode.w,
+      h: el.gridstackNode.h,
+    }
+    // Check for a nested grid within this grid item.
+    const nestedGridContainer = el.querySelector('.nested-grid')
+    if (nestedGridContainer) {
+      const childOrder = buildWidgetOrder(nestedGridContainer)
+      if (Object.keys(childOrder).length > 0) {
+        reorderItem.children = childOrder
+      }
+    }
+    order[widgetId] = reorderItem
+  })
+  return order
+}
+
+function debounce(func, wait) {
+  let timeout
+  return function (...args) {
+    clearTimeout(timeout)
+    timeout = setTimeout(() => func.apply(this, args), wait)
+  }
+}

@@ -568,6 +568,10 @@ body {
   text-wrap-mode: nowrap !important;
 }
 
+.grid-stack-handle {
+  @apply cursor-move;
+}
+
 .tagify--select::after {
   content: '›' !important;
   color: #000d4d73;
