@@ -54,8 +54,8 @@ keepNonEmpty (Just "") = Nothing
 keepNonEmpty (Just a) = Just a
 
 
-apiLogH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe UTCTime -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders LogsGet)
-apiLogH pid queryM queryASTM cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM queryLibItemTitle queryLibItemID hxRequestM hxBoostedM = do
+apiLogH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe UTCTime -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders LogsGet)
+apiLogH pid queryM queryASTM cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM queryLibItemTitle queryLibItemID detailWM targetEventM hxRequestM hxBoostedM = do
   (sess, project) <- Sessions.sessionAndProject pid
   let source = fromMaybe "requests" sourceM
   let summaryCols = T.splitOn "," (fromMaybe "" cols')
@@ -167,6 +167,8 @@ apiLogH pid queryM queryASTM cols' cursorM' sinceM fromM toM layoutM sourceM tar
               , queryLibSaved
               , fromD
               , toD
+              , detailsWidth = detailWM
+              , targetEvent = targetEventM
               }
       case (layoutM, hxRequestM, hxBoostedM) of
         (Just "SaveQuery", _, _) -> addRespHeaders $ LogsQueryLibrary pid queryLibSaved queryLibRecent
@@ -425,6 +427,8 @@ data ApiLogsPageData = ApiLogsPageData
   , queryLibSaved :: V.Vector Projects.QueryLibItem
   , fromD :: Maybe UTCTime
   , toD :: Maybe UTCTime
+  , detailsWidth :: Maybe Text
+  , targetEvent :: Maybe Text
   }
 
 
@@ -451,7 +455,7 @@ virtualTable page = do
   termRaw
     "log-list"
     [ id_ "resultTable"
-    , class_ "w-full divide-y flex flex-col h-full overflow-y-hidden overflow-x-auto"
+    , class_ "w-full divide-y shrink-1 flex flex-col h-full min-w-0  overflow-x-hidden"
     , term "data-results" (decodeUtf8 $ AE.encode page.requestVecs)
     , term "data-columns" (decodeUtf8 $ AE.encode page.cols)
     , term "data-colIdxMap" (decodeUtf8 $ AE.encode page.colIdxMap)
@@ -550,21 +554,30 @@ apiLogsPage page = do
 
       div_ [class_ "grow flex-1 h-full space-y-1.5 overflow-hidden"] do
         div_ [class_ "flex w-full relative h-full", id_ "logs_section_container"] do
-          div_ [class_ "relative flex shrink-1 min-w-0 w-full overlfow-x-hidden h-full", id_ "logs_list_container"] do
+          let dW = fromMaybe "0px" page.detailsWidth
+          div_ [class_ "relative flex shrink-1 min-w-0 w-full h-full", id_ "logs_list_container"] do
             div_ [class_ "absolute top-0 right-0 hidden w-full h-full overflow-scroll c-scroll z-50 bg-white transition-all duration-100", id_ "trace_expanded_view"] pass
             virtualTable page
 
           div_ [onmousedown_ "mouseDown(event)", class_ "relative shrink-0 h-full flex items-center justify-center w-1 bg-fillWeak  cursor-ew-resize overflow-visible"] do
-            div_ [onmousedown_ "mouseDown(event)", id_ "resizer", class_ "absolute hidden left-1/2 top-1/2 z-[999] -translate-x-1/2  px-1 py-1 -translate-y-1/2 w-max bg-slate-50 rounded border border-strokeBrand-weak grid grid-cols-2 gap-1"] do
-              div_ [class_ "bg-iconNeutral h-[3px] w-[3px] rounded-full"] ""
-              div_ [class_ "bg-iconNeutral h-[3px] w-[3px] rounded-full"] ""
-              div_ [class_ "bg-iconNeutral h-[3px] w-[3px] rounded-full"] ""
-              div_ [class_ "bg-iconNeutral h-[3px] w-[3px] rounded-full"] ""
-              div_ [class_ "bg-iconNeutral h-[3px] w-[3px] rounded-full"] ""
-              div_ [class_ "bg-iconNeutral h-[3px] w-[3px] rounded-full"] ""
+            div_
+              [ onmousedown_ "mouseDown(event)"
+              , id_ "resizer"
+              , class_ $ "absolute left-1/2 top-1/2 z-[999] -translate-x-1/2  px-1 py-1 -translate-y-1/2 w-max bg-slate-50 rounded border border-strokeBrand-weak grid grid-cols-2 gap-1" <> if isJust page.detailsWidth then "" else "hidden"
+              ]
+              do
+                div_ [class_ "bg-iconNeutral h-[3px] w-[3px] rounded-full"] ""
+                div_ [class_ "bg-iconNeutral h-[3px] w-[3px] rounded-full"] ""
+                div_ [class_ "bg-iconNeutral h-[3px] w-[3px] rounded-full"] ""
+                div_ [class_ "bg-iconNeutral h-[3px] w-[3px] rounded-full"] ""
+                div_ [class_ "bg-iconNeutral h-[3px] w-[3px] rounded-full"] ""
+                div_ [class_ "bg-iconNeutral h-[3px] w-[3px] rounded-full"] ""
 
-          div_ [class_ "absolute right-0 grow-1 overflow-y-auto overflow-x-hidden h-full c-scroll transition-all duration-100", style_ "width:0px", id_ "log_details_container"] do
+          div_ [class_ "overflow-y-auto overflow-x-hidden h-full c-scroll transition-all duration-100", style_ $ "width:" <> dW, id_ "log_details_container"] do
             span_ [class_ "htmx-indicator query-indicator absolute loading left-1/2 -translate-x-1/2 loading-dots absoute z-10 top-10", id_ "details_indicator"] ""
+            whenJust page.targetEvent \te -> do
+              let url = "/p/" <> page.pid.toText <> "/log_explorer/" <> te
+              div_ [hxGet_ url, hxTarget_ "#log_details_container", hxSwap_ "innerHtml", hxTrigger_ "intersect one", hxIndicator_ "#details_indicator"] pass
 
           script_
             [text|
@@ -605,9 +618,12 @@ apiLogsPage page = do
             const diff = event.clientX  - mouseState.x
             mouseState = {x: event.clientX}
             const edW = Number(logDetails.style.width.replace('px',''))
-            const ldW = Number(logsListC.style.width.replace('px',''))
-            logsListC.style.width = (ldW + diff) + 'px'
+            let ldW = Number(logsListC.style.width.replace('px',''))
+            if(isNaN(ldW)) {
+                ldW = Number(window.getComputedStyle(logsListC).width.replace('px',''))
+            }
             logDetails.style.width = (edW - diff) + 'px'
+            // logsListC.style.width = (ldW + diff) + 'px'
             updateUrlState('details_width', logDetails.style.width)
           }
           window.addEventListener ('mousemove', handleMouseMove)

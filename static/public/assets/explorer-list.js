@@ -148,7 +148,7 @@ export class LogList extends LitElement {
   renderLoadMore() {
     return this.hasMore
       ? html`<tr class="w-full flex relative">
-          <td colspan=${String(this.logsColumns.length)} class="relative">
+          <td colspan=${String(this.logsColumns.length)} class="relative  pl-[calc(40vw-10ch)]">
             <div class="absolute -top-[500px] w-[1px] h-[500px] left-0 flex flex-col justify-end bg-transparent items-center" id="loader"></div>
             ${this.isLoading
               ? html`<div class="loading loading-dots loading-md"></div>`
@@ -164,7 +164,7 @@ export class LogList extends LitElement {
 
   fetchRecent() {
     return html`<tr class="w-full flex relative">
-      <td colspan=${String(this.logsColumns.length)} class="relative">
+      <td colspan=${String(this.logsColumns.length)} class="relative pl-[calc(40vw-10ch)]">
         ${this.isLiveStreaming
           ? html`<p>Live streaming latest data...</p>`
           : this.isLoadingRecent
@@ -205,9 +205,9 @@ export class LogList extends LitElement {
     if (rowData === 'end') return this.renderLoadMore()
     if (rowData === 'start') return this.fetchRecent()
     const s = this.source === 'spans' && rowData.type === 'log' ? 'logs' : this.source
-    const [url] = requestDumpLogItemUrlPath(this.projectId, this.source === 'spans' ? rowData.data : rowData, this.colIdxMap, s)
+    const targetInfo = requestDumpLogItemUrlPath(this.source === 'spans' ? rowData.data : rowData, this.colIdxMap, s)
     return html`
-      <tr class="item-row flex items-center cursor-pointer whitespace-nowrap" @click=${event => toggleLogRow(event, url)}>
+      <tr class="item-row flex items-center cursor-pointer whitespace-nowrap" @click=${event => toggleLogRow(event, targetInfo, this.projectId)}>
         ${this.logsColumns
           .filter(v => v !== 'latency_breakdown')
           .map(column => {
@@ -237,14 +237,16 @@ export class LogList extends LitElement {
       .then(data => {
         if (!data.error) {
           const { logsData, serviceColors, nextUrl, traceLogs } = data
-          this.logsData = isNewData ? [...logsData, ...this.logsData] : [...this.logsData, ...logsData]
-          this.traceLogs = [...this.traceLogs, ...traceLogs]
-          this.serviceColors = { ...this.serviceColors, ...serviceColors }
-          if (!isNewData) {
-            this.hasMore = logsData.length > 199
-            this.nextFetchUrl = nextUrl
+          if (logsData.length > 0) {
+            this.logsData = isNewData ? [...logsData, ...this.logsData] : [...this.logsData, ...logsData]
+            this.traceLogs = [...this.traceLogs, ...traceLogs]
+            this.serviceColors = { ...this.serviceColors, ...serviceColors }
+            if (!isNewData) {
+              this.hasMore = logsData.length > 199
+              this.nextFetchUrl = nextUrl
+            }
+            this.spanListTree = this.source === 'spans' ? this.buildSpanListTree() : []
           }
-          this.spanListTree = this.source === 'spans' ? this.buildSpanListTree() : []
         } else {
           this.fetchError = data.error
         }
@@ -317,7 +319,7 @@ export class LogList extends LitElement {
     list.unshift('start')
     list.push('end')
     return html`
-      <div class="relative h-full p-0 m-0 shrink-1 w-full bg-white c-scroll pb-12 overflow-y-scroll " id="logs_list_container_inner">
+      <div class="relative h-full shrink-1 min-w-0 p-0 m-0  w-full bg-white c-scroll pb-12 overflow-y-scroll " id="logs_list_container_inner">
         <table class="table-auto w-max relative ctable table-pin-rows table-pin-cols">
           <thead class="z-10 sticky top-0">
             <tr class="text-textStrong border-b flex min-w-0 relative font-medium border-y">
@@ -663,13 +665,13 @@ function emptyState(source, cols) {
   `
 }
 
-function toggleLogRow(event, source) {
+function toggleLogRow(event, targetInfo, pid) {
   const sideView = document.querySelector('#log_details_container')
   const logsView = document.querySelector('#logs_list_container')
   const resizer = document.querySelector('#resizer')
   if (sideView.style.width === '0px') {
     const lW = getComputedStyle(logsView).width.replace('px', '')
-    logsView.style.width = `${lW - 550}px`
+    // logsView.style.width = `${lW - 550}px`
     sideView.style.width = '550px'
     resizer.classList.remove('hidden')
     updateUrlState('details_width', sideView.style.width)
@@ -679,13 +681,16 @@ function toggleLogRow(event, source) {
   event.currentTarget.classList.add('bg-fillBrand-weak')
   const indicator = document.querySelector('#details_indicator')
   indicator.classList.add('htmx-request')
-  htmx.ajax('GET', source, { target: '#log_details_container', swap: 'innerHTML', indicator: '#details_indicator' })
+  const [rdId, rdCreatedAt, source] = targetInfo
+  const url = `/p/${pid}/log_explorer/${rdId}/${rdCreatedAt}/detailed?source=${source}`
+  updateUrlState('target_event', `${rdId}/${rdCreatedAt}/detailed?source=${source}`)
+  htmx.ajax('GET', url, { target: '#log_details_container', swap: 'innerHTML', indicator: '#details_indicator' })
 }
 
-function requestDumpLogItemUrlPath(pid, rd, colIdxMap, source) {
+function requestDumpLogItemUrlPath(rd, colIdxMap, source) {
   const rdId = lookupVecTextByKey(rd, colIdxMap, 'id')
   const rdCreatedAt = lookupVecTextByKey(rd, colIdxMap, 'created_at') || lookupVecTextByKey(rd, colIdxMap, 'timestamp')
-  return [`/p/${pid}/log_explorer/${rdId}/${rdCreatedAt}/detailed?source=${source}`, rdId]
+  return [rdId, rdCreatedAt, source]
 }
 
 function groupSpans(data, logs, colIdxMap, expandedTraces) {
