@@ -244,12 +244,12 @@ export class QueryInputElement extends LitElement {
     const selectionType = this.editContext?.editType || (!this.qs.field ? 'field' : !this.qs.op ? 'op' : 'value')
 
     return html`
-      <div class="query-input absolute z-50 bg-bgBase border rounded font-normal top-10 left-0">
+      <div class="query-input absolute z-50 bg-bgBase border rounded-sm font-normal top-10 left-0">
         <input
           type="text"
           autofocus
           ${ref(el => el?.focus())}
-          class="w-full min-w-56 border-b text-sm outline-none px-2 py-1 ${isValid ? '' : 'text-red-500'}"
+          class="w-full min-w-56 border-b text-sm outline-hidden px-2 py-1 ${isValid ? '' : 'text-red-500'}"
           .value=${this.editContext?.currentValue || this.qs.input || ''}
           @input=${e => this.#updateStateFromInput(e.target.value)}
           @keydown=${this.#handleKey}
@@ -474,7 +474,7 @@ export class FilterElement extends LitElement {
           <div class="relative inline-block">
             ${typeof this.ast[searchASTIdx]?.contents === 'object'
               ? html`<a
-                  class="rounded-lg bg-white inline-flex p-2 items-center shadow-sm cursor-pointer"
+                  class="rounded-lg bg-white inline-flex p-2 items-center shadow-xs cursor-pointer"
                   @click=${() => {
                     this.newQuery = true
                     this.requestUpdate()

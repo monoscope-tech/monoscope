@@ -112,7 +112,7 @@ tracePage p = do
               div_ [class_ "flex items-center gap-2 w-full rounded-xl px-3 grow-1 h-12 border border-slate-200 bg-fillWeaker"] do
                 faSprite_ "magnifying-glass" "regular" "w-4 h-4 text-slate-500"
                 input_
-                  [ class_ "w-full py text-slate-950 bg-transparent hover:outline-none focus:outline-none"
+                  [ class_ "w-full py text-slate-950 bg-transparent hover:outline-hidden focus:outline-hidden"
                   , type_ "text"
                   , placeholder_ "Search"
                   , id_ "search-input"
@@ -160,11 +160,11 @@ tracePage p = do
                         color = getServiceColor s serviceColors
                     div_ [class_ "flex items-center justify-between px-2 py-1"] $ do
                       div_ [class_ "flex gap-1 items-center"] $ do
-                        div_ [class_ $ "w-3 h-3 rounded " <> color] pass
+                        div_ [class_ $ "w-3 h-3 rounded-sm " <> color] pass
                         span_ [class_ ""] $ toHtml s
                       div_ [class_ "flex gap-1 items-center"] $ do
                         span_ [class_ "text-xs max-w-52 truncate"] $ toHtml $ T.take 4 percent <> "%"
-                        div_ [class_ "w-[100px] h-3 bg-gray-200 rounded overflow-hidden"]
+                        div_ [class_ "w-[100px] h-3 bg-gray-200 rounded-sm overflow-hidden"]
                           $ div_ [class_ $ "h-full pl-2 text-xs font-medium " <> color, style_ $ "width:" <> percent <> "%"] pass
 
           div_ [role_ "tabpanel", class_ "a-tab-content pt-2 hidden", id_ "water_fall"] do
@@ -239,7 +239,7 @@ renderSpanRecordRow spanRecords colors service = do
       td_ [class_ "ml-1 px-2 py-1 w-[600px] text-slate-950 truncate flex items-center gap-1 font-medium"] do
         div_ [class_ "w-1 bg-blue-200 h-4"] pass
         faSprite_ "chevron-right" "regular" "h-3 w-3 mr-2 text-gray-500"
-        div_ [class_ $ "w-3 h-3 rounded " <> getServiceColor service colors] pass
+        div_ [class_ $ "w-3 h-3 rounded-sm " <> getServiceColor service colors] pass
         span_ [] $ toHtml service
       td_ [class_ "px-2 py-1 max-w-48 text-slate-500 truncate pl-4"] $ toHtml $ show listLen
       td_ [class_ "px-2 py-1 max-w-48 text-slate-500 truncate pl-4"] $ toHtml $ getDurationNSMS $ duration `div` toInteger listLen
@@ -401,13 +401,13 @@ buildTree_ pid sp trId level scol isLasChild = do
         do
           div_ [class_ "flex items-center w-[95%] gap-1 border-blue-300 rounded-lg overflow-x-hidden waterfall-item", [__|on click remove .border from .waterfall-item then add .border to me|]] do
             when hasChildren $ do
-              div_ [class_ "border border-slate-200 w-7 flex justify-between gap-1 items-center rounded p-0.5"] do
+              div_ [class_ "border border-slate-200 w-7 flex justify-between gap-1 items-center rounded-sm p-0.5"] do
                 faSprite_ "chevron-right" "regular" "h-3 w-3 shrink-0 font-bold text-slate-950 waterfall-item-tree-chevron"
                 span_ [class_ "text-xs"] $ toHtml $ show (length sp.children)
             span_ [class_ "font-medium text-slate-950 "] $ toHtml sp.spanRecord.serviceName
             faSprite_ "chevron-right" "regular" "h-3 w-3 shrink-0 text-slate-950"
             span_ [class_ "text-slate-500 text-sm whitespace-nowrap"] $ toHtml sp.spanRecord.spanName
-          span_ [class_ $ "w-1 rounded h-5 shrink-0 " <> serviceCol] ""
+          span_ [class_ $ "w-1 rounded-sm h-5 shrink-0 " <> serviceCol] ""
       when hasChildren $ do
         div_ [class_ "flex flex-col children_container gap-2 mt-2", id_ $ "waterfall-tree-" <> sp.spanRecord.spanId] do
           forM_ (zip [0 ..] sp.children) \(i, c) -> do

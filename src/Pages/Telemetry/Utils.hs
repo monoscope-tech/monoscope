@@ -185,7 +185,7 @@ buildTree_ pid sp level isLasChild dp = do
         do
           div_ [class_ "flex w-full justify-between items-center overflow-x-hidden"] do
             div_ [class_ "flex items-center overflow-y-hidden", style_ $ "width: calc(40vw - " <> paddingLeft] do
-              when hasChildren $ faSprite_ "chevron-up" "regular" "toggler rotate-90 w-4 border border-slate-200 h-4 shadow-sm rounded px-0.5 z-50 bg-slate-50 mr-1 shrink-0 text-slate-950"
+              when hasChildren $ faSprite_ "chevron-up" "regular" "toggler rotate-90 w-4 border border-slate-200 h-4 shadow-xs rounded-sm px-0.5 z-50 bg-slate-50 mr-1 shrink-0 text-slate-950"
               unless (sp.spanRecord.parent == "___root___") $ span_ [class_ "text-slate-400"] $ toHtml $ sp.spanRecord.parent <> "."
               span_ [class_ "text-slate-900 "] $ toHtml sp.spanRecord.current
               when hasChildren $ span_ [class_ "badge badge-ghost text-xs"] $ toHtml $ show $ length sp.children

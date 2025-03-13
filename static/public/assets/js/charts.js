@@ -178,7 +178,7 @@ function throughputEChartTable(
     tooltip: {
       trigger: "axis",
       axisPointer: {
-        type: "shadow",
+        type: "shadow-sm",
       },
       formatter: fmter,
     },
@@ -436,7 +436,7 @@ function flameGraphChart(data, renderAt, colorsMap) {
 
     const div = elt("div", {
       class: item.itemStyle.color +
-        " absolute hover:z-[999] flex rounded items-center span-filterble cursor-pointer gap-1 flex-nowrap overflow-hidden hover:border hover:border-black",
+        " absolute hover:z-999 flex rounded-sm items-center span-filterble cursor-pointer gap-1 flex-nowrap overflow-hidden hover:border hover:border-black",
       id: item.span_id,
       onclick: (e) => {
         e.stopPropagation();
@@ -631,7 +631,7 @@ function buildTree(span, serviceColors, start, rootVal, containerWidth) {
   const color = serviceColors[span.spanRecord.serviceName] || "bg-black";
   const div = elt("div", {
     class: color +
-      " flex rounded items-center cursor-pointer  h-5 grow-0 justify-between flex-nowrap overflow-x-visible hover:border hover:border-black",
+      " flex rounded-sm items-center cursor-pointer  h-5 grow-0 justify-between flex-nowrap overflow-x-visible hover:border hover:border-black",
     id: "waterfall-chart-" + spanId,
     onclick: (event) => {
       event.stopPropagation();

@@ -354,7 +354,7 @@ createProjectBody sess pid envCfg cp cpe = do
                 "Title"
                 span_ [class_ "text-red-400"] " *"
               input_
-                [ class_ "flex h-9 w-full rounded-lg border border-input bg-transparent px-3 py-1  shadow-sm transition-colors placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                [ class_ "flex h-9 w-full rounded-lg border border-input bg-transparent px-3 py-1  shadow-xs transition-colors placeholder:text-muted-foreground focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring"
                 , type_ "text"
                 , id_ "title"
                 , name_ "title"
@@ -369,7 +369,7 @@ createProjectBody sess pid envCfg cp cpe = do
             div_ [class_ "mt-5 "] do
               label_ [class_ " font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70"] "Description"
               textarea_
-                [ class_ " flex min-h-[60px] w-full rounded-lg border border-input bg-transparent px-3 py-2  shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50 "
+                [ class_ " flex min-h-[60px] w-full rounded-lg border border-input bg-transparent px-3 py-2  shadow-xs placeholder:text-muted-foreground focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50 "
                 , rows_ "4"
                 , placeholder_ "Description"
                 , id_ "description"

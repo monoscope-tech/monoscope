@@ -73,7 +73,7 @@ expandedSpanItem pid sp leftM rightM = do
                     div_ [[__| install Copy(content:.urlPath )|]] do
                       faSprite_ "copy" "regular" "h-8 w-8 border border-slate-300 bg-fillWeaker rounded-full p-2 text-slate-500"
                 (scheme, method, path, status) -> do
-                  -- span_ [class_ " font-medium border rounded px-2 py-1.5"] $ toHtml scheme
+                  -- span_ [class_ " font-medium border rounded-sm px-2 py-1.5"] $ toHtml scheme
                   div_ [class_ "flex items-center"] do
                     span_ [class_ "flex gap-2 items-center text-textStrong bg-fillWeak border border-strokeWeak rounded-lg whitespace-nowrap px-2 py-1"] $ toHtml method
                     span_ [class_ "px-2 py-1.5 max-w-96 truncate"] $ toHtml path

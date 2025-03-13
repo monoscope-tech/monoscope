@@ -79,7 +79,7 @@ drawer_ :: Text -> Maybe Text -> Maybe (Html ()) -> Html () -> Html ()
 drawer_ drawerId urlM content trigger = div_ [class_ "drawer drawer-end inline-block w-auto"] do
   input_ [id_ drawerId, type_ "checkbox", class_ "drawer-toggle", [__|on keyup if the event's key is 'Escape' set my.checked to false trigger keyup |]]
   label_ [Lucid.for_ drawerId, class_ "drawer-button inline-block"] trigger
-  div_ [class_ "drawer-side top-0 left-0 w-full h-full flex z-[10000] overflow-y-scroll "] do
+  div_ [class_ "drawer-side top-0 left-0 w-full h-full flex z-10000 overflow-y-scroll "] do
     label_ [Lucid.for_ drawerId, Aria.label_ "close modal", class_ "w-full drawer-overlay grow flex-1"] ""
     div_ [style_ "width: min(90vw, 1200px)", class_ "bg-bgRaised h-full overflow-y-scroll"] do
       div_
@@ -176,7 +176,7 @@ popularPricing pid lemonUrl isSettings = do
           unless isSettings do
             div_ [class_ "flex-col justify-start items-start gap-6 mt-auto flex", [__|on click halt|]] $ do
               button_
-                [ class_ "btn-primary h-12 rounded w-full font-semibold rounded-lg shadow-[0px_1px_2px_0px_rgba(10,13,18,0.05)] shadow-[inset_0px_-2px_0px_0px_rgba(10,13,18,0.05)] shadow-[inset_0px_0px_0px_1px_rgba(10,13,18,0.18)]"
+                [ class_ "btn-primary h-12 rounded-sm w-full font-semibold rounded-lg shadow-[0px_1px_2px_0px_rgba(10,13,18,0.05)] shadow-[inset_0px_-2px_0px_0px_rgba(10,13,18,0.05)] shadow-[inset_0px_0px_0px_1px_rgba(10,13,18,0.18)]"
                 , term "_" [text|on click call window.payLemon("GraduatedPricing","$lemonUrl") |]
                 , type_ "button"
                 ]
@@ -220,7 +220,7 @@ systemsPricing pid critical isSettings = do
           unless isSettings do
             div_ [class_ "flex-col justify-start items-start gap-6 mt-auto  flex", [__|on click halt|]] $ do
               button_
-                [ class_ "btn-primary h-12 rounded w-full font-semibold rounded-lg shadow-[0px_1px_2px_0px_rgba(10,13,18,0.05)] shadow-[inset_0px_-2px_0px_0px_rgba(10,13,18,0.05)] shadow-[inset_0px_0px_0px_1px_rgba(10,13,18,0.18)]"
+                [ class_ "btn-primary h-12 rounded-sm w-full font-semibold rounded-lg shadow-[0px_1px_2px_0px_rgba(10,13,18,0.05)] shadow-[inset_0px_-2px_0px_0px_rgba(10,13,18,0.05)] shadow-[inset_0px_0px_0px_1px_rgba(10,13,18,0.18)]"
                 , term "_" [text|on click call window.payLemon("SystemsPricing", "$critical") |]
                 , type_ "button"
                 ]

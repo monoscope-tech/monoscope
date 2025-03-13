@@ -336,7 +336,7 @@ reportListItems pid reports nextUrl =
             , hxSwap_ "innerHTML"
             ]
             do
-              div_ [class_ "flex flex-col flex-grow"] do
+              div_ [class_ "flex flex-col grow"] do
                 h4_ [class_ "text-xl font-medium capitalize"] $ toHtml report.reportType <> " Report"
                 span_ [class_ " text-gray-500"] $ toHtml $ formatTime defaultTimeLocale "%a, %b %d %Y" (zonedTimeToLocalTime report.createdAt)
 

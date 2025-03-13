@@ -511,14 +511,14 @@ detailsHeader title method statusCode issue currTime filterV content anBtn = do
         div_ [class_ "flex justify-end"] do
           div_ [class_ "rounded-lg border grid grid-cols-2 w-max h-7 bg-slate-200 overflow-hidden"] do
             a_
-              [ class_ $ "cursor-pointer px-1.5 flex items-center text-xs h-full rounded " <> (if filterV == "24h" then "bg-white" else "")
+              [ class_ $ "cursor-pointer px-1.5 flex items-center text-xs h-full rounded-sm " <> (if filterV == "24h" then "bg-white" else "")
               , hxGet_ $ currentURL' <> "&since=24h"
               , hxTarget_ "#reqsChartsEC"
               , hxSwap_ "innerHTML"
               ]
               "24h"
             a_
-              [ class_ $ "cursor-pointer px-1.5 flex items-center text-xs h-full rounded " <> (if filterV == "14d" then "bg-white" else "")
+              [ class_ $ "cursor-pointer px-1.5 flex items-center text-xs h-full rounded-sm " <> (if filterV == "14d" then "bg-white" else "")
               , hxGet_ $ currentURL' <> "&since=14d"
               , hxTarget_ "#reqsChartsEC"
               , hxSwap_ "innerHTML"

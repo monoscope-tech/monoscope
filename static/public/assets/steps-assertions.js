@@ -29,22 +29,22 @@ const bodyAdditionalOperations = [
 ]
 
 const renderInput = (type, value, onChange, placeholder, className) => html`
-  <input type=${type} placeholder=${placeholder} class="input input-sm input-bordered grow shadow-none ${className}" .value=${value} @input=${onChange} />
+  <input type=${type} placeholder=${placeholder} class="input input-sm grow shadow-none ${className}" .value=${value} @input=${onChange} />
 `
 
 const renderTextarea = (value, onChange, placeholder) => html`
-  <textarea placeholder=${placeholder} class="textarea textarea-sm textarea-bordered h-24 grow shadow-none" .value=${value} @input=${onChange}></textarea>
+  <textarea placeholder=${placeholder} class="textarea textarea-sm h-24 grow shadow-none" .value=${value} @input=${onChange}></textarea>
 `
 
 const renderDropdown = (options, value, onChange, className) => html`
-  <select class="select select-sm select-bordered max-w-xs shadow-none ${className}" .value=${value} @change=${onChange}>
-    ${options.map((option) => html` <option value=${option.value} ?selected=${option.value === value}>${option.label}</option> `)}
+  <select class="select select-sm max-w-xs shadow-none ${className}" .value=${value} @change=${onChange}>
+    ${options.map(option => html` <option value=${option.value} ?selected=${option.value === value}>${option.label}</option> `)}
   </select>
 `
 
 // Main renderInputs function
 function renderInputs(assertion, index, updateAssertion) {
-  const update = (field) => (e) => updateAssertion(index, { [field]: e.target.value })
+  const update = field => e => updateAssertion(index, { [field]: e.target.value })
   const inputs = []
   if (assertion.type === 'responseTime') {
     inputs.push(
@@ -54,14 +54,17 @@ function renderInputs(assertion, index, updateAssertion) {
           { value: 'excludeDNS', label: 'Excluding DNS' },
         ],
         assertion.includeDNS ? 'includeDNS' : 'excludeDNS',
-        (e) => updateAssertion(index, { includeDNS: e.target.value === 'includeDNS' }),
-        'select select-bordered w-48'
-      )
+        e => updateAssertion(index, { includeDNS: e.target.value === 'includeDNS' }),
+        'select w-48',
+      ),
     )
   }
 
   if (assertion.operation === 'jsonpath') {
-    inputs.push(renderInput('text', assertion.jsonpath || '', update('jsonpath'), 'JSON path'), renderDropdown(baseOperations, assertion.subOperation, update('subOperation')))
+    inputs.push(
+      renderInput('text', assertion.jsonpath || '', update('jsonpath'), 'JSON path'),
+      renderDropdown(baseOperations, assertion.subOperation, update('subOperation')),
+    )
     if (assertion.subOperation !== 'isUndefined') {
       inputs.push(renderInput('text', assertion.value || '', update('value'), 'Value'))
     }
@@ -80,7 +83,7 @@ function renderInputs(assertion, index, updateAssertion) {
     inputs.push(
       assertion.type == 'body'
         ? renderTextarea(assertion.value || '', update('value', config.placeholder), 'Body content')
-        : renderInput(config.type, assertion.value || '', update('value'), config.placeholder, config.className)
+        : renderInput(config.type, assertion.value || '', update('value'), config.placeholder, config.className),
     )
   }
 
@@ -96,10 +99,10 @@ function renderAssertionContent(assertion, index, updateAssertion) {
   const inputs = []
 
   if (assertion.type === 'header') {
-    inputs.push(renderInput('text', assertion.headerName || '', (e) => updateAssertion(index, { headerName: e.target.value }), 'Header name', ''))
+    inputs.push(renderInput('text', assertion.headerName || '', e => updateAssertion(index, { headerName: e.target.value }), 'Header name', ''))
   }
 
-  inputs.push(renderDropdown(operationOptions, assertion.operation, (e) => updateAssertion(index, { operation: e.target.value })))
+  inputs.push(renderDropdown(operationOptions, assertion.operation, e => updateAssertion(index, { operation: e.target.value })))
 
   // Additional Inputs based on Operation
   inputs.push(renderInputs(assertion, index, updateAssertion))
@@ -184,15 +187,25 @@ export function renderAssertionBuilder({
                     { value: 'responseTime', label: 'response time' },
                   ],
                   assertion.type,
-                  (e) => updateAssertion(index, { type: e.target.value, operation: undefined, jsonpath: undefined, subOperation: undefined, value: undefined, status: undefined }),
-                  ''
+                  e =>
+                    updateAssertion(index, {
+                      type: e.target.value,
+                      operation: undefined,
+                      jsonpath: undefined,
+                      subOperation: undefined,
+                      value: undefined,
+                      status: undefined,
+                    }),
+                  '',
                 )}
                 ${renderAssertionContent(assertion, index, updateAssertion)}
               </div>
-              <div class="flex-shrink-0">
+              <div class="shrink-0">
                 <div class="flex gap-3 pt-2 items-center">
                   ${passed ? html`<span class="badge badge-success">Passed</span>` : html`<span class="badge badge-error">Failed</span>`}
-                  <a class="cursor-pointer text-slate-600" @click=${removeAssertion(index)}> ${faSprite_('trash', 'regular', 'rounded-full border bg-white shadow p-1 w-5 h-5 stroke-red-500')} </a>
+                  <a class="cursor-pointer text-slate-600" @click=${removeAssertion(index)}>
+                    ${faSprite_('trash', 'regular', 'rounded-full border bg-white shadow-sm p-1 w-5 h-5 stroke-red-500')}
+                  </a>
                 </div>
               </div>
             </div>
@@ -201,10 +214,10 @@ export function renderAssertionBuilder({
         `
       })}
       <button class="flex items-center gap-1 mt-4 text-sm" @click=${addAssertion}>${faSprite_(
-    'plus',
-    'regular',
-    'w-4 h-4  text-textWeak'
-  )} <span class="underline  text-textWeak font-semibold">New assertion<span></button>
+        'plus',
+        'regular',
+        'w-4 h-4  text-textWeak',
+      )} <span class="underline  text-textWeak font-semibold">New assertion<span></button>
     </div>
   `
 }
