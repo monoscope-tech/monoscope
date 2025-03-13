@@ -558,8 +558,8 @@ apiLogsPage page = do
         --     input_ [type_ "checkbox", class_ "toggle-filters hidden", checked_]
         --   span_ [class_ "text-slate-200"] "|"
         -- div_ [class_ "divide-y flex flex-col  overflow-hidden"] $ resultTableAndMeta_ page
-        div_ [class_ "flex items-start h-full", id_ "logs_section_container"] do
-          div_ [class_ "relative flex items-start w-full h-full", id_ "logs_list_container"] do
+        div_ [class_ "flex items-start w-full h-full", id_ "logs_section_container"] do
+          div_ [class_ "relative flex items-start w-full shrink-1 h-full", id_ "logs_list_container"] do
             div_ [class_ "absolute top-0 right-0 hidden w-full h-full overflow-scroll c-scroll z-50 bg-white transition-all duration-100", id_ "trace_expanded_view"] pass
             virtualTable page
 
@@ -572,7 +572,7 @@ apiLogsPage page = do
               div_ [class_ "bg-iconNeutral h-[3px] w-[3px] rounded-full"] ""
               div_ [class_ "bg-iconNeutral h-[3px] w-[3px] rounded-full"] ""
 
-          div_ [class_ "relative shrink-0 flex flex-col overflow-y-auto overflow-x-hidden h-full c-scroll transition-all duration-100", style_ "width:0px", id_ "log_details_container"] do
+          div_ [class_ "relative lex flex-col overflow-y-auto overflow-x-hidden h-full c-scroll transition-all duration-100", style_ "width:0px", id_ "log_details_container"] do
             span_ [class_ "htmx-indicator query-indicator absolute loading left-1/2 -translate-x-1/2 loading-dots absoute z-10 top-10", id_ "details_indicator"] ""
 
           script_
@@ -585,11 +585,13 @@ apiLogsPage page = do
           var logsList = null
           const logDetails = document.querySelector('#log_details_container')
           const container = document.querySelector('#logs_section_container')
+          const logsListC = document.querySelector('#logs_list_container')          
           const containerWidth = Number(window.getComputedStyle(container).width.replace('px',''))
 
           let mouseState = {x: 0}
           let resizeStart = false
           let target = ""
+
 
           function mouseDown(event) {
               resizeStart = true
@@ -607,12 +609,14 @@ apiLogsPage page = do
           function handleMouseMove(event) {
             if(!resizeStart) return
             if(!logsList) {
-             logsList = document.querySelector('#logs_list_container')
+            
             }
             const diff = event.clientX  - mouseState.x
             mouseState = {x: event.clientX}
             const edW = Number(logDetails.style.width.replace('px',''))
+            const ldW = Number(logsListC.style.width.replace('px',''))
             logDetails.style.width = (edW - diff) + 'px'
+            logsListC.style.width = (ldW + diff) + 'px'
             updateUrlState('details_width', logDetails.style.width)
           }
           window.addEventListener ('mousemove', handleMouseMove)

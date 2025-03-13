@@ -111,7 +111,7 @@ export class LogList extends LitElement {
     }
 
     const loader = document.querySelector('#loader')
-    const container = document.querySelector('#logs_list_container')
+    const container = document.querySelector('#logs_list_container_inner')
     if (!loader || !container) {
       setTimeout(() => {
         this.setupIntersectionObserver()
@@ -147,11 +147,11 @@ export class LogList extends LitElement {
 
   renderLoadMore() {
     return this.hasMore
-      ? html`<tr class="w-full flex justify-center relative">
+      ? html`<tr class="w-full flex relative">
           <td colspan=${String(this.logsColumns.length)} class="relative">
             <div class="absolute -top-[500px] w-[1px] h-[500px] left-0 flex flex-col justify-end bg-transparent items-center" id="loader"></div>
             ${this.isLoading
-              ? html`<div class="mx-auto loading loading-dots loading-md"></div>`
+              ? html`<div class="loading loading-dots loading-md"></div>`
               : html`
                   <button class="cursor-pointer text-textBrand underline font-semibold w-max mx-auto" @click=${() => this.fetchData(this.nextFetchUrl)}>
                     Load more
@@ -163,12 +163,12 @@ export class LogList extends LitElement {
   }
 
   fetchRecent() {
-    return html`<tr class="w-full flex justify-center relative">
+    return html`<tr class="w-full flex relative">
       <td colspan=${String(this.logsColumns.length)} class="relative">
         ${this.isLiveStreaming
-          ? html`<p>Live streaming latest data</p>`
+          ? html`<p>Live streaming latest data...</p>`
           : this.isLoadingRecent
-          ? html`<div class="mx-auto loading loading-dots loading-md"></div>`
+          ? html`<div class="loading loading-dots loading-md"></div>`
           : html`
               <button
                 class="cursor-pointer text-textBrand underline font-semibold w-max mx-auto"
@@ -212,7 +212,7 @@ export class LogList extends LitElement {
           .filter(v => v !== 'latency_breakdown')
           .map(column => {
             const tableDataWidth = getColumnWidth(column)
-            return html`<td class=${column === 'rest' ? 'w-[1400px] overflow-x-hidden grow-1' : tableDataWidth}>
+            return html`<td class=${column === 'rest' ? 'w-[1200px] shrink-1 overflow-x-hidden grow-1' : tableDataWidth}>
               ${logItemCol(rowData, this.source, this.colIdxMap, column, this.serviceColors, this.expandTrace)}
             </td>`
           })}
@@ -294,7 +294,7 @@ export class LogList extends LitElement {
       case 'created_at':
         return this.tableHeadingWrapper('timestamp', column, 'w-[16ch] shrink-0')
       case 'latency_breakdown':
-        return this.tableHeadingWrapper('latency', column, 'shrink-0 w-[200px]')
+        return this.tableHeadingWrapper('latency', column, 'sticky right-0 shrink-0 w-[200px]')
       case 'status_code':
         return this.tableHeadingWrapper('status', column, 'shrink-0 w-[12ch]')
       case 'method':
@@ -305,7 +305,7 @@ export class LogList extends LitElement {
       case 'service':
         return this.tableHeadingWrapper('service', column, 'w-[16ch] shrink-0')
       case 'rest':
-        return this.tableHeadingWrapper('summary', column, 'w-3/4 shrink-1')
+        return this.tableHeadingWrapper('summary', column, 'w-[1200px] shrink-1')
       default:
         return this.tableHeadingWrapper(column, column, 'w-[16ch] shrink-0')
     }
@@ -317,24 +317,21 @@ export class LogList extends LitElement {
     list.unshift('start')
     list.push('end')
     return html`
-      <div class="relative h-full w-full overlfow-x-hidden" id="logs_list_container">
-        <table
-          class="table-auto w-full min-w-full overflow-x-hidden ctable min-h-full flex flex-col table-pin-rows table-pin-cols"
-          style="height:1px; --rounded-box:0;"
-        >
-          <thead class="w-full grow-1 shrink-1">
-            <tr class="text-textStrong border-b flex w-full font-medium border-y">
+      <div class="relative h-full p-0 m-0 shrink-1 w-full bg-white c-scroll pb-12 overflow-y-scroll " id="logs_list_container_inner">
+        <table class="table-auto w-max relative ctable table-pin-rows table-pin-cols">
+          <thead class="z-10 sticky top-0">
+            <tr class="text-textStrong border-b flex min-w-0 relative font-medium border-y">
               ${this.logsColumns.filter(v => v !== 'latency_breakdown').map(column => this.logTableHeading(column))}
               ${this.source === 'spans' ? this.logTableHeading('latency_breakdown') : nothing}
             </tr>
           </thead>
           ${list.length === 1 ? emptyState(this.source, this.logsColumns.length) : nothing}
           <tbody
-            class="w-full flex flex-col min-w-0 grow-1 pb-16  c-scroll h-full relative"
+            class="min-w-0"
             id="log-item-table-body"
             @rangeChanged=${() => {
               this.setupIntersectionObserver()
-              const tableBody = document.querySelector('#log-item-table-body')
+              const tableBody = document.querySelector('#logs_list_container_inner')
               if (tableBody && tableBody.scrollTop === 0) {
                 tableBody.scrollTop = 30
               }
@@ -343,7 +340,6 @@ export class LogList extends LitElement {
             ${virtualize({
               items: list,
               renderItem: this.logItemRow,
-              scroller: true,
             })}
           </tbody>
         </table>
@@ -669,8 +665,11 @@ function emptyState(source, cols) {
 
 function toggleLogRow(event, source) {
   const sideView = document.querySelector('#log_details_container')
+  const logsView = document.querySelector('#logs_list_container')
   const resizer = document.querySelector('#resizer')
   if (sideView.style.width === '0px') {
+    const lW = getComputedStyle(logsView).width.replace('px', '')
+    logsView.style.width = `${lW - 550}px`
     sideView.style.width = '550px'
     resizer.classList.remove('hidden')
     updateUrlState('details_width', sideView.style.width)
