@@ -274,9 +274,9 @@ export class LogList extends LitElement {
         <div class="dropdown pl-2" data-tippy-content=${title}>
           <div tabindex="0" role="button" class="py-1">
             ${title}
-            <span class="ml-1 p-0.5 border border-slate-200 rounded inline-flex"> ${faSprite('chevron-down', 'regular', 'w-3 h-3')} </span>
+            <span class="ml-1 p-0.5 border border-slate-200 rounded-sm inline-flex"> ${faSprite('chevron-down', 'regular', 'w-3 h-3')} </span>
           </div>
-          <ul tabindex="0" class="dropdown-content z-[1] menu p-2 shadow bg-bgBase rounded-box min-w-[15rem]">
+          <ul tabindex="0" class="dropdown-content z-1 menu p-2 shadow-sm bg-bgBase rounded-box min-w-[15rem]">
             <li>
               <button @click=${() => this.hideColumn(column)}>Hide column</button>
             </li>
@@ -362,7 +362,7 @@ function logItemCol(rowData, source, colIdxMap, key, serviceColors, toggleTrace)
       let [status, errCount, errClass] = errorClass(false, dataArr, colIdxMap)
       return html`
         <div class="flex items-center justify-between w-3">
-          <span class="col-span-1 h-5 rounded flex"> ${renderIconWithTippy(errClass, `${errCount} errors attached; status ${status}`)} </span>
+          <span class="col-span-1 h-5 rounded-sm flex"> ${renderIconWithTippy(errClass, `${errCount} errors attached; status ${status}`)} </span>
         </div>
       `
     case 'created_at':
@@ -477,14 +477,14 @@ function logItemCol(rowData, source, colIdxMap, key, serviceColors, toggleTrace)
                       e.stopPropagation()
                       if (depth === 0) toggleTrace(traceId)
                     }}
-                    class=${`rounded shrink-0 w-8 px-1 flex justify-center gap-[2px] text-xs items-center h-5 ${errClas}`}
+                    class=${`rounded-sm shrink-0 w-8 px-1 flex justify-center gap-[2px] text-xs items-center h-5 ${errClas}`}
                   >
                     ${depth === 0 ? (expanded ? faSprite('minus', 'regular', 'w-3 h-1 shrink-0') : faSprite('plus', 'regular', 'w-3 h-3 shrink-0')) : nothing}
                     ${children}
                   </button>`
                 : depth === 0
                 ? nothing
-                : html`<div class=${`rounded shrink-0 w-3 h-5 ${errClas}`}></div>`}
+                : html`<div class=${`rounded-sm shrink-0 w-3 h-5 ${errClas}`}></div>`}
               ${type === 'log'
                 ? ['severity_text', 'body'].map(k => logItemCol(rowData, source, { severity_text: 5, body: 6 }, k))
                 : ['http_attributes', 'db_attributes', 'status', 'kind', 'span_name'].map(k => logItemCol(rowData, source, colIdxMap, k))}

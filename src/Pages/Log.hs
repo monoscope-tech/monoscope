@@ -104,17 +104,17 @@ apiLogH pid queryM queryASTM cols' cursorM' sinceM fromM toM layoutM sourceM tar
           , pageTitle = "Explorer"
           , docsLink = Just "https://apitoolkit.io/docs/dashboard/dashboard-pages/openapi-docs/"
           , pageActions = Just $ div_ [class_ "inline-flex gap-2"] do
-              label_ [class_ "cursor-pointer border border-strokeStrong rounded-lg flex shadow"] do
+              label_ [class_ "cursor-pointer border border-strokeStrong rounded-lg flex shadow-sm"] do
                 input_ [type_ "checkbox", id_ "streamLiveData", class_ "hidden"]
                 span_ [class_ "group-has-[#streamLiveData:checked]/pg:flex hidden py-1 px-3 items-center", data_ "tippy-content" "pause live data stream"] $ faSprite_ "pause" "solid" "h-4 w-4"
                 span_ [class_ "group-has-[#streamLiveData:checked]/pg:hidden flex  py-1 px-3 items-center", data_ "tippy-content" "stream live data"] $ faSprite_ "play" "regular" "h-4 w-4"
               Components.timepicker_ (Just "log_explorer_form") currentRange
-              a_ [class_ "cursor-pointer py-1 px-3 border border-strokeStrong rounded-lg shadow", [__|on click htmx.trigger('#log_explorer_form', 'submit') |], data_ "tippy-content" "refresh"] $ faSprite_ "arrows-rotate" "regular" "h-4 w-4"
+              a_ [class_ "cursor-pointer py-1 px-3 border border-strokeStrong rounded-lg shadow-sm", [__|on click htmx.trigger('#log_explorer_form', 'submit') |], data_ "tippy-content" "refresh"] $ faSprite_ "arrows-rotate" "regular" "h-4 w-4"
           , navTabs = Just $ div_ [class_ "tabs tabs-boxed tabs-md p-0 tabs-outline items-center border"] do
-              a_ [onclick_ "window.setQueryParamAndReload('source', 'requests')", role_ "tab", class_ $ "tab !h-auto " <> if source == "requests" then "tab-active  text-textStrong " else ""] "Requests"
-              a_ [onclick_ "window.setQueryParamAndReload('source', 'logs')", role_ "tab", class_ $ "tab !h-auto " <> if source == "logs" then "tab-activetext-textStrong " else ""] "Logs"
-              a_ [onclick_ "window.setQueryParamAndReload('source', 'spans')", role_ "tab", class_ $ "tab !h-auto " <> if source == "spans" then "tab-active" else ""] "Traces"
-              -- a_ [onclick_ "window.setQueryParamAndReload('source', 'metrics')", role_ "tab", class_ $ "tab py-1.5 !h-auto " <> if source == "metrics" then "tab-active" else ""] "Metrics"
+              a_ [onclick_ "window.setQueryParamAndReload('source', 'requests')", role_ "tab", class_ $ "tab h-auto! " <> if source == "requests" then "tab-active  text-textStrong " else ""] "Requests"
+              a_ [onclick_ "window.setQueryParamAndReload('source', 'logs')", role_ "tab", class_ $ "tab h-auto! " <> if source == "logs" then "tab-activetext-textStrong " else ""] "Logs"
+              a_ [onclick_ "window.setQueryParamAndReload('source', 'spans')", role_ "tab", class_ $ "tab h-auto! " <> if source == "spans" then "tab-active" else ""] "Traces"
+              -- a_ [onclick_ "window.setQueryParamAndReload('source', 'metrics')", role_ "tab", class_ $ "tab py-1.5 h-auto! " <> if source == "metrics" then "tab-active" else ""] "Metrics"
           }
   let (days, hours, minutes, _seconds) = convertToDHMS $ diffUTCTime now project.createdAt
       daysLeft =
@@ -269,8 +269,8 @@ logQueryBox_ pid currentRange source targetSpan queryAST queryLibRecent queryLib
     do
       strong_ "Please input a title for your query"
       input_ [type_ "hidden", value_ "", name_ "queryLibId", id_ "queryLibId"]
-      input_ [class_ "input input-bordered input-md", placeholder_ "query title", name_ "queryTitle"]
-      button_ [type_ "submit", class_ "btn cursor-pointer bg-gradient-to-b from-[#067cff] to-[#0850c5] text-white"] "Save"
+      input_ [class_ "input input-md", placeholder_ "query title", name_ "queryTitle"]
+      button_ [type_ "submit", class_ "btn cursor-pointer bg-linear-to-b from-[#067cff] to-[#0850c5] text-white"] "Save"
   form_
     [ hxGet_ $ "/p/" <> pid.toText <> "/log_explorer"
     , hxPushUrl_ "true"
@@ -293,7 +293,7 @@ logQueryBox_ pid currentRange source targetSpan queryAST queryLibRecent queryLib
             div_ [class_ "gap-[2px] flex items-center"] do
               span_ "in"
               select_
-                [ class_ "ml-1 select select-sm select-bordered w-full max-w-[150px]"
+                [ class_ "ml-1 select select-sm w-full max-w-[150px]"
                 , name_ "target-spans"
                 , id_ "spans-toggle"
                 , onchange_ "htmx.trigger('#log_explorer_form', 'submit')"
@@ -304,7 +304,7 @@ logQueryBox_ pid currentRange source targetSpan queryAST queryLibRecent queryLib
                   option_ (value_ "service-entry-spans" : ([selected_ "true" | target == "service-entry-spans"])) "Service Entry Spans"
           div_ [class_ "dropdown dropdown-hover dropdown-bottom dropdown-end"] do
             div_ [class_ "rounded-lg px-3 py-2 text-slate-700 inline-flex items-center border border-strokeStrong", tabindex_ "0", role_ "button"] $ faSprite_ "floppy-disk" "regular" "h-5 w-5"
-            ul_ [tabindex_ "0", class_ "dropdown-content border menu bg-base-100 rounded-box z-[1] w-60 p-2 shadow-lg"] do
+            ul_ [tabindex_ "0", class_ "dropdown-content border menu bg-base-100 rounded-box z-1 w-60 p-2 shadow-lg"] do
               li_ $ label_ [Lucid.for_ "saveQueryMdl"] "Save query to Query Library"
           -- li_ $ a_ [] "Save query as an Alerts"
           -- li_ $ a_ [] "Save result to a dashboard"
@@ -319,9 +319,9 @@ logQueryBox_ pid currentRange source targetSpan queryAST queryLibRecent queryLib
         -- termRaw "filter-element" [id_ "filterElement", class_ "w-full h-full flex items-center", termRaw "ast" queryAST, termRaw "mode" "command"] ("" :: Text)
         div_ [class_ "flex justify-end  gap-2 "] do
           div_ [class_ "py-1 flex flex-row justify-end"] $ label_ [class_ "flex items-center cursor-pointer space-x-2 p-1"] do
-            input_ [type_ "checkbox", class_ "checkbox checkbox-sm rounded toggle-chart"] >> span_ "charts"
-          div_ [class_ "form-control w-max"] $ label_ [class_ "label flex items-center cursor-pointer w-max space-x-2"] do
-            input_ [type_ "checkbox", class_ "checkbox checkbox-sm rounded", id_ "toggleQueryEditor", onclick_ "toggleQueryBuilder()"] >> span_ "query editor"
+            input_ [type_ "checkbox", class_ "checkbox checkbox-sm rounded-sm toggle-chart"] >> span_ "charts"
+          fieldset_ [class_ "fieldset w-max"] $ label_ [class_ "label flex items-center cursor-pointer w-max space-x-2"] do
+            input_ [type_ "checkbox", class_ "checkbox checkbox-sm rounded-sm", id_ "toggleQueryEditor", onclick_ "toggleQueryBuilder()"] >> span_ "query editor"
 
 
 queryLibrary_ :: Projects.ProjectId -> V.Vector Projects.QueryLibItem -> V.Vector Projects.QueryLibItem -> Html ()
@@ -344,7 +344,7 @@ queryLibrary_ pid queryLibSaved queryLibRecent = div_ [class_ "dropdown dropdown
 
     searchBar_ :: Text -> Html ()
     searchBar_ label = div_ [class_ "flex gap-2 sticky top-0 p-3 bg-base-100 z-20"] do
-      label_ [class_ "input input-md input-bordered flex items-center gap-2 flex-1"] do
+      label_ [class_ "input input-md flex items-center gap-2 flex-1"] do
         faSprite_ "magnifying-glass" "regular" "h-4 w-4 opacity-70"
         input_
           [ type_ "text"
@@ -396,7 +396,7 @@ queryLibItem_ qli =
           li_ "Send query to a dashboard"
     strong_ $ whenJust qli.title \title -> (toHtml title)
     pre_ $
-      code_ [class_ "language-js !bg-transparent queryText whitespace-pre-wrap break-words"] $
+      code_ [class_ "language-js bg-transparent! queryText whitespace-pre-wrap break-words"] $
         toHtml qli.queryText
     div_ [class_ "gap-3 flex"] $ time_ [datetime_ "", term "data-tippy-content" "created on"] (toHtml $ displayTimestamp $ formatUTC qli.createdAt) >> when qli.byMe " by me"
 
@@ -529,23 +529,23 @@ apiLogsPage page = do
 
     div_ [class_ "flex h-full gap-3.5 overflow-hidden"] do
       div_ [class_ "w-1/5 shrink-0 flex flex-col gap-2 p-2 hidden  group-has-[.toggle-filters:checked]/pg:hidden "] do
-        input_ [placeholder_ "Search filter", class_ "rounded-lg shadow px-3 py-1 border border-strokeStrong"]
+        input_ [placeholder_ "Search filter", class_ "rounded-lg shadow-sm px-3 py-1 border border-strokeStrong"]
         div_ [class_ "divide-y gap-3"] do
           div_ [class_ "flex flex-col gap-1.5 py-3"] do
             div_ [class_ "flex justify-between items-center text-slate-950 pb-2"] $ span_ "Status" >> faSprite_ "chevron-down" "regular" "w-3 h-3"
             div_ [class_ "flex justify-between items-center"] do
-              div_ [class_ "flex gap-1.5 items-center text-slate-950"] $ input_ [type_ "checkbox", class_ "checkbox "] >> span_ [class_ "bg-green-500 shrink-0 w-1 h-5 rounded"] " " >> span_ [] "200"
+              div_ [class_ "flex gap-1.5 items-center text-slate-950"] $ input_ [type_ "checkbox", class_ "checkbox "] >> span_ [class_ "bg-green-500 shrink-0 w-1 h-5 rounded-sm"] " " >> span_ [] "200"
               span_ "19,833"
             div_ [class_ "flex justify-between items-center"] do
-              div_ [class_ "flex gap-1.5 items-center  text-slate-950"] $ input_ [type_ "checkbox", class_ "checkbox "] >> span_ [class_ "bg-red-600 shrink-0 w-1 h-5 rounded"] " " >> span_ [] "200"
+              div_ [class_ "flex gap-1.5 items-center  text-slate-950"] $ input_ [type_ "checkbox", class_ "checkbox "] >> span_ [class_ "bg-red-600 shrink-0 w-1 h-5 rounded-sm"] " " >> span_ [] "200"
               span_ "121"
           div_ [class_ "flex flex-col gap-1.5 py-3"] do
             div_ [class_ "flex justify-between items-center text-slate-950 pb-2"] $ span_ "Methods" >> faSprite_ "chevron-down" "regular" "w-3 h-3"
             div_ [class_ "flex justify-between"] do
-              div_ [class_ "flex gap-1.5 items-center  text-slate-950"] $ input_ [type_ "checkbox", class_ "checkbox "] >> span_ [class_ "bg-[#067cff] shrink-0 w-1 h-5 rounded"] " " >> span_ [] "GET"
+              div_ [class_ "flex gap-1.5 items-center  text-slate-950"] $ input_ [type_ "checkbox", class_ "checkbox "] >> span_ [class_ "bg-[#067cff] shrink-0 w-1 h-5 rounded-sm"] " " >> span_ [] "GET"
               span_ "8,675"
             div_ [class_ "flex justify-between"] do
-              div_ [class_ "flex gap-1.5 items-center  text-slate-950"] $ input_ [type_ "checkbox", class_ "checkbox "] >> span_ [class_ "text-green-500 shrink-0 w-1 h-5 rounded"] " " >> span_ [] "POST"
+              div_ [class_ "flex gap-1.5 items-center  text-slate-950"] $ input_ [type_ "checkbox", class_ "checkbox "] >> span_ [class_ "text-green-500 shrink-0 w-1 h-5 rounded-sm"] " " >> span_ [] "POST"
               span_ "4,459"
 
       div_ [class_ "grow flex-1 h-full space-y-1.5 overflow-hidden"] do
@@ -555,7 +555,7 @@ apiLogsPage page = do
             virtualTable page
 
           div_ [onmousedown_ "mouseDown(event)", class_ "relative shrink-0 h-full flex items-center justify-center w-1 bg-fillWeak  cursor-ew-resize overflow-visible"] do
-            div_ [onmousedown_ "mouseDown(event)", id_ "resizer", class_ "absolute hidden left-1/2 top-1/2 z-[999] -translate-x-1/2  px-1 py-1 -translate-y-1/2 w-max bg-slate-50 rounded border border-strokeBrand-weak grid grid-cols-2 gap-1"] do
+            div_ [onmousedown_ "mouseDown(event)", id_ "resizer", class_ "absolute hidden left-1/2 top-1/2 z-999 -translate-x-1/2  px-1 py-1 -translate-y-1/2 w-max bg-slate-50 rounded-sm border border-strokeBrand-weak grid grid-cols-2 gap-1"] do
               div_ [class_ "bg-iconNeutral h-[3px] w-[3px] rounded-full"] ""
               div_ [class_ "bg-iconNeutral h-[3px] w-[3px] rounded-full"] ""
               div_ [class_ "bg-iconNeutral h-[3px] w-[3px] rounded-full"] ""
@@ -664,7 +664,7 @@ isLogEvent cols = all @[] (`elem` cols) ["id", "created_at"] || all @[] (`elem` 
 jsonTreeAuxillaryCode :: Projects.ProjectId -> Text -> Html ()
 jsonTreeAuxillaryCode pid queryAST = do
   template_ [id_ "log-item-context-menu-tmpl"] do
-    div_ [id_ "log-item-context-menu", class_ "log-item-context-menu  origin-top-right absolute left-0 mt-2 w-56 rounded-md shadow-md shadow-slate-300 bg-bgBase ring-1 ring-black ring-opacity-5 divide-y divide-gray-100 focus:outline-none z-10", role_ "menu", tabindex_ "-1"] do
+    div_ [id_ "log-item-context-menu", class_ "log-item-context-menu  origin-top-right absolute left-0 mt-2 w-56 rounded-md shadow-md shadow-slate-300 bg-bgBase ring-1 ring-black ring-opacity-5 divide-y divide-gray-100 focus:outline-hidden z-10", role_ "menu", tabindex_ "-1"] do
       div_ [class_ "py-1", role_ "none"] do
         a_
           [ class_ "cursor-pointer text-slate-700 block px-4 py-1  hover:bg-gray-100 hover:text-slate-900"

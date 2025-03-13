@@ -49,14 +49,14 @@ export class StepsEditor extends LitElement {
       this.requestUpdate()
     }
 
-    window.updateCollectionResults = (results) => {
+    window.updateCollectionResults = results => {
       if (results && Array.isArray(results)) {
         this.collectionResults = results
       }
       this.requestUpdate()
     }
 
-    window.updateStepsWithErrors = (errors) => {
+    window.updateStepsWithErrors = errors => {
       if (errors && Array.isArray(errors)) {
         this.saveErrors = errors
       }
@@ -165,7 +165,7 @@ export class StepsEditor extends LitElement {
     let closestItem = null
     let smallestDistance = Number.MAX_SAFE_INTEGER
 
-    items.forEach((item) => {
+    items.forEach(item => {
       const box = item.getBoundingClientRect()
       const midpoint = box.top + box.height / 2
       const distance = Math.abs(event.clientY - midpoint)
@@ -175,7 +175,7 @@ export class StepsEditor extends LitElement {
       }
     })
 
-    items.forEach((item) => {
+    items.forEach(item => {
       if (item === closestItem) {
         item.classList.add('active-drop-target')
       } else {
@@ -225,7 +225,7 @@ export class StepsEditor extends LitElement {
     e.preventDefault()
     this.isSendingRequest = true
     makeRequestAndProcessResponse(this.collectionSteps[idx])
-      .then((resp) => {
+      .then(resp => {
         this.isSendingRequest = false
         const stepResult = this.collectionResults[idx]
         if (stepResult) {
@@ -236,7 +236,7 @@ export class StepsEditor extends LitElement {
 
         this.requestUpdate()
       })
-      .catch((err) => {
+      .catch(err => {
         this.isSendingRequest = false
         this.requestUpdate()
       })
@@ -245,7 +245,7 @@ export class StepsEditor extends LitElement {
   renderCollectionStep(stepData, idx, result, saveError) {
     const stepResult = this.collectionResults[idx]
     const hasResults = !!result
-    const hasFailingAssertions = result?.assert_results?.some((a) => !a.ok || a.ok === false) || false
+    const hasFailingAssertions = result?.assert_results?.some(a => !a.ok || a.ok === false) || false
     const svErr = saveError !== undefined
     const failed = !stepData.disabled && (hasFailingAssertions || svErr)
     const passed = !stepData.disabled && hasResults && !hasFailingAssertions && !svErr
@@ -259,7 +259,7 @@ export class StepsEditor extends LitElement {
       timeout: stepData.timeout !== 60 ? 1 : 0,
     }
     const activeTab = this.collectionSteps[idx].activeTab || 'request-options'
-    const setActiveTab = (tab) => {
+    const setActiveTab = tab => {
       this.collectionSteps[idx].activeTab = tab
       this.requestUpdate()
     }
@@ -273,20 +273,20 @@ export class StepsEditor extends LitElement {
         <div class="flex flex-row items-center">
           <div class="h-full shrink p-3 cursor-move"
             draggable="true"
-            @dragstart="${(e) => e.dataTransfer.setData('text/plain', e.target.dataset.index)}"
+            @dragstart="${e => e.dataTransfer.setData('text/plain', e.target.dataset.index)}"
           >${faSprite_('grip-dots-vertical', 'solid', 'h-4 w-4')}</div>
           <div class="flex-1 flex flex-row items-center gap-1 pr-5 py-3" @click="${() => this.toggleExpanded(idx)}">
             <label
              for="stepState-${idx}" class="flex items-center whitespace-nowrap gap-1 py-1 w-max text-xs bg-fillStrong badge text-textInverse-strong">Step ${idx + 1}</label>
-            <div class="w-full space-y-1 shrink" @click="${(e) => e.stopPropagation()}">
+            <div class="w-full space-y-1 shrink" @click="${e => e.stopPropagation()}">
               <input
-              class="text-lg w-full pl-2 bg-transparent outline-none focus:outline-none" placeholder="Give your step a name*"
-               .value="${stepData.title || ''}" id="title-${idx}" @change=${(e) => this.updateValue(e, idx, null, null, 'title')} />
+              class="text-lg w-full pl-2 bg-transparent outline-hidden focus:outline-hidden" placeholder="Give your step a name*"
+               .value="${stepData.title || ''}" id="title-${idx}" @change=${e => this.updateValue(e, idx, null, null, 'title')} />
             </div>
             <div class="items-center w-max shrink-0 gap-3 text-xs text-slate-600 flex">
                 <input
-                  @click="${(e) => e.stopPropagation()}"
-                  @change="${(e) => {
+                  @click="${e => e.stopPropagation()}"
+                  @change="${e => {
                     this.collectionSteps[idx].disabled = !e.target.checked
                     this.requestUpdate()
                   }}"
@@ -294,7 +294,7 @@ export class StepsEditor extends LitElement {
                   type="checkbox"
                   class="toggle toggle-sm  ${stepData.disabled ? 'border-red-500 bg-white [--tglbg:#ef4444]' : 'border-green-500 bg-white [--tglbg:#22c55e]'}"
                    />
-                <button class="text-red-700 cursor-pointer" @click="${(e) => {
+                <button class="text-red-700 cursor-pointer" @click="${e => {
                   e.preventDefault()
                   e.stopPropagation()
                   this.collectionSteps = this.collectionSteps.filter((_, i) => i != idx)
@@ -316,16 +316,16 @@ export class StepsEditor extends LitElement {
                 <div class="text-sm text-slate-700"><div>URL<span class="text-error">*</span></div></div>
                 <div class="relative flex flex-row gap-2 items-center">
                   <label for="actions-list-input-${idx}" class="w-28 shrink text-sm font-medium form-control">
-                    <select id="actions-list-input-${idx}" class="select select-sm select-bordered shadow-none w-full" @change=${(e) => this.updateValue(e, idx, null, null, '_method')}>
-                      ${validMethods.map((methodItem) => html`<option ?selected=${methodItem == stepData._method}>${methodItem}</option>`)}
+                    <select id="actions-list-input-${idx}" class="select select-sm shadow-none w-full" @change=${e => this.updateValue(e, idx, null, null, '_method')}>
+                      ${validMethods.map(methodItem => html`<option ?selected=${methodItem == stepData._method}>${methodItem}</option>`)}
                     </select>
                     ${saveError.method ? html`<span class="text-red-700 text-xs">${saveError.method}</span>` : ''}
                   </label>
                   <label for="actions-data-${idx}" class="flex-1 text-sm font-medium form-control w-full flex flex-row items-center gap-1">
                     <input
                       placeholder="https://example.com/api/users"
-                      type="text" id="actions-data-${idx}" .value=${stepData._url || ''} class="input input-sm shadow-none input-bordered w-full" @change=${(e) =>
-      this.updateValue(e, idx, null, null, '_url')}
+                      type="text" id="actions-data-${idx}" .value=${stepData._url || ''} class="input input-sm shadow-none w-full" @change=${e =>
+                        this.updateValue(e, idx, null, null, '_url')}
                     />
                     ${saveError.url ? html`<span class="text-red-700 text-xs">${saveError.url}</span>` : ''}
                   </label>
@@ -353,9 +353,9 @@ export class StepsEditor extends LitElement {
                               <div class="form-control w-full">
                                 <div class="label"><span class="label-text">HTTP Version</span></div>
                                 <select
-                                  class="select select-sm select-bordered max-w-xs shadow-none"
+                                  class="select select-sm max-w-xs shadow-none"
                                   .value=${this.collectionSteps[idx].httpVersion}
-                                  @change=${(e) => {
+                                  @change=${e => {
                                     this.collectionSteps[idx].httpVersion = e.target.value
                                   }}
                                 >
@@ -371,7 +371,7 @@ export class StepsEditor extends LitElement {
                                       type="checkbox"
                                       class="checkbox checkbox-sm"
                                       ?checked=${stepData.followRedirects}
-                                      @change=${(e) => (this.collectionSteps[idx].followRedirects = e.target.value == 'on')}
+                                      @change=${e => (this.collectionSteps[idx].followRedirects = e.target.value == 'on')}
                                     />
                                     <span class="text-slate-700 font-medium">Follow redirects</span>
                                   </label>
@@ -382,7 +382,7 @@ export class StepsEditor extends LitElement {
                                       type="checkbox"
                                       class="checkbox checkbox-sm"
                                       ?checked=${stepData.ignoreSSLErrors}
-                                      @change=${(e) => (this.collectionSteps[idx].ignoreSSLErrors = e.target.value == 'on')}
+                                      @change=${e => (this.collectionSteps[idx].ignoreSSLErrors = e.target.value == 'on')}
                                     />
                                     <span class="text-slate-700 font-medium">Ignore server certificate error</span>
                                   </label>
@@ -394,8 +394,8 @@ export class StepsEditor extends LitElement {
                                 <input
                                   type="number"
                                   value=${stepData.timeout || 60}
-                                  class="input input-bordered input-sm w-20 shadow-none"
-                                  @change=${(e) => (this.collectionSteps[idx].timeout = parseInt(e.target.value))}
+                                  class="input input-sm w-20 shadow-none"
+                                  @change=${e => (this.collectionSteps[idx].timeout = parseInt(e.target.value))}
                                 />
                                 <span>seconds</span>
                               </div>
@@ -406,9 +406,9 @@ export class StepsEditor extends LitElement {
                               <div class="form-control w-full">
                                 <div class="label"><span class="label-text">Cookies</span></div>
                                 <textarea
-                                  class="textarea textarea-bordered"
+                                  class="textarea"
                                   placeholder="cookie-name-1=value; cookie-name-2=value"
-                                  @change=${(e) => ((this.collectionSteps[idx].headers ??= {}).Cookie = e.target.value)}
+                                  @change=${e => ((this.collectionSteps[idx].headers ??= {}).Cookie = e.target.value)}
                                 >
 ${stepData?.headers?.Cookie || ''}</textarea
                                 >
@@ -423,7 +423,8 @@ ${stepData?.headers?.Cookie || ''}</textarea
                                 <div class="label flex-col items-start gap-2">
                                   <p class="label-text">Parameters to encode</p>
                                   <p class="label-text text-xs">
-                                    Add all parameters that require encoding to the below fields. Query parameters that do not require encoding can be added to the URL field directly.
+                                    Add all parameters that require encoding to the below fields. Query parameters that do not require encoding can be added to
+                                    the URL field directly.
                                   </p>
                                 </div>
                                 <div class="space-y-2 paramRows" id="[${idx}][params]">${this.renderParamsRows(stepData, idx, 'params')}</div>
@@ -437,9 +438,9 @@ ${stepData?.headers?.Cookie || ''}</textarea
                               <div class="form-control">
                                 <div class="label items-start gap-2"><span class="label-text">Body Type</span></div>
                                 <select
-                                  class="select select-sm select-bordered max-w-xs"
+                                  class="select select-sm max-w-xs"
                                   .value=${stepData._requestType || 'application/json'}
-                                  @change=${(e) => {
+                                  @change=${e => {
                                     this.collectionSteps[idx]._requestType = e.target.value
                                     this.requestUpdate()
                                   }}
@@ -461,7 +462,7 @@ ${stepData?.headers?.Cookie || ''}</textarea
                                   : html` <textarea
                                       class="w-full border border-slate-200 textarea"
                                       name="[${idx}][json]"
-                                      @change=${(e) => {
+                                      @change=${e => {
                                         this.collectionSteps[idx]._json = e.target.value
                                       }}
                                     >
@@ -475,7 +476,7 @@ ${stepData._json}</textarea
                   </div>
                 </details>
               </div>
-              <button class="mt-5 btn-primary px-2 py-1 font-medium text-sm rounded-lg" ?disabled=${!stepData._url} @click=${(e) => this.sendStepRequest(e, idx)}>
+              <button class="mt-5 btn-primary px-2 py-1 font-medium text-sm rounded-lg" ?disabled=${!stepData._url} @click=${e => this.sendStepRequest(e, idx)}>
               ${this.isSendingRequest ? html`<span class="loading loading-dots loading-sm"></span>` : 'Send request'}
               </button>
               ${
@@ -483,9 +484,13 @@ ${stepData._json}</textarea
                   ? html`
                       <h3 class=" text-textStrong text-lg font-medium py-2 mt-10">
                         Request Preview
-                        <span class="font-normal  text-textWeak">(took <strong>${stepResult.resp.duration_ms}ms</strong> with status <strong>${stepResult.resp.status}</strong>)</span>
+                        <span class="font-normal  text-textWeak"
+                          >(took <strong>${stepResult.resp.duration_ms}ms</strong> with status <strong>${stepResult.resp.status}</strong>)</span
+                        >
                       </h3>
-                      <div class="rounded-xl border border-weak p-4  text-textStrong flex flex-col gap-1">${unsafeHTML(generateRequestPreviewFromObject(this.collectionSteps[idx]))}</div>
+                      <div class="rounded-xl border border-weak p-4  text-textStrong flex flex-col gap-1">
+                        ${unsafeHTML(generateRequestPreviewFromObject(this.collectionSteps[idx]))}
+                      </div>
                       <div role="tablist" class="tabs tabs-bordered max-h-96 overflow-y-auto border border-slate-200 rounded-xl mt-6">
                         <input
                           type="radio"
@@ -496,7 +501,7 @@ ${stepData._json}</textarea
                           checked
                         />
                         <div role="tabpanel" class="tab-content p-4">
-                          <div class="flex rounded  bg-fillWeak px-2 py-1 mb-2 items-center gap-2">
+                          <div class="flex rounded-sm  bg-fillWeak px-2 py-1 mb-2 items-center gap-2">
                             ${faSprite_('circle-info', 'regular', 'w-4 h-4 fill-none stroke-slate-600')}
                             <span class=" text-textWeak">Click below to add field as an assertion</span>
                           </div>
@@ -515,7 +520,7 @@ ${stepData._json}</textarea
                                 <button
                                   data-tippy-content="Add as an assertion"
                                   class="rounded-full border fill-textDisabled shadow-[0px_4px_4px_0px_rgba(0,0,0,0.06)] border-strokeWeak shadown-sm p-1.5 bg-bgBase"
-                                  @click="${(e) => this.addAssertion(e, idx, assertionObj)}"
+                                  @click="${e => this.addAssertion(e, idx, assertionObj)}"
                                 >
                                   ${faSprite_('plus', 'regular', 'w-3 h-3')}
                                 </button>
@@ -524,10 +529,18 @@ ${stepData._json}</textarea
                           })}
                         </div>
 
-                        <input type="radio" name="resp-items" role="tab" class="tab checked:[--bc:var(--brand-color)] checked:text-[var(--brand-color)] checked:font-bold" aria-label="Response Body" />
+                        <input
+                          type="radio"
+                          name="resp-items"
+                          role="tab"
+                          class="tab checked:[--bc:var(--brand-color)] checked:text-[var(--brand-color)] checked:font-bold"
+                          aria-label="Response Body"
+                        />
                         <div role="tabpanel" class="tab-content p-4">
                           <div>{</div>
-                          <div class="pl-3">${renderJsonWithIndentation(stepResult.resp.json, (e, assertionObj) => this.addAssertion(e, idx, assertionObj), '$')}</div>
+                          <div class="pl-3">
+                            ${renderJsonWithIndentation(stepResult.resp.json, (e, assertionObj) => this.addAssertion(e, idx, assertionObj), '$')}
+                          </div>
                           <div>}</div>
                         </div>
 
@@ -560,8 +573,8 @@ ${stepData._json}</textarea
             assertions: this.collectionSteps[idx]._assertions || [],
             result: this.collectionResults[idx],
             updateAssertion: (index, updates) => this.updateAssertion(idx, index, updates),
-            addAssertion: (e) => this.addAssertion(e, idx, { type: 'body', operation: 'equals', value: '' }),
-            removeAssertion: (index) => (e) => this.removeAssertion(idx, index),
+            addAssertion: e => this.addAssertion(e, idx, { type: 'body', operation: 'equals', value: '' }),
+            removeAssertion: index => e => this.removeAssertion(idx, index),
           })}
               </div>
             </details>
@@ -632,14 +645,20 @@ ${stepData._json}</textarea
       <div class="flex flex-row gap-2 w-full paramRow">
         <span class="shrink hidden assertIndicator"> ${this.renderAssertResult(result)} </span>
         <div class="flex flex-col w-1/3">
-          <input class="input input-bordered input-sm shadow-none w-full" list="${type}DataList" placeholder="Key" .value="${key}" @change=${(e) => this.updateKey(e, idx, type, aidx)} />
+          <input
+            class="input input-sm shadow-none w-full"
+            list="${type}DataList"
+            placeholder="Key"
+            .value="${key}"
+            @change=${e => this.updateKey(e, idx, type, aidx)}
+          />
           <span class="text-xs text-red-500 w-full">${keyError}</span>
         </div>
         ${type === 'exports'
           ? html`
               <div class="flex flex-col w-1/3">
-                <select class="select select-sm select-bordered max-w-xs shadow-none" @change=${(e) => this.updateExportCategory(e, idx, type, aidx, key)}>
-                  ${options.map((option) => html` <option value=${option.value} ?selected=${option.value === category}>${option.label}</option> `)}
+                <select class="select select-sm max-w-xs shadow-none" @change=${e => this.updateExportCategory(e, idx, type, aidx, key)}>
+                  ${options.map(option => html` <option value=${option.value} ?selected=${option.value === category}>${option.label}</option> `)}
                 </select>
               </div>
             `
@@ -648,15 +667,15 @@ ${stepData._json}</textarea
           ? html`<div class="shrink w-full flex flex-col">
           <input
             list="${type === 'asserts' ? 'assertAutocomplete-' + idx : ''}"
-            class="input input-bordered shadow-none ${error ? 'input-error' : ''} input-sm w-full"
+            class="input shadow-none ${error ? 'input-error' : ''} input-sm w-full"
             placeholder="Value"
             .value="${value}"
-            @input=${(e) => this.updateValue(e, idx, type, aidx, key)}
+            @input=${e => this.updateValue(e, idx, type, aidx, key)}
           />
           <span class="text-xs text-red-500">${error}</span>
         </div>
-        <a class="cursor-pointer text-slate-600" @click=${(e) => this.deleteKey(e, idx, type, aidx, key)}>
-          <svg class="inline-block icon w-5 h-5 p-1 rounded-full shadow border stroke-red-500"><use href="/public/assets/svgs/fa-sprites/regular.svg#trash"></use></svg>
+        <a class="cursor-pointer text-slate-600" @click=${e => this.deleteKey(e, idx, type, aidx, key)}>
+          <svg class="inline-block icon w-5 h-5 p-1 rounded-full shadow-sm border stroke-red-500"><use href="/public/assets/svgs/fa-sprites/regular.svg#trash"></use></svg>
         </a>
       </div>`
           : nothing}
@@ -675,7 +694,7 @@ ${stepData._json}</textarea
       if (resultContainer) {
         elements = resultContainer.querySelectorAll('[data-field-path]')
       }
-      elements.forEach((element) => {
+      elements.forEach(element => {
         let path = element.getAttribute('data-field-path')
         if (path) {
           fieldPathValues.add(('$.resp.json.' + path.replace(/\.?(\d+)\.?/g, '.[$1].')).replace('..', '.'))
@@ -685,13 +704,15 @@ ${stepData._json}</textarea
       matches = Array.from(fieldPathValues)
 
       const data = stepData[type] || []
-      rows = data.map((assertObj, aidx) => Object.entries(assertObj).map(([key, value]) => this.renderParamRow(key, value, type, idx, aidx, results[aidx], errors[aidx])))
+      rows = data.map((assertObj, aidx) =>
+        Object.entries(assertObj).map(([key, value]) => this.renderParamRow(key, value, type, idx, aidx, results[aidx], errors[aidx])),
+      )
       if (rows.length === 0 || !Object.entries(data).some(([k, v]) => k.trim() === '' && v.trim() === '')) {
         rows.push(this.renderParamRow('', '', type, idx, rows.length))
       }
       rows.push(html`
         <datalist id=${'assertAutocomplete-' + idx}>
-          ${matches.map((fieldPath) => {
+          ${matches.map(fieldPath => {
             return html`<option class="w-full  text-left text-xs px-3 py-1 hover:bg-gray-200">${fieldPath}</option>`
           })}
         </datalist>
@@ -837,7 +858,10 @@ ${stepData._json}</textarea
             @dragenter="${this._onDragEnter}"
             @dragleave="${this._onDragLeave}"
           >
-            ${repeat(this.collectionSteps, (stepData, idx) => this.renderCollectionStep(stepData, idx, this.collectionResults[idx], this.saveErrors[idx]) || undefined)}
+            ${repeat(
+              this.collectionSteps,
+              (stepData, idx) => this.renderCollectionStep(stepData, idx, this.collectionResults[idx], this.saveErrors[idx]) || undefined,
+            )}
           </div>
           ${this.isOnboarding
             ? nothing
@@ -854,11 +878,15 @@ ${stepData._json}</textarea
 
   // Assume that stepIndex is available in your component
   updateAssertion(stepIdx, index, updates) {
-    this.collectionSteps[stepIdx]._assertions = this.collectionSteps[stepIdx]._assertions.map((assertion, i) => (i === index ? { ...assertion, ...updates } : assertion))
+    this.collectionSteps[stepIdx]._assertions = this.collectionSteps[stepIdx]._assertions.map((assertion, i) =>
+      i === index ? { ...assertion, ...updates } : assertion,
+    )
     // Optionally re-evaluate the assertion after the update
     const updatedAssertion = this.collectionSteps[stepIdx]._assertions[index]
     const status = this.evaluateAssertion(updatedAssertion) ? 'PASSED' : 'FAILED'
-    this.collectionSteps[stepIdx]._assertions = this.collectionSteps[stepIdx]._assertions.map((assertion, i) => (i === index ? { ...assertion, status } : assertion))
+    this.collectionSteps[stepIdx]._assertions = this.collectionSteps[stepIdx]._assertions.map((assertion, i) =>
+      i === index ? { ...assertion, status } : assertion,
+    )
     this.requestUpdate()
   }
 

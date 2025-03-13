@@ -27,4 +27,4 @@ dropDownMenu_ :: T.Text -> Html () -> Html () -> Html ()
 dropDownMenu_ dropDownId btnTrigger contentHtml = do
   div_ [class_ "dropdown dropdown-bottom"] do
     label_ [Lucid.for_ dropDownId] btnTrigger
-    div_ [class_ "dropdown-content z-[1] menu p-2 shadow bg-base-100 rounded-box w-52"] contentHtml
+    div_ [class_ "dropdown-content z-1 menu p-2 shadow-sm bg-base-100 rounded-box w-52"] contentHtml

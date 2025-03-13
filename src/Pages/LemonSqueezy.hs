@@ -145,7 +145,7 @@ manageBillingGetH pid from = do
 
 billingPage :: Text -> Int64 -> Text -> Text -> Html ()
 billingPage pidTxt reqs amount last_reported = div_ [class_ "w-full pt-40"] do
-  div_ [class_ "border w-[550px] rounded-xl shadow-sm mx-auto p-10"] do
+  div_ [class_ "border w-[550px] rounded-xl shadow-xs mx-auto p-10"] do
     div_ [class_ "flex flex-col gap-1"] do
       h3_ [class_ "font-bold text-3xl"] "Usage & Billing"
       p_ [class_ "text-gray-600"] "Track your usage and estimated costs"

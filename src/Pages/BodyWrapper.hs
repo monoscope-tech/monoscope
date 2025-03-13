@@ -353,15 +353,15 @@ projectsDropDown currProject projects = do
         nav_ [] do
           a_ [href_ [text| /p/$pidTxt/settings |], class_ "p-3 flex gap-3 items-center rounded-2xl hover:bg-gray-100"] do
             faSprite_ "gear" "regular" "h-5 w-5" >> span_ "Settings"
-          a_ [href_ [text| /p/$pidTxt/manage_members |], class_ "p-3 flex gap-3 items-center rounded hover:bg-gray-100"] do
+          a_ [href_ [text| /p/$pidTxt/manage_members |], class_ "p-3 flex gap-3 items-center rounded-sm hover:bg-gray-100"] do
             faSprite_ "user-plus" "regular" "h-5 w-5" >> span_ "Manage members"
-          a_ [href_ [text| /p/$pidTxt/apis|], class_ "p-3 flex gap-3 items-center rounded hover:bg-gray-100"] do
+          a_ [href_ [text| /p/$pidTxt/apis|], class_ "p-3 flex gap-3 items-center rounded-sm hover:bg-gray-100"] do
             faSprite_ "key" "regular" "h-5 w-5" >> span_ "API Keys"
-          a_ [href_ [text| /p/$pidTxt/integrations|], class_ "p-3 flex gap-3 items-center rounded hover:bg-gray-100"] do
+          a_ [href_ [text| /p/$pidTxt/integrations|], class_ "p-3 flex gap-3 items-center rounded-sm hover:bg-gray-100"] do
             faSprite_ "arrows-turn-right" "regular" "h-5 w-5" >> span_ "Integrations"
           when (currProject.paymentPlan == "UsageBased" || currProject.paymentPlan == "GraduatedPricing") $
             a_
-              [class_ "p-3 flex gap-3 items-center rounded hover:bg-gray-100 cursor-pointer", hxGet_ [text| /p/$pidTxt/manage_subscription |]]
+              [class_ "p-3 flex gap-3 items-center rounded-sm hover:bg-gray-100 cursor-pointer", hxGet_ [text| /p/$pidTxt/manage_subscription |]]
               (faSprite_ "dollar-sign" "regular" "h-5 w-5" >> span_ "Manage billing")
       div_ [class_ "border-t border-gray-100 p-2"] do
         div_ [class_ "flex justify-between content-center items-center py-5 mb-2 "] do
@@ -401,12 +401,12 @@ sideNav sess project pageTitle menuItem hasIntegrated = aside_ [class_ "border-r
         do
           span_ [class_ "grow hidden group-has-[#sidenav-toggle:checked]/pg:block overflow-x-hidden whitespace-nowrap truncate"] $ toHtml project.title
           faSprite_ "angles-up-down" "regular" "w-4"
-      div_ [tabindex_ "0", class_ "dropdown-content z-[40]"] $ projectsDropDown project (Sessions.getProjects $ Sessions.projects sess.persistentSession)
+      div_ [tabindex_ "0", class_ "dropdown-content z-40"] $ projectsDropDown project (Sessions.getProjects $ Sessions.projects sess.persistentSession)
     nav_ [class_ "mt-5 flex flex-col gap-2.5 text-slate-600"] do
       -- FIXME: reeanable hx-boost hxBoost_ "true"
       menu project.id & mapM_ \(mTitle, mUrl, fIcon) -> do
         let isActive = maybe (pageTitle == mTitle) (== mTitle) menuItem
-        let activeCls = if isActive then "bg-fillWeak  text-textStrong border border-strokeStrong" else "!border-transparent"
+        let activeCls = if isActive then "bg-fillWeak  text-textStrong border border-strokeStrong" else "border-transparent!"
         a_
           [ href_ mUrl
           , term "data-tippy-placement" "right"
@@ -417,7 +417,7 @@ sideNav sess project pageTitle menuItem hasIntegrated = aside_ [class_ "border-r
             faSprite_ fIcon "regular" "w-4 h-4 shrink-0 "
             span_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:block whitespace-nowrap truncate"] $ toHtml mTitle
 
-  div_ [class_ "py-8 px-2 group-has-[#sidenav-toggle:checked]/pg:px-6 [&>*]:gap-2 [&>*]:whitespace-nowrap [&>*]:truncate flex flex-col gap-2.5 [&>*]:items-center [&>*]:overflow-x-hidden [&>*]:flex &:no-wrap"] do
+  div_ [class_ "py-8 px-2 group-has-[#sidenav-toggle:checked]/pg:px-6 *:gap-2 *:whitespace-nowrap *:truncate flex flex-col gap-2.5 *:items-center *:overflow-x-hidden *:flex &:no-wrap"] do
     let currUser = sess.persistentSession.user.getUser
     let userIdentifier =
           if currUser.firstName /= "" || currUser.lastName /= ""
@@ -500,5 +500,5 @@ loginBanner :: Html ()
 loginBanner = do
   div_ [class_ "flex items-center justify-end border-b px-6 py-2 gap-4"] do
     a_ [class_ "underline underline-offset-2 ", href_ "https://apitoolkit.io/docs/onboarding/"] "Documentation"
-    a_ [class_ "py-2 px-3 rounded-xl bg-transparent border border-fillBrand-strong text-fillBrand-strong shadow hover:shadow-md", href_ "https://calendar.app.google/1a4HG5GZYv1sjjZG6"] "Book a demo with an engineer"
-    a_ [class_ "py-2 px-3 rounded-xl bg-fillBrand-strong text-textInverse-strong shadow hover:shadow-md", href_ "/login"] "Start 30 day free trial"
+    a_ [class_ "py-2 px-3 rounded-xl bg-transparent border border-fillBrand-strong text-fillBrand-strong shadow-sm hover:shadow-md", href_ "https://calendar.app.google/1a4HG5GZYv1sjjZG6"] "Book a demo with an engineer"
+    a_ [class_ "py-2 px-3 rounded-xl bg-fillBrand-strong text-textInverse-strong shadow-sm hover:shadow-md", href_ "/login"] "Start 30 day free trial"

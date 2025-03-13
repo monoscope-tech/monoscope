@@ -97,7 +97,7 @@ timepicker_ submitForm currentRange = div_ [class_ "relative"] do
   input_ [type_ "hidden", id_ "since_input"]
   input_ [type_ "hidden", id_ "custom_range_input"]
   a_
-    [ class_ "relative p-2 shadow-sm border border-strokeStrong  text-textWeak flex items-center gap-1.5 rounded-lg cursor-pointer"
+    [ class_ "relative p-2 shadow-xs border border-strokeStrong  text-textWeak flex items-center gap-1.5 rounded-lg cursor-pointer"
     , [__| on click toggle .hidden on #timepickerBox |]
     ]
     do
@@ -107,7 +107,7 @@ timepicker_ submitForm currentRange = div_ [class_ "relative"] do
   div_ [id_ "timepickerBox", class_ "hidden absolute right-0 z-10 mt-1 rounded-md flex"] do
     div_ [class_ "relative hidden", id_ "timepickerSidebar"] $ div_ [id_ "startTime", class_ "hidden"] ""
     div_
-      [class_ "inline-block w-84 overflow-auto bg-base-100 py-1 text-base shadow-lg ring-1 ring-black ring-opacity-5 focus:outline-none sm:"]
+      [class_ "inline-block w-84 overflow-auto bg-base-100 py-1 text-base shadow-lg ring-1 ring-black ring-opacity-5 focus:outline-hidden sm:"]
       do
         let linkClassBase = "block text-gray-900 relative cursor-pointer select-none py-2 pl-3 pr-9 hover:bg-gray-200"
             action =

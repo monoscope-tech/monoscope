@@ -159,6 +159,6 @@ instance ToHtml TabFilter where
           whenJust opt.count $ span_ [class_ "absolute top-[1px] -right-[5px] text-white text-xs font-medium rounded-full px-1 bg-red-500"] . show
 
 -- , navTabs = Just $ div_ [class_ "tabs tabs-boxed tabs-md p-0 tabs-outline items-center  bg-fillWeak  text-textWeak border"] do
---     a_ [onclick_ "window.setQueryParamAndReload('source', 'requests')", role_ "tab", class_ $ "tab py-1 !h-auto " <> if source == "requests" then "tab-active  text-textStrong border border-strokeStrong " else ""] "Requests"
---     a_ [onclick_ "window.setQueryParamAndReload('source', 'logs')", role_ "tab", class_ $ "tab py-1 !h-auto " <> if source == "logs" then "tab-active  text-textStrong border border-strokeStrong " else ""] "Logs"
---     a_ [onclick_ "window.setQueryParamAndReload('source', 'spans')", role_ "tab", class_ $ "tab py-1 !h-auto " <> if source == "spans" then "tab-active  text-textStrong border border-strokeStrong " else ""] "Traces"
+--     a_ [onclick_ "window.setQueryParamAndReload('source', 'requests')", role_ "tab", class_ $ "tab py-1 h-auto! " <> if source == "requests" then "tab-active  text-textStrong border border-strokeStrong " else ""] "Requests"
+--     a_ [onclick_ "window.setQueryParamAndReload('source', 'logs')", role_ "tab", class_ $ "tab py-1 h-auto! " <> if source == "logs" then "tab-active  text-textStrong border border-strokeStrong " else ""] "Logs"
+--     a_ [onclick_ "window.setQueryParamAndReload('source', 'spans')", role_ "tab", class_ $ "tab py-1 h-auto! " <> if source == "spans" then "tab-active  text-textStrong border border-strokeStrong " else ""] "Traces"

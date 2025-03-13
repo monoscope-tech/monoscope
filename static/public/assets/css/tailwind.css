@@ -1,6 +1,253 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+@import 'tailwindcss';
+
+@config '../../../../tailwind.config.js';
+
+@plugin "daisyui" {
+  themes:
+    light --default,
+    dark --prefersdark,
+    cupcake;
+}
+
+/*
+  The default border color has changed to `currentColor` in Tailwind CSS v4,
+  so we've added these compatibility styles to make sure everything still
+  looks the same as it did with Tailwind CSS v3.
+
+  If we ever want to remove these styles, we need to add an explicit border
+  color utility to any element that depends on these defaults.
+*/
+@layer base {
+  *,
+  ::after,
+  ::before,
+  ::backdrop,
+  ::file-selector-button {
+    border-color: var(--color-gray-200, currentColor);
+  }
+}
+
+@utility tabs-outline {
+  & :is(.tab-active, [aria-selected='true']):not(.tab-disabled):not([disabled]) {
+    @apply bg-bgBase shadow-sm border border-strokeStrong text-textStrong;
+  }
+  & :is(.tab-active, [aria-selected='true']):not(.tab-disabled):not([disabled]):hover {
+    @apply bg-bgBase shadow-sm border border-strokeStrong text-textStrong;
+  }
+
+  /*
+  .tabs-outline .tab {
+    @apply !text-slate-800 font-medium;
+  }*/
+}
+
+@utility tab-active {
+  .tabs-outline :is(&, [aria-selected='true']):not(.tab-disabled):not([disabled]) {
+    @apply bg-bgBase shadow-sm border border-strokeStrong text-textStrong;
+  }
+
+  .tabs-outline :is(&, [aria-selected='true']):not(.tab-disabled):not([disabled]):hover {
+    @apply bg-bgBase shadow-sm border border-strokeStrong text-textStrong;
+  }
+
+  /*
+  .tabs-outline .tab {
+    @apply !text-slate-800 font-medium;
+  }*/
+}
+
+@utility tabs-boxed {
+  & :is(input:checked) {
+    @apply bg-bgBase;
+  }
+
+  /*
+  .tabs-outline .tab {
+    @apply !text-slate-800 font-medium;
+  }*/
+}
+
+@utility tab {
+  @apply h-auto! leading-none py-2;
+
+  /*
+  .tabs-outline .tab {
+    @apply !text-slate-800 font-medium;
+  }*/
+}
+@utility inconsolata {
+  font-family: 'Inconsolata', monospace;
+}
+@utility monospace {
+  font-family: 'Inconsolata', monospace;
+  font-variation-settings: 'mono' 1000;
+}
+@utility icon {
+  /* From icomoon app*/
+  display: inline-block;
+  width: 1em;
+  height: 1em;
+  stroke: currentColor;
+  fill: currentColor;
+}
+@utility dataTable-search {
+  /* .checkbox, .input, .btn, .select, .textarea { */
+  /*   @apply shadow; */
+  /* } */
+  @apply rounded-sm;
+}
+@utility btn-indigo {
+  @apply ml-3 text-white bg-indigo-600 hover:bg-indigo-700 focus:ring-indigo-500;
+}
+@utility btn-yellow {
+  @apply btn-sm ml-3 text-black bg-yellow-300 hover:bg-yellow-400 focus:ring-yellow-500;
+}
+@utility btn-white-sm {
+  @apply btn-sm bg-base-100 border-gray-300 text-gray-700 hover:bg-gray-50 focus:ring-indigo-500;
+}
+@utility input-txt {
+  @apply shadow-xs focus:ring-indigo-500 focus:border-indigo-500 block w-full sm:text-sm border-gray-300 rounded-md;
+}
+@utility neg-rotate-90 {
+  /* Added because using - in class name prefix via hyperscript doesnt work*/
+  @apply -rotate-90;
+}
+@utility parent-hover {
+  & .child-hover {
+    visibility: hidden;
+  }
+
+  &:hover .child-hover {
+    visibility: visible;
+  }
+}
+@utility child-hover {
+  .parent-hover & {
+    visibility: hidden;
+  }
+
+  .parent-hover:hover & {
+    visibility: visible;
+  }
+}
+
+@utility blue-gr-btn {
+  @apply bg-linear-to-b text-white font-medium from-blue-500 to-blue-600;
+}
+
+@utility blue-outline-btn {
+  @apply border-blue-500 text-[var(--brand-color)] font-medium;
+}
+
+@utility cbadge {
+  @apply px-3 py-1.5 text-sm rounded-xl;
+}
+
+@utility cbadge-sm {
+  @apply px-2 py-1 text-sm rounded-xl;
+}
+
+@utility badge-2xx {
+  @apply bg-green-100 text-green-700;
+  @apply bg-green-100 text-green-700;
+}
+
+@utility badge-success {
+  @apply bg-green-100 text-green-700 font-medium;
+}
+
+@utility badge-error {
+  @apply bg-red-100 text-red-700 font-medium;
+}
+
+@utility badge-3xx {
+  @apply bg-amber-100 text-amber-800;
+}
+
+@utility badge-4xx {
+  @apply bg-red-50 text-red-800;
+}
+
+@utility badge-neutral {
+  @apply bg-slate-150 text-[#000933]/60;
+}
+
+@utility badge-blue {
+  @apply text-[var(--brand-color)] bg-[#d6efff];
+}
+
+@utility badge-green {
+  @apply text-green-500 bg-green-100;
+  @apply text-amber-500 bg-amber-100;
+}
+
+@utility badge-lime {
+  @apply bg-lime-200 text-lime-600;
+}
+
+@utility badge-pink {
+  @apply bg-pink-100 text-pink-600;
+}
+
+@utility badge-cyan {
+  @apply bg-cyan-100 text-cyan-600;
+}
+
+@utility ctable {
+  & :where(.table-pin-rows thead tr) {
+    @apply sticky top-0 z-10 bg-bgBase;
+  }
+
+  & :where(.table-pin-cols tr th) {
+    @apply sticky left-0 right-0 z-10;
+  }
+
+  & td > div {
+    @apply py-1;
+  }
+
+  & .log-row.htmx-added {
+    @apply bg-[#d6efff] transition-colors duration-300 ease-in-out;
+  }
+
+  & .log-row.htmx-settling {
+    @apply bg-[#d6efff] transition-colors duration-300 ease-in-out;
+  }
+}
+
+@utility table-pin-rows {
+  .ctable :where(& thead tr) {
+    @apply sticky top-0 z-10 bg-bgBase;
+  }
+}
+
+@utility table-pin-cols {
+  .ctable :where(& tr th) {
+    @apply sticky left-0 right-0 z-10;
+  }
+}
+
+@utility log-row {
+  .ctable &.htmx-added {
+    @apply bg-[#d6efff] transition-colors duration-300 ease-in-out;
+  }
+
+  .ctable &.htmx-settling {
+    @apply bg-[#d6efff] transition-colors duration-300 ease-in-out;
+  }
+}
+
+@utility htmx-added {
+  .ctable &.log-row {
+    @apply bg-[#d6efff] transition-colors duration-300 ease-in-out;
+  }
+}
+
+@utility htmx-settling {
+  .ctable &.log-row {
+    @apply bg-[#d6efff] transition-colors duration-300 ease-in-out;
+  }
+}
 
 @layer base {
   .swagger_history_container {
@@ -28,220 +275,202 @@
   }
 }
 
-@layer components {
-  .tabs-outline :is(.tab-active, [aria-selected='true']):not(.tab-disabled):not([disabled]),
-  .tabs-outline :is(.tab-active, [aria-selected='true']):not(.tab-disabled):not([disabled]):hover {
-    @apply bg-bgBase shadow border border-strokeStrong text-textStrong;
+@layer utilities {
+  .log_details_expanded {
+    width: 850px;
   }
 
-  .tabs-boxed :is(input:checked) {
-    @apply bg-bgBase;
+  :root,
+  [data-theme] {
+    --backgroundPrimary: #fff;
+    --rounded-btn: 0.5rem;
   }
 
-  .tab {
-    @apply !h-auto leading-none py-2;
+  html,
+  body {
+    @apply overscroll-none bg-bgBase;
+    --brand-color: #0068ff;
+    --brand-color-light: #0090f0;
+    --tags-border-color: rgba(0, 13, 77, 0.45);
+    --tags-hover-border-color: rgba(0, 13, 77, 0.45);
+    --chkbg: var(--brand-color);
   }
 
-  /*
-  .tabs-outline .tab {
-    @apply !text-slate-800 font-medium;
-  }*/
-}
+  .c-scroll::-webkit-scrollbar {
+    width: 5px;
+    height: 5px;
+  }
 
-.log_details_expanded {
-  width: 850px;
-}
+  /* Track */
+  .c-scroll::-webkit-scrollbar-track {
+    background: transparent;
+  }
 
-:root,
-[data-theme] {
-  --backgroundPrimary: #fff;
-  --rounded-btn: 0.5rem;
-}
+  /* Handle */
+  .c-scroll::-webkit-scrollbar-thumb {
+    @apply bg-gray-400 opacity-70;
+    border-radius: 3px;
+  }
 
-html,
-body {
-  @apply overscroll-none bg-bgBase;
-  --brand-color: #0068ff;
-  --brand-color-light: #0090f0;
-  --tags-border-color: rgba(0, 13, 77, 0.45);
-  --tags-hover-border-color: rgba(0, 13, 77, 0.45);
-  --chkbg: var(--brand-color);
-}
+  .c-scroll::-webkit-scrollbar-thumb:hover {
+    @apply bg-gray-300;
+  }
 
-.c-scroll::-webkit-scrollbar {
-  width: 5px;
-  height: 5px;
-}
+  .payment-radio-active {
+    @apply bg-blue-500;
+  }
 
-/* Track */
-.c-scroll::-webkit-scrollbar-track {
-  background: transparent;
-}
+  .payment-radio-active > div {
+    display: block;
+  }
 
-/* Handle */
-.c-scroll::-webkit-scrollbar-thumb {
-  @apply bg-gray-400 opacity-70;
-  border-radius: 3px;
-}
+  .endpoint-path-collapse > .subpaths-container {
+    display: none;
+  }
 
-.c-scroll::-webkit-scrollbar-thumb:hover {
-  @apply bg-gray-300;
-}
+  .endpoint-path-collapse .collpase-icon {
+    transform: rotate(180deg);
+  }
 
-.payment-radio-active {
-  @apply bg-blue-500;
-}
+  .endpoint_schema {
+    @apply text-gray-600;
+  }
 
-.payment-radio-active > div {
-  display: block;
-}
+  .subpaths-container {
+    cursor: pointer;
+    @apply flex flex-col pb-4;
+  }
 
-.endpoint-path-collapse > .subpaths-container {
-  display: none;
-}
+  .subpaths-container > div {
+    @apply px-4 py-2;
+  }
 
-.endpoint-path-collapse .collpase-icon {
-  transform: rotate(180deg);
-}
+  .subpaths-container > div:hover {
+    @apply bg-gray-100;
+  }
 
-.endpoint_schema {
-  @apply text-gray-600;
-}
+  .save_swagger_btn_active {
+    @apply bg-green-500 text-white;
+  }
 
-.subpaths-container {
-  cursor: pointer;
-  @apply flex flex-col pb-4;
-}
+  .selected_swagger {
+    @apply bg-blue-600 text-white;
+  }
 
-.subpaths-container > div {
-  @apply px-4 py-2;
-}
+  .font_toggle_active {
+    @apply bg-blue-200;
+  }
 
-.subpaths-container > div:hover {
-  @apply bg-gray-100;
-}
+  .path-method-get {
+    @apply text-[var(--brand-color)];
+  }
 
-.save_swagger_btn_active {
-  @apply bg-green-500 text-white;
-}
+  .endpoint_active {
+    border-left: 5px solid currentColor;
+  }
 
-.selected_swagger {
-  @apply bg-blue-600 text-white;
-}
+  .path-method-put {
+    @apply text-orange-500;
+  }
 
-.font_toggle_active {
-  @apply bg-blue-200;
-}
+  .path-method-post {
+    @apply text-green-500;
+  }
 
-.path-method-get {
-  @apply text-[var(--brand-color)];
-}
+  .path-method-delete {
+    @apply text-red-500;
+  }
 
-.endpoint_active {
-  border-left: 5px solid currentColor;
-}
+  .path-method-patch {
+    @apply text-purple-500;
+  }
 
-.path-method-put {
-  @apply text-orange-500;
-}
+  .path-method-options {
+    @apply text-gray-500;
+  }
 
-.path-method-post {
-  @apply text-green-500;
-}
+  .path-method-head {
+    @apply text-purple-500;
+  }
 
-.path-method-delete {
-  @apply text-red-500;
-}
+  .subpaths-header {
+    display: flex;
+    cursor: pointer;
+    @apply hover:bg-gray-100 py-3 px-2 w-full items-center justify-between;
+  }
 
-.path-method-patch {
-  @apply text-purple-500;
-}
+  .htmx-indicator {
+    display: none;
+  }
 
-.path-method-options {
-  @apply text-gray-500;
-}
+  .htmx-request.htmx-indicator {
+    display: flex;
+  }
 
-.path-method-head {
-  @apply text-purple-500;
-}
+  .btn-secondary {
+    @apply text-[var(--brand-color)] border border-[var(--brand-color)] rounded-lg font-semibold;
+  }
 
-.subpaths-header {
-  display: flex;
-  cursor: pointer;
-  @apply hover:bg-gray-100 py-3 px-2 w-full items-center justify-between;
-}
+  .htmx-request.survey-indicator + button {
+    display: none;
+  }
+  .htmx-request.htmx-indicator ~ span {
+    display: none;
+  }
 
-.htmx-indicator {
-  display: none;
-}
+  .htmx-request.query-indicator {
+    display: flex;
+  }
 
-.htmx-request.htmx-indicator {
-  display: flex;
-}
+  .htmx-request.refresh-indicator ~ svg {
+    display: none;
+  }
 
-.btn-secondary {
-  @apply text-[var(--brand-color)] border border-[var(--brand-color)] rounded-lg font-semibold;
-}
+  .htmx-request.htmx-indicator {
+    display: flex;
+  }
 
-.htmx-request.survey-indicator + button {
-  display: none;
-}
-.htmx-request.htmx-indicator ~ span {
-  display: none;
-}
+  .htmx-request.htmx-indicator ~ span {
+    display: none;
+  }
 
-.htmx-request.query-indicator {
-  display: flex;
-}
+  .htmx-request.steps-indicator > .empty-state {
+    display: none;
+  }
 
-.htmx-request.refresh-indicator ~ svg {
-  display: none;
-}
+  .htmx-request.steps-indicator > .loading-indicator {
+    display: block;
+  }
 
-.htmx-request.htmx-indicator {
-  display: flex;
-}
-
-.htmx-request.htmx-indicator ~ span {
-  display: none;
-}
-
-.htmx-request.steps-indicator > .empty-state {
-  display: none;
-}
-
-.htmx-request.steps-indicator > .loading-indicator {
-  display: block;
-}
-
-.text-weak {
-  @apply text-[#000933]/60;
-}
-.bg-weak {
-  @apply bg-[#00157f]/5;
-}
-.text-brand {
-  @apply text-[var(--brand-color)];
-}
-.bg-brand {
-  @apply bg-[var(--brand-color)];
-}
-.btn-primary {
-  @apply bg-[var(--brand-color)] hover:bg-[var(--brand-color-light)] text-white;
-}
-.input,
-.select,
-.checkbox,
-.textarea {
-  @apply shadow-none;
-  --chkbg: var(--brand-color);
-  border-color: rgba(0, 13, 77, 0.45);
-}
-.stroke-strong {
-  border: 1px solid rgba(0, 13, 77, 0.45);
-}
-.stroke-weak {
-  @apply border-[#001066]/10;
+  .text-weak {
+    @apply text-[#000933]/60;
+  }
+  .bg-weak {
+    @apply bg-[#00157f]/5;
+  }
+  .text-brand {
+    @apply text-[var(--brand-color)];
+  }
+  .bg-brand {
+    @apply bg-[var(--brand-color)];
+  }
+  .btn-primary {
+    @apply bg-[var(--brand-color)] hover:bg-[var(--brand-color-light)] text-white;
+  }
+  .input,
+  .select,
+  .checkbox,
+  .textarea {
+    @apply shadow-none;
+    --chkbg: var(--brand-color);
+    border-color: rgba(0, 13, 77, 0.45);
+  }
+  .stroke-strong {
+    border: 1px solid rgba(0, 13, 77, 0.45);
+  }
+  .stroke-weak {
+    @apply border-[#001066]/10;
+  }
 }
 @layer components {
   :root {
@@ -261,289 +490,149 @@ body {
       font-family: InterVariable, sans-serif;
     }
   }
-
-  .inconsolata {
-    font-family: 'Inconsolata', monospace;
-  }
-
-  .monospace {
-    font-family: 'Inconsolata', monospace;
-    font-variation-settings: 'mono' 1000;
-  }
-
-  /* From icomoon app*/
-  .icon {
-    display: inline-block;
-    width: 1em;
-    height: 1em;
-    stroke: currentColor;
-    fill: currentColor;
-  }
-
-  /* .checkbox, .input, .btn, .select, .textarea { */
-  /*   @apply shadow; */
-  /* } */
-
-  .dataTable-search {
-    @apply rounded;
-  }
-
-  .btn-indigo {
-    @apply ml-3 text-white bg-indigo-600 hover:bg-indigo-700 focus:ring-indigo-500;
-  }
-
-  .btn-yellow {
-    @apply btn-sm ml-3 text-black bg-yellow-300 hover:bg-yellow-400 focus:ring-yellow-500;
-  }
-
-  .btn-white-sm {
-    @apply btn-sm bg-base-100 border-gray-300 text-gray-700 hover:bg-gray-50 focus:ring-indigo-500;
-  }
-
-  .input-txt {
-    @apply shadow-sm focus:ring-indigo-500 focus:border-indigo-500 block w-full sm:text-sm border-gray-300 rounded-md;
-  }
-
-  /* Added because using - in class name prefix via hyperscript doesnt work*/
-  .neg-rotate-90 {
-    @apply -rotate-90;
-  }
-
-  .parent-hover .child-hover {
-    visibility: hidden;
-  }
-
-  .parent-hover:hover .child-hover {
-    visibility: visible;
-  }
 }
 
-/* HERE SINCE IT"S BASICALLY AN OVERRIDE.  Its for the log items rows */
-.expanded-log {
-  @apply border-l-blue-200 bg-blue-50;
-}
+@layer utilities {
+  /* HERE SINCE IT"S BASICALLY AN OVERRIDE.  Its for the log items rows */
+  .expanded-log {
+    @apply border-l-blue-200 bg-blue-50;
+  }
 
-.expanded-log .status-indicator {
-  @apply bg-blue-200;
-}
+  .expanded-log .status-indicator {
+    @apply bg-blue-200;
+  }
 
-.expanded-log .log-chevron {
-  @apply rotate-90;
-}
+  .expanded-log .log-chevron {
+    @apply rotate-90;
+  }
 
-.log-item-tree-chevron {
-  @apply cursor-pointer font-bold h-5 w-5 rotate-90 inline-block p-1 rounded border border-slate-200 mr-1;
-}
+  .log-item-tree-chevron {
+    @apply cursor-pointer font-bold h-5 w-5 rotate-90 inline-block p-1 rounded-sm border border-slate-200 mr-1;
+  }
 
-.collapsed .log-item-tree-chevron {
-  @apply rotate-0;
-}
+  .collapsed .log-item-tree-chevron {
+    @apply rotate-0;
+  }
 
-.collapsed .waterfall-item-tree-chevron {
-  @apply rotate-90;
-}
+  .collapsed .waterfall-item-tree-chevron {
+    @apply rotate-90;
+  }
 
-.b--b2 {
-  border-color: oklch(var(--b2));
-}
+  .b--b2 {
+    border-color: oklch(var(--b2));
+  }
 
-.b--b2 > :not([hidden]) ~ :not([hidden]) {
-  border-color: oklch(var(--b2));
-}
+  .b--b2 > :not([hidden]) ~ :not([hidden]) {
+    border-color: oklch(var(--b2));
+  }
 
-/*
+  /*
 == THIS SECTION IS FOR CSS CLASSES THAT ARE ADDED DYNAMICALLY,
    SINCE TREE SHAKING IS NOT ENABLED TO CLASSES DEFINED OUTSIDE THE TAILWIND @layers
 */
-.endpoint {
-  @apply w-20 rounded-lg text-center text-white text-sm p-2 m-2 inline-block;
-}
-
-.endpoint-options {
-  @apply bg-red-700;
-}
-
-.endpoint-get {
-  @apply bg-green-600;
-}
-
-.endpoint-head {
-  @apply bg-yellow-600;
-}
-
-.endpoint-post {
-  @apply bg-blue-700;
-}
-
-.endpoint-put {
-  @apply bg-indigo-600;
-}
-
-.endpoint-delete {
-  @apply bg-orange-600;
-}
-
-.endpoint-trace {
-  @apply bg-purple-600;
-}
-
-.endpoint-patch {
-  @apply bg-amber-600;
-}
-
-.btn {
-  @apply justify-center items-center leading-none;
-}
-
-/* ======= CODEMIRROR */
-.tree-children {
-  display: block;
-}
-
-.tree-children-count {
-  display: none;
-}
-
-.collapsed .tree-children {
-  display: none !important;
-}
-
-.expand-button {
-  display: none;
-}
-
-/* TODO: check if this should be deleted */
-
-.CodeMirror {
-  font-family: Arial, monospace;
-  font-size: 16px;
-  background-color: rgb(243 244 246);
-}
-
-.collapsed .tree-children-count {
-  display: inline !important;
-}
-
-.collapsed .children {
-  display: inline-block;
-  padding-left: 0;
-}
-
-.collapsed .closing-token {
-  padding-left: 0;
-}
-
-.sdk_tab {
-  @apply h-36 border rounded w-full p-4;
-}
-
-.sdk_tab_active {
-  @apply border-blue-500 border ring ring-blue-500 shadow-lg;
-}
-
-.t-tab-active {
-  @apply font-bold border-[var(--brand-color)] text-[var(--brand-color)];
-}
-.t-tab-box-active {
-  @apply tab-active  shadow-[0px_4px_8px_-2px_rgba(0,0,0,0.04)]  text-textStrong border border-strokeStrong bg-bgOverlay;
-}
-
-.tab:is(input[type='radio']) {
-  width: max-content;
-}
-
-.tree_opened ~ .children_container {
-  display: flex;
-}
-
-.tree_opened .toggler {
-  transform: rotate(180deg);
-}
-
-@layer components {
-  .blue-gr-btn {
-    @apply bg-gradient-to-b text-white font-medium from-blue-500 to-blue-600;
+  .endpoint {
+    @apply w-20 rounded-lg text-center text-white text-sm p-2 m-2 inline-block;
   }
 
-  .blue-outline-btn {
-    @apply border-blue-500 text-[var(--brand-color)] font-medium;
+  .endpoint-options {
+    @apply bg-red-700;
   }
 
-  .cbadge {
-    @apply px-3 py-1.5 text-sm rounded-xl;
+  .endpoint-get {
+    @apply bg-green-600;
   }
 
-  .cbadge-sm {
-    @apply px-2 py-1 text-sm rounded-xl;
+  .endpoint-head {
+    @apply bg-yellow-600;
   }
 
-  .badge-2xx {
-    @apply bg-green-100 text-green-700;
+  .endpoint-post {
+    @apply bg-blue-700;
   }
 
-  .badge-success {
-    @apply bg-green-100 text-green-700 font-medium;
+  .endpoint-put {
+    @apply bg-indigo-600;
   }
 
-  .badge-error {
-    @apply bg-red-100 text-red-700 font-medium;
+  .endpoint-delete {
+    @apply bg-orange-600;
   }
 
-  .badge-3xx {
-    @apply bg-amber-100 text-amber-800;
+  .endpoint-trace {
+    @apply bg-purple-600;
   }
 
-  .badge-2xx {
-    @apply bg-green-100 text-green-700;
+  .endpoint-patch {
+    @apply bg-amber-600;
   }
 
-  .badge-4xx {
-    @apply bg-red-50 text-red-800;
+  .btn {
+    @apply justify-center items-center leading-none;
   }
 
-  .badge-neutral {
-    @apply bg-slate-150 text-[#000933]/60;
+  /* ======= CODEMIRROR */
+  .tree-children {
+    display: block;
   }
 
-  .badge-blue {
-    @apply text-[var(--brand-color)] bg-[#d6efff];
+  .tree-children-count {
+    display: none;
   }
 
-  .badge-green {
-    @apply text-green-500 bg-green-100;
+  .collapsed .tree-children {
+    display: none !important;
   }
 
-  .badge-green {
-    @apply text-amber-500 bg-amber-100;
+  .expand-button {
+    display: none;
   }
 
-  .badge-lime {
-    @apply bg-lime-200 text-lime-600;
+  /* TODO: check if this should be deleted */
+
+  .CodeMirror {
+    font-family: Arial, monospace;
+    font-size: 16px;
+    background-color: rgb(243 244 246);
   }
 
-  .badge-pink {
-    @apply bg-pink-100 text-pink-600;
+  .collapsed .tree-children-count {
+    display: inline !important;
   }
 
-  .badge-cyan {
-    @apply bg-cyan-100 text-cyan-600;
+  .collapsed .children {
+    display: inline-block;
+    padding-left: 0;
   }
 
-  .ctable :where(.table-pin-rows thead tr) {
-    @apply sticky top-0 z-10 bg-bgBase;
+  .collapsed .closing-token {
+    padding-left: 0;
   }
 
-  .ctable :where(.table-pin-cols tr th) {
-    @apply sticky left-0 right-0 z-10;
+  .sdk_tab {
+    @apply h-36 border rounded-sm w-full p-4;
   }
 
-  .ctable td > div {
-    @apply py-1;
+  .sdk_tab_active {
+    @apply border-blue-500 border ring-3 ring-blue-500 shadow-lg;
   }
 
-  .ctable .log-row.htmx-added,
-  .ctable .log-row.htmx-settling {
-    @apply bg-[#d6efff] transition-colors duration-300 ease-in-out;
+  .t-tab-active {
+    @apply font-bold border-[var(--brand-color)] text-[var(--brand-color)];
+  }
+  .t-tab-box-active {
+    @apply tab-active  shadow-[0px_4px_8px_-2px_rgba(0,0,0,0.04)]  text-textStrong border border-strokeStrong bg-bgOverlay;
+  }
+
+  .tab:is(input[type='radio']) {
+    width: max-content;
+  }
+
+  .tree_opened ~ .children_container {
+    display: flex;
+  }
+
+  .tree_opened .toggler {
+    transform: rotate(180deg);
   }
 }
 

@@ -65,16 +65,16 @@ dashboardPage_ pid dashId dash = do
   Components.modal_ "pageTitleModalId" ""
     $ form_
       [class_ "flex flex-col p-3 gap-3"]
-    $ label_ [class_ "form-control w-full max-w-xs"] do
-      div_ [class_ "label"] $ span_ [class_ "label-text"] "Change Dashboard Title"
-      input_ [class_ "input input-bordered w-full max-w-xs", placeholder_ "Insert new title", value_ $ maybeToMonoid dash.title]
+    $ fieldset_ [class_ "fieldset"] do
+      label_ [class_ "label"] "Change Dashboard Title"
+      input_ [class_ "input", placeholder_ "Insert new title", value_ $ maybeToMonoid dash.title]
 
   Components.modal_ "pageAddWidgetModalId" ""
     $ form_
       [class_ "flex flex-col p-3 gap-3"]
-    $ label_ [class_ "form-control w-full max-w-xs"] do
-      div_ [class_ "label"] $ span_ [class_ "label-text"] "Change Dashboard Title"
-      input_ [class_ "input input-bordered w-full max-w-xs", placeholder_ "Insert new title", value_ $ maybeToMonoid dash.title]
+    $ fieldset_ [class_ "fieldset"] do
+      label_ [class_ "label"] "Change Dashboard Title"
+      input_ [class_ "input w-full max-w-xs", placeholder_ "Insert new title", value_ $ maybeToMonoid dash.title]
 
   whenJust dash.variables \variables -> do
     div_ [class_ "flex bg-fillWeaker px-6 py-2 gap-2"] $
@@ -174,7 +174,7 @@ console.error(`Error fetching data for ${input.name}:`, e);
       ]
       do
         forM_ dash.widgets (\w -> toHtml (w{Widget._projectId = Just pid}))
-        when (null dash.widgets) $ label_ [id_ "add_a_widget_label", class_ "grid-stack-item pb-8 cursor-pointer bg-fillBrand-weak border-2 border-strokeBrand-strong border-dashed text-strokeSelected rounded rounded-lg flex flex-col gap-3 items-center justify-center *:!right-0  *:!bottom-0 ", term "gs-w" "3", term "gs-h" "2", Lucid.for_ "page-data-drawer"] do
+        when (null dash.widgets) $ label_ [id_ "add_a_widget_label", class_ "grid-stack-item pb-8 cursor-pointer bg-fillBrand-weak border-2 border-strokeBrand-strong border-dashed text-strokeSelected rounded-sm rounded-lg flex flex-col gap-3 items-center justify-center *:right-0!  *:bottom-0! ", term "gs-w" "3", term "gs-h" "2", Lucid.for_ "page-data-drawer"] do
           faSprite_ "plus" "regular" "h-8 w-8"
           span_ "Add a widget"
     let projectId = pid.toText
@@ -407,7 +407,7 @@ dashboardGetH pid dashId fileM fromDStr toDStr sinceStr allParams = do
           , pageActions = Just $ div_ [class_ "inline-flex gap-3 items-center leading-[0]"] do
               Components.timepicker_ Nothing currentRange
               label_
-                [ class_ "cursor-pointer py-2 px-3 border border-strokeStrong rounded-lg shadow"
+                [ class_ "cursor-pointer py-2 px-3 border border-strokeStrong rounded-lg shadow-sm"
                 , data_ "tippy-content" "Refresh"
                 , [__| on click trigger 'update-query' on window then
                     add .animate-spin to the first <svg/> in me then wait 1 seconds then
@@ -455,13 +455,13 @@ newWidget_ pid currentRange = div_ do
   let defaultWidgetJSON = TE.decodeUtf8 $ fromLazy $ AE.encode defaultWidget
   div_ [class_ "flex justify-between"] do
     div_ [class_ "tabs tabs-boxed tabs-md p-0 tabs-outline items-center border"] do
-      a_ [onclick_ "window.setQueryParamAndReload('source', 'requests')", role_ "tab", class_ $ "tab !h-auto  tab-active "] "Edit"
-      a_ [onclick_ "window.setQueryParamAndReload('source', 'logs')", role_ "tab", class_ $ "tab !h-auto "] "Overview"
+      a_ [onclick_ "window.setQueryParamAndReload('source', 'requests')", role_ "tab", class_ $ "tab h-auto!  tab-active "] "Edit"
+      a_ [onclick_ "window.setQueryParamAndReload('source', 'logs')", role_ "tab", class_ $ "tab h-auto! "] "Overview"
 
     div_ [class_ "inline-flex gap-3 items-center leading-[0]"] do
       Components.timepicker_ Nothing currentRange
       label_
-        [ class_ "cursor-pointer py-2 px-3 border border-strokeStrong rounded-lg shadow"
+        [ class_ "cursor-pointer py-2 px-3 border border-strokeStrong rounded-lg shadow-sm"
         , data_ "tippy-content" "Refresh"
         , [__| on click trigger 'update-query' on window then
                       add .animate-spin to the first <svg/> in me then wait 1 seconds then
@@ -469,9 +469,9 @@ newWidget_ pid currentRange = div_ do
         ]
         $ faSprite_ "arrows-rotate" "regular" "w-3 h-3"
       span_ [class_ "text-fillDisabled"] "|"
-      button_ [class_ "leading-none rounded-lg px-4 py-2 cursor-pointer btn-primary shadow", type_ "submit", form_ "newWidgetForm"] $ "Save changes"
+      button_ [class_ "leading-none rounded-lg px-4 py-2 cursor-pointer btn-primary shadow-sm", type_ "submit", form_ "newWidgetForm"] $ "Save changes"
       label_ [class_ "text-iconNeutral cursor-pointer", data_ "tippy-content" "Close Drawer", Lucid.for_ "page-data-drawer"] $ faSprite_ "xmark" "regular" "w-3 h-3"
-  div_ [class_ "w-full aspect-[4/1] p-3 rounded-lg bg-fillWeaker"] do
+  div_ [class_ "w-full aspect-4/1 p-3 rounded-lg bg-fillWeaker"] do
     script_
       [class_ "hidden"]
       [text| var defaultWidgetJSON = ${defaultWidgetJSON} |]
@@ -493,7 +493,7 @@ newWidget_ pid currentRange = div_ do
             ]
        in iforM_ visTypes \idx (icon, title, widgetType) ->
             label_
-              [ class_ "col-span-1 p-4 aspect-square gap-3 flex flex-col border border-strokeWeak rounded-lg items-center justify-center has-[:checked]:border-strokeBrand-strong has-[:checked]:bg-fillBrand-weak"
+              [ class_ "col-span-1 p-4 aspect-square gap-3 flex flex-col border border-strokeWeak rounded-lg items-center justify-center has-checked:border-strokeBrand-strong has-checked:bg-fillBrand-weak"
               , data_ "widgetType" widgetType
               , [__| on click set defaultWidgetJSON.type to @data-widgetType then trigger 'update-default-widget' on #default-widget-container |]
               ]
@@ -582,7 +582,7 @@ dashboardsGet_ dg = do
     do
       div_ [class_ "col-span-2 space-y-4"] do
         strong_ "Create dashboard"
-        label_ [class_ "input input-sm input-bordered flex items-center "] do
+        label_ [class_ "input input-sm flex items-center "] do
           faSprite_ "magnifying-glass" "regular" "w-4 h-4 opacity-70"
           input_
             [ type_ "text"
@@ -606,14 +606,14 @@ dashboardsGet_ dg = do
           div_ [class_ "flex-1"] do
             strong_ [class_ "text-xl", id_ "dItemTitle"] "Custom Dashboard"
             p_ [class_ "text-sm line-clamp-2 min-h-10", id_ "dItemDescription"] "Get started from a blank slate"
-          div_ [class_ "flex items-center justify-center shrink"] $ button_ [class_ "leading-none rounded-lg p-3 cursor-pointer bg-fillBrand-strong shadow text-white", type_ "submit"] "Select template"
+          div_ [class_ "flex items-center justify-center shrink"] $ button_ [class_ "leading-none rounded-lg p-3 cursor-pointer bg-fillBrand-strong shadow-sm text-white", type_ "submit"] "Select template"
         div_ [class_ "pt-5"] $
           div_ [class_ "bg-[#1e9cff] px-5 py-8 rounded-xl aspect-square w-full flex items-center"] $
             img_ [src_ "/public/assets/svgs/screens/dashboard_blank.svg", class_ "w-full", id_ "dItemPreview"]
 
   div_ [id_ "itemsListPage", class_ "mx-auto px-6 pt-4 gap-8 w-full flex flex-col h-full overflow-hidden pb-2  group/pg"] do
     div_ [class_ "flex"] do
-      label_ [class_ "input input-md input-bordered flex-1 flex bg-fillWeaker border-slate-200 shadow-none overflow-hidden items-center gap-2"] do
+      label_ [class_ "input input-md flex-1 flex bg-fillWeaker border-slate-200 shadow-none overflow-hidden items-center gap-2"] do
         faSprite_ "magnifying-glass" "regular" "w-4 h-4 opacity-70"
         input_
           [ type_ "text"
@@ -655,7 +655,7 @@ dashboardsGetH pid = do
           { sessM = Just sess
           , currProject = Just project
           , pageTitle = "Dashboards"
-          , pageActions = Just $ (label_ [Lucid.for_ "newDashboardMdl", class_ "leading-none rounded-xl shadow p-3 cursor-pointer bg-fillBrand-strong text-white"] "New Dashboard")
+          , pageActions = Just $ (label_ [Lucid.for_ "newDashboardMdl", class_ "leading-none rounded-xl shadow-sm p-3 cursor-pointer bg-fillBrand-strong text-white"] "New Dashboard")
           }
   addRespHeaders $
     PageCtx bwconf $

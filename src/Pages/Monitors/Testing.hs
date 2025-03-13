@@ -313,7 +313,7 @@ renderStepIll_ st stepResult ind = do
         totalPass = V.length $ V.filter fst assertionRes
     div_ [] do
       div_ [class_ "flex items-center gap-2 cursor-pointer", [__|on click toggle .hidden on the next .step-body|]] do
-        faSprite_ "chevron-up" "regular" "h-5 w-5 border rounded p-1"
+        faSprite_ "chevron-up" "regular" "h-5 w-5 border rounded-sm p-1"
         span_ [class_ "text-gray-800 text-sm font-medium"] $ "Step " <> show (ind + 1)
         span_ [class_ "badge badge-success"] $ show totalPass <> "/" <> show (V.length assertionRes) <> " Passed"
         span_ [class_ "text-gray-500 text-sm flex items-center gap-1"] do
@@ -325,7 +325,7 @@ renderStepIll_ st stepResult ind = do
           div_ [class_ "border-t w-8"] pass
           div_ [] do
             div_ [class_ "flex gap-1 -mt-2 cursor-pointer", [__|on click toggle .hidden on the next .assert-body|]] do
-              faSprite_ "chevron-up" "regular" "h-5 w-5 border rounded p-1"
+              faSprite_ "chevron-up" "regular" "h-5 w-5 border rounded-sm p-1"
               span_ [class_ "font-medium text-sm text-gray-800"] "Assertions"
             div_ [class_ "border-l pt-4 ml-2 flex flex-col gap-3 assert-body"] do
               forM_ assertionRes $ \(success, resultText) -> do

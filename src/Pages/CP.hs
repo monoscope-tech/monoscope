@@ -121,35 +121,35 @@ page = do
               h2_ [class_ "text-[#181d27] text-semibold text-2xl leading-loose"] "Data Overview"
               p_ [class_ "text-[#535861] text-base font-normal"] "An overview of the customer data that has been flagged and requires a manual check."
             div_ do
-              button_ [class_ "gap-2 px-3.5 py-2.5 bg-[#554696] rounded-lg shadow shadow-inner text-white text-sm justify-center items-center inline-flex"] do
+              button_ [class_ "gap-2 px-3.5 py-2.5 bg-[#554696] rounded-lg shadow-sm shadow-inner text-white text-sm justify-center items-center inline-flex"] do
                 i_ [class_ "fa-regular fa-file-circle-check"] ""
                 "Submit corrected data"
           div_ [c "self-stretch grow shrink basis-0 justify-between items-center flex flex-col"] $ do
             div_ [c "self-stretch px-8 flex-col justify-start items-start gap-6 flex"] $ do
               -- Filter Bar
               div_ [class_ "sticky top-0 z-10 px-4 py-3 bg-neutral-50 rounded-xl justify-between items-start flex w-full"] do
-                select_ [class_ "select select-sm h-auto px-3.5 py-1.5 leading-normal bg-white rounded-lg shadow shadow-inner border !border-[#d5d6d9] rounded-lg min-w-52 fix"] do
+                select_ [class_ "select select-sm h-auto px-3.5 py-1.5 leading-normal bg-white rounded-lg shadow-sm shadow-inner border border-[#d5d6d9]! rounded-lg min-w-52 fix"] do
                   option_ [value_ ""] "Select Field"
                   forM_ columns \(title, colId, _) -> option_ [value_ colId] $ toHtml $ title <> " Correction"
 
                 div_ [class_ "flex gap-3"] do
-                  button_ [class_ "flex gap-2 items-center px-3.5 py-1.5 bg-white rounded-lg shadow shadow-inner border border-[#d5d6d9]"] do
+                  button_ [class_ "flex gap-2 items-center px-3.5 py-1.5 bg-white rounded-lg shadow-sm shadow-inner border border-[#d5d6d9]"] do
                     i_ [class_ "fa-regular fa-calendar"] ""
                     "Nov 10, 2024 – Nov 31, 2024"
 
                   div_ [class_ "dropdown dropdown-end"] do
-                    div_ [tabindex_ "0", role_ "button", class_ "flex gap-2 items-center px-3.5 py-1.5 bg-white rounded-lg shadow shadow-inner border border-[#d5d6d9] "] do
+                    div_ [tabindex_ "0", role_ "button", class_ "flex gap-2 items-center px-3.5 py-1.5 bg-white rounded-lg shadow-sm shadow-inner border border-[#d5d6d9] "] do
                       i_ [class_ "fa-solid fa-bars-filter"] ""
                       "Filters"
-                    div_ [tabindex_ "0", class_ "dropdown-content flex flex-col bg-white shadow w-64 rounded-xl p-3 [&>*]:flex [&>*]:justify-between [&>*]:w-full  [&>*]:p-3"] do
+                    div_ [tabindex_ "0", class_ "dropdown-content flex flex-col bg-white shadow-sm w-64 rounded-xl p-3 *:flex *:justify-between *:w-full  *:p-3"] do
                       label_ [] $ span_ "Approved Data" >> input_ [type_ "checkbox", checked_, name_ "colApprovedD", class_ "checkbox colApprovedD"]
                       label_ [] $ span_ "Incorrect Data" >> input_ [type_ "checkbox", checked_, name_ "colIncorrectD", class_ "checkbox colIncorrectD"]
                       label_ [] $ span_ "No Error Data" >> input_ [type_ "checkbox", checked_, name_ "colNoErrD", class_ "checkbox colNoErrD"]
 
                   div_ [class_ "dropdown dropdown-end"] do
-                    div_ [tabindex_ "0", role_ "button", class_ "flex gap-2 items-center px-3.5 py-1.5 bg-white rounded-lg shadow shadow-inner border border-[#d5d6d9] "] do
+                    div_ [tabindex_ "0", role_ "button", class_ "flex gap-2 items-center px-3.5 py-1.5 bg-white rounded-lg shadow-sm shadow-inner border border-[#d5d6d9] "] do
                       i_ [class_ "fa-regular fa-columns-3"] "" >> "Columns"
-                    div_ [tabindex_ "0", class_ "dropdown-content flex flex-col bg-white shadow w-64 rounded-xl p-3 [&>*]:flex [&>*]:justify-between [&>*]:w-full  [&>*]:p-3"] do
+                    div_ [tabindex_ "0", class_ "dropdown-content flex flex-col bg-white shadow-sm w-64 rounded-xl p-3 *:flex *:justify-between *:w-full  *:p-3"] do
                       forM_ columns \(title, colId, _) -> label_ [] do
                         span_ (toHtml title)
                         input_ [type_ "checkbox", checked_, name_ colId, class_ $ "checkbox " <> colId]
@@ -160,8 +160,8 @@ page = do
                     col_ []
                     forM_ columns \(_, colId, _) -> col_ [class_ $ "min-w-48 "]
                   thead_ do
-                    tr_ [class_ "rounded-lg [&>*]:top-[3.8rem] text-[#717680] font-semibold"] do
-                      th_ [class_ " w-6 text-center"] $ input_ [type_ "checkbox", class_ "checkbox !border-[#D5D7DA] rounded-lg", [__|  on click set .contactCheckbox.checked to my.checked |]]
+                    tr_ [class_ "rounded-lg *:top-[3.8rem] text-[#717680] font-semibold"] do
+                      th_ [class_ " w-6 text-center"] $ input_ [type_ "checkbox", class_ "checkbox border-[#D5D7DA]! rounded-lg", [__|  on click set .contactCheckbox.checked to my.checked |]]
                       th_ [class_ "space-x-2 group"] do
                         span_ "Contact"
                         span_ [class_ "sortIcon absolute right-2 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 transition-opacity"] "↕"
@@ -320,13 +320,13 @@ bottomButtons =
     const deleteRowValue = () =>
       forEachChecked((id, col) => col && (document.querySelector(`.inputValue_$${id}$${col}`).value = ''));
     |]
-    button_ [c "px-3.5 py-2.5 rounded-md border border-[#d5d6d9] justify-center items-center gap-2 flex bg-neutral-50 text-neutral-400 group-has-[.contactCheckbox:checked]/pg:!bg-white group-has-[.contactCheckbox:checked]/pg:!text-[#414651]", onclick_ "approveDataList()"] do
+    button_ [c "px-3.5 py-2.5 rounded-md border border-[#d5d6d9] justify-center items-center gap-2 flex bg-neutral-50 text-neutral-400 group-has-[.contactCheckbox:checked]/pg:bg-white! group-has-[.contactCheckbox:checked]/pg:text-[#414651]!", onclick_ "approveDataList()"] do
       i_ [class_ "fa-regular fa-circle-check"] ""
       span_ [c "text-md font-semibold"] "Approve Data"
-    button_ [c "px-3.5 py-2.5 rounded-md border border-[#d5d6d9] justify-center items-center gap-2 flex bg-neutral-50 text-neutral-400 group-has-[.contactCheckbox:checked]/pg:!bg-white group-has-[.contactCheckbox:checked]/pg:!text-[#414651]", onclick_ "takeLastValue()"] do
+    button_ [c "px-3.5 py-2.5 rounded-md border border-[#d5d6d9] justify-center items-center gap-2 flex bg-neutral-50 text-neutral-400 group-has-[.contactCheckbox:checked]/pg:bg-white! group-has-[.contactCheckbox:checked]/pg:text-[#414651]!", onclick_ "takeLastValue()"] do
       i_ [class_ "fa-regular fa-rotate-reverse"] ""
       span_ [c "text-md font-semibold"] "Take last value"
-    button_ [c "px-3.5 py-2.5 rounded-md border border-[#d5d6d9] justify-center items-center gap-2 flex bg-neutral-50 text-neutral-400 group-has-[.contactCheckbox:checked]/pg:!bg-white group-has-[.contactCheckbox:checked]/pg:!text-[#414651]", onclick_ "deleteRowValue()"] do
+    button_ [c "px-3.5 py-2.5 rounded-md border border-[#d5d6d9] justify-center items-center gap-2 flex bg-neutral-50 text-neutral-400 group-has-[.contactCheckbox:checked]/pg:bg-white! group-has-[.contactCheckbox:checked]/pg:text-[#414651]!", onclick_ "deleteRowValue()"] do
       i_ [class_ "fa-regular fa-trash-can"] ""
       span_ [c "text-md font-semibold"] "Delete Value"
 
@@ -335,7 +335,7 @@ tableRow1 :: Contact -> Html ()
 tableRow1 cc =
   tr_ do
     th_ [class_ "text-center"] do
-      input_ [type_ "checkbox", class_ "checkbox !border-[#D5D7DA] rounded-lg contactCheckbox", id_ $ "check_" <> cc.nativeId]
+      input_ [type_ "checkbox", class_ "checkbox border-[#D5D7DA]! rounded-lg contactCheckbox", id_ $ "check_" <> cc.nativeId]
     th_ [class_ "space-y-1"] do
       strong_ [class_ "text-[#181d27] text-sm font-medium"] $ toHtml $ cc.title <> "." <> cc.firstName <> " " <> cc.lastName
       span_ [class_ "text-[#535861] text-sm font-normal block"] $ toHtml $ "#" <> cc.nativeId

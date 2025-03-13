@@ -133,7 +133,7 @@ itemsList_ listCfg items = do
 
         div_ [class_ " grow flex flex-row gap-2"] do
           forM_ listCfg.bulkActions \blkA -> button_
-            [ class_ "btn btn-sm btn-disabled group-has-[.bulkactionItemCheckbox:checked]/grid:text-white group-has-[.bulkactionItemCheckbox:checked]/grid:bg-fillBrand-strong group-has-[.bulkactionItemCheckbox:checked]/grid:!pointer-events-auto  "
+            [ class_ "btn btn-sm btn-disabled group-has-[.bulkactionItemCheckbox:checked]/grid:text-white group-has-[.bulkactionItemCheckbox:checked]/grid:bg-fillBrand-strong group-has-[.bulkactionItemCheckbox:checked]/grid:pointer-events-auto!  "
             , hxPost_ blkA.uri
             , hxSwap_ "none"
             ]
@@ -172,10 +172,10 @@ itemsList_ listCfg items = do
         div_ [class_ "flex justify-center w-60 items-center text-sm  content-between gap-2"] do
           span_ [] "Chart"
           div_ [class_ "rounded-lg border grid grid-cols-2 w-max h-7 bg-slate-200 overflow-hidden"] do
-            a_ [class_ $ "cursor-pointer px-1.5 flex items-center text-xs h-full rounded bg-white ", [__|init if window.location.search contains "since=14D" remove .bg-white from me else add .bg-white to me |], href_ $ currentURL' <> "&since=24H"] "24h"
-            a_ [class_ $ "cursor-pointer px-1.5 flex items-center text-xs h-full rounded ", [__|init if window.location.search contains "since=14D" add .bg-white to me else remove .bg-white from me |], href_ $ currentURL' <> "&since=14D"] "14d"
+            a_ [class_ $ "cursor-pointer px-1.5 flex items-center text-xs h-full rounded-sm bg-white ", [__|init if window.location.search contains "since=14D" remove .bg-white from me else add .bg-white to me |], href_ $ currentURL' <> "&since=24H"] "24h"
+            a_ [class_ $ "cursor-pointer px-1.5 flex items-center text-xs h-full rounded-sm ", [__|init if window.location.search contains "since=14D" add .bg-white to me else remove .bg-white from me |], href_ $ currentURL' <> "&since=14D"] "14d"
         div_
-          [ class_ "p-12 fixed rounded-lg shadow bg-base-100 top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 htmx-indicator loading loading-dots loading-md"
+          [ class_ "p-12 fixed rounded-lg shadow-sm bg-base-100 top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 htmx-indicator loading loading-dots loading-md"
           , id_ "sortLoader"
           ]
           ""
@@ -258,7 +258,7 @@ timelineSteps_ steps colM =
             whenJust colM $ \col ->
               div_ [class_ "flex items-center gap-6"] do
                 label_ [class_ "relative inline-flex items-center cursor-pointer space-x-1"] do
-                  input_ [type_ "checkbox", class_ "checkbox checkbox-sm rounded editormode", id_ "test-code-toggle", onchange_ "codeToggle(event)"] >> span_ [class_ "text-sm  text-textWeak font-medium"] "Code editor"
+                  input_ [type_ "checkbox", class_ "checkbox checkbox-sm rounded-sm editormode", id_ "test-code-toggle", onchange_ "codeToggle(event)"] >> span_ [class_ "text-sm  text-textWeak font-medium"] "Code editor"
                 button_
                   [ class_ "flex items-center gap-1 font-medium rounded-lg text-brand underline"
                   , hxPatch_ $ "/p/" <> col.projectId.toText <> "/monitors/" <> col.id.toText

@@ -34,8 +34,8 @@ metricsOverViewGetH pid tabM fromM toM sinceM sourceM prefixM cursorM = do
           , currProject = Just project
           , pageTitle = "Metrics"
           , navTabs = Just $ div_ [class_ "tabs tabs-boxed tabs-md tabs-outline items-center bg-slate-200 text-slate-500"] do
-              a_ [onclick_ "window.setQueryParamAndReload('source', 'requests')", role_ "tab", class_ "tab py-1.5 !h-auto tab-active"] "Overview"
-              a_ [onclick_ "window.setQueryParamAndReload('source', 'logs')", role_ "tab", class_ "tab py-1.5 !h-auto "] "Explorer"
+              a_ [onclick_ "window.setQueryParamAndReload('source', 'requests')", role_ "tab", class_ "tab py-1.5 h-auto! tab-active"] "Overview"
+              a_ [onclick_ "window.setQueryParamAndReload('source', 'logs')", role_ "tab", class_ "tab py-1.5 h-auto! "] "Explorer"
           , pageActions = Just $ Components.timepicker_ Nothing currentRange
           }
   if tab == "datapoints"
@@ -77,8 +77,8 @@ overViewTabs :: Projects.ProjectId -> Text -> Html ()
 overViewTabs pid tab = do
   div_ [class_ "w-max mt-5"] do
     div_ [class_ "tabs tabs-boxed tabs-md tabs-outline items-center bg-slate-200 text-slate-500"] do
-      a_ [onclick_ "window.setQueryParamAndReload('tab', 'datapoints')", role_ "tab", class_ $ "tab py-1.5 !h-auto  " <> if tab == "datapoints" then "tab-active" else ""] "Datapoints"
-      a_ [onclick_ "window.setQueryParamAndReload('tab', 'charts')", role_ "tab", class_ $ "tab py-1.5 !h-auto " <> if tab == "charts" then "tab-active" else ""] "Charts List"
+      a_ [onclick_ "window.setQueryParamAndReload('tab', 'datapoints')", role_ "tab", class_ $ "tab py-1.5 h-auto!  " <> if tab == "datapoints" then "tab-active" else ""] "Datapoints"
+      a_ [onclick_ "window.setQueryParamAndReload('tab', 'charts')", role_ "tab", class_ $ "tab py-1.5 h-auto! " <> if tab == "charts" then "tab-active" else ""] "Charts List"
 
 
 chartsPage :: Projects.ProjectId -> V.Vector Telemetry.MetricChartListData -> V.Vector Text -> Text -> Text -> Text -> Html ()
@@ -92,7 +92,7 @@ chartsPage pid metricList sources source mFilter nextUrl = do
         div_ [class_ "flex flex-col gap-1"] do
           span_ [class_ "text-slate-900 text-sm"] "Data source"
           select_
-            [ class_ "select bg-fillWeaker  border border-slate-200 rounded-xl w-36 focus:outline-none"
+            [ class_ "select bg-fillWeaker  border border-slate-200 rounded-xl w-36 focus:outline-hidden"
             , onchange_ "(() => {window.setQueryParamAndReload('metric_source', this.value)})()"
             ]
             do
@@ -101,7 +101,7 @@ chartsPage pid metricList sources source mFilter nextUrl = do
         div_ [class_ "flex items-center gap-2 w-full rounded-xl px-3 h-12 border border-slate-200 bg-fillWeaker"] do
           faSprite_ "magnifying-glass" "regular" "w-4 h-4 text-slate-500"
           input_
-            [ class_ "w-full text-slate-950 bg-transparent hover:outline-none focus:outline-none"
+            [ class_ "w-full text-slate-950 bg-transparent hover:outline-hidden focus:outline-hidden"
             , type_ "text"
             , placeholder_ "Search"
             , id_ "search-input"
@@ -110,7 +110,7 @@ chartsPage pid metricList sources source mFilter nextUrl = do
         div_ [class_ "flex flex-col gap-1"] do
           span_ [class_ "text-slate-900 text-sm"] "View by"
           select_
-            [ class_ "select bg-fillWeaker  border border-slate-200 rounded-xl w-42 focus:outline-none"
+            [ class_ "select bg-fillWeaker  border border-slate-200 rounded-xl w-42 focus:outline-hidden"
             , onchange_ "(() => {window.setQueryParamAndReload('metric_prefix', this.value)})()"
             ]
             do
@@ -210,7 +210,7 @@ metricsDetailsPage pid sources metric source currentRange = do
       div_ [class_ "flex flex-col gap-1"] do
         span_ [class_ "text-slate-900 text-sm font-medium"] "Data source"
         select_
-          [ class_ "select select-sm bg-fillWeaker border border-slate-200 rounded-xl w-36 focus:outline-none"
+          [ class_ "select select-sm bg-fillWeaker border border-slate-200 rounded-xl w-36 focus:outline-hidden"
           , hxGet_ $ "/p/" <> pid.toText <> "/metrics/details/" <> metric.metricName <> "/"
           , name_ "metric_source"
           , hxTarget_ "#global-data-drawer-content"
@@ -251,7 +251,7 @@ metricsDetailsPage pid sources metric source currentRange = do
             div_ [class_ "flex flex-col gap-1"] do
               span_ [class_ "text-slate-900 text-sm font-medium"] "By label"
               select_
-                [ class_ "select select-sm bg-fillWeaker border border-slate-200 rounded-xl w-36 focus:outline-none"
+                [ class_ "select select-sm bg-fillWeaker border border-slate-200 rounded-xl w-36 focus:outline-hidden"
                 , hxGet_ $ "/p/" <> pid.toText <> "/metrics/details/" <> metric.metricName <> "/breakdown"
                 , name_ "label"
                 , hxTarget_ "#breakdown-container"

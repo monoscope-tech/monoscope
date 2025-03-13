@@ -287,11 +287,11 @@ timelineSteps pid col =
 nameOfTest_ :: Text -> V.Vector Text -> Html ()
 nameOfTest_ name tags = do
   let tgs = decodeUtf8 $ AE.encode $ V.toList tags
-  div_ [class_ "form-control w-full p-4 bg-fillWeaker rounded-2xl"] do
+  div_ [class_ "fieldset w-full p-4 bg-fillWeaker rounded-2xl"] do
     div_ [class_ "flex flex-col rounded-xl p-4 bg-slate-50"] do
-      label_ [class_ "label"] $ span_ [class_ "text-slate-500 text-sm font-semibold"] "Name"
-      input_ [placeholder_ "Give your test a name", id_ "test_title", class_ "input input-sm input-bordered mb-2 shadow-none w-full", name_ "title", value_ name]
-      label_ [class_ "label"] $ span_ [class_ "text-slate-500 text-sm font-semibold"] "Tags"
+      label_ [class_ "label text-slate-500 text-sm font-semibold"] "Name"
+      input_ [placeholder_ "Give your test a name", id_ "test_title", class_ "input input-sm mb-2 shadow-none w-full", name_ "title", value_ name]
+      label_ [class_ "label text-slate-500 text-sm font-semibold"] "Tags"
       input_ [placeholder_ "Add tags", id_ "tags_input", class_ "rounded-lg shadow-none w-full", value_ tgs]
       script_
         [text|
@@ -307,7 +307,7 @@ nameOfTest_ name tags = do
 defineTestSteps_ :: Maybe Testing.Collection -> Html ()
 defineTestSteps_ colM = do
   div_ [class_ "flex flex-col ml-4 notif bg-blue-100 bg-opacity-60 rounded-xl relative"] do
-    div_ [class_ "self-end rounded-full absolute shadow-sm bg-white flex justify-center items-center h-5 w-5  top-1.5 right-1.5 mb-0"] do
+    div_ [class_ "self-end rounded-full absolute shadow-xs bg-white flex justify-center items-center h-5 w-5  top-1.5 right-1.5 mb-0"] do
       a_ [[__|on click remove the closest parent <.notif/>|]] $ faSprite_ "xmark" "regular" "w-2 h-2 text-brand"
     div_ [class_ "flex items-center gap-4 py-4 px-8"] do
       faSprite_ "circle-info" "regular" "w-5 h-5 fill-none stroke-blue-500"
@@ -345,8 +345,8 @@ collectionPage pid colM col_rn respJson = do
           div_ [class_ "flex items-centers justify-between mb-4"] do
             div_ [class_ "flex items-center gap-2"] do
               span_ [class_ "text-gray-900 font-medium"] "Run the test every"
-              input_ [class_ "ml-3 input input-sm input-bordered shadow-none w-12 text-center", type_ "number", value_ scheduleNumber, name_ "scheduleNumber"]
-              select_ [class_ "select select-sm select-bordered shadow-none", name_ "scheduleNumberUnit"] do
+              input_ [class_ "ml-3 input input-sm shadow-none w-12 text-center", type_ "number", value_ scheduleNumber, name_ "scheduleNumber"]
+              select_ [class_ "select select-sm shadow-none", name_ "scheduleNumberUnit"] do
                 option_ (value_ "minutes" : [selected_ "" | scheduleNumberUnit == "minutes"]) "minutes"
                 option_ (value_ "hours" : [selected_ "" | scheduleNumberUnit == "hours"]) "hours"
                 option_ (value_ "days" : [selected_ "" | scheduleNumberUnit == "days"]) "days"
@@ -418,11 +418,11 @@ variablesDialog pid colM = do
       div_ [class_ "w-full flex flex-col gap-2"] do
         forM_ vars $ \var -> do
           div_ [class_ "flex items-center w-full px-4 gap-2 text-sm relative"] do
-            div_ [class_ "input text-left truncate ellipsis input-sm w-full input-bordered bg-transparent"] $ toHtml var.variableName
+            div_ [class_ "input text-left truncate ellipsis input-sm w-full bg-transparent"] $ toHtml var.variableName
             span_ [] "="
-            div_ [class_ "input text-left truncate ellipsis input-sm w-full input-bordered bg-transparent"] $ toHtml var.variableValue
+            div_ [class_ "input text-left truncate ellipsis input-sm w-full bg-transparent"] $ toHtml var.variableValue
             div_
-              [ class_ "acursor-pointer h-5 w-5 flex justify-center items-center rounded-full bg-white shadow border"
+              [ class_ "acursor-pointer h-5 w-5 flex justify-center items-center rounded-full bg-white shadow-sm border"
               , hxDelete_ $ "/p/" <> pid.toText <> "/monitors/" <> col.id.toText <> "/variables/" <> var.variableName
               , hxTarget_ "#test-variables-content"
               , hxSwap_ "outerHTML"
@@ -464,11 +464,11 @@ variablesDialog pid colM = do
               , hxTrigger_ "click from:#var-save"
               ]
               do
-                div_ [class_ "form-control w-full"] do
+                fieldset_ [class_ "fieldset w-full"] do
                   label_ [class_ "label"] $ span_ [class_ "label-text"] "Name"
-                  input_ [type_ "text", placeholder_ "Variable name", class_ "input input-sm input-bordered w-full ", name_ "variableName", value_ ""]
+                  input_ [type_ "text", placeholder_ "Variable name", class_ "input input-sm w-full ", name_ "variableName", value_ ""]
                   label_ [class_ "label"] $ span_ [class_ "label-text"] "Value"
-                  input_ [type_ "text", placeholder_ "Value", class_ "input input-sm input-bordered w-full ", name_ "variableValue", value_ ""]
+                  input_ [type_ "text", placeholder_ "Value", class_ "input input-sm w-full ", name_ "variableValue", value_ ""]
             div_ [class_ "modal-action"] do
               button_ [class_ "btn btn-sm btn-success", id_ "var-save", [__|on click halt then htmx.trigger('#test-variables','click')|]] "Save"
         label_ [class_ "modal-backdrop", Lucid.for_ "my_modal_7"] "Close"
@@ -476,21 +476,21 @@ variablesDialog pid colM = do
 
 collectionStepResult_ :: Int -> Testing.StepResult -> Html ()
 collectionStepResult_ idx stepResult = section_ [class_ "p-1"] do
-  when (idx == 0) $ div_ [id_ "step-results-indicator", class_ "absolute top-1/2 z-10 left-1/2 -translate-x-1/2 rounded-sm -translate-y-1/2 steps-indicator text-slate-400"] do
-    div_ [class_ "hidden loading-indicator flex justify-center bg-base-100 rounded-sm shadow-sm p-4"] do
+  when (idx == 0) $ div_ [id_ "step-results-indicator", class_ "absolute top-1/2 z-10 left-1/2 -translate-x-1/2 rounded-xs -translate-y-1/2 steps-indicator text-slate-400"] do
+    div_ [class_ "hidden loading-indicator flex justify-center bg-base-100 rounded-xs shadow-xs p-4"] do
       span_ [class_ "loading loading-dots loading-lg"] ""
   div_ [class_ "p-2 bg-base-200 font-bold"] do
     toHtml $ show (idx + 1) <> " " <> fromMaybe "" stepResult.stepName
     p_ [class_ $ "block badge badge-sm " <> getStatusColor stepResult.request.resp.status, term "data-tippy-content" "status"] $ show stepResult.request.resp.status
-  div_ [role_ "tablist", class_ "tabs tabs-lifted"] do
+  div_ [role_ "tablist", class_ "tabs tabs-lift"] do
     input_ [type_ "radio", name_ $ "step-result-tabs-" <> show idx, role_ "tab", class_ "tab", Aria.label_ "Response Log", checked_]
-    div_ [role_ "tabpanel", class_ "tab-content bg-base-100 border-base-300 rounded-box p-6"]
-      $ toHtmlRaw
-      $ textToHTML stepResult.stepLog
+    div_ [role_ "tabpanel", class_ "tab-content bg-base-100 border-base-300 rounded-box p-6"] $
+      toHtmlRaw $
+        textToHTML stepResult.stepLog
 
     input_ [type_ "radio", name_ $ "step-result-tabs-" <> show idx, role_ "tab", class_ "tab", Aria.label_ "Response Headers"]
-    div_ [role_ "tabpanel", class_ "tab-content bg-base-100 border-base-300 rounded-box p-6 "]
-      $ table_ [class_ "table table-xs"] do
+    div_ [role_ "tabpanel", class_ "tab-content bg-base-100 border-base-300 rounded-box p-6 "] $
+      table_ [class_ "table table-xs"] do
         thead_ [] $ tr_ [] $ th_ [] "Name" >> th_ [] "Value"
         tbody_ do
           whenJust stepResult.request.resp.headers $ \headers -> do
@@ -507,7 +507,7 @@ collectionStepResult_ idx stepResult = section_ [class_ "p-1"] do
 jsonTreeAuxillaryCode :: Html ()
 jsonTreeAuxillaryCode = do
   template_ [id_ "log-item-context-menu-tmpl"] do
-    div_ [id_ "log-item-context-menu", class_ "log-item-context-menu  origin-top-right absolute left-0 mt-2 rounded-md shadow-md shadow-slate-300 bg-base-100 ring-1 ring-black ring-opacity-5 divide-y divide-gray-100 focus:outline-none z-10", role_ "menu", tabindex_ "-1"] do
+    div_ [id_ "log-item-context-menu", class_ "log-item-context-menu  origin-top-right absolute left-0 mt-2 rounded-md shadow-md shadow-slate-300 bg-base-100 ring-1 ring-black ring-opacity-5 divide-y divide-gray-100 focus:outline-hidden z-10", role_ "menu", tabindex_ "-1"] do
       div_ [class_ "py-1 w-max", role_ "none"] do
         button_
           [ class_ "cursor-pointer w-full text-left text-slate-700 block px-4 py-1  hover:bg-gray-100 hover:text-slate-900"

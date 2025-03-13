@@ -274,8 +274,8 @@ onboardingCompleteBody pid = do
   div_ [class_ "w-[550px] h-full flex items-center mx-auto relative"] $ do
     canvas_ [id_ "drawing_canvas", class_ "absolute top-0 left-0  w-full"] pass
     div_ [class_ "flex-col gap-4 flex w-full p-14 my-auto border border-weak rounded-2xl"] $ do
-      div_ [class_ "p-3 bg-[#0acc91]/5 rounded-full w-max border-[#067a57]/20 gap-2 inline-flex"]
-        $ faSprite_ "circle-check" "regular" "h-8 w-8 text-green-500"
+      div_ [class_ "p-3 bg-[#0acc91]/5 rounded-full w-max border-[#067a57]/20 gap-2 inline-flex"] $
+        faSprite_ "circle-check" "regular" "h-8 w-8 text-green-500"
       div_ [class_ "flex flex-col gap-2"] do
         h3_ [class_ " text-textStrong font-semibold text-2xl"] "Onboarding completed!"
         p_ [class_ " text-textWeak text-sm"] "You're all set! You can now start using exploring the apitoolkit dashboard by clicking the button below."
@@ -418,7 +418,7 @@ notifChannels pid slackRedirectUri phone emails hasDiscord hasSlack = do
                 then button_ [class_ "text-green-500 font-semibold"] "Connected"
                 else a_
                   [ target_ "_blank"
-                  , class_ "border px-3 h-8 flex items-center shadow-sm border-[var(--brand-color)] rounded-lg text-brand font-semibold"
+                  , class_ "border px-3 h-8 flex items-center shadow-xs border-[var(--brand-color)] rounded-lg text-brand font-semibold"
                   , href_ $ slackPro <> "&redirect_uri=" <> slackRedirectUri <> pid.toText <> "?onboarding=true"
                   ]
                   do
@@ -515,7 +515,7 @@ createMonitorPage pid colM = do
 discordModal :: Projects.ProjectId -> Html ()
 discordModal pid = do
   div_ [id_ "discord-modal"] $ do
-    label_ [Lucid.for_ "my_modal_6", class_ "border px-3 h-8 flex items-center shadow-sm border-[var(--brand-color)] rounded-lg text-brand font-semibold"] "Connect"
+    label_ [Lucid.for_ "my_modal_6", class_ "border px-3 h-8 flex items-center shadow-xs border-[var(--brand-color)] rounded-lg text-brand font-semibold"] "Connect"
     input_ [type_ "checkbox", id_ "my_modal_6", class_ "modal-toggle"]
     div_ [class_ "modal", role_ "dialog"] do
       div_ [class_ "modal-box"] $ do
@@ -581,8 +581,8 @@ inviteTeamMemberModal pid emails = do
     div_ [class_ "modal p-8", role_ "dialog"] do
       universalIndicator
       div_ [class_ "modal-box flex flex-col gap-4"] $ do
-        div_ [class_ "p-3 bg-[#0acc91]/5 rounded-full w-max border-[#067a57]/20 gap-2 inline-flex"]
-          $ faSprite_ "circle-check" "regular" "h-6 w-6 text-green-500"
+        div_ [class_ "p-3 bg-[#0acc91]/5 rounded-full w-max border-[#067a57]/20 gap-2 inline-flex"] $
+          faSprite_ "circle-check" "regular" "h-6 w-6 text-green-500"
         span_ [class_ " text-textStrong text-2xl font-semibold"] "Test notifications sent"
         div_ [class_ "text-[#000833]/60"] "No notification? Close this modal and verify emails and channels."
         div_ [class_ "h-1 w-full  bg-fillWeak"] pass
@@ -591,10 +591,10 @@ inviteTeamMemberModal pid emails = do
             div_ [class_ "w-full text-[#000833]/60"] "The users below will be added to your project as team members"
             div_ [class_ "w-full gap-4 flex flex-col"] $ do
               div_ [class_ "w-full gap-2 flex items-center"] $ do
-                div_ [class_ "flex-col gap-1 inline-flex w-full"]
-                  $ div_ [class_ "flex flex-col gap-1 w-full"]
-                  $ do
-                    input_ [class_ "input input-sm w-full", placeholder_ "email@example.com", type_ "email", id_ "add-member-input"]
+                div_ [class_ "flex-col gap-1 inline-flex w-full"] $
+                  div_ [class_ "flex flex-col gap-1 w-full"] $
+                    do
+                      input_ [class_ "input input-sm w-full", placeholder_ "email@example.com", type_ "email", id_ "add-member-input"]
                 button_ [class_ "btn-primary rounded-lg  px-3 h-8 justify-center items-center flex text-white text-sm font-semibold", onclick_ "appendMember()"] "invite"
               div_ [class_ "w-full"] $ do
                 div_ [class_ "w-full  text-textStrong text-sm font-semibold"] "Members"
@@ -636,8 +636,8 @@ inviteMemberItem email = do
   div_ (class_ ("flex  py-1 w-full justify-between items-center border-b border-[#001066]/10 " <> if hide then "hidden" else "") : [id_ "member-template" | hide]) do
     div_ [class_ "pr-6 py-1  w-full justify-start items-center inline-flex"] do
       input_ ([type_ "hidden", value_ email] ++ [name_ "emails" | not hide])
-      span_ [class_ "text-[#000626]/90 text-sm font-normal"]
-        $ toHtml email
+      span_ [class_ "text-[#000626]/90 text-sm font-normal"] $
+        toHtml email
     select_ [name_ "permissions", class_ "select select-xs"] do
       option_ [class_ "text-gray-500", value_ "admin"] "Admin"
       option_ [class_ "text-gray-500", value_ "edit"] "Can Edit"
@@ -674,7 +674,7 @@ createBinaryField :: Text -> Text -> [Text] -> (Text, Text) -> Html ()
 createBinaryField kind name selectedValues (value, label) = do
   div_ [class_ " items-center gap-3 inline-flex"] $ do
     let checked = value `elem` selectedValues
-    input_ $ [class_ "w-6 h-6 rounded", type_ kind, name_ name, value_ value, id_ value] <> [required_ "required" | kind == "radio"] <> [checked_ | checked]
+    input_ $ [class_ "w-6 h-6 rounded-sm", type_ kind, name_ name, value_ value, id_ value] <> [required_ "required" | kind == "radio"] <> [checked_ | checked]
     label_ [class_ " text-textStrong text-sm", Lucid.for_ value] $ toHtml label
 
 
@@ -687,7 +687,7 @@ stepIndicator step title prevUrl = do
     div_ [class_ "flex-col gap-2 flex w-full"] $ do
       div_ [class_ " text-textStrong text-base font-semibold"] $ "Step " <> show step <> " of 6"
       div_ [class_ "grid grid-cols-6 w-full gap-1"] $ do
-        forM_ [1 .. 6] $ \i -> div_ [class_ $ "h-2 w-full rounded " <> if step >= i then "btn-primary rounded" else " bg-fillWeak shadow-[inset_0px_1px_4px_0px_rgba(0,0,0,0.08)] border border-[#001066]/10"] pass
+        forM_ [1 .. 6] $ \i -> div_ [class_ $ "h-2 w-full rounded-sm " <> if step >= i then "btn-primary rounded-sm" else " bg-fillWeak shadow-[inset_0px_1px_4px_0px_rgba(0,0,0,0.08)] border border-[#001066]/10"] pass
       when (step > 1) $ do
         a_ [class_ "flex items-center gap-3 flex text-brand w-full mt-2", href_ prevUrl] $ do
           faSprite_ "arrow-left" "regular" "h-4 w-4"
@@ -706,5 +706,5 @@ faQ question answer =
 
 universalIndicator :: Html ()
 universalIndicator =
-  div_ [class_ "fixed  htmx-indicator top-0 left-0 right-0 bottom-0 flex items-center justify-center z-[9999]", id_ "loadingIndicator"] do
+  div_ [class_ "fixed  htmx-indicator top-0 left-0 right-0 bottom-0 flex items-center justify-center z-9999", id_ "loadingIndicator"] do
     span_ [class_ "loading loading-dots loading-lg"] ""
