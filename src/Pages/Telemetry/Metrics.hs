@@ -33,7 +33,7 @@ metricsOverViewGetH pid tabM fromM toM sinceM sourceM prefixM cursorM = do
           { sessM = Just sess
           , currProject = Just project
           , pageTitle = "Metrics"
-          , navTabs = Just $ div_ [class_ "tabs tabs-boxed tabs-md tabs-outline items-center bg-slate-200 text-slate-500"] do
+          , navTabs = Just $ div_ [class_ "tabs tabs-box tabs-md tabs-outline items-center bg-slate-200 text-slate-500"] do
               a_ [onclick_ "window.setQueryParamAndReload('source', 'requests')", role_ "tab", class_ "tab py-1.5 h-auto! tab-active"] "Overview"
               a_ [onclick_ "window.setQueryParamAndReload('source', 'logs')", role_ "tab", class_ "tab py-1.5 h-auto! "] "Explorer"
           , pageActions = Just $ Components.timepicker_ Nothing currentRange
@@ -76,7 +76,7 @@ instance ToHtml MetricsOverViewGet where
 overViewTabs :: Projects.ProjectId -> Text -> Html ()
 overViewTabs pid tab = do
   div_ [class_ "w-max mt-5"] do
-    div_ [class_ "tabs tabs-boxed tabs-md tabs-outline items-center bg-slate-200 text-slate-500"] do
+    div_ [class_ "tabs tabs-box tabs-md tabs-outline items-center bg-slate-200 text-slate-500"] do
       a_ [onclick_ "window.setQueryParamAndReload('tab', 'datapoints')", role_ "tab", class_ $ "tab py-1.5 h-auto!  " <> if tab == "datapoints" then "tab-active" else ""] "Datapoints"
       a_ [onclick_ "window.setQueryParamAndReload('tab', 'charts')", role_ "tab", class_ $ "tab py-1.5 h-auto! " <> if tab == "charts" then "tab-active" else ""] "Charts List"
 
@@ -139,21 +139,21 @@ chartList pid source metricList nextUrl = do
                   then htmx.process(#global-data-drawer-content)
                   then _hyperscript.processNode(#global-data-drawer-content)
                   then window.evalScriptsFromContent(#global-data-drawer-content)|]
-      div_ [class_ "h-52"]
-        $ toHtml
-        $ def
-          { Widget.wType = Widget.WTDistribution
-          , Widget.title = Just metric.metricName
-          , Widget.query = Just $ "metric_name = \"" <> metric.metricName <> "\""
-          , Widget.layout = Just $ Widget.Layout{x = Just 0, y = Just 0, w = Just 2, h = Just 1}
-          , Widget.unit = Just metric.metricUnit
-          , Widget.hideLegend = Just True
-          , Widget.eager = Just True
-          , Widget._projectId = Just pid
-          , Widget.expandBtnFn = Just expandBtn
-          }
-  when (length metricList > 19)
-    $ a_ [hxTrigger_ "intersect once", hxSwap_ "outerHTML", hxGet_ nextUrl] pass
+      div_ [class_ "h-52"] $
+        toHtml $
+          def
+            { Widget.wType = Widget.WTDistribution
+            , Widget.title = Just metric.metricName
+            , Widget.query = Just $ "metric_name = \"" <> metric.metricName <> "\""
+            , Widget.layout = Just $ Widget.Layout{x = Just 0, y = Just 0, w = Just 2, h = Just 1}
+            , Widget.unit = Just metric.metricUnit
+            , Widget.hideLegend = Just True
+            , Widget.eager = Just True
+            , Widget._projectId = Just pid
+            , Widget.expandBtnFn = Just expandBtn
+            }
+  when (length metricList > 19) $
+    a_ [hxTrigger_ "intersect once", hxSwap_ "outerHTML", hxGet_ nextUrl] pass
 
 
 dataPointsPage :: Projects.ProjectId -> V.Vector Telemetry.MetricDataPoint -> Html ()

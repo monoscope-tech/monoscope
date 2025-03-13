@@ -8,9 +8,9 @@ LINUX_HC_PATH := .stack-work/dist/x86_64-linux-tinfo6/ghc-$(GHC_VERSION)/build
 RUSTLIB := Crust_interop
 
 css-start:
-	npx tailwindcss/cli -i ./static/public/assets/css/tailwind.css -o ./static/public/assets/css/tailwind.min.css --watch
+	./node_modules/.bin/tailwindcss -i ./static/public/assets/css/tailwind.css -o ./static/public/assets/css/tailwind.min.css --watch
 post-css:
-	npx postcss-cli ./static/public/assets/css/tailwind.css  -o ./static/public/assets/css/tailwind.min.css
+	./node_modules/.bin/tailwindcss --postcss ./static/public/assets/css/tailwind.css  -o ./static/public/assets/css/tailwind.min.css
 run:
 	stack run
 

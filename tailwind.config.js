@@ -372,23 +372,6 @@ module.exports = {
         'span-13': 'span 13 / span 13',
         'span-14': 'span 14 / span 14',
       },
-      fontFamily: {
-        sans: [
-          '-apple-system',
-          'BlinkMacSystemFont',
-          "'Segoe UI'",
-          'Roboto',
-          "'Helvetica Neue'",
-          'Helvetica',
-          "'PingFang SC'",
-          "'Hiragino Sans GB'",
-          "'Microsoft YaHei'",
-          'SimSun',
-          'sans-serif',
-        ],
-      },
     },
   },
-  // plugins: [require('daisyui'), require('@tailwindcss/typography')],
-  plugins: [require('@tailwindcss/typography')],
 }

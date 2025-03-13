@@ -88,7 +88,7 @@ itemsList_ :: ToHtml a => ItemsListCfg -> V.Vector a -> Html ()
 itemsList_ listCfg items = do
   let currentURL' = deleteParam "sort" listCfg.currentURL
   whenJust listCfg.search \search -> do
-    label_ [class_ "input input-sm flex h-10 bg-fillWeak border border-strokeStrong shadow-none overflow-hidden items-center gap-2"] do
+    label_ [class_ "input input-sm flex w-full h-10 bg-fillWeak border border-strokeStrong shadow-none overflow-hidden items-center gap-2"] do
       faSprite_ "magnifying-glass" "regular" "w-4 h-4 opacity-70"
       case search.viaQueryParam of
         Just param ->
@@ -163,8 +163,8 @@ itemsList_ listCfg items = do
                       , hxIndicator_ "#sortLoader"
                       ]
                       do
-                        div_ [class_ "flex flex-col items-center justify-center px-3"]
-                          $ if isActive then faSprite_ "icon-checkmark4" "solid" "w-4 h-5" else div_ [class_ "w-4 h-5"] ""
+                        div_ [class_ "flex flex-col items-center justify-center px-3"] $
+                          if isActive then faSprite_ "icon-checkmark4" "solid" "w-4 h-5" else div_ [class_ "w-4 h-5"] ""
                         div_ [class_ "grow space-y-1"] do
                           span_ [class_ "block text-lg"] $ toHtml title
                           span_ [class_ "block "] $ toHtml desc
@@ -206,8 +206,8 @@ itemRows_ :: (Monad m, ToHtml a) => Maybe Text -> V.Vector a -> HtmlT m ()
 itemRows_ nextFetchUrl items = do
   mapM_ toHtml items
   whenJust nextFetchUrl \url ->
-    when (length items > 9)
-      $ a_
+    when (length items > 9) $
+      a_
         [ class_ "cursor-pointer flex justify-center items-center p-1 blue-800 bg-blue-100 hover:bg-blue-200 text-center"
         , hxTrigger_ "click, intersect once"
         , hxSwap_ "outerHTML"

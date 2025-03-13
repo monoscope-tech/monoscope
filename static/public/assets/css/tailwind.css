@@ -1,12 +1,144 @@
 @import 'tailwindcss';
+@source "./public/*.{html,js,hs}";
+
+@layer base, utilities, custom;
 
 @config '../../../../tailwind.config.js';
-
+@plugin "@tailwindcss/typography";
 @plugin "daisyui" {
   themes:
     light --default,
     dark --prefersdark,
     cupcake;
+}
+
+@theme {
+  /* Simple colors */
+  --color-gray-25: #fcfcfd;
+  --color-gray-150: #ecedf0;
+  --color-slate-25: #fbfcfd;
+  --color-slate-150: #e9eef4;
+  --color-slate-250: #d6dee8;
+
+  /* Background colors */
+  --color-bgAlternate: #f5f6fa;
+  --color-bgBase: #fbfcfd;
+  --color-bgInverse: #12131a;
+  --color-bgOverlay: #fbfcfd;
+  --color-bgRaised: #fbfcfd;
+  --color-bgSunken: #f5f6fa;
+
+  /* Fill colors */
+  --color-fillBrand-strong: #0068ff;
+  --color-fillBrand-weak: #0068ff0d;
+  --color-fillDisabled: #0011661a;
+  --color-fillStrong: #000626e5;
+  --color-fillError-strong: #c73a3a;
+  --color-fillError-weak: #ff4a4a0d;
+  --color-fillHover: #0015800a;
+  --color-fillInformation-strong: #1a74a8;
+  --color-fillInformation-weak: #26b0ff0d;
+  --color-fillInverseDisabled: #ffffff1f;
+  --color-fillInverse-weak: #ffffff0f;
+  --color-fillOverlay: #000d4d73;
+  --color-fillPress: #0011661a;
+  --color-fillSelected: #0068ff;
+  --color-fillSuccess-strong: #067a57;
+  --color-fillSuccess-weak: #0acc920d;
+  --color-fillWarning-strong: #8f6c1a;
+  --color-fillWarning-weak: #ffc02e0d;
+  --color-fillWeak: #0015800a;
+  --color-fillWeaker: #00158005;
+  --color-fillWhite: #ffffff;
+  --color-fillYellow: #fec62e;
+
+  /* Icon colors */
+  --color-iconBrand: #0068ffcc;
+  --color-iconDisabled: #0011661a;
+  --color-iconError: #c73a3acc;
+  --color-iconInformation: #1a74a8cc;
+  --color-iconInverse: #ffffff99;
+  --color-iconInverseDisabled: #ffffff1f;
+  --color-iconInverse-strong: #ffffff;
+  --color-iconNeutral: #000d4d73;
+  --color-iconSuccess: #067a57cc;
+  --color-iconWarning: #8f6c1acc;
+
+  /* Stroke colors */
+  --color-strokeBrand-strong: #0068ffcc;
+  --color-strokeBrand-weak: #0068ff33;
+  --color-strokeDisabled: #0011661a;
+  --color-strokeError-strong: #c73a3acc;
+  --color-strokeError-weak: #c73a3a24;
+  --color-strokeFocus: #0068ff;
+  --color-strokeInformation-strong: #1a74a8cc;
+  --color-strokeInformation-weak: #1a74a833;
+  --color-strokeInverseDisabled: #ffffff1f;
+  --color-strokeInverse-strong: #ffffff99;
+  --color-strokeInverse-weak: #ffffff1f;
+  --color-strokeSelected: #0068ff;
+  --color-strokeStrong: #000d4d73;
+  --color-strokeSuccess-strong: #067a57cc;
+  --color-strokeSuccess-weak: #067a5733;
+  --color-strokeWarning-strong: #8f6c1acc;
+  --color-strokeWarning-weak: #8f6c1a33;
+  --color-strokeWeak: #0011661a;
+
+  /* Text colors */
+  --color-textBrand: #0068ff;
+  --color-textDisabled: #000d4d73;
+  --color-textError: #c73a3a;
+  --color-textInverseDisabled: #ffffff1f;
+  --color-textInverse-strong: #ffffff;
+  --color-textInverse-weak: #ffffffc7;
+  --color-textStrong: #000626e6;
+  --color-textWeak: #000833a6;
+}
+
+@plugin "daisyui/theme" {
+  name: 'light';
+  default: true;
+  prefersdark: false;
+  color-scheme: 'light';
+  --color-base-100: #00158005;
+  --color-base-200: #0015800a;
+  --color-base-300: #0015800a;
+  --color-base-content: #000626e6;
+  --color-primary: #0068ff;
+  --color-primary-content: #ffffff;
+  --color-secondary: #fbfcfd;
+  --color-secondary-content: #000833a6;
+  --color-accent: #00158005;
+  --color-accent-content: #0068ff;
+  --color-neutral: #0015800a;
+  --color-neutral-content: #000626e6;
+  --color-info: #26b0ff0d;
+  --color-info-content: #1a74a8;
+  --color-success: #0acc920d;
+  --color-success-content: #067a57;
+  --color-warning: #ffc02e0d;
+  --color-warning-content: #8f6c1a;
+  --color-error: #ff4a4a0d;
+  --color-error-content: #c73a3a;
+  --radius-selector: 0.5rem;
+  --radius-field: 0.4rem;
+  --radius-box: 1rem;
+  --size-selector: 0.25rem;
+  --size-field: 0.25rem;
+  --border: 1px;
+  --depth: 1;
+  --noise: 1;
+}
+
+@layer custom {
+  .tab {
+    --tab-bg: var(--color-bgOverlay);
+  }
+  .tooltip:before,
+  .tooltip:after {
+    --tt-bg: var(--color-fillStrong);
+    color: var(--color-textInverse-strong);
+  }
 }
 
 /*
@@ -29,42 +161,40 @@
 
 @utility tabs-outline {
   & :is(.tab-active, [aria-selected='true']):not(.tab-disabled):not([disabled]) {
-    @apply bg-bgBase shadow-sm border border-strokeStrong text-textStrong;
+    @apply border border-strokeStrong shadow-sm text-textStrong;
   }
+
   & :is(.tab-active, [aria-selected='true']):not(.tab-disabled):not([disabled]):hover {
-    @apply bg-bgBase shadow-sm border border-strokeStrong text-textStrong;
+    @apply border border-strokeStrong shadow-sm text-textStrong;
   }
-
-  /*
   .tabs-outline .tab {
-    @apply !text-slate-800 font-medium;
-  }*/
+    @apply !text-textStrong;
+  }
 }
 
-@utility tab-active {
-  .tabs-outline :is(&, [aria-selected='true']):not(.tab-disabled):not([disabled]) {
-    @apply bg-bgBase shadow-sm border border-strokeStrong text-textStrong;
-  }
-
-  .tabs-outline :is(&, [aria-selected='true']):not(.tab-disabled):not([disabled]):hover {
-    @apply bg-bgBase shadow-sm border border-strokeStrong text-textStrong;
-  }
-
-  /*
-  .tabs-outline .tab {
-    @apply !text-slate-800 font-medium;
-  }*/
-}
+/* @utility tab-active { */
+/*   .tabs-outline :is(&, [aria-selected='true']):not(.tab-disabled):not([disabled]) { */
+/*     @apply bg-bgBase shadow-sm border border-strokeStrong text-textStrong; */
+/*   } */
+/**/
+/*   .tabs-outline :is(&, [aria-selected='true']):not(.tab-disabled):not([disabled]):hover { */
+/*     @apply bg-bgBase shadow-sm border border-strokeStrong text-textStrong; */
+/*   } */
+/**/
+/*   /* */
+/*   .tabs-outline .tab { */
+/*     @apply !text-slate-800 font-medium; */
+/*   }*/
+/* } */
 
 @utility tabs-boxed {
   & :is(input:checked) {
     @apply bg-bgBase;
   }
 
-  /*
   .tabs-outline .tab {
-    @apply !text-slate-800 font-medium;
-  }*/
+    @apply !text-textStrong;
+  }
 }
 
 @utility tab {
@@ -139,16 +269,15 @@
   @apply border-blue-500 text-[var(--brand-color)] font-medium;
 }
 
-@utility cbadge {
-  @apply px-3 py-1.5 text-sm rounded-xl;
+.cbadge {
+  @apply px-2 py-1.5 text-sm rounded-lg text-center;
 }
 
-@utility cbadge-sm {
-  @apply px-2 py-1 text-sm rounded-xl;
+.cbadge-sm {
+  @apply px-1.5 py-1 text-sm rounded-lg text-center;
 }
 
 @utility badge-2xx {
-  @apply bg-green-100 text-green-700;
   @apply bg-green-100 text-green-700;
 }
 
@@ -168,17 +297,12 @@
   @apply bg-red-50 text-red-800;
 }
 
-@utility badge-neutral {
-  @apply bg-slate-150 text-[#000933]/60;
-}
-
 @utility badge-blue {
   @apply text-[var(--brand-color)] bg-[#d6efff];
 }
 
 @utility badge-green {
   @apply text-green-500 bg-green-100;
-  @apply text-amber-500 bg-amber-100;
 }
 
 @utility badge-lime {
@@ -249,7 +373,7 @@
   }
 }
 
-@layer base {
+@layer custom {
   .swagger_history_container {
     width: 200px !important;
   }
@@ -275,7 +399,7 @@
   }
 }
 
-@layer utilities {
+@layer custom {
   .log_details_expanded {
     width: 850px;
   }
@@ -492,7 +616,7 @@
   }
 }
 
-@layer utilities {
+@layer custom {
   /* HERE SINCE IT"S BASICALLY AN OVERRIDE.  Its for the log items rows */
   .expanded-log {
     @apply border-l-blue-200 bg-blue-50;
@@ -619,9 +743,9 @@
   .t-tab-active {
     @apply font-bold border-[var(--brand-color)] text-[var(--brand-color)];
   }
-  .t-tab-box-active {
-    @apply tab-active  shadow-[0px_4px_8px_-2px_rgba(0,0,0,0.04)]  text-textStrong border border-strokeStrong bg-bgOverlay;
-  }
+  /* .t-tab-box-active { */
+  /*   @apply tab-active  shadow-[0px_4px_8px_-2px_rgba(0,0,0,0.04)]  text-textStrong border border-strokeStrong bg-bgOverlay; */
+  /* } */
 
   .tab:is(input[type='radio']) {
     width: max-content;

@@ -178,7 +178,7 @@ stepsBox_ total passed failed = do
 
 pageTabs :: Text -> Text -> Html ()
 pageTabs url ov = do
-  div_ [class_ "tabs tabs-boxed tabs-outline items-center border p-0  bg-fillWeak  text-textWeak"] do
+  div_ [class_ "tabs tabs-box tabs-outline items-center border p-0  bg-fillWeak  text-textWeak"] do
     a_ [href_ ov, role_ "tab", class_ "tab tab-active border border-strokeStrong  text-textStrong"] "Overview"
     a_ [href_ url, role_ "tab", class_ "tab"] "Test editor"
 

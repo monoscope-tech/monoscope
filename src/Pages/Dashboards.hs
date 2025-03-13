@@ -454,7 +454,7 @@ newWidget_ pid currentRange = div_ do
           }
   let defaultWidgetJSON = TE.decodeUtf8 $ fromLazy $ AE.encode defaultWidget
   div_ [class_ "flex justify-between"] do
-    div_ [class_ "tabs tabs-boxed tabs-md p-0 tabs-outline items-center border"] do
+    div_ [class_ "tabs tabs-box tabs-md p-0 tabs-outline items-center border"] do
       a_ [onclick_ "window.setQueryParamAndReload('source', 'requests')", role_ "tab", class_ $ "tab h-auto!  tab-active "] "Edit"
       a_ [onclick_ "window.setQueryParamAndReload('source', 'logs')", role_ "tab", class_ $ "tab h-auto! "] "Overview"
 
@@ -469,7 +469,7 @@ newWidget_ pid currentRange = div_ do
         ]
         $ faSprite_ "arrows-rotate" "regular" "w-3 h-3"
       span_ [class_ "text-fillDisabled"] "|"
-      button_ [class_ "leading-none rounded-lg px-4 py-2 cursor-pointer btn-primary shadow-sm", type_ "submit", form_ "newWidgetForm"] $ "Save changes"
+      button_ [class_ "leading-none rounded-lg px-4 py-2 cursor-pointer btn btn-primary shadow-sm", type_ "submit", form_ "newWidgetForm"] $ "Save changes"
       label_ [class_ "text-iconNeutral cursor-pointer", data_ "tippy-content" "Close Drawer", Lucid.for_ "page-data-drawer"] $ faSprite_ "xmark" "regular" "w-3 h-3"
   div_ [class_ "w-full aspect-4/1 p-3 rounded-lg bg-fillWeaker"] do
     script_
@@ -635,7 +635,7 @@ dashboardsGet_ dg = do
                 when (isJust dashVM.homepageSince) $ (faSprite_ "house" "regular" "w-4 h-4")
             div_ [class_ "gap-2 flex items-center"] do
               time_ [class_ "mr-2 text-slate-400", term "data-tippy-content" "Date of dashboard creation", datetime_ $ Utils.formatUTC dashVM.createdAt] $ toHtml $ formatTime defaultTimeLocale "%eth %b %Y" dashVM.createdAt
-              forM_ dashVM.tags (span_ [class_ "cbadge-sm badge-neutral cbadge bg-fillWeak"] . toHtml @Text)
+              forM_ dashVM.tags (span_ [class_ "badge badge-neutral"] . toHtml @Text)
           div_ [class_ "flex items-end justify-center gap-5"] do
             button_ [class_ "leading-none", term "data-tippy-content" "click star this dashboard"] $
               if isJust dashVM.starredSince

@@ -110,7 +110,7 @@ apiLogH pid queryM queryASTM cols' cursorM' sinceM fromM toM layoutM sourceM tar
                 span_ [class_ "group-has-[#streamLiveData:checked]/pg:hidden flex  py-1 px-3 items-center", data_ "tippy-content" "stream live data"] $ faSprite_ "play" "regular" "h-4 w-4"
               Components.timepicker_ (Just "log_explorer_form") currentRange
               a_ [class_ "cursor-pointer py-1 px-3 border border-strokeStrong rounded-lg shadow-sm", [__|on click htmx.trigger('#log_explorer_form', 'submit') |], data_ "tippy-content" "refresh"] $ faSprite_ "arrows-rotate" "regular" "h-4 w-4"
-          , navTabs = Just $ div_ [class_ "tabs tabs-boxed tabs-md p-0 tabs-outline items-center border"] do
+          , navTabs = Just $ div_ [class_ "tabs tabs-box tabs-md p-0 tabs-outline items-center border"] do
               a_ [onclick_ "window.setQueryParamAndReload('source', 'requests')", role_ "tab", class_ $ "tab h-auto! " <> if source == "requests" then "tab-active  text-textStrong " else ""] "Requests"
               a_ [onclick_ "window.setQueryParamAndReload('source', 'logs')", role_ "tab", class_ $ "tab h-auto! " <> if source == "logs" then "tab-activetext-textStrong " else ""] "Logs"
               a_ [onclick_ "window.setQueryParamAndReload('source', 'spans')", role_ "tab", class_ $ "tab h-auto! " <> if source == "spans" then "tab-active" else ""] "Traces"
@@ -281,6 +281,7 @@ logQueryBox_ pid currentRange source targetSpan queryAST queryLibRecent queryLib
     , id_ "log_explorer_form"
     , hxIndicator_ "#run-query-indicator"
     , [__| on keydown if event.key is 'Enter' halt |]
+    , class_ "flex flex-col gap-1"
     ]
     do
       div_ [class_ "flex gap-2 items-stretch justify-center"] do
@@ -309,7 +310,7 @@ logQueryBox_ pid currentRange source targetSpan queryAST queryLibRecent queryLib
           -- li_ $ a_ [] "Save query as an Alerts"
           -- li_ $ a_ [] "Save result to a dashboard"
           button_
-            [type_ "submit", class_ "leading-none rounded-lg px-3 py-2 cursor-pointer btn-primary"]
+            [type_ "submit", class_ "leading-none rounded-lg px-3 py-2 cursor-pointer btn btn-primary"]
             do
               span_ [id_ "run-query-indicator", class_ "refresh-indicator htmx-indicator query-indicator loading loading-dots loading-sm"] ""
               faSprite_ "magnifying-glass" "regular" "h-4 w-4 inline-block"
@@ -318,9 +319,9 @@ logQueryBox_ pid currentRange source targetSpan queryAST queryLibRecent queryLib
 
         -- termRaw "filter-element" [id_ "filterElement", class_ "w-full h-full flex items-center", termRaw "ast" queryAST, termRaw "mode" "command"] ("" :: Text)
         div_ [class_ "flex justify-end  gap-2 "] do
-          div_ [class_ "py-1 flex flex-row justify-end"] $ label_ [class_ "flex items-center cursor-pointer space-x-2 p-1"] do
+          fieldset_ [class_ "fieldset"] $ label_ [class_ "label"] do
             input_ [type_ "checkbox", class_ "checkbox checkbox-sm rounded-sm toggle-chart"] >> span_ "charts"
-          fieldset_ [class_ "fieldset w-max"] $ label_ [class_ "label flex items-center cursor-pointer w-max space-x-2"] do
+          fieldset_ [class_ "fieldset"] $ label_ [class_ "label"] do
             input_ [type_ "checkbox", class_ "checkbox checkbox-sm rounded-sm", id_ "toggleQueryEditor", onclick_ "toggleQueryBuilder()"] >> span_ "query editor"
 
 
@@ -328,7 +329,7 @@ queryLibrary_ :: Projects.ProjectId -> V.Vector Projects.QueryLibItem -> V.Vecto
 queryLibrary_ pid queryLibSaved queryLibRecent = div_ [class_ "dropdown dropdown-hover dropdown-bottom dropdown-start", id_ "queryLibraryParentEl"] do
   div_ [class_ "cursor-pointer relative  bg-fillWeak  text-textWeak rounded-lg border border-strokeWeaker h-full flex gap-2 items-center px-2", tabindex_ "0", role_ "button"] $
     (toHtml "Presets" >> faSprite_ "chevron-down" "regular" "w-3 h-3")
-  div_ [class_ "dropdown-content z-20"] $ div_ [class_ "tabs tabs-boxed tabs-md tabs-outline items-center bg-fillWeak p-0 h-full", role_ "tablist", id_ "queryLibraryTabListEl"] do
+  div_ [class_ "dropdown-content z-20"] $ div_ [class_ "tabs tabs-box tabs-md tabs-outline items-center bg-fillWeak p-0 h-full", role_ "tablist", id_ "queryLibraryTabListEl"] do
     tabPanel_ "Saved" (queryLibraryContent_ "Saved" queryLibSaved)
     tabPanel_ "Recent" (queryLibraryContent_ "Recent" queryLibRecent)
   where
@@ -356,7 +357,7 @@ queryLibrary_ pid queryLibSaved queryLibRecent = div_ [class_ "dropdown dropdown
                      else show <.group/> in .{@data-filterParent} when its textContent.toLowerCase() contains my value.toLowerCase()|]
           ]
       when (label == "Saved") do
-        label_ [class_ "tabs tabs-md tabs-boxed tabs-outline bg-slate-200 text-slate-50 shrink items-center", role_ "tablist"] do
+        label_ [class_ "tabs tabs-md tabs-box tabs-outline bg-slate-200 text-slate-50 shrink items-center", role_ "tablist"] do
           input_ [class_ "hidden", type_ "checkbox", id_ "queryLibraryGroup"]
           div_ [role_ "tab", class_ "tab h-full bg-slate-50 group-has-[#queryLibraryGroup:checked]/pg:bg-transparent", term "data-tippy-content" "My Queries"] $ faSprite_ "user" "solid" "w-5 h-5"
           div_ [role_ "tab", class_ "tab h-full group-has-[#queryLibraryGroup:checked]/pg:bg-slate-50", term "data-tippy-content" "All team Queries"] $ faSprite_ "users" "solid" "w-5 h-5"

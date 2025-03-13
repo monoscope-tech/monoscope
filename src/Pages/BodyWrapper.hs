@@ -264,7 +264,7 @@ bodyWrapper bcfg child = do
             end
     |]
 
-    body_ [class_ "h-full w-full bg-bgBase text-slate-700 group/pg", term "data-theme" "antdtheme", term "hx-ext" "multi-swap,preload"] do
+    body_ [class_ "h-full w-full bg-bgBase text-slate-700 group/pg", term "data-theme" "light", term "hx-ext" "multi-swap,preload"] do
       div_
         [ style_ "z-index:99999"
         , class_ "pt-24 sm:hidden justify-center z-50 w-full p-4 bg-gray-50 overflow-y-auto inset-0 h-full max-h-full"

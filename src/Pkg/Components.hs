@@ -146,7 +146,7 @@ data TabFilterOpt = TabFilterOpt
 
 instance ToHtml TabFilter where
   toHtmlRaw = toHtml
-  toHtml tf = div_ [class_ "tabs tabs-boxed tabs-outline p-0 bg-fillWeak text-textWeak border items-center border"] do
+  toHtml tf = div_ [class_ "tabs tabs-box tabs-outline p-0 bg-fillWeak text-textWeak border items-center border"] do
     let uri = deleteParam "filter" tf.currentURL
     forM_ tf.options \opt ->
       a_
@@ -158,7 +158,7 @@ instance ToHtml TabFilter where
           span_ $ toHtml opt.name
           whenJust opt.count $ span_ [class_ "absolute top-[1px] -right-[5px] text-white text-xs font-medium rounded-full px-1 bg-red-500"] . show
 
--- , navTabs = Just $ div_ [class_ "tabs tabs-boxed tabs-md p-0 tabs-outline items-center  bg-fillWeak  text-textWeak border"] do
+-- , navTabs = Just $ div_ [class_ "tabs tabs-box tabs-md p-0 tabs-outline items-center  bg-fillWeak  text-textWeak border"] do
 --     a_ [onclick_ "window.setQueryParamAndReload('source', 'requests')", role_ "tab", class_ $ "tab py-1 h-auto! " <> if source == "requests" then "tab-active  text-textStrong border border-strokeStrong " else ""] "Requests"
 --     a_ [onclick_ "window.setQueryParamAndReload('source', 'logs')", role_ "tab", class_ $ "tab py-1 h-auto! " <> if source == "logs" then "tab-active  text-textStrong border border-strokeStrong " else ""] "Logs"
 --     a_ [onclick_ "window.setQueryParamAndReload('source', 'spans')", role_ "tab", class_ $ "tab py-1 h-auto! " <> if source == "spans" then "tab-active  text-textStrong border border-strokeStrong " else ""] "Traces"

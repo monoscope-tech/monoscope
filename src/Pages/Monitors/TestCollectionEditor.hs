@@ -191,7 +191,7 @@ castToStepResult v = case AE.eitherDecodeStrictText (decodeUtf8 $ AE.encode v) o
 
 pageTabs :: Text -> Maybe Text -> Html ()
 pageTabs url ov = do
-  div_ [class_ "tabs tabs-boxed tabs-outline items-center p-0  bg-fillWeak  text-textWeak border"] do
+  div_ [class_ "tabs tabs-box tabs-outline items-center p-0  bg-fillWeak  text-textWeak border"] do
     whenJust ov $ \v -> do
       a_ [href_ v, role_ "tab", class_ "tab"] "Overview"
     a_ [href_ url, role_ "tab", class_ "tab tab-active  text-textStrong border border-strokeStrong"] "Test editor"
