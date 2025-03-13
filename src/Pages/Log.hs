@@ -549,17 +549,8 @@ apiLogsPage page = do
               span_ "4,459"
 
       div_ [class_ "grow flex-1 h-full space-y-1.5 overflow-hidden"] do
-        -- div_ [class_ "flex gap-2  pt-1"] do
-        --   label_ [class_ "gap-1 flex items-center cursor-pointer"] do
-        --     faSprite_ "side-chevron-left-in-box" "regular" "w-4 h-4 group-has-[.toggle-filters:checked]/pg:rotate-180 "
-        --     span_ [class_ "hidden group-has-[.toggle-filters:checked]/pg:block"] "Show"
-        --     span_ [class_ "group-has-[.toggle-filters:checked]/pg:hidden"] "Hide"
-        --     "filters"
-        --     input_ [type_ "checkbox", class_ "toggle-filters hidden", checked_]
-        --   span_ [class_ "text-slate-200"] "|"
-        -- div_ [class_ "divide-y flex flex-col  overflow-hidden"] $ resultTableAndMeta_ page
-        div_ [class_ "flex items-start w-full h-full", id_ "logs_section_container"] do
-          div_ [class_ "relative flex items-start w-full overlfow-x-hidden h-full", id_ "logs_list_container"] do
+        div_ [class_ "flex w-full relative h-full", id_ "logs_section_container"] do
+          div_ [class_ "relative flex shrink-1 min-w-0 w-full overlfow-x-hidden h-full", id_ "logs_list_container"] do
             div_ [class_ "absolute top-0 right-0 hidden w-full h-full overflow-scroll c-scroll z-50 bg-white transition-all duration-100", id_ "trace_expanded_view"] pass
             virtualTable page
 
@@ -572,7 +563,7 @@ apiLogsPage page = do
               div_ [class_ "bg-iconNeutral h-[3px] w-[3px] rounded-full"] ""
               div_ [class_ "bg-iconNeutral h-[3px] w-[3px] rounded-full"] ""
 
-          div_ [class_ "relative lex flex-col overflow-y-auto overflow-x-hidden h-full c-scroll transition-all duration-100", style_ "width:0px", id_ "log_details_container"] do
+          div_ [class_ "absolute right-0 grow-1 overflow-y-auto overflow-x-hidden h-full c-scroll transition-all duration-100", style_ "width:0px", id_ "log_details_container"] do
             span_ [class_ "htmx-indicator query-indicator absolute loading left-1/2 -translate-x-1/2 loading-dots absoute z-10 top-10", id_ "details_indicator"] ""
 
           script_
@@ -615,8 +606,8 @@ apiLogsPage page = do
             mouseState = {x: event.clientX}
             const edW = Number(logDetails.style.width.replace('px',''))
             const ldW = Number(logsListC.style.width.replace('px',''))
-            logDetails.style.width = (edW - diff) + 'px'
             logsListC.style.width = (ldW + diff) + 'px'
+            logDetails.style.width = (edW - diff) + 'px'
             updateUrlState('details_width', logDetails.style.width)
           }
           window.addEventListener ('mousemove', handleMouseMove)

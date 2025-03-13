@@ -65,8 +65,15 @@ expandAPIlogItem' pid req modal = do
 
         div_ [class_ "flex items-center gap-2"] do
           dateTime (zonedTimeToUTC req.createdAt) Nothing
-          button_ [class_ "ml-4 p-0 -mt-1", [__|on click add .hidden to #trace_expanded_view then put '0px' into  #log_details_container.style.width|]] do
-            faSprite_ "xmark" "regular" "w-3 h-3 text-textBrand"
+          button_
+            [ class_ "ml-4 p-0 -mt-1"
+            , [__|on click add .hidden to #trace_expanded_view 
+            then put '0px' into  #log_details_container.style.width 
+            then put '100%' into #logs_list_container.style.width 
+            then add .hidden to #resizer|]
+            ]
+            do
+              faSprite_ "xmark" "regular" "w-3 h-3 text-textBrand"
     -- url, endpoint, latency, request size, repsonse size
     let path = toText $ escapeURIString isUnescapedInURI $ "url_path==\"" <> toString req.urlPath <> "\""
         query = toText $ escapeURIString isUnescapedInURI $ "raw_url==\"" <> toString req.rawUrl <> "\""
@@ -183,8 +190,14 @@ apiLogItemView pid lg = do
         div_ [class_ "flex gap-4 items-center"] $ do
           dateTime lg.timestamp Nothing
           div_ [class_ "flex gap-2 items-center"] do
-            button_ [[__|on click add .hidden to #trace_expanded_view then put '0px' into  #log_details_container.style.width|]] do
-              faSprite_ "xmark" "regular" "w-3 h-3 text-textBrand"
+            button_
+              [ [__|on click add .hidden to #trace_expanded_view 
+            then put '0px' into  #log_details_container.style.width 
+            then put '100%' into #logs_list_container.style.width 
+            then add .hidden to #resizer|]
+              ]
+              do
+                faSprite_ "xmark" "regular" "w-3 h-3 text-textBrand"
     div_ [class_ "flex flex-col gap-4"] do
       div_ [class_ "flex items-center gap-4"] do
         let svTxt = maybe "UNSET" (\x -> T.toLower $ T.drop 2 $ show x) lg.severityText
@@ -257,8 +270,8 @@ spanBadge val key = do
 -- Function to selectively convert RequestDumpLogItem to JSON
 selectiveReqToJson :: RequestDumps.RequestDumpLogItem -> AE.Value
 selectiveReqToJson req =
-  AE.object
-    $ concat @[]
+  AE.object $
+    concat @[]
       [ ["created_at" AE..= req.createdAt]
       , ["duration_ns" AE..= req.durationNs]
       , ["errors" AE..= req.errors]

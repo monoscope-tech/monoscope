@@ -47,8 +47,14 @@ expandedSpanItem pid sp leftM rightM = do
         div_ [class_ "flex gap-4 items-center"] $ do
           dateTime sp.startTime Nothing
           div_ [class_ "flex gap-2 items-center"] do
-            button_ [[__|on click add .hidden to #trace_expanded_view then put '0px' into  #log_details_container.style.width then put '100%' into #logs_list_container.style.width then add .hidden to #resizer|]] do
-              faSprite_ "xmark" "regular" "w-3 h-3 text-textBrand"
+            button_
+              [ [__|on click add .hidden to #trace_expanded_view 
+            then put '0px' into  #log_details_container.style.width 
+            then put '100%' into #logs_list_container.style.width 
+            then add .hidden to #resizer|]
+              ]
+              do
+                faSprite_ "xmark" "regular" "w-3 h-3 text-textBrand"
 
       div_ [class_ "flex items-center gap-4 text-sm font-medium text-slate-950"] $ do
         case reqDetails of
