@@ -561,15 +561,20 @@ apiLogsPage page = do
             virtualTable page
 
           div_ [onmousedown_ "mouseDown(event)", class_ "relative shrink-0 h-full flex items-center justify-center w-1 bg-fillWeak  cursor-ew-resize overflow-visible"] do
-            div_ [onmousedown_ "mouseDown(event)", id_ "resizer", class_ "absolute hidden left-1/2 top-1/2 z-999 -translate-x-1/2  px-1 py-1 -translate-y-1/2 w-max bg-slate-50 rounded-sm border border-strokeBrand-weak grid grid-cols-2 gap-1"] do
-              div_ [class_ "bg-iconNeutral h-[3px] w-[3px] rounded-full"] ""
-              div_ [class_ "bg-iconNeutral h-[3px] w-[3px] rounded-full"] ""
-              div_ [class_ "bg-iconNeutral h-[3px] w-[3px] rounded-full"] ""
-              div_ [class_ "bg-iconNeutral h-[3px] w-[3px] rounded-full"] ""
-              div_ [class_ "bg-iconNeutral h-[3px] w-[3px] rounded-full"] ""
-              div_ [class_ "bg-iconNeutral h-[3px] w-[3px] rounded-full"] ""
+            div_
+              [ onmousedown_ "mouseDown(event)"
+              , id_ "resizer"
+              , class_ $ "absolute left-1/2 top-1/2 z-999 -translate-x-1/2  px-1 py-1 -translate-y-1/2 w-max bg-slate-50 rounded-sm border border-strokeBrand-weak grid grid-cols-2 gap-1 " <> if isJust page.detailsWidth then "" else "hidden"
+              ]
+              do
+                div_ [class_ "bg-iconNeutral h-[3px] w-[3px] rounded-full"] ""
+                div_ [class_ "bg-iconNeutral h-[3px] w-[3px] rounded-full"] ""
+                div_ [class_ "bg-iconNeutral h-[3px] w-[3px] rounded-full"] ""
+                div_ [class_ "bg-iconNeutral h-[3px] w-[3px] rounded-full"] ""
+                div_ [class_ "bg-iconNeutral h-[3px] w-[3px] rounded-full"] ""
+                div_ [class_ "bg-iconNeutral h-[3px] w-[3px] rounded-full"] ""
 
-          div_ [class_ "overflow-y-auto overflow-x-hidden h-full c-scroll transition-all duration-100", style_ $ "width:" <> dW, id_ "log_details_container"] do
+          div_ [class_ "overflow-y-auto grow-1 overflow-x-hidden h-full c-scroll transition-all duration-100", style_ $ "width:" <> dW, id_ "log_details_container"] do
             span_ [class_ "htmx-indicator query-indicator absolute loading left-1/2 -translate-x-1/2 loading-dots absoute z-10 top-10", id_ "details_indicator"] ""
             whenJust page.targetEvent \te -> do
               let url = "/p/" <> page.pid.toText <> "/log_explorer/" <> te
