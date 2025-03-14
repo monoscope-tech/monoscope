@@ -288,6 +288,8 @@ dashboardPage pid col reqsVecM = do
                       , traceLogs = V.empty
                       , fromD = Nothing
                       , toD = Nothing
+                      , detailsWidth = Nothing
+                      , targetEvent = Nothing
                       }
               Log.virtualTable page
             _ -> pass
