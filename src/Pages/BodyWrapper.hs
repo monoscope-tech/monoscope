@@ -341,7 +341,7 @@ projectsDropDown currProject projects = do
   let pidTxt = currProject.id.toText
   div_
     [ term "data-menu" "true"
-    , class_ "origin-top-right z-40 transition transform bg-base-100 p-4 absolute w-[20rem] rounded-2xl shadow-2xl shadow-indigo-200 opacity-100 scale-100"
+    , class_ "origin-top-right z-40 transition transform bg-bgOverlay p-4 absolute w-[20rem] rounded-2xl shadow-2xl shadow-indigo-200 opacity-100 scale-100"
     ]
     do
       div_ [class_ "p-2 pb-4 "] do

@@ -414,9 +414,15 @@ dashboardGetH pid dashId fileM fromDStr toDStr sinceStr allParams = do
                     remove .animate-spin from the first <svg/> in me |]
                 ]
                 $ faSprite_ "arrows-rotate" "regular" "w-3 h-3"
-              span_ [class_ "text-fillDisabled"] "|"
-              Components.drawer_ "page-data-drawer" Nothing (Just $ newWidget_ pid currentRange) $ span_ [class_ "text-iconNeutral cursor-pointer", data_ "tippy-content" "Add a new widget"] $ faSprite_ "plus" "regular" "w-3 h-3"
-              label_ [class_ "text-iconNeutral cursor-pointer", data_ "tippy-content" "Menu"] $ faSprite_ "ellipsis" "regular" "w-4 h-4"
+              div_ [class_ "flex gap-1 items-center"] do
+                span_ [class_ "text-fillDisabled"] "|"
+                Components.drawer_ "page-data-drawer" Nothing (Just $ newWidget_ pid currentRange) $ span_ [class_ "text-iconNeutral cursor-pointer p-2 hover:bg-fillWeak rounded-lg", data_ "tippy-content" "Add a new widget"] $ faSprite_ "plus" "regular" "w-3 h-3"
+                div_ [class_ "dropdown dropdown-end"] do
+                  div_ [tabindex_ "0", role_ "button", class_ "text-iconNeutral cursor-pointer  p-2 hover:bg-fillWeak rounded-lg", data_ "tippy-content" "Context Menu"] $ faSprite_ "ellipsis" "regular" "w-4 h-4"
+                  ul_ [tabindex_ "0", class_ "dropdown-content menu menu-md bg-base-100 rounded-box w-52 shadow-sm"] do
+                    li_ $ a_ "Rename dashboard"
+                    li_ $ a_ "Duplicate dashboard"
+                    li_ $ a_ [class_ "text-textError"] "Duplicate dashboard"
           , docsLink = Just "https://apitoolkit.io/docs/dashboard/dashboard-pages/dashboard/"
           }
   addRespHeaders $ PageCtx bwconf $ DashboardGet pid dashId dash''

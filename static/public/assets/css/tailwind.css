@@ -130,6 +130,22 @@
   --noise: 1;
 }
 
+:root,
+[data-theme] {
+  --backgroundPrimary: #fff;
+  --rounded-btn: 0.5rem;
+}
+
+html,
+body {
+  @apply overscroll-none bg-bgBase;
+  --brand-color: #0068ff;
+  --brand-color-light: #0090f0;
+  --tags-border-color: rgba(0, 13, 77, 0.45);
+  --tags-hover-border-color: rgba(0, 13, 77, 0.45);
+  --chkbg: var(--brand-color);
+}
+
 @layer custom {
   .tab {
     --tab-bg: var(--color-bgOverlay);
@@ -138,6 +154,10 @@
   .tooltip:after {
     --tt-bg: var(--color-fillStrong);
     color: var(--color-textInverse-strong);
+  }
+
+  .dropdown-content {
+    background-color: var(--color-bgOverlay);
   }
 }
 
@@ -402,22 +422,6 @@
 @layer custom {
   .log_details_expanded {
     width: 850px;
-  }
-
-  :root,
-  [data-theme] {
-    --backgroundPrimary: #fff;
-    --rounded-btn: 0.5rem;
-  }
-
-  html,
-  body {
-    @apply overscroll-none bg-bgBase;
-    --brand-color: #0068ff;
-    --brand-color-light: #0090f0;
-    --tags-border-color: rgba(0, 13, 77, 0.45);
-    --tags-hover-border-color: rgba(0, 13, 77, 0.45);
-    --chkbg: var(--brand-color);
   }
 
   .c-scroll::-webkit-scrollbar {
