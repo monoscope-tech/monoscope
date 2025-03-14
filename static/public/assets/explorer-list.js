@@ -671,7 +671,7 @@ function toggleLogRow(event, targetInfo, pid) {
   const resizer = document.querySelector('#resizer')
   if (sideView.style.width === '0px') {
     const lW = getComputedStyle(logsView).width.replace('px', '')
-    // logsView.style.width = `${lW - 550}px`
+    logsView.style.width = `${lW - 550}px`
     sideView.style.width = '550px'
     resizer.classList.remove('hidden')
     updateUrlState('details_width', sideView.style.width)
