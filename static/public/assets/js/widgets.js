@@ -139,7 +139,7 @@ const chartWidget = widgetData => {
     updateChartData(chart, opt, true, widgetData)
   })
 
-  window.addEventListener('unload', () => (clearInterval(intervalId), resizeObserver.disconnect()))
+  window.addEventListener('pagehide', () => (clearInterval(intervalId), resizeObserver.disconnect()))
 }
 
 function bindFunctionsToObjects(rootObj, obj) {

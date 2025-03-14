@@ -200,10 +200,48 @@ renderWidgetHeader wId title valueM subValueM expandBtnFn ctaM hideSub = div_ [c
         , class_ "p-2 cursor-pointer"
         ]
         $ Utils.faSprite_ "expand-icon" "regular" "w-3 h-3"
-    button_
-      [ class_ "p-2 cursor-pointer"
-      ]
-      $ Utils.faSprite_ "ellipsis" "regular" "w-4 h-4"
+    details_ [class_ "dropdown dropdown-end"] do
+      summary_ [class_ "text-iconNeutral cursor-pointer p-2 hover:bg-fillWeak rounded-lg", data_ "tippy-content" "Widget Menu"] $ 
+        Utils.faSprite_ "ellipsis" "regular" "w-4 h-4"
+      ul_ [class_ "menu menu-md dropdown-content bg-base-100 rounded-box p-2 w-52 shadow-sm leading-none z-10"] do
+        li_ $ 
+          button_ 
+            [ class_ "p-2 w-full text-left"
+            , data_ "tippy-content" "Move this widget to another dashboard"
+            ] 
+            "Move to dashboard"
+        li_ $ 
+          button_ 
+            [ class_ "p-2 w-full text-left"
+            , data_ "tippy-content" "Create a copy of this widget"
+            ]
+            "Duplicate widget"
+        li_ $ 
+          button_ 
+            [ class_ "p-2 w-full text-left text-textError"
+            , data_ "tippy-content" "Permanently delete this widget"
+            , onclick_ [text|
+                if(confirm('Are you sure you want to delete this widget? This action cannot be undone.')) {
+                  const widgetEl = document.getElementById('${wId}_widgetEl');
+                  
+                  // Try to remove using the main gridStackInstance
+                  // The removeWidget method will only remove widgets that belong to this instance,
+                  // so it's safe to try even if the widget is in a nested grid
+                  gridStackInstance.removeWidget(widgetEl, true);
+                  
+                  // If the widget is still in the DOM, it might be in a nested grid
+                  // We can trigger a custom event that the dashboard page script can listen for
+                  if (document.getElementById('${wId}_widgetEl')) {
+                    widgetEl.dispatchEvent(new CustomEvent('widget-remove-requested', {
+                      bubbles: true,
+                      detail: { widgetId: '${wId}' }
+                    }));
+                  }
+                }
+                return false;
+              |]
+            ]
+            "Delete widget"
 
 
 renderChart :: Widget -> Html ()

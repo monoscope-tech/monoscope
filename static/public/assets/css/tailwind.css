@@ -163,6 +163,12 @@ body {
   .modal-box {
     background-color: var(--color-bgOverlay);
   }
+  .dropdown summary {
+    list-style: none;
+  }
+  .dropdown summary::-webkit-details-marker {
+    display: none;
+  }
 }
 
 /*
