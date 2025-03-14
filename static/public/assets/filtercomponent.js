@@ -1,4 +1,4 @@
-import { LitElement, html, ref } from 'https://cdn.jsdelivr.net/gh/lit/dist@3/all/lit-all.min.js'
+import { LitElement, html, ref } from './js/thirdparty/lit.js'
 import jsonpath from './js/thirdparty/jsonpath.js'
 // prettier-ignore
 const httpStatusCodes = [
@@ -96,7 +96,7 @@ class SuggestionService {
     if (qs.editType === 'op' && qs.field) return fieldSchema?.[1] ?? STRING_OPERATORS
     if (qs.editType === 'value' && qs.field) return fieldSchema?.[2] ?? []
     if (!qs.field) return REQ_SCHEMA.filter(([f]) => !qs.input || f.includes(this.parseInput(qs.input)[0]))
-    return !qs.op ? (fieldSchema?.[1] ?? []) : (fieldSchema?.[2] ?? [])
+    return !qs.op ? fieldSchema?.[1] ?? [] : fieldSchema?.[2] ?? []
   }
 
   async updateStateFromInput(input) {

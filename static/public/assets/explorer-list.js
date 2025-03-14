@@ -1,6 +1,5 @@
 'use strict'
 import { LitElement, html, nothing } from './js/thirdparty/lit.js'
-import '@lit-labs/virtualizer'
 import { virtualize } from '@lit-labs/virtualizer/virtualizer'
 
 export class LogList extends LitElement {
@@ -481,8 +480,7 @@ function logItemCol(rowData, source, colIdxMap, key, serviceColors, toggleTrace)
                     }}
                     class=${`rounded-sm shrink-0 w-8 px-1 flex justify-center gap-[2px] text-xs items-center h-5 ${errClas}`}
                   >
-                    ${depth === 0 ? (expanded ? faSprite('minus', 'regular', 'w-3 h-1 shrink-0') : faSprite('plus', 'regular', 'w-3 h-3 shrink-0')) : nothing}
-                    ${children}
+                    ${expanded ? faSprite('minus', 'regular', 'w-3 h-1 shrink-0') : faSprite('plus', 'regular', 'w-3 h-3 shrink-0')} ${children}
                   </button>`
                 : depth === 0
                 ? nothing
@@ -491,8 +489,6 @@ function logItemCol(rowData, source, colIdxMap, key, serviceColors, toggleTrace)
                 ? ['severity_text', 'body'].map(k => logItemCol(rowData, source, { severity_text: 5, body: 6 }, k))
                 : ['http_attributes', 'db_attributes', 'status', 'kind', 'span_name'].map(k => logItemCol(rowData, source, colIdxMap, k))}
             </div>
-            <!-- <div class="w-24 overflow-visible shrink-0">${logItemCol(rowData, source, colIdxMap, 'duration')}</div>
-            ${logItemCol(rowData, source, colIdxMap, 'latency_breakdown', serviceColors)} -->
           </div>`
         : html`
             ${logItemCol(rowData, source, colIdxMap, 'request_type')} ${logItemCol(rowData, source, colIdxMap, 'status_code')}
@@ -819,7 +815,7 @@ function flattenSpanTree(traceArr, expandedTraces = {}) {
       traceId,
       childErrors,
       show: expandedTraces[traceId] || depth === 0,
-      expanded: expandedTraces[traceId] && depth === 0,
+      expanded: expandedTraces[traceId],
       ...span,
       children: childrenCount,
       childrenTimeSpans: span.children.map(child => ({
