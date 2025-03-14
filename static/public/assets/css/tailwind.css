@@ -158,6 +158,10 @@ body {
 
   .dropdown-content {
     background-color: var(--color-bgOverlay);
+    @apply border;
+  }
+  .modal-box {
+    background-color: var(--color-bgOverlay);
   }
 }
 
