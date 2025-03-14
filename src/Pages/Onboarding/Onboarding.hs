@@ -274,8 +274,8 @@ onboardingCompleteBody pid = do
   div_ [class_ "w-[550px] h-full flex items-center mx-auto relative"] $ do
     canvas_ [id_ "drawing_canvas", class_ "absolute top-0 left-0  w-full"] pass
     div_ [class_ "flex-col gap-4 flex w-full p-14 my-auto border border-weak rounded-2xl"] $ do
-      div_ [class_ "p-3 bg-[#0acc91]/5 rounded-full w-max border-[#067a57]/20 gap-2 inline-flex"] $
-        faSprite_ "circle-check" "regular" "h-8 w-8 text-green-500"
+      div_ [class_ "p-3 bg-[#0acc91]/5 rounded-full w-max border-[#067a57]/20 gap-2 inline-flex"]
+        $ faSprite_ "circle-check" "regular" "h-8 w-8 text-green-500"
       div_ [class_ "flex flex-col gap-2"] do
         h3_ [class_ " text-textStrong font-semibold text-2xl"] "Onboarding completed!"
         p_ [class_ " text-textWeak text-sm"] "You're all set! You can now start using exploring the apitoolkit dashboard by clicking the button below."
@@ -581,8 +581,8 @@ inviteTeamMemberModal pid emails = do
     div_ [class_ "modal p-8", role_ "dialog"] do
       universalIndicator
       div_ [class_ "modal-box flex flex-col gap-4"] $ do
-        div_ [class_ "p-3 bg-[#0acc91]/5 rounded-full w-max border-[#067a57]/20 gap-2 inline-flex"] $
-          faSprite_ "circle-check" "regular" "h-6 w-6 text-green-500"
+        div_ [class_ "p-3 bg-[#0acc91]/5 rounded-full w-max border-[#067a57]/20 gap-2 inline-flex"]
+          $ faSprite_ "circle-check" "regular" "h-6 w-6 text-green-500"
         span_ [class_ " text-textStrong text-2xl font-semibold"] "Test notifications sent"
         div_ [class_ "text-[#000833]/60"] "No notification? Close this modal and verify emails and channels."
         div_ [class_ "h-1 w-full  bg-fillWeak"] pass
@@ -591,10 +591,10 @@ inviteTeamMemberModal pid emails = do
             div_ [class_ "w-full text-[#000833]/60"] "The users below will be added to your project as team members"
             div_ [class_ "w-full gap-4 flex flex-col"] $ do
               div_ [class_ "w-full gap-2 flex items-center"] $ do
-                div_ [class_ "flex-col gap-1 inline-flex w-full"] $
-                  div_ [class_ "flex flex-col gap-1 w-full"] $
-                    do
-                      input_ [class_ "input input-sm w-full", placeholder_ "email@example.com", type_ "email", id_ "add-member-input"]
+                div_ [class_ "flex-col gap-1 inline-flex w-full"]
+                  $ div_ [class_ "flex flex-col gap-1 w-full"]
+                  $ do
+                    input_ [class_ "input input-sm w-full", placeholder_ "email@example.com", type_ "email", id_ "add-member-input"]
                 button_ [class_ "btn-primary rounded-lg  px-3 h-8 justify-center items-center flex text-white text-sm font-semibold", onclick_ "appendMember()"] "invite"
               div_ [class_ "w-full"] $ do
                 div_ [class_ "w-full  text-textStrong text-sm font-semibold"] "Members"
@@ -636,8 +636,8 @@ inviteMemberItem email = do
   div_ (class_ ("flex  py-1 w-full justify-between items-center border-b border-[#001066]/10 " <> if hide then "hidden" else "") : [id_ "member-template" | hide]) do
     div_ [class_ "pr-6 py-1  w-full justify-start items-center inline-flex"] do
       input_ ([type_ "hidden", value_ email] ++ [name_ "emails" | not hide])
-      span_ [class_ "text-[#000626]/90 text-sm font-normal"] $
-        toHtml email
+      span_ [class_ "text-[#000626]/90 text-sm font-normal"]
+        $ toHtml email
     select_ [name_ "permissions", class_ "select select-xs"] do
       option_ [class_ "text-gray-500", value_ "admin"] "Admin"
       option_ [class_ "text-gray-500", value_ "edit"] "Can Edit"

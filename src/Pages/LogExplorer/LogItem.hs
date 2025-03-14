@@ -270,8 +270,8 @@ spanBadge val key = do
 -- Function to selectively convert RequestDumpLogItem to JSON
 selectiveReqToJson :: RequestDumps.RequestDumpLogItem -> AE.Value
 selectiveReqToJson req =
-  AE.object $
-    concat @[]
+  AE.object
+    $ concat @[]
       [ ["created_at" AE..= req.createdAt]
       , ["duration_ns" AE..= req.durationNs]
       , ["errors" AE..= req.errors]
