@@ -255,11 +255,10 @@ export class LogList extends LitElement {
             }
             if (this.source === 'spans') {
               if (isNewData) {
-                const tree = this.buildSpanListTree(logsData, traceLogs)
-                this.spanListTree = [...tree, ...this.spanListTree]
+                this.spanListTree = this.buildSpanListTree()
               } else {
                 const { nonRootRootSpans, remainingSpans } = this.filterFalseRoots()
-                const tree = this.buildSpanListTree([nonRootRootSpans, ...logsData], traceLogs)
+                const tree = this.buildSpanListTree([...nonRootRootSpans, ...logsData], traceLogs)
                 this.spanListTree = [...remainingSpans, ...tree]
               }
             }
@@ -289,7 +288,7 @@ export class LogList extends LitElement {
   filterFalseRoots() {
     return this.spanListTree.reduce(
       (result, span) => {
-        if (span.parentId && depth === 0) {
+        if ((span.parent && span.depth === 0) || span.type === 'log') {
           result.nonRootRootSpans.push(span.data)
         } else {
           result.remainingSpans.push(span)
