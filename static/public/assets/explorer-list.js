@@ -288,7 +288,7 @@ export class LogList extends LitElement {
   filterFalseRoots() {
     return this.spanListTree.reduce(
       (result, span) => {
-        if ((span.parent && span.depth === 0) || span.type === 'log') {
+        if ((span.parent && span.depth === 0) || (span.type === 'log' && span.depth === 0)) {
           result.nonRootRootSpans.push(span.data)
         } else {
           result.remainingSpans.push(span)
