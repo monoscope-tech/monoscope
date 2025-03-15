@@ -176,7 +176,7 @@ widgetHelper_ isChild w' = case w.wType of
         whenJust w.icon \icon -> span_ [] $ Utils.faSprite_ icon "regular" "w-4 h-4"
         span_ [class_ "text-sm"] $ toHtml $ maybeToMonoid w.title
     div_ [class_ "grid-stack nested-grid  h-full -mx-2"] $ forM_ (fromMaybe [] w.children) (widgetHelper_ True)
-  _ -> gridItem_ $ div_ [class_ $ " w-full h-full " <> paddingBtm] $ renderChart w
+  _ -> gridItem_ $ div_ [class_ $ " w-full h-full group/wgt " <> paddingBtm] $ renderChart w
   where
     w = (w' & #id %~ maybe (slugify <$> w.title) Just)
     layoutFields = [("x", (.x)), ("y", (.y)), ("w", (.w)), ("h", (.h))]
@@ -197,14 +197,37 @@ renderWidgetHeader widget wId title valueM subValueM expandBtnFn ctaM hideSub = 
     span_ [class_ $ "text-textWeak widget-subtitle text-sm " <> bool "" "hidden" hideSub, id_ $ wId <> "Subtitle"] $ toHtml $ maybeToMonoid subValueM
     -- Add hidden loader with specific ID that can be toggled from JS
     span_ [class_ "hidden", id_ $ wId <> "_loader"] $ Utils.faSprite_ "spinner" "regular" "w-4 h-4 animate-spin"
-  div_ [class_ "text-iconNeutral"] do
+  div_ [class_ "text-iconNeutral flex items-center"] do
+    -- Add expand button that's visible on hover
+
     whenJust ctaM \(ctaTitle, uri) -> a_ [class_ "underline underline-offset-2 text-textBrand", href_ uri] $ toHtml ctaTitle
     whenJust expandBtnFn \fn ->
       button_
-        [ term "_" $ fn
+        [ term "_" fn
         , class_ "p-2 cursor-pointer"
+        , data_ "tippy-content" "Expand widget"
         ]
         $ Utils.faSprite_ "expand-icon" "regular" "w-3 h-3"
+    when (isJust widget._dashboardId) $
+      let pid = maybeToMonoid (widget._projectId <&> (.toText))
+          dashId = maybeToMonoid widget._dashboardId
+       in button_
+            [ class_ "p-2 cursor-pointer hidden group-hover/wgt:block"
+            , title_ "Expand widget"
+            , data_ "tippy-content" "Expand widget"
+            , term
+                "_"
+                [text| on mousedown or click 
+            set #global-data-drawer.checked to true
+            then set #global-data-drawer-content.innerHTML to #loader-tmp.innerHTML
+            then fetch `/p/${pid}/dashboards/${dashId}/widgets/${wId}/expand`
+            then set #global-data-drawer-content.innerHTML to it
+            then htmx.process(#global-data-drawer-content)
+            then _hyperscript.processNode(#global-data-drawer-content)
+            then window.evalScriptsFromContent(#global-data-drawer-content)
+         |]
+            ]
+            $ Utils.faSprite_ "expand-icon" "regular" "w-3 h-3"
     details_ [class_ "dropdown dropdown-end"] do
       summary_ [class_ "text-iconNeutral cursor-pointer p-2 hover:bg-fillWeak rounded-lg", data_ "tippy-content" "Widget Menu"] $
         Utils.faSprite_ "ellipsis" "regular" "w-4 h-4"

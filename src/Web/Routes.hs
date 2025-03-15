@@ -135,6 +135,7 @@ data CookieProtectedRoutes mode = CookieProtectedRoutes
   , dashboardDuplicatePost :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "duplicate" :> Post '[HTML] (RespHeaders NoContent)
   , dashboardMoveWidget :: mode :- "p" :> ProjectId :> "dashboards" :> "move_widget" :> ReqBody '[JSON] Dashboards.WidgetMoveForm :> Post '[HTML] (RespHeaders NoContent)
   , dashboardDuplicateWidget :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "widgets" :> Capture "widget_id" Text :> "duplicate" :> Post '[HTML] (RespHeaders Widget.Widget)
+  , dashboardWidgetExpandGet :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "widgets" :> Capture "widget_id" Text :> "expand" :> Get '[HTML] (RespHeaders (Html ()))
   , projects :: mode :- ProjectsRoutes.Routes
   , anomalies :: mode :- "p" :> ProjectId :> "anomalies" :> AnomaliesRoutes.Routes
   , logExplorer :: mode :- "p" :> ProjectId :> LogExplorerRoutes.Routes
@@ -177,6 +178,7 @@ cookieProtectedServer =
     , dashboardDuplicatePost = Dashboards.dashboardDuplicatePostH
     , dashboardMoveWidget = Dashboards.dashboardMoveWidgetPostH
     , dashboardDuplicateWidget = Dashboards.dashboardDuplicateWidgetPostH
+    , dashboardWidgetExpandGet = Dashboards.dashboardWidgetExpandGetH
     , projects = ProjectsRoutes.server
     , logExplorer = LogExplorerRoutes.server
     , anomalies = AnomaliesRoutes.server
