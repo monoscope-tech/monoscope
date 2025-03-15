@@ -183,18 +183,26 @@ export class LogList extends LitElement {
     </tr>`
   }
 
-  expandTrace(tracId) {
-    if (!this.expandedTraces[tracId]) {
-      this.expandedTraces[tracId] = false
+  expandTrace(tracId, spanId) {
+    if (!this.expandedTraces[spanId]) {
+      this.expandedTraces[spanId] = false
     }
-    this.expandedTraces[tracId] = !this.expandedTraces[tracId]
-    const expanded = this.expandedTraces[tracId]
+    this.expandedTraces[spanId] = !this.expandedTraces[spanId]
+    const expanded = this.expandedTraces[spanId]
     const affectedSpans = this.spanListTree.filter(span => span.traceId === tracId)
     affectedSpans.forEach(span => {
-      if (span.depth != 0) {
-        span.show = expanded
-      } else {
+      if (span.id === spanId) {
         span.expanded = expanded
+        span.show = true
+      }
+      if (span.children > 0) {
+        affectedSpans.forEach(span => {
+          if (span.parentIds.includes(spanId)) {
+            span.expanded = expanded
+            span.show = expanded
+            this.expandedTraces[span.id] = expanded
+          }
+        })
       }
     })
     this.requestUpdate()
@@ -455,7 +463,7 @@ function logItemCol(rowData, source, colIdxMap, key, serviceColors, toggleTrace)
       break
     case 'rest':
       let val = lookupVecTextByKey(dataArr, colIdxMap, key)
-      const { depth, children, traceId, childErrors, hasErrors, expanded, type } = rowData
+      const { depth, children, traceId, childErrors, hasErrors, expanded, type, id } = rowData
       const errClas = hasErrors
         ? 'bg-red-500 text-white fill-white stroke-white'
         : childErrors
@@ -476,7 +484,7 @@ function logItemCol(rowData, source, colIdxMap, key, serviceColors, toggleTrace)
                 ? html`<button
                     @click=${e => {
                       e.stopPropagation()
-                      if (depth === 0) toggleTrace(traceId)
+                      toggleTrace(traceId, id)
                     }}
                     class=${`rounded-sm shrink-0 w-8 px-1 flex justify-center gap-[2px] text-xs items-center h-5 ${errClas}`}
                   >
@@ -804,7 +812,7 @@ function groupSpans(data, logs, colIdxMap, expandedTraces) {
 function flattenSpanTree(traceArr, expandedTraces = {}) {
   const result = []
 
-  function traverse(span, traceId, traceStart, traceEnd, depth = 0) {
+  function traverse(span, traceId, parentIds, traceStart, traceEnd, depth = 0) {
     let childrenCount = span.children.length
     let childErrors = false
 
@@ -814,6 +822,7 @@ function flattenSpanTree(traceArr, expandedTraces = {}) {
       traceEnd,
       traceId,
       childErrors,
+      parentIds: parentIds,
       show: expandedTraces[traceId] || depth === 0,
       expanded: expandedTraces[traceId],
       ...span,
@@ -826,10 +835,9 @@ function flattenSpanTree(traceArr, expandedTraces = {}) {
     }
 
     result.push(spanInfo)
-
     span.children.forEach(child => {
       childErrors = child.hasErrors || childErrors
-      const [count, errors] = traverse(child, traceId, traceStart, traceEnd, depth + 1)
+      const [count, errors] = traverse(child, traceId, [...parentIds, span.id], traceStart, traceEnd, depth + 1)
       childrenCount += count
       childErrors = childErrors || errors
     })
@@ -841,10 +849,9 @@ function flattenSpanTree(traceArr, expandedTraces = {}) {
 
   traceArr.forEach(trace => {
     trace.spans.forEach(span => {
-      traverse(span, trace.traceId, trace.startTime, trace.duration, 0)
+      traverse(span, trace.traceId, [], trace.startTime, trace.duration, 0)
     })
   })
-
   return result
 }
 
