@@ -50,6 +50,7 @@ export class LogList extends LitElement {
     this.expandTrace = this.expandTrace.bind(this)
     this.renderLoadMore = this.renderLoadMore.bind(this)
     this.updateTableData = this.updateTableData.bind(this)
+    this.filterFalseRoots = this.filterFalseRoots.bind(this)
     this.latestLogsURLQueryValsFn = this.latestLogsURLQueryValsFn.bind(this)
 
     const liveBtn = document.querySelector('#streamLiveData')
@@ -140,8 +141,8 @@ export class LogList extends LitElement {
     super.disconnectedCallback()
   }
 
-  buildSpanListTree() {
-    return groupSpans(this.logsData, this.traceLogs, this.colIdxMap, this.expandedTraces)
+  buildSpanListTree(logs, traceLogs) {
+    return groupSpans(logs ? logs : this.logsData, traceLogs ? traceLogs : this.traceLogs, this.colIdxMap, this.expandedTraces)
   }
 
   renderLoadMore() {
@@ -252,7 +253,16 @@ export class LogList extends LitElement {
               this.hasMore = logsData.length > 199
               this.nextFetchUrl = nextUrl
             }
-            this.spanListTree = this.source === 'spans' ? this.buildSpanListTree() : []
+            if (this.source === 'spans') {
+              if (isNewData) {
+                const tree = this.buildSpanListTree(logsData, traceLogs)
+                this.spanListTree = [...tree, ...this.spanListTree]
+              } else {
+                const { nonRootRootSpans, remainingSpans } = this.filterFalseRoots()
+                const tree = this.buildSpanListTree([nonRootRootSpans, ...logsData], traceLogs)
+                this.spanListTree = [...remainingSpans, ...tree]
+              }
+            }
           }
         } else {
           this.fetchError = data.error
@@ -274,6 +284,20 @@ export class LogList extends LitElement {
 
   hideColumn(column) {
     this.logsColumns = this.logsColumns.filter(col => col !== column)
+  }
+
+  filterFalseRoots() {
+    return this.spanListTree.reduce(
+      (result, span) => {
+        if (span.parentId && depth === 0) {
+          result.nonRootRootSpans.push(span.data)
+        } else {
+          result.remainingSpans.push(span)
+        }
+        return result
+      },
+      { nonRootRootSpans: [], remainingSpans: [] },
+    )
   }
 
   tableHeadingWrapper(title, column, classes) {
