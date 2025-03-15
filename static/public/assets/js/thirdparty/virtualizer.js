@@ -1,43 +1,41 @@
 /**
  * Bundled by jsDelivr using Rollup v2.79.2 and Terser v5.37.0.
- * Original file: /npm/@lit-labs/virtualizer@2.1.0/lit-virtualizer.js
+ * Original file: /npm/@lit-labs/virtualizer@2.1.0/virtualize.js
  *
  * Do NOT use SRI with dynamically generated files! More information: https://www.jsdelivr.com/using-sri-with-dynamic-files
  */
-import { __decorate as t } from '/npm/tslib@2.8.1/+esm'
-import { noChange as e, html as i, LitElement as s } from './lit.js'
-import { property as l } from './lit.js'
-import { directive as r, PartType as n } from './lit.js'
-import { AsyncDirective as o } from './lit.js'
-import { repeat as h } from './lit.js'
+import { html as t, noChange as e } from './lit.js'
+import { directive as i, PartType as s } from './lit.js'
+import { AsyncDirective as l } from './lit.js'
+import { repeat as n } from './lit.js'
 /**
  * @license
  * Copyright 2021 Google LLC
  * SPDX-License-Identifier: BSD-3-Clause
- */ class a extends Event {
+ */ class r extends Event {
   constructor(t) {
-    super(a.eventName, { bubbles: !1 }), (this.first = t.first), (this.last = t.last)
+    super(r.eventName, { bubbles: !1 }), (this.first = t.first), (this.last = t.last)
   }
 }
-a.eventName = 'rangeChanged'
-class c extends Event {
+r.eventName = 'rangeChanged'
+class o extends Event {
   constructor(t) {
-    super(c.eventName, { bubbles: !1 }), (this.first = t.first), (this.last = t.last)
+    super(o.eventName, { bubbles: !1 }), (this.first = t.first), (this.last = t.last)
   }
 }
-c.eventName = 'visibilityChanged'
-class _ extends Event {
+o.eventName = 'visibilityChanged'
+class h extends Event {
   constructor() {
-    super(_.eventName, { bubbles: !1 })
+    super(h.eventName, { bubbles: !1 })
   }
 }
-_.eventName = 'unpinned'
+h.eventName = 'unpinned'
 /**
  * @license
  * Copyright 2021 Google LLC
  * SPDX-License-Identifier: BSD-3-Clause
  */
-class d {
+class a {
   constructor(t) {
     this._element = null
     const e = t ?? window
@@ -71,7 +69,7 @@ class d {
     return this.scrollWidth - this.viewportWidth
   }
 }
-class u extends d {
+class c extends a {
   constructor(t, e) {
     super(e),
       (this._clients = new Set()),
@@ -139,8 +137,8 @@ class u extends d {
       let { top: i, left: s } = this._destination
       ;(i = Math.min(i || 0, this.maxScrollTop)), (s = Math.min(s || 0, this.maxScrollLeft))
       const l = Math.abs(i - t),
-        r = Math.abs(s - e)
-      l < 1 && r < 1 && (this._end && this._end(), this._resetScrollState())
+        n = Math.abs(s - e)
+      l < 1 && n < 1 && (this._end && this._end(), this._resetScrollState())
     }
   }
   detach(t) {
@@ -163,11 +161,11 @@ class u extends d {
         this._node.addEventListener('scroll', this._checkForArrival))
   }
 }
-let m = 'undefined' != typeof window ? window.ResizeObserver : void 0
-const p = Symbol('virtualizerRef'),
-  y = 'virtualizer-sizer'
-let f
-class g {
+let _ = 'undefined' != typeof window ? window.ResizeObserver : void 0
+const d = Symbol('virtualizerRef'),
+  u = 'virtualizer-sizer'
+let m
+class p {
   constructor(t) {
     if (
       ((this._benchmarkStart = null),
@@ -222,12 +220,12 @@ class g {
   }
   _initObservers() {
     ;(this._mutationObserver = new MutationObserver(this._finishDOMUpdate.bind(this))),
-      (this._hostElementRO = new m(() => this._hostElementSizeChanged())),
-      (this._childrenRO = new m(this._childrenSizeChanged.bind(this)))
+      (this._hostElementRO = new _(() => this._hostElementSizeChanged())),
+      (this._childrenRO = new _(this._childrenSizeChanged.bind(this)))
   }
   _initHostElement(t) {
     const e = (this._hostElement = t.hostElement)
-    this._applyVirtualizerStyles(), (e[p] = this)
+    this._applyVirtualizerStyles(), (e[d] = this)
   }
   connected() {
     this._initObservers()
@@ -236,8 +234,8 @@ class g {
       let i = !1
       return (function (t, e = !1) {
         const i = []
-        let s = e ? t : w(t)
-        for (; null !== s; ) i.push(s), (s = w(s))
+        let s = e ? t : f(t)
+        for (; null !== s; ) i.push(s), (s = f(s))
         return i
       })(t, e).filter(t => {
         if (i) return !1
@@ -252,7 +250,7 @@ class g {
        */ this._hostElement,
       t,
     )),
-      (this._scrollerController = new u(this, this._clippingAncestors[0])),
+      (this._scrollerController = new c(this, this._clippingAncestors[0])),
       this._schedule(this._updateLayout),
       this._observeAndListen(),
       (this._connected = !0)
@@ -294,18 +292,18 @@ class g {
   _getSizer() {
     const t = this._hostElement
     if (!this._sizer) {
-      let e = t.querySelector(`[${y}]`)
-      e || ((e = document.createElement('div')), e.setAttribute(y, ''), t.appendChild(e)),
+      let e = t.querySelector(`[${u}]`)
+      e || ((e = document.createElement('div')), e.setAttribute(u, ''), t.appendChild(e)),
         Object.assign(e.style, { position: 'absolute', margin: '-2px 0 0 0', padding: 0, visibility: 'hidden', fontSize: '2px' }),
         (e.textContent = '&nbsp;'),
-        e.setAttribute(y, ''),
+        e.setAttribute(u, ''),
         (this._sizer = e)
     }
     return this._sizer
   }
   async updateLayoutConfig(t) {
     await this._layoutInitialized
-    const e = t.type || f
+    const e = t.type || m
     if ('function' == typeof e && this._layout instanceof e) {
       const e = { ...t }
       return delete e.type, (this._layout.config = e), !0
@@ -319,7 +317,7 @@ class g {
       const s = { ...t }
       delete s.type, (e = s)
     } else e = t
-    void 0 === i && (f = i = (await import('/npm/@lit-labs/virtualizer@2.1.0/layouts/flow.js/+esm')).FlowLayout),
+    void 0 === i && (m = i = (await import('/npm/@lit-labs/virtualizer@2.1.0/layouts/flow.js/+esm')).FlowLayout),
       (this._layout = new i(t => this._handleLayoutMessage(t), e)),
       this._layout.measureChildren &&
         'function' == typeof this._layout.updateItemSizes &&
@@ -349,8 +347,8 @@ class g {
       i = this._measureChildOverride || this._measureChild
     for (let s = 0; s < e.length; s++) {
       const l = e[s],
-        r = this._first + s
-      ;(this._itemsChanged || this._toBeMeasured.has(l)) && (t[r] = i.call(this, l, this._items[r]))
+        n = this._first + s
+      ;(this._itemsChanged || this._toBeMeasured.has(l)) && (t[n] = i.call(this, l, this._items[n]))
     }
     ;(this._childMeasurements = t), this._schedule(this._updateLayout), this._toBeMeasured.clear()
   }
@@ -360,7 +358,7 @@ class g {
       { width: e, height: i },
       (function (t) {
         const e = window.getComputedStyle(t)
-        return { marginTop: v(e.marginTop), marginRight: v(e.marginRight), marginBottom: v(e.marginBottom), marginLeft: v(e.marginLeft) }
+        return { marginTop: g(e.marginTop), marginRight: g(e.marginRight), marginBottom: g(e.marginBottom), marginLeft: g(e.marginLeft) }
       })(t),
     )
   }
@@ -412,12 +410,12 @@ class g {
       ? this._updateDOM(t)
       : 'visibilityChanged' === t.type
       ? ((this._firstVisible = t.firstVisible), (this._lastVisible = t.lastVisible), this._notifyVisibility())
-      : 'unpinned' === t.type && this._hostElement.dispatchEvent(new _())
+      : 'unpinned' === t.type && this._hostElement.dispatchEvent(new h())
   }
   get _children() {
     const t = []
     let e = this._hostElement.firstElementChild
-    for (; e; ) e.hasAttribute(y) || t.push(e), (e = e.nextElementSibling)
+    for (; e; ) e.hasAttribute(u) || t.push(e), (e = e.nextElementSibling)
     return t
   }
   _updateView() {
@@ -425,19 +423,19 @@ class g {
       e = this._scrollerController?.element,
       i = this._layout
     if (t && e && i) {
-      let s, l, r, n
+      let s, l, n, r
       const o = t.getBoundingClientRect()
-      ;(s = 0), (l = 0), (r = window.innerHeight), (n = window.innerWidth)
+      ;(s = 0), (l = 0), (n = window.innerHeight), (r = window.innerWidth)
       const h = this._clippingAncestors.map(t => t.getBoundingClientRect())
       h.unshift(o)
-      for (const t of h) (s = Math.max(s, t.top)), (l = Math.max(l, t.left)), (r = Math.min(r, t.bottom)), (n = Math.min(n, t.right))
+      for (const t of h) (s = Math.max(s, t.top)), (l = Math.max(l, t.left)), (n = Math.min(n, t.bottom)), (r = Math.min(r, t.right))
       const a = e.getBoundingClientRect(),
         c = { left: o.left - a.left, top: o.top - a.top },
         _ = { width: e.scrollWidth, height: e.scrollHeight },
         d = s - o.top + t.scrollTop,
         u = l - o.left + t.scrollLeft,
-        m = Math.max(0, r - s),
-        p = Math.max(0, n - l)
+        m = Math.max(0, n - s),
+        p = Math.max(0, r - l)
       ;(i.viewportSize = { width: p, height: m }), (i.viewportScroll = { top: d, left: u }), (i.totalScrollSize = _), (i.offsetWithinScroller = c)
     }
   }
@@ -453,8 +451,8 @@ class g {
   }
   _positionChildren(t) {
     t &&
-      t.forEach(({ top: t, left: e, width: i, height: s, xOffset: l, yOffset: r }, n) => {
-        const o = this._children[n - this._first]
+      t.forEach(({ top: t, left: e, width: i, height: s, xOffset: l, yOffset: n }, r) => {
+        const o = this._children[r - this._first]
         o &&
           ((o.style.position = 'absolute'),
           (o.style.boxSizing = 'border-box'),
@@ -462,7 +460,7 @@ class g {
           void 0 !== i && (o.style.width = i + 'px'),
           void 0 !== s && (o.style.height = s + 'px'),
           (o.style.left = void 0 === l ? null : l + 'px'),
-          (o.style.top = void 0 === r ? null : r + 'px'))
+          (o.style.top = void 0 === n ? null : n + 'px'))
       })
   }
   async _adjustRange(t) {
@@ -505,10 +503,10 @@ class g {
     e && t?.has(e) && this._updateScrollIntoViewCoordinates(this._layout.getScrollIntoViewCoordinates(this._scrollIntoViewTarget))
   }
   _notifyRange() {
-    this._hostElement.dispatchEvent(new a({ first: this._first, last: this._last }))
+    this._hostElement.dispatchEvent(new r({ first: this._first, last: this._last }))
   }
   _notifyVisibility() {
-    this._hostElement.dispatchEvent(new c({ first: this._firstVisible, last: this._lastVisible }))
+    this._hostElement.dispatchEvent(new o({ first: this._firstVisible, last: this._lastVisible }))
   }
   get layoutComplete() {
     return (
@@ -545,30 +543,30 @@ class g {
     this._scheduleLayoutComplete(), (this._itemsChanged = !1), (this._rangeChanged = !1)
   }
 }
-function v(t) {
+function g(t) {
   const e = t ? parseFloat(t) : NaN
   return Number.isNaN(e) ? 0 : e
 }
-function w(t) {
+function f(t) {
   if (null !== t.assignedSlot) return t.assignedSlot
   if (null !== t.parentElement) return t.parentElement
   const e = t.parentNode
   return (e && e.nodeType === Node.DOCUMENT_FRAGMENT_NODE && e.host) || null
 }
-const b = t => t,
-  C = (t, e) => i`${e}: ${JSON.stringify(t, null, 2)}`
-const E = r(
-  class extends o {
+const y = t => t,
+  v = (e, i) => t`${i}: ${JSON.stringify(e, null, 2)}`
+const w = i(
+  class extends l {
     constructor(t) {
       if (
         (super(t),
         (this._virtualizer = null),
         (this._first = 0),
         (this._last = -1),
-        (this._renderItem = (t, e) => C(t, e + this._first)),
-        (this._keyFunction = (t, e) => b(t, this._first)),
+        (this._renderItem = (t, e) => v(t, e + this._first)),
+        (this._keyFunction = (t, e) => y(t, this._first)),
         (this._items = []),
-        t.type !== n.CHILD)
+        t.type !== s.CHILD)
       )
         throw new Error('The virtualize directive can only be used in child expressions')
     }
@@ -576,7 +574,7 @@ const E = r(
       t && this._setFunctions(t)
       const e = []
       if (this._first >= 0 && this._last >= this._first) for (let t = this._first; t <= this._last; t++) e.push(this._items[t])
-      return h(e, this._keyFunction, this._renderItem)
+      return n(e, this._keyFunction, this._renderItem)
     }
     update(t, [i]) {
       this._setFunctions(i)
@@ -597,7 +595,7 @@ const E = r(
     _makeVirtualizer(t, e) {
       this._virtualizer && this._virtualizer.disconnected()
       const { layout: i, scroller: s, items: l } = e
-      ;(this._virtualizer = new g({ hostElement: t, layout: i, scroller: s })), (this._virtualizer.items = l), this._virtualizer.connected()
+      ;(this._virtualizer = new p({ hostElement: t, layout: i, scroller: s })), (this._virtualizer.items = l), this._virtualizer.connected()
     }
     _initialize(t, e) {
       const i = t.parentNode
@@ -616,42 +614,6 @@ const E = r(
     }
   },
 )
-/**
- * @license
- * Copyright 2021 Google LLC
- * SPDX-License-Identifier: BSD-3-Clause
- */ class S extends s {
-  constructor() {
-    super(...arguments), (this.items = []), (this.renderItem = C), (this.keyFunction = b), (this.layout = {}), (this.scroller = !1)
-  }
-  createRenderRoot() {
-    return this
-  }
-  render() {
-    const { items: t, renderItem: e, keyFunction: s, layout: l, scroller: r } = this
-    return i`${E({ items: t, renderItem: e, keyFunction: s, layout: l, scroller: r })}`
-  }
-  element(t) {
-    return this[p]?.element(t)
-  }
-  get layoutComplete() {
-    return this[p]?.layoutComplete
-  }
-  scrollToIndex(t, e = 'start') {
-    this.element(t)?.scrollIntoView({ block: e })
-  }
-}
-t([l({ attribute: !1 })], S.prototype, 'items', void 0),
-  t([l()], S.prototype, 'renderItem', void 0),
-  t([l()], S.prototype, 'keyFunction', void 0),
-  t([l({ attribute: !1 })], S.prototype, 'layout', void 0),
-  t([l({ reflect: !0, type: Boolean })], S.prototype, 'scroller', void 0),
-  /**
-   * @license
-   * Copyright 2021 Google LLC
-   * SPDX-License-Identifier: BSD-3-Clause
-   */
-  customElements.define('lit-virtualizer', S)
-export { S as LitVirtualizer, a as RangeChangedEvent, c as VisibilityChangedEvent }
+export { y as defaultKeyFunction, v as defaultRenderItem, w as virtualize, d as virtualizerRef }
 export default null
-//# sourceMappingURL=/sm/586dc6f1d1595b20986ca432c09ab00ef16eb415aee52eb8338bc49ceaef3562.map
+//# sourceMappingURL=/sm/8fc427744ee062712912054982a9c4b300af8c4f38c0544b83fd98d94ecec213.map

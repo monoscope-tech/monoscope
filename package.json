@@ -5,11 +5,17 @@
     "daisyui": "^5.0.3",
     "jest": "^29.7.0",
     "postcss": "^8.4.34",
-    "tailwindcss": "^4.0.14"
+    "rollup": "^2.79.2",
+    "tailwindcss": "^4.0.14",
+    "typescript": "^5.8.2"
   },
   "dependencies": {
+    "@lit-labs/compiler": "^1.1.1",
+    "@lit-labs/virtualizer": "^2.1.0",
     "@opentelemetry/auto-instrumentations-node": "^0.50.0",
+    "@rollup/plugin-typescript": "^12.1.2",
     "@tailwindcss/cli": "^4.0.14",
+    "lit": "^3.2.1",
     "workbox-cli": "^6.5.4"
   },
   "scripts": {

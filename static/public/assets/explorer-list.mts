@@ -1,25 +1,45 @@
-'use strict'
-import { LitElement, html, nothing } from './js/thirdparty/lit.js'
-import { virtualize } from '@lit-labs/virtualizer/virtualizer'
+import { LitElement, html, nothing } from 'lit'
+import { virtualize } from '@lit-labs/virtualizer/virtualize.js'
 
 export class LogList extends LitElement {
+  source = 'request'
+  logsData: any[] = []
+  logsColumns: string[] = []
+  colIdxMap = {}
+  traceLogs: any[] = []
+  serviceColors = {}
+  hasMore = false
+  expandedTraces = {}
+  spanListTree: any[] = []
+  projectId: string = ''
+  nextFetchUrl: string = ''
+  isLoading = false
+  isLoadingRecent = false
+  isError = false
+  isLiveStreaming = false
+  liveStreamInterval
+  _observer
+  fetchError: string = ''
   static properties = {
-    logsData: [],
-    logsColumns: [],
-    colIdxMap: {},
+    logsData: { type: Array },
+    logsColumns: { type: Array },
+    colIdxMap: { type: Object },
+    traceLogs: { type: Array },
+    serviceColors: { type: Object },
     hasMore: { type: Boolean },
+    expandedTraces: { type: Object },
+    spanListTree: { type: Array },
+    projectId: { type: String },
+    nextFetchUrl: { type: String },
     isLoading: { type: Boolean },
     isLoadingRecent: { type: Boolean },
-    nextFetchUrl: { type: String },
     isError: { type: Boolean },
-    fetchError: { type: String },
-    projectId: { type: String },
-    groupedData: [],
-    expandedTraces: {},
+    isLiveStreaming: { type: Boolean },
+    liveStreamInterval: { type: Object },
   }
   constructor() {
     super()
-    const container = document.querySelector('#resultTable')
+    const container = document.querySelector('#resultTable') as HTMLElement
     this.source = new URLSearchParams(window.location.search).get('source') || 'requests'
 
     try {
@@ -40,8 +60,8 @@ export class LogList extends LitElement {
     this.hasMore = this.logsData.length > 199
     this.expandedTraces = {}
     this.spanListTree = this.source === 'spans' ? this.buildSpanListTree() : []
-    this.projectId = container.dataset.projectid
-    this.nextFetchUrl = container.dataset.nextfetchurl
+    this.projectId = container.dataset.projectid || ''
+    this.nextFetchUrl = container.dataset.nextfetchurl || ''
     this.isLoading = false
     this.isLoadingRecent = false
     this.isError = false
@@ -55,10 +75,10 @@ export class LogList extends LitElement {
     const liveBtn = document.querySelector('#streamLiveData')
     if (liveBtn) {
       liveBtn.addEventListener('change', () => {
-        if (liveBtn.checked) {
+        if ((liveBtn as HTMLInputElement).checked) {
           this.isLiveStreaming = true
           this.liveStreamInterval = setInterval(() => {
-            const url = this.latestLogsURLQueryValsFn(this.nextFetchUrl)
+            const url = this.latestLogsURLQueryValsFn()
             this.fetchData(url, true)
           }, 5000)
         } else {
@@ -69,19 +89,19 @@ export class LogList extends LitElement {
       })
     }
   }
-
   latestLogsURLQueryValsFn() {
     const datetime = document.querySelector('#log-item-table-body time')?.getAttribute('datetime')
-    const to = datetime ? new Date(new Date(datetime).getTime() + 1).toISOString() : params().to
-    const from = params().from
+    const params = new URLSearchParams(window.location.search)
+    const to = params.get('to') || ''
+    const from = params.get('from') || ''
+    const t = datetime ? new Date(new Date(datetime).getTime() + 1).toISOString() : to
     const url = new URL(this.nextFetchUrl, window.location.origin)
     const p = url.searchParams
     p.set('from', from)
     p.delete('cursor')
-    p.set('to', to)
+    p.set('to', t)
     return url.toString()
   }
-
   updateTableData = (ves, cols, colIdxMap, serviceColors, nextFetchUrl, traceLogs) => {
     this.logsData = [...ves]
     this.logsColumns = [...cols]
@@ -101,9 +121,8 @@ export class LogList extends LitElement {
 
   firstUpdated() {
     this.setupIntersectionObserver()
-    window.logListTable = document.querySelector('#resultTable')
+    ;(window as any).logListTable = document.querySelector('#resultTable')
   }
-
   setupIntersectionObserver() {
     if (this._observer) {
       this._observer.disconnect()
@@ -183,7 +202,7 @@ export class LogList extends LitElement {
     </tr>`
   }
 
-  expandTrace(tracId) {
+  expandTrace(tracId: string) {
     if (!this.expandedTraces[tracId]) {
       this.expandedTraces[tracId] = false
     }
@@ -200,7 +219,7 @@ export class LogList extends LitElement {
     this.requestUpdate()
   }
 
-  logItemRow(rowData) {
+  logItemRow(rowData: any) {
     if (rowData === 'end') return this.renderLoadMore()
     if (rowData === 'start') return this.fetchRecent()
     const s = this.source === 'spans' && rowData.type === 'log' ? 'logs' : this.source
@@ -356,7 +375,7 @@ customElements.define('log-list', LogList)
 
 const faSprite = (iconName, kind, classes) => html`<svg class="${classes}"><use href="/public/assets/svgs/fa-sprites/${kind}.svg#${iconName}"></use></svg>`
 
-function logItemCol(rowData, source, colIdxMap, key, serviceColors, toggleTrace) {
+function logItemCol(rowData, source, colIdxMap, key, serviceColors?: {}, toggleTrace?: (spanId: string) => void) {
   const dataArr = source === 'spans' ? rowData.data : rowData
   switch (key) {
     case 'id':
@@ -412,11 +431,11 @@ function logItemCol(rowData, source, colIdxMap, key, serviceColors, toggleTrace)
       return renderBadge('cbadge-sm badge-neutral border border-strokeWeak bg-fillWeak', kind, 'span kind')
     case 'latency_breakdown':
       const { traceStart, traceEnd, startNs, duration, childrenTimeSpans, depth: d } = rowData
-      const color = serviceColors[lookupVecTextByKey(dataArr, colIdxMap, 'span_name')] || 'black'
+      const color = serviceColors![lookupVecTextByKey(dataArr, colIdxMap, 'span_name')] || 'black'
       const chil = childrenTimeSpans.map(({ startNs, duration, data }) => ({
         start: startNs - traceStart,
         duration,
-        color: serviceColors[lookupVecTextByKey(data, colIdxMap, 'span_name')] || 'black',
+        color: serviceColors![lookupVecTextByKey(data, colIdxMap, 'span_name')] || 'black',
       }))
       return html`
         <div class="w-[200px] flex h-10 justify-end items-center gap-1 text-textWeak">
@@ -476,7 +495,11 @@ function logItemCol(rowData, source, colIdxMap, key, serviceColors, toggleTrace)
                 ? html`<button
                     @click=${e => {
                       e.stopPropagation()
-                      if (depth === 0) toggleTrace(traceId)
+                      if (depth === 0) {
+                        if (toggleTrace) {
+                          toggleTrace(traceId)
+                        }
+                      }
                     }}
                     class=${`rounded-sm shrink-0 w-8 px-1 flex justify-center gap-[2px] text-xs items-center h-5 ${errClas}`}
                   >
@@ -504,7 +527,6 @@ function logItemCol(rowData, source, colIdxMap, key, serviceColors, toggleTrace)
 
 function displayTimestamp(inputDateString) {
   const date = new Date(inputDateString)
-  if (isNaN(date)) return ''
 
   const options = {
     month: 'short',
@@ -514,13 +536,13 @@ function displayTimestamp(inputDateString) {
     second: '2-digit',
     hour12: false,
     timeZone: 'UTC',
-  }
+  } as any
 
   const formatted = date.toLocaleString('en-US', options)
   return formatted.replace(',', '')
 }
 
-function renderBadge(classes, title, tippy) {
+function renderBadge(classes: string, title: string, tippy?: string) {
   return html`<span class=${`ml-2 relative  ${classes} ${tippy ? 'tooltip tooltip-right' : ''}`} data-tip=${tippy}>${title}</span>`
 }
 
@@ -554,7 +576,7 @@ function getStatusColor(status) {
   return 'cbadge-sm badge-4xx'
 }
 
-function getMethodColor(method) {
+function getMethodColor(method: string) {
   const methodColors = {
     POST: 'cbadge-sm badge-pink',
     PUT: 'cbadge-sm badge-lime',
@@ -562,16 +584,17 @@ function getMethodColor(method) {
     PATCH: 'cbadge-sm badge-cyan',
     GET: 'cbadge-sm badge-blue',
   }
-  return methodColors[method] || 'cbadge-sm badge-neutral'
+  return methodColors[method as keyof typeof methodColors] || 'cbadge-sm badge-neutral'
 }
 
-function renderIconWithTippy(cls, tip, icon) {
+function renderIconWithTippy(cls: string, tip: string, icon?: any) {
   return html`<span class=${'shrink-0 inline-flex tooltip tooltip-right ' + cls} data-tip=${tip}>${icon}</span>`
 }
 
-function getDurationNSMS(duration) {
+function getDurationNSMS(dur: string) {
+  let duration = 0
   try {
-    duration = parseInt(duration)
+    duration = parseInt(dur)
   } catch (e) {
     return '0 ns'
   }
@@ -586,7 +609,7 @@ function getDurationNSMS(duration) {
   }
 }
 
-function errorClass(expandedSection, reqVec, colIdxMap) {
+function errorClass(expandedSection: boolean, reqVec: any, colIdxMap: any) {
   const errCount = lookupVecTextByKey(reqVec, colIdxMap, 'errors_count') || 0
   const status = lookupVecTextByKey(reqVec, colIdxMap, 'status_code') || 0
 
@@ -602,7 +625,7 @@ function errorClass(expandedSection, reqVec, colIdxMap) {
   return [status, errCount, errClass]
 }
 
-function getSeverityColor(severity) {
+function getSeverityColor(severity: string) {
   severity = severity ? severity.toLowerCase() : 'unset'
   return (
     {
@@ -617,7 +640,7 @@ function getSeverityColor(severity) {
   )
 }
 
-function getSpanStatusColor(status) {
+function getSpanStatusColor(status: string) {
   return (
     {
       ERROR: 'cbadge-sm badge-error',
@@ -626,14 +649,28 @@ function getSpanStatusColor(status) {
   )
 }
 
-function spanLatencyBreakdown({ start, duration, traceEnd, depth, color, children }) {
+function spanLatencyBreakdown({
+  start,
+  duration,
+  traceEnd,
+  depth,
+  color,
+  children,
+}: {
+  start: number
+  duration: number
+  traceEnd: number
+  depth: number
+  color: string
+  children: any
+}) {
   const barWidth = 100
   const width = (duration / traceEnd) * barWidth
   const left = (start / traceEnd) * barWidth
   return html`<div class="-mt-1 shrink-0">
     <div class="flex h-5 w-[100px] relative bg-fillWeak">
       <div class=${`h-full absolute top-0 ${depth === 0 || children.length === 0 ? color : ''}`} style=${`width:${width}px; left:${left}px`}></div>
-      ${children.map(child => {
+      ${children.map((child: any) => {
         const cWidth = (child.duration / traceEnd) * barWidth
         const cLeft = (child.start / traceEnd) * barWidth
         return html`<div class=${`h-full absolute top-0 ${child.color}`} style=${`width:${cWidth}px; left:${cLeft}px`}></div>`
@@ -661,12 +698,18 @@ function emptyState(source, cols) {
   `
 }
 
+function updateUrlState(key, value) {
+  const params = new URLSearchParams(window.location.search)
+  params.set(key, value)
+  window.history.replaceState({}, '', `$${window.location.pathname}?$${params}`)
+}
+
 function toggleLogRow(event, targetInfo, pid) {
-  const sideView = document.querySelector('#log_details_container')
-  const logsView = document.querySelector('#logs_list_container')
-  const resizer = document.querySelector('#resizer')
+  const sideView = document.querySelector('#log_details_container') as HTMLElement
+  const logsView = document.querySelector('#logs_list_container') as HTMLElement
+  const resizer = document.querySelector('#resizer') as HTMLElement
   if (sideView.style.width === '0px') {
-    const lW = getComputedStyle(logsView).width.replace('px', '')
+    const lW = Number(getComputedStyle(logsView).width.replace('px', ''))
     logsView.style.width = `${lW - 550}px`
     sideView.style.width = '550px'
     resizer.classList.remove('hidden')
@@ -675,14 +718,13 @@ function toggleLogRow(event, targetInfo, pid) {
   const rows = document.querySelectorAll('.item-row.bg-fillBrand-weak')
   rows.forEach(row => row.classList.remove('bg-fillBrand-weak'))
   event.currentTarget.classList.add('bg-fillBrand-weak')
-  const indicator = document.querySelector('#details_indicator')
+  const indicator = document.querySelector('#details_indicator') as HTMLElement
   indicator.classList.add('htmx-request')
   const [rdId, rdCreatedAt, source] = targetInfo
   const url = `/p/${pid}/log_explorer/${rdId}/${rdCreatedAt}/detailed?source=${source}`
   updateUrlState('target_event', `${rdId}/${rdCreatedAt}/detailed?source=${source}`)
-  htmx.ajax('GET', url, { target: '#log_details_container', swap: 'innerHTML', indicator: '#details_indicator' })
+  ;(window as any).htmx.ajax('GET', url, { target: '#log_details_container', swap: 'innerHTML', indicator: '#details_indicator' })
 }
-
 function requestDumpLogItemUrlPath(rd, colIdxMap, source) {
   const rdId = lookupVecTextByKey(rd, colIdxMap, 'id')
   const rdCreatedAt = lookupVecTextByKey(rd, colIdxMap, 'created_at') || lookupVecTextByKey(rd, colIdxMap, 'timestamp')
@@ -802,7 +844,7 @@ function groupSpans(data, logs, colIdxMap, expandedTraces) {
 }
 
 function flattenSpanTree(traceArr, expandedTraces = {}) {
-  const result = []
+  const result: any[] = []
 
   function traverse(span, traceId, traceStart, traceEnd, depth = 0) {
     let childrenCount = span.children.length
