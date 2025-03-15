@@ -11,7 +11,7 @@ import Deriving.Aeson.Stock qualified as DAES
 import Fmt qualified as Ft
 import Language.Haskell.TH.Syntax qualified as THS
 import Lucid
-import Lucid.Htmx (hxConfirm_, hxExt_, hxPost_, hxSwap_, hxTarget_, hxTrigger_)
+import Lucid.Htmx (hxExt_, hxPost_, hxSwap_, hxTarget_, hxTrigger_)
 import Models.Projects.Projects qualified as Projects
 import NeatInterpolation
 import Pages.Charts.Charts qualified as Charts
@@ -252,7 +252,7 @@ renderWidgetHeader widget wId title valueM subValueM expandBtnFn ctaM hideSub = 
               "Move to dashboard"
 
         -- Only show the "Duplicate widget" option if we're in a dashboard context
-        when (isJust widget._dashboardId) $
+        when (isJust widget._dashboardId) do
           li_ $
             a_
               [ class_ "p-2 w-full text-left block"
@@ -268,36 +268,28 @@ renderWidgetHeader widget wId title valueM subValueM expandBtnFn ctaM hideSub = 
               , hxSwap_ "beforeend"
               , hxTrigger_ "click"
               , hxTarget_ ".grid-stack"
-              , hxConfirm_ "Are you sure you want to duplicate this widget?"
               ]
               "Duplicate widget"
-        li_ $
-          button_
-            [ class_ "p-2 w-full text-left text-textError"
-            , data_ "tippy-content" "Permanently delete this widget"
-            , onclick_
-                [text|
-                if(confirm('Are you sure you want to delete this widget? This action cannot be undone.')) {
-                  const widgetEl = document.getElementById('${wId}_widgetEl');
-                  
-                  // Try to remove using the main gridStackInstance
-                  // The removeWidget method will only remove widgets that belong to this instance,
-                  // so it's safe to try even if the widget is in a nested grid
-                  gridStackInstance.removeWidget(widgetEl, true);
-                  
-                  // If the widget is still in the DOM, it might be in a nested grid
-                  // We can trigger a custom event that the dashboard page script can listen for
-                  if (document.getElementById('${wId}_widgetEl')) {
-                    widgetEl.dispatchEvent(new CustomEvent('widget-remove-requested', {
-                      bubbles: true,
-                      detail: { widgetId: '${wId}' }
-                    }));
+          li_ $
+            button_
+              [ class_ "p-2 w-full text-left text-textError"
+              , data_ "tippy-content" "Permanently delete this widget"
+              , onclick_
+                  [text|
+                  if(confirm('Are you sure you want to delete this widget? This action cannot be undone.')) {
+                    const widgetEl = document.getElementById('${wId}_widgetEl');
+                    gridStackInstance.removeWidget(widgetEl, true);
+                    if (document.getElementById('${wId}_widgetEl')) {
+                      widgetEl.dispatchEvent(new CustomEvent('widget-remove-requested', {
+                        bubbles: true,
+                        detail: { widgetId: '${wId}' }
+                      }));
+                    }
                   }
-                }
-                return false;
-              |]
-            ]
-            "Delete widget"
+                  return false;
+                |]
+              ]
+              "Delete widget"
 
 
 renderChart :: Widget -> Html ()
