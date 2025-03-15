@@ -1,4 +1,4 @@
-module Pages.Dashboards (dashboardGetH, entrypointRedirectGetH, DashboardGet (..), dashboardsGetH, DashboardsGet (..), dashboardsPostH, DashboardForm (..), dashboardWidgetPutH, dashboardWidgetReorderPatchH, WidgetReorderItem (..)) where
+module Pages.Dashboards (dashboardGetH, entrypointRedirectGetH, DashboardGet (..), dashboardsGetH, DashboardsGet (..), dashboardsPostH, DashboardForm (..), dashboardWidgetPutH, dashboardWidgetReorderPatchH, WidgetReorderItem (..), dashboardDeleteH, dashboardRenamePatchH, DashboardRenameForm (..), dashboardDuplicatePostH, dashboardMoveWidgetPostH, WidgetMoveForm (..), dashboardDuplicateWidgetPostH) where
 
 import Control.Lens
 import Data.Aeson qualified as AE
@@ -25,7 +25,7 @@ import Effectful.Error.Static (Error, throwError)
 import Effectful.PostgreSQL.Transact.Effect (DB, dbtToEff)
 import Effectful.Time qualified as Time
 import Lucid
-import Lucid.Htmx (hxExt_, hxPost_, hxPut_, hxSwap_, hxTarget_, hxTrigger_, hxVals_)
+import Lucid.Htmx (hxConfirm_, hxDelete_, hxExt_, hxPatch_, hxPost_, hxPut_, hxSwap_, hxTarget_, hxTrigger_, hxVals_)
 import Lucid.Hyperscript (__)
 import Models.Apis.Anomalies qualified as Anomalies
 import Models.Projects.Dashboards qualified as Dashboards
@@ -52,29 +52,37 @@ import Utils qualified
 import Web.FormUrlEncoded (FromForm)
 
 
-data DashboardGet = DashboardGet Projects.ProjectId Dashboards.DashboardId Dashboards.Dashboard
+data DashboardGet = DashboardGet Projects.ProjectId Dashboards.DashboardId Dashboards.Dashboard Dashboards.DashboardVM
 
 
 instance ToHtml DashboardGet where
-  toHtml (DashboardGet pid dashId dash) = toHtml $ dashboardPage_ pid dashId dash
+  toHtml (DashboardGet pid dashId dash dashVM) = toHtml $ dashboardPage_ pid dashId dash dashVM
   toHtmlRaw = toHtml
 
 
-dashboardPage_ :: Projects.ProjectId -> Dashboards.DashboardId -> Dashboards.Dashboard -> Html ()
-dashboardPage_ pid dashId dash = do
+dashboardPage_ :: Projects.ProjectId -> Dashboards.DashboardId -> Dashboards.Dashboard -> Dashboards.DashboardVM -> Html ()
+dashboardPage_ pid dashId dash dashVM = do
   Components.modal_ "pageTitleModalId" ""
     $ form_
-      [class_ "flex flex-col p-3 gap-3"]
+      [ class_ "flex flex-col p-3 gap-3"
+      , hxPatch_ ("/p/" <> pid.toText <> "/dashboards/" <> dashId.toText <> "/rename")
+      , hxSwap_ "innerHTML"
+      , hxTrigger_ "submit"
+      , hxTarget_ "#pageTitleText"
+      ]
     $ fieldset_ [class_ "fieldset"] do
       label_ [class_ "label"] "Change Dashboard Title"
-      input_ [class_ "input", placeholder_ "Insert new title", value_ $ maybeToMonoid dash.title]
+      input_ [class_ "input", name_ "title", placeholder_ "Insert new title", value_ $ if dashVM.title == "" then "Untitled" else dashVM.title]
+      div_ [class_ "mt-3 flex justify-end gap-2"] do
+        label_ [Lucid.for_ "pageTitleModalId", class_ "btn btn-outline cursor-pointer"] "Cancel"
+        button_ [type_ "submit", class_ "btn btn-primary"] "Save"
 
   Components.modal_ "pageAddWidgetModalId" ""
     $ form_
       [class_ "flex flex-col p-3 gap-3"]
     $ fieldset_ [class_ "fieldset"] do
       label_ [class_ "label"] "Change Dashboard Title"
-      input_ [class_ "input w-full max-w-xs", placeholder_ "Insert new title", value_ $ maybeToMonoid dash.title]
+      input_ [class_ "input w-full max-w-xs", placeholder_ "Insert new title", value_ $ if dashVM.title == "" then "Untitled" else dashVM.title]
 
   whenJust dash.variables \variables -> do
     div_ [class_ "flex bg-fillWeaker px-6 py-2 gap-2"] $
@@ -199,6 +207,7 @@ console.error(`Error fetching data for ${input.name}:`, e);
         gridStackInstance.on('removed change', debounce(updateWidgetOrder('${projectId}', '${dashboardId}'), 200));
 
         // Initialize nested grids and bind change events.
+        const nestedGridInstances = [];
         document.querySelectorAll('.nested-grid').forEach(nestedEl => {
           const nestedInstance = GridStack.init({
             column: 12,
@@ -215,6 +224,27 @@ console.error(`Error fetching data for ${input.name}:`, e);
           }, nestedEl);
           // nestedInstance.compact()
           nestedInstance.on('removed change', debounce(updateWidgetOrder('${projectId}', '${dashboardId}'), 200));
+          nestedGridInstances.push(nestedInstance);
+        });
+        
+        // Listen for widget-remove-requested custom events
+        document.addEventListener('widget-remove-requested', function(e) {
+          const widgetId = e.detail.widgetId;
+          const widgetEl = document.getElementById(widgetId + '_widgetEl');
+          if (widgetEl) {
+            // Find which nested grid contains this widget
+            for (const nestedInstance of nestedGridInstances) {
+              try {
+                // If the widget belongs to this grid, it will be removed
+                // If not, nothing happens
+                nestedInstance.removeWidget(widgetEl, true);
+                break;
+              } catch (err) {
+                // Continue to the next instance if this one doesn't contain the widget
+                continue;
+              }
+            }
+          }
         });
       |]
 
@@ -294,7 +324,19 @@ processWidget pid now (sinceStr, fromDStr, toDStr) allParams widgetBase = do
   case widget'.children of
     Nothing -> pure widget'
     Just childWidgets -> do
-      newChildren <- traverse (processWidget pid now (sinceStr, fromDStr, toDStr) allParams) childWidgets
+      -- Process child widgets, preserving any dashboard ID from the parent
+      let processWithParentContext childWidget =
+            processWidget
+              pid
+              now
+              (sinceStr, fromDStr, toDStr)
+              allParams
+              ( if isJust widget'._dashboardId && isNothing childWidget._dashboardId
+                  then childWidget{Widget._dashboardId = widget'._dashboardId}
+                  else childWidget
+              )
+
+      newChildren <- traverse processWithParentContext childWidgets
       pure $ widget' & #children .~ Just newChildren
 
 
@@ -393,16 +435,22 @@ dashboardGetH pid dashId fileM fromDStr toDStr sinceStr allParams = do
   (sess, project) <- Sessions.sessionAndProject pid
   now <- Time.currentTime
   let (_fromD, _toD, currentRange) = Components.parseTimeRange now (Components.TimePicker sinceStr fromDStr toDStr)
-  (_, dash) <- getDashAndVM dashId fileM
+  (dashVM, dash) <- getDashAndVM dashId fileM
   dash' <- forOf (#variables . traverse . traverse) dash (processVariable pid now (sinceStr, fromDStr, toDStr) allParams)
-  dash'' <- forOf (#widgets . traverse) dash' (processWidget pid now (sinceStr, fromDStr, toDStr) allParams)
+
+  -- Process widgets and add the dashboard ID to each one
+  let processWidgetWithDashboardId w = do
+        processed <- processWidget pid now (sinceStr, fromDStr, toDStr) allParams w
+        pure $ processed{Widget._dashboardId = Just dashId.toText}
+
+  dash'' <- forOf (#widgets . traverse) dash' processWidgetWithDashboardId
 
   let bwconf =
         (def :: BWConfig)
           { sessM = Just sess
           , currProject = Just project
           , prePageTitle = Just "Dashboards"
-          , pageTitle = fromMaybe "Untitled" dash''.title
+          , pageTitle = if dashVM.title == "" then "Untitled" else dashVM.title
           , pageTitleModalId = Just "pageTitleModalId"
           , pageActions = Just $ div_ [class_ "inline-flex gap-3 items-center leading-[0]"] do
               Components.timepicker_ Nothing currentRange
@@ -414,12 +462,33 @@ dashboardGetH pid dashId fileM fromDStr toDStr sinceStr allParams = do
                     remove .animate-spin from the first <svg/> in me |]
                 ]
                 $ faSprite_ "arrows-rotate" "regular" "w-3 h-3"
-              span_ [class_ "text-fillDisabled"] "|"
-              Components.drawer_ "page-data-drawer" Nothing (Just $ newWidget_ pid currentRange) $ span_ [class_ "text-iconNeutral cursor-pointer", data_ "tippy-content" "Add a new widget"] $ faSprite_ "plus" "regular" "w-3 h-3"
-              label_ [class_ "text-iconNeutral cursor-pointer", data_ "tippy-content" "Menu"] $ faSprite_ "ellipsis" "regular" "w-4 h-4"
+              div_ [class_ "flex items-center"] do
+                span_ [class_ "text-fillDisabled mr-2"] "|"
+                Components.drawer_ "page-data-drawer" Nothing (Just $ newWidget_ pid currentRange) $ span_ [class_ "text-iconNeutral cursor-pointer p-2 hover:bg-fillWeak rounded-lg", data_ "tippy-content" "Add a new widget"] $ faSprite_ "plus" "regular" "w-3 h-3"
+                div_ [class_ "dropdown dropdown-end"] do
+                  div_ [tabindex_ "0", role_ "button", class_ "text-iconNeutral cursor-pointer  p-2 hover:bg-fillWeak rounded-lg", data_ "tippy-content" "Context Menu"] $ faSprite_ "ellipsis" "regular" "w-4 h-4"
+                  ul_ [tabindex_ "0", class_ "dropdown-content menu menu-md bg-base-100 rounded-box p-2 w-52 shadow-sm leading-none"] do
+                    li_ $ label_ [Lucid.for_ "pageTitleModalId", class_ "p-2"] "Rename dashboard"
+                    li_ $
+                      button_
+                        [ class_ "p-2 w-full text-left"
+                        , hxPost_ ("/p/" <> pid.toText <> "/dashboards/" <> dashId.toText <> "/duplicate")
+                        , hxSwap_ "none"
+                        , data_ "tippy-content" "Creates a copy of this dashboard"
+                        ]
+                        "Duplicate dashboard"
+                    li_ $
+                      button_
+                        [ class_ "p-2 w-full text-left text-textError"
+                        , hxDelete_ ("/p/" <> pid.toText <> "/dashboards/" <> dashId.toText)
+                        , hxSwap_ "none"
+                        , hxConfirm_ "Are you sure you want to delete this dashboard? This action cannot be undone."
+                        , data_ "tippy-content" "Permanently deletes this dashboard"
+                        ]
+                        "Delete dashboard"
           , docsLink = Just "https://apitoolkit.io/docs/dashboard/dashboard-pages/dashboard/"
           }
-  addRespHeaders $ PageCtx bwconf $ DashboardGet pid dashId dash''
+  addRespHeaders $ PageCtx bwconf $ DashboardGet pid dashId dash'' dashVM
 
 
 newWidget_ :: Projects.ProjectId -> Maybe Text -> Html ()
@@ -745,3 +814,213 @@ toQueryParams qs =
   TE.decodeUtf8 $
     URI.renderQuery False $
       map (\(k, mv) -> (TE.encodeUtf8 k, fmap TE.encodeUtf8 mv)) qs
+
+
+-- | Form data for renaming a dashboard
+data DashboardRenameForm = DashboardRenameForm
+  { title :: Text
+  }
+  deriving stock (Show, Generic)
+  deriving anyclass (FromForm)
+
+
+-- | Handler for renaming a dashboard.
+-- It updates the title of the specified dashboard.
+dashboardRenamePatchH :: Projects.ProjectId -> Dashboards.DashboardId -> DashboardRenameForm -> ATAuthCtx (RespHeaders (Html ()))
+dashboardRenamePatchH pid dashId form = do
+  mDashboard <- dbtToEff $ DBT.selectOneByField @Dashboards.DashboardVM [DBT.field| id |] (Only dashId)
+  case mDashboard of
+    Nothing -> throwError $ err404{errBody = "Dashboard not found or does not belong to this project"}
+    Just dashVM -> do
+      _ <- dbtToEff $ DBT.updateFieldsBy @Dashboards.DashboardVM [[DBT.field| title |]] ([DBT.field| id |], dashId) (Only form.title)
+
+      when (isJust dashVM.schema) do
+        let updatedSchema = dashVM.schema & _Just . #title .~ Just form.title
+        _ <-
+          dbtToEff $
+            DBT.updateFieldsBy @Dashboards.DashboardVM
+              [[DBT.field| schema |]]
+              ([DBT.field| id |], dashId)
+              (Only updatedSchema)
+        pass
+
+      addSuccessToast "Dashboard renamed successfully" Nothing
+      addTriggerEvent "closeModal" ""
+      addRespHeaders (toHtml form.title)
+
+
+-- | Handler for duplicating a dashboard.
+-- It creates a new dashboard with the same content but with "(Copy)" appended to the title.
+dashboardDuplicatePostH :: Projects.ProjectId -> Dashboards.DashboardId -> ATAuthCtx (RespHeaders NoContent)
+dashboardDuplicatePostH pid dashId = do
+  mDashboard <- dbtToEff $ DBT.selectOneByField @Dashboards.DashboardVM [DBT.field| id |] (Only dashId)
+
+  case mDashboard of
+    Nothing -> throwError $ err404{errBody = "Dashboard not found or does not belong to this project"}
+    Just dashVM -> do
+      (sess, _) <- Sessions.sessionAndProject pid
+      now <- Time.currentTime
+      -- Generate new dashboard ID
+      newDashId <- Dashboards.DashboardId <$> UUID.genUUID
+
+      -- Create new title with "(Copy)" suffix
+      let copyTitle = if dashVM.title == "" then "Untitled (Copy)" else dashVM.title <> " (Copy)"
+      -- Update schema title if it exists
+      let updatedSchema =
+            dashVM.schema
+              & _Just . #title %~ \t ->
+                Just $ case t of
+                  Nothing -> copyTitle
+                  Just "" -> "Untitled (Copy)"
+                  Just title -> title <> " (Copy)"
+
+      -- Insert the new dashboard
+      _ <-
+        dbtToEff $
+          DBT.insert @Dashboards.DashboardVM $
+            dashVM
+              { Dashboards.id = newDashId
+              , Dashboards.createdAt = now
+              , Dashboards.updatedAt = now
+              , Dashboards.createdBy = sess.user.id
+              , Dashboards.title = copyTitle
+              , Dashboards.schema = updatedSchema
+              , Dashboards.starredSince = Nothing
+              , Dashboards.homepageSince = Nothing
+              }
+
+      -- Redirect to the new dashboard
+      let redirectURI = "/p/" <> pid.toText <> "/dashboards/" <> newDashId.toText
+      redirectCS redirectURI
+      addSuccessToast "Dashboard was duplicated successfully" Nothing
+      addRespHeaders NoContent
+
+
+-- | Handler for deleting a dashboard.
+-- It verifies the dashboard exists and belongs to the project before deletion.
+-- After deletion, redirects to the dashboard list page.
+dashboardDeleteH :: Projects.ProjectId -> Dashboards.DashboardId -> ATAuthCtx (RespHeaders NoContent)
+dashboardDeleteH pid dashId = do
+  mDashboard <- dbtToEff $ DBT.selectOneByField @Dashboards.DashboardVM [DBT.field| id |] (Only dashId)
+  case mDashboard of
+    Nothing -> throwError $ err404{errBody = "Dashboard not found or does not belong to this project"}
+    Just _ -> do
+      dbtToEff $ DBT.delete @Dashboards.DashboardVM (Only dashId)
+
+      -- Redirect to dashboard list page
+      let redirectURI = "/p/" <> pid.toText <> "/dashboards"
+      redirectCS redirectURI
+      addSuccessToast "Dashboard was deleted successfully" Nothing
+      addRespHeaders NoContent
+
+
+-- | Form data for moving a widget between dashboards
+data WidgetMoveForm = WidgetMoveForm
+  { widgetId :: Text
+  , sourceDashboardId :: Dashboards.DashboardId
+  , targetDashboardId :: Dashboards.DashboardId
+  }
+  deriving stock (Show, Generic)
+  deriving anyclass (AE.FromJSON, AE.ToJSON)
+
+
+-- | Handler for moving a widget from one dashboard to another.
+-- It removes the widget from the source dashboard and adds it to the target dashboard.
+dashboardMoveWidgetPostH :: Projects.ProjectId -> WidgetMoveForm -> ATAuthCtx (RespHeaders NoContent)
+dashboardMoveWidgetPostH pid form = do
+  -- Get source and target dashboards
+  sourceDashVM <-
+    dbtToEff (DBT.selectById @Dashboards.DashboardVM (Only form.sourceDashboardId)) >>= \case
+      Just vm -> pure vm
+      Nothing -> throwError $ err404{errBody = "Source dashboard not found"}
+
+  targetDashVM <-
+    dbtToEff (DBT.selectById @Dashboards.DashboardVM (Only form.targetDashboardId)) >>= \case
+      Just vm -> pure vm
+      Nothing -> throwError $ err404{errBody = "Target dashboard not found"}
+
+  -- Load dashboard schemas
+  (_, sourceDash) <- getDashAndVM form.sourceDashboardId Nothing
+
+  -- Find the widget to move
+  let widgetToMoveM = find (\w -> (w.id == Just form.widgetId) || (maybeToMonoid (slugify <$> w.title) == form.widgetId)) sourceDash.widgets
+
+  case widgetToMoveM of
+    Nothing -> throwError $ err404{errBody = "Widget not found in source dashboard"}
+    Just widgetToMove -> do
+      -- Get the target dashboard schema (or template if not set)
+      targetDash <- case targetDashVM.schema of
+        Just schema -> pure schema
+        Nothing -> case loadDashboardFromVM targetDashVM of
+          Just template -> pure template
+          Nothing -> throwError $ err404{errBody = "Could not load target dashboard schema or template"}
+
+      -- Get current time for updated_at field
+      now <- Time.currentTime
+
+      -- Remove widget from source dashboard
+      let updatedSourceWidgets = filter (\w -> (w.id /= Just form.widgetId) && (maybeToMonoid (slugify <$> w.title) /= form.widgetId)) sourceDash.widgets
+      let updatedSourceDash = sourceDash{Dashboards.widgets = updatedSourceWidgets}
+
+      -- Add widget to target dashboard
+      let updatedTargetDash = targetDash{Dashboards.widgets = targetDash.widgets <> [widgetToMove]}
+
+      -- Update both dashboards in the database
+      _ <-
+        dbtToEff $
+          DBT.updateFieldsBy @Dashboards.DashboardVM
+            [[DBT.field| schema |], [DBT.field| updated_at |]]
+            ([DBT.field| id |], form.sourceDashboardId)
+            (updatedSourceDash, now)
+
+      _ <-
+        dbtToEff $
+          DBT.updateFieldsBy @Dashboards.DashboardVM
+            [[DBT.field| schema |], [DBT.field| updated_at |]]
+            ([DBT.field| id |], form.targetDashboardId)
+            (updatedTargetDash, now)
+
+      addSuccessToast "Widget moved successfully" Nothing
+      addRespHeaders NoContent
+
+
+-- | Handler for duplicating a widget within the same dashboard.
+-- It creates a copy of the widget with "(Copy)" appended to the title.
+dashboardDuplicateWidgetPostH :: Projects.ProjectId -> Dashboards.DashboardId -> Text -> ATAuthCtx (RespHeaders NoContent)
+dashboardDuplicateWidgetPostH pid dashId widgetId = do
+  -- Load the dashboard
+  (_, dash) <- getDashAndVM dashId Nothing
+
+  -- Find the widget to duplicate
+  let widgetToDuplicateM = find (\w -> (w.id == Just widgetId) || (maybeToMonoid (slugify <$> w.title) == widgetId)) dash.widgets
+
+  case widgetToDuplicateM of
+    Nothing -> throwError $ err404{errBody = "Widget not found in dashboard"}
+    Just widgetToDuplicate -> do
+      -- Generate a new ID for the widget
+      newWidgetId <- UUID.genUUID >>= pure . UUID.toText
+
+      -- Create a copy of the widget with a new ID and modified title
+      let widgetCopy =
+            widgetToDuplicate
+              { Widget.id = Just newWidgetId
+              , Widget.title = case widgetToDuplicate.title of
+                  Nothing -> Just "Widget Copy"
+                  Just "" -> Just "Widget Copy"
+                  Just title -> Just (title <> " (Copy)")
+              }
+
+      -- Add the copy to the dashboard
+      let updatedDash = dash{Dashboards.widgets = dash.widgets <> [widgetCopy]}
+
+      -- Update the dashboard in the database
+      now <- Time.currentTime
+      _ <-
+        dbtToEff $
+          DBT.updateFieldsBy @Dashboards.DashboardVM
+            [[DBT.field| schema |], [DBT.field| updated_at |]]
+            ([DBT.field| id |], dashId)
+            (updatedDash, now)
+
+      addSuccessToast "Widget duplicated successfully" Nothing
+      addRespHeaders NoContent

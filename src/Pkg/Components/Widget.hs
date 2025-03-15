@@ -11,6 +11,8 @@ import Deriving.Aeson.Stock qualified as DAES
 import Fmt qualified as Ft
 import Language.Haskell.TH.Syntax qualified as THS
 import Lucid
+import Lucid.Htmx (hxExt_, hxPost_, hxSwap_, hxTrigger_)
+import Lucid.Hyperscript (__)
 import Models.Projects.Projects qualified as Projects
 import NeatInterpolation
 import Pages.Charts.Charts qualified as Charts
@@ -114,6 +116,7 @@ data Widget = Widget
   , -- eager
     eager :: Maybe Bool
   , _projectId :: Maybe Projects.ProjectId
+  , _dashboardId :: Maybe Text -- Dashboard ID for context
   , expandBtnFn :: Maybe Text
   , children :: Maybe [Widget]
   , html :: Maybe LText
@@ -165,7 +168,7 @@ widget_ w = widgetHelper_ False w
 widgetHelper_ :: Bool -> Widget -> Html ()
 widgetHelper_ isChild w' = case w.wType of
   WTAnomalies -> gridItem_ $ div_ [class_ $ "h-full " <> paddingBtm] do
-    renderWidgetHeader (maybeToMonoid w.id) w.title Nothing Nothing Nothing (Just ("View all", "/p/" <> maybeToMonoid (w._projectId <&> (.toText)) <> "/anomalies")) (w.hideSubtitle == Just True)
+    renderWidgetHeader w (maybeToMonoid w.id) w.title Nothing Nothing Nothing (Just ("View all", "/p/" <> maybeToMonoid (w._projectId <&> (.toText)) <> "/anomalies")) (w.hideSubtitle == Just True)
     whenJust w.html toHtmlRaw
   WTGroup -> gridItem_ $ div_ [class_ $ "h-full " <> paddingBtm] $ div_ [class_ "h-full flex flex-col gap-4"] do
     div_ [class_ "leading-none flex justify-between items-center grid-stack-handle"] do
@@ -185,13 +188,15 @@ widgetHelper_ isChild w' = case w.wType of
         else (div_ ([class_ "grid-stack-item h-full flex-1 overflow-hidden ", id_ $ maybeToMonoid w.id <> "_widgetEl"] <> attrs) . div_ [class_ "grid-stack-item-content h-full"])
 
 
-renderWidgetHeader :: Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe (Text, Text) -> Bool -> Html ()
-renderWidgetHeader wId title valueM subValueM expandBtnFn ctaM hideSub = div_ [class_ "leading-none flex justify-between items-center grid-stack-handle"] do
+renderWidgetHeader :: Widget -> Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe (Text, Text) -> Bool -> Html ()
+renderWidgetHeader widget wId title valueM subValueM expandBtnFn ctaM hideSub = div_ [class_ "leading-none flex justify-between items-center grid-stack-handle", id_ $ wId <> "_header"] do
   div_ [class_ "inline-flex gap-3 items-center"] do
     span_ [class_ "text-sm"] $ toHtml $ maybeToMonoid title
     span_ [class_ $ "bg-fillWeak border border-strokeWeak text-sm font-semibold px-2 py-1 rounded-3xl " <> if (isJust valueM) then "" else "hidden", id_ $ wId <> "Value"] $
       whenJust valueM toHtml
     span_ [class_ $ "text-textWeak widget-subtitle text-sm " <> bool "" "hidden" hideSub, id_ $ wId <> "Subtitle"] $ toHtml $ maybeToMonoid subValueM
+    -- Add hidden loader with specific ID that can be toggled from JS
+    span_ [class_ "hidden", id_ $ wId <> "_loader"] $ Utils.faSprite_ "spinner" "regular" "w-4 h-4 animate-spin"
   div_ [class_ "text-iconNeutral"] do
     whenJust ctaM \(ctaTitle, uri) -> a_ [class_ "underline underline-offset-2 text-textBrand", href_ uri] $ toHtml ctaTitle
     whenJust expandBtnFn \fn ->
@@ -200,10 +205,101 @@ renderWidgetHeader wId title valueM subValueM expandBtnFn ctaM hideSub = div_ [c
         , class_ "p-2 cursor-pointer"
         ]
         $ Utils.faSprite_ "expand-icon" "regular" "w-3 h-3"
-    button_
-      [ class_ "p-2 cursor-pointer"
-      ]
-      $ Utils.faSprite_ "ellipsis" "regular" "w-4 h-4"
+    details_ [class_ "dropdown dropdown-end"] do
+      summary_ [class_ "text-iconNeutral cursor-pointer p-2 hover:bg-fillWeak rounded-lg", data_ "tippy-content" "Widget Menu"] $
+        Utils.faSprite_ "ellipsis" "regular" "w-4 h-4"
+      ul_ [class_ "text-textStrong menu menu-md dropdown-content bg-base-100 rounded-box p-2 w-52 shadow-sm leading-none z-10"] do
+        -- Only show the "Move to dashboard" option if we're in a dashboard context
+        when (isJust widget._dashboardId) $
+          li_ $
+            a_
+              [ class_ "p-2 w-full text-left block"
+              , data_ "tippy-content" "Move this widget to another dashboard"
+              , id_ $ wId <> "_move_link"
+              , -- TODO: Spin up a modal dialog to select a dshboard to move chart into.
+                -- This logic would exist on the log explorer too, so it should be portable
+                -- Instead of moving, should be a clone
+                -- , onclick_
+                --     [text|
+                --     const targetDashboardId = prompt('Enter the target dashboard ID:', '');
+                --     if (!targetDashboardId) return false;
+                --
+                --     if(!confirm('Are you sure you want to move this widget to dashboard ' + targetDashboardId + '?'))
+                --       return false;
+                --
+                --     // Set the hx-vals attribute with the form data
+                --     this.setAttribute('hx-vals', JSON.stringify({
+                --       widget_id: '${wId}',
+                --       source_dashboard_id: '${fromMaybe "" widget._dashboardId}',
+                --       target_dashboard_id: targetDashboardId
+                --     }));
+                --
+                --     return true; // Allow the htmx request to proceed
+                --   |]
+                hxPost_ $ "/p/" <> fromMaybe "" (widget._projectId <&> (.toText)) <> "/dashboards/move_widget"
+              , hxSwap_ "none"
+              , hxTrigger_ "click"
+              , hxExt_ "json-enc"
+              -- , [__| on htmx:afterRequest[detail.successful]
+              --       set widgetEl to document.getElementById('${wId}_widgetEl')
+              --       call gridStackInstance.removeWidget(widgetEl, true)
+              --       if document.getElementById('${wId}_widgetEl')
+              --         call widgetEl.dispatchEvent(new CustomEvent('widget-remove-requested',
+              --                                     {bubbles: true, detail: { widgetId: '${wId}' }}))
+              --       end
+              --   |]
+              ]
+              "Move to dashboard"
+
+        -- Only show the "Duplicate widget" option if we're in a dashboard context
+        when (isJust widget._dashboardId) $
+          li_ $
+            a_
+              [ class_ "p-2 w-full text-left block"
+              , data_ "tippy-content" "Create a copy of this widget"
+              , hxPost_ $
+                  "/p/"
+                    <> fromMaybe "" (widget._projectId <&> (.toText))
+                    <> "/dashboards/"
+                    <> fromMaybe "" widget._dashboardId
+                    <> "/widgets/"
+                    <> wId
+                    <> "/duplicate"
+              , hxSwap_ "none"
+              , hxTrigger_ "click"
+              , onclick_ "return confirm('Are you sure you want to duplicate this widget?');"
+              , [__| on htmx:afterRequest[detail.successful]
+                    location.reload()
+                |]
+              ]
+              "Duplicate widget"
+        li_ $
+          button_
+            [ class_ "p-2 w-full text-left text-textError"
+            , data_ "tippy-content" "Permanently delete this widget"
+            , onclick_
+                [text|
+                if(confirm('Are you sure you want to delete this widget? This action cannot be undone.')) {
+                  const widgetEl = document.getElementById('${wId}_widgetEl');
+                  
+                  // Try to remove using the main gridStackInstance
+                  // The removeWidget method will only remove widgets that belong to this instance,
+                  // so it's safe to try even if the widget is in a nested grid
+                  gridStackInstance.removeWidget(widgetEl, true);
+                  
+                  // If the widget is still in the DOM, it might be in a nested grid
+                  // We can trigger a custom event that the dashboard page script can listen for
+                  if (document.getElementById('${wId}_widgetEl')) {
+                    widgetEl.dispatchEvent(new CustomEvent('widget-remove-requested', {
+                      bubbles: true,
+                      detail: { widgetId: '${wId}' }
+                    }));
+                  }
+                }
+                return false;
+              |]
+            ]
+            "Delete widget"
 
 
 renderChart :: Widget -> Html ()
@@ -214,7 +310,7 @@ renderChart widget = do
   let isStat = widget.wType `elem` [WTTimeseriesStat, WTStat]
   div_ [class_ "gap-0.5 flex flex-col h-full justify-end"] do
     unless (widget.naked == Just True || widget.wType `elem` [WTTimeseriesStat, WTStat]) $
-      renderWidgetHeader chartId widget.title valueM rateM widget.expandBtnFn Nothing (widget.hideSubtitle == Just True)
+      renderWidgetHeader widget chartId widget.title valueM rateM widget.expandBtnFn Nothing (widget.hideSubtitle == Just True)
     div_ [class_ $ "flex-1 flex " <> bool "" "grid-stack-handle" isStat] do
       div_
         [ class_ $

@@ -112,6 +112,8 @@ bodyWrapper bcfg child = do
         script_ [src_ $(hashAssetFile "/public/assets/deps/htmx/json-enc-2.js"), defer_ "true"] ("" :: Text)
         script_ [src_ $(hashAssetFile "/public/assets/deps/lit/lit-html.js"), type_ "module", defer_ "true"] ("" :: Text)
         script_ [src_ $(hashAssetFile "/public/assets/deps/gridstack/gridstack-all.js")] ("" :: Text)
+        -- script_ [src_ "https://unpkg.com/htmx.org/dist/ext/debug.js", defer_ "true"] ("" :: Text)
+
         script_ [src_ $(hashAssetFile "/public/assets/js/thirdparty/_hyperscript_web0_9_5.min.js"), defer_ "true"] ("" :: Text)
         script_ [src_ $(hashAssetFile "/public/assets/js/thirdparty/_hyperscript_template.js"), defer_ "true"] ("" :: Text)
         script_ [src_ $(hashAssetFile "/public/assets/js/thirdparty/luxon.min.js"), defer_ "true"] ("" :: Text)
@@ -340,7 +342,7 @@ projectsDropDown currProject projects = do
   let pidTxt = currProject.id.toText
   div_
     [ term "data-menu" "true"
-    , class_ "origin-top-right z-40 transition transform bg-base-100 p-4 absolute w-[20rem] rounded-2xl shadow-2xl shadow-indigo-200 opacity-100 scale-100"
+    , class_ "origin-top-right z-40 transition transform bg-bgOverlay p-4 absolute w-[20rem] rounded-2xl shadow-2xl shadow-indigo-200 opacity-100 scale-100"
     ]
     do
       div_ [class_ "p-2 pb-4 "] do
@@ -461,7 +463,7 @@ navbar projectM menuL currUser prePageTitle pageTitle pageTitleMonadId docsLink 
           faSprite_ icon "regular" "w-4 h-4 text-strokeStrong"
           toHtml pt
         faSprite_ "chevron-right" "regular" "w-3 h-3"
-      label_ [class_ "font-normal text-xl p-1 rounded-md cursor-pointer hover:bg-fillWeak leading-none", Lucid.for_ $ maybeToMonoid pageTitleMonadId] $ toHtml pageTitle
+      label_ [class_ "font-normal text-xl p-1 rounded-md cursor-pointer hover:bg-fillWeak leading-none", Lucid.for_ $ maybeToMonoid pageTitleMonadId, id_ "pageTitleText"] $ toHtml pageTitle
       whenJust docsLink \link -> a_ [class_ "text-iconBrand -mt-1", href_ link, term "data-tippy-placement" "right", term "data-tippy-content" "Open Documentation"] $ faSprite_ "circle-question" "regular" "w-4 h-4"
     whenJust tabsM id
     div_ [class_ "flex-1 flex items-center justify-end text-sm"] $ whenJust pageActionsM id

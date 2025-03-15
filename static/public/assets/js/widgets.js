@@ -44,9 +44,15 @@ const updateChartConfiguration = (widgetData, opt, data) => {
 
 const updateChartData = async (chart, opt, shouldFetch, widgetData) => {
   if (!shouldFetch) return
+  
+  const { query, querySQL, queryAST, pid, chartId, summarizeBy, summarizeByPrefix } = widgetData
+  const loader = $(`${chartId}_loader`)
+  
+  // Show loader before fetch
+  if (loader) loader.classList.remove('hidden')
+  
   try {
-    const { query, querySQL, queryAST, pid, chartId, summarizeBy, summarizeByPrefix } = widgetData,
-      params = new URLSearchParams(window.location.search)
+    const params = new URLSearchParams(window.location.search)
     params.set('pid', pid)
     params.set('query_raw', query)
     params.set('queryAST', JSON.stringify(queryAST))
@@ -73,6 +79,9 @@ const updateChartData = async (chart, opt, shouldFetch, widgetData) => {
     chart.setOption(updateChartConfiguration(widgetData, opt, opt.dataset.source))
   } catch (e) {
     console.error('Failed to fetch new data:', e)
+  } finally {
+    // Hide loader after fetch completes (success or failure)
+    if (loader) loader.classList.add('hidden')
   }
 }
 
@@ -139,7 +148,7 @@ const chartWidget = widgetData => {
     updateChartData(chart, opt, true, widgetData)
   })
 
-  window.addEventListener('unload', () => (clearInterval(intervalId), resizeObserver.disconnect()))
+  window.addEventListener('pagehide', () => (clearInterval(intervalId), resizeObserver.disconnect()))
 }
 
 function bindFunctionsToObjects(rootObj, obj) {

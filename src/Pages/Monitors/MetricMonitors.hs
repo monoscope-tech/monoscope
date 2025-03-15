@@ -199,8 +199,8 @@ configureNotificationMessage_ colM = do
         div_ [class_ "flex items-center gap-2 pt-4"] do
           input_ $ [class_ "checkbox checkbox-sm", type_ "checkbox", name_ "notifyAfterCheck"] ++ [checked_ | nfc]
           span_ "If this monitor is not acknowleged or resoved, notify renotify every"
-          select_ [class_ "select select-xs shadow-none", name_ "notifyAfter"] $
-            mapM_ (\v -> option_ [selected_ "" | v == naf] $ toHtml v) ["10 mins", "20 mins", "30 mins", "1 hour", "6 hours", "24 hours"]
+          select_ [class_ "select select-xs shadow-none", name_ "notifyAfter"]
+            $ mapM_ (\v -> option_ [selected_ "" | v == naf] $ toHtml v) ["10 mins", "20 mins", "30 mins", "1 hour", "6 hours", "24 hours"]
         div_ [class_ "flex items-center gap-2"] do
           input_ $ [class_ "checkbox checkbox-sm", type_ "checkbox", name_ "stopAfterCheck"] ++ [checked_ | sfc]
           span_ "Stop renotifying after "
