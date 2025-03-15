@@ -11,8 +11,7 @@ import Deriving.Aeson.Stock qualified as DAES
 import Fmt qualified as Ft
 import Language.Haskell.TH.Syntax qualified as THS
 import Lucid
-import Lucid.Htmx (hxExt_, hxPost_, hxSwap_, hxTrigger_)
-import Lucid.Hyperscript (__)
+import Lucid.Htmx (hxConfirm_, hxExt_, hxPost_, hxSwap_, hxTarget_, hxTrigger_)
 import Models.Projects.Projects qualified as Projects
 import NeatInterpolation
 import Pages.Charts.Charts qualified as Charts
@@ -156,8 +155,9 @@ data WidgetAxis = WidgetAxis
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.StripPrefix "w", DAE.CamelToSnake]] WidgetAxis
 
 
-widgetPostH :: Widget -> ATAuthCtx (RespHeaders (Html ()))
-widgetPostH = addRespHeaders . widget_
+-- Used when converting a widget json to its html representation. Eg in a query chart builder
+widgetPostH :: Widget -> ATAuthCtx (RespHeaders Widget)
+widgetPostH widget = addRespHeaders widget
 
 
 -- use either index or the xxhash as id
@@ -259,18 +259,16 @@ renderWidgetHeader widget wId title valueM subValueM expandBtnFn ctaM hideSub = 
               , data_ "tippy-content" "Create a copy of this widget"
               , hxPost_ $
                   "/p/"
-                    <> fromMaybe "" (widget._projectId <&> (.toText))
+                    <> maybeToMonoid (widget._projectId <&> (.toText))
                     <> "/dashboards/"
-                    <> fromMaybe "" widget._dashboardId
+                    <> maybeToMonoid widget._dashboardId
                     <> "/widgets/"
                     <> wId
                     <> "/duplicate"
-              , hxSwap_ "none"
+              , hxSwap_ "beforeend"
               , hxTrigger_ "click"
-              , onclick_ "return confirm('Are you sure you want to duplicate this widget?');"
-              , [__| on htmx:afterRequest[detail.successful]
-                    location.reload()
-                |]
+              , hxTarget_ ".grid-stack"
+              , hxConfirm_ "Are you sure you want to duplicate this widget?"
               ]
               "Duplicate widget"
         li_ $

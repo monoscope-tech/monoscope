@@ -1,3 +1,15 @@
+htmx.defineExtension('debug', {
+  onEvent: function (name, evt) {
+    if (console.debug) {
+      console.debug(name, evt)
+    } else if (console) {
+      console.log('DEBUG:', name, evt)
+    } else {
+      throw new Error('NO CONSOLE SUPPORTED')
+    }
+  },
+})
+
 // buildCurlRequest converts a log explorer result item into a curl and copies the curl to clipboard.
 window.buildCurlRequest = function (event) {
   const { request_headers, request_body, method, host, raw_url } = JSON.parse(event.currentTarget.dataset.reqjson)

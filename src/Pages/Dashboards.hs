@@ -986,7 +986,8 @@ dashboardMoveWidgetPostH pid form = do
 
 -- | Handler for duplicating a widget within the same dashboard.
 -- It creates a copy of the widget with "(Copy)" appended to the title.
-dashboardDuplicateWidgetPostH :: Projects.ProjectId -> Dashboards.DashboardId -> Text -> ATAuthCtx (RespHeaders NoContent)
+-- Returns the duplicated widget that will be converted to HTML automatically.
+dashboardDuplicateWidgetPostH :: Projects.ProjectId -> Dashboards.DashboardId -> Text -> ATAuthCtx (RespHeaders Widget.Widget)
 dashboardDuplicateWidgetPostH pid dashId widgetId = do
   -- Load the dashboard
   (_, dash) <- getDashAndVM dashId Nothing
@@ -1008,6 +1009,8 @@ dashboardDuplicateWidgetPostH pid dashId widgetId = do
                   Nothing -> Just "Widget Copy"
                   Just "" -> Just "Widget Copy"
                   Just title -> Just (title <> " (Copy)")
+              , Widget._projectId = Just pid
+              , Widget._dashboardId = Just dashId.toText
               }
 
       -- Add the copy to the dashboard
@@ -1023,4 +1026,6 @@ dashboardDuplicateWidgetPostH pid dashId widgetId = do
             (updatedDash, now)
 
       addSuccessToast "Widget duplicated successfully" Nothing
-      addRespHeaders NoContent
+      
+      -- Return the widget directly (will be converted to HTML by ToHtml instance)
+      addRespHeaders widgetCopy
