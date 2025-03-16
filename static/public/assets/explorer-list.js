@@ -360,7 +360,7 @@ export class LogList extends LitElement {
     list.unshift('start')
     list.push('end')
     return html`
-      <div class="relative h-full shrink-1 min-w-0 p-0 m-0  w-full c-scroll pb-12 overflow-y-scroll " id="logs_list_container_inner">
+      <div class="relative h-full shrink-1 min-w-0 p-0 m-0 bg-white w-full c-scroll pb-12 overflow-y-scroll " id="logs_list_container_inner">
         <table class="table-auto w-max relative ctable table-pin-rows table-pin-cols">
           <thead class="z-10 sticky top-0">
             <tr class="text-textStrong border-b flex min-w-0 relative font-medium border-y">
