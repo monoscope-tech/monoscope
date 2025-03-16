@@ -44,13 +44,13 @@ const updateChartConfiguration = (widgetData, opt, data) => {
 
 const updateChartData = async (chart, opt, shouldFetch, widgetData) => {
   if (!shouldFetch) return
-  
+
   const { query, querySQL, queryAST, pid, chartId, summarizeBy, summarizeByPrefix } = widgetData
   const loader = $(`${chartId}_loader`)
-  
+
   // Show loader before fetch
   if (loader) loader.classList.remove('hidden')
-  
+
   try {
     const params = new URLSearchParams(window.location.search)
     params.set('pid', pid)
@@ -230,3 +230,33 @@ function debounce(func, wait) {
     timeout = setTimeout(() => func.apply(this, args), wait)
   }
 }
+
+/**
+ * Auto-refresh functionality for dashboards and widgets
+ */
+const DEFAULT_REFRESH_INTERVAL = 0 // Default to Off
+
+// Global variable to store the refresh timer
+window.dashboardRefreshTimer = null
+window.dashboardRefreshInterval = DEFAULT_REFRESH_INTERVAL
+
+/**
+ * Sets up auto-refresh functionality for the page
+ * @param {number} interval - Refresh interval in milliseconds (0 to disable)
+ */
+function setRefreshInterval(detail) {
+  clearInterval(window.dashboardRefreshTimer)
+  const interval = parseInt(detail.interval)
+  if (interval > 0) {
+    window.dashboardRefreshTimer = setInterval(() => {
+      window.dispatchEvent(new CustomEvent('update-query'))
+    }, interval)
+  }
+}
+
+// Custom event handler for setting the refresh interval programmatically
+window.addEventListener('setRefreshInterval', function (e) {
+  if (e.detail !== undefined) {
+    setRefreshInterval(e.detail)
+  }
+})
