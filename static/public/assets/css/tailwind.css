@@ -770,9 +770,10 @@ body {
   .t-tab-active {
     @apply font-bold border-[var(--brand-color)] text-[var(--brand-color)];
   }
-  /* .t-tab-box-active { */
-  /*   @apply tab-active  shadow-[0px_4px_8px_-2px_rgba(0,0,0,0.04)]  text-textStrong border border-strokeStrong bg-bgOverlay; */
-  /* } */
+
+  .t-tab-box-active { 
+   @apply shadow-[0px_4px_8px_-2px_rgba(0,0,0,0.04)]  text-textStrong border border-strokeStrong bg-bgOverlay; 
+  } 
 
   .tab:is(input[type='radio']) {
     width: max-content;
