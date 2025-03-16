@@ -286,17 +286,28 @@ export class LogList extends LitElement {
   }
 
   filterFalseRoots() {
-    return this.spanListTree.reduce(
-      (result, span) => {
-        if ((span.parent && span.depth === 0) || (span.type === 'log' && span.depth === 0)) {
-          result.nonRootRootSpans.push(span.data)
-        } else {
-          result.remainingSpans.push(span)
+    const nonRootRootSpans = []
+    const remainingSpans = []
+    for (let i = 0; i < this.spanListTree.length; i++) {
+      const span = this.spanListTree[i]
+      if (span.parent && span.depth === 0) {
+        nonRootRootSpans.push(span)
+        for (let j = i + 1; j < span.children; j++) {
+          if (this.spanListTree[j].parentIds.includes(span.id)) {
+            nonRootRootSpans.push(this.spanListTree[j])
+          } else {
+            remainingSpans.push(this.spanListTree[j])
+            i = j - 1
+            break
+          }
         }
-        return result
-      },
-      { nonRootRootSpans: [], remainingSpans: [] },
-    )
+      } else if (span.type === 'log' && span.depth === 0) {
+        nonRootRootSpans.push(span)
+      } else {
+        remainingSpans.push(span)
+      }
+    }
+    return { nonRootRootSpans, remainingSpans }
   }
 
   tableHeadingWrapper(title, column, classes) {
@@ -349,7 +360,7 @@ export class LogList extends LitElement {
     list.unshift('start')
     list.push('end')
     return html`
-      <div class="relative h-full shrink-1 min-w-0 p-0 m-0  w-full bg-white c-scroll pb-12 overflow-y-scroll " id="logs_list_container_inner">
+      <div class="relative h-full shrink-1 min-w-0 p-0 m-0  w-full c-scroll pb-12 overflow-y-scroll " id="logs_list_container_inner">
         <table class="table-auto w-max relative ctable table-pin-rows table-pin-cols">
           <thead class="z-10 sticky top-0">
             <tr class="text-textStrong border-b flex min-w-0 relative font-medium border-y">
