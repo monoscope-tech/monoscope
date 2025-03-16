@@ -410,7 +410,7 @@ widgetToECharts widget =
               , "trigger" AE..= ("axis" :: Text)
               , "axisPointer"
                   AE..= AE.object
-                    ["type" AE..= ("shadow-sm" :: Text)]
+                    ["type" AE..= ("shadow" :: Text)]
               ]
         , "legend"
             AE..= AE.object

@@ -454,14 +454,47 @@ dashboardGetH pid dashId fileM fromDStr toDStr sinceStr allParams = do
           , pageTitleModalId = Just "pageTitleModalId"
           , pageActions = Just $ div_ [class_ "inline-flex gap-3 items-center leading-[0]"] do
               Components.timepicker_ Nothing currentRange
-              label_
-                [ class_ "cursor-pointer py-2 px-3 border border-strokeStrong rounded-lg shadow-sm leading-none"
-                , data_ "tippy-content" "Refresh"
-                , [__| on click trigger 'update-query' on window then
-                    add .animate-spin to the first <svg/> in me then wait 1 seconds then
-                    remove .animate-spin from the first <svg/> in me |]
-                ]
-                $ faSprite_ "arrows-rotate" "regular" "w-3 h-3"
+              div_ [class_ "join"] do
+                label_
+                  [ class_ "cursor-pointer px-3 flex items-center border border-strokeStrong shadow-sm leading-none join-item"
+                  , data_ "tippy-content" "Refresh"
+                  , [__| on click trigger 'update-query' on window then
+                      add .animate-spin to the first <svg/> in me then wait 1 seconds then
+                      remove .animate-spin from the first <svg/> in me |]
+                  ]
+                  $ faSprite_ "arrows-rotate" "regular" "w-3 h-3"
+
+                div_ [class_ "dropdown dropdown-end leading-none join-item border-y border-r border-strokeStrong shadow-sm group/rf"] do
+                  div_ [class_ "cursor-pointer py-2 px-3 flex gap-2 items-center leading-none", tabindex_ "0", data_ "tippy-content" "Refresh frequency"] do
+                    span_ [class_ "auto-refresh-span"] "Off"
+                    faSprite_ "chevron-down" "regular" "w-3 h-3 text-iconNeutral "
+                  ul_ [class_ "dropdown-content menu p-2 shadow-lg bg-base-100 rounded-box z-[1] mt-2", tabindex_ "0", id_ "auto-refresh-menu"] do
+                    let refreshOptions :: [(Text, Text, Text)]
+                        refreshOptions =
+                          [ ("off", "Off", "0")
+                          , ("15s", "15 seconds", "15000")
+                          , ("30s", "30 seconds", "30000")
+                          , ("1m", "1 minute", "60000")
+                          , ("5m", "5 minutes", "300000")
+                          , ("15m", "15 minutes", "900000")
+                          , ("30m", "30 minutes", "1800000")
+                          , ("1h", "1 hour", "3600000")
+                          , ("2h", "2 hours", "7200000")
+                          , ("1d", "1 day", "86400000")
+                          ]
+                    forM_ refreshOptions \(label, title, ms) ->
+                      li_
+                        $ a_
+                          [ data_ "value" ms
+                          , data_ "tippy-content" title
+                          , [__| on click 
+                              set .auto-refresh-span.innerText to my.textContent then
+                              send setRefreshInterval(interval: parseInt(@data-value)) to window then
+                              focus(document.body)
+                          |]
+                          ]
+                        $ toHtml label
+
               div_ [class_ "flex items-center"] do
                 span_ [class_ "text-fillDisabled mr-2"] "|"
                 Components.drawer_ "page-data-drawer" Nothing (Just $ newWidget_ pid currentRange) $ span_ [class_ "text-iconNeutral cursor-pointer p-2 hover:bg-fillWeak rounded-lg", data_ "tippy-content" "Add a new widget"] $ faSprite_ "plus" "regular" "w-3 h-3"
@@ -586,8 +619,8 @@ widgetViewerEditor_ pid dashboardIdM currentRange existingWidgetM activeTab = di
       label_ [class_ "text-iconNeutral cursor-pointer p-2 hover:bg-fillWeak rounded-lg leading-none", data_ "tippy-content" "Close Drawer", Lucid.for_ drawerToClose] $ faSprite_ "xmark" "regular" "w-3 h-3"
 
   -- Only show overview when viewing existing widgets and the overview tab is selected
-  when (not isNewWidget) do
-    div_ [class_ "w-full aspect-4/1 p-3 rounded-lg bg-fillWeaker mb-4 hidden group-has-[.page-drawer-tab-overview:checked]/wgtexp:block"] $
+  when (not isNewWidget) $ div_ [class_ " hidden group-has-[.page-drawer-tab-overview:checked]/wgtexp:block"] do
+    div_ [class_ "w-full aspect-4/1 p-3 rounded-lg bg-fillWeaker mb-4"] do
       toHtml $
         widgetToUse{Widget.standalone = Just True, Widget.naked = Just True, Widget.id = Just $ maybeToMonoid widgetToUse.id <> "Expanded"}
     h3_ [class_ "text-lg font-normal text-center"] $ toHtml $ maybeToMonoid widgetToUse.title
@@ -613,7 +646,7 @@ widgetViewerEditor_ pid dashboardIdM currentRange existingWidgetM activeTab = di
     -- Widget configuration UI
     div_ [class_ "space-y-7"] do
       div_ [class_ "flex gap-3"] do
-        span_ [class_ "inline-block rounded-full bg-fillWeak p-3"] "1"
+        span_ [class_ "inline-block rounded-full bg-fillWeak px-3 py-1 leading-none"] "1"
         strong_ [class_ "text-lg font-semibold"] "Select your Visualization"
       div_ [class_ "grid grid-cols-12 gap-3 px-5"] $
         let visTypes :: [(Text, Text, Text)]
@@ -645,7 +678,7 @@ widgetViewerEditor_ pid dashboardIdM currentRange existingWidgetM activeTab = di
 
       div_ [class_ "space-y-7"] do
         div_ [class_ "flex gap-3"] do
-          span_ [class_ "inline-block rounded-full bg-fillWeak p-3"] "2"
+          span_ [class_ "inline-block rounded-full bg-fillWeak px-3 py-1 leading-none"] "2"
           strong_ [class_ "text-lg font-semibold"] "Graph your Data"
         div_ [class_ "px-5"] $
           textarea_
@@ -657,7 +690,7 @@ widgetViewerEditor_ pid dashboardIdM currentRange existingWidgetM activeTab = di
 
       div_ [class_ "space-y-7"] do
         div_ [class_ "flex gap-3"] do
-          span_ [class_ "inline-block rounded-full bg-fillWeak p-3"] "3"
+          span_ [class_ "inline-block rounded-full bg-fillWeak px-3 py-1 leading-none"] "3"
           strong_ [class_ "text-lg font-semibold"] "Give your graph a title"
         div_ [class_ "space-x-8 px-5"] $
           input_
