@@ -247,7 +247,6 @@ window.dashboardRefreshInterval = DEFAULT_REFRESH_INTERVAL
 function setRefreshInterval(detail) {
   clearInterval(window.dashboardRefreshTimer)
   const interval = parseInt(detail.interval)
-
   if (interval > 0) {
     window.dashboardRefreshTimer = setInterval(() => {
       window.dispatchEvent(new CustomEvent('update-query'))
@@ -255,6 +254,7 @@ function setRefreshInterval(detail) {
   }
 }
 
+// Custom event handler for setting the refresh interval programmatically
 window.addEventListener('setRefreshInterval', function (e) {
   if (e.detail !== undefined) {
     setRefreshInterval(e.detail)

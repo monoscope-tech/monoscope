@@ -109,7 +109,7 @@ apiLogH pid queryM queryASTM cols' cursorM' sinceM fromM toM layoutM sourceM tar
                 span_ [class_ "group-has-[#streamLiveData:checked]/pg:flex hidden py-1 px-3 items-center", data_ "tippy-content" "pause live data stream"] $ faSprite_ "pause" "solid" "h-4 w-4"
                 span_ [class_ "group-has-[#streamLiveData:checked]/pg:hidden flex  py-1 px-3 items-center", data_ "tippy-content" "stream live data"] $ faSprite_ "play" "regular" "h-4 w-4"
               Components.timepicker_ (Just "log_explorer_form") currentRange
-              a_ [class_ "cursor-pointer py-1 px-3 border border-strokeStrong rounded-lg shadow-sm", [__|on click htmx.trigger('#log_explorer_form', 'submit') |], data_ "tippy-content" "refresh"] $ faSprite_ "arrows-rotate" "regular" "h-4 w-4"
+              Components.refreshButton_
           , navTabs = Just $ div_ [class_ "tabs tabs-box tabs-md p-0 tabs-outline items-center border"] do
               a_ [onclick_ "window.setQueryParamAndReload('source', 'requests')", role_ "tab", class_ $ "tab h-auto! " <> if source == "requests" then "tab-active  text-textStrong " else ""] "Requests"
               a_ [onclick_ "window.setQueryParamAndReload('source', 'logs')", role_ "tab", class_ $ "tab h-auto! " <> if source == "logs" then "tab-activetext-textStrong " else ""] "Logs"
@@ -276,7 +276,7 @@ logQueryBox_ pid currentRange source targetSpan queryAST queryLibRecent queryLib
   form_
     [ hxGet_ $ "/p/" <> pid.toText <> "/log_explorer"
     , hxPushUrl_ "true"
-    , hxTrigger_ "add-query from:#filterElement, update-query from:#filterElement, submit"
+    , hxTrigger_ "add-query from:#filterElement, update-query from:#filterElement, submit, update-query from:window"
     , hxVals_ "js:{queryAST:window.getQueryFromEditor(), since: params().since, from: params().from, to:params().to, cols:params().cols, layout:'all', source: params().source}"
     , hxTarget_ "#resultTableInner"
     , hxSwap_ "outerHTML"
