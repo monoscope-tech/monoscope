@@ -1,4 +1,4 @@
-module Pages.Dashboards (dashboardGetH, entrypointRedirectGetH, DashboardGet (..), dashboardsGetH, DashboardsGet (..), dashboardsPostH, DashboardForm (..), dashboardWidgetPutH, dashboardWidgetReorderPatchH, WidgetReorderItem (..), dashboardDeleteH, dashboardRenamePatchH, DashboardRenameForm (..), dashboardDuplicatePostH, dashboardMoveWidgetPostH, WidgetMoveForm (..), dashboardDuplicateWidgetPostH) where
+module Pages.Dashboards (dashboardGetH, entrypointRedirectGetH, DashboardGet (..), dashboardsGetH, DashboardsGet (..), dashboardsPostH, DashboardForm (..), dashboardWidgetPutH, dashboardWidgetReorderPatchH, WidgetReorderItem (..), dashboardDeleteH, dashboardRenamePatchH, DashboardRenameForm (..), dashboardDuplicatePostH, dashboardMoveWidgetPostH, WidgetMoveForm (..), dashboardDuplicateWidgetPostH, dashboardWidgetExpandGetH) where
 
 import Control.Lens
 import Data.Aeson qualified as AE
@@ -455,7 +455,7 @@ dashboardGetH pid dashId fileM fromDStr toDStr sinceStr allParams = do
           , pageActions = Just $ div_ [class_ "inline-flex gap-3 items-center leading-[0]"] do
               Components.timepicker_ Nothing currentRange
               label_
-                [ class_ "cursor-pointer py-2 px-3 border border-strokeStrong rounded-lg shadow-sm"
+                [ class_ "cursor-pointer py-2 px-3 border border-strokeStrong rounded-lg shadow-sm leading-none"
                 , data_ "tippy-content" "Refresh"
                 , [__| on click trigger 'update-query' on window then
                     add .animate-spin to the first <svg/> in me then wait 1 seconds then
@@ -491,22 +491,20 @@ dashboardGetH pid dashId fileM fromDStr toDStr sinceStr allParams = do
   addRespHeaders $ PageCtx bwconf $ DashboardGet pid dashId dash'' dashVM
 
 
-newWidget_ :: Projects.ProjectId -> Maybe Text -> Html ()
-newWidget_ pid currentRange = div_ do
-  form_
-    [ class_ "space-y-8"
-    , id_ "newWidgetForm"
-    , hxPut_ ""
-    , hxVals_ "js:{...defaultWidgetJSON}"
-    , hxExt_ "json-enc"
-    , hxSwap_ "beforeend"
-    , hxTarget_ ".grid-stack"
-    , hxTrigger_ "submit"
-    , [__| on htmx:beforeRequest from #newWidgetForm 
-                gridStackInstance.removeWidget('#add_a_widget_label', true, false) |]
-    ]
-    ""
+-- | A unified widget viewer/editor component that uses DaisyUI tabs without JavaScript
+-- @param pid Project ID
+-- @param dashboardIdM Optional dashboard ID
+-- @param currentRange Time range for the widget
+-- @param existingWidgetM Optional existing widget (for edit mode)
+-- @param activeTab Which tab should be active initially ("edit" or "overview")
+widgetViewerEditor_ :: Projects.ProjectId -> Maybe Dashboards.DashboardId -> Maybe Text -> Maybe Widget.Widget -> Text -> Html ()
+widgetViewerEditor_ pid dashboardIdM currentRange existingWidgetM activeTab = div_ [class_ "group/wgtexp"] do
+  -- Determine if this is a new widget or editing existing one
+  let isNewWidget = isNothing existingWidgetM
+  -- Set the actual active tab based on whether this is a new widget or editing an existing one
+  let effectiveActiveTab = if isNewWidget then "edit" else activeTab
 
+  -- Define widget data (either existing or default)
   let defaultWidget =
         (def :: Widget.Widget)
           { Widget.wType = Widget.WTTimeseries
@@ -519,83 +517,161 @@ newWidget_ pid currentRange = div_ do
           , Widget.unit = Just "ms"
           , Widget.hideLegend = Just True
           , Widget._projectId = Just pid
+          , Widget._dashboardId = dashboardIdM <&> (.toText)
           , Widget.layout = Just $ def{Widget.w = Just 3, Widget.h = Just 3}
           }
-  let defaultWidgetJSON = TE.decodeUtf8 $ fromLazy $ AE.encode defaultWidget
-  div_ [class_ "flex justify-between"] do
-    div_ [class_ "tabs tabs-box tabs-md p-0 tabs-outline items-center border"] do
-      a_ [onclick_ "window.setQueryParamAndReload('source', 'requests')", role_ "tab", class_ $ "tab h-auto!  tab-active "] "Edit"
-      a_ [onclick_ "window.setQueryParamAndReload('source', 'logs')", role_ "tab", class_ $ "tab h-auto! "] "Overview"
+      widgetToUse' = fromMaybe defaultWidget existingWidgetM
+      widgetToUse = (fromMaybe defaultWidget existingWidgetM){Widget.id = Just $ maybeToMonoid widgetToUse'.id <> "Expanded", Widget.standalone = Just True, Widget.naked = Just True}
 
-    div_ [class_ "inline-flex gap-3 items-center leading-[0]"] do
+  let widgetJSON = TE.decodeUtf8 $ fromLazy $ AE.encode widgetToUse
+  let formAction = case (dashboardIdM, existingWidgetM) of
+        (Just dashId, Just w) -> "/p/" <> pid.toText <> "/dashboards/" <> dashId.toText <> "/widgets/" <> fromMaybe "" w.id
+        (Just dashId, Nothing) -> "/p/" <> pid.toText <> "/dashboards/" <> dashId.toText <> "/widgets"
+        _ -> ""
+  let wid = maybeToMonoid widgetToUse.id
+  -- Form for saving widgets
+  form_
+    [ class_ "hidden"
+    , id_ "widget-form"
+    , hxPut_ formAction
+    , hxVals_ "js:{...widgetJSON}"
+    , hxExt_ "json-enc"
+    , hxSwap_ "beforeend"
+    , hxTarget_ ".grid-stack"
+    , hxTrigger_ "submit"
+    , [__| on htmx:beforeRequest 
+            if not widgetJSON.id
+              gridStackInstance.removeWidget('#add_a_widget_label', true, false)
+            end
+        |]
+    ]
+    ""
+
+  -- Widget title and close button
+  div_ [class_ "flex justify-between items-center mb-4"] do
+    div_ [class_ "flex justify-between"] do
+      -- Only show tabs when viewing an existing widget, not for new widgets
+      when (not isNewWidget) $
+        div_ [class_ "tabs tabs-box tabs-md p-0 tabs-outline items-center border"] do
+          label_ [role_ "tab", class_ $ "tab h-auto! has-[:checked]:tab-active"] do
+            input_ ([type_ "radio", value_ "Overview", class_ "hidden page-drawer-tab-overview", name_ $ wid <> "-drawer-tab"] <> if effectiveActiveTab /= "edit" then [checked_] else mempty)
+            "Overview"
+
+          label_ [role_ "tab", class_ $ "tab h-auto! has-[:checked]:tab-active "] do
+            input_ ([type_ "radio", value_ "Edit", class_ "hidden page-drawer-tab page-drawer-tab-edit", name_ $ wid <> "-drawer-tab"] <> if effectiveActiveTab == "edit" then [checked_] else mempty)
+            "Edit"
+
+      -- For new widgets, just show a title
+      when isNewWidget $
+        h3_ [class_ "text-lg font-normal"] "Add a new widget"
+
+    -- Action buttons
+    div_ [class_ "flex items-center gap-2"] do
       Components.timepicker_ Nothing currentRange
+
       label_
-        [ class_ "cursor-pointer py-2 px-3 border border-strokeStrong rounded-lg shadow-sm"
+        [ class_ "cursor-pointer py-2 px-3 border border-strokeStrong rounded-lg shadow-sm leading-none"
         , data_ "tippy-content" "Refresh"
         , [__| on click trigger 'update-query' on window then
-                      add .animate-spin to the first <svg/> in me then wait 1 seconds then
-                      remove .animate-spin from the first <svg/> in me |]
+                add .animate-spin to the first <svg/> in me then 
+                wait 1s then remove .animate-spin from the first <svg/> in me 
+            |]
         ]
         $ faSprite_ "arrows-rotate" "regular" "w-3 h-3"
+
+      -- Close drawer button
+      let drawerToClose = if isJust existingWidgetM then "global-data-drawer" else "page-data-drawer"
       span_ [class_ "text-fillDisabled"] "|"
-      button_ [class_ "leading-none rounded-lg px-4 py-2 cursor-pointer btn btn-primary shadow-sm", type_ "submit", form_ "newWidgetForm"] $ "Save changes"
-      label_ [class_ "text-iconNeutral cursor-pointer", data_ "tippy-content" "Close Drawer", Lucid.for_ "page-data-drawer"] $ faSprite_ "xmark" "regular" "w-3 h-3"
-  div_ [class_ "w-full aspect-4/1 p-3 rounded-lg bg-fillWeaker"] do
-    script_
-      [class_ "hidden"]
-      [text| var defaultWidgetJSON = ${defaultWidgetJSON} |]
-    div_ [id_ "default-widget-container", class_ "h-full", hxPost_ "/widget", hxTrigger_ "intersect, update-default-widget", hxTarget_ "this", hxSwap_ "innerHTML", hxVals_ "js:{...defaultWidgetJSON}", hxExt_ "json-enc"] ""
-  div_ [class_ "space-y-7"] do
-    div_ [class_ "flex gap-3"] do
-      span_ [class_ "inline-block rounded-full bg-fillWeak p-3"] "1"
-      strong_ [class_ "text-lg  font-semibold"] "Select your Visualization"
-    div_ [class_ "grid grid-cols-12 gap-3 px-5"] $
-      let visTypes :: [(Text, Text, Text)]
-          visTypes =
-            [ ("bar-chart", "Bar", "timeseries")
-            , ("duo-line-chart", "Line", "timeseries_line")
-            , ("duo-pie-chart", "Pie", "pie_chart")
-            , ("duo-scatter-chart", "Scatter", "distribution")
-            , ("hashtag", "Number", "stat")
-            , ("guage", "Guage", "")
-            , ("text", "Text", "")
-            ]
-       in iforM_ visTypes \idx (icon, title, widgetType) ->
-            label_
-              [ class_ "col-span-1 p-4 aspect-square gap-3 flex flex-col border border-strokeWeak rounded-lg items-center justify-center has-checked:border-strokeBrand-strong has-checked:bg-fillBrand-weak"
-              , data_ "widgetType" widgetType
-              , [__| on click set defaultWidgetJSON.type to @data-widgetType then trigger 'update-default-widget' on #default-widget-container |]
-              ]
-              do
-                input_ ([class_ "hidden", name_ "widgetType", type_ "radio"] <> if idx == 0 then [checked_] else [])
-                span_ [class_ "block"] $ faSprite_ icon "regular" "w-4 h-4"
-                span_ [class_ "text-textWeak block leading-none"] $ toHtml title
-    div_ [class_ "space-x-8 px-5"] do
-      label_ [class_ "space-x-3"] do
-        span_ "Style:"
-        select_ do
-          option_ [selected_ "selected"] "Solid"
-      label_ [class_ "space-x-3"] do
-        span_ "Select theme:"
-        faSprite_ "classic-theme" "regular" "w-16 h-5 "
-        select_ do
-          option_ [selected_ "selected"] "Classic"
-  div_ [class_ "space-y-7"] do
-    div_ [class_ "flex gap-3"] do
-      span_ [class_ "inline-block rounded-full bg-fillWeak p-3"] "2"
-      strong_ [class_ "text-lg font-semibold"] "Graph your Data"
-    div_ [class_ "px-5"] $ textarea_ [class_ "w-full h-5 textarea"] ""
-  div_ [class_ "space-y-7"] do
-    div_ [class_ "flex gap-3"] do
-      span_ [class_ "inline-block rounded-full bg-fillWeak p-3"] "3"
-      strong_ [class_ "text-lg  font-semibold"] "Give your graph a title"
-    div_ [class_ "space-x-8 px-5"] $
-      input_
-        [ class_ "p-3 border border-strokeWeak w-full rounded-lg bg-transparent"
-        , placeholder_ "Throughput"
-        , required_ "required"
-        , [__| on change set defaultWidgetJSON.title to my value then trigger 'update-default-widget' on #default-widget-container |]
+      button_ [class_ "leading-none rounded-lg px-4 py-2 cursor-pointer btn btn-primary shadow-sm leading-none hidden group-has-[.page-drawer-tab-edit:checked]/wgtexp:block", type_ "submit", form_ "newWidgetForm"] $ "Save changes"
+      label_ [class_ "text-iconNeutral cursor-pointer p-2 hover:bg-fillWeak rounded-lg leading-none", data_ "tippy-content" "Close Drawer", Lucid.for_ drawerToClose] $ faSprite_ "xmark" "regular" "w-3 h-3"
+
+  -- Only show overview when viewing existing widgets and the overview tab is selected
+  when (not isNewWidget) do
+    div_ [class_ "w-full aspect-4/1 p-3 rounded-lg bg-fillWeaker mb-4 hidden group-has-[.page-drawer-tab-overview:checked]/wgtexp:block"] $
+      toHtml $
+        widgetToUse{Widget.standalone = Just True, Widget.naked = Just True, Widget.id = Just $ maybeToMonoid widgetToUse.id <> "Expanded"}
+    h3_ [class_ "text-lg font-normal text-center"] $ toHtml $ maybeToMonoid widgetToUse.title
+
+  -- Always show edit for new widgets, otherwise only when edit tab is selected
+  div_ [class_ $ if isNewWidget then "block" else "hidden group-has-[.page-drawer-tab-edit:checked]/wgtexp:block"] do
+    div_ [class_ "w-full aspect-4/1 p-3 rounded-lg bg-fillWeaker mb-4"] do
+      script_
+        [class_ "hidden"]
+        [text| var widgetJSON = ${widgetJSON}; |]
+      div_
+        [ id_ "widget-preview"
+        , class_ "h-full w-full"
+        , hxPost_ "/widget"
+        , hxTrigger_ "intersect, update-widget"
+        , hxTarget_ "this"
+        , hxSwap_ "innerHTML"
+        , hxVals_ "js:{...widgetJSON}"
+        , hxExt_ "json-enc"
         ]
+        ""
+
+    -- Widget configuration UI
+    div_ [class_ "space-y-7"] do
+      div_ [class_ "flex gap-3"] do
+        span_ [class_ "inline-block rounded-full bg-fillWeak p-3"] "1"
+        strong_ [class_ "text-lg font-semibold"] "Select your Visualization"
+      div_ [class_ "grid grid-cols-12 gap-3 px-5"] $
+        let visTypes :: [(Text, Text, Text)]
+            visTypes =
+              [ ("bar-chart", "Bar", "timeseries")
+              , ("duo-line-chart", "Line", "timeseries_line")
+              , ("duo-pie-chart", "Pie", "pie_chart")
+              , ("duo-scatter-chart", "Scatter", "distribution")
+              , ("hashtag", "Number", "stat")
+              , ("guage", "Guage", "")
+              , ("text", "Text", "")
+              ]
+         in iforM_ visTypes \idx (icon, title, widgetType) ->
+              label_
+                [ class_ "col-span-1 p-4 aspect-square gap-3 flex flex-col border border-strokeWeak rounded-lg items-center justify-center has-checked:border-strokeBrand-strong has-checked:bg-fillBrand-weak"
+                , data_ "widgetType" widgetType
+                , [__| on click set widgetJSON.type to @data-widgetType then trigger 'update-widget' on #widget-preview |]
+                ]
+                do
+                  input_
+                    ( [ class_ "hidden"
+                      , name_ "widgetType"
+                      , type_ "radio"
+                      ]
+                        <> if idx == 0 then [checked_] else mempty
+                    )
+                  span_ [class_ "block"] $ faSprite_ icon "regular" "w-4 h-4"
+                  span_ [class_ "text-textWeak block leading-none"] $ toHtml title
+
+      div_ [class_ "space-y-7"] do
+        div_ [class_ "flex gap-3"] do
+          span_ [class_ "inline-block rounded-full bg-fillWeak p-3"] "2"
+          strong_ [class_ "text-lg font-semibold"] "Graph your Data"
+        div_ [class_ "px-5"] $
+          textarea_
+            [ class_ "w-full h-20 textarea"
+            , value_ $ fromMaybe "" widgetToUse.query
+            , [__| on change set widgetJSON.query to my value then trigger 'update-widget' on #widget-preview |]
+            ]
+            ""
+
+      div_ [class_ "space-y-7"] do
+        div_ [class_ "flex gap-3"] do
+          span_ [class_ "inline-block rounded-full bg-fillWeak p-3"] "3"
+          strong_ [class_ "text-lg font-semibold"] "Give your graph a title"
+        div_ [class_ "space-x-8 px-5"] $
+          input_
+            [ class_ "p-3 border border-strokeWeak w-full rounded-lg bg-transparent"
+            , placeholder_ "Throughput"
+            , required_ "required"
+            , value_ $ fromMaybe "" widgetToUse.title
+            , [__| on change set widgetJSON.title to my value then trigger 'update-widget' on #widget-preview |]
+            ]
+
+
+-- | Backward compatibility wrapper for the new widget editor
+newWidget_ :: Projects.ProjectId -> Maybe Text -> Html ()
+newWidget_ pid currentRange = widgetViewerEditor_ pid Nothing currentRange Nothing "edit"
 
 
 --------------------------------------------------------------------
@@ -986,7 +1062,8 @@ dashboardMoveWidgetPostH pid form = do
 
 -- | Handler for duplicating a widget within the same dashboard.
 -- It creates a copy of the widget with "(Copy)" appended to the title.
-dashboardDuplicateWidgetPostH :: Projects.ProjectId -> Dashboards.DashboardId -> Text -> ATAuthCtx (RespHeaders NoContent)
+-- Returns the duplicated widget that will be converted to HTML automatically.
+dashboardDuplicateWidgetPostH :: Projects.ProjectId -> Dashboards.DashboardId -> Text -> ATAuthCtx (RespHeaders Widget.Widget)
 dashboardDuplicateWidgetPostH pid dashId widgetId = do
   -- Load the dashboard
   (_, dash) <- getDashAndVM dashId Nothing
@@ -1008,6 +1085,8 @@ dashboardDuplicateWidgetPostH pid dashId widgetId = do
                   Nothing -> Just "Widget Copy"
                   Just "" -> Just "Widget Copy"
                   Just title -> Just (title <> " (Copy)")
+              , Widget._projectId = Just pid
+              , Widget._dashboardId = Just dashId.toText
               }
 
       -- Add the copy to the dashboard
@@ -1023,4 +1102,30 @@ dashboardDuplicateWidgetPostH pid dashId widgetId = do
             (updatedDash, now)
 
       addSuccessToast "Widget duplicated successfully" Nothing
-      addRespHeaders NoContent
+
+      -- Return the widget directly (will be converted to HTML by ToHtml instance)
+      addRespHeaders widgetCopy
+
+
+-- | Handler for expanding a widget to full-screen view in a drawer.
+-- Returns an HTML representation of the expanded widget with controls.
+dashboardWidgetExpandGetH :: Projects.ProjectId -> Dashboards.DashboardId -> Text -> ATAuthCtx (RespHeaders (Html ()))
+dashboardWidgetExpandGetH pid dashId widgetId = do
+  -- Load the dashboard
+  (_, dash) <- getDashAndVM dashId Nothing
+  now <- Time.currentTime
+
+  -- Find the widget to expand
+  let widgetToExpandM = find (\w -> (w.id == Just widgetId) || (maybeToMonoid (slugify <$> w.title) == widgetId)) dash.widgets
+
+  case widgetToExpandM of
+    Nothing -> throwError $ err404{errBody = "Widget not found in dashboard"}
+    Just widgetToExpand -> do
+      -- Process the widget to ensure data is loaded
+      processedWidget <- processWidget pid now (Nothing, Nothing, Nothing) [] widgetToExpand
+
+      -- Create an expanded view of the widget using our unified component
+      -- Start with "overview" tab active by default, but user can switch to edit if they want
+      let expandedWidgetHtml = widgetViewerEditor_ pid (Just dashId) Nothing (Just processedWidget) "overview"
+
+      addRespHeaders expandedWidgetHtml

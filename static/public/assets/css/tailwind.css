@@ -150,6 +150,17 @@ body {
   .tab {
     --tab-bg: var(--color-bgOverlay);
   }
+  .tab-not-active {
+    --tab-color: var(--fallback-bc, oklch(var(--bc) / 0.5));
+    --tab-bg: transparent;
+    --tab-border-color: transparent;
+    border-color: var(--tab-border-color);
+    background-color: var(--tab-bg);
+    color: var(--tab-color);
+    padding-left: var(--tab-padding, 1rem);
+    padding-right: var(--tab-padding, 1rem);
+  }
+
   .tooltip:before,
   .tooltip:after {
     --tt-bg: var(--color-fillStrong);
@@ -190,7 +201,9 @@ body {
 }
 
 @utility tabs-outline {
-  & :is(.tab-active, [aria-selected='true']):not(.tab-disabled):not([disabled]) {
+  & :is(.tab-active, [aria-selected='true']):not(.tab-disabled):not([disabled]),
+  :is(input:checked),
+  :is(label:has(:checked)) {
     @apply border border-strokeStrong shadow-sm text-textStrong;
   }
 

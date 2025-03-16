@@ -11,8 +11,7 @@ import Deriving.Aeson.Stock qualified as DAES
 import Fmt qualified as Ft
 import Language.Haskell.TH.Syntax qualified as THS
 import Lucid
-import Lucid.Htmx (hxExt_, hxPost_, hxSwap_, hxTrigger_)
-import Lucid.Hyperscript (__)
+import Lucid.Htmx (hxExt_, hxPost_, hxSwap_, hxTarget_, hxTrigger_)
 import Models.Projects.Projects qualified as Projects
 import NeatInterpolation
 import Pages.Charts.Charts qualified as Charts
@@ -156,8 +155,9 @@ data WidgetAxis = WidgetAxis
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.StripPrefix "w", DAE.CamelToSnake]] WidgetAxis
 
 
-widgetPostH :: Widget -> ATAuthCtx (RespHeaders (Html ()))
-widgetPostH = addRespHeaders . widget_
+-- Used when converting a widget json to its html representation. Eg in a query chart builder
+widgetPostH :: Widget -> ATAuthCtx (RespHeaders Widget)
+widgetPostH widget = addRespHeaders widget
 
 
 -- use either index or the xxhash as id
@@ -176,7 +176,7 @@ widgetHelper_ isChild w' = case w.wType of
         whenJust w.icon \icon -> span_ [] $ Utils.faSprite_ icon "regular" "w-4 h-4"
         span_ [class_ "text-sm"] $ toHtml $ maybeToMonoid w.title
     div_ [class_ "grid-stack nested-grid  h-full -mx-2"] $ forM_ (fromMaybe [] w.children) (widgetHelper_ True)
-  _ -> gridItem_ $ div_ [class_ $ " w-full h-full " <> paddingBtm] $ renderChart w
+  _ -> gridItem_ $ div_ [class_ $ " w-full h-full group/wgt " <> paddingBtm] $ renderChart w
   where
     w = (w' & #id %~ maybe (slugify <$> w.title) Just)
     layoutFields = [("x", (.x)), ("y", (.y)), ("w", (.w)), ("h", (.h))]
@@ -197,14 +197,37 @@ renderWidgetHeader widget wId title valueM subValueM expandBtnFn ctaM hideSub = 
     span_ [class_ $ "text-textWeak widget-subtitle text-sm " <> bool "" "hidden" hideSub, id_ $ wId <> "Subtitle"] $ toHtml $ maybeToMonoid subValueM
     -- Add hidden loader with specific ID that can be toggled from JS
     span_ [class_ "hidden", id_ $ wId <> "_loader"] $ Utils.faSprite_ "spinner" "regular" "w-4 h-4 animate-spin"
-  div_ [class_ "text-iconNeutral"] do
+  div_ [class_ "text-iconNeutral flex items-center"] do
+    -- Add expand button that's visible on hover
+
     whenJust ctaM \(ctaTitle, uri) -> a_ [class_ "underline underline-offset-2 text-textBrand", href_ uri] $ toHtml ctaTitle
     whenJust expandBtnFn \fn ->
       button_
-        [ term "_" $ fn
+        [ term "_" fn
         , class_ "p-2 cursor-pointer"
+        , data_ "tippy-content" "Expand widget"
         ]
         $ Utils.faSprite_ "expand-icon" "regular" "w-3 h-3"
+    when (isJust widget._dashboardId) $
+      let pid = maybeToMonoid (widget._projectId <&> (.toText))
+          dashId = maybeToMonoid widget._dashboardId
+       in button_
+            [ class_ "p-2 cursor-pointer hidden group-hover/wgt:block"
+            , title_ "Expand widget"
+            , data_ "tippy-content" "Expand widget"
+            , term
+                "_"
+                [text| on mousedown or click 
+            set #global-data-drawer.checked to true
+            then set #global-data-drawer-content.innerHTML to #loader-tmp.innerHTML
+            then fetch `/p/${pid}/dashboards/${dashId}/widgets/${wId}/expand`
+            then set #global-data-drawer-content.innerHTML to it
+            then htmx.process(#global-data-drawer-content)
+            then _hyperscript.processNode(#global-data-drawer-content)
+            then window.evalScriptsFromContent(#global-data-drawer-content)
+         |]
+            ]
+            $ Utils.faSprite_ "expand-icon" "regular" "w-3 h-3"
     details_ [class_ "dropdown dropdown-end"] do
       summary_ [class_ "text-iconNeutral cursor-pointer p-2 hover:bg-fillWeak rounded-lg", data_ "tippy-content" "Widget Menu"] $
         Utils.faSprite_ "ellipsis" "regular" "w-4 h-4"
@@ -252,54 +275,44 @@ renderWidgetHeader widget wId title valueM subValueM expandBtnFn ctaM hideSub = 
               "Move to dashboard"
 
         -- Only show the "Duplicate widget" option if we're in a dashboard context
-        when (isJust widget._dashboardId) $
+        when (isJust widget._dashboardId) do
           li_ $
             a_
               [ class_ "p-2 w-full text-left block"
               , data_ "tippy-content" "Create a copy of this widget"
               , hxPost_ $
                   "/p/"
-                    <> fromMaybe "" (widget._projectId <&> (.toText))
+                    <> maybeToMonoid (widget._projectId <&> (.toText))
                     <> "/dashboards/"
-                    <> fromMaybe "" widget._dashboardId
+                    <> maybeToMonoid widget._dashboardId
                     <> "/widgets/"
                     <> wId
                     <> "/duplicate"
-              , hxSwap_ "none"
+              , hxSwap_ "beforeend"
               , hxTrigger_ "click"
-              , onclick_ "return confirm('Are you sure you want to duplicate this widget?');"
-              , [__| on htmx:afterRequest[detail.successful]
-                    location.reload()
-                |]
+              , hxTarget_ ".grid-stack"
               ]
               "Duplicate widget"
-        li_ $
-          button_
-            [ class_ "p-2 w-full text-left text-textError"
-            , data_ "tippy-content" "Permanently delete this widget"
-            , onclick_
-                [text|
-                if(confirm('Are you sure you want to delete this widget? This action cannot be undone.')) {
-                  const widgetEl = document.getElementById('${wId}_widgetEl');
-                  
-                  // Try to remove using the main gridStackInstance
-                  // The removeWidget method will only remove widgets that belong to this instance,
-                  // so it's safe to try even if the widget is in a nested grid
-                  gridStackInstance.removeWidget(widgetEl, true);
-                  
-                  // If the widget is still in the DOM, it might be in a nested grid
-                  // We can trigger a custom event that the dashboard page script can listen for
-                  if (document.getElementById('${wId}_widgetEl')) {
-                    widgetEl.dispatchEvent(new CustomEvent('widget-remove-requested', {
-                      bubbles: true,
-                      detail: { widgetId: '${wId}' }
-                    }));
+          li_ $
+            button_
+              [ class_ "p-2 w-full text-left text-textError"
+              , data_ "tippy-content" "Permanently delete this widget"
+              , onclick_
+                  [text|
+                  if(confirm('Are you sure you want to delete this widget? This action cannot be undone.')) {
+                    const widgetEl = document.getElementById('${wId}_widgetEl');
+                    gridStackInstance.removeWidget(widgetEl, true);
+                    if (document.getElementById('${wId}_widgetEl')) {
+                      widgetEl.dispatchEvent(new CustomEvent('widget-remove-requested', {
+                        bubbles: true,
+                        detail: { widgetId: '${wId}' }
+                      }));
+                    }
                   }
-                }
-                return false;
-              |]
-            ]
-            "Delete widget"
+                  return false;
+                |]
+              ]
+              "Delete widget"
 
 
 renderChart :: Widget -> Html ()
