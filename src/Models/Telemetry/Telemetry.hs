@@ -43,6 +43,7 @@ import Data.Aeson qualified as AE
 import Data.Aeson.Key qualified as AEK
 import Data.Aeson.KeyMap qualified as KEM
 import Data.ByteString.Base16 qualified as B16
+import Data.List (nubBy)
 import Data.Text qualified as T
 import Data.Time (TimeZone (..), UTCTime, formatTime, utcToZonedTime)
 import Data.Time.Format (defaultTimeLocale)
@@ -201,6 +202,21 @@ data MetricRecord = MetricRecord
   }
   deriving (Show, Generic)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake MetricRecord
+  deriving anyclass (FromRow, ToRow, NFData)
+
+
+data MetricMeta = MetricMeta
+  { id :: UUID.UUID
+  , projectId :: UUID.UUID
+  , createdAt :: UTCTime
+  , updatedAt :: UTCTime
+  , metricName :: Text
+  , metricType :: MetricType
+  , metricUnit :: Text
+  , metricDescription :: Text
+  }
+  deriving (Show, Generic)
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake MetricMeta
   deriving anyclass (FromRow, ToRow, NFData)
 
 
@@ -436,15 +452,16 @@ getMetricData pid metricName = dbtToEff $ queryOne Select q (pid, metricName, pi
             metric_description,
             COUNT(*) AS data_points,
             ARRAY_AGG(DISTINCT COALESCE(resource->>'service.name', 'unknown'))::text[] AS service_names,
-            (
-                SELECT ARRAY_AGG(DISTINCT key)
-                FROM (
-                    SELECT DISTINCT jsonb_object_keys(attributes) AS key
-                    FROM telemetry.metrics
-                    WHERE project_id = ? AND metric_name = ?
-                ) AS unique_keys
-            ) AS metric_labels
-      FROM telemetry.metrics
+    COALESCE(
+        (SELECT ARRAY_AGG(DISTINCT key) 
+         FROM (
+             SELECT DISTINCT jsonb_object_keys(attributes) AS key 
+             FROM telemetry.metrics 
+             WHERE project_id = ? AND metric_name = ? AND attributes IS NOT NULL
+         ) AS unique_keys
+        ),
+        ARRAY[]::text[]
+    ) AS metric_labels      FROM telemetry.metrics
       WHERE project_id = ? AND metric_name = ?
       GROUP BY metric_name, metric_type, metric_unit, metric_description;
         |]
@@ -454,20 +471,20 @@ getMetricChartListData :: DB :> es => Projects.ProjectId -> Maybe Text -> Maybe 
 getMetricChartListData pid sourceM prefixM dateRange cursor = dbtToEff $ query Select (Query $ Relude.encodeUtf8 q) pid
   where
     dateRangeStr = toText $ case dateRange of
-      (Nothing, Just b) -> "AND timestamp BETWEEN NOW() AND '" <> formatTime defaultTimeLocale "%F %R" b <> "'"
-      (Just a, Just b) -> "AND timestamp BETWEEN '" <> formatTime defaultTimeLocale "%F %R" a <> "' AND '" <> formatTime defaultTimeLocale "%F %R" b <> "'"
+      (Nothing, Just b) -> "AND created_at BETWEEN NOW() AND '" <> formatTime defaultTimeLocale "%F %R" b <> "'"
+      (Just a, Just b) -> "AND created_at BETWEEN '" <> formatTime defaultTimeLocale "%F %R" a <> "' AND '" <> formatTime defaultTimeLocale "%F %R" b <> "'"
       _ -> ""
-    sourceFilter = case sourceM of
-      Nothing -> ""
-      Just source -> if source == "" || source == "all" then "" else "AND resource->>'service.name' = '" <> source <> "'"
+    -- sourceFilter = case sourceM of
+    --   Nothing -> ""
+    --   Just source -> if source == "" || source == "all" then "" else "AND resource->>'service.name' = '" <> source <> "'"
     prefixFilter = case prefixM of
       Nothing -> ""
       Just prefix -> if prefix == "" || prefix == "all" then "" else "AND metric_name LIKE '" <> prefix <> "%'"
     cursorTxt = show cursor
     q =
       [text|
-        SELECT DISTINCT ON (metric_name) metric_name, metric_type, metric_unit, metric_description
-        FROM telemetry.metrics WHERE project_id = ? $sourceFilter $prefixFilter $dateRangeStr ORDER BY metric_name OFFSET $cursorTxt LIMIT 20;
+        SELECT  metric_name, metric_type, metric_unit, metric_description
+        FROM telemetry.metrics_meta WHERE project_id = ? $prefixFilter $dateRangeStr OFFSET $cursorTxt LIMIT 20;
      |]
 
 
@@ -546,7 +563,9 @@ bulkInsertSpans spans = void $ dbtToEff $ executeMany Insert q (V.toList rowsToI
 
 
 bulkInsertMetrics :: DB :> es => V.Vector MetricRecord -> Eff es ()
-bulkInsertMetrics metrics = void $ dbtToEff $ executeMany Insert q (V.toList rowsToInsert)
+bulkInsertMetrics metrics = do
+  void $ dbtToEff $ executeMany Insert q (V.toList rowsToInsert)
+  void $ dbtToEff $ executeMany Insert q2 (removeDuplic $ V.toList rows2)
   where
     q =
       [sql|
@@ -555,7 +574,14 @@ bulkInsertMetrics metrics = void $ dbtToEff $ executeMany Insert q (V.toList row
          attributes, resource, instrumentation_scope, metric_value, exemplars, flags)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
      |]
+    q2 =
+      [sql|
+       INSERT INTO telemetry.metrics_meta (project_id, metric_name, metric_type, metric_unit, metric_description) VALUES (?, ?, ?, ?, ?)
+       ON CONFLICT (project_id, metric_name) DO UPDATE SET metric_type = EXCLUDED.metric_type, metric_unit = EXCLUDED.metric_unit, metric_description = EXCLUDED.metric_description
+    |]
+
     rowsToInsert = V.map metricToTuple metrics
+    rows2 = V.map (\(o, t, tr, f, fi, _, _, _, _, _, _, _, _) -> (o, t, tr, f, fi)) rowsToInsert
     metricToTuple entry =
       ( entry.projectId
       , entry.metricName
@@ -571,6 +597,10 @@ bulkInsertMetrics metrics = void $ dbtToEff $ executeMany Insert q (V.toList row
       , entry.exemplars
       , entry.flags
       )
+
+
+removeDuplic :: Eq a => Eq e => [(a, e, b, c, d)] -> [(a, e, b, c, d)]
+removeDuplic = nubBy (\(a1, a2, _, _, _) (b1, b2, _, _, _) -> a1 == b1 && a2 == b2)
 
 
 convertSpanToRequestMessage :: SpanRecord -> Text -> RequestMessage

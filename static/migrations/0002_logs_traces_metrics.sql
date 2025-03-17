@@ -137,6 +137,22 @@ SELECT add_retention_policy('telemetry.metrics', INTERVAL '30 days', true);
 CREATE INDEX idx_metrics_project_id_metric_name ON telemetry.metrics (project_id, metric_name, timestamp DESC);
 CREATE INDEX idx_metrics_project_id_resource_service_name ON telemetry.metrics (project_id, (resource->>'service.name'), timestamp DESC);
 
+
+CREATE TABLE IF NOT EXISTS telemetry.metrics_meta (
+      id UUID NOT NULL DEFAULT gen_random_uuid(),
+      project_id UUID NOT NULL REFERENCES projects.projects (id) ON DELETE CASCADE,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp,
+      metric_name TEXT NOT NULL,
+      metric_type TEXT NOT NULL,
+      metric_unit TEXT NOT NULL,
+      metric_description TEXT NOT NULL,
+      UNIQUE (project_id, metric_name)
+);
+CREATE INDEX idx_metrics_meta_project_id_metric_name ON telemetry.metrics_meta (project_id, metric_name);
+SELECT manage_updated_at('telemetry.metrics_meta');
+
+
 -- =================================================================
 -- Query history and saved queries
 -- =================================================================
