@@ -69,6 +69,7 @@ import NeatInterpolation (text)
 import Pkg.DBUtils (WrappedEnum (..))
 import Relude
 import RequestMessages (RequestMessage (..))
+import Utils (lookupValueText)
 
 
 data SeverityLevel = SLDebug | SLInfo | SLWarn | SLError | SLFatal
@@ -206,14 +207,12 @@ data MetricRecord = MetricRecord
 
 
 data MetricMeta = MetricMeta
-  { id :: UUID.UUID
-  , projectId :: UUID.UUID
-  , createdAt :: UTCTime
-  , updatedAt :: UTCTime
+  { projectId :: UUID.UUID
   , metricName :: Text
   , metricType :: MetricType
   , metricUnit :: Text
   , metricDescription :: Text
+  , serviceName :: Text
   }
   deriving (Show, Generic)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake MetricMeta
@@ -498,7 +497,7 @@ getMetricServiceNames :: DB :> es => Projects.ProjectId -> Eff es (V.Vector Text
 getMetricServiceNames pid = dbtToEff $ query Select q pid
   where
     q =
-      [sql| SELECT DISTINCT resource->>'service.name' FROM telemetry.metrics WHERE project_id = ?  AND resource->>'service.name' IS NOT NULL|]
+      [sql| SELECT DISTINCT service_name FROM telemetry.metrics_meta WHERE project_id = ?|]
 
 
 -- Function to insert multiple log entries
@@ -576,12 +575,12 @@ bulkInsertMetrics metrics = do
      |]
     q2 =
       [sql|
-       INSERT INTO telemetry.metrics_meta (project_id, metric_name, metric_type, metric_unit, metric_description) VALUES (?, ?, ?, ?, ?)
-       ON CONFLICT (project_id, metric_name) DO UPDATE SET metric_type = EXCLUDED.metric_type, metric_unit = EXCLUDED.metric_unit, metric_description = EXCLUDED.metric_description
+       INSERT INTO telemetry.metrics_meta (project_id, metric_name, metric_type, metric_unit, metric_description, service_name) VALUES (?, ?, ?, ?, ?, ?)
+       ON CONFLICT (project_id, metric_name, service_name) DO UPDATE SET metric_type = EXCLUDED.metric_type, metric_unit = EXCLUDED.metric_unit, metric_description = EXCLUDED.metric_description
     |]
 
     rowsToInsert = V.map metricToTuple metrics
-    rows2 = V.map (\(o, t, tr, f, fi, _, _, _, _, _, _, _, _) -> (o, t, tr, f, fi)) rowsToInsert
+    rows2 = V.map (\(o, t, tr, f, fi, _, _, att, _, _, _, _, _) -> (o, t, tr, f, fi, fromMaybe "" $ lookupValueText att "service.name")) rowsToInsert
     metricToTuple entry =
       ( entry.projectId
       , entry.metricName
@@ -599,8 +598,8 @@ bulkInsertMetrics metrics = do
       )
 
 
-removeDuplic :: Eq a => Eq e => [(a, e, b, c, d)] -> [(a, e, b, c, d)]
-removeDuplic = nubBy (\(a1, a2, _, _, _) (b1, b2, _, _, _) -> a1 == b1 && a2 == b2)
+removeDuplic :: Eq a => Eq e => [(a, e, b, c, d, q)] -> [(a, e, b, c, d, q)]
+removeDuplic = nubBy (\(a1, a2, _, _, _, _) (b1, b2, _, _, _, _) -> a1 == b1 && a2 == b2)
 
 
 convertSpanToRequestMessage :: SpanRecord -> Text -> RequestMessage

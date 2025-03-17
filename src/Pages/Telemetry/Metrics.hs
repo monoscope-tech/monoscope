@@ -55,7 +55,7 @@ metricsOverViewGetH pid tabM fromM toM sinceM sourceM prefixM cursorM = do
       serviceNames <- Telemetry.getMetricServiceNames pid
       if cursor == 0
         then do
-          addRespHeaders $ MetricsOVChartsMain $ PageCtx bwconf (pid, metricList, serviceNames, fromMaybe "all" sourceM, fromMaybe "all" prefixM, nextFetchUrl)
+          addRespHeaders $ MetricsOVChartsMain $ PageCtx bwconf (pid, metricList, [], fromMaybe "all" sourceM, fromMaybe "all" prefixM, nextFetchUrl)
         else do
           addRespHeaders $ MetricsOVChartsPaginated (pid, metricList, fromMaybe "all" sourceM, nextFetchUrl)
 
@@ -139,21 +139,21 @@ chartList pid source metricList nextUrl = do
                   then htmx.process(#global-data-drawer-content)
                   then _hyperscript.processNode(#global-data-drawer-content)
                   then window.evalScriptsFromContent(#global-data-drawer-content)|]
-      div_ [class_ "h-52"]
-        $ toHtml
-        $ def
-          { Widget.wType = Widget.WTDistribution
-          , Widget.title = Just metric.metricName
-          , Widget.query = Just $ "metric_name = \"" <> metric.metricName <> "\""
-          , Widget.layout = Just $ Widget.Layout{x = Just 0, y = Just 0, w = Just 2, h = Just 1}
-          , Widget.unit = Just metric.metricUnit
-          , Widget.hideLegend = Just True
-          , Widget.eager = Just True
-          , Widget._projectId = Just pid
-          , Widget.expandBtnFn = Just expandBtn
-          }
-  when (length metricList > 19)
-    $ a_ [hxTrigger_ "intersect once", hxSwap_ "outerHTML", hxGet_ nextUrl] pass
+      div_ [class_ "h-52"] $
+        toHtml $
+          def
+            { Widget.wType = Widget.WTDistribution
+            , Widget.title = Just metric.metricName
+            , Widget.query = Just $ "metric_name = \"" <> metric.metricName <> "\""
+            , Widget.layout = Just $ Widget.Layout{x = Just 0, y = Just 0, w = Just 2, h = Just 1}
+            , Widget.unit = Just metric.metricUnit
+            , Widget.hideLegend = Just True
+            , Widget.eager = Just True
+            , Widget._projectId = Just pid
+            , Widget.expandBtnFn = Just expandBtn
+            }
+  when (length metricList > 19) $
+    a_ [hxTrigger_ "intersect once", hxSwap_ "outerHTML", hxGet_ nextUrl] pass
 
 
 dataPointsPage :: Projects.ProjectId -> V.Vector Telemetry.MetricDataPoint -> Html ()

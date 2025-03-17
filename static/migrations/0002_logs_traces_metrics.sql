@@ -147,11 +147,11 @@ CREATE TABLE IF NOT EXISTS telemetry.metrics_meta (
       metric_type TEXT NOT NULL,
       metric_unit TEXT NOT NULL,
       metric_description TEXT NOT NULL,
-      UNIQUE (project_id, metric_name)
+      service_name TEXT NOT NULL,
+      UNIQUE (project_id, metric_name, service_name)
 );
-CREATE INDEX idx_metrics_meta_project_id_metric_name ON telemetry.metrics_meta (project_id, metric_name);
+CREATE INDEX idx_metrics_meta_project_id_metric_name ON telemetry.metrics_meta (project_id, metric_name, service_name);
 SELECT manage_updated_at('telemetry.metrics_meta');
-
 
 -- =================================================================
 -- Query history and saved queries
