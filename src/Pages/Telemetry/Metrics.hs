@@ -55,7 +55,7 @@ metricsOverViewGetH pid tabM fromM toM sinceM sourceM prefixM cursorM = do
       serviceNames <- Telemetry.getMetricServiceNames pid
       if cursor == 0
         then do
-          addRespHeaders $ MetricsOVChartsMain $ PageCtx bwconf (pid, metricList, [], fromMaybe "all" sourceM, fromMaybe "all" prefixM, nextFetchUrl)
+          addRespHeaders $ MetricsOVChartsMain $ PageCtx bwconf (pid, metricList, serviceNames, fromMaybe "all" sourceM, fromMaybe "all" prefixM, nextFetchUrl)
         else do
           addRespHeaders $ MetricsOVChartsPaginated (pid, metricList, fromMaybe "all" sourceM, nextFetchUrl)
 

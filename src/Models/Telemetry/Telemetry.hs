@@ -580,7 +580,7 @@ bulkInsertMetrics metrics = do
     |]
 
     rowsToInsert = V.map metricToTuple metrics
-    rows2 = V.map (\(o, t, tr, f, fi, _, _, att, _, _, _, _, _) -> (o, t, tr, f, fi, fromMaybe "" $ lookupValueText att "service.name")) rowsToInsert
+    rows2 = V.map (\(o, t, tr, f, fi, _, _, _, res, _, _, _, _) -> (o, t, tr, f, fi, fromMaybe "unknown" $ lookupValueText res "service.name")) rowsToInsert
     metricToTuple entry =
       ( entry.projectId
       , entry.metricName
