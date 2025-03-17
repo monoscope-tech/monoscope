@@ -25,7 +25,7 @@ import Effectful.Error.Static (Error, throwError)
 import Effectful.PostgreSQL.Transact.Effect (DB, dbtToEff)
 import Effectful.Time qualified as Time
 import Lucid
-import Lucid.Htmx (hxConfirm_, hxDelete_, hxExt_, hxGet_, hxPatch_, hxPost_, hxPut_, hxSwap_, hxTarget_, hxTrigger_, hxVals_)
+import Lucid.Htmx (hxConfirm_, hxDelete_, hxExt_, hxGet_, hxPatch_, hxPost_, hxPut_, hxSelect_, hxSwap_, hxTarget_, hxTrigger_, hxVals_)
 import Lucid.Hyperscript (__)
 import Models.Apis.Anomalies qualified as Anomalies
 import Models.Projects.Dashboards qualified as Dashboards
@@ -93,7 +93,8 @@ dashboardPage_ pid dashId dash dashVM = do
     div_
       [ class_ "dashboards-list space-y-3 max-h-160 overflow-y-auto"
       , hxGet_ ("/p/" <> pid.toText <> "/dashboards?embedded=true")
-      , hxTrigger_ "intersect"
+      , hxTrigger_ "intersect once"
+      , hxSelect_ "#itemsListPage"
       , hxSwap_ "innerHTML"
       ]
       do
@@ -374,6 +375,7 @@ dashboardWidgetPutH pid dashId widgetIdM widget = do
           (dash{Dashboards.widgets = dash.widgets <> [widgetUpdated]}, widgetUpdated)
   _ <- dbtToEff $ DBT.updateFieldsBy @Dashboards.DashboardVM [[DBT.field| schema |]] ([DBT.field| id |], dashId) (Only dash')
   addSuccessToast "Widget added to dsahboard successfully" Nothing
+  addTriggerEvent "closeModal" ""
   addRespHeaders $ widget'
 
 
@@ -610,7 +612,7 @@ widgetViewerEditor_ pid dashboardIdM currentRange existingWidgetM activeTab = di
         [ id_ "widget-preview"
         , class_ "h-full w-full"
         , hxPost_ "/widget"
-        , hxTrigger_ "intersect, update-widget"
+        , hxTrigger_ "intersect once, update-widget"
         , hxTarget_ "this"
         , hxSwap_ "innerHTML"
         , hxVals_ "js:{...widgetJSON}"
@@ -781,7 +783,16 @@ dashboardsGet_ dg = do
     div_ [class_ $ "grid gap-5 " <> if dg.embedded then "grid-cols-1" else "grid-cols-2"] do
       forM_ dg.dashboards \dashVM -> do
         let dash = loadDashboardFromVM dashVM
-        let attrs = if dg.embedded then [] else [href_ ("/p/" <> dg.projectId.toText <> "/dashboards/" <> dashVM.id.toText)]
+        let attrs =
+              if dg.embedded
+                then
+                  [ class_ "cursor-pointer"
+                  , hxPut_ ("/p/" <> dg.projectId.toText <> "/dashboards/" <> dashVM.id.toText)
+                  , hxVals_ "js:{...JSON.parse(document.getElementById(document.getElementById('dashboards-modal-widget-id').value + '_widgetEl').dataset.widget)}"
+                  , hxSwap_ "none"
+                  , hxExt_ "json-enc"
+                  ]
+                else [href_ ("/p/" <> dg.projectId.toText <> "/dashboards/" <> dashVM.id.toText)]
         a_ ([class_ "rounded-xl border border-strokeWeak hover:border-strokeBrand-strong gap-3.5 p-4 bg-fillWeaker flex itemListItem group/i"] <> attrs) do
           div_ [class_ "flex-1 space-y-2"] do
             div_ [class_ "flex items-center gap-2"] do

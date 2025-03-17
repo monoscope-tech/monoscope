@@ -180,6 +180,12 @@ body {
   .dropdown summary::-webkit-details-marker {
     display: none;
   }
+  .alert {
+    --color-success: #eef8f7;
+    --color-error: #eef8f7;
+    --color-warning: #eef8f7;
+    --color-info: #eef8f7;
+  }
 }
 
 /*

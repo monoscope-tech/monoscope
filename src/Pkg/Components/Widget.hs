@@ -11,7 +11,8 @@ import Deriving.Aeson.Stock qualified as DAES
 import Fmt qualified as Ft
 import Language.Haskell.TH.Syntax qualified as THS
 import Lucid
-import Lucid.Htmx (hxExt_, hxPost_, hxSwap_, hxTarget_, hxTrigger_)
+import Lucid.Htmx (hxPost_, hxSwap_, hxTarget_, hxTrigger_)
+import Lucid.Hyperscript (__)
 import Models.Projects.Projects qualified as Projects
 import NeatInterpolation
 import Pages.Charts.Charts qualified as Charts
@@ -250,6 +251,7 @@ renderWidgetHeader widget wId title valueM subValueM expandBtnFn ctaM hideSub = 
                 set #dashboards-modal.checked to true
                 then set #dashboards-modal-widget-id.value to "${wId}"
                 then set #dashboards-modal-source-dashboard-id.value to "${dashId}"
+                then set (the closest <details/>).open to false 
               |]
               ]
               "Copy to dashboard"
@@ -271,6 +273,7 @@ renderWidgetHeader widget wId title valueM subValueM expandBtnFn ctaM hideSub = 
               , hxSwap_ "beforeend"
               , hxTrigger_ "click"
               , hxTarget_ ".grid-stack"
+              , [__| on click set (the closest <details/>).open to false |]
               ]
               "Duplicate widget"
           li_ $
