@@ -473,17 +473,17 @@ getMetricChartListData pid sourceM prefixM dateRange cursor = dbtToEff $ query S
       (Nothing, Just b) -> "AND created_at BETWEEN NOW() AND '" <> formatTime defaultTimeLocale "%F %R" b <> "'"
       (Just a, Just b) -> "AND created_at BETWEEN '" <> formatTime defaultTimeLocale "%F %R" a <> "' AND '" <> formatTime defaultTimeLocale "%F %R" b <> "'"
       _ -> ""
-    -- sourceFilter = case sourceM of
-    --   Nothing -> ""
-    --   Just source -> if source == "" || source == "all" then "" else "AND resource->>'service.name' = '" <> source <> "'"
+    sourceFilter = case sourceM of
+      Nothing -> ""
+      Just source -> if source == "" || source == "all" then "" else "AND service_name = '" <> source <> "'"
     prefixFilter = case prefixM of
       Nothing -> ""
       Just prefix -> if prefix == "" || prefix == "all" then "" else "AND metric_name LIKE '" <> prefix <> "%'"
     cursorTxt = show cursor
     q =
       [text|
-        SELECT  metric_name, metric_type, metric_unit, metric_description
-        FROM telemetry.metrics_meta WHERE project_id = ? $prefixFilter $dateRangeStr OFFSET $cursorTxt LIMIT 20;
+        SELECT distinct metric_name, metric_type, metric_unit, metric_description
+        FROM telemetry.metrics_meta WHERE project_id = ? $sourceFilter $prefixFilter $dateRangeStr OFFSET $cursorTxt LIMIT 20;
      |]
 
 
