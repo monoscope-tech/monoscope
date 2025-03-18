@@ -497,7 +497,7 @@ function logItemCol(rowData, source, colIdxMap, key, serviceColors, toggleTrace)
       break
     case 'rest':
       let val = lookupVecTextByKey(dataArr, colIdxMap, key)
-      const { depth, children, traceId, childErrors, hasErrors, expanded, type, id } = rowData
+      const { depth, children, traceId, childErrors, hasErrors, expanded, type, id, isLastChild } = rowData
       const errClas = hasErrors
         ? 'bg-red-500 text-white fill-white stroke-white'
         : childErrors
@@ -507,11 +507,11 @@ function logItemCol(rowData, source, colIdxMap, key, serviceColors, toggleTrace)
         ? html`${logItemCol(rowData, source, colIdxMap, 'severity_text')} ${logItemCol(rowData, source, colIdxMap, 'body')}`
         : source === 'spans'
         ? html`<div class="flex w-full items-center gap-1">
-            <div class="w-full flex items-center">
+            <div class="w-full flex items-start">
               ${depth > 1 ? new Array(depth - 1).fill(1).map(() => html`<div class="ml-[15px] border-l w-4 h-5 shrink-0"></div>`) : nothing}
               ${depth > 0
-                ? html`<div class="border-l ml-[15px] w-4 h-5 relative shrink-0">
-                    <span class="border-b w-full absolute left-0 top-1/2 -translate-y-1/2"></span>
+                ? html`<div class=${`border-l ml-[15px] w-4 ${isLastChild ? 'h-3' : 'h-5'} relative shrink-0`}>
+                    <span class=${`border-b w-full absolute left-0 ${isLastChild ? 'bottom-0' : 'top-1/2 -translate-y-1/2'}`}></span>
                   </div>`
                 : nothing}
               ${children > 0
@@ -520,13 +520,13 @@ function logItemCol(rowData, source, colIdxMap, key, serviceColors, toggleTrace)
                       e.stopPropagation()
                       toggleTrace(traceId, id)
                     }}
-                    class=${`rounded-sm shrink-0 w-8 px-1 flex justify-center gap-[2px] text-xs items-center h-5 ${errClas}`}
+                    class=${`rounded-sm ml-1 shrink-0 w-8 px-1 flex justify-center gap-[2px] text-xs items-center h-5 ${errClas}`}
                   >
                     ${expanded ? faSprite('minus', 'regular', 'w-3 h-1 shrink-0') : faSprite('plus', 'regular', 'w-3 h-3 shrink-0')} ${children}
                   </button>`
                 : depth === 0
                 ? nothing
-                : html`<div class=${`rounded-sm shrink-0 w-3 h-5 ${errClas}`}></div>`}
+                : html`<div class=${`rounded-sm ml-1 shrink-0 w-3 h-5 ${errClas}`}></div>`}
               ${type === 'log'
                 ? ['severity_text', 'body'].map(k => logItemCol(rowData, source, { severity_text: 5, body: 6 }, k))
                 : ['http_attributes', 'db_attributes', 'status', 'kind', 'span_name'].map(k => logItemCol(rowData, source, colIdxMap, k))}
@@ -846,7 +846,7 @@ function groupSpans(data, logs, colIdxMap, expandedTraces) {
 function flattenSpanTree(traceArr, expandedTraces = {}) {
   const result = []
 
-  function traverse(span, traceId, parentIds, traceStart, traceEnd, depth = 0) {
+  function traverse(span, traceId, parentIds, traceStart, traceEnd, depth = 0, isLastChild = false) {
     let childrenCount = span.children.length
     let childErrors = false
 
@@ -859,6 +859,7 @@ function flattenSpanTree(traceArr, expandedTraces = {}) {
       parentIds: parentIds,
       show: expandedTraces[traceId] || depth === 0,
       expanded: expandedTraces[traceId],
+      isLastChild,
       ...span,
       children: childrenCount,
       childrenTimeSpans: span.children.map(child => ({
@@ -867,15 +868,13 @@ function flattenSpanTree(traceArr, expandedTraces = {}) {
         data: child.data,
       })),
     }
-
     result.push(spanInfo)
-    span.children.forEach(child => {
+    span.children.forEach((child, index) => {
       childErrors = child.hasErrors || childErrors
-      const [count, errors] = traverse(child, traceId, [...parentIds, span.id], traceStart, traceEnd, depth + 1)
+      const [count, errors] = traverse(child, traceId, [...parentIds, span.id], traceStart, traceEnd, depth + 1, index === span.children.length - 1)
       childrenCount += count
       childErrors = childErrors || errors
     })
-
     spanInfo.children = childrenCount
     spanInfo.childErrors = childErrors
     return [childrenCount, childErrors]
