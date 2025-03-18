@@ -88,17 +88,15 @@ chartsPage pid metricList sources source mFilter nextUrl = do
     div_ [class_ "w-full"] do
       Components.drawer_ "global-data-drawer" Nothing Nothing ""
       template_ [id_ "loader-tmp"] $ span_ [class_ "loading loading-dots loading-md"] ""
-      div_ [class_ "w-full flex gap-4 items-end"] do
-        div_ [class_ "flex flex-col gap-1"] do
-          span_ [class_ "text-slate-900 text-sm"] "Data source"
-          select_
-            [ class_ "select bg-fillWeaker  border border-slate-200 rounded-xl w-36 focus:outline-hidden"
-            , onchange_ "(() => {window.setQueryParamAndReload('metric_source', this.value)})()"
-            ]
-            do
-              option_ ([selected_ "all" | "all" == source] ++ [value_ "all"]) "All"
-              forM_ sources $ \s -> option_ ([selected_ s | s == source] ++ [value_ s]) $ toHtml s
-        div_ [class_ "flex items-center gap-2 w-full rounded-xl px-3 h-12 border border-slate-200 bg-fillWeaker"] do
+      div_ [class_ "w-full flex gap-1 items-start"] do
+        select_
+          [ class_ "select bg-fillWeaker  border border-strokeWeak h-12 rounded-xl w-36 focus:outline-hidden"
+          , onchange_ "(() => {window.setQueryParamAndReload('metric_source', this.value)})()"
+          ]
+          do
+            option_ ([selected_ "all" | "all" == source] ++ [value_ "all"]) "Data Source"
+            forM_ sources $ \s -> option_ ([selected_ s | s == source] ++ [value_ s]) $ toHtml s
+        div_ [class_ "flex items-center gap-2 w-full rounded-xl px-3 h-12 border border-strokeWeak bg-fillWeaker"] do
           faSprite_ "magnifying-glass" "regular" "w-4 h-4 text-slate-500"
           input_
             [ class_ "w-full text-slate-950 bg-transparent hover:outline-hidden focus:outline-hidden"
@@ -107,21 +105,19 @@ chartsPage pid metricList sources source mFilter nextUrl = do
             , id_ "search-input"
             , [__| on input show .metric_filterble in #metric_list_container when its textContent.toLowerCase() contains my value.toLowerCase() |]
             ]
-        div_ [class_ "flex flex-col gap-1"] do
-          span_ [class_ "text-slate-900 text-sm"] "View by"
-          select_
-            [ class_ "select bg-fillWeaker  border border-slate-200 rounded-xl w-42 focus:outline-hidden"
-            , onchange_ "(() => {window.setQueryParamAndReload('metric_prefix', this.value)})()"
-            ]
-            do
-              let metricNames =
-                    ( \x ->
-                        let (n, pr) = if length (T.splitOn "." x.metricName) == 1 then (T.splitOn "_" x.metricName, "_") else (T.splitOn "." x.metricName, ".")
-                         in fromMaybe "" (viaNonEmpty head n) <> pr
-                    )
-                      <$> V.toList metricList
-              option_ ([selected_ "all" | "all" == mFilter] ++ [value_ "all"]) "All"
-              forM_ (ordNub metricNames) $ \m -> option_ ([selected_ m | m == mFilter] ++ [value_ m]) $ toHtml m
+        select_
+          [ class_ "select bg-fillWeaker h-12 border border-strokeWeak rounded-xl w-42 focus:outline-hidden"
+          , onchange_ "(() => {window.setQueryParamAndReload('metric_prefix', this.value)})()"
+          ]
+          do
+            let metricNames =
+                  ( \x ->
+                      let (n, pr) = if length (T.splitOn "." x.metricName) == 1 then (T.splitOn "_" x.metricName, "_") else (T.splitOn "." x.metricName, ".")
+                       in fromMaybe "" (viaNonEmpty head n) <> pr
+                  )
+                    <$> V.toList metricList
+            option_ ([selected_ "all" | "all" == mFilter] ++ [value_ "all"]) "View By"
+            forM_ (ordNub metricNames) $ \m -> option_ ([selected_ m | m == mFilter] ++ [value_ m]) $ toHtml m
     div_ [class_ "w-full grid grid-cols-3 gap-4", id_ "metric_list_container"] $ do
       chartList pid source metricList nextUrl
 
@@ -139,21 +135,21 @@ chartList pid source metricList nextUrl = do
                   then htmx.process(#global-data-drawer-content)
                   then _hyperscript.processNode(#global-data-drawer-content)
                   then window.evalScriptsFromContent(#global-data-drawer-content)|]
-      div_ [class_ "h-52"]
-        $ toHtml
-        $ def
-          { Widget.wType = Widget.WTDistribution
-          , Widget.title = Just metric.metricName
-          , Widget.query = Just $ "metric_name = \"" <> metric.metricName <> "\""
-          , Widget.layout = Just $ Widget.Layout{x = Just 0, y = Just 0, w = Just 2, h = Just 1}
-          , Widget.unit = Just metric.metricUnit
-          , Widget.hideLegend = Just True
-          , Widget.eager = Just True
-          , Widget._projectId = Just pid
-          , Widget.expandBtnFn = Just expandBtn
-          }
-  when (length metricList > 19)
-    $ a_ [hxTrigger_ "intersect once", hxSwap_ "outerHTML", hxGet_ nextUrl] pass
+      div_ [class_ "h-52"] $
+        toHtml $
+          def
+            { Widget.wType = Widget.WTDistribution
+            , Widget.title = Just metric.metricName
+            , Widget.query = Just $ "metric_name = \"" <> metric.metricName <> "\""
+            , Widget.layout = Just $ Widget.Layout{x = Just 0, y = Just 0, w = Just 2, h = Just 1}
+            , Widget.unit = Just metric.metricUnit
+            , Widget.hideLegend = Just True
+            , Widget.eager = Just True
+            , Widget._projectId = Just pid
+            , Widget.expandBtnFn = Just expandBtn
+            }
+  when (length metricList > 19) $
+    a_ [hxTrigger_ "intersect once", hxSwap_ "outerHTML", hxGet_ nextUrl] pass
 
 
 dataPointsPage :: Projects.ProjectId -> V.Vector Telemetry.MetricDataPoint -> Html ()
