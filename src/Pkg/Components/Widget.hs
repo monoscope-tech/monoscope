@@ -11,7 +11,8 @@ import Deriving.Aeson.Stock qualified as DAES
 import Fmt qualified as Ft
 import Language.Haskell.TH.Syntax qualified as THS
 import Lucid
-import Lucid.Htmx (hxExt_, hxPost_, hxSwap_, hxTarget_, hxTrigger_)
+import Lucid.Htmx (hxPost_, hxSwap_, hxTarget_, hxTrigger_)
+import Lucid.Hyperscript (__)
 import Models.Projects.Projects qualified as Projects
 import NeatInterpolation
 import Pages.Charts.Charts qualified as Charts
@@ -182,10 +183,12 @@ widgetHelper_ isChild w' = case w.wType of
     layoutFields = [("x", (.x)), ("y", (.y)), ("w", (.w)), ("h", (.h))]
     attrs = concat [maybe [] (\v -> [term ("gs-" <> name) (show v)]) (w.layout >>= layoutField) | (name, layoutField) <- layoutFields]
     paddingBtm = if w.standalone == Just True then "" else (bool " pb-8 " " pb-4 " isChild)
+    -- Serialize the widget to JSON for easy copying
+    widgetJson = decodeUtf8 $ fromLazy $ AE.encode w
     gridItem_ =
       if w.naked == Just True
         then Relude.id
-        else (div_ ([class_ "grid-stack-item h-full flex-1 overflow-hidden ", id_ $ maybeToMonoid w.id <> "_widgetEl"] <> attrs) . div_ [class_ "grid-stack-item-content h-full"])
+        else (div_ ([class_ "grid-stack-item h-full flex-1 overflow-hidden ", id_ $ maybeToMonoid w.id <> "_widgetEl", data_ "widget" widgetJson] <> attrs) . div_ [class_ "grid-stack-item-content h-full"])
 
 
 renderWidgetHeader :: Widget -> Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe (Text, Text) -> Bool -> Html ()
@@ -233,46 +236,25 @@ renderWidgetHeader widget wId title valueM subValueM expandBtnFn ctaM hideSub = 
         $ Utils.faSprite_ "ellipsis" "regular" "w-4 h-4"
       ul_ [class_ "text-textStrong menu menu-md dropdown-content bg-base-100 rounded-box p-2 w-52 shadow-sm leading-none z-10"] do
         -- Only show the "Move to dashboard" option if we're in a dashboard context
-        when (isJust widget._dashboardId)
-          $ li_
-          $ a_
-            [ class_ "p-2 w-full text-left block"
-            , data_ "tippy-content" "Move this widget to another dashboard"
-            , id_ $ wId <> "_move_link"
-            , -- TODO: Spin up a modal dialog to select a dshboard to move chart into.
-              -- This logic would exist on the log explorer too, so it should be portable
-              -- Instead of moving, should be a clone
-              -- , onclick_
-              --     [text|
-              --     const targetDashboardId = prompt('Enter the target dashboard ID:', '');
-              --     if (!targetDashboardId) return false;
-              --
-              --     if(!confirm('Are you sure you want to move this widget to dashboard ' + targetDashboardId + '?'))
-              --       return false;
-              --
-              --     // Set the hx-vals attribute with the form data
-              --     this.setAttribute('hx-vals', JSON.stringify({
-              --       widget_id: '${wId}',
-              --       source_dashboard_id: '${fromMaybe "" widget._dashboardId}',
-              --       target_dashboard_id: targetDashboardId
-              --     }));
-              --
-              --     return true; // Allow the htmx request to proceed
-              --   |]
-              hxPost_ $ "/p/" <> fromMaybe "" (widget._projectId <&> (.toText)) <> "/dashboards/move_widget"
-            , hxSwap_ "none"
-            , hxTrigger_ "click"
-            , hxExt_ "json-enc"
-            -- , [__| on htmx:afterRequest[detail.successful]
-            --       set widgetEl to document.getElementById('${wId}_widgetEl')
-            --       call gridStackInstance.removeWidget(widgetEl, true)
-            --       if document.getElementById('${wId}_widgetEl')
-            --         call widgetEl.dispatchEvent(new CustomEvent('widget-remove-requested',
-            --                                     {bubbles: true, detail: { widgetId: '${wId}' }}))
-            --       end
-            --   |]
-            ]
-            "Move to dashboard"
+
+        when (isJust widget._dashboardId) do
+          let dashId = fromMaybe "" widget._dashboardId
+          li_
+            $ a_
+              [ class_ "p-2 w-full text-left block"
+              , data_ "tippy-content" "Copy this widget to another dashboard"
+              , id_ $ wId <> "_copy_link"
+              , term
+                  "_"
+                  [text|
+                on click 
+                set #dashboards-modal.checked to true
+                then set #dashboards-modal-widget-id.value to "${wId}"
+                then set #dashboards-modal-source-dashboard-id.value to "${dashId}"
+                then set (the closest <details/>).open to false 
+              |]
+              ]
+              "Copy to dashboard"
 
         -- Only show the "Duplicate widget" option if we're in a dashboard context
         when (isJust widget._dashboardId) do
@@ -291,6 +273,7 @@ renderWidgetHeader widget wId title valueM subValueM expandBtnFn ctaM hideSub = 
               , hxSwap_ "beforeend"
               , hxTrigger_ "click"
               , hxTarget_ ".grid-stack"
+              , [__| on click set (the closest <details/>).open to false |]
               ]
               "Duplicate widget"
           li_

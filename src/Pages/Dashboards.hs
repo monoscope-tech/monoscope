@@ -1,4 +1,4 @@
-module Pages.Dashboards (dashboardGetH, entrypointRedirectGetH, DashboardGet (..), dashboardsGetH, DashboardsGet (..), dashboardsPostH, DashboardForm (..), dashboardWidgetPutH, dashboardWidgetReorderPatchH, WidgetReorderItem (..), dashboardDeleteH, dashboardRenamePatchH, DashboardRenameForm (..), dashboardDuplicatePostH, dashboardMoveWidgetPostH, WidgetMoveForm (..), dashboardDuplicateWidgetPostH, dashboardWidgetExpandGetH) where
+module Pages.Dashboards (dashboardGetH, entrypointRedirectGetH, DashboardGet (..), dashboardsGetH, DashboardsGet (..), dashboardsPostH, DashboardForm (..), dashboardWidgetPutH, dashboardWidgetReorderPatchH, WidgetReorderItem (..), dashboardDeleteH, dashboardRenamePatchH, DashboardRenameForm (..), dashboardDuplicatePostH, WidgetMoveForm (..), dashboardDuplicateWidgetPostH, dashboardWidgetExpandGetH) where
 
 import Control.Lens
 import Data.Aeson qualified as AE
@@ -25,7 +25,7 @@ import Effectful.Error.Static (Error, throwError)
 import Effectful.PostgreSQL.Transact.Effect (DB, dbtToEff)
 import Effectful.Time qualified as Time
 import Lucid
-import Lucid.Htmx (hxConfirm_, hxDelete_, hxExt_, hxPatch_, hxPost_, hxPut_, hxSwap_, hxTarget_, hxTrigger_, hxVals_)
+import Lucid.Htmx (hxConfirm_, hxDelete_, hxExt_, hxGet_, hxPatch_, hxPost_, hxPut_, hxSelect_, hxSwap_, hxTarget_, hxTrigger_, hxVals_)
 import Lucid.Hyperscript (__)
 import Models.Apis.Anomalies qualified as Anomalies
 import Models.Projects.Dashboards qualified as Dashboards
@@ -83,6 +83,27 @@ dashboardPage_ pid dashId dash dashVM = do
     $ fieldset_ [class_ "fieldset"] do
       label_ [class_ "label"] "Change Dashboard Title"
       input_ [class_ "input w-full max-w-xs", placeholder_ "Insert new title", value_ $ if dashVM.title == "" then "Untitled" else dashVM.title]
+
+  -- Modal for copying widgets to other dashboards
+  Components.modal_ "dashboards-modal" "" do
+    -- Hidden fields to store widget and dashboard IDs
+    input_ [type_ "hidden", id_ "dashboards-modal-widget-id", name_ "widget_id"]
+    input_ [type_ "hidden", id_ "dashboards-modal-source-dashboard-id", name_ "source_dashboard_id"]
+
+    div_
+      [ class_ "dashboards-list space-y-3 max-h-160 overflow-y-auto"
+      , hxGet_ ("/p/" <> pid.toText <> "/dashboards?embedded=true")
+      , hxTrigger_ "intersect once"
+      , hxSelect_ "#itemsListPage"
+      , hxSwap_ "innerHTML"
+      ]
+      do
+        div_ [class_ "skeleton h-16 w-full"] ""
+        div_ [class_ "skeleton h-16 w-full"] ""
+        div_ [class_ "skeleton h-16 w-full"] ""
+
+    div_ [class_ "mt-3 flex justify-end gap-2"] do
+      label_ [Lucid.for_ "dashboards-modal", class_ "btn btn-outline cursor-pointer"] "Cancel"
 
   whenJust dash.variables \variables -> do
     div_ [class_ "flex bg-fillWeaker px-6 py-2 gap-2"]
@@ -343,7 +364,6 @@ processWidget pid now (sinceStr, fromDStr, toDStr) allParams widgetBase = do
       pure $ widget' & #children .~ Just newChildren
 
 
--- dashboardWdgetPutH adds a widget at the end of
 dashboardWidgetPutH :: Projects.ProjectId -> Dashboards.DashboardId -> Maybe Text -> Widget.Widget -> ATAuthCtx (RespHeaders Widget.Widget)
 dashboardWidgetPutH pid dashId widgetIdM widget = do
   (_, dash) <- getDashAndVM dashId Nothing
@@ -354,6 +374,8 @@ dashboardWidgetPutH pid dashId widgetIdM widget = do
           let widgetUpdated = widget{Widget.standalone = Nothing, Widget.naked = Nothing, Widget.id = Just uid}
           (dash{Dashboards.widgets = dash.widgets <> [widgetUpdated]}, widgetUpdated)
   _ <- dbtToEff $ DBT.updateFieldsBy @Dashboards.DashboardVM [[DBT.field| schema |]] ([DBT.field| id |], dashId) (Only dash')
+  addSuccessToast "Widget added to dsahboard successfully" Nothing
+  addTriggerEvent "closeModal" ""
   addRespHeaders $ widget'
 
 
@@ -590,7 +612,7 @@ widgetViewerEditor_ pid dashboardIdM currentRange existingWidgetM activeTab = di
         [ id_ "widget-preview"
         , class_ "h-full w-full"
         , hxPost_ "/widget"
-        , hxTrigger_ "intersect, update-widget"
+        , hxTrigger_ "intersect once, update-widget"
         , hxTarget_ "this"
         , hxSwap_ "innerHTML"
         , hxVals_ "js:{...widgetJSON}"
@@ -669,6 +691,7 @@ newWidget_ pid currentRange = widgetViewerEditor_ pid Nothing currentRange Nothi
 data DashboardsGet = DashboardsGet
   { dashboards :: V.Vector Dashboards.DashboardVM
   , projectId :: Projects.ProjectId
+  , embedded :: Bool -- Whether to render in embedded mode (for modals)
   }
   deriving (Show, Generic)
 
@@ -708,7 +731,7 @@ renderDashboardListItem checked tmplClass title value description icon prview = 
 
 dashboardsGet_ :: DashboardsGet -> Html ()
 dashboardsGet_ dg = do
-  Components.modal_ "newDashboardMdl" "" $ form_
+  unless (dg.embedded) $ Components.modal_ "newDashboardMdl" "" $ form_
     [ class_ "grid grid-cols-7 overflow-hidden h-full gap-4 group/md"
     , hxPost_ ""
     ]
@@ -744,25 +767,36 @@ dashboardsGet_ dg = do
           $ div_ [class_ "bg-[#1e9cff] px-5 py-8 rounded-xl aspect-square w-full flex items-center"]
           $ img_ [src_ "/public/assets/svgs/screens/dashboard_blank.svg", class_ "w-full", id_ "dItemPreview"]
 
-  div_ [id_ "itemsListPage", class_ "mx-auto px-6 pt-4 gap-8 w-full flex flex-col h-full overflow-hidden pb-2  group/pg"] do
-    div_ [class_ "flex"] do
-      label_ [class_ "input input-md flex-1 flex bg-fillWeaker border-slate-200 shadow-none overflow-hidden items-center gap-2"] do
-        faSprite_ "magnifying-glass" "regular" "w-4 h-4 opacity-70"
-        input_
-          [ type_ "text"
-          , class_ "grow"
-          , placeholder_ "Search"
-          , [__|on keyup if the event's key is 'Escape' set my value to '' then trigger keyup
+  div_ [id_ "itemsListPage", class_ $ "mx-auto px-6 pt-4 gap-8 w-full flex flex-col h-full overflow-hidden pb-2  group/pg"] do
+    div_ [class_ "flex"] $ label_ [class_ "input input-md flex-1 flex bg-fillWeaker border-slate-200 shadow-none overflow-hidden items-center gap-2"] do
+      faSprite_ "magnifying-glass" "regular" "w-4 h-4 opacity-70"
+      input_
+        [ type_ "text"
+        , class_ "grow"
+        , placeholder_ "Search"
+        , [__|on keyup if the event's key is 'Escape' set my value to '' then trigger keyup
                          else show <.itemListItem/> in #itemsListPage when its textContent.toLowerCase() contains my value.toLowerCase() |]
-          ]
-    -- button_
-    div_ [class_ "grid grid-cols-2 gap-5"] do
+        ]
+
+    when (dg.embedded) $ h3_ [class_ "text-lg font-normal"] "Select a dashboard below, and the widget will be copied there"
+
+    div_ [class_ $ "grid gap-5 " <> if dg.embedded then "grid-cols-1" else "grid-cols-2"] do
       forM_ dg.dashboards \dashVM -> do
         let dash = loadDashboardFromVM dashVM
-        div_ [class_ "rounded-xl border border-strokeWeak gap-3.5 p-4 bg-fillWeaker flex itemListItem"] do
+        let attrs =
+              if dg.embedded
+                then
+                  [ class_ "cursor-pointer"
+                  , hxPut_ ("/p/" <> dg.projectId.toText <> "/dashboards/" <> dashVM.id.toText)
+                  , hxVals_ "js:{...JSON.parse(document.getElementById(document.getElementById('dashboards-modal-widget-id').value + '_widgetEl').dataset.widget)}"
+                  , hxSwap_ "none"
+                  , hxExt_ "json-enc"
+                  ]
+                else [href_ ("/p/" <> dg.projectId.toText <> "/dashboards/" <> dashVM.id.toText)]
+        a_ ([class_ "rounded-xl border border-strokeWeak hover:border-strokeBrand-strong gap-3.5 p-4 bg-fillWeaker flex itemListItem group/i"] <> attrs) do
           div_ [class_ "flex-1 space-y-2"] do
             div_ [class_ "flex items-center gap-2"] do
-              a_ [class_ "hover:underline underline-offset-2", href_ ("/p/" <> dg.projectId.toText <> "/dashboards/" <> dashVM.id.toText)]
+              span_ [class_ "group-hover/i:underline underline-offset-2"]
                 $ strong_ [class_ "font-medium"] (toHtml $ bool "Untitled" dashVM.title (dashVM.title /= ""))
               span_ [class_ "leading-none", term "data-tippy-content" "This dashboard is currently your homepage."] do
                 when (isJust dashVM.homepageSince) $ (faSprite_ "house" "regular" "w-4 h-4")
@@ -770,7 +804,7 @@ dashboardsGet_ dg = do
               time_ [class_ "mr-2 text-slate-400", term "data-tippy-content" "Date of dashboard creation", datetime_ $ Utils.formatUTC dashVM.createdAt] $ toHtml $ formatTime defaultTimeLocale "%eth %b %Y" dashVM.createdAt
               forM_ dashVM.tags (span_ [class_ "badge badge-neutral"] . toHtml @Text)
           div_ [class_ "flex items-end justify-center gap-5"] do
-            button_ [class_ "leading-none", term "data-tippy-content" "click star this dashboard"]
+            button_ [class_ "leading-none", term "data-tippy-content" "click to star this dashboard"]
               $ if isJust dashVM.starredSince
                 then (faSprite_ "star" "solid" "w-5 h-5")
                 else (faSprite_ "star" "regular" "w-5 h-5")
@@ -778,21 +812,27 @@ dashboardsGet_ dg = do
             div_ [class_ "flex items-end gap-2", term "data-tippy-content" $ "There are " <> widgetCount <> " charts/widgets in this dashboard"] $ faSprite_ "chart-area" "regular" "w-5 h-5 text-iconNeutral" >> (span_ [class_ "leading-none"] . toHtml $ widgetCount)
 
 
-dashboardsGetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders (PageCtx DashboardsGet))
-dashboardsGetH pid = do
+dashboardsGetH :: Projects.ProjectId -> Maybe Text -> ATAuthCtx (RespHeaders (PageCtx DashboardsGet))
+dashboardsGetH pid embeddedM = do
   (sess, project) <- Sessions.sessionAndProject pid
   now <- Time.currentTime
   dashboards <- dbtToEff $ DBT.selectManyByField @Dashboards.DashboardVM [DBT.field| project_id |] pid
-  let bwconf =
-        (def :: BWConfig)
-          { sessM = Just sess
-          , currProject = Just project
-          , pageTitle = "Dashboards"
-          , pageActions = Just $ (label_ [Lucid.for_ "newDashboardMdl", class_ "leading-none rounded-xl shadow-sm p-3 cursor-pointer bg-fillBrand-strong text-white"] "New Dashboard")
-          }
-  addRespHeaders
-    $ PageCtx bwconf
-    $ DashboardsGet{dashboards, projectId = pid}
+
+  -- Check if we're requesting in embedded mode (for modals, etc.)
+  let embedded = embeddedM == Just "true" || embeddedM == Just "1" || embeddedM == Just "yes"
+
+  if embedded
+    -- For embedded mode, use a minimal BWConfig that will still work with ToHtml instance
+    then addRespHeaders $ PageCtx def $ DashboardsGet{dashboards, projectId = pid, embedded = True}
+    else do
+      let bwconf =
+            (def :: BWConfig)
+              { sessM = Just sess
+              , currProject = Just project
+              , pageTitle = "Dashboards"
+              , pageActions = Just $ (label_ [Lucid.for_ "newDashboardMdl", class_ "leading-none rounded-xl shadow-sm p-3 cursor-pointer bg-fillBrand-strong text-white"] "New Dashboard")
+              }
+      addRespHeaders $ PageCtx bwconf $ DashboardsGet{dashboards, projectId = pid, embedded = False}
 
 
 data DashboardForm = DashboardForm
@@ -986,66 +1026,6 @@ data WidgetMoveForm = WidgetMoveForm
   }
   deriving stock (Show, Generic)
   deriving anyclass (AE.FromJSON, AE.ToJSON)
-
-
--- | Handler for moving a widget from one dashboard to another.
--- It removes the widget from the source dashboard and adds it to the target dashboard.
-dashboardMoveWidgetPostH :: Projects.ProjectId -> WidgetMoveForm -> ATAuthCtx (RespHeaders NoContent)
-dashboardMoveWidgetPostH pid form = do
-  -- Get source and target dashboards
-  sourceDashVM <-
-    dbtToEff (DBT.selectById @Dashboards.DashboardVM (Only form.sourceDashboardId)) >>= \case
-      Just vm -> pure vm
-      Nothing -> throwError $ err404{errBody = "Source dashboard not found"}
-
-  targetDashVM <-
-    dbtToEff (DBT.selectById @Dashboards.DashboardVM (Only form.targetDashboardId)) >>= \case
-      Just vm -> pure vm
-      Nothing -> throwError $ err404{errBody = "Target dashboard not found"}
-
-  -- Load dashboard schemas
-  (_, sourceDash) <- getDashAndVM form.sourceDashboardId Nothing
-
-  -- Find the widget to move
-  let widgetToMoveM = find (\w -> (w.id == Just form.widgetId) || (maybeToMonoid (slugify <$> w.title) == form.widgetId)) sourceDash.widgets
-
-  case widgetToMoveM of
-    Nothing -> throwError $ err404{errBody = "Widget not found in source dashboard"}
-    Just widgetToMove -> do
-      -- Get the target dashboard schema (or template if not set)
-      targetDash <- case targetDashVM.schema of
-        Just schema -> pure schema
-        Nothing -> case loadDashboardFromVM targetDashVM of
-          Just template -> pure template
-          Nothing -> throwError $ err404{errBody = "Could not load target dashboard schema or template"}
-
-      -- Get current time for updated_at field
-      now <- Time.currentTime
-
-      -- Remove widget from source dashboard
-      let updatedSourceWidgets = filter (\w -> (w.id /= Just form.widgetId) && (maybeToMonoid (slugify <$> w.title) /= form.widgetId)) sourceDash.widgets
-      let updatedSourceDash = sourceDash{Dashboards.widgets = updatedSourceWidgets}
-
-      -- Add widget to target dashboard
-      let updatedTargetDash = targetDash{Dashboards.widgets = targetDash.widgets <> [widgetToMove]}
-
-      -- Update both dashboards in the database
-      _ <-
-        dbtToEff
-          $ DBT.updateFieldsBy @Dashboards.DashboardVM
-            [[DBT.field| schema |], [DBT.field| updated_at |]]
-            ([DBT.field| id |], form.sourceDashboardId)
-            (updatedSourceDash, now)
-
-      _ <-
-        dbtToEff
-          $ DBT.updateFieldsBy @Dashboards.DashboardVM
-            [[DBT.field| schema |], [DBT.field| updated_at |]]
-            ([DBT.field| id |], form.targetDashboardId)
-            (updatedTargetDash, now)
-
-      addSuccessToast "Widget moved successfully" Nothing
-      addRespHeaders NoContent
 
 
 -- | Handler for duplicating a widget within the same dashboard.
