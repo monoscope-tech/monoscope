@@ -403,18 +403,39 @@ getChildSpans pid spanIds = dbtToEff $ query Select q (pid, spanIds)
 
 
 getDataPointsData :: DB :> es => Projects.ProjectId -> (Maybe UTCTime, Maybe UTCTime) -> Eff es (V.Vector MetricDataPoint)
-getDataPointsData pid dateRange = dbtToEff $ query Select (Query $ Relude.encodeUtf8 q) pid
+getDataPointsData pid dateRange = dbtToEff $ query Select (Query $ Relude.encodeUtf8 q) (pid, pid)
   where
     dateRangeStr = toText $ case dateRange of
       (Nothing, Just b) -> "AND timestamp BETWEEN NOW() AND '" <> formatTime defaultTimeLocale "%F %R" b <> "'"
       (Just a, Just b) -> "AND timestamp BETWEEN '" <> formatTime defaultTimeLocale "%F %R" a <> "' AND '" <> formatTime defaultTimeLocale "%F %R" b <> "'"
       _ -> ""
+
     q =
-      [text| SELECT metric_name, metric_type, metric_unit, metric_description, COUNT(*) AS data_points,
-             ARRAY_AGG(DISTINCT COALESCE(resource->>'service.name', 'unknown'))::text[] AS service_names, '{}'::text[] AS labels
-             FROM telemetry.metrics WHERE project_id = ? $dateRangeStr
-             GROUP BY metric_name, metric_type, metric_unit, metric_description
-             ORDER BY metric_name|]
+      [text|
+WITH metrics_aggregated AS (
+    SELECT 
+        project_id,
+        metric_name,
+        COUNT(*) AS data_points
+    FROM telemetry.metrics
+    WHERE project_id = ? $dateRangeStr
+    GROUP BY project_id, metric_name
+)
+SELECT 
+    mm.metric_name,
+    mm.metric_type,
+    mm.metric_unit,
+    mm.metric_description,
+    COALESCE(ma.data_points, 0) AS data_points,
+    ARRAY_AGG(mm.service_name) AS service_names,
+    '{}'::text[] AS labels
+FROM telemetry.metrics_meta mm
+LEFT JOIN metrics_aggregated ma
+    ON mm.project_id = ma.project_id
+    AND mm.metric_name = ma.metric_name
+WHERE mm.project_id = ?
+GROUP BY mm.metric_name, mm.metric_type, mm.metric_unit, mm.metric_description, ma.data_points;
+|]
 
 
 getLogsByTraceIds :: DB :> es => Projects.ProjectId -> V.Vector Text -> Eff es (V.Vector (V.Vector AE.Value))
