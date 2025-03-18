@@ -90,7 +90,7 @@ chartsPage pid metricList sources source mFilter nextUrl = do
       template_ [id_ "loader-tmp"] $ span_ [class_ "loading loading-dots loading-md"] ""
       div_ [class_ "w-full flex gap-1 items-start"] do
         select_
-          [ class_ "select bg-fillWeaker  border border-strokeWeak h-12 rounded-xl w-36 focus:outline-hidden"
+          [ class_ "select bg-fillWeaker  border !border-strokeWeak h-12 rounded-xl w-36 focus:outline-hidden"
           , onchange_ "(() => {window.setQueryParamAndReload('metric_source', this.value)})()"
           ]
           do
@@ -106,7 +106,7 @@ chartsPage pid metricList sources source mFilter nextUrl = do
             , [__| on input show .metric_filterble in #metric_list_container when its textContent.toLowerCase() contains my value.toLowerCase() |]
             ]
         select_
-          [ class_ "select bg-fillWeaker h-12 border border-strokeWeak rounded-xl w-42 focus:outline-hidden"
+          [ class_ "select bg-fillWeaker h-12 border !border-strokeWeak rounded-xl w-42 focus:outline-hidden"
           , onchange_ "(() => {window.setQueryParamAndReload('metric_prefix', this.value)})()"
           ]
           do
