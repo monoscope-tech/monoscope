@@ -457,16 +457,29 @@ virtualTable page = do
     "log-list"
     [ id_ "resultTable"
     , class_ "w-full divide-y shrink-1 flex flex-col h-full min-w-0  overflow-x-hidden"
-    , term "data-results" (decodeUtf8 $ AE.encode page.requestVecs)
-    , term "data-columns" (decodeUtf8 $ AE.encode page.cols)
-    , term "data-colIdxMap" (decodeUtf8 $ AE.encode page.colIdxMap)
-    , term "data-servicecolors" (decodeUtf8 $ AE.encode page.serviceColors)
-    , term "data-nextfetchurl" page.nextLogsURL
-    , term "data-resetLogsURL" page.resetLogsURL
-    , term "data-projectid" page.pid.toText
-    , term "data-tracelogs" (decodeUtf8 $ AE.encode page.traceLogs)
     ]
     ("" :: Text)
+  let logs = decodeUtf8 $ AE.encode page.requestVecs
+      cols = decodeUtf8 $ AE.encode page.cols
+      colIdxMap = decodeUtf8 $ AE.encode page.colIdxMap
+      serviceColors = decodeUtf8 $ AE.encode page.serviceColors
+      nextfetchurl = page.nextLogsURL
+      resetLogsURL = page.resetLogsURL
+      projectid = page.pid.toText
+      tracelogs = decodeUtf8 $ AE.encode page.traceLogs
+  script_
+    [text|
+      window.virtualListData = {
+       requestVecs: $logs,
+       cols: $cols,
+       colIdxMap: $colIdxMap,
+       serviceColors: $serviceColors,
+       nextFetchUrl: "$nextfetchurl",
+       resetLogsUrl: "$resetLogsURL",
+       projectId: "$projectid",
+       traceLogs: $tracelogs,
+      }
+   |]
 
 
 apiLogsPage :: ApiLogsPageData -> Html ()

@@ -822,8 +822,8 @@ dashboardsGetH pid embeddedM = do
   let embedded = embeddedM == Just "true" || embeddedM == Just "1" || embeddedM == Just "yes"
 
   if embedded
-    -- For embedded mode, use a minimal BWConfig that will still work with ToHtml instance
-    then addRespHeaders $ PageCtx def $ DashboardsGet{dashboards, projectId = pid, embedded = True}
+    then -- For embedded mode, use a minimal BWConfig that will still work with ToHtml instance
+      addRespHeaders $ PageCtx def $ DashboardsGet{dashboards, projectId = pid, embedded = True}
     else do
       let bwconf =
             (def :: BWConfig)

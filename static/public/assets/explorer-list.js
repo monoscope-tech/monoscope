@@ -19,29 +19,16 @@ export class LogList extends LitElement {
   }
   constructor() {
     super()
-    const container = document.querySelector('#resultTable')
     this.source = new URLSearchParams(window.location.search).get('source') || 'requests'
 
-    try {
-      this.colIdxMap = JSON.parse(container.dataset.colidxmap || '{}')
-      this.logsData = JSON.parse(container.dataset.results || '[]')
-      this.traceLogs = JSON.parse(container.dataset.tracelogs || '[]')
-      this.logsColumns = JSON.parse(container.dataset.columns || '[]')
-      this.serviceColors = JSON.parse(container.dataset.servicecolors || '{}')
-    } catch (e) {
-      console.error('Error parsing JSON data:', e)
-      this.colIdxMap = {}
-      this.logsData = []
-      this.traceLogs = []
-      this.logsColumns = []
-      this.serviceColors = {}
-    }
-
-    this.hasMore = this.logsData.length > 199
+    this.logsData = []
+    this.logsColumns = []
+    this.colIdxMap = {}
+    this.serviceColors = {}
+    this.traceLogs = []
+    this.hasMore = false
     this.expandedTraces = {}
-    this.spanListTree = this.source === 'spans' ? this.buildSpanListTree() : []
-    this.projectId = container.dataset.projectid
-    this.nextFetchUrl = container.dataset.nextfetchurl
+    this.spanListTree = []
     this.isLoading = false
     this.isLoadingRecent = false
     this.isError = false
@@ -98,6 +85,20 @@ export class LogList extends LitElement {
 
   connectedCallback() {
     super.connectedCallback()
+    if (window.virtualListData) {
+      this.logsData = window.virtualListData.requestVecs
+      this.logsColumns = window.virtualListData.cols
+      this.colIdxMap = window.virtualListData.colIdxMap
+      this.serviceColors = window.virtualListData.serviceColors
+      this.nextFetchUrl = window.virtualListData.nextFetchUrl
+      this.resetLogsUrl = window.virtualListData.resetLogsUrl
+      this.projectId = window.virtualListData.projectId
+      this.traceLogs = window.virtualListData.traceLogs
+      this.hasMore = this.logsData.length > 199
+      this.expandedTraces = {}
+      this.spanListTree = this.source === 'spans' ? this.buildSpanListTree() : []
+      window.virtualListData = null
+    }
   }
 
   firstUpdated() {
