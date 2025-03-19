@@ -71,22 +71,24 @@ export class LogList extends LitElement {
   }
 
   updateTableData = (ves, cols, colIdxMap, serviceColors, nextFetchUrl, traceLogs) => {
-    this.logsData = [...ves]
     this.logsColumns = [...cols]
     this.colIdxMap = { ...colIdxMap }
-    this.traceLogs = [...traceLogs]
+    this.traceLogs = traceLogs
     this.hasMore = ves.length > 199
     this.serviceColors = { ...serviceColors }
     this.nextFetchUrl = nextFetchUrl
-    this.spanListTree = this.source === 'spans' ? this.buildSpanListTree() : []
-
+    if (this.source === 'spans') {
+      this.spanListTree = this.buildSpanListTree(ves, this.tr)
+    } else {
+      this.logsData = ves
+    }
     this.requestUpdate()
   }
 
   connectedCallback() {
     super.connectedCallback()
     if (window.virtualListData) {
-      this.logsData = window.virtualListData.requestVecs
+      const logs = window.virtualListData.requestVecs
       this.logsColumns = window.virtualListData.cols
       this.colIdxMap = window.virtualListData.colIdxMap
       this.serviceColors = window.virtualListData.serviceColors
@@ -94,9 +96,13 @@ export class LogList extends LitElement {
       this.resetLogsUrl = window.virtualListData.resetLogsUrl
       this.projectId = window.virtualListData.projectId
       this.traceLogs = window.virtualListData.traceLogs
-      this.hasMore = this.logsData.length > 199
+      this.hasMore = logs.length > 199
       this.expandedTraces = {}
-      this.spanListTree = this.source === 'spans' ? this.buildSpanListTree() : []
+      if (this.source === 'spans') {
+        this.spanListTree = this.buildSpanListTree(logs)
+      } else {
+        this.logsData = logs
+      }
       window.virtualListData = null
     }
   }
@@ -143,7 +149,7 @@ export class LogList extends LitElement {
   }
 
   buildSpanListTree(logs, traceLogs) {
-    return groupSpans(logs ? logs : this.logsData, traceLogs ? traceLogs : this.traceLogs, this.colIdxMap, this.expandedTraces)
+    return groupSpans(logs, traceLogs, this.colIdxMap, this.expandedTraces)
   }
 
   renderLoadMore() {
@@ -247,7 +253,6 @@ export class LogList extends LitElement {
         if (!data.error) {
           const { logsData, serviceColors, nextUrl, traceLogs } = data
           if (logsData.length > 0) {
-            this.logsData = isNewData ? [...logsData, ...this.logsData] : [...this.logsData, ...logsData]
             this.traceLogs = [...this.traceLogs, ...traceLogs]
             this.serviceColors = { ...this.serviceColors, ...serviceColors }
             if (!isNewData) {
@@ -256,12 +261,15 @@ export class LogList extends LitElement {
             }
             if (this.source === 'spans') {
               if (isNewData) {
-                this.spanListTree = this.buildSpanListTree()
+                const los = this.spanListTree.map(span => span.data)
+                this.spanListTree = this.buildSpanListTree([...logsData, ...los], this.traceLogs)
               } else {
                 const { nonRootRootSpans, remainingSpans } = this.filterFalseRoots()
-                const tree = this.buildSpanListTree([...nonRootRootSpans, ...logsData], traceLogs)
+                const tree = this.buildSpanListTree([...nonRootRootSpans, ...logsData], this.traceLogs)
                 this.spanListTree = [...remainingSpans, ...tree]
               }
+            } else {
+              this.logsData = isNewData ? [...logsData, ...this.logsData] : [...this.logsData, ...logsData]
             }
           }
         } else {
@@ -711,7 +719,7 @@ function toggleLogRow(event, targetInfo, pid) {
   const logsView = document.querySelector('#logs_list_container')
   const resizer = document.querySelector('#resizer')
   const width = Number(getComputedStyle(sideView).width.replace('px', ''))
-  if (sideView.style.width < 50) {
+  if (width < 50) {
     const lW = getComputedStyle(logsView).width.replace('px', '')
     logsView.style.width = `${lW - 550}px`
     // sideView.style.width = '550px'
