@@ -509,7 +509,7 @@ function logItemCol(rowData, source, colIdxMap, key, serviceColors, toggleTrace)
         : source === 'spans'
         ? html`<div class="flex w-full items-center gap-1">
             <div class="w-full flex items-start">
-              ${depth > 1 ? new Array(depth - 1).fill(1).map(() => html`<div class="ml-[15px] border-l w-4 h-5 shrink-0"></div>`) : nothing}
+              ${depth > 1 ? new Array(depth - 1).fill(1).map(() => html`<div class="ml-[15px]  w-4 h-5 shrink-0"></div>`) : nothing}
               ${depth > 0
                 ? html`<div class=${`border-l ml-[15px] w-4 ${isLastChild ? 'h-3' : 'h-5'} relative shrink-0`}>
                     <span class=${`border-b w-full absolute left-0 ${isLastChild ? 'bottom-0' : 'top-1/2 -translate-y-1/2'}`}></span>
@@ -711,7 +711,7 @@ function toggleLogRow(event, targetInfo, pid) {
   if (sideView.style.width === '0px') {
     const lW = getComputedStyle(logsView).width.replace('px', '')
     logsView.style.width = `${lW - 550}px`
-    sideView.style.width = '550px'
+    // sideView.style.width = '550px'
     resizer.classList.remove('hidden')
     updateUrlState('details_width', sideView.style.width)
   }
