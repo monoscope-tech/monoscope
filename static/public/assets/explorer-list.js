@@ -498,7 +498,7 @@ function logItemCol(rowData, source, colIdxMap, key, serviceColors, toggleTrace)
       break
     case 'rest':
       let val = lookupVecTextByKey(dataArr, colIdxMap, key)
-      const { depth, children, traceId, childErrors, hasErrors, expanded, type, id, isLastChild } = rowData
+      const { depth, children, traceId, childErrors, hasErrors, expanded, type, id, isLastChild, siblingsArr } = rowData
       const errClas = hasErrors
         ? 'bg-red-500 text-white fill-white stroke-white'
         : childErrors
@@ -508,8 +508,10 @@ function logItemCol(rowData, source, colIdxMap, key, serviceColors, toggleTrace)
         ? html`${logItemCol(rowData, source, colIdxMap, 'severity_text')} ${logItemCol(rowData, source, colIdxMap, 'body')}`
         : source === 'spans'
         ? html`<div class="flex w-full items-center gap-1">
-            <div class="w-full flex items-start">
-              ${depth > 1 ? new Array(depth - 1).fill(1).map(() => html`<div class="ml-[15px]  w-4 h-5 shrink-0"></div>`) : nothing}
+            <div class="w-full flex items-center">
+              ${depth > 1
+                ? new Array(depth - 1).fill(1).map((_, i) => html`<div class=${`ml-[15px] w-4 h-5 shrink-0 ${siblingsArr[i] ? 'border-l' : ''}`}></div>`)
+                : nothing}
               ${depth > 0
                 ? html`<div class=${`border-l ml-[15px] w-4 ${isLastChild ? 'h-3' : 'h-5'} relative shrink-0`}>
                     <span class=${`border-b w-full absolute left-0 ${isLastChild ? 'bottom-0' : 'top-1/2 -translate-y-1/2'}`}></span>
@@ -708,7 +710,8 @@ function toggleLogRow(event, targetInfo, pid) {
   const sideView = document.querySelector('#log_details_container')
   const logsView = document.querySelector('#logs_list_container')
   const resizer = document.querySelector('#resizer')
-  if (sideView.style.width === '0px') {
+  const width = Number(getComputedStyle(sideView).width.replace('px', ''))
+  if (sideView.style.width < 50) {
     const lW = getComputedStyle(logsView).width.replace('px', '')
     logsView.style.width = `${lW - 550}px`
     // sideView.style.width = '550px'
@@ -847,7 +850,7 @@ function groupSpans(data, logs, colIdxMap, expandedTraces) {
 function flattenSpanTree(traceArr, expandedTraces = {}) {
   const result = []
 
-  function traverse(span, traceId, parentIds, traceStart, traceEnd, depth = 0, isLastChild = false) {
+  function traverse(span, traceId, parentIds, traceStart, traceEnd, depth = 0, isLastChild = false, hasSiblingsArr = []) {
     let childrenCount = span.children.length
     let childErrors = false
 
@@ -861,6 +864,7 @@ function flattenSpanTree(traceArr, expandedTraces = {}) {
       show: expandedTraces[traceId] || depth === 0,
       expanded: expandedTraces[traceId],
       isLastChild,
+      siblingsArr: hasSiblingsArr,
       ...span,
       children: childrenCount,
       childrenTimeSpans: span.children.map(child => ({
@@ -870,9 +874,12 @@ function flattenSpanTree(traceArr, expandedTraces = {}) {
       })),
     }
     result.push(spanInfo)
+    const hasSiling = span.children.length > 1
     span.children.forEach((child, index) => {
       childErrors = child.hasErrors || childErrors
-      const [count, errors] = traverse(child, traceId, [...parentIds, span.id], traceStart, traceEnd, depth + 1, index === span.children.length - 1)
+      const lastChild = index === span.children.length - 1
+      const newSiblingsArr = hasSiling && !lastChild ? [...hasSiblingsArr, true] : [...hasSiblingsArr, false]
+      const [count, errors] = traverse(child, traceId, [...parentIds, span.id], traceStart, traceEnd, depth + 1, lastChild, newSiblingsArr)
       childrenCount += count
       childErrors = childErrors || errors
     })
