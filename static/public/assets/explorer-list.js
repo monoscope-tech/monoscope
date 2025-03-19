@@ -96,13 +96,14 @@ export class LogList extends LitElement {
       this.resetLogsUrl = window.virtualListData.resetLogsUrl
       this.projectId = window.virtualListData.projectId
       this.traceLogs = window.virtualListData.traceLogs
-      this.hasMore = logs.length > 199
       this.expandedTraces = {}
       if (this.source === 'spans') {
-        this.spanListTree = this.buildSpanListTree(logs)
+        this.spanListTree = this.buildSpanListTree(logs, this.traceLogs)
       } else {
         this.logsData = logs
       }
+      this.requestUpdate()
+      this.hasMore = logs.length > 199
       window.virtualListData = null
     }
   }
