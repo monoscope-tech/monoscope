@@ -62,7 +62,7 @@ instance ToHtml DashboardGet where
 
 dashboardPage_ :: Projects.ProjectId -> Dashboards.DashboardId -> Dashboards.Dashboard -> Dashboards.DashboardVM -> Html ()
 dashboardPage_ pid dashId dash dashVM = do
-  when True $ freeTierLimitExceededBanner pid.toText
+  -- when  $ freeTierLimitExceededBanner pid.toText
   Components.modal_ "pageTitleModalId" ""
     $ form_
       [ class_ "flex flex-col p-3 gap-3"
