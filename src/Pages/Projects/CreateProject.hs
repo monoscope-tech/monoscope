@@ -14,6 +14,7 @@ module Pages.Projects.CreateProject (
   projectOnboarding,
   deleteProjectGetH,
   CreateProject (..),
+  pricingUpdateGetH,
   CreateProjectResp (..),
 )
 where
@@ -57,6 +58,7 @@ import Servant.API (Header)
 import Servant.API.ResponseHeaders (Headers)
 import System.Config
 
+import Pages.Onboarding.Onboarding (pricingPage)
 import System.Types (ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders, addSuccessToast, redirectCS)
 import Utils (insertIfNotExist, isDemoAndNotSudo, lookupValueText)
 import Web.FormUrlEncoded (FromForm)
@@ -306,6 +308,22 @@ pricingUpdateH pid PricingUpdateForm{orderId} = do
     _ -> do
       addErrorToast "Something went wrong while fetching subscription id" Nothing
       addRespHeaders ""
+
+
+pricingUpdateGetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders (PageCtx (Html ())))
+pricingUpdateGetH pid = do
+  (sess, project) <- Sessions.sessionAndProject pid
+  appCtx <- ask @AuthContext
+  let bwconf =
+        (def :: BWConfig)
+          { sessM = Just sess
+          , pageTitle = "Create Project"
+          , currProject = Just project
+          }
+  let envCfg = appCtx.config
+      lemon = envCfg.lemonSqueezyUrl <> "&checkout[custom][project_id]=" <> pid.toText
+      critical = envCfg.lemonSqueezyCriticalUrl <> "&checkout[custom][project_id]=" <> pid.toText
+  addRespHeaders $ PageCtx bwconf $ pricingPage pid lemon critical
 
 
 processProjectPostForm :: Valor.Valid CreateProjectForm -> Projects.ProjectId -> ATAuthCtx (RespHeaders CreateProject)
