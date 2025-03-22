@@ -51,7 +51,11 @@ expandedSpanItem pid sp leftM rightM = do
               [ [__|on click add .hidden to #trace_expanded_view 
             then put '0px' into  #log_details_container.style.width 
             then put '100%' into #logs_list_container.style.width 
-            then add .hidden to #resizer|]
+            then add .hidden to #resizer
+            then call updateUrlState('details_width', '', 'delete')
+            then call updateUrlState('target_event', '0px', 'delete')
+            
+            |]
               ]
               do
                 faSprite_ "xmark" "regular" "w-3 h-3 text-textBrand"
@@ -228,8 +232,8 @@ spanBadge val key = do
 
 selectiveReqToJson :: RequestMessage -> AE.Value
 selectiveReqToJson req =
-  AE.object
-    $ concat @[]
+  AE.object $
+    concat @[]
       [ ["created_at" AE..= req.timestamp]
       , ["errors" AE..= fromMaybe [] req.errors]
       , ["host" AE..= req.host]

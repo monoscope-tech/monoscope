@@ -597,9 +597,13 @@ apiLogsPage page = do
 
           script_
             [text|
-          function updateUrlState(key, value) {
+          function updateUrlState(key, value, action='set') {
             const params = new URLSearchParams(window.location.search)
-            params.set(key, value)
+            if(action === 'delete') {
+              params.delete(key)
+            }else {
+             params.set(key, value)
+            }
             window.history.replaceState({}, '', `$${window.location.pathname}?$${params}`)
           }
           var logsList = null

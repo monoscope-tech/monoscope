@@ -70,7 +70,10 @@ expandAPIlogItem' pid req modal = do
             , [__|on click add .hidden to #trace_expanded_view 
             then put '0px' into  #log_details_container.style.width 
             then put '100%' into #logs_list_container.style.width 
-            then add .hidden to #resizer|]
+            then add .hidden to #resizer
+            then call updateUrlState('details_width', '', 'delete')
+            then call updateUrlState('target_event', '0px', 'delete')
+            |]
             ]
             do
               faSprite_ "xmark" "regular" "w-3 h-3 text-textBrand"
@@ -194,7 +197,11 @@ apiLogItemView pid lg = do
               [ [__|on click add .hidden to #trace_expanded_view 
             then put '0px' into  #log_details_container.style.width 
             then put '100%' into #logs_list_container.style.width 
-            then add .hidden to #resizer|]
+            then add .hidden to #resizer
+            then call updateUrlState('details_width', '', 'delete')
+            then call updateUrlState('target_event', '0px', 'delete')
+
+            |]
               ]
               do
                 faSprite_ "xmark" "regular" "w-3 h-3 text-textBrand"
@@ -270,8 +277,8 @@ spanBadge val key = do
 -- Function to selectively convert RequestDumpLogItem to JSON
 selectiveReqToJson :: RequestDumps.RequestDumpLogItem -> AE.Value
 selectiveReqToJson req =
-  AE.object
-    $ concat @[]
+  AE.object $
+    concat @[]
       [ ["created_at" AE..= req.createdAt]
       , ["duration_ns" AE..= req.durationNs]
       , ["errors" AE..= req.errors]
