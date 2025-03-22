@@ -47,7 +47,7 @@ import Servant.API (Header)
 import Servant.API.ResponseHeaders (Headers, addHeader)
 import System.Types
 import Text.Slugify (slugify)
-import Utils (faSprite_, freeTierLimitExceededBanner)
+import Utils (faSprite_)
 import Utils qualified
 import Web.FormUrlEncoded (FromForm)
 

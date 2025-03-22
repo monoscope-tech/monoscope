@@ -29,7 +29,7 @@ import Relude
 import Servant qualified
 import Servant.Server.Generic (genericServeTWithContext)
 import System.Config (
-  AuthContext (config, jobsPool, pool),
+  AuthContext (config, jobsPool, pool, timefusionPgPool),
   EnvConfig (
     enableBackgroundJobs,
     enablePubsubService,
@@ -71,9 +71,10 @@ runServer appLogger env = do
 
   let wrappedServer =
         heartbeatMiddleware
-          -- . loggingMiddleware
-          -- . const
-          $ server
+        -- . loggingMiddleware
+        -- . const
+        $
+          server
   let bgJobWorker = BackgroundJobs.jobsWorkerInit appLogger env
 
   -- let ojStartArgs =
@@ -87,16 +88,16 @@ runServer appLogger env = do
   -- let ojCfg = OJConfig.mkUIConfig ojLogger ojTable poolConn id
   let exceptionLogger = logException env.config.environment appLogger
   asyncs <-
-    liftIO
-      $ sequence
-      $ concat @[]
-        [ [async $ runSettings warpSettings wrappedServer]
-        , -- , [async $ OJCli.defaultWebUI ojStartArgs ojCfg] -- Uncomment or modify as needed
-          [async $ Safe.withException (Queue.pubsubService appLogger env env.config.requestPubsubTopics processMessages) exceptionLogger | env.config.enablePubsubService]
-        , [async $ Safe.withException bgJobWorker exceptionLogger | env.config.enableBackgroundJobs]
-        , [async $ Safe.withException (OtlpServer.runServer appLogger env) exceptionLogger]
-        , [async $ Safe.withException (Queue.pubsubService appLogger env env.config.otlpStreamTopics OtlpServer.processList) exceptionLogger | (not . any T.null) env.config.otlpStreamTopics]
-        ]
+    liftIO $
+      sequence $
+        concat @[]
+          [ [async $ runSettings warpSettings wrappedServer]
+          , -- , [async $ OJCli.defaultWebUI ojStartArgs ojCfg] -- Uncomment or modify as needed
+            [async $ Safe.withException (Queue.pubsubService appLogger env env.config.requestPubsubTopics processMessages) exceptionLogger | env.config.enablePubsubService]
+          , [async $ Safe.withException bgJobWorker exceptionLogger | env.config.enableBackgroundJobs]
+          , [async $ Safe.withException (OtlpServer.runServer appLogger env) exceptionLogger]
+          , [async $ Safe.withException (Queue.pubsubService appLogger env env.config.otlpStreamTopics OtlpServer.processList) exceptionLogger | (not . any T.null) env.config.otlpStreamTopics]
+          ]
   void $ liftIO $ waitAnyCancel asyncs
 
 
@@ -116,6 +117,7 @@ shutdownAPItoolkit env =
   liftIO $ do
     Pool.destroyAllResources env.pool
     Pool.destroyAllResources env.jobsPool
+    Pool.destroyAllResources env.timefusionPgPool
 
 
 logException
