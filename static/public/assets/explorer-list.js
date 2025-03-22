@@ -16,6 +16,7 @@ export class LogList extends LitElement {
     projectId: { type: String },
     groupedData: [],
     expandedTraces: {},
+    columnMaxWidthMap: {},
   }
   constructor() {
     super()
@@ -30,6 +31,7 @@ export class LogList extends LitElement {
     this.expandedTraces = {}
     this.spanListTree = []
     this.isLoading = false
+    this.columnMaxWidthMap = {}
     this.isLoadingRecent = false
     this.isError = false
     this.logItemRow = this.logItemRow.bind(this)
@@ -37,6 +39,7 @@ export class LogList extends LitElement {
     this.expandTrace = this.expandTrace.bind(this)
     this.renderLoadMore = this.renderLoadMore.bind(this)
     this.updateTableData = this.updateTableData.bind(this)
+    this.updateColumnMaxWidthMap = this.updateColumnMaxWidthMap.bind(this)
     this.filterFalseRoots = this.filterFalseRoots.bind(this)
     this.latestLogsURLQueryValsFn = this.latestLogsURLQueryValsFn.bind(this)
 
@@ -102,8 +105,10 @@ export class LogList extends LitElement {
       } else {
         this.logsData = logs
       }
-      this.requestUpdate()
+      this.updateColumnMaxWidthMap(logs)
       this.hasMore = logs.length > 199
+      this.requestUpdate()
+
       window.virtualListData = null
     }
   }
@@ -222,13 +227,18 @@ export class LogList extends LitElement {
     if (rowData === 'start') return this.fetchRecent()
     const s = this.source === 'spans' && rowData.type === 'log' ? 'logs' : this.source
     const targetInfo = requestDumpLogItemUrlPath(this.source === 'spans' ? rowData.data : rowData, this.colIdxMap, s)
+
     return html`
       <tr class="item-row flex items-center cursor-pointer whitespace-nowrap" @click=${event => toggleLogRow(event, targetInfo, this.projectId)}>
         ${this.logsColumns
           .filter(v => v !== 'latency_breakdown')
           .map(column => {
             const tableDataWidth = getColumnWidth(column)
-            return html`<td class=${column === 'rest' ? 'w-[1400px] shrink-1 overflow-x-hidden grow-1' : tableDataWidth}>
+            const width = this.columnMaxWidthMap[column]
+            return html`<td
+              class=${`mr-2 ${column === 'rest' ? 'w-[1400px] shrink-1 overflow-x-hidden grow-1 ' : tableDataWidth}`}
+              style=${width ? `width: ${width}ch; font-size: 0.875rem` : 'font-size: 0.875rem'}
+            >
               ${logItemCol(rowData, this.source, this.colIdxMap, column, this.serviceColors, this.expandTrace)}
             </td>`
           })}
@@ -272,6 +282,7 @@ export class LogList extends LitElement {
             } else {
               this.logsData = isNewData ? [...logsData, ...this.logsData] : [...this.logsData, ...logsData]
             }
+            this.updateColumnMaxWidthMap(logsData)
           }
         } else {
           this.fetchError = data.error
@@ -321,10 +332,11 @@ export class LogList extends LitElement {
   }
 
   tableHeadingWrapper(title, column, classes) {
+    const width = this.columnMaxWidthMap[column]
     return html`
-      <td class=${'cursor-pointer p-0 m-0 whitespace-nowrap ' + classes ? classes : ''}>
+      <td class=${`cursor-pointer p-0 m-0 whitespace-nowrap mr-2 text-sm font-normal ${classes ? classes : ''}`} style=${width ? `width: ${width}ch` : ''}>
         <span class="text-slate-200">|</span>
-        <div class="dropdown pl-2" data-tippy-content=${title}>
+        <div class="dropdown font-medium text-base" data-tippy-content=${title}>
           <div tabindex="0" role="button" class="py-1">
             ${title}
             <span class="ml-1 p-0.5 border border-slate-200 rounded-sm inline-flex"> ${faSprite('chevron-down', 'regular', 'w-3 h-3')} </span>
@@ -345,7 +357,7 @@ export class LogList extends LitElement {
         return html`<td class="p-0 m-0 whitespace-nowrap w-3"></td>`
       case 'timestamp':
       case 'created_at':
-        return this.tableHeadingWrapper('timestamp', column, 'w-[16ch] shrink-0')
+        return this.tableHeadingWrapper('timestamp', column, 'w-[17ch] shrink-0')
       case 'latency_breakdown':
         return this.tableHeadingWrapper('latency', column, 'sticky right-0 shrink-0 w-[200px]')
       case 'status_code':
@@ -362,6 +374,22 @@ export class LogList extends LitElement {
       default:
         return this.tableHeadingWrapper(column, column, 'w-[16ch] shrink-0')
     }
+  }
+
+  updateColumnMaxWidthMap(recVecs) {
+    recVecs.forEach(vec => {
+      Object.entries(this.colIdxMap).forEach(([key, value]) => {
+        if (!['timestamp', 'created_at', 'id', 'rest', 'latency_breakdown'].includes(key)) {
+          const target = String(vec[value]).length
+          if (this.columnMaxWidthMap[key] === undefined) {
+            this.columnMaxWidthMap[key] = 12
+          }
+          if (this.columnMaxWidthMap[key] < target) {
+            this.columnMaxWidthMap[key] = target
+          }
+        }
+      })
+    })
   }
 
   render() {
@@ -382,7 +410,7 @@ export class LogList extends LitElement {
           <tbody
             class="min-w-0"
             id="log-item-table-body"
-            @rangeChanged=${() => {
+            @rangeChanged=${event => {
               this.setupIntersectionObserver()
               const tableBody = document.querySelector('#logs_list_container_inner')
               if (tableBody && tableBody.scrollTop === 0) {
@@ -421,10 +449,8 @@ function logItemCol(rowData, source, colIdxMap, key, serviceColors, toggleTrace)
     case 'created_at':
     case 'timestamp':
       let timestamp = lookupVecTextByKey(dataArr, colIdxMap, key)
-      return html`<div class="w-[16ch]">
-        <time class="monospace whitespace-nowrap text-slate-600 w-[16ch]" data-tippy-content="timestamp" datetime=${timestamp}
-          >${displayTimestamp(timestamp)}</time
-        >
+      return html`<div class="text-base">
+        <time class="monospace whitespace-nowrap text-slate-600" data-tippy-content="timestamp" datetime=${timestamp}>${displayTimestamp(timestamp)}</time>
       </div>`
     case 'status_code':
       let statusCode = lookupVecTextByKey(dataArr, colIdxMap, 'status_code')
@@ -906,10 +932,11 @@ function flattenSpanTree(traceArr, expandedTraces = {}) {
 }
 
 function getColumnWidth(column) {
-  if (!['rest', 'service', 'id', 'status', 'method', 'raw_url', 'url_path'].includes(column)) return 'w-[16ch] shrink-0'
+  if (!['rest', 'service', 'id', 'method', 'status_code', 'raw_url', 'url_path'].includes(column)) return 'w-[16ch] shrink-0'
   switch (column) {
     case 'status':
     case 'method':
+    case 'status_code':
       return 'w-[12ch] shrink-0'
     case 'raw_url':
     case 'url_path':
