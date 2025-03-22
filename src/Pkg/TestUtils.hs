@@ -169,6 +169,7 @@ withTestResources f = withSetup $ \pool -> LogBulk.withBulkStdOutLogger \logger 
           (def @EnvConfig)
           pool
           pool
+          pool
           projectCache
           projectKeyCache
           ( (def :: EnvConfig)

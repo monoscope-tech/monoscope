@@ -26,6 +26,7 @@ import System.Logging qualified as Logging
 
 data EnvConfig = EnvConfig
   { databaseUrl :: Text -- "DATABASE_URL"
+  , timefusionPgUrl :: Text -- TIMEFUSION_PG_URL
   , port :: Int
   , migrationsDir :: Text -- "MIGRATIONS_DIR"
   , auth0ClientId :: Text
@@ -77,6 +78,7 @@ data AuthContext = AuthContext
   { env :: EnvConfig
   , pool :: Pool.Pool Connection
   , jobsPool :: Pool.Pool Connection
+  , timefusionPgPool :: Pool.Pool Connection
   , projectCache :: Cache Projects.ProjectId Projects.ProjectCache
   , projectKeyCache :: Cache Text (Maybe Projects.ProjectId)
   , config :: EnvConfig
@@ -106,6 +108,7 @@ instance Default DeploymentEnv where
 configToEnv :: IOE :> es => EnvConfig -> Eff es AuthContext
 configToEnv config = do
   let createPgConnIO = PG.connectPostgreSQL $ encodeUtf8 config.databaseUrl
+  let createTimefusionPgConnIO = PG.connectPostgreSQL $ encodeUtf8 config.timefusionPgUrl
   when config.migrateAndInitializeOnStart $ liftIO do
     conn <- createPgConnIO
     initializationRes <- Migrations.runMigration conn Migrations.defaultOptions Migrations.MigrationInitialization
@@ -114,13 +117,15 @@ configToEnv config = do
     blueMessage ("migration result " <> show migrationRes)
     pass
   pool <- liftIO $ Pool.newPool $ Pool.defaultPoolConfig createPgConnIO PG.close (60 * 2) 100
-  jobsPool <- liftIO $ Pool.newPool $ Pool.defaultPoolConfig createPgConnIO PG.close (60 * 2) 25
+  jobsPool <- liftIO $ Pool.newPool $ Pool.defaultPoolConfig createPgConnIO PG.close (60 * 2) 50
+  timefusionPgPool <- liftIO $ Pool.newPool $ Pool.defaultPoolConfig createTimefusionPgConnIO PG.close (60 * 2) 50
   projectCache <- liftIO $ newCache (Just $ TimeSpec (60 * 60) 0) -- :: m (Cache Projects.ProjectId Projects.ProjectCache) -- 60*60secs or 1 hour TTL
   projectKeyCache <- liftIO $ newCache Nothing
   pure
     AuthContext
-      { pool = pool
-      , jobsPool = jobsPool
+      { pool
+      , jobsPool
+      , timefusionPgPool
       , env = config
       , projectCache
       , projectKeyCache
