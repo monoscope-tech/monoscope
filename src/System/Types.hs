@@ -34,6 +34,7 @@ import Data.UUID qualified as UUID
 import Effectful
 import Effectful.Concurrent.Async
 import Effectful.Error.Static (Error, runErrorNoCallStack)
+import Effectful.Labeled (Labeled, runLabeled)
 import Effectful.Log (Log)
 import Effectful.PostgreSQL.Transact.Effect (DB, runDB)
 import Effectful.Reader.Static (Reader, runReader)
@@ -64,6 +65,7 @@ type CommonWebEffects =
    , UUIDEff
    , HTTP
    , DB
+   , Labeled "timefusion" DB
    , Time
    , Log
    , Concurrent
@@ -100,6 +102,7 @@ effToServantHandler env logger app =
     & runUUID
     & runHTTPWreq
     & runDB env.pool
+    & runLabeled @"timefusion" (runDB env.timefusionPgPool)
     & runTime
     & Logging.runLog (show env.config.environment) logger
     & runConcurrent
@@ -115,6 +118,7 @@ effToServantHandlerTest env logger app =
     & runStaticUUID (map (UUID.fromWords 0 0 0) [1 .. 10])
     & runHTTPGolden "./golden/"
     & runDB env.pool
+    & runLabeled @"timefusion" (runDB env.timefusionPgPool)
     & runFrozenTime (posixSecondsToUTCTime 0)
     & Logging.runLog (show env.config.environment) logger
     & runConcurrent
