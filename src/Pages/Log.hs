@@ -474,8 +474,8 @@ virtualTable page = do
        cols: $cols,
        colIdxMap: $colIdxMap,
        serviceColors: $serviceColors,
-       nextFetchUrl: "$nextfetchurl",
-       resetLogsUrl: "$resetLogsURL",
+       nextFetchUrl: `$nextfetchurl`,
+       resetLogsUrl: `$resetLogsURL`,
        projectId: "$projectid",
        traceLogs: $tracelogs,
       }

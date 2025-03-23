@@ -419,14 +419,14 @@ export class FilterElement extends LitElement {
           : ''}
       </div>
     `
-
+    node = node.detail ? node.detail : node
     const exprParts = { field: node.contents[0], op: OPERATORS[node.tag], value: node.contents[1] }
     return html`
       <div class="text-[#067cff] bg-[#edf9ff] rounded-xl border border-[#b5e5ff] justify-start items-center inline-flex px-1" data-path=${path}>
         <div class="divide-x divide-[#b5e5ff] inline-flex">
-          ${renderEditableField(`${path}.contents[0]`, node.contents[0], 'field', exprParts)}
-          ${renderEditableField(`${path}.tag`, OPERATORS[node.tag], 'op', exprParts)}
-          ${renderEditableField(`${path}.contents[1]`, node.contents[1], 'value', exprParts)}
+          ${renderEditableField(`${path}.contents[0]`, exprParts.field, 'field', exprParts)}
+          ${renderEditableField(`${path}.tag`, exprParts.op, 'op', exprParts)}
+          ${renderEditableField(`${path}.contents[1]`, exprParts.value, 'value', exprParts)}
         </div>
         <span class="rounded-full bg-white inline-flex p-1 ml-1 cursor-pointer" @click=${() => this.#remove(path)}>
           <svg class="h-3 w-3 icon"><use href="/public/assets/svgs/fa-sprites/regular.svg#xmark" /></svg>
