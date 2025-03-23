@@ -526,8 +526,7 @@ apiLogsPage page = do
                   Just
                     [text|
                         SELECT timeB, value, quantile
-                              FROM (
-                                SELECT extract(epoch from time_bucket('1h', created_at))::integer AS timeB,
+                              FROM ( SELECT extract(epoch from time_bucket('1h', created_at))::integer AS timeB,
                                       ARRAY[
                                         (approx_percentile(0.50, percentile_agg(duration_ns)) / 1000000.0)::float,
                                         (approx_percentile(0.75, percentile_agg(duration_ns)) / 1000000.0)::float,
@@ -540,7 +539,7 @@ apiLogsPage page = do
                                   {{time_filter_sql_created_at}} {{query_ast_filters}}
                                 GROUP BY timeB
                               ) s,
-                              LATERAL unnest(s.values, s.quantiles) AS u(value, quantile);
+                            LATERAL unnest(s.values, s.quantiles) AS u(value, quantile);
                         |]
               , Widget.unit = Just "ms"
               , Widget.hideLegend = Just True

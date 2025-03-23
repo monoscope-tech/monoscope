@@ -42,13 +42,17 @@ exporters:
     topic: projects/past-3/topics/otlp-stream-prod
   kafka:
     brokers:
-      - srv-captain--redpanda-0:9092
-      - srv-captain--redpanda-1:9092
-      - srv-captain--redpanda-2:9092
+      - redpanda-0.s.past3.tech:19092
+      - redpanda-1.s.past3.tech:19092
+      - redpanda-2.s.past3.tech:19092
+      # - srv-captain--redpanda-0:9092
+      # - srv-captain--redpanda-1:9092
+      # - srv-captain--redpanda-2:9092
     auth:
-      plain_text:
+      sasl:
         username: ${env:KAFKA_USERNAME}
         password: ${env:KAFKA_PASSWORD}
+        mechanism: SCRAM-SHA-256
 
 extensions:
   health_check:
