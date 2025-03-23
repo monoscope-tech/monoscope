@@ -419,7 +419,6 @@ export class FilterElement extends LitElement {
           : ''}
       </div>
     `
-    node = node.detail ? node.detail : node
     const exprParts = { field: node.contents[0], op: OPERATORS[node.tag], value: node.contents[1] }
     return html`
       <div class="text-[#067cff] bg-[#edf9ff] rounded-xl border border-[#b5e5ff] justify-start items-center inline-flex px-1" data-path=${path}>

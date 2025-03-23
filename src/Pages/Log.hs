@@ -746,10 +746,10 @@ jsonTreeAuxillaryCode pid queryAST = do
     [text|
     function filterByField(event, operation) {
         const { fieldPath: path, fieldValue: value } = event.target.closest('[data-field-path]').dataset;
-        document.getElementById("filterElement").handleAddQuery({detail:{
+        document.getElementById("filterElement").handleAddQuery({
             "tag": operation,
             "contents": [path, JSON.parse(value)]
-        }});
+        });
     }
 
     var toggleColumnToSummary = (e)=>{
