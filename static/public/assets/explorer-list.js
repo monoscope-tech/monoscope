@@ -85,6 +85,7 @@ export class LogList extends LitElement {
     } else {
       this.logsData = ves
     }
+    this.updateColumnMaxWidthMap(ves)
     this.requestUpdate()
   }
 
