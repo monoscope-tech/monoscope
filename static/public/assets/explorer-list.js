@@ -753,9 +753,8 @@ function toggleLogRow(event, targetInfo, pid) {
   if (width < 50) {
     const lW = getComputedStyle(logsView).width.replace('px', '')
     logsView.style.width = `${lW - 550}px`
-    // sideView.style.width = '550px'
     resizer.classList.remove('hidden')
-    updateUrlState('details_width', sideView.style.width)
+    updateUrlState('details_width', logsView.style.width)
   }
   const rows = document.querySelectorAll('.item-row.bg-fillBrand-weak')
   rows.forEach(row => row.classList.remove('bg-fillBrand-weak'))

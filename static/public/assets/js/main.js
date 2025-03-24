@@ -47,7 +47,11 @@ window.setQueryParamAndReload = (key, value) => {
   url.searchParams.set(key, value)
   if (key === 'source') {
     url.searchParams.delete('queryAST')
+    url.searchParams.delete('query')
+    url.searchParams.delete('cols')
     url.searchParams.delete('target-spans')
+    url.searchParams.delete('details_width')
+    url.searchParams.delete('target_event')
   }
   window.location.href = url.toString()
 }
