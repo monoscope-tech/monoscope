@@ -402,7 +402,9 @@ createProjectBody sess pid envCfg cp cpe = do
 
             -- LEMON SQUEEZY PAYMENT
 
-            div_ [class_ "p-5 flex w-full justify-end"] do
+            div_ [class_ "p-5 flex w-full justify-between items-center"] do
+              a_ [href_ $ "/p/" <> pid.toText <> "/update_pricing", class_ "text-textBrand font-medium"] "Update pricing"
+
               button_
                 [ class_ "lemonsqueezy-button py-2 px-5 w-max bg-blue-700 flex items-center text-[white]  rounded-xl cursor-pointer"
                 ]
