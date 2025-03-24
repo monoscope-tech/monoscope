@@ -22,6 +22,9 @@ export class LogList extends LitElement {
     super()
     this.source = new URLSearchParams(window.location.search).get('source') || 'requests'
 
+    this.resizeTarget = null
+    this.mouseState = { x: 0 }
+
     this.logsData = []
     this.logsColumns = []
     this.colIdxMap = {}
@@ -59,6 +62,22 @@ export class LogList extends LitElement {
         this.requestUpdate()
       })
     }
+
+    window.addEventListener('mouseup', () => {
+      this.resizeTarget = null
+    })
+    window.addEventListener('mousemove', event => {
+      if (this.resizeTarget === null) return
+      const diff = event.clientX - this.mouseState.x
+      let width = this.columnMaxWidthMap[this.resizeTarget]
+      if (!width) width = 16
+      width += diff
+      if (width > 100) {
+        this.columnMaxWidthMap[this.resizeTarget] = width
+        this.requestUpdate()
+      }
+      this.mouseState = { x: event.clientX }
+    })
   }
 
   latestLogsURLQueryValsFn() {
@@ -237,15 +256,21 @@ export class LogList extends LitElement {
             const tableDataWidth = getColumnWidth(column)
             const width = this.columnMaxWidthMap[column]
             return html`<td
-              class=${`mr-2 bg-white ${column === 'rest' ? 'w-[1400px] shrink-1 overflow-x-hidden grow-1 ' : tableDataWidth}`}
-              style=${width ? `width: ${width}ch; font-size: 0.875rem` : 'font-size: 0.875rem'}
+              class=${`${column !== 'id' ? 'mr-2' : ''} bg-white relative ${
+                column === 'rest' ? 'w-[1400px] shrink-1 overflow-x-hidden grow-1 ' : tableDataWidth
+              }`}
+              style=${width ? `width: ${width}px; font-size: 0.875rem` : 'font-size: 0.875rem'}
             >
               ${logItemCol(rowData, this.source, this.colIdxMap, column, this.serviceColors, this.expandTrace)}
+              <!-- <span class="absolute top-0 right-0 h-full w-1 bg-fillWeak"></span> -->
             </td>`
           })}
         ${this.source === 'spans' && this.logsColumns.includes('latency_breakdown')
-          ? html`<td class="bg-white sticky right-0 pr-2">
-              ${logItemCol(rowData, this.source, this.colIdxMap, 'latency_breakdown', this.serviceColors, this.expandTrace)}
+          ? html`<td
+              class="bg-white sticky right-0 pr-2 overflow-x-hidden"
+              style=${this.columnMaxWidthMap['latency_breakdown'] ? "width: ${this.columnMaxWidthMap['latency_breakdown']}px;" : ''}
+            >
+              ${logItemCol(rowData, this.source, this.colIdxMap, 'latency_breakdown', this.serviceColors, this.expandTrace, this.columnMaxWidthMap)}
             </td>`
           : nothing}
       </tr>
@@ -333,13 +358,17 @@ export class LogList extends LitElement {
   }
 
   tableHeadingWrapper(title, column, classes) {
-    const width = this.columnMaxWidthMap[column]
+    let width = this.columnMaxWidthMap[column]
+    if (column === 'latency_breakdown' && !width) {
+      width = 200
+    }
     return html`
       <td
-        class=${`cursor-pointer p-0 m-0 whitespace-nowrap mr-2 text-sm font-normal bg-white ${classes ? classes : ''}`}
-        style=${width ? `width: ${width}ch` : ''}
+        class=${`cursor-pointer p-0 m-0 whitespace-nowrap relative flex justify-between items-center mr-2 text-sm font-normal bg-white ${
+          classes ? classes : ''
+        }`}
+        style=${width ? `width: ${width}px` : ''}
       >
-        <span class="text-slate-200">|</span>
         <div class="dropdown font-medium text-base" data-tippy-content=${title}>
           <div tabindex="0" role="button" class="py-1">
             ${title}
@@ -351,6 +380,13 @@ export class LogList extends LitElement {
             </li>
           </ul>
         </div>
+        <span
+          @mousedown=${event => {
+            this.resizeTarget = column
+            this.mouseState = { x: event.clientX }
+          }}
+          class="w-1 bg-gray-200 hover:bg-fill-brand-strong absolute right-0 top-1/2 -translate-y-1/2 h-4 cursor-ew-resize z-[1111111]"
+        ></span>
       </td>
     `
   }
@@ -383,13 +419,13 @@ export class LogList extends LitElement {
   updateColumnMaxWidthMap(recVecs) {
     recVecs.forEach(vec => {
       Object.entries(this.colIdxMap).forEach(([key, value]) => {
-        if (!['timestamp', 'created_at', 'id', 'rest', 'latency_breakdown'].includes(key)) {
+        if (!['id'].includes(key)) {
           const target = String(vec[value]).length
           if (this.columnMaxWidthMap[key] === undefined) {
-            this.columnMaxWidthMap[key] = 12
+            this.columnMaxWidthMap[key] = 12 * 13
           }
           if (this.columnMaxWidthMap[key] < target) {
-            this.columnMaxWidthMap[key] = target
+            this.columnMaxWidthMap[key] = target * 13
           }
         }
       })
@@ -440,7 +476,7 @@ customElements.define('log-list', LogList)
 
 const faSprite = (iconName, kind, classes) => html`<svg class="${classes}"><use href="/public/assets/svgs/fa-sprites/${kind}.svg#${iconName}"></use></svg>`
 
-function logItemCol(rowData, source, colIdxMap, key, serviceColors, toggleTrace) {
+function logItemCol(rowData, source, colIdxMap, key, serviceColors, toggleTrace, columnMaxWidthMap) {
   const dataArr = source === 'spans' ? rowData.data : rowData
   switch (key) {
     case 'id':
@@ -500,10 +536,11 @@ function logItemCol(rowData, source, colIdxMap, key, serviceColors, toggleTrace)
         duration,
         color: serviceColors[lookupVecTextByKey(data, colIdxMap, 'span_name')] || 'black',
       }))
+      const width = columnMaxWidthMap['latency_breakdown'] || 200
       return html`
-        <div class="w-[200px] flex h-10 justify-end items-center gap-1 text-textWeak">
+        <div class="flex h-10 justify-end items-center gap-1 text-textWeak" style="width:${width}px">
           <div class="w-24 overflow-visible  shrink-0 font-normal">${logItemCol(rowData, source, colIdxMap, 'duration')}</div>
-          ${spanLatencyBreakdown({ start: startNs - traceStart, depth: d, duration, traceEnd, color, children: chil })}
+          ${spanLatencyBreakdown({ start: startNs - traceStart, depth: d, duration, traceEnd, color, children: chil, barWidth: width - 100 })}
         </div>
       `
     case 'http_attributes':
@@ -710,12 +747,11 @@ function getSpanStatusColor(status) {
   )
 }
 
-function spanLatencyBreakdown({ start, duration, traceEnd, depth, color, children }) {
-  const barWidth = 100
+function spanLatencyBreakdown({ start, duration, traceEnd, depth, color, children, barWidth }) {
   const width = (duration / traceEnd) * barWidth
   const left = (start / traceEnd) * barWidth
   return html`<div class="-mt-1 shrink-0">
-    <div class="flex h-5 w-[100px] relative bg-fillWeak">
+    <div class="flex h-5 relative bg-fillWeak overflow-x-hidden" style=${`width:${barWidth}px`}>
       <div class=${`h-full absolute top-0 ${depth === 0 || children.length === 0 ? color : ''}`} style=${`width:${width}px; left:${left}px`}></div>
       ${children.map(child => {
         const cWidth = (child.duration / traceEnd) * barWidth
