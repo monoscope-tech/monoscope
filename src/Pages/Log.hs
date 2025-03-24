@@ -486,7 +486,7 @@ apiLogsPage :: ApiLogsPageData -> Html ()
 apiLogsPage page = do
   section_ [class_ "mx-auto pt-2 px-6 gap-3.5 w-full flex flex-col h-full overflow-hidden pb-2  group/pg", id_ "apiLogsPage"] do
     template_ [id_ "loader-tmp"] $ span_ [class_ "loading loading-dots loading-md"] ""
-    when True $ freeTierLimitExceededBanner page.pid.toText
+    when page.exceededFreeTier $ freeTierLimitExceededBanner page.pid.toText
     div_
       [ style_ "z-index:26"
       , class_ "fixed hidden right-0 top-0 justify-end left-0 bottom-0 w-full bg-black bg-opacity-5"
