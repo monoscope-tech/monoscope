@@ -326,7 +326,7 @@ pricingUpdateGetH pid = do
 
 pricingPage_ :: Projects.ProjectId -> Text -> Text  -> Bool -> Html() 
 pricingPage_ pid lemon critical isCritical = do
- section_ [class_ "max-w-4xl mx-auto h-full pt-12 flex flex-col gap-10"] do
+ section_ [class_ "max-w-4xl mx-auto h-full pt-12 flex flex-col gap-10 px-4"] do
    h1_ [class_ "font-semibold text-4xl text-textStrong"] "Update pricing"
    paymentPlanPicker pid lemon critical False
 
