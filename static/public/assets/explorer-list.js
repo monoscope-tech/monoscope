@@ -237,14 +237,14 @@ export class LogList extends LitElement {
             const tableDataWidth = getColumnWidth(column)
             const width = this.columnMaxWidthMap[column]
             return html`<td
-              class=${`mr-2 ${column === 'rest' ? 'w-[1400px] shrink-1 overflow-x-hidden grow-1 ' : tableDataWidth}`}
+              class=${`mr-2 bg-white ${column === 'rest' ? 'w-[1400px] shrink-1 overflow-x-hidden grow-1 ' : tableDataWidth}`}
               style=${width ? `width: ${width}ch; font-size: 0.875rem` : 'font-size: 0.875rem'}
             >
               ${logItemCol(rowData, this.source, this.colIdxMap, column, this.serviceColors, this.expandTrace)}
             </td>`
           })}
         ${this.source === 'spans' && this.logsColumns.includes('latency_breakdown')
-          ? html`<td class="bg-white sticky right-0">
+          ? html`<td class="bg-white sticky right-0 pr-2">
               ${logItemCol(rowData, this.source, this.colIdxMap, 'latency_breakdown', this.serviceColors, this.expandTrace)}
             </td>`
           : nothing}
@@ -335,7 +335,10 @@ export class LogList extends LitElement {
   tableHeadingWrapper(title, column, classes) {
     const width = this.columnMaxWidthMap[column]
     return html`
-      <td class=${`cursor-pointer p-0 m-0 whitespace-nowrap mr-2 text-sm font-normal ${classes ? classes : ''}`} style=${width ? `width: ${width}ch` : ''}>
+      <td
+        class=${`cursor-pointer p-0 m-0 whitespace-nowrap mr-2 text-sm font-normal bg-white ${classes ? classes : ''}`}
+        style=${width ? `width: ${width}ch` : ''}
+      >
         <span class="text-slate-200">|</span>
         <div class="dropdown font-medium text-base" data-tippy-content=${title}>
           <div tabindex="0" role="button" class="py-1">
@@ -360,7 +363,7 @@ export class LogList extends LitElement {
       case 'created_at':
         return this.tableHeadingWrapper('timestamp', column, 'w-[17ch] shrink-0')
       case 'latency_breakdown':
-        return this.tableHeadingWrapper('latency', column, 'sticky right-0 shrink-0 w-[200px]')
+        return this.tableHeadingWrapper('latency', column, 'sticky right-0 pr-2 shrink-0 w-[200px]')
       case 'status_code':
         return this.tableHeadingWrapper('status', column, 'shrink-0 w-[12ch]')
       case 'method':
