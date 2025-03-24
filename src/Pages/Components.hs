@@ -104,13 +104,36 @@ paymentPlanPicker pid lemonUrl criticalUrl isSettings = do
       div_ [class_ "flex items-center justify-between w-full gap-4"] do
         p_ [class_ " text-textStrong"] "Total events"
         p_ [class_ " text-textWeak", id_ "num_requests"] "25 Million"
-      input_ [type_ "range", min_ "25000000", max_ "500000000", step_ "10000000", value_ "0", class_ "range range-primary range-sm", id_ "price_range"]
+      input_ [type_ "range", min_ "25000000", max_ "500000000", step_ "10000000", value_ "25000000", class_ "range range-primary range-sm w-full", id_ "price_range"]
     div_ [class_ "grid grid-cols-2 gap-8 mt-6 w-full"] do
       popularPricing pid lemonUrl isSettings
       systemsPricing pid criticalUrl isSettings
     script_ [src_ "https://assets.lemonsqueezy.com/lemon.js"] ("" :: Text)
     script_
       [text|
+
+             window.payLemon = function(plan, url) {
+             LemonSqueezy.Setup({
+               eventHandler: ({event, data}) => {
+                 if(event === "Checkout.Success") {
+                     let inputs = document.querySelectorAll(".orderId")
+                     for (let input of inputs)  {
+                      input.value = data.order.data.id
+                     }
+                     LemonSqueezy.Url.Close()
+                     gtag('event', 'conversion', {
+                         'send_to': 'AW-11285541899/rf7NCKzf_9YYEIvoroUq',
+                         'value': 20.0,
+                         'currency': 'EUR',
+                         'transaction_id': '',
+                     });
+                     htmx.trigger("#"+ plan, "click")
+                 }
+               }
+             })
+              LemonSqueezy.Url.Open(url);
+             };
+
                const price_indicator = document.querySelector("#price_range");
                const priceContainer = document.querySelector("#price")
                const reqsContainer = document.querySelector("#num_requests")
@@ -139,7 +162,6 @@ paymentPlanPicker pid lemonUrl criticalUrl isSettings = do
                 }
                }
             |]
-
 
 popularPricing :: Projects.ProjectId -> Text -> Bool -> Html ()
 popularPricing pid lemonUrl isSettings = do

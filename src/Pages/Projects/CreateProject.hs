@@ -57,7 +57,7 @@ import Servant (addHeader)
 import Servant.API (Header)
 import Servant.API.ResponseHeaders (Headers)
 import System.Config
-
+import Pages.Components (paymentPlanPicker)
 import Pages.Onboarding.Onboarding (pricingPage)
 import System.Types (ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders, addSuccessToast, redirectCS)
 import Utils (insertIfNotExist, isDemoAndNotSudo, lookupValueText)
@@ -317,13 +317,18 @@ pricingUpdateGetH pid = do
   let bwconf =
         (def :: BWConfig)
           { sessM = Just sess
-          , pageTitle = "Create Project"
           , currProject = Just project
           }
   let envCfg = appCtx.config
       lemon = envCfg.lemonSqueezyUrl <> "&checkout[custom][project_id]=" <> pid.toText
       critical = envCfg.lemonSqueezyCriticalUrl <> "&checkout[custom][project_id]=" <> pid.toText
-  addRespHeaders $ PageCtx bwconf $ pricingPage pid lemon critical
+  addRespHeaders $ PageCtx bwconf $ pricingPage_ pid lemon critical False
+
+pricingPage_ :: Projects.ProjectId -> Text -> Text  -> Bool -> Html() 
+pricingPage_ pid lemon critical isCritical = do
+ section_ [class_ "max-w-4xl mx-auto h-full pt-12 flex flex-col gap-10"] do
+   h1_ [class_ "font-semibold text-4xl text-textStrong"] "Update pricing"
+   paymentPlanPicker pid lemon critical False
 
 
 processProjectPostForm :: Valor.Valid CreateProjectForm -> Projects.ProjectId -> ATAuthCtx (RespHeaders CreateProject)

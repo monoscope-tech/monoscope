@@ -297,35 +297,7 @@ pricingPage pid lemon critical = do
           faQ "What is an event?" "An event is any of span, log, or metric that you send to APItoolkit."
           faQ "How do you handle security and sensitive data?" "We employ encryption and authentication measures to ensure the security of your data during transmission and storage. All our SDKs also support redacting data. You can simply specify the JSONPath to the fields that you don't want the SDKs to forward to APItoolkit, and those sensitive fields will be stripped out/redacted before the data even leaves your servers and replaced with the text \"CLIENT REDACTED\" on our end. We will never see anything you don't want us to see."
           faQ "What makes us better than others?" "Aside the observerbility features like traces, logs, metrics etc. APItoolkit takes it a step further by monitoring request payloads for both incoming and outgoing requests, automatic error reportings like sentry and payload changes detections which gives engineering teams with all the information the need to seamlessly debug and fix issues in their servers."
-    script_
-      [type_ "text/javascript"]
-      [text|
-             window.payLemon = function(plan, url) {
-             const sub = document.getElementById("loadingIndicator")
-             if(sub.classList.contains("htmx-request")) {
-                return
-              }
-             LemonSqueezy.Setup({
-               eventHandler: ({event, data}) => {
-                 if(event === "Checkout.Success") {
-                     let inputs = document.querySelectorAll(".orderId")
-                     for (let input of inputs)  {
-                      input.value = data.order.data.id
-                     }
-                     LemonSqueezy.Url.Close()
-                     gtag('event', 'conversion', {
-                         'send_to': 'AW-11285541899/rf7NCKzf_9YYEIvoroUq',
-                         'value': 20.0,
-                         'currency': 'EUR',
-                         'transaction_id': '',
-                     });
-                     htmx.trigger("#"+ plan, "click")
-                 }
-               }
-             })
-              LemonSqueezy.Url.Open(url);
-             };
-            |]
+
 
 
 integrationsPage :: Projects.ProjectId -> Text -> Html ()
