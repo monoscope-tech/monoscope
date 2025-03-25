@@ -51,6 +51,7 @@
   --color-fillWeaker: #00158005;
   --color-fillWhite: #ffffff;
   --color-fillYellow: #fec62e;
+  --color-fillWeakerSolid: #f7f7fc;
 
   /* Icon colors */
   --color-iconBrand: #0068ffcc;
@@ -777,9 +778,9 @@ body {
     @apply font-bold border-[var(--brand-color)] text-[var(--brand-color)];
   }
 
-  .t-tab-box-active { 
-   @apply shadow-[0px_4px_8px_-2px_rgba(0,0,0,0.04)]  text-textStrong border border-strokeStrong bg-bgOverlay; 
-  } 
+  .t-tab-box-active {
+    @apply shadow-[0px_4px_8px_-2px_rgba(0,0,0,0.04)]  text-textStrong border border-strokeStrong bg-bgOverlay;
+  }
 
   .tab:is(input[type='radio']) {
     width: max-content;
@@ -822,4 +823,56 @@ body {
 .tagify--select::after {
   content: '›' !important;
   color: #000d4d73;
+}
+
+@keyframes rotate {
+  0% {
+    transform: rotate(0deg);
+  }
+  100% {
+    transform: rotate(360deg);
+  }
+}
+
+.spotlight-border {
+  position: relative;
+  z-index: 0;
+  overflow: hidden;
+}
+
+.spotlight-border::before {
+  content: '';
+  position: absolute;
+  z-index: -2;
+  inset: -50%;
+  width: 200%;
+  height: 200%;
+  background-image: conic-gradient(
+    #ffcc00,
+    #33cc33,
+    #3399ff,
+    transparent,
+    transparent,
+    transparent,
+    transparent,
+    transparent,
+    transparent,
+    transparent,
+    transparent,
+    transparent,
+    transparent,
+    transparent,
+    transparent,
+    transparent
+  );
+  animation: rotate 4s linear infinite;
+}
+
+.spotlight-border::after {
+  content: '';
+  position: absolute;
+  z-index: -1;
+  inset: 1px;
+  background: var(--color-fillWeakerSolid);
+  border-radius: inherit;
 }

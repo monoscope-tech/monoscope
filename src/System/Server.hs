@@ -32,8 +32,10 @@ import System.Config (
   AuthContext (config, jobsPool, pool, timefusionPgPool),
   EnvConfig (
     enableBackgroundJobs,
+    enableKafkaService,
     enablePubsubService,
     environment,
+    kafkaTopics,
     loggingDestination,
     otlpStreamTopics,
     port,
@@ -97,6 +99,7 @@ runServer appLogger env = do
           , [async $ Safe.withException bgJobWorker exceptionLogger | env.config.enableBackgroundJobs]
           , [async $ Safe.withException (OtlpServer.runServer appLogger env) exceptionLogger]
           , [async $ Safe.withException (Queue.pubsubService appLogger env env.config.otlpStreamTopics OtlpServer.processList) exceptionLogger | (not . any T.null) env.config.otlpStreamTopics]
+          , [async $ Safe.withException (Queue.kafkaService appLogger env OtlpServer.processList) exceptionLogger | env.config.enableKafkaService && (not . any T.null) env.config.kafkaTopics]
           ]
   void $ liftIO $ waitAnyCancel asyncs
 

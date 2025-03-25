@@ -41,6 +41,12 @@ data EnvConfig = EnvConfig
   , requestPubsubTopics :: [Text]
   , enablePubsubService :: Bool
   , otlpStreamTopics :: [Text]
+  , kafkaBrokers :: [Text]
+  , kafkaGroupId :: Text
+  , kafkaTopics :: [Text]
+  , kafkaUsername :: Text
+  , kafkaPassword :: Text
+  , enableKafkaService :: Bool
   , smtpHost :: Text
   , smtpPort :: Int
   , smtpUsername :: Text

@@ -231,6 +231,7 @@ library
     , http-api-data
     , http-client
     , http-types
+    , hw-kafka-client
     , indexed-traversable
     , lens
     , lens-aeson

@@ -10,13 +10,15 @@ receivers:
 
 processors:
   batch:
+    send_batch_size: 1024
+    timeout: 5s
   memory_limiter:
     check_interval: 1s
     limit_percentage: 75
   groupbytrace:
-    wait_duration: 30s
+    wait_duration: 5s
     num_traces: 1000
-    num_workers: 2
+    num_workers: 4
   attributes:
     actions:
       - key: http.headers
@@ -73,5 +75,5 @@ service:
       exporters: [kafka]
     traces:
       receivers: [otlp]
-      processors: [attributes, resource, memory_limiter, groupbytrace, batch]
+      processors: [attributes, resource, memory_limiter, batch]
       exporters: [kafka]

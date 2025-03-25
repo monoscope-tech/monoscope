@@ -130,6 +130,7 @@ library:
     - gogol
     - gogol-core
     - gogol-pubsub
+    - hw-kafka-client
     - hspec
     - hashtables
     - strict-containers

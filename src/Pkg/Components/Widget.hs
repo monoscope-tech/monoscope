@@ -195,8 +195,8 @@ renderWidgetHeader :: Widget -> Text -> Maybe Text -> Maybe Text -> Maybe Text -
 renderWidgetHeader widget wId title valueM subValueM expandBtnFn ctaM hideSub = div_ [class_ "leading-none flex justify-between items-center grid-stack-handle", id_ $ wId <> "_header"] do
   div_ [class_ "inline-flex gap-3 items-center"] do
     span_ [class_ "text-sm"] $ toHtml $ maybeToMonoid title
-    span_ [class_ $ "bg-fillWeak border border-strokeWeak text-sm font-semibold px-2 py-1 rounded-3xl " <> if (isJust valueM) then "" else "hidden", id_ $ wId <> "Value"]
-      $ whenJust valueM toHtml
+    span_ [class_ $ "bg-fillWeak border border-strokeWeak text-sm font-semibold px-2 py-1 rounded-3xl " <> if (isJust valueM) then "" else "hidden", id_ $ wId <> "Value"] $
+      whenJust valueM toHtml
     span_ [class_ $ "text-textWeak widget-subtitle text-sm " <> bool "" "hidden" hideSub, id_ $ wId <> "Subtitle"] $ toHtml $ maybeToMonoid subValueM
     -- Add hidden loader with specific ID that can be toggled from JS
     span_ [class_ "hidden", id_ $ wId <> "_loader"] $ Utils.faSprite_ "spinner" "regular" "w-4 h-4 animate-spin"
@@ -211,16 +211,16 @@ renderWidgetHeader widget wId title valueM subValueM expandBtnFn ctaM hideSub = 
         , data_ "tippy-content" "Expand widget"
         ]
         $ Utils.faSprite_ "expand-icon" "regular" "w-3 h-3"
-    when (isJust widget._dashboardId)
-      $ let pid = maybeToMonoid (widget._projectId <&> (.toText))
-            dashId = maybeToMonoid widget._dashboardId
-         in button_
-              [ class_ "p-2 cursor-pointer hidden group-hover/wgt:block"
-              , title_ "Expand widget"
-              , data_ "tippy-content" "Expand widget"
-              , term
-                  "_"
-                  [text| on mousedown or click 
+    when (isJust widget._dashboardId) $
+      let pid = maybeToMonoid (widget._projectId <&> (.toText))
+          dashId = maybeToMonoid widget._dashboardId
+       in button_
+            [ class_ "p-2 cursor-pointer hidden group-hover/wgt:block"
+            , title_ "Expand widget"
+            , data_ "tippy-content" "Expand widget"
+            , term
+                "_"
+                [text| on mousedown or click 
             set #global-data-drawer.checked to true
             then set #global-data-drawer-content.innerHTML to #loader-tmp.innerHTML
             then fetch `/p/${pid}/dashboards/${dashId}/widgets/${wId}/expand`
@@ -229,18 +229,18 @@ renderWidgetHeader widget wId title valueM subValueM expandBtnFn ctaM hideSub = 
             then _hyperscript.processNode(#global-data-drawer-content)
             then window.evalScriptsFromContent(#global-data-drawer-content)
          |]
-              ]
-              $ Utils.faSprite_ "expand-icon" "regular" "w-3 h-3"
+            ]
+            $ Utils.faSprite_ "expand-icon" "regular" "w-3 h-3"
     details_ [class_ "dropdown dropdown-end"] do
-      summary_ [class_ "text-iconNeutral cursor-pointer p-2 hover:bg-fillWeak rounded-lg", data_ "tippy-content" "Widget Menu"]
-        $ Utils.faSprite_ "ellipsis" "regular" "w-4 h-4"
+      summary_ [class_ "text-iconNeutral cursor-pointer p-2 hover:bg-fillWeak rounded-lg", data_ "tippy-content" "Widget Menu"] $
+        Utils.faSprite_ "ellipsis" "regular" "w-4 h-4"
       ul_ [class_ "text-textStrong menu menu-md dropdown-content bg-base-100 rounded-box p-2 w-52 shadow-sm leading-none z-10"] do
         -- Only show the "Move to dashboard" option if we're in a dashboard context
 
         when (isJust widget._dashboardId) do
           let dashId = fromMaybe "" widget._dashboardId
-          li_
-            $ a_
+          li_ $
+            a_
               [ class_ "p-2 w-full text-left block"
               , data_ "tippy-content" "Copy this widget to another dashboard"
               , id_ $ wId <> "_copy_link"
@@ -258,26 +258,26 @@ renderWidgetHeader widget wId title valueM subValueM expandBtnFn ctaM hideSub = 
 
         -- Only show the "Duplicate widget" option if we're in a dashboard context
         when (isJust widget._dashboardId) do
-          li_
-            $ a_
+          li_ $
+            a_
               [ class_ "p-2 w-full text-left block"
               , data_ "tippy-content" "Create a copy of this widget"
-              , hxPost_
-                  $ "/p/"
-                  <> maybeToMonoid (widget._projectId <&> (.toText))
-                  <> "/dashboards/"
-                  <> maybeToMonoid widget._dashboardId
-                  <> "/widgets/"
-                  <> wId
-                  <> "/duplicate"
+              , hxPost_ $
+                  "/p/"
+                    <> maybeToMonoid (widget._projectId <&> (.toText))
+                    <> "/dashboards/"
+                    <> maybeToMonoid widget._dashboardId
+                    <> "/widgets/"
+                    <> wId
+                    <> "/duplicate"
               , hxSwap_ "beforeend"
               , hxTrigger_ "click"
               , hxTarget_ ".grid-stack"
               , [__| on click set (the closest <details/>).open to false |]
               ]
               "Duplicate widget"
-          li_
-            $ button_
+          li_ $
+            button_
               [ class_ "p-2 w-full text-left text-textError"
               , data_ "tippy-content" "Permanently delete this widget"
               , onclick_
@@ -304,20 +304,21 @@ renderChart widget = do
   let chartId = maybeToMonoid widget.id
   let valueM = widget.dataset >>= (.value) >>= \x -> Just $ Ft.fmt $ Ft.commaizeF $ round x
   let isStat = widget.wType `elem` [WTTimeseriesStat, WTStat]
-  div_ [class_ "gap-0.5 flex flex-col h-full justify-end"] do
-    unless (widget.naked == Just True || widget.wType `elem` [WTTimeseriesStat, WTStat])
-      $ renderWidgetHeader widget chartId widget.title valueM rateM widget.expandBtnFn Nothing (widget.hideSubtitle == Just True)
+  div_ [class_ "gap-0.5 flex flex-col h-full justify-end "] do
+    unless (widget.naked == Just True || widget.wType `elem` [WTTimeseriesStat, WTStat]) $
+      renderWidgetHeader widget chartId widget.title valueM rateM widget.expandBtnFn Nothing (widget.hideSubtitle == Just True)
     div_ [class_ $ "flex-1 flex " <> bool "" "grid-stack-handle" isStat] do
       div_
-        [ class_
-            $ "h-full w-full flex flex-col justify-end "
-            <> if widget.naked == Just True then "" else " rounded-2xl border border-strokeWeak bg-fillWeaker "
+        [ class_ $
+            "h-full w-full flex flex-col justify-end "
+              <> if widget.naked == Just True then "" else " rounded-2xl border border-strokeWeak bg-fillWeaker"
+        , id_ $ chartId <> "_bordered"
         ]
         do
           when (isStat) $ div_ [class_ "px-3 py-3 flex-1 flex flex-col justify-end "] do
             div_ [class_ "flex flex-col gap-1"] do
-              strong_ [class_ "text-textSuccess-strong text-4xl font-normal", id_ $ chartId <> "Value"]
-                $ whenJust valueM toHtml
+              strong_ [class_ "text-textSuccess-strong text-4xl font-normal", id_ $ chartId <> "Value"] $
+                whenJust valueM toHtml
               div_ [class_ "inline-flex gap-1 items-center text-sm"] do
                 whenJust widget.icon \icon -> Utils.faSprite_ icon "regular" "w-4 h-4 text-iconBrand"
                 toHtml $ maybeToMonoid widget.title
