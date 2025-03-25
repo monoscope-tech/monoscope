@@ -17,6 +17,7 @@ import Kafka.Consumer qualified as K
 import Log qualified
 import Relude
 import Relude.Unsafe qualified as Unsafe
+import Safe (headMay)
 import System.Config
 import System.Types (ATBackgroundCtx, runBackground)
 import UnliftIO (throwIO)
@@ -40,27 +41,27 @@ pubsubService appLogger appCtx topics fn = do
 
   let pullReq = PubSub.newPullRequest & field @"maxMessages" L.?~ fromIntegral envConfig.messagesPerPubsubPullBatch
 
-  forever
-    $ runResourceT
-    $ forM topics \topic -> do
-      result <- tryAny do
-        let subscription = "projects/past-3/subscriptions/" <> topic <> "-sub"
-        pullResp <- Google.send env $ PubSub.newPubSubProjectsSubscriptionsPull pullReq subscription
-        let messages = fromMaybe [] (pullResp L.^. field @"receivedMessages")
-        let msgsB64 =
-              messages & map \msg -> do
-                ackId <- msg.ackId
-                b64Msg <- msg ^? field @"message" . _Just . field @"data'" . _Just . _Base64
-                Just (ackId, b64Msg)
-        let firstAttrs = messages ^? L.folded . field @"message" . _Just . field @"attributes" . _Just . field @"additional"
-        msgIds <- liftIO $ runBackground appLogger appCtx $ fn (catMaybes msgsB64) (maybeToMonoid firstAttrs)
-        let acknowlegReq = PubSub.newAcknowledgeRequest & field @"ackIds" L..~ Just msgIds
-        unless (null msgIds) $ void $ PubSub.newPubSubProjectsSubscriptionsAcknowledge acknowlegReq subscription & Google.send env
-      case result of
-        Left e -> do
-          liftIO $ Log.runLogT "apitoolkit" appLogger Log.LogAttention $ Log.logAttention "Run Pubsub exception" (show e)
-          pass
-        Right _ -> pass
+  forever $
+    runResourceT $
+      forM topics \topic -> do
+        result <- tryAny do
+          let subscription = "projects/past-3/subscriptions/" <> topic <> "-sub"
+          pullResp <- Google.send env $ PubSub.newPubSubProjectsSubscriptionsPull pullReq subscription
+          let messages = fromMaybe [] (pullResp L.^. field @"receivedMessages")
+          let msgsB64 =
+                messages & map \msg -> do
+                  ackId <- msg.ackId
+                  b64Msg <- msg ^? field @"message" . _Just . field @"data'" . _Just . _Base64
+                  Just (ackId, b64Msg)
+          let firstAttrs = messages ^? L.folded . field @"message" . _Just . field @"attributes" . _Just . field @"additional"
+          msgIds <- liftIO $ runBackground appLogger appCtx $ fn (catMaybes msgsB64) (maybeToMonoid firstAttrs)
+          let acknowlegReq = PubSub.newAcknowledgeRequest & field @"ackIds" L..~ Just msgIds
+          unless (null msgIds) $ void $ PubSub.newPubSubProjectsSubscriptionsAcknowledge acknowlegReq subscription & Google.send env
+        case result of
+          Left e -> do
+            liftIO $ Log.runLogT "apitoolkit" appLogger Log.LogAttention $ Log.logAttention "Run Pubsub exception" (show e)
+            pass
+          Right _ -> pass
   where
     -- pubSubScope :: Proxy PubSub.Pubsub'FullControl
     pubSubScope :: Proxy '["https://www.googleapis.com/auth/pubsub"]
@@ -73,12 +74,13 @@ kafkaService appLogger appCtx fn = do
   consumer <- either throwIO pure =<< K.newConsumer (consumerProps appCtx.config) consumerSub
   forever do
     pollResult@(leftRecords, rightRecords) <- partitionEithers <$> K.pollMessageBatch consumer (K.Timeout 10) (K.BatchSize appCtx.config.messagesPerPubsubPullBatch) -- timeout in milliseconds
-    unless (null rightRecords) do
-      let rec = Unsafe.head rightRecords
-          topic = rec.crTopic.unTopicName
-          attributes = HM.insert "ce-type" (topicToCeType topic) $ consumerRecordHeadersToHashMap rec
-      msgIds <- runBackground appLogger appCtx $ fn (consumerRecordToTuple <$> rightRecords) attributes
-      (maybe pass throwIO) =<< K.commitAllOffsets (K.OffsetCommitAsync) consumer
+    case rightRecords of
+      [] -> pass
+      (rec : _) -> do
+        let topic = rec.crTopic.unTopicName
+            attributes = HM.insert "ce-type" (topicToCeType topic) $ consumerRecordHeadersToHashMap rec
+        msgIds <- runBackground appLogger appCtx $ fn (consumerRecordToTuple <$> rightRecords) attributes
+        (maybe pass throwIO) =<< K.commitAllOffsets (K.OffsetCommitAsync) consumer
     pass
   where
     -- TODO: How should errors and retries be handled and implemented?
