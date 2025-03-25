@@ -73,10 +73,9 @@ runServer appLogger env = do
 
   let wrappedServer =
         heartbeatMiddleware
-        -- . loggingMiddleware
-        -- . const
-        $
-          server
+          -- . loggingMiddleware
+          -- . const
+          $ server
   let bgJobWorker = BackgroundJobs.jobsWorkerInit appLogger env
 
   -- let ojStartArgs =
@@ -90,17 +89,17 @@ runServer appLogger env = do
   -- let ojCfg = OJConfig.mkUIConfig ojLogger ojTable poolConn id
   let exceptionLogger = logException env.config.environment appLogger
   asyncs <-
-    liftIO $
-      sequence $
-        concat @[]
-          [ [async $ runSettings warpSettings wrappedServer]
-          , -- , [async $ OJCli.defaultWebUI ojStartArgs ojCfg] -- Uncomment or modify as needed
-            [async $ Safe.withException (Queue.pubsubService appLogger env env.config.requestPubsubTopics processMessages) exceptionLogger | env.config.enablePubsubService]
-          , [async $ Safe.withException bgJobWorker exceptionLogger | env.config.enableBackgroundJobs]
-          , [async $ Safe.withException (OtlpServer.runServer appLogger env) exceptionLogger]
-          , [async $ Safe.withException (Queue.pubsubService appLogger env env.config.otlpStreamTopics OtlpServer.processList) exceptionLogger | (not . any T.null) env.config.otlpStreamTopics]
-          , [async $ Safe.withException (Queue.kafkaService appLogger env OtlpServer.processList) exceptionLogger | env.config.enableKafkaService && (not . any T.null) env.config.kafkaTopics]
-          ]
+    liftIO
+      $ sequence
+      $ concat @[]
+        [ [async $ runSettings warpSettings wrappedServer]
+        , -- , [async $ OJCli.defaultWebUI ojStartArgs ojCfg] -- Uncomment or modify as needed
+          [async $ Safe.withException (Queue.pubsubService appLogger env env.config.requestPubsubTopics processMessages) exceptionLogger | env.config.enablePubsubService]
+        , [async $ Safe.withException bgJobWorker exceptionLogger | env.config.enableBackgroundJobs]
+        , [async $ Safe.withException (OtlpServer.runServer appLogger env) exceptionLogger]
+        , [async $ Safe.withException (Queue.pubsubService appLogger env env.config.otlpStreamTopics OtlpServer.processList) exceptionLogger | (not . any T.null) env.config.otlpStreamTopics]
+        , [async $ Safe.withException (Queue.kafkaService appLogger env OtlpServer.processList) exceptionLogger | env.config.enableKafkaService && (not . any T.null) env.config.kafkaTopics]
+        ]
   void $ liftIO $ waitAnyCancel asyncs
 
 
