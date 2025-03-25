@@ -111,21 +111,26 @@ processList msgs attrs = do
     Just "org.opentelemetry.otlp.logs.v1" -> do
       results <-
         V.forM msgs' \(ackId, msg) -> case (HsProtobuf.fromByteString msg :: Either HsProtobuf.ParseError ExportLogsServiceRequest) of
-          Left err -> error $ "unable to parse logs service request with err " <> show err
+          Left err -> do
+            Log.logAttention_ $ "processList: unable to parse logs service request with err " <> show err <> (decodeUtf8 msg)
+            pure (ackId, [])
           Right (ExportLogsServiceRequest logReq) -> do
             pidM <- join <$> forM (getLogAttributeValue "at-project-key" logReq) ProjectApiKeys.getProjectIdByApiKey
             let pid2M = Projects.projectIdFromText =<< getLogAttributeValue "at-project-id" logReq
-            let pid = fromMaybe (error "project API Key and project ID not available in trace") $ pidM <|> pid2M
-            pure (ackId, join $ V.map (convertToLog pid) logReq)
+            case (pidM <|> pid2M) of
+              Just pid -> pure (ackId, join $ V.map (convertToLog pid) logReq)
+              Nothing -> do
+                Log.logAttention_ "processList: project API Key and project ID not available in trace"
+                pure (ackId, [])
       let (ackIds, logs) = V.unzip results
-      Telemetry.bulkInsertLogs $ join logs
+      unless (null $ join logs) $ Telemetry.bulkInsertLogs $ join logs
       pure $ V.toList ackIds
     Just "org.opentelemetry.otlp.traces.v1" -> do
       results <-
         V.forM msgs' \(ackId, msg) -> do
           case (HsProtobuf.fromByteString msg :: Either HsProtobuf.ParseError ExportTraceServiceRequest) of
             Left err -> do
-              Log.logInfo_ $ "unable to parse traces service request with err " <> show err <> (decodeUtf8 msg)
+              Log.logAttention_ $ "processList: unable to parse traces service request with err " <> show err <> (decodeUtf8 msg)
               pure (ackId, [])
             Right (ExportTraceServiceRequest traceReq) -> do
               projectIdsAndKeys <- dbtToEff $ ProjectApiKeys.projectIdsByProjectApiKeys $ getSpanAttributeValue "at-project-key" traceReq
@@ -134,23 +139,30 @@ processList msgs attrs = do
           spans = join spansVec
           apitoolkitSpans = V.map mapHTTPSpan spans
       _ <- ProcessMessage.processRequestMessages $ V.toList $ V.catMaybes apitoolkitSpans <&> ("",)
-      Telemetry.bulkInsertSpans spans
+      unless (null spans) $ Telemetry.bulkInsertSpans spans
       pure $ V.toList ackIds
     Just "org.opentelemetry.otlp.metrics.v1" -> do
       results <-
         V.forM msgs' \(ackId, msg) -> do
           case (HsProtobuf.fromByteString msg :: Either HsProtobuf.ParseError ExportMetricsServiceRequest) of
-            Left err -> error $ "unable to parse traces service request with err " <> show err
+            Left err -> do
+              Log.logAttention_ $ "processList: unable to parse metrics service request with err " <> show err <> (decodeUtf8 msg)
+              pure (ackId, [])
             Right (ExportMetricsServiceRequest metricReq) -> do
               pidM <- join <$> forM (getMetricAttributeValue "at-project-key" metricReq) ProjectApiKeys.getProjectIdByApiKey
               let pid2M = Projects.projectIdFromText =<< getMetricAttributeValue "at-project-id" metricReq
-              let pid = fromMaybe (error $ "project API Key and project ID not available in trace") $ pidM <|> pid2M
-              pure (ackId, join $ V.map (convertToMetric pid) metricReq)
+              case (pidM <|> pid2M) of
+                Just pid -> pure (ackId, join $ V.map (convertToMetric pid) metricReq)
+                Nothing -> do
+                  Log.logAttention_ "processList: project API Key and project ID not available in trace"
+                  pure (ackId, [])
       let (ackIds, metricVec) = V.unzip results
           metricRecords = join metricVec
-      Telemetry.bulkInsertMetrics metricRecords
+      unless (null metricRecords) $ Telemetry.bulkInsertMetrics metricRecords
       pure $ V.toList ackIds
-    _ -> error "unsupported opentelemetry data type"
+    _ -> do
+      Log.logAttention "processList: unsupported opentelemetry data type" (AE.object ["ce-type" AE..= (HashMap.lookup "ce-type" attrs)])
+      pure []
 
 
 logsServiceExportH
