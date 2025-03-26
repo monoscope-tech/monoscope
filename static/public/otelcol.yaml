@@ -10,13 +10,15 @@ receivers:
 
 processors:
   batch:
+    send_batch_size: 1024
+    timeout: 5s
   memory_limiter:
     check_interval: 1s
     limit_percentage: 75
   groupbytrace:
-    wait_duration: 30s
+    wait_duration: 5s
     num_traces: 1000
-    num_workers: 2
+    num_workers: 4
   attributes:
     actions:
       - key: http.headers
@@ -42,13 +44,17 @@ exporters:
     topic: projects/past-3/topics/otlp-stream-prod
   kafka:
     brokers:
-      - srv-captain--redpanda-0:9092
-      - srv-captain--redpanda-1:9092
-      - srv-captain--redpanda-2:9092
+      - redpanda-0.s.past3.tech:19092
+      - redpanda-1.s.past3.tech:19092
+      - redpanda-2.s.past3.tech:19092
+      # - srv-captain--redpanda-0:9092
+      # - srv-captain--redpanda-1:9092
+      # - srv-captain--redpanda-2:9092
     auth:
-      plain_text:
+      sasl:
         username: ${env:KAFKA_USERNAME}
         password: ${env:KAFKA_PASSWORD}
+        mechanism: SCRAM-SHA-256
 
 extensions:
   health_check:
@@ -69,5 +75,5 @@ service:
       exporters: [kafka]
     traces:
       receivers: [otlp]
-      processors: [attributes, resource, memory_limiter, groupbytrace, batch]
+      processors: [attributes, resource, memory_limiter, batch]
       exporters: [kafka]

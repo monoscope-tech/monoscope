@@ -111,21 +111,26 @@ processList msgs attrs = do
     Just "org.opentelemetry.otlp.logs.v1" -> do
       results <-
         V.forM msgs' \(ackId, msg) -> case (HsProtobuf.fromByteString msg :: Either HsProtobuf.ParseError ExportLogsServiceRequest) of
-          Left err -> error $ "unable to parse logs service request with err " <> show err
+          Left err -> do
+            Log.logAttention_ $ "processList: unable to parse logs service request with err " <> show err <> (decodeUtf8 msg)
+            pure (ackId, [])
           Right (ExportLogsServiceRequest logReq) -> do
             pidM <- join <$> forM (getLogAttributeValue "at-project-key" logReq) ProjectApiKeys.getProjectIdByApiKey
             let pid2M = Projects.projectIdFromText =<< getLogAttributeValue "at-project-id" logReq
-            let pid = fromMaybe (error "project API Key and project ID not available in trace") $ pidM <|> pid2M
-            pure (ackId, join $ V.map (convertToLog pid) logReq)
+            case (pidM <|> pid2M) of
+              Just pid -> pure (ackId, join $ V.map (convertToLog pid) logReq)
+              Nothing -> do
+                Log.logAttention_ "processList: project API Key and project ID not available in trace"
+                pure (ackId, [])
       let (ackIds, logs) = V.unzip results
-      Telemetry.bulkInsertLogs $ join logs
+      unless (null $ join logs) $ Telemetry.bulkInsertLogs $ join logs
       pure $ V.toList ackIds
     Just "org.opentelemetry.otlp.traces.v1" -> do
       results <-
         V.forM msgs' \(ackId, msg) -> do
           case (HsProtobuf.fromByteString msg :: Either HsProtobuf.ParseError ExportTraceServiceRequest) of
             Left err -> do
-              Log.logInfo_ $ "unable to parse traces service request with err " <> show err <> (decodeUtf8 msg)
+              Log.logAttention_ $ "processList: unable to parse traces service request with err " <> show err <> (decodeUtf8 msg)
               pure (ackId, [])
             Right (ExportTraceServiceRequest traceReq) -> do
               projectIdsAndKeys <- dbtToEff $ ProjectApiKeys.projectIdsByProjectApiKeys $ getSpanAttributeValue "at-project-key" traceReq
@@ -134,23 +139,30 @@ processList msgs attrs = do
           spans = join spansVec
           apitoolkitSpans = V.map mapHTTPSpan spans
       _ <- ProcessMessage.processRequestMessages $ V.toList $ V.catMaybes apitoolkitSpans <&> ("",)
-      Telemetry.bulkInsertSpans spans
+      unless (null spans) $ Telemetry.bulkInsertSpans spans
       pure $ V.toList ackIds
     Just "org.opentelemetry.otlp.metrics.v1" -> do
       results <-
         V.forM msgs' \(ackId, msg) -> do
           case (HsProtobuf.fromByteString msg :: Either HsProtobuf.ParseError ExportMetricsServiceRequest) of
-            Left err -> error $ "unable to parse traces service request with err " <> show err
+            Left err -> do
+              Log.logAttention_ $ "processList: unable to parse metrics service request with err " <> show err <> (decodeUtf8 msg)
+              pure (ackId, [])
             Right (ExportMetricsServiceRequest metricReq) -> do
               pidM <- join <$> forM (getMetricAttributeValue "at-project-key" metricReq) ProjectApiKeys.getProjectIdByApiKey
               let pid2M = Projects.projectIdFromText =<< getMetricAttributeValue "at-project-id" metricReq
-              let pid = fromMaybe (error $ "project API Key and project ID not available in trace") $ pidM <|> pid2M
-              pure (ackId, join $ V.map (convertToMetric pid) metricReq)
+              case (pidM <|> pid2M) of
+                Just pid -> pure (ackId, join $ V.map (convertToMetric pid) metricReq)
+                Nothing -> do
+                  Log.logAttention_ "processList: project API Key and project ID not available in trace"
+                  pure (ackId, [])
       let (ackIds, metricVec) = V.unzip results
           metricRecords = join metricVec
-      Telemetry.bulkInsertMetrics metricRecords
+      unless (null metricRecords) $ Telemetry.bulkInsertMetrics metricRecords
       pure $ V.toList ackIds
-    _ -> error "unsupported opentelemetry data type"
+    _ -> do
+      Log.logAttention "processList: unsupported opentelemetry data type" (AE.object ["ce-type" AE..= (HashMap.lookup "ce-type" attrs)])
+      pure []
 
 
 logsServiceExportH
@@ -183,8 +195,8 @@ byteStringToHexText bs = decodeUtf8 (B16.encode bs)
 -- Convert a list of KeyValue to a JSONB object
 keyValueToJSONB :: V.Vector KeyValue -> AE.Value
 keyValueToJSONB kvs =
-  AE.object
-    $ V.foldr (\kv acc -> (AEK.fromText $ toText kv.keyValueKey, convertAnyValue kv.keyValueValue) : acc) [] kvs
+  AE.object $
+    V.foldr (\kv acc -> (AEK.fromText $ toText kv.keyValueKey, convertAnyValue kv.keyValueValue) : acc) [] kvs
 
 
 convertAnyValue :: Maybe AnyValue -> AE.Value
@@ -396,8 +408,8 @@ convertMetricRecord pid resource iscp metric =
                   mtTime = histogram.exponentialHistogramDataPointTimeUnixNano
                   pointNegative =
                     ( \b ->
-                        Just
-                          $ Telemetry.EHBucket
+                        Just $
+                          Telemetry.EHBucket
                             { bucketOffset = fromIntegral $ b.exponentialHistogramDataPoint_BucketsOffset
                             , bucketCounts = fromIntegral <$> b.exponentialHistogramDataPoint_BucketsBucketCounts
                             }
@@ -405,8 +417,8 @@ convertMetricRecord pid resource iscp metric =
                       =<< histogram.exponentialHistogramDataPointNegative
                   pointPositive =
                     ( \b ->
-                        Just
-                          $ Telemetry.EHBucket
+                        Just $
+                          Telemetry.EHBucket
                             { bucketOffset = fromIntegral $ b.exponentialHistogramDataPoint_BucketsOffset
                             , bucketCounts = fromIntegral <$> b.exponentialHistogramDataPoint_BucketsBucketCounts
                             }
@@ -531,30 +543,30 @@ parseSpanStatus st = case st of
 
 eventsToJSONB :: [Span_Event] -> AE.Value
 eventsToJSONB spans =
-  AE.toJSON
-    $ ( \sp ->
-          AE.object
-            [ "event_name" AE..= toText sp.span_EventName
-            , "event_time" AE..= nanosecondsToUTC sp.span_EventTimeUnixNano
-            , "event_attributes" AE..= keyValueToJSONB sp.span_EventAttributes
-            , "event_dropped_attributes_count" AE..= fromIntegral sp.span_EventDroppedAttributesCount
-            ]
-      )
-    <$> spans
+  AE.toJSON $
+    ( \sp ->
+        AE.object
+          [ "event_name" AE..= toText sp.span_EventName
+          , "event_time" AE..= nanosecondsToUTC sp.span_EventTimeUnixNano
+          , "event_attributes" AE..= keyValueToJSONB sp.span_EventAttributes
+          , "event_dropped_attributes_count" AE..= fromIntegral sp.span_EventDroppedAttributesCount
+          ]
+    )
+      <$> spans
 
 
 linksToJSONB :: [Span_Link] -> AE.Value
 linksToJSONB lnks =
-  AE.toJSON
-    $ lnks
-    <&> \lnk ->
-      AE.object
-        [ "link_span_id" AE..= (decodeUtf8 lnk.span_LinkSpanId :: Text)
-        , "link_trace_id" AE..= (decodeUtf8 lnk.span_LinkTraceId :: Text)
-        , "link_attributes" AE..= keyValueToJSONB lnk.span_LinkAttributes
-        , "link_dropped_attributes_count" AE..= fromIntegral lnk.span_LinkDroppedAttributesCount
-        , "link_flags" AE..= fromIntegral lnk.span_LinkFlags
-        ]
+  AE.toJSON $
+    lnks
+      <&> \lnk ->
+        AE.object
+          [ "link_span_id" AE..= (decodeUtf8 lnk.span_LinkSpanId :: Text)
+          , "link_trace_id" AE..= (decodeUtf8 lnk.span_LinkTraceId :: Text)
+          , "link_attributes" AE..= keyValueToJSONB lnk.span_LinkAttributes
+          , "link_dropped_attributes_count" AE..= fromIntegral lnk.span_LinkDroppedAttributesCount
+          , "link_flags" AE..= fromIntegral lnk.span_LinkFlags
+          ]
 
 
 ---------------------------------------------------------------------------------------

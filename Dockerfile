@@ -9,6 +9,7 @@ RUN apt-get update && apt-get install -y \
   curl \
   libgmp-dev \
   libgrpc-dev \
+  librdkafka-dev \
   libpq-dev
 COPY apitoolkit-server-exe /opt/apitoolkit
 COPY static /opt/apitoolkit/static

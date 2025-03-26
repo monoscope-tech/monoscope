@@ -304,14 +304,15 @@ renderChart widget = do
   let chartId = maybeToMonoid widget.id
   let valueM = widget.dataset >>= (.value) >>= \x -> Just $ Ft.fmt $ Ft.commaizeF $ round x
   let isStat = widget.wType `elem` [WTTimeseriesStat, WTStat]
-  div_ [class_ "gap-0.5 flex flex-col h-full justify-end"] do
+  div_ [class_ "gap-0.5 flex flex-col h-full justify-end "] do
     unless (widget.naked == Just True || widget.wType `elem` [WTTimeseriesStat, WTStat])
       $ renderWidgetHeader widget chartId widget.title valueM rateM widget.expandBtnFn Nothing (widget.hideSubtitle == Just True)
     div_ [class_ $ "flex-1 flex " <> bool "" "grid-stack-handle" isStat] do
       div_
         [ class_
             $ "h-full w-full flex flex-col justify-end "
-            <> if widget.naked == Just True then "" else " rounded-2xl border border-strokeWeak bg-fillWeaker "
+            <> if widget.naked == Just True then "" else " rounded-2xl border border-strokeWeak bg-fillWeaker"
+        , id_ $ chartId <> "_bordered"
         ]
         do
           when (isStat) $ div_ [class_ "px-3 py-3 flex-1 flex flex-col justify-end "] do

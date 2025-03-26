@@ -163,6 +163,7 @@ paymentPlanPicker pid lemonUrl criticalUrl isSettings = do
                }
             |]
 
+
 popularPricing :: Projects.ProjectId -> Text -> Bool -> Html ()
 popularPricing pid lemonUrl isSettings = do
   div_

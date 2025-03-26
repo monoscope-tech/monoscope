@@ -47,9 +47,11 @@ const updateChartData = async (chart, opt, shouldFetch, widgetData) => {
 
   const { query, querySQL, queryAST, pid, chartId, summarizeBy, summarizeByPrefix } = widgetData
   const loader = $(`${chartId}_loader`)
-
   // Show loader before fetch
   if (loader) loader.classList.remove('hidden')
+
+  const borderedItem = $(`${chartId}_bordered`)
+  if (borderedItem) borderedItem.classList.add('spotlight-border')
 
   try {
     const params = new URLSearchParams(window.location.search)
@@ -82,6 +84,7 @@ const updateChartData = async (chart, opt, shouldFetch, widgetData) => {
   } finally {
     // Hide loader after fetch completes (success or failure)
     if (loader) loader.classList.add('hidden')
+    if (borderedItem) borderedItem.classList.remove('spotlight-border')
   }
 }
 

@@ -50,6 +50,8 @@ import Models.Users.Users qualified as Users
 import NeatInterpolation (text)
 import OddJobs.Job (createJob)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
+import Pages.Components (paymentPlanPicker)
+import Pages.Onboarding.Onboarding (pricingPage)
 import Pkg.ConvertKit qualified as ConvertKit
 import Relude hiding (ask, asks)
 import Relude.Unsafe qualified as Unsafe
@@ -57,8 +59,6 @@ import Servant (addHeader)
 import Servant.API (Header)
 import Servant.API.ResponseHeaders (Headers)
 import System.Config
-import Pages.Components (paymentPlanPicker)
-import Pages.Onboarding.Onboarding (pricingPage)
 import System.Types (ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders, addSuccessToast, redirectCS)
 import Utils (insertIfNotExist, isDemoAndNotSudo, lookupValueText)
 import Web.FormUrlEncoded (FromForm)
@@ -324,11 +324,12 @@ pricingUpdateGetH pid = do
       critical = envCfg.lemonSqueezyCriticalUrl <> "&checkout[custom][project_id]=" <> pid.toText
   addRespHeaders $ PageCtx bwconf $ pricingPage_ pid lemon critical False
 
-pricingPage_ :: Projects.ProjectId -> Text -> Text  -> Bool -> Html() 
+
+pricingPage_ :: Projects.ProjectId -> Text -> Text -> Bool -> Html ()
 pricingPage_ pid lemon critical isCritical = do
- section_ [class_ "max-w-4xl mx-auto h-full pt-12 flex flex-col gap-10 px-4"] do
-   h1_ [class_ "font-semibold text-4xl text-textStrong"] "Update pricing"
-   paymentPlanPicker pid lemon critical False
+  section_ [class_ "max-w-4xl mx-auto h-full pt-12 flex flex-col gap-10 px-4"] do
+    h1_ [class_ "font-semibold text-4xl text-textStrong"] "Update pricing"
+    paymentPlanPicker pid lemon critical False
 
 
 processProjectPostForm :: Valor.Valid CreateProjectForm -> Projects.ProjectId -> ATAuthCtx (RespHeaders CreateProject)
