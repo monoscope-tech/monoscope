@@ -571,7 +571,7 @@ apiLogsPage page = do
       div_ [class_ "grow flex-1 h-full space-y-1.5 overflow-hidden"] do
         div_ [class_ "flex w-full relative h-full", id_ "logs_section_container"] do
           let dW = fromMaybe "100%" page.detailsWidth
-          div_ [class_ "relative flex shrink-1 min-w-0 w-full h-full", style_ $ "width: " <> dW, id_ "logs_list_container"] do
+          div_ [class_ "relative flex flex-col shrink-1 min-w-0 w-full h-full", style_ $ "width: " <> dW, id_ "logs_list_container"] do
             div_ [class_ "absolute top-0 right-0 hidden w-full h-full overflow-scroll c-scroll z-50 bg-white transition-all duration-100", id_ "trace_expanded_view"] pass
             virtualTable page
 
