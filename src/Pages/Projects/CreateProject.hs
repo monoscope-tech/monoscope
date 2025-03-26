@@ -51,7 +51,6 @@ import NeatInterpolation (text)
 import OddJobs.Job (createJob)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
 import Pages.Components (paymentPlanPicker)
-import Pages.Onboarding.Onboarding (pricingPage)
 import Pkg.ConvertKit qualified as ConvertKit
 import Relude hiding (ask, asks)
 import Relude.Unsafe qualified as Unsafe
