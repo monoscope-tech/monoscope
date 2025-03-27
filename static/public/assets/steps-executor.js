@@ -42,14 +42,10 @@ export async function makeRequestAndProcessResponse(requestObject) {
 
     let jsonResponse = {}
     try {
-      // Try to parse the response as JSON
       jsonResponse = JSON.parse(rawResponse)
-    } catch (error) {
-      // If parsing fails, leave jsonResponse empty
-    }
+    } catch (error) {}
 
-    // Construct the result object
-    return {
+    return Promise.resolve({
       resp: {
         status: status,
         duration_ms: duration_ms.toFixed(2),
@@ -63,13 +59,9 @@ export async function makeRequestAndProcessResponse(requestObject) {
         json: rawBody ? JSON.parse(rawBody) : null,
         raw: rawBody,
       },
-    }
+    })
   } catch (error) {
-    // Handle errors and return a meaningful error object
-    console.error(error)
-    return {
-      error: `Request failed: ${error.message}`,
-    }
+    return Promise.reject(error)
   }
 }
 

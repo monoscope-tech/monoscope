@@ -306,9 +306,9 @@ nameOfTest_ name tags = do
 
 defineTestSteps_ :: Maybe Testing.Collection -> Html ()
 defineTestSteps_ colM = do
-  div_ [class_ "flex flex-col ml-4 notif bg-blue-100 bg-opacity-60 rounded-xl relative"] do
-    div_ [class_ "self-end rounded-full absolute shadow-xs bg-white flex justify-center items-center h-5 w-5  top-1.5 right-1.5 mb-0"] do
-      a_ [[__|on click remove the closest parent <.notif/>|]] $ faSprite_ "xmark" "regular" "w-2 h-2 text-brand"
+  div_ [class_ "flex flex-col  notif bg-blue-100 bg-opacity-60 rounded-xl relative"] do
+    div_ [class_ "rounded-full absolute shadow-xs bg-white flex justify-center items-center h-5 w-5 top-1.5 right-1.5 mb-0"] do
+      a_ [[__|on click remove the closest parent <.notif/>|]] $ faSprite_ "xmark" "regular" "w-2 -mt-[2px] text-brand"
     div_ [class_ "flex items-center gap-4 py-4 px-8"] do
       faSprite_ "circle-info" "regular" "w-5 h-5 fill-none stroke-blue-500"
       div_ [class_ "text-sm font-medium text-gray-500"] do
@@ -344,7 +344,7 @@ collectionPage pid colM col_rn respJson = do
         div_ [class_ "col-span-2 px-8 pt-5 pb-12"] do
           div_ [class_ "flex items-centers justify-between mb-4"] do
             div_ [class_ "flex items-center gap-2"] do
-              span_ [class_ "text-gray-900 font-medium"] "Run the test every"
+              span_ [class_ "text-gray-900 font-medium whitespace-nowrap"] "Run the test every"
               input_ [class_ "ml-3 input input-sm shadow-none w-12 text-center", type_ "number", value_ scheduleNumber, name_ "scheduleNumber"]
               select_ [class_ "select select-sm shadow-none", name_ "scheduleNumberUnit"] do
                 option_ (value_ "minutes" : [selected_ "" | scheduleNumberUnit == "minutes"]) "minutes"

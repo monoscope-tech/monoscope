@@ -246,14 +246,14 @@ timelineSteps_ steps colM =
       when (idx > 0) $ hr_ [style_ "width:2px"]
       div_ [class_ "timeline-middle "] do
         span_
-          [class_ "rounded-full bg-primary text-base-100 h-7 w-7 flex items-center justify-center "]
+          [class_ "rounded-full bg-primary text-textInverse-strong h-7 w-7 flex items-center justify-center "]
           (toHtml $ show $ idx + 1)
       div_ [class_ "timeline-end space-y-5 w-full"] $ do
         div_ [class_ "flex items-center justify-between"] do
           label_ [class_ "text-lg flex gap-2 items-center pt-1"] $ do
             span_ [class_ "font-medium ml-2 text-gray-900"] (toHtml step.title)
             input_ ([type_ "checkbox", class_ "hidden tm-toggle"] <> [checked_ | idx == 0])
-            faSprite_ "chevron-up" "regular" "h-4 rounded-full rotate-180  bg-fillWeak  text-textStrong p-1 w-4 text-white group-has-[.tm-toggle:checked]/tm:rotate-0"
+            faSprite_ "chevron-up" "regular" "h-4 rounded-full rotate-180  bg-fillWeak  text-textStrong p-1 w-4 group-has-[.tm-toggle:checked]/tm:rotate-0"
           when (idx == 0) $ do
             whenJust colM $ \col ->
               div_ [class_ "flex items-center gap-6"] do

@@ -112,8 +112,8 @@ apiLogH pid queryM queryASTM cols' cursorM' sinceM fromM toM layoutM sourceM tar
               Components.refreshButton_
           , navTabs = Just $ div_ [class_ "tabs tabs-box tabs-md p-0 tabs-outline items-center border"] do
               a_ [onclick_ "window.setQueryParamAndReload('source', 'requests')", role_ "tab", class_ $ "tab h-auto! " <> if source == "requests" then "tab-active  text-textStrong " else ""] "Requests"
-              a_ [onclick_ "window.setQueryParamAndReload('source', 'logs')", role_ "tab", class_ $ "tab h-auto! " <> if source == "logs" then "tab-activetext-textStrong " else ""] "Logs"
-              a_ [onclick_ "window.setQueryParamAndReload('source', 'spans')", role_ "tab", class_ $ "tab h-auto! " <> if source == "spans" then "tab-active" else ""] "Traces"
+              a_ [onclick_ "window.setQueryParamAndReload('source', 'logs')", role_ "tab", class_ $ "tab h-auto! " <> if source == "logs" then "tab-active text-textStrong " else ""] "Logs"
+              a_ [onclick_ "window.setQueryParamAndReload('source', 'spans')", role_ "tab", class_ $ "tab h-auto! " <> if source == "spans" then "tab-active text-textStrong " else ""] "Traces"
               -- a_ [onclick_ "window.setQueryParamAndReload('source', 'metrics')", role_ "tab", class_ $ "tab py-1.5 h-auto! " <> if source == "metrics" then "tab-active" else ""] "Metrics"
           }
   let (days, hours, minutes, _seconds) = convertToDHMS $ diffUTCTime now project.createdAt

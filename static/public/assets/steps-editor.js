@@ -9,7 +9,8 @@ export class StepsEditor extends LitElement {
     collectionSteps: [],
     collectionResults: [],
     saveErrors: [],
-    isSendingRequest: false,
+    isSendingRequest: [],
+    sendRequestErrors: [],
     isOnboarding: false,
   }
 
@@ -18,7 +19,8 @@ export class StepsEditor extends LitElement {
     this.collectionSteps = convertTestkitToCollectionSteps(window.collectionSteps) || []
     this.collectionResults = window.collectionResults || []
     this.saveErrors = []
-    this.isSendingRequest = false
+    this.isSendingRequest = this.collectionSteps.map(() => false)
+    this.sendRequestErrors = this.collectionSteps.map(() => null)
 
     // Ensure there's at least one step
     if (this.collectionSteps.length === 0) {
@@ -221,25 +223,25 @@ export class StepsEditor extends LitElement {
     this.requestUpdate()
   }
 
-  sendStepRequest(e, idx) {
+  async sendStepRequest(e, idx) {
     e.preventDefault()
-    this.isSendingRequest = true
-    makeRequestAndProcessResponse(this.collectionSteps[idx])
-      .then(resp => {
-        this.isSendingRequest = false
-        const stepResult = this.collectionResults[idx]
-        if (stepResult) {
-          this.collectionResults[idx] = { ...stepResult, ...resp }
-        } else {
-          this.collectionResults[idx] = { ...resp }
-        }
-
-        this.requestUpdate()
-      })
-      .catch(err => {
-        this.isSendingRequest = false
-        this.requestUpdate()
-      })
+    this.isSendingRequest[idx] = true
+    this.requestUpdate()
+    this.sendRequestErrors[idx] = null
+    try {
+      const resp = await makeRequestAndProcessResponse(this.collectionSteps[idx])
+      const stepResult = this.collectionResults[idx]
+      if (stepResult) {
+        this.collectionResults[idx] = { ...stepResult, ...resp }
+      } else {
+        this.collectionResults[idx] = { ...resp }
+      }
+    } catch (error) {
+      this.sendRequestErrors[idx] = 'Send request failed with message: ' + error.message
+    } finally {
+      this.isSendingRequest[idx] = false
+      this.requestUpdate()
+    }
   }
 
   renderCollectionStep(stepData, idx, result, saveError) {
@@ -267,7 +269,9 @@ export class StepsEditor extends LitElement {
 
     return html`
       <div
-        class="rounded-2xl overflow-hidden group/item  bg-fillWeak collectionStep border draggable  ${failed ? 'border-red-500' : passed ? 'border-green-500' : 'border-strokeWeak'}"
+        class="rounded-2xl overflow-hidden group/item  bg-fillWeak collectionStep border draggable  ${
+          failed ? 'border-red-500' : passed ? 'border-green-500' : 'border-strokeWeak'
+        }"
         data-index="${idx}"
       >
         <div class="flex flex-row items-center">
@@ -277,7 +281,9 @@ export class StepsEditor extends LitElement {
           >${faSprite_('grip-dots-vertical', 'solid', 'h-4 w-4')}</div>
           <div class="flex-1 flex flex-row items-center gap-1 pr-5 py-3" @click="${() => this.toggleExpanded(idx)}">
             <label
-             for="stepState-${idx}" class="flex items-center whitespace-nowrap gap-1 py-1 w-max text-xs bg-fillStrong badge text-textInverse-strong">Step ${idx + 1}</label>
+             for="stepState-${idx}" class="flex items-center whitespace-nowrap gap-1 py-1 w-max text-xs bg-fillStrong badge text-textInverse-strong">Step ${
+      idx + 1
+    }</label>
             <div class="w-full space-y-1 shrink" @click="${e => e.stopPropagation()}">
               <input
               class="text-lg w-full pl-2 bg-transparent outline-hidden focus:outline-hidden" placeholder="Give your step a name*"
@@ -292,7 +298,7 @@ export class StepsEditor extends LitElement {
                   }}"
                   ?checked="${stepData.disabled === undefined ? true : stepData.disabled ? false : true}"
                   type="checkbox"
-                  class="toggle toggle-sm  ${stepData.disabled ? 'border-red-500 bg-white [--tglbg:#ef4444]' : 'border-green-500 bg-white [--tglbg:#22c55e]'}"
+                  class="toggle toggle-sm  ${stepData.disabled ? 'border-red-500  text-[#ef4444]' : 'border-green-500 text-[#22c55e]'}"
                    />
                 <button class="text-red-700 cursor-pointer" @click="${e => {
                   e.preventDefault()
@@ -316,7 +322,8 @@ export class StepsEditor extends LitElement {
                 <div class="text-sm text-slate-700"><div>URL<span class="text-error">*</span></div></div>
                 <div class="relative flex flex-row gap-2 items-center">
                   <label for="actions-list-input-${idx}" class="w-28 shrink text-sm font-medium form-control">
-                    <select id="actions-list-input-${idx}" class="select select-sm shadow-none w-full" @change=${e => this.updateValue(e, idx, null, null, '_method')}>
+                    <select id="actions-list-input-${idx}" class="select select-sm shadow-none w-full" @change=${e =>
+      this.updateValue(e, idx, null, null, '_method')}>
                       ${validMethods.map(methodItem => html`<option ?selected=${methodItem == stepData._method}>${methodItem}</option>`)}
                     </select>
                     ${saveError.method ? html`<span class="text-red-700 text-xs">${saveError.method}</span>` : ''}
@@ -325,7 +332,7 @@ export class StepsEditor extends LitElement {
                     <input
                       placeholder="https://example.com/api/users"
                       type="text" id="actions-data-${idx}" .value=${stepData._url || ''} class="input input-sm shadow-none w-full" @change=${e =>
-                        this.updateValue(e, idx, null, null, '_url')}
+      this.updateValue(e, idx, null, null, '_url')}
                     />
                     ${saveError.url ? html`<span class="text-red-700 text-xs">${saveError.url}</span>` : ''}
                   </label>
@@ -336,14 +343,32 @@ export class StepsEditor extends LitElement {
                  <div>
                   <div class="mt-4 pb-3 border rounded-xl">
                     <div role="tablist" class="tabs tabs-bordered pt-1">
-                      <a role="tab" class="tab  ${activeTab === 'request-options' ? 'tab-active [--bc:var(--brand-color)] text-brand font-bold' : ''}" @click=${() => setActiveTab('request-options')}>
-                        Request Options ${configuredOptions['request-options'] > 0 ? html`<span class="badge badge-sm badge-ghost">${configuredOptions['request-options']}</span>` : ''}
+                      <a role="tab" class="tab  ${
+                        activeTab === 'request-options' ? 'tab-active [--bc:var(--brand-color)] text-brand font-bold' : ''
+                      }" @click=${() => setActiveTab('request-options')}>
+                        Request Options ${
+                          configuredOptions['request-options'] > 0
+                            ? html`<span class="badge badge-sm badge-ghost">${configuredOptions['request-options']}</span>`
+                            : ''
+                        }
                       </a>
-                      <a role="tab" class="tab ${activeTab === 'query-params' ? 'tab-active [--bc:var(--brand-color)] text-brand font-bold' : ''}" @click=${() => setActiveTab('query-params')}>
-                        Query Params ${configuredOptions['query-params'] > 0 ? html`<span class="badge badge-sm badge-ghost">${configuredOptions['query-params']}</span>` : ''}
+                      <a role="tab" class="tab ${
+                        activeTab === 'query-params' ? 'tab-active [--bc:var(--brand-color)] text-brand font-bold' : ''
+                      }" @click=${() => setActiveTab('query-params')}>
+                        Query Params ${
+                          configuredOptions['query-params'] > 0
+                            ? html`<span class="badge badge-sm badge-ghost">${configuredOptions['query-params']}</span>`
+                            : ''
+                        }
                       </a>
-                      <a role="tab" class="tab ${activeTab === 'request-body' ? 'tab-active [--bc:var(--brand-color)] text-brand font-bold' : ''}" @click=${() => setActiveTab('request-body')}>
-                        Request Body ${configuredOptions['request-body'] > 0 ? html`<span class="badge badge-sm badge-ghost">${configuredOptions['request-body']}</span>` : ''}
+                      <a role="tab" class="tab ${
+                        activeTab === 'request-body' ? 'tab-active [--bc:var(--brand-color)] text-brand font-bold' : ''
+                      }" @click=${() => setActiveTab('request-body')}>
+                        Request Body ${
+                          configuredOptions['request-body'] > 0
+                            ? html`<span class="badge badge-sm badge-ghost">${configuredOptions['request-body']}</span>`
+                            : ''
+                        }
                       </a>
                     </div>
                     <div class="p-4 space-y-3">
@@ -477,8 +502,9 @@ ${stepData._json}</textarea
                 </details>
               </div>
               <button class="mt-5 btn btn-sm btn-primary px-2 py-1" ?disabled=${!stepData._url} @click=${e => this.sendStepRequest(e, idx)}>
-              ${this.isSendingRequest ? html`<span class="loading loading-dots loading-sm"></span>` : 'Send request'}
+              ${this.isSendingRequest[idx] ? html`<span class="loading loading-dots loading-sm"></span>` : 'Send request'}
               </button>
+              ${this.sendRequestErrors[idx] !== null ? html`<div class="mt-2 text-textError">${this.sendRequestErrors[idx]}</div>` : nothing}
               ${
                 stepResult && stepResult.resp
                   ? html`
