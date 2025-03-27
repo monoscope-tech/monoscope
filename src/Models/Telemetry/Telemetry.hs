@@ -26,6 +26,7 @@ module Models.Telemetry.Telemetry (
   getMetricData,
   bulkInsertMetrics,
   bulkInsertSpans,
+  bulkInsertSpansTF,
   getMetricChartListData,
   getLogsByTraceIds,
   getMetricLabelValues,
@@ -62,6 +63,7 @@ import Database.PostgreSQL.Transact qualified as DBT
 import Deriving.Aeson qualified as DAE
 import Deriving.Aeson.Stock qualified as DAE
 import Effectful
+import Effectful.Labeled (Labeled, labeled)
 import Effectful.PostgreSQL.Transact.Effect (DB, dbtToEff)
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.Projects qualified as Projects
@@ -555,6 +557,38 @@ bulkInsertSpans spans = void $ dbtToEff $ executeMany Insert q (V.toList rowsToI
     q =
       [sql|
       INSERT INTO telemetry.spans
+      (project_id, timestamp, trace_id, span_id, parent_span_id, trace_state, span_name,
+       start_time, end_time, kind, status, status_message, attributes, events, links, resource, instrumentation_scope, duration_ns)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    |]
+    rowsToInsert = V.map spanToTuple spans
+    spanToTuple entry =
+      ( entry.projectId
+      , entry.timestamp
+      , entry.traceId
+      , entry.spanId
+      , entry.parentSpanId
+      , entry.traceState
+      , entry.spanName
+      , entry.startTime
+      , entry.endTime
+      , entry.kind
+      , entry.status
+      , entry.statusMessage
+      , entry.attributes
+      , entry.events
+      , entry.links
+      , entry.resource
+      , entry.instrumentationScope
+      , entry.spanDurationNs
+      )
+
+
+bulkInsertSpansTF :: Labeled "timefusion" DB :> es => V.Vector SpanRecord -> Eff es Int64
+bulkInsertSpansTF spans = labeled @"timefusion" @DB $ dbtToEff $ executeMany Insert q (V.toList rowsToInsert)
+  where
+    q =
+      [sql| INSERT INTO telemetry.spans
       (project_id, timestamp, trace_id, span_id, parent_span_id, trace_state, span_name,
        start_time, end_time, kind, status, status_message, attributes, events, links, resource, instrumentation_scope, duration_ns)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
