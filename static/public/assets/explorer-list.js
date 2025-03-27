@@ -66,6 +66,7 @@ export class LogList extends LitElement {
 
     window.addEventListener('mouseup', () => {
       this.resizeTarget = null
+      document.body.style.userSelect = 'auto'
     })
     window.addEventListener('mousemove', event => {
       if (this.resizeTarget === null) return
@@ -262,9 +263,7 @@ export class LogList extends LitElement {
             const tableDataWidth = getColumnWidth(column)
             let width = this.columnMaxWidthMap[column]
             return html`<td
-              class=${`${this.wrapLines ? 'break-all whitespace-wrap' : ''} ${column !== 'id' ? 'mr-2' : ''} bg-white relative ${
-                column === 'rest' ? '' : tableDataWidth
-              }`}
+              class=${`${this.wrapLines ? 'break-all whitespace-wrap' : ''} bg-white relative ${column === 'rest' ? '' : tableDataWidth}`}
               style=${width ? `width: ${width}px;` : ''}
             >
               ${logItemCol(rowData, this.source, this.colIdxMap, column, this.serviceColors, this.expandTrace, this.columnMaxWidthMap, this.wrapLines)}
@@ -272,7 +271,7 @@ export class LogList extends LitElement {
           })}
         ${this.source === 'spans' && this.logsColumns.includes('latency_breakdown')
           ? html`<td
-              class="bg-white sticky right-0 pr-2 overflow-x-hidden"
+              class="bg-white sticky right-0 overflow-x-hidden"
               style=${this.columnMaxWidthMap['latency_breakdown'] ? "width: ${this.columnMaxWidthMap['latency_breakdown']}px;" : ''}
             >
               ${logItemCol(
@@ -378,7 +377,7 @@ export class LogList extends LitElement {
     }
     return html`
       <td
-        class=${`cursor-pointer p-0 m-0 whitespace-nowrap relative flex justify-between items-center mr-2 text-sm font-normal bg-white ${
+        class=${`cursor-pointer p-0 m-0 whitespace-nowrap relative flex justify-between items-center pl-1 text-sm font-normal bg-white ${
           classes ? classes : ''
         }`}
         style=${width ? `width: ${width}px` : ''}
@@ -398,8 +397,9 @@ export class LogList extends LitElement {
           @mousedown=${event => {
             this.resizeTarget = column
             this.mouseState = { x: event.clientX }
+            document.body.style.userSelect = 'none'
           }}
-          class="w-3 text-gray-200 text-center hover:text-textBrand overflow-hidden font-bold absolute right-0 top-1/2 -translate-y-1/2 h-4 cursor-ew-resize"
+          class="w-3 text-gray-200 text-right select-none hover:text-textBrand overflow-hidden font-bold absolute right-0 top-1/2 -translate-y-1/2 h-4 cursor-ew-resize"
         >
           |
         </div>
@@ -435,10 +435,16 @@ export class LogList extends LitElement {
   updateColumnMaxWidthMap(recVecs) {
     recVecs.forEach(vec => {
       Object.entries(this.colIdxMap).forEach(([key, value]) => {
+        let chPx = 8.5
+
         if (!['id'].includes(key)) {
-          let target = String(vec[value]).length * 6
+          if (key === 'timestamp' || key === 'created_at') {
+            chPx = 6.5
+          }
+          let target = String(vec[value]).length * chPx
+
           if (key === 'rest' && !this.columnMaxWidthMap[key]) {
-            target = 400 * 6
+            target = 450 * chPx
             this.columnMaxWidthMap[key] = target
           }
           if (key === 'latency_breakdown' && !this.columnMaxWidthMap[key]) {
@@ -448,12 +454,13 @@ export class LogList extends LitElement {
             return
           } else {
             if (this.columnMaxWidthMap[key] === undefined) {
-              this.columnMaxWidthMap[key] = 12 * 6
+              this.columnMaxWidthMap[key] = 12 * chPx
             }
             if (this.columnMaxWidthMap[key] < target) {
               this.columnMaxWidthMap[key] = target
             }
           }
+          console.log(this.columnMaxWidthMap)
         }
       })
     })
@@ -482,7 +489,7 @@ export class LogList extends LitElement {
                 })
                 this.columnMaxWidthMap['rest'] = width - 20 // margin left and right and id width
               } else {
-                this.columnMaxWidthMap['rest'] = 400 * 6
+                this.columnMaxWidthMap['rest'] = 450 * 8
               }
               this.requestUpdate()
             }}
@@ -595,9 +602,10 @@ function logItemCol(rowData, source, colIdxMap, key, serviceColors, toggleTrace,
       }))
       const width = columnMaxWidthMap['latency_breakdown'] || 200
       return html`
-        <div class="flex h-full min-h-10 justify-end items-center gap-1 text-textWeak" style="width:${width}px">
-          <div class="w-24 overflow-visible  shrink-0 font-normal">${logItemCol(rowData, source, colIdxMap, 'duration')}</div>
+        <div class="flex h-full min-h-10 justify-end items-center  text-textWeak" style="width:${width}px">
+          <div class="w-24 overflow-visible shrink-0 font-normal">${logItemCol(rowData, source, colIdxMap, 'duration')}</div>
           ${spanLatencyBreakdown({ start: startNs - traceStart, depth: d, duration, traceEnd, color, children: chil, barWidth: width - 100 })}
+          <span class="w-1"></span>
         </div>
       `
     case 'http_attributes':
@@ -641,7 +649,7 @@ function logItemCol(rowData, source, colIdxMap, key, serviceColors, toggleTrace,
       return source == 'logs'
         ? html`${logItemCol(rowData, source, colIdxMap, 'severity_text')} ${logItemCol(rowData, source, colIdxMap, 'body')}`
         : source === 'spans'
-        ? html`<div class="flex w-full items-start gap-1">
+        ? html`<div class="flex w-full ${wrapLines ? 'items-start' : 'items-center'} gap-1">
             <div class="flex items-center gap-1">
               ${depth > 1
                 ? new Array(depth - 1).fill(1).map((_, i) => html`<div class=${`ml-[15px] w-4 h-5 shrink-0 ${siblingsArr[i] ? 'border-l' : ''}`}></div>`)
