@@ -141,7 +141,7 @@ paymentPlanPicker pid lemonUrl criticalUrl isSettings = do
                function priceChange() {
                  const value = price_indicator.value
                  let num_reqs = Math.floor(value/1000000)
-                 let calculatedPrice = value <= 20_000_000 ? 32 : 32 + ((value- 20_000_000)/500_000)
+                 let calculatedPrice = value <= 20_000_000 ? 34 : 34 + ((value- 20_000_000)/500_000)
                  priceContainer.innerText = "$" + calculatedPrice
                  reqsContainer.innerText = num_reqs + " Million"
                }
@@ -190,7 +190,7 @@ popularPricing pid lemonUrl isSettings = do
             div_ [class_ "text-brand text-base font-semibold"] "Start your FREE 30-day trial"
             div_ [class_ " text-textWeak text-sm font-medium"] do
               "Starts at "
-              span_ [class_ "", id_ "price"] "$49"
+              span_ [class_ "", id_ "price"] "$34"
 
           div_ [class_ "flex-col justify-start items-start gap-6 flex"] $ do
             span_ [class_ " text-textWeak text-base font-semibold"] "What’s Included:"
@@ -234,7 +234,7 @@ systemsPricing pid critical isSettings = do
             input_ [type_ "hidden", class_ "orderId", id_ "systemsPricing", name_ "order", value_ ""]
             div_ [class_ "text-center  text-textStrong text-4xl font-bold"] "Critical Systems"
             div_ [class_ "text-base font-semibold"] "Business plan"
-            div_ [class_ " text-textWeak text-sm font-medium"] "Starts at $500/monthly"
+            div_ [class_ " text-textWeak text-sm font-medium"] "Starts at $199/monthly"
 
           div_ [class_ "flex-col justify-start items-start gap-6 flex"] $ do
             span_ [class_ " text-textWeak text-base font-semibold"] "Everything in plus and..."
