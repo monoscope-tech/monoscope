@@ -602,8 +602,8 @@ function logItemCol(rowData, source, colIdxMap, key, serviceColors, toggleTrace,
       }))
       const width = columnMaxWidthMap['latency_breakdown'] || 200
       return html`
-        <div class="flex h-full min-h-10 justify-end items-center  text-textWeak" style="width:${width}px">
-          <div class="w-24 overflow-visible shrink-0 font-normal">${logItemCol(rowData, source, colIdxMap, 'duration')}</div>
+        <div class="flex h-full min-h-10 justify-end items-center gap-2 pl-1 text-textWeak" style="width:${width}px">
+          <div class="overflow-visible shrink-0 font-normal">${logItemCol(rowData, source, colIdxMap, 'duration')}</div>
           ${spanLatencyBreakdown({ start: startNs - traceStart, depth: d, duration, traceEnd, color, children: chil, barWidth: width - 100 })}
           <span class="w-1"></span>
         </div>
