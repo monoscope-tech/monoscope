@@ -85,8 +85,8 @@ getSpanAttributeValue attribute rss = V.mapMaybe (\rs -> getResourceAttr rs <|> 
     getAttr = V.find ((== attribute) . toText . keyValueKey) >=> keyValueValue >=> anyValueValue >=> anyValueToString >=> (Just . toText)
 
 
-getLogAttributeValue :: Text -> V.Vector ResourceLogs -> Maybe Text
-getLogAttributeValue attribute rls = listToMaybe $ V.toList $ V.mapMaybe (\rl -> getResourceAttr rl <|> getLogAttr rl) rls
+getLogAttributeValue :: Text -> V.Vector ResourceLogs -> V.Vector Text
+getLogAttributeValue attribute rls = V.mapMaybe (\rl -> getResourceAttr rl <|> getLogAttr rl) rls
   where
     getResourceAttr rl = rl.resourceLogsResource >>= getAttr . resourceAttributes
     getLogAttr rl = rl.resourceLogsScopeLogs & listToMaybe . V.toList . V.mapMaybe (getAttr . logRecordAttributes) . V.concatMap scopeLogsLogRecords
@@ -115,13 +115,8 @@ processList msgs attrs = do
             Log.logAttention_ $ "processList: unable to parse logs service request with err " <> show err <> (decodeUtf8 msg)
             pure (ackId, [])
           Right (ExportLogsServiceRequest logReq) -> do
-            pidM <- join <$> forM (getLogAttributeValue "at-project-key" logReq) ProjectApiKeys.getProjectIdByApiKey
-            let pid2M = Projects.projectIdFromText =<< getLogAttributeValue "at-project-id" logReq
-            case (pidM <|> pid2M) of
-              Just pid -> pure (ackId, join $ V.map (convertToLog pid) logReq)
-              Nothing -> do
-                Log.logAttention_ "processList: project API Key and project ID not available in trace"
-                pure (ackId, [])
+            projectIdsAndKeys <- dbtToEff $ ProjectApiKeys.projectIdsByProjectApiKeys $ getLogAttributeValue "at-project-key" logReq
+            pure (ackId, join $ V.map (convertToLog projectIdsAndKeys) logReq)
       let (ackIds, logs) = V.unzip results
       unless (null $ join logs) $ Telemetry.bulkInsertLogs $ join logs
       pure $ V.toList ackIds
@@ -176,11 +171,11 @@ logsServiceExportH appLogger appCtx (ServerNormalRequest meta (ExportLogsService
   -- let projectKey = T.replace "Bearer " "" $ decodeUtf8 $ Unsafe.fromJust $ Safe.headMay =<< M.lookup "authorization" meta.metadata.unMap
   --     apiKeyUUID = projectApiKeyFromB64 appCtx.config.apiKeyEncryptionSecretKey projectKey
   _ <- runBackground appLogger appCtx do
-    let projectKey = fromMaybe (error "Missing project key") $ getLogAttributeValue "at-project-key" req
+    let projectKey = fromMaybe (error "Missing project key") $ listToMaybe $ V.toList $ getLogAttributeValue "at-project-key" req
     projectIdM <- ProjectApiKeys.getProjectIdByApiKey projectKey
     let pid = fromMaybe (error "project API Key is invalid pid") projectIdM
 
-    let logRecords = join $ V.map (convertToLog pid) req
+    let logRecords = join $ V.map (convertToLog [(projectKey, pid, 0)]) req
     Telemetry.bulkInsertLogs logRecords
   return (ServerNormalResponse (ExportLogsServiceResponse Nothing) mempty StatusOk "")
 
@@ -239,8 +234,18 @@ instrumentationScopeToJSONB Nothing = AE.Null
 
 
 -- Convert ExportLogsServiceRequest to [Log]
-convertToLog :: Projects.ProjectId -> ResourceLogs -> V.Vector Telemetry.LogRecord
-convertToLog pid resourceLogs = join $ V.map (convertScopeLog pid resourceLogs.resourceLogsResource) resourceLogs.resourceLogsScopeLogs
+convertToLog :: V.Vector (Text, Projects.ProjectId, Integer) -> ResourceLogs -> V.Vector Telemetry.LogRecord
+convertToLog pids resourceLogs =
+  let key = fromMaybe "" $ listToMaybe $ V.toList $ getLogAttributeValue "at-project-key" [resourceLogs]
+      pid = case find (\(k, _, count) -> k == key) pids of
+        Just (_, v, count) -> if count >= 10000 then Nothing else Just v
+        Nothing ->
+          let pidText = fromMaybe "" $ listToMaybe $ V.toList $ getLogAttributeValue "at-project-id" [resourceLogs]
+              uId = UUID.fromText pidText
+           in ((Just . Projects.ProjectId) =<< uId)
+   in case pid of
+        Just p -> join $ V.map (convertScopeLog p resourceLogs.resourceLogsResource) resourceLogs.resourceLogsScopeLogs
+        _ -> V.empty
 
 
 convertScopeLog :: Projects.ProjectId -> Maybe Resource -> ScopeLogs -> V.Vector Telemetry.LogRecord
