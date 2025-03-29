@@ -127,13 +127,23 @@ projectIdsByProjectApiKeys projectKeys = query Select q (Only projectKeys)
   where
     q =
       [sql| 
-    select key_prefix, project_id,
-      CASE 
-        WHEN s.payment_plan = 'Free' THEN (SELECT count(*) FROM telemetry.spans e WHERE e.project_id = p.project_id AND e.created_at > NOW() - INTERVAL '1 day')
-        ELSE 0
-     END AS daily_events_count
-    from projects.project_api_keys k
-    LEFT JOIN projects.projects p ON p.project_id = k.project_id where key_prefix = ANY(?)|]
+SELECT 
+  k.key_prefix, 
+  k.project_id, 
+  COALESCE(span_counts.daily_events_count, 0) AS daily_events_count
+FROM projects.project_api_keys k
+LEFT JOIN projects.projects p ON p.id = k.project_id
+LEFT JOIN (
+    SELECT 
+      e.project_id, 
+      COUNT(*) AS daily_events_count
+    FROM telemetry.spans e
+    JOIN projects.projects p ON p.id = e.project_id
+    WHERE p.payment_plan = 'Free'  -- Only count for 'Free' plans
+      AND e.created_at > NOW() - INTERVAL '1 day'
+    GROUP BY e.project_id
+) span_counts ON span_counts.project_id = k.project_id
+WHERE k.key_prefix = ANY(?)|]
 
 
 -- AES256 encryption

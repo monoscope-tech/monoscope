@@ -483,10 +483,8 @@ traceServiceExportH
   -> IO (ServerResponse 'Normal ExportTraceServiceResponse)
 traceServiceExportH appLogger appCtx (ServerNormalRequest _meta (ExportTraceServiceRequest req)) = do
   _ <- runBackground appLogger appCtx do
-    let projectKey = fromMaybe (error "Missing project key") $ listToMaybe $ V.toList $ getSpanAttributeValue "at-project-key" req
-    projectIdM <- ProjectApiKeys.getProjectIdByApiKey projectKey
-    let pid = fromMaybe (error "project API Key is invalid pid") projectIdM
-    let spanRecords = join $ V.map (convertToSpan [(projectKey, pid, 0)]) req
+    pids <- dbtToEff $ ProjectApiKeys.projectIdsByProjectApiKeys $ getSpanAttributeValue "at-project-key" req
+    let spanRecords = join $ V.map (convertToSpan pids) req
         apitoolkitSpans = V.map mapHTTPSpan spanRecords
     _ <- ProcessMessage.processRequestMessages $ V.toList $ V.catMaybes apitoolkitSpans <&> ("",)
     Telemetry.bulkInsertSpans $ V.filter (\s -> s.spanName /= "apitoolkit-http-span") spanRecords
