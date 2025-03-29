@@ -139,8 +139,8 @@ LEFT JOIN (
       COUNT(*) AS daily_events_count
     FROM telemetry.spans e
     JOIN projects.projects p ON p.id = e.project_id
-    WHERE p.payment_plan = 'Free'  -- Only count for 'Free' plans
-      AND e.created_at > NOW() - INTERVAL '1 day'
+    WHERE p.payment_plan = 'Free' 
+      AND e.timestamp > NOW() - INTERVAL '1 day'
     GROUP BY e.project_id
 ) span_counts ON span_counts.project_id = k.project_id
 WHERE k.key_prefix = ANY(?)|]
