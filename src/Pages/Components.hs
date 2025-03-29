@@ -105,8 +105,10 @@ paymentPlanPicker pid lemonUrl criticalUrl isSettings = do
         p_ [class_ " text-textStrong"] "Total events"
         p_ [class_ " text-textWeak", id_ "num_requests"] "25 Million"
       input_ [type_ "range", min_ "25000000", max_ "500000000", step_ "10000000", value_ "25000000", class_ "range range-primary range-sm w-full", id_ "price_range"]
-    div_ [class_ "grid grid-cols-2 gap-8 mt-6 w-full"] do
-      popularPricing pid lemonUrl isSettings
+    div_ [class_ "flex flex-col gap-8 mt-6 w-full"] do
+      div_ [class_ "grid grid-cols-2 gap-8 w-full"] do
+        freePricing pid isSettings
+        popularPricing pid lemonUrl isSettings
       systemsPricing pid criticalUrl isSettings
     script_ [src_ "https://assets.lemonsqueezy.com/lemon.js"] ("" :: Text)
     script_
@@ -153,15 +155,50 @@ paymentPlanPicker pid lemonUrl criticalUrl isSettings = do
                 const target = event.currentTarget
                 if(id === 'popularPlan') {
                   window.paymentPlanUrl = "$lemonUrl"
-                  target.classList.add('border-[var(--brand-color)]')
-                  document.querySelector('#systemsPlan').classList.remove('border-[var(--brand-color)]')
-                } else {
+                } else if(id=== 'systemsPlan') {
                   window.paymentPlanUrl = "$criticalUrl"
-                  target.classList.add('border-[var(--brand-color)]')
-                  document.querySelector('#popularPlan').classList.remove('border-[var(--brand-color)]')
                 }
                }
             |]
+
+
+freePricing :: Projects.ProjectId -> Bool -> Html ()
+freePricing pid isSettings = do
+  div_
+    [ class_ "flex flex-col gap-2 h-full w-full"
+    , hxPost_ $ "/p/" <> pid.toText <> "/onboarding/pricing"
+    , id_ "freePricing"
+    , hxIndicator_ "#loadingIndicator"
+    ]
+    $ do
+      div_
+        [ class_ "flex flex-col gap-2 h-full rounded-2xl p-8 border border-strokeWeak flex-col flex gap-8 relative shadow-[0px_4px_8px_-2px_rgba(0,0,0,0.04)] shadow-[0px_2px_4px_-2px_rgba(0,0,0,0.08)]"
+        , onclick_ "handlePaymentPlanSelect(event, 'freePlan')"
+        , id_ "popularPlan"
+        ]
+        do
+          div_ [class_ "flex-col justify-start items-start gap-2 flex"] $ do
+            div_ [class_ "text-center  text-textStrong text-4xl font-bold"] "Free tier"
+            div_ [class_ "text-brand text-base font-semibold"] "Free forever"
+            div_ [class_ " text-textWeak text-sm font-medium"] do
+              "Starts at "
+              span_ [class_ ""] "$0"
+          included features "What's included:"
+          div_ [class_ "flex-col justify-start items-start gap-6 mt-auto flex", [__|on click halt|]] $ do
+            button_
+              [ class_ "btn-primary h-12 rounded-sm w-full font-semibold rounded-lg shadow-[0px_1px_2px_0px_rgba(10,13,18,0.05)] shadow-[inset_0px_-2px_0px_0px_rgba(10,13,18,0.05)] shadow-[inset_0px_0px_0px_1px_rgba(10,13,18,0.18)]"
+              , [__| on click htmx.trigger("#freePricing", "click")|]
+              , type_ "button"
+              ]
+              do
+                "Start free"
+  where
+    features =
+      [ "10K events per day"
+      , "1 team member"
+      , "Opentelemetry Logs, Traces and Metrics"
+      , "Last 3 days data retention"
+      ]
 
 
 popularPricing :: Projects.ProjectId -> Text -> Bool -> Html ()
@@ -171,7 +208,7 @@ popularPricing pid lemonUrl isSettings = do
     , hxPost_ $ "/p/" <> pid.toText <> "/onboarding/pricing"
     , id_ "GraduatedPricing"
     , hxIndicator_ "#loadingIndicator"
-    , hxVals_ "js:{orderId: document.querySelector('#popularPricing').value}"
+    , hxVals_ "js:{orderIdM: document.querySelector('#popularPricing').value}"
     ]
     $ do
       div_
@@ -191,22 +228,19 @@ popularPricing pid lemonUrl isSettings = do
             div_ [class_ " text-textWeak text-sm font-medium"] do
               "Starts at "
               span_ [class_ "", id_ "price"] "$34"
-
-          div_ [class_ "flex-col justify-start items-start gap-6 flex"] $ do
-            span_ [class_ " text-textWeak text-base font-semibold"] "What’s Included:"
-            mapM_ featureRow features
-          unless isSettings do
-            div_ [class_ "flex-col justify-start items-start gap-6 mt-auto flex", [__|on click halt|]] $ do
-              button_
-                [ class_ "btn-primary h-12 rounded-sm w-full font-semibold rounded-lg shadow-[0px_1px_2px_0px_rgba(10,13,18,0.05)] shadow-[inset_0px_-2px_0px_0px_rgba(10,13,18,0.05)] shadow-[inset_0px_0px_0px_1px_rgba(10,13,18,0.18)]"
-                , term "_" [text|on click call window.payLemon("GraduatedPricing","$lemonUrl") |]
-                , type_ "button"
-                ]
-                do
-                  "Start free 30 day trial"
+          included features "Everything in plus and..."
+          div_ [class_ "flex-col justify-start items-start gap-6 mt-auto flex", [__|on click halt|]] $ do
+            button_
+              [ class_ "btn-primary h-12 rounded-sm w-full font-semibold rounded-lg shadow-[0px_1px_2px_0px_rgba(10,13,18,0.05)] shadow-[inset_0px_-2px_0px_0px_rgba(10,13,18,0.05)] shadow-[inset_0px_0px_0px_1px_rgba(10,13,18,0.18)]"
+              , term "_" [text|on click call window.payLemon("GraduatedPricing","$lemonUrl") |]
+              , type_ "button"
+              ]
+              do
+                "Start free 30 day trial"
   where
     features =
-      [ "Unlimited team members"
+      [ "Unlimited events per day"
+      , "Unlimited team members"
       , "Opentelemetry Logs, Traces and Metrics"
       , "Last 14 days data retention"
       ]
@@ -219,7 +253,7 @@ systemsPricing pid critical isSettings = do
     , hxPost_ $ "/p/" <> pid.toText <> "/onboarding/pricing"
     , id_ "SystemsPricing"
     , hxIndicator_ "#loadingIndicator"
-    , hxVals_ "js:{orderId: document.querySelector('#systemsPricing').value}"
+    , hxVals_ "js:{orderIdM: document.querySelector('#systemsPricing').value}"
     ]
     $ do
       div_
@@ -235,23 +269,26 @@ systemsPricing pid critical isSettings = do
             div_ [class_ "text-center  text-textStrong text-4xl font-bold"] "Critical Systems"
             div_ [class_ "text-base font-semibold"] "Business plan"
             div_ [class_ " text-textWeak text-sm font-medium"] "Starts at $199/monthly"
-
-          div_ [class_ "flex-col justify-start items-start gap-6 flex"] $ do
-            span_ [class_ " text-textWeak text-base font-semibold"] "Everything in plus and..."
-            mapM_ featureRow features
-          unless isSettings do
-            div_ [class_ "flex-col justify-start items-start gap-6 mt-auto  flex", [__|on click halt|]] $ do
-              button_
-                [ class_ "btn-primary h-12 rounded-sm w-full font-semibold rounded-lg shadow-[0px_1px_2px_0px_rgba(10,13,18,0.05)] shadow-[inset_0px_-2px_0px_0px_rgba(10,13,18,0.05)] shadow-[inset_0px_0px_0px_1px_rgba(10,13,18,0.18)]"
-                , term "_" [text|on click call window.payLemon("SystemsPricing", "$critical") |]
-                , type_ "button"
-                ]
-                "Start free 30 day trial"
+          included features "Everything in plus and..."
+          div_ [class_ "flex-col justify-start items-start gap-6 mt-auto  flex", [__|on click halt|]] $ do
+            button_
+              [ class_ "btn-primary h-12 rounded-sm w-full font-semibold rounded-lg shadow-[0px_1px_2px_0px_rgba(10,13,18,0.05)] shadow-[inset_0px_-2px_0px_0px_rgba(10,13,18,0.05)] shadow-[inset_0px_0px_0px_1px_rgba(10,13,18,0.18)]"
+              , term "_" [text|on click call window.payLemon("SystemsPricing", "$critical") |]
+              , type_ "button"
+              ]
+              "Start free 30 day trial"
   where
     features =
       [ "24/7 support from our team of industry experts"
       , "Last 30 days data retention"
       ]
+
+
+included :: [Text] -> Text -> Html ()
+included features title =
+  div_ [class_ "flex-col justify-start items-start gap-3 flex"] $ do
+    span_ [class_ " text-textWeak text-base font-semibold mb-2"] $ toHtml title
+    mapM_ featureRow features
 
 
 featureRow :: Text -> Html ()

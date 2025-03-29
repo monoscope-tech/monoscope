@@ -270,43 +270,45 @@ getSubscriptionId orderId apiKey = do
         Left err -> do
           return Nothing
 data PricingUpdateForm = PricingUpdateForm
-  { orderId :: Text
+  { orderIdM :: Maybe Text
   }
   deriving stock (Eq, Show, Generic)
   deriving anyclass (FromForm, Default)
 
 
 pricingUpdateH :: Projects.ProjectId -> PricingUpdateForm -> ATAuthCtx (RespHeaders (Html ()))
-pricingUpdateH pid PricingUpdateForm{orderId} = do
+pricingUpdateH pid PricingUpdateForm{orderIdM} = do
   (sess, project) <- Sessions.sessionAndProject pid
   appCtx <- ask @AuthContext
   let envCfg = appCtx.config
       apiKey = envCfg.lemonSqueezyApiKey
-  subRes <- getSubscriptionId (Just orderId) apiKey
-  case subRes of
-    Just sub
-      | not (null sub.dataVal) -> do
+      steps = project.onboardingStepsCompleted
+      newStepsComp = insertIfNotExist "Pricing" steps
+      updatePricing name sid fid oid = dbtToEff $ Projects.updateProjectPricing pid name sid fid oid newStepsComp
+      handleOnboarding name = when (project.paymentPlan == "ONBOARDING") $ do
+        _ <- liftIO $ withResource appCtx.pool \conn -> do
+          let fullName = sess.user.firstName <> " " <> sess.user.lastName
+              foundUsFrom = fromMaybe "" $ project.questions >>= (\x -> lookupValueText x "foundUsFrom")
+          createJob conn "background_jobs" $ BackgroundJobs.SendDiscordData sess.user.id pid fullName [foundUsFrom] foundUsFrom
+        users <- dbtToEff $ ProjectMembers.selectActiveProjectMembers pid
+        forM_ users $ \user -> ConvertKit.addUserOrganization envCfg.convertkitApiKey (CI.original user.email) pid.toText project.title name
+
+  case orderIdM of
+    Just orderId -> do
+      getSubscriptionId (Just orderId) apiKey >>= \case
+        Just sub | not (null sub.dataVal) -> do
           let target = sub.dataVal Unsafe.!! 0
               subId = show target.attributes.firstSubscriptionItem.subscriptionId
               firstSubId = show target.attributes.firstSubscriptionItem.id
               productName = target.attributes.productName
-              steps = project.onboardingStepsCompleted
-              newStepsComp = insertIfNotExist "Pricing" steps
-          v <- dbtToEff $ Projects.updateProjectPricing pid productName subId firstSubId orderId newStepsComp
-          -- onboarding means it's the users first time adding pricing
-          when (project.paymentPlan == "ONBOARDING") $ do
-            _ <- liftIO $ withResource appCtx.pool \conn -> do
-              let fullName = sess.user.firstName <> " " <> sess.user.lastName
-                  foundUsFrom = maybe "" (\x -> fromMaybe "" $ lookupValueText x "foundUsFrom") project.questions
-              createJob conn "background_jobs" $ BackgroundJobs.SendDiscordData sess.user.id pid fullName [foundUsFrom] foundUsFrom
-            users <- dbtToEff $ ProjectMembers.selectActiveProjectMembers pid
-            forM_ users \user -> do
-              ConvertKit.addUserOrganization envCfg.convertkitApiKey (CI.original user.email) pid.toText project.title productName
-          redirectCS $ "/p/" <> pid.toText <> "/"
-          addRespHeaders ""
-    _ -> do
-      addErrorToast "Something went wrong while fetching subscription id" Nothing
-      addRespHeaders ""
+          _ <- updatePricing productName subId firstSubId orderId
+          handleOnboarding productName
+        _ -> addErrorToast "Something went wrong while fetching subscription id" Nothing
+    Nothing -> do
+      _ <- updatePricing "Free" "" "" ""
+      handleOnboarding "Free"
+  redirectCS $ "/p/" <> pid.toText <> "/"
+  addRespHeaders ""
 
 
 pricingUpdateGetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders (PageCtx (Html ())))

@@ -213,7 +213,7 @@ data ProjectCache = ProjectCache
     -- [endpointHash]<>[field_category eg requestBody]<>[field_key_path]
     -- Those redact fields that don't have endpoint or field_category attached, would be aplied to every endpoint and field category.
     redactFieldslist :: V.Vector Text
-  , weeklyRequestCount :: Int
+  , dailyEventsCount :: Int
   , paymentPlan :: Text
   }
   deriving stock (Show, Generic)
@@ -246,9 +246,9 @@ projectCacheById pid = queryOne Select q (pid, pid, pid)
                     coalesce(ARRAY_AGG(DISTINCT endpoint_hashes ORDER BY endpoint_hashes ASC),'{}') endpoint_hashes,
                     coalesce(ARRAY_AGG(DISTINCT shape_hashes ORDER BY shape_hashes ASC),'{}'::text[]) shape_hashes,
                     coalesce(ARRAY_AGG(DISTINCT paths ORDER BY paths ASC),'{}') redacted_fields,
-                    ( SELECT count(*) FROM apis.request_dumps
-                     WHERE project_id=? AND created_at > NOW() - INTERVAL '7' DAY
-                    ) weekly_request_count,
+                    ( SELECT count(*) FROM telemetry.spans
+                     WHERE project_id=? AND created_at > NOW() - INTERVAL '1' DAY
+                    ) daily_events_count,
                     (SELECT COALESCE((SELECT payment_plan FROM projects.projects WHERE id = ?),'Free')) payment_plan
             from
               (select e.host hosts, e.hash endpoint_hashes, sh.hash shape_hashes, concat(rf.endpoint_hash,'<>', rf.field_category,'<>', rf.path) paths

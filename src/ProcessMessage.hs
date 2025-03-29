@@ -196,7 +196,7 @@ projectCacheDefault =
     , endpointHashes = []
     , shapeHashes = []
     , redactFieldslist = []
-    , weeklyRequestCount = 0
+    , dailyEventsCount = 0
     , paymentPlan = ""
     }
 
@@ -217,8 +217,8 @@ processRequestMessage recMsg = do
     mpjCache <- withPool appCtx.jobsPool $ Projects.projectCacheById pid'
     pure $ fromMaybe projectCacheDefault mpjCache
   recId <- liftIO nextRandom
-  pure
-    $ if projectCacheVal.paymentPlan == "Free" && projectCacheVal.weeklyRequestCount >= 5000
+  pure $
+    if projectCacheVal.paymentPlan == "Free" && projectCacheVal.dailyEventsCount >= 10000
       then Right (Nothing, Nothing, Nothing, V.empty, V.empty, V.empty)
       else RequestMessages.requestMsgToDumpAndEndpoint projectCacheVal recMsg timestamp recId
 
@@ -258,24 +258,24 @@ convertRequestMessageToSpan rm (spanId, trId) =
 
 createSpanAttributes :: RequestMessages.RequestMessage -> AE.Value
 createSpanAttributes rm =
-  AE.object
-    $ [ ("net.host.name", AE.String $ fromMaybe "" rm.host)
-      , ("http.request.method", AE.String $ rm.method)
-      , ("http.request.path_params", AE.String $ Relude.decodeUtf8 $ AE.encode rm.pathParams)
-      , ("http.request.query_params", AE.String $ Relude.decodeUtf8 $ AE.encode rm.queryParams)
-      , ("apitoolkit.msg_id", AE.String $ maybe "" UUID.toText rm.msgId)
-      , ("apitoolkit.parent_id", AE.String $ maybe "" UUID.toText rm.parentId)
-      , ("http.request.body", AE.String $ rm.requestBody)
-      , ("http.response.body", AE.String $ rm.responseBody)
-      , ("http.response.status_code", AE.String $ T.pack $ show rm.statusCode)
-      , ("apitoolkit.sdk_type", AE.String $ show rm.sdkType)
-      , ("http.route", maybe (AE.String (T.takeWhile (/= '?') rm.rawUrl)) AE.String rm.urlPath)
-      , ("url.path", AE.String $ rm.rawUrl)
-      ]
-    ++ refererPair
-    ++ errorsPair
-    ++ requestHeaderPairs
-    ++ responseHeaderPairs
+  AE.object $
+    [ ("net.host.name", AE.String $ fromMaybe "" rm.host)
+    , ("http.request.method", AE.String $ rm.method)
+    , ("http.request.path_params", AE.String $ Relude.decodeUtf8 $ AE.encode rm.pathParams)
+    , ("http.request.query_params", AE.String $ Relude.decodeUtf8 $ AE.encode rm.queryParams)
+    , ("apitoolkit.msg_id", AE.String $ maybe "" UUID.toText rm.msgId)
+    , ("apitoolkit.parent_id", AE.String $ maybe "" UUID.toText rm.parentId)
+    , ("http.request.body", AE.String $ rm.requestBody)
+    , ("http.response.body", AE.String $ rm.responseBody)
+    , ("http.response.status_code", AE.String $ T.pack $ show rm.statusCode)
+    , ("apitoolkit.sdk_type", AE.String $ show rm.sdkType)
+    , ("http.route", maybe (AE.String (T.takeWhile (/= '?') rm.rawUrl)) AE.String rm.urlPath)
+    , ("url.path", AE.String $ rm.rawUrl)
+    ]
+      ++ refererPair
+      ++ errorsPair
+      ++ requestHeaderPairs
+      ++ responseHeaderPairs
   where
     refererPair = case rm.referer of
       Just (Left text) -> [("http.request.headers.referer", AE.String text)]

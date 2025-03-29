@@ -263,12 +263,12 @@ convertScopeSpan pid resource sl =
   V.map (convertSpanRecord pid resource sl.scopeSpansScope) sl.scopeSpansSpans
 
 
-convertToSpan :: V.Vector (Text, Projects.ProjectId) -> ResourceSpans -> V.Vector Telemetry.SpanRecord
+convertToSpan :: V.Vector (Text, Projects.ProjectId, Integer) -> ResourceSpans -> V.Vector Telemetry.SpanRecord
 convertToSpan pids resourceSpans =
   let
     key = fromMaybe "" $ listToMaybe $ V.toList $ getSpanAttributeValue "at-project-key" [resourceSpans]
-    pid = case find (\(k, _) -> k == key) pids of
-      Just (_, v) -> Just v
+    pid = case find (\(k, _, count) -> k == key) pids of
+      Just (_, v, count) -> if count >= 10000 then Nothing else Just v
       Nothing ->
         let pidText = fromMaybe "" $ listToMaybe $ V.toList $ getSpanAttributeValue "at-project-id" [resourceSpans]
             uId = UUID.fromText pidText
@@ -481,7 +481,7 @@ traceServiceExportH appLogger appCtx (ServerNormalRequest _meta (ExportTraceServ
     let projectKey = fromMaybe (error "Missing project key") $ listToMaybe $ V.toList $ getSpanAttributeValue "at-project-key" req
     projectIdM <- ProjectApiKeys.getProjectIdByApiKey projectKey
     let pid = fromMaybe (error "project API Key is invalid pid") projectIdM
-    let spanRecords = join $ V.map (convertToSpan [(projectKey, pid)]) req
+    let spanRecords = join $ V.map (convertToSpan [(projectKey, pid, 0)]) req
         apitoolkitSpans = V.map mapHTTPSpan spanRecords
     _ <- ProcessMessage.processRequestMessages $ V.toList $ V.catMaybes apitoolkitSpans <&> ("",)
     Telemetry.bulkInsertSpans $ V.filter (\s -> s.spanName /= "apitoolkit-http-span") spanRecords

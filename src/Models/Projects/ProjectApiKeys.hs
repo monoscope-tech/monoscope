@@ -122,10 +122,18 @@ getProjectIdByApiKey projectKey = do
     q = [sql| select project_id from projects.project_api_keys where key_prefix=?|]
 
 
-projectIdsByProjectApiKeys :: V.Vector Text -> DBT IO (V.Vector (Text, Projects.ProjectId))
+projectIdsByProjectApiKeys :: V.Vector Text -> DBT IO (V.Vector (Text, Projects.ProjectId, Integer))
 projectIdsByProjectApiKeys projectKeys = query Select q (Only projectKeys)
   where
-    q = [sql| select key_prefix, project_id from projects.project_api_keys where key_prefix = ANY(?)|]
+    q =
+      [sql| 
+    select key_prefix, project_id,
+      CASE 
+        WHEN s.payment_plan = 'Free' THEN (SELECT count(*) FROM telemetry.spans e WHERE e.project_id = p.project_id AND e.created_at > NOW() - INTERVAL '1 day')
+        ELSE 0
+     END AS daily_events_count
+    from projects.project_api_keys k
+    LEFT JOIN projects.projects p ON p.project_id = k.project_id where key_prefix = ANY(?)|]
 
 
 -- AES256 encryption
