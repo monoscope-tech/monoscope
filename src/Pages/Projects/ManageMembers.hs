@@ -46,16 +46,16 @@ data ManageMembersForm = ManageMembersForm
 
 manageMembersPostH :: Projects.ProjectId -> Maybe Text -> ManageMembersForm -> ATAuthCtx (RespHeaders ManageMembers)
 manageMembersPostH pid onboardingM form = do
-  (sess, project) <- Sessions.sessionAndProject pid
-  appCtx <- ask @AuthContext
-  let currUserId = sess.persistentSession.userId
-  projMembers <- dbtToEff $ ProjectMembers.selectActiveProjectMembers pid
+ (sess, project) <- Sessions.sessionAndProject pid
+ appCtx <- ask @AuthContext
+ let currUserId = sess.persistentSession.userId
+ projMembers <- dbtToEff $ ProjectMembers.selectActiveProjectMembers pid 
+ -- TODO:
+ -- Separate the new emails from the old emails
+ -- Insert the new emails and permissions.
+ -- Update the permissions only of the existing emails.
 
-  -- TODO:
-  -- Separate the new emails from the old emails
-  -- Insert the new emails and permissions.
-  -- Update the permissions only of the existing emails.
-
+ if project.paymentPlan /= "Free" then do
   let usersAndPermissions = zip (form.emails <&> T.strip) form.permissions & uniq
   let uAndPOldAndChanged =
         mapMaybe
@@ -118,6 +118,9 @@ manageMembersPostH pid onboardingM form = do
     else do
       addSuccessToast "Updated Members List Successfully" Nothing
       addRespHeaders $ ManageMembersPost projMembersLatest
+ else do 
+  addErrorToast "Only one member allowed on Free plan" Nothing
+  addRespHeaders $ ManageMembersPost projMembers
 
 
 manageMembersGetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders ManageMembers)

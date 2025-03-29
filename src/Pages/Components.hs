@@ -168,6 +168,7 @@ freePricing pid isSettings = do
     [ class_ "flex flex-col gap-2 h-full w-full"
     , hxPost_ $ "/p/" <> pid.toText <> "/onboarding/pricing"
     , id_ "freePricing"
+    , hxSwap_ "none"
     , hxIndicator_ "#loadingIndicator"
     ]
     $ do
@@ -208,6 +209,7 @@ popularPricing pid lemonUrl isSettings = do
     , hxPost_ $ "/p/" <> pid.toText <> "/onboarding/pricing"
     , id_ "GraduatedPricing"
     , hxIndicator_ "#loadingIndicator"
+    , hxSwap_ "none"
     , hxVals_ "js:{orderIdM: document.querySelector('#popularPricing').value}"
     ]
     $ do
@@ -253,6 +255,7 @@ systemsPricing pid critical isSettings = do
     , hxPost_ $ "/p/" <> pid.toText <> "/onboarding/pricing"
     , id_ "SystemsPricing"
     , hxIndicator_ "#loadingIndicator"
+    , hxSwap_ "none"
     , hxVals_ "js:{orderIdM: document.querySelector('#systemsPricing').value}"
     ]
     $ do

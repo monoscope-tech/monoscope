@@ -307,8 +307,17 @@ pricingUpdateH pid PricingUpdateForm{orderIdM} = do
     Nothing -> do
       _ <- updatePricing "Free" "" "" ""
       handleOnboarding "Free"
-  redirectCS $ "/p/" <> pid.toText <> "/"
-  addRespHeaders ""
+      users <- dbtToEff $ ProjectMembers.selectActiveProjectMembers pid
+      let usersToDel = (\u -> u.id) <$> V.tail users
+      _ <- dbtToEff $ ProjectMembers.softDeleteProjectMembers $ V.toList usersToDel
+      pass
+  if project.paymentPlan == "ONBOARDING"
+    then do
+       redirectCS $ "/p/" <> pid.toText <> "/"
+       addRespHeaders ""
+    else do
+     addSuccessToast "Pricing updated successfully" Nothing
+     addRespHeaders ""
 
 
 pricingUpdateGetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders (PageCtx (Html ())))
