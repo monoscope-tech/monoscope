@@ -46,81 +46,82 @@ data ManageMembersForm = ManageMembersForm
 
 manageMembersPostH :: Projects.ProjectId -> Maybe Text -> ManageMembersForm -> ATAuthCtx (RespHeaders ManageMembers)
 manageMembersPostH pid onboardingM form = do
- (sess, project) <- Sessions.sessionAndProject pid
- appCtx <- ask @AuthContext
- let currUserId = sess.persistentSession.userId
- projMembers <- dbtToEff $ ProjectMembers.selectActiveProjectMembers pid 
- -- TODO:
- -- Separate the new emails from the old emails
- -- Insert the new emails and permissions.
- -- Update the permissions only of the existing emails.
+  (sess, project) <- Sessions.sessionAndProject pid
+  appCtx <- ask @AuthContext
+  let currUserId = sess.persistentSession.userId
+  projMembers <- dbtToEff $ ProjectMembers.selectActiveProjectMembers pid
+  -- TODO:
+  -- Separate the new emails from the old emails
+  -- Insert the new emails and permissions.
+  -- Update the permissions only of the existing emails.
 
- if project.paymentPlan /= "Free" then do
-  let usersAndPermissions = zip (form.emails <&> T.strip) form.permissions & uniq
-  let uAndPOldAndChanged =
-        mapMaybe
-          ( \(email, permission) -> do
-              let projMembersM = projMembers & find (\a -> original a.email == email && a.permission /= permission)
-              projMembersM >>= (\projMember -> Just (projMember.id, permission))
-          )
-          usersAndPermissions
-
-  let uAndPNew = filter (\(email, _) -> not $ any (\a -> original a.email == email) projMembers) usersAndPermissions
-
-  let deletedUAndP =
-        V.toList projMembers
-          & filter (\pm -> not $ any (\(email, _) -> original pm.email == email) usersAndPermissions)
-          & filter (\a -> a.userId /= currUserId)
-          & map (.id) -- We should not allow deleting the current user from the project
-
-  -- Create new users and send notifications
-  newProjectMembers <- forM uAndPNew \(email, permission) -> do
-    userId' <- dbtToEff do
-      userIdM' <- Users.userIdByEmail email
-      case userIdM' of
-        Nothing -> do
-          idM' <- Users.createEmptyUser email -- NEXT Trigger email sending
-          case idM' of
-            Nothing -> error "duplicate email in createEmptyUser"
-            Just idX -> pure idX
-        Just idX -> pure idX
-
-    when (userId' /= currUserId)
-      $ void
-      $ liftIO
-      $ withResource appCtx.pool \conn -> createJob conn "background_jobs" $ BackgroundJobs.InviteUserToProject currUserId pid email project.title -- invite the users to the project (Usually as an email)
-    pure (email, permission, userId')
-
-  let projectMembers =
-        newProjectMembers
-          & filter (\(_, _, id') -> id' /= currUserId)
-          & map (\(email, permission, id') -> ProjectMembers.CreateProjectMembers pid id' permission)
-  _ <- dbtToEff $ ProjectMembers.insertProjectMembers projectMembers -- insert new project members
-
-  -- Update existing contacts with updated permissions
-  -- TODO: Send a notification via background job, about the users permission having been updated.
-  unless (null uAndPOldAndChanged)
-    $ void
-    . dbtToEff
-    $ ProjectMembers.updateProjectMembersPermissons uAndPOldAndChanged
-
-  -- soft delete project members with id
-  unless (null deletedUAndP)
-    $ void
-    . dbtToEff
-    $ ProjectMembers.softDeleteProjectMembers deletedUAndP
-
-  projMembersLatest <- dbtToEff $ ProjectMembers.selectActiveProjectMembers pid
-  if isJust onboardingM
+  if project.paymentPlan /= "Free"
     then do
-      redirectCS $ "/p/" <> pid.toText <> "/onboarding?step=Integration"
-      addRespHeaders $ ManageMembersPost projMembersLatest
+      let usersAndPermissions = zip (form.emails <&> T.strip) form.permissions & uniq
+      let uAndPOldAndChanged =
+            mapMaybe
+              ( \(email, permission) -> do
+                  let projMembersM = projMembers & find (\a -> original a.email == email && a.permission /= permission)
+                  projMembersM >>= (\projMember -> Just (projMember.id, permission))
+              )
+              usersAndPermissions
+
+      let uAndPNew = filter (\(email, _) -> not $ any (\a -> original a.email == email) projMembers) usersAndPermissions
+
+      let deletedUAndP =
+            V.toList projMembers
+              & filter (\pm -> not $ any (\(email, _) -> original pm.email == email) usersAndPermissions)
+              & filter (\a -> a.userId /= currUserId)
+              & map (.id) -- We should not allow deleting the current user from the project
+
+      -- Create new users and send notifications
+      newProjectMembers <- forM uAndPNew \(email, permission) -> do
+        userId' <- dbtToEff do
+          userIdM' <- Users.userIdByEmail email
+          case userIdM' of
+            Nothing -> do
+              idM' <- Users.createEmptyUser email -- NEXT Trigger email sending
+              case idM' of
+                Nothing -> error "duplicate email in createEmptyUser"
+                Just idX -> pure idX
+            Just idX -> pure idX
+
+        when (userId' /= currUserId)
+          $ void
+          $ liftIO
+          $ withResource appCtx.pool \conn -> createJob conn "background_jobs" $ BackgroundJobs.InviteUserToProject currUserId pid email project.title -- invite the users to the project (Usually as an email)
+        pure (email, permission, userId')
+
+      let projectMembers =
+            newProjectMembers
+              & filter (\(_, _, id') -> id' /= currUserId)
+              & map (\(email, permission, id') -> ProjectMembers.CreateProjectMembers pid id' permission)
+      _ <- dbtToEff $ ProjectMembers.insertProjectMembers projectMembers -- insert new project members
+
+      -- Update existing contacts with updated permissions
+      -- TODO: Send a notification via background job, about the users permission having been updated.
+      unless (null uAndPOldAndChanged)
+        $ void
+        . dbtToEff
+        $ ProjectMembers.updateProjectMembersPermissons uAndPOldAndChanged
+
+      -- soft delete project members with id
+      unless (null deletedUAndP)
+        $ void
+        . dbtToEff
+        $ ProjectMembers.softDeleteProjectMembers deletedUAndP
+
+      projMembersLatest <- dbtToEff $ ProjectMembers.selectActiveProjectMembers pid
+      if isJust onboardingM
+        then do
+          redirectCS $ "/p/" <> pid.toText <> "/onboarding?step=Integration"
+          addRespHeaders $ ManageMembersPost projMembersLatest
+        else do
+          addSuccessToast "Updated Members List Successfully" Nothing
+          addRespHeaders $ ManageMembersPost projMembersLatest
     else do
-      addSuccessToast "Updated Members List Successfully" Nothing
-      addRespHeaders $ ManageMembersPost projMembersLatest
- else do 
-  addErrorToast "Only one member allowed on Free plan" Nothing
-  addRespHeaders $ ManageMembersPost projMembers
+      addErrorToast "Only one member allowed on Free plan" Nothing
+      addRespHeaders $ ManageMembersPost projMembers
 
 
 manageMembersGetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders ManageMembers)

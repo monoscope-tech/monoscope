@@ -313,11 +313,11 @@ pricingUpdateH pid PricingUpdateForm{orderIdM} = do
       pass
   if project.paymentPlan == "ONBOARDING"
     then do
-       redirectCS $ "/p/" <> pid.toText <> "/"
-       addRespHeaders ""
+      redirectCS $ "/p/" <> pid.toText <> "/"
+      addRespHeaders ""
     else do
-     addSuccessToast "Pricing updated successfully" Nothing
-     addRespHeaders ""
+      addSuccessToast "Pricing updated successfully" Nothing
+      addRespHeaders ""
 
 
 pricingUpdateGetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders (PageCtx (Html ())))
@@ -338,9 +338,9 @@ pricingUpdateGetH pid = do
 pricingPage_ :: Projects.ProjectId -> Text -> Text -> Bool -> Html ()
 pricingPage_ pid lemon critical isCritical = do
   section_ [class_ "w-full h-full overflow-y-auto py-12"] do
-   div_ [class_ "flex flex-col max-w-4xl mx-auto gap-10 px-4"] do
-    h1_ [class_ "font-semibold text-4xl text-textStrong"] "Update pricing"
-    paymentPlanPicker pid lemon critical False
+    div_ [class_ "flex flex-col max-w-4xl mx-auto gap-10 px-4"] do
+      h1_ [class_ "font-semibold text-4xl text-textStrong"] "Update pricing"
+      paymentPlanPicker pid lemon critical False
 
 
 processProjectPostForm :: Valor.Valid CreateProjectForm -> Projects.ProjectId -> ATAuthCtx (RespHeaders CreateProject)
