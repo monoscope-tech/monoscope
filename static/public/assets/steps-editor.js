@@ -236,10 +236,8 @@ export class StepsEditor extends LitElement {
       } else {
         this.collectionResults[idx] = { ...resp }
       }
-      this.requestUpdate()
     } catch (error) {
       this.sendRequestErrors[idx] = 'Send request failed with message: ' + error.message
-      this.requestUpdate()
     } finally {
       this.isSendingRequest[idx] = false
       this.requestUpdate()
@@ -503,7 +501,7 @@ ${stepData._json}</textarea
                   </div>
                 </details>
               </div>
-              <button class="mt-5 btn btn-sm btn-primary px-2 py-1" ?disabled=${!stepData._url} @click=${e => this.sendStepRequest(e, idx)}>
+              <button class="mt-5 btn btn-sm btn-primary px-2 py-1" @click=${e => this.sendStepRequest(e, idx)}>
               ${this.isSendingRequest[idx] ? html`<span class="loading loading-dots loading-sm"></span>` : 'Send request'}
               </button>
               ${this.sendRequestErrors[idx] !== null ? html`<div class="mt-2 text-textError">${this.sendRequestErrors[idx]}</div>` : nothing}

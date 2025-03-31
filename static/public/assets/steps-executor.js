@@ -3,7 +3,7 @@ import { html } from './js/thirdparty/lit.js'
 export async function makeRequestAndProcessResponse(requestObject) {
   try {
     // Extract necessary information from the requestObject
-    const url = replaceVariables(requestObject._url)
+    const url = new URL(replaceVariables(requestObject._url))
     const method = requestObject._method
     const headers = requestObject.headers || {}
     const rawBody = requestObject._requestBody ? requestObject._requestBody : requestObject._json || null
