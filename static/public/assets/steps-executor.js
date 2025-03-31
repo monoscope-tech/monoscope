@@ -66,7 +66,12 @@ export async function makeRequestAndProcessResponse(requestObject) {
 }
 
 export function generateRequestPreviewFromObject(requestObject) {
-  const url = new URL(replaceVariables(requestObject._url))
+  let url = ''
+  try {
+    url = new URL(replaceVariables(requestObject._url))
+  } catch (error) {
+    url = requestObject._url
+  }
   const method = requestObject._requestType === 'raw' ? 'POST' : 'GET' // Default to GET if not raw
   const userHeaders = requestObject.headers || {}
   const httpVersion = requestObject.httpVersion || 'HTTP/1.1' // Default to HTTP/1.1 if not provided

@@ -494,7 +494,7 @@ renderNavBottomItem (iconName, bgColor, textColor, linkText, link, targetBlankM,
     attrs =
       defaultAttrs
         ++ (if isJust targetBlankM then [target_ "BLANK_"] else [])
-        ++ (maybe [] (\onClick -> [term "onclick" onClick]) onClickM)
+        ++ (maybe [] (\onClick -> [onclick_ onClick]) onClickM)
    in
     a_ attrs $ do
       span_

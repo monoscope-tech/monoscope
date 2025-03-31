@@ -236,8 +236,10 @@ export class StepsEditor extends LitElement {
       } else {
         this.collectionResults[idx] = { ...resp }
       }
+      this.requestUpdate()
     } catch (error) {
       this.sendRequestErrors[idx] = 'Send request failed with message: ' + error.message
+      this.requestUpdate()
     } finally {
       this.isSendingRequest[idx] = false
       this.requestUpdate()
