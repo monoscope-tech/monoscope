@@ -193,6 +193,9 @@ library:
     - hiedb-plugin
     - casing
     - yaml
+    - hs-opentelemetry-sdk
+    - hs-opentelemetry-instrumentation-postgresql-simple
+    # - hs-opentelemetry-instrumentation-auto
 
 executables:
   apitoolkit-server-exe:
@@ -200,6 +203,7 @@ executables:
     source-dirs: app
     ghc-options:
       - -threaded
+      # - -fplugin AutoInstrument
       - -rtsopts
       - -with-rtsopts=-N
       - -j4

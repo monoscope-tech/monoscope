@@ -37,7 +37,7 @@ import Data.Time (UTCTime, ZonedTime)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity
-import Database.PostgreSQL.Entity.DBT (QueryNature (..), execute, query, queryOne)
+import Database.PostgreSQL.Entity.DBT (QueryNature (..), queryOne)
 import Database.PostgreSQL.Entity.Types
 import Database.PostgreSQL.Simple (FromRow, Only (Only), ResultError (..), ToRow)
 import Database.PostgreSQL.Simple.FromField (FromField (fromField), returnError)
@@ -55,7 +55,7 @@ import Pkg.DBUtils (WrappedEnumSC (..))
 import Pkg.Parser.Stats (Section)
 import Relude
 import Web.HttpApiData
-
+import OpenTelemetry.Instrumentation.PostgresqlSimple (query, execute)
 
 newtype ProjectId = ProjectId {unProjectId :: UUID.UUID}
   deriving stock (Generic, Show, Read, THS.Lift)
