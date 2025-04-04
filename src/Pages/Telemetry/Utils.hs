@@ -39,7 +39,7 @@ getRequestDetails spanRecord = case spanRecord.attributes of
     _ -> case KEM.lookup "rpc.system" r of
       Just (AE.String "grpc") -> Just ("GRPC", fromMaybe "" $ getText "rpc.service" r, fromMaybe "" $ getText "rpc.method" r, getStatus r)
       _ -> case KEM.lookup "db.system" r of
-        Just (AE.String db) -> Just ("DB", db, fromMaybe "" $ getText "db.statement" r, getStatus r)
+        Just (AE.String db) -> Just ("DB", db, fromMaybe (fromMaybe "" $ getText "db.statement" r) $ getText "db.query.text" r, getStatus r)
         _ -> case KEM.lookup "http.request.method" r of
           Just (AE.String method) -> Just ("HTTP", method, getUrl r, getStatus r)
           _ -> Nothing

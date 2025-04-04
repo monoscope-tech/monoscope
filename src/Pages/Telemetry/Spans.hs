@@ -78,9 +78,9 @@ expandedSpanItem pid sp leftM rightM = do
                       faSprite_ "copy" "regular" "h-8 w-8 border border-slate-300 bg-fillWeaker rounded-full p-2 text-slate-500"
                 (scheme, method, path, status) -> do
                   -- span_ [class_ " font-medium border rounded-sm px-2 py-1.5"] $ toHtml scheme
-                  div_ [class_ "flex items-center"] do
+                  div_ [class_ "flex flex-wrap items-center"] do
                     span_ [class_ "flex gap-2 items-center text-textStrong bg-fillWeak border border-strokeWeak rounded-lg whitespace-nowrap px-2 py-1"] $ toHtml method
-                    span_ [class_ "px-2 py-1.5 max-w-96 truncate"] $ toHtml path
+                    span_ [class_ "px-2 py-1.5 max-w-96"] $ toHtml path
                     let extraClass = getGrpcStatusColor status
                     when (scheme /= "DB") $ span_ [class_ $ " px-2 py-1.5 border-l " <> extraClass] $ toHtml $ show status
           Nothing -> do
@@ -232,8 +232,8 @@ spanBadge val key = do
 
 selectiveReqToJson :: RequestMessage -> AE.Value
 selectiveReqToJson req =
-  AE.object
-    $ concat @[]
+  AE.object $
+    concat @[]
       [ ["created_at" AE..= req.timestamp]
       , ["errors" AE..= fromMaybe [] req.errors]
       , ["host" AE..= req.host]
