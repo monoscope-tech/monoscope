@@ -195,6 +195,8 @@ library:
     - yaml
     - hs-opentelemetry-sdk
     - hs-opentelemetry-instrumentation-postgresql-simple
+    - hs-opentelemetry-instrumentation-wai
+    - hs-opentelemetry-exporter-otlp
     # - hs-opentelemetry-instrumentation-auto
 
 executables:

@@ -226,7 +226,9 @@ library
     , grpc-haskell
     , hashtables
     , hiedb-plugin
+    , hs-opentelemetry-exporter-otlp
     , hs-opentelemetry-instrumentation-postgresql-simple
+    , hs-opentelemetry-instrumentation-wai
     , hs-opentelemetry-sdk
     , hspec
     , hspec-expectations-json

@@ -13,6 +13,7 @@ import Effectful
 import Effectful.Concurrent (runConcurrent)
 import Effectful.Fail (runFailIO)
 import Effectful.Time (runTime)
+import GHC.IO (unsafePerformIO)
 import Log qualified
 import Network.Wai.Handler.Warp (
   defaultSettings,
@@ -22,6 +23,8 @@ import Network.Wai.Handler.Warp (
  )
 import Network.Wai.Log qualified as WaiLog
 import Network.Wai.Middleware.Heartbeat (heartbeatMiddleware)
+import OpenTelemetry.Instrumentation.Wai (newOpenTelemetryWaiMiddleware, newOpenTelemetryWaiMiddleware')
+import OpenTelemetry.Trace (TracerProvider)
 import Opentelemetry.OtlpServer qualified as OtlpServer
 import Pkg.Queue qualified as Queue
 import ProcessMessage (processMessages)
@@ -48,8 +51,8 @@ import System.Types (effToServantHandler)
 import Web.Routes qualified as Routes
 
 
-runAPItoolkit :: IO ()
-runAPItoolkit =
+runAPItoolkit :: TracerProvider -> IO ()
+runAPItoolkit tp =
   Safe.bracket
     (getAppContext & runFailIO & runEff)
     (runEff . shutdownAPItoolkit)
@@ -57,11 +60,11 @@ runAPItoolkit =
       let baseURL = "http://localhost:" <> show env.config.port
       liftIO $ blueMessage $ "Starting APItoolkit server on " <> baseURL
       let withLogger = Logging.makeLogger env.config.loggingDestination
-      withLogger (`runServer` env)
+      withLogger \l -> runServer l env tp
 
 
-runServer :: IOE :> es => Log.Logger -> AuthContext -> Eff es ()
-runServer appLogger env = do
+runServer :: IOE :> es => Log.Logger -> AuthContext -> TracerProvider -> Eff es ()
+runServer appLogger env tp = do
   loggingMiddleware <- Logging.runLog (show env.config.environment) appLogger WaiLog.mkLogMiddleware
   let server = mkServer appLogger env
   let warpSettings =
@@ -70,13 +73,12 @@ runServer appLogger env = do
           & setOnException \mRequest exception -> Log.runLogT "apitoolkit" appLogger Log.LogAttention $ do
             Log.logAttention "Unhandled exception" $ AE.object ["exception" AE..= show @String exception]
             Safe.throw exception
-
   let wrappedServer =
         heartbeatMiddleware
-        -- . loggingMiddleware
-        -- . const
-        $
-          server
+          . (newOpenTelemetryWaiMiddleware' tp)
+          -- . loggingMiddleware
+          -- . const
+          $ server
   let bgJobWorker = BackgroundJobs.jobsWorkerInit appLogger env
 
   -- let ojStartArgs =

@@ -250,6 +250,13 @@ packages:
   original:
     hackage: hs-opentelemetry-instrumentation-auto-0.1.0.1
 - completed:
+    hackage: hs-opentelemetry-instrumentation-wai-0.1.1.0@sha256:d97b4cb3870217e64e95da3f51db814eca62eb57484ee0a6f747366da5940bc2,1371
+    pantry-tree:
+      sha256: 23bbd4e58ba48b0ec3541a494d02e08e6b934d7173523be8aab04c6b2c7bb98b
+      size: 360
+  original:
+    hackage: hs-opentelemetry-instrumentation-wai-0.1.1.0@sha256:d97b4cb3870217e64e95da3f51db814eca62eb57484ee0a6f747366da5940bc2,1371
+- completed:
     commit: bcd3aeb5ca63a02ba026be4f02f4ce5767fb4f78
     git: https://github.com/Kleidukos/pg-transact-effectful
     name: pg-transact-effectful
