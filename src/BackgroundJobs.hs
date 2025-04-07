@@ -50,7 +50,13 @@ data BgJobs
   | CreatedProjectSuccessfully Users.UserId Projects.ProjectId Text Text
   | SendDiscordData Users.UserId Projects.ProjectId Text [Text] Text
   | -- NewAnomaly Projects.ProjectId Anomalies.AnomalyTypes Anomalies.AnomalyActions TargetHash
-    NewAnomaly Projects.ProjectId ZonedTime Text Text Text
+    NewAnomaly
+      { projectId :: Projects.ProjectId
+      , createdAt :: ZonedTime
+      , anomalyType :: Text
+      , anomalyAction :: Text
+      , targetHashes :: [Text]
+      }
   | DailyReports Projects.ProjectId
   | WeeklyReports Projects.ProjectId
   | DailyJob
@@ -82,7 +88,12 @@ jobsRunner logger authCtx job = when authCtx.config.enableBackgroundJobs $ do
   void $ runBackground logger authCtx do
     case bgJob of
       QueryMonitorsTriggered queryMonitorIds -> queryMonitorsTriggered queryMonitorIds
-      NewAnomaly pid createdAt anomalyTypesT anomalyActionsT targetHash -> newAnomalyJob pid createdAt anomalyTypesT anomalyActionsT targetHash
+      NewAnomaly{projectId, createdAt, anomalyType, anomalyAction, targetHashes} ->
+        case nonEmpty targetHashes of
+          Just (hash :| _) ->
+            newAnomalyJob projectId createdAt anomalyType anomalyAction hash
+          Nothing ->
+            pure ()
       InviteUserToProject userId projectId reciever projectTitle' -> do
         userM <- Users.userById userId
         whenJust userM \user -> do
@@ -292,8 +303,8 @@ handleQueryMonitorThreshold monitorE isAlert = do
 
 jobsWorkerInit :: Log.Logger -> Config.AuthContext -> IO ()
 jobsWorkerInit logger appCtx =
-  startJobRunner
-    $ mkConfig jobLogger "background_jobs" appCtx.jobsPool (MaxConcurrentJobs 1) (jobsRunner logger appCtx) id
+  startJobRunner $
+    mkConfig jobLogger "background_jobs" appCtx.jobsPool (MaxConcurrentJobs 1) (jobsRunner logger appCtx) id
   where
     jobLogger :: LogLevel -> LogEvent -> IO ()
     jobLogger logLevel logEvent = Log.runLogT "OddJobs" logger Log.LogAttention $ Log.logInfo "Background jobs ping." (show @Text logLevel, show @Text logEvent) -- logger show (logLevel, logEvent)
@@ -481,8 +492,8 @@ Endpoint: `{endpointPath}`
 [View more](https://app.apitoolkit.io/p/{pid.toText}/anomalies/by_hash/{targetHash})|]
             whenJust project.discordUrl (`sendDiscordNotif` msg)
           _ -> do
-            when (totalRequestsCount > 50)
-              $ forM_ users \u -> do
+            when (totalRequestsCount > 50) $
+              forM_ users \u -> do
                 let templateVars =
                       AE.object
                         [ "user_name" AE..= u.firstName
@@ -566,21 +577,21 @@ Endpoint: `{endpointPath}`
       err <- Unsafe.fromJust <<$>> dbtToEff $ Anomalies.errorByHash targetHash
       issueId <- liftIO $ Anomalies.AnomalyId <$> UUIDV4.nextRandom
       _ <-
-        dbtToEff
-          $ Anomalies.insertIssue
-          $ Anomalies.Issue
-            { id = issueId
-            , createdAt = err.createdAt
-            , updatedAt = err.updatedAt
-            , projectId = pid
-            , anomalyType = Anomalies.ATRuntimeException
-            , targetHash = targetHash
-            , issueData = Anomalies.IDNewRuntimeExceptionIssue err.errorData
-            , acknowlegedAt = Nothing
-            , acknowlegedBy = Nothing
-            , endpointId = Nothing
-            , archivedAt = Nothing
-            }
+        dbtToEff $
+          Anomalies.insertIssue $
+            Anomalies.Issue
+              { id = issueId
+              , createdAt = err.createdAt
+              , updatedAt = err.updatedAt
+              , projectId = pid
+              , anomalyType = Anomalies.ATRuntimeException
+              , targetHash = targetHash
+              , issueData = Anomalies.IDNewRuntimeExceptionIssue err.errorData
+              , acknowlegedAt = Nothing
+              , acknowlegedBy = Nothing
+              , endpointId = Nothing
+              , archivedAt = Nothing
+              }
       forM_ project.notificationsChannel \case
         Projects.NSlack ->
           sendSlackMessage

@@ -333,19 +333,65 @@ ALTER TABLE apis.anomalies ADD CONSTRAINT anomalies_acknowleged_by_fkey FOREIGN 
 
 CREATE OR REPLACE FUNCTION apis.new_anomaly_proc() RETURNS trigger AS $$
 DECLARE
-	anomaly_type apis.anomaly_type;
-	anomaly_action apis.anomaly_action;
+  anomaly_type apis.anomaly_type;
+  anomaly_action apis.anomaly_action;
+  existing_job_id INT;
+  existing_target_hashes JSONB;
 BEGIN
   IF TG_WHEN <> 'AFTER' THEN
-      RAISE EXCEPTION 'apis.new_anomaly_proc() may only run as an AFTER trigger';
+    RAISE EXCEPTION 'apis.new_anomaly_proc() may only run as an AFTER trigger';
   END IF;
+
   anomaly_type := TG_ARGV[0];
   anomaly_action := TG_ARGV[1];
-  INSERT INTO apis.anomalies (project_id, anomaly_type, action, target_hash) VALUES (NEW.project_id, anomaly_type, anomaly_action, NEW.hash);
-  INSERT INTO background_jobs (run_at, status, payload) VALUES (now() + INTERVAL '5 minutes', 'queued',  jsonb_build_object('tag', 'NewAnomaly', 'contents', json_build_array(NEW.project_id, NEW.created_at, anomaly_type::text, anomaly_action::text, NEW.hash)));
+
+  INSERT INTO apis.anomalies (
+    project_id, anomaly_type, action, target_hash
+  ) VALUES (
+    NEW.project_id, anomaly_type, anomaly_action, NEW.hash
+  );
+
+  -- Look for existing job
+  SELECT id, payload->'targetHashes'
+  INTO existing_job_id, existing_target_hashes
+  FROM background_jobs
+  WHERE payload->>'tag' = 'NewAnomaly'
+    AND payload->>'projectId' = NEW.project_id::TEXT
+    AND payload->>'anomalyType' = anomaly_type::TEXT
+    AND status = 'queued'
+  ORDER BY run_at ASC
+  LIMIT 1;
+
+  IF existing_job_id IS NOT NULL THEN
+    
+    UPDATE background_jobs SET payload =  jsonb_build_object(
+        'tag', 'NewAnomaly',
+        'projectId', NEW.project_id,
+        'createdAt', to_jsonb(NEW.created_at),
+        'anomalyType', anomaly_type::TEXT,
+        'anomalyAction', anomaly_action::TEXT,
+        'targetHashes', existing_target_hashes || to_jsonb(NEW.hash)
+      ) WHERE id = existing_job_id;
+  ELSE
+    INSERT INTO background_jobs (run_at, status, payload)
+    VALUES (
+      now() + INTERVAL '5 minutes',
+      'queued',
+      jsonb_build_object(
+        'tag', 'NewAnomaly',
+        'projectId', NEW.project_id,
+        'createdAt', to_jsonb(NEW.created_at),
+        'anomalyType', anomaly_type::TEXT,
+        'anomalyAction', anomaly_action::TEXT,
+        'targetHashes', jsonb_build_array(NEW.hash)
+      )
+    );
+  END IF;
+
   RETURN NULL;
 END;
 $$ LANGUAGE plpgsql;
+
 
 CREATE OR REPLACE TRIGGER fields_created_anomaly AFTER INSERT ON apis.fields FOR EACH ROW EXECUTE PROCEDURE apis.new_anomaly_proc('field', 'created');
 CREATE OR REPLACE TRIGGER format_created_anomaly AFTER INSERT ON apis.formats FOR EACH ROW EXECUTE PROCEDURE apis.new_anomaly_proc('format', 'created');
