@@ -335,6 +335,7 @@ CREATE OR REPLACE FUNCTION apis.new_anomaly_proc() RETURNS trigger AS $$
 DECLARE
   anomaly_type apis.anomaly_type;
   anomaly_action apis.anomaly_action;
+  should_record_anomaly BOOLEAN := true;
   existing_job_id INT;
   existing_target_hashes JSONB;
 BEGIN
@@ -345,11 +346,17 @@ BEGIN
   anomaly_type := TG_ARGV[0];
   anomaly_action := TG_ARGV[1];
 
-  INSERT INTO apis.anomalies (
-    project_id, anomaly_type, action, target_hash
-  ) VALUES (
-    NEW.project_id, anomaly_type, anomaly_action, NEW.hash
-  );
+  IF array_length(TG_ARGV, 1) >= 3 AND TG_ARGV[2] = 'skip_anomaly_record' THEN
+    should_record_anomaly := false;
+  END IF;
+
+  IF should_record_anomaly THEN
+    INSERT INTO apis.anomalies (
+      project_id, anomaly_type, action, target_hash
+    ) VALUES (
+      NEW.project_id, anomaly_type, anomaly_action, NEW.hash
+    );
+  END IF;
 
   -- Look for existing job
   SELECT id, payload->'targetHashes'
@@ -363,15 +370,14 @@ BEGIN
   LIMIT 1;
 
   IF existing_job_id IS NOT NULL THEN
-    
-    UPDATE background_jobs SET payload =  jsonb_build_object(
-        'tag', 'NewAnomaly',
-        'projectId', NEW.project_id,
-        'createdAt', to_jsonb(NEW.created_at),
-        'anomalyType', anomaly_type::TEXT,
-        'anomalyAction', anomaly_action::TEXT,
-        'targetHashes', existing_target_hashes || to_jsonb(NEW.hash)
-      ) WHERE id = existing_job_id;
+    UPDATE background_jobs SET payload = jsonb_build_object(
+      'tag', 'NewAnomaly',
+      'projectId', NEW.project_id,
+      'createdAt', to_jsonb(NEW.created_at),
+      'anomalyType', anomaly_type::TEXT,
+      'anomalyAction', anomaly_action::TEXT,
+      'targetHashes', existing_target_hashes || to_jsonb(NEW.hash)
+    ) WHERE id = existing_job_id;
   ELSE
     INSERT INTO background_jobs (run_at, status, payload)
     VALUES (
@@ -927,7 +933,7 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
-CREATE OR REPLACE TRIGGER error_created_anomaly AFTER INSERT ON apis.errors FOR EACH ROW EXECUTE PROCEDURE apis.new_anomaly_proc_job_only('runtime_exception', 'created');
+CREATE OR REPLACE TRIGGER error_created_anomaly AFTER INSERT ON apis.errors FOR EACH ROW EXECUTE PROCEDURE apis.new_anomaly_proc('runtime_exception', 'created', "skip_anomaly_record");
 
 
 COMMIT;

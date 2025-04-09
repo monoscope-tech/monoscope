@@ -5,6 +5,7 @@ import Data.Aeson qualified as AE
 import Data.Aeson.QQ (aesonQQ)
 import Data.CaseInsensitive qualified as CI
 import Data.Pool (withResource)
+import Data.Text qualified as T
 import Data.Time (DayOfWeek (Monday), UTCTime (utctDay), ZonedTime, addUTCTime, dayOfWeek, getZonedTime)
 import Data.Time.LocalTime (LocalTime (localDay), ZonedTime (zonedTimeToLocalTime), getCurrentTimeZone, utcToZonedTime, zonedTimeToUTC)
 import Data.UUID.V4 qualified as UUIDV4
@@ -88,12 +89,7 @@ jobsRunner logger authCtx job = when authCtx.config.enableBackgroundJobs $ do
   void $ runBackground logger authCtx do
     case bgJob of
       QueryMonitorsTriggered queryMonitorIds -> queryMonitorsTriggered queryMonitorIds
-      NewAnomaly{projectId, createdAt, anomalyType, anomalyAction, targetHashes} ->
-        case nonEmpty targetHashes of
-          Just (hash :| _) ->
-            newAnomalyJob projectId createdAt anomalyType anomalyAction hash
-          Nothing ->
-            pure ()
+      NewAnomaly{projectId, createdAt, anomalyType, anomalyAction, targetHashes} -> newAnomalyJob projectId createdAt anomalyType anomalyAction (V.fromList targetHashes)
       InviteUserToProject userId projectId reciever projectTitle' -> do
         userM <- Users.userById userId
         whenJust userM \user -> do
@@ -458,50 +454,58 @@ emailQueryMonitorAlert monitorE@Monitors.QueryMonitorEvaled{alertConfig} email u
 --     Apitoolkit team
 --               |]
 
-newAnomalyJob :: Projects.ProjectId -> ZonedTime -> Text -> Text -> Text -> ATBackgroundCtx ()
-newAnomalyJob pid createdAt anomalyTypesT anomalyActionsT targetHash = do
+convertAnomaliesToIssues :: V.Vector Anomalies.AnomalyVM -> V.Vector Endpoints.Endpoint -> V.Vector Anomalies.Issue
+convertAnomaliesToIssues ans ens = V.catMaybes $ (\e -> V.find (\a -> a.targetHash == e.hash) ans >>= (\a -> Anomalies.convertAnomalyToIssue (Just e.host) a)) <$> ens
+
+
+newAnomalyJob :: Projects.ProjectId -> ZonedTime -> Text -> Text -> V.Vector Text -> ATBackgroundCtx ()
+newAnomalyJob pid createdAt anomalyTypesT anomalyActionsT targetHashes = do
   let anomalyType = fromMaybe (error "parseAnomalyTypes returned Nothing") $ Anomalies.parseAnomalyTypes anomalyTypesT
   case anomalyType of
     Anomalies.ATEndpoint -> do
-      totalRequestsCount <- dbtToEff $ RequestDumps.countRequestDumpByProject pid
-      whenJustM (dbtToEff $ Anomalies.getAnomalyVM pid targetHash) \anomaly -> do
-        endp <- dbtToEff $ Endpoints.endpointByHash pid targetHash
-        users <- dbtToEff $ Projects.usersByProjectId pid
-        project <- Unsafe.fromJust <<$>> dbtToEff $ Projects.projectById pid
-        let enp = Unsafe.fromJust endp
-        let endpointPath = enp.method <> " " <> enp.urlPath
-        _ <- dbtToEff $ Anomalies.insertIssue $ Unsafe.fromJust $ Anomalies.convertAnomalyToIssue (Just enp.host) anomaly
-        forM_ project.notificationsChannel \case
-          Projects.NSlack ->
-            sendSlackMessage
-              pid
-              [fmtTrim| 🤖 *New Endpoint Detected for `{project.title}`*
+      anomaliesVM <- dbtToEff $ Anomalies.getAnomaliesVM pid targetHashes
+      endpoints <- dbtToEff $ Endpoints.endpointsByHashes pid targetHashes
+      users <- dbtToEff $ Projects.usersByProjectId pid
+      project <- Unsafe.fromJust <<$>> dbtToEff $ Projects.projectById pid
+      let endpointsPaths = (\e -> e.method <> " " <> e.urlPath) <$> endpoints
+          endpointLines = T.intercalate "\n" (V.toList endpointsPaths)
+          anIssues = convertAnomaliesToIssues anomaliesVM endpoints
+          targetHash = fromMaybe "" $ viaNonEmpty head (V.toList targetHashes)
+      _ <- dbtToEff $ Anomalies.insertIssues anIssues
+      forM_ project.notificationsChannel \case
+        Projects.NSlack -> do
+          sendSlackMessage
+            pid
+            [fmtTrim| {{...}} *New Endpoint(s) Detected for `{project.title}`*
 
 We have detected a new endpoint on *{project.title}*
 
-Endpoint: `{endpointPath}`
+**Endpoints:**
+`{endpointLines}`
 
 <https://app.apitoolkit.io/p/{pid.toText}/anomalies/by_hash/{targetHash}|More details on APItoolkit>
                               |]
-          Projects.NDiscord -> do
-            let msg =
-                  [fmtTrim|
-{{···}} **New Endpoint Detected For {project.title}**
+        Projects.NDiscord -> do
+          let msg =
+                [fmtTrim|
+{{···}} **New Endpoint(s) Detected For {project.title}**
 
-**Endpoint**: `{endpointPath}`
+**Endpoints**: 
+`{endpointLines}`
 [View more](https://app.apitoolkit.io/p/{pid.toText}/anomalies/by_hash/{targetHash})|]
-            whenJust project.discordUrl (`sendDiscordNotif` msg)
-          _ -> do
-            when (totalRequestsCount > 50) $
-              forM_ users \u -> do
-                let templateVars =
-                      AE.object
-                        [ "user_name" AE..= u.firstName
-                        , "project_name" AE..= project.title
-                        , "anomaly_url" AE..= ("https://app.apitoolkit.io/p/" <> pid.toText <> "/anomalies/by_hash/" <> targetHash)
-                        , "endpoint_name" AE..= endpointPath
-                        ]
-                sendPostmarkEmail (CI.original u.email) (Just ("anomaly-endpoint", templateVars)) Nothing
+          whenJust project.discordUrl (`sendDiscordNotif` msg)
+        _ -> do
+          forM_ users \u -> do
+            let templateVars =
+                  AE.object
+                    [ "user_name" AE..= u.firstName
+                    , "project_name" AE..= project.title
+                    , "anomaly_url" AE..= ("https://app.apitoolkit.io/p/" <> pid.toText <> "/anomalies/by_hash/" <> targetHash)
+                    , "endpoint_name" AE..= endpointsPaths
+                    ]
+            sendPostmarkEmail (CI.original u.email) (Just ("anomaly-endpoint-2", templateVars)) Nothing
+
+      pass
     Anomalies.ATShape -> do
       pass
     -- hasEndpointAnomaly <- dbtToEff $ Anomalies.getShapeParentAnomalyVM pid targetHash
@@ -572,31 +576,36 @@ Endpoint: `{endpointPath}`
     --          }|]
     --     sendPostmarkEmail (CI.original u.email) "anomaly-field" templateVars
     Anomalies.ATRuntimeException -> do
+      let targetHash = fromMaybe "" $ viaNonEmpty head (V.toList targetHashes)
       users <- dbtToEff $ Projects.usersByProjectId pid
       project <- Unsafe.fromJust <<$>> dbtToEff $ Projects.projectById pid
-      err <- Unsafe.fromJust <<$>> dbtToEff $ Anomalies.errorByHash targetHash
+      errs <- dbtToEff $ Anomalies.errorsByHashes pid targetHashes
       issueId <- liftIO $ Anomalies.AnomalyId <$> UUIDV4.nextRandom
       _ <-
         dbtToEff $
-          Anomalies.insertIssue $
-            Anomalies.Issue
-              { id = issueId
-              , createdAt = err.createdAt
-              , updatedAt = err.updatedAt
-              , projectId = pid
-              , anomalyType = Anomalies.ATRuntimeException
-              , targetHash = targetHash
-              , issueData = Anomalies.IDNewRuntimeExceptionIssue err.errorData
-              , acknowlegedAt = Nothing
-              , acknowlegedBy = Nothing
-              , endpointId = Nothing
-              , archivedAt = Nothing
-              }
+          Anomalies.insertIssues $
+            ( \err ->
+                Anomalies.Issue
+                  { id = issueId
+                  , createdAt = err.createdAt
+                  , updatedAt = err.updatedAt
+                  , projectId = pid
+                  , anomalyType = Anomalies.ATRuntimeException
+                  , targetHash = targetHash
+                  , issueData = Anomalies.IDNewRuntimeExceptionIssue err.errorData
+                  , acknowlegedAt = Nothing
+                  , acknowlegedBy = Nothing
+                  , endpointId = Nothing
+                  , archivedAt = Nothing
+                  }
+            )
+              <$> errs
+
       forM_ project.notificationsChannel \case
         Projects.NSlack ->
           sendSlackMessage
             pid
-            [fmtTrim| 🤖 *New Runtime Exception Found for `{project.title}`*
+            [fmtTrim| 🤖 *New Runtime Exception(s) Found for `{project.title}`*
 
 A new runtime exception has been detected. click the link below to see more details.
 
