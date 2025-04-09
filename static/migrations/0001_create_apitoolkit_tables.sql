@@ -918,22 +918,7 @@ SELECT manage_updated_at('apis.errors');
 CREATE INDEX IF NOT EXISTS idx_apis_errors_project_id ON apis.errors(project_id);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_apis_errors_project_id_hash ON apis.errors(project_id, hash);
 
-CREATE OR REPLACE FUNCTION apis.new_anomaly_proc_job_only() RETURNS trigger AS $$
-DECLARE
-	anomaly_type apis.anomaly_type;
-	anomaly_action apis.anomaly_action;
-BEGIN
-  IF TG_WHEN <> 'AFTER' THEN
-      RAISE EXCEPTION 'apis.new_anomaly_proc() may only run as an AFTER trigger';
-  END IF;
-  anomaly_type := TG_ARGV[0];
-  anomaly_action := TG_ARGV[1];
-  INSERT INTO background_jobs (run_at, status, payload) VALUES (now(), 'queued',  jsonb_build_object('tag', 'NewAnomaly', 'contents', json_build_array(NEW.project_id, NEW.created_at, anomaly_type::text, anomaly_action::text, NEW.hash)));
-  RETURN NULL;
-END;
-$$ LANGUAGE plpgsql;
-
-CREATE OR REPLACE TRIGGER error_created_anomaly AFTER INSERT ON apis.errors FOR EACH ROW EXECUTE PROCEDURE apis.new_anomaly_proc('runtime_exception', 'created', "skip_anomaly_record");
+CREATE OR REPLACE TRIGGER error_created_anomaly AFTER INSERT ON apis.errors FOR EACH ROW EXECUTE PROCEDURE apis.new_anomaly_proc('runtime_exception', 'created', 'skip_anomaly_record');
 
 
 COMMIT;
