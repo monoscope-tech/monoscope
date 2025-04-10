@@ -19,6 +19,9 @@ module Models.Telemetry.Telemetry (
   Summary (..),
   EHBucket (..),
   Quantile (..),
+  OtelLogsAndSpans (..),
+  Severity (..),
+  Context (..),
   getDataPointsData,
   bulkInsertLogs,
   spanRecordById,
@@ -27,6 +30,7 @@ module Models.Telemetry.Telemetry (
   bulkInsertMetrics,
   bulkInsertSpans,
   bulkInsertSpansTF,
+  bulkInsertOtelLogsAndSpansTF,
   getMetricChartListData,
   getLogsByTraceIds,
   getMetricLabelValues,
@@ -45,18 +49,19 @@ import Data.Aeson.Key qualified as AEK
 import Data.Aeson.KeyMap qualified as KEM
 import Data.ByteString.Base16 qualified as B16
 import Data.List (nubBy)
+import Data.Map qualified as Map
 import Data.Text qualified as T
 import Data.Time (TimeZone (..), UTCTime, formatTime, utcToZonedTime)
 import Data.Time.Format (defaultTimeLocale)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity.DBT (QueryNature (..), executeMany, query, queryOne)
-import Database.PostgreSQL.Simple (Only (..))
-import Database.PostgreSQL.Simple.FromField (FromField (..))
+import Database.PostgreSQL.Simple (Only (..), ResultError (ConversionFailed))
+import Database.PostgreSQL.Simple.FromField (Conversion (..), FromField (..), returnError)
 import Database.PostgreSQL.Simple.FromRow
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
-import Database.PostgreSQL.Simple.ToField (ToField)
+import Database.PostgreSQL.Simple.ToField (ToField (toField))
 import Database.PostgreSQL.Simple.ToRow
 import Database.PostgreSQL.Simple.Types (Query (..))
 import Database.PostgreSQL.Transact qualified as DBT
@@ -72,6 +77,27 @@ import Pkg.DBUtils (WrappedEnum (..))
 import Relude
 import RequestMessages (RequestMessage (..))
 import Utils (lookupValueText)
+
+
+-- Lens-like access helpers for Map Text AE.Value fields
+atMapText :: Text -> Maybe (Map Text AE.Value) -> Maybe Text
+atMapText key maybeMap = do
+  m <- maybeMap
+  v <- Map.lookup key m
+  case v of
+    AE.String t -> Just t
+    AE.Number n -> Just $ T.pack $ show n
+    _ -> Nothing
+
+
+atMapWord32 :: Text -> Maybe (Map Text AE.Value) -> Maybe Word32
+atMapWord32 key maybeMap = do
+  m <- maybeMap
+  v <- Map.lookup key m
+  case v of
+    AE.Number n -> Just $ round n
+    AE.String t -> readMaybe $ T.unpack t
+    _ -> Nothing
 
 
 data SeverityLevel = SLDebug | SLInfo | SLWarn | SLError | SLFatal
@@ -133,6 +159,20 @@ instance AE.FromJSON ByteString where
 
 instance AE.ToJSON ByteString where
   toJSON = AE.String . decodeUtf8 . B16.encode
+
+
+-- Custom FromField instance for Map Text AE.Value
+instance FromField (Map Text AE.Value) where
+  fromField f mdata = do
+    v <- fromField f mdata :: Conversion AE.Value
+    case v of
+      AE.Object o -> pure $ KEM.toMapText o
+      _ -> returnError ConversionFailed f "Expected a JSON object"
+
+
+-- Custom ToField instance for Map Text AE.Value
+instance ToField (Map Text AE.Value) where
+  toField = toField . AE.Object . KEM.fromMapText
 
 
 data SpanRecord = SpanRecord
@@ -653,6 +693,143 @@ bulkInsertMetrics metrics = do
       )
 
 
+-- OtelLogsAndSpans ToRow instance
+instance ToRow OtelLogsAndSpans where
+  toRow entry =
+    [ toField entry.observed_timestamp -- observed_timestamp
+    , toField entry.id -- id
+    , toField entry.parent_id -- parent_id
+    , toField entry.name -- name
+    , toField entry.kind -- kind
+    , toField entry.status_code -- status_code
+    , toField entry.status_message -- status_message
+    , toField entry.level -- level
+    , toField $ fmap AE.toJSON entry.severity -- severity as JSON
+    , toField $ parseSeverityText entry.severity -- severity___severity_text
+    , toField $ parseSeverityNumber entry.severity -- severity___severity_number
+    , toField entry.body -- body as JSON
+    , toField entry.duration -- duration
+    , toField entry.start_time -- start_time
+    , toField entry.end_time -- end_time
+    , toField $ fmap AE.toJSON entry.context -- context as JSON
+    , toField $ entry.context >>= (.trace_id) -- context___trace_id
+    , toField $ entry.context >>= (.span_id) -- context___span_id
+    , toField $ entry.context >>= (.trace_state) -- context___trace_state
+    , toField $ entry.context >>= (.trace_flags) -- context___trace_flags
+    , toField $ entry.context >>= (.is_remote) -- context___is_remote
+    , toField entry.events -- events as JSON
+    , toField entry.links -- links
+    , toField $ fmap AE.Object $ fmap KEM.fromMapText entry.attributes -- attributes as JSON
+    , toField $ atMapText "client.address" entry.attributes -- attributes___client___address
+    , toField $ atMapWord32 "client.port" entry.attributes -- attributes___client___port
+    , toField $ atMapText "server.address" entry.attributes -- attributes___server___address
+    , toField $ atMapWord32 "server.port" entry.attributes -- attributes___server___port
+    , toField $ atMapText "network.local.address" entry.attributes -- attributes___network___local__address
+    , toField $ atMapWord32 "network.local.port" entry.attributes -- attributes___network___local__port
+    , toField $ atMapText "network.peer.address" entry.attributes -- attributes___network___peer___address
+    , toField $ atMapWord32 "network.peer.port" entry.attributes -- attributes___network___peer__port
+    , toField $ atMapText "network.protocol.name" entry.attributes -- attributes___network___protocol___name
+    , toField $ atMapText "network.protocol.version" entry.attributes -- attributes___network___protocol___version
+    , toField $ atMapText "network.transport" entry.attributes -- attributes___network___transport
+    , toField $ atMapText "network.type" entry.attributes -- attributes___network___type
+    , toField $ atMapWord32 "code.number" entry.attributes -- attributes___code___number
+    , toField $ atMapWord32 "code.file.path" entry.attributes -- attributes___code___file___path
+    , toField $ atMapWord32 "code.function.name" entry.attributes -- attributes___code___function___name
+    , toField $ atMapWord32 "code.line.number" entry.attributes -- attributes___code___line___number
+    , toField $ atMapWord32 "code.stacktrace" entry.attributes -- attributes___code___stacktrace
+    , toField $ atMapText "log.record.original" entry.attributes -- attributes___log__record___original
+    , toField $ atMapText "log.record.uid" entry.attributes -- attributes___log__record___uid
+    , toField $ atMapText "error.type" entry.attributes -- attributes___error___type
+    , toField $ atMapText "exception.type" entry.attributes -- attributes___exception___type
+    , toField $ atMapText "exception.message" entry.attributes -- attributes___exception___message
+    , toField $ atMapText "exception.stacktrace" entry.attributes -- attributes___exception___stacktrace
+    , toField $ atMapText "url.fragment" entry.attributes -- attributes___url___fragment
+    , toField $ atMapText "url.full" entry.attributes -- attributes___url___full
+    , toField $ atMapText "url.path" entry.attributes -- attributes___url___path
+    , toField $ atMapText "url.query" entry.attributes -- attributes___url___query
+    , toField $ atMapText "url.scheme" entry.attributes -- attributes___url___scheme
+    , toField $ atMapText "user_agent.original" entry.attributes -- attributes___user_agent___original
+    , toField $ atMapText "http.request.method" entry.attributes -- attributes___http___request___method
+    , toField $ atMapText "http.request.method_original" entry.attributes -- attributes___http___request___method_original
+    , toField $ atMapText "http.response.status_code" entry.attributes -- attributes___http___response___status_code
+    , toField $ atMapText "http.request.resend_count" entry.attributes -- attributes___http___request___resend_count
+    , toField $ atMapText "http.request.body.size" entry.attributes -- attributes___http___request___body___size
+    , toField $ atMapText "session.id" entry.attributes -- attributes___session___id
+    , toField $ atMapText "session.previous.id" entry.attributes -- attributes___session___previous___id
+    , toField $ atMapText "db.system.name" entry.attributes -- attributes___db___system___name
+    , toField $ atMapText "db.collection.name" entry.attributes -- attributes___db___collection___name
+    , toField $ atMapText "db.namespace" entry.attributes -- attributes___db___namespace
+    , toField $ atMapText "db.operation.name" entry.attributes -- attributes___db___operation___name
+    , toField $ atMapText "db.response.status_code" entry.attributes -- attributes___db___response___status_code
+    , toField $ atMapWord32 "db.operation.batch.size" entry.attributes -- attributes___db___operation___batch___size
+    , toField $ atMapText "db.query.summary" entry.attributes -- attributes___db___query___summary
+    , toField $ atMapText "db.query.text" entry.attributes -- attributes___db___query___text
+    , toField $ atMapText "user.id" entry.attributes -- attributes___user___id
+    , toField $ atMapText "user.email" entry.attributes -- attributes___user___email
+    , toField $ atMapText "user.full_name" entry.attributes -- attributes___user___full_name
+    , toField $ atMapText "user.name" entry.attributes -- attributes___user___name
+    , toField $ atMapText "user.hash" entry.attributes -- attributes___user___hash
+    , toField $ fmap AE.Object $ fmap KEM.fromMapText entry.resource -- resource as JSON
+    , toField $ atMapText "service.name" entry.resource -- resource___service___name
+    , toField $ atMapText "service.version" entry.resource -- resource___service___version
+    , toField $ atMapText "service.instance.id" entry.resource -- resource___service___instance___id
+    , toField $ atMapText "service.namespace" entry.resource -- resource___service___namespace
+    , toField $ atMapText "telemetry.sdk.language" entry.resource -- resource___telemetry___sdk___language
+    , toField $ atMapText "telemetry.sdk.name" entry.resource -- resource___telemetry___sdk___name
+    , toField $ atMapText "telemetry.sdk.version" entry.resource -- resource___telemetry___sdk___version
+    , toField $ atMapText "user_agent.original" entry.resource -- resource___user_agent___original
+    , toField entry.project_id -- project_id
+    , toField entry.timestamp -- timestamp
+    ]
+    where
+      -- Helper functions for severity fields
+      parseSeverityText sev = do
+        s <- sev
+        lvl <- s.severity_text
+        pure $ T.pack $ show lvl
+
+      parseSeverityNumber sev = fmap (T.pack . show . severity_number) sev
+
+
+-- Function to insert OtelLogsAndSpans records with all fields in flattened structure
+bulkInsertOtelLogsAndSpansTF :: Labeled "timefusion" DB :> es => V.Vector OtelLogsAndSpans -> Eff es Int64
+bulkInsertOtelLogsAndSpansTF records = labeled @"timefusion" @DB $ dbtToEff $ executeMany Insert q (V.toList records)
+  where
+    q =
+      [sql| INSERT INTO telemetry.otel_logs_and_spans
+      (observed_timestamp, id, parent_id, name, kind, status_code, status_message, 
+       level, severity, severity___severity_text, severity___severity_number, body, duration, 
+       start_time, end_time, context, context___trace_id, context___span_id, context___trace_state, 
+       context___trace_flags, context___is_remote, events, links, attributes, 
+       attributes___client___address, attributes___client___port, attributes___server___address,
+       attributes___server___port, attributes___network___local__address, attributes___network___local__port,
+       attributes___network___peer___address, attributes___network___peer__port, 
+       attributes___network___protocol___name, attributes___network___protocol___version,
+       attributes___network___transport, attributes___network___type, attributes___code___number,
+       attributes___code___file___path, attributes___code___function___name, attributes___code___line___number,
+       attributes___code___stacktrace, attributes___log__record___original, attributes___log__record___uid,
+       attributes___error___type, attributes___exception___type, attributes___exception___message,
+       attributes___exception___stacktrace, attributes___url___fragment, attributes___url___full,
+       attributes___url___path, attributes___url___query, attributes___url___scheme,
+       attributes___user_agent___original, attributes___http___request___method,
+       attributes___http___request___method_original, attributes___http___response___status_code,
+       attributes___http___request___resend_count, attributes___http___request___body___size,
+       attributes___session___id, attributes___session___previous___id, attributes___db___system___name,
+       attributes___db___collection___name, attributes___db___namespace, attributes___db___operation___name,
+       attributes___db___response___status_code, attributes___db___operation___batch___size,
+       attributes___db___query___summary, attributes___db___query___text, attributes___user___id,
+       attributes___user___email, attributes___user___full_name, attributes___user___name,
+       attributes___user___hash, resource, resource___service___name, resource___service___version,
+       resource___service___instance___id, resource___service___namespace, 
+       resource___telemetry___sdk___language, resource___telemetry___sdk___name,
+       resource___telemetry___sdk___version, resource___user_agent___original,
+       project_id, timestamp)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+              ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+              ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    |]
+
+
 removeDuplic :: Eq a => Eq e => [(a, e, b, c, d, q)] -> [(a, e, b, c, d, q)]
 removeDuplic = nubBy (\(a1, a2, _, _, _, _) (b1, b2, _, _, _, _) -> a1 == b1 && a2 == b2)
 
@@ -725,3 +902,52 @@ getSpanAttribute key attr = case attr of
     Just (AE.Number v) -> Just $ show v
     _ -> Nothing
   _ -> Nothing
+
+
+data Severity = Severity
+  { severity_text :: Maybe SeverityLevel
+  , severity_number :: Int
+  }
+  deriving (Show, Generic)
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake Severity
+  deriving anyclass (NFData, FromRow, ToRow)
+  deriving (ToField, FromField) via Aeson Severity
+
+
+data Context = Context
+  { trace_id :: Maybe Text
+  , span_id :: Maybe Text
+  , trace_state :: Maybe Text
+  , trace_flags :: Maybe Text
+  , is_remote :: Maybe Text
+  }
+  deriving (Show, Generic)
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake Context
+  deriving anyclass (NFData, FromRow, ToRow)
+  deriving (ToField, FromField) via Aeson Context
+
+
+data OtelLogsAndSpans = OtelLogsAndSpans
+  { observed_timestamp :: Maybe UTCTime
+  , id :: Text
+  , parent_id :: Maybe Text
+  , name :: Maybe Text
+  , kind :: Maybe Text
+  , status_code :: Maybe Text
+  , status_message :: Maybe Text
+  , level :: Maybe Text
+  , severity :: Maybe Severity
+  , body :: Maybe AE.Value
+  , duration :: Maybe Int64
+  , start_time :: Maybe UTCTime
+  , end_time :: Maybe UTCTime
+  , context :: Maybe Context
+  , events :: Maybe AE.Value
+  , links :: Maybe Text
+  , attributes :: Maybe (Map Text AE.Value)
+  , resource :: Maybe (Map Text AE.Value)
+  , project_id :: Text
+  , timestamp :: UTCTime
+  }
+  deriving (Show, Generic)
+  deriving anyclass (NFData)

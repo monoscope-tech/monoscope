@@ -1,11 +1,17 @@
 {-# LANGUAGE OverloadedRecordDot #-}
+{-# LANGUAGE TemplateHaskell #-}
+{-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE RankNTypes #-}
+{-# LANGUAGE TypeApplications #-}
 
 module Opentelemetry.OtlpServer (runServer, processList) where
 
 import Control.Lens hiding ((.=))
+import Control.Lens.TH
 import Data.Aeson qualified as AE
 import Data.Aeson.Key qualified as AEK
 import Data.Aeson.KeyMap qualified as KEM
+import Data.Aeson.Lens
 import Data.ByteString qualified as BS
 import Data.ByteString.Base16 qualified as B16
 import Data.HashMap.Strict qualified as HashMap
