@@ -1,12 +1,15 @@
 module BackgroundJobs (jobsWorkerInit, jobsRunner, BgJobs (..)) where
 
 import Control.Lens ((.~))
+import Data.Aeson ((.=))
 import Data.Aeson qualified as AE
+import Data.Aeson.Encoding qualified as AE
 import Data.Aeson.QQ (aesonQQ)
 import Data.CaseInsensitive qualified as CI
 import Data.Pool (withResource)
 import Data.Text qualified as T
-import Data.Time (DayOfWeek (Monday), UTCTime (utctDay), ZonedTime, addUTCTime, dayOfWeek, getZonedTime)
+import Data.Time (DayOfWeek (Monday), UTCTime (utctDay), ZonedTime, addUTCTime, dayOfWeek, formatTime, getZonedTime)
+import Data.Time.Format (defaultTimeLocale)
 import Data.Time.LocalTime (LocalTime (localDay), ZonedTime (zonedTimeToLocalTime), getCurrentTimeZone, utcToZonedTime, zonedTimeToUTC)
 import Data.UUID.V4 qualified as UUIDV4
 import Data.Vector qualified as V
@@ -621,17 +624,31 @@ A new runtime exception has been detected. click the link below to see more deta
 
           whenJust project.discordUrl (`sendDiscordNotif` msg)
         _ ->
-          -- forM_ users \u -> do
-          --   let firstName = u.firstName
-          --   let title = project.title
-          --   let anomaly_url = "https://app.apitoolkit.io/p/" <> pid.toText <> "/anomalies/by_hash/" <> targetHash
-          --   let templateVars =
-          --         [aesonQQ|{
-          --               "user_name": #{firstName},
-          --               "project_name": #{title},
-          --               "anomaly_url": #{anomaly_url}
-          --          }|]
-          pass
-    -- sendPostmarkEmail (CI.original u.email) (Just ("anomaly-field", templateVars)) Nothing
+          forM_ users \u -> do
+            let errosJ =
+                  ( \ee ->
+                      let e = ee.errorData
+                       in AE.object
+                            [ "root_error_message" .= e.rootErrorMessage
+                            , "error_type" .= e.errorType
+                            , "error_message" .= e.message
+                            , "stack_trace" .= e.stackTrace
+                            , "when" .= formatTime defaultTimeLocale "%b %-e, %Y, %-l:%M:%S %p" e.when
+                            , "hash" .= e.hash
+                            , "tech" .= e.technology
+                            , "request_info" .= ((fromMaybe "" e.requestMethod) <> " " <> (fromMaybe "" e.requestPath))
+                            , "root_error_type" .= e.rootErrorType
+                            ]
+                  )
+                    <$> errs
+                title = project.title
+                errors_url = "https://app.apitoolkit.io/p/" <> pid.toText <> "/anomalies/"
+                templateVars =
+                  [aesonQQ|{
+                        "project_name": #{title},
+                        "errors_url": #{errors_url},
+                        "errors": #{errosJ}
+                   }|]
+            sendPostmarkEmail (CI.original u.email) (Just ("runtime-errors", templateVars)) Nothing
     Anomalies.ATField -> pass
     Anomalies.ATUnknown -> pass
