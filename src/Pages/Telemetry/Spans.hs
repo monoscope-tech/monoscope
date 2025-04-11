@@ -54,7 +54,7 @@ expandedSpanItem pid sp leftM rightM = do
             then add .hidden to #resizer
             then call updateUrlState('details_width', '', 'delete')
             then call updateUrlState('target_event', '0px', 'delete')
-            
+            then call updateUrlState('showTrace', "true", 'delete')
             |]
               ]
               do
@@ -106,12 +106,14 @@ expandedSpanItem pid sp leftM rightM = do
                 "Copy request as curl"
                 faSprite_ "copy" "regular" "w-3 h-3"
           _ -> pass
-        let tracePath = "/p/" <> pid.toText <> "/traces/" <> sp.traceId <> "/"
+        let trId = sp.traceId
+            tracePath = "/p/" <> pid.toText <> "/traces/" <> trId <> "/"
         button_
           [ class_ "flex items-end gap-1"
           , term
               "_"
               [text|on click remove .hidden from #trace_expanded_view
+                    then call updateUrlState('showTrace', "$trId")
                     then set #trace_expanded_view.innerHTML to #loader-tmp.innerHTML
                     then fetch $tracePath
                     then set #trace_expanded_view.innerHTML to it

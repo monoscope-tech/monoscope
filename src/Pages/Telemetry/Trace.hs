@@ -93,7 +93,7 @@ tracePage p = do
           h3_ [class_ "whitespace-nowrap  font-semibold text-textStrong"] "Trace Breakdown"
         div_ [class_ "flex items-center gap-2"] $ do
           dateTime traceItem.traceStartTime (Just traceItem.traceEndTime)
-          button_ [class_ "p-0 m-0", [__| on click add .hidden to #trace_expanded_view|]] do
+          button_ [class_ "p-0 m-0", [__| on click add .hidden to #trace_expanded_view then call updateUrlState('showTrace', '', 'delete')|]] do
             faSprite_ "side-chevron-left-in-box" "regular" "w-5 h-5 text-textBrand rotate-180"
 
       div_ [class_ "flex gap-1 w-full mt-5"] $ do
@@ -164,8 +164,8 @@ tracePage p = do
                         span_ [class_ ""] $ toHtml s
                       div_ [class_ "flex gap-1 items-center"] $ do
                         span_ [class_ "text-xs max-w-52 truncate"] $ toHtml $ T.take 4 percent <> "%"
-                        div_ [class_ "w-[100px] h-3 bg-gray-200 rounded-sm overflow-hidden"]
-                          $ div_ [class_ $ "h-full pl-2 text-xs font-medium " <> color, style_ $ "width:" <> percent <> "%"] pass
+                        div_ [class_ "w-[100px] h-3 bg-gray-200 rounded-sm overflow-hidden"] $
+                          div_ [class_ $ "h-full pl-2 text-xs font-medium " <> color, style_ $ "width:" <> percent <> "%"] pass
 
           div_ [role_ "tabpanel", class_ "a-tab-content pt-2 hidden", id_ "water_fall"] do
             div_ [class_ "border border-slate-200 flex w-full rounded-2xl min-h-[230px]  overflow-y-auto overflow-x-hidden "] do
@@ -260,22 +260,22 @@ renderSpanListTable services colors records =
         th_ "Avg. Duration"
         th_ "Exec. Time"
         th_ "%Exec. Time"
-    tbody_ [class_ "space-y-0"]
-      $ mapM_ (renderSpanRecordRow records colors) services
+    tbody_ [class_ "space-y-0"] $
+      mapM_ (renderSpanRecordRow records colors) services
 
 
 spanTable :: V.Vector Telemetry.SpanRecord -> Html ()
 spanTable records =
   div_ [class_ "rounded-xl my-2 mx-3 border border-slate-200"] do
     table_ [class_ "table w-full"] do
-      thead_ [class_ "border-b border-slate-200"]
-        $ tr_ [class_ "p-2 border-b font-medium"]
-        $ do
-          td_ "Time"
-          td_ "Span name"
-          td_ "Event type"
-          td_ "Span kind"
-          td_ "Exec. time"
+      thead_ [class_ "border-b border-slate-200"] $
+        tr_ [class_ "p-2 border-b font-medium"] $
+          do
+            td_ "Time"
+            td_ "Span name"
+            td_ "Event type"
+            td_ "Span kind"
+            td_ "Exec. time"
       tbody_ do
         forM_ records $ \spanRecord -> do
           let pidText = UUID.toText spanRecord.projectId
@@ -347,19 +347,19 @@ buildTree spanMap parentId =
     Nothing -> []
     Just spans ->
       [ SpanTree
-        SpanMin
-          { parentSpanId = sp.parentSpanId
-          , spanId = sp.spanId
-          , uSpanId = sp.uSpanId
-          , spanName = sp.spanName
-          , spanDurationNs = sp.spanDurationNs
-          , serviceName = getServiceName sp
-          , startTime = utcTimeToNanoseconds sp.startTime
-          , endTime = utcTimeToNanoseconds <$> sp.endTime
-          , hasErrors = spanHasErrors sp
-          , timestamp = sp.timestamp
-          }
-        (buildTree spanMap (Just sp.spanId))
+          SpanMin
+            { parentSpanId = sp.parentSpanId
+            , spanId = sp.spanId
+            , uSpanId = sp.uSpanId
+            , spanName = sp.spanName
+            , spanDurationNs = sp.spanDurationNs
+            , serviceName = getServiceName sp
+            , startTime = utcTimeToNanoseconds sp.startTime
+            , endTime = utcTimeToNanoseconds <$> sp.endTime
+            , hasErrors = spanHasErrors sp
+            , timestamp = sp.timestamp
+            }
+          (buildTree spanMap (Just sp.spanId))
       | sp <- spans
       ]
 

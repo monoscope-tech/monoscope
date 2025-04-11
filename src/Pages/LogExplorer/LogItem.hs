@@ -200,7 +200,7 @@ apiLogItemView pid lg = do
             then add .hidden to #resizer
             then call updateUrlState('details_width', '', 'delete')
             then call updateUrlState('target_event', '0px', 'delete')
-
+            then call updateUrlState('showTrace', '', 'delete')
             |]
               ]
               do
@@ -220,12 +220,14 @@ apiLogItemView pid lg = do
         spanBadge ("Trace ID: " <> lg.traceId) "Span Kind"
 
       div_ [class_ "flex gap-2 items-center text-textBrand font-medium text-xs"] do
-        let tracePath = "/p/" <> pid.toText <> "/traces/" <> lg.traceId <> "/"
+        let trId = lg.traceId
+            tracePath = "/p/" <> pid.toText <> "/traces/" <> trId <> "/"
         button_
           [ class_ "flex items-end gap-1"
           , term
               "_"
               [text|on click remove .hidden from #trace_expanded_view
+                        then call updateUrlState('showTrace', "$trId")
                         then set #trace_expanded_view.innerHTML to #loader-tmp.innerHTML
                         then fetch $tracePath
                         then set #trace_expanded_view.innerHTML to it
@@ -277,8 +279,8 @@ spanBadge val key = do
 -- Function to selectively convert RequestDumpLogItem to JSON
 selectiveReqToJson :: RequestDumps.RequestDumpLogItem -> AE.Value
 selectiveReqToJson req =
-  AE.object
-    $ concat @[]
+  AE.object $
+    concat @[]
       [ ["created_at" AE..= req.createdAt]
       , ["duration_ns" AE..= req.durationNs]
       , ["errors" AE..= req.errors]

@@ -54,8 +54,8 @@ keepNonEmpty (Just "") = Nothing
 keepNonEmpty (Just a) = Just a
 
 
-apiLogH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe UTCTime -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders LogsGet)
-apiLogH pid queryM queryASTM cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM queryLibItemTitle queryLibItemID detailWM targetEventM hxRequestM hxBoostedM = do
+apiLogH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe UTCTime -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders LogsGet)
+apiLogH pid queryM queryASTM cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM queryLibItemTitle queryLibItemID detailWM targetEventM showTraceM hxRequestM hxBoostedM = do
   (sess, project) <- Sessions.sessionAndProject pid
   let source = fromMaybe "requests" sourceM
   let summaryCols = T.splitOn "," (fromMaybe "" cols')
@@ -92,8 +92,8 @@ apiLogH pid queryM queryASTM cols' cursorM' sinceM fromM toM layoutM sourceM tar
   (queryLibRecent, queryLibSaved) <- V.partition (\x -> Projects.QLTHistory == (x.queryType)) <$> Projects.queryLibHistoryForUser pid sess.persistentSession.userId
 
   freeTierExceeded <-
-    dbtToEff
-      $ if project.paymentPlan == "Free"
+    dbtToEff $
+      if project.paymentPlan == "Free"
         then (> 10000) <$> RequestDumps.getLastSevenDaysTotalRequest pid
         else pure False
 
@@ -169,6 +169,7 @@ apiLogH pid queryM queryASTM cols' cursorM' sinceM fromM toM layoutM sourceM tar
               , toD
               , detailsWidth = detailWM
               , targetEvent = targetEventM
+              , showTrace = showTraceM
               }
       case (layoutM, hxRequestM, hxBoostedM) of
         (Just "SaveQuery", _, _) -> addRespHeaders $ LogsQueryLibrary pid queryLibSaved queryLibRecent
@@ -245,8 +246,8 @@ apiLogJson pid queryM queryASTM cols' cursorM' sinceM fromM toM layoutM sourceM 
               else []
       traceLogs <- Telemetry.getLogsByTraceIds pid traceIDs
       let colors = getServiceColors (V.catMaybes serviceNames)
-      addRespHeaders
-        $ AE.object
+      addRespHeaders $
+        AE.object
           [ "logsData" AE..= requestVecs
           , "traceLogs" AE..= traceLogs
           , "serviceColors" AE..= colors
@@ -329,8 +330,8 @@ logQueryBox_ pid currentRange source targetSpan queryAST queryLibRecent queryLib
 
 queryLibrary_ :: Projects.ProjectId -> V.Vector Projects.QueryLibItem -> V.Vector Projects.QueryLibItem -> Html ()
 queryLibrary_ pid queryLibSaved queryLibRecent = div_ [class_ "dropdown dropdown-hover dropdown-bottom dropdown-start", id_ "queryLibraryParentEl"] do
-  div_ [class_ "cursor-pointer relative  bg-fillWeak  text-textWeak rounded-lg border border-strokeWeaker h-full flex gap-2 items-center px-2", tabindex_ "0", role_ "button"]
-    $ (toHtml "Presets" >> faSprite_ "chevron-down" "regular" "w-3 h-3")
+  div_ [class_ "cursor-pointer relative  bg-fillWeak  text-textWeak rounded-lg border border-strokeWeaker h-full flex gap-2 items-center px-2", tabindex_ "0", role_ "button"] $
+    (toHtml "Presets" >> faSprite_ "chevron-down" "regular" "w-3 h-3")
   div_ [class_ "dropdown-content z-20"] $ div_ [class_ "tabs tabs-box tabs-md tabs-outline items-center bg-fillWeak p-0 h-full", role_ "tablist", id_ "queryLibraryTabListEl"] do
     tabPanel_ "Saved" (queryLibraryContent_ "Saved" queryLibSaved)
     tabPanel_ "Recent" (queryLibraryContent_ "Recent" queryLibRecent)
@@ -398,9 +399,9 @@ queryLibItem_ qli =
           li_ "Send query to alert"
           li_ "Send query to a dashboard"
     strong_ $ whenJust qli.title \title -> (toHtml title)
-    pre_
-      $ code_ [class_ "language-js bg-transparent! queryText whitespace-pre-wrap break-words"]
-      $ toHtml qli.queryText
+    pre_ $
+      code_ [class_ "language-js bg-transparent! queryText whitespace-pre-wrap break-words"] $
+        toHtml qli.queryText
     div_ [class_ "gap-3 flex"] $ time_ [datetime_ "", term "data-tippy-content" "created on"] (toHtml $ displayTimestamp $ formatUTC qli.createdAt) >> when qli.byMe " by me"
 
 
@@ -430,6 +431,7 @@ data ApiLogsPageData = ApiLogsPageData
   , toD :: Maybe UTCTime
   , detailsWidth :: Maybe Text
   , targetEvent :: Maybe Text
+  , showTrace :: Maybe Text
   }
 
 
@@ -495,9 +497,9 @@ apiLogsPage page = do
       ]
       do
         div_ [class_ "relative ml-auto w-full", style_ ""] do
-          div_ [class_ "flex justify-end  w-full p-4 "]
-            $ button_ [[__|on click add .hidden to #expand-log-modal|]]
-            $ faSprite_ "xmark" "regular" "h-8"
+          div_ [class_ "flex justify-end  w-full p-4 "] $
+            button_ [[__|on click add .hidden to #expand-log-modal|]] $
+              faSprite_ "xmark" "regular" "h-8"
           form_
             [ hxPost_ $ "/p/" <> page.pid.toText <> "/share/"
             , hxSwap_ "innerHTML"
@@ -513,18 +515,18 @@ apiLogsPage page = do
 
       div_ [class_ "flex flex-row gap-4 mt-3 group-has-[.toggle-chart:checked]/pg:hidden w-full", style_ "aspect-ratio: 10 / 1;"] do
         Widget.widget_ $ (def :: Widget.Widget){Widget.query = Just "timechart count(*)", Widget.unit = Just "reqs", Widget.title = Just "All requests", Widget.hideLegend = Just True, Widget._projectId = Just page.pid, Widget.standalone = Just True, Widget.yAxis = Just (def{showOnlyMaxLabel = Just True})}
-        unless (page.source == "logs")
-          $ Widget.widget_
-          $ (def :: Widget.Widget)
-            { Widget.wType = WTTimeseriesLine
-            , Widget.standalone = Just True
-            , Widget.title = Just "Latency percentiles (ms)"
-            , Widget.hideSubtitle = Just True
-            , Widget.yAxis = Just (def{showOnlyMaxLabel = Just True})
-            , Widget.summarizeBy = Just Widget.SBMax
-            , Widget.sql =
-                Just
-                  [text|
+        unless (page.source == "logs") $
+          Widget.widget_ $
+            (def :: Widget.Widget)
+              { Widget.wType = WTTimeseriesLine
+              , Widget.standalone = Just True
+              , Widget.title = Just "Latency percentiles (ms)"
+              , Widget.hideSubtitle = Just True
+              , Widget.yAxis = Just (def{showOnlyMaxLabel = Just True})
+              , Widget.summarizeBy = Just Widget.SBMax
+              , Widget.sql =
+                  Just
+                    [text|
                         SELECT timeB, value, quantile
                               FROM ( SELECT extract(epoch from time_bucket('1h', created_at))::integer AS timeB,
                                       ARRAY[
@@ -541,10 +543,10 @@ apiLogsPage page = do
                               ) s,
                             LATERAL unnest(s.values, s.quantiles) AS u(value, quantile);
                         |]
-            , Widget.unit = Just "ms"
-            , Widget.hideLegend = Just True
-            , Widget._projectId = Just page.pid
-            }
+              , Widget.unit = Just "ms"
+              , Widget.hideLegend = Just True
+              , Widget._projectId = Just page.pid
+              }
 
     div_ [class_ "flex h-full gap-3.5 overflow-hidden"] do
       div_ [class_ "w-1/5 shrink-0 flex flex-col gap-2 p-2 hidden  group-has-[.toggle-filters:checked]/pg:hidden "] do
@@ -570,8 +572,13 @@ apiLogsPage page = do
       div_ [class_ "grow flex-1 h-full space-y-1.5 overflow-hidden"] do
         div_ [class_ "flex w-full relative h-full", id_ "logs_section_container"] do
           let dW = fromMaybe "100%" page.detailsWidth
+              showTrace = isJust page.showTrace
           div_ [class_ "relative flex flex-col shrink-1 min-w-0 w-full h-full", style_ $ "width: " <> dW, id_ "logs_list_container"] do
-            div_ [class_ "absolute top-0 right-0 hidden w-full h-full overflow-scroll c-scroll z-50 bg-white transition-all duration-100", id_ "trace_expanded_view"] pass
+            div_ [class_ $ "absolute top-0 right-0  w-full h-full overflow-scroll c-scroll z-50 bg-white transition-all duration-100 " <> if showTrace then "" else "hidden", id_ "trace_expanded_view"] do
+              whenJust page.showTrace \trId -> do
+                let url = "/p/" <> page.pid.toText <> "/traces/" <> trId
+                span_ [class_ "loading loading-dots loading-md"] ""
+                div_ [hxGet_ url, hxTarget_ "#trace_expanded_view", hxSwap_ "innerHtml", hxTrigger_ "intersect one"] pass
             virtualTable page
 
           div_ [onmousedown_ "mouseDown(event)", class_ "relative shrink-0 h-full flex items-center justify-center w-1 bg-fillWeak  cursor-ew-resize overflow-visible"] do

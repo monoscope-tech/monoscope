@@ -568,7 +568,7 @@ function logItemCol(rowData, source, colIdxMap, key, serviceColors, toggleTrace,
       return renderIconWithTippy('w-4', 'Outgoing Request', faSprite('arrow-up-right', 'solid', ' h-3 fill-blue-700'))
     case 'duration':
       let dur = rowData.type === 'log' ? 'log' : getDurationNSMS(lookupVecTextByKey(dataArr, colIdxMap, key))
-      return renderBadge('cbadge-sm badge-neutral font-normal border border-strokeWeak bg-fillWeak', dur, 'latency')
+      return renderBadge('cbadge-sm badge-neutral font-normal bg-fillWeak', dur, 'latency')
     case 'severity_text':
       let severity = lookupVecTextByKey(dataArr, colIdxMap, key) || 'UNSET'
       let severityClass = getSeverityColor(severity)
@@ -582,16 +582,14 @@ function logItemCol(rowData, source, colIdxMap, key, serviceColors, toggleTrace,
       return renderBadge(statsCls, st)
     case 'span_name':
       let spanName = lookupVecTextByKey(dataArr, colIdxMap, key)
-      return renderBadge('cbadge-sm badge-neutral border  border-strokeWeak  bg-fillWeak ' + wrapClass, spanName, 'span name')
+      return renderBadge('cbadge-sm badge-neutral bg-fillWeak ' + wrapClass, spanName, 'span name')
     case 'service':
       colIdxMap = rowData.type === 'log' ? { ...colIdxMap, service: dataArr.length - 1 } : colIdxMap
       let service = lookupVecTextByKey(dataArr, colIdxMap, key)
-      return html` <div class="w-[16ch]">
-        ${renderBadge('cbadge-sm badge-neutral border  border-strokeWeak bg-fillWeak ' + wrapClass, service, 'service name')}
-      </div>`
+      return html` <div class="w-[16ch]">${renderBadge('cbadge-sm badge-neutral bg-fillWeak ' + wrapClass, service, 'service name')}</div>`
     case 'kind':
       let kind = lookupVecTextByKey(dataArr, colIdxMap, key)
-      return renderBadge('cbadge-sm badge-neutral border border-strokeWeak bg-fillWeak', kind, 'span kind')
+      return renderBadge('cbadge-sm badge-neutral bg-fillWeak', kind, 'span kind')
     case 'latency_breakdown':
       const { traceStart, traceEnd, startNs, duration, childrenTimeSpans, depth: d } = rowData
       const color = serviceColors[lookupVecTextByKey(dataArr, colIdxMap, 'span_name')] || 'black'
@@ -624,7 +622,7 @@ function logItemCol(rowData, source, colIdxMap, key, serviceColors, toggleTrace,
             : nothing}
           ${statusCode_ ? renderBadge(statusCls_, statusCode_, 'status code') : nothing}
           ${m ? renderBadge('min-w-[4rem] text-center cbadge cbadge-sm ' + methodCls_, m, 'method') : nothing}
-          ${url ? renderBadge('cbadge-sm badge-neutral border border-strokeWeak bg-fillWeak ' + wrapCls, url, 'url') : nothing}
+          ${url ? renderBadge('cbadge-sm badge-neutral bg-fillWeak ' + wrapCls, url, 'url') : nothing}
         `
       }
       break
@@ -633,8 +631,8 @@ function logItemCol(rowData, source, colIdxMap, key, serviceColors, toggleTrace,
       const { system, statement } = dbAttributes
       if (system || statement) {
         return html`
-          ${system ? renderBadge('cbadge-sm badge-neutral border border-strokeWeak bg-fillWeak', system) : nothing}
-          ${statement ? renderBadge('cbadge-sm badge-neutral border border-strokeWeak bg-fillWeak', statement) : nothing}
+          ${system ? renderBadge('cbadge-sm badge-neutral bg-fillWeak', system) : nothing}
+          ${statement ? renderBadge('cbadge-sm badge-neutral bg-fillWeak', statement) : nothing}
         `
       }
       break
@@ -690,7 +688,7 @@ function logItemCol(rowData, source, colIdxMap, key, serviceColors, toggleTrace,
           `
     default:
       let v = lookupVecTextByKey(dataArr, colIdxMap, key)
-      return renderBadge('cbadge-sm badge-neutral border border-strokeWeak bg-fillWeak ' + wrapClass, v, key)
+      return renderBadge('cbadge-sm badge-neutral bg-fillWeak ' + wrapClass, v, key)
   }
 }
 
