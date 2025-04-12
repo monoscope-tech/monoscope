@@ -29,7 +29,7 @@ module Models.Apis.Anomalies (
   parseAnomalyRawTypes,
   acknowlegeCascade,
   acknowledgeAnomalies,
-  getShapeParentAnomalyVM,
+  getShapeParentAnomaliesVM,
   getFormatParentAnomalyVM,
 )
 where
@@ -275,17 +275,13 @@ where
       |]
 
 
-getShapeParentAnomalyVM :: Projects.ProjectId -> Text -> DBT IO Int
-getShapeParentAnomalyVM pid hash = do
-  result <- query Select q (pid, hash)
-  case result of
-    [Only countt] -> return countt
-    v -> return $ length v
+getShapeParentAnomaliesVM :: Projects.ProjectId -> V.Vector Text -> DBT IO (V.Vector Text)
+getShapeParentAnomaliesVM pid hashes = query Select q (pid, hashes)
   where
     q =
-      [sql|SELECT COUNT(*)
+      [sql|SELECT target_hash
            FROM apis.issues iss JOIN apis.anomalies aan ON iss.id = aan.id
-           WHERE iss.project_id = ? AND ? LIKE iss.target_hash ||'%' AND iss.anomaly_type='endpoint' AND aan.acknowleged_at IS NULL
+           WHERE iss.project_id = ? AND ANY(?) LIKE iss.target_hash ||'%' AND iss.anomaly_type='endpoint' AND aan.acknowleged_at IS NULL
       |]
 
 
