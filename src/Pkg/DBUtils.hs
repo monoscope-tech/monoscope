@@ -1,9 +1,18 @@
-module Pkg.DBUtils (WrappedEnum (..), WrappedEnumSC (..)) where
+module Pkg.DBUtils (WrappedEnum (..), WrappedEnumSC (..), connectPostgreSQL) where
 
+import Control.Exception
+import Data.IntMap qualified as IntMap
+import Data.Pool (Pool, withResource)
 import Data.Text qualified as T
-import Database.PostgreSQL.Simple (ResultError (..))
+import Database.PostgreSQL.LibPQ qualified as PQ
+import Database.PostgreSQL.Simple (Connection, ResultError (..))
 import Database.PostgreSQL.Simple.FromField (FromField (..), fromField, returnError)
+import Database.PostgreSQL.Simple.Internal qualified as PGI
 import Database.PostgreSQL.Simple.ToField (ToField, toField)
+import Database.PostgreSQL.Transact (DBT (DBT))
+import Effectful (Dispatch (Static), DispatchOf, Eff, (:>))
+import Effectful.Dispatch.Static
+import Effectful.Dispatch.Static (StaticRep)
 import GHC.TypeLits
 import Relude
 import Relude.Unsafe qualified as Unsafe
@@ -37,3 +46,25 @@ instance (KnownSymbol prefix, Typeable a, Read a) => FromField (WrappedEnumSC pr
   fromField f = \case
     Nothing -> returnError UnexpectedNull f ""
     Just bss -> pure $ WrappedEnumSC (Unsafe.read $ symbolVal (Proxy @prefix) <> toString (T.toTitle (decodeUtf8 bss)))
+
+
+connectPostgreSQL :: ByteString -> IO Connection
+connectPostgreSQL connstr = do
+  traceShowM "conn A"
+  conn <- PGI.connectdb connstr
+  stat <- PQ.status conn
+  case stat of
+    PQ.ConnectionOk -> do
+      traceShowM "conn D"
+      connectionHandle <- newMVar conn
+      connectionObjects <- newMVar (IntMap.empty)
+      connectionTempNameCounter <- newIORef 0
+      let wconn = PGI.Connection{..}
+      -- version <- PQ.serverVersion conn
+      -- _ <- PGI.execute_ wconn ""
+      return wconn
+    _ -> do
+      traceShowM "conn J"
+      msg <- maybe "connectPostgreSQL error" id <$> PQ.errorMessage conn
+      traceShowM "conn K"
+      throwIO $ PGI.fatalError msg

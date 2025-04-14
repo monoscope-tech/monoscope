@@ -255,6 +255,7 @@ library
     , pg-entity
     , pg-transact
     , pg-transact-effectful
+    , postgresql-libpq
     , postgresql-migration
     , postgresql-simple
     , pretty-relative-time
