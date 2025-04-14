@@ -99,6 +99,8 @@ library:
     - log-base
     - log-effectful
     - Unique
+    - streamly
+    - streamly-core
     - aeson
     - aeson-qq
     - async

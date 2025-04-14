@@ -277,6 +277,8 @@ library
     , servant-lucid
     , servant-server
     , slugify
+    , streamly
+    , streamly-core
     , strict-containers
     , template-haskell
     , text
