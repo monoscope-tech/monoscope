@@ -799,24 +799,20 @@ instance ToRow OtelLogsAndSpans where
 
 bulkInsertOtelLogsAndSpansTF :: (DB :> es, Labeled "timefusion" DB :> es) => V.Vector OtelLogsAndSpans -> Eff es ()
 bulkInsertOtelLogsAndSpansTF records = do
-  _ <- bulkInsertSpansTM records
+  _ <- bulkInsertSpansTS records
   _ <- bulkInsertOtelLogsAndSpans records
   pure ()
 
 
-bulkInsertSpansTM :: DB :> es => V.Vector OtelLogsAndSpans -> Eff es Int64
-bulkInsertSpansTM records = dbtToEff $ do
-  traceShowM "timescale insert"
-  executeMany Insert bulkInserSpansAndLogsQuery (V.toList records)
+bulkInsertSpansTS :: DB :> es => V.Vector OtelLogsAndSpans -> Eff es Int64
+bulkInsertSpansTS records = dbtToEff $ executeMany Insert bulkInserSpansAndLogsQuery (V.toList records)
 
 
 -- Function to insert OtelLogsAndSpans records with all fields in flattened structure
 -- Using direct connection without transaction
 bulkInsertOtelLogsAndSpans :: Labeled "timefusion" DB :> es => V.Vector OtelLogsAndSpans -> Eff es Int64
 -- bulkInsertOtelLogsAndSpansTF :: (IOE :> es, Effectful.Reader.Static.Reader AuthContext :> es) => V.Vector OtelLogsAndSpans -> Eff es Int64
-bulkInsertOtelLogsAndSpans records = labeled @"timefusion" @DB $ dbtToEff $ do
-  traceShowM "timefusion insert"
-  executeMany Insert bulkInserSpansAndLogsQuery (V.toList records)
+bulkInsertOtelLogsAndSpans records = labeled @"timefusion" @DB $ dbtToEff $ executeMany Insert bulkInserSpansAndLogsQuery (V.toList records)
 
 
 -- envCfg <- ask @AuthContext

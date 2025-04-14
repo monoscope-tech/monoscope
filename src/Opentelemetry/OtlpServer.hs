@@ -572,7 +572,6 @@ otelSpansToTimeFusionSpans pid res scope sp =
     , hashes = V.empty
     , name = Just $ toText sp.spanName
     , kind = getSpanKindText sp.spanKind
-    , hashes = []
     , status_code = getStatusCodeText =<< sp.spanStatus
     , status_message = getStatusMessage =<< sp.spanStatus
     , level = Nothing
