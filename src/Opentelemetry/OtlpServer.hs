@@ -620,6 +620,7 @@ makeOtelLogsAndSpans pid res scope sp =
         if BS.null sp.spanParentSpanId
           then Nothing
           else Just $ byteStringToHexText sp.spanParentSpanId
+    , hashes = V.empty
     , name = Just $ toText sp.spanName
     , kind = getSpanKindText sp.spanKind
     , status_code = getStatusCodeText =<< sp.spanStatus
