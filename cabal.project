@@ -94,7 +94,7 @@ package proto3-suite
   ghc-options: -Wno-x-partial
 
 constraints:
-  pg-entity -prod, proto3-suite -large-records -dhall,
+  pg-entity +prod, proto3-suite -large-records -dhall,
   text-display == 0.0.5.2
 
 allow-newer: all 

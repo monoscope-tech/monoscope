@@ -767,23 +767,8 @@ instance ToRow OtelLogsAndSpans where
 -- Function to insert OtelLogsAndSpans records with all fields in flattened structure
 -- Using direct connection without transaction
 bulkInsertOtelLogsAndSpansTF :: Labeled "timefusion" DB :> es => V.Vector OtelLogsAndSpans -> Eff es Int64
--- bulkInsertOtelLogsAndSpansTF :: (IOE :> es, Effectful.Reader.Static.Reader AuthContext :> es) => V.Vector OtelLogsAndSpans -> Eff es Int64
-bulkInsertOtelLogsAndSpansTF records = labeled @"timefusion" @DB $ dbtToEff $ do
-  traceShowM "timefusion insert"
-  executeMany Insert q (V.toList records)
+bulkInsertOtelLogsAndSpansTF records = labeled @"timefusion" @DB $ dbtToEff $ executeMany Insert q (V.toList records)
   where
-    -- envCfg <- ask @AuthContext
-    -- -- liftIO $ withResource envCfg.timefusionPgPool \conn -> do
-    -- --   PG.executeMany conn q (V.toList records)
-    --
-    -- liftIO $ do
-    --   -- Create a direct connection instead of using the pool
-    --   -- postgresql://postgres:postgres@localhost:12345/postgres
-    --   conn <- DBUtils.connectPostgreSQL "postgresql://postgres:postgres@localhost:12345/postgres"
-    --   result <- PG.executeMany conn q (V.toList records)
-    --   PG.close conn
-    --   return result
-
     q =
       [sql| INSERT INTO otel_logs_and_spans
       (observed_timestamp, id, parent_id, hashes, name, kind, status_code, status_message, 
