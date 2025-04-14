@@ -29,7 +29,6 @@ module Models.Telemetry.Telemetry (
   getMetricData,
   bulkInsertMetrics,
   bulkInsertSpans,
-  bulkInsertSpansTF,
   bulkInsertOtelLogsAndSpansTF,
   getMetricChartListData,
   getLogsByTraceIds,
@@ -50,13 +49,15 @@ import Data.Aeson.KeyMap qualified as KEM
 import Data.ByteString.Base16 qualified as B16
 import Data.List (nubBy)
 import Data.Map qualified as Map
+import Data.Pool (withResource)
 import Data.Text qualified as T
 import Data.Time (TimeZone (..), UTCTime, formatTime, utcToZonedTime)
 import Data.Time.Format (defaultTimeLocale)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
-import Database.PostgreSQL.Entity.DBT (QueryNature (..), executeMany, query, queryOne)
+import Database.PostgreSQL.Entity.DBT (QueryNature (..), executeMany, query, queryOne, withPool)
 import Database.PostgreSQL.Simple (Only (..), ResultError (ConversionFailed))
+import Database.PostgreSQL.Simple qualified as PG
 import Database.PostgreSQL.Simple.FromField (Conversion (..), FromField (..), returnError)
 import Database.PostgreSQL.Simple.FromRow
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
@@ -70,12 +71,15 @@ import Deriving.Aeson.Stock qualified as DAE
 import Effectful
 import Effectful.Labeled (Labeled, labeled)
 import Effectful.PostgreSQL.Transact.Effect (DB, dbtToEff)
+import Effectful.Reader.Static
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.Projects qualified as Projects
 import NeatInterpolation (text)
 import Pkg.DBUtils (WrappedEnum (..))
-import Relude
+import Pkg.DBUtils qualified as DBUtils
+import Relude hiding (ask)
 import RequestMessages (RequestMessage (..))
+import System.Config (AuthContext (..))
 import Utils (lookupValueText)
 
 
@@ -624,38 +628,6 @@ bulkInsertSpans spans = void $ dbtToEff $ executeMany Insert q (V.toList rowsToI
       )
 
 
-bulkInsertSpansTF :: Labeled "timefusion" DB :> es => V.Vector SpanRecord -> Eff es Int64
-bulkInsertSpansTF spans = labeled @"timefusion" @DB $ dbtToEff $ executeMany Insert q (V.toList rowsToInsert)
-  where
-    q =
-      [sql| INSERT INTO telemetry.spans
-      (project_id, timestamp, trace_id, span_id, parent_span_id, trace_state, span_name,
-       start_time, end_time, kind, status, status_message, attributes, events, links, resource, instrumentation_scope, duration_ns)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    |]
-    rowsToInsert = V.map spanToTuple spans
-    spanToTuple entry =
-      ( entry.projectId
-      , entry.timestamp
-      , entry.traceId
-      , entry.spanId
-      , entry.parentSpanId
-      , entry.traceState
-      , entry.spanName
-      , entry.startTime
-      , entry.endTime
-      , entry.kind
-      , entry.status
-      , entry.statusMessage
-      , entry.attributes
-      , entry.events
-      , entry.links
-      , entry.resource
-      , entry.instrumentationScope
-      , entry.spanDurationNs
-      )
-
-
 bulkInsertMetrics :: DB :> es => V.Vector MetricRecord -> Eff es ()
 bulkInsertMetrics metrics = do
   void $ dbtToEff $ executeMany Insert q (V.toList rowsToInsert)
@@ -699,6 +671,7 @@ instance ToRow OtelLogsAndSpans where
     [ toField entry.observed_timestamp -- observed_timestamp
     , toField entry.id -- id
     , toField entry.parent_id -- parent_id
+    , toField entry.hashes
     , toField entry.name -- name
     , toField entry.kind -- kind
     , toField entry.status_code -- status_code
@@ -792,12 +765,28 @@ instance ToRow OtelLogsAndSpans where
 
 
 -- Function to insert OtelLogsAndSpans records with all fields in flattened structure
+-- Using direct connection without transaction
 bulkInsertOtelLogsAndSpansTF :: Labeled "timefusion" DB :> es => V.Vector OtelLogsAndSpans -> Eff es Int64
-bulkInsertOtelLogsAndSpansTF records = labeled @"timefusion" @DB $ dbtToEff $ executeMany Insert q (V.toList records)
+-- bulkInsertOtelLogsAndSpansTF :: (IOE :> es, Effectful.Reader.Static.Reader AuthContext :> es) => V.Vector OtelLogsAndSpans -> Eff es Int64
+bulkInsertOtelLogsAndSpansTF records = labeled @"timefusion" @DB $ dbtToEff $ do
+  traceShowM "timefusion insert"
+  executeMany Insert q (V.toList records)
   where
+    -- envCfg <- ask @AuthContext
+    -- -- liftIO $ withResource envCfg.timefusionPgPool \conn -> do
+    -- --   PG.executeMany conn q (V.toList records)
+    --
+    -- liftIO $ do
+    --   -- Create a direct connection instead of using the pool
+    --   -- postgresql://postgres:postgres@localhost:12345/postgres
+    --   conn <- DBUtils.connectPostgreSQL "postgresql://postgres:postgres@localhost:12345/postgres"
+    --   result <- PG.executeMany conn q (V.toList records)
+    --   PG.close conn
+    --   return result
+
     q =
-      [sql| INSERT INTO telemetry.otel_logs_and_spans
-      (observed_timestamp, id, parent_id, name, kind, status_code, status_message, 
+      [sql| INSERT INTO otel_logs_and_spans
+      (observed_timestamp, id, parent_id, hashes, name, kind, status_code, status_message, 
        level, severity, severity___severity_text, severity___severity_number, body, duration, 
        start_time, end_time, context, context___trace_id, context___span_id, context___trace_state, 
        context___trace_flags, context___is_remote, events, links, attributes, 
@@ -826,7 +815,7 @@ bulkInsertOtelLogsAndSpansTF records = labeled @"timefusion" @DB $ dbtToEff $ ex
        project_id, timestamp)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
               ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-              ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+              ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     |]
 
 
@@ -931,6 +920,7 @@ data OtelLogsAndSpans = OtelLogsAndSpans
   { observed_timestamp :: Maybe UTCTime
   , id :: Text
   , parent_id :: Maybe Text
+  , hashes :: V.Vector Text
   , name :: Maybe Text
   , kind :: Maybe Text
   , status_code :: Maybe Text

@@ -140,6 +140,7 @@ type ATBackgroundCtx =
   Effectful.Eff
     '[ Effectful.Reader.Static.Reader AuthContext
      , DB
+     , Labeled "timefusion" DB
      , Time
      , Log
      , Effectful.IOE
@@ -151,6 +152,7 @@ runBackground logger appCtx process =
   process
     & Effectful.Reader.Static.runReader appCtx
     & runDB appCtx.pool
+    & runLabeled @"timefusion" (runDB appCtx.timefusionPgPool)
     & runTime
     & Logging.runLog ("background-job:" <> show appCtx.config.environment) logger
     & Effectful.runEff

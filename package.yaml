@@ -193,6 +193,7 @@ library:
     - hiedb-plugin
     - casing
     - yaml
+    - postgresql-libpq
 
 executables:
   apitoolkit-server-exe:
