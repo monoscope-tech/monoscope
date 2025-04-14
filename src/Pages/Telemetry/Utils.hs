@@ -1,4 +1,4 @@
-module Pages.Telemetry.Utils (getServiceName, getServiceColor, getRequestDetails, spanHasErrors, getSpanErrors, getErrorDetails, metricsTree)
+module Pages.Telemetry.Utils (getServiceName, getServiceColor, getRequestDetails, spanHasErrors, getSpanErrors, getErrorDetails, metricsTree, atMapText)
 where
 
 import Data.Aeson qualified as AE
@@ -18,46 +18,52 @@ import Relude
 import Utils (faSprite_)
 
 
-getServiceName :: Telemetry.SpanRecord -> Text
-getServiceName sp = case sp.resource of
-  AE.Object r -> maybe "Unknown" serviceNameString $ KEM.lookup "service.name" r
+getServiceName :: Maybe (Map Text AE.Value) -> Text
+getServiceName rs = case Map.lookup "service.name" (fromMaybe Map.empty rs) of
+  Just (AE.String s) -> s
   _ -> "Unknown"
-  where
-    serviceNameString :: AE.Value -> Text
-    serviceNameString (AE.String s) = s
-    serviceNameString _ = "Unknown"
 
 
 getServiceColor :: Text -> HashMap Text Text -> Text
 getServiceColor s serviceColors = fromMaybe "bg-black" $ HM.lookup s serviceColors
 
 
-getRequestDetails :: Telemetry.SpanRecord -> Maybe (Text, Text, Text, Int)
-getRequestDetails spanRecord = case spanRecord.attributes of
-  AE.Object r -> case KEM.lookup "http.method" r of
-    Just (AE.String method) -> Just ("HTTP", method, getUrl r, getStatus r)
-    _ -> case KEM.lookup "rpc.system" r of
-      Just (AE.String "grpc") -> Just ("GRPC", fromMaybe "" $ getText "rpc.service" r, fromMaybe "" $ getText "rpc.method" r, getStatus r)
-      _ -> case KEM.lookup "db.system" r of
-        Just (AE.String db) -> Just ("DB", db, fromMaybe (fromMaybe "" $ getText "db.statement" r) $ getText "db.query.text" r, getStatus r)
-        _ -> case KEM.lookup "http.request.method" r of
-          Just (AE.String method) -> Just ("HTTP", method, getUrl r, getStatus r)
+atMapText :: Text -> Maybe (Map Text AE.Value) -> Maybe Text
+atMapText key maybeMap = do
+  m <- maybeMap
+  v <- Map.lookup key m
+  case v of
+    AE.String t -> Just t
+    AE.Number n -> Just $ T.pack $ show n
+    _ -> Nothing
+
+
+getRequestDetails :: Maybe (Map Text AE.Value) -> Maybe (Text, Text, Text, Int)
+getRequestDetails spanRecord = do
+  m <- spanRecord
+  case Map.lookup "http.method" m of
+    Just (AE.String method) -> Just ("HTTP", method, getUrl m, getStatus m)
+    _ -> case Map.lookup "rpc.system" m of
+      Just (AE.String "grpc") -> Just ("GRPC", fromMaybe "" $ getText "rpc.service" m, fromMaybe "" $ getText "rpc.method" m, getStatus m)
+      _ -> case Map.lookup "db.system" m of
+        Just (AE.String db) -> Just ("DB", db, fromMaybe (fromMaybe "" $ getText "db.statement" m) $ getText "db.query.text" m, getStatus m)
+        _ -> case Map.lookup "http.request.method" m of
+          Just (AE.String method) -> Just ("HTTP", method, getUrl m, getStatus m)
           _ -> Nothing
-  _ -> Nothing
   where
-    getText :: Text -> AE.Object -> Maybe Text
-    getText key v = case KEM.lookup (AEKey.fromText key) v of
+    getText :: Text -> Map Text AE.Value -> Maybe Text
+    getText key v = case Map.lookup key v of
       Just (AE.String s) -> Just s
       _ -> Nothing
-    getInt :: Text -> AE.Object -> Maybe Int
-    getInt key v = case KEM.lookup (AEKey.fromText key) v of
+    getInt :: Text -> Map Text AE.Value -> Maybe Int
+    getInt key v = case Map.lookup key v of
       Just (AE.Number n) -> toBoundedInteger n
       Just (AE.String s) -> readMaybe $ toString s
       _ -> Nothing
     (<->) = mplus
-    getUrl :: AE.Object -> Text
+    getUrl :: Map Text AE.Value -> Text
     getUrl v = fromMaybe "/" $ getText "http.route" v <-> getText "url.path" v <-> getText "http.url" v <-> getText "http.target" v
-    getStatus :: AE.Object -> Int
+    getStatus :: Map Text AE.Value -> Int
     getStatus v = fromMaybe 0 $ getInt "http.status_code" v <-> getInt "http.response.status_code" v <-> getInt "rpc.grpc.status_code" v
 
 
@@ -71,8 +77,8 @@ spanHasErrors spanRecord = case spanRecord.events of
   _ -> False
 
 
-getSpanErrors :: Telemetry.SpanRecord -> [AE.Value]
-getSpanErrors spanRecord = case spanRecord.events of
+getSpanErrors :: AE.Value -> [AE.Value]
+getSpanErrors evs = case evs of
   AE.Array a ->
     let events = V.toList a
         hasExceptionEvent :: AE.Value -> Bool
@@ -144,11 +150,11 @@ buildTree metricMap parentId =
     Nothing -> []
     Just metrics ->
       [ MetricTree
-        MetricNode
-          { parent = mt.parent
-          , current = mt.current
-          }
-        (buildTree metricMap (if mt.parent == "___root___" then Just mt.current else Just $ mt.parent <> "." <> mt.current))
+          MetricNode
+            { parent = mt.parent
+            , current = mt.current
+            }
+          (buildTree metricMap (if mt.parent == "___root___" then Just mt.current else Just $ mt.parent <> "." <> mt.current))
       | mt <- metrics
       ]
 

@@ -39,6 +39,7 @@ import Models.Apis.Formats qualified as Formats
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Apis.Shapes qualified as Shapes
 import Models.Projects.Projects qualified as Projects
+import Models.Telemetry.Telemetry (Context (trace_state))
 import Models.Telemetry.Telemetry qualified as Telemetry
 import PyF (fmt)
 import Relude hiding (ask)
@@ -139,60 +140,11 @@ processMessages msgs attrs = do
         trId <- liftIO $ UUID.toText <$> UUID.nextRandom
         pure $ convertRequestMessageToSpan msg (spanId, trId)
       let spanVec = V.fromList spans
-      Telemetry.bulkInsertSpans spanVec
-
-      -- Convert spans to OtelLogsAndSpans and insert
-      let otelLogsAndSpans = V.mapMaybe createOtelLogsAndSpans spanVec
-      unless (V.null otelLogsAndSpans) $
+      unless (V.null spanVec) $
         void $
-          Telemetry.bulkInsertOtelLogsAndSpansTF otelLogsAndSpans
+          Telemetry.bulkInsertOtelLogsAndSpansTF spanVec
 
       processRequestMessages (rights msgs')
-  where
-    -- Convert SpanRecord to OtelLogsAndSpans
-    createOtelLogsAndSpans :: Telemetry.SpanRecord -> Maybe Telemetry.OtelLogsAndSpans
-    createOtelLogsAndSpans spn =
-      Just $
-        Telemetry.OtelLogsAndSpans
-          { observed_timestamp = Just spn.timestamp
-          , id = spn.spanId
-          , parent_id = spn.parentSpanId
-          , hashes = V.empty
-          , name = Just spn.spanName
-          , kind = case spn.kind of
-              Just Telemetry.SKServer -> Just "server"
-              Just Telemetry.SKClient -> Just "client"
-              Just Telemetry.SKProducer -> Just "producer"
-              Just Telemetry.SKConsumer -> Just "consumer"
-              Just Telemetry.SKInternal -> Just "internal"
-              _ -> Just "unspecified"
-          , status_code = case spn.status of
-              Just Telemetry.SSOk -> Just "OK"
-              Just Telemetry.SSError -> Just "ERROR"
-              _ -> Just "UNSET"
-          , status_message = spn.statusMessage
-          , level = Nothing
-          , severity = Nothing
-          , body = Nothing
-          , duration = Just $ fromIntegral spn.spanDurationNs
-          , start_time = Just spn.startTime
-          , end_time = spn.endTime
-          , context =
-              Just $
-                Telemetry.Context
-                  { trace_id = Just spn.traceId
-                  , span_id = Just spn.spanId
-                  , trace_state = spn.traceState
-                  , trace_flags = Nothing
-                  , is_remote = Nothing
-                  }
-          , events = Just spn.events
-          , links = Just $ T.pack $ show spn.links
-          , attributes = jsonToMap spn.attributes
-          , resource = jsonToMap spn.resource
-          , project_id = T.pack $ UUID.toString spn.projectId
-          , timestamp = spn.timestamp
-          }
 
 
 -- Replace null characters in a Text
@@ -284,36 +236,39 @@ processRequestMessage recMsg = do
       else RequestMessages.requestMsgToDumpAndEndpoint projectCacheVal recMsg timestamp recId
 
 
-convertRequestMessageToSpan :: RequestMessages.RequestMessage -> (UUID.UUID, Text) -> Telemetry.SpanRecord
+convertRequestMessageToSpan :: RequestMessages.RequestMessage -> (UUID.UUID, Text) -> Telemetry.OtelLogsAndSpans
 convertRequestMessageToSpan rm (spanId, trId) =
-  Telemetry.SpanRecord
-    { uSpanId = UUID.nil
-    , projectId = rm.projectId
+  Telemetry.OtelLogsAndSpans
+    { id = UUID.nil
+    , project_id = UUID.toText rm.projectId
     , timestamp = zonedTimeToUTC rm.timestamp
-    , traceId = trId
-    , spanId = UUID.toText $ fromMaybe spanId rm.msgId
-    , parentSpanId = maybe Nothing (\x -> Just (UUID.toText x)) rm.parentId
-    , traceState = Nothing
-    , spanName = rm.method <> maybe "" (" " <>) rm.urlPath
-    , startTime = zonedTimeToUTC rm.timestamp
-    , endTime = Just $ addUTCTime (realToFrac (fromIntegral rm.duration / 1000000000)) (zonedTimeToUTC rm.timestamp)
-    , kind = Just Telemetry.SKServer
-    , status = Just $ case rm.statusCode of
+    , parent_id = maybe Nothing (\x -> Just (UUID.toText x)) rm.parentId
+    , context = Just $ Telemetry.Context{trace_id = Just trId, span_id = Just $ UUID.toText spanId, trace_state = Nothing, trace_flags = Nothing, is_remote = Nothing}
+    , name = Just $ rm.method <> maybe "" (" " <>) rm.urlPath
+    , start_time = zonedTimeToUTC rm.timestamp
+    , end_time = Just $ addUTCTime (realToFrac (fromIntegral rm.duration / 1000000000)) (zonedTimeToUTC rm.timestamp)
+    , kind = Just "Server"
+    , level = Nothing
+    , body = Nothing
+    , severity = Nothing
+    , status_message = Just $ case rm.statusCode of
         sc
-          | sc >= 400 -> Telemetry.SSError
-          | otherwise -> Telemetry.SSOk
-    , statusMessage = Nothing
-    , attributes = createSpanAttributes rm
-    , events = AE.Array V.empty
-    , links = AE.Array V.empty
+          | sc >= 400 -> "Error"
+          | otherwise -> "OK"
+    , status_code = Just $ show rm.statusCode
+    , hashes = []
+    , observed_timestamp = Nothing
+    , attributes = jsonToMap $ createSpanAttributes rm
+    , events = Just $ AE.Array V.empty
+    , links = Just $ AE.Array V.empty
     , resource =
-        AE.object
-          [ "service.name" AE..= fromMaybe "unknown" rm.host
-          , "telemetry.sdk.language" AE..= "apitoolkit"
-          , "telemetry.sdk.name" AE..= "opentelemetry"
-          ]
-    , instrumentationScope = AE.object ["name" AE..= "apitoolkit", "version" AE..= "1.0.0"]
-    , spanDurationNs = fromIntegral rm.duration
+        jsonToMap $
+          AE.object
+            [ "service.name" AE..= fromMaybe "unknown" rm.host
+            , "telemetry.sdk.language" AE..= "apitoolkit"
+            , "telemetry.sdk.name" AE..= "opentelemetry"
+            ]
+    , duration = Just $ fromIntegral rm.duration
     }
 
 
