@@ -81,7 +81,7 @@ extra-deps:
 
 flags:
   pg-entity:
-    prod: true
+    prod: True
   proto3-suite:
     large-records: False
     dhall: False

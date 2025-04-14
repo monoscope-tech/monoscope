@@ -50,12 +50,10 @@ instance (KnownSymbol prefix, Typeable a, Read a) => FromField (WrappedEnumSC pr
 
 connectPostgreSQL :: ByteString -> IO Connection
 connectPostgreSQL connstr = do
-  traceShowM "conn A"
   conn <- PGI.connectdb connstr
   stat <- PQ.status conn
   case stat of
     PQ.ConnectionOk -> do
-      traceShowM "conn D"
       connectionHandle <- newMVar conn
       connectionObjects <- newMVar (IntMap.empty)
       connectionTempNameCounter <- newIORef 0
@@ -64,7 +62,5 @@ connectPostgreSQL connstr = do
       -- _ <- PGI.execute_ wconn ""
       return wconn
     _ -> do
-      traceShowM "conn J"
       msg <- maybe "connectPostgreSQL error" id <$> PQ.errorMessage conn
-      traceShowM "conn K"
       throwIO $ PGI.fatalError msg
