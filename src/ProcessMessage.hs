@@ -24,6 +24,7 @@ import Data.Vector.Algorithms qualified as VAA
 import Database.PostgreSQL.Entity.DBT (withPool)
 import Database.PostgreSQL.Simple (SomePostgreSqlException)
 import Effectful
+import Effectful.Ki qualified as Ki
 import Effectful.Labeled (Labeled (..))
 import Effectful.Log (Log)
 import Effectful.PostgreSQL.Transact.Effect (DB)
@@ -115,7 +116,7 @@ import Utils (eitherStrToText)
  --}
 processMessages
   -- :: (Reader.Reader Config.AuthContext :> es, Time.Time :> es, DB :> es, Log :> es, IOE :> es)
-  :: (Reader.Reader Config.AuthContext :> es, Time.Time :> es, DB :> es, Labeled "timefusion" DB :> es, Log :> es, IOE :> es)
+  :: (Reader.Reader Config.AuthContext :> es, Time.Time :> es, DB :> es, Labeled "timefusion" DB :> es, Log :> es, IOE :> es, Ki.StructuredConcurrency :> es)
   => [(Text, ByteString)]
   -> HashMap Text Text
   -> Eff es [Text]
@@ -143,17 +144,17 @@ processMessages msgs attrs = do
 
       -- Convert spans to OtelLogsAndSpans and insert
       let otelLogsAndSpans = V.mapMaybe createOtelLogsAndSpans spanVec
-      unless (V.null otelLogsAndSpans)
-        $ void
-        $ Telemetry.bulkInsertOtelLogsAndSpansTF otelLogsAndSpans
+      unless (V.null otelLogsAndSpans) $
+        void $
+          Telemetry.bulkInsertOtelLogsAndSpansTF otelLogsAndSpans
 
       processRequestMessages (rights msgs')
   where
     -- Convert SpanRecord to OtelLogsAndSpans
     createOtelLogsAndSpans :: Telemetry.SpanRecord -> Maybe Telemetry.OtelLogsAndSpans
     createOtelLogsAndSpans spn =
-      Just
-        $ Telemetry.OtelLogsAndSpans
+      Just $
+        Telemetry.OtelLogsAndSpans
           { observed_timestamp = Just spn.timestamp
           , id = spn.spanId
           , parent_id = spn.parentSpanId
@@ -178,8 +179,8 @@ processMessages msgs attrs = do
           , start_time = Just spn.startTime
           , end_time = spn.endTime
           , context =
-              Just
-                $ Telemetry.Context
+              Just $
+                Telemetry.Context
                   { trace_id = Just spn.traceId
                   , span_id = Just spn.spanId
                   , trace_state = spn.traceState
@@ -207,16 +208,15 @@ jsonToMap _ = Nothing
 
 
 processRequestMessages
-  :: (Reader.Reader Config.AuthContext :> es, Time.Time :> es, DB :> es, Log :> es, IOE :> es)
+  :: (Reader.Reader Config.AuthContext :> es, Time.Time :> es, DB :> es, Log :> es, IOE :> es, Ki.StructuredConcurrency :> es)
   => [(Text, RequestMessages.RequestMessage)]
   -> Eff es [Text]
 processRequestMessages msgs = do
   startTime <- liftIO $ getTime Monotonic
-  !processed <- forM msgs \(rmAckId, msg) -> do
-    resp <- processRequestMessage msg
-    pure $ case resp of
-      Left err -> Left (err, rmAckId, msg)
-      Right (rd, enp, s, f, fo, err) -> Right (rd, enp, s, f, fo, err, rmAckId)
+  !processed <- forM msgs \(rmAckId, msg) ->
+    processRequestMessage msg >>= \case
+      Left err -> pure $ Left (err, rmAckId, msg)
+      Right (rd, enp, s, f, fo, err) -> pure $ Right (rd, enp, s, f, fo, err, rmAckId)
 
   let !(failures, successes) = partitionEithers processed
       !(reqDumps, endpoints, shapes, fields, formats, errs, rmAckIds) = L.unzip7 successes
@@ -231,13 +231,15 @@ processRequestMessages msgs = do
     Log.logAttention "Error processing message" (object ["Error" .= err, "AckId" .= rmAckId, "OriginalMsg" .= msg])
 
   afterProcessing <- liftIO $ getTime Monotonic
-  result <- try do
-    unless (null reqDumpsFinal) $ RequestDumps.bulkInsertRequestDumps reqDumpsFinal
-    unless (null endpointsFinal) $ Endpoints.bulkInsertEndpoints endpointsFinal
-    unless (null shapesFinal) $ Shapes.bulkInsertShapes shapesFinal
-    unless (null fieldsFinal) $ Fields.bulkInsertFields fieldsFinal
-    unless (null formatsFinal) $ Formats.bulkInsertFormat formatsFinal
-    unless (null errsFinal) $ Anomalies.bulkInsertErrors errsFinal
+  result <- try $ Ki.scoped \scope -> do
+    unless (null reqDumpsFinal) $ void $ Ki.fork scope $ RequestDumps.bulkInsertRequestDumps reqDumpsFinal
+    unless (null endpointsFinal) $ void $ Ki.fork scope $ Endpoints.bulkInsertEndpoints endpointsFinal
+    unless (null shapesFinal) $ void $ Ki.fork scope $ Shapes.bulkInsertShapes shapesFinal
+    unless (null fieldsFinal) $ void $ Ki.fork scope $ Fields.bulkInsertFields fieldsFinal
+    unless (null formatsFinal) $ void $ Ki.fork scope $ Formats.bulkInsertFormat formatsFinal
+    unless (null errsFinal) $ void $ Ki.fork scope $ Anomalies.bulkInsertErrors errsFinal
+    Ki.atomically $ Ki.awaitAll scope
+
   endTime <- liftIO $ getTime Monotonic
   let processingTime = toNanoSecs (diffTimeSpec startTime afterProcessing) `div` 1000
   let queryTime = toNanoSecs (diffTimeSpec afterProcessing endTime) `div` 1000
@@ -278,8 +280,8 @@ processRequestMessage recMsg = do
     mpjCache <- withPool appCtx.jobsPool $ Projects.projectCacheById pid'
     pure $ fromMaybe projectCacheDefault mpjCache
   recId <- liftIO nextRandom
-  pure
-    $ if projectCacheVal.paymentPlan == "Free" && projectCacheVal.weeklyRequestCount >= 5000
+  pure $
+    if projectCacheVal.paymentPlan == "Free" && projectCacheVal.weeklyRequestCount >= 5000
       then Right (Nothing, Nothing, Nothing, V.empty, V.empty, V.empty)
       else RequestMessages.requestMsgToDumpAndEndpoint projectCacheVal recMsg timestamp recId
 
@@ -319,24 +321,24 @@ convertRequestMessageToSpan rm (spanId, trId) =
 
 createSpanAttributes :: RequestMessages.RequestMessage -> AE.Value
 createSpanAttributes rm =
-  AE.object
-    $ [ ("net.host.name", AE.String $ fromMaybe "" rm.host)
-      , ("http.request.method", AE.String $ rm.method)
-      , ("http.request.path_params", AE.String $ Relude.decodeUtf8 $ AE.encode rm.pathParams)
-      , ("http.request.query_params", AE.String $ Relude.decodeUtf8 $ AE.encode rm.queryParams)
-      , ("apitoolkit.msg_id", AE.String $ maybe "" UUID.toText rm.msgId)
-      , ("apitoolkit.parent_id", AE.String $ maybe "" UUID.toText rm.parentId)
-      , ("http.request.body", AE.String $ rm.requestBody)
-      , ("http.response.body", AE.String $ rm.responseBody)
-      , ("http.response.status_code", AE.String $ T.pack $ show rm.statusCode)
-      , ("apitoolkit.sdk_type", AE.String $ show rm.sdkType)
-      , ("http.route", maybe (AE.String (T.takeWhile (/= '?') rm.rawUrl)) AE.String rm.urlPath)
-      , ("url.path", AE.String $ rm.rawUrl)
-      ]
-    ++ refererPair
-    ++ errorsPair
-    ++ requestHeaderPairs
-    ++ responseHeaderPairs
+  AE.object $
+    [ ("net.host.name", AE.String $ fromMaybe "" rm.host)
+    , ("http.request.method", AE.String $ rm.method)
+    , ("http.request.path_params", AE.String $ Relude.decodeUtf8 $ AE.encode rm.pathParams)
+    , ("http.request.query_params", AE.String $ Relude.decodeUtf8 $ AE.encode rm.queryParams)
+    , ("apitoolkit.msg_id", AE.String $ maybe "" UUID.toText rm.msgId)
+    , ("apitoolkit.parent_id", AE.String $ maybe "" UUID.toText rm.parentId)
+    , ("http.request.body", AE.String $ rm.requestBody)
+    , ("http.response.body", AE.String $ rm.responseBody)
+    , ("http.response.status_code", AE.String $ T.pack $ show rm.statusCode)
+    , ("apitoolkit.sdk_type", AE.String $ show rm.sdkType)
+    , ("http.route", maybe (AE.String (T.takeWhile (/= '?') rm.rawUrl)) AE.String rm.urlPath)
+    , ("url.path", AE.String $ rm.rawUrl)
+    ]
+      ++ refererPair
+      ++ errorsPair
+      ++ requestHeaderPairs
+      ++ responseHeaderPairs
   where
     refererPair = case rm.referer of
       Just (Left text) -> [("http.request.headers.referer", AE.String text)]

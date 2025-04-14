@@ -233,6 +233,7 @@ library
     , http-types
     , hw-kafka-client
     , indexed-traversable
+    , ki-effectful
     , lens
     , lens-aeson
     , log-base
@@ -277,8 +278,6 @@ library
     , servant-lucid
     , servant-server
     , slugify
-    , streamly
-    , streamly-core
     , strict-containers
     , template-haskell
     , text

@@ -173,19 +173,12 @@ packages:
   original:
     hackage: wai-log-0.4.0.1@sha256:0b4b57ae218cf5ec59523c8cf405802a588d4e299436b5a663a6001ea34bb7e6,1583
 - completed:
-    hackage: streamly-0.10.1@sha256:eec2e8e14ac64b9e389600b964541c5e9e0a3d3e657dc54412691df47300a1fd,20899
+    hackage: ki-effectful-0.1.1.0@sha256:15a4bc01c4195d9e3ed3d0ae25e419b0c035c897494dadefc2d676a43f1f5082,1815
     pantry-tree:
-      sha256: ec59982c650e7a2259a1e075800bb705893fd9fce1b922d56c0e8c5c3d1d7ebc
-      size: 22901
+      sha256: a0897588dabdae952547ee5e7758a0b58602a1f765a395fe628a6aebe94bdbf4
+      size: 328
   original:
-    hackage: streamly-0.10.1@sha256:eec2e8e14ac64b9e389600b964541c5e9e0a3d3e657dc54412691df47300a1fd,20899
-- completed:
-    hackage: streamly-core-0.2.2@sha256:7245ac46f380af62ce16adb70d26d2710d615f393867cfa8789c29b32d2ff979,20274
-    pantry-tree:
-      sha256: 61d0562a80f873d1a90e6e26392f37740ddbe78fcb630a4290370b7a6574c9bc
-      size: 10460
-  original:
-    hackage: streamly-core-0.2.2@sha256:7245ac46f380af62ce16adb70d26d2710d615f393867cfa8789c29b32d2ff979,20274
+    hackage: ki-effectful-0.1.1.0@sha256:15a4bc01c4195d9e3ed3d0ae25e419b0c035c897494dadefc2d676a43f1f5082,1815
 - completed:
     commit: bcd3aeb5ca63a02ba026be4f02f4ce5767fb4f78
     git: https://github.com/Kleidukos/pg-transact-effectful

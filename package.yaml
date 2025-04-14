@@ -99,8 +99,8 @@ library:
     - log-base
     - log-effectful
     - Unique
-    - streamly
-    - streamly-core
+    # - streamly
+    # - streamly-core
     - aeson
     - aeson-qq
     - async
@@ -196,6 +196,7 @@ library:
     - casing
     - yaml
     - postgresql-libpq
+    - ki-effectful
 
 executables:
   apitoolkit-server-exe:
