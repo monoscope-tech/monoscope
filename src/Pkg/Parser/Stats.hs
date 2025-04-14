@@ -311,7 +311,7 @@ instance Display Sources where
   displayPrec prec SRequests = "apis.request_dumps"
   displayPrec prec SLogs = "telemetry.logs"
   displayPrec prec STraces = "telemetry.traces"
-  displayPrec prec SSpans = "telemetry.spans"
+  displayPrec prec SSpans = "otel_logs_and_spans"
   displayPrec prec SMetrics = "telemetry.metrics"
 
 

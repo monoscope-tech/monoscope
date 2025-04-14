@@ -415,71 +415,67 @@ data MetricChartListData = MetricChartListData
 
 
 getTraceDetails :: DB :> es => Projects.ProjectId -> Text -> Eff es (Maybe Trace)
-getTraceDetails pid trId = dbtToEff $ queryOne Select q (pid, trId)
+getTraceDetails pid trId = dbtToEff $ queryOne Select q (pid.toText, trId)
   where
     q =
       [sql| SELECT
-              context->>'trace_id',
+              context___trace_id,
               MIN(start_time) AS trace_start_time,
               MAX(COALESCE(end_time, start_time)) AS trace_end_time,
               CAST(EXTRACT(EPOCH FROM (MAX(COALESCE(end_time, start_time)) - MIN(start_time))) * 1000000000 AS BIGINT) AS trace_duration_ns,
               COUNT(context->>'span_id') AS total_spans,
               ARRAY_REMOVE(ARRAY_AGG(DISTINCT jsonb_extract_path_text(resource, 'service.name')), NULL) AS service_names
-            FROM telemetry.logs_and_spans
-            WHERE  project_id = ? AND trace_id = ?
-            GROUP BY trace_id;
+            FROM otel_logs_and_spans
+            WHERE  project_id = ? AND context___trace_id = ?
+            GROUP BY context___trace_id;
         |]
 
 
 logRecordByProjectAndId :: DB :> es => Projects.ProjectId -> UTCTime -> UUID.UUID -> Eff es (Maybe OtelLogsAndSpans)
-logRecordByProjectAndId pid createdAt rdId = dbtToEff $ queryOne Select q (createdAt, pid, rdId)
+logRecordByProjectAndId pid createdAt rdId = dbtToEff $ queryOne Select q (createdAt, pid.toText, rdId)
   where
     q =
-      [sql|SELECT project_id, id, timestamp, observed_timestamp, trace_id, span_id, severity_text,
-                  severity_number, body, attributes, resource, instrumentation_scope
-             FROM telemetry.logs_and_spans where (timestamp=?)  and project_id=? and id=? LIMIT 1|]
+      [sql|SELECT project_id, id, timestamp, observed_timestamp, context, level, severity, body, attributes, resource, 
+                  hashes, kind, status_code, status_message, start_time, end_time, events, links, duration, name, parent_id
+             FROM otel_logs_and_spans where (timestamp=?)  and project_id=? and id=? LIMIT 1|]
 
 
 getSpandRecordsByTraceId :: DB :> es => Projects.ProjectId -> Text -> Eff es (V.Vector OtelLogsAndSpans)
-getSpandRecordsByTraceId pid trId = dbtToEff $ query Select q (pid, trId)
+getSpandRecordsByTraceId pid trId = dbtToEff $ query Select q (pid.toText, trId)
   where
     q =
       [sql|
-      SELECT id, project_id, timestamp, trace_id::text, span_id::text, parent_span_id::text, trace_state,
-                     span_name, start_time, end_time, kind, status, status_message, attributes,
-                     events, links, resource, instrumentation_scope, duration_ns
-              FROM telemetry.logs_and_spans where project_id=? and trace_id=? ORDER BY start_time ASC;
+      SELECT project_id, id, timestamp, observed_timestamp, context, level, severity, body, attributes, resource, 
+                  hashes, kind, status_code, status_message, start_time, end_time, events, links, duration, name, parent_id
+              FROM otel_logs_and_spans where project_id=? and context___trace_id=? ORDER BY start_time ASC;
     |]
 
 
 spanRecordByProjectAndId :: DB :> es => Projects.ProjectId -> UTCTime -> UUID.UUID -> Eff es (Maybe OtelLogsAndSpans)
-spanRecordByProjectAndId pid createdAt rdId = dbtToEff $ queryOne Select q (createdAt, pid, rdId)
+spanRecordByProjectAndId pid createdAt rdId = dbtToEff $ queryOne Select q (createdAt, pid.toText, rdId)
   where
     q =
-      [sql| SELECT id, project_id, timestamp, trace_id::text, span_id::text, parent_span_id::text, trace_state,
-                     span_name, start_time, end_time, kind, status, status_message, attributes,
-                     events, links, resource, instrumentation_scope, duration_ns
-              FROM telemetry.logs_and_spans where (timestamp=?)  and project_id=? and id=? LIMIT 1|]
+      [sql| SELECT project_id, id, timestamp, observed_timestamp, context, level, severity, body, attributes, resource, 
+                  hashes, kind, status_code, status_message, start_time, end_time, events, links, duration, name, parent_id
+              FROM otel_logs_and_spans where (timestamp=?)  and project_id=? and id=? LIMIT 1|]
 
 
 spanRecordById :: DB :> es => Projects.ProjectId -> Text -> Text -> Eff es (Maybe OtelLogsAndSpans)
-spanRecordById pid trId spanId = dbtToEff $ queryOne Select q (pid, trId, spanId)
+spanRecordById pid trId spanId = dbtToEff $ queryOne Select q (pid.toText, trId, spanId)
   where
     q =
-      [sql| SELECT id, project_id, timestamp, trace_id::text, span_id::text, parent_span_id::text, trace_state,
-                     span_name, start_time, end_time, kind, status, status_message, attributes,
-                     events, links, resource, instrumentation_scope, duration_ns
-              FROM telemetry.logs_and_spans where project_id=? and trace_id = ? and span_id=? LIMIT 1|]
+      [sql| SELECT project_id, id, timestamp, observed_timestamp, context, level, severity, body, attributes, resource, 
+                  hashes, kind, status_code, status_message, start_time, end_time, events, links, duration, name, parent_id
+              FROM otel_logs_and_spans where project_id=? and context___trace_id = ? and context___span_id=? LIMIT 1|]
 
 
 getChildSpans :: DB :> es => Projects.ProjectId -> V.Vector Text -> Eff es (V.Vector OtelLogsAndSpans)
-getChildSpans pid spanIds = dbtToEff $ query Select q (pid, spanIds)
+getChildSpans pid spanIds = dbtToEff $ query Select q (pid.toText, spanIds)
   where
     q =
-      [sql| SELECT id, project_id, timestamp, trace_id::text, span_id::text, parent_span_id::text, trace_state,
-                     span_name, start_time, end_time, kind, status, status_message, attributes,
-                     events, links, resource, instrumentation_scope, duration_ns
-              FROM telemetry.logs_and_spans where project_id =? AND parent_span_id=Any(?)|]
+      [sql| SELECT project_id, id, timestamp, observed_timestamp, context, level, severity, body, attributes, resource, 
+                  hashes, kind, status_code, status_message, start_time, end_time, events, links, duration, name, parent_id
+              FROM otel_logs_and_spans where project_id =? AND parent_id=Any(?)|]
 
 
 getDataPointsData :: DB :> es => Projects.ProjectId -> (Maybe UTCTime, Maybe UTCTime) -> Eff es (V.Vector MetricDataPoint)
@@ -531,12 +527,12 @@ valueToVector (Only val) = case val of
 
 
 queryToValues :: DB :> es => Projects.ProjectId -> V.Vector Text -> Eff es (V.Vector (Only AE.Value))
-queryToValues pid traceIds = dbtToEff $ V.fromList <$> DBT.query q (pid, traceIds)
+queryToValues pid traceIds = dbtToEff $ V.fromList <$> DBT.query q (pid.toText, traceIds)
   where
     q =
       [sql|
-      SELECT json_build_array(id, timestamp, trace_id, span_id, CAST(EXTRACT(EPOCH FROM (timestamp)) * 1_000_000_000 AS BIGINT), severity_text, body, resource->>'service.name')
-      FROM telemetry.logs WHERE project_id = ? AND trace_id = ANY(?);
+      SELECT json_build_array(id, timestamp, context___trace_id, context___span_id, CAST(EXTRACT(EPOCH FROM (timestamp)) * 1_000_000_000 AS BIGINT), severity___severity_text, body, resource->>'service.name')
+      FROM otel_logs_and_spans WHERE project_id = ? AND context___trace_id = ANY(?);
     |]
 
 
@@ -829,7 +825,7 @@ bulkInsertOtelLogsAndSpans records = labeled @"timefusion" @DB $ dbtToEff $ exec
 
 bulkInserSpansAndLogsQuery :: Query
 bulkInserSpansAndLogsQuery =
-  [sql| INSERT INTO telemetry.logs_and_spans
+  [sql| INSERT INTO otel_logs_and_spans
       (observed_timestamp, parent_id, hashes, name, kind, status_code, status_message, 
        level, severity, severity___severity_text, severity___severity_number, body, duration, 
        start_time, end_time, context, context___trace_id, context___span_id, context___trace_state, 
@@ -857,7 +853,7 @@ bulkInserSpansAndLogsQuery =
        resource___telemetry___sdk___language, resource___telemetry___sdk___name,
        resource___telemetry___sdk___version, resource___user_agent___original,
        project_id, timestamp)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+      VALUES (?, ?, ?, ?, ?, ?,  ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
               ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
               ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     |]
@@ -964,28 +960,30 @@ data Context = Context
   deriving (ToField, FromField) via Aeson Context
 
 
+-- project_id, id, timestamp, observed_timestamp, context, level, severity, body, attributes, resource,
+--                   hashes, kind, status_code, status_message, start_time, end_time, events, links, duration, name, parent_id
 data OtelLogsAndSpans = OtelLogsAndSpans
-  { observed_timestamp :: Maybe UTCTime
+  { project_id :: Text
   , id :: UUID.UUID
-  , parent_id :: Maybe Text
-  , hashes :: V.Vector Text
-  , name :: Maybe Text
-  , kind :: Maybe Text
-  , status_code :: Maybe Text
-  , status_message :: Maybe Text
+  , timestamp :: UTCTime
+  , observed_timestamp :: Maybe UTCTime
+  , context :: Maybe Context
   , level :: Maybe Text
   , severity :: Maybe Severity
   , body :: Maybe AE.Value
-  , duration :: Maybe Integer
-  , start_time :: UTCTime
-  , end_time :: Maybe UTCTime
-  , context :: Maybe Context
-  , events :: Maybe AE.Value
-  , links :: Maybe AE.Value
   , attributes :: Maybe (Map Text AE.Value)
   , resource :: Maybe (Map Text AE.Value)
-  , project_id :: Text
-  , timestamp :: UTCTime
+  , hashes :: V.Vector Text
+  , kind :: Maybe Text
+  , status_code :: Maybe Text
+  , status_message :: Maybe Text
+  , start_time :: UTCTime
+  , end_time :: Maybe UTCTime
+  , events :: Maybe AE.Value
+  , links :: Maybe AE.Value
+  , duration :: Maybe Integer
+  , name :: Maybe Text
+  , parent_id :: Maybe Text
   }
   deriving (Show, Generic)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake OtelLogsAndSpans

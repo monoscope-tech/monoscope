@@ -113,7 +113,7 @@ sqlFromQueryComponents sqlCfg qc =
         Just "service-entry-spans" ->
           [fmt|WITH ranked_spans AS (SELECT *, resource->>'service.name' AS service_name,
                 ROW_NUMBER() OVER (PARTITION BY trace_id, resource->>'service.name' ORDER BY start_time) AS rn
-                FROM telemetry.spans where project_id='{sqlCfg.pid.toText}'::uuid  and (
+                FROM telemetry.spans where project_id='{sqlCfg.pid.toText}' and (
                 {timestampCol} > NOW() - interval '14 days'
                 {cursorT} {dateRangeStr} {whereClause} )
                 {groupByClause}
@@ -122,12 +122,12 @@ sqlFromQueryComponents sqlCfg qc =
                   WHERE rn = 1 ORDER BY {timestampCol} desc limit 200 |]
         _ ->
           [fmt|SELECT json_build_array({selectClause}) FROM {fromTable}
-             WHERE project_id='{sqlCfg.pid.toText}'::uuid  and ( {timestampCol} > NOW() - interval '14 days'
+             WHERE project_id='{sqlCfg.pid.toText}'  and ( {timestampCol} > NOW() - interval '14 days'
              {cursorT} {dateRangeStr} {whereClause} )
              {groupByClause} ORDER BY {timestampCol} desc limit 200 |]
       countQuery =
         [fmt|SELECT count(*) FROM {fromTable}
-          WHERE project_id='{sqlCfg.pid.toText}'::uuid  and ( {timestampCol} > NOW() - interval '14 days'
+          WHERE project_id='{sqlCfg.pid.toText}' and ( {timestampCol} > NOW() - interval '14 days'
           {cursorT} {dateRangeStr} {whereClause} )
           {groupByClause} limit 1|]
 
@@ -153,7 +153,7 @@ sqlFromQueryComponents sqlCfg qc =
       timeChartQuery =
         [fmt|
       SELECT {timebucket} {chartSelect}, {timeGroupSelect} FROM {fromTable}
-          WHERE project_id='{sqlCfg.pid.toText}'::uuid  and ( {timestampCol} > NOW() - interval '14 days'
+          WHERE project_id='{sqlCfg.pid.toText}'  and ( {timestampCol} > NOW() - interval '14 days'
           {cursorT} {dateRangeStr} {whereClause} )
           {timeGroupByClause}
         |]
@@ -165,7 +165,7 @@ sqlFromQueryComponents sqlCfg qc =
       alertQuery =
         [fmt|
       SELECT GREATEST({alertSelect}) FROM {fromTable}
-          WHERE project_id='{sqlCfg.pid.toText}'::uuid  and ( {timestampCol} > NOW() - interval '{timeRollup}'
+          WHERE project_id='{sqlCfg.pid.toText}' and ( {timestampCol} > NOW() - interval '{timeRollup}'
           {whereClause}) {alertGroupByClause}
         |]
    in ( finalSqlQuery
@@ -316,14 +316,14 @@ defaultSelectSqlQuery (Just SLogs) =
 defaultSelectSqlQuery (Just SSpans) =
   [ "id"
   , timestampLogFmt "timestamp"
-  , "trace_id"
+  , "context___trace_id as trace_id"
   , "kind"
-  , "status"
-  , "span_name"
-  , "duration_ns as duration"
+  , "status_message as status"
+  , "name as span_name"
+  , "duration"
   , "resource->>'service.name' as service"
-  , "span_id as latency_breakdown"
-  , "parent_span_id"
+  , "context___span_id as latency_breakdown"
+  , "parent_id as latency_breakdown"
   , "CAST(EXTRACT(EPOCH FROM (start_time)) * 1_000_000_000 AS BIGINT) as start_time_ns"
   , "EXISTS(SELECT 1 FROM jsonb_array_elements(events) elem  WHERE elem->>'event_name' = 'exception') as errors"
   , [fmt|jsonb_build_object(
