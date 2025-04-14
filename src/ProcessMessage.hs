@@ -24,6 +24,7 @@ import Data.Vector.Algorithms qualified as VAA
 import Database.PostgreSQL.Entity.DBT (withPool)
 import Database.PostgreSQL.Simple (SomePostgreSqlException)
 import Effectful
+import Effectful.Labeled (Labeled (..))
 import Effectful.Log (Log)
 import Effectful.PostgreSQL.Transact.Effect (DB)
 import Effectful.Reader.Static (ask)
@@ -113,7 +114,8 @@ import Utils (eitherStrToText)
     We could also maintain hashes of all the formats in the cache, and check each field format within this list.🤔
  --}
 processMessages
-  :: (Reader.Reader Config.AuthContext :> es, Time.Time :> es, DB :> es, Log :> es, IOE :> es)
+  -- :: (Reader.Reader Config.AuthContext :> es, Time.Time :> es, DB :> es, Log :> es, IOE :> es)
+  :: (Reader.Reader Config.AuthContext :> es, Time.Time :> es, DB :> es, Labeled "timefusion" DB :> es, Log :> es, IOE :> es)
   => [(Text, ByteString)]
   -> HashMap Text Text
   -> Eff es [Text]
@@ -136,13 +138,72 @@ processMessages msgs attrs = do
         spanId <- liftIO $ UUID.nextRandom
         trId <- liftIO $ UUID.toText <$> UUID.nextRandom
         pure $ convertRequestMessageToSpan msg (spanId, trId)
-      Telemetry.bulkInsertSpans $ V.fromList spans
+      let spanVec = V.fromList spans
+      Telemetry.bulkInsertSpans spanVec
+
+      -- Convert spans to OtelLogsAndSpans and insert
+      let otelLogsAndSpans = V.mapMaybe createOtelLogsAndSpans spanVec
+      unless (V.null otelLogsAndSpans) $
+        void $
+          Telemetry.bulkInsertOtelLogsAndSpansTF otelLogsAndSpans
+
       processRequestMessages (rights msgs')
+  where
+    -- Convert SpanRecord to OtelLogsAndSpans
+    createOtelLogsAndSpans :: Telemetry.SpanRecord -> Maybe Telemetry.OtelLogsAndSpans
+    createOtelLogsAndSpans spn =
+      Just $
+        Telemetry.OtelLogsAndSpans
+          { observed_timestamp = Just spn.timestamp
+          , id = spn.spanId
+          , parent_id = spn.parentSpanId
+          , hashes = V.empty
+          , name = Just spn.spanName
+          , kind = case spn.kind of
+              Just Telemetry.SKServer -> Just "server"
+              Just Telemetry.SKClient -> Just "client"
+              Just Telemetry.SKProducer -> Just "producer"
+              Just Telemetry.SKConsumer -> Just "consumer"
+              Just Telemetry.SKInternal -> Just "internal"
+              _ -> Just "unspecified"
+          , status_code = case spn.status of
+              Just Telemetry.SSOk -> Just "OK"
+              Just Telemetry.SSError -> Just "ERROR"
+              _ -> Just "UNSET"
+          , status_message = spn.statusMessage
+          , level = Nothing
+          , severity = Nothing
+          , body = Nothing
+          , duration = Just $ fromIntegral spn.spanDurationNs
+          , start_time = Just spn.startTime
+          , end_time = spn.endTime
+          , context =
+              Just $
+                Telemetry.Context
+                  { trace_id = Just spn.traceId
+                  , span_id = Just spn.spanId
+                  , trace_state = spn.traceState
+                  , trace_flags = Nothing
+                  , is_remote = Nothing
+                  }
+          , events = Just spn.events
+          , links = Just $ T.pack $ show spn.links
+          , attributes = jsonToMap spn.attributes
+          , resource = jsonToMap spn.resource
+          , project_id = T.pack $ UUID.toString spn.projectId
+          , timestamp = spn.timestamp
+          }
 
 
 -- Replace null characters in a Text
 replaceNullChars :: Text -> Text
 replaceNullChars = T.replace "\\u0000" ""
+
+
+-- Convert JSON value to Map
+jsonToMap :: AE.Value -> Maybe (Map Text AE.Value)
+jsonToMap (AE.Object o) = Just $ AEK.toMapText o
+jsonToMap _ = Nothing
 
 
 processRequestMessages
@@ -217,8 +278,8 @@ processRequestMessage recMsg = do
     mpjCache <- withPool appCtx.jobsPool $ Projects.projectCacheById pid'
     pure $ fromMaybe projectCacheDefault mpjCache
   recId <- liftIO nextRandom
-  pure
-    $ if projectCacheVal.paymentPlan == "Free" && projectCacheVal.weeklyRequestCount >= 5000
+  pure $
+    if projectCacheVal.paymentPlan == "Free" && projectCacheVal.weeklyRequestCount >= 5000
       then Right (Nothing, Nothing, Nothing, V.empty, V.empty, V.empty)
       else RequestMessages.requestMsgToDumpAndEndpoint projectCacheVal recMsg timestamp recId
 
@@ -258,24 +319,24 @@ convertRequestMessageToSpan rm (spanId, trId) =
 
 createSpanAttributes :: RequestMessages.RequestMessage -> AE.Value
 createSpanAttributes rm =
-  AE.object
-    $ [ ("net.host.name", AE.String $ fromMaybe "" rm.host)
-      , ("http.request.method", AE.String $ rm.method)
-      , ("http.request.path_params", AE.String $ Relude.decodeUtf8 $ AE.encode rm.pathParams)
-      , ("http.request.query_params", AE.String $ Relude.decodeUtf8 $ AE.encode rm.queryParams)
-      , ("apitoolkit.msg_id", AE.String $ maybe "" UUID.toText rm.msgId)
-      , ("apitoolkit.parent_id", AE.String $ maybe "" UUID.toText rm.parentId)
-      , ("http.request.body", AE.String $ rm.requestBody)
-      , ("http.response.body", AE.String $ rm.responseBody)
-      , ("http.response.status_code", AE.String $ T.pack $ show rm.statusCode)
-      , ("apitoolkit.sdk_type", AE.String $ show rm.sdkType)
-      , ("http.route", maybe (AE.String (T.takeWhile (/= '?') rm.rawUrl)) AE.String rm.urlPath)
-      , ("url.path", AE.String $ rm.rawUrl)
-      ]
-    ++ refererPair
-    ++ errorsPair
-    ++ requestHeaderPairs
-    ++ responseHeaderPairs
+  AE.object $
+    [ ("net.host.name", AE.String $ fromMaybe "" rm.host)
+    , ("http.request.method", AE.String $ rm.method)
+    , ("http.request.path_params", AE.String $ Relude.decodeUtf8 $ AE.encode rm.pathParams)
+    , ("http.request.query_params", AE.String $ Relude.decodeUtf8 $ AE.encode rm.queryParams)
+    , ("apitoolkit.msg_id", AE.String $ maybe "" UUID.toText rm.msgId)
+    , ("apitoolkit.parent_id", AE.String $ maybe "" UUID.toText rm.parentId)
+    , ("http.request.body", AE.String $ rm.requestBody)
+    , ("http.response.body", AE.String $ rm.responseBody)
+    , ("http.response.status_code", AE.String $ T.pack $ show rm.statusCode)
+    , ("apitoolkit.sdk_type", AE.String $ show rm.sdkType)
+    , ("http.route", maybe (AE.String (T.takeWhile (/= '?') rm.rawUrl)) AE.String rm.urlPath)
+    , ("url.path", AE.String $ rm.rawUrl)
+    ]
+      ++ refererPair
+      ++ errorsPair
+      ++ requestHeaderPairs
+      ++ responseHeaderPairs
   where
     refererPair = case rm.referer of
       Just (Left text) -> [("http.request.headers.referer", AE.String text)]
