@@ -194,6 +194,7 @@ processMessages msgs attrs = do
           , resource = jsonToMap spn.resource
           , project_id = T.pack $ UUID.toString spn.projectId
           , timestamp = spn.timestamp
+          , date = spn.timestamp
           }
 
 
@@ -212,12 +213,11 @@ processRequestMessages
   :: (Reader.Reader Config.AuthContext :> es, Time.Time :> es, DB :> es, Log :> es, IOE :> es, Ki.StructuredConcurrency :> es, UUIDEff :> es)
   => [(Text, RequestMessages.RequestMessage)]
   -> Eff es [Text]
-processRequestMessages msgs = do
+processRequestMessages msgs' = do
   startTime <- liftIO $ getTime Monotonic
   appCtx <- ask @Config.AuthContext
   timestamp <- Time.currentTime
-
-  let groupedMsgs = groupMsgsByProjectId msgs
+  let groupedMsgs = groupMsgsByProjectId msgs'
 
   !processed <- fmap concat $ forM (HM.toList groupedMsgs) \(projectId, projectMsgs) -> do
     let pid = Projects.ProjectId projectId
@@ -262,7 +262,7 @@ processRequestMessages msgs = do
   let processingTime = toNanoSecs (diffTimeSpec startTime afterProcessing) `div` 1000
   let queryTime = toNanoSecs (diffTimeSpec afterProcessing endTime) `div` 1000
   let totalTime = toNanoSecs (diffTimeSpec startTime endTime) `div` 1000
-  Log.logInfo_ $ show [fmt| Processing {length msgs} msgs. saved {length reqDumpsFinal}. totalTime: {totalTime} -> query: {queryTime} -> processing: {processingTime}|]
+  Log.logInfo_ $ show [fmt| Processing {length groupedMsgs} msgs. saved {length reqDumpsFinal}. totalTime: {totalTime} -> query: {queryTime} -> processing: {processingTime}|]
   case result of
     Left (e :: SomePostgreSqlException) -> do
       Log.logAttention "Postgres Exception" (show e)

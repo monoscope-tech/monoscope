@@ -668,7 +668,8 @@ bulkInsertMetrics metrics = do
 -- OtelLogsAndSpans ToRow instance
 instance ToRow OtelLogsAndSpans where
   toRow entry =
-    [ toField entry.observed_timestamp -- observed_timestamp
+    [ toField entry.timestamp -- timestamp
+    , toField entry.observed_timestamp -- observed_timestamp
     , toField entry.id -- id
     , toField entry.parent_id -- parent_id
     , toField entry.hashes
@@ -752,7 +753,7 @@ instance ToRow OtelLogsAndSpans where
     , toField $ atMapText "telemetry.sdk.version" entry.resource -- resource___telemetry___sdk___version
     , toField $ atMapText "user_agent.original" entry.resource -- resource___user_agent___original
     , toField entry.project_id -- project_id
-    , toField entry.timestamp -- timestamp
+    , toField entry.date
     ]
     where
       -- Helper functions for severity fields
@@ -771,7 +772,7 @@ bulkInsertOtelLogsAndSpansTF records = labeled @"timefusion" @DB $ dbtToEff $ ex
   where
     q =
       [sql| INSERT INTO otel_logs_and_spans
-      (observed_timestamp, id, parent_id, hashes, name, kind, status_code, status_message, 
+      (timestamp, observed_timestamp, id, parent_id, hashes, name, kind, status_code, status_message, 
        level, severity, severity___severity_text, severity___severity_number, body, duration, 
        start_time, end_time, context, context___trace_id, context___span_id, context___trace_state, 
        context___trace_flags, context___is_remote, events, links, attributes, 
@@ -797,10 +798,10 @@ bulkInsertOtelLogsAndSpansTF records = labeled @"timefusion" @DB $ dbtToEff $ ex
        resource___service___instance___id, resource___service___namespace, 
        resource___telemetry___sdk___language, resource___telemetry___sdk___name,
        resource___telemetry___sdk___version, resource___user_agent___original,
-       project_id, timestamp)
+       project_id, date)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
               ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-              ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+              ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     |]
 
 
@@ -902,7 +903,8 @@ data Context = Context
 
 
 data OtelLogsAndSpans = OtelLogsAndSpans
-  { observed_timestamp :: Maybe UTCTime
+  { timestamp :: UTCTime
+  , observed_timestamp :: Maybe UTCTime
   , id :: Text
   , parent_id :: Maybe Text
   , hashes :: V.Vector Text
@@ -922,7 +924,7 @@ data OtelLogsAndSpans = OtelLogsAndSpans
   , attributes :: Maybe (Map Text AE.Value)
   , resource :: Maybe (Map Text AE.Value)
   , project_id :: Text
-  , timestamp :: UTCTime
+  , date :: UTCTime
   }
   deriving (Show, Generic)
   deriving anyclass (NFData)
