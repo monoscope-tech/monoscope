@@ -17,6 +17,7 @@ export class LogList extends LitElement {
     groupedData: [],
     expandedTraces: {},
     columnMaxWidthMap: {},
+    view: { type: String },
   }
   constructor() {
     super()
@@ -44,8 +45,9 @@ export class LogList extends LitElement {
     this.updateColumnMaxWidthMap = this.updateColumnMaxWidthMap.bind(this)
     this.filterFalseRoots = this.filterFalseRoots.bind(this)
     this.latestLogsURLQueryValsFn = this.latestLogsURLQueryValsFn.bind(this)
+    this.logItemCol = this.logItemCol.bind(this)
     this.wrapLines = false
-
+    this.view = 'tree'
     const liveBtn = document.querySelector('#streamLiveData')
     if (liveBtn) {
       liveBtn.addEventListener('change', () => {
@@ -263,7 +265,7 @@ export class LogList extends LitElement {
               class=${`${this.wrapLines ? 'break-all whitespace-wrap' : ''} bg-white relative ${column === 'rest' ? '' : tableDataWidth}`}
               style=${width ? `width: ${width}px;` : ''}
             >
-              ${logItemCol(rowData, this.source, this.colIdxMap, column, this.serviceColors, this.expandTrace, this.columnMaxWidthMap, this.wrapLines)}
+              ${this.logItemCol(rowData, this.source, this.colIdxMap, column, this.serviceColors, this.expandTrace, this.columnMaxWidthMap, this.wrapLines)}
             </td>`
           })}
         ${this.source === 'spans' && this.logsColumns.includes('latency_breakdown')
@@ -271,7 +273,7 @@ export class LogList extends LitElement {
               class="bg-white sticky right-0 overflow-x-hidden"
               style=${this.columnMaxWidthMap['latency_breakdown'] ? "width: ${this.columnMaxWidthMap['latency_breakdown']}px;" : ''}
             >
-              ${logItemCol(
+              ${this.logItemCol(
                 rowData,
                 this.source,
                 this.colIdxMap,
@@ -280,6 +282,7 @@ export class LogList extends LitElement {
                 this.expandTrace,
                 this.columnMaxWidthMap,
                 this.wrapLines,
+                this.view,
               )}
             </td>`
           : nothing}
@@ -462,36 +465,78 @@ export class LogList extends LitElement {
   }
 
   render() {
-    const list = this.source === 'spans' ? this.spanListTree.filter(sp => sp.show) : [...this.logsData]
-    console.log(this.spanListTree)
+    const list = this.source === 'spans' ? (this.view === 'tree' ? this.spanListTree.filter(sp => sp.show) : [...this.spanListTree]) : [...this.logsData]
     // end is used to render the load more button"
     list.unshift('start')
     list.push('end')
     return html`
-      <fieldset class="w-full flex justify-end px-2 pb-0.5">
-        <label class="text-textBrand text-xs gap-1 flex items-center">
+      <fieldset class="w-full flex justify-end px-2 pb-1 gap-3 ">
+        <button
+          @click=${() => (this.view = 'tree')}
+          class=${`flex items-center justify-center gap-1 px-2 py-1 text-xs rounded ${
+            this.view === 'tree' ? 'bg-gray-200 text-gray-800' : 'text-textWeak  hover:bg-gray-100'
+          }`}
+        >
+          ${faSprite('tree', 'regular', 'h-4 w-4')}
+          <span class="sm:inline hidden">Tree</span>
+        </button>
+
+        <button
+          @click=${() => (this.view = 'list')}
+          class=${`flex items-center justify-center gap-1 px-2 py-1 text-xs rounded ${
+            this.view === 'list' ? 'bg-gray-200 text-gray-800' : 'text-textWeak  hover:bg-gray-100'
+          }`}
+        >
+          ${faSprite('list-view', 'regular', 'h-4 w-4')}
+          <span class="sm:inline hidden">List</span>
+        </button>
+
+        <button
+          class=${`flex items-center justify-center gap-1 px-2 py-1 text-xs rounded ${
+            this.wrapLines ? 'bg-gray-200 text-gray-800' : 'text-textWeak  hover:bg-gray-100'
+          }`}
+          @click=${() => {
+            this.wrapLines = !this.wrapLines
+            if (this.wrapLines) {
+              let width = Number(window.getComputedStyle(document.getElementById('logs_list_container_inner')).width.replace('px', ''))
+              this.logsColumns.forEach(col => {
+                if (col !== 'rest' && this.columnMaxWidthMap[col]) {
+                  width -= this.columnMaxWidthMap[col] + 8
+                }
+              })
+              this.columnMaxWidthMap['rest'] = width - 20 // margin left and right and id width
+            } else {
+              this.columnMaxWidthMap['rest'] = 450 * 8
+            }
+            this.requestUpdate()
+          }}
+        >
+          ${faSprite('wrap-text', 'regular', 'h-4 w-4')}
+          <span class="sm:inline hidden">Wrap lines</span>
+        </button>
+        <!-- <label class="text-textBrand text-xs gap-1 flex items-center">
           <input
             type="checkbox"
             .checked=${this.wrapLines}
             class="checkbox-xs"
             @change=${() => {
-              this.wrapLines = !this.wrapLines
-              if (this.wrapLines) {
-                let width = Number(window.getComputedStyle(document.getElementById('logs_list_container_inner')).width.replace('px', ''))
-                this.logsColumns.forEach(col => {
-                  if (col !== 'rest' && this.columnMaxWidthMap[col]) {
-                    width -= this.columnMaxWidthMap[col] + 8
-                  }
-                })
-                this.columnMaxWidthMap['rest'] = width - 20 // margin left and right and id width
-              } else {
-                this.columnMaxWidthMap['rest'] = 450 * 8
+          this.wrapLines = !this.wrapLines
+          if (this.wrapLines) {
+            let width = Number(window.getComputedStyle(document.getElementById('logs_list_container_inner')).width.replace('px', ''))
+            this.logsColumns.forEach(col => {
+              if (col !== 'rest' && this.columnMaxWidthMap[col]) {
+                width -= this.columnMaxWidthMap[col] + 8
               }
-              this.requestUpdate()
-            }}
+            })
+            this.columnMaxWidthMap['rest'] = width - 20 // margin left and right and id width
+          } else {
+            this.columnMaxWidthMap['rest'] = 450 * 8
+          }
+          this.requestUpdate()
+        }}
           />
           Wrap lines
-        </label>
+        </label> -->
       </fieldset>
       <div class="relative h-full shrink-1 min-w-0 p-0 m-0 bg-white w-full c-scroll pb-12 overflow-y-scroll " id="logs_list_container_inner">
         <table class="table-auto w-max relative ctable table-pin-rows table-pin-cols">
@@ -525,167 +570,173 @@ export class LogList extends LitElement {
   createRenderRoot() {
     return this
   }
+
+  logItemCol(rowData, source, colIdxMap, key, serviceColors, toggleTrace, columnMaxWidthMap, wrapLines) {
+    const dataArr = source === 'spans' ? rowData.data : rowData
+    const wrapClass = wrapLines ? 'whitespace-break-spaces' : 'whitespace-nowrap'
+    switch (key) {
+      case 'id':
+        let [status, errCount, errClass] = errorClass(false, dataArr, colIdxMap)
+        return html`
+          <div class="flex items-center justify-between w-3">
+            <span class="col-span-1 h-5 rounded-sm flex"> ${renderIconWithTippy(errClass, `${errCount} errors attached; status ${status}`)} </span>
+          </div>
+        `
+      case 'created_at':
+      case 'timestamp':
+        let timestamp = lookupVecTextByKey(dataArr, colIdxMap, key)
+        return html`<div class="text-base">
+          <time class="monospace whitespace-nowrap text-slate-600 ${wrapClass}" data-tippy-content="timestamp" datetime=${timestamp}
+            >${displayTimestamp(timestamp)}</time
+          >
+        </div>`
+      case 'status_code':
+        let statusCode = lookupVecTextByKey(dataArr, colIdxMap, 'status_code')
+        let statusCls = getStatusColor(Number(statusCode))
+        return renderBadge(statusCls, statusCode, 'status code')
+      case 'method':
+        let method = lookupVecTextByKey(dataArr, colIdxMap, key)
+        let methodCls = getMethodColor(method)
+        return renderBadge('min-w-[4rem] cbadge ' + methodCls, method, 'method')
+      case 'request_type':
+        let requestType = lookupVecTextByKey(dataArr, colIdxMap, key)
+        if (requestType === 'Incoming') return renderIconWithTippy('w-4', 'Incoming Request', faSprite('arrow-down-left', 'solid', ' h-3 fill-slate-500'))
+        return renderIconWithTippy('w-4', 'Outgoing Request', faSprite('arrow-up-right', 'solid', ' h-3 fill-blue-700'))
+      case 'duration':
+        let dur = rowData.type === 'log' ? 'log' : getDurationNSMS(lookupVecTextByKey(dataArr, colIdxMap, key))
+        return renderBadge('cbadge-sm badge-neutral font-normal bg-fillWeak', dur, 'latency')
+      case 'severity_text':
+        let severity = lookupVecTextByKey(dataArr, colIdxMap, key) || 'UNSET'
+        let severityClass = getSeverityColor(severity)
+        return renderBadge('cbadge-sm cbadge ' + severityClass, severity)
+      case 'body':
+        let body = lookupVecTextByKey(dataArr, colIdxMap, key)
+        return renderBadge('space-x-2 ' + wrapClass, body)
+      case 'status':
+        let st = lookupVecTextByKey(dataArr, colIdxMap, key)
+        let statsCls = getSpanStatusColor(st)
+        return renderBadge(statsCls, st)
+      case 'span_name':
+        let spanName = lookupVecTextByKey(dataArr, colIdxMap, key)
+        return renderBadge('cbadge-sm badge-neutral bg-fillWeak ' + wrapClass, spanName, 'span name')
+      case 'service':
+        let service = lookupVecTextByKey(dataArr, colIdxMap, key)
+        return html` <div class="w-[16ch]">${renderBadge('cbadge-sm badge-neutral bg-fillWeak ' + wrapClass, service, 'service name')}</div>`
+      case 'kind':
+        let kind = lookupVecTextByKey(dataArr, colIdxMap, key)
+        return renderBadge('cbadge-sm badge-neutral bg-fillWeak', kind, 'span kind')
+      case 'latency_breakdown':
+        const { traceStart, traceEnd, startNs, duration, childrenTimeSpans, depth: d } = rowData
+        const color = serviceColors[lookupVecTextByKey(dataArr, colIdxMap, 'span_name')] || 'bg-black'
+        const chil = childrenTimeSpans.map(({ startNs, duration, data }) => ({
+          start: startNs - traceStart,
+          duration,
+          color: serviceColors[lookupVecTextByKey(data, colIdxMap, 'span_name')] || 'bg-black',
+        }))
+        const width = columnMaxWidthMap['latency_breakdown'] || 200
+        return html`
+          <div class="flex h-full min-h-10 justify-end items-center gap-2 pl-1 text-textWeak" style="width:${width}px">
+            <div class="overflow-visible shrink-0 font-normal">${this.logItemCol(rowData, source, colIdxMap, 'duration')}</div>
+            ${spanLatencyBreakdown({ start: startNs - traceStart, depth: d, duration, traceEnd, color, children: chil, barWidth: width - 100 })}
+            <span class="w-1"></span>
+          </div>
+        `
+      case 'http_attributes':
+        const attributes = lookupVecObjectByKey(dataArr, colIdxMap, key)
+        const { method: m, url, status_code: statusCode_ } = attributes
+        if (m || url || statusCode_) {
+          let k = lookupVecTextByKey(dataArr, colIdxMap, 'kind')
+          let methodCls_ = getMethodColor(m)
+          let statusCls_ = getStatusColor(Number(statusCode_))
+          let wrapCls = wrapLines ? 'whitespace-break-spaces' : 'whitespace-nowrap'
+          return html`
+            ${k === 'SERVER'
+              ? renderIconWithTippy('w-4 ml-2', 'Incoming Request', faSprite('arrow-down-left', 'solid', ' h-3 fill-slate-500'))
+              : k === 'CLIENT'
+              ? renderIconWithTippy('w-4 ml-2', 'Outgoing Request', faSprite('arrow-up-right', 'solid', ' h-3 fill-blue-700'))
+              : nothing}
+            ${statusCode_ ? renderBadge(statusCls_, statusCode_, 'status code') : nothing}
+            ${m ? renderBadge('min-w-[4rem] text-center cbadge cbadge-sm ' + methodCls_, m, 'method') : nothing}
+            ${url ? renderBadge('cbadge-sm badge-neutral bg-fillWeak ' + wrapCls, url, 'url') : nothing}
+          `
+        }
+        break
+      case 'db_attributes':
+        const dbAttributes = lookupVecObjectByKey(dataArr, colIdxMap, key)
+        const { system, statement } = dbAttributes
+        if (system || statement) {
+          return html`
+            ${system ? renderBadge('cbadge-sm badge-neutral bg-fillWeak', system) : nothing}
+            ${statement ? renderBadge('cbadge-sm badge-neutral bg-fillWeak', statement) : nothing}
+          `
+        }
+        break
+      case 'rest':
+        let val = lookupVecTextByKey(dataArr, colIdxMap, key)
+        const { depth, children, traceId, childErrors, hasErrors, expanded, type, id, isLastChild, siblingsArr } = rowData
+        const errClas = hasErrors
+          ? 'bg-red-500 text-white fill-white stroke-white'
+          : childErrors
+          ? 'border border-red-500 bg-fillWeak text-textWeak fill-textWeak'
+          : 'border border-strokeWeak bg-fillWeak text-textWeak fill-textWeak'
+        return source == 'logs'
+          ? html`${this.logItemCol(rowData, source, colIdxMap, 'severity_text')} ${this.logItemCol(rowData, source, colIdxMap, 'body')}`
+          : source === 'spans'
+          ? html`<div class="flex w-full ${wrapLines ? 'items-start' : 'items-center'} gap-1">
+              ${this.view === 'tree'
+                ? html`
+                    <div class="flex items-center gap-1">
+                      ${depth > 1
+                        ? new Array(depth - 1)
+                            .fill(1)
+                            .map((_, i) => html`<div class=${`ml-[15px] w-4 h-5 shrink-0 ${siblingsArr[i] ? 'border-l' : ''}`}></div>`)
+                        : nothing}
+                      ${depth > 0
+                        ? html`<div class=${`border-l ml-[15px] w-4 ${isLastChild ? 'h-3' : 'h-5'} relative shrink-0`}>
+                            <span class=${`border-b w-full absolute left-0 ${isLastChild ? 'bottom-0' : 'top-1/2 -translate-y-1/2'}`}></span>
+                          </div>`
+                        : nothing}
+                      ${children > 0
+                        ? html`<button
+                            @click=${e => {
+                              e.stopPropagation()
+                              toggleTrace(traceId, id)
+                            }}
+                            class=${`rounded-sm ml-1 cursor-pointer shrink-0 w-8 px-1 flex justify-center gap-[2px] text-xs items-center h-5 ${errClas}`}
+                          >
+                            ${expanded ? faSprite('minus', 'regular', 'w-3 h-1 shrink-0') : faSprite('plus', 'regular', 'w-3 h-3 shrink-0')} ${children}
+                          </button>`
+                        : depth === 0
+                        ? nothing
+                        : html`<div class=${`rounded-sm ml-1 shrink-0 w-3 h-5 ${errClas}`}></div>`}
+                    </div>
+                  `
+                : nothing}
+              <div class=${`flex items-center gap-1 ${wrapLines ? 'break-all flex-wrap' : 'overflow-hidden'}`}>
+                ${type === 'log'
+                  ? ['severity_text', 'body'].map(k => this.logItemCol(rowData, source, colIdxMap, k, undefined, undefined, undefined, wrapLines))
+                  : ['http_attributes', 'db_attributes', 'status', 'kind', 'span_name'].map(k =>
+                      this.logItemCol(rowData, source, colIdxMap, k, undefined, undefined, undefined, wrapLines),
+                    )}
+                <span class=${'fill-slate-700 ' + wrapClass}>${val}</span>
+              </div>
+            </div>`
+          : html`
+              ${this.logItemCol(rowData, source, colIdxMap, 'request_type')} ${this.logItemCol(rowData, source, colIdxMap, 'status_code')}
+              ${this.logItemCol(rowData, source, colIdxMap, 'method')} ${this.logItemCol(rowData, source, colIdxMap, 'url_path')}
+              ${this.logItemCol(rowData, source, colIdxMap, 'duration')} ${this.logItemCol(rowData, source, colIdxMap, 'host')}
+              <span class=${'overflow-x-hidden max-w-lg fill-slate-700 ' + wrapClass}>${val}</span>
+            `
+      default:
+        let v = lookupVecTextByKey(dataArr, colIdxMap, key)
+        return renderBadge('cbadge-sm badge-neutral bg-fillWeak ' + wrapClass, v, key)
+    }
+  }
 }
 
 customElements.define('log-list', LogList)
 
 const faSprite = (iconName, kind, classes) => html`<svg class="${classes}"><use href="/public/assets/svgs/fa-sprites/${kind}.svg#${iconName}"></use></svg>`
-
-function logItemCol(rowData, source, colIdxMap, key, serviceColors, toggleTrace, columnMaxWidthMap, wrapLines) {
-  const dataArr = source === 'spans' ? rowData.data : rowData
-  const wrapClass = wrapLines ? 'whitespace-break-spaces' : 'whitespace-nowrap'
-  switch (key) {
-    case 'id':
-      let [status, errCount, errClass] = errorClass(false, dataArr, colIdxMap)
-      return html`
-        <div class="flex items-center justify-between w-3">
-          <span class="col-span-1 h-5 rounded-sm flex"> ${renderIconWithTippy(errClass, `${errCount} errors attached; status ${status}`)} </span>
-        </div>
-      `
-    case 'created_at':
-    case 'timestamp':
-      let timestamp = lookupVecTextByKey(dataArr, colIdxMap, key)
-      return html`<div class="text-base">
-        <time class="monospace whitespace-nowrap text-slate-600 ${wrapClass}" data-tippy-content="timestamp" datetime=${timestamp}
-          >${displayTimestamp(timestamp)}</time
-        >
-      </div>`
-    case 'status_code':
-      let statusCode = lookupVecTextByKey(dataArr, colIdxMap, 'status_code')
-      let statusCls = getStatusColor(Number(statusCode))
-      return renderBadge(statusCls, statusCode, 'status code')
-    case 'method':
-      let method = lookupVecTextByKey(dataArr, colIdxMap, key)
-      let methodCls = getMethodColor(method)
-      return renderBadge('min-w-[4rem] cbadge ' + methodCls, method, 'method')
-    case 'request_type':
-      let requestType = lookupVecTextByKey(dataArr, colIdxMap, key)
-      if (requestType === 'Incoming') return renderIconWithTippy('w-4', 'Incoming Request', faSprite('arrow-down-left', 'solid', ' h-3 fill-slate-500'))
-      return renderIconWithTippy('w-4', 'Outgoing Request', faSprite('arrow-up-right', 'solid', ' h-3 fill-blue-700'))
-    case 'duration':
-      let dur = rowData.type === 'log' ? 'log' : getDurationNSMS(lookupVecTextByKey(dataArr, colIdxMap, key))
-      return renderBadge('cbadge-sm badge-neutral font-normal bg-fillWeak', dur, 'latency')
-    case 'severity_text':
-      let severity = lookupVecTextByKey(dataArr, colIdxMap, key) || 'UNSET'
-      let severityClass = getSeverityColor(severity)
-      return renderBadge('cbadge-sm cbadge ' + severityClass, severity)
-    case 'body':
-      let body = lookupVecTextByKey(dataArr, colIdxMap, key)
-      return renderBadge('space-x-2 ' + wrapClass, body)
-    case 'status':
-      let st = lookupVecTextByKey(dataArr, colIdxMap, key)
-      let statsCls = getSpanStatusColor(st)
-      return renderBadge(statsCls, st)
-    case 'span_name':
-      let spanName = lookupVecTextByKey(dataArr, colIdxMap, key)
-      return renderBadge('cbadge-sm badge-neutral bg-fillWeak ' + wrapClass, spanName, 'span name')
-    case 'service':
-      let service = lookupVecTextByKey(dataArr, colIdxMap, key)
-      return html` <div class="w-[16ch]">${renderBadge('cbadge-sm badge-neutral bg-fillWeak ' + wrapClass, service, 'service name')}</div>`
-    case 'kind':
-      let kind = lookupVecTextByKey(dataArr, colIdxMap, key)
-      return renderBadge('cbadge-sm badge-neutral bg-fillWeak', kind, 'span kind')
-    case 'latency_breakdown':
-      const { traceStart, traceEnd, startNs, duration, childrenTimeSpans, depth: d } = rowData
-      const color = serviceColors[lookupVecTextByKey(dataArr, colIdxMap, 'span_name')] || 'bg-black'
-      const chil = childrenTimeSpans.map(({ startNs, duration, data }) => ({
-        start: startNs - traceStart,
-        duration,
-        color: serviceColors[lookupVecTextByKey(data, colIdxMap, 'span_name')] || 'bg-black',
-      }))
-      const width = columnMaxWidthMap['latency_breakdown'] || 200
-      return html`
-        <div class="flex h-full min-h-10 justify-end items-center gap-2 pl-1 text-textWeak" style="width:${width}px">
-          <div class="overflow-visible shrink-0 font-normal">${logItemCol(rowData, source, colIdxMap, 'duration')}</div>
-          ${spanLatencyBreakdown({ start: startNs - traceStart, depth: d, duration, traceEnd, color, children: chil, barWidth: width - 100 })}
-          <span class="w-1"></span>
-        </div>
-      `
-    case 'http_attributes':
-      const attributes = lookupVecObjectByKey(dataArr, colIdxMap, key)
-      const { method: m, url, status_code: statusCode_ } = attributes
-      if (m || url || statusCode_) {
-        let k = lookupVecTextByKey(dataArr, colIdxMap, 'kind')
-        let methodCls_ = getMethodColor(m)
-        let statusCls_ = getStatusColor(Number(statusCode_))
-        let wrapCls = wrapLines ? 'whitespace-break-spaces' : 'whitespace-nowrap'
-        return html`
-          ${k === 'SERVER'
-            ? renderIconWithTippy('w-4 ml-2', 'Incoming Request', faSprite('arrow-down-left', 'solid', ' h-3 fill-slate-500'))
-            : k === 'CLIENT'
-            ? renderIconWithTippy('w-4 ml-2', 'Outgoing Request', faSprite('arrow-up-right', 'solid', ' h-3 fill-blue-700'))
-            : nothing}
-          ${statusCode_ ? renderBadge(statusCls_, statusCode_, 'status code') : nothing}
-          ${m ? renderBadge('min-w-[4rem] text-center cbadge cbadge-sm ' + methodCls_, m, 'method') : nothing}
-          ${url ? renderBadge('cbadge-sm badge-neutral bg-fillWeak ' + wrapCls, url, 'url') : nothing}
-        `
-      }
-      break
-    case 'db_attributes':
-      const dbAttributes = lookupVecObjectByKey(dataArr, colIdxMap, key)
-      const { system, statement } = dbAttributes
-      if (system || statement) {
-        return html`
-          ${system ? renderBadge('cbadge-sm badge-neutral bg-fillWeak', system) : nothing}
-          ${statement ? renderBadge('cbadge-sm badge-neutral bg-fillWeak', statement) : nothing}
-        `
-      }
-      break
-    case 'rest':
-      let val = lookupVecTextByKey(dataArr, colIdxMap, key)
-      const { depth, children, traceId, childErrors, hasErrors, expanded, type, id, isLastChild, siblingsArr } = rowData
-      const errClas = hasErrors
-        ? 'bg-red-500 text-white fill-white stroke-white'
-        : childErrors
-        ? 'border border-red-500 bg-fillWeak text-textWeak fill-textWeak'
-        : 'border border-strokeWeak bg-fillWeak text-textWeak fill-textWeak'
-      return source == 'logs'
-        ? html`${logItemCol(rowData, source, colIdxMap, 'severity_text')} ${logItemCol(rowData, source, colIdxMap, 'body')}`
-        : source === 'spans'
-        ? html`<div class="flex w-full ${wrapLines ? 'items-start' : 'items-center'} gap-1">
-            <div class="flex items-center gap-1">
-              ${depth > 1
-                ? new Array(depth - 1).fill(1).map((_, i) => html`<div class=${`ml-[15px] w-4 h-5 shrink-0 ${siblingsArr[i] ? 'border-l' : ''}`}></div>`)
-                : nothing}
-              ${depth > 0
-                ? html`<div class=${`border-l ml-[15px] w-4 ${isLastChild ? 'h-3' : 'h-5'} relative shrink-0`}>
-                    <span class=${`border-b w-full absolute left-0 ${isLastChild ? 'bottom-0' : 'top-1/2 -translate-y-1/2'}`}></span>
-                  </div>`
-                : nothing}
-              ${children > 0
-                ? html`<button
-                    @click=${e => {
-                      e.stopPropagation()
-                      toggleTrace(traceId, id)
-                    }}
-                    class=${`rounded-sm ml-1 cursor-pointer shrink-0 w-8 px-1 flex justify-center gap-[2px] text-xs items-center h-5 ${errClas}`}
-                  >
-                    ${expanded ? faSprite('minus', 'regular', 'w-3 h-1 shrink-0') : faSprite('plus', 'regular', 'w-3 h-3 shrink-0')} ${children}
-                  </button>`
-                : depth === 0
-                ? nothing
-                : html`<div class=${`rounded-sm ml-1 shrink-0 w-3 h-5 ${errClas}`}></div>`}
-            </div>
-            <div class=${`flex items-center gap-1 ${wrapLines ? 'break-all flex-wrap' : 'overflow-hidden'}`}>
-              ${type === 'log'
-                ? ['severity_text', 'body'].map(k => logItemCol(rowData, source, colIdxMap, k, undefined, undefined, undefined, wrapLines))
-                : ['http_attributes', 'db_attributes', 'status', 'kind', 'span_name'].map(k =>
-                    logItemCol(rowData, source, colIdxMap, k, undefined, undefined, undefined, wrapLines),
-                  )}
-              <span class=${'fill-slate-700 ' + wrapClass}>${val}</span>
-            </div>
-          </div>`
-        : html`
-            ${logItemCol(rowData, source, colIdxMap, 'request_type')} ${logItemCol(rowData, source, colIdxMap, 'status_code')}
-            ${logItemCol(rowData, source, colIdxMap, 'method')} ${logItemCol(rowData, source, colIdxMap, 'url_path')}
-            ${logItemCol(rowData, source, colIdxMap, 'duration')} ${logItemCol(rowData, source, colIdxMap, 'host')}
-            <span class=${'overflow-x-hidden max-w-lg fill-slate-700 ' + wrapClass}>${val}</span>
-          `
-    default:
-      let v = lookupVecTextByKey(dataArr, colIdxMap, key)
-      return renderBadge('cbadge-sm badge-neutral bg-fillWeak ' + wrapClass, v, key)
-  }
-}
 
 function displayTimestamp(inputDateString) {
   const date = new Date(inputDateString)
