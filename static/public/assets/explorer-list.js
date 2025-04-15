@@ -29,7 +29,6 @@ export class LogList extends LitElement {
     this.logsColumns = []
     this.colIdxMap = {}
     this.serviceColors = {}
-    this.traceLogs = []
     this.hasMore = false
     this.expandedTraces = {}
     this.spanListTree = []
@@ -94,15 +93,14 @@ export class LogList extends LitElement {
     return url.toString()
   }
 
-  updateTableData = (ves, cols, colIdxMap, serviceColors, nextFetchUrl, traceLogs) => {
+  updateTableData = (ves, cols, colIdxMap, serviceColors, nextFetchUrl) => {
     this.logsColumns = [...cols]
     this.colIdxMap = { ...colIdxMap }
-    this.traceLogs = traceLogs
     this.hasMore = ves.length > 199
     this.serviceColors = { ...serviceColors }
     this.nextFetchUrl = nextFetchUrl
     if (this.source === 'spans') {
-      this.spanListTree = this.buildSpanListTree(ves, this.tr)
+      this.spanListTree = this.buildSpanListTree(ves)
     } else {
       this.logsData = ves
     }
@@ -125,10 +123,9 @@ export class LogList extends LitElement {
       this.nextFetchUrl = window.virtualListData.nextFetchUrl
       this.resetLogsUrl = window.virtualListData.resetLogsUrl
       this.projectId = window.virtualListData.projectId
-      this.traceLogs = window.virtualListData.traceLogs
       this.expandedTraces = {}
       if (this.source === 'spans') {
-        this.spanListTree = this.buildSpanListTree(logs, this.traceLogs)
+        this.spanListTree = this.buildSpanListTree(logs)
       } else {
         this.logsData = logs
       }
@@ -181,8 +178,8 @@ export class LogList extends LitElement {
     super.disconnectedCallback()
   }
 
-  buildSpanListTree(logs, traceLogs) {
-    return groupSpans(logs, traceLogs, this.colIdxMap, this.expandedTraces)
+  buildSpanListTree(logs) {
+    return groupSpans(logs, this.colIdxMap, this.expandedTraces)
   }
 
   renderLoadMore() {
@@ -303,7 +300,6 @@ export class LogList extends LitElement {
         if (!data.error) {
           const { logsData, serviceColors, nextUrl, traceLogs } = data
           if (logsData.length > 0) {
-            this.traceLogs = [...this.traceLogs, ...traceLogs]
             this.serviceColors = { ...this.serviceColors, ...serviceColors }
             if (!isNewData) {
               this.hasMore = logsData.length > 199
@@ -312,10 +308,10 @@ export class LogList extends LitElement {
             if (this.source === 'spans') {
               if (isNewData) {
                 const los = this.spanListTree.map(span => span.data)
-                this.spanListTree = this.buildSpanListTree([...logsData, ...los], this.traceLogs)
+                this.spanListTree = this.buildSpanListTree([...logsData, ...los])
               } else {
                 const { nonRootRootSpans, remainingSpans } = this.filterFalseRoots()
-                const tree = this.buildSpanListTree([...nonRootRootSpans, ...logsData], this.traceLogs)
+                const tree = this.buildSpanListTree([...nonRootRootSpans, ...logsData])
                 this.spanListTree = [...remainingSpans, ...tree]
               }
             } else {
@@ -460,14 +456,13 @@ export class LogList extends LitElement {
               this.columnMaxWidthMap[key] = target
             }
           }
-          console.log(this.columnMaxWidthMap)
         }
       })
     })
   }
 
   render() {
-    const list = this.source === 'spans' ? this.spanListTree.filter(sp => sp.show) : [...this.logsData]
+    const list = this.source === 'spans' ? [...this.spanListTree] : [...this.logsData]
     // end is used to render the load more button"
     list.unshift('start')
     list.push('end')
@@ -584,7 +579,6 @@ function logItemCol(rowData, source, colIdxMap, key, serviceColors, toggleTrace,
       let spanName = lookupVecTextByKey(dataArr, colIdxMap, key)
       return renderBadge('cbadge-sm badge-neutral bg-fillWeak ' + wrapClass, spanName, 'span name')
     case 'service':
-      colIdxMap = rowData.type === 'log' ? { ...colIdxMap, service: dataArr.length - 1 } : colIdxMap
       let service = lookupVecTextByKey(dataArr, colIdxMap, key)
       return html` <div class="w-[16ch]">${renderBadge('cbadge-sm badge-neutral bg-fillWeak ' + wrapClass, service, 'service name')}</div>`
     case 'kind':
@@ -673,7 +667,7 @@ function logItemCol(rowData, source, colIdxMap, key, serviceColors, toggleTrace,
             </div>
             <div class=${`flex items-center gap-1 ${wrapLines ? 'break-all flex-wrap' : 'overflow-hidden'}`}>
               ${type === 'log'
-                ? ['severity_text', 'body'].map(k => logItemCol(rowData, source, { severity_text: 5, body: 6 }, k))
+                ? ['severity_text', 'body'].map(k => logItemCol(rowData, source, colIdxMap, k, undefined, undefined, undefined, wrapLines))
                 : ['http_attributes', 'db_attributes', 'status', 'kind', 'span_name'].map(k =>
                     logItemCol(rowData, source, colIdxMap, k, undefined, undefined, undefined, wrapLines),
                   )}
@@ -878,7 +872,7 @@ function requestDumpLogItemUrlPath(rd, colIdxMap, source) {
   return [rdId, rdCreatedAt, source]
 }
 
-function groupSpans(data, logs, colIdxMap, expandedTraces) {
+function groupSpans(data, colIdxMap, expandedTraces) {
   const traceMap = new Map()
   const TRACE_INDEX = colIdxMap['trace_id']
   const SPAN_INDEX = colIdxMap['latency_breakdown']
@@ -887,18 +881,23 @@ function groupSpans(data, logs, colIdxMap, expandedTraces) {
   const SPAN_DURATION_INDEX = colIdxMap['duration']
   const START_TIME_NS = colIdxMap['start_time_ns']
   const ERROR_INDEX = colIdxMap['errors']
-
-  const logMap = logs.reduce((map, log) => {
-    if (!map.has(log[2])) map.set(log[2], [])
-    map.get(log[2]).push(log)
-    return map
-  }, new Map())
+  const BODY_INDEX = colIdxMap['body']
 
   data.forEach(span => {
-    const traceId = span[TRACE_INDEX]
-    const spanId = span[SPAN_INDEX]
+    let traceId = span[TRACE_INDEX]
+    let spanId = span[SPAN_INDEX]
     const parentSpanId = span[PARENT_SPAN_INDEX]
-
+    const body = span[BODY_INDEX]
+    const id = span[colIdxMap['id']]
+    if (traceId === '' || traceId === null) {
+      // generate random id
+      traceId = generateStrId()
+      span[TRACE_INDEX] = traceId
+    }
+    if (spanId === '' || spanId === null) {
+      spanId = generateStrId()
+      span[SPAN_INDEX] = spanId
+    }
     let traceData = traceMap.get(traceId)
     if (!traceData) {
       traceData = {
@@ -906,7 +905,6 @@ function groupSpans(data, logs, colIdxMap, expandedTraces) {
         spans: new Map(),
         minStart: Infinity,
         duration: 0,
-        logs: logMap.get(traceId) || [],
         trace_start_time: null,
       }
       traceMap.set(traceId, traceData)
@@ -921,28 +919,25 @@ function groupSpans(data, logs, colIdxMap, expandedTraces) {
     }
     traceData.minStart = Math.min(traceData.minStart, startTime)
     traceData.duration = Math.max(traceData.duration, duration)
-
-    traceData.spans.set(spanId, {
-      id: spanId,
-      startNs: startTime,
-      hasErrors: span[ERROR_INDEX],
-      duration,
-      children: [],
-      parent: parentSpanId,
-      data: span,
-      type: 'span',
-    })
-  })
-
-  logs.forEach(log => {
-    const traceData = traceMap.get(log[2])
-    if (traceData) {
-      traceData.spans.set(log[0], {
-        data: log,
-        type: 'log',
-        spandId: log[3],
-        startNs: log[4],
+    if (body !== null) {
+      traceData.spans.set(id, {
+        id: spanId,
+        startNs: startTime,
         children: [],
+        spandId: spanId,
+        data: span,
+        type: 'log',
+      })
+    } else {
+      traceData.spans.set(spanId, {
+        id: spanId,
+        startNs: startTime,
+        hasErrors: span[ERROR_INDEX],
+        duration,
+        children: [],
+        parent: parentSpanId,
+        data: span,
+        type: 'span',
       })
     }
   })
@@ -1054,4 +1049,8 @@ function getColumnWidth(column) {
     default:
       return ''
   }
+}
+
+function generateStrId() {
+  return Math.random().toString(36).substring(2, 15)
 }

@@ -294,8 +294,7 @@ convertLogToTimeFusionLog pid resource scope lr = do
     , start_time = nanosecondsToUTC lr.logRecordObservedTimeUnixNano
     , parent_id = Nothing
     , observed_timestamp = Just $ nanosecondsToUTC lr.logRecordObservedTimeUnixNano
-    , -- generate a unique id for the log record
-      id = UUID.nil
+    , id = UUID.nil
     , events = Nothing
     , links = Nothing
     , timestamp = if lr.logRecordTimeUnixNano == 0 then nanosecondsToUTC lr.logRecordObservedTimeUnixNano else nanosecondsToUTC lr.logRecordTimeUnixNano

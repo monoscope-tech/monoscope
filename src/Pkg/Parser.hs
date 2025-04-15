@@ -321,9 +321,11 @@ defaultSelectSqlQuery (Just SSpans) =
   , "status_message as status"
   , "name as span_name"
   , "duration"
+  , "body"
+  , "level as severity_text"
   , "resource->>'service.name' as service"
   , "context___span_id as latency_breakdown"
-  , "parent_id as latency_breakdown"
+  , "parent_id as parent_span_id"
   , "CAST(EXTRACT(EPOCH FROM (start_time)) * 1_000_000_000 AS BIGINT) as start_time_ns"
   , "EXISTS(SELECT 1 FROM jsonb_array_elements(events) elem  WHERE elem->>'event_name' = 'exception') as errors"
   , [fmt|jsonb_build_object(
