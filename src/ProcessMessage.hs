@@ -12,12 +12,13 @@ import Data.Aeson.KeyMap qualified as AEK
 import Data.Aeson.Types (KeyValue ((.=)), object)
 import Data.ByteString.Lazy.Char8 qualified as BL
 import Data.Cache qualified as Cache
+import Data.Effectful.UUID (UUIDEff)
 import Data.Effectful.UUID qualified as UUID
+import Data.HashMap.Strict qualified as HM
 import Data.List qualified as L
 import Data.Text qualified as T
 import Data.Time (addUTCTime, zonedTimeToUTC)
 import Data.UUID qualified as UUID
-import Data.UUID.V4 (nextRandom)
 import Data.UUID.V4 qualified as UUID
 import Data.Vector qualified as V
 import Data.Vector.Algorithms qualified as VAA
@@ -116,7 +117,7 @@ import Utils (eitherStrToText)
  --}
 processMessages
   -- :: (Reader.Reader Config.AuthContext :> es, Time.Time :> es, DB :> es, Log :> es, IOE :> es)
-  :: (Reader.Reader Config.AuthContext :> es, Time.Time :> es, DB :> es, Labeled "timefusion" DB :> es, Log :> es, IOE :> es, Ki.StructuredConcurrency :> es)
+  :: (Reader.Reader Config.AuthContext :> es, Time.Time :> es, DB :> es, Labeled "timefusion" DB :> es, Log :> es, IOE :> es, UUIDEff :> es, Ki.StructuredConcurrency :> es)
   => [(Text, ByteString)]
   -> HashMap Text Text
   -> Eff es [Text]
@@ -136,8 +137,8 @@ processMessages msgs attrs = do
     then pure []
     else do
       spans <- forM (rights msgs') \(rmAckId, msg) -> do
-        spanId <- liftIO $ UUID.nextRandom
-        trId <- liftIO $ UUID.toText <$> UUID.nextRandom
+        spanId <- UUID.genUUID
+        trId <- UUID.toText <$> UUID.genUUID
         pure $ convertRequestMessageToSpan msg (spanId, trId)
       let spanVec = V.fromList spans
       Telemetry.bulkInsertSpans spanVec
@@ -208,15 +209,32 @@ jsonToMap _ = Nothing
 
 
 processRequestMessages
-  :: (Reader.Reader Config.AuthContext :> es, Time.Time :> es, DB :> es, Log :> es, IOE :> es, Ki.StructuredConcurrency :> es)
+  :: (Reader.Reader Config.AuthContext :> es, Time.Time :> es, DB :> es, Log :> es, IOE :> es, Ki.StructuredConcurrency :> es, UUIDEff :> es)
   => [(Text, RequestMessages.RequestMessage)]
   -> Eff es [Text]
 processRequestMessages msgs = do
   startTime <- liftIO $ getTime Monotonic
-  !processed <- forM msgs \(rmAckId, msg) ->
-    processRequestMessage msg >>= \case
-      Left err -> pure $ Left (err, rmAckId, msg)
-      Right (rd, enp, s, f, fo, err) -> pure $ Right (rd, enp, s, f, fo, err, rmAckId)
+  appCtx <- ask @Config.AuthContext
+  timestamp <- Time.currentTime
+
+  let groupedMsgs = groupMsgsByProjectId msgs
+
+  !processed <- fmap concat $ forM (HM.toList groupedMsgs) \(projectId, projectMsgs) -> do
+    let pid = Projects.ProjectId projectId
+    projectCacheVal <- liftIO $ Cache.fetchWithCache appCtx.projectCache pid \pid' -> do
+      mpjCache <- withPool appCtx.jobsPool $ Projects.projectCacheById pid'
+      pure $ fromMaybe projectCacheDefault mpjCache
+
+    -- Process all messages for this project with the same cache
+    forM projectMsgs \(rmAckId, msg) -> do
+      recId <- UUID.genUUID
+      let result =
+            if projectCacheVal.paymentPlan == "Free" && projectCacheVal.weeklyRequestCount >= 5000
+              then Right (Nothing, Nothing, Nothing, V.empty, V.empty, V.empty)
+              else RequestMessages.requestMsgToDumpAndEndpoint projectCacheVal msg timestamp recId
+      case result of
+        Left err -> pure $ Left (err, rmAckId, msg)
+        Right (rd, enp, s, f, fo, err) -> pure $ Right (rd, enp, s, f, fo, err, rmAckId)
 
   let !(failures, successes) = partitionEithers processed
       !(reqDumps, endpoints, shapes, fields, formats, errs, rmAckIds) = L.unzip7 successes
@@ -227,7 +245,7 @@ processRequestMessages msgs = do
   let !formatsFinal = VAA.nubBy (comparing (.hash)) $ V.concat formats
   let !errsFinal = VAA.nubBy (comparing (.hash)) $ V.concat errs
 
-  forM_ failures $ \(err, rmAckId, msg) ->
+  forM_ failures \(err, rmAckId, msg) ->
     Log.logAttention "Error processing message" (object ["Error" .= err, "AckId" .= rmAckId, "OriginalMsg" .= msg])
 
   afterProcessing <- liftIO $ getTime Monotonic
@@ -250,40 +268,27 @@ processRequestMessages msgs = do
       Log.logAttention "Postgres Exception" (show e)
       pure []
     Right _ -> pure rmAckIds
+  where
+    -- \| Group messages by project ID to reduce cache lookups
+    groupMsgsByProjectId :: [(Text, RequestMessages.RequestMessage)] -> HashMap UUID.UUID [(Text, RequestMessages.RequestMessage)]
+    groupMsgsByProjectId msgs =
+      foldr
+        ( \(ackId, msg) acc ->
+            HM.insertWith (\new old -> new ++ old) msg.projectId [(ackId, msg)] acc
+        )
+        HM.empty
+        msgs
 
-
-projectCacheDefault :: Projects.ProjectCache
-projectCacheDefault =
-  Projects.ProjectCache
-    { hosts = []
-    , endpointHashes = []
-    , shapeHashes = []
-    , redactFieldslist = []
-    , weeklyRequestCount = 0
-    , paymentPlan = ""
-    }
-
-
-processRequestMessage
-  :: (Reader.Reader Config.AuthContext :> es, Time.Time :> es, IOE :> es)
-  => RequestMessages.RequestMessage
-  -> Eff es (Either Text (Maybe RequestDumps.RequestDump, Maybe Endpoints.Endpoint, Maybe Shapes.Shape, V.Vector Fields.Field, V.Vector Formats.Format, V.Vector RequestDumps.ATError))
-processRequestMessage recMsg = do
-  appCtx <- ask @Config.AuthContext
-  timestamp <- Time.currentTime
-  let pid = Projects.ProjectId recMsg.projectId
-  -- We retrieve the projectCache object from the inmemory cache and if it doesn't exist,
-  -- we set the value in the db into the cache and return that.
-  -- This should help with our performance, since this project Cache is the only information we need in order to process
-  -- an apitoolkit requestmessage payload. So we're able to process payloads without hitting the database except for the actual db inserts.
-  projectCacheVal <- liftIO $ Cache.fetchWithCache appCtx.projectCache pid \pid' -> do
-    mpjCache <- withPool appCtx.jobsPool $ Projects.projectCacheById pid'
-    pure $ fromMaybe projectCacheDefault mpjCache
-  recId <- liftIO nextRandom
-  pure $
-    if projectCacheVal.paymentPlan == "Free" && projectCacheVal.weeklyRequestCount >= 5000
-      then Right (Nothing, Nothing, Nothing, V.empty, V.empty, V.empty)
-      else RequestMessages.requestMsgToDumpAndEndpoint projectCacheVal recMsg timestamp recId
+    projectCacheDefault :: Projects.ProjectCache
+    projectCacheDefault =
+      Projects.ProjectCache
+        { hosts = []
+        , endpointHashes = []
+        , shapeHashes = []
+        , redactFieldslist = []
+        , weeklyRequestCount = 0
+        , paymentPlan = ""
+        }
 
 
 convertRequestMessageToSpan :: RequestMessages.RequestMessage -> (UUID.UUID, Text) -> Telemetry.SpanRecord

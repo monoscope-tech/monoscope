@@ -3,6 +3,7 @@ module Models.Tests.TestToDump (testRunToRequestMsg, logTest, runCollectionTest)
 import Data.Aeson qualified as AE
 import Data.Base64.Types qualified as B64
 import Data.ByteString.Base64 qualified as B64
+import Data.Effectful.UUID (UUIDEff)
 import Data.Either.Extra (mapLeft)
 import Data.Time
 import Data.UUID qualified as UUID
@@ -85,7 +86,7 @@ runCollectionTest collection_steps col_vars cold_id = do
 
 
 logTest
-  :: (IOE :> es, Time.Time :> es, Reader.Reader Config.AuthContext :> es, DB :> es, Log :> es, Ki.StructuredConcurrency :> es)
+  :: (IOE :> es, Time.Time :> es, Reader.Reader Config.AuthContext :> es, DB :> es, Log :> es, Ki.StructuredConcurrency :> es, UUIDEff :> es)
   => Projects.ProjectId
   -> Testing.CollectionId
   -> V.Vector Testing.CollectionStepData

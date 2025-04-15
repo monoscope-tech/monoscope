@@ -147,6 +147,7 @@ type ATBackgroundCtx =
      , Labeled "timefusion" DB
      , Time
      , Log
+     , UUIDEff
      , Ki.StructuredConcurrency
      , Effectful.IOE
      ]
@@ -160,6 +161,7 @@ runBackground logger appCtx process =
     & runLabeled @"timefusion" (runDB appCtx.timefusionPgPool)
     & runTime
     & Logging.runLog ("background-job:" <> show appCtx.config.environment) logger
+    & runUUID
     & Ki.runStructuredConcurrency
     & Effectful.runEff
 
