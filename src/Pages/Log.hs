@@ -130,18 +130,29 @@ apiLogH pid queryM queryASTM cols' cursorM' sinceM fromM toM layoutM sourceM tar
             if source == "requests"
               then (\r -> lookupVecTextByKey r colIdxMap "created_at") =<< (requestVecs V.!? (V.length requestVecs - 1))
               else (\r -> lookupVecTextByKey r colIdxMap "timestamp") =<< (requestVecs V.!? (V.length requestVecs - 1))
-          serviceNames =
+          traceIDs =
             if source == "spans"
-              then V.map (\v -> lookupVecTextByKey v colIdxMap "span_name") requestVecs
+              then V.catMaybes $ V.map (\v -> lookupVecTextByKey v colIdxMap "trace_id") requestVecs
               else []
-          colors = getServiceColors (V.catMaybes serviceNames)
           nextLogsURL = RequestDumps.requestDumpLogUrlPath pid queryM cols' reqLastCreatedAtM sinceM fromM toM (Just "loadmore") source queryASTM
           resetLogsURL = RequestDumps.requestDumpLogUrlPath pid queryM cols' Nothing Nothing Nothing Nothing Nothing source Nothing
+      additionalReqsVec <-
+        if (null traceIDs)
+          then pure []
+          else do
+            rs <- RequestDumps.selectChildSpansAndLogs pid summaryCols $ V.filter (/= "") traceIDs
+            pure rs
+      let finalVecs = requestVecs <> additionalReqsVec
+          serviceNames =
+            if source == "spans"
+              then V.map (\v -> lookupVecTextByKey v colIdxMap "span_name") finalVecs
+              else []
+          colors = getServiceColors (V.catMaybes serviceNames)
       let page =
             ApiLogsPageData
               { pid
               , resultCount
-              , requestVecs
+              , requestVecs = finalVecs
               , cols = curatedColNames
               , colIdxMap
               , nextLogsURL
@@ -228,16 +239,28 @@ apiLogJson pid queryM queryASTM cols' cursorM' sinceM fromM toM layoutM sourceM 
             if source == "requests"
               then (\r -> lookupVecTextByKey r colIdxMap "created_at") =<< (requestVecs V.!? (V.length requestVecs - 1))
               else (\r -> lookupVecTextByKey r colIdxMap "timestamp") =<< (requestVecs V.!? (V.length requestVecs - 1))
-          serviceNames =
-            if source == "spans"
-              then V.map (\v -> lookupVecTextByKey v colIdxMap "span_name") requestVecs
-              else []
           nextLogsURL = RequestDumps.requestDumpLogUrlPath pid queryM cols' reqLastCreatedAtM sinceM fromM toM (Just "loadmore") source queryASTM
           resetLogsURL = RequestDumps.requestDumpLogUrlPath pid queryM cols' Nothing Nothing Nothing Nothing Nothing source Nothing
-      let colors = getServiceColors (V.catMaybes serviceNames)
+          traceIDs =
+            if source == "spans"
+              then V.catMaybes $ V.map (\v -> lookupVecTextByKey v colIdxMap "trace_id") requestVecs
+              else []
+      additionalReqsVec <-
+        if (null traceIDs)
+          then pure []
+          else do
+            rs <- RequestDumps.selectChildSpansAndLogs pid summaryCols $ V.filter (/= "") traceIDs
+            pure rs
+      let finalVecs = requestVecs <> additionalReqsVec
+          serviceNames =
+            if source == "spans"
+              then V.map (\v -> lookupVecTextByKey v colIdxMap "span_name") finalVecs
+              else []
+          colors = getServiceColors (V.catMaybes serviceNames)
+
       addRespHeaders $
         AE.object
-          [ "logsData" AE..= requestVecs
+          [ "logsData" AE..= finalVecs
           , "serviceColors" AE..= colors
           , "nextUrl" AE..= nextLogsURL
           , "resetLogsUrl" AE..= resetLogsURL

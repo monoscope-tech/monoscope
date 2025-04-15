@@ -96,7 +96,7 @@ export class LogList extends LitElement {
   updateTableData = (ves, cols, colIdxMap, serviceColors, nextFetchUrl) => {
     this.logsColumns = [...cols]
     this.colIdxMap = { ...colIdxMap }
-    this.hasMore = ves.length > 199
+    this.hasMore = ves.length > 0
     this.serviceColors = { ...serviceColors }
     this.nextFetchUrl = nextFetchUrl
     if (this.source === 'spans') {
@@ -130,7 +130,7 @@ export class LogList extends LitElement {
         this.logsData = logs
       }
       this.updateColumnMaxWidthMap(logs)
-      this.hasMore = logs.length > 199
+      this.hasMore = logs.length > 0
       this.requestUpdate()
 
       window.virtualListData = null
@@ -298,11 +298,11 @@ export class LogList extends LitElement {
       .then(response => response.json())
       .then(data => {
         if (!data.error) {
-          const { logsData, serviceColors, nextUrl, traceLogs } = data
+          const { logsData, serviceColors, nextUrl } = data
           if (logsData.length > 0) {
             this.serviceColors = { ...this.serviceColors, ...serviceColors }
             if (!isNewData) {
-              this.hasMore = logsData.length > 199
+              this.hasMore = logsData.length > 0
               this.nextFetchUrl = nextUrl
             }
             if (this.source === 'spans') {
@@ -462,7 +462,8 @@ export class LogList extends LitElement {
   }
 
   render() {
-    const list = this.source === 'spans' ? [...this.spanListTree] : [...this.logsData]
+    const list = this.source === 'spans' ? this.spanListTree.filter(sp => sp.show) : [...this.logsData]
+    console.log(this.spanListTree)
     // end is used to render the load more button"
     list.unshift('start')
     list.push('end')
@@ -586,11 +587,11 @@ function logItemCol(rowData, source, colIdxMap, key, serviceColors, toggleTrace,
       return renderBadge('cbadge-sm badge-neutral bg-fillWeak', kind, 'span kind')
     case 'latency_breakdown':
       const { traceStart, traceEnd, startNs, duration, childrenTimeSpans, depth: d } = rowData
-      const color = serviceColors[lookupVecTextByKey(dataArr, colIdxMap, 'span_name')] || 'black'
+      const color = serviceColors[lookupVecTextByKey(dataArr, colIdxMap, 'span_name')] || 'bg-black'
       const chil = childrenTimeSpans.map(({ startNs, duration, data }) => ({
         start: startNs - traceStart,
         duration,
-        color: serviceColors[lookupVecTextByKey(data, colIdxMap, 'span_name')] || 'black',
+        color: serviceColors[lookupVecTextByKey(data, colIdxMap, 'span_name')] || 'bg-black',
       }))
       const width = columnMaxWidthMap['latency_breakdown'] || 200
       return html`

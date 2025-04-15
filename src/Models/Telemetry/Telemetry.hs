@@ -24,12 +24,10 @@ module Models.Telemetry.Telemetry (
   Severity (..),
   Context (..),
   getDataPointsData,
-  bulkInsertLogs,
   spanRecordById,
   getTraceDetails,
   getMetricData,
   bulkInsertMetrics,
-  bulkInsertSpans,
   bulkInsertOtelLogsAndSpansTF,
   getMetricChartListData,
   getLogsByTraceIds,
@@ -597,67 +595,6 @@ getMetricServiceNames pid = dbtToEff $ query Select q pid
       [sql| SELECT DISTINCT service_name FROM telemetry.metrics_meta WHERE project_id = ?|]
 
 
--- Function to insert multiple log entries
-bulkInsertLogs :: DB :> es => V.Vector LogRecord -> Eff es ()
-bulkInsertLogs logs = void $ dbtToEff $ executeMany Insert q (V.toList rowsToInsert)
-  where
-    q =
-      [sql|
-      INSERT INTO telemetry.logs
-      (project_id, timestamp, observed_timestamp, trace_id, span_id,
-       severity_text, severity_number, body, attributes, resource, instrumentation_scope)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    |]
-    rowsToInsert = V.map logToTuple logs
-    logToTuple entry =
-      ( entry.projectId
-      , entry.timestamp
-      , entry.observedTimestamp
-      , entry.traceId
-      , entry.spanId
-      , entry.severityText
-      , entry.severityNumber
-      , entry.body
-      , entry.attributes
-      , entry.resource
-      , entry.instrumentationScope
-      )
-
-
--- Function to insert multiple span entries
-bulkInsertSpans :: DB :> es => V.Vector SpanRecord -> Eff es ()
-bulkInsertSpans spans = void $ dbtToEff $ executeMany Insert q (V.toList rowsToInsert)
-  where
-    q =
-      [sql|
-      INSERT INTO telemetry.spans
-      (project_id, timestamp, trace_id, span_id, parent_span_id, trace_state, span_name,
-       start_time, end_time, kind, status, status_message, attributes, events, links, resource, instrumentation_scope, duration_ns)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    |]
-    rowsToInsert = V.map spanToTuple spans
-    spanToTuple entry =
-      ( entry.projectId
-      , entry.timestamp
-      , entry.traceId
-      , entry.spanId
-      , entry.parentSpanId
-      , entry.traceState
-      , entry.spanName
-      , entry.startTime
-      , entry.endTime
-      , entry.kind
-      , entry.status
-      , entry.statusMessage
-      , entry.attributes
-      , entry.events
-      , entry.links
-      , entry.resource
-      , entry.instrumentationScope
-      , entry.spanDurationNs
-      )
-
-
 bulkInsertMetrics :: DB :> es => V.Vector MetricRecord -> Eff es ()
 bulkInsertMetrics metrics = do
   void $ dbtToEff $ executeMany Insert q (V.toList rowsToInsert)
@@ -796,7 +733,7 @@ instance ToRow OtelLogsAndSpans where
 bulkInsertOtelLogsAndSpansTF :: (DB :> es, Labeled "timefusion" DB :> es) => V.Vector OtelLogsAndSpans -> Eff es ()
 bulkInsertOtelLogsAndSpansTF records = do
   _ <- bulkInsertSpansTS records
-  _ <- bulkInsertOtelLogsAndSpans records
+  -- _ <- bulkInsertOtelLogsAndSpans records
   pure ()
 
 

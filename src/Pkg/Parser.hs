@@ -1,5 +1,5 @@
 -- Parser implemented with help and code from: https://markkarpov.com/tutorial/megaparsec.html
-module Pkg.Parser (parseQueryStringToWhereClause, queryASTToComponents, parseQueryToComponents, fixedUTCTime, parseQuery, sectionsToComponents, defSqlQueryCfg, defPid, SqlQueryCfg (..), QueryComponents (..), listToColNames, pSource, parseQueryToAST, ToQueryText (..)) where
+module Pkg.Parser (parseQueryStringToWhereClause, queryASTToComponents, parseQueryToComponents, getProcessedColumns, fixedUTCTime, parseQuery, sectionsToComponents, defSqlQueryCfg, defPid, SqlQueryCfg (..), QueryComponents (..), listToColNames, pSource, parseQueryToAST, ToQueryText (..)) where
 
 import Control.Error (hush)
 import Data.Default (Default (def))
@@ -80,6 +80,16 @@ normalizeKeyPath :: Text -> Text
 normalizeKeyPath txt = T.toLower $ T.replace "]" "❳" $ T.replace "[" "❲" $ T.replace "." "•" txt
 
 
+getProcessedColumns :: [Text] -> [Text] -> (Text, [Text])
+getProcessedColumns cols defaultSelect = (T.intercalate "," $ colsNoAsClause selectedCols, selectedCols)
+  where
+    prs =
+      cols & mapMaybe \col -> do
+        subJ@(Subject entire _ _) <- hush (parse pSubject "" col)
+        pure $ display subJ <> " as " <> normalizeKeyPath entire
+    selectedCols = prs <> defaultSelect
+
+
 sqlFromQueryComponents :: SqlQueryCfg -> QueryComponents -> (Text, QueryComponents)
 sqlFromQueryComponents sqlCfg qc =
   let fmtTime = toText . iso8601Show
@@ -88,17 +98,13 @@ sqlFromQueryComponents sqlCfg qc =
 
       cursorT = maybe "" (\c -> " AND " <> timestampCol <> "<'" <> fmtTime c <> "' ") sqlCfg.cursorM
       -- Handle the Either error case correctly not hushing it.
-      projectedColsProcessed =
-        sqlCfg.projectedColsByUser & mapMaybe \col -> do
-          subJ@(Subject entire _ _) <- hush (parse pSubject "" col)
-          pure $ display subJ <> " as " <> normalizeKeyPath entire
-      selectedCols = if null qc.select then projectedColsProcessed <> sqlCfg.defaultSelect else qc.select
+      (_, selVec) = getProcessedColumns sqlCfg.projectedColsByUser sqlCfg.defaultSelect
+      selectedCols = if null qc.select then selVec else qc.select
       selectClause = T.intercalate "," $ colsNoAsClause selectedCols
       where' = maybe "" (\whereC -> " AND (" <> whereC <> ")") qc.whereClause
       whereClause = case sqlCfg.source of
         Just SSpans -> case sqlCfg.targetSpansM of
-          Just "root-spans" -> where' <> " AND parent_span_id IS NULL"
-          Just "service-entry-spans" -> where'
+          Nothing -> where' <> " AND ((parent_id IS NULL AND body IS NULL) OR (context___trace_id = '' AND context___span_id = '' AND body IS NOT NULL))"
           _ -> where'
         _ -> where'
       groupByClause = if null qc.groupByClause then "" else " GROUP BY " <> T.intercalate "," qc.groupByClause
@@ -119,16 +125,16 @@ sqlFromQueryComponents sqlCfg qc =
                 {groupByClause}
                 )
                SELECT json_build_array({selectClause}) FROM ranked_spans
-                  WHERE rn = 1 ORDER BY {timestampCol} desc limit 200 |]
+                  WHERE rn = 1 ORDER BY {timestampCol} desc limit 50 |]
         _ ->
           [fmt|SELECT json_build_array({selectClause}) FROM {fromTable}
              WHERE project_id='{sqlCfg.pid.toText}'  and ( {timestampCol} > NOW() - interval '14 days'
              {cursorT} {dateRangeStr} {whereClause} )
-             {groupByClause} ORDER BY {timestampCol} desc limit 200 |]
+             {groupByClause} ORDER BY {timestampCol} desc limit 50 |]
       countQuery =
         [fmt|SELECT count(*) FROM {fromTable}
           WHERE project_id='{sqlCfg.pid.toText}' and ( {timestampCol} > NOW() - interval '14 days'
-          {cursorT} {dateRangeStr} {whereClause} )
+          {cursorT} {dateRangeStr} {where'} )
           {groupByClause} limit 1|]
 
       defRollup
@@ -154,7 +160,7 @@ sqlFromQueryComponents sqlCfg qc =
         [fmt|
       SELECT {timebucket} {chartSelect}, {timeGroupSelect} FROM {fromTable}
           WHERE project_id='{sqlCfg.pid.toText}'  and ( {timestampCol} > NOW() - interval '14 days'
-          {cursorT} {dateRangeStr} {whereClause} )
+          {cursorT} {dateRangeStr} {where'} )
           {timeGroupByClause}
         |]
 
