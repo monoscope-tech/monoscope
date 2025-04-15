@@ -12,18 +12,20 @@ import Data.Aeson.KeyMap qualified as AEK
 import Data.Aeson.Types (KeyValue ((.=)), object)
 import Data.ByteString.Lazy.Char8 qualified as BL
 import Data.Cache qualified as Cache
+import Data.Effectful.UUID (UUIDEff)
 import Data.Effectful.UUID qualified as UUID
+import Data.HashMap.Strict qualified as HM
 import Data.List qualified as L
 import Data.Text qualified as T
 import Data.Time (addUTCTime, zonedTimeToUTC)
 import Data.UUID qualified as UUID
-import Data.UUID.V4 (nextRandom)
 import Data.UUID.V4 qualified as UUID
 import Data.Vector qualified as V
 import Data.Vector.Algorithms qualified as VAA
 import Database.PostgreSQL.Entity.DBT (withPool)
 import Database.PostgreSQL.Simple (SomePostgreSqlException)
 import Effectful
+import Effectful.Ki qualified as Ki
 import Effectful.Labeled (Labeled (..))
 import Effectful.Log (Log)
 import Effectful.PostgreSQL.Transact.Effect (DB)
@@ -116,7 +118,7 @@ import Utils (eitherStrToText)
  --}
 processMessages
   -- :: (Reader.Reader Config.AuthContext :> es, Time.Time :> es, DB :> es, Log :> es, IOE :> es)
-  :: (Reader.Reader Config.AuthContext :> es, Time.Time :> es, DB :> es, Labeled "timefusion" DB :> es, Log :> es, IOE :> es)
+  :: (Reader.Reader Config.AuthContext :> es, Time.Time :> es, DB :> es, Labeled "timefusion" DB :> es, Log :> es, IOE :> es, UUIDEff :> es, Ki.StructuredConcurrency :> es)
   => [(Text, ByteString)]
   -> HashMap Text Text
   -> Eff es [Text]
@@ -136,8 +138,8 @@ processMessages msgs attrs = do
     then pure []
     else do
       spans <- forM (rights msgs') \(rmAckId, msg) -> do
-        spanId <- liftIO $ UUID.nextRandom
-        trId <- liftIO $ UUID.toText <$> UUID.nextRandom
+        spanId <- UUID.genUUID
+        trId <- UUID.toText <$> UUID.genUUID
         pure $ convertRequestMessageToSpan msg (spanId, trId)
       let spanVec = V.fromList spans
       unless (V.null spanVec) $
@@ -159,16 +161,32 @@ jsonToMap _ = Nothing
 
 
 processRequestMessages
-  :: (Reader.Reader Config.AuthContext :> es, Time.Time :> es, DB :> es, Log :> es, IOE :> es)
+  :: (Reader.Reader Config.AuthContext :> es, Time.Time :> es, DB :> es, Log :> es, IOE :> es, Ki.StructuredConcurrency :> es, UUIDEff :> es)
   => [(Text, RequestMessages.RequestMessage)]
   -> Eff es [Text]
 processRequestMessages msgs = do
   startTime <- liftIO $ getTime Monotonic
-  !processed <- forM msgs \(rmAckId, msg) -> do
-    resp <- processRequestMessage msg
-    pure $ case resp of
-      Left err -> Left (err, rmAckId, msg)
-      Right (rd, enp, s, f, fo, err) -> Right (rd, enp, s, f, fo, err, rmAckId)
+  appCtx <- ask @Config.AuthContext
+  timestamp <- Time.currentTime
+
+  let groupedMsgs = groupMsgsByProjectId msgs
+
+  !processed <- fmap concat $ forM (HM.toList groupedMsgs) \(projectId, projectMsgs) -> do
+    let pid = Projects.ProjectId projectId
+    projectCacheVal <- liftIO $ Cache.fetchWithCache appCtx.projectCache pid \pid' -> do
+      mpjCache <- withPool appCtx.jobsPool $ Projects.projectCacheById pid'
+      pure $ fromMaybe projectCacheDefault mpjCache
+
+    -- Process all messages for this project with the same cache
+    forM projectMsgs \(rmAckId, msg) -> do
+      recId <- UUID.genUUID
+      let result =
+            if projectCacheVal.paymentPlan == "Free" && projectCacheVal.weeklyRequestCount >= 5000
+              then Right (Nothing, Nothing, Nothing, V.empty, V.empty, V.empty)
+              else RequestMessages.requestMsgToDumpAndEndpoint projectCacheVal msg timestamp recId
+      case result of
+        Left err -> pure $ Left (err, rmAckId, msg)
+        Right (rd, enp, s, f, fo, err) -> pure $ Right (rd, enp, s, f, fo, err, rmAckId)
 
   let !(failures, successes) = partitionEithers processed
       !(reqDumps, endpoints, shapes, fields, formats, errs, rmAckIds) = L.unzip7 successes
@@ -179,17 +197,19 @@ processRequestMessages msgs = do
   let !formatsFinal = VAA.nubBy (comparing (.hash)) $ V.concat formats
   let !errsFinal = VAA.nubBy (comparing (.hash)) $ V.concat errs
 
-  forM_ failures $ \(err, rmAckId, msg) ->
+  forM_ failures \(err, rmAckId, msg) ->
     Log.logAttention "Error processing message" (object ["Error" .= err, "AckId" .= rmAckId, "OriginalMsg" .= msg])
 
   afterProcessing <- liftIO $ getTime Monotonic
-  result <- try do
-    unless (null reqDumpsFinal) $ RequestDumps.bulkInsertRequestDumps reqDumpsFinal
-    unless (null endpointsFinal) $ Endpoints.bulkInsertEndpoints endpointsFinal
-    unless (null shapesFinal) $ Shapes.bulkInsertShapes shapesFinal
-    unless (null fieldsFinal) $ Fields.bulkInsertFields fieldsFinal
-    unless (null formatsFinal) $ Formats.bulkInsertFormat formatsFinal
-    unless (null errsFinal) $ Anomalies.bulkInsertErrors errsFinal
+  result <- try $ Ki.scoped \scope -> do
+    unless (null reqDumpsFinal) $ void $ Ki.fork scope $ RequestDumps.bulkInsertRequestDumps reqDumpsFinal
+    unless (null endpointsFinal) $ void $ Ki.fork scope $ Endpoints.bulkInsertEndpoints endpointsFinal
+    unless (null shapesFinal) $ void $ Ki.fork scope $ Shapes.bulkInsertShapes shapesFinal
+    unless (null fieldsFinal) $ void $ Ki.fork scope $ Fields.bulkInsertFields fieldsFinal
+    unless (null formatsFinal) $ void $ Ki.fork scope $ Formats.bulkInsertFormat formatsFinal
+    unless (null errsFinal) $ void $ Ki.fork scope $ Anomalies.bulkInsertErrors errsFinal
+    Ki.atomically $ Ki.awaitAll scope
+
   endTime <- liftIO $ getTime Monotonic
   let processingTime = toNanoSecs (diffTimeSpec startTime afterProcessing) `div` 1000
   let queryTime = toNanoSecs (diffTimeSpec afterProcessing endTime) `div` 1000
@@ -200,18 +220,27 @@ processRequestMessages msgs = do
       Log.logAttention "Postgres Exception" (show e)
       pure []
     Right _ -> pure rmAckIds
+  where
+    -- \| Group messages by project ID to reduce cache lookups
+    groupMsgsByProjectId :: [(Text, RequestMessages.RequestMessage)] -> HashMap UUID.UUID [(Text, RequestMessages.RequestMessage)]
+    groupMsgsByProjectId msgs =
+      foldr
+        ( \(ackId, msg) acc ->
+            HM.insertWith (\new old -> new ++ old) msg.projectId [(ackId, msg)] acc
+        )
+        HM.empty
+        msgs
 
-
-projectCacheDefault :: Projects.ProjectCache
-projectCacheDefault =
-  Projects.ProjectCache
-    { hosts = []
-    , endpointHashes = []
-    , shapeHashes = []
-    , redactFieldslist = []
-    , weeklyRequestCount = 0
-    , paymentPlan = ""
-    }
+    projectCacheDefault :: Projects.ProjectCache
+    projectCacheDefault =
+      Projects.ProjectCache
+        { hosts = []
+        , endpointHashes = []
+        , shapeHashes = []
+        , redactFieldslist = []
+        , weeklyRequestCount = 0
+        , paymentPlan = ""
+        }
 
 
 processRequestMessage
@@ -274,6 +303,24 @@ convertRequestMessageToSpan rm (spanId, trId) =
 
 createSpanAttributes :: RequestMessages.RequestMessage -> AE.Value
 createSpanAttributes rm =
+  AE.object $
+    [ ("net.host.name", AE.String $ fromMaybe "" rm.host)
+    , ("http.request.method", AE.String $ rm.method)
+    , ("http.request.path_params", AE.String $ Relude.decodeUtf8 $ AE.encode rm.pathParams)
+    , ("http.request.query_params", AE.String $ Relude.decodeUtf8 $ AE.encode rm.queryParams)
+    , ("apitoolkit.msg_id", AE.String $ maybe "" UUID.toText rm.msgId)
+    , ("apitoolkit.parent_id", AE.String $ maybe "" UUID.toText rm.parentId)
+    , ("http.request.body", AE.String $ rm.requestBody)
+    , ("http.response.body", AE.String $ rm.responseBody)
+    , ("http.response.status_code", AE.String $ T.pack $ show rm.statusCode)
+    , ("apitoolkit.sdk_type", AE.String $ show rm.sdkType)
+    , ("http.route", maybe (AE.String (T.takeWhile (/= '?') rm.rawUrl)) AE.String rm.urlPath)
+    , ("url.path", AE.String $ rm.rawUrl)
+    ]
+      ++ refererPair
+      ++ errorsPair
+      ++ requestHeaderPairs
+      ++ responseHeaderPairs
   AE.object $
     [ ("net.host.name", AE.String $ fromMaybe "" rm.host)
     , ("http.request.method", AE.String $ rm.method)

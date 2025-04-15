@@ -233,6 +233,7 @@ library
     , http-types
     , hw-kafka-client
     , indexed-traversable
+    , ki-effectful
     , lens
     , lens-aeson
     , log-base

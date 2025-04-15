@@ -26,6 +26,7 @@ import Data.Aeson.KeyMap qualified as KEM
 import Data.Aeson.Lens
 import Data.ByteString qualified as BS
 import Data.ByteString.Base16 qualified as B16
+import Data.Effectful.UUID (UUIDEff)
 import Data.Generics.Labels
 import Data.Generics.Product.Fields
 import Data.HashMap.Strict qualified as HashMap
@@ -37,6 +38,7 @@ import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUID
 import Data.Vector qualified as V
 import Effectful
+import Effectful.Ki qualified as Ki
 import Effectful.Labeled (Labeled, labeled)
 import Effectful.Log (Log)
 import Effectful.PostgreSQL.Transact.Effect (DB, dbtToEff)
@@ -125,8 +127,7 @@ getMetricAttributeValue attribute rms = listToMaybe $ V.toList $ V.mapMaybe getR
     getAttr = V.find ((== attribute) . toText . keyValueKey) >=> keyValueValue >=> anyValueValue >=> anyValueToString >=> (Just . toText)
 
 
-processList :: (Eff.Reader AuthContext :> es, DB :> es, Labeled "timefusion" DB :> es, Log :> es, IOE :> es, Time :> es) => [(Text, ByteString)] -> HashMap Text Text -> Eff es [Text]
--- processList :: (Eff.Reader AuthContext :> es, DB :> es, Log :> es, IOE :> es, Time :> es) => [(Text, ByteString)] -> HashMap Text Text -> Eff es [Text]
+processList :: (Eff.Reader AuthContext :> es, DB :> es, Labeled "timefusion" DB :> es, Ki.StructuredConcurrency :> es, Log :> es, IOE :> es, Time :> es, UUIDEff :> es) => [(Text, ByteString)] -> HashMap Text Text -> Eff es [Text]
 processList [] _ = pure []
 processList msgs attrs = do
   let msgs' = V.fromList msgs
