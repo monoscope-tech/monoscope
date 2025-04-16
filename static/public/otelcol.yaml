@@ -43,6 +43,15 @@ exporters:
     project: past-3
     topic: projects/past-3/topics/otlp-stream-prod
   kafka:
+    logs:
+      topic: otlp_logs
+      encoding: otlp_proto
+    metrics:
+      topic: otlp_metrics
+      encoding: otlp_proto
+    traces:
+      topic: otlp_traces
+      encoding: otlp_proto
     brokers:
       - redpanda-0.s.past3.tech:19092
       - redpanda-1.s.past3.tech:19092
