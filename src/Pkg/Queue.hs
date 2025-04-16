@@ -39,27 +39,27 @@ pubsubService appLogger appCtx topics fn = do
 
   let pullReq = PubSub.newPullRequest & field @"maxMessages" L.?~ fromIntegral envConfig.messagesPerPubsubPullBatch
 
-  forever
-    $ runResourceT
-    $ forM topics \topic -> do
-      result <- tryAny do
-        let subscription = "projects/past-3/subscriptions/" <> topic <> "-sub"
-        pullResp <- Google.send env $ PubSub.newPubSubProjectsSubscriptionsPull pullReq subscription
-        let messages = fromMaybe [] (pullResp L.^. field @"receivedMessages")
-        let msgsB64 =
-              messages & map \msg -> do
-                ackId <- msg.ackId
-                b64Msg <- msg ^? field @"message" . _Just . field @"data'" . _Just . _Base64
-                Just (ackId, b64Msg)
-        let firstAttrs = messages ^? L.folded . field @"message" . _Just . field @"attributes" . _Just . field @"additional"
-        msgIds <- liftIO $ runBackground appLogger appCtx $ fn (catMaybes msgsB64) (maybeToMonoid firstAttrs)
-        let acknowlegReq = PubSub.newAcknowledgeRequest & field @"ackIds" L..~ Just msgIds
-        unless (null msgIds) $ void $ PubSub.newPubSubProjectsSubscriptionsAcknowledge acknowlegReq subscription & Google.send env
-      case result of
-        Left e -> do
-          liftIO $ Log.runLogT "apitoolkit" appLogger Log.LogAttention $ Log.logAttention "Run Pubsub exception" (show e)
-          pass
-        Right _ -> pass
+  forever $
+    runResourceT $
+      forM topics \topic -> do
+        result <- tryAny do
+          let subscription = "projects/past-3/subscriptions/" <> topic <> "-sub"
+          pullResp <- Google.send env $ PubSub.newPubSubProjectsSubscriptionsPull pullReq subscription
+          let messages = fromMaybe [] (pullResp L.^. field @"receivedMessages")
+          let msgsB64 =
+                messages & map \msg -> do
+                  ackId <- msg.ackId
+                  b64Msg <- msg ^? field @"message" . _Just . field @"data'" . _Just . _Base64
+                  Just (ackId, b64Msg)
+          let firstAttrs = messages ^? L.folded . field @"message" . _Just . field @"attributes" . _Just . field @"additional"
+          msgIds <- liftIO $ runBackground appLogger appCtx $ fn (catMaybes msgsB64) (maybeToMonoid firstAttrs)
+          let acknowlegReq = PubSub.newAcknowledgeRequest & field @"ackIds" L..~ Just msgIds
+          unless (null msgIds) $ void $ PubSub.newPubSubProjectsSubscriptionsAcknowledge acknowlegReq subscription & Google.send env
+        case result of
+          Left e -> do
+            liftIO $ Log.runLogT "apitoolkit" appLogger Log.LogAttention $ Log.logAttention "Run Pubsub exception" (show e)
+            pass
+          Right _ -> pass
   where
     -- pubSubScope :: Proxy PubSub.Pubsub'FullControl
     pubSubScope :: Proxy '["https://www.googleapis.com/auth/pubsub"]
@@ -105,6 +105,7 @@ kafkaService appLogger appCtx fn = do
     -- \| Maps Kafka topic names to their corresponding CloudEvent types
     topicToCeType :: Text -> Text
     topicToCeType topic = case topic of
+      "otlp_traces" -> "org.opentelemetry.otlp.traces.v1"
       "otlp_spans" -> "org.opentelemetry.otlp.traces.v1"
       "otlp_logs" -> "org.opentelemetry.otlp.logs.v1"
       "otlp_metrics" -> "org.opentelemetry.otlp.metrics.v1"

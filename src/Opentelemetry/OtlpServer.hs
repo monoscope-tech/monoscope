@@ -590,6 +590,7 @@ otelSpansToTimeFusionSpans pid res scope sp =
     , resource = jsonToMap $ resourceToJSONB res
     , project_id = T.pack $ UUID.toString pid.unProjectId
     , timestamp = nanosecondsToUTC sp.spanStartTimeUnixNano
+    , date = nanosecondsToUTC sp.spanStartTimeUnixNano
     }
   where
     utcTime = Just $ nanosecondsToUTC sp.spanStartTimeUnixNano

@@ -639,8 +639,9 @@ bulkInsertMetrics metrics = do
 -- OtelLogsAndSpans ToRow instance
 instance ToRow OtelLogsAndSpans where
   toRow entry =
-    [ toField entry.observed_timestamp -- observed_timestamp
-    , toField entry.id
+    [ toField entry.timestamp -- timestamp
+    , toField entry.observed_timestamp -- observed_timestamp
+    , toField entry.id -- id
     , toField entry.parent_id -- parent_id
     , toField entry.hashes
     , toField entry.name -- name
@@ -723,8 +724,7 @@ instance ToRow OtelLogsAndSpans where
     , toField $ atMapText "telemetry.sdk.version" entry.resource -- resource___telemetry___sdk___version
     , toField $ atMapText "user_agent.original" entry.resource -- resource___user_agent___original
     , toField entry.project_id -- project_id
-    , toField entry.timestamp -- timestamp
-    , toField $ formatTime defaultTimeLocale "%F" entry.timestamp
+    , toField entry.date
     ]
     where
       -- Helper functions for severity fields
@@ -804,8 +804,8 @@ bulkInserSpansAndLogsQuery =
        resource___service___instance___id, resource___service___namespace, 
        resource___telemetry___sdk___language, resource___telemetry___sdk___name,
        resource___telemetry___sdk___version, resource___user_agent___original,
-       project_id, timestamp, date)
-      VALUES (?, ?, ?, ?, ?, ?, ?,  ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+       project_id, date)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
               ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
               ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,?)
     |]
@@ -930,10 +930,11 @@ data OtelLogsAndSpans = OtelLogsAndSpans
   , start_time :: UTCTime
   , end_time :: Maybe UTCTime
   , events :: Maybe AE.Value
-  , links :: Maybe AE.Value
-  , duration :: Maybe Integer
-  , name :: Maybe Text
-  , parent_id :: Maybe Text
+  , links :: Maybe Text
+  , attributes :: Maybe (Map Text AE.Value)
+  , resource :: Maybe (Map Text AE.Value)
+  , project_id :: Text
+  , date :: UTCTime
   }
   deriving (Show, Generic)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake OtelLogsAndSpans
