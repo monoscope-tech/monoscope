@@ -282,7 +282,7 @@ CREATE TABLE IF NOT EXISTS otel_logs_and_spans (
     resource___telemetry___sdk___name      TEXT,
     resource___telemetry___sdk___version   TEXT,
     resource___user_agent___original       TEXT,
-    date TEXT NOT NULL DEFAULT TO_CHAR(NOW()::DATE, 'YYYY-MM-DD')
+    date  TIMESTAMPTZ NOT NULL DEFAULT current_timestamp
 );
 SELECT create_hypertable('otel_logs_and_spans', by_range('timestamp', INTERVAL '1 hours'), migrate_data => true);
 SELECT add_retention_policy('otel_logs_and_spans',INTERVAL '3 days',true);

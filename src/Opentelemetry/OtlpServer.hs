@@ -307,6 +307,7 @@ convertLogToTimeFusionLog pid resource scope lr = do
     , body = Just $ convertAnyValue lr.logRecordBody
     , attributes = jsonToMap $ removeProjectId $ keyValueToJSONB lr.logRecordAttributes
     , resource = jsonToMap $ removeProjectId $ resourceToJSONB resource
+    , date = if lr.logRecordTimeUnixNano == 0 then nanosecondsToUTC lr.logRecordObservedTimeUnixNano else nanosecondsToUTC lr.logRecordTimeUnixNano
     }
   where
     makeLogContext :: LogRecord -> Telemetry.Context
@@ -585,7 +586,7 @@ otelSpansToTimeFusionSpans pid res scope sp =
     , end_time = Just $ nanosecondsToUTC sp.spanEndTimeUnixNano
     , context = Just $ makeSpanContext sp
     , events = Just $ eventsToJSONB $ V.toList sp.spanEvents
-    , links = Just $ linksToJSONB $ V.toList sp.spanLinks
+    , links = Just $ T.pack $ show $ linksToJSONB $ V.toList sp.spanLinks
     , attributes = jsonToMap $ keyValueToJSONB sp.spanAttributes
     , resource = jsonToMap $ resourceToJSONB res
     , project_id = T.pack $ UUID.toString pid.unProjectId

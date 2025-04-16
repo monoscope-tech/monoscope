@@ -227,13 +227,13 @@ processRequestMessages msgs' = do
   where
     -- \| Group messages by project ID to reduce cache lookups
     groupMsgsByProjectId :: [(Text, RequestMessages.RequestMessage)] -> HashMap UUID.UUID [(Text, RequestMessages.RequestMessage)]
-    groupMsgsByProjectId msgs' =
+    groupMsgsByProjectId mgs' =
       foldr
         ( \(ackId, msg) acc ->
             HM.insertWith (\new old -> new ++ old) msg.projectId [(ackId, msg)] acc
         )
         HM.empty
-        msgs'
+        mgs'
 
     projectCacheDefault :: Projects.ProjectCache
     projectCacheDefault =
@@ -271,7 +271,7 @@ convertRequestMessageToSpan rm (spanId, trId) =
     , observed_timestamp = Nothing
     , attributes = jsonToMap $ createSpanAttributes rm
     , events = Just $ AE.Array V.empty
-    , links = Just $ AE.Array V.empty
+    , links = Just ""
     , resource =
         jsonToMap $
           AE.object
@@ -280,6 +280,7 @@ convertRequestMessageToSpan rm (spanId, trId) =
             , "telemetry.sdk.name" AE..= "opentelemetry"
             ]
     , duration = Just $ fromIntegral rm.duration
+    , date = zonedTimeToUTC rm.timestamp
     }
 
 

@@ -88,7 +88,7 @@ expandedSpanItem pid sp leftM rightM = do
             h4_ [class_ "text-xl max-w-96 truncate"] $ toHtml $ fromMaybe "" sp.name
 
       div_ [class_ "flex gap-2 flex-wrap"] $ do
-        spanBadge (toText $ getDurationNSMS $ fromMaybe 0 sp.duration) "Span duration"
+        spanBadge (toText $ getDurationNSMS $ maybe 0 fromIntegral sp.duration) "Span duration"
         spanBadge (getServiceName sp.resource) "Service"
         spanBadge ("Spand ID: " <> maybe "" (\c -> fromMaybe "" c.span_id) sp.context) "Span ID"
         spanBadge (fromMaybe "" sp.kind) "Span Kind"

@@ -198,7 +198,7 @@ data SpanRecord = SpanRecord
   , statusMessage :: Maybe Text
   , attributes :: Maybe (Map Text AE.Value)
   , events :: AE.Value
-  , links :: AE.Value
+  , links :: Maybe Text
   , resource :: Maybe (Map Text AE.Value)
   , instrumentationScope :: AE.Value
   , spanDurationNs :: Integer
@@ -228,10 +228,10 @@ convertOtelLogsAndSpansToSpanRecord lgSp = case (trId, spanId, projectId, spanNa
         , statusMessage = lgSp.status_message
         , attributes = lgSp.attributes
         , events = fromMaybe AE.Null lgSp.events
-        , links = fromMaybe AE.Null lgSp.links
+        , links = lgSp.links
         , resource = lgSp.resource
         , instrumentationScope = AE.Null
-        , spanDurationNs = fromMaybe 0 $ lgSp.duration
+        , spanDurationNs = maybe 0 fromIntegral lgSp.duration
         }
   _ -> Nothing
   where
@@ -438,7 +438,7 @@ logRecordByProjectAndId pid createdAt rdId = dbtToEff $ queryOne Select q (creat
   where
     q =
       [sql|SELECT project_id, id, timestamp, observed_timestamp, context, level, severity, body, attributes, resource, 
-                  hashes, kind, status_code, status_message, start_time, end_time, events, links, duration, name, parent_id
+                  hashes, kind, status_code, status_message, start_time, end_time, events, links, duration, name, parent_id, date
              FROM otel_logs_and_spans where (timestamp=?)  and project_id=? and id=? LIMIT 1|]
 
 
@@ -448,7 +448,7 @@ getSpandRecordsByTraceId pid trId = dbtToEff $ query Select q (pid.toText, trId)
     q =
       [sql|
       SELECT project_id, id, timestamp, observed_timestamp, context, level, severity, body, attributes, resource, 
-                  hashes, kind, status_code, status_message, start_time, end_time, events, links, duration, name, parent_id
+                  hashes, kind, status_code, status_message, start_time, end_time, events, links, duration, name, parent_id, date
               FROM otel_logs_and_spans where project_id=? and context___trace_id=? ORDER BY start_time ASC;
     |]
 
@@ -458,7 +458,7 @@ spanRecordByProjectAndId pid createdAt rdId = dbtToEff $ queryOne Select q (crea
   where
     q =
       [sql| SELECT project_id, id, timestamp, observed_timestamp, context, level, severity, body, attributes, resource, 
-                  hashes, kind, status_code, status_message, start_time, end_time, events, links, duration, name, parent_id
+                  hashes, kind, status_code, status_message, start_time, end_time, events, links, duration, name, parent_id, date
               FROM otel_logs_and_spans where (timestamp=?)  and project_id=? and id=? LIMIT 1|]
 
 
@@ -467,7 +467,7 @@ spanRecordById pid trId spanId = dbtToEff $ queryOne Select q (pid.toText, trId,
   where
     q =
       [sql| SELECT project_id, id, timestamp, observed_timestamp, context, level, severity, body, attributes, resource, 
-                  hashes, kind, status_code, status_message, start_time, end_time, events, links, duration, name, parent_id
+                  hashes, kind, status_code, status_message, start_time, end_time, events, links, duration, name, parent_id, date
               FROM otel_logs_and_spans where project_id=? and context___trace_id = ? and context___span_id=? LIMIT 1|]
 
 
@@ -476,7 +476,7 @@ getChildSpans pid spanIds = dbtToEff $ query Select q (pid.toText, spanIds)
   where
     q =
       [sql| SELECT project_id, id, timestamp, observed_timestamp, context, level, severity, body, attributes, resource, 
-                  hashes, kind, status_code, status_message, start_time, end_time, events, links, duration, name, parent_id
+                  hashes, kind, status_code, status_message, start_time, end_time, events, links, duration, name, parent_id, date
               FROM otel_logs_and_spans where project_id =? AND parent_id=Any(?)|]
 
 
@@ -739,8 +739,8 @@ instance ToRow OtelLogsAndSpans where
 bulkInsertOtelLogsAndSpansTF :: (DB :> es, Labeled "timefusion" DB :> es, UUIDEff :> es) => V.Vector OtelLogsAndSpans -> Eff es ()
 bulkInsertOtelLogsAndSpansTF records = do
   updatedRecords <- updateIds records
-  num <- bulkInsertSpansTS updatedRecords
-  -- num <- bulkInsertOtelLogsAndSpans updatedRecords
+  _ <- bulkInsertSpansTS updatedRecords
+  _ <- bulkInsertOtelLogsAndSpans updatedRecords
   pure ()
   where
     updateIds :: UUIDEff :> es => V.Vector OtelLogsAndSpans -> Eff es (V.Vector OtelLogsAndSpans)
@@ -778,7 +778,7 @@ bulkInsertOtelLogsAndSpans records = labeled @"timefusion" @DB $ dbtToEff $ exec
 bulkInserSpansAndLogsQuery :: Query
 bulkInserSpansAndLogsQuery =
   [sql| INSERT INTO otel_logs_and_spans
-      (observed_timestamp, id, parent_id, hashes, name, kind, status_code, status_message, 
+      (timestamp, observed_timestamp, id, parent_id, hashes, name, kind, status_code, status_message, 
        level, severity, severity___severity_text, severity___severity_number, body, duration, 
        start_time, end_time, context, context___trace_id, context___span_id, context___trace_state, 
        context___trace_flags, context___is_remote, events, links, attributes, 
@@ -807,7 +807,7 @@ bulkInserSpansAndLogsQuery =
        project_id, date)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
               ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-              ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,?)
+              ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     |]
 
 
@@ -931,9 +931,9 @@ data OtelLogsAndSpans = OtelLogsAndSpans
   , end_time :: Maybe UTCTime
   , events :: Maybe AE.Value
   , links :: Maybe Text
-  , attributes :: Maybe (Map Text AE.Value)
-  , resource :: Maybe (Map Text AE.Value)
-  , project_id :: Text
+  , duration :: Maybe Int64
+  , name :: Maybe Text
+  , parent_id :: Maybe Text
   , date :: UTCTime
   }
   deriving (Show, Generic)
