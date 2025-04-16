@@ -239,8 +239,8 @@ spanBadge val key = do
 
 selectiveReqToJson :: RequestMessage -> AE.Value
 selectiveReqToJson req =
-  AE.object $
-    concat @[]
+  AE.object
+    $ concat @[]
       [ ["created_at" AE..= req.timestamp]
       , ["errors" AE..= fromMaybe [] req.errors]
       , ["host" AE..= req.host]
