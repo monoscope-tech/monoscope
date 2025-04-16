@@ -232,7 +232,7 @@ processRequestMessages msgs' = do
     -- Process all messages for this project with the same cache
     forM projectMsgs \(rmAckId, msg) ->
       if exceededFreeTier
-        then Right (Nothing, Nothing, Nothing, V.empty, V.empty, V.empty, rmAckId)
+        then pure $ Right (Nothing, Nothing, Nothing, V.empty, V.empty, V.empty, rmAckId)
         else do
           recId <- UUID.genUUID
           let result = RequestMessages.requestMsgToDumpAndEndpoint projectCacheVal msg timestamp recId
@@ -266,7 +266,8 @@ processRequestMessages msgs' = do
   let processingTime = toNanoSecs (diffTimeSpec startTime afterProcessing) `div` 1000
   let queryTime = toNanoSecs (diffTimeSpec afterProcessing endTime) `div` 1000
   let totalTime = toNanoSecs (diffTimeSpec startTime endTime) `div` 1000
-  Log.logInfo_ $ show [fmt| Processing {length groupedMsgs} projectIds from {length msgs'} msgs. saved {length reqDumpsFinal}. totalTime: {totalTime} -> query: {queryTime} -> processing: {processingTime} => projects: {HM.keys groupedMsgs}|]
+  let projectIds = show $ UUID.toText <$> HM.keys groupedMsgs
+  Log.logInfo_ $ show [fmt| Processing {length groupedMsgs} projectIds from {length msgs'} msgs. saved {length reqDumpsFinal}. totalTime: {totalTime} -> query: {queryTime} -> processing: {processingTime} => projects: {projectIds}|]
   case result of
     Left (e :: SomePostgreSqlException) -> do
       Log.logAttention "Postgres Exception" (show e)
