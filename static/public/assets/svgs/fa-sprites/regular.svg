@@ -594,7 +594,7 @@
       stroke="#374151" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
   </symbol>
 
-  <symbol id="tree" width="24" height="24" viewBox="0 0 24 24" fill="none"
+  <symbol id="tree" viewBox="0 0 16 16" fill="none"
     stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
   >
     <path d="M6 3v12"></path>
@@ -605,7 +605,7 @@
     <path d="M21 18h-6"></path>
   </symbol>
 
-  <symbol id="list-view" width="24" height="24" viewBox="0 0 24 24" fill="none"
+  <symbol id="list-view" viewBox="0 0 16 16" fill="none"
     stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
   >
     <path d="M3 12h.01"></path>
@@ -617,7 +617,7 @@
   </symbol>
 
 
-  <symbol id="wrap-text" width="24" height="24" viewBox="0 0 24 24" fill="none"
+  <symbol id="wrap-text" viewBox="0 0 24 24" fill="none"
     stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
   >
     <line x1="3" x2="21" y1="6" y2="6"></line>

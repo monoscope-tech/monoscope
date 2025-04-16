@@ -309,13 +309,11 @@ export class LogList extends LitElement {
               this.nextFetchUrl = nextUrl
             }
             if (this.source === 'spans') {
+              const tree = this.buildSpanListTree([...logsData])
               if (isNewData) {
-                const los = this.spanListTree.map(span => span.data)
-                this.spanListTree = this.buildSpanListTree([...logsData, ...los])
+                this.spanListTree = [...tree, ...this.spanListTree]
               } else {
-                const { nonRootRootSpans, remainingSpans } = this.filterFalseRoots()
-                const tree = this.buildSpanListTree([...nonRootRootSpans, ...logsData])
-                this.spanListTree = [...remainingSpans, ...tree]
+                this.spanListTree = [...this.spanListTree, ...tree]
               }
             } else {
               this.logsData = isNewData ? [...logsData, ...this.logsData] : [...this.logsData, ...logsData]
