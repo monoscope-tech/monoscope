@@ -740,7 +740,7 @@ bulkInsertOtelLogsAndSpansTF :: (DB :> es, Labeled "timefusion" DB :> es, UUIDEf
 bulkInsertOtelLogsAndSpansTF records = do
   updatedRecords <- updateIds records
   _ <- bulkInsertSpansTS updatedRecords
-  -- _ <- bulkInsertOtelLogsAndSpans updatedRecords-
+  _ <- bulkInsertOtelLogsAndSpans updatedRecords
   pure ()
   where
     updateIds :: UUIDEff :> es => V.Vector OtelLogsAndSpans -> Eff es (V.Vector OtelLogsAndSpans)
