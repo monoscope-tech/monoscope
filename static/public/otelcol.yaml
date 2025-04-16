@@ -50,7 +50,7 @@ exporters:
       topic: otlp_metrics
       encoding: otlp_proto
     traces:
-      topic: otlp_traces
+      topic: otlp_spans
       encoding: otlp_proto
     brokers:
       - redpanda-0.s.past3.tech:19092
