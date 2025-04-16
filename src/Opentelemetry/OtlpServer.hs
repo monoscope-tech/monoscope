@@ -175,11 +175,11 @@ processList msgs attrs = do
 
         -- Generate and insert OtelLogsAndSpans from the spans
         let otelLogsAndSpans =
-              join $
-                V.map
+              join
+                $ V.map
                   ( \(_, req, pids) ->
-                      join $
-                        V.mapMaybe
+                      join
+                        $ V.mapMaybe
                           ( \rs ->
                               case findProjectId pids rs of
                                 Just pid -> Just $ convertToOtelLogsAndSpans pid rs
@@ -259,8 +259,8 @@ byteStringToHexText bs = decodeUtf8 (B16.encode bs)
 -- Convert a list of KeyValue to a JSONB object
 keyValueToJSONB :: V.Vector KeyValue -> AE.Value
 keyValueToJSONB kvs =
-  AE.object $
-    V.foldr (\kv acc -> (AEK.fromText $ toText kv.keyValueKey, convertAnyValue kv.keyValueValue) : acc) [] kvs
+  AE.object
+    $ V.foldr (\kv acc -> (AEK.fromText $ toText kv.keyValueKey, convertAnyValue kv.keyValueValue) : acc) [] kvs
 
 
 convertAnyValue :: Maybe AnyValue -> AE.Value
@@ -404,30 +404,30 @@ convertToSpan pids resourceSpans =
 -- | Convert span events to JSON
 eventsToJSONB :: [Span_Event] -> AE.Value
 eventsToJSONB spans =
-  AE.toJSON $
-    spans
-      <&> \sp ->
-        AE.object
-          [ "event_name" AE..= toText sp.span_EventName
-          , "event_time" AE..= nanosecondsToUTC sp.span_EventTimeUnixNano
-          , "event_attributes" AE..= keyValueToJSONB sp.span_EventAttributes
-          , "event_dropped_attributes_count" AE..= fromIntegral sp.span_EventDroppedAttributesCount
-          ]
+  AE.toJSON
+    $ spans
+    <&> \sp ->
+      AE.object
+        [ "event_name" AE..= toText sp.span_EventName
+        , "event_time" AE..= nanosecondsToUTC sp.span_EventTimeUnixNano
+        , "event_attributes" AE..= keyValueToJSONB sp.span_EventAttributes
+        , "event_dropped_attributes_count" AE..= fromIntegral sp.span_EventDroppedAttributesCount
+        ]
 
 
 -- | Convert span links to JSON
 linksToJSONB :: [Span_Link] -> AE.Value
 linksToJSONB lnks =
-  AE.toJSON $
-    lnks
-      <&> \lnk ->
-        AE.object
-          [ "link_span_id" AE..= (decodeUtf8 lnk.span_LinkSpanId :: Text)
-          , "link_trace_id" AE..= (decodeUtf8 lnk.span_LinkTraceId :: Text)
-          , "link_attributes" AE..= keyValueToJSONB lnk.span_LinkAttributes
-          , "link_dropped_attributes_count" AE..= fromIntegral lnk.span_LinkDroppedAttributesCount
-          , "link_flags" AE..= fromIntegral lnk.span_LinkFlags
-          ]
+  AE.toJSON
+    $ lnks
+    <&> \lnk ->
+      AE.object
+        [ "link_span_id" AE..= (decodeUtf8 lnk.span_LinkSpanId :: Text)
+        , "link_trace_id" AE..= (decodeUtf8 lnk.span_LinkTraceId :: Text)
+        , "link_attributes" AE..= keyValueToJSONB lnk.span_LinkAttributes
+        , "link_dropped_attributes_count" AE..= fromIntegral lnk.span_LinkDroppedAttributesCount
+        , "link_flags" AE..= fromIntegral lnk.span_LinkFlags
+        ]
 
 
 -- | Convert span kind from protobuf to internal representation
@@ -541,8 +541,8 @@ convertMetricRecord pid resource iscp metric =
                   mtTime = histogram.exponentialHistogramDataPointTimeUnixNano
                   pointNegative =
                     ( \b ->
-                        Just $
-                          Telemetry.EHBucket
+                        Just
+                          $ Telemetry.EHBucket
                             { bucketOffset = fromIntegral $ b.exponentialHistogramDataPoint_BucketsOffset
                             , bucketCounts = fromIntegral <$> b.exponentialHistogramDataPoint_BucketsBucketCounts
                             }
@@ -550,8 +550,8 @@ convertMetricRecord pid resource iscp metric =
                       =<< histogram.exponentialHistogramDataPointNegative
                   pointPositive =
                     ( \b ->
-                        Just $
-                          Telemetry.EHBucket
+                        Just
+                          $ Telemetry.EHBucket
                             { bucketOffset = fromIntegral $ b.exponentialHistogramDataPoint_BucketsOffset
                             , bucketCounts = fromIntegral <$> b.exponentialHistogramDataPoint_BucketsBucketCounts
                             }
@@ -691,8 +691,8 @@ traceServiceExportH appLogger appCtx (ServerNormalRequest _meta (ExportTraceServ
     let spanRecords = join $ V.map (convertToSpan pids) req
         apitoolkitSpans = V.map mapHTTPSpan spanRecords
         otelLogsAndSpans =
-          join $
-            V.mapMaybe
+          join
+            $ V.mapMaybe
               ( \rs ->
                   case find (\(k, _, _) -> k == getKey rs) pids of
                     Just (_, pid, _) -> Just $ convertToOtelLogsAndSpans pid rs

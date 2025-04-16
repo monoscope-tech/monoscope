@@ -42,6 +42,7 @@ import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Apis.Shapes qualified as Shapes
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Telemetry qualified as Telemetry
+import Pages.Log (ApiLogsPageData (exceededFreeTier))
 import PyF (fmt)
 import Relude hiding (ask)
 import RequestMessages qualified
@@ -218,6 +219,7 @@ processRequestMessages msgs' = do
   appCtx <- ask @Config.AuthContext
   timestamp <- Time.currentTime
   let groupedMsgs = groupMsgsByProjectId msgs'
+  -- TODO: Chcek which projects exceed free tier and skip their messages here.
 
   !processed <- fmap concat $ forM (HM.toList groupedMsgs) \(projectId, projectMsgs) -> do
     let pid = Projects.ProjectId projectId
@@ -225,16 +227,18 @@ processRequestMessages msgs' = do
       mpjCache <- withPool appCtx.jobsPool $ Projects.projectCacheById pid'
       pure $ fromMaybe projectCacheDefault mpjCache
 
+    let exceededFreeTier = projectCacheVal.paymentPlan == "Free" && projectCacheVal.weeklyRequestCount >= 5000
+
     -- Process all messages for this project with the same cache
-    forM projectMsgs \(rmAckId, msg) -> do
-      recId <- UUID.genUUID
-      let result =
-            if projectCacheVal.paymentPlan == "Free" && projectCacheVal.weeklyRequestCount >= 5000
-              then Right (Nothing, Nothing, Nothing, V.empty, V.empty, V.empty)
-              else RequestMessages.requestMsgToDumpAndEndpoint projectCacheVal msg timestamp recId
-      case result of
-        Left err -> pure $ Left (err, rmAckId, msg)
-        Right (rd, enp, s, f, fo, err) -> pure $ Right (rd, enp, s, f, fo, err, rmAckId)
+    forM projectMsgs \(rmAckId, msg) ->
+      if exceededFreeTier
+        then Right (Nothing, Nothing, Nothing, V.empty, V.empty, V.empty, rmAckId)
+        else do
+          recId <- UUID.genUUID
+          let result = RequestMessages.requestMsgToDumpAndEndpoint projectCacheVal msg timestamp recId
+          case result of
+            Left err -> pure $ Left (err, rmAckId, msg)
+            Right (rd, enp, s, f, fo, err) -> pure $ Right (rd, enp, s, f, fo, err, rmAckId)
 
   let !(failures, successes) = partitionEithers processed
       !(reqDumps, endpoints, shapes, fields, formats, errs, rmAckIds) = L.unzip7 successes
@@ -262,7 +266,7 @@ processRequestMessages msgs' = do
   let processingTime = toNanoSecs (diffTimeSpec startTime afterProcessing) `div` 1000
   let queryTime = toNanoSecs (diffTimeSpec afterProcessing endTime) `div` 1000
   let totalTime = toNanoSecs (diffTimeSpec startTime endTime) `div` 1000
-  Log.logInfo_ $ show [fmt| Processing {length groupedMsgs} msgs. saved {length reqDumpsFinal}. totalTime: {totalTime} -> query: {queryTime} -> processing: {processingTime}|]
+  Log.logInfo_ $ show [fmt| Processing {length groupedMsgs} projectIds from {length msgs'} msgs. saved {length reqDumpsFinal}. totalTime: {totalTime} -> query: {queryTime} -> processing: {processingTime} => projects: {HM.keys groupedMsgs}|]
   case result of
     Left (e :: SomePostgreSqlException) -> do
       Log.logAttention "Postgres Exception" (show e)
