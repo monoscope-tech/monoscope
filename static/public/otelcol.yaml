@@ -44,13 +44,13 @@ exporters:
     topic: projects/past-3/topics/otlp-stream-prod
   kafka:
     logs:
-      topic: otlp_logs
+      topic: otlp-logs
       encoding: otlp_proto
     metrics:
-      topic: otlp_metrics
+      topic: otlp-metrics
       encoding: otlp_proto
     traces:
-      topic: otlp_spans
+      topic: otlp-traces
       encoding: otlp_proto
     brokers:
       - redpanda-0.s.past3.tech:19092
@@ -77,12 +77,12 @@ service:
     logs:
       receivers: [otlp]
       processors: [attributes, resource, memory_limiter, batch]
-      exporters: [googlecloudpubsub, kafka]
+      exporters: [kafka]
     metrics:
       receivers: [otlp]
       processors: [attributes, resource, memory_limiter, batch]
-      exporters: [googlecloudpubsub, kafka]
+      exporters: [kafka]
     traces:
       receivers: [otlp]
       processors: [attributes, resource, memory_limiter, batch]
-      exporters: [googlecloudpubsub, kafka]
+      exporters: [kafka]

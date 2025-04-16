@@ -105,8 +105,7 @@ kafkaService appLogger appCtx fn = do
     -- \| Maps Kafka topic names to their corresponding CloudEvent types
     topicToCeType :: Text -> Text
     topicToCeType topic = case topic of
-      "otlp_traces" -> "org.opentelemetry.otlp.traces.v1"
-      "otlp_spans" -> "org.opentelemetry.otlp.traces.v1"
-      "otlp_logs" -> "org.opentelemetry.otlp.logs.v1"
-      "otlp_metrics" -> "org.opentelemetry.otlp.metrics.v1"
+      "otlp-traces" -> "org.opentelemetry.otlp.traces.v1"
+      "otlp-logs" -> "org.opentelemetry.otlp.logs.v1"
+      "otlp-metrics" -> "org.opentelemetry.otlp.metrics.v1"
       _ -> ""
