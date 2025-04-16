@@ -43,11 +43,13 @@ module Models.Telemetry.Telemetry (
 )
 where
 
+import Control.Lens ((.~))
 import Data.Aeson qualified as AE
 import Data.Aeson.Key qualified as AEK
 import Data.Aeson.KeyMap qualified as KEM
 import Data.ByteString.Base16 qualified as B16
 import Data.Effectful.UUID (UUIDEff, genUUID)
+import Data.Generics.Labels ()
 import Data.List (nubBy)
 import Data.Map qualified as Map
 import Data.Pool (withResource)
@@ -749,7 +751,7 @@ bulkInsertOtelLogsAndSpansTF records = do
         updateId :: UUIDEff :> es => OtelLogsAndSpans -> Eff es OtelLogsAndSpans
         updateId record = do
           newId <- genUUID
-          return (record{id = newId} :: OtelLogsAndSpans)
+          pure $ record & #id .~ newId
 
 
 bulkInsertSpansTS :: DB :> es => V.Vector OtelLogsAndSpans -> Eff es Int64
@@ -984,8 +986,8 @@ extractATError spanObj (AE.Object o) = do
       asText (AE.String t) = Just t
       asText _ = Nothing
 
-  return
-    $ RequestDumps.ATError
+  return $
+    RequestDumps.ATError
       { projectId = UUID.fromText spanObj.project_id >>= (\uid -> Just Projects.ProjectId{unProjectId = uid})
       , when = spanObj.timestamp
       , errorType = typ
