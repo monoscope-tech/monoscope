@@ -222,7 +222,7 @@ CREATE TABLE IF NOT EXISTS otel_logs_and_spans (
     context___trace_flags    TEXT,
     context___is_remote      BOOLEAN,
     events                   JSONB,
-    links                    JSONB,
+    links                    Text,
     attributes               JSONB,
     attributes___client___address         TEXT,
     attributes___client___port            INTEGER,
