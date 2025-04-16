@@ -77,12 +77,12 @@ service:
     logs:
       receivers: [otlp]
       processors: [attributes, resource, memory_limiter, batch]
-      exporters: [kafka]
+      exporters: [googlecloudpubsub, kafka]
     metrics:
       receivers: [otlp]
       processors: [attributes, resource, memory_limiter, batch]
-      exporters: [kafka]
+      exporters: [googlecloudpubsub, kafka]
     traces:
       receivers: [otlp]
       processors: [attributes, resource, memory_limiter, batch]
-      exporters: [kafka]
+      exporters: [googlecloudpubsub, kafka]
