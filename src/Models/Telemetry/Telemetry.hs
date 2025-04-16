@@ -5,6 +5,7 @@ module Models.Telemetry.Telemetry (
   getSpandRecordsByTraceId,
   convertOtelLogsAndSpansToSpanRecord,
   SpanRecord (..),
+  getAllATErrors,
   Trace (..),
   SeverityLevel (..),
   SpanStatus (..),
@@ -72,7 +73,9 @@ import Effectful
 import Effectful.Labeled (Labeled, labeled)
 import Effectful.PostgreSQL.Transact.Effect (DB, dbtToEff)
 import Effectful.Reader.Static
+import Models.Apis.RequestDumps (RequestDump)
 import Models.Apis.RequestDumps qualified as RequestDumps
+import Models.Projects.Projects (ProjectId (unProjectId))
 import Models.Projects.Projects qualified as Projects
 import NeatInterpolation (text)
 import Pkg.DBUtils (WrappedEnum (..))
@@ -80,7 +83,7 @@ import Pkg.DBUtils qualified as DBUtils
 import Relude hiding (ask)
 import RequestMessages (RequestMessage (..))
 import System.Config (AuthContext (..))
-import Utils (lookupValueText)
+import Utils (lookupValueText, toXXHash)
 
 
 -- Lens-like access helpers for Map Text AE.Value fields
@@ -935,3 +938,63 @@ data OtelLogsAndSpans = OtelLogsAndSpans
   deriving (Show, Generic)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake OtelLogsAndSpans
   deriving anyclass (NFData, FromRow)
+
+
+getErrorEvents :: OtelLogsAndSpans -> V.Vector AE.Value
+getErrorEvents OtelLogsAndSpans{events = Just (AE.Array arr)} =
+  V.filter isErrorEvent arr
+  where
+    isErrorEvent (AE.Object o) =
+      case KEM.lookup "name" o of
+        Just (AE.String name) -> "exception" `T.isInfixOf` name || "error" `T.isInfixOf` name
+        _ -> False
+    isErrorEvent _ = False
+getErrorEvents _ = []
+
+
+getAllATErrors :: V.Vector OtelLogsAndSpans -> V.Vector RequestDumps.ATError
+getAllATErrors = V.concatMap extractErrorsFromSpan
+  where
+    extractErrorsFromSpan spanObj =
+      let events = getErrorEvents spanObj
+       in V.mapMaybe (extractATError spanObj) events
+
+
+extractATError :: OtelLogsAndSpans -> AE.Value -> Maybe RequestDumps.ATError
+extractATError spanObj (AE.Object o) = do
+  AE.Object attrs <- KEM.lookup "event_attributes" o
+  let lookupText k = case KEM.lookup k attrs of
+        Just (AE.String s) -> Just s
+        _ -> Nothing
+      getTextOrEmpty k = fromMaybe "" (lookupText k)
+
+      typ = getTextOrEmpty "exception.type"
+      msg = getTextOrEmpty "exception.message"
+      stack = getTextOrEmpty "exception.stacktrace"
+
+      -- TODO: parse telemetry.sdk.name to SDKTypes
+      tech = case spanObj.resource >>= Map.lookup "telemetry.sdk.name" of
+        Just (AE.String sdk) -> Nothing
+        _ -> Nothing
+      serviceName = spanObj.resource >>= Map.lookup "service.name" >>= asText
+
+      spanId = spanObj.context >>= (.span_id)
+
+      asText (AE.String t) = Just t
+      asText _ = Nothing
+
+  return $
+    RequestDumps.ATError
+      { projectId = UUID.fromText spanObj.project_id >>= (\uid -> Just Projects.ProjectId{unProjectId = uid})
+      , when = spanObj.timestamp
+      , errorType = typ
+      , rootErrorType = typ
+      , message = msg
+      , rootErrorMessage = msg
+      , stackTrace = stack
+      , hash = Just $ (toXXHash (spanObj.project_id <> fromMaybe "" serviceName <> fromMaybe "" spanObj.name <> typ <> msg))
+      , technology = tech
+      , requestMethod = Just "Span Id"
+      , requestPath = spanId
+      }
+extractATError _ _ = Nothing

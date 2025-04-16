@@ -46,6 +46,7 @@ import Effectful.Reader.Static (ask)
 import Effectful.Reader.Static qualified as Eff
 import Effectful.Time (Time)
 import Log qualified
+import Models.Apis.Anomalies qualified as Anomalies
 import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Telemetry (SpanKind (..), SpanStatus (..), convertSpanToRequestMessage)
@@ -162,10 +163,12 @@ processList msgs attrs = do
             V.map (\(req, pids) -> (join $ V.map (convertToSpan pids) req, req, pids)) reqsAndPids
           spans = join $ V.map (\(s, _, _) -> s) results
           apitoolkitSpans = V.map mapHTTPSpan spans
-      _ <- ProcessMessage.processRequestMessages $ V.toList $ V.catMaybes apitoolkitSpans <&> ("",)
-
+      unless (V.null apitoolkitSpans) do
+        _ <- ProcessMessage.processRequestMessages $ V.toList $ V.catMaybes apitoolkitSpans <&> ("",)
+        pass
       unless (V.null spans) do
         _ <- Telemetry.bulkInsertOtelLogsAndSpansTF spans
+        _ <- Anomalies.bulkInsertErrors $ Telemetry.getAllATErrors spans
         pure ()
 
       pure $ V.toList ackIds
