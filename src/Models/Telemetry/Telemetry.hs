@@ -738,11 +738,11 @@ instance ToRow OtelLogsAndSpans where
       parseSeverityNumber sev = fmap (T.pack . show . severity_number) sev
 
 
-bulkInsertOtelLogsAndSpansTF :: (DB :> es, Labeled "timefusion" DB :> es, UUIDEff :> es) => V.Vector OtelLogsAndSpans -> Eff es ()
+bulkInsertOtelLogsAndSpansTF :: (DB :> es, UUIDEff :> es) => V.Vector OtelLogsAndSpans -> Eff es ()
 bulkInsertOtelLogsAndSpansTF records = do
   updatedRecords <- updateIds records
   _ <- bulkInsertSpansTS updatedRecords
-  _ <- bulkInsertOtelLogsAndSpans updatedRecords
+  -- _ <- bulkInsertOtelLogsAndSpans updatedRecords
   pure ()
   where
     updateIds :: UUIDEff :> es => V.Vector OtelLogsAndSpans -> Eff es (V.Vector OtelLogsAndSpans)
