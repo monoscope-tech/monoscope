@@ -98,7 +98,7 @@ export class LogList extends LitElement {
   updateTableData = (ves, cols, colIdxMap, serviceColors, nextFetchUrl) => {
     this.logsColumns = [...cols]
     this.colIdxMap = { ...colIdxMap }
-    this.hasMore = ves.length > 0
+    this.hasMore = ves.length >= 50
     this.serviceColors = { ...serviceColors }
     this.nextFetchUrl = nextFetchUrl
     if (this.source === 'spans') {
@@ -132,7 +132,7 @@ export class LogList extends LitElement {
         this.logsData = logs
       }
       this.updateColumnMaxWidthMap(logs)
-      this.hasMore = logs.length > 0
+      this.hasMore = logs.length >= 50
       this.requestUpdate()
 
       window.virtualListData = null
@@ -305,7 +305,7 @@ export class LogList extends LitElement {
           if (logsData.length > 0) {
             this.serviceColors = { ...this.serviceColors, ...serviceColors }
             if (!isNewData) {
-              this.hasMore = logsData.length > 0
+              this.hasMore = logsData.length >= 50
               this.nextFetchUrl = nextUrl
             }
             if (this.source === 'spans') {
