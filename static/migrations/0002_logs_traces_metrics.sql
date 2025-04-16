@@ -285,7 +285,7 @@ CREATE TABLE IF NOT EXISTS otel_logs_and_spans (
     date  TIMESTAMPTZ NOT NULL DEFAULT current_timestamp
 );
 SELECT create_hypertable('otel_logs_and_spans', by_range('timestamp', INTERVAL '1 hours'), migrate_data => true);
-SELECT add_retention_policy('otel_logs_and_spans',INTERVAL '3 days',true);
+SELECT add_retention_policy('otel_logs_and_spans',INTERVAL '14 days',true);
 
 CREATE INDEX idx_logs_and_spans_trace_id ON otel_logs_and_spans (project_id, context___trace_id);
 CREATE INDEX idx_logs_and_spans_span_id ON otel_logs_and_spans (project_id, context___span_id);
