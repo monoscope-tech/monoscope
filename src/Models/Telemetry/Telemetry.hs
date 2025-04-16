@@ -46,6 +46,7 @@ import Data.Aeson qualified as AE
 import Data.Aeson.Key qualified as AEK
 import Data.Aeson.KeyMap qualified as KEM
 import Data.ByteString.Base16 qualified as B16
+import Data.Effectful.UUID (UUIDEff, genUUID)
 import Data.List (nubBy)
 import Data.Map qualified as Map
 import Data.Pool (withResource)
@@ -636,6 +637,7 @@ bulkInsertMetrics metrics = do
 instance ToRow OtelLogsAndSpans where
   toRow entry =
     [ toField entry.observed_timestamp -- observed_timestamp
+    , toField entry.id
     , toField entry.parent_id -- parent_id
     , toField entry.hashes
     , toField entry.name -- name
@@ -719,6 +721,7 @@ instance ToRow OtelLogsAndSpans where
     , toField $ atMapText "user_agent.original" entry.resource -- resource___user_agent___original
     , toField entry.project_id -- project_id
     , toField entry.timestamp -- timestamp
+    , toField $ formatTime defaultTimeLocale "%F" entry.timestamp
     ]
     where
       -- Helper functions for severity fields
@@ -730,11 +733,20 @@ instance ToRow OtelLogsAndSpans where
       parseSeverityNumber sev = fmap (T.pack . show . severity_number) sev
 
 
-bulkInsertOtelLogsAndSpansTF :: (DB :> es, Labeled "timefusion" DB :> es) => V.Vector OtelLogsAndSpans -> Eff es ()
+bulkInsertOtelLogsAndSpansTF :: (DB :> es, Labeled "timefusion" DB :> es, UUIDEff :> es) => V.Vector OtelLogsAndSpans -> Eff es ()
 bulkInsertOtelLogsAndSpansTF records = do
-  _ <- bulkInsertSpansTS records
-  -- _ <- bulkInsertOtelLogsAndSpans records
+  updatedRecords <- updateIds records
+  num <- bulkInsertSpansTS updatedRecords
+  -- num <- bulkInsertOtelLogsAndSpans updatedRecords
   pure ()
+  where
+    updateIds :: UUIDEff :> es => V.Vector OtelLogsAndSpans -> Eff es (V.Vector OtelLogsAndSpans)
+    updateIds recs = V.mapM updateId recs
+      where
+        updateId :: UUIDEff :> es => OtelLogsAndSpans -> Eff es OtelLogsAndSpans
+        updateId record = do
+          newId <- genUUID
+          return (record{id = newId} :: OtelLogsAndSpans)
 
 
 bulkInsertSpansTS :: DB :> es => V.Vector OtelLogsAndSpans -> Eff es Int64
@@ -763,7 +775,7 @@ bulkInsertOtelLogsAndSpans records = labeled @"timefusion" @DB $ dbtToEff $ exec
 bulkInserSpansAndLogsQuery :: Query
 bulkInserSpansAndLogsQuery =
   [sql| INSERT INTO otel_logs_and_spans
-      (observed_timestamp, parent_id, hashes, name, kind, status_code, status_message, 
+      (observed_timestamp, id, parent_id, hashes, name, kind, status_code, status_message, 
        level, severity, severity___severity_text, severity___severity_number, body, duration, 
        start_time, end_time, context, context___trace_id, context___span_id, context___trace_state, 
        context___trace_flags, context___is_remote, events, links, attributes, 
@@ -789,10 +801,10 @@ bulkInserSpansAndLogsQuery =
        resource___service___instance___id, resource___service___namespace, 
        resource___telemetry___sdk___language, resource___telemetry___sdk___name,
        resource___telemetry___sdk___version, resource___user_agent___original,
-       project_id, timestamp)
-      VALUES (?, ?, ?, ?, ?, ?,  ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+       project_id, timestamp, date)
+      VALUES (?, ?, ?, ?, ?, ?, ?,  ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
               ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-              ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+              ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,?)
     |]
 
 
@@ -897,8 +909,6 @@ data Context = Context
   deriving (ToField, FromField) via Aeson Context
 
 
--- project_id, id, timestamp, observed_timestamp, context, level, severity, body, attributes, resource,
---                   hashes, kind, status_code, status_message, start_time, end_time, events, links, duration, name, parent_id
 data OtelLogsAndSpans = OtelLogsAndSpans
   { project_id :: Text
   , id :: UUID.UUID

@@ -304,21 +304,7 @@ timestampLogFmt colName = [fmt|to_char({colName} AT TIME ZONE 'UTC', 'YYYY-MM-DD
 
 defaultSelectSqlQuery :: Maybe Sources -> [Text]
 defaultSelectSqlQuery (Just SMetrics) = ["id"]
-defaultSelectSqlQuery (Just STraces) = ["id"]
 defaultSelectSqlQuery Nothing = defaultSelectSqlQuery (Just SRequests)
-defaultSelectSqlQuery (Just SLogs) =
-  [ "id"
-  , timestampLogFmt "timestamp"
-  , "resource->>'service.name'  as service"
-  , "severity_text"
-  , "body"
-  , [fmt|LEFT(
-        CONCAT(
-            COALESCE(attributes, 'null')
-        ),
-        255
-    ) as rest|]
-  ]
 defaultSelectSqlQuery (Just SSpans) =
   [ "id"
   , timestampLogFmt "timestamp"
