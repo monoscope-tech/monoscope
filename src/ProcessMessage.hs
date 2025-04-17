@@ -119,7 +119,7 @@ import Utils (eitherStrToText)
  --}
 processMessages
   -- :: (Reader.Reader Config.AuthContext :> es, Time.Time :> es, DB :> es, Log :> es, IOE :> es)
-  :: (Reader.Reader Config.AuthContext :> es, Time.Time :> es, DB :> es, Log :> es, IOE :> es, UUIDEff :> es, Ki.StructuredConcurrency :> es)
+  :: (Reader.Reader Config.AuthContext :> es, Time.Time :> es, DB :> es, Labeled "timefusion" DB :> es, Log :> es, IOE :> es, UUIDEff :> es, Ki.StructuredConcurrency :> es)
   => [(Text, ByteString)]
   -> HashMap Text Text
   -> Eff es [Text]

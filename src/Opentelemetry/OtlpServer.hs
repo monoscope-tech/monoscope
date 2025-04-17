@@ -128,7 +128,7 @@ getMetricAttributeValue attribute rms = listToMaybe $ V.toList $ V.mapMaybe getR
     getAttr = V.find ((== attribute) . toText . keyValueKey) >=> keyValueValue >=> anyValueValue >=> anyValueToString >=> (Just . toText)
 
 
-processList :: (Eff.Reader AuthContext :> es, DB :> es, Ki.StructuredConcurrency :> es, Log :> es, IOE :> es, Time :> es, UUIDEff :> es) => [(Text, ByteString)] -> HashMap Text Text -> Eff es [Text]
+processList :: (Eff.Reader AuthContext :> es, DB :> es, Labeled "timefusion" DB :> es, Ki.StructuredConcurrency :> es, Log :> es, IOE :> es, Time :> es, UUIDEff :> es) => [(Text, ByteString)] -> HashMap Text Text -> Eff es [Text]
 processList [] _ = pure []
 processList msgs attrs = do
   let msgs' = V.fromList msgs
@@ -168,7 +168,7 @@ processList msgs attrs = do
         pass
       unless (V.null spans) do
         _ <- Telemetry.bulkInsertOtelLogsAndSpansTF spans
-        _ <- Anomalies.bulkInsertErrors $ Telemetry.getAllATErrors spans
+        -- _ <- Anomalies.bulkInsertErrors $ Telemetry.getAllATErrors spans
         pure ()
 
       pure $ V.toList ackIds
