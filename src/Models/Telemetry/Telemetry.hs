@@ -43,6 +43,7 @@ module Models.Telemetry.Telemetry (
 )
 where
 
+import Control.Exception.Annotated (checkpoint)
 import Control.Lens ((.~))
 import Data.Aeson qualified as AE
 import Data.Aeson.Key qualified as AEK
@@ -602,7 +603,7 @@ getMetricServiceNames pid = dbtToEff $ query Select q pid
 
 
 bulkInsertMetrics :: DB :> es => V.Vector MetricRecord -> Eff es ()
-bulkInsertMetrics metrics = do
+bulkInsertMetrics metrics = checkpoint "bulkInsertMetrics" $ do
   void $ dbtToEff $ executeMany Insert q (V.toList rowsToInsert)
   void $ dbtToEff $ executeMany Insert q2 (removeDuplic $ V.toList rows2)
   where
@@ -680,10 +681,10 @@ instance ToRow OtelLogsAndSpans where
     , toField $ atMapText "network.transport" entry.attributes -- attributes___network___transport
     , toField $ atMapText "network.type" entry.attributes -- attributes___network___type
     , toField $ atMapInt "code.number" entry.attributes -- attributes___code___number
-    , toField $ atMapInt "code.file.path" entry.attributes -- attributes___code___file___path
-    , toField $ atMapInt "code.function.name" entry.attributes -- attributes___code___function___name
+    , toField $ atMapText "code.file.path" entry.attributes -- attributes___code___file___path
+    , toField $ atMapText "code.function.name" entry.attributes -- attributes___code___function___name
     , toField $ atMapInt "code.line.number" entry.attributes -- attributes___code___line___number
-    , toField $ atMapInt "code.stacktrace" entry.attributes -- attributes___code___stacktrace
+    , toField $ atMapText "code.stacktrace" entry.attributes -- attributes___code___stacktrace
     , toField $ atMapText "log.record.original" entry.attributes -- attributes___log__record___original
     , toField $ atMapText "log.record.uid" entry.attributes -- attributes___log__record___uid
     , toField $ atMapText "error.type" entry.attributes -- attributes___error___type
@@ -698,9 +699,9 @@ instance ToRow OtelLogsAndSpans where
     , toField $ atMapText "user_agent.original" entry.attributes -- attributes___user_agent___original
     , toField $ atMapText "http.request.method" entry.attributes -- attributes___http___request___method
     , toField $ atMapText "http.request.method_original" entry.attributes -- attributes___http___request___method_original
-    , toField $ atMapText "http.response.status_code" entry.attributes -- attributes___http___response___status_code
-    , toField $ atMapText "http.request.resend_count" entry.attributes -- attributes___http___request___resend_count
-    , toField $ atMapText "http.request.body.size" entry.attributes -- attributes___http___request___body___size
+    , toField $ atMapInt "http.response.status_code" entry.attributes -- attributes___http___response___status_code
+    , toField $ atMapInt "http.request.resend_count" entry.attributes -- attributes___http___request___resend_count
+    , toField $ atMapInt "http.request.body.size" entry.attributes -- attributes___http___request___body___size
     , toField $ atMapText "session.id" entry.attributes -- attributes___session___id
     , toField $ atMapText "session.previous.id" entry.attributes -- attributes___session___previous___id
     , toField $ atMapText "db.system.name" entry.attributes -- attributes___db___system___name
@@ -986,8 +987,8 @@ extractATError spanObj (AE.Object o) = do
       asText (AE.String t) = Just t
       asText _ = Nothing
 
-  return $
-    RequestDumps.ATError
+  return
+    $ RequestDumps.ATError
       { projectId = UUID.fromText spanObj.project_id >>= (\uid -> Just Projects.ProjectId{unProjectId = uid})
       , when = spanObj.timestamp
       , errorType = typ

@@ -115,6 +115,7 @@ library:
     - containers
     - cookie
     - safe-exceptions
+    - annotated-exception
     - safe
     - aeson-pretty
     - cryptonite

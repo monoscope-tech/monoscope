@@ -52,7 +52,17 @@ pubsubService appLogger appCtx topics fn = do
                 b64Msg <- msg ^? field @"message" . _Just . field @"data'" . _Just . _Base64
                 Just (ackId, b64Msg)
         let firstAttrs = messages ^? L.folded . field @"message" . _Just . field @"attributes" . _Just . field @"additional"
-        msgIds <- liftIO $ runBackground appLogger appCtx $ fn (catMaybes msgsB64) (maybeToMonoid firstAttrs)
+
+        msgIds <-
+          tryAny (liftIO $ runBackground appLogger appCtx $ fn (catMaybes msgsB64) (maybeToMonoid firstAttrs)) >>= \case
+            Left e -> do
+              liftIO
+                $ Log.runLogT "apitoolkit" appLogger Log.LogAttention
+                $ Log.logAttention "CAUGHT EXCEPTION: Error processing messages, but continuing" (show e)
+              -- Return all message IDs so they're acknowledged anyway to prevent reprocessing
+              pure $ map fst $ catMaybes msgsB64
+            Right ids -> pure ids
+
         let acknowlegReq = PubSub.newAcknowledgeRequest & field @"ackIds" L..~ Just msgIds
         unless (null msgIds) $ void $ PubSub.newPubSubProjectsSubscriptionsAcknowledge acknowlegReq subscription & Google.send env
       case result of
@@ -77,7 +87,17 @@ kafkaService appLogger appCtx fn = do
       (rec : _) -> do
         let topic = rec.crTopic.unTopicName
             attributes = HM.insert "ce-type" (topicToCeType topic) $ consumerRecordHeadersToHashMap rec
-        msgIds <- runBackground appLogger appCtx $ fn (consumerRecordToTuple <$> rightRecords) attributes
+            allRecords = consumerRecordToTuple <$> rightRecords
+
+        msgIds <-
+          tryAny (runBackground appLogger appCtx $ fn allRecords attributes) >>= \case
+            Left e -> do
+              Log.runLogT "apitoolkit" appLogger Log.LogAttention
+                $ Log.logAttention "Error processing Kafka messages, but continuing" (show e)
+              -- Return all message IDs so they're acknowledged anyway
+              pure $ map fst allRecords
+            Right ids -> pure ids
+
         (maybe pass throwIO) =<< K.commitAllOffsets (K.OffsetCommitAsync) consumer
     pass
   where

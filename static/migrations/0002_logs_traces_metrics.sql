@@ -264,7 +264,7 @@ CREATE TABLE IF NOT EXISTS otel_logs_and_spans (
     attributes___db___collection___name    TEXT,
     attributes___db___namespace            TEXT,
     attributes___db___operation___name     TEXT,
-    attributes___db___response___status_code INTEGER,
+    attributes___db___response___status_code TEXT,
     attributes___db___operation___batch___size INTEGER,
     attributes___db___query___summary      TEXT,
     attributes___db___query___text         TEXT,

@@ -12,6 +12,7 @@
 
 module Opentelemetry.OtlpServer (runServer, processList) where
 
+import Control.Exception.Annotated (checkpoint)
 import Control.Lens hiding ((.=))
 import Control.Lens.At
 import Control.Lens.Extras (is)
@@ -38,6 +39,7 @@ import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUID
 import Data.Vector qualified as V
 import Effectful
+import Effectful.Exception (onException)
 import Effectful.Ki qualified as Ki
 import Effectful.Labeled (Labeled, labeled)
 import Effectful.Log (Log)
@@ -130,70 +132,99 @@ getMetricAttributeValue attribute rms = listToMaybe $ V.toList $ V.mapMaybe getR
 
 processList :: (Eff.Reader AuthContext :> es, DB :> es, Labeled "timefusion" DB :> es, Ki.StructuredConcurrency :> es, Log :> es, IOE :> es, Time :> es, UUIDEff :> es) => [(Text, ByteString)] -> HashMap Text Text -> Eff es [Text]
 processList [] _ = pure []
-processList msgs attrs = do
-  let msgs' = V.fromList msgs
-  appCtx <- ask @AuthContext
-  case HashMap.lookup "ce-type" attrs of
-    Just "org.opentelemetry.otlp.logs.v1" -> do
-      results <-
-        V.forM msgs' \(ackId, msg) -> case (HsProtobuf.fromByteString msg :: Either HsProtobuf.ParseError ExportLogsServiceRequest) of
-          Left err -> do
-            Log.logAttention_ $ "processList: unable to parse logs service request with err " <> show err <> (decodeUtf8 msg)
-            pure (ackId, [])
-          Right (ExportLogsServiceRequest logReq) -> do
-            projectIdsAndKeys <- dbtToEff $ ProjectApiKeys.projectIdsByProjectApiKeys $ getLogAttributeValue "at-project-key" logReq
-            pure (ackId, join $ V.map (convertToLog projectIdsAndKeys) logReq)
-      let (ackIds, logs) = V.unzip results
-      unless (null $ join logs) do
-        _ <- Telemetry.bulkInsertOtelLogsAndSpansTF $ join logs
-        pure ()
-      pure $ V.toList ackIds
-    Just "org.opentelemetry.otlp.traces.v1" -> do
-      reqsAndProjects <- V.forM msgs' \(ackId, msg) -> do
-        case (HsProtobuf.fromByteString msg :: Either HsProtobuf.ParseError ExportTraceServiceRequest) of
-          Left err -> do
-            Log.logAttention_ $ "processList: unable to parse traces service request with err " <> show err <> (decodeUtf8 msg)
-            pure (ackId, ([], []))
-          Right (ExportTraceServiceRequest traceReq) -> do
-            projectIdsAndKeys <- dbtToEff $ ProjectApiKeys.projectIdsByProjectApiKeys $ getSpanAttributeValue "at-project-key" traceReq
-            pure (ackId, (traceReq, projectIdsAndKeys))
+processList msgs attrs = checkpoint "processList" $ process `onException` handleException
+  where
+    handleException = do
+      Log.logAttention "processList: caught exception" (AE.object ["ce-type" AE..= (HashMap.lookup "ce-type" attrs)])
+      pure $ map fst msgs
 
-      let (ackIds, reqsAndPids) = V.unzip reqsAndProjects
-          results =
-            V.map (\(req, pids) -> (join $ V.map (convertToSpan pids) req, req, pids)) reqsAndPids
-          spans = join $ V.map (\(s, _, _) -> s) results
-          apitoolkitSpans = V.map mapHTTPSpan spans
-      unless (V.null apitoolkitSpans) do
-        _ <- ProcessMessage.processRequestMessages $ V.toList $ V.catMaybes apitoolkitSpans <&> ("",)
-        pass
-      unless (V.null spans) do
-        _ <- Telemetry.bulkInsertOtelLogsAndSpansTF spans
-        -- _ <- Anomalies.bulkInsertErrors $ Telemetry.getAllATErrors spans
-        pure ()
+    process = do
+      let msgs' = V.fromList msgs
+      appCtx <- ask @AuthContext
+      case HashMap.lookup "ce-type" attrs of
+        Just "org.opentelemetry.otlp.logs.v1" -> checkpoint "processList:logs" $ do
+          results <- V.forM msgs' $ \(ackId, msg) ->
+            case (HsProtobuf.fromByteString msg :: Either HsProtobuf.ParseError ExportLogsServiceRequest) of
+              Left err -> do
+                Log.logAttention_ $ "processList: unable to parse logs service request with err "
+                pure (ackId, [])
+              Right (ExportLogsServiceRequest logReq) -> do
+                projectIdsAndKeys <-
+                  checkpoint "processList:logs:getProjectIds" $
+                    dbtToEff $
+                      ProjectApiKeys.projectIdsByProjectApiKeys $
+                        getLogAttributeValue "at-project-key" logReq
+                pure (ackId, join $ V.map (convertToLog projectIdsAndKeys) logReq)
 
-      pure $ V.toList ackIds
-    Just "org.opentelemetry.otlp.metrics.v1" -> do
-      results <-
-        V.forM msgs' \(ackId, msg) -> do
-          case (HsProtobuf.fromByteString msg :: Either HsProtobuf.ParseError ExportMetricsServiceRequest) of
-            Left err -> do
-              Log.logAttention_ $ "processList: unable to parse metrics service request with err " <> show err <> (decodeUtf8 msg)
-              pure (ackId, [])
-            Right (ExportMetricsServiceRequest metricReq) -> do
-              pidM <- join <$> forM (getMetricAttributeValue "at-project-key" metricReq) ProjectApiKeys.getProjectIdByApiKey
-              let pid2M = Projects.projectIdFromText =<< getMetricAttributeValue "at-project-id" metricReq
-              case (pidM <|> pid2M) of
-                Just pid -> pure (ackId, join $ V.map (convertToMetric pid) metricReq)
-                Nothing -> do
-                  Log.logAttention_ "processList: project API Key and project ID not available in trace"
-                  pure (ackId, [])
-      let (ackIds, metricVec) = V.unzip results
-          metricRecords = join metricVec
-      unless (null metricRecords) $ Telemetry.bulkInsertMetrics metricRecords
-      pure $ V.toList ackIds
-    _ -> do
-      Log.logAttention "processList: unsupported opentelemetry data type" (AE.object ["ce-type" AE..= (HashMap.lookup "ce-type" attrs)])
-      pure []
+          let (ackIds, logs) = V.unzip results
+          unless (null $ join logs) $ do
+            void $
+              checkpoint "processList:logs:bulkInsert" $
+                Telemetry.bulkInsertOtelLogsAndSpansTF $
+                  join logs
+          pure $ V.toList ackIds
+        Just "org.opentelemetry.otlp.traces.v1" -> checkpoint "processList:traces" $ do
+          reqsAndProjects <- V.forM msgs' $ \(ackId, msg) ->
+            case (HsProtobuf.fromByteString msg :: Either HsProtobuf.ParseError ExportTraceServiceRequest) of
+              Left err -> do
+                Log.logAttention_ $ "processList: unable to parse traces service request with err "
+                pure (ackId, ([], []))
+              Right (ExportTraceServiceRequest traceReq) -> do
+                projectIdsAndKeys <-
+                  checkpoint "processList:traces:getProjectIds" $
+                    dbtToEff $
+                      ProjectApiKeys.projectIdsByProjectApiKeys $
+                        getSpanAttributeValue "at-project-key" traceReq
+                pure (ackId, (traceReq, projectIdsAndKeys))
+
+          let (ackIds, reqsAndPids) = V.unzip reqsAndProjects
+              results = V.map (\(req, pids) -> (join $ V.map (convertToSpan pids) req, req, pids)) reqsAndPids
+              spans = join $ V.map (\(s, _, _) -> s) results
+              apitoolkitSpans = V.map mapHTTPSpan spans
+
+          unless (V.null apitoolkitSpans) $ do
+            void $
+              checkpoint "processList:traces:processRequestMessages" $
+                ProcessMessage.processRequestMessages $
+                  V.toList $
+                    V.catMaybes apitoolkitSpans
+                      <&> ("",)
+
+          unless (V.null spans) do
+            checkpoint "processList:traces:bulkInsertSpans" $ Telemetry.bulkInsertOtelLogsAndSpansTF spans
+            checkpoint "processList:traces:bulkInsertErrors" $ Anomalies.bulkInsertErrors $ Telemetry.getAllATErrors spans
+
+          pure $ V.toList ackIds
+        Just "org.opentelemetry.otlp.metrics.v1" -> checkpoint "processList:metrics" $ do
+          results <- V.forM msgs' $ \(ackId, msg) ->
+            case (HsProtobuf.fromByteString msg :: Either HsProtobuf.ParseError ExportMetricsServiceRequest) of
+              Left err -> do
+                Log.logAttention_ $ "processList: unable to parse metrics service request with err "
+                pure (ackId, [])
+              Right (ExportMetricsServiceRequest metricReq) -> do
+                pidM <-
+                  checkpoint "processList:metrics:getProjectId" $
+                    join
+                      <$> forM (getMetricAttributeValue "at-project-key" metricReq) ProjectApiKeys.getProjectIdByApiKey
+                let pid2M = Projects.projectIdFromText =<< getMetricAttributeValue "at-project-id" metricReq
+                case (pidM <|> pid2M) of
+                  Just pid -> pure (ackId, join $ V.map (convertToMetric pid) metricReq)
+                  Nothing -> do
+                    Log.logAttention_ "processList: project API Key and project ID not available in trace"
+                    pure (ackId, [])
+
+          let (ackIds, metricVec) = V.unzip results
+              metricRecords = join metricVec
+
+          unless (null metricRecords) $ do
+            void $
+              checkpoint "processList:metrics:bulkInsert" $
+                Telemetry.bulkInsertMetrics metricRecords
+
+          pure $ V.toList ackIds
+        _ -> do
+          Log.logAttention "processList: unsupported opentelemetry data type" (AE.object ["ce-type" AE..= (HashMap.lookup "ce-type" attrs)])
+          pure []
 
 
 logsServiceExportH
@@ -415,11 +446,15 @@ parseSpanStatus = \case
 
 
 convertToMetric :: Projects.ProjectId -> ResourceMetrics -> V.Vector Telemetry.MetricRecord
-convertToMetric pid resourceMetrics = join $ V.map (convertScopeMetric pid resourceMetrics.resourceMetricsResource) resourceMetrics.resourceMetricsScopeMetrics
+convertToMetric pid resourceMetrics =
+  join $
+    V.map (convertScopeMetric pid resourceMetrics.resourceMetricsResource) resourceMetrics.resourceMetricsScopeMetrics
 
 
 convertScopeMetric :: Projects.ProjectId -> Maybe Resource -> ScopeMetrics -> V.Vector Telemetry.MetricRecord
-convertScopeMetric pid resource sm = join $ V.map (convertMetricRecord pid resource sm.scopeMetricsScope) sm.scopeMetricsMetrics
+convertScopeMetric pid resource sm =
+  join $
+    V.map (convertMetricRecord pid resource sm.scopeMetricsScope) sm.scopeMetricsMetrics
 
 
 convertMetricRecord :: Projects.ProjectId -> Maybe Resource -> Maybe InstrumentationScope -> Metric -> V.Vector Telemetry.MetricRecord
