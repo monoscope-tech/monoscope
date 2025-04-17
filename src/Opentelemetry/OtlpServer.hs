@@ -612,8 +612,8 @@ otelSpansToTimeFusionSpans pid res scope sp =
     , context = Just $ makeSpanContext sp
     , events = Just $ eventsToJSONB $ V.toList sp.spanEvents
     , links = Just $ T.pack $ show $ linksToJSONB $ V.toList sp.spanLinks
-    , attributes = jsonToMap $ keyValueToJSONB sp.spanAttributes
-    , resource = jsonToMap $ resourceToJSONB res
+    , attributes = jsonToMap $ removeProjectId $ keyValueToJSONB sp.spanAttributes
+    , resource = jsonToMap $ removeProjectId $ resourceToJSONB res
     , project_id = T.pack $ UUID.toString pid.unProjectId
     , timestamp = nanosecondsToUTC sp.spanStartTimeUnixNano
     , date = nanosecondsToUTC sp.spanStartTimeUnixNano
@@ -624,8 +624,8 @@ otelSpansToTimeFusionSpans pid res scope sp =
     -- Convert span to context
     makeSpanContext s =
       Telemetry.Context
-        { trace_id = Just $ byteStringToHexText s.spanTraceId
-        , span_id = Just $ byteStringToHexText s.spanSpanId
+        { trace_id = if BS.null s.spanTraceId then Nothing else Just $ byteStringToHexText s.spanTraceId
+        , span_id = if BS.null s.spanSpanId then Nothing else Just $ byteStringToHexText s.spanSpanId
         , trace_state = Just $ toText s.spanTraceState
         , trace_flags = Nothing
         , is_remote = Nothing

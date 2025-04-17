@@ -462,32 +462,30 @@ export class LogList extends LitElement {
     })
   }
 
-  render() {
-    const list = this.source === 'spans' ? (this.view === 'tree' ? this.spanListTree.filter(sp => sp.show) : [...this.spanListTree]) : [...this.logsData]
-    // end is used to render the load more button"
-    list.unshift('start')
-    list.push('end')
+  options() {
     return html`
-      <fieldset class="w-full flex justify-end px-2 pb-1 gap-3 ">
-        <button
-          @click=${() => (this.view = 'tree')}
-          class=${`flex items-center justify-center gap-1 px-2 py-1 text-xs rounded ${
-            this.view === 'tree' ? 'bg-gray-200 text-gray-800' : 'text-textWeak  hover:bg-gray-100'
-          }`}
-        >
-          ${faSprite('tree', 'regular', 'h-4 w-4')}
-          <span class="sm:inline hidden">Tree</span>
-        </button>
+      <div class="w-full flex justify-end px-2 pb-1 gap-3 ">
+        <div class="tabs tabs-box tabs-md p-0 tabs-outline items-center border">
+          <button
+            @click=${() => (this.view = 'tree')}
+            class=${`flex items-center justify-center gap-1 px-2 py-1 text-xs rounded ${
+              this.view === 'tree' ? 'bg-gray-200 text-gray-800' : 'text-textWeak  hover:bg-gray-100'
+            }`}
+          >
+            ${faSprite('tree', 'regular', 'h-4 w-4')}
+            <span class="sm:inline hidden">Tree</span>
+          </button>
 
-        <button
-          @click=${() => (this.view = 'list')}
-          class=${`flex items-center justify-center gap-1 px-2 py-1 text-xs rounded ${
-            this.view === 'list' ? 'bg-gray-200 text-gray-800' : 'text-textWeak  hover:bg-gray-100'
-          }`}
-        >
-          ${faSprite('list-view', 'regular', 'h-4 w-4')}
-          <span class="sm:inline hidden">List</span>
-        </button>
+          <button
+            @click=${() => (this.view = 'list')}
+            class=${`flex items-center justify-center gap-1 px-2 py-1 text-xs rounded ${
+              this.view === 'list' ? 'bg-gray-200 text-gray-800' : 'text-textWeak  hover:bg-gray-100'
+            }`}
+          >
+            ${faSprite('list-view', 'regular', 'h-4 w-4')}
+            <span class="sm:inline hidden">List</span>
+          </button>
+        </div>
 
         <button
           class=${`flex items-center justify-center gap-1 px-2 py-1 text-xs rounded ${
@@ -512,30 +510,18 @@ export class LogList extends LitElement {
           ${faSprite('wrap-text', 'regular', 'h-4 w-4')}
           <span class="sm:inline hidden">Wrap lines</span>
         </button>
-        <!-- <label class="text-textBrand text-xs gap-1 flex items-center">
-          <input
-            type="checkbox"
-            .checked=${this.wrapLines}
-            class="checkbox-xs"
-            @change=${() => {
-          this.wrapLines = !this.wrapLines
-          if (this.wrapLines) {
-            let width = Number(window.getComputedStyle(document.getElementById('logs_list_container_inner')).width.replace('px', ''))
-            this.logsColumns.forEach(col => {
-              if (col !== 'rest' && this.columnMaxWidthMap[col]) {
-                width -= this.columnMaxWidthMap[col] + 8
-              }
-            })
-            this.columnMaxWidthMap['rest'] = width - 20 // margin left and right and id width
-          } else {
-            this.columnMaxWidthMap['rest'] = 450 * 8
-          }
-          this.requestUpdate()
-        }}
-          />
-          Wrap lines
-        </label> -->
-      </fieldset>
+      </div>
+    `
+  }
+
+  render() {
+    const list = this.source === 'spans' ? (this.view === 'tree' ? this.spanListTree.filter(sp => sp.show) : [...this.spanListTree]) : [...this.logsData]
+    // end is used to render the load more button"
+    list.unshift('start')
+    list.push('end')
+
+    return html`
+      ${this.source === 'spans' ? this.options() : nothing}
       <div class="relative h-full shrink-1 min-w-0 p-0 m-0 bg-white w-full c-scroll pb-12 overflow-y-scroll " id="logs_list_container_inner">
         <table class="table-auto w-max relative ctable table-pin-rows table-pin-cols">
           <thead class="z-10 sticky top-0">
