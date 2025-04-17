@@ -57,10 +57,6 @@ library
       Network.Wai.Middleware.Heartbeat
       Opentelemetry.OtlpMockValues
       Opentelemetry.OtlpServer
-      Opentelemetry.OtlpServer_BACKUP_93374
-      Opentelemetry.OtlpServer_BASE_93374
-      Opentelemetry.OtlpServer_LOCAL_93374
-      Opentelemetry.OtlpServer_REMOTE_93374
       Opentelemetry.OtlpServerSpec
       Pages.Anomalies.AnomalyList
       Pages.Anomalies.AnomalyListSpec
