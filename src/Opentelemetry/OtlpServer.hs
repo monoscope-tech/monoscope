@@ -218,21 +218,23 @@ processList msgs attrs = checkpoint "processList" $ process `onException` handle
 decodeUtf8Lenient :: ByteString -> Text
 decodeUtf8Lenient = TE.decodeUtf8With lenientDecode
 
+
 -- Extract structured information from protobuf decoding errors
 createProtoErrorInfo :: String -> ByteString -> AE.Value
-createProtoErrorInfo err msg = 
+createProtoErrorInfo err msg =
   case T.splitOn ":" (T.pack err) of
-    (firstPart:details) -> 
+    (firstPart : details) ->
       -- Extract the field path that caused the error
       let fieldPath = T.takeWhile (/= ':') (T.strip (T.unwords details))
           errorType = T.takeWhileEnd (/= ':') (T.strip (T.unwords details))
-      in AE.object [
-          "err_type" AE..= errorType,
-          "field_path" AE..= fieldPath, 
-          "full_err" AE..= err,
-          "msg_size" AE..= BS.length msg
-        ]
+       in AE.object
+            [ "err_type" AE..= errorType
+            , "field_path" AE..= fieldPath
+            , "full_err" AE..= err
+            , "msg_size" AE..= BS.length msg
+            ]
     _ -> AE.object ["full_err" AE..= err, "msg_size" AE..= BS.length msg]
+
 
 -- Convert nanoseconds to UTCTime
 nanosecondsToUTC :: Word64 -> UTCTime
