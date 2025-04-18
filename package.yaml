@@ -167,7 +167,6 @@ library:
     - dotenv
     - envy
     - errors
-    - microlens
     - mmark
     - extra
     - slugify
