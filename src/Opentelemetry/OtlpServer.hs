@@ -665,10 +665,10 @@ traceServiceExportH appLogger appCtx (ServerNormalRequest _meta (ExportTraceServ
     let spanRecords = join $ V.map (convertToSpan pids) req
         apitoolkitSpans = V.map mapHTTPSpan spanRecords
     unless (null apitoolkitSpans) do
-       void $ ProcessMessage.processRequestMessages $ V.toList $ V.catMaybes apitoolkitSpans <&> ("",)
-    unless (null spanRecords) do 
-     Telemetry.bulkInsertOtelLogsAndSpansTF spanRecords
-     Anomalies.bulkInsertErrors $ Telemetry.getAllATErrors spanRecords
+      void $ ProcessMessage.processRequestMessages $ V.toList $ V.catMaybes apitoolkitSpans <&> ("",)
+    unless (null spanRecords) do
+      Telemetry.bulkInsertOtelLogsAndSpansTF spanRecords
+      Anomalies.bulkInsertErrors $ Telemetry.getAllATErrors spanRecords
   return (ServerNormalResponse (ExportTraceServiceResponse Nothing) mempty StatusOk "")
 
 
