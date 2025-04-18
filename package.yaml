@@ -167,6 +167,7 @@ library:
     - dotenv
     - envy
     - errors
+    - microlens
     - mmark
     - extra
     - slugify
@@ -241,6 +242,7 @@ library:
     - yaml
     - postgresql-libpq
     - ki-effectful
+    - grapesy
 
 executables:
   apitoolkit-server-exe:

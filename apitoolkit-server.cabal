@@ -303,6 +303,7 @@ library
     , lucid-hyperscript >=0.1.0.2
     , lucid-svg >=0.7.1.1
     , megaparsec
+    , microlens
     , mmark
     , monad-time-effectful
     , mtl
