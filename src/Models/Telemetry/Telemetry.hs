@@ -949,7 +949,7 @@ getErrorEvents OtelLogsAndSpans{events = Just (AE.Array arr)} =
   V.filter isErrorEvent arr
   where
     isErrorEvent (AE.Object o) =
-      case KEM.lookup "name" o of
+      case KEM.lookup "event_name" o of
         Just (AE.String name) -> "exception" `T.isInfixOf` name || "error" `T.isInfixOf` name
         _ -> False
     isErrorEvent _ = False

@@ -43,11 +43,11 @@ export class LogList extends LitElement {
     this.renderLoadMore = this.renderLoadMore.bind(this)
     this.updateTableData = this.updateTableData.bind(this)
     this.updateColumnMaxWidthMap = this.updateColumnMaxWidthMap.bind(this)
-    this.filterFalseRoots = this.filterFalseRoots.bind(this)
     this.latestLogsURLQueryValsFn = this.latestLogsURLQueryValsFn.bind(this)
     this.logItemCol = this.logItemCol.bind(this)
     this.wrapLines = false
     this.view = 'tree'
+    this.newDataCount = 0
     const liveBtn = document.querySelector('#streamLiveData')
     if (liveBtn) {
       liveBtn.addEventListener('change', () => {
@@ -143,6 +143,17 @@ export class LogList extends LitElement {
     this.setupIntersectionObserver()
     window.logListTable = document.querySelector('#resultTable')
   }
+
+  // updated(changedProps) {
+  //   super.updated(changedProps)
+  //   for (const span of this.spanListTree) {
+  //     if (span.isNewData) {
+  //       span.isNewData = false
+  //     } else {
+  //       break
+  //     }
+  //   }
+  // }
 
   setupIntersectionObserver() {
     if (this._observer) {
@@ -253,9 +264,14 @@ export class LogList extends LitElement {
     if (rowData === 'start') return this.fetchRecent()
     const s = this.source === 'spans' && rowData.type === 'log' ? 'logs' : this.source
     const targetInfo = requestDumpLogItemUrlPath(this.source === 'spans' ? rowData.data : rowData, this.colIdxMap, s)
+    const isNew = this.newDataCount > 0
+    this.newDataCount = this.newDataCount - 1
 
     return html`
-      <tr class="item-row flex items-center cursor-pointer whitespace-nowrap" @click=${event => toggleLogRow(event, targetInfo, this.projectId)}>
+      <tr
+        class=${`item-row relative flex items-center cursor-pointer whitespace-nowrap  ${isNew ? 'animate-fadeBg' : ''}`}
+        @click=${event => toggleLogRow(event, targetInfo, this.projectId)}
+      >
         ${this.logsColumns
           .filter(v => v !== 'latency_breakdown')
           .map(column => {
@@ -302,19 +318,21 @@ export class LogList extends LitElement {
       .then(data => {
         if (!data.error) {
           const { logsData, serviceColors, nextUrl } = data
+          if (!isNewData) {
+            this.hasMore = logsData.length >= 50
+            this.nextFetchUrl = nextUrl
+          }
           if (logsData.length > 0) {
             this.serviceColors = { ...this.serviceColors, ...serviceColors }
-            if (!isNewData) {
-              this.hasMore = logsData.length >= 50
-              this.nextFetchUrl = nextUrl
-            }
             if (this.source === 'spans') {
               const tree = this.buildSpanListTree([...logsData])
               if (isNewData) {
+                this.newDataCount = this.view === 'tree' ? tree.filter(t => t.show).length : tree.length
                 this.spanListTree = [...tree, ...this.spanListTree]
               } else {
                 this.spanListTree = [...this.spanListTree, ...tree]
               }
+              window.spanListTree = this.spanListTree
             } else {
               this.logsData = isNewData ? [...logsData, ...this.logsData] : [...this.logsData, ...logsData]
             }
@@ -340,31 +358,6 @@ export class LogList extends LitElement {
 
   hideColumn(column) {
     this.logsColumns = this.logsColumns.filter(col => col !== column)
-  }
-
-  filterFalseRoots() {
-    const nonRootRootSpans = []
-    const remainingSpans = []
-    for (let i = 0; i < this.spanListTree.length; i++) {
-      const span = this.spanListTree[i]
-      if (span.parent && span.depth === 0) {
-        nonRootRootSpans.push(span)
-        for (let j = i + 1; j < span.children; j++) {
-          if (this.spanListTree[j].parentIds.includes(span.id)) {
-            nonRootRootSpans.push(this.spanListTree[j])
-          } else {
-            remainingSpans.push(this.spanListTree[j])
-            i = j - 1
-            break
-          }
-        }
-      } else if (span.type === 'log' && span.depth === 0) {
-        nonRootRootSpans.push(span)
-      } else {
-        remainingSpans.push(span)
-      }
-    }
-    return { nonRootRootSpans, remainingSpans }
   }
 
   tableHeadingWrapper(title, column, classes) {
@@ -462,32 +455,30 @@ export class LogList extends LitElement {
     })
   }
 
-  render() {
-    const list = this.source === 'spans' ? (this.view === 'tree' ? this.spanListTree.filter(sp => sp.show) : [...this.spanListTree]) : [...this.logsData]
-    // end is used to render the load more button"
-    list.unshift('start')
-    list.push('end')
+  options() {
     return html`
-      <fieldset class="w-full flex justify-end px-2 pb-1 gap-3 ">
-        <button
-          @click=${() => (this.view = 'tree')}
-          class=${`flex items-center justify-center gap-1 px-2 py-1 text-xs rounded ${
-            this.view === 'tree' ? 'bg-gray-200 text-gray-800' : 'text-textWeak  hover:bg-gray-100'
-          }`}
-        >
-          ${faSprite('tree', 'regular', 'h-4 w-4')}
-          <span class="sm:inline hidden">Tree</span>
-        </button>
+      <div class="w-full flex justify-end px-2 pb-1 gap-3 ">
+        <div class="tabs tabs-box tabs-md p-0 tabs-outline items-center border">
+          <button
+            @click=${() => (this.view = 'tree')}
+            class=${`flex items-center justify-center gap-1 px-2 py-1 text-xs rounded ${
+              this.view === 'tree' ? 'bg-gray-200 text-gray-800' : 'text-textWeak  hover:bg-gray-100'
+            }`}
+          >
+            ${faSprite('tree', 'regular', 'h-4 w-4')}
+            <span class="sm:inline hidden">Tree</span>
+          </button>
 
-        <button
-          @click=${() => (this.view = 'list')}
-          class=${`flex items-center justify-center gap-1 px-2 py-1 text-xs rounded ${
-            this.view === 'list' ? 'bg-gray-200 text-gray-800' : 'text-textWeak  hover:bg-gray-100'
-          }`}
-        >
-          ${faSprite('list-view', 'regular', 'h-4 w-4')}
-          <span class="sm:inline hidden">List</span>
-        </button>
+          <button
+            @click=${() => (this.view = 'list')}
+            class=${`flex items-center justify-center gap-1 px-2 py-1 text-xs rounded ${
+              this.view === 'list' ? 'bg-gray-200 text-gray-800' : 'text-textWeak  hover:bg-gray-100'
+            }`}
+          >
+            ${faSprite('list-view', 'regular', 'h-4 w-4')}
+            <span class="sm:inline hidden">List</span>
+          </button>
+        </div>
 
         <button
           class=${`flex items-center justify-center gap-1 px-2 py-1 text-xs rounded ${
@@ -512,30 +503,18 @@ export class LogList extends LitElement {
           ${faSprite('wrap-text', 'regular', 'h-4 w-4')}
           <span class="sm:inline hidden">Wrap lines</span>
         </button>
-        <!-- <label class="text-textBrand text-xs gap-1 flex items-center">
-          <input
-            type="checkbox"
-            .checked=${this.wrapLines}
-            class="checkbox-xs"
-            @change=${() => {
-          this.wrapLines = !this.wrapLines
-          if (this.wrapLines) {
-            let width = Number(window.getComputedStyle(document.getElementById('logs_list_container_inner')).width.replace('px', ''))
-            this.logsColumns.forEach(col => {
-              if (col !== 'rest' && this.columnMaxWidthMap[col]) {
-                width -= this.columnMaxWidthMap[col] + 8
-              }
-            })
-            this.columnMaxWidthMap['rest'] = width - 20 // margin left and right and id width
-          } else {
-            this.columnMaxWidthMap['rest'] = 450 * 8
-          }
-          this.requestUpdate()
-        }}
-          />
-          Wrap lines
-        </label> -->
-      </fieldset>
+      </div>
+    `
+  }
+
+  render() {
+    const list = this.source === 'spans' ? (this.view === 'tree' ? this.spanListTree.filter(sp => sp.show) : [...this.spanListTree]) : [...this.logsData]
+    // end is used to render the load more button"
+    list.unshift('start')
+    list.push('end')
+
+    return html`
+      ${this.source === 'spans' ? this.options() : nothing}
       <div class="relative h-full shrink-1 min-w-0 p-0 m-0 bg-white w-full c-scroll pb-12 overflow-y-scroll " id="logs_list_container_inner">
         <table class="table-auto w-max relative ctable table-pin-rows table-pin-cols">
           <thead class="z-10 sticky top-0">
@@ -920,6 +899,87 @@ function requestDumpLogItemUrlPath(rd, colIdxMap, source) {
   const rdId = lookupVecTextByKey(rd, colIdxMap, 'id')
   const rdCreatedAt = lookupVecTextByKey(rd, colIdxMap, 'created_at') || lookupVecTextByKey(rd, colIdxMap, 'timestamp')
   return [rdId, rdCreatedAt, source]
+}
+
+function groupSpansTF(events, colIdxMap, expandedTraces) {
+  const traceMap = {}
+  const spanMap = {}
+
+  const TRACE_INDEX = colIdxMap['trace_id']
+  const SPAN_INDEX = colIdxMap['latency_breakdown']
+  const PARENT_SPAN_INDEX = colIdxMap['parent_span_id']
+  // const TIMESTAMP_INDEX = colIdxMap['timestamp']
+  const SPAN_DURATION_INDEX = colIdxMap['duration']
+  const START_TIME_NS = colIdxMap['start_time_ns']
+  const ERROR_INDEX = colIdxMap['errors']
+  const BODY_INDEX = colIdxMap['body']
+
+  for (const span of events) {
+    let traceId = span[TRACE_INDEX]
+    let spanId = span[SPAN_INDEX]
+    const parentSpanId = span[PARENT_SPAN_INDEX]
+
+    const body = span[BODY_INDEX]
+    let type = 'span'
+    if (body !== null) {
+      type = 'log'
+    }
+
+    if (traceId === '' || traceId === null) {
+      traceId = generateStrId()
+      span[TRACE_INDEX] = traceId
+    }
+    if (spanId === '' || spanId === null) {
+      spanId = generateStrId()
+      span[SPAN_INDEX] = spanId
+    }
+    spanMap[spanId] = {
+      spanId,
+      traceId,
+      type,
+      hasErrors: span[ERROR_INDEX],
+      startNs: span[START_TIME_NS],
+      duration: span[SPAN_DURATION_INDEX],
+      parentId: parentSpanId,
+      data: span,
+      children: [],
+    }
+  }
+
+  for (const span in spanMap) {
+    const parentSpanId = span[PARENT_SPAN_INDEX]
+    if (parentSpanId && spanMap[parentSpanId]) {
+      spanMap[parentSpanId].children.push(span)
+    }
+  }
+
+  for (const spanId in spanMap) {
+    const span = spanMap[spanId]
+    span.children.sort((a, b) => a.startNs - b.startNs)
+  }
+
+  for (const span in spanMap) {
+    if (!span.parentId) {
+      let traceData = traceMap[span.traceId]
+      if (!traceData) {
+        traceData = {
+          traceId: span.traceId,
+          spans: [],
+          duration: span.duration,
+          startTime: span.startNs,
+        }
+      }
+      traceData.spans.push(span)
+      traceData.duration = Math.max(traceData.duration, span.duration)
+      traceData.minStart = Math.min(traceData.startTime, span.startNs)
+      traceMap[span.traceId] = traceData
+    }
+  }
+
+  const traceArray = Object.values(traceMap).sort((a, b) => b.startTime - a.startTime)
+
+  const rr = flattenSpanTree(traceArray, expandedTraces)
+  return rr
 }
 
 function groupSpans(data, colIdxMap, expandedTraces) {

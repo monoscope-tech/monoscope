@@ -176,11 +176,8 @@ processList msgs attrs = checkpoint "processList" $ process `onException` handle
             $ (void $ ProcessMessage.processRequestMessages $ V.toList apitoolkitSpans <&> ("",))
 
           unless (null allSpans) do
-            checkpoint "processList:traces:bulkInsertSpans"
-              $ Telemetry.bulkInsertOtelLogsAndSpansTF spans'
-            checkpoint "processList:traces:bulkInsertErrors"
-              $ Anomalies.bulkInsertErrors
-              $ Telemetry.getAllATErrors spans'
+            checkpoint "processList:traces:bulkInsertSpans" $ Telemetry.bulkInsertOtelLogsAndSpansTF spans'
+            checkpoint "processList:traces:bulkInsertErrors" $ Anomalies.bulkInsertErrors $ Telemetry.getAllATErrors spans'
 
           pure $ V.toList ackIds
         Just "org.opentelemetry.otlp.metrics.v1" -> checkpoint "processList:metrics" do

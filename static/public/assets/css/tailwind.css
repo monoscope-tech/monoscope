@@ -94,6 +94,14 @@
   --color-textInverse-weak: #ffffffc7;
   --color-textStrong: #000626e6;
   --color-textWeak: #000833a6;
+  --animate-fadeBg: fadeBg 2s ease-out;
+
+
+  @keyframes fadeBg {
+    0% { background-color: #22c55e }
+    70% { background-color: #22c55e }
+    100% { background-color: transparent }
+  }
 }
 
 @plugin "daisyui/theme" {
@@ -824,6 +832,22 @@ body {
   content: '›' !important;
   color: #000d4d73;
 }
+/* 
+.animated-fadeBG {
+  animation: bgColorChange 5s infinite alternate;
+}
+
+@keyframes bgColorChange {
+  0% {
+    background-color: 
+  }
+  50% {
+    background-color: #fad0c4;
+  }
+  100% {
+    background-color: #fbc2eb;
+  }
+} */
 
 @keyframes rotate {
   0% {

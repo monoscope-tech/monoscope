@@ -34,3 +34,4 @@ errors.err
 apitoolkit-server-exe*
 .hiedb-shm
 .hiedb-wal
+stack.yaml.local
