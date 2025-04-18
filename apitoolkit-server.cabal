@@ -283,6 +283,7 @@ library
     , gogol
     , gogol-core
     , gogol-pubsub
+    , grapesy
     , hashtables
     , hiedb-plugin
     , hspec

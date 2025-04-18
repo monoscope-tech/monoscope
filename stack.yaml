@@ -37,6 +37,8 @@ extra-deps:
   # - streamly-0.10.1@sha256:eec2e8e14ac64b9e389600b964541c5e9e0a3d3e657dc54412691df47300a1fd,20899
   # - streamly-core-0.2.2@sha256:7245ac46f380af62ce16adb70d26d2710d615f393867cfa8789c29b32d2ff979,20274
   - ki-effectful-0.1.1.0@sha256:15a4bc01c4195d9e3ed3d0ae25e419b0c035c897494dadefc2d676a43f1f5082,1815
+  - http2-tls-0.4.5@sha256:2084af1e64a4f4c2523cd0aa264fe1bebca8333e4dde0e25cf4820f27c012c97,2398
+  - snappy-c-0.1.1@sha256:b113aa1c7c095325cc218e8fcc4ad05e719f5ed0d2febb910d42e21387759ac9,3993
   - git: https://github.com/google/proto-lens
     commit: 815c852b046612256fc0f5f7e8585ec4e55dd9b7
     subdirs:
@@ -54,7 +56,11 @@ extra-deps:
     commit: a159d7a17913725a0cb2a2251fa0b812acd3d160
     subdirs:
       - .
-
+  - git: https://github.com/well-typed/grapesy.git
+    commit: 4d374aca55bb5392e3b91ae47d6ca5625ffc59b6
+    subdirs:
+      - grapesy
+      - grpc-spec
   - git: https://github.com/tonyalaribe/gogol.git
     commit: b54294c179f8ce8e76c9549c953e2ee684fcef8a
     subdirs:

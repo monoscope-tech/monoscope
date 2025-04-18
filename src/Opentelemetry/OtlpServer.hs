@@ -1,17 +1,3 @@
-{-# LANGUAGE BlockArguments #-}
-{-# LANGUAGE DataKinds #-}
-{-# LANGUAGE DeriveGeneric #-}
-{-# LANGUAGE DuplicateRecordFields #-}
-{-# LANGUAGE FlexibleContexts #-}
-{-# LANGUAGE LambdaCase #-}
-{-# LANGUAGE OverloadedLabels #-}
-{-# LANGUAGE OverloadedRecordDot #-}
-{-# LANGUAGE RankNTypes #-}
-{-# LANGUAGE TemplateHaskell #-}
-{-# LANGUAGE TypeApplications #-}
-{-# OPTIONS_GHC -Wno-dodgy-imports #-}
-{-# OPTIONS_GHC -Wno-name-shadowing #-}
-
 module Opentelemetry.OtlpServer (processList, runServer, otlpServer) where
 
 import Control.Exception.Annotated (checkpoint)
@@ -25,7 +11,7 @@ import Data.Effectful.UUID (UUIDEff)
 import Data.HashMap.Strict qualified as HashMap
 import Data.Map qualified as Map
 import Data.ProtoLens (defMessage)
-import Data.ProtoLens.Encoding (decodeMessage)
+import Data.ProtoLens.Encoding (decodeMessage, encodeMessage)
 import Data.Scientific (fromFloatDigits)
 import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
@@ -42,59 +28,61 @@ import Effectful.PostgreSQL.Transact.Effect (DB, dbtToEff)
 import Effectful.Reader.Static (ask)
 import Effectful.Reader.Static qualified as Eff
 import Effectful.Time (Time)
-
-import Lens.Micro ((^.), (^?))
+import Lens.Micro ((^?))
 import Log qualified
 import Models.Apis.Anomalies qualified as Anomalies
 import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Telemetry (Context (..), OtelLogsAndSpans (..), Severity (..), SpanKind (..), SpanStatus (..), convertSpanToRequestMessage)
 import Models.Telemetry.Telemetry qualified as Telemetry
+import Network.GRPC.Common
+import Network.GRPC.Common.Protobuf
+import Network.GRPC.Server (SomeRpcHandler)
+import Network.GRPC.Server.Protobuf
+import Network.GRPC.Server.Run hiding (runServer)
+import Network.GRPC.Server.StreamType
 import ProcessMessage qualified
-import Proto.Opentelemetry.Proto.Collector.Logs.V1.LogsService (ExportLogsServiceRequest)
-import Proto.Opentelemetry.Proto.Collector.Metrics.V1.MetricsService (ExportMetricsServiceRequest)
-import Proto.Opentelemetry.Proto.Collector.Trace.V1.TraceService (ExportTraceServiceRequest)
-import Proto.Opentelemetry.Proto.Common.V1.Common (AnyValue, InstrumentationScope, KeyValue)
-import Proto.Opentelemetry.Proto.Common.V1.Common_Fields
+import Proto.Opentelemetry.Proto.Collector.Logs.V1.LogsService qualified as LS
+import Proto.Opentelemetry.Proto.Collector.Metrics.V1.MetricsService qualified as MS
+import Proto.Opentelemetry.Proto.Collector.Trace.V1.TraceService qualified as TS
+import Proto.Opentelemetry.Proto.Collector.Trace.V1.TraceService_Fields qualified as TSF
+import Proto.Opentelemetry.Proto.Common.V1.Common qualified as PC
 import Proto.Opentelemetry.Proto.Common.V1.Common_Fields qualified as C
-import Proto.Opentelemetry.Proto.Logs.V1.Logs (LogRecord, ResourceLogs, SeverityNumber (..))
-import Proto.Opentelemetry.Proto.Logs.V1.Logs_Fields
+import Proto.Opentelemetry.Proto.Common.V1.Common_Fields qualified as CF
+import Proto.Opentelemetry.Proto.Logs.V1.Logs qualified as PL
 import Proto.Opentelemetry.Proto.Logs.V1.Logs_Fields qualified as L
-import Proto.Opentelemetry.Proto.Metrics.V1.Metrics
-import Proto.Opentelemetry.Proto.Metrics.V1.Metrics_Fields
+import Proto.Opentelemetry.Proto.Logs.V1.Logs_Fields qualified as LF
+import Proto.Opentelemetry.Proto.Metrics.V1.Metrics qualified as PM
 import Proto.Opentelemetry.Proto.Metrics.V1.Metrics_Fields qualified as M
-import Proto.Opentelemetry.Proto.Resource.V1.Resource (Resource)
-import Proto.Opentelemetry.Proto.Resource.V1.Resource_Fields
+import Proto.Opentelemetry.Proto.Metrics.V1.Metrics_Fields qualified as MF
+import Proto.Opentelemetry.Proto.Resource.V1.Resource qualified as PR
 import Proto.Opentelemetry.Proto.Resource.V1.Resource_Fields qualified as R
-import Proto.Opentelemetry.Proto.Trace.V1.Trace (ResourceSpans, Span, Span'SpanKind (..), Status, Status'StatusCode (..))
-import Proto.Opentelemetry.Proto.Trace.V1.Trace_Fields
+import Proto.Opentelemetry.Proto.Resource.V1.Resource_Fields qualified as RF
+import Proto.Opentelemetry.Proto.Trace.V1.Trace qualified as PT
 import Proto.Opentelemetry.Proto.Trace.V1.Trace_Fields qualified as T
+import Proto.Opentelemetry.Proto.Trace.V1.Trace_Fields qualified as TF
 import Relude hiding (ask)
 import RequestMessages (RequestMessage (..))
 import System.Config (AuthContext)
+import System.Types (runBackground)
 
--- GRPC imports
-import Grapesy qualified
-import Grapesy.Server qualified
-import Network.Socket (ServiceName)
-import Network.Socket qualified as Socket
-import Control.Monad.IO.Class (liftIO)
 
+-- import Network.GRPC.Server.Service (Service, service, method, fromServices)
 
 -- | Generic lens-based attribute extraction from spans
-getSpanAttributeValue :: Text -> V.Vector ResourceSpans -> V.Vector Text
+getSpanAttributeValue :: Text -> V.Vector PT.ResourceSpans -> V.Vector Text
 getSpanAttributeValue attribute rss = V.mapMaybe (\rs -> getResourceAttr rs <|> getSpanAttr rs) rss
   where
     getResourceAttr rs =
-      let resource = rs ^. T.resource
-       in getAttr (V.fromList $ resource ^. R.attributes)
+      let resourceVal = rs ^. T.resource
+       in getAttr (V.fromList $ resourceVal ^. R.attributes)
 
     getSpanAttr rs =
       let scopeSpans = V.fromList $ rs ^. T.scopeSpans
           allSpans = join $ V.map (\ss -> V.fromList $ ss ^. T.spans) scopeSpans
        in listToMaybe $ V.toList $ V.mapMaybe (\s -> getAttr (V.fromList $ s ^. T.attributes)) allSpans
 
-    getAttr :: V.Vector KeyValue -> Maybe Text
+    getAttr :: V.Vector PC.KeyValue -> Maybe Text
     getAttr kvs =
       let matchingKvs = V.filter (\kv -> kv ^. C.key == attribute) kvs
        in if V.null matchingKvs
@@ -107,7 +95,7 @@ getSpanAttributeValue attribute rss = V.mapMaybe (\rs -> getResourceAttr rs <|> 
 
 
 -- | Extract attribute values from resource logs
-getLogAttributeValue :: Text -> V.Vector ResourceLogs -> V.Vector Text
+getLogAttributeValue :: Text -> V.Vector PL.ResourceLogs -> V.Vector Text
 getLogAttributeValue attribute rls = V.mapMaybe (\rl -> getResourceAttr rl <|> getLogAttr rl) rls
   where
     getResourceAttr rl =
@@ -119,7 +107,7 @@ getLogAttributeValue attribute rls = V.mapMaybe (\rl -> getResourceAttr rl <|> g
           allLogs = join $ V.map (\sl -> V.fromList $ sl ^. L.logRecords) scopeLogs
        in listToMaybe $ V.toList $ V.mapMaybe (\lr -> getAttr (V.fromList $ lr ^. L.attributes)) allLogs
 
-    getAttr :: V.Vector KeyValue -> Maybe Text
+    getAttr :: V.Vector PC.KeyValue -> Maybe Text
     getAttr kvs =
       let matchingKvs = V.filter (\kv -> kv ^. C.key == attribute) kvs
        in if V.null matchingKvs
@@ -132,14 +120,14 @@ getLogAttributeValue attribute rls = V.mapMaybe (\rl -> getResourceAttr rl <|> g
 
 
 -- | Extract metric attribute values
-getMetricAttributeValue :: Text -> V.Vector ResourceMetrics -> Maybe Text
+getMetricAttributeValue :: Text -> V.Vector PM.ResourceMetrics -> Maybe Text
 getMetricAttributeValue attribute rms = join $ listToMaybe $ V.toList $ V.map getResourceAttr $ V.filter (\rm -> isJust $ getResourceAttr rm) rms
   where
     getResourceAttr rm =
       let resource = rm ^. M.resource
        in getAttr (V.fromList $ resource ^. R.attributes)
 
-    getAttr :: V.Vector KeyValue -> Maybe Text
+    getAttr :: V.Vector PC.KeyValue -> Maybe Text
     getAttr kvs =
       let matchingKvs = V.filter (\kv -> kv ^. C.key == attribute) kvs
        in if V.null matchingKvs
@@ -166,7 +154,7 @@ processList msgs attrs = checkpoint "processList" $ process `onException` handle
       case HashMap.lookup "ce-type" attrs of
         Just "org.opentelemetry.otlp.logs.v1" -> checkpoint "processList:logs" $ do
           results <- V.forM msgs' $ \(ackId, msg) ->
-            case (decodeMessage msg :: Either String ExportLogsServiceRequest) of
+            case (decodeMessage msg :: Either String LS.ExportLogsServiceRequest) of
               Left err -> do
                 Log.logAttention "processList:logs: unable to parse logs service request with err " (AE.object ["err" AE..= err, "decoded_msg" AE..= (decodeUtf8 @Text msg)])
                 pure (ackId, [])
@@ -187,7 +175,7 @@ processList msgs attrs = checkpoint "processList" $ process `onException` handle
           pure $ V.toList ackIds
         Just "org.opentelemetry.otlp.traces.v1" -> checkpoint "processList:traces" $ do
           results <- V.forM msgs' $ \(ackId, msg) ->
-            case (decodeMessage msg :: Either String ExportTraceServiceRequest) of
+            case (decodeMessage msg :: Either String TS.ExportTraceServiceRequest) of
               Left err -> do
                 Log.logAttention "processList:traces: unable to parse traces service request with err " (AE.object ["err" AE..= err, "decoded_msg" AE..= (decodeUtf8 @Text msg)])
                 pure (ackId, [])
@@ -227,7 +215,7 @@ processList msgs attrs = checkpoint "processList" $ process `onException` handle
           pure $ V.toList ackIds
         Just "org.opentelemetry.otlp.metrics.v1" -> checkpoint "processList:metrics" do
           results <- V.forM msgs' $ \(ackId, msg) ->
-            case (decodeMessage msg :: Either String ExportMetricsServiceRequest) of
+            case (decodeMessage msg :: Either String MS.ExportMetricsServiceRequest) of
               Left err -> do
                 Log.logAttention "processList:metrics: unable to parse metrics service request with err " (AE.object ["err" AE..= err, "decoded_msg" AE..= (decodeUtf8 @Text msg)])
                 pure (ackId, [])
@@ -268,14 +256,14 @@ byteStringToHexText bs = TE.decodeUtf8 (B16.encode bs)
 
 
 -- Convert a list of KeyValue to a JSON object
-keyValueToJSON :: V.Vector KeyValue -> AE.Value
+keyValueToJSON :: V.Vector PC.KeyValue -> AE.Value
 keyValueToJSON kvs =
   AE.object $
     V.foldr (\kv acc -> (AEK.fromText (kv ^. C.key), anyValueToJSON (kv ^? C.value)) : acc) [] kvs
 
 
 -- Convert AnyValue to JSON
-anyValueToJSON :: Maybe AnyValue -> AE.Value
+anyValueToJSON :: Maybe PC.AnyValue -> AE.Value
 anyValueToJSON Nothing = AE.Null
 anyValueToJSON (Just av) =
   case av ^? C.stringValue of
@@ -292,7 +280,7 @@ anyValueToJSON (Just av) =
 
 
 -- Convert Resource to JSON
-resourceToJSON :: Maybe Resource -> AE.Value
+resourceToJSON :: Maybe PR.Resource -> AE.Value
 resourceToJSON Nothing = AE.Null
 resourceToJSON (Just resource) = keyValueToJSON (V.fromList $ resource ^. R.attributes)
 
@@ -322,7 +310,7 @@ parseSeverityLevel input = case T.toUpper input of
 
 
 -- | Convert ResourceLogs to OtelLogsAndSpans
-convertResourceLogsToOtelLogs :: V.Vector (Text, Projects.ProjectId, Integer) -> ResourceLogs -> [OtelLogsAndSpans]
+convertResourceLogsToOtelLogs :: V.Vector (Text, Projects.ProjectId, Integer) -> PL.ResourceLogs -> [OtelLogsAndSpans]
 convertResourceLogsToOtelLogs pids resourceLogs =
   let projectKey = fromMaybe "" $ listToMaybe $ V.toList $ getLogAttributeValue "at-project-key" (V.singleton resourceLogs)
       projectId = case find (\(k, _, count) -> k == projectKey) pids of
@@ -337,7 +325,7 @@ convertResourceLogsToOtelLogs pids resourceLogs =
 
 
 -- | Convert ScopeLogs to OtelLogsAndSpans
-convertScopeLogsToOtelLogs :: Projects.ProjectId -> Maybe Resource -> ResourceLogs -> [OtelLogsAndSpans]
+convertScopeLogsToOtelLogs :: Projects.ProjectId -> Maybe PR.Resource -> PL.ResourceLogs -> [OtelLogsAndSpans]
 convertScopeLogsToOtelLogs pid resourceM resourceLogs =
   join $
     V.toList $
@@ -351,7 +339,7 @@ convertScopeLogsToOtelLogs pid resourceM resourceLogs =
 
 
 -- | Convert LogRecord to OtelLogsAndSpans
-convertLogRecordToOtelLog :: Projects.ProjectId -> Maybe Resource -> Maybe InstrumentationScope -> LogRecord -> OtelLogsAndSpans
+convertLogRecordToOtelLog :: Projects.ProjectId -> Maybe PR.Resource -> Maybe PC.InstrumentationScope -> PL.LogRecord -> OtelLogsAndSpans
 convertLogRecordToOtelLog pid resourceM scopeM logRecord =
   let timeNano = logRecord ^. L.timeUnixNano
       observedTimeNano = logRecord ^. L.observedTimeUnixNano
@@ -397,7 +385,7 @@ convertLogRecordToOtelLog pid resourceM scopeM logRecord =
 
 
 -- | Convert ResourceSpans to OtelLogsAndSpans
-convertResourceSpansToOtelLogs :: V.Vector (Text, Projects.ProjectId, Integer) -> V.Vector ResourceSpans -> [OtelLogsAndSpans]
+convertResourceSpansToOtelLogs :: V.Vector (Text, Projects.ProjectId, Integer) -> V.Vector PT.ResourceSpans -> [OtelLogsAndSpans]
 convertResourceSpansToOtelLogs pids resourceSpans =
   join $
     V.toList $
@@ -418,7 +406,7 @@ convertResourceSpansToOtelLogs pids resourceSpans =
 
 
 -- | Convert ScopeSpans to OtelLogsAndSpans
-convertScopeSpansToOtelLogs :: Projects.ProjectId -> Maybe Resource -> ResourceSpans -> [OtelLogsAndSpans]
+convertScopeSpansToOtelLogs :: Projects.ProjectId -> Maybe PR.Resource -> PT.ResourceSpans -> [OtelLogsAndSpans]
 convertScopeSpansToOtelLogs pid resourceM resourceSpans =
   join $
     V.toList $
@@ -432,37 +420,37 @@ convertScopeSpansToOtelLogs pid resourceM resourceSpans =
 
 
 -- | Convert Span to OtelLogsAndSpans
-convertSpanToOtelLog :: Projects.ProjectId -> Maybe Resource -> Maybe InstrumentationScope -> Span -> OtelLogsAndSpans
-convertSpanToOtelLog pid resourceM scopeM span =
-  let startTimeNano = span ^. T.startTimeUnixNano
-      endTimeNano = span ^. T.endTimeUnixNano
+convertSpanToOtelLog :: Projects.ProjectId -> Maybe PR.Resource -> Maybe PC.InstrumentationScope -> PT.Span -> OtelLogsAndSpans
+convertSpanToOtelLog pid resourceM scopeM pSpan =
+  let startTimeNano = pSpan ^. T.startTimeUnixNano
+      endTimeNano = pSpan ^. T.endTimeUnixNano
       durationNanos = endTimeNano - startTimeNano
-      spanKind = span ^. T.kind
+      spanKind = pSpan ^. T.kind
       spanKindText = case spanKind of
-        Span'SPAN_KIND_INTERNAL -> Just "internal"
-        Span'SPAN_KIND_SERVER -> Just "server"
-        Span'SPAN_KIND_CLIENT -> Just "client"
-        Span'SPAN_KIND_PRODUCER -> Just "producer"
-        Span'SPAN_KIND_CONSUMER -> Just "consumer"
+        PT.Span'SPAN_KIND_INTERNAL -> Just "internal"
+        PT.Span'SPAN_KIND_SERVER -> Just "server"
+        PT.Span'SPAN_KIND_CLIENT -> Just "client"
+        PT.Span'SPAN_KIND_PRODUCER -> Just "producer"
+        PT.Span'SPAN_KIND_CONSUMER -> Just "consumer"
         _ -> Just "unspecified"
-      statusM = Just $ span ^. T.status
+      statusM = Just $ pSpan ^. T.status
       statusCodeText = case statusM of
         Just status -> case status ^. T.code of
-          Status'STATUS_CODE_OK -> Just "OK"
-          Status'STATUS_CODE_ERROR -> Just "ERROR"
+          PT.Status'STATUS_CODE_OK -> Just "OK"
+          PT.Status'STATUS_CODE_ERROR -> Just "ERROR"
           _ -> Just "UNSET"
         Nothing -> Nothing
       statusMsgText = case statusM of
         Just status -> Just $ status ^. T.message
         Nothing -> Nothing
-      parentSpanId = span ^. T.parentSpanId
+      parentSpanId = pSpan ^. T.parentSpanId
       parentId =
         if BS.null parentSpanId
           then Nothing
           else Just $ byteStringToHexText parentSpanId
 
       -- Convert events
-      events = V.fromList $ span ^. T.events
+      events = V.fromList $ pSpan ^. T.events
       eventsJson =
         if V.null events
           then Nothing
@@ -481,7 +469,7 @@ convertSpanToOtelLog pid resourceM scopeM span =
                   events
 
       -- Convert links
-      links = V.fromList $ span ^. T.links
+      links = V.fromList $ pSpan ^. T.links
       linksJson =
         if V.null links
           then Nothing
@@ -509,16 +497,16 @@ convertSpanToOtelLog pid resourceM scopeM span =
         , context =
             Just $
               Context
-                { trace_id = Just $ byteStringToHexText $ span ^. T.traceId
-                , span_id = Just $ byteStringToHexText $ span ^. T.spanId
-                , trace_state = Just $ span ^. T.traceState
+                { trace_id = Just $ byteStringToHexText $ pSpan ^. T.traceId
+                , span_id = Just $ byteStringToHexText $ pSpan ^. T.spanId
+                , trace_state = Just $ pSpan ^. T.traceState
                 , trace_flags = Nothing
                 , is_remote = Nothing
                 }
         , level = Nothing
         , severity = Nothing
         , body = Nothing
-        , attributes = jsonToMap $ keyValueToJSON $ V.fromList $ span ^. T.attributes
+        , attributes = jsonToMap $ keyValueToJSON $ V.fromList $ pSpan ^. T.attributes
         , resource = jsonToMap $ resourceToJSON resourceM
         , hashes = V.empty
         , kind = spanKindText
@@ -529,20 +517,20 @@ convertSpanToOtelLog pid resourceM scopeM span =
         , end_time = Just $ nanosecondsToUTC endTimeNano
         , events = eventsJson
         , links = linksJson
-        , name = Just $ span ^. T.name
+        , name = Just $ pSpan ^. T.name
         , parent_id = parentId
         , date = nanosecondsToUTC startTimeNano
         }
 
 
 -- | Convert ResourceMetrics to MetricRecords
-convertResourceMetricsToMetricRecords :: Projects.ProjectId -> V.Vector ResourceMetrics -> [Telemetry.MetricRecord]
+convertResourceMetricsToMetricRecords :: Projects.ProjectId -> V.Vector PM.ResourceMetrics -> [Telemetry.MetricRecord]
 convertResourceMetricsToMetricRecords pid resourceMetrics =
   join $ V.toList $ V.map (convertResourceMetricToMetricRecords pid) resourceMetrics
 
 
 -- | Convert a single ResourceMetrics to MetricRecords
-convertResourceMetricToMetricRecords :: Projects.ProjectId -> ResourceMetrics -> [Telemetry.MetricRecord]
+convertResourceMetricToMetricRecords :: Projects.ProjectId -> PM.ResourceMetrics -> [Telemetry.MetricRecord]
 convertResourceMetricToMetricRecords pid resourceMetric =
   let resourceM = Just $ resourceMetric ^. M.resource
       scopeMetrics = V.fromList $ resourceMetric ^. M.scopeMetrics
@@ -558,14 +546,14 @@ convertResourceMetricToMetricRecords pid resourceMetric =
 
 
 -- | Convert a single Metric to MetricRecords
-convertMetricToMetricRecords :: Projects.ProjectId -> Maybe Resource -> Maybe InstrumentationScope -> Metric -> [Telemetry.MetricRecord]
+convertMetricToMetricRecords :: Projects.ProjectId -> Maybe PR.Resource -> Maybe PC.InstrumentationScope -> PM.Metric -> [Telemetry.MetricRecord]
 convertMetricToMetricRecords pid resourceM scopeM metric =
   -- For brevity, implementing only gauge metrics as an example
   -- In a complete implementation, you would handle all metric types
   case metric ^. M.maybe'data' of
     Just metricData ->
       case metricData of
-        Metric'Gauge gauge ->
+        PM.Metric'Gauge gauge ->
           let gaugePoints = V.fromList $ gauge ^. M.dataPoints
            in V.toList $
                 V.map
@@ -609,3 +597,173 @@ convertMetricToMetricRecords pid resourceM scopeM metric =
         -- Add other metric types (Sum, Histogram, etc.) following a similar pattern
         _ -> [] -- Not implemented for brevity
     Nothing -> []
+
+
+---------------------------------------------------------------------------------------
+-- Server
+---------------------------------------------------------------------------------------
+
+-- | Data type to hold server options
+data ServiceOptions = ServiceOptions
+  { serverHost :: Text
+  , serverPort :: Int
+  , useCompression :: Bool
+  , userAgentPrefix :: Maybe Text
+  , userAgentSuffix :: Maybe Text
+  , initialMetadata :: [(Text, Text)]
+  , sslConfig :: Maybe Text -- Simplified SSL config for now
+  , logger :: Maybe (Text -> IO ())
+  , serverMaxReceiveMessageLength :: Maybe Int
+  , serverMaxMetadataSize :: Maybe Int
+  }
+
+
+-- | Default service options
+defaultServiceOptions :: ServiceOptions
+defaultServiceOptions =
+  ServiceOptions
+    { serverHost = "localhost"
+    , serverPort = 4317
+    , useCompression = False
+    , userAgentPrefix = Nothing
+    , userAgentSuffix = Nothing
+    , initialMetadata = []
+    , sslConfig = Nothing
+    , logger = Nothing
+    , serverMaxReceiveMessageLength = Nothing
+    , serverMaxMetadataSize = Nothing
+    }
+
+
+-- | Run the OpenTelemetry GRPC server
+runServer :: Log.Logger -> AuthContext -> IO ()
+runServer appLogger appCtx = do
+  let opts =
+        defaultServiceOptions
+          { serverHost = "localhost"
+          , serverPort = 4317
+          }
+  otlpServer opts appLogger appCtx
+
+
+-- | Trace service handler (Export)
+traceServiceExport :: Log.Logger -> AuthContext -> Proto TS.ExportTraceServiceRequest -> IO (Proto TS.ExportTraceServiceResponse)
+traceServiceExport appLogger appCtx (Proto req) = do
+  _ <- runBackground appLogger appCtx do
+    Log.logInfo "Received trace export request" AE.Null
+
+    let resourceSpans = V.fromList $ req ^. TSF.resourceSpans
+        projectKeys = getSpanAttributeValue "at-project-key" resourceSpans
+
+    projectIdsAndKeys <- dbtToEff $ ProjectApiKeys.projectIdsByProjectApiKeys projectKeys
+
+    let spans = convertResourceSpansToOtelLogs projectIdsAndKeys resourceSpans
+        spans' = V.fromList spans
+        apitoolkitSpans =
+          V.mapMaybe
+            ( \s ->
+                if s.name == Just "apitoolkit-http-span"
+                  then convertSpanToRequestMessage s "apitoolkit-http-span"
+                  else Nothing
+            )
+            spans'
+
+    unless (V.null apitoolkitSpans) $ do
+      void $ ProcessMessage.processRequestMessages $ V.toList apitoolkitSpans <&> ("",)
+
+    unless (null spans) do
+      Telemetry.bulkInsertOtelLogsAndSpansTF spans'
+      Anomalies.bulkInsertErrors $ Telemetry.getAllATErrors spans'
+
+  -- Return an empty response
+  pure $ defMessage
+
+
+-- | Logs service handler (Export)
+logsServiceExport :: Log.Logger -> AuthContext -> Proto LS.ExportLogsServiceRequest -> IO (Proto LS.ExportLogsServiceResponse)
+logsServiceExport appLogger appCtx (Proto req) = do
+  _ <- runBackground appLogger appCtx do
+    Log.logInfo "Received logs export request" AE.Null
+
+    let resourceLogs = V.fromList $ req ^. L.resourceLogs
+        projectKeys = getLogAttributeValue "at-project-key" resourceLogs
+
+    projectIdsAndKeys <- dbtToEff $ ProjectApiKeys.projectIdsByProjectApiKeys projectKeys
+
+    let logs = join $ V.toList $ V.map (convertResourceLogsToOtelLogs projectIdsAndKeys) resourceLogs
+
+    unless (null logs) do
+      Telemetry.bulkInsertOtelLogsAndSpansTF (V.fromList logs)
+
+  -- Return an empty response
+  pure $ defMessage
+
+
+-- | Metrics service handler (Export)
+metricsServiceExport :: Log.Logger -> AuthContext -> Proto MS.ExportMetricsServiceRequest -> IO (Proto MS.ExportMetricsServiceResponse)
+metricsServiceExport appLogger appCtx (Proto req) = do
+  _ <- runBackground appLogger appCtx do
+    Log.logInfo "Received metrics export request" AE.Null
+
+    let resourceMetrics = V.fromList $ req ^. M.resourceMetrics
+        projectKey = getMetricAttributeValue "at-project-key" resourceMetrics
+
+    pidM <- do
+      p1 <- join <$> (forM projectKey $ \key -> ProjectApiKeys.getProjectIdByApiKey key)
+      let p2 = Projects.projectIdFromText =<< getMetricAttributeValue "at-project-id" resourceMetrics
+      pure (p1 <|> p2)
+
+    case pidM of
+      Just pid -> do
+        let metricRecords = convertResourceMetricsToMetricRecords pid resourceMetrics
+
+        unless (null metricRecords) $
+          Telemetry.bulkInsertMetrics (V.fromList metricRecords)
+      Nothing -> Log.logAttention_ "Project API Key and project ID not available in metrics"
+
+  -- Return an empty response
+  pure $ defMessage
+
+
+-- | Create the OpenTelemetry GRPC server
+otlpServer :: ServiceOptions -> Log.Logger -> AuthContext -> IO ()
+otlpServer opts appLogger appCtx = do
+  runServerWithHandlers def config $ (services appLogger appCtx)
+  where
+    config :: ServerConfig
+    config =
+      ServerConfig
+        { serverInsecure = Just (InsecureConfig (Just $ toString opts.serverHost) (fromIntegral opts.serverPort))
+        , serverSecure = Nothing
+        }
+
+
+services :: Log.Logger -> AuthContext -> [SomeRpcHandler IO]
+services appLogger appCtx =
+  ( fromMethods $
+      simpleMethods
+        (mkNonStreaming $ traceServiceExport appLogger appCtx :: ServerHandler IO (Protobuf TS.TraceService "export"))
+  )
+    <> ( fromMethods $
+          simpleMethods
+            (mkNonStreaming $ logsServiceExport appLogger appCtx :: ServerHandler IO (Protobuf LS.LogsService "export"))
+       )
+    <> ( fromMethods $
+          simpleMethods
+            (mkNonStreaming $ metricsServiceExport appLogger appCtx :: ServerHandler IO (Protobuf MS.MetricsService "export"))
+       )
+
+
+type instance RequestMetadata (Protobuf TS.TraceService "export") = NoMetadata
+type instance ResponseInitialMetadata (Protobuf TS.TraceService "export") = NoMetadata
+type instance ResponseTrailingMetadata (Protobuf TS.TraceService "export") = NoMetadata
+
+
+type instance RequestMetadata (Protobuf LS.LogsService "export") = NoMetadata
+type instance ResponseInitialMetadata (Protobuf LS.LogsService "export") = NoMetadata
+type instance ResponseTrailingMetadata (Protobuf LS.LogsService "export") = NoMetadata
+
+
+type instance RequestMetadata (Protobuf MS.MetricsService "export") = NoMetadata
+type instance ResponseInitialMetadata (Protobuf MS.MetricsService "export") = NoMetadata
+type instance ResponseTrailingMetadata (Protobuf MS.MetricsService "export") = NoMetadata

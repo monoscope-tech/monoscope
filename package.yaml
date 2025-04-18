@@ -232,9 +232,6 @@ library:
     - filepath
     - http-client
     - wai-middleware-static
-    # - grpc-haskell
-    # - proto3-suite
-    # - proto3-wire
     - template-haskell
     - cryptohash-md5
     - hiedb-plugin

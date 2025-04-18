@@ -166,6 +166,20 @@ packages:
   original:
     hackage: ki-effectful-0.1.1.0@sha256:15a4bc01c4195d9e3ed3d0ae25e419b0c035c897494dadefc2d676a43f1f5082,1815
 - completed:
+    hackage: http2-tls-0.4.5@sha256:2084af1e64a4f4c2523cd0aa264fe1bebca8333e4dde0e25cf4820f27c012c97,2398
+    pantry-tree:
+      sha256: d7691292b9cba368b50ee0bb5da86feb002dc93ccb61cf5de8e3e7d7de91f170
+      size: 894
+  original:
+    hackage: http2-tls-0.4.5@sha256:2084af1e64a4f4c2523cd0aa264fe1bebca8333e4dde0e25cf4820f27c012c97,2398
+- completed:
+    hackage: snappy-c-0.1.1@sha256:b113aa1c7c095325cc218e8fcc4ad05e719f5ed0d2febb910d42e21387759ac9,3993
+    pantry-tree:
+      sha256: 04170f8ee10717615b1f077e2bd96f8ac71dd6072fc73ffac5f12ed4d9a22bd9
+      size: 1109
+  original:
+    hackage: snappy-c-0.1.1@sha256:b113aa1c7c095325cc218e8fcc4ad05e719f5ed0d2febb910d42e21387759ac9,3993
+- completed:
     commit: 815c852b046612256fc0f5f7e8585ec4e55dd9b7
     git: https://github.com/google/proto-lens
     name: proto-lens-setup
@@ -256,6 +270,32 @@ packages:
     commit: a159d7a17913725a0cb2a2251fa0b812acd3d160
     git: https://github.com/saurabhnanda/odd-jobs.git
     subdir: .
+- completed:
+    commit: 4d374aca55bb5392e3b91ae47d6ca5625ffc59b6
+    git: https://github.com/well-typed/grapesy.git
+    name: grapesy
+    pantry-tree:
+      sha256: 894961c5048ba0bf60ecb2c865456d3cd90c86c84ba15bce5f40581b0d3af041
+      size: 12118
+    subdir: grapesy
+    version: 1.0.1
+  original:
+    commit: 4d374aca55bb5392e3b91ae47d6ca5625ffc59b6
+    git: https://github.com/well-typed/grapesy.git
+    subdir: grapesy
+- completed:
+    commit: 4d374aca55bb5392e3b91ae47d6ca5625ffc59b6
+    git: https://github.com/well-typed/grapesy.git
+    name: grpc-spec
+    pantry-tree:
+      sha256: 66b9f22f2a73ae1cd5b7ab713122f1e3d5a7e49cf56a9c153247ab6306adaf15
+      size: 4019
+    subdir: grpc-spec
+    version: 1.0.0
+  original:
+    commit: 4d374aca55bb5392e3b91ae47d6ca5625ffc59b6
+    git: https://github.com/well-typed/grapesy.git
+    subdir: grpc-spec
 - completed:
     commit: b54294c179f8ce8e76c9549c953e2ee684fcef8a
     git: https://github.com/tonyalaribe/gogol.git
