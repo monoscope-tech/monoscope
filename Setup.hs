@@ -1,4 +1,6 @@
+import Data.ProtoLens.Setup
 import Distribution.Simple
 
 
-main = defaultMain
+main :: IO ()
+main = defaultMainGeneratingProtos "proto"

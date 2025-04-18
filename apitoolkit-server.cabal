@@ -14,13 +14,29 @@ maintainer:     example@example.com
 copyright:      2021 Author name here
 license:        BSD3
 license-file:   LICENSE
-build-type:     Simple
+build-type:     Custom
 extra-source-files:
+    proto/opentelemetry/proto/collector/logs/v1/logs_service.proto
+    proto/opentelemetry/proto/collector/metrics/v1/metrics_service.proto
+    proto/opentelemetry/proto/collector/profiles/v1development/profiles_service.proto
+    proto/opentelemetry/proto/collector/trace/v1/trace_service.proto
+    proto/opentelemetry/proto/common/v1/common.proto
+    proto/opentelemetry/proto/logs/v1/logs.proto
+    proto/opentelemetry/proto/metrics/v1/metrics.proto
+    proto/opentelemetry/proto/profiles/v1development/profiles.proto
+    proto/opentelemetry/proto/resource/v1/resource.proto
+    proto/opentelemetry/proto/trace/v1/trace.proto
     README.md
 
 source-repository head
   type: git
   location: https://github.com/githubuser/apitoolkit-server
+
+custom-setup
+  setup-depends:
+      Cabal
+    , base
+    , proto-lens-setup
 
 library
   exposed-modules:
@@ -158,6 +174,47 @@ library
       Web.ClientMetadataSpec
       Web.Error
       Web.Routes
+      Proto.Opentelemetry.Proto.Common.V1.Common
+      Proto.Opentelemetry.Proto.Common.V1.Common_Fields
+      Proto.Opentelemetry.Proto.Resource.V1.Resource
+      Proto.Opentelemetry.Proto.Resource.V1.Resource_Fields
+      Proto.Opentelemetry.Proto.Trace.V1.Trace
+      Proto.Opentelemetry.Proto.Trace.V1.Trace_Fields
+      Proto.Opentelemetry.Proto.Collector.Trace.V1.TraceService
+      Proto.Opentelemetry.Proto.Collector.Trace.V1.TraceService_Fields
+      Proto.Opentelemetry.Proto.Logs.V1.Logs
+      Proto.Opentelemetry.Proto.Logs.V1.Logs_Fields
+      Proto.Opentelemetry.Proto.Collector.Logs.V1.LogsService
+      Proto.Opentelemetry.Proto.Collector.Logs.V1.LogsService_Fields
+      Proto.Opentelemetry.Proto.Metrics.V1.Metrics
+      Proto.Opentelemetry.Proto.Metrics.V1.Metrics_Fields
+      Proto.Opentelemetry.Proto.Collector.Metrics.V1.MetricsService
+      Proto.Opentelemetry.Proto.Collector.Metrics.V1.MetricsService_Fields
+      Proto.Opentelemetry.Proto.Profiles.V1development.Profiles
+      Proto.Opentelemetry.Proto.Profiles.V1development.Profiles_Fields
+      Proto.Opentelemetry.Proto.Collector.Profiles.V1development.ProfilesService
+      Proto.Opentelemetry.Proto.Collector.Profiles.V1development.ProfilesService_Fields
+  autogen-modules:
+      Proto.Opentelemetry.Proto.Common.V1.Common
+      Proto.Opentelemetry.Proto.Common.V1.Common_Fields
+      Proto.Opentelemetry.Proto.Resource.V1.Resource
+      Proto.Opentelemetry.Proto.Resource.V1.Resource_Fields
+      Proto.Opentelemetry.Proto.Trace.V1.Trace
+      Proto.Opentelemetry.Proto.Trace.V1.Trace_Fields
+      Proto.Opentelemetry.Proto.Collector.Trace.V1.TraceService
+      Proto.Opentelemetry.Proto.Collector.Trace.V1.TraceService_Fields
+      Proto.Opentelemetry.Proto.Logs.V1.Logs
+      Proto.Opentelemetry.Proto.Logs.V1.Logs_Fields
+      Proto.Opentelemetry.Proto.Collector.Logs.V1.LogsService
+      Proto.Opentelemetry.Proto.Collector.Logs.V1.LogsService_Fields
+      Proto.Opentelemetry.Proto.Metrics.V1.Metrics
+      Proto.Opentelemetry.Proto.Metrics.V1.Metrics_Fields
+      Proto.Opentelemetry.Proto.Collector.Metrics.V1.MetricsService
+      Proto.Opentelemetry.Proto.Collector.Metrics.V1.MetricsService_Fields
+      Proto.Opentelemetry.Proto.Profiles.V1development.Profiles
+      Proto.Opentelemetry.Proto.Profiles.V1development.Profiles_Fields
+      Proto.Opentelemetry.Proto.Collector.Profiles.V1development.ProfilesService
+      Proto.Opentelemetry.Proto.Collector.Profiles.V1development.ProfilesService_Fields
   hs-source-dirs:
       src
   default-extensions:
@@ -187,6 +244,8 @@ library
       TupleSections
       ViewPatterns
   ghc-options: -fwrite-ide-info -hiedir .hiefiles -threaded -Weverything -Werror -fno-defer-typed-holes -Wno-error=deprecations -Wno-error=unused-packages -Wno-error=implicit-lift -Wno-error=missing-poly-kind-signatures -Wno-missing-exported-signatures -Wno-missing-import-lists -Wno-missed-specialisations -Wno-all-missed-specialisations -Wno-unsafe -Wno-safe -Wno-missing-local-signatures -Wno-monomorphism-restriction -Wno-missing-safe-haskell-mode -Wno-partial-fields -Wno-prepositive-qualified-module -Wno-missing-export-lists -Wno-orphans -Wno-missing-deriving-strategies -Wno-missing-role-annotations -Wno-unused-matches -Wno-missing-kind-signatures -Wno-type-defaults -Wno-unused-top-binds -Wno-unused-imports -Wno-error=incomplete-record-selectors
+  build-tool-depends:
+      proto-lens-protoc:proto-lens-protoc
   build-depends:
       PyF
     , Unique
@@ -224,7 +283,7 @@ library
     , gogol
     , gogol-core
     , gogol-pubsub
-    , grpc-haskell
+    , grapesy
     , hashtables
     , hiedb-plugin
     , hspec
@@ -252,7 +311,6 @@ library
     , network-uri
     , nyan-interpolation
     , odd-jobs
-    , otlp
     , parser-combinators
     , pg-entity
     , pg-transact
@@ -262,8 +320,8 @@ library
     , postgresql-simple
     , pretty-relative-time
     , pretty-simple
-    , proto3-suite
-    , proto3-wire
+    , proto-lens
+    , proto-lens-runtime
     , regex-tdfa
     , relude >=1.2.0.0
     , resource-pool
@@ -332,6 +390,8 @@ executable apitoolkit-server-exe
       TupleSections
       ViewPatterns
   ghc-options: -fwrite-ide-info -hiedir .hiefiles -threaded -Weverything -Werror -fno-defer-typed-holes -Wno-error=deprecations -Wno-error=unused-packages -Wno-error=implicit-lift -Wno-error=missing-poly-kind-signatures -Wno-missing-exported-signatures -Wno-missing-import-lists -Wno-missed-specialisations -Wno-all-missed-specialisations -Wno-unsafe -Wno-safe -Wno-missing-local-signatures -Wno-monomorphism-restriction -Wno-missing-safe-haskell-mode -Wno-partial-fields -Wno-prepositive-qualified-module -Wno-missing-export-lists -Wno-orphans -Wno-missing-deriving-strategies -Wno-missing-role-annotations -Wno-unused-matches -Wno-missing-kind-signatures -Wno-type-defaults -Wno-unused-top-binds -Wno-unused-imports -Wno-error=incomplete-record-selectors -threaded -rtsopts -with-rtsopts=-N -j4 +RTS -N -A128m -n2m -RTS
+  build-tool-depends:
+      proto-lens-protoc:proto-lens-protoc
   build-depends:
       apitoolkit-server
     , hiedb-plugin
@@ -374,6 +434,8 @@ test-suite doctests
       TupleSections
       ViewPatterns
   ghc-options: -fwrite-ide-info -hiedir .hiefiles -threaded -Weverything -Werror -fno-defer-typed-holes -Wno-error=deprecations -Wno-error=unused-packages -Wno-error=implicit-lift -Wno-error=missing-poly-kind-signatures -Wno-missing-exported-signatures -Wno-missing-import-lists -Wno-missed-specialisations -Wno-all-missed-specialisations -Wno-unsafe -Wno-safe -Wno-missing-local-signatures -Wno-monomorphism-restriction -Wno-missing-safe-haskell-mode -Wno-partial-fields -Wno-prepositive-qualified-module -Wno-missing-export-lists -Wno-orphans -Wno-missing-deriving-strategies -Wno-missing-role-annotations -Wno-unused-matches -Wno-missing-kind-signatures -Wno-type-defaults -Wno-unused-top-binds -Wno-unused-imports -Wno-error=incomplete-record-selectors -threaded -rtsopts -with-rtsopts=-N
+  build-tool-depends:
+      proto-lens-protoc:proto-lens-protoc
   build-depends:
       apitoolkit-server
     , base
@@ -415,6 +477,8 @@ test-suite tests
       TupleSections
       ViewPatterns
   ghc-options: -fwrite-ide-info -hiedir .hiefiles -threaded -Weverything -Werror -fno-defer-typed-holes -Wno-error=deprecations -Wno-error=unused-packages -Wno-error=implicit-lift -Wno-error=missing-poly-kind-signatures -Wno-missing-exported-signatures -Wno-missing-import-lists -Wno-missed-specialisations -Wno-all-missed-specialisations -Wno-unsafe -Wno-safe -Wno-missing-local-signatures -Wno-monomorphism-restriction -Wno-missing-safe-haskell-mode -Wno-partial-fields -Wno-prepositive-qualified-module -Wno-missing-export-lists -Wno-orphans -Wno-missing-deriving-strategies -Wno-missing-role-annotations -Wno-unused-matches -Wno-missing-kind-signatures -Wno-type-defaults -Wno-unused-top-binds -Wno-unused-imports -Wno-error=incomplete-record-selectors
+  build-tool-depends:
+      proto-lens-protoc:proto-lens-protoc
   build-depends:
       apitoolkit-server
     , base

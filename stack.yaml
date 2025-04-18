@@ -10,7 +10,6 @@ ghc-options:
 
 extra-deps:
   - ./rust-interop
-  - ./otlp
   - pg-entity-0.0.4.4@sha256:33c2b9b7890ac89a3bdaec4765fa5740cc882fe464f4b94cfa41c16b5cb95cb5,4577
   - Unique-0.4.7.9@sha256:7c37e22b7bb9df935c22112e67043177461aedcebe3a958854f6c0e9ecb54083,2155
   - dotenv-0.12.0.0@sha256:2f25615cec37ff9a66a48ef0ebf2ac96ae989911d0c26c6796fc2f5247bdd665,4702
@@ -23,8 +22,7 @@ extra-deps:
   - lucid-svg-0.7.2.0@sha256:ac145997d5d6976d5c77e09992b5b204d7ddb7edba3002801927ed2acc69692b,1091
   - monad-time-effectful-1.0.0.0@sha256:4994617545bb4b25ba01eaf2bdb1c2c74f7cefab36945af8eb92dca9842fc4b6,1528
   - nyan-interpolation-0.9.2@sha256:fb0b07ef6a9f8ca4d2e1db2f2df841c649556d9f6cff894ebf6b9ffbb7c25003,4276
-  - proto-lens-0.7.1.5@sha256:38f7f70fb01f6c79c35d76ef0f60bf1297b132d4a71973c6bafb48fcb1b3c0d4,2980
-  - proto-lens-runtime-0.7.0.6@sha256:b12a2731424121ea337c5705088dd4c83db461c280c962749298503f2643ca24,3057
+  # Dependencies are now directly taken from git repo below
   - servant-htmx-0.1.0.2@sha256:cdafd3165d28694ec4bf81fff3b87b4721415293d75a394a97c26d0d4d57e38c,1817
   - slugify-0.1.0.2@sha256:b16f953401390212faf0450f6044f9c9a44ee07370995ab01dc46d3394e14c7a,1396
   - strict-containers-0.2.1@sha256:ea58d1f30c9867a4c4241864881e0d2576ad72fb6333c49d88c5e42c8f7a04b1,9408
@@ -35,9 +33,21 @@ extra-deps:
   - hie-compat-0.3.1.2@sha256:74a8585a90e3c06667134939cd170cff24067d5a988e14829785af0dfa6bd10f,1535
   - nyan-interpolation-core-0.9.2@sha256:930202fafc4e9472f9aed3d216a459e23454db500bfd0e0a5af2a4e5c5202096,4523
   - wai-log-0.4.0.1@sha256:0b4b57ae218cf5ec59523c8cf405802a588d4e299436b5a663a6001ea34bb7e6,1583
+  # Dependencies are now directly taken from git repo below
   # - streamly-0.10.1@sha256:eec2e8e14ac64b9e389600b964541c5e9e0a3d3e657dc54412691df47300a1fd,20899
   # - streamly-core-0.2.2@sha256:7245ac46f380af62ce16adb70d26d2710d615f393867cfa8789c29b32d2ff979,20274
   - ki-effectful-0.1.1.0@sha256:15a4bc01c4195d9e3ed3d0ae25e419b0c035c897494dadefc2d676a43f1f5082,1815
+  - http2-tls-0.4.5@sha256:2084af1e64a4f4c2523cd0aa264fe1bebca8333e4dde0e25cf4820f27c012c97,2398
+  - snappy-c-0.1.1@sha256:b113aa1c7c095325cc218e8fcc4ad05e719f5ed0d2febb910d42e21387759ac9,3993
+  - git: https://github.com/google/proto-lens
+    commit: 815c852b046612256fc0f5f7e8585ec4e55dd9b7
+    subdirs:
+      - proto-lens-setup
+      - proto-lens-protoc
+      - proto-lens-runtime
+      - proto-lens
+      - proto-lens-protobuf-types
+      # - .
   - git: https://github.com/Kleidukos/pg-transact-effectful
     commit: bcd3aeb5ca63a02ba026be4f02f4ce5767fb4f78
     subdirs:
@@ -46,7 +56,11 @@ extra-deps:
     commit: a159d7a17913725a0cb2a2251fa0b812acd3d160
     subdirs:
       - .
-
+  - git: https://github.com/well-typed/grapesy.git
+    commit: 4d374aca55bb5392e3b91ae47d6ca5625ffc59b6
+    subdirs:
+      - grapesy
+      - grpc-spec
   - git: https://github.com/tonyalaribe/gogol.git
     commit: b54294c179f8ce8e76c9549c953e2ee684fcef8a
     subdirs:
@@ -55,23 +69,10 @@ extra-deps:
       - lib/services/gogol-pubsub
       - lib/services/gogol-logging
       - lib/services/gogol-cloudtrace
-  - git: https://github.com/awakesecurity/proto3-wire.git
-    commit: 2d48ee3446858f08a8c75130c90d770c377569bd
-    subdirs:
-      - .
   - github: tonyalaribe/proto3-suite
     # branch: aeson-error-fix
     commit: ecf8330af92941d5a0a0676a719b666ca3970ac4
 
-  # - github: awakesecurity/proto3-suite
-  #   # branch: aeson-error-fix
-  #   commit: 54e9d54c44e092710705358fd58e1954f9c7d20e
-
-  - git: https://github.com/awakesecurity/gRPC-haskell.git
-    commit: 4b3b04d0ac9d1db53033fb4f0b6864f25b6e945d
-    subdirs:
-      - core
-      - .
   - git: https://github.com/tonyalaribe/xxhash
     commit: 0fa01adb871e66996d4ed2c27a3e97fac39ac466
     subdirs:
