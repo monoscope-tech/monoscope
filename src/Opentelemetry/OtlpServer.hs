@@ -162,16 +162,16 @@ processList msgs attrs = checkpoint "processList" $ process `onException` handle
                 let resourceLogs = V.fromList $ logReq ^. L.resourceLogs
                     projectKeys = getLogAttributeValue "at-project-key" resourceLogs
                 projectIdsAndKeys <-
-                  checkpoint "processList:logs:getProjectIds" $
-                    dbtToEff $
-                      ProjectApiKeys.projectIdsByProjectApiKeys projectKeys
+                  checkpoint "processList:logs:getProjectIds"
+                    $ dbtToEff
+                    $ ProjectApiKeys.projectIdsByProjectApiKeys projectKeys
                 pure (ackId, join $ V.toList $ V.map (convertResourceLogsToOtelLogs projectIdsAndKeys) resourceLogs)
 
           let (ackIds, logs) = V.unzip results
               allLogs = concat logs -- Flattens the list of lists
-          unless (null allLogs) $
-            checkpoint "processList:logs:bulkInsert" $
-              Telemetry.bulkInsertOtelLogsAndSpansTF (V.fromList allLogs)
+          unless (null allLogs)
+            $ checkpoint "processList:logs:bulkInsert"
+            $ Telemetry.bulkInsertOtelLogsAndSpansTF (V.fromList allLogs)
           pure $ V.toList ackIds
         Just "org.opentelemetry.otlp.traces.v1" -> checkpoint "processList:traces" $ do
           results <- V.forM msgs' $ \(ackId, msg) ->
@@ -183,9 +183,9 @@ processList msgs attrs = checkpoint "processList" $ process `onException` handle
                 let resourceSpans = V.fromList $ traceReq ^. T.resourceSpans
                     projectKeys = getSpanAttributeValue "at-project-key" resourceSpans
                 projectIdsAndKeys <-
-                  checkpoint "processList:traces:getProjectIds" $
-                    dbtToEff $
-                      ProjectApiKeys.projectIdsByProjectApiKeys projectKeys
+                  checkpoint "processList:traces:getProjectIds"
+                    $ dbtToEff
+                    $ ProjectApiKeys.projectIdsByProjectApiKeys projectKeys
                 let spans = convertResourceSpansToOtelLogs projectIdsAndKeys resourceSpans
                 pure (ackId, spans)
 
@@ -201,16 +201,16 @@ processList msgs attrs = checkpoint "processList" $ process `onException` handle
                   )
                   spans'
 
-          unless (V.null apitoolkitSpans) $
-            checkpoint "processList:traces:processRequestMessages" $
-              (void $ ProcessMessage.processRequestMessages $ V.toList apitoolkitSpans <&> ("",))
+          unless (V.null apitoolkitSpans)
+            $ checkpoint "processList:traces:processRequestMessages"
+            $ (void $ ProcessMessage.processRequestMessages $ V.toList apitoolkitSpans <&> ("",))
 
           unless (null allSpans) do
-            checkpoint "processList:traces:bulkInsertSpans" $
-              Telemetry.bulkInsertOtelLogsAndSpansTF spans'
-            checkpoint "processList:traces:bulkInsertErrors" $
-              Anomalies.bulkInsertErrors $
-                Telemetry.getAllATErrors spans'
+            checkpoint "processList:traces:bulkInsertSpans"
+              $ Telemetry.bulkInsertOtelLogsAndSpansTF spans'
+            checkpoint "processList:traces:bulkInsertErrors"
+              $ Anomalies.bulkInsertErrors
+              $ Telemetry.getAllATErrors spans'
 
           pure $ V.toList ackIds
         Just "org.opentelemetry.otlp.metrics.v1" -> checkpoint "processList:metrics" do
@@ -233,9 +233,9 @@ processList msgs attrs = checkpoint "processList" $ process `onException` handle
           let (ackIds, metricLists) = V.unzip results
               metricRecords = concat metricLists
 
-          unless (null metricRecords) $
-            checkpoint "processList:metrics:bulkInsert" $
-              Telemetry.bulkInsertMetrics (V.fromList metricRecords)
+          unless (null metricRecords)
+            $ checkpoint "processList:metrics:bulkInsert"
+            $ Telemetry.bulkInsertMetrics (V.fromList metricRecords)
 
           pure $ V.toList ackIds
         _ -> do
@@ -258,8 +258,8 @@ byteStringToHexText bs = TE.decodeUtf8 (B16.encode bs)
 -- Convert a list of KeyValue to a JSON object
 keyValueToJSON :: V.Vector PC.KeyValue -> AE.Value
 keyValueToJSON kvs =
-  AE.object $
-    V.foldr (\kv acc -> (AEK.fromText (kv ^. C.key), anyValueToJSON (kv ^? C.value)) : acc) [] kvs
+  AE.object
+    $ V.foldr (\kv acc -> (AEK.fromText (kv ^. C.key), anyValueToJSON (kv ^? C.value)) : acc) [] kvs
 
 
 -- Convert AnyValue to JSON
@@ -327,15 +327,15 @@ convertResourceLogsToOtelLogs pids resourceLogs =
 -- | Convert ScopeLogs to OtelLogsAndSpans
 convertScopeLogsToOtelLogs :: Projects.ProjectId -> Maybe PR.Resource -> PL.ResourceLogs -> [OtelLogsAndSpans]
 convertScopeLogsToOtelLogs pid resourceM resourceLogs =
-  join $
-    V.toList $
-      V.map
-        ( \scopeLog ->
-            let scope = Just $ scopeLog ^. L.scope
-                logRecords = V.fromList $ scopeLog ^. L.logRecords
-             in V.toList $ V.map (convertLogRecordToOtelLog pid resourceM scope) logRecords
-        )
-        (V.fromList $ resourceLogs ^. L.scopeLogs)
+  join
+    $ V.toList
+    $ V.map
+      ( \scopeLog ->
+          let scope = Just $ scopeLog ^. L.scope
+              logRecords = V.fromList $ scopeLog ^. L.logRecords
+           in V.toList $ V.map (convertLogRecordToOtelLog pid resourceM scope) logRecords
+      )
+      (V.fromList $ resourceLogs ^. L.scopeLogs)
 
 
 -- | Convert LogRecord to OtelLogsAndSpans
@@ -351,8 +351,8 @@ convertLogRecordToOtelLog pid resourceM scopeM logRecord =
         , timestamp = if timeNano == 0 then nanosecondsToUTC observedTimeNano else nanosecondsToUTC timeNano
         , observed_timestamp = Just $ nanosecondsToUTC observedTimeNano
         , context =
-            Just $
-              Context
+            Just
+              $ Context
                 { trace_id = Just $ byteStringToHexText $ logRecord ^. L.traceId
                 , span_id = Just $ byteStringToHexText $ logRecord ^. L.spanId
                 , trace_state = Nothing
@@ -361,8 +361,8 @@ convertLogRecordToOtelLog pid resourceM scopeM logRecord =
                 }
         , level = Just severityText
         , severity =
-            Just $
-              Severity
+            Just
+              $ Severity
                 { severity_text = parseSeverityLevel severityText
                 , severity_number = severityNumber
                 }
@@ -387,36 +387,36 @@ convertLogRecordToOtelLog pid resourceM scopeM logRecord =
 -- | Convert ResourceSpans to OtelLogsAndSpans
 convertResourceSpansToOtelLogs :: V.Vector (Text, Projects.ProjectId, Integer) -> V.Vector PT.ResourceSpans -> [OtelLogsAndSpans]
 convertResourceSpansToOtelLogs pids resourceSpans =
-  join $
-    V.toList $
-      V.map
-        ( \rs ->
-            let projectKey = fromMaybe "" $ listToMaybe $ V.toList $ getSpanAttributeValue "at-project-key" (V.singleton rs)
-                projectId = case find (\(k, _, count) -> k == projectKey) pids of
-                  Just (_, v, count) -> if count >= 10000 then Nothing else Just v
-                  Nothing ->
-                    let pidText = fromMaybe "" $ listToMaybe $ V.toList $ getSpanAttributeValue "at-project-id" (V.singleton rs)
-                        uId = UUID.fromText pidText
-                     in ((Just . Projects.ProjectId) =<< uId)
-             in case projectId of
-                  Just pid -> convertScopeSpansToOtelLogs pid (Just $ rs ^. T.resource) rs
-                  _ -> []
-        )
-        resourceSpans
+  join
+    $ V.toList
+    $ V.map
+      ( \rs ->
+          let projectKey = fromMaybe "" $ listToMaybe $ V.toList $ getSpanAttributeValue "at-project-key" (V.singleton rs)
+              projectId = case find (\(k, _, count) -> k == projectKey) pids of
+                Just (_, v, count) -> if count >= 10000 then Nothing else Just v
+                Nothing ->
+                  let pidText = fromMaybe "" $ listToMaybe $ V.toList $ getSpanAttributeValue "at-project-id" (V.singleton rs)
+                      uId = UUID.fromText pidText
+                   in ((Just . Projects.ProjectId) =<< uId)
+           in case projectId of
+                Just pid -> convertScopeSpansToOtelLogs pid (Just $ rs ^. T.resource) rs
+                _ -> []
+      )
+      resourceSpans
 
 
 -- | Convert ScopeSpans to OtelLogsAndSpans
 convertScopeSpansToOtelLogs :: Projects.ProjectId -> Maybe PR.Resource -> PT.ResourceSpans -> [OtelLogsAndSpans]
 convertScopeSpansToOtelLogs pid resourceM resourceSpans =
-  join $
-    V.toList $
-      V.map
-        ( \scopeSpan ->
-            let scope = Just $ scopeSpan ^. T.scope
-                spans = V.fromList $ scopeSpan ^. T.spans
-             in V.toList $ V.map (convertSpanToOtelLog pid resourceM scope) spans
-        )
-        (V.fromList $ resourceSpans ^. T.scopeSpans)
+  join
+    $ V.toList
+    $ V.map
+      ( \scopeSpan ->
+          let scope = Just $ scopeSpan ^. T.scope
+              spans = V.fromList $ scopeSpan ^. T.spans
+           in V.toList $ V.map (convertSpanToOtelLog pid resourceM scope) spans
+      )
+      (V.fromList $ resourceSpans ^. T.scopeSpans)
 
 
 -- | Convert Span to OtelLogsAndSpans
@@ -455,18 +455,18 @@ convertSpanToOtelLog pid resourceM scopeM pSpan =
         if V.null events
           then Nothing
           else
-            Just $
-              AE.toJSON $
-                V.map
-                  ( \ev ->
-                      AE.object
-                        [ "event_name" AE..= (ev ^. T.name)
-                        , "event_time" AE..= nanosecondsToUTC (ev ^. T.timeUnixNano)
-                        , "event_attributes" AE..= keyValueToJSON (V.fromList $ ev ^. T.attributes)
-                        , "event_dropped_attributes_count" AE..= (ev ^. T.droppedAttributesCount)
-                        ]
-                  )
-                  events
+            Just
+              $ AE.toJSON
+              $ V.map
+                ( \ev ->
+                    AE.object
+                      [ "event_name" AE..= (ev ^. T.name)
+                      , "event_time" AE..= nanosecondsToUTC (ev ^. T.timeUnixNano)
+                      , "event_attributes" AE..= keyValueToJSON (V.fromList $ ev ^. T.attributes)
+                      , "event_dropped_attributes_count" AE..= (ev ^. T.droppedAttributesCount)
+                      ]
+                )
+                events
 
       -- Convert links
       links = V.fromList $ pSpan ^. T.links
@@ -474,29 +474,29 @@ convertSpanToOtelLog pid resourceM scopeM pSpan =
         if V.null links
           then Nothing
           else
-            Just $
-              T.pack $
-                show $
-                  AE.toJSON $
-                    V.map
-                      ( \link ->
-                          AE.object
-                            [ "link_span_id" AE..= byteStringToHexText (link ^. T.spanId)
-                            , "link_trace_id" AE..= byteStringToHexText (link ^. T.traceId)
-                            , "link_attributes" AE..= keyValueToJSON (V.fromList $ link ^. T.attributes)
-                            , "link_dropped_attributes_count" AE..= (link ^. T.droppedAttributesCount)
-                            , "link_flags" AE..= (link ^. T.traceState)
-                            ]
-                      )
-                      links
+            Just
+              $ T.pack
+              $ show
+              $ AE.toJSON
+              $ V.map
+                ( \link ->
+                    AE.object
+                      [ "link_span_id" AE..= byteStringToHexText (link ^. T.spanId)
+                      , "link_trace_id" AE..= byteStringToHexText (link ^. T.traceId)
+                      , "link_attributes" AE..= keyValueToJSON (V.fromList $ link ^. T.attributes)
+                      , "link_dropped_attributes_count" AE..= (link ^. T.droppedAttributesCount)
+                      , "link_flags" AE..= (link ^. T.traceState)
+                      ]
+                )
+                links
    in OtelLogsAndSpans
         { project_id = pid.toText
         , id = UUID.nil -- Will be replaced in bulkInsertOtelLogsAndSpansTF
         , timestamp = nanosecondsToUTC startTimeNano
         , observed_timestamp = Just $ nanosecondsToUTC startTimeNano
         , context =
-            Just $
-              Context
+            Just
+              $ Context
                 { trace_id = Just $ byteStringToHexText $ pSpan ^. T.traceId
                 , span_id = Just $ byteStringToHexText $ pSpan ^. T.spanId
                 , trace_state = Just $ pSpan ^. T.traceState
@@ -534,15 +534,15 @@ convertResourceMetricToMetricRecords :: Projects.ProjectId -> PM.ResourceMetrics
 convertResourceMetricToMetricRecords pid resourceMetric =
   let resourceM = Just $ resourceMetric ^. M.resource
       scopeMetrics = V.fromList $ resourceMetric ^. M.scopeMetrics
-   in join $
-        V.toList $
-          V.map
-            ( \sm ->
-                let scope = Just $ sm ^. M.scope
-                    metrics = V.fromList $ sm ^. M.metrics
-                 in join $ V.toList $ V.map (convertMetricToMetricRecords pid resourceM scope) metrics
-            )
-            scopeMetrics
+   in join
+        $ V.toList
+        $ V.map
+          ( \sm ->
+              let scope = Just $ sm ^. M.scope
+                  metrics = V.fromList $ sm ^. M.metrics
+               in join $ V.toList $ V.map (convertMetricToMetricRecords pid resourceM scope) metrics
+          )
+          scopeMetrics
 
 
 -- | Convert a single Metric to MetricRecords
@@ -555,8 +555,8 @@ convertMetricToMetricRecords pid resourceM scopeM metric =
       case metricData of
         PM.Metric'Gauge gauge ->
           let gaugePoints = V.fromList $ gauge ^. M.dataPoints
-           in V.toList $
-                V.map
+           in V.toList
+                $ V.map
                   ( \point ->
                       let startTimeNano = point ^. M.startTimeUnixNano
                           timeNano = point ^. M.timeUnixNano
@@ -717,8 +717,8 @@ metricsServiceExport appLogger appCtx (Proto req) = do
       Just pid -> do
         let metricRecords = convertResourceMetricsToMetricRecords pid resourceMetrics
 
-        unless (null metricRecords) $
-          Telemetry.bulkInsertMetrics (V.fromList metricRecords)
+        unless (null metricRecords)
+          $ Telemetry.bulkInsertMetrics (V.fromList metricRecords)
       Nothing -> Log.logAttention_ "Project API Key and project ID not available in metrics"
 
   -- Return an empty response
@@ -740,16 +740,16 @@ otlpServer opts appLogger appCtx = do
 
 services :: Log.Logger -> AuthContext -> [SomeRpcHandler IO]
 services appLogger appCtx =
-  ( fromMethods $
-      simpleMethods
+  ( fromMethods
+      $ simpleMethods
         (mkNonStreaming $ traceServiceExport appLogger appCtx :: ServerHandler IO (Protobuf TS.TraceService "export"))
   )
-    <> ( fromMethods $
-          simpleMethods
+    <> ( fromMethods
+          $ simpleMethods
             (mkNonStreaming $ logsServiceExport appLogger appCtx :: ServerHandler IO (Protobuf LS.LogsService "export"))
        )
-    <> ( fromMethods $
-          simpleMethods
+    <> ( fromMethods
+          $ simpleMethods
             (mkNonStreaming $ metricsServiceExport appLogger appCtx :: ServerHandler IO (Protobuf MS.MetricsService "export"))
        )
 

@@ -1,4 +1,6 @@
 module Opentelemetry.OtlpMockValues where
+
+
 --
 -- import Data.Vector qualified as V
 -- import Opentelemetry.Proto.Common.V1.Common
