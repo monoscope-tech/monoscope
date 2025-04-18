@@ -664,9 +664,11 @@ traceServiceExportH appLogger appCtx (ServerNormalRequest _meta (ExportTraceServ
     pids <- dbtToEff $ ProjectApiKeys.projectIdsByProjectApiKeys $ getSpanAttributeValue "at-project-key" req
     let spanRecords = join $ V.map (convertToSpan pids) req
         apitoolkitSpans = V.map mapHTTPSpan spanRecords
-    _ <- ProcessMessage.processRequestMessages $ V.toList $ V.catMaybes apitoolkitSpans <&> ("",)
-    -- Telemetry.bulkInsertSpans $ V.filter (\s -> s.spanName /= "apitoolkit-http-span") spanRecords
-    Telemetry.bulkInsertOtelLogsAndSpansTF spanRecords
+    unless (null apitoolkitSpans) do
+       void $ ProcessMessage.processRequestMessages $ V.toList $ V.catMaybes apitoolkitSpans <&> ("",)
+    unless (null spanRecords) do 
+     Telemetry.bulkInsertOtelLogsAndSpansTF spanRecords
+     Anomalies.bulkInsertErrors $ Telemetry.getAllATErrors spanRecords
   return (ServerNormalResponse (ExportTraceServiceResponse Nothing) mempty StatusOk "")
 
 

@@ -43,7 +43,6 @@ export class LogList extends LitElement {
     this.renderLoadMore = this.renderLoadMore.bind(this)
     this.updateTableData = this.updateTableData.bind(this)
     this.updateColumnMaxWidthMap = this.updateColumnMaxWidthMap.bind(this)
-    this.filterFalseRoots = this.filterFalseRoots.bind(this)
     this.latestLogsURLQueryValsFn = this.latestLogsURLQueryValsFn.bind(this)
     this.logItemCol = this.logItemCol.bind(this)
     this.wrapLines = false
@@ -143,6 +142,17 @@ export class LogList extends LitElement {
     this.setupIntersectionObserver()
     window.logListTable = document.querySelector('#resultTable')
   }
+
+  // updated(changedProps) {
+  //   super.updated(changedProps)
+  //   for (const span of this.spanListTree) {
+  //     if (span.isNewData) {
+  //       span.isNewData = false
+  //     } else {
+  //       break
+  //     }
+  //   }
+  // }
 
   setupIntersectionObserver() {
     if (this._observer) {
@@ -253,9 +263,13 @@ export class LogList extends LitElement {
     if (rowData === 'start') return this.fetchRecent()
     const s = this.source === 'spans' && rowData.type === 'log' ? 'logs' : this.source
     const targetInfo = requestDumpLogItemUrlPath(this.source === 'spans' ? rowData.data : rowData, this.colIdxMap, s)
+    const isNew = rowData.isNewData
 
     return html`
-      <tr class="item-row flex items-center cursor-pointer whitespace-nowrap" @click=${event => toggleLogRow(event, targetInfo, this.projectId)}>
+      <tr
+        class=${`item-row relative flex items-center cursor-pointer whitespace-nowrap  ${isNew ? 'animate-fadeBg' : ''}`}
+        @click=${event => toggleLogRow(event, targetInfo, this.projectId)}
+      >
         ${this.logsColumns
           .filter(v => v !== 'latency_breakdown')
           .map(column => {
@@ -311,10 +325,19 @@ export class LogList extends LitElement {
             if (this.source === 'spans') {
               const tree = this.buildSpanListTree([...logsData])
               if (isNewData) {
+                tree.forEach(tr => (tr.isNewData = true))
+                for (const span of this.spanListTree) {
+                  if (span.isNewData) {
+                    span.isNewData = false
+                  } else {
+                    break
+                  }
+                }
                 this.spanListTree = [...tree, ...this.spanListTree]
               } else {
                 this.spanListTree = [...this.spanListTree, ...tree]
               }
+              window.spanListTree = this.spanListTree
             } else {
               this.logsData = isNewData ? [...logsData, ...this.logsData] : [...this.logsData, ...logsData]
             }
@@ -340,31 +363,6 @@ export class LogList extends LitElement {
 
   hideColumn(column) {
     this.logsColumns = this.logsColumns.filter(col => col !== column)
-  }
-
-  filterFalseRoots() {
-    const nonRootRootSpans = []
-    const remainingSpans = []
-    for (let i = 0; i < this.spanListTree.length; i++) {
-      const span = this.spanListTree[i]
-      if (span.parent && span.depth === 0) {
-        nonRootRootSpans.push(span)
-        for (let j = i + 1; j < span.children; j++) {
-          if (this.spanListTree[j].parentIds.includes(span.id)) {
-            nonRootRootSpans.push(this.spanListTree[j])
-          } else {
-            remainingSpans.push(this.spanListTree[j])
-            i = j - 1
-            break
-          }
-        }
-      } else if (span.type === 'log' && span.depth === 0) {
-        nonRootRootSpans.push(span)
-      } else {
-        remainingSpans.push(span)
-      }
-    }
-    return { nonRootRootSpans, remainingSpans }
   }
 
   tableHeadingWrapper(title, column, classes) {
@@ -906,6 +904,87 @@ function requestDumpLogItemUrlPath(rd, colIdxMap, source) {
   const rdId = lookupVecTextByKey(rd, colIdxMap, 'id')
   const rdCreatedAt = lookupVecTextByKey(rd, colIdxMap, 'created_at') || lookupVecTextByKey(rd, colIdxMap, 'timestamp')
   return [rdId, rdCreatedAt, source]
+}
+
+function groupSpansTF(events, colIdxMap, expandedTraces) {
+  const traceMap = {}
+  const spanMap = {}
+
+  const TRACE_INDEX = colIdxMap['trace_id']
+  const SPAN_INDEX = colIdxMap['latency_breakdown']
+  const PARENT_SPAN_INDEX = colIdxMap['parent_span_id']
+  // const TIMESTAMP_INDEX = colIdxMap['timestamp']
+  const SPAN_DURATION_INDEX = colIdxMap['duration']
+  const START_TIME_NS = colIdxMap['start_time_ns']
+  const ERROR_INDEX = colIdxMap['errors']
+  const BODY_INDEX = colIdxMap['body']
+
+  for (const span of events) {
+    let traceId = span[TRACE_INDEX]
+    let spanId = span[SPAN_INDEX]
+    const parentSpanId = span[PARENT_SPAN_INDEX]
+
+    const body = span[BODY_INDEX]
+    let type = 'span'
+    if (body !== null) {
+      type = 'log'
+    }
+
+    if (traceId === '' || traceId === null) {
+      traceId = generateStrId()
+      span[TRACE_INDEX] = traceId
+    }
+    if (spanId === '' || spanId === null) {
+      spanId = generateStrId()
+      span[SPAN_INDEX] = spanId
+    }
+    spanMap[spanId] = {
+      spanId,
+      traceId,
+      type,
+      hasErrors: span[ERROR_INDEX],
+      startNs: span[START_TIME_NS],
+      duration: span[SPAN_DURATION_INDEX],
+      parentId: parentSpanId,
+      data: span,
+      children: [],
+    }
+  }
+
+  for (const span in spanMap) {
+    const parentSpanId = span[PARENT_SPAN_INDEX]
+    if (parentSpanId && spanMap[parentSpanId]) {
+      spanMap[parentSpanId].children.push(span)
+    }
+  }
+
+  for (const spanId in spanMap) {
+    const span = spanMap[spanId]
+    span.children.sort((a, b) => a.startNs - b.startNs)
+  }
+
+  for (const span in spanMap) {
+    if (!span.parentId) {
+      let traceData = traceMap[span.traceId]
+      if (!traceData) {
+        traceData = {
+          traceId: span.traceId,
+          spans: [],
+          duration: span.duration,
+          startTime: span.startNs,
+        }
+      }
+      traceData.spans.push(span)
+      traceData.duration = Math.max(traceData.duration, span.duration)
+      traceData.minStart = Math.min(traceData.startTime, span.startNs)
+      traceMap[span.traceId] = traceData
+    }
+  }
+
+  const traceArray = Object.values(traceMap).sort((a, b) => b.startTime - a.startTime)
+
+  const rr = flattenSpanTree(traceArray, expandedTraces)
+  return rr
 }
 
 function groupSpans(data, colIdxMap, expandedTraces) {
