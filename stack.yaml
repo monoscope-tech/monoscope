@@ -69,23 +69,10 @@ extra-deps:
       - lib/services/gogol-pubsub
       - lib/services/gogol-logging
       - lib/services/gogol-cloudtrace
-  # - git: https://github.com/awakesecurity/proto3-wire.git
-  #   commit: 2d48ee3446858f08a8c75130c90d770c377569bd
-  #   subdirs:
-  #     - .
   - github: tonyalaribe/proto3-suite
     # branch: aeson-error-fix
     commit: ecf8330af92941d5a0a0676a719b666ca3970ac4
 
-  # - github: awakesecurity/proto3-suite
-  #   # branch: aeson-error-fix
-  #   commit: 54e9d54c44e092710705358fd58e1954f9c7d20e
-
-  # - git: https://github.com/awakesecurity/gRPC-haskell.git
-  #   commit: 4b3b04d0ac9d1db53033fb4f0b6864f25b6e945d
-  #   subdirs:
-  #     - core
-  #     - .
   - git: https://github.com/tonyalaribe/xxhash
     commit: 0fa01adb871e66996d4ed2c27a3e97fac39ac466
     subdirs:

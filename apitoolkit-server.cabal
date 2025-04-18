@@ -448,8 +448,6 @@ test-suite doctests
 test-suite tests
   type: exitcode-stdio-1.0
   main-is: Main.hs
-  other-modules:
-      OtelProtoTest
   hs-source-dirs:
       test/hspec
   default-extensions:

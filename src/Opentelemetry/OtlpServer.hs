@@ -69,64 +69,44 @@ import System.Types (runBackground)
 getSpanAttributeValue :: Text -> V.Vector PT.ResourceSpans -> V.Vector Text
 getSpanAttributeValue attribute rss = V.mapMaybe (\rs -> getResourceAttr rs <|> getSpanAttr rs) rss
   where
-    getResourceAttr rs =
-      let resourceVal = rs ^. PTF.resource
-       in getAttr (V.fromList $ resourceVal ^. PRF.attributes)
-
+    getResourceAttr rs = getAttr (resourceAttributes (rs ^. PTF.resource))
     getSpanAttr rs =
-      let scopeSpans = V.fromList $ rs ^. PTF.scopeSpans
-          allSpans = join $ V.map (\ss -> V.fromList $ ss ^. PTF.spans) scopeSpans
-       in listToMaybe $ V.toList $ V.mapMaybe (\s -> getAttr (V.fromList $ s ^. PTF.attributes)) allSpans
+      let spans = V.fromList (rs ^. PTF.scopeSpans) >>= (\s -> V.fromList (s ^. PTF.spans))
+       in listToMaybe $ V.toList $ V.mapMaybe (getAttr . spanAttributes) spans
 
     getAttr :: V.Vector PC.KeyValue -> Maybe Text
-    getAttr kvs =
-      let matchingKvs = V.filter (\kv -> kv ^. PCF.key == attribute) kvs
-       in if V.null matchingKvs
-            then Nothing
-            else
-              let kv = V.head matchingKvs
-               in Just $ kv ^. PCF.value . PCF.stringValue
+    getAttr kvs = V.find ((== attribute) . (^. PCF.key)) kvs >>= \kv -> Just (kv ^. PCF.value . PCF.stringValue)
+
+    resourceAttributes resource = V.fromList $ resource ^. PRF.attributes
+    spanAttributes spn = V.fromList $ spn ^. PTF.attributes
 
 
 -- | Extract attribute values from resource logs
 getLogAttributeValue :: Text -> V.Vector PL.ResourceLogs -> V.Vector Text
 getLogAttributeValue attribute rls = V.mapMaybe (\rl -> getResourceAttr rl <|> getLogAttr rl) rls
   where
-    getResourceAttr rl =
-      let resource = rl ^. PLF.resource
-       in getAttr (V.fromList $ resource ^. PRF.attributes)
-
+    getResourceAttr rl = getAttr (resourceAttributes (rl ^. PLF.resource))
     getLogAttr rl =
-      let scopeLogs = V.fromList $ rl ^. PLF.scopeLogs
-          allLogs = join $ V.map (\sl -> V.fromList $ sl ^. PLF.logRecords) scopeLogs
-       in listToMaybe $ V.toList $ V.mapMaybe (\lr -> getAttr (V.fromList $ lr ^. PLF.attributes)) allLogs
+      let logs = V.fromList (rl ^. PLF.scopeLogs) >>= (\s -> V.fromList (s ^. PLF.logRecords))
+       in listToMaybe $ V.toList $ V.mapMaybe (getAttr . logAttributes) logs
 
     getAttr :: V.Vector PC.KeyValue -> Maybe Text
-    getAttr kvs =
-      let matchingKvs = V.filter (\kv -> kv ^. PCF.key == attribute) kvs
-       in if V.null matchingKvs
-            then Nothing
-            else
-              let kv = V.head matchingKvs
-               in Just $ kv ^. PCF.value . PCF.stringValue
+    getAttr kvs = V.find ((== attribute) . (^. PCF.key)) kvs >>= \kv -> Just (kv ^. PCF.value . PCF.stringValue)
+
+    resourceAttributes resource = V.fromList $ resource ^. PRF.attributes
+    logAttributes log = V.fromList $ log ^. PLF.attributes
 
 
 -- | Extract metric attribute values
 getMetricAttributeValue :: Text -> V.Vector PM.ResourceMetrics -> Maybe Text
-getMetricAttributeValue attribute rms = join $ listToMaybe $ V.toList $ V.map getResourceAttr $ V.filter (\rm -> isJust $ getResourceAttr rm) rms
+getMetricAttributeValue attribute rms = listToMaybe $ V.toList $ V.mapMaybe getResourceAttr rms
   where
-    getResourceAttr rm =
-      let resource = rm ^. PMF.resource
-       in getAttr (V.fromList $ resource ^. PRF.attributes)
+    getResourceAttr rm = getAttr (resourceAttributes (rm ^. PMF.resource))
 
     getAttr :: V.Vector PC.KeyValue -> Maybe Text
-    getAttr kvs =
-      let matchingKvs = V.filter (\kv -> kv ^. PCF.key == attribute) kvs
-       in if V.null matchingKvs
-            then Nothing
-            else
-              let kv = V.head matchingKvs
-               in Just $ kv ^. PCF.value . PCF.stringValue
+    getAttr kvs = V.find ((== attribute) . (^. PCF.key)) kvs >>= \kv -> Just (kv ^. PCF.value . PCF.stringValue)
+
+    resourceAttributes resource = V.fromList $ resource ^. PRF.attributes
 
 
 -- | Process a list of messages
@@ -152,16 +132,16 @@ processList msgs attrs = checkpoint "processList" $ process `onException` handle
                 let resourceLogs = V.fromList $ logReq ^. PLF.resourceLogs
                     projectKeys = getLogAttributeValue "at-project-key" resourceLogs
                 projectIdsAndKeys <-
-                  checkpoint "processList:logs:getProjectIds" $
-                    dbtToEff $
-                      ProjectApiKeys.projectIdsByProjectApiKeys projectKeys
+                  checkpoint "processList:logs:getProjectIds"
+                    $ dbtToEff
+                    $ ProjectApiKeys.projectIdsByProjectApiKeys projectKeys
                 pure (ackId, join $ V.toList $ V.map (convertResourceLogsToOtelLogs projectIdsAndKeys) resourceLogs)
 
           let (ackIds, logs) = V.unzip results
               allLogs = concat logs -- Flattens the list of lists
-          unless (null allLogs) $
-            checkpoint "processList:logs:bulkInsert" $
-              Telemetry.bulkInsertOtelLogsAndSpansTF (V.fromList allLogs)
+          unless (null allLogs)
+            $ checkpoint "processList:logs:bulkInsert"
+            $ Telemetry.bulkInsertOtelLogsAndSpansTF (V.fromList allLogs)
           pure $ V.toList ackIds
         Just "org.opentelemetry.otlp.traces.v1" -> checkpoint "processList:traces" $ do
           results <- V.forM msgs' $ \(ackId, msg) ->
@@ -173,9 +153,9 @@ processList msgs attrs = checkpoint "processList" $ process `onException` handle
                 let resourceSpans = V.fromList $ traceReq ^. PTF.resourceSpans
                     projectKeys = getSpanAttributeValue "at-project-key" resourceSpans
                 projectIdsAndKeys <-
-                  checkpoint "processList:traces:getProjectIds" $
-                    dbtToEff $
-                      ProjectApiKeys.projectIdsByProjectApiKeys projectKeys
+                  checkpoint "processList:traces:getProjectIds"
+                    $ dbtToEff
+                    $ ProjectApiKeys.projectIdsByProjectApiKeys projectKeys
                 let spans = convertResourceSpansToOtelLogs projectIdsAndKeys resourceSpans
                 pure (ackId, spans)
 
@@ -191,16 +171,16 @@ processList msgs attrs = checkpoint "processList" $ process `onException` handle
                   )
                   spans'
 
-          unless (V.null apitoolkitSpans) $
-            checkpoint "processList:traces:processRequestMessages" $
-              (void $ ProcessMessage.processRequestMessages $ V.toList apitoolkitSpans <&> ("",))
+          unless (V.null apitoolkitSpans)
+            $ checkpoint "processList:traces:processRequestMessages"
+            $ (void $ ProcessMessage.processRequestMessages $ V.toList apitoolkitSpans <&> ("",))
 
           unless (null allSpans) do
-            checkpoint "processList:traces:bulkInsertSpans" $
-              Telemetry.bulkInsertOtelLogsAndSpansTF spans'
-            checkpoint "processList:traces:bulkInsertErrors" $
-              Anomalies.bulkInsertErrors $
-                Telemetry.getAllATErrors spans'
+            checkpoint "processList:traces:bulkInsertSpans"
+              $ Telemetry.bulkInsertOtelLogsAndSpansTF spans'
+            checkpoint "processList:traces:bulkInsertErrors"
+              $ Anomalies.bulkInsertErrors
+              $ Telemetry.getAllATErrors spans'
 
           pure $ V.toList ackIds
         Just "org.opentelemetry.otlp.metrics.v1" -> checkpoint "processList:metrics" do
@@ -223,9 +203,9 @@ processList msgs attrs = checkpoint "processList" $ process `onException` handle
           let (ackIds, metricLists) = V.unzip results
               metricRecords = concat metricLists
 
-          unless (null metricRecords) $
-            checkpoint "processList:metrics:bulkInsert" $
-              Telemetry.bulkInsertMetrics (V.fromList metricRecords)
+          unless (null metricRecords)
+            $ checkpoint "processList:metrics:bulkInsert"
+            $ Telemetry.bulkInsertMetrics (V.fromList metricRecords)
 
           pure $ V.toList ackIds
         _ -> do
@@ -322,15 +302,15 @@ convertResourceLogsToOtelLogs pids resourceLogs =
 -- | Convert ScopeLogs to OtelLogsAndSpans
 convertScopeLogsToOtelLogs :: Projects.ProjectId -> Maybe PR.Resource -> PL.ResourceLogs -> [OtelLogsAndSpans]
 convertScopeLogsToOtelLogs pid resourceM resourceLogs =
-  join $
-    V.toList $
-      V.map
-        ( \scopeLog ->
-            let scope = Just $ scopeLog ^. PLF.scope
-                logRecords = V.fromList $ scopeLog ^. PLF.logRecords
-             in V.toList $ V.map (convertLogRecordToOtelLog pid resourceM scope) logRecords
-        )
-        (V.fromList $ resourceLogs ^. PLF.scopeLogs)
+  join
+    $ V.toList
+    $ V.map
+      ( \scopeLog ->
+          let scope = Just $ scopeLog ^. PLF.scope
+              logRecords = V.fromList $ scopeLog ^. PLF.logRecords
+           in V.toList $ V.map (convertLogRecordToOtelLog pid resourceM scope) logRecords
+      )
+      (V.fromList $ resourceLogs ^. PLF.scopeLogs)
 
 
 -- | Convert LogRecord to OtelLogsAndSpans
@@ -346,8 +326,8 @@ convertLogRecordToOtelLog pid resourceM scopeM logRecord =
         , timestamp = if timeNano == 0 then nanosecondsToUTC observedTimeNano else nanosecondsToUTC timeNano
         , observed_timestamp = Just $ nanosecondsToUTC observedTimeNano
         , context =
-            Just $
-              Context
+            Just
+              $ Context
                 { trace_id = Just $ byteStringToHexText $ logRecord ^. PLF.traceId
                 , span_id = Just $ byteStringToHexText $ logRecord ^. PLF.spanId
                 , trace_state = Nothing
@@ -356,8 +336,8 @@ convertLogRecordToOtelLog pid resourceM scopeM logRecord =
                 }
         , level = Just severityText
         , severity =
-            Just $
-              Severity
+            Just
+              $ Severity
                 { severity_text = parseSeverityLevel severityText
                 , severity_number = severityNumber
                 }
@@ -382,36 +362,36 @@ convertLogRecordToOtelLog pid resourceM scopeM logRecord =
 -- | Convert ResourceSpans to OtelLogsAndSpans
 convertResourceSpansToOtelLogs :: V.Vector (Text, Projects.ProjectId, Integer) -> V.Vector PT.ResourceSpans -> [OtelLogsAndSpans]
 convertResourceSpansToOtelLogs pids resourceSpans =
-  join $
-    V.toList $
-      V.map
-        ( \rs ->
-            let projectKey = fromMaybe "" $ listToMaybe $ V.toList $ getSpanAttributeValue "at-project-key" (V.singleton rs)
-                projectId = case find (\(k, _, count) -> k == projectKey) pids of
-                  Just (_, v, count) -> if count >= 10000 then Nothing else Just v
-                  Nothing ->
-                    let pidText = fromMaybe "" $ listToMaybe $ V.toList $ getSpanAttributeValue "at-project-id" (V.singleton rs)
-                        uId = UUID.fromText pidText
-                     in ((Just . Projects.ProjectId) =<< uId)
-             in case projectId of
-                  Just pid -> convertScopeSpansToOtelLogs pid (Just $ rs ^. PTF.resource) rs
-                  _ -> []
-        )
-        resourceSpans
+  join
+    $ V.toList
+    $ V.map
+      ( \rs ->
+          let projectKey = fromMaybe "" $ listToMaybe $ V.toList $ getSpanAttributeValue "at-project-key" (V.singleton rs)
+              projectId = case find (\(k, _, count) -> k == projectKey) pids of
+                Just (_, v, count) -> if count >= 10000 then Nothing else Just v
+                Nothing ->
+                  let pidText = fromMaybe "" $ listToMaybe $ V.toList $ getSpanAttributeValue "at-project-id" (V.singleton rs)
+                      uId = UUID.fromText pidText
+                   in ((Just . Projects.ProjectId) =<< uId)
+           in case projectId of
+                Just pid -> convertScopeSpansToOtelLogs pid (Just $ rs ^. PTF.resource) rs
+                _ -> []
+      )
+      resourceSpans
 
 
 -- | Convert ScopeSpans to OtelLogsAndSpans
 convertScopeSpansToOtelLogs :: Projects.ProjectId -> Maybe PR.Resource -> PT.ResourceSpans -> [OtelLogsAndSpans]
 convertScopeSpansToOtelLogs pid resourceM resourceSpans =
-  join $
-    V.toList $
-      V.map
-        ( \scopeSpan ->
-            let scope = Just $ scopeSpan ^. PTF.scope
-                spans = V.fromList $ scopeSpan ^. PTF.spans
-             in V.toList $ V.map (convertSpanToOtelLog pid resourceM scope) spans
-        )
-        (V.fromList $ resourceSpans ^. PTF.scopeSpans)
+  join
+    $ V.toList
+    $ V.map
+      ( \scopeSpan ->
+          let scope = Just $ scopeSpan ^. PTF.scope
+              spans = V.fromList $ scopeSpan ^. PTF.spans
+           in V.toList $ V.map (convertSpanToOtelLog pid resourceM scope) spans
+      )
+      (V.fromList $ resourceSpans ^. PTF.scopeSpans)
 
 
 -- | Convert Span to OtelLogsAndSpans
@@ -450,18 +430,18 @@ convertSpanToOtelLog pid resourceM scopeM pSpan =
         if V.null events
           then Nothing
           else
-            Just $
-              AE.toJSON $
-                V.map
-                  ( \ev ->
-                      AE.object
-                        [ "event_name" AE..= (ev ^. PTF.name)
-                        , "event_time" AE..= nanosecondsToUTC (ev ^. PTF.timeUnixNano)
-                        , "event_attributes" AE..= keyValueToJSON (V.fromList $ ev ^. PTF.attributes)
-                        , "event_dropped_attributes_count" AE..= (ev ^. PTF.droppedAttributesCount)
-                        ]
-                  )
-                  events
+            Just
+              $ AE.toJSON
+              $ V.map
+                ( \ev ->
+                    AE.object
+                      [ "event_name" AE..= (ev ^. PTF.name)
+                      , "event_time" AE..= nanosecondsToUTC (ev ^. PTF.timeUnixNano)
+                      , "event_attributes" AE..= keyValueToJSON (V.fromList $ ev ^. PTF.attributes)
+                      , "event_dropped_attributes_count" AE..= (ev ^. PTF.droppedAttributesCount)
+                      ]
+                )
+                events
 
       -- Convert links
       links = V.fromList $ pSpan ^. PTF.links
@@ -469,29 +449,29 @@ convertSpanToOtelLog pid resourceM scopeM pSpan =
         if V.null links
           then Nothing
           else
-            Just $
-              T.pack $
-                show $
-                  AE.toJSON $
-                    V.map
-                      ( \link ->
-                          AE.object
-                            [ "link_span_id" AE..= byteStringToHexText (link ^. PTF.spanId)
-                            , "link_trace_id" AE..= byteStringToHexText (link ^. PTF.traceId)
-                            , "link_attributes" AE..= keyValueToJSON (V.fromList $ link ^. PTF.attributes)
-                            , "link_dropped_attributes_count" AE..= (link ^. PTF.droppedAttributesCount)
-                            , "link_flags" AE..= (link ^. PTF.traceState)
-                            ]
-                      )
-                      links
+            Just
+              $ T.pack
+              $ show
+              $ AE.toJSON
+              $ V.map
+                ( \link ->
+                    AE.object
+                      [ "link_span_id" AE..= byteStringToHexText (link ^. PTF.spanId)
+                      , "link_trace_id" AE..= byteStringToHexText (link ^. PTF.traceId)
+                      , "link_attributes" AE..= keyValueToJSON (V.fromList $ link ^. PTF.attributes)
+                      , "link_dropped_attributes_count" AE..= (link ^. PTF.droppedAttributesCount)
+                      , "link_flags" AE..= (link ^. PTF.traceState)
+                      ]
+                )
+                links
    in OtelLogsAndSpans
         { project_id = pid.toText
         , id = UUID.nil -- Will be replaced in bulkInsertOtelLogsAndSpansTF
         , timestamp = nanosecondsToUTC startTimeNano
         , observed_timestamp = Just $ nanosecondsToUTC startTimeNano
         , context =
-            Just $
-              Context
+            Just
+              $ Context
                 { trace_id = Just $ byteStringToHexText $ pSpan ^. PTF.traceId
                 , span_id = Just $ byteStringToHexText $ pSpan ^. PTF.spanId
                 , trace_state = Just $ pSpan ^. PTF.traceState
@@ -529,15 +509,15 @@ convertResourceMetricToMetricRecords :: Projects.ProjectId -> PM.ResourceMetrics
 convertResourceMetricToMetricRecords pid resourceMetric =
   let resourceM = Just $ resourceMetric ^. PMF.resource
       scopeMetrics = V.fromList $ resourceMetric ^. PMF.scopeMetrics
-   in join $
-        V.toList $
-          V.map
-            ( \sm ->
-                let scope = Just $ sm ^. PMF.scope
-                    metrics = V.fromList $ sm ^. PMF.metrics
-                 in join $ V.toList $ V.map (convertMetricToMetricRecords pid resourceM scope) metrics
-            )
-            scopeMetrics
+   in join
+        $ V.toList
+        $ V.map
+          ( \sm ->
+              let scope = Just $ sm ^. PMF.scope
+                  metrics = V.fromList $ sm ^. PMF.metrics
+               in join $ V.toList $ V.map (convertMetricToMetricRecords pid resourceM scope) metrics
+          )
+          scopeMetrics
 
 
 -- | Convert a single Metric to MetricRecords
@@ -550,8 +530,8 @@ convertMetricToMetricRecords pid resourceM scopeM metric =
       case metricData of
         PM.Metric'Gauge gauge ->
           let gaugePoints = V.fromList $ gauge ^. PMF.dataPoints
-           in V.toList $
-                V.map
+           in V.toList
+                $ V.map
                   ( \point ->
                       let startTimeNano = point ^. PMF.startTimeUnixNano
                           timeNano = point ^. PMF.timeUnixNano
@@ -711,8 +691,8 @@ metricsServiceExport appLogger appCtx (Proto req) = do
       Just pid -> do
         let metricRecords = convertResourceMetricsToMetricRecords pid resourceMetrics
 
-        unless (null metricRecords) $
-          Telemetry.bulkInsertMetrics (V.fromList metricRecords)
+        unless (null metricRecords)
+          $ Telemetry.bulkInsertMetrics (V.fromList metricRecords)
       Nothing -> Log.logAttention_ "Project API Key and project ID not available in metrics"
 
   -- Return an empty response
@@ -734,16 +714,16 @@ otlpServer opts appLogger appCtx = do
 
 services :: Log.Logger -> AuthContext -> [SomeRpcHandler IO]
 services appLogger appCtx =
-  ( fromMethods $
-      simpleMethods
+  ( fromMethods
+      $ simpleMethods
         (mkNonStreaming $ traceServiceExport appLogger appCtx :: ServerHandler IO (Protobuf TS.TraceService "export"))
   )
-    <> ( fromMethods $
-          simpleMethods
+    <> ( fromMethods
+          $ simpleMethods
             (mkNonStreaming $ logsServiceExport appLogger appCtx :: ServerHandler IO (Protobuf LS.LogsService "export"))
        )
-    <> ( fromMethods $
-          simpleMethods
+    <> ( fromMethods
+          $ simpleMethods
             (mkNonStreaming $ metricsServiceExport appLogger appCtx :: ServerHandler IO (Protobuf MS.MetricsService "export"))
        )
 
