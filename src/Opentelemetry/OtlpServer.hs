@@ -217,6 +217,7 @@ processList msgs attrs = checkpoint "processList" $ process `onException` handle
 decodeUtf8Lenient :: ByteString -> Text
 decodeUtf8Lenient = TE.decodeUtf8With lenientDecode
 
+
 -- Convert nanoseconds to UTCTime
 nanosecondsToUTC :: Word64 -> UTCTime
 nanosecondsToUTC ns = posixSecondsToUTCTime (fromIntegral ns / 1e9)
