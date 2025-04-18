@@ -195,82 +195,100 @@ CREATE TABLE IF NOT EXISTS projects.dashboards (
 SELECT manage_updated_at('projects.dashboards');
 
 
-CREATE TABLE IF NOT EXISTS telemetry.events (
-    project_id UUID NOT NULL REFERENCES projects.projects (id) ON DELETE CASCADE,
-    id UUID NOT NULL DEFAULT gen_random_uuid(),
-    timestamp TIMESTAMPTZ NOT NULL DEFAULT current_timestamp,
-    trace_id TEXT NOT NULL,
-    span_id TEXT NOT NULL,
-    parent_span_id TEXT DEFAULT NULL,
-    trace_state TEXT DEFAULT '',
-    start_time TIMESTAMPTZ NOT NULL,
-    end_time TIMESTAMPTZ DEFAULT NULL,
-    duration_ns BIGINT NOT NULL DEFAULT 0,
-    span_name TEXT NOT NULL DEFAULT '',
-    span_kind telemetry.span_kind,
-    span_type TEXT NOT NULL DEFAULT 'span',
 
-    -- Status and severity
-    status telemetry.span_status DEFAULT NULL,
-    status_code INTEGER DEFAULT 0,
-    status_message TEXT DEFAULT '',
-    severity_text telemetry.severity_level DEFAULT NULL,
-    severity_number INTEGER DEFAULT 0,
-
-    -- Request specific fields
-    host TEXT NOT NULL DEFAULT '',
-    url_path TEXT NOT NULL DEFAULT '',
-    raw_url TEXT NOT NULL DEFAULT '',
-    method TEXT NOT NULL DEFAULT '',
-    referer TEXT NOT NULL DEFAULT '',
-
-    -- Request/Response data
-    path_params JSONB NOT NULL DEFAULT '{}'::jsonb,
-    query_params JSONB NOT NULL DEFAULT '{}'::jsonb,
-    request_headers JSONB NOT NULL DEFAULT '{}'::jsonb,
-    response_headers JSONB NOT NULL DEFAULT '{}'::jsonb,
-    request_body JSONB NOT NULL DEFAULT '{}'::jsonb,
-    response_body JSONB NOT NULL DEFAULT '{}'::jsonb,
-
-    -- API-specific fields
-    endpoint_hash TEXT NOT NULL DEFAULT '',
-    shape_hash TEXT NOT NULL DEFAULT '',
-    format_hashes TEXT[] NOT NULL DEFAULT '{}'::text[],
-    field_hashes TEXT[] NOT NULL DEFAULT '{}'::text[],
-    sdk_type TEXT NOT NULL DEFAULT '',
-    service_version TEXT DEFAULT NULL,
-
-    -- Common metadata
-    attributes JSONB NOT NULL DEFAULT '{}'::jsonb,
-    events JSONB NOT NULL DEFAULT '{}'::jsonb,
-    links JSONB NOT NULL DEFAULT '{}'::jsonb,
-    resource JSONB NOT NULL DEFAULT '{}'::jsonb,
-    instrumentation_scope JSONB NOT NULL DEFAULT '{}'::jsonb,
-    errors JSONB NOT NULL DEFAULT '{}'::jsonb,
-    tags TEXT[] NOT NULL DEFAULT '{}'::text[],
-
-    PRIMARY KEY (project_id, timestamp, id)
+CREATE TABLE IF NOT EXISTS otel_logs_and_spans (
+    id                      UUID NOT NULL DEFAULT gen_random_uuid(),
+    project_id               Text NOT NULL,
+    timestamp                TIMESTAMPTZ NOT NULL DEFAULT current_timestamp,
+    parent_id                TEXT,
+    observed_timestamp       TIMESTAMPTZ,
+    hashes                   TEXT[],
+    name                     TEXT,
+    kind                     TEXT,
+    status_code              TEXT,
+    status_message           TEXT,
+    level                    TEXT,
+    severity                 JSONB,
+    severity___severity_text TEXT,
+    severity___severity_number INTEGER,
+    body                     JSONB,
+    duration                 BIGINT,
+    start_time               TIMESTAMPTZ,
+    end_time                 TIMESTAMPTZ,
+    context                  JSONB,
+    context___trace_id       TEXT,
+    context___span_id        TEXT,
+    context___trace_state    TEXT,
+    context___trace_flags    TEXT,
+    context___is_remote      BOOLEAN,
+    events                   JSONB,
+    links                    Text,
+    attributes               JSONB,
+    attributes___client___address         TEXT,
+    attributes___client___port            INTEGER,
+    attributes___server___address         TEXT,
+    attributes___server___port            INTEGER,
+    attributes___network___local__address TEXT,
+    attributes___network___local__port    INTEGER,
+    attributes___network___peer___address TEXT,
+    attributes___network___peer__port     INTEGER,
+    attributes___network___protocol___name TEXT,
+    attributes___network___protocol___version TEXT,
+    attributes___network___transport       TEXT,
+    attributes___network___type            TEXT,
+    attributes___code___number             INTEGER,
+    attributes___code___file___path        TEXT,
+    attributes___code___function___name    TEXT,
+    attributes___code___line___number      INTEGER,
+    attributes___code___stacktrace         TEXT,
+    attributes___log__record___original    TEXT,
+    attributes___log__record___uid         TEXT,
+    attributes___error___type              TEXT,
+    attributes___exception___type          TEXT,
+    attributes___exception___message       TEXT,
+    attributes___exception___stacktrace    TEXT,
+    attributes___url___fragment            TEXT,
+    attributes___url___full                TEXT,
+    attributes___url___path                TEXT,
+    attributes___url___query               TEXT,
+    attributes___url___scheme              TEXT,
+    attributes___user_agent___original     TEXT,
+    attributes___http___request___method   TEXT,
+    attributes___http___request___method_original TEXT,
+    attributes___http___response___status_code INTEGER,
+    attributes___http___request___resend_count   INTEGER,
+    attributes___http___request___body___size    BIGINT,
+    attributes___session___id              TEXT,
+    attributes___session___previous___id   TEXT,
+    attributes___db___system___name        TEXT,
+    attributes___db___collection___name    TEXT,
+    attributes___db___namespace            TEXT,
+    attributes___db___operation___name     TEXT,
+    attributes___db___response___status_code TEXT,
+    attributes___db___operation___batch___size INTEGER,
+    attributes___db___query___summary      TEXT,
+    attributes___db___query___text         TEXT,
+    attributes___user___id                 TEXT,
+    attributes___user___email              TEXT,
+    attributes___user___full_name          TEXT,
+    attributes___user___name               TEXT,
+    attributes___user___hash               TEXT,
+    resource                               JSONB,
+    resource___service___name              TEXT,
+    resource___service___version           TEXT,
+    resource___service___instance___id     TEXT,
+    resource___service___namespace         TEXT,
+    resource___telemetry___sdk___language  TEXT,
+    resource___telemetry___sdk___name      TEXT,
+    resource___telemetry___sdk___version   TEXT,
+    resource___user_agent___original       TEXT,
+    date  TIMESTAMPTZ NOT NULL DEFAULT current_timestamp
 );
+SELECT create_hypertable('otel_logs_and_spans', by_range('timestamp', INTERVAL '1 hours'), migrate_data => true);
+SELECT add_retention_policy('otel_logs_and_spans',INTERVAL '14 days',true);
 
-CREATE INDEX IF NOT EXISTS idx_telemetry_events_trace_id
-ON telemetry.events (trace_id);
+CREATE INDEX idx_logs_and_spans_trace_id ON otel_logs_and_spans (project_id, context___trace_id);
+CREATE INDEX idx_logs_and_spans_span_id ON otel_logs_and_spans (project_id, context___span_id);
+CREATE INDEX idx_logs_and_spans_parent_id ON otel_logs_and_spans (project_id, parent_id);
+CREATE INDEX idx_logs_and_spans_service_name ON otel_logs_and_spans (project_id, resource___service___name);
 
--- Index for efficient project-trace filtering
-CREATE INDEX IF NOT EXISTS idx_telemetry_events_project_trace
-ON telemetry.events (project_id, trace_id);
-
--- Index for span relationship lookups
-CREATE INDEX IF NOT EXISTS idx_telemetry_events_parent_span_id
-ON telemetry.events (parent_span_id);
-
--- Index for efficient time-based queries
-CREATE INDEX IF NOT EXISTS idx_telemetry_events_start_end
-ON telemetry.events (start_time DESC, end_time DESC);
-
--- Index for full text search
-CREATE INDEX IF NOT EXISTS idx_telemetry_events_body_tsvector
-ON telemetry.events USING gin(body_tsvector);
-
--- Index for span type filtering
-CREATE INDEX IF NOT EXISTS idx_telemetry_events_span_type
-ON telemetry.events (span_type);

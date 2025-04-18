@@ -30,10 +30,11 @@ traceH :: Projects.ProjectId -> Text -> Maybe Text -> Maybe Text -> ATAuthCtx (R
 traceH pid trId spanIdM nav = do
   if isJust nav
     then do
-      spanRecords <- Telemetry.getSpandRecordsByTraceId pid trId
+      spanRecords' <- Telemetry.getSpandRecordsByTraceId pid trId
+      let spanRecords = V.catMaybes $ Telemetry.convertOtelLogsAndSpansToSpanRecord <$> spanRecords'
       let sid = fromMaybe "" spanIdM
-          targetSpan = fromMaybe (V.head spanRecords) (V.find (\x -> x.spanId == sid) spanRecords)
-          targetIndex = fromMaybe 0 (V.findIndex (\x -> x.spanId == sid) spanRecords)
+          targetSpan = fromMaybe (V.head spanRecords') (V.find (\x -> maybe False (\s -> s.span_id == Just sid) x.context) spanRecords')
+          targetIndex = fromMaybe 0 (V.findIndex (\x -> maybe False (\s -> s.span_id == Just sid) x.context) spanRecords')
           prevSpan =
             if targetIndex > 0
               then Just (spanRecords V.! (targetIndex - 1))
@@ -47,9 +48,10 @@ traceH pid trId spanIdM nav = do
       traceItemM <- Telemetry.getTraceDetails pid trId
       case traceItemM of
         Just traceItem -> do
-          spanRecords <- Telemetry.getSpandRecordsByTraceId pid trId
-          let spanid = fromMaybe "" $ if isJust spanIdM then spanIdM else Just ""
-          let pageProps = PageProps pid traceItem spanid spanRecords
+          spanRecords' <- Telemetry.getSpandRecordsByTraceId pid trId
+          let spanRecords = V.catMaybes $ Telemetry.convertOtelLogsAndSpansToSpanRecord <$> spanRecords'
+              spanid = fromMaybe "" $ if isJust spanIdM then spanIdM else Just ""
+              pageProps = PageProps pid traceItem spanid spanRecords
           addRespHeaders $ TraceDetails pageProps
         Nothing -> addRespHeaders $ TraceDetailsNotFound "Trace not found"
 
@@ -64,7 +66,7 @@ data PageProps = PageProps
 
 data TraceDetailsGet
   = TraceDetails PageProps
-  | SpanDetails Projects.ProjectId Telemetry.SpanRecord (Maybe Text) (Maybe Text)
+  | SpanDetails Projects.ProjectId Telemetry.OtelLogsAndSpans (Maybe Text) (Maybe Text)
   | TraceDetailsNotFound Text
 
 
@@ -93,7 +95,7 @@ tracePage p = do
           h3_ [class_ "whitespace-nowrap  font-semibold text-textStrong"] "Trace Breakdown"
         div_ [class_ "flex items-center gap-2"] $ do
           dateTime traceItem.traceStartTime (Just traceItem.traceEndTime)
-          button_ [class_ "p-0 m-0", [__| on click add .hidden to #trace_expanded_view|]] do
+          button_ [class_ "p-0 m-0", [__| on click add .hidden to #trace_expanded_view then call updateUrlState('showTrace', '', 'delete')|]] do
             faSprite_ "side-chevron-left-in-box" "regular" "w-5 h-5 text-textBrand rotate-180"
 
       div_ [class_ "flex gap-1 w-full mt-5"] $ do
@@ -218,7 +220,7 @@ getSpanJson sp =
     , "value" AE..= sp.spanDurationNs
     , "start" AE..= start
     , "parent_id" AE..= sp.parentSpanId
-    , "service_name" AE..= getServiceName sp
+    , "service_name" AE..= getServiceName sp.resource
     , "has_errors" AE..= spanHasErrors sp
     ]
   where
@@ -228,7 +230,7 @@ getSpanJson sp =
 renderSpanRecordRow :: V.Vector Telemetry.SpanRecord -> HashMap Text Text -> Text -> Html ()
 renderSpanRecordRow spanRecords colors service = do
   let totalDuration = sum $ (.spanDurationNs) <$> spanRecords
-  let filterRecords = V.filter (\x -> getServiceName x == service) spanRecords
+  let filterRecords = V.filter (\x -> getServiceName x.resource == service) spanRecords
   let listLen = V.length filterRecords
   let duration = sum $ (.spanDurationNs) <$> filterRecords
   tr_
@@ -281,7 +283,7 @@ spanTable records =
           let pidText = UUID.toText spanRecord.projectId
               spanid = UUID.toText spanRecord.uSpanId
               tme = fromString (formatShow iso8601Format spanRecord.timestamp)
-              (reqType, _, _, _) = fromMaybe ("", "", "", 0) $ getRequestDetails spanRecord
+              (reqType, _, _, _) = fromMaybe ("", "", "", 0) $ getRequestDetails spanRecord.attributes
           tr_
             [ hxGet_ $ "/p/" <> pidText <> "/log_explorer/" <> spanid <> "/" <> tme <> "/detailed?source=spans"
             , hxTarget_ "#log_details_container"
@@ -302,7 +304,7 @@ spanTable records =
 
 
 getServiceData :: Telemetry.SpanRecord -> ServiceData
-getServiceData sp = ServiceData{name = getServiceName sp, duration = sp.spanDurationNs}
+getServiceData sp = ServiceData{name = getServiceName sp.resource, duration = sp.spanDurationNs}
 
 
 stBox :: Text -> Maybe (Html ()) -> Html ()
@@ -347,19 +349,19 @@ buildTree spanMap parentId =
     Nothing -> []
     Just spans ->
       [ SpanTree
-        SpanMin
-          { parentSpanId = sp.parentSpanId
-          , spanId = sp.spanId
-          , uSpanId = sp.uSpanId
-          , spanName = sp.spanName
-          , spanDurationNs = sp.spanDurationNs
-          , serviceName = getServiceName sp
-          , startTime = utcTimeToNanoseconds sp.startTime
-          , endTime = utcTimeToNanoseconds <$> sp.endTime
-          , hasErrors = spanHasErrors sp
-          , timestamp = sp.timestamp
-          }
-        (buildTree spanMap (Just sp.spanId))
+          SpanMin
+            { parentSpanId = sp.parentSpanId
+            , spanId = sp.spanId
+            , uSpanId = sp.uSpanId
+            , spanName = sp.spanName
+            , spanDurationNs = sp.spanDurationNs
+            , serviceName = getServiceName sp.resource
+            , startTime = utcTimeToNanoseconds sp.startTime
+            , endTime = utcTimeToNanoseconds <$> sp.endTime
+            , hasErrors = spanHasErrors sp
+            , timestamp = sp.timestamp
+            }
+          (buildTree spanMap (Just sp.spanId))
       | sp <- spans
       ]
 

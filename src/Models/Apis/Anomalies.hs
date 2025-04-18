@@ -1,7 +1,7 @@
 module Models.Apis.Anomalies (
   AnomalyVM (..),
   errorByHash,
-  insertIssue,
+  insertIssues,
   AnomalyActions (..),
   Issue (..),
   IssueL (..),
@@ -22,13 +22,14 @@ module Models.Apis.Anomalies (
   convertAnomalyToIssue,
   getReportAnomalies,
   parseAnomalyActions,
-  getAnomalyVM,
+  getAnomaliesVM,
   anomalyIdText,
+  errorsByHashes,
   countAnomalies,
   parseAnomalyRawTypes,
   acknowlegeCascade,
   acknowledgeAnomalies,
-  getShapeParentAnomalyVM,
+  getShapeParentAnomaliesVM,
   getFormatParentAnomalyVM,
 )
 where
@@ -224,8 +225,8 @@ data AnomalyVM = AnomalyVM
     via (GenericEntity '[Schema "apis", TableName "anomalies_vm", PrimaryKey "id", FieldModifiers '[CamelToSnake]] AnomalyVM)
 
 
-getAnomalyVM :: Projects.ProjectId -> Text -> DBT IO (Maybe AnomalyVM)
-getAnomalyVM pid hash = queryOne Select q (pid, hash)
+getAnomaliesVM :: Projects.ProjectId -> V.Vector Text -> DBT IO (V.Vector AnomalyVM)
+getAnomaliesVM pid hash = query Select q (pid, hash)
   where
     q =
       [sql|
@@ -270,21 +271,17 @@ where
     OR (anomaly_type = 'shape' AND endpoints.project_id = an.project_id AND endpoints.created_at != an.created_at)
     OR (anomaly_type = 'format' AND fields.project_id = an.project_id AND fields.created_at != an.created_at)
     OR NOT ( anomaly_type = ANY('{"endpoint","shape","field","format"}'::apis.anomaly_type[]))
-  ) AND an.project_id=? AND an.target_hash=?
+  ) AND an.project_id=? AND an.target_hash=ANY(?)
       |]
 
 
-getShapeParentAnomalyVM :: Projects.ProjectId -> Text -> DBT IO Int
-getShapeParentAnomalyVM pid hash = do
-  result <- query Select q (pid, hash)
-  case result of
-    [Only countt] -> return countt
-    v -> return $ length v
+getShapeParentAnomaliesVM :: Projects.ProjectId -> V.Vector Text -> DBT IO (V.Vector Text)
+getShapeParentAnomaliesVM pid hashes = query Select q (pid, hashes)
   where
     q =
-      [sql|SELECT COUNT(*)
+      [sql|SELECT target_hash
            FROM apis.issues iss JOIN apis.anomalies aan ON iss.id = aan.id
-           WHERE iss.project_id = ? AND ? LIKE iss.target_hash ||'%' AND iss.anomaly_type='endpoint' AND aan.acknowleged_at IS NULL
+           WHERE iss.project_id = ? AND ANY(?) LIKE iss.target_hash ||'%' AND iss.anomaly_type='endpoint' AND aan.acknowleged_at IS NULL
       |]
 
 
@@ -676,6 +673,14 @@ errorByHash :: Text -> DBT IO (Maybe ATError)
 errorByHash hash = selectOneByField [field| hash |] (Only hash)
 
 
+errorsByHashes :: Projects.ProjectId -> V.Vector Text -> DBT IO (V.Vector ATError)
+errorsByHashes pid hashes = query Select q (pid, hashes)
+  where
+    q =
+      [sql| SELECT id, created_at, updated_at, project_id, hash, error_type, message, error_data
+            FROM apis.errors WHERE project_id=? AND hash=ANY(?); |]
+
+
 insertErrorQueryAndParams :: Projects.ProjectId -> RequestDumps.ATError -> (Query, [DBField])
 insertErrorQueryAndParams pid err = (q, params)
   where
@@ -709,11 +714,25 @@ bulkInsertErrors errors = void $ dbtToEff $ executeMany q (V.toList rowsToInsert
         )
 
 
-insertIssue :: Issue -> DBT IO Int64
-insertIssue = execute Insert q
+insertIssues :: V.Vector Issue -> DBT IO Int64
+insertIssues issues = executeMany q (V.toList issuesRows)
   where
     q =
       [sql|insert into apis.issues (id, created_at, updated_at, project_id, acknowleged_at, anomaly_type, target_hash,
                       issue_data, endpoint_id, acknowleged_by, archived_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                       ON CONFLICT (project_id, target_hash) DO NOTHING;
                       |]
+    issuesRows =
+      issues <&> \issue ->
+        ( issue.id
+        , issue.createdAt
+        , issue.updatedAt
+        , issue.projectId
+        , issue.acknowlegedAt
+        , issue.anomalyType
+        , issue.targetHash
+        , issue.issueData
+        , issue.endpointId
+        , issue.acknowlegedBy
+        , issue.archivedAt
+        )

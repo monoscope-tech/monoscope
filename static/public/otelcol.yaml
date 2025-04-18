@@ -43,6 +43,21 @@ exporters:
     project: past-3
     topic: projects/past-3/topics/otlp-stream-prod
   kafka:
+    # logs:
+    #   topic: otlp-logs
+    #   encoding: otlp_proto
+    # metrics:
+    #   topic: otlp-metrics
+    #   encoding: otlp_proto
+    # traces:
+    #   topic: otlp-traces
+    #   encoding: otlp_proto
+    sending_queue:
+      queue_size: 1000000
+      num_consumers: 6
+    producer:
+      max_message_bytes: 10000000
+
     brokers:
       - redpanda-0.s.past3.tech:19092
       - redpanda-1.s.past3.tech:19092

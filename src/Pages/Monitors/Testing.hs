@@ -285,11 +285,11 @@ dashboardPage pid col reqsVecM = do
                       , queryLibRecent = V.empty
                       , queryLibSaved = V.empty
                       , serviceColors = HM.empty
-                      , traceLogs = V.empty
                       , fromD = Nothing
                       , toD = Nothing
                       , detailsWidth = Nothing
                       , targetEvent = Nothing
+                      , showTrace = Nothing
                       }
               Log.virtualTable page
             _ -> pass

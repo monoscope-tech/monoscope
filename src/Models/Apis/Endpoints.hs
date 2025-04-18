@@ -19,6 +19,7 @@ module Models.Apis.Endpoints (
   endpointIdText,
   endpointToUrlPath,
   endpointByHash,
+  endpointsByHashes,
   getProjectHosts,
   insertEndpoints,
   countEndpointInbox,
@@ -243,6 +244,12 @@ endpointByHash :: Projects.ProjectId -> Text -> PgT.DBT IO (Maybe Endpoint)
 endpointByHash pid hash = queryOne Select q (pid, hash)
   where
     q = [sql| SELECT id, created_at, updated_at, project_id, url_path, url_params, method, host, hash, outgoing, description from apis.endpoints where project_id=? AND hash=? |]
+
+
+endpointsByHashes :: Projects.ProjectId -> V.Vector Text -> PgT.DBT IO (V.Vector Endpoint)
+endpointsByHashes pid hashes = query Select q (pid, hashes)
+  where
+    q = [sql| SELECT id, created_at, updated_at, project_id, url_path, url_params, method, host, hash, outgoing, description from apis.endpoints where project_id=? AND hash=ANY(?)|]
 
 
 getEndpointsByAnomalyTargetHash :: Projects.ProjectId -> V.Vector Text -> PgT.DBT IO (V.Vector Host)

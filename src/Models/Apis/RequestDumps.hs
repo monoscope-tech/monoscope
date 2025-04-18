@@ -14,6 +14,7 @@ module Models.Apis.RequestDumps (
   bulkInsertRequestDumps,
   getRequestDumpForReports,
   getRequestDumpsForPreviousReportPeriod,
+  selectChildSpansAndLogs,
   countRequestDumpByProject,
   getRequestType,
   autoCompleteFromRequestDumps,
@@ -23,6 +24,7 @@ module Models.Apis.RequestDumps (
 )
 where
 
+import Control.Error.Util (hush)
 import Data.Aeson qualified as AE
 import Data.Default
 import Data.Default.Instances ()
@@ -45,12 +47,15 @@ import Deriving.Aeson qualified as DAE
 import Effectful
 import Effectful.PostgreSQL.Transact.Effect (DB, dbtToEff)
 import Effectful.Time qualified as Time
+import Fmt (fmt)
 import Models.Apis.Fields.Query ()
 import Models.Projects.Projects qualified as Projects
 import NeatInterpolation (text)
 import Pkg.Parser
-import Pkg.Parser.Stats (Section, Sources)
+import Pkg.Parser.Expr
+import Pkg.Parser.Stats (Section, Sources (SSpans))
 import Relude hiding (many, some)
+import Text.Megaparsec
 import Web.HttpApiData (ToHttpApiData (..))
 import Witch (from)
 
@@ -423,9 +428,22 @@ selectLogTable pid queryAST cursorM dateRange projectedColsByUser source targetS
   now <- Time.currentTime
   let (q, queryComponents) = queryASTToComponents ((defSqlQueryCfg pid now source targetSpansM){cursorM, dateRange, projectedColsByUser, source, targetSpansM}) queryAST
   logItems <- queryToValues q
-  Only count <- fromMaybe (Only 0) <$> queryCount queryComponents.countQuery
+  Only c <- fromMaybe (Only 0) <$> queryCount queryComponents.countQuery
   let logItemsV = V.mapMaybe valueToVector logItems
-  pure $ Right (logItemsV, queryComponents.toColNames, count)
+  pure $ Right (logItemsV, queryComponents.toColNames, c)
+
+
+selectChildSpansAndLogs :: (DB :> es, Time.Time :> es) => Projects.ProjectId -> [Text] -> V.Vector Text -> Eff es (V.Vector (V.Vector AE.Value))
+selectChildSpansAndLogs pid projectedColsByUser traceIds = do
+  now <- Time.currentTime
+  let qConfig = defSqlQueryCfg pid now (Just SSpans) Nothing
+      (r, _) = getProcessedColumns projectedColsByUser qConfig.defaultSelect
+      q =
+        [text|SELECT json_build_array($r) FROM otel_logs_and_spans
+             WHERE project_id=? and context___trace_id=Any(?) and parent_id IS NOT NULL ORDER BY timestamp DESC
+           |]
+  v <- dbtToEff $ query Select (Query $ encodeUtf8 q) (pid, traceIds)
+  pure $ V.mapMaybe valueToVector v
 
 
 valueToVector :: Only AE.Value -> Maybe (V.Vector AE.Value)
@@ -445,8 +463,8 @@ queryCount q = dbtToEff $ DBT.queryOne_ (Query $ encodeUtf8 q)
 selectRequestDumpByProject :: Projects.ProjectId -> Text -> Maybe Text -> Maybe ZonedTime -> Maybe ZonedTime -> DBT IO (V.Vector RequestDumpLogItem, Int)
 selectRequestDumpByProject pid extraQuery cursorM fromM toM = do
   logItems <- query Select (Query $ encodeUtf8 q) (pid, cursorT)
-  Only count <- fromMaybe (Only 0) <$> queryOne Select (Query $ encodeUtf8 qCount) (pid, cursorT)
-  pure (logItems, count)
+  Only c <- fromMaybe (Only 0) <$> queryOne Select (Query $ encodeUtf8 qCount) (pid, cursorT)
+  pure (logItems, c)
   where
     cursorT = fromMaybe "infinity" cursorM
     dateRangeStr = from @String $ case (fromM, toM) of
@@ -475,7 +493,7 @@ countRequestDumpByProject :: Projects.ProjectId -> DBT IO Int
 countRequestDumpByProject pid = do
   result <- query Select q pid
   case result of
-    [Only count] -> return count
+    [Only c] -> return c
     v -> return $ length v
   where
     q = [sql| SELECT count(*) FROM apis.request_dumps WHERE project_id=?  AND created_at > NOW() - interval '14 days'|]
@@ -509,7 +527,7 @@ getLastSevenDaysTotalRequest :: Projects.ProjectId -> DBT IO Int
 getLastSevenDaysTotalRequest pid = do
   result <- queryOne Select q pid
   case fromMaybe (Only 0) result of
-    (Only count) -> return count
+    (Only c) -> return c
   where
     q =
       [sql| SELECT count(*) FROM apis.request_dumps WHERE project_id=? AND created_at > NOW() - interval '7' day;|]
@@ -519,7 +537,7 @@ getTotalRequestToReport :: Projects.ProjectId -> UTCTime -> DBT IO Int
 getTotalRequestToReport pid lastReported = do
   result <- query Select q (pid, lastReported)
   case result of
-    [Only count] -> return count
+    [Only c] -> return c
     v -> return $ length v
   where
     q =

@@ -54,8 +54,8 @@ keepNonEmpty (Just "") = Nothing
 keepNonEmpty (Just a) = Just a
 
 
-apiLogH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe UTCTime -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders LogsGet)
-apiLogH pid queryM queryASTM cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM queryLibItemTitle queryLibItemID detailWM targetEventM hxRequestM hxBoostedM = do
+apiLogH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe UTCTime -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders LogsGet)
+apiLogH pid queryM queryASTM cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM queryLibItemTitle queryLibItemID detailWM targetEventM showTraceM hxRequestM hxBoostedM = do
   (sess, project) <- Sessions.sessionAndProject pid
   let source = fromMaybe "requests" sourceM
   let summaryCols = T.splitOn "," (fromMaybe "" cols')
@@ -112,7 +112,6 @@ apiLogH pid queryM queryASTM cols' cursorM' sinceM fromM toM layoutM sourceM tar
               Components.refreshButton_
           , navTabs = Just $ div_ [class_ "tabs tabs-box tabs-md p-0 tabs-outline items-center border"] do
               a_ [onclick_ "window.setQueryParamAndReload('source', 'requests')", role_ "tab", class_ $ "tab h-auto! " <> if source == "requests" then "tab-active  text-textStrong " else ""] "Requests"
-              a_ [onclick_ "window.setQueryParamAndReload('source', 'logs')", role_ "tab", class_ $ "tab h-auto! " <> if source == "logs" then "tab-active text-textStrong " else ""] "Logs"
               a_ [onclick_ "window.setQueryParamAndReload('source', 'spans')", role_ "tab", class_ $ "tab h-auto! " <> if source == "spans" then "tab-active text-textStrong " else ""] "Traces"
               -- a_ [onclick_ "window.setQueryParamAndReload('source', 'metrics')", role_ "tab", class_ $ "tab py-1.5 h-auto! " <> if source == "metrics" then "tab-active" else ""] "Metrics"
           }
@@ -130,23 +129,29 @@ apiLogH pid queryM queryASTM cols' cursorM' sinceM fromM toM layoutM sourceM tar
             if source == "requests"
               then (\r -> lookupVecTextByKey r colIdxMap "created_at") =<< (requestVecs V.!? (V.length requestVecs - 1))
               else (\r -> lookupVecTextByKey r colIdxMap "timestamp") =<< (requestVecs V.!? (V.length requestVecs - 1))
-          serviceNames =
-            if source == "spans"
-              then V.map (\v -> lookupVecTextByKey v colIdxMap "span_name") requestVecs
-              else []
-          colors = getServiceColors (V.catMaybes serviceNames)
-          nextLogsURL = RequestDumps.requestDumpLogUrlPath pid queryM cols' reqLastCreatedAtM sinceM fromM toM (Just "loadmore") source queryASTM
-          resetLogsURL = RequestDumps.requestDumpLogUrlPath pid queryM cols' Nothing Nothing Nothing Nothing Nothing source Nothing
           traceIDs =
             if source == "spans"
               then V.catMaybes $ V.map (\v -> lookupVecTextByKey v colIdxMap "trace_id") requestVecs
               else []
-      traceLogs <- Telemetry.getLogsByTraceIds pid traceIDs
+          nextLogsURL = RequestDumps.requestDumpLogUrlPath pid queryM cols' reqLastCreatedAtM sinceM fromM toM (Just "loadmore") source queryASTM
+          resetLogsURL = RequestDumps.requestDumpLogUrlPath pid queryM cols' Nothing Nothing Nothing Nothing Nothing source Nothing
+      additionalReqsVec <-
+        if (null traceIDs)
+          then pure []
+          else do
+            rs <- RequestDumps.selectChildSpansAndLogs pid summaryCols $ V.filter (/= "") traceIDs
+            pure rs
+      let finalVecs = requestVecs <> additionalReqsVec
+          serviceNames =
+            if source == "spans"
+              then V.map (\v -> lookupVecTextByKey v colIdxMap "span_name") finalVecs
+              else []
+          colors = getServiceColors (V.catMaybes serviceNames)
       let page =
             ApiLogsPageData
               { pid
               , resultCount
-              , requestVecs
+              , requestVecs = finalVecs
               , cols = curatedColNames
               , colIdxMap
               , nextLogsURL
@@ -158,7 +163,6 @@ apiLogH pid queryM queryASTM cols' cursorM' sinceM fromM toM layoutM sourceM tar
               , isTestLog = Nothing
               , emptyStateUrl = Nothing
               , source
-              , traceLogs
               , targetSpans = targetSpansM
               , serviceColors = colors
               , daysCountDown = daysLeft
@@ -169,6 +173,7 @@ apiLogH pid queryM queryASTM cols' cursorM' sinceM fromM toM layoutM sourceM tar
               , toD
               , detailsWidth = detailWM
               , targetEvent = targetEventM
+              , showTrace = showTraceM
               }
       case (layoutM, hxRequestM, hxBoostedM) of
         (Just "SaveQuery", _, _) -> addRespHeaders $ LogsQueryLibrary pid queryLibSaved queryLibRecent
@@ -233,22 +238,28 @@ apiLogJson pid queryM queryASTM cols' cursorM' sinceM fromM toM layoutM sourceM 
             if source == "requests"
               then (\r -> lookupVecTextByKey r colIdxMap "created_at") =<< (requestVecs V.!? (V.length requestVecs - 1))
               else (\r -> lookupVecTextByKey r colIdxMap "timestamp") =<< (requestVecs V.!? (V.length requestVecs - 1))
-          serviceNames =
-            if source == "spans"
-              then V.map (\v -> lookupVecTextByKey v colIdxMap "span_name") requestVecs
-              else []
           nextLogsURL = RequestDumps.requestDumpLogUrlPath pid queryM cols' reqLastCreatedAtM sinceM fromM toM (Just "loadmore") source queryASTM
           resetLogsURL = RequestDumps.requestDumpLogUrlPath pid queryM cols' Nothing Nothing Nothing Nothing Nothing source Nothing
           traceIDs =
             if source == "spans"
               then V.catMaybes $ V.map (\v -> lookupVecTextByKey v colIdxMap "trace_id") requestVecs
               else []
-      traceLogs <- Telemetry.getLogsByTraceIds pid traceIDs
-      let colors = getServiceColors (V.catMaybes serviceNames)
+      additionalReqsVec <-
+        if (null traceIDs)
+          then pure []
+          else do
+            rs <- RequestDumps.selectChildSpansAndLogs pid summaryCols $ V.filter (/= "") traceIDs
+            pure rs
+      let finalVecs = requestVecs <> additionalReqsVec
+          serviceNames =
+            if source == "spans"
+              then V.map (\v -> lookupVecTextByKey v colIdxMap "span_name") finalVecs
+              else []
+          colors = getServiceColors (V.catMaybes serviceNames)
+
       addRespHeaders
         $ AE.object
-          [ "logsData" AE..= requestVecs
-          , "traceLogs" AE..= traceLogs
+          [ "logsData" AE..= finalVecs
           , "serviceColors" AE..= colors
           , "nextUrl" AE..= nextLogsURL
           , "resetLogsUrl" AE..= resetLogsURL
@@ -422,7 +433,6 @@ data ApiLogsPageData = ApiLogsPageData
   , targetSpans :: Maybe Text
   , serviceColors :: HM.HashMap Text Text
   , daysCountDown :: Maybe Text
-  , traceLogs :: V.Vector (V.Vector AE.Value)
   , queryAST :: Text
   , queryLibRecent :: V.Vector Projects.QueryLibItem
   , queryLibSaved :: V.Vector Projects.QueryLibItem
@@ -430,6 +440,7 @@ data ApiLogsPageData = ApiLogsPageData
   , toD :: Maybe UTCTime
   , detailsWidth :: Maybe Text
   , targetEvent :: Maybe Text
+  , showTrace :: Maybe Text
   }
 
 
@@ -441,12 +452,11 @@ virtualTableTrigger page = do
         colIdxMap = decodeUtf8 $ AE.encode page.colIdxMap
         serviceColors = decodeUtf8 $ AE.encode page.serviceColors
         nextLogsURL = decodeUtf8 $ AE.encode page.nextLogsURL
-        traceLogs = decodeUtf8 $ AE.encode page.traceLogs
 
     script_
       [text|
         if(window.logListTable) {
-           window.logListTable.updateTableData($vecs, $cols, $colIdxMap, $serviceColors, $nextLogsURL, $traceLogs)
+           window.logListTable.updateTableData($vecs, $cols, $colIdxMap, $serviceColors, $nextLogsURL)
           }
     |]
 
@@ -466,7 +476,6 @@ virtualTable page = do
       nextfetchurl = page.nextLogsURL
       resetLogsURL = page.resetLogsURL
       projectid = page.pid.toText
-      tracelogs = decodeUtf8 $ AE.encode page.traceLogs
   script_
     [text|
       window.virtualListData = {
@@ -476,8 +485,7 @@ virtualTable page = do
        serviceColors: $serviceColors,
        nextFetchUrl: `$nextfetchurl`,
        resetLogsUrl: `$resetLogsURL`,
-       projectId: "$projectid",
-       traceLogs: $tracelogs,
+       projectId: "$projectid"
       }
    |]
 
@@ -570,8 +578,13 @@ apiLogsPage page = do
       div_ [class_ "grow flex-1 h-full space-y-1.5 overflow-hidden"] do
         div_ [class_ "flex w-full relative h-full", id_ "logs_section_container"] do
           let dW = fromMaybe "100%" page.detailsWidth
+              showTrace = isJust page.showTrace
           div_ [class_ "relative flex flex-col shrink-1 min-w-0 w-full h-full", style_ $ "width: " <> dW, id_ "logs_list_container"] do
-            div_ [class_ "absolute top-0 right-0 hidden w-full h-full overflow-scroll c-scroll z-50 bg-white transition-all duration-100", id_ "trace_expanded_view"] pass
+            div_ [class_ $ "absolute top-0 right-0  w-full h-full overflow-scroll c-scroll z-50 bg-white transition-all duration-100 " <> if showTrace then "" else "hidden", id_ "trace_expanded_view"] do
+              whenJust page.showTrace \trId -> do
+                let url = "/p/" <> page.pid.toText <> "/traces/" <> trId
+                span_ [class_ "loading loading-dots loading-md"] ""
+                div_ [hxGet_ url, hxTarget_ "#trace_expanded_view", hxSwap_ "innerHtml", hxTrigger_ "intersect one"] pass
             virtualTable page
 
           div_ [onmousedown_ "mouseDown(event)", class_ "relative shrink-0 h-full flex items-center justify-center w-1 bg-fillWeak  cursor-ew-resize overflow-visible"] do

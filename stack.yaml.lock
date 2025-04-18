@@ -89,20 +89,6 @@ packages:
   original:
     hackage: nyan-interpolation-0.9.2@sha256:fb0b07ef6a9f8ca4d2e1db2f2df841c649556d9f6cff894ebf6b9ffbb7c25003,4276
 - completed:
-    hackage: proto-lens-0.7.1.5@sha256:38f7f70fb01f6c79c35d76ef0f60bf1297b132d4a71973c6bafb48fcb1b3c0d4,2980
-    pantry-tree:
-      sha256: 3af265bf8058520232ea8d608cc7174b9b638a43c878ef4bdf52c7e3cd877b13
-      size: 1857
-  original:
-    hackage: proto-lens-0.7.1.5@sha256:38f7f70fb01f6c79c35d76ef0f60bf1297b132d4a71973c6bafb48fcb1b3c0d4,2980
-- completed:
-    hackage: proto-lens-runtime-0.7.0.6@sha256:b12a2731424121ea337c5705088dd4c83db461c280c962749298503f2643ca24,3057
-    pantry-tree:
-      sha256: f70c8ec121f62902b4ce98f41dbb54126c81a2ff07c85df313782ae334463d00
-      size: 168
-  original:
-    hackage: proto-lens-runtime-0.7.0.6@sha256:b12a2731424121ea337c5705088dd4c83db461c280c962749298503f2643ca24,3057
-- completed:
     hackage: servant-htmx-0.1.0.2@sha256:cdafd3165d28694ec4bf81fff3b87b4721415293d75a394a97c26d0d4d57e38c,1817
     pantry-tree:
       sha256: e2eac22dcc977e6081ba7614d748d7a6a83b2001d4e719d6afb9ae6edf6bb23d
@@ -257,6 +243,92 @@ packages:
   original:
     hackage: hs-opentelemetry-instrumentation-wai-0.1.1.0@sha256:d97b4cb3870217e64e95da3f51db814eca62eb57484ee0a6f747366da5940bc2,1371
 - completed:
+    hackage: ki-effectful-0.1.1.0@sha256:15a4bc01c4195d9e3ed3d0ae25e419b0c035c897494dadefc2d676a43f1f5082,1815
+    pantry-tree:
+      sha256: a0897588dabdae952547ee5e7758a0b58602a1f765a395fe628a6aebe94bdbf4
+      size: 328
+  original:
+    hackage: ki-effectful-0.1.1.0@sha256:15a4bc01c4195d9e3ed3d0ae25e419b0c035c897494dadefc2d676a43f1f5082,1815
+- completed:
+    hackage: http2-tls-0.4.5@sha256:2084af1e64a4f4c2523cd0aa264fe1bebca8333e4dde0e25cf4820f27c012c97,2398
+    pantry-tree:
+      sha256: d7691292b9cba368b50ee0bb5da86feb002dc93ccb61cf5de8e3e7d7de91f170
+      size: 894
+  original:
+    hackage: http2-tls-0.4.5@sha256:2084af1e64a4f4c2523cd0aa264fe1bebca8333e4dde0e25cf4820f27c012c97,2398
+- completed:
+    hackage: snappy-c-0.1.1@sha256:b113aa1c7c095325cc218e8fcc4ad05e719f5ed0d2febb910d42e21387759ac9,3993
+    pantry-tree:
+      sha256: 04170f8ee10717615b1f077e2bd96f8ac71dd6072fc73ffac5f12ed4d9a22bd9
+      size: 1109
+  original:
+    hackage: snappy-c-0.1.1@sha256:b113aa1c7c095325cc218e8fcc4ad05e719f5ed0d2febb910d42e21387759ac9,3993
+- completed:
+    commit: 815c852b046612256fc0f5f7e8585ec4e55dd9b7
+    git: https://github.com/google/proto-lens
+    name: proto-lens-setup
+    pantry-tree:
+      sha256: 739d6d07032630350de09c604a632b7e705dd6bc4cc320aeb51164c3a0ee2253
+      size: 288
+    subdir: proto-lens-setup
+    version: 0.4.0.9
+  original:
+    commit: 815c852b046612256fc0f5f7e8585ec4e55dd9b7
+    git: https://github.com/google/proto-lens
+    subdir: proto-lens-setup
+- completed:
+    commit: 815c852b046612256fc0f5f7e8585ec4e55dd9b7
+    git: https://github.com/google/proto-lens
+    name: proto-lens-protoc
+    pantry-tree:
+      sha256: 8a39323d03fd8317cd01764438680dc0b0f726bd72fccd97441b62fd06b0b61b
+      size: 1449
+    subdir: proto-lens-protoc
+    version: 0.9.0.0
+  original:
+    commit: 815c852b046612256fc0f5f7e8585ec4e55dd9b7
+    git: https://github.com/google/proto-lens
+    subdir: proto-lens-protoc
+- completed:
+    commit: 815c852b046612256fc0f5f7e8585ec4e55dd9b7
+    git: https://github.com/google/proto-lens
+    name: proto-lens-runtime
+    pantry-tree:
+      sha256: 9f1ecf6a13ebe3dd447dcab3b17bd2fb00c223eb9497f696d0fc39929c3995f6
+      size: 221
+    subdir: proto-lens-runtime
+    version: 0.7.0.7
+  original:
+    commit: 815c852b046612256fc0f5f7e8585ec4e55dd9b7
+    git: https://github.com/google/proto-lens
+    subdir: proto-lens-runtime
+- completed:
+    commit: 815c852b046612256fc0f5f7e8585ec4e55dd9b7
+    git: https://github.com/google/proto-lens
+    name: proto-lens
+    pantry-tree:
+      sha256: 6726c34a41263cda7ab730b1af9936794d19c12a3f16027377f34b167b6559eb
+      size: 74962
+    subdir: proto-lens
+    version: 0.7.1.6
+  original:
+    commit: 815c852b046612256fc0f5f7e8585ec4e55dd9b7
+    git: https://github.com/google/proto-lens
+    subdir: proto-lens
+- completed:
+    commit: 815c852b046612256fc0f5f7e8585ec4e55dd9b7
+    git: https://github.com/google/proto-lens
+    name: proto-lens-protobuf-types
+    pantry-tree:
+      sha256: 66ece4f49e6e83481f4b8ee4ced702ca92175377b1cfb9edaa18d089e62814f2
+      size: 67707
+    subdir: proto-lens-protobuf-types
+    version: 0.7.2.2
+  original:
+    commit: 815c852b046612256fc0f5f7e8585ec4e55dd9b7
+    git: https://github.com/google/proto-lens
+    subdir: proto-lens-protobuf-types
+- completed:
     commit: bcd3aeb5ca63a02ba026be4f02f4ce5767fb4f78
     git: https://github.com/Kleidukos/pg-transact-effectful
     name: pg-transact-effectful
@@ -282,6 +354,32 @@ packages:
     commit: a159d7a17913725a0cb2a2251fa0b812acd3d160
     git: https://github.com/saurabhnanda/odd-jobs.git
     subdir: .
+- completed:
+    commit: 4d374aca55bb5392e3b91ae47d6ca5625ffc59b6
+    git: https://github.com/well-typed/grapesy.git
+    name: grapesy
+    pantry-tree:
+      sha256: 894961c5048ba0bf60ecb2c865456d3cd90c86c84ba15bce5f40581b0d3af041
+      size: 12118
+    subdir: grapesy
+    version: 1.0.1
+  original:
+    commit: 4d374aca55bb5392e3b91ae47d6ca5625ffc59b6
+    git: https://github.com/well-typed/grapesy.git
+    subdir: grapesy
+- completed:
+    commit: 4d374aca55bb5392e3b91ae47d6ca5625ffc59b6
+    git: https://github.com/well-typed/grapesy.git
+    name: grpc-spec
+    pantry-tree:
+      sha256: 66b9f22f2a73ae1cd5b7ab713122f1e3d5a7e49cf56a9c153247ab6306adaf15
+      size: 4019
+    subdir: grpc-spec
+    version: 1.0.0
+  original:
+    commit: 4d374aca55bb5392e3b91ae47d6ca5625ffc59b6
+    git: https://github.com/well-typed/grapesy.git
+    subdir: grpc-spec
 - completed:
     commit: b54294c179f8ce8e76c9549c953e2ee684fcef8a
     git: https://github.com/tonyalaribe/gogol.git
@@ -348,19 +446,6 @@ packages:
     git: https://github.com/tonyalaribe/gogol.git
     subdir: lib/services/gogol-cloudtrace
 - completed:
-    commit: 2d48ee3446858f08a8c75130c90d770c377569bd
-    git: https://github.com/awakesecurity/proto3-wire.git
-    name: proto3-wire
-    pantry-tree:
-      sha256: 435441c5b8a677353e3c6566f3e6e7d9c1947ff75ade51ce1bc8d66e4ae329eb
-      size: 2648
-    subdir: .
-    version: 1.4.3
-  original:
-    commit: 2d48ee3446858f08a8c75130c90d770c377569bd
-    git: https://github.com/awakesecurity/proto3-wire.git
-    subdir: .
-- completed:
     name: proto3-suite
     pantry-tree:
       sha256: bff4d12baadfc9a98595928b90d823ca28cc05cdce9c6dcfa0a5a5b1ccb7b0db
@@ -371,32 +456,6 @@ packages:
     version: 0.8.2
   original:
     url: https://github.com/tonyalaribe/proto3-suite/archive/ecf8330af92941d5a0a0676a719b666ca3970ac4.tar.gz
-- completed:
-    commit: 4b3b04d0ac9d1db53033fb4f0b6864f25b6e945d
-    git: https://github.com/awakesecurity/gRPC-haskell.git
-    name: grpc-haskell-core
-    pantry-tree:
-      sha256: 2bfee0e6b5c88593099df242bd48a051f79468d1f4559b0c30a0c69125747a9e
-      size: 2532
-    subdir: core
-    version: 0.6.0
-  original:
-    commit: 4b3b04d0ac9d1db53033fb4f0b6864f25b6e945d
-    git: https://github.com/awakesecurity/gRPC-haskell.git
-    subdir: core
-- completed:
-    commit: 4b3b04d0ac9d1db53033fb4f0b6864f25b6e945d
-    git: https://github.com/awakesecurity/gRPC-haskell.git
-    name: grpc-haskell
-    pantry-tree:
-      sha256: e2acf6df3b1db984868c794451712321fcc68df403e70e590b79e6eba28be898
-      size: 7616
-    subdir: .
-    version: 0.4.0
-  original:
-    commit: 4b3b04d0ac9d1db53033fb4f0b6864f25b6e945d
-    git: https://github.com/awakesecurity/gRPC-haskell.git
-    subdir: .
 - completed:
     commit: 0fa01adb871e66996d4ed2c27a3e97fac39ac466
     git: https://github.com/tonyalaribe/xxhash

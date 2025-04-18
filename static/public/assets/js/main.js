@@ -52,6 +52,7 @@ window.setQueryParamAndReload = (key, value) => {
     url.searchParams.delete('target-spans')
     url.searchParams.delete('details_width')
     url.searchParams.delete('target_event')
+    url.searchParams.delete('showTrace')
   }
   window.location.href = url.toString()
 }

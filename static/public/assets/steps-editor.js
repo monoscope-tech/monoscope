@@ -237,7 +237,15 @@ export class StepsEditor extends LitElement {
         this.collectionResults[idx] = { ...resp }
       }
     } catch (error) {
-      this.sendRequestErrors[idx] = 'Send request failed with message: ' + error.message
+      let msg = error.message
+      if (msg === 'Failed to fetch') {
+        if (!navigator.onLine) {
+          msg += ': Please check your network connection'
+        } else {
+          msg += ': This could be due to a CORS restriction, DNS failure, server being unreachable.'
+        }
+      }
+      this.sendRequestErrors[idx] = 'Send request error: \n' + msg
     } finally {
       this.isSendingRequest[idx] = false
       this.requestUpdate()

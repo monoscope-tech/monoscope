@@ -1,6 +1,7 @@
 module Pages.Telemetry.Spans (expandedSpanItem, spanLatencyBreakdown, spanGetH) where
 
 import Data.Aeson qualified as AE
+import Data.Aeson.KeyMap qualified as KEM
 import Data.ByteString.Base64 qualified as B64
 import Data.Effectful.UUID qualified as UUID
 import Data.HashMap.Strict qualified as HM
@@ -12,7 +13,7 @@ import Lucid
 import Lucid.Htmx
 import Lucid.Hyperscript (__)
 import Models.Projects.Projects qualified as Projects
-import Models.Telemetry.Telemetry (SpanRecord (..), convertSpanToRequestMessage)
+import Models.Telemetry.Telemetry (Context (..), SpanRecord (..), convertSpanToRequestMessage)
 import Models.Telemetry.Telemetry qualified as Telemetry
 import NeatInterpolation (text)
 import Pages.Components (dateTime)
@@ -33,9 +34,9 @@ spanGetH pid trId spanId = do
       addRespHeaders $ h1_ [] "Span not found"
 
 
-expandedSpanItem :: Projects.ProjectId -> Telemetry.SpanRecord -> Maybe Text -> Maybe Text -> Html ()
+expandedSpanItem :: Projects.ProjectId -> Telemetry.OtelLogsAndSpans -> Maybe Text -> Maybe Text -> Html ()
 expandedSpanItem pid sp leftM rightM = do
-  let reqDetails = getRequestDetails sp
+  let reqDetails = getRequestDetails sp.attributes
   div_ [class_ "w-full px-2 pb-2 relative pb-[50px]"] $ do
     div_ [class_ "flex justify-between items-center", id_ "copy_share_link"] pass
     span_ [class_ "htmx-indicator query-indicator absolute loading left-1/2 -translate-x-1/2 loading-dots absoute z-10 top-10", id_ "loading-span-list"] ""
@@ -45,7 +46,7 @@ expandedSpanItem pid sp leftM rightM = do
         div_ [class_ "flex items-center gap-4"] $ do
           h3_ [class_ "whitespace-nowrap font-semibold text-textStrong"] "Trace Span"
         div_ [class_ "flex gap-4 items-center"] $ do
-          dateTime sp.startTime Nothing
+          dateTime sp.start_time Nothing
           div_ [class_ "flex gap-2 items-center"] do
             button_
               [ [__|on click add .hidden to #trace_expanded_view 
@@ -54,7 +55,7 @@ expandedSpanItem pid sp leftM rightM = do
             then add .hidden to #resizer
             then call updateUrlState('details_width', '', 'delete')
             then call updateUrlState('target_event', '0px', 'delete')
-            
+            then call updateUrlState('showTrace', "true", 'delete')
             |]
               ]
               do
@@ -78,25 +79,25 @@ expandedSpanItem pid sp leftM rightM = do
                       faSprite_ "copy" "regular" "h-8 w-8 border border-slate-300 bg-fillWeaker rounded-full p-2 text-slate-500"
                 (scheme, method, path, status) -> do
                   -- span_ [class_ " font-medium border rounded-sm px-2 py-1.5"] $ toHtml scheme
-                  div_ [class_ "flex items-center"] do
+                  div_ [class_ "flex flex-wrap items-center"] do
                     span_ [class_ "flex gap-2 items-center text-textStrong bg-fillWeak border border-strokeWeak rounded-lg whitespace-nowrap px-2 py-1"] $ toHtml method
-                    span_ [class_ "px-2 py-1.5 max-w-96 truncate"] $ toHtml path
+                    span_ [class_ "px-2 py-1.5 max-w-96"] $ toHtml path
                     let extraClass = getGrpcStatusColor status
                     when (scheme /= "DB") $ span_ [class_ $ " px-2 py-1.5 border-l " <> extraClass] $ toHtml $ show status
           Nothing -> do
-            h4_ [class_ "text-xl max-w-96 truncate"] $ toHtml sp.spanName
+            h4_ [class_ "text-xl max-w-96 truncate"] $ toHtml $ fromMaybe "" sp.name
 
       div_ [class_ "flex gap-2 flex-wrap"] $ do
-        spanBadge (toText $ getDurationNSMS sp.spanDurationNs) "Span duration"
-        spanBadge (getServiceName sp) "Service"
-        spanBadge ("Spand ID: " <> sp.spanId) "Span ID"
-        spanBadge (maybe "" show sp.kind) "Span Kind"
-        spanBadge (maybe "" show sp.status) "Span Status"
+        spanBadge (toText $ getDurationNSMS $ maybe 0 fromIntegral sp.duration) "Span duration"
+        spanBadge (getServiceName sp.resource) "Service"
+        spanBadge ("Spand ID: " <> maybe "" (\c -> fromMaybe "" c.span_id) sp.context) "Span ID"
+        spanBadge (fromMaybe "" sp.kind) "Span Kind"
+      -- spanBadge (maybe "" show sp.status) "Span Status"
 
       div_ [class_ "flex gap-2 items-center text-textBrand font-medium text-xs"] do
         whenJust reqDetails $ \case
           ("HTTP", _, _, _) -> do
-            let json = decodeUtf8 $ AE.encode $ selectiveReqToJson $ convertSpanToRequestMessage sp ""
+            let json = decodeUtf8 $ AE.encode $ convertSpanToRequestMessage sp "" >>= (\req -> Just $ selectiveReqToJson req)
             button_
               [ class_ "flex items-center gap-1"
               , onclick_ "window.buildCurlRequest(event)"
@@ -106,22 +107,25 @@ expandedSpanItem pid sp leftM rightM = do
                 "Copy request as curl"
                 faSprite_ "copy" "regular" "w-3 h-3"
           _ -> pass
-        let tracePath = "/p/" <> pid.toText <> "/traces/" <> sp.traceId <> "/"
-        button_
-          [ class_ "flex items-end gap-1"
-          , term
-              "_"
-              [text|on click remove .hidden from #trace_expanded_view
-                    then set #trace_expanded_view.innerHTML to #loader-tmp.innerHTML
-                    then fetch $tracePath
-                    then set #trace_expanded_view.innerHTML to it
-                    then htmx.process(#trace_expanded_view)
-                    then _hyperscript.processNode(#trace_expanded_view) then window.evalScriptsFromContent(#trace_expanded_view)|]
-          ]
-          do
-            "View parent trace"
-            faSprite_ "cross-hair" "regular" "w-4 h-4"
-        let sp_id = UUID.toText sp.uSpanId
+        whenJust sp.context $ \ctx -> do
+          whenJust ctx.trace_id $ \trId -> do
+            let tracePath = "/p/" <> pid.toText <> "/traces/" <> trId <> "/"
+            button_
+              [ class_ "flex items-end gap-1"
+              , term
+                  "_"
+                  [text|on click remove .hidden from #trace_expanded_view
+                         then call updateUrlState('showTrace', "$trId")
+                         then set #trace_expanded_view.innerHTML to #loader-tmp.innerHTML
+                         then fetch $tracePath
+                         then set #trace_expanded_view.innerHTML to it
+                         then htmx.process(#trace_expanded_view)
+                         then _hyperscript.processNode(#trace_expanded_view) then window.evalScriptsFromContent(#trace_expanded_view)|]
+              ]
+              do
+                "View parent trace"
+                faSprite_ "cross-hair" "regular" "w-4 h-4"
+        let sp_id = UUID.toText sp.id
         let createdAt = toText $ formatTime defaultTimeLocale "%Y-%m-%dT%H:%M:%S%6QZ" $ sp.timestamp
         button_
           [ class_ "flex items-center gap-2"
@@ -135,30 +139,33 @@ expandedSpanItem pid sp leftM rightM = do
 
       whenJust reqDetails $ \case
         ("HTTP", method, path, status) -> do
-          let httpJson = convertSpanToRequestMessage sp ""
-          div_ [id_ "http-content-container", class_ "flex flex-col gap-3"] do
-            div_ [class_ "bg-fillWeak w-max rounded-lg border border-strokeWeak justify-start items-start inline-flex"] $ do
-              div_ [class_ "justify-start items-start flex text-sm"] $ do
-                button_ [onclick_ "navigatable(this, '#raw_content', '#http-content-container', 't-tab-box-active')", class_ "a-tab px-3 py-1 rounded-lg text-textWeak t-tab-box-active"] "Raw Details"
-                button_ [onclick_ "navigatable(this, '#req_content', '#http-content-container', 't-tab-box-active')", class_ "a-tab px-3 py-1 rounded-lg text-textWeak"] "Req Body"
-                button_ [onclick_ "navigatable(this, '#res_content', '#http-content-container', 't-tab-box-active')", class_ "a-tab px-3 py-1 rounded-lg text-textWeak"] "Res Body"
-                button_ [onclick_ "navigatable(this, '#hed_content', '#http-content-container', 't-tab-box-active')", class_ "a-tab px-3 py-1 rounded-lg text-textWeak"] "Headers"
-                button_ [onclick_ "navigatable(this, '#par_content', '#http-content-container', 't-tab-box-active')", class_ "a-tab px-3 py-1 rounded-lg text-textWeak"] "Params"
-            div_ [] do
-              div_ [id_ "raw_content", class_ "a-tab-content"] do
-                jsonValueToHtmlTree $ selectiveReqToJson httpJson
-              div_ [id_ "req_content", class_ "hidden a-tab-content"] do
-                jsonValueToHtmlTree $ b64ToJson httpJson.requestBody
-              div_ [id_ "res_content", class_ "hidden a-tab-content"] do
-                jsonValueToHtmlTree $ b64ToJson httpJson.responseBody
-              div_ [id_ "hed_content", class_ "hidden a-tab-content"] do
-                jsonValueToHtmlTree $ AE.object ["request_headers" AE..= httpJson.requestHeaders, "response_headers" AE..= httpJson.responseHeaders]
-              div_ [id_ "par_content", class_ "hidden a-tab-content"] do
-                jsonValueToHtmlTree $ AE.object ["query_params" AE..= httpJson.queryParams, "path_params" AE..= httpJson.pathParams]
+          let httpJsonM = convertSpanToRequestMessage sp ""
+          case httpJsonM of
+            Just httpJson -> do
+              div_ [id_ "http-content-container", class_ "flex flex-col gap-3"] do
+                div_ [class_ "bg-fillWeak w-max rounded-lg border border-strokeWeak justify-start items-start inline-flex"] $ do
+                  div_ [class_ "justify-start items-start flex text-sm"] $ do
+                    button_ [onclick_ "navigatable(this, '#raw_content', '#http-content-container', 't-tab-box-active')", class_ "a-tab px-3 py-1 rounded-lg text-textWeak t-tab-box-active"] "Raw Details"
+                    button_ [onclick_ "navigatable(this, '#req_content', '#http-content-container', 't-tab-box-active')", class_ "a-tab px-3 py-1 rounded-lg text-textWeak"] "Req Body"
+                    button_ [onclick_ "navigatable(this, '#res_content', '#http-content-container', 't-tab-box-active')", class_ "a-tab px-3 py-1 rounded-lg text-textWeak"] "Res Body"
+                    button_ [onclick_ "navigatable(this, '#hed_content', '#http-content-container', 't-tab-box-active')", class_ "a-tab px-3 py-1 rounded-lg text-textWeak"] "Headers"
+                    button_ [onclick_ "navigatable(this, '#par_content', '#http-content-container', 't-tab-box-active')", class_ "a-tab px-3 py-1 rounded-lg text-textWeak"] "Params"
+                div_ [] do
+                  div_ [id_ "raw_content", class_ "a-tab-content"] do
+                    jsonValueToHtmlTree $ selectiveReqToJson httpJson
+                  div_ [id_ "req_content", class_ "hidden a-tab-content"] do
+                    jsonValueToHtmlTree $ b64ToJson httpJson.requestBody
+                  div_ [id_ "res_content", class_ "hidden a-tab-content"] do
+                    jsonValueToHtmlTree $ b64ToJson httpJson.responseBody
+                  div_ [id_ "hed_content", class_ "hidden a-tab-content"] do
+                    jsonValueToHtmlTree $ AE.object ["request_headers" AE..= httpJson.requestHeaders, "response_headers" AE..= httpJson.responseHeaders]
+                  div_ [id_ "par_content", class_ "hidden a-tab-content"] do
+                    jsonValueToHtmlTree $ AE.object ["query_params" AE..= httpJson.queryParams, "path_params" AE..= httpJson.pathParams]
+            Nothing -> pass
         _ -> pass
 
     div_ [class_ "w-full mt-8", id_ "span-tabs-container"] do
-      let spanErrors = getSpanErrors sp
+      let spanErrors = getSpanErrors $ fromMaybe AE.Null sp.events
       div_ [class_ "flex", [__|on click halt|]] $ do
         button_ [class_ "a-tab border-b-2 border-b-slate-200 px-4 py-1.5 t-tab-active", onclick_ "navigatable(this, '#att-content', '#span-tabs-container', 't-tab-active')"] "Attributes"
         button_ [class_ "a-tab border-b-2 border-b-slate-200 px-4 py-1.5 ", onclick_ "navigatable(this, '#meta-content', '#span-tabs-container', 't-tab-active')"] "Process"
@@ -168,14 +175,14 @@ expandedSpanItem pid sp leftM rightM = do
             div_ [class_ "badge badge-error badge-sm"] $ show $ length spanErrors
         button_ [class_ "a-tab border-b-2 border-b-slate-200 flex items-center gap-1 px-4 py-1.5 ", onclick_ "navigatable(this, '#logs-content', '#span-tabs-container', 't-tab-active')"] $ do
           "Logs"
-          div_ [class_ "badge badge-ghost badge-sm"] $ show $ numberOfEvents sp.events
+          div_ [class_ "badge badge-ghost badge-sm"] $ show $ numberOfEvents $ fromMaybe AE.Null sp.events
         div_ [class_ "w-full border-b-2 border-b-slate-200"] pass
 
       div_ [class_ "grid my-4 text-slate-600 font"] $ do
         div_ [class_ "a-tab-content", id_ "att-content"] $ do
-          jsonValueToHtmlTree sp.attributes
+          jsonValueToHtmlTree $ fromMaybe (AE.object []) (fmap AE.Object $ fmap KEM.fromMapText sp.attributes)
         div_ [class_ "hidden a-tab-content", id_ "meta-content"] $ do
-          jsonValueToHtmlTree sp.resource
+          jsonValueToHtmlTree $ fromMaybe (AE.object []) (fmap AE.Object $ fmap KEM.fromMapText sp.resource)
         div_ [class_ "hidden a-tab-content", id_ "errors-content"] $ do
           renderErrors spanErrors
         div_ [class_ "hidden a-tab-content", id_ "logs-content"] $ do

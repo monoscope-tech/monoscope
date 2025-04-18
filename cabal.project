@@ -94,7 +94,9 @@ package proto3-suite
   ghc-options: -Wno-x-partial
 
 constraints:
-  pg-entity -prod, proto3-suite -large-records -dhall,
-  text-display == 0.0.5.2
+  pg-entity +prod, proto3-suite -large-records -dhall,
+  text-display == 0.0.5.2,
+  streamly ^>=0.10.0,
+  streamly-core ^>=0.3.0
 
 allow-newer: all 

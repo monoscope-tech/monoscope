@@ -37,7 +37,7 @@ type Routes = NamedRoutes Routes'
 -- TODO: rename layout to action
 type Routes' :: Type -> Type
 data Routes' mode = Routes'
-  { logExplorerGet :: mode :- "log_explorer" :> QPT "query" :> QPT "queryAST" :> QPT "cols" :> QPU "cursor" :> QPT "since" :> QPT "from" :> QPT "to" :> QPT "layout" :> QPT "source" :> QPT "target-spans" :> QPT "queryTitle" :> QPT "queryLibId" :> QPT "details_width" :> QPT "target_event" :> HXRequest :> HXBoosted :> Get '[HTML] (RespHeaders Log.LogsGet)
+  { logExplorerGet :: mode :- "log_explorer" :> QPT "query" :> QPT "queryAST" :> QPT "cols" :> QPU "cursor" :> QPT "since" :> QPT "from" :> QPT "to" :> QPT "layout" :> QPT "source" :> QPT "target-spans" :> QPT "queryTitle" :> QPT "queryLibId" :> QPT "details_width" :> QPT "target_event" :> QPT "showTrace" :> HXRequest :> HXBoosted :> Get '[HTML] (RespHeaders Log.LogsGet)
   , logExplorerGetJson :: mode :- "log_explorer" :> "json" :> QPT "query" :> QPT "queryAST" :> QPT "cols" :> QPU "cursor" :> QPT "since" :> QPT "from" :> QPT "to" :> QPT "layout" :> QPT "source" :> QPT "target-spans" :> Get '[JSON] (RespHeaders AE.Value)
   , logExplorerItemDetailedGet :: mode :- "log_explorer" :> Capture "logItemID" UUID.UUID :> Capture "createdAt" UTCTime :> "detailed" :> QPT "source" :> Get '[HTML] (RespHeaders LogItem.ApiItemDetailed)
   }

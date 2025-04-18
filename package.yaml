@@ -8,6 +8,23 @@ copyright: '2021 Author name here'
 language: GHC2021
 spec-version: 0.36.0
 
+build-type: Custom
+custom-setup:
+  dependencies:
+    - base
+    - Cabal
+    - proto-lens-setup
+
+build-tools:
+  - proto-lens-protoc:proto-lens-protoc
+
+extra-source-files:
+  - proto/**/*.proto
+  - README.md
+
+# generated-other-modules:
+# generated-exposed-modules:
+
 ghc-options:
   - -fwrite-ide-info
   - -hiedir .hiefiles
@@ -76,20 +93,46 @@ default-extensions:
   - TupleSections
   - ViewPatterns
 
-extra-source-files:
-  - README.md
-
 description: Please see the README on GitHub at <https://github.com/githubuser/apitoolkit-server#readme>
 
 library:
   source-dirs:
     - src
+  generated-exposed-modules:
+    # Common
+    - Proto.Opentelemetry.Proto.Common.V1.Common
+    - Proto.Opentelemetry.Proto.Common.V1.Common_Fields
+    # Resource
+    - Proto.Opentelemetry.Proto.Resource.V1.Resource
+    - Proto.Opentelemetry.Proto.Resource.V1.Resource_Fields
+    # Trace
+    - Proto.Opentelemetry.Proto.Trace.V1.Trace
+    - Proto.Opentelemetry.Proto.Trace.V1.Trace_Fields
+    - Proto.Opentelemetry.Proto.Collector.Trace.V1.TraceService
+    - Proto.Opentelemetry.Proto.Collector.Trace.V1.TraceService_Fields
+    # Logs
+    - Proto.Opentelemetry.Proto.Logs.V1.Logs
+    - Proto.Opentelemetry.Proto.Logs.V1.Logs_Fields
+    - Proto.Opentelemetry.Proto.Collector.Logs.V1.LogsService
+    - Proto.Opentelemetry.Proto.Collector.Logs.V1.LogsService_Fields
+    # Metrics
+    - Proto.Opentelemetry.Proto.Metrics.V1.Metrics
+    - Proto.Opentelemetry.Proto.Metrics.V1.Metrics_Fields
+    - Proto.Opentelemetry.Proto.Collector.Metrics.V1.MetricsService
+    - Proto.Opentelemetry.Proto.Collector.Metrics.V1.MetricsService_Fields
+    # Profiles
+    - Proto.Opentelemetry.Proto.Profiles.V1development.Profiles
+    - Proto.Opentelemetry.Proto.Profiles.V1development.Profiles_Fields
+    - Proto.Opentelemetry.Proto.Collector.Profiles.V1development.ProfilesService
+    - Proto.Opentelemetry.Proto.Collector.Profiles.V1development.ProfilesService_Fields
+
   dependencies:
     - base
     - relude >= 1.2.0.0
     - rust-interop
-    - otlp
     - colourista
+    - proto-lens
+    - proto-lens-runtime
     - vector-algorithms
     - effectful
     - effectful-core
@@ -99,6 +142,8 @@ library:
     - log-base
     - log-effectful
     - Unique
+    # - streamly
+    # - streamly-core
     - aeson
     - aeson-qq
     - async
@@ -113,6 +158,7 @@ library:
     - containers
     - cookie
     - safe-exceptions
+    - annotated-exception
     - safe
     - aeson-pretty
     - cryptonite
@@ -185,9 +231,6 @@ library:
     - filepath
     - http-client
     - wai-middleware-static
-    - grpc-haskell
-    - proto3-suite
-    - proto3-wire
     - template-haskell
     - cryptohash-md5
     - hiedb-plugin
@@ -198,6 +241,9 @@ library:
     - hs-opentelemetry-instrumentation-wai
     - hs-opentelemetry-exporter-otlp
     # - hs-opentelemetry-instrumentation-auto
+    - postgresql-libpq
+    - ki-effectful
+    - grapesy
 
 executables:
   apitoolkit-server-exe:

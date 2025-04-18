@@ -24,7 +24,7 @@ spec = aroundAll withTestResources do
   describe "Check Log Page" do
     it "should return an empty list" \TestResources{..} -> do
       pg <-
-        toServantResponse trATCtx trSessAndHeader trLogger $ Log.apiLogH testPid Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
+        toServantResponse trATCtx trSessAndHeader trLogger $ Log.apiLogH testPid Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
 
       case pg of
         Log.LogPage (PageCtx _ content) -> do
@@ -50,7 +50,7 @@ spec = aroundAll withTestResources do
       res <- runTestBackground trATCtx $ processRequestMessages msgs
       length res `shouldBe` 202
       pg <-
-        toServantResponse trATCtx trSessAndHeader trLogger $ Log.apiLogH testPid Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
+        toServantResponse trATCtx trSessAndHeader trLogger $ Log.apiLogH testPid Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
 
       case pg of
         Log.LogPage (PageCtx _ content) -> do

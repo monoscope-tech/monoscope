@@ -1,6 +1,8 @@
 module Pages.LogExplorer.LogItem (expandAPIlogItemH, expandAPIlogItem', ApiItemDetailed (..)) where
 
 import Data.Aeson qualified as AE
+import Data.Aeson.KeyMap qualified as KEM
+import Data.Aeson.KeyMap qualified as Map
 import Data.Aeson.Text (encodeToLazyText)
 import Data.ByteString.Lazy qualified as BS
 import Data.Text qualified as T
@@ -20,6 +22,7 @@ import NeatInterpolation (text)
 import Network.URI (escapeURIString, isUnescapedInURI)
 import Pages.Components (dateTime, statBox_)
 import Pages.Telemetry.Spans qualified as Spans
+import Pages.Telemetry.Utils (atMapText)
 import Relude
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
 import Utils (faSprite_, getDurationNSMS, getMethodBorderColor, getMethodColor, getSeverityColor, getStatusBorderColor, getStatusColor, jsonValueToHtmlTree, lookupValueText)
@@ -168,8 +171,8 @@ expandAPIlogItem' pid req modal = do
 
 data ApiItemDetailed
   = RequestItemExpanded Projects.ProjectId RequestDumps.RequestDumpLogItem Bool
-  | SpanItemExpanded Projects.ProjectId Telemetry.SpanRecord
-  | LogItemExpanded Projects.ProjectId Telemetry.LogRecord
+  | SpanItemExpanded Projects.ProjectId Telemetry.OtelLogsAndSpans
+  | LogItemExpanded Projects.ProjectId Telemetry.OtelLogsAndSpans
   | ItemDetailedNotFound Text
 
 
@@ -181,7 +184,7 @@ instance ToHtml ApiItemDetailed where
   toHtmlRaw = toHtml
 
 
-apiLogItemView :: Projects.ProjectId -> Telemetry.LogRecord -> Html ()
+apiLogItemView :: Projects.ProjectId -> Telemetry.OtelLogsAndSpans -> Html ()
 apiLogItemView pid lg = do
   div_ [class_ "w-full flex flex-col gap-2 px-2 pb-2 relative"] $ do
     div_ [class_ "flex justify-between items-center", id_ "copy_share_link"] pass
@@ -200,41 +203,44 @@ apiLogItemView pid lg = do
             then add .hidden to #resizer
             then call updateUrlState('details_width', '', 'delete')
             then call updateUrlState('target_event', '0px', 'delete')
-
+            then call updateUrlState('showTrace', '', 'delete')
             |]
               ]
               do
                 faSprite_ "xmark" "regular" "w-3 h-3 text-textBrand"
     div_ [class_ "flex flex-col gap-4"] do
       div_ [class_ "flex items-center gap-4"] do
-        let svTxt = maybe "UNSET" (\x -> T.toLower $ T.drop 2 $ show x) lg.severityText
+        let svTxt = maybe "UNSET" (\x -> maybe "UNSET" show x.severity_text) lg.severity
             cls = getSeverityColor $ svTxt
         span_ [class_ $ "rounded-lg border cbadge-sm text-sm px-2 py-1 shrink-0 " <> cls] $ toHtml $ T.toUpper svTxt
         h4_ [class_ "text-slate-800 font-medium"] $ toHtml $ case lg.body of
-          AE.String x -> x
+          Just (AE.String x) -> x
           _ -> toStrict $ encodeToLazyText lg.body
 
       div_ [class_ "flex gap-2 flex-wrap"] $ do
-        spanBadge (fromMaybe "" $ lookupValueText lg.resource "service.name") "Service"
-        spanBadge ("Spand ID: " <> fromMaybe "" lg.spanId) "Span ID"
-        spanBadge ("Trace ID: " <> lg.traceId) "Span Kind"
+        spanBadge (fromMaybe "" $ atMapText "service.name" lg.resource) "Service"
+        spanBadge ("Spand ID: " <> maybe "" (\z -> fromMaybe "" z.span_id) lg.context) "Span ID"
+        spanBadge ("Trace ID: " <> maybe "" (\z -> fromMaybe "" z.trace_id) lg.context) "Trace ID"
 
       div_ [class_ "flex gap-2 items-center text-textBrand font-medium text-xs"] do
-        let tracePath = "/p/" <> pid.toText <> "/traces/" <> lg.traceId <> "/"
-        button_
-          [ class_ "flex items-end gap-1"
-          , term
-              "_"
-              [text|on click remove .hidden from #trace_expanded_view
-                        then set #trace_expanded_view.innerHTML to #loader-tmp.innerHTML
-                        then fetch $tracePath
-                        then set #trace_expanded_view.innerHTML to it
-                        then htmx.process(#trace_expanded_view)
-                        then _hyperscript.processNode(#trace_expanded_view) then window.evalScriptsFromContent(#trace_expanded_view)|]
-          ]
-          do
-            "View parent trace"
-            faSprite_ "cross-hair" "regular" "w-4 h-4"
+        whenJust lg.context $ \ctx -> do
+          whenJust ctx.trace_id $ \trId -> do
+            let tracePath = "/p/" <> pid.toText <> "/traces/" <> trId <> "/"
+            button_
+              [ class_ "flex items-end gap-1"
+              , term
+                  "_"
+                  [text|on click remove .hidden from #trace_expanded_view
+                            then call updateUrlState('showTrace', "$trId")
+                            then set #trace_expanded_view.innerHTML to #loader-tmp.innerHTML
+                            then fetch $tracePath
+                            then set #trace_expanded_view.innerHTML to it
+                            then htmx.process(#trace_expanded_view)
+                            then _hyperscript.processNode(#trace_expanded_view) then window.evalScriptsFromContent(#trace_expanded_view)|]
+              ]
+              do
+                "View parent trace"
+                faSprite_ "cross-hair" "regular" "w-4 h-4"
         let lg_id = UUID.toText lg.id
         let createdAt = toText $ formatTime defaultTimeLocale "%Y-%m-%dT%H:%M:%S%6QZ" $ lg.timestamp
         button_
@@ -255,9 +261,9 @@ apiLogItemView pid lg = do
 
         div_ [class_ "grid my-4 text-slate-600 font"] $ do
           div_ [class_ "a-tab-content", id_ "att-content"] $ do
-            jsonValueToHtmlTree lg.attributes
+            jsonValueToHtmlTree $ fromMaybe (AE.object []) (fmap AE.Object $ fmap KEM.fromMapText lg.attributes)
           div_ [class_ "hidden a-tab-content", id_ "meta-content"] $ do
-            jsonValueToHtmlTree lg.resource
+            jsonValueToHtmlTree $ fromMaybe (AE.object []) (fmap AE.Object $ fmap KEM.fromMapText lg.resource)
 
 
 -- div_ [class_ "px-2 flex flex-col w-full items-center gap-2"] do

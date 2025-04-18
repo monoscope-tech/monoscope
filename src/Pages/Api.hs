@@ -3,6 +3,7 @@ module Pages.Api (apiGetH, apiPostH, apiDeleteH, GenerateAPIKeyForm (..), ApiGet
 import Data.Base64.Types qualified as B64
 import Data.ByteString.Base64 qualified as B64
 import Data.Default (def)
+import Data.Map qualified as Map
 import Data.Text qualified as T
 import Data.UUID as UUID (toText)
 import Data.UUID.V4 qualified as UUIDV4
@@ -19,7 +20,7 @@ import Models.Users.Sessions qualified as Sessions
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
 import Relude hiding (ask)
 import System.Config (AuthContext (config), EnvConfig (apiKeyEncryptionSecretKey))
-import System.Types (ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders, addSuccessToast)
+import System.Types (ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders, addSuccessToast, addTriggerEvent)
 import Utils (faSprite_)
 import Web.FormUrlEncoded (FromForm)
 
@@ -44,6 +45,7 @@ apiPostH pid apiKeyForm = do
     ProjectApiKeys.insertProjectApiKey pApiKey
     ProjectApiKeys.projectApiKeysByProjectId pid
   addSuccessToast "Created API Key Successfully" Nothing
+  addTriggerEvent "closeModal" ""
   case from apiKeyForm of
     Just v -> addRespHeaders $ ApiPostCopy (Just (pApiKey, encryptedKeyB64)) True
     Nothing -> addRespHeaders $ ApiPost pid apiKeys (Just (pApiKey, encryptedKeyB64))
@@ -100,49 +102,32 @@ apiKeysPage pid apiKeys = do
   section_ [class_ "w-full mx-auto  px-16 py-10 overflow-hidden overflow-y-scroll"] do
     div_ [class_ "flex justify-between mb-6"] do
       h2_ [class_ "text-slate-700 text-2xl font-medium"] "API Keys"
-      button_ [class_ "btn-indigo p-2 rounded-lg", [__|on click remove .hidden from #generateApiKeyDialog |]] "Create an API Key"
+      label_ [class_ "btn-indigo p-2 rounded-lg", Lucid.for_ "apikey-modal"] "Create an API Key"
     mainContent pid apiKeys Nothing
-    div_
-      [ class_ "hidden fixed z-30 inset-0 overflow-y-auto"
-      , role_ "dialog"
-      , id_ "generateApiKeyDialog"
-      ]
-      do
+
+    input_ [type_ "checkbox", id_ "apikey-modal", class_ "modal-toggle"]
+    div_ [class_ "modal p-8", role_ "dialog", id_ "apikey-modal"] do
+      div_ [class_ "modal-box flex flex-col gap-4"] $ do
+        div_ [class_ "p-3 bg-[#0acc91]/5 rounded-full w-max border-[#067a57]/20 gap-2 inline-flex"]
+          $ faSprite_ "key" "regular" "h-6 w-6 text-green-500"
+        span_ [class_ " text-textStrong text-2xl font-semibold"] "Generate an API key"
         form_
           [ hxPost_ $ "/p/" <> pid.toText <> "/apis"
-          , class_ "flex items-end justify-center min-h-screen pt-4 px-4 pb-20 text-center sm:block sm:p-0"
+          , class_ "flex flex-col gap-4"
           , hxTarget_ "#main-content"
-          , [__|on closeModal from body add .hidden to #generateApiKeyDialog then call me.reset()|]
+          , [__|on closeModal from body set #apikey-modal.checked to false |]
           ]
           do
-            div_ [class_ "fixed inset-0 bg-gray-500 bg-opacity-75 transition-opacity"] do
-              span_ [class_ "hidden sm:inline-block sm:align-middle sm:h-screen"] ""
-            div_ [class_ "inline-block align-bottom bg-base-100 rounded-lg px-4 pt-5 pb-4 text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:align-middle sm:max-w-lg sm:w-full sm:p-6"] do
-              div_ [class_ "hidden sm:block absolute top-0 right-0 pt-4 pr-4"] do
-                button_
-                  [ type_ "button"
-                  , class_ "bg-base-100 rounded-md text-gray-400 hover:text-gray-500 focus:outline-hidden focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
-                  , [__|on click add .hidden to #generateApiKeyDialog|]
-                  ]
-                  do
-                    span_ [class_ "sr-only"] "Close"
-                    faSprite_ "xmark" "regular" "h-6 w-6"
-              div_ [class_ "sm:flex sm:items-start"] do
-                div_ [class_ "mx-auto shrink-0 flex items-center justify-center h-12 w-12 rounded-full bg-red-100 sm:mx-0 sm:h-10 sm:w-10"] do
-                  faSprite_ "xmark" "regular" "h-6 w-6"
-                div_ [class_ "mt-3 text-center sm:mt-0 sm:ml-4 sm:text-left grow"] do
-                  h3_ [class_ "text-lg leading-6 font-medium text-gray-900", id_ "modal-title"] "Generate an API Key"
-                  div_ [class_ "mt-6 space-y-2"] do
-                    p_ [class_ " text-gray-500"] "Please input a title for your API Key."
-                    div_ $ input_ [class_ "input-txt px-4 py-2  border w-full", type_ "text", placeholder_ "API Key Title", name_ "title", autofocus_]
-              div_ [class_ "mt-5 sm:mt-4 sm:flex sm:flex-row-reverse"] do
-                button_ [type_ "submit", class_ "w-full inline-flex justify-center rounded-md border border-transparent shadow-xs px-4 py-2 bg-red-600 text-base font-medium text-white hover:bg-red-700 focus:outline-hidden focus:ring-2 focus:ring-offset-2 focus:ring-red-500 sm:ml-3 sm:w-auto sm:"] "Submit"
-                button_
-                  [ type_ "button"
-                  , class_ "mt-3 w-full inline-flex justify-center rounded-md border border-gray-300 shadow-xs px-4 py-2 bg-base-100 text-base font-medium text-gray-700 hover:text-gray-500 focus:outline-hidden focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 sm:mt-0 sm:w-auto sm:"
-                  , [__|on click add .hidden to #generateApiKeyDialog|]
-                  ]
-                  "Cancel"
+            div_ [class_ "flex gap-1 flex-col"] do
+              p_ [class_ "text-textWeak"] "Please input a title for your API key."
+              div_ $ input_ [class_ "input-txt px-4 py-2  border w-full", type_ "text", placeholder_ "API Key Title", name_ "title", autofocus_]
+            div_ [class_ "flex justify-end"] do
+              button_
+                [ type_ "submit"
+                , class_ "rounded px-4 py-2 bg-green-500 text-white"
+                ]
+                "Submit"
+      label_ [class_ "modal-backdrop", Lucid.for_ "apikey-modal"] "Close"
 
 
 mainContent :: Projects.ProjectId -> V.Vector ProjectApiKeys.ProjectApiKey -> Maybe (ProjectApiKeys.ProjectApiKey, Text) -> Html ()
