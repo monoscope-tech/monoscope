@@ -17,6 +17,7 @@ import Data.ProtoLens.Encoding (decodeMessage, encodeMessage)
 import Data.Scientific (fromFloatDigits)
 import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
+import Data.Text.Encoding.Error (lenientDecode)
 import Data.Time (UTCTime)
 import Data.Time.Clock.POSIX (posixSecondsToUTCTime)
 import Data.UUID qualified as UUID
@@ -126,7 +127,7 @@ processList msgs attrs = checkpoint "processList" $ process `onException` handle
           results <- V.forM msgs' $ \(ackId, msg) ->
             case (decodeMessage msg :: Either String LS.ExportLogsServiceRequest) of
               Left err -> do
-                Log.logAttention "processList:logs: unable to parse logs service request with err " (AE.object ["err" AE..= err, "decoded_msg" AE..= (decodeUtf8 @Text msg)])
+                Log.logAttention "processList:logs: unable to parse logs service request with err " (AE.object ["err" AE..= err, "decoded_msg" AE..= (decodeUtf8Lenient msg)])
                 pure (ackId, [])
               Right logReq -> do
                 let resourceLogs = V.fromList $ logReq ^. PLF.resourceLogs
@@ -147,7 +148,7 @@ processList msgs attrs = checkpoint "processList" $ process `onException` handle
           results <- V.forM msgs' $ \(ackId, msg) ->
             case (decodeMessage msg :: Either String TS.ExportTraceServiceRequest) of
               Left err -> do
-                Log.logAttention "processList:traces: unable to parse traces service request with err " (AE.object ["err" AE..= err, "decoded_msg" AE..= (decodeUtf8 @Text msg)])
+                Log.logAttention "processList:traces: unable to parse traces service request with err " (AE.object ["err" AE..= err, "decoded_msg" AE..= (decodeUtf8Lenient msg)])
                 pure (ackId, [])
               Right traceReq -> do
                 let resourceSpans = V.fromList $ traceReq ^. PTF.resourceSpans
@@ -184,7 +185,7 @@ processList msgs attrs = checkpoint "processList" $ process `onException` handle
           results <- V.forM msgs' $ \(ackId, msg) ->
             case (decodeMessage msg :: Either String MS.ExportMetricsServiceRequest) of
               Left err -> do
-                Log.logAttention "processList:metrics: unable to parse metrics service request with err " (AE.object ["err" AE..= err, "decoded_msg" AE..= (decodeUtf8 @Text msg)])
+                Log.logAttention "processList:metrics: unable to parse metrics service request with err " (AE.object ["err" AE..= err, "decoded_msg" AE..= decodeUtf8Lenient msg])
                 pure (ackId, [])
               Right metricReq -> checkpoint "processList:metrics:getProjectId" do
                 let resourceMetrics = V.fromList $ metricReq ^. PMF.resourceMetrics
@@ -211,6 +212,10 @@ processList msgs attrs = checkpoint "processList" $ process `onException` handle
 
 
 -- Helper functions
+
+-- Decode ByteString to Text with lenient UTF-8 handling
+decodeUtf8Lenient :: ByteString -> Text
+decodeUtf8Lenient = TE.decodeUtf8With lenientDecode
 
 -- Convert nanoseconds to UTCTime
 nanosecondsToUTC :: Word64 -> UTCTime
