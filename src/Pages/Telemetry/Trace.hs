@@ -349,19 +349,19 @@ buildTree spanMap parentId =
     Nothing -> []
     Just spans ->
       [ SpanTree
-          SpanMin
-            { parentSpanId = sp.parentSpanId
-            , spanId = sp.spanId
-            , uSpanId = sp.uSpanId
-            , spanName = sp.spanName
-            , spanDurationNs = sp.spanDurationNs
-            , serviceName = getServiceName sp.resource
-            , startTime = utcTimeToNanoseconds sp.startTime
-            , endTime = utcTimeToNanoseconds <$> sp.endTime
-            , hasErrors = spanHasErrors sp
-            , timestamp = sp.timestamp
-            }
-          (buildTree spanMap (Just sp.spanId))
+        SpanMin
+          { parentSpanId = sp.parentSpanId
+          , spanId = sp.spanId
+          , uSpanId = sp.uSpanId
+          , spanName = sp.spanName
+          , spanDurationNs = sp.spanDurationNs
+          , serviceName = getServiceName sp.resource
+          , startTime = utcTimeToNanoseconds sp.startTime
+          , endTime = utcTimeToNanoseconds <$> sp.endTime
+          , hasErrors = spanHasErrors sp
+          , timestamp = sp.timestamp
+          }
+        (buildTree spanMap (Just sp.spanId))
       | sp <- spans
       ]
 

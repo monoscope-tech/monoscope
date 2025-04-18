@@ -302,12 +302,12 @@ export class LogList extends LitElement {
       .then(data => {
         if (!data.error) {
           const { logsData, serviceColors, nextUrl } = data
+          if (!isNewData) {
+            this.hasMore = logsData.length >= 50
+            this.nextFetchUrl = nextUrl
+          }
           if (logsData.length > 0) {
             this.serviceColors = { ...this.serviceColors, ...serviceColors }
-            if (!isNewData) {
-              this.hasMore = logsData.length >= 50
-              this.nextFetchUrl = nextUrl
-            }
             if (this.source === 'spans') {
               const tree = this.buildSpanListTree([...logsData])
               if (isNewData) {

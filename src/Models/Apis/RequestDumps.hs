@@ -440,7 +440,7 @@ selectChildSpansAndLogs pid projectedColsByUser traceIds = do
       (r, _) = getProcessedColumns projectedColsByUser qConfig.defaultSelect
       q =
         [text|SELECT json_build_array($r) FROM otel_logs_and_spans
-             WHERE project_id=? and context___trace_id=Any(?) ORDER BY timestamp DESC
+             WHERE project_id=? and context___trace_id=Any(?) and parent_id IS NOT NULL ORDER BY timestamp DESC
            |]
   v <- dbtToEff $ query Select (Query $ encodeUtf8 q) (pid, traceIds)
   pure $ V.mapMaybe valueToVector v

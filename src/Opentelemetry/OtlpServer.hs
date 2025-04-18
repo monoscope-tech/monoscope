@@ -150,16 +150,16 @@ processList msgs attrs = checkpoint "processList" $ process `onException` handle
                 pure (ackId, [])
               Right (ExportLogsServiceRequest logReq) -> do
                 projectIdsAndKeys <-
-                  checkpoint "processList:logs:getProjectIds" $
-                    dbtToEff $
-                      ProjectApiKeys.projectIdsByProjectApiKeys $
-                        getLogAttributeValue "at-project-key" logReq
+                  checkpoint "processList:logs:getProjectIds"
+                    $ dbtToEff
+                    $ ProjectApiKeys.projectIdsByProjectApiKeys
+                    $ getLogAttributeValue "at-project-key" logReq
                 pure (ackId, join $ V.map (convertToLog projectIdsAndKeys) logReq)
 
           let (ackIds, logs) = V.unzip results
-          unless (null $ join logs) $
-            checkpoint "processList:logs:bulkInsert" $
-              Telemetry.bulkInsertOtelLogsAndSpansTF (join logs)
+          unless (null $ join logs)
+            $ checkpoint "processList:logs:bulkInsert"
+            $ Telemetry.bulkInsertOtelLogsAndSpansTF (join logs)
           pure $ V.toList ackIds
         Just "org.opentelemetry.otlp.traces.v1" -> checkpoint "processList:traces" $ do
           reqsAndProjects <- V.forM msgs' $ \(ackId, msg) ->
@@ -169,10 +169,10 @@ processList msgs attrs = checkpoint "processList" $ process `onException` handle
                 pure (ackId, ([], []))
               Right (ExportTraceServiceRequest traceReq) -> do
                 projectIdsAndKeys <-
-                  checkpoint "processList:traces:getProjectIds" $
-                    dbtToEff $
-                      ProjectApiKeys.projectIdsByProjectApiKeys $
-                        getSpanAttributeValue "at-project-key" traceReq
+                  checkpoint "processList:traces:getProjectIds"
+                    $ dbtToEff
+                    $ ProjectApiKeys.projectIdsByProjectApiKeys
+                    $ getSpanAttributeValue "at-project-key" traceReq
                 pure (ackId, (traceReq, projectIdsAndKeys))
 
           let (ackIds, reqsAndPids) = V.unzip reqsAndProjects
@@ -180,9 +180,9 @@ processList msgs attrs = checkpoint "processList" $ process `onException` handle
               spans = join $ V.map (\(s, _, _) -> s) results
               apitoolkitSpans = V.map mapHTTPSpan spans
 
-          unless (V.null apitoolkitSpans) $
-            checkpoint "processList:traces:processRequestMessages" $
-              (void $ ProcessMessage.processRequestMessages $ V.toList $ V.catMaybes apitoolkitSpans <&> ("",))
+          unless (V.null apitoolkitSpans)
+            $ checkpoint "processList:traces:processRequestMessages"
+            $ (void $ ProcessMessage.processRequestMessages $ V.toList $ V.catMaybes apitoolkitSpans <&> ("",))
 
           unless (V.null spans) do
             checkpoint "processList:traces:bulkInsertSpans" $ Telemetry.bulkInsertOtelLogsAndSpansTF spans
@@ -207,9 +207,9 @@ processList msgs attrs = checkpoint "processList" $ process `onException` handle
           let (ackIds, metricVec) = V.unzip results
               metricRecords = join metricVec
 
-          unless (null metricRecords) $
-            checkpoint "processList:metrics:bulkInsert" $
-              Telemetry.bulkInsertMetrics metricRecords
+          unless (null metricRecords)
+            $ checkpoint "processList:metrics:bulkInsert"
+            $ Telemetry.bulkInsertMetrics metricRecords
 
           pure $ V.toList ackIds
         _ -> do
@@ -247,8 +247,8 @@ byteStringToHexText bs = decodeUtf8 (B16.encode bs)
 -- Convert a list of KeyValue to a JSONB object
 keyValueToJSONB :: V.Vector KeyValue -> AE.Value
 keyValueToJSONB kvs =
-  AE.object $
-    V.foldr (\kv acc -> (AEK.fromText $ toText kv.keyValueKey, convertAnyValue kv.keyValueValue) : acc) [] kvs
+  AE.object
+    $ V.foldr (\kv acc -> (AEK.fromText $ toText kv.keyValueKey, convertAnyValue kv.keyValueValue) : acc) [] kvs
 
 
 convertAnyValue :: Maybe AnyValue -> AE.Value
@@ -386,30 +386,30 @@ convertToSpan pids resourceSpans =
 -- | Convert span events to JSON
 eventsToJSONB :: [Span_Event] -> AE.Value
 eventsToJSONB spans =
-  AE.toJSON $
-    spans
-      <&> \sp ->
-        AE.object
-          [ "event_name" AE..= toText sp.span_EventName
-          , "event_time" AE..= nanosecondsToUTC sp.span_EventTimeUnixNano
-          , "event_attributes" AE..= keyValueToJSONB sp.span_EventAttributes
-          , "event_dropped_attributes_count" AE..= fromIntegral sp.span_EventDroppedAttributesCount
-          ]
+  AE.toJSON
+    $ spans
+    <&> \sp ->
+      AE.object
+        [ "event_name" AE..= toText sp.span_EventName
+        , "event_time" AE..= nanosecondsToUTC sp.span_EventTimeUnixNano
+        , "event_attributes" AE..= keyValueToJSONB sp.span_EventAttributes
+        , "event_dropped_attributes_count" AE..= fromIntegral sp.span_EventDroppedAttributesCount
+        ]
 
 
 -- | Convert span links to JSON
 linksToJSONB :: [Span_Link] -> AE.Value
 linksToJSONB lnks =
-  AE.toJSON $
-    lnks
-      <&> \lnk ->
-        AE.object
-          [ "link_span_id" AE..= (decodeUtf8 lnk.span_LinkSpanId :: Text)
-          , "link_trace_id" AE..= (decodeUtf8 lnk.span_LinkTraceId :: Text)
-          , "link_attributes" AE..= keyValueToJSONB lnk.span_LinkAttributes
-          , "link_dropped_attributes_count" AE..= fromIntegral lnk.span_LinkDroppedAttributesCount
-          , "link_flags" AE..= fromIntegral lnk.span_LinkFlags
-          ]
+  AE.toJSON
+    $ lnks
+    <&> \lnk ->
+      AE.object
+        [ "link_span_id" AE..= (decodeUtf8 lnk.span_LinkSpanId :: Text)
+        , "link_trace_id" AE..= (decodeUtf8 lnk.span_LinkTraceId :: Text)
+        , "link_attributes" AE..= keyValueToJSONB lnk.span_LinkAttributes
+        , "link_dropped_attributes_count" AE..= fromIntegral lnk.span_LinkDroppedAttributesCount
+        , "link_flags" AE..= fromIntegral lnk.span_LinkFlags
+        ]
 
 
 -- | Convert span kind from protobuf to internal representation
@@ -437,14 +437,14 @@ parseSpanStatus = \case
 
 convertToMetric :: Projects.ProjectId -> ResourceMetrics -> V.Vector Telemetry.MetricRecord
 convertToMetric pid resourceMetrics =
-  join $
-    V.map (convertScopeMetric pid resourceMetrics.resourceMetricsResource) resourceMetrics.resourceMetricsScopeMetrics
+  join
+    $ V.map (convertScopeMetric pid resourceMetrics.resourceMetricsResource) resourceMetrics.resourceMetricsScopeMetrics
 
 
 convertScopeMetric :: Projects.ProjectId -> Maybe Resource -> ScopeMetrics -> V.Vector Telemetry.MetricRecord
 convertScopeMetric pid resource sm =
-  join $
-    V.map (convertMetricRecord pid resource sm.scopeMetricsScope) sm.scopeMetricsMetrics
+  join
+    $ V.map (convertMetricRecord pid resource sm.scopeMetricsScope) sm.scopeMetricsMetrics
 
 
 convertMetricRecord :: Projects.ProjectId -> Maybe Resource -> Maybe InstrumentationScope -> Metric -> V.Vector Telemetry.MetricRecord
@@ -527,8 +527,8 @@ convertMetricRecord pid resource iscp metric =
                   mtTime = histogram.exponentialHistogramDataPointTimeUnixNano
                   pointNegative =
                     ( \b ->
-                        Just $
-                          Telemetry.EHBucket
+                        Just
+                          $ Telemetry.EHBucket
                             { bucketOffset = fromIntegral $ b.exponentialHistogramDataPoint_BucketsOffset
                             , bucketCounts = fromIntegral <$> b.exponentialHistogramDataPoint_BucketsBucketCounts
                             }
@@ -536,8 +536,8 @@ convertMetricRecord pid resource iscp metric =
                       =<< histogram.exponentialHistogramDataPointNegative
                   pointPositive =
                     ( \b ->
-                        Just $
-                          Telemetry.EHBucket
+                        Just
+                          $ Telemetry.EHBucket
                             { bucketOffset = fromIntegral $ b.exponentialHistogramDataPoint_BucketsOffset
                             , bucketCounts = fromIntegral <$> b.exponentialHistogramDataPoint_BucketsBucketCounts
                             }
