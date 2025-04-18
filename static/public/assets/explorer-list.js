@@ -47,6 +47,7 @@ export class LogList extends LitElement {
     this.logItemCol = this.logItemCol.bind(this)
     this.wrapLines = false
     this.view = 'tree'
+    this.newDataCount = 0
     const liveBtn = document.querySelector('#streamLiveData')
     if (liveBtn) {
       liveBtn.addEventListener('change', () => {
@@ -263,7 +264,8 @@ export class LogList extends LitElement {
     if (rowData === 'start') return this.fetchRecent()
     const s = this.source === 'spans' && rowData.type === 'log' ? 'logs' : this.source
     const targetInfo = requestDumpLogItemUrlPath(this.source === 'spans' ? rowData.data : rowData, this.colIdxMap, s)
-    const isNew = rowData.isNewData
+    const isNew = this.newDataCount > 0
+    this.newDataCount = this.newDataCount - 1
 
     return html`
       <tr
@@ -325,14 +327,7 @@ export class LogList extends LitElement {
             if (this.source === 'spans') {
               const tree = this.buildSpanListTree([...logsData])
               if (isNewData) {
-                tree.forEach(tr => (tr.isNewData = true))
-                for (const span of this.spanListTree) {
-                  if (span.isNewData) {
-                    span.isNewData = false
-                  } else {
-                    break
-                  }
-                }
+                this.newDataCount = this.view === 'tree' ? tree.filter(t => t.show).length : tree.length
                 this.spanListTree = [...tree, ...this.spanListTree]
               } else {
                 this.spanListTree = [...this.spanListTree, ...tree]
