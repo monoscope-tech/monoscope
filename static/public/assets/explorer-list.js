@@ -627,9 +627,9 @@ export class LogList extends LitElement {
           let statusCls_ = getStatusColor(Number(statusCode_))
           let wrapCls = wrapLines ? 'whitespace-break-spaces' : 'whitespace-nowrap'
           return html`
-            ${k === 'SERVER'
+            ${k.toLowerCase() === 'server'
               ? renderIconWithTippy('w-4 ml-2', 'Incoming Request', faSprite('arrow-down-left', 'solid', ' h-3 fill-slate-500'))
-              : k === 'CLIENT'
+              : k.toLowerCase() === 'client'
               ? renderIconWithTippy('w-4 ml-2', 'Outgoing Request', faSprite('arrow-up-right', 'solid', ' h-3 fill-blue-700'))
               : nothing}
             ${statusCode_ ? renderBadge(statusCls_, statusCode_, 'status code') : nothing}

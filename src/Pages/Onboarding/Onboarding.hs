@@ -23,6 +23,7 @@ import Data.Vector as V (Vector, fromList, head, length, toList)
 import Database.PostgreSQL.Entity.DBT (QueryNature (Select, Update), execute, queryOne)
 import Database.PostgreSQL.Simple.Types (Query (Query))
 
+import Data.CaseInsensitive qualified as CI
 import Database.PostgreSQL.Simple (Only (Only))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Transact (DBT)
@@ -190,8 +191,10 @@ phoneEmailPostH pid form = do
       stepsCompleted = project.onboardingStepsCompleted
       newCompleted = insertIfNotExist "NotifChannel" stepsCompleted
       q = [sql| update projects.projects set notifications_channel=?::notification_channel_enum[], notify_phone_number=?, notify_emails=?::text[],onboarding_steps_completed=? where id=? |]
+  projectMembers <- dbtToEff $ Projects.usersByProjectId pid
+  let emails' = (\u -> CI.original u.email) <$> projectMembers
   _ <- dbtToEff $ execute Update q (V.fromList notifsTxt, phone, V.fromList emails, newCompleted, pid)
-  addRespHeaders $ inviteTeamMemberModal pid (V.fromList emails)
+  addRespHeaders $ inviteTeamMemberModal pid (V.fromList $ ordNub $ emails <> V.toList emails')
 
 
 checkIntegrationGet :: Projects.ProjectId -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))
