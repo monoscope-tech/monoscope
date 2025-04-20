@@ -1,0 +1,15 @@
+[[targets]]
+type = "constructor"
+value = "IO"
+
+[[targets]]
+type = "constructor"
+value = "ATAuthCtx"
+
+[[targets]]
+type = "constructor"
+value = "ATBackgroundCtx"
+
+[global]
+service_name = "apitoolkit-server"
+
