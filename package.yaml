@@ -30,6 +30,7 @@ ghc-options:
   - -hiedir .hiefiles
   #- "-hidir=.hifiles"
   - -threaded
+  - -fplugin AutoInstrument
   - -Weverything
   # - -fdefer-type-errors
   - -Werror # Treat warnings as errors
@@ -240,7 +241,7 @@ library:
     - hs-opentelemetry-instrumentation-postgresql-simple
     - hs-opentelemetry-instrumentation-wai
     - hs-opentelemetry-exporter-otlp
-    # - hs-opentelemetry-instrumentation-auto
+    - hs-opentelemetry-instrumentation-auto
     - postgresql-libpq
     - ki-effectful
     - grapesy
@@ -251,7 +252,7 @@ executables:
     source-dirs: app
     ghc-options:
       - -threaded
-      # - -fplugin AutoInstrument
+      - -fplugin AutoInstrument
       - -rtsopts
       - -with-rtsopts=-N
       - -j4
@@ -262,6 +263,7 @@ executables:
       - apitoolkit-server
       - rust-interop
       - hiedb-plugin
+      - hs-opentelemetry-instrumentation-auto
       - name: relude
         version: '>= 1.2.0.0'
         mixin:

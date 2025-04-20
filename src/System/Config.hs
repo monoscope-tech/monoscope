@@ -3,7 +3,6 @@
 module System.Config (EnvConfig (..), AuthContext (..), DashboardM, ctxToHandler, getAppContext, configToEnv, DeploymentEnv (..)) where
 
 import Colourista.IO (blueMessage)
-import Configuration.Dotenv qualified as Dotenv
 import Control.Exception (try)
 import Data.Cache (Cache, newCache)
 import Data.Default (Default (..))
@@ -142,7 +141,6 @@ configToEnv config = do
 
 getAppContext :: Eff '[Fail, IOE] AuthContext
 getAppContext = do
-  _ <- liftIO (try (Dotenv.loadFile Dotenv.defaultConfig) :: IO (Either SomeException ()))
   configE <- liftIO (decodeEnv :: IO (Either String EnvConfig))
   case configE of
     Left errMsg -> error $ toText errMsg

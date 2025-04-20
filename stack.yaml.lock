@@ -229,12 +229,12 @@ packages:
   original:
     hackage: hs-opentelemetry-instrumentation-postgresql-simple-0.2.0.0
 - completed:
-    hackage: hs-opentelemetry-instrumentation-auto-0.1.0.1@sha256:fc49c1d55b401ae308676df0f9d8d85a9a7247511637ab5a19d967c2d3354a5d,2302
+    hackage: hs-opentelemetry-instrumentation-auto-0.1.0.2@sha256:98911aa698825c6cbb966a52dff8a76e818cb39111b00ab62e8684fdacf5d0c0,2265
     pantry-tree:
-      sha256: e9aea2af10530121442241785b8333031b200c6415a4cb71199fb8b2cb31cb2b
+      sha256: ea8566a8bd04d089abe2f31c4816fd5c670603d032e117afcd12417710cc3350
       size: 803
   original:
-    hackage: hs-opentelemetry-instrumentation-auto-0.1.0.1
+    hackage: hs-opentelemetry-instrumentation-auto-0.1.0.2
 - completed:
     hackage: hs-opentelemetry-instrumentation-wai-0.1.1.0@sha256:d97b4cb3870217e64e95da3f51db814eca62eb57484ee0a6f747366da5940bc2,1371
     pantry-tree:
