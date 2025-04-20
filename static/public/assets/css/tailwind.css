@@ -12,6 +12,40 @@
     cupcake;
 }
 
+/* JetBrains Mono font */
+@font-face {
+  font-family: 'JetBrains Mono';
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url("/public/assets/fonts/JetBrainsMono[wght].ttf") format("truetype");
+}
+
+/* Inter Variable fonts */
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url("/public/assets/fonts/InterVariable.ttf") format("truetype");
+}
+
+@font-face {
+  font-family: 'Inter';
+  font-style: italic;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url("/public/assets/fonts/InterVariable-Italic.ttf") format("truetype");
+}
+
+/* Basic Inter font features */
+@font-feature-settings {
+  'ss01': 1,  /* Sans-serif simple a */
+  'ss02': 1,  /* Sans-serif g */
+  'cv01': 1,  /* Open zero */
+  'cv02': 1   /* Open four */
+}
+
 @theme {
   /* Simple colors */
   --color-gray-25: #fcfcfd;
@@ -264,11 +298,14 @@ body {
   }*/
 }
 @utility inconsolata {
-  font-family: 'Inconsolata', monospace;
+  font-family: 'JetBrains Mono', monospace;
 }
 @utility monospace {
-  font-family: 'Inconsolata', monospace;
-  font-variation-settings: 'mono' 1000;
+  font-family: 'JetBrains Mono', monospace;
+}
+/* For code blocks and pre-formatted text */
+code, pre, .code, .monospace {
+  font-family: 'JetBrains Mono', monospace;
 }
 @utility icon {
   /* From icomoon app*/
@@ -332,7 +369,7 @@ body {
 }
 
 .cbadge-sm {
-  @apply px-1.5 py-1 text-sm rounded-lg text-center;
+  @apply px-1.5 py-1 text-xs rounded-lg text-center monospace;
 }
 
 @utility badge-2xx {
@@ -640,21 +677,9 @@ body {
 }
 @layer components {
   :root {
-    font-family: Inter, sans-serif;
-    font-feature-settings:
-      'liga' 1,
-      'calt' 1;
-    /* fix for Chrome */
-    /* font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, */
-    /*     'Noto Sans', sans-serif, 'Apple Color Emoji', 'Segoe UI Emoji', 'Segoe UI Symbol', */
-    /*     'Noto Color Emoji'; */
+    font-family: 'Inter', sans-serif;
+    font-feature-settings: 'liga' 1, 'calt' 1;
     font-size: 16px;
-  }
-
-  @supports (font-variation-settings: normal) {
-    :root {
-      font-family: InterVariable, sans-serif;
-    }
   }
 }
 
@@ -756,7 +781,7 @@ body {
   /* TODO: check if this should be deleted */
 
   .CodeMirror {
-    font-family: Arial, monospace;
+    font-family: 'JetBrains Mono', monospace;
     font-size: 16px;
     background-color: rgb(243 244 246);
   }

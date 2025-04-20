@@ -1,10 +1,10 @@
-packages: . ./rust-interop ./otlp
+packages: . ./rust-interop
 with-compiler: ghc-9.10.1
 -- import: https://www.stackage.org/nightly-2025-01-20/cabal.config
 -- documentation: True
 
 -- with-compiler: ghc-9.8.2
-import: https://www.stackage.org/nightly-2024-08-23/cabal.config
+import: https://www.stackage.org/nightly-2025-04-20/cabal.config
 
 -- package *
 --  extra-lib-dirs: rust-interop/target/release target/release

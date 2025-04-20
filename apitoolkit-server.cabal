@@ -84,7 +84,6 @@ library
       Pages.BodyWrapper
       Pages.Charts.Charts
       Pages.Components
-      Pages.CP
       Pages.Dashboards
       Pages.Endpoints.ApiCatalog
       Pages.Endpoints.ApiCatalogSpec

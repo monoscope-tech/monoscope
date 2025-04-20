@@ -218,18 +218,18 @@ export class LogList extends LitElement {
         ${this.isLiveStreaming
           ? html`<p>Live streaming latest data...</p>`
           : this.isLoadingRecent
-          ? html`<div class="loading loading-dots loading-md"></div>`
-          : html`
-              <button
-                class="cursor-pointer text-textBrand underline font-semibold w-max mx-auto"
-                @click=${() => {
-                  const updatedUrl = this.latestLogsURLQueryValsFn()
-                  this.fetchData(updatedUrl, true)
-                }}
-              >
-                Check for recent data
-              </button>
-            `}
+            ? html`<div class="loading loading-dots loading-md"></div>`
+            : html`
+                <button
+                  class="cursor-pointer text-textBrand underline font-semibold w-max mx-auto"
+                  @click=${() => {
+                    const updatedUrl = this.latestLogsURLQueryValsFn()
+                    this.fetchData(updatedUrl, true)
+                  }}
+                >
+                  Check for recent data
+                </button>
+              `}
       </td>
     </tr>`
   }
@@ -525,7 +525,7 @@ export class LogList extends LitElement {
           </thead>
           ${list.length === 1 ? emptyState(this.source, this.logsColumns.length) : nothing}
           <tbody
-            class="min-w-0"
+            class="min-w-0 text-sm"
             id="log-item-table-body"
             @rangeChanged=${event => {
               this.setupIntersectionObserver()
@@ -562,10 +562,8 @@ export class LogList extends LitElement {
       case 'created_at':
       case 'timestamp':
         let timestamp = lookupVecTextByKey(dataArr, colIdxMap, key)
-        return html`<div class="text-base">
-          <time class="monospace whitespace-nowrap text-slate-600 ${wrapClass}" data-tippy-content="timestamp" datetime=${timestamp}
-            >${displayTimestamp(timestamp)}</time
-          >
+        return html`<div>
+          <time class="monospace text-textStrong ${wrapClass}" data-tippy-content="timestamp" datetime=${timestamp}>${displayTimestamp(timestamp)}</time>
         </div>`
       case 'status_code':
         let statusCode = lookupVecTextByKey(dataArr, colIdxMap, 'status_code')
@@ -630,8 +628,8 @@ export class LogList extends LitElement {
             ${k.toLowerCase() === 'server'
               ? renderIconWithTippy('w-4 ml-2', 'Incoming Request', faSprite('arrow-down-left', 'solid', ' h-3 fill-slate-500'))
               : k.toLowerCase() === 'client'
-              ? renderIconWithTippy('w-4 ml-2', 'Outgoing Request', faSprite('arrow-up-right', 'solid', ' h-3 fill-blue-700'))
-              : nothing}
+                ? renderIconWithTippy('w-4 ml-2', 'Outgoing Request', faSprite('arrow-up-right', 'solid', ' h-3 fill-blue-700'))
+                : nothing}
             ${statusCode_ ? renderBadge(statusCls_, statusCode_, 'status code') : nothing}
             ${m ? renderBadge('min-w-[4rem] text-center cbadge cbadge-sm ' + methodCls_, m, 'method') : nothing}
             ${url ? renderBadge('cbadge-sm badge-neutral bg-fillWeak ' + wrapCls, url, 'url') : nothing}
@@ -654,56 +652,56 @@ export class LogList extends LitElement {
         const errClas = hasErrors
           ? 'bg-red-500 text-white fill-white stroke-white'
           : childErrors
-          ? 'border border-red-500 bg-fillWeak text-textWeak fill-textWeak'
-          : 'border border-strokeWeak bg-fillWeak text-textWeak fill-textWeak'
+            ? 'border border-red-500 bg-fillWeak text-textWeak fill-textWeak'
+            : 'border border-strokeWeak bg-fillWeak text-textWeak fill-textWeak'
         return source == 'logs'
           ? html`${this.logItemCol(rowData, source, colIdxMap, 'severity_text')} ${this.logItemCol(rowData, source, colIdxMap, 'body')}`
           : source === 'spans'
-          ? html`<div class="flex w-full ${wrapLines ? 'items-start' : 'items-center'} gap-1">
-              ${this.view === 'tree'
-                ? html`
-                    <div class="flex items-center gap-1">
-                      ${depth > 1
-                        ? new Array(depth - 1)
-                            .fill(1)
-                            .map((_, i) => html`<div class=${`ml-[15px] w-4 h-5 shrink-0 ${siblingsArr[i] ? 'border-l' : ''}`}></div>`)
-                        : nothing}
-                      ${depth > 0
-                        ? html`<div class=${`border-l ml-[15px] w-4 ${isLastChild ? 'h-3' : 'h-5'} relative shrink-0`}>
-                            <span class=${`border-b w-full absolute left-0 ${isLastChild ? 'bottom-0' : 'top-1/2 -translate-y-1/2'}`}></span>
-                          </div>`
-                        : nothing}
-                      ${children > 0
-                        ? html`<button
-                            @click=${e => {
-                              e.stopPropagation()
-                              toggleTrace(traceId, id)
-                            }}
-                            class=${`rounded-sm ml-1 cursor-pointer shrink-0 w-8 px-1 flex justify-center gap-[2px] text-xs items-center h-5 ${errClas}`}
-                          >
-                            ${expanded ? faSprite('minus', 'regular', 'w-3 h-1 shrink-0') : faSprite('plus', 'regular', 'w-3 h-3 shrink-0')} ${children}
-                          </button>`
-                        : depth === 0
-                        ? nothing
-                        : html`<div class=${`rounded-sm ml-1 shrink-0 w-3 h-5 ${errClas}`}></div>`}
-                    </div>
-                  `
-                : nothing}
-              <div class=${`flex items-center gap-1 ${wrapLines ? 'break-all flex-wrap' : 'overflow-hidden'}`}>
-                ${type === 'log'
-                  ? ['severity_text', 'body'].map(k => this.logItemCol(rowData, source, colIdxMap, k, undefined, undefined, undefined, wrapLines))
-                  : ['http_attributes', 'db_attributes', 'status', 'kind', 'span_name'].map(k =>
-                      this.logItemCol(rowData, source, colIdxMap, k, undefined, undefined, undefined, wrapLines),
-                    )}
-                <span class=${'fill-slate-700 ' + wrapClass}>${val}</span>
-              </div>
-            </div>`
-          : html`
-              ${this.logItemCol(rowData, source, colIdxMap, 'request_type')} ${this.logItemCol(rowData, source, colIdxMap, 'status_code')}
-              ${this.logItemCol(rowData, source, colIdxMap, 'method')} ${this.logItemCol(rowData, source, colIdxMap, 'url_path')}
-              ${this.logItemCol(rowData, source, colIdxMap, 'duration')} ${this.logItemCol(rowData, source, colIdxMap, 'host')}
-              <span class=${'overflow-x-hidden max-w-lg fill-slate-700 ' + wrapClass}>${val}</span>
-            `
+            ? html`<div class="flex w-full ${wrapLines ? 'items-start' : 'items-center'} gap-1">
+                ${this.view === 'tree'
+                  ? html`
+                      <div class="flex items-center gap-1">
+                        ${depth > 1
+                          ? new Array(depth - 1)
+                              .fill(1)
+                              .map((_, i) => html`<div class=${`ml-[15px] w-4 h-5 shrink-0 ${siblingsArr[i] ? 'border-l' : ''}`}></div>`)
+                          : nothing}
+                        ${depth > 0
+                          ? html`<div class=${`border-l ml-[15px] w-4 ${isLastChild ? 'h-3' : 'h-5'} relative shrink-0`}>
+                              <span class=${`border-b w-full absolute left-0 ${isLastChild ? 'bottom-0' : 'top-1/2 -translate-y-1/2'}`}></span>
+                            </div>`
+                          : nothing}
+                        ${children > 0
+                          ? html`<button
+                              @click=${e => {
+                                e.stopPropagation()
+                                toggleTrace(traceId, id)
+                              }}
+                              class=${`rounded-sm ml-1 cursor-pointer shrink-0 w-8 px-1 flex justify-center gap-[2px] text-xs items-center h-5 ${errClas}`}
+                            >
+                              ${expanded ? faSprite('minus', 'regular', 'w-3 h-1 shrink-0') : faSprite('plus', 'regular', 'w-3 h-3 shrink-0')} ${children}
+                            </button>`
+                          : depth === 0
+                            ? nothing
+                            : html`<div class=${`rounded-sm ml-1 shrink-0 w-3 h-5 ${errClas}`}></div>`}
+                      </div>
+                    `
+                  : nothing}
+                <div class=${`flex items-center gap-1 ${wrapLines ? 'break-all flex-wrap' : 'overflow-hidden'}`}>
+                  ${type === 'log'
+                    ? ['severity_text', 'body'].map(k => this.logItemCol(rowData, source, colIdxMap, k, undefined, undefined, undefined, wrapLines))
+                    : ['http_attributes', 'db_attributes', 'status', 'kind', 'span_name'].map(k =>
+                        this.logItemCol(rowData, source, colIdxMap, k, undefined, undefined, undefined, wrapLines),
+                      )}
+                  <span class=${'fill-slate-700 ' + wrapClass}>${val}</span>
+                </div>
+              </div>`
+            : html`
+                ${this.logItemCol(rowData, source, colIdxMap, 'request_type')} ${this.logItemCol(rowData, source, colIdxMap, 'status_code')}
+                ${this.logItemCol(rowData, source, colIdxMap, 'method')} ${this.logItemCol(rowData, source, colIdxMap, 'url_path')}
+                ${this.logItemCol(rowData, source, colIdxMap, 'duration')} ${this.logItemCol(rowData, source, colIdxMap, 'host')}
+                <span class=${'overflow-x-hidden max-w-lg fill-slate-700 ' + wrapClass}>${val}</span>
+              `
       default:
         let v = lookupVecTextByKey(dataArr, colIdxMap, key)
         return renderBadge('cbadge-sm badge-neutral bg-fillWeak ' + wrapClass, v, key)
