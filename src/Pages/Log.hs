@@ -589,7 +589,7 @@ apiLogsPage page = do
                 div_ [hxGet_ url, hxTarget_ "#trace_expanded_view", hxSwap_ "innerHtml", hxTrigger_ "intersect one"] pass
             virtualTable page
 
-          div_ [onmousedown_ "mouseDown(event)", class_ "relative shrink-0 h-full flex items-center justify-center w-1 bg-fillWeak  cursor-ew-resize overflow-visible"] do
+          div_ [onmousedown_ "mouseDown(event)", class_ "relative shrink-0 h-full flex items-center justify-center border-l bg-fillWeak  cursor-ew-resize overflow-visible"] do
             div_
               [ onmousedown_ "mouseDown(event)"
               , id_ "resizer"

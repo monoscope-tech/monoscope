@@ -7,8 +7,8 @@ module ProcessMessage (
 where
 
 import Data.Aeson qualified as AE
-import Data.Aeson.Key qualified as AEKey
-import Data.Aeson.KeyMap qualified as AEK
+import Data.Aeson.Key qualified as AEK
+import Data.Aeson.KeyMap qualified as AEKM
 import Data.Aeson.Types (KeyValue ((.=)), object)
 import Data.ByteString.Lazy.Char8 qualified as BL
 import Data.Cache qualified as Cache
@@ -55,7 +55,7 @@ import System.Clock (
  )
 import System.Config qualified as Config
 import UnliftIO.Exception (try)
-import Utils (eitherStrToText)
+import Utils (eitherStrToText, nestedJsonFromDotNotation)
 
 
 {--
@@ -143,9 +143,9 @@ processMessages msgs attrs = do
         trId <- UUID.toText <$> UUID.genUUID
         pure $ convertRequestMessageToSpan msg (spanId, trId)
       let spanVec = V.fromList spans
-      unless (V.null spanVec)
-        $ void
-        $ Telemetry.bulkInsertOtelLogsAndSpansTF spanVec
+      unless (V.null spanVec) $
+        void $
+          Telemetry.bulkInsertOtelLogsAndSpansTF spanVec
 
       processRequestMessages (rights msgs')
 
@@ -157,7 +157,7 @@ replaceNullChars = T.replace "\\u0000" ""
 
 -- Convert JSON value to Map
 jsonToMap :: AE.Value -> Maybe (Map Text AE.Value)
-jsonToMap (AE.Object o) = Just $ AEK.toMapText o
+jsonToMap (AE.Object o) = Just $ AEKM.toMapText o
 jsonToMap _ = Nothing
 
 
@@ -273,51 +273,80 @@ convertRequestMessageToSpan rm (spanId, trId) =
     , events = Just $ AE.Array V.empty
     , links = Just ""
     , resource =
-        jsonToMap
-          $ AE.object
-            [ "service.name" AE..= fromMaybe "unknown" rm.host
-            , "telemetry.sdk.language" AE..= "apitoolkit"
-            , "telemetry.sdk.name" AE..= "opentelemetry"
+        jsonToMap $
+          nestedJsonFromDotNotation
+            [ ("service.name", AE.String $ fromMaybe "unknown" rm.host)
+            , ("telemetry.sdk.language", AE.String "apitoolkit")
+            , ("telemetry.sdk.name", AE.String "opentelemetry")
             ]
     , duration = Just $ fromIntegral rm.duration
     , date = zonedTimeToUTC rm.timestamp
     }
 
 
+-- Using nestedJsonFromDotNotation from Utils module
+
+-- Helper function to merge JSON objects
+mergeJsonObjects :: AE.Value -> AE.Value -> AE.Value
+mergeJsonObjects (AE.Object o1) (AE.Object o2) = AE.Object $ AEKM.union o1 o2
+mergeJsonObjects v1 _ = v1
+
+
 createSpanAttributes :: RequestMessages.RequestMessage -> AE.Value
 createSpanAttributes rm =
-  AE.object
-    $ [ ("net.host.name", AE.String $ fromMaybe "" rm.host)
-      , ("http.request.method", AE.String $ rm.method)
-      , ("http.request.path_params", AE.String $ Relude.decodeUtf8 $ AE.encode rm.pathParams)
-      , ("http.request.query_params", AE.String $ Relude.decodeUtf8 $ AE.encode rm.queryParams)
-      , ("apitoolkit.msg_id", AE.String $ maybe "" UUID.toText rm.msgId)
-      , ("apitoolkit.parent_id", AE.String $ maybe "" UUID.toText rm.parentId)
-      , ("http.request.body", AE.String $ rm.requestBody)
-      , ("http.response.body", AE.String $ rm.responseBody)
-      , ("http.response.status_code", AE.String $ T.pack $ show rm.statusCode)
-      , ("apitoolkit.sdk_type", AE.String $ show rm.sdkType)
-      , ("http.route", maybe (AE.String (T.takeWhile (/= '?') rm.rawUrl)) AE.String rm.urlPath)
-      , ("url.path", AE.String $ rm.rawUrl)
-      ]
-    ++ refererPair
-    ++ errorsPair
-    ++ requestHeaderPairs
-    ++ responseHeaderPairs
+  let baseAttrs =
+        nestedJsonFromDotNotation
+          [ ("net.host.name", AE.String $ fromMaybe "" rm.host)
+          , ("http.request.method", AE.String $ rm.method)
+          , ("http.request.path_params", AE.String $ Relude.decodeUtf8 $ AE.encode rm.pathParams)
+          , ("http.request.query_params", AE.String $ Relude.decodeUtf8 $ AE.encode rm.queryParams)
+          , ("apitoolkit.msg_id", AE.String $ maybe "" UUID.toText rm.msgId)
+          , ("apitoolkit.parent_id", AE.String $ maybe "" UUID.toText rm.parentId)
+          , ("http.request.body", AE.String $ rm.requestBody)
+          , ("http.response.body", AE.String $ rm.responseBody)
+          , ("http.response.status_code", AE.String $ T.pack $ show rm.statusCode)
+          , ("apitoolkit.sdk_type", AE.String $ show rm.sdkType)
+          , ("http.route", maybe (AE.String (T.takeWhile (/= '?') rm.rawUrl)) AE.String rm.urlPath)
+          , ("url.path", AE.String $ rm.rawUrl)
+          ]
+   in baseAttrs
+        `mergeJsonObjects` refererObj
+        `mergeJsonObjects` errorsObj
+        `mergeJsonObjects` headersObj
   where
-    refererPair = case rm.referer of
-      Just (Left text) -> [("http.request.headers.referer", AE.String text)]
-      Just (Right texts) -> [("http.request.headers.referer", AE.String $ T.intercalate "," texts)]
-      Nothing -> []
+    -- Process referer
+    refererObj = case rm.referer of
+      Just (Left text) -> nestedJsonFromDotNotation [("http.request.headers.referer", AE.String text)]
+      Just (Right texts) -> nestedJsonFromDotNotation [("http.request.headers.referer", AE.String $ T.intercalate "," texts)]
+      Nothing -> AE.object []
 
-    errorsPair = case rm.errors of
-      Just errs -> [("apitoolkit.errors", AE.String $ Relude.decodeUtf8 $ AE.encode errs)]
-      Nothing -> []
-    requestHeaderPairs = addHeadersToAttributes "http.request.header." rm.requestHeaders
-    responseHeaderPairs = addHeadersToAttributes "http.response.header." rm.responseHeaders
+    -- Process errors
+    errorsObj = case rm.errors of
+      Just errs -> nestedJsonFromDotNotation [("apitoolkit.errors", AE.String $ Relude.decodeUtf8 $ AE.encode errs)]
+      Nothing -> AE.object []
+
+    -- Process headers
+    headersObj =
+      let
+        -- Convert request headers
+        reqHeaders = case rm.requestHeaders of
+          AE.Object obj ->
+            let pairs = [("http.request.headers." <> AEK.toText k, v) | (k, v) <- AEKM.toList obj]
+             in nestedJsonFromDotNotation pairs
+          _ -> AE.object []
+
+        -- Convert response headers
+        respHeaders = case rm.responseHeaders of
+          AE.Object obj ->
+            let pairs = [("http.response.headers." <> AEK.toText k, v) | (k, v) <- AEKM.toList obj]
+             in nestedJsonFromDotNotation pairs
+          _ -> AE.object []
+       in
+        reqHeaders `mergeJsonObjects` respHeaders
 
 
+-- Update to use AEK.fromText in addHeadersToAttributes
 addHeadersToAttributes :: Text -> AE.Value -> [(AEK.Key, AE.Value)]
 addHeadersToAttributes prefix (AE.Object obj) =
-  map (\(k, v) -> (AEKey.fromText prefix <> k, v)) $ AEK.toList obj
+  map (\(k, v) -> (AEK.fromText (prefix <> AEK.toText k), v)) $ AEKM.toList obj
 addHeadersToAttributes _ _ = []

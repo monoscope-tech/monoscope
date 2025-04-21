@@ -46,12 +46,13 @@ module Utils (
   toXXHash,
   getServiceColors,
   getGrpcStatusColor,
+  nestedJsonFromDotNotation,
 )
 where
 
 import Data.Aeson qualified as AE
-import Data.Aeson.Key (fromText)
-import Data.Aeson.KeyMap qualified as AEK
+import Data.Aeson.Key qualified as AEK
+import Data.Aeson.KeyMap qualified as AEKM
 import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as LBS
 import Data.Char (isDigit)
@@ -290,7 +291,7 @@ jsonValueToHtmlTree val = do
     jsonValueToHtmlTree' ("", "", val)
   where
     jsonValueToHtmlTree' :: (Text, Text, AE.Value) -> Html ()
-    jsonValueToHtmlTree' (path, key, AE.Object v) = renderParentType "{" "}" key (length v) (AEK.toHashMapText v & HM.toList & sort & mapM_ (\(kk, vv) -> jsonValueToHtmlTree' (path <> "." <> key, kk, vv)))
+    jsonValueToHtmlTree' (path, key, AE.Object v) = renderParentType "{" "}" key (length v) (AEKM.toHashMapText v & HM.toList & sort & mapM_ (\(kk, vv) -> jsonValueToHtmlTree' (path <> "." <> key, kk, vv)))
     jsonValueToHtmlTree' (path, key, AE.Array v) = renderParentType "[" "]" key (length v) (V.iforM_ v \i item -> jsonValueToHtmlTree' (path <> "." <> key, toText $ show i, item))
     jsonValueToHtmlTree' (path, key, value) = do
       let fullFieldPath = if T.isSuffixOf "[*]" path then path else path <> "." <> key
@@ -389,7 +390,7 @@ lookupVecByKey vec colIdxMap key = HM.lookup key colIdxMap >>= (vec V.!?)
 
 
 lookupValueText :: AE.Value -> Text -> Maybe Text
-lookupValueText (AE.Object obj) key = case AEK.lookup (fromText key) obj of
+lookupValueText (AE.Object obj) key = case AEKM.lookup (AEK.fromText key) obj of
   Just (AE.String textValue) -> Just textValue -- Extract text from Value if it's a String
   _ -> Nothing
 lookupValueText _ _ = Nothing
@@ -493,6 +494,25 @@ toXXHash input = leftPad 8 $ fromString $ showHex (xxHash $ encodeUtf8 input) ""
 
 leftPad :: Int -> Text -> Text
 leftPad len txt = T.justifyRight len '0' (T.take len txt)
+
+
+-- | Convert flat key-value pairs with dot notation into nested JSON structure
+-- | Example: {"http.request.method": "GET"} -> {"http": {"request": {"method": "GET"}}}
+nestedJsonFromDotNotation :: [(Text, AE.Value)] -> AE.Value
+nestedJsonFromDotNotation pairs =
+  AE.object $ map (uncurry insertNested) pairs
+  where
+    insertNested :: Text -> AE.Value -> (AEK.Key, AE.Value)
+    insertNested key value = 
+      case T.splitOn "." key of
+        [] -> (AEK.fromText "", value)
+        [k] -> (AEK.fromText k, value)
+        (firstPart:rest) -> (AEK.fromText firstPart, nestRest rest value)
+    
+    nestRest :: [Text] -> AE.Value -> AE.Value
+    nestRest [] value = value
+    nestRest [k] value = AE.object [(AEK.fromText k, value)]
+    nestRest (k:ks) value = AE.object [(AEK.fromText k, nestRest ks value)]
 
 
 convertToDHMS :: NominalDiffTime -> (Int, Int, Int, Int)

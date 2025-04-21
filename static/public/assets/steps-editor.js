@@ -131,6 +131,9 @@ export class StepsEditor extends LitElement {
       lineNumbersMinChars: 3,
       automaticLayout: true,
       minimap: { enabled: false },
+      fontFamily: 'JetBrains Mono, monospace',
+      fontLigatures: true,
+      fontWeight: '400',
     })
 
     const model = this.editor.getModel()

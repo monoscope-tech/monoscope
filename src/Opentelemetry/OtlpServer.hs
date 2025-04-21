@@ -59,9 +59,11 @@ import Proto.Opentelemetry.Proto.Resource.V1.Resource_Fields qualified as PRF
 import Proto.Opentelemetry.Proto.Trace.V1.Trace qualified as PT
 import Proto.Opentelemetry.Proto.Trace.V1.Trace_Fields qualified as PTF
 import Relude hiding (ask)
+import Data.List (partition)
 import RequestMessages (RequestMessage (..))
 import System.Config (AuthContext)
 import System.Types (runBackground)
+import Utils (nestedJsonFromDotNotation)
 
 
 -- import Network.GRPC.Server.Service (Service, service, method, fromServices)
@@ -248,10 +250,27 @@ byteStringToHexText bs = TE.decodeUtf8 (B16.encode bs)
 
 keyValueToJSON :: V.Vector PC.KeyValue -> AE.Value
 keyValueToJSON kvs =
-  AE.object
-    [ AEK.fromText (kv ^. PCF.key) AE..= anyValueToJSON (Just (kv ^. PCF.value))
-    | kv <- V.toList kvs
-    ]
+  let
+    -- Extract all key-value pairs
+    allPairs = [(kv ^. PCF.key, anyValueToJSON (Just (kv ^. PCF.value))) | kv <- V.toList kvs]
+    
+    -- Special case keys that should remain flat for OTel compatibility
+    specialKeys = ["at-project-key", "at-project-id"] 
+    
+    -- Split into flat and nested categories
+    (flatPairs, nestedPairs) = partition (\(k, _) -> k `elem` specialKeys) allPairs
+    
+    -- Create the nested structure for regular keys
+    nestedObj = nestedJsonFromDotNotation nestedPairs
+    
+    -- Create a separate object for special keys that should remain flat
+    flatObj = AE.object [AEK.fromText k AE..= v | (k, v) <- flatPairs]
+    
+    -- Merge both objects (keeping special keys at the top level)
+    mergedObj = AE.Object $ KEM.union (case flatObj of AE.Object km -> km; _ -> KEM.empty) 
+                                      (case nestedObj of AE.Object km -> km; _ -> KEM.empty)
+  in
+    mergedObj
 
 
 anyValueToJSON :: Maybe PC.AnyValue -> AE.Value
@@ -278,7 +297,25 @@ anyValueToJSON (Just av) =
 -- Convert Resource to JSON
 resourceToJSON :: Maybe PR.Resource -> AE.Value
 resourceToJSON Nothing = AE.Null
-resourceToJSON (Just resource) = keyValueToJSON (V.fromList $ resource ^. PRF.attributes)
+resourceToJSON (Just resource) = 
+  let 
+    attrs = V.fromList $ resource ^. PRF.attributes
+    -- Process resource attributes with proper nesting
+    attrPairs = [(kv ^. PCF.key, anyValueToJSON (Just (kv ^. PCF.value))) | kv <- V.toList attrs]
+    -- Special case keys that should remain flat
+    specialKeys = ["at-project-key", "at-project-id"] 
+    -- Split into flat and nested categories
+    (flatPairs, nestedPairs) = partition (\(k, _) -> k `elem` specialKeys) attrPairs
+    
+    -- Create properly nested structure
+    nestedObj = nestedJsonFromDotNotation nestedPairs
+    
+    -- Add flat keys at top level
+    flatObj = AE.object [AEK.fromText k AE..= v | (k, v) <- flatPairs]
+  in
+    -- Merge both objects
+    AE.Object $ KEM.union (case flatObj of AE.Object km -> km; _ -> KEM.empty) 
+                          (case nestedObj of AE.Object km -> km; _ -> KEM.empty)
 
 
 -- Convert JSON to Map

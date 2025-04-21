@@ -84,8 +84,6 @@ bodyWrapper bcfg child = do
         meta_ [name_ "msapplication-TileColor", content_ "#da532c"]
         meta_ [name_ "theme-color", content_ "#ffffff"]
         link_ [rel_ "stylesheet", type_ "text/css", href_ $(hashAssetFile "/public/assets/css/thirdparty/notyf3.min.css")]
-        link_ [rel_ "preconnect", href_ "https://rsms.me/"]
-        link_ [rel_ "stylesheet", href_ "https://rsms.me/inter/inter.css"]
         -- link_ [rel_ "stylesheet", href_ "https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/atom-one-dark.min.css"]
         link_ [rel_ "stylesheet", href_ "https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/atom-one-light.min.css"]
         link_ [rel_ "stylesheet", href_ "https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.63.0/codemirror.min.css"]

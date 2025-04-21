@@ -370,7 +370,7 @@ export class LogList extends LitElement {
           </thead>
           ${list.length === 1 ? emptyState(this.source, this.logsColumns.length) : nothing}
           <tbody
-            class="min-w-0"
+            class="min-w-0 text-sm"
             id="log-item-table-body"
             @rangeChanged=${event => {
               this.setupIntersectionObserver()
@@ -416,10 +416,8 @@ export class LogList extends LitElement {
       case 'created_at':
       case 'timestamp':
         let timestamp = lookupVecTextByKey(dataArr, colIdxMap, key)
-        return html`<div class="text-base">
-          <time class="monospace whitespace-nowrap text-slate-600 ${wrapClass}" data-tippy-content="timestamp" datetime=${timestamp}
-            >${displayTimestamp(timestamp)}</time
-          >
+        return html`<div>
+          <time class="monospace text-textStrong ${wrapClass}" data-tippy-content="timestamp" datetime=${timestamp}>${displayTimestamp(timestamp)}</time>
         </div>`
       case 'status_code':
         let statusCode = lookupVecTextByKey(dataArr, colIdxMap, 'status_code')
