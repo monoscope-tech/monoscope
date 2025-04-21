@@ -47,34 +47,6 @@ packages:
   original:
     hackage: log-effectful-1.0.1.0@sha256:79d1c821db1c1d95cf109f813f13a2588e45dbacb5f797eefc200ff7a5984923,2466
 - completed:
-    hackage: lucid-aria-0.1.0.1@sha256:d4f37b67a28f2e38eb3cf9fca4cbed5dcc6bf335c880113c618ca50fa933cd40,920
-    pantry-tree:
-      sha256: 86dc56b3e719f1cd436a3efad829cfd0fa75a29c8bdbbb9e866ec8d2ea96cac7
-      size: 318
-  original:
-    hackage: lucid-aria-0.1.0.1@sha256:d4f37b67a28f2e38eb3cf9fca4cbed5dcc6bf335c880113c618ca50fa933cd40,920
-- completed:
-    hackage: lucid-htmx-0.1.0.7@sha256:05d0bec34cd3c3d99d69a02c5c5f87385a9e53de8fa2e57a0c7c477dd3e5a6af,1491
-    pantry-tree:
-      sha256: 02dcd0ec63f113e1c17e82108daa7282b4e27374a1be380fc132f9aa5fa2d813
-      size: 428
-  original:
-    hackage: lucid-htmx-0.1.0.7@sha256:05d0bec34cd3c3d99d69a02c5c5f87385a9e53de8fa2e57a0c7c477dd3e5a6af,1491
-- completed:
-    hackage: lucid-hyperscript-0.1.0.2@sha256:c3b048424e75c0e9cbadc30f7ebeb6abc164c2b45b2c995fd0674d4cc57be216,2035
-    pantry-tree:
-      sha256: 4fad3e11a8a599a8bc05a9b70d22d29dbdc07740ab8ebd5e4236af37f20ee554
-      size: 502
-  original:
-    hackage: lucid-hyperscript-0.1.0.2@sha256:c3b048424e75c0e9cbadc30f7ebeb6abc164c2b45b2c995fd0674d4cc57be216,2035
-- completed:
-    hackage: lucid-svg-0.7.2.0@sha256:ac145997d5d6976d5c77e09992b5b204d7ddb7edba3002801927ed2acc69692b,1091
-    pantry-tree:
-      sha256: d17d9c53627b0b05d62f6fc9b74a7c5a600126318df2b89aca205794be084de3
-      size: 456
-  original:
-    hackage: lucid-svg-0.7.2.0@sha256:ac145997d5d6976d5c77e09992b5b204d7ddb7edba3002801927ed2acc69692b,1091
-- completed:
     hackage: monad-time-effectful-1.0.0.0@sha256:4994617545bb4b25ba01eaf2bdb1c2c74f7cefab36945af8eb92dca9842fc4b6,1528
     pantry-tree:
       sha256: ca2ac18b97169e7734e190d2a0175ae1f6de7a2d2f355514250ab2625de36942
@@ -116,13 +88,6 @@ packages:
       size: 2192
   original:
     hackage: swagger2-2.8.9@sha256:8434f71bf8017c1421d85ee8021e3f56f45f15c8ba50fff55f7329ace4cb0076,4518
-- completed:
-    hackage: text-display-0.0.5.2@sha256:6e6a5bf1c83dfa6c34692ed5d8ea87f1bd385984309b42c302f2156f4d82477b,2670
-    pantry-tree:
-      sha256: e84ac3f5fdc4d6e1c544174735beb80474cf7d7b849abfd1ae6184517a30c1c1
-      size: 3364
-  original:
-    hackage: text-display-0.0.5.2@sha256:6e6a5bf1c83dfa6c34692ed5d8ea87f1bd385984309b42c302f2156f4d82477b,2670
 - completed:
     hackage: timing-convenience-0.1@sha256:7ff807a9a9e5596f2b18d45c5a01aefb91d4a98f6a1008d183b5c550f68f7cb7,2092
     pantry-tree:
@@ -242,6 +207,34 @@ packages:
       size: 360
   original:
     hackage: hs-opentelemetry-instrumentation-wai-0.1.1.0@sha256:d97b4cb3870217e64e95da3f51db814eca62eb57484ee0a6f747366da5940bc2,1371
+- completed:
+    hackage: lucid-aria-0.1.0.1@sha256:d4f37b67a28f2e38eb3cf9fca4cbed5dcc6bf335c880113c618ca50fa933cd40,920
+    pantry-tree:
+      sha256: 86dc56b3e719f1cd436a3efad829cfd0fa75a29c8bdbbb9e866ec8d2ea96cac7
+      size: 318
+  original:
+    hackage: lucid-aria-0.1.0.1@sha256:d4f37b67a28f2e38eb3cf9fca4cbed5dcc6bf335c880113c618ca50fa933cd40,920
+- completed:
+    hackage: lucid-htmx-0.1.0.7@sha256:05d0bec34cd3c3d99d69a02c5c5f87385a9e53de8fa2e57a0c7c477dd3e5a6af,1491
+    pantry-tree:
+      sha256: 02dcd0ec63f113e1c17e82108daa7282b4e27374a1be380fc132f9aa5fa2d813
+      size: 428
+  original:
+    hackage: lucid-htmx-0.1.0.7@sha256:05d0bec34cd3c3d99d69a02c5c5f87385a9e53de8fa2e57a0c7c477dd3e5a6af,1491
+- completed:
+    hackage: lucid-hyperscript-0.1.0.2@sha256:c3b048424e75c0e9cbadc30f7ebeb6abc164c2b45b2c995fd0674d4cc57be216,2035
+    pantry-tree:
+      sha256: 4fad3e11a8a599a8bc05a9b70d22d29dbdc07740ab8ebd5e4236af37f20ee554
+      size: 502
+  original:
+    hackage: lucid-hyperscript-0.1.0.2@sha256:c3b048424e75c0e9cbadc30f7ebeb6abc164c2b45b2c995fd0674d4cc57be216,2035
+- completed:
+    hackage: lucid-svg-0.7.2.0@sha256:ac145997d5d6976d5c77e09992b5b204d7ddb7edba3002801927ed2acc69692b,1091
+    pantry-tree:
+      sha256: d17d9c53627b0b05d62f6fc9b74a7c5a600126318df2b89aca205794be084de3
+      size: 456
+  original:
+    hackage: lucid-svg-0.7.2.0@sha256:ac145997d5d6976d5c77e09992b5b204d7ddb7edba3002801927ed2acc69692b,1091
 - completed:
     hackage: ki-effectful-0.1.1.0@sha256:15a4bc01c4195d9e3ed3d0ae25e419b0c035c897494dadefc2d676a43f1f5082,1815
     pantry-tree:
@@ -381,81 +374,70 @@ packages:
     git: https://github.com/well-typed/grapesy.git
     subdir: grpc-spec
 - completed:
-    commit: b54294c179f8ce8e76c9549c953e2ee684fcef8a
-    git: https://github.com/tonyalaribe/gogol.git
+    commit: 881cd14c9844131b4a8d96ca1bbb2bd9a2409ed9
+    git: https://github.com/brendanhay/gogol.git
     name: gogol-core
     pantry-tree:
-      sha256: 0025798c66f1150056dee10cda21062e4916236bcfa2adf5684d061f8ede2a83
+      sha256: 5d7d40dfb33497da34fcd8cd60da6b7968f5977a1047b172ff6b480d6dc04d26
       size: 567
     subdir: lib/gogol-core
     version: 1.0.0.0
   original:
-    commit: b54294c179f8ce8e76c9549c953e2ee684fcef8a
-    git: https://github.com/tonyalaribe/gogol.git
+    commit: 881cd14c9844131b4a8d96ca1bbb2bd9a2409ed9
+    git: https://github.com/brendanhay/gogol.git
     subdir: lib/gogol-core
 - completed:
-    commit: b54294c179f8ce8e76c9549c953e2ee684fcef8a
-    git: https://github.com/tonyalaribe/gogol.git
+    commit: 881cd14c9844131b4a8d96ca1bbb2bd9a2409ed9
+    git: https://github.com/brendanhay/gogol.git
     name: gogol
     pantry-tree:
-      sha256: 786abce35654341f7ff3c3fcb800e9bcd1df0a0a44a0789c9557a610078051b7
+      sha256: 3b48295164de1c3e4063d0be6b41860620eee46d381953fb6d3b9cc37cb88a7c
       size: 1194
     subdir: lib/gogol
     version: 1.0.0.0
   original:
-    commit: b54294c179f8ce8e76c9549c953e2ee684fcef8a
-    git: https://github.com/tonyalaribe/gogol.git
+    commit: 881cd14c9844131b4a8d96ca1bbb2bd9a2409ed9
+    git: https://github.com/brendanhay/gogol.git
     subdir: lib/gogol
 - completed:
-    commit: b54294c179f8ce8e76c9549c953e2ee684fcef8a
-    git: https://github.com/tonyalaribe/gogol.git
+    commit: 881cd14c9844131b4a8d96ca1bbb2bd9a2409ed9
+    git: https://github.com/brendanhay/gogol.git
     name: gogol-pubsub
     pantry-tree:
-      sha256: 72c744c90fe905238e79c39176e9a3a6a580f3839af7a056dc6207f85593a293
-      size: 4631
+      sha256: 6d2d2308723276b7f5c3b49172652c21a534e189b48b082bc66c7798d5218a90
+      size: 4632
     subdir: lib/services/gogol-pubsub
-    version: 1.0.0.0
+    version: 1.0.0
   original:
-    commit: b54294c179f8ce8e76c9549c953e2ee684fcef8a
-    git: https://github.com/tonyalaribe/gogol.git
+    commit: 881cd14c9844131b4a8d96ca1bbb2bd9a2409ed9
+    git: https://github.com/brendanhay/gogol.git
     subdir: lib/services/gogol-pubsub
 - completed:
-    commit: b54294c179f8ce8e76c9549c953e2ee684fcef8a
-    git: https://github.com/tonyalaribe/gogol.git
+    commit: 881cd14c9844131b4a8d96ca1bbb2bd9a2409ed9
+    git: https://github.com/brendanhay/gogol.git
     name: gogol-logging
     pantry-tree:
-      sha256: 6d903a732edfd7b27c1cbc00c296f2ea6bdd3c5f6564c526c1b3a2fbbe5cc8c2
-      size: 19371
+      sha256: 0676769b800c312f33f473929a1693538b66cdd02e90599a06f365d5609a19cb
+      size: 24284
     subdir: lib/services/gogol-logging
-    version: 1.0.0.0
+    version: 1.0.0
   original:
-    commit: b54294c179f8ce8e76c9549c953e2ee684fcef8a
-    git: https://github.com/tonyalaribe/gogol.git
+    commit: 881cd14c9844131b4a8d96ca1bbb2bd9a2409ed9
+    git: https://github.com/brendanhay/gogol.git
     subdir: lib/services/gogol-logging
 - completed:
-    commit: b54294c179f8ce8e76c9549c953e2ee684fcef8a
-    git: https://github.com/tonyalaribe/gogol.git
+    commit: 881cd14c9844131b4a8d96ca1bbb2bd9a2409ed9
+    git: https://github.com/brendanhay/gogol.git
     name: gogol-cloudtrace
     pantry-tree:
-      sha256: 8536a13f9c62ba5d2fd55d4a110463766f79051923615e419d458fde89d36131
+      sha256: 8c9fe79443b921fe159bcd268b0bb67ec36573495cad1815f034e3f86999199c
       size: 740
     subdir: lib/services/gogol-cloudtrace
-    version: 1.0.0.0
+    version: 1.0.0
   original:
-    commit: b54294c179f8ce8e76c9549c953e2ee684fcef8a
-    git: https://github.com/tonyalaribe/gogol.git
+    commit: 881cd14c9844131b4a8d96ca1bbb2bd9a2409ed9
+    git: https://github.com/brendanhay/gogol.git
     subdir: lib/services/gogol-cloudtrace
-- completed:
-    name: proto3-suite
-    pantry-tree:
-      sha256: bff4d12baadfc9a98595928b90d823ca28cc05cdce9c6dcfa0a5a5b1ccb7b0db
-      size: 8315
-    sha256: 4fcad929b14c2ccde2cea8fde93f2676400034e3328decc7eb9ac41e232901e5
-    size: 126320
-    url: https://github.com/tonyalaribe/proto3-suite/archive/ecf8330af92941d5a0a0676a719b666ca3970ac4.tar.gz
-    version: 0.8.2
-  original:
-    url: https://github.com/tonyalaribe/proto3-suite/archive/ecf8330af92941d5a0a0676a719b666ca3970ac4.tar.gz
 - completed:
     commit: 0fa01adb871e66996d4ed2c27a3e97fac39ac466
     git: https://github.com/tonyalaribe/xxhash

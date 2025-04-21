@@ -117,8 +117,8 @@ sqlFromQueryComponents sqlCfg qc =
       timeDiffSecs = abs $ nominalDiffTimeToSeconds $ diffUTCTime fromT toT
       finalSqlQuery = case sqlCfg.targetSpansM of
         Just "service-entry-spans" ->
-          [fmt|WITH ranked_spans AS (SELECT *, resource->>'service.name' AS service_name,
-                ROW_NUMBER() OVER (PARTITION BY trace_id, resource->>'service.name' ORDER BY start_time) AS rn
+          [fmt|WITH ranked_spans AS (SELECT *, resource->'service'->>'name' AS service_name,
+                ROW_NUMBER() OVER (PARTITION BY trace_id, resource->'service'->>'name' ORDER BY start_time) AS rn
                 FROM telemetry.spans where project_id='{sqlCfg.pid.toText}' and (
                 {timestampCol} > NOW() - interval '14 days'
                 {cursorT} {dateRangeStr} {whereClause} )

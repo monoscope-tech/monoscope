@@ -207,7 +207,8 @@ library:
     - servant-lucid
     - servant-server
     - text
-    - text-display == 0.0.5.2
+    - text-display
+    - text-builder-linear
     - unliftio
     - time
     - unordered-containers

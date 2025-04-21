@@ -236,7 +236,7 @@ jsonValueToHtmlTree val = do
   div_ [class_ "p-2 rounded-lg bg-fillWeaker border w-full overflow-x-auto json-tree-container"] do
     div_ [class_ "w-full flex items-center gap-4 text-xs mb-2"] do
       button_
-        [ class_ "flex items-center gap-1 expand_all"
+        [ class_ "flex items-center gap-1 cursor-pointer expand_all"
         , [__|on click
                set container to the closest .json-tree-container to the parentElement of me
                set items to container.querySelectorAll(".log-item-with-children")
@@ -250,7 +250,7 @@ jsonValueToHtmlTree val = do
           span_ [class_ "underline"] "Expand all"
           faSprite_ "expand" "regular" "w-2 h-2"
       button_
-        [ class_ "flex hidden items-center gap-1 collpase_all"
+        [ class_ "flex hidden items-center gap-1 cursor-pointer collpase_all"
         , [__| on click
                set container to the closest .json-tree-container to the parentElement of me
                set items to container.querySelectorAll(".log-item-with-children")
@@ -266,7 +266,7 @@ jsonValueToHtmlTree val = do
 
       let json = decodeUtf8 $ AE.encode $ AE.toJSON val
       button_
-        [ class_ "flex items-center gap-1"
+        [ class_ "flex items-center gap-1 cursor-pointer"
         , term
             "_"
             [text|  on click
@@ -281,7 +281,7 @@ jsonValueToHtmlTree val = do
           faSprite_ "copy" "regular" "w-2 h-2"
 
       button_
-        [ class_ "flex items-center gap-1"
+        [ class_ "flex items-center gap-1 cursor-pointer"
         , onclick_ "window.downloadJson(event)"
         , term "data-reqjson" $ json
         ]

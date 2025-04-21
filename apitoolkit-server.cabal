@@ -344,7 +344,8 @@ library
     , strict-containers
     , template-haskell
     , text
-    , text-display ==0.0.5.2
+    , text-builder-linear
+    , text-display
     , time
     , tmp-postgres
     , unliftio
