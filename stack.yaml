@@ -76,8 +76,10 @@ extra-deps:
     subdirs:
       - grapesy
       - grpc-spec
-  - git: https://github.com/brendanhay/gogol.git
-    commit: 881cd14c9844131b4a8d96ca1bbb2bd9a2409ed9
+  # - git: https://github.com/brendanhay/gogol.git
+  #   commit: 881cd14c9844131b4a8d96ca1bbb2bd9a2409ed9
+  - git: https://github.com/tonyalaribe/gogol.git
+    commit: b54294c179f8ce8e76c9549c953e2ee684fcef8a
     subdirs:
       - lib/gogol-core
       - lib/gogol

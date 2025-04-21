@@ -6,6 +6,9 @@ with-compiler: ghc-9.10.1
 -- with-compiler: ghc-9.8.2
 import: https://www.stackage.org/nightly-2025-04-20/cabal.config
 
+-- Override dependencies from stack.yaml
+allow-newer: all
+
 -- package *
 --  extra-lib-dirs: rust-interop/target/release target/release
 --  extra-include-dirs: rust-interop/target/release target/release
@@ -29,6 +32,36 @@ source-repository-package
 
 source-repository-package
   type: git
+  location: https://github.com/tonyalaribe/gogol.git
+  tag: b54294c179f8ce8e76c9549c953e2ee684fcef8a
+  subdir: lib/gogol-core
+
+source-repository-package
+  type: git
+  location: https://github.com/tonyalaribe/gogol.git
+  tag: b54294c179f8ce8e76c9549c953e2ee684fcef8a
+  subdir: lib/gogol
+
+source-repository-package
+  type: git
+  location: https://github.com/tonyalaribe/gogol.git
+  tag: b54294c179f8ce8e76c9549c953e2ee684fcef8a
+  subdir: lib/services/gogol-pubsub
+
+source-repository-package
+  type: git
+  location: https://github.com/tonyalaribe/gogol.git
+  tag: b54294c179f8ce8e76c9549c953e2ee684fcef8a
+  subdir: lib/services/gogol-logging
+
+source-repository-package
+  type: git
+  location: https://github.com/tonyalaribe/gogol.git
+  tag: b54294c179f8ce8e76c9549c953e2ee684fcef8a
+  subdir: lib/services/gogol-cloudtrace
+
+source-repository-package
+  type: git
   location: https://github.com/tonyalaribe/xxhash
   tag: 0fa01adb871e66996d4ed2c27a3e97fac39ac466
   subdir: .
@@ -39,11 +72,52 @@ source-repository-package
   tag: 893368e6010a87c3a2d33227af675b4fb8fe411f
   subdir: .
 
+source-repository-package
+  type: git
+  location: https://github.com/google/proto-lens
+  tag: 815c852b046612256fc0f5f7e8585ec4e55dd9b7
+  subdir: proto-lens-setup
+
+source-repository-package
+  type: git
+  location: https://github.com/google/proto-lens
+  tag: 815c852b046612256fc0f5f7e8585ec4e55dd9b7
+  subdir: proto-lens-protoc
+
+source-repository-package
+  type: git
+  location: https://github.com/google/proto-lens
+  tag: 815c852b046612256fc0f5f7e8585ec4e55dd9b7
+  subdir: proto-lens-runtime
+
+source-repository-package
+  type: git
+  location: https://github.com/google/proto-lens
+  tag: 815c852b046612256fc0f5f7e8585ec4e55dd9b7
+  subdir: proto-lens
+
+source-repository-package
+  type: git
+  location: https://github.com/google/proto-lens
+  tag: 815c852b046612256fc0f5f7e8585ec4e55dd9b7
+  subdir: proto-lens-protobuf-types
+
+source-repository-package
+  type: git
+  location: https://github.com/well-typed/grapesy.git
+  tag: 4d374aca55bb5392e3b91ae47d6ca5625ffc59b6
+  subdir: grapesy
+
+source-repository-package
+  type: git
+  location: https://github.com/well-typed/grapesy.git
+  tag: 4d374aca55bb5392e3b91ae47d6ca5625ffc59b6
+  subdir: grpc-spec
 
 
 constraints:
   pg-entity +prod,
   streamly ^>=0.10.0,
-  streamly-core ^>=0.3.0
+
 
 allow-newer: all 

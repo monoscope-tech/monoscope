@@ -374,69 +374,69 @@ packages:
     git: https://github.com/well-typed/grapesy.git
     subdir: grpc-spec
 - completed:
-    commit: 881cd14c9844131b4a8d96ca1bbb2bd9a2409ed9
-    git: https://github.com/brendanhay/gogol.git
+    commit: b54294c179f8ce8e76c9549c953e2ee684fcef8a
+    git: https://github.com/tonyalaribe/gogol.git
     name: gogol-core
     pantry-tree:
-      sha256: 5d7d40dfb33497da34fcd8cd60da6b7968f5977a1047b172ff6b480d6dc04d26
+      sha256: 0025798c66f1150056dee10cda21062e4916236bcfa2adf5684d061f8ede2a83
       size: 567
     subdir: lib/gogol-core
     version: 1.0.0.0
   original:
-    commit: 881cd14c9844131b4a8d96ca1bbb2bd9a2409ed9
-    git: https://github.com/brendanhay/gogol.git
+    commit: b54294c179f8ce8e76c9549c953e2ee684fcef8a
+    git: https://github.com/tonyalaribe/gogol.git
     subdir: lib/gogol-core
 - completed:
-    commit: 881cd14c9844131b4a8d96ca1bbb2bd9a2409ed9
-    git: https://github.com/brendanhay/gogol.git
+    commit: b54294c179f8ce8e76c9549c953e2ee684fcef8a
+    git: https://github.com/tonyalaribe/gogol.git
     name: gogol
     pantry-tree:
-      sha256: 3b48295164de1c3e4063d0be6b41860620eee46d381953fb6d3b9cc37cb88a7c
+      sha256: 786abce35654341f7ff3c3fcb800e9bcd1df0a0a44a0789c9557a610078051b7
       size: 1194
     subdir: lib/gogol
     version: 1.0.0.0
   original:
-    commit: 881cd14c9844131b4a8d96ca1bbb2bd9a2409ed9
-    git: https://github.com/brendanhay/gogol.git
+    commit: b54294c179f8ce8e76c9549c953e2ee684fcef8a
+    git: https://github.com/tonyalaribe/gogol.git
     subdir: lib/gogol
 - completed:
-    commit: 881cd14c9844131b4a8d96ca1bbb2bd9a2409ed9
-    git: https://github.com/brendanhay/gogol.git
+    commit: b54294c179f8ce8e76c9549c953e2ee684fcef8a
+    git: https://github.com/tonyalaribe/gogol.git
     name: gogol-pubsub
     pantry-tree:
-      sha256: 6d2d2308723276b7f5c3b49172652c21a534e189b48b082bc66c7798d5218a90
-      size: 4632
+      sha256: 72c744c90fe905238e79c39176e9a3a6a580f3839af7a056dc6207f85593a293
+      size: 4631
     subdir: lib/services/gogol-pubsub
-    version: 1.0.0
+    version: 1.0.0.0
   original:
-    commit: 881cd14c9844131b4a8d96ca1bbb2bd9a2409ed9
-    git: https://github.com/brendanhay/gogol.git
+    commit: b54294c179f8ce8e76c9549c953e2ee684fcef8a
+    git: https://github.com/tonyalaribe/gogol.git
     subdir: lib/services/gogol-pubsub
 - completed:
-    commit: 881cd14c9844131b4a8d96ca1bbb2bd9a2409ed9
-    git: https://github.com/brendanhay/gogol.git
+    commit: b54294c179f8ce8e76c9549c953e2ee684fcef8a
+    git: https://github.com/tonyalaribe/gogol.git
     name: gogol-logging
     pantry-tree:
-      sha256: 0676769b800c312f33f473929a1693538b66cdd02e90599a06f365d5609a19cb
-      size: 24284
+      sha256: 6d903a732edfd7b27c1cbc00c296f2ea6bdd3c5f6564c526c1b3a2fbbe5cc8c2
+      size: 19371
     subdir: lib/services/gogol-logging
-    version: 1.0.0
+    version: 1.0.0.0
   original:
-    commit: 881cd14c9844131b4a8d96ca1bbb2bd9a2409ed9
-    git: https://github.com/brendanhay/gogol.git
+    commit: b54294c179f8ce8e76c9549c953e2ee684fcef8a
+    git: https://github.com/tonyalaribe/gogol.git
     subdir: lib/services/gogol-logging
 - completed:
-    commit: 881cd14c9844131b4a8d96ca1bbb2bd9a2409ed9
-    git: https://github.com/brendanhay/gogol.git
+    commit: b54294c179f8ce8e76c9549c953e2ee684fcef8a
+    git: https://github.com/tonyalaribe/gogol.git
     name: gogol-cloudtrace
     pantry-tree:
-      sha256: 8c9fe79443b921fe159bcd268b0bb67ec36573495cad1815f034e3f86999199c
+      sha256: 8536a13f9c62ba5d2fd55d4a110463766f79051923615e419d458fde89d36131
       size: 740
     subdir: lib/services/gogol-cloudtrace
-    version: 1.0.0
+    version: 1.0.0.0
   original:
-    commit: 881cd14c9844131b4a8d96ca1bbb2bd9a2409ed9
-    git: https://github.com/brendanhay/gogol.git
+    commit: b54294c179f8ce8e76c9549c953e2ee684fcef8a
+    git: https://github.com/tonyalaribe/gogol.git
     subdir: lib/services/gogol-cloudtrace
 - completed:
     commit: 0fa01adb871e66996d4ed2c27a3e97fac39ac466
