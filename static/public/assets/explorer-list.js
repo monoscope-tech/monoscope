@@ -1,6 +1,6 @@
 'use strict'
 import { LitElement, html, nothing } from './js/thirdparty/lit.js'
-import { virtualize } from '@lit-labs/virtualizer/virtualizer'
+import { virtualize, virtualizerRef } from '@lit-labs/virtualizer/virtualizer'
 
 export class LogList extends LitElement {
   static properties = {
@@ -18,6 +18,7 @@ export class LogList extends LitElement {
     expandedTraces: {},
     columnMaxWidthMap: {},
     view: { type: String },
+    shouldScrollToBottom: { type: Boolean },
   }
   constructor() {
     super()
@@ -37,6 +38,7 @@ export class LogList extends LitElement {
     this.columnMaxWidthMap = {}
     this.isLoadingRecent = false
     this.isError = false
+    this.shouldScrollToBottom = true
     this.logItemRow = this.logItemRow.bind(this)
     this.fetchData = this.fetchData.bind(this)
     this.expandTrace = this.expandTrace.bind(this)
@@ -44,6 +46,7 @@ export class LogList extends LitElement {
     this.updateTableData = this.updateTableData.bind(this)
     this.updateColumnMaxWidthMap = this.updateColumnMaxWidthMap.bind(this)
     this.latestLogsURLQueryValsFn = this.latestLogsURLQueryValsFn.bind(this)
+    this.toggleLogRow = this.toggleLogRow.bind(this)
     this.logItemCol = this.logItemCol.bind(this)
     this.wrapLines = false
     this.view = 'tree'
@@ -84,7 +87,9 @@ export class LogList extends LitElement {
   }
 
   latestLogsURLQueryValsFn() {
-    const datetime = document.querySelector('#log-item-table-body time')?.getAttribute('datetime')
+    const latestData = this.source === 'spans' ? this.spanListTree[this.spanListTree.length - 1].data : this.logsData[this.logsData.length - 1]
+    const timeIndex = this.source === 'spans' ? this.colIdxMap['timestamp'] : this.ariaColIndex['created_at']
+    const datetime = latestData[timeIndex]
     const to = datetime ? new Date(new Date(datetime).getTime() + 1).toISOString() : params().to
     const from = params().from
     const url = new URL(this.nextFetchUrl, window.location.origin)
@@ -104,7 +109,7 @@ export class LogList extends LitElement {
     if (this.source === 'spans') {
       this.spanListTree = this.buildSpanListTree(ves)
     } else {
-      this.logsData = ves
+      this.logsData = ves.reverse()
     }
     this.updateColumnMaxWidthMap(ves)
     this.requestUpdate()
@@ -129,7 +134,7 @@ export class LogList extends LitElement {
       if (this.source === 'spans') {
         this.spanListTree = this.buildSpanListTree(logs)
       } else {
-        this.logsData = logs
+        this.logsData = logs.reverse()
       }
       this.updateColumnMaxWidthMap(logs)
       this.hasMore = logs.length >= 50
@@ -140,20 +145,22 @@ export class LogList extends LitElement {
   }
 
   firstUpdated() {
+    this.scrollToBottom()
     this.setupIntersectionObserver()
-    window.logListTable = document.querySelector('#resultTable')
   }
 
-  // updated(changedProps) {
-  //   super.updated(changedProps)
-  //   for (const span of this.spanListTree) {
-  //     if (span.isNewData) {
-  //       span.isNewData = false
-  //     } else {
-  //       break
-  //     }
-  //   }
-  // }
+  updated(changedProperties) {
+    if (this.shouldScrollToBottom) {
+      this.scrollToBottom()
+    }
+  }
+
+  scrollToBottom() {
+    const container = document.getElementById('logs_list_container_inner')
+    if (container) {
+      container.scrollTop = container.scrollHeight
+    }
+  }
 
   setupIntersectionObserver() {
     if (this._observer) {
@@ -195,46 +202,8 @@ export class LogList extends LitElement {
     return groupSpans(logs, this.colIdxMap, this.expandedTraces)
   }
 
-  renderLoadMore() {
-    return this.hasMore
-      ? html`<tr class="w-full flex relative">
-          <td colspan=${String(this.logsColumns.length)} class="relative  pl-[calc(40vw-10ch)]">
-            <div class="absolute -top-[500px] w-[1px] h-[500px] left-0 flex flex-col justify-end bg-transparent items-center" id="loader"></div>
-            ${this.isLoading
-              ? html`<div class="loading loading-dots loading-md"></div>`
-              : html`
-                  <button class="cursor-pointer text-textBrand underline font-semibold w-max mx-auto" @click=${() => this.fetchData(this.nextFetchUrl)}>
-                    Load more
-                  </button>
-                `}
-          </td>
-        </tr>`
-      : html`<tr></tr>`
-  }
-
-  fetchRecent() {
-    return html`<tr class="w-full flex relative">
-      <td colspan=${String(this.logsColumns.length)} class="relative pl-[calc(40vw-10ch)]">
-        ${this.isLiveStreaming
-          ? html`<p>Live streaming latest data...</p>`
-          : this.isLoadingRecent
-          ? html`<div class="loading loading-dots loading-md"></div>`
-          : html`
-              <button
-                class="cursor-pointer text-textBrand underline font-semibold w-max mx-auto"
-                @click=${() => {
-                  const updatedUrl = this.latestLogsURLQueryValsFn()
-                  this.fetchData(updatedUrl, true)
-                }}
-              >
-                Check for recent data
-              </button>
-            `}
-      </td>
-    </tr>`
-  }
-
   expandTrace(tracId, spanId) {
+    this.shouldScrollToBottom = false
     if (!this.expandedTraces[spanId]) {
       this.expandedTraces[spanId] = false
     }
@@ -259,53 +228,6 @@ export class LogList extends LitElement {
     this.requestUpdate()
   }
 
-  logItemRow(rowData) {
-    if (rowData === 'end') return this.renderLoadMore()
-    if (rowData === 'start') return this.fetchRecent()
-    const s = this.source === 'spans' && rowData.type === 'log' ? 'logs' : this.source
-    const targetInfo = requestDumpLogItemUrlPath(this.source === 'spans' ? rowData.data : rowData, this.colIdxMap, s)
-    const isNew = this.newDataCount > 0
-    this.newDataCount = this.newDataCount - 1
-
-    return html`
-      <tr
-        class=${`item-row relative flex items-center cursor-pointer whitespace-nowrap  ${isNew ? 'animate-fadeBg' : ''}`}
-        @click=${event => toggleLogRow(event, targetInfo, this.projectId)}
-      >
-        ${this.logsColumns
-          .filter(v => v !== 'latency_breakdown')
-          .map(column => {
-            const tableDataWidth = getColumnWidth(column)
-            let width = this.columnMaxWidthMap[column]
-            return html`<td
-              class=${`${this.wrapLines ? 'break-all whitespace-wrap' : ''} bg-white relative ${column === 'rest' ? '' : tableDataWidth}`}
-              style=${width ? `width: ${width}px;` : ''}
-            >
-              ${this.logItemCol(rowData, this.source, this.colIdxMap, column, this.serviceColors, this.expandTrace, this.columnMaxWidthMap, this.wrapLines)}
-            </td>`
-          })}
-        ${this.source === 'spans' && this.logsColumns.includes('latency_breakdown')
-          ? html`<td
-              class="bg-white sticky right-0 overflow-x-hidden"
-              style=${this.columnMaxWidthMap['latency_breakdown'] ? "width: ${this.columnMaxWidthMap['latency_breakdown']}px;" : ''}
-            >
-              ${this.logItemCol(
-                rowData,
-                this.source,
-                this.colIdxMap,
-                'latency_breakdown',
-                this.serviceColors,
-                this.expandTrace,
-                this.columnMaxWidthMap,
-                this.wrapLines,
-                this.view,
-              )}
-            </td>`
-          : nothing}
-      </tr>
-    `
-  }
-
   fetchData(url, isNewData = false) {
     if ((this.isLoading && !isNewData) || (this.isLoadingRecent && isNewData)) return
     if (isNewData) {
@@ -325,16 +247,20 @@ export class LogList extends LitElement {
           if (logsData.length > 0) {
             this.serviceColors = { ...this.serviceColors, ...serviceColors }
             if (this.source === 'spans') {
-              const tree = this.buildSpanListTree([...logsData])
+              let tree = this.buildSpanListTree([...logsData])
               if (isNewData) {
-                this.newDataCount = this.view === 'tree' ? tree.filter(t => t.show).length : tree.length
-                this.spanListTree = [...tree, ...this.spanListTree]
-              } else {
+                const container = document.querySelector('#logs_list_container_inner')
+                if (container && container.scrollTop + container.clientHeight >= container.scrollHeight - 1) {
+                  this.shouldScrollToBottom = true
+                }
+                this.newDataCount = this.view === 'tree' ? this.spanListTree.filter(t => t.show).length : this.spanListTree.length
                 this.spanListTree = [...this.spanListTree, ...tree]
+              } else {
+                this.spanListTree = [...tree, ...this.spanListTree]
               }
-              window.spanListTree = this.spanListTree
             } else {
-              this.logsData = isNewData ? [...logsData, ...this.logsData] : [...this.logsData, ...logsData]
+              logsData.reverse()
+              this.logsData = isNewData ? [...this.logsData, ...logsData] : [...logsData, ...this.logsData]
             }
             this.updateColumnMaxWidthMap(logsData)
           }
@@ -358,68 +284,6 @@ export class LogList extends LitElement {
 
   hideColumn(column) {
     this.logsColumns = this.logsColumns.filter(col => col !== column)
-  }
-
-  tableHeadingWrapper(title, column, classes) {
-    let width = this.columnMaxWidthMap[column]
-    if (column === 'latency_breakdown' && !width) {
-      width = 200
-    }
-    return html`
-      <td
-        class=${`cursor-pointer p-0 m-0 whitespace-nowrap relative flex justify-between items-center pl-1 text-sm font-normal bg-white ${
-          classes ? classes : ''
-        }`}
-        style=${width ? `width: ${width}px` : ''}
-      >
-        <div class="dropdown font-medium text-base" data-tippy-content=${title}>
-          <div tabindex="0" role="button" class="py-1">
-            ${title}
-            <span class="ml-1 p-0.5 border border-slate-200 rounded-sm inline-flex"> ${faSprite('chevron-down', 'regular', 'w-3 h-3')} </span>
-          </div>
-          <ul tabindex="0" class="dropdown-content z-1 menu p-2 shadow-sm bg-bgBase rounded-box min-w-[15rem]">
-            <li>
-              <button @click=${() => this.hideColumn(column)}>Hide column</button>
-            </li>
-          </ul>
-        </div>
-        <div
-          @mousedown=${event => {
-            this.resizeTarget = column
-            this.mouseState = { x: event.clientX }
-            document.body.style.userSelect = 'none'
-          }}
-          class="w-3 text-gray-200 text-right select-none hover:text-textBrand overflow-hidden font-bold absolute right-0 top-1/2 -translate-y-1/2 h-4 cursor-ew-resize"
-        >
-          |
-        </div>
-      </td>
-    `
-  }
-
-  logTableHeading(column) {
-    switch (column) {
-      case 'id':
-        return html`<td class="p-0 m-0 whitespace-nowrap w-3"></td>`
-      case 'timestamp':
-      case 'created_at':
-        return this.tableHeadingWrapper('timestamp', column, 'w-[17ch] shrink-0')
-      case 'latency_breakdown':
-        return this.tableHeadingWrapper('latency', column, 'sticky right-0 pr-2 shrink-0 w-[200px]')
-      case 'status_code':
-        return this.tableHeadingWrapper('status', column, 'shrink-0 w-[12ch]')
-      case 'method':
-        return this.tableHeadingWrapper('method', column, 'shrink-0 w-[12ch]')
-      case 'raw_url':
-      case 'url_path':
-        return this.tableHeadingWrapper(column, column, 'w-[25ch] shrink-0')
-      case 'service':
-        return this.tableHeadingWrapper('service', column, 'w-[16ch] shrink-0')
-      case 'rest':
-        return this.tableHeadingWrapper('summary', column, 'w-[1400px] shrink-1')
-      default:
-        return this.tableHeadingWrapper(column, column, 'w-[16ch] shrink-0')
-    }
   }
 
   updateColumnMaxWidthMap(recVecs) {
@@ -454,68 +318,49 @@ export class LogList extends LitElement {
       })
     })
   }
-
-  options() {
-    return html`
-      <div class="w-full flex justify-end px-2 pb-1 gap-3 ">
-        <div class="tabs tabs-box tabs-md p-0 tabs-outline items-center border">
-          <button
-            @click=${() => (this.view = 'tree')}
-            class=${`flex items-center justify-center gap-1 px-2 py-1 text-xs rounded ${
-              this.view === 'tree' ? 'bg-gray-200 text-gray-800' : 'text-textWeak  hover:bg-gray-100'
-            }`}
-          >
-            ${faSprite('tree', 'regular', 'h-4 w-4')}
-            <span class="sm:inline hidden">Tree</span>
-          </button>
-
-          <button
-            @click=${() => (this.view = 'list')}
-            class=${`flex items-center justify-center gap-1 px-2 py-1 text-xs rounded ${
-              this.view === 'list' ? 'bg-gray-200 text-gray-800' : 'text-textWeak  hover:bg-gray-100'
-            }`}
-          >
-            ${faSprite('list-view', 'regular', 'h-4 w-4')}
-            <span class="sm:inline hidden">List</span>
-          </button>
-        </div>
-
-        <button
-          class=${`flex items-center justify-center gap-1 px-2 py-1 text-xs rounded ${
-            this.wrapLines ? 'bg-gray-200 text-gray-800' : 'text-textWeak  hover:bg-gray-100'
-          }`}
-          @click=${() => {
-            this.wrapLines = !this.wrapLines
-            if (this.wrapLines) {
-              let width = Number(window.getComputedStyle(document.getElementById('logs_list_container_inner')).width.replace('px', ''))
-              this.logsColumns.forEach(col => {
-                if (col !== 'rest' && this.columnMaxWidthMap[col]) {
-                  width -= this.columnMaxWidthMap[col] + 8
-                }
-              })
-              this.columnMaxWidthMap['rest'] = width - 20 // margin left and right and id width
-            } else {
-              this.columnMaxWidthMap['rest'] = 450 * 8
-            }
-            this.requestUpdate()
-          }}
-        >
-          ${faSprite('wrap-text', 'regular', 'h-4 w-4')}
-          <span class="sm:inline hidden">Wrap lines</span>
-        </button>
-      </div>
-    `
+  toggleLogRow(event, targetInfo, pid) {
+    const sideView = document.querySelector('#log_details_container')
+    const logsView = document.querySelector('#logs_list_container')
+    const resizer = document.querySelector('#resizer')
+    const width = Number(getComputedStyle(sideView).width.replace('px', ''))
+    this.shouldScrollToBottom = false
+    if (width < 50) {
+      const lW = getComputedStyle(logsView).width.replace('px', '')
+      logsView.style.width = `${lW - 550}px`
+      resizer.classList.remove('hidden')
+      updateUrlState('details_width', logsView.style.width)
+    }
+    const rows = document.querySelectorAll('.item-row.bg-fillBrand-weak')
+    rows.forEach(row => row.classList.remove('bg-fillBrand-weak'))
+    event.currentTarget.classList.add('bg-fillBrand-weak')
+    const indicator = document.querySelector('#details_indicator')
+    indicator.classList.add('htmx-request')
+    const [rdId, rdCreatedAt, source] = targetInfo
+    const url = `/p/${pid}/log_explorer/${rdId}/${rdCreatedAt}/detailed?source=${source}`
+    updateUrlState('target_event', `${rdId}/${rdCreatedAt}/detailed?source=${source}`)
+    htmx.ajax('GET', url, { target: '#log_details_container', swap: 'innerHTML', indicator: '#details_indicator' })
   }
 
   render() {
     const list = this.source === 'spans' ? (this.view === 'tree' ? this.spanListTree.filter(sp => sp.show) : [...this.spanListTree]) : [...this.logsData]
     // end is used to render the load more button"
-    list.unshift('start')
-    list.push('end')
+    list.unshift('end')
+    list.push('start')
 
     return html`
       ${this.source === 'spans' ? this.options() : nothing}
-      <div class="relative h-full shrink-1 min-w-0 p-0 m-0 bg-white w-full c-scroll pb-12 overflow-y-scroll " id="logs_list_container_inner">
+      <div
+        @scroll=${event => {
+          const container = event.target
+          if (container.scrollTop + container.clientHeight >= container.scrollHeight - 1) {
+            this.shouldScrollToBottom = true
+          } else {
+            this.shouldScrollToBottom = false
+          }
+        }}
+        class="relative h-full shrink-1 min-w-0 p-0 m-0 bg-white w-full c-scroll pb-12 overflow-y-scroll scroll-smooth"
+        id="logs_list_container_inner"
+      >
         <table class="table-auto w-max relative ctable table-pin-rows table-pin-cols">
           <thead class="z-10 sticky top-0">
             <tr class="text-textStrong border-b flex min-w-0 relative font-medium ">
@@ -529,10 +374,6 @@ export class LogList extends LitElement {
             id="log-item-table-body"
             @rangeChanged=${event => {
               this.setupIntersectionObserver()
-              const tableBody = document.querySelector('#logs_list_container_inner')
-              if (tableBody && tableBody.scrollTop === 0) {
-                tableBody.scrollTop = 30
-              }
             }}
           >
             ${virtualize({
@@ -541,6 +382,19 @@ export class LogList extends LitElement {
             })}
           </tbody>
         </table>
+        ${this.shouldScrollToBottom
+          ? nothing
+          : html`<div style="position: sticky;bottom: 0px;overflow-anchor: none;">
+              <button
+                @click=${() => {
+                  this.shouldScrollToBottom = true
+                  this.scrollToBottom()
+                }}
+                class="absolute right-4 bottom-2 z-50 bg-black text-white"
+              >
+                To bottom
+              </button>
+            </div> `}
       </div>
     `
   }
@@ -611,8 +465,12 @@ export class LogList extends LitElement {
           color: serviceColors[lookupVecTextByKey(data, colIdxMap, 'span_name')] || 'bg-black',
         }))
         const width = columnMaxWidthMap['latency_breakdown'] || 200
+        const db = lookupVecObjectByKey(dataArr, colIdxMap, 'db_attributes')
+        const http = lookupVecObjectByKey(dataArr, colIdxMap, 'http_attributes')
         return html`
-          <div class="flex h-full min-h-10 justify-end items-center gap-2 pl-1 text-textWeak" style="width:${width}px">
+          <div class="flex justify-end items-center gap-2 pl-1 text-textWeak" style="min-width:${width}px">
+            ${db.system ? renderBadge('cbadge-sm badge-neutral bg-fillWeak border border-strokeWeak', db.system) : nothing}
+            ${http.method && http.url ? renderBadge('cbadge-sm badge-neutral bg-fillWeak border border-strokeWeak', 'http') : nothing}
             <div class="overflow-visible shrink-0 font-normal">${this.logItemCol(rowData, source, colIdxMap, 'duration')}</div>
             ${spanLatencyBreakdown({ start: startNs - traceStart, depth: d, duration, traceEnd, color, children: chil, barWidth: width - 100 })}
             <span class="w-1"></span>
@@ -708,6 +566,213 @@ export class LogList extends LitElement {
         let v = lookupVecTextByKey(dataArr, colIdxMap, key)
         return renderBadge('cbadge-sm badge-neutral bg-fillWeak ' + wrapClass, v, key)
     }
+  }
+
+  renderLoadMore() {
+    return this.hasMore
+      ? html`<tr class="w-full flex relative">
+          <td colspan=${String(this.logsColumns.length)} class="relative  pl-[calc(40vw-10ch)]">
+            <div class="absolute -top-[500px] w-[1px] h-[500px] left-0 flex flex-col justify-end bg-transparent items-center" id="loader"></div>
+            ${this.isLoading
+              ? html`<div class="loading loading-dots loading-md"></div>`
+              : html`
+                  <button class="cursor-pointer text-textBrand underline font-semibold w-max mx-auto" @click=${() => this.fetchData(this.nextFetchUrl)}>
+                    Load more
+                  </button>
+                `}
+          </td>
+        </tr>`
+      : html`<tr></tr>`
+  }
+
+  fetchRecent() {
+    return html`<tr class="w-full flex relative">
+      <td colspan=${String(this.logsColumns.length)} class="relative pl-[calc(40vw-10ch)]">
+        ${this.isLiveStreaming
+          ? html`<p>Live streaming latest data...</p>`
+          : this.isLoadingRecent
+          ? html`<div class="loading loading-dots loading-md"></div>`
+          : html`
+              <button
+                class="cursor-pointer text-textBrand underline font-semibold w-max mx-auto"
+                @click=${() => {
+                  const updatedUrl = this.latestLogsURLQueryValsFn()
+                  this.fetchData(updatedUrl, true)
+                }}
+              >
+                Check for recent data
+              </button>
+            `}
+      </td>
+    </tr>`
+  }
+
+  logTableHeading(column) {
+    switch (column) {
+      case 'id':
+        return html`<td class="p-0 m-0 whitespace-nowrap w-3"></td>`
+      case 'timestamp':
+      case 'created_at':
+        return this.tableHeadingWrapper('timestamp', column, 'w-[17ch] shrink-0')
+      case 'latency_breakdown':
+        return html`<td></td>`
+      case 'status_code':
+        return this.tableHeadingWrapper('status', column, 'shrink-0 w-[12ch]')
+      case 'method':
+        return this.tableHeadingWrapper('method', column, 'shrink-0 w-[12ch]')
+      case 'raw_url':
+      case 'url_path':
+        return this.tableHeadingWrapper(column, column, 'w-[25ch] shrink-0')
+      case 'service':
+        return this.tableHeadingWrapper('service', column, 'w-[16ch] shrink-0')
+      case 'rest':
+        return this.tableHeadingWrapper('summary', column, 'w-[1400px] shrink-1')
+      default:
+        return this.tableHeadingWrapper(column, column, 'w-[16ch] shrink-0')
+    }
+  }
+
+  logItemRow(rowData, index) {
+    if (rowData === 'end') return this.renderLoadMore()
+    if (rowData === 'start') return this.fetchRecent()
+    const s = this.source === 'spans' && rowData.type === 'log' ? 'logs' : this.source
+    const targetInfo = requestDumpLogItemUrlPath(this.source === 'spans' ? rowData.data : rowData, this.colIdxMap, s)
+
+    return html`
+      <tr
+        class=${`item-row relative p-0 flex items-center cursor-pointer whitespace-nowrap`}
+        @click=${event => this.toggleLogRow(event, targetInfo, this.projectId)}
+      >
+        ${this.logsColumns
+          .filter(v => v !== 'latency_breakdown')
+          .map(column => {
+            const tableDataWidth = getColumnWidth(column)
+            let width = this.columnMaxWidthMap[column]
+            return html`<td
+              class=${`${this.wrapLines ? 'break-all whitespace-wrap' : ''} bg-white relative ${column === 'rest' ? '' : tableDataWidth}`}
+              style=${width ? `width: ${width}px;` : ''}
+            >
+              ${this.logItemCol(rowData, this.source, this.colIdxMap, column, this.serviceColors, this.expandTrace, this.columnMaxWidthMap, this.wrapLines)}
+            </td>`
+          })}
+        ${this.source === 'spans' && this.logsColumns.includes('latency_breakdown')
+          ? html`<td
+              class="bg-white sticky right-0 overflow-x-hidden"
+              style=${this.columnMaxWidthMap['latency_breakdown'] ? "width: ${this.columnMaxWidthMap['latency_breakdown']}px;" : ''}
+            >
+              ${this.logItemCol(
+                rowData,
+                this.source,
+                this.colIdxMap,
+                'latency_breakdown',
+                this.serviceColors,
+                this.expandTrace,
+                this.columnMaxWidthMap,
+                this.wrapLines,
+                this.view,
+              )}
+            </td>`
+          : nothing}
+      </tr>
+    `
+  }
+
+  tableHeadingWrapper(title, column, classes) {
+    let width = this.columnMaxWidthMap[column]
+    if (column === 'latency_breakdown' && !width) {
+      width = 200
+    }
+    return html`
+      <td
+        class=${`cursor-pointer p-0 m-0 whitespace-nowrap relative flex justify-between items-center pl-1 text-sm font-normal bg-white ${
+          classes ? classes : ''
+        }`}
+        style=${width ? `width: ${width}px` : ''}
+      >
+        <div class="dropdown font-medium text-base" data-tippy-content=${title}>
+          <div tabindex="0" role="button" class="py-1">
+            ${title}
+            <span class="ml-1 p-0.5 border border-slate-200 rounded-sm inline-flex"> ${faSprite('chevron-down', 'regular', 'w-3 h-3')} </span>
+          </div>
+          <ul tabindex="0" class="dropdown-content z-1 menu p-2 shadow-sm bg-bgBase rounded-box min-w-[15rem]">
+            <li>
+              <button @click=${() => this.hideColumn(column)}>Hide column</button>
+            </li>
+          </ul>
+        </div>
+        <div
+          @mousedown=${event => {
+            this.resizeTarget = column
+            this.mouseState = { x: event.clientX }
+            document.body.style.userSelect = 'none'
+          }}
+          class="w-3 text-gray-200 text-right select-none hover:text-textBrand overflow-hidden font-bold absolute right-0 top-1/2 -translate-y-1/2 h-4 cursor-ew-resize"
+        >
+          |
+        </div>
+      </td>
+    `
+  }
+
+  options() {
+    return html`
+      <div class="w-full flex justify-end px-2 pb-1 gap-3 ">
+        <div class="tabs tabs-box tabs-md p-0 tabs-outline items-center border">
+          <button
+            @click=${() => (this.view = 'tree')}
+            class=${`flex items-center justify-center gap-1 px-2 py-1 text-xs rounded ${
+              this.view === 'tree' ? 'bg-gray-200 text-gray-800' : 'text-textWeak  hover:bg-gray-100'
+            }`}
+          >
+            ${faSprite('tree', 'regular', 'h-4 w-4')}
+            <span class="sm:inline hidden">Tree</span>
+          </button>
+
+          <button
+            @click=${() => (this.view = 'list')}
+            class=${`flex items-center justify-center gap-1 px-2 py-1 text-xs rounded ${
+              this.view === 'list' ? 'bg-gray-200 text-gray-800' : 'text-textWeak  hover:bg-gray-100'
+            }`}
+          >
+            ${faSprite('list-view', 'regular', 'h-4 w-4')}
+            <span class="sm:inline hidden">List</span>
+          </button>
+        </div>
+        <button
+          class=${`flex items-center justify-center gap-1 px-2 py-1 text-xs rounded ${
+            this.flipDirection ? 'bg-gray-200 text-gray-800' : 'text-textWeak  hover:bg-gray-100'
+          }`}
+          @click=${() => {}}
+        >
+          ${faSprite('arrow-up-down', 'regular', 'h-4 w-4')}
+          <span class="sm:inline hidden">Flip direction</span>
+        </button>
+
+        <button
+          class=${`flex items-center justify-center gap-1 px-2 py-1 text-xs rounded ${
+            this.wrapLines ? 'bg-gray-200 text-gray-800' : 'text-textWeak  hover:bg-gray-100'
+          }`}
+          @click=${() => {
+            this.wrapLines = !this.wrapLines
+            if (this.wrapLines) {
+              let width = Number(window.getComputedStyle(document.getElementById('logs_list_container_inner')).width.replace('px', ''))
+              this.logsColumns.forEach(col => {
+                if (col !== 'rest' && this.columnMaxWidthMap[col]) {
+                  width -= this.columnMaxWidthMap[col] + 8
+                }
+              })
+              this.columnMaxWidthMap['rest'] = width - 20 // margin left and right and id width
+            } else {
+              this.columnMaxWidthMap['rest'] = 450 * 8
+            }
+            this.requestUpdate()
+          }}
+        >
+          ${faSprite('wrap-text', 'regular', 'h-4 w-4')}
+          <span class="sm:inline hidden">Wrap lines</span>
+        </button>
+      </div>
+    `
   }
 }
 
@@ -873,28 +938,6 @@ function emptyState(source, cols) {
   `
 }
 
-function toggleLogRow(event, targetInfo, pid) {
-  const sideView = document.querySelector('#log_details_container')
-  const logsView = document.querySelector('#logs_list_container')
-  const resizer = document.querySelector('#resizer')
-  const width = Number(getComputedStyle(sideView).width.replace('px', ''))
-  if (width < 50) {
-    const lW = getComputedStyle(logsView).width.replace('px', '')
-    logsView.style.width = `${lW - 550}px`
-    resizer.classList.remove('hidden')
-    updateUrlState('details_width', logsView.style.width)
-  }
-  const rows = document.querySelectorAll('.item-row.bg-fillBrand-weak')
-  rows.forEach(row => row.classList.remove('bg-fillBrand-weak'))
-  event.currentTarget.classList.add('bg-fillBrand-weak')
-  const indicator = document.querySelector('#details_indicator')
-  indicator.classList.add('htmx-request')
-  const [rdId, rdCreatedAt, source] = targetInfo
-  const url = `/p/${pid}/log_explorer/${rdId}/${rdCreatedAt}/detailed?source=${source}`
-  updateUrlState('target_event', `${rdId}/${rdCreatedAt}/detailed?source=${source}`)
-  htmx.ajax('GET', url, { target: '#log_details_container', swap: 'innerHTML', indicator: '#details_indicator' })
-}
-
 function requestDumpLogItemUrlPath(rd, colIdxMap, source) {
   const rdId = lookupVecTextByKey(rd, colIdxMap, 'id')
   const rdCreatedAt = lookupVecTextByKey(rd, colIdxMap, 'created_at') || lookupVecTextByKey(rd, colIdxMap, 'timestamp')
@@ -946,7 +989,8 @@ function groupSpansTF(events, colIdxMap, expandedTraces) {
     }
   }
 
-  for (const span in spanMap) {
+  for (const spanId in spanMap) {
+    const span = spanMap[spanId]
     const parentSpanId = span[PARENT_SPAN_INDEX]
     if (parentSpanId && spanMap[parentSpanId]) {
       spanMap[parentSpanId].children.push(span)
@@ -958,7 +1002,8 @@ function groupSpansTF(events, colIdxMap, expandedTraces) {
     span.children.sort((a, b) => a.startNs - b.startNs)
   }
 
-  for (const span in spanMap) {
+  for (const spanId in spanMap) {
+    const span = spanMap[spanId]
     if (!span.parentId) {
       let traceData = traceMap[span.traceId]
       if (!traceData) {
@@ -976,8 +1021,9 @@ function groupSpansTF(events, colIdxMap, expandedTraces) {
     }
   }
 
-  const traceArray = Object.values(traceMap).sort((a, b) => b.startTime - a.startTime)
-
+  const traceArray = Object.values(traceMap)
+    .sort((a, b) => b.startTime - a.startTime)
+    .reverse()
   const rr = flattenSpanTree(traceArray, expandedTraces)
   return rr
 }
@@ -1085,12 +1131,14 @@ function groupSpans(data, colIdxMap, expandedTraces) {
     traceData.spans = Array.from(spanTree.values()).sort((a, b) => a.startNs - b.startNs)
   })
 
-  const result = Array.from(traceMap.values()).map(trace => ({
-    traceId: trace.traceId,
-    spans: Object.values(trace.spans),
-    startTime: trace.minStart,
-    duration: trace.duration,
-  }))
+  const result = Array.from(traceMap.values())
+    .map(trace => ({
+      traceId: trace.traceId,
+      spans: Object.values(trace.spans),
+      startTime: trace.minStart,
+      duration: trace.duration,
+    }))
+    .reverse()
 
   return flattenSpanTree(result, expandedTraces)
 }

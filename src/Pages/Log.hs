@@ -92,8 +92,8 @@ apiLogH pid queryM queryASTM cols' cursorM' sinceM fromM toM layoutM sourceM tar
   (queryLibRecent, queryLibSaved) <- V.partition (\x -> Projects.QLTHistory == (x.queryType)) <$> Projects.queryLibHistoryForUser pid sess.persistentSession.userId
 
   freeTierExceeded <-
-    dbtToEff
-      $ if project.paymentPlan == "Free"
+    dbtToEff $
+      if project.paymentPlan == "Free"
         then (> 10000) <$> RequestDumps.getLastSevenDaysTotalRequest pid
         else pure False
 
@@ -257,8 +257,8 @@ apiLogJson pid queryM queryASTM cols' cursorM' sinceM fromM toM layoutM sourceM 
               else []
           colors = getServiceColors (V.catMaybes serviceNames)
 
-      addRespHeaders
-        $ AE.object
+      addRespHeaders $
+        AE.object
           [ "logsData" AE..= finalVecs
           , "serviceColors" AE..= colors
           , "nextUrl" AE..= nextLogsURL
@@ -340,8 +340,8 @@ logQueryBox_ pid currentRange source targetSpan queryAST queryLibRecent queryLib
 
 queryLibrary_ :: Projects.ProjectId -> V.Vector Projects.QueryLibItem -> V.Vector Projects.QueryLibItem -> Html ()
 queryLibrary_ pid queryLibSaved queryLibRecent = div_ [class_ "dropdown dropdown-hover dropdown-bottom dropdown-start", id_ "queryLibraryParentEl"] do
-  div_ [class_ "cursor-pointer relative  bg-fillWeak  text-textWeak rounded-lg border border-strokeWeaker h-full flex gap-2 items-center px-2", tabindex_ "0", role_ "button"]
-    $ (toHtml "Presets" >> faSprite_ "chevron-down" "regular" "w-3 h-3")
+  div_ [class_ "cursor-pointer relative  bg-fillWeak  text-textWeak rounded-lg border border-strokeWeaker h-full flex gap-2 items-center px-2", tabindex_ "0", role_ "button"] $
+    (toHtml "Presets" >> faSprite_ "chevron-down" "regular" "w-3 h-3")
   div_ [class_ "dropdown-content z-20"] $ div_ [class_ "tabs tabs-box tabs-md tabs-outline items-center bg-fillWeak p-0 h-full", role_ "tablist", id_ "queryLibraryTabListEl"] do
     tabPanel_ "Saved" (queryLibraryContent_ "Saved" queryLibSaved)
     tabPanel_ "Recent" (queryLibraryContent_ "Recent" queryLibRecent)
@@ -409,9 +409,9 @@ queryLibItem_ qli =
           li_ "Send query to alert"
           li_ "Send query to a dashboard"
     strong_ $ whenJust qli.title \title -> (toHtml title)
-    pre_
-      $ code_ [class_ "language-js bg-transparent! queryText whitespace-pre-wrap break-words"]
-      $ toHtml qli.queryText
+    pre_ $
+      code_ [class_ "language-js bg-transparent! queryText whitespace-pre-wrap break-words"] $
+        toHtml qli.queryText
     div_ [class_ "gap-3 flex"] $ time_ [datetime_ "", term "data-tippy-content" "created on"] (toHtml $ displayTimestamp $ formatUTC qli.createdAt) >> when qli.byMe " by me"
 
 
@@ -503,9 +503,9 @@ apiLogsPage page = do
       ]
       do
         div_ [class_ "relative ml-auto w-full", style_ ""] do
-          div_ [class_ "flex justify-end  w-full p-4 "]
-            $ button_ [[__|on click add .hidden to #expand-log-modal|]]
-            $ faSprite_ "xmark" "regular" "h-8"
+          div_ [class_ "flex justify-end  w-full p-4 "] $
+            button_ [[__|on click add .hidden to #expand-log-modal|]] $
+              faSprite_ "xmark" "regular" "h-8"
           form_
             [ hxPost_ $ "/p/" <> page.pid.toText <> "/share/"
             , hxSwap_ "innerHTML"
@@ -521,9 +521,11 @@ apiLogsPage page = do
 
       div_ [class_ "flex flex-row gap-4 mt-3 group-has-[.toggle-chart:checked]/pg:hidden w-full", style_ "aspect-ratio: 10 / 1;"] do
         Widget.widget_ $ (def :: Widget.Widget){Widget.query = Just "timechart count(*)", Widget.unit = Just "reqs", Widget.title = Just "All requests", Widget.hideLegend = Just True, Widget._projectId = Just page.pid, Widget.standalone = Just True, Widget.yAxis = Just (def{showOnlyMaxLabel = Just True})}
-        unless (page.source == "logs")
-          $ Widget.widget_
-          $ (def :: Widget.Widget)
+        let table = if page.source == "spans" then "otel_logs_and_spans" else "apis.request_dumps"
+            appColumn = if page.source == "spans" then "duration" else "duration_ns"
+            timeFilter = if page.source == "spans" then "time_filter" else "time_filter_sql_created_at"
+        Widget.widget_ $
+          (def :: Widget.Widget)
             { Widget.wType = WTTimeseriesLine
             , Widget.standalone = Just True
             , Widget.title = Just "Latency percentiles (ms)"
@@ -536,15 +538,15 @@ apiLogsPage page = do
                         SELECT timeB, value, quantile
                               FROM ( SELECT extract(epoch from time_bucket('1h', created_at))::integer AS timeB,
                                       ARRAY[
-                                        (approx_percentile(0.50, percentile_agg(duration_ns)) / 1000000.0)::float,
-                                        (approx_percentile(0.75, percentile_agg(duration_ns)) / 1000000.0)::float,
-                                        (approx_percentile(0.90, percentile_agg(duration_ns)) / 1000000.0)::float,
-                                        (approx_percentile(0.95, percentile_agg(duration_ns)) / 1000000.0)::float
+                                        (approx_percentile(0.50, percentile_agg($appColumn)) / 1000000.0)::float,
+                                        (approx_percentile(0.75, percentile_agg($appColumn)) / 1000000.0)::float,
+                                        (approx_percentile(0.90, percentile_agg($appColumn)) / 1000000.0)::float,
+                                        (approx_percentile(0.95, percentile_agg($appColumn)) / 1000000.0)::float
                                       ] AS values,
                                       ARRAY['p50', 'p75', 'p90', 'p95'] AS quantiles
-                                FROM apis.request_dumps
+                                FROM $table
                                 WHERE project_id='{{project_id}}'::uuid
-                                  {{time_filter_sql_created_at}} {{query_ast_filters}}
+                                  {{$timeFilter}} {{query_ast_filters}}
                                 GROUP BY timeB
                               ) s,
                             LATERAL unnest(s.values, s.quantiles) AS u(value, quantile);
