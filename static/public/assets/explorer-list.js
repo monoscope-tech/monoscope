@@ -18,6 +18,7 @@ export class LogList extends LitElement {
     expandedTraces: {},
     columnMaxWidthMap: {},
     view: { type: String },
+    flipDirection: { type: Boolean },
     shouldScrollToBottom: { type: Boolean },
   }
   constructor() {
@@ -39,6 +40,7 @@ export class LogList extends LitElement {
     this.isLoadingRecent = false
     this.isError = false
     this.shouldScrollToBottom = true
+    this.flipDirection = false
     this.logItemRow = this.logItemRow.bind(this)
     this.fetchData = this.fetchData.bind(this)
     this.expandTrace = this.expandTrace.bind(this)
@@ -109,7 +111,7 @@ export class LogList extends LitElement {
     if (this.source === 'spans') {
       this.spanListTree = this.buildSpanListTree(ves)
     } else {
-      this.logsData = ves.reverse()
+      this.logsData = this.flipDirection ? ves.reverse() : ves
     }
     this.updateColumnMaxWidthMap(ves)
     this.requestUpdate()
@@ -134,7 +136,7 @@ export class LogList extends LitElement {
       if (this.source === 'spans') {
         this.spanListTree = this.buildSpanListTree(logs)
       } else {
-        this.logsData = logs.reverse()
+        this.logsData = this.flipDirection ? logs.reverse() : logs
       }
       this.updateColumnMaxWidthMap(logs)
       this.hasMore = logs.length >= 50
@@ -199,7 +201,7 @@ export class LogList extends LitElement {
   }
 
   buildSpanListTree(logs) {
-    return groupSpans(logs, this.colIdxMap, this.expandedTraces)
+    return groupSpans(logs, this.colIdxMap, this.expandedTraces, this.flipDirection)
   }
 
   expandTrace(tracId, spanId) {
@@ -239,13 +241,13 @@ export class LogList extends LitElement {
       .then(response => response.json())
       .then(data => {
         if (!data.error) {
-          const { logsData, serviceColors, nextUrl } = data
+          let { logsData, serviceColors, nextUrl } = data
           if (!isNewData) {
             this.hasMore = logsData.length >= 50
             this.nextFetchUrl = nextUrl
           }
           if (logsData.length > 0) {
-            this.serviceColors = { ...this.serviceColors, ...serviceColors }
+            this.serviceColors = { ...serviceColors, ...this.serviceColors }
             if (this.source === 'spans') {
               let tree = this.buildSpanListTree([...logsData])
               if (isNewData) {
@@ -254,13 +256,17 @@ export class LogList extends LitElement {
                   this.shouldScrollToBottom = true
                 }
                 this.newDataCount = this.view === 'tree' ? this.spanListTree.filter(t => t.show).length : this.spanListTree.length
-                this.spanListTree = [...this.spanListTree, ...tree]
+                this.spanListTree = this.flipDirection ? [...this.spanListTree, ...tree] : [...tree, ...this.spanListTree]
               } else {
-                this.spanListTree = [...tree, ...this.spanListTree]
+                this.spanListTree = this.flipDirection ? [...tree, ...this.spanListTree] : [...this.spanListTree, ...tree]
               }
             } else {
-              logsData.reverse()
-              this.logsData = isNewData ? [...this.logsData, ...logsData] : [...logsData, ...this.logsData]
+              if (isNewData) {
+                logsData = this.flipDirection ? logsData.reverse() : logsData
+                this.logsData = this.flipDirection ? [...this.logsData, ...logsData] : [...logsData, ...this.logsData]
+              } else {
+                this.logsData = this.flipDirection ? [...logsData, ...this.logsData] : [...this.logsData, ...logsData]
+              }
             }
             this.updateColumnMaxWidthMap(logsData)
           }
@@ -344,8 +350,8 @@ export class LogList extends LitElement {
   render() {
     const list = this.source === 'spans' ? (this.view === 'tree' ? this.spanListTree.filter(sp => sp.show) : [...this.spanListTree]) : [...this.logsData]
     // end is used to render the load more button"
-    list.unshift('end')
-    list.push('start')
+    list.unshift('start')
+    list.push('end')
 
     return html`
       ${this.source === 'spans' ? this.options() : nothing}
@@ -382,9 +388,8 @@ export class LogList extends LitElement {
             })}
           </tbody>
         </table>
-        ${this.shouldScrollToBottom
-          ? nothing
-          : html`<div style="position: sticky;bottom: 0px;overflow-anchor: none;">
+        ${!this.shouldScrollToBottom && this.flipDirection
+          ? html`<div style="position: sticky;bottom: 0px;overflow-anchor: none;">
               <button
                 @click=${() => {
                   this.shouldScrollToBottom = true
@@ -394,7 +399,8 @@ export class LogList extends LitElement {
               >
                 To bottom
               </button>
-            </div> `}
+            </div> `
+          : nothing}
       </div>
     `
   }
@@ -631,8 +637,18 @@ export class LogList extends LitElement {
   }
 
   logItemRow(rowData, index) {
-    if (rowData === 'end') return this.renderLoadMore()
-    if (rowData === 'start') return this.fetchRecent()
+    if (rowData === 'end') {
+      if (this.flipDirection) {
+        return this.fetchRecent()
+      }
+      return this.renderLoadMore()
+    }
+    if (rowData === 'start') {
+      if (this.flipDirection) {
+        return this.renderLoadMore()
+      }
+      return this.fetchRecent()
+    }
     const s = this.source === 'spans' && rowData.type === 'log' ? 'logs' : this.source
     const targetInfo = requestDumpLogItemUrlPath(this.source === 'spans' ? rowData.data : rowData, this.colIdxMap, s)
 
@@ -740,7 +756,14 @@ export class LogList extends LitElement {
           class=${`flex items-center justify-center gap-1 px-2 py-1 text-xs rounded ${
             this.flipDirection ? 'bg-gray-200 text-gray-800' : 'text-textWeak  hover:bg-gray-100'
           }`}
-          @click=${() => {}}
+          @click=${() => {
+            this.flipDirection = !this.flipDirection
+            if (this.source === 'spans') {
+              this.spanListTree = this.buildSpanListTree(this.spanListTree.map(span => span.data))
+            } else {
+              this.logsData = this.flipDirection ? this.logsData.reverse() : this.logsData
+            }
+          }}
         >
           ${faSprite('arrow-up-down', 'regular', 'h-4 w-4')}
           <span class="sm:inline hidden">Flip direction</span>
@@ -942,91 +965,7 @@ function requestDumpLogItemUrlPath(rd, colIdxMap, source) {
   return [rdId, rdCreatedAt, source]
 }
 
-function groupSpansTF(events, colIdxMap, expandedTraces) {
-  const traceMap = {}
-  const spanMap = {}
-
-  const TRACE_INDEX = colIdxMap['trace_id']
-  const SPAN_INDEX = colIdxMap['latency_breakdown']
-  const PARENT_SPAN_INDEX = colIdxMap['parent_span_id']
-  // const TIMESTAMP_INDEX = colIdxMap['timestamp']
-  const SPAN_DURATION_INDEX = colIdxMap['duration']
-  const START_TIME_NS = colIdxMap['start_time_ns']
-  const ERROR_INDEX = colIdxMap['errors']
-  const BODY_INDEX = colIdxMap['body']
-
-  for (const span of events) {
-    let traceId = span[TRACE_INDEX]
-    let spanId = span[SPAN_INDEX]
-    const parentSpanId = span[PARENT_SPAN_INDEX]
-
-    const body = span[BODY_INDEX]
-    let type = 'span'
-    if (body !== null) {
-      type = 'log'
-    }
-
-    if (traceId === '' || traceId === null) {
-      traceId = generateStrId()
-      span[TRACE_INDEX] = traceId
-    }
-    if (spanId === '' || spanId === null) {
-      spanId = generateStrId()
-      span[SPAN_INDEX] = spanId
-    }
-    spanMap[spanId] = {
-      spanId,
-      traceId,
-      type,
-      hasErrors: span[ERROR_INDEX],
-      startNs: span[START_TIME_NS],
-      duration: span[SPAN_DURATION_INDEX],
-      parentId: parentSpanId,
-      data: span,
-      children: [],
-    }
-  }
-
-  for (const spanId in spanMap) {
-    const span = spanMap[spanId]
-    const parentSpanId = span[PARENT_SPAN_INDEX]
-    if (parentSpanId && spanMap[parentSpanId]) {
-      spanMap[parentSpanId].children.push(span)
-    }
-  }
-
-  for (const spanId in spanMap) {
-    const span = spanMap[spanId]
-    span.children.sort((a, b) => a.startNs - b.startNs)
-  }
-
-  for (const spanId in spanMap) {
-    const span = spanMap[spanId]
-    if (!span.parentId) {
-      let traceData = traceMap[span.traceId]
-      if (!traceData) {
-        traceData = {
-          traceId: span.traceId,
-          spans: [],
-          duration: span.duration,
-          startTime: span.startNs,
-        }
-      }
-      traceData.spans.push(span)
-      traceData.duration = Math.max(traceData.duration, span.duration)
-      traceData.minStart = Math.min(traceData.startTime, span.startNs)
-      traceMap[span.traceId] = traceData
-    }
-  }
-
-  const traceArray = Object.values(traceMap)
-    .sort((a, b) => b.startTime - a.startTime)
-    .reverse()
-  const rr = flattenSpanTree(traceArray, expandedTraces)
-  return rr
-}
-
-function groupSpans(data, colIdxMap, expandedTraces) {
+function groupSpans(data, colIdxMap, expandedTraces, flipDirection) {
   const traceMap = new Map()
   const TRACE_INDEX = colIdxMap['trace_id']
   const SPAN_INDEX = colIdxMap['latency_breakdown']
@@ -1082,6 +1021,7 @@ function groupSpans(data, colIdxMap, expandedTraces) {
         data: span,
         type: 'log',
       })
+      console.log(span)
     } else {
       traceData.spans.set(spanId, {
         id: spanId,
@@ -1129,14 +1069,15 @@ function groupSpans(data, colIdxMap, expandedTraces) {
     traceData.spans = Array.from(spanTree.values()).sort((a, b) => a.startNs - b.startNs)
   })
 
-  const result = Array.from(traceMap.values())
-    .map(trace => ({
-      traceId: trace.traceId,
-      spans: Object.values(trace.spans),
-      startTime: trace.minStart,
-      duration: trace.duration,
-    }))
-    .reverse()
+  const result = Array.from(traceMap.values()).map(trace => ({
+    traceId: trace.traceId,
+    spans: Object.values(trace.spans),
+    startTime: trace.minStart,
+    duration: trace.duration,
+  }))
+  if (flipDirection) {
+    result.reverse()
+  }
 
   return flattenSpanTree(result, expandedTraces)
 }

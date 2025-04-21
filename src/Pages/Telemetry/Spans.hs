@@ -152,7 +152,7 @@ expandedSpanItem pid sp leftM rightM = do
                     button_ [onclick_ "navigatable(this, '#par_content', '#http-content-container', 't-tab-box-active')", class_ "a-tab px-3 py-1 rounded-lg text-textWeak"] "Params"
                 div_ [] do
                   div_ [id_ "raw_content", class_ "a-tab-content"] do
-                    jsonValueToHtmlTree $ selectiveReqToJson httpJson
+                    jsonValueToHtmlTree $ AE.toJSON sp
                   div_ [id_ "req_content", class_ "hidden a-tab-content"] do
                     jsonValueToHtmlTree $ b64ToJson httpJson.requestBody
                   div_ [id_ "res_content", class_ "hidden a-tab-content"] do
@@ -239,8 +239,8 @@ spanBadge val key = do
 
 selectiveReqToJson :: RequestMessage -> AE.Value
 selectiveReqToJson req =
-  AE.object
-    $ concat @[]
+  AE.object $
+    concat @[]
       [ ["created_at" AE..= req.timestamp]
       , ["errors" AE..= fromMaybe [] req.errors]
       , ["host" AE..= req.host]
