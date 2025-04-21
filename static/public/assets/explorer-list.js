@@ -471,10 +471,12 @@ export class LogList extends LitElement {
         const width = columnMaxWidthMap['latency_breakdown'] || 200
         const db = lookupVecObjectByKey(dataArr, colIdxMap, 'db_attributes')
         const http = lookupVecObjectByKey(dataArr, colIdxMap, 'http_attributes')
+        const rpc = lookupVecObjectByKey(dataArr, colIdxMap, 'rpc_attributes')
         return html`
           <div class="flex justify-end items-center gap-2 pl-1 text-textWeak" style="min-width:${width}px">
             ${db.system ? renderBadge('cbadge-sm badge-neutral bg-fillWeak border border-strokeWeak', db.system) : nothing}
             ${http.method && http.url ? renderBadge('cbadge-sm badge-neutral bg-fillWeak border border-strokeWeak', 'http') : nothing}
+            ${rpc.system && rpc.method ? renderBadge('cbadge-sm badge-neutral bg-fillWeak border border-strokeWeak', 'rpc') : nothing}
             <div class="overflow-visible shrink-0 font-normal">${this.logItemCol(rowData, source, colIdxMap, 'duration')}</div>
             ${spanLatencyBreakdown({ start: startNs - traceStart, depth: d, duration, traceEnd, color, children: chil, barWidth: width - 100 })}
             <span class="w-1"></span>
@@ -507,6 +509,16 @@ export class LogList extends LitElement {
           return html`
             ${system ? renderBadge('cbadge-sm badge-neutral bg-fillWeak', system) : nothing}
             ${statement ? renderBadge('cbadge-sm badge-neutral bg-fillWeak', statement) : nothing}
+          `
+        }
+        break
+      case 'rpc_attributes':
+        const rpcAttributes = lookupVecObjectByKey(dataArr, colIdxMap, key)
+        const { system: rpcSystem, method: rpcMethod } = rpcAttributes
+        if (rpcSystem || rpcMethod) {
+          return html`
+            ${rpcSystem ? renderBadge('cbadge-sm badge-neutral bg-fillWeak', rpcSystem) : nothing}
+            ${rpcMethod ? renderBadge('cbadge-sm badge-neutral bg-fillWeak', rpcMethod) : nothing}
           `
         }
         break
@@ -554,7 +566,7 @@ export class LogList extends LitElement {
               <div class=${`flex items-center gap-1 ${wrapLines ? 'break-all flex-wrap' : 'overflow-hidden'}`}>
                 ${type === 'log'
                   ? ['severity_text', 'body'].map(k => this.logItemCol(rowData, source, colIdxMap, k, undefined, undefined, undefined, wrapLines))
-                  : ['http_attributes', 'db_attributes', 'status', 'kind', 'span_name'].map(k =>
+                  : ['http_attributes', 'db_attributes', 'rpc_attributes', 'status', 'kind', 'span_name'].map(k =>
                       this.logItemCol(rowData, source, colIdxMap, k, undefined, undefined, undefined, wrapLines),
                     )}
                 <span class=${'fill-slate-700 ' + wrapClass}>${val}</span>
@@ -1021,7 +1033,6 @@ function groupSpans(data, colIdxMap, expandedTraces, flipDirection) {
         data: span,
         type: 'log',
       })
-      console.log(span)
     } else {
       traceData.spans.set(spanId, {
         id: spanId,
