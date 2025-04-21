@@ -683,6 +683,7 @@ curateCols summaryCols cols = sortBy sortAccordingly filteredCols
       , "errors"
       , "http_attributes"
       , "db_attributes"
+      , "rpc_attributes"
       , "start_time_ns"
       , "kind"
       , "span_name"

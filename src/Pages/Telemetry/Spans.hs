@@ -152,7 +152,7 @@ expandedSpanItem pid sp leftM rightM = do
                     button_ [onclick_ "navigatable(this, '#par_content', '#http-content-container', 't-tab-box-active')", class_ "a-tab px-3 py-1 rounded-lg text-textWeak"] "Params"
                 div_ [] do
                   div_ [id_ "raw_content", class_ "a-tab-content"] do
-                    jsonValueToHtmlTree $ AE.toJSON sp
+                    jsonValueToHtmlTree $ selectiveOtelLogsJson sp
                   div_ [id_ "req_content", class_ "hidden a-tab-content"] do
                     jsonValueToHtmlTree $ b64ToJson httpJson.requestBody
                   div_ [id_ "res_content", class_ "hidden a-tab-content"] do
@@ -258,6 +258,27 @@ selectiveReqToJson req =
       , ["status_code" AE..= req.statusCode]
       , ["tags" AE..= req.tags]
       , ["url_path" AE..= req.urlPath]
+      ]
+
+
+selectiveOtelLogsJson :: Telemetry.OtelLogsAndSpans -> AE.Value
+selectiveOtelLogsJson sp =
+  AE.object $
+    concat @[]
+      [ ["start_time" AE..= sp.start_time]
+      , ["end_time" AE..= sp.end_time]
+      , ["resource" AE..= sp.resource]
+      , ["attributes" AE..= sp.attributes]
+      , maybe [] (\d -> ["name" AE..= d]) sp.name
+      , maybe [] (\d -> ["status" AE..= d]) sp.status_code
+      , maybe [] (\d -> ["kind" AE..= d]) sp.kind
+      , maybe [] (\d -> ["body" AE..= d]) sp.body
+      , maybe [] (\d -> ["duration" AE..= (getDurationNSMS $ fromIntegral d)]) sp.duration
+      , ["parent_id" AE..= sp.parent_id]
+      , maybe [] (\d -> ["context" AE..= d]) sp.context
+      , maybe [] (\d -> ["severity" AE..= d]) sp.severity
+      , maybe [] (\d -> ["events" AE..= d]) sp.events
+      , maybe [] (\d -> ["link" AE..= d]) sp.links
       ]
 
 
