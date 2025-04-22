@@ -104,25 +104,28 @@ renderFacets facetSummary = do
   forM_ facetDisplays $ \(key, displayName, colorFn) -> do
     whenJust (HM.lookup key facetMap) $ \values -> do
       when (not $ null values) $ do
-        div_ [class_ "facet-section flex flex-col gap-1.5 py-3"] do
-          div_ [class_ "flex justify-between items-center text-slate-950 pb-2"] $
-            span_ [class_ "facet-title"] (toHtml displayName) >> faSprite_ "chevron-down" "regular" "w-3 h-3"
+        div_ [class_ "facet-section flex flex-col gap-1.5 py-3 transition-all duration-200 hover:bg-fillWeaker rounded-lg group"] do
+          div_ [class_ "flex justify-between items-center text-slate-950 pb-2 cursor-pointer", 
+                [__|on click toggle .collapsed on me.parentElement|]] $
+            span_ [class_ "facet-title"] (toHtml displayName) >> faSprite_ "chevron-down" "regular" "w-3 h-3 transition-transform duration-200 group-[.collapsed]:rotate-180"
 
-          -- Render each facet value
-          forM_ values \(FacetValue val count) -> do
-            div_ [class_ "facet-item flex justify-between items-center"] do
-              label_ [class_ "flex gap-1.5 items-center text-slate-950"] $ do
-                input_
-                  [ type_ "checkbox"
-                  , class_ "checkbox checkbox-sm"
-                  , -- Convert key format for filter (from db___ format to proper dot notation)
-                    onclick_ $ "filterByFacet('" <> formatFieldPath key <> "', '" <> val <> "')"
-                  ]
-                let colorClass = colorFn val
-                when (not $ T.null colorClass) $
-                  span_ [class_ $ colorClass <> " shrink-0 w-1 h-5 rounded-sm"] " "
-                span_ [class_ "facet-value"] $ toHtml val
-              span_ [class_ "facet-count"] $ toHtml $ show count
+          -- Wrap facet values in a collapsible container with animation
+          div_ [class_ "facet-content overflow-hidden transition-all duration-300 ease-in-out max-h-96 opacity-100 transition-opacity duration-150 group-[.collapsed]:max-h-0 group-[.collapsed]:opacity-0 group-[.collapsed]:py-0"] do
+            -- Render each facet value
+            forM_ values \(FacetValue val count) -> do
+              div_ [class_ "facet-item flex justify-between items-center py-1 hover:bg-fillWeak transition-colors duration-150 rounded-md px-1"] do
+                label_ [class_ "flex gap-1.5 items-center text-slate-950 cursor-pointer flex-1"] $ do
+                  input_
+                    [ type_ "checkbox"
+                    , class_ "checkbox checkbox-sm"
+                    , -- Convert key format for filter (from db___ format to proper dot notation)
+                      onclick_ $ "filterByFacet('" <> formatFieldPath key <> "', '" <> val <> "')"
+                    ]
+                  let colorClass = colorFn val
+                  when (not $ T.null colorClass) $
+                    span_ [class_ $ colorClass <> " shrink-0 w-1 h-5 rounded-sm"] " "
+                  span_ [class_ "facet-value"] $ toHtml val
+                span_ [class_ "facet-count text-slate-500"] $ toHtml $ show count
 
 
 -- | Convert field path from database style (___) to query style (.)
@@ -642,7 +645,7 @@ apiLogsPage page = do
 
     div_ [class_ "flex h-full gap-3.5 overflow-hidden"] do
       -- FACETS
-      div_ [class_ "w-1/6 text-sm shrink-0 flex flex-col gap-2 p-2 group-has-[.toggle-filters:checked]/pg:hidden "] do
+      div_ [class_ "w-1/6 text-sm shrink-0 flex flex-col gap-2 p-2 transition-all duration-500 ease-out opacity-100 delay-[0ms] group-has-[.toggle-filters:checked]/pg:duration-300 group-has-[.toggle-filters:checked]/pg:opacity-0 group-has-[.toggle-filters:checked]/pg:w-0 group-has-[.toggle-filters:checked]/pg:p-0 group-has-[.toggle-filters:checked]/pg:overflow-hidden"] do
         input_
           [ placeholder_ "Search facets..."
           , class_ "rounded-lg shadow-sm px-3 py-1 border border-strokeStrong"

@@ -415,10 +415,8 @@ getRequestDumpsForPreviousReportPeriod pid report_type = query Select (Query $ e
       [text|
      SELECT  endpoint_hash,
         CAST (ROUND (AVG (duration_ns)) AS BIGINT) AS average_duration
-     FROM
-        apis.request_dumps
-     WHERE
-        project_id = ? AND created_at > NOW() - interval $start AND created_at < NOW() - interval $end
+     FROM apis.request_dumps
+     WHERE project_id = ? AND created_at > NOW() - interval $start AND created_at < NOW() - interval $end
      GROUP BY endpoint_hash;
     |]
 
@@ -427,7 +425,7 @@ selectLogTable :: (DB :> es, Time.Time :> es) => Projects.ProjectId -> [Section]
 selectLogTable pid queryAST cursorM dateRange projectedColsByUser source targetSpansM = do
   now <- Time.currentTime
   let (q, queryComponents) = queryASTToComponents ((defSqlQueryCfg pid now source targetSpansM){cursorM, dateRange, projectedColsByUser, source, targetSpansM}) queryAST
-  logItems <- queryToValues q
+  logItems <- queryToValues $ traceShowId q
   Only c <- fromMaybe (Only 0) <$> queryCount queryComponents.countQuery
   let logItemsV = V.mapMaybe valueToVector logItems
   pure $ Right (logItemsV, queryComponents.toColNames, c)
