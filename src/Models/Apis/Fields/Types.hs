@@ -4,6 +4,9 @@ module Models.Apis.Fields.Types (
   FieldCategoryEnum (..),
   FieldId (..),
   SwField (..),
+  FacetSummary (..),
+  FacetValue (..),
+  FacetData (..),
   fieldIdText,
   parseFieldCategoryEnum,
   parseFieldTypes,
@@ -17,9 +20,11 @@ where
 
 import Data.Aeson qualified as AE
 import Data.Default
+import Data.HashMap.Strict qualified as HM
 import Data.List qualified as L
 import Data.Text qualified as T
 import Data.Time (ZonedTime)
+import Data.Time.Clock (UTCTime)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity.Types (CamelToSnake, Entity, FieldModifiers, GenericEntity, PrimaryKey, Schema, TableName)
@@ -233,19 +238,48 @@ data SwField = SwField
   deriving (FromField) via Aeson SwField
 
 
+data FacetValue = FacetValue
+  { value :: Text
+  , count :: Int
+  }
+  deriving stock (Show, Eq, Generic)
+  deriving anyclass (NFData)
+  deriving (AE.ToJSON, AE.FromJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] FacetValue
+
+
+-- | Map of field names to arrays of facet values
+newtype FacetData = FacetData (HM.HashMap Text [FacetValue])
+  deriving stock (Show, Eq, Generic)
+  deriving newtype (NFData)
+  deriving (AE.ToJSON, AE.FromJSON) via DAE.CustomJSON '[DAE.OmitNothingFields] FacetData
+  deriving (FromField, ToField) via Aeson FacetData
+
+
+data FacetSummary = FacetSummary
+  { id :: UUID.UUID
+  , projectId :: Projects.ProjectId
+  , tableName :: Text
+  , timestamp :: UTCTime
+  , facetJson :: FacetData
+  }
+  deriving stock (Show, Generic)
+  deriving anyclass (FromRow, ToRow, NFData)
+  deriving (AE.ToJSON, AE.FromJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] FacetSummary
+  deriving (Entity) via (GenericEntity '[Schema "apis", TableName "facet_summaries", PrimaryKey "id", FieldModifiers '[CamelToSnake]] FacetSummary)
+
+
 instance Ord Field where
   (<=) f1 f2 =
-    (projectId f1 <= projectId f2)
-      && (endpointHash f1 <= endpointHash f2)
-      && keyPath f1
-      <= keyPath f2
+    (f1.projectId <= f2.projectId)
+      && (f1.endpointHash <= f2.endpointHash)
+      && (f1.keyPath <= f2.keyPath)
 
 
 instance Eq Field where
   (==) f1 f2 =
-    (projectId f1 == projectId f2)
-      && (endpointHash f1 == endpointHash f2)
-      && (keyPath f1 == keyPath f2)
+    (f1.projectId == f2.projectId)
+      && (f1.endpointHash == f2.endpointHash)
+      && (f1.keyPath == f2.keyPath)
 
 
 -- | NB: The GroupBy function has been merged into the vectors package.

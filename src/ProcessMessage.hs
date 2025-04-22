@@ -7,6 +7,7 @@ module ProcessMessage (
 where
 
 import Data.Aeson qualified as AE
+import Data.Aeson.Extra (lodashMerge)
 import Data.Aeson.Key qualified as AEK
 import Data.Aeson.KeyMap qualified as AEKM
 import Data.Aeson.Types (KeyValue ((.=)), object)
@@ -19,7 +20,6 @@ import Data.List qualified as L
 import Data.Text qualified as T
 import Data.Time (addUTCTime, zonedTimeToUTC)
 import Data.UUID qualified as UUID
-import Data.UUID.V4 qualified as UUID
 import Data.Vector qualified as V
 import Data.Vector.Algorithms qualified as VAA
 import Database.PostgreSQL.Entity.DBT (withPool)
@@ -43,7 +43,6 @@ import Models.Apis.Shapes qualified as Shapes
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Telemetry (Context (trace_state))
 import Models.Telemetry.Telemetry qualified as Telemetry
-import Pages.Log (ApiLogsPageData (exceededFreeTier))
 import PyF (fmt)
 import Relude hiding (ask)
 import RequestMessages qualified
@@ -56,6 +55,7 @@ import System.Clock (
 import System.Config qualified as Config
 import UnliftIO.Exception (try)
 import Utils (eitherStrToText, nestedJsonFromDotNotation)
+import Data.Aeson.Extra.Merge (lodashMerge)
 
 
 {--
@@ -258,7 +258,7 @@ convertRequestMessageToSpan rm (spanId, trId) =
     , name = Just $ rm.method <> maybe "" (" " <>) rm.urlPath
     , start_time = zonedTimeToUTC rm.timestamp
     , end_time = Just $ addUTCTime (realToFrac (fromIntegral rm.duration / 1000000000)) (zonedTimeToUTC rm.timestamp)
-    , kind = Just "Server"
+    , kind = Just $ if (T.isSuffixOf "Outgoing" (show rm.sdkType)) then "Client" else "Server"
     , level = Nothing
     , body = Nothing
     , severity = Nothing
@@ -268,7 +268,7 @@ convertRequestMessageToSpan rm (spanId, trId) =
           | otherwise -> "OK"
     , status_code = Just $ show rm.statusCode
     , hashes = []
-    , observed_timestamp = Nothing
+    , observed_timestamp = Just $ zonedTimeToUTC rm.timestamp
     , attributes = jsonToMap $ createSpanAttributes rm
     , events = Just $ AE.Array V.empty
     , links = Just ""
@@ -277,7 +277,7 @@ convertRequestMessageToSpan rm (spanId, trId) =
           nestedJsonFromDotNotation
             [ ("service.name", AE.String $ fromMaybe "unknown" rm.host)
             , ("telemetry.sdk.language", AE.String "apitoolkit")
-            , ("telemetry.sdk.name", AE.String "opentelemetry")
+            , ("telemetry.sdk.name", AE.String $ show rm.sdkType)
             ]
     , duration = Just $ fromIntegral rm.duration
     , date = zonedTimeToUTC rm.timestamp
@@ -287,9 +287,9 @@ convertRequestMessageToSpan rm (spanId, trId) =
 -- Using nestedJsonFromDotNotation from Utils module
 
 -- Helper function to merge JSON objects
+-- Now using lodashMerge from aeson-extra which properly handles nested objects
 mergeJsonObjects :: AE.Value -> AE.Value -> AE.Value
-mergeJsonObjects (AE.Object o1) (AE.Object o2) = AE.Object $ AEKM.union o1 o2
-mergeJsonObjects v1 _ = v1
+mergeJsonObjects = lodashMerge
 
 
 createSpanAttributes :: RequestMessages.RequestMessage -> AE.Value
@@ -310,9 +310,9 @@ createSpanAttributes rm =
           , ("url.path", AE.String $ rm.rawUrl)
           ]
    in baseAttrs
-        `mergeJsonObjects` refererObj
-        `mergeJsonObjects` errorsObj
-        `mergeJsonObjects` headersObj
+        `lodashMerge` refererObj
+        `lodashMerge` errorsObj
+        `lodashMerge` headersObj
   where
     -- Process referer
     refererObj = case rm.referer of
@@ -343,10 +343,3 @@ createSpanAttributes rm =
           _ -> AE.object []
        in
         reqHeaders `mergeJsonObjects` respHeaders
-
-
--- Update to use AEK.fromText in addHeadersToAttributes
-addHeadersToAttributes :: Text -> AE.Value -> [(AEK.Key, AE.Value)]
-addHeadersToAttributes prefix (AE.Object obj) =
-  map (\(k, v) -> (AEK.fromText (prefix <> AEK.toText k), v)) $ AEKM.toList obj
-addHeadersToAttributes _ _ = []

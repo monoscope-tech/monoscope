@@ -25,7 +25,9 @@ module Models.Apis.RequestDumps (
 where
 
 import Control.Error.Util (hush)
+import Control.Exception.Annotated (checkpoint)
 import Data.Aeson qualified as AE
+import Data.Annotation (toAnnotation)
 import Data.Default
 import Data.Default.Instances ()
 import Data.Text qualified as T
@@ -52,10 +54,8 @@ import Models.Apis.Fields.Query ()
 import Models.Projects.Projects qualified as Projects
 import NeatInterpolation (text)
 import Pkg.Parser
-import Pkg.Parser.Expr
 import Pkg.Parser.Stats (Section, Sources (SSpans))
 import Relude hiding (many, some)
-import Text.Megaparsec
 import Web.HttpApiData (ToHttpApiData (..))
 import Witch (from)
 
@@ -415,10 +415,8 @@ getRequestDumpsForPreviousReportPeriod pid report_type = query Select (Query $ e
       [text|
      SELECT  endpoint_hash,
         CAST (ROUND (AVG (duration_ns)) AS BIGINT) AS average_duration
-     FROM
-        apis.request_dumps
-     WHERE
-        project_id = ? AND created_at > NOW() - interval $start AND created_at < NOW() - interval $end
+     FROM apis.request_dumps
+     WHERE project_id = ? AND created_at > NOW() - interval $start AND created_at < NOW() - interval $end
      GROUP BY endpoint_hash;
     |]
 
@@ -427,7 +425,7 @@ selectLogTable :: (DB :> es, Time.Time :> es) => Projects.ProjectId -> [Section]
 selectLogTable pid queryAST cursorM dateRange projectedColsByUser source targetSpansM = do
   now <- Time.currentTime
   let (q, queryComponents) = queryASTToComponents ((defSqlQueryCfg pid now source targetSpansM){cursorM, dateRange, projectedColsByUser, source, targetSpansM}) queryAST
-  logItems <- queryToValues q
+  logItems <- checkpoint (toAnnotation ("selectLogTable", q)) $ queryToValues q
   Only c <- fromMaybe (Only 0) <$> queryCount queryComponents.countQuery
   let logItemsV = V.mapMaybe valueToVector logItems
   pure $ Right (logItemsV, queryComponents.toColNames, c)

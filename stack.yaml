@@ -16,10 +16,10 @@ extra-deps:
   - hiedb-plugin-0.1.0@sha256:480d8836e7d21b91a6205010af534cb739a2079d4bdeac7893cf85c9a4d75f32,1439
   - insert-ordered-containers-0.2.6@sha256:8f46527a04f92e1a1b11fb45633f85d2dd73c2ab7b5de13ccf504c8f98a079f1,2358
   - log-effectful-1.0.1.0@sha256:79d1c821db1c1d95cf109f813f13a2588e45dbacb5f797eefc200ff7a5984923,2466
-  - lucid-aria-0.1.0.1@sha256:d4f37b67a28f2e38eb3cf9fca4cbed5dcc6bf335c880113c618ca50fa933cd40,920
-  - lucid-htmx-0.1.0.7@sha256:05d0bec34cd3c3d99d69a02c5c5f87385a9e53de8fa2e57a0c7c477dd3e5a6af,1491
-  - lucid-hyperscript-0.1.0.2@sha256:c3b048424e75c0e9cbadc30f7ebeb6abc164c2b45b2c995fd0674d4cc57be216,2035
-  - lucid-svg-0.7.2.0@sha256:ac145997d5d6976d5c77e09992b5b204d7ddb7edba3002801927ed2acc69692b,1091
+  # - lucid-aria-0.1.0.1@sha256:d4f37b67a28f2e38eb3cf9fca4cbed5dcc6bf335c880113c618ca50fa933cd40,920
+  # - lucid-htmx-0.1.0.7@sha256:05d0bec34cd3c3d99d69a02c5c5f87385a9e53de8fa2e57a0c7c477dd3e5a6af,1491
+  # - lucid-hyperscript-0.1.0.2@sha256:c3b048424e75c0e9cbadc30f7ebeb6abc164c2b45b2c995fd0674d4cc57be216,2035
+  # - lucid-svg-0.7.2.0@sha256:ac145997d5d6976d5c77e09992b5b204d7ddb7edba3002801927ed2acc69692b,1091
   - monad-time-effectful-1.0.0.0@sha256:4994617545bb4b25ba01eaf2bdb1c2c74f7cefab36945af8eb92dca9842fc4b6,1528
   - nyan-interpolation-0.9.2@sha256:fb0b07ef6a9f8ca4d2e1db2f2df841c649556d9f6cff894ebf6b9ffbb7c25003,4276
   # Dependencies are now directly taken from git repo below
@@ -27,7 +27,6 @@ extra-deps:
   - slugify-0.1.0.2@sha256:b16f953401390212faf0450f6044f9c9a44ee07370995ab01dc46d3394e14c7a,1396
   - strict-containers-0.2.1@sha256:ea58d1f30c9867a4c4241864881e0d2576ad72fb6333c49d88c5e42c8f7a04b1,9408
   - swagger2-2.8.9@sha256:8434f71bf8017c1421d85ee8021e3f56f45f15c8ba50fff55f7329ace4cb0076,4518
-  - text-display-0.0.5.2@sha256:6e6a5bf1c83dfa6c34692ed5d8ea87f1bd385984309b42c302f2156f4d82477b,2670
   - timing-convenience-0.1@sha256:7ff807a9a9e5596f2b18d45c5a01aefb91d4a98f6a1008d183b5c550f68f7cb7,2092
   - hiedb-0.6.0.1@sha256:7398fe3115c239f421286dbb1db3b5ac359568955e7585bcf27a45c99420b46f,2962
   - hie-compat-0.3.1.2@sha256:74a8585a90e3c06667134939cd170cff24067d5a988e14829785af0dfa6bd10f,1535
@@ -45,6 +44,11 @@ extra-deps:
   - hs-opentelemetry-instrumentation-postgresql-simple-0.2.0.0
   - hs-opentelemetry-instrumentation-auto-0.1.0.2
   - hs-opentelemetry-instrumentation-wai-0.1.1.0@sha256:d97b4cb3870217e64e95da3f51db814eca62eb57484ee0a6f747366da5940bc2,1371
+  - lucid-aria-0.1.0.1@sha256:d4f37b67a28f2e38eb3cf9fca4cbed5dcc6bf335c880113c618ca50fa933cd40,920
+  - lucid-htmx-0.1.0.7@sha256:05d0bec34cd3c3d99d69a02c5c5f87385a9e53de8fa2e57a0c7c477dd3e5a6af,1491
+  - lucid-hyperscript-0.1.0.2@sha256:c3b048424e75c0e9cbadc30f7ebeb6abc164c2b45b2c995fd0674d4cc57be216,2035
+  - lucid-svg-0.7.2.0@sha256:ac145997d5d6976d5c77e09992b5b204d7ddb7edba3002801927ed2acc69692b,1091
+  - aeson-extra-0.5.1.3@sha256:7719f2da8930ded5cbeaa4cb35aba04ee3b68d5d882557962990555e2bfe3433,2682
   # Dependencies are now directly taken from git repo below
   # - streamly-0.10.1@sha256:eec2e8e14ac64b9e389600b964541c5e9e0a3d3e657dc54412691df47300a1fd,20899
   # - streamly-core-0.2.2@sha256:7245ac46f380af62ce16adb70d26d2710d615f393867cfa8789c29b32d2ff979,20274
@@ -73,6 +77,8 @@ extra-deps:
     subdirs:
       - grapesy
       - grpc-spec
+  # - git: https://github.com/brendanhay/gogol.git
+  #   commit: 881cd14c9844131b4a8d96ca1bbb2bd9a2409ed9
   - git: https://github.com/tonyalaribe/gogol.git
     commit: b54294c179f8ce8e76c9549c953e2ee684fcef8a
     subdirs:
@@ -81,9 +87,6 @@ extra-deps:
       - lib/services/gogol-pubsub
       - lib/services/gogol-logging
       - lib/services/gogol-cloudtrace
-  - github: tonyalaribe/proto3-suite
-    # branch: aeson-error-fix
-    commit: ecf8330af92941d5a0a0676a719b666ca3970ac4
 
   - git: https://github.com/tonyalaribe/xxhash
     commit: 0fa01adb871e66996d4ed2c27a3e97fac39ac466
@@ -98,8 +101,5 @@ extra-deps:
 flags:
   pg-entity:
     prod: True
-  proto3-suite:
-    large-records: False
-    dhall: False
 
 allow-newer: true

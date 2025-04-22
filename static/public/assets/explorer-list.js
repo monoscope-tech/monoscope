@@ -428,22 +428,27 @@ export class LogList extends LitElement {
       case 'status_code':
         let statusCode = lookupVecTextByKey(dataArr, colIdxMap, 'status_code')
         let statusCls = getStatusColor(Number(statusCode))
-        return renderBadge(statusCls, statusCode, 'status code')
+        if (statusCode == 'UNSET') {
+          return ''
+        } else return renderBadge(statusCls, statusCode, 'status code')
       case 'method':
         let method = lookupVecTextByKey(dataArr, colIdxMap, key)
         let methodCls = getMethodColor(method)
         return renderBadge('min-w-[4rem] cbadge ' + methodCls, method, 'method')
       case 'request_type':
         let requestType = lookupVecTextByKey(dataArr, colIdxMap, key)
-        if (requestType === 'Incoming') return renderIconWithTippy('w-4', 'Incoming Request', faSprite('arrow-down-left', 'solid', ' h-3 fill-slate-500'))
-        return renderIconWithTippy('w-4', 'Outgoing Request', faSprite('arrow-up-right', 'solid', ' h-3 fill-blue-700'))
+        if (requestType === 'Incoming')
+          return renderIconWithTippy('w-4', 'Incoming Request => Server', faSprite('arrow-down-left', 'solid', ' h-3 fill-slate-500'))
+        return renderIconWithTippy('w-4', 'Outgoing Request => Client', faSprite('arrow-up-right', 'solid', ' h-3 fill-blue-700'))
       case 'duration':
         let dur = rowData.type === 'log' ? 'log' : getDurationNSMS(lookupVecTextByKey(dataArr, colIdxMap, key))
         return renderBadge('cbadge-sm badge-neutral font-normal bg-fillWeak', dur, 'latency')
       case 'severity_text':
         let severity = lookupVecTextByKey(dataArr, colIdxMap, key) || 'UNSET'
         let severityClass = getSeverityColor(severity)
-        return renderBadge('cbadge-sm cbadge ' + severityClass, severity)
+        if (severity == 'UNSET') {
+          return ''
+        } else return renderBadge('cbadge-sm cbadge ' + severityClass, severity)
       case 'body':
         let body = lookupVecTextByKey(dataArr, colIdxMap, key)
         return renderBadge('space-x-2 ' + wrapClass, body)
@@ -457,9 +462,9 @@ export class LogList extends LitElement {
       case 'service':
         let service = lookupVecTextByKey(dataArr, colIdxMap, key)
         return html` <div class="w-[16ch]">${renderBadge('cbadge-sm badge-neutral bg-fillWeak ' + wrapClass, service, 'service name')}</div>`
-      case 'kind':
-        let kind = lookupVecTextByKey(dataArr, colIdxMap, key)
-        return renderBadge('cbadge-sm badge-neutral bg-fillWeak', kind, 'span kind')
+      // case 'kind':
+      //   let kind = lookupVecTextByKey(dataArr, colIdxMap, key)
+      //   return renderBadge('cbadge-sm badge-neutral bg-fillWeak', kind, 'span kind')
       case 'latency_breakdown':
         const { traceStart, traceEnd, startNs, duration, childrenTimeSpans, depth: d } = rowData
         const color = serviceColors[lookupVecTextByKey(dataArr, colIdxMap, 'span_name')] || 'bg-black'
@@ -492,7 +497,7 @@ export class LogList extends LitElement {
           let wrapCls = wrapLines ? 'whitespace-break-spaces' : 'whitespace-nowrap'
           return html`
             ${k.toLowerCase() === 'server'
-              ? renderIconWithTippy('w-4 ml-2', 'Incoming Request', faSprite('arrow-down-left', 'solid', ' h-3 fill-slate-500'))
+              ? renderIconWithTippy('w-4 ml-2', 'Incoming Request => Server', faSprite('arrow-down-left', 'solid', ' h-3 fill-slate-500'))
               : k.toLowerCase() === 'client'
               ? renderIconWithTippy('w-4 ml-2', 'Outgoing Request', faSprite('arrow-up-right', 'solid', ' h-3 fill-blue-700'))
               : nothing}
@@ -566,7 +571,7 @@ export class LogList extends LitElement {
               <div class=${`flex items-center gap-1 ${wrapLines ? 'break-all flex-wrap' : 'overflow-hidden'}`}>
                 ${type === 'log'
                   ? ['severity_text', 'body'].map(k => this.logItemCol(rowData, source, colIdxMap, k, undefined, undefined, undefined, wrapLines))
-                  : ['http_attributes', 'db_attributes', 'rpc_attributes', 'status', 'kind', 'span_name'].map(k =>
+                  : ['http_attributes', 'db_attributes', 'status', 'kind', 'span_name'].map(k =>
                       this.logItemCol(rowData, source, colIdxMap, k, undefined, undefined, undefined, wrapLines),
                     )}
                 <span class=${'fill-slate-700 ' + wrapClass}>${val}</span>
@@ -862,7 +867,8 @@ function getStatusColor(status) {
   if (status < 200) return 'cbadge-sm badge-neutral'
   if (status < 300) return 'cbadge-sm badge-2xx'
   if (status < 400) return 'cbadge-sm badge-3xx'
-  return 'cbadge-sm badge-4xx'
+  if (status >= 400) return 'cbadge-sm badge-4xx'
+  return 'cbadge-sm badge-neutral bg-fillWeak '
 }
 
 function getMethodColor(method) {
@@ -873,7 +879,7 @@ function getMethodColor(method) {
     PATCH: 'cbadge-sm badge-cyan',
     GET: 'cbadge-sm badge-blue',
   }
-  return methodColors[method] || 'cbadge-sm badge-neutral'
+  return methodColors[method] || 'cbadge-sm badge-neutral bg-fillWeak '
 }
 
 function renderIconWithTippy(cls, tip, icon) {

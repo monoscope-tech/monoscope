@@ -117,8 +117,8 @@ sqlFromQueryComponents sqlCfg qc =
       timeDiffSecs = abs $ nominalDiffTimeToSeconds $ diffUTCTime fromT toT
       finalSqlQuery = case sqlCfg.targetSpansM of
         Just "service-entry-spans" ->
-          [fmt|WITH ranked_spans AS (SELECT *, resource->>'service.name' AS service_name,
-                ROW_NUMBER() OVER (PARTITION BY trace_id, resource->>'service.name' ORDER BY start_time) AS rn
+          [fmt|WITH ranked_spans AS (SELECT *, resource->'service'->>'name' AS service_name,
+                ROW_NUMBER() OVER (PARTITION BY trace_id, resource->'service'->>'name' ORDER BY start_time) AS rn
                 FROM telemetry.spans where project_id='{sqlCfg.pid.toText}' and (
                 {timestampCol} > NOW() - interval '14 days'
                 {cursorT} {dateRangeStr} {whereClause} )
@@ -315,24 +315,22 @@ defaultSelectSqlQuery (Just SSpans) =
   , "duration"
   , "body"
   , "level as severity_text"
-  , "resource->>'service.name' as service"
+  , "resource___service___name as service"
   , "context___span_id as latency_breakdown"
   , "parent_id as parent_span_id"
   , "CAST(EXTRACT(EPOCH FROM (start_time)) * 1_000_000_000 AS BIGINT) as start_time_ns"
   , "EXISTS(SELECT 1 FROM jsonb_array_elements(events) elem  WHERE elem->>'event_name' = 'exception') as errors"
   , [fmt|jsonb_build_object(
-          'method', COALESCE(attributes->'http.method', attributes->'http.request.method'),
-          'url', COALESCE(attributes->'http.route', attributes->'url.path', attributes->'http.target', attributes->'http.url'),
-          'status_code', COALESCE(attributes->'http.status_code', attributes->'http.response.status_code')
+          'method', COALESCE(attributes->'http'->>'method', attributes___http___request___method),
+          'url', COALESCE(attributes->'http'->>'route', attributes->'url'->>'path', attributes->'http'->>'target', attributes->'http'->>'url'),
+          'status_code', COALESCE(attributes->'http'->>'status_code', attributes->'http'->'response'->>'status_code', status_code::text)
           ) as http_attributes |]
-  , [fmt| jsonb_build_object('system', attributes->'db.system','statement', coalesce(attributes->'db.query.text', attributes->'db.statement')) as db_attributes  |]
-  , [fmt| jsonb_build_object('system', attributes->'rpc.system','method', attributes->'rpc.method') as rpc_attributes  |]
+  , [fmt| jsonb_build_object('system', attributes->'db'->'system','statement', coalesce(attributes->'db'->'query'->'text', attributes->'db'->'statement')) as db_attributes  |]
   , [fmt|LEFT(
         CONCAT(
-            'attributes=', COALESCE(attributes, 'null'),
-            ' events=', COALESCE(events, 'null')
+            COALESCE(attributes::text, '')
         ),
-        255
+        500
     ) as rest|]
   ]
 defaultSelectSqlQuery (Just SRequests) =

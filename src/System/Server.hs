@@ -9,12 +9,17 @@ import Control.Exception.Safe qualified as Safe
 import Data.Aeson qualified as AE
 import Data.Pool as Pool (destroyAllResources)
 import Data.Text qualified as T
+import Database.PostgreSQL.Entity.DBT (QueryNature (Select), query)
+import Database.PostgreSQL.Simple (Only (Only))
+import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Effectful
 import Effectful.Concurrent (runConcurrent)
 import Effectful.Fail (runFailIO)
+import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
 import Effectful.Time (runTime)
 import GHC.IO (unsafePerformIO)
 import Log qualified
+import Models.Projects.Projects qualified as Projects
 import Network.Wai.Handler.Warp (
   defaultSettings,
   runSettings,
@@ -29,6 +34,7 @@ import Opentelemetry.OtlpServer qualified as OtlpServer
 import Pkg.Queue qualified as Queue
 import ProcessMessage (processMessages)
 import Relude
+import Relude.Unsafe qualified as Unsafe
 import Servant qualified
 import Servant.Server.Generic (genericServeTWithContext)
 import System.Config (
@@ -47,7 +53,7 @@ import System.Config (
   getAppContext,
  )
 import System.Logging qualified as Logging
-import System.Types (effToServantHandler)
+import System.Types (effToServantHandler, runBackground)
 import Web.Routes qualified as Routes
 
 
