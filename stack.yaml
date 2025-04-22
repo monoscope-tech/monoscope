@@ -48,6 +48,7 @@ extra-deps:
   - lucid-htmx-0.1.0.7@sha256:05d0bec34cd3c3d99d69a02c5c5f87385a9e53de8fa2e57a0c7c477dd3e5a6af,1491
   - lucid-hyperscript-0.1.0.2@sha256:c3b048424e75c0e9cbadc30f7ebeb6abc164c2b45b2c995fd0674d4cc57be216,2035
   - lucid-svg-0.7.2.0@sha256:ac145997d5d6976d5c77e09992b5b204d7ddb7edba3002801927ed2acc69692b,1091
+  - aeson-extra-0.5.1.3@sha256:7719f2da8930ded5cbeaa4cb35aba04ee3b68d5d882557962990555e2bfe3433,2682
   # Dependencies are now directly taken from git repo below
   # - streamly-0.10.1@sha256:eec2e8e14ac64b9e389600b964541c5e9e0a3d3e657dc54412691df47300a1fd,20899
   # - streamly-core-0.2.2@sha256:7245ac46f380af62ce16adb70d26d2710d615f393867cfa8789c29b32d2ff979,20274

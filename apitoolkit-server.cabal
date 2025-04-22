@@ -250,6 +250,7 @@ library
       PyF
     , Unique
     , aeson
+    , aeson-extra
     , aeson-pretty
     , aeson-qq
     , annotated-exception

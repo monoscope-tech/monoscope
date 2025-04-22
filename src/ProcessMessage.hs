@@ -7,6 +7,7 @@ module ProcessMessage (
 where
 
 import Data.Aeson qualified as AE
+import Data.Aeson.Extra (lodashMerge)
 import Data.Aeson.Key qualified as AEK
 import Data.Aeson.KeyMap qualified as AEKM
 import Data.Aeson.Types (KeyValue ((.=)), object)
@@ -54,6 +55,7 @@ import System.Clock (
 import System.Config qualified as Config
 import UnliftIO.Exception (try)
 import Utils (eitherStrToText, nestedJsonFromDotNotation)
+import Data.Aeson.Extra.Merge (lodashMerge)
 
 
 {--
@@ -141,9 +143,9 @@ processMessages msgs attrs = do
         trId <- UUID.toText <$> UUID.genUUID
         pure $ convertRequestMessageToSpan msg (spanId, trId)
       let spanVec = V.fromList spans
-      unless (V.null spanVec)
-        $ void
-        $ Telemetry.bulkInsertOtelLogsAndSpansTF spanVec
+      unless (V.null spanVec) $
+        void $
+          Telemetry.bulkInsertOtelLogsAndSpansTF spanVec
 
       processRequestMessages (rights msgs')
 
@@ -271,8 +273,8 @@ convertRequestMessageToSpan rm (spanId, trId) =
     , events = Just $ AE.Array V.empty
     , links = Just ""
     , resource =
-        jsonToMap
-          $ nestedJsonFromDotNotation
+        jsonToMap $
+          nestedJsonFromDotNotation
             [ ("service.name", AE.String $ fromMaybe "unknown" rm.host)
             , ("telemetry.sdk.language", AE.String "apitoolkit")
             , ("telemetry.sdk.name", AE.String $ show rm.sdkType)
@@ -285,10 +287,9 @@ convertRequestMessageToSpan rm (spanId, trId) =
 -- Using nestedJsonFromDotNotation from Utils module
 
 -- Helper function to merge JSON objects
+-- Now using lodashMerge from aeson-extra which properly handles nested objects
 mergeJsonObjects :: AE.Value -> AE.Value -> AE.Value
-mergeJsonObjects (AE.Object o1) (AE.Object o2) =
-  AE.Object $ AEKM.unionWith mergeJsonObjects o1 o2
-mergeJsonObjects _ v2 = v2
+mergeJsonObjects = lodashMerge
 
 
 createSpanAttributes :: RequestMessages.RequestMessage -> AE.Value
@@ -309,9 +310,9 @@ createSpanAttributes rm =
           , ("url.path", AE.String $ rm.rawUrl)
           ]
    in baseAttrs
-        `mergeJsonObjects` refererObj
-        `mergeJsonObjects` errorsObj
-        `mergeJsonObjects` headersObj
+        `lodashMerge` refererObj
+        `lodashMerge` errorsObj
+        `lodashMerge` headersObj
   where
     -- Process referer
     refererObj = case rm.referer of

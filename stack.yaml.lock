@@ -236,6 +236,13 @@ packages:
   original:
     hackage: lucid-svg-0.7.2.0@sha256:ac145997d5d6976d5c77e09992b5b204d7ddb7edba3002801927ed2acc69692b,1091
 - completed:
+    hackage: aeson-extra-0.5.1.3@sha256:7719f2da8930ded5cbeaa4cb35aba04ee3b68d5d882557962990555e2bfe3433,2682
+    pantry-tree:
+      sha256: 54f6f103f300810ed7293d0f916a1951eef2516d9954698aa4314f9eb2a957fd
+      size: 1007
+  original:
+    hackage: aeson-extra-0.5.1.3@sha256:7719f2da8930ded5cbeaa4cb35aba04ee3b68d5d882557962990555e2bfe3433,2682
+- completed:
     hackage: ki-effectful-0.1.1.0@sha256:15a4bc01c4195d9e3ed3d0ae25e419b0c035c897494dadefc2d676a43f1f5082,1815
     pantry-tree:
       sha256: a0897588dabdae952547ee5e7758a0b58602a1f765a395fe628a6aebe94bdbf4

@@ -51,12 +51,14 @@ module Utils (
 where
 
 import Data.Aeson qualified as AE
+import Data.Aeson.Extra.Merge (lodashMerge)
 import Data.Aeson.Key qualified as AEK
 import Data.Aeson.KeyMap qualified as AEKM
 import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as LBS
 import Data.Char (isDigit)
 import Data.Digest.XXHash (xxHash)
+import Data.Foldable (Foldable (foldl))
 import Data.HashMap.Strict qualified as HM
 import Data.List qualified as L
 import Data.Scientific (toBoundedInteger)
@@ -496,23 +498,24 @@ leftPad :: Int -> Text -> Text
 leftPad len txt = T.justifyRight len '0' (T.take len txt)
 
 
--- | Convert flat key-value pairs with dot notation into nested JSON structure
--- | Example: {"http.request.method": "GET"} -> {"http": {"request": {"method": "GET"}}}
+-- | Turn a dot‑key + value into a singleton nested Object
+build :: [Text] -> AE.Value -> AEKM.KeyMap AE.Value
+build [] _ = AEKM.empty
+build [x] v = AEKM.singleton (AEK.fromText x) v
+build (x : xs) v = AEKM.singleton (AEK.fromText x) (AE.Object (build xs v))
+
+
+-- | Succinct “dot‑notation → nested JSON”
 nestedJsonFromDotNotation :: [(Text, AE.Value)] -> AE.Value
 nestedJsonFromDotNotation pairs =
-  AE.object $ map (uncurry insertNested) pairs
-  where
-    insertNested :: Text -> AE.Value -> (AEK.Key, AE.Value)
-    insertNested key value =
-      case T.splitOn "." key of
-        [] -> (AEK.fromText "", value)
-        [k] -> (AEK.fromText k, value)
-        (firstPart : rest) -> (AEK.fromText firstPart, nestRest rest value)
-
-    nestRest :: [Text] -> AE.Value -> AE.Value
-    nestRest [] value = value
-    nestRest [k] value = AE.object [(AEK.fromText k, value)]
-    nestRest (k : ks) value = AE.object [(AEK.fromText k, nestRest ks value)]
+  -- start from empty object, insert each small object with a lodash‑style merge
+  foldl'
+    (\acc (k, v) ->
+      let nestedObj = AE.Object $ build (T.splitOn "." k) v
+      in lodashMerge acc nestedObj
+    )
+    (AE.object [])
+    pairs
 
 
 convertToDHMS :: NominalDiffTime -> (Int, Int, Int, Int)

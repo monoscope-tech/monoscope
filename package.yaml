@@ -146,6 +146,7 @@ library:
     # - streamly
     # - streamly-core
     - aeson
+    - aeson-extra
     - aeson-qq
     - async
     - bytestring

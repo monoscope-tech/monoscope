@@ -53,7 +53,6 @@ import Data.Effectful.UUID (UUIDEff, genUUID)
 import Data.Generics.Labels ()
 import Data.List (nubBy)
 import Data.Map qualified as Map
-import Data.Pool (withResource)
 import Data.Text qualified as T
 import Data.Time (TimeZone (..), UTCTime, formatTime, utcToZonedTime)
 import Data.Time.Format (defaultTimeLocale)
@@ -61,7 +60,6 @@ import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity.DBT (QueryNature (..), executeMany, query, queryOne, withPool)
 import Database.PostgreSQL.Simple (Only (..), ResultError (ConversionFailed))
-import Database.PostgreSQL.Simple qualified as PG
 import Database.PostgreSQL.Simple.FromField (Conversion (..), FromField (..), returnError)
 import Database.PostgreSQL.Simple.FromRow
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
@@ -75,17 +73,13 @@ import Deriving.Aeson.Stock qualified as DAE
 import Effectful
 import Effectful.Labeled (Labeled, labeled)
 import Effectful.PostgreSQL.Transact.Effect (DB, dbtToEff)
-import Effectful.Reader.Static
 import Models.Apis.RequestDumps (RequestDump)
-import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.Projects (ProjectId (unProjectId))
 import Models.Projects.Projects qualified as Projects
 import NeatInterpolation (text)
 import Pkg.DBUtils (WrappedEnum (..))
-import Pkg.DBUtils qualified as DBUtils
 import Relude hiding (ask)
 import RequestMessages (RequestMessage (..))
-import System.Config (AuthContext (..))
 import Utils (lookupValueText, toXXHash)
 
 
@@ -998,8 +992,8 @@ extractATError spanObj (AE.Object o) = do
       asText (AE.String t) = Just t
       asText _ = Nothing
 
-  return
-    $ RequestDumps.ATError
+  return $
+    RequestDumps.ATError
       { projectId = UUID.fromText spanObj.project_id >>= (\uid -> Just Projects.ProjectId{unProjectId = uid})
       , when = spanObj.timestamp
       , errorType = typ
