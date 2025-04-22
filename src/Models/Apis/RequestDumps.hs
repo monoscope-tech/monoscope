@@ -48,14 +48,11 @@ import Effectful
 import Effectful.PostgreSQL.Transact.Effect (DB, dbtToEff)
 import Effectful.Time qualified as Time
 import Fmt (fmt)
-import Models.Apis.Fields.Query ()
 import Models.Projects.Projects qualified as Projects
 import NeatInterpolation (text)
 import Pkg.Parser
-import Pkg.Parser.Expr
 import Pkg.Parser.Stats (Section, Sources (SSpans))
 import Relude hiding (many, some)
-import Text.Megaparsec
 import Web.HttpApiData (ToHttpApiData (..))
 import Witch (from)
 
@@ -425,7 +422,7 @@ selectLogTable :: (DB :> es, Time.Time :> es) => Projects.ProjectId -> [Section]
 selectLogTable pid queryAST cursorM dateRange projectedColsByUser source targetSpansM = do
   now <- Time.currentTime
   let (q, queryComponents) = queryASTToComponents ((defSqlQueryCfg pid now source targetSpansM){cursorM, dateRange, projectedColsByUser, source, targetSpansM}) queryAST
-  logItems <- queryToValues $ traceShowId q
+  logItems <- queryToValues q
   Only c <- fromMaybe (Only 0) <$> queryCount queryComponents.countQuery
   let logItemsV = V.mapMaybe valueToVector logItems
   pure $ Right (logItemsV, queryComponents.toColNames, c)
