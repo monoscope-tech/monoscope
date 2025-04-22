@@ -144,17 +144,6 @@ export class LogList extends LitElement {
     window.logListTable = document.querySelector('#resultTable')
   }
 
-  // updated(changedProps) {
-  //   super.updated(changedProps)
-  //   for (const span of this.spanListTree) {
-  //     if (span.isNewData) {
-  //       span.isNewData = false
-  //     } else {
-  //       break
-  //     }
-  //   }
-  // }
-
   setupIntersectionObserver() {
     if (this._observer) {
       this._observer.disconnect()
@@ -897,87 +886,6 @@ function requestDumpLogItemUrlPath(rd, colIdxMap, source) {
   const rdId = lookupVecTextByKey(rd, colIdxMap, 'id')
   const rdCreatedAt = lookupVecTextByKey(rd, colIdxMap, 'created_at') || lookupVecTextByKey(rd, colIdxMap, 'timestamp')
   return [rdId, rdCreatedAt, source]
-}
-
-function groupSpansTF(events, colIdxMap, expandedTraces) {
-  const traceMap = {}
-  const spanMap = {}
-
-  const TRACE_INDEX = colIdxMap['trace_id']
-  const SPAN_INDEX = colIdxMap['latency_breakdown']
-  const PARENT_SPAN_INDEX = colIdxMap['parent_span_id']
-  // const TIMESTAMP_INDEX = colIdxMap['timestamp']
-  const SPAN_DURATION_INDEX = colIdxMap['duration']
-  const START_TIME_NS = colIdxMap['start_time_ns']
-  const ERROR_INDEX = colIdxMap['errors']
-  const BODY_INDEX = colIdxMap['body']
-
-  for (const span of events) {
-    let traceId = span[TRACE_INDEX]
-    let spanId = span[SPAN_INDEX]
-    const parentSpanId = span[PARENT_SPAN_INDEX]
-
-    const body = span[BODY_INDEX]
-    let type = 'span'
-    if (body !== null) {
-      type = 'log'
-    }
-
-    if (traceId === '' || traceId === null) {
-      traceId = generateStrId()
-      span[TRACE_INDEX] = traceId
-    }
-    if (spanId === '' || spanId === null) {
-      spanId = generateStrId()
-      span[SPAN_INDEX] = spanId
-    }
-    spanMap[spanId] = {
-      spanId,
-      traceId,
-      type,
-      hasErrors: span[ERROR_INDEX],
-      startNs: span[START_TIME_NS],
-      duration: span[SPAN_DURATION_INDEX],
-      parentId: parentSpanId,
-      data: span,
-      children: [],
-    }
-  }
-
-  for (const span in spanMap) {
-    const parentSpanId = span[PARENT_SPAN_INDEX]
-    if (parentSpanId && spanMap[parentSpanId]) {
-      spanMap[parentSpanId].children.push(span)
-    }
-  }
-
-  for (const spanId in spanMap) {
-    const span = spanMap[spanId]
-    span.children.sort((a, b) => a.startNs - b.startNs)
-  }
-
-  for (const span in spanMap) {
-    if (!span.parentId) {
-      let traceData = traceMap[span.traceId]
-      if (!traceData) {
-        traceData = {
-          traceId: span.traceId,
-          spans: [],
-          duration: span.duration,
-          startTime: span.startNs,
-        }
-      }
-      traceData.spans.push(span)
-      traceData.duration = Math.max(traceData.duration, span.duration)
-      traceData.minStart = Math.min(traceData.startTime, span.startNs)
-      traceMap[span.traceId] = traceData
-    }
-  }
-
-  const traceArray = Object.values(traceMap).sort((a, b) => b.startTime - a.startTime)
-
-  const rr = flattenSpanTree(traceArray, expandedTraces)
-  return rr
 }
 
 function groupSpans(data, colIdxMap, expandedTraces) {
