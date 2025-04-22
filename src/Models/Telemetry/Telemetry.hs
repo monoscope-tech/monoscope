@@ -998,8 +998,8 @@ extractATError spanObj (AE.Object o) = do
       asText (AE.String t) = Just t
       asText _ = Nothing
 
-  return $
-    RequestDumps.ATError
+  return
+    $ RequestDumps.ATError
       { projectId = UUID.fromText spanObj.project_id >>= (\uid -> Just Projects.ProjectId{unProjectId = uid})
       , when = spanObj.timestamp
       , errorType = typ

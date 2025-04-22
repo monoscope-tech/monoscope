@@ -53,8 +53,8 @@ pivot' rows
       let extractHeaders vec = V.uniq . V.map thd3 . V.modify (\mvec -> VA.sortBy (comparing thd3) mvec) $ vec
           headers = extractHeaders rows
           grouped =
-            V.groupBy (\a b -> fst3 a == fst3 b) $
-              V.modify (\mvec -> VA.sortBy (comparing fst3) mvec) rows
+            V.groupBy (\a b -> fst3 a == fst3 b)
+              $ V.modify (\mvec -> VA.sortBy (comparing fst3) mvec) rows
           ngrouped = map (transform headers) grouped
           totalSum = V.sum $ V.map snd3 rows
 
@@ -105,8 +105,8 @@ statsTriple v
         else maximum $ M.elems timestampMap
 
     mode =
-      fst $
-        M.foldlWithKey'
+      fst
+        $ M.foldlWithKey'
           ( \acc@(_, cnt') k c ->
               if c > cnt' then (k, c) else acc
           )

@@ -64,8 +64,8 @@ generateAndSaveFacets projectId tableName columns maxValues = do
           }
 
   _ <-
-    dbtToEff $
-      execute
+    dbtToEff
+      $ execute
         Insert
         [sql|
       INSERT INTO apis.facet_summaries 

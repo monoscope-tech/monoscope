@@ -109,7 +109,8 @@ renderFacets facetSummary = do
             [ class_ "flex justify-between items-center text-slate-950 pb-2 cursor-pointer"
             , [__|on click toggle .collapsed on me.parentElement|]
             ]
-            $ span_ [class_ "facet-title"] (toHtml displayName) >> faSprite_ "chevron-down" "regular" "w-3 h-3 transition-transform duration-200 group-[.collapsed]:rotate-180"
+            $ span_ [class_ "facet-title"] (toHtml displayName)
+            >> faSprite_ "chevron-down" "regular" "w-3 h-3 transition-transform duration-200 group-[.collapsed]:rotate-180"
 
           -- Wrap facet values in a collapsible container with animation
           div_ [class_ "facet-content overflow-hidden transition-all duration-300 ease-in-out max-h-96 opacity-100 transition-opacity duration-150 group-[.collapsed]:max-h-0 group-[.collapsed]:opacity-0 group-[.collapsed]:py-0"] do
@@ -124,8 +125,8 @@ renderFacets facetSummary = do
                       onclick_ $ "filterByFacet('" <> T.replace "___" "." key <> "', '" <> val <> "')"
                     ]
                   let colorClass = colorFn val
-                  when (not $ T.null colorClass) $
-                    span_ [class_ $ colorClass <> " shrink-0 w-1 h-5 rounded-sm"] " "
+                  when (not $ T.null colorClass)
+                    $ span_ [class_ $ colorClass <> " shrink-0 w-1 h-5 rounded-sm"] " "
                   span_ [class_ "facet-value truncate max-w-[80%]", term "data-tippy-content" val] $ toHtml val
                 span_ [class_ "facet-count text-slate-500 shrink-0 ml-1"] $ toHtml $ show count
 
@@ -176,8 +177,8 @@ apiLogH pid queryM queryASTM cols' cursorM' sinceM fromM toM layoutM sourceM tar
   facetSummary <- Facets.getFacetSummary pid "otel_logs_and_spans" now
 
   freeTierExceeded <-
-    dbtToEff $
-      if project.paymentPlan == "Free"
+    dbtToEff
+      $ if project.paymentPlan == "Free"
         then (> 10000) <$> RequestDumps.getLastSevenDaysTotalRequest pid
         else pure False
 
@@ -342,8 +343,8 @@ apiLogJson pid queryM queryASTM cols' cursorM' sinceM fromM toM layoutM sourceM 
               else []
           colors = getServiceColors (V.catMaybes serviceNames)
 
-      addRespHeaders $
-        AE.object
+      addRespHeaders
+        $ AE.object
           [ "logsData" AE..= finalVecs
           , "serviceColors" AE..= colors
           , "nextUrl" AE..= nextLogsURL
@@ -425,8 +426,8 @@ logQueryBox_ pid currentRange source targetSpan queryAST queryLibRecent queryLib
 
 queryLibrary_ :: Projects.ProjectId -> V.Vector Projects.QueryLibItem -> V.Vector Projects.QueryLibItem -> Html ()
 queryLibrary_ pid queryLibSaved queryLibRecent = div_ [class_ "dropdown dropdown-hover dropdown-bottom dropdown-start", id_ "queryLibraryParentEl"] do
-  div_ [class_ "cursor-pointer relative  bg-fillWeak  text-textWeak rounded-lg border border-strokeWeaker h-full flex gap-2 items-center px-2", tabindex_ "0", role_ "button"] $
-    (toHtml "Presets" >> faSprite_ "chevron-down" "regular" "w-3 h-3")
+  div_ [class_ "cursor-pointer relative  bg-fillWeak  text-textWeak rounded-lg border border-strokeWeaker h-full flex gap-2 items-center px-2", tabindex_ "0", role_ "button"]
+    $ (toHtml "Presets" >> faSprite_ "chevron-down" "regular" "w-3 h-3")
   div_ [class_ "dropdown-content z-20"] $ div_ [class_ "tabs tabs-box tabs-md tabs-outline items-center bg-fillWeak p-0 h-full", role_ "tablist", id_ "queryLibraryTabListEl"] do
     tabPanel_ "Saved" (queryLibraryContent_ "Saved" queryLibSaved)
     tabPanel_ "Recent" (queryLibraryContent_ "Recent" queryLibRecent)
@@ -494,9 +495,9 @@ queryLibItem_ qli =
           li_ "Send query to alert"
           li_ "Send query to a dashboard"
     strong_ $ whenJust qli.title \title -> (toHtml title)
-    pre_ $
-      code_ [class_ "language-js bg-transparent! queryText whitespace-pre-wrap break-words"] $
-        toHtml qli.queryText
+    pre_
+      $ code_ [class_ "language-js bg-transparent! queryText whitespace-pre-wrap break-words"]
+      $ toHtml qli.queryText
     div_ [class_ "gap-3 flex"] $ time_ [datetime_ "", term "data-tippy-content" "created on"] (toHtml $ displayTimestamp $ formatUTC qli.createdAt) >> when qli.byMe " by me"
 
 
@@ -589,9 +590,9 @@ apiLogsPage page = do
       ]
       do
         div_ [class_ "relative ml-auto w-full", style_ ""] do
-          div_ [class_ "flex justify-end  w-full p-4 "] $
-            button_ [[__|on click add .hidden to #expand-log-modal|]] $
-              faSprite_ "xmark" "regular" "h-8"
+          div_ [class_ "flex justify-end  w-full p-4 "]
+            $ button_ [[__|on click add .hidden to #expand-log-modal|]]
+            $ faSprite_ "xmark" "regular" "h-8"
           form_
             [ hxPost_ $ "/p/" <> page.pid.toText <> "/share/"
             , hxSwap_ "innerHTML"
@@ -607,18 +608,18 @@ apiLogsPage page = do
 
       div_ [class_ "flex flex-row gap-4 mt-3 group-has-[.toggle-chart:checked]/pg:hidden w-full", style_ "aspect-ratio: 10 / 1;"] do
         Widget.widget_ $ (def :: Widget.Widget){Widget.query = Just "timechart count(*)", Widget.unit = Just "reqs", Widget.title = Just "All requests", Widget.hideLegend = Just True, Widget._projectId = Just page.pid, Widget.standalone = Just True, Widget.yAxis = Just (def{showOnlyMaxLabel = Just True})}
-        unless (page.source == "logs") $
-          Widget.widget_ $
-            (def :: Widget.Widget)
-              { Widget.wType = WTTimeseriesLine
-              , Widget.standalone = Just True
-              , Widget.title = Just "Latency percentiles (ms)"
-              , Widget.hideSubtitle = Just True
-              , Widget.yAxis = Just (def{showOnlyMaxLabel = Just True})
-              , Widget.summarizeBy = Just Widget.SBMax
-              , Widget.sql =
-                  Just
-                    [text|
+        unless (page.source == "logs")
+          $ Widget.widget_
+          $ (def :: Widget.Widget)
+            { Widget.wType = WTTimeseriesLine
+            , Widget.standalone = Just True
+            , Widget.title = Just "Latency percentiles (ms)"
+            , Widget.hideSubtitle = Just True
+            , Widget.yAxis = Just (def{showOnlyMaxLabel = Just True})
+            , Widget.summarizeBy = Just Widget.SBMax
+            , Widget.sql =
+                Just
+                  [text|
                         SELECT timeB, value, quantile
                               FROM ( SELECT extract(epoch from time_bucket('1h', timestamp))::integer AS timeB,
                                       ARRAY[
@@ -635,10 +636,10 @@ apiLogsPage page = do
                               ) s,
                             LATERAL unnest(s.values, s.quantiles) AS u(value, quantile);
                         |]
-              , Widget.unit = Just "ms"
-              , Widget.hideLegend = Just True
-              , Widget._projectId = Just page.pid
-              }
+            , Widget.unit = Just "ms"
+            , Widget.hideLegend = Just True
+            , Widget._projectId = Just page.pid
+            }
 
     div_ [class_ "flex h-full gap-3.5 overflow-hidden"] do
       -- FACETS

@@ -503,16 +503,16 @@ nestedJsonFromDotNotation pairs =
   AE.object $ map (uncurry insertNested) pairs
   where
     insertNested :: Text -> AE.Value -> (AEK.Key, AE.Value)
-    insertNested key value = 
+    insertNested key value =
       case T.splitOn "." key of
         [] -> (AEK.fromText "", value)
         [k] -> (AEK.fromText k, value)
-        (firstPart:rest) -> (AEK.fromText firstPart, nestRest rest value)
-    
+        (firstPart : rest) -> (AEK.fromText firstPart, nestRest rest value)
+
     nestRest :: [Text] -> AE.Value -> AE.Value
     nestRest [] value = value
     nestRest [k] value = AE.object [(AEK.fromText k, value)]
-    nestRest (k:ks) value = AE.object [(AEK.fromText k, nestRest ks value)]
+    nestRest (k : ks) value = AE.object [(AEK.fromText k, nestRest ks value)]
 
 
 convertToDHMS :: NominalDiffTime -> (Int, Int, Int, Int)
