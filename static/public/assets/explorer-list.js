@@ -564,8 +564,9 @@ export class LogList extends LitElement {
         return renderBadge('min-w-[4rem] cbadge ' + methodCls, method, 'method')
       case 'request_type':
         let requestType = lookupVecTextByKey(dataArr, colIdxMap, key)
-        if (requestType === 'Incoming') return renderIconWithTippy('w-4', 'Incoming Request', faSprite('arrow-down-left', 'solid', ' h-3 fill-slate-500'))
-        return renderIconWithTippy('w-4', 'Outgoing Request', faSprite('arrow-up-right', 'solid', ' h-3 fill-blue-700'))
+        if (requestType === 'Incoming')
+          return renderIconWithTippy('w-4', 'Incoming Request => Server', faSprite('arrow-down-left', 'solid', ' h-3 fill-slate-500'))
+        return renderIconWithTippy('w-4', 'Outgoing Request => Client', faSprite('arrow-up-right', 'solid', ' h-3 fill-blue-700'))
       case 'duration':
         let dur = rowData.type === 'log' ? 'log' : getDurationNSMS(lookupVecTextByKey(dataArr, colIdxMap, key))
         return renderBadge('cbadge-sm badge-neutral font-normal bg-fillWeak', dur, 'latency')
@@ -586,9 +587,9 @@ export class LogList extends LitElement {
       case 'service':
         let service = lookupVecTextByKey(dataArr, colIdxMap, key)
         return html` <div class="w-[16ch]">${renderBadge('cbadge-sm badge-neutral bg-fillWeak ' + wrapClass, service, 'service name')}</div>`
-      case 'kind':
-        let kind = lookupVecTextByKey(dataArr, colIdxMap, key)
-        return renderBadge('cbadge-sm badge-neutral bg-fillWeak', kind, 'span kind')
+      // case 'kind':
+      //   let kind = lookupVecTextByKey(dataArr, colIdxMap, key)
+      //   return renderBadge('cbadge-sm badge-neutral bg-fillWeak', kind, 'span kind')
       case 'latency_breakdown':
         const { traceStart, traceEnd, startNs, duration, childrenTimeSpans, depth: d } = rowData
         const color = serviceColors[lookupVecTextByKey(dataArr, colIdxMap, 'span_name')] || 'bg-black'
@@ -615,9 +616,9 @@ export class LogList extends LitElement {
           let wrapCls = wrapLines ? 'whitespace-break-spaces' : 'whitespace-nowrap'
           return html`
             ${k.toLowerCase() === 'server'
-              ? renderIconWithTippy('w-4 ml-2', 'Incoming Request', faSprite('arrow-down-left', 'solid', ' h-3 fill-slate-500'))
+              ? renderIconWithTippy('w-4 ml-2', 'Incoming Request => Server', faSprite('arrow-down-left', 'solid', ' h-3 fill-slate-500'))
               : k.toLowerCase() === 'client'
-                ? renderIconWithTippy('w-4 ml-2', 'Outgoing Request', faSprite('arrow-up-right', 'solid', ' h-3 fill-blue-700'))
+                ? renderIconWithTippy('w-4 ml-2', 'Outgoing Request => Client', faSprite('arrow-up-right', 'solid', ' h-3 fill-blue-700'))
                 : nothing}
             ${statusCode_ ? renderBadge(statusCls_, statusCode_, 'status code') : nothing}
             ${m ? renderBadge('min-w-[4rem] text-center cbadge cbadge-sm ' + methodCls_, m, 'method') : nothing}
@@ -679,7 +680,7 @@ export class LogList extends LitElement {
                 <div class=${`flex items-center gap-1 ${wrapLines ? 'break-all flex-wrap' : 'overflow-hidden'}`}>
                   ${type === 'log'
                     ? ['severity_text', 'body'].map(k => this.logItemCol(rowData, source, colIdxMap, k, undefined, undefined, undefined, wrapLines))
-                    : ['http_attributes', 'db_attributes', 'status', 'kind', 'span_name'].map(k =>
+                    : ['http_attributes', 'db_attributes', 'status', 'span_name'].map(k =>
                         this.logItemCol(rowData, source, colIdxMap, k, undefined, undefined, undefined, wrapLines),
                       )}
                   <span class=${'fill-slate-700 ' + wrapClass}>${val}</span>

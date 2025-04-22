@@ -19,7 +19,6 @@ import Data.List qualified as L
 import Data.Text qualified as T
 import Data.Time (addUTCTime, zonedTimeToUTC)
 import Data.UUID qualified as UUID
-import Data.UUID.V4 qualified as UUID
 import Data.Vector qualified as V
 import Data.Vector.Algorithms qualified as VAA
 import Database.PostgreSQL.Entity.DBT (withPool)
@@ -43,7 +42,6 @@ import Models.Apis.Shapes qualified as Shapes
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Telemetry (Context (trace_state))
 import Models.Telemetry.Telemetry qualified as Telemetry
-import Pages.Log (ApiLogsPageData (exceededFreeTier))
 import PyF (fmt)
 import Relude hiding (ask)
 import RequestMessages qualified
@@ -143,9 +141,9 @@ processMessages msgs attrs = do
         trId <- UUID.toText <$> UUID.genUUID
         pure $ convertRequestMessageToSpan msg (spanId, trId)
       let spanVec = V.fromList spans
-      unless (V.null spanVec)
-        $ void
-        $ Telemetry.bulkInsertOtelLogsAndSpansTF spanVec
+      unless (V.null spanVec) $
+        void $
+          Telemetry.bulkInsertOtelLogsAndSpansTF spanVec
 
       processRequestMessages (rights msgs')
 
@@ -258,7 +256,7 @@ convertRequestMessageToSpan rm (spanId, trId) =
     , name = Just $ rm.method <> maybe "" (" " <>) rm.urlPath
     , start_time = zonedTimeToUTC rm.timestamp
     , end_time = Just $ addUTCTime (realToFrac (fromIntegral rm.duration / 1000000000)) (zonedTimeToUTC rm.timestamp)
-    , kind = Just "Server"
+    , kind = Just $ if (T.isSuffixOf "Outgoing" (show rm.sdkType)) then "Client" else "Server"
     , level = Nothing
     , body = Nothing
     , severity = Nothing
@@ -268,16 +266,16 @@ convertRequestMessageToSpan rm (spanId, trId) =
           | otherwise -> "OK"
     , status_code = Just $ show rm.statusCode
     , hashes = []
-    , observed_timestamp = Nothing
+    , observed_timestamp = Just $ zonedTimeToUTC rm.timestamp
     , attributes = jsonToMap $ createSpanAttributes rm
     , events = Just $ AE.Array V.empty
     , links = Just ""
     , resource =
-        jsonToMap
-          $ nestedJsonFromDotNotation
+        jsonToMap $
+          nestedJsonFromDotNotation
             [ ("service.name", AE.String $ fromMaybe "unknown" rm.host)
             , ("telemetry.sdk.language", AE.String "apitoolkit")
-            , ("telemetry.sdk.name", AE.String "opentelemetry")
+            , ("telemetry.sdk.name", AE.String $ show rm.sdkType)
             ]
     , duration = Just $ fromIntegral rm.duration
     , date = zonedTimeToUTC rm.timestamp
@@ -288,8 +286,9 @@ convertRequestMessageToSpan rm (spanId, trId) =
 
 -- Helper function to merge JSON objects
 mergeJsonObjects :: AE.Value -> AE.Value -> AE.Value
-mergeJsonObjects (AE.Object o1) (AE.Object o2) = AE.Object $ AEKM.union o1 o2
-mergeJsonObjects v1 _ = v1
+mergeJsonObjects (AE.Object o1) (AE.Object o2) =
+  AE.Object $ AEKM.unionWith mergeJsonObjects o1 o2
+mergeJsonObjects _ v2 = v2
 
 
 createSpanAttributes :: RequestMessages.RequestMessage -> AE.Value
@@ -343,10 +342,3 @@ createSpanAttributes rm =
           _ -> AE.object []
        in
         reqHeaders `mergeJsonObjects` respHeaders
-
-
--- Update to use AEK.fromText in addHeadersToAttributes
-addHeadersToAttributes :: Text -> AE.Value -> [(AEK.Key, AE.Value)]
-addHeadersToAttributes prefix (AE.Object obj) =
-  map (\(k, v) -> (AEK.fromText (prefix <> AEK.toText k), v)) $ AEKM.toList obj
-addHeadersToAttributes _ _ = []

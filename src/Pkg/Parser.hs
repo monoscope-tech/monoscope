@@ -322,13 +322,13 @@ defaultSelectSqlQuery (Just SSpans) =
   , "EXISTS(SELECT 1 FROM jsonb_array_elements(events) elem  WHERE elem->>'event_name' = 'exception') as errors"
   , [fmt|jsonb_build_object(
           'method', COALESCE(attributes->'http'->>'method', attributes___http___request___method),
-          'url', COALESCE(attributes->'http'->'route', attributes->'url'->'path', attributes->'http'->'target', attributes->'http'->'url'),
-          'status_code', COALESCE(attributes->'http'->'status_code', attributes->'http'->'response'->'status_code')
+          'url', COALESCE(attributes->'http'->>'route', attributes->'url'->>'path', attributes->'http'->>'target', attributes->'http'->>'url'),
+          'status_code', COALESCE(attributes->'http'->>'status_code', attributes->'http'->'response'->>'status_code', status_code::text)
           ) as http_attributes |]
   , [fmt| jsonb_build_object('system', attributes->'db'->'system','statement', coalesce(attributes->'db'->'query'->'text', attributes->'db'->'statement')) as db_attributes  |]
   , [fmt|LEFT(
         CONCAT(
-            COALESCE(attributes, ''),
+            COALESCE(attributes::text, '')
         ),
         500
     ) as rest|]
