@@ -557,7 +557,9 @@ export class LogList extends LitElement {
       case 'status_code':
         let statusCode = lookupVecTextByKey(dataArr, colIdxMap, 'status_code')
         let statusCls = getStatusColor(Number(statusCode))
-        return renderBadge(statusCls, statusCode, 'status code')
+        if (statusCode == 'UNSET') {
+          return ''
+        } else return renderBadge(statusCls, statusCode, 'status code')
       case 'method':
         let method = lookupVecTextByKey(dataArr, colIdxMap, key)
         let methodCls = getMethodColor(method)
@@ -573,7 +575,9 @@ export class LogList extends LitElement {
       case 'severity_text':
         let severity = lookupVecTextByKey(dataArr, colIdxMap, key) || 'UNSET'
         let severityClass = getSeverityColor(severity)
-        return renderBadge('cbadge-sm cbadge ' + severityClass, severity)
+        if (severity == 'UNSET') {
+          return ''
+        } else return renderBadge('cbadge-sm cbadge ' + severityClass, severity)
       case 'body':
         let body = lookupVecTextByKey(dataArr, colIdxMap, key)
         return renderBadge('space-x-2 ' + wrapClass, body)
@@ -752,7 +756,8 @@ function getStatusColor(status) {
   if (status < 200) return 'cbadge-sm badge-neutral'
   if (status < 300) return 'cbadge-sm badge-2xx'
   if (status < 400) return 'cbadge-sm badge-3xx'
-  return 'cbadge-sm badge-4xx'
+  if (status >= 400) return 'cbadge-sm badge-4xx'
+  return 'cbadge-sm badge-neutral bg-fillWeak '
 }
 
 function getMethodColor(method) {
@@ -763,7 +768,7 @@ function getMethodColor(method) {
     PATCH: 'cbadge-sm badge-cyan',
     GET: 'cbadge-sm badge-blue',
   }
-  return methodColors[method] || 'cbadge-sm badge-neutral'
+  return methodColors[method] || 'cbadge-sm badge-neutral bg-fillWeak '
 }
 
 function renderIconWithTippy(cls, tip, icon) {
