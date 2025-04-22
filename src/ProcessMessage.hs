@@ -141,9 +141,9 @@ processMessages msgs attrs = do
         trId <- UUID.toText <$> UUID.genUUID
         pure $ convertRequestMessageToSpan msg (spanId, trId)
       let spanVec = V.fromList spans
-      unless (V.null spanVec) $
-        void $
-          Telemetry.bulkInsertOtelLogsAndSpansTF spanVec
+      unless (V.null spanVec)
+        $ void
+        $ Telemetry.bulkInsertOtelLogsAndSpansTF spanVec
 
       processRequestMessages (rights msgs')
 
@@ -271,8 +271,8 @@ convertRequestMessageToSpan rm (spanId, trId) =
     , events = Just $ AE.Array V.empty
     , links = Just ""
     , resource =
-        jsonToMap $
-          nestedJsonFromDotNotation
+        jsonToMap
+          $ nestedJsonFromDotNotation
             [ ("service.name", AE.String $ fromMaybe "unknown" rm.host)
             , ("telemetry.sdk.language", AE.String "apitoolkit")
             , ("telemetry.sdk.name", AE.String $ show rm.sdkType)

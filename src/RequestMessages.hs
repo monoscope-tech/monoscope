@@ -329,6 +329,7 @@ requestMsgToDumpAndEndpoint pjc rM now dumpIDOriginal = do
 isRequestOutgoing :: RequestDumps.SDKTypes -> Bool
 isRequestOutgoing sdkType = T.isSuffixOf "Outgoing" (show sdkType)
 
+
 buildEndpoint :: RequestMessages.RequestMessage -> UTCTime -> UUID.UUID -> Projects.ProjectId -> Text -> Text -> AE.Value -> Text -> Bool -> Endpoints.Endpoint
 buildEndpoint rM now dumpID projectId method urlPath urlParams endpointHash outgoing =
   Endpoints.Endpoint
