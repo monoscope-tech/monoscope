@@ -667,7 +667,7 @@ apiLogsPage page = do
           let dW = fromMaybe "100%" page.detailsWidth
               showTrace = isJust page.showTrace
           div_ [class_ "relative flex flex-col shrink-1 min-w-0 w-full h-full", style_ $ "width: " <> dW, id_ "logs_list_container"] do
-            div_ [class_ "flex gap-2  pt-1 text-sm -mb-6 z-10"] do
+            div_ [class_ "flex gap-2  pt-1 text-sm -mb-6 z-10 w-max"] do
               label_ [class_ "gap-1 flex items-center cursor-pointer"] do
                 faSprite_ "side-chevron-left-in-box" "regular" "w-4 h-4 group-has-[.toggle-filters:checked]/pg:rotate-180 "
                 span_ [class_ "hidden group-has-[.toggle-filters:checked]/pg:block"] "Show"

@@ -14,11 +14,11 @@ export class LogList extends LitElement {
     isError: { type: Boolean },
     fetchError: { type: String },
     projectId: { type: String },
-    groupedData: [],
     expandedTraces: {},
     columnMaxWidthMap: {},
-    view: { type: String },
+    spanListTree: [],
     flipDirection: { type: Boolean },
+    view: { type: String },
     shouldScrollToBottom: { type: Boolean },
   }
   constructor() {
@@ -89,7 +89,8 @@ export class LogList extends LitElement {
   }
 
   latestLogsURLQueryValsFn() {
-    const latestData = this.source === 'spans' ? this.spanListTree[this.spanListTree.length - 1].data : this.logsData[this.logsData.length - 1]
+    const latestIndex = this.flipDirection ? (this.source === 'spans' ? this.spanListTree.length - 1 : this.logsData.length - 1) : 0
+    const latestData = this.source === 'spans' ? this.spanListTree[latestIndex].data : this.logsData[latestIndex]
     const timeIndex = this.source === 'spans' ? this.colIdxMap['timestamp'] : this.ariaColIndex['created_at']
     const datetime = latestData[timeIndex]
     const to = datetime ? new Date(new Date(datetime).getTime() + 1).toISOString() : params().to
@@ -152,7 +153,7 @@ export class LogList extends LitElement {
   }
 
   updated(changedProperties) {
-    if (this.shouldScrollToBottom) {
+    if (this.shouldScrollToBottom && this.flipDirection) {
       this.scrollToBottom()
     }
   }
@@ -201,7 +202,7 @@ export class LogList extends LitElement {
   }
 
   buildSpanListTree(logs) {
-    return groupSpans(logs, this.colIdxMap, this.expandedTraces, this.flipDirection)
+    return groupSpans(logs, this.colIdxMap, this.expandedTraces)
   }
 
   expandTrace(tracId, spanId) {
@@ -354,7 +355,7 @@ export class LogList extends LitElement {
     list.push('end')
 
     return html`
-      ${this.source === 'spans' ? this.options() : nothing}
+      ${this.options()}
       <div
         @scroll=${event => {
           const container = event.target
@@ -748,27 +749,31 @@ export class LogList extends LitElement {
   options() {
     return html`
       <div class="w-full flex justify-end px-2 pb-1 gap-3 ">
-        <div class="tabs tabs-box tabs-md p-0 tabs-outline items-center border">
-          <button
-            @click=${() => (this.view = 'tree')}
-            class=${`flex items-center justify-center gap-1 px-2 py-1 text-xs rounded ${
-              this.view === 'tree' ? 'bg-gray-200 text-gray-800' : 'text-textWeak  hover:bg-gray-100'
-            }`}
-          >
-            ${faSprite('tree', 'regular', 'h-4 w-4')}
-            <span class="sm:inline hidden">Tree</span>
-          </button>
+        ${this.source === 'spans'
+          ? html`
+              <div class="tabs tabs-box tabs-md p-0 tabs-outline items-center border">
+                <button
+                  @click=${() => (this.view = 'tree')}
+                  class=${`flex items-center justify-center gap-1 px-2 py-1 text-xs rounded ${
+                    this.view === 'tree' ? 'bg-gray-200 text-gray-800' : 'text-textWeak  hover:bg-gray-100'
+                  }`}
+                >
+                  ${faSprite('tree', 'regular', 'h-4 w-4')}
+                  <span class="sm:inline hidden">Tree</span>
+                </button>
 
-          <button
-            @click=${() => (this.view = 'list')}
-            class=${`flex items-center justify-center gap-1 px-2 py-1 text-xs rounded ${
-              this.view === 'list' ? 'bg-gray-200 text-gray-800' : 'text-textWeak  hover:bg-gray-100'
-            }`}
-          >
-            ${faSprite('list-view', 'regular', 'h-4 w-4')}
-            <span class="sm:inline hidden">List</span>
-          </button>
-        </div>
+                <button
+                  @click=${() => (this.view = 'list')}
+                  class=${`flex items-center justify-center gap-1 px-2 py-1 text-xs rounded ${
+                    this.view === 'list' ? 'bg-gray-200 text-gray-800' : 'text-textWeak  hover:bg-gray-100'
+                  }`}
+                >
+                  ${faSprite('list-view', 'regular', 'h-4 w-4')}
+                  <span class="sm:inline hidden">List</span>
+                </button>
+              </div>
+            `
+          : nothing}
         <button
           class=${`flex items-center justify-center gap-1 px-2 py-1 text-xs rounded ${
             this.flipDirection ? 'bg-gray-200 text-gray-800' : 'text-textWeak  hover:bg-gray-100'
@@ -776,10 +781,11 @@ export class LogList extends LitElement {
           @click=${() => {
             this.flipDirection = !this.flipDirection
             if (this.source === 'spans') {
-              this.spanListTree = this.buildSpanListTree(this.spanListTree.map(span => span.data))
+              this.spanListTree = this.buildSpanListTree(this.spanListTree.map(span => span.data).reverse())
             } else {
-              this.logsData = this.flipDirection ? this.logsData.reverse() : this.logsData
+              this.logsData = this.logsData.reverse()
             }
+            this.requestUpdate()
           }}
         >
           ${faSprite('arrow-up-down', 'regular', 'h-4 w-4')}
@@ -1092,6 +1098,7 @@ function groupSpans(data, colIdxMap, expandedTraces, flipDirection) {
     startTime: trace.minStart,
     duration: trace.duration,
   }))
+
   if (flipDirection) {
     result.reverse()
   }
