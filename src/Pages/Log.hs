@@ -26,6 +26,8 @@ import Lucid.Aria qualified as Aria
 import Lucid.Base (TermRaw (termRaw))
 import Lucid.Htmx
 import Lucid.Hyperscript (__)
+import Models.Apis.Fields.Facets qualified as Facets
+import Models.Apis.Fields.Types (FacetData (..), FacetSummary (..), FacetValue (..))
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Telemetry qualified as Telemetry
@@ -47,6 +49,85 @@ import Utils
 -- >>> import Data.Vector qualified as Vector
 -- >>> import Data.Aeson.QQ (aesonQQ)
 -- >>> import Data.Aeson
+
+
+-- | Render facet data for Log Explorer sidebar in a compact format
+renderFacets :: FacetSummary -> Html ()
+renderFacets facetSummary = do
+  let (FacetData facetMap) = facetSummary.facetJson
+
+      -- Define display info for different facet types
+      facetDisplays :: [(Text, Text, (Text -> Text))]
+      facetDisplays =
+        [ ("attributes___http___response___status_code", "Status Code", statusColorFn)
+        , ("attributes___http___request___method", "HTTP Method", methodColorFn)
+        , ("resource___service___name", "Service", const "")
+        , ("level", "Log Level", levelColorFn)
+        , ("kind", "Span Kind", const "")
+        , ("attributes___error___type", "Error Type", const "bg-red-500")
+        ]
+
+      -- Color functions for different facet types
+      statusColorFn val = case T.take 1 val of
+        "2" -> "bg-green-500"
+        "3" -> "bg-blue-500"
+        "4" -> "bg-yellow-500"
+        "5" -> "bg-red-600"
+        _ -> "bg-gray-500"
+
+      methodColorFn val = case val of
+        "GET" -> "bg-[#067cff]"
+        "POST" -> "bg-green-500"
+        "PUT" -> "bg-amber-500"
+        "DELETE" -> "bg-red-500"
+        _ -> "bg-purple-500"
+
+      levelColorFn val = case val of
+        "ERROR" -> "bg-red-500"
+        "WARN" -> "bg-yellow-500"
+        "INFO" -> "bg-blue-500"
+        "DEBUG" -> "bg-gray-500"
+        _ -> "bg-gray-400"
+
+  -- Add JS for filtering
+  script_
+    [text|
+    function filterByFacet(field, value) {
+      document.getElementById("filterElement").handleAddQuery({
+        "tag": "Eq",
+        "contents": [field, value]
+      });
+    }
+  |]
+
+  -- Render each facet group
+  forM_ facetDisplays $ \(key, displayName, colorFn) -> do
+    whenJust (HM.lookup key facetMap) $ \values -> do
+      when (not $ null values) $ do
+        div_ [class_ "facet-section flex flex-col gap-1.5 py-3"] do
+          div_ [class_ "flex justify-between items-center text-slate-950 pb-2"] $
+            span_ [class_ "facet-title"] (toHtml displayName) >> faSprite_ "chevron-down" "regular" "w-3 h-3"
+
+          -- Render each facet value
+          forM_ values \(FacetValue val count) -> do
+            div_ [class_ "facet-item flex justify-between items-center"] do
+              label_ [class_ "flex gap-1.5 items-center text-slate-950"] $ do
+                input_
+                  [ type_ "checkbox"
+                  , class_ "checkbox checkbox-sm"
+                  , -- Convert key format for filter (from db___ format to proper dot notation)
+                    onclick_ $ "filterByFacet('" <> formatFieldPath key <> "', '" <> val <> "')"
+                  ]
+                let colorClass = colorFn val
+                when (not $ T.null colorClass) $
+                  span_ [class_ $ colorClass <> " shrink-0 w-1 h-5 rounded-sm"] " "
+                span_ [class_ "facet-value"] $ toHtml val
+              span_ [class_ "facet-count"] $ toHtml $ show count
+
+
+-- | Convert field path from database style (___) to query style (.)
+formatFieldPath :: Text -> Text
+formatFieldPath = T.replace "___" "."
 
 
 keepNonEmpty :: Maybe Text -> Maybe Text
@@ -91,6 +172,8 @@ apiLogH pid queryM queryASTM cols' cursorM' sinceM fromM toM layoutM sourceM tar
   let tableAsVecM = hush tableAsVecE
 
   (queryLibRecent, queryLibSaved) <- V.partition (\x -> Projects.QLTHistory == (x.queryType)) <$> Projects.queryLibHistoryForUser pid sess.persistentSession.userId
+
+  facetSummary <- Facets.getFacetSummary pid "otel_logs_and_spans" now
 
   freeTierExceeded <-
     dbtToEff $
@@ -175,6 +258,7 @@ apiLogH pid queryM queryASTM cols' cursorM' sinceM fromM toM layoutM sourceM tar
               , detailsWidth = detailWM
               , targetEvent = targetEventM
               , showTrace = showTraceM
+              , facets = facetSummary
               }
       case (layoutM, hxRequestM, hxBoostedM) of
         (Just "SaveQuery", _, _) -> addRespHeaders $ LogsQueryLibrary pid queryLibSaved queryLibRecent
@@ -442,6 +526,7 @@ data ApiLogsPageData = ApiLogsPageData
   , detailsWidth :: Maybe Text
   , targetEvent :: Maybe Text
   , showTrace :: Maybe Text
+  , facets :: Maybe Models.Apis.Fields.Types.FacetSummary
   }
 
 
@@ -493,7 +578,7 @@ virtualTable page = do
 
 apiLogsPage :: ApiLogsPageData -> Html ()
 apiLogsPage page = do
-  section_ [class_ "mx-auto pt-2 px-6 gap-3.5 w-full flex flex-col h-full overflow-hidden pb-2  group/pg", id_ "apiLogsPage"] do
+  section_ [class_ "mx-auto pt-2 px-6 gap-3.5 w-full flex flex-col h-full overflow-hidden pb-2 group/pg", id_ "apiLogsPage"] do
     template_ [id_ "loader-tmp"] $ span_ [class_ "loading loading-dots loading-md"] ""
     when page.exceededFreeTier $ freeTierLimitExceededBanner page.pid.toText
     div_
@@ -535,7 +620,7 @@ apiLogsPage page = do
                   Just
                     [text|
                         SELECT timeB, value, quantile
-                              FROM ( SELECT extract(epoch from time_bucket('1h', created_at))::integer AS timeB,
+                              FROM ( SELECT extract(epoch from time_bucket('1h', timestamp))::integer AS timeB,
                                       ARRAY[
                                         (approx_percentile(0.50, percentile_agg(duration)) / 1000000.0)::float,
                                         (approx_percentile(0.75, percentile_agg(duration)) / 1000000.0)::float,
@@ -544,8 +629,8 @@ apiLogsPage page = do
                                       ] AS values,
                                       ARRAY['p50', 'p75', 'p90', 'p95'] AS quantiles
                                 FROM otel_logs_and_spans
-                                WHERE project_id='{{project_id}}'::uuid
-                                  {{time_filter_sql_created_at}} {{query_ast_filters}}
+                                WHERE project_id='{{project_id}}'
+                                  {{time_filter}} {{query_ast_filters}}
                                 GROUP BY timeB
                               ) s,
                             LATERAL unnest(s.values, s.quantiles) AS u(value, quantile);
@@ -556,25 +641,23 @@ apiLogsPage page = do
               }
 
     div_ [class_ "flex h-full gap-3.5 overflow-hidden"] do
-      div_ [class_ "w-1/6 shrink-0 flex flex-col gap-2 p-2 hidden  group-has-[.toggle-filters:checked]/pg:hidden "] do
-        input_ [placeholder_ "Search filter", class_ "rounded-lg shadow-sm px-3 py-1 border border-strokeStrong"]
-        div_ [class_ "divide-y gap-3"] do
-          div_ [class_ "flex flex-col gap-1.5 py-3"] do
-            div_ [class_ "flex justify-between items-center text-slate-950 pb-2"] $ span_ "Status" >> faSprite_ "chevron-down" "regular" "w-3 h-3"
-            div_ [class_ "flex justify-between items-center"] do
-              div_ [class_ "flex gap-1.5 items-center text-slate-950"] $ input_ [type_ "checkbox", class_ "checkbox "] >> span_ [class_ "bg-green-500 shrink-0 w-1 h-5 rounded-sm"] " " >> span_ [] "200"
-              span_ "19,833"
-            div_ [class_ "flex justify-between items-center"] do
-              div_ [class_ "flex gap-1.5 items-center  text-slate-950"] $ input_ [type_ "checkbox", class_ "checkbox "] >> span_ [class_ "bg-red-600 shrink-0 w-1 h-5 rounded-sm"] " " >> span_ [] "200"
-              span_ "121"
-          div_ [class_ "flex flex-col gap-1.5 py-3"] do
-            div_ [class_ "flex justify-between items-center text-slate-950 pb-2"] $ span_ "Methods" >> faSprite_ "chevron-down" "regular" "w-3 h-3"
-            div_ [class_ "flex justify-between"] do
-              div_ [class_ "flex gap-1.5 items-center  text-slate-950"] $ input_ [type_ "checkbox", class_ "checkbox "] >> span_ [class_ "bg-[#067cff] shrink-0 w-1 h-5 rounded-sm"] " " >> span_ [] "GET"
-              span_ "8,675"
-            div_ [class_ "flex justify-between"] do
-              div_ [class_ "flex gap-1.5 items-center  text-slate-950"] $ input_ [type_ "checkbox", class_ "checkbox "] >> span_ [class_ "text-green-500 shrink-0 w-1 h-5 rounded-sm"] " " >> span_ [] "POST"
-              span_ "4,459"
+      -- FACETS
+      div_ [class_ "w-1/6 text-sm shrink-0 flex flex-col gap-2 p-2 group-has-[.toggle-filters:checked]/pg:hidden "] do
+        input_
+          [ placeholder_ "Search facets..."
+          , class_ "rounded-lg shadow-sm px-3 py-1 border border-strokeStrong"
+          , term "data-filterParent" "facets-container"
+          , [__| on keyup 
+                if the event's key is 'Escape' 
+                  set my value to '' 
+                  trigger keyup 
+                else 
+                  show <div.facet-section/> in #{@data-filterParent} when its textContent.toLowerCase() contains my value.toLowerCase()
+                  show <div.facet-item/> in #{@data-filterParent} when its textContent.toLowerCase() contains my value.toLowerCase()
+              |]
+          ]
+        div_ [class_ "divide-y gap-3", id_ "facets-container"] do
+          whenJust page.facets renderFacets
 
       div_ [class_ "grow flex-1 h-full space-y-1.5 overflow-hidden"] do
         div_ [class_ "flex w-full relative h-full", id_ "logs_section_container"] do

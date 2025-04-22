@@ -48,6 +48,7 @@ library
       Models.Apis.Anomalies
       Models.Apis.Endpoints
       Models.Apis.Fields
+      Models.Apis.Fields.Facets
       Models.Apis.Fields.Query
       Models.Apis.Fields.Types
       Models.Apis.Formats

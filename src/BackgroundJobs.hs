@@ -1,4 +1,4 @@
-module BackgroundJobs (jobsWorkerInit, jobsRunner, BgJobs (..)) where
+module BackgroundJobs (jobsWorkerInit, jobsRunner, BgJobs (..), generateOtelFacets) where
 
 import Control.Lens ((.~))
 import Data.Aeson ((.=))
@@ -6,6 +6,7 @@ import Data.Aeson qualified as AE
 import Data.Aeson.Encoding qualified as AE
 import Data.Aeson.QQ (aesonQQ)
 import Data.CaseInsensitive qualified as CI
+import Data.Effectful.UUID qualified as UUID
 import Data.List (intersect, union)
 import Data.Pool (withResource)
 import Data.Text qualified as T
@@ -18,12 +19,15 @@ import Database.PostgreSQL.Entity.DBT (QueryNature (Select, Update), execute, qu
 import Database.PostgreSQL.Simple (Only (Only))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Transact (DBT)
-import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
+import Effectful (Eff, (:>))
+import Effectful.Log (Log)
+import Effectful.PostgreSQL.Transact.Effect (DB, dbtToEff)
 import Effectful.Reader.Static (ask)
 import Effectful.Time qualified as Time
 import Log qualified
 import Models.Apis.Anomalies qualified as Anomalies
 import Models.Apis.Endpoints qualified as Endpoints
+import Models.Apis.Fields.Facets qualified as Facets
 import Models.Apis.Fields.Query qualified as FieldsQ
 import Models.Apis.Fields.Types qualified as Fields
 import Models.Apis.Formats qualified as Formats
@@ -66,8 +70,10 @@ data BgJobs
   | DailyReports Projects.ProjectId
   | WeeklyReports Projects.ProjectId
   | DailyJob
+  | HourlyJob
   | GenSwagger Projects.ProjectId Users.UserId Text
   | ReportUsage Projects.ProjectId
+  | GenerateOtelFacets Projects.ProjectId
   | QueryMonitorsTriggered (V.Vector Monitors.QueryMonitorId)
   | RunCollectionTests Testing.CollectionId
   | DeletedProject Projects.ProjectId
@@ -93,6 +99,7 @@ jobsRunner logger authCtx job = when authCtx.config.enableBackgroundJobs $ do
   bgJob <- throwParsePayload job
   void $ runBackground logger authCtx do
     case bgJob of
+      GenerateOtelFacets pid -> generateOtelFacets pid
       QueryMonitorsTriggered queryMonitorIds -> queryMonitorsTriggered queryMonitorIds
       NewAnomaly{projectId, createdAt, anomalyType, anomalyAction, targetHashes} -> newAnomalyJob projectId createdAt anomalyType anomalyAction (V.fromList targetHashes)
       InviteUserToProject userId projectId reciever projectTitle' -> do
@@ -154,17 +161,21 @@ jobsRunner logger authCtx job = when authCtx.config.enableBackgroundJobs $ do
             sendPostmarkEmail userEmail (Just ("project-deleted", templateVars)) Nothing
       DailyJob -> do
         currentDay <- utctDay <$> Time.currentTime
+
+        -- Schedule all 24 hourly jobs in one batch
+        liftIO $ withResource authCtx.jobsPool \conn -> do
+          forM_ [0 .. 23] \_ -> createJob conn "background_jobs" BackgroundJobs.HourlyJob
+
+        -- Handle regular daily jobs for each project
         projects <- dbtToEff $ query Select [sql|SELECT id FROM projects.projects WHERE active=? AND deleted_at IS NULL and payment_plan != 'ONBOARDING'|] (Only True)
         forM_ projects \p -> do
           liftIO $ withResource authCtx.jobsPool \conn -> do
-            _ <-
-              if dayOfWeek currentDay == Monday
-                then do
-                  _ <- createJob conn "background_jobs" $ BackgroundJobs.WeeklyReports p
-                  pass
-                else pass
-            _ <- createJob conn "background_jobs" $ BackgroundJobs.ReportUsage p
-            pass
+            when (dayOfWeek currentDay == Monday) $
+              void $
+                createJob conn "background_jobs" $
+                  BackgroundJobs.WeeklyReports p
+            createJob conn "background_jobs" $ BackgroundJobs.ReportUsage p
+      HourlyJob -> runHourlyJob
       DailyReports pid -> dailyReportForProject pid
       WeeklyReports pid -> weeklyReportForProject pid
       GenSwagger pid uid host -> generateSwaggerForProject pid uid host
@@ -202,6 +213,46 @@ jobsRunner logger authCtx job = when authCtx.config.enableBackgroundJobs $ do
         -- whenJust collectionM \collection -> do
         --   _ <- sendTestFailedAlert pid col_id collection stepResult
         pass
+
+
+-- | Run hourly scheduled tasks for all projects
+runHourlyJob :: ATBackgroundCtx ()
+runHourlyJob = do
+  ctx <- ask @Config.AuthContext
+  Log.logInfo "Running hourly job" ()
+
+  -- Get current time and all active projects
+  now <- Time.currentTime
+  projects <- dbtToEff $ query Select [sql|SELECT id FROM projects.projects WHERE active=? AND deleted_at IS NULL|] (Only True)
+
+  -- For each project, schedule facet generation (all in one connection)
+  liftIO $ withResource ctx.jobsPool \conn ->
+    forM_ projects \pid -> createJob conn "background_jobs" $ BackgroundJobs.GenerateOtelFacets pid
+
+  Log.logInfo "Completed hourly job scheduling" ()
+
+
+-- | Generate facets for OTLP logs and spans for a specific project
+generateOtelFacets :: (DB :> es, Log :> es, UUID.UUIDEff :> es, Time.Time :> es) => Projects.ProjectId -> Eff es ()
+generateOtelFacets pid = do
+  -- Define the columns to generate facets for
+  let otelColumns =
+        [ "resource___service___name"
+        , "resource___service___version"
+        , "attributes___http___request___method"
+        , "attributes___http___response___status_code"
+        , "attributes___db___system___name"
+        , "attributes___error___type"
+        , "attributes___user___id"
+        , "attributes___session___id"
+        , "level"
+        , "kind"
+        , "status_code"
+        ]
+  -- Generate facets for the otel_logs_and_spans table (using current hour)
+  _ <- Facets.generateAndSaveFacets pid "otel_logs_and_spans" otelColumns 10
+
+  Log.logInfo "Completed OTLP facets generation for project" pid
 
 
 generateSwaggerForProject :: Projects.ProjectId -> Users.UserId -> Text -> ATBackgroundCtx ()
@@ -304,8 +355,8 @@ handleQueryMonitorThreshold monitorE isAlert = do
 
 jobsWorkerInit :: Log.Logger -> Config.AuthContext -> IO ()
 jobsWorkerInit logger appCtx =
-  startJobRunner
-    $ mkConfig jobLogger "background_jobs" appCtx.jobsPool (MaxConcurrentJobs 1) (jobsRunner logger appCtx) id
+  startJobRunner $
+    mkConfig jobLogger "background_jobs" appCtx.jobsPool (MaxConcurrentJobs 1) (jobsRunner logger appCtx) id
   where
     jobLogger :: LogLevel -> LogEvent -> IO ()
     jobLogger logLevel logEvent = Log.runLogT "OddJobs" logger Log.LogAttention $ Log.logInfo "Background jobs ping." (show @Text logLevel, show @Text logEvent) -- logger show (logLevel, logEvent)
@@ -586,9 +637,9 @@ We have detected a new endpoint on *{project.title}*
       errs <- dbtToEff $ Anomalies.errorsByHashes pid targetHashes
       issueId <- liftIO $ Anomalies.AnomalyId <$> UUIDV4.nextRandom
       _ <-
-        dbtToEff
-          $ Anomalies.insertIssues
-          $ ( \err ->
+        dbtToEff $
+          Anomalies.insertIssues $
+            ( \err ->
                 Anomalies.Issue
                   { id = issueId
                   , createdAt = err.createdAt
@@ -603,7 +654,7 @@ We have detected a new endpoint on *{project.title}*
                   , archivedAt = Nothing
                   }
             )
-          <$> errs
+              <$> errs
 
       forM_ project.notificationsChannel \case
         Projects.NSlack ->

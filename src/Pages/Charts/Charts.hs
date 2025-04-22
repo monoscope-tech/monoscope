@@ -4,7 +4,9 @@
 
 module Pages.Charts.Charts (queryMetrics, MetricsData (..), MetricsStats (..), DataType (..)) where
 
+import Control.Exception.Annotated (checkpoint)
 import Data.Aeson qualified as AE
+import Data.Annotation (toAnnotation)
 import Data.Default
 import Data.List (maximum)
 import Data.Map.Strict qualified as M
@@ -51,8 +53,8 @@ pivot' rows
       let extractHeaders vec = V.uniq . V.map thd3 . V.modify (\mvec -> VA.sortBy (comparing thd3) mvec) $ vec
           headers = extractHeaders rows
           grouped =
-            V.groupBy (\a b -> fst3 a == fst3 b)
-              $ V.modify (\mvec -> VA.sortBy (comparing fst3) mvec) rows
+            V.groupBy (\a b -> fst3 a == fst3 b) $
+              V.modify (\mvec -> VA.sortBy (comparing fst3) mvec) rows
           ngrouped = map (transform headers) grouped
           totalSum = V.sum $ V.map snd3 rows
 
@@ -103,8 +105,8 @@ statsTriple v
         else maximum $ M.elems timestampMap
 
     mode =
-      fst
-        $ M.foldlWithKey'
+      fst $
+        M.foldlWithKey'
           ( \acc@(_, cnt') k c ->
               if c > cnt' then (k, c) else acc
           )
@@ -203,14 +205,14 @@ queryMetrics (maybeToMonoid -> respDataType) pidM (nonNull -> queryM) (nonNull -
           }
   case respDataType of
     DTFloat -> do
-      chartData <- dbtToEff $ DBT.queryOne_ (Query $ encodeUtf8 sqlQuery)
+      chartData <- checkpoint (toAnnotation sqlQuery) $ dbtToEff $ DBT.queryOne_ (Query $ encodeUtf8 sqlQuery)
       pure
         baseMetricsData
           { dataFloat = chartData <&> \(Only v) -> v
           , rowsCount = 1
           }
     DTMetric -> do
-      chartData <- dbtToEff $ DBT.query_ (Query $ encodeUtf8 sqlQuery)
+      chartData <- checkpoint (toAnnotation sqlQuery) $ dbtToEff $ DBT.query_ (Query $ encodeUtf8 sqlQuery)
       let chartsDataV = V.fromList chartData
       let (hdrs, groupedData, rowsCount, rpm) = pivot' chartsDataV
       pure
@@ -222,14 +224,14 @@ queryMetrics (maybeToMonoid -> respDataType) pidM (nonNull -> queryM) (nonNull -
           , stats = Just $ statsTriple chartsDataV
           }
     DTText -> do
-      chartData <- dbtToEff $ DBT.query_ (Query $ encodeUtf8 sqlQuery)
+      chartData <- checkpoint (toAnnotation sqlQuery) $ dbtToEff $ DBT.query_ (Query $ encodeUtf8 sqlQuery)
       pure
         baseMetricsData
           { dataText = V.fromList chartData
           , rowsCount = fromIntegral $ length chartData
           }
     DTJson -> do
-      chartData <- dbtToEff $ DBT.query_ (Query $ encodeUtf8 sqlQuery)
+      chartData <- checkpoint (toAnnotation sqlQuery) $ dbtToEff $ DBT.query_ (Query $ encodeUtf8 sqlQuery)
       pure
         baseMetricsData
           { dataJSON = V.fromList chartData
