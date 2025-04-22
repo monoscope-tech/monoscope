@@ -321,7 +321,7 @@ defaultSelectSqlQuery (Just SSpans) =
   , "CAST(EXTRACT(EPOCH FROM (start_time)) * 1_000_000_000 AS BIGINT) as start_time_ns"
   , "EXISTS(SELECT 1 FROM jsonb_array_elements(events) elem  WHERE elem->>'event_name' = 'exception') as errors"
   , [fmt|jsonb_build_object(
-          'method', COALESCE(attributes->'http'->>'method', attributes___http___request___method'),
+          'method', COALESCE(attributes->'http'->>'method', attributes___http___request___method),
           'url', COALESCE(attributes->'http'->'route', attributes->'url'->'path', attributes->'http'->'target', attributes->'http'->'url'),
           'status_code', COALESCE(attributes->'http'->'status_code', attributes->'http'->'response'->'status_code')
           ) as http_attributes |]

@@ -25,7 +25,9 @@ module Models.Apis.RequestDumps (
 where
 
 import Control.Error.Util (hush)
+import Control.Exception.Annotated (checkpoint)
 import Data.Aeson qualified as AE
+import Data.Annotation (toAnnotation)
 import Data.Default
 import Data.Default.Instances ()
 import Data.Text qualified as T
@@ -423,7 +425,7 @@ selectLogTable :: (DB :> es, Time.Time :> es) => Projects.ProjectId -> [Section]
 selectLogTable pid queryAST cursorM dateRange projectedColsByUser source targetSpansM = do
   now <- Time.currentTime
   let (q, queryComponents) = queryASTToComponents ((defSqlQueryCfg pid now source targetSpansM){cursorM, dateRange, projectedColsByUser, source, targetSpansM}) queryAST
-  logItems <- queryToValues q
+  logItems <- checkpoint (toAnnotation ("selectLogTable", q)) $ queryToValues q
   Only c <- fromMaybe (Only 0) <$> queryCount queryComponents.countQuery
   let logItemsV = V.mapMaybe valueToVector logItems
   pure $ Right (logItemsV, queryComponents.toColNames, c)
