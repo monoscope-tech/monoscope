@@ -105,9 +105,11 @@ renderFacets facetSummary = do
     whenJust (HM.lookup key facetMap) $ \values -> do
       when (not $ null values) $ do
         div_ [class_ "facet-section flex flex-col gap-1.5 py-3 transition-all duration-200 hover:bg-fillWeaker rounded-lg group"] do
-          div_ [class_ "flex justify-between items-center text-slate-950 pb-2 cursor-pointer", 
-                [__|on click toggle .collapsed on me.parentElement|]] $
-            span_ [class_ "facet-title"] (toHtml displayName) >> faSprite_ "chevron-down" "regular" "w-3 h-3 transition-transform duration-200 group-[.collapsed]:rotate-180"
+          div_
+            [ class_ "flex justify-between items-center text-slate-950 pb-2 cursor-pointer"
+            , [__|on click toggle .collapsed on me.parentElement|]
+            ]
+            $ span_ [class_ "facet-title"] (toHtml displayName) >> faSprite_ "chevron-down" "regular" "w-3 h-3 transition-transform duration-200 group-[.collapsed]:rotate-180"
 
           -- Wrap facet values in a collapsible container with animation
           div_ [class_ "facet-content overflow-hidden transition-all duration-300 ease-in-out max-h-96 opacity-100 transition-opacity duration-150 group-[.collapsed]:max-h-0 group-[.collapsed]:opacity-0 group-[.collapsed]:py-0"] do
@@ -119,18 +121,13 @@ renderFacets facetSummary = do
                     [ type_ "checkbox"
                     , class_ "checkbox checkbox-sm"
                     , -- Convert key format for filter (from db___ format to proper dot notation)
-                      onclick_ $ "filterByFacet('" <> formatFieldPath key <> "', '" <> val <> "')"
+                      onclick_ $ "filterByFacet('" <> T.replace "___" "." key <> "', '" <> val <> "')"
                     ]
                   let colorClass = colorFn val
                   when (not $ T.null colorClass) $
                     span_ [class_ $ colorClass <> " shrink-0 w-1 h-5 rounded-sm"] " "
-                  span_ [class_ "facet-value"] $ toHtml val
-                span_ [class_ "facet-count text-slate-500"] $ toHtml $ show count
-
-
--- | Convert field path from database style (___) to query style (.)
-formatFieldPath :: Text -> Text
-formatFieldPath = T.replace "___" "."
+                  span_ [class_ "facet-value truncate max-w-[80%]", term "data-tippy-content" val] $ toHtml val
+                span_ [class_ "facet-count text-slate-500 shrink-0 ml-1"] $ toHtml $ show count
 
 
 keepNonEmpty :: Maybe Text -> Maybe Text

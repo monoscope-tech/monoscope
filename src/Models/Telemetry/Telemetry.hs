@@ -89,12 +89,23 @@ import System.Config (AuthContext (..))
 import Utils (lookupValueText, toXXHash)
 
 
+-- Helper function to get nested value from a map using dot notation
+getNestedValue :: [Text] -> Map Text AE.Value -> Maybe AE.Value
+getNestedValue [] _ = Nothing
+getNestedValue [k] m = Map.lookup k m
+getNestedValue (k : ks) m = do
+  v <- Map.lookup k m
+  case v of
+    AE.Object obj -> getNestedValue ks (KEM.toMapText obj)
+    _ -> Nothing
+
+
 -- Lens-like access helpers for Map Text AE.Value fields
 atMapText :: Text -> Maybe (Map Text AE.Value) -> Maybe Text
 atMapText key maybeMap = do
   m <- maybeMap
-  v <- Map.lookup key m
-  case v of
+  val <- getNestedValue (T.split (== '.') key) m
+  case val of
     AE.String t -> Just t
     AE.Number n -> Just $ T.pack $ show n
     _ -> Nothing
@@ -103,8 +114,8 @@ atMapText key maybeMap = do
 atMapInt :: Text -> Maybe (Map Text AE.Value) -> Maybe Int
 atMapInt key maybeMap = do
   m <- maybeMap
-  v <- Map.lookup key m
-  case v of
+  val <- getNestedValue (T.split (== '.') key) m
+  case val of
     AE.Number n -> Just $ round n
     AE.String t -> readMaybe $ T.unpack t
     _ -> Nothing
@@ -987,8 +998,8 @@ extractATError spanObj (AE.Object o) = do
       asText (AE.String t) = Just t
       asText _ = Nothing
 
-  return
-    $ RequestDumps.ATError
+  return $
+    RequestDumps.ATError
       { projectId = UUID.fromText spanObj.project_id >>= (\uid -> Just Projects.ProjectId{unProjectId = uid})
       , when = spanObj.timestamp
       , errorType = typ
