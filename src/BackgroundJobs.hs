@@ -44,7 +44,7 @@ import Models.Users.Users qualified as Users
 import NeatInterpolation (trimming)
 import Network.Wreq (defaults, header, postWith)
 import OddJobs.ConfigBuilder (mkConfig)
-import OddJobs.Job (ConcurrencyControl (..), Job (..), LogEvent, LogLevel, createJob, startJobRunner, throwParsePayload)
+import OddJobs.Job (ConcurrencyControl (..), Job (..), LogEvent, LogLevel, createJob, scheduleJob, startJobRunner, throwParsePayload)
 import Pages.Reports qualified as RP
 import Pages.Specification.GenerateSwagger (generateSwagger)
 import Pkg.Mail (sendDiscordNotif, sendPostmarkEmail, sendSlackMessage)
@@ -70,7 +70,7 @@ data BgJobs
   | DailyReports Projects.ProjectId
   | WeeklyReports Projects.ProjectId
   | DailyJob
-  | HourlyJob
+  | HourlyJob UTCTime Int
   | GenSwagger Projects.ProjectId Users.UserId Text
   | ReportUsage Projects.ProjectId
   | GenerateOtelFacets Projects.ProjectId
@@ -161,10 +161,14 @@ jobsRunner logger authCtx job = when authCtx.config.enableBackgroundJobs $ do
             sendPostmarkEmail userEmail (Just ("project-deleted", templateVars)) Nothing
       DailyJob -> do
         currentDay <- utctDay <$> Time.currentTime
+        currentTime <- Time.currentTime
 
         -- Schedule all 24 hourly jobs in one batch
         liftIO $ withResource authCtx.jobsPool \conn -> do
-          forM_ [0 .. 23] \_ -> createJob conn "background_jobs" BackgroundJobs.HourlyJob
+          forM_ [0 .. 23] \hour -> do
+            -- Schedule each hourly job to run at the appropriate hour
+            let scheduledTime = addUTCTime (fromIntegral $ hour * 3600) currentTime
+            scheduleJob conn "background_jobs" (BackgroundJobs.HourlyJob scheduledTime hour) scheduledTime
 
         -- Handle regular daily jobs for each project
         projects <- dbtToEff $ query Select [sql|SELECT id FROM projects.projects WHERE active=? AND deleted_at IS NULL and payment_plan != 'ONBOARDING'|] (Only True)
@@ -175,7 +179,7 @@ jobsRunner logger authCtx job = when authCtx.config.enableBackgroundJobs $ do
               $ createJob conn "background_jobs"
               $ BackgroundJobs.WeeklyReports p
             createJob conn "background_jobs" $ BackgroundJobs.ReportUsage p
-      HourlyJob -> runHourlyJob
+      HourlyJob scheduledTime hour -> runHourlyJob scheduledTime hour
       DailyReports pid -> dailyReportForProject pid
       WeeklyReports pid -> weeklyReportForProject pid
       GenSwagger pid uid host -> generateSwaggerForProject pid uid host
@@ -216,10 +220,10 @@ jobsRunner logger authCtx job = when authCtx.config.enableBackgroundJobs $ do
 
 
 -- | Run hourly scheduled tasks for all projects
-runHourlyJob :: ATBackgroundCtx ()
-runHourlyJob = do
+runHourlyJob :: UTCTime -> Int -> ATBackgroundCtx ()
+runHourlyJob scheduledTime hour = do
   ctx <- ask @Config.AuthContext
-  Log.logInfo "Running hourly job" ()
+  Log.logInfo "Running hourly job for hour" hour
 
   -- Get current time and all active projects
   now <- Time.currentTime
@@ -229,7 +233,7 @@ runHourlyJob = do
   liftIO $ withResource ctx.jobsPool \conn ->
     forM_ projects \pid -> createJob conn "background_jobs" $ BackgroundJobs.GenerateOtelFacets pid
 
-  Log.logInfo "Completed hourly job scheduling" ()
+  Log.logInfo "Completed hourly job scheduling for hour" hour
 
 
 -- | Generate facets for OTLP logs and spans for a specific project
