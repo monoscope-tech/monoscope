@@ -238,7 +238,7 @@ jsonValueToHtmlTree val = do
   div_ [class_ "p-2 rounded-lg bg-fillWeaker border w-full overflow-x-auto json-tree-container"] do
     div_ [class_ "w-full flex items-center gap-4 text-xs mb-2"] do
       button_
-        [ class_ "flex items-center gap-1 cursor-pointer expand_all"
+        [ class_ "flex hidden items-center gap-1 cursor-pointer"
         , [__|on click
                set container to the closest .json-tree-container to the parentElement of me
                set items to container.querySelectorAll(".log-item-with-children")
@@ -252,7 +252,7 @@ jsonValueToHtmlTree val = do
           span_ [class_ "underline"] "Expand all"
           faSprite_ "expand" "regular" "w-2 h-2"
       button_
-        [ class_ "flex hidden items-center gap-1 cursor-pointer collpase_all"
+        [ class_ "flex items-center gap-1 cursor-pointer"
         , [__| on click
                set container to the closest .json-tree-container to the parentElement of me
                set items to container.querySelectorAll(".log-item-with-children")
@@ -311,7 +311,7 @@ jsonValueToHtmlTree val = do
             span_ [class_ "text-blue-800 ml-2.5 log-item-field-value", term "data-field-path" fullFieldPath'] $ toHtml $ unwrapJsonPrimValue False value
 
     renderParentType :: Text -> Text -> Text -> Int -> Html () -> Html ()
-    renderParentType opening closing key count child = div_ [class_ (if key == "" then "log-item-with-children" else "log-item-with-children collapsed")] do
+    renderParentType opening closing key count child = div_ [class_ (if key == "" then "log-item-with-children" else "log-item-with-children")] do
       a_
         [ class_ "inline-block items-center cursor-pointer"
         , onclick_ "this.parentNode.classList.toggle('collapsed')"

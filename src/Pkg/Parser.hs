@@ -310,7 +310,7 @@ defaultSelectSqlQuery (Just SSpans) =
   , timestampLogFmt "timestamp"
   , "context___trace_id as trace_id"
   , "kind"
-  , "status_message as status"
+  , "status_code as status"
   , "name as span_name"
   , "duration"
   , "body"
@@ -323,7 +323,7 @@ defaultSelectSqlQuery (Just SSpans) =
   , [fmt|jsonb_build_object(
           'method', COALESCE(attributes->'http'->>'method', attributes___http___request___method),
           'url', COALESCE(attributes->'http'->>'route', attributes->'url'->>'path', attributes->'http'->>'target', attributes->'http'->>'url'),
-          'status_code', COALESCE(attributes->'http'->>'status_code', attributes->'http'->'response'->>'status_code', status_code::text)
+          'status_code', COALESCE(attributes->'http'->>'status_code', attributes->'http'->'response'->>'status_code')
           ) as http_attributes |]
   , [fmt| jsonb_build_object('system', attributes->'db'->'system','statement', coalesce(attributes->'db'->'query'->'text', attributes->'db'->'statement')) as db_attributes  |]
   , [fmt|LEFT(
