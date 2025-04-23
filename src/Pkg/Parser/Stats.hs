@@ -43,7 +43,7 @@ newtype Rollup = Rollup Text
   deriving anyclass (AE.FromJSON, AE.ToJSON)
 
 
-data Sources = SRequests | SSpans | SMetrics
+data Sources = SSpans | SMetrics
   deriving stock (Show, Generic, Eq)
   deriving anyclass (AE.FromJSON, AE.ToJSON)
 
@@ -291,20 +291,17 @@ pSection = do
 pSource :: Parser Sources
 pSource =
   choice @[]
-    [ SRequests <$ string "requests"
-    , SSpans <$ string "spans"
+    [ SSpans <$ string "spans"
     , SMetrics <$ string "metrics"
     ]
 
 
 instance ToQueryText Sources where
-  toQText SRequests = "requests"
   toQText SSpans = "spans"
   toQText SMetrics = "metrics"
 
 
 instance Display Sources where
-  displayPrec prec SRequests = "apis.request_dumps"
   displayPrec prec SSpans = "otel_logs_and_spans"
   displayPrec prec SMetrics = "telemetry.metrics"
 

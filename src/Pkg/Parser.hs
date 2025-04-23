@@ -304,7 +304,7 @@ timestampLogFmt colName = [fmt|to_char({colName} AT TIME ZONE 'UTC', 'YYYY-MM-DD
 
 defaultSelectSqlQuery :: Maybe Sources -> [Text]
 defaultSelectSqlQuery (Just SMetrics) = ["id"]
-defaultSelectSqlQuery Nothing = defaultSelectSqlQuery (Just SRequests)
+defaultSelectSqlQuery Nothing = defaultSelectSqlQuery (Just SSpans)
 defaultSelectSqlQuery (Just SSpans) =
   [ "id"
   , timestampLogFmt "timestamp"
@@ -331,25 +331,6 @@ defaultSelectSqlQuery (Just SSpans) =
             COALESCE(attributes::text, '')
         ),
         500
-    ) as rest|]
-  ]
-defaultSelectSqlQuery (Just SRequests) =
-  [ "id::text as id"
-  , timestampLogFmt "created_at"
-  , "duration_ns as duration"
-  , "request_type"
-  , "host"
-  , "status_code"
-  , "method"
-  , "url_path"
-  , "JSONB_ARRAY_LENGTH(errors) as errors_count"
-  , [fmt|LEFT(
-        CONCAT(
-            'url=', COALESCE(raw_url, 'null'),
-            ' response_body=', COALESCE(response_body, 'null'),
-            ' request_body=', COALESCE(request_body, 'null')
-        ),
-        255
     ) as rest|]
   ]
 
