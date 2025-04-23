@@ -143,9 +143,9 @@ processMessages msgs attrs = do
         trId <- UUID.toText <$> UUID.genUUID
         pure $ convertRequestMessageToSpan msg (spanId, trId)
       let spanVec = V.fromList spans
-      unless (V.null spanVec)
-        $ void
-        $ Telemetry.bulkInsertOtelLogsAndSpansTF spanVec
+      unless (V.null spanVec) $
+        void $
+          Telemetry.bulkInsertOtelLogsAndSpansTF spanVec
 
       processRequestMessages (rights msgs')
 
@@ -273,8 +273,8 @@ convertRequestMessageToSpan rm (spanId, trId) =
     , events = Just $ AE.Array V.empty
     , links = Just ""
     , resource =
-        jsonToMap
-          $ nestedJsonFromDotNotation
+        jsonToMap $
+          nestedJsonFromDotNotation
             [ ("service.name", AE.String $ fromMaybe "unknown" rm.host)
             , ("telemetry.sdk.language", AE.String "apitoolkit")
             , ("telemetry.sdk.name", AE.String $ show rm.sdkType)
@@ -304,7 +304,7 @@ createSpanAttributes rm =
           , ("apitoolkit.parent_id", AE.String $ maybe "" UUID.toText rm.parentId)
           , ("http.request.body", AE.String $ rm.requestBody)
           , ("http.response.body", AE.String $ rm.responseBody)
-          , ("http.response.status_code", AE.String $ T.pack $ show rm.statusCode)
+          , ("http.response.status_code", AE.Number $ fromIntegral rm.statusCode)
           , ("apitoolkit.sdk_type", AE.String $ show rm.sdkType)
           , ("http.route", maybe (AE.String (T.takeWhile (/= '?') rm.rawUrl)) AE.String rm.urlPath)
           , ("url.path", AE.String $ rm.rawUrl)

@@ -93,7 +93,7 @@ getProcessedColumns cols defaultSelect = (T.intercalate "," $ colsNoAsClause sel
 sqlFromQueryComponents :: SqlQueryCfg -> QueryComponents -> (Text, QueryComponents)
 sqlFromQueryComponents sqlCfg qc =
   let fmtTime = toText . iso8601Show
-      fromTable = fromMaybe "apis.request_dumps" $ qc.fromTable <|> (display <$> sqlCfg.source)
+      fromTable = fromMaybe "otel_logs_and_spans" $ qc.fromTable <|> (display <$> sqlCfg.source)
       timestampCol = if fromTable == "apis.request_dumps" then "created_at" else "timestamp"
 
       cursorT = maybe "" (\c -> " AND " <> timestampCol <> "<'" <> fmtTime c <> "' ") sqlCfg.cursorM

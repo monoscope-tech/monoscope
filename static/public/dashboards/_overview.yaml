@@ -60,7 +60,7 @@ widgets:
 
   - type: 'timeseries'
     title: 'All requests'
-    query: timechart count(*) by status_code
+    query: timechart count(*) by attributes.http.response.status_code
     unit: reqs
     layout: { w: 6, h: 4 }
 
@@ -73,17 +73,17 @@ widgets:
     sql: |
       SELECT timeB, value, quantile
       FROM (
-        SELECT extract(epoch from time_bucket('1h', created_at))::integer AS timeB,
+        SELECT extract(epoch from time_bucket('1h', timestamp))::integer AS timeB,
                ARRAY[
-                 (approx_percentile(0.50, percentile_agg(duration_ns)) / 1000000.0)::float,
-                 (approx_percentile(0.75, percentile_agg(duration_ns)) / 1000000.0)::float,
-                 (approx_percentile(0.90, percentile_agg(duration_ns)) / 1000000.0)::float,
-                 (approx_percentile(0.95, percentile_agg(duration_ns)) / 1000000.0)::float
+                 (approx_percentile(0.50, percentile_agg(duration)) / 1000000.0)::float,
+                 (approx_percentile(0.75, percentile_agg(duration)) / 1000000.0)::float,
+                 (approx_percentile(0.90, percentile_agg(duration)) / 1000000.0)::float,
+                 (approx_percentile(0.95, percentile_agg(duration)) / 1000000.0)::float
                ] AS values,
                ARRAY['p50', 'p75', 'p90', 'p95'] AS quantiles
-        FROM apis.request_dumps
+        FROM otel_logs_and_spans
         WHERE project_id='{{project_id}}'::uuid
-          {{time_filter_sql_created_at}}
+          {{time_filter}}
         GROUP BY timeB
       ) s,
       LATERAL unnest(s.values, s.quantiles) AS u(value, quantile);
@@ -93,10 +93,10 @@ widgets:
     title: 'Errors'
     eager: true
     theme: 'roma'
-    query: status_code >= 300.0 | timechart count(*) by status_code
+    query: attributes.http.response.status_code >= 300.0 | timechart count(*) by attributes.http.response.status_code
     layout: { w: 6, h: 4 }
 
   - type: 'timeseries'
     title: 'Requests by Endpoint'
-    query: timechart count(*) by method,url_path
+    query: timechart count(*) by attributes.http.request.method,attributes.http.route
     layout: { w: 6, h: 4 }
