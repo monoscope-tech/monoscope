@@ -156,6 +156,18 @@ export class LogList extends LitElement {
     if (this.shouldScrollToBottom && this.flipDirection) {
       this.scrollToBottom()
     }
+    if (this.newDataFetched) {
+      if (this.source === 'spans') {
+        this.spanListTree.forEach(t => {
+          t.isNew = false
+        })
+      } else {
+        this.logsData.forEach(d => {
+          d.isNew = false
+        })
+      }
+      this.newDataFetched = false
+    }
   }
 
   scrollToBottom() {
@@ -252,18 +264,21 @@ export class LogList extends LitElement {
             if (this.source === 'spans') {
               let tree = this.buildSpanListTree([...logsData])
               if (isNewData) {
+                this.newDataFetched
+                tree.forEach(tr => (tr.isNew = true))
                 const container = document.querySelector('#logs_list_container_inner')
                 if (container && container.scrollTop + container.clientHeight >= container.scrollHeight - 1) {
                   this.shouldScrollToBottom = true
                 }
-                this.newDataCount = this.view === 'tree' ? this.spanListTree.filter(t => t.show).length : this.spanListTree.length
                 this.spanListTree = this.flipDirection ? [...this.spanListTree, ...tree] : [...tree, ...this.spanListTree]
               } else {
                 this.spanListTree = this.flipDirection ? [...tree, ...this.spanListTree] : [...this.spanListTree, ...tree]
               }
             } else {
               if (isNewData) {
+                this.newDataFetched
                 logsData = this.flipDirection ? logsData.reverse() : logsData
+                logsData.forEach(l => (l.isNew = true))
                 this.logsData = this.flipDirection ? [...this.logsData, ...logsData] : [...logsData, ...this.logsData]
               } else {
                 this.logsData = this.flipDirection ? [...logsData, ...this.logsData] : [...this.logsData, ...logsData]
@@ -654,7 +669,7 @@ export class LogList extends LitElement {
     }
   }
 
-  logItemRow(rowData, index) {
+  logItemRow(rowData) {
     if (rowData === 'end') {
       if (this.flipDirection) {
         return this.fetchRecent()
@@ -669,10 +684,10 @@ export class LogList extends LitElement {
     }
     const s = this.source === 'spans' && rowData.type === 'log' ? 'logs' : this.source
     const targetInfo = requestDumpLogItemUrlPath(this.source === 'spans' ? rowData.data : rowData, this.colIdxMap, s)
-
+    const isNew = rowData.isNew
     return html`
       <tr
-        class=${`item-row relative p-0 flex items-center cursor-pointer whitespace-nowrap`}
+        class=${`item-row relative p-0 flex items-center cursor-pointer whitespace-nowrap ${isNew ? 'animate-fadeBg' : ''}`}
         @click=${event => this.toggleLogRow(event, targetInfo, this.projectId)}
       >
         ${this.logsColumns

@@ -41,30 +41,33 @@ atMapText key maybeMap = do
 getRequestDetails :: Maybe (Map Text AE.Value) -> Maybe (Text, Text, Text, Int)
 getRequestDetails spanRecord = do
   m <- spanRecord
-  case Map.lookup "http.method" m of
-    Just (AE.String method) -> Just ("HTTP", method, getUrl m, getStatus m)
-    _ -> case Map.lookup "rpc.system" m of
-      Just (AE.String "grpc") -> Just ("GRPC", fromMaybe "" $ getText "rpc.service" m, fromMaybe "" $ getText "rpc.method" m, getStatus m)
-      _ -> case Map.lookup "db.system" m of
-        Just (AE.String db) -> Just ("DB", db, fromMaybe (fromMaybe "" $ getText "db.statement" m) $ getText "db.query.text" m, getStatus m)
-        _ -> case Map.lookup "http.request.method" m of
-          Just (AE.String method) -> Just ("HTTP", method, getUrl m, getStatus m)
-          _ -> Nothing
+  case Map.lookup "http" m of
+    Just (AE.Object o) -> Just ("HTTP", getText "method" o, getUrl o, getStatus o)
+    _ -> case Map.lookup "rpc" m of
+      Just (AE.Object o) -> Just ("GRPC", getText "service" o, getText "method" o, getStatus o)
+      _ -> case Map.lookup "db" m of
+        Just (AE.Object o) -> Just ("DB", getText "system" o, if (T.null query) then statement else query, getStatus o)
+          where
+            statement = getText "statement" o
+            query = getText "query" o
+        _ -> Nothing
   where
-    getText :: Text -> Map Text AE.Value -> Maybe Text
-    getText key v = case Map.lookup key v of
-      Just (AE.String s) -> Just s
-      _ -> Nothing
-    getInt :: Text -> Map Text AE.Value -> Maybe Int
-    getInt key v = case Map.lookup key v of
+    getText :: Text -> AE.Object -> Text
+    getText key v = case KEM.lookup (AEKey.fromText key) v of
+      Just (AE.String s) -> s
+      _ -> ""
+    getInt :: Text -> AE.Object -> Maybe Int
+    getInt key v = case KEM.lookup (AEKey.fromText key) v of
       Just (AE.Number n) -> toBoundedInteger n
       Just (AE.String s) -> readMaybe $ toString s
       _ -> Nothing
     (<->) = mplus
-    getUrl :: Map Text AE.Value -> Text
-    getUrl v = fromMaybe "/" $ getText "http.route" v <-> getText "url.path" v <-> getText "http.url" v <-> getText "http.target" v
-    getStatus :: Map Text AE.Value -> Int
-    getStatus v = fromMaybe 0 $ getInt "http.status_code" v <-> getInt "http.response.status_code" v <-> getInt "rpc.grpc.status_code" v
+    getUrl :: AE.Object -> Text
+    getUrl v =
+      let opts = [getText "route" v, getText "url.path" v, getText "url" v, getText "target" v]
+       in fromMaybe "/" $ viaNonEmpty head $ Relude.filter (not . T.null) opts
+    getStatus :: AE.Object -> Int
+    getStatus v = fromMaybe 0 $ getInt "status_code" v <-> getInt "http.response.status_code" v <-> getInt "rpc.grpc.status_code" v
 
 
 spanHasErrors :: Telemetry.SpanRecord -> Bool
