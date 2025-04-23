@@ -608,18 +608,21 @@ apiLogsPage page = do
 
       div_ [class_ "flex flex-row gap-4 mt-3 group-has-[.toggle-chart:checked]/pg:hidden w-full", style_ "aspect-ratio: 10 / 1;"] do
         Widget.widget_ $ (def :: Widget.Widget){Widget.query = Just "timechart count(*)", Widget.unit = Just "reqs", Widget.title = Just "All requests", Widget.hideLegend = Just True, Widget._projectId = Just page.pid, Widget.standalone = Just True, Widget.yAxis = Just (def{showOnlyMaxLabel = Just True})}
-        unless (page.source == "logs") $
-          Widget.widget_ $
-            (def :: Widget.Widget)
-              { Widget.wType = WTTimeseriesLine
-              , Widget.standalone = Just True
-              , Widget.title = Just "Latency percentiles (ms)"
-              , Widget.hideSubtitle = Just True
-              , Widget.yAxis = Just (def{showOnlyMaxLabel = Just True})
-              , Widget.summarizeBy = Just Widget.SBMax
-              , Widget.sql =
-                  Just
-                    [text|
+        -- let table = if page.source == "spans" then "otel_logs_and_spans" else "apis.request_dumps"
+        --     appColumn = if page.source == "spans" then "duration" else "duration_ns"
+        --     timeFilter = if page.source == "spans" then "time_filter" else "time_filter_sql_created_at"
+
+        Widget.widget_ $
+          (def :: Widget.Widget)
+            { Widget.wType = WTTimeseriesLine
+            , Widget.standalone = Just True
+            , Widget.title = Just "Latency percentiles (ms)"
+            , Widget.hideSubtitle = Just True
+            , Widget.yAxis = Just (def{showOnlyMaxLabel = Just True})
+            , Widget.summarizeBy = Just Widget.SBMax
+            , Widget.sql =
+                Just
+                  [text|
                         SELECT timeB, value, quantile
                               FROM ( SELECT extract(epoch from time_bucket('1h', timestamp))::integer AS timeB,
                                       ARRAY[
@@ -636,10 +639,10 @@ apiLogsPage page = do
                               ) s,
                             LATERAL unnest(s.values, s.quantiles) AS u(value, quantile);
                         |]
-              , Widget.unit = Just "ms"
-              , Widget.hideLegend = Just True
-              , Widget._projectId = Just page.pid
-              }
+            , Widget.unit = Just "ms"
+            , Widget.hideLegend = Just True
+            , Widget._projectId = Just page.pid
+            }
 
     div_ [class_ "flex h-full gap-3.5 overflow-hidden"] do
       -- FACETS
