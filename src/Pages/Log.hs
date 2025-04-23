@@ -186,7 +186,7 @@ apiLogH pid queryM queryASTM cols' cursorM' sinceM fromM toM layoutM sourceM tar
         (def :: BWConfig)
           { sessM = Just sess
           , currProject = Just project
-          , pageTitle = "Events Explorer"
+          , pageTitle = "Explorer"
           , docsLink = Just "https://apitoolkit.io/docs/dashboard/dashboard-pages/openapi-docs/"
           , pageActions = Just $ div_ [class_ "inline-flex gap-2"] do
               label_ [class_ "cursor-pointer border border-strokeStrong rounded-lg flex shadow-sm"] do

@@ -522,9 +522,9 @@ export class LogList extends LitElement {
         let val = lookupVecTextByKey(dataArr, colIdxMap, key)
         const { depth, children, traceId, childErrors, hasErrors, expanded, type, id, isLastChild, siblingsArr } = rowData
         const errClas = hasErrors
-          ? 'bg-red-500 text-white fill-white stroke-white'
+          ? 'bg-fillError-strong text-white fill-white stroke-strokeError-strong'
           : childErrors
-            ? 'border border-red-500 bg-fillWeak text-textWeak fill-textWeak'
+            ? 'border border-strokeError-strong bg-fillWeak text-textWeak fill-textWeak'
             : 'border border-strokeWeak bg-fillWeak text-textWeak fill-textWeak'
         return html`<div class="flex w-full ${wrapLines ? 'items-start' : 'items-center'} gap-1">
           ${this.view === 'tree'
