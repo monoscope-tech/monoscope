@@ -2,17 +2,12 @@ module Pkg.DBUtils (WrappedEnum (..), WrappedEnumSC (..), connectPostgreSQL) whe
 
 import Control.Exception
 import Data.IntMap qualified as IntMap
-import Data.Pool (Pool, withResource)
 import Data.Text qualified as T
 import Database.PostgreSQL.LibPQ qualified as PQ
 import Database.PostgreSQL.Simple (Connection, ResultError (..))
 import Database.PostgreSQL.Simple.FromField (FromField (..), fromField, returnError)
 import Database.PostgreSQL.Simple.Internal qualified as PGI
 import Database.PostgreSQL.Simple.ToField (ToField, toField)
-import Database.PostgreSQL.Transact (DBT (DBT))
-import Effectful (Dispatch (Static), DispatchOf, Eff, (:>))
-import Effectful.Dispatch.Static
-import Effectful.Dispatch.Static (StaticRep)
 import GHC.TypeLits
 import Relude
 import Relude.Unsafe qualified as Unsafe

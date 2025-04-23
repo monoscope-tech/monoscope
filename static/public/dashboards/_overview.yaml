@@ -60,7 +60,7 @@ widgets:
 
   - type: 'timeseries'
     title: 'All requests'
-    query: timechart count(*) by attributes.http.response.status_code
+    query: attributes___http___response___status_code != null | timechart count(*) by attributes___http___response___status_code
     unit: reqs
     layout: { w: 6, h: 4 }
 
@@ -82,7 +82,7 @@ widgets:
                ] AS values,
                ARRAY['p50', 'p75', 'p90', 'p95'] AS quantiles
         FROM otel_logs_and_spans
-        WHERE project_id='{{project_id}}'::uuid
+        WHERE project_id='{{project_id}}' and attributes___http___response___status_code != null 
           {{time_filter}}
         GROUP BY timeB
       ) s,
@@ -93,10 +93,10 @@ widgets:
     title: 'Errors'
     eager: true
     theme: 'roma'
-    query: attributes.http.response.status_code >= 300.0 | timechart count(*) by attributes.http.response.status_code
+    query: attributes___http___response___status_code != null AND attributes___http___response___status_code >= 300.0 | timechart count(*) by attributes___http___response___status_code
     layout: { w: 6, h: 4 }
 
   - type: 'timeseries'
     title: 'Requests by Endpoint'
-    query: timechart count(*) by attributes.http.request.method,attributes.http.route
+    query: attributes___http___response___status_code != null  | timechart count(*) by attributes___http___request___method,attributes___url___path
     layout: { w: 6, h: 4 }
