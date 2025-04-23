@@ -411,9 +411,9 @@ export class LogList extends LitElement {
                   this.shouldScrollToBottom = true
                   this.scrollToBottom()
                 }}
-                class="absolute right-4 bottom-2 z-50 bg-black text-white"
+                class="absolute right-8 bottom-2 z-50 bg-black text-white flex justify-center items-center rounded-full shadow-lg h-12 w-12"
               >
-                To bottom
+                ${faSprite('arrow-down', 'regular', 'h-6 w-6 fill-white stroke-white')}
               </button>
             </div> `
           : nothing}
