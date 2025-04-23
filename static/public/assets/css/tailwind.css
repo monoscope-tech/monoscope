@@ -132,7 +132,7 @@
 
 
   @keyframes fadeBg {
-    0% { background-color: #0068ffcc }
+    0% { background-color: #0068ff }
     70% { background-color: #0068ff}
     100% { background-color: transparent }
   }
