@@ -510,9 +510,9 @@ nestedJsonFromDotNotation :: [(Text, AE.Value)] -> AE.Value
 nestedJsonFromDotNotation pairs =
   -- start from empty object, insert each small object with a lodash‑style merge
   foldl'
-    (\acc (k, v) ->
-      let nestedObj = AE.Object $ build (T.splitOn "." k) v
-      in lodashMerge acc nestedObj
+    ( \acc (k, v) ->
+        let nestedObj = AE.Object $ build (T.splitOn "." k) v
+         in lodashMerge acc nestedObj
     )
     (AE.object [])
     pairs
