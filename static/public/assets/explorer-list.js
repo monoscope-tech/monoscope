@@ -411,7 +411,8 @@ export class LogList extends LitElement {
                   this.shouldScrollToBottom = true
                   this.scrollToBottom()
                 }}
-                class="absolute right-8 bottom-2 z-50 bg-black text-white flex justify-center items-center rounded-full shadow-lg h-12 w-12"
+                data-tip="Scroll to bottom"
+                class="absolute tooltip tooltip-left right-8 bottom-2 group z-50 bg-bgInverse text-white flex justify-center items-center rounded-full shadow-lg h-10 w-10"
               >
                 ${faSprite('arrow-down', 'regular', 'h-6 w-6 fill-white stroke-white')}
               </button>
@@ -444,9 +445,7 @@ export class LogList extends LitElement {
       case 'status_code':
         let statusCode = lookupVecTextByKey(dataArr, colIdxMap, 'status_code')
         let statusCls = getStatusColor(Number(statusCode))
-        if (statusCode == 'UNSET') {
-          return ''
-        } else return renderBadge(statusCls, statusCode, 'status code')
+        return statusCode == 'UNSET' ? nothing : renderBadge(statusCls, statusCode, 'status code')
       case 'method':
         let method = lookupVecTextByKey(dataArr, colIdxMap, key)
         let methodCls = getMethodColor(method)
@@ -462,16 +461,14 @@ export class LogList extends LitElement {
       case 'severity_text':
         let severity = lookupVecTextByKey(dataArr, colIdxMap, key) || 'UNSET'
         let severityClass = getSeverityColor(severity)
-        if (severity == 'UNSET') {
-          return ''
-        } else return renderBadge('cbadge-sm cbadge ' + severityClass, severity)
+        return severity === 'UNSET' ? nothing : renderBadge('cbadge-sm cbadge ' + severityClass, severity)
       case 'body':
         let body = lookupVecTextByKey(dataArr, colIdxMap, key)
         return renderBadge('space-x-2 ' + wrapClass, body)
       case 'status':
         let st = lookupVecTextByKey(dataArr, colIdxMap, key)
         let statsCls = getSpanStatusColor(st)
-        return renderBadge(statsCls, st)
+        return !st || st.toLowerCase() === 'unset' ? nothing : renderBadge(statsCls, st)
       case 'span_name':
         let spanName = lookupVecTextByKey(dataArr, colIdxMap, key)
         return renderBadge('cbadge-sm badge-neutral bg-fillWeak ' + wrapClass, spanName, 'span name')
@@ -517,7 +514,7 @@ export class LogList extends LitElement {
               : k.toLowerCase() === 'client'
               ? renderIconWithTippy('w-4 ml-2', 'Outgoing Request', faSprite('arrow-up-right', 'solid', ' h-3 fill-blue-700'))
               : nothing}
-            ${statusCode_ ? renderBadge(statusCls_, statusCode_, 'status code') : nothing}
+            ${statusCode_ && statusCode_ !== 'UNSET' ? renderBadge(statusCls_, statusCode_, 'status code') : nothing}
             ${m ? renderBadge('min-w-[4rem] text-center cbadge cbadge-sm ' + methodCls_, m, 'method') : nothing}
             ${url ? renderBadge('cbadge-sm badge-neutral bg-fillWeak ' + wrapCls, url, 'url') : nothing}
           `
