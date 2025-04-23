@@ -150,6 +150,7 @@ export class LogList extends LitElement {
   firstUpdated() {
     this.scrollToBottom()
     this.setupIntersectionObserver()
+    window.logListTable = document.querySelector('#resultTable')
   }
 
   updated(changedProperties) {
