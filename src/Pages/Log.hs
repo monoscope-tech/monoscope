@@ -653,9 +653,9 @@ apiLogsPage page = do
                 span_ [class_ "hidden group-has-[.toggle-filters:checked]/pg:block"] "Show"
                 span_ [class_ "group-has-[.toggle-filters:checked]/pg:hidden"] "Hide"
                 "filters"
-                input_ [type_ "checkbox", class_ "toggle-filters hidden", checked_]
+                input_ [type_ "checkbox", class_ "toggle-filters hidden"]
               span_ [class_ "text-slate-200"] "|"
-              div_ [class_ ""] $ span_ [class_ "text-slate-950"] (toHtml @Text $ fmt $ commaizeF page.resultCount) >> span_ [class_ "text-slate-600"] (toHtml (" " <> page.source <> " found"))
+              div_ [class_ ""] $ span_ [class_ "text-slate-950"] (toHtml @Text $ fmt $ commaizeF page.resultCount) >> span_ [class_ "text-slate-600"] (toHtml (" rows found"))
             div_ [class_ $ "absolute top-0 right-0  w-full h-full overflow-scroll c-scroll z-50 bg-white transition-all duration-100 " <> if showTrace then "" else "hidden", id_ "trace_expanded_view"] do
               whenJust page.showTrace \trId -> do
                 let url = "/p/" <> page.pid.toText <> "/traces/" <> trId
