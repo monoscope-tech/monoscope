@@ -326,6 +326,7 @@ defaultSelectSqlQuery (Just SSpans) =
           'status_code', COALESCE(attributes->'http'->>'status_code', attributes->'http'->'response'->>'status_code')
           ) as http_attributes |]
   , [fmt| jsonb_build_object('system', attributes->'db'->'system','statement', coalesce(attributes->'db'->'query'->'text', attributes->'db'->'statement')) as db_attributes  |]
+  , [fmt| json_build_object('system', attributes->'rpc'->'system', 'method', attributes->'rpc'->'method') as rpc_attributes|]
   , [fmt|LEFT(
         CONCAT(
             COALESCE(attributes::text, '')

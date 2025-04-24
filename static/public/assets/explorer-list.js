@@ -472,7 +472,7 @@ export class LogList extends LitElement {
             ${errStatus === 'ERROR' ? renderBadge(getSpanStatusColor('ERROR'), 'ERROR') : nothing}
             ${db.system ? renderBadge('cbadge-sm badge-neutral bg-fillWeak border border-strokeWeak', db.system) : nothing}
             ${http.method && http.url ? renderBadge('cbadge-sm badge-neutral bg-fillWeak border border-strokeWeak', 'http') : nothing}
-            ${rpc.system && rpc.method ? renderBadge('cbadge-sm badge-neutral bg-fillWeak border border-strokeWeak', 'rpc') : nothing}
+            ${rpc.system ? renderBadge('cbadge-sm badge-neutral bg-fillWeak border border-strokeWeak', rpc.system) : nothing}
             <div class="overflow-visible shrink-0 font-normal">${this.logItemCol(rowData, source, colIdxMap, 'duration')}</div>
             ${spanLatencyBreakdown({ start: startNs - traceStart, depth: d, duration, traceEnd, color, children: chil, barWidth: width - 12 })}
             <span class="w-1"></span>
@@ -503,7 +503,7 @@ export class LogList extends LitElement {
         const { system, statement } = dbAttributes
         if (system || statement) {
           return html`
-            ${renderIconWithTippy('w-4 ml-2', 'database span', faSprite('database', 'regular', 'h-3 w-3 fill-slate-500'))}
+            ${renderIconWithTippy('w-4 ml-2', system, faSprite('database', 'regular', 'h-3 w-3 fill-slate-500'))}
             ${statement ? renderBadge('cbadge-sm badge-neutral bg-fillWeak', statement) : nothing}
           `
         }
@@ -511,9 +511,14 @@ export class LogList extends LitElement {
       case 'rpc_attributes':
         const rpcAttributes = lookupVecObjectByKey(dataArr, colIdxMap, key)
         const { system: rpcSystem, method: rpcMethod } = rpcAttributes
+        let k = lookupVecTextByKey(dataArr, colIdxMap, 'kind')
         if (rpcSystem || rpcMethod) {
           return html`
-            ${rpcSystem ? renderBadge('cbadge-sm badge-neutral bg-fillWeak', rpcSystem) : nothing}
+            ${k.toLowerCase() === 'server'
+              ? renderIconWithTippy('w-4 ml-2', 'Incoming Request => Server', faSprite('arrow-down-left', 'solid', ' h-3 fill-slate-500'))
+              : k.toLowerCase() === 'client'
+              ? renderIconWithTippy('w-4 ml-2', 'Outgoing Request  => Client', faSprite('arrow-up-right', 'solid', ' h-3 fill-blue-700'))
+              : nothing}
             ${rpcMethod ? renderBadge('cbadge-sm badge-neutral bg-fillWeak', rpcMethod) : nothing}
           `
         }
@@ -886,19 +891,20 @@ function getDurationNSMS(duration) {
 }
 
 function errorClass(expandedSection, reqVec, colIdxMap) {
-  const errCount = lookupVecTextByKey(reqVec, colIdxMap, 'errors_count') || 0
-  const status = lookupVecTextByKey(reqVec, colIdxMap, 'status_code') || 0
+  const hasErrors = lookupVecTextByKey(reqVec, colIdxMap, 'errors')
+  const status = lookupVecTextByKey(reqVec, colIdxMap, 'http_attributes').status_code || 0
+  const errStatus = lookupVecTextByKey(reqVec, colIdxMap, 'status') || 0
 
   let errClass = ' w-1 bg-blue-200 status-indicator '
-  if (errCount > 0) {
+  if (hasErrors || errStatus === 'ERROR') {
     errClass = ' w-1 bg-red-500 '
   } else if (status >= 400) {
-    errClass = ' w-1 bg-warning '
+    errClass = ' w-1 bg-yellow-500 '
   } else if (expandedSection) {
     errClass = ' w-1 bg-blue-200 '
   }
 
-  return [status, errCount, errClass]
+  return [status, hasErrors, errClass]
 }
 
 function getSeverityColor(severity) {
