@@ -5,6 +5,7 @@ import Data.Aeson.KeyMap qualified as KEM
 import Data.ByteString.Base64 qualified as B64
 import Data.Effectful.UUID qualified as UUID
 import Data.HashMap.Strict qualified as HM
+import Data.Map qualified as Map
 import Data.Text qualified as T
 import Data.Time (formatTime)
 import Data.Time.Format (defaultTimeLocale)
@@ -140,6 +141,10 @@ expandedSpanItem pid sp leftM rightM = do
       whenJust reqDetails $ \case
         ("HTTP", method, path, status) -> do
           let httpJsonM = convertSpanToRequestMessage sp ""
+          let (request, resp) = case Map.lookup "http" (fromMaybe Map.empty sp.attributes) of
+                Just (AE.Object obj) -> (KEM.lookup "request" obj, KEM.lookup "response" obj)
+                _ -> (Nothing, Nothing)
+
           case httpJsonM of
             Just httpJson -> do
               div_ [id_ "http-content-container", class_ "flex flex-col gap-3"] do
@@ -154,13 +159,41 @@ expandedSpanItem pid sp leftM rightM = do
                   div_ [id_ "raw_content", class_ "a-tab-content"] do
                     jsonValueToHtmlTree $ selectiveOtelLogsJson sp
                   div_ [id_ "req_content", class_ "hidden a-tab-content"] do
-                    jsonValueToHtmlTree $ b64ToJson httpJson.requestBody
+                    jsonValueToHtmlTree $ case request of
+                      Just (AE.Object obj) -> case KEM.lookup "body" obj of
+                        Just (AE.String b64) -> b64ToJson b64
+                        _ -> "{}"
+                      _ -> "{}"
                   div_ [id_ "res_content", class_ "hidden a-tab-content"] do
-                    jsonValueToHtmlTree $ b64ToJson httpJson.responseBody
+                    jsonValueToHtmlTree $ case resp of
+                      Just (AE.Object obj) -> case KEM.lookup "body" obj of
+                        Just (AE.String b64) -> b64ToJson b64
+                        _ -> "{}"
+                      _ -> "{}"
                   div_ [id_ "hed_content", class_ "hidden a-tab-content"] do
-                    jsonValueToHtmlTree $ AE.object ["request_headers" AE..= httpJson.requestHeaders, "response_headers" AE..= httpJson.responseHeaders]
+                    let reqHeaders = case request of
+                          Just (AE.Object obj) -> case KEM.lookup "headers" obj of
+                            Just (AE.Object headers) -> headers
+                            _ -> KEM.empty
+                          _ -> KEM.empty
+                    let respHeaders = case resp of
+                          Just (AE.Object obj) -> case KEM.lookup "headers" obj of
+                            Just (AE.Object headers) -> headers
+                            _ -> KEM.empty
+                          _ -> KEM.empty
+                    jsonValueToHtmlTree $ AE.object ["request_headers" AE..= reqHeaders, "response_headers" AE..= respHeaders]
                   div_ [id_ "par_content", class_ "hidden a-tab-content"] do
-                    jsonValueToHtmlTree $ AE.object ["query_params" AE..= httpJson.queryParams, "path_params" AE..= httpJson.pathParams]
+                    let (queryParams, pathParams) = case request of
+                          Just (AE.Object obj) ->
+                            ( case KEM.lookup "query_params" obj of
+                                Just (AE.Object o) -> o
+                                _ -> KEM.empty
+                            , case KEM.lookup "query_params" obj of
+                                Just (AE.Object o) -> o
+                                _ -> KEM.empty
+                            )
+                          _ -> (KEM.empty, KEM.empty)
+                    jsonValueToHtmlTree $ AE.object ["query_params" AE..= queryParams, "path_params" AE..= pathParams]
             Nothing -> pass
         _ -> pass
 

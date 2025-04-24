@@ -19,8 +19,10 @@ import Utils (faSprite_)
 
 
 getServiceName :: Maybe (Map Text AE.Value) -> Text
-getServiceName rs = case Map.lookup "service.name" (fromMaybe Map.empty rs) of
-  Just (AE.String s) -> s
+getServiceName rs = case Map.lookup "service" (fromMaybe Map.empty rs) of
+  Just (AE.Object o) -> case KEM.lookup "name" o of
+    Just (AE.String s) -> s
+    _ -> "Unknown"
   _ -> "Unknown"
 
 
