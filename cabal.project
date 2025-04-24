@@ -5,6 +5,8 @@ with-compiler: ghc-9.10.1
 
 -- with-compiler: ghc-9.8.2
 import: https://www.stackage.org/nightly-2025-04-20/cabal.config
+--import: https://www.stackage.org/lts-23.19/cabal.config
+
 
 -- Override dependencies from stack.yaml
 allow-newer: all
@@ -117,7 +119,7 @@ source-repository-package
 
 constraints:
   pg-entity +prod,
-  streamly ^>=0.10.0,
+  streamly ^>=0.10.0
 
 
 allow-newer: all 

@@ -82,7 +82,7 @@ widgets:
                ] AS values,
                ARRAY['p50', 'p75', 'p90', 'p95'] AS quantiles
         FROM otel_logs_and_spans
-        WHERE project_id='{{project_id}}' AND kind='server' AND attributes___http___response___status_code != null 
+        WHERE project_id='{{project_id}}' AND kind='server' AND attributes___http___response___status_code != null
           {{time_filter}}
         GROUP BY timeB
       ) s,

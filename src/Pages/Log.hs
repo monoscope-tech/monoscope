@@ -16,7 +16,7 @@ import Data.Default (def)
 import Data.HashMap.Strict qualified as HM
 import Data.List qualified as L
 import Data.Text qualified as T
-import Data.Time (UTCTime, diffUTCTime)
+import Data.Time (UTCTime, addUTCTime, diffUTCTime)
 import Data.Vector qualified as V
 import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
 import Effectful.Time qualified as Time
@@ -174,7 +174,7 @@ apiLogH pid queryM queryASTM cols' cursorM' sinceM fromM toM layoutM sourceM tar
 
   (queryLibRecent, queryLibSaved) <- V.partition (\x -> Projects.QLTHistory == (x.queryType)) <$> Projects.queryLibHistoryForUser pid sess.persistentSession.userId
 
-  facetSummary <- Facets.getFacetSummary pid "otel_logs_and_spans" now
+  facetSummary <- Facets.getFacetSummary pid "otel_logs_and_spans" (fromMaybe (addUTCTime (-86400) now) fromD) (fromMaybe now toD)
 
   freeTierExceeded <-
     dbtToEff $
