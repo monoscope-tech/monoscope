@@ -104,7 +104,7 @@ sqlFromQueryComponents sqlCfg qc =
       where' = maybe "" (\whereC -> " AND (" <> whereC <> ")") qc.whereClause
       whereClause = case sqlCfg.source of
         Just SSpans -> case sqlCfg.targetSpansM of
-          Nothing -> where' <> " AND ((parent_id IS NULL AND body IS NULL) OR (context___trace_id = '' AND body IS NOT NULL))"
+          Nothing -> where' <> " AND parent_id IS NULL"
           _ -> where'
         _ -> where'
       groupByClause = if null qc.groupByClause then "" else " GROUP BY " <> T.intercalate "," qc.groupByClause
@@ -125,12 +125,12 @@ sqlFromQueryComponents sqlCfg qc =
                 {groupByClause}
                 )
                SELECT json_build_array({selectClause}) FROM ranked_spans
-                  WHERE rn = 1 ORDER BY {timestampCol} desc limit 50 |]
+                  WHERE rn = 1 ORDER BY {timestampCol} desc limit 150 |]
         _ ->
           [fmt|SELECT json_build_array({selectClause}) FROM {fromTable}
              WHERE project_id='{sqlCfg.pid.toText}'  and ( {timestampCol} > NOW() - interval '14 days'
              {cursorT} {dateRangeStr} {whereClause} )
-             {groupByClause} ORDER BY {timestampCol} desc limit 50 |]
+             {groupByClause} ORDER BY {timestampCol} desc limit 150 |]
       countQuery =
         [fmt|SELECT count(*) FROM {fromTable}
           WHERE project_id='{sqlCfg.pid.toText}' and ( {timestampCol} > NOW() - interval '14 days'

@@ -23,12 +23,10 @@ export class LogList extends LitElement {
   }
   constructor() {
     super()
-    this.source = new URLSearchParams(window.location.search).get('source') || 'requests'
 
     this.resizeTarget = null
     this.mouseState = { x: 0 }
 
-    this.logsData = []
     this.logsColumns = []
     this.colIdxMap = {}
     this.serviceColors = {}
