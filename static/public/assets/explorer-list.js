@@ -453,7 +453,7 @@ export class LogList extends LitElement {
         return html` <div class="w-[16ch]">${renderBadge('cbadge-sm badge-neutral bg-fillWeak ' + wrapClass, service, 'service name')}</div>`
       case 'kind':
         let kind = lookupVecTextByKey(dataArr, colIdxMap, key)
-        return kind.toLowerCase() === 'internal' ? renderIconWithTippy('w-4', 'Internal span', faSprite('function', 'regular', 'h-3 w-3')) : nothing
+        return kind.toLowerCase() === 'internal' ? renderIconWithTippy('w-4 ml-2', 'Internal span', faSprite('function', 'regular', 'h-3 w-3 ')) : nothing
       case 'latency_breakdown':
         const { traceStart, traceEnd, startNs, duration, childrenTimeSpans, depth: d } = rowData
         const color = serviceColors[lookupVecTextByKey(dataArr, colIdxMap, 'span_name')] || 'bg-black'
@@ -503,7 +503,7 @@ export class LogList extends LitElement {
         const { system, statement } = dbAttributes
         if (system || statement) {
           return html`
-            ${renderIconWithTippy('w-4', 'database span', faSprite('database', 'regular', 'h-3 w-3 fill-slate-500'))}
+            ${renderIconWithTippy('w-4 ml-2', 'database span', faSprite('database', 'regular', 'h-3 w-3 fill-slate-500'))}
             ${statement ? renderBadge('cbadge-sm badge-neutral bg-fillWeak', statement) : nothing}
           `
         }
@@ -616,7 +616,7 @@ export class LogList extends LitElement {
       case 'created_at':
         return this.tableHeadingWrapper('timestamp', column, 'w-[17ch] shrink-0')
       case 'latency_breakdown':
-        return this.tableHeadingWrapper('latency', column, 'sticky right-0 shrink-0 bg-red-500')
+        return this.tableHeadingWrapper('latency', column, 'sticky right-0 shrink-0 bg-fillError-strong')
       case 'status_code':
         return this.tableHeadingWrapper('status', column, 'shrink-0 w-[12ch]')
       case 'method':

@@ -628,7 +628,7 @@ apiLogsPage page = do
       div_ [class_ "w-1/6 text-sm shrink-0 flex flex-col gap-2 p-2 transition-all duration-500 ease-out opacity-100 delay-[0ms] group-has-[.toggle-filters:checked]/pg:duration-300 group-has-[.toggle-filters:checked]/pg:opacity-0 group-has-[.toggle-filters:checked]/pg:w-0 group-has-[.toggle-filters:checked]/pg:p-0 group-has-[.toggle-filters:checked]/pg:overflow-hidden"] do
         input_
           [ placeholder_ "Search facets..."
-          , class_ "rounded-lg shadow-sm px-3 py-1 border border-strokeStrong"
+          , class_ "rounded-lg px-3 py-1 border border-strokeStrong"
           , term "data-filterParent" "facets-container"
           , [__| on keyup 
                 if the event's key is 'Escape' 
