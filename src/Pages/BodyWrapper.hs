@@ -7,7 +7,7 @@ import Data.Text qualified as T
 import Data.Tuple.Extra (fst3)
 import Data.Vector qualified as V
 import Lucid
-import Lucid.Htmx (hxGet_)
+import Lucid.Htmx (hxGet_, hxTarget_)
 import Lucid.Hyperscript (__)
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
@@ -424,6 +424,7 @@ sideNav sess project pageTitle menuItem hasIntegrated = aside_ [class_ "border-r
         , src_ [text|https://www.gravatar.com/avatar/${emailMd5}?d=https%3A%2F%2Fui-avatars.com%2Fapi%2F/${sanitizedID}/128|]
         ]
       span_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:inline-block overflow-hidden"] $ toHtml userIdentifier
+
     mapM_ renderNavBottomItem $ navBottomList project.id.toText
 
 
@@ -478,20 +479,20 @@ loginBanner = do
     a_ [class_ "py-2 px-3 rounded-xl bg-fillBrand-strong text-textInverse-strong shadow-sm hover:shadow-md", href_ "/login"] "Start 30 day free trial"
 
 
-renderNavBottomItem :: (Text, Text, Text, Text, Text, Maybe Text, Maybe Text) -> Html ()
-renderNavBottomItem (iconName, bgColor, textColor, linkText, link, targetBlankM, onClickM) =
+renderNavBottomItem :: (Text, Text, Text, Text, Text, Maybe Text, Maybe Text, Maybe Text) -> Html ()
+renderNavBottomItem (iconName, bgColor, textColor, linkText, link, targetBlankM, onClickM, hxGetM) =
   let
     defaultAttrs =
       [ class_ $ "hover:bg-blue-50"
       , term "data-tippy-placement" "right"
       , term "data-tippy-content" linkText
-      , href_ link
       ]
 
     attrs =
       defaultAttrs
         ++ (if isJust targetBlankM then [target_ "BLANK_"] else [])
         ++ (maybe [] (\onClick -> [onclick_ onClick]) onClickM)
+        ++ (if isJust hxGetM then [hxGet_ link, hxTarget_ "body"] else [href_ link])
    in
     a_ attrs $ do
       span_
@@ -499,12 +500,13 @@ renderNavBottomItem (iconName, bgColor, textColor, linkText, link, targetBlankM,
         (toHtml linkText)
 
 
-navBottomList :: Text -> [(Text, Text, Text, Text, Text, Maybe Text, Maybe Text)]
+navBottomList :: Text -> [(Text, Text, Text, Text, Text, Maybe Text, Maybe Text, Maybe Text)]
 navBottomList pidTxt =
-  [ ("gear", "bg-blue-100", "text-brand", "Settings", "/p/" <> pidTxt <> "/settings", Nothing, Nothing)
-  , ("key", "bg-green-100", "text-green-600", "API Keys", "/p/" <> pidTxt <> "/apis", Nothing, Nothing)
-  , ("user-plus", "bg-yellow-100", "text-yellow-600", "Manage members", "/p/" <> pidTxt <> "/manage_members", Nothing, Nothing)
-  , ("user-gear", "bg-purple-100", "text-purple-600", "Integrations", "/p/" <> pidTxt <> "/integrations", Nothing, Nothing)
-  , ("circle-question", "bg-blue-100", "text-brand", "Documentation", "https://apitoolkit.io/docs/", Just "blank", Nothing)
-  , ("arrow-right-from-bracket", "bg-red-100", "text-red-600", "Logout", "/logout", Nothing, Just "posthog.reset()")
+  [ ("gear", "bg-blue-100", "text-brand", "Settings", "/p/" <> pidTxt <> "/settings", Nothing, Nothing, Nothing)
+  , ("key", "bg-green-100", "text-green-600", "API Keys", "/p/" <> pidTxt <> "/apis", Nothing, Nothing, Nothing)
+  , ("user-plus", "bg-yellow-100", "text-yellow-600", "Manage members", "/p/" <> pidTxt <> "/manage_members", Nothing, Nothing, Nothing)
+  , ("user-shield", "bg-orange-100", "text-orange-600", "Manage billing", "/p/" <> pidTxt <> "/manage_billing", Nothing, Nothing, Just "")
+  , ("user-gear", "bg-purple-100", "text-purple-600", "Integrations", "/p/" <> pidTxt <> "/integrations", Nothing, Nothing, Nothing)
+  , ("circle-question", "bg-blue-100", "text-brand", "Documentation", "https://apitoolkit.io/docs/", Just "blank", Nothing, Nothing)
+  , ("arrow-right-from-bracket", "bg-red-100", "text-red-600", "Logout", "/logout", Nothing, Just "posthog.reset()", Nothing)
   ]
