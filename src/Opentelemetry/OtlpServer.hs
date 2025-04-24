@@ -222,46 +222,49 @@ migrateHttpSemanticConventions Nothing = Nothing
 migrateHttpSemanticConventions (Just attributes) =
   let
     -- Field mapping from old -> new
-    fieldMappings = [
-      ("http.method", "http.request.method"),
-      ("http.status_code", "http.response.status_code"),
-      ("http.request_content_length", "http.request.body.size"),
-      ("http.response_content_length", "http.response.body.size"),
-      ("net.protocol.name", "network.protocol.name"),
-      ("net.protocol.version", "network.protocol.version"),
-      ("net.sock.peer.addr", "network.peer.address"),
-      ("net.sock.peer.port", "network.peer.port"),
-      ("http.url", "url.full"),
-      ("http.resend_count", "http.request.resend_count"),
-      ("net.peer.name", "server.address"),
-      ("net.peer.port", "server.port"),
-      ("http.scheme", "url.scheme"),
-      ("http.client_ip", "client.address"),
-      ("net.host.name", "server.address"),
-      ("net.host.port", "server.port")
-    ]
-    
+    fieldMappings :: [(Text, Text)]
+    fieldMappings =
+      [ ("http.method", "http.request.method")
+      , ("http.status_code", "http.response.status_code")
+      , ("http.request_content_length", "http.request.body.size")
+      , ("http.response_content_length", "http.response.body.size")
+      , ("net.protocol.name", "network.protocol.name")
+      , ("net.protocol.version", "network.protocol.version")
+      , ("net.sock.peer.addr", "network.peer.address")
+      , ("net.sock.peer.port", "network.peer.port")
+      , ("http.url", "url.full")
+      , ("http.resend_count", "http.request.resend_count")
+      , ("net.peer.name", "server.address")
+      , ("net.peer.port", "server.port")
+      , ("http.scheme", "url.scheme")
+      , ("http.client_ip", "client.address")
+      , ("net.host.name", "server.address")
+      , ("net.host.port", "server.port")
+      ]
+
     -- Handle the special case of http.target -> url.path and url.query
-    migrateHttpTarget attributes' = 
+    migrateHttpTarget attributes' =
       case Map.lookup "http.target" attributes' of
         Just (AE.String target) ->
           let
             -- Simple split at first '?' to separate path and query
             (path, query) = T.breakOn "?" target
             queryWithoutQ = if T.null query then "" else T.drop 1 query
-            
+
             -- Add path and query fields if they don't exist yet
-            withPath = if Map.member "url.path" attributes'
-              then attributes' 
-              else Map.insert "url.path" (AE.String path) attributes'
-            
-            withPathAndQuery = if T.null query || Map.member "url.query" withPath
-              then withPath
-              else Map.insert "url.query" (AE.String queryWithoutQ) withPath
-          in
+            withPath =
+              if Map.member "url.path" attributes'
+                then attributes'
+                else Map.insert "url.path" (AE.String path) attributes'
+
+            withPathAndQuery =
+              if T.null query || Map.member "url.query" withPath
+                then withPath
+                else Map.insert "url.query" (AE.String queryWithoutQ) withPath
+           in
             withPathAndQuery
         _ -> attributes'
-    
+
     -- Migrate method "_OTHER" case
     migrateMethodOther attributes' =
       case (Map.lookup "http.method" attributes', Map.lookup "http.request.method_original" attributes') of
@@ -270,22 +273,23 @@ migrateHttpSemanticConventions (Just attributes) =
             then Map.insert "http.request.method" originalMethod attributes'
             else attributes'
         _ -> attributes'
-    
+
     -- Migrate fields based on mapping
     migrateFields attributes' =
-      foldl' 
-        (\acc (oldKey, newKey) -> 
-          case Map.lookup oldKey acc of
-            Just value ->
-              if Map.member newKey acc
-                then acc  -- Don't override existing values
-                else Map.insert newKey value acc
-            Nothing -> acc
-        ) 
-        attributes' 
+      foldl'
+        ( \acc (oldKey, newKey) ->
+            case Map.lookup oldKey acc of
+              Just value ->
+                if Map.member newKey acc
+                  then acc -- Don't override existing values
+                  else Map.insert newKey value acc
+              Nothing -> acc
+        )
+        attributes'
         fieldMappings
-  in
+   in
     Just $ migrateMethodOther $ migrateHttpTarget $ migrateFields attributes
+
 
 -- Decode ByteString to Text with lenient UTF-8 handling
 decodeUtf8Lenient :: ByteString -> Text
