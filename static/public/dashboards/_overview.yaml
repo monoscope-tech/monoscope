@@ -59,13 +59,13 @@ widgets:
     layout: { w: 6, h: 5 }
 
   - type: 'timeseries'
-    title: 'All requests'
-    query: timechart count(*) by attributes.http.response.status_code
+    title: 'All requests (Incoming)'
+    query: kind="server" AND attributes___http___response___status_code != null | timechart count(*) by attributes___http___response___status_code
     unit: reqs
     layout: { w: 6, h: 4 }
 
   - type: 'timeseries_line'
-    title: 'Latency percentiles (ms)'
+    title: 'Incoming request latency (ms)'
     hide_subtitle: true
     # query: timechart count(*) by status_code
     # query: timechart p50(duration_ns) as p50, p75(duration_ns) as p75, p90(duration_ns) as p90, p95(duration_ns) as p95 by duration_ns
@@ -82,7 +82,7 @@ widgets:
                ] AS values,
                ARRAY['p50', 'p75', 'p90', 'p95'] AS quantiles
         FROM otel_logs_and_spans
-        WHERE project_id='{{project_id}}'::uuid
+        WHERE project_id='{{project_id}}' AND kind='server' AND attributes___http___response___status_code != null 
           {{time_filter}}
         GROUP BY timeB
       ) s,
@@ -90,13 +90,13 @@ widgets:
     layout: { w: 6, h: 4 }
 
   - type: 'timeseries'
-    title: 'Errors'
+    title: 'HTTP Errors (Incoming)'
     eager: true
     theme: 'roma'
-    query: attributes.http.response.status_code >= 300.0 | timechart count(*) by attributes.http.response.status_code
+    query: kind="server" AND attributes___http___response___status_code != null AND attributes___http___response___status_code >= 300.0 | timechart count(*) by attributes___http___response___status_code
     layout: { w: 6, h: 4 }
 
   - type: 'timeseries'
-    title: 'Requests by Endpoint'
-    query: timechart count(*) by attributes.http.request.method,attributes.http.route
+    title: 'Incoming Requests by Endpoint'
+    query: kind="server" AND attributes___http___response___status_code != null  | timechart count(*) by attributes___http___request___method,attributes___url___path
     layout: { w: 6, h: 4 }

@@ -89,9 +89,9 @@ export class LogList extends LitElement {
   }
 
   latestLogsURLQueryValsFn() {
-    const latestIndex = this.flipDirection ? (this.source === 'spans' ? this.spanListTree.length - 1 : this.logsData.length - 1) : 0
-    const latestData = this.source === 'spans' ? this.spanListTree[latestIndex].data : this.logsData[latestIndex]
-    const timeIndex = this.source === 'spans' ? this.colIdxMap['timestamp'] : this.ariaColIndex['created_at']
+    const latestIndex = this.flipDirection ? this.spanListTree.length - 1 : 0
+    const latestData = this.spanListTree[latestIndex].data
+    const timeIndex = this.colIdxMap['timestamp']
     const datetime = latestData[timeIndex]
     const to = datetime ? new Date(new Date(datetime).getTime() + 1).toISOString() : params().to
     const from = params().from
@@ -109,11 +109,7 @@ export class LogList extends LitElement {
     this.hasMore = ves.length >= 50
     this.serviceColors = { ...serviceColors }
     this.nextFetchUrl = nextFetchUrl
-    if (this.source === 'spans') {
-      this.spanListTree = this.buildSpanListTree(ves)
-    } else {
-      this.logsData = this.flipDirection ? ves.reverse() : ves
-    }
+    this.spanListTree = this.buildSpanListTree(ves)
     this.updateColumnMaxWidthMap(ves)
     this.requestUpdate()
   }
@@ -134,11 +130,7 @@ export class LogList extends LitElement {
       this.resetLogsUrl = window.virtualListData.resetLogsUrl
       this.projectId = window.virtualListData.projectId
       this.expandedTraces = {}
-      if (this.source === 'spans') {
-        this.spanListTree = this.buildSpanListTree(logs)
-      } else {
-        this.logsData = this.flipDirection ? logs.reverse() : logs
-      }
+      this.spanListTree = this.buildSpanListTree(logs)
       this.updateColumnMaxWidthMap(logs)
       this.hasMore = logs.length >= 50
       this.requestUpdate()
@@ -158,15 +150,9 @@ export class LogList extends LitElement {
       this.scrollToBottom()
     }
     if (this.newDataFetched) {
-      if (this.source === 'spans') {
-        this.spanListTree.forEach(t => {
-          t.isNew = false
-        })
-      } else {
-        this.logsData.forEach(d => {
-          d.isNew = false
-        })
-      }
+      this.spanListTree.forEach(t => {
+        t.isNew = false
+      })
       this.newDataFetched = false
     }
   }
@@ -262,28 +248,17 @@ export class LogList extends LitElement {
           }
           if (logsData.length > 0) {
             this.serviceColors = { ...serviceColors, ...this.serviceColors }
-            if (this.source === 'spans') {
-              let tree = this.buildSpanListTree([...logsData])
-              if (isNewData) {
-                this.newDataFetched
-                tree.forEach(tr => (tr.isNew = true))
-                const container = document.querySelector('#logs_list_container_inner')
-                if (container && container.scrollTop + container.clientHeight >= container.scrollHeight - 1) {
-                  this.shouldScrollToBottom = true
-                }
-                this.spanListTree = this.flipDirection ? [...this.spanListTree, ...tree] : [...tree, ...this.spanListTree]
-              } else {
-                this.spanListTree = this.flipDirection ? [...tree, ...this.spanListTree] : [...this.spanListTree, ...tree]
+            let tree = this.buildSpanListTree([...logsData])
+            if (isNewData) {
+              this.newDataFetched
+              tree.forEach(tr => (tr.isNew = true))
+              const container = document.querySelector('#logs_list_container_inner')
+              if (container && container.scrollTop + container.clientHeight >= container.scrollHeight - 1) {
+                this.shouldScrollToBottom = true
               }
+              this.spanListTree = this.flipDirection ? [...this.spanListTree, ...tree] : [...tree, ...this.spanListTree]
             } else {
-              if (isNewData) {
-                this.newDataFetched
-                logsData = this.flipDirection ? logsData.reverse() : logsData
-                logsData.forEach(l => (l.isNew = true))
-                this.logsData = this.flipDirection ? [...this.logsData, ...logsData] : [...logsData, ...this.logsData]
-              } else {
-                this.logsData = this.flipDirection ? [...logsData, ...this.logsData] : [...this.logsData, ...logsData]
-              }
+              this.spanListTree = this.flipDirection ? [...tree, ...this.spanListTree] : [...this.spanListTree, ...tree]
             }
             this.updateColumnMaxWidthMap(logsData)
           }
@@ -315,7 +290,7 @@ export class LogList extends LitElement {
         let chPx = 8.5
 
         if (!['id'].includes(key)) {
-          if (key === 'timestamp' || key === 'created_at') {
+          if (key === 'timestamp') {
             chPx = 6.5
           }
           let target = String(vec[value]).length * chPx
@@ -359,13 +334,13 @@ export class LogList extends LitElement {
     const indicator = document.querySelector('#details_indicator')
     indicator.classList.add('htmx-request')
     const [rdId, rdCreatedAt, source] = targetInfo
-    const url = `/p/${pid}/log_explorer/${rdId}/${rdCreatedAt}/detailed?source=${source}`
-    updateUrlState('target_event', `${rdId}/${rdCreatedAt}/detailed?source=${source}`)
+    const url = `/p/${pid}/log_explorer/${rdId}/${rdCreatedAt}/detailed?source=spans`
+    updateUrlState('target_event', `${rdId}/${rdCreatedAt}/detailed?source=spans`)
     htmx.ajax('GET', url, { target: '#log_details_container', swap: 'innerHTML', indicator: '#details_indicator' })
   }
 
   render() {
-    const list = this.source === 'spans' ? (this.view === 'tree' ? this.spanListTree.filter(sp => sp.show) : [...this.spanListTree]) : [...this.logsData]
+    const list = this.view === 'tree' ? this.spanListTree.filter(sp => sp.show) : [...this.spanListTree]
     // end is used to render the load more button"
     list.unshift('start')
     list.push('end')
@@ -388,7 +363,7 @@ export class LogList extends LitElement {
           <thead class="z-10 sticky top-0">
             <tr class="text-textStrong border-b flex min-w-0 relative font-medium ">
               ${this.logsColumns.filter(v => v !== 'latency_breakdown').map(column => this.logTableHeading(column))}
-              ${this.source === 'spans' ? this.logTableHeading('latency_breakdown') : nothing}
+              ${this.logTableHeading('latency_breakdown')}
             </tr>
           </thead>
           ${list.length === 1 ? emptyState(this.source, this.logsColumns.length) : nothing}
@@ -427,7 +402,7 @@ export class LogList extends LitElement {
   }
 
   logItemCol(rowData, source, colIdxMap, key, serviceColors, toggleTrace, columnMaxWidthMap, wrapLines) {
-    const dataArr = source === 'spans' ? rowData.data : rowData
+    const dataArr = rowData.data
     const wrapClass = wrapLines ? 'whitespace-break-spaces' : 'whitespace-nowrap'
     switch (key) {
       case 'id':
@@ -478,7 +453,7 @@ export class LogList extends LitElement {
         return html` <div class="w-[16ch]">${renderBadge('cbadge-sm badge-neutral bg-fillWeak ' + wrapClass, service, 'service name')}</div>`
       case 'kind':
         let kind = lookupVecTextByKey(dataArr, colIdxMap, key)
-        return kind.toLowerCase() === 'internal' ? renderIconWithTippy('w-4', 'Internal span', faSprite('function', 'regular', 'h-3 w-3')) : nothing
+        return kind.toLowerCase() === 'internal' ? renderIconWithTippy('w-4 ml-2', 'Internal span', faSprite('function', 'regular', 'h-3 w-3 ')) : nothing
       case 'latency_breakdown':
         const { traceStart, traceEnd, startNs, duration, childrenTimeSpans, depth: d } = rowData
         const color = serviceColors[lookupVecTextByKey(dataArr, colIdxMap, 'span_name')] || 'bg-black'
@@ -515,8 +490,8 @@ export class LogList extends LitElement {
             ${k.toLowerCase() === 'server'
               ? renderIconWithTippy('w-4 ml-2', 'Incoming Request => Server', faSprite('arrow-down-left', 'solid', ' h-3 fill-slate-500'))
               : k.toLowerCase() === 'client'
-              ? renderIconWithTippy('w-4 ml-2', 'Outgoing Request  => Client', faSprite('arrow-up-right', 'solid', ' h-3 fill-blue-700'))
-              : nothing}
+                ? renderIconWithTippy('w-4 ml-2', 'Outgoing Request  => Client', faSprite('arrow-up-right', 'solid', ' h-3 fill-blue-700'))
+                : nothing}
             ${statusCode_ && statusCode_ !== 'UNSET' ? renderBadge(statusCls_, statusCode_, 'status code') : nothing}
             ${m ? renderBadge('min-w-[4rem] text-center cbadge cbadge-sm ' + methodCls_, m, 'method') : nothing}
             ${url ? renderBadge('cbadge-sm badge-neutral bg-fillWeak ' + wrapCls, url, 'url') : nothing}
@@ -528,7 +503,7 @@ export class LogList extends LitElement {
         const { system, statement } = dbAttributes
         if (system || statement) {
           return html`
-            ${renderIconWithTippy('w-4', 'database span', faSprite('database', 'regular', 'h-3 w-3 fill-slate-500'))}
+            ${renderIconWithTippy('w-4 ml-2', 'database span', faSprite('database', 'regular', 'h-3 w-3 fill-slate-500'))}
             ${statement ? renderBadge('cbadge-sm badge-neutral bg-fillWeak', statement) : nothing}
           `
         }
@@ -547,58 +522,47 @@ export class LogList extends LitElement {
         let val = lookupVecTextByKey(dataArr, colIdxMap, key)
         const { depth, children, traceId, childErrors, hasErrors, expanded, type, id, isLastChild, siblingsArr } = rowData
         const errClas = hasErrors
-          ? 'bg-red-500 text-white fill-white stroke-white'
+          ? 'bg-fillError-strong text-white fill-white stroke-strokeError-strong'
           : childErrors
-          ? 'border border-red-500 bg-fillWeak text-textWeak fill-textWeak'
-          : 'border border-strokeWeak bg-fillWeak text-textWeak fill-textWeak'
-        return source == 'logs'
-          ? html`${this.logItemCol(rowData, source, colIdxMap, 'severity_text')} ${this.logItemCol(rowData, source, colIdxMap, 'body')}`
-          : source === 'spans'
-          ? html`<div class="flex w-full ${wrapLines ? 'items-start' : 'items-center'} gap-1">
-              ${this.view === 'tree'
-                ? html`
-                    <div class="flex items-center gap-1">
-                      ${depth > 1
-                        ? new Array(depth - 1)
-                            .fill(1)
-                            .map((_, i) => html`<div class=${`ml-[15px] w-4 h-5 shrink-0 ${siblingsArr[i] ? 'border-l' : ''}`}></div>`)
-                        : nothing}
-                      ${depth > 0
-                        ? html`<div class=${`border-l ml-[15px] w-4 ${isLastChild ? 'h-3' : 'h-5'} relative shrink-0`}>
-                            <span class=${`border-b w-full absolute left-0 ${isLastChild ? 'bottom-0' : 'top-1/2 -translate-y-1/2'}`}></span>
-                          </div>`
-                        : nothing}
-                      ${children > 0
-                        ? html`<button
-                            @click=${e => {
-                              e.stopPropagation()
-                              toggleTrace(traceId, id)
-                            }}
-                            class=${`rounded-sm ml-1 cursor-pointer shrink-0 w-8 px-1 flex justify-center gap-[2px] text-xs items-center h-5 ${errClas}`}
-                          >
-                            ${expanded ? faSprite('minus', 'regular', 'w-3 h-1 shrink-0') : faSprite('plus', 'regular', 'w-3 h-3 shrink-0')} ${children}
-                          </button>`
-                        : depth === 0
-                        ? nothing
-                        : html`<div class=${`rounded-sm ml-1 shrink-0 w-3 h-5 ${errClas}`}></div>`}
-                    </div>
-                  `
-                : nothing}
-              <div class=${`flex items-center gap-1 ${wrapLines ? 'break-all flex-wrap' : 'overflow-hidden'}`}>
-                ${type === 'log'
-                  ? ['severity_text', 'body'].map(k => this.logItemCol(rowData, source, colIdxMap, k, undefined, undefined, undefined, wrapLines))
-                  : ['kind', 'http_attributes', 'db_attributes', 'rpc_attributes', 'status', 'span_name'].map(k =>
-                      this.logItemCol(rowData, source, colIdxMap, k, undefined, undefined, undefined, wrapLines),
-                    )}
-                <span class=${'fill-slate-700 ' + wrapClass}>${val}</span>
-              </div>
-            </div>`
-          : html`
-              ${this.logItemCol(rowData, source, colIdxMap, 'request_type')} ${this.logItemCol(rowData, source, colIdxMap, 'status_code')}
-              ${this.logItemCol(rowData, source, colIdxMap, 'method')} ${this.logItemCol(rowData, source, colIdxMap, 'url_path')}
-              ${this.logItemCol(rowData, source, colIdxMap, 'duration')} ${this.logItemCol(rowData, source, colIdxMap, 'host')}
-              <span class=${'overflow-x-hidden max-w-lg fill-slate-700 ' + wrapClass}>${val}</span>
-            `
+            ? 'border border-strokeError-strong bg-fillWeak text-textWeak fill-textWeak'
+            : 'border border-strokeWeak bg-fillWeak text-textWeak fill-textWeak'
+        return html`<div class="flex w-full ${wrapLines ? 'items-start' : 'items-center'} gap-1">
+          ${this.view === 'tree'
+            ? html`
+                <div class="flex items-center gap-1">
+                  ${depth > 1
+                    ? new Array(depth - 1).fill(1).map((_, i) => html`<div class=${`ml-[15px] w-4 h-5 shrink-0 ${siblingsArr[i] ? 'border-l' : ''}`}></div>`)
+                    : nothing}
+                  ${depth > 0
+                    ? html`<div class=${`border-l ml-[15px] w-4 ${isLastChild ? 'h-3' : 'h-5'} relative shrink-0`}>
+                        <span class=${`border-b w-full absolute left-0 ${isLastChild ? 'bottom-0' : 'top-1/2 -translate-y-1/2'}`}></span>
+                      </div>`
+                    : nothing}
+                  ${children > 0
+                    ? html`<button
+                        @click=${e => {
+                          e.stopPropagation()
+                          toggleTrace(traceId, id)
+                        }}
+                        class=${`rounded-sm ml-1 cursor-pointer shrink-0 w-8 px-1 flex justify-center gap-[2px] text-xs items-center h-5 ${errClas}`}
+                      >
+                        ${expanded ? faSprite('minus', 'regular', 'w-3 h-1 shrink-0') : faSprite('plus', 'regular', 'w-3 h-3 shrink-0')} ${children}
+                      </button>`
+                    : depth === 0
+                      ? nothing
+                      : html`<div class=${`rounded-sm ml-1 shrink-0 w-3 h-5 ${errClas}`}></div>`}
+                </div>
+              `
+            : nothing}
+          <div class=${`flex items-center gap-1 ${wrapLines ? 'break-all flex-wrap' : 'overflow-hidden'}`}>
+            ${type === 'log'
+              ? ['severity_text', 'body'].map(k => this.logItemCol(rowData, source, colIdxMap, k, undefined, undefined, undefined, wrapLines))
+              : ['kind', 'http_attributes', 'db_attributes', 'rpc_attributes', 'status', 'span_name'].map(k =>
+                  this.logItemCol(rowData, source, colIdxMap, k, undefined, undefined, undefined, wrapLines),
+                )}
+            <span class=${'fill-slate-700 ' + wrapClass}>${val}</span>
+          </div>
+        </div>`
       default:
         let v = lookupVecTextByKey(dataArr, colIdxMap, key)
         return renderBadge('cbadge-sm badge-neutral bg-fillWeak ' + wrapClass, v, key)
@@ -628,18 +592,18 @@ export class LogList extends LitElement {
         ${this.isLiveStreaming
           ? html`<p>Live streaming latest data...</p>`
           : this.isLoadingRecent
-          ? html`<div class="loading loading-dots loading-md"></div>`
-          : html`
-              <button
-                class="cursor-pointer text-textBrand underline font-semibold w-max mx-auto"
-                @click=${() => {
-                  const updatedUrl = this.latestLogsURLQueryValsFn()
-                  this.fetchData(updatedUrl, true)
-                }}
-              >
-                Check for recent data
-              </button>
-            `}
+            ? html`<div class="loading loading-dots loading-md"></div>`
+            : html`
+                <button
+                  class="cursor-pointer text-textBrand underline font-semibold w-max mx-auto"
+                  @click=${() => {
+                    const updatedUrl = this.latestLogsURLQueryValsFn()
+                    this.fetchData(updatedUrl, true)
+                  }}
+                >
+                  Check for recent data
+                </button>
+              `}
       </td>
     </tr>`
   }
@@ -652,7 +616,7 @@ export class LogList extends LitElement {
       case 'created_at':
         return this.tableHeadingWrapper('timestamp', column, 'w-[17ch] shrink-0')
       case 'latency_breakdown':
-        return this.tableHeadingWrapper('latency', column, 'sticky right-0 shrink-0 bg-red-500')
+        return this.tableHeadingWrapper('latency', column, 'sticky right-0 shrink-0 bg-fillError-strong')
       case 'status_code':
         return this.tableHeadingWrapper('status', column, 'shrink-0 w-[12ch]')
       case 'method':
@@ -682,8 +646,8 @@ export class LogList extends LitElement {
       }
       return this.fetchRecent()
     }
-    const s = this.source === 'spans' && rowData.type === 'log' ? 'logs' : this.source
-    const targetInfo = requestDumpLogItemUrlPath(this.source === 'spans' ? rowData.data : rowData, this.colIdxMap, s)
+    const s = rowData.type === 'log' ? 'logs' : this.source
+    const targetInfo = requestDumpLogItemUrlPath(rowData.data, this.colIdxMap, s)
     const isNew = rowData.isNew
     return html`
       <tr
@@ -702,7 +666,7 @@ export class LogList extends LitElement {
               ${this.logItemCol(rowData, this.source, this.colIdxMap, column, this.serviceColors, this.expandTrace, this.columnMaxWidthMap, this.wrapLines)}
             </td>`
           })}
-        ${this.source === 'spans' && this.logsColumns.includes('latency_breakdown')
+        ${this.logsColumns.includes('latency_breakdown')
           ? html`<td
               class="bg-white sticky right-0 overflow-x-hidden"
               style=${this.columnMaxWidthMap['latency_breakdown'] ? "width: ${this.columnMaxWidthMap['latency_breakdown']}px;" : ''}
@@ -764,42 +728,36 @@ export class LogList extends LitElement {
   options() {
     return html`
       <div class="w-full flex justify-end px-2 pb-1 gap-3 ">
-        ${this.source === 'spans'
-          ? html`
-              <div class="tabs tabs-box tabs-md p-0 tabs-outline items-center border">
-                <button
-                  @click=${() => (this.view = 'tree')}
-                  class=${`flex items-center justify-center gap-1 px-2 py-1 text-xs rounded ${
-                    this.view === 'tree' ? 'bg-gray-200 text-gray-800' : 'text-textWeak  hover:bg-gray-100'
-                  }`}
-                >
-                  ${faSprite('tree', 'regular', 'h-4 w-4')}
-                  <span class="sm:inline hidden">Tree</span>
-                </button>
+        ${html`
+          <div class="tabs tabs-box tabs-md p-0 tabs-outline items-center border">
+            <button
+              @click=${() => (this.view = 'tree')}
+              class=${`flex items-center justify-center gap-1 px-2 py-1 text-xs rounded ${
+                this.view === 'tree' ? 'bg-gray-200 text-gray-800' : 'text-textWeak  hover:bg-gray-100'
+              }`}
+            >
+              ${faSprite('tree', 'regular', 'h-4 w-4')}
+              <span class="sm:inline hidden">Tree</span>
+            </button>
 
-                <button
-                  @click=${() => (this.view = 'list')}
-                  class=${`flex items-center justify-center gap-1 px-2 py-1 text-xs rounded ${
-                    this.view === 'list' ? 'bg-gray-200 text-gray-800' : 'text-textWeak  hover:bg-gray-100'
-                  }`}
-                >
-                  ${faSprite('list-view', 'regular', 'h-4 w-4')}
-                  <span class="sm:inline hidden">List</span>
-                </button>
-              </div>
-            `
-          : nothing}
+            <button
+              @click=${() => (this.view = 'list')}
+              class=${`flex items-center justify-center gap-1 px-2 py-1 text-xs rounded ${
+                this.view === 'list' ? 'bg-gray-200 text-gray-800' : 'text-textWeak  hover:bg-gray-100'
+              }`}
+            >
+              ${faSprite('list-view', 'regular', 'h-4 w-4')}
+              <span class="sm:inline hidden">List</span>
+            </button>
+          </div>
+        `}
         <button
           class=${`flex items-center justify-center gap-1 px-2 py-1 text-xs rounded ${
             this.flipDirection ? 'bg-gray-200 text-gray-800' : 'text-textWeak  hover:bg-gray-100'
           }`}
           @click=${() => {
             this.flipDirection = !this.flipDirection
-            if (this.source === 'spans') {
-              this.spanListTree = this.buildSpanListTree(this.spanListTree.map(span => span.data).reverse())
-            } else {
-              this.logsData = this.logsData.reverse()
-            }
+            this.spanListTree = this.buildSpanListTree(this.spanListTree.map(span => span.data).reverse())
             this.requestUpdate()
           }}
         >

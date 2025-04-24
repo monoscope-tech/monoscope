@@ -409,13 +409,6 @@ sideNav sess project pageTitle menuItem hasIntegrated = aside_ [class_ "border-r
             span_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:block whitespace-nowrap truncate"] $ toHtml mTitle
 
   div_ [class_ "py-8 px-2 group-has-[#sidenav-toggle:checked]/pg:px-6 *:gap-2 *:whitespace-nowrap *:truncate flex flex-col gap-2.5 *:items-center *:overflow-x-hidden *:flex &:no-wrap"] do
-    mapM_ renderNavBottomItem $ navBottomList project.id.toText
-    let pidTxt = project.id.toText
-    when (project.paymentPlan /= "Free") $
-      a_
-        [class_ "p-3 flex gap-3 items-center rounded-sm hover:bg-gray-100 cursor-pointer", hxGet_ [text| /p/$pidTxt/manage_subscription |]]
-        (faSprite_ "dollar-sign" "regular" "h-5 w-5" >> span_ "Manage billing")
-
     let currUser = sess.persistentSession.user.getUser
     let userIdentifier =
           if currUser.firstName /= "" || currUser.lastName /= ""
@@ -431,6 +424,7 @@ sideNav sess project pageTitle menuItem hasIntegrated = aside_ [class_ "border-r
         , src_ [text|https://www.gravatar.com/avatar/${emailMd5}?d=https%3A%2F%2Fui-avatars.com%2Fapi%2F/${sanitizedID}/128|]
         ]
       span_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:inline-block overflow-hidden"] $ toHtml userIdentifier
+    mapM_ renderNavBottomItem $ navBottomList project.id.toText
 
 
 navbar :: Maybe Projects.Project -> [(Text, Text, Text)] -> Users.User -> Maybe Text -> Text -> Maybe Text -> Maybe Text -> Maybe (Html ()) -> Maybe (Html ()) -> Html ()
@@ -501,10 +495,7 @@ renderNavBottomItem (iconName, bgColor, textColor, linkText, link, targetBlankM,
    in
     a_ attrs $ do
       span_
-        [class_ $ "p-2 rounded-full " <> bgColor <> " " <> textColor <> " leading-none"]
-        (faSprite_ iconName "regular" "h-3 w-3")
-      span_
-        [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:block"]
+        [class_ "hidden link underline underline-offset-2 group-has-[#sidenav-toggle:checked]/pg:block"]
         (toHtml linkText)
 
 

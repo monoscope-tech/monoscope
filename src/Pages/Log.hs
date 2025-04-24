@@ -56,17 +56,6 @@ renderFacets :: FacetSummary -> Html ()
 renderFacets facetSummary = do
   let (FacetData facetMap) = facetSummary.facetJson
 
-      -- Define display info for different facet types
-      facetDisplays :: [(Text, Text, (Text -> Text))]
-      facetDisplays =
-        [ ("attributes___http___response___status_code", "Status Code", statusColorFn)
-        , ("attributes___http___request___method", "HTTP Method", methodColorFn)
-        , ("resource___service___name", "Service", const "")
-        , ("level", "Log Level", levelColorFn)
-        , ("kind", "Span Kind", const "")
-        , ("attributes___error___type", "Error Type", const "bg-red-500")
-        ]
-
       -- Color functions for different facet types
       statusColorFn val = case T.take 1 val of
         "2" -> "bg-green-500"
@@ -81,6 +70,17 @@ renderFacets facetSummary = do
         "PUT" -> "bg-amber-500"
         "DELETE" -> "bg-red-500"
         _ -> "bg-purple-500"
+
+      -- Define display info for different facet types
+      facetDisplays :: [(Text, Text, (Text -> Text))]
+      facetDisplays =
+        [ ("attributes___http___response___status_code", "Status Code", statusColorFn)
+        , ("attributes___http___request___method", "HTTP Method", methodColorFn)
+        , ("resource___service___name", "Service", const "")
+        , ("level", "Log Level", levelColorFn)
+        , ("kind", "Span Kind", const "")
+        , ("attributes___error___type", "Error Type", const "bg-red-500")
+        ]
 
       levelColorFn val = case val of
         "ERROR" -> "bg-red-500"
@@ -140,7 +140,7 @@ keepNonEmpty (Just a) = Just a
 apiLogH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe UTCTime -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders LogsGet)
 apiLogH pid queryM queryASTM cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM queryLibItemTitle queryLibItemID detailWM targetEventM showTraceM hxRequestM hxBoostedM = do
   (sess, project) <- Sessions.sessionAndProject pid
-  let source = fromMaybe "requests" sourceM
+  let source = fromMaybe "spans" sourceM
   let summaryCols = T.splitOn "," (fromMaybe "" cols')
   let parseQuery q = either (\err -> addErrorToast "Error Parsing Query" (Just err) >> pure []) pure (parseQueryToAST q)
   queryAST <-
@@ -196,9 +196,10 @@ apiLogH pid queryM queryASTM cols' cursorM' sinceM fromM toM layoutM sourceM tar
               Components.timepicker_ (Just "log_explorer_form") currentRange
               Components.refreshButton_
           , navTabs = Just $ div_ [class_ "tabs tabs-box tabs-md p-0 tabs-outline items-center border"] do
-              a_ [onclick_ "window.setQueryParamAndReload('source', 'requests')", role_ "tab", class_ $ "tab h-auto! " <> if source == "requests" then "tab-active  text-textStrong " else ""] "Requests"
-              a_ [onclick_ "window.setQueryParamAndReload('source', 'spans')", role_ "tab", class_ $ "tab h-auto! " <> if source == "spans" then "tab-active text-textStrong " else ""] "Traces"
-              -- a_ [onclick_ "window.setQueryParamAndReload('source', 'metrics')", role_ "tab", class_ $ "tab py-1.5 h-auto! " <> if source == "metrics" then "tab-active" else ""] "Metrics"
+              a_
+                [onclick_ "window.setQueryParamAndReload('source', 'spans')", role_ "tab", class_ $ "tab h-auto! " <> if source == "spans" then "tab-active text-textStrong " else ""]
+                "Events"
+                -- a_ [onclick_ "window.setQueryParamAndReload('source', 'metrics')", role_ "tab", class_ $ "tab py-1.5 h-auto! " <> if source == "metrics" then "tab-active" else ""] "Metrics"
           }
   let (days, hours, minutes, _seconds) = convertToDHMS $ diffUTCTime now project.createdAt
       daysLeft =
@@ -210,14 +211,8 @@ apiLogH pid queryM queryASTM cols' cursorM' sinceM fromM toM layoutM sourceM tar
       let (requestVecs, colNames, resultCount) = tableAsVec
           curatedColNames = nubOrd $ curateCols summaryCols colNames
           colIdxMap = listToIndexHashMap colNames
-          reqLastCreatedAtM =
-            if source == "requests"
-              then (\r -> lookupVecTextByKey r colIdxMap "created_at") =<< (requestVecs V.!? (V.length requestVecs - 1))
-              else (\r -> lookupVecTextByKey r colIdxMap "timestamp") =<< (requestVecs V.!? (V.length requestVecs - 1))
-          traceIDs =
-            if source == "spans"
-              then V.catMaybes $ V.map (\v -> lookupVecTextByKey v colIdxMap "trace_id") requestVecs
-              else []
+          reqLastCreatedAtM = (\r -> lookupVecTextByKey r colIdxMap "timestamp") =<< (requestVecs V.!? (V.length requestVecs - 1))
+          traceIDs = V.catMaybes $ V.map (\v -> lookupVecTextByKey v colIdxMap "trace_id") requestVecs
           nextLogsURL = RequestDumps.requestDumpLogUrlPath pid queryM cols' reqLastCreatedAtM sinceM fromM toM (Just "loadmore") source queryASTM
           resetLogsURL = RequestDumps.requestDumpLogUrlPath pid queryM cols' Nothing Nothing Nothing Nothing Nothing source Nothing
       additionalReqsVec <-
@@ -227,10 +222,7 @@ apiLogH pid queryM queryASTM cols' cursorM' sinceM fromM toM layoutM sourceM tar
             rs <- RequestDumps.selectChildSpansAndLogs pid summaryCols $ V.filter (/= "") traceIDs
             pure rs
       let finalVecs = requestVecs <> additionalReqsVec
-          serviceNames =
-            if source == "spans"
-              then V.map (\v -> lookupVecTextByKey v colIdxMap "span_name") finalVecs
-              else []
+          serviceNames = V.map (\v -> lookupVecTextByKey v colIdxMap "span_name") finalVecs
           colors = getServiceColors (V.catMaybes serviceNames)
       let page =
             ApiLogsPageData
@@ -301,7 +293,7 @@ instance ToHtml LogsGet where
 apiLogJson :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe UTCTime -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders AE.Value)
 apiLogJson pid queryM queryASTM cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM = do
   (sess, project) <- Sessions.sessionAndProject pid
-  let source = fromMaybe "requests" sourceM
+  let source = fromMaybe "spans" sourceM
   let summaryCols = T.splitOn "," (fromMaybe "" cols')
   let parseQuery q = either (\err -> addErrorToast "Error Parsing Query" (Just err) >> pure []) pure (parseQueryToAST q)
   queryAST <-
@@ -320,16 +312,10 @@ apiLogJson pid queryM queryASTM cols' cursorM' sinceM fromM toM layoutM sourceM 
     Just tableAsVec -> do
       let (requestVecs, colNames, _) = tableAsVec
           colIdxMap = listToIndexHashMap colNames
-          reqLastCreatedAtM =
-            if source == "requests"
-              then (\r -> lookupVecTextByKey r colIdxMap "created_at") =<< (requestVecs V.!? (V.length requestVecs - 1))
-              else (\r -> lookupVecTextByKey r colIdxMap "timestamp") =<< (requestVecs V.!? (V.length requestVecs - 1))
+          reqLastCreatedAtM = (\r -> lookupVecTextByKey r colIdxMap "timestamp") =<< (requestVecs V.!? (V.length requestVecs - 1))
           nextLogsURL = RequestDumps.requestDumpLogUrlPath pid queryM cols' reqLastCreatedAtM sinceM fromM toM (Just "loadmore") source queryASTM
           resetLogsURL = RequestDumps.requestDumpLogUrlPath pid queryM cols' Nothing Nothing Nothing Nothing Nothing source Nothing
-          traceIDs =
-            if source == "spans"
-              then V.catMaybes $ V.map (\v -> lookupVecTextByKey v colIdxMap "trace_id") requestVecs
-              else []
+          traceIDs = V.catMaybes $ V.map (\v -> lookupVecTextByKey v colIdxMap "trace_id") requestVecs
       additionalReqsVec <-
         if (null traceIDs)
           then pure []
@@ -337,10 +323,7 @@ apiLogJson pid queryM queryASTM cols' cursorM' sinceM fromM toM layoutM sourceM 
             rs <- RequestDumps.selectChildSpansAndLogs pid summaryCols $ V.filter (/= "") traceIDs
             pure rs
       let finalVecs = requestVecs <> additionalReqsVec
-          serviceNames =
-            if source == "spans"
-              then V.map (\v -> lookupVecTextByKey v colIdxMap "span_name") finalVecs
-              else []
+          serviceNames = V.map (\v -> lookupVecTextByKey v colIdxMap "span_name") finalVecs
           colors = getServiceColors (V.catMaybes serviceNames)
 
       addRespHeaders $
@@ -388,20 +371,19 @@ logQueryBox_ pid currentRange source targetSpan queryAST queryLibRecent queryLib
         div_ [class_ "p-1 pl-3 flex-1 flex gap-2  bg-fillWeaker rounded-lg border border-strokeWeak justify-between items-stretch"] do
           div_ [id_ "queryEditor", class_ "h-14 hidden overflow-hidden  bg-fillWeak flex-1 flex items-center"] pass
           div_ [id_ "queryBuilder", class_ "flex-1 flex items-center"] $ termRaw "filter-element" [id_ "filterElement", class_ "w-full h-full flex items-center", termRaw "ast" queryAST] ("" :: Text)
-          when (source == "spans") do
-            let target = fromMaybe "all-spans" targetSpan
-            div_ [class_ "gap-[2px] flex items-center"] do
-              span_ "in"
-              select_
-                [ class_ "ml-1 select select-sm w-full max-w-[150px]"
-                , name_ "target-spans"
-                , id_ "spans-toggle"
-                , onchange_ "htmx.trigger('#log_explorer_form', 'submit')"
-                ]
-                do
-                  option_ (value_ "all-spans" : ([selected_ "true" | target == "all-spans"])) "All spans"
-                  option_ (value_ "root-spans" : ([selected_ "true" | target == "root-spans"])) "Trace Root Spans"
-                  option_ (value_ "service-entry-spans" : ([selected_ "true" | target == "service-entry-spans"])) "Service Entry Spans"
+          div_ [class_ "gap-[2px] flex items-center"] do
+            span_ "in"
+            select_
+              [ class_ "ml-1 select select-sm w-full max-w-[150px]"
+              , name_ "target-spans"
+              , id_ "spans-toggle"
+              , onchange_ "htmx.trigger('#log_explorer_form', 'submit')"
+              ]
+              do
+                let target = fromMaybe "all-spans" targetSpan
+                option_ (value_ "all-spans" : ([selected_ "true" | target == "all-spans"])) "All spans"
+                option_ (value_ "root-spans" : ([selected_ "true" | target == "root-spans"])) "Trace Root Spans"
+                option_ (value_ "service-entry-spans" : ([selected_ "true" | target == "service-entry-spans"])) "Service Entry Spans"
           div_ [class_ "dropdown dropdown-hover dropdown-bottom dropdown-end"] do
             div_ [class_ "rounded-lg px-3 py-2 text-slate-700 inline-flex items-center border border-strokeStrong", tabindex_ "0", role_ "button"] $ faSprite_ "floppy-disk" "regular" "h-5 w-5"
             ul_ [tabindex_ "0", class_ "dropdown-content border menu bg-base-100 rounded-box z-1 w-60 p-2 shadow-lg"] do
@@ -607,10 +589,7 @@ apiLogsPage page = do
       logQueryBox_ page.pid page.currentRange page.source page.targetSpans page.queryAST page.queryLibRecent page.queryLibSaved
 
       div_ [class_ "flex flex-row gap-4 mt-3 group-has-[.toggle-chart:checked]/pg:hidden w-full", style_ "aspect-ratio: 10 / 1;"] do
-        Widget.widget_ $ (def :: Widget.Widget){Widget.query = Just "timechart count(*)", Widget.unit = Just "reqs", Widget.title = Just "All requests", Widget.hideLegend = Just True, Widget._projectId = Just page.pid, Widget.standalone = Just True, Widget.yAxis = Just (def{showOnlyMaxLabel = Just True})}
-        -- let table = if page.source == "spans" then "otel_logs_and_spans" else "apis.request_dumps"
-        --     appColumn = if page.source == "spans" then "duration" else "duration_ns"
-        --     timeFilter = if page.source == "spans" then "time_filter" else "time_filter_sql_created_at"
+        Widget.widget_ $ (def :: Widget.Widget){Widget.query = Just "timechart count(*)", Widget.unit = Just "rows", Widget.title = Just "All traces", Widget.hideLegend = Just True, Widget._projectId = Just page.pid, Widget.standalone = Just True, Widget.yAxis = Just (def{showOnlyMaxLabel = Just True})}
 
         Widget.widget_ $
           (def :: Widget.Widget)
@@ -649,7 +628,7 @@ apiLogsPage page = do
       div_ [class_ "w-1/6 text-sm shrink-0 flex flex-col gap-2 p-2 transition-all duration-500 ease-out opacity-100 delay-[0ms] group-has-[.toggle-filters:checked]/pg:duration-300 group-has-[.toggle-filters:checked]/pg:opacity-0 group-has-[.toggle-filters:checked]/pg:w-0 group-has-[.toggle-filters:checked]/pg:p-0 group-has-[.toggle-filters:checked]/pg:overflow-hidden"] do
         input_
           [ placeholder_ "Search facets..."
-          , class_ "rounded-lg shadow-sm px-3 py-1 border border-strokeStrong"
+          , class_ "rounded-lg px-3 py-1 border border-strokeStrong"
           , term "data-filterParent" "facets-container"
           , [__| on keyup 
                 if the event's key is 'Escape' 
@@ -674,9 +653,9 @@ apiLogsPage page = do
                 span_ [class_ "hidden group-has-[.toggle-filters:checked]/pg:block"] "Show"
                 span_ [class_ "group-has-[.toggle-filters:checked]/pg:hidden"] "Hide"
                 "filters"
-                input_ [type_ "checkbox", class_ "toggle-filters hidden", checked_]
+                input_ [type_ "checkbox", class_ "toggle-filters hidden"]
               span_ [class_ "text-slate-200"] "|"
-              div_ [class_ ""] $ span_ [class_ "text-slate-950"] (toHtml @Text $ fmt $ commaizeF page.resultCount) >> span_ [class_ "text-slate-600"] (toHtml (" " <> page.source <> " found"))
+              div_ [class_ ""] $ span_ [class_ "text-slate-950"] (toHtml @Text $ fmt $ commaizeF page.resultCount) >> span_ [class_ "text-slate-600"] (toHtml (" rows found"))
             div_ [class_ $ "absolute top-0 right-0  w-full h-full overflow-scroll c-scroll z-50 bg-white transition-all duration-100 " <> if showTrace then "" else "hidden", id_ "trace_expanded_view"] do
               whenJust page.showTrace \trId -> do
                 let url = "/p/" <> page.pid.toText <> "/traces/" <> trId
@@ -766,13 +745,7 @@ curateCols :: [Text] -> [Text] -> [Text]
 curateCols summaryCols cols = sortBy sortAccordingly filteredCols
   where
     defaultSummaryPaths =
-      [ "errors_count"
-      , "host"
-      , "status_code"
-      , "method"
-      , "url_path"
-      , "request_type"
-      , "trace_id"
+      [ "trace_id"
       , "severity_text"
       , "parent_span_id"
       , "errors"
@@ -788,22 +761,17 @@ curateCols summaryCols cols = sortBy sortAccordingly filteredCols
       , "duration"
       , "body"
       ]
-    isLogEventB = isLogEvent cols
-    filteredCols = filter (\c -> not isLogEventB || (c `notElem` defaultSummaryPaths || c `elem` summaryCols)) cols
+    filteredCols = filter (\c -> c `notElem` defaultSummaryPaths || c `elem` summaryCols) cols
 
     sortAccordingly :: Text -> Text -> Ordering
     sortAccordingly a b
       | a == "id" = LT
       | b == "id" = GT
-      | a == "created_at" && b /= "id" = LT
-      | b == "created_at" && a /= "id" = GT
+      | a == "timestamp" && b /= "id" = LT
+      | b == "timestamp" && a /= "id" = GT
       | a == "rest" = GT
       | b == "rest" = LT
       | otherwise = comparing (`L.elemIndex` filteredCols) a b
-
-
-isLogEvent :: [Text] -> Bool
-isLogEvent cols = all @[] (`elem` cols) ["id", "created_at"] || all @[] (`elem` cols) ["id", "timestamp"]
 
 
 -- TODO:

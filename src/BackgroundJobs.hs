@@ -174,10 +174,10 @@ jobsRunner logger authCtx job = when authCtx.config.enableBackgroundJobs $ do
         projects <- dbtToEff $ query Select [sql|SELECT id FROM projects.projects WHERE active=? AND deleted_at IS NULL and payment_plan != 'ONBOARDING'|] (Only True)
         forM_ projects \p -> do
           liftIO $ withResource authCtx.jobsPool \conn -> do
-            when (dayOfWeek currentDay == Monday)
-              $ void
-              $ createJob conn "background_jobs"
-              $ BackgroundJobs.WeeklyReports p
+            when (dayOfWeek currentDay == Monday) $
+              void $
+                createJob conn "background_jobs" $
+                  BackgroundJobs.WeeklyReports p
             createJob conn "background_jobs" $ BackgroundJobs.ReportUsage p
       HourlyJob scheduledTime hour -> runHourlyJob scheduledTime hour
       DailyReports pid -> dailyReportForProject pid
@@ -187,10 +187,11 @@ jobsRunner logger authCtx job = when authCtx.config.enableBackgroundJobs $ do
         when (project.paymentPlan /= "Free" && project.paymentPlan /= "ONBOARDING") $ whenJust project.firstSubItemId \fSubId -> do
           currentTime <- liftIO getZonedTime
           totalToReport <- dbtToEff $ RequestDumps.getTotalRequestToReport pid project.usageLastReported
-          liftIO $ reportUsageToLemonsqueezy fSubId totalToReport authCtx.config.lemonSqueezyApiKey
-          _ <- dbtToEff $ LemonSqueezy.addDailyUsageReport pid totalToReport
-          _ <- dbtToEff $ Projects.updateUsageLastReported pid currentTime
-          pass
+          when (totalToReport > 0) do
+            liftIO $ reportUsageToLemonsqueezy fSubId totalToReport authCtx.config.lemonSqueezyApiKey
+            _ <- dbtToEff $ LemonSqueezy.addDailyUsageReport pid totalToReport
+            _ <- dbtToEff $ Projects.updateUsageLastReported pid currentTime
+            pass
       RunCollectionTests col_id -> do
         now <- Time.currentTime
         collectionM <- dbtToEff $ Testing.getCollectionById col_id
@@ -359,8 +360,8 @@ handleQueryMonitorThreshold monitorE isAlert = do
 
 jobsWorkerInit :: Log.Logger -> Config.AuthContext -> IO ()
 jobsWorkerInit logger appCtx =
-  startJobRunner
-    $ mkConfig jobLogger "background_jobs" appCtx.jobsPool (MaxConcurrentJobs 1) (jobsRunner logger appCtx) id
+  startJobRunner $
+    mkConfig jobLogger "background_jobs" appCtx.jobsPool (MaxConcurrentJobs 1) (jobsRunner logger appCtx) id
   where
     jobLogger :: LogLevel -> LogEvent -> IO ()
     jobLogger logLevel logEvent = Log.runLogT "OddJobs" logger Log.LogAttention $ Log.logInfo "Background jobs ping." (show @Text logLevel, show @Text logEvent) -- logger show (logLevel, logEvent)
@@ -641,9 +642,9 @@ We have detected a new endpoint on *{project.title}*
       errs <- dbtToEff $ Anomalies.errorsByHashes pid targetHashes
       issueId <- liftIO $ Anomalies.AnomalyId <$> UUIDV4.nextRandom
       _ <-
-        dbtToEff
-          $ Anomalies.insertIssues
-          $ ( \err ->
+        dbtToEff $
+          Anomalies.insertIssues $
+            ( \err ->
                 Anomalies.Issue
                   { id = issueId
                   , createdAt = err.createdAt
@@ -658,7 +659,7 @@ We have detected a new endpoint on *{project.title}*
                   , archivedAt = Nothing
                   }
             )
-          <$> errs
+              <$> errs
 
       forM_ project.notificationsChannel \case
         Projects.NSlack ->
