@@ -63,7 +63,7 @@ import Relude hiding (ask)
 import RequestMessages (RequestMessage (..))
 import System.Config (AuthContext)
 import System.Types (runBackground)
-import Utils (nestedJsonFromDotNotation)
+import Utils (b64ToJson, nestedJsonFromDotNotation)
 
 
 -- import Network.GRPC.Server.Service (Service, service, method, fromServices)
@@ -527,6 +527,26 @@ convertSpanToOtelLog pid resourceM scopeM pSpan =
                             ]
                       )
                       links
+      attributes = jsonToMap $ keyValueToJSON $ V.fromList $ pSpan ^. PTF.attributes
+      (req, res) = case Map.lookup "http" (fromMaybe Map.empty attributes) of
+        Just (AE.Object http) -> (KEM.lookup "request" http, KEM.lookup "response" http)
+        _ -> (Nothing, Nothing)
+      body =
+        if pSpan ^. PTF.name == "apitoolkit-http-span"
+          then
+            Just $
+              AE.object
+                [ "request_body" AE..= extractBody req
+                , "response_body" AE..= extractBody res
+                ]
+          else Nothing
+        where
+          extractBody :: Maybe AE.Value -> AE.Value
+          extractBody (Just (AE.Object obj)) =
+            case KEM.lookup "body" obj of
+              Just (AE.String b) -> b64ToJson b
+              _ -> AE.Null
+          extractBody _ = AE.Null
    in OtelLogsAndSpans
         { project_id = pid.toText
         , id = UUID.nil -- Will be replaced in bulkInsertOtelLogsAndSpansTF
@@ -543,8 +563,8 @@ convertSpanToOtelLog pid resourceM scopeM pSpan =
                 }
         , level = Nothing
         , severity = Nothing
-        , body = Nothing
-        , attributes = jsonToMap $ keyValueToJSON $ V.fromList $ pSpan ^. PTF.attributes
+        , body
+        , attributes
         , resource = jsonToMap $ resourceToJSON resourceM
         , hashes = V.empty
         , kind = spanKindText

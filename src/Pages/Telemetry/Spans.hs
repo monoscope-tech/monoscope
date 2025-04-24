@@ -313,8 +313,3 @@ selectiveOtelLogsJson sp =
       , maybe [] (\d -> ["events" AE..= d]) sp.events
       , maybe [] (\d -> ["link" AE..= d]) sp.links
       ]
-
-
-b64ToJson :: Text -> AE.Value
-b64ToJson b64Text =
-  fromRight (AE.object []) $ AE.eitherDecodeStrict $ fromRight "{}" $ B64.decodeBase64Untyped $ encodeUtf8 b64Text

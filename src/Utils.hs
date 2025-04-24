@@ -31,6 +31,7 @@ module Utils (
   getStatusColor,
   unwrapJsonPrimValue,
   listToIndexHashMap,
+  b64ToJson,
   lookupMapText,
   getOtelLangVersion,
   lookupMapInt,
@@ -55,6 +56,7 @@ import Data.Aeson.Extra.Merge (lodashMerge)
 import Data.Aeson.Key qualified as AEK
 import Data.Aeson.KeyMap qualified as AEKM
 import Data.ByteString qualified as BS
+import Data.ByteString.Base64 qualified as B64
 import Data.ByteString.Lazy qualified as LBS
 import Data.Char (isDigit)
 import Data.Digest.XXHash (xxHash)
@@ -231,6 +233,11 @@ replaceNumbers input = T.replace ".[*]" "[*]" $ T.intercalate "." (map replaceDi
     replaceDigitWithAsterisk ch
       | isDigit ch = "[*]"
       | otherwise = one ch
+
+
+b64ToJson :: Text -> AE.Value
+b64ToJson b64Text =
+  fromRight (AE.object []) $ AE.eitherDecodeStrict $ fromRight "{}" $ B64.decodeBase64Untyped $ encodeUtf8 b64Text
 
 
 jsonValueToHtmlTree :: AE.Value -> Html ()

@@ -12,6 +12,7 @@ import Data.Aeson.Extra.Merge (lodashMerge)
 import Data.Aeson.Key qualified as AEK
 import Data.Aeson.KeyMap qualified as AEKM
 import Data.Aeson.Types (KeyValue ((.=)), object)
+import Data.ByteString.Base64 qualified as B64
 import Data.ByteString.Lazy.Char8 qualified as BL
 import Data.Cache qualified as Cache
 import Data.Effectful.UUID (UUIDEff)
@@ -55,7 +56,7 @@ import System.Clock (
  )
 import System.Config qualified as Config
 import UnliftIO.Exception (try)
-import Utils (eitherStrToText, nestedJsonFromDotNotation)
+import Utils (b64ToJson, eitherStrToText, nestedJsonFromDotNotation)
 
 
 {--
@@ -260,7 +261,7 @@ convertRequestMessageToSpan rm (spanId, trId) =
     , end_time = Just $ addUTCTime (realToFrac (fromIntegral rm.duration / 1000000000)) (zonedTimeToUTC rm.timestamp)
     , kind = Just $ if (T.isSuffixOf "Outgoing" (show rm.sdkType)) then "Client" else "Server"
     , level = Nothing
-    , body = Nothing
+    , body = Just $ AE.object ["request_body" AE..= b64ToJson rm.requestBody, "response_body" AE..= b64ToJson rm.responseBody]
     , severity = Nothing
     , status_message = Just $ case rm.statusCode of
         sc
@@ -302,8 +303,8 @@ createSpanAttributes rm =
           , ("http.request.query_params", AE.String $ Relude.decodeUtf8 $ AE.encode rm.queryParams)
           , ("apitoolkit.msg_id", AE.String $ maybe "" UUID.toText rm.msgId)
           , ("apitoolkit.parent_id", AE.String $ maybe "" UUID.toText rm.parentId)
-          , ("http.request.body", AE.String $ rm.requestBody)
-          , ("http.response.body", AE.String $ rm.responseBody)
+          , ("http.request.body", b64ToJson $ rm.requestBody)
+          , ("http.response.body", b64ToJson $ rm.responseBody)
           , ("http.response.status_code", AE.Number $ fromIntegral rm.statusCode)
           , ("apitoolkit.sdk_type", AE.String $ show rm.sdkType)
           , ("http.route", maybe (AE.String (T.takeWhile (/= '?') rm.rawUrl)) AE.String rm.urlPath)
