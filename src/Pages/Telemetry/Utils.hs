@@ -50,9 +50,11 @@ getRequestDetails spanRecord = do
         , case KEM.lookup "request" o of
             Just (AE.Object r) -> getText "method" r
             _ -> ""
-        , case Map.lookup "url" m of
-            Just (AE.Object r) -> getUrl r
-            _ -> ""
+        , case getUrl o of
+            Just u -> u
+            Nothing -> case Map.lookup "url" m of
+              Just (AE.Object p) -> fromMaybe "/" $ getUrl p
+              _ -> "/"
         , case KEM.lookup "response" o of
             Just (AE.Object r) -> getStatus r
             _ -> 0
@@ -75,10 +77,10 @@ getRequestDetails spanRecord = do
       Just (AE.Number n) -> toBoundedInteger n
       Just (AE.String s) -> readMaybe $ toString s
       _ -> Nothing
-    getUrl :: AE.Object -> Text
+    getUrl :: AE.Object -> Maybe Text
     getUrl v =
       let opts = [getText "route" v, getText "path" v, getText "url" v, getText "target" v]
-       in fromMaybe "/" $ viaNonEmpty head $ Relude.filter (not . T.null) opts
+       in viaNonEmpty head $ Relude.filter (not . T.null) opts
     getStatus :: AE.Object -> Int
     getStatus v = fromMaybe 0 $ getInt "status_code" v
 

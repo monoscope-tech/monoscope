@@ -330,7 +330,7 @@ export class LogList extends LitElement {
     }
     const rows = document.querySelectorAll('.item-row.bg-fillBrand-weak')
     rows.forEach(row => row.classList.remove('bg-fillBrand-weak'))
-    event.currentTarget.classList.add('bg-fillBrand-weak')
+    event.currentTarget.classList.add('bg-fillBrand-strong')
     const indicator = document.querySelector('#details_indicator')
     indicator.classList.add('htmx-request')
     const [rdId, rdCreatedAt, source] = targetInfo
@@ -490,8 +490,8 @@ export class LogList extends LitElement {
             ${k.toLowerCase() === 'server'
               ? renderIconWithTippy('w-4 ml-2', 'Incoming Request => Server', faSprite('arrow-down-left', 'solid', ' h-3 fill-slate-500'))
               : k.toLowerCase() === 'client'
-                ? renderIconWithTippy('w-4 ml-2', 'Outgoing Request  => Client', faSprite('arrow-up-right', 'solid', ' h-3 fill-blue-700'))
-                : nothing}
+              ? renderIconWithTippy('w-4 ml-2', 'Outgoing Request  => Client', faSprite('arrow-up-right', 'solid', ' h-3 fill-blue-700'))
+              : nothing}
             ${statusCode_ && statusCode_ !== 'UNSET' ? renderBadge(statusCls_, statusCode_, 'status code') : nothing}
             ${m ? renderBadge('min-w-[4rem] text-center cbadge cbadge-sm ' + methodCls_, m, 'method') : nothing}
             ${url ? renderBadge('cbadge-sm badge-neutral bg-fillWeak ' + wrapCls, url, 'url') : nothing}
@@ -524,8 +524,8 @@ export class LogList extends LitElement {
         const errClas = hasErrors
           ? 'bg-fillError-strong text-white fill-white stroke-strokeError-strong'
           : childErrors
-            ? 'border border-strokeError-strong bg-fillWeak text-textWeak fill-textWeak'
-            : 'border border-strokeWeak bg-fillWeak text-textWeak fill-textWeak'
+          ? 'border border-strokeError-strong bg-fillWeak text-textWeak fill-textWeak'
+          : 'border border-strokeWeak bg-fillWeak text-textWeak fill-textWeak'
         return html`<div class="flex w-full ${wrapLines ? 'items-start' : 'items-center'} gap-1">
           ${this.view === 'tree'
             ? html`
@@ -549,8 +549,8 @@ export class LogList extends LitElement {
                         ${expanded ? faSprite('minus', 'regular', 'w-3 h-1 shrink-0') : faSprite('plus', 'regular', 'w-3 h-3 shrink-0')} ${children}
                       </button>`
                     : depth === 0
-                      ? nothing
-                      : html`<div class=${`rounded-sm ml-1 shrink-0 w-3 h-5 ${errClas}`}></div>`}
+                    ? nothing
+                    : html`<div class=${`rounded-sm ml-1 shrink-0 w-3 h-5 ${errClas}`}></div>`}
                 </div>
               `
             : nothing}
@@ -592,18 +592,18 @@ export class LogList extends LitElement {
         ${this.isLiveStreaming
           ? html`<p>Live streaming latest data...</p>`
           : this.isLoadingRecent
-            ? html`<div class="loading loading-dots loading-md"></div>`
-            : html`
-                <button
-                  class="cursor-pointer text-textBrand underline font-semibold w-max mx-auto"
-                  @click=${() => {
-                    const updatedUrl = this.latestLogsURLQueryValsFn()
-                    this.fetchData(updatedUrl, true)
-                  }}
-                >
-                  Check for recent data
-                </button>
-              `}
+          ? html`<div class="loading loading-dots loading-md"></div>`
+          : html`
+              <button
+                class="cursor-pointer text-textBrand underline font-semibold w-max mx-auto"
+                @click=${() => {
+                  const updatedUrl = this.latestLogsURLQueryValsFn()
+                  this.fetchData(updatedUrl, true)
+                }}
+              >
+                Check for recent data
+              </button>
+            `}
       </td>
     </tr>`
   }
