@@ -42,7 +42,19 @@ getRequestDetails :: Maybe (Map Text AE.Value) -> Maybe (Text, Text, Text, Int)
 getRequestDetails spanRecord = do
   m <- spanRecord
   case Map.lookup "http" m of
-    Just (AE.Object o) -> Just ("HTTP", getText "method" o, getUrl o, getStatus o)
+    Just (AE.Object o) ->
+      Just
+        ( "HTTP"
+        , case KEM.lookup "request" o of
+            Just (AE.Object r) -> getText "method" r
+            _ -> ""
+        , case KEM.lookup "url" o of
+            Just (AE.Object r) -> getUrl r
+            _ -> ""
+        , case KEM.lookup "response" o of
+            Just (AE.Object r) -> getStatus r
+            _ -> 0
+        )
     _ -> case Map.lookup "rpc" m of
       Just (AE.Object o) -> Just ("GRPC", getText "service" o, getText "method" o, getStatus o)
       _ -> case Map.lookup "db" m of
@@ -61,13 +73,12 @@ getRequestDetails spanRecord = do
       Just (AE.Number n) -> toBoundedInteger n
       Just (AE.String s) -> readMaybe $ toString s
       _ -> Nothing
-    (<->) = mplus
     getUrl :: AE.Object -> Text
     getUrl v =
-      let opts = [getText "route" v, getText "url.path" v, getText "url" v, getText "target" v]
+      let opts = [getText "route" v, getText "path" v, getText "url" v, getText "target" v]
        in fromMaybe "/" $ viaNonEmpty head $ Relude.filter (not . T.null) opts
     getStatus :: AE.Object -> Int
-    getStatus v = fromMaybe 0 $ getInt "status_code" v <-> getInt "http.response.status_code" v <-> getInt "rpc.grpc.status_code" v
+    getStatus v = fromMaybe 0 $ getInt "status_code" v
 
 
 spanHasErrors :: Telemetry.SpanRecord -> Bool
