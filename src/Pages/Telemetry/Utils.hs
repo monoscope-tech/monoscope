@@ -50,7 +50,7 @@ getRequestDetails spanRecord = do
         , case KEM.lookup "request" o of
             Just (AE.Object r) -> getText "method" r
             _ -> ""
-        , case KEM.lookup "url" o of
+        , case Map.lookup "url" m of
             Just (AE.Object r) -> getUrl r
             _ -> ""
         , case KEM.lookup "response" o of
