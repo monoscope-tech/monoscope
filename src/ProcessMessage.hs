@@ -303,8 +303,6 @@ createSpanAttributes rm =
           , ("http.request.query_params", AE.String $ Relude.decodeUtf8 $ AE.encode rm.queryParams)
           , ("apitoolkit.msg_id", AE.String $ maybe "" UUID.toText rm.msgId)
           , ("apitoolkit.parent_id", AE.String $ maybe "" UUID.toText rm.parentId)
-          , ("http.request.body", b64ToJson $ rm.requestBody)
-          , ("http.response.body", b64ToJson $ rm.responseBody)
           , ("http.response.status_code", AE.Number $ fromIntegral rm.statusCode)
           , ("apitoolkit.sdk_type", AE.String $ show rm.sdkType)
           , ("http.route", maybe (AE.String (T.takeWhile (/= '?') rm.rawUrl)) AE.String rm.urlPath)

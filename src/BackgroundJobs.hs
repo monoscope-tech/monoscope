@@ -1,4 +1,4 @@
-module BackgroundJobs (jobsWorkerInit, jobsRunner, BgJobs (..), generateOtelFacets) where
+module BackgroundJobs (jobsWorkerInit, jobsRunner, BgJobs (..)) where
 
 import Control.Lens ((.~))
 import Data.Aeson ((.=))
@@ -8,6 +8,7 @@ import Data.Aeson.QQ (aesonQQ)
 import Data.CaseInsensitive qualified as CI
 import Data.Effectful.UUID qualified as UUID
 import Data.List (intersect, union)
+import Data.List.Extra (chunksOf)
 import Data.Pool (withResource)
 import Data.Text qualified as T
 import Data.Time (DayOfWeek (Monday), UTCTime (utctDay), ZonedTime, addUTCTime, dayOfWeek, formatTime, getZonedTime)
@@ -73,7 +74,7 @@ data BgJobs
   | HourlyJob UTCTime Int
   | GenSwagger Projects.ProjectId Users.UserId Text
   | ReportUsage Projects.ProjectId
-  | GenerateOtelFacets Projects.ProjectId
+  | GenerateOtelFacetsBatch (V.Vector Projects.ProjectId) UTCTime
   | QueryMonitorsTriggered (V.Vector Monitors.QueryMonitorId)
   | RunCollectionTests Testing.CollectionId
   | DeletedProject Projects.ProjectId
@@ -99,7 +100,7 @@ jobsRunner logger authCtx job = when authCtx.config.enableBackgroundJobs $ do
   bgJob <- throwParsePayload job
   void $ runBackground logger authCtx do
     case bgJob of
-      GenerateOtelFacets pid -> generateOtelFacets pid
+      GenerateOtelFacetsBatch pids timestamp -> generateOtelFacetsBatch pids timestamp
       QueryMonitorsTriggered queryMonitorIds -> queryMonitorsTriggered queryMonitorIds
       NewAnomaly{projectId, createdAt, anomalyType, anomalyAction, targetHashes} -> newAnomalyJob projectId createdAt anomalyType anomalyAction (V.fromList targetHashes)
       InviteUserToProject userId projectId reciever projectTitle' -> do
@@ -226,38 +227,50 @@ runHourlyJob scheduledTime hour = do
   ctx <- ask @Config.AuthContext
   Log.logInfo "Running hourly job for hour" hour
 
-  -- Get current time and all active projects
-  now <- Time.currentTime
-  projects <- dbtToEff $ query Select [sql|SELECT id FROM projects.projects WHERE active=? AND deleted_at IS NULL|] (Only True)
+  let oneHourAgo = addUTCTime (-3600) scheduledTime
+  activeProjects <-
+    dbtToEff $
+      query
+        Select
+        [sql|
+      SELECT DISTINCT p.id 
+      FROM projects.projects p
+      JOIN otel_logs_and_spans ols ON p.id = ols.project_id
+      WHERE p.active = ? 
+        AND p.deleted_at IS NULL
+        AND ols.timestamp >= ?
+        AND ols.timestamp <= ?
+    |]
+        (True, oneHourAgo, scheduledTime)
 
-  -- For each project, schedule facet generation (all in one connection)
+  -- Log count of projects to process
+  Log.logInfo "Projects with new data in the last hour window" (length activeProjects)
+
+  -- Batch projects in groups of 100
+  let batchSize = 100
+      projectBatches = chunksOf batchSize $ V.toList activeProjects
+
+  -- For each batch, create a single job with multiple project IDs
   liftIO $ withResource ctx.jobsPool \conn ->
-    forM_ projects \pid -> createJob conn "background_jobs" $ BackgroundJobs.GenerateOtelFacets pid
+    forM_ projectBatches \batch -> do
+      let batchJob = BackgroundJobs.GenerateOtelFacetsBatch (V.fromList batch) scheduledTime
+      createJob conn "background_jobs" batchJob
 
   Log.logInfo "Completed hourly job scheduling for hour" hour
 
 
--- | Generate facets for OTLP logs and spans for a specific project
-generateOtelFacets :: (DB :> es, Log :> es, UUID.UUIDEff :> es, Time.Time :> es) => Projects.ProjectId -> Eff es ()
-generateOtelFacets pid = do
-  -- Define the columns to generate facets for
-  let otelColumns =
-        [ "resource___service___name"
-        , "resource___service___version"
-        , "attributes___http___request___method"
-        , "attributes___http___response___status_code"
-        , "attributes___db___system___name"
-        , "attributes___error___type"
-        , "attributes___user___id"
-        , "attributes___session___id"
-        , "level"
-        , "kind"
-        , "status_code"
-        ]
-  -- Generate facets for the otel_logs_and_spans table (using current hour)
-  _ <- Facets.generateAndSaveFacets pid "otel_logs_and_spans" otelColumns 10
 
-  Log.logInfo "Completed OTLP facets generation for project" pid
+-- | Batch process facets generation for multiple projects
+generateOtelFacetsBatch :: (DB :> es, Log :> es, UUID.UUIDEff :> es, Time.Time :> es) => V.Vector Projects.ProjectId -> UTCTime -> Eff es ()
+generateOtelFacetsBatch projectIds timestamp = do
+  Log.logInfo "Starting batch facets generation for projects" (V.length projectIds)
+
+  -- Process each project in the batch using centralized facet columns
+  forM_ projectIds \pid -> do
+    _ <- Facets.generateAndSaveFacets pid "otel_logs_and_spans" Facets.facetColumns 10 timestamp
+    pure ()
+
+  Log.logInfo "Completed batch OTLP facets generation for projects" (V.length projectIds)
 
 
 generateSwaggerForProject :: Projects.ProjectId -> Users.UserId -> Text -> ATBackgroundCtx ()

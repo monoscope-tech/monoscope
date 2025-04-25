@@ -58,7 +58,7 @@ import Data.Time (TimeZone (..), UTCTime, formatTime, utcToZonedTime)
 import Data.Time.Format (defaultTimeLocale)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
-import Database.PostgreSQL.Entity.DBT (QueryNature (..), executeMany, query, queryOne, withPool)
+import Database.PostgreSQL.Entity.DBT (QueryNature (..), executeMany, query, queryOne)
 import Database.PostgreSQL.Simple (Only (..), ResultError (ConversionFailed))
 import Database.PostgreSQL.Simple.FromField (Conversion (..), FromField (..), returnError)
 import Database.PostgreSQL.Simple.FromRow
@@ -73,7 +73,6 @@ import Deriving.Aeson.Stock qualified as DAE
 import Effectful
 import Effectful.Labeled (Labeled, labeled)
 import Effectful.PostgreSQL.Transact.Effect (DB, dbtToEff)
-import Models.Apis.RequestDumps (RequestDump)
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.Projects (ProjectId (unProjectId))
 import Models.Projects.Projects qualified as Projects

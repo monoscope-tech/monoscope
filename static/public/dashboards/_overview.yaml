@@ -60,7 +60,7 @@ widgets:
 
   - type: 'timeseries'
     title: 'All requests (Incoming)'
-    query: kind="server" AND attributes___http___response___status_code != null | timechart count(*) by attributes___http___response___status_code
+    query: kind=="server" AND attributes___http___response___status_code != null | timechart count(*) by attributes___http___response___status_code
     unit: reqs
     layout: { w: 6, h: 4 }
 
@@ -75,28 +75,28 @@ widgets:
       FROM (
         SELECT extract(epoch from time_bucket('1h', timestamp))::integer AS timeB,
                ARRAY[
-                 (approx_percentile(0.50, percentile_agg(duration)) / 1000000.0)::float,
-                 (approx_percentile(0.75, percentile_agg(duration)) / 1000000.0)::float,
-                 (approx_percentile(0.90, percentile_agg(duration)) / 1000000.0)::float,
-                 (approx_percentile(0.95, percentile_agg(duration)) / 1000000.0)::float
+                 (approx_percentile(0.50, percentile_agg(duration)) / 1e6)::float,
+                 (approx_percentile(0.75, percentile_agg(duration)) / 1e6)::float,
+                 (approx_percentile(0.90, percentile_agg(duration)) / 1e6)::float,
+                 (approx_percentile(0.95, percentile_agg(duration)) / 1e6)::float
                ] AS values,
                ARRAY['p50', 'p75', 'p90', 'p95'] AS quantiles
         FROM otel_logs_and_spans
-        WHERE project_id='{{project_id}}' AND kind='server' AND attributes___http___response___status_code != null 
+        WHERE project_id='{{project_id}}' AND kind='server' AND attributes___http___response___status_code is not null
           {{time_filter}}
         GROUP BY timeB
       ) s,
       LATERAL unnest(s.values, s.quantiles) AS u(value, quantile);
     layout: { w: 6, h: 4 }
-
+  #
   - type: 'timeseries'
     title: 'HTTP Errors (Incoming)'
     eager: true
     theme: 'roma'
-    query: kind="server" AND attributes___http___response___status_code != null AND attributes___http___response___status_code >= 300.0 | timechart count(*) by attributes___http___response___status_code
+    query: kind=="server" AND attributes___http___response___status_code != null AND attributes___http___response___status_code >= 300.0 | timechart count(*) by attributes___http___response___status_code
     layout: { w: 6, h: 4 }
 
   - type: 'timeseries'
     title: 'Incoming Requests by Endpoint'
-    query: kind="server" AND attributes___http___response___status_code != null  | timechart count(*) by attributes___http___request___method,attributes___url___path
+    query: kind=="server" AND attributes___http___response___status_code != null  | timechart count(*) by attributes___http___request___method,attributes___url___path
     layout: { w: 6, h: 4 }

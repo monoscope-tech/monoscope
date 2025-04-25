@@ -136,6 +136,10 @@ data Expr
 --
 -- >>> parse pFieldKey "" "abc[*]"
 -- Right (ArrayWildcard "abc")
+--
+-- >>> parse pFieldKey "" "ab___b___c.a"
+-- Right (FieldKey "ab___b___c")
+--
 pFieldKey :: Parser FieldKey
 pFieldKey = do
   key <- toText <$> some (alphaNumChar <|> oneOf ("-_" :: String))
@@ -414,10 +418,18 @@ instance ToQueryText Expr where
 -- Helper function to handle the common display logic
 displayExprHelper :: T.Text -> Int -> Subject -> Values -> Builder
 displayExprHelper op prec sub val =
-  displayParen (prec > 0)
-    $ if subjectHasWildcard sub
+  displayParen (prec > 0) $
+    if subjectHasWildcard sub
       then displayPrec prec (jsonPathQuery op sub val)
-      else displayPrec prec sub <> displayPrec @T.Text prec op <> displayPrec prec val
+      else case val of
+        Null ->
+          if op == "="
+            then displayPrec prec sub <> " IS NULL"
+            else
+              if op == "!="
+                then displayPrec prec sub <> " IS NOT NULL"
+                else displayPrec prec sub <> displayPrec @T.Text prec op <> displayPrec prec val
+        _ -> displayPrec prec sub <> displayPrec @T.Text prec op <> displayPrec prec val
 
 
 -- | Generate PostgreSQL JSONPath queries from AST with specified operator
@@ -443,7 +455,7 @@ displayExprHelper op prec sub val =
 -- "jsonb_path_exists(request_body, $$$.\"msg\" ? (@ like_regex \"^abc.*\" flag \"i\" )$$::jsonpath)"
 jsonPathQuery :: T.Text -> Subject -> Values -> T.Text
 jsonPathQuery op' (Subject entire base keys) val =
-  "jsonb_path_exists(" <> base <> ", $$" <> "$" <> buildPath keys <> buildCondition op val postfix <> "$$::jsonpath)"
+  "jsonb_path_exists(to_jsonb(" <> base <> "), $$" <> "$" <> buildPath keys <> buildCondition op val postfix <> "$$::jsonpath)"
   where
     op = if op' == "=" then "==" else op'
     postfix = if op' == "like_regex" then " flag \"i\" " else ""
@@ -460,5 +472,9 @@ jsonPathQuery op' (Subject entire base keys) val =
     buildCondition oper (Num n) pstfx = " ? (@ " <> oper <> " " <> n <> postfix <> ")"
     buildCondition oper (Str s) pstfx = " ? (@ " <> oper <> " \"" <> s <> "\"" <> postfix <> ")"
     buildCondition oper (Boolean b) pstfx = " ? (@ " <> oper <> " " <> T.toLower (show b) <> pstfx <> ")"
-    buildCondition oper Null pstfx = " ? (@ " <> oper <> " null" <> pstfx <> ")"
+    buildCondition oper Null pstfx =
+      case op' of
+        "=" -> " ? (@ is null" <> pstfx <> ")"
+        "!=" -> " ? (@ is not null" <> pstfx <> ")"
+        _ -> " ? (@ " <> oper <> " null" <> pstfx <> ")"
     buildCondition oper (List xs) pstfx = " ? (@ " <> oper <> " {" <> (mconcat . intersperse "," . map display) xs <> "}" <> pstfx <> ")"

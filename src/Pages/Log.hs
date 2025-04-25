@@ -16,7 +16,7 @@ import Data.Default (def)
 import Data.HashMap.Strict qualified as HM
 import Data.List qualified as L
 import Data.Text qualified as T
-import Data.Time (UTCTime, diffUTCTime)
+import Data.Time (UTCTime, addUTCTime, diffUTCTime)
 import Data.Vector qualified as V
 import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
 import Effectful.Time qualified as Time
@@ -74,11 +74,12 @@ renderFacets facetSummary = do
       -- Define display info for different facet types
       facetDisplays :: [(Text, Text, (Text -> Text))]
       facetDisplays =
-        [ ("attributes___http___response___status_code", "Status Code", statusColorFn)
+        [ ("level", "Log Level", levelColorFn)
+        , ("kind", "Span Kind", const "")
+        , ("name", "Operation name", const "")
+        , ("attributes___http___response___status_code", "Status Code", statusColorFn)
         , ("attributes___http___request___method", "HTTP Method", methodColorFn)
         , ("resource___service___name", "Service", const "")
-        , ("level", "Log Level", levelColorFn)
-        , ("kind", "Span Kind", const "")
         , ("attributes___error___type", "Error Type", const "bg-red-500")
         ]
 
@@ -174,7 +175,7 @@ apiLogH pid queryM queryASTM cols' cursorM' sinceM fromM toM layoutM sourceM tar
 
   (queryLibRecent, queryLibSaved) <- V.partition (\x -> Projects.QLTHistory == (x.queryType)) <$> Projects.queryLibHistoryForUser pid sess.persistentSession.userId
 
-  facetSummary <- Facets.getFacetSummary pid "otel_logs_and_spans" now
+  facetSummary <- Facets.getFacetSummary pid "otel_logs_and_spans" (fromMaybe (addUTCTime (-86400) now) fromD) (fromMaybe now toD)
 
   freeTierExceeded <-
     dbtToEff $
@@ -628,7 +629,7 @@ apiLogsPage page = do
       div_ [class_ "w-1/6 text-sm shrink-0 flex flex-col gap-2 p-2 transition-all duration-500 ease-out opacity-100 delay-[0ms] group-has-[.toggle-filters:checked]/pg:duration-300 group-has-[.toggle-filters:checked]/pg:opacity-0 group-has-[.toggle-filters:checked]/pg:w-0 group-has-[.toggle-filters:checked]/pg:p-0 group-has-[.toggle-filters:checked]/pg:overflow-hidden"] do
         input_
           [ placeholder_ "Search facets..."
-          , class_ "rounded-lg px-3 py-1 border border-strokeStrong"
+          , class_ "rounded-lg px-3 py-1 border border-strokeStrong overflow-y-scroll"
           , term "data-filterParent" "facets-container"
           , [__| on keyup 
                 if the event's key is 'Escape' 

@@ -257,7 +257,7 @@ newtype FacetData = FacetData (HM.HashMap Text [FacetValue])
 
 data FacetSummary = FacetSummary
   { id :: UUID.UUID
-  , projectId :: Projects.ProjectId
+  , projectId :: Text
   , tableName :: Text
   , timestamp :: UTCTime
   , facetJson :: FacetData

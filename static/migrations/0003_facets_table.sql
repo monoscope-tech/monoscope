@@ -4,7 +4,8 @@ CREATE TABLE IF NOT EXISTS apis.facet_summaries (
     table_name TEXT NOT NULL,
     timestamp TIMESTAMPTZ NOT NULL,
     facet_json JSONB NOT NULL,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp
+    created_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp,
+    UNIQUE (project_id, table_name, timestamp)
 );
 
 -- Create an index for efficient querying of facets
@@ -13,7 +14,7 @@ CREATE INDEX IF NOT EXISTS facet_summaries_project_table_timestamp_idx ON apis.f
 -- Add a compound index for faster lookups by project and table
 CREATE INDEX IF NOT EXISTS facet_summaries_project_table_idx ON apis.facet_summaries (project_id, table_name);
 
--- Add truncation policy for facets that are over 90 days old
+-- Add truncation policy for facets that are over 30 days old
 CREATE OR REPLACE FUNCTION remove_old_facet_summaries() RETURNS TRIGGER AS $$
 BEGIN
     DELETE FROM apis.facet_summaries WHERE timestamp < NOW() - INTERVAL '30 days';

@@ -216,6 +216,81 @@ processList msgs attrs = checkpoint "processList" $ process `onException` handle
 
 -- Helper functions
 
+-- | Migrate HTTP semantic convention fields to their new paths/formats
+migrateHttpSemanticConventions :: Maybe (Map Text AE.Value) -> Maybe (Map Text AE.Value)
+migrateHttpSemanticConventions Nothing = Nothing
+migrateHttpSemanticConventions (Just attributes) =
+  let
+    -- Field mapping from old -> new
+    fieldMappings :: [(Text, Text)]
+    fieldMappings =
+      [ ("http.method", "http.request.method")
+      , ("http.status_code", "http.response.status_code")
+      , ("http.request_content_length", "http.request.body.size")
+      , ("http.response_content_length", "http.response.body.size")
+      , ("net.protocol.name", "network.protocol.name")
+      , ("net.protocol.version", "network.protocol.version")
+      , ("net.sock.peer.addr", "network.peer.address")
+      , ("net.sock.peer.port", "network.peer.port")
+      , ("http.url", "url.full")
+      , ("http.resend_count", "http.request.resend_count")
+      , ("net.peer.name", "server.address")
+      , ("net.peer.port", "server.port")
+      , ("http.scheme", "url.scheme")
+      , ("http.client_ip", "client.address")
+      , ("net.host.name", "server.address")
+      , ("net.host.port", "server.port")
+      ]
+
+    -- Handle the special case of http.target -> url.path and url.query
+    migrateHttpTarget attributes' =
+      case Map.lookup "http.target" attributes' of
+        Just (AE.String target) ->
+          let
+            -- Simple split at first '?' to separate path and query
+            (path, query) = T.breakOn "?" target
+            queryWithoutQ = if T.null query then "" else T.drop 1 query
+
+            -- Add path and query fields if they don't exist yet
+            withPath =
+              if Map.member "url.path" attributes'
+                then attributes'
+                else Map.insert "url.path" (AE.String path) attributes'
+
+            withPathAndQuery =
+              if T.null query || Map.member "url.query" withPath
+                then withPath
+                else Map.insert "url.query" (AE.String queryWithoutQ) withPath
+           in
+            withPathAndQuery
+        _ -> attributes'
+
+    -- Migrate method "_OTHER" case
+    migrateMethodOther attributes' =
+      case (Map.lookup "http.method" attributes', Map.lookup "http.request.method_original" attributes') of
+        (Just (AE.String method), Just originalMethod) ->
+          if method == "_OTHER" && not (Map.member "http.request.method" attributes')
+            then Map.insert "http.request.method" originalMethod attributes'
+            else attributes'
+        _ -> attributes'
+
+    -- Migrate fields based on mapping
+    migrateFields attributes' =
+      foldl'
+        ( \acc (oldKey, newKey) ->
+            case Map.lookup oldKey acc of
+              Just value ->
+                if Map.member newKey acc
+                  then acc -- Don't override existing values
+                  else Map.insert newKey value acc
+              Nothing -> acc
+        )
+        attributes'
+        fieldMappings
+   in
+    Just $ migrateMethodOther $ migrateHttpTarget $ migrateFields attributes
+
+
 -- Decode ByteString to Text with lenient UTF-8 handling
 decodeUtf8Lenient :: ByteString -> Text
 decodeUtf8Lenient = TE.decodeUtf8With lenientDecode
@@ -405,7 +480,7 @@ convertLogRecordToOtelLog pid resourceM scopeM logRecord =
                 , severity_number = severityNumber
                 }
         , body = Just $ anyValueToJSON $ Just $ logRecord ^. PLF.body
-        , attributes = jsonToMap $ removeProjectId $ keyValueToJSON $ V.fromList $ logRecord ^. PLF.attributes
+        , attributes = migrateHttpSemanticConventions $ jsonToMap $ removeProjectId $ keyValueToJSON $ V.fromList $ logRecord ^. PLF.attributes
         , resource = jsonToMap $ removeProjectId $ resourceToJSON resourceM
         , hashes = V.empty
         , kind = Just "log"
@@ -527,7 +602,7 @@ convertSpanToOtelLog pid resourceM scopeM pSpan =
                             ]
                       )
                       links
-      attributes = jsonToMap $ keyValueToJSON $ V.fromList $ pSpan ^. PTF.attributes
+      attributes = migrateHttpSemanticConventions $ jsonToMap $ keyValueToJSON $ V.fromList $ pSpan ^. PTF.attributes
       (req, res) = case Map.lookup "http" (fromMaybe Map.empty attributes) of
         Just (AE.Object http) -> (KEM.lookup "request" http, KEM.lookup "response" http)
         _ -> (Nothing, Nothing)
