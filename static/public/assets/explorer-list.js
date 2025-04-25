@@ -978,6 +978,7 @@ function groupSpans(data, colIdxMap, expandedTraces, flipDirection) {
   const START_TIME_NS = colIdxMap['start_time_ns']
   const ERROR_INDEX = colIdxMap['errors']
   const BODY_INDEX = colIdxMap['body']
+  const KIND_INDEX = colIdxMap['kind']
 
   data.forEach(span => {
     let traceId = span[TRACE_INDEX]
@@ -1015,7 +1016,7 @@ function groupSpans(data, colIdxMap, expandedTraces, flipDirection) {
     }
     traceData.minStart = Math.min(traceData.minStart, startTime)
     traceData.duration = Math.max(traceData.duration, duration)
-    if (body !== null) {
+    if (span[KIND_INDEX] === 'log') {
       traceData.spans.set(id, {
         id: spanId,
         startNs: startTime,
