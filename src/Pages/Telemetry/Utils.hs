@@ -110,7 +110,9 @@ getSpanErrors evs = case evs of
 getErrorDetails :: AE.Value -> (Text, Text, Text)
 getErrorDetails ae = case ae of
   AE.Object obj -> case KEM.lookup "event_attributes" obj of
-    Just (AE.Object j) -> (fromMaybe "" $ getText "exception.type" j, fromMaybe "" $ getText "exception.message" j, fromMaybe "" $ getText "exception.stacktrace" j)
+    Just (AE.Object jj) -> case KEM.lookup "exception" jj of
+      Just (AE.Object j) -> (fromMaybe "" $ getText "type" j, fromMaybe "" $ getText "message" j, fromMaybe "" $ getText "stacktrace" j)
+      _ -> ("", "", "")
     _ -> ("", "", "")
   _ -> ("", "", "")
   where

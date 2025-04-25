@@ -234,7 +234,7 @@ renderErrors errs = div_ [class_ "flex flex-col gap-1"] $ do
         span_ [class_ "font-bold"] $ toHtml (tye <> ":")
         span_ [] $ toHtml message
       div_ [] do
-        p_ [class_ "whitespace-prewrap px-4 py-2"] $ toHtml stacktrace
+        p_ [class_ "whitespace-nowrap px-4 py-2"] $ toHtml stacktrace
 
 
 numberOfEvents :: AE.Value -> Int

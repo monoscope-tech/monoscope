@@ -971,21 +971,31 @@ getAllATErrors = V.concatMap extractErrorsFromSpan
 
 extractATError :: OtelLogsAndSpans -> AE.Value -> Maybe RequestDumps.ATError
 extractATError spanObj (AE.Object o) = do
-  AE.Object attrs <- KEM.lookup "event_attributes" o
+  AE.Object attrs' <- KEM.lookup "event_attributes" o
+  AE.Object attrs <- KEM.lookup "exception" attrs'
+
   let lookupText k = case KEM.lookup k attrs of
         Just (AE.String s) -> Just s
         _ -> Nothing
       getTextOrEmpty k = fromMaybe "" (lookupText k)
 
-      typ = getTextOrEmpty "exception.type"
-      msg = getTextOrEmpty "exception.message"
-      stack = getTextOrEmpty "exception.stacktrace"
+      typ = getTextOrEmpty "type"
+      msg = getTextOrEmpty "message"
+      stack = getTextOrEmpty "stacktrace"
 
       -- TODO: parse telemetry.sdk.name to SDKTypes
-      tech = case spanObj.resource >>= Map.lookup "telemetry.sdk.name" of
-        Just (AE.String sdk) -> Nothing
+      -- tech = case spanObj.resource >>= Map.lookup "telemetry" of
+      --   Just (AE.Object tel) ->
+      --     KEM.lookup "sdk" tel
+      --       >>= ( \case
+      --               AE.Object sdkObj -> KEM.lookup "name" sdkObj >>= asText
+      --               _ -> Nothing
+      --           )
+      --   _ -> Nothing
+      serviceName = case spanObj.resource >>= Map.lookup "service" of
+        Just (AE.Object serviceObj) ->
+          KEM.lookup "name" serviceObj >>= asText
         _ -> Nothing
-      serviceName = spanObj.resource >>= Map.lookup "service.name" >>= asText
 
       spanId = spanObj.context >>= (.span_id)
 
@@ -1002,7 +1012,7 @@ extractATError spanObj (AE.Object o) = do
       , rootErrorMessage = msg
       , stackTrace = stack
       , hash = Just $ (toXXHash (spanObj.project_id <> fromMaybe "" serviceName <> fromMaybe "" spanObj.name <> typ <> msg))
-      , technology = tech
+      , technology = Nothing
       , requestMethod = Just "Span Id"
       , requestPath = spanId
       }
