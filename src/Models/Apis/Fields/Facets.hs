@@ -5,25 +5,18 @@ module Models.Apis.Fields.Facets (
 ) where
 
 import Control.Exception.Annotated (checkpoint)
-import Control.Monad (foldM)
-import Data.Aeson qualified as AE
 import Data.Annotation (toAnnotation)
 import Data.Effectful.UUID qualified as UUID
 import Data.HashMap.Strict qualified as HM
-import Data.List (nub, sortOn)
-import Data.List.NonEmpty (NonEmpty)
 import Data.Text qualified as T
 import Data.Time (UTCTime, addUTCTime, diffUTCTime)
 import Data.Time.Clock.POSIX (posixSecondsToUTCTime, utcTimeToPOSIXSeconds)
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity.DBT (QueryNature (Insert, Select), execute, query)
-import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.Types (Query)
-import Database.PostgreSQL.Transact (DBT)
 import Effectful (Eff, (:>))
 import Effectful.PostgreSQL.Transact.Effect (DB, dbtToEff)
-import Effectful.Time qualified as Time
 import Models.Apis.Fields.Types (FacetData (..), FacetSummary (..), FacetValue (..))
 import Models.Projects.Projects (ProjectId)
 import Relude
@@ -32,7 +25,8 @@ import Relude
 -- | Centralized list of facet columns for OTLP data
 facetColumns :: [Text]
 facetColumns =
-  [ "resource___service___name"
+  [ "name"
+  , "resource___service___name"
   , "resource___service___version"
   , "attributes___http___request___method"
   , "attributes___http___response___status_code"

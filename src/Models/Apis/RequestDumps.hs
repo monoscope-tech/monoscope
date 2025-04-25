@@ -24,7 +24,6 @@ module Models.Apis.RequestDumps (
 )
 where
 
-import Control.Error.Util (hush)
 import Control.Exception.Annotated (checkpoint)
 import Data.Aeson qualified as AE
 import Data.Annotation (toAnnotation)
@@ -49,7 +48,6 @@ import Deriving.Aeson qualified as DAE
 import Effectful
 import Effectful.PostgreSQL.Transact.Effect (DB, dbtToEff)
 import Effectful.Time qualified as Time
-import Fmt (fmt)
 import Models.Apis.Fields.Query ()
 import Models.Projects.Projects qualified as Projects
 import NeatInterpolation (text)
@@ -473,7 +471,7 @@ selectRequestDumpByProject pid extraQuery cursorM fromM toM = do
     -- We only let people search within the 14 days time period
     qCount =
       [text| SELECT count(*)
-             FROM apis.request_dumps where project_id=? and created_at > NOW() - interval '14 days' and created_at<? $dateRangeStr |]
+             FROM apis.request_dumps where project_id=? and created_at<? $dateRangeStr |]
         <> extraQueryParsed
         <> " limit 1;"
     q =
@@ -482,7 +480,7 @@ selectRequestDumpByProject pid extraQuery cursorM fromM toM = do
                     request_body,response_body,'{}'::jsonb,'{}'::jsonb,
                     duration_ns, sdk_type,
                     parent_id, service_version, JSONB_ARRAY_LENGTH(errors) as errors_count, '{}'::jsonb, tags, request_type
-             FROM apis.request_dumps where project_id=? and created_at > NOW() - interval '14 days' and created_at<? $dateRangeStr |]
+             FROM apis.request_dumps where project_id=? and created_at<? $dateRangeStr |]
         <> extraQueryParsed
         <> " order by created_at desc limit 200;"
 
@@ -494,7 +492,7 @@ countRequestDumpByProject pid = do
     [Only c] -> return c
     v -> return $ length v
   where
-    q = [sql| SELECT count(*) FROM apis.request_dumps WHERE project_id=?  AND created_at > NOW() - interval '14 days'|]
+    q = [sql| SELECT count(*) FROM apis.request_dumps WHERE project_id=? |]
 
 
 bulkInsertRequestDumps :: DB :> es => [RequestDump] -> Eff es ()

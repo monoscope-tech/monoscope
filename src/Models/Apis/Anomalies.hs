@@ -41,7 +41,7 @@ import Data.Time
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity
-import Database.PostgreSQL.Entity.DBT (QueryNature (Insert, Select, Update), execute, query, queryOne)
+import Database.PostgreSQL.Entity.DBT (QueryNature (Select, Update), execute, query, queryOne)
 import Database.PostgreSQL.Entity.Types (CamelToSnake, FieldModifiers, GenericEntity, PrimaryKey, Schema, TableName, field)
 import Database.PostgreSQL.Simple (FromRow, Only (Only), ToRow)
 import Database.PostgreSQL.Simple.FromField (FromField, ResultError (ConversionFailed, UnexpectedNull), fromField, returnError)
