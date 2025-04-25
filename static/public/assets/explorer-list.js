@@ -326,8 +326,8 @@ export class LogList extends LitElement {
       resizer.classList.remove('hidden')
       updateUrlState('details_width', logsView.style.width)
     }
-    const rows = document.querySelectorAll('.item-row.bg-fillBrand-weak')
-    rows.forEach(row => row.classList.remove('bg-fillBrand-weak'))
+    const rows = document.querySelectorAll('.item-row.bg-fillBrand-strong')
+    rows.forEach(row => row.classList.remove('bg-fillBrand-strong'))
     event.currentTarget.classList.add('bg-fillBrand-strong')
     const indicator = document.querySelector('#details_indicator')
     indicator.classList.add('htmx-request')
