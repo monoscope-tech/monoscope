@@ -259,9 +259,8 @@ runHourlyJob scheduledTime hour = do
   Log.logInfo "Completed hourly job scheduling for hour" hour
 
 
-
 -- | Batch process facets generation for multiple projects
-generateOtelFacetsBatch :: (DB :> es, Log :> es, UUID.UUIDEff :> es, Time.Time :> es) => V.Vector Projects.ProjectId -> UTCTime -> Eff es ()
+generateOtelFacetsBatch :: (DB :> es, Log :> es, UUID.UUIDEff :> es) => V.Vector Projects.ProjectId -> UTCTime -> Eff es ()
 generateOtelFacetsBatch projectIds timestamp = do
   Log.logInfo "Starting batch facets generation for projects" (V.length projectIds)
 
