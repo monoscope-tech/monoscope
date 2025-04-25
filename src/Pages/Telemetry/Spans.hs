@@ -54,6 +54,7 @@ expandedSpanItem pid sp leftM rightM = do
             then put '0px' into  #log_details_container.style.width 
             then put '100%' into #logs_list_container.style.width 
             then add .hidden to #resizer
+            then remove .bg-fillBrand-strong from <.item-row.bg-fillBrand-strong/>
             then call updateUrlState('details_width', '', 'delete')
             then call updateUrlState('target_event', '0px', 'delete')
             then call updateUrlState('showTrace', "true", 'delete')
