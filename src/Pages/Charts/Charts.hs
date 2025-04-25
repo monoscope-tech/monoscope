@@ -203,7 +203,6 @@ queryMetrics (maybeToMonoid -> respDataType) pidM (nonNull -> queryM) (nonNull -
           { from = Just $ round . utcTimeToPOSIXSeconds $ fromMaybe (addUTCTime (-86400) now) fromD
           , to = Just $ round . utcTimeToPOSIXSeconds $ fromMaybe now toD
           }
-  traceShowM sqlQuery
   checkpoint (toAnnotation sqlQuery) $ case respDataType of
     DTFloat -> do
       chartData <- dbtToEff $ DBT.queryOne_ (Query $ encodeUtf8 sqlQuery)
