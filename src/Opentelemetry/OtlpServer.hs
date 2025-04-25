@@ -622,6 +622,21 @@ convertSpanToOtelLog pid resourceM scopeM pSpan =
               Just (AE.String b) -> b64ToJson b
               _ -> AE.Null
           extractBody _ = AE.Null
+      newAttributes =
+        if pSpan ^. PTF.name == "apitoolkit-http-span"
+          then
+            let htt = Map.lookup "http" (fromMaybe Map.empty attributes)
+             in case htt of
+                  Just (AE.Object http) ->
+                    let newHttp = case (req, res) of
+                          (Just (AE.Object re), Just (AE.Object rs)) ->
+                            let newReq = KEM.insert "request" (AE.Object $ KEM.delete "body" re) http
+                                newRes = KEM.insert "response" (AE.Object $ KEM.delete "body" rs) newReq
+                             in Just $ Map.insert "http" (AE.Object newRes) (fromMaybe Map.empty attributes)
+                          _ -> attributes
+                     in newHttp
+                  _ -> attributes
+          else attributes
    in OtelLogsAndSpans
         { project_id = pid.toText
         , id = UUID.nil -- Will be replaced in bulkInsertOtelLogsAndSpansTF
@@ -639,7 +654,7 @@ convertSpanToOtelLog pid resourceM scopeM pSpan =
         , level = Nothing
         , severity = Nothing
         , body
-        , attributes
+        , attributes = newAttributes
         , resource = jsonToMap $ resourceToJSON resourceM
         , hashes = V.empty
         , kind = spanKindText
