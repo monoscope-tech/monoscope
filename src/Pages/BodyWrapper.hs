@@ -61,6 +61,7 @@ data BWConfig = BWConfig
   , navTabs :: Maybe (Html ())
   , pageActions :: Maybe (Html ())
   , docsLink :: Maybe Text
+  , isSettingsPage :: Bool
   }
   deriving stock (Show, Generic)
   deriving anyclass (Default)
@@ -292,8 +293,11 @@ bodyWrapper bcfg child = do
                 section_ [class_ "h-screen overflow-y-hidden grow"] do
                   when (currUser.email == "hello@apitoolkit.io") $
                     loginBanner
-                  navbar bcfg.currProject (fromMaybe [] (bcfg.currProject <&> \p -> menu p.id)) currUser bcfg.prePageTitle bcfg.pageTitle bcfg.pageTitleModalId bcfg.docsLink bcfg.navTabs bcfg.pageActions
-                  section_ [class_ "overflow-y-hidden h-full flex-1"] child
+                  unless bcfg.isSettingsPage $ navbar bcfg.currProject (fromMaybe [] (bcfg.currProject <&> \p -> menu p.id)) currUser bcfg.prePageTitle bcfg.pageTitle bcfg.pageTitleModalId bcfg.docsLink bcfg.navTabs bcfg.pageActions
+                  section_ [class_ "overflow-y-hidden h-full flex-1"] do
+                    if (bcfg.isSettingsPage)
+                      then maybe child (\p -> settingsWrapper p.id bcfg.pageTitle child) bcfg.currProject
+                      else child
                   Components.drawer_ "global-data-drawer" Nothing Nothing ""
 
       externalHeadScripts_
@@ -409,13 +413,40 @@ sideNav sess project pageTitle menuItem hasIntegrated = aside_ [class_ "border-r
             span_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:block whitespace-nowrap truncate"] $ toHtml mTitle
 
   div_ [class_ "py-8 px-2 group-has-[#sidenav-toggle:checked]/pg:px-6 *:gap-2 *:whitespace-nowrap *:truncate flex flex-col gap-2.5 *:items-center *:overflow-x-hidden *:flex &:no-wrap"] do
+    a_
+      [ class_ "hover:bg-blue-50 "
+      , target_ "blank"
+      , term "data-tippy-placement" "right"
+      , term "data-tippy-content" "Documentation"
+      , href_ $ "/p/" <> project.id.toText <> "/settings"
+      ]
+      $ span_ [class_ "p-2 rounded-full bg-blue-100 text-brand leading-none"] (faSprite_ "gear" "regular" "h-3 w-3")
+        >> span_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:block"] "Settings"
+    a_
+      [ class_ "hover:bg-blue-50 "
+      , target_ "blank"
+      , term "data-tippy-placement" "right"
+      , term "data-tippy-content" "Documentation"
+      , href_ "https://apitoolkit.io/docs/"
+      ]
+      $ span_ [class_ "p-2 rounded-full bg-blue-100 text-brand leading-none"] (faSprite_ "circle-question" "regular" "h-3 w-3")
+        >> span_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:block"] "Documentation"
+    a_
+      [ class_ "hover:bg-blue-50"
+      , term "data-tippy-placement" "right"
+      , term "data-tippy-content" "Logout"
+      , href_ "/logout"
+      , [__| on click js posthog.reset(); end |]
+      ]
+      $ span_ [class_ "p-2 rounded-full bg-red-100 text-red-600 leading-none"] (faSprite_ "arrow-right-from-bracket" "regular" "h-3 w-3")
+        >> span_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:block"] "Logout"
     let currUser = sess.persistentSession.user.getUser
-    let userIdentifier =
+        userIdentifier =
           if currUser.firstName /= "" || currUser.lastName /= ""
             then currUser.firstName <> " " <> currUser.lastName
             else CI.original currUser.email
-    let emailMd5 = decodeUtf8 $ MD5.hash $ encodeUtf8 $ CI.original currUser.email
-    let sanitizedID = T.replace " " "+" userIdentifier
+        emailMd5 = decodeUtf8 $ MD5.hash $ encodeUtf8 $ CI.original currUser.email
+        sanitizedID = T.replace " " "+" userIdentifier
     div_ [tabindex_ "0", role_ "button", class_ "cursor-pointer justify-center group-has-[#sidenav-toggle:checked]/pg:justify-start"] do
       img_
         [ class_ "inline-block w-8 h-8 p-1 rounded-full bg-gray-300"
@@ -425,8 +456,8 @@ sideNav sess project pageTitle menuItem hasIntegrated = aside_ [class_ "border-r
         ]
       span_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:inline-block overflow-hidden"] $ toHtml userIdentifier
 
-    mapM_ renderNavBottomItem $ navBottomList project.id.toText
 
+-- mapM_ renderNavBottomItem $ navBottomList project.id.toText
 
 navbar :: Maybe Projects.Project -> [(Text, Text, Text)] -> Users.User -> Maybe Text -> Text -> Maybe Text -> Maybe Text -> Maybe (Html ()) -> Maybe (Html ()) -> Html ()
 navbar projectM menuL currUser prePageTitle pageTitle pageTitleMonadId docsLink tabsM pageActionsM =
@@ -479,34 +510,48 @@ loginBanner = do
     a_ [class_ "py-2 px-3 rounded-xl bg-fillBrand-strong text-textInverse-strong shadow-sm hover:shadow-md", href_ "/login"] "Start 30 day free trial"
 
 
-renderNavBottomItem :: (Text, Text, Text, Text, Text, Maybe Text, Maybe Text, Maybe Text) -> Html ()
-renderNavBottomItem (iconName, bgColor, textColor, linkText, link, targetBlankM, onClickM, hxGetM) =
+settingsWrapper :: Projects.ProjectId -> Text -> Html () -> Html ()
+settingsWrapper pid current pageHtml = do
+  section_ [class_ "flex h-full w-full"] do
+    nav_ [class_ "w-[300px] bg-fillWeaker h-full p-4 pt-6 border-r border-r-strokWeak"] do
+      h1_ [class_ "text-3xl font-medium mb-4"] do
+        "Settings"
+      ul_ [class_ "flex flex-col mt-14 gap-3 w-full"] do
+        mapM_ (renderNavBottomItem current) $ navBottomList pid.toText
+    main_ [class_ "w-full h-full overflow-y-auto"] do
+      pageHtml
+
+
+navBottomList :: Text -> [(Text, Text, Text, Text, Text, Maybe Text, Maybe Text, Maybe Text)]
+navBottomList pidTxt =
+  [ ("gear", "bg-blue-100", "text-brand", "Project settings", "/p/" <> pidTxt <> "/settings", Nothing, Nothing, Nothing)
+  , ("key", "bg-green-100", "text-green-600", "API keys", "/p/" <> pidTxt <> "/apis", Nothing, Nothing, Nothing)
+  , ("user-plus", "bg-yellow-100", "text-yellow-600", "Manage members", "/p/" <> pidTxt <> "/manage_members", Nothing, Nothing, Nothing)
+  , ("dollar", "bg-orange-100", "text-orange-600", "Manage billing", "/p/" <> pidTxt <> "/manage_billing", Nothing, Nothing, Just "")
+  , ("arrows-turn-right", "bg-purple-100", "text-purple-600", "Integrations", "/p/" <> pidTxt <> "/integrations", Nothing, Nothing, Nothing)
+  ]
+
+
+renderNavBottomItem :: Text -> (Text, Text, Text, Text, Text, Maybe Text, Maybe Text, Maybe Text) -> Html ()
+renderNavBottomItem curr (iconName, bgColor, textColor, linkText, link, targetBlankM, onClickM, hxGetM) =
   let
     defaultAttrs =
-      [ class_ $ "hover:bg-blue-50"
+      [ class_ $ "hover:bg-blue-50 flex gap-2 items-center "
       , term "data-tippy-placement" "right"
       , term "data-tippy-content" linkText
       ]
-
+    activeCls = if curr == linkText then "bg-fillBrand-weak" else ""
     attrs =
       defaultAttrs
         ++ (if isJust targetBlankM then [target_ "BLANK_"] else [])
         ++ (maybe [] (\onClick -> [onclick_ onClick]) onClickM)
         ++ (if isJust hxGetM then [hxGet_ link, hxTarget_ "body"] else [href_ link])
    in
-    a_ attrs $ do
-      span_
-        [class_ "hidden link underline underline-offset-2 group-has-[#sidenav-toggle:checked]/pg:block"]
-        (toHtml linkText)
-
-
-navBottomList :: Text -> [(Text, Text, Text, Text, Text, Maybe Text, Maybe Text, Maybe Text)]
-navBottomList pidTxt =
-  [ ("gear", "bg-blue-100", "text-brand", "Settings", "/p/" <> pidTxt <> "/settings", Nothing, Nothing, Nothing)
-  , ("key", "bg-green-100", "text-green-600", "API Keys", "/p/" <> pidTxt <> "/apis", Nothing, Nothing, Nothing)
-  , ("user-plus", "bg-yellow-100", "text-yellow-600", "Manage members", "/p/" <> pidTxt <> "/manage_members", Nothing, Nothing, Nothing)
-  , ("user-shield", "bg-orange-100", "text-orange-600", "Manage billing", "/p/" <> pidTxt <> "/manage_billing", Nothing, Nothing, Just "")
-  , ("user-gear", "bg-purple-100", "text-purple-600", "Integrations", "/p/" <> pidTxt <> "/integrations", Nothing, Nothing, Nothing)
-  , ("circle-question", "bg-blue-100", "text-brand", "Documentation", "https://apitoolkit.io/docs/", Just "blank", Nothing, Nothing)
-  , ("arrow-right-from-bracket", "bg-red-100", "text-red-600", "Logout", "/logout", Nothing, Just "posthog.reset()", Nothing)
-  ]
+    li_ [class_ $ "px-2 py-1 w-[220px] rounded-lg " <> activeCls] do
+      a_ attrs $ do
+        span_
+          [class_ $ "p-2 rounded-full shrink-0 leading-none"]
+          (faSprite_ iconName "regular" "shrink-0 h-3 w-3")
+        span_
+          [class_ "text-textWeak"]
+          (toHtml linkText)

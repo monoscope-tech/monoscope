@@ -83,8 +83,9 @@ apiGetH pid = do
         (def :: BWConfig)
           { sessM = Just sess
           , currProject = Just project
-          , pageTitle = "API Keys"
+          , pageTitle = "API keys"
           , hasIntegrated = Just (requestDumps > 0)
+          , isSettingsPage = True
           }
   addRespHeaders $ ApiGet $ PageCtx bwconf (pid, apiKeys)
 
@@ -108,8 +109,8 @@ apiKeysPage pid apiKeys = do
     input_ [type_ "checkbox", id_ "apikey-modal", class_ "modal-toggle"]
     div_ [class_ "modal p-8", role_ "dialog", id_ "apikey-modal"] do
       div_ [class_ "modal-box flex flex-col gap-4"] $ do
-        div_ [class_ "p-3 bg-[#0acc91]/5 rounded-full w-max border-[#067a57]/20 gap-2 inline-flex"]
-          $ faSprite_ "key" "regular" "h-6 w-6 text-green-500"
+        div_ [class_ "p-3 bg-[#0acc91]/5 rounded-full w-max border-[#067a57]/20 gap-2 inline-flex"] $
+          faSprite_ "key" "regular" "h-6 w-6 text-green-500"
         span_ [class_ " text-textStrong text-2xl font-semibold"] "Generate an API key"
         form_
           [ hxPost_ $ "/p/" <> pid.toText <> "/apis"
@@ -153,7 +154,7 @@ mainContent pid apiKeys newKeyM = section_ [id_ "main-content"] do
                       [class_ "mr-2 w-full"]
                       $ toHtml
                       $ T.take 8 apiKey.keyPrefix
-                      <> "********************************************"
+                        <> "********************************************"
                     button_
                       [ class_ "text-brand"
                       , term "data-key" apiKey.keyPrefix

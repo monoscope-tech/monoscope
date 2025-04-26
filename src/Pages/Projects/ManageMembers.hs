@@ -86,10 +86,10 @@ manageMembersPostH pid onboardingM form = do
                 Just idX -> pure idX
             Just idX -> pure idX
 
-        when (userId' /= currUserId)
-          $ void
-          $ liftIO
-          $ withResource appCtx.pool \conn -> createJob conn "background_jobs" $ BackgroundJobs.InviteUserToProject currUserId pid email project.title -- invite the users to the project (Usually as an email)
+        when (userId' /= currUserId) $
+          void $
+            liftIO $
+              withResource appCtx.pool \conn -> createJob conn "background_jobs" $ BackgroundJobs.InviteUserToProject currUserId pid email project.title -- invite the users to the project (Usually as an email)
         pure (email, permission, userId')
 
       let projectMembers =
@@ -102,13 +102,13 @@ manageMembersPostH pid onboardingM form = do
       -- TODO: Send a notification via background job, about the users permission having been updated.
       unless (null uAndPOldAndChanged)
         $ void
-        . dbtToEff
+          . dbtToEff
         $ ProjectMembers.updateProjectMembersPermissons uAndPOldAndChanged
 
       -- soft delete project members with id
       unless (null deletedUAndP)
         $ void
-        . dbtToEff
+          . dbtToEff
         $ ProjectMembers.softDeleteProjectMembers deletedUAndP
 
       projMembersLatest <- dbtToEff $ ProjectMembers.selectActiveProjectMembers pid
@@ -129,7 +129,13 @@ manageMembersGetH pid = do
   (sess, project) <- Sessions.sessionAndProject pid
   appCtx <- ask @AuthContext
   projMembers <- dbtToEff $ ProjectMembers.selectActiveProjectMembers pid
-  let bwconf = (def :: BWConfig){sessM = Just sess, pageTitle = "Settings", currProject = Just project}
+  let bwconf =
+        (def :: BWConfig)
+          { sessM = Just sess
+          , pageTitle = "Manage members"
+          , currProject = Just project
+          , isSettingsPage = True
+          }
   addRespHeaders $ ManageMembersGet $ PageCtx bwconf projMembers
 
 

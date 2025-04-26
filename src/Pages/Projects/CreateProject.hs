@@ -185,7 +185,13 @@ projectSettingsGetH pid = do
           , timeZone = project.timeZone
           }
 
-  let bwconf = (def :: BWConfig){sessM = Just sess, currProject = Just project, pageTitle = "Settings"}
+  let bwconf =
+        (def :: BWConfig)
+          { sessM = Just sess
+          , currProject = Just project
+          , pageTitle = "Project settings"
+          , isSettingsPage = True
+          }
   addRespHeaders $ CreateProject $ PageCtx bwconf (sess.persistentSession, pid, appCtx.config, True, createProj, def @CreateProjectFormError)
 
 

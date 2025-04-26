@@ -138,7 +138,8 @@ manageBillingGetH pid from = do
         (def :: BWConfig)
           { sessM = Just sess
           , currProject = Just project
-          , pageTitle = "Manage Billing"
+          , pageTitle = "Manage billing"
+          , isSettingsPage = True
           }
   addRespHeaders $ BillingGet $ PageCtx bwconf (pid.toText, totalRequests, estimatedAmount, last_reported)
 
