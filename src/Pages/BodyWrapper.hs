@@ -516,7 +516,7 @@ settingsWrapper pid current pageHtml = do
     nav_ [class_ "w-[300px] bg-fillWeaker h-full p-4 pt-6 border-r border-r-strokWeak"] do
       h1_ [class_ "text-3xl font-medium mb-4"] do
         "Settings"
-      ul_ [class_ "flex flex-col mt-14 gap-3 w-full"] do
+      ul_ [class_ "flex flex-col mt-14 gap-2 w-full"] do
         mapM_ (renderNavBottomItem current) $ navBottomList pid.toText
     main_ [class_ "w-full h-full overflow-y-auto"] do
       pageHtml
