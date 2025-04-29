@@ -413,6 +413,22 @@ sideNav sess project pageTitle menuItem hasIntegrated = aside_ [class_ "border-r
             span_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:block whitespace-nowrap truncate"] $ toHtml mTitle
 
   div_ [class_ "py-8 px-2 group-has-[#sidenav-toggle:checked]/pg:px-6 *:gap-2 *:whitespace-nowrap *:truncate flex flex-col gap-2.5 *:items-center *:overflow-x-hidden *:flex &:no-wrap"] do
+    let currUser = sess.persistentSession.user.getUser
+        userIdentifier =
+          if currUser.firstName /= "" || currUser.lastName /= ""
+            then currUser.firstName <> " " <> currUser.lastName
+            else CI.original currUser.email
+        emailMd5 = decodeUtf8 $ MD5.hash $ encodeUtf8 $ CI.original currUser.email
+        sanitizedID = T.replace " " "+" userIdentifier
+    div_ [tabindex_ "0", role_ "button", class_ "cursor-pointer justify-center group-has-[#sidenav-toggle:checked]/pg:justify-start"] do
+      img_
+        [ class_ "inline-block w-8 h-8 p-1 rounded-full bg-gray-300"
+        , term "data-tippy-placement" "right"
+        , term "data-tippy-content" userIdentifier
+        , src_ [text|https://www.gravatar.com/avatar/${emailMd5}?d=https%3A%2F%2Fui-avatars.com%2Fapi%2F/${sanitizedID}/128|]
+        ]
+      span_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:inline-block overflow-hidden"] $ toHtml userIdentifier
+
     a_
       [ class_ "hover:bg-blue-50 "
       , target_ "blank"
@@ -440,21 +456,6 @@ sideNav sess project pageTitle menuItem hasIntegrated = aside_ [class_ "border-r
       ]
       $ span_ [class_ "p-2 rounded-full bg-red-100 text-red-600 leading-none"] (faSprite_ "arrow-right-from-bracket" "regular" "h-3 w-3")
         >> span_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:block"] "Logout"
-    let currUser = sess.persistentSession.user.getUser
-        userIdentifier =
-          if currUser.firstName /= "" || currUser.lastName /= ""
-            then currUser.firstName <> " " <> currUser.lastName
-            else CI.original currUser.email
-        emailMd5 = decodeUtf8 $ MD5.hash $ encodeUtf8 $ CI.original currUser.email
-        sanitizedID = T.replace " " "+" userIdentifier
-    div_ [tabindex_ "0", role_ "button", class_ "cursor-pointer justify-center group-has-[#sidenav-toggle:checked]/pg:justify-start"] do
-      img_
-        [ class_ "inline-block w-8 h-8 p-1 rounded-full bg-gray-300"
-        , term "data-tippy-placement" "right"
-        , term "data-tippy-content" userIdentifier
-        , src_ [text|https://www.gravatar.com/avatar/${emailMd5}?d=https%3A%2F%2Fui-avatars.com%2Fapi%2F/${sanitizedID}/128|]
-        ]
-      span_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:inline-block overflow-hidden"] $ toHtml userIdentifier
 
 
 -- mapM_ renderNavBottomItem $ navBottomList project.id.toText

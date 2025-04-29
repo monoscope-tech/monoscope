@@ -452,7 +452,7 @@ createProjectBody sess pid envCfg paymentPlan cp cpe = do
           div_ [class_ "modal p-8", role_ "dialog", [__|on closeModal from body set #pricing-modal.checked to false |]] do
             div_ [class_ "modal-box relative flex flex-col gap-5 w-[1250px] py-16 px-32", style_ "max-width:1300px"] $ do
               div_ [class_ "absolute top-8 right-8"] do
-                faSprite_ "xmark" "regular" "h-4 w-4"
+                faSprite_ "circle-xmark" "regular" "h-4 w-4"
               div_ [class_ "text-center text-sm text-textWeak w-full mx-auto max-w-96"] do
                 span_ [class_ " text-textStrong text-2xl font-semibold"] "What’s Included?"
                 p_ [class_ "mt-2 mb-4"] "See and compare what you get in each plan."
