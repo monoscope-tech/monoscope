@@ -463,7 +463,7 @@ createProjectBody sess pid envCfg paymentPlan cp cpe = do
             label_ [class_ "modal-backdrop", Lucid.for_ "pricing-modal"] "Close"
 
       let pidText = pid.toText
-      div_ [class_ "border border-red-500 gap-5 w-full p-12 mt-24 rounded-lg bg-red-50"] do
+      div_ [class_ "border border-red-500 gap-5 w-full p-8 my-24 rounded-lg bg-red-50"] do
         h1_ [class_ "text-red-500 font-medium text-xl"] "Danger zone"
         p_ [class_ "py-4"] "Delete project. This is dangerous and unreversible."
         button_
