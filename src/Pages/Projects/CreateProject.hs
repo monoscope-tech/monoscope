@@ -3,7 +3,6 @@
 
 module Pages.Projects.CreateProject (
   CreateProjectForm (..),
-  createProjectGetH,
   createProjectPostH,
   createProjectFormV,
   createProjectFormToModel,
@@ -41,6 +40,7 @@ import Effectful.Reader.Static (ask)
 import GHC.Records (HasField (getField))
 import Lucid
 import Lucid.Htmx (hxConfirm_, hxGet_, hxIndicator_, hxPost_, hxSwap_, hxTarget_)
+import Lucid.Hyperscript (__)
 import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
 import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.ProjectMembers qualified as Projects
@@ -58,8 +58,8 @@ import Servant (addHeader)
 import Servant.API (Header)
 import Servant.API.ResponseHeaders (Headers)
 import System.Config
-import System.Types (ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders, addSuccessToast, redirectCS)
-import Utils (insertIfNotExist, isDemoAndNotSudo, lookupValueText)
+import System.Types (ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders, addSuccessToast, addTriggerEvent, redirectCS)
+import Utils (faSprite_, insertIfNotExist, isDemoAndNotSudo, lookupValueText)
 import Web.FormUrlEncoded (FromForm)
 
 
@@ -129,22 +129,22 @@ projectOnboarding = do
 
 ----------------------------------------------------------------------------------------------------------
 -- createProjectGetH is the handler for the create projects page
-createProjectGetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders CreateProject)
-createProjectGetH pid = do
-  appCtx <- ask @AuthContext
-  sess <- Sessions.getSession
-  let bwconf =
-        (def :: BWConfig)
-          { sessM = Just sess
-          , pageTitle = "Create Project"
-          }
-  addRespHeaders $ CreateProject $ PageCtx bwconf (sess.persistentSession, pid, appCtx.config, False, def @CreateProjectForm, def @CreateProjectFormError)
-
+-- createProjectGetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders CreateProject)
+-- createProjectGetH pid = do
+--   appCtx <- ask @AuthContext
+--   sess <- Sessions.getSession
+--   let bwconf =
+--         (def :: BWConfig)
+--           { sessM = Just sess
+--           , pageTitle = "Create Project"
+--           }
+--   addRespHeaders $ CreateProject $ PageCtx bwconf (sess.persistentSession, pid, appCtx.config, False, def @CreateProjectForm, def @CreateProjectFormError)
 
 data CreateProjectResp = CreateProjectResp
   { sess :: Sessions.PersistentSession
   , pid :: Projects.ProjectId
   , env :: EnvConfig
+  , paymentPlan :: Text
   , form :: CreateProjectForm
   , formError :: CreateProjectFormError
   }
@@ -152,7 +152,7 @@ data CreateProjectResp = CreateProjectResp
 
 
 data CreateProject
-  = CreateProject (PageCtx (Sessions.PersistentSession, Projects.ProjectId, EnvConfig, Bool, CreateProjectForm, CreateProjectFormError))
+  = CreateProject (PageCtx (Sessions.PersistentSession, Projects.ProjectId, EnvConfig, Text, Bool, CreateProjectForm, CreateProjectFormError))
   | PostNoContent Text
   | ProjectPost CreateProjectResp
   deriving stock (Show, Generic)
@@ -165,9 +165,9 @@ instance HasField "unwrapCreateProjectResp" CreateProject (Maybe CreateProjectRe
 
 
 instance ToHtml CreateProject where
-  toHtml (CreateProject (PageCtx bwconf (sess, pid, config, isUpdate, prf, pref))) = toHtml $ PageCtx bwconf $ createProjectBody sess pid config prf pref
+  toHtml (CreateProject (PageCtx bwconf (sess, pid, config, paymentPlan, isUpdate, prf, pref))) = toHtml $ PageCtx bwconf $ createProjectBody sess pid config paymentPlan prf pref
   toHtml (PostNoContent message) = span_ [class_ ""] $ toHtml message
-  toHtml (ProjectPost cpr) = toHtml $ createProjectBody cpr.sess cpr.pid cpr.env cpr.form cpr.formError
+  toHtml (ProjectPost cpr) = toHtml $ createProjectBody cpr.sess cpr.pid cpr.env cpr.paymentPlan cpr.form cpr.formError
   toHtmlRaw = toHtml
 
 
@@ -192,7 +192,7 @@ projectSettingsGetH pid = do
           , pageTitle = "Project settings"
           , isSettingsPage = True
           }
-  addRespHeaders $ CreateProject $ PageCtx bwconf (sess.persistentSession, pid, appCtx.config, True, createProj, def @CreateProjectFormError)
+  addRespHeaders $ CreateProject $ PageCtx bwconf (sess.persistentSession, pid, appCtx.config, project.paymentPlan, True, createProj, def @CreateProjectFormError)
 
 
 ----------------------------------------------------------------------------------------------------------
@@ -222,7 +222,7 @@ createProjectPostH pid createP = do
   appCtx <- ask @AuthContext
   validationRes <- validateM createProjectFormV createP
   case validationRes of
-    Right cpe -> addRespHeaders $ ProjectPost (CreateProjectResp sess.persistentSession pid appCtx.config createP cpe)
+    Right cpe -> addRespHeaders $ ProjectPost (CreateProjectResp sess.persistentSession pid appCtx.config "" createP cpe)
     Left cp -> processProjectPostForm cp pid
 
 
@@ -322,6 +322,7 @@ pricingUpdateH pid PricingUpdateForm{orderIdM} = do
       redirectCS $ "/p/" <> pid.toText <> "/"
       addRespHeaders ""
     else do
+      addTriggerEvent "closeModal" ""
       addSuccessToast "Pricing updated successfully" Nothing
       addRespHeaders ""
 
@@ -338,15 +339,15 @@ pricingUpdateGetH pid = do
   let envCfg = appCtx.config
       lemon = envCfg.lemonSqueezyUrl <> "&checkout[custom][project_id]=" <> pid.toText
       critical = envCfg.lemonSqueezyCriticalUrl <> "&checkout[custom][project_id]=" <> pid.toText
-  addRespHeaders $ PageCtx bwconf $ pricingPage_ pid lemon critical False
+  addRespHeaders $ PageCtx bwconf $ pricingPage_ pid lemon critical project.paymentPlan
 
 
-pricingPage_ :: Projects.ProjectId -> Text -> Text -> Bool -> Html ()
-pricingPage_ pid lemon critical isCritical = do
+pricingPage_ :: Projects.ProjectId -> Text -> Text -> Text -> Html ()
+pricingPage_ pid lemon critical paymentPlan = do
   section_ [class_ "w-full h-full overflow-y-auto py-12"] do
     div_ [class_ "flex flex-col max-w-4xl mx-auto gap-10 px-4"] do
       h1_ [class_ "font-semibold text-4xl text-textStrong"] "Update pricing"
-      paymentPlanPicker pid lemon critical False
+      paymentPlanPicker pid lemon critical paymentPlan
 
 
 processProjectPostForm :: Valor.Valid CreateProjectForm -> Projects.ProjectId -> ATAuthCtx (RespHeaders CreateProject)
@@ -359,27 +360,27 @@ processProjectPostForm cpRaw pid = do
   if isDemoAndNotSudo pid sess.user.isSudo
     then do
       addErrorToast "Can't perform this action on the demo project" Nothing
-      addRespHeaders $ ProjectPost (CreateProjectResp sess.persistentSession pid envCfg cp (def @CreateProjectFormError))
+      addRespHeaders $ ProjectPost (CreateProjectResp sess.persistentSession pid envCfg "" cp (def @CreateProjectFormError))
     else do
       project <- dbtToEff $ Projects.projectById pid
       case project of
         Just p -> do
           _ <- dbtToEff $ Projects.updateProject (createProjectFormToModel pid p.subId p.firstSubItemId p.orderId p.paymentPlan cp)
           addSuccessToast "Updated Project Successfully" Nothing
-          addRespHeaders $ ProjectPost (CreateProjectResp sess.persistentSession pid envCfg cp (def @CreateProjectFormError))
+          addRespHeaders $ ProjectPost (CreateProjectResp sess.persistentSession pid envCfg "" cp (def @CreateProjectFormError))
         Nothing -> do
           addErrorToast "Something went wrong. Please try again." Nothing
           redirectCS ("/p/" <> pid.toText <> "/about_project")
-          addRespHeaders $ ProjectPost (CreateProjectResp sess.persistentSession pid envCfg cp (def @CreateProjectFormError))
+          addRespHeaders $ ProjectPost (CreateProjectResp sess.persistentSession pid envCfg "" cp (def @CreateProjectFormError))
 
 
 ----------------------------------------------------------------------------------------------------------
 -- createProjectBody is the core html view
-createProjectBody :: Sessions.PersistentSession -> Projects.ProjectId -> EnvConfig -> CreateProjectForm -> CreateProjectFormError -> Html ()
-createProjectBody sess pid envCfg cp cpe = do
+createProjectBody :: Sessions.PersistentSession -> Projects.ProjectId -> EnvConfig -> Text -> CreateProjectForm -> CreateProjectFormError -> Html ()
+createProjectBody sess pid envCfg paymentPlan cp cpe = do
   section_ [id_ "main-content", class_ "overflow-y-scroll h-full text-textWeak"] do
-    div_ [class_ "mx-auto px-2 pt-18", style_ "max-width:800px"] do
-      h2_ [class_ "text-slate-700 text-3xl font-medium mb-5"] "Project Settings"
+    div_ [class_ "mx-auto px-2 pt-12", style_ "max-width:800px"] do
+      h2_ [class_ "text-slate-700 text-3xl font-medium mb-2"] "Project Settings"
       form_
         [ class_ "py-8 flex flex-col gap-8 w-full"
         , hxPost_ $ "/p/update/" <> pid.toText
@@ -420,15 +421,46 @@ createProjectBody sess pid envCfg cp cpe = do
           div_ [class_ "flex w-full justify-end items-center"] do
             -- a_ [href_ $ "/p/" <> pid.toText <> "/update_pricing", class_ "text-textBrand font-medium"] "Update pricing"
             button_
-              [ class_ "lemonsqueezy-button py-2 px-5 w-max bg-blue-700 flex items-center text-[white]  rounded-xl cursor-pointer"
+              [ class_
+                  "lemonsqueezy-button py-2 px-5 w-max bg-blue-700 flex items-center text-[white]  rounded-xl cursor-pointer"
+              , type_ "submit"
               ]
               do
                 span_ [id_ "createIndicator", class_ "htmx-indicator loading loading-dots loading-md"] ""
                 "Update project"
 
-      -- div_ [class_ "border-t py-8"] do
-      --   div_ [class_ "self-stretch justify-start text-textStrong text-base font-semibold font-['Inter']"] "Upgrade plan"
-      --   p_ [class_ "text-textWeak text-sm max-w-[500px]"] "This is APItoolkit pricing, click on compare feature below to select the option that best suit your project."
+      div_ [class_ "border-t pt-8"] do
+        div_ [class_ "self-stretch justify-start text-textStrong text-base font-semibold font-['Inter']"] "Upgrade plan"
+        p_ [class_ "text-textWeak text-sm max-w-[513px] mt-3"] "This is APItoolkit pricing, click on compare feature below to select the option that best suit your project."
+
+      div_ [class_ "border border-strokeWeak rounded-2xl h-32 flex items-center px-6 py-8 overflow-hidden mt-8 relative"] do
+        div_ [class_ "w-full h-36 rotate-y-5 rotate-z-15 right-[-40px] top-[-95px] z-0 absolute bg-gradient-to-b from-slate-500/10 to-slate-500/0"] pass
+        div_ [class_ "flex items-center justify-between w-full"] do
+          div_ [class_ "flex flex-col gap-1"] do
+            span_ [class_ "text-textStrong font-semibold"] $ toHtml paymentPlan
+            span_ [class_ "rounded-2xl text-textWeak bg-fillWeaker border border-strokeWeak py-1 text-sm px-3"] "current plan"
+          div_ [class_ "flex items-center gap-1 mt-4"] do
+            div_ [class_ "flex items-end"] do
+              span_ [class_ "text-textStrong text-xl"] "$"
+              span_ [class_ "text-4xl text-textStrong"] $ if paymentPlan == "Free" then "0" else if paymentPlan == "Critical Systems Plan" then "199" else "34"
+            div_ [class_ "flex flex-col text-text-Weak text-sm"] do
+              span_ [class_ ""] "Starts at"
+              span_ [class_ ""] "/per month"
+          label_ [class_ "btn btn-secondary bg-white cursor pointer z-10", Lucid.for_ "pricing-modal", [__|on click set #pricing-modal.check to true|]] "Change plan"
+
+          input_ [type_ "checkbox", id_ "pricing-modal", class_ "modal-toggle"]
+          div_ [class_ "modal p-8", role_ "dialog", [__|on closeModal from body set #pricing-modal.checked to false |]] do
+            div_ [class_ "modal-box relative flex flex-col gap-5 w-[1250px] py-16 px-32", style_ "max-width:1300px"] $ do
+              div_ [class_ "absolute top-8 right-8"] do
+                faSprite_ "xmark" "regular" "h-4 w-4"
+              div_ [class_ "text-center text-sm text-textWeak w-full mx-auto max-w-96"] do
+                span_ [class_ " text-textStrong text-2xl font-semibold"] "What’s Included?"
+                p_ [class_ "mt-2 mb-4"] "See and compare what you get in each plan."
+                p_ [] "Please adjust the bar below to see difference in price as your events increase"
+              let lemonUrl = envCfg.lemonSqueezyUrl <> "&checkout[custom][project_id]=" <> pid.toText
+                  critical = envCfg.lemonSqueezyCriticalUrl <> "&checkout[custom][project_id]=" <> pid.toText
+              paymentPlanPicker pid lemonUrl critical paymentPlan
+            label_ [class_ "modal-backdrop", Lucid.for_ "pricing-modal"] "Close"
 
       let pidText = pid.toText
       div_ [class_ "border border-red-500 gap-5 w-full p-12 mt-24 rounded-lg bg-red-50"] do

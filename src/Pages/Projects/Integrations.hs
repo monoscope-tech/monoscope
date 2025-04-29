@@ -3,7 +3,6 @@
 
 module Pages.Projects.Integrations (
   CreateProjectForm,
-  createProjectGetH,
   NotifListForm,
   integrationsSettingsGetH,
   updateNotificationsChannel,
@@ -42,20 +41,6 @@ data CreateProjectForm = CreateProjectForm
   }
   deriving stock (Eq, Show, Generic)
   deriving anyclass (FromForm, Default)
-
-
-----------------------------------------------------------------------------------------------------------
--- createProjectGetH is the handler for the create projects page
-createProjectGetH :: ATAuthCtx (RespHeaders (Html ()))
-createProjectGetH = do
-  appCtx <- ask @AuthContext
-  sess <- Sessions.getSession
-  let bwconf =
-        (def :: BWConfig)
-          { sessM = Just sess
-          , pageTitle = "Endpoints"
-          }
-  addRespHeaders $ bodyWrapper bwconf $ integrationsBody sess.persistentSession appCtx.config False (def @CreateProjectForm) Nothing Nothing
 
 
 ----------------------------------------------------------------------------------------------------------
