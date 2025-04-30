@@ -160,15 +160,15 @@ expandedSpanItem pid sp leftM rightM = do
 
       div_ [class_ "grid my-4 text-slate-600 font"] $ do
         div_ [class_ "hidden a-tab-content", id_ "m-raw-content"] $ do
-          jsonValueToHtmlTree $ selectiveOtelLogsJson sp
+          jsonValueToHtmlTree (selectiveOtelLogsJson sp) Nothing
         div_ [class_ $ "a-tab-content " <> if isHttp then "hidden" else "", id_ "att-content"] $ do
-          jsonValueToHtmlTree $ fromMaybe (AE.object []) (fmap AE.Object $ fmap KEM.fromMapText sp.attributes)
+          jsonValueToHtmlTree (fromMaybe (AE.object []) (fmap AE.Object $ fmap KEM.fromMapText sp.attributes)) Nothing
         div_ [class_ "hidden a-tab-content", id_ "meta-content"] $ do
-          jsonValueToHtmlTree $ fromMaybe (AE.object []) (fmap AE.Object $ fmap KEM.fromMapText sp.resource)
+          jsonValueToHtmlTree (fromMaybe (AE.object []) (fmap AE.Object $ fmap KEM.fromMapText sp.resource)) Nothing
         div_ [class_ "hidden a-tab-content", id_ "errors-content"] $ do
           renderErrors spanErrors
         div_ [class_ "hidden a-tab-content", id_ "logs-content"] $ do
-          jsonValueToHtmlTree $ AE.toJSON sp.events
+          jsonValueToHtmlTree (AE.toJSON sp.events) Nothing
 
         whenJust reqDetails $ \case
           ("HTTP", method, path, status) -> do
@@ -189,19 +189,21 @@ expandedSpanItem pid sp leftM rightM = do
                         button_ [onclick_ "navigatable(this, '#raw_content', '#http-content-container', 't-tab-box-active')", class_ "http a-tab px-3 py-1 rounded-lg text-textWeak"] "Request Details"
                     div_ [] do
                       div_ [id_ "raw_content", class_ "hidden a-tab-content http"] do
-                        jsonValueToHtmlTree $ selectiveReqToJson httpJson
+                        jsonValueToHtmlTree (selectiveReqToJson httpJson) Nothing
                       div_ [id_ "req_content", class_ "a-tab-content http"] do
-                        jsonValueToHtmlTree $ case sp.body of
-                          Just (AE.Object b) -> case KEM.lookup "request_body" b of
-                            Just a -> a
-                            _ -> AE.object []
-                          _ -> AE.object []
+                        let b = case sp.body of
+                              Just (AE.Object bb) -> case KEM.lookup "request_body" bb of
+                                Just a -> a
+                                _ -> AE.object []
+                              _ -> AE.object []
+                        jsonValueToHtmlTree b $ Just "body.request_body"
                       div_ [id_ "res_content", class_ "hidden a-tab-content http"] do
-                        jsonValueToHtmlTree $ case sp.body of
-                          Just (AE.Object b) -> case KEM.lookup "response_body" b of
-                            Just a -> a
-                            _ -> AE.object []
-                          _ -> AE.object []
+                        let b = case sp.body of
+                              Just (AE.Object bb) -> case KEM.lookup "response_body" bb of
+                                Just a -> a
+                                _ -> AE.object []
+                              _ -> AE.object []
+                        jsonValueToHtmlTree b $ Just "body.response_body"
                       div_ [id_ "hed_content", class_ "hidden a-tab-content http"] do
                         let reqHeaders = case request of
                               Just (AE.Object obj) -> case KEM.lookup "headers" obj of
@@ -213,7 +215,7 @@ expandedSpanItem pid sp leftM rightM = do
                                 Just (AE.Object headers) -> headers
                                 _ -> KEM.empty
                               _ -> KEM.empty
-                        jsonValueToHtmlTree $ AE.object ["request_headers" AE..= reqHeaders, "response_headers" AE..= respHeaders]
+                        jsonValueToHtmlTree (AE.object ["request_headers" AE..= reqHeaders, "response_headers" AE..= respHeaders]) Nothing
                       div_ [id_ "par_content", class_ "hidden a-tab-content http"] do
                         let (queryParams, pathParams) = case request of
                               Just (AE.Object obj) ->
@@ -225,7 +227,7 @@ expandedSpanItem pid sp leftM rightM = do
                                     _ -> KEM.empty
                                 )
                               _ -> (KEM.empty, KEM.empty)
-                        jsonValueToHtmlTree $ AE.object ["query_params" AE..= queryParams, "path_params" AE..= pathParams]
+                        jsonValueToHtmlTree (AE.object ["query_params" AE..= queryParams, "path_params" AE..= pathParams]) Nothing
               Nothing -> pass
           _ -> pass
 

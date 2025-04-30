@@ -116,7 +116,7 @@ expandAPIlogItem' pid req modal = do
         p_ "Errors"
         p_ [class_ " text-red-500 font-bold"] $ show req.errorsCount
       div_ [class_ "p-4 rounded-lg border border-slate-200 text-gray-500"] do
-        jsonValueToHtmlTree req.errors
+        jsonValueToHtmlTree req.errors Nothing
 
     div_ [id_ "http-content-container", class_ "flex flex-col gap-3"] do
       let json = selectiveReqToJson req
@@ -149,15 +149,15 @@ expandAPIlogItem' pid req modal = do
           button_ [onclick_ "navigatable(this, '#par_content', '#http-content-container', 't-tab-box-active')", class_ "a-tab px-3 py-1 rounded-lg text-textWeak"] "Params"
       div_ [] do
         div_ [id_ "raw_content", class_ "a-tab-content"] do
-          jsonValueToHtmlTree json
+          jsonValueToHtmlTree json Nothing
         div_ [id_ "req_content", class_ "hidden a-tab-content"] do
-          jsonValueToHtmlTree $ req.requestBody
+          jsonValueToHtmlTree req.requestBody Nothing
         div_ [id_ "res_content", class_ "hidden a-tab-content"] do
-          jsonValueToHtmlTree $ req.responseBody
+          jsonValueToHtmlTree req.responseBody Nothing
         div_ [id_ "hed_content", class_ "hidden a-tab-content"] do
-          jsonValueToHtmlTree $ AE.object ["request_headers" AE..= req.requestHeaders, "response_headers" AE..= req.responseHeaders]
+          jsonValueToHtmlTree (AE.object ["request_headers" AE..= req.requestHeaders, "response_headers" AE..= req.responseHeaders]) Nothing
         div_ [id_ "par_content", class_ "hidden a-tab-content"] do
-          jsonValueToHtmlTree $ AE.object ["query_params" AE..= req.queryParams, "path_params" AE..= req.pathParams]
+          jsonValueToHtmlTree (AE.object ["query_params" AE..= req.queryParams, "path_params" AE..= req.pathParams]) Nothing
 
 
 -- outgoing request details
@@ -262,9 +262,9 @@ apiLogItemView pid lg = do
 
         div_ [class_ "grid my-4 text-slate-600 font"] $ do
           div_ [class_ "a-tab-content", id_ "att-content"] $ do
-            jsonValueToHtmlTree $ fromMaybe (AE.object []) (fmap AE.Object $ fmap KEM.fromMapText lg.attributes)
+            jsonValueToHtmlTree (fromMaybe (AE.object []) (fmap AE.Object $ fmap KEM.fromMapText lg.attributes)) Nothing
           div_ [class_ "hidden a-tab-content", id_ "meta-content"] $ do
-            jsonValueToHtmlTree $ fromMaybe (AE.object []) (fmap AE.Object $ fmap KEM.fromMapText lg.resource)
+            jsonValueToHtmlTree (fromMaybe (AE.object []) (fmap AE.Object $ fmap KEM.fromMapText lg.resource)) Nothing
 
 
 -- div_ [class_ "px-2 flex flex-col w-full items-center gap-2"] do

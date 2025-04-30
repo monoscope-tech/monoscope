@@ -240,8 +240,8 @@ b64ToJson b64Text =
   fromRight (AE.object []) $ AE.eitherDecodeStrict $ fromRight "{}" $ B64.decodeBase64Untyped $ encodeUtf8 b64Text
 
 
-jsonValueToHtmlTree :: AE.Value -> Html ()
-jsonValueToHtmlTree val = do
+jsonValueToHtmlTree :: AE.Value -> Maybe Text -> Html ()
+jsonValueToHtmlTree val pathM = do
   div_ [class_ "p-2 rounded-lg bg-fillWeaker border w-full overflow-x-auto json-tree-container"] do
     div_ [class_ "w-full flex items-center gap-4 text-xs mb-2"] do
       button_
@@ -297,7 +297,7 @@ jsonValueToHtmlTree val = do
         do
           span_ [class_ "underline"] "Download json"
           faSprite_ "download-f" "regular" "w-2 h-2"
-    jsonValueToHtmlTree' ("", "", val)
+    jsonValueToHtmlTree' (fromMaybe "" pathM, "", val)
   where
     jsonValueToHtmlTree' :: (Text, Text, AE.Value) -> Html ()
     jsonValueToHtmlTree' (path, key, AE.Object v) = renderParentType "{" "}" key (length v) (AEKM.toHashMapText v & HM.toList & sort & mapM_ (\(kk, vv) -> jsonValueToHtmlTree' (path <> "." <> key, kk, vv)))
