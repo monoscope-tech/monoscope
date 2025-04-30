@@ -186,10 +186,12 @@ bodyWrapper bcfg child = do
           [raw|
 
 
-        function navigatable(me, target, container, activeClass)  {
+        function navigatable(me, target, container, activeClass, excl)  {
+            const exCls = excl ? ":not(" + excl + ".a-tab)" : "";
+            const exClsC = excl ? ":not(" + excl + ".a-tab-content)" : "";
             const nav = document.querySelector(container);
-            const tabs = nav.querySelectorAll(".a-tab");
-            const contents = nav.querySelectorAll(".a-tab-content");
+            const tabs = nav.querySelectorAll(".a-tab" + exCls);
+            const contents = nav.querySelectorAll(".a-tab-content" + exClsC);
             const targetElement = document.querySelector(target);
             tabs.forEach(tab => {
               tab.classList.remove(activeClass);
@@ -431,7 +433,6 @@ sideNav sess project pageTitle menuItem hasIntegrated = aside_ [class_ "border-r
 
     a_
       [ class_ "hover:bg-blue-50 "
-      , target_ "blank"
       , term "data-tippy-placement" "right"
       , term "data-tippy-content" "Documentation"
       , href_ $ "/p/" <> project.id.toText <> "/settings"

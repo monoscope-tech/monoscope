@@ -145,17 +145,17 @@ expandedSpanItem pid sp leftM rightM = do
             Just ("HTTP", _, _, _) -> True
             _ -> False
       div_ [class_ "flex", [__|on click halt|]] $ do
-        when isHttp $ button_ [class_ "a-tab border-b-2 border-b-slate-200 px-4 py-1.5 t-tab-active", onclick_ "navigatable(this, '#request-content', '#span-tabs-container', 't-tab-active')"] "Request"
-        button_ [class_ $ "a-tab border-b-2 border-b-slate-200 px-4 py-1.5 " <> if isHttp then "" else "t-tab-active", onclick_ "navigatable(this, '#att-content', '#span-tabs-container', 't-tab-active')"] "Attributes"
-        button_ [class_ "a-tab border-b-2 border-b-slate-200 px-4 py-1.5 ", onclick_ "navigatable(this, '#meta-content', '#span-tabs-container', 't-tab-active')"] "Process"
+        when isHttp $ button_ [class_ "a-tab border-b-2 border-b-slate-200 px-4 py-1.5 t-tab-active", onclick_ "navigatable(this, '#request-content', '#span-tabs-container', 't-tab-active','.http')"] "Request"
+        button_ [class_ $ "a-tab border-b-2 border-b-slate-200 px-4 py-1.5 " <> if isHttp then "" else "t-tab-active", onclick_ "navigatable(this, '#att-content', '#span-tabs-container', 't-tab-active','.http')"] "Attributes"
+        button_ [class_ "a-tab border-b-2 border-b-slate-200 px-4 py-1.5 ", onclick_ "navigatable(this, '#meta-content', '#span-tabs-container', 't-tab-active', '.http')"] "Process"
         unless (null spanErrors) $ do
-          button_ [class_ "a-tab border-b-2 border-b-slate-200 flex items-center gap-1 nowrap px-4 py-1.5 ", onclick_ "navigatable(this, '#errors-content', '#span-tabs-container', 't-tab-active')"] do
+          button_ [class_ "a-tab border-b-2 border-b-slate-200 flex items-center gap-1 nowrap px-4 py-1.5 ", onclick_ "navigatable(this, '#errors-content', '#span-tabs-container', 't-tab-active', '.http')"] do
             "Errors"
             div_ [class_ "badge badge-error badge-sm"] $ show $ length spanErrors
-        button_ [class_ "a-tab border-b-2 border-b-slate-200 flex items-center gap-1 px-4 py-1.5 ", onclick_ "navigatable(this, '#logs-content', '#span-tabs-container', 't-tab-active')"] $ do
+        button_ [class_ "a-tab border-b-2 border-b-slate-200 flex items-center gap-1 px-4 py-1.5 ", onclick_ "navigatable(this, '#logs-content', '#span-tabs-container', 't-tab-active','.http')"] $ do
           "Logs"
           div_ [class_ "badge badge-ghost badge-sm"] $ show $ numberOfEvents $ fromMaybe AE.Null sp.events
-        button_ [class_ "a-tab border-b-2 whitespace-nowrap border-b-slate-200 px-4 py-1.5", onclick_ "navigatable(this, '#m-raw-content', '#span-tabs-container', 't-tab-active')"] "Raw data"
+        button_ [class_ "a-tab border-b-2 whitespace-nowrap border-b-slate-200 px-4 py-1.5", onclick_ "navigatable(this, '#m-raw-content', '#span-tabs-container', 't-tab-active','.http')"] "Raw data"
         div_ [class_ "w-full border-b-2 border-b-slate-200"] pass
 
       div_ [class_ "grid my-4 text-slate-600 font"] $ do
@@ -176,34 +176,33 @@ expandedSpanItem pid sp leftM rightM = do
             let (request, resp) = case Map.lookup "http" (fromMaybe Map.empty sp.attributes) of
                   Just (AE.Object obj) -> (KEM.lookup "request" obj, KEM.lookup "response" obj)
                   _ -> (Nothing, Nothing)
-
             case httpJsonM of
               Just httpJson -> do
-                div_ [class_ "a-tab-content", id_ "request-content"] do
+                div_ [class_ "a-tab-content nested-tab", id_ "request-content"] do
                   div_ [id_ "http-content-container", class_ "flex flex-col gap-3 mt-2"] do
                     div_ [class_ "bg-fillWeak w-max rounded-lg border border-strokeWeak justify-start items-start inline-flex"] $ do
                       div_ [class_ "justify-start items-start flex text-sm"] $ do
-                        button_ [onclick_ "navigatable(this, '#raw_content', '#http-content-container', 't-tab-box-active')", class_ "a-tab px-3 py-1 rounded-lg text-textWeak t-tab-box-active"] "Request Details"
-                        button_ [onclick_ "navigatable(this, '#req_content', '#http-content-container', 't-tab-box-active')", class_ "a-tab px-3 py-1 rounded-lg text-textWeak"] "Req Body"
-                        button_ [onclick_ "navigatable(this, '#res_content', '#http-content-container', 't-tab-box-active')", class_ "a-tab px-3 py-1 rounded-lg text-textWeak"] "Res Body"
-                        button_ [onclick_ "navigatable(this, '#hed_content', '#http-content-container', 't-tab-box-active')", class_ "a-tab px-3 py-1 rounded-lg text-textWeak"] "Headers"
-                        button_ [onclick_ "navigatable(this, '#par_content', '#http-content-container', 't-tab-box-active')", class_ "a-tab px-3 py-1 rounded-lg text-textWeak"] "Params"
+                        button_ [onclick_ "navigatable(this, '#req_content', '#http-content-container', 't-tab-box-active')", class_ "http a-tab px-3 py-1 rounded-lg text-textWeak t-tab-box-active"] "Req Body"
+                        button_ [onclick_ "navigatable(this, '#res_content', '#http-content-container', 't-tab-box-active')", class_ "http a-tab px-3 py-1 rounded-lg text-textWeak"] "Res Body"
+                        button_ [onclick_ "navigatable(this, '#hed_content', '#http-content-container', 't-tab-box-active')", class_ "http a-tab px-3 py-1 rounded-lg text-textWeak"] "Headers"
+                        button_ [onclick_ "navigatable(this, '#par_content', '#http-content-container', 't-tab-box-active')", class_ "http a-tab px-3 py-1 rounded-lg text-textWeak"] "Params"
+                        button_ [onclick_ "navigatable(this, '#raw_content', '#http-content-container', 't-tab-box-active')", class_ "http a-tab px-3 py-1 rounded-lg text-textWeak"] "Request Details"
                     div_ [] do
-                      div_ [id_ "raw_content", class_ "a-tab-content"] do
+                      div_ [id_ "raw_content", class_ "hidden a-tab-content http"] do
                         jsonValueToHtmlTree $ selectiveReqToJson httpJson
-                      div_ [id_ "req_content", class_ "hidden a-tab-content"] do
+                      div_ [id_ "req_content", class_ "hidden a-tab-content http"] do
                         jsonValueToHtmlTree $ case request of
                           Just (AE.Object obj) -> case KEM.lookup "body" obj of
                             Just (AE.String b64) -> b64ToJson b64
                             _ -> "{}"
                           _ -> "{}"
-                      div_ [id_ "res_content", class_ "hidden a-tab-content"] do
+                      div_ [id_ "res_content", class_ "a-tab-content http"] do
                         jsonValueToHtmlTree $ case resp of
                           Just (AE.Object obj) -> case KEM.lookup "body" obj of
                             Just (AE.String b64) -> b64ToJson b64
                             _ -> "{}"
                           _ -> "{}"
-                      div_ [id_ "hed_content", class_ "hidden a-tab-content"] do
+                      div_ [id_ "hed_content", class_ "hidden a-tab-content http"] do
                         let reqHeaders = case request of
                               Just (AE.Object obj) -> case KEM.lookup "headers" obj of
                                 Just (AE.Object headers) -> headers
@@ -215,7 +214,7 @@ expandedSpanItem pid sp leftM rightM = do
                                 _ -> KEM.empty
                               _ -> KEM.empty
                         jsonValueToHtmlTree $ AE.object ["request_headers" AE..= reqHeaders, "response_headers" AE..= respHeaders]
-                      div_ [id_ "par_content", class_ "hidden a-tab-content"] do
+                      div_ [id_ "par_content", class_ "hidden a-tab-content http"] do
                         let (queryParams, pathParams) = case request of
                               Just (AE.Object obj) ->
                                 ( case KEM.lookup "query_params" obj of
