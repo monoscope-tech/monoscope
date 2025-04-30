@@ -531,6 +531,7 @@ navBottomList pidTxt =
   , ("user-plus", "bg-yellow-100", "text-yellow-600", "Manage members", "/p/" <> pidTxt <> "/manage_members", Nothing, Nothing, Nothing)
   , ("dollar", "bg-orange-100", "text-orange-600", "Manage billing", "/p/" <> pidTxt <> "/manage_billing", Nothing, Nothing, Just "")
   , ("arrows-turn-right", "bg-purple-100", "text-purple-600", "Integrations", "/p/" <> pidTxt <> "/integrations", Nothing, Nothing, Nothing)
+  , ("trash", "bg-red-100", "text-red-600", "Delete project", "/p/" <> pidTxt <> "/settings/delete", Nothing, Nothing, Nothing)
   ]
 
 

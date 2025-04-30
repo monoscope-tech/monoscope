@@ -9,6 +9,7 @@ module Pages.Projects.CreateProject (
   CreateProjectFormError (..),
   pricingUpdateH,
   PricingUpdateForm (..),
+  projectDeleteGetH,
   projectSettingsGetH,
   projectOnboarding,
   deleteProjectGetH,
@@ -379,7 +380,7 @@ processProjectPostForm cpRaw pid = do
 createProjectBody :: Sessions.PersistentSession -> Projects.ProjectId -> EnvConfig -> Text -> CreateProjectForm -> CreateProjectFormError -> Html ()
 createProjectBody sess pid envCfg paymentPlan cp cpe = do
   section_ [id_ "main-content", class_ "overflow-y-scroll h-full text-textWeak"] do
-    div_ [class_ "mx-auto px-2 pt-12", style_ "max-width:800px"] do
+    div_ [class_ "mx-auto px-2 pt-12", style_ "max-width:700px"] do
       h2_ [class_ "text-slate-700 text-3xl font-medium mb-2"] "Project Settings"
       form_
         [ class_ "py-8 flex flex-col gap-8 w-full"
@@ -462,13 +463,30 @@ createProjectBody sess pid envCfg paymentPlan cp cpe = do
               paymentPlanPicker pid lemonUrl critical paymentPlan
             label_ [class_ "modal-backdrop", Lucid.for_ "pricing-modal"] "Close"
 
-      let pidText = pid.toText
-      div_ [class_ "border border-red-500 gap-5 w-full p-8 my-24 rounded-lg bg-red-50"] do
-        h1_ [class_ "text-red-500 font-medium text-xl"] "Danger zone"
-        p_ [class_ "py-4"] "Delete project. This is dangerous and unreversible."
-        button_
-          [ class_ "btn btn-sm bg-red-500 text-white shadow-md hover:bg-red-700 cursor-pointer"
-          , hxGet_ [text|/p/$pidText/delete|]
-          , hxConfirm_ "Are you sure you want to delete this project?"
-          ]
-          "Delete Project"
+
+projectDeleteGetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders (PageCtx (Html ())))
+projectDeleteGetH pid = do
+  (sess, project) <- Sessions.sessionAndProject pid
+  let bwconf =
+        (def :: BWConfig)
+          { sessM = Just sess
+          , currProject = Just project
+          , pageTitle = "Delete Project"
+          , isSettingsPage = True
+          }
+  addRespHeaders $ PageCtx bwconf $ deleteProjectBody pid
+
+
+deleteProjectBody :: Projects.ProjectId -> Html ()
+deleteProjectBody pid = do
+  let pidText = pid.toText
+  section_ [class_ "p-4 mx-auto w-[500px]"] do
+    div_ [class_ " gap-5 w-full p-8 my-24"] do
+      h1_ [class_ "text-textStrong font-semibold text-2xl"] "Delete project"
+      p_ [class_ "py-4"] "Delete project. This is dangerous and unreversible."
+      button_
+        [ class_ "btn btn-sm bg-red-500 text-white shadow-md hover:bg-red-700 cursor-pointer"
+        , hxGet_ [text|/p/$pidText/delete|]
+        , hxConfirm_ "Are you sure you want to delete this project?"
+        ]
+        "Delete Project"

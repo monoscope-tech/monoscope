@@ -20,6 +20,7 @@ server =
     , settingsGet = CreateProject.projectSettingsGetH
     , integrationGet = Integrations.integrationsSettingsGetH
     , deleteGet = CreateProject.deleteProjectGetH
+    , deleteProjectH = CreateProject.projectDeleteGetH
     , notificationsUpdateChannelPost = Integrations.updateNotificationsChannel
     , deleteProjectGet = CreateProject.deleteProjectGetH
     , membersManageGet = ManageMembers.manageMembersGetH
