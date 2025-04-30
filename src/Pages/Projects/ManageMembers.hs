@@ -9,6 +9,8 @@ where
 
 import BackgroundJobs qualified
 import Control.Lens qualified as Lens
+import Data.CaseInsensitive qualified as CI
+
 import Data.Aeson qualified as AE
 import Data.CaseInsensitive (original)
 import Data.Default (def)
@@ -57,7 +59,7 @@ manageMembersPostH pid onboardingM form = do
 
   if project.paymentPlan /= "Free"
     then do
-      let usersAndPermissions = zip (form.emails <&> T.strip) form.permissions & uniq
+      let usersAndPermissions = filter (\(x, _) -> not (T.null x)) $ zip (form.emails <&> T.strip) form.permissions & uniq
       let uAndPOldAndChanged =
             mapMaybe
               ( \(email, permission) -> do
@@ -154,31 +156,70 @@ manageMembersBody :: V.Vector ProjectMembers.ProjectMemberVM -> Html ()
 manageMembersBody projMembers =
   div_ [id_ "main-content", class_ "w-full py-16"] do
     section_ [class_ "p-6 w-[800px] mx-auto"] do
-      h2_ [class_ "text-slate-700 text-2xl font-medium mb-5"] "Manage project members"
+      h2_ [class_ "text-textWeak mb-4 text-xl font-semibold"] "Manage Access"
+      p_ [class_ "text-textWeak text-sm leading-tight"] "We’ll email them instructions and a link to sign in"
       form_
-        [ class_ "relative px-10 border border-gray-200 py-10  bg-base-100 w-full rounded-3xl"
+        [ class_ "my-8 flex flex-col gap-8"
         , hxPost_ ""
         , hxTarget_ "#main-content"
         , hxSwap_ "outerHTML"
         , hxIndicator_ "#submitIndicator"
         ]
         do
-          div_ [class_ "mt-6"] do
-            section_ [id_ "inviteMemberSection"] do
-              mapM_ (projectMemberRow . Just) projMembers
-              template_ [id_ "inviteTmpl"] $ projectMemberRow Nothing
-            a_
-              [ class_ "bg-transparent inline-flex cursor-pointer mt-2"
-              , [__| on click put #inviteTmpl.innerHTML at end of #inviteMemberSection then
-                          _hyperscript.processNode(#inviteMemberSection) then halt |]
-              ]
-              do
-                faSprite_ "plus" "regular" "mt-1 mx-2 w-3 h-3 text-blue-700"
-                span_ [class_ "text-blue-700 font-medium  "] "Add member"
-          button_ [class_ "py-2 px-5 bg-blue-700 absolute m-5 flex items-center bottom-0 right-0 text-[white]  rounded-xl cursor-pointer", type_ "submit"] do
-            "Submit"
-            span_ [id_ "submitIndicator", class_ "loading loading-dots loading-sm htmx-indicator"] ""
+          div_ [class_ "flex gap-2 w-full"] do
+            input_ [type_ "text", name_ "emails", class_ "input w-full", placeholder_ "Add a member by email"]
+            select_ [name_ "permissions", class_ "select w-[130px]"] do
+              option_ [class_ "text-gray-500", value_ "admin"] "Admin"
+              option_ [class_ "text-gray-500", value_ "edit"] "Can Edit"
+              option_ [class_ "text-gray-500", value_ "view"] "Can View"
+            button_ [class_ "btn btn-secondary"] "Send invite"
+          div_ [class_ "flex w-full flex-col gap-4"] do
+            h3_ [class_ "text-textWeak font-semibold"] "Members"
+            div_ [class_ "flex flex-col gap-2"] do
+              mapM_ memberRow projMembers
+            button_ [class_ "self-end btn btn-primary mt-2"] "Update settings"
 
+
+memberRow :: ProjectMembers.ProjectMemberVM -> Html ()
+memberRow prM = do
+  let email = CI.original prM.email
+  div_ [class_ "w-full  px-1.5 py-3 rounded-lg  even:border even:border-strokeWeak gap-4 even:bg-fillWeak flex justify-between items-center"] $ do
+    div_ [data_ "size" "Small", class_ "w-full grow-1 flex items-center gap-2"] $ do
+      img_
+        [ class_ "w-8 h-8 relative rounded-[32px] outline outline-1 outline-offset-[-1px] outline-Stroke-Weak/10"
+        , src_ "https://placehold.co/32x32"
+        ]
+      div_ [class_ "inline-flex flex-col items-start"] do
+        input_ [type_ "text", name_ "emails", value_ email, class_ "focus:border-none focus:outline-0 text-textStrong text-sm font-normal leading-tight"]
+
+    div_ [class_ "flex items-center gap-4"] $ do
+      let permission = prM.permission
+      select_ [name_ "permissions", class_ "w-[90px] text-textWeak text-sm font-normal leading-tight"] do
+        option_ ([class_ "text-gray-500", value_ "admin"] <> selectedIf ProjectMembers.PAdmin permission) "Admin"
+        option_ ([class_ "text-gray-500", value_ "edit"] <> selectedIf ProjectMembers.PEdit permission) "Can Edit"
+        option_ ([class_ "text-gray-500", value_ "view"] <> selectedIf ProjectMembers.PView permission) "Can View"
+    button_ [[__| on click remove the closest parent <div/> then halt |]] do
+      faSprite_ "trash" "regular" "w-5 h-5 text-red-700"
+  where
+    selectedIf :: ProjectMembers.Permissions -> ProjectMembers.Permissions -> [Attribute]
+    selectedIf a b = [selected_ "" | a == b]
+
+
+-- div_ [class_ "mt-6"] do
+--       section_ [id_ "inviteMemberSection"] do
+--         mapM_ (projectMemberRow . Just) projMembers
+--         template_ [id_ "inviteTmpl"] $ projectMemberRow Nothing
+--       a_
+--         [ class_ "bg-transparent inline-flex cursor-pointer mt-2"
+--         , [__| on click put #inviteTmpl.innerHTML at end of #inviteMemberSection then
+--                     _hyperscript.processNode(#inviteMemberSection) then halt |]
+--         ]
+--         do
+--           faSprite_ "plus" "regular" "mt-1 mx-2 w-3 h-3 text-blue-700"
+--           span_ [class_ "text-blue-700 font-medium  "] "Add member"
+--     button_ [class_ "py-2 px-5 bg-blue-700 absolute m-5 flex items-center bottom-0 right-0 text-[white]  rounded-xl cursor-pointer", type_ "submit"] do
+--       "Submit"
+--       span_ [id_ "submitIndicator", class_ "loading loading-dots loading-sm htmx-indicator"] ""
 
 projectMemberRow :: Maybe ProjectMembers.ProjectMemberVM -> Html ()
 projectMemberRow projMembersM =

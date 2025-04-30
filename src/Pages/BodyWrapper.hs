@@ -515,7 +515,7 @@ loginBanner = do
 settingsWrapper :: Projects.ProjectId -> Text -> Html () -> Html ()
 settingsWrapper pid current pageHtml = do
   section_ [class_ "flex h-full w-full"] do
-    nav_ [class_ "w-[300px] bg-fillWeaker h-full p-4 pt-6 border-r border-r-strokWeak"] do
+    nav_ [class_ "w-[300px]  h-full p-4 pt-6 border-r border-r-strokWeak"] do
       h1_ [class_ "text-3xl font-medium mb-4"] do
         "Settings"
       ul_ [class_ "flex flex-col mt-14 gap-2 w-full"] do
