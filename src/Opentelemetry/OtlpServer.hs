@@ -113,7 +113,7 @@ getMetricAttributeValue attribute rms = listToMaybe $ V.toList $ V.mapMaybe getR
 
 
 -- | Process a list of messages
-processList :: (Eff.Reader AuthContext :> es, DB :> es, Labeled "timefusion" DB :> es, Log :> es, IOE :> es, UUIDEff :> es) => [(Text, ByteString)] -> HashMap Text Text -> Eff es [Text]
+processList :: (Eff.Reader AuthContext :> es, DB :> es, Labeled "timefusion" DB :> es, Log :> es, IOE :> es, Time :> es, UUIDEff :> es, Ki.StructuredConcurrency :> es) => [(Text, ByteString)] -> HashMap Text Text -> Eff es [Text]
 processList [] _ = pure []
 processList msgs attrs = checkpoint "processList" $ process `onException` handleException
   where
@@ -165,6 +165,18 @@ processList msgs attrs = checkpoint "processList" $ process `onException` handle
           let (ackIds, spans) = V.unzip results
               allSpans = concat spans -- Flattens the list of lists
               spans' = V.fromList allSpans
+              apitoolkitSpans =
+                V.mapMaybe
+                  ( \s ->
+                      if s.name == Just "apitoolkit-http-span"
+                        then convertSpanToRequestMessage s "apitoolkit-http-span"
+                        else Nothing
+                  )
+                  spans'
+
+          unless (V.null apitoolkitSpans) $
+            checkpoint "processList:traces:processRequestMessages" $
+              (void $ ProcessMessage.processRequestMessages $ V.toList apitoolkitSpans <&> ("",))
 
           unless (null allSpans) do
             checkpoint "processList:traces:bulkInsertSpans" $ Telemetry.bulkInsertOtelLogsAndSpansTF spans'
@@ -764,6 +776,18 @@ traceServiceExport appLogger appCtx (Proto req) = do
 
     let spans = convertResourceSpansToOtelLogs projectIdsAndKeys resourceSpans
         spans' = V.fromList spans
+        apitoolkitSpans =
+          V.mapMaybe
+            ( \s ->
+                if s.name == Just "apitoolkit-http-span"
+                  then convertSpanToRequestMessage s "apitoolkit-http-span"
+                  else Nothing
+            )
+            spans'
+
+    unless (V.null apitoolkitSpans) $
+      checkpoint "processList:traces:processRequestMessages" $
+        (void $ ProcessMessage.processRequestMessages $ V.toList apitoolkitSpans <&> ("",))
 
     unless (null spans) do
       Telemetry.bulkInsertOtelLogsAndSpansTF spans'
