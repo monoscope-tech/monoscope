@@ -173,7 +173,7 @@ expandedSpanItem pid sp leftM rightM = do
         whenJust reqDetails $ \case
           ("HTTP", method, path, status) -> do
             let httpJsonM = convertSpanToRequestMessage sp ""
-            let (request, resp) = case Map.lookup "http" (fromMaybe Map.empty sp.attributes) of
+            let (request, resp) = case sp.body of
                   Just (AE.Object obj) -> (KEM.lookup "request" obj, KEM.lookup "response" obj)
                   _ -> (Nothing, Nothing)
             case httpJsonM of
@@ -191,17 +191,17 @@ expandedSpanItem pid sp leftM rightM = do
                       div_ [id_ "raw_content", class_ "hidden a-tab-content http"] do
                         jsonValueToHtmlTree $ selectiveReqToJson httpJson
                       div_ [id_ "req_content", class_ "hidden a-tab-content http"] do
-                        jsonValueToHtmlTree $ case request of
-                          Just (AE.Object obj) -> case KEM.lookup "body" obj of
-                            Just (AE.String b64) -> b64ToJson b64
-                            _ -> "{}"
-                          _ -> "{}"
+                        jsonValueToHtmlTree $ case sp.body of
+                          Just (AE.Object b) -> case KEM.lookup "request_body" b of
+                            Just a -> a
+                            _ -> AE.object []
+                          _ -> AE.object []
                       div_ [id_ "res_content", class_ "a-tab-content http"] do
-                        jsonValueToHtmlTree $ case resp of
-                          Just (AE.Object obj) -> case KEM.lookup "body" obj of
-                            Just (AE.String b64) -> b64ToJson b64
-                            _ -> "{}"
-                          _ -> "{}"
+                        jsonValueToHtmlTree $ case sp.body of
+                          Just (AE.Object b) -> case KEM.lookup "response_body" b of
+                            Just a -> a
+                            _ -> AE.object []
+                          _ -> AE.object []
                       div_ [id_ "hed_content", class_ "hidden a-tab-content http"] do
                         let reqHeaders = case request of
                               Just (AE.Object obj) -> case KEM.lookup "headers" obj of
