@@ -839,9 +839,9 @@ convertSpanToRequestMessage sp instrumentationScope =
         , rawUrl = rawUrl
         , referer = referer
         , requestBody = requestBody
-        , requestHeaders = requestHeaders
+        , requestHeaders = fromMaybe (AE.object []) reqHeaders
         , responseBody = responseBody
-        , responseHeaders = responseHeaders
+        , responseHeaders = fromMaybe (AE.object []) resHeaders
         , statusCode = status
         , sdkType = sdkType
         , msgId = messageId
@@ -855,31 +855,45 @@ convertSpanToRequestMessage sp instrumentationScope =
   where
     pidM = UUID.fromText sp.project_id
     attrJson = fromMaybe AE.Null $ fmap AE.Object $ fmap KEM.fromMapText sp.attributes
-    host = getSpanAttribute "net.host.name" attrJson
-    method = fromMaybe (fromMaybe "GET" $ getSpanAttribute "http.request.method" attrJson) $ getSpanAttribute "http.method" attrJson
-    pathParams = fromMaybe (AE.object []) (AE.decode $ Relude.encodeUtf8 $ fromMaybe "" $ getSpanAttribute "http.request.path_params" attrJson)
-    queryParams = fromMaybe (AE.object []) (AE.decode $ Relude.encodeUtf8 $ fromMaybe "" $ getSpanAttribute "http.request.query_params" attrJson)
-    errors = AE.decode $ Relude.encodeUtf8 $ fromMaybe "" $ getSpanAttribute "apitoolkit.errors" attrJson
-    messageId = UUID.fromText $ fromMaybe "" $ getSpanAttribute "apitoolkit.msg_id" attrJson
-    parentId = UUID.fromText $ fromMaybe "" $ getSpanAttribute "apitoolkit.parent_id" attrJson
-    referer = Just $ Left (fromMaybe "" $ getSpanAttribute "http.request.headers.referer" attrJson) :: Maybe (Either Text [Text])
-    requestBody = fromMaybe "{}" $ getSpanAttribute "http.request.body" attrJson
-    responseBody = fromMaybe "{}" $ getSpanAttribute "http.response.body" attrJson
-    (requestHeaders, responseHeaders) = case attrJson of
-      AE.Object v -> (getValsWithPrefix "http.request.header." v, getValsWithPrefix "http.response.header." v)
-      _ -> (AE.object [], AE.object [])
-    responseStatus = (readMaybe . toString =<< getSpanAttribute "http.response.status_code" attrJson) :: Maybe Double
-    responseStatus' = (readMaybe . toString =<< getSpanAttribute "http.status_code" attrJson) :: Maybe Double
-    status = round $ fromMaybe (fromMaybe 0.0 responseStatus') responseStatus
-    sdkType = RequestDumps.parseSDKType $ fromMaybe "" $ getSpanAttribute "apitoolkit.sdk_type" attrJson
-    urlPath' = getSpanAttribute "http.route" attrJson
-    undUrlPath = getSpanAttribute "url.path" attrJson
-    urlPath = if instrumentationScope == "@opentelemetry/instrumentation-undici" then undUrlPath else urlPath'
-    rawUrl' = fromMaybe "" $ getSpanAttribute "http.target" attrJson
-    rawUrl =
-      if instrumentationScope == "@opentelemetry/instrumentation-undici"
-        then fromMaybe "" undUrlPath <> fromMaybe "" (getSpanAttribute "url.query" attrJson)
-        else rawUrl'
+    (req, res, apt, hst) = case attrJson of
+      AE.Object v ->
+        let httpAttsM = KEM.lookup "http" v
+            h = case httpAttsM of
+              Just (AE.Object httpAtts) -> httpAtts
+              _ -> KEM.empty
+            rq = case KEM.lookup "request" h of
+              Just (AE.Object reqAtts) -> reqAtts
+              _ -> KEM.empty
+            rs = case KEM.lookup "response" h of
+              Just (AE.Object resAtts) -> resAtts
+              _ -> KEM.empty
+            ap = case KEM.lookup "apitoolkit" v of
+              Just (AE.Object apAtts) -> apAtts
+              _ -> KEM.empty
+            hs = case KEM.lookup "net" v of
+              Just (AE.Object netAtts) -> case KEM.lookup "host" netAtts of
+                Just (AE.Object hostAtts) -> hostAtts
+                _ -> KEM.empty
+              _ -> KEM.empty
+         in (rq, rs, ap, hs)
+      _ -> (KEM.empty, KEM.empty, KEM.empty, KEM.empty)
+    host = getSpanAttribute "name" hst
+    method = fromMaybe "GET" $ getSpanAttribute "method" req
+    pathParams = fromMaybe (AE.object []) (AE.decode $ Relude.encodeUtf8 $ fromMaybe "" $ getSpanAttribute "path_params" req)
+    queryParams = fromMaybe (AE.object []) (AE.decode $ Relude.encodeUtf8 $ fromMaybe "" $ getSpanAttribute "query_params" req)
+    errors = AE.decode $ Relude.encodeUtf8 $ fromMaybe "" $ getSpanAttribute "errors" apt
+    messageId = UUID.fromText $ fromMaybe "" $ getSpanAttribute "msg_id" apt
+    parentId = UUID.fromText $ fromMaybe "" $ getSpanAttribute "parent_id" apt
+    referer = Just $ Left "" :: Maybe (Either Text [Text])
+    requestBody = fromMaybe "{}" $ getSpanAttribute "body" req
+    responseBody = fromMaybe "{}" $ getSpanAttribute "body" res
+    reqHeaders = KEM.lookup "header" req
+    resHeaders = KEM.lookup "header" res
+    responseStatus = (readMaybe . toString =<< getSpanAttribute "status_code" res) :: Maybe Double
+    status = round $ fromMaybe 0.0 responseStatus
+    sdkType = RequestDumps.parseSDKType $ fromMaybe "" $ getSpanAttribute "sdk_type" apt
+    urlPath = getSpanAttribute "route" req
+    rawUrl = fromMaybe "" $ getSpanAttribute "target" req
 
 
 getValsWithPrefix :: Text -> AE.Object -> AE.Value
@@ -888,12 +902,10 @@ getValsWithPrefix prefix obj = AE.object $ map (\k -> (AEK.fromText (T.replace p
     keys = filter (\k -> prefix `T.isPrefixOf` AEK.toText k) (KEM.keys obj)
 
 
-getSpanAttribute :: Text -> AE.Value -> Maybe Text
-getSpanAttribute key attr = case attr of
-  AE.Object o -> case KEM.lookup (AEK.fromText key) o of
-    Just (AE.String v) -> Just v
-    Just (AE.Number v) -> Just $ show v
-    _ -> Nothing
+getSpanAttribute :: Text -> AE.Object -> Maybe Text
+getSpanAttribute key attr = case KEM.lookup (AEK.fromText key) attr of
+  Just (AE.String v) -> Just v
+  Just (AE.Number v) -> Just $ show v
   _ -> Nothing
 
 
