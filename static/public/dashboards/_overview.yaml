@@ -60,7 +60,7 @@ widgets:
 
   - type: 'timeseries'
     title: 'All requests (Incoming)'
-    query: kind=="server" AND  attributes___http___response___status_code != null | timechart count(*) by attributes___http___response___status_code
+    query: kind=="server" OR name=="apitoolkit-http-span" AND  attributes___http___response___status_code != null | timechart count(*) by attributes___http___response___status_code
     unit: reqs
     layout: { w: 6, h: 4 }
 
@@ -82,7 +82,7 @@ widgets:
                ] AS values,
                ARRAY['p50', 'p75', 'p90', 'p95'] AS quantiles
         FROM otel_logs_and_spans
-        WHERE project_id='{{project_id}}' AND kind='server' AND attributes___http___response___status_code is not null
+        WHERE project_id='{{project_id}}' AND (kind='server' OR name='apitoolkit-http-span') AND attributes___http___response___status_code is not null
           {{time_filter}}
         GROUP BY timeB
       ) s,
@@ -93,10 +93,10 @@ widgets:
     title: 'HTTP Errors (Incoming)'
     eager: true
     theme: 'roma'
-    query: kind=="server" AND attributes___http___response___status_code != null AND attributes___http___response___status_code >= 400.0 | timechart count(*) by attributes___http___response___status_code
+    query: kind=="server" OR name=="apitoolkit-http-span" AND attributes___http___response___status_code != null AND attributes___http___response___status_code >= 400.0 | timechart count(*) by attributes___http___response___status_code
     layout: { w: 6, h: 4 }
 
   - type: 'timeseries'
     title: 'Incoming Requests by Endpoint'
-    query: kind=="server" AND attributes___http___response___status_code != null  | timechart count(*) by attributes___http___request___method,attributes___url___path
+    query: kind=="server" OR name=="apitoolkit-http-span" AND attributes___http___response___status_code != null  | timechart count(*) by attributes___http___request___method,attributes___url___path
     layout: { w: 6, h: 4 }
