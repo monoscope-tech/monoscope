@@ -259,7 +259,7 @@ convertRequestMessageToSpan rm (spanId, trId) =
     , name = Just $ rm.method <> maybe "" (" " <>) rm.urlPath
     , start_time = zonedTimeToUTC rm.timestamp
     , end_time = Just $ addUTCTime (realToFrac (fromIntegral rm.duration / 1000000000)) (zonedTimeToUTC rm.timestamp)
-    , kind = Just $ if (T.isSuffixOf "Outgoing" (show rm.sdkType)) then "Client" else "Server"
+    , kind = Just $ if (T.isSuffixOf "Outgoing" (show rm.sdkType)) then "client" else "server"
     , level = Nothing
     , body = Just $ AE.object ["request_body" AE..= b64ToJson rm.requestBody, "response_body" AE..= b64ToJson rm.responseBody]
     , severity = Nothing
