@@ -217,9 +217,8 @@ processList msgs attrs = checkpoint "processList" $ process `onException` handle
 -- Helper functions
 
 -- | Migrate HTTP semantic convention fields to their new paths/formats
-migrateHttpSemanticConventions :: Maybe (Map Text AE.Value) -> Maybe (Map Text AE.Value)
-migrateHttpSemanticConventions Nothing = Nothing
-migrateHttpSemanticConventions (Just attributes) =
+migrateHttpSemanticConventions :: [(Text, AE.Value)] -> [(Text, AE.Value)]
+migrateHttpSemanticConventions keyVals = do
   let
     -- Field mapping from old -> new
     fieldMappings :: [(Text, Text)]
@@ -241,54 +240,40 @@ migrateHttpSemanticConventions (Just attributes) =
       , ("net.host.name", "server.address")
       , ("net.host.port", "server.port")
       ]
+    mgVals =
+      (\(k, v) -> maybe (k, v) (\(_, e) -> ((e, v))) (find (\(kk, _) -> kk == k) fieldMappings)) <$> keyVals
 
     -- Handle the special case of http.target -> url.path and url.query
-    migrateHttpTarget attributes' =
-      case Map.lookup "http.target" attributes' of
-        Just (AE.String target) ->
-          let
-            -- Simple split at first '?' to separate path and query
-            (path, query) = T.breakOn "?" target
-            queryWithoutQ = if T.null query then "" else T.drop 1 query
+    migrateHttpTarget kvs = case find (\(k, _) -> k == "http.target") kvs of
+      Just (_, AE.String target) ->
+        let
+          -- Simple split at first '?' to separate path and query
+          (path, query) = T.breakOn "?" target
+          queryWithoutQ = if T.null query then "" else T.drop 1 query
 
-            -- Add path and query fields if they don't exist yet
-            withPath =
-              if Map.member "url.path" attributes'
-                then attributes'
-                else Map.insert "url.path" (AE.String path) attributes'
+          -- Add path and query fields if they don't exist yet
+          withPath = case find (\(k, _) -> k == "url.path") kvs of
+            Just (_, AE.String _) -> []
+            _ -> [("url.path", AE.String path)]
 
-            withPathAndQuery =
-              if T.null query || Map.member "url.query" withPath
-                then withPath
-                else Map.insert "url.query" (AE.String queryWithoutQ) withPath
-           in
-            withPathAndQuery
-        _ -> attributes'
+          withPathAndQuery =
+            if T.null query || isNothing (find (\(k, _) -> k == "url.path") kvs)
+              then []
+              else [("url.query", AE.String queryWithoutQ)]
+         in
+          withPath ++ withPathAndQuery
+      _ -> []
 
     -- Migrate method "_OTHER" case
     migrateMethodOther attributes' =
-      case (Map.lookup "http.method" attributes', Map.lookup "http.request.method_original" attributes') of
-        (Just (AE.String method), Just originalMethod) ->
-          if method == "_OTHER" && not (Map.member "http.request.method" attributes')
-            then Map.insert "http.request.method" originalMethod attributes'
-            else attributes'
-        _ -> attributes'
-
-    -- Migrate fields based on mapping
-    migrateFields attributes' =
-      foldl'
-        ( \acc (oldKey, newKey) ->
-            case Map.lookup oldKey acc of
-              Just value ->
-                if Map.member newKey acc
-                  then acc -- Don't override existing values
-                  else Map.insert newKey value acc
-              Nothing -> acc
-        )
-        attributes'
-        fieldMappings
+      case (find (\(k, _) -> k == "http.method") keyVals, find (\(k, _) -> k == "http.request.method_original") keyVals) of
+        (Just (_, AE.String method), Just (_, originalMethod)) ->
+          if method == "_OTHER" && (isNothing $ find (\(k, _) -> k == "http.request.method") attributes')
+            then [("http.request.method", originalMethod)]
+            else []
+        _ -> []
    in
-    Just $ migrateMethodOther $ migrateHttpTarget $ migrateFields attributes
+    mgVals ++ migrateHttpTarget keyVals ++ migrateMethodOther keyVals
 
 
 -- Decode ByteString to Text with lenient UTF-8 handling
@@ -327,7 +312,8 @@ keyValueToJSON :: V.Vector PC.KeyValue -> AE.Value
 keyValueToJSON kvs =
   let
     -- Extract all key-value pairs
-    allPairs = [(kv ^. PCF.key, anyValueToJSON (Just (kv ^. PCF.value))) | kv <- V.toList kvs]
+    allPairs' = [(kv ^. PCF.key, anyValueToJSON (Just (kv ^. PCF.value))) | kv <- V.toList kvs]
+    allPairs = migrateHttpSemanticConventions allPairs'
 
     -- Special case keys that should remain flat for OTel compatibility
     specialKeys = ["at-project-key", "at-project-id"]
@@ -480,7 +466,7 @@ convertLogRecordToOtelLog pid resourceM scopeM logRecord =
                 , severity_number = severityNumber
                 }
         , body = Just $ anyValueToJSON $ Just $ logRecord ^. PLF.body
-        , attributes = migrateHttpSemanticConventions $ jsonToMap $ removeProjectId $ keyValueToJSON $ V.fromList $ logRecord ^. PLF.attributes
+        , attributes = jsonToMap $ removeProjectId $ keyValueToJSON $ V.fromList $ logRecord ^. PLF.attributes
         , resource = jsonToMap $ removeProjectId $ resourceToJSON resourceM
         , hashes = V.empty
         , kind = Just "log"
@@ -602,7 +588,7 @@ convertSpanToOtelLog pid resourceM scopeM pSpan =
                             ]
                       )
                       links
-      attributes = migrateHttpSemanticConventions $ jsonToMap $ keyValueToJSON $ V.fromList $ pSpan ^. PTF.attributes
+      attributes = jsonToMap $ removeProjectId $ keyValueToJSON $ V.fromList $ pSpan ^. PTF.attributes
       (req, res) = case Map.lookup "http" (fromMaybe Map.empty attributes) of
         Just (AE.Object http) -> (KEM.lookup "request" http, KEM.lookup "response" http)
         _ -> (Nothing, Nothing)
@@ -655,7 +641,7 @@ convertSpanToOtelLog pid resourceM scopeM pSpan =
         , severity = Nothing
         , body
         , attributes = newAttributes
-        , resource = jsonToMap $ resourceToJSON resourceM
+        , resource = jsonToMap $ removeProjectId $ resourceToJSON resourceM
         , hashes = V.empty
         , kind = spanKindText
         , status_code = statusCodeText
@@ -773,7 +759,6 @@ traceServiceExport appLogger appCtx (Proto req) = do
         projectKeys = getSpanAttributeValue "at-project-key" resourceSpans
 
     projectIdsAndKeys <- dbtToEff $ ProjectApiKeys.projectIdsByProjectApiKeys projectKeys
-
     let spans = convertResourceSpansToOtelLogs projectIdsAndKeys resourceSpans
         spans' = V.fromList spans
         apitoolkitSpans =
