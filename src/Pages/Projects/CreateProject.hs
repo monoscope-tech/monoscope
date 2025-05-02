@@ -424,7 +424,7 @@ createProjectBody sess pid envCfg paymentPlan cp cpe = do
             -- a_ [href_ $ "/p/" <> pid.toText <> "/update_pricing", class_ "text-textBrand font-medium"] "Update pricing"
             button_
               [ class_
-                  "lemonsqueezy-button btn btn-primary cursor-pointer"
+                  "btn btn-primary cursor-pointer"
               , type_ "submit"
               ]
               do
@@ -463,6 +463,17 @@ createProjectBody sess pid envCfg paymentPlan cp cpe = do
                   critical = envCfg.lemonSqueezyCriticalUrl <> "&checkout[custom][project_id]=" <> pid.toText
               paymentPlanPicker pid lemonUrl critical paymentPlan
             label_ [class_ "modal-backdrop", Lucid.for_ "pricing-modal"] "Close"
+      script_ do
+        [text|
+           const timezoneSelect = document.getElementById("timezone");
+           const timeZones = Intl.supportedValuesOf('timeZone');
+           timeZones.forEach((tz) => {
+             const option = document.createElement("option");
+             option.value = tz;
+             option.text = tz;
+             timezoneSelect.appendChild(option);
+           });        
+        |]
 
 
 projectDeleteGetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders (PageCtx (Html ())))
