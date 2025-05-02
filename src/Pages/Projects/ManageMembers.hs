@@ -155,8 +155,8 @@ instance ToHtml ManageMembers where
 manageMembersBody :: V.Vector ProjectMembers.ProjectMemberVM -> Html ()
 manageMembersBody projMembers =
   div_ [id_ "main-content", class_ "w-full py-16"] do
-    section_ [class_ "p-6 w-[800px] mx-auto"] do
-      h2_ [class_ "text-textWeak mb-4 text-xl font-semibold"] "Manage Access"
+    section_ [class_ "p-6 w-[606px] mx-auto"] do
+      h2_ [class_ "text-textStrong mb-4 text-xl font-semibold"] "Manage Access"
       p_ [class_ "text-textWeak text-sm leading-tight"] "We’ll email them instructions and a link to sign in"
       form_
         [ class_ "my-8 flex flex-col gap-8"
@@ -183,23 +183,20 @@ manageMembersBody projMembers =
 memberRow :: ProjectMembers.ProjectMemberVM -> Html ()
 memberRow prM = do
   let email = CI.original prM.email
-  div_ [class_ "w-full  px-1.5 py-3 rounded-lg  even:border even:border-strokeWeak gap-4 even:bg-fillWeak flex justify-between items-center"] $ do
+  div_ [class_ "w-full  px-1.5 py-3 rounded-lg  border border-transparent hover:border-strokeWeak gap-4 hover:bg-fillWeak flex justify-between items-center"] $ do
     div_ [data_ "size" "Small", class_ "w-full grow-1 flex items-center gap-2"] $ do
-      img_
-        [ class_ "w-8 h-8 relative rounded-[32px] outline outline-1 outline-offset-[-1px] outline-Stroke-Weak/10"
-        , src_ "https://placehold.co/32x32"
-        ]
+      div_ [class_ "w-8 h-8 relative rounded-[32px] flex items-center text-xs justify-center outline outline-1 outline-offset-[-1px] outline-strokeWeak text-textWeak uppercase font-medium"] $ toHtml $ T.take 2 email
       div_ [class_ "inline-flex flex-col items-start"] do
         input_ [type_ "text", name_ "emails", value_ email, class_ "focus:border-none focus:outline-0 text-textStrong text-sm font-normal leading-tight"]
 
     div_ [class_ "flex items-center gap-4"] $ do
       let permission = prM.permission
-      select_ [name_ "permissions", class_ "w-[90px] text-textWeak text-sm font-normal leading-tight"] do
+      select_ [name_ "permissions", class_ "w-max text-textWeak text-sm font-normal leading-tight"] do
         option_ ([class_ "text-gray-500", value_ "admin"] <> selectedIf ProjectMembers.PAdmin permission) "Admin"
-        option_ ([class_ "text-gray-500", value_ "edit"] <> selectedIf ProjectMembers.PEdit permission) "Can Edit"
-        option_ ([class_ "text-gray-500", value_ "view"] <> selectedIf ProjectMembers.PView permission) "Can View"
+        option_ ([class_ "text-gray-500", value_ "edit"] <> selectedIf ProjectMembers.PEdit permission) "Can edit"
+        option_ ([class_ "text-gray-500", value_ "view"] <> selectedIf ProjectMembers.PView permission) "View only"
     button_ [[__| on click remove the closest parent <div/> then halt |]] do
-      faSprite_ "trash" "regular" "w-5 h-5 text-red-700"
+      faSprite_ "trash" "regular" "w-4 h-4 text-textWeak"
   where
     selectedIf :: ProjectMembers.Permissions -> ProjectMembers.Permissions -> [Attribute]
     selectedIf a b = [selected_ "" | a == b]

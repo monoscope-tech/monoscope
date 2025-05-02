@@ -191,7 +191,7 @@ freePricing pid isCurrent = do
               span_ [class_ ""] "/per month"
           div_ [[__|on click halt|]] do
             button_
-              [ class_ $ "btn mb-6 mt-4 h-8 px-3 py-1 w-full text-sm font-semibold rounded-lg text-white " <> if isCurrent then "btn-disabled" else "bg-fillStrong"
+              [ class_ $ "btn mb-6 mt-4 h-8 px-3 py-1 w-full text-sm font-semibold rounded-lg " <> if isCurrent then "bg-fillDisabled cursor-not-allowed border-0 text-textInverse-strong" else "bg-fillStrong text-white "
               , [__| on click htmx.trigger("#freePricing", "click")|]
               , type_ "button"
               ]
@@ -239,7 +239,7 @@ popularPricing pid lemonUrl isCurrent = do
                 span_ [class_ ""] "/per month"
             div_ [[__|on click halt|]] do
               button_
-                [ class_ $ "btn mb-6 mt-4 h-8 px-3 py-1 w-full text-sm font-semibold rounded-lg " <> if isCurrent then "btn-disable" else "btn-primary"
+                [ class_ $ "btn mb-6 mt-4 h-8 px-3 py-1 w-full text-sm font-semibold " <> if isCurrent then "bg-fillDisabled cursor-not-allowed border-0 text-textInverse-strong" else "btn-primary"
                 , term "_" [text|on click call window.payLemon("GraduatedPricing","$lemonUrl") |]
                 , type_ "button"
                 ]
@@ -293,7 +293,7 @@ systemsPricing pid critical isCurrent = do
               span_ [class_ ""] "/per month"
           div_ [[__|on click halt|]] do
             button_
-              [ class_ $ "btn mb-6 mt-4 h-8 px-3 py-1 w-full text-sm font-semibold rounded-lg text-white " <> if isCurrent then "btn-disable" else "bg-fillStrong"
+              [ class_ $ "btn mb-6 mt-4 h-8 px-3 py-1 w-full text-sm font-semibold rounded-lg " <> if isCurrent then "bg-fillDisabled cursor-not-allowed border-0 text-textInverse-strong" else "bg-fillStrong text-white"
               , term "_" [text|on click call window.payLemon("SystemsPricing", "$critical") |]
               , type_ "button"
               ]

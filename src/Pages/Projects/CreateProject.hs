@@ -380,8 +380,9 @@ processProjectPostForm cpRaw pid = do
 createProjectBody :: Sessions.PersistentSession -> Projects.ProjectId -> EnvConfig -> Text -> CreateProjectForm -> CreateProjectFormError -> Html ()
 createProjectBody sess pid envCfg paymentPlan cp cpe = do
   section_ [id_ "main-content", class_ "overflow-y-scroll h-full text-textWeak"] do
-    div_ [class_ "mx-auto px-2 pt-12", style_ "max-width:700px"] do
-      h2_ [class_ "text-slate-700 text-3xl font-medium mb-2"] "Project Settings"
+    div_ [class_ "mx-auto px-2 pt-12 w-[606px]"] do
+      h2_ [class_ "text-textStrong mb-3 text-xl font-semibold"] "Manage Project"
+      p_ [class_ "text-textWeak text-sm leading-tight"] "Manage your project details and upgrade your plan"
       form_
         [ class_ "py-8 flex flex-col gap-8 w-full"
         , hxPost_ $ "/p/update/" <> pid.toText
@@ -423,7 +424,7 @@ createProjectBody sess pid envCfg paymentPlan cp cpe = do
             -- a_ [href_ $ "/p/" <> pid.toText <> "/update_pricing", class_ "text-textBrand font-medium"] "Update pricing"
             button_
               [ class_
-                  "lemonsqueezy-button py-2 px-5 w-max bg-blue-700 flex items-center text-[white]  rounded-xl cursor-pointer"
+                  "lemonsqueezy-button btn btn-primary cursor-pointer"
               , type_ "submit"
               ]
               do
@@ -439,7 +440,7 @@ createProjectBody sess pid envCfg paymentPlan cp cpe = do
         div_ [class_ "flex items-center justify-between w-full"] do
           div_ [class_ "flex flex-col gap-1"] do
             span_ [class_ "text-textStrong font-semibold"] $ toHtml paymentPlan
-            span_ [class_ "rounded-2xl text-textWeak bg-fillWeaker border border-strokeWeak py-1 text-sm px-3"] "current plan"
+            span_ [class_ "rounded-2xl text-textWeak bg-fillWeaker border border-strokeWeak py-[3px] leading-tight text-center text-sm px-2"] "Current plan"
           div_ [class_ "flex items-center gap-1 mt-4"] do
             div_ [class_ "flex items-end"] do
               span_ [class_ "text-textStrong text-xl"] "$"
@@ -452,8 +453,8 @@ createProjectBody sess pid envCfg paymentPlan cp cpe = do
           input_ [type_ "checkbox", id_ "pricing-modal", class_ "modal-toggle"]
           div_ [class_ "modal p-8", role_ "dialog", [__|on closeModal from body set #pricing-modal.checked to false |]] do
             div_ [class_ "modal-box relative flex flex-col gap-5 w-[1250px] py-16 px-32", style_ "max-width:1300px"] $ do
-              button_ [class_ "absolute top-8 right-8 p-2", [__| on click set #pricing-modal.checked to false |]] do
-                faSprite_ "circle-xmark" "regular" "h-4 w-4"
+              button_ [class_ "absolute top-8 right-8 cursor-pointer", [__| on click set #pricing-modal.checked to false |]] do
+                faSprite_ "circle-xmark" "regular" "w-8 h-8"
               div_ [class_ "text-center text-sm text-textWeak w-full mx-auto max-w-96"] do
                 span_ [class_ " text-textStrong text-2xl font-semibold"] "What’s Included?"
                 p_ [class_ "mt-2 mb-4"] "See and compare what you get in each plan."
@@ -480,12 +481,12 @@ projectDeleteGetH pid = do
 deleteProjectBody :: Projects.ProjectId -> Html ()
 deleteProjectBody pid = do
   let pidText = pid.toText
-  section_ [class_ "p-4 mx-auto w-[500px]"] do
-    div_ [class_ " gap-5 w-full p-8 my-24"] do
+  section_ [class_ "px-60 w-max"] do
+    div_ [class_ " gap-5 w-full my-24"] do
       h1_ [class_ "text-textStrong font-semibold text-2xl"] "Delete project"
-      p_ [class_ "py-4"] "Delete project. This is dangerous and unreversible."
+      p_ [class_ "py-4 text-sm text-textWeak"] "This is action not reversible, only delete a project you no longer need."
       button_
-        [ class_ "btn btn-sm bg-red-500 text-white shadow-md hover:bg-red-700 cursor-pointer"
+        [ class_ "btn btn-sm bg-fillError-strong text-white shadow-md hover:bg-red-700 cursor-pointer"
         , hxGet_ [text|/p/$pidText/delete|]
         , hxConfirm_ "Are you sure you want to delete this project?"
         ]

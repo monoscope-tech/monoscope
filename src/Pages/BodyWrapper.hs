@@ -515,8 +515,8 @@ loginBanner = do
 settingsWrapper :: Projects.ProjectId -> Text -> Html () -> Html ()
 settingsWrapper pid current pageHtml = do
   section_ [class_ "flex h-full w-full"] do
-    nav_ [class_ "w-[300px]  h-full p-4 pt-6 border-r border-r-strokWeak"] do
-      h1_ [class_ "text-3xl font-medium mb-4"] do
+    nav_ [class_ "w-[300px]  h-full p-4 pt-8 border-r border-r-strokWeak"] do
+      h1_ [class_ "text-3xl pl-5 font-medium"] do
         "Settings"
       ul_ [class_ "flex flex-col mt-14 gap-2 w-full"] do
         mapM_ (renderNavBottomItem current) $ navBottomList pid.toText
@@ -543,7 +543,7 @@ renderNavBottomItem curr (iconName, bgColor, textColor, linkText, link, targetBl
       , term "data-tippy-placement" "right"
       , term "data-tippy-content" linkText
       ]
-    activeCls = if curr == linkText then "bg-fillBrand-weak" else ""
+    activeCls = if curr == linkText then "bg-fillWeak" else ""
     attrs =
       defaultAttrs
         ++ (if isJust targetBlankM then [target_ "BLANK_"] else [])
