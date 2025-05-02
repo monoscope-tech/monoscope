@@ -643,7 +643,7 @@ convertSpanToOtelLog pid resourceM scopeM pSpan =
         , attributes = newAttributes
         , resource = jsonToMap $ removeProjectId $ resourceToJSON resourceM
         , hashes = V.empty
-        , kind = spanKindText
+        , kind = if pSpan ^. PTF.name == "apitoolkit-http-span" then Just "server" else spanKindText
         , status_code = statusCodeText
         , status_message = statusMsgText
         , duration = Just $ fromIntegral durationNanos
