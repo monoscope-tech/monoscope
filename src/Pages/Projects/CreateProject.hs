@@ -440,7 +440,7 @@ createProjectBody sess pid envCfg paymentPlan cp cpe = do
         div_ [class_ "flex items-center justify-between w-full"] do
           div_ [class_ "flex flex-col gap-1"] do
             span_ [class_ "text-textStrong font-semibold"] $ toHtml paymentPlan
-            span_ [class_ "rounded-2xl text-textWeak bg-fillWeaker border border-strokeWeak py-[3px] leading-tight text-center text-sm px-2"] "Current plan"
+            span_ [class_ "rounded-2xl text-textWeak bg-fillWeaker border border-strokeWeak py-[2px] leading-tight text-center text-sm px-2 w-max"] "Current plan"
           div_ [class_ "flex items-center gap-1 mt-4"] do
             div_ [class_ "flex items-end"] do
               span_ [class_ "text-textStrong text-xl"] "$"
