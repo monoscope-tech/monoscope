@@ -422,9 +422,9 @@ sideNav sess project pageTitle menuItem hasIntegrated = aside_ [class_ "border-r
             else CI.original currUser.email
         emailMd5 = decodeUtf8 $ MD5.hash $ encodeUtf8 $ CI.original currUser.email
         sanitizedID = T.replace " " "+" userIdentifier
-    div_ [tabindex_ "0", role_ "button", class_ "cursor-pointer justify-center group-has-[#sidenav-toggle:checked]/pg:justify-start"] do
+    div_ [tabindex_ "0", role_ "button", class_ ""] do
       img_
-        [ class_ "inline-block w-8 h-8 p-1 rounded-full bg-gray-300"
+        [ class_ "inline-block w-9 h-9 p-2 rounded-full bg-gray-300"
         , term "data-tippy-placement" "right"
         , term "data-tippy-content" userIdentifier
         , src_ [text|https://www.gravatar.com/avatar/${emailMd5}?d=https%3A%2F%2Fui-avatars.com%2Fapi%2F/${sanitizedID}/128|]
@@ -437,7 +437,7 @@ sideNav sess project pageTitle menuItem hasIntegrated = aside_ [class_ "border-r
       , term "data-tippy-content" "Documentation"
       , href_ $ "/p/" <> project.id.toText <> "/settings"
       ]
-      $ span_ [class_ "p-2 rounded-full bg-blue-100 text-brand leading-none"] (faSprite_ "gear" "regular" "h-3 w-3")
+      $ span_ [class_ "w-9 h-9 p-2 flex justify-center items-center rounded-full bg-blue-100 text-brand leading-none "] (faSprite_ "gear" "regular" "h-3 w-3")
         >> span_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:block"] "Settings"
     a_
       [ class_ "hover:bg-blue-50 "
@@ -446,7 +446,7 @@ sideNav sess project pageTitle menuItem hasIntegrated = aside_ [class_ "border-r
       , term "data-tippy-content" "Documentation"
       , href_ "https://apitoolkit.io/docs/"
       ]
-      $ span_ [class_ "p-2 rounded-full bg-blue-100 text-brand leading-none"] (faSprite_ "circle-question" "regular" "h-3 w-3")
+      $ span_ [class_ "w-9 h-9 p-2 flex justify-center items-center rounded-full bg-blue-100 text-brand leading-none"] (faSprite_ "circle-question" "regular" "h-3 w-3")
         >> span_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:block"] "Documentation"
     a_
       [ class_ "hover:bg-blue-50"
@@ -455,7 +455,7 @@ sideNav sess project pageTitle menuItem hasIntegrated = aside_ [class_ "border-r
       , href_ "/logout"
       , [__| on click js posthog.reset(); end |]
       ]
-      $ span_ [class_ "p-2 rounded-full bg-red-100 text-red-600 leading-none"] (faSprite_ "arrow-right-from-bracket" "regular" "h-3 w-3")
+      $ span_ [class_ "w-9 h-9 p-2 flex justify-center items-center  rounded-full bg-red-100 text-red-600 leading-none"] (faSprite_ "arrow-right-from-bracket" "regular" "h-3 w-3")
         >> span_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:block"] "Logout"
 
 
