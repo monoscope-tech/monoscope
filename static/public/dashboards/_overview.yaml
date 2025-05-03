@@ -93,7 +93,7 @@ widgets:
     title: 'HTTP Errors (Incoming)'
     eager: true
     theme: 'roma'
-    query: kind=="server" OR name=="apitoolkit-http-span" AND attributes___http___response___status_code != null AND attributes___http___response___status_code >= 400.0 | timechart count(*) by attributes___http___response___status_code
+    query: kind=="server" OR name=="apitoolkit-http-span" AND attributes___http___response___status_code != null AND attributes___http___response___status_code > 399.0  | timechart count(*) by attributes___http___response___status_code
     layout: { w: 6, h: 4 }
 
   - type: 'timeseries'
