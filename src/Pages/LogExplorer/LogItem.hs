@@ -22,7 +22,7 @@ import NeatInterpolation (text)
 import Network.URI (escapeURIString, isUnescapedInURI)
 import Pages.Components (dateTime, statBox_)
 import Pages.Telemetry.Spans qualified as Spans
-import Pages.Telemetry.Utils (atMapText)
+import Pages.Telemetry.Utils (atMapText, getRequestDetails)
 import Relude
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
 import Utils (faSprite_, getDurationNSMS, getMethodBorderColor, getMethodColor, getSeverityColor, getStatusBorderColor, getStatusColor, jsonValueToHtmlTree, lookupValueText)
@@ -33,21 +33,29 @@ expandAPIlogItemH pid rdId createdAt sourceM = do
   _ <- Sessions.sessionAndProject pid
   let source = fromMaybe "requets" sourceM
   case source of
-    "spans" -> do
-      spanItem <- Telemetry.spanRecordByProjectAndId pid createdAt rdId
-      addRespHeaders $ case spanItem of
-        Just spn -> SpanItemExpanded pid spn
-        Nothing -> ItemDetailedNotFound "Span not found"
     "logs" -> do
       logItem <- Telemetry.logRecordByProjectAndId pid createdAt rdId
       addRespHeaders $ case logItem of
         Just lg -> LogItemExpanded pid lg
         Nothing -> ItemDetailedNotFound "Log not found"
     _ -> do
-      logItemM <- dbtToEff $ RequestDumps.selectRequestDumpByProjectAndId pid createdAt rdId
-      addRespHeaders $ case logItemM of
-        Just req -> RequestItemExpanded pid req True
-        Nothing -> ItemDetailedNotFound "Request not found"
+      spanItem <- Telemetry.spanRecordByProjectAndId pid createdAt rdId
+      case spanItem of
+        Just spn -> do
+          aptSpan <- case getRequestDetails spn.attributes of
+            Just ("HTTP", _, _, _) -> do
+              let trIdM = spn.context >>= (.trace_id)
+              if spn.name /= Just "apitoolkit-http-span"
+                then do
+                  case trIdM of
+                    Just trId -> do
+                      aptSpn <- Telemetry.spanRecordByName pid trId "apitoolkit-http-span"
+                      pure aptSpn
+                    _ -> pure Nothing
+                else pure Nothing
+            _ -> pure Nothing
+          addRespHeaders $ SpanItemExpanded pid spn aptSpan
+        Nothing -> addRespHeaders $ ItemDetailedNotFound "Span not found"
 
 
 expandAPIlogItem' :: Projects.ProjectId -> RequestDumps.RequestDumpLogItem -> Bool -> Html ()
@@ -170,15 +178,13 @@ expandAPIlogItem' pid req modal = do
 --     div_ [hxGet_ events_url, hxTrigger_ "intersect once", hxSwap_ "outerHTML"] $ span_ [class_ "loading loading-dots loading-md"] ""
 
 data ApiItemDetailed
-  = RequestItemExpanded Projects.ProjectId RequestDumps.RequestDumpLogItem Bool
-  | SpanItemExpanded Projects.ProjectId Telemetry.OtelLogsAndSpans
+  = SpanItemExpanded Projects.ProjectId Telemetry.OtelLogsAndSpans (Maybe Telemetry.OtelLogsAndSpans)
   | LogItemExpanded Projects.ProjectId Telemetry.OtelLogsAndSpans
   | ItemDetailedNotFound Text
 
 
 instance ToHtml ApiItemDetailed where
-  toHtml (RequestItemExpanded pid log_item is_modal) = toHtml $ expandAPIlogItem' pid log_item is_modal
-  toHtml (SpanItemExpanded pid span_item) = toHtml $ Spans.expandedSpanItem pid span_item Nothing Nothing
+  toHtml (SpanItemExpanded pid spn aptSpan) = toHtml $ Spans.expandedSpanItem pid spn aptSpan Nothing Nothing
   toHtml (LogItemExpanded pid req) = toHtml $ apiLogItemView pid req
   toHtml (ItemDetailedNotFound message) = div_ [] $ toHtml message
   toHtmlRaw = toHtml

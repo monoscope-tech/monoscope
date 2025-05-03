@@ -30,13 +30,21 @@ spanGetH pid trId spanId = do
   spanRecord <- Telemetry.spanRecordById pid trId spanId
   case spanRecord of
     Just sp -> do
-      addRespHeaders $ expandedSpanItem pid sp Nothing Nothing
+      aptSpan <- case getRequestDetails sp.attributes of
+        Just ("HTTP", _, _, _) -> do
+          if sp.name /= Just "apitoolkit-http-span"
+            then do
+              spn <- Telemetry.spanRecordByName pid trId "apitoolkit-http-span"
+              pure spn
+            else pure Nothing
+        _ -> pure Nothing
+      addRespHeaders $ expandedSpanItem pid sp aptSpan Nothing Nothing
     Nothing -> do
       addRespHeaders $ h1_ [] "Span not found"
 
 
-expandedSpanItem :: Projects.ProjectId -> Telemetry.OtelLogsAndSpans -> Maybe Text -> Maybe Text -> Html ()
-expandedSpanItem pid sp leftM rightM = do
+expandedSpanItem :: Projects.ProjectId -> Telemetry.OtelLogsAndSpans -> Maybe Telemetry.OtelLogsAndSpans -> Maybe Text -> Maybe Text -> Html ()
+expandedSpanItem pid sp aptSp leftM rightM = do
   let reqDetails = getRequestDetails sp.attributes
   div_ [class_ "w-full px-2 pb-2 relative pb-[50px]"] $ do
     div_ [class_ "flex justify-between items-center", id_ "copy_share_link"] pass
@@ -172,10 +180,8 @@ expandedSpanItem pid sp leftM rightM = do
 
         whenJust reqDetails $ \case
           ("HTTP", method, path, status) -> do
-            let httpJsonM = convertSpanToRequestMessage sp ""
-            let (request, resp) = case sp.body of
-                  Just (AE.Object obj) -> (KEM.lookup "request" obj, KEM.lookup "response" obj)
-                  _ -> (Nothing, Nothing)
+            let cSp = fromMaybe sp aptSp
+            let httpJsonM = convertSpanToRequestMessage cSp ""
             case httpJsonM of
               Just httpJson -> do
                 div_ [class_ "a-tab-content nested-tab", id_ "request-content"] do
@@ -191,43 +197,23 @@ expandedSpanItem pid sp leftM rightM = do
                       div_ [id_ "raw_content", class_ "hidden a-tab-content http"] do
                         jsonValueToHtmlTree (selectiveReqToJson httpJson) Nothing
                       div_ [id_ "req_content", class_ "a-tab-content http"] do
-                        let b = case sp.body of
+                        let b = case cSp.body of
                               Just (AE.Object bb) -> case KEM.lookup "request_body" bb of
                                 Just a -> a
                                 _ -> AE.object []
                               _ -> AE.object []
                         jsonValueToHtmlTree b $ Just "body.request_body"
                       div_ [id_ "res_content", class_ "hidden a-tab-content http"] do
-                        let b = case sp.body of
+                        let b = case cSp.body of
                               Just (AE.Object bb) -> case KEM.lookup "response_body" bb of
                                 Just a -> a
                                 _ -> AE.object []
                               _ -> AE.object []
                         jsonValueToHtmlTree b $ Just "body.response_body"
                       div_ [id_ "hed_content", class_ "hidden a-tab-content http"] do
-                        let reqHeaders = case request of
-                              Just (AE.Object obj) -> case KEM.lookup "headers" obj of
-                                Just (AE.Object headers) -> headers
-                                _ -> KEM.empty
-                              _ -> KEM.empty
-                        let respHeaders = case resp of
-                              Just (AE.Object obj) -> case KEM.lookup "headers" obj of
-                                Just (AE.Object headers) -> headers
-                                _ -> KEM.empty
-                              _ -> KEM.empty
-                        jsonValueToHtmlTree (AE.object ["request_headers" AE..= reqHeaders, "response_headers" AE..= respHeaders]) Nothing
+                        jsonValueToHtmlTree (AE.object ["request_headers" AE..= httpJson.requestHeaders, "response_headers" AE..= httpJson.responseHeaders]) Nothing
                       div_ [id_ "par_content", class_ "hidden a-tab-content http"] do
-                        let (queryParams, pathParams) = case request of
-                              Just (AE.Object obj) ->
-                                ( case KEM.lookup "query_params" obj of
-                                    Just (AE.Object o) -> o
-                                    _ -> KEM.empty
-                                , case KEM.lookup "query_params" obj of
-                                    Just (AE.Object o) -> o
-                                    _ -> KEM.empty
-                                )
-                              _ -> (KEM.empty, KEM.empty)
-                        jsonValueToHtmlTree (AE.object ["query_params" AE..= queryParams, "path_params" AE..= pathParams]) Nothing
+                        jsonValueToHtmlTree (AE.object ["query_params" AE..= httpJson.queryParams, "path_params" AE..= httpJson.pathParams]) Nothing
               Nothing -> pass
           _ -> pass
 

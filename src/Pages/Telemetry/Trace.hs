@@ -43,7 +43,7 @@ traceH pid trId spanIdM nav = do
             if targetIndex < V.length spanRecords - 1
               then Just (spanRecords V.! (targetIndex + 1))
               else Nothing
-      addRespHeaders $ SpanDetails pid targetSpan (prevSpan >>= \s -> Just s.spanId) (nextSpan >>= \s -> Just s.spanId)
+      addRespHeaders $ SpanDetails pid targetSpan Nothing (prevSpan >>= \s -> Just s.spanId) (nextSpan >>= \s -> Just s.spanId)
     else do
       traceItemM <- Telemetry.getTraceDetails pid trId
       case traceItemM of
@@ -66,7 +66,7 @@ data PageProps = PageProps
 
 data TraceDetailsGet
   = TraceDetails PageProps
-  | SpanDetails Projects.ProjectId Telemetry.OtelLogsAndSpans (Maybe Text) (Maybe Text)
+  | SpanDetails Projects.ProjectId Telemetry.OtelLogsAndSpans (Maybe Telemetry.OtelLogsAndSpans) (Maybe Text) (Maybe Text)
   | TraceDetailsNotFound Text
 
 
@@ -75,7 +75,7 @@ data ServiceData = ServiceData {name :: Text, duration :: Integer}
 
 instance ToHtml TraceDetailsGet where
   toHtml (TraceDetails p) = toHtml $ tracePage p
-  toHtml (SpanDetails pid s left right) = toHtml $ Spans.expandedSpanItem pid s left right
+  toHtml (SpanDetails pid s aptSpn left right) = toHtml $ Spans.expandedSpanItem pid s aptSpn left right
   toHtml (TraceDetailsNotFound msg) = toHtml msg
   toHtmlRaw = toHtml
 
@@ -166,8 +166,8 @@ tracePage p = do
                         span_ [class_ ""] $ toHtml s
                       div_ [class_ "flex gap-1 items-center"] $ do
                         span_ [class_ "text-xs max-w-52 truncate"] $ toHtml $ T.take 4 percent <> "%"
-                        div_ [class_ "w-[100px] h-3 bg-gray-200 rounded-sm overflow-hidden"]
-                          $ div_ [class_ $ "h-full pl-2 text-xs font-medium " <> color, style_ $ "width:" <> percent <> "%"] pass
+                        div_ [class_ "w-[100px] h-3 bg-gray-200 rounded-sm overflow-hidden"] $
+                          div_ [class_ $ "h-full pl-2 text-xs font-medium " <> color, style_ $ "width:" <> percent <> "%"] pass
 
           div_ [role_ "tabpanel", class_ "a-tab-content pt-2 hidden", id_ "water_fall"] do
             div_ [class_ "border border-slate-200 flex w-full rounded-2xl min-h-[230px]  overflow-y-auto overflow-x-hidden "] do
@@ -262,22 +262,22 @@ renderSpanListTable services colors records =
         th_ "Avg. Duration"
         th_ "Exec. Time"
         th_ "%Exec. Time"
-    tbody_ [class_ "space-y-0"]
-      $ mapM_ (renderSpanRecordRow records colors) services
+    tbody_ [class_ "space-y-0"] $
+      mapM_ (renderSpanRecordRow records colors) services
 
 
 spanTable :: V.Vector Telemetry.SpanRecord -> Html ()
 spanTable records =
   div_ [class_ "rounded-xl my-2 mx-3 border border-slate-200"] do
     table_ [class_ "table w-full"] do
-      thead_ [class_ "border-b border-slate-200"]
-        $ tr_ [class_ "p-2 border-b font-medium"]
-        $ do
-          td_ "Time"
-          td_ "Span name"
-          td_ "Event type"
-          td_ "Span kind"
-          td_ "Exec. time"
+      thead_ [class_ "border-b border-slate-200"] $
+        tr_ [class_ "p-2 border-b font-medium"] $
+          do
+            td_ "Time"
+            td_ "Span name"
+            td_ "Event type"
+            td_ "Span kind"
+            td_ "Exec. time"
       tbody_ do
         forM_ records $ \spanRecord -> do
           let pidText = UUID.toText spanRecord.projectId

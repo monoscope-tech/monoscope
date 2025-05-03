@@ -26,6 +26,7 @@ module Models.Telemetry.Telemetry (
   Context (..),
   getDataPointsData,
   spanRecordById,
+  spanRecordByName,
   getTraceDetails,
   getMetricData,
   bulkInsertMetrics,
@@ -48,7 +49,10 @@ import Control.Lens ((.~))
 import Data.Aeson qualified as AE
 import Data.Aeson.Key qualified as AEK
 import Data.Aeson.KeyMap qualified as KEM
+import Data.Base64.Types qualified as B64
 import Data.ByteString.Base16 qualified as B16
+import Data.ByteString.Base64 qualified as B64
+import Data.ByteString.Lazy qualified as BL
 import Data.Effectful.UUID (UUIDEff, genUUID)
 import Data.Generics.Labels ()
 import Data.List (nubBy)
@@ -479,6 +483,15 @@ spanRecordById pid trId spanId = dbtToEff $ queryOne Select q (pid.toText, trId,
               FROM otel_logs_and_spans where project_id=? and context___trace_id = ? and context___span_id=? LIMIT 1|]
 
 
+spanRecordByName :: DB :> es => Projects.ProjectId -> Text -> Text -> Eff es (Maybe OtelLogsAndSpans)
+spanRecordByName pid trId spanName = dbtToEff $ queryOne Select q (pid.toText, trId, spanName)
+  where
+    q =
+      [sql| SELECT project_id, id, timestamp, observed_timestamp, context, level, severity, body, attributes, resource, 
+                  hashes, kind, status_code, status_message, start_time, end_time, events, links, duration, name, parent_id, date
+              FROM otel_logs_and_spans where project_id=? and context___trace_id = ? and name=? LIMIT 1|]
+
+
 getChildSpans :: DB :> es => Projects.ProjectId -> V.Vector Text -> Eff es (V.Vector OtelLogsAndSpans)
 getChildSpans pid spanIds = dbtToEff $ query Select q (pid.toText, spanIds)
   where
@@ -838,9 +851,9 @@ convertSpanToRequestMessage sp instrumentationScope =
         , queryParams = queryParams
         , rawUrl = rawUrl
         , referer = referer
-        , requestBody = requestBody
+        , requestBody = B64.extractBase64 requestBody
         , requestHeaders = fromMaybe (AE.object []) reqHeaders
-        , responseBody = responseBody
+        , responseBody = B64.extractBase64 responseBody
         , responseHeaders = fromMaybe (AE.object []) resHeaders
         , statusCode = status
         , sdkType = sdkType
@@ -885,8 +898,9 @@ convertSpanToRequestMessage sp instrumentationScope =
     messageId = UUID.fromText $ fromMaybe "" $ getSpanAttribute "msg_id" apt
     parentId = UUID.fromText $ fromMaybe "" $ getSpanAttribute "parent_id" apt
     referer = Just $ Left "" :: Maybe (Either Text [Text])
-    requestBody = fromMaybe "{}" $ getSpanAttribute "body" req
-    responseBody = fromMaybe "{}" $ getSpanAttribute "body" res
+    (requestBody, responseBody) = case sp.body of
+      Just (AE.Object o) -> (B64.encodeBase64 $ maybe "{}" (\x -> BL.toStrict $ AE.encode x) (KEM.lookup "request_body" o), B64.encodeBase64 $ maybe "{}" (\x -> BL.toStrict $ AE.encode x) (KEM.lookup "response_body" o))
+      _ -> (B64.encodeBase64 "{}", B64.encodeBase64 "{}")
     reqHeaders = KEM.lookup "header" req
     resHeaders = KEM.lookup "header" res
     responseStatus = (readMaybe . toString =<< getSpanAttribute "status_code" res) :: Maybe Double

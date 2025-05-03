@@ -100,7 +100,7 @@ shareLinkGetH sid = do
           "span" -> do
             spanItem <- Telemetry.spanRecordByProjectAndId pid createdAt eventId
             pure case spanItem of
-              Just spn -> Just $ Spans.expandedSpanItem pid spn Nothing Nothing
+              Just spn -> Just $ Spans.expandedSpanItem pid spn Nothing Nothing Nothing
               Nothing -> Nothing
           "log" -> do
             logItem <- Telemetry.logRecordByProjectAndId pid createdAt eventId
