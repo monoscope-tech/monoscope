@@ -1,4 +1,4 @@
-module BackgroundJobs (jobsWorkerInit, jobsRunner, BgJobs (..), runHourlyJob) where
+module BackgroundJobs (jobsWorkerInit, jobsRunner, BgJobs (..), runHourlyJob, generateOtelFacetsBatch) where
 
 import Control.Lens ((.~))
 import Data.Aeson ((.=))

@@ -72,17 +72,17 @@ generateAndSaveFacets pid tableName columns maxValues timestamp = do
     Just summary -> pure summary
     Nothing -> do
       -- Generate facets using an optimized query for all columns
-      facetMap <- dbtToEff $ do
+      facetMap <- do
+        let facetQuery = buildOptimizedFacetQuery tableName (length columns)
         -- Prepare columns for the optimized query
         values <-
-          query
-            Select
-            (buildOptimizedFacetQuery tableName (length columns))
-            (pid.toText, hourStart, hourEnd, maxValues, V.fromList columns)
-
-        -- Process results directly into a map for better performance
-        let groupedMap = processQueryResults values
-        pure groupedMap
+          checkpoint (toAnnotation facetQuery) $
+            dbtToEff $
+              query
+                Select
+                facetQuery
+                (V.fromList columns, pid.toText, hourStart, hourEnd, maxValues)
+        pure $ processQueryResults values
 
       -- Create and save the new facet summary
       facetId <- UUID.genUUID
@@ -148,7 +148,7 @@ buildOptimizedFacetQuery tableName _ =
       WITH columns_list AS (SELECT unnest(?::text[]) as column_name),
       filtered_data AS (
         SELECT * FROM |]
-      <> fromString (toString tableName)
+      <> (" " <> fromString (toString tableName) <> " ")
       <> [sql| 
         WHERE project_id = ?::text AND timestamp >= ? AND timestamp < ?
       ),

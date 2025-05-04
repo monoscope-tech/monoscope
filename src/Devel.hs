@@ -51,7 +51,9 @@ dev2 = do
   ctx <- runEff $ runFailIO $ Cfg.getAppContext
   -- traceShowM ctx
   now <- getCurrentTime
-  _ <- runTestBackground ctx $ BackgroundJobs.runHourlyJob now 18
+  -- _ <- runTestBackground ctx $ BackgroundJobs.runHourlyJob now 18
+  let pids = []
+  _ <- runTestBackground ctx $ BackgroundJobs.generateOtelFacetsBatch pids now
 
   pass
 
