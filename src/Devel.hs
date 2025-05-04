@@ -1,7 +1,7 @@
 {-# OPTIONS_GHC -Wno-error=ambiguous-fields -Wno-ambiguous-fields #-}
 {-# OPTIONS_GHC -Wno-error=unused-imports -Wno-unused-imports -Wno-incomplete-uni-patterns #-}
 
-module Devel (dev) where
+module Devel (dev, dev2) where
 
 -- Devel is useful when doing local web/html development
 -- where having fast reloads is important
@@ -34,6 +34,26 @@ import Relude hiding (get)
 import System.Config
 import System.Directory (doesFileExist)
 import System.Envy (FromEnv (..), ReadShowVar (..), Var (..), decodeEnv, fromVar, toVar)
+
+import BackgroundJobs qualified as BackgroundJobs
+import Configuration.Dotenv qualified as Dotenv
+import Control.Exception.Safe qualified as Safe
+import Data.Time (getCurrentTime)
+import Effectful
+import Effectful.Fail (runFailIO)
+import Pkg.TestUtils (runTestBackground)
+import System.Config qualified as Cfg
+
+
+dev2 :: IO ()
+dev2 = do
+  _ <- Safe.try (Dotenv.loadFile Dotenv.defaultConfig) :: IO (Either SomeException ())
+  ctx <- runEff $ runFailIO $ Cfg.getAppContext
+  -- traceShowM ctx
+  now <- getCurrentTime
+  _ <- runTestBackground ctx $ BackgroundJobs.runHourlyJob now 18
+
+  pass
 
 
 dev :: IO ()
