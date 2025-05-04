@@ -14,12 +14,13 @@ import Data.Text qualified as T
 import Data.Time (DayOfWeek (Monday), UTCTime (utctDay), ZonedTime, addUTCTime, dayOfWeek, formatTime, getZonedTime)
 import Data.Time.Format (defaultTimeLocale)
 import Data.Time.LocalTime (LocalTime (localDay), ZonedTime (zonedTimeToLocalTime), getCurrentTimeZone, utcToZonedTime, zonedTimeToUTC)
+import Data.UUID qualified as UUID4
 import Data.UUID.V4 qualified as UUIDV4
 import Data.Vector qualified as V
-import Database.PostgreSQL.Entity.DBT (QueryNature (Select, Update), execute, query)
+import Database.PostgreSQL.Entity.DBT (QueryNature (..), execute, query, withPool)
 import Database.PostgreSQL.Simple (Only (Only))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
-import Database.PostgreSQL.Transact (DBT)
+import Database.PostgreSQL.Transact qualified as PTR
 import Effectful (Eff, (:>))
 import Effectful.Log (Log)
 import Effectful.PostgreSQL.Transact.Effect (DB, dbtToEff)
@@ -37,6 +38,7 @@ import Models.Apis.Reports qualified as Reports
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Apis.Shapes qualified as Shapes
 import Models.Projects.LemonSqueezy qualified as LemonSqueezy
+import Models.Projects.Projects (ProjectId (unProjectId))
 import Models.Projects.Projects qualified as Projects
 import Models.Projects.Swaggers qualified as Swaggers
 import Models.Tests.TestToDump qualified as TestToDump
@@ -79,6 +81,7 @@ data BgJobs
   | RunCollectionTests Testing.CollectionId
   | DeletedProject Projects.ProjectId
   | APITestFailed Projects.ProjectId Testing.CollectionId (V.Vector Testing.StepResult)
+  | CleanupDemoProject
   deriving stock (Show, Generic)
   deriving anyclass (AE.ToJSON, AE.FromJSON)
 
@@ -166,6 +169,9 @@ jobsRunner logger authCtx job = when authCtx.config.enableBackgroundJobs $ do
 
         -- Schedule all 24 hourly jobs in one batch
         liftIO $ withResource authCtx.jobsPool \conn -> do
+          -- background job to cleanup demo project
+          when (dayOfWeek currentDay == Monday) do
+            void $ createJob conn "background_jobs" $ BackgroundJobs.CleanupDemoProject
           forM_ [0 .. 23] \hour -> do
             -- Schedule each hourly job to run at the appropriate hour
             let scheduledTime = addUTCTime (fromIntegral $ hour * 3600) currentTime
@@ -218,6 +224,15 @@ jobsRunner logger authCtx job = when authCtx.config.enableBackgroundJobs $ do
         -- collectionM <- dbtToEff $ Testing.getCollectionById col_id
         -- whenJust collectionM \collection -> do
         --   _ <- sendTestFailedAlert pid col_id collection stepResult
+        pass
+      CleanupDemoProject -> do
+        let pid = Projects.ProjectId{unProjectId = UUID4.nil}
+        -- DELETE PROJECT members
+        _ <- withPool authCtx.pool $ PTR.execute [sql| DELETE FROM projects.project_members WHERE project_id = ? |] (Only pid)
+        -- SOFT DELETE test collections
+        _ <- withPool authCtx.pool $ PTR.execute [sql|DELETE FROM tests.collections  WHERE project_id = ? and title != 'Default Health check' |] (Only pid)
+        -- DELETE API KEYS
+        _ <- withPool authCtx.pool $ PTR.execute [sql| DELETE FROM projects.project_api_keys WHERE project_id = ? AND title != 'Default API Key' |] (Only pid)
         pass
 
 
@@ -723,7 +738,7 @@ A new runtime exception has been detected. click the link below to see more deta
     Anomalies.ATUnknown -> pass
 
 
-getUpdatedFieldFormats :: Projects.ProjectId -> V.Vector Text -> DBT IO (V.Vector Text)
+getUpdatedFieldFormats :: Projects.ProjectId -> V.Vector Text -> PTR.DBT IO (V.Vector Text)
 getUpdatedFieldFormats pid fieldHashes = query Select q (pid, fieldHashes)
   where
     q =
@@ -731,7 +746,7 @@ getUpdatedFieldFormats pid fieldHashes = query Select q (pid, fieldHashes)
                 where fm.project_id=? AND fm.created_at>(fd.created_at+interval '2 minutes') AND fm.field_hash=ANY(?) |]
 
 
-updateShapeCounts :: Projects.ProjectId -> Text -> V.Vector Text -> V.Vector Text -> V.Vector Text -> DBT IO Int64
+updateShapeCounts :: Projects.ProjectId -> Text -> V.Vector Text -> V.Vector Text -> V.Vector Text -> PTR.DBT IO Int64
 updateShapeCounts pid shapeHash newFields deletedFields updatedFields = execute Update q (newFields, deletedFields, updatedFields, pid, shapeHash)
   where
     q = [sql| update apis.shapes SET new_unique_fields=?, deleted_fields=?, updated_field_formats=? where project_id=? and hash=?|]

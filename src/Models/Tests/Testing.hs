@@ -126,8 +126,8 @@ stepDataMethod stepData =
 
 instance AE.ToJSON CollectionStepData where
   toJSON csd =
-    AE.object
-      $ catMaybes
+    AE.object $
+      catMaybes
         [ Just $ "title" .= csd.title
         , fmap ("POST" .=) csd.post -- Change the key to "POST" here for the output JSON
         , fmap ("GET" .=) csd.get
@@ -470,7 +470,7 @@ getCollections pid tabStatus = query Select q (pid, statusValue)
              ) AS http_methods_subquery
            ), ARRAY[]::text[]) as urls
            FROM tests.collections t
-           WHERE t.project_id = ? AND t.is_scheduled = ?
+           WHERE t.project_id = ? AND t.is_scheduled = ? and deleted_at IS NULL
            ORDER BY t.updated_at DESC;
     |]
 
@@ -492,7 +492,7 @@ inactiveCollectionsCount pid = do
     q =
       [sql|SELECT COUNT(*)
            FROM tests.collections
-           WHERE project_id = ? and is_scheduled = false;
+           WHERE project_id = ? and is_scheduled = false and deleted_at IS NULL;
       |]
 
 
