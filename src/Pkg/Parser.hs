@@ -51,7 +51,7 @@ applySectionToComponent qc (TimeChartCommand agg byClauseM rollupM) = applyRollu
 
 applyByClauseToQC :: Maybe ByClause -> QueryComponents -> QueryComponents
 applyByClauseToQC Nothing qc = qc
-applyByClauseToQC (Just (ByClause fields)) qc = qc{groupByClause = qc.groupByClause <> map display fields}
+applyByClauseToQC (Just (ByClause fields)) qc = qc{groupByClause = qc.groupByClause <> map (\f -> "COALESCE(" <> display f <> "::text, '')::text") fields}
 
 
 applyRollupToQC :: Maybe Rollup -> QueryComponents -> QueryComponents

@@ -4,12 +4,6 @@ preview: /public/assets/svgs/screens/http-stats.svg
 description: General dashboard about events, requests, apis, etc
 refresh_interval: 60s
 widgets:
-  # - type: "timeseries_stat"
-  #   title: "Requests"
-  #   query: requests
-  #   unit: reqs
-  #   layout: { w: 3, h: 2 }
-
   - type: group
     title: Overview
     layout: { w: 6, h: 5 }
@@ -88,7 +82,7 @@ widgets:
       ) s,
       LATERAL unnest(s.values, s.quantiles) AS u(value, quantile);
     layout: { w: 6, h: 4 }
-  #
+
   - type: 'timeseries'
     title: 'HTTP Errors (Incoming)'
     eager: true

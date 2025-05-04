@@ -1,4 +1,4 @@
-module BackgroundJobs (jobsWorkerInit, jobsRunner, BgJobs (..)) where
+module BackgroundJobs (jobsWorkerInit, jobsRunner, BgJobs (..), runHourlyJob, generateOtelFacetsBatch) where
 
 import Control.Lens ((.~))
 import Data.Aeson ((.=))
@@ -14,7 +14,7 @@ import Data.Text qualified as T
 import Data.Time (DayOfWeek (Monday), UTCTime (utctDay), ZonedTime, addUTCTime, dayOfWeek, formatTime, getZonedTime)
 import Data.Time.Format (defaultTimeLocale)
 import Data.Time.LocalTime (LocalTime (localDay), ZonedTime (zonedTimeToLocalTime), getCurrentTimeZone, utcToZonedTime, zonedTimeToUTC)
-import Data.UUID qualified as UUID4
+import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUIDV4
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity.DBT (QueryNature (..), execute, query, withPool)
@@ -76,7 +76,7 @@ data BgJobs
   | HourlyJob UTCTime Int
   | GenSwagger Projects.ProjectId Users.UserId Text
   | ReportUsage Projects.ProjectId
-  | GenerateOtelFacetsBatch (V.Vector Projects.ProjectId) UTCTime
+  | GenerateOtelFacetsBatch (V.Vector Text) UTCTime
   | QueryMonitorsTriggered (V.Vector Monitors.QueryMonitorId)
   | RunCollectionTests Testing.CollectionId
   | DeletedProject Projects.ProjectId
@@ -247,16 +247,11 @@ runHourlyJob scheduledTime hour = do
     dbtToEff $
       query
         Select
-        [sql|
-      SELECT DISTINCT p.id 
-      FROM projects.projects p
-      JOIN otel_logs_and_spans ols ON p.id = ols.project_id
-      WHERE p.active = ? 
-        AND p.deleted_at IS NULL
-        AND ols.timestamp >= ?
-        AND ols.timestamp <= ?
-    |]
-        (True, oneHourAgo, scheduledTime)
+        [sql| SELECT DISTINCT project_id 
+              FROM otel_logs_and_spans ols
+              WHERE ols.timestamp >= ?
+                AND ols.timestamp <= ? |]
+        (oneHourAgo, scheduledTime)
 
   -- Log count of projects to process
   Log.logInfo "Projects with new data in the last hour window" (length activeProjects)
@@ -275,13 +270,13 @@ runHourlyJob scheduledTime hour = do
 
 
 -- | Batch process facets generation for multiple projects
-generateOtelFacetsBatch :: (DB :> es, Log :> es, UUID.UUIDEff :> es) => V.Vector Projects.ProjectId -> UTCTime -> Eff es ()
+generateOtelFacetsBatch :: (DB :> es, Log :> es, UUID.UUIDEff :> es) => V.Vector Text -> UTCTime -> Eff es ()
 generateOtelFacetsBatch projectIds timestamp = do
   Log.logInfo "Starting batch facets generation for projects" (V.length projectIds)
 
   -- Process each project in the batch using centralized facet columns
   forM_ projectIds \pid -> do
-    _ <- Facets.generateAndSaveFacets pid "otel_logs_and_spans" Facets.facetColumns 10 timestamp
+    _ <- Facets.generateAndSaveFacets (Projects.ProjectId $ Unsafe.fromJust $ UUID.fromText pid) "otel_logs_and_spans" Facets.facetColumns 10 timestamp
     pure ()
 
   Log.logInfo "Completed batch OTLP facets generation for projects" (V.length projectIds)
