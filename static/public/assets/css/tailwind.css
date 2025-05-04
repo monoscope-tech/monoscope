@@ -850,7 +850,7 @@ code, pre, .code, .monospace {
   text-wrap-mode: nowrap !important;
 }
 
-.grid-stack-handle {
+.grid-stack-handle, .nested-grid-stack-handle {
   @apply cursor-move;
 }
 

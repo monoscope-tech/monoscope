@@ -543,8 +543,8 @@ stBox title value =
 
 
 buildQueryForAnomaly :: Anomalies.AnomalyTypes -> Text -> Text
-buildQueryForAnomaly Anomalies.ATEndpoint hash = "hash==\"" <> hash <> "\""
-buildQueryForAnomaly Anomalies.ATShape hash = "hashes==\"" <> hash <> "\""
+buildQueryForAnomaly Anomalies.ATEndpoint hash = "hashes[*]==\"" <> hash <> "\""
+buildQueryForAnomaly Anomalies.ATShape hash = "hashes[*]==\"" <> hash <> "\""
 buildQueryForAnomaly Anomalies.ATFormat hash = "hashes[*]==\"" <> hash <> "\""
 buildQueryForAnomaly Anomalies.ATField hash = "hashes[*]==\"" <> hash <> "\""
 buildQueryForAnomaly Anomalies.ATRuntimeException hash = "hashes[*]==\"" <> hash <> "\""

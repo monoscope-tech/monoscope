@@ -173,10 +173,11 @@ queryMetrics (maybeToMonoid -> respDataType) pidM (nonNull -> queryM) (nonNull -
   sqlQuery <- case (queryM, queryASTM, querySQLM) of
     (_, _, Just querySQL) -> do
       queryAST <-
-        maybe
-          (parseQuery $ maybeToMonoid queryM)
-          (either (const $ parseQuery $ maybeToMonoid queryM) pure . AE.eitherDecode . encodeUtf8)
-          queryASTM
+        checkpoint (toAnnotation ("queryMetrics", queryM)) $
+          maybe
+            (parseQuery $ maybeToMonoid queryM)
+            (either (const $ parseQuery $ maybeToMonoid queryM) pure . AE.eitherDecode . encodeUtf8)
+            queryASTM
       let sqlQueryComponents =
             (defSqlQueryCfg (Unsafe.fromJust pidM) now (parseMaybe pSource =<< sourceM) Nothing)
               { dateRange = (fromD, toD)
@@ -187,10 +188,11 @@ queryMetrics (maybeToMonoid -> respDataType) pidM (nonNull -> queryM) (nonNull -
       pure $ DashboardUtils.replacePlaceholders mappng' querySQL -- FIXME: risk of sql injection and many other attacks
     _ -> do
       queryAST <-
-        maybe
-          (parseQuery $ maybeToMonoid queryM)
-          (either (const $ parseQuery $ maybeToMonoid queryM) pure . AE.eitherDecode . encodeUtf8)
-          queryASTM
+        checkpoint (toAnnotation ("queryMetrics", queryM)) $
+          maybe
+            (parseQuery $ maybeToMonoid queryM)
+            (either (const $ parseQuery $ maybeToMonoid queryM) pure . AE.eitherDecode . encodeUtf8)
+            queryASTM
       let sqlQueryComponents =
             (defSqlQueryCfg (Unsafe.fromJust pidM) now (parseMaybe pSource =<< sourceM) Nothing)
               { dateRange = (fromD, toD)
