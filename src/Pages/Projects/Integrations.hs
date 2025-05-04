@@ -116,16 +116,16 @@ integrationsBody sess envCfg isUpdate cp notifChannel slackData = do
             div_ [class_ "p-6 pb-3"] $ do
               div_ [class_ "flex items-center justify-between"] $ do
                 div_ [class_ "flex items-center gap-3"] $ do
-                  div_ [class_ "flex h-10 w-10 items-center justify-center rounded-full bg-fillWeak"] $
-                    faSprite_ "envelope" "solid" "h-6 w-6"
+                  div_ [class_ "flex h-10 w-10 items-center justify-center rounded-full bg-fillWeak"]
+                    $ faSprite_ "envelope" "solid" "h-6 w-6"
                   div_ [] $ do
                     h3_ [class_ "text-lg font-semibold"] "Email Notifications"
                     p_ [class_ "text-sm text-gray-500"] "Receive project updates via email"
                 label_ [class_ "relative inline-flex items-center cursor-pointer"] $ do
                   input_ [type_ "checkbox", name_ "notificationsChannel", value_ "email", if isCheckedM then checked_ else title_ "Enable notification via email", class_ "toggle toggle-primary"]
                   span_ [class_ "slider"] ("" :: Html ())
-            div_ [class_ "px-6 pb-6"] $
-              p_ [class_ "text-sm text-gray-500"] "All users on this project will receive updates via email."
+            div_ [class_ "px-6 pb-6"]
+              $ p_ [class_ "text-sm text-gray-500"] "All users on this project will receive updates via email."
 
           -- div_ [class_ "shadow-xs border p-6 rounded-lg"] do
           --   div_ [class_ "flex gap-6 items-center mb-2"] do

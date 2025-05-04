@@ -38,8 +38,8 @@ shareLinkPostH pid eventId createdAt reqTypeM = do
   let eventType = fromMaybe "request" reqTypeM
   shareId <- liftIO UUIDV4.nextRandom
   res <-
-    dbtToEff $
-      execute
+    dbtToEff
+      $ execute
         Insert
         [sql| INSERT INTO apis.share_events (id, project_id, event_id, event_type, event_created_at)
                               VALUES (?,?,?,?,?) |]
@@ -64,8 +64,8 @@ copyLink rid = do
     input_ [type_ "checkbox", id_ "shareModal", class_ "modal-toggle", checked_]
     div_ [class_ "modal p-8", role_ "dialog"] do
       div_ [class_ "modal-box flex flex-col gap-4"] $ do
-        div_ [class_ "p-3 bg-[#0acc91]/5 rounded-full w-max border-[#067a57]/20 gap-2 inline-flex"] $
-          faSprite_ "copy" "regular" "h-6 w-6 text-green-500"
+        div_ [class_ "p-3 bg-[#0acc91]/5 rounded-full w-max border-[#067a57]/20 gap-2 inline-flex"]
+          $ faSprite_ "copy" "regular" "h-6 w-6 text-green-500"
         span_ [class_ " text-textStrong text-2xl font-semibold"] "Copy Share Link"
         div_ [class_ "text-[#000833]/60"] "Share this link with anyone to give them access to this event. Lasts for 48 hours only."
         div_ [class_ "h-1 w-full  bg-fillWeak"] pass

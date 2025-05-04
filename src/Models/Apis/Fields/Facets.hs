@@ -43,7 +43,12 @@ facetColumns =
 -- | Generate facets for a project from a specified table and save to database
 generateAndSaveFacets
   :: (DB :> es, UUID.UUIDEff :> es)
-  => ProjectId -> Text -> [Text] -> Int -> UTCTime -> Eff es FacetSummary
+  => ProjectId
+  -> Text
+  -> [Text]
+  -> Int
+  -> UTCTime
+  -> Eff es FacetSummary
 generateAndSaveFacets pid tableName columns maxValues timestamp = do
   -- Truncate timestamp to hour
   let unixTime = utcTimeToPOSIXSeconds timestamp
@@ -76,12 +81,12 @@ generateAndSaveFacets pid tableName columns maxValues timestamp = do
         let facetQuery = buildOptimizedFacetQuery tableName (length columns)
         -- Prepare columns for the optimized query
         values <-
-          checkpoint (toAnnotation facetQuery) $
-            dbtToEff $
-              query
-                Select
-                facetQuery
-                (V.fromList columns, pid.toText, hourStart, hourEnd, maxValues)
+          checkpoint (toAnnotation facetQuery)
+            $ dbtToEff
+            $ query
+              Select
+              facetQuery
+              (V.fromList columns, pid.toText, hourStart, hourEnd, maxValues)
         pure $ processQueryResults values
 
       -- Create and save the new facet summary
@@ -96,8 +101,8 @@ generateAndSaveFacets pid tableName columns maxValues timestamp = do
               }
 
       _ <-
-        dbtToEff $
-          execute
+        dbtToEff
+          $ execute
             Insert
             [sql|
           INSERT INTO apis.facet_summaries 
@@ -211,12 +216,12 @@ getFacetSummary projectId tableName fromTime toTime = checkpoint "getFacetSummar
 
   -- Fetch facet summaries in the time range, plus a fallback if needed
   summariesVec <-
-    checkpoint (toAnnotation qury) $
-      dbtToEff $
-        query
-          Select
-          qury
-          (projectIdText, tableName, fromTime, toTime, sampleLimit, projectIdText, tableName, fromTime)
+    checkpoint (toAnnotation qury)
+      $ dbtToEff
+      $ query
+        Select
+        qury
+        (projectIdText, tableName, fromTime, toTime, sampleLimit, projectIdText, tableName, fromTime)
 
   let summaries = V.toList summariesVec
   case summaries of
