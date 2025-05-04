@@ -226,7 +226,7 @@ jobsRunner logger authCtx job = when authCtx.config.enableBackgroundJobs $ do
         --   _ <- sendTestFailedAlert pid col_id collection stepResult
         pass
       CleanupDemoProject -> do
-        let pid = Projects.ProjectId{unProjectId = UUID4.nil}
+        let pid = Projects.ProjectId{unProjectId = UUID.nil}
         -- DELETE PROJECT members
         _ <- withPool authCtx.pool $ PTR.execute [sql| DELETE FROM projects.project_members WHERE project_id = ? |] (Only pid)
         -- SOFT DELETE test collections
