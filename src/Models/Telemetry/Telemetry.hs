@@ -837,7 +837,7 @@ removeDuplic = nubBy (\(a1, a2, _, _, _, _) (b1, b2, _, _, _, _) -> a1 == b1 && 
 
 
 convertSpanToRequestMessage :: OtelLogsAndSpans -> Text -> Maybe RequestMessage
-convertSpanToRequestMessage sp instrumentationScope =
+convertSpanToRequestMessage sp instrumentationScope = do
   pidM >>= \pid ->
     Just
       RequestMessage
@@ -860,15 +860,15 @@ convertSpanToRequestMessage sp instrumentationScope =
         , msgId = messageId
         , parentId = parentId
         , errors
-        , tags = Nothing
-        , urlPath = urlPath
+        , tags = tags
+        , urlPath = Just urlPath
         , timestamp = utcToZonedTime (TimeZone 0 False "UTC+0") sp.timestamp
-        , serviceVersion = Nothing
+        , serviceVersion = Just serviceVersion
         }
   where
     pidM = UUID.fromText sp.project_id
     attrJson = fromMaybe AE.Null $ fmap AE.Object $ fmap KEM.fromMapText sp.attributes
-    (req, res, apt, hst) = case attrJson of
+    (http, req, res, apt, hst, url) = case attrJson of
       AE.Object v ->
         let httpAttsM = KEM.lookup "http" v
             h = case httpAttsM of
@@ -888,13 +888,16 @@ convertSpanToRequestMessage sp instrumentationScope =
                 Just (AE.Object hostAtts) -> hostAtts
                 _ -> KEM.empty
               _ -> KEM.empty
-         in (rq, rs, ap, hs)
-      _ -> (KEM.empty, KEM.empty, KEM.empty, KEM.empty)
+            u = case KEM.lookup "url" v of
+              Just (AE.Object urlAtts) -> urlAtts
+              _ -> KEM.empty
+         in (h, rq, rs, ap, hs, u)
+      _ -> (KEM.empty, KEM.empty, KEM.empty, KEM.empty, KEM.empty, KEM.empty)
     host = getSpanAttribute "name" hst
     method = fromMaybe "GET" $ getSpanAttribute "method" req
     pathParams = fromMaybe (AE.object []) (AE.decode $ Relude.encodeUtf8 $ fromMaybe "" $ getSpanAttribute "path_params" req)
     queryParams = fromMaybe (AE.object []) (AE.decode $ Relude.encodeUtf8 $ fromMaybe "" $ getSpanAttribute "query_params" req)
-    errors = AE.decode $ Relude.encodeUtf8 $ fromMaybe "" $ getSpanAttribute "errors" apt
+    errors = AE.decode $ Relude.encodeUtf8 $ fromMaybe "[]" $ getSpanAttribute "errors" apt
     messageId = UUID.fromText $ fromMaybe "" $ getSpanAttribute "msg_id" apt
     parentId = UUID.fromText $ fromMaybe "" $ getSpanAttribute "parent_id" apt
     referer = Just $ Left "" :: Maybe (Either Text [Text])
@@ -906,8 +909,10 @@ convertSpanToRequestMessage sp instrumentationScope =
     responseStatus = (readMaybe . toString =<< getSpanAttribute "status_code" res) :: Maybe Double
     status = round $ fromMaybe 0.0 responseStatus
     sdkType = RequestDumps.parseSDKType $ fromMaybe "" $ getSpanAttribute "sdk_type" apt
-    urlPath = getSpanAttribute "route" req
-    rawUrl = fromMaybe "" $ getSpanAttribute "target" req
+    tags = AE.decode $ Relude.encodeUtf8 $ fromMaybe "[]" $ getSpanAttribute "tags" apt
+    serviceVersion = fromMaybe "" $ getSpanAttribute "service_version" apt
+    urlPath = fromMaybe (fromMaybe "/" $ getSpanAttribute "path" url) $ getSpanAttribute "route" http
+    rawUrl = fromMaybe (fromMaybe "/" $ getSpanAttribute "path" url) $ getSpanAttribute "target" http
 
 
 getValsWithPrefix :: Text -> AE.Object -> AE.Value
@@ -1028,8 +1033,8 @@ extractATError spanObj (AE.Object o) = do
       asText (AE.String t) = Just t
       asText _ = Nothing
 
-  return
-    $ RequestDumps.ATError
+  return $
+    RequestDumps.ATError
       { projectId = UUID.fromText spanObj.project_id >>= (\uid -> Just Projects.ProjectId{unProjectId = uid})
       , when = spanObj.timestamp
       , errorType = typ
