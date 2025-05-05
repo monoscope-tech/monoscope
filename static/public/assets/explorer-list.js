@@ -4,19 +4,9 @@ import { virtualize, virtualizerRef } from '@lit-labs/virtualizer/virtualizer'
 
 export class LogList extends LitElement {
   static properties = {
-    logsData: [],
-    logsColumns: [],
-    colIdxMap: {},
-    hasMore: { type: Boolean },
-    isLoading: { type: Boolean },
-    isLoadingRecent: { type: Boolean },
-    nextFetchUrl: { type: String },
     isError: { type: Boolean },
     fetchError: { type: String },
-    projectId: { type: String },
     expandedTraces: {},
-    columnMaxWidthMap: {},
-    spanListTree: [],
     flipDirection: { type: Boolean },
     view: { type: String },
     shouldScrollToBottom: { type: Boolean },
@@ -143,15 +133,9 @@ export class LogList extends LitElement {
     window.logListTable = document.querySelector('#resultTable')
   }
 
-  updated(changedProperties) {
+  updated() {
     if (this.shouldScrollToBottom && this.flipDirection) {
       this.scrollToBottom()
-    }
-    if (this.newDataFetched) {
-      this.spanListTree.forEach(t => {
-        t.isNew = false
-      })
-      this.newDataFetched = false
     }
   }
 
@@ -248,8 +232,12 @@ export class LogList extends LitElement {
             this.serviceColors = { ...serviceColors, ...this.serviceColors }
             let tree = this.buildSpanListTree([...logsData])
             if (isNewData) {
-              this.newDataFetched
-              tree.forEach(tr => (tr.isNew = true))
+              const newCount = this.view === 'tree' ? tree.filter(t => t.show).length : logsData.length
+              if (this.flipDirection) {
+                this.newDataCount = this.view === 'tree' ? this.spanListTree.filter(s => s.show).length - 1 : this.spanListTree.length - 1
+              } else {
+                this.newDataCount = newCount
+              }
               const container = document.querySelector('#logs_list_container_inner')
               if (container && container.scrollTop + container.clientHeight >= container.scrollHeight - 1) {
                 this.shouldScrollToBottom = true
@@ -488,8 +476,8 @@ export class LogList extends LitElement {
             ${k.toLowerCase() === 'server'
               ? renderIconWithTippy('w-4 ml-2', 'Incoming Request => Server', faSprite('arrow-down-left', 'solid', ' h-3 fill-slate-500'))
               : k.toLowerCase() === 'client'
-                ? renderIconWithTippy('w-4 ml-2', 'Outgoing Request  => Client', faSprite('arrow-up-right', 'solid', ' h-3 fill-blue-700'))
-                : nothing}
+              ? renderIconWithTippy('w-4 ml-2', 'Outgoing Request  => Client', faSprite('arrow-up-right', 'solid', ' h-3 fill-blue-700'))
+              : nothing}
             ${statusCode_ && statusCode_ !== 'UNSET' ? renderBadge(statusCls_, statusCode_, 'status code') : nothing}
             ${m ? renderBadge('min-w-[4rem] text-center cbadge cbadge-sm ' + methodCls_, m, 'method') : nothing}
             ${url ? renderBadge('cbadge-sm badge-neutral bg-fillWeak ' + wrapCls, url, 'url') : nothing}
@@ -515,8 +503,8 @@ export class LogList extends LitElement {
             ${k.toLowerCase() === 'server'
               ? renderIconWithTippy('w-4 ml-2', 'Incoming Request => Server', faSprite('arrow-down-left', 'solid', ' h-3 fill-slate-500'))
               : k.toLowerCase() === 'client'
-                ? renderIconWithTippy('w-4 ml-2', 'Outgoing Request  => Client', faSprite('arrow-up-right', 'solid', ' h-3 fill-blue-700'))
-                : nothing}
+              ? renderIconWithTippy('w-4 ml-2', 'Outgoing Request  => Client', faSprite('arrow-up-right', 'solid', ' h-3 fill-blue-700'))
+              : nothing}
             ${rpcMethod ? renderBadge('cbadge-sm badge-neutral bg-fillWeak', rpcMethod) : nothing}
           `
         }
@@ -527,8 +515,8 @@ export class LogList extends LitElement {
         const errClas = hasErrors
           ? 'bg-fillError-strong text-white fill-white stroke-strokeError-strong'
           : childErrors
-            ? 'border border-strokeError-strong bg-fillWeak text-textWeak fill-textWeak'
-            : 'border border-strokeWeak bg-fillWeak text-textWeak fill-textWeak'
+          ? 'border border-strokeError-strong bg-fillWeak text-textWeak fill-textWeak'
+          : 'border border-strokeWeak bg-fillWeak text-textWeak fill-textWeak'
         return html`<div class="flex w-full ${wrapLines ? 'items-start' : 'items-center'} gap-1">
           ${this.view === 'tree'
             ? html`
@@ -552,8 +540,8 @@ export class LogList extends LitElement {
                         ${expanded ? faSprite('minus', 'regular', 'w-3 h-1 shrink-0') : faSprite('plus', 'regular', 'w-3 h-3 shrink-0')} ${children}
                       </button>`
                     : depth === 0
-                      ? nothing
-                      : html`<div class=${`rounded-sm ml-1 shrink-0 w-3 h-5 ${errClas}`}></div>`}
+                    ? nothing
+                    : html`<div class=${`rounded-sm ml-1 shrink-0 w-3 h-5 ${errClas}`}></div>`}
                 </div>
               `
             : nothing}
@@ -595,18 +583,18 @@ export class LogList extends LitElement {
         ${this.isLiveStreaming
           ? html`<p>Live streaming latest data...</p>`
           : this.isLoadingRecent
-            ? html`<div class="loading loading-dots loading-md"></div>`
-            : html`
-                <button
-                  class="cursor-pointer text-textBrand underline font-semibold w-max mx-auto"
-                  @click=${() => {
-                    const updatedUrl = this.latestLogsURLQueryValsFn()
-                    this.fetchData(updatedUrl, true)
-                  }}
-                >
-                  Check for recent data
-                </button>
-              `}
+          ? html`<div class="loading loading-dots loading-md"></div>`
+          : html`
+              <button
+                class="cursor-pointer text-textBrand underline font-semibold w-max mx-auto"
+                @click=${() => {
+                  const updatedUrl = this.latestLogsURLQueryValsFn()
+                  this.fetchData(updatedUrl, true)
+                }}
+              >
+                Check for recent data
+              </button>
+            `}
       </td>
     </tr>`
   }
@@ -636,7 +624,7 @@ export class LogList extends LitElement {
     }
   }
 
-  logItemRow(rowData) {
+  logItemRow(rowData, index) {
     if (rowData === 'end') {
       if (this.flipDirection) {
         return this.fetchRecent()
@@ -651,7 +639,16 @@ export class LogList extends LitElement {
     }
     const s = rowData.type === 'log' ? 'logs' : this.source
     const targetInfo = requestDumpLogItemUrlPath(rowData.data, this.colIdxMap, s)
-    const isNew = rowData.isNew
+    let isNew = false
+    if (this.flipDirection) {
+      isNew = this.newDataCount < index
+      if (isNew) {
+        this.newDataCount++
+      }
+    } else {
+      isNew = this.newDataCount > 0
+      this.newDataCount--
+    }
     return html`
       <tr
         class=${`item-row relative p-0 flex items-center cursor-pointer whitespace-nowrap ${isNew ? 'animate-fadeBg' : ''}`}
@@ -759,7 +756,9 @@ export class LogList extends LitElement {
             this.flipDirection ? 'bg-gray-200 text-gray-800' : 'text-textWeak  hover:bg-gray-100'
           }`}
           @click=${() => {
-            this.flipDirection = !this.flipDirection
+            const currVal = !this.flipDirection
+            this.flipDirection = currVal
+            this.newDataCount = currVal ? Infinity : 0
             this.spanListTree = this.buildSpanListTree(this.spanListTree.map(span => span.data).reverse())
             this.requestUpdate()
           }}
