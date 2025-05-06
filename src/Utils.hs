@@ -591,4 +591,4 @@ instance AE.ToJSON a => ToHttpApiData (JSONHttpApiData a) where
 
 
 freeTierDailyMaxEvents :: Integer
-freeTierDailyMaxEvents = 10000
+freeTierDailyMaxEvents = 1000
