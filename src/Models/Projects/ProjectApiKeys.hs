@@ -137,12 +137,12 @@ LEFT JOIN (
     SELECT 
       e.project_id, 
       COUNT(*) AS daily_events_count
-    FROM telemetry.spans e
-    JOIN projects.projects p ON p.id = e.project_id
+    FROM otel_logs_and_spans e
+    JOIN projects.projects p ON p.id = e.project_id::uuid
     WHERE p.payment_plan = 'Free' 
       AND e.timestamp > NOW() - INTERVAL '1 day'
     GROUP BY e.project_id
-) span_counts ON span_counts.project_id = k.project_id
+) span_counts ON span_counts.project_id::uuid = k.project_id
 WHERE k.key_prefix = ANY(?)|]
 
 

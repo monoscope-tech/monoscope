@@ -63,7 +63,7 @@ import Relude hiding (ask)
 import RequestMessages (RequestMessage (..))
 import System.Config (AuthContext)
 import System.Types (runBackground)
-import Utils (b64ToJson, nestedJsonFromDotNotation)
+import Utils (b64ToJson, freeTierDailyMaxEvents, freeTierLimitExceededBanner, nestedJsonFromDotNotation)
 
 
 -- import Network.GRPC.Server.Service (Service, service, method, fromServices)
@@ -411,7 +411,7 @@ convertResourceLogsToOtelLogs :: V.Vector (Text, Projects.ProjectId, Integer) ->
 convertResourceLogsToOtelLogs pids resourceLogs =
   let projectKey = fromMaybe "" $ listToMaybe $ V.toList $ getLogAttributeValue "at-project-key" (V.singleton resourceLogs)
       projectId = case find (\(k, _, count) -> k == projectKey) pids of
-        Just (_, v, count) -> if count >= 10000 then Nothing else Just v
+        Just (_, v, count) -> if count >= freeTierDailyMaxEvents then Nothing else Just v
         Nothing ->
           let pidText = fromMaybe "" $ listToMaybe $ V.toList $ getLogAttributeValue "at-project-id" (V.singleton resourceLogs)
               uId = UUID.fromText pidText
@@ -490,7 +490,7 @@ convertResourceSpansToOtelLogs pids resourceSpans =
         ( \rs ->
             let projectKey = fromMaybe "" $ listToMaybe $ V.toList $ getSpanAttributeValue "at-project-key" (V.singleton rs)
                 projectId = case find (\(k, _, count) -> k == projectKey) pids of
-                  Just (_, v, count) -> if count >= 10000 then Nothing else Just v
+                  Just (_, v, count) -> if count >= freeTierDailyMaxEvents then Nothing else Just v
                   Nothing ->
                     let pidText = fromMaybe "" $ listToMaybe $ V.toList $ getSpanAttributeValue "at-project-id" (V.singleton rs)
                         uId = UUID.fromText pidText
@@ -756,7 +756,10 @@ traceServiceExport appLogger appCtx (Proto req) = do
     let resourceSpans = V.fromList $ req ^. TSF.resourceSpans
         projectKeys = getSpanAttributeValue "at-project-key" resourceSpans
 
-    projectIdsAndKeys <- dbtToEff $ ProjectApiKeys.projectIdsByProjectApiKeys projectKeys
+    projectIdsAndKeys <-
+      checkpoint "processList:traces:getProjectIds" $
+        dbtToEff $
+          ProjectApiKeys.projectIdsByProjectApiKeys projectKeys
     let spans = convertResourceSpansToOtelLogs projectIdsAndKeys resourceSpans
         spans' = V.fromList spans
         apitoolkitSpans =

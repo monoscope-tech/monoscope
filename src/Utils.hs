@@ -6,6 +6,7 @@ module Utils (
   jsonValueToHtmlTree,
   userIsProjectMember,
   GetOrRedirect,
+  freeTierDailyMaxEvents,
   JSONHttpApiData (..),
   redirect,
   lookupVecByKey,
@@ -587,3 +588,7 @@ instance AE.ToJSON a => ToHttpApiData (JSONHttpApiData a) where
             TE.decodeUtf8 $ BS.init $ BS.tail bs
       -- Otherwise, keep as is
       bs -> TE.decodeUtf8 bs
+
+
+freeTierDailyMaxEvents :: Integer
+freeTierDailyMaxEvents = 10000

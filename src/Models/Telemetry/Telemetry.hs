@@ -4,6 +4,7 @@ module Models.Telemetry.Telemetry (
   spanRecordByProjectAndId,
   getSpandRecordsByTraceId,
   convertOtelLogsAndSpansToSpanRecord,
+  getTotalEventsToReport,
   SpanRecord (..),
   getAllATErrors,
   Trace (..),
@@ -584,6 +585,17 @@ getMetricData pid metricName = dbtToEff $ queryOne Select q (pid, metricName, pi
       WHERE project_id = ? AND metric_name = ?
       GROUP BY metric_name, metric_type, metric_unit, metric_description;
         |]
+
+
+getTotalEventsToReport :: DB :> es => Projects.ProjectId -> UTCTime -> Eff es Int
+getTotalEventsToReport pid lastReported = do
+  result <- dbtToEff $ query Select q (pid, lastReported)
+  case result of
+    [Only c] -> return c
+    v -> return $ length v
+  where
+    q =
+      [sql| SELECT count(*) FROM apis.request_dumps WHERE project_id=? AND created_at > ?|]
 
 
 getMetricChartListData :: DB :> es => Projects.ProjectId -> Maybe Text -> Maybe Text -> (Maybe UTCTime, Maybe UTCTime) -> Int -> Eff es (V.Vector MetricChartListData)

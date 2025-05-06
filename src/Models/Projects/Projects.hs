@@ -246,8 +246,8 @@ projectCacheById pid = queryOne Select q (pid, pid, pid)
                     coalesce(ARRAY_AGG(DISTINCT endpoint_hashes ORDER BY endpoint_hashes ASC),'{}') endpoint_hashes,
                     coalesce(ARRAY_AGG(DISTINCT shape_hashes ORDER BY shape_hashes ASC),'{}'::text[]) shape_hashes,
                     coalesce(ARRAY_AGG(DISTINCT paths ORDER BY paths ASC),'{}') redacted_fields,
-                    ( SELECT count(*) FROM apis.request_dumps
-                     WHERE project_id=? AND created_at > NOW() - INTERVAL '7' DAY
+                    ( SELECT count(*) FROM otel_logs_and_spans
+                     WHERE project_id=? AND timestamp > NOW() - INTERVAL '7' DAY
                     ) weekly_request_count,
                     (SELECT COALESCE((SELECT payment_plan FROM projects.projects WHERE id = ?),'Free')) payment_plan
             from
