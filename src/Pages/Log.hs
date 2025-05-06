@@ -126,8 +126,8 @@ renderFacets facetSummary = do
                       onclick_ $ "filterByFacet('" <> T.replace "___" "." key <> "', '" <> val <> "')"
                     ]
                   let colorClass = colorFn val
-                  when (not $ T.null colorClass) $
-                    span_ [class_ $ colorClass <> " shrink-0 w-1 h-5 rounded-sm"] " "
+                  when (not $ T.null colorClass)
+                    $ span_ [class_ $ colorClass <> " shrink-0 w-1 h-5 rounded-sm"] " "
                   span_ [class_ "facet-value truncate max-w-[80%]", term "data-tippy-content" val] $ toHtml val
                 span_ [class_ "facet-count text-slate-500 shrink-0 ml-1"] $ toHtml $ show count
 
@@ -178,8 +178,8 @@ apiLogH pid queryM queryASTM cols' cursorM' sinceM fromM toM layoutM sourceM tar
   facetSummary <- Facets.getFacetSummary pid "otel_logs_and_spans" (fromMaybe (addUTCTime (-86400) now) fromD) (fromMaybe now toD)
 
   freeTierExceeded <-
-    dbtToEff $
-      if project.paymentPlan == "Free"
+    dbtToEff
+      $ if project.paymentPlan == "Free"
         then (> 10000) <$> RequestDumps.getLastSevenDaysTotalRequest pid
         else pure False
 
@@ -327,8 +327,8 @@ apiLogJson pid queryM queryASTM cols' cursorM' sinceM fromM toM layoutM sourceM 
           serviceNames = V.map (\v -> lookupVecTextByKey v colIdxMap "span_name") finalVecs
           colors = getServiceColors (V.catMaybes serviceNames)
 
-      addRespHeaders $
-        AE.object
+      addRespHeaders
+        $ AE.object
           [ "logsData" AE..= finalVecs
           , "serviceColors" AE..= colors
           , "nextUrl" AE..= nextLogsURL
@@ -409,8 +409,8 @@ logQueryBox_ pid currentRange source targetSpan queryAST queryLibRecent queryLib
 
 queryLibrary_ :: Projects.ProjectId -> V.Vector Projects.QueryLibItem -> V.Vector Projects.QueryLibItem -> Html ()
 queryLibrary_ pid queryLibSaved queryLibRecent = div_ [class_ "dropdown dropdown-hover dropdown-bottom dropdown-start", id_ "queryLibraryParentEl"] do
-  div_ [class_ "cursor-pointer relative  bg-fillWeak  text-textWeak rounded-lg border border-strokeWeaker h-full flex gap-2 items-center px-2", tabindex_ "0", role_ "button"] $
-    (toHtml "Presets" >> faSprite_ "chevron-down" "regular" "w-3 h-3")
+  div_ [class_ "cursor-pointer relative  bg-fillWeak  text-textWeak rounded-lg border border-strokeWeaker h-full flex gap-2 items-center px-2", tabindex_ "0", role_ "button"]
+    $ (toHtml "Presets" >> faSprite_ "chevron-down" "regular" "w-3 h-3")
   div_ [class_ "dropdown-content z-20"] $ div_ [class_ "tabs tabs-box tabs-md tabs-outline items-center bg-fillWeak p-0 h-full", role_ "tablist", id_ "queryLibraryTabListEl"] do
     tabPanel_ "Saved" (queryLibraryContent_ "Saved" queryLibSaved)
     tabPanel_ "Recent" (queryLibraryContent_ "Recent" queryLibRecent)
@@ -478,9 +478,9 @@ queryLibItem_ qli =
           li_ "Send query to alert"
           li_ "Send query to a dashboard"
     strong_ $ whenJust qli.title \title -> (toHtml title)
-    pre_ $
-      code_ [class_ "language-js bg-transparent! queryText whitespace-pre-wrap break-words"] $
-        toHtml qli.queryText
+    pre_
+      $ code_ [class_ "language-js bg-transparent! queryText whitespace-pre-wrap break-words"]
+      $ toHtml qli.queryText
     div_ [class_ "gap-3 flex"] $ time_ [datetime_ "", term "data-tippy-content" "created on"] (toHtml $ displayTimestamp $ formatUTC qli.createdAt) >> when qli.byMe " by me"
 
 
@@ -573,9 +573,9 @@ apiLogsPage page = do
       ]
       do
         div_ [class_ "relative ml-auto w-full", style_ ""] do
-          div_ [class_ "flex justify-end  w-full p-4 "] $
-            button_ [[__|on click add .hidden to #expand-log-modal|]] $
-              faSprite_ "xmark" "regular" "h-8"
+          div_ [class_ "flex justify-end  w-full p-4 "]
+            $ button_ [[__|on click add .hidden to #expand-log-modal|]]
+            $ faSprite_ "xmark" "regular" "h-8"
           form_
             [ hxPost_ $ "/p/" <> page.pid.toText <> "/share/"
             , hxSwap_ "innerHTML"
@@ -592,8 +592,8 @@ apiLogsPage page = do
       div_ [class_ "flex flex-row gap-4 mt-3 group-has-[.toggle-chart:checked]/pg:hidden w-full", style_ "aspect-ratio: 10 / 1;"] do
         Widget.widget_ $ (def :: Widget.Widget){Widget.query = Just "timechart count(*)", Widget.unit = Just "rows", Widget.title = Just "All traces", Widget.hideLegend = Just True, Widget._projectId = Just page.pid, Widget.standalone = Just True, Widget.yAxis = Just (def{showOnlyMaxLabel = Just True})}
 
-        Widget.widget_ $
-          (def :: Widget.Widget)
+        Widget.widget_
+          $ (def :: Widget.Widget)
             { Widget.wType = WTTimeseriesLine
             , Widget.standalone = Just True
             , Widget.title = Just "Latency percentiles (ms)"
@@ -664,19 +664,18 @@ apiLogsPage page = do
                 div_ [hxGet_ url, hxTarget_ "#trace_expanded_view", hxSwap_ "innerHtml", hxTrigger_ "intersect one"] pass
             virtualTable page
 
-          div_ [onmousedown_ "mouseDown(event)", class_ "relative shrink-0 h-full flex items-center justify-center border-l bg-fillWeak  cursor-ew-resize overflow-visible"] do
+          div_ [onmousedown_ "mouseDown(event)", class_ "relative shrink-0 h-full flex items-center justify-center border-l  hover:border-strokeBrand-strong cursor-ew-resize overflow-visible"] do
+            div_
+              [ onmousedown_ "mouseDown(event)"
+              , class_ "absolute inset-y-0 left-0 w-4 -ml-3 cursor-ew-resize h-full z-10"
+              ]
+              ""
             div_
               [ onmousedown_ "mouseDown(event)"
               , id_ "resizer"
-              , class_ $ "absolute left-1/2 top-1/2 z-999 -translate-x-1/2  px-1 py-1 -translate-y-1/2 w-max bg-slate-50 rounded-sm border border-strokeBrand-weak grid grid-cols-2 gap-1 " <> if isJust page.detailsWidth then "" else "hidden"
+              , class_ $ "absolute left-1/2 top-1/2 z-50 -translate-x-1/2 leading-none py-1 -translate-y-1/2 bg-slate-50 rounded-sm border border-strokeBrand-weak hover:border-strokeBrand-strong text-iconNeutral hover:text-iconBrand" <> if isJust page.detailsWidth then "" else "hidden"
               ]
-              do
-                div_ [class_ "bg-iconNeutral h-[3px] w-[3px] rounded-full"] ""
-                div_ [class_ "bg-iconNeutral h-[3px] w-[3px] rounded-full"] ""
-                div_ [class_ "bg-iconNeutral h-[3px] w-[3px] rounded-full"] ""
-                div_ [class_ "bg-iconNeutral h-[3px] w-[3px] rounded-full"] ""
-                div_ [class_ "bg-iconNeutral h-[3px] w-[3px] rounded-full"] ""
-                div_ [class_ "bg-iconNeutral h-[3px] w-[3px] rounded-full"] ""
+              $ faSprite_ "grip-dots-vertical" "regular" "w-4 h-5"
 
           div_ [class_ "overflow-y-auto grow-1 overflow-x-hidden h-full c-scroll transition-all duration-100", style_ "width:0px", id_ "log_details_container"] do
             span_ [class_ "htmx-indicator query-indicator absolute loading left-1/2 -translate-x-1/2 loading-dots absoute z-10 top-10", id_ "details_indicator"] ""

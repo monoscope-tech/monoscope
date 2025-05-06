@@ -124,55 +124,6 @@ packages:
   original:
     hackage: wai-log-0.4.0.1@sha256:0b4b57ae218cf5ec59523c8cf405802a588d4e299436b5a663a6001ea34bb7e6,1583
 - completed:
-    hackage: hs-opentelemetry-sdk-0.1.0.0@sha256:2642851866f11a494c99f15202d4bd9e75d4a5e1a7f3f172742a0676a33c664f,4059
-    pantry-tree:
-      sha256: c0868a6eb3d6add84df1ad32cdb0ebdbebe41205897e16ae8b30e96f205a8fe0
-      size: 1934
-  original:
-    hackage: hs-opentelemetry-sdk-0.1.0.0@sha256:2642851866f11a494c99f15202d4bd9e75d4a5e1a7f3f172742a0676a33c664f,4059
-- completed:
-    hackage: hs-opentelemetry-api-0.2.0.0@sha256:bbdbe7e212e99f17a7e68d09b94c1a6613e50ce88b3cb1b68979bbb0221291ae,4051
-    pantry-tree:
-      sha256: fcb11b19fa633afb8c34e002e6b8e8927d20fc2332d4234cc10a0b6e3dbe6022
-      size: 4396
-  original:
-    hackage: hs-opentelemetry-api-0.2.0.0@sha256:bbdbe7e212e99f17a7e68d09b94c1a6613e50ce88b3cb1b68979bbb0221291ae,4051
-- completed:
-    hackage: hs-opentelemetry-exporter-otlp-0.1.0.0@sha256:4c908a7e2e5053879687b7a7ee6e40a8eb22868e1a0808cd0cfd6ac9905057b8,1526
-    pantry-tree:
-      sha256: dd22c915f65b1ca76c6130cfb39ce666376d4813c267e12dd59be61a914bb264
-      size: 511
-  original:
-    hackage: hs-opentelemetry-exporter-otlp-0.1.0.0@sha256:4c908a7e2e5053879687b7a7ee6e40a8eb22868e1a0808cd0cfd6ac9905057b8,1526
-- completed:
-    hackage: hs-opentelemetry-propagator-b3-0.0.1.2@sha256:8815dd74f27a908b5be0729cc09a3bf9f3049481c982252bbd6c3f6b908ecfcd,1340
-    pantry-tree:
-      sha256: fc71f8b7dc25625af6b81c1b3c1c5d808b682e2a7c1daf8e23f2af45ab9dc123
-      size: 431
-  original:
-    hackage: hs-opentelemetry-propagator-b3-0.0.1.2@sha256:8815dd74f27a908b5be0729cc09a3bf9f3049481c982252bbd6c3f6b908ecfcd,1340
-- completed:
-    hackage: hs-opentelemetry-propagator-datadog-0.0.1.0@sha256:c85de95e3c33b3ffcf980f560166e960cab0888e0741315f487288b3653c007c,2950
-    pantry-tree:
-      sha256: 04c10d8901e506c8c7662c8ce549a152118303fd2d0354a887bede4e73f0a8ee
-      size: 730
-  original:
-    hackage: hs-opentelemetry-propagator-datadog-0.0.1.0@sha256:c85de95e3c33b3ffcf980f560166e960cab0888e0741315f487288b3653c007c,2950
-- completed:
-    hackage: hs-opentelemetry-propagator-w3c-0.0.1.4@sha256:251428754454fbaf71d9b6acbbea473014b1ab50bdcda8bc8fe1532e63193374,1382
-    pantry-tree:
-      sha256: 5f7ff3fd37b7f720064193f02c84e8af6b554f8a7a2b7702a4bcd34fe576f721
-      size: 445
-  original:
-    hackage: hs-opentelemetry-propagator-w3c-0.0.1.4@sha256:251428754454fbaf71d9b6acbbea473014b1ab50bdcda8bc8fe1532e63193374,1382
-- completed:
-    hackage: hs-opentelemetry-otlp-0.1.0.0@sha256:5cd096b15f26f51ffae4c18f6a26794daef801acc9e13033db8b21a7606336d4,2533
-    pantry-tree:
-      sha256: 618a513764a7ae9995fc4f8b8ee5cec731a8759ac8c5df8e9553171abd3ff97d
-      size: 2585
-  original:
-    hackage: hs-opentelemetry-otlp-0.1.0.0@sha256:5cd096b15f26f51ffae4c18f6a26794daef801acc9e13033db8b21a7606336d4,2533
-- completed:
     hackage: thread-utils-context-0.3.0.4@sha256:e763da1c6cab3b6d378fb670ca74aa9bf03c9b61b6fcf7628c56363fb0e3e71e,1671
     pantry-tree:
       sha256: 57d909a991b5e0b4c7a28121cb52ee9c2db6c09e0419b89af6c82fae52be88d4
@@ -187,26 +138,12 @@ packages:
   original:
     hackage: thread-utils-finalizers-0.1.1.0@sha256:24944b71d9f1d01695a5908b4a3b44838fab870883114a323336d537995e0a5b,1381
 - completed:
-    hackage: hs-opentelemetry-instrumentation-postgresql-simple-0.2.0.0@sha256:f4ba4f7901b3c806562c0fa69d17450a332627fdd03e64de8109462a90b3aa35,1343
-    pantry-tree:
-      sha256: 89fc8d7f02d112e5d39238d9c1d4d7c7175a77fd6637288560a3670e200974ed
-      size: 388
-  original:
-    hackage: hs-opentelemetry-instrumentation-postgresql-simple-0.2.0.0
-- completed:
     hackage: hs-opentelemetry-instrumentation-auto-0.1.0.2@sha256:98911aa698825c6cbb966a52dff8a76e818cb39111b00ab62e8684fdacf5d0c0,2265
     pantry-tree:
       sha256: ea8566a8bd04d089abe2f31c4816fd5c670603d032e117afcd12417710cc3350
       size: 803
   original:
     hackage: hs-opentelemetry-instrumentation-auto-0.1.0.2
-- completed:
-    hackage: hs-opentelemetry-instrumentation-wai-0.1.1.0@sha256:d97b4cb3870217e64e95da3f51db814eca62eb57484ee0a6f747366da5940bc2,1371
-    pantry-tree:
-      sha256: 23bbd4e58ba48b0ec3541a494d02e08e6b934d7173523be8aab04c6b2c7bb98b
-      size: 360
-  original:
-    hackage: hs-opentelemetry-instrumentation-wai-0.1.1.0@sha256:d97b4cb3870217e64e95da3f51db814eca62eb57484ee0a6f747366da5940bc2,1371
 - completed:
     hackage: lucid-aria-0.1.0.1@sha256:d4f37b67a28f2e38eb3cf9fca4cbed5dcc6bf335c880113c618ca50fa933cd40,920
     pantry-tree:
@@ -263,6 +200,136 @@ packages:
       size: 1109
   original:
     hackage: snappy-c-0.1.1@sha256:b113aa1c7c095325cc218e8fcc4ad05e719f5ed0d2febb910d42e21387759ac9,3993
+- completed:
+    commit: ee8a6dad7db306eb67748ddcd77df4974ad8259e
+    git: https://github.com/iand675/hs-opentelemetry
+    name: hs-opentelemetry-api
+    pantry-tree:
+      sha256: 73c3fea9a055b9e628cd41ff0d3f2db8996ea5737c8f8f204bcbe959202033dc
+      size: 4732
+    subdir: api
+    version: 0.2.0.0
+  original:
+    commit: ee8a6dad7db306eb67748ddcd77df4974ad8259e
+    git: https://github.com/iand675/hs-opentelemetry
+    subdir: api
+- completed:
+    commit: ee8a6dad7db306eb67748ddcd77df4974ad8259e
+    git: https://github.com/iand675/hs-opentelemetry
+    name: hs-opentelemetry-sdk
+    pantry-tree:
+      sha256: b448c620fb76dab859f0e9c35658ee89ad613fcd4d2c23193e0d8f653c5e07bb
+      size: 2036
+    subdir: sdk
+    version: 0.1.0.0
+  original:
+    commit: ee8a6dad7db306eb67748ddcd77df4974ad8259e
+    git: https://github.com/iand675/hs-opentelemetry
+    subdir: sdk
+- completed:
+    commit: ee8a6dad7db306eb67748ddcd77df4974ad8259e
+    git: https://github.com/iand675/hs-opentelemetry
+    name: hs-opentelemetry-otlp
+    pantry-tree:
+      sha256: 67fe2435171ea289a2d9f14565a8ca723279ce503f54105dc0b59e2f37a797bc
+      size: 2857
+    subdir: otlp
+    version: 0.1.0.0
+  original:
+    commit: ee8a6dad7db306eb67748ddcd77df4974ad8259e
+    git: https://github.com/iand675/hs-opentelemetry
+    subdir: otlp
+- completed:
+    commit: ee8a6dad7db306eb67748ddcd77df4974ad8259e
+    git: https://github.com/iand675/hs-opentelemetry
+    name: hs-opentelemetry-exporter-otlp
+    pantry-tree:
+      sha256: db680557a0f51e859b40cea5adc138d98317740b35d50d33fd5f978832551ed0
+      size: 664
+    subdir: exporters/otlp
+    version: 0.1.0.0
+  original:
+    commit: ee8a6dad7db306eb67748ddcd77df4974ad8259e
+    git: https://github.com/iand675/hs-opentelemetry
+    subdir: exporters/otlp
+- completed:
+    commit: ee8a6dad7db306eb67748ddcd77df4974ad8259e
+    git: https://github.com/iand675/hs-opentelemetry
+    name: hs-opentelemetry-propagator-w3c
+    pantry-tree:
+      sha256: a70d9546f518c8374b0382b605b49d49f9f12caaaa6ada3dea373f85c5399110
+      size: 598
+    subdir: propagators/w3c
+    version: 0.0.1.4
+  original:
+    commit: ee8a6dad7db306eb67748ddcd77df4974ad8259e
+    git: https://github.com/iand675/hs-opentelemetry
+    subdir: propagators/w3c
+- completed:
+    commit: ee8a6dad7db306eb67748ddcd77df4974ad8259e
+    git: https://github.com/iand675/hs-opentelemetry
+    name: hs-opentelemetry-instrumentation-postgresql-simple
+    pantry-tree:
+      sha256: f94cb95a805aafceceeb6b6a7b0b2546901e640d1a91e3a80ea19583164818a0
+      size: 541
+    subdir: instrumentation/postgresql-simple
+    version: 0.2.0.0
+  original:
+    commit: ee8a6dad7db306eb67748ddcd77df4974ad8259e
+    git: https://github.com/iand675/hs-opentelemetry
+    subdir: instrumentation/postgresql-simple
+- completed:
+    commit: ee8a6dad7db306eb67748ddcd77df4974ad8259e
+    git: https://github.com/iand675/hs-opentelemetry
+    name: hs-opentelemetry-instrumentation-wai
+    pantry-tree:
+      sha256: b385b9f17f79b15d88387ada739ade57a300a03cfeda5b2099dace7ab7e33a45
+      size: 513
+    subdir: instrumentation/wai
+    version: 0.1.1.0
+  original:
+    commit: ee8a6dad7db306eb67748ddcd77df4974ad8259e
+    git: https://github.com/iand675/hs-opentelemetry
+    subdir: instrumentation/wai
+- completed:
+    commit: ee8a6dad7db306eb67748ddcd77df4974ad8259e
+    git: https://github.com/iand675/hs-opentelemetry
+    name: hs-opentelemetry-utils-exceptions
+    pantry-tree:
+      sha256: 3270bfb7a102a7ad6b0e455acb11313fdd83f24ba8d648bfbb4b9a974ce281ae
+      size: 458
+    subdir: utils/exceptions
+    version: 0.2.0.1
+  original:
+    commit: ee8a6dad7db306eb67748ddcd77df4974ad8259e
+    git: https://github.com/iand675/hs-opentelemetry
+    subdir: utils/exceptions
+- completed:
+    commit: ee8a6dad7db306eb67748ddcd77df4974ad8259e
+    git: https://github.com/iand675/hs-opentelemetry
+    name: hs-opentelemetry-propagator-datadog
+    pantry-tree:
+      sha256: 88e09ab9b9787f9da859fa3766a9724916b3177155842398b55fe98e93ef6670
+      size: 781
+    subdir: propagators/datadog
+    version: 0.0.1.0
+  original:
+    commit: ee8a6dad7db306eb67748ddcd77df4974ad8259e
+    git: https://github.com/iand675/hs-opentelemetry
+    subdir: propagators/datadog
+- completed:
+    commit: ee8a6dad7db306eb67748ddcd77df4974ad8259e
+    git: https://github.com/iand675/hs-opentelemetry
+    name: hs-opentelemetry-propagator-b3
+    pantry-tree:
+      sha256: 6e550839bc741f497d4e47b8432c3604a42c6e397ecc79e96e6c219cc9df3586
+      size: 584
+    subdir: propagators/b3
+    version: 0.0.1.2
+  original:
+    commit: ee8a6dad7db306eb67748ddcd77df4974ad8259e
+    git: https://github.com/iand675/hs-opentelemetry
+    subdir: propagators/b3
 - completed:
     commit: 815c852b046612256fc0f5f7e8585ec4e55dd9b7
     git: https://github.com/google/proto-lens
@@ -342,17 +409,17 @@ packages:
     git: https://github.com/Kleidukos/pg-transact-effectful
     subdir: .
 - completed:
-    commit: a159d7a17913725a0cb2a2251fa0b812acd3d160
-    git: https://github.com/saurabhnanda/odd-jobs.git
+    commit: 7a0eee112cb582746f14cfe6a527a86ef1c4c5e0
+    git: https://github.com/tonyalaribe/odd-jobs.git
     name: odd-jobs
     pantry-tree:
-      sha256: 15e8b0597759e4b2257c0d0dc56e635b038726e38d18d96d1c60343cf6280fc3
+      sha256: 40c9ac8d3d829c840dfa1d2e0ff35e234caeae5e7b4ea0eab6f906dbec6457be
       size: 3207
     subdir: .
     version: 0.2.3
   original:
-    commit: a159d7a17913725a0cb2a2251fa0b812acd3d160
-    git: https://github.com/saurabhnanda/odd-jobs.git
+    commit: 7a0eee112cb582746f14cfe6a527a86ef1c4c5e0
+    git: https://github.com/tonyalaribe/odd-jobs.git
     subdir: .
 - completed:
     commit: 4d374aca55bb5392e3b91ae47d6ca5625ffc59b6
@@ -473,7 +540,7 @@ packages:
     subdir: .
 snapshots:
 - completed:
-    sha256: 2427658057ae4adc3fa0d2d22cc4c8b3f6ad0395de2eaace7b0532c92caacb00
-    size: 681591
-    url: https://raw.githubusercontent.com/commercialhaskell/stackage-snapshots/master/nightly/2025/4/20.yaml
-  original: nightly-2025-04-20
+    sha256: edd939386754d61f20420f5abd03d2fba934910a5fae6c0da07376033ee717fd
+    size: 677729
+    url: https://raw.githubusercontent.com/commercialhaskell/stackage-snapshots/master/nightly/2025/5/6.yaml
+  original: nightly-2025-05-06
