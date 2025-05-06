@@ -664,19 +664,15 @@ apiLogsPage page = do
                 div_ [hxGet_ url, hxTarget_ "#trace_expanded_view", hxSwap_ "innerHtml", hxTrigger_ "intersect one"] pass
             virtualTable page
 
-          div_ [onmousedown_ "mouseDown(event)", class_ "relative shrink-0 h-full flex items-center justify-center border-l bg-fillWeak  cursor-ew-resize overflow-visible"] do
+          div_ [onmousedown_ "mouseDown(event)", class_ "relative shrink-0 h-full flex items-center justify-center border-l  hover:border-strokeBrand-strong cursor-ew-resize overflow-visible"] do
+            div_
+              [ onmousedown_ "mouseDown(event)"
+              , class_ "absolute inset-y-0 left-0 w-4 -ml-3 cursor-ew-resize h-full z-10"] ""
             div_
               [ onmousedown_ "mouseDown(event)"
               , id_ "resizer"
-              , class_ $ "absolute left-1/2 top-1/2 z-999 -translate-x-1/2  px-1 py-1 -translate-y-1/2 w-max bg-slate-50 rounded-sm border border-strokeBrand-weak grid grid-cols-2 gap-1 " <> if isJust page.detailsWidth then "" else "hidden"
-              ]
-              do
-                div_ [class_ "bg-iconNeutral h-[3px] w-[3px] rounded-full"] ""
-                div_ [class_ "bg-iconNeutral h-[3px] w-[3px] rounded-full"] ""
-                div_ [class_ "bg-iconNeutral h-[3px] w-[3px] rounded-full"] ""
-                div_ [class_ "bg-iconNeutral h-[3px] w-[3px] rounded-full"] ""
-                div_ [class_ "bg-iconNeutral h-[3px] w-[3px] rounded-full"] ""
-                div_ [class_ "bg-iconNeutral h-[3px] w-[3px] rounded-full"] ""
+              , class_ $ "absolute left-1/2 top-1/2 z-50 -translate-x-1/2 leading-none py-1 -translate-y-1/2 bg-slate-50 rounded-sm border border-strokeBrand-weak text-iconNeutral " <> if isJust page.detailsWidth then "" else "hidden"
+              ] $ faSprite_ "grip-dots-vertical" "regular" "w-5 h-5"
 
           div_ [class_ "overflow-y-auto grow-1 overflow-x-hidden h-full c-scroll transition-all duration-100", style_ "width:0px", id_ "log_details_container"] do
             span_ [class_ "htmx-indicator query-indicator absolute loading left-1/2 -translate-x-1/2 loading-dots absoute z-10 top-10", id_ "details_indicator"] ""
