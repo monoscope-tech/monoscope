@@ -170,9 +170,9 @@ expandedSpanItem pid sp aptSp leftM rightM = do
         div_ [class_ "hidden a-tab-content", id_ "m-raw-content"] $ do
           jsonValueToHtmlTree (selectiveOtelLogsJson sp) Nothing
         div_ [class_ $ "a-tab-content " <> if isHttp then "hidden" else "", id_ "att-content"] $ do
-          jsonValueToHtmlTree (fromMaybe (AE.object []) (fmap AE.Object $ fmap KEM.fromMapText sp.attributes)) Nothing
+          jsonValueToHtmlTree (fromMaybe (AE.object []) (fmap AE.Object $ fmap KEM.fromMapText sp.attributes)) (Just "attributes")
         div_ [class_ "hidden a-tab-content", id_ "meta-content"] $ do
-          jsonValueToHtmlTree (fromMaybe (AE.object []) (fmap AE.Object $ fmap KEM.fromMapText sp.resource)) Nothing
+          jsonValueToHtmlTree (fromMaybe (AE.object []) (fmap AE.Object $ fmap KEM.fromMapText sp.resource)) (Just "resource")
         div_ [class_ "hidden a-tab-content", id_ "errors-content"] $ do
           renderErrors spanErrors
         div_ [class_ "hidden a-tab-content", id_ "logs-content"] $ do
@@ -268,8 +268,8 @@ spanBadge val key = do
 
 selectiveReqToJson :: RequestMessage -> AE.Value
 selectiveReqToJson req =
-  AE.object
-    $ concat @[]
+  AE.object $
+    concat @[]
       [ ["created_at" AE..= req.timestamp]
       , ["errors" AE..= fromMaybe [] req.errors]
       , ["host" AE..= req.host]
@@ -292,8 +292,8 @@ selectiveReqToJson req =
 
 selectiveOtelLogsJson :: Telemetry.OtelLogsAndSpans -> AE.Value
 selectiveOtelLogsJson sp =
-  AE.object
-    $ concat @[]
+  AE.object $
+    concat @[]
       [ ["start_time" AE..= sp.start_time]
       , ["end_time" AE..= sp.end_time]
       , ["resource" AE..= sp.resource]
