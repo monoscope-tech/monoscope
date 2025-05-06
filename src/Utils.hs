@@ -308,7 +308,7 @@ jsonValueToHtmlTree val pathM = do
       let fullFieldPath' = fromMaybe fullFieldPath $ T.stripPrefix ".." fullFieldPath
       div_
         [ class_ "relative log-item-field-parent"
-        , term "data-field-path" $ replaceNumbers fullFieldPath'
+        , term "data-field-path" $ replaceNumbers $ if (isJust pathM) then T.replace ".." "." fullFieldPath' else fullFieldPath'
         , term "data-field-value" $ unwrapJsonPrimValue False value
         ]
         $ a_
