@@ -6,6 +6,7 @@ module Models.Projects.ProjectApiKeys (
   ProjectApiKeyId (..),
   encryptAPIKey,
   getProjectIdByApiKey,
+  activateApiKey,
   decryptAPIKey,
   newProjectApiKeys,
   insertProjectApiKey,
@@ -94,6 +95,14 @@ revokeApiKey kid = do
   where
     q =
       [sql| UPDATE projects.project_api_keys SET deleted_at=NOW(), active=false where id=?;|]
+
+
+activateApiKey :: ProjectApiKeyId -> DBT IO Int64
+activateApiKey kid = do
+  execute Update q kid
+  where
+    q =
+      [sql| UPDATE projects.project_api_keys SET deleted_at=null, active=true where id=?;|]
 
 
 countProjectApiKeysByProjectId :: Projects.ProjectId -> DBT IO Int

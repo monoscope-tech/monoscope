@@ -382,14 +382,16 @@
   </symbol>
   <symbol id="p-chevron-down" width="16" height="16" viewBox="0 0 16 16" fill="none">
     <g id="chevron-right">
-      <path id="Vector" d="M4 6L8 10L12 6" stroke="#000D4D" stroke-opacity="0.45" stroke-width="2"
+      <path id="Vector" d="M4 6L8 10L12 6" stroke="currentColor" stroke-opacity="0.45"
+        stroke-width="2"
         stroke-linecap="round" stroke-linejoin="round" />
     </g>
   </symbol>
 
   <symbol id="p-chevron-up" width="16" height="16" viewBox="0 0 16 16" fill="none">
     <g id="chevron-left">
-      <path id="Vector" d="M4 10L8 6L12 10" stroke="#000D4D" stroke-opacity="0.45" stroke-width="2"
+      <path id="Vector" d="M4 10L8 6L12 10" stroke="currentColor" stroke-opacity="0.45"
+        stroke-width="2"
         stroke-linecap="round" stroke-linejoin="round" />
     </g>
   </symbol>
@@ -489,7 +491,7 @@
     <g id="Loader" clip-path="url(#clip0_6882_4605)">
       <path id="Icon"
         d="M7.99967 1.3335V4.00016M7.99967 12.0002V14.6668M3.28634 3.28682L5.173 5.17349M10.8263 10.8268L12.713 12.7135M1.33301 8.00016H3.99967M11.9997 8.00016H14.6663M3.28634 12.7135L5.173 10.8268M10.8263 5.17349L12.713 3.28682"
-        stroke="#000D4D" stroke-opacity="0.45" stroke-width="1.8" stroke-linecap="round"
+        stroke="currentColor" stroke-opacity="0.45" stroke-width="1.8" stroke-linecap="round"
         stroke-linejoin="round" />
     </g>
     <defs>
@@ -503,7 +505,7 @@
     <g clip-path="url(#clip0_8255_26416)">
       <path
         d="M8.75 6.25V7.91667C8.75 8.13768 8.6622 8.34964 8.50592 8.50592C8.34964 8.6622 8.13768 8.75 7.91667 8.75H2.08333C1.86232 8.75 1.65036 8.6622 1.49408 8.50592C1.3378 8.34964 1.25 8.13768 1.25 7.91667V6.25M2.91667 4.16667L5 6.25M5 6.25L7.08333 4.16667M5 6.25V1.25"
-        stroke="#000D4D" stroke-opacity="0.45" stroke-width="1.33" stroke-linecap="round"
+        stroke="currentColor" stroke-opacity="0.45" stroke-width="1.33" stroke-linecap="round"
         stroke-linejoin="round" />
     </g>
   </symbol>
@@ -717,14 +719,43 @@
   <symbol id="circle-xmark" viewBox="0 0 32 32" fill="none">
     <g id="Frame">
       <g id="Group">
-        <path id="Vector" d="M21 11L11 21" stroke="#000626" stroke-opacity="0.9" stroke-width="2"
+        <path id="Vector" d="M21 11L11 21" stroke="currentColor" stroke-opacity="0.9"
+          stroke-width="2"
           stroke-miterlimit="10" stroke-linecap="square" />
-        <path id="Vector_2" d="M21 21L11 11" stroke="#000626" stroke-opacity="0.9" stroke-width="2"
+        <path id="Vector_2" d="M21 21L11 11" stroke="currentColor" stroke-opacity="0.9"
+          stroke-width="2"
           stroke-miterlimit="10" stroke-linecap="square" />
         <path id="Vector_3"
           d="M16 30C23.732 30 30 23.732 30 16C30 8.26801 23.732 2 16 2C8.26801 2 2 8.26801 2 16C2 23.732 8.26801 30 16 30Z"
-          stroke="#000626" stroke-opacity="0.9" stroke-width="2" stroke-miterlimit="10"
+          stroke="currentColor" stroke-opacity="0.9" stroke-width="2" stroke-miterlimit="10"
           stroke-linecap="square" />
+      </g>
+    </g>
+  </symbol>
+
+
+  <symbol id="clipboard-copy" viewBox="0 0 20 20" fill="none"
+    xmlns="http://www.w3.org/2000/svg">
+    <g id="clipboard-copy">
+      <path id="Vector"
+        d="M6.66671 3.33268H5.00004C4.55801 3.33268 4.13409 3.50828 3.82153 3.82084C3.50897 4.1334 3.33337 4.55732 3.33337 4.99935V16.666C3.33337 17.108 3.50897 17.532 3.82153 17.8445C4.13409 18.1571 4.55801 18.3327 5.00004 18.3327H15C15.4421 18.3327 15.866 18.1571 16.1786 17.8445C16.4911 17.532 16.6667 17.108 16.6667 16.666V14.9993M13.3334 3.33268H15C15.4421 3.33268 15.866 3.50828 16.1786 3.82084C16.4911 4.1334 16.6667 4.55732 16.6667 4.99935V8.33268M17.5 11.666H9.16671M9.16671 11.666L12.5 8.33268M9.16671 11.666L12.5 14.9993M7.50004 1.66602H12.5C12.9603 1.66602 13.3334 2.03911 13.3334 2.49935V4.16602C13.3334 4.62625 12.9603 4.99935 12.5 4.99935H7.50004C7.0398 4.99935 6.66671 4.62625 6.66671 4.16602V2.49935C6.66671 2.03911 7.0398 1.66602 7.50004 1.66602Z"
+        stroke="currentColor" stroke-opacity="0.45" stroke-width="2" stroke-linecap="round"
+        stroke-linejoin="round" />
+    </g>
+  </symbol>
+
+
+  <symbol id="eye" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <g>
+      <g id="Vector">
+        <path
+          d="M1.71835 10.2908C1.6489 10.1037 1.6489 9.89788 1.71835 9.71079C2.39476 8.07067 3.54294 6.66832 5.01732 5.68154C6.4917 4.69475 8.22588 4.16797 10 4.16797C11.7741 4.16797 13.5083 4.69475 14.9827 5.68154C16.4571 6.66832 17.6053 8.07067 18.2817 9.71079C18.3511 9.89788 18.3511 10.1037 18.2817 10.2908C17.6053 11.9309 16.4571 13.3333 14.9827 14.32C13.5083 15.3068 11.7741 15.8336 10 15.8336C8.22588 15.8336 6.4917 15.3068 5.01732 14.32C3.54294 13.3333 2.39476 11.9309 1.71835 10.2908Z"
+          stroke="currentColor" stroke-opacity="0.45" stroke-width="2" stroke-linecap="round"
+          stroke-linejoin="round" />
+        <path
+          d="M10 12.5007C11.3807 12.5007 12.5 11.3814 12.5 10.0007C12.5 8.61998 11.3807 7.50069 10 7.50069C8.61929 7.50069 7.5 8.61998 7.5 10.0007C7.5 11.3814 8.61929 12.5007 10 12.5007Z"
+          stroke="currentColor" stroke-opacity="0.45" stroke-width="2" stroke-linecap="round"
+          stroke-linejoin="round" />
       </g>
     </g>
   </symbol>

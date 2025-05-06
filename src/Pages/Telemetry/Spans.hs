@@ -153,18 +153,18 @@ expandedSpanItem pid sp aptSp leftM rightM = do
             Just ("HTTP", _, _, _) -> True
             _ -> False
       div_ [class_ "flex", [__|on click halt|]] $ do
-        when isHttp $ button_ [class_ "a-tab border-b-2 border-b-slate-200 px-4 py-1.5 t-tab-active", onclick_ "navigatable(this, '#request-content', '#span-tabs-container', 't-tab-active','.http')"] "Request"
-        button_ [class_ $ "a-tab border-b-2 border-b-slate-200 px-4 py-1.5 " <> if isHttp then "" else "t-tab-active", onclick_ "navigatable(this, '#att-content', '#span-tabs-container', 't-tab-active','.http')"] "Attributes"
-        button_ [class_ "a-tab border-b-2 border-b-slate-200 px-4 py-1.5 ", onclick_ "navigatable(this, '#meta-content', '#span-tabs-container', 't-tab-active', '.http')"] "Process"
+        when isHttp $ button_ [class_ "a-tab border-b-2 border-b-strokeWeak px-4 py-1.5 t-tab-active", onclick_ "navigatable(this, '#request-content', '#span-tabs-container', 't-tab-active','.http')"] "Request"
+        button_ [class_ $ "a-tab border-b-2 border-b-strokeWeak px-4 py-1.5 " <> if isHttp then "" else "t-tab-active", onclick_ "navigatable(this, '#att-content', '#span-tabs-container', 't-tab-active','.http')"] "Attributes"
+        button_ [class_ "a-tab border-b-2 border-b-strokeWeak px-4 py-1.5 ", onclick_ "navigatable(this, '#meta-content', '#span-tabs-container', 't-tab-active', '.http')"] "Process"
         unless (null spanErrors) $ do
-          button_ [class_ "a-tab border-b-2 border-b-slate-200 flex items-center gap-1 nowrap px-4 py-1.5 ", onclick_ "navigatable(this, '#errors-content', '#span-tabs-container', 't-tab-active', '.http')"] do
+          button_ [class_ "a-tab border-b-2 border-b-strokeWeak flex items-center gap-1 nowrap px-4 py-1.5 ", onclick_ "navigatable(this, '#errors-content', '#span-tabs-container', 't-tab-active', '.http')"] do
             "Errors"
             div_ [class_ "badge badge-error badge-sm"] $ show $ length spanErrors
-        button_ [class_ "a-tab border-b-2 border-b-slate-200 flex items-center gap-1 px-4 py-1.5 ", onclick_ "navigatable(this, '#logs-content', '#span-tabs-container', 't-tab-active','.http')"] $ do
+        button_ [class_ "a-tab border-b-2 border-b-strokeWeak flex items-center gap-1 px-4 py-1.5 ", onclick_ "navigatable(this, '#logs-content', '#span-tabs-container', 't-tab-active','.http')"] $ do
           "Logs"
           div_ [class_ "badge badge-ghost badge-sm"] $ show $ numberOfEvents $ fromMaybe AE.Null sp.events
-        button_ [class_ "a-tab border-b-2 whitespace-nowrap border-b-slate-200 px-4 py-1.5", onclick_ "navigatable(this, '#m-raw-content', '#span-tabs-container', 't-tab-active','.http')"] "Raw data"
-        div_ [class_ "w-full border-b-2 border-b-slate-200"] pass
+        button_ [class_ "a-tab border-b-2 whitespace-nowrap border-b-strokeWeak px-4 py-1.5", onclick_ "navigatable(this, '#m-raw-content', '#span-tabs-container', 't-tab-active','.http')"] "Raw data"
+        div_ [class_ "w-full border-b-2 border-b-strokeWeak"] pass
 
       div_ [class_ "grid my-4 text-slate-600 font"] $ do
         div_ [class_ "hidden a-tab-content", id_ "m-raw-content"] $ do

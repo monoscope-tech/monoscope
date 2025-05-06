@@ -140,6 +140,7 @@ data CookieProtectedRoutes mode = CookieProtectedRoutes
   , traces :: mode :- "p" :> ProjectId :> TelemetryRoutes.Routes
   , apiGet :: mode :- "p" :> ProjectId :> "apis" :> Get '[HTML] (RespHeaders Api.ApiGet)
   , apiDelete :: mode :- "p" :> ProjectId :> "apis" :> Capture "keyID" ProjectApiKeys.ProjectApiKeyId :> Delete '[HTML] (RespHeaders Api.ApiMut)
+  , apiPatch :: mode :- "p" :> ProjectId :> "apis" :> Capture "keyID" ProjectApiKeys.ProjectApiKeyId :> Patch '[HTML] (RespHeaders Api.ApiMut)
   , apiPost :: mode :- "p" :> ProjectId :> "apis" :> ReqBody '[FormUrlEncoded] Api.GenerateAPIKeyForm :> Post '[HTML] (RespHeaders Api.ApiMut)
   , slackInstallPost :: mode :- "slack" :> "link-projects" :> ReqBody '[FormUrlEncoded] SlackInstall.LinkProjectsForm :> Post '[HTML] (RespHeaders (Html ()))
   , slackUpdateWebhook :: mode :- "p" :> ProjectId :> "slack" :> "webhook" :> ReqBody '[FormUrlEncoded] SlackInstall.LinkProjectsForm :> Post '[HTML] (RespHeaders (Html ()))
@@ -182,6 +183,7 @@ cookieProtectedServer =
     , traces = TelemetryRoutes.server
     , apiGet = Api.apiGetH
     , apiDelete = Api.apiDeleteH
+    , apiPatch = Api.apiActivateH
     , apiPost = Api.apiPostH
     , slackInstallPost = SlackInstall.postH
     , slackUpdateWebhook = SlackInstall.updateWebHook
