@@ -320,8 +320,8 @@ export class LogList extends LitElement {
     const indicator = document.querySelector('#details_indicator')
     indicator.classList.add('htmx-request')
     const [rdId, rdCreatedAt, source] = targetInfo
-    const url = `/p/${pid}/log_explorer/${rdId}/${rdCreatedAt}/detailed?source=spans`
-    updateUrlState('target_event', `${rdId}/${rdCreatedAt}/detailed?source=spans`)
+    const url = `/p/${pid}/log_explorer/${rdId}/${rdCreatedAt}/detailed?source=${source}`
+    updateUrlState('target_event', `${rdId}/${rdCreatedAt}/detailed?source=${source}`)
     htmx.ajax('GET', url, { target: '#log_details_container', swap: 'innerHTML', indicator: '#details_indicator' })
   }
 
