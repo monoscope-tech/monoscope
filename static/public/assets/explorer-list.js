@@ -9,6 +9,7 @@ export class LogList extends LitElement {
     expandedTraces: {},
     flipDirection: { type: Boolean },
     view: { type: String },
+    showOptions: { type: Boolean },
     shouldScrollToBottom: { type: Boolean },
   }
   constructor() {
@@ -22,6 +23,7 @@ export class LogList extends LitElement {
     this.serviceColors = {}
     this.hasMore = false
     this.expandedTraces = {}
+    this.showOptions = false
     this.spanListTree = []
     this.isLoading = false
     this.columnMaxWidthMap = {}
@@ -269,7 +271,10 @@ export class LogList extends LitElement {
   hideColumn(column) {
     this.logsColumns = this.logsColumns.filter(col => col !== column)
   }
-
+  handleColumnsChanged(e) {
+    this.logsColumns = e.detail
+    this.requestUpdate()
+  }
   updateColumnMaxWidthMap(recVecs) {
     recVecs.forEach(vec => {
       Object.entries(this.colIdxMap).forEach(([key, value]) => {
@@ -281,14 +286,14 @@ export class LogList extends LitElement {
           }
           let target = String(vec[value]).length * chPx
 
-          if (key === 'rest' && !this.columnMaxWidthMap[key]) {
+          if (key === 'summary' && !this.columnMaxWidthMap[key]) {
             target = 450 * chPx
             this.columnMaxWidthMap[key] = target
           }
           if (key === 'latency_breakdown' && !this.columnMaxWidthMap[key]) {
             target = 100
           }
-          if ((key === 'latency_breakdown' || key === 'rest') && this.columnMaxWidthMap[key]) {
+          if ((key === 'latency_breakdown' || key === 'summary') && this.columnMaxWidthMap[key]) {
             return
           } else {
             if (this.columnMaxWidthMap[key] === undefined) {
@@ -323,6 +328,16 @@ export class LogList extends LitElement {
     const url = `/p/${pid}/log_explorer/${rdId}/${rdCreatedAt}/detailed?source=${source}`
     updateUrlState('target_event', `${rdId}/${rdCreatedAt}/detailed?source=${source}`)
     htmx.ajax('GET', url, { target: '#log_details_container', swap: 'innerHTML', indicator: '#details_indicator' })
+  }
+
+  moveColumn(column, direction) {
+    const index = this.logsColumns.indexOf(column)
+    if (index === -1) return
+    const newIndex = index + direction
+    if (newIndex < 0 || newIndex >= this.logsColumns.length) return
+    this.logsColumns[index] = this.logsColumns[newIndex]
+    this.logsColumns[newIndex] = column
+    this.requestUpdate()
   }
 
   render() {
@@ -509,7 +524,7 @@ export class LogList extends LitElement {
           `
         }
         break
-      case 'rest':
+      case 'summary':
         let val = lookupVecTextByKey(dataArr, colIdxMap, key)
         const { depth, children, traceId, childErrors, hasErrors, expanded, type, id, isLastChild, siblingsArr } = rowData
         const errClas = hasErrors
@@ -617,7 +632,7 @@ export class LogList extends LitElement {
         return this.tableHeadingWrapper(column, column, 'w-[25ch] shrink-0')
       case 'service':
         return this.tableHeadingWrapper('service', column, 'w-[16ch] shrink-0')
-      case 'rest':
+      case 'summary':
         return this.tableHeadingWrapper('summary', column, 'w-[1400px] shrink-1')
       default:
         return this.tableHeadingWrapper(column, column, 'w-[16ch] shrink-0')
@@ -660,7 +675,7 @@ export class LogList extends LitElement {
             const tableDataWidth = getColumnWidth(column)
             let width = this.columnMaxWidthMap[column]
             return html`<td
-              class=${`${this.wrapLines ? 'break-all whitespace-wrap' : ''} bg-white relative ${column === 'rest' ? '' : tableDataWidth}`}
+              class=${`${this.wrapLines ? 'break-all whitespace-wrap' : ''} bg-white relative ${column === 'summary' ? '' : tableDataWidth}`}
               style=${width ? `width: ${width}px;` : ''}
             >
               ${this.logItemCol(rowData, this.source, this.colIdxMap, column, this.serviceColors, this.expandTrace, this.columnMaxWidthMap, this.wrapLines)}
@@ -705,9 +720,15 @@ export class LogList extends LitElement {
             ${title}
             <span class="ml-1 p-0.5 border border-slate-200 rounded-sm inline-flex"> ${faSprite('chevron-down', 'regular', 'w-3 h-3')} </span>
           </div>
-          <ul tabindex="0" class="dropdown-content z-1 menu p-2 shadow-sm bg-bgBase rounded-box min-w-[15rem]">
-            <li>
+          <ul tabindex="0" class="dropdown-content z-1 flex flex-col font-normal bg-white border w-64 border-strokeWeak p-2 text-sm rounded shadow">
+            <li class="px-1 py-0.5 hover:bg-fillWeak">
               <button @click=${() => this.hideColumn(column)}>Hide column</button>
+            </li>
+            <li class="px-1 py-0.5 hover:bg-fillWeak">
+              <button @click=${() => this.moveColumn(column, -1)}>Move column left</button>
+            </li>
+            <li class="px-1 py-0.5 hover:bg-fillWeak">
+              <button @click=${() => this.moveColumn(column, 1)}>Move column right</button>
             </li>
           </ul>
         </div>
@@ -776,13 +797,13 @@ export class LogList extends LitElement {
             if (this.wrapLines) {
               let width = Number(window.getComputedStyle(document.getElementById('logs_list_container_inner')).width.replace('px', ''))
               this.logsColumns.forEach(col => {
-                if (col !== 'rest' && this.columnMaxWidthMap[col]) {
+                if (col !== 'summary' && this.columnMaxWidthMap[col]) {
                   width -= this.columnMaxWidthMap[col] + 8
                 }
               })
-              this.columnMaxWidthMap['rest'] = width - 20 // margin left and right and id width
+              this.columnMaxWidthMap['summary'] = width - 20 // margin left and right and id width
             } else {
-              this.columnMaxWidthMap['rest'] = 450 * 8
+              this.columnMaxWidthMap['summary'] = 450 * 8
             }
             this.requestUpdate()
           }}
@@ -790,12 +811,175 @@ export class LogList extends LitElement {
           ${faSprite('wrap-text', 'regular', 'h-4 w-4')}
           <span class="sm:inline hidden">Wrap lines</span>
         </button>
+
+        <columns-settings .columns=${this.logsColumns} @columns-changed=${this.handleColumnsChanged}></columns-settings>
       </div>
     `
   }
 }
 
 customElements.define('log-list', LogList)
+
+class ColumnsSettings extends LitElement {
+  static properties = {
+    showModal: { type: Boolean },
+    searchTerm: { type: String },
+    showSearchResults: { type: Boolean },
+  }
+
+  constructor() {
+    super()
+    this.columns = []
+    this.showModal = false
+    this.dragIndex = null
+    this.defaultColumns = [
+      'trace_id',
+      'severity_text',
+      'parent_span_id',
+      'errors',
+      'kind',
+      'span_name',
+      'status',
+      'start_time',
+      'end_time',
+      'duration',
+      'timestamp',
+      'service',
+      'summary',
+    ]
+  }
+
+  createRenderRoot() {
+    return this
+  }
+  updated(changedProperties) {
+    if (changedProperties.has('columns')) {
+      const currentNames = new Set(this.defaultColumns)
+      const merged = [...this.defaultColumns, ...this.columns.filter(c => !currentNames.has(c))]
+      this.defaultColumns = merged
+    }
+    this._emitChanges()
+  }
+
+  render() {
+    return html`
+      <div class="relative dropdown dropdown-end">
+        <button
+          tabindex="0"
+          role="button"
+          class=${`flex items-center justify-center gap-1 px-2 py-1 text-xs rounded focus:bg-fillBrand-strong focus:text-white focus:fill-white`}
+          @click=${() => (this.showModal = !this.showModal)}
+        >
+          ${faSprite('gear', 'regular', `h-3 w-3 `)}
+          <span class="sm:inline hidden">Options</span>
+        </button>
+        <div tabindex="0" class="dropdown-content  bg-white border w-64 border-strokeWeak p-2 text-sm rounded shadow">
+          <div class="relative mb-4">
+            <span class="block mb-1 text-sm text-textStrong font-medium">Add column</span>
+            <input
+              type="text"
+              placeholder="Search columns..."
+              class="input input-xs w-full max-w-xs focus:outline-none focus:border-textBrand focus:ring-0"
+              .value=${this.searchTerm || ''}
+              @input=${e => {
+                this.searchTerm = e.target.value
+              }}
+            />
+
+            ${this.searchTerm && this.searchTerm.length > 0
+              ? html`
+                  <ul class="mt-1 w-full text-sm max-h-48 overflow-y-auto">
+                    ${this.defaultColumns
+                      .concat(this.columns)
+                      .filter(col => !this.columns.some(c => c === col) && col.toLowerCase().includes(this.searchTerm.toLowerCase()))
+                      .map(
+                        col =>
+                          html`
+                            <li
+                              class="px-1 py-0.5 hover:bg-fillWeak cursor-pointer"
+                              @click=${() => {
+                                this.columns.push(col)
+                                this.searchTerm = ''
+                                this._emitChanges()
+                              }}
+                            >
+                              ${col}
+                            </li>
+                          `,
+                      )}
+                    ${this.defaultColumns.filter(col => !this.columns.some(c => c === col) && col.toLowerCase().includes(this.searchTerm.toLowerCase()))
+                      .length === 0
+                      ? html`<li class="px-3 py-2 text-gray-400">No results</li>`
+                      : ''}
+                  </ul>
+                `
+              : nothing}
+          </div>
+
+          <ul class="flex flex-col gap-1 border-t border-strokeWeak py-2">
+            ${this.columns.map(
+              (col, index) => html`
+                <li
+                  class="flex items-center group justify-between  px-1 py-0.5 rounded hover:bg-fillWeak cursor-move"
+                  draggable="true"
+                  @dragstart=${e => this._onDragStart(e, index)}
+                  @dragover=${e => e.preventDefault()}
+                  @drop=${e => this._onDrop(e, index)}
+                >
+                  <span class="text-textStrong">${col}</span>
+                  <div class="flex items-center gap-2">
+                    <button class="hidden group-hover:inline-block cursor-pointer" @click=${() => this._removeColumn(index)}>
+                      ${faSprite('trash-can', 'regular', 'h-3 w-3 text-iconNeutral fill-red-600')}
+                    </button>
+                    ${faSprite('grip-dots-vertical', 'regular', 'h-4 w-4 text-iconNeutral')}
+                  </div>
+                </li>
+              `,
+            )}
+          </ul>
+        </div>
+      </div>
+    `
+  }
+
+  _toggleVisibility(index) {
+    this.columns[index].visible = !this.columns[index].visible
+    this.requestUpdate()
+  }
+
+  _removeColumn(index) {
+    this.columns.splice(index, 1)
+    this.requestUpdate()
+  }
+
+  _onDragStart(e, index) {
+    this.dragIndex = index
+  }
+
+  _onDrop(e, index) {
+    const dragged = this.columns[this.dragIndex]
+    this.columns.splice(this.dragIndex, 1)
+    this.columns.splice(index, 0, dragged)
+    this.dragIndex = null
+    this.requestUpdate()
+  }
+
+  _emitChanges() {
+    this.dispatchEvent(
+      new CustomEvent('columns-changed', {
+        detail: this.columns,
+        bubbles: true,
+        composed: true,
+      }),
+    )
+  }
+
+  _close() {
+    this.showModal = false
+  }
+}
+
+customElements.define('columns-settings', ColumnsSettings)
 
 const faSprite = (iconName, kind, classes) => html`<svg class="${classes}"><use href="/public/assets/svgs/fa-sprites/${kind}.svg#${iconName}"></use></svg>`
 
@@ -1135,7 +1319,7 @@ function flattenSpanTree(traceArr, expandedTraces = {}) {
 }
 
 function getColumnWidth(column) {
-  if (!['rest', 'service', 'id', 'method', 'status_code', 'raw_url', 'url_path'].includes(column)) return 'w-[16ch] shrink-0'
+  if (!['summary', 'service', 'id', 'method', 'status_code', 'raw_url', 'url_path'].includes(column)) return 'w-[16ch] shrink-0'
   switch (column) {
     case 'status':
     case 'method':
@@ -1144,7 +1328,7 @@ function getColumnWidth(column) {
     case 'raw_url':
     case 'url_path':
       return 'w-[25ch] shrink-0 overflow-hidden'
-    case 'rest':
+    case 'sumarry':
       return 'w-3/4 shrink-1'
     default:
       return ''

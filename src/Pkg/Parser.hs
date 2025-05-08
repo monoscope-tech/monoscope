@@ -310,7 +310,7 @@ defaultSelectSqlQuery (Just SSpans) =
   , timestampLogFmt "timestamp"
   , "context___trace_id as trace_id"
   , "kind"
-  , "status_code as status"
+  , "status_message as status"
   , "name as span_name"
   , "duration"
   , "body"
@@ -332,7 +332,7 @@ defaultSelectSqlQuery (Just SSpans) =
             COALESCE(attributes::text, '')
         ),
         500
-    ) as rest|]
+    ) as summary|]
   ]
 
 

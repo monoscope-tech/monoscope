@@ -536,7 +536,7 @@ virtualTable page = do
   termRaw
     "log-list"
     [ id_ "resultTable"
-    , class_ "w-full divide-y shrink-1 flex flex-col h-full min-w-0  overflow-x-hidden"
+    , class_ "w-full divide-y shrink-1 flex flex-col h-full min-w-0"
     ]
     ("" :: Text)
   let logs = decodeUtf8 $ AE.encode page.requestVecs
@@ -562,7 +562,7 @@ virtualTable page = do
 
 apiLogsPage :: ApiLogsPageData -> Html ()
 apiLogsPage page = do
-  section_ [class_ "mx-auto pt-2 px-6 gap-3.5 w-full flex flex-col h-full overflow-hidden pb-2 group/pg", id_ "apiLogsPage"] do
+  section_ [class_ "mx-auto pt-2 px-6 gap-3.5 w-full flex flex-col h-full overflow-y-hidden pb-2 group/pg", id_ "apiLogsPage"] do
     template_ [id_ "loader-tmp"] $ span_ [class_ "loading loading-dots loading-md"] ""
     when page.exceededFreeTier $ freeTierLimitExceededBanner page.pid.toText
     div_
@@ -624,7 +624,7 @@ apiLogsPage page = do
             , Widget._projectId = Just page.pid
             }
 
-    div_ [class_ "flex h-full gap-3.5 overflow-hidden"] do
+    div_ [class_ "flex h-full gap-3.5 overflow-y-hidden"] do
       -- FACETS
       div_ [class_ "w-1/6 text-sm shrink-0 flex flex-col gap-2 p-2 transition-all duration-500 ease-out opacity-100 delay-[0ms] group-has-[.toggle-filters:checked]/pg:duration-300 group-has-[.toggle-filters:checked]/pg:opacity-0 group-has-[.toggle-filters:checked]/pg:w-0 group-has-[.toggle-filters:checked]/pg:p-0 group-has-[.toggle-filters:checked]/pg:overflow-hidden"] do
         input_
@@ -643,7 +643,7 @@ apiLogsPage page = do
         div_ [class_ "divide-y gap-3 overflow-y-scroll h-full", id_ "facets-container"] do
           whenJust page.facets renderFacets
 
-      div_ [class_ "grow flex-1 h-full space-y-1.5 overflow-hidden"] do
+      div_ [class_ "grow flex-1 h-full space-y-1.5 overflow-y-hidden"] do
         div_ [class_ "flex w-full relative h-full", id_ "logs_section_container"] do
           let dW = fromMaybe "100%" page.detailsWidth
               showTrace = isJust page.showTrace
