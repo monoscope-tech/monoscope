@@ -1,6 +1,6 @@
 'use strict'
 import { LitElement, html, nothing } from './js/thirdparty/lit.js'
-import { virtualize, virtualizerRef } from '@lit-labs/virtualizer/virtualizer'
+import { virtualize } from '@lit-labs/virtualizer/virtualizer'
 
 export class LogList extends LitElement {
   static properties = {
