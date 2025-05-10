@@ -1,6 +1,5 @@
 module Pages.Log (
   apiLogH,
-  apiLogJson,
   LogsGet (..),
   ApiLogsPageData (..),
   virtualTable,
@@ -126,8 +125,8 @@ renderFacets facetSummary = do
                       onclick_ $ "filterByFacet('" <> T.replace "___" "." key <> "', '" <> val <> "')"
                     ]
                   let colorClass = colorFn val
-                  when (not $ T.null colorClass)
-                    $ span_ [class_ $ colorClass <> " shrink-0 w-1 h-5 rounded-sm"] " "
+                  when (not $ T.null colorClass) $
+                    span_ [class_ $ colorClass <> " shrink-0 w-1 h-5 rounded-sm"] " "
                   span_ [class_ "facet-value truncate max-w-[80%]", term "data-tippy-content" val] $ toHtml val
                 span_ [class_ "facet-count text-slate-500 shrink-0 ml-1"] $ toHtml $ show count
 
@@ -138,10 +137,10 @@ keepNonEmpty (Just "") = Nothing
 keepNonEmpty (Just a) = Just a
 
 
-apiLogH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe UTCTime -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders LogsGet)
-apiLogH pid queryM queryASTM cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM queryLibItemTitle queryLibItemID detailWM targetEventM showTraceM hxRequestM hxBoostedM = do
+apiLogH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe UTCTime -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders LogsGet)
+apiLogH pid queryM queryASTM cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM queryLibItemTitle queryLibItemID detailWM targetEventM showTraceM hxRequestM hxBoostedM jsonM = do
   (sess, project) <- Sessions.sessionAndProject pid
-  let source = fromMaybe "spans" sourceM
+  let source =  "spans" -- fromMaybe "spans" sourceM
   let summaryCols = T.splitOn "," (fromMaybe "" cols')
   let parseQuery q = either (\err -> addErrorToast "Error Parsing Query" (Just err) >> pure []) pure (parseQueryToAST q)
   queryAST <-
@@ -178,8 +177,8 @@ apiLogH pid queryM queryASTM cols' cursorM' sinceM fromM toM layoutM sourceM tar
   facetSummary <- Facets.getFacetSummary pid "otel_logs_and_spans" (fromMaybe (addUTCTime (-86400) now) fromD) (fromMaybe now toD)
 
   freeTierExceeded <-
-    dbtToEff
-      $ if project.paymentPlan == "Free"
+    dbtToEff $
+      if project.paymentPlan == "Free"
         then (> 10000) <$> RequestDumps.getLastSevenDaysTotalRequest pid
         else pure False
 
@@ -213,8 +212,8 @@ apiLogH pid queryM queryASTM cols' cursorM' sinceM fromM toM layoutM sourceM tar
           curatedColNames = nubOrd $ curateCols summaryCols colNames
           colIdxMap = listToIndexHashMap colNames
           reqLastCreatedAtM = (\r -> lookupVecTextByKey r colIdxMap "timestamp") =<< (requestVecs V.!? (V.length requestVecs - 1))
+          nextLogsURL = RequestDumps.requestDumpLogUrlPath pid queryM cols' reqLastCreatedAtM sinceM fromM toM (Just "loadmore") source queryASTM          
           traceIDs = V.catMaybes $ V.map (\v -> lookupVecTextByKey v colIdxMap "trace_id") requestVecs
-          nextLogsURL = RequestDumps.requestDumpLogUrlPath pid queryM cols' reqLastCreatedAtM sinceM fromM toM (Just "loadmore") source queryASTM
           resetLogsURL = RequestDumps.requestDumpLogUrlPath pid queryM cols' Nothing Nothing Nothing Nothing Nothing source Nothing
       additionalReqsVec <-
         if (null traceIDs)
@@ -254,11 +253,12 @@ apiLogH pid queryM queryASTM cols' cursorM' sinceM fromM toM layoutM sourceM tar
               , showTrace = showTraceM
               , facets = facetSummary
               }
-      case (layoutM, hxRequestM, hxBoostedM) of
-        (Just "SaveQuery", _, _) -> addRespHeaders $ LogsQueryLibrary pid queryLibSaved queryLibRecent
-        (Just "resultTable", Just "true", _) -> addRespHeaders $ LogsGetResultTable page False
-        (Just "virtualTable", _, _) -> addRespHeaders $ LogsGetVirtuaTable page
-        (Just "all", Just "true", _) -> addRespHeaders $ LogsGetResultTable page True
+      case (layoutM, hxRequestM, hxBoostedM, jsonM) of
+        (Just "SaveQuery", _, _,_) -> addRespHeaders $ LogsQueryLibrary pid queryLibSaved queryLibRecent
+        (Just "resultTable", Just "true", _,_) -> addRespHeaders $ LogsGetResultTable page False
+        (Just "virtualTable", _, _,_) -> addRespHeaders $ LogsGetVirtuaTable page
+        (Just "all", Just "true", _,_) -> addRespHeaders $ LogsGetResultTable page True
+        (_ , _ ,_, Just _) -> addRespHeaders $ LogsGetJson finalVecs colors nextLogsURL resetLogsURL
         _ -> addRespHeaders $ LogPage $ PageCtx bwconf page
     Nothing -> do
       case (layoutM, hxRequestM, hxBoostedM) of
@@ -278,6 +278,7 @@ data LogsGet
   | LogsGetVirtuaTable ApiLogsPageData
   | LogsGetError (PageCtx Text)
   | LogsGetErrorSimple Text
+  | LogsGetJson (V.Vector (V.Vector AE.Value)) (HM.HashMap Text Text) Text Text
   | LogsQueryLibrary Projects.ProjectId (V.Vector Projects.QueryLibItem) (V.Vector Projects.QueryLibItem)
 
 
@@ -288,54 +289,13 @@ instance ToHtml LogsGet where
   toHtml (LogsGetErrorSimple err) = span_ [class_ "text-red-500"] $ toHtml err
   toHtml (LogsGetError (PageCtx conf err)) = toHtml $ PageCtx conf err
   toHtml (LogsQueryLibrary pid queryLibSaved queryLibRecent) = toHtml $ queryLibrary_ pid queryLibSaved queryLibRecent
+  toHtml (LogsGetJson vecs colors nextLogsURL resetLogsURL) = span_ [] $ show $ AE.object ["logsData" AE..= vecs , "serviceColors" AE..= colors, "nextUrl" AE..= nextLogsURL, "resetLogsUrl" AE..= resetLogsURL]
   toHtmlRaw = toHtml
 
 
-apiLogJson :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe UTCTime -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders AE.Value)
-apiLogJson pid queryM queryASTM cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM = do
-  (sess, project) <- Sessions.sessionAndProject pid
-  let source = fromMaybe "spans" sourceM
-  let summaryCols = T.splitOn "," (fromMaybe "" cols')
-  let parseQuery q = either (\err -> addErrorToast "Error Parsing Query" (Just err) >> pure []) pure (parseQueryToAST q)
-  queryAST <-
-    maybe
-      (parseQuery $ maybeToMonoid queryM)
-      (either (const $ parseQuery $ maybeToMonoid queryM) pure . AE.eitherDecode . encodeUtf8)
-      queryASTM
-
-  now <- Time.currentTime
-  let (fromD, toD, _) = Components.parseTimeRange now (Components.TimePicker sinceM fromM toM)
-  tableAsVecE <- RequestDumps.selectLogTable pid queryAST cursorM' (fromD, toD) summaryCols (parseMaybe pSource =<< sourceM) targetSpansM
-
-  -- FIXME: we're silently ignoring parse errors and the likes.
-  let tableAsVecM = hush tableAsVecE
-  case tableAsVecM of
-    Just tableAsVec -> do
-      let (requestVecs, colNames, _) = tableAsVec
-          colIdxMap = listToIndexHashMap colNames
-          reqLastCreatedAtM = (\r -> lookupVecTextByKey r colIdxMap "timestamp") =<< (requestVecs V.!? (V.length requestVecs - 1))
-          nextLogsURL = RequestDumps.requestDumpLogUrlPath pid queryM cols' reqLastCreatedAtM sinceM fromM toM (Just "loadmore") source queryASTM
-          resetLogsURL = RequestDumps.requestDumpLogUrlPath pid queryM cols' Nothing Nothing Nothing Nothing Nothing source Nothing
-          traceIDs = V.catMaybes $ V.map (\v -> lookupVecTextByKey v colIdxMap "trace_id") requestVecs
-      additionalReqsVec <-
-        if (null traceIDs)
-          then pure []
-          else do
-            rs <- RequestDumps.selectChildSpansAndLogs pid summaryCols $ V.filter (/= "") traceIDs
-            pure rs
-      let finalVecs = requestVecs <> additionalReqsVec
-          serviceNames = V.map (\v -> lookupVecTextByKey v colIdxMap "span_name") finalVecs
-          colors = getServiceColors (V.catMaybes serviceNames)
-
-      addRespHeaders
-        $ AE.object
-          [ "logsData" AE..= finalVecs
-          , "serviceColors" AE..= colors
-          , "nextUrl" AE..= nextLogsURL
-          , "resetLogsUrl" AE..= resetLogsURL
-          ]
-    Nothing -> do
-      addRespHeaders $ AE.object ["error" AE..= "Something went wrong"]
+instance AE.ToJSON LogsGet where
+  toJSON (LogsGetJson vecs colors nextLogsURL resetLogsURL) = AE.object [ "logsData" AE..= vecs, "serviceColors" AE..= colors, "nextUrl" AE..= nextLogsURL, "resetLogsUrl" AE..= resetLogsURL]
+  toJSON _ = AE.object []
 
 
 logQueryBox_ :: Projects.ProjectId -> Maybe Text -> Text -> Maybe Text -> Text -> V.Vector Projects.QueryLibItem -> V.Vector Projects.QueryLibItem -> Html ()
@@ -409,8 +369,8 @@ logQueryBox_ pid currentRange source targetSpan queryAST queryLibRecent queryLib
 
 queryLibrary_ :: Projects.ProjectId -> V.Vector Projects.QueryLibItem -> V.Vector Projects.QueryLibItem -> Html ()
 queryLibrary_ pid queryLibSaved queryLibRecent = div_ [class_ "dropdown dropdown-hover dropdown-bottom dropdown-start", id_ "queryLibraryParentEl"] do
-  div_ [class_ "cursor-pointer relative  bg-fillWeak  text-textWeak rounded-lg border border-strokeWeaker h-full flex gap-2 items-center px-2", tabindex_ "0", role_ "button"]
-    $ (toHtml "Presets" >> faSprite_ "chevron-down" "regular" "w-3 h-3")
+  div_ [class_ "cursor-pointer relative  bg-fillWeak  text-textWeak rounded-lg border border-strokeWeaker h-full flex gap-2 items-center px-2", tabindex_ "0", role_ "button"] $
+    (toHtml "Presets" >> faSprite_ "chevron-down" "regular" "w-3 h-3")
   div_ [class_ "dropdown-content z-20"] $ div_ [class_ "tabs tabs-box tabs-md tabs-outline items-center bg-fillWeak p-0 h-full", role_ "tablist", id_ "queryLibraryTabListEl"] do
     tabPanel_ "Saved" (queryLibraryContent_ "Saved" queryLibSaved)
     tabPanel_ "Recent" (queryLibraryContent_ "Recent" queryLibRecent)
@@ -478,9 +438,9 @@ queryLibItem_ qli =
           li_ "Send query to alert"
           li_ "Send query to a dashboard"
     strong_ $ whenJust qli.title \title -> (toHtml title)
-    pre_
-      $ code_ [class_ "language-js bg-transparent! queryText whitespace-pre-wrap break-words"]
-      $ toHtml qli.queryText
+    pre_ $
+      code_ [class_ "language-js bg-transparent! queryText whitespace-pre-wrap break-words"] $
+        toHtml qli.queryText
     div_ [class_ "gap-3 flex"] $ time_ [datetime_ "", term "data-tippy-content" "created on"] (toHtml $ displayTimestamp $ formatUTC qli.createdAt) >> when qli.byMe " by me"
 
 
@@ -573,9 +533,9 @@ apiLogsPage page = do
       ]
       do
         div_ [class_ "relative ml-auto w-full", style_ ""] do
-          div_ [class_ "flex justify-end  w-full p-4 "]
-            $ button_ [[__|on click add .hidden to #expand-log-modal|]]
-            $ faSprite_ "xmark" "regular" "h-8"
+          div_ [class_ "flex justify-end  w-full p-4 "] $
+            button_ [[__|on click add .hidden to #expand-log-modal|]] $
+              faSprite_ "xmark" "regular" "h-8"
           form_
             [ hxPost_ $ "/p/" <> page.pid.toText <> "/share/"
             , hxSwap_ "innerHTML"
@@ -592,8 +552,8 @@ apiLogsPage page = do
       div_ [class_ "flex flex-row gap-4 mt-3 group-has-[.toggle-chart:checked]/pg:hidden w-full", style_ "aspect-ratio: 10 / 1;"] do
         Widget.widget_ $ (def :: Widget.Widget){Widget.query = Just "timechart count(*)", Widget.unit = Just "rows", Widget.title = Just "All traces", Widget.hideLegend = Just True, Widget._projectId = Just page.pid, Widget.standalone = Just True, Widget.yAxis = Just (def{showOnlyMaxLabel = Just True})}
 
-        Widget.widget_
-          $ (def :: Widget.Widget)
+        Widget.widget_ $
+          (def :: Widget.Widget)
             { Widget.wType = WTTimeseriesLine
             , Widget.standalone = Just True
             , Widget.title = Just "Latency percentiles (ms)"

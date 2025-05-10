@@ -373,11 +373,12 @@ data RequestDumpLogItem = RequestDumpLogItem
 
 requestDumpLogUrlPath :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Text -> Maybe Text -> Text
 requestDumpLogUrlPath pid q cols cursor since fromV toV layout source queryASTM =
-  "/p/" <> pid.toText <> "/log_explorer/json?" <> T.intercalate "&" params
+  "/p/" <> pid.toText <> "/log_explorer?" <> T.intercalate "&" params
   where
     params =
       catMaybes
-        [ fmap ("query=" <>) (toQueryParam <$> q)
+        [ Just ("json=true")
+        , fmap ("query=" <>) (toQueryParam <$> q)
         , fmap ("cols=" <>) (toQueryParam <$> cols)
         , fmap ("cursor=" <>) (toQueryParam <$> cursor)
         , fmap ("since=" <>) (toQueryParam <$> since)

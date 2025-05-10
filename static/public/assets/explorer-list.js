@@ -221,7 +221,12 @@ export class LogList extends LitElement {
     } else {
       this.isLoading = true
     }
-    fetch(url)
+    fetch(url, {
+      method: 'GET',
+      headers: {
+        Accept: 'application/json',
+      },
+    })
       .then(response => response.json())
       .then(data => {
         if (!data.error) {
