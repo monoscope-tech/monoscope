@@ -140,7 +140,7 @@ keepNonEmpty (Just a) = Just a
 apiLogH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe UTCTime -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders LogsGet)
 apiLogH pid queryM queryASTM cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM queryLibItemTitle queryLibItemID detailWM targetEventM showTraceM hxRequestM hxBoostedM jsonM = do
   (sess, project) <- Sessions.sessionAndProject pid
-  let source =  "spans" -- fromMaybe "spans" sourceM
+  let source = "spans" -- fromMaybe "spans" sourceM
   let summaryCols = T.splitOn "," (fromMaybe "" cols')
   let parseQuery q = either (\err -> addErrorToast "Error Parsing Query" (Just err) >> pure []) pure (parseQueryToAST q)
   queryAST <-
@@ -212,7 +212,7 @@ apiLogH pid queryM queryASTM cols' cursorM' sinceM fromM toM layoutM sourceM tar
           curatedColNames = nubOrd $ curateCols summaryCols colNames
           colIdxMap = listToIndexHashMap colNames
           reqLastCreatedAtM = (\r -> lookupVecTextByKey r colIdxMap "timestamp") =<< (requestVecs V.!? (V.length requestVecs - 1))
-          nextLogsURL = RequestDumps.requestDumpLogUrlPath pid queryM cols' reqLastCreatedAtM sinceM fromM toM (Just "loadmore") source queryASTM          
+          nextLogsURL = RequestDumps.requestDumpLogUrlPath pid queryM cols' reqLastCreatedAtM sinceM fromM toM (Just "loadmore") source queryASTM
           traceIDs = V.catMaybes $ V.map (\v -> lookupVecTextByKey v colIdxMap "trace_id") requestVecs
           resetLogsURL = RequestDumps.requestDumpLogUrlPath pid queryM cols' Nothing Nothing Nothing Nothing Nothing source Nothing
       additionalReqsVec <-
@@ -254,11 +254,11 @@ apiLogH pid queryM queryASTM cols' cursorM' sinceM fromM toM layoutM sourceM tar
               , facets = facetSummary
               }
       case (layoutM, hxRequestM, hxBoostedM, jsonM) of
-        (Just "SaveQuery", _, _,_) -> addRespHeaders $ LogsQueryLibrary pid queryLibSaved queryLibRecent
-        (Just "resultTable", Just "true", _,_) -> addRespHeaders $ LogsGetResultTable page False
-        (Just "virtualTable", _, _,_) -> addRespHeaders $ LogsGetVirtuaTable page
-        (Just "all", Just "true", _,_) -> addRespHeaders $ LogsGetResultTable page True
-        (_ , _ ,_, Just _) -> addRespHeaders $ LogsGetJson finalVecs colors nextLogsURL resetLogsURL
+        (Just "SaveQuery", _, _, _) -> addRespHeaders $ LogsQueryLibrary pid queryLibSaved queryLibRecent
+        (Just "resultTable", Just "true", _, _) -> addRespHeaders $ LogsGetResultTable page False
+        (Just "virtualTable", _, _, _) -> addRespHeaders $ LogsGetVirtuaTable page
+        (Just "all", Just "true", _, Nothing) -> addRespHeaders $ LogsGetResultTable page True
+        (_, _, _, Just _) -> addRespHeaders $ LogsGetJson finalVecs colors nextLogsURL resetLogsURL
         _ -> addRespHeaders $ LogPage $ PageCtx bwconf page
     Nothing -> do
       case (layoutM, hxRequestM, hxBoostedM) of
@@ -289,12 +289,12 @@ instance ToHtml LogsGet where
   toHtml (LogsGetErrorSimple err) = span_ [class_ "text-red-500"] $ toHtml err
   toHtml (LogsGetError (PageCtx conf err)) = toHtml $ PageCtx conf err
   toHtml (LogsQueryLibrary pid queryLibSaved queryLibRecent) = toHtml $ queryLibrary_ pid queryLibSaved queryLibRecent
-  toHtml (LogsGetJson vecs colors nextLogsURL resetLogsURL) = span_ [] $ show $ AE.object ["logsData" AE..= vecs , "serviceColors" AE..= colors, "nextUrl" AE..= nextLogsURL, "resetLogsUrl" AE..= resetLogsURL]
+  toHtml (LogsGetJson vecs colors nextLogsURL resetLogsURL) = span_ [] $ show $ AE.object ["logsData" AE..= vecs, "serviceColors" AE..= colors, "nextUrl" AE..= nextLogsURL, "resetLogsUrl" AE..= resetLogsURL]
   toHtmlRaw = toHtml
 
 
 instance AE.ToJSON LogsGet where
-  toJSON (LogsGetJson vecs colors nextLogsURL resetLogsURL) = AE.object [ "logsData" AE..= vecs, "serviceColors" AE..= colors, "nextUrl" AE..= nextLogsURL, "resetLogsUrl" AE..= resetLogsURL]
+  toJSON (LogsGetJson vecs colors nextLogsURL resetLogsURL) = AE.object ["logsData" AE..= vecs, "serviceColors" AE..= colors, "nextUrl" AE..= nextLogsURL, "resetLogsUrl" AE..= resetLogsURL]
   toJSON _ = AE.object []
 
 
@@ -318,7 +318,7 @@ logQueryBox_ pid currentRange source targetSpan queryAST queryLibRecent queryLib
     [ hxGet_ $ "/p/" <> pid.toText <> "/log_explorer"
     , hxPushUrl_ "true"
     , hxTrigger_ "add-query from:#filterElement, update-query from:#filterElement, submit, update-query from:window"
-    , hxVals_ "js:{queryAST:window.getQueryFromEditor(), since: params().since, from: params().from, to:params().to, cols:params().cols, layout:'all', source: params().source}"
+    , hxVals_ "js:{queryAST:window.getQueryFromEditor(), since: params().since, from: params().from, to:params().to, cols:params().cols, layout:'resultTable', source: params().source}"
     , hxTarget_ "#resultTableInner"
     , hxSwap_ "outerHTML"
     , id_ "log_explorer_form"
