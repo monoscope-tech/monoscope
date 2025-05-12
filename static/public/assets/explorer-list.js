@@ -8,6 +8,8 @@ export class LogList extends LitElement {
     fetchError: { type: String },
     expandedTraces: {},
     flipDirection: { type: Boolean },
+    isLoadingRecent: { type: Boolean },
+    isLoading: { type: Boolean },
     view: { type: String },
     showOptions: { type: Boolean },
     shouldScrollToBottom: { type: Boolean },
@@ -80,16 +82,18 @@ export class LogList extends LitElement {
 
   latestLogsURLQueryValsFn() {
     const latestIndex = this.flipDirection ? this.spanListTree.length - 1 : 0
-    const latestData = this.spanListTree[latestIndex].data
-    const timeIndex = this.colIdxMap['timestamp']
-    const datetime = latestData[timeIndex]
-    const to = datetime ? new Date(new Date(datetime).getTime() + 1).toISOString() : params().to
-    const from = params().from
     const url = new URL(this.nextFetchUrl, window.location.origin)
     const p = url.searchParams
-    p.set('from', from)
     p.delete('cursor')
-    p.set('to', to)
+    if (this.spanListTree[latestIndex]) {
+      const latestData = this.spanListTree[latestIndex].data
+      const timeIndex = this.colIdxMap['timestamp']
+      const datetime = latestData[timeIndex]
+      const to = datetime ? new Date(new Date(datetime).getTime() + 1).toISOString() : params().to
+      p.set('to', to)
+      const from = params().from
+      p.set('from', from)
+    }
     return url.toString()
   }
 
@@ -260,7 +264,6 @@ export class LogList extends LitElement {
         }
       })
       .catch(error => {
-        this.isError = true
         console.error('Error fetching logs:', error)
       })
       .finally(() => {
@@ -872,7 +875,7 @@ class ColumnsSettings extends LitElement {
         <button
           tabindex="0"
           role="button"
-          class=${`flex items-center justify-center gap-1 px-2 py-1 text-xs rounded focus:bg-fillBrand-strong focus:text-white focus:fill-white`}
+          class=${`flex cursor-pointer items-center justify-center gap-1 px-2 py-1 text-xs rounded focus:bg-fillBrand-strong focus:text-white focus:fill-white`}
           @click=${() => (this.showModal = !this.showModal)}
         >
           ${faSprite('gear', 'regular', `h-3 w-3 `)}
