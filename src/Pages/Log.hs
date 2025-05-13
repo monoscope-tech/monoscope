@@ -729,8 +729,8 @@ curateCols summaryCols cols = sortBy sortAccordingly filteredCols
       | b == "id" = GT
       | a == "timestamp" && b /= "id" = LT
       | b == "timestamp" && a /= "id" = GT
-      | a == "rest" = GT
-      | b == "rest" = LT
+      | a == "latency_breakdown" = GT
+      | b == "latency_breakdown" = LT
       | otherwise = comparing (`L.elemIndex` filteredCols) a b
 
 

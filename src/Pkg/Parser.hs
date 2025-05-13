@@ -316,7 +316,6 @@ defaultSelectSqlQuery (Just SSpans) =
   , "body"
   , "level as severity_text"
   , "resource___service___name as service"
-  , "context___span_id as latency_breakdown"
   , "parent_id as parent_span_id"
   , "CAST(EXTRACT(EPOCH FROM (start_time)) * 1_000_000_000 AS BIGINT) as start_time_ns"
   , "EXISTS(SELECT 1 FROM jsonb_array_elements(events) elem  WHERE elem->>'event_name' = 'exception') as errors"
@@ -333,6 +332,7 @@ defaultSelectSqlQuery (Just SSpans) =
         ),
         500
     ) as summary|]
+  , "context___span_id as latency_breakdown"
   ]
 
 
