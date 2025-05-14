@@ -730,14 +730,14 @@ export class LogList extends LitElement {
             <span class="ml-1 p-0.5 border border-slate-200 rounded-sm inline-flex"> ${faSprite('chevron-down', 'regular', 'w-3 h-3')} </span>
           </div>
           <ul tabindex="0" class="dropdown-content z-1 flex flex-col font-normal bg-white border w-64 border-strokeWeak p-2 text-sm rounded shadow">
-            <li class="px-1 py-0.5 cursor-pointer hover:bg-fillWeak">
-              <button @click=${() => this.hideColumn(column)}>Hide column</button>
+            <li class="px-1 cursor-pointer hover:bg-fillWeak">
+              <button class="cursor-pointer py-0.5" @click=${() => this.hideColumn(column)}>Hide column</button>
             </li>
-            <li class="px-1 py-0.5 cursor-pointer hover:bg-fillWeak">
-              <button @click=${() => this.moveColumn(column, -1)}>Move column left</button>
+            <li class="px-1 cursor-pointer hover:bg-fillWeak">
+              <button class="cursor-pointer py-0.5" @click=${() => this.moveColumn(column, -1)}>Move column left</button>
             </li>
-            <li class="px-1 py-0.5 cursor-pointer hover:bg-fillWeak">
-              <button @click=${() => this.moveColumn(column, 1)}>Move column right</button>
+            <li class="px-1 cursor-pointer hover:bg-fillWeak">
+              <button class="cursor-pointer py-0.5" @click=${() => this.moveColumn(column, 1)}>Move column right</button>
             </li>
           </ul>
         </div>
