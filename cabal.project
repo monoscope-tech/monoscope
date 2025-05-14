@@ -1,5 +1,5 @@
 packages: . ./rust-interop
-with-compiler: ghc-9.10.1
+with-compiler: ghc-9.10.2
 -- import: https://www.stackage.org/nightly-2025-01-20/cabal.config
 -- documentation: True
 
@@ -28,8 +28,8 @@ source-repository-package
 
 source-repository-package
   type: git
-  location: https://github.com/saurabhnanda/odd-jobs.git
-  tag: a159d7a17913725a0cb2a2251fa0b812acd3d160
+  location: https://github.com/tonyalaribe/odd-jobs.git
+  tag: 7a0eee112cb582746f14cfe6a527a86ef1c4c5e0
   subdir: .
 
 source-repository-package
@@ -116,6 +116,20 @@ source-repository-package
   tag: 4d374aca55bb5392e3b91ae47d6ca5625ffc59b6
   subdir: grpc-spec
 
+source-repository-package
+  type: git
+  location: https://github.com/iand675/hs-opentelemetry
+  tag: ee8a6dad7db306eb67748ddcd77df4974ad8259e
+  subdir:   api
+  subdir:   sdk
+  subdir:   otlp
+  subdir:   exporters/otlp
+  subdir:   propagators/w3c
+  subdir:   instrumentation/postgresql-simple
+  subdir:   instrumentation/wai
+  subdir:   utils/exceptions
+  subdir:   propagators/datadog
+  subdir:   propagators/b3
 
 constraints:
   pg-entity +prod,
