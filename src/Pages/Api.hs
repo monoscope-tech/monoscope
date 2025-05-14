@@ -125,8 +125,8 @@ apiKeysPage pid apiKeys = do
     div_ [class_ "modal ", role_ "dialog", id_ "apikey-modal"] do
       div_ [class_ "modal-box flex flex-col p-8"] $ do
         div_ [class_ "flex w-full mb-4 justify-between items-start"] do
-          div_ [class_ "p-3 bg-[#0068ff]/5 rounded-full w-max border-[#067a57]/20 gap-2 inline-flex"] $
-            faSprite_ "key" "regular" "h-6 w-6 text-textBrand"
+          div_ [class_ "p-3 bg-[#0068ff]/5 rounded-full w-max border-[#067a57]/20 gap-2 inline-flex"]
+            $ faSprite_ "key" "regular" "h-6 w-6 text-textBrand"
           button_
             [ class_ "btn btn-ghost btn-sm btn-circle"
             , [__|on click set #apikey-modal.checked to false |]
@@ -193,7 +193,7 @@ keyRow pid i apiKey = do
         [class_ $ "mr-2 w-full " <> idx]
         $ toHtml
         $ T.take 8 apiKey.keyPrefix
-          <> T.replicate 20 "*"
+        <> T.replicate 20 "*"
       div_ [class_ "hidden group-hover:flex justify-between items-center gap-3"] do
         button_
           [ class_ "text-brand"

@@ -268,8 +268,8 @@ spanBadge val key = do
 
 selectiveReqToJson :: RequestMessage -> AE.Value
 selectiveReqToJson req =
-  AE.object $
-    concat @[]
+  AE.object
+    $ concat @[]
       [ ["created_at" AE..= req.timestamp]
       , ["errors" AE..= fromMaybe [] req.errors]
       , ["host" AE..= req.host]
@@ -292,8 +292,8 @@ selectiveReqToJson req =
 
 selectiveOtelLogsJson :: Telemetry.OtelLogsAndSpans -> AE.Value
 selectiveOtelLogsJson sp =
-  AE.object $
-    concat @[]
+  AE.object
+    $ concat @[]
       [ ["start_time" AE..= sp.start_time]
       , ["end_time" AE..= sp.end_time]
       , ["resource" AE..= sp.resource]
