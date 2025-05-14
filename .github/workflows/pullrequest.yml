@@ -28,7 +28,7 @@ jobs:
           enable-stack: true
           stack-version: 'latest'
       - name: Install OpenSSL, protoc and snappy
-        run: sudo apt-get update && sudo apt-get install -y libssl-dev libgrpc-dev>=1.55 protobuf-compiler libsnappy-dev # or "brew install openssl" for macOS
+        run: sudo apt-get update && sudo apt-get install -y libssl-dev librdkafka-dev libgrpc-dev>=1.55 protobuf-compiler libsnappy-dev # or "brew install openssl" for macOS
       - name: Set OpenSSL Paths
         run: |
           export OPENSSL_INCLUDE_DIR=$(pkg-config --variable=includedir openssl)
