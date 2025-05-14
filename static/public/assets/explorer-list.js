@@ -278,6 +278,7 @@ export class LogList extends LitElement {
 
   hideColumn(column) {
     this.logsColumns = this.logsColumns.filter(col => col !== column)
+    this.requestUpdate()
   }
   handleColumnsChanged(e) {
     this.logsColumns = e.detail
@@ -729,13 +730,13 @@ export class LogList extends LitElement {
             <span class="ml-1 p-0.5 border border-slate-200 rounded-sm inline-flex"> ${faSprite('chevron-down', 'regular', 'w-3 h-3')} </span>
           </div>
           <ul tabindex="0" class="dropdown-content z-1 flex flex-col font-normal bg-white border w-64 border-strokeWeak p-2 text-sm rounded shadow">
-            <li class="px-1 py-0.5 hover:bg-fillWeak">
+            <li class="px-1 py-0.5 cursor-pointer hover:bg-fillWeak">
               <button @click=${() => this.hideColumn(column)}>Hide column</button>
             </li>
-            <li class="px-1 py-0.5 hover:bg-fillWeak">
+            <li class="px-1 py-0.5 cursor-pointer hover:bg-fillWeak">
               <button @click=${() => this.moveColumn(column, -1)}>Move column left</button>
             </li>
-            <li class="px-1 py-0.5 hover:bg-fillWeak">
+            <li class="px-1 py-0.5 cursor-pointer hover:bg-fillWeak">
               <button @click=${() => this.moveColumn(column, 1)}>Move column right</button>
             </li>
           </ul>
@@ -854,6 +855,7 @@ class ColumnsSettings extends LitElement {
       'timestamp',
       'service',
       'summary',
+      'latency_breakdown',
     ]
   }
 
@@ -906,7 +908,12 @@ class ColumnsSettings extends LitElement {
                             <li
                               class="px-1 py-0.5 hover:bg-fillWeak cursor-pointer"
                               @click=${() => {
-                                this.columns.push(col)
+                                let summaryIndex = this.columns.indexOf('summary')
+                                if (summaryIndex === -1 || col === 'latency_breakdown') {
+                                  this.columns.push(col)
+                                } else {
+                                  this.columns.splice(summaryIndex, 0, col)
+                                }
                                 this.searchTerm = ''
                                 this._emitChanges()
                               }}
@@ -950,11 +957,6 @@ class ColumnsSettings extends LitElement {
     `
   }
 
-  _toggleVisibility(index) {
-    this.columns[index].visible = !this.columns[index].visible
-    this.requestUpdate()
-  }
-
   _removeColumn(index) {
     this.columns.splice(index, 1)
     this.requestUpdate()
@@ -965,7 +967,10 @@ class ColumnsSettings extends LitElement {
   }
 
   _onDrop(e, index) {
+    if (index === this.dragIndex) return
+    if (index === this.columns.length - 1 && this.columns[index] === 'latency_breakdown') return
     const dragged = this.columns[this.dragIndex]
+    if (dragged === 'latency_breakdown') return
     this.columns.splice(this.dragIndex, 1)
     this.columns.splice(index, 0, dragged)
     this.dragIndex = null
@@ -980,10 +985,6 @@ class ColumnsSettings extends LitElement {
         composed: true,
       }),
     )
-  }
-
-  _close() {
-    this.showModal = false
   }
 }
 

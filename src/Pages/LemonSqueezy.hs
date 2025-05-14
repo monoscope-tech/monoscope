@@ -10,18 +10,18 @@ import Data.UUID.V4 qualified as UUIDV4
 import Deriving.Aeson qualified as DAE
 import Deriving.Aeson.Stock qualified as DAE
 import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
-import Effectful.Reader.Static (asks, ask)
+import Effectful.Reader.Static (ask, asks)
 import Effectful.Time qualified as Time
 import Lucid
-import Lucid.Hyperscript (__)
 import Lucid.Htmx (hxGet_)
+import Lucid.Hyperscript (__)
 import Models.Projects.LemonSqueezy qualified as LemonSqueezy
 import Models.Projects.Projects qualified as Projects
-import Pages.Components (paymentPlanPicker)
 import Models.Users.Sessions qualified as Sessions
 import NeatInterpolation (text)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (PageCtx))
-import Relude hiding (asks,ask)
+import Pages.Components (paymentPlanPicker)
+import Relude hiding (ask, asks)
 import System.Config
 import System.Types (ATAuthCtx, ATBaseCtx, RespHeaders, addRespHeaders)
 import Text.Printf (printf)
@@ -119,7 +119,7 @@ webhookPostH secretHeaderM dat = do
     _ -> pure ""
 
 
-newtype BillingGet = BillingGet (PageCtx (Projects.ProjectId, Int64, Text, Text, Text, Text ,Text))
+newtype BillingGet = BillingGet (PageCtx (Projects.ProjectId, Int64, Text, Text, Text, Text, Text))
 
 
 instance ToHtml BillingGet where
@@ -150,7 +150,7 @@ manageBillingGetH pid from = do
   addRespHeaders $ BillingGet $ PageCtx bwconf (pid, totalRequests, estimatedAmount, last_reported, lemonUrl, critical, project.paymentPlan)
 
 
-billingPage :: Projects.ProjectId -> Int64 -> Text -> Text ->  Text -> Text  -> Text -> Html ()
+billingPage :: Projects.ProjectId -> Int64 -> Text -> Text -> Text -> Text -> Text -> Html ()
 billingPage pid reqs amount last_reported lemonUrl critical paymentPlan = div_ [class_ "w-full pt-12"] do
   let pidTxt = pid.toText
   div_ [class_ "w-[606px] mx-auto"] do
@@ -175,36 +175,35 @@ billingPage pid reqs amount last_reported lemonUrl critical paymentPlan = div_ [
         span_ [data_ "id" "18"] "View on LemonSqueezy"
 
     div_ [class_ "border-t mt-8 pt-8"] do
-        div_ [class_ "self-stretch justify-start text-textStrong text-base font-semibold font-['Inter']"] "Upgrade plan"
-        p_ [class_ "text-textWeak text-sm max-w-[513px] mt-3"] "This is APItoolkit pricing, click on compare feature below to select the option that best suit your project."
+      div_ [class_ "self-stretch justify-start text-textStrong text-base font-semibold font-['Inter']"] "Upgrade plan"
+      p_ [class_ "text-textWeak text-sm max-w-[513px] mt-3"] "This is APItoolkit pricing, click on compare feature below to select the option that best suit your project."
 
     div_ [class_ "border border-strokeWeak rounded-2xl h-32 flex items-center px-6 py-8 overflow-hidden mt-8 relative"] do
-        div_ [class_ "w-full h-36 rotate-y-5 rotate-z-15 right-[-40px] top-[-95px] z-0 absolute bg-gradient-to-b from-slate-500/10 to-slate-500/0"] pass
-        div_ [class_ "flex items-center justify-between w-full"] do
-          div_ [class_ "flex flex-col gap-1"] do
-            span_ [class_ "text-textStrong font-semibold"] $ toHtml paymentPlan
-            span_ [class_ "rounded-2xl text-textWeak bg-fillWeaker border border-strokeWeak py-[2px] leading-tight text-center text-xs px-2 w-max"] "Current plan"
-          div_ [class_ "flex items-center gap-1 mt-4"] do
-            div_ [class_ "flex items-end"] do
-              span_ [class_ "text-textStrong text-xl"] "$"
-              span_ [class_ "text-4xl text-textStrong"] $ if paymentPlan == "Free" then "0" else if paymentPlan == "Critical Systems Plan" then "199" else "34"
-            div_ [class_ "flex flex-col text-text-Weak text-sm"] do
-              span_ [class_ ""] "Starts at"
-              span_ [class_ ""] "/per month"
-          label_ [class_ "btn btn-secondary bg-white cursor pointer z-10", Lucid.for_ "pricing-modal", [__|on click set #pricing-modal.check to true|]] "Change plan"
+      div_ [class_ "w-full h-36 rotate-y-5 rotate-z-15 right-[-40px] top-[-95px] z-0 absolute bg-gradient-to-b from-slate-500/10 to-slate-500/0"] pass
+      div_ [class_ "flex items-center justify-between w-full"] do
+        div_ [class_ "flex flex-col gap-1"] do
+          span_ [class_ "text-textStrong font-semibold"] $ toHtml paymentPlan
+          span_ [class_ "rounded-2xl text-textWeak bg-fillWeaker border border-strokeWeak py-[2px] leading-tight text-center text-xs px-2 w-max"] "Current plan"
+        div_ [class_ "flex items-center gap-1 mt-4"] do
+          div_ [class_ "flex items-end"] do
+            span_ [class_ "text-textStrong text-xl"] "$"
+            span_ [class_ "text-4xl text-textStrong"] $ if paymentPlan == "Free" then "0" else if paymentPlan == "Critical Systems Plan" then "199" else "34"
+          div_ [class_ "flex flex-col text-text-Weak text-sm"] do
+            span_ [class_ ""] "Starts at"
+            span_ [class_ ""] "/per month"
+        label_ [class_ "btn btn-secondary bg-white cursor pointer z-10", Lucid.for_ "pricing-modal", [__|on click set #pricing-modal.check to true|]] "Change plan"
 
-          input_ [type_ "checkbox", id_ "pricing-modal", class_ "modal-toggle"]
-          div_ [class_ "modal p-8", role_ "dialog", [__|on closeModal from body set #pricing-modal.checked to false |]] do
-            div_ [class_ "modal-box relative flex flex-col gap-5 w-[1250px] py-16 px-32", style_ "max-width:1300px"] $ do
-              button_ [class_ "absolute top-8 right-8 cursor-pointer", [__| on click set #pricing-modal.checked to false |]] do
-                faSprite_ "circle-xmark" "regular" "w-8 h-8"
-              div_ [class_ "text-center text-sm text-textWeak w-full mx-auto max-w-96"] do
-                span_ [class_ " text-textStrong text-2xl font-semibold"] "What’s Included?"
-                p_ [class_ "mt-2 mb-4"] "See and compare what you get in each plan."
-                p_ [] "Please adjust the bar below to see difference in price as your events increase"
-              paymentPlanPicker pid lemonUrl critical paymentPlan
-            label_ [class_ "modal-backdrop", Lucid.for_ "pricing-modal"] "Close"
-
+        input_ [type_ "checkbox", id_ "pricing-modal", class_ "modal-toggle"]
+        div_ [class_ "modal p-8", role_ "dialog", [__|on closeModal from body set #pricing-modal.checked to false |]] do
+          div_ [class_ "modal-box relative flex flex-col gap-5 w-[1250px] py-16 px-32", style_ "max-width:1300px"] $ do
+            button_ [class_ "absolute top-8 right-8 cursor-pointer", [__| on click set #pricing-modal.checked to false |]] do
+              faSprite_ "circle-xmark" "regular" "w-8 h-8"
+            div_ [class_ "text-center text-sm text-textWeak w-full mx-auto max-w-96"] do
+              span_ [class_ " text-textStrong text-2xl font-semibold"] "What’s Included?"
+              p_ [class_ "mt-2 mb-4"] "See and compare what you get in each plan."
+              p_ [] "Please adjust the bar below to see difference in price as your events increase"
+            paymentPlanPicker pid lemonUrl critical paymentPlan
+          label_ [class_ "modal-backdrop", Lucid.for_ "pricing-modal"] "Close"
 
 
 calculateCycleStartDate :: UTCTime -> UTCTime -> UTCTime

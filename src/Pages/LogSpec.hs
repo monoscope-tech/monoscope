@@ -59,17 +59,17 @@ spec = aroundAll withTestResources do
           content.cols `shouldBe` ["id", "created_at", "rest"]
           length content.requestVecs `shouldBe` 200
 
-          -- let cur = textToUTCTime $ fromMaybe "" content.cursor
-          -- json <-
-          --   toServantResponse trATCtx trSessAndHeader trLogger $ Log.apiLogJson testPid Nothing Nothing Nothing cur Nothing Nothing Nothing Nothing Nothing Nothing
-          -- case json of
-          --   AE.Object j -> do
-          --     let lgs = KEM.lookup "logsData" j
-          --     case lgs of
-          --       Just (AE.Array o) -> length o `shouldBe` 2
-          --       _ -> error "Unexpected response"
-          --   _ -> error "Unexpected response"
-          -- content.resultCount `shouldBe` 202
+        -- let cur = textToUTCTime $ fromMaybe "" content.cursor
+        -- json <-
+        --   toServantResponse trATCtx trSessAndHeader trLogger $ Log.apiLogJson testPid Nothing Nothing Nothing cur Nothing Nothing Nothing Nothing Nothing Nothing
+        -- case json of
+        --   AE.Object j -> do
+        --     let lgs = KEM.lookup "logsData" j
+        --     case lgs of
+        --       Just (AE.Array o) -> length o `shouldBe` 2
+        --       _ -> error "Unexpected response"
+        --   _ -> error "Unexpected response"
+        -- content.resultCount `shouldBe` 202
         _ -> error "Unexpected response"
 
 
