@@ -29,7 +29,7 @@ jobs:
         with:
           ghc-version: 9.10.1
           enable-stack: true
-          stack-version: 'nightly-2025-05-11'
+          stack-version: 'latest'
       - name: Install OpenSSL, protoc and snappy
         run: sudo apt-get update && sudo apt-get install -y libssl-dev librdkafka-dev libgrpc-dev>=1.55 protobuf-compiler libsnappy-dev # or "brew install openssl" for macOS
       - name: Set OpenSSL Paths
