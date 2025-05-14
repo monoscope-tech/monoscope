@@ -40,7 +40,14 @@ jobs:
       - run: npm install
       - run: npx tailwindcss  -i ./static/public/assets/css/tailwind.css -o ./static/public/assets/css/tailwind.min.css
 
-      - run: make prepare-rust-interop
+      - run: |
+          make prepare-rust-interop
+          sudo mkdir -p /usr/local/lib
+          sudo cp rust-interop/target/release/libCrust_interop.so /usr/local/lib
+          sudo cp rust-interop/target/release/libCrust_interop.so /usr/local/lib/librust_interop.so
+          sudo mkdir -p /usr/lib
+          sudo cp rust-interop/target/release/libCrust_interop.so /usr/lib
+          sudo cp rust-interop/target/release/libCrust_interop.so /usr/lib/librust_interop.so
       - run: stack --no-terminal build --dependencies-only
       - run: stack install --local-bin-path=. --flag pg-entity:prod --ghc-options "-O0"
       - run: stack test
