@@ -762,7 +762,7 @@ export class LogList extends LitElement {
           <div class="tabs tabs-box tabs-md p-0 tabs-outline items-center border">
             <button
               @click=${() => (this.view = 'tree')}
-              class=${`flex items-center justify-center gap-1 px-2 py-1 text-xs rounded ${
+              class=${`flex items-center cursor-pointer justify-center gap-1 px-2 py-1 text-xs rounded ${
                 this.view === 'tree' ? 'bg-gray-200 text-gray-800' : 'text-textWeak  hover:bg-gray-100'
               }`}
             >
@@ -772,7 +772,7 @@ export class LogList extends LitElement {
 
             <button
               @click=${() => (this.view = 'list')}
-              class=${`flex items-center justify-center gap-1 px-2 py-1 text-xs rounded ${
+              class=${`flex items-center cursor-pointer justify-center gap-1 px-2 py-1 text-xs rounded ${
                 this.view === 'list' ? 'bg-gray-200 text-gray-800' : 'text-textWeak  hover:bg-gray-100'
               }`}
             >
@@ -782,7 +782,7 @@ export class LogList extends LitElement {
           </div>
         `}
         <button
-          class=${`flex items-center justify-center gap-1 px-2 py-1 text-xs rounded ${
+          class=${`flex items-center cursor-pointer justify-center gap-1 px-2 py-1 text-xs rounded ${
             this.flipDirection ? 'bg-gray-200 text-gray-800' : 'text-textWeak  hover:bg-gray-100'
           }`}
           @click=${() => {
@@ -798,7 +798,7 @@ export class LogList extends LitElement {
         </button>
 
         <button
-          class=${`flex items-center justify-center gap-1 px-2 py-1 text-xs rounded ${
+          class=${`flex items-center cursor-pointer justify-center gap-1 px-2 py-1 text-xs rounded ${
             this.wrapLines ? 'bg-gray-200 text-gray-800' : 'text-textWeak  hover:bg-gray-100'
           }`}
           @click=${() => {
