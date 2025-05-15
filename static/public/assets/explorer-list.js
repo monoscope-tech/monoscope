@@ -730,14 +730,14 @@ export class LogList extends LitElement {
             <span class="ml-1 p-0.5 border border-slate-200 rounded-sm inline-flex"> ${faSprite('chevron-down', 'regular', 'w-3 h-3')} </span>
           </div>
           <ul tabindex="0" class="dropdown-content z-1 flex flex-col font-normal bg-white border w-64 border-strokeWeak p-2 text-sm rounded shadow">
-            <li class="px-1 py-0.5 cursor-pointer hover:bg-fillWeak">
-              <button @click=${() => this.hideColumn(column)}>Hide column</button>
+            <li class="px-1 cursor-pointer hover:bg-fillWeak">
+              <button class="cursor-pointer py-0.5" @click=${() => this.hideColumn(column)}>Hide column</button>
             </li>
-            <li class="px-1 py-0.5 cursor-pointer hover:bg-fillWeak">
-              <button @click=${() => this.moveColumn(column, -1)}>Move column left</button>
+            <li class="px-1 cursor-pointer hover:bg-fillWeak">
+              <button class="cursor-pointer py-0.5" @click=${() => this.moveColumn(column, -1)}>Move column left</button>
             </li>
-            <li class="px-1 py-0.5 cursor-pointer hover:bg-fillWeak">
-              <button @click=${() => this.moveColumn(column, 1)}>Move column right</button>
+            <li class="px-1 cursor-pointer hover:bg-fillWeak">
+              <button class="cursor-pointer py-0.5" @click=${() => this.moveColumn(column, 1)}>Move column right</button>
             </li>
           </ul>
         </div>
@@ -762,7 +762,7 @@ export class LogList extends LitElement {
           <div class="tabs tabs-box tabs-md p-0 tabs-outline items-center border">
             <button
               @click=${() => (this.view = 'tree')}
-              class=${`flex items-center justify-center gap-1 px-2 py-1 text-xs rounded ${
+              class=${`flex items-center cursor-pointer justify-center gap-1 px-2 py-1 text-xs rounded ${
                 this.view === 'tree' ? 'bg-gray-200 text-gray-800' : 'text-textWeak  hover:bg-gray-100'
               }`}
             >
@@ -772,7 +772,7 @@ export class LogList extends LitElement {
 
             <button
               @click=${() => (this.view = 'list')}
-              class=${`flex items-center justify-center gap-1 px-2 py-1 text-xs rounded ${
+              class=${`flex items-center cursor-pointer justify-center gap-1 px-2 py-1 text-xs rounded ${
                 this.view === 'list' ? 'bg-gray-200 text-gray-800' : 'text-textWeak  hover:bg-gray-100'
               }`}
             >
@@ -782,7 +782,7 @@ export class LogList extends LitElement {
           </div>
         `}
         <button
-          class=${`flex items-center justify-center gap-1 px-2 py-1 text-xs rounded ${
+          class=${`flex items-center cursor-pointer justify-center gap-1 px-2 py-1 text-xs rounded ${
             this.flipDirection ? 'bg-gray-200 text-gray-800' : 'text-textWeak  hover:bg-gray-100'
           }`}
           @click=${() => {
@@ -798,7 +798,7 @@ export class LogList extends LitElement {
         </button>
 
         <button
-          class=${`flex items-center justify-center gap-1 px-2 py-1 text-xs rounded ${
+          class=${`flex items-center cursor-pointer justify-center gap-1 px-2 py-1 text-xs rounded ${
             this.wrapLines ? 'bg-gray-200 text-gray-800' : 'text-textWeak  hover:bg-gray-100'
           }`}
           @click=${() => {
