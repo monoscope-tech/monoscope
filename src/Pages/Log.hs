@@ -179,7 +179,7 @@ apiLogH pid queryM queryASTM cols' cursorM' sinceM fromM toM layoutM sourceM tar
   freeTierExceeded <-
     dbtToEff $
       if project.paymentPlan == "Free"
-        then (> 10000) <$> RequestDumps.getLastSevenDaysTotalRequest pid
+        then (> 1000) <$> RequestDumps.getLastSevenDaysTotalRequest pid
         else pure False
 
   let bwconf =

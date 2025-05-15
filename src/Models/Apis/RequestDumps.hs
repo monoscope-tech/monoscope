@@ -534,7 +534,7 @@ getLastSevenDaysTotalRequest pid = do
     (Only c) -> return c
   where
     q =
-      [sql| SELECT count(*) FROM otel_logs_and_spans WHERE project_id=? AND created_at > NOW() - interval '7' day;|]
+      [sql| SELECT count(*) FROM otel_logs_and_spans WHERE project_id=? AND timestamp > NOW() - interval '1' day;|]
 
 
 getTotalRequestToReport :: Projects.ProjectId -> UTCTime -> DBT IO Int

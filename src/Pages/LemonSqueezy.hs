@@ -163,16 +163,17 @@ billingPage pid reqs amount last_reported lemonUrl critical paymentPlan = div_ [
         div_ [class_ " text-gray-600"] "Total Requests Made"
         div_ [class_ " text-gray-600"] "*Calculation may not be up-to-date"
       div_ [class_ "flex flex-col gap-2"] $ do
-        div_ [class_ "text-4xl font-bold"] $ toHtml $ "$" <> T.replace "\"" "" amount
+        div_ [class_ "text-4xl font-bold"] $ toHtml $ "$" <> if paymentPlan == "Free" then "0" else T.replace "\"" "" amount
         div_ [class_ " text-gray-600"] "Estimated Cost"
         div_ [class_ " text-gray-600"] "*Based on current usage"
     div_ [class_ "mt-8 flex flex-col gap-4"] do
       div_ [class_ "flex items-center gap-2  text-gray-600"] $ do
         faSprite_ "regular-calendar-days-clock" "regular" "h-4 w-4"
         span_ [data_ "id" "18"] $ toHtml $ "Latest data: " <> T.take 19 last_reported
-      a_ [class_ "flex items-center gap-2 font-bold cursor-pointer", hxGet_ [text| /p/$pidTxt/manage_subscription |]] $ do
-        faSprite_ "link-simple" "regular" "h-4 w-4"
-        span_ [data_ "id" "18"] "View on LemonSqueezy"
+      unless (paymentPlan == "Free") do
+        a_ [class_ "flex items-center gap-2 font-bold cursor-pointer", hxGet_ [text| /p/$pidTxt/manage_subscription |]] $ do
+          faSprite_ "link-simple" "regular" "h-4 w-4"
+          span_ [data_ "id" "18"] "View on LemonSqueezy"
 
     div_ [class_ "border-t mt-8 pt-8"] do
       div_ [class_ "self-stretch justify-start text-textStrong text-base font-semibold font-['Inter']"] "Upgrade plan"
