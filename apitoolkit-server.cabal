@@ -451,6 +451,7 @@ test-suite doctests
     , hspec
     , hspec-discover
     , relude >=1.2.0.0
+    , hs-opentelemetry-instrumentation-auto
   default-language: GHC2021
 
 test-suite tests
@@ -495,4 +496,5 @@ test-suite tests
     , hspec-discover
     , relude >=1.2.0.0
     , tmp-postgres
+    ,hs-opentelemetry-instrumentation-auto
   default-language: GHC2021
