@@ -283,6 +283,9 @@ tests:
     dependencies:
       - base
       - apitoolkit-server
+      - rust-interop
+      - hs-opentelemetry-instrumentation-auto
+      - hiedb-plugin
       - doctest-parallel >= 0.1
       - relude >= 1.2.0.0
       - hspec
@@ -293,6 +296,9 @@ tests:
     dependencies:
       - base
       - apitoolkit-server
+      - rust-interop
+      - hs-opentelemetry-instrumentation-auto
+      - hiedb-plugin
       - tmp-postgres
       - hspec
       - hspec-discover
