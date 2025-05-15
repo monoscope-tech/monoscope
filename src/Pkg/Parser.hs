@@ -104,7 +104,7 @@ sqlFromQueryComponents sqlCfg qc =
       where' = maybe "" (\whereC -> " AND (" <> whereC <> ")") qc.whereClause
       whereClause = case sqlCfg.source of
         Just SSpans -> case sqlCfg.targetSpansM of
-          Nothing -> where' <> " AND parent_id IS NULL"
+          Nothing -> where'
           _ -> where'
         _ -> where'
       groupByClause = if null qc.groupByClause then "" else " GROUP BY " <> T.intercalate "," qc.groupByClause

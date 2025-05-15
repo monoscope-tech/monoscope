@@ -32,6 +32,7 @@ import Data.Default.Instances ()
 import Data.Text qualified as T
 import Data.Time (CalendarDiffTime, UTCTime, ZonedTime)
 import Data.Time.Format
+import Data.Time.Format.ISO8601 (iso8601Show)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity.DBT (QueryNature (Insert, Select), executeMany, query, queryOne)
@@ -430,14 +431,20 @@ selectLogTable pid queryAST cursorM dateRange projectedColsByUser source targetS
   pure $ Right (logItemsV, queryComponents.toColNames, c)
 
 
-selectChildSpansAndLogs :: (DB :> es, Time.Time :> es) => Projects.ProjectId -> [Text] -> V.Vector Text -> Eff es (V.Vector (V.Vector AE.Value))
-selectChildSpansAndLogs pid projectedColsByUser traceIds = do
+selectChildSpansAndLogs :: (DB :> es, Time.Time :> es) => Projects.ProjectId -> [Text] -> V.Vector Text -> (Maybe UTCTime, Maybe UTCTime) -> Eff es (V.Vector (V.Vector AE.Value))
+selectChildSpansAndLogs pid projectedColsByUser traceIds dateRange = do
   now <- Time.currentTime
+  let fmtTime = toText . iso8601Show
   let qConfig = defSqlQueryCfg pid now (Just SSpans) Nothing
       (r, _) = getProcessedColumns projectedColsByUser qConfig.defaultSelect
+      dateRangeStr = case dateRange of
+        (Nothing, Just b) -> "AND timestamp BETWEEN '" <> fmtTime b <> "' AND NOW() "
+        (Just a, Just b) -> "AND  timestamp BETWEEN '" <> fmtTime a <> "' AND '" <> fmtTime b <> "'"
+        _ -> ""
+
       q =
         [text|SELECT json_build_array($r) FROM otel_logs_and_spans
-             WHERE project_id=? and context___trace_id=Any(?) and parent_id IS NOT NULL ORDER BY timestamp DESC
+             WHERE project_id=? and  context___trace_id=Any(?) $dateRangeStr and parent_id IS NOT NULL
            |]
   v <- dbtToEff $ query Select (Query $ encodeUtf8 q) (pid, traceIds)
   pure $ V.mapMaybe valueToVector v
@@ -527,7 +534,7 @@ getLastSevenDaysTotalRequest pid = do
     (Only c) -> return c
   where
     q =
-      [sql| SELECT count(*) FROM apis.request_dumps WHERE project_id=? AND created_at > NOW() - interval '7' day;|]
+      [sql| SELECT count(*) FROM otel_logs_and_spans WHERE project_id=? AND created_at > NOW() - interval '7' day;|]
 
 
 getTotalRequestToReport :: Projects.ProjectId -> UTCTime -> DBT IO Int
