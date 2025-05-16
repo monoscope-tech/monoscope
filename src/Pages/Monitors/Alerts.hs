@@ -182,7 +182,7 @@ editAlert_ pid monitorM = do
 
       div_ [class_ "flex gap-5 py-5"] do
         label_ [class_ " flex items-center gap-2 justify-between pl-5 text-lg pr-5"] "Alert Title"
-        input_ [class_ "grow input input-bordered", type_ "text", placeholder_ "Title of alert", name_ "title", value_ monitor.alertConfig.title]
+        input_ [class_ "grow input ", type_ "text", placeholder_ "Title of alert", name_ "title", value_ monitor.alertConfig.title]
 
       div_ [class_ "collapse collapse-arrow join-item border border-base-300"] do
         input_ [class_ "", name_ "createAlertAccordion", checked_, type_ "radio", required_ ""]
@@ -192,12 +192,12 @@ editAlert_ pid monitorM = do
         div_ [class_ "collapse-content"] do
           div_ [class_ "py-3"] do
             span_ "Trigger when the metric is "
-            select_ [class_ "select select-bordered inline-block mx-2 ", name_ "direction"] do
+            select_ [class_ "select inline-block mx-2 ", name_ "direction"] do
               option_ [selected_ ""] "above"
               option_ "below"
             span_ " the threshold for the last"
             select_
-              [ class_ "select select-bordered inline-block mx-2 "
+              [ class_ "select inline-block mx-2 "
               , [__| on change log me.value then
                       if me.value=='5' set :val to '24H' else if me.value=='60' set :val to '7D' end
                        then set #custom_range_input's value to :val
@@ -214,7 +214,7 @@ editAlert_ pid monitorM = do
                 span_ [class_ ""] "Alert threshold"
                 faSprite_ "chevron-right" "solid" "w-3 h-3"
               input_
-                [ class_ "grow input input-bordered input-error "
+                [ class_ "grow input input-error "
                 , id_ "alertThreshold"
                 , [__|on input updateMarkAreas('reqsChartsEC',#warningThreshold.value, #alertThreshold.value) |]
                 , type_ "number"
@@ -228,7 +228,7 @@ editAlert_ pid monitorM = do
                 span_ "Warning threshold"
                 faSprite_ "chevron-right" "solid" "w-3 h-3"
               input_
-                [ class_ "grow input input-bordered input-warning"
+                [ class_ "grow input input-warning"
                 , id_ "warningThreshold"
                 , [__|on input updateMarkAreas('reqsChartsEC',#warningThreshold.value, #alertThreshold.value) |]
                 , type_ "number"
@@ -243,20 +243,20 @@ editAlert_ pid monitorM = do
           span_ [class_ "badge badge-error mr-3"] "2"
           "Alert Message"
         div_ [class_ "collapse-content space-y-4"] do
-          div_ [class_ "form-control w-full"] do
-            label_ [class_ "label"] $ span_ [class_ "label-text"] "Severity"
-            select_ [class_ "select select-bordered w-full", name_ "severity"] do
+          fieldset_ [class_ "fieldset w-full"] do
+            label_ [class_ "label"] "Severity"
+            select_ [class_ "select w-full", name_ "severity"] do
               option_ "Info"
               option_ "Warning"
               option_ "Error"
               option_ "Critical"
-          div_ [class_ "form-control w-full"] do
-            label_ [class_ "label"] $ span_ [class_ "label-text"] "Subject"
-            input_ [placeholder_ "Error: Error subject", class_ "input input-bordered  w-full", name_ "subject", value_ monitor.alertConfig.subject]
-          div_ [class_ "form-control w-full"] do
-            label_ [class_ "label"] $ span_ [class_ "label-text"] "Message"
+          fieldset_ [class_ "fieldset w-full"] do
+            label_ [class_ "label"] "Subject"
+            input_ [placeholder_ "Error: Error subject", class_ "input w-full", name_ "subject", value_ monitor.alertConfig.subject]
+          fieldset_ [class_ "fieldset w-full"] do
+            label_ [class_ "label"] "Message"
             textarea_
-              [placeholder_ "Alert Message", class_ "textarea textarea-bordered textarea-md w-full", name_ "message"]
+              [placeholder_ "Alert Message", class_ "textarea textarea-md w-full", name_ "message"]
               $ toHtml
               $ if monitor.alertConfig.message == ""
                 then [text| The alert's value is too high. Check the APItoolkit Alerts to debug |]
@@ -279,7 +279,7 @@ editAlert_ pid monitorM = do
                 -- [__|on click toggle .dropdown-open on the closest .dropdown|]
                 ]
                 "Add recipient"
-              ul_ [tabindex_ "0", style_ "bottom:100%;top:auto", class_ "bottom-full top-auto dropdown-content z-[1] menu p-2 shadow bg-base-100 rounded-box w-52 min-w-[15rem]"] do
+              ul_ [tabindex_ "0", style_ "bottom:100%;top:auto", class_ "bottom-full top-auto dropdown-content z-1 menu p-2 shadow-sm bg-base-100 rounded-box w-52 min-w-[15rem]"] do
                 li_ $ a_ [[__|on click put #addRecipientEmailAllTmpl.innerHTML after #addRecipientDropdown then _hyperscript.processNode(#recipientListParent) |]] "Email everyone"
                 li_ $ a_ [[__|on click put #addRecipientEmailTmpl.innerHTML after #addRecipientDropdown then _hyperscript.processNode(#recipientListParent) |]] "Email ..."
                 li_ $ a_ [[__|on click put #addRecipientSlackTmpl.innerHTML after #addRecipientDropdown then _hyperscript.processNode(#recipientListParent) |]] "To default Slack channel"
@@ -300,7 +300,7 @@ editAlert_ pid monitorM = do
 
 addRecipientSlackTmpl_ :: Text -> Html ()
 addRecipientSlackTmpl_ channel =
-  label_ [class_ "input input-bordered inline-flex items-center gap-2"] do
+  label_ [class_ "input inline-flex items-center gap-2"] do
     "Slack"
     input_ [class_ "grow", class_ "input", placeholder_ "#channelName", type_ "text", required_ "", name_ "recipientSlack"]
     a_ [class_ "badge badge-base", [__|on click remove the closest parent <label/>|]] $ faSprite_ "xmark" "solid" "w-3 h-3"
@@ -308,7 +308,7 @@ addRecipientSlackTmpl_ channel =
 
 addRecipientEmailTmpl_ :: CI.CI Text -> Html ()
 addRecipientEmailTmpl_ email =
-  label_ [class_ "input input-bordered inline-flex items-center gap-2"] do
+  label_ [class_ "input inline-flex items-center gap-2"] do
     "Email"
     input_ [class_ "grow", class_ "input", placeholder_ "name@site.com", type_ "email", required_ "", name_ "recipientEmail"]
     a_ [class_ "badge badge-base", [__|on click remove the closest parent <label/>|]] $ faSprite_ "xmark" "solid" "w-3 h-3"
@@ -316,7 +316,7 @@ addRecipientEmailTmpl_ email =
 
 addRecipientEmailAllTmpl_ :: Html ()
 addRecipientEmailAllTmpl_ =
-  label_ [class_ "input input-bordered inline-flex items-center gap-2"] do
+  label_ [class_ "input inline-flex items-center gap-2"] do
     "Email Everyone"
     input_ [class_ "grow", class_ "input", placeholder_ "name@site.com", type_ "hidden", value_ "True", name_ "recipientEmailAll"]
     a_ [class_ "badge badge-base", [__|on click remove the closest parent <label/>|]] $ faSprite_ "xmark" "solid" "w-3 h-3"
@@ -394,7 +394,7 @@ triggerCondition = div_ [class_ "flex items-center space-x-2"] $ do
 
 thresholdInput_ :: Text -> Text -> Maybe Text -> Text -> Html ()
 thresholdInput_ sign label colorM placeholder = div_ [class_ "flex items-center space-x-4"] $ do
-  whenJust colorM \color -> div_ [class_ $ "w-1 h-6 rounded bg-" <> color] mempty
+  whenJust colorM \color -> div_ [class_ $ "w-1 h-6 rounded-sm bg-" <> color] mempty
   span_ [class_ "w-52 inline-block"] $ toHtml $ label <> " threshold:"
   div_ [class_ "space-x-5"] do
     span_ $ toHtml sign
@@ -421,8 +421,8 @@ evaluationOptions = div_ [class_ "border-l-2 border-l-slate-300 pl-4 space-y-2"]
 
 
 selectClass, inputClass :: Text
-selectClass = "border border-gray-300 rounded px-2 py-1"
-inputClass = "border border-gray-300 rounded px-2 py-1"
+selectClass = "border border-gray-300 rounded-sm px-2 py-1"
+inputClass = "border border-gray-300 rounded-sm px-2 py-1"
 
 
 instance ToHtml MonitorCreate where
@@ -444,7 +444,7 @@ monitorMetric_ pid monitorM = section_ [class_ "px-8 py-5 space-y-5 group/pg ove
 
   div_
     [ id_ "reqsChartsECP"
-    , class_ "px-5 mt-5 aspect-[4/1]"
+    , class_ "px-5 mt-5 aspect-4/1"
     , hxGet_ $ "/charts_html?id=reqsChartsEC&show_legend=true&pid=" <> pid.toText
     , hxTrigger_ "load,  htmx:beforeRequest from:#log_explorer_form"
     , hxVals_ "js:{query_raw:window.getQueryFromEditor(), since: getTimeRange().since, from: getTimeRange().from, to:getTimeRange().to, cols:params().cols, layout:'all', source: params().source}"
@@ -478,12 +478,12 @@ monitorMetric_ pid monitorM = section_ [class_ "px-8 py-5 space-y-5 group/pg ove
           div_ [class_ "border-l-2 border-l-slate-300 pl-4 space-y-2"] do
             h3_ [class_ "font-normal text-base"] "Evaluation Details"
             div_ [class_ "flex items-center gap-2"] do
-              div_ [class_ "form-control"] do
-                label_ [class_ "label label-text"] "Evaluate the"
-                select_ [class_ "select select-xs select-bordered"] $ mapM_ (option_ []) ["average", "maximum", "minimum", "sum"]
-              div_ [class_ "form-control"] do
+              fieldset_ [class_ "fieldset"] do
+                label_ [class_ "label"] "Evaluate the"
+                select_ [class_ "select select-xs "] $ mapM_ (option_ []) ["average", "maximum", "minimum", "sum"]
+              fieldset_ [class_ "fieldset"] do
                 label_ [class_ "label label-text"] "Of the query over the"
-                select_ [class_ "select select-xs select-bordered"] $ mapM_ (option_ []) ["last 5 minutes", "last 10minutes", "last 15minutes", "last 30minutes", "last 1 hour", "last 1 day", "last 1 week"]
+                select_ [class_ "select select-xs "] $ mapM_ (option_ []) ["last 5 minutes", "last 10minutes", "last 15minutes", "last 30minutes", "last 1 hour", "last 1 day", "last 1 week"]
       hr_ []
     li_ [] do
       hr_ []
@@ -503,20 +503,20 @@ monitorMetric_ pid monitorM = section_ [class_ "px-8 py-5 space-y-5 group/pg ove
           span_ [] "Configure notification message"
         div_ [class_ "pl-8 pb-8 space-y-3 "] do
           div_ [class_ "space-y-4"] do
-            div_ [class_ "form-control w-full"] do
-              label_ [class_ "label"] $ span_ [class_ "label-text"] "Severity"
-              select_ [class_ "select select-xs select-bordered w-full", name_ "severity"] do
+            fieldset_ [class_ "fieldset w-full"] do
+              label_ [class_ "label"] "Severity"
+              select_ [class_ "select select-xs w-full", name_ "severity"] do
                 option_ "Info"
                 option_ "Warning"
                 option_ "Error"
                 option_ "Critical"
-            div_ [class_ "form-control w-full"] do
-              label_ [class_ "label"] $ span_ [class_ "label-text"] "Subject"
-              input_ [placeholder_ "Error: Error subject", class_ "input input-xs input-bordered  w-full", name_ "subject", value_ monitor.alertConfig.subject]
-            div_ [class_ "form-control w-full"] do
-              label_ [class_ "label"] $ span_ [class_ "label-text"] "Message"
+            fieldset_ [class_ "fieldset w-full"] do
+              label_ [class_ "label"] "Subject"
+              input_ [placeholder_ "Error: Error subject", class_ "input input-xs nw-full", name_ "subject", value_ monitor.alertConfig.subject]
+            fieldset_ [class_ "fieldset w-full"] do
+              label_ [class_ "label"] "Message"
               textarea_
-                [placeholder_ "Alert Message", class_ "textarea  textarea-bordered textarea-xs w-full", name_ "message"]
+                [placeholder_ "Alert Message", class_ "textarea  textarea-xs w-full", name_ "message"]
                 $ toHtml
                 $ if monitor.alertConfig.message == ""
                   then [text| The alert's value is too high. Check the APItoolkit Alerts to debug |]
@@ -528,7 +528,7 @@ monitorMetric_ pid monitorM = section_ [class_ "px-8 py-5 space-y-5 group/pg ove
               div_ [class_ "flex items-center gap-2"] do
                 input_ [class_ "toggle toggle-sm", type_ "checkbox", name_ "notifyAfterCheck"]
                 span_ "If this monitor is not acknowleged or resoved, notify renotify every"
-                select_ [class_ "select select-xs select-bordered", name_ "notifyAfter"] $ mapM_ (option_ []) ["10mins", "20mins", "30mins", "1hour", "6hours", "24hours"]
+                select_ [class_ "select select-xs ", name_ "notifyAfter"] $ mapM_ (option_ []) ["10mins", "20mins", "30mins", "1hour", "6hours", "24hours"]
               div_ [class_ "flex items-center gap-2"] do
                 input_ [class_ "toggle toggle-sm", type_ "checkbox", name_ "stopAfterCheck"]
                 span_ "Stop renotifying after "
@@ -555,7 +555,7 @@ monitorMetric_ pid monitorM = section_ [class_ "px-8 py-5 space-y-5 group/pg ove
                 -- [__|on click toggle .dropdown-open on the closest .dropdown|]
                 ]
                 "Add recipient"
-              ul_ [tabindex_ "0", style_ "bottom:100%;top:auto", class_ "bottom-full top-auto dropdown-content z-[1] menu p-2 shadow bg-base-100 rounded-box w-52 min-w-[15rem]"] do
+              ul_ [tabindex_ "0", style_ "bottom:100%;top:auto", class_ "bottom-full top-auto dropdown-content z-1 menu p-2 shadow-sm bg-base-100 rounded-box w-52 min-w-[15rem]"] do
                 li_ $ a_ [[__|on click put #addRecipientEmailAllTmpl.innerHTML after #addRecipientDropdown then _hyperscript.processNode(#recipientListParent) |]] "Email everyone"
                 li_ $ a_ [[__|on click put #addRecipientEmailTmpl.innerHTML after #addRecipientDropdown then _hyperscript.processNode(#recipientListParent) |]] "Email ..."
                 li_ $ a_ [[__|on click put #addRecipientSlackTmpl.innerHTML after #addRecipientDropdown then _hyperscript.processNode(#recipientListParent) |]] "To default Slack channel"
@@ -670,9 +670,9 @@ monitorTypeDetail_ title content uri = do
 
 
 inputRadio_ :: Text -> Text -> Html ()
-inputRadio_ name lbel = div_ [class_ "form-control"] $ label_ [class_ "label cursor-pointer justify-start items-start gap-2"] do
+inputRadio_ name lbel = fieldset_ [class_ "fieldset"] $ label_ [class_ "label cursor-pointer justify-start items-start gap-2"] do
   input_ ([type_ "radio", name_ name, class_ $ "radio radio-xs " <> slugify lbel] <> [checked_ | lbel == "Errors"])
-  span_ [class_ "label-text"] $ toHtml lbel
+  span_ [class_ ""] $ toHtml lbel
 
 
 monitorCreatePostH :: Projects.ProjectId -> Maybe Text -> ATAuthCtx (RespHeaders (PageCtx MonitorCreate))

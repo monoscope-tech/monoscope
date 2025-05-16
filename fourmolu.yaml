@@ -1,8 +1,8 @@
 indentation: 2
-function-arrows: leading 
+function-arrows: leading
 comma-style: leading
 import-export-style: diff-friendly
-indent-wheres: true 
+indent-wheres: true
 record-brace-space: false
 newlines-between-decls: 2
 haddock-style: single-line
@@ -11,7 +11,10 @@ let-style: auto
 in-style: right-align
 respectful: true
 fixities: []
-unicode: detect 
+unicode: detect
 single-constraint-parens: never
 single-deriving-parens: always
-single-deriving-parens: always 
+sort-constraints: true
+sort-derived-classes: true
+sort-deriving-clauses: true
+trailing-section-operators: false

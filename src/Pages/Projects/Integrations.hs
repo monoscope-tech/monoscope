@@ -3,7 +3,6 @@
 
 module Pages.Projects.Integrations (
   CreateProjectForm,
-  createProjectGetH,
   NotifListForm,
   integrationsSettingsGetH,
   updateNotificationsChannel,
@@ -25,6 +24,7 @@ import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
 import Relude hiding (ask, asks)
 import System.Config
 import System.Types (ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders, addSuccessToast)
+import Utils (faSprite_)
 import Web.FormUrlEncoded (FromForm)
 
 
@@ -41,20 +41,6 @@ data CreateProjectForm = CreateProjectForm
   }
   deriving stock (Eq, Show, Generic)
   deriving anyclass (FromForm, Default)
-
-
-----------------------------------------------------------------------------------------------------------
--- createProjectGetH is the handler for the create projects page
-createProjectGetH :: ATAuthCtx (RespHeaders (Html ()))
-createProjectGetH = do
-  appCtx <- ask @AuthContext
-  sess <- Sessions.getSession
-  let bwconf =
-        (def :: BWConfig)
-          { sessM = Just sess
-          , pageTitle = "Endpoints"
-          }
-  addRespHeaders $ bodyWrapper bwconf $ integrationsBody sess.persistentSession appCtx.config False (def @CreateProjectForm) Nothing Nothing
 
 
 ----------------------------------------------------------------------------------------------------------
@@ -76,7 +62,7 @@ integrationsSettingsGetH pid = do
           }
   slackInfo <- getProjectSlackData pid
 
-  let bwconf = (def :: BWConfig){sessM = Just sess, currProject = Just project, pageTitle = "Integrations"}
+  let bwconf = (def :: BWConfig){sessM = Just sess, currProject = Just project, pageTitle = "Integrations", isSettingsPage = True}
   addRespHeaders $ bodyWrapper bwconf $ integrationsBody sess.persistentSession appCtx.config True createProj (Just project.notificationsChannel) slackInfo
 
 
@@ -119,50 +105,96 @@ integrationsBody :: Sessions.PersistentSession -> EnvConfig -> Bool -> CreatePro
 integrationsBody sess envCfg isUpdate cp notifChannel slackData = do
   section_ [id_ "main-content", class_ "p-3 py-5 sm:p-6 overflow-y-scroll h-full"] do
     div_ [class_ "mx-auto", style_ "max-width:1000px"] do
-      when isUpdate do
-        let pid = cp.projectId
-        form_ [class_ "mt-10", hxPost_ [text|/p/$pid/notifications-channels|], hxSwap_ "none"] do
-          h2_ [class_ "text-slate-700 text-3xl font-medium mb-5"] "Project Notifications"
-          div_ [class_ "flex flex-col gap-4 border shadow p-6 rounded-2xl"] do
-            p_ [] "Select channels to receive updates on this project."
-            let notif = fromMaybe [] notifChannel
-            div_ [class_ "shadow-sm border p-6 rounded-lg"] do
-              div_ [class_ "flex gap-6 items-center mb-2"] do
-                h3_ [class_ "text-2xl font-bold"] "Email"
-                let isChecked = Projects.NEmail `elem` notif
-                div_
-                  [class_ "flex items-center gap-2"]
-                  do
-                    label_ [class_ "relative inline-flex items-center cursor-pointer"] do
-                      input_ [type_ "checkbox", name_ "notificationsChannel", value_ "email", if isChecked then checked_ else title_ "Enable notification via email", class_ "sr-only peer"]
-                      div_ [class_ "w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300 dark:peer-focus:ring-blue-800 rounded-full peer dark:bg-gray-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-base-100 after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:border-gray-600 peer-checked:bg-blue-600"] pass
-              p_ [class_ " text-blue-500 font-bold"] "All users on this project, will receive updates via email."
-            div_ [class_ "shadow-sm border p-6 rounded-lg"] do
-              div_ [class_ "flex gap-6 items-center mb-6"] do
-                h3_ [class_ "text-2xl font-bold"] "Slack"
-                let isChecked = Projects.NSlack `elem` notif
-                div_
-                  [class_ "flex items-center gap-2"]
-                  do
-                    label_ [class_ "relative inline-flex items-center cursor-pointer"] do
-                      input_ [type_ "checkbox", name_ "notificationsChannel", if isChecked then checked_ else title_ "Enable notifications via slack", value_ "slack", class_ "sr-only peer"]
-                      div_ [class_ "w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300 dark:peer-focus:ring-blue-800 rounded-full peer dark:bg-gray-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-base-100 after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:border-gray-600 peer-checked:bg-blue-600"] pass
+      let pid = cp.projectId
+      form_ [class_ "mt-10", hxPost_ [text|/p/$pid/notifications-channels|], hxSwap_ "none"] do
+        h2_ [class_ "text-slate-700 text-3xl font-medium mb-5"] "Project Notifications"
+        div_ [class_ "flex flex-col gap-4"] do
+          p_ [] "Select channels to receive updates on this project."
+          let notif = fromMaybe [] notifChannel
+          let isCheckedM = Projects.NEmail `elem` notif
+          div_ [class_ $ "bg-white rounded-lg border border-strokeWeak shadow-xs " <> if isCheckedM then "border-l-4 border-l-primary" else ""] $ do
+            div_ [class_ "p-6 pb-3"] $ do
+              div_ [class_ "flex items-center justify-between"] $ do
+                div_ [class_ "flex items-center gap-3"] $ do
+                  div_ [class_ "flex h-10 w-10 items-center justify-center rounded-full bg-fillWeak"]
+                    $ faSprite_ "envelope" "solid" "h-6 w-6"
+                  div_ [] $ do
+                    h3_ [class_ "text-lg font-semibold"] "Email Notifications"
+                    p_ [class_ "text-sm text-gray-500"] "Receive project updates via email"
+                label_ [class_ "relative inline-flex items-center cursor-pointer"] $ do
+                  input_ [type_ "checkbox", name_ "notificationsChannel", value_ "email", if isCheckedM then checked_ else title_ "Enable notification via email", class_ "toggle toggle-primary"]
+                  span_ [class_ "slider"] ("" :: Html ())
+            div_ [class_ "px-6 pb-6"]
+              $ p_ [class_ "text-sm text-gray-500"] "All users on this project will receive updates via email."
+
+          -- div_ [class_ "shadow-xs border p-6 rounded-lg"] do
+          --   div_ [class_ "flex gap-6 items-center mb-2"] do
+          --     h3_ [class_ "text-2xl font-bold"] "Email"
+          --     div_
+          --       [class_ "flex items-center gap-2"]
+          --       do
+          --         label_ [class_ "relative inline-flex items-center cursor-pointer"] do
+          --           input_ [type_ "checkbox", name_ "notificationsChannel", value_ "email", if isChecked then checked_ else title_ "Enable notification via email", class_ "toggle"]
+          --   p_ [class_ " text-brand font-bold"] "All users on this project, will receive updates via email."
+          let isCheckedS = Projects.NSlack `elem` notif
+          div_ [class_ $ "bg-white rounded-lg border border-strokeWeak shadow-xs " <> if isCheckedS then "border-l-4 border-l-primary" else ""] $ do
+            div_ [class_ "p-6 pb-3"] $ do
+              div_ [class_ "flex items-center justify-between"] $ do
+                div_ [class_ "flex items-center gap-3"] $ do
+                  div_ [class_ "flex h-10 w-10 items-center justify-center rounded-full bg-fillWeak"] do
+                    faSprite_ "slack" "solid" "h-6 w-6"
+                  div_ $ do
+                    h3_ [class_ "text-lg font-semibold"] "Slack"
+                    p_ [class_ "text-sm text-gray-500"] "Send notifications to Slack channels"
+                label_ [class_ "relative inline-flex items-center cursor-pointer"] $ do
+                  input_ [type_ "checkbox", id_ "slack-toggle", if isCheckedS then checked_ else title_ "Enable notifications via slack", name_ "notificationsChannel", value_ "slack", class_ "toggle toggle-primary"]
+            div_ [class_ "px-6 pb-6"] $ do
               case slackData of
-                Just s -> span_ [class_ "font-bold  mb-2 text-blue-500 block"] "Already connected, but you can add again to change workspace or channel."
+                Just s -> p_ [class_ "text-sm text-gray-500 mb-4 text-green-500"] "Already connected, but you can add again to change workspace or channel."
                 Nothing -> pass
               a_ [target_ "_blank", class_ "", href_ $ "https://slack.com/oauth/v2/authorize?client_id=6211090672305.6200958370180&scope=chat:write,incoming-webhook&user_scope=&redirect_uri=" <> envCfg.slackRedirectUri <> pid] do
                 img_ [alt_ "Add to slack", height_ "40", width_ "139", src_ "https://platform.slack-edge.com/img/add_to_slack.png", term "srcSet" "https://platform.slack-edge.com/img/add_to_slack.png 1x, https://platform.slack-edge.com/img/add_to_slack@2x.png 2x"]
 
-            div_ [class_ "shadow-sm border p-6 rounded-lg"] do
-              div_ [class_ "flex gap-6 items-center mb-2"] do
-                h3_ [class_ "text-2xl font-bold"] "Discord"
-                let isChecked = Projects.NDiscord `elem` notif
-                div_
-                  [class_ "flex items-center gap-2"]
-                  do
-                    label_ [class_ "relative inline-flex items-center cursor-pointer"] do
-                      input_ [type_ "checkbox", name_ "notificationsChannel", value_ "discord", if isChecked then checked_ else title_ "Enable notification via discord", class_ "sr-only peer"]
-                      div_ [class_ "w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300 dark:peer-focus:ring-blue-800 rounded-full peer dark:bg-gray-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-base-100 after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:border-gray-600 peer-checked:bg-blue-600"] pass
-              input_ [type_ "text", name_ "discordUrl", class_ "input input-bordered input-sm w-full mt-2", placeholder_ "Discord Webhook URL"]
+          -- div_ [class_ "shadow-xs border p-6 rounded-lg"] do
+          --   div_ [class_ "flex gap-6 items-center mb-6"] do
+          --     h3_ [class_ "text-2xl font-bold"] "Slack"
+          --     let isChecked = Projects.NSlack `elem` notif
+          --     div_
+          --       [class_ "flex items-center gap-2"]
+          --       do
+          --         label_ [class_ "relative inline-flex items-center cursor-pointer"] do
+          --           input_ [type_ "checkbox", name_ "notificationsChannel", if isChecked then checked_ else title_ "Enable notifications via slack", value_ "slack", class_ "sr-only peer"]
+          --           div_ [class_ "w-11 h-6 bg-gray-200 peer-focus:outline-hidden peer-focus:ring-4 peer-focus:ring-blue-300 dark:peer-focus:ring-blue-800 rounded-full peer dark:bg-gray-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-base-100 after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:border-gray-600 peer-checked:bg-blue-600"] pass
+          --   case slackData of
+          --     Just s -> span_ [class_ "font-bold  mb-2 text-brand block"] "Already connected, but you can add again to change workspace or channel."
+          --     Nothing -> pass
+          --   a_ [target_ "_blank", class_ "", href_ $ "https://slack.com/oauth/v2/authorize?client_id=6211090672305.6200958370180&scope=chat:write,incoming-webhook&user_scope=&redirect_uri=" <> envCfg.slackRedirectUri <> pid] do
+          --     img_ [alt_ "Add to slack", height_ "40", width_ "139", src_ "https://platform.slack-edge.com/img/add_to_slack.png", term "srcSet" "https://platform.slack-edge.com/img/add_to_slack.png 1x, https://platform.slack-edge.com/img/add_to_slack@2x.png 2x"]
+          let isCheckedD = Projects.NDiscord `elem` notif
+          div_ [class_ $ "bg-white rounded-lg border border-strokeWeak shadow-xs " <> if isCheckedD then "border-l-4 border-l-primary" else ""] $ do
+            div_ [class_ "p-6 pb-6"] $ do
+              div_ [class_ "flex items-center justify-between "] $ do
+                div_ [class_ "flex items-center gap-3"] $ do
+                  div_ [class_ "flex h-10 w-10 items-center justify-center rounded-full bg-fillWeak"] do
+                    faSprite_ "discord" "solid" "h-6 w-6"
+                  div_ $ do
+                    h3_ [class_ "text-lg font-semibold"] "Discord"
+                    p_ [class_ "text-sm text-gray-500"] "Send notifications to Discord servers"
+                div_ [class_ "flex items-center gap-2"] do
+                  label_ [class_ "relative inline-flex items-center cursor-pointer"] do
+                    input_ [type_ "checkbox", name_ "notificationsChannel", value_ "discord", if isCheckedD then checked_ else title_ "Enable notification via discord", class_ "toggle toggle-primary"]
+              input_ [type_ "text", name_ "discordUrl", class_ "input input-sm w-full mt-3", placeholder_ "Discord Webhook URL"]
 
-            button_ [class_ "btn btn-primary w-max"] "Save Selections"
+          -- div_ [class_ "shadow-xs border p-6 rounded-lg"] do
+          --   div_ [class_ "flex gap-6 items-center mb-2"] do
+          --     h3_ [class_ "text-2xl font-bold"] "Discord"
+          --     let isChecked = Projects.NDiscord `elem` notif
+          --     div_
+          --       [class_ "flex items-center gap-2"]
+          --       do
+          --         label_ [class_ "relative inline-flex items-center cursor-pointer"] do
+          --           input_ [type_ "checkbox", name_ "notificationsChannel", value_ "discord", if isChecked then checked_ else title_ "Enable notification via discord", class_ "sr-only peer"]
+          --           div_ [class_ "w-11 h-6 bg-gray-200 peer-focus:outline-hidden peer-focus:ring-4 peer-focus:ring-blue-300 dark:peer-focus:ring-blue-800 rounded-full peer dark:bg-gray-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-base-100 after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:border-gray-600 peer-checked:bg-blue-600"] pass
+          --   input_ [type_ "text", name_ "discordUrl", class_ "input input-sm w-full mt-2", placeholder_ "Discord Webhook URL"]
+
+          button_ [class_ "btn btn-primary w-max"] "Save Selections"

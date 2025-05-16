@@ -1,8 +1,10 @@
-module Pages.Api (apiGetH, apiPostH, apiDeleteH, GenerateAPIKeyForm (..), ApiGet (..), ApiMut (..)) where
+module Pages.Api (apiGetH, apiPostH, apiActivateH, apiDeleteH, GenerateAPIKeyForm (..), ApiGet (..), ApiMut (..)) where
 
 import Data.Base64.Types qualified as B64
 import Data.ByteString.Base64 qualified as B64
+import Data.Char (isAlphaNum)
 import Data.Default (def)
+import Data.Map qualified as Map
 import Data.Text qualified as T
 import Data.UUID as UUID (toText)
 import Data.UUID.V4 qualified as UUIDV4
@@ -10,16 +12,17 @@ import Data.Vector qualified as V
 import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
 import Effectful.Reader.Static (ask)
 import Lucid
-import Lucid.Htmx (hxConfirm_, hxDelete_, hxPost_, hxTarget_)
+import Lucid.Htmx (hxConfirm_, hxDelete_, hxPatch_, hxPost_, hxPut_, hxTarget_)
 import Lucid.Hyperscript (__)
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
+import NeatInterpolation (text)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
 import Relude hiding (ask)
 import System.Config (AuthContext (config), EnvConfig (apiKeyEncryptionSecretKey))
-import System.Types (ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders, addSuccessToast)
+import System.Types (ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders, addSuccessToast, addTriggerEvent)
 import Utils (faSprite_)
 import Web.FormUrlEncoded (FromForm)
 
@@ -44,6 +47,7 @@ apiPostH pid apiKeyForm = do
     ProjectApiKeys.insertProjectApiKey pApiKey
     ProjectApiKeys.projectApiKeysByProjectId pid
   addSuccessToast "Created API Key Successfully" Nothing
+  addTriggerEvent "closeModal" ""
   case from apiKeyForm of
     Just v -> addRespHeaders $ ApiPostCopy (Just (pApiKey, encryptedKeyB64)) True
     Nothing -> addRespHeaders $ ApiPost pid apiKeys (Just (pApiKey, encryptedKeyB64))
@@ -56,6 +60,17 @@ apiDeleteH pid keyid = do
   apikeys <- dbtToEff $ ProjectApiKeys.projectApiKeysByProjectId pid
   if res > 0
     then addSuccessToast "Revoked API Key Successfully" Nothing
+    else addErrorToast "Something went wrong" Nothing
+  addRespHeaders $ ApiPost pid apikeys Nothing
+
+
+apiActivateH :: Projects.ProjectId -> ProjectApiKeys.ProjectApiKeyId -> ATAuthCtx (RespHeaders ApiMut)
+apiActivateH pid keyid = do
+  (sess, project) <- Sessions.sessionAndProject pid
+  res <- dbtToEff $ ProjectApiKeys.activateApiKey keyid
+  apikeys <- dbtToEff $ ProjectApiKeys.projectApiKeysByProjectId pid
+  if res > 0
+    then addSuccessToast "Activated API Key Successfully" Nothing
     else addErrorToast "Something went wrong" Nothing
   addRespHeaders $ ApiPost pid apikeys Nothing
 
@@ -81,8 +96,9 @@ apiGetH pid = do
         (def :: BWConfig)
           { sessM = Just sess
           , currProject = Just project
-          , pageTitle = "API Keys"
+          , pageTitle = "API keys"
           , hasIntegrated = Just (requestDumps > 0)
+          , isSettingsPage = True
           }
   addRespHeaders $ ApiGet $ PageCtx bwconf (pid, apiKeys)
 
@@ -97,122 +113,144 @@ instance ToHtml ApiGet where
 
 apiKeysPage :: Projects.ProjectId -> V.Vector ProjectApiKeys.ProjectApiKey -> Html ()
 apiKeysPage pid apiKeys = do
-  section_ [class_ "w-full mx-auto  px-16 py-10 overflow-hidden overflow-y-scroll"] do
-    div_ [class_ "flex justify-between mb-6"] do
-      h2_ [class_ "text-slate-700 text-2xl font-medium"] "API Keys"
-      button_ [class_ "btn-indigo p-2 rounded-lg", [__|on click remove .hidden from #generateApiKeyDialog |]] "Create an API Key"
+  section_ [class_ "w-full mx-auto px-16 py-16 overflow-hidden overflow-y-scroll"] do
+    div_ [class_ "flex justify-between items-center mb-6"] do
+      div_ [class_ "flex flex-col gap-2"] do
+        h2_ [class_ "text-xl font-semibold text-textWeak leading-7"] "Manage API keys"
+        p_ [class_ "text-sm text-textWeak leading-tight"] "Create and revoke your API keys"
+      label_ [class_ "btn btn-primary", Lucid.for_ "apikey-modal"] "Create an API key"
     mainContent pid apiKeys Nothing
-    div_
-      [ class_ "hidden fixed z-30 inset-0 overflow-y-auto"
-      , role_ "dialog"
-      , id_ "generateApiKeyDialog"
-      ]
-      do
+
+    input_ [type_ "checkbox", id_ "apikey-modal", class_ "modal-toggle"]
+    div_ [class_ "modal ", role_ "dialog", id_ "apikey-modal"] do
+      div_ [class_ "modal-box flex flex-col p-8"] $ do
+        div_ [class_ "flex w-full mb-4 justify-between items-start"] do
+          div_ [class_ "p-3 bg-[#0068ff]/5 rounded-full w-max border-[#067a57]/20 gap-2 inline-flex"]
+            $ faSprite_ "key" "regular" "h-6 w-6 text-textBrand"
+          button_
+            [ class_ "btn btn-ghost btn-sm btn-circle"
+            , [__|on click set #apikey-modal.checked to false |]
+            ]
+            do
+              faSprite_ "circle-xmark" "regular" "h-6 w-6 text-textWeak"
+        span_ [class_ "text-textStrong text-2xl font-semibold mb-1"] "Generate an API key"
         form_
           [ hxPost_ $ "/p/" <> pid.toText <> "/apis"
-          , class_ "flex items-end justify-center min-h-screen pt-4 px-4 pb-20 text-center sm:block sm:p-0"
+          , class_ "flex flex-col gap-6"
           , hxTarget_ "#main-content"
-          , [__|on closeModal from body add .hidden to #generateApiKeyDialog then call me.reset()|]
+          , [__|on closeModal from body set #apikey-modal.checked to false |]
           ]
           do
-            div_ [class_ "fixed inset-0 bg-gray-500 bg-opacity-75 transition-opacity"] do
-              span_ [class_ "hidden sm:inline-block sm:align-middle sm:h-screen"] ""
-            div_ [class_ "inline-block align-bottom bg-base-100 rounded-lg px-4 pt-5 pb-4 text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:align-middle sm:max-w-lg sm:w-full sm:p-6"] do
-              div_ [class_ "hidden sm:block absolute top-0 right-0 pt-4 pr-4"] do
-                button_
-                  [ type_ "button"
-                  , class_ "bg-base-100 rounded-md text-gray-400 hover:text-gray-500 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
-                  , [__|on click add .hidden to #generateApiKeyDialog|]
-                  ]
-                  do
-                    span_ [class_ "sr-only"] "Close"
-                    faSprite_ "xmark" "regular" "h-6 w-6"
-              div_ [class_ "sm:flex sm:items-start"] do
-                div_ [class_ "mx-auto flex-shrink-0 flex items-center justify-center h-12 w-12 rounded-full bg-red-100 sm:mx-0 sm:h-10 sm:w-10"] do
-                  faSprite_ "xmark" "regular" "h-6 w-6"
-                div_ [class_ "mt-3 text-center sm:mt-0 sm:ml-4 sm:text-left grow"] do
-                  h3_ [class_ "text-lg leading-6 font-medium text-gray-900", id_ "modal-title"] "Generate an API Key"
-                  div_ [class_ "mt-6 space-y-2"] do
-                    p_ [class_ " text-gray-500"] "Please input a title for your API Key."
-                    div_ $ input_ [class_ "input-txt px-4 py-2  border w-full", type_ "text", placeholder_ "API Key Title", name_ "title", autofocus_]
-              div_ [class_ "mt-5 sm:mt-4 sm:flex sm:flex-row-reverse"] do
-                button_ [type_ "submit", class_ "w-full inline-flex justify-center rounded-md border border-transparent shadow-sm px-4 py-2 bg-red-600 text-base font-medium text-white hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500 sm:ml-3 sm:w-auto sm:"] "Submit"
-                button_
-                  [ type_ "button"
-                  , class_ "mt-3 w-full inline-flex justify-center rounded-md border border-gray-300 shadow-sm px-4 py-2 bg-base-100 text-base font-medium text-gray-700 hover:text-gray-500 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 sm:mt-0 sm:w-auto sm:"
-                  , [__|on click add .hidden to #generateApiKeyDialog|]
-                  ]
-                  "Cancel"
+            div_ [class_ "flex flex-col"] do
+              p_ [class_ "text-textWeak"] "Please input a title for your API key."
+              div_ $ input_ [class_ "input px-4 py-2 mt-6  border w-full", type_ "text", placeholder_ "Enter your API key title", name_ "title", autofocus_]
+            div_ [class_ "flex w-full"] do
+              button_
+                [ type_ "submit"
+                , class_ "btn btn-primary w-full"
+                ]
+                "Create key"
+      label_ [class_ "modal-backdrop", Lucid.for_ "apikey-modal"] "Close"
 
 
 mainContent :: Projects.ProjectId -> V.Vector ProjectApiKeys.ProjectApiKey -> Maybe (ProjectApiKeys.ProjectApiKey, Text) -> Html ()
 mainContent pid apiKeys newKeyM = section_ [id_ "main-content"] do
   copyNewApiKey newKeyM False
-  div_ [class_ "flex flex-col"] do
-    div_ [class_ "-my-2 overflow-x-auto sm:-mx-6 lg:-mx-8"] do
-      div_ [class_ "py-2 align-middle inline-block min-w-full sm:px-6 lg:px-8"] do
-        div_ [class_ "shadow overflow-hidden border-b border-gray-200 sm:rounded-lg"] do
-          table_ [class_ "min-w-full divide-y divide-gray-200"] do
-            thead_ [class_ "bg-gray-50"] do
-              tr_ do
-                th_ [class_ "px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider"] "Title"
-                th_ [class_ "px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider"] "Key"
-                th_ [class_ "relative px-6 py-3"] do
-                  span_ [class_ "sr-only"] "Edit"
-            tbody_ [class_ "bg-base-100 divide-y divide-gray-200"] do
-              V.indexed apiKeys & mapM_ \(i, apiKey) -> do
-                tr_ [] do
-                  td_ [class_ "px-6 py-4 whitespace-nowrap  font-medium text-gray-900"] $ toHtml apiKey.title
-                  td_ [class_ "px-6 py-4 whitespace-nowrap  text-gray-500 w-[500px]"] do
-                    span_
-                      [class_ "mr-2 w-full"]
-                      $ toHtml
-                      $ T.take 8 apiKey.keyPrefix
-                      <> "********************************************"
-                    button_
-                      [ class_ "text-blue-500"
-                      , term "data-key" apiKey.keyPrefix
-                      , term "data-prefix" (T.take 8 apiKey.keyPrefix <> "********************************************")
-                      , [__| on click  if my innerText is "show" 
-                                 put  @data-key into previous <span/>
-                                 put "hide" into me
-                                 exit
-                              end
-                             if my innerText is "hide"
-                                 put  @data-prefix into previous <span/>
-                              put "show" into me
-                             end
-                            |]
-                      ]
-                      "show"
-                    button_
-                      [ class_ "text-blue-500 ml-2"
-                      , term "data-key" apiKey.keyPrefix
-                      , [__| on click if 'clipboard' in window.navigator then
+  let activeKeys = V.filter (\x -> x.active) apiKeys
+  let revokedKeys = V.filter (\x -> not (x.active)) apiKeys
+  div_ [class_ "justify-start items-start gap-4 flex mb-6 text-sm"] $ do
+    button_ [onclick_ "navigatable(this, '#active_content', '#main-content', 't-tab-active')", class_ "flex items-center gap-4 a-tab border-b border-b-strokeWeak  px-3 py-2 t-tab-active"] do
+      "Active keys"
+      span_ [class_ "text-textDisabled text-xs font-normal"] $ toHtml $ show $ V.length activeKeys
+    button_ [onclick_ "navigatable(this, '#revoked_content', '#main-content', 't-tab-active')", class_ "flex items-center gap-4 a-tab border-b border-b-strokeWeak  px-3 py-2"] do
+      "Archived keys"
+      span_ [class_ "text-textDisabled text-xs font-normal"] $ toHtml $ show $ V.length revokedKeys
+
+  table_ [class_ "min-w-full a-tab-content", id_ "active_content"] do
+    thead_ [class_ "bg-fillWeaker"] do
+      tr_ do
+        th_ [class_ "px-6 py-4 text-left text-sm font-semibold text-textWeak uppercase leading-tight"] "Title"
+        th_ [class_ "px-6 py-4 text-left text-sm font-semibold text-textWeak uppercase leading-tight"] "Key"
+    tbody_ [class_ ""] do
+      V.indexed activeKeys & mapM_ \(i, apiKey) -> keyRow pid i apiKey
+
+  table_ [class_ "min-w-full hidden a-tab-content", id_ "revoked_content"] do
+    thead_ [class_ "bg-fillWeaker"] do
+      tr_ do
+        th_ [class_ "px-6 py-4 text-left text-sm font-semibold text-textWeak uppercase leading-tight"] "Title"
+        th_ [class_ "px-6 py-4 text-left text-sm font-semibold text-textWeak uppercase leading-tight"] "Key"
+    tbody_ [class_ ""] do
+      V.indexed revokedKeys & mapM_ \(i, apiKey) -> keyRow pid i apiKey
+
+
+keyRow :: Projects.ProjectId -> Int -> ProjectApiKeys.ProjectApiKey -> Html ()
+keyRow pid i apiKey = do
+  tr_ [class_ "group hover:bg-fillWeak rounded-lg"] do
+    td_ [class_ "px-6 py-4 text-textStrong font-semibold text-sm w-96 max-w-96 truncate"] $ toHtml apiKey.title
+    td_ [class_ "px-6 py-4 whitespace-nowrap w-full flex items-center text-sm text-textWeak"] do
+      let idx = "key-" <> show i
+      span_
+        [class_ $ "mr-2 w-full " <> idx]
+        $ toHtml
+        $ T.take 8 apiKey.keyPrefix
+        <> T.replicate 20 "*"
+      div_ [class_ "hidden group-hover:flex justify-between items-center gap-3"] do
+        button_
+          [ class_ "text-brand"
+          , term "data-key" apiKey.keyPrefix
+          , term "data-state" "hide"
+          , term "data-tippy-content" "Show key"
+          , term "data-prefix" (T.take 8 apiKey.keyPrefix <> T.replicate 20 "*")
+          , term
+              "_"
+              [text|on click
+                 if my @data-state is "hide"
+                   put my @data-key into <.$idx/>
+                   put "show" into my @data-state
+                   put "Hide key" into my @data-tippy-content
+                 else
+                   put my @data-prefix into <.$idx/>
+                   put "hide" into my @data-state
+                   put "Show key" into my @data-tippy-content
+                 end |]
+          ]
+          do
+            faSprite_ "eye" "regular" "h-4 w-4 text-textWeak"
+        button_
+          [ class_ "text-brand  cursor-pointer"
+          , term "data-key" apiKey.keyPrefix
+          , [__| on click if 'clipboard' in window.navigator then
                           call navigator.clipboard.writeText(my @data-key)
                           send successToast(value:['API Key has been copied to the Clipboard']) to <body/>
                         end
                         |]
-                      ]
-                      "copy"
-                  td_ [class_ "px-6 py-4 whitespace-nowrap text-right  font-medium"] $ do
-                    if apiKey.active
-                      then do
-                        button_
-                          [ class_ "text-indigo-600 hover:text-indigo-900"
-                          , hxDelete_ $ "/p/" <> pid.toText <> "/apis/" <> apiKey.id.toText
-                          , hxConfirm_ $ "Are you sure you want to revoke " <> apiKey.title <> " API Key?"
-                          , hxTarget_ "#main-content"
-                          , id_ $ "key" <> show i
-                          ]
-                          do
-                            faSprite_ "xmark" "regular" "h-3 w-3 mr-2 inline-block text-red-600"
-                            span_ [class_ "text-slate-500"] "Revoke"
-                      else do
-                        button_
-                          [class_ "text-indigo-600 hover:text-indigo-900"]
-                          do
-                            span_ [class_ "text-slate-500"] "Revoked"
+          , term "data-tippy-content" "Copy key"
+          ]
+          do
+            faSprite_ "clipboard-copy" "regular" "h-4 w-4 text-textWeak"
+        if apiKey.active
+          then do
+            button_
+              [ class_ "text-textWeak flex gap-2 items-center cursor-pointer"
+              , hxDelete_ $ "/p/" <> pid.toText <> "/apis/" <> apiKey.id.toText
+              , hxConfirm_ $ "Are you sure you want to revoke " <> apiKey.title <> " API Key?"
+              , hxTarget_ "#main-content"
+              , id_ $ "key" <> show i
+              ]
+              do
+                faSprite_ "circle-xmark" "regular" "h-4 w-4 text-textError"
+                span_ [class_ "text-slate-500"] "Revoke"
+          else do
+            button_
+              [ class_ "text-textWeak flex gap-2 items-center cursor-pointer"
+              , hxPatch_ $ "/p/" <> pid.toText <> "/apis/" <> apiKey.id.toText
+              , hxConfirm_ $ "Are you sure you want to activate " <> apiKey.title <> " API Key?"
+              , hxTarget_ "#main-content"
+              , id_ $ "key" <> show i
+              ]
+              do
+                faSprite_ "circle-check" "regular" "h-4 w-4 text-textWeak"
+                span_ [class_ "text-slate-500"] "Activate"
 
 
 copyNewApiKey :: Maybe (ProjectApiKeys.ProjectApiKey, Text) -> Bool -> Html ()
@@ -223,7 +261,7 @@ copyNewApiKey newKeyM hasNext =
       div_ [id_ "apiFeedbackSection", class_ "pb-8"] do
         div_ [class_ "rounded-md bg-green-50 p-4"] do
           div_ [class_ "flex"] do
-            div_ [class_ "flex-shrink-0"] do
+            div_ [class_ "shrink-0"] do
               faSprite_ "circle-check" "regular" "h-5 w-5 text-green-400"
             div_ [class_ "ml-3"] do
               h3_ [class_ " font-medium text-green-800"] "API Key was generated successfully"
@@ -233,7 +271,7 @@ copyNewApiKey newKeyM hasNext =
                 div_ [class_ "-mx-2 -my-1.5 flex"] do
                   button_
                     [ type_ "button"
-                    , class_ "bg-green-500 px-2 py-1.5 text-white rounded-md  font-medium text-green-800 hover:bg-green-300 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-green-50 focus:ring-green-600"
+                    , class_ "bg-green-500 px-2 py-1.5 text-white rounded-md  font-medium text-green-800 hover:bg-green-300 focus:outline-hidden focus:ring-2 focus:ring-offset-2 focus:ring-offset-green-50 focus:ring-green-600"
                     , [__|
                       on click
                         if 'clipboard' in window.navigator then
@@ -247,14 +285,14 @@ copyNewApiKey newKeyM hasNext =
                     then do
                       button_
                         [ type_ "button"
-                        , class_ "ml-3 bg-green-50 px-2 py-1.5 rounded-md  font-medium text-green-800 hover:bg-green-100 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-green-50 focus:ring-green-600"
+                        , class_ "ml-3 bg-green-50 px-2 py-1.5 rounded-md  font-medium text-green-800 hover:bg-green-100 focus:outline-hidden focus:ring-2 focus:ring-offset-2 focus:ring-offset-green-50 focus:ring-green-600"
                         , [__|on click remove #apiFeedbackSection|]
                         ]
                         "Dismiss"
                     else do
                       button_
                         [ type_ "button"
-                        , class_ "ml-6 font-medium px-2 py-1.5 rounded-md font-medium text-blue-500"
+                        , class_ "ml-6 font-medium px-2 py-1.5 rounded-md font-medium text-brand"
                         , [__|on click call window.location.reload()|]
                         ]
                         "Next"

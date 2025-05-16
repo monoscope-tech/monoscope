@@ -1,4 +1,4 @@
-module Pages.Telemetry.Utils (getServiceName, getServiceColor, getRequestDetails, spanHasErrors, getSpanErrors, getErrorDetails, metricsTree)
+module Pages.Telemetry.Utils (getServiceName, getServiceColor, getRequestDetails, spanHasErrors, getSpanErrors, getErrorDetails, metricsTree, atMapText)
 where
 
 import Data.Aeson qualified as AE
@@ -18,40 +18,71 @@ import Relude
 import Utils (faSprite_)
 
 
-getServiceName :: Telemetry.SpanRecord -> Text
-getServiceName sp = case sp.resource of
-  AE.Object r -> maybe "Unknown" serviceNameString $ KEM.lookup "service.name" r
+getServiceName :: Maybe (Map Text AE.Value) -> Text
+getServiceName rs = case Map.lookup "service" (fromMaybe Map.empty rs) of
+  Just (AE.Object o) -> case KEM.lookup "name" o of
+    Just (AE.String s) -> s
+    _ -> "Unknown"
   _ -> "Unknown"
-  where
-    serviceNameString :: AE.Value -> Text
-    serviceNameString (AE.String s) = s
-    serviceNameString _ = "Unknown"
 
 
 getServiceColor :: Text -> HashMap Text Text -> Text
 getServiceColor s serviceColors = fromMaybe "bg-black" $ HM.lookup s serviceColors
 
 
-getRequestDetails :: Telemetry.SpanRecord -> Maybe (Text, Text, Text, Int)
-getRequestDetails spanRecord = case spanRecord.attributes of
-  AE.Object r -> case KEM.lookup "http.method" r of
-    Just (AE.String method) -> Just ("HTTP", method, fromMaybe "/" $ getText "http.url" r, fromMaybe 0 $ getInt "http.status_code" r)
-    _ -> case KEM.lookup "rpc.system" r of
-      Just (AE.String "grpc") -> Just ("GRPC", fromMaybe "" $ getText "rpc.service" r, fromMaybe "" $ getText "rpc.method" r, fromMaybe 0 $ getInt "rpc.grpc.status_code" r)
-      _ -> case KEM.lookup "http.request.method" r of
-        Just (AE.String method) -> Just ("HTTP", method, fromMaybe "/" $ getText "http.request.url" r, fromMaybe 0 $ getInt "http.response.status_code" r)
+atMapText :: Text -> Maybe (Map Text AE.Value) -> Maybe Text
+atMapText key maybeMap = do
+  m <- maybeMap
+  v <- Map.lookup key m
+  case v of
+    AE.String t -> Just t
+    AE.Number n -> Just $ T.pack $ show n
+    _ -> Nothing
+
+
+getRequestDetails :: Maybe (Map Text AE.Value) -> Maybe (Text, Text, Text, Int)
+getRequestDetails spanRecord = do
+  m <- spanRecord
+  case Map.lookup "http" m of
+    Just (AE.Object o) ->
+      Just
+        ( "HTTP"
+        , case KEM.lookup "request" o of
+            Just (AE.Object r) -> getText "method" r
+            _ -> ""
+        , case getUrl o of
+            Just u -> u
+            Nothing -> case Map.lookup "url" m of
+              Just (AE.Object p) -> fromMaybe "/" $ getUrl p
+              _ -> "/"
+        , case KEM.lookup "response" o of
+            Just (AE.Object r) -> getStatus r
+            _ -> 0
+        )
+    _ -> case Map.lookup "rpc" m of
+      Just (AE.Object o) -> Just ("GRPC", getText "service" o, getText "method" o, getStatus o)
+      _ -> case Map.lookup "db" m of
+        Just (AE.Object o) -> Just ("DB", getText "system" o, if (T.null query) then statement else query, getStatus o)
+          where
+            statement = getText "statement" o
+            query = getText "query" o
         _ -> Nothing
-  _ -> Nothing
   where
-    getText :: Text -> AE.Object -> Maybe Text
+    getText :: Text -> AE.Object -> Text
     getText key v = case KEM.lookup (AEKey.fromText key) v of
-      Just (AE.String s) -> Just s
-      _ -> Nothing
+      Just (AE.String s) -> s
+      _ -> ""
     getInt :: Text -> AE.Object -> Maybe Int
     getInt key v = case KEM.lookup (AEKey.fromText key) v of
       Just (AE.Number n) -> toBoundedInteger n
       Just (AE.String s) -> readMaybe $ toString s
       _ -> Nothing
+    getUrl :: AE.Object -> Maybe Text
+    getUrl v =
+      let opts = [getText "route" v, getText "path" v, getText "url" v, getText "target" v]
+       in viaNonEmpty head $ Relude.filter (not . T.null) opts
+    getStatus :: AE.Object -> Int
+    getStatus v = fromMaybe 0 $ getInt "status_code" v
 
 
 spanHasErrors :: Telemetry.SpanRecord -> Bool
@@ -64,8 +95,8 @@ spanHasErrors spanRecord = case spanRecord.events of
   _ -> False
 
 
-getSpanErrors :: Telemetry.SpanRecord -> [AE.Value]
-getSpanErrors spanRecord = case spanRecord.events of
+getSpanErrors :: AE.Value -> [AE.Value]
+getSpanErrors evs = case evs of
   AE.Array a ->
     let events = V.toList a
         hasExceptionEvent :: AE.Value -> Bool
@@ -79,7 +110,9 @@ getSpanErrors spanRecord = case spanRecord.events of
 getErrorDetails :: AE.Value -> (Text, Text, Text)
 getErrorDetails ae = case ae of
   AE.Object obj -> case KEM.lookup "event_attributes" obj of
-    Just (AE.Object j) -> (fromMaybe "" $ getText "exception.type" j, fromMaybe "" $ getText "exception.message" j, fromMaybe "" $ getText "exception.stacktrace" j)
+    Just (AE.Object jj) -> case KEM.lookup "exception" jj of
+      Just (AE.Object j) -> (fromMaybe "" $ getText "type" j, fromMaybe "" $ getText "message" j, fromMaybe "" $ getText "stacktrace" j)
+      _ -> ("", "", "")
     _ -> ("", "", "")
   _ -> ("", "", "")
   where
@@ -137,11 +170,11 @@ buildTree metricMap parentId =
     Nothing -> []
     Just metrics ->
       [ MetricTree
-        MetricNode
-          { parent = mt.parent
-          , current = mt.current
-          }
-        (buildTree metricMap (if mt.parent == "___root___" then Just mt.current else Just $ mt.parent <> "." <> mt.current))
+          MetricNode
+            { parent = mt.parent
+            , current = mt.current
+            }
+          (buildTree metricMap (if mt.parent == "___root___" then Just mt.current else Just $ mt.parent <> "." <> mt.current))
       | mt <- metrics
       ]
 
@@ -172,13 +205,13 @@ buildTree_ pid sp level isLasChild dp = do
     div_ [class_ "flex flex-col w-full grow-1 shrink-1 border-slate-200 relative"] do
       when hasChildren $ div_ [class_ "absolute top-1 left-2 border-l h-2 border-l-slate-200"] pass
       div_
-        [ class_ "w-full cursor-pointer flex tree_opened justify-between max-w-full items-center h-5 hover:bg-slate-100"
+        [ class_ "w-full cursor-pointer flex tree_opened justify-between max-w-full items-center h-5 hover:bg-fillWeaker"
         , [__| on click toggle .tree_opened on me|]
         ]
         do
           div_ [class_ "flex w-full justify-between items-center overflow-x-hidden"] do
             div_ [class_ "flex items-center overflow-y-hidden", style_ $ "width: calc(40vw - " <> paddingLeft] do
-              when hasChildren $ faSprite_ "chevron-up" "regular" "toggler rotate-90 w-4 border border-slate-200 h-4 shadow-sm rounded px-0.5 z-50 bg-slate-50 mr-1 shrink-0 text-slate-950"
+              when hasChildren $ faSprite_ "chevron-up" "regular" "toggler rotate-90 w-4 border border-slate-200 h-4 shadow-xs rounded-sm px-0.5 z-50 bg-slate-50 mr-1 shrink-0 text-slate-950"
               unless (sp.spanRecord.parent == "___root___") $ span_ [class_ "text-slate-400"] $ toHtml $ sp.spanRecord.parent <> "."
               span_ [class_ "text-slate-900 "] $ toHtml sp.spanRecord.current
               when hasChildren $ span_ [class_ "badge badge-ghost text-xs"] $ toHtml $ show $ length sp.children

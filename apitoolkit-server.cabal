@@ -1,6 +1,6 @@
 cabal-version: 2.0
 
--- This file has been generated from package.yaml by hpack version 0.37.0.
+-- This file has been generated from package.yaml by hpack version 0.38.0.
 --
 -- see: https://github.com/sol/hpack
 
@@ -14,13 +14,29 @@ maintainer:     example@example.com
 copyright:      2021 Author name here
 license:        BSD3
 license-file:   LICENSE
-build-type:     Simple
+build-type:     Custom
 extra-source-files:
+    proto/opentelemetry/proto/collector/logs/v1/logs_service.proto
+    proto/opentelemetry/proto/collector/metrics/v1/metrics_service.proto
+    proto/opentelemetry/proto/collector/profiles/v1development/profiles_service.proto
+    proto/opentelemetry/proto/collector/trace/v1/trace_service.proto
+    proto/opentelemetry/proto/common/v1/common.proto
+    proto/opentelemetry/proto/logs/v1/logs.proto
+    proto/opentelemetry/proto/metrics/v1/metrics.proto
+    proto/opentelemetry/proto/profiles/v1development/profiles.proto
+    proto/opentelemetry/proto/resource/v1/resource.proto
+    proto/opentelemetry/proto/trace/v1/trace.proto
     README.md
 
 source-repository head
   type: git
   location: https://github.com/githubuser/apitoolkit-server
+
+custom-setup
+  setup-depends:
+      Cabal
+    , base
+    , proto-lens-setup
 
 library
   exposed-modules:
@@ -32,6 +48,7 @@ library
       Models.Apis.Anomalies
       Models.Apis.Endpoints
       Models.Apis.Fields
+      Models.Apis.Fields.Facets
       Models.Apis.Fields.Query
       Models.Apis.Fields.Types
       Models.Apis.Formats
@@ -68,44 +85,24 @@ library
       Pages.BodyWrapper
       Pages.Charts.Charts
       Pages.Components
-      Pages.Dashboard
       Pages.Dashboards
-      Pages.DashboardSpec
       Pages.Endpoints.ApiCatalog
       Pages.Endpoints.ApiCatalogSpec
       Pages.Endpoints.EndpointComponents
-      Pages.Endpoints.EndpointDetails
-      Pages.Endpoints.EndpointDetailsSpec
       Pages.Endpoints.EndpointList
       Pages.Endpoints.EndpointListSpec
-      Pages.Endpoints.Routes
-      Pages.Endpoints.Server
       Pages.Fields.FieldDetails
       Pages.Fields.FieldDetailsSpec
-      Pages.IntegrationDemos.AdonisJS
-      Pages.IntegrationDemos.Django
-      Pages.IntegrationDemos.DotNet
-      Pages.IntegrationDemos.Echo
-      Pages.IntegrationDemos.ExpressJs
-      Pages.IntegrationDemos.FastApi
-      Pages.IntegrationDemos.FastifyJs
-      Pages.IntegrationDemos.Flask
-      Pages.IntegrationDemos.Gin
-      Pages.IntegrationDemos.GoNative
-      Pages.IntegrationDemos.GorillaMux
-      Pages.IntegrationDemos.Laravel
-      Pages.IntegrationDemos.NestJs
+      Pages.IntegrationDemos.Csharp
+      Pages.IntegrationDemos.Golang
+      Pages.IntegrationDemos.Java
+      Pages.IntegrationDemos.Javascript
       Pages.IntegrationDemos.Phoenix
-      Pages.IntegrationDemos.Pyramid
-      Pages.IntegrationDemos.Slim
-      Pages.IntegrationDemos.Springboot
-      Pages.IntegrationDemos.Symfony
-      Pages.IntegrationGuides
-      Pages.IntegrationGuidesSpec
+      Pages.IntegrationDemos.Php
+      Pages.IntegrationDemos.Python
       Pages.LemonSqueezy
       Pages.Log
       Pages.LogExplorer.LogItem
-      Pages.LogExplorer.LogItemSpec
       Pages.LogExplorer.Routes
       Pages.LogSpec
       Pages.Monitors.Alerts
@@ -115,6 +112,7 @@ library
       Pages.Monitors.TestCollectionEditor
       Pages.Monitors.Testing
       Pages.Monitors.TestingSpec
+      Pages.Onboarding.Onboarding
       Pages.Projects.CreateProject
       Pages.Projects.Integrations
       Pages.Projects.ListProjects
@@ -134,8 +132,6 @@ library
       Pages.Specification.GenerateSwaggerSpec
       Pages.Specification.Routes
       Pages.Specification.Server
-      Pages.Survey
-      Pages.SurveySpec
       Pages.Telemetry.Metrics
       Pages.Telemetry.Routes
       Pages.Telemetry.Spans
@@ -148,6 +144,7 @@ library
       Pkg.Components.TimePicker
       Pkg.Components.Widget
       Pkg.ConvertKit
+      Pkg.DashboardUtils
       Pkg.DBUtils
       Pkg.Google
       Pkg.Mail
@@ -177,6 +174,47 @@ library
       Web.ClientMetadataSpec
       Web.Error
       Web.Routes
+      Proto.Opentelemetry.Proto.Common.V1.Common
+      Proto.Opentelemetry.Proto.Common.V1.Common_Fields
+      Proto.Opentelemetry.Proto.Resource.V1.Resource
+      Proto.Opentelemetry.Proto.Resource.V1.Resource_Fields
+      Proto.Opentelemetry.Proto.Trace.V1.Trace
+      Proto.Opentelemetry.Proto.Trace.V1.Trace_Fields
+      Proto.Opentelemetry.Proto.Collector.Trace.V1.TraceService
+      Proto.Opentelemetry.Proto.Collector.Trace.V1.TraceService_Fields
+      Proto.Opentelemetry.Proto.Logs.V1.Logs
+      Proto.Opentelemetry.Proto.Logs.V1.Logs_Fields
+      Proto.Opentelemetry.Proto.Collector.Logs.V1.LogsService
+      Proto.Opentelemetry.Proto.Collector.Logs.V1.LogsService_Fields
+      Proto.Opentelemetry.Proto.Metrics.V1.Metrics
+      Proto.Opentelemetry.Proto.Metrics.V1.Metrics_Fields
+      Proto.Opentelemetry.Proto.Collector.Metrics.V1.MetricsService
+      Proto.Opentelemetry.Proto.Collector.Metrics.V1.MetricsService_Fields
+      Proto.Opentelemetry.Proto.Profiles.V1development.Profiles
+      Proto.Opentelemetry.Proto.Profiles.V1development.Profiles_Fields
+      Proto.Opentelemetry.Proto.Collector.Profiles.V1development.ProfilesService
+      Proto.Opentelemetry.Proto.Collector.Profiles.V1development.ProfilesService_Fields
+  autogen-modules:
+      Proto.Opentelemetry.Proto.Common.V1.Common
+      Proto.Opentelemetry.Proto.Common.V1.Common_Fields
+      Proto.Opentelemetry.Proto.Resource.V1.Resource
+      Proto.Opentelemetry.Proto.Resource.V1.Resource_Fields
+      Proto.Opentelemetry.Proto.Trace.V1.Trace
+      Proto.Opentelemetry.Proto.Trace.V1.Trace_Fields
+      Proto.Opentelemetry.Proto.Collector.Trace.V1.TraceService
+      Proto.Opentelemetry.Proto.Collector.Trace.V1.TraceService_Fields
+      Proto.Opentelemetry.Proto.Logs.V1.Logs
+      Proto.Opentelemetry.Proto.Logs.V1.Logs_Fields
+      Proto.Opentelemetry.Proto.Collector.Logs.V1.LogsService
+      Proto.Opentelemetry.Proto.Collector.Logs.V1.LogsService_Fields
+      Proto.Opentelemetry.Proto.Metrics.V1.Metrics
+      Proto.Opentelemetry.Proto.Metrics.V1.Metrics_Fields
+      Proto.Opentelemetry.Proto.Collector.Metrics.V1.MetricsService
+      Proto.Opentelemetry.Proto.Collector.Metrics.V1.MetricsService_Fields
+      Proto.Opentelemetry.Proto.Profiles.V1development.Profiles
+      Proto.Opentelemetry.Proto.Profiles.V1development.Profiles_Fields
+      Proto.Opentelemetry.Proto.Collector.Profiles.V1development.ProfilesService
+      Proto.Opentelemetry.Proto.Collector.Profiles.V1development.ProfilesService_Fields
   hs-source-dirs:
       src
   default-extensions:
@@ -204,13 +242,18 @@ library
       TemplateHaskell
       AllowAmbiguousTypes
       TupleSections
-  ghc-options: -fwrite-ide-info -hiedir .hiefiles -threaded -Weverything -Werror -fno-defer-typed-holes -Wno-error=deprecations -Wno-error=unused-packages -Wno-error=implicit-lift -Wno-error=missing-poly-kind-signatures -Wno-missing-exported-signatures -Wno-missing-import-lists -Wno-missed-specialisations -Wno-all-missed-specialisations -Wno-unsafe -Wno-safe -Wno-missing-local-signatures -Wno-monomorphism-restriction -Wno-missing-safe-haskell-mode -Wno-partial-fields -Wno-prepositive-qualified-module -Wno-missing-export-lists -Wno-orphans -Wno-missing-deriving-strategies -Wno-missing-role-annotations -Wno-unused-matches -Wno-missing-kind-signatures -Wno-type-defaults -Wno-unused-top-binds -Wno-unused-imports
+      ViewPatterns
+  ghc-options: -fwrite-ide-info -hiedir .hiefiles -threaded -fplugin AutoInstrument -Weverything -Werror -fno-defer-typed-holes -Wno-error=deprecations -Wno-error=unused-packages -Wno-error=implicit-lift -Wno-error=missing-poly-kind-signatures -Wno-missing-exported-signatures -Wno-missing-import-lists -Wno-missed-specialisations -Wno-all-missed-specialisations -Wno-unsafe -Wno-safe -Wno-missing-local-signatures -Wno-monomorphism-restriction -Wno-missing-safe-haskell-mode -Wno-partial-fields -Wno-prepositive-qualified-module -Wno-missing-export-lists -Wno-orphans -Wno-missing-deriving-strategies -Wno-missing-role-annotations -Wno-unused-matches -Wno-missing-kind-signatures -Wno-type-defaults -Wno-unused-top-binds -Wno-unused-imports -Wno-error=incomplete-record-selectors
+  build-tool-depends:
+      proto-lens-protoc:proto-lens-protoc
   build-depends:
       PyF
     , Unique
     , aeson
+    , aeson-extra
     , aeson-pretty
     , aeson-qq
+    , annotated-exception
     , async
     , base
     , base16-bytestring
@@ -241,15 +284,22 @@ library
     , gogol
     , gogol-core
     , gogol-pubsub
-    , grpc-haskell
+    , grapesy
     , hashtables
     , hiedb-plugin
+    , hs-opentelemetry-exporter-otlp
+    , hs-opentelemetry-instrumentation-auto
+    , hs-opentelemetry-instrumentation-postgresql-simple
+    , hs-opentelemetry-instrumentation-wai
+    , hs-opentelemetry-sdk
     , hspec
     , hspec-expectations-json
     , http-api-data
     , http-client
     , http-types
+    , hw-kafka-client
     , indexed-traversable
+    , ki-effectful
     , lens
     , lens-aeson
     , log-base
@@ -267,17 +317,17 @@ library
     , network-uri
     , nyan-interpolation
     , odd-jobs
-    , otlp
     , parser-combinators
     , pg-entity
     , pg-transact
     , pg-transact-effectful
+    , postgresql-libpq
     , postgresql-migration
     , postgresql-simple
     , pretty-relative-time
     , pretty-simple
-    , proto3-suite
-    , proto3-wire
+    , proto-lens
+    , proto-lens-runtime
     , regex-tdfa
     , relude >=1.2.0.0
     , resource-pool
@@ -296,6 +346,7 @@ library
     , strict-containers
     , template-haskell
     , text
+    , text-builder-linear
     , text-display
     , time
     , tmp-postgres
@@ -344,15 +395,19 @@ executable apitoolkit-server-exe
       TemplateHaskell
       AllowAmbiguousTypes
       TupleSections
-  ghc-options: -fwrite-ide-info -hiedir .hiefiles -threaded -Weverything -Werror -fno-defer-typed-holes -Wno-error=deprecations -Wno-error=unused-packages -Wno-error=implicit-lift -Wno-error=missing-poly-kind-signatures -Wno-missing-exported-signatures -Wno-missing-import-lists -Wno-missed-specialisations -Wno-all-missed-specialisations -Wno-unsafe -Wno-safe -Wno-missing-local-signatures -Wno-monomorphism-restriction -Wno-missing-safe-haskell-mode -Wno-partial-fields -Wno-prepositive-qualified-module -Wno-missing-export-lists -Wno-orphans -Wno-missing-deriving-strategies -Wno-missing-role-annotations -Wno-unused-matches -Wno-missing-kind-signatures -Wno-type-defaults -Wno-unused-top-binds -Wno-unused-imports -threaded -rtsopts -with-rtsopts=-N -j4 +RTS -N -A128m -n2m -RTS
+      ViewPatterns
+  ghc-options: -fwrite-ide-info -hiedir .hiefiles -threaded -fplugin AutoInstrument -Weverything -Werror -fno-defer-typed-holes -Wno-error=deprecations -Wno-error=unused-packages -Wno-error=implicit-lift -Wno-error=missing-poly-kind-signatures -Wno-missing-exported-signatures -Wno-missing-import-lists -Wno-missed-specialisations -Wno-all-missed-specialisations -Wno-unsafe -Wno-safe -Wno-missing-local-signatures -Wno-monomorphism-restriction -Wno-missing-safe-haskell-mode -Wno-partial-fields -Wno-prepositive-qualified-module -Wno-missing-export-lists -Wno-orphans -Wno-missing-deriving-strategies -Wno-missing-role-annotations -Wno-unused-matches -Wno-missing-kind-signatures -Wno-type-defaults -Wno-unused-top-binds -Wno-unused-imports -Wno-error=incomplete-record-selectors -threaded -fplugin AutoInstrument -rtsopts -with-rtsopts=-N -j4 +RTS -N -A128m -n2m -RTS
+  build-tool-depends:
+      proto-lens-protoc:proto-lens-protoc
   build-depends:
       apitoolkit-server
     , hiedb-plugin
+    , hs-opentelemetry-instrumentation-auto
     , relude >=1.2.0.0
     , rust-interop
   mixins:
       relude (Relude as Prelude)
-    , relude
+    , relude 
   default-language: GHC2021
 
 test-suite doctests
@@ -385,7 +440,10 @@ test-suite doctests
       TemplateHaskell
       AllowAmbiguousTypes
       TupleSections
-  ghc-options: -fwrite-ide-info -hiedir .hiefiles -threaded -Weverything -Werror -fno-defer-typed-holes -Wno-error=deprecations -Wno-error=unused-packages -Wno-error=implicit-lift -Wno-error=missing-poly-kind-signatures -Wno-missing-exported-signatures -Wno-missing-import-lists -Wno-missed-specialisations -Wno-all-missed-specialisations -Wno-unsafe -Wno-safe -Wno-missing-local-signatures -Wno-monomorphism-restriction -Wno-missing-safe-haskell-mode -Wno-partial-fields -Wno-prepositive-qualified-module -Wno-missing-export-lists -Wno-orphans -Wno-missing-deriving-strategies -Wno-missing-role-annotations -Wno-unused-matches -Wno-missing-kind-signatures -Wno-type-defaults -Wno-unused-top-binds -Wno-unused-imports -threaded -rtsopts -with-rtsopts=-N
+      ViewPatterns
+  ghc-options: -fwrite-ide-info -hiedir .hiefiles -threaded -fplugin AutoInstrument -Weverything -Werror -fno-defer-typed-holes -Wno-error=deprecations -Wno-error=unused-packages -Wno-error=implicit-lift -Wno-error=missing-poly-kind-signatures -Wno-missing-exported-signatures -Wno-missing-import-lists -Wno-missed-specialisations -Wno-all-missed-specialisations -Wno-unsafe -Wno-safe -Wno-missing-local-signatures -Wno-monomorphism-restriction -Wno-missing-safe-haskell-mode -Wno-partial-fields -Wno-prepositive-qualified-module -Wno-missing-export-lists -Wno-orphans -Wno-missing-deriving-strategies -Wno-missing-role-annotations -Wno-unused-matches -Wno-missing-kind-signatures -Wno-type-defaults -Wno-unused-top-binds -Wno-unused-imports -Wno-error=incomplete-record-selectors -threaded -rtsopts -with-rtsopts=-N
+  build-tool-depends:
+      proto-lens-protoc:proto-lens-protoc
   build-depends:
       apitoolkit-server
     , base
@@ -393,6 +451,7 @@ test-suite doctests
     , hspec
     , hspec-discover
     , relude >=1.2.0.0
+    , hs-opentelemetry-instrumentation-auto
   default-language: GHC2021
 
 test-suite tests
@@ -425,7 +484,10 @@ test-suite tests
       TemplateHaskell
       AllowAmbiguousTypes
       TupleSections
-  ghc-options: -fwrite-ide-info -hiedir .hiefiles -threaded -Weverything -Werror -fno-defer-typed-holes -Wno-error=deprecations -Wno-error=unused-packages -Wno-error=implicit-lift -Wno-error=missing-poly-kind-signatures -Wno-missing-exported-signatures -Wno-missing-import-lists -Wno-missed-specialisations -Wno-all-missed-specialisations -Wno-unsafe -Wno-safe -Wno-missing-local-signatures -Wno-monomorphism-restriction -Wno-missing-safe-haskell-mode -Wno-partial-fields -Wno-prepositive-qualified-module -Wno-missing-export-lists -Wno-orphans -Wno-missing-deriving-strategies -Wno-missing-role-annotations -Wno-unused-matches -Wno-missing-kind-signatures -Wno-type-defaults -Wno-unused-top-binds -Wno-unused-imports
+      ViewPatterns
+  ghc-options: -fwrite-ide-info -hiedir .hiefiles -threaded -fplugin AutoInstrument -Weverything -Werror -fno-defer-typed-holes -Wno-error=deprecations -Wno-error=unused-packages -Wno-error=implicit-lift -Wno-error=missing-poly-kind-signatures -Wno-missing-exported-signatures -Wno-missing-import-lists -Wno-missed-specialisations -Wno-all-missed-specialisations -Wno-unsafe -Wno-safe -Wno-missing-local-signatures -Wno-monomorphism-restriction -Wno-missing-safe-haskell-mode -Wno-partial-fields -Wno-prepositive-qualified-module -Wno-missing-export-lists -Wno-orphans -Wno-missing-deriving-strategies -Wno-missing-role-annotations -Wno-unused-matches -Wno-missing-kind-signatures -Wno-type-defaults -Wno-unused-top-binds -Wno-unused-imports -Wno-error=incomplete-record-selectors
+  build-tool-depends:
+      proto-lens-protoc:proto-lens-protoc
   build-depends:
       apitoolkit-server
     , base
@@ -434,4 +496,5 @@ test-suite tests
     , hspec-discover
     , relude >=1.2.0.0
     , tmp-postgres
+    ,hs-opentelemetry-instrumentation-auto
   default-language: GHC2021

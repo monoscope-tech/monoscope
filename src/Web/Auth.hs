@@ -16,10 +16,11 @@ import Control.Error (note)
 import Control.Lens qualified as L
 import Control.Monad.Except qualified as T
 import Data.Aeson.Lens (key, _String)
-import Data.Effectful.UUID (UUIDEff)
-import Data.Effectful.Wreq (HTTP)
+import Data.Effectful.UUID (UUIDEff, runUUID)
+import Data.Effectful.Wreq (HTTP, runHTTPWreq)
 import Data.List qualified as L
 import Data.Map.Strict qualified as Map
+import Data.Text qualified as T
 import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUID
 import Data.UUID.V4 qualified as UUIDV4
@@ -35,7 +36,7 @@ import Effectful.Error.Static (Error, runErrorNoCallStack, throwError)
 import Effectful.PostgreSQL.Transact.Effect (DB)
 import Effectful.PostgreSQL.Transact.Effect qualified as DB
 import Effectful.Reader.Static (ask, asks)
-import Effectful.Time (Time)
+import Effectful.Time (Time, runTime)
 import Log (Logger)
 import Lucid (Html)
 import Lucid.Html5 (
@@ -52,7 +53,7 @@ import Models.Users.Sessions (craftSessionCookie, emptySessionCookie)
 import Models.Users.Sessions qualified as Sessions
 import Models.Users.Users qualified as Users
 import Network.HTTP.Types (hCookie)
-import Network.Wai (Request (requestHeaders))
+import Network.Wai (Request (rawPathInfo, rawQueryString, requestHeaders))
 import Network.Wreq (FormParam ((:=)), defaults, getWith, header, post, responseBody)
 import Pkg.ConvertKit qualified as ConvertKit
 import Relude hiding (ask, asks)
@@ -74,6 +75,7 @@ import System.Config (
  )
 import System.Logging qualified as Logging
 import System.Types (ATBaseCtx)
+import Utils (escapedQueryPartial)
 import Web.Cookie (Cookies, SetCookie, parseCookies)
 
 
@@ -86,30 +88,49 @@ authHandler logger env =
     handler request
       & Logging.runLog (show env.config.environment) logger
       & DB.runDB env.pool
+      & runHTTPWreq
+      & runUUID
+      & runTime
       & effToHandler
   where
-    handler :: (DB :> es, Error ServerError :> es, IOE :> es) => Request -> Eff es (Headers '[Header "Set-Cookie" SetCookie] Sessions.Session)
+    handler :: (DB :> es, UUIDEff :> es, HTTP :> es, Time :> es, Error ServerError :> es, IOE :> es) => Request -> Eff es (Headers '[Header "Set-Cookie" SetCookie] Sessions.Session)
     handler req = do
       let cookies = getCookies req
       mbPersistentSessionId <- handlerToEff $ getSessionId cookies
       let isSidebarClosed = sidebarClosedFromCookie cookies
       requestID <- liftIO $ getRequestID req
-      sessionByID mbPersistentSessionId requestID isSidebarClosed
+      sessionByID mbPersistentSessionId requestID isSidebarClosed (Just $ getRequestUrl req)
 
 
-sessionByID :: (DB :> es, Error ServerError :> es) => Maybe Sessions.PersistentSessionId -> Text -> Bool -> Eff es (Headers '[Header "Set-Cookie" SetCookie] Sessions.Session)
-sessionByID mbPersistentSessionId requestID isSidebarClosed = do
+sessionByID :: (DB :> es, UUIDEff :> es, HTTP :> es, Time :> es, Error ServerError :> es) => Maybe Sessions.PersistentSessionId -> Text -> Bool -> Maybe ByteString -> Eff es (Headers '[Header "Set-Cookie" SetCookie] Sessions.Session)
+sessionByID mbPersistentSessionId requestID isSidebarClosed url = do
   mbPersistentSession <- join <$> mapM Sessions.getPersistentSession mbPersistentSessionId
   let mUser = mbPersistentSession <&> (.user.getUser)
   (user, sessionId, persistentSession) <- case (mUser, mbPersistentSession) of
     (Just user, Just userSession) -> pure (user, userSession.id, userSession)
-    _ -> throwError $ err302{errHeaders = [("Location", "/to_login")]}
+    _ -> do
+      case url of
+        Just u -> do
+          if T.isInfixOf "/p/00000000-0000-0000-0000-000000000000" (decodeUtf8 u) || T.isInfixOf "pid=00000000-0000-0000-0000-000000000000" (decodeUtf8 u)
+            then do
+              sessId <- authorizeUserAndPersist Nothing "Guest" "User" "" "hello@apitoolkit.io"
+              mbPess <- join <$> mapM Sessions.getPersistentSession (Just sessId)
+              let mU = mbPess <&> (.user.getUser)
+              case (mU, mbPess) of
+                (Just uu, Just uSess) -> pure (uu, uSess.id, uSess)
+                _ -> throwError $ err302{errHeaders = [("Location", "/to_login?redirect_to=" <> fromMaybe "" url)]}
+            else throwError $ err302{errHeaders = [("Location", "/login?redirect_to=" <> fromMaybe "" url)]}
+        Nothing -> throwError $ err302{errHeaders = [("Location", "/to_login?redirect_to=" <> fromMaybe "" url)]}
   let sessionCookie = Sessions.craftSessionCookie sessionId False
   pure $ Sessions.addCookie sessionCookie (Sessions.Session{persistentSession, ..})
 
 
 getCookies :: Request -> Cookies
 getCookies req = maybe [] parseCookies (L.lookup hCookie $ requestHeaders req)
+
+
+getRequestUrl :: Request -> ByteString
+getRequestUrl req = rawPathInfo req <> rawQueryString req
 
 
 getRequestID :: Request -> IO Text
@@ -151,40 +172,32 @@ effToHandler computation = do
   either T.throwError pure v
 
 
-logoutH
-  :: ATBaseCtx
-      ( Headers
-          '[Header "Location" Text, Header "Set-Cookie" SetCookie]
-          NoContent
-      )
+logoutH :: ATBaseCtx (Headers '[Header "Location" Text, Header "Set-Cookie" SetCookie] NoContent)
 logoutH = do
   envCfg <- asks env
   let redirectTo = envCfg.auth0Domain <> "/v2/logout?client_id=" <> envCfg.auth0ClientId <> "&returnTo=" <> envCfg.auth0LogoutRedirect
   pure $ addHeader redirectTo $ addHeader Sessions.emptySessionCookie NoContent
 
 
-loginRedirectH
-  :: ATBaseCtx
-      ( Headers
-          '[Header "Location" Text, Header "Set-Cookie" SetCookie]
-          NoContent
-      )
-loginRedirectH = do
-  let redirectTo = "/login"
+loginRedirectH :: Maybe Text -> ATBaseCtx (Headers '[Header "Location" Text, Header "Set-Cookie" SetCookie] NoContent)
+loginRedirectH redirectToM = do
+  let redirectTo = "/login?redirect_to=" <> fromMaybe "/" redirectToM
   pure $ addHeader redirectTo $ addHeader emptySessionCookie NoContent
 
 
 -- loginH
 loginH
-  :: ATBaseCtx
+  :: Maybe Text
+  -> ATBaseCtx
       ( Headers
           '[Header "Location" Text, Header "Set-Cookie" SetCookie]
           NoContent
       )
-loginH = do
+loginH redirectToM = do
   envCfg <- asks env
   stateVar <- liftIO $ UUID.toText <$> UUIDV4.nextRandom
-  let redirectTo = envCfg.auth0Domain <> "/authorize?response_type=code&client_id=" <> envCfg.auth0ClientId <> "&redirect_uri=" <> envCfg.auth0Callback <> "&state=" <> stateVar <> "&scope=openid profile email"
+  let escapedUri = escapedQueryPartial $ envCfg.auth0Callback <> "?redirect_to=" <> fromMaybe "/" redirectToM
+  let redirectTo = envCfg.auth0Domain <> "/authorize?response_type=code&client_id=" <> envCfg.auth0ClientId <> "&redirect_uri=" <> escapedUri <> "&state=" <> stateVar <> "&scope=openid profile email"
   pure $ addHeader redirectTo $ addHeader emptySessionCookie NoContent
 
 
@@ -194,12 +207,13 @@ loginH = do
 authCallbackH
   :: Maybe Text
   -> Maybe Text -- state variable from auth0
+  -> Maybe Text
   -> ATBaseCtx
       ( Headers
           '[Header "Location" Text, Header "Set-Cookie" SetCookie]
           (Html ())
       )
-authCallbackH codeM _ = do
+authCallbackH codeM _ redirectToM = do
   envCfg <- ask @AuthContext
   pool <- asks pool
   resp <- runExceptT do
@@ -229,7 +243,7 @@ authCallbackH codeM _ = do
   case resp of
     Left err -> putStrLn ("unable to process auth callback page " <> err) >> (throwError $ err302{errHeaders = [("Location", "/login?auth0_callback_failure")]}) >> pure (noHeader $ noHeader "")
     Right persistentSessId -> pure
-      $ addHeader "/"
+      $ addHeader (fromMaybe "/" redirectToM)
       $ addHeader
         (craftSessionCookie persistentSessId True)
         do
@@ -237,7 +251,7 @@ authCallbackH codeM _ = do
             head_ do
               meta_ [httpEquiv_ "refresh", content_ "1;url=/"]
             body_ do
-              a_ [href_ "/"] "Continue to APIToolkit"
+              a_ [href_ $ fromMaybe "/" redirectToM] "Continue to APIToolkit"
 
 
 authorizeUserAndPersist :: (DB :> es, UUIDEff :> es, HTTP :> es, Time :> es) => Maybe Text -> Text -> Text -> Text -> Text -> Eff es Sessions.PersistentSessionId

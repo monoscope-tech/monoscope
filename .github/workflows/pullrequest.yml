@@ -1,4 +1,4 @@
-name:  Build and Test PR
+name: Build and Test PR
 
 on: pull_request
 
@@ -7,8 +7,8 @@ env:
 
 jobs:
   runhaskell:
-    name: Build and test 
-    runs-on: ubuntu-24.04 
+    name: Build and test
+    runs-on: ubuntu-24.04
     permissions:
       contents: 'read'
       id-token: 'write'
@@ -24,11 +24,11 @@ jobs:
       # - uses: freckle/stack-action@v5
       - uses: haskell-actions/setup@v2
         with:
-          ghc-version: 9.8.2 
+          ghc-version: 9.10.2
           enable-stack: true
-          stack-version: "latest"
-      - name: Install OpenSSL
-        run: sudo apt-get update && sudo apt-get install -y libssl-dev libgrpc-dev>=1.55  # or "brew install openssl" for macOS
+          stack-version: 'latest'
+      - name: Install OpenSSL, protoc and snappy
+        run: sudo apt-get update && sudo apt-get install -y libssl-dev librdkafka-dev libgrpc-dev>=1.55 protobuf-compiler libsnappy-dev # or "brew install openssl" for macOS
       - name: Set OpenSSL Paths
         run: |
           export OPENSSL_INCLUDE_DIR=$(pkg-config --variable=includedir openssl)
@@ -40,7 +40,14 @@ jobs:
       - run: npm install
       - run: npx tailwindcss  -i ./static/public/assets/css/tailwind.css -o ./static/public/assets/css/tailwind.min.css
 
-      - run: make prepare-rust-interop
+      - run: |
+          make prepare-rust-interop
+          sudo mkdir -p /usr/local/lib
+          sudo cp rust-interop/target/release/libCrust_interop.so /usr/local/lib
+          sudo cp rust-interop/target/release/libCrust_interop.so /usr/local/lib/librust_interop.so
+          sudo mkdir -p /usr/lib
+          sudo cp rust-interop/target/release/libCrust_interop.so /usr/lib
+          sudo cp rust-interop/target/release/libCrust_interop.so /usr/lib/librust_interop.so
       - run: stack --no-terminal build --dependencies-only
       - run: stack install --local-bin-path=. --flag pg-entity:prod --ghc-options "-O0"
       - run: stack test

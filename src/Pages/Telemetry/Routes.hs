@@ -5,23 +5,19 @@ import Models.Projects.Projects qualified as Projects
 import Pages.Telemetry.Metrics qualified as Metrics
 import Pages.Telemetry.Spans qualified as Spans
 import Pages.Telemetry.Trace qualified as Trace
-import Relude (Generic, Int, Text)
 import Servant (
   Capture,
   GenericMode (type (:-)),
   Get,
   HasServer (ServerT),
   NamedRoutes,
-  QueryParam,
   type (:>),
  )
+
+import Pkg.RouteUtils (QPI, QPT)
+import Relude
 import Servant.HTML.Lucid (HTML)
-import Servant.Htmx (HXBoosted)
 import System.Types (ATAuthCtx, RespHeaders)
-
-
-type QPT a = QueryParam a Text
-type QPI a = QueryParam a Int
 
 
 type role Routes' nominal
@@ -30,6 +26,7 @@ type role Routes' nominal
 type Routes = NamedRoutes Routes'
 
 
+type Routes' :: Type -> Type
 data Routes' mode = Routes'
   { tracesGet :: mode :- "traces" :> Capture "trace_id" Text :> QPT "span_id" :> QPT "nav" :> Get '[HTML] (RespHeaders Trace.TraceDetailsGet)
   , spanGetH :: mode :- "spans" :> Capture "trace_id" Text :> Capture "span_id" Text :> Get '[HTML] (RespHeaders (Html ()))

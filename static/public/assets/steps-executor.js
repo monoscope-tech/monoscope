@@ -3,7 +3,7 @@ import { html } from './js/thirdparty/lit.js'
 export async function makeRequestAndProcessResponse(requestObject) {
   try {
     // Extract necessary information from the requestObject
-    const url = replaceVariables(requestObject._url)
+    const url = new URL(replaceVariables(requestObject._url))
     const method = requestObject._method
     const headers = requestObject.headers || {}
     const rawBody = requestObject._requestBody ? requestObject._requestBody : requestObject._json || null
@@ -42,14 +42,10 @@ export async function makeRequestAndProcessResponse(requestObject) {
 
     let jsonResponse = {}
     try {
-      // Try to parse the response as JSON
       jsonResponse = JSON.parse(rawResponse)
-    } catch (error) {
-      // If parsing fails, leave jsonResponse empty
-    }
+    } catch (error) {}
 
-    // Construct the result object
-    return {
+    return Promise.resolve({
       resp: {
         status: status,
         duration_ms: duration_ms.toFixed(2),
@@ -63,18 +59,19 @@ export async function makeRequestAndProcessResponse(requestObject) {
         json: rawBody ? JSON.parse(rawBody) : null,
         raw: rawBody,
       },
-    }
+    })
   } catch (error) {
-    // Handle errors and return a meaningful error object
-    console.log(error)
-    return {
-      error: `Request failed: ${error.message}`,
-    }
+    return Promise.reject(error)
   }
 }
 
 export function generateRequestPreviewFromObject(requestObject) {
-  const url = new URL(replaceVariables(requestObject._url))
+  let url = ''
+  try {
+    url = new URL(replaceVariables(requestObject._url))
+  } catch (error) {
+    url = requestObject._url
+  }
   const method = requestObject._requestType === 'raw' ? 'POST' : 'GET' // Default to GET if not raw
   const userHeaders = requestObject.headers || {}
   const httpVersion = requestObject.httpVersion || 'HTTP/1.1' // Default to HTTP/1.1 if not provided
@@ -126,10 +123,22 @@ export function renderJsonWithIndentation(json, addAssertion, path = '', depth =
       }
       return html`
         <div style="padding-left: ${padding};">
-          <span class="hover:bg-gray-200 cursor-pointer" @click="${(e) => addAssertion(e, assertionObj)}"> ${key}: ${typeof value === 'object' && value ? '' : JSON.stringify(value)} </span><br />
+          <div class="flex items-center gap-4">
+            <span> ${key}: ${typeof value === 'object' && value ? '' : JSON.stringify(value)} </span>
+            <button
+              class="rounded-full border fill-textDisabled shadow-[0px_4px_4px_0px_rgba(0,0,0,0.06)] border-strokeWeak shadown-sm p-1.5 bg-bgBase"
+              @click="${e => addAssertion(e, assertionObj)}"
+            >
+              ${faSprite_('plus', 'regular', 'w-3 h-3')}
+            </button>
+          </div>
           ${typeof value === 'object' && value ? renderJsonWithIndentation(value, addAssertion, currentPath, depth + 1) : ''}
         </div>
       `
     })}
   `
+}
+
+function faSprite_(iconName, kind, classes) {
+  return html`<svg class="${classes}"><use href="/public/assets/svgs/fa-sprites/${kind}.svg#${iconName}"></use></svg>`
 }

@@ -90,6 +90,8 @@ SELECT manage_updated_at('users.persistent_sessions');
 
 CREATE TYPE notification_channel_enum AS ENUM ('email', 'slack');
 ALTER TYPE notification_channel_enum ADD VALUE 'discord';
+ALTER TYPE notification_channel_enum ADD VALUE 'phone';
+
 
 CREATE TABLE IF NOT EXISTS projects.projects
 (
@@ -114,7 +116,9 @@ CREATE TABLE IF NOT EXISTS projects.projects
 SELECT manage_updated_at('projects.projects');
 ALTER TABLE projects.projects ADD COLUMN IF NOT EXISTS discord_url TEXT DEFAULT NULL;
 ALTER TABLE projects.projects ADD COLUMN IF NOT EXISTS billing_day TIMESTAMP WITH TIME ZONE DEFAULT current_timestamp;
-
+ALTER TABLE projects.projects ADD COLUMN IF NOT EXISTS onboarding_steps_completed TEXT[] DEFAULT ARRAY[]::TEXT[];
+ALTER TABLE projects.projects ADD COLUMN IF NOT EXISTS notify_phone_number TEXT DEFAULT NULL;
+ALTER TABLE projects.projects ADD COLUMN IF NOT EXISTS notify_emails TEXT[] DEFAULT ARRAY[]::TEXT[];
 
 
 -----------------------------------------------------------------------
@@ -329,19 +333,71 @@ ALTER TABLE apis.anomalies ADD CONSTRAINT anomalies_acknowleged_by_fkey FOREIGN 
 
 CREATE OR REPLACE FUNCTION apis.new_anomaly_proc() RETURNS trigger AS $$
 DECLARE
-	anomaly_type apis.anomaly_type;
-	anomaly_action apis.anomaly_action;
+  anomaly_type apis.anomaly_type;
+  anomaly_action apis.anomaly_action;
+  should_record_anomaly BOOLEAN := true;
+  existing_job_id INT;
+  existing_target_hashes JSONB;
 BEGIN
   IF TG_WHEN <> 'AFTER' THEN
-      RAISE EXCEPTION 'apis.new_anomaly_proc() may only run as an AFTER trigger';
+    RAISE EXCEPTION 'apis.new_anomaly_proc() may only run as an AFTER trigger';
   END IF;
+
   anomaly_type := TG_ARGV[0];
   anomaly_action := TG_ARGV[1];
-  INSERT INTO apis.anomalies (project_id, anomaly_type, action, target_hash) VALUES (NEW.project_id, anomaly_type, anomaly_action, NEW.hash);
-  INSERT INTO background_jobs (run_at, status, payload) VALUES (now() + INTERVAL '5 minutes', 'queued',  jsonb_build_object('tag', 'NewAnomaly', 'contents', json_build_array(NEW.project_id, NEW.created_at, anomaly_type::text, anomaly_action::text, NEW.hash)));
+
+  IF array_length(TG_ARGV, 1) >= 3 AND TG_ARGV[2] = 'skip_anomaly_record' THEN
+    should_record_anomaly := false;
+  END IF;
+
+  IF should_record_anomaly THEN
+    INSERT INTO apis.anomalies (
+      project_id, anomaly_type, action, target_hash
+    ) VALUES (
+      NEW.project_id, anomaly_type, anomaly_action, NEW.hash
+    );
+  END IF;
+
+  -- Look for existing job
+  SELECT id, payload->'targetHashes'
+  INTO existing_job_id, existing_target_hashes
+  FROM background_jobs
+  WHERE payload->>'tag' = 'NewAnomaly'
+    AND payload->>'projectId' = NEW.project_id::TEXT
+    AND payload->>'anomalyType' = anomaly_type::TEXT
+    AND status = 'queued'
+  ORDER BY run_at ASC
+  LIMIT 1;
+
+  IF existing_job_id IS NOT NULL THEN
+    UPDATE background_jobs SET payload = jsonb_build_object(
+      'tag', 'NewAnomaly',
+      'projectId', NEW.project_id,
+      'createdAt', to_jsonb(NEW.created_at),
+      'anomalyType', anomaly_type::TEXT,
+      'anomalyAction', anomaly_action::TEXT,
+      'targetHashes', existing_target_hashes || to_jsonb(NEW.hash)
+    ) WHERE id = existing_job_id;
+  ELSE
+    INSERT INTO background_jobs (run_at, status, payload)
+    VALUES (
+      now() + INTERVAL '5 minutes',
+      'queued',
+      jsonb_build_object(
+        'tag', 'NewAnomaly',
+        'projectId', NEW.project_id,
+        'createdAt', to_jsonb(NEW.created_at),
+        'anomalyType', anomaly_type::TEXT,
+        'anomalyAction', anomaly_action::TEXT,
+        'targetHashes', jsonb_build_array(NEW.hash)
+      )
+    );
+  END IF;
+
   RETURN NULL;
 END;
 $$ LANGUAGE plpgsql;
+
 
 CREATE OR REPLACE TRIGGER fields_created_anomaly AFTER INSERT ON apis.fields FOR EACH ROW EXECUTE PROCEDURE apis.new_anomaly_proc('field', 'created');
 CREATE OR REPLACE TRIGGER format_created_anomaly AFTER INSERT ON apis.formats FOR EACH ROW EXECUTE PROCEDURE apis.new_anomaly_proc('format', 'created');
@@ -649,6 +705,16 @@ CREATE TABLE IF NOT EXISTS apis.share_requests
 CREATE INDEX IF NOT EXISTS idx_apis_share_requests_id ON apis.share_requests(id);
 CREATE INDEX IF NOT EXISTS idx_share_requests ON apis.share_requests(request_created_at);
 
+CREATE TABLE IF NOT EXISTS apis.share_events
+ (
+    id                 UUID      NOT        NULL           DEFAULT           gen_random_uuid() PRIMARY KEY,
+    project_id         UUID      NOT        NULL           REFERENCES projects.projects (id)              ON      DELETE CASCADE,
+    created_at         TIMESTAMP WITH       TIME           ZONE       NOT               NULL              DEFAULT current_timestamp,
+    event_id           UUID      NOT        NULL,
+    event_type         TEXT      NOT        NULL,
+    event_created_at   TIMESTAMP WITH TIME ZONE NOT NULL,
+);
+CREATE INDEX IF NOT EXISTS idx_apis_share_events_projectid_id ON apis.share_events(project_id)
 
 CREATE TABLE IF NOT EXISTS apis.slack
 (
@@ -831,6 +897,10 @@ SELECT add_job('tests.check_tests_to_trigger', '10min');
 INSERT into projects.projects (id, title) VALUES ('00000000-0000-0000-0000-000000000000', 'Demo Project');
 
 
+INSERT into users.users (id, email, first_name, last_name) VALUES ('00000000-0000-0000-0000-000000000000', 'hello@apitoolkit.io', 'Guest', 'User');
+
+INSERT INTO projects.project_members (project_id, user_id, permission) VALUES ('00000000-0000-0000-0000-000000000000', '00000000-0000-0000-0000-000000000000', 'view');
+
 CREATE TABLE IF NOT EXISTS apis.errors
 (
   id              UUID NOT NULL DEFAULT gen_random_uuid(),
@@ -848,72 +918,7 @@ SELECT manage_updated_at('apis.errors');
 CREATE INDEX IF NOT EXISTS idx_apis_errors_project_id ON apis.errors(project_id);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_apis_errors_project_id_hash ON apis.errors(project_id, hash);
 
-CREATE OR REPLACE FUNCTION apis.new_anomaly_proc_job_only() RETURNS trigger AS $$
-DECLARE
-	anomaly_type apis.anomaly_type;
-	anomaly_action apis.anomaly_action;
-BEGIN
-  IF TG_WHEN <> 'AFTER' THEN
-      RAISE EXCEPTION 'apis.new_anomaly_proc() may only run as an AFTER trigger';
-  END IF;
-  anomaly_type := TG_ARGV[0];
-  anomaly_action := TG_ARGV[1];
-  INSERT INTO background_jobs (run_at, status, payload) VALUES (now(), 'queued',  jsonb_build_object('tag', 'NewAnomaly', 'contents', json_build_array(NEW.project_id, NEW.created_at, anomaly_type::text, anomaly_action::text, NEW.hash)));
-  RETURN NULL;
-END;
-$$ LANGUAGE plpgsql;
-
-CREATE OR REPLACE TRIGGER error_created_anomaly AFTER INSERT ON apis.errors FOR EACH ROW EXECUTE PROCEDURE apis.new_anomaly_proc_job_only('runtime_exception', 'created');
+CREATE OR REPLACE TRIGGER error_created_anomaly AFTER INSERT ON apis.errors FOR EACH ROW EXECUTE PROCEDURE apis.new_anomaly_proc('runtime_exception', 'created', 'skip_anomaly_record');
 
 
 COMMIT;
-
-
-
-'8cca98f8-e23b-432f-abde-9134a2b3db4b',
-'465aaadf-5c01-44d7-a01d-4c98e3486da7',
-'f384f7b8-686b-4376-ac8b-c6819f389930',
-'e98ca375-1c8a-4d43-8bf1-b09e87efdc83',
-'b4d2e0a3-6286-49d8-8e11-a1f235f44e9a',
-'788bc86e-eef3-4faa-90c0-0e31709b45bd',
-'465d317f-e8c3-4577-ae97-6d0a43236a18',
-'68c4b8ec-632e-44c3-ab95-feda0d208e3e',
-'e5d4b2fa-c41e-414d-b316-25a39c14e128',
-'a93c8a5c-2329-4882-b4d6-e11712c27645',
-'b2a46bc5-9474-4885-be42-b5025cf83434',
-'ec3efc59-7cda-4c2f-98b3-48607cb249cb',
-'8e28b0c0-ea86-46b8-b6ab-279ebb1b8877',
-'2900330e-4f88-43fc-8b5b-f8491ef3a9a3',
-'de4ed0d6-e30b-4a37-9259-18e7f3e649a6',
-'73a604df-2d36-46e4-9a48-a4100a37e30b',
-'27b0bf69-e16e-4a52-9040-55cd8d332c37',
-'575373a4-2fe8-40ec-bd90-e17216ca619b',
-'59c29a3f-8168-4768-aaf7-d9eb5833ae68',
-'ba1ce4e6-b815-4ff7-9743-8ba36b180918',
-'f98e0407-b22d-4824-ad96-b6f3a75e2708',
-'f29d98f2-8440-4729-bf8c-e4db27d7ddbb',
-'1272aaea-351f-4ea1-b0ce-c0d751599bb0',
-'8f12040f-a61c-4111-a255-26803ae25ba4',
-'e7c6a518-5387-4564-8b27-fe6c0d219a02',
-'2f229447-b979-4535-b1cc-7ff418ec7611',
-'c5487225-759e-4243-9fda-33c17070de18',
-'0d91d561-8dfa-4d05-afd3-3f25d10c60ed',
-'bced49ac-67ad-497b-8484-e3c65dc80284',
-'99068406-bcaa-4b4d-aed4-c95bc0f6b90c',
-'ae908abf-08be-454e-a542-722cbf79712e',
-'e4e2a71d-b085-4551-a7c7-5bcca7773a9a',
-'1a79a350-0717-48c1-9e30-885134941ea3',
-'3667b172-6ba8-40c1-afe8-88fbadaf2aec',
-'0e456cf2-f127-4561-9a12-c9bda8c7e38b',
-'53ca5ed4-4ac2-47db-9278-7b21695cf45b',
-'2b83a7ea-446d-4f8d-bd01-c8c6e55810d9',
-'72c392e4-069a-4136-8bb9-f74b8aaa65c5',
-'f5e6a8d0-dece-4831-9157-1084932a9a81',
-'d68381f3-39f3-4a01-821e-6d46ddd6ba0d',
-'a15f762e-e931-44f4-a9bf-930391cdd97c',
-'d3cad1cd-73c5-43b3-98e1-89756a457d3e',
-'80ad18ad-4c65-4107-a6ff-9f995fedd2da',
-'bbe053ab-bb26-4827-b94f-1bf2bf43c0fb',
-'83740cb4-fd41-487e-85ca-d7dc19705bfa',
-'a000d319-cb37-4d8d-99c1-81a53ce7376b',
-'a8b38189-4784-4301-8b01-989db0d9b9f8',

@@ -131,8 +131,8 @@ selectActiveProjectMembers = query Select q
     q =
       [sql| SELECT pm.id, pm.user_id, pm.permission,us.email  from projects.project_members pm
                    JOIN users.users us ON (pm.user_id=us.id)
-                   WHERE pm.project_id=?::uuid and pm.active=TRUE;
-
+                   WHERE pm.project_id=?::uuid and pm.active=TRUE 
+                   ORDER BY pm.created_at ASC;
         |]
 
 

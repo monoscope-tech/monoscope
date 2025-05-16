@@ -1,30 +1,17 @@
-import { LitElement, html, ref, createRef, nothing, unsafeHTML } from './js/thirdparty/lit.js'
+import { LitElement, html, nothing, unsafeHTML, repeat } from './js/thirdparty/lit.js'
 import { renderAssertionBuilder } from './steps-assertions.js'
 import { makeRequestAndProcessResponse, generateRequestPreviewFromObject, renderJsonWithIndentation } from './steps-executor.js'
 
 const validMethods = ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'HEAD', 'OPTIONS', 'TRACE', 'CONNECT']
-
-const DEFAULT_STEP = {
-  _expanded: false,
-  _method: 'GET',
-  _url: '',
-  assertions: [{ equal: ['$.resp.status', 200] }],
-  _assertions: [
-    {
-      type: 'statusCode',
-      operation: 'equals',
-      value: 200,
-      status: 'PASSED',
-    },
-  ],
-}
 
 export class StepsEditor extends LitElement {
   static properties = {
     collectionSteps: [],
     collectionResults: [],
     saveErrors: [],
-    isSendingRequest: false,
+    isSendingRequest: [],
+    sendRequestErrors: [],
+    isOnboarding: false,
   }
 
   constructor() {
@@ -32,7 +19,8 @@ export class StepsEditor extends LitElement {
     this.collectionSteps = convertTestkitToCollectionSteps(window.collectionSteps) || []
     this.collectionResults = window.collectionResults || []
     this.saveErrors = []
-    this.isSendingRequest = false
+    this.isSendingRequest = this.collectionSteps.map(() => false)
+    this.sendRequestErrors = this.collectionSteps.map(() => null)
 
     // Ensure there's at least one step
     if (this.collectionSteps.length === 0) {
@@ -63,14 +51,14 @@ export class StepsEditor extends LitElement {
       this.requestUpdate()
     }
 
-    window.updateCollectionResults = (results) => {
+    window.updateCollectionResults = results => {
       if (results && Array.isArray(results)) {
         this.collectionResults = results
       }
       this.requestUpdate()
     }
 
-    window.updateStepsWithErrors = (errors) => {
+    window.updateStepsWithErrors = errors => {
       if (errors && Array.isArray(errors)) {
         this.saveErrors = errors
       }
@@ -79,8 +67,29 @@ export class StepsEditor extends LitElement {
     window.updateEditorVal = () => {
       // this.updateEditorContent()
     }
+    window.addCollectionStep = () => {
+      this.addStep()
+    }
   }
-
+  addStep() {
+    this.collectionSteps = [
+      ...this.collectionSteps,
+      {
+        _expanded: false,
+        _method: 'GET',
+        _url: '',
+        assertions: [{ equal: ['$.resp.status', 200] }],
+        _assertions: [
+          {
+            type: 'statusCode',
+            operation: 'equals',
+            value: 200,
+            status: 'PASSED',
+          },
+        ],
+      },
+    ]
+  }
   initializeEditor(monaco) {
     const editorContainer = this.querySelector('#steps-codeEditor')
     const reqBodyContainer = this.querySelector('#reqBodyContainer')
@@ -122,6 +131,9 @@ export class StepsEditor extends LitElement {
       lineNumbersMinChars: 3,
       automaticLayout: true,
       minimap: { enabled: false },
+      fontFamily: 'JetBrains Mono, monospace',
+      fontLigatures: true,
+      fontWeight: '400',
     })
 
     const model = this.editor.getModel()
@@ -158,7 +170,7 @@ export class StepsEditor extends LitElement {
     let closestItem = null
     let smallestDistance = Number.MAX_SAFE_INTEGER
 
-    items.forEach((item) => {
+    items.forEach(item => {
       const box = item.getBoundingClientRect()
       const midpoint = box.top + box.height / 2
       const distance = Math.abs(event.clientY - midpoint)
@@ -168,7 +180,7 @@ export class StepsEditor extends LitElement {
       }
     })
 
-    items.forEach((item) => {
+    items.forEach(item => {
       if (item === closestItem) {
         item.classList.add('active-drop-target')
       } else {
@@ -214,31 +226,39 @@ export class StepsEditor extends LitElement {
     this.requestUpdate()
   }
 
-  sendStepRequest(e, idx) {
+  async sendStepRequest(e, idx) {
     e.preventDefault()
-    this.isSendingRequest = true
-    makeRequestAndProcessResponse(this.collectionSteps[idx])
-      .then((resp) => {
-        this.isSendingRequest = false
-        const stepResult = this.collectionResults[idx]
-        if (stepResult) {
-          this.collectionResults[idx] = { ...stepResult, ...resp }
+    this.isSendingRequest[idx] = true
+    this.requestUpdate()
+    this.sendRequestErrors[idx] = null
+    try {
+      const resp = await makeRequestAndProcessResponse(this.collectionSteps[idx])
+      const stepResult = this.collectionResults[idx]
+      if (stepResult) {
+        this.collectionResults[idx] = { ...stepResult, ...resp }
+      } else {
+        this.collectionResults[idx] = { ...resp }
+      }
+    } catch (error) {
+      let msg = error.message
+      if (msg === 'Failed to fetch') {
+        if (!navigator.onLine) {
+          msg += ': Please check your network connection'
         } else {
-          this.collectionResults[idx] = { ...resp }
+          msg += ': This could be due to a CORS restriction, DNS failure, server being unreachable.'
         }
-
-        this.requestUpdate()
-      })
-      .catch((err) => {
-        this.isSendingRequest = false
-        this.requestUpdate()
-      })
+      }
+      this.sendRequestErrors[idx] = 'Send request error: \n' + msg
+    } finally {
+      this.isSendingRequest[idx] = false
+      this.requestUpdate()
+    }
   }
 
   renderCollectionStep(stepData, idx, result, saveError) {
     const stepResult = this.collectionResults[idx]
     const hasResults = !!result
-    const hasFailingAssertions = result?.assert_results?.some((a) => !a.ok || a.ok === false) || false
+    const hasFailingAssertions = result?.assert_results?.some(a => !a.ok || a.ok === false) || false
     const svErr = saveError !== undefined
     const failed = !stepData.disabled && (hasFailingAssertions || svErr)
     const passed = !stepData.disabled && hasResults && !hasFailingAssertions && !svErr
@@ -252,7 +272,7 @@ export class StepsEditor extends LitElement {
       timeout: stepData.timeout !== 60 ? 1 : 0,
     }
     const activeTab = this.collectionSteps[idx].activeTab || 'request-options'
-    const setActiveTab = (tab) => {
+    const setActiveTab = tab => {
       this.collectionSteps[idx].activeTab = tab
       this.requestUpdate()
     }
@@ -260,34 +280,38 @@ export class StepsEditor extends LitElement {
 
     return html`
       <div
-        class="rounded-2xl overflow-hidden group/item collectionStep border draggable  ${failed ? 'border-red-500' : passed ? 'border-green-500' : 'border-slate-200'}"
+        class="rounded-2xl overflow-hidden group/item  bg-fillWeak collectionStep border draggable  ${
+          failed ? 'border-red-500' : passed ? 'border-green-500' : 'border-strokeWeak'
+        }"
         data-index="${idx}"
       >
-        <div class="flex flex-row items-center bg-slate-100">
+        <div class="flex flex-row items-center">
           <div class="h-full shrink p-3 cursor-move"
             draggable="true"
-            @dragstart="${(e) => e.dataTransfer.setData('text/plain', e.target.dataset.index)}"
+            @dragstart="${e => e.dataTransfer.setData('text/plain', e.target.dataset.index)}"
           >${faSprite_('grip-dots-vertical', 'solid', 'h-4 w-4')}</div>
           <div class="flex-1 flex flex-row items-center gap-1 pr-5 py-3" @click="${() => this.toggleExpanded(idx)}">
             <label
-             for="stepState-${idx}" class="flex items-center whitespace-nowrap gap-1 w-max text-xs bg-slate-500 badge text-white">Step ${idx + 1}</label>
-            <div class="w-full space-y-1 shrink" @click="${(e) => e.stopPropagation()}">
+             for="stepState-${idx}" class="flex items-center whitespace-nowrap gap-1 py-1 w-max text-xs bg-fillStrong badge text-textInverse-strong">Step ${
+      idx + 1
+    }</label>
+            <div class="w-full space-y-1 shrink" @click="${e => e.stopPropagation()}">
               <input
-              class="text-lg w-full pl-2 bg-transparent outline-none focus:outline-none" placeholder="Give your step a name*"
-               .value="${stepData.title || ''}" id="title-${idx}" @change=${(e) => this.updateValue(e, idx, null, null, 'title')} />
+              class="text-lg w-full pl-2 bg-transparent outline-hidden focus:outline-hidden" placeholder="Give your step a name*"
+               .value="${stepData.title || ''}" id="title-${idx}" @change=${e => this.updateValue(e, idx, null, null, 'title')} />
             </div>
             <div class="items-center w-max shrink-0 gap-3 text-xs text-slate-600 flex">
                 <input
-                  @click="${(e) => e.stopPropagation()}"
-                  @change="${(e) => {
+                  @click="${e => e.stopPropagation()}"
+                  @change="${e => {
                     this.collectionSteps[idx].disabled = !e.target.checked
                     this.requestUpdate()
                   }}"
                   ?checked="${stepData.disabled === undefined ? true : stepData.disabled ? false : true}"
                   type="checkbox"
-                  class="toggle toggle-sm  ${stepData.disabled ? 'border-red-500 bg-white [--tglbg:#ef4444]' : 'border-green-500 bg-white [--tglbg:#22c55e]'}"
+                  class="toggle toggle-sm  ${stepData.disabled ? 'border-red-500  text-[#ef4444]' : 'border-green-500 text-[#22c55e]'}"
                    />
-                <button class="text-red-700 cursor-pointer" @click="${(e) => {
+                <button class="text-red-700 cursor-pointer" @click="${e => {
                   e.preventDefault()
                   e.stopPropagation()
                   this.collectionSteps = this.collectionSteps.filter((_, i) => i != idx)
@@ -301,7 +325,7 @@ export class StepsEditor extends LitElement {
               </div>
           </div>
         </div>
-        <div class="p-4 pt-0 bg-slate-100 ${stepData._expanded ? 'block' : 'hidden'} ">
+        <div class="p-4 pt-0 bg-fillWeaker ${stepData._expanded ? 'block' : 'hidden'} ">
         <div class="rounded-xl p-4 bg-slate-50">
           <div>
             <div class="p-0 m-0s">
@@ -309,14 +333,16 @@ export class StepsEditor extends LitElement {
                 <div class="text-sm text-slate-700"><div>URL<span class="text-error">*</span></div></div>
                 <div class="relative flex flex-row gap-2 items-center">
                   <label for="actions-list-input-${idx}" class="w-28 shrink text-sm font-medium form-control">
-                    <select id="actions-list-input-${idx}" class="select select-sm select-bordered shadow-none w-full" @change=${(e) => this.updateValue(e, idx, null, null, '_method')}>
-                      ${validMethods.map((methodItem) => html`<option ?selected=${methodItem == stepData._method}>${methodItem}</option>`)}
+                    <select id="actions-list-input-${idx}" class="select select-sm shadow-none w-full" @change=${e =>
+      this.updateValue(e, idx, null, null, '_method')}>
+                      ${validMethods.map(methodItem => html`<option ?selected=${methodItem == stepData._method}>${methodItem}</option>`)}
                     </select>
                     ${saveError.method ? html`<span class="text-red-700 text-xs">${saveError.method}</span>` : ''}
                   </label>
                   <label for="actions-data-${idx}" class="flex-1 text-sm font-medium form-control w-full flex flex-row items-center gap-1">
                     <input
-                      type="text" id="actions-data-${idx}" .value=${stepData._url} class="input input-sm shadow-none input-bordered w-full" @change=${(e) =>
+                      placeholder="https://example.com/api/users"
+                      type="text" id="actions-data-${idx}" .value=${stepData._url || ''} class="input input-sm shadow-none w-full" @change=${e =>
       this.updateValue(e, idx, null, null, '_url')}
                     />
                     ${saveError.url ? html`<span class="text-red-700 text-xs">${saveError.url}</span>` : ''}
@@ -328,14 +354,32 @@ export class StepsEditor extends LitElement {
                  <div>
                   <div class="mt-4 pb-3 border rounded-xl">
                     <div role="tablist" class="tabs tabs-bordered pt-1">
-                      <a role="tab" class="tab ${activeTab === 'request-options' ? 'tab-active' : ''}" @click=${() => setActiveTab('request-options')}>
-                        Request Options ${configuredOptions['request-options'] > 0 ? html`<span class="badge badge-sm badge-ghost">${configuredOptions['request-options']}</span>` : ''}
+                      <a role="tab" class="tab  ${
+                        activeTab === 'request-options' ? 'tab-active [--bc:var(--brand-color)] text-brand font-bold' : ''
+                      }" @click=${() => setActiveTab('request-options')}>
+                        Request Options ${
+                          configuredOptions['request-options'] > 0
+                            ? html`<span class="badge badge-sm badge-ghost">${configuredOptions['request-options']}</span>`
+                            : ''
+                        }
                       </a>
-                      <a role="tab" class="tab ${activeTab === 'query-params' ? 'tab-active' : ''}" @click=${() => setActiveTab('query-params')}>
-                        Query Params ${configuredOptions['query-params'] > 0 ? html`<span class="badge badge-sm badge-ghost">${configuredOptions['query-params']}</span>` : ''}
+                      <a role="tab" class="tab ${
+                        activeTab === 'query-params' ? 'tab-active [--bc:var(--brand-color)] text-brand font-bold' : ''
+                      }" @click=${() => setActiveTab('query-params')}>
+                        Query Params ${
+                          configuredOptions['query-params'] > 0
+                            ? html`<span class="badge badge-sm badge-ghost">${configuredOptions['query-params']}</span>`
+                            : ''
+                        }
                       </a>
-                      <a role="tab" class="tab ${activeTab === 'request-body' ? 'tab-active' : ''}" @click=${() => setActiveTab('request-body')}>
-                        Request Body ${configuredOptions['request-body'] > 0 ? html`<span class="badge badge-sm badge-ghost">${configuredOptions['request-body']}</span>` : ''}
+                      <a role="tab" class="tab ${
+                        activeTab === 'request-body' ? 'tab-active [--bc:var(--brand-color)] text-brand font-bold' : ''
+                      }" @click=${() => setActiveTab('request-body')}>
+                        Request Body ${
+                          configuredOptions['request-body'] > 0
+                            ? html`<span class="badge badge-sm badge-ghost">${configuredOptions['request-body']}</span>`
+                            : ''
+                        }
                       </a>
                     </div>
                     <div class="p-4 space-y-3">
@@ -345,9 +389,9 @@ export class StepsEditor extends LitElement {
                               <div class="form-control w-full">
                                 <div class="label"><span class="label-text">HTTP Version</span></div>
                                 <select
-                                  class="select select-sm select-bordered max-w-xs shadow-none"
+                                  class="select select-sm max-w-xs shadow-none"
                                   .value=${this.collectionSteps[idx].httpVersion}
-                                  @change=${(e) => {
+                                  @change=${e => {
                                     this.collectionSteps[idx].httpVersion = e.target.value
                                   }}
                                 >
@@ -363,7 +407,7 @@ export class StepsEditor extends LitElement {
                                       type="checkbox"
                                       class="checkbox checkbox-sm"
                                       ?checked=${stepData.followRedirects}
-                                      @change=${(e) => (this.collectionSteps[idx].followRedirects = e.target.value == 'on')}
+                                      @change=${e => (this.collectionSteps[idx].followRedirects = e.target.value == 'on')}
                                     />
                                     <span class="text-slate-700 font-medium">Follow redirects</span>
                                   </label>
@@ -374,7 +418,7 @@ export class StepsEditor extends LitElement {
                                       type="checkbox"
                                       class="checkbox checkbox-sm"
                                       ?checked=${stepData.ignoreSSLErrors}
-                                      @change=${(e) => (this.collectionSteps[idx].ignoreSSLErrors = e.target.value == 'on')}
+                                      @change=${e => (this.collectionSteps[idx].ignoreSSLErrors = e.target.value == 'on')}
                                     />
                                     <span class="text-slate-700 font-medium">Ignore server certificate error</span>
                                   </label>
@@ -386,8 +430,8 @@ export class StepsEditor extends LitElement {
                                 <input
                                   type="number"
                                   value=${stepData.timeout || 60}
-                                  class="input input-bordered input-sm w-20 shadow-none"
-                                  @change=${(e) => (this.collectionSteps[idx].timeout = parseInt(e.target.value))}
+                                  class="input input-sm w-20 shadow-none"
+                                  @change=${e => (this.collectionSteps[idx].timeout = parseInt(e.target.value))}
                                 />
                                 <span>seconds</span>
                               </div>
@@ -398,9 +442,9 @@ export class StepsEditor extends LitElement {
                               <div class="form-control w-full">
                                 <div class="label"><span class="label-text">Cookies</span></div>
                                 <textarea
-                                  class="textarea textarea-bordered"
+                                  class="textarea"
                                   placeholder="cookie-name-1=value; cookie-name-2=value"
-                                  @change=${(e) => ((this.collectionSteps[idx].headers ??= {}).Cookie = e.target.value)}
+                                  @change=${e => ((this.collectionSteps[idx].headers ??= {}).Cookie = e.target.value)}
                                 >
 ${stepData?.headers?.Cookie || ''}</textarea
                                 >
@@ -415,7 +459,8 @@ ${stepData?.headers?.Cookie || ''}</textarea
                                 <div class="label flex-col items-start gap-2">
                                   <p class="label-text">Parameters to encode</p>
                                   <p class="label-text text-xs">
-                                    Add all parameters that require encoding to the below fields. Query parameters that do not require encoding can be added to the URL field directly.
+                                    Add all parameters that require encoding to the below fields. Query parameters that do not require encoding can be added to
+                                    the URL field directly.
                                   </p>
                                 </div>
                                 <div class="space-y-2 paramRows" id="[${idx}][params]">${this.renderParamsRows(stepData, idx, 'params')}</div>
@@ -429,9 +474,9 @@ ${stepData?.headers?.Cookie || ''}</textarea
                               <div class="form-control">
                                 <div class="label items-start gap-2"><span class="label-text">Body Type</span></div>
                                 <select
-                                  class="select select-sm select-bordered max-w-xs"
+                                  class="select select-sm max-w-xs"
                                   .value=${stepData._requestType || 'application/json'}
-                                  @change=${(e) => {
+                                  @change=${e => {
                                     this.collectionSteps[idx]._requestType = e.target.value
                                     this.requestUpdate()
                                   }}
@@ -451,9 +496,9 @@ ${stepData?.headers?.Cookie || ''}</textarea
                                 ${this.collectionSteps[idx]._requestType === 'application/x-www-form-urlencoded'
                                   ? html`<div class="flex flex-col gap-1">${this.renderParamsRows(stepData, idx, '_requestBody')}</div>`
                                   : html` <textarea
-                                      class="w-full border border-slate-200"
+                                      class="w-full border border-slate-200 textarea"
                                       name="[${idx}][json]"
-                                      @change=${(e) => {
+                                      @change=${e => {
                                         this.collectionSteps[idx]._json = e.target.value
                                       }}
                                     >
@@ -467,80 +512,119 @@ ${stepData._json}</textarea
                   </div>
                 </details>
               </div>
-              <button class="btn btn-sm mt-5 blue-gr-btn" ?disabled=${!stepData._url} @click=${(e) => this.sendStepRequest(e, idx)}>
-              ${this.isSendingRequest ? html`<span class="loading loading-dots loading-sm"></span>` : 'Send'}
+              <button class="mt-5 btn btn-sm btn-primary px-2 py-1" @click=${e => this.sendStepRequest(e, idx)}>
+              ${this.isSendingRequest[idx] ? html`<span class="loading loading-dots loading-sm"></span>` : 'Send request'}
               </button>
-              <br/>
+              ${this.sendRequestErrors[idx] !== null ? html`<div class="mt-2 text-textError">${this.sendRequestErrors[idx]}</div>` : nothing}
               ${
                 stepResult && stepResult.resp
                   ? html`
-                      <div class="py-3 text-sm font-medium">
-                        The request responded with a status of <strong>${stepResult.resp.status}</strong> and took <strong>${stepResult.resp.duration_ms}</strong> ms
+                      <h3 class=" text-textStrong text-lg font-medium py-2 mt-10">
+                        Request Preview
+                        <span class="font-normal  text-textWeak"
+                          >(took <strong>${stepResult.resp.duration_ms}ms</strong> with status <strong>${stepResult.resp.status}</strong>)</span
+                        >
+                      </h3>
+                      <div class="rounded-xl border border-weak p-4  text-textStrong flex flex-col gap-1">
+                        ${unsafeHTML(generateRequestPreviewFromObject(this.collectionSteps[idx]))}
                       </div>
-                      <h3 class="text-slate-500 text-sm font-bold py-2">Request Preview</h3>
-                      <div class="bg-slate-25 rounded-xl p-4 flex flex-col gap-1">${unsafeHTML(generateRequestPreviewFromObject(this.collectionSteps[idx]))}</div>
+                      <div role="tablist" class="tabs tabs-bordered max-h-96 overflow-y-auto border border-slate-200 rounded-xl mt-6">
+                        <input
+                          type="radio"
+                          name="resp-items"
+                          role="tab"
+                          class="tab checked:[--bc:var(--brand-color)] checked:text-[var(--brand-color)] checked:font-bold"
+                          aria-label="Response Headers"
+                          checked
+                        />
+                        <div role="tabpanel" class="tab-content p-4">
+                          <div class="flex rounded-sm  bg-fillWeak px-2 py-1 mb-2 items-center gap-2">
+                            ${faSprite_('circle-info', 'regular', 'w-4 h-4 fill-none stroke-slate-600')}
+                            <span class=" text-textWeak">Click below to add field as an assertion</span>
+                          </div>
+                          ${Object.entries(stepResult.resp.headers).map(([key, value]) => {
+                            let assertionObj = {
+                              type: 'header',
+                              operation: 'equals',
+                              headerName: key,
+                              value: value,
+                              status: 'PASSED',
+                            }
+                            return html`
+                              <div class="flex items-center gap-2">
+                                <span class=" text-textStrong">${key}:</span>
+                                <span class=" text-textWeak">${value}</span>
+                                <button
+                                  data-tippy-content="Add as an assertion"
+                                  class="rounded-full border fill-textDisabled shadow-[0px_4px_4px_0px_rgba(0,0,0,0.06)] border-strokeWeak shadown-sm p-1.5 bg-bgBase"
+                                  @click="${e => this.addAssertion(e, idx, assertionObj)}"
+                                >
+                                  ${faSprite_('plus', 'regular', 'w-3 h-3')}
+                                </button>
+                              </div>
+                            `
+                          })}
+                        </div>
+
+                        <input
+                          type="radio"
+                          name="resp-items"
+                          role="tab"
+                          class="tab checked:[--bc:var(--brand-color)] checked:text-[var(--brand-color)] checked:font-bold"
+                          aria-label="Response Body"
+                        />
+                        <div role="tabpanel" class="tab-content p-4">
+                          <div>{</div>
+                          <div class="pl-3">
+                            ${renderJsonWithIndentation(stepResult.resp.json, (e, assertionObj) => this.addAssertion(e, idx, assertionObj), '$')}
+                          </div>
+                          <div>}</div>
+                        </div>
+
+                        <input
+                          type="radio"
+                          name="resp-items"
+                          role="tab"
+                          class="tab checked:[--bc:var(--brand-color)] checked:text-[var(--brand-color)] checked:font-bold"
+                          aria-label="Response Status Code"
+                        />
+                        <div role="tabpanel" class="tab-content p-4">${stepResult.resp.status}</div>
+                      </div>
                     `
                   : nothing
               }
             </div>
 
-            <details class="mt-8" ?open=${stepResult && stepResult.resp}>
+            <details class="mt-10" ?open=${stepResult && stepResult.resp}>
               <summary class="label-text text-lg mb-2 cursor-pointer">
-                <div class="inline-flex gap-2 items-center cursor-pointer text-slate-700 font-medium">
-                  Add Assertions (optional)
+                <div class="inline-flex text-lg gap-2 items-center cursor-pointer  text-textStrong font-medium">
+                  Add Assertions <span class="font-normal  text-textWeak">(optional)</span>
                   <a href="https://apitoolkit.io/docs/dashboard/dashboard-pages/api-tests/#test-definition-syntax" class="" target="_blank">
                     ${faSprite_('circle-info', 'regular', 'w-3 h-3 text-slate-700')}
                   </a>
                 </div>
               </summary>
-              <div class="text-sm space-y-2 px-2 paramRows [&_.assertIndicator]:inline-block" id="[${idx}][asserts]">
-                ${
-                  stepResult && stepResult.resp
-                    ? html`
-                        <div role="tablist" class="tabs tabs-bordered max-h-96 overflow-y-auto border border-slate-200 rounded-xl">
-                          <input type="radio" name="resp-items" role="tab" class="tab" aria-label="Response Headers" checked />
-                          <div role="tabpanel" class="tab-content p-4">
-                            ${Object.entries(stepResult.resp.headers).map(([key, value]) => {
-                              let assertionObj = {
-                                type: 'header',
-                                operation: 'equals',
-                                headerName: key,
-                                value: value,
-                                status: 'PASSED',
-                              }
-                              return html` <span class="hover:bg-gray-200 cursor-pointer" @click="${(e) => this.addAssertion(e, idx, assertionObj)}"> ${key}: ${value} </span><br /> `
-                            })}
-                          </div>
-
-                          <input type="radio" name="resp-items" role="tab" class="tab" aria-label="Response Body" />
-                          <div role="tabpanel" class="tab-content p-4">
-                            <div>{</div>
-                            <div class="pl-3">${renderJsonWithIndentation(stepResult.resp.json, (e, assertionObj) => this.addAssertion(e, idx, assertionObj), '$')}</div>
-                            <div>}</div>
-                          </div>
-
-                          <input type="radio" name="resp-items" role="tab" class="tab" aria-label="Response Status Code" />
-                          <div role="tabpanel" class="tab-content p-4">${stepResult.resp.status}</div>
-                        </div>
-                      `
-                    : nothing
-                }
-                <p class="mt-10 text-xs font-semibold">Your step is successful:</p>
+              <div class=" text-textStrong space-y-2 px-2 paramRows [&_.assertIndicator]:inline-block" id="[${idx}][asserts]">
+                <p class="">Your step is successful;</p>
           ${renderAssertionBuilder({
             assertions: this.collectionSteps[idx]._assertions || [],
             result: this.collectionResults[idx],
             updateAssertion: (index, updates) => this.updateAssertion(idx, index, updates),
-            addAssertion: (e) => this.addAssertion(e, idx, { type: 'body', operation: 'equals', value: '' }),
-            removeAssertion: (index) => (e) => this.removeAssertion(idx, index),
+            addAssertion: e => this.addAssertion(e, idx, { type: 'body', operation: 'equals', value: '' }),
+            removeAssertion: index => e => this.removeAssertion(idx, index),
           })}
               </div>
             </details>
-            <details class="mt-5">
+            <details class="mt-10">
               <summary class="label-text text-lg mb-2 cursor-pointer">
-                <div class="inline-flex gap-2 items-center cursor-pointer text-slate-700 font-medium">Extract variables from the response (optional)</div></summary>
+                <div class="inline-flex gap-2 items-center cursor-pointer text-lg  text-textStrong font-medium">Extract variables from the response <span class="font-normal  text-textWeak">(optional)</span></div></summary>
               <div class="text-sm space-y-2 px-2 paramRows" id="[${idx}][exports]">
-                <p>Variables consist of a variable name and a json path pointing to the variable in the response.</p>
+                <p class=" text-textStrong">Variables consist of a variable name and a json path pointing to the variable in the response.</p>
                 ${this.renderParamsRows(stepData, idx, 'exports')}
+                <button class="flex items-center gap-1 mt-4" type="button" @click=${() => {}}>
+                ${faSprite_('plus', 'regular', 'w-4 h-4  text-textWeak')}
+                <span class="underline  text-textWeak font-semibold">New variable<span>
+                </button>
               </div>
             </div>
           </div>
@@ -598,14 +682,20 @@ ${stepData._json}</textarea
       <div class="flex flex-row gap-2 w-full paramRow">
         <span class="shrink hidden assertIndicator"> ${this.renderAssertResult(result)} </span>
         <div class="flex flex-col w-1/3">
-          <input class="input input-bordered input-xs shadow-none w-full" list="${type}DataList" placeholder="Key" .value="${key}" @change=${(e) => this.updateKey(e, idx, type, aidx)} />
+          <input
+            class="input input-sm shadow-none w-full"
+            list="${type}DataList"
+            placeholder="Key"
+            .value="${key}"
+            @change=${e => this.updateKey(e, idx, type, aidx)}
+          />
           <span class="text-xs text-red-500 w-full">${keyError}</span>
         </div>
         ${type === 'exports'
           ? html`
               <div class="flex flex-col w-1/3">
-                <select class="select select-xs select-bordered max-w-xs shadow-none" @change=${(e) => this.updateExportCategory(e, idx, type, aidx, key)}>
-                  ${options.map((option) => html` <option value=${option.value} ?selected=${option.value === category}>${option.label}</option> `)}
+                <select class="select select-sm max-w-xs shadow-none" @change=${e => this.updateExportCategory(e, idx, type, aidx, key)}>
+                  ${options.map(option => html` <option value=${option.value} ?selected=${option.value === category}>${option.label}</option> `)}
                 </select>
               </div>
             `
@@ -614,15 +704,15 @@ ${stepData._json}</textarea
           ? html`<div class="shrink w-full flex flex-col">
           <input
             list="${type === 'asserts' ? 'assertAutocomplete-' + idx : ''}"
-            class="input input-bordered shadow-none ${error ? 'input-error' : ''} input-xs w-full"
+            class="input shadow-none ${error ? 'input-error' : ''} input-sm w-full"
             placeholder="Value"
             .value="${value}"
-            @input=${(e) => this.updateValue(e, idx, type, aidx, key)}
+            @input=${e => this.updateValue(e, idx, type, aidx, key)}
           />
           <span class="text-xs text-red-500">${error}</span>
         </div>
-        <a class="cursor-pointer text-slate-600" @click=${(e) => this.deleteKey(e, idx, type, aidx, key)}>
-          <svg class="inline-block icon w-5 h-5 p-1 rounded-full shadow border stroke-red-500"><use href="/public/assets/svgs/fa-sprites/regular.svg#trash"></use></svg>
+        <a class="cursor-pointer text-slate-600" @click=${e => this.deleteKey(e, idx, type, aidx, key)}>
+          <svg class="inline-block icon w-5 h-5 p-1 rounded-full shadow-sm border stroke-red-500"><use href="/public/assets/svgs/fa-sprites/regular.svg#trash"></use></svg>
         </a>
       </div>`
           : nothing}
@@ -641,7 +731,7 @@ ${stepData._json}</textarea
       if (resultContainer) {
         elements = resultContainer.querySelectorAll('[data-field-path]')
       }
-      elements.forEach((element) => {
+      elements.forEach(element => {
         let path = element.getAttribute('data-field-path')
         if (path) {
           fieldPathValues.add(('$.resp.json.' + path.replace(/\.?(\d+)\.?/g, '.[$1].')).replace('..', '.'))
@@ -651,13 +741,15 @@ ${stepData._json}</textarea
       matches = Array.from(fieldPathValues)
 
       const data = stepData[type] || []
-      rows = data.map((assertObj, aidx) => Object.entries(assertObj).map(([key, value]) => this.renderParamRow(key, value, type, idx, aidx, results[aidx], errors[aidx])))
+      rows = data.map((assertObj, aidx) =>
+        Object.entries(assertObj).map(([key, value]) => this.renderParamRow(key, value, type, idx, aidx, results[aidx], errors[aidx])),
+      )
       if (rows.length === 0 || !Object.entries(data).some(([k, v]) => k.trim() === '' && v.trim() === '')) {
         rows.push(this.renderParamRow('', '', type, idx, rows.length))
       }
       rows.push(html`
         <datalist id=${'assertAutocomplete-' + idx}>
-          ${matches.map((fieldPath) => {
+          ${matches.map(fieldPath => {
             return html`<option class="w-full  text-left text-xs px-3 py-1 hover:bg-gray-200">${fieldPath}</option>`
           })}
         </datalist>
@@ -797,20 +889,25 @@ ${stepData._json}</textarea
         <div class="group-has-[.editormode:checked]/colform:hidden">
           <div
             id="collectionStepsContainer"
-            class="collectionSteps draggable-container pl-4 space-y-4"
+            class="collectionSteps draggable-container space-y-4"
             @dragover="${this._onDragOver}"
             @drop="${this._onDrop}"
             @dragenter="${this._onDragEnter}"
             @dragleave="${this._onDragLeave}"
           >
-            ${this.collectionSteps.map((stepData, idx) => this.renderCollectionStep(stepData, idx, this.collectionResults[idx], this.saveErrors[idx]) || undefined)}
+            ${repeat(
+              this.collectionSteps,
+              (stepData, idx) => this.renderCollectionStep(stepData, idx, this.collectionResults[idx], this.saveErrors[idx]) || undefined,
+            )}
           </div>
-          <div class="p-4 pt-4">
-            <a class="btn btn-sm blue-outline-btn items-center cursor-pointer" @click=${() => (this.collectionSteps = [...this.collectionSteps, DEFAULT_STEP])}>
-              <svg class="inline-block icon w-3 h-3"><use href="/public/assets/svgs/fa-sprites/solid.svg#plus"></use></svg>
-              Add a step to test
-            </a>
-          </div>
+          ${this.isOnboarding
+            ? nothing
+            : html`<div class="p-4 pt-4">
+                <a class="btn btn-sm blue-outline-btn bg-transparent border-[var(--brand-color)] items-center cursor-pointer" @click=${() => this.addStep()}>
+                  <svg class="inline-block icon w-3 h-3"><use href="/public/assets/svgs/fa-sprites/solid.svg#plus"></use></svg>
+                  Add new step
+                </a>
+              </div>`}
         </div>
       </div>
     `
@@ -818,11 +915,15 @@ ${stepData._json}</textarea
 
   // Assume that stepIndex is available in your component
   updateAssertion(stepIdx, index, updates) {
-    this.collectionSteps[stepIdx]._assertions = this.collectionSteps[stepIdx]._assertions.map((assertion, i) => (i === index ? { ...assertion, ...updates } : assertion))
+    this.collectionSteps[stepIdx]._assertions = this.collectionSteps[stepIdx]._assertions.map((assertion, i) =>
+      i === index ? { ...assertion, ...updates } : assertion,
+    )
     // Optionally re-evaluate the assertion after the update
     const updatedAssertion = this.collectionSteps[stepIdx]._assertions[index]
     const status = this.evaluateAssertion(updatedAssertion) ? 'PASSED' : 'FAILED'
-    this.collectionSteps[stepIdx]._assertions = this.collectionSteps[stepIdx]._assertions.map((assertion, i) => (i === index ? { ...assertion, status } : assertion))
+    this.collectionSteps[stepIdx]._assertions = this.collectionSteps[stepIdx]._assertions.map((assertion, i) =>
+      i === index ? { ...assertion, status } : assertion,
+    )
     this.requestUpdate()
   }
 

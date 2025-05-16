@@ -7,12 +7,13 @@ import Data.Text qualified as T
 import Data.Tuple.Extra (fst3)
 import Data.Vector qualified as V
 import Lucid
-import Lucid.Htmx (hxGet_)
+import Lucid.Htmx (hxGet_, hxTarget_)
 import Lucid.Hyperscript (__)
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
 import Models.Users.Users qualified as Users
 import NeatInterpolation (text)
+import Pages.Components qualified as Components
 import Pkg.Components.ExternalHeadScripts (externalHeadScripts_)
 import Pkg.THUtils
 import PyF
@@ -22,8 +23,7 @@ import Utils (faSprite_)
 
 menu :: Projects.ProjectId -> [(Text, Text, Text)]
 menu pid =
-  [ ("Dashboard", "/p/" <> pid.toText <> "/", "qrcode")
-  -- , ("Dashboards", "/p/" <> pid.toText <> "/dashboards", "dashboard")
+  [ ("Dashboards", "/p/" <> pid.toText <> "/dashboards", "dashboard")
   , ("Explorer", "/p/" <> pid.toText <> "/log_explorer", "explore")
   , ("API Catalog", "/p/" <> pid.toText <> "/api_catalog", "swap")
   , ("Changes & Errors", "/p/" <> pid.toText <> "/anomalies", "bug")
@@ -55,21 +55,24 @@ data BWConfig = BWConfig
   , currProject :: Maybe Projects.Project
   , prePageTitle :: Maybe Text
   , pageTitle :: Text
+  , pageTitleModalId :: Maybe Text --
   , menuItem :: Maybe Text -- Use PageTitle if menuItem is not set
   , hasIntegrated :: Maybe Bool
   , navTabs :: Maybe (Html ())
   , pageActions :: Maybe (Html ())
+  , docsLink :: Maybe Text
+  , isSettingsPage :: Bool
   }
   deriving stock (Show, Generic)
   deriving anyclass (Default)
 
 
 bodyWrapper :: BWConfig -> Html () -> Html ()
-bodyWrapper BWConfig{sessM, currProject, prePageTitle, pageTitle, menuItem, hasIntegrated, navTabs, pageActions} child = do
+bodyWrapper bcfg child = do
   doctypehtml_ do
     head_
       do
-        title_ $ toHtml pageTitle
+        title_ $ toHtml bcfg.pageTitle
         meta_ [charset_ "UTF-8"]
         meta_ [name_ "viewport", content_ "width=device-width, initial-scale=1.0"]
         meta_ [httpEquiv_ "X-UA-Compatible", content_ "ie=edge"]
@@ -81,28 +84,32 @@ bodyWrapper BWConfig{sessM, currProject, prePageTitle, pageTitle, menuItem, hasI
         link_ [rel_ "mask-icon", href_ "/public/safari-pinned-tab.svg", term "color" "#5bbad5"]
         meta_ [name_ "msapplication-TileColor", content_ "#da532c"]
         meta_ [name_ "theme-color", content_ "#ffffff"]
-        link_ [rel_ "stylesheet", type_ "text/css", href_ $(hashAssetFile "/public/assets/css/tailwind.min.css")]
         link_ [rel_ "stylesheet", type_ "text/css", href_ $(hashAssetFile "/public/assets/css/thirdparty/notyf3.min.css")]
-        link_ [rel_ "preconnect", href_ "https://rsms.me/"]
-        link_ [rel_ "stylesheet", href_ "https://rsms.me/inter/inter.css"]
-        link_ [rel_ "stylesheet", href_ "https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/atom-one-dark.min.css"]
+        -- link_ [rel_ "stylesheet", href_ "https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/atom-one-dark.min.css"]
+        link_ [rel_ "stylesheet", href_ "https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/atom-one-light.min.css"]
         link_ [rel_ "stylesheet", href_ "https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.63.0/codemirror.min.css"]
         link_ [rel_ "stylesheet", href_ "https://cdnjs.cloudflare.com/ajax/libs/codemirror/6.65.7/theme/elegant.min.css"]
         link_ [rel_ "stylesheet", href_ "https://cdn.jsdelivr.net/npm/@yaireo/tagify/dist/tagify.css", type_ "text/css"]
         link_ [rel_ "stylesheet", href_ $(hashAssetFile "/public/assets/deps/gridstack/gridstack.min.css")]
+        link_ [rel_ "stylesheet", type_ "text/css", href_ $(hashAssetFile "/public/assets/css/tailwind.min.css")]
 
         -- SCRIPTS
+        script_
+          [type_ "importmap"]
+          [text|
+              {"imports": { "@lit-labs/virtualizer/virtualizer": "https://cdn.jsdelivr.net/npm/@lit-labs/virtualizer/virtualize.js/+esm"}}
+          |]
         script_ [src_ $(hashAssetFile "/public/assets/deps/tagify/tagify.min.js")] ("" :: Text)
         script_ [src_ $(hashAssetFile "/public/assets/deps/echarts/echarts.min.js")] ("" :: Text)
-        script_ [src_ $(hashAssetFile "/public/assets/roma-echarts.js"), defer_ "true"] ("" :: Text)
+        script_ [src_ $(hashAssetFile "/public/assets/roma-echarts.js")] ("" :: Text)
         script_ [src_ $(hashAssetFile "/public/assets/js/thirdparty/notyf3.min.js"), defer_ "true"] ("" :: Text)
-        script_ [src_ $(hashAssetFile "/public/assets/js/thirdparty/htmx1_9_10.min.js"), defer_ "true"] ("" :: Text)
+        script_ [src_ $(hashAssetFile "/public/assets/deps/htmx/htmx-2.js")] ("" :: Text)
         script_ [src_ $(hashAssetFile "/public/assets/deps/htmx/multi-swap.js"), defer_ "true"] ("" :: Text)
         script_ [src_ $(hashAssetFile "/public/assets/deps/htmx/preload.js"), defer_ "true"] ("" :: Text)
-        script_ [src_ $(hashAssetFile "/public/assets/deps/htmx/json-enc.js"), defer_ "true"] ("" :: Text)
+        script_ [src_ $(hashAssetFile "/public/assets/deps/htmx/json-enc-2.js"), defer_ "true"] ("" :: Text)
         script_ [src_ $(hashAssetFile "/public/assets/deps/lit/lit-html.js"), type_ "module", defer_ "true"] ("" :: Text)
         script_ [src_ $(hashAssetFile "/public/assets/deps/gridstack/gridstack-all.js")] ("" :: Text)
-        script_ [src_ "https://unpkg.com/htmx.org/dist/ext/debug.js", defer_ "true"] ("" :: Text)
+
         script_ [src_ $(hashAssetFile "/public/assets/js/thirdparty/_hyperscript_web0_9_5.min.js"), defer_ "true"] ("" :: Text)
         script_ [src_ $(hashAssetFile "/public/assets/js/thirdparty/_hyperscript_template.js"), defer_ "true"] ("" :: Text)
         script_ [src_ $(hashAssetFile "/public/assets/js/thirdparty/luxon.min.js"), defer_ "true"] ("" :: Text)
@@ -111,9 +118,11 @@ bodyWrapper BWConfig{sessM, currProject, prePageTitle, pageTitle, menuItem, hasI
         script_ [src_ $(hashAssetFile "/public/assets/js/thirdparty/instantpage5_1_0.js"), type_ "module", defer_ "true"] ("" :: Text)
         script_ [src_ $(hashAssetFile "/public/assets/js/monaco/vs/loader.js"), defer_ "true"] ("" :: Text)
         script_ [src_ $(hashAssetFile "/public/assets/js/charts.js")] ("" :: Text)
-        script_ [src_ "https://cdn.jsdelivr.net/npm/@easepick/bundle@1.2.0/dist/index.umd.min.js"] ("" :: Text)
-        script_ [src_ "https://cdn.jsdelivr.net/npm/lodash@4.17.21/lodash.min.js"] ("" :: Text)
-        script_ [src_ "https://kit.fontawesome.com/e0cb5637ed.js", crossorigin_ "anonymous"] ("" :: Text)
+        script_ [src_ $(hashAssetFile "/public/assets/js/widgets.js")] ("" :: Text)
+
+        script_ [src_ $(hashAssetFile "/public/assets/deps/easepick/bundle.min.js")] ("" :: Text)
+        -- script_ [src_ "https://cdn.jsdelivr.net/npm/lodash@4.17.21/lodash.min.js"] ("" :: Text)
+        -- script_ [src_ "https://kit.fontawesome.com/e0cb5637ed.js", crossorigin_ "anonymous"] ("" :: Text)
         script_ [src_ "https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"] ("" :: Text)
         script_ [src_ "https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/go.min.js"] ("" :: Text)
         script_ [src_ "https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/javascript.min.js"] ("" :: Text)
@@ -124,6 +133,7 @@ bodyWrapper BWConfig{sessM, currProject, prePageTitle, pageTitle, menuItem, hasI
         script_ [src_ "https://cdnjs.cloudflare.com/ajax/libs/codemirror/6.65.7/mode/javascript/javascript.min.js"] ("" :: Text)
         script_ [type_ "module", src_ $(hashAssetFile "/public/assets/filtercomponent.js")] ("" :: Text)
         script_ [src_ $(hashAssetFile "/public/assets/js/main.js")] ("" :: Text)
+        script_ [type_ "module", src_ $(hashAssetFile "/public/assets/explorer-list.js")] ("" :: Text)
 
         script_
           [text|
@@ -132,14 +142,56 @@ bodyWrapper BWConfig{sessM, currProject, prePageTitle, pageTitle, menuItem, hasI
       twq('config','om5gt');
       |]
 
+        script_ [src_ "/public/assets/js/thirdparty/jsyaml.min.js", crossorigin_ "true"] ("" :: Text)
+        script_ [src_ "/public/assets/testeditor-utils.js"] ("" :: Text)
+        script_ [type_ "module", src_ "/public/assets/steps-editor.js"] ("" :: Text)
+        script_ [type_ "module", src_ "/public/assets/steps-assertions.js"] ("" :: Text)
+        script_
+          [text|
+
+            function codeToggle(e) {
+              if(e.target.checked) {
+                   window.updateEditorVal()
+                }
+            }
+            function addToAssertions(event, assertion, operation) {
+                const parent = event.target.closest(".tab-content")
+                const step = Number(parent.getAttribute('data-step'));
+                const target = event.target.parentNode.parentNode.parentNode
+                const path = target.getAttribute('data-field-path');
+                const value = target.getAttribute('data-field-value');
+                let expression = "$.resp.json." + path
+                if(operation) {
+                  expression +=  ' ' + operation + ' ' + value;
+                  }
+                window.updateStepAssertions(assertion, expression, step);
+            }
+
+         function saveStepData()  {
+           const data = document.getElementById('stepsEditor').collectionSteps
+           const parsedData = validateYaml(data)
+           if(parsedData === undefined) {
+              return undefined
+            }
+           return parsedData;
+          }
+
+          function getTags() {
+            const tag = window.tagify.value
+            return tag.map(tag => tag.value);
+          }
+        |]
+
         script_
           [raw|
 
 
-        function navigatable(me, target, container, activeClass)  {
+        function navigatable(me, target, container, activeClass, excl)  {
+            const exCls = excl ? ":not(" + excl + ".a-tab)" : "";
+            const exClsC = excl ? ":not(" + excl + ".a-tab-content)" : "";
             const nav = document.querySelector(container);
-            const tabs = nav.querySelectorAll(".a-tab");
-            const contents = nav.querySelectorAll(".a-tab-content");
+            const tabs = nav.querySelectorAll(".a-tab" + exCls);
+            const contents = nav.querySelectorAll(".a-tab-content" + exClsC);
             const targetElement = document.querySelector(target);
             tabs.forEach(tab => {
               tab.classList.remove(activeClass);
@@ -179,6 +231,7 @@ bodyWrapper BWConfig{sessM, currProject, prePageTitle, pageTitle, menuItem, hasI
           document.body.addEventListener("errorToast", (e)=> {e.detail.value.map(v=>notyf.error(v));});
         });
 
+
         if("serviceWorker" in navigator) {
             window.addEventListener("load", () => {
               navigator.serviceWorker.register("/public/sw.js?v=7").then(swReg => {}).catch(err => {
@@ -211,7 +264,7 @@ bodyWrapper BWConfig{sessM, currProject, prePageTitle, pageTitle, menuItem, hasI
             end
     |]
 
-    body_ [class_ "h-full w-full bg-slate-25 text-slate-700 group/pg", term "data-theme" "antdtheme", term "hx-ext" "multi-swap,preload"] do
+    body_ [class_ "h-full w-full bg-bgBase text-slate-700 group/pg", term "data-theme" "light", term "hx-ext" "multi-swap,preload"] do
       div_
         [ style_ "z-index:99999"
         , class_ "pt-24 sm:hidden justify-center z-50 w-full p-4 bg-gray-50 overflow-y-auto inset-0 h-full max-h-full"
@@ -229,18 +282,26 @@ bodyWrapper BWConfig{sessM, currProject, prePageTitle, pageTitle, menuItem, hasI
                 p_ [] "Don't hesitate to let us know if this is a very important feature for your team, then we can prioritize it"
               -- Modal footer
               div_ [class_ "flex w-full justify-end items-center p-6 space-x-2 border-t border-gray-200 rounded-b"] pass
-      case sessM of
+      case bcfg.sessM of
         Nothing -> do
-          section_ [class_ "flex flex-col grow  h-screen overflow-y-hidden"] 
-            $ section_ [class_ "flex-1 overflow-y-auto"] $ child
+          section_ [class_ "flex flex-col grow  h-screen overflow-y-hidden"]
+            $ section_ [class_ "flex-1 overflow-y-auto"]
+            $ child
         Just sess ->
           let currUser = sess.persistentSession.user.getUser
-              sideNav' = currProject & maybe "" \project -> sideNav sess project pageTitle menuItem hasIntegrated
-           in section_ [class_ "flex flex-row h-screen overflow-hidden"] do
+              sideNav' = bcfg.currProject & maybe "" \project -> sideNav sess project (fromMaybe bcfg.pageTitle bcfg.prePageTitle) bcfg.menuItem bcfg.hasIntegrated
+           in section_ [class_ "flex flex-row grow-0 h-screen overflow-hidden"] do
                 sideNav'
                 section_ [class_ "h-screen overflow-y-hidden grow"] do
-                  navbar currProject (fromMaybe [] (currProject <&> \p -> menu p.id)) currUser prePageTitle pageTitle navTabs pageActions
-                  section_ [class_ "overflow-y-hidden h-full "] child
+                  when (currUser.email == "hello@apitoolkit.io")
+                    $ loginBanner
+                  unless bcfg.isSettingsPage $ navbar bcfg.currProject (fromMaybe [] (bcfg.currProject <&> \p -> menu p.id)) currUser bcfg.prePageTitle bcfg.pageTitle bcfg.pageTitleModalId bcfg.docsLink bcfg.navTabs bcfg.pageActions
+                  section_ [class_ "overflow-y-hidden h-full flex-1"] do
+                    if (bcfg.isSettingsPage)
+                      then maybe child (\p -> settingsWrapper p.id bcfg.pageTitle child) bcfg.currProject
+                      else child
+                  Components.drawer_ "global-data-drawer" Nothing Nothing ""
+
       externalHeadScripts_
       alerts_
       script_ [async_ "true", src_ "https://www.googletagmanager.com/gtag/js?id=AW-11285541899"] ("" :: Text)
@@ -268,12 +329,14 @@ bodyWrapper BWConfig{sessM, currProject, prePageTitle, pageTitle, menuItem, hasI
             });
           });
       |]
-      let email = show $ maybe "" ((.persistentSession.user.getUser.email)) sessM
-      let name = maybe "" (\sess -> sess.persistentSession.user.getUser.firstName <> " " <> sess.persistentSession.user.getUser.lastName) sessM
+      let email = show $ maybe "" ((.persistentSession.user.getUser.email)) bcfg.sessM
+      let name = maybe "" (\sess -> sess.persistentSession.user.getUser.firstName <> " " <> sess.persistentSession.user.getUser.lastName) bcfg.sessM
       script_
         [text| window.addEventListener("load", (event) => {
         posthog.people.set_once({email: ${email}, name: "${name}"});
-      });|]
+      });
+      echarts.connect('default');
+      |]
 
 
 projectsDropDown :: Projects.Project -> V.Vector Projects.Project -> Html ()
@@ -281,7 +344,7 @@ projectsDropDown currProject projects = do
   let pidTxt = currProject.id.toText
   div_
     [ term "data-menu" "true"
-    , class_ "origin-top-right z-40 transition transform bg-base-100 p-4 absolute w-[20rem] rounded-2xl shadow-2xl shadow-indigo-200 opacity-100 scale-100"
+    , class_ "origin-top-right z-40 transition transform bg-bgOverlay p-4 absolute w-[20rem] rounded-2xl shadow-2xl shadow-indigo-200 opacity-100 scale-100"
     ]
     do
       div_ [class_ "p-2 pb-4 "] do
@@ -291,17 +354,11 @@ projectsDropDown currProject projects = do
             strong_ [class_ "block"] $ toHtml currProject.title
             small_ [class_ "block"] $ toHtml currProject.paymentPlan
         nav_ [] do
-          a_ [href_ [text| /p/$pidTxt/settings |], class_ "p-3 flex gap-3 items-center rounded-2xl hover:bg-gray-100"] do
-            faSprite_ "gear" "regular" "h-5 w-5" >> span_ "Settings"
-          a_ [href_ [text| /p/$pidTxt/manage_members |], class_ "p-3 flex gap-3 items-center rounded hover:bg-gray-100"] do
-            faSprite_ "user-plus" "regular" "h-5 w-5" >> span_ "Manage members"
-          a_ [href_ [text| /p/$pidTxt/apis|], class_ "p-3 flex gap-3 items-center rounded hover:bg-gray-100"] do
-            faSprite_ "key" "regular" "h-5 w-5" >> span_ "API Keys"
-          a_ [href_ [text| /p/$pidTxt/integrations|], class_ "p-3 flex gap-3 items-center rounded hover:bg-gray-100"] do
+          a_ [href_ [text| /p/$pidTxt/integrations|], class_ "p-3 flex gap-3 items-center rounded-sm hover:bg-gray-100"] do
             faSprite_ "arrows-turn-right" "regular" "h-5 w-5" >> span_ "Integrations"
           when (currProject.paymentPlan == "UsageBased" || currProject.paymentPlan == "GraduatedPricing")
             $ a_
-              [class_ "p-3 flex gap-3 items-center rounded hover:bg-gray-100 cursor-pointer", hxGet_ [text| /p/$pidTxt/manage_subscription |]]
+              [class_ "p-3 flex gap-3 items-center rounded-sm hover:bg-gray-100 cursor-pointer", hxGet_ [text| /p/$pidTxt/manage_subscription |]]
               (faSprite_ "dollar-sign" "regular" "h-5 w-5" >> span_ "Manage billing")
       div_ [class_ "border-t border-gray-100 p-2"] do
         div_ [class_ "flex justify-between content-center items-center py-5 mb-2 "] do
@@ -324,55 +381,64 @@ projectsDropDown currProject projects = do
 
 
 sideNav :: Sessions.Session -> Projects.Project -> Text -> Maybe Text -> Maybe Bool -> Html ()
-sideNav sess project pageTitle menuItem hasIntegrated = aside_ [class_ "border-r bg-slate-100 border-slate-200 w-15 group-has-[#sidenav-toggle:checked]/pg:w-72  h-screen transition-all duration-200 ease-in-out flex flex-col justify-between", id_ "side-nav-menu"] do
+sideNav sess project pageTitle menuItem hasIntegrated = aside_ [class_ "border-r bg-fillWeaker border-strokeWeak text-sm min-w-15 shrink-0 w-15 group-has-[#sidenav-toggle:checked]/pg:w-60  h-screen transition-all duration-200 ease-in-out flex flex-col justify-between", id_ "side-nav-menu"] do
   div_ [class_ "px-2 group-has-[#sidenav-toggle:checked]/pg:px-6"] do
     div_ [class_ "py-5 flex justify-center group-has-[#sidenav-toggle:checked]/pg:justify-between items-center"] do
       a_ [href_ "/", class_ "inline-flex"] do
-        img_ [class_ "h-7 hidden group-has-[#sidenav-toggle:checked]/pg:block", src_ "/public/assets/svgs/logo.svg"]
+        img_ [class_ "h-6 hidden group-has-[#sidenav-toggle:checked]/pg:block", src_ "/public/assets/svgs/logo.svg"]
         img_ [class_ "h-10 w-10 hidden sd-show", src_ "/public/assets/logo-mini.png"]
-      label_ [class_ "cursor-pointer text-slate-700"] do
+      label_ [class_ "cursor-pointer text-strokeStrong"] do
         input_ ([type_ "checkbox", class_ "hidden", id_ "sidenav-toggle", [__|on change call setCookie("isSidebarClosed", `${me.checked}`)|]] <> [checked_ | sess.isSidebarClosed])
         faSprite_ "side-chevron-left-in-box" "regular" " h-5 w-5 rotate-180 group-has-[#sidenav-toggle:checked]/pg:rotate-0"
     div_ [class_ "mt-4 sd-px-0 dropdown block"] do
       a_
-        [ class_ "flex flex-row border border-slate-300 bg-slate-25 text-slate-950 hover:bg-slate-100 gap-2 justify-center rounded-xl cursor-pointer py-3 group-has-[#sidenav-toggle:checked]/pg:px-3"
+        [ class_ "flex flex-row border border-slate-300 bg-fillWeaker text-textStrong hover:bg-fillWeaker gap-2 justify-center items-center rounded-xl cursor-pointer py-3 group-has-[#sidenav-toggle:checked]/pg:px-3"
         , tabindex_ "0"
         ]
         do
           span_ [class_ "grow hidden group-has-[#sidenav-toggle:checked]/pg:block overflow-x-hidden whitespace-nowrap truncate"] $ toHtml project.title
-          faSprite_ "angles-up-down" "regular" " w-4 m-1"
-      div_ [tabindex_ "0", class_ "dropdown-content z-[40]"] $ projectsDropDown project (Sessions.getProjects $ Sessions.projects sess.persistentSession)
+          faSprite_ "angles-up-down" "regular" "w-4"
+      div_ [tabindex_ "0", class_ "dropdown-content z-40"] $ projectsDropDown project (Sessions.getProjects $ Sessions.projects sess.persistentSession)
     nav_ [class_ "mt-5 flex flex-col gap-2.5 text-slate-600"] do
       -- FIXME: reeanable hx-boost hxBoost_ "true"
       menu project.id & mapM_ \(mTitle, mUrl, fIcon) -> do
         let isActive = maybe (pageTitle == mTitle) (== mTitle) menuItem
-        let activeCls = if isActive then " bg-slate-250 text-slate-800 " else "!border-transparent"
+        let activeCls = if isActive then "bg-fillWeak  text-textStrong border border-strokeStrong" else "border-transparent!"
         a_
           [ href_ mUrl
           , term "data-tippy-placement" "right"
           , term "data-tippy-content" mTitle
-          , class_ $ "group-has-[#sidenav-toggle:checked]/pg:px-4 gap-3 py-2 flex no-wrap shrink-0  justify-center group-has-[#sidenav-toggle:checked]/pg:justify-start items-center rounded-xl  border border-slate-300 hover:border overflow-x-hidden overflow-y-hidden " <> activeCls
+          , class_ $ "group-has-[#sidenav-toggle:checked]/pg:px-4 gap-3 py-2 flex no-wrap shrink-0  justify-center group-has-[#sidenav-toggle:checked]/pg:justify-start items-center rounded-lg  border hover:border overflow-x-hidden overflow-y-hidden " <> activeCls
           ]
           do
             faSprite_ fIcon "regular" "w-4 h-4 shrink-0 "
             span_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:block whitespace-nowrap truncate"] $ toHtml mTitle
 
-  div_ [class_ "py-8 px-2 group-has-[#sidenav-toggle:checked]/pg:px-6 [&>*]:gap-2 [&>*]:whitespace-nowrap [&>*]:truncate flex flex-col gap-2.5 [&>*]:items-center [&>*]:overflow-x-hidden [&>*]:flex &:no-wrap"] do
+  div_ [class_ "py-8 px-2 group-has-[#sidenav-toggle:checked]/pg:px-6 *:gap-2 *:whitespace-nowrap *:truncate flex flex-col gap-2.5 *:items-center *:overflow-x-hidden *:flex &:no-wrap"] do
     let currUser = sess.persistentSession.user.getUser
-    let userIdentifier =
+        userIdentifier =
           if currUser.firstName /= "" || currUser.lastName /= ""
             then currUser.firstName <> " " <> currUser.lastName
             else CI.original currUser.email
-    let emailMd5 = decodeUtf8 $ MD5.hash $ encodeUtf8 $ CI.original currUser.email
-    let sanitizedID = T.replace " " "+" userIdentifier
-    div_ [tabindex_ "0", role_ "button", class_ "cursor-pointer justify-center group-has-[#sidenav-toggle:checked]/pg:justify-start"] do
+        emailMd5 = decodeUtf8 $ MD5.hash $ encodeUtf8 $ CI.original currUser.email
+        sanitizedID = T.replace " " "+" userIdentifier
+    div_ [tabindex_ "0", role_ "button", class_ ""] do
       img_
-        [ class_ "inline-block w-10 h-10 p-2 rounded-full bg-gray-300"
+        [ class_ "inline-block w-9 h-9 p-2 rounded-full bg-gray-300"
         , term "data-tippy-placement" "right"
         , term "data-tippy-content" userIdentifier
         , src_ [text|https://www.gravatar.com/avatar/${emailMd5}?d=https%3A%2F%2Fui-avatars.com%2Fapi%2F/${sanitizedID}/128|]
         ]
       span_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:inline-block overflow-hidden"] $ toHtml userIdentifier
+
+    a_
+      [ class_ "hover:bg-blue-50 "
+      , term "data-tippy-placement" "right"
+      , term "data-tippy-content" "Documentation"
+      , href_ $ "/p/" <> project.id.toText <> "/settings"
+      ]
+      $ span_ [class_ "w-9 h-9 p-2 flex justify-center items-center rounded-full bg-blue-100 text-brand leading-none "] (faSprite_ "gear" "regular" "h-3 w-3")
+      >> span_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:block"] "Settings"
     a_
       [ class_ "hover:bg-blue-50 "
       , target_ "blank"
@@ -380,7 +446,8 @@ sideNav sess project pageTitle menuItem hasIntegrated = aside_ [class_ "border-r
       , term "data-tippy-content" "Documentation"
       , href_ "https://apitoolkit.io/docs/"
       ]
-        $ span_ [class_ "p-3 rounded-full bg-blue-100 text-blue-500 leading-none"] (faSprite_ "circle-question" "regular" "h-4 w-4") >> span_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:block"] "Documentation"
+      $ span_ [class_ "w-9 h-9 p-2 flex justify-center items-center rounded-full bg-blue-100 text-brand leading-none"] (faSprite_ "circle-question" "regular" "h-3 w-3")
+      >> span_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:block"] "Documentation"
     a_
       [ class_ "hover:bg-blue-50"
       , term "data-tippy-placement" "right"
@@ -388,21 +455,25 @@ sideNav sess project pageTitle menuItem hasIntegrated = aside_ [class_ "border-r
       , href_ "/logout"
       , [__| on click js posthog.reset(); end |]
       ]
-        $ span_ [class_ "p-3 rounded-full bg-red-100 text-red-600 leading-none"] (faSprite_ "arrow-right-from-bracket" "regular" "h-4 w-4") >> span_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:block"] "Logout"
+      $ span_ [class_ "w-9 h-9 p-2 flex justify-center items-center  rounded-full bg-red-100 text-red-600 leading-none"] (faSprite_ "arrow-right-from-bracket" "regular" "h-3 w-3")
+      >> span_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:block"] "Logout"
 
 
-navbar :: Maybe Projects.Project -> [(Text, Text, Text)] -> Users.User -> Maybe Text -> Text -> Maybe (Html ()) -> Maybe (Html ()) -> Html ()
-navbar projectM menuL currUser prePageTitle pageTitle tabsM pageActionsM =
-  nav_ [id_ "main-navbar", class_ "sticky z-20 top-0 w-full px-6 py-2 flex flex-row border-slate-200"] do
+-- mapM_ renderNavBottomItem $ navBottomList project.id.toText
+
+navbar :: Maybe Projects.Project -> [(Text, Text, Text)] -> Users.User -> Maybe Text -> Text -> Maybe Text -> Maybe Text -> Maybe (Html ()) -> Maybe (Html ()) -> Html ()
+navbar projectM menuL currUser prePageTitle pageTitle pageTitleMonadId docsLink tabsM pageActionsM =
+  nav_ [id_ "main-navbar", class_ "w-full px-6 py-2 flex flex-row border-slate-200"] do
     div_ [class_ "flex-1 flex items-center text-slate-950 gap-1"] do
       whenJust prePageTitle \pt -> whenJust (find (\a -> fst3 a == pt) menuL) \(_, _, icon) -> do
-        whenJust projectM \p -> a_ [class_ "p-1 hover:bg-slate-100 inline-flex items-center justify-center gap-1 rounded-md", href_ $ "/p/" <> p.id.toText <> "/dashboards"] do
-          faSprite_ icon "regular" "w-4 h-4"
+        whenJust projectM \p -> a_ [class_ "p-1 hover:bg-fillWeak inline-flex items-center justify-center gap-1 rounded-md text-sm", href_ $ "/p/" <> p.id.toText <> "/dashboards"] do
+          faSprite_ icon "regular" "w-4 h-4 text-strokeStrong"
           toHtml pt
         faSprite_ "chevron-right" "regular" "w-3 h-3"
-      strong_ [class_ "font-semibold text-2xl px-1"] $ toHtml pageTitle
+      label_ [class_ "font-normal text-xl p-1 rounded-md cursor-pointer hover:bg-fillWeak leading-none", Lucid.for_ $ maybeToMonoid pageTitleMonadId, id_ "pageTitleText"] $ toHtml pageTitle
+      whenJust docsLink \link -> a_ [class_ "text-iconBrand -mt-1", href_ link, term "data-tippy-placement" "right", term "data-tippy-content" "Open Documentation"] $ faSprite_ "circle-question" "regular" "w-4 h-4"
     whenJust tabsM id
-    div_ [class_ "flex-1 flex items-center justify-end"] $ whenJust pageActionsM id
+    div_ [class_ "flex-1 flex items-center justify-end text-sm"] $ whenJust pageActionsM id
 
 
 alerts_ :: Html ()
@@ -431,3 +502,59 @@ alerts_ = do
       })
     })
   |]
+
+
+loginBanner :: Html ()
+loginBanner = do
+  div_ [class_ "flex items-center justify-end border-b px-6 py-2 gap-4"] do
+    a_ [class_ "underline underline-offset-2 ", href_ "https://apitoolkit.io/docs/onboarding/"] "Documentation"
+    a_ [class_ "py-2 px-3 rounded-xl bg-transparent border border-fillBrand-strong text-fillBrand-strong shadow-sm hover:shadow-md", href_ "https://calendar.app.google/1a4HG5GZYv1sjjZG6"] "Book a demo with an engineer"
+    a_ [class_ "py-2 px-3 rounded-xl bg-fillBrand-strong text-textInverse-strong shadow-sm hover:shadow-md", href_ "/login"] "Start 30 day free trial"
+
+
+settingsWrapper :: Projects.ProjectId -> Text -> Html () -> Html ()
+settingsWrapper pid current pageHtml = do
+  section_ [class_ "flex h-full w-full"] do
+    nav_ [class_ "w-[300px]  h-full p-4 pt-8 border-r border-r-strokWeak"] do
+      h1_ [class_ "text-3xl pl-5 font-medium"] do
+        "Settings"
+      ul_ [class_ "flex flex-col mt-14 gap-2 w-full"] do
+        mapM_ (renderNavBottomItem current) $ navBottomList pid.toText
+    main_ [class_ "w-full h-full overflow-y-auto"] do
+      pageHtml
+
+
+navBottomList :: Text -> [(Text, Text, Text, Text, Text, Maybe Text, Maybe Text, Maybe Text)]
+navBottomList pidTxt =
+  [ ("gear", "bg-blue-100", "text-brand", "Project settings", "/p/" <> pidTxt <> "/settings", Nothing, Nothing, Nothing)
+  , ("key", "bg-green-100", "text-green-600", "API keys", "/p/" <> pidTxt <> "/apis", Nothing, Nothing, Nothing)
+  , ("user-plus", "bg-yellow-100", "text-yellow-600", "Manage members", "/p/" <> pidTxt <> "/manage_members", Nothing, Nothing, Nothing)
+  , ("dollar", "bg-orange-100", "text-orange-600", "Manage billing", "/p/" <> pidTxt <> "/manage_billing", Nothing, Nothing, Nothing)
+  , ("arrows-turn-right", "bg-purple-100", "text-purple-600", "Integrations", "/p/" <> pidTxt <> "/integrations", Nothing, Nothing, Nothing)
+  , ("trash", "bg-red-100", "text-red-600", "Delete project", "/p/" <> pidTxt <> "/settings/delete", Nothing, Nothing, Nothing)
+  ]
+
+
+renderNavBottomItem :: Text -> (Text, Text, Text, Text, Text, Maybe Text, Maybe Text, Maybe Text) -> Html ()
+renderNavBottomItem curr (iconName, bgColor, textColor, linkText, link, targetBlankM, onClickM, hxGetM) =
+  let
+    defaultAttrs =
+      [ class_ $ "hover:bg-blue-50 flex gap-2 items-center "
+      , term "data-tippy-placement" "right"
+      , term "data-tippy-content" linkText
+      ]
+    activeCls = if curr == linkText then "bg-fillWeak" else ""
+    attrs =
+      defaultAttrs
+        ++ (if isJust targetBlankM then [target_ "BLANK_"] else [])
+        ++ (maybe [] (\onClick -> [onclick_ onClick]) onClickM)
+        ++ (if isJust hxGetM then [hxGet_ link, hxTarget_ "body"] else [href_ link])
+   in
+    li_ [class_ $ "px-2 py-1 w-[220px] rounded-lg " <> activeCls] do
+      a_ attrs $ do
+        span_
+          [class_ $ "p-2 rounded-full shrink-0 leading-none"]
+          (faSprite_ iconName "regular" "shrink-0 h-3 w-3")
+        span_
+          [class_ "text-textWeak"]
+          (toHtml linkText)

@@ -7,8 +7,8 @@ import Control.Monad.Combinators.Expr (
 import Data.Aeson qualified as AE
 import Data.Scientific (FPFormat (Fixed), Scientific, formatScientific)
 import Data.Text qualified as T
-import Data.Text.Display (Display, display, displayBuilder, displayParen, displayPrec)
-import Data.Text.Lazy.Builder (Builder)
+import Data.Text.Builder.Linear (Builder)
+import Data.Text.Display (Display, display, displayParen, displayPrec)
 import Data.Vector qualified as V
 import Pkg.Parser.Core
 import Relude hiding (GT, LT, Sum, many, some)
@@ -136,6 +136,10 @@ data Expr
 --
 -- >>> parse pFieldKey "" "abc[*]"
 -- Right (ArrayWildcard "abc")
+--
+-- >>> parse pFieldKey "" "ab___b___c.a"
+-- Right (FieldKey "ab___b___c")
+--
 pFieldKey :: Parser FieldKey
 pFieldKey = do
   key <- toText <$> some (alphaNumChar <|> oneOf ("-_" :: String))
@@ -221,10 +225,10 @@ pTerm =
   (Paren <$> parens pExpr)
     <|> try (Eq <$> pSubject <* space <* void (symbol "==") <* space <*> pValues)
     <|> try (NotEq <$> pSubject <* space <* void (symbol "!=") <* space <*> pValues)
-    <|> try (GT <$> pSubject <* space <* void (symbol ">") <* space <*> pValues)
-    <|> try (LT <$> pSubject <* space <* void (symbol "<") <* space <*> pValues)
     <|> try (GTEq <$> pSubject <* space <* void (symbol ">=") <* space <*> pValues)
     <|> try (LTEq <$> pSubject <* space <* void (symbol "<=") <* space <*> pValues)
+    <|> try (GT <$> pSubject <* space <* void (symbol ">") <* space <*> pValues)
+    <|> try (LT <$> pSubject <* space <* void (symbol "<") <* space <*> pValues)
     <|> try regexParser
 
 
@@ -338,13 +342,13 @@ instance Display Subject where
 -- >>> display (List [Num "2"])
 -- "ARRAY[2]"
 instance Display Values where
-  displayPrec prec (Num a) = displayBuilder a
-  displayPrec prec (Str a) = displayBuilder $ "'" <> a <> "'"
+  displayPrec prec (Num a) = displayPrec prec a
+  displayPrec prec (Str a) = displayPrec prec $ "'" <> a <> "'"
   displayPrec prec (Boolean True) = "true"
   displayPrec prec (Boolean False) = "false"
   displayPrec prec Null = "null"
   displayPrec prec (List vs) =
-    let arrayElements = mconcat . intersperse "," . map (displayBuilder . display) $ vs
+    let arrayElements = mconcat . intersperse "," . map (displayPrec prec) $ vs
      in "ARRAY[" <> arrayElements <> "]"
 
 
@@ -392,8 +396,8 @@ instance Display Expr where
   displayPrec prec (GTEq sub val) = displayExprHelper ">=" prec sub val
   displayPrec prec (LTEq sub val) = displayExprHelper "<=" prec sub val
   displayPrec prec (Paren u1) = displayParen True $ displayPrec prec u1
-  displayPrec prec (And u1 u2) = displayParen (prec > 0) $ displayPrec prec u1 <> " AND " <> displayBuilder u2
-  displayPrec prec (Or u1 u2) = displayParen (prec > 0) $ displayPrec prec u1 <> " OR " <> displayBuilder u2
+  displayPrec prec (And u1 u2) = displayParen (prec > 0) $ displayPrec prec u1 <> " AND " <> displayPrec prec u2
+  displayPrec prec (Or u1 u2) = displayParen (prec > 0) $ displayPrec prec u1 <> " OR " <> displayPrec prec u2
   displayPrec prec (Regex sub val) = displayPrec prec $ jsonPathQuery "like_regex" sub (Str val)
 
 
@@ -417,7 +421,15 @@ displayExprHelper op prec sub val =
   displayParen (prec > 0)
     $ if subjectHasWildcard sub
       then displayPrec prec (jsonPathQuery op sub val)
-      else displayPrec prec sub <> displayPrec @T.Text prec op <> displayBuilder val
+      else case val of
+        Null ->
+          if op == "="
+            then displayPrec prec sub <> " IS NULL"
+            else
+              if op == "!="
+                then displayPrec prec sub <> " IS NOT NULL"
+                else displayPrec prec sub <> displayPrec @T.Text prec op <> displayPrec prec val
+        _ -> displayPrec prec sub <> displayPrec @T.Text prec op <> displayPrec prec val
 
 
 -- | Generate PostgreSQL JSONPath queries from AST with specified operator
@@ -443,7 +455,7 @@ displayExprHelper op prec sub val =
 -- "jsonb_path_exists(request_body, $$$.\"msg\" ? (@ like_regex \"^abc.*\" flag \"i\" )$$::jsonpath)"
 jsonPathQuery :: T.Text -> Subject -> Values -> T.Text
 jsonPathQuery op' (Subject entire base keys) val =
-  "jsonb_path_exists(" <> base <> ", $$" <> "$" <> buildPath keys <> buildCondition op val postfix <> "$$::jsonpath)"
+  "jsonb_path_exists(to_jsonb(" <> base <> "), $$" <> "$" <> buildPath keys <> buildCondition op val postfix <> "$$::jsonpath)"
   where
     op = if op' == "=" then "==" else op'
     postfix = if op' == "like_regex" then " flag \"i\" " else ""
@@ -460,5 +472,9 @@ jsonPathQuery op' (Subject entire base keys) val =
     buildCondition oper (Num n) pstfx = " ? (@ " <> oper <> " " <> n <> postfix <> ")"
     buildCondition oper (Str s) pstfx = " ? (@ " <> oper <> " \"" <> s <> "\"" <> postfix <> ")"
     buildCondition oper (Boolean b) pstfx = " ? (@ " <> oper <> " " <> T.toLower (show b) <> pstfx <> ")"
-    buildCondition oper Null pstfx = " ? (@ " <> oper <> " null" <> pstfx <> ")"
+    buildCondition oper Null pstfx =
+      case op' of
+        "=" -> " ? (@ is null" <> pstfx <> ")"
+        "!=" -> " ? (@ is not null" <> pstfx <> ")"
+        _ -> " ? (@ " <> oper <> " null" <> pstfx <> ")"
     buildCondition oper (List xs) pstfx = " ? (@ " <> oper <> " {" <> (mconcat . intersperse "," . map display) xs <> "}" <> pstfx <> ")"

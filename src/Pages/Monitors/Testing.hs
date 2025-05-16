@@ -8,6 +8,7 @@ where
 import Control.Error.Util (hush)
 import Data.Aeson qualified as AE
 import Data.Default (def)
+import Data.HashMap.Lazy qualified as HM
 import Data.List.Extra (nubOrd)
 import Data.Map qualified as Map
 import Data.Text qualified as T
@@ -82,7 +83,10 @@ testingGetH pid filterTM timeFilter = do
         (def :: BWConfig)
           { sessM = Just sess
           , currProject = Just project
-          , pageTitle = "Multistep API Tests (Beta)"
+          , pageTitle = "API Tests"
+          , prePageTitle = Just "Monitors & Alerts"
+          , menuItem = Just "Monitors & Alerts"
+          , docsLink = Just "https://apitoolkit.io/docs/monitors/multistep-tests/"
           , pageActions = Just $ a_ [href_ $ "/p/" <> pid.toText <> "/monitors/collection", class_ "btn btn-sm blue-outline-btn space-x-2"] $ Utils.faSprite_ "plus" "regular" "h-4" >> "new tests"
           , navTabs =
               Just
@@ -120,7 +124,7 @@ collectionCard pid col currTime = do
         ]
     div_ [class_ "w-full flex flex-col gap-2 shrink-1"] do
       div_ [class_ "flex gap-10 items-center"] do
-        a_ [href_ $ "/p/" <> pid.toText <> "/monitors/" <> col.id.toText <> "/overview", class_ "font-medium text-gray-800 text-xl"] $ toHtml col.title
+        a_ [href_ $ "/p/" <> pid.toText <> "/monitors/" <> col.id.toText <> "/overview", class_ "font-medium text-gray-800 text-base"] $ toHtml col.title
         div_ [class_ "flex gap-1 items-center text-sm"] do
           forM_ col.tags $ \tag -> do
             span_ [class_ "badge badge-blue"] $ toHtml tag
@@ -132,8 +136,8 @@ collectionCard pid col currTime = do
               span_ [class_ "badge badge-ghost"] $ toHtml url
           div_ [class_ "flex gap-4 w-full items-center"] do
             if col.failed > 0
-              then span_ [class_ "badge badge-error"] "Failing"
-              else span_ [class_ "badge badge-success"] "Passing"
+              then span_ [class_ "badge badge-error text-sm"] "Failing"
+              else span_ [class_ "badge badge-success text-sm"] "Passing"
             div_ [class_ "flex items-center shrink-0 gap-1"] do
               faSprite_ "clock" "regular" "h-4 w-4"
               span_ [class_ "shrink-0 text-sm"] $ toHtml $ "every " <> col.schedule
@@ -174,8 +178,8 @@ stepsBox_ total passed failed = do
 
 pageTabs :: Text -> Text -> Html ()
 pageTabs url ov = do
-  div_ [class_ "tabs tabs-boxed tabs-outline items-center border"] do
-    a_ [href_ ov, role_ "tab", class_ "tab tab-active"] "Overview"
+  div_ [class_ "tabs tabs-box tabs-outline items-center border p-0  bg-fillWeak  text-textWeak"] do
+    a_ [href_ ov, role_ "tab", class_ "tab tab-active border border-strokeStrong  text-textStrong"] "Overview"
     a_ [href_ url, role_ "tab", class_ "tab"] "Test editor"
 
 
@@ -197,6 +201,7 @@ collectionDashboard pid cid = do
           { sessM = Just sess
           , currProject = Just project
           , pageTitle = "API Tests (Beta)"
+          , prePageTitle = Just "Monitors & Alerts"
           , navTabs = Just $ pageTabs url overviewUrl
           }
   case collectionM of
@@ -248,16 +253,16 @@ dashboardPage pid col reqsVecM = do
         let Testing.CollectionSteps stepsD = col.collectionSteps
         testResultDiagram_ pid col.id stepsD result
       div_ [class_ "hidden h-[65vh] overflow-y-auto a-tab-content", id_ "logs-t"] do
-        div_ [class_ "overflow-x-hidden"] do
+        div_ [class_ "overflow-x-hidden h-full"] do
           case reqsVecM of
             Just reqVec -> do
               let (requestVecs, colNames, requestsCount) = reqVec
-                  query = Just "sdk_type=\"TestkitOutgoing\""
+                  query = Just "sdk_type==\"TestkitOutgoing\""
                   colIdxMap = listToIndexHashMap colNames
                   reqLastCreatedAtM = (\r -> lookupVecTextByKey r colIdxMap "created_at") =<< (requestVecs V.!? (V.length requestVecs - 1))
                   curatedColNames = nubOrd $ Log.curateCols [""] colNames
-                  nextLogsURL = RequestDumps.requestDumpLogUrlPath pid query reqLastCreatedAtM Nothing Nothing Nothing Nothing (Just "loadmore") "requests"
-                  resetLogsURL = RequestDumps.requestDumpLogUrlPath pid query Nothing Nothing Nothing Nothing Nothing Nothing "requests"
+                  nextLogsURL = RequestDumps.requestDumpLogUrlPath pid query reqLastCreatedAtM Nothing Nothing Nothing Nothing (Just "loadmore") "requests" Nothing
+                  resetLogsURL = RequestDumps.requestDumpLogUrlPath pid query Nothing Nothing Nothing Nothing Nothing Nothing "requests" Nothing
                   page =
                     Log.ApiLogsPageData
                       { pid
@@ -276,12 +281,18 @@ dashboardPage pid col reqsVecM = do
                       , emptyStateUrl = Just $ "/p/" <> pid.toText <> "/monitors/collection?col_id=" <> col.id.toText
                       , source = "requests"
                       , targetSpans = Nothing
-                      , childSpans = []
                       , daysCountDown = Nothing
                       , queryLibRecent = V.empty
                       , queryLibSaved = V.empty
+                      , serviceColors = HM.empty
+                      , fromD = Nothing
+                      , toD = Nothing
+                      , detailsWidth = Nothing
+                      , targetEvent = Nothing
+                      , showTrace = Nothing
+                      , facets = Nothing
                       }
-              Log.resultTable_ page False
+              Log.virtualTable page
             _ -> pass
 
 
@@ -305,7 +316,7 @@ renderStepIll_ st stepResult ind = do
         totalPass = V.length $ V.filter fst assertionRes
     div_ [] do
       div_ [class_ "flex items-center gap-2 cursor-pointer", [__|on click toggle .hidden on the next .step-body|]] do
-        faSprite_ "chevron-up" "regular" "h-5 w-5 border rounded p-1"
+        faSprite_ "chevron-up" "regular" "h-5 w-5 border rounded-sm p-1"
         span_ [class_ "text-gray-800 text-sm font-medium"] $ "Step " <> show (ind + 1)
         span_ [class_ "badge badge-success"] $ show totalPass <> "/" <> show (V.length assertionRes) <> " Passed"
         span_ [class_ "text-gray-500 text-sm flex items-center gap-1"] do
@@ -317,7 +328,7 @@ renderStepIll_ st stepResult ind = do
           div_ [class_ "border-t w-8"] pass
           div_ [] do
             div_ [class_ "flex gap-1 -mt-2 cursor-pointer", [__|on click toggle .hidden on the next .assert-body|]] do
-              faSprite_ "chevron-up" "regular" "h-5 w-5 border rounded p-1"
+              faSprite_ "chevron-up" "regular" "h-5 w-5 border rounded-sm p-1"
               span_ [class_ "font-medium text-sm text-gray-800"] "Assertions"
             div_ [class_ "border-l pt-4 ml-2 flex flex-col gap-3 assert-body"] do
               forM_ assertionRes $ \(success, resultText) -> do

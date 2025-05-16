@@ -1,6 +1,6 @@
 # GHC_VERSION := $(shell stack ghc -- --version | awk '{print $$NF}')
 # GHC_VERSION := $(shell stack ghc -- --version | grep -o '[0-9]\+\.[0-9]\+\.[0-9]\+' | head -n 1)
-GHC_VERSION := 9.8.2
+GHC_VERSION := 9.10.2
 ARCH := $(shell uname -m | sed 's/arm64/aarch64/' | tr '[:upper:]' '[:lower:]')
 OS := $(shell uname -s | sed 's/Darwin/osx/' | tr '[:upper:]' '[:lower:]')
 OS_ARCH := $(ARCH)-$(OS)
@@ -8,9 +8,9 @@ LINUX_HC_PATH := .stack-work/dist/x86_64-linux-tinfo6/ghc-$(GHC_VERSION)/build
 RUSTLIB := Crust_interop
 
 css-start:
-	npx tailwindcss -i ./static/public/assets/css/tailwind.css -o ./static/public/assets/css/tailwind.min.css --watch
+	./node_modules/.bin/tailwindcss -i ./static/public/assets/css/tailwind.css -o ./static/public/assets/css/tailwind.min.css --watch
 post-css:
-	npx postcss-cli ./static/public/assets/css/tailwind.css  -o ./static/public/assets/css/tailwind.min.css
+	./node_modules/.bin/tailwindcss --postcss ./static/public/assets/css/tailwind.css  -o ./static/public/assets/css/tailwind.min.css
 run:
 	stack run
 
@@ -20,7 +20,7 @@ cypress:
 live-reload:
 	# ghcid --command 'stack ghci apitoolkit-server --ghc-options=-w --with-compiler=ghc-9.8.2' --test ':run Start.startApp' --warnings
 	# ghcid --command 'stack ghci apitoolkit-server --ghc-options="-w -j4 +RTS -A128m -n2m -RTS"' --test ':run Start.startApp' --warnings
-	ghcid --command 'cabal repl --ghc-options="-w -j4" --with-compiler=ghc-9.8.3' --test ':run Start.startApp' --warnings
+	ghcid --command 'cabal repl --ghc-options="-w -j4 -Wno-error=unused-imports -Wno-error=unused-top-binds" --with-compiler=ghc-9.10.2' --test ':run Start.startApp' --warnings
 
 
 hot-reload:
@@ -28,12 +28,12 @@ hot-reload:
 	ghcid --command 'cabal repl --ghc-options="-w -j4"' --test ':run Start.startApp' --test ':! (sleep 1 && touch static/public/reload.trigger)'  --warnings
 
 watch:
-	# https://github.com/MercuryTechnologies/ghciwatch/issues/143 
-	# GHCI currently doesnt support non-terminating test actions like webservers. 
+	# https://github.com/MercuryTechnologies/ghciwatch/issues/143
+	# GHCI currently doesnt support non-terminating test actions like webservers.
 	# So it should be used only for checking compile time and generating static-ls actions
 	# And for repeatedly running tests on code changes
-	# ghciwatch --test-ghci Start.startApp --error-file errors.err  --before-startup-shell hpack --clear  --watch 
-	ghciwatch --error-file errors.err  --before-startup-shell hpack --clear  --watch 
+	# ghciwatch --test-ghci Start.startApp --error-file errors.err  --before-startup-shell hpack --clear  --watch
+	ghciwatch --error-file errors.err  --before-startup-shell hpack --clear  --watch
 
 
 live-test-reload:

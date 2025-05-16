@@ -365,7 +365,7 @@ documentationsPage pid swaggers swaggerID jsonString = do
           do
             -- Modal content
             div_
-              [ class_ "bg-base-100 rounded-lg shadow w-full"
+              [ class_ "bg-base-100 rounded-lg shadow-sm w-full"
               -- , hxPost_ $ "/p/" <> pid.toText <> "/documentation"
               ]
               do
@@ -375,7 +375,7 @@ documentationsPage pid swaggers swaggerID jsonString = do
                 div_ [class_ "w-full"] do
                   div_ [id_ "diff_editor_container", style_ "height:65vh; width:100%"] pass
                 -- input_ [type_ "hidden", name_ "from", value_ "docs"]
-                -- textarea_ [style_ "height:65vh;resize:none", name_ "swagger_json", class_ "w-full border outline-none p-4 focus:outline-none focus:border-blue-200", placeholder_ "Paste swagger here"] ""
+                -- textarea_ [style_ "height:65vh;resize:none", name_ "swagger_json", class_ "w-full border outline-hidden p-4 focus:outline-hidden focus:border-blue-200", placeholder_ "Paste swagger here"] ""
                 -- Modal footer
                 div_ [class_ "flex w-full justify-end items-center p-6 space-x-2 border-t border-gray-200 rounded-b"] do
                   button_ [style_ "margin-right:50px", type_ "button", class_ "btn", onclick_ "closeModal(event)", id_ "close_btn"] "Close"
@@ -394,12 +394,12 @@ documentationsPage pid swaggers swaggerID jsonString = do
             button_
               [ onclick_ "toggleSwaggerHistory(event)"
               , id_ "toggle_swagger_btn"
-              , class_ "w-full flex gap-2 text-gray-600 justify_between items-center cursor-pointer px-2 py-1 border rounded focus:ring-2 focus:ring-blue-200 active:ring-2 active:ring-blue-200"
+              , class_ "w-full flex gap-2 text-gray-600 justify_between items-center cursor-pointer px-2 py-1 border rounded-sm focus:ring-2 focus:ring-blue-200 active:ring-2 active:ring-blue-200"
               ]
               do
                 p_ [style_ "width: calc(100% - 25px)", class_ "truncate ..."] $ toHtml swaggerID
                 faSprite_ "chevron-down" "regular" "h-3 w-3"
-            div_ [id_ "swagger_history_container", class_ "absolute hidden bg-base-100 border shadow w-full overflow-y-auto", style_ "top:100%; max-height: 300px; z-index:9"] do
+            div_ [id_ "swagger_history_container", class_ "absolute hidden bg-base-100 border shadow-sm w-full overflow-y-auto", style_ "top:100%; max-height: 300px; z-index:9"] do
               swaggers & mapM_ \sw -> do
                 button_ [onclick_ "swaggerChanged(event)", class_ "p-2 w-full text-left truncate ... hover:bg-blue-100 hover:text-black"] $ toHtml swaggerID
         button_ [class_ "place-content-center text-md btn btn-primary", onclick_ "showModal()"] "Save swagger"
@@ -415,7 +415,7 @@ documentationsPage pid swaggers swaggerID jsonString = do
             div_ [class_ "h-full overflow-auto", style_ "width: calc(100% - 2px)"] do
               div_ [id_ "info_tags_container", class_ "w-full"] pass
               div_ [class_ "w-full"] do
-                input_ [id_ "endpoints-search", type_ "text", class_ "w-full px-2 py-3 text-lg border-b border-t outline-none focus:outline-none", placeholder_ "Search.."]
+                input_ [id_ "endpoints-search", type_ "text", class_ "w-full px-2 py-3 text-lg border-b border-t outline-hidden focus:outline-hidden", placeholder_ "Search.."]
                 div_ [id_ "endpoint_paths_container", class_ "w-full"] pass
             div_ [onmousedown_ "mouseDown(event)", id_ "endpoints_resizer", class_ "h-full bg-neutral-400", style_ "width: 2px; cursor: col-resize; background-color: rgb(209 213 219)"] pass
           div_ [id_ "editor_container", class_ "flex flex-auto overflow-auto", style_ "width:40%; height:100%"] do
@@ -423,14 +423,14 @@ documentationsPage pid swaggers swaggerID jsonString = do
               div_ [class_ "w-full flex gap-8 justify-end px-2 items-center", style_ "height:40px"] do
                 div_ [onclick_ "toggleFontSize(event)", class_ "relative"] do
                   button_ [id_ "toggle_font", class_ "font-semibold"] "Aa"
-                  div_ [id_ "toggle_dropdown_container", class_ "absolute hidden flex flex-col justify-between bg-base-100 shadow bottom-0 rounded-b overflow-hidden", style_ "bottom:-105px;left:-50px; height: 100px;width:100px; z-index:999"] do
+                  div_ [id_ "toggle_dropdown_container", class_ "absolute hidden flex flex-col justify-between bg-base-100 shadow-sm bottom-0 rounded-b overflow-hidden", style_ "bottom:-105px;left:-50px; height: 100px;width:100px; z-index:999"] do
                     span_ [id_ "toggle_sm", class_ "cursor-pointer  w-full px-3 py-2 hover:bg-blue-100"] "Small"
                     span_ [id_ "toggle_md", class_ "font_toggle_active cursor-pointer w-full px-3 py-2 hover:bg-blue-100"] "Medium"
                     span_ [id_ "toggle_lg", class_ "cursor-pointer text-lg w-full px-3 py-2 hover:bg-blue-100"] "Large"
                 form_ [hxPost_ $ "/p/" <> pid.toText <> "/documentation/save"] do
                   input_ [id_ "save_swagger_input_id", name_ "swagger_id", type_ "hidden", value_ (toText swaggerID)]
                   input_ [id_ "save_swagger_input_data", name_ "updated_swagger", type_ "hidden", value_ (toText jsonString)]
-              --  button_ [type_ "submit", id_ "save_swagger_btn", class_ "bg-gray-200  py-2 px-4 rounded active:bg-green-600"] "Save"
+              --  button_ [type_ "submit", id_ "save_swagger_btn", class_ "bg-gray-200  py-2 px-4 rounded-sm active:bg-green-600"] "Save"
               div_ [id_ "swaggerEditor", class_ "w-full overflow-y-auto", style_ "height: calc(100% - 40px)"] pass
             div_ [onmousedown_ "mouseDown(event)", id_ "editor_resizer", class_ "h-full bg-neutral-400", style_ "width: 2px; cursor: col-resize; background-color: rgb(209 213 219);"] pass
           div_ [id_ "details_container", class_ "flex-auto overflow-y-auto", style_ "width:30%; height:100%"] do
@@ -724,7 +724,7 @@ documentationsPage pid swaggers swaggerID jsonString = do
                }
 
           }catch(e) {
-            console.log(e)
+            console.error(e)
           }
         });   
       };

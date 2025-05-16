@@ -3,8 +3,6 @@
 module System.Config (EnvConfig (..), AuthContext (..), DashboardM, ctxToHandler, getAppContext, configToEnv, DeploymentEnv (..)) where
 
 import Colourista.IO (blueMessage)
-import Configuration.Dotenv qualified as Dotenv
-import Control.Exception (try)
 import Data.Cache (Cache, newCache)
 import Data.Default (Default (..))
 import Data.Default.Instances ()
@@ -17,6 +15,7 @@ import Database.PostgreSQL.Simple.Migration qualified as Migrations
 import Effectful
 import Effectful.Fail (Fail)
 import Models.Projects.Projects qualified as Projects
+import Pkg.DBUtils qualified as DBUtils
 import Relude
 import Servant.Server (Handler)
 import System.Clock (TimeSpec (TimeSpec))
@@ -26,6 +25,7 @@ import System.Logging qualified as Logging
 
 data EnvConfig = EnvConfig
   { databaseUrl :: Text -- "DATABASE_URL"
+  , timefusionPgUrl :: Text -- TIMEFUSION_PG_URL
   , port :: Int
   , migrationsDir :: Text -- "MIGRATIONS_DIR"
   , auth0ClientId :: Text
@@ -40,6 +40,12 @@ data EnvConfig = EnvConfig
   , requestPubsubTopics :: [Text]
   , enablePubsubService :: Bool
   , otlpStreamTopics :: [Text]
+  , kafkaBrokers :: [Text]
+  , kafkaGroupId :: Text
+  , kafkaTopics :: [Text]
+  , kafkaUsername :: Text
+  , kafkaPassword :: Text
+  , enableKafkaService :: Bool
   , smtpHost :: Text
   , smtpPort :: Int
   , smtpUsername :: Text
@@ -58,6 +64,7 @@ data EnvConfig = EnvConfig
   , loggingDestination :: Logging.LoggingDestination
   , lemonSqueezyApiKey :: Text
   , lemonSqueezyUrl :: Text
+  , lemonSqueezyCriticalUrl :: Text
   , postmarkToken :: Text
   , lemonSqueezyWebhookSecret :: Text
   }
@@ -76,6 +83,7 @@ data AuthContext = AuthContext
   { env :: EnvConfig
   , pool :: Pool.Pool Connection
   , jobsPool :: Pool.Pool Connection
+  , timefusionPgPool :: Pool.Pool Connection
   , projectCache :: Cache Projects.ProjectId Projects.ProjectCache
   , projectKeyCache :: Cache Text (Maybe Projects.ProjectId)
   , config :: EnvConfig
@@ -105,6 +113,7 @@ instance Default DeploymentEnv where
 configToEnv :: IOE :> es => EnvConfig -> Eff es AuthContext
 configToEnv config = do
   let createPgConnIO = PG.connectPostgreSQL $ encodeUtf8 config.databaseUrl
+  let createTimefusionPgConnIO = DBUtils.connectPostgreSQL $ encodeUtf8 config.timefusionPgUrl
   when config.migrateAndInitializeOnStart $ liftIO do
     conn <- createPgConnIO
     initializationRes <- Migrations.runMigration conn Migrations.defaultOptions Migrations.MigrationInitialization
@@ -113,13 +122,15 @@ configToEnv config = do
     blueMessage ("migration result " <> show migrationRes)
     pass
   pool <- liftIO $ Pool.newPool $ Pool.defaultPoolConfig createPgConnIO PG.close (60 * 2) 100
-  jobsPool <- liftIO $ Pool.newPool $ Pool.defaultPoolConfig createPgConnIO PG.close (60 * 2) 25
+  jobsPool <- liftIO $ Pool.newPool $ Pool.defaultPoolConfig createPgConnIO PG.close (60 * 2) 50
+  timefusionPgPool <- liftIO $ Pool.newPool $ Pool.defaultPoolConfig createTimefusionPgConnIO PG.close (60 * 2) 50
   projectCache <- liftIO $ newCache (Just $ TimeSpec (60 * 60) 0) -- :: m (Cache Projects.ProjectId Projects.ProjectCache) -- 60*60secs or 1 hour TTL
   projectKeyCache <- liftIO $ newCache Nothing
   pure
     AuthContext
-      { pool = pool
-      , jobsPool = jobsPool
+      { pool
+      , jobsPool
+      , timefusionPgPool
       , env = config
       , projectCache
       , projectKeyCache
@@ -129,7 +140,6 @@ configToEnv config = do
 
 getAppContext :: Eff '[Fail, IOE] AuthContext
 getAppContext = do
-  _ <- liftIO (try (Dotenv.loadFile Dotenv.defaultConfig) :: IO (Either SomeException ()))
   configE <- liftIO (decodeEnv :: IO (Either String EnvConfig))
   case configE of
     Left errMsg -> error $ toText errMsg

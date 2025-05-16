@@ -34,7 +34,7 @@ data Routes' mode = Routes'
   , monitorCreatePost :: mode :- "monitors" :> "create" :> QPT "monitor-type" :> Get '[HTML] (RespHeaders (PageCtx MetricMonitors.MonitorCreate))
   , collectionGet :: mode :- "monitors" :> "collection" :> QueryParam "col_id" TestingM.CollectionId :> Get '[HTML] (RespHeaders TestCollectionEditor.CollectionGet)
   , collectionDashboardGet :: mode :- "monitors" :> Capture "collection_id" TestingM.CollectionId :> "overview" :> Get '[HTML] (RespHeaders (PageCtx (Html ())))
-  , collectionStepsUpdate :: mode :- "monitors" :> "collection" :> ReqBody '[JSON] TestingM.CollectionStepUpdateForm :> Post '[HTML] (RespHeaders TestCollectionEditor.CollectionMut)
+  , collectionStepsUpdate :: mode :- "monitors" :> "collection" :> ReqBody '[JSON] TestingM.CollectionStepUpdateForm :> QPT "onboarding" :> Post '[HTML] (RespHeaders TestCollectionEditor.CollectionMut)
   , collectionRunTests :: mode :- "monitors" :> Capture "collection_id" TestingM.CollectionId :> QueryParam "step_index" Int :> ReqBody '[JSON] TestingM.CollectionStepUpdateForm :> Patch '[HTML] (RespHeaders TestCollectionEditor.CollectionRunTest)
   , collectionVarsPost :: mode :- "monitors" :> Capture "collection_id" TestingM.CollectionId :> "variables" :> ReqBody '[JSON] TestCollectionEditor.CollectionVariableForm :> Post '[HTML] (RespHeaders (Html ()))
   , collectionVarsDelete :: mode :- "monitors" :> Capture "collection_id" TestingM.CollectionId :> "variables" :> Capture "variable_name" Text :> Delete '[HTML] (RespHeaders (Html ()))

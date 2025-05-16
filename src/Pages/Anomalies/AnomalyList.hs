@@ -55,10 +55,10 @@ import NeatInterpolation (text)
 import OddJobs.Job (createJob)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
 import Pages.Components (dateTime, statBox_)
-import Pages.Components qualified as Components
 import Pages.Endpoints.EndpointComponents qualified as EndpointComponents
 import Pkg.Components qualified as Components
 import Pkg.Components.ItemsList qualified as ItemsList
+import Pkg.Components.Widget qualified as Widget
 import PyF (fmt)
 import Relude hiding (ask)
 import Relude.Unsafe qualified as Unsafe
@@ -202,7 +202,7 @@ anomalyListGetH pid layoutM filterTM sortM timeFilter pageM loadM endpointM hxRe
                   , title = "No Issues Or Errors."
                   , description = "Start monitoring errors that happened during a request."
                   , actionText = "Error reporting guide"
-                  , destination = Right $ "/p/" <> listCfg.projectId.toText <> "/integration_guides#errors-monitoring"
+                  , destination = Right $ "https://apitoolkit.io/docs/sdks/nodejs/expressjs/#reporting-errors-to-apitoolkit"
                   }
           , elemID = "anomalyListForm"
           , ..
@@ -299,7 +299,7 @@ shapeParameterStats_ newF deletedF updatedFF = div_ [class_ "flex items-center g
   span_ [] "Fields:"
   div_ [class_ "flex items-center gap-2 "] do
     fieldStats newF "new" "text-green-600"
-    fieldStats updatedFF "updated" "text-blue-500"
+    fieldStats updatedFF "updated" "text-brand"
     fieldStats deletedF "deleted" "text-red-500"
 
 
@@ -331,11 +331,19 @@ issueItem hideByDefault currTime issue timeFilter icon title endpoint content an
         div_ [class_ "flex flex-row items-center gap-2 mb-2"] do
           h4_ [class_ "text-xl font-medium text-slate-950"] $ toHtml title
           whenJust anButton Relude.id
-          span_ [class_ "text-slate-500 text-sm"] $ toHtml endpoint
+          span_ [class_ "text-slate-500 text-sm font-mono"] $ toHtml endpoint
         fromMaybe (toHtml @String "") content
         div_ [class_ "flex gap-3 items-center mt-4"] do
           let modalEndpoint = "/p/" <> issue.projectId.toText <> "/anomalies/by_hash/" <> issue.targetHash <> "?modal=True"
-          Components.drawerWithURLContent_ ("expand-log-drawer-" <> issue.targetHash) (Just modalEndpoint) $ span_ [class_ "flex px-2 py-1 items-center gap-1 bg-green-100 text-sm rounded-lg border border-green-600 text-green-600"] do
+          let expandBtn =
+                [text|on mousedown or click set #global-data-drawer.checked to true
+                        then set #global-data-drawer-content.innerHTML to #loader-tmp.innerHTML
+                        then fetch $modalEndpoint
+                        then set #global-data-drawer-content.innerHTML to it
+                        then htmx.process(#global-data-drawer-content)
+                        then _hyperscript.processNode(#global-data-drawer-content)
+                        then window.evalScriptsFromContent(#global-data-drawer-content)|]
+          label_ [Lucid.for_ "global-data-drawer", class_ "flex px-2 py-1 items-center gap-1 bg-green-100 text-sm rounded-lg border border-green-600 text-green-600", term "_" expandBtn] do
             "Open"
             faSprite_ "f-chevron-up" "regular" "h-4 w-4 fill-none stroke-green-700 rotate-180"
           p_ [class_ "text-sm flex  gap-1 items-enter"] do
@@ -348,13 +356,20 @@ issueItem hideByDefault currTime issue timeFilter icon title endpoint content an
           $ show issue.eventsAgg.count
         let issueQueryPartial = buildQueryForAnomaly issue.anomalyType issue.targetHash
         div_ [class_ "flex items-center justify-center "]
-          $ div_
-            [ class_ "w-60 h-16 px-3"
-            , hxGet_ $ "/charts_html?pid=" <> issue.projectId.toText <> "&since=" <> (if timeFilter == "14d" then "14D" else "24h") <> "&show_axes=false&query_raw=" <> escapedQueryPartial [fmt|{issueQueryPartial} | timechart [1d]|]
-            , hxTrigger_ "intersect once"
-            , hxSwap_ "innerHTML"
-            ]
-            ""
+          $ div_ [class_ "w-56 h-12 px-3"]
+          $ Widget.widget_
+          $ (def :: Widget.Widget)
+            { Widget.standalone = Just True
+            , Widget.id = Just issue.targetHash
+            , Widget.title = Just issue.targetHash
+            , Widget.showTooltip = Just False
+            , Widget.naked = Just True
+            , Widget.xAxis = Just (def{Widget.showAxisLabel = Just False})
+            , Widget.yAxis = Just (def{Widget.showOnlyMaxLabel = Just True})
+            , Widget.query = Just $ issueQueryPartial <> "\" | timechart [1h]"
+            , Widget._projectId = Just issue.projectId
+            , Widget.hideLegend = Just True
+            }
 
 
 anomalyDetailsGetH :: Projects.ProjectId -> Text -> Maybe Text -> ATAuthCtx (RespHeaders AnomalyDetails)
@@ -443,13 +458,13 @@ anomalyDetailsPage issue shapesWithFieldsMap fields prvFormatsM currTime timeFil
               updF = length issueD.updatedFieldFormats
               content = div_ [class_ "flex gap-6 shrink-1"] do
                 statBox_ Nothing Nothing "New fields" "Total number of new field detected" (show $ length issueD.newUniqueFields) Nothing (Just "text-green-500")
-                statBox_ Nothing Nothing "Updated" "Total number of updated fields detected" (show $ length issueD.updatedFieldFormats) Nothing (Just "text-blue-500")
+                statBox_ Nothing Nothing "Updated" "Total number of updated fields detected" (show $ length issueD.updatedFieldFormats) Nothing (Just "text-brand")
                 statBox_ Nothing Nothing "Deleted" "Total number of deledted fields detected" (show delF) Nothing (Just "text-red-600")
               anButton :: Html ()
               anButton =
                 if delF > 0 || updF > 0
-                  then button_ [class_ "btn btn-sm bg-red-500 text-white"] "Breaking"
-                  else button_ [class_ "btn btn-sm bg-slate-950 text-white"] "Incremental"
+                  then button_ [class_ "h-6 flex items-center px-2 py-1 rounded-lg bg-fillStrong text-textInverse-strong"] "Breaking"
+                  else button_ [class_ "h-6 flex items-center px-2 py-1 rounded-lg bg-fillWeak border text-textStrong border-strokeWeak"] "Incremental"
           detailsHeader "New Request Shape" issueD.endpointMethod 200 issue currTime filterV (Just content) (Just anButton)
         Anomalies.IDNewFormatIssue issueD -> do
           detailsHeader "Modified field" issueD.endpointMethod 200 issue currTime filterV Nothing Nothing
@@ -479,9 +494,9 @@ detailsHeader title method statusCode issue currTime filterV content anBtn = do
   div_ [class_ "flex flex-col w-full"] do
     div_ [class_ "flex justify-between"] do
       div_ [class_ "flex items-center gap-4"] do
-        span_ [class_ "flex items-center rounded-lg px-2 py-1 font-medium gap-2 border border-blue-300 bg-blue-100 text-blue-500"] $ toHtml method
+        span_ [class_ "flex items-center rounded-lg px-2 py-1 font-medium gap-2 border border-blue-300 bg-blue-100 text-brand"] $ toHtml method
         span_ [class_ "flex items-center rounded-lg px-2 py-1 font-medium gap-2 border border-green-300 bg-green-100 text-green-500"] $ toHtml $ show statusCode
-        dateTime $ zonedTimeToUTC issue.createdAt
+        dateTime (zonedTimeToUTC issue.createdAt) Nothing
       anomalyActionButtons issue.projectId issue.id (isJust issue.acknowlegedAt) (isJust issue.archivedAt) ""
     span_ [class_ "font-medium text-2xl text-slate-600 mt-6"] $ toHtml title
     div_ [class_ "flex justify-between items-center gap-4 mt-8"] do
@@ -496,14 +511,14 @@ detailsHeader title method statusCode issue currTime filterV content anBtn = do
         div_ [class_ "flex justify-end"] do
           div_ [class_ "rounded-lg border grid grid-cols-2 w-max h-7 bg-slate-200 overflow-hidden"] do
             a_
-              [ class_ $ "cursor-pointer px-1.5 flex items-center text-xs h-full rounded " <> (if filterV == "24h" then "bg-white" else "")
+              [ class_ $ "cursor-pointer px-1.5 flex items-center text-xs h-full rounded-sm " <> (if filterV == "24h" then "bg-white" else "")
               , hxGet_ $ currentURL' <> "&since=24h"
               , hxTarget_ "#reqsChartsEC"
               , hxSwap_ "innerHTML"
               ]
               "24h"
             a_
-              [ class_ $ "cursor-pointer px-1.5 flex items-center text-xs h-full rounded " <> (if filterV == "14d" then "bg-white" else "")
+              [ class_ $ "cursor-pointer px-1.5 flex items-center text-xs h-full rounded-sm " <> (if filterV == "14d" then "bg-white" else "")
               , hxGet_ $ currentURL' <> "&since=14d"
               , hxTarget_ "#reqsChartsEC"
               , hxSwap_ "innerHTML"
@@ -528,11 +543,11 @@ stBox title value =
 
 
 buildQueryForAnomaly :: Anomalies.AnomalyTypes -> Text -> Text
-buildQueryForAnomaly Anomalies.ATEndpoint hash = "endpoint_hash==\"" <> hash <> "\""
-buildQueryForAnomaly Anomalies.ATShape hash = "shape_hash==\"" <> hash <> "\""
-buildQueryForAnomaly Anomalies.ATFormat hash = "format_hashes[*]==\"" <> hash <> "\""
-buildQueryForAnomaly Anomalies.ATField hash = "field[*]==\"" <> hash <> "\""
-buildQueryForAnomaly Anomalies.ATRuntimeException hash = "errors[*].hash==\"" <> hash <> "\""
+buildQueryForAnomaly Anomalies.ATEndpoint hash = "hashes[*]==\"" <> hash <> "\""
+buildQueryForAnomaly Anomalies.ATShape hash = "hashes[*]==\"" <> hash <> "\""
+buildQueryForAnomaly Anomalies.ATFormat hash = "hashes[*]==\"" <> hash <> "\""
+buildQueryForAnomaly Anomalies.ATField hash = "hashes[*]==\"" <> hash <> "\""
+buildQueryForAnomaly Anomalies.ATRuntimeException hash = "hashes[*]==\"" <> hash <> "\""
 buildQueryForAnomaly Anomalies.ATUnknown hash = ""
 
 
@@ -632,8 +647,8 @@ renderIssue hideByDefault currTime timeFilter issue = do
           anButton :: Html ()
           anButton =
             if delF > 0 || updF > 0
-              then span_ [class_ "btn btn-sm shadow-none bg-red-600 text-white hover:bg-red-600", term "data-tippy-content" tippy] "Breaking"
-              else span_ [class_ "btn btn-sm shadow-none bg-slate-950 text-white hover:bg-slate-800", term "data-tippy-content" tippy] "Incremental"
+              then span_ [class_ "h-6 flex items-center px-2 py-1 rounded-lg bg-fillStrong text-textInverse-strong", term "data-tippy-content" tippy] "Breaking"
+              else span_ [class_ "h-6 flex items-center px-2 py-1 rounded-lg bg-fillWeak border text-textStrong border-strokeWeak", term "data-tippy-content" tippy] "Incremental"
 
       issueItem hideByDefault currTime issue timeFilter icon issueTitle endpointTitle (Just shapeContent) (Just anButton)
     Anomalies.IDNewFormatIssue issueD -> do
@@ -653,7 +668,9 @@ renderIssue hideByDefault currTime timeFilter issue = do
     Anomalies.IDNewRuntimeExceptionIssue issueD -> do
       let endpointTitle = fromMaybe "" $ issueD.requestMethod <> Just "  " <> issueD.requestPath
           body = div_ [class_ "block"] $ p_ [] $ toHtml issueD.message
-      issueItem hideByDefault currTime issue timeFilter icon issueTitle endpointTitle (Just body) Nothing
+          anBtn = span_ [class_ "h-6 flex items-center px-2 py-1 rounded-lg bg-fillError-strong text-textInverse-strong"] "Error"
+
+      issueItem hideByDefault currTime issue timeFilter icon issueTitle endpointTitle (Just body) (Just anBtn)
     _ -> error "Anomalies.ATField issue should never show up in practice "
 
 
@@ -670,7 +687,7 @@ anomalyAcknowlegeButton pid aid acked host = do
   a_
     [ class_
         $ "flex items-center gap-2 cursor-pointer py-2 px-3 rounded-xl  "
-        <> (if acked then "bg-green-100 text-green-900" else "blue-gr-btn text-white")
+        <> (if acked then "bg-green-100 text-green-900" else "btn-primary")
     , term "data-tippy-content" "acknowlege anomaly"
     , hxGet_ acknowlegeAnomalyEndpoint
     , hxSwap_ "outerHTML"
@@ -686,7 +703,7 @@ anomalyArchiveButton pid aid archived = do
   a_
     [ class_
         $ "flex items-center gap-2 cursor-pointer py-2 px-3 rounded-xl "
-        <> (if archived then " bg-green-100 text-green-900" else "blue-gr-btn text-white")
+        <> (if archived then " bg-green-100 text-green-900" else "btn-primary")
     , term "data-tippy-content" $ if archived then "unarchive" else "archive"
     , hxGet_ archiveAnomalyEndpoint
     , hxSwap_ "outerHTML"
@@ -727,7 +744,7 @@ subSubSection title fieldsM = whenJust fieldsM \fields -> do
   div_ [class_ "space-y-1 mb-4"] do
     div_ [class_ "flex flex-row items-center"] do
       a_ [class_ "cursor-pointer", [__|on click toggle .neg-rotate-90 on me then toggle .hidden on (next .subSectionContent)|]] $ faSprite_ "chevron-down" "regular" "h-6 mr-3 w-6 p-1 cursor-pointer"
-      div_ [class_ "px-4 rounded-xl w-full font-bold  text-slate-900"] $ toHtml title
+      div_ [class_ "px-4 rounded-xl w-full font-bold  text-textStrong"] $ toHtml title
     div_ [class_ "space-y-1 subSectionContent"] do
       fieldsToNormalized fields & mapM_ \(key, fieldM) -> do
         let segments = T.splitOn "." key

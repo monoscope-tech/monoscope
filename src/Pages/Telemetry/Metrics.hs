@@ -1,35 +1,25 @@
 module Pages.Telemetry.Metrics (metricsOverViewGetH, metricDetailsGetH, MetricsOverViewGet (..), metricBreakdownGetH) where
 
+import Data.Default
+import Data.Map qualified as Map
+import Data.Text qualified as T
 import Data.Vector qualified as V
 import Effectful.Time qualified as Time
 import Lucid
-import Models.Projects.Projects qualified as Projects
-import Models.Telemetry.Telemetry qualified as Telemetry
-import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
-import Relude
-import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
-
-import Data.Default
-import Data.List (foldl')
-import Data.Map qualified as Map
-import Data.Text qualified as T
-
-import Models.Users.Sessions qualified as Sessions
-import Pkg.Components qualified as Components
-import Utils (faSprite_, parseTime)
-
-import Data.Aeson qualified as AE
-import Data.Function (on)
-import Data.List qualified as L
-import Data.Text (Text, unpack)
-import Data.Text qualified as T
-import Data.Time (UTCTime)
 import Lucid.Htmx
 import Lucid.Hyperscript (__)
+import Models.Projects.Projects qualified as Projects
+import Models.Telemetry.Telemetry qualified as Telemetry
+import Models.Users.Sessions qualified as Sessions
 import NeatInterpolation (text)
+import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
 import Pages.Components qualified as Components
 import Pages.Telemetry.Utils (metricsTree)
+import Pkg.Components qualified as Components
 import Pkg.Components.Widget qualified as Widget
+import Relude
+import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
+import Utils (faSprite_, parseTime)
 
 
 metricsOverViewGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Int -> ATAuthCtx (RespHeaders MetricsOverViewGet)
@@ -43,9 +33,9 @@ metricsOverViewGetH pid tabM fromM toM sinceM sourceM prefixM cursorM = do
           { sessM = Just sess
           , currProject = Just project
           , pageTitle = "Metrics"
-          , navTabs = Just $ div_ [class_ "tabs tabs-boxed tabs-md tabs-outline items-center bg-slate-200 text-slate-500"] do
-              a_ [onclick_ "window.setQueryParamAndReload('source', 'requests')", role_ "tab", class_ "tab py-1.5 !h-auto tab-active"] "Overview"
-              a_ [onclick_ "window.setQueryParamAndReload('source', 'logs')", role_ "tab", class_ "tab py-1.5 !h-auto "] "Explorer"
+          , navTabs = Just $ div_ [class_ "tabs tabs-box tabs-md tabs-outline items-center bg-slate-200 text-slate-500"] do
+              a_ [onclick_ "window.setQueryParamAndReload('source', 'requests')", role_ "tab", class_ "tab py-1.5 h-auto! tab-active"] "Overview"
+              a_ [onclick_ "window.setQueryParamAndReload('source', 'logs')", role_ "tab", class_ "tab py-1.5 h-auto! "] "Explorer"
           , pageActions = Just $ Components.timepicker_ Nothing currentRange
           }
   if tab == "datapoints"
@@ -86,9 +76,9 @@ instance ToHtml MetricsOverViewGet where
 overViewTabs :: Projects.ProjectId -> Text -> Html ()
 overViewTabs pid tab = do
   div_ [class_ "w-max mt-5"] do
-    div_ [class_ "tabs tabs-boxed tabs-md tabs-outline items-center bg-slate-200 text-slate-500"] do
-      a_ [onclick_ "window.setQueryParamAndReload('tab', 'datapoints')", role_ "tab", class_ $ "tab py-1.5 !h-auto  " <> if tab == "datapoints" then "tab-active" else ""] "Datapoints"
-      a_ [onclick_ "window.setQueryParamAndReload('tab', 'charts')", role_ "tab", class_ $ "tab py-1.5 !h-auto " <> if tab == "charts" then "tab-active" else ""] "Charts List"
+    div_ [class_ "tabs tabs-box tabs-md tabs-outline items-center bg-slate-200 text-slate-500"] do
+      a_ [onclick_ "window.setQueryParamAndReload('tab', 'datapoints')", role_ "tab", class_ $ "tab py-1.5 h-auto!  " <> if tab == "datapoints" then "tab-active" else ""] "Datapoints"
+      a_ [onclick_ "window.setQueryParamAndReload('tab', 'charts')", role_ "tab", class_ $ "tab py-1.5 h-auto! " <> if tab == "charts" then "tab-active" else ""] "Charts List"
 
 
 chartsPage :: Projects.ProjectId -> V.Vector Telemetry.MetricChartListData -> V.Vector Text -> Text -> Text -> Text -> Html ()
@@ -96,42 +86,38 @@ chartsPage pid metricList sources source mFilter nextUrl = do
   div_ [class_ "flex flex-col gap-6 px-6 py-4 h-[calc(100%-60px)] overflow-y-scroll"] $ do
     overViewTabs pid "charts"
     div_ [class_ "w-full"] do
-      Components.drawerWithURLContent_ "global-data-drawer" Nothing ""
+      Components.drawer_ "global-data-drawer" Nothing Nothing ""
       template_ [id_ "loader-tmp"] $ span_ [class_ "loading loading-dots loading-md"] ""
-      div_ [class_ "w-full flex gap-4 items-end"] do
-        div_ [class_ "flex flex-col gap-1"] do
-          span_ [class_ "text-slate-900 text-sm"] "Data source"
-          select_
-            [ class_ "select bg-slate-100  border border-slate-200 rounded-xl w-36 focus:outline-none"
-            , onchange_ "(() => {window.setQueryParamAndReload('metric_source', this.value)})()"
-            ]
-            do
-              option_ ([selected_ "all" | "all" == source] ++ [value_ "all"]) "All"
-              forM_ sources $ \s -> option_ ([selected_ s | s == source] ++ [value_ s]) $ toHtml s
-        div_ [class_ "flex items-center gap-2 w-full rounded-xl px-3 h-12 border border-slate-200 bg-slate-100"] do
+      div_ [class_ "w-full flex gap-1 items-start"] do
+        select_
+          [ class_ "select bg-fillWeaker  border !border-strokeWeak h-12 rounded-xl w-36 focus:outline-hidden"
+          , onchange_ "(() => {window.setQueryParamAndReload('metric_source', this.value)})()"
+          ]
+          do
+            option_ ([selected_ "all" | "all" == source] ++ [value_ "all"]) "Data Source"
+            forM_ sources $ \s -> option_ ([selected_ s | s == source] ++ [value_ s]) $ toHtml s
+        div_ [class_ "flex items-center gap-2 w-full rounded-xl px-3 h-12 border border-strokeWeak bg-fillWeaker"] do
           faSprite_ "magnifying-glass" "regular" "w-4 h-4 text-slate-500"
           input_
-            [ class_ "w-full text-slate-950 bg-transparent hover:outline-none focus:outline-none"
+            [ class_ "w-full text-slate-950 bg-transparent hover:outline-hidden focus:outline-hidden"
             , type_ "text"
             , placeholder_ "Search"
             , id_ "search-input"
             , [__| on input show .metric_filterble in #metric_list_container when its textContent.toLowerCase() contains my value.toLowerCase() |]
             ]
-        div_ [class_ "flex flex-col gap-1"] do
-          span_ [class_ "text-slate-900 text-sm"] "View by"
-          select_
-            [ class_ "select bg-slate-100  border border-slate-200 rounded-xl w-42 focus:outline-none"
-            , onchange_ "(() => {window.setQueryParamAndReload('metric_prefix', this.value)})()"
-            ]
-            do
-              let metricNames =
-                    ( \x ->
-                        let (n, pr) = if length (T.splitOn "." x.metricName) == 1 then (T.splitOn "_" x.metricName, "_") else (T.splitOn "." x.metricName, ".")
-                         in fromMaybe "" (viaNonEmpty head n) <> pr
-                    )
-                      <$> V.toList metricList
-              option_ ([selected_ "all" | "all" == mFilter] ++ [value_ "all"]) "All"
-              forM_ (ordNub metricNames) $ \m -> option_ ([selected_ m | m == mFilter] ++ [value_ m]) $ toHtml m
+        select_
+          [ class_ "select bg-fillWeaker h-12 border !border-strokeWeak rounded-xl w-42 focus:outline-hidden"
+          , onchange_ "(() => {window.setQueryParamAndReload('metric_prefix', this.value)})()"
+          ]
+          do
+            let metricNames =
+                  ( \x ->
+                      let (n, pr) = if length (T.splitOn "." x.metricName) == 1 then (T.splitOn "_" x.metricName, "_") else (T.splitOn "." x.metricName, ".")
+                       in fromMaybe "" (viaNonEmpty head n) <> pr
+                  )
+                    <$> V.toList metricList
+            option_ ([selected_ "all" | "all" == mFilter] ++ [value_ "all"]) "View By"
+            forM_ (ordNub metricNames) $ \m -> option_ ([selected_ m | m == mFilter] ++ [value_ m]) $ toHtml m
     div_ [class_ "w-full grid grid-cols-3 gap-4", id_ "metric_list_container"] $ do
       chartList pid source metricList nextUrl
 
@@ -149,31 +135,21 @@ chartList pid source metricList nextUrl = do
                   then htmx.process(#global-data-drawer-content)
                   then _hyperscript.processNode(#global-data-drawer-content)
                   then window.evalScriptsFromContent(#global-data-drawer-content)|]
-      div_ [class_ "h-52"] $
-        toHtml $
-          Widget.Widget
-            { wType = Widget.WTDistribution
-            , id = Nothing
-            , title = Just metric.metricName
-            , subtitle = Nothing
-            , sql = Nothing
-            , query = Just $ "metric_name = \"" <> metric.metricName <> "\""
-            , queries = Nothing
-            , layout = Just $ Widget.Layout{x = Just 0, y = Just 0, w = Just 2, h = Just 1}
-            , xAxis = Nothing
-            , yAxis = Nothing
-            , unit = Just metric.metricUnit
-            , value = Nothing
-            , wData = Nothing
-            , hideLegend = Just True
-            , theme = Nothing
-            , dataset = Nothing
-            , eager = Just True
-            , _projectId = Just pid
-            , expandBtnFn = Just expandBtn
-            }
-  when (length metricList > 19) $
-    a_ [hxTrigger_ "intersect once", hxSwap_ "outerHTML", hxGet_ nextUrl] pass
+      div_ [class_ "h-52"]
+        $ toHtml
+        $ def
+          { Widget.wType = Widget.WTDistribution
+          , Widget.title = Just metric.metricName
+          , Widget.query = Just $ "metric_name = \"" <> metric.metricName <> "\""
+          , Widget.layout = Just $ Widget.Layout{x = Just 0, y = Just 0, w = Just 2, h = Just 1}
+          , Widget.unit = Just metric.metricUnit
+          , Widget.hideLegend = Just True
+          , Widget.eager = Just True
+          , Widget._projectId = Just pid
+          , Widget.expandBtnFn = Just expandBtn
+          }
+  when (length metricList > 19)
+    $ a_ [hxTrigger_ "intersect once", hxSwap_ "outerHTML", hxGet_ nextUrl] pass
 
 
 dataPointsPage :: Projects.ProjectId -> V.Vector Telemetry.MetricDataPoint -> Html ()
@@ -192,11 +168,6 @@ dataPointsPage pid metrics = do
         div_ [class_ "w-full"] $ do
           let metrMap = Map.fromList $ V.toList $ V.map (\mdp -> (mdp.metricName, mdp)) metrics
           metricsTree pid metrics metrMap
-
-
-metricsExploreGet :: Projects.ProjectId -> ATAuthCtx (RespHeaders (Html ()))
-metricsExploreGet pid = do
-  addRespHeaders $ div_ [class_ "flex flex-col gap-2"] "Hello world"
 
 
 metricDetailsGetH :: Projects.ProjectId -> Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))
@@ -235,7 +206,7 @@ metricsDetailsPage pid sources metric source currentRange = do
       div_ [class_ "flex flex-col gap-1"] do
         span_ [class_ "text-slate-900 text-sm font-medium"] "Data source"
         select_
-          [ class_ "select select-sm bg-slate-100 border border-slate-200 rounded-xl w-36 focus:outline-none"
+          [ class_ "select select-sm bg-fillWeaker border border-slate-200 rounded-xl w-36 focus:outline-hidden"
           , hxGet_ $ "/p/" <> pid.toText <> "/metrics/details/" <> metric.metricName <> "/"
           , name_ "metric_source"
           , hxTarget_ "#global-data-drawer-content"
@@ -276,7 +247,7 @@ metricsDetailsPage pid sources metric source currentRange = do
             div_ [class_ "flex flex-col gap-1"] do
               span_ [class_ "text-slate-900 text-sm font-medium"] "By label"
               select_
-                [ class_ "select select-sm bg-slate-100 border border-slate-200 rounded-xl w-36 focus:outline-none"
+                [ class_ "select select-sm bg-fillWeaker border border-slate-200 rounded-xl w-36 focus:outline-hidden"
                 , hxGet_ $ "/p/" <> pid.toText <> "/metrics/details/" <> metric.metricName <> "/breakdown"
                 , name_ "label"
                 , hxTarget_ "#breakdown-container"

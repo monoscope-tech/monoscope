@@ -34,6 +34,8 @@ import Data.UUID qualified as UUID
 import Effectful
 import Effectful.Concurrent.Async
 import Effectful.Error.Static (Error, runErrorNoCallStack)
+import Effectful.Ki qualified as Ki
+import Effectful.Labeled (Labeled, runLabeled)
 import Effectful.Log (Log)
 import Effectful.PostgreSQL.Transact.Effect (DB, runDB)
 import Effectful.Reader.Static (Reader, runReader)
@@ -64,9 +66,11 @@ type CommonWebEffects =
    , UUIDEff
    , HTTP
    , DB
+   , Labeled "timefusion" DB
    , Time
    , Log
    , Concurrent
+   , Ki.StructuredConcurrency
    , Error ServerError
    , Effectful.IOE
    ]
@@ -100,9 +104,11 @@ effToServantHandler env logger app =
     & runUUID
     & runHTTPWreq
     & runDB env.pool
+    & runLabeled @"timefusion" (runDB env.timefusionPgPool)
     & runTime
     & Logging.runLog (show env.config.environment) logger
     & runConcurrent
+    & Ki.runStructuredConcurrency
     & effToHandler
 
 
@@ -115,9 +121,11 @@ effToServantHandlerTest env logger app =
     & runStaticUUID (map (UUID.fromWords 0 0 0) [1 .. 10])
     & runHTTPGolden "./golden/"
     & runDB env.pool
+    & runLabeled @"timefusion" (runDB env.timefusionPgPool)
     & runFrozenTime (posixSecondsToUTCTime 0)
     & Logging.runLog (show env.config.environment) logger
     & runConcurrent
+    & Ki.runStructuredConcurrency
     & effToHandler
 
 
@@ -136,8 +144,11 @@ type ATBackgroundCtx =
   Effectful.Eff
     '[ Effectful.Reader.Static.Reader AuthContext
      , DB
+     , Labeled "timefusion" DB
      , Time
      , Log
+     , UUIDEff
+     , Ki.StructuredConcurrency
      , Effectful.IOE
      ]
 
@@ -147,8 +158,11 @@ runBackground logger appCtx process =
   process
     & Effectful.Reader.Static.runReader appCtx
     & runDB appCtx.pool
+    & runLabeled @"timefusion" (runDB appCtx.timefusionPgPool)
     & runTime
     & Logging.runLog ("background-job:" <> show appCtx.config.environment) logger
+    & runUUID
+    & Ki.runStructuredConcurrency
     & Effectful.runEff
 
 

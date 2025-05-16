@@ -7,14 +7,12 @@ import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
 import Effectful.Time qualified as Time
 import Fmt (commaizeF, fmt)
 import Lucid
-import Lucid.Htmx (hxGet_, hxSwap_, hxTrigger_)
 import Models.Apis.Endpoints qualified as Endpoints
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
-import Pages.Anomalies.AnomalyList qualified as AnomalyList
 import Pages.BodyWrapper (BWConfig (currProject, pageTitle, sessM), PageCtx (..), navTabs)
 import Pkg.Components.ItemsList qualified as ItemsList
-import PyF qualified
+import Pkg.Components.Widget qualified as Widget
 import Relude hiding (ask, asks)
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
 
@@ -55,7 +53,7 @@ apiCatalogH pid sortM timeFilter requestTypeM = do
                   , title = "No " <> requestType <> " Requests Monitored."
                   , description = "You're currently not monitoring your " <> T.toLower requestType <> " integrations."
                   , actionText = "See monitoring guide"
-                  , destination = Right $ "/p/" <> listCfg.projectId.toText <> "/integration_guides#" <> T.toLower requestType <> "-request-monitoring"
+                  , destination = Right $ "https://apitoolkit.io/docs/sdks/nodejs/expressjs/#monitoring-axios-requests"
                   }
           , elemID = "anomalyListForm"
           }
@@ -65,9 +63,9 @@ apiCatalogH pid sortM timeFilter requestTypeM = do
           { sessM = Just sess
           , currProject = Just project
           , pageTitle = "API Catalog"
-          , navTabs = Just $ div_ [class_ "tabs tabs-boxed tabs-outline items-center border"] do
-              a_ [href_ $ "/p/" <> pid.toText <> "/api_catalog?sort=" <> sortV <> "&request_type=Incoming", role_ "tab", class_ $ "tab " <> if requestType == "Incoming" then "tab-active" else ""] "Incoming"
-              a_ [href_ $ "/p/" <> pid.toText <> "/api_catalog?sort=" <> sortV <> "&request_type=Outgoing", role_ "tab", class_ $ "tab " <> if requestType == "Outgoing" then "tab-active" else ""] "Outgoing"
+          , navTabs = Just $ div_ [class_ "tabs tabs-box tabs-outline p-0  bg-fillWeak  text-textWeak border items-center border"] do
+              a_ [href_ $ "/p/" <> pid.toText <> "/api_catalog?sort=" <> sortV <> "&request_type=Incoming", role_ "tab", class_ $ "tab " <> if requestType == "Incoming" then "tab-active text-textStrong border border-strokeStrong" else ""] "Incoming"
+              a_ [href_ $ "/p/" <> pid.toText <> "/api_catalog?sort=" <> sortV <> "&request_type=Outgoing", role_ "tab", class_ $ "tab " <> if requestType == "Outgoing" then "tab-active text-textStrong border border-strokeStrong" else ""] "Outgoing"
           }
 
   addRespHeaders $ PageCtx bwconf (ItemsList.ItemsPage listCfg $ V.map (\host -> HostEventsVM pid host filterV requestType) hostsAndEvents)
@@ -93,19 +91,24 @@ renderapiCatalog pid host timeFilter requestType = div_ [class_ "flex py-4 gap-8
     div_ [class_ "space-x-3"] do
       a_ [class_ "inline-block font-bold space-x-2"] $ do
         a_ [href_ $ "/p/" <> pid.toText <> "/endpoints?host=" <> host.host <> "&request_type=" <> requestType, class_ " hover:text-slate-600"] $ toHtml (T.replace "http://" "" $ T.replace "https://" "" host.host)
-        a_ [href_ $ "/p/" <> pid.toText <> "/log_explorer?query=host%3D%3D" <> "\"" <> host.host <> "\"", class_ "text-blue-500 hover:text-slate-600 text-xs"] "View logs"
+        a_ [href_ $ "/p/" <> pid.toText <> "/log_explorer?query=attributes.net.host.name%3D%3D" <> "\"" <> host.host <> "\"", class_ "text-brand hover:text-slate-600 text-xs"] "View logs"
 
   div_ [class_ "w-36 flex items-center justify-center"]
     $ span_ [class_ "tabular-nums text-xl", term "data-tippy-content" "Events for this Anomaly in the last 14 days"]
     $ toHtml @String
-    $ fmt
-    $ commaizeF host.eventCount
+    $ fmt (commaizeF host.eventCount)
 
-  div_ [class_ "flex items-center justify-center "] $ do
-    div_
-      [ class_ "w-56 h-12 px-3"
-      , hxGet_ $ "/charts_html?pid=" <> pid.toText <> "&since=" <> (if timeFilter == "14d" then "14D" else "24h") <> "&show_axes=false&query_raw=" <> AnomalyList.escapedQueryPartial [PyF.fmt|host=="{host.host}" | timechart [1d]|]
-      , hxTrigger_ "intersect once"
-      , hxSwap_ "innerHTML"
-      ]
-      ""
+  div_ [class_ "flex items-center justify-center "] do
+    div_ [class_ "w-56 h-12 px-3"]
+      $ Widget.widget_
+      $ (def :: Widget.Widget)
+        { Widget.standalone = Just True
+        , Widget.title = Just host.host
+        , Widget.showTooltip = Just False
+        , Widget.naked = Just True
+        , Widget.xAxis = Just (def{Widget.showAxisLabel = Just False})
+        , Widget.yAxis = Just (def{Widget.showOnlyMaxLabel = Just True})
+        , Widget.query = Just $ "attributes.http.host==\"" <> host.host <> "\" | timechart [1h]"
+        , Widget._projectId = Just pid
+        , Widget.hideLegend = Just True
+        }

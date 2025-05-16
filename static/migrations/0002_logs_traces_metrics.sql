@@ -62,6 +62,45 @@ SELECT create_hypertable('telemetry.spans', by_range('timestamp', INTERVAL '1 ho
 SELECT add_retention_policy('telemetry.spans',INTERVAL '3 days',true);
 ALTER TABLE telemetry.spans ADD COLUMN IF NOT EXISTS id UUID NOT NULL DEFAULT gen_random_uuid();
 
+ALTER TABLE telemetry.spans ADD COLUMN IF NOT EXISTS duration_ns BIGINT NOT NULL DEFAULT 0;
+
+
+ALTER TABLE telemetry.spans
+-- HTTP span fields
+ADD COLUMN IF NOT EXISTS http_status_code INTEGER,
+ADD COLUMN IF NOT EXISTS http_method TEXT,
+ADD COLUMN IF NOT EXISTS http_url TEXT,
+ADD COLUMN IF NOT EXISTS http_path TEXT,
+ADD COLUMN IF NOT EXISTS http_host TEXT,
+
+-- Database span fields
+ADD COLUMN IF NOT EXISTS db_system TEXT,
+ADD COLUMN IF NOT EXISTS db_name TEXT,
+ADD COLUMN IF NOT EXISTS db_statement TEXT,
+ADD COLUMN IF NOT EXISTS db_operation TEXT,
+
+-- Service/component identification
+ADD COLUMN IF NOT EXISTS service_name TEXT,
+
+-- Error details
+ADD COLUMN IF NOT EXISTS error_type TEXT,
+ADD COLUMN IF NOT EXISTS error_message TEXT,
+ADD COLUMN IF NOT EXISTS error_stack TEXT,
+
+-- Additional context
+ADD COLUMN IF NOT EXISTS user_id TEXT,
+ADD COLUMN IF NOT EXISTS session_id TEXT,
+ADD COLUMN IF NOT EXISTS transaction_id TEXT;
+
+-- Create indexes for common query patterns
+CREATE INDEX IF NOT EXISTS idx_spans_http_status_code ON telemetry.spans(project_id, http_status_code);
+CREATE INDEX IF NOT EXISTS idx_spans_http_method ON telemetry.spans(project_id, http_method);
+CREATE INDEX IF NOT EXISTS idx_spans_http_path ON telemetry.spans(project_id, http_path);
+CREATE INDEX IF NOT EXISTS idx_spans_service_name ON telemetry.spans(project_id, service_name);
+CREATE INDEX IF NOT EXISTS idx_spans_db_system ON telemetry.spans(project_id, db_system);
+CREATE INDEX IF NOT EXISTS idx_spans_duration_ms ON telemetry.spans(project_id, duration_ms);
+CREATE INDEX IF NOT EXISTS idx_spans_error_type ON telemetry.spans(project_id, error_type);
+
 -- Indexes for efficient querying
 CREATE INDEX idx_traces_trace_id ON telemetry.spans(project_id, trace_id, timestamp DESC);
 CREATE INDEX idx_traces_parent_span_id ON telemetry.spans(project_id, parent_span_id, timestamp DESC);
@@ -69,6 +108,8 @@ CREATE INDEX idx_traces_span_name ON telemetry.spans(project_id, span_name, time
 CREATE INDEX idx_traces_status ON telemetry.spans(project_id, status, timestamp DESC);
 CREATE INDEX idx_traces_kind ON telemetry.spans(project_id, kind, timestamp DESC);
 CREATE INDEX idx_traces_resource_service_name ON telemetry.spans (project_id, (resource->>'service.name'), timestamp DESC);
+
+
 
 CREATE TABLE IF NOT EXISTS telemetry.metrics (
     id UUID NOT NULL DEFAULT gen_random_uuid(),
@@ -95,6 +136,22 @@ SELECT add_retention_policy('telemetry.metrics', INTERVAL '30 days', true);
 
 CREATE INDEX idx_metrics_project_id_metric_name ON telemetry.metrics (project_id, metric_name, timestamp DESC);
 CREATE INDEX idx_metrics_project_id_resource_service_name ON telemetry.metrics (project_id, (resource->>'service.name'), timestamp DESC);
+
+
+CREATE TABLE IF NOT EXISTS telemetry.metrics_meta (
+      id UUID NOT NULL DEFAULT gen_random_uuid(),
+      project_id UUID NOT NULL REFERENCES projects.projects (id) ON DELETE CASCADE,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp,
+      metric_name TEXT NOT NULL,
+      metric_type TEXT NOT NULL,
+      metric_unit TEXT NOT NULL,
+      metric_description TEXT NOT NULL,
+      service_name TEXT NOT NULL,
+      UNIQUE (project_id, metric_name, service_name)
+);
+CREATE INDEX idx_metrics_meta_project_id_metric_name ON telemetry.metrics_meta (project_id, metric_name, service_name);
+SELECT manage_updated_at('telemetry.metrics_meta');
 
 -- =================================================================
 -- Query history and saved queries
@@ -129,10 +186,109 @@ CREATE TABLE IF NOT EXISTS projects.dashboards (
   created_by    UUID NOT NULL REFERENCES users.users (id) ON DELETE CASCADE,
   base_template TEXT,
   schema JSONB,
-  starred_since TIMESTAMP WITH TIMEZONE,
-  homepage_since TIMESTAMP WITH TIMEZONE,
+  starred_since TIMESTAMP WITH TIME ZONE,
+  homepage_since TIMESTAMP WITH TIME ZONE,
   tags TEXT[] NOT NULL DEFAULT '{}',
   title TEXT NOT NULL DEFAULT 'Untitled',
   PRIMARY KEY (id)
 );
 SELECT manage_updated_at('projects.dashboards');
+
+
+
+CREATE TABLE IF NOT EXISTS otel_logs_and_spans (
+    id                      UUID NOT NULL DEFAULT gen_random_uuid(),
+    project_id               Text NOT NULL,
+    timestamp                TIMESTAMPTZ NOT NULL DEFAULT current_timestamp,
+    parent_id                TEXT,
+    observed_timestamp       TIMESTAMPTZ,
+    hashes                   TEXT[],
+    name                     TEXT,
+    kind                     TEXT,
+    status_code              TEXT,
+    status_message           TEXT,
+    level                    TEXT,
+    severity                 JSONB,
+    severity___severity_text TEXT,
+    severity___severity_number INTEGER,
+    body                     JSONB,
+    duration                 BIGINT,
+    start_time               TIMESTAMPTZ,
+    end_time                 TIMESTAMPTZ,
+    context                  JSONB,
+    context___trace_id       TEXT,
+    context___span_id        TEXT,
+    context___trace_state    TEXT,
+    context___trace_flags    TEXT,
+    context___is_remote      BOOLEAN,
+    events                   JSONB,
+    links                    Text,
+    attributes               JSONB,
+    attributes___client___address         TEXT,
+    attributes___client___port            INTEGER,
+    attributes___server___address         TEXT,
+    attributes___server___port            INTEGER,
+    attributes___network___local__address TEXT,
+    attributes___network___local__port    INTEGER,
+    attributes___network___peer___address TEXT,
+    attributes___network___peer__port     INTEGER,
+    attributes___network___protocol___name TEXT,
+    attributes___network___protocol___version TEXT,
+    attributes___network___transport       TEXT,
+    attributes___network___type            TEXT,
+    attributes___code___number             INTEGER,
+    attributes___code___file___path        TEXT,
+    attributes___code___function___name    TEXT,
+    attributes___code___line___number      INTEGER,
+    attributes___code___stacktrace         TEXT,
+    attributes___log__record___original    TEXT,
+    attributes___log__record___uid         TEXT,
+    attributes___error___type              TEXT,
+    attributes___exception___type          TEXT,
+    attributes___exception___message       TEXT,
+    attributes___exception___stacktrace    TEXT,
+    attributes___url___fragment            TEXT,
+    attributes___url___full                TEXT,
+    attributes___url___path                TEXT,
+    attributes___url___query               TEXT,
+    attributes___url___scheme              TEXT,
+    attributes___user_agent___original     TEXT,
+    attributes___http___request___method   TEXT,
+    attributes___http___request___method_original TEXT,
+    attributes___http___response___status_code INTEGER,
+    attributes___http___request___resend_count   INTEGER,
+    attributes___http___request___body___size    BIGINT,
+    attributes___session___id              TEXT,
+    attributes___session___previous___id   TEXT,
+    attributes___db___system___name        TEXT,
+    attributes___db___collection___name    TEXT,
+    attributes___db___namespace            TEXT,
+    attributes___db___operation___name     TEXT,
+    attributes___db___response___status_code TEXT,
+    attributes___db___operation___batch___size INTEGER,
+    attributes___db___query___summary      TEXT,
+    attributes___db___query___text         TEXT,
+    attributes___user___id                 TEXT,
+    attributes___user___email              TEXT,
+    attributes___user___full_name          TEXT,
+    attributes___user___name               TEXT,
+    attributes___user___hash               TEXT,
+    resource                               JSONB,
+    resource___service___name              TEXT,
+    resource___service___version           TEXT,
+    resource___service___instance___id     TEXT,
+    resource___service___namespace         TEXT,
+    resource___telemetry___sdk___language  TEXT,
+    resource___telemetry___sdk___name      TEXT,
+    resource___telemetry___sdk___version   TEXT,
+    resource___user_agent___original       TEXT,
+    date  TIMESTAMPTZ NOT NULL DEFAULT current_timestamp
+);
+SELECT create_hypertable('otel_logs_and_spans', by_range('timestamp', INTERVAL '1 hours'), migrate_data => true);
+SELECT add_retention_policy('otel_logs_and_spans',INTERVAL '14 days',true);
+
+CREATE INDEX idx_logs_and_spans_trace_id ON otel_logs_and_spans (project_id, context___trace_id);
+CREATE INDEX idx_logs_and_spans_span_id ON otel_logs_and_spans (project_id, context___span_id);
+CREATE INDEX idx_logs_and_spans_parent_id ON otel_logs_and_spans (project_id, parent_id);
+CREATE INDEX idx_logs_and_spans_service_name ON otel_logs_and_spans (project_id, resource___service___name);
+

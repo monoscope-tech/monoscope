@@ -9,11 +9,15 @@ import Control.Exception.Safe qualified as Safe
 import Data.Aeson qualified as AE
 import Data.Pool as Pool (destroyAllResources)
 import Data.Text qualified as T
+import Database.PostgreSQL.Entity.DBT (QueryNature (Select), query)
 import Effectful
 import Effectful.Concurrent (runConcurrent)
 import Effectful.Fail (runFailIO)
+import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
 import Effectful.Time (runTime)
+import GHC.IO (unsafePerformIO)
 import Log qualified
+import Models.Projects.Projects qualified as Projects
 import Network.Wai.Handler.Warp (
   defaultSettings,
   runSettings,
@@ -22,18 +26,23 @@ import Network.Wai.Handler.Warp (
  )
 import Network.Wai.Log qualified as WaiLog
 import Network.Wai.Middleware.Heartbeat (heartbeatMiddleware)
+import OpenTelemetry.Instrumentation.Wai (newOpenTelemetryWaiMiddleware, newOpenTelemetryWaiMiddleware')
+import OpenTelemetry.Trace (TracerProvider)
 import Opentelemetry.OtlpServer qualified as OtlpServer
 import Pkg.Queue qualified as Queue
 import ProcessMessage (processMessages)
 import Relude
+import Relude.Unsafe qualified as Unsafe
 import Servant qualified
 import Servant.Server.Generic (genericServeTWithContext)
 import System.Config (
-  AuthContext (config, jobsPool, pool),
+  AuthContext (config, jobsPool, pool, timefusionPgPool),
   EnvConfig (
     enableBackgroundJobs,
+    enableKafkaService,
     enablePubsubService,
     environment,
+    kafkaTopics,
     loggingDestination,
     otlpStreamTopics,
     port,
@@ -42,12 +51,12 @@ import System.Config (
   getAppContext,
  )
 import System.Logging qualified as Logging
-import System.Types (effToServantHandler)
+import System.Types (effToServantHandler, runBackground)
 import Web.Routes qualified as Routes
 
 
-runAPItoolkit :: IO ()
-runAPItoolkit =
+runAPItoolkit :: TracerProvider -> IO ()
+runAPItoolkit tp =
   Safe.bracket
     (getAppContext & runFailIO & runEff)
     (runEff . shutdownAPItoolkit)
@@ -55,11 +64,11 @@ runAPItoolkit =
       let baseURL = "http://localhost:" <> show env.config.port
       liftIO $ blueMessage $ "Starting APItoolkit server on " <> baseURL
       let withLogger = Logging.makeLogger env.config.loggingDestination
-      withLogger (`runServer` env)
+      withLogger \l -> runServer l env tp
 
 
-runServer :: IOE :> es => Log.Logger -> AuthContext -> Eff es ()
-runServer appLogger env = do
+runServer :: IOE :> es => Log.Logger -> AuthContext -> TracerProvider -> Eff es ()
+runServer appLogger env tp = do
   loggingMiddleware <- Logging.runLog (show env.config.environment) appLogger WaiLog.mkLogMiddleware
   let server = mkServer appLogger env
   let warpSettings =
@@ -68,11 +77,11 @@ runServer appLogger env = do
           & setOnException \mRequest exception -> Log.runLogT "apitoolkit" appLogger Log.LogAttention $ do
             Log.logAttention "Unhandled exception" $ AE.object ["exception" AE..= show @String exception]
             Safe.throw exception
-
   let wrappedServer =
         heartbeatMiddleware
-          . loggingMiddleware
-          . const
+          . (newOpenTelemetryWaiMiddleware' tp)
+          -- . loggingMiddleware
+          -- . const
           $ server
   let bgJobWorker = BackgroundJobs.jobsWorkerInit appLogger env
 
@@ -93,9 +102,11 @@ runServer appLogger env = do
         [ [async $ runSettings warpSettings wrappedServer]
         , -- , [async $ OJCli.defaultWebUI ojStartArgs ojCfg] -- Uncomment or modify as needed
           [async $ Safe.withException (Queue.pubsubService appLogger env env.config.requestPubsubTopics processMessages) exceptionLogger | env.config.enablePubsubService]
+        , [async $ Safe.withException (Queue.pubsubService appLogger env env.config.requestPubsubTopics processMessages) exceptionLogger | env.config.enablePubsubService]
         , [async $ Safe.withException bgJobWorker exceptionLogger | env.config.enableBackgroundJobs]
         , [async $ Safe.withException (OtlpServer.runServer appLogger env) exceptionLogger]
         , [async $ Safe.withException (Queue.pubsubService appLogger env env.config.otlpStreamTopics OtlpServer.processList) exceptionLogger | (not . any T.null) env.config.otlpStreamTopics]
+        , [async $ Safe.withException (Queue.kafkaService appLogger env OtlpServer.processList) exceptionLogger | env.config.enableKafkaService && (not . any T.null) env.config.kafkaTopics]
         ]
   void $ liftIO $ waitAnyCancel asyncs
 
@@ -116,6 +127,7 @@ shutdownAPItoolkit env =
   liftIO $ do
     Pool.destroyAllResources env.pool
     Pool.destroyAllResources env.jobsPool
+    Pool.destroyAllResources env.timefusionPgPool
 
 
 logException
