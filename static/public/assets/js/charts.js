@@ -1,114 +1,12 @@
 'use strict'
 
-function throughputEChart(renderAt, data, gb, showLegend, showAxes, theme) {
-  let backgroundStyle = {
-    color: 'rgba(240,248,255, 0.4)',
-  }
-  let series = {
-    name: 'Throughput',
-    type: 'bar',
-    showBackground: true,
-    backgroundStyle: backgroundStyle,
-    barWidth: '60%',
-    barMinHeight: '1',
-    encode: {
-      x: 'timestamp',
-      y: 'throughput',
-    },
-    data: data,
-  }
-  if (gb.length > 0) {
-    const newData = data.reduce((mp, curr) => {
-      if (!mp[curr[1]]) mp[curr[1]] = []
-      mp[curr[1]].push([curr[0], curr[2]])
-      return mp
-    }, {})
-    series = Object.entries(newData).map(([k, v]) => ({
-      name: k,
-      type: 'bar',
-      stack: 'Endpoints',
-      showBackground: true,
-      backgroundStyle: backgroundStyle,
-      barWidth: '60%',
-      encode: {
-        x: 'timestamp',
-        y: 'throughput',
-      },
-      data: v,
-    }))
-  }
-
-  const chartEl = document.getElementById(renderAt);
-  const myChart = echarts.init(chartEl, theme)
-  const option = {
-    legend: { show: showLegend, type: 'scroll', top: 'bottom' },
-    grid: {
-      width: '100%',
-      left: '0%',
-      top: '5%',
-      bottom: '1.8%',
-      containLabel: true,
-    },
-    tooltip: {
-      trigger: 'axis',
-    },
-    xAxis: { show: showAxes, type: 'time', scale: true },
-    yAxis: { show: showAxes, scale: true },
-    series: series,
-  }
-  if (showLegend) {
-    option.grid.bottom = '9%'
-  }
-  myChart.setOption(option)
-  const resizeObserver = new ResizeObserver((_entries) => window.requestAnimationFrame(() => myChart.resize()))
-  resizeObserver.observe(chartEl);
-}
-
-function stackedChart(title, series, _data, interp, width = 800, height = 400) {
-  let { opts, data } = getStackedOpts(title, series, _data, interp)
-  opts.title = title
-  opts.width = width
-  opts.height = height
-  /*
-    Object.assign(opts.scales.x, {
-      ori: 1,
-      dir: -1,
-    });
-    Object.assign(opts.scales.y, {
-      ori: 0,
-      dir: 1,
-    });
-  */
-  return new uPlot(opts, data, document.body)
-}
-
-function defaultFormatter(params) {
-  let result = ''
-  if (params.length > 0) {
-    let dateV = params[0].axisValueLabel
-    result += `<div>${dateV}</div>`
-  }
-  params.forEach((param) => {
-    // Check if data (value) is not zero or null
-    if (param.value !== null && param.value[1] !== null) {
-      result += `<div >
-                            <div class="monospace flex flex-row space-between">
-                                <div class="flex-1">${param.marker}${param.seriesName}</div>
-                                <strong class="shrink pl-3 font-bold">${param.value[1]}</strong>
-                              </div>
-                        </div>`
-    }
-  })
-  return result
-}
-
 function durationFormatter(params) {
   let result = ''
   if (params.length > 0) {
     let dateV = params[0].axisValueLabel
     result += `<div>${dateV}</div>`
   }
-  params.forEach((param) => {
+  params.forEach(param => {
     let index = param.encode.y[0]
     // Check if data (value) is not zero or null
     if (param.value !== null && param.value[index] !== null) {
@@ -127,189 +25,20 @@ function durationFormatter(params) {
   return result
 }
 
-function throughputEChartTable(renderAt, categories, data, gb, showLegend, showAxes, theme, from, to, chartType) {
-  let backgroundStyle = {
-    color: 'rgba(240,248,255, 0.4)',
-  }
-  let maxValue = 0
-  const getSeriesData = (data) => {
-    return data.slice(1).map((seriesData, index) => {
-      return {
-        name: categories[index],
-        type: chartType,
-        stack: 'Endpoints',
-        showBackground: true,
-        backgroundStyle: backgroundStyle,
-        barMaxWidth: '10',
-        barMinHeight: '1',
-        encode: {
-          x: 'timestamp',
-          y: 'throughput',
-        },
-        data: seriesData.map((value, dataIndex) => {
-          maxValue = value > maxValue ? value : maxValue
-          return [data[0][dataIndex] * 1000, value]
-        }),
-      }
-    })
-  }
-
-  let fmter = defaultFormatter
-  if (chartType == 'line') {
-    // Temporary workaround until js knows what kind of chart it is, or the units
-    fmter = durationFormatter
-  }
-
-  const option = {
-    tooltip: {
-      trigger: 'axis',
-      axisPointer: {
-        type: 'shadow',
-      },
-      formatter: fmter,
-    },
-    legend: {
-      show: showLegend,
-      type: 'scroll',
-      top: 'bottom',
-      data: categories.slice(0, data.length - 1),
-    },
-    grid: {
-      width: '100%',
-      left: '0%',
-      top: '2%',
-      bottom: showLegend ? '22%' : '1.8%',
-      containLabel: true,
-    },
-    xAxis: {
-      show: true,
-      scale: true,
-      type: 'time',
-      min: from,
-      max: to,
-      boundaryGap: [0, 0.01],
-      axisLabel: {
-        show: showAxes,
-      },
-    },
-    yAxis: {
-      show: showAxes,
-      maxInterval: 3600 * 1000 * 24, // 1day
-      type: 'value',
-      min: 0,
-      axisLine: {
-        show: true,
-      },
-      axisLabel: {
-        show: true,
-      },
-    },
-    series: getSeriesData(data),
-  }
-
-  if (chartType == 'line') {
-    option.yAxis.axisLabel = {
-      formatter: function(params) {
-        if (params >= 1000) {
-          return `${Math.trunc(params / 1000)}s`
-        }
-        return `${Math.trunc(params)}ms`
-      },
-      show: true,
-      position: 'inside',
-    }
-  } else {
-    option.yAxis.axisLabel.formatter = function(params) {
-      if (params >= 1000) {
-        return `${Math.trunc(params / 1000)}k`
-      }
-      return `${Math.trunc(params)}`
-    }
-  }
-  if (!showAxes) {
-    option.yAxis.axisLabel = {
-      formatter: function(value, index) {
-        // Only show the label for the maximum value
-        return value === maxValue ? maxValue : ''
-      },
-      show: true,
-      // inside: true,
-      showMaxLabel: true,
-    }
-  }
-
-  const chartEl = document.getElementById(renderAt);
-  const myChart = echarts.init(chartEl, theme)
-  option.animation = false;
-  myChart.setOption(option);
-  (new ResizeObserver((_entries) => window.requestAnimationFrame(() => echarts.getInstanceByDom(chartEl).resize()))).observe(chartEl);
-}
-
-function latencyHistogram(renderAt, pc, data) {
-  const myChart = echarts.init(document.getElementById(renderAt))
-  const option = {
-    grid: { width: '100%', left: '1%', right: '-1%', top: '10%', bottom: '1.5%', containLabel: true },
-    xAxis: {
-      show: true,
-      type: 'value',
-      scale: true,
-      splitLine: { show: false },
-      axisLabel: {
-        formatter: function(params) {
-          if (params > 1000) {
-            return `${params / 1000}s`
-          }
-          return `${params}ms`
-        },
-        show: true,
-        position: 'inside',
-      },
-    },
-    yAxis: { show: true, type: 'value', scale: true },
-    series: {
-      name: 'Direct',
-      type: 'bar',
-      barWidth: '60%',
-      data: data,
-      markLine: {
-        data: [
-          [
-            { name: 'p50', coord: [pc.p50, 0] },
-            { name: 'end', coord: [pc.p50, 'max'] },
-          ],
-          [
-            { name: 'p75', coord: [pc.p75, 0] },
-            { name: 'end', coord: [pc.p75, 'max'] },
-          ],
-          [
-            { name: 'p90', coord: [pc.p90, 0] },
-            { name: 'end', coord: [pc.p90, 'max'] },
-          ],
-          [
-            { name: 'p95', coord: [pc.p95, 0] },
-            { name: 'end', coord: [pc.p95, 'max'] },
-          ],
-          [
-            { name: 'p99', coord: [pc.p99, 0] },
-            { name: 'end', coord: [pc.p99, 'max'] },
-          ],
-          [
-            { name: 'max', coord: [pc.max, 0] },
-            { name: 'end', coord: [pc.max, 'max'] },
-          ],
-        ],
-      },
-    },
-  }
-  myChart.setOption(option)
-}
-
 const SCROLL_BAR_WIDTH = 7
 const getErrorIndicator = () =>
   elt(
     'span',
-    { class: 'bg-red-600 rounded-l h-full w-5 flex justify-center items-center rounded-r shrink-0 font-bold' },
-    elt('span', { class: 'text-white text-xs h-3 w-3 flex items-center justify-center rounded-full border border-white p-1' }, '!')
+    {
+      class: 'bg-red-600 rounded-l h-full w-5 flex justify-center items-center rounded-r shrink-0 font-bold',
+    },
+    elt(
+      'span',
+      {
+        class: 'text-white text-xs h-3 w-3 flex items-center justify-center rounded-full border border-white p-1',
+      },
+      '!',
+    ),
   )
 function flameGraphChart(data, renderAt, colorsMap) {
   const filterJson = (json, id) => {
@@ -362,7 +91,7 @@ function flameGraphChart(data, renderAt, colorsMap) {
         recur(child, start, level + 1)
       }
     }
-    filteredJson.forEach((item) => {
+    filteredJson.forEach(item => {
       recur(item, item.start)
     })
     return data
@@ -370,7 +99,7 @@ function flameGraphChart(data, renderAt, colorsMap) {
 
   const fData = modifySpansForFlameGraph(data)
 
-  const heightOfJson = (json) => {
+  const heightOfJson = json => {
     const recur = (item, level = 0) => {
       if ((item.children || []).length === 0) {
         return level
@@ -397,15 +126,18 @@ function flameGraphChart(data, renderAt, colorsMap) {
     const yStart = height * level + (level + 1) * 3
 
     const div = elt('div', {
-      class: item.itemStyle.color + ' absolute hover:z-[999] flex rounded items-center span-filterble cursor-pointer gap-1 flex-nowrap overflow-hidden hover:border hover:border-black',
+      class:
+        item.itemStyle.color +
+        ' absolute hover:z-999 flex rounded-sm items-center span-filterble cursor-pointer gap-1 flex-nowrap overflow-hidden hover:border hover:border-black',
       id: item.span_id,
-      onclick: (e) => {
+      onclick: e => {
+        e.stopPropagation()
         const data = filterJson(structuredClone(fData), item.name)
         flameGraph(data, renderAt)
-        const target = document.getElementById(item.span_id)
-        if (target) {
-          target.scrollIntoView()
-        }
+        // const target = document.getElementById(item.span_id)
+        // if (target) {
+        //   target.scrollIntoView()
+        // }
         htmx.trigger('#trigger-span-' + item.span_id, 'click')
       },
     })
@@ -433,7 +165,7 @@ function flameGraphChart(data, renderAt, colorsMap) {
     generateTimeIntervals(rootVal, 'time-container')
     const data = recursionJson(stackTrace)
     const sortedData = data.sort((a, b) => b.value[2] - a.value[2])
-    sortedData.forEach((item) => {
+    sortedData.forEach(item => {
       renderItem(item, target, rootVal)
     })
   }
@@ -442,7 +174,7 @@ function flameGraphChart(data, renderAt, colorsMap) {
 
   const flameGraphContainer = document.querySelector('#flame-graph-container')
 
-  flameGraphContainer.addEventListener('mousemove', (e) => {
+  flameGraphContainer.addEventListener('mousemove', e => {
     const boundingX = e.currentTarget.getBoundingClientRect().x
     const lineContainer = document.querySelector('#time-bar-indicator')
     const time = document.querySelector('#line-time')
@@ -461,7 +193,7 @@ function flameGraphChart(data, renderAt, colorsMap) {
       }
     }
   })
-  flameGraphContainer.addEventListener('mouseleave', (e) => {
+  flameGraphContainer.addEventListener('mouseleave', e => {
     const lineContainer = document.querySelector('#time-bar-indicator')
     lineContainer.style.display = 'none'
   })
@@ -474,12 +206,12 @@ function modifySpansForFlameGraph(data) {
 
 function buildHierachy(spans) {
   const spanMap = new Map()
-  spans.forEach((span) => {
+  spans.forEach(span => {
     span.children = []
     spanMap.set(span.span_id, span)
   })
   const roots = []
-  spans.forEach((span) => {
+  spans.forEach(span => {
     if (span.parent_id) {
       const parent = spanMap.get(span.parent_id)
       if (parent) {
@@ -561,7 +293,7 @@ function buildWaterfall(spans, target, serviceColors, start, maxDuration) {
   const container = document.querySelector('#' + target)
   const containerWidth = 550
   container.innerHTML = ''
-  spans.forEach((span) => {
+  spans.forEach(span => {
     container.appendChild(buildTree(span, serviceColors, start, maxDuration, containerWidth))
   })
 }
@@ -577,9 +309,9 @@ function buildTree(span, serviceColors, start, rootVal, containerWidth) {
   const spanId = span.spanRecord.spanId
   const color = serviceColors[span.spanRecord.serviceName] || 'bg-black'
   const div = elt('div', {
-    class: color + ' flex rounded items-center cursor-pointer  h-5 grow-0 justify-between flex-nowrap overflow-x-visible hover:border hover:border-black',
+    class: color + ' flex rounded-sm items-center cursor-pointer  h-5 grow-0 justify-between flex-nowrap overflow-x-visible hover:border hover:border-black',
     id: 'waterfall-chart-' + spanId,
-    onclick: (event) => {
+    onclick: event => {
       event.stopPropagation()
       event.currentTarget.nextSibling.classList.toggle('hidden')
       const treeTarget = document.querySelector('#waterfall-tree-' + spanId)
@@ -588,11 +320,20 @@ function buildTree(span, serviceColors, start, rootVal, containerWidth) {
   })
   parentDiv.style.marginLeft = `${startPix}px`
   div.style.width = `${width}px`
-  const childDiv = elt('div', { class: 'flex flex-col gap-2 mt-2 gap-1', id: 'waterfall-child-' + spanId })
-  span.children.forEach((child) => {
+  const childDiv = elt('div', {
+    class: 'flex flex-col gap-2 mt-2 gap-1',
+    id: 'waterfall-child-' + spanId,
+  })
+  span.children.forEach(child => {
     childDiv.appendChild(buildTree(child, serviceColors, startCurr, rootVal, containerWidth))
   })
-  const text = elt('span', { class: 'text-black ml-1 shrink-0 mr-4 text-xs hidden' }, span.spanRecord.serviceName + span.spanRecord.spanName)
+  const text = elt(
+    'span',
+    {
+      class: 'text-black ml-1 shrink-0 mr-4 text-xs hidden',
+    },
+    span.spanRecord.serviceName + span.spanRecord.spanName,
+  )
   const [t, u] = formatDuration(span.spanRecord.spanDurationNs)
   const tim = elt('span', { class: 'text-black text-xs shrink-0 ml-auto' }, `${Math.floor(t)} ${u}`)
   if (span.spanRecord.hasErrors) {

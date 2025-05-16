@@ -1,5 +1,5 @@
 -- Parser implemented with help and code from: https://markkarpov.com/tutorial/megaparsec.html
-module Pkg.Parser (parseQueryStringToWhereClause, queryASTToComponents, parseQueryToComponents, fixedUTCTime, parseQuery, sectionsToComponents, defSqlQueryCfg, defPid, SqlQueryCfg (..), QueryComponents (..), listToColNames, pSource, parseQueryToAST) where
+module Pkg.Parser (parseQueryStringToWhereClause, queryASTToComponents, parseQueryToComponents, getProcessedColumns, fixedUTCTime, parseQuery, sectionsToComponents, defSqlQueryCfg, defPid, SqlQueryCfg (..), QueryComponents (..), listToColNames, pSource, parseQueryToAST, ToQueryText (..)) where
 
 import Control.Error (hush)
 import Data.Default (Default (def))
@@ -10,6 +10,7 @@ import Data.Time.Clock (UTCTime (..), diffUTCTime, nominalDiffTimeToSeconds, sec
 import Data.Time.Format.ISO8601 (iso8601Show)
 import GHC.Records (HasField (getField))
 import Models.Projects.Projects qualified as Projects
+import Pkg.Parser.Core (ToQueryText (..))
 import Pkg.Parser.Expr
 import Pkg.Parser.Stats
 import PyF (fmt)
@@ -45,12 +46,12 @@ applySectionToComponent qc (Search expr) = qc{whereClause = Just $ display expr}
 applySectionToComponent qc (Source source) = qc{fromTable = Just $ display source}
 applySectionToComponent qc (StatsCommand aggs Nothing) = qc{select = qc.select <> map display aggs}
 applySectionToComponent qc (StatsCommand aggs byClauseM) = applyByClauseToQC byClauseM $ qc{select = qc.select <> map display aggs}
-applySectionToComponent qc (TimeChartCommand agg byClauseM rollupM) = applyRollupToQC rollupM $ applyByClauseToQC byClauseM $ qc{select = qc.select <> [display agg]}
+applySectionToComponent qc (TimeChartCommand agg byClauseM rollupM) = applyRollupToQC rollupM $ applyByClauseToQC byClauseM $ qc{select = qc.select <> (map display agg)}
 
 
 applyByClauseToQC :: Maybe ByClause -> QueryComponents -> QueryComponents
 applyByClauseToQC Nothing qc = qc
-applyByClauseToQC (Just (ByClause fields)) qc = qc{groupByClause = qc.groupByClause <> map display fields}
+applyByClauseToQC (Just (ByClause fields)) qc = qc{groupByClause = qc.groupByClause <> map (\f -> "COALESCE(" <> display f <> "::text, '')::text") fields}
 
 
 applyRollupToQC :: Maybe Rollup -> QueryComponents -> QueryComponents
@@ -79,25 +80,31 @@ normalizeKeyPath :: Text -> Text
 normalizeKeyPath txt = T.toLower $ T.replace "]" "❳" $ T.replace "[" "❲" $ T.replace "." "•" txt
 
 
+getProcessedColumns :: [Text] -> [Text] -> (Text, [Text])
+getProcessedColumns cols defaultSelect = (T.intercalate "," $ colsNoAsClause selectedCols, selectedCols)
+  where
+    prs =
+      cols & mapMaybe \col -> do
+        subJ@(Subject entire _ _) <- hush (parse pSubject "" col)
+        pure $ display subJ <> " as " <> normalizeKeyPath entire
+    selectedCols = prs <> defaultSelect
+
+
 sqlFromQueryComponents :: SqlQueryCfg -> QueryComponents -> (Text, QueryComponents)
 sqlFromQueryComponents sqlCfg qc =
   let fmtTime = toText . iso8601Show
-      fromTable = fromMaybe "apis.request_dumps" $ qc.fromTable <|> (display <$> sqlCfg.source)
-      timestampCol = if fromTable == "apis.request_dumps" then "created_at" else "timestamp"
+      fromTable = "otel_logs_and_spans"
+      timestampCol = "timestamp"
 
       cursorT = maybe "" (\c -> " AND " <> timestampCol <> "<'" <> fmtTime c <> "' ") sqlCfg.cursorM
       -- Handle the Either error case correctly not hushing it.
-      projectedColsProcessed =
-        sqlCfg.projectedColsByUser & mapMaybe \col -> do
-          subJ@(Subject entire _ _) <- hush (parse pSubject "" col)
-          pure $ display subJ <> " as " <> normalizeKeyPath entire
-      selectedCols = if null qc.select then projectedColsProcessed <> sqlCfg.defaultSelect else qc.select
+      (_, selVec) = getProcessedColumns sqlCfg.projectedColsByUser sqlCfg.defaultSelect
+      selectedCols = if null qc.select then selVec else qc.select
       selectClause = T.intercalate "," $ colsNoAsClause selectedCols
       where' = maybe "" (\whereC -> " AND (" <> whereC <> ")") qc.whereClause
       whereClause = case sqlCfg.source of
         Just SSpans -> case sqlCfg.targetSpansM of
-          Just "root-spans" -> where' <> " AND parent_span_id IS NULL"
-          Just "service-entry-spans" -> where'
+          Nothing -> where'
           _ -> where'
         _ -> where'
       groupByClause = if null qc.groupByClause then "" else " GROUP BY " <> T.intercalate "," qc.groupByClause
@@ -110,24 +117,24 @@ sqlFromQueryComponents sqlCfg qc =
       timeDiffSecs = abs $ nominalDiffTimeToSeconds $ diffUTCTime fromT toT
       finalSqlQuery = case sqlCfg.targetSpansM of
         Just "service-entry-spans" ->
-          [fmt|WITH ranked_spans AS (SELECT *, resource->>'service.name' AS service_name,
-                ROW_NUMBER() OVER (PARTITION BY trace_id, resource->>'service.name' ORDER BY start_time) AS rn
-                FROM telemetry.spans where project_id='{sqlCfg.pid.toText}'::uuid  and (
+          [fmt|WITH ranked_spans AS (SELECT *, resource->'service'->>'name' AS service_name,
+                ROW_NUMBER() OVER (PARTITION BY trace_id, resource->'service'->>'name' ORDER BY start_time) AS rn
+                FROM telemetry.spans where project_id='{sqlCfg.pid.toText}' and (
                 {timestampCol} > NOW() - interval '14 days'
                 {cursorT} {dateRangeStr} {whereClause} )
                 {groupByClause}
                 )
                SELECT json_build_array({selectClause}) FROM ranked_spans
-                  WHERE rn = 1 ORDER BY {timestampCol} desc limit 200 |]
+                  WHERE rn = 1 ORDER BY {timestampCol} desc limit 150 |]
         _ ->
           [fmt|SELECT json_build_array({selectClause}) FROM {fromTable}
-             WHERE project_id='{sqlCfg.pid.toText}'::uuid  and ( {timestampCol} > NOW() - interval '14 days'
+             WHERE project_id='{sqlCfg.pid.toText}'  and ( {timestampCol} > NOW() - interval '14 days'
              {cursorT} {dateRangeStr} {whereClause} )
-             {groupByClause} ORDER BY {timestampCol} desc limit 200 |]
+             {groupByClause} ORDER BY {timestampCol} desc limit 150 |]
       countQuery =
         [fmt|SELECT count(*) FROM {fromTable}
-          WHERE project_id='{sqlCfg.pid.toText}'::uuid  and ( {timestampCol} > NOW() - interval '14 days'
-          {cursorT} {dateRangeStr} {whereClause} )
+          WHERE project_id='{sqlCfg.pid.toText}' and ( {timestampCol} > NOW() - interval '14 days'
+          {cursorT} {dateRangeStr} {where'} )
           {groupByClause} limit 1|]
 
       defRollup
@@ -143,14 +150,19 @@ sqlFromQueryComponents sqlCfg qc =
       timebucket = [fmt|extract(epoch from time_bucket('{timeRollup}', {timestampCol}))::integer as timeB, |] :: Text
       -- FIXME: render this based on the aggregations
       chartSelect = [fmt| count(*)::integer as count|] :: Text
+      -- chartSelect = T.intercalate "," qc.select
       timeGroupByClause = " GROUP BY " <> T.intercalate "," ("timeB" : qc.groupByClause)
+      timeGroupSelect =
+        if null qc.groupByClause
+          then "'Throughput'"
+          else T.intercalate "||' '|| " (map (<> "::text") qc.groupByClause)
       timeChartQuery =
         [fmt|
-      SELECT {timebucket} {chartSelect}, 'Throughput' FROM {fromTable}
-          WHERE project_id='{sqlCfg.pid.toText}'::uuid  and ( {timestampCol} > NOW() - interval '14 days'
-          {cursorT} {dateRangeStr} {whereClause} )
+      SELECT {timebucket} {chartSelect}, {timeGroupSelect} FROM {fromTable}
+          WHERE project_id='{sqlCfg.pid.toText}'  and ( {timestampCol} > NOW() - interval '14 days'
+          {cursorT} {dateRangeStr} {where'} )
           {timeGroupByClause}
-    |]
+        |]
 
       -- FIXME: render this based on the aggregations, but without the aliases
       alertSelect = [fmt| count(*)::integer|] :: Text
@@ -159,14 +171,14 @@ sqlFromQueryComponents sqlCfg qc =
       alertQuery =
         [fmt|
       SELECT GREATEST({alertSelect}) FROM {fromTable}
-          WHERE project_id='{sqlCfg.pid.toText}'::uuid  and ( {timestampCol} > NOW() - interval '{timeRollup}'
+          WHERE project_id='{sqlCfg.pid.toText}' and ( {timestampCol} > NOW() - interval '{timeRollup}'
           {whereClause}) {alertGroupByClause}
-    |]
+        |]
    in ( finalSqlQuery
       , qc
           { finalColumns = listToColNames selectedCols
           , countQuery
-          , finalSqlQuery
+          , finalSqlQuery = finalSqlQuery
           , finalTimechartQuery = Just timeChartQuery
           , finalAlertQuery = Just alertQuery
           }
@@ -292,56 +304,35 @@ timestampLogFmt colName = [fmt|to_char({colName} AT TIME ZONE 'UTC', 'YYYY-MM-DD
 
 defaultSelectSqlQuery :: Maybe Sources -> [Text]
 defaultSelectSqlQuery (Just SMetrics) = ["id"]
-defaultSelectSqlQuery (Just STraces) = ["id"]
-defaultSelectSqlQuery Nothing = defaultSelectSqlQuery (Just SRequests)
-defaultSelectSqlQuery (Just SLogs) =
-  [ "id"
-  , timestampLogFmt "timestamp"
-  , "severity_text"
-  , "body"
-  , [fmt|LEFT(
-        CONCAT(
-            COALESCE(attributes, 'null')
-        ),
-        255
-    ) as rest|]
-  ]
+defaultSelectSqlQuery Nothing = defaultSelectSqlQuery (Just SSpans)
 defaultSelectSqlQuery (Just SSpans) =
   [ "id"
   , timestampLogFmt "timestamp"
-  , "trace_id"
+  , "context___trace_id as trace_id"
   , "kind"
-  , "status"
-  , "span_name"
-  , "CAST(EXTRACT(EPOCH FROM (end_time - start_time)) * 1_000_000_000 AS BIGINT) as duration"
-  , "resource->>'service.name' as service"
-  , "span_id as latency_breakdown"
+  , "status_message as status"
+  , "name as span_name"
+  , "duration"
+  , "body"
+  , "level as severity_text"
+  , "resource___service___name as service"
+  , "parent_id as parent_span_id"
+  , "CAST(EXTRACT(EPOCH FROM (start_time)) * 1_000_000_000 AS BIGINT) as start_time_ns"
+  , "EXISTS(SELECT 1 FROM jsonb_array_elements(events) elem  WHERE elem->>'event_name' = 'exception') as errors"
+  , [fmt|jsonb_build_object(
+          'method', COALESCE(attributes->'http'->>'method', attributes___http___request___method),
+          'url', COALESCE(attributes->'http'->>'route', attributes->'url'->>'path', attributes->'http'->>'target', attributes->'http'->>'url'),
+          'status_code', COALESCE(attributes->'http'->>'status_code', attributes->'http'->'response'->>'status_code')
+          ) as http_attributes |]
+  , [fmt| jsonb_build_object('system', attributes->'db'->'system','statement', coalesce(attributes->'db'->'query'->'text', attributes->'db'->'statement')) as db_attributes  |]
+  , [fmt| json_build_object('system', attributes->'rpc'->'system', 'method', attributes->'rpc'->'method') as rpc_attributes|]
   , [fmt|LEFT(
         CONCAT(
-            'attributes=', COALESCE(attributes, 'null'),
-            ' events=', COALESCE(events, 'null')
+            COALESCE(attributes::text, '')
         ),
-        255
-    ) as rest|]
-  ]
-defaultSelectSqlQuery (Just SRequests) =
-  [ "id::text as id"
-  , timestampLogFmt "created_at"
-  , "duration_ns as duration"
-  , "request_type"
-  , "host"
-  , "status_code"
-  , "method"
-  , "url_path"
-  , "JSONB_ARRAY_LENGTH(errors) as errors_count"
-  , [fmt|LEFT(
-        CONCAT(
-            'url=', COALESCE(raw_url, 'null'),
-            ' response_body=', COALESCE(response_body, 'null'),
-            ' request_body=', COALESCE(request_body, 'null')
-        ),
-        255
-    ) as rest|]
+        500
+    ) as summary|]
+  , "context___span_id as latency_breakdown"
   ]
 
 

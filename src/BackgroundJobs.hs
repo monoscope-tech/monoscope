@@ -1,23 +1,35 @@
-module BackgroundJobs (jobsWorkerInit, jobsRunner, BgJobs (..)) where
+module BackgroundJobs (jobsWorkerInit, jobsRunner, BgJobs (..), runHourlyJob, generateOtelFacetsBatch) where
 
 import Control.Lens ((.~))
+import Data.Aeson ((.=))
 import Data.Aeson qualified as AE
+import Data.Aeson.Encoding qualified as AE
 import Data.Aeson.QQ (aesonQQ)
 import Data.CaseInsensitive qualified as CI
+import Data.Effectful.UUID qualified as UUID
+import Data.List (intersect, union)
+import Data.List.Extra (chunksOf)
 import Data.Pool (withResource)
-import Data.Time (DayOfWeek (Monday), UTCTime (utctDay), ZonedTime, addUTCTime, dayOfWeek, getZonedTime)
+import Data.Text qualified as T
+import Data.Time (DayOfWeek (Monday), UTCTime (utctDay), ZonedTime, addUTCTime, dayOfWeek, formatTime, getZonedTime)
+import Data.Time.Format (defaultTimeLocale)
 import Data.Time.LocalTime (LocalTime (localDay), ZonedTime (zonedTimeToLocalTime), getCurrentTimeZone, utcToZonedTime, zonedTimeToUTC)
+import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUIDV4
 import Data.Vector qualified as V
-import Database.PostgreSQL.Entity.DBT (QueryNature (Select), query)
+import Database.PostgreSQL.Entity.DBT (QueryNature (..), execute, query, withPool)
 import Database.PostgreSQL.Simple (Only (Only))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
-import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
+import Database.PostgreSQL.Transact qualified as PTR
+import Effectful (Eff, (:>))
+import Effectful.Log (Log)
+import Effectful.PostgreSQL.Transact.Effect (DB, dbtToEff)
 import Effectful.Reader.Static (ask)
 import Effectful.Time qualified as Time
 import Log qualified
 import Models.Apis.Anomalies qualified as Anomalies
 import Models.Apis.Endpoints qualified as Endpoints
+import Models.Apis.Fields.Facets qualified as Facets
 import Models.Apis.Fields.Query qualified as FieldsQ
 import Models.Apis.Fields.Types qualified as Fields
 import Models.Apis.Formats qualified as Formats
@@ -26,15 +38,17 @@ import Models.Apis.Reports qualified as Reports
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Apis.Shapes qualified as Shapes
 import Models.Projects.LemonSqueezy qualified as LemonSqueezy
+import Models.Projects.Projects (ProjectId (unProjectId))
 import Models.Projects.Projects qualified as Projects
 import Models.Projects.Swaggers qualified as Swaggers
+import Models.Telemetry.Telemetry qualified as Telemetry
 import Models.Tests.TestToDump qualified as TestToDump
 import Models.Tests.Testing qualified as Testing
 import Models.Users.Users qualified as Users
 import NeatInterpolation (trimming)
 import Network.Wreq (defaults, header, postWith)
 import OddJobs.ConfigBuilder (mkConfig)
-import OddJobs.Job (ConcurrencyControl (..), Job (..), LogEvent, LogLevel, createJob, startJobRunner, throwParsePayload)
+import OddJobs.Job (ConcurrencyControl (..), Job (..), LogEvent, LogLevel, createJob, scheduleJob, startJobRunner, throwParsePayload)
 import Pages.Reports qualified as RP
 import Pages.Specification.GenerateSwagger (generateSwagger)
 import Pkg.Mail (sendDiscordNotif, sendPostmarkEmail, sendSlackMessage)
@@ -50,16 +64,25 @@ data BgJobs
   | CreatedProjectSuccessfully Users.UserId Projects.ProjectId Text Text
   | SendDiscordData Users.UserId Projects.ProjectId Text [Text] Text
   | -- NewAnomaly Projects.ProjectId Anomalies.AnomalyTypes Anomalies.AnomalyActions TargetHash
-    NewAnomaly Projects.ProjectId ZonedTime Text Text Text
+    NewAnomaly
+      { projectId :: Projects.ProjectId
+      , createdAt :: ZonedTime
+      , anomalyType :: Text
+      , anomalyAction :: Text
+      , targetHashes :: [Text]
+      }
   | DailyReports Projects.ProjectId
   | WeeklyReports Projects.ProjectId
   | DailyJob
+  | HourlyJob UTCTime Int
   | GenSwagger Projects.ProjectId Users.UserId Text
   | ReportUsage Projects.ProjectId
+  | GenerateOtelFacetsBatch (V.Vector Text) UTCTime
   | QueryMonitorsTriggered (V.Vector Monitors.QueryMonitorId)
   | RunCollectionTests Testing.CollectionId
   | DeletedProject Projects.ProjectId
   | APITestFailed Projects.ProjectId Testing.CollectionId (V.Vector Testing.StepResult)
+  | CleanupDemoProject
   deriving stock (Show, Generic)
   deriving anyclass (AE.ToJSON, AE.FromJSON)
 
@@ -81,8 +104,9 @@ jobsRunner logger authCtx job = when authCtx.config.enableBackgroundJobs $ do
   bgJob <- throwParsePayload job
   void $ runBackground logger authCtx do
     case bgJob of
+      GenerateOtelFacetsBatch pids timestamp -> generateOtelFacetsBatch pids timestamp
       QueryMonitorsTriggered queryMonitorIds -> queryMonitorsTriggered queryMonitorIds
-      NewAnomaly pid createdAt anomalyTypesT anomalyActionsT targetHash -> newAnomalyJob pid createdAt anomalyTypesT anomalyActionsT targetHash
+      NewAnomaly{projectId, createdAt, anomalyType, anomalyAction, targetHashes} -> newAnomalyJob projectId createdAt anomalyType anomalyAction (V.fromList targetHashes)
       InviteUserToProject userId projectId reciever projectTitle' -> do
         userM <- Users.userById userId
         whenJust userM \user -> do
@@ -142,26 +166,40 @@ jobsRunner logger authCtx job = when authCtx.config.enableBackgroundJobs $ do
             sendPostmarkEmail userEmail (Just ("project-deleted", templateVars)) Nothing
       DailyJob -> do
         currentDay <- utctDay <$> Time.currentTime
-        projects <- dbtToEff $ query Select [sql|SELECT id FROM projects.projects WHERE active=? AND deleted_at IS NULL|] (Only True)
+        currentTime <- Time.currentTime
+
+        -- Schedule all 24 hourly jobs in one batch
+        liftIO $ withResource authCtx.jobsPool \conn -> do
+          -- background job to cleanup demo project
+          when (dayOfWeek currentDay == Monday) do
+            void $ createJob conn "background_jobs" $ BackgroundJobs.CleanupDemoProject
+          forM_ [0 .. 23] \hour -> do
+            -- Schedule each hourly job to run at the appropriate hour
+            let scheduledTime = addUTCTime (fromIntegral $ hour * 3600) currentTime
+            scheduleJob conn "background_jobs" (BackgroundJobs.HourlyJob scheduledTime hour) scheduledTime
+
+        -- Handle regular daily jobs for each project
+        projects <- dbtToEff $ query Select [sql|SELECT id FROM projects.projects WHERE active=? AND deleted_at IS NULL and payment_plan != 'ONBOARDING'|] (Only True)
         forM_ projects \p -> do
           liftIO $ withResource authCtx.jobsPool \conn -> do
-            _ <-
-              if dayOfWeek currentDay == Monday
-                then createJob conn "background_jobs" $ BackgroundJobs.WeeklyReports p
-                else createJob conn "background_jobs" $ BackgroundJobs.DailyReports p
-            _ <- createJob conn "background_jobs" $ BackgroundJobs.ReportUsage p
-            pass
+            when (dayOfWeek currentDay == Monday)
+              $ void
+              $ createJob conn "background_jobs"
+              $ BackgroundJobs.WeeklyReports p
+            createJob conn "background_jobs" $ BackgroundJobs.ReportUsage p
+      HourlyJob scheduledTime hour -> runHourlyJob scheduledTime hour
       DailyReports pid -> dailyReportForProject pid
       WeeklyReports pid -> weeklyReportForProject pid
       GenSwagger pid uid host -> generateSwaggerForProject pid uid host
       ReportUsage pid -> whenJustM (dbtToEff $ Projects.projectById pid) \project -> do
-        when (project.paymentPlan == "UsageBased" || project.paymentPlan == "GraduatedPricing") $ whenJust project.firstSubItemId \fSubId -> do
+        when (project.paymentPlan /= "Free" && project.paymentPlan /= "ONBOARDING") $ whenJust project.firstSubItemId \fSubId -> do
           currentTime <- liftIO getZonedTime
-          totalToReport <- dbtToEff $ RequestDumps.getTotalRequestToReport pid project.usageLastReported
-          liftIO $ reportUsageToLemonsqueezy fSubId totalToReport authCtx.config.lemonSqueezyApiKey
-          _ <- dbtToEff $ LemonSqueezy.addDailyUsageReport pid totalToReport
-          _ <- dbtToEff $ Projects.updateUsageLastReported pid currentTime
-          pass
+          totalToReport <- Telemetry.getTotalEventsToReport pid project.usageLastReported
+          when (totalToReport > 0) do
+            liftIO $ reportUsageToLemonsqueezy fSubId totalToReport authCtx.config.lemonSqueezyApiKey
+            _ <- dbtToEff $ LemonSqueezy.addDailyUsageReport pid totalToReport
+            _ <- dbtToEff $ Projects.updateUsageLastReported pid currentTime
+            pass
       RunCollectionTests col_id -> do
         now <- Time.currentTime
         collectionM <- dbtToEff $ Testing.getCollectionById col_id
@@ -184,10 +222,65 @@ jobsRunner logger authCtx job = when authCtx.config.enableBackgroundJobs $ do
                 pass
           else Log.logAttention "RunCollectionTests failed.  Job was sheduled to run over 30 mins ago" $ collectionM <&> \c -> (c.title, c.id)
       APITestFailed pid col_id stepResult -> do
-        collectionM <- dbtToEff $ Testing.getCollectionById col_id
-        whenJust collectionM \collection -> do
-          _ <- sendTestFailedAlert pid col_id collection stepResult
-          pass
+        -- collectionM <- dbtToEff $ Testing.getCollectionById col_id
+        -- whenJust collectionM \collection -> do
+        --   _ <- sendTestFailedAlert pid col_id collection stepResult
+        pass
+      CleanupDemoProject -> do
+        let pid = Projects.ProjectId{unProjectId = UUID.nil}
+        -- DELETE PROJECT members
+        _ <- withPool authCtx.pool $ PTR.execute [sql| DELETE FROM projects.project_members WHERE project_id = ? |] (Only pid)
+        -- SOFT DELETE test collections
+        _ <- withPool authCtx.pool $ PTR.execute [sql|DELETE FROM tests.collections  WHERE project_id = ? and title != 'Default Health check' |] (Only pid)
+        -- DELETE API KEYS
+        _ <- withPool authCtx.pool $ PTR.execute [sql| DELETE FROM projects.project_api_keys WHERE project_id = ? AND title != 'Default API Key' |] (Only pid)
+        pass
+
+
+-- | Run hourly scheduled tasks for all projects
+runHourlyJob :: UTCTime -> Int -> ATBackgroundCtx ()
+runHourlyJob scheduledTime hour = do
+  ctx <- ask @Config.AuthContext
+  Log.logInfo "Running hourly job for hour" hour
+
+  let oneHourAgo = addUTCTime (-3600) scheduledTime
+  activeProjects <-
+    dbtToEff
+      $ query
+        Select
+        [sql| SELECT DISTINCT project_id 
+              FROM otel_logs_and_spans ols
+              WHERE ols.timestamp >= ?
+                AND ols.timestamp <= ? |]
+        (oneHourAgo, scheduledTime)
+
+  -- Log count of projects to process
+  Log.logInfo "Projects with new data in the last hour window" (length activeProjects)
+
+  -- Batch projects in groups of 100
+  let batchSize = 100
+      projectBatches = chunksOf batchSize $ V.toList activeProjects
+
+  -- For each batch, create a single job with multiple project IDs
+  liftIO $ withResource ctx.jobsPool \conn ->
+    forM_ projectBatches \batch -> do
+      let batchJob = BackgroundJobs.GenerateOtelFacetsBatch (V.fromList batch) scheduledTime
+      createJob conn "background_jobs" batchJob
+
+  Log.logInfo "Completed hourly job scheduling for hour" hour
+
+
+-- | Batch process facets generation for multiple projects
+generateOtelFacetsBatch :: (DB :> es, Log :> es, UUID.UUIDEff :> es) => V.Vector Text -> UTCTime -> Eff es ()
+generateOtelFacetsBatch projectIds timestamp = do
+  Log.logInfo "Starting batch facets generation for projects" (V.length projectIds)
+
+  -- Process each project in the batch using centralized facet columns
+  forM_ projectIds \pid -> do
+    _ <- Facets.generateAndSaveFacets (Projects.ProjectId $ Unsafe.fromJust $ UUID.fromText pid) "otel_logs_and_spans" Facets.facetColumns 10 timestamp
+    pure ()
+
+  Log.logInfo "Completed batch OTLP facets generation for projects" (V.length projectIds)
 
 
 generateSwaggerForProject :: Projects.ProjectId -> Users.UserId -> Text -> ATBackgroundCtx ()
@@ -215,21 +308,21 @@ generateSwaggerForProject pid uid host = whenJustM (dbtToEff $ Projects.projectB
   dbtToEff $ Swaggers.addSwagger swaggerToAdd
 
 
-sendTestFailedAlert :: Projects.ProjectId -> Testing.CollectionId -> Testing.Collection -> V.Vector Testing.StepResult -> ATBackgroundCtx ()
-sendTestFailedAlert pid col_id collection stepResult = do
-  let
-    -- sv = if collection.alertSeverity == "" then "INFO" else collection.alertSeverity
-    sbjt = collection.title <> ": " <> if collection.alertSubject == "" then "API Test Failed" else collection.alertSubject
-    (Testing.CollectionSteps colStepsV) = collection.collectionSteps
-    failedSteps = Testing.getCollectionFailedSteps colStepsV stepResult
-    msg' = "Failing steps: \n" <> unwords (V.toList $ V.catMaybes $ V.map (\(s, rs) -> s.title) failedSteps)
-    msg = if collection.alertMessage == "" then msg' else collection.alertMessage
-  users <- dbtToEff $ Projects.usersByProjectId pid
-  forM_ users \user -> do
-    let email = CI.original user.email
-    sendPostmarkEmail email Nothing (Just (sbjt, msg))
-  pass
-
+-- FIXME: implement inteligent allerting logic, where we pause to ensure users are not alerted too often, or spammed.
+-- sendTestFailedAlert :: Projects.ProjectId -> Testing.CollectionId -> Testing.Collection -> V.Vector Testing.StepResult -> ATBackgroundCtx ()
+-- sendTestFailedAlert pid col_id collection stepResult = do
+--   let
+--     -- sv = if collection.alertSeverity == "" then "INFO" else collection.alertSeverity
+--     sbjt = collection.title <> ": " <> if collection.alertSubject == "" then "API Test Failed" else collection.alertSubject
+--     (Testing.CollectionSteps colStepsV) = collection.collectionSteps
+--     failedSteps = Testing.getCollectionFailedSteps colStepsV stepResult
+--     msg' = "Failing steps: \n" <> unwords (V.toList $ V.catMaybes $ V.map (\(s, rs) -> s.title) failedSteps)
+--     msg = if collection.alertMessage == "" then msg' else collection.alertMessage
+--   users <- dbtToEff $ Projects.usersByProjectId pid
+--   forM_ users \user -> do
+--     let email = CI.original user.email
+--     sendPostmarkEmail email Nothing (Just (sbjt, msg))
+--   pass
 
 reportUsageToLemonsqueezy :: Text -> Int -> Text -> IO ()
 reportUsageToLemonsqueezy subItemId quantity apiKey = do
@@ -334,16 +427,15 @@ dailyReportForProject pid = do
       _ -> do
         users & mapM_ \user -> do
           let firstName = user.firstName
-          let projectTitle = pr.title
-          let userEmail = CI.original user.email
-          let anmls = if total_anomalies == 0 then [AE.object ["message" AE..= "No anomalies detected yet."]] else RP.getAnomaliesEmailTemplate anomalies
-          let perf = RP.getPerformanceEmailTemplate endpoint_rp previous_day
-          let perf_count = V.length perf
-          let perf_shrt = if perf_count == 0 then [AE.object ["message" AE..= "No performance data yet."]] else V.take 10 perf
-
-          let rp_url = "https://app.apitoolkit.io/p/" <> pid.toText <> "/reports/" <> show report.id.reportId
-          let day = show $ localDay (zonedTimeToLocalTime currentTime)
-          let templateVars =
+              projectTitle = pr.title
+              userEmail = CI.original user.email
+              anmls = if total_anomalies == 0 then [AE.object ["message" AE..= "No anomalies detected yet."]] else RP.getAnomaliesEmailTemplate anomalies
+              perf = RP.getPerformanceEmailTemplate endpoint_rp previous_day
+              perf_count = V.length perf
+              perf_shrt = if perf_count == 0 then [AE.object ["message" AE..= "No performance data yet."]] else V.take 10 perf
+              rp_url = "https://app.apitoolkit.io/p/" <> pid.toText <> "/reports/" <> show report.id.reportId
+              day = show $ localDay (zonedTimeToLocalTime currentTime)
+              templateVars =
                 [aesonQQ|{
                  "user_name": #{firstName},
                  "project_name": #{projectTitle},
@@ -396,36 +488,36 @@ weeklyReportForProject pid = do
         whenJust pr.discordUrl \url -> sendDiscordNotif url [fmtTrim|**WEEKLY REPORT**: [{pr.title}]({projectUrl})|]
       _ -> do
         totalRequest <- dbtToEff $ RequestDumps.getLastSevenDaysTotalRequest pid
-        forM_ users \user -> do
-          let firstName = user.firstName
-          let projectTitle = pr.title
-          let userEmail = CI.original user.email
-          let anmls = if total_anomalies == 0 then [AE.object ["message" AE..= "No anomalies detected yet."]] else RP.getAnomaliesEmailTemplate anomalies
-          let perf = RP.getPerformanceEmailTemplate endpoint_rp previous_week
-          let perf_count = V.length perf
-          let perf_shrt = if perf_count == 0 then [AE.object ["message" AE..= "No performance data yet."]] else V.take 10 perf
-          let rp_url = "https://app.apitoolkit.io/p/" <> pid.toText <> "/reports/" <> show report.id.reportId
-          let dayEnd = show $ localDay (zonedTimeToLocalTime currentTime)
-          let currentUTCTime = zonedTimeToUTC currentTime
-          let sevenDaysAgoUTCTime = addUTCTime (negate $ 6 * 86400) currentUTCTime
-          let sevenDaysAgoZonedTime = utcToZonedTime timeZone sevenDaysAgoUTCTime
-          let dayStart = show $ localDay (zonedTimeToLocalTime sevenDaysAgoZonedTime)
-          let freeTierLimitExceeded = pr.paymentPlan == "FREE" && totalRequest > 5000
-
-          let templateVars =
-                [aesonQQ|{
-                 "user_name": #{firstName},
-                 "project_name": #{projectTitle},
-                 "anomalies_count": #{total_anomalies},
-                 "anomalies":  #{anmls},
-                 "report_url": #{rp_url},
-                 "performance_count": #{perf_count},
-                 "performance": #{perf_shrt},
-                 "start_date": #{dayStart},
-                 "end_date": #{dayEnd},
-                 "free_exceeded": #{freeTierLimitExceeded}
-          }|]
-          sendPostmarkEmail userEmail (Just ("weekly-report", templateVars)) Nothing
+        when (totalRequest > 0) do
+          forM_ users \user -> do
+            let firstName = user.firstName
+                projectTitle = pr.title
+                userEmail = CI.original user.email
+                anmls = if total_anomalies == 0 then [AE.object ["message" AE..= "No anomalies detected yet."]] else RP.getAnomaliesEmailTemplate anomalies
+                perf = RP.getPerformanceEmailTemplate endpoint_rp previous_week
+                perf_count = V.length perf
+                perf_shrt = if perf_count == 0 then [AE.object ["message" AE..= "No performance data yet."]] else V.take 10 perf
+                rp_url = "https://app.apitoolkit.io/p/" <> pid.toText <> "/reports/" <> show report.id.reportId
+                dayEnd = show $ localDay (zonedTimeToLocalTime currentTime)
+                currentUTCTime = zonedTimeToUTC currentTime
+                sevenDaysAgoUTCTime = addUTCTime (negate $ 6 * 86400) currentUTCTime
+                sevenDaysAgoZonedTime = utcToZonedTime timeZone sevenDaysAgoUTCTime
+                dayStart = show $ localDay (zonedTimeToLocalTime sevenDaysAgoZonedTime)
+                freeTierLimitExceeded = pr.paymentPlan == "FREE" && totalRequest > 5000
+                templateVars =
+                  [aesonQQ|{
+                   "user_name": #{firstName},
+                   "project_name": #{projectTitle},
+                   "anomalies_count": #{total_anomalies},
+                   "anomalies":  #{anmls},
+                   "report_url": #{rp_url},
+                   "performance_count": #{perf_count},
+                   "performance": #{perf_shrt},
+                   "start_date": #{dayStart},
+                   "end_date": #{dayEnd},
+                   "free_exceeded": #{freeTierLimitExceeded}
+            }|]
+            sendPostmarkEmail userEmail (Just ("weekly-report", templateVars)) Nothing
 
 
 emailQueryMonitorAlert :: Monitors.QueryMonitorEvaled -> CI.CI Text -> Maybe Users.User -> ATBackgroundCtx ()
@@ -446,71 +538,79 @@ emailQueryMonitorAlert monitorE@Monitors.QueryMonitorEvaled{alertConfig} email u
 --     Apitoolkit team
 --               |]
 
-newAnomalyJob :: Projects.ProjectId -> ZonedTime -> Text -> Text -> Text -> ATBackgroundCtx ()
-newAnomalyJob pid createdAt anomalyTypesT anomalyActionsT targetHash = do
+convertAnomaliesToIssues :: V.Vector Anomalies.AnomalyVM -> V.Vector Endpoints.Endpoint -> V.Vector Anomalies.Issue
+convertAnomaliesToIssues ans ens = V.catMaybes $ (\e -> V.find (\a -> e.hash `T.isPrefixOf` a.targetHash) ans >>= (\a -> Anomalies.convertAnomalyToIssue (Just e.host) a)) <$> ens
+
+
+newAnomalyJob :: Projects.ProjectId -> ZonedTime -> Text -> Text -> V.Vector Text -> ATBackgroundCtx ()
+newAnomalyJob pid createdAt anomalyTypesT anomalyActionsT targetHashes = do
   let anomalyType = fromMaybe (error "parseAnomalyTypes returned Nothing") $ Anomalies.parseAnomalyTypes anomalyTypesT
   case anomalyType of
     Anomalies.ATEndpoint -> do
-      totalRequestsCount <- dbtToEff $ RequestDumps.countRequestDumpByProject pid
-      whenJustM (dbtToEff $ Anomalies.getAnomalyVM pid targetHash) \anomaly -> do
-        endp <- dbtToEff $ Endpoints.endpointByHash pid targetHash
-        users <- dbtToEff $ Projects.usersByProjectId pid
-        project <- Unsafe.fromJust <<$>> dbtToEff $ Projects.projectById pid
-        let enp = Unsafe.fromJust endp
-        let endpointPath = enp.method <> " " <> enp.urlPath
-        _ <- dbtToEff $ Anomalies.insertIssue $ Unsafe.fromJust $ Anomalies.convertAnomalyToIssue (Just enp.host) anomaly
-        forM_ project.notificationsChannel \case
-          Projects.NSlack ->
-            sendSlackMessage
-              pid
-              [fmtTrim| 🤖 *New Endpoint Detected for `{project.title}`*
+      anomaliesVM <- dbtToEff $ Anomalies.getAnomaliesVM pid targetHashes
+      endpoints <- dbtToEff $ Endpoints.endpointsByHashes pid targetHashes
+      users <- dbtToEff $ Projects.usersByProjectId pid
+      project <- Unsafe.fromJust <<$>> dbtToEff $ Projects.projectById pid
+      let endpointsPaths = (\e -> e.method <> " " <> e.urlPath) <$> endpoints
+          endpointLines = T.intercalate "\n" (V.toList endpointsPaths)
+          anIssues = convertAnomaliesToIssues anomaliesVM endpoints
+          targetHash = fromMaybe "" $ viaNonEmpty head (V.toList targetHashes)
+      _ <- dbtToEff $ Anomalies.insertIssues anIssues
+      forM_ project.notificationsChannel \case
+        Projects.NSlack -> do
+          sendSlackMessage
+            pid
+            [fmtTrim| {{...}} *New Endpoint(s) Detected for `{project.title}`*
 
 We have detected a new endpoint on *{project.title}*
 
-Endpoint: `{endpointPath}`
+**Endpoints:**
+`{endpointLines}`
 
 <https://app.apitoolkit.io/p/{pid.toText}/anomalies/by_hash/{targetHash}|More details on APItoolkit>
                               |]
-          Projects.NDiscord -> do
-            let msg =
-                  [fmtTrim|
-{{···}} **New Endpoint Detected For {project.title}**
+        Projects.NDiscord -> do
+          let msg =
+                [fmtTrim|
+{{···}} **New Endpoint(s) Detected For {project.title}**
 
-**Endpoint**: `{endpointPath}`
+**Endpoints**: 
+`{endpointLines}`
 [View more](https://app.apitoolkit.io/p/{pid.toText}/anomalies/by_hash/{targetHash})|]
-            whenJust project.discordUrl (`sendDiscordNotif` msg)
-          _ -> do
-            when (totalRequestsCount > 50)
-              $ forM_ users \u -> do
-                let templateVars =
-                      AE.object
-                        [ "user_name" AE..= u.firstName
-                        , "project_name" AE..= project.title
-                        , "anomaly_url" AE..= ("https://app.apitoolkit.io/p/" <> pid.toText <> "/anomalies/by_hash/" <> targetHash)
-                        , "endpoint_name" AE..= endpointPath
-                        ]
-                sendPostmarkEmail (CI.original u.email) (Just ("anomaly-endpoint", templateVars)) Nothing
-    Anomalies.ATShape -> do
-      pass
-    -- hasEndpointAnomaly <- dbtToEff $ Anomalies.getShapeParentAnomalyVM pid targetHash
-    -- when (hasEndpointAnomaly == 0) $ whenJustM (dbtToEff $ Anomalies.getAnomalyVM pid targetHash) \anomaly -> do
-    --   endp <- dbtToEff $ Endpoints.endpointByHash pid $ T.take 8 targetHash
-    --   let getShapesQuery = [sql| select hash, field_hashes from apis.shapes where project_id=? and endpoint_hash=? |]
-    --   shapes <- (dbtToEff $ query Select getShapesQuery (pid, T.take 8 targetHash))
-    --   let targetFields = maybe [] (V.toList . snd) $ V.find (\a -> fst a == targetHash) shapes
-    --   let otherFields = toList <$> toList (snd $ V.unzip $ V.filter (\a -> fst a /= targetHash) shapes)
-    --   updatedFieldFormats <- dbtToEff $ getUpdatedFieldFormats pid (V.fromList targetFields)
+          whenJust project.discordUrl (`sendDiscordNotif` msg)
+        _ -> do
+          forM_ users \u -> do
+            let templateVars =
+                  AE.object
+                    [ "user_name" AE..= u.firstName
+                    , "project_name" AE..= project.title
+                    , "anomaly_url" AE..= ("https://app.apitoolkit.io/p/" <> pid.toText <> "/anomalies/by_hash/" <> targetHash)
+                    , "endpoint_name" AE..= endpointsPaths
+                    ]
+            sendPostmarkEmail (CI.original u.email) (Just ("anomaly-endpoint-2", templateVars)) Nothing
 
-    --   let newFields = filter (`notElem` foldl' union [] otherFields) targetFields
-    --   let deletedFields = filter (`notElem` targetFields) $ foldl' intersect (head $ [] :| otherFields) (tail $ [] :| otherFields)
-    --   _ <- dbtToEff $ updateShapeCounts pid targetHash (V.fromList newFields) (V.fromList deletedFields) updatedFieldFormats
-    --   -- Send an email about the new shape anomaly but only if there was no endpoint anomaly logged
-    --   users <- dbtToEff $ Projects.usersByProjectId pid
-    --   project <- Unsafe.fromJust <<$>> dbtToEff $ Projects.projectById pid
-    --   let anomaly' = anomaly{Anomalies.anomalyType = anomalyType, Anomalies.shapeDeletedFields = V.fromList deletedFields, Anomalies.shapeUpdatedFieldFormats = updatedFieldFormats, Anomalies.shapeNewUniqueFields = V.fromList newFields}
-    --   _ <- dbtToEff $ Anomalies.insertIssue $ Unsafe.fromJust $ Anomalies.convertAnomalyToIssue (endp <&> (.host)) anomaly'
-    --   pass
-    -- forM_ project.notificationsChannel \case
+      pass
+    Anomalies.ATShape -> do
+      anomaliesVM <- (dbtToEff $ Anomalies.getAnomaliesVM pid targetHashes)
+      endpoints <- dbtToEff $ Endpoints.endpointsByHashes pid $ T.take 8 <$> targetHashes
+      anomalies <- forM anomaliesVM \anomaly -> do
+        let targetHash = anomaly.targetHash
+            getShapesQuery = [sql| select hash, field_hashes from apis.shapes where project_id=? and endpoint_hash=? |]
+        shapes <- (dbtToEff $ query Select getShapesQuery (pid, T.take 8 targetHash))
+        let targetFields = maybe [] (V.toList . snd) $ V.find (\a -> fst a == targetHash) shapes
+        let otherFields = toList <$> toList (snd $ V.unzip $ V.filter (\a -> fst a /= targetHash) shapes)
+        updatedFieldFormats <- dbtToEff $ getUpdatedFieldFormats pid (V.fromList targetFields)
+        let newFields = filter (`notElem` foldl' union [] otherFields) targetFields
+        let deletedFields = filter (`notElem` targetFields) $ foldl' intersect (head $ [] :| otherFields) (tail $ [] :| otherFields)
+        _ <- dbtToEff $ updateShapeCounts pid targetHash (V.fromList newFields) (V.fromList deletedFields) updatedFieldFormats
+        -- Send an email about the new shape anomaly but only if there was no endpoint anomaly logged
+        -- users <- dbtToEff $ Projects.usersByProjectId pid
+        project <- Unsafe.fromJust <<$>> dbtToEff $ Projects.projectById pid
+        pure anomaly{Anomalies.anomalyType = anomalyType, Anomalies.shapeDeletedFields = V.fromList deletedFields, Anomalies.shapeUpdatedFieldFormats = updatedFieldFormats, Anomalies.shapeNewUniqueFields = V.fromList newFields}
+      _ <- dbtToEff $ Anomalies.insertIssues $ convertAnomaliesToIssues anomalies endpoints
+      pass
+    -- _ <- dbtToEff $ Anomalies.insertIssues $ convertAnomaliesToIssues anomaliesVM endpoints -- Anomalies.convertAnomalyToIssue (endp <&> (.host)) anomaly'
+    -- forM_ project.notificationsChannel \cased
     --   Projects.NSlack ->
     --     sendSlackMessage
     --       pid
@@ -529,15 +629,14 @@ Endpoint: `{endpointPath}`
     --               ]
     --       sendPostmarkEmail (CI.original u.email) "anomaly-shape" templateVars
     Anomalies.ATFormat -> do
+      -- pass
+      -- -- Send an email about the new shape anomaly but only if there was no endpoint anomaly logged
+      -- hasEndpointAnomaly <- dbtToEff $ Anomalies.getFormatParentAnomaliesVM pid targetHashes
+      endpoints <- dbtToEff $ Endpoints.endpointsByHashes pid $ T.take 8 <$> targetHashes
+      anomaliesVM <- dbtToEff $ Anomalies.getAnomaliesVM pid targetHashes
+      project <- Unsafe.fromJust <<$>> dbtToEff $ Projects.projectById pid
+      _ <- dbtToEff $ Anomalies.insertIssues $ convertAnomaliesToIssues anomaliesVM endpoints
       pass
-    -- -- Send an email about the new shape anomaly but only if there was no endpoint anomaly logged
-    -- hasEndpointAnomaly <- dbtToEff $ Anomalies.getFormatParentAnomalyVM pid targetHash
-    -- when (hasEndpointAnomaly == 0) $ whenJustM (dbtToEff $ Anomalies.getAnomalyVM pid targetHash) \anomaly -> do
-    --   endp <- dbtToEff $ Endpoints.endpointByHash pid $ T.take 8 targetHash
-    --   users <- dbtToEff $ Projects.usersByProjectId pid
-    --   project <- Unsafe.fromJust <<$>> dbtToEff $ Projects.projectById pid
-    --   _ <- dbtToEff $ Anomalies.insertIssue $ Unsafe.fromJust $ Anomalies.convertAnomalyToIssue (endp <&> (.host)) anomaly
-    --   pass
     -- forM_ project.notificationsChannel \case
     --   Projects.NSlack ->
     --     sendSlackMessage
@@ -560,31 +659,36 @@ Endpoint: `{endpointPath}`
     --          }|]
     --     sendPostmarkEmail (CI.original u.email) "anomaly-field" templateVars
     Anomalies.ATRuntimeException -> do
+      let targetHash = fromMaybe "" $ viaNonEmpty head (V.toList targetHashes)
       users <- dbtToEff $ Projects.usersByProjectId pid
       project <- Unsafe.fromJust <<$>> dbtToEff $ Projects.projectById pid
-      err <- Unsafe.fromJust <<$>> dbtToEff $ Anomalies.errorByHash targetHash
+      errs <- dbtToEff $ Anomalies.errorsByHashes pid targetHashes
       issueId <- liftIO $ Anomalies.AnomalyId <$> UUIDV4.nextRandom
       _ <-
         dbtToEff
-          $ Anomalies.insertIssue
-          $ Anomalies.Issue
-            { id = issueId
-            , createdAt = err.createdAt
-            , updatedAt = err.updatedAt
-            , projectId = pid
-            , anomalyType = Anomalies.ATRuntimeException
-            , targetHash = targetHash
-            , issueData = Anomalies.IDNewRuntimeExceptionIssue err.errorData
-            , acknowlegedAt = Nothing
-            , acknowlegedBy = Nothing
-            , endpointId = Nothing
-            , archivedAt = Nothing
-            }
+          $ Anomalies.insertIssues
+          $ ( \err ->
+                Anomalies.Issue
+                  { id = issueId
+                  , createdAt = err.createdAt
+                  , updatedAt = err.updatedAt
+                  , projectId = pid
+                  , anomalyType = Anomalies.ATRuntimeException
+                  , targetHash = targetHash
+                  , issueData = Anomalies.IDNewRuntimeExceptionIssue err.errorData
+                  , acknowlegedAt = Nothing
+                  , acknowlegedBy = Nothing
+                  , endpointId = Nothing
+                  , archivedAt = Nothing
+                  }
+            )
+          <$> errs
+
       forM_ project.notificationsChannel \case
         Projects.NSlack ->
           sendSlackMessage
             pid
-            [fmtTrim| 🤖 *New Runtime Exception Found for `{project.title}`*
+            [fmtTrim| 🤖 *New Runtime Exception(s) Found for `{project.title}`*
 
 A new runtime exception has been detected. click the link below to see more details.
 
@@ -599,16 +703,46 @@ A new runtime exception has been detected. click the link below to see more deta
 [View more](https://app.apitoolkit.io/p/{pid.toText}/anomalies/by_hash/{targetHash})|]
 
           whenJust project.discordUrl (`sendDiscordNotif` msg)
-        _ -> forM_ users \u -> do
-          let firstName = u.firstName
-          let title = project.title
-          let anomaly_url = "https://app.apitoolkit.io/p/" <> pid.toText <> "/anomalies/by_hash/" <> targetHash
-          let templateVars =
-                [aesonQQ|{
-                      "user_name": #{firstName},
-                      "project_name": #{title},
-                      "anomaly_url": #{anomaly_url}
-                 }|]
-          sendPostmarkEmail (CI.original u.email) (Just ("anomaly-field", templateVars)) Nothing
+        _ ->
+          forM_ users \u -> do
+            let errosJ =
+                  ( \ee ->
+                      let e = ee.errorData
+                       in AE.object
+                            [ "root_error_message" .= e.rootErrorMessage
+                            , "error_type" .= e.errorType
+                            , "error_message" .= e.message
+                            , "stack_trace" .= e.stackTrace
+                            , "when" .= formatTime defaultTimeLocale "%b %-e, %Y, %-l:%M:%S %p" e.when
+                            , "hash" .= e.hash
+                            , "tech" .= e.technology
+                            , "request_info" .= ((fromMaybe "" e.requestMethod) <> " " <> (fromMaybe "" e.requestPath))
+                            , "root_error_type" .= e.rootErrorType
+                            ]
+                  )
+                    <$> errs
+                title = project.title
+                errors_url = "https://app.apitoolkit.io/p/" <> pid.toText <> "/anomalies/"
+                templateVars =
+                  [aesonQQ|{
+                        "project_name": #{title},
+                        "errors_url": #{errors_url},
+                        "errors": #{errosJ}
+                   }|]
+            sendPostmarkEmail (CI.original u.email) (Just ("runtime-errors", templateVars)) Nothing
     Anomalies.ATField -> pass
     Anomalies.ATUnknown -> pass
+
+
+getUpdatedFieldFormats :: Projects.ProjectId -> V.Vector Text -> PTR.DBT IO (V.Vector Text)
+getUpdatedFieldFormats pid fieldHashes = query Select q (pid, fieldHashes)
+  where
+    q =
+      [sql| select fm.hash from apis.formats fm JOIN apis.fields fd ON (fm.project_id=fd.project_id AND fd.hash=fm.field_hash) 
+                where fm.project_id=? AND fm.created_at>(fd.created_at+interval '2 minutes') AND fm.field_hash=ANY(?) |]
+
+
+updateShapeCounts :: Projects.ProjectId -> Text -> V.Vector Text -> V.Vector Text -> V.Vector Text -> PTR.DBT IO Int64
+updateShapeCounts pid shapeHash newFields deletedFields updatedFields = execute Update q (newFields, deletedFields, updatedFields, pid, shapeHash)
+  where
+    q = [sql| update apis.shapes SET new_unique_fields=?, deleted_fields=?, updated_field_formats=? where project_id=? and hash=?|]

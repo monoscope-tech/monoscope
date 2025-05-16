@@ -1,15 +1,18 @@
-module Pages.LogExplorer.LogItem (expandAPIlogItemH, expandAPIlogItem', apiLogItemH, ApiLogItem (..), ApiItemDetailed (..)) where
+module Pages.LogExplorer.LogItem (expandAPIlogItemH, expandAPIlogItem', ApiItemDetailed (..)) where
 
 import Data.Aeson qualified as AE
 import Data.Aeson.KeyMap qualified as KEM
+import Data.Aeson.KeyMap qualified as Map
+import Data.Aeson.Text (encodeToLazyText)
 import Data.ByteString.Lazy qualified as BS
+import Data.Text qualified as T
 import Data.Time (UTCTime)
 import Data.Time.Format (defaultTimeLocale, formatTime)
-import Data.Time.Format.ISO8601 (ISO8601 (iso8601Format), formatShow)
+import Data.Time.LocalTime (zonedTimeToUTC)
 import Data.UUID qualified as UUID
 import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
 import Lucid
-import Lucid.Htmx (hxGet_, hxSwap_, hxTrigger_)
+import Lucid.Htmx
 import Lucid.Hyperscript (__)
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.Projects qualified as Projects
@@ -17,12 +20,12 @@ import Models.Telemetry.Telemetry qualified as Telemetry
 import Models.Users.Sessions qualified as Sessions
 import NeatInterpolation (text)
 import Network.URI (escapeURIString, isUnescapedInURI)
-import Pages.Components (statBox_)
-import Pages.Traces.Spans qualified as Spans
-import PyF (fmt)
+import Pages.Components (dateTime, statBox_)
+import Pages.Telemetry.Spans qualified as Spans
+import Pages.Telemetry.Utils (atMapText, getRequestDetails)
 import Relude
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
-import Utils (faSprite_, getDurationNSMS, getMethodBorderColor, getMethodColor, getStatusBorderColor, getStatusColor, jsonValueToHtmlTree, toXXHash)
+import Utils (faSprite_, getDurationNSMS, getMethodBorderColor, getMethodColor, getSeverityColor, getStatusBorderColor, getStatusColor, jsonValueToHtmlTree, lookupValueText)
 
 
 expandAPIlogItemH :: Projects.ProjectId -> UUID.UUID -> UTCTime -> Maybe Text -> ATAuthCtx (RespHeaders ApiItemDetailed)
@@ -30,21 +33,36 @@ expandAPIlogItemH pid rdId createdAt sourceM = do
   _ <- Sessions.sessionAndProject pid
   let source = fromMaybe "requets" sourceM
   case source of
-    "spans" -> do
-      spanItem <- Telemetry.spanRecordByProjectAndId pid createdAt rdId
-      addRespHeaders $ case spanItem of
-        Just spn -> SpanItemExpanded pid spn
-        Nothing -> ItemDetailedNotFound "Span not found"
+    "logs" -> do
+      logItem <- Telemetry.logRecordByProjectAndId pid createdAt rdId
+      addRespHeaders $ case logItem of
+        Just lg -> LogItemExpanded pid lg
+        Nothing -> ItemDetailedNotFound "Log not found"
     _ -> do
-      logItemM <- dbtToEff $ RequestDumps.selectRequestDumpByProjectAndId pid createdAt rdId
-      addRespHeaders $ case logItemM of
-        Just req -> LogItemExpanded pid req True
-        Nothing -> ItemDetailedNotFound "Request not found"
+      spanItem <- Telemetry.spanRecordByProjectAndId pid createdAt rdId
+      case spanItem of
+        Just spn -> do
+          aptSpan <- case getRequestDetails spn.attributes of
+            Just ("HTTP", _, _, _) -> do
+              let trIdM = spn.context >>= (.trace_id)
+              if spn.name /= Just "apitoolkit-http-span"
+                then do
+                  case trIdM of
+                    Just trId -> do
+                      aptSpn <- Telemetry.spanRecordByName pid trId "apitoolkit-http-span"
+                      pure aptSpn
+                    _ -> pure Nothing
+                else pure Nothing
+            _ -> pure Nothing
+          addRespHeaders $ SpanItemExpanded pid spn aptSpan
+        Nothing -> addRespHeaders $ ItemDetailedNotFound "Span not found"
 
 
 expandAPIlogItem' :: Projects.ProjectId -> RequestDumps.RequestDumpLogItem -> Bool -> Html ()
 expandAPIlogItem' pid req modal = do
-  div_ [class_ "flex flex-col w-full gap-4 pb-[100px]"] do
+  div_ [class_ "relative flex flex-col w-full px-4 gap-4 pb-[100px]"] do
+    span_ [class_ "htmx-indicator query-indicator absolute loading left-1/2 -translate-x-1/2 loading-dots absoute z-10 top-10", id_ "details_indicator"] ""
+    div_ [class_ "flex justify-between items-center", id_ "copy_share_link"] pass
     div_ [class_ "w-full flex flex-col gap-4"] do
       let methodColor = getMethodColor req.method
           statusColor = getStatusColor req.statusCode
@@ -53,219 +71,220 @@ expandAPIlogItem' pid req modal = do
 
       div_ [class_ "flex  justify-between items-center gap-4"] do
         div_ [class_ "flex items-center gap-4"] do
-          span_ [class_ $ "flex items-center rounded-lg px-2 py-2 border font-medium gap-2 " <> borderColor <> " " <> methodColor] $ toHtml req.method
-          span_ [class_ $ "flex items-center rounded-lg px-2 py-2 border font-medium gap-2 " <> stBorder <> " " <> statusColor] $ toHtml $ show req.statusCode
-          span_ [class_ "flex items-center rounded-lg px-2 py-1 text-sm font-medium gap-2 border border-slate-300 bg-slate-100 text-slate-600"] do
-            faSprite_ "calendar" "regular" "w-4 h-4 fill-none"
-            toHtml $ formatTime defaultTimeLocale "%b. %d, %Y %I:%M:%S %p" req.createdAt
+          span_ [class_ $ "flex items-center rounded-lg px-2 py-1 border font-medium gap-2 " <> borderColor <> " " <> methodColor] $ toHtml req.method
+          span_ [class_ $ "flex items-center rounded-lg px-2 py-1 border font-medium gap-2 " <> stBorder <> " " <> statusColor] $ toHtml $ show req.statusCode
 
-        div_ [class_ "flex items-center"] do
-          when modal do
-            div_
-              [ class_ "flex gap-2 px-4 items-center"
-              , id_ "copy_share_link"
-              ]
-              do
-                p_ [class_ "text-slate-500 font-medium"] "Expires in: "
-                div_ [class_ "relative w-max flex"] do
-                  button_
-                    [ [__|on click toggle .hidden on #expire_container|]
-                    , id_ "toggle_expires_btn"
-                    , class_ "btn px-0 flex w-[100px] nowrap justify-center gap-2 text-slate-600 font-medium items-center cursor-pointer border border-slate-300 bg-slate-100"
-                    ]
-                    do
-                      span_ [] "1 hour"
-                      faSprite_ "chevron-down" "regular" "h-3 w-3"
-                  div_ [id_ "expire_container", class_ "absolute hidden bg-base-100 border shadow w-full overflow-y-auto", style_ "top:100%; max-height: 300px; z-index:9"] do
-                    forM_ (["1 hour", "8 hours", "1 day"] :: [Text]) \sw -> do
-                      button_
-                        [ [__|on click set #toggle_expires_btn.firstElementChild.innerText to event.target's @data-expire-value
-                                            then set #expire_input.value to event.target's @data-expire-value
-                                            then add .hidden to #expire_container
-                                            |]
-                        , term "data-expire-value" sw
-                        , class_ "p-2 w-full text-left truncate ... hover:bg-blue-100 hover:text-black"
-                        ]
-                        $ toHtml sw
-                button_
-                  [ class_ "btn blue-gr-btn"
-                  , term "data-req-id" (show req.id)
-                  , term "data-req-created-at" (toText $ formatTime defaultTimeLocale "%FT%T%6QZ" req.createdAt)
-                  , [__|on click set #req_id_input.value to my @data-req-id
-                              then set #req_created_at_input.value to my @data-req-created-at
-                              then call #share_log_form.requestSubmit() |]
-                  ]
-                  "Get link"
+        div_ [class_ "flex items-center gap-2"] do
+          dateTime (zonedTimeToUTC req.createdAt) Nothing
+          button_
+            [ class_ "ml-4 p-0 -mt-1"
+            , [__|on click add .hidden to #trace_expanded_view 
+            then put '0px' into  #log_details_container.style.width 
+            then put '100%' into #logs_list_container.style.width 
+            then add .hidden to #resizer
+            then call updateUrlState('details_width', '', 'delete')
+            then call updateUrlState('target_event', '0px', 'delete')
+            |]
+            ]
+            do
+              faSprite_ "xmark" "regular" "w-3 h-3 text-textBrand"
     -- url, endpoint, latency, request size, repsonse size
-    let endpointHash = toXXHash $ pid.toText <> req.host <> req.method <> req.urlPath
-    let endpointURl = "/p/" <> pid.toText <> "/log_explorer/endpoint/" <> endpointHash
+    let path = toText $ escapeURIString isUnescapedInURI $ "url_path==\"" <> toString req.urlPath <> "\""
+        query = toText $ escapeURIString isUnescapedInURI $ "raw_url==\"" <> toString req.rawUrl <> "\""
+        rawUrl = "/p/" <> pid.toText <> "/log_explorer?query=" <> query
+        urlPath = "/p/" <> pid.toText <> "/log_explorer?query=" <> path
     div_ [class_ "flex flex-col mt-4 justify-between w-full"] do
       div_ [class_ "text-base mb-2 flex gap-6 items-center"] do
         span_ [class_ "text-slate-500 font-medium w-16"] "Endpoint"
         div_ [class_ "flex gap-1 items-center"] do
           span_ [class_ "text-slate-800 text-sm truncate ellipsis urlPath", term "data-tippy" req.urlPath] $ toHtml req.urlPath
           div_ [[__| install Copy(content:.urlPath )|]] do
-            faSprite_ "copy" "regular" "h-8 w-8 border border-slate-300 bg-slate-100 rounded-full p-2 text-slate-500"
-          a_ [href_ endpointURl] do
-            faSprite_ "arrow-up-right" "regular" "h-8 w-8 p-2 blue-gr-btn rounded-full"
+            faSprite_ "copy" "regular" "h-8 w-8 border border-slate-300 bg-fillWeaker rounded-full p-2 text-slate-500"
+          a_ [href_ urlPath] do
+            faSprite_ "arrow-up-right" "regular" "h-8 w-8 p-2 btn-primary rounded-full"
       div_ [class_ "text-base flex items-center gap-6"] do
         span_ [class_ "text-slate-500 font-medium w-16"] "URL"
         div_ [class_ "flex gap-1 items-center"] do
           span_ [class_ "text-slate-800 text-sm truncate ellipsis", term "data-tippy" req.rawUrl] $ toHtml req.rawUrl
           div_ [[__| install Copy(content:.urlPath )|]] do
-            faSprite_ "copy" "regular" "h-8 w-8 border border-slate-300 bg-slate-100 rounded-full p-2 text-slate-500"
-          a_ [href_ endpointURl] do
-            faSprite_ "arrow-up-right" "regular" "h-8 w-8 p-2 blue-gr-btn rounded-full"
+            faSprite_ "copy" "regular" "h-8 w-8 border border-slate-300 bg-fillWeaker rounded-full p-2 text-slate-500"
+          a_ [href_ rawUrl] do
+            faSprite_ "arrow-up-right" "regular" "h-8 w-8 p-2 btn-primary rounded-full"
       div_ [class_ "flex gap-2 mt-4"] do
-        statBox_ Nothing (Just ("clock", "regular", "text-blue-500")) "Latency" "Latency" (toText $ getDurationNSMS req.durationNs) Nothing Nothing
+        statBox_ Nothing (Just ("clock", "regular", "text-brand")) "Latency" "Latency" (toText $ getDurationNSMS req.durationNs) Nothing Nothing
         let reqSize = BS.length $ AE.encode req.requestBody
-        statBox_ Nothing (Just ("upload", "regular", "text-blue-500")) "Request size" "Total request body size in bytes" (show (reqSize - 2)) Nothing Nothing
+        statBox_ Nothing (Just ("upload", "regular", "text-brand")) "Request size" "Total request body size in bytes" (show (reqSize - 2)) Nothing Nothing
         let respSize = BS.length $ AE.encode req.responseBody
-        statBox_ Nothing (Just ("download", "regular", "text-blue-500")) "Response size" "Total response body size in bytes" (show (respSize - 2)) Nothing Nothing
-        statBox_ Nothing (Just ("stack", "regular", "text-blue-500")) "Framework" "Framework used to handle this the request" (show req.sdkType) Nothing Nothing
+        statBox_ Nothing (Just ("download", "regular", "text-brand")) "Response size" "Total response body size in bytes" (show (respSize - 2)) Nothing Nothing
+        statBox_ Nothing (Just ("stack", "regular", "text-brand")) "Framework" "Framework used to handle this the request" (show req.sdkType) Nothing Nothing
 
     -- errors
     when (req.errorsCount > 0) $ div_ [class_ "mt-4"] do
       div_ [class_ "flex w-full text-slate-950 font-medium gap-2 items-center"] do
         p_ "Errors"
         p_ [class_ " text-red-500 font-bold"] $ show req.errorsCount
-      div_ [class_ "p-4 rounded-3xl border border-slate-200 text-gray-500"] do
-        jsonValueToHtmlTree req.errors
+      div_ [class_ "p-4 rounded-lg border border-slate-200 text-gray-500"] do
+        jsonValueToHtmlTree req.errors Nothing
 
-    -- outgoing request details
-    div_ [class_ "flex w-full flex-col gap-1"] do
-      p_ [class_ "font-medium text-slate-950 mb-2"] "Outgoing requests"
-      div_ [class_ "grow rounded-3xl border border-slate-200 overflow-y-auto py-2 px-1 max-h-[500px] whitespace-nowrap  divide-y overflow-x-hidden"] do
-        let createdAt = toText $ formatTime defaultTimeLocale "%FT%T%6QZ" req.createdAt
-        let escapedQueryPartial = toText $ escapeURIString isUnescapedInURI $ toString [fmt|parent_id=="{UUID.toText req.id}" AND created_at<="{createdAt}"|]
-        let events_url = "/p/" <> pid.toText <> "/log_explorer?layout=resultTable&query=" <> escapedQueryPartial
-        div_ [hxGet_ events_url, hxTrigger_ "intersect once", hxSwap_ "outerHTML"] $ span_ [class_ "loading loading-dots loading-md"] ""
+    div_ [id_ "http-content-container", class_ "flex flex-col gap-3"] do
+      let json = selectiveReqToJson req
+      div_ [class_ "flex items-center gap-2"] do
+        button_
+          [ class_ "flex items-center gap-1 text-sm text-textBrand"
+          , onclick_ "window.buildCurlRequest(event)"
+          , term "data-reqjson" $ decodeUtf8 $ AE.encode json
+          ]
+          do
+            span_ [class_ "underline"] "Copy request as curl"
+            faSprite_ "copy" "regular" "w-2 h-2"
+        let createdAt = toText $ formatTime defaultTimeLocale "%Y-%m-%dT%H:%M:%S%6QZ" req.createdAt
+        button_
+          [ class_ "flex items-center gap-2 text-textBrand text-sm underline"
+          , hxPost_ $ "/p/" <> pid.toText <> "/share/" <> UUID.toText req.id <> "/" <> createdAt <> "?event_type=request"
+          , hxSwap_ "innerHTML"
+          , hxTarget_ "#copy_share_link"
+          ]
+          do
+            "Get shareable link"
+            faSprite_ "link-simple" "regular" "w-3 h-3"
 
-    -- request details
-    div_ [class_ "mt-8", id_ "req-tabs-container"] do
-      p_ [class_ "text-slate-950 font-medium mb-2"] "Request Details"
-      div_ [class_ "rounded-3xl border border-slate-200", role_ "tablist"] do
-        div_ [class_ "flex w-full text-slate-500"] do
-          button_ [class_ "a-tab whitespace-nowrap px-3 py-2 border-b border-b-slate-200 w-max t-tab-active", onclick_ "navigatable(this, '#req_body_json', '#req-tabs-container', 't-tab-active')"] "Body"
-          button_ [class_ "a-tab whitespace-nowrap px-3 py-2 border-b border-b-slate-200 w-max", onclick_ "navigatable(this, '#req_headers_json', '#req-tabs-container', 't-tab-active')"] "Headers"
-          button_ [class_ "a-tab whitespace-nowrap px-3 py-2 border-b border-b-slate-200 w-max", onclick_ "navigatable(this, '#query_params_json', '#req-tabs-container', 't-tab-active')"] "Query"
-          button_ [class_ "a-tab whitespace-nowrap px-3 py-2 border-b border-b-slate-200 w-max", onclick_ "navigatable(this, '#path_params_json', '#req-tabs-container', 't-tab-active')"] "Path Params"
-          button_ [class_ "border-b border-b-slate-200 w-full"] pass
-
-        div_ [class_ "a-tab-content m-4  rounded-xl p-2 border border-slate-200", id_ "req_body_json"]
-          $ jsonValueToHtmlTree req.requestBody
-
-        div_ [class_ "a-tab-content m-4 hidden rounded-xl p-2 border border-slate-200 break-all", id_ "req_headers_json"]
-          $ jsonValueToHtmlTree req.requestHeaders
-
-        div_ [class_ "a-tab-content m-4 hidden rounded-xl p-2 border border-slate-200", id_ "query_params_json"]
-          $ jsonValueToHtmlTree req.queryParams
-
-        div_ [class_ "a-tab-content m-4 hidden rounded-xl p-2 border border-slate-200", id_ "path_params_json"]
-          $ jsonValueToHtmlTree req.pathParams
-
-    -- response details
-    div_ [class_ "mt-8", id_ "res-tabs-container"] do
-      p_ [class_ "text-slate-950 font-medium mb-2"] "Request Details"
-      div_ [class_ "rounded-3xl border border-slate-200", role_ "tablist"] do
-        div_ [class_ "flex w-full text-slate-500"] do
-          button_ [class_ "a-tab px-3 border-b border-b-slate-200 py-2 w-max t-tab-active", onclick_ "navigatable(this, '#res_body_json', '#res-tabs-container', 't-tab-active')"] "Body"
-          button_ [class_ "a-tab px-3 border-b border-b-slate-200 py-2 w-max", role_ "tab", onclick_ "navigatable(this, '#res_headers_json', '#res-tabs-container', 't-tab-active')"] "Headers"
-          button_ [class_ "border-b border-b-slate-200 w-full"] pass
-
-        div_ [class_ "a-tab-content m-4 rounded-xl p-2 border border-slate-200", id_ "res_body_json"]
-          $ jsonValueToHtmlTree req.responseBody
-
-        div_ [class_ "a-tab-content m-4 hidden rounded-xl p-2 border border-slate-200", id_ "res_headers_json"]
-          $ jsonValueToHtmlTree req.responseHeaders
+      div_ [class_ "bg-fillWeak w-max rounded-lg border border-strokeWeak justify-start items-start inline-flex"] $ do
+        div_ [class_ "justify-start items-start flex text-sm"] $ do
+          button_ [onclick_ "navigatable(this, '#raw_content', '#http-content-container', 't-tab-box-active')", class_ "a-tab px-3 py-1 rounded-lg text-textWeak t-tab-box-active"] "Raw Details"
+          button_ [onclick_ "navigatable(this, '#req_content', '#http-content-container', 't-tab-box-active')", class_ "a-tab px-3 py-1 rounded-lg text-textWeak"] "Req Body"
+          button_ [onclick_ "navigatable(this, '#res_content', '#http-content-container', 't-tab-box-active')", class_ "a-tab px-3 py-1 rounded-lg text-textWeak"] "Res Body"
+          button_ [onclick_ "navigatable(this, '#hed_content', '#http-content-container', 't-tab-box-active')", class_ "a-tab px-3 py-1 rounded-lg text-textWeak"] "Headers"
+          button_ [onclick_ "navigatable(this, '#par_content', '#http-content-container', 't-tab-box-active')", class_ "a-tab px-3 py-1 rounded-lg text-textWeak"] "Params"
+      div_ [] do
+        div_ [id_ "raw_content", class_ "a-tab-content"] do
+          jsonValueToHtmlTree json Nothing
+        div_ [id_ "req_content", class_ "hidden a-tab-content"] do
+          jsonValueToHtmlTree req.requestBody Nothing
+        div_ [id_ "res_content", class_ "hidden a-tab-content"] do
+          jsonValueToHtmlTree req.responseBody Nothing
+        div_ [id_ "hed_content", class_ "hidden a-tab-content"] do
+          jsonValueToHtmlTree (AE.object ["request_headers" AE..= req.requestHeaders, "response_headers" AE..= req.responseHeaders]) Nothing
+        div_ [id_ "par_content", class_ "hidden a-tab-content"] do
+          jsonValueToHtmlTree (AE.object ["query_params" AE..= req.queryParams, "path_params" AE..= req.pathParams]) Nothing
 
 
-apiLogItemH :: Projects.ProjectId -> UUID.UUID -> UTCTime -> Maybe Text -> ATAuthCtx (RespHeaders ApiLogItem)
-apiLogItemH pid rdId createdAt sourceM = do
-  let source = fromMaybe "requests" sourceM
-  _ <- Sessions.sessionAndProject pid
-  logItem <- case sourceM of
-    Just "logs" -> do
-      logItem <- Telemetry.logRecordByProjectAndId pid createdAt rdId
-      pure $ AE.toJSON <$> logItem
-    Just "spans" -> do
-      spanItem <- Telemetry.spanRecordByProjectAndId pid createdAt rdId
-      pure $ selectiveSpanToJson <$> spanItem
-    _ -> do
-      logItemM <- dbtToEff $ RequestDumps.selectRequestDumpByProjectAndId pid createdAt rdId
-      pure $ selectiveReqToJson <$> logItemM
-  addRespHeaders $ case logItem of
-    Just req -> ApiLogItem pid rdId req (requestDumpLogItemUrlPath pid rdId createdAt) source
-    Nothing -> ApiLogItemNotFound $ "Invalid " <> source <> " ID"
-
-
-requestDumpLogItemUrlPath :: Projects.ProjectId -> UUID.UUID -> UTCTime -> Text
-requestDumpLogItemUrlPath pid rdId timestamp = "/p/" <> pid.toText <> "/log_explorer/" <> UUID.toText rdId <> "/" <> fromString (formatShow iso8601Format timestamp)
-
-
-data ApiLogItem
-  = ApiLogItem Projects.ProjectId UUID.UUID AE.Value Text Text
-  | ApiLogItemNotFound Text
-
-
-instance ToHtml ApiLogItem where
-  toHtml (ApiLogItem pid logId req expandItemPath source) = toHtml $ apiLogItemView pid logId req expandItemPath source
-  toHtml (ApiLogItemNotFound message) = div_ [] $ toHtml message
-  toHtmlRaw = toHtml
-
+-- outgoing request details
+-- div_ [class_ "flex w-full flex-col gap-1"] do
+--   p_ [class_ "font-medium text-slate-950 mb-2"] "Outgoing requests"
+--   div_ [class_ "grow rounded-lg border border-slate-200 overflow-y-auto py-2 px-1 h-[150px] whitespace-nowrap  divide-y overflow-x-hidden"] do
+--     let createdAt = toText $ formatTime defaultTimeLocale "%FT%T%6QZ" req.createdAt
+--         escapedQueryPartial = toText $ escapeURIString isUnescapedInURI $ toString $ "parent_id==\"" <> UUID.toText req.id <> "\" AND " <> "created_at>=\"" <> createdAt <> "\""
+--         events_url = "/p/" <> pid.toText <> "/log_explorer?layout=virtualTable&query=" <> escapedQueryPartial
+--     div_ [hxGet_ events_url, hxTrigger_ "intersect once", hxSwap_ "outerHTML"] $ span_ [class_ "loading loading-dots loading-md"] ""
 
 data ApiItemDetailed
-  = LogItemExpanded Projects.ProjectId RequestDumps.RequestDumpLogItem Bool
-  | SpanItemExpanded Projects.ProjectId Telemetry.SpanRecord
+  = SpanItemExpanded Projects.ProjectId Telemetry.OtelLogsAndSpans (Maybe Telemetry.OtelLogsAndSpans)
+  | LogItemExpanded Projects.ProjectId Telemetry.OtelLogsAndSpans
   | ItemDetailedNotFound Text
 
 
 instance ToHtml ApiItemDetailed where
-  toHtml (LogItemExpanded pid log_item is_modal) = toHtml $ expandAPIlogItem' pid log_item is_modal
-  toHtml (SpanItemExpanded pid span_item) = toHtml $ Spans.expandedSpanItem pid span_item Nothing Nothing
+  toHtml (SpanItemExpanded pid spn aptSpan) = toHtml $ Spans.expandedSpanItem pid spn aptSpan Nothing Nothing
+  toHtml (LogItemExpanded pid req) = toHtml $ apiLogItemView pid req
   toHtml (ItemDetailedNotFound message) = div_ [] $ toHtml message
   toHtmlRaw = toHtml
 
 
-apiLogItemView :: Projects.ProjectId -> UUID.UUID -> AE.Value -> Text -> Text -> Html ()
-apiLogItemView pid logId req expandItemPath source = do
-  let trId = case req of
-        AE.Object o -> case KEM.lookup "trace_id" o of
-          Just (AE.String trid) -> Just trid
-          _ -> Nothing
-        _ -> Nothing
-  let logItemPathDetailed = if source == "spans" then "/p/" <> pid.toText <> "/traces/" <> fromMaybe "" trId else expandItemPath <> "/detailed?source=" <> source
-  div_ [class_ "flex items-center gap-2"] do
-    when (source /= "logs")
-      $ label_
-        [ class_ "btn btn-sm bg-base-100"
-        , Lucid.for_ "global-data-drawer"
-        , term
-            "_"
-            [text|on mousedown or click fetch $logItemPathDetailed
-                  then set #global-data-drawer-content.innerHTML to #loader-tmp.innerHTML
-                  then set #global-data-drawer.checked to true
-                  then set #global-data-drawer-content.innerHTML to it
-                  then htmx.process(#global-data-drawer-content) then _hyperscript.processNode(#global-data-drawer-content) then window.evalScriptsFromContent(#global-data-drawer-content)|]
-        ]
-        ("Expand" >> faSprite_ "expand" "regular" "h-3 w-3")
+apiLogItemView :: Projects.ProjectId -> Telemetry.OtelLogsAndSpans -> Html ()
+apiLogItemView pid lg = do
+  div_ [class_ "w-full flex flex-col gap-2 px-2 pb-2 relative"] $ do
+    div_ [class_ "flex justify-between items-center", id_ "copy_share_link"] pass
+    span_ [class_ "htmx-indicator query-indicator absolute loading left-1/2 -translate-x-1/2 loading-dots absoute z-10 top-10", id_ "details_indicator"] ""
+    div_ [class_ "flex flex-col gap-4 bg-gray-50 py-2  px-2"] $ do
+      div_ [class_ "flex justify-between items-center"] do
+        div_ [class_ "flex items-center gap-4"] $ do
+          h3_ [class_ "whitespace-nowrap font-semibold text-textStrong"] "Trace Log"
+        div_ [class_ "flex gap-4 items-center"] $ do
+          dateTime lg.timestamp Nothing
+          div_ [class_ "flex gap-2 items-center"] do
+            button_
+              [ [__|on click add .hidden to #trace_expanded_view 
+            then put '0px' into  #log_details_container.style.width 
+            then put '100%' into #logs_list_container.style.width 
+            then add .hidden to #resizer
+            then remove .bg-fillBrand-strong from <.item-row.bg-fillBrand-strong/>
+            then call updateUrlState('details_width', '', 'delete')
+            then call updateUrlState('target_event', '0px', 'delete')
+            then call updateUrlState('showTrace', '', 'delete')
+            |]
+              ]
+              do
+                faSprite_ "xmark" "regular" "w-3 h-3 text-textBrand"
+    div_ [class_ "flex flex-col gap-4"] do
+      div_ [class_ "flex items-center gap-4"] do
+        let svTxt = maybe "UNSET" (\x -> maybe "UNSET" show x.severity_text) lg.severity
+            cls = getSeverityColor $ svTxt
+        span_ [class_ $ "rounded-lg border cbadge-sm text-sm px-2 py-1 shrink-0 " <> cls] $ toHtml $ T.toUpper svTxt
+        h4_ [class_ "text-slate-800 font-medium"] $ toHtml $ case lg.body of
+          Just (AE.String x) -> x
+          _ -> toStrict $ encodeToLazyText lg.body
 
-    let reqJson = decodeUtf8 $ AE.encode req
-    when (source /= "logs" && source /= "spans")
-      $ button_
-        [ class_ "btn btn-sm bg-base-100"
-        , term "data-reqJson" reqJson
-        , onclick_ "window.buildCurlRequest(event)"
-        ]
-        (span_ [] "Copy as curl" >> faSprite_ "copy" "regular" "h-3 w-3")
+      div_ [class_ "flex gap-2 flex-wrap"] $ do
+        spanBadge (fromMaybe "" $ atMapText "service.name" lg.resource) "Service"
+        spanBadge ("Spand ID: " <> maybe "" (\z -> fromMaybe "" z.span_id) lg.context) "Span ID"
+        spanBadge ("Trace ID: " <> maybe "" (\z -> fromMaybe "" z.trace_id) lg.context) "Trace ID"
 
-    button_
-      [ class_ "btn btn-sm bg-base-100"
-      , onclick_ "window.downloadJson(event)"
-      , term "data-reqJson" reqJson
-      ]
-      (span_ [] "Download" >> faSprite_ "arrow-down-to-line" "regular" "h-3 w-3")
-  jsonValueToHtmlTree req
+      div_ [class_ "flex gap-2 items-center text-textBrand font-medium text-xs"] do
+        whenJust lg.context $ \ctx -> do
+          whenJust ctx.trace_id $ \trId -> do
+            let tracePath = "/p/" <> pid.toText <> "/traces/" <> trId <> "/"
+            button_
+              [ class_ "flex items-end gap-1"
+              , term
+                  "_"
+                  [text|on click remove .hidden from #trace_expanded_view
+                            then call updateUrlState('showTrace', "$trId")
+                            then set #trace_expanded_view.innerHTML to #loader-tmp.innerHTML
+                            then fetch $tracePath
+                            then set #trace_expanded_view.innerHTML to it
+                            then htmx.process(#trace_expanded_view)
+                            then _hyperscript.processNode(#trace_expanded_view) then window.evalScriptsFromContent(#trace_expanded_view)|]
+              ]
+              do
+                "View parent trace"
+                faSprite_ "cross-hair" "regular" "w-4 h-4"
+        let lg_id = UUID.toText lg.id
+        let createdAt = toText $ formatTime defaultTimeLocale "%Y-%m-%dT%H:%M:%S%6QZ" $ lg.timestamp
+        button_
+          [ class_ "flex items-center gap-2"
+          , hxPost_ $ "/p/" <> pid.toText <> "/share/" <> lg_id <> "/" <> createdAt <> "?event_type=log"
+          , hxSwap_ "innerHTML"
+          , hxTarget_ "#copy_share_link"
+          ]
+          do
+            "Generate shareable link"
+            faSprite_ "link-simple" "regular" "w-3 h-3"
+
+      div_ [class_ "w-full mt-4", id_ "log-tabs-container"] do
+        div_ [class_ "flex", [__|on click halt|]] $ do
+          button_ [class_ "a-tab border-b-2 border-b-slate-200 px-4 py-1.5 t-tab-active", onclick_ "navigatable(this, '#att-content', '#log-tabs-container', 't-tab-active')"] "Attributes"
+          button_ [class_ "a-tab border-b-2 border-b-slate-200 px-4 py-1.5 ", onclick_ "navigatable(this, '#meta-content', '#log-tabs-container', 't-tab-active')"] "Process"
+          div_ [class_ "w-full border-b-2 border-b-slate-200"] pass
+
+        div_ [class_ "grid my-4 text-slate-600 font"] $ do
+          div_ [class_ "a-tab-content", id_ "att-content"] $ do
+            jsonValueToHtmlTree (fromMaybe (AE.object []) (fmap AE.Object $ fmap KEM.fromMapText lg.attributes)) Nothing
+          div_ [class_ "hidden a-tab-content", id_ "meta-content"] $ do
+            jsonValueToHtmlTree (fromMaybe (AE.object []) (fmap AE.Object $ fmap KEM.fromMapText lg.resource)) Nothing
+
+
+-- div_ [class_ "px-2 flex flex-col w-full items-center gap-2"] do
+--   span_ [class_ "htmx-indicator query-indicator absolute loading left-1/2 -translate-x-1/2 loading-dots absoute z-10 top-10", id_ "details_indicator"] ""
+--   jsonValueToHtmlTree req
+
+spanBadge :: Text -> Text -> Html ()
+spanBadge val key = do
+  div_
+    [ class_ "flex gap-2 items-center text-textStrong bg-fillWeak border border-strokeWeak text-xs rounded-lg whitespace-nowrap px-2 py-1"
+    , term "data-tippy-content" key
+    ]
+    $ do
+      span_ [] $ toHtml val
 
 
 -- Function to selectively convert RequestDumpLogItem to JSON
@@ -294,27 +313,3 @@ selectiveReqToJson req =
       , ["tags" AE..= req.tags]
       , ["url_path" AE..= req.urlPath]
       ]
-
-
-selectiveSpanToJson :: Telemetry.SpanRecord -> AE.Value
-selectiveSpanToJson sp =
-  AE.object
-    $ concat @[]
-      [ ["timestamp" AE..= sp.timestamp]
-      , ["span_id" AE..= sp.spanId]
-      , ["span_name" AE..= sp.spanName]
-      , ["kind" AE..= sp.kind]
-      , ["links" AE..= sp.links]
-      , ["trace_id" AE..= sp.traceId]
-      , ["start_time" AE..= sp.startTime]
-      , ["status" AE..= sp.status]
-      , ["status_message" AE..= sp.statusMessage]
-      , ["parent_span_id" AE..= sp.parentSpanId]
-      , ["trace_state" AE..= sp.traceState]
-      , ["intrumentation_scope" AE..= sp.instrumentationScope]
-      , ["attributes" AE..= sp.attributes]
-      , ["resource" AE..= sp.resource]
-      ]
-
-
--- | jsonValueToHtmlTree takes an aeson json object and renders it as a collapsible html tree, with hyperscript for interactivity.

@@ -1,4 +1,4 @@
-module Pkg.Parser.Core (Parser, lexeme, symbol, sc) where
+module Pkg.Parser.Core (Parser, lexeme, symbol, sc, ToQueryText (..)) where
 
 import Relude
 import Text.Megaparsec (Parsec)
@@ -7,6 +7,10 @@ import Text.Megaparsec.Char.Lexer qualified as L
 
 
 type Parser = Parsec Void Text
+
+
+class ToQueryText a where
+  toQText :: a -> Text
 
 
 sc :: Parser ()

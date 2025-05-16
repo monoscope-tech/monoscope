@@ -6,14 +6,19 @@ module Utils (
   jsonValueToHtmlTree,
   userIsProjectMember,
   GetOrRedirect,
+  freeTierDailyMaxEvents,
+  JSONHttpApiData (..),
   redirect,
   lookupVecByKey,
+  parseTime,
   DBField (..),
   faSprite_,
   lookupVecInt,
   lookupVecText,
   lookupVecIntByKey,
+  lookupValueText,
   formatUTC,
+  insertIfNotExist,
   parseUTC,
   lookupVecTextByKey,
   getStatusBorderColor,
@@ -27,9 +32,9 @@ module Utils (
   getStatusColor,
   unwrapJsonPrimValue,
   listToIndexHashMap,
-  lemonSqueezyUrls,
-  lemonSqueezyUrlsAnnual,
+  b64ToJson,
   lookupMapText,
+  getOtelLangVersion,
   lookupMapInt,
   freeTierLimitExceededBanner,
   isDemoAndNotSudo,
@@ -43,18 +48,26 @@ module Utils (
   toXXHash,
   getServiceColors,
   getGrpcStatusColor,
+  nestedJsonFromDotNotation,
 )
 where
 
 import Data.Aeson qualified as AE
-import Data.Aeson.KeyMap qualified as AEK
+import Data.Aeson.Extra.Merge (lodashMerge)
+import Data.Aeson.Key qualified as AEK
+import Data.Aeson.KeyMap qualified as AEKM
+import Data.ByteString qualified as BS
+import Data.ByteString.Base64 qualified as B64
+import Data.ByteString.Lazy qualified as LBS
 import Data.Char (isDigit)
 import Data.Digest.XXHash (xxHash)
+import Data.Foldable (Foldable (foldl))
 import Data.HashMap.Strict qualified as HM
 import Data.List qualified as L
 import Data.Scientific (toBoundedInteger)
 import Data.Text qualified as T
-import Data.Time (NominalDiffTime, ZonedTime, defaultTimeLocale, parseTimeM)
+import Data.Text.Encoding qualified as TE
+import Data.Time (NominalDiffTime, ZonedTime, addUTCTime, defaultTimeLocale, parseTimeM, secondsToNominalDiffTime)
 import Data.Time.Clock (UTCTime)
 import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
 import Data.Time.Format (formatTime)
@@ -68,6 +81,7 @@ import Lucid.Svg qualified as Svg
 import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Session
+import NeatInterpolation (text)
 import Network.URI (escapeURIString, isUnescapedInURI)
 import Numeric (showHex)
 import Pkg.THUtils (hashFile)
@@ -194,13 +208,13 @@ getGrpcStatusColor status
 
 
 getSeverityColor :: Text -> Text
-getSeverityColor "debug" = "text-gray-500 bg-gray-100"
-getSeverityColor "info" = "text-blue-500 bg-blue-100"
-getSeverityColor "warning" = "text-yellow-700 bg-yellow-100"
-getSeverityColor "error" = "text-red-500 bg-red-100"
-getSeverityColor "critical" = "text-red-700 bg-red-200 font-bold"
-getSeverityColor "notice" = "text-green-500 bg-green-100"
-getSeverityColor "alert" = "text-orange-600 bg-orange-100 font-bold"
+getSeverityColor "debug" = "text-gray-500 border-gray-500 bg-gray-100"
+getSeverityColor "info" = "text-brand border-strokeBrand-strong bg-blue-100"
+getSeverityColor "warning" = "text-yellow-700 border-yellow-700 bg-yellow-100"
+getSeverityColor "error" = "text-red-500 border-red-700 bg-red-100"
+getSeverityColor "critical" = "text-red-700 border-red-700 bg-red-200 font-bold"
+getSeverityColor "notice" = "text-green-500 border-green-500 bg-green-100"
+getSeverityColor "alert" = "text-orange-600 border-orange-600 bg-orange-100 font-bold"
 getSeverityColor _ = "text-black bg-gray-50"
 
 
@@ -222,29 +236,90 @@ replaceNumbers input = T.replace ".[*]" "[*]" $ T.intercalate "." (map replaceDi
       | otherwise = one ch
 
 
-jsonValueToHtmlTree :: AE.Value -> Html ()
-jsonValueToHtmlTree val = jsonValueToHtmlTree' ("", "", val)
+b64ToJson :: Text -> AE.Value
+b64ToJson b64Text =
+  fromRight (AE.object []) $ AE.eitherDecodeStrict $ fromRight "{}" $ B64.decodeBase64Untyped $ encodeUtf8 b64Text
+
+
+jsonValueToHtmlTree :: AE.Value -> Maybe Text -> Html ()
+jsonValueToHtmlTree val pathM = do
+  div_ [class_ "p-2 rounded-lg bg-fillWeaker border w-full overflow-x-auto json-tree-container"] do
+    div_ [class_ "w-full flex items-center gap-4 text-xs mb-2"] do
+      button_
+        [ class_ "flex hidden items-center gap-1 cursor-pointer"
+        , [__|on click
+               set container to the closest .json-tree-container to the parentElement of me
+               set items to container.querySelectorAll(".log-item-with-children")
+               remove .collapsed from items
+               add .hidden to me
+               remove .hidden from the next <button/>
+             end
+            |]
+        ]
+        do
+          span_ [class_ "underline"] "Expand all"
+          faSprite_ "expand" "regular" "w-2 h-2"
+      button_
+        [ class_ "flex items-center gap-1 cursor-pointer"
+        , [__| on click
+               set container to the closest .json-tree-container to the parentElement of me
+               set items to container.querySelectorAll(".log-item-with-children")
+               add .collapsed to items
+               add .hidden to me
+               remove .hidden from the previous <button/>
+             end
+           |]
+        ]
+        do
+          span_ [class_ "underline"] "Collapse all"
+          faSprite_ "expand" "regular" "w-2 h-2"
+
+      let json = decodeUtf8 $ AE.encode $ AE.toJSON val
+      button_
+        [ class_ "flex items-center gap-1 cursor-pointer"
+        , term
+            "_"
+            [text|  on click
+                 if 'clipboard' in window.navigator then
+                   call navigator.clipboard.writeText(my @data-reqjson)
+                   send successToast(value:['Json copied to clipboard']) to <body/>
+                 end|]
+        , term "data-reqjson" $ json
+        ]
+        do
+          span_ [class_ "underline"] "Copy json"
+          faSprite_ "copy" "regular" "w-2 h-2"
+
+      button_
+        [ class_ "flex items-center gap-1 cursor-pointer"
+        , onclick_ "window.downloadJson(event)"
+        , term "data-reqjson" $ json
+        ]
+        do
+          span_ [class_ "underline"] "Download json"
+          faSprite_ "download-f" "regular" "w-2 h-2"
+    jsonValueToHtmlTree' (fromMaybe "" pathM, "", val)
   where
     jsonValueToHtmlTree' :: (Text, Text, AE.Value) -> Html ()
-    jsonValueToHtmlTree' (path, key, AE.Object v) = renderParentType "{" "}" key (length v) (AEK.toHashMapText v & HM.toList & sort & mapM_ (\(kk, vv) -> jsonValueToHtmlTree' (path <> "." <> key, kk, vv)))
+    jsonValueToHtmlTree' (path, key, AE.Object v) = renderParentType "{" "}" key (length v) (AEKM.toHashMapText v & HM.toList & sort & mapM_ (\(kk, vv) -> jsonValueToHtmlTree' (path <> "." <> key, kk, vv)))
     jsonValueToHtmlTree' (path, key, AE.Array v) = renderParentType "[" "]" key (length v) (V.iforM_ v \i item -> jsonValueToHtmlTree' (path <> "." <> key, toText $ show i, item))
     jsonValueToHtmlTree' (path, key, value) = do
       let fullFieldPath = if T.isSuffixOf "[*]" path then path else path <> "." <> key
       let fullFieldPath' = fromMaybe fullFieldPath $ T.stripPrefix ".." fullFieldPath
       div_
         [ class_ "relative log-item-field-parent"
-        , term "data-field-path" $ replaceNumbers fullFieldPath'
+        , term "data-field-path" $ replaceNumbers $ if (isJust pathM) then T.replace ".." "." fullFieldPath' else fullFieldPath'
         , term "data-field-value" $ unwrapJsonPrimValue False value
         ]
         $ a_
-          [class_ "block hover:bg-blue-50 cursor-pointer pl-6 relative log-item-field-anchor ", [__|install LogItemMenuable|]]
+          [class_ "block hover:bg-fillBrandWeak cursor-pointer pl-6 relative log-item-field-anchor ", [__|install LogItemMenuable|]]
           do
             span_ $ toHtml key
             span_ [class_ "text-blue-800"] ":"
             span_ [class_ "text-blue-800 ml-2.5 log-item-field-value", term "data-field-path" fullFieldPath'] $ toHtml $ unwrapJsonPrimValue False value
 
     renderParentType :: Text -> Text -> Text -> Int -> Html () -> Html ()
-    renderParentType opening closing key count child = div_ [class_ (if key == "" then "" else "collapsed")] do
+    renderParentType opening closing key count child = div_ [class_ (if key == "" then "log-item-with-children" else "log-item-with-children")] do
       a_
         [ class_ "inline-block items-center cursor-pointer"
         , onclick_ "this.parentNode.classList.toggle('collapsed')"
@@ -324,6 +399,13 @@ lookupVecByKey :: V.Vector AE.Value -> HM.HashMap Text Int -> Text -> Maybe AE.V
 lookupVecByKey vec colIdxMap key = HM.lookup key colIdxMap >>= (vec V.!?)
 
 
+lookupValueText :: AE.Value -> Text -> Maybe Text
+lookupValueText (AE.Object obj) key = case AEKM.lookup (AEK.fromText key) obj of
+  Just (AE.String textValue) -> Just textValue -- Extract text from Value if it's a String
+  _ -> Nothing
+lookupValueText _ _ = Nothing
+
+
 listToIndexHashMap :: Hashable a => [a] -> HM.HashMap a Int
 listToIndexHashMap list = HM.fromList [(x, i) | (x, i) <- zip list [0 ..]]
 
@@ -340,6 +422,18 @@ getDurationNSMS duration
   | duration >= 1000000 = printf "%.1f ms" (fromIntegral @_ @Double duration / 1000000)
   | duration >= 1000 = printf "%.1f µs" (fromIntegral @_ @Double duration / 1000)
   | otherwise = printf "%.1f ns" (fromIntegral @_ @Double duration)
+
+
+getOtelLangVersion :: Text -> Maybe Text
+getOtelLangVersion "Golang" = Just "go"
+getOtelLangVersion "Python" = Just "python"
+getOtelLangVersion "Java" = Just "java"
+getOtelLangVersion "Ruby" = Just "ruby"
+getOtelLangVersion "Rust" = Just "rust"
+getOtelLangVersion "Csharp" = Just "csharp"
+getOtelLangVersion "PHP" = Just "php"
+getOtelLangVersion "Javascript" = Just "nodejs"
+getOtelLangVersion _ = Nothing
 
 
 displayTimestamp :: Text -> Text
@@ -362,8 +456,8 @@ parseUTC utcTime = iso8601ParseM (toString utcTime)
 freeTierLimitExceededBanner :: Text -> Html ()
 freeTierLimitExceededBanner pid =
   div_ [class_ "flex w-full text-center items-center px-4 gap-4 py-2 bg-red-600 text-white rounded-lg justify-center"] do
-    p_ [] "You have exceeded the free tier requests limit for this month, new requests will not be processed."
-    a_ [class_ "font-semibold text-red-700 bg-white px-2 py-1 rounded-lg", href_ $ "/p/" <> pid <> "/settings"] "upgrade now"
+    p_ [] "You’ve exceeded your free tier event limit for the past 24 hours. New requests will not be processed until the limit resets."
+    a_ [class_ "font-semibold text-red-700 bg-white px-2 py-1 rounded-lg", href_ $ "/p/" <> pid <> "/manage_billing"] "upgrade now"
 
 
 serviceColors :: V.Vector Text
@@ -412,6 +506,26 @@ leftPad :: Int -> Text -> Text
 leftPad len txt = T.justifyRight len '0' (T.take len txt)
 
 
+-- | Turn a dot‑key + value into a singleton nested Object
+build :: [Text] -> AE.Value -> AEKM.KeyMap AE.Value
+build [] _ = AEKM.empty
+build [x] v = AEKM.singleton (AEK.fromText x) v
+build (x : xs) v = AEKM.singleton (AEK.fromText x) (AE.Object (build xs v))
+
+
+-- | Succinct “dot‑notation → nested JSON”
+nestedJsonFromDotNotation :: [(Text, AE.Value)] -> AE.Value
+nestedJsonFromDotNotation pairs =
+  -- start from empty object, insert each small object with a lodash‑style merge
+  foldl'
+    ( \acc (k, v) ->
+        let nestedObj = AE.Object $ build (T.splitOn "." k) v
+         in lodashMerge acc nestedObj
+    )
+    (AE.object [])
+    pairs
+
+
 convertToDHMS :: NominalDiffTime -> (Int, Int, Int, Int)
 convertToDHMS diffTime =
   let totalSeconds = floor diffTime :: Int
@@ -421,33 +535,60 @@ convertToDHMS diffTime =
    in (7 - days, hours, minutes, seconds)
 
 
--- "https://apitoolkit.lemonsqueezy.com/buy/b982b83b-66cc-4169-b5cb-f7d1d8a96a18?embed=1&media=0&logo=0&desc=0&checkout[custom][project_id]="
-
-lemonSqueezyUrls :: V.Vector Text
-lemonSqueezyUrls =
-  V.fromList
-    [ "https://apitoolkit.lemonsqueezy.com/buy/7c2ec567-2b9f-4bab-bb63-c3d5ab45e65b?embed=1&media=0&logo=0&desc=0" -- 400k
-    , "https://apitoolkit.lemonsqueezy.com/buy/9695dbc9-6e24-4054-879f-1f360eda9293?embed=1&media=0&logo=0&desc=0" -- 550K
-    , "https://apitoolkit.lemonsqueezy.com/buy/096bb970-e6a2-4cd7-a6ee-5f6ce6ecd39e?embed=1&media=0&logo=0&desc=0" -- 1M
-    , "https://apitoolkit.lemonsqueezy.com/buy/e1b06cdb-5e18-44a4-9ec9-ece569f73137?embed=1&media=0&logo=0&desc=0" -- 2.5M
-    , "https://apitoolkit.lemonsqueezy.com/buy/952fc4b0-2c5e-4789-b186-8580998dabd5?embed=1&media=0&logo=0&desc=0" -- 5M
-    , "https://apitoolkit.lemonsqueezy.com/buy/1ceb7455-fa10-4c5c-b34b-00fa6f1b1729?embed=1&media=0&logo=0&desc=0" -- 7.5M
-    , "https://apitoolkit.lemonsqueezy.com/buy/d0095f15-2363-4045-8c99-6603e8038c9e?embed=1&media=0&logo=0&desc=0" -- 10M
-    ]
-
-
-lemonSqueezyUrlsAnnual :: V.Vector Text
-lemonSqueezyUrlsAnnual =
-  V.fromList
-    [ "https://apitoolkit.lemonsqueezy.com/buy/311bf5e7-f17a-44e6-b209-c42b84306f47?embed=1&media=0&logo=0&desc=0" -- 2.4M
-    , "https://apitoolkit.lemonsqueezy.com/buy/0900a416-05b1-4ebe-a7bb-8b7d4c063c7f?embed=1&media=0&logo=0&desc=0" -- 6.6M
-    , "https://apitoolkit.lemonsqueezy.com/buy/53fc9818-8f8a-4e60-a390-c10609e0a535?embed=1&media=0&logo=0&desc=0" -- 12M
-    , "https://apitoolkit.lemonsqueezy.com/buy/196ba4de-af2e-4e17-ada6-6889e62011d0?embed=1&media=0&logo=0&desc=0" -- 30M
-    , "https://apitoolkit.lemonsqueezy.com/buy/1821b082-28c2-4d2d-9a29-2cae822943b6?embed=1&media=0&logo=0&desc=0" -- 60M
-    , "https://apitoolkit.lemonsqueezy.com/buy/1821b082-28c2-4d2d-9a29-2cae822943b6?embed=1&media=0&logo=0&desc=0" -- 60M
-    , "https://apitoolkit.lemonsqueezy.com/buy/1821b082-28c2-4d2d-9a29-2cae822943b6?embed=1&media=0&logo=0&desc=0" -- 60M
-    ]
-
-
 isDemoAndNotSudo :: Projects.ProjectId -> Bool -> Bool
 isDemoAndNotSudo pid isSudo = pid.toText == "00000000-0000-0000-0000-000000000000" && not isSudo
+
+
+parseTime :: Maybe Text -> Maybe Text -> Maybe Text -> UTCTime -> (Maybe UTCTime, Maybe UTCTime, Maybe Text)
+parseTime fromM toM sinceM now = case sinceM of
+  Just "1H" -> (Just $ addUTCTime (negate $ secondsToNominalDiffTime 3600) now, Just now, Just "Last Hour")
+  Just "24H" -> (Just $ addUTCTime (negate $ secondsToNominalDiffTime $ 3600 * 24) now, Just now, Just "Last 24 Hours")
+  Just "7D" -> (Just $ addUTCTime (negate $ secondsToNominalDiffTime $ 3600 * 24 * 7) now, Just now, Just "Last 7 Days")
+  Just "14D" -> (Just $ addUTCTime (negate $ secondsToNominalDiffTime $ 3600 * 24 * 14) now, Just now, Just "Last 14 Days")
+  _ -> do
+    let f = (iso8601ParseM (toString $ fromMaybe "" fromM) :: Maybe UTCTime)
+        t = (iso8601ParseM (toString $ fromMaybe "" toM) :: Maybe UTCTime)
+        start = toText . formatTime defaultTimeLocale "%F %T" <$> f
+        end = toText . formatTime defaultTimeLocale "%F %T" <$> t
+        range = case (start, end) of
+          (Just s, Just e) -> Just (s <> "-" <> e)
+          _ -> Nothing
+     in (f, t, range)
+
+
+insertIfNotExist :: Eq a => a -> V.Vector a -> V.Vector a
+insertIfNotExist x vec
+  | x `V.elem` vec = vec
+  | otherwise = V.snoc vec x
+
+
+-- A newtype wrapper that uses the FromJSON instance to implement FromHttpApiData,
+-- without requiring quotes for string values in URLs.
+newtype JSONHttpApiData a = JSONHttpApiData a
+
+
+instance AE.FromJSON a => FromHttpApiData (JSONHttpApiData a) where
+  parseUrlPiece t =
+    -- Try to parse assuming it's already a valid JSON string
+    case AE.eitherDecodeStrict' (TE.encodeUtf8 t) of
+      Right a -> Right (JSONHttpApiData a)
+      -- If parsing fails, try wrapping in quotes and parsing as a string
+      Left _ ->
+        case AE.eitherDecodeStrict' (TE.encodeUtf8 $ "\"" <> t <> "\"") of
+          Right a -> Right (JSONHttpApiData a)
+          Left err -> Left (fromString err)
+
+
+instance AE.ToJSON a => ToHttpApiData (JSONHttpApiData a) where
+  toUrlPiece (JSONHttpApiData a) =
+    case LBS.toStrict $ AE.encode a of
+      -- If the encoded value starts and ends with quotes, remove them
+      bs
+        | BS.length bs >= 2 && BS.head bs == 34 && BS.last bs == 34 ->
+            TE.decodeUtf8 $ BS.init $ BS.tail bs
+      -- Otherwise, keep as is
+      bs -> TE.decodeUtf8 bs
+
+
+freeTierDailyMaxEvents :: Integer
+freeTierDailyMaxEvents = 1000

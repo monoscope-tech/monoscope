@@ -1,0 +1,20 @@
+# .editorconfig
+root = true
+
+[*]
+# Set the maximum line length (maps to "printWidth": 160)
+max_line_length = 160
+
+[*.js]
+# Use spaces instead of tabs (maps to "useTabs": false)
+indent_style = space
+# Set the number of spaces per indentation level (maps to "tabWidth": 2)
+indent_size = 2
+# Set line endings to LF
+end_of_line = lf
+# Use UTF-8 encoding
+charset = utf-8
+# Remove any trailing whitespace at the end of lines
+trim_trailing_whitespace = true
+# Ensure a final newline at the end of files
+insert_final_newline = true

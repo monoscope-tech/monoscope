@@ -90,6 +90,8 @@ SELECT manage_updated_at('users.persistent_sessions');
 
 CREATE TYPE notification_channel_enum AS ENUM ('email', 'slack');
 ALTER TYPE notification_channel_enum ADD VALUE 'discord';
+ALTER TYPE notification_channel_enum ADD VALUE 'phone';
+
 
 CREATE TABLE IF NOT EXISTS projects.projects
 (
@@ -114,7 +116,9 @@ CREATE TABLE IF NOT EXISTS projects.projects
 SELECT manage_updated_at('projects.projects');
 ALTER TABLE projects.projects ADD COLUMN IF NOT EXISTS discord_url TEXT DEFAULT NULL;
 ALTER TABLE projects.projects ADD COLUMN IF NOT EXISTS billing_day TIMESTAMP WITH TIME ZONE DEFAULT current_timestamp;
-
+ALTER TABLE projects.projects ADD COLUMN IF NOT EXISTS onboarding_steps_completed TEXT[] DEFAULT ARRAY[]::TEXT[];
+ALTER TABLE projects.projects ADD COLUMN IF NOT EXISTS notify_phone_number TEXT DEFAULT NULL;
+ALTER TABLE projects.projects ADD COLUMN IF NOT EXISTS notify_emails TEXT[] DEFAULT ARRAY[]::TEXT[];
 
 
 -----------------------------------------------------------------------
@@ -315,7 +319,7 @@ CREATE TABLE IF NOT EXISTS apis.anomalies
   updated_at     TIMESTAMP           WITH       TIME        ZONE       NOT               NULL    DEFAULT current_timestamp,
   project_id     uuid                NOT        NULL        REFERENCES projects.projects (id)    ON      DELETE CASCADE,
   acknowleged_at TIMESTAMP           WITH       TIME        ZONE,
-  acknowleged_by UUID                REFERENCES users.users (id),      -- user who acknowleges the anomaly
+  acknowleged_by UUID                REFERENCES users.users (id),
   anomaly_type   apis.anomaly_type   NOT        NULL        DEFAULT    'unknown'::apis.anomaly_type,
   action         apis.anomaly_action NOT        NULL        DEFAULT    'unknown'::apis.anomaly_action,
   target_hash    text,
@@ -324,23 +328,76 @@ CREATE TABLE IF NOT EXISTS apis.anomalies
 SELECT manage_updated_at('apis.anomalies');
 CREATE INDEX IF NOT EXISTS idx_apis_anomalies_project_id ON apis.anomalies(project_id);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_apis_anomalies_project_id_target_hash ON apis.anomalies(project_id, target_hash);
-
+ALTER TABLE apis.anomalies DROP CONSTRAINT IF EXISTS anomalies_acknowleged_by_fkey;
+ALTER TABLE apis.anomalies ADD CONSTRAINT anomalies_acknowleged_by_fkey FOREIGN KEY (acknowleged_by) REFERENCES users.users (id) ON DELETE CASCADE;
 
 CREATE OR REPLACE FUNCTION apis.new_anomaly_proc() RETURNS trigger AS $$
 DECLARE
-	anomaly_type apis.anomaly_type;
-	anomaly_action apis.anomaly_action;
+  anomaly_type apis.anomaly_type;
+  anomaly_action apis.anomaly_action;
+  should_record_anomaly BOOLEAN := true;
+  existing_job_id INT;
+  existing_target_hashes JSONB;
 BEGIN
   IF TG_WHEN <> 'AFTER' THEN
-      RAISE EXCEPTION 'apis.new_anomaly_proc() may only run as an AFTER trigger';
+    RAISE EXCEPTION 'apis.new_anomaly_proc() may only run as an AFTER trigger';
   END IF;
+
   anomaly_type := TG_ARGV[0];
   anomaly_action := TG_ARGV[1];
-  INSERT INTO apis.anomalies (project_id, anomaly_type, action, target_hash) VALUES (NEW.project_id, anomaly_type, anomaly_action, NEW.hash);
-  INSERT INTO background_jobs (run_at, status, payload) VALUES (now() + INTERVAL '5 minutes', 'queued',  jsonb_build_object('tag', 'NewAnomaly', 'contents', json_build_array(NEW.project_id, NEW.created_at, anomaly_type::text, anomaly_action::text, NEW.hash)));
+
+  IF array_length(TG_ARGV, 1) >= 3 AND TG_ARGV[2] = 'skip_anomaly_record' THEN
+    should_record_anomaly := false;
+  END IF;
+
+  IF should_record_anomaly THEN
+    INSERT INTO apis.anomalies (
+      project_id, anomaly_type, action, target_hash
+    ) VALUES (
+      NEW.project_id, anomaly_type, anomaly_action, NEW.hash
+    );
+  END IF;
+
+  -- Look for existing job
+  SELECT id, payload->'targetHashes'
+  INTO existing_job_id, existing_target_hashes
+  FROM background_jobs
+  WHERE payload->>'tag' = 'NewAnomaly'
+    AND payload->>'projectId' = NEW.project_id::TEXT
+    AND payload->>'anomalyType' = anomaly_type::TEXT
+    AND status = 'queued'
+  ORDER BY run_at ASC
+  LIMIT 1;
+
+  IF existing_job_id IS NOT NULL THEN
+    UPDATE background_jobs SET payload = jsonb_build_object(
+      'tag', 'NewAnomaly',
+      'projectId', NEW.project_id,
+      'createdAt', to_jsonb(NEW.created_at),
+      'anomalyType', anomaly_type::TEXT,
+      'anomalyAction', anomaly_action::TEXT,
+      'targetHashes', existing_target_hashes || to_jsonb(NEW.hash)
+    ) WHERE id = existing_job_id;
+  ELSE
+    INSERT INTO background_jobs (run_at, status, payload)
+    VALUES (
+      now() + INTERVAL '5 minutes',
+      'queued',
+      jsonb_build_object(
+        'tag', 'NewAnomaly',
+        'projectId', NEW.project_id,
+        'createdAt', to_jsonb(NEW.created_at),
+        'anomalyType', anomaly_type::TEXT,
+        'anomalyAction', anomaly_action::TEXT,
+        'targetHashes', jsonb_build_array(NEW.hash)
+      )
+    );
+  END IF;
+
   RETURN NULL;
 END;
 $$ LANGUAGE plpgsql;
+
 
 CREATE OR REPLACE TRIGGER fields_created_anomaly AFTER INSERT ON apis.fields FOR EACH ROW EXECUTE PROCEDURE apis.new_anomaly_proc('field', 'created');
 CREATE OR REPLACE TRIGGER format_created_anomaly AFTER INSERT ON apis.formats FOR EACH ROW EXECUTE PROCEDURE apis.new_anomaly_proc('format', 'created');
@@ -648,6 +705,16 @@ CREATE TABLE IF NOT EXISTS apis.share_requests
 CREATE INDEX IF NOT EXISTS idx_apis_share_requests_id ON apis.share_requests(id);
 CREATE INDEX IF NOT EXISTS idx_share_requests ON apis.share_requests(request_created_at);
 
+CREATE TABLE IF NOT EXISTS apis.share_events
+ (
+    id                 UUID      NOT        NULL           DEFAULT           gen_random_uuid() PRIMARY KEY,
+    project_id         UUID      NOT        NULL           REFERENCES projects.projects (id)              ON      DELETE CASCADE,
+    created_at         TIMESTAMP WITH       TIME           ZONE       NOT               NULL              DEFAULT current_timestamp,
+    event_id           UUID      NOT        NULL,
+    event_type         TEXT      NOT        NULL,
+    event_created_at   TIMESTAMP WITH TIME ZONE NOT NULL,
+);
+CREATE INDEX IF NOT EXISTS idx_apis_share_events_projectid_id ON apis.share_events(project_id)
 
 CREATE TABLE IF NOT EXISTS apis.slack
 (
@@ -830,6 +897,10 @@ SELECT add_job('tests.check_tests_to_trigger', '10min');
 INSERT into projects.projects (id, title) VALUES ('00000000-0000-0000-0000-000000000000', 'Demo Project');
 
 
+INSERT into users.users (id, email, first_name, last_name) VALUES ('00000000-0000-0000-0000-000000000000', 'hello@apitoolkit.io', 'Guest', 'User');
+
+INSERT INTO projects.project_members (project_id, user_id, permission) VALUES ('00000000-0000-0000-0000-000000000000', '00000000-0000-0000-0000-000000000000', 'view');
+
 CREATE TABLE IF NOT EXISTS apis.errors
 (
   id              UUID NOT NULL DEFAULT gen_random_uuid(),
@@ -847,22 +918,7 @@ SELECT manage_updated_at('apis.errors');
 CREATE INDEX IF NOT EXISTS idx_apis_errors_project_id ON apis.errors(project_id);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_apis_errors_project_id_hash ON apis.errors(project_id, hash);
 
-CREATE OR REPLACE FUNCTION apis.new_anomaly_proc_job_only() RETURNS trigger AS $$
-DECLARE
-	anomaly_type apis.anomaly_type;
-	anomaly_action apis.anomaly_action;
-BEGIN
-  IF TG_WHEN <> 'AFTER' THEN
-      RAISE EXCEPTION 'apis.new_anomaly_proc() may only run as an AFTER trigger';
-  END IF;
-  anomaly_type := TG_ARGV[0];
-  anomaly_action := TG_ARGV[1];
-  INSERT INTO background_jobs (run_at, status, payload) VALUES (now(), 'queued',  jsonb_build_object('tag', 'NewAnomaly', 'contents', json_build_array(NEW.project_id, NEW.created_at, anomaly_type::text, anomaly_action::text, NEW.hash)));
-  RETURN NULL;
-END;
-$$ LANGUAGE plpgsql;
-
-CREATE OR REPLACE TRIGGER error_created_anomaly AFTER INSERT ON apis.errors FOR EACH ROW EXECUTE PROCEDURE apis.new_anomaly_proc_job_only('runtime_exception', 'created');
+CREATE OR REPLACE TRIGGER error_created_anomaly AFTER INSERT ON apis.errors FOR EACH ROW EXECUTE PROCEDURE apis.new_anomaly_proc('runtime_exception', 'created', 'skip_anomaly_record');
 
 
 COMMIT;

@@ -19,12 +19,12 @@ where
 
 import BackgroundJobs (jobsRunner)
 import Control.Exception (bracket_, finally, mask, throwIO)
-import Data.Aeson qualified as AE 
+import Data.Aeson qualified as AE
 import Data.Aeson.QQ (aesonQQ)
 import Data.Cache (Cache (..), newCache)
 import Data.Default (Default (..))
-import Data.Effectful.UUID (runStaticUUID)
-import Data.Effectful.Wreq (runHTTPGolden)
+import Data.Effectful.UUID (runStaticUUID, runUUID)
+import Data.Effectful.Wreq (runHTTPGolden, runHTTPWreq)
 import Data.Either.Extra
 import Data.Pool (Pool, defaultPoolConfig, newPool)
 import Data.UUID qualified as UUID
@@ -127,9 +127,12 @@ testSessionHeader pool = do
       & runTime
       & runEff
       & liftIO
-  Auth.sessionByID (Just pSessId) "requestID" False
+  Auth.sessionByID (Just pSessId) "requestID" False Nothing
     & runErrorNoCallStack @Servant.ServerError
     & DB.runDB pool
+    & runTime
+    & runUUID
+    & runHTTPWreq
     & runEff
     & liftIO
     <&> fromRightShow
@@ -164,6 +167,7 @@ withTestResources f = withSetup $ \pool -> LogBulk.withBulkStdOutLogger \logger 
   let atAuthCtx =
         AuthContext
           (def @EnvConfig)
+          pool
           pool
           pool
           projectCache

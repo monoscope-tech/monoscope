@@ -3,23 +3,26 @@ module Pages.LemonSqueezy (webhookPostH, WebhookData, manageBillingGetH, Billing
 import Data.Aeson qualified as AE
 import Data.Default
 import Data.Text qualified as T
-import Data.Time (LocalTime (LocalTime), ZonedTime, getZonedTime, localTimeOfDay, utctDay, zonedTimeToLocalTime, zonedTimeToUTC)
+import Data.Time (getZonedTime, timeOfDayToTime, timeToTimeOfDay)
 import Data.Time.Calendar (fromGregorian, toGregorian)
-import Data.Time.Clock (UTCTime)
-import Data.Time.LocalTime (localTimeToUTC, utc)
+import Data.Time.Clock (UTCTime (..))
 import Data.UUID.V4 qualified as UUIDV4
 import Deriving.Aeson qualified as DAE
+import Deriving.Aeson.Stock qualified as DAE
 import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
-import Effectful.Reader.Static (asks)
+import Effectful.Reader.Static (ask, asks)
+import Effectful.Time qualified as Time
 import Lucid
 import Lucid.Htmx (hxGet_)
+import Lucid.Hyperscript (__)
 import Models.Projects.LemonSqueezy qualified as LemonSqueezy
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
 import NeatInterpolation (text)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (PageCtx))
-import Relude hiding (asks)
-import System.Config (env)
+import Pages.Components (paymentPlanPicker)
+import Relude hiding (ask, asks)
+import System.Config
 import System.Types (ATAuthCtx, ATBaseCtx, RespHeaders, addRespHeaders)
 import Text.Printf (printf)
 import Utils (faSprite_)
@@ -30,20 +33,20 @@ data FirstSubItem = FirstSubItem
   , subscriptionId :: Int
   }
   deriving stock (Show, Generic)
-  deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] FirstSubItem
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake FirstSubItem
 
 
 newtype CustomData = CustomData
   { projectId :: Maybe Text
   }
   deriving stock (Show, Generic)
-  deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] CustomData
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake CustomData
 
 
 data MetaData = MetaData
   {customData :: Maybe CustomData, eventName :: Text}
   deriving stock (Show, Generic)
-  deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] MetaData
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake MetaData
 
 
 data Attributes = Attributes
@@ -53,7 +56,7 @@ data Attributes = Attributes
   , userEmail :: Text
   }
   deriving stock (Show, Generic)
-  deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] Attributes
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake Attributes
 
 
 data DataVals = DataVals
@@ -61,7 +64,7 @@ data DataVals = DataVals
   , attributes :: Attributes
   }
   deriving stock (Show, Generic)
-  deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] DataVals
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake DataVals
 
 
 data WebhookData = WebhookData
@@ -116,11 +119,11 @@ webhookPostH secretHeaderM dat = do
     _ -> pure ""
 
 
-newtype BillingGet = BillingGet (PageCtx (Text, Int64, Text, Text))
+newtype BillingGet = BillingGet (PageCtx (Projects.ProjectId, Int64, Text, Text, Text, Text, Text))
 
 
 instance ToHtml BillingGet where
-  toHtml (BillingGet (PageCtx bwconf (pidText, totalReqs, amount, last_reported))) = toHtml $ PageCtx bwconf $ billingPage pidText totalReqs amount last_reported
+  toHtml (BillingGet (PageCtx bwconf (pid, totalReqs, amount, last_reported, lemonUrl, critical, paymentPlan))) = toHtml $ PageCtx bwconf $ billingPage pid totalReqs amount last_reported lemonUrl critical paymentPlan
   toHtmlRaw = toHtml
 
 
@@ -128,55 +131,92 @@ manageBillingGetH :: Projects.ProjectId -> Maybe Text -> ATAuthCtx (RespHeaders 
 manageBillingGetH pid from = do
   (sess, project) <- Sessions.sessionAndProject pid
   let dat = fromMaybe project.createdAt project.billingDay
-  currentTime <- liftIO getZonedTime
+  appCtx <- ask @AuthContext
+  let envCfg = appCtx.config
+  currentTime <- Time.currentTime
   let cycleStart = calculateCycleStartDate dat currentTime
   totalRequests <- dbtToEff $ LemonSqueezy.getTotalUsage pid cycleStart
   let estimatedAmount = show $ if totalRequests == 0 then "0.00" else printf "%.2f" (fromIntegral totalRequests / 20_000)
   let last_reported = show project.usageLastReported
   let bwconf =
         (def :: BWConfig)
-          { sessM = Just sess.persistentSession
+          { sessM = Just sess
           , currProject = Just project
-          , pageTitle = "Manage Billing"
+          , pageTitle = "Manage billing"
+          , isSettingsPage = True
           }
-  addRespHeaders $ BillingGet $ PageCtx bwconf (pid.toText, totalRequests, estimatedAmount, last_reported)
+  let lemonUrl = envCfg.lemonSqueezyUrl <> "&checkout[custom][project_id]=" <> pid.toText
+      critical = envCfg.lemonSqueezyCriticalUrl <> "&checkout[custom][project_id]=" <> pid.toText
+  addRespHeaders $ BillingGet $ PageCtx bwconf (pid, totalRequests, estimatedAmount, last_reported, lemonUrl, critical, project.paymentPlan)
 
 
-billingPage :: Text -> Int64 -> Text -> Text -> Html ()
-billingPage pidTxt reqs amount last_reported = div_ [class_ "w-full pt-40"] do
-  div_ [class_ "border w-[550px] rounded-xl shadow-sm mx-auto p-10"] do
+billingPage :: Projects.ProjectId -> Int64 -> Text -> Text -> Text -> Text -> Text -> Html ()
+billingPage pid reqs amount last_reported lemonUrl critical paymentPlan = div_ [class_ "w-full pt-12"] do
+  let pidTxt = pid.toText
+  div_ [class_ "w-[606px] mx-auto"] do
     div_ [class_ "flex flex-col gap-1"] do
-      h3_ [class_ "font-bold text-3xl"] "Usage & Billing"
-      p_ [class_ "text-gray-600"] "Track your usage and estimated costs"
+      h2_ [class_ "text-textStrong mb-3 text-xl font-semibold"] "Manage billing"
+      p_ [class_ "text-textWeak text-sm leading-tight"] "Track your usage and estimated costs"
     div_ [class_ "flex gap-6 justify-between mt-8"] do
       div_ [class_ "flex flex-col gap-2"] $ do
         div_ [class_ "text-4xl font-bold"] $ toHtml $ formatNumberWithCommas reqs
         div_ [class_ " text-gray-600"] "Total Requests Made"
         div_ [class_ " text-gray-600"] "*Calculation may not be up-to-date"
       div_ [class_ "flex flex-col gap-2"] $ do
-        div_ [class_ "text-4xl font-bold"] $ toHtml $ "$" <> T.replace "\"" "" amount
+        div_ [class_ "text-4xl font-bold"] $ toHtml $ "$" <> if paymentPlan == "Free" then "0" else T.replace "\"" "" amount
         div_ [class_ " text-gray-600"] "Estimated Cost"
         div_ [class_ " text-gray-600"] "*Based on current usage"
     div_ [class_ "mt-8 flex flex-col gap-4"] do
       div_ [class_ "flex items-center gap-2  text-gray-600"] $ do
         faSprite_ "regular-calendar-days-clock" "regular" "h-4 w-4"
         span_ [data_ "id" "18"] $ toHtml $ "Latest data: " <> T.take 19 last_reported
-      a_ [class_ "flex items-center gap-2 font-bold cursor-pointer", hxGet_ [text| /p/$pidTxt/manage_subscription |]] $ do
-        faSprite_ "link-simple" "regular" "h-4 w-4"
-        span_ [data_ "id" "18"] "View on LemonSqueezy"
+      unless (paymentPlan == "Free") do
+        a_ [class_ "flex items-center gap-2 font-bold cursor-pointer", hxGet_ [text| /p/$pidTxt/manage_subscription |]] $ do
+          faSprite_ "link-simple" "regular" "h-4 w-4"
+          span_ [data_ "id" "18"] "View on LemonSqueezy"
+
+    div_ [class_ "border-t mt-8 pt-8"] do
+      div_ [class_ "self-stretch justify-start text-textStrong text-base font-semibold font-['Inter']"] "Upgrade plan"
+      p_ [class_ "text-textWeak text-sm max-w-[513px] mt-3"] "This is APItoolkit pricing, click on compare feature below to select the option that best suit your project."
+
+    div_ [class_ "border border-strokeWeak rounded-2xl h-32 flex items-center px-6 py-8 overflow-hidden mt-8 relative"] do
+      div_ [class_ "w-full h-36 rotate-y-5 rotate-z-15 right-[-40px] top-[-95px] z-0 absolute bg-gradient-to-b from-slate-500/10 to-slate-500/0"] pass
+      div_ [class_ "flex items-center justify-between w-full"] do
+        div_ [class_ "flex flex-col gap-1"] do
+          span_ [class_ "text-textStrong font-semibold"] $ toHtml paymentPlan
+          span_ [class_ "rounded-2xl text-textWeak bg-fillWeaker border border-strokeWeak py-[2px] leading-tight text-center text-xs px-2 w-max"] "Current plan"
+        div_ [class_ "flex items-center gap-1 mt-4"] do
+          div_ [class_ "flex items-end"] do
+            span_ [class_ "text-textStrong text-xl"] "$"
+            span_ [class_ "text-4xl text-textStrong"] $ if paymentPlan == "Free" then "0" else if paymentPlan == "Critical Systems Plan" then "199" else "34"
+          div_ [class_ "flex flex-col text-text-Weak text-sm"] do
+            span_ [class_ ""] "Starts at"
+            span_ [class_ ""] "/per month"
+        label_ [class_ "btn btn-secondary bg-white cursor pointer z-10", Lucid.for_ "pricing-modal", [__|on click set #pricing-modal.check to true|]] "Change plan"
+
+        input_ [type_ "checkbox", id_ "pricing-modal", class_ "modal-toggle"]
+        div_ [class_ "modal p-8", role_ "dialog", [__|on closeModal from body set #pricing-modal.checked to false |]] do
+          div_ [class_ "modal-box relative flex flex-col gap-5 w-[1250px] py-16 px-32", style_ "max-width:1300px"] $ do
+            button_ [class_ "absolute top-8 right-8 cursor-pointer", [__| on click set #pricing-modal.checked to false |]] do
+              faSprite_ "circle-xmark" "regular" "w-8 h-8"
+            div_ [class_ "text-center text-sm text-textWeak w-full mx-auto max-w-96"] do
+              span_ [class_ " text-textStrong text-2xl font-semibold"] "What’s Included?"
+              p_ [class_ "mt-2 mb-4"] "See and compare what you get in each plan."
+              p_ [] "Please adjust the bar below to see difference in price as your events increase"
+            paymentPlanPicker pid lemonUrl critical paymentPlan
+          label_ [class_ "modal-backdrop", Lucid.for_ "pricing-modal"] "Close"
 
 
-calculateCycleStartDate :: ZonedTime -> ZonedTime -> UTCTime
-calculateCycleStartDate start currentZonedTime =
-  let (_, _, startDay) = toGregorian (utctDay (zonedTimeToUTC start))
-      (currentYear, currentMonth, currentDay) = toGregorian (utctDay (zonedTimeToUTC currentZonedTime))
-      timeOfDay = localTimeOfDay $ zonedTimeToLocalTime start
-      cycleStartDate
+calculateCycleStartDate :: UTCTime -> UTCTime -> UTCTime
+calculateCycleStartDate start current =
+  let (_startYear, _startMonth, startDay) = toGregorian $ utctDay start
+      (currentYear, currentMonth, currentDay) = toGregorian $ utctDay current
+      timeOfDay = timeToTimeOfDay $ utctDayTime start
+      cycleStartDay
         | currentDay > startDay = fromGregorian currentYear currentMonth startDay
-        | otherwise = if currentMonth == 1 then fromGregorian (currentYear - 1) 12 startDay else fromGregorian currentYear (currentMonth - 1) startDay
-      locT = LocalTime cycleStartDate timeOfDay
-      cycleStartTime = localTimeToUTC utc locT
-   in cycleStartTime
+        | currentMonth == 1 = fromGregorian (currentYear - 1) 12 startDay
+        | otherwise = fromGregorian currentYear (currentMonth - 1) startDay
+   in UTCTime cycleStartDay (timeOfDayToTime timeOfDay)
 
 
 formatNumberWithCommas :: Int64 -> String

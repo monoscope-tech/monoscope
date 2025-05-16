@@ -50,10 +50,6 @@ instance AE.ToJSON (CI.CI Text) where
   toJSON = AE.toJSON . CI.original
 
 
-instance Default Bool where
-  def = False
-
-
 newtype UserId = UserId {getUserId :: UUID.UUID}
   deriving stock (Generic, Show, Eq)
   deriving

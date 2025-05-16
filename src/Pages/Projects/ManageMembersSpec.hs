@@ -26,9 +26,12 @@ spec = aroundAll withTestResources do
               , permissions = [ProjectMembers.PAdmin]
               }
       pg <-
-        toServantResponse trATCtx trSessAndHeader trLogger $ ManageMembers.manageMembersPostH testPid member
+        toServantResponse trATCtx trSessAndHeader trLogger $ ManageMembers.manageMembersPostH testPid Nothing member
       -- Check if the response contains the newly added member
-      "example@gmail.com" `shouldSatisfy` (`elem` (pg.unwrapPost & V.toList & map (.email)))
+      case pg of
+        ManageMembers.ManageMembersPost p -> do
+          "example@gmail.com" `shouldSatisfy` (`elem` (p & V.toList & map (.email)))
+        _ -> fail "Expected ManageMembersPost response"
 
     it "Update member permissions" \TestResources{..} -> do
       let member =
@@ -37,7 +40,7 @@ spec = aroundAll withTestResources do
               , permissions = [ProjectMembers.PView]
               }
       pg <-
-        toServantResponse trATCtx trSessAndHeader trLogger $ ManageMembers.manageMembersPostH testPid member
+        toServantResponse trATCtx trSessAndHeader trLogger $ ManageMembers.manageMembersPostH testPid Nothing member
 
       -- Check if the member's permission is updated
       case pg of
@@ -68,7 +71,7 @@ spec = aroundAll withTestResources do
               , permissions = []
               }
       pg <-
-        toServantResponse trATCtx trSessAndHeader trLogger $ ManageMembers.manageMembersPostH testPid member
+        toServantResponse trATCtx trSessAndHeader trLogger $ ManageMembers.manageMembersPostH testPid Nothing member
 
       -- Check if the member is deleted
       case pg of
@@ -84,6 +87,9 @@ spec = aroundAll withTestResources do
               , permissions = [ProjectMembers.PAdmin]
               }
       pg <-
-        toServantResponse trATCtx trSessAndHeader trLogger $ ManageMembers.manageMembersPostH testPid member
+        toServantResponse trATCtx trSessAndHeader trLogger $ ManageMembers.manageMembersPostH testPid Nothing member
       -- Check if the response contains the newly added member
-      "example@gmail.com" `shouldSatisfy` (`elem` (pg.unwrapPost & V.toList & map (.email)))
+      case pg of
+        ManageMembers.ManageMembersPost p -> do
+          "example@gmail.com" `shouldSatisfy` (`elem` (p & V.toList & map (.email)))
+        _ -> fail "Expected ManageMembersPost response"

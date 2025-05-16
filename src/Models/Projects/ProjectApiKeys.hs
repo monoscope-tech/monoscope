@@ -6,11 +6,13 @@ module Models.Projects.ProjectApiKeys (
   ProjectApiKeyId (..),
   encryptAPIKey,
   getProjectIdByApiKey,
+  activateApiKey,
   decryptAPIKey,
   newProjectApiKeys,
   insertProjectApiKey,
   projectApiKeysByProjectId,
   countProjectApiKeysByProjectId,
+  projectIdsByProjectApiKeys,
   revokeApiKey,
   getProjectApiKey,
 )
@@ -95,6 +97,14 @@ revokeApiKey kid = do
       [sql| UPDATE projects.project_api_keys SET deleted_at=NOW(), active=false where id=?;|]
 
 
+activateApiKey :: ProjectApiKeyId -> DBT IO Int64
+activateApiKey kid = do
+  execute Update q kid
+  where
+    q =
+      [sql| UPDATE projects.project_api_keys SET deleted_at=null, active=true where id=?;|]
+
+
 countProjectApiKeysByProjectId :: Projects.ProjectId -> DBT IO Int
 countProjectApiKeysByProjectId pid = do
   result <- query Select q pid
@@ -119,6 +129,30 @@ getProjectIdByApiKey projectKey = do
     withPool pool $ queryOne Select q (Only projectKey)
   where
     q = [sql| select project_id from projects.project_api_keys where key_prefix=?|]
+
+
+projectIdsByProjectApiKeys :: V.Vector Text -> DBT IO (V.Vector (Text, Projects.ProjectId, Integer))
+projectIdsByProjectApiKeys projectKeys = query Select q (Only projectKeys)
+  where
+    q =
+      [sql| 
+SELECT 
+  k.key_prefix, 
+  k.project_id, 
+  COALESCE(span_counts.daily_events_count, 0) AS daily_events_count
+FROM projects.project_api_keys k
+LEFT JOIN projects.projects p ON p.id = k.project_id
+LEFT JOIN (
+    SELECT 
+      e.project_id, 
+      COUNT(*) AS daily_events_count
+    FROM otel_logs_and_spans e
+    JOIN projects.projects p ON p.id = e.project_id::uuid
+    WHERE p.payment_plan = 'Free' 
+      AND e.timestamp > NOW() - INTERVAL '1 day'
+    GROUP BY e.project_id
+) span_counts ON span_counts.project_id::uuid = k.project_id
+WHERE k.key_prefix = ANY(?)|]
 
 
 -- AES256 encryption

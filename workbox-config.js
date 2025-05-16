@@ -17,10 +17,7 @@ module.exports = {
       urlPattern: /https:\/\/ka-p\.fontawesome\.com\/.*/,
       handler: 'CacheFirst'
     },
-    {
-      urlPattern: /https:\/\/rsms\.me\/.*/,
-      handler: 'CacheFirst'
-    },
+    // Removed rsms.me - using local fonts now
     {
       urlPattern: /https:\/\/cdnjs\.cloudflare\.com\/.*/,
       handler: 'CacheFirst'

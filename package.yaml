@@ -1,25 +1,43 @@
 name: apitoolkit-server
 version: 0.1.0.0
-github: "githubuser/apitoolkit-server"
+github: 'githubuser/apitoolkit-server'
 license: BSD3
-author: "Author name here"
-maintainer: "example@example.com"
-copyright: "2021 Author name here"
+author: 'Author name here'
+maintainer: 'example@example.com'
+copyright: '2021 Author name here'
 language: GHC2021
 spec-version: 0.36.0
 
+build-type: Custom
+custom-setup:
+  dependencies:
+    - base
+    - Cabal
+    - proto-lens-setup
+
+build-tools:
+  - proto-lens-protoc:proto-lens-protoc
+
+extra-source-files:
+  - proto/**/*.proto
+  - README.md
+
+# generated-other-modules:
+# generated-exposed-modules:
 
 ghc-options:
   - -fwrite-ide-info
   - -hiedir .hiefiles
-  - "-hidir=.hifiles"
+  #- "-hidir=.hifiles"
   - -threaded
+  - -fplugin AutoInstrument
   - -Weverything
   # - -fdefer-type-errors
   - -Werror # Treat warnings as errors
   - -fno-defer-typed-holes
   - -Wno-error=deprecations
   - -Wno-error=unused-packages
+  - -Wno-error=implicit-lift
   - -Wno-error=missing-poly-kind-signatures
   - -Wno-missing-exported-signatures # missing-exported-signatures turns off the more strict -Wmissing-signatures. See https://ghc.haskell.org/trac/ghc/ticket/14794#ticket
   - -Wno-missing-import-lists # Requires explicit imports of _every_ function (e.g. ‘$’); too strict
@@ -40,23 +58,21 @@ ghc-options:
   - -Wno-unused-matches
   - -Wno-missing-kind-signatures
   - -Wno-type-defaults
-  - -rtsopts
-  - -j4
   - -Wno-unused-top-binds
   - -Wno-unused-imports
-  - -plugin-package hiedb-plugin -fplugin Plugin.HieDb
+  - -Wno-error=incomplete-record-selectors
+  # - -plugin-package hiedb-plugin -fplugin Plugin.HieDb
   # - "-prof"
   # - -g
-  - "-fprof-late"
-  - "-finfo-table-map"
-  - "+RTS -N -A128m -n2m -RTS"
+  # - "-fprof-late"
+  # - "-finfo-table-map"
 
 default-extensions:
   - BlockArguments
   - DataKinds
   - DerivingVia
   - DeriveAnyClass
-  # - DerivingStrategies
+  - DerivingStrategies
   - DuplicateRecordFields
   - ExplicitNamespaces
   - ExtendedDefaultRules
@@ -76,21 +92,48 @@ default-extensions:
   - TemplateHaskell
   - AllowAmbiguousTypes
   - TupleSections
-
-extra-source-files:
-  - README.md
+  - ViewPatterns
 
 description: Please see the README on GitHub at <https://github.com/githubuser/apitoolkit-server#readme>
 
 library:
   source-dirs:
     - src
+  generated-exposed-modules:
+    # Common
+    - Proto.Opentelemetry.Proto.Common.V1.Common
+    - Proto.Opentelemetry.Proto.Common.V1.Common_Fields
+    # Resource
+    - Proto.Opentelemetry.Proto.Resource.V1.Resource
+    - Proto.Opentelemetry.Proto.Resource.V1.Resource_Fields
+    # Trace
+    - Proto.Opentelemetry.Proto.Trace.V1.Trace
+    - Proto.Opentelemetry.Proto.Trace.V1.Trace_Fields
+    - Proto.Opentelemetry.Proto.Collector.Trace.V1.TraceService
+    - Proto.Opentelemetry.Proto.Collector.Trace.V1.TraceService_Fields
+    # Logs
+    - Proto.Opentelemetry.Proto.Logs.V1.Logs
+    - Proto.Opentelemetry.Proto.Logs.V1.Logs_Fields
+    - Proto.Opentelemetry.Proto.Collector.Logs.V1.LogsService
+    - Proto.Opentelemetry.Proto.Collector.Logs.V1.LogsService_Fields
+    # Metrics
+    - Proto.Opentelemetry.Proto.Metrics.V1.Metrics
+    - Proto.Opentelemetry.Proto.Metrics.V1.Metrics_Fields
+    - Proto.Opentelemetry.Proto.Collector.Metrics.V1.MetricsService
+    - Proto.Opentelemetry.Proto.Collector.Metrics.V1.MetricsService_Fields
+    # Profiles
+    - Proto.Opentelemetry.Proto.Profiles.V1development.Profiles
+    - Proto.Opentelemetry.Proto.Profiles.V1development.Profiles_Fields
+    - Proto.Opentelemetry.Proto.Collector.Profiles.V1development.ProfilesService
+    - Proto.Opentelemetry.Proto.Collector.Profiles.V1development.ProfilesService_Fields
+
   dependencies:
-    - base 
+    - base
     - relude >= 1.2.0.0
     - rust-interop
-    - otlp
     - colourista
+    - proto-lens
+    - proto-lens-runtime
     - vector-algorithms
     - effectful
     - effectful-core
@@ -100,7 +143,10 @@ library:
     - log-base
     - log-effectful
     - Unique
+    # - streamly
+    # - streamly-core
     - aeson
+    - aeson-extra
     - aeson-qq
     - async
     - bytestring
@@ -114,6 +160,7 @@ library:
     - containers
     - cookie
     - safe-exceptions
+    - annotated-exception
     - safe
     - aeson-pretty
     - cryptonite
@@ -131,6 +178,7 @@ library:
     - gogol
     - gogol-core
     - gogol-pubsub
+    - hw-kafka-client
     - hspec
     - hashtables
     - strict-containers
@@ -161,6 +209,7 @@ library:
     - servant-server
     - text
     - text-display
+    - text-builder-linear
     - unliftio
     - time
     - unordered-containers
@@ -185,12 +234,19 @@ library:
     - filepath
     - http-client
     - wai-middleware-static
-    - grpc-haskell
-    - proto3-suite
-    - proto3-wire
     - template-haskell
     - cryptohash-md5
     - hiedb-plugin
+    - casing
+    - yaml
+    - hs-opentelemetry-sdk
+    - hs-opentelemetry-instrumentation-postgresql-simple
+    - hs-opentelemetry-instrumentation-wai
+    - hs-opentelemetry-exporter-otlp
+    - hs-opentelemetry-instrumentation-auto
+    - postgresql-libpq
+    - ki-effectful
+    - grapesy
 
 executables:
   apitoolkit-server-exe:
@@ -198,21 +254,23 @@ executables:
     source-dirs: app
     ghc-options:
       - -threaded
+      - -fplugin AutoInstrument
       - -rtsopts
       - -with-rtsopts=-N
-      - -fwrite-ide-info
-      - -hiedir=.hie
+      - -j4
+      - '+RTS -N -A128m -n2m -RTS'
       # - -O2
       # - -fPIC
     dependencies:
       - apitoolkit-server
       - rust-interop
       - hiedb-plugin
+      - hs-opentelemetry-instrumentation-auto
       - name: relude
-        version: ">= 1.2.0.0"
+        version: '>= 1.2.0.0'
         mixin:
           - (Relude as Prelude)
-          - ""
+          - ''
 
 tests:
   doctests:
@@ -222,11 +280,12 @@ tests:
       - -threaded
       - -rtsopts
       - -with-rtsopts=-N
-      - -fwrite-ide-info
-      - -hiedir=.hie
     dependencies:
       - base
       - apitoolkit-server
+      - rust-interop
+      - hs-opentelemetry-instrumentation-auto
+      - hiedb-plugin
       - doctest-parallel >= 0.1
       - relude >= 1.2.0.0
       - hspec
@@ -237,6 +296,9 @@ tests:
     dependencies:
       - base
       - apitoolkit-server
+      - rust-interop
+      - hs-opentelemetry-instrumentation-auto
+      - hiedb-plugin
       - tmp-postgres
       - hspec
       - hspec-discover

@@ -25,7 +25,7 @@ listProjectsGetH = do
   (sess, project) <- Sessions.sessionAndProject (Projects.ProjectId UUID.nil)
   let bwconf =
         (def :: BWConfig)
-          { sessM = Just sess.persistentSession
+          { sessM = Just sess
           , pageTitle = "Projects List"
           }
 
@@ -58,7 +58,7 @@ listProjectsBody projects = do
       h2_ [class_ "text-slate-700 text-2xl font-medium"] "Projects"
       a_ [class_ "btn btn-primary", href_ "/p/new"] "Create Project"
     section_ [] do
-      div_ [class_ "bg-base-100 shadow overflow-hidden sm:rounded-md"] do
+      div_ [class_ "bg-base-100 shadow-sm overflow-hidden sm:rounded-md"] do
         ul_ [role_ "list", class_ "divide-y divide-gray-200"] $ mapM_ projectItem_ projects
 
 
@@ -70,14 +70,14 @@ projectItem_ project = li_ do
         div_ [class_ "truncate"] do
           div_ [class_ ""] do
             p_ [class_ "block font-medium text-indigo-600 truncate py-2"] $ toHtml project.title
-            p_ [class_ "block flex-shrink-0 font-normal text-gray-500"] $ toHtml project.description
+            p_ [class_ "block shrink-0 font-normal text-gray-500"] $ toHtml project.description
           div_ [class_ "mt-2 flex"] do
             div_ [class_ "flex items-center  text-gray-500"] do
               small_ do
                 span_ "Created on "
                 time_ [datetime_ $ fmt $ dateDashF project.createdAt] $ toHtml @Text $ fmt $ dateDashF project.createdAt
-        div_ [class_ "mt-4 flex-shrink-0 sm:mt-0 sm:ml-5"] do
+        div_ [class_ "mt-4 shrink-0 sm:mt-0 sm:ml-5"] do
           div_ [class_ "flex overflow-hidden -space-x-1"] do
             project.usersDisplayImages & V.toList & mapM_ \imgSrc -> img_ [class_ "inline-block h-6 w-6 rounded-full ring-2 ring-white", src_ imgSrc, alt_ "Dries Vincent"]
-      div_ [class_ "ml-5 flex-shrink-0 text-gray-400"] do
+      div_ [class_ "ml-5 shrink-0 text-gray-400"] do
         faSprite_ "chevron-right" "regular" "h-3 w-3"

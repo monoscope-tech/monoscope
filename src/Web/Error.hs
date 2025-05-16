@@ -54,4 +54,4 @@ renderError env status = do
 --               toHtml $
 --                 statusMessage status
 --           div_ [class_ "mt-10 flex space-x-3 sm:border-l sm:border-transparent sm:pl-6"] $ do
---             a_ [href_ "/", class_ "inline-flex items-center px-4 py-2 border border-transparent  font-medium rounded-md shadow-sm dark:text-gray-100 text-gray-100 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 error-page-button"] "Go back home"
+--             a_ [href_ "/", class_ "inline-flex items-center px-4 py-2 border border-transparent  font-medium rounded-md shadow-xs dark:text-gray-100 text-gray-100 focus:outline-hidden focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 error-page-button"] "Go back home"

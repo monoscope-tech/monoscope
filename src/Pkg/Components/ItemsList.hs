@@ -88,7 +88,7 @@ itemsList_ :: ToHtml a => ItemsListCfg -> V.Vector a -> Html ()
 itemsList_ listCfg items = do
   let currentURL' = deleteParam "sort" listCfg.currentURL
   whenJust listCfg.search \search -> do
-    label_ [class_ "input input-sm input-bordered flex bg-slate-100 border-slate-200 shadow-none overflow-hidden items-center gap-2"] do
+    label_ [class_ "input input-sm flex w-full h-10 bg-fillWeak border border-strokeStrong shadow-none overflow-hidden items-center gap-2"] do
       faSprite_ "magnifying-glass" "regular" "w-4 h-4 opacity-70"
       case search.viaQueryParam of
         Just param ->
@@ -127,13 +127,13 @@ itemsList_ listCfg items = do
           input_
             [ term "aria-label" "Select Issue"
             , type_ "checkbox"
-            , class_ "checkbox  checkbox-md checked:checkbox-primary"
+            , class_ "checkbox h-6 w-6 checked:checkbox-primary"
             , [__| on click set .bulkactionItemCheckbox.checked to my.checked |]
             ]
 
         div_ [class_ " grow flex flex-row gap-2"] do
           forM_ listCfg.bulkActions \blkA -> button_
-            [ class_ "btn btn-sm btn-disabled group-has-[.bulkactionItemCheckbox:checked]/grid:!blue-gr-btn group-has-[.bulkactionItemCheckbox:checked]/grid:!pointer-events-auto  "
+            [ class_ "btn btn-sm btn-disabled group-has-[.bulkactionItemCheckbox:checked]/grid:text-white group-has-[.bulkactionItemCheckbox:checked]/grid:bg-fillBrand-strong group-has-[.bulkactionItemCheckbox:checked]/grid:pointer-events-auto!  "
             , hxPost_ blkA.uri
             , hxSwap_ "none"
             ]
@@ -144,7 +144,7 @@ itemsList_ listCfg items = do
           whenJust listCfg.sort \sortCfg -> do
             let currentSortTitle = maybe "First Seen" fst3 $ find (\(_, _, identifier) -> identifier == sortCfg.current) sortMenu
             div_ [class_ "dropdown dropdown-end inline-block"] do
-              a_ [class_ "btn btn-sm shadow-none text-sm font-medium bg-slate-100 border text-slate-600 border-slate-300 ", tabindex_ "0"] do
+              a_ [class_ "btn btn-sm shadow-none text-sm font-medium bg-fillWeaker border text-slate-600 border-slate-300 ", tabindex_ "0"] do
                 span_ $ toHtml currentSortTitle
                 faSprite_ "sort" "regular" "h-4 w-4 stroke-slate-600"
 
@@ -172,11 +172,10 @@ itemsList_ listCfg items = do
         div_ [class_ "flex justify-center w-60 items-center text-sm  content-between gap-2"] do
           span_ [] "Chart"
           div_ [class_ "rounded-lg border grid grid-cols-2 w-max h-7 bg-slate-200 overflow-hidden"] do
-            let selectedFilter = fromMaybe "14d" listCfg.filter -- Default to "14d" if Nothing
-            a_ [class_ $ "cursor-pointer px-1.5 flex items-center text-xs h-full rounded " <> (if selectedFilter == "24h" then "bg-white" else ""), href_ $ currentURL' <> "&since=24h"] "24h"
-            a_ [class_ $ "cursor-pointer px-1.5 flex items-center text-xs h-full rounded " <> (if selectedFilter == "14d" then "bg-white" else ""), href_ $ currentURL' <> "&since=14d"] "14d"
+            a_ [class_ $ "cursor-pointer px-1.5 flex items-center text-xs h-full rounded-sm bg-white ", [__|init if window.location.search contains "since=14D" remove .bg-white from me else add .bg-white to me |], href_ $ currentURL' <> "&since=24H"] "24h"
+            a_ [class_ $ "cursor-pointer px-1.5 flex items-center text-xs h-full rounded-sm ", [__|init if window.location.search contains "since=14D" add .bg-white to me else remove .bg-white from me |], href_ $ currentURL' <> "&since=14D"] "14d"
         div_
-          [ class_ "p-12 fixed rounded-lg shadow bg-base-100 top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 htmx-indicator loading loading-dots loading-md"
+          [ class_ "p-12 fixed rounded-lg shadow-sm bg-base-100 top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 htmx-indicator loading loading-dots loading-md"
           , id_ "sortLoader"
           ]
           ""
@@ -247,21 +246,21 @@ timelineSteps_ steps colM =
       when (idx > 0) $ hr_ [style_ "width:2px"]
       div_ [class_ "timeline-middle "] do
         span_
-          [class_ "rounded-full bg-primary text-base-100 h-7 w-7 flex items-center justify-center "]
+          [class_ "rounded-full bg-primary text-textInverse-strong h-7 w-7 flex items-center justify-center "]
           (toHtml $ show $ idx + 1)
       div_ [class_ "timeline-end space-y-5 w-full"] $ do
         div_ [class_ "flex items-center justify-between"] do
           label_ [class_ "text-lg flex gap-2 items-center pt-1"] $ do
             span_ [class_ "font-medium ml-2 text-gray-900"] (toHtml step.title)
             input_ ([type_ "checkbox", class_ "hidden tm-toggle"] <> [checked_ | idx == 0])
-            faSprite_ "chevron-up" "regular" "h-4 rounded-full rotate-180 bg-blue-500 p-1 w-4 text-white group-has-[.tm-toggle:checked]/tm:rotate-0"
+            faSprite_ "chevron-up" "regular" "h-4 rounded-full rotate-180  bg-fillWeak  text-textStrong p-1 w-4 group-has-[.tm-toggle:checked]/tm:rotate-0"
           when (idx == 0) $ do
             whenJust colM $ \col ->
-              div_ [class_ "flex items-center gap-4"] do
+              div_ [class_ "flex items-center gap-6"] do
                 label_ [class_ "relative inline-flex items-center cursor-pointer space-x-1"] do
-                  input_ [type_ "checkbox", class_ "checkbox checkbox-sm editormode", id_ "test-code-toggle", onchange_ "codeToggle(event)"] >> span_ [class_ "text-sm font-medium"] "Code editor"
+                  input_ [type_ "checkbox", class_ "checkbox checkbox-sm rounded-sm editormode", id_ "test-code-toggle", onchange_ "codeToggle(event)"] >> span_ [class_ "text-sm  text-textWeak font-medium"] "Code editor"
                 button_
-                  [ class_ "border flex items-center gap-1 text-sm font-medium rounded-lg border-blue-500 text-blue-500 px-2 py-1"
+                  [ class_ "flex items-center gap-1 font-medium rounded-lg text-brand underline"
                   , hxPatch_ $ "/p/" <> col.projectId.toText <> "/monitors/" <> col.id.toText
                   , hxParams_ "stepsData"
                   , hxExt_ "json-enc"
@@ -270,9 +269,7 @@ timelineSteps_ steps colM =
                   , hxSwap_ "innerHTML"
                   , hxIndicator_ "#step-results-indicator"
                   ]
-                  do
-                    span_ "Run all"
-                    faSprite_ "play" "regular" "h-4 w-4 fill-none stroke-blue-500"
+                  "Run all"
 
         div_ [class_ "pl-2 pb-8 space-y-3 hidden group-has-[.tm-toggle:checked]/tm:block"] step.content
       when (idx < (length steps - 1)) $ hr_ [style_ "width:2px"]

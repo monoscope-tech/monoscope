@@ -19,6 +19,7 @@ module Models.Apis.Endpoints (
   endpointIdText,
   endpointToUrlPath,
   endpointByHash,
+  endpointsByHashes,
   getProjectHosts,
   insertEndpoints,
   countEndpointInbox,
@@ -46,6 +47,7 @@ import Deriving.Aeson qualified as DAE
 import Effectful
 import Effectful.PostgreSQL.Transact.Effect (DB, dbtToEff)
 import GHC.Records (HasField (getField))
+import Language.Haskell.TH.Syntax qualified as THS
 import Models.Projects.Projects qualified as Projects
 import NeatInterpolation (text)
 import Relude
@@ -53,7 +55,7 @@ import Web.HttpApiData (FromHttpApiData)
 
 
 newtype EndpointId = EndpointId {unEndpointId :: UUID.UUID}
-  deriving stock (Generic, Show)
+  deriving stock (Generic, Show, Read, THS.Lift)
   deriving newtype (AE.ToJSON, AE.FromJSON, Eq, Ord, FromField, ToField, FromHttpApiData, Default, NFData)
   deriving anyclass (FromRow, ToRow)
 
@@ -242,6 +244,12 @@ endpointByHash :: Projects.ProjectId -> Text -> PgT.DBT IO (Maybe Endpoint)
 endpointByHash pid hash = queryOne Select q (pid, hash)
   where
     q = [sql| SELECT id, created_at, updated_at, project_id, url_path, url_params, method, host, hash, outgoing, description from apis.endpoints where project_id=? AND hash=? |]
+
+
+endpointsByHashes :: Projects.ProjectId -> V.Vector Text -> PgT.DBT IO (V.Vector Endpoint)
+endpointsByHashes pid hashes = query Select q (pid, hashes)
+  where
+    q = [sql| SELECT id, created_at, updated_at, project_id, url_path, url_params, method, host, hash, outgoing, description from apis.endpoints where project_id=? AND hash=ANY(?)|]
 
 
 getEndpointsByAnomalyTargetHash :: Projects.ProjectId -> V.Vector Text -> PgT.DBT IO (V.Vector Host)
