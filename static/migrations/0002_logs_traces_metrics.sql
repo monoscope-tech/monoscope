@@ -98,7 +98,7 @@ CREATE INDEX IF NOT EXISTS idx_spans_http_method ON telemetry.spans(project_id, 
 CREATE INDEX IF NOT EXISTS idx_spans_http_path ON telemetry.spans(project_id, http_path);
 CREATE INDEX IF NOT EXISTS idx_spans_service_name ON telemetry.spans(project_id, service_name);
 CREATE INDEX IF NOT EXISTS idx_spans_db_system ON telemetry.spans(project_id, db_system);
-CREATE INDEX IF NOT EXISTS idx_spans_duration_ms ON telemetry.spans(project_id, duration_ms);
+CREATE INDEX IF NOT EXISTS idx_spans_duration_ms ON telemetry.spans(project_id, duration_ns);
 CREATE INDEX IF NOT EXISTS idx_spans_error_type ON telemetry.spans(project_id, error_type);
 
 -- Indexes for efficient querying
