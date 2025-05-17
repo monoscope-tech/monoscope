@@ -9,6 +9,7 @@ export class LogList extends LitElement {
     expandedTraces: {},
     flipDirection: { type: Boolean },
     isLoadingRecent: { type: Boolean },
+    spanListTree: {},
     isLoading: { type: Boolean },
     view: { type: String },
     showOptions: { type: Boolean },
@@ -113,7 +114,7 @@ export class LogList extends LitElement {
   updateTableData = (ves, cols, colIdxMap, serviceColors, nextFetchUrl) => {
     this.logsColumns = [...cols]
     this.colIdxMap = { ...colIdxMap }
-    this.hasMore = ves.length >= 50
+    this.hasMore = ves.length > 0
     this.serviceColors = { ...serviceColors }
     this.nextFetchUrl = nextFetchUrl
     this.spanListTree = this.buildSpanListTree(ves)
@@ -139,8 +140,9 @@ export class LogList extends LitElement {
       this.expandedTraces = {}
       this.spanListTree = this.buildSpanListTree(logs)
       this.updateColumnMaxWidthMap(logs)
-      this.hasMore = logs.length >= 50
+      this.hasMore = logs.length > 0
       this.requestUpdate()
+      this.fetchedNew = false
 
       window.virtualListData = null
     }
@@ -156,12 +158,15 @@ export class LogList extends LitElement {
     if (this.shouldScrollToBottom && this.flipDirection) {
       this.scrollToBottom()
     }
-    if (changedProperties.has('spanListTree')) {
-      spanListTree.forEach(span => {
-        if (span.isNew) {
-          span.isNew = false
-        }
-      })
+    if (changedProperties.has('spanListTree') && this.fetchedNew) {
+      setTimeout(() => {
+        this.spanListTree.forEach(span => {
+          if (span.isNew) {
+            span.isNew = false
+          }
+        })
+        this.fetchedNew = false
+      }, 10)
     }
   }
 
@@ -256,13 +261,14 @@ export class LogList extends LitElement {
         if (!data.error) {
           let { logsData, serviceColors, nextUrl } = data
           if (!isNewData) {
-            this.hasMore = logsData.length >= 50
+            this.hasMore = logsData.length > 0
             this.nextFetchUrl = nextUrl
           }
           if (logsData.length > 0) {
             this.serviceColors = { ...serviceColors, ...this.serviceColors }
             let tree = this.buildSpanListTree([...logsData])
             if (isNewData) {
+              this.fetchedNew = true
               tree.forEach(t => (t.isNew = true))
               const container = document.querySelector('#logs_list_container_inner')
               if (container && container.scrollTop + container.clientHeight >= container.scrollHeight - 1) {
