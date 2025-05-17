@@ -44,7 +44,6 @@ export class LogList extends LitElement {
     this.logItemCol = this.logItemCol.bind(this)
     this.wrapLines = false
     this.view = 'tree'
-    this.newDataCount = 0
     const liveBtn = document.querySelector('#streamLiveData')
     if (liveBtn) {
       liveBtn.addEventListener('change', () => {
@@ -88,8 +87,22 @@ export class LogList extends LitElement {
     if (this.spanListTree[latestIndex]) {
       const latestData = this.spanListTree[latestIndex].data
       const timeIndex = this.colIdxMap['timestamp']
-      const datetime = latestData[timeIndex]
-      const to = datetime ? new Date(new Date(datetime).getTime() + 1).toISOString() : params().to
+      const traceIdIndex = this.colIdxMap['trace_id']
+      const traceId = latestData[traceIdIndex]
+      const startTimes = []
+
+      const length = this.spanListTree.length
+      const [start, end, step] = this.flipDirection ? [length - 1, 0, -1] : [0, length, 1]
+      for (let i = start; this.flipDirection ? i > -1 : i < end; i += step) {
+        const data = this.spanListTree[i].data
+        if (data[traceIdIndex] === traceId) {
+          startTimes.push(data[timeIndex])
+        } else if (startTimes.length > 0) {
+          break
+        }
+      }
+      const datetime = Math.max(...startTimes.map(d => new Date(d).getTime()))
+      const to = datetime ? new Date(datetime + 1).toISOString() : params().to
       p.set('to', to)
       const from = params().from
       p.set('from', from)
@@ -139,9 +152,16 @@ export class LogList extends LitElement {
     window.logListTable = document.querySelector('#resultTable')
   }
 
-  updated() {
+  updated(changedProperties) {
     if (this.shouldScrollToBottom && this.flipDirection) {
       this.scrollToBottom()
+    }
+    if (changedProperties.has('spanListTree')) {
+      spanListTree.forEach(span => {
+        if (span.isNew) {
+          span.isNew = false
+        }
+      })
     }
   }
 
@@ -243,12 +263,7 @@ export class LogList extends LitElement {
             this.serviceColors = { ...serviceColors, ...this.serviceColors }
             let tree = this.buildSpanListTree([...logsData])
             if (isNewData) {
-              const newCount = this.view === 'tree' ? tree.filter(t => t.show).length : logsData.length
-              if (this.flipDirection) {
-                this.newDataCount = this.view === 'tree' ? this.spanListTree.filter(s => s.show).length - 1 : this.spanListTree.length - 1
-              } else {
-                this.newDataCount = newCount
-              }
+              tree.forEach(t => (t.isNew = true))
               const container = document.querySelector('#logs_list_container_inner')
               if (container && container.scrollTop + container.clientHeight >= container.scrollHeight - 1) {
                 this.shouldScrollToBottom = true
@@ -663,16 +678,7 @@ export class LogList extends LitElement {
     }
     const s = rowData.type === 'log' ? 'logs' : this.source
     const targetInfo = requestDumpLogItemUrlPath(rowData.data, this.colIdxMap, s)
-    let isNew = false
-    if (this.flipDirection) {
-      isNew = this.newDataCount < index
-      if (isNew) {
-        this.newDataCount++
-      }
-    } else {
-      isNew = this.newDataCount > 0
-      this.newDataCount--
-    }
+    let isNew = rowData.isNew
     return html`
       <tr
         class=${`item-row relative p-0 flex items-center cursor-pointer whitespace-nowrap ${isNew ? 'animate-fadeBg' : ''}`}
@@ -786,9 +792,7 @@ export class LogList extends LitElement {
             this.flipDirection ? 'bg-gray-200 text-gray-800' : 'text-textWeak  hover:bg-gray-100'
           }`}
           @click=${() => {
-            const currVal = !this.flipDirection
-            this.flipDirection = currVal
-            this.newDataCount = currVal ? Infinity : 0
+            this.flipDirection = !this.flipDirection
             this.spanListTree = this.buildSpanListTree(this.spanListTree.map(span => span.data).reverse())
             this.requestUpdate()
           }}
