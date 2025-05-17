@@ -454,7 +454,7 @@ export class LogList extends LitElement {
       case 'status':
         let st = lookupVecTextByKey(dataArr, colIdxMap, key)
         let statsCls = getSpanStatusColor(st)
-        return !st || st.toLowerCase() === 'unset' || st === 'ERROR' ? nothing : renderBadge(statsCls, st)
+        return !st || st.toLowerCase() === 'unset' || st === 'ERROR' ? nothing : renderBadge(statsCls, st, 'status')
       case 'span_name':
         let spanName = lookupVecTextByKey(dataArr, colIdxMap, key)
         return renderBadge('cbadge-sm badge-neutral bg-fillWeak ' + wrapClass, spanName, 'span name')
@@ -465,7 +465,7 @@ export class LogList extends LitElement {
         let kind = lookupVecTextByKey(dataArr, colIdxMap, key)
         return kind.toLowerCase() === 'internal' ? renderIconWithTippy('w-4 ml-2', 'Internal span', faSprite('function', 'regular', 'h-3 w-3 ')) : nothing
       case 'latency_breakdown':
-        const { traceStart, traceEnd, startNs, duration, childrenTimeSpans, depth: d } = rowData
+        const { traceStart, traceEnd, startNs, duration, childrenTimeSpans, depth: d, hasErrors: hErrs } = rowData
         const color = serviceColors[lookupVecTextByKey(dataArr, colIdxMap, 'span_name')] || 'bg-black'
         const chil = childrenTimeSpans.map(({ startNs, duration, data }) => ({
           start: startNs - traceStart,
@@ -479,7 +479,7 @@ export class LogList extends LitElement {
         const errStatus = lookupVecTextByKey(dataArr, colIdxMap, 'status')
         return html`
           <div class="flex justify-end items-center gap-1 text-textWeak" style="min-width:${width}px">
-            ${errStatus === 'ERROR' ? renderBadge(getSpanStatusColor('ERROR'), 'ERROR') : nothing}
+            ${errStatus === 'ERROR' || hErrs ? renderBadge(getSpanStatusColor('ERROR'), 'ERROR') : nothing}
             ${db.system ? renderBadge('cbadge-sm badge-neutral bg-fillWeak border border-strokeWeak', db.system) : nothing}
             ${http.method && http.url ? renderBadge('cbadge-sm badge-neutral bg-fillWeak border border-strokeWeak', 'http') : nothing}
             ${rpc.system ? renderBadge('cbadge-sm badge-neutral bg-fillWeak border border-strokeWeak', rpc.system) : nothing}
