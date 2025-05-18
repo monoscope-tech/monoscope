@@ -843,6 +843,7 @@ class ColumnsSettings extends LitElement {
   static properties = {
     showModal: { type: Boolean },
     searchTerm: { type: String },
+    dragOverIndex: { type: Number },
     showSearchResults: { type: Boolean },
   }
 
@@ -851,6 +852,7 @@ class ColumnsSettings extends LitElement {
     this.columns = []
     this.showModal = false
     this.dragIndex = null
+    this.dragOverIndex = null
     this.defaultColumns = [
       'trace_id',
       'severity_text',
@@ -878,7 +880,6 @@ class ColumnsSettings extends LitElement {
       const merged = [...this.defaultColumns, ...this.columns.filter(c => !currentNames.has(c))]
       this.defaultColumns = merged
     }
-    this._emitChanges()
   }
 
   render() {
@@ -945,10 +946,12 @@ class ColumnsSettings extends LitElement {
             ${this.columns.map(
               (col, index) => html`
                 <li
-                  class="flex items-center group justify-between  px-1 py-0.5 rounded hover:bg-fillWeak cursor-move"
-                  draggable="true"
+                  class=${`flex items-center group justify-between  px-1 py-0.5 rounded ${
+                    col === 'latency_breakdown' ? 'cursor-default select-none' : 'cursor-move hover:bg-fillWeak'
+                  } ${this.dragOverIndex === index ? 'border border-strokeBrand-strong' : ''}`}
+                  draggable=${col === 'latency_breakdown' ? 'false' : 'true'}
                   @dragstart=${e => this._onDragStart(e, index)}
-                  @dragover=${e => e.preventDefault()}
+                  @dragover=${e => this._onDragOver(e, index)}
                   @drop=${e => this._onDrop(e, index)}
                 >
                   <span class="text-textStrong">${col}</span>
@@ -967,9 +970,18 @@ class ColumnsSettings extends LitElement {
     `
   }
 
+  _onDragOver(e, index) {
+    e.preventDefault()
+    if (this.columns[index] === 'latency_breakdown' || index === this.dragIndex) {
+      this.dragOverIndex = null
+      return
+    }
+
+    this.dragOverIndex = index
+  }
+
   _removeColumn(index) {
     this.columns.splice(index, 1)
-    this.requestUpdate()
   }
 
   _onDragStart(e, index) {
@@ -984,7 +996,8 @@ class ColumnsSettings extends LitElement {
     this.columns.splice(this.dragIndex, 1)
     this.columns.splice(index, 0, dragged)
     this.dragIndex = null
-    this.requestUpdate()
+    this.dragOverIndex = null
+    this._emitChanges()
   }
 
   _emitChanges() {
