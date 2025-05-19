@@ -40,7 +40,6 @@ export class LogList extends LitElement {
     this.renderLoadMore = this.renderLoadMore.bind(this)
     this.updateTableData = this.updateTableData.bind(this)
     this.updateColumnMaxWidthMap = this.updateColumnMaxWidthMap.bind(this)
-    this.latestLogsURLQueryValsFn = this.latestLogsURLQueryValsFn.bind(this)
     this.toggleLogRow = this.toggleLogRow.bind(this)
     this.logItemCol = this.logItemCol.bind(this)
     this.wrapLines = false
@@ -51,8 +50,7 @@ export class LogList extends LitElement {
         if (liveBtn.checked) {
           this.isLiveStreaming = true
           this.liveStreamInterval = setInterval(() => {
-            const url = this.latestLogsURLQueryValsFn(this.nextFetchUrl)
-            this.fetchData(url, true)
+            this.fetchData(this.recentFetchUrl, true)
           }, 5000)
         } else {
           clearInterval(this.liveStreamInterval)
@@ -80,43 +78,13 @@ export class LogList extends LitElement {
     })
   }
 
-  latestLogsURLQueryValsFn() {
-    const latestIndex = this.flipDirection ? this.spanListTree.length - 1 : 0
-    const url = new URL(this.nextFetchUrl, window.location.origin)
-    const p = url.searchParams
-    p.delete('cursor')
-    if (this.spanListTree[latestIndex]) {
-      const latestData = this.spanListTree[latestIndex].data
-      const timeIndex = this.colIdxMap['timestamp']
-      const traceIdIndex = this.colIdxMap['trace_id']
-      const traceId = latestData[traceIdIndex]
-      const startTimes = []
-
-      const length = this.spanListTree.length
-      const [start, end, step] = this.flipDirection ? [length - 1, 0, -1] : [0, length, 1]
-      for (let i = start; this.flipDirection ? i > -1 : i < end; i += step) {
-        const data = this.spanListTree[i].data
-        if (data[traceIdIndex] === traceId) {
-          startTimes.push(data[timeIndex])
-        } else if (startTimes.length > 0) {
-          break
-        }
-      }
-      const datetime = Math.max(...startTimes.map(d => new Date(d).getTime()))
-      const to = datetime ? new Date(datetime + 1).toISOString() : params().to
-      p.set('to', to)
-      const from = params().from
-      p.set('from', from)
-    }
-    return url.toString()
-  }
-
-  updateTableData = (ves, cols, colIdxMap, serviceColors, nextFetchUrl) => {
+  updateTableData = (ves, cols, colIdxMap, serviceColors, nextFetchUrl, recentFetchUrl) => {
     this.logsColumns = [...cols]
     this.colIdxMap = { ...colIdxMap }
     this.hasMore = ves.length > 0
     this.serviceColors = { ...serviceColors }
     this.nextFetchUrl = nextFetchUrl
+    this.recentFetchUrl = recentFetchUrl
     this.spanListTree = this.buildSpanListTree(ves)
     this.updateColumnMaxWidthMap(ves)
     this.requestUpdate()
@@ -136,6 +104,7 @@ export class LogList extends LitElement {
       this.serviceColors = window.virtualListData.serviceColors
       this.nextFetchUrl = window.virtualListData.nextFetchUrl
       this.resetLogsUrl = window.virtualListData.resetLogsUrl
+      this.recentFetchUrl = window.virtualListData.recentFetchUrl
       this.projectId = window.virtualListData.projectId
       this.expandedTraces = {}
       this.spanListTree = this.buildSpanListTree(logs)
@@ -259,12 +228,16 @@ export class LogList extends LitElement {
       .then(response => response.json())
       .then(data => {
         if (!data.error) {
-          let { logsData, serviceColors, nextUrl } = data
+          let { logsData, serviceColors, nextUrl, recentUrl } = data
           if (!isNewData) {
             this.hasMore = logsData.length > 0
-            this.nextFetchUrl = nextUrl
           }
           if (logsData.length > 0) {
+            if (!isNewData) {
+              this.nextFetchUrl = nextUrl
+            } else {
+              this.recentFetchUrl = recentUrl
+            }
             this.serviceColors = { ...serviceColors, ...this.serviceColors }
             let tree = this.buildSpanListTree([...logsData])
             if (isNewData) {
@@ -633,8 +606,7 @@ export class LogList extends LitElement {
               <button
                 class="cursor-pointer text-textBrand underline font-semibold w-max mx-auto"
                 @click=${() => {
-                  const updatedUrl = this.latestLogsURLQueryValsFn()
-                  this.fetchData(updatedUrl, true)
+                  this.fetchData(this.recentFetchUrl, true)
                 }}
               >
                 Check for recent data
@@ -1029,7 +1001,7 @@ function displayTimestamp(inputDateString) {
     timeZone: 'UTC',
   }
 
-  const formatted = date.toLocaleString('en-US', options)
+  const formatted = `${date.toLocaleString('en-US', options)}.${String(date.getUTCMilliseconds()).padStart(3, '0')}`
   return formatted.replace(',', '')
 }
 

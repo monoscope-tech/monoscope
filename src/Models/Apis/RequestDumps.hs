@@ -45,6 +45,7 @@ import Database.PostgreSQL.Simple.ToField (ToField (toField))
 import Database.PostgreSQL.Simple.Types (Query (Query))
 import Database.PostgreSQL.Transact (DBT)
 import Database.PostgreSQL.Transact qualified as DBT
+import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds, posixSecondsToUTCTime)
 import Deriving.Aeson qualified as DAE
 import Effectful
 import Effectful.PostgreSQL.Transact.Effect (DB, dbtToEff)
@@ -371,20 +372,31 @@ data RequestDumpLogItem = RequestDumpLogItem
   deriving anyclass (ToRow, FromRow, NFData)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] RequestDumpLogItem
 
+incrementByOneMillisecond :: String -> String
+incrementByOneMillisecond dateStr = 
+  case maybeTime of
+    Nothing -> ""
+    Just utcTime -> 
+      let newTime =  posixSecondsToUTCTime $ utcTimeToPOSIXSeconds utcTime + 0.000001
+       in formatTime defaultTimeLocale (iso8601DateFormat (Just "%H:%M:%S%QZ")) newTime
+  where 
+    maybeTime = parseTimeM True defaultTimeLocale (iso8601DateFormat (Just "%H:%M:%S%QZ")) dateStr :: Maybe UTCTime
 
-requestDumpLogUrlPath :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Text -> Maybe Text -> Text
-requestDumpLogUrlPath pid q cols cursor since fromV toV layout source queryASTM =
-  "/p/" <> pid.toText <> "/log_explorer?" <> T.intercalate "&" params
+
+
+requestDumpLogUrlPath :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Text -> Maybe Text -> Bool -> Text
+requestDumpLogUrlPath pid q cols cursor since fromV toV layout source queryASTM recent = "/p/" <> pid.toText <> "/log_explorer?" <> T.intercalate "&" params
   where
+    recentTo =  cursor >>= (\x -> Just (toText . incrementByOneMillisecond . toString $ x) )
     params =
       catMaybes
         [ Just ("json=true")
         , fmap ("query=" <>) (toQueryParam <$> q)
         , fmap ("cols=" <>) (toQueryParam <$> cols)
-        , fmap ("cursor=" <>) (toQueryParam <$> cursor)
-        , fmap ("since=" <>) (toQueryParam <$> since)
+        , if recent then Nothing else fmap ("cursor=" <>) (toQueryParam <$> cursor)
+        , if recent then Nothing else fmap ("since=" <>) (toQueryParam <$> since)
         , fmap ("from=" <>) (toQueryParam <$> fromV)
-        , fmap ("to=" <>) (toQueryParam <$> toV)
+        , if recent then fmap ("to=" <>) (toQueryParam <$> recentTo) else fmap ("to=" <>) (toQueryParam <$> toV)
         , fmap ("layout=" <>) (toQueryParam <$> layout)
         , fmap ("queryAST=" <>) (toQueryParam <$> queryASTM)
         , Just ("source=" <> toQueryParam source)

@@ -207,9 +207,12 @@ apiLogH pid queryM queryASTM cols' cursorM' sinceM fromM toM layoutM sourceM tar
           curatedColNames = nubOrd $ curateCols summaryCols colNames
           colIdxMap = listToIndexHashMap colNames
           reqLastCreatedAtM = (\r -> lookupVecTextByKey r colIdxMap "timestamp") =<< (requestVecs V.!? (V.length requestVecs - 1))
-          nextLogsURL = RequestDumps.requestDumpLogUrlPath pid queryM cols' reqLastCreatedAtM sinceM fromM toM (Just "loadmore") source queryASTM
+          reqFirstCreatedAtM = (\r -> lookupVecTextByKey r colIdxMap "timestamp") =<< (requestVecs V.!? 0)
+          nextLogsURL = RequestDumps.requestDumpLogUrlPath pid queryM cols' reqLastCreatedAtM sinceM fromM toM (Just "loadmore") source queryASTM False
+          recentLogsURL = RequestDumps.requestDumpLogUrlPath pid queryM cols' reqFirstCreatedAtM sinceM fromM toM (Just "loadmore") source queryASTM True
+          
           -- traceIDs = V.catMaybes $ V.map (\v -> lookupVecTextByKey v colIdxMap "trace_id") requestVecs
-          resetLogsURL = RequestDumps.requestDumpLogUrlPath pid queryM cols' Nothing Nothing Nothing Nothing Nothing source Nothing
+          resetLogsURL = RequestDumps.requestDumpLogUrlPath pid queryM cols' Nothing Nothing Nothing Nothing Nothing source Nothing False
           -- additionalReqsVec <-
           --   if (null traceIDs)
           --     then pure []
@@ -228,6 +231,7 @@ apiLogH pid queryM queryASTM cols' cursorM' sinceM fromM toM layoutM sourceM tar
               , colIdxMap
               , nextLogsURL
               , resetLogsURL
+              , recentLogsURL
               , currentRange
               , exceededFreeTier = freeTierExceeded
               , query = queryM
@@ -253,7 +257,7 @@ apiLogH pid queryM queryASTM cols' cursorM' sinceM fromM toM layoutM sourceM tar
         (Just "resultTable", Just "true", _, _) -> addRespHeaders $ LogsGetResultTable page False
         (Just "virtualTable", _, _, _) -> addRespHeaders $ LogsGetVirtuaTable page
         (Just "all", Just "true", _, Nothing) -> addRespHeaders $ LogsGetResultTable page True
-        (_, _, _, Just _) -> addRespHeaders $ LogsGetJson requestVecs colors nextLogsURL resetLogsURL
+        (_, _, _, Just _) -> addRespHeaders $ LogsGetJson requestVecs colors nextLogsURL resetLogsURL recentLogsURL
         _ -> addRespHeaders $ LogPage $ PageCtx bwconf page
     Nothing -> do
       case (layoutM, hxRequestM, hxBoostedM) of
@@ -273,7 +277,7 @@ data LogsGet
   | LogsGetVirtuaTable ApiLogsPageData
   | LogsGetError (PageCtx Text)
   | LogsGetErrorSimple Text
-  | LogsGetJson (V.Vector (V.Vector AE.Value)) (HM.HashMap Text Text) Text Text
+  | LogsGetJson (V.Vector (V.Vector AE.Value)) (HM.HashMap Text Text) Text Text Text
   | LogsQueryLibrary Projects.ProjectId (V.Vector Projects.QueryLibItem) (V.Vector Projects.QueryLibItem)
 
 
@@ -284,12 +288,12 @@ instance ToHtml LogsGet where
   toHtml (LogsGetErrorSimple err) = span_ [class_ "text-red-500"] $ toHtml err
   toHtml (LogsGetError (PageCtx conf err)) = toHtml $ PageCtx conf err
   toHtml (LogsQueryLibrary pid queryLibSaved queryLibRecent) = toHtml $ queryLibrary_ pid queryLibSaved queryLibRecent
-  toHtml (LogsGetJson vecs colors nextLogsURL resetLogsURL) = span_ [] $ show $ AE.object ["logsData" AE..= vecs, "serviceColors" AE..= colors, "nextUrl" AE..= nextLogsURL, "resetLogsUrl" AE..= resetLogsURL]
+  toHtml (LogsGetJson vecs colors nextLogsURL resetLogsURL recentLogsURL) = span_ [] $ show $ AE.object ["logsData" AE..= vecs, "serviceColors" AE..= colors, "nextUrl" AE..= nextLogsURL, "resetLogsUrl" AE..= resetLogsURL, "recentUrl" AE..= recentLogsURL]
   toHtmlRaw = toHtml
 
 
 instance AE.ToJSON LogsGet where
-  toJSON (LogsGetJson vecs colors nextLogsURL resetLogsURL) = AE.object ["logsData" AE..= vecs, "serviceColors" AE..= colors, "nextUrl" AE..= nextLogsURL, "resetLogsUrl" AE..= resetLogsURL]
+  toJSON (LogsGetJson vecs colors nextLogsURL resetLogsURL recentLogsURL) = AE.object ["logsData" AE..= vecs, "serviceColors" AE..= colors, "nextUrl" AE..= nextLogsURL, "resetLogsUrl" AE..= resetLogsURL, "recentUrl" AE..= recentLogsURL]
   toJSON _ = AE.object []
 
 
@@ -447,6 +451,7 @@ data ApiLogsPageData = ApiLogsPageData
   , colIdxMap :: HM.HashMap Text Int
   , nextLogsURL :: Text
   , resetLogsURL :: Text
+  , recentLogsURL :: Text
   , currentRange :: Maybe Text
   , exceededFreeTier :: Bool
   , query :: Maybe Text
@@ -477,11 +482,11 @@ virtualTableTrigger page = do
         colIdxMap = decodeUtf8 $ AE.encode page.colIdxMap
         serviceColors = decodeUtf8 $ AE.encode page.serviceColors
         nextLogsURL = decodeUtf8 $ AE.encode page.nextLogsURL
-
+        recentFetchUrl = decodeUtf8 $ AE.encode page.recentLogsURL
     script_
       [text|
         if(window.logListTable) {
-           window.logListTable.updateTableData($vecs, $cols, $colIdxMap, $serviceColors, $nextLogsURL)
+           window.logListTable.updateTableData($vecs, $cols, $colIdxMap, $serviceColors, $nextLogsURL, $recentFetchUrl)
           }
     |]
 
@@ -499,6 +504,7 @@ virtualTable page = do
       colIdxMap = decodeUtf8 $ AE.encode page.colIdxMap
       serviceColors = decodeUtf8 $ AE.encode page.serviceColors
       nextfetchurl = page.nextLogsURL
+      recentFetchUrl = page.recentLogsURL
       resetLogsURL = page.resetLogsURL
       projectid = page.pid.toText
   script_
@@ -509,6 +515,7 @@ virtualTable page = do
        colIdxMap: $colIdxMap,
        serviceColors: $serviceColors,
        nextFetchUrl: `$nextfetchurl`,
+       recentFetchUrl: `$recentFetchUrl`,
        resetLogsUrl: `$resetLogsURL`,
        projectId: "$projectid"
       }
