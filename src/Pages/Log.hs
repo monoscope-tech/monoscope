@@ -137,12 +137,58 @@ keepNonEmpty (Just "") = Nothing
 keepNonEmpty (Just a) = Just a
 
 
+    -- resource___service___name              TEXT,
+    -- resource___service___version           TEXT,
+    -- resource___service___instance___id     TEXT,
+    -- resource___service___namespace         TEXT,
+    -- resource___telemetry___sdk___language  TEXT,
+    -- resource___telemetry___sdk___name      TEXT,
+    -- resource___telemetry___sdk___version   TEXT,
+
+
+
+replaceNestJsonWithColumns :: Text -> Text
+replaceNestJsonWithColumns =
+  T.replace "attributes.http.request.method" "attributes___http___request___method"
+  . T.replace "attributes.http.request.method_original" "attributes___http___request___method_original"
+  . T.replace "attributes.http.response.status_code" "attributes___http___response___status_code"
+  . T.replace "attributes.http.request.resend_count" "attributes___http___request___resend_count"
+  . T.replace "attributes.http.request.body.size" "attributes___http___request___body___size"
+  . T.replace "attributes.url.fragment" "attributes___url___fragment"
+  . T.replace "attributes.url.full" "attributes___url___full"
+  . T.replace "attributes.url.path" "attributes___url___path"
+  . T.replace "attributes.url.query" "attributes___url___query"
+  . T.replace "attributes.url.scheme" "attributes___url___scheme"
+  . T.replace "attributes.user_agent.original" "attributes___user_agent___original"
+  . T.replace "attributes.db.system.name" "attributes___db___system___name"
+  . T.replace "attributes.db.collection.name" "attributes___db___collection___name"
+  . T.replace "attributes.db.namespace" "attributes___db___namespace"
+  . T.replace "attributes.db.operation.name" "attributes___db___operation___name"
+  . T.replace "attributes.db.operation.batch.size" "attributes___db___operation___batch___size"
+  . T.replace "attributes.db.query.summary" "attributes___db___query___summary"
+  . T.replace "attributes.db.query.text" "attributes___db___query___text"
+  . T.replace "context.trace_id" "context___trace_id"
+  . T.replace "context.span_id" "context___span_id"
+  . T.replace "context.trace_state" "context___trace_state"
+  . T.replace "context.trace_flags" "context___trace_flags"
+  . T.replace "context.is_remote" "context___is_remote"
+  . T.replace "resource.service.name" "resource___service___name"
+  . T.replace "resource.service.version" "resource___service___version"
+  . T.replace "resource.service.instance.id" "resource___service___instance___id"
+  . T.replace "resource.service.namespace" "resource___service___namespace"
+  . T.replace "resource.telemetry.sdk.language" "resource___telemetry___sdk___language"
+  . T.replace "resource.telemetry.sdk.name" "resource___telemetry___sdk___name"
+  . T.replace "resource.telemetry.sdk.version" "resource___telemetry___sdk___version"
+
+
 apiLogH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe UTCTime -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders LogsGet)
-apiLogH pid queryM queryASTM cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM queryLibItemTitle queryLibItemID detailWM targetEventM showTraceM hxRequestM hxBoostedM jsonM = do
+apiLogH pid queryM' queryASTM' cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM queryLibItemTitle queryLibItemID detailWM targetEventM showTraceM hxRequestM hxBoostedM jsonM = do
   (sess, project) <- Sessions.sessionAndProject pid
   let source = "spans" -- fromMaybe "spans" sourceM
   let summaryCols = T.splitOn "," (fromMaybe "" cols')
-  let parseQuery q = either (\err -> addErrorToast "Error Parsing Query" (Just err) >> pure []) pure (parseQueryToAST q)
+  let parseQuery q = either (\err -> addErrorToast "Error Parsing Query" (Just err) >> pure []) pure (parseQueryToAST $ replaceNestJsonWithColumns q)
+  let queryASTM = queryASTM' >>=  (\x  -> Just $ replaceNestJsonWithColumns x)
+  let queryM = queryM' >>=  (\x  -> Just $ replaceNestJsonWithColumns x)
   queryAST <-
     maybe
       (parseQuery $ maybeToMonoid queryM)
