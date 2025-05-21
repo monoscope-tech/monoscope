@@ -1,4 +1,4 @@
-module Pkg.Parser.Stats (pTimeChartSection, pStatsSection, AggFunction (..), Section (..), Rollup (..), ByClause (..), Sources (..), parseQuery, pSource) where
+module Pkg.Parser.Stats (pTimeChartSection, pStatsSection, AggFunction (..), Section (..), Rollup (..), ByClause (..), Sources (..), parseQuery, pSource,aggFunctionParser,aliasParser,byClauseParser,pTimeChartSection) where
 
 import Data.Aeson qualified as AE
 import Data.Text qualified as T
@@ -6,7 +6,7 @@ import Data.Text.Display (Display, display, displayBuilder, displayPrec)
 import Pkg.Parser.Core
 import Pkg.Parser.Expr (Expr, Subject (..), pExpr, pSubject)
 import Relude hiding (Sum, some)
-import Text.Megaparsec
+import Text.Megaparsec 
 import Text.Megaparsec.Char (alphaNumChar, char, space, space1, string)
 
 
@@ -60,6 +60,8 @@ data Sources = SSpans | SMetrics
 
 -- | Handles different aggregation functions and their optional aliases.
 --
+-- >>> import Text.Megaparsec ( parse)
+-- >>> import Pkg.Parser.Stats (aggFunctionParser)
 -- >>> parse aggFunctionParser "" "count(field)"
 -- Right (Count (Subject "field" "field" []) Nothing)
 --
@@ -88,7 +90,7 @@ data Sources = SSpans | SMetrics
 -- Right (Range (Subject "field" "field" []) (Just "rangeVal"))
 --
 -- >>> parse aggFunctionParser "" "p50(field)"
--- Right (Range (Subject "field" "field" []) (Just "rangeVal"))
+-- Right (P50 (Subject "field" "field" []) Nothing)
 --
 -- >>> parse aggFunctionParser "" "customFunc(field) as custom"
 -- Right (Plain (Subject "customFunc" "customFunc" []) Nothing)
@@ -140,7 +142,7 @@ instance Display AggFunction where
 
 
 -- | Utility Parser: Parses an alias
---
+-- import Pkg.Parser.Stats (aliasParser)
 -- >>> parse aliasParser "" " as min_price"
 -- Right "min_price"
 aliasParser :: Parser Text
@@ -148,7 +150,7 @@ aliasParser = toText <$> (string " as" *> space1 *> some (alphaNumChar <|> oneOf
 
 
 -- | Parses the 'by' clause, which can include multiple fields.
---
+-- import Pkg.Parser.Stats (byClauseParser)
 -- >>> parse byClauseParser "" "by field1,field2"
 -- Right (ByClause [Subject "field1" "field1" [],Subject "field2" "field2" []])
 byClauseParser :: Parser ByClause
@@ -193,24 +195,24 @@ instance ToQueryText Section where
 --
 
 -- | parses the timechart command which is used to describe timeseries charts based off the request log data.
---
+--  import Pkg.Parser.Stats 
 -- >>> parse pTimeChartSection "" "timechart count(*) by field1 [1d]"
--- Right (TimeChartCommand (Count (Subject "*" "*" []) Nothing) (Just (ByClause [Subject "field1" "field1" []])) (Just (Rollup "1d")))
+-- Right (TimeChartCommand [Count (Subject "*" "*" []) Nothing] (Just (ByClause [Subject "field1" "field1" []])) (Just (Rollup "1d")))
 --
 -- >>> parse pTimeChartSection "" "timechart sum(field1) by field2,field3 [1d]"
--- Right (TimeChartCommand (Sum (Subject "field1" "field1" []) Nothing) (Just (ByClause [Subject "field2" "field2" [],Subject "field3" "field3" []])) (Just (Rollup "1d")))
+-- Right (TimeChartCommand [Sum (Subject "field1" "field1" []) Nothing] (Just (ByClause [Subject "field2" "field2" [],Subject "field3" "field3" []])) (Just (Rollup "1d")))
 --
 -- >>> parse pTimeChartSection "" "timechart sum(field1) [1d]"
--- Right (TimeChartCommand (Sum (Subject "field1" "field1" []) Nothing) Nothing (Just (Rollup "1d")))
+-- Right (TimeChartCommand [Sum (Subject "field1" "field1" []) Nothing] Nothing (Just (Rollup "1d")))
 --
 -- >>> parse pTimeChartSection "" "timechart count(*) [1d]"
--- Right (TimeChartCommand (Count (Subject "*" "*" []) Nothing) Nothing (Just (Rollup "1d")))
+-- Right (TimeChartCommand [Count (Subject "*" "*" []) Nothing] Nothing (Just (Rollup "1d")))
 --
 -- >>> parse pTimeChartSection "" "timechart [1d]"
--- Right (TimeChartCommand (Count (Subject "*" "*" []) Nothing) Nothing (Just (Rollup "1d")))
+-- Right (TimeChartCommand [Count (Subject "*" "*" []) Nothing] Nothing (Just (Rollup "1d")))
 --
 -- >>> parse pTimeChartSection "" "timechart"
--- Right (TimeChartCommand (Count (Subject "*" "*" []) Nothing) Nothing Nothing)
+-- Right (TimeChartCommand [Count (Subject "*" "*" []) Nothing] Nothing Nothing)
 pTimeChartSection :: Parser Section
 pTimeChartSection = do
   _ <- string "timechart"

@@ -8,6 +8,7 @@ module RequestMessages (
   valueToFields,
   redactJSON,
   replaceNullChars,
+  dedupFields
 )
 where
 
@@ -405,14 +406,16 @@ valueToFields value = dedupFields $ removeBlacklistedFields $ snd $ valueToField
 
 -- | Merge all fields in the vector of tuples by the first item in the tuple.
 --
+-- >>> import Data.Vector qualified as V
+-- >>> import Data.Aeson qualified as AE
 -- >>> dedupFields (V.fromList [(".menu[*]", AE.String "xyz"),(".menu[*]", AE.String "abc")])
--- V.fromList [(".menu[*]",V.fromList [AE.String "abc",AE.String "xyz"])]
+-- [(".menu[*]",[String "abc",String "xyz"])]
 --
 -- >>> dedupFields (V.fromList [(".menu.[*]", AE.String "xyz"),(".menu.[*]", AE.String "abc"),(".menu.[*]", AE.Number 123)])
--- V.fromList [(".menu.[*]",V.fromList [AE.Number 123.0,AE.String "abc",AE.String "xyz"])]
+-- [(".menu.[*]",[Number 123.0,String "abc",String "xyz"])]
 --
 -- >>> dedupFields (V.fromList [(".menu.[*].a", AE.String "xyz"),(".menu.[*].b", AE.String "abc"),(".menu.[*].a", AE.Number 123)])
--- V.fromList [(".menu.[*].a",V.fromList [AE.Number 123.0,AE.String "xyz"]),(".menu.[*].b",V.fromList [AE.String "abc"])]
+-- [(".menu.[*].b",[String "abc"]),(".menu.[*].a",[Number 123.0,String "xyz"])]
 dedupFields :: V.Vector (Text, AE.Value) -> V.Vector (Text, V.Vector AE.Value)
 dedupFields fields = runST $ do
   -- Create a mutable hash table

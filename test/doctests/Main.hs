@@ -2,6 +2,8 @@ module Main (main) where
 
 import Relude
 import Test.DocTest qualified as DocTest 
+import Pkg.Parser.Core 
+import Text.Megaparsec ( parse)
 
 
 main :: IO ()

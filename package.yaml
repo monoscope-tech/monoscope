@@ -40,13 +40,13 @@ ghc-options:
   - -Wno-error=implicit-lift
   - -Wno-error=missing-poly-kind-signatures
   - -Wno-missing-exported-signatures # missing-exported-signatures turns off the more strict -Wmissing-signatures. See https://ghc.haskell.org/trac/ghc/ticket/14794#ticket
-  - -Wno-missing-import-lists # Requires explicit imports of _every_ function (e.g. ‘$’); too strict
-  - -Wno-missed-specialisations # When GHC can’t specialize a polymorphic function. No big deal and requires fixing underlying libraries to solve.
+  - -Wno-missing-import-lists # Requires explicit imports of _every_ function (e.g. '$''); too strict
+  - -Wno-missed-specialisations # When GHC can't specialize a polymorphic function. No big deal and requires fixing underlying libraries to solve.
   - -Wno-all-missed-specialisations # See missed-specialisations
-  - -Wno-unsafe # Don’t use Safe Haskell warnings
-  - -Wno-safe # Don’t use Safe Haskell warnings
+  - -Wno-unsafe # Don't use Safe Haskell warnings
+  - -Wno-safe # Don't use Safe Haskell warnings
   - -Wno-missing-local-signatures # Warning for polymorphic local bindings; nothing wrong with those.
-  - -Wno-monomorphism-restriction # Don’t warn if the monomorphism restriction is used
+  - -Wno-monomorphism-restriction # Don't warn if the monomorphism restriction is used
   - -Wno-missing-safe-haskell-mode
   - -Wno-partial-fields
   - -Wno-prepositive-qualified-module
@@ -281,15 +281,16 @@ tests:
       - -rtsopts
       - -with-rtsopts=-N
     dependencies:
-      - base
       - apitoolkit-server
-      - rust-interop
-      - hs-opentelemetry-instrumentation-auto
-      - hiedb-plugin
+      - base
       - doctest-parallel >= 0.1
-      - relude >= 1.2.0.0
+      - hiedb-plugin
+      - hs-opentelemetry-instrumentation-auto
       - hspec
       - hspec-discover
+      - megaparsec
+      - relude >= 1.2.0.0
+      - rust-interop
   tests:
     main: Main.hs
     source-dirs: test/hspec

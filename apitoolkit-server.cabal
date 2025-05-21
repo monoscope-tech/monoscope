@@ -452,6 +452,7 @@ test-suite doctests
     , hs-opentelemetry-instrumentation-auto
     , hspec
     , hspec-discover
+    , megaparsec
     , relude >=1.2.0.0
     , rust-interop
   default-language: GHC2021
