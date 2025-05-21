@@ -10,7 +10,6 @@ export class LogList extends LitElement {
     flipDirection: { type: Boolean },
     isLoadingRecent: { type: Boolean },
     spanListTree: {},
-    showRecentButton: { type: Boolean },
     recentDataToBeAdded: {},
     isLoading: { type: Boolean },
     view: { type: String },
@@ -33,7 +32,6 @@ export class LogList extends LitElement {
     this.spanListTree = []
     this.isLoading = false
     this.columnMaxWidthMap = {}
-    this.showRecentButton = false
     this.isLoadingRecent = false
     this.isError = false
     this.shouldScrollToBottom = true
@@ -44,6 +42,7 @@ export class LogList extends LitElement {
     this.renderLoadMore = this.renderLoadMore.bind(this)
     this.updateTableData = this.updateTableData.bind(this)
     this.updateColumnMaxWidthMap = this.updateColumnMaxWidthMap.bind(this)
+    this.addWithFlipDirection = this.addWithFlipDirection.bind(this)
     this.toggleLogRow = this.toggleLogRow.bind(this)
     this.logItemCol = this.logItemCol.bind(this)
     this.wrapLines = false
@@ -248,17 +247,19 @@ export class LogList extends LitElement {
               this.fetchedNew = true
               tree.forEach(t => (t.isNew = true))
               const container = document.querySelector('#logs_list_container_inner')
-              if (container && container.scrollTop + container.clientHeight >= container.scrollHeight - 1) {
+              const scrolledToBottom = container.scrollTop + container.clientHeight >= container.scrollHeight - 1
+              if (container && scrolledToBottom) {
                 this.shouldScrollToBottom = true
               }
-              if (this.isLiveStreaming && container && container.scrollTop > 40) {
-                this.showRecentButton = true
-                this.recentDataToBeAdded = this.flipDirection ? [...this.recentDataToBeAdded, ...tree] : [...tree, ...this.recentDataToBeAdded]
+              if (this.isLiveStreaming && container && container.scrollTop > 30 && !this.flipDirection) {
+                this.recentDataToBeAdded = this.addWithFlipDirection(this.recentDataToBeAdded, tree)
+              } else if (this.isLiveStreaming && !scrolledToBottom && this.flipDirection) {
+                this.recentDataToBeAdded = this.addWithFlipDirection(this.recentDataToBeAdded, tree)
               } else {
-                this.spanListTree = this.flipDirection ? [...this.spanListTree, ...tree] : [...tree, ...this.spanListTree]
+                this.spanListTree = this.addWithFlipDirection(this.spanListTree, tree)
               }
             } else {
-              this.spanListTree = this.flipDirection ? [...tree, ...this.spanListTree] : [...this.spanListTree, ...tree]
+              this.spanListTree = this.addWithFlipDirection(tree, this.spanListTree)
             }
             this.updateColumnMaxWidthMap(logsData)
           }
@@ -352,6 +353,24 @@ export class LogList extends LitElement {
     this.requestUpdate()
   }
 
+  addWithFlipDirection(current, newData) {
+    return this.flipDirection ? [...current, ...newData] : [...newData, ...current]
+  }
+
+  handleRecentClick() {
+    const container = document.querySelector('#logs_list_container_inner')
+    if (container) {
+      container.scrollTop = 0
+    }
+    this.handleRecentConcatenation()
+  }
+
+  handleRecentConcatenation() {
+    if (this.recentDataToBeAdded.length === 0) return
+    this.spanListTree = this.addWithFlipDirection(this.spanListTree, this.recentDataToBeAdded)
+    this.recentDataToBeAdded = []
+  }
+
   render() {
     const list = this.view === 'tree' ? this.spanListTree.filter(sp => sp.show) : [...this.spanListTree]
     // end is used to render the load more button"
@@ -363,30 +382,27 @@ export class LogList extends LitElement {
       <div
         @scroll=${event => {
           const container = event.target
-          if (container.scrollTop + container.clientHeight >= container.scrollHeight - 1) {
-            this.shouldScrollToBottom = true
+          if (this.flipDirection) {
+            if (container.scrollTop + container.clientHeight >= container.scrollHeight - 1) {
+              this.shouldScrollToBottom = true
+            } else {
+              this.shouldScrollToBottom = false
+              this.handleRecentConcatenation()
+            }
           } else {
-            this.shouldScrollToBottom = false
+            if (container.scrollTop === 0) {
+              this.handleRecentConcatenation()
+            }
           }
         }}
         class="relative h-full shrink-1 min-w-0 p-0 m-0 bg-white w-full c-scroll pb-12 overflow-y-scroll scroll-smooth"
         id="logs_list_container_inner"
       >
-        ${this.showRecentButton
+        ${this.recentDataToBeAdded.length > 0 && !this.flipDirection
           ? html` <div class="sticky left-1/2 -translate-y-1/2 top-[30px] z-50">
               <button
-                class="cbadge-sm badge-neutral cursor-pointer border bg-white border-strokeWeak shadow rounded-lg text-sm text-textStrong absolute"
-                @click=${() => {
-                  this.spanListTree = this.flipDirection
-                    ? [...this.spanListTree, ...this.recentDataToBeAdded]
-                    : [...this.recentDataToBeAdded, ...this.spanListTree]
-                  this.recentDataToBeAdded = []
-                  this.showRecentButton = false
-                  const container = document.querySelector('#logs_list_container_inner')
-                  if (container) {
-                    container.scrollTop = 0
-                  }
-                }}
+                class="cbadge-sm badge-neutral cursor-pointer bg-fillBrand-strong text-textInverse-strong shadow rounded-lg text-sm absolute"
+                @click=${this.handleRecentClick}
               >
                 ${this.recentDataToBeAdded.length} new
               </button>
@@ -414,15 +430,19 @@ export class LogList extends LitElement {
             })}
           </tbody>
         </table>
+
         ${!this.shouldScrollToBottom && this.flipDirection
           ? html`<div style="position: sticky;bottom: 0px;overflow-anchor: none;">
               <button
                 @click=${() => {
                   this.shouldScrollToBottom = true
                   this.scrollToBottom()
+                  this.handleRecentConcatenation()
                 }}
                 data-tip="Scroll to bottom"
-                class="absolute tooltip tooltip-left right-8 bottom-2 group z-50 bg-bgInverse text-white flex justify-center items-center rounded-full shadow-lg h-10 w-10"
+                class=${`absolute tooltip tooltip-left right-8 bottom-2 group z-50 ${
+                  this.recentDataToBeAdded.length > 0 ? 'bg-fillBrand-strong' : 'bg-bgInverse'
+                } text-white flex justify-center items-center rounded-full shadow-lg h-10 w-10`}
               >
                 ${faSprite('arrow-down', 'regular', 'h-6 w-6 fill-white stroke-white')}
               </button>
@@ -802,6 +822,9 @@ export class LogList extends LitElement {
           @click=${() => {
             this.flipDirection = !this.flipDirection
             this.spanListTree = this.buildSpanListTree(this.spanListTree.map(span => span.data).reverse())
+            this.recentDataToBeAdded = this.buildSpanListTree(this.recentDataToBeAdded.map(span => span.data).reverse())
+            this.spanListTree = [...this.spanListTree, ...this.recentDataToBeAdded]
+            this.recentDataToBeAdded = []
             this.requestUpdate()
           }}
         >
