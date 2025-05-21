@@ -10,6 +10,8 @@ export class LogList extends LitElement {
     flipDirection: { type: Boolean },
     isLoadingRecent: { type: Boolean },
     spanListTree: {},
+    showRecentButton: { type: Boolean },
+    recentDataToBeAdded: {},
     isLoading: { type: Boolean },
     view: { type: String },
     showOptions: { type: Boolean },
@@ -27,9 +29,11 @@ export class LogList extends LitElement {
     this.hasMore = false
     this.expandedTraces = {}
     this.showOptions = false
+    this.recentDataToBeAdded = []
     this.spanListTree = []
     this.isLoading = false
     this.columnMaxWidthMap = {}
+    this.showRecentButton = false
     this.isLoadingRecent = false
     this.isError = false
     this.shouldScrollToBottom = true
@@ -247,7 +251,12 @@ export class LogList extends LitElement {
               if (container && container.scrollTop + container.clientHeight >= container.scrollHeight - 1) {
                 this.shouldScrollToBottom = true
               }
-              this.spanListTree = this.flipDirection ? [...this.spanListTree, ...tree] : [...tree, ...this.spanListTree]
+              if (this.isLiveStreaming && container && container.scrollTop > 40) {
+                this.showRecentButton = true
+                this.recentDataToBeAdded = this.flipDirection ? [...this.recentDataToBeAdded, ...tree] : [...tree, ...this.recentDataToBeAdded]
+              } else {
+                this.spanListTree = this.flipDirection ? [...this.spanListTree, ...tree] : [...tree, ...this.spanListTree]
+              }
             } else {
               this.spanListTree = this.flipDirection ? [...tree, ...this.spanListTree] : [...this.spanListTree, ...tree]
             }
@@ -363,6 +372,27 @@ export class LogList extends LitElement {
         class="relative h-full shrink-1 min-w-0 p-0 m-0 bg-white w-full c-scroll pb-12 overflow-y-scroll scroll-smooth"
         id="logs_list_container_inner"
       >
+        ${this.showRecentButton
+          ? html` <div class="sticky left-1/2 -translate-y-1/2 top-[30px] z-50">
+              <button
+                class="cbadge-sm badge-neutral cursor-pointer border bg-white border-strokeWeak shadow rounded-lg text-sm text-textStrong absolute"
+                @click=${() => {
+                  this.spanListTree = this.flipDirection
+                    ? [...this.spanListTree, ...this.recentDataToBeAdded]
+                    : [...this.recentDataToBeAdded, ...this.spanListTree]
+                  this.recentDataToBeAdded = []
+                  this.showRecentButton = false
+                  const container = document.querySelector('#logs_list_container_inner')
+                  if (container) {
+                    container.scrollTop = 0
+                  }
+                }}
+              >
+                ${this.recentDataToBeAdded.length} new
+              </button>
+            </div>`
+          : nothing}
+
         <table class="table-auto w-max relative ctable table-pin-rows table-pin-cols">
           <thead class="z-10 sticky top-0">
             <tr class="text-textStrong border-b flex min-w-0 relative font-medium ">
@@ -596,8 +626,8 @@ export class LogList extends LitElement {
   }
 
   fetchRecent() {
-    return html`<tr class="w-full flex relative">
-      <td colspan=${String(this.logsColumns.length)} class="relative pl-[calc(40vw-10ch)]">
+    return html`<tr class="w-full flex relative" id="recent-logs">
+      <td colspan=${String(this.logsColumns.length)} class="relative pl-[calc(40vw-10ch)]" id="recent-logs">
         ${this.isLiveStreaming
           ? html`<p>Live streaming latest data...</p>`
           : this.isLoadingRecent

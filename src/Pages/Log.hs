@@ -201,6 +201,7 @@ apiLogH pid queryM queryASTM cols' cursorM' sinceM fromM toM layoutM sourceM tar
                 "Events"
                 -- a_ [onclick_ "window.setQueryParamAndReload('source', 'metrics')", role_ "tab", class_ $ "tab py-1.5 h-auto! " <> if source == "metrics" then "tab-active" else ""] "Metrics"
           }
+          
   case tableAsVecM of
     Just tableAsVec -> do
       let (requestVecs, colNames, resultCount) = tableAsVec

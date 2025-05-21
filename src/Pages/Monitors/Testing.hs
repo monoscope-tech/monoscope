@@ -272,6 +272,7 @@ dashboardPage pid col reqsVecM = do
                       , colIdxMap
                       , nextLogsURL
                       , resetLogsURL
+                      , recentLogsURL = ""
                       , currentRange = Nothing
                       , exceededFreeTier = False
                       , query
