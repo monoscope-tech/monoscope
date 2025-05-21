@@ -113,7 +113,7 @@ getMetricAttributeValue attribute rms = listToMaybe $ V.toList $ V.mapMaybe getR
 
 
 -- | Process a list of messages
-processList :: (Eff.Reader AuthContext :> es, DB :> es, Labeled "timefusion" DB :> es, Log :> es, IOE :> es, Time :> es, UUIDEff :> es, Ki.StructuredConcurrency :> es) => [(Text, ByteString)] -> HashMap Text Text -> Eff es [Text]
+processList :: (DB :> es, Eff.Reader AuthContext :> es, IOE :> es, Ki.StructuredConcurrency :> es, Labeled "timefusion" DB :> es, Log :> es, Time :> es, UUIDEff :> es) => [(Text, ByteString)] -> HashMap Text Text -> Eff es [Text]
 processList [] _ = pure []
 processList msgs attrs = checkpoint "processList" $ process `onException` handleException
   where
@@ -836,12 +836,12 @@ services appLogger appCtx =
         (mkNonStreaming $ traceServiceExport appLogger appCtx :: ServerHandler IO (Protobuf TS.TraceService "export"))
   )
     <> ( fromMethods
-          $ simpleMethods
-            (mkNonStreaming $ logsServiceExport appLogger appCtx :: ServerHandler IO (Protobuf LS.LogsService "export"))
+           $ simpleMethods
+             (mkNonStreaming $ logsServiceExport appLogger appCtx :: ServerHandler IO (Protobuf LS.LogsService "export"))
        )
     <> ( fromMethods
-          $ simpleMethods
-            (mkNonStreaming $ metricsServiceExport appLogger appCtx :: ServerHandler IO (Protobuf MS.MetricsService "export"))
+           $ simpleMethods
+             (mkNonStreaming $ metricsServiceExport appLogger appCtx :: ServerHandler IO (Protobuf MS.MetricsService "export"))
        )
 
 

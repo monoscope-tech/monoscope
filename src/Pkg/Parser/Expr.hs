@@ -1,4 +1,4 @@
-module Pkg.Parser.Expr (pSubject, pExpr, Subject (..), Values (..), Expr (..),pSquareBracketKey,pTerm,jsonPathQuery,pValues,FieldKey(..)) where
+module Pkg.Parser.Expr (pSubject, pExpr, Subject (..), Values (..), Expr (..), pSquareBracketKey, pTerm, jsonPathQuery, pValues, FieldKey (..)) where
 
 import Control.Monad.Combinators.Expr (
   Operator (InfixL),
@@ -20,7 +20,7 @@ import Text.Megaparsec.Char.Lexer qualified as L
 -- Values is an enum of the list of supported value types.
 -- Num is a text  that represents a float as float covers ints in a lot of cases. But its basically the json num type.
 data Values = Num Text | Str Text | Boolean Bool | Null | List [Values]
-  deriving stock (Eq, Ord, Show, Generic)
+  deriving stock (Eq, Generic, Ord, Show)
 
 
 instance AE.FromJSON Values where
@@ -49,7 +49,7 @@ instance ToQueryText Values where
 -- A subject consists of the primary key, and then the list of fields keys which are delimited by a .
 -- To support jsonpath, we will have more powerfule field keys, so instead of a text array, we could have an enum field key type?
 data Subject = Subject Text Text [FieldKey]
-  deriving stock (Eq, Ord, Show, Generic)
+  deriving stock (Eq, Generic, Ord, Show)
 
 
 -- Custom ToJSON which lets us stick to the jsonpath representation of subjects, when rendering subject to json
@@ -70,7 +70,7 @@ instance ToQueryText Subject where
 
 
 data FieldKey = FieldKey Text | ArrayIndex Text Int | ArrayWildcard Text
-  deriving stock (Eq, Ord, Show, Generic)
+  deriving stock (Eq, Generic, Ord, Show)
   deriving anyclass (AE.FromJSON, AE.ToJSON)
 
 
@@ -118,7 +118,7 @@ data Expr
   --  | Not Expr
   --  | JSONPathExpr Expr
   --  | FunctionCall String [Expr] -- For functions like ANY
-  deriving stock (Eq, Ord, Show, Generic)
+  deriving stock (Eq, Generic, Ord, Show)
   deriving anyclass (AE.FromJSON, AE.ToJSON)
 
 
@@ -217,7 +217,7 @@ pValues =
 
 
 -- | pTerm is the main entry point that desides what tree lines to decend
--- 
+--
 -- Exampes:
 -- >>> import Text.Megaparsec ( parseTest)
 -- >>> parseTest pTerm "abc != \"GET\""
@@ -356,7 +356,7 @@ instance Display Values where
 
 -- | Render the expr ast to a value. Start with Eq only, for supporting jsonpath
 -- >>> import Data.Text.Display ( display)
--- >>> import qualified Data.Text as T 
+-- >>> import qualified Data.Text as T
 -- >>> import Pkg.Parser.Expr (FieldKey(..))
 -- >>> display (Eq (Subject "" "request_body" [FieldKey (T.pack "message")]) (Str "val"))
 -- "request_body->>'message'='val'"
@@ -437,9 +437,9 @@ displayExprHelper op prec sub val =
 
 
 -- | Generate PostgreSQL JSONPath queries from AST with specified operator
--- 
+--
 -- Examples:
--- >>> import qualified Data.Text as T 
+-- >>> import qualified Data.Text as T
 -- >>> import Pkg.Parser.Expr (FieldKey(..))
 -- >>> jsonPathQuery "==" (Subject "" "data" [FieldKey (T.pack "name")]) (Str "John Doe")
 -- "jsonb_path_exists(to_jsonb(data), $$$.\"name\" ? (@ == \"John Doe\")$$::jsonpath)"

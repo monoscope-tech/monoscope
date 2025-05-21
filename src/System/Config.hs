@@ -68,8 +68,8 @@ data EnvConfig = EnvConfig
   , postmarkToken :: Text
   , lemonSqueezyWebhookSecret :: Text
   }
-  deriving stock (Show, Generic)
-  deriving anyclass (FromEnv, Default)
+  deriving stock (Generic, Show)
+  deriving anyclass (Default, FromEnv)
 
 
 -- Support unmarshalling a coma separated text into a text list
@@ -102,7 +102,7 @@ ctxToHandler s x = runReaderT x s
 -- ===============
 
 data DeploymentEnv = Prod | Staging
-  deriving stock (Read, Show, Generic)
+  deriving stock (Generic, Read, Show)
   deriving (Var) via (ReadShowVar DeploymentEnv)
 
 

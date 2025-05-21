@@ -33,7 +33,7 @@ import Servant (FromHttpApiData)
 
 newtype FormatId = FormatId {unFormatId :: UUID.UUID}
   deriving stock (Generic, Show)
-  deriving newtype (Eq, Ord, FromField, ToField, FromHttpApiData, Default, AE.FromJSON, NFData, AE.ToJSON)
+  deriving newtype (AE.FromJSON, AE.ToJSON, Default, Eq, FromField, FromHttpApiData, NFData, Ord, ToField)
 
 
 data Format = Format
@@ -47,11 +47,11 @@ data Format = Format
   , examples :: V.Vector AE.Value
   , hash :: Text
   }
-  deriving stock (Show, Generic)
-  deriving anyclass (FromRow, ToRow, NFData)
-  deriving (AE.FromJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] Format
+  deriving stock (Generic, Show)
+  deriving anyclass (FromRow, NFData, ToRow)
   deriving (Entity) via (GenericEntity '[Schema "apis", TableName "formats", PrimaryKey "id", FieldModifiers '[CamelToSnake]] Format)
   deriving (FromField) via Aeson Format
+  deriving (AE.FromJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] Format
 
 
 formatsByFieldHash :: Text -> DBT IO (V.Vector Format)
@@ -95,11 +95,11 @@ data SwFormat = SwFormat
   , swExamples :: V.Vector AE.Value
   , swHash :: Text
   }
-  deriving stock (Show, Generic)
-  deriving anyclass (FromRow, ToRow, NFData)
-  deriving (AE.FromJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] SwFormat
-  deriving (FromField) via Aeson SwFormat
+  deriving stock (Generic, Show)
+  deriving anyclass (FromRow, NFData, ToRow)
   deriving anyclass (AE.ToJSON)
+  deriving (FromField) via Aeson SwFormat
+  deriving (AE.FromJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] SwFormat
 
 
 formatsByFieldsHashes :: Projects.ProjectId -> V.Vector Text -> PgT.DBT IO (V.Vector SwFormat)

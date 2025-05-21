@@ -22,7 +22,7 @@ import Servant (FromHttpApiData)
 
 newtype SwaggerId = SwaggerId {swaggerId :: UUID.UUID}
   deriving stock (Generic, Show)
-  deriving newtype (Eq, Ord, AE.ToJSON, AE.FromJSON, FromField, ToField, FromHttpApiData, Default, NFData)
+  deriving newtype (AE.FromJSON, AE.ToJSON, Default, Eq, FromField, FromHttpApiData, NFData, Ord, ToField)
 
 
 instance HasField "toText" SwaggerId Text where
@@ -38,8 +38,8 @@ data Swagger = Swagger
   , swaggerJson :: AE.Value
   , host :: Text
   }
-  deriving stock (Show, Generic)
-  deriving anyclass (FromRow, ToRow, NFData)
+  deriving stock (Generic, Show)
+  deriving anyclass (FromRow, NFData, ToRow)
   deriving
     (Entity)
     via (GenericEntity '[Schema "apis", TableName "swagger_jsons", PrimaryKey "id", FieldModifiers '[CamelToSnake]] Swagger)

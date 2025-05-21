@@ -58,8 +58,8 @@ import Web.HttpApiData
 
 
 newtype ProjectId = ProjectId {unProjectId :: UUID.UUID}
-  deriving stock (Generic, Show, Read, THS.Lift)
-  deriving newtype (Eq, Ord, AE.ToJSON, AE.FromJSON, FromField, ToField, FromHttpApiData, Default, Hashable, NFData)
+  deriving stock (Generic, Read, Show, THS.Lift)
+  deriving newtype (AE.FromJSON, AE.ToJSON, Default, Eq, FromField, FromHttpApiData, Hashable, NFData, Ord, ToField)
   deriving anyclass (FromRow, ToRow)
 
 
@@ -119,8 +119,8 @@ parseNotifChannel NPhone = "phone"
 
 
 data OnboardingStep = Info | Survey | CreateMonitor | NotifChannel | Integration | Pricing | Complete
-  deriving stock (Eq, Generic, Show, Read)
-  deriving (AE.FromJSON, AE.ToJSON, NFData, ToField, FromField) via OnboardingStep
+  deriving stock (Eq, Generic, Read, Show)
+  deriving (AE.FromJSON, AE.ToJSON, FromField, NFData, ToField) via OnboardingStep
 
 
 instance FromField NotificationChannel where
@@ -156,14 +156,14 @@ data Project = Project
   , notifyPhoneNumber :: Maybe Text
   , notifyEmails :: V.Vector Text
   }
-  deriving stock (Show, Generic)
+  deriving stock (Generic, Show)
   deriving anyclass (FromRow, NFData)
-  deriving
-    (AE.FromJSON, AE.ToJSON)
-    via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] Project
   deriving
     (Entity)
     via (GenericEntity '[Schema "projects", TableName "projects", PrimaryKey "id", FieldModifiers '[CamelToSnake]] Project)
+  deriving
+    (AE.FromJSON, AE.ToJSON)
+    via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] Project
 
 
 -- FIXME: Why was this record created? And not the regular projects record?
@@ -195,8 +195,8 @@ data Project' = Project'
   , hasIntegrated :: Bool
   , usersDisplayImages :: V.Vector Text
   }
-  deriving stock (Show, Generic)
-  deriving anyclass (FromRow, Default, NFData)
+  deriving stock (Generic, Show)
+  deriving anyclass (Default, FromRow, NFData)
 
 
 data ProjectCache = ProjectCache
@@ -216,7 +216,7 @@ data ProjectCache = ProjectCache
   , weeklyRequestCount :: Int
   , paymentPlan :: Text
   }
-  deriving stock (Show, Generic)
+  deriving stock (Generic, Show)
   deriving anyclass (FromRow)
 
 
@@ -230,7 +230,7 @@ data CreateProject = CreateProject
   , firstSubItemId :: Maybe Text
   , orderId :: Maybe Text
   }
-  deriving stock (Show, Generic)
+  deriving stock (Generic, Show)
   deriving anyclass (FromRow, ToRow)
   deriving
     (Entity)
@@ -356,8 +356,8 @@ updateUsageLastReported pid lastReported = execute Update q (lastReported, pid)
 
 ---------------------------------
 newtype QueryLibItemId = QueryLibItemId {unQueryLibItemId :: UUID.UUID}
-  deriving stock (Generic, Show, Read)
-  deriving newtype (Eq, Ord, FromField, ToField, FromHttpApiData, Default, Hashable, NFData)
+  deriving stock (Generic, Read, Show)
+  deriving newtype (Default, Eq, FromField, FromHttpApiData, Hashable, NFData, Ord, ToField)
 
 
 instance HasField "unwrap" QueryLibItemId UUID.UUID where
@@ -369,8 +369,8 @@ instance HasField "toText" QueryLibItemId Text where
 
 
 data QueryLibType = QLTHistory | QLTSaved
-  deriving (Eq, Generic, Show, Read, NFData)
-  deriving (ToField, FromField) via WrappedEnumSC "QLT" QueryLibType
+  deriving (Eq, Generic, NFData, Read, Show)
+  deriving (FromField, ToField) via WrappedEnumSC "QLT" QueryLibType
 
 
 data QueryLibItem = QueryLibItem
@@ -385,8 +385,8 @@ data QueryLibItem = QueryLibItem
   , title :: Maybe Text
   , byMe :: Bool
   }
-  deriving (Show, Generic, Eq)
-  deriving anyclass (FromRow, ToRow, NFData)
+  deriving (Eq, Generic, Show)
+  deriving anyclass (FromRow, NFData, ToRow)
 
 
 queryLibHistoryForUser :: DB :> es => ProjectId -> Users.UserId -> Eff es (V.Vector QueryLibItem)

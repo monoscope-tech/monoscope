@@ -127,14 +127,14 @@ data MetricNode = MetricNode
   { parent :: Text
   , current :: Text
   }
-  deriving (Show, Eq)
+  deriving (Eq, Show)
 
 
 data MetricTree = MetricTree
   { spanRecord :: MetricNode
   , children :: [MetricTree]
   }
-  deriving (Show, Generic)
+  deriving (Generic, Show)
 
 
 pathToNodes :: Text -> [MetricNode]

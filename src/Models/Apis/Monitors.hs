@@ -60,7 +60,7 @@ import Servant (FromHttpApiData)
 
 newtype QueryMonitorId = QueryMonitorId {unQueryMonitorId :: UUID.UUID}
   deriving stock (Generic, Show)
-  deriving newtype (AE.ToJSON, AE.FromJSON, Eq, Ord, FromField, ToField, FromHttpApiData, NFData, Default)
+  deriving newtype (AE.FromJSON, AE.ToJSON, Default, Eq, FromField, FromHttpApiData, NFData, Ord, ToField)
 
 
 instance HasField "toText" QueryMonitorId Text where
@@ -77,9 +77,9 @@ data MonitorAlertConfig = MonitorAlertConfig
   , slackChannels :: V.Vector Text
   }
   deriving stock (Generic, Show)
-  deriving anyclass (NFData, Default)
-  deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] MonitorAlertConfig
+  deriving anyclass (Default, NFData)
   deriving (FromField, ToField) via Aeson MonitorAlertConfig
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] MonitorAlertConfig
 
 
 data QueryMonitor = QueryMonitor
@@ -101,10 +101,10 @@ data QueryMonitor = QueryMonitor
   , deactivatedAt :: Maybe UTCTime
   , deletedAt :: Maybe UTCTime
   }
-  deriving stock (Show, Generic)
-  deriving anyclass (FromRow, ToRow, NFData, Default)
-  deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] QueryMonitor
+  deriving stock (Generic, Show)
+  deriving anyclass (Default, FromRow, NFData, ToRow)
   deriving (Entity) via (GenericEntity '[Schema "monitors", TableName "query_monitors", PrimaryKey "id", FieldModifiers '[CamelToSnake]] QueryMonitor)
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] QueryMonitor
 
 
 data QueryMonitorEvaled = QueryMonitorEvaled
@@ -127,8 +127,8 @@ data QueryMonitorEvaled = QueryMonitorEvaled
   , deletedAt :: Maybe UTCTime
   , evalResult :: Int
   }
-  deriving stock (Show, Generic)
-  deriving anyclass (FromRow, ToRow, NFData, Default)
+  deriving stock (Generic, Show)
+  deriving anyclass (Default, FromRow, NFData, ToRow)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] QueryMonitorEvaled
 
 

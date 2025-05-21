@@ -327,16 +327,16 @@ data SpanMin = SpanMin
   , endTime :: Maybe Integer
   , timestamp :: UTCTime
   }
-  deriving stock (Show, Generic)
-  deriving anyclass (AE.ToJSON, AE.FromJSON)
+  deriving stock (Generic, Show)
+  deriving anyclass (AE.FromJSON, AE.ToJSON)
 
 
 data SpanTree = SpanTree
   { spanRecord :: SpanMin
   , children :: [SpanTree]
   }
-  deriving (Show, Generic)
-  deriving anyclass (AE.ToJSON, AE.FromJSON)
+  deriving (Generic, Show)
+  deriving anyclass (AE.FromJSON, AE.ToJSON)
 
 
 buildSpanMap :: V.Vector Telemetry.SpanRecord -> Map (Maybe Text) [Telemetry.SpanRecord]

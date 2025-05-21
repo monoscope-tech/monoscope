@@ -314,8 +314,8 @@ processWidget pid now (sinceStr, fromDStr, toDStr) allParams widgetBase = do
               $ widget
               & #html
                 ?~ ( renderText
-                      $ div_ [class_ "flex flex-col gap-4 h-full w-full overflow-hidden"]
-                      $ forM_ issuesVM (\x -> div_ [class_ "border border-strokeWeak rounded-2xl overflow-hidden"] $ toHtml x)
+                       $ div_ [class_ "flex flex-col gap-4 h-full w-full overflow-hidden"]
+                       $ forM_ issuesVM (\x -> div_ [class_ "border border-strokeWeak rounded-2xl overflow-hidden"] $ toHtml x)
                    )
           Widget.WTStat -> do
             stat <- Charts.queryMetrics (Just Charts.DTFloat) (Just pid) widget.query Nothing widget.sql sinceStr fromDStr toDStr Nothing allParams
@@ -387,8 +387,8 @@ data WidgetReorderItem = WidgetReorderItem
   , y :: Maybe Int
   , children :: Maybe (Map Text WidgetReorderItem)
   }
-  deriving stock (Show, Generic)
-  deriving anyclass (NFData, Default)
+  deriving stock (Generic, Show)
+  deriving anyclass (Default, NFData)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake WidgetReorderItem
 
 
@@ -442,7 +442,7 @@ reorderWidgets patch ws = go patch
         Widget.Layout ox oy ow oh = fromMaybe (Widget.Layout Nothing Nothing Nothing Nothing) mLayout
 
 
-getDashAndVM :: (DB :> es, Wreq.HTTP :> es, Error ServerError :> es) => Dashboards.DashboardId -> Maybe Text -> Eff es (Dashboards.DashboardVM, Dashboards.Dashboard)
+getDashAndVM :: (DB :> es, Error ServerError :> es, Wreq.HTTP :> es) => Dashboards.DashboardId -> Maybe Text -> Eff es (Dashboards.DashboardVM, Dashboards.Dashboard)
 getDashAndVM dashId fileM = do
   dashVM <-
     (dbtToEff $ DBT.selectById @Dashboards.DashboardVM (Only dashId)) >>= \case
@@ -694,7 +694,7 @@ data DashboardsGet = DashboardsGet
   , projectId :: Projects.ProjectId
   , embedded :: Bool -- Whether to render in embedded mode (for modals)
   }
-  deriving (Show, Generic)
+  deriving (Generic, Show)
 
 
 instance ToHtml DashboardsGet where
@@ -839,7 +839,7 @@ dashboardsGetH pid embeddedM = do
 data DashboardForm = DashboardForm
   { file :: Text
   }
-  deriving stock (Show, Generic)
+  deriving stock (Generic, Show)
   deriving anyclass (FromForm)
 
 
@@ -925,7 +925,7 @@ toQueryParams qs =
 data DashboardRenameForm = DashboardRenameForm
   { title :: Text
   }
-  deriving stock (Show, Generic)
+  deriving stock (Generic, Show)
   deriving anyclass (FromForm)
 
 
@@ -1025,7 +1025,7 @@ data WidgetMoveForm = WidgetMoveForm
   , sourceDashboardId :: Dashboards.DashboardId
   , targetDashboardId :: Dashboards.DashboardId
   }
-  deriving stock (Show, Generic)
+  deriving stock (Generic, Show)
   deriving anyclass (AE.FromJSON, AE.ToJSON)
 
 

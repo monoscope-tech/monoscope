@@ -20,7 +20,7 @@ import Servant (FromHttpApiData)
 
 newtype LemonSubId = LemonSubId {lemonSubId :: UUID.UUID}
   deriving stock (Generic, Show)
-  deriving newtype (Eq, Ord, AE.ToJSON, AE.FromJSON, FromField, ToField, FromHttpApiData, Default, NFData)
+  deriving newtype (AE.FromJSON, AE.ToJSON, Default, Eq, FromField, FromHttpApiData, NFData, Ord, ToField)
 
 
 instance HasField "toText" LemonSubId Text where
@@ -38,8 +38,8 @@ data LemonSub = LemonSub
   , productName :: Text
   , userEmail :: Text
   }
-  deriving stock (Show, Generic)
-  deriving anyclass (FromRow, ToRow, NFData)
+  deriving stock (Generic, Show)
+  deriving anyclass (FromRow, NFData, ToRow)
   deriving
     (Entity)
     via (GenericEntity '[Schema "apis", TableName "subscriptions", PrimaryKey "id", FieldModifiers '[CamelToSnake]] LemonSub)

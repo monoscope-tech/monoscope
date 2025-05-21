@@ -115,7 +115,7 @@ redirect :: Text -> Headers '[Header "Location" Text] NoContent
 redirect destination = addHeader destination NoContent
 
 
-data DBField = forall a. (ToField a, Show a) => MkDBField a
+data DBField = forall a. (Show a, ToField a) => MkDBField a
 
 
 instance Show DBField where

@@ -121,21 +121,21 @@ atMapInt key maybeMap = do
 
 
 data SeverityLevel = SLDebug | SLInfo | SLWarn | SLError | SLFatal
-  deriving (Show, Generic, Read)
-  deriving anyclass (NFData, AE.FromJSON, AE.ToJSON)
-  deriving (ToField, FromField) via WrappedEnum "SL" SeverityLevel
+  deriving (Generic, Read, Show)
+  deriving anyclass (AE.FromJSON, AE.ToJSON, NFData)
+  deriving (FromField, ToField) via WrappedEnum "SL" SeverityLevel
 
 
 data SpanStatus = SSOk | SSError | SSUnset
-  deriving (Show, Generic, Read, Eq)
-  deriving anyclass (NFData, AE.FromJSON, AE.ToJSON)
-  deriving (ToField, FromField) via WrappedEnum "SS" SpanStatus
+  deriving (Eq, Generic, Read, Show)
+  deriving anyclass (AE.FromJSON, AE.ToJSON, NFData)
+  deriving (FromField, ToField) via WrappedEnum "SS" SpanStatus
 
 
 data SpanKind = SKInternal | SKServer | SKClient | SKProducer | SKConsumer | SKUnspecified
-  deriving (Show, Generic, Read)
-  deriving anyclass (NFData, AE.FromJSON, AE.ToJSON)
-  deriving (ToField, FromField) via WrappedEnum "SK" SpanKind
+  deriving (Generic, Read, Show)
+  deriving anyclass (AE.FromJSON, AE.ToJSON, NFData)
+  deriving (FromField, ToField) via WrappedEnum "SK" SpanKind
 
 
 data Trace = Trace
@@ -146,9 +146,9 @@ data Trace = Trace
   , totalSpans :: Int
   , serviceNames :: Maybe (V.Vector Text)
   }
-  deriving (Show, Generic)
+  deriving (Generic, Show)
+  deriving anyclass (FromRow, NFData)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake Trace
-  deriving anyclass (NFData, FromRow)
 
 
 data LogRecord = LogRecord
@@ -165,9 +165,9 @@ data LogRecord = LogRecord
   , resource :: AE.Value
   , instrumentationScope :: AE.Value
   }
-  deriving (Show, Generic)
+  deriving (Generic, Show)
+  deriving anyclass (FromRow, NFData)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake LogRecord
-  deriving anyclass (NFData, FromRow)
 
 
 instance AE.FromJSON ByteString where
@@ -216,9 +216,9 @@ data SpanRecord = SpanRecord
   , instrumentationScope :: AE.Value
   , spanDurationNs :: Integer
   }
-  deriving (Show, Generic)
+  deriving (Generic, Show)
+  deriving anyclass (FromRow, NFData, ToRow)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake SpanRecord
-  deriving anyclass (NFData, FromRow, ToRow)
 
 
 convertOtelLogsAndSpansToSpanRecord :: OtelLogsAndSpans -> Maybe SpanRecord
@@ -260,10 +260,10 @@ data SpanEvent = SpanEvent
   , eventAttributes :: AE.Value
   , eventDroppedAttributesCount :: Int
   }
-  deriving (Show, Generic)
+  deriving (Generic, Show)
+  deriving anyclass (FromRow, NFData, ToRow)
+  deriving (FromField, ToField) via Aeson SpanEvent
   deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake SpanEvent
-  deriving anyclass (NFData, FromRow, ToRow)
-  deriving (ToField, FromField) via Aeson SpanEvent
 
 
 data SpanLink = SpanLink
@@ -273,10 +273,10 @@ data SpanLink = SpanLink
   , linkDroppedAttributesCount :: Int
   , linkFlags :: Int
   }
-  deriving (Show, Generic)
+  deriving (Generic, Show)
+  deriving anyclass (FromRow, NFData, ToRow)
+  deriving (FromField, ToField) via Aeson SpanLink
   deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake SpanLink
-  deriving anyclass (NFData, FromRow, ToRow)
-  deriving (ToField, FromField) via Aeson SpanLink
 
 
 data MetricRecord = MetricRecord
@@ -296,9 +296,9 @@ data MetricRecord = MetricRecord
   , exemplars :: AE.Value
   , flags :: Int
   }
-  deriving (Show, Generic)
+  deriving (Generic, Show)
+  deriving anyclass (FromRow, NFData, ToRow)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake MetricRecord
-  deriving anyclass (FromRow, ToRow, NFData)
 
 
 data MetricMeta = MetricMeta
@@ -309,9 +309,9 @@ data MetricMeta = MetricMeta
   , metricDescription :: Text
   , serviceName :: Text
   }
-  deriving (Show, Generic)
+  deriving (Generic, Show)
+  deriving anyclass (FromRow, NFData, ToRow)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake MetricMeta
-  deriving anyclass (FromRow, ToRow, NFData)
 
 
 data MetricValue
@@ -320,16 +320,16 @@ data MetricValue
   | HistogramValue Histogram
   | SummaryValue Summary
   | ExponentialHistogramValue ExponentialHistogram
-  deriving (Show, Generic)
+  deriving (Generic, Show)
   deriving anyclass (NFData)
-  deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake MetricValue
   deriving (FromField, ToField) via Aeson MetricValue
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake MetricValue
 
 
 newtype GaugeSum = GaugeSum
   { value :: Double
   }
-  deriving (Show, Generic)
+  deriving (Generic, Show)
   deriving anyclass (NFData)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake GaugeSum
 
@@ -342,9 +342,9 @@ data Histogram = Histogram
   , pointMin :: Double
   , pointMax :: Double
   }
-  deriving (Show, Generic)
-  deriving anyclass (NFData)
+  deriving (Generic, Show)
   deriving (AE.FromJSON, AE.ToJSON)
+  deriving anyclass (NFData)
 
 
 data ExponentialHistogram = ExponentialHistogram
@@ -358,18 +358,18 @@ data ExponentialHistogram = ExponentialHistogram
   , pointPositive :: Maybe EHBucket
   , zeroThreshold :: Double
   }
-  deriving (Show, Generic)
-  deriving anyclass (NFData)
+  deriving (Generic, Show)
   deriving (AE.FromJSON, AE.ToJSON)
+  deriving anyclass (NFData)
 
 
 data EHBucket = EHBucket
   { bucketOffset :: Int
   , bucketCounts :: V.Vector Int
   }
-  deriving (Show, Generic)
-  deriving anyclass (NFData)
+  deriving (Generic, Show)
   deriving (AE.FromJSON, AE.ToJSON)
+  deriving anyclass (NFData)
 
 
 data Summary = Summary
@@ -377,18 +377,18 @@ data Summary = Summary
   , count :: Int
   , quantiles :: V.Vector Quantile
   }
-  deriving (Show, Generic)
-  deriving anyclass (NFData)
+  deriving (Generic, Show)
   deriving (AE.FromJSON, AE.ToJSON)
+  deriving anyclass (NFData)
 
 
 data Quantile = Quantile
   { quantile :: Double
   , value :: Double
   }
-  deriving (Show, Generic)
-  deriving anyclass (NFData)
+  deriving (Generic, Show)
   deriving (AE.FromJSON, AE.ToJSON)
+  deriving anyclass (NFData)
 
 
 data Exemplar = Exemplar
@@ -396,14 +396,14 @@ data Exemplar = Exemplar
   , timestamp :: UTCTime
   , attributes :: AE.Value
   }
-  deriving (Show, Generic)
+  deriving (Generic, Show)
   deriving (AE.FromJSON, AE.ToJSON)
 
 
 data MetricType = MTGauge | MTSum | MTHistogram | MTExponentialHistogram | MTSummary
-  deriving (Show, Generic, Read)
+  deriving (Generic, Read, Show)
   deriving (AE.FromJSON, AE.ToJSON, NFData)
-  deriving (ToField, FromField) via WrappedEnum "MT" MetricType
+  deriving (FromField, ToField) via WrappedEnum "MT" MetricType
 
 
 data MetricDataPoint = MetricDataPoint
@@ -415,8 +415,8 @@ data MetricDataPoint = MetricDataPoint
   , serviceNames :: V.Vector Text
   , metricLabels :: V.Vector Text
   }
-  deriving (Show, Generic)
-  deriving anyclass (FromRow, ToRow, NFData)
+  deriving (Generic, Show)
+  deriving anyclass (FromRow, NFData, ToRow)
 
 
 data MetricChartListData = MetricChartListData
@@ -425,8 +425,8 @@ data MetricChartListData = MetricChartListData
   , metricUnit :: Text
   , metricDescription :: Text
   }
-  deriving (Show, Generic)
-  deriving anyclass (FromRow, ToRow, NFData)
+  deriving (Generic, Show)
+  deriving anyclass (FromRow, NFData, ToRow)
 
 
 getTraceDetails :: DB :> es => Projects.ProjectId -> Text -> Eff es (Maybe Trace)
@@ -944,10 +944,10 @@ data Severity = Severity
   { severity_text :: Maybe SeverityLevel
   , severity_number :: Int
   }
-  deriving (Show, Generic)
+  deriving (Generic, Show)
+  deriving anyclass (FromRow, NFData, ToRow)
+  deriving (FromField, ToField) via Aeson Severity
   deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake Severity
-  deriving anyclass (NFData, FromRow, ToRow)
-  deriving (ToField, FromField) via Aeson Severity
 
 
 data Context = Context
@@ -957,10 +957,10 @@ data Context = Context
   , trace_flags :: Maybe Text
   , is_remote :: Maybe Text
   }
-  deriving (Show, Generic)
+  deriving (Generic, Show)
+  deriving anyclass (FromRow, NFData, ToRow)
+  deriving (FromField, ToField) via Aeson Context
   deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake Context
-  deriving anyclass (NFData, FromRow, ToRow)
-  deriving (ToField, FromField) via Aeson Context
 
 
 data OtelLogsAndSpans = OtelLogsAndSpans
@@ -987,9 +987,9 @@ data OtelLogsAndSpans = OtelLogsAndSpans
   , parent_id :: Maybe Text
   , date :: UTCTime
   }
-  deriving (Show, Generic)
+  deriving (Generic, Show)
+  deriving anyclass (FromRow, NFData)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake OtelLogsAndSpans
-  deriving anyclass (NFData, FromRow)
 
 
 getErrorEvents :: OtelLogsAndSpans -> V.Vector AE.Value

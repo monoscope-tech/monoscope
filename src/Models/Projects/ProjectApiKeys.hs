@@ -48,7 +48,7 @@ import System.Config qualified as Config
 
 newtype ProjectApiKeyId = ProjectApiKeyId {unProjectApiKeyId :: UUID.UUID}
   deriving stock (Generic, Show)
-  deriving newtype (FromField, ToField, FromHttpApiData, Default, NFData)
+  deriving newtype (Default, FromField, FromHttpApiData, NFData, ToField)
   deriving anyclass (FromRow, ToRow)
 
 
@@ -66,8 +66,8 @@ data ProjectApiKey = ProjectApiKey
   , title :: Text
   , keyPrefix :: Text
   }
-  deriving stock (Show, Generic)
-  deriving anyclass (FromRow, ToRow, NFData)
+  deriving stock (Generic, Show)
+  deriving anyclass (FromRow, NFData, ToRow)
   deriving (Entity) via (GenericEntity '[Schema "projects", TableName "project_api_keys", PrimaryKey "id", FieldModifiers '[CamelToSnake]] ProjectApiKey)
 
 
@@ -121,7 +121,7 @@ getProjectApiKey = queryOne Select q
     q = [sql|select id, created_at, updated_at, deleted_at, active, project_id,  title, key_prefix from projects.project_api_keys where id=? and active=true |]
 
 
-getProjectIdByApiKey :: (DB :> es, IOE :> es, Effectful.Reader Config.AuthContext :> es) => Text -> Eff es (Maybe Projects.ProjectId)
+getProjectIdByApiKey :: (DB :> es, Effectful.Reader Config.AuthContext :> es, IOE :> es) => Text -> Eff es (Maybe Projects.ProjectId)
 getProjectIdByApiKey projectKey = do
   pool <- getPool
   appCtx <- Effectful.ask @Config.AuthContext

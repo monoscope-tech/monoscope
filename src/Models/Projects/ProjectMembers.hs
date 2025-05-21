@@ -89,8 +89,8 @@ data ProjectMembers = ProjectMembers
   , userId :: Users.UserId
   , permission :: Permissions
   }
-  deriving stock (Show, Generic)
-  deriving anyclass (FromRow, ToRow, NFData)
+  deriving stock (Generic, Show)
+  deriving anyclass (FromRow, NFData, ToRow)
   deriving
     (Entity)
     via (GenericEntity '[Schema "projects", TableName "project_members", PrimaryKey "id", FieldModifiers '[CamelToSnake]] ProjectMembers)
@@ -101,8 +101,8 @@ data CreateProjectMembers = CreateProjectMembers
   , userId :: Users.UserId
   , permission :: Permissions
   }
-  deriving stock (Show, Generic, Eq)
-  deriving anyclass (FromRow, ToRow, NFData)
+  deriving stock (Eq, Generic, Show)
+  deriving anyclass (FromRow, NFData, ToRow)
   deriving
     (Entity)
     via (GenericEntity '[Schema "projects", TableName "project_members", PrimaryKey "id", FieldModifiers '[CamelToSnake]] CreateProjectMembers)
@@ -121,7 +121,7 @@ data ProjectMemberVM = ProjectMemberVM
   , permission :: Permissions
   , email :: CI Text
   }
-  deriving stock (Show, Generic, Eq)
+  deriving stock (Eq, Generic, Show)
   deriving anyclass (FromRow, NFData)
 
 

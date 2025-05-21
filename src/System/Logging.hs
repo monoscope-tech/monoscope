@@ -38,7 +38,7 @@ data LoggingDestination
     Json
   | -- | Logs are sent to a file as JSON
     JSONFile
-  deriving stock (Show, Read, Generic)
+  deriving stock (Generic, Read, Show)
   deriving (Var) via (ReadShowVar LoggingDestination)
 
 
@@ -66,7 +66,7 @@ makeLogger JSONFile = withJSONFileBackend FileBackendConfig{destinationFile = "l
 newtype FileBackendConfig = FileBackendConfig
   { destinationFile :: FilePath
   }
-  deriving stock (Eq, Ord, Show, Generic)
+  deriving stock (Eq, Generic, Ord, Show)
 
 
 withJSONFileBackend

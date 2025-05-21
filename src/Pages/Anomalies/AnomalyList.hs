@@ -72,7 +72,7 @@ import Web.FormUrlEncoded (FromForm)
 newtype AnomalyBulkForm = AnomalyBulk
   { anomalyId :: [Text]
   }
-  deriving stock (Show, Generic)
+  deriving stock (Generic, Show)
   deriving anyclass (FromForm)
 
 

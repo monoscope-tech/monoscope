@@ -8,7 +8,7 @@ module RequestMessages (
   valueToFields,
   redactJSON,
   replaceNullChars,
-  dedupFields
+  dedupFields,
 )
 where
 
@@ -83,7 +83,7 @@ data RequestMessage = RequestMessage
   , errors :: Maybe [RequestDumps.ATError]
   , tags :: Maybe [Text]
   }
-  deriving stock (Show, Generic)
+  deriving stock (Generic, Show)
   deriving
     (AE.FromJSON, AE.ToJSON)
     via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] RequestMessage

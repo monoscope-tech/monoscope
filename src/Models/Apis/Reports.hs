@@ -29,7 +29,7 @@ import Web.HttpApiData (FromHttpApiData)
 
 newtype ReportId = ReportId {reportId :: UUID.UUID}
   deriving stock (Generic, Show)
-  deriving newtype (Eq, Ord, AE.ToJSON, AE.FromJSON, FromField, ToField, FromHttpApiData, Default, NFData)
+  deriving newtype (AE.FromJSON, AE.ToJSON, Default, Eq, FromField, FromHttpApiData, NFData, Ord, ToField)
 
 
 instance HasField "toText" ReportId Text where
@@ -44,8 +44,8 @@ data Report = Report
   , reportType :: Text
   , reportJson :: AE.Value
   }
-  deriving stock (Show, Generic)
-  deriving anyclass (FromRow, ToRow, NFData)
+  deriving stock (Generic, Show)
+  deriving anyclass (FromRow, NFData, ToRow)
   deriving
     (Entity)
     via (GenericEntity '[Schema "apis", TableName "reports", PrimaryKey "id", FieldModifiers '[CamelToSnake]] Report)
@@ -57,8 +57,8 @@ data ReportListItem = ReportListItem
   , projectId :: Projects.ProjectId
   , reportType :: Text
   }
-  deriving stock (Show, Generic)
-  deriving anyclass (FromRow, ToRow, NFData)
+  deriving stock (Generic, Show)
+  deriving anyclass (FromRow, NFData, ToRow)
   deriving
     (Entity)
     via (GenericEntity '[Schema "apis", TableName "reports", PrimaryKey "id", FieldModifiers '[CamelToSnake]] ReportListItem)

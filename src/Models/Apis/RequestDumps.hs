@@ -90,7 +90,7 @@ data SDKTypes
   | JavaSpring
   | JavaApacheOutgoing
   | JavaVertx
-  deriving stock (Show, Generic, Read, Eq)
+  deriving stock (Eq, Generic, Read, Show)
   deriving anyclass (NFData)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] SDKTypes
 
@@ -145,7 +145,7 @@ data RequestTypes
   | Outgoing
   | Background
   | System
-  deriving stock (Show, Generic, Read, Eq)
+  deriving stock (Eq, Generic, Read, Show)
   deriving anyclass (NFData)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] RequestTypes
 
@@ -253,12 +253,12 @@ data ATError = ATError
   , requestMethod :: Maybe Text
   , requestPath :: Maybe Text
   }
-  deriving stock (Show, Generic)
-  deriving anyclass (NFData, Default)
+  deriving stock (Generic, Show)
+  deriving anyclass (Default, NFData)
+  deriving (FromField, ToField) via Aeson ATError
   deriving
     (AE.FromJSON, AE.ToJSON)
     via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] ATError
-  deriving (ToField, FromField) via Aeson ATError
 
 
 --   via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] ATErrors
@@ -304,7 +304,7 @@ data RequestDump = RequestDump
   , requestType :: RequestTypes
   }
   deriving stock (Generic)
-  deriving anyclass (ToRow, NFData)
+  deriving anyclass (NFData, ToRow)
 
 
 -- Fields to from request dump neccessary for generating performance reports
@@ -319,8 +319,8 @@ data RequestForReport = RequestForReport
   , endpointHash :: Text
   , averageDuration :: Integer
   }
-  deriving stock (Show, Generic)
-  deriving anyclass (ToRow, FromRow, NFData)
+  deriving stock (Generic, Show)
+  deriving anyclass (FromRow, NFData, ToRow)
   deriving
     (Entity)
     via (GenericEntity '[Schema "apis", TableName "request_dumps", PrimaryKey "id", FieldModifiers '[CamelToSnake]] RequestForReport)
@@ -330,8 +330,8 @@ data EndpointPerf = EndpointPerf
   { endpointHash :: Text
   , averageDuration :: Integer
   }
-  deriving stock (Show, Generic, Eq)
-  deriving anyclass (ToRow, FromRow, NFData)
+  deriving stock (Eq, Generic, Show)
+  deriving anyclass (FromRow, NFData, ToRow)
   deriving
     (Entity)
     via (GenericEntity '[Schema "apis", TableName "request_dumps", PrimaryKey "id", FieldModifiers '[CamelToSnake]] EndpointPerf)
@@ -367,8 +367,8 @@ data RequestDumpLogItem = RequestDumpLogItem
   , tags :: Maybe (V.Vector Text)
   , requestType :: RequestTypes
   }
-  deriving stock (Show, Generic)
-  deriving anyclass (ToRow, FromRow, NFData)
+  deriving stock (Generic, Show)
+  deriving anyclass (FromRow, NFData, ToRow)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] RequestDumpLogItem
 
 

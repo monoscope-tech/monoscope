@@ -121,20 +121,20 @@ data OnboardingInfoForm = OnboardingInfoForm
   , companySize :: Text
   , whereDidYouHearAboutUs :: Text
   }
-  deriving stock (Show, Generic)
-  deriving anyclass (FromForm, AE.FromJSON, AE.ToJSON)
+  deriving stock (Generic, Show)
+  deriving anyclass (AE.FromJSON, AE.ToJSON, FromForm)
 
 
 data OnboardingConfForm = OnboardingConForm
   { location :: Text
   , functionality :: [Text]
   }
-  deriving stock (Show, Generic)
+  deriving stock (Generic, Show)
   deriving anyclass (FromForm)
 
 
 data DiscordForm = DiscordForm {url :: Text}
-  deriving stock (Show, Generic)
+  deriving stock (Generic, Show)
   deriving anyclass (FromForm)
 
 
@@ -142,8 +142,8 @@ data NotifChannelForm = NotifChannelForm
   { phoneNumber :: Text
   , emails :: [Text]
   }
-  deriving stock (Show, Generic)
-  deriving anyclass (FromForm, AE.FromJSON, AE.ToJSON)
+  deriving stock (Generic, Show)
+  deriving anyclass (AE.FromJSON, AE.ToJSON, FromForm)
 
 
 discorPostH :: Projects.ProjectId -> DiscordForm -> ATAuthCtx (RespHeaders (Html ()))

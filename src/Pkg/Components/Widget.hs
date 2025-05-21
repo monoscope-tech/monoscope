@@ -27,8 +27,8 @@ data Query = Query
   { query :: Maybe Text
   , sql :: Maybe Text
   }
-  deriving stock (Show, Generic, THS.Lift)
-  deriving anyclass (NFData, Default)
+  deriving stock (Generic, Show, THS.Lift)
+  deriving anyclass (Default, NFData)
   deriving (AE.FromJSON, AE.ToJSON) via DAES.Snake Query
 
 
@@ -38,8 +38,8 @@ data Layout = Layout
   , w :: Maybe Int
   , h :: Maybe Int
   }
-  deriving stock (Show, Generic, THS.Lift)
-  deriving anyclass (NFData, Default)
+  deriving stock (Generic, Show, THS.Lift)
+  deriving anyclass (Default, NFData)
   deriving (AE.FromJSON, AE.ToJSON) via DAES.Snake Layout
 
 
@@ -57,7 +57,7 @@ data WidgetType
   | WTTreeMap
   | WTPieChart
   | WTAnomalies
-  deriving stock (Show, Eq, Generic, Enum, THS.Lift)
+  deriving stock (Enum, Eq, Generic, Show, THS.Lift)
   deriving anyclass (NFData)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.ConstructorTagModifier '[DAE.StripPrefix "WT", DAE.CamelToSnake]] WidgetType
 
@@ -72,7 +72,7 @@ data SummarizeBy
   | SBMax
   | SBMin
   | SBCount
-  deriving stock (Show, Eq, Generic, Enum, THS.Lift)
+  deriving stock (Enum, Eq, Generic, Show, THS.Lift)
   deriving anyclass (NFData)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.ConstructorTagModifier '[DAE.StripPrefix "SB", DAE.CamelToSnake]] SummarizeBy
 
@@ -123,8 +123,8 @@ data Widget = Widget
   , html :: Maybe LText
   , standalone :: Maybe Bool -- Not used in a grid stack
   }
-  deriving stock (Show, Generic, THS.Lift)
-  deriving anyclass (NFData, Default)
+  deriving stock (Generic, Show, THS.Lift)
+  deriving anyclass (Default, NFData)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.StripPrefix "w", DAE.CamelToSnake]] Widget
 
 
@@ -141,8 +141,8 @@ data WidgetDataset = WidgetDataset
   , to :: Maybe Int
   , stats :: Maybe Charts.MetricsStats
   }
-  deriving stock (Show, Generic, THS.Lift)
-  deriving anyclass (NFData, Default)
+  deriving stock (Generic, Show, THS.Lift)
+  deriving anyclass (Default, NFData)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.StripPrefix "w", DAE.CamelToSnake]] WidgetDataset
 
 
@@ -152,8 +152,8 @@ data WidgetAxis = WidgetAxis
   , series :: Maybe [WidgetAxis]
   , showOnlyMaxLabel :: Maybe Bool
   }
-  deriving stock (Show, Generic, THS.Lift)
-  deriving anyclass (NFData, Default)
+  deriving stock (Generic, Show, THS.Lift)
+  deriving anyclass (Default, NFData)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.StripPrefix "w", DAE.CamelToSnake]] WidgetAxis
 
 

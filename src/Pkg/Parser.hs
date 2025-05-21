@@ -33,7 +33,7 @@ data QueryComponents = QueryComponents
   , rollup :: Maybe Text
   , finalTimechartQuery :: Maybe Text
   }
-  deriving stock (Show, Generic)
+  deriving stock (Generic, Show)
   deriving anyclass (Default)
 
 
@@ -72,7 +72,7 @@ data SqlQueryCfg = SqlQueryCfg
   , source :: Maybe Sources
   , targetSpansM :: Maybe Text
   }
-  deriving stock (Show, Generic)
+  deriving stock (Generic, Show)
   deriving anyclass (Default)
 
 

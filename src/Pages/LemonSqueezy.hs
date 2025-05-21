@@ -32,20 +32,20 @@ data FirstSubItem = FirstSubItem
   { id :: Int
   , subscriptionId :: Int
   }
-  deriving stock (Show, Generic)
+  deriving stock (Generic, Show)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake FirstSubItem
 
 
 newtype CustomData = CustomData
   { projectId :: Maybe Text
   }
-  deriving stock (Show, Generic)
+  deriving stock (Generic, Show)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake CustomData
 
 
 data MetaData = MetaData
   {customData :: Maybe CustomData, eventName :: Text}
-  deriving stock (Show, Generic)
+  deriving stock (Generic, Show)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake MetaData
 
 
@@ -55,7 +55,7 @@ data Attributes = Attributes
   , orderId :: Int
   , userEmail :: Text
   }
-  deriving stock (Show, Generic)
+  deriving stock (Generic, Show)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake Attributes
 
 
@@ -63,7 +63,7 @@ data DataVals = DataVals
   { id :: Text
   , attributes :: Attributes
   }
-  deriving stock (Show, Generic)
+  deriving stock (Generic, Show)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake DataVals
 
 
@@ -71,7 +71,7 @@ data WebhookData = WebhookData
   { dataVal :: DataVals
   , meta :: MetaData
   }
-  deriving stock (Show, Generic)
+  deriving stock (Generic, Show)
 
 
 instance AE.FromJSON WebhookData where

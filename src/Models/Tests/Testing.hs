@@ -53,10 +53,10 @@ import Web.HttpApiData (FromHttpApiData)
 
 newtype CollectionId = CollectionId {collectionId :: UUID.UUID}
   deriving stock (Generic, Show)
-  deriving
-    (Eq, Ord, AE.ToJSON, AE.FromJSON, FromField, ToField, FromHttpApiData, Default, NFData)
-    via UUID.UUID
   deriving anyclass (FromRow, ToRow)
+  deriving
+    (AE.FromJSON, AE.ToJSON, Default, Eq, FromField, FromHttpApiData, NFData, Ord, ToField)
+    via UUID.UUID
 
 
 instance HasField "toText" CollectionId Text where
@@ -66,7 +66,7 @@ instance HasField "toText" CollectionId Text where
 newtype CollectionStepId = CollectionStepId {collectionStepId :: UUID.UUID}
   deriving stock (Generic, Show)
   deriving
-    (Eq, Ord, AE.ToJSON, AE.FromJSON, FromField, ToField, FromHttpApiData, Default, NFData)
+    (AE.FromJSON, AE.ToJSON, Default, Eq, FromField, FromHttpApiData, NFData, Ord, ToField)
     via UUID.UUID
 
 
@@ -96,8 +96,8 @@ data CollectionStepData = CollectionStepData
   , allowRedirects :: Maybe Bool
   , ignoreSSLErrors :: Maybe Bool
   }
-  deriving stock (Show, Generic)
-  deriving anyclass (NFData, Default)
+  deriving stock (Generic, Show)
+  deriving anyclass (Default, NFData)
   deriving (FromField) via Aeson CollectionStepData
   deriving (ToField) via Aeson CollectionStepData
 
@@ -105,8 +105,8 @@ data CollectionStepData = CollectionStepData
 data CollectionStepConfig = CollectionStepConfig
   {
   }
-  deriving stock (Show, Generic)
-  deriving anyclass (AE.FromJSON, AE.ToJSON, NFData, Default)
+  deriving stock (Generic, Show)
+  deriving anyclass (AE.FromJSON, AE.ToJSON, Default, NFData)
   deriving (FromField) via Aeson CollectionStepConfig
   deriving (ToField) via Aeson CollectionStepConfig
 
@@ -180,21 +180,21 @@ data CollectionVariablesItem = CollectionVariablesItem
   { variableName :: Text
   , variableValue :: Text
   }
-  deriving stock (Show, Generic)
-  deriving anyclass (AE.FromJSON, AE.ToJSON, NFData, Default)
+  deriving stock (Generic, Show)
+  deriving anyclass (AE.FromJSON, AE.ToJSON, Default, NFData)
   deriving (FromField) via Aeson CollectionVariablesItem
   deriving (ToField) via Aeson CollectionVariablesItem
 
 
 newtype CollectionSteps = CollectionSteps (V.Vector CollectionStepData)
-  deriving stock (Show, Generic)
-  deriving anyclass (AE.ToJSON, AE.FromJSON, NFData, Default)
+  deriving stock (Generic, Show)
+  deriving anyclass (AE.FromJSON, AE.ToJSON, Default, NFData)
   deriving (FromField, ToField) via Aeson CollectionSteps
 
 
 newtype CollectionVariables = CollectionVariables (V.Vector CollectionVariablesItem)
-  deriving stock (Show, Generic)
-  deriving anyclass (AE.ToJSON, AE.FromJSON, NFData, Default)
+  deriving stock (Generic, Show)
+  deriving anyclass (AE.FromJSON, AE.ToJSON, Default, NFData)
   deriving (FromField, ToField) via Aeson CollectionVariables
 
 
@@ -223,8 +223,8 @@ data Collection = Collection
   , stopAfter :: Text
   , stopAfterCheck :: Bool
   }
-  deriving stock (Show, Generic)
-  deriving anyclass (FromRow, ToRow, AE.ToJSON, AE.FromJSON, NFData, Default)
+  deriving stock (Generic, Show)
+  deriving anyclass (AE.FromJSON, AE.ToJSON, Default, FromRow, NFData, ToRow)
   deriving
     (Entity)
     via (GenericEntity '[Schema "tests", TableName "collections", PrimaryKey "id", FieldModifiers '[CamelToSnake]] Collection)
@@ -246,8 +246,8 @@ data CollectionListItem = CollectionListItem
   , failed :: Int
   , urls :: V.Vector Text
   }
-  deriving stock (Show, Generic)
-  deriving anyclass (FromRow, ToRow, NFData)
+  deriving stock (Generic, Show)
+  deriving anyclass (FromRow, NFData, ToRow)
   deriving
     (Entity)
     via (GenericEntity '[Schema "tests", TableName "collections", PrimaryKey "id", FieldModifiers '[CamelToSnake]] CollectionListItem)
@@ -259,7 +259,7 @@ data StepResponse = StepResponse
   , raw :: Text
   , json :: AE.Value
   }
-  deriving stock (Show, Generic)
+  deriving stock (Generic, Show)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] StepResponse
 
 
@@ -267,18 +267,18 @@ data StepRequest = StepRequest
   { req :: CollectionStepData
   , resp :: StepResponse
   }
-  deriving stock (Show, Generic)
+  deriving stock (Generic, Show)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] StepRequest
 
 
 newtype AssertError = AssertError {advice :: Maybe Text}
-  deriving stock (Show, Generic)
+  deriving stock (Generic, Show)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] AssertError
 data AssertResult = AssertResult
   { ok :: Maybe Bool
   , err :: Maybe AssertError -- Assuming AssertError is a String for simplicity
   }
-  deriving stock (Show, Generic)
+  deriving stock (Generic, Show)
   deriving (AE.ToJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] AssertResult
 
 
@@ -304,7 +304,7 @@ data StepResult = StepResult
   , stepLog :: Text
   , stepError :: Maybe Text
   }
-  deriving stock (Show, Generic)
+  deriving stock (Generic, Show)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] StepResult
 
 
@@ -328,7 +328,7 @@ data CollectionStepUpdateForm = CollectionStepUpdateForm
   , stopAfter :: Maybe Text
   , stopAfterCheck :: Maybe Text
   }
-  deriving stock (Show, Generic)
+  deriving stock (Generic, Show)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields] CollectionStepUpdateForm
 
 

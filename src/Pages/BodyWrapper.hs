@@ -39,7 +39,7 @@ data PageCtx a = PageCtx
   { conf :: BWConfig
   , content :: a
   }
-  deriving stock (Show, Generic)
+  deriving stock (Generic, Show)
 
 
 instance ToHtml a => ToHtml (PageCtx a) where
@@ -63,7 +63,7 @@ data BWConfig = BWConfig
   , docsLink :: Maybe Text
   , isSettingsPage :: Bool
   }
-  deriving stock (Show, Generic)
+  deriving stock (Generic, Show)
   deriving anyclass (Default)
 
 

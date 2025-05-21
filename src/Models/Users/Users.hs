@@ -51,12 +51,12 @@ instance AE.ToJSON (CI.CI Text) where
 
 
 newtype UserId = UserId {getUserId :: UUID.UUID}
-  deriving stock (Generic, Show, Eq)
-  deriving
-    (Ord, AE.ToJSON, AE.FromJSON, FromField, ToField, Default)
-    via UUID.UUID
-  deriving anyclass (FromRow, ToRow)
+  deriving stock (Eq, Generic, Show)
   deriving newtype (NFData)
+  deriving anyclass (FromRow, ToRow)
+  deriving
+    (AE.FromJSON, AE.ToJSON, Default, FromField, Ord, ToField)
+    via UUID.UUID
 
 
 instance HasField "toText" UserId Text where
@@ -76,14 +76,14 @@ data User = User
   , phoneNumber :: Maybe Text
   , isSudo :: Bool
   }
-  deriving stock (Show, Generic)
-  deriving anyclass (FromRow, ToRow, Default, NFData)
-  deriving
-    (AE.FromJSON, AE.ToJSON)
-    via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] User
+  deriving stock (Generic, Show)
+  deriving anyclass (Default, FromRow, NFData, ToRow)
   deriving
     (Entity)
     via (GenericEntity '[Schema "users", TableName "users", PrimaryKey "id", FieldModifiers '[CamelToSnake]] User)
+  deriving
+    (AE.FromJSON, AE.ToJSON)
+    via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] User
 
 
 createUserId :: UUIDEff :> es => Eff es UserId

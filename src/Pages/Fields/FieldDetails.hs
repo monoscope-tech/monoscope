@@ -27,8 +27,8 @@ data EditFieldForm = EditFieldForm
   , fieldHash :: Text
   , fieldType :: Text
   }
-  deriving stock (Show, Generic)
-  deriving anyclass (FromForm, AE.FromJSON)
+  deriving stock (Generic, Show)
+  deriving anyclass (AE.FromJSON, FromForm)
 
 
 parseCheckbox :: Maybe Text -> Bool

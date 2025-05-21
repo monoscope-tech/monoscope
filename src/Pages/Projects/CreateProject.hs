@@ -71,15 +71,15 @@ data CreateProjectForm = CreateProjectForm
   , permissions :: [ProjectMembers.Permissions]
   , timeZone :: Text
   }
-  deriving stock (Eq, Show, Generic)
-  deriving anyclass (FromForm, Default)
+  deriving stock (Eq, Generic, Show)
+  deriving anyclass (Default, FromForm)
 
 
 data CreateProjectFormError = CreateProjectFormError
   { titleE :: Maybe [String]
   , descriptionE :: Maybe [String]
   }
-  deriving stock (Eq, Show, Generic)
+  deriving stock (Eq, Generic, Show)
   deriving anyclass (Default)
 
 
@@ -149,14 +149,14 @@ data CreateProjectResp = CreateProjectResp
   , form :: CreateProjectForm
   , formError :: CreateProjectFormError
   }
-  deriving stock (Show, Generic)
+  deriving stock (Generic, Show)
 
 
 data CreateProject
   = CreateProject (PageCtx (Sessions.PersistentSession, Projects.ProjectId, EnvConfig, Text, Bool, CreateProjectForm, CreateProjectFormError))
   | PostNoContent Text
   | ProjectPost CreateProjectResp
-  deriving stock (Show, Generic)
+  deriving stock (Generic, Show)
 
 
 instance HasField "unwrapCreateProjectResp" CreateProject (Maybe CreateProjectResp) where
@@ -231,7 +231,7 @@ data FirstSubItem = FirstSubItem
   { id :: Int
   , subscriptionId :: Int
   }
-  deriving stock (Show, Generic)
+  deriving stock (Generic, Show)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] FirstSubItem
 
 
@@ -239,7 +239,7 @@ data Attributes = Attributes
   { firstSubscriptionItem :: FirstSubItem
   , productName :: Text
   }
-  deriving stock (Show, Generic)
+  deriving stock (Generic, Show)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] Attributes
 
 
@@ -247,14 +247,14 @@ data DataVals = DataVals
   { id :: Text
   , attributes :: Attributes
   }
-  deriving stock (Show, Generic)
+  deriving stock (Generic, Show)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] DataVals
 
 
 newtype SubResponse = SubResponse
   { dataVal :: [DataVals]
   }
-  deriving stock (Show, Generic)
+  deriving stock (Generic, Show)
 
 
 instance AE.FromJSON SubResponse where
@@ -279,8 +279,8 @@ getSubscriptionId orderId apiKey = do
 data PricingUpdateForm = PricingUpdateForm
   { orderIdM :: Maybe Text
   }
-  deriving stock (Eq, Show, Generic)
-  deriving anyclass (FromForm, Default)
+  deriving stock (Eq, Generic, Show)
+  deriving anyclass (Default, FromForm)
 
 
 pricingUpdateH :: Projects.ProjectId -> PricingUpdateForm -> ATAuthCtx (RespHeaders (Html ()))

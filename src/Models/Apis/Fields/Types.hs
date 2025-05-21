@@ -52,7 +52,7 @@ newtype FieldId = FieldId {unFieldId :: UUID.UUID}
   deriving stock (Generic, Show)
   deriving newtype (NFData)
   deriving
-    (Eq, Ord, AE.ToJSON, AE.FromJSON, FromField, ToField, FromHttpApiData, Default)
+    (AE.FromJSON, AE.ToJSON, Default, Eq, FromField, FromHttpApiData, Ord, ToField)
     via UUID.UUID
 
 
@@ -68,9 +68,9 @@ data FieldTypes
   | FTObject
   | FTList
   | FTNull
-  deriving stock (Eq, Generic, Show, Read)
+  deriving stock (Eq, Generic, Read, Show)
   deriving anyclass (NFData)
-  deriving (ToField, FromField) via WrappedEnumSC "FT" FieldTypes
+  deriving (FromField, ToField) via WrappedEnumSC "FT" FieldTypes
 
 
 instance AE.FromJSON FieldTypes where
@@ -127,7 +127,7 @@ data FieldCategoryEnum
   | FCResponseHeader
   | FCRequestBody
   | FCResponseBody
-  deriving stock (Eq, Generic, Show, Ord)
+  deriving stock (Eq, Generic, Ord, Show)
   deriving anyclass (NFData)
 
 
@@ -207,17 +207,17 @@ data Field = Field
   , isEnum :: Bool
   , isRequired :: Bool
   }
-  deriving stock (Show, Generic)
-  deriving anyclass (FromRow, ToRow, Default, NFData)
-  deriving
-    (AE.ToJSON, AE.FromJSON)
-    via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] Field
+  deriving stock (Generic, Show)
+  deriving anyclass (Default, FromRow, NFData, ToRow)
   deriving
     (Entity)
     via (GenericEntity '[Schema "apis", TableName "fields", PrimaryKey "id", FieldModifiers '[CamelToSnake]] Field)
   deriving
     (FromField)
     via Aeson Field
+  deriving
+    (AE.FromJSON, AE.ToJSON)
+    via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] Field
 
 
 data SwField = SwField
@@ -232,27 +232,27 @@ data SwField = SwField
   , fIsEnum :: Bool
   , fIsRequired :: Bool
   }
-  deriving stock (Show, Generic)
-  deriving anyclass (FromRow, ToRow, Default, NFData)
-  deriving (AE.ToJSON, AE.FromJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] SwField
+  deriving stock (Generic, Show)
+  deriving anyclass (Default, FromRow, NFData, ToRow)
   deriving (FromField) via Aeson SwField
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] SwField
 
 
 data FacetValue = FacetValue
   { value :: Text
   , count :: Int
   }
-  deriving stock (Show, Eq, Generic)
+  deriving stock (Eq, Generic, Show)
   deriving anyclass (NFData)
-  deriving (AE.ToJSON, AE.FromJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] FacetValue
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] FacetValue
 
 
 -- | Map of field names to arrays of facet values
 newtype FacetData = FacetData (HM.HashMap Text [FacetValue])
-  deriving stock (Show, Eq, Generic)
+  deriving stock (Eq, Generic, Show)
   deriving newtype (NFData)
-  deriving (AE.ToJSON, AE.FromJSON) via DAE.CustomJSON '[DAE.OmitNothingFields] FacetData
   deriving (FromField, ToField) via Aeson FacetData
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields] FacetData
 
 
 data FacetSummary = FacetSummary
@@ -262,10 +262,10 @@ data FacetSummary = FacetSummary
   , timestamp :: UTCTime
   , facetJson :: FacetData
   }
-  deriving stock (Show, Generic)
-  deriving anyclass (FromRow, ToRow, NFData)
-  deriving (AE.ToJSON, AE.FromJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] FacetSummary
+  deriving stock (Generic, Show)
+  deriving anyclass (FromRow, NFData, ToRow)
   deriving (Entity) via (GenericEntity '[Schema "apis", TableName "facet_summaries", PrimaryKey "id", FieldModifiers '[CamelToSnake]] FacetSummary)
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] FacetSummary
 
 
 instance Ord Field where

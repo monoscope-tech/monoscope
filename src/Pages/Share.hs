@@ -29,7 +29,7 @@ data ReqForm = ReqForm
   , reqId :: UUID.UUID
   , reqCreatedAt :: UTCTime
   }
-  deriving stock (Show, Generic)
+  deriving stock (Generic, Show)
   deriving anyclass (FromForm)
 
 

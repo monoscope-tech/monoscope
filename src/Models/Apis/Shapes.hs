@@ -41,7 +41,7 @@ newtype ShapeId = ShapeId {unShapeId :: UUID.UUID}
   deriving stock (Generic, Show)
   deriving newtype (NFData)
   deriving
-    (AE.FromJSON, AE.ToJSON, Eq, Ord, FromField, ToField, FromHttpApiData, Default)
+    (AE.FromJSON, AE.ToJSON, Default, Eq, FromField, FromHttpApiData, Ord, ToField)
     via UUID.UUID
 
 
@@ -94,11 +94,11 @@ data Shape = Shape
   , responseDescription :: Text
   , requestDescription :: Text
   }
-  deriving stock (Show, Generic)
-  deriving anyclass (FromRow, ToRow, Default, NFData)
-  deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] Shape
+  deriving stock (Generic, Show)
+  deriving anyclass (Default, FromRow, NFData, ToRow)
   deriving (Entity) via (GenericEntity '[Schema "apis", TableName "shapes", PrimaryKey "id", FieldModifiers '[CamelToSnake]] Shape)
   deriving (FromField) via Aeson Shape
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] Shape
 
 
 bulkInsertShapes :: DB :> es => V.Vector Shape -> Eff es ()
@@ -186,11 +186,11 @@ data SwShape = SwShape
   , swRequestDescription :: Text
   , swResponseDescription :: Text
   }
-  deriving stock (Show, Generic)
-  deriving anyclass (FromRow, ToRow, Default, NFData)
-  deriving (AE.FromJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] SwShape
-  deriving (FromField) via Aeson SwShape
+  deriving stock (Generic, Show)
+  deriving anyclass (Default, FromRow, NFData, ToRow)
   deriving anyclass (AE.ToJSON)
+  deriving (FromField) via Aeson SwShape
+  deriving (AE.FromJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] SwShape
 
 
 shapesByEndpointHashes :: Projects.ProjectId -> V.Vector Text -> PgT.DBT IO (V.Vector SwShape)

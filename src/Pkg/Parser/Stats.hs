@@ -1,4 +1,4 @@
-module Pkg.Parser.Stats (pTimeChartSection, pStatsSection, AggFunction (..), Section (..), Rollup (..), ByClause (..), Sources (..), parseQuery, pSource,aggFunctionParser,aliasParser,byClauseParser,pTimeChartSection) where
+module Pkg.Parser.Stats (pTimeChartSection, pStatsSection, AggFunction (..), Section (..), Rollup (..), ByClause (..), Sources (..), parseQuery, pSource, aggFunctionParser, aliasParser, byClauseParser) where
 
 import Data.Aeson qualified as AE
 import Data.Text qualified as T
@@ -6,7 +6,7 @@ import Data.Text.Display (Display, display, displayBuilder, displayPrec)
 import Pkg.Parser.Core
 import Pkg.Parser.Expr (Expr, Subject (..), pExpr, pSubject)
 import Relude hiding (Sum, some)
-import Text.Megaparsec 
+import Text.Megaparsec
 import Text.Megaparsec.Char (alphaNumChar, char, space, space1, string)
 
 
@@ -28,23 +28,23 @@ data AggFunction
   | Range Subject (Maybe Text)
   | -- | CustomAgg String [Field] (Maybe String)
     Plain Subject (Maybe Text)
-  deriving stock (Show, Generic, Eq)
+  deriving stock (Eq, Generic, Show)
   deriving anyclass (AE.FromJSON, AE.ToJSON)
 
 
 -- Define an optional 'by' clause
 newtype ByClause = ByClause [Subject] -- List of fields to group by
-  deriving stock (Show, Generic, Eq)
+  deriving stock (Eq, Generic, Show)
   deriving anyclass (AE.FromJSON, AE.ToJSON)
 
 
 newtype Rollup = Rollup Text
-  deriving stock (Show, Generic, Eq)
+  deriving stock (Eq, Generic, Show)
   deriving anyclass (AE.FromJSON, AE.ToJSON)
 
 
 data Sources = SSpans | SMetrics
-  deriving stock (Show, Generic, Eq)
+  deriving stock (Eq, Generic, Show)
   deriving anyclass (AE.FromJSON, AE.ToJSON)
 
 
@@ -195,7 +195,7 @@ instance ToQueryText Section where
 --
 
 -- | parses the timechart command which is used to describe timeseries charts based off the request log data.
---  import Pkg.Parser.Stats 
+--  import Pkg.Parser.Stats
 -- >>> parse pTimeChartSection "" "timechart count(*) by field1 [1d]"
 -- Right (TimeChartCommand [Count (Subject "*" "*" []) Nothing] (Just (ByClause [Subject "field1" "field1" []])) (Just (Rollup "1d")))
 --
@@ -244,7 +244,7 @@ data Section
     StatsCommand [AggFunction] (Maybe ByClause)
   | TimeChartCommand [AggFunction] (Maybe ByClause) (Maybe Rollup)
   | Source Sources
-  deriving stock (Show, Generic, Eq)
+  deriving stock (Eq, Generic, Show)
   deriving anyclass (AE.FromJSON, AE.ToJSON)
 
 

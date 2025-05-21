@@ -42,7 +42,7 @@ data ManageMembersForm = ManageMembersForm
   { emails :: [Text]
   , permissions :: [ProjectMembers.Permissions]
   }
-  deriving stock (Eq, Show, Generic)
+  deriving stock (Eq, Generic, Show)
   deriving anyclass (FromForm)
 
 
@@ -276,28 +276,28 @@ data SubUrls = SubUrls
   { updatePaymentMethod :: Text
   , customerPortal :: Text
   }
-  deriving stock (Show, Generic)
+  deriving stock (Generic, Show)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] SubUrls
 
 
 newtype Attributes = Attributes
   { urls :: SubUrls
   }
-  deriving stock (Show, Generic)
+  deriving stock (Generic, Show)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] Attributes
 
 
 newtype DataVals = DataVals
   { attributes :: Attributes
   }
-  deriving stock (Show, Generic)
+  deriving stock (Generic, Show)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] DataVals
 
 
 newtype SubResponse = SubResponse
   { dataVal :: DataVals
   }
-  deriving stock (Show, Generic)
+  deriving stock (Generic, Show)
 
 
 instance AE.FromJSON SubResponse where
