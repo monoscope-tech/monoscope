@@ -44,14 +44,6 @@ jobs:
           sudo -u postgres psql -c "CREATE DATABASE apitoolkit;"
           sudo -u postgres psql -c "GRANT ALL PRIVILEGES ON DATABASE apitoolkit TO postgres;"
           sudo -u postgres psql -c "ALTER DATABASE apitoolkit OWNER TO postgres;"
-      - name: "Set PostgreSQL Environment Variables"
-        env:
-          PGHOST: localhost
-          PGPORT: 5432
-          PGDATABASE: apitoolkit
-          PGUSER: postgres
-          PGPASSWORD: postgres
-          DATABASE_URL: host=localhost user=postgres password=postgres dbname=apitoolkit port=5432 sslmode=disable
       - name: Setup node env
         uses: actions/setup-node@v4
         with:
@@ -73,5 +65,12 @@ jobs:
         run: |
           timeout 20 bash -c "until pg_isready -h localhost; do sleep 1; done"
       - run: |
+          env:
+          PGHOST: localhost
+          PGPORT: 5432
+          PGDATABASE: apitoolkit
+          PGUSER: postgres
+          PGPASSWORD: postgres
+          DATABASE_URL: host=localhost user=postgres password=postgres dbname=apitoolkit port=5432 sslmode=disable
           export PATH=$PATH:/usr/lib/postgresql/16/bin
           stack test --ghc-options=-w
