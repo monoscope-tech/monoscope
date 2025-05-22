@@ -33,8 +33,8 @@ jobs:
         run: |
           export OPENSSL_INCLUDE_DIR=$(pkg-config --variable=includedir openssl)
           export OPENSSL_LIB_DIR=$(pkg-config --variable=libdir openssl)
-      - name: "Install postgresql"
-        run: "sudo apt-get update && sudo apt-get install postgresql-16"
+      - name: "Run postgresql docker"
+        run: "make timescaledb-docker-tmp"
       - name: Setup node env
         uses: actions/setup-node@v4
         with:
@@ -52,6 +52,4 @@ jobs:
           sudo cp rust-interop/target/release/libCrust_interop.so /usr/lib/librust_interop.so
       - run: stack --no-terminal build --dependencies-only
       - run: stack install --local-bin-path=. --flag pg-entity:prod --ghc-options "-O0"
-      - run: |
-          export PATH=$PATH:/usr/lib/postgresql/16/bin
-          stack test --ghc-options=-w
+      - run: make test
