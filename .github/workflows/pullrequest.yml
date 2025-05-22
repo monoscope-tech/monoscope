@@ -34,7 +34,7 @@ jobs:
           export OPENSSL_INCLUDE_DIR=$(pkg-config --variable=includedir openssl)
           export OPENSSL_LIB_DIR=$(pkg-config --variable=libdir openssl)
       - name: "Install postgresql"
-        run: "sudo apt-get update && sudo apt-get install postgresql-17"
+        run: "sudo apt-get update && sudo apt-get install postgresql-16"
       - name: Setup node env
         uses: actions/setup-node@v4
         with:
@@ -53,5 +53,5 @@ jobs:
       - run: stack --no-terminal build --dependencies-only
       - run: stack install --local-bin-path=. --flag pg-entity:prod --ghc-options "-O0"
       - run: |
-          export PATH=$PATH:/usr/lib/postgresql/17/bin
+          export PATH=$PATH:/usr/lib/postgresql/16/bin
           stack test --ghc-options=-w
