@@ -40,7 +40,6 @@ jobs:
             sudo systemctl status postgresql  # Verify service is running
       - name: "Create Test Database and User"
         run: |
-          sudo -u postgres psql -c "CREATE USER postgres WITH PASSWORD 'postgres';"
           sudo -u postgres psql -c "CREATE DATABASE apitoolkit;"
           sudo -u postgres psql -c "GRANT ALL PRIVILEGES ON DATABASE apitoolkit TO postgres;"
           sudo -u postgres psql -c "ALTER DATABASE apitoolkit OWNER TO postgres;"
