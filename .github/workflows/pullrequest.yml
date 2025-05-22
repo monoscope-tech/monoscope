@@ -33,8 +33,25 @@ jobs:
         run: |
           export OPENSSL_INCLUDE_DIR=$(pkg-config --variable=includedir openssl)
           export OPENSSL_LIB_DIR=$(pkg-config --variable=libdir openssl)
-      - name: "Run postgresql docker"
-        run: "make timescaledb-docker-tmp"
+      - name: "Install and Start PostgreSQL"
+        run: |
+            sudo apt-get install -y postgresql-16 postgresql-client-16
+            sudo systemctl start postgresql
+            sudo systemctl status postgresql  # Verify service is running
+      - name: "Create Test Database and User"
+        run: |
+          sudo -u postgres psql -c "CREATE USER postgres WITH PASSWORD 'postgres';"
+          sudo -u postgres psql -c "CREATE DATABASE apitoolkit;"
+          sudo -u postgres psql -c "GRANT ALL PRIVILEGES ON DATABASE apitoolkit TO postgres;"
+          sudo -u postgres psql -c "ALTER DATABASE apitoolkit OWNER TO postgres;"
+      - name: "Set PostgreSQL Environment Variables"
+        env:
+          PGHOST: localhost
+          PGPORT: 5432
+          PGDATABASE: apitoolkit
+          PGUSER: postgres
+          PGPASSWORD: postgres
+          DATABASE_URL: host=localhost user=postgres password=postgres dbname=apitoolkit port=5432 sslmode=disable
       - name: Setup node env
         uses: actions/setup-node@v4
         with:
@@ -52,4 +69,9 @@ jobs:
           sudo cp rust-interop/target/release/libCrust_interop.so /usr/lib/librust_interop.so
       - run: stack --no-terminal build --dependencies-only
       - run: stack install --local-bin-path=. --flag pg-entity:prod --ghc-options "-O0"
-      - run: make test
+      - name: "Check PostgreSQL Readiness"
+        run: |
+          timeout 20 bash -c "until pg_isready -h localhost; do sleep 1; done"
+      - run: |
+          export PATH=$PATH:/usr/lib/postgresql/16/bin
+          stack test --ghc-options=-w
