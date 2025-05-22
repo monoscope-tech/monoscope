@@ -395,7 +395,7 @@ export class LogList extends LitElement {
             }
           }
         }}
-        class="relative h-full shrink-1 min-w-0 p-0 m-0 bg-white w-full c-scroll pb-12 overflow-y-scroll scroll-smooth"
+        class="relative h-full shrink-1 min-w-0 p-0 m-0 bg-white w-full c-scroll pb-12 overflow-y-scroll"
         id="logs_list_container_inner"
       >
         ${this.recentDataToBeAdded.length > 0 && !this.flipDirection
