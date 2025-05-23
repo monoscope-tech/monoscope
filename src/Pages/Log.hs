@@ -92,10 +92,7 @@ renderFacets facetSummary = do
   script_
     [text|
     function filterByFacet(field, value) {
-      document.getElementById("filterElement").handleAddQuery({
-        "tag": "Eq",
-        "contents": [field, value]
-      });
+      document.getElementById("filterElement").handleAddQuery(field + ' == "' + value + '"');
     }
   |]
 
@@ -350,8 +347,8 @@ logQueryBox_ pid currentRange source targetSpan query queryLibRecent queryLibSav
       button_ [type_ "submit", class_ "btn cursor-pointer bg-linear-to-b from-[#067cff] to-[#0850c5] text-white"] "Save"
   form_
     [ hxGet_ $ "/p/" <> pid.toText <> "/log_explorer"
-    , hxPushUrl_ "true"
-    , hxTrigger_ "add-query from:#filterElement, update-query from:#filterElement, submit, update-query from:window"
+    , -- , hxPushUrl_ "true"
+      hxTrigger_ "update-query from:#filterElement, submit, update-query from:window"
     , hxVals_ "js:{...{layout:'resultTable', ...params()}}"
     , hxTarget_ "#resultTableInner"
     , hxSwap_ "outerHTML"
@@ -362,14 +359,14 @@ logQueryBox_ pid currentRange source targetSpan query queryLibRecent queryLibSav
     ]
     do
       div_ [class_ "flex gap-2 items-stretch justify-center"] do
-        queryLibrary_ pid queryLibSaved queryLibRecent
-        div_ [class_ "p-1 pl-3 flex-1 flex gap-2  bg-fillWeaker rounded-lg border border-strokeWeak justify-between items-stretch"] do
-          div_ [id_ "queryEditor", class_ "h-14 hidden overflow-hidden  bg-fillWeak flex-1 flex items-center"] pass
-          div_ [id_ "queryBuilder", class_ "flex-1 flex items-center"] $ termRaw "query-editor" [id_ "filterElement", class_ "w-full h-full flex items-center"] ("" :: Text)
+        div_ [class_ "p-1 flex-1 flex gap-2  bg-fillWeaker rounded-lg border border-strokeWeak justify-between items-stretch"] do
+          queryLibrary_ pid queryLibSaved queryLibRecent
+          div_ [id_ "queryBuilder", class_ "flex-1 flex items-center"] $ termRaw "query-editor" [id_ "filterElement", class_ "w-full h-full flex items-center", term "default-value" (fromMaybe "" query)] ("" :: Text)
           div_ [class_ "gap-[2px] flex items-center"] do
             span_ "in"
+            -- TODO: trigger update-query instead
             select_
-              [ class_ "ml-1 select select-sm w-full max-w-[150px]"
+              [ class_ "ml-1 select select-sm w-full max-w-xs h-full bg-transparent border-strokeStrong"
               , name_ "target-spans"
               , id_ "spans-toggle"
               , onchange_ "htmx.trigger('#log_explorer_form', 'submit')"
@@ -380,13 +377,13 @@ logQueryBox_ pid currentRange source targetSpan query queryLibRecent queryLibSav
                 option_ (value_ "root-spans" : ([selected_ "true" | target == "root-spans"])) "Trace Root Spans"
                 option_ (value_ "service-entry-spans" : ([selected_ "true" | target == "service-entry-spans"])) "Service Entry Spans"
           div_ [class_ "dropdown dropdown-hover dropdown-bottom dropdown-end"] do
-            div_ [class_ "rounded-lg px-3 py-2 text-slate-700 inline-flex items-center border border-strokeStrong", tabindex_ "0", role_ "button"] $ faSprite_ "floppy-disk" "regular" "h-5 w-5"
-            ul_ [tabindex_ "0", class_ "dropdown-content border menu bg-base-100 rounded-box z-1 w-60 p-2 shadow-lg"] do
+            div_ [class_ "rounded-lg px-3 py-2 text-slate-700 inline-flex items-center border border-strokeStrong h-full", tabindex_ "0", role_ "button"] $ faSprite_ "floppy-disk" "regular" "h-5 w-5"
+            ul_ [tabindex_ "0", class_ "dropdown-content border menu bg-base-100 rounded-box z-1 w-60 p-2 shadow-lg h-full"] do
               li_ $ label_ [Lucid.for_ "saveQueryMdl"] "Save query to Query Library"
           -- li_ $ a_ [] "Save query as an Alerts"
           -- li_ $ a_ [] "Save result to a dashboard"
           button_
-            [type_ "submit", class_ "leading-none rounded-lg px-3 py-2 cursor-pointer btn btn-primary"]
+            [type_ "submit", class_ "leading-none rounded-lg px-3 py-2 cursor-pointer !h-auto btn btn-primary"]
             do
               span_ [id_ "run-query-indicator", class_ "refresh-indicator htmx-indicator query-indicator loading loading-dots loading-sm"] ""
               faSprite_ "magnifying-glass" "regular" "h-4 w-4 inline-block"
@@ -396,13 +393,11 @@ logQueryBox_ pid currentRange source targetSpan query queryLibRecent queryLibSav
         div_ [class_ "flex justify-end  gap-2 "] do
           fieldset_ [class_ "fieldset"] $ label_ [class_ "label"] do
             input_ [type_ "checkbox", class_ "checkbox checkbox-sm rounded-sm toggle-chart"] >> span_ "charts"
-          fieldset_ [class_ "fieldset"] $ label_ [class_ "label"] do
-            input_ [type_ "checkbox", class_ "checkbox checkbox-sm rounded-sm", id_ "toggleQueryEditor", onclick_ "toggleQueryBuilder()"] >> span_ "query editor"
 
 
 queryLibrary_ :: Projects.ProjectId -> V.Vector Projects.QueryLibItem -> V.Vector Projects.QueryLibItem -> Html ()
-queryLibrary_ pid queryLibSaved queryLibRecent = div_ [class_ "dropdown dropdown-hover dropdown-bottom dropdown-start", id_ "queryLibraryParentEl"] do
-  div_ [class_ "cursor-pointer relative  bg-fillWeak  text-textWeak rounded-lg border border-strokeWeaker h-full flex gap-2 items-center px-2", tabindex_ "0", role_ "button"]
+queryLibrary_ pid queryLibSaved queryLibRecent = div_ [class_ "dropdown dropdown-bottom dropdown-start", id_ "queryLibraryParentEl"] do
+  div_ [class_ "cursor-pointer relative  text-textWeak rounded-lg border border-strokeStrong h-full flex gap-2 items-center px-2 mb-2", tabindex_ "0", role_ "button"]
     $ (toHtml "Presets" >> faSprite_ "chevron-down" "regular" "w-3 h-3")
   div_ [class_ "dropdown-content z-20"] $ div_ [class_ "tabs tabs-box tabs-md tabs-outline items-center bg-fillWeak p-0 h-full", role_ "tablist", id_ "queryLibraryTabListEl"] do
     tabPanel_ "Saved" (queryLibraryContent_ "Saved" queryLibSaved)
@@ -411,7 +406,7 @@ queryLibrary_ pid queryLibSaved queryLibRecent = div_ [class_ "dropdown dropdown
     tabPanel_ :: Text -> Html () -> Html ()
     tabPanel_ label content = do
       input_ $ [type_ "radio", name_ "querylib", role_ "tab", class_ "tab", Aria.label_ label] <> [checked_ | label == "Saved"]
-      div_ [role_ "tabpanel", class_ "tab-content bg-base-100 shadow-lg rounded-box h-[70vh] w-[40vw] space-y-2 overflow-y-scroll"] content
+      div_ [role_ "tabpanel", class_ "tab-content bg-bgBase shadow-lg rounded-box h-full max-h-[60dvh] w-[40vw] space-y-2 overflow-y-scroll"] content
 
     queryLibraryContent_ :: Text -> V.Vector Projects.QueryLibItem -> Html ()
     queryLibraryContent_ label items = do
@@ -419,7 +414,7 @@ queryLibrary_ pid queryLibSaved queryLibRecent = div_ [class_ "dropdown dropdown
       div_ [class_ $ "border divide-y rounded-xl p-3 dataLibContent" <> label] $ V.forM_ items queryLibItem_
 
     searchBar_ :: Text -> Html ()
-    searchBar_ label = div_ [class_ "flex gap-2 sticky top-0 p-3 bg-base-100 z-20"] do
+    searchBar_ label = div_ [class_ "flex gap-2 sticky top-0 p-3 bg-bgBase z-20"] do
       label_ [class_ "input input-md flex items-center gap-2 flex-1"] do
         faSprite_ "magnifying-glass" "regular" "h-4 w-4 opacity-70"
         input_
@@ -840,10 +835,8 @@ jsonTreeAuxillaryCode pid query = do
           }
         })
 
-        document.getElementById("filterElement").handleAddQuery({
-            "tag": operation,
-            "contents": [path, JSON.parse(value)]
-        });
+        const operator = operation === 'Eq' ? '==' : operation === 'NotEq' ? '!=' : '==';
+        document.getElementById("filterElement").handleAddQuery(path + ' ' + operator + ' ' + value);
     }
 
     var toggleColumnToSummary = (e)=>{
@@ -862,22 +855,6 @@ jsonTreeAuxillaryCode pid query = do
       return [...new Set(cols.filter((x) => namedCol.toLowerCase() != x.replaceAll('.', '•').replaceAll('[', '❲').replaceAll(']', '❳').toLowerCase()))].join(',')
     }
 
-    // TODO: Delete
-    function toggleQueryBuilder() {
-        ["queryBuilder", "queryEditor"].forEach(id => document.getElementById(id).classList.toggle("hidden"));
-        window.editor ??= CodeMirror(document.getElementById('queryEditor'), {
-            value: params().query || window.queryBuilderValue || '',
-            mode: "javascript",
-            theme: "elegant",
-            lineNumbers: true,
-        });
-        setTimeout(() => {
-            const editorVisible = !document.getElementById("queryEditor").classList.contains("hidden");
-            editorVisible
-                ? window.editor.setValue(window.queryBuilderValue)
-                : document.querySelector('#filterElement')?.setBuilderValue(window.editor.getValue());
-        }, 10);
-    }
 |]
 
 

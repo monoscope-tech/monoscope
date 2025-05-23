@@ -623,7 +623,7 @@ export class QueryEditorComponent extends LitElement {
   @state() private showSuggestions = false;
   @state() private currentQuery = '';
   @state() private selectedIndex = -1;
-  @state() private placeholderText = 'filter by value';
+  @state() private defaultValue = '';
 
   // Internal state
   private editor: monaco.editor.IStandaloneCodeEditor | null = null;
@@ -673,6 +673,9 @@ export class QueryEditorComponent extends LitElement {
   // Lifecycle methods
   async firstUpdated(): Promise<void> {
     if (!this._editorContainer) return;
+
+    // Get default value from attributes
+    this.defaultValue = this.getAttribute('default-value') || '';
 
     this.createMonacoEditor();
     this.setupSuggestions();
@@ -726,6 +729,33 @@ export class QueryEditorComponent extends LitElement {
       }));
   }
 
+  // Public API method for adding query fragments
+  public handleAddQuery(queryFragment: string): void {
+    if (!this.editor) return;
+
+    const currentValue = this.editor.getValue().trim();
+    let newValue: string;
+    if (currentValue) {
+      newValue = `${currentValue} and ${queryFragment}`;
+    } else {
+      newValue = queryFragment;
+    }
+
+    this.editor.setValue(newValue);
+
+    // Move cursor to the end
+    const model = this.editor.getModel();
+    if (model) {
+      const lastLine = model.getLineCount();
+      const lastColumn = model.getLineMaxColumn(lastLine);
+      this.editor.setPosition({ lineNumber: lastLine, column: lastColumn });
+    }
+
+    this.debouncedUpdateQuery(newValue);
+    this.showSuggestions = false;
+    this.selectedIndex = -1;
+  }
+
   // Private methods
   private formatRelativeTime(date: Date): string {
     const diffSec = Math.floor((Date.now() - date.getTime()) / 1000);
@@ -738,7 +768,7 @@ export class QueryEditorComponent extends LitElement {
 
   private createMonacoEditor(): void {
     this.editor = monaco.editor.create(this._editorContainer, {
-      value: ``,
+      value: this.defaultValue,
       language: 'aql',
       theme: 'transparent-theme',
       automaticLayout: true,
@@ -749,7 +779,7 @@ export class QueryEditorComponent extends LitElement {
       readOnly: false,
       cursorStyle: 'line',
       fontLigatures: true,
-      fontSize: 16,
+      fontSize: 14,
       'semanticHighlighting.enabled': true,
       quickSuggestions: {
         other: true,
@@ -768,7 +798,7 @@ export class QueryEditorComponent extends LitElement {
       wrappingIndent: 'indent',
       glyphMargin: false,
       folding: false,
-      padding: { top: 4, bottom: 4 },
+      padding: { top: 8, bottom: 4 },
       // Remove borders and make background transparent
       renderLineHighlight: 'none',
       overviewRulerBorder: false,
@@ -880,10 +910,24 @@ export class QueryEditorComponent extends LitElement {
       preventAndStop();
       this.selectedIndex = this.selectedIndex <= 0 ? totalItems - 1 : this.selectedIndex - 1;
       this.scrollSelectedIntoView();
-    } else if (key === 'Enter' && this.selectedIndex >= 0) {
-      preventAndStop();
-      const item = this.getItemAtIndex(this.selectedIndex);
-      if (item) this.insertCompletion(item);
+    } else if (key === 'Enter') {
+      // Only select suggestion if we have actively selected one (selectedIndex >= 0)
+      if (this.selectedIndex >= 0) {
+        preventAndStop();
+        const item = this.getItemAtIndex(this.selectedIndex);
+        if (item) this.insertCompletion(item);
+      } else {
+        // No suggestion selected - close dropdown and trigger update-query event
+        preventAndStop();
+        this.showSuggestions = false;
+        this.selectedIndex = -1;
+
+        // Use existing debounced function to trigger update-query and URL update
+        const model = this.editor?.getModel();
+        if (model) {
+          this.debouncedUpdateQuery(model.getValue());
+        }
+      }
     } else if (key === 'Escape') {
       preventAndStop();
       this.showSuggestions = false;
@@ -1297,7 +1341,7 @@ export class QueryEditorComponent extends LitElement {
 
     return html`
       <div
-        class="suggestions-dropdown absolute top-10 left-0 right-0 bg-white border border-gray-200 shadow-lg z-50 max-h-[600px] overflow-y-auto rounded-md text-xs flex flex-col"
+        class="suggestions-dropdown absolute top-10 left-0 right-0 bg-white border border-gray-200 shadow-lg z-50 max-h-[80dvh] overflow-y-auto rounded-md text-xs flex flex-col"
       >
         <div class="overflow-y-auto flex-grow min-h-0">
           ${sections.map(
@@ -1323,15 +1367,22 @@ export class QueryEditorComponent extends LitElement {
           display: none !important;
           visibility: hidden !important;
         }
+        .monaco-editor {
+          border-radius: 6px;
+          outline-color: var(--color-strokeStrong);
+        }
+        .monaco-editor:focus-within {
+          outline-color: var(--color-strokeBrand-strong);
+        }
       </style>
       <div class="relative w-full h-full">
         <div class="relative w-full h-full">
-          <div id="editor-container" class="rounded border border-gray-300 xoverflow-hidden h-full"></div>
+          <div id="editor-container" class="h-full"></div>
           <div
-            class="placeholder-overlay absolute top-0 left-0 right-0 bottom-0 pointer-events-auto z-[1] text-gray-400 font-mono text-sm leading-[18px] pt-1 pl-2 hidden cursor-text"
+            class="placeholder-overlay absolute top-0 left-0 right-0 bottom-0 pointer-events-auto z-[1] text-gray-400 f/nont-mono text-sm leading-[18px] pt-2 pl-2 hidden cursor-text"
             @click=${() => this.editor?.focus()}
           >
-            ${this.placeholderText}
+            Filter by your logs and events. Press <span class="kbd">Shift + Space</span> to search using natural langauge.
           </div>
         </div>
         ${this.renderSuggestionDropdown()}
