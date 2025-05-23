@@ -39,7 +39,7 @@ data PageCtx a = PageCtx
   { conf :: BWConfig
   , content :: a
   }
-  deriving stock (Show, Generic)
+  deriving stock (Generic, Show)
 
 
 instance ToHtml a => ToHtml (PageCtx a) where
@@ -63,7 +63,7 @@ data BWConfig = BWConfig
   , docsLink :: Maybe Text
   , isSettingsPage :: Bool
   }
-  deriving stock (Show, Generic)
+  deriving stock (Generic, Show)
   deriving anyclass (Default)
 
 
@@ -92,6 +92,7 @@ bodyWrapper bcfg child = do
         link_ [rel_ "stylesheet", href_ "https://cdn.jsdelivr.net/npm/@yaireo/tagify/dist/tagify.css", type_ "text/css"]
         link_ [rel_ "stylesheet", href_ $(hashAssetFile "/public/assets/deps/gridstack/gridstack.min.css")]
         link_ [rel_ "stylesheet", type_ "text/css", href_ $(hashAssetFile "/public/assets/css/tailwind.min.css")]
+        link_ [rel_ "stylesheet", type_ "text/css", href_ $(hashAssetFile "/public/assets/web-components/dist/css/index.css")]
 
         -- SCRIPTS
         script_
@@ -131,7 +132,7 @@ bodyWrapper bcfg child = do
         script_ [src_ "https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/python.min.js"] ("" :: Text)
         script_ [src_ "https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.63.0/codemirror.min.js"] ("" :: Text)
         script_ [src_ "https://cdnjs.cloudflare.com/ajax/libs/codemirror/6.65.7/mode/javascript/javascript.min.js"] ("" :: Text)
-        script_ [type_ "module", src_ $(hashAssetFile "/public/assets/filtercomponent.js")] ("" :: Text)
+        script_ [type_ "module", src_ $(hashAssetFile "/public/assets/web-components/dist/js/index.js")] ("" :: Text)
         script_ [src_ $(hashAssetFile "/public/assets/js/main.js")] ("" :: Text)
         script_ [type_ "module", src_ $(hashAssetFile "/public/assets/explorer-list.js")] ("" :: Text)
 
@@ -438,7 +439,7 @@ sideNav sess project pageTitle menuItem hasIntegrated = aside_ [class_ "border-r
       , href_ $ "/p/" <> project.id.toText <> "/settings"
       ]
       $ span_ [class_ "w-9 h-9 p-2 flex justify-center items-center rounded-full bg-blue-100 text-brand leading-none "] (faSprite_ "gear" "regular" "h-3 w-3")
-      >> span_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:block"] "Settings"
+        >> span_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:block"] "Settings"
     a_
       [ class_ "hover:bg-blue-50 "
       , target_ "blank"
@@ -447,7 +448,7 @@ sideNav sess project pageTitle menuItem hasIntegrated = aside_ [class_ "border-r
       , href_ "https://apitoolkit.io/docs/"
       ]
       $ span_ [class_ "w-9 h-9 p-2 flex justify-center items-center rounded-full bg-blue-100 text-brand leading-none"] (faSprite_ "circle-question" "regular" "h-3 w-3")
-      >> span_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:block"] "Documentation"
+        >> span_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:block"] "Documentation"
     a_
       [ class_ "hover:bg-blue-50"
       , term "data-tippy-placement" "right"
@@ -456,7 +457,7 @@ sideNav sess project pageTitle menuItem hasIntegrated = aside_ [class_ "border-r
       , [__| on click js posthog.reset(); end |]
       ]
       $ span_ [class_ "w-9 h-9 p-2 flex justify-center items-center  rounded-full bg-red-100 text-red-600 leading-none"] (faSprite_ "arrow-right-from-bracket" "regular" "h-3 w-3")
-      >> span_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:block"] "Logout"
+        >> span_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:block"] "Logout"
 
 
 -- mapM_ renderNavBottomItem $ navBottomList project.id.toText

@@ -15,7 +15,7 @@ import Data.Default (def)
 import Data.HashMap.Strict qualified as HM
 import Data.List qualified as L
 import Data.Text qualified as T
-import Data.Time (UTCTime, addUTCTime, diffUTCTime)
+import Data.Time (UTCTime, addUTCTime)
 import Data.Vector qualified as V
 import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
 import Effectful.Time qualified as Time
@@ -29,7 +29,6 @@ import Models.Apis.Fields.Facets qualified as Facets
 import Models.Apis.Fields.Types (FacetData (..), FacetSummary (..), FacetValue (..))
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.Projects qualified as Projects
-import Models.Telemetry.Telemetry qualified as Telemetry
 import Models.Users.Sessions qualified as Sessions
 import NeatInterpolation (text)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), currProject, pageActions, pageTitle, sessM)
@@ -125,8 +124,8 @@ renderFacets facetSummary = do
                       onclick_ $ "filterByFacet('" <> T.replace "___" "." key <> "', '" <> val <> "')"
                     ]
                   let colorClass = colorFn val
-                  when (not $ T.null colorClass) $
-                    span_ [class_ $ colorClass <> " shrink-0 w-1 h-5 rounded-sm"] " "
+                  when (not $ T.null colorClass)
+                    $ span_ [class_ $ colorClass <> " shrink-0 w-1 h-5 rounded-sm"] " "
                   span_ [class_ "facet-value truncate max-w-[80%]", term "data-tippy-content" val] $ toHtml val
                 span_ [class_ "facet-count text-slate-500 shrink-0 ml-1"] $ toHtml $ show count
 
@@ -137,48 +136,39 @@ keepNonEmpty (Just "") = Nothing
 keepNonEmpty (Just a) = Just a
 
 
-    -- resource___service___name              TEXT,
-    -- resource___service___version           TEXT,
-    -- resource___service___instance___id     TEXT,
-    -- resource___service___namespace         TEXT,
-    -- resource___telemetry___sdk___language  TEXT,
-    -- resource___telemetry___sdk___name      TEXT,
-    -- resource___telemetry___sdk___version   TEXT,
-
-
-
+-- TODO: This logic should be moved into the parseQueryToAST logic
 replaceNestJsonWithColumns :: Text -> Text
 replaceNestJsonWithColumns =
   T.replace "attributes.http.request.method" "attributes___http___request___method"
-  . T.replace "attributes.http.request.method_original" "attributes___http___request___method_original"
-  . T.replace "attributes.http.response.status_code" "attributes___http___response___status_code"
-  . T.replace "attributes.http.request.resend_count" "attributes___http___request___resend_count"
-  . T.replace "attributes.http.request.body.size" "attributes___http___request___body___size"
-  . T.replace "attributes.url.fragment" "attributes___url___fragment"
-  . T.replace "attributes.url.full" "attributes___url___full"
-  . T.replace "attributes.url.path" "attributes___url___path"
-  . T.replace "attributes.url.query" "attributes___url___query"
-  . T.replace "attributes.url.scheme" "attributes___url___scheme"
-  . T.replace "attributes.user_agent.original" "attributes___user_agent___original"
-  . T.replace "attributes.db.system.name" "attributes___db___system___name"
-  . T.replace "attributes.db.collection.name" "attributes___db___collection___name"
-  . T.replace "attributes.db.namespace" "attributes___db___namespace"
-  . T.replace "attributes.db.operation.name" "attributes___db___operation___name"
-  . T.replace "attributes.db.operation.batch.size" "attributes___db___operation___batch___size"
-  . T.replace "attributes.db.query.summary" "attributes___db___query___summary"
-  . T.replace "attributes.db.query.text" "attributes___db___query___text"
-  . T.replace "context.trace_id" "context___trace_id"
-  . T.replace "context.span_id" "context___span_id"
-  . T.replace "context.trace_state" "context___trace_state"
-  . T.replace "context.trace_flags" "context___trace_flags"
-  . T.replace "context.is_remote" "context___is_remote"
-  . T.replace "resource.service.name" "resource___service___name"
-  . T.replace "resource.service.version" "resource___service___version"
-  . T.replace "resource.service.instance.id" "resource___service___instance___id"
-  . T.replace "resource.service.namespace" "resource___service___namespace"
-  . T.replace "resource.telemetry.sdk.language" "resource___telemetry___sdk___language"
-  . T.replace "resource.telemetry.sdk.name" "resource___telemetry___sdk___name"
-  . T.replace "resource.telemetry.sdk.version" "resource___telemetry___sdk___version"
+    . T.replace "attributes.http.request.method_original" "attributes___http___request___method_original"
+    . T.replace "attributes.http.response.status_code" "attributes___http___response___status_code"
+    . T.replace "attributes.http.request.resend_count" "attributes___http___request___resend_count"
+    . T.replace "attributes.http.request.body.size" "attributes___http___request___body___size"
+    . T.replace "attributes.url.fragment" "attributes___url___fragment"
+    . T.replace "attributes.url.full" "attributes___url___full"
+    . T.replace "attributes.url.path" "attributes___url___path"
+    . T.replace "attributes.url.query" "attributes___url___query"
+    . T.replace "attributes.url.scheme" "attributes___url___scheme"
+    . T.replace "attributes.user_agent.original" "attributes___user_agent___original"
+    . T.replace "attributes.db.system.name" "attributes___db___system___name"
+    . T.replace "attributes.db.collection.name" "attributes___db___collection___name"
+    . T.replace "attributes.db.namespace" "attributes___db___namespace"
+    . T.replace "attributes.db.operation.name" "attributes___db___operation___name"
+    . T.replace "attributes.db.operation.batch.size" "attributes___db___operation___batch___size"
+    . T.replace "attributes.db.query.summary" "attributes___db___query___summary"
+    . T.replace "attributes.db.query.text" "attributes___db___query___text"
+    . T.replace "context.trace_id" "context___trace_id"
+    . T.replace "context.span_id" "context___span_id"
+    . T.replace "context.trace_state" "context___trace_state"
+    . T.replace "context.trace_flags" "context___trace_flags"
+    . T.replace "context.is_remote" "context___is_remote"
+    . T.replace "resource.service.name" "resource___service___name"
+    . T.replace "resource.service.version" "resource___service___version"
+    . T.replace "resource.service.instance.id" "resource___service___instance___id"
+    . T.replace "resource.service.namespace" "resource___service___namespace"
+    . T.replace "resource.telemetry.sdk.language" "resource___telemetry___sdk___language"
+    . T.replace "resource.telemetry.sdk.name" "resource___telemetry___sdk___name"
+    . T.replace "resource.telemetry.sdk.version" "resource___telemetry___sdk___version"
 
 
 apiLogH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe UTCTime -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders LogsGet)
@@ -187,8 +177,8 @@ apiLogH pid queryM' queryASTM' cols' cursorM' sinceM fromM toM layoutM sourceM t
   let source = "spans" -- fromMaybe "spans" sourceM
   let summaryCols = T.splitOn "," (fromMaybe "" cols')
   let parseQuery q = either (\err -> addErrorToast "Error Parsing Query" (Just err) >> pure []) pure (parseQueryToAST $ replaceNestJsonWithColumns q)
-  let queryASTM = queryASTM' >>=  (\x  -> Just $ replaceNestJsonWithColumns x)
-  let queryM = queryM' >>=  (\x  -> Just $ replaceNestJsonWithColumns x)
+  let queryASTM = queryASTM' >>= (\x -> Just $ replaceNestJsonWithColumns x)
+  let queryM = queryM' >>= (\x -> Just $ replaceNestJsonWithColumns x)
   queryAST <-
     maybe
       (parseQuery $ maybeToMonoid queryM)
@@ -223,8 +213,8 @@ apiLogH pid queryM' queryASTM' cols' cursorM' sinceM fromM toM layoutM sourceM t
   facetSummary <- Facets.getFacetSummary pid "otel_logs_and_spans" (fromMaybe (addUTCTime (-86400) now) fromD) (fromMaybe now toD)
 
   freeTierExceeded <-
-    dbtToEff $
-      if project.paymentPlan == "Free"
+    dbtToEff
+      $ if project.paymentPlan == "Free"
         then (> 1000) <$> RequestDumps.getLastSevenDaysTotalRequest pid
         else pure False
 
@@ -247,7 +237,7 @@ apiLogH pid queryM' queryASTM' cols' cursorM' sinceM fromM toM layoutM sourceM t
                 "Events"
                 -- a_ [onclick_ "window.setQueryParamAndReload('source', 'metrics')", role_ "tab", class_ $ "tab py-1.5 h-auto! " <> if source == "metrics" then "tab-active" else ""] "Metrics"
           }
-          
+
   case tableAsVecM of
     Just tableAsVec -> do
       let (requestVecs, colNames, resultCount) = tableAsVec
@@ -257,8 +247,7 @@ apiLogH pid queryM' queryASTM' cols' cursorM' sinceM fromM toM layoutM sourceM t
           reqFirstCreatedAtM = (\r -> lookupVecTextByKey r colIdxMap "timestamp") =<< (requestVecs V.!? 0)
           nextLogsURL = RequestDumps.requestDumpLogUrlPath pid queryM cols' reqLastCreatedAtM sinceM fromM toM (Just "loadmore") source queryASTM False
           recentLogsURL = RequestDumps.requestDumpLogUrlPath pid queryM cols' reqFirstCreatedAtM sinceM fromM toM (Just "loadmore") source queryASTM True
-          
-          -- traceIDs = V.catMaybes $ V.map (\v -> lookupVecTextByKey v colIdxMap "trace_id") requestVecs
+
           resetLogsURL = RequestDumps.requestDumpLogUrlPath pid queryM cols' Nothing Nothing Nothing Nothing Nothing source Nothing False
           -- additionalReqsVec <-
           --   if (null traceIDs)
@@ -289,7 +278,6 @@ apiLogH pid queryM' queryASTM' cols' cursorM' sinceM fromM toM layoutM sourceM t
               , targetSpans = targetSpansM
               , serviceColors = colors
               , daysCountDown = Nothing
-              , queryAST = decodeUtf8 $ AE.encode queryAST
               , queryLibRecent
               , queryLibSaved
               , fromD
@@ -344,12 +332,12 @@ instance AE.ToJSON LogsGet where
   toJSON _ = AE.object []
 
 
-logQueryBox_ :: Projects.ProjectId -> Maybe Text -> Text -> Maybe Text -> Text -> V.Vector Projects.QueryLibItem -> V.Vector Projects.QueryLibItem -> Html ()
-logQueryBox_ pid currentRange source targetSpan queryAST queryLibRecent queryLibSaved = do
+logQueryBox_ :: Projects.ProjectId -> Maybe Text -> Text -> Maybe Text -> Maybe Text -> V.Vector Projects.QueryLibItem -> V.Vector Projects.QueryLibItem -> Html ()
+logQueryBox_ pid currentRange source targetSpan query queryLibRecent queryLibSaved = do
   Components.modal_ "saveQueryMdl" "" $ form_
     [ class_ "flex flex-col p-3 gap-3"
     , hxGet_ $ "/p/" <> pid.toText <> "/log_explorer?layout=SaveQuery"
-    , hxVals_ "js:{queryAST:window.getQueryFromEditor()}"
+    , hxVals_ "js:{query:window.getQueryFromEditor()}"
     , hxTarget_ "#queryLibraryParentEl"
     , hxSwap_ "outerHTML"
     , hxSelect_ "#queryLibraryParentEl"
@@ -364,7 +352,7 @@ logQueryBox_ pid currentRange source targetSpan queryAST queryLibRecent queryLib
     [ hxGet_ $ "/p/" <> pid.toText <> "/log_explorer"
     , hxPushUrl_ "true"
     , hxTrigger_ "add-query from:#filterElement, update-query from:#filterElement, submit, update-query from:window"
-    , hxVals_ "js:{queryAST:window.getQueryFromEditor(), since: params().since, from: params().from, to:params().to, cols:params().cols, layout:'resultTable', source: params().source}"
+    , hxVals_ "js:{...{layout:'resultTable', ...params()}}"
     , hxTarget_ "#resultTableInner"
     , hxSwap_ "outerHTML"
     , id_ "log_explorer_form"
@@ -377,7 +365,7 @@ logQueryBox_ pid currentRange source targetSpan queryAST queryLibRecent queryLib
         queryLibrary_ pid queryLibSaved queryLibRecent
         div_ [class_ "p-1 pl-3 flex-1 flex gap-2  bg-fillWeaker rounded-lg border border-strokeWeak justify-between items-stretch"] do
           div_ [id_ "queryEditor", class_ "h-14 hidden overflow-hidden  bg-fillWeak flex-1 flex items-center"] pass
-          div_ [id_ "queryBuilder", class_ "flex-1 flex items-center"] $ termRaw "filter-element" [id_ "filterElement", class_ "w-full h-full flex items-center", termRaw "ast" queryAST] ("" :: Text)
+          div_ [id_ "queryBuilder", class_ "flex-1 flex items-center"] $ termRaw "query-editor" [id_ "filterElement", class_ "w-full h-full flex items-center"] ("" :: Text)
           div_ [class_ "gap-[2px] flex items-center"] do
             span_ "in"
             select_
@@ -405,7 +393,6 @@ logQueryBox_ pid currentRange source targetSpan queryAST queryLibRecent queryLib
       div_ [class_ "flex items-between justify-between"] do
         div_ [class_ "", id_ "resultTableInner"] pass
 
-        -- termRaw "filter-element" [id_ "filterElement", class_ "w-full h-full flex items-center", termRaw "ast" queryAST, termRaw "mode" "command"] ("" :: Text)
         div_ [class_ "flex justify-end  gap-2 "] do
           fieldset_ [class_ "fieldset"] $ label_ [class_ "label"] do
             input_ [type_ "checkbox", class_ "checkbox checkbox-sm rounded-sm toggle-chart"] >> span_ "charts"
@@ -415,8 +402,8 @@ logQueryBox_ pid currentRange source targetSpan queryAST queryLibRecent queryLib
 
 queryLibrary_ :: Projects.ProjectId -> V.Vector Projects.QueryLibItem -> V.Vector Projects.QueryLibItem -> Html ()
 queryLibrary_ pid queryLibSaved queryLibRecent = div_ [class_ "dropdown dropdown-hover dropdown-bottom dropdown-start", id_ "queryLibraryParentEl"] do
-  div_ [class_ "cursor-pointer relative  bg-fillWeak  text-textWeak rounded-lg border border-strokeWeaker h-full flex gap-2 items-center px-2", tabindex_ "0", role_ "button"] $
-    (toHtml "Presets" >> faSprite_ "chevron-down" "regular" "w-3 h-3")
+  div_ [class_ "cursor-pointer relative  bg-fillWeak  text-textWeak rounded-lg border border-strokeWeaker h-full flex gap-2 items-center px-2", tabindex_ "0", role_ "button"]
+    $ (toHtml "Presets" >> faSprite_ "chevron-down" "regular" "w-3 h-3")
   div_ [class_ "dropdown-content z-20"] $ div_ [class_ "tabs tabs-box tabs-md tabs-outline items-center bg-fillWeak p-0 h-full", role_ "tablist", id_ "queryLibraryTabListEl"] do
     tabPanel_ "Saved" (queryLibraryContent_ "Saved" queryLibSaved)
     tabPanel_ "Recent" (queryLibraryContent_ "Recent" queryLibRecent)
@@ -459,8 +446,8 @@ queryLibItem_ qli =
         a_
           [ class_ "tooltip"
           , term "data-tip" "run query"
-          , term "data-queryAST" $ decodeUtf8 $ AE.encode qli.queryAst
-          , [__| on click call #filterElement.handleAddQuery({detail: JSON.parse(@data-queryAST)})|]
+          , term "data-query" $ qli.queryText
+          , [__| on click call #filterElement.handleAddQuery({detail: JSON.parse(@data-query)})|]
           ]
           $ faSprite_ "play" "regular" "h-4 w-4"
         a_ [class_ "tooltip", term "data-tip" "copy query to clipboard", [__|install Copy(content: (next <.queryText/> ))|]] $ faSprite_ "copy" "regular" "h-4 w-4"
@@ -470,7 +457,7 @@ queryLibItem_ qli =
             [ class_ "tooltip"
             , term "data-tip" "delete query"
             , hxGet_ $ "/p/" <> qli.projectId.toText <> "/log_explorer?layout=DeleteQuery&queryLibId=" <> qli.id.toText
-            , hxVals_ "js:{queryAST:window.getQueryFromEditor()}"
+            , hxVals_ "js:{query:window.getQueryFromEditor()}"
             , hxTarget_ "#queryLibraryTabListEl"
             , hxSwap_ "outerHTML"
             , hxSelect_ "#queryLibraryTabListEl"
@@ -484,9 +471,9 @@ queryLibItem_ qli =
           li_ "Send query to alert"
           li_ "Send query to a dashboard"
     strong_ $ whenJust qli.title \title -> (toHtml title)
-    pre_ $
-      code_ [class_ "language-js bg-transparent! queryText whitespace-pre-wrap break-words"] $
-        toHtml qli.queryText
+    pre_
+      $ code_ [class_ "language-js bg-transparent! queryText whitespace-pre-wrap break-words"]
+      $ toHtml qli.queryText
     div_ [class_ "gap-3 flex"] $ time_ [datetime_ "", term "data-tippy-content" "created on"] (toHtml $ displayTimestamp $ formatUTC qli.createdAt) >> when qli.byMe " by me"
 
 
@@ -509,7 +496,6 @@ data ApiLogsPageData = ApiLogsPageData
   , targetSpans :: Maybe Text
   , serviceColors :: HM.HashMap Text Text
   , daysCountDown :: Maybe Text
-  , queryAST :: Text
   , queryLibRecent :: V.Vector Projects.QueryLibItem
   , queryLibSaved :: V.Vector Projects.QueryLibItem
   , fromD :: Maybe UTCTime
@@ -582,9 +568,9 @@ apiLogsPage page = do
       ]
       do
         div_ [class_ "relative ml-auto w-full", style_ ""] do
-          div_ [class_ "flex justify-end  w-full p-4 "] $
-            button_ [[__|on click add .hidden to #expand-log-modal|]] $
-              faSprite_ "xmark" "regular" "h-8"
+          div_ [class_ "flex justify-end  w-full p-4 "]
+            $ button_ [[__|on click add .hidden to #expand-log-modal|]]
+            $ faSprite_ "xmark" "regular" "h-8"
           form_
             [ hxPost_ $ "/p/" <> page.pid.toText <> "/share/"
             , hxSwap_ "innerHTML"
@@ -596,13 +582,13 @@ apiLogsPage page = do
               input_ [type_ "hidden", value_ "", name_ "reqId", id_ "req_id_input"]
               input_ [type_ "hidden", value_ "", name_ "reqCreatedAt", id_ "req_created_at_input"]
     div_ [] do
-      logQueryBox_ page.pid page.currentRange page.source page.targetSpans page.queryAST page.queryLibRecent page.queryLibSaved
+      logQueryBox_ page.pid page.currentRange page.source page.targetSpans page.query page.queryLibRecent page.queryLibSaved
 
       div_ [class_ "flex flex-row gap-4 mt-3 group-has-[.toggle-chart:checked]/pg:hidden w-full", style_ "aspect-ratio: 10 / 1;"] do
         Widget.widget_ $ (def :: Widget.Widget){Widget.query = Just "timechart count(*)", Widget.unit = Just "rows", Widget.title = Just "All traces", Widget.hideLegend = Just True, Widget._projectId = Just page.pid, Widget.standalone = Just True, Widget.yAxis = Just (def{showOnlyMaxLabel = Just True})}
 
-        Widget.widget_ $
-          (def :: Widget.Widget)
+        Widget.widget_
+          $ (def :: Widget.Widget)
             { Widget.wType = WTTimeseriesLine
             , Widget.standalone = Just True
             , Widget.title = Just "Latency percentiles (ms)"
@@ -747,7 +733,8 @@ apiLogsPage page = do
           window.addEventListener ('mouseup', handleMouseup)
           |]
 
-  jsonTreeAuxillaryCode page.pid page.queryAST
+  jsonTreeAuxillaryCode page.pid page.query
+  queryEditorInitializationCode page.queryLibRecent page.queryLibSaved
 
 
 curateCols :: [Text] -> [Text] -> [Text]
@@ -784,8 +771,8 @@ curateCols summaryCols cols = sortBy sortAccordingly filteredCols
 
 
 -- TODO:
-jsonTreeAuxillaryCode :: Projects.ProjectId -> Text -> Html ()
-jsonTreeAuxillaryCode pid queryAST = do
+jsonTreeAuxillaryCode :: Projects.ProjectId -> Maybe Text -> Html ()
+jsonTreeAuxillaryCode pid query = do
   template_ [id_ "log-item-context-menu-tmpl"] do
     div_ [id_ "log-item-context-menu", class_ "log-item-context-menu  origin-top-right absolute left-0 mt-2 w-56 rounded-md shadow-md shadow-slate-300 bg-bgBase ring-1 ring-black ring-opacity-5 divide-y divide-gray-100 focus:outline-hidden z-10", role_ "menu", tabindex_ "-1"] do
       div_ [class_ "py-1", role_ "none"] do
@@ -795,7 +782,7 @@ jsonTreeAuxillaryCode pid queryAST = do
           , tabindex_ "-1"
           , hxGet_ $ "/p/" <> pid.toText <> "/log_explorer"
           , hxPushUrl_ "true"
-          , hxVals_ "js:{queryAST:params().queryAST,cols:toggleColumnToSummary(event),layout:'resultTable', since: params().since, from: params().from, to:params().to, source: params().source}"
+          , hxVals_ "js:{...{layout:'resultTable',cols:toggleColumnToSummary(event), ...params()}}"
           , hxTarget_ "#resultTableInner"
           , hxSwap_ "outerHTML"
           , -- , hxIndicator_ "#query-indicator"
@@ -879,7 +866,7 @@ jsonTreeAuxillaryCode pid queryAST = do
     function toggleQueryBuilder() {
         ["queryBuilder", "queryEditor"].forEach(id => document.getElementById(id).classList.toggle("hidden"));
         window.editor ??= CodeMirror(document.getElementById('queryEditor'), {
-            value: params().queryAST || window.queryBuilderValue || '',
+            value: params().query || window.queryBuilderValue || '',
             mode: "javascript",
             theme: "elegant",
             lineNumbers: true,
@@ -892,3 +879,20 @@ jsonTreeAuxillaryCode pid queryAST = do
         }, 10);
     }
 |]
+
+
+queryEditorInitializationCode :: V.Vector Projects.QueryLibItem -> V.Vector Projects.QueryLibItem -> Html ()
+queryEditorInitializationCode queryLibRecent queryLibSaved = do
+  let queryLibData = queryLibRecent <> queryLibSaved
+      queryLibDataJson = decodeUtf8 $ AE.encode queryLibData
+  script_
+    [text|
+    // Initialize query-editor component with query library data
+    setTimeout(() => {
+      const editor = document.getElementById('filterElement');
+      if (editor && editor.setQueryLibrary) {
+        const queryLibraryData = $queryLibDataJson;
+        editor.setQueryLibrary(queryLibraryData);
+      }
+    }, 100);
+    |]

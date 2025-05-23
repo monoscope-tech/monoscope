@@ -1,6 +1,5 @@
 module Pages.LogExplorer.Routes (Routes, Routes' (..), server) where
 
-import Data.Aeson qualified as AE
 import Data.Time (UTCTime)
 import Data.UUID qualified as UUID
 import Models.Projects.Projects qualified as Projects

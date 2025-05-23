@@ -4,7 +4,6 @@ module Models.Projects.Projects (
   ProjectId (..),
   CreateProject (..),
   NotificationChannel (..),
-  parseNotifChannel,
   OnboardingStep (..),
   insertProject,
   projectIdFromText,
@@ -39,11 +38,11 @@ import Data.Vector qualified as V
 import Database.PostgreSQL.Entity
 import Database.PostgreSQL.Entity.DBT (QueryNature (..), execute, query, queryOne)
 import Database.PostgreSQL.Entity.Types
-import Database.PostgreSQL.Simple (FromRow, Only (Only), ResultError (..), ToRow)
-import Database.PostgreSQL.Simple.FromField (FromField (fromField), returnError)
+import Database.PostgreSQL.Simple (FromRow, Only (Only), ToRow)
+import Database.PostgreSQL.Simple.FromField (FromField)
 import Database.PostgreSQL.Simple.Newtypes
+import Database.PostgreSQL.Simple.ToField (ToField)
 import Database.PostgreSQL.Simple.SqlQQ (sql)
-import Database.PostgreSQL.Simple.ToField (Action (..), ToField (toField))
 import Database.PostgreSQL.Transact (DBT)
 import Deriving.Aeson qualified as DAE
 import Effectful
@@ -80,54 +79,22 @@ data NotificationChannel
   | NSlack
   | NDiscord
   | NPhone
-  deriving stock (Eq, Generic, Show)
+  deriving stock (Eq, Generic, Show, Read)
   deriving anyclass (NFData)
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.ConstructorTagModifier '[DAE.StripPrefix "N", DAE.CamelToSnake]] NotificationChannel
+  deriving (ToField, FromField) via WrappedEnumSC "N" NotificationChannel
 
 
-instance AE.ToJSON NotificationChannel where
-  toJSON NEmail = AE.String "email"
-  toJSON NSlack = AE.String "slack"
-  toJSON NDiscord = AE.String "discord"
-  toJSON NPhone = AE.String "phone"
-
-
-instance AE.FromJSON NotificationChannel where
-  parseJSON (AE.String "email") = pure NEmail
-  parseJSON (AE.String "slack") = pure NSlack
-  parseJSON (AE.String "discord") = pure NDiscord
-  parseJSON (AE.String "phone") = pure NPhone
-  parseJSON _ = fail "Invalid NotificationChannel value"
-
-
-instance ToField NotificationChannel where
-  toField NEmail = Escape "email"
-  toField NSlack = Escape "slack"
-  toField NDiscord = Escape "discord"
-  toField NPhone = Escape "phone"
-
-
-parsePermissions :: (Eq s, IsString s) => s -> NotificationChannel
-parsePermissions "slack" = NSlack
-parsePermissions _ = NEmail
-
-
-parseNotifChannel :: NotificationChannel -> Text
-parseNotifChannel NSlack = "slack"
-parseNotifChannel NDiscord = "discord"
-parseNotifChannel NEmail = "email"
-parseNotifChannel NPhone = "phone"
+instance HasField "toText" NotificationChannel Text where
+  getField nc = case AE.toJSON nc of
+    AE.String t -> t
+    _ -> error "NotificationChannel should serialize to String"
 
 
 data OnboardingStep = Info | Survey | CreateMonitor | NotifChannel | Integration | Pricing | Complete
   deriving stock (Eq, Generic, Show, Read)
   deriving (AE.FromJSON, AE.ToJSON, NFData, ToField, FromField) via OnboardingStep
 
-
-instance FromField NotificationChannel where
-  fromField f mdata =
-    case mdata of
-      Nothing -> returnError UnexpectedNull f ""
-      Just bs -> pure $ parsePermissions bs
 
 
 data Project = Project
@@ -357,7 +324,7 @@ updateUsageLastReported pid lastReported = execute Update q (lastReported, pid)
 ---------------------------------
 newtype QueryLibItemId = QueryLibItemId {unQueryLibItemId :: UUID.UUID}
   deriving stock (Generic, Show, Read)
-  deriving newtype (Eq, Ord, FromField, ToField, FromHttpApiData, Default, Hashable, NFData)
+  deriving newtype (Eq, Ord, FromField, ToField, FromHttpApiData, Default, Hashable, NFData, AE.FromJSON, AE.ToJSON)
 
 
 instance HasField "unwrap" QueryLibItemId UUID.UUID where
@@ -371,6 +338,7 @@ instance HasField "toText" QueryLibItemId Text where
 data QueryLibType = QLTHistory | QLTSaved
   deriving (Eq, Generic, Show, Read, NFData)
   deriving (ToField, FromField) via WrappedEnumSC "QLT" QueryLibType
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.ConstructorTagModifier '[DAE.StripPrefix "QLT", DAE.CamelToSnake]] QueryLibType 
 
 
 data QueryLibItem = QueryLibItem
@@ -386,7 +354,7 @@ data QueryLibItem = QueryLibItem
   , byMe :: Bool
   }
   deriving (Show, Generic, Eq)
-  deriving anyclass (FromRow, ToRow, NFData)
+  deriving anyclass (FromRow, ToRow, NFData, AE.FromJSON, AE.ToJSON)
 
 
 queryLibHistoryForUser :: DB :> es => ProjectId -> Users.UserId -> Eff es (V.Vector QueryLibItem)

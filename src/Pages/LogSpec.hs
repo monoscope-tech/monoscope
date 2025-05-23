@@ -1,9 +1,7 @@
 module Pages.LogSpec (spec) where
 
-import Data.Aeson qualified as AE
-import Data.Aeson.KeyMap qualified as KEM
-import Data.Time (defaultTimeLocale, formatTime, getCurrentTime, parseTimeM)
-import Data.Time.Clock (UTCTime, addUTCTime)
+import Data.Time (defaultTimeLocale, formatTime, getCurrentTime)
+import Data.Time.Clock (addUTCTime)
 import Data.UUID qualified as UUID
 import Models.Projects.Projects qualified as Projects
 import Pages.BodyWrapper (PageCtx (..))
@@ -73,5 +71,3 @@ spec = aroundAll withTestResources do
         _ -> error "Unexpected response"
 
 
-textToUTCTime :: Text -> Maybe UTCTime
-textToUTCTime t = parseTimeM True defaultTimeLocale "%Y-%m-%dT%H:%M:%S%QZ" (toString t)

@@ -121,20 +121,20 @@ data OnboardingInfoForm = OnboardingInfoForm
   , companySize :: Text
   , whereDidYouHearAboutUs :: Text
   }
-  deriving stock (Show, Generic)
-  deriving anyclass (FromForm, AE.FromJSON, AE.ToJSON)
+  deriving stock (Generic, Show)
+  deriving anyclass (AE.FromJSON, AE.ToJSON, FromForm)
 
 
 data OnboardingConfForm = OnboardingConForm
   { location :: Text
   , functionality :: [Text]
   }
-  deriving stock (Show, Generic)
+  deriving stock (Generic, Show)
   deriving anyclass (FromForm)
 
 
 data DiscordForm = DiscordForm {url :: Text}
-  deriving stock (Show, Generic)
+  deriving stock (Generic, Show)
   deriving anyclass (FromForm)
 
 
@@ -142,14 +142,14 @@ data NotifChannelForm = NotifChannelForm
   { phoneNumber :: Text
   , emails :: [Text]
   }
-  deriving stock (Show, Generic)
-  deriving anyclass (FromForm, AE.FromJSON, AE.ToJSON)
+  deriving stock (Generic, Show)
+  deriving anyclass (AE.FromJSON, AE.ToJSON, FromForm)
 
 
 discorPostH :: Projects.ProjectId -> DiscordForm -> ATAuthCtx (RespHeaders (Html ()))
 discorPostH pid form = do
   (sess, project) <- Sessions.sessionAndProject pid
-  let notifs = ordNub $ Projects.parseNotifChannel <$> (V.toList project.notificationsChannel <> [Projects.NDiscord])
+  let notifs = ordNub $ (map (.toText) (V.toList project.notificationsChannel) <> [(Projects.NDiscord).toText])
   sendDiscordNotif form.url "APItoolkit connected successfully"
   let stepsCompleted = project.onboardingStepsCompleted
       newCompleted = insertIfNotExist "NotifChannel" stepsCompleted
@@ -186,9 +186,9 @@ phoneEmailPostH pid form = do
   (sess, project) <- Sessions.sessionAndProject pid
   let phone = form.phoneNumber
       emails = form.emails
-      notifs = if phone /= "" then V.toList project.notificationsChannel <> [Projects.NPhone] else V.toList project.notificationsChannel
-      notifs' = if emails /= [] then notifs <> [Projects.NEmail] else notifs
-      notifsTxt = ordNub $ Projects.parseNotifChannel <$> notifs'
+      notifs = if phone /= "" then map (.toText) (V.toList project.notificationsChannel) <> [(Projects.NPhone).toText] else map (.toText) (V.toList project.notificationsChannel)
+      notifs' = if emails /= [] then notifs <> [(Projects.NEmail).toText] else notifs
+      notifsTxt = ordNub $ notifs'
       stepsCompleted = project.onboardingStepsCompleted
       newCompleted = insertIfNotExist "NotifChannel" stepsCompleted
       q = [sql| update projects.projects set notifications_channel=?::notification_channel_enum[], notify_phone_number=?, notify_emails=?::text[],onboarding_steps_completed=? where id=? |]

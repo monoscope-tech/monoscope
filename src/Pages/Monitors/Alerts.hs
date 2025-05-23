@@ -61,7 +61,7 @@ data AlertUpsertForm = AlertUpsertForm
   -- TODO: support source for alerts. and hence alerts on traces, metrics etc
   -- , source :: Text
   }
-  deriving stock (Show, Generic)
+  deriving stock (Generic, Show)
   deriving anyclass (FromForm)
 
 
@@ -474,7 +474,7 @@ monitorMetric_ pid monitorM = section_ [class_ "px-8 py-5 space-y-5 group/pg ove
           faSprite_ "chevron-down" "regular" "h-4 w-4 mx-2"
           span_ [] "Define the metric"
         div_ [class_ "pl-8 pb-8 space-y-3 min-w-[750px]"] do
-          LogList.logQueryBox_ pid Nothing "requests" Nothing "{}" V.empty V.empty
+          LogList.logQueryBox_ pid Nothing "requests" Nothing Nothing V.empty V.empty
           div_ [class_ "border-l-2 border-l-slate-300 pl-4 space-y-2"] do
             h3_ [class_ "font-normal text-base"] "Evaluation Details"
             div_ [class_ "flex items-center gap-2"] do
@@ -589,7 +589,7 @@ monitorSelectType_ = section_ [class_ "px-8 py-5 space-y-5 group/pg"] do
       monitorTypeDetail_
         "Errors"
         $( THUtils.markdown
-            [text|
+             [text|
            Errors are groups of exceptions that have a similar stacktrace. Set an alert for new issues, when an issue changes state, frequency of errors, or users affected by an issue.
            ![](/public/pages/monitors/alerts-wizard-issues.022643ec283774262884.svg)
            Examples
@@ -601,7 +601,7 @@ monitorSelectType_ = section_ [class_ "px-8 py-5 space-y-5 group/pg"] do
       monitorTypeDetail_
         "API changes"
         $( THUtils.markdown
-            [text|
+             [text|
            Errors are groups of exceptions that have a similar stacktrace. Set an alert for new issues, when an issue changes state, frequency of errors, or users affected by an issue.
            ![](/public/pages/monitors/alerts-wizard-issues.022643ec283774262884.svg)
            Examples
@@ -613,7 +613,7 @@ monitorSelectType_ = section_ [class_ "px-8 py-5 space-y-5 group/pg"] do
       monitorTypeDetail_
         "Healthcheck/Pings"
         $( THUtils.markdown
-            [text|
+             [text|
            Errors are groups of exceptions that have a similar stacktrace. Set an alert for new issues, when an issue changes state, frequency of errors, or users affected by an issue.
            ![](/public/pages/monitors/alerts-wizard-issues.022643ec283774262884.svg)
            Examples
@@ -625,7 +625,7 @@ monitorSelectType_ = section_ [class_ "px-8 py-5 space-y-5 group/pg"] do
       monitorTypeDetail_
         "Multistep API test"
         $( THUtils.markdown
-            [text|
+             [text|
            Errors are groups of exceptions that have a similar stacktrace. Set an alert for new issues, when an issue changes state, frequency of errors, or users affected by an issue.
            ![](/public/pages/monitors/alerts-wizard-issues.022643ec283774262884.svg)
            Examples
@@ -637,7 +637,7 @@ monitorSelectType_ = section_ [class_ "px-8 py-5 space-y-5 group/pg"] do
       monitorTypeDetail_
         "Throughput"
         $( THUtils.markdown
-            [text|
+             [text|
            Errors are groups of exceptions that have a similar stacktrace. Set an alert for new issues, when an issue changes state, frequency of errors, or users affected by an issue.
            ![](/public/pages/monitors/alerts-wizard-issues.022643ec283774262884.svg)
            Examples
@@ -649,7 +649,7 @@ monitorSelectType_ = section_ [class_ "px-8 py-5 space-y-5 group/pg"] do
       monitorTypeDetail_
         "Error Logs"
         $( THUtils.markdown
-            [text|
+             [text|
            Errors are groups of exceptions that have a similar stacktrace. Set an alert for new issues, when an issue changes state, frequency of errors, or users affected by an issue.
            ![](/public/pages/monitors/alerts-wizard-issues.022643ec283774262884.svg)
            Examples
