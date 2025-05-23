@@ -1385,10 +1385,33 @@ export class QueryEditorComponent extends LitElement {
             Filter by your logs and events. Press <span class="kbd">Shift + Space</span> to search using natural langauge.
           </div>
         </div>
+        <div class="absolute top-1 right-1 z-[2]">
+          <button
+            class="px-3 py-0.5 inline-flex gap-2 items-center cursor-pointer border border-strokeBrand-strong text-textBrand hover:border-strokeBrand-weak rounded-sm"
+            data-tippy-content="Write queries in natural language with APItoolkit AI"
+            @click=${this.handleAskClick}
+          >
+            <svg class="inline-block icon h-4 w-4 text-iconBrand ">
+              <use href="/public/assets/svgs/fa-sprites/regular.svg#sparkles"></use>
+            </svg>
+            ask
+          </button>
+        </div>
         ${this.renderSuggestionDropdown()}
       </div>
     `;
   }
+
+  private handleAskClick = (e): void => {
+    e.preventDefault();
+    e.stopPropagation();
+    this.dispatchEvent(
+      new CustomEvent('ask-clicked', {
+        detail: { query: this.editor?.getValue() || '' },
+        bubbles: true,
+      })
+    );
+  };
 }
 
 // Export monaco and schemaManager

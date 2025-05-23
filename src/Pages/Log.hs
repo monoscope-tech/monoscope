@@ -592,8 +592,7 @@ apiLogsPage page = do
             , Widget.summarizeBy = Just Widget.SBMax
             , Widget.sql =
                 Just
-                  [text|
-                        SELECT timeB, value, quantile
+                  [text| SELECT timeB, value, quantile
                               FROM ( SELECT extract(epoch from time_bucket('1h', timestamp))::integer AS timeB,
                                       ARRAY[
                                         (approx_percentile(0.50, percentile_agg(duration)) / 1000000.0)::float,
