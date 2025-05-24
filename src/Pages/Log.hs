@@ -358,35 +358,71 @@ logQueryBox_ pid currentRange source targetSpan query queryLibRecent queryLibSav
     , class_ "flex flex-col gap-1"
     ]
     do
-      div_ [class_ "flex gap-2 items-stretch justify-center"] do
-        div_ [class_ "p-1 flex-1 flex gap-2  bg-fillWeaker rounded-lg border border-strokeWeak justify-between items-stretch"] do
-          queryLibrary_ pid queryLibSaved queryLibRecent
-          div_ [id_ "queryBuilder", class_ "flex-1 flex items-center"] $ termRaw "query-editor" [id_ "filterElement", class_ "w-full h-full flex items-center", term "default-value" (fromMaybe "" query)] ("" :: Text)
-          div_ [class_ "gap-[2px] flex items-center"] do
-            span_ "in"
-            -- TODO: trigger update-query instead
-            select_
-              [ class_ "ml-1 select select-sm w-full max-w-xs h-full bg-transparent border-strokeStrong"
-              , name_ "target-spans"
-              , id_ "spans-toggle"
-              , onchange_ "htmx.trigger('#log_explorer_form', 'submit')"
+      div_ [class_ "flex flex-col gap-2 items-stretch justify-center group/fltr"] do
+        div_ [class_ "p-1 flex-1 flex flex-col gap-2  bg-fillWeaker rounded-lg border border-strokeWeak group-has-[.ai-search:checked]/fltr:border-2 group-has-[.ai-search:checked]/fltr:border-iconBrand group-has-[.ai-search:checked]/fltr:drop-shadow-md"] do
+          input_
+            [ class_ "hidden ai-search"
+            , type_ "checkbox"
+            , id_ "ai-search-chkbox"
+            , [__|on change if me.checked then call #ai-search-input.focus() end
+                  on keydown[key=='Space' and shiftKey] from document set #ai-search-chkbox.checked to true
+                  |]
+            ]
+          script_
+            [text|
+            document.addEventListener('keydown', function(event) {
+              if (event.shiftKey && event.key === " ") {
+                event.preventDefault();
+                event.stopPropagation();
+                document.getElementById("ai-search-chkbox").checked = true;
+                document.getElementById("ai-search-input").focus()
+                document.getElementById("ai-search-input").value=""
+              }
+            });
+            |]
+          div_ [class_ "w-full gap-2 items-center px-2 hidden group-has-[.ai-search:checked]/fltr:flex"] do
+            faSprite_ "sparkles" "regular" "h-4 w-4 inline-block text-iconBrand"
+            input_
+              [ class_ "border-0 w-full flex-1 p-2 outline-none peer"
+              , placeholder_ "Ask. Eg: Logs with errors. Enger to submit"
+              , id_ "ai-search-input"
+              , autofocus_
+              , required_ "required"
+              , [__|on keydown[key=='Escape'] set #ai-search-chkbox.checked to false|]
               ]
+            button_ [class_ "px-3 py-0.5 inline-flex gap-2 items-center cursor-pointer border text-textDisabled shadow-strokeBrand-weak hover:border-strokeBrand-weak rounded-sm peer-valid:border-strokeBrand-strong peer-valid:text-textBrand peer-valid:shadow-md"] do
+              faSprite_ "arrow-right" "regular" "h-4 w-4"
+              "Submit"
+            label_ [Lucid.for_ "ai-search-chkbox", class_ "cursor-pointer p-1", data_ "tippy-content" "Collapse APItoolkit AI without losing your query"] $ faSprite_ "arrows-minimize" "regular" "h-4 w-4 inline-block text-iconBrand"
+
+          div_ [class_ "flex flex-1 gap-2 justify-between items-stretch"] do
+            queryLibrary_ pid queryLibSaved queryLibRecent
+            div_ [id_ "queryBuilder", class_ "flex-1 flex items-center"] $ termRaw "query-editor" [id_ "filterElement", class_ "w-full h-full flex items-center", term "default-value" (fromMaybe "" query)] ("" :: Text)
+            div_ [class_ "gap-[2px] flex items-center"] do
+              span_ "in"
+              -- TODO: trigger update-query instead
+              select_
+                [ class_ "ml-1 select select-sm w-full max-w-xs h-full bg-transparent border-strokeStrong"
+                , name_ "target-spans"
+                , id_ "spans-toggle"
+                , onchange_ "htmx.trigger('#log_explorer_form', 'submit')"
+                ]
+                do
+                  let target = fromMaybe "all-spans" targetSpan
+                  option_ (value_ "all-spans" : ([selected_ "true" | target == "all-spans"])) "All spans"
+                  option_ (value_ "root-spans" : ([selected_ "true" | target == "root-spans"])) "Trace Root Spans"
+                  option_ (value_ "service-entry-spans" : ([selected_ "true" | target == "service-entry-spans"])) "Service Entry Spans"
+            div_ [class_ "dropdown dropdown-hover dropdown-bottom dropdown-end"] do
+              div_ [class_ "rounded-lg px-3 py-2 text-slate-700 inline-flex items-center border border-strokeStrong h-full", tabindex_ "0", role_ "button"] $ faSprite_ "floppy-disk" "regular" "h-5 w-5"
+              ul_ [tabindex_ "0", class_ "dropdown-content border menu bg-base-100 rounded-box z-1 w-60 p-2 shadow-lg h-full"] do
+                li_ $ label_ [Lucid.for_ "saveQueryMdl"] "Save query to Query Library"
+            -- li_ $ a_ [] "Save query as an Alerts"
+            -- li_ $ a_ [] "Save result to a dashboard"
+            button_
+              [type_ "submit", class_ "leading-none rounded-lg px-3 py-2 cursor-pointer !h-auto btn btn-primary"]
               do
-                let target = fromMaybe "all-spans" targetSpan
-                option_ (value_ "all-spans" : ([selected_ "true" | target == "all-spans"])) "All spans"
-                option_ (value_ "root-spans" : ([selected_ "true" | target == "root-spans"])) "Trace Root Spans"
-                option_ (value_ "service-entry-spans" : ([selected_ "true" | target == "service-entry-spans"])) "Service Entry Spans"
-          div_ [class_ "dropdown dropdown-hover dropdown-bottom dropdown-end"] do
-            div_ [class_ "rounded-lg px-3 py-2 text-slate-700 inline-flex items-center border border-strokeStrong h-full", tabindex_ "0", role_ "button"] $ faSprite_ "floppy-disk" "regular" "h-5 w-5"
-            ul_ [tabindex_ "0", class_ "dropdown-content border menu bg-base-100 rounded-box z-1 w-60 p-2 shadow-lg h-full"] do
-              li_ $ label_ [Lucid.for_ "saveQueryMdl"] "Save query to Query Library"
-          -- li_ $ a_ [] "Save query as an Alerts"
-          -- li_ $ a_ [] "Save result to a dashboard"
-          button_
-            [type_ "submit", class_ "leading-none rounded-lg px-3 py-2 cursor-pointer !h-auto btn btn-primary"]
-            do
-              span_ [id_ "run-query-indicator", class_ "refresh-indicator htmx-indicator query-indicator loading loading-dots loading-sm"] ""
-              faSprite_ "magnifying-glass" "regular" "h-4 w-4 inline-block"
+                span_ [id_ "run-query-indicator", class_ "refresh-indicator htmx-indicator query-indicator loading loading-dots loading-sm"] ""
+                faSprite_ "magnifying-glass" "regular" "h-4 w-4 inline-block"
       div_ [class_ "flex items-between justify-between"] do
         div_ [class_ "", id_ "resultTableInner"] pass
 

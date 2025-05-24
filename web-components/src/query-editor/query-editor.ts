@@ -1386,32 +1386,32 @@ export class QueryEditorComponent extends LitElement {
           </div>
         </div>
         <div class="absolute top-1 right-1 z-[2]">
-          <button
-            class="px-3 py-0.5 inline-flex gap-2 items-center cursor-pointer border border-strokeBrand-strong text-textBrand hover:border-strokeBrand-weak rounded-sm"
+          <label
+            class="px-3 py-0.5 inline-flex gap-2 items-center cursor-pointer border border-strokeBrand-strong text-textBrand hover:border-strokeBrand-weak rounded-sm group-has-[.ai-search:checked]/fltr:hidden"
             data-tippy-content="Write queries in natural language with APItoolkit AI"
-            @click=${this.handleAskClick}
+            for="ai-search-chkbox"
           >
             <svg class="inline-block icon h-4 w-4 text-iconBrand ">
               <use href="/public/assets/svgs/fa-sprites/regular.svg#sparkles"></use>
             </svg>
             ask
-          </button>
+          </label>
         </div>
         ${this.renderSuggestionDropdown()}
       </div>
     `;
   }
 
-  private handleAskClick = (e): void => {
-    e.preventDefault();
-    e.stopPropagation();
-    this.dispatchEvent(
-      new CustomEvent('ask-clicked', {
-        detail: { query: this.editor?.getValue() || '' },
-        bubbles: true,
-      })
-    );
-  };
+  // private handleAskClick = (e): void => {
+  //   e.preventDefault();
+  //   e.stopPropagation();
+  //   this.dispatchEvent(
+  //     new CustomEvent('ask-clicked', {
+  //       detail: { query: this.editor?.getValue() || '' },
+  //       bubbles: true,
+  //     })
+  //   );
+  // };
 }
 
 // Export monaco and schemaManager
