@@ -116,6 +116,12 @@ const chartWidget = widgetData => {
   }
 
   opt.dataset.source = opt.dataset?.source?.map(row => [row[0] * 1000, ...row.slice(1)]) ?? null
+
+  const isLogExlorerPage = window.location.pathname.includes('/log_explorer')
+  if (isLogExlorerPage) {
+    window[`${chartType}Chart`] = chart
+  }
+
   chart.setOption(updateChartConfiguration(widgetData, opt, opt.dataset.source))
 
   const resizeObserver = new ResizeObserver(() => requestAnimationFrame(() => echarts.getInstanceByDom(chartEl).resize()))

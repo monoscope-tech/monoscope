@@ -5,6 +5,7 @@ import Data.Aeson qualified as AE
 import Data.Default
 import Data.Generics.Labels ()
 import Data.Scientific (fromFloatDigits)
+import Data.Vector qualified as V
 import Data.Text qualified as T
 import Deriving.Aeson qualified as DAE
 import Deriving.Aeson.Stock qualified as DAES
@@ -122,6 +123,8 @@ data Widget = Widget
   , children :: Maybe [Widget]
   , html :: Maybe LText
   , standalone :: Maybe Bool -- Not used in a grid stack
+  , allowZoom :: Maybe Bool -- Allow zooming in the chart
+  , showMarkArea :: Maybe Bool -- Show mark area in the chart
   }
   deriving stock (Show, Generic, THS.Lift)
   deriving anyclass (NFData, Default)
@@ -346,7 +349,6 @@ renderChart widget = do
               [type_ "text/javascript"]
               [text|
               (()=>{
-
                 const echartOptTxt = `${echartOpt}`
                 const echartOpt = JSON.parse(echartOptTxt, (key, value) => {
                   if (typeof value === 'string' && value.trim().startsWith("function(")) {
@@ -373,6 +375,7 @@ renderChart widget = do
                   pid: ${pid},
                   summarizeBy: '${summarizeBy}',
                   summarizeByPrefix: '${summarizeByPfx}'
+                 
                 });
               })();
             |]
@@ -466,8 +469,18 @@ widgetToECharts widget =
               ["source" AE..= fromMaybe AE.Null (widget.dataset <&> (.source))]
         , "series" AE..= map (createSeries widget.wType) []
         , "animation" AE..= False
-        ]
-
+        -- , "markArea"
+        --     AE..= AE.object
+        --       [ 
+        --         "itemStyle" AE..= AE.object ["color" AE..= "#0090f0", "opacity" AE..= 0.2]
+        --       , "data" AE..= AE.Array (V.fromList [])
+        --       ]   
+        , if widget.allowZoom == Just True
+          then  "toolbox" AE..= AE.object [
+           "feature" AE..= AE.object [  "dataZoom" AE..= AE.object ["show" AE..= True, "yAxisIndex" AE..= "none"] ]
+          ]
+          else "toolbox" AE..= AE.object [ ]
+        ] 
 
 -- Helper: Extract legend data
 extractLegend :: Widget -> Maybe [Text]

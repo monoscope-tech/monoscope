@@ -599,7 +599,7 @@ apiLogsPage page = do
       logQueryBox_ page.pid page.currentRange page.source page.targetSpans page.queryAST page.queryLibRecent page.queryLibSaved
 
       div_ [class_ "flex flex-row gap-4 mt-3 group-has-[.toggle-chart:checked]/pg:hidden w-full", style_ "aspect-ratio: 10 / 1;"] do
-        Widget.widget_ $ (def :: Widget.Widget){Widget.query = Just "timechart count(*)", Widget.unit = Just "rows", Widget.title = Just "All traces", Widget.hideLegend = Just True, Widget._projectId = Just page.pid, Widget.standalone = Just True, Widget.yAxis = Just (def{showOnlyMaxLabel = Just True})}
+        Widget.widget_ $ (def :: Widget.Widget){Widget.query = Just "timechart count(*)", Widget.unit = Just "rows", Widget.title = Just "All traces", Widget.hideLegend = Just True, Widget._projectId = Just page.pid, Widget.standalone = Just True, Widget.yAxis = Just (def{showOnlyMaxLabel = Just True}),Widget.allowZoom = Just True, Widget.showMarkArea = Just True}
 
         Widget.widget_ $
           (def :: Widget.Widget)
@@ -631,6 +631,8 @@ apiLogsPage page = do
             , Widget.unit = Just "ms"
             , Widget.hideLegend = Just True
             , Widget._projectId = Just page.pid
+            , Widget.allowZoom = Just True 
+            , Widget.showMarkArea = Just True
             }
 
     div_ [class_ "flex h-full gap-3.5 overflow-y-hidden"] do

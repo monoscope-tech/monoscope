@@ -41,6 +41,7 @@ export class LogList extends LitElement {
     this.expandTrace = this.expandTrace.bind(this)
     this.renderLoadMore = this.renderLoadMore.bind(this)
     this.updateTableData = this.updateTableData.bind(this)
+    this.handleChartZoom = this.handleChartZoom.bind(this)
     this.updateColumnMaxWidthMap = this.updateColumnMaxWidthMap.bind(this)
     this.addWithFlipDirection = this.addWithFlipDirection.bind(this)
     this.toggleLogRow = this.toggleLogRow.bind(this)
@@ -79,6 +80,82 @@ export class LogList extends LitElement {
       }
       this.mouseState = { x: event.clientX }
     })
+
+    window.addEventListener('load', () => {
+      this.barChart = window.barChart
+      this.lineChart = window.lineChart
+      if (this.barChart) {
+        this.barChart.on('datazoom', this.handleChartZoom)
+      }
+      if (this.lineChart) {
+        this.lineChart.on('datazoom', this.handleChartZoom)
+      }
+    })
+  }
+
+  updateChartDataZoom(start, end) {
+    // let first = this.spanListTree[start]
+    // let last = this.spanListTree[end]
+    // if (first === 'start' || last === 'end') {
+    //   first = this.spansListTree[start + 1]
+    // }
+    // if (last === 'end' || last === 'start') {
+    //   last = this.spansListTree[end - 1]
+    // }
+    // let startTime, endTime
+    // startTime = new Date(first.data[this.colIdxMap['timestamp']]).toISOString()
+    // endTime = new Date(last.data[this.colIdxMap['timestamp']]).toISOString()
+    // console.log(startTime, endTime)
+    // if (this.barChart) {
+    //   const option = this.barChart.getOption()
+    //   option.markArea.data = [[{ xAxis: startTime }], [{ xAxis: endTime }]]
+    //   this.barChart.setOption(option)
+    //   if (this.lineChart) {
+    //     const option = this.lineChart.getOption()
+    //     option.markArea.data = [[{ xAxis: startTime }], [{ xAxis: endTime }]]
+    //     this.lineChart.setOption(option)
+    //   }
+    // }
+  }
+
+  getTraceMaxMin(traceId, timeIndex, traceIdIndex, minMax = 'max') {
+    const startTimes = []
+    const [start, end, step] = this.flipDirection ? [length - 1, 0, -1] : [0, length, 1]
+    for (let i = start; this.flipDirection ? i > -1 : i < end; i += step) {
+      const data = this.spanListTree[i].data
+      if (data[traceIdIndex] === traceId) {
+        startTimes.push(data[timeIndex])
+      } else if (startTimes.length > 0) {
+        break
+      }
+    }
+    // if
+  }
+
+  handleChartZoom(params) {
+    const zoom = params.batch ? params.batch[0] : params
+    const startValue = zoom.startValue
+    const endValue = zoom.endValue
+    if (startValue === undefined || endValue === undefined) return
+
+    const p = new URLSearchParams(window.location.search)
+    p.set('from', new Date(startValue).toISOString())
+    p.set('to', new Date(endValue).toISOString())
+    p.delete('since')
+
+    const newUrl = `${window.location.pathname}?${p.toString()}${window.location.hash}`
+    window.history.replaceState({}, '', newUrl)
+
+    this.dispatchEvent(
+      new CustomEvent('update-query', {
+        bubbles: true,
+        detail: {
+          ast: p.queryAST,
+        },
+      }),
+    )
+
+    // set from and to to the startValue and endValue in search params
   }
 
   updateTableData = (ves, cols, colIdxMap, serviceColors, nextFetchUrl, recentFetchUrl) => {
@@ -422,6 +499,9 @@ export class LogList extends LitElement {
             id="log-item-table-body"
             @rangeChanged=${event => {
               this.setupIntersectionObserver()
+            }}
+            @visibilityChanged=${event => {
+              this.updateChartDataZoom(event.first, event.last)
             }}
           >
             ${virtualize({
