@@ -1,9 +1,10 @@
 import { schemaManager, SchemaData } from './query-editor';
 
 export function initializeDefaultSchema(): void {
-  // Configure the OTel schema based on the provided struct
+  // Configure the OTel schema using flattened key-value pairs
   const otelSchema = {
     fields: {
+      // Top-level fields
       timestamp: {
         type: 'string',
         description: 'Timestamp when the event occurred',
@@ -47,14 +48,6 @@ export function initializeDefaultSchema(): void {
         description: 'Log level (same as severity text)',
         enum: ['TRACE', 'DEBUG', 'INFO', 'WARN', 'ERROR', 'FATAL'],
       },
-      severity: {
-        type: 'object',
-        description: 'Severity information',
-        fields: {
-          severity_text: { type: 'string', description: 'Text representation of severity' },
-          severity_number: { type: 'string', description: 'Numeric representation of severity' },
-        },
-      },
       body: {
         type: 'object',
         description: 'Body content of the log/span',
@@ -71,17 +64,6 @@ export function initializeDefaultSchema(): void {
         type: 'string',
         description: 'End time of the span',
       },
-      context: {
-        type: 'object',
-        description: 'Context information',
-        fields: {
-          trace_id: { type: 'string', description: 'Unique identifier for the trace' },
-          span_id: { type: 'string', description: 'Unique identifier for the span' },
-          trace_state: { type: 'string', description: 'Trace state' },
-          trace_flags: { type: 'string', description: 'Trace flags' },
-          is_remote: { type: 'string', description: 'Whether this span is remote' },
-        },
-      },
       events: {
         type: 'array',
         description: 'Events associated with the span',
@@ -90,283 +72,6 @@ export function initializeDefaultSchema(): void {
         type: 'string',
         description: 'Links to other spans',
       },
-      attributes: {
-        type: 'object',
-        description: 'Attributes of the log/span',
-        fields: {
-          client: {
-            type: 'object',
-            description: 'Client information',
-            fields: {
-              address: { type: 'string', description: 'Client address' },
-              port: { type: 'number', description: 'Client port' },
-            },
-          },
-          server: {
-            type: 'object',
-            description: 'Server information',
-            fields: {
-              address: { type: 'string', description: 'Server address' },
-              port: { type: 'number', description: 'Server port' },
-            },
-          },
-          network: {
-            type: 'object',
-            description: 'Network information',
-            fields: {
-              local: {
-                type: 'object',
-                description: 'Local network information',
-                fields: {
-                  address: { type: 'string', description: 'Local address' },
-                  port: { type: 'number', description: 'Local port' },
-                },
-              },
-              peer: {
-                type: 'object',
-                description: 'Peer network information',
-                fields: {
-                  address: { type: 'string', description: 'Peer address' },
-                  port: { type: 'number', description: 'Peer port' },
-                },
-              },
-              protocol: {
-                type: 'object',
-                description: 'Protocol information',
-                fields: {
-                  name: { type: 'string', description: 'Protocol name' },
-                  version: { type: 'string', description: 'Protocol version' },
-                },
-              },
-              transport: { type: 'string', description: 'Transport type' },
-              type: { type: 'string', description: 'Network type' },
-            },
-          },
-          code: {
-            type: 'object',
-            description: 'Source code attributes',
-            fields: {
-              number: { type: 'number', description: 'Code number' },
-              file: {
-                type: 'object',
-                description: 'File information',
-                fields: {
-                  path: { type: 'number', description: 'File path' },
-                },
-              },
-              function: {
-                type: 'object',
-                description: 'Function information',
-                fields: {
-                  name: { type: 'number', description: 'Function name' },
-                },
-              },
-              line: {
-                type: 'object',
-                description: 'Line information',
-                fields: {
-                  number: { type: 'number', description: 'Line number' },
-                },
-              },
-              stacktrace: { type: 'number', description: 'Stack trace' },
-            },
-          },
-          log_record: {
-            type: 'object',
-            description: 'Log record attributes',
-            fields: {
-              original: { type: 'string', description: 'Original log record' },
-              uid: { type: 'string', description: 'Log record UID' },
-            },
-          },
-          error: {
-            type: 'object',
-            description: 'Error information',
-            fields: {
-              type: { type: 'string', description: 'Error type' },
-            },
-          },
-          exception: {
-            type: 'object',
-            description: 'Exception information',
-            fields: {
-              type: { type: 'string', description: 'Exception type' },
-              message: { type: 'string', description: 'Exception message' },
-              stacktrace: { type: 'string', description: 'Exception stack trace' },
-            },
-          },
-          url: {
-            type: 'object',
-            description: 'URL information',
-            fields: {
-              fragment: { type: 'string', description: 'URL fragment' },
-              full: { type: 'string', description: 'Full URL' },
-              path: { type: 'string', description: 'URL path' },
-              query: { type: 'string', description: 'URL query' },
-              scheme: { type: 'string', description: 'URL scheme' },
-            },
-          },
-          user_agent: {
-            type: 'object',
-            description: 'User agent information',
-            fields: {
-              original: { type: 'string', description: 'Original user agent string' },
-            },
-          },
-          http: {
-            type: 'object',
-            description: 'HTTP information',
-            fields: {
-              request: {
-                type: 'object',
-                description: 'HTTP request attributes',
-                fields: {
-                  method: {
-                    type: 'string',
-                    description: 'HTTP method',
-                    enum: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'HEAD', 'OPTIONS'],
-                  },
-                  method_original: { type: 'string', description: 'Original HTTP method' },
-                  resend_count: { type: 'number', description: 'Number of times request was resent' },
-                  body: {
-                    type: 'object',
-                    description: 'Request body information',
-                    fields: {
-                      size: { type: 'number', description: 'Request body size' },
-                    },
-                  },
-                },
-              },
-              response: {
-                type: 'object',
-                description: 'HTTP response attributes',
-                fields: {
-                  status_code: { type: 'number', description: 'HTTP status code' },
-                },
-              },
-            },
-          },
-          session: {
-            type: 'object',
-            description: 'Session information',
-            fields: {
-              id: { type: 'string', description: 'Session ID' },
-              previous: {
-                type: 'object',
-                description: 'Previous session information',
-                fields: {
-                  id: { type: 'string', description: 'Previous session ID' },
-                },
-              },
-            },
-          },
-          db: {
-            type: 'object',
-            description: 'Database information',
-            fields: {
-              system: {
-                type: 'object',
-                description: 'Database system',
-                fields: {
-                  name: { type: 'string', description: 'Database system name' },
-                },
-              },
-              collection: {
-                type: 'object',
-                description: 'Collection information',
-                fields: {
-                  name: { type: 'string', description: 'Collection name' },
-                },
-              },
-              namespace: { type: 'string', description: 'Database namespace' },
-              operation: {
-                type: 'object',
-                description: 'Operation information',
-                fields: {
-                  name: { type: 'string', description: 'Operation name' },
-                  batch: {
-                    type: 'object',
-                    description: 'Batch information',
-                    fields: {
-                      size: { type: 'number', description: 'Batch size' },
-                    },
-                  },
-                },
-              },
-              response: {
-                type: 'object',
-                description: 'Database response',
-                fields: {
-                  status_code: { type: 'string', description: 'Response status code' },
-                },
-              },
-              query: {
-                type: 'object',
-                description: 'Query information',
-                fields: {
-                  summary: { type: 'string', description: 'Query summary' },
-                  text: { type: 'string', description: 'Query text' },
-                },
-              },
-            },
-          },
-          user: {
-            type: 'object',
-            description: 'User information',
-            fields: {
-              id: { type: 'string', description: 'User ID' },
-              email: { type: 'string', description: 'User email' },
-              full_name: { type: 'string', description: 'User full name' },
-              name: { type: 'string', description: 'User name' },
-              hash: { type: 'string', description: 'User hash' },
-            },
-          },
-        },
-      },
-      resource: {
-        type: 'object',
-        description: 'Resource attributes',
-        fields: {
-          service: {
-            type: 'object',
-            description: 'Service information',
-            fields: {
-              name: { type: 'string', description: 'Service name' },
-              version: { type: 'string', description: 'Service version' },
-              instance: {
-                type: 'object',
-                description: 'Service instance',
-                fields: {
-                  id: { type: 'string', description: 'Service instance ID' },
-                },
-              },
-              namespace: { type: 'string', description: 'Service namespace' },
-            },
-          },
-          telemetry: {
-            type: 'object',
-            description: 'Telemetry information',
-            fields: {
-              sdk: {
-                type: 'object',
-                description: 'SDK information',
-                fields: {
-                  language: { type: 'string', description: 'SDK language' },
-                  name: { type: 'string', description: 'SDK name' },
-                  version: { type: 'string', description: 'SDK version' },
-                },
-              },
-            },
-          },
-          user_agent: {
-            type: 'object',
-            description: 'User agent information',
-            fields: {
-              original: { type: 'string', description: 'Original user agent string' },
-            },
-          },
-        },
-      },
       project_id: {
         type: 'string',
         description: 'Project ID',
@@ -374,6 +79,424 @@ export function initializeDefaultSchema(): void {
       date: {
         type: 'string',
         description: 'Date',
+      },
+
+      // Severity fields (flattened)
+      severity: {
+        type: 'object',
+        description: 'Severity information',
+      },
+      'severity.text': {
+        type: 'string',
+        description: 'Text representation of severity',
+        enum: ['TRACE', 'DEBUG', 'INFO', 'WARN', 'ERROR', 'FATAL'],
+      },
+      'severity.number': {
+        type: 'string',
+        description: 'Numeric representation of severity',
+      },
+
+      // Context fields (flattened)
+      context: {
+        type: 'object',
+        description: 'Context information',
+      },
+      'context.trace_id': {
+        type: 'string',
+        description: 'Unique identifier for the trace',
+      },
+      'context.span_id': {
+        type: 'string',
+        description: 'Unique identifier for the span',
+      },
+      'context.trace_state': {
+        type: 'string',
+        description: 'Trace state',
+      },
+      'context.trace_flags': {
+        type: 'string',
+        description: 'Trace flags',
+      },
+      'context.is_remote': {
+        type: 'string',
+        description: 'Whether this span is remote',
+      },
+
+      // Attributes fields (flattened)
+      attributes: {
+        type: 'object',
+        description: 'Attributes of the log/span',
+      },
+      'attributes.client': {
+        type: 'object',
+        description: 'Client information',
+      },
+      'attributes.client.address': {
+        type: 'string',
+        description: 'Client address',
+      },
+      'attributes.client.port': {
+        type: 'number',
+        description: 'Client port',
+      },
+      'attributes.server': {
+        type: 'object',
+        description: 'Server information',
+      },
+      'attributes.server.address': {
+        type: 'string',
+        description: 'Server address',
+      },
+      'attributes.server.port': {
+        type: 'number',
+        description: 'Server port',
+      },
+      'attributes.network': {
+        type: 'object',
+        description: 'Network information',
+      },
+      'attributes.network.local': {
+        type: 'object',
+        description: 'Local network information',
+      },
+      'attributes.network.local.address': {
+        type: 'string',
+        description: 'Local address',
+      },
+      'attributes.network.local.port': {
+        type: 'number',
+        description: 'Local port',
+      },
+      'attributes.network.peer': {
+        type: 'object',
+        description: 'Peer network information',
+      },
+      'attributes.network.peer.address': {
+        type: 'string',
+        description: 'Peer address',
+      },
+      'attributes.network.peer.port': {
+        type: 'number',
+        description: 'Peer port',
+      },
+      'attributes.network.protocol': {
+        type: 'object',
+        description: 'Protocol information',
+      },
+      'attributes.network.protocol.name': {
+        type: 'string',
+        description: 'Protocol name',
+      },
+      'attributes.network.protocol.version': {
+        type: 'string',
+        description: 'Protocol version',
+      },
+      'attributes.network.transport': {
+        type: 'string',
+        description: 'Transport type',
+      },
+      'attributes.network.type': {
+        type: 'string',
+        description: 'Network type',
+      },
+      'attributes.code': {
+        type: 'object',
+        description: 'Source code attributes',
+      },
+      'attributes.code.number': {
+        type: 'number',
+        description: 'Code number',
+      },
+      'attributes.code.file': {
+        type: 'object',
+        description: 'File information',
+      },
+      'attributes.code.file.path': {
+        type: 'string',
+        description: 'File path',
+      },
+      'attributes.code.function': {
+        type: 'object',
+        description: 'Function information',
+      },
+      'attributes.code.function.name': {
+        type: 'string',
+        description: 'Function name',
+      },
+      'attributes.code.line': {
+        type: 'object',
+        description: 'Line information',
+      },
+      'attributes.code.line.number': {
+        type: 'number',
+        description: 'Line number',
+      },
+      'attributes.code.stacktrace': {
+        type: 'string',
+        description: 'Stack trace',
+      },
+      'attributes.log_record': {
+        type: 'object',
+        description: 'Log record attributes',
+      },
+      'attributes.log_record.original': {
+        type: 'string',
+        description: 'Original log record',
+      },
+      'attributes.log_record.uid': {
+        type: 'string',
+        description: 'Log record UID',
+      },
+      'attributes.error': {
+        type: 'object',
+        description: 'Error information',
+      },
+      'attributes.error.type': {
+        type: 'string',
+        description: 'Error type',
+      },
+      'attributes.exception': {
+        type: 'object',
+        description: 'Exception information',
+      },
+      'attributes.exception.type': {
+        type: 'string',
+        description: 'Exception type',
+      },
+      'attributes.exception.message': {
+        type: 'string',
+        description: 'Exception message',
+      },
+      'attributes.exception.stacktrace': {
+        type: 'string',
+        description: 'Exception stack trace',
+      },
+      'attributes.url': {
+        type: 'object',
+        description: 'URL information',
+      },
+      'attributes.url.fragment': {
+        type: 'string',
+        description: 'URL fragment',
+      },
+      'attributes.url.full': {
+        type: 'string',
+        description: 'Full URL',
+      },
+      'attributes.url.path': {
+        type: 'string',
+        description: 'URL path',
+      },
+      'attributes.url.query': {
+        type: 'string',
+        description: 'URL query',
+      },
+      'attributes.url.scheme': {
+        type: 'string',
+        description: 'URL scheme',
+      },
+      'attributes.user_agent': {
+        type: 'object',
+        description: 'User agent information',
+      },
+      'attributes.user_agent.original': {
+        type: 'string',
+        description: 'Original user agent string',
+      },
+      'attributes.http': {
+        type: 'object',
+        description: 'HTTP information',
+      },
+      'attributes.http.request': {
+        type: 'object',
+        description: 'HTTP request attributes',
+      },
+      'attributes.http.request.method': {
+        type: 'string',
+        description: 'HTTP method',
+        enum: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'HEAD', 'OPTIONS'],
+      },
+      'attributes.http.request.method_original': {
+        type: 'string',
+        description: 'Original HTTP method',
+      },
+      'attributes.http.request.resend_count': {
+        type: 'number',
+        description: 'Number of times request was resent',
+      },
+      'attributes.http.request.body': {
+        type: 'object',
+        description: 'Request body information',
+      },
+      'attributes.http.request.body.size': {
+        type: 'number',
+        description: 'Request body size',
+      },
+      'attributes.http.response': {
+        type: 'object',
+        description: 'HTTP response attributes',
+      },
+      'attributes.http.response.status_code': {
+        type: 'number',
+        description: 'HTTP status code',
+      },
+      'attributes.session': {
+        type: 'object',
+        description: 'Session information',
+      },
+      'attributes.session.id': {
+        type: 'string',
+        description: 'Session ID',
+      },
+      'attributes.session.previous': {
+        type: 'object',
+        description: 'Previous session information',
+      },
+      'attributes.session.previous.id': {
+        type: 'string',
+        description: 'Previous session ID',
+      },
+      'attributes.db': {
+        type: 'object',
+        description: 'Database information',
+      },
+      'attributes.db.system': {
+        type: 'object',
+        description: 'Database system',
+      },
+      'attributes.db.system.name': {
+        type: 'string',
+        description: 'Database system name',
+      },
+      'attributes.db.collection': {
+        type: 'object',
+        description: 'Collection information',
+      },
+      'attributes.db.collection.name': {
+        type: 'string',
+        description: 'Collection name',
+      },
+      'attributes.db.namespace': {
+        type: 'string',
+        description: 'Database namespace',
+      },
+      'attributes.db.operation': {
+        type: 'object',
+        description: 'Operation information',
+      },
+      'attributes.db.operation.name': {
+        type: 'string',
+        description: 'Operation name',
+      },
+      'attributes.db.operation.batch': {
+        type: 'object',
+        description: 'Batch information',
+      },
+      'attributes.db.operation.batch.size': {
+        type: 'number',
+        description: 'Batch size',
+      },
+      'attributes.db.response': {
+        type: 'object',
+        description: 'Database response',
+      },
+      'attributes.db.response.status_code': {
+        type: 'string',
+        description: 'Response status code',
+      },
+      'attributes.db.query': {
+        type: 'object',
+        description: 'Query information',
+      },
+      'attributes.db.query.summary': {
+        type: 'string',
+        description: 'Query summary',
+      },
+      'attributes.db.query.text': {
+        type: 'string',
+        description: 'Query text',
+      },
+      'attributes.user': {
+        type: 'object',
+        description: 'User information',
+      },
+      'attributes.user.id': {
+        type: 'string',
+        description: 'User ID',
+      },
+      'attributes.user.email': {
+        type: 'string',
+        description: 'User email',
+      },
+      'attributes.user.full_name': {
+        type: 'string',
+        description: 'User full name',
+      },
+      'attributes.user.name': {
+        type: 'string',
+        description: 'User name',
+      },
+      'attributes.user.hash': {
+        type: 'string',
+        description: 'User hash',
+      },
+
+      // Resource fields (flattened)
+      resource: {
+        type: 'object',
+        description: 'Resource attributes',
+      },
+      'resource.service': {
+        type: 'object',
+        description: 'Service information',
+      },
+      'resource.service.name': {
+        type: 'string',
+        description: 'Service name',
+      },
+      'resource.service.version': {
+        type: 'string',
+        description: 'Service version',
+      },
+      'resource.service.instance': {
+        type: 'object',
+        description: 'Service instance',
+      },
+      'resource.service.instance.id': {
+        type: 'string',
+        description: 'Service instance ID',
+      },
+      'resource.service.namespace': {
+        type: 'string',
+        description: 'Service namespace',
+      },
+      'resource.telemetry': {
+        type: 'object',
+        description: 'Telemetry information',
+      },
+      'resource.telemetry.sdk': {
+        type: 'object',
+        description: 'SDK information',
+      },
+      'resource.telemetry.sdk.language': {
+        type: 'string',
+        description: 'SDK language',
+      },
+      'resource.telemetry.sdk.name': {
+        type: 'string',
+        description: 'SDK name',
+      },
+      'resource.telemetry.sdk.version': {
+        type: 'string',
+        description: 'SDK version',
+      },
+      'resource.user_agent': {
+        type: 'object',
+        description: 'User agent information',
+      },
+      'resource.user_agent.original': {
+        type: 'string',
+        description: 'Original user agent string',
       },
     },
   };
@@ -385,7 +508,7 @@ export function initializeDefaultSchema(): void {
   // Set schema data for spans
   schemaManager.setSchemaData('spans', otelSchema as SchemaData);
 
-  // Set up a nested field resolver
+  // Set up a nested field resolver for flattened schema
   schemaManager.setNestedResolver(async (schema: string, prefix: string) => {
     console.log(`Resolving nested fields for schema: ${schema}, prefix: ${prefix}`);
 
@@ -394,38 +517,55 @@ export function initializeDefaultSchema(): void {
     if (!currentSchema?.fields) return [];
 
     if (!prefix) {
-      // Top-level fields
-      return Object.entries(currentSchema.fields).map(([name, info]) => ({
-        name,
-        type: info.type,
-        examples: info.enum,
-        fields: info.fields,
-      }));
+      // Top-level fields - return all fields that don't contain dots (direct fields only)
+      return Object.entries(currentSchema.fields)
+        .filter(([name]) => !name.includes('.'))
+        .map(([name, info]) => ({
+          name,
+          type: info.type,
+          examples: info.enum,
+          // Check if this field has nested fields by looking for dotted versions
+          fields: Object.keys(currentSchema.fields).some(key => key.startsWith(name + '.')) ? {} : undefined,
+        }));
     }
 
-    // Handle nested fields
-    const parts = prefix.split('.');
-    let current = currentSchema.fields;
+    // Handle nested fields - find all fields that start with prefix + "."
+    const prefixWithDot = prefix + '.';
+    const nestedFields = Object.entries(currentSchema.fields)
+      .filter(([name]) => name.startsWith(prefixWithDot))
+      .map(([name, info]) => {
+        // Extract the immediate child field name
+        const remainder = name.substring(prefixWithDot.length);
+        const nextDotIndex = remainder.indexOf('.');
+        const childName = nextDotIndex === -1 ? remainder : remainder.substring(0, nextDotIndex);
+        
+        return {
+          childName,
+          fullName: name,
+          info,
+          hasNestedFields: nextDotIndex !== -1,
+        };
+      });
 
-    // Navigate to the requested prefix path
-    for (let i = 0; i < parts.length; i++) {
-      if (!current[parts[i]] || !current[parts[i]].fields) {
-        // Path doesn't exist or doesn't have nested fields
-        return [];
+    // Group by immediate child name and deduplicate
+    const childMap = new Map();
+    nestedFields.forEach(({ childName, fullName, info, hasNestedFields }) => {
+      if (!childMap.has(childName)) {
+        childMap.set(childName, {
+          name: childName,
+          type: info.type,
+          examples: info.enum,
+          // Mark as having nested fields if there are deeper levels or if it's an object type
+          fields: hasNestedFields || 
+                 nestedFields.some(f => f.fullName.startsWith(prefixWithDot + childName + '.')) ? {} : undefined,
+        });
       }
-      current = current[parts[i]].fields!;
-    }
+    });
 
-    // Return fields at this level
-    return Object.entries(current).map(([name, info]) => ({
-      name,
-      type: info.type,
-      examples: info.enum,
-      fields: info.fields,
-    }));
+    return Array.from(childMap.values());
   });
 
-  // Set up a value resolver for field-specific values
+  // Set up a value resolver for field-specific values with flattened schema
   schemaManager.setValueResolver(async (schema: string, field: string) => {
     console.log(`Resolving values for field: ${field} in schema: ${schema}`);
 
@@ -433,30 +573,9 @@ export function initializeDefaultSchema(): void {
     const currentSchema = schemaManager.getSchemaData(schema) || schemaManager.getSchemaData('spans');
     if (!currentSchema?.fields) return [];
 
-    // Navigate the schema to find the field
-    const parts = field.split('.');
-    let current = currentSchema.fields;
-    let fieldInfo = null;
-
-    for (let i = 0; i < parts.length; i++) {
-      const part = parts[i];
-      if (!current[part]) {
-        break;
-      }
-
-      if (i === parts.length - 1) {
-        // Found our target field
-        fieldInfo = current[part];
-        break;
-      }
-
-      if (!current[part].fields) {
-        break;
-      }
-
-      current = current[part].fields!;
-    }
-
+    // Direct field lookup in flattened schema
+    const fieldInfo = currentSchema.fields[field];
+    
     // Check for enum values
     if (fieldInfo && fieldInfo.enum) {
       return fieldInfo.enum.map((v) => String(v));
@@ -470,19 +589,45 @@ export function initializeDefaultSchema(): void {
     // For specific common fields, return useful values
     const fieldSpecificValues: Record<string, string[]> = {
       status_code: ['OK', 'ERROR', 'UNSET'],
-      'attributes.http.request.method': ['GET', 'POST', 'PUT', 'DELETE', 'PATCH'],
+      'attributes.http.request.method': ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'HEAD', 'OPTIONS'],
       'resource.service.name': ['frontend', 'backend', 'api', 'auth-service'],
-      level: ['DEBUG', 'INFO', 'WARN', 'ERROR'],
+      level: ['TRACE', 'DEBUG', 'INFO', 'WARN', 'ERROR', 'FATAL'],
+      'severity.text': ['TRACE', 'DEBUG', 'INFO', 'WARN', 'ERROR', 'FATAL'],
+      kind: ['logs', 'span', 'request'],
+      'context.trace_id': ['trace-123', 'trace-456'],
+      'context.span_id': ['span-abc', 'span-def'],
+      'attributes.http.response.status_code': ['200', '201', '400', '401', '403', '404', '500', '502', '503'],
+      'resource.telemetry.sdk.language': ['javascript', 'python', 'java', 'go', 'rust', 'csharp'],
+      'attributes.user.email': ['user@example.com', 'admin@company.com'],
     };
 
-    // Check if any part of the field matches known fields
+    // Check for exact match or partial match
+    if (fieldSpecificValues[field]) {
+      return fieldSpecificValues[field];
+    }
+
+    // Check if any part of the field matches known patterns
     for (const [key, values] of Object.entries(fieldSpecificValues)) {
-      if (field.includes(key)) {
+      if (field.includes(key.split('.').pop() || '')) {
         return values;
       }
     }
 
-    // Default fallback values
+    // Default fallback values based on field type
+    if (fieldInfo) {
+      switch (fieldInfo.type) {
+        case 'string':
+          return ['example-value', 'test-string', 'sample-data'];
+        case 'number':
+          return ['100', '200', '500', '1000'];
+        case 'boolean':
+          return ['true', 'false'];
+        default:
+          return ['value1', 'value2', 'value3'];
+      }
+    }
+
+    // Ultimate fallback
     return ['value1', 'value2', 'value3'];
   });
 }

@@ -114,67 +114,76 @@ const schemaManager = (() => {
   let defaultSchema = 'spans';
   let schemaData: Record<string, SchemaData> = {}; // Store schema data per schema name
 
-  // Default nested resolver implementation that uses stored schema data
+  // Default nested resolver implementation that uses stored schema data (flattened approach)
   let nestedResolver: (schema: string, prefix: string) => Promise<SchemaField[]> = async (schema: string, prefix: string) => {
     const currentSchema = schemaData[schema] || schemaData[defaultSchema];
     if (!currentSchema?.fields) return [];
 
-    if (prefix) {
-      // Handle nested field access (e.g., "attributes.http" -> return fields under attributes.http)
-      const pathParts = prefix.split('.');
-      let current = currentSchema.fields;
-
-      for (const part of pathParts) {
-        if (current[part]?.fields) {
-          current = current[part].fields!;
-        } else {
-          return [];
-        }
-      }
-
-      return Object.entries(current).map(([name, info]) => ({
-        name,
-        type: info.type || 'string',
-        examples: info.examples || [],
-        fields: info.fields,
-      }));
+    if (!prefix) {
+      // Top-level fields - return all fields that don't contain dots (direct fields only)
+      return Object.entries(currentSchema.fields)
+        .filter(([name]) => !name.includes('.'))
+        .map(([name, info]) => ({
+          name,
+          type: info.type || 'string',
+          examples: info.examples || info.enum || [],
+          // Check if this field has nested fields by looking for dotted versions
+          fields: Object.keys(currentSchema.fields).some(key => key.startsWith(name + '.')) ? {} : undefined,
+        }));
     }
 
-    // Return root fields
-    return Object.entries(currentSchema.fields).map(([name, info]) => ({
-      name,
-      type: info.type || 'string',
-      examples: info.examples || [],
-      fields: info.fields,
-    }));
+    // Handle nested fields - find all fields that start with prefix + "."
+    const prefixWithDot = prefix + '.';
+    const nestedFields = Object.entries(currentSchema.fields)
+      .filter(([name]) => name.startsWith(prefixWithDot))
+      .map(([name, info]) => {
+        // Extract the immediate child field name
+        const remainder = name.substring(prefixWithDot.length);
+        const nextDotIndex = remainder.indexOf('.');
+        const childName = nextDotIndex === -1 ? remainder : remainder.substring(0, nextDotIndex);
+        
+        return {
+          childName,
+          fullName: name,
+          info,
+          hasNestedFields: nextDotIndex !== -1,
+        };
+      });
+
+    // Group by immediate child name and deduplicate
+    const childMap = new Map();
+    nestedFields.forEach(({ childName, fullName, info, hasNestedFields }) => {
+      if (!childMap.has(childName)) {
+        childMap.set(childName, {
+          name: childName,
+          type: info.type || 'string',
+          examples: info.examples || info.enum || [],
+          // Mark as having nested fields if there are deeper levels
+          fields: hasNestedFields || 
+                 nestedFields.some(f => f.fullName.startsWith(prefixWithDot + childName + '.')) ? {} : undefined,
+        });
+      }
+    });
+
+    return Array.from(childMap.values());
   };
 
-  // Default value resolver implementation that uses stored schema data
+  // Default value resolver implementation that uses stored schema data (flattened approach)
   let valueResolver: (schema: string, field: string) => Promise<string[]> = async (schema: string, field: string) => {
     const currentSchema = schemaData[schema] || schemaData[defaultSchema];
     if (!currentSchema?.fields) return [];
 
-    // Direct field lookup
-    if (currentSchema.fields[field]?.examples) {
-      return currentSchema.fields[field].examples!;
+    // Direct field lookup in flattened schema
+    const fieldInfo = currentSchema.fields[field];
+    
+    // Check for enum values first
+    if (fieldInfo?.enum) {
+      return fieldInfo.enum.map((v) => String(v));
     }
 
-    // Handle nested field access
-    if (field.includes('.')) {
-      const pathParts = field.split('.');
-      let current = currentSchema.fields;
-
-      for (const part of pathParts) {
-        if (current[part]) {
-          if (current[part].fields) {
-            current = current[part].fields!;
-          } else if (current[part].examples) {
-            return current[part].examples!;
-          }
-        } else {
-          break;
-        }
-      }
+    // Check for examples
+    if (fieldInfo?.examples) {
+      return fieldInfo.examples.map((v) => String(v));
     }
 
     return [];
@@ -210,6 +219,7 @@ const schemaManager = (() => {
         info: {
           type: f.type as FieldType,
           examples: f.examples,
+          enum: f.examples, // Map examples to enum for backward compatibility
           fields: f.fields,
         },
       }));
@@ -221,6 +231,7 @@ const schemaManager = (() => {
         info: {
           type: f.type as FieldType,
           examples: f.examples,
+          enum: f.examples, // Map examples to enum for backward compatibility
           fields: f.fields,
         },
       }));
