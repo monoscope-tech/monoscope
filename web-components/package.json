@@ -22,7 +22,7 @@
     "lit": "^3.3.0",
     "lodash": "^4.17.21",
     "monaco-editor": "^0.52.2",
-    "vite": "^6.3.3"
+    "vite": "^6.3.5"
   },
   "devDependencies": {
     "@types/node": "^20.12.12",
