@@ -109,10 +109,10 @@ timepicker_ submitForm currentRange = div_ [class_ "relative"] do
       faSprite_ "calendar" "regular" "h-4 w-4"
       span_ [class_ "inline-block leading-none", id_ "currentRange"] $ toHtml (fromMaybe "Last 24 Hours" currentRange)
       faSprite_ "chevron-down" "regular" "h-3 w-3 text-iconNeutral "
-  div_ [id_ "timepickerBox", class_ "hidden absolute right-0 z-10 mt-1 rounded-md flex"] do
-    div_ [class_ "relative hidden", id_ "timepickerSidebar"] $ div_ [id_ "startTime", class_ "hidden"] ""
+  div_ [id_ "timepickerBox", class_ "hidden absolute right-0 z-50 mt-1 rounded-md flex"] do
+    div_ [class_ "relative hidden", id_ "timepickerSidebar"] $ div_ [id_ "startTime"] ""
     div_
-      [class_ "inline-block w-84 overflow-auto bg-bgBase py-1 text-base shadow-lg ring-1 ring-black ring-opacity-5 focus:outline-hidden sm:"]
+      [class_ "inline-block shrink-0 h-max w-84 overflow-auto bg-bgBase py-1 text-base shadow-lg ring-1 ring-black ring-opacity-5 focus:outline-hidden sm:"]
       do
         let linkClassBase = "block text-gray-900 relative cursor-pointer select-none py-2 pl-3 pr-9 hover:bg-gray-200"
             action =
@@ -152,9 +152,15 @@ timepicker_ submitForm currentRange = div_ [class_ "relative"] do
         css: ['https://cdn.jsdelivr.net/npm/@easepick/bundle@1.2.0/dist/index.css'],
         inline: true,
         plugins: ['RangePlugin', 'TimePlugin'],
+        format: 'YYYY-MM-DD HH:mm',
         autoApply: false,
         setup(picker) {
           picker.on('select', ({ detail: { start, end } }) => {
+            startMs = start.getTime();
+            endMs = end.getTime();
+            if (startMs >= endMs) {
+               end = new Date();
+              }
             const formatDate = (date) => date.toISOString();
             document.getElementById('custom_range_input').value = `$${start}/$${end}`;
             document.getElementById('timepickerBox')?.classList.toggle('hidden');
