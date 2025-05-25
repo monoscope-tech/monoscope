@@ -10,15 +10,18 @@ import Servant (
   Capture,
   GenericMode (type (:-)),
   Get,
+  Post,
   HasServer (ServerT),
   JSON,
   NamedRoutes,
   QueryParam,
+  ReqBody,
   type (:>),
  )
 import Servant.HTML.Lucid (HTML)
 import Servant.Htmx (HXBoosted, HXRequest)
 import System.Types (ATAuthCtx, RespHeaders)
+import Data.Aeson qualified as AE
 
 
 type QPU a = QueryParam a UTCTime
@@ -38,6 +41,7 @@ type Routes' :: Type -> Type
 data Routes' mode = Routes'
   { logExplorerGet :: mode :- "log_explorer" :> QPT "query" :> QPT "queryAST" :> QPT "cols" :> QPU "cursor" :> QPT "since" :> QPT "from" :> QPT "to" :> QPT "layout" :> QPT "source" :> QPT "target-spans" :> QPT "queryTitle" :> QPT "queryLibId" :> QPT "details_width" :> QPT "target_event" :> QPT "showTrace" :> HXRequest :> HXBoosted :> QPT "json" :> Get '[HTML, JSON] (RespHeaders Log.LogsGet)
   , logExplorerItemDetailedGet :: mode :- "log_explorer" :> Capture "logItemID" UUID.UUID :> Capture "createdAt" UTCTime :> "detailed" :> QPT "source" :> Get '[HTML] (RespHeaders LogItem.ApiItemDetailed)
+  , aiSearchPost :: mode :- "log_explorer" :> "ai_search" :> ReqBody '[JSON] AE.Value :> Post '[JSON] (RespHeaders AE.Value)
   }
   deriving stock (Generic)
 
@@ -47,4 +51,5 @@ server pid =
   Routes'
     { logExplorerGet = Log.apiLogH pid
     , logExplorerItemDetailedGet = LogItem.expandAPIlogItemH pid
+    , aiSearchPost = Log.aiSearchH pid
     }

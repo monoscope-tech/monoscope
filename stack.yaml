@@ -101,6 +101,10 @@ extra-deps:
     commit: 893368e6010a87c3a2d33227af675b4fb8fe411f
     subdirs:
       - .
+  - git: https://github.com/tusharad/langchain-hs
+    commit: 8182563f4648fcc34952ccaf06a2247e6514727f
+    subdirs:
+      - .
 
 flags:
   pg-entity:

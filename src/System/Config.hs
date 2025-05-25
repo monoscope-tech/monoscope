@@ -67,6 +67,8 @@ data EnvConfig = EnvConfig
   , lemonSqueezyCriticalUrl :: Text
   , postmarkToken :: Text
   , lemonSqueezyWebhookSecret :: Text
+  , openaiApiKey :: Text
+  , openaiBaseUrl :: Text
   }
   deriving stock (Show, Generic)
   deriving anyclass (FromEnv, Default)

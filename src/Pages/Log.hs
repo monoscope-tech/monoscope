@@ -1,5 +1,6 @@
 module Pages.Log (
   apiLogH,
+  aiSearchH,
   LogsGet (..),
   ApiLogsPageData (..),
   virtualTable,
@@ -10,6 +11,7 @@ where
 
 import Control.Error (hush)
 import Data.Aeson qualified as AE
+import Data.Aeson.Types qualified as AET
 import Data.Containers.ListUtils (nubOrd)
 import Data.Default (def)
 import Data.HashMap.Strict qualified as HM
@@ -17,9 +19,13 @@ import Data.List qualified as L
 import Data.Text qualified as T
 import Data.Time (UTCTime, addUTCTime)
 import Data.Vector qualified as V
+import Effectful.Error.Static (throwError)
 import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
+import Effectful.Reader.Static qualified
 import Effectful.Time qualified as Time
 import Fmt (commaizeF, fmt)
+import Langchain.LLM.Core qualified as LLM
+import Langchain.LLM.OpenAI (OpenAI (..))
 import Lucid
 import Lucid.Aria qualified as Aria
 import Lucid.Base (TermRaw (termRaw))
@@ -37,6 +43,8 @@ import Pkg.Components.Widget (WidgetAxis (..), WidgetType (WTTimeseriesLine))
 import Pkg.Components.Widget qualified as Widget
 import Pkg.Parser (pSource, parseQueryToAST, toQText)
 import Relude hiding (ask)
+import Servant qualified
+import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types
 import Text.Megaparsec (parseMaybe)
 import Utils
@@ -384,15 +392,37 @@ logQueryBox_ pid currentRange source targetSpan query queryLibRecent queryLibSav
             faSprite_ "sparkles" "regular" "h-4 w-4 inline-block text-iconBrand"
             input_
               [ class_ "border-0 w-full flex-1 p-2 outline-none peer"
-              , placeholder_ "Ask. Eg: Logs with errors. Enger to submit"
+              , placeholder_ "Ask. Eg: Logs with errors. Hit Enter to submit"
               , id_ "ai-search-input"
               , autofocus_
               , required_ "required"
-              , [__|on keydown[key=='Escape'] set #ai-search-chkbox.checked to false|]
+              , name_ "input"
+              , hxPost_ $ "/p/" <> pid.toText <> "/log_explorer/ai_search"
+              , hxTrigger_ "input[this.value.trim().length > 0] changed delay:500ms"
+              , hxSwap_ "none"
+              , hxExt_ "json-enc"
+              , [__|on keydown[key=='Escape'] set #ai-search-chkbox.checked to false
+                   on keydown[key=='Enter'] 
+                     if this.value.trim().length > 0 
+                       then halt then trigger htmx:trigger 
+                     end
+                   on htmx:afterRequest 
+                     if event.detail.successful 
+                       then 
+                         call JSON.parse(event.detail.xhr.responseText) set result to it
+                         if result.query
+                           then 
+                             call #filterElement.handleAddQuery(result.query)
+                         end
+                     end|]
               ]
-            button_ [class_ "px-3 py-0.5 inline-flex gap-2 items-center cursor-pointer border text-textDisabled shadow-strokeBrand-weak hover:border-strokeBrand-weak rounded-sm peer-valid:border-strokeBrand-strong peer-valid:text-textBrand peer-valid:shadow-md"] do
-              faSprite_ "arrow-right" "regular" "h-4 w-4"
-              "Submit"
+            button_
+              [ class_ "px-3 py-0.5 inline-flex gap-2 items-center cursor-pointer border text-textDisabled shadow-strokeBrand-weak hover:border-strokeBrand-weak rounded-sm peer-valid:border-strokeBrand-strong peer-valid:text-textBrand peer-valid:shadow-md"
+              , onclick_ "htmx.trigger('#ai-search-input', 'htmx:trigger')"
+              ]
+              do
+                faSprite_ "arrow-right" "regular" "h-4 w-4"
+                "Submit"
             label_ [Lucid.for_ "ai-search-chkbox", class_ "cursor-pointer p-1", data_ "tippy-content" "Collapse APItoolkit AI without losing your query"] $ faSprite_ "arrows-minimize" "regular" "h-4 w-4 inline-block text-iconBrand"
 
           div_ [class_ "flex flex-1 gap-2 justify-between items-stretch"] do
@@ -765,6 +795,70 @@ apiLogsPage page = do
 
   jsonTreeAuxillaryCode page.pid page.query
   queryEditorInitializationCode page.queryLibRecent page.queryLibSaved
+
+
+aiSearchH :: Projects.ProjectId -> AE.Value -> ATAuthCtx (RespHeaders AE.Value)
+aiSearchH _pid requestBody = do
+  let inputTextM = AET.parseMaybe (AE.withObject "request" (AE..: "input")) requestBody
+  case inputTextM of
+    Nothing -> do
+      addErrorToast "Invalid AI search input" Nothing
+      throwError Servant.err400{Servant.errBody = "Invalid input format"}
+    Just inputText ->
+      if T.null (T.strip inputText)
+        then do
+          addErrorToast "Please enter a search query" Nothing
+          throwError Servant.err400{Servant.errBody = "Empty input"}
+        else do
+          result <- callOpenAIAPI inputText
+          case result of
+            Left errMsg -> do
+              addErrorToast "AI search failed" (Just errMsg)
+              throwError Servant.err502{Servant.errBody = encodeUtf8 errMsg}
+            Right kqlQuery -> addRespHeaders $ AE.object ["query" AE..= kqlQuery]
+  where
+    callOpenAIAPI :: Text -> ATAuthCtx (Either Text Text)
+    callOpenAIAPI input = do
+      authCtx <- Effectful.Reader.Static.ask @AuthContext
+      let config = authCtx.env
+      let openAI =
+            OpenAI
+              { apiKey = config.openaiApiKey
+              , openAIModelName = "gpt-4o-mini"
+              , callbacks = []
+              }
+      let fullPrompt = systemPrompt <> "\n\nUser query: " <> input
+
+      -- Use langchain-hs to generate response
+      result <- liftIO $ LLM.generate openAI fullPrompt Nothing
+      case result of
+        Left err -> pure $ Left $ "LLM Error: " <> T.pack err
+        Right response ->
+          -- Clean up the response to extract just the KQL query
+          let cleanedResponse = T.strip $ T.takeWhile (/= '\n') response
+           in pure $ Right cleanedResponse
+
+    systemPrompt :: Text
+    systemPrompt =
+      T.unlines
+        [ "You are a helpful assistant that converts natural language queries to KQL (Kusto Query Language) filter expressions."
+        , "Available fields include:"
+        , "- level (ERROR, WARN, INFO, DEBUG)"
+        , "- attributes.http.request.method (GET, POST, PUT, DELETE, etc.)"
+        , "- attributes.http.response.status_code (200, 404, 500, etc.)"
+        , "- duration (in nanoseconds)"
+        , "- resource.service.name"
+        , "- span_name"
+        , "- timestamp"
+        , ""
+        , "Examples:"
+        , "- \"show me errors\" -> level == \"ERROR\""
+        , "- \"POST requests\" -> attributes.http.request.method == \"POST\""
+        , "- \"slow requests\" -> duration > 5000000000"
+        , "- \"500 errors\" -> attributes.http.response.status_code == \"500\""
+        , ""
+        , "Return only the KQL filter expression, no explanations."
+        ]
 
 
 curateCols :: [Text] -> [Text] -> [Text]
