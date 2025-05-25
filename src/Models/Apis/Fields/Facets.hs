@@ -12,7 +12,7 @@ import Data.Text qualified as T
 import Data.Time (UTCTime, addUTCTime, diffUTCTime)
 import Data.Time.Clock.POSIX (posixSecondsToUTCTime, utcTimeToPOSIXSeconds)
 import Data.Vector qualified as V
-import Database.PostgreSQL.Entity.DBT (QueryNature (Insert, Select), execute, query)
+import Database.PostgreSQL.Entity.DBT (execute, query)
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.Types (Query)
 import Effectful (Eff, (:>))
@@ -60,7 +60,6 @@ generateAndSaveFacets pid tableName columns maxValues timestamp = do
   existingSummary <- dbtToEff $ do
     results <-
       query
-        Select
         [sql|
         SELECT id, project_id, table_name, timestamp, facet_json
         FROM apis.facet_summaries
@@ -84,7 +83,6 @@ generateAndSaveFacets pid tableName columns maxValues timestamp = do
           checkpoint (toAnnotation facetQuery)
             $ dbtToEff
             $ query
-              Select
               facetQuery
               (V.fromList columns, pid.toText, hourStart, hourEnd, maxValues)
         pure $ processQueryResults values
@@ -103,7 +101,6 @@ generateAndSaveFacets pid tableName columns maxValues timestamp = do
       _ <-
         dbtToEff
           $ execute
-            Insert
             [sql|
           INSERT INTO apis.facet_summaries 
             (id, project_id, table_name, timestamp, facet_json) 
@@ -219,7 +216,6 @@ getFacetSummary projectId tableName fromTime toTime = checkpoint "getFacetSummar
     checkpoint (toAnnotation qury)
       $ dbtToEff
       $ query
-        Select
         qury
         (projectIdText, tableName, fromTime, toTime, sampleLimit, projectIdText, tableName, fromTime)
 

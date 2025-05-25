@@ -63,7 +63,7 @@ import Data.Time (TimeZone (..), UTCTime, formatTime, utcToZonedTime)
 import Data.Time.Format (defaultTimeLocale)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
-import Database.PostgreSQL.Entity.DBT (QueryNature (..), executeMany, query, queryOne)
+import Database.PostgreSQL.Entity.DBT (executeMany, query, queryOne)
 import Database.PostgreSQL.Simple (Only (..), ResultError (ConversionFailed))
 import Database.PostgreSQL.Simple.FromField (Conversion (..), FromField (..), returnError)
 import Database.PostgreSQL.Simple.FromRow
@@ -430,7 +430,7 @@ data MetricChartListData = MetricChartListData
 
 
 getTraceDetails :: DB :> es => Projects.ProjectId -> Text -> Eff es (Maybe Trace)
-getTraceDetails pid trId = dbtToEff $ queryOne Select q (pid.toText, trId)
+getTraceDetails pid trId = dbtToEff $ queryOne q (pid.toText, trId)
   where
     q =
       [sql| SELECT
@@ -447,7 +447,7 @@ getTraceDetails pid trId = dbtToEff $ queryOne Select q (pid.toText, trId)
 
 
 logRecordByProjectAndId :: DB :> es => Projects.ProjectId -> UTCTime -> UUID.UUID -> Eff es (Maybe OtelLogsAndSpans)
-logRecordByProjectAndId pid createdAt rdId = dbtToEff $ queryOne Select q (createdAt, pid.toText, rdId)
+logRecordByProjectAndId pid createdAt rdId = dbtToEff $ queryOne q (createdAt, pid.toText, rdId)
   where
     q =
       [sql|SELECT project_id, id, timestamp, observed_timestamp, context, level, severity, body, attributes, resource, 
@@ -456,7 +456,7 @@ logRecordByProjectAndId pid createdAt rdId = dbtToEff $ queryOne Select q (creat
 
 
 getSpandRecordsByTraceId :: DB :> es => Projects.ProjectId -> Text -> Eff es (V.Vector OtelLogsAndSpans)
-getSpandRecordsByTraceId pid trId = dbtToEff $ query Select q (pid.toText, trId)
+getSpandRecordsByTraceId pid trId = dbtToEff $ query q (pid.toText, trId)
   where
     q =
       [sql|
@@ -467,7 +467,7 @@ getSpandRecordsByTraceId pid trId = dbtToEff $ query Select q (pid.toText, trId)
 
 
 spanRecordByProjectAndId :: DB :> es => Projects.ProjectId -> UTCTime -> UUID.UUID -> Eff es (Maybe OtelLogsAndSpans)
-spanRecordByProjectAndId pid createdAt rdId = dbtToEff $ queryOne Select q (createdAt, pid.toText, rdId)
+spanRecordByProjectAndId pid createdAt rdId = dbtToEff $ queryOne q (createdAt, pid.toText, rdId)
   where
     q =
       [sql| SELECT project_id, id, timestamp, observed_timestamp, context, level, severity, body, attributes, resource, 
@@ -476,7 +476,7 @@ spanRecordByProjectAndId pid createdAt rdId = dbtToEff $ queryOne Select q (crea
 
 
 spanRecordById :: DB :> es => Projects.ProjectId -> Text -> Text -> Eff es (Maybe OtelLogsAndSpans)
-spanRecordById pid trId spanId = dbtToEff $ queryOne Select q (pid.toText, trId, spanId)
+spanRecordById pid trId spanId = dbtToEff $ queryOne q (pid.toText, trId, spanId)
   where
     q =
       [sql| SELECT project_id, id, timestamp, observed_timestamp, context, level, severity, body, attributes, resource, 
@@ -485,7 +485,7 @@ spanRecordById pid trId spanId = dbtToEff $ queryOne Select q (pid.toText, trId,
 
 
 spanRecordByName :: DB :> es => Projects.ProjectId -> Text -> Text -> Eff es (Maybe OtelLogsAndSpans)
-spanRecordByName pid trId spanName = dbtToEff $ queryOne Select q (pid.toText, trId, spanName)
+spanRecordByName pid trId spanName = dbtToEff $ queryOne q (pid.toText, trId, spanName)
   where
     q =
       [sql| SELECT project_id, id, timestamp, observed_timestamp, context, level, severity, body, attributes, resource, 
@@ -494,7 +494,7 @@ spanRecordByName pid trId spanName = dbtToEff $ queryOne Select q (pid.toText, t
 
 
 getChildSpans :: DB :> es => Projects.ProjectId -> V.Vector Text -> Eff es (V.Vector OtelLogsAndSpans)
-getChildSpans pid spanIds = dbtToEff $ query Select q (pid.toText, spanIds)
+getChildSpans pid spanIds = dbtToEff $ query q (pid.toText, spanIds)
   where
     q =
       [sql| SELECT project_id, id, timestamp, observed_timestamp, context, level, severity, body, attributes, resource, 
@@ -503,7 +503,7 @@ getChildSpans pid spanIds = dbtToEff $ query Select q (pid.toText, spanIds)
 
 
 getDataPointsData :: DB :> es => Projects.ProjectId -> (Maybe UTCTime, Maybe UTCTime) -> Eff es (V.Vector MetricDataPoint)
-getDataPointsData pid dateRange = dbtToEff $ query Select (Query $ Relude.encodeUtf8 q) (pid, pid)
+getDataPointsData pid dateRange = dbtToEff $ query (Query $ Relude.encodeUtf8 q) (pid, pid)
   where
     dateRangeStr = toText $ case dateRange of
       (Nothing, Just b) -> "AND timestamp BETWEEN NOW() AND '" <> formatTime defaultTimeLocale "%F %R" b <> "'"
@@ -561,7 +561,7 @@ queryToValues pid traceIds = dbtToEff $ V.fromList <$> DBT.query q (pid.toText, 
 
 
 getMetricData :: DB :> es => Projects.ProjectId -> Text -> Eff es (Maybe MetricDataPoint)
-getMetricData pid metricName = dbtToEff $ queryOne Select q (pid, metricName, pid, metricName)
+getMetricData pid metricName = dbtToEff $ queryOne q (pid, metricName, pid, metricName)
   where
     q =
       [sql|
@@ -589,7 +589,7 @@ getMetricData pid metricName = dbtToEff $ queryOne Select q (pid, metricName, pi
 
 getTotalEventsToReport :: DB :> es => Projects.ProjectId -> UTCTime -> Eff es Int
 getTotalEventsToReport pid lastReported = do
-  result <- dbtToEff $ query Select q (pid, lastReported)
+  result <- dbtToEff $ query q (pid, lastReported)
   case result of
     [Only c] -> return c
     v -> return $ length v
@@ -599,7 +599,7 @@ getTotalEventsToReport pid lastReported = do
 
 
 getMetricChartListData :: DB :> es => Projects.ProjectId -> Maybe Text -> Maybe Text -> (Maybe UTCTime, Maybe UTCTime) -> Int -> Eff es (V.Vector MetricChartListData)
-getMetricChartListData pid sourceM prefixM dateRange cursor = dbtToEff $ query Select (Query $ Relude.encodeUtf8 q) pid
+getMetricChartListData pid sourceM prefixM dateRange cursor = dbtToEff $ query (Query $ Relude.encodeUtf8 q) pid
   where
     dateRangeStr = toText $ case dateRange of
       (Nothing, Just b) -> "AND created_at BETWEEN NOW() AND '" <> formatTime defaultTimeLocale "%F %R" b <> "'"
@@ -620,13 +620,13 @@ getMetricChartListData pid sourceM prefixM dateRange cursor = dbtToEff $ query S
 
 
 getMetricLabelValues :: DB :> es => Projects.ProjectId -> Text -> Text -> Eff es (V.Vector Text)
-getMetricLabelValues pid metricName labelName = dbtToEff $ query Select q (labelName, pid, metricName)
+getMetricLabelValues pid metricName labelName = dbtToEff $ query q (labelName, pid, metricName)
   where
     q = [sql| SELECT DISTINCT attributes->>? FROM telemetry.metrics WHERE project_id = ? AND metric_name = ?|]
 
 
 getMetricServiceNames :: DB :> es => Projects.ProjectId -> Eff es (V.Vector Text)
-getMetricServiceNames pid = dbtToEff $ query Select q pid
+getMetricServiceNames pid = dbtToEff $ query q pid
   where
     q =
       [sql| SELECT DISTINCT service_name FROM telemetry.metrics_meta WHERE project_id = ?|]
@@ -634,8 +634,8 @@ getMetricServiceNames pid = dbtToEff $ query Select q pid
 
 bulkInsertMetrics :: DB :> es => V.Vector MetricRecord -> Eff es ()
 bulkInsertMetrics metrics = checkpoint "bulkInsertMetrics" $ do
-  void $ dbtToEff $ executeMany Insert q (V.toList rowsToInsert)
-  void $ dbtToEff $ executeMany Insert q2 (removeDuplic $ V.toList rows2)
+  void $ dbtToEff $ executeMany q (V.toList rowsToInsert)
+  void $ dbtToEff $ executeMany q2 (removeDuplic $ V.toList rows2)
   where
     q =
       [sql|
@@ -786,14 +786,14 @@ bulkInsertOtelLogsAndSpansTF records = do
 
 
 bulkInsertSpansTS :: DB :> es => V.Vector OtelLogsAndSpans -> Eff es Int64
-bulkInsertSpansTS records = dbtToEff $ executeMany Insert bulkInserSpansAndLogsQuery (V.toList records)
+bulkInsertSpansTS records = dbtToEff $ executeMany bulkInserSpansAndLogsQuery (V.toList records)
 
 
 -- Function to insert OtelLogsAndSpans records with all fields in flattened structure
 -- Using direct connection without transaction
 bulkInsertOtelLogsAndSpans :: Labeled "timefusion" DB :> es => V.Vector OtelLogsAndSpans -> Eff es Int64
 -- bulkInsertOtelLogsAndSpansTF :: (IOE :> es, Effectful.Reader.Static.Reader AuthContext :> es) => V.Vector OtelLogsAndSpans -> Eff es Int64
-bulkInsertOtelLogsAndSpans records = labeled @"timefusion" @DB $ dbtToEff $ executeMany Insert bulkInserSpansAndLogsQuery (V.toList records)
+bulkInsertOtelLogsAndSpans records = labeled @"timefusion" @DB $ dbtToEff $ executeMany bulkInserSpansAndLogsQuery (V.toList records)
 
 
 -- envCfg <- ask @AuthContext

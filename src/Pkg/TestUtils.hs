@@ -29,7 +29,7 @@ import Data.Either.Extra
 import Data.Pool (Pool, defaultPoolConfig, newPool)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
-import Database.PostgreSQL.Entity.DBT (QueryNature (Select), query, withPool)
+import Database.PostgreSQL.Entity.DBT (query, withPool)
 import Database.PostgreSQL.Simple (Connection, close, connectPostgreSQL, execute, execute_)
 import Database.PostgreSQL.Simple.Migration (MigrationCommand (MigrationDirectory, MigrationInitialization))
 import Database.PostgreSQL.Simple.Migration qualified as Migration
@@ -122,7 +122,7 @@ testSessionHeader pool = do
   pSessId <-
     Auth.authorizeUserAndPersist Nothing "firstName" "lastName" "https://placehold.it/500x500" "test@apitoolkit.io"
       & runStaticUUID (map (UUID.fromWords 0 0 0) [1 .. 10])
-      & runHTTPGolden "./golden/"
+      & runHTTPGolden "./tests/golden/"
       & DB.runDB pool
       & runTime
       & runEff
@@ -292,7 +292,7 @@ runAllBackgroundJobs authCtx = do
 
 
 getBackgroundJobs :: PgT.DBT IO (V.Vector Job)
-getBackgroundJobs = query Select q ()
+getBackgroundJobs = query q ()
   where
     q = [sql|SELECT id, created_at, updated_at, run_at, status, payload,last_error, attempts, locked_at, locked_by FROM background_jobs|]
 

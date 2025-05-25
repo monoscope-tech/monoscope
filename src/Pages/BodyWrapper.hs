@@ -39,7 +39,7 @@ data PageCtx a = PageCtx
   { conf :: BWConfig
   , content :: a
   }
-  deriving stock (Show, Generic)
+  deriving stock (Generic, Show)
 
 
 instance ToHtml a => ToHtml (PageCtx a) where
@@ -63,7 +63,7 @@ data BWConfig = BWConfig
   , docsLink :: Maybe Text
   , isSettingsPage :: Bool
   }
-  deriving stock (Show, Generic)
+  deriving stock (Generic, Show)
   deriving anyclass (Default)
 
 
@@ -92,6 +92,7 @@ bodyWrapper bcfg child = do
         link_ [rel_ "stylesheet", href_ "https://cdn.jsdelivr.net/npm/@yaireo/tagify/dist/tagify.css", type_ "text/css"]
         link_ [rel_ "stylesheet", href_ $(hashAssetFile "/public/assets/deps/gridstack/gridstack.min.css")]
         link_ [rel_ "stylesheet", type_ "text/css", href_ $(hashAssetFile "/public/assets/css/tailwind.min.css")]
+        link_ [rel_ "stylesheet", type_ "text/css", href_ $(hashAssetFile "/public/assets/web-components/dist/css/index.css")]
 
         -- SCRIPTS
         script_
@@ -131,7 +132,7 @@ bodyWrapper bcfg child = do
         script_ [src_ "https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/python.min.js"] ("" :: Text)
         script_ [src_ "https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.63.0/codemirror.min.js"] ("" :: Text)
         script_ [src_ "https://cdnjs.cloudflare.com/ajax/libs/codemirror/6.65.7/mode/javascript/javascript.min.js"] ("" :: Text)
-        script_ [type_ "module", src_ $(hashAssetFile "/public/assets/filtercomponent.js")] ("" :: Text)
+        script_ [type_ "module", src_ $(hashAssetFile "/public/assets/web-components/dist/js/index.js")] ("" :: Text)
         script_ [src_ $(hashAssetFile "/public/assets/js/main.js")] ("" :: Text)
         script_ [type_ "module", src_ $(hashAssetFile "/public/assets/explorer-list.js")] ("" :: Text)
 

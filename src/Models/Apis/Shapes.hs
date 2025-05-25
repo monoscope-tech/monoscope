@@ -17,7 +17,7 @@ import Data.Default (Default)
 import Data.Time (UTCTime, getZonedTime)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
-import Database.PostgreSQL.Entity.DBT (QueryNature (..), query)
+import Database.PostgreSQL.Entity.DBT (query)
 import Database.PostgreSQL.Entity.Types (CamelToSnake, Entity, FieldModifiers, GenericEntity, PrimaryKey, Schema, TableName)
 import Database.PostgreSQL.Simple (FromRow, ToRow)
 import Database.PostgreSQL.Simple.FromField (FromField)
@@ -130,7 +130,7 @@ bulkInsertShapes shapes = void $ dbtToEff $ executeMany q $ V.toList rowsToInser
 
 
 shapesByEndpointHash :: Projescts.ProjectId -> Text -> PgT.DBT IO (V.Vector Shape)
-shapesByEndpointHash pid endpointHash = query Select q (pid, endpointHash)
+shapesByEndpointHash pid endpointHash = query q (pid, endpointHash)
   where
     q =
       [sql| 
@@ -194,7 +194,7 @@ data SwShape = SwShape
 
 
 shapesByEndpointHashes :: Projects.ProjectId -> V.Vector Text -> PgT.DBT IO (V.Vector SwShape)
-shapesByEndpointHashes pid hashes = query Select q (pid, hashes)
+shapesByEndpointHashes pid hashes = query q (pid, hashes)
   where
     q =
       [sql|

@@ -41,7 +41,7 @@ import Data.Time
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity
-import Database.PostgreSQL.Entity.DBT (QueryNature (Select, Update), execute, query, queryOne)
+import Database.PostgreSQL.Entity.DBT (execute, query, queryOne)
 import Database.PostgreSQL.Entity.Types (CamelToSnake, FieldModifiers, GenericEntity, PrimaryKey, Schema, TableName, field)
 import Database.PostgreSQL.Simple (FromRow, Only (Only), ToRow)
 import Database.PostgreSQL.Simple.FromField (FromField, ResultError (ConversionFailed, UnexpectedNull), fromField, returnError)
@@ -226,7 +226,7 @@ data AnomalyVM = AnomalyVM
 
 
 getAnomaliesVM :: Projects.ProjectId -> V.Vector Text -> DBT IO (V.Vector AnomalyVM)
-getAnomaliesVM pid hash = query Select q (pid, hash)
+getAnomaliesVM pid hash = query q (pid, hash)
   where
     q =
       [sql|
@@ -276,7 +276,7 @@ where
 
 
 getShapeParentAnomaliesVM :: Projects.ProjectId -> V.Vector Text -> DBT IO (V.Vector Text)
-getShapeParentAnomaliesVM pid hashes = query Select q (pid, hashes)
+getShapeParentAnomaliesVM pid hashes = query q (pid, hashes)
   where
     q =
       [sql|SELECT target_hash
@@ -287,7 +287,7 @@ getShapeParentAnomaliesVM pid hashes = query Select q (pid, hashes)
 
 getFormatParentAnomalyVM :: Projects.ProjectId -> Text -> DBT IO Int
 getFormatParentAnomalyVM pid hash = do
-  result <- query Select q (pid, hash)
+  result <- query q (pid, hash)
   case result of
     [Only countt] -> return countt
     v -> return $ length v
@@ -302,7 +302,7 @@ getFormatParentAnomalyVM pid hash = do
 
 
 selectIssues :: Projects.ProjectId -> Maybe Endpoints.EndpointId -> Maybe Bool -> Maybe Bool -> Maybe Text -> Maybe Int -> Int -> DBT IO (V.Vector IssueL)
-selectIssues pid endpointM isAcknowleged isArchived sortM limitM skipM = query Select (Query $ encodeUtf8 q) (MkDBField pid : paramList)
+selectIssues pid endpointM isAcknowleged isArchived sortM limitM skipM = query (Query $ encodeUtf8 q) (MkDBField pid : paramList)
   where
     boolToNullSubQ a = if a then " not " else ""
     condlist =
@@ -343,7 +343,7 @@ SELECT id, created_at, updated_at, project_id, acknowleged_at, anomaly_type, tar
 
 
 selectIssueByHash :: Projects.ProjectId -> Text -> DBT IO (Maybe IssueL)
-selectIssueByHash pid targetHash = queryOne Select q (pid, targetHash)
+selectIssueByHash pid targetHash = queryOne q (pid, targetHash)
   where
     q =
       [sql|
@@ -361,7 +361,7 @@ SELECT id, created_at, updated_at, project_id, acknowleged_at, anomaly_type, tar
 
 
 getReportAnomalies :: Projects.ProjectId -> Text -> DBT IO (V.Vector IssueL)
-getReportAnomalies pid report_type = query Select (Query $ encodeUtf8 q) pid
+getReportAnomalies pid report_type = query (Query $ encodeUtf8 q) pid
   where
     report_interval = if report_type == "daily" then ("'24 hours'" :: Text) else "'7 days'"
     q =
@@ -383,7 +383,7 @@ getReportAnomalies pid report_type = query Select (Query $ encodeUtf8 q) pid
 
 countAnomalies :: Projects.ProjectId -> Text -> DBT IO Int
 countAnomalies pid report_type = do
-  result <- query Select (Query $ encodeUtf8 q) pid
+  result <- query (Query $ encodeUtf8 q) pid
   case result of
     [Only countt] -> return countt
     v -> return $ length v
@@ -398,8 +398,8 @@ countAnomalies pid report_type = do
 
 acknowledgeAnomalies :: Users.UserId -> V.Vector Text -> DBT IO (V.Vector Text)
 acknowledgeAnomalies uid aids = do
-  _ <- query Update qIssues (uid, aids) :: DBT IO (V.Vector Text)
-  query Update q (uid, aids)
+  _ <- query qIssues (uid, aids) :: DBT IO (V.Vector Text)
+  query q (uid, aids)
   where
     qIssues = [sql| update apis.issues set acknowleged_by=?, acknowleged_at=NOW() where id=ANY(?::uuid[]) RETURNING target_hash; |]
     q = [sql| update apis.anomalies set acknowleged_by=?, acknowleged_at=NOW() where id=ANY(?::uuid[]) RETURNING target_hash; |]
@@ -407,8 +407,8 @@ acknowledgeAnomalies uid aids = do
 
 acknowlegeCascade :: Users.UserId -> V.Vector Text -> DBT IO Int64
 acknowlegeCascade uid targets = do
-  _ <- execute Update qIssues (uid, hashes)
-  execute Update q (uid, hashes)
+  _ <- execute qIssues (uid, hashes)
+  execute q (uid, hashes)
   where
     hashes = (<> "%") <$> targets
     qIssues = [sql| UPDATE apis.issues SET acknowleged_by = ?, acknowleged_at = NOW() WHERE target_hash=ANY (?); |]
@@ -674,7 +674,7 @@ errorByHash hash = selectOneByField [field| hash |] (Only hash)
 
 
 errorsByHashes :: Projects.ProjectId -> V.Vector Text -> DBT IO (V.Vector ATError)
-errorsByHashes pid hashes = query Select q (pid, hashes)
+errorsByHashes pid hashes = query q (pid, hashes)
   where
     q =
       [sql| SELECT id, created_at, updated_at, project_id, hash, error_type, message, error_data

@@ -1,9 +1,7 @@
 module Pages.LogSpec (spec) where
 
-import Data.Aeson qualified as AE
-import Data.Aeson.KeyMap qualified as KEM
-import Data.Time (defaultTimeLocale, formatTime, getCurrentTime, parseTimeM)
-import Data.Time.Clock (UTCTime, addUTCTime)
+import Data.Time (defaultTimeLocale, formatTime, getCurrentTime)
+import Data.Time.Clock (addUTCTime)
 import Data.UUID qualified as UUID
 import Models.Projects.Projects qualified as Projects
 import Pages.BodyWrapper (PageCtx (..))
@@ -24,7 +22,7 @@ spec = aroundAll withTestResources do
   describe "Check Log Page" do
     it "should return an empty list" \TestResources{..} -> do
       pg <-
-        toServantResponse trATCtx trSessAndHeader trLogger $ Log.apiLogH testPid Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
+        toServantResponse trATCtx trSessAndHeader trLogger $ Log.apiLogH testPid Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
 
       case pg of
         Log.LogPage (PageCtx _ content) -> do
@@ -50,7 +48,7 @@ spec = aroundAll withTestResources do
       res <- runTestBackground trATCtx $ processRequestMessages msgs
       length res `shouldBe` 202
       pg <-
-        toServantResponse trATCtx trSessAndHeader trLogger $ Log.apiLogH testPid Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
+        toServantResponse trATCtx trSessAndHeader trLogger $ Log.apiLogH testPid Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
 
       case pg of
         Log.LogPage (PageCtx _ content) -> do
@@ -71,7 +69,3 @@ spec = aroundAll withTestResources do
         --   _ -> error "Unexpected response"
         -- content.resultCount `shouldBe` 202
         _ -> error "Unexpected response"
-
-
-textToUTCTime :: Text -> Maybe UTCTime
-textToUTCTime t = parseTimeM True defaultTimeLocale "%Y-%m-%dT%H:%M:%S%QZ" (toString t)

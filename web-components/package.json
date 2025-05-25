@@ -1,0 +1,37 @@
+{
+  "name": "monaco-aql-editor",
+  "version": "1.0.0",
+  "description": "Monaco editor with APIToolkit Query Language (AQL) support",
+  "main": "index.js",
+  "scripts": {
+    "dev": "vite",
+    "watch": "vite build --watch",
+    "build": "vite build",
+    "build-with-types": "tsc && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "type": "module",
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@types/lodash": "^4.17.16",
+    "lit": "^3.3.0",
+    "lodash": "^4.17.21",
+    "monaco-editor": "^0.52.2",
+    "vite": "^6.3.5"
+  },
+  "devDependencies": {
+    "@types/node": "^20.12.12",
+    "@vitest/browser": "^3.1.4",
+    "happy-dom": "^17.4.7",
+    "jsdom": "^26.1.0",
+    "typescript": "^5.4.5",
+    "vite-plugin-monaco-editor": "^1.1.0",
+    "vite-plugin-node-polyfills": "^0.23.0",
+    "vitest": "^3.1.4"
+  }
+}

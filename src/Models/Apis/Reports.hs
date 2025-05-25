@@ -14,7 +14,7 @@ import Data.Time (ZonedTime)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity (insert, selectById)
-import Database.PostgreSQL.Entity.DBT (QueryNature (..), query)
+import Database.PostgreSQL.Entity.DBT (query)
 import Database.PostgreSQL.Entity.Types
 import Database.PostgreSQL.Simple hiding (execute, query)
 import Database.PostgreSQL.Simple.FromField
@@ -73,7 +73,7 @@ getReportById id' = selectById (Only id')
 
 
 reportHistoryByProject :: Projects.ProjectId -> Int -> DBT IO (V.Vector ReportListItem)
-reportHistoryByProject pid page = query Select q (pid, offset)
+reportHistoryByProject pid page = query q (pid, offset)
   where
     offset = page * 20
     q =

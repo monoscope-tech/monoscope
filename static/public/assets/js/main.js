@@ -57,24 +57,8 @@ window.setQueryParamAndReload = (key, value) => {
   window.location.href = url.toString()
 }
 
-// TODO: implement correctly. errors doesnt work
-window.getQueryFromEditor = target => {
-  const toggler = document.getElementById('toggleQueryEditor')
-  const queryAST = document.getElementById('filterElement').ast
-  let val = ''
-  if (toggler.checked) {
-    val = window.editor.getValue()
-  } else {
-    // val = window.queryBuilderValue || ''
-    return JSON.stringify(queryAST)
-  }
-  if (target === 'errors') {
-    let source = document.querySelector('#reqsChartsErrP').dataset.source
-    let srcErrs = source === 'logs' ? `severityText == "ERROR" OR severityText == "FATAL"` : source === 'spans' ? `status == "ERROR"` : 'status_code > 399'
-    val = val.length === 0 ? srcErrs : `${val} AND ${srcErrs}`
-  }
-  return val
-}
+// TODO: Delete
+window.getQueryFromEditor = _target => params().query
 
 window.downloadJson = function (event) {
   event.stopPropagation()
@@ -103,10 +87,7 @@ window.evalScriptsFromContent = function (container) {
   })
 }
 
-var params = () =>
-  new Proxy(new URLSearchParams(window.location.search), {
-    get: (searchParams, prop) => searchParams.get(prop) ?? '',
-  })
+const params = () => ({ ...Object.fromEntries(new URLSearchParams(location.search)) })
 window.params = params
 
 var getTimeRange = function () {

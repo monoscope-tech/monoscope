@@ -126,8 +126,8 @@ data MetricsStats = MetricsStats
   , mode :: Double
   , maxGroupSum :: Double
   }
-  deriving (Show, Generic, THS.Lift)
-  deriving anyclass (NFData, Default)
+  deriving (Generic, Show, THS.Lift)
+  deriving anyclass (Default, NFData)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake MetricsStats
 
 
@@ -143,17 +143,17 @@ data MetricsData = MetricsData
   , to :: Maybe Int
   , stats :: Maybe MetricsStats
   }
-  deriving (Show, Generic)
-  deriving anyclass (NFData, Default)
+  deriving (Generic, Show)
+  deriving anyclass (Default, NFData)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake MetricsData
 
 
 data DataType = DTMetric | DTJson | DTFloat | DTText
-  deriving stock (Show, Eq, Generic, Enum, Bounded, Ord, THS.Lift)
+  deriving stock (Bounded, Enum, Eq, Generic, Ord, Show, THS.Lift)
   deriving anyclass (NFData)
+  deriving (Monoid, Semigroup) via (Max DataType)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.ConstructorTagModifier '[DAE.StripPrefix "DT", DAE.CamelToSnake]] DataType
   deriving (FromHttpApiData) via Utils.JSONHttpApiData DataType
-  deriving (Semigroup, Monoid) via (Max DataType)
 
 
 -- Helper function: converts Just "" to Nothing.
@@ -163,21 +163,19 @@ nonNull (Just "") = Nothing
 nonNull x = x
 
 
-queryMetrics :: (State.State TriggerEvents :> es, Time.Time :> es, DB :> es, Log :> es) => M DataType -> M Projects.ProjectId -> M Text -> M Text -> M Text -> M Text -> M Text -> M Text -> M Text -> [(Text, Maybe Text)] -> Eff es MetricsData
-queryMetrics (maybeToMonoid -> respDataType) pidM (nonNull -> queryM) (nonNull -> queryASTM) (nonNull -> querySQLM) (nonNull -> sinceM) (nonNull -> fromM) (nonNull -> toM) (nonNull -> sourceM) allParams = do
+queryMetrics :: (DB :> es, Log :> es, State.State TriggerEvents :> es, Time.Time :> es) => M DataType -> M Projects.ProjectId -> M Text -> M Text -> M Text -> M Text -> M Text -> M Text -> [(Text, Maybe Text)] -> Eff es MetricsData
+queryMetrics (maybeToMonoid -> respDataType) pidM (nonNull -> queryM) (nonNull -> querySQLM) (nonNull -> sinceM) (nonNull -> fromM) (nonNull -> toM) (nonNull -> sourceM) allParams = do
   now <- Time.currentTime
   let (fromD, toD, _currentRange) = Components.parseTimeRange now (Components.TimePicker sinceM fromM toM)
   let mappng = DashboardUtils.variablePresets (maybe "" (.toText) pidM) fromD toD allParams
   let parseQuery q = either (\err -> addErrorToast "Error Parsing Query" (Just err) >> pure []) pure (parseQueryToAST $ DashboardUtils.replacePlaceholders mappng q)
 
-  sqlQuery <- case (queryM, queryASTM, querySQLM) of
-    (_, _, Just querySQL) -> do
+  sqlQuery <- case (queryM, querySQLM) of
+    (_, Just querySQL) -> do
       queryAST <-
         checkpoint (toAnnotation ("queryMetrics", queryM))
-          $ maybe
-            (parseQuery $ maybeToMonoid queryM)
-            (either (const $ parseQuery $ maybeToMonoid queryM) pure . AE.eitherDecode . encodeUtf8)
-            queryASTM
+          $ parseQuery
+          $ maybeToMonoid queryM
       let sqlQueryComponents =
             (defSqlQueryCfg (Unsafe.fromJust pidM) now (parseMaybe pSource =<< sourceM) Nothing)
               { dateRange = (fromD, toD)
@@ -189,10 +187,8 @@ queryMetrics (maybeToMonoid -> respDataType) pidM (nonNull -> queryM) (nonNull -
     _ -> do
       queryAST <-
         checkpoint (toAnnotation ("queryMetrics", queryM))
-          $ maybe
-            (parseQuery $ maybeToMonoid queryM)
-            (either (const $ parseQuery $ maybeToMonoid queryM) pure . AE.eitherDecode . encodeUtf8)
-            queryASTM
+          $ parseQuery
+          $ maybeToMonoid queryM
       let sqlQueryComponents =
             (defSqlQueryCfg (Unsafe.fromJust pidM) now (parseMaybe pSource =<< sourceM) Nothing)
               { dateRange = (fromD, toD)

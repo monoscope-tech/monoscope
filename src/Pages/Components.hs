@@ -186,7 +186,7 @@ freePricing pid isCurrent = do
             div_ [class_ "flex items-end"] do
               span_ [class_ "text-textStrong text-xl"] "$"
               span_ [class_ "text-4xl text-textStrong"] "0"
-            div_ [class_ "flex flex-col text-text-Weak text-sm"] do
+            div_ [class_ "flex flex-col text-textWeak text-sm"] do
               span_ [class_ ""] "Starts at"
               span_ [class_ ""] "/per month"
           div_ [[__|on click halt|]] do
@@ -234,7 +234,7 @@ popularPricing pid lemonUrl isCurrent = do
               div_ [class_ "flex items-end"] do
                 span_ [class_ "text-textStrong text-xl"] "$"
                 span_ [class_ "text-4xl text-textStrong", id_ "price"] "34"
-              div_ [class_ "flex flex-col text-text-Weak text-sm"] do
+              div_ [class_ "flex flex-col text-textWeak text-sm"] do
                 span_ [class_ ""] "Starts at"
                 span_ [class_ ""] "/per month"
             div_ [[__|on click halt|]] do
@@ -288,7 +288,7 @@ systemsPricing pid critical isCurrent = do
             div_ [class_ "flex items-end"] do
               span_ [class_ "text-textStrong text-xl"] "$"
               span_ [class_ "text-4xl text-textStrong"] "199"
-            div_ [class_ "flex flex-col text-text-Weak text-sm"] do
+            div_ [class_ "flex flex-col text-textWeak text-sm"] do
               span_ [class_ ""] "Starts at"
               span_ [class_ ""] "/per month"
           div_ [[__|on click halt|]] do

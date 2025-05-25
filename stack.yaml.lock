@@ -5,12 +5,12 @@
 
 packages:
 - completed:
-    hackage: pg-entity-0.0.4.4@sha256:33c2b9b7890ac89a3bdaec4765fa5740cc882fe464f4b94cfa41c16b5cb95cb5,4577
+    hackage: pg-entity-0.0.6.0@sha256:b1459028b1571a14a32a5149c7957463dd05034c34bfee2c1723006d58bae85f,4112
     pantry-tree:
-      sha256: a9e60d36ec71870b0ca946f93cee90925b630774bcb30bd2565133b0bab7210c
-      size: 3983
+      sha256: 8135da3e21eb6fbad6fd2257b4865f0fe667fd2dce19123d66d25ced72d1d011
+      size: 3984
   original:
-    hackage: pg-entity-0.0.4.4@sha256:33c2b9b7890ac89a3bdaec4765fa5740cc882fe464f4b94cfa41c16b5cb95cb5,4577
+    hackage: pg-entity-0.0.6.0
 - completed:
     hackage: Unique-0.4.7.9@sha256:7c37e22b7bb9df935c22112e67043177461aedcebe3a958854f6c0e9ecb54083,2155
     pantry-tree:
@@ -537,6 +537,19 @@ packages:
   original:
     commit: 893368e6010a87c3a2d33227af675b4fb8fe411f
     git: https://github.com/tonyalaribe/tmp-postgres
+    subdir: .
+- completed:
+    commit: 8182563f4648fcc34952ccaf06a2247e6514727f
+    git: https://github.com/tusharad/langchain-hs
+    name: langchain-hs
+    pantry-tree:
+      sha256: 208b46ee0263e113846cb362157ff9ee0de6d3356709250ad5d7213c374e3b74
+      size: 7440
+    subdir: .
+    version: 0.0.2.0
+  original:
+    commit: 8182563f4648fcc34952ccaf06a2247e6514727f
+    git: https://github.com/tusharad/langchain-hs
     subdir: .
 snapshots:
 - completed:

@@ -5,7 +5,7 @@ where
 
 import Configuration.Dotenv qualified as Dotenv
 import Control.Exception.Safe qualified as Safe
-import OpenTelemetry.Trace (Tracer, TracerOptions (..), TracerProvider, getGlobalTracerProvider, initializeGlobalTracerProvider, makeTracer, shutdownTracerProvider)
+import OpenTelemetry.Trace (Tracer, TracerOptions (..), getGlobalTracerProvider, initializeGlobalTracerProvider, makeTracer, shutdownTracerProvider)
 import Relude
 import System.Server qualified as Server
 
