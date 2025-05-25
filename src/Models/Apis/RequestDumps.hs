@@ -17,7 +17,6 @@ module Models.Apis.RequestDumps (
   selectChildSpansAndLogs,
   countRequestDumpByProject,
   getRequestType,
-  autoCompleteFromRequestDumps,
   getLastSevenDaysTotalRequest,
   getTotalRequestToReport,
   parseSDKType,
@@ -533,10 +532,6 @@ selectRequestDumpByProjectAndId pid createdAt rdId = queryOne Select q (createdA
              FROM apis.request_dumps where (created_at=?)  and project_id=? and id=? LIMIT 1|]
 
 
-autoCompleteFromRequestDumps :: Projects.ProjectId -> Text -> Text -> DBT IO (V.Vector Text)
-autoCompleteFromRequestDumps pid key prefix = query Select (Query $ encodeUtf8 q) (pid, prefix <> "%")
-  where
-    q = [text|SELECT DISTINCT $key from apis.request_dumps WHERE project_id = ? AND created_at > NOW() - interval '14' day AND $key <> ''  AND $key LIKE ?|]
 
 
 getLastSevenDaysTotalRequest :: Projects.ProjectId -> DBT IO Int

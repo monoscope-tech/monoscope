@@ -234,13 +234,14 @@ sqlFromQueryComponents sqlCfg qc =
 --
 parseQueryStringToWhereClause :: Text -> Either Text Text
 parseQueryStringToWhereClause q =
-  if q == ""
-    then Right ""
-    else
-      bimap
-        (toText . errorBundlePretty)
-        (\x -> fromMaybe "" (sectionsToComponents x).whereClause)
-        (parse parseQuery "" q)
+  let trimmedQ = T.strip q
+   in if trimmedQ == ""
+        then Right ""
+        else
+          bimap
+            (toText . errorBundlePretty)
+            (\x -> fromMaybe "" (sectionsToComponents x).whereClause)
+            (parse parseQuery "" trimmedQ)
 
 
 ----------------------------------------------------------------------------------
@@ -263,7 +264,7 @@ parseQueryStringToWhereClause q =
 -- Just "jsonb_path_exists(errors, $$$[*].\"error_type\" ? (@ = \"^ab.*c\")$$::jsonpath)"
 --
 parseQueryToComponents :: SqlQueryCfg -> Text -> Either Text (Text, QueryComponents)
-parseQueryToComponents sqlCfg q = bimap (toText . errorBundlePretty) (queryASTToComponents sqlCfg) (parse parseQuery "" q)
+parseQueryToComponents sqlCfg q = bimap (toText . errorBundlePretty) (queryASTToComponents sqlCfg) (parse parseQuery "" (T.strip q))
 
 
 queryASTToComponents :: SqlQueryCfg -> [Section] -> (Text, QueryComponents)
@@ -271,7 +272,7 @@ queryASTToComponents sqlCfg = sqlFromQueryComponents sqlCfg . sectionsToComponen
 
 
 parseQueryToAST :: Text -> Either Text [Section]
-parseQueryToAST q = first (toText . errorBundlePretty) (parse parseQuery "" q)
+parseQueryToAST q = first (toText . errorBundlePretty) (parse parseQuery "" (T.strip q))
 
 
 defPid :: Projects.ProjectId

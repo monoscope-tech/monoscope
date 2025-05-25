@@ -1,10 +1,5 @@
 module Opentelemetry.OtlpServerSpec where
 
-import Data.Base64.Types qualified as B64
-import Data.ByteString.Base64 qualified as B64
-import Data.HashMap.Strict qualified as HashMap
-import Opentelemetry.OtlpMockValues
-import Opentelemetry.OtlpServer qualified as OtlpServer
 import Pkg.TestUtils qualified as TestUtils
 import ProcessMessageSpec (testAuthContext)
 import Relude

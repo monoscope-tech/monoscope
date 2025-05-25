@@ -8,11 +8,9 @@ where
 
 import Data.Aeson qualified as AE
 import Data.Aeson.Extra (lodashMerge)
-import Data.Aeson.Extra.Merge (lodashMerge)
 import Data.Aeson.Key qualified as AEK
 import Data.Aeson.KeyMap qualified as AEKM
 import Data.Aeson.Types (KeyValue ((.=)), object)
-import Data.ByteString.Base64 qualified as B64
 import Data.ByteString.Lazy.Char8 qualified as BL
 import Data.Cache qualified as Cache
 import Data.Effectful.UUID (UUIDEff)

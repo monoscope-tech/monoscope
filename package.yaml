@@ -247,6 +247,7 @@ library:
     - postgresql-libpq
     - ki-effectful
     - grapesy
+    - langchain-hs
 
 executables:
   apitoolkit-server-exe:

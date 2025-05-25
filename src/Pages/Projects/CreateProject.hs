@@ -41,7 +41,6 @@ import Effectful.Reader.Static (ask)
 import GHC.Records (HasField (getField))
 import Lucid
 import Lucid.Htmx (hxConfirm_, hxGet_, hxIndicator_, hxPost_, hxSwap_, hxTarget_)
-import Lucid.Hyperscript (__)
 import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
 import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.ProjectMembers qualified as Projects
@@ -60,7 +59,7 @@ import Servant.API (Header)
 import Servant.API.ResponseHeaders (Headers)
 import System.Config
 import System.Types (ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders, addSuccessToast, addTriggerEvent, redirectCS)
-import Utils (faSprite_, insertIfNotExist, isDemoAndNotSudo, lookupValueText)
+import Utils (insertIfNotExist, isDemoAndNotSudo, lookupValueText)
 import Web.FormUrlEncoded (FromForm)
 
 

@@ -27,8 +27,8 @@ data Query = Query
   { query :: Maybe Text
   , sql :: Maybe Text
   }
-  deriving stock (Show, Generic, THS.Lift)
-  deriving anyclass (NFData, Default)
+  deriving stock (Generic, Show, THS.Lift)
+  deriving anyclass (Default, NFData)
   deriving (AE.FromJSON, AE.ToJSON) via DAES.Snake Query
 
 
@@ -38,8 +38,8 @@ data Layout = Layout
   , w :: Maybe Int
   , h :: Maybe Int
   }
-  deriving stock (Show, Generic, THS.Lift)
-  deriving anyclass (NFData, Default)
+  deriving stock (Generic, Show, THS.Lift)
+  deriving anyclass (Default, NFData)
   deriving (AE.FromJSON, AE.ToJSON) via DAES.Snake Layout
 
 
@@ -57,7 +57,7 @@ data WidgetType
   | WTTreeMap
   | WTPieChart
   | WTAnomalies
-  deriving stock (Show, Eq, Generic, Enum, THS.Lift)
+  deriving stock (Enum, Eq, Generic, Show, THS.Lift)
   deriving anyclass (NFData)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.ConstructorTagModifier '[DAE.StripPrefix "WT", DAE.CamelToSnake]] WidgetType
 
@@ -72,7 +72,7 @@ data SummarizeBy
   | SBMax
   | SBMin
   | SBCount
-  deriving stock (Show, Eq, Generic, Enum, THS.Lift)
+  deriving stock (Enum, Eq, Generic, Show, THS.Lift)
   deriving anyclass (NFData)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.ConstructorTagModifier '[DAE.StripPrefix "SB", DAE.CamelToSnake]] SummarizeBy
 
@@ -123,8 +123,8 @@ data Widget = Widget
   , html :: Maybe LText
   , standalone :: Maybe Bool -- Not used in a grid stack
   }
-  deriving stock (Show, Generic, THS.Lift)
-  deriving anyclass (NFData, Default)
+  deriving stock (Generic, Show, THS.Lift)
+  deriving anyclass (Default, NFData)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.StripPrefix "w", DAE.CamelToSnake]] Widget
 
 
@@ -141,8 +141,8 @@ data WidgetDataset = WidgetDataset
   , to :: Maybe Int
   , stats :: Maybe Charts.MetricsStats
   }
-  deriving stock (Show, Generic, THS.Lift)
-  deriving anyclass (NFData, Default)
+  deriving stock (Generic, Show, THS.Lift)
+  deriving anyclass (Default, NFData)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.StripPrefix "w", DAE.CamelToSnake]] WidgetDataset
 
 
@@ -152,8 +152,8 @@ data WidgetAxis = WidgetAxis
   , series :: Maybe [WidgetAxis]
   , showOnlyMaxLabel :: Maybe Bool
   }
-  deriving stock (Show, Generic, THS.Lift)
-  deriving anyclass (NFData, Default)
+  deriving stock (Generic, Show, THS.Lift)
+  deriving anyclass (Default, NFData)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.StripPrefix "w", DAE.CamelToSnake]] WidgetAxis
 
 
@@ -185,7 +185,7 @@ widgetHelper_ w' = case w.wType of
     gridStackHandleClass = if w._isNested == Just True then "nested-grid-stack-handle" else "grid-stack-handle"
     layoutFields = [("x", (.x)), ("y", (.y)), ("w", (.w)), ("h", (.h))]
     attrs = concat [maybe [] (\v -> [term ("gs-" <> name) (show v)]) (w.layout >>= layoutField) | (name, layoutField) <- layoutFields]
-    paddingBtm = if w.standalone == Just True then "" else (bool " pb-8 " " pb-4 " (w._isNested == Just True))
+    paddingBtm = if w.standalone == Just True then "" else (bool " pb-8 " " standalone pb-4 " (w._isNested == Just True))
     -- Serialize the widget to JSON for easy copying
     widgetJson = decodeUtf8 $ fromLazy $ AE.encode w
     gridItem_ =
@@ -195,10 +195,10 @@ widgetHelper_ w' = case w.wType of
 
 
 renderWidgetHeader :: Widget -> Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe (Text, Text) -> Bool -> Html ()
-renderWidgetHeader widget wId title valueM subValueM expandBtnFn ctaM hideSub = div_ [class_ "leading-none flex justify-between items-center grid-stack-handle", id_ $ wId <> "_header"] do
+renderWidgetHeader widget wId title valueM subValueM expandBtnFn ctaM hideSub = div_ [class_ $ "leading-none flex justify-between items-center  " <> bool "grid-stack-handle" "" (widget.standalone == Just True), id_ $ wId <> "_header"] do
   div_ [class_ "inline-flex gap-3 items-center group/h"] do
     span_ [class_ "text-sm flex items-center gap-1"] do
-      span_ [class_ "hidden group-hover/h:inline-flex"] $ Utils.faSprite_ "grip-dots-vertical" "regular" "w-4 h-4"
+      unless (widget.standalone == Just True) $ span_ [class_ "hidden  group-hover/h:inline-flex"] $ Utils.faSprite_ "grip-dots-vertical" "regular" "w-4 h-4"
       whenJust widget.icon \icon -> span_ [] $ Utils.faSprite_ icon "regular" "w-4 h-4"
       toHtml $ maybeToMonoid title
     span_ [class_ $ "bg-fillWeak border border-strokeWeak text-sm font-semibold px-2 py-1 rounded-3xl " <> if (isJust valueM) then "" else "hidden", id_ $ wId <> "Value"]
@@ -270,12 +270,12 @@ renderWidgetHeader widget wId title valueM subValueM expandBtnFn ctaM hideSub = 
               , data_ "tippy-content" "Create a copy of this widget"
               , hxPost_
                   $ "/p/"
-                  <> maybeToMonoid (widget._projectId <&> (.toText))
-                  <> "/dashboards/"
-                  <> maybeToMonoid widget._dashboardId
-                  <> "/widgets/"
-                  <> wId
-                  <> "/duplicate"
+                    <> maybeToMonoid (widget._projectId <&> (.toText))
+                    <> "/dashboards/"
+                    <> maybeToMonoid widget._dashboardId
+                    <> "/widgets/"
+                    <> wId
+                    <> "/duplicate"
               , hxSwap_ "beforeend"
               , hxTrigger_ "click"
               , hxTarget_ ".grid-stack"
@@ -318,7 +318,7 @@ renderChart widget = do
       div_
         [ class_
             $ "h-full w-full flex flex-col justify-end "
-            <> if widget.naked == Just True then "" else " rounded-2xl border border-strokeWeak bg-fillWeaker"
+              <> if widget.naked == Just True then "" else " rounded-2xl border border-strokeWeak bg-fillWeaker"
         , id_ $ chartId <> "_bordered"
         ]
         do

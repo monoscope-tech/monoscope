@@ -122,7 +122,7 @@ testSessionHeader pool = do
   pSessId <-
     Auth.authorizeUserAndPersist Nothing "firstName" "lastName" "https://placehold.it/500x500" "test@apitoolkit.io"
       & runStaticUUID (map (UUID.fromWords 0 0 0) [1 .. 10])
-      & runHTTPGolden "./golden/"
+      & runHTTPGolden "./tests/golden/"
       & DB.runDB pool
       & runTime
       & runEff

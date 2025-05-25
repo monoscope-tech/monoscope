@@ -8,17 +8,14 @@ import Data.Base64.Types qualified as B64
 import Data.ByteString qualified as BS
 import Data.ByteString.Base16 qualified as B16
 import Data.ByteString.Base64 qualified as B64
-import Data.ByteString.Lazy qualified as LBS
 import Data.Effectful.UUID (UUIDEff)
 import Data.HashMap.Strict qualified as HashMap
 import Data.List (partition)
 import Data.Map qualified as Map
-import Data.ProtoLens (defMessage)
-import Data.ProtoLens.Encoding (decodeMessage, encodeMessage)
+import Data.ProtoLens.Encoding (decodeMessage)
 import Data.Scientific (fromFloatDigits)
 import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
-import Data.Text.Encoding.Error (lenientDecode)
 import Data.Time (UTCTime)
 import Data.Time.Clock.POSIX (posixSecondsToUTCTime)
 import Data.UUID qualified as UUID
@@ -36,12 +33,11 @@ import Log qualified
 import Models.Apis.Anomalies qualified as Anomalies
 import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
 import Models.Projects.Projects qualified as Projects
-import Models.Telemetry.Telemetry (Context (..), OtelLogsAndSpans (..), Severity (..), SpanKind (..), SpanStatus (..), convertSpanToRequestMessage)
+import Models.Telemetry.Telemetry (Context (..), OtelLogsAndSpans (..), Severity (..), convertSpanToRequestMessage)
 import Models.Telemetry.Telemetry qualified as Telemetry
 import Network.GRPC.Common
 import Network.GRPC.Common.Protobuf
 import Network.GRPC.Server (SomeRpcHandler)
-import Network.GRPC.Server.Protobuf
 import Network.GRPC.Server.Run hiding (runServer)
 import Network.GRPC.Server.StreamType
 import ProcessMessage qualified
@@ -60,10 +56,9 @@ import Proto.Opentelemetry.Proto.Resource.V1.Resource_Fields qualified as PRF
 import Proto.Opentelemetry.Proto.Trace.V1.Trace qualified as PT
 import Proto.Opentelemetry.Proto.Trace.V1.Trace_Fields qualified as PTF
 import Relude hiding (ask)
-import RequestMessages (RequestMessage (..))
 import System.Config (AuthContext)
 import System.Types (runBackground)
-import Utils (b64ToJson, freeTierDailyMaxEvents, freeTierLimitExceededBanner, nestedJsonFromDotNotation)
+import Utils (b64ToJson, freeTierDailyMaxEvents, nestedJsonFromDotNotation)
 
 
 -- import Network.GRPC.Server.Service (Service, service, method, fromServices)
@@ -274,9 +269,6 @@ migrateHttpSemanticConventions keyVals = do
     mgVals ++ migrateHttpTarget keyVals ++ migrateMethodOther keyVals
 
 
--- Decode ByteString to Text with lenient UTF-8 handling
-decodeUtf8Lenient :: ByteString -> Text
-decodeUtf8Lenient = TE.decodeUtf8With lenientDecode
 
 
 -- Extract structured information from protobuf decoding errors

@@ -1,0 +1,18 @@
+# Build output
+dist/
+build/
+
+# Node modules
+node_modules/
+
+# Package files
+package-lock.json
+yarn.lock
+
+# Misc
+.DS_Store
+.env
+*.log
+
+# Public directory (contains vendored code)
+public/

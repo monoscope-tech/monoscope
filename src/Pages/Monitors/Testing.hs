@@ -276,7 +276,6 @@ dashboardPage pid col reqsVecM = do
                       , currentRange = Nothing
                       , exceededFreeTier = False
                       , query
-                      , queryAST = ""
                       , cursor = Nothing
                       , isTestLog = Just True
                       , emptyStateUrl = Just $ "/p/" <> pid.toText <> "/monitors/collection?col_id=" <> col.id.toText

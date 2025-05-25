@@ -38,7 +38,7 @@ import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.ToField
 import Database.PostgreSQL.Transact hiding (DB, execute, queryOne)
 import Effectful
-import Effectful.Error.Static
+import Effectful.Error.Static (throwError)
 import Effectful.Error.Static qualified as EffError
 import Effectful.PostgreSQL.Transact.Effect (DB, dbtToEff)
 import Effectful.Reader.Static (Reader, asks)
@@ -65,38 +65,38 @@ import Web.HttpApiData
 
 
 newtype PersistentSessionId = PersistentSessionId {getPersistentSessionId :: UUID.UUID}
-  deriving
-    (Show, Eq, FromField, ToField, FromHttpApiData, ToHttpApiData, Default)
-    via UUID.UUID
   deriving newtype (NFData)
   deriving (Display) via ShowInstance UUID.UUID
+  deriving
+    (Default, Eq, FromField, FromHttpApiData, Show, ToField, ToHttpApiData)
+    via UUID.UUID
 
 
 newtype SessionData = SessionData {getSessionData :: Map Text Text}
-  deriving stock (Show, Eq, Generic)
+  deriving stock (Eq, Generic, Show)
+  deriving newtype (NFData)
+  deriving anyclass (Default)
   deriving
     (FromField, ToField)
     via Aeson (Map Text Text)
-  deriving newtype (NFData)
-  deriving anyclass (Default)
 
 
 newtype PSUser = PSUser {getUser :: Users.User}
-  deriving stock (Show, Generic)
+  deriving stock (Generic, Show)
+  deriving newtype (NFData)
+  deriving anyclass (Default)
   deriving
     (FromField, ToField)
     via Aeson Users.User
-  deriving newtype (NFData)
-  deriving anyclass (Default)
 
 
 newtype PSProjects = PSProjects {getProjects :: V.Vector Projects.Project}
-  deriving stock (Show, Generic)
+  deriving stock (Generic, Show)
+  deriving newtype (NFData)
+  deriving anyclass (Default)
   deriving
     (FromField, ToField)
     via Aeson (V.Vector Projects.Project)
-  deriving anyclass (Default)
-  deriving newtype (NFData)
 
 
 data PersistentSession = PersistentSession
@@ -109,8 +109,8 @@ data PersistentSession = PersistentSession
   , isSudo :: Bool -- super user/admin
   , projects :: PSProjects
   }
-  deriving stock (Show, Generic)
-  deriving anyclass (FromRow, ToRow, Default, NFData)
+  deriving stock (Generic, Show)
+  deriving anyclass (Default, FromRow, NFData, ToRow)
   deriving
     (Entity)
     via (GenericEntity '[Schema "users", TableName "persistent_sessions", PrimaryKey "id"] PersistentSession)
@@ -199,7 +199,7 @@ data Session = Session
 
 
 sessionAndProject
-  :: (DB :> es, EffReader.Reader (Headers '[Header "Set-Cookie" SetCookie] Session) :> es, EffError.Error ServerError :> es)
+  :: (DB :> es, EffError.Error ServerError :> es, EffReader.Reader (Headers '[Header "Set-Cookie" SetCookie] Session) :> es)
   => Projects.ProjectId
   -> Eff es (Session, Projects.Project)
 sessionAndProject pid = do

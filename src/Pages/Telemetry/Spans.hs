@@ -2,10 +2,8 @@ module Pages.Telemetry.Spans (expandedSpanItem, spanLatencyBreakdown, spanGetH) 
 
 import Data.Aeson qualified as AE
 import Data.Aeson.KeyMap qualified as KEM
-import Data.ByteString.Base64 qualified as B64
 import Data.Effectful.UUID qualified as UUID
 import Data.HashMap.Strict qualified as HM
-import Data.Map qualified as Map
 import Data.Text qualified as T
 import Data.Time (formatTime)
 import Data.Time.Format (defaultTimeLocale)

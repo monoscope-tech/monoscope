@@ -3,7 +3,6 @@ module BackgroundJobs (jobsWorkerInit, jobsRunner, BgJobs (..), runHourlyJob, ge
 import Control.Lens ((.~))
 import Data.Aeson ((.=))
 import Data.Aeson qualified as AE
-import Data.Aeson.Encoding qualified as AE
 import Data.Aeson.QQ (aesonQQ)
 import Data.CaseInsensitive qualified as CI
 import Data.Effectful.UUID qualified as UUID

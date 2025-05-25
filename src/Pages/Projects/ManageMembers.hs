@@ -218,28 +218,6 @@ memberRow prM = do
 --       "Submit"
 --       span_ [id_ "submitIndicator", class_ "loading loading-dots loading-sm htmx-indicator"] ""
 
-projectMemberRow :: Maybe ProjectMembers.ProjectMemberVM -> Html ()
-projectMemberRow projMembersM =
-  div_ [class_ "flex flex-row space-x-2"] do
-    input_
-      [ name_ "emails"
-      , class_ "w-2/3 h-10 px-5 my-2 w-full  bg-base-100 text-slate-700 font-light border-solid border border-gray-200 rounded-2xl border-0 "
-      , placeholder_ "name@example.com"
-      , value_ (maybe "" (original . (.email)) projMembersM)
-      ]
-    let permission = maybe ProjectMembers.PView (.permission) projMembersM
-    select_ [name_ "permissions", class_ "w-1/3 h-10 px-5  my-2 w-full  bg-base-100 text-zinc-500 border-solid border border-gray-200 rounded-2xl border-0"] do
-      option_ ([class_ "text-gray-500", value_ "admin"] <> selectedIf ProjectMembers.PAdmin permission) "Admin"
-      option_ ([class_ "text-gray-500", value_ "edit"] <> selectedIf ProjectMembers.PEdit permission) "Can Edit"
-      option_ ([class_ "text-gray-500", value_ "view"] <> selectedIf ProjectMembers.PView permission) "Can View"
-    button_
-      [ [__| on click remove the closest parent <div/> then halt |]
-      ]
-      $ faSprite_ "trash-can" "regular" "w-3 h-3 text-red-700"
-  where
-    selectedIf :: ProjectMembers.Permissions -> ProjectMembers.Permissions -> [Attribute]
-    selectedIf a b = [selected_ "" | a == b]
-
 
 manageSubGetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders (Html ()))
 manageSubGetH pid = do

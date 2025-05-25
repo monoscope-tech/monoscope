@@ -65,6 +65,7 @@ library
       Models.Projects.ProjectsEmail
       Models.Projects.Swaggers
       Models.Projects.SwaggersSpec
+      Models.Telemetry.Schema
       Models.Telemetry.Telemetry
       Models.Tests.Testing
       Models.Tests.TestToDump
@@ -81,7 +82,6 @@ library
       Pages.Anomalies.Server
       Pages.Api
       Pages.ApiSpec
-      Pages.AutoComplete
       Pages.BodyWrapper
       Pages.Charts.Charts
       Pages.Components
@@ -300,6 +300,7 @@ library
     , hw-kafka-client
     , indexed-traversable
     , ki-effectful
+    , langchain-hs
     , lens
     , lens-aeson
     , log-base
@@ -448,10 +449,12 @@ test-suite doctests
       apitoolkit-server
     , base
     , doctest-parallel >=0.1
+    , hiedb-plugin
+    , hs-opentelemetry-instrumentation-auto
     , hspec
     , hspec-discover
     , relude >=1.2.0.0
-    , hs-opentelemetry-instrumentation-auto
+    , rust-interop
   default-language: GHC2021
 
 test-suite tests
@@ -492,9 +495,11 @@ test-suite tests
       apitoolkit-server
     , base
     , doctest-parallel
+    , hiedb-plugin
+    , hs-opentelemetry-instrumentation-auto
     , hspec
     , hspec-discover
     , relude >=1.2.0.0
+    , rust-interop
     , tmp-postgres
-    ,hs-opentelemetry-instrumentation-auto
   default-language: GHC2021

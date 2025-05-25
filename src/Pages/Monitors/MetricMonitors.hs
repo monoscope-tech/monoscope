@@ -70,7 +70,7 @@ monitorTypes =
 errorsContent, apiChangesContent, healthcheckContent, multistepApiTestContent, throughputContent, errorLogsContent :: Html ()
 errorsContent =
   $( THUtils.markdown
-      [text|
+       [text|
            Errors are groups of exceptions that have a similar stacktrace. Set an alert for new issues, when an issue changes state, frequency of errors, or users affected by an issue.
            ![](/public/pages/monitors/alerts-wizard-issues.022643ec283774262884.svg)
            Examples
@@ -80,7 +80,7 @@ errorsContent =
    )
 apiChangesContent =
   $( THUtils.markdown
-      [text|
+       [text|
            Errors are groups of exceptions that have a similar stacktrace. Set an alert for new issues, when an issue changes state, frequency of errors, or users affected by an issue.
            ![](/public/pages/monitors/alerts-wizard-issues.022643ec283774262884.svg)
            Examples
@@ -90,7 +90,7 @@ apiChangesContent =
    )
 healthcheckContent =
   $( THUtils.markdown
-      [text|
+       [text|
            Errors are groups of exceptions that have a similar stacktrace. Set an alert for new issues, when an issue changes state, frequency of errors, or users affected by an issue.
            ![](/public/pages/monitors/alerts-wizard-issues.022643ec283774262884.svg)
            Examples
@@ -100,7 +100,7 @@ healthcheckContent =
    )
 multistepApiTestContent =
   $( THUtils.markdown
-      [text|
+       [text|
            Errors are groups of exceptions that have a similar stacktrace. Set an alert for new issues, when an issue changes state, frequency of errors, or users affected by an issue.
            ![](/public/pages/monitors/alerts-wizard-issues.022643ec283774262884.svg)
            Examples
@@ -110,7 +110,7 @@ multistepApiTestContent =
    )
 throughputContent =
   $( THUtils.markdown
-      [text|
+       [text|
            Errors are groups of exceptions that have a similar stacktrace. Set an alert for new issues, when an issue changes state, frequency of errors, or users affected by an issue.
            ![](/public/pages/monitors/alerts-wizard-issues.022643ec283774262884.svg)
            Examples
@@ -120,7 +120,7 @@ throughputContent =
    )
 errorLogsContent =
   $( THUtils.markdown
-      [text|
+       [text|
            Errors are groups of exceptions that have a similar stacktrace. Set an alert for new issues, when an issue changes state, frequency of errors, or users affected by an issue.
            ![](/public/pages/monitors/alerts-wizard-issues.022643ec283774262884.svg)
            Examples
@@ -158,7 +158,7 @@ chooseDetectionMethod_ = do
 
 defineTheMetric_ :: Projects.ProjectId -> Html ()
 defineTheMetric_ pid = do
-  div_ [class_ " max-w-[750px]"] $ LogList.logQueryBox_ pid Nothing "requests" Nothing "{}" V.empty V.empty
+  div_ [class_ " max-w-[750px]"] $ LogList.logQueryBox_ pid Nothing "requests" Nothing Nothing V.empty V.empty
   div_ [class_ "border-l-2 border-l-slate-300 pl-4 space-y-2"] do
     h3_ [class_ "font-normal text-base"] "Evaluation Details"
     div_ [class_ "flex items-center gap-2"] do
