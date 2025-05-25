@@ -65,6 +65,7 @@ library
       Models.Projects.ProjectsEmail
       Models.Projects.Swaggers
       Models.Projects.SwaggersSpec
+      Models.Telemetry.Schema
       Models.Telemetry.Telemetry
       Models.Tests.Testing
       Models.Tests.TestToDump

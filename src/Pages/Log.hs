@@ -35,6 +35,7 @@ import Models.Apis.Fields.Facets qualified as Facets
 import Models.Apis.Fields.Types (FacetData (..), FacetSummary (..), FacetValue (..))
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.Projects qualified as Projects
+import Models.Telemetry.Schema qualified as Schema
 import Models.Users.Sessions qualified as Sessions
 import NeatInterpolation (text)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), currProject, pageActions, pageTitle, sessM)
@@ -859,14 +860,8 @@ aiSearchH _pid requestBody = do
     systemPrompt =
       T.unlines
         [ "You are a helpful assistant that converts natural language queries to KQL (Kusto Query Language) filter expressions."
-        , "Available fields include:"
-        , "- level (ERROR, WARN, INFO, DEBUG)"
-        , "- attributes.http.request.method (GET, POST, PUT, DELETE, etc.)"
-        , "- attributes.http.response.status_code (200, 404, 500, etc.)"
-        , "- duration (in nanoseconds)"
-        , "- resource.service.name"
-        , "- span_name"
-        , "- timestamp"
+        , ""
+        , Schema.generateSchemaForAI Schema.telemetrySchema
         , ""
         , "Examples:"
         , "- \"show me errors\" -> level == \"ERROR\""
@@ -1008,14 +1003,24 @@ queryEditorInitializationCode :: V.Vector Projects.QueryLibItem -> V.Vector Proj
 queryEditorInitializationCode queryLibRecent queryLibSaved = do
   let queryLibData = queryLibRecent <> queryLibSaved
       queryLibDataJson = decodeUtf8 $ AE.encode queryLibData
+      schemaJson = decodeUtf8 $ AE.encode Schema.telemetrySchemaJson
   script_
     [text|
-    // Initialize query-editor component with query library data
+    // Initialize query-editor component with query library data and schema
     setTimeout(() => {
       const editor = document.getElementById('filterElement');
-      if (editor && editor.setQueryLibrary) {
-        const queryLibraryData = $queryLibDataJson;
-        editor.setQueryLibrary(queryLibraryData);
+      if (editor) {
+        // Set query library if available
+        if (editor.setQueryLibrary) {
+          const queryLibraryData = $queryLibDataJson;
+          editor.setQueryLibrary(queryLibraryData);
+        }
+        
+        // Set schema data using schemaManager if available
+        if (window.schemaManager && window.schemaManager.setSchemaData) {
+          const schemaData = $schemaJson;
+          window.schemaManager.setSchemaData('spans', schemaData);
+        }
       }
     }, 100);
     |]
