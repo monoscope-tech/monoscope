@@ -469,12 +469,15 @@ widgetToECharts widget =
               ["source" AE..= fromMaybe AE.Null (widget.dataset <&> (.source))]
         , "series" AE..= map (createSeries widget.wType) []
         , "animation" AE..= False
-        -- , "markArea"
-        --     AE..= AE.object
-        --       [ 
-        --         "itemStyle" AE..= AE.object ["color" AE..= "#0090f0", "opacity" AE..= 0.2]
-        --       , "data" AE..= AE.Array (V.fromList [])
-        --       ]   
+
+        -- , "dataZoom" AE..= AE.Array(V.fromList [ AE.object[
+        --   "type" AE..= "inside" 
+        --   , "xAxisIndex" AE..= 0 
+        --   , "filterMode" AE..= "weakFilter"
+        --   , "zoomOnMouseWheel" AE..= True
+        --   , "moveOnMouseMove": True
+        --   , "moveOnMouseWheel": True
+        --   ] ])
         , if widget.allowZoom == Just True
           then  "toolbox" AE..= AE.object [
            "feature" AE..= AE.object [  "dataZoom" AE..= AE.object ["show" AE..= True, "yAxisIndex" AE..= "none"] ]
@@ -510,6 +513,20 @@ createSeries widgetType query =
         [ "name" AE..= fromMaybe "Unnamed Series" (query >>= (.query))
         , "type" AE..= mapWidgetTypeToChartType widgetType
         , "stack" AE..= ("Stack" :: Text)
+        , "markArea" AE..=  AE.object
+            [ "show" AE..= True
+            , "data"
+                AE..= if isStat
+                  then AE.Array V.empty -- No mark area for stat widgets
+                  else AE.Array
+                    (V.fromList
+                      [ AE.Array
+                          (V.fromList
+                            [ AE.object ["x" AE..= 5]
+                            , AE.object ["x" AE..= 25]
+                            ])
+                      ])
+            ]
         , "showBackground" AE..= not isStat
         , "backgroundStyle"
             AE..= AE.object

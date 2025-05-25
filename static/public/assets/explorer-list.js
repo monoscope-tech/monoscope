@@ -94,17 +94,39 @@ export class LogList extends LitElement {
   }
 
   updateChartDataZoom(start, end) {
-    // let first = this.spanListTree[start]
-    // let last = this.spanListTree[end]
-    // if (first === 'start' || last === 'end') {
-    //   first = this.spansListTree[start + 1]
-    // }
-    // if (last === 'end' || last === 'start') {
-    //   last = this.spansListTree[end - 1]
-    // }
-    // let startTime, endTime
-    // startTime = new Date(first.data[this.colIdxMap['timestamp']]).toISOString()
-    // endTime = new Date(last.data[this.colIdxMap['timestamp']]).toISOString()
+    let first = this.spanListTree[start]
+    let last = this.spanListTree[end]
+    if (first === 'start' || last === 'end') {
+      first = this.spansListTree[start + 1]
+    }
+    if (last === 'end' || last === 'start') {
+      last = this.spansListTree[end - 1]
+    }
+    let startTime, endTime
+    startTime = new Date(first.data[this.colIdxMap['timestamp']]).getTime()
+    endTime = new Date(last.data[this.colIdxMap['timestamp']]).getTime()
+    if (this.barChart) {
+      const options = this.barChart.getOption()
+      options.series[0].markArea = {
+        silent: true,
+        itemStyle: {
+          opacity: 0.8,
+          color: 'red',
+        },
+        data: [
+          [
+            {
+              xAxis: new Date(1747555577663.2622),
+            },
+            {
+              xAxis: new Date(1748123258929.097).toISOString(),
+            },
+          ],
+        ],
+      }
+      this.barChart.setOption(options)
+    }
+
     // console.log(startTime, endTime)
     // if (this.barChart) {
     //   const option = this.barChart.getOption()
@@ -137,7 +159,7 @@ export class LogList extends LitElement {
     const startValue = zoom.startValue
     const endValue = zoom.endValue
     if (startValue === undefined || endValue === undefined) return
-
+    console.log(startValue, endValue)
     const p = new URLSearchParams(window.location.search)
     p.set('from', new Date(startValue).toISOString())
     p.set('to', new Date(endValue).toISOString())

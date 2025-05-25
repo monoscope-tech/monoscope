@@ -631,8 +631,6 @@ apiLogsPage page = do
             , Widget.unit = Just "ms"
             , Widget.hideLegend = Just True
             , Widget._projectId = Just page.pid
-            , Widget.allowZoom = Just True 
-            , Widget.showMarkArea = Just True
             }
 
     div_ [class_ "flex h-full gap-3.5 overflow-y-hidden"] do
