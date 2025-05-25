@@ -378,9 +378,9 @@ incrementByOneMillisecond dateStr =
     Nothing -> ""
     Just utcTime ->
       let newTime = posixSecondsToUTCTime $ utcTimeToPOSIXSeconds utcTime + 0.000001
-       in formatTime defaultTimeLocale (iso8601DateFormat (Just "%H:%M:%S%QZ")) newTime
+       in iso8601Show newTime
   where
-    maybeTime = parseTimeM True defaultTimeLocale (iso8601DateFormat (Just "%H:%M:%S%QZ")) dateStr :: Maybe UTCTime
+    maybeTime = parseTimeM True defaultTimeLocale "%Y-%m-%dT%H:%M:%S%QZ" dateStr :: Maybe UTCTime
 
 
 requestDumpLogUrlPath :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Text -> Bool -> Text
