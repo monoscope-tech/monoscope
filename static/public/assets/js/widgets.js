@@ -142,6 +142,10 @@ const chartWidget = widgetData => {
       if (params().query) {
         widgetData.query = params().query + ' | ' + widgetData.query
       }
+      if (window.logListTable) {
+        window.logListTable.refetchLogs()
+      }
+
       updateChartData(chart, opt, true, widgetData)
     })
   })

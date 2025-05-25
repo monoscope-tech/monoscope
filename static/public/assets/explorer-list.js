@@ -342,12 +342,17 @@ export class LogList extends LitElement {
           if (!isNewData) {
             this.hasMore = logsData.length > 0
           }
+          if (logsData.length === 0 && isRefresh) {
+            this.spanListTree = []
+          }
+
           if (logsData.length > 0) {
             if (!isNewData) {
               this.nextFetchUrl = nextUrl
             } else {
               this.recentFetchUrl = recentUrl
             }
+
             this.serviceColors = { ...serviceColors, ...this.serviceColors }
             let tree = this.buildSpanListTree([...logsData])
 
@@ -355,7 +360,7 @@ export class LogList extends LitElement {
               this.nextFetchUrl = nextUrl
               this.recentFetchUrl = recentUrl
               this.spanListTree = tree
-            }else {
+            } else {
               if (isNewData) {
                 this.fetchedNew = true
                 tree.forEach(t => (t.isNew = true))
@@ -374,7 +379,6 @@ export class LogList extends LitElement {
               } else {
                 this.spanListTree = this.addWithFlipDirection(tree, this.spanListTree)
               }
-
             }
 
             this.updateColumnMaxWidthMap(logsData)
