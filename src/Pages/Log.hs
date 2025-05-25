@@ -1021,6 +1021,12 @@ queryEditorInitializationCode queryLibRecent queryLibSaved = do
           const schemaData = $schemaJson;
           window.schemaManager.setSchemaData('spans', schemaData);
         }
+        
+        // Set popular searches if available
+        if (editor.setPopularSearches && window.getPopularQueries) {
+          const popularQueries = window.getPopularQueries();
+          editor.setPopularSearches(popularQueries);
+        }
       }
     }, 100);
     |]

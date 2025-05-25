@@ -1,5 +1,9 @@
 // Re-export everything from query-editor
 export * from './query-editor/query-editor';
 
-// Re-export the config function
-export { initializeDefaultSchema } from './query-editor/query-editor-config';
+// Re-export the config functions
+export { initializeDefaultSchema, getPopularQueries } from './query-editor/query-editor-config';
+
+// Expose getPopularQueries globally for Haskell initialization
+import { getPopularQueries } from './query-editor/query-editor-config';
+(window as any).getPopularQueries = getPopularQueries;
