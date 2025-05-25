@@ -108,7 +108,5 @@ extra-deps:
       - .
 
 flags:
-  pg-entity:
-    prod: True
 
 allow-newer: true
