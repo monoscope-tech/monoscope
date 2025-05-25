@@ -628,6 +628,8 @@ export class QueryEditorComponent extends LitElement {
   // Internal state
   private editor: monaco.editor.IStandaloneCodeEditor | null = null;
   private suggestionListeners: (() => void)[] = [];
+  private isProgrammaticUpdate = false;
+  private updateHandlers: Array<monaco.IDisposable> = [];
 
   // Icons for different suggestion types: document, function, operator, variable, keyword, etc.
   private readonly KIND_ICONS = ['📄', '🔢', '🔍', '#', '📊', '📋', '#', '🔢', '✅', '❓'];
@@ -693,6 +695,8 @@ export class QueryEditorComponent extends LitElement {
   disconnectedCallback(): void {
     this.suggestionListeners.forEach((dispose) => dispose());
     this.suggestionListeners = [];
+    this.updateHandlers.forEach((handler) => handler.dispose());
+    this.updateHandlers = [];
     this.editor?.dispose();
     super.disconnectedCallback();
   }
@@ -729,38 +733,115 @@ export class QueryEditorComponent extends LitElement {
       }));
   }
 
-  // Public API method for adding query fragments
+  // New handleAddQuery that prevents all focus
   public handleAddQuery(queryFragment: string, replace: boolean = false): void {
     if (!this.editor) return;
 
-    const currentValue = this.editor.getValue().trim();
-    let newValue: string;
+    // Capture current focus state
+    const previouslyFocusedElement = document.activeElement as HTMLElement;
+    const hadFocus = this.editor.hasTextFocus();
 
-    if (replace) {
-      // Replace the entire editor content
-      newValue = queryFragment;
-    } else {
-      // Add to existing content (original behavior)
-      if (currentValue) {
-        newValue = `${currentValue} and ${queryFragment}`;
-      } else {
-        newValue = queryFragment;
+    // Prevent all updates and focus
+    this.isProgrammaticUpdate = true;
+
+    // Store original Monaco methods
+    const originalFocus = this.editor.focus;
+    const originalTrigger = this.editor.trigger;
+    const editorDomNode = this.editor.getDomNode();
+
+    // Override focus-related methods
+    this.editor.focus = () => {};
+    this.editor.trigger = () => {};
+
+    // Prevent DOM focus events
+    const preventFocus = (e: FocusEvent) => {
+      if (e.target === editorDomNode || editorDomNode?.contains(e.target as Node)) {
+        e.preventDefault();
+        e.stopPropagation();
+        e.stopImmediatePropagation();
       }
+    };
+
+    // Add capture phase listeners to intercept focus before Monaco handles it
+    document.addEventListener('focus', preventFocus, true);
+    document.addEventListener('focusin', preventFocus, true);
+
+    try {
+      const currentValue = this.editor.getValue().trim();
+      let newValue: string;
+
+      if (replace) {
+        newValue = queryFragment;
+      } else {
+        if (currentValue) {
+          newValue = `${currentValue} and ${queryFragment}`;
+        } else {
+          newValue = queryFragment;
+        }
+      }
+
+      // Update the editor value
+      this.editor.setValue(newValue);
+
+      // Move cursor without focusing
+      const model = this.editor.getModel();
+      if (model) {
+        const lastLine = model.getLineCount();
+        const lastColumn = model.getLineMaxColumn(lastLine);
+        this.editor.setPosition({ lineNumber: lastLine, column: lastColumn });
+      }
+
+      // Update state
+      this.showSuggestions = false;
+      this.selectedIndex = -1;
+
+      // Manually trigger the update query event
+      const url = new URL(window.location.href);
+      if (newValue.trim()) {
+        url.searchParams.set('query', newValue);
+      } else {
+        url.searchParams.delete('query');
+      }
+      window.history.replaceState({}, '', url.toString());
+
+      this.dispatchEvent(
+        new CustomEvent('update-query', {
+          detail: { value: newValue },
+          bubbles: true,
+        })
+      );
+    } finally {
+      // Clean up in next tick
+      setTimeout(() => {
+        // Restore Monaco methods
+        this.editor.focus = originalFocus.bind(this.editor);
+        this.editor.trigger = originalTrigger.bind(this.editor);
+
+        // Remove focus prevention listeners
+        document.removeEventListener('focus', preventFocus, true);
+        document.removeEventListener('focusin', preventFocus, true);
+
+        // Reset programmatic flag
+        this.isProgrammaticUpdate = false;
+
+        // Restore focus to previous element if needed
+        if (
+          !hadFocus &&
+          previouslyFocusedElement &&
+          previouslyFocusedElement !== editorDomNode &&
+          !editorDomNode?.contains(previouslyFocusedElement)
+        ) {
+          previouslyFocusedElement.focus();
+
+          // Double-check focus didn't get stolen
+          setTimeout(() => {
+            if (document.activeElement === editorDomNode || editorDomNode?.contains(document.activeElement)) {
+              previouslyFocusedElement.focus();
+            }
+          }, 50);
+        }
+      }, 0);
     }
-
-    this.editor.setValue(newValue);
-
-    // Move cursor to the end
-    const model = this.editor.getModel();
-    if (model) {
-      const lastLine = model.getLineCount();
-      const lastColumn = model.getLineMaxColumn(lastLine);
-      this.editor.setPosition({ lineNumber: lastLine, column: lastColumn });
-    }
-
-    this.debouncedUpdateQuery(newValue);
-    this.showSuggestions = false;
-    this.selectedIndex = -1;
   }
 
   // Private methods
@@ -824,8 +905,13 @@ export class QueryEditorComponent extends LitElement {
     setTimeout(() => this.updatePlaceholder(), 100);
   }
 
+  // Override the setupEditorEvents method
   private setupEditorEvents(): void {
     if (!this.editor) return;
+
+    // Clear any existing handlers
+    this.updateHandlers.forEach((handler) => handler.dispose());
+    this.updateHandlers = [];
 
     // Add Cmd+Enter handler for new lines
     this.editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter, () => {
@@ -851,15 +937,32 @@ export class QueryEditorComponent extends LitElement {
       clickedOnSuggestion = !!this.querySelector('.suggestions-dropdown')?.contains(e.target as Node);
     });
 
-    // Set up focus and blur events
-    this.editor.onDidFocusEditorText(() => {
-      this.showSuggestions = true;
-      this.updatePlaceholder();
-      // Trigger Monaco suggestions on focus
-      setTimeout(() => this.editor?.trigger('focus', 'editor.action.triggerSuggest', {}), 10);
+    // Set up focus and blur events with programmatic update check
+    const focusHandler = this.editor.onDidFocusEditorText(() => {
+      if (!this.isProgrammaticUpdate) {
+        this.showSuggestions = true;
+        this.updatePlaceholder();
+        setTimeout(() => {
+          if (!this.isProgrammaticUpdate) {
+            this.editor?.trigger('focus', 'editor.action.triggerSuggest', {});
+          }
+        }, 10);
+      }
     });
-    this.editor.onMouseDown(() => setTimeout(() => this.editor?.hasTextFocus() && (this.showSuggestions = true), 10));
-    this.editor.onDidBlurEditorText(() => {
+    this.updateHandlers.push(focusHandler);
+
+    const mouseHandler = this.editor.onMouseDown(() => {
+      if (!this.isProgrammaticUpdate) {
+        setTimeout(() => {
+          if (!this.isProgrammaticUpdate && this.editor?.hasTextFocus()) {
+            this.showSuggestions = true;
+          }
+        }, 10);
+      }
+    });
+    this.updateHandlers.push(mouseHandler);
+
+    const blurHandler = this.editor.onDidBlurEditorText(() => {
       setTimeout(() => {
         if (!this.editor?.hasTextFocus() && !clickedOnSuggestion) {
           this.showSuggestions = false;
@@ -867,31 +970,36 @@ export class QueryEditorComponent extends LitElement {
         this.updatePlaceholder();
       }, 300);
     });
+    this.updateHandlers.push(blurHandler);
 
-    this.editor.onKeyDown(this.handleKeyboardNavigation);
+    const keyHandler = this.editor.onKeyDown(this.handleKeyboardNavigation);
+    this.updateHandlers.push(keyHandler);
 
-    // Update suggestions when typing
-    this.editor.onDidChangeModelContent(() => {
-      const model = this.editor?.getModel();
-      const position = this.editor?.getPosition();
-      if (!model || !position) return;
+    // Update suggestions when typing with programmatic update check
+    const contentHandler = this.editor.onDidChangeModelContent(() => {
+      if (!this.isProgrammaticUpdate) {
+        const model = this.editor?.getModel();
+        const position = this.editor?.getPosition();
+        if (!model || !position) return;
 
-      this.currentQuery = model.getLineContent(position.lineNumber);
-      this.showSuggestions = true;
-      this.updatePlaceholder();
+        this.currentQuery = model.getLineContent(position.lineNumber);
+        this.showSuggestions = true;
+        this.updatePlaceholder();
 
-      // Debounced update of query event and URL
-      this.debouncedUpdateQuery(model.getValue());
+        // Debounced update of query event and URL
+        this.debouncedUpdateQuery(model.getValue());
 
-      // Trigger suggestions on every input change
-      this.debouncedTriggerSuggestions();
+        // Trigger suggestions on every input change
+        this.debouncedTriggerSuggestions();
+      }
     });
+    this.updateHandlers.push(contentHandler);
 
     // Auto-adjust editor height
-    this.editor.onDidContentSizeChange((e) => {
-      // this._editorContainer.style.height = `${e.contentHeight}px`;
+    const sizeHandler = this.editor.onDidContentSizeChange((e) => {
       this.editor?.layout();
     });
+    this.updateHandlers.push(sizeHandler);
   }
 
   private handleKeyboardNavigation = (e: monaco.IKeyboardEvent): void => {
