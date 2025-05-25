@@ -177,8 +177,8 @@ generateSchemaForAI :: Schema -> Text
 generateSchemaForAI schema =
   T.unlines
     $ "Available telemetry fields for querying logs and spans:"
-      : ""
-      : concatMap renderCategory fieldCategories
+    : ""
+    : concatMap renderCategory fieldCategories
   where
     fields = Map.toList schema.fields
 

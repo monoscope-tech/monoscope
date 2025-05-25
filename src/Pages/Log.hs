@@ -115,7 +115,7 @@ renderFacets facetSummary = do
             , [__|on click toggle .collapsed on me.parentElement|]
             ]
             $ span_ [class_ "facet-title"] (toHtml displayName)
-              >> faSprite_ "chevron-down" "regular" "w-3 h-3 transition-transform duration-200 group-[.collapsed]:rotate-180"
+            >> faSprite_ "chevron-down" "regular" "w-3 h-3 transition-transform duration-200 group-[.collapsed]:rotate-180"
 
           -- Wrap facet values in a collapsible container with animation
           div_ [class_ "facet-content overflow-hidden transition-all duration-300 ease-in-out max-h-96 opacity-100 transition-opacity duration-150 group-[.collapsed]:max-h-0 group-[.collapsed]:opacity-0 group-[.collapsed]:py-0"] do
@@ -140,8 +140,6 @@ keepNonEmpty :: Maybe Text -> Maybe Text
 keepNonEmpty Nothing = Nothing
 keepNonEmpty (Just "") = Nothing
 keepNonEmpty (Just a) = Just a
-
-
 
 
 apiLogH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe UTCTime -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders LogsGet)
@@ -811,10 +809,14 @@ aiSearchH _pid requestBody = do
           -- Clean up the response to extract just the KQL query
           let cleanedResponse = T.strip $ T.takeWhile (/= '\n') response
            in -- Check if the response indicates an invalid query
-              if "Please provide a query" `T.isInfixOf` cleanedResponse
-                || "I need more" `T.isInfixOf` cleanedResponse
-                || "Could you please" `T.isInfixOf` cleanedResponse
-                || T.length cleanedResponse < 3
+              if "Please provide a query"
+                `T.isInfixOf` cleanedResponse
+                || "I need more"
+                `T.isInfixOf` cleanedResponse
+                || "Could you please"
+                `T.isInfixOf` cleanedResponse
+                || T.length cleanedResponse
+                < 3
                 then pure $ Left "INVALID_QUERY_ERROR"
                 else pure $ Right cleanedResponse
 

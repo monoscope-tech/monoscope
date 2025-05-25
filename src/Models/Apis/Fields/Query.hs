@@ -142,5 +142,3 @@ fieldsByEndpointHashes pid hashes = query q (pid, hashes)
       FROM apis.fields
       WHERE project_id = ? AND endpoint_hash = ANY(?)
     |]
-
-

@@ -69,5 +69,3 @@ spec = aroundAll withTestResources do
         --   _ -> error "Unexpected response"
         -- content.resultCount `shouldBe` 202
         _ -> error "Unexpected response"
-
-

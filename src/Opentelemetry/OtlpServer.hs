@@ -269,8 +269,6 @@ migrateHttpSemanticConventions keyVals = do
     mgVals ++ migrateHttpTarget keyVals ++ migrateMethodOther keyVals
 
 
-
-
 -- Extract structured information from protobuf decoding errors
 createProtoErrorInfo :: String -> ByteString -> AE.Value
 createProtoErrorInfo err msg =

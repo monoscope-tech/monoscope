@@ -1,5 +1,6 @@
 module Pages.LogExplorer.Routes (Routes, Routes' (..), server) where
 
+import Data.Aeson qualified as AE
 import Data.Time (UTCTime)
 import Data.UUID qualified as UUID
 import Models.Projects.Projects qualified as Projects
@@ -11,10 +12,10 @@ import Servant (
   Capture,
   GenericMode (type (:-)),
   Get,
-  Post,
   HasServer (ServerT),
   JSON,
   NamedRoutes,
+  Post,
   QueryParam,
   ReqBody,
   type (:>),
@@ -22,7 +23,6 @@ import Servant (
 import Servant.HTML.Lucid (HTML)
 import Servant.Htmx (HXBoosted, HXRequest)
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
-import Data.Aeson qualified as AE
 
 
 type QPU a = QueryParam a UTCTime
@@ -56,6 +56,7 @@ server pid =
     , aiSearchPost = Log.aiSearchH pid
     , schemaGet = schemaH
     }
+
 
 schemaH :: ATAuthCtx (RespHeaders AE.Value)
 schemaH = addRespHeaders Schema.telemetrySchemaJson

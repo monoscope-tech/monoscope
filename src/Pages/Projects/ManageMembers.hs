@@ -218,7 +218,6 @@ memberRow prM = do
 --       "Submit"
 --       span_ [id_ "submitIndicator", class_ "loading loading-dots loading-sm htmx-indicator"] ""
 
-
 manageSubGetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders (Html ()))
 manageSubGetH pid = do
   (sess, project) <- Sessions.sessionAndProject pid

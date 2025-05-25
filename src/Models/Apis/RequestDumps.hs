@@ -30,6 +30,7 @@ import Data.Default
 import Data.Default.Instances ()
 import Data.Text qualified as T
 import Data.Time (CalendarDiffTime, UTCTime, ZonedTime)
+import Data.Time.Clock.POSIX (posixSecondsToUTCTime, utcTimeToPOSIXSeconds)
 import Data.Time.Format
 import Data.Time.Format.ISO8601 (iso8601Show)
 import Data.UUID qualified as UUID
@@ -44,7 +45,6 @@ import Database.PostgreSQL.Simple.ToField (ToField (toField))
 import Database.PostgreSQL.Simple.Types (Query (Query))
 import Database.PostgreSQL.Transact (DBT)
 import Database.PostgreSQL.Transact qualified as DBT
-import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds, posixSecondsToUTCTime)
 import Deriving.Aeson qualified as DAE
 import Effectful
 import Effectful.PostgreSQL.Transact.Effect (DB, dbtToEff)
@@ -371,22 +371,22 @@ data RequestDumpLogItem = RequestDumpLogItem
   deriving anyclass (ToRow, FromRow, NFData)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] RequestDumpLogItem
 
+
 incrementByOneMillisecond :: String -> String
-incrementByOneMillisecond dateStr = 
+incrementByOneMillisecond dateStr =
   case maybeTime of
     Nothing -> ""
-    Just utcTime -> 
-      let newTime =  posixSecondsToUTCTime $ utcTimeToPOSIXSeconds utcTime + 0.000001
+    Just utcTime ->
+      let newTime = posixSecondsToUTCTime $ utcTimeToPOSIXSeconds utcTime + 0.000001
        in formatTime defaultTimeLocale (iso8601DateFormat (Just "%H:%M:%S%QZ")) newTime
-  where 
+  where
     maybeTime = parseTimeM True defaultTimeLocale (iso8601DateFormat (Just "%H:%M:%S%QZ")) dateStr :: Maybe UTCTime
-
 
 
 requestDumpLogUrlPath :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Text -> Bool -> Text
 requestDumpLogUrlPath pid q cols cursor since fromV toV layout source recent = "/p/" <> pid.toText <> "/log_explorer?" <> T.intercalate "&" params
   where
-    recentTo =  cursor >>= (\x -> Just (toText . incrementByOneMillisecond . toString $ x) )
+    recentTo = cursor >>= (\x -> Just (toText . incrementByOneMillisecond . toString $ x))
     params =
       catMaybes
         [ Just ("json=true")
@@ -529,8 +529,6 @@ selectRequestDumpByProjectAndId pid createdAt rdId = queryOne q (createdAt, pid,
                     duration_ns, sdk_type,
                     parent_id, service_version, JSONB_ARRAY_LENGTH(errors) as errors_count, errors, tags, request_type
              FROM apis.request_dumps where (created_at=?)  and project_id=? and id=? LIMIT 1|]
-
-
 
 
 getLastSevenDaysTotalRequest :: Projects.ProjectId -> DBT IO Int
