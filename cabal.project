@@ -137,7 +137,7 @@ source-repository-package
   subdir:   propagators/b3
   
 constraints:
-  -- pg-entity +prod,
+  pg-entity +prod,
   streamly ^>=0.10.0
 
 

@@ -107,8 +107,8 @@ extra-deps:
     subdirs:
       - .
 
-# flags:
-#   pg-entity:
-#     prod: True
+flags:
+  pg-entity:
+    prod: True
 
 allow-newer: true
