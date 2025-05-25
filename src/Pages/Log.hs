@@ -367,7 +367,7 @@ logQueryBox_ pid currentRange source targetSpan query queryLibRecent queryLibSav
     ]
     do
       div_ [class_ "flex flex-col gap-2 items-stretch justify-center group/fltr"] do
-        div_ [class_ "p-1 flex-1 flex flex-col gap-2  bg-fillWeaker rounded-lg border border-strokeWeak group-has-[.ai-search:checked]/fltr:border-2 group-has-[.ai-search:checked]/fltr:border-iconBrand group-has-[.ai-search:checked]/fltr:drop-shadow-md"] do
+        div_ [class_ "p-1 flex-1 flex flex-col gap-2  bg-fillWeaker rounded-lg border border-strokeWeak group-has-[.ai-search:checked]/fltr:border-2 group-has-[.ai-search:checked]/fltr:border-iconBrand group-has-[.ai-search:checked]/fltr:shadow-xs shadow-strokeBrand-weak"] do
           input_
             [ class_ "hidden ai-search"
             , type_ "checkbox"
@@ -412,7 +412,7 @@ logQueryBox_ pid currentRange source targetSpan query queryLibRecent queryLibSav
                          call JSON.parse(event.detail.xhr.responseText) set result to it
                          if result.query
                            then 
-                             call #filterElement.handleAddQuery(result.query)
+                             call #filterElement.handleAddQuery(result.query, true)
                          end
                      end|]
               ]

@@ -730,15 +730,22 @@ export class QueryEditorComponent extends LitElement {
   }
 
   // Public API method for adding query fragments
-  public handleAddQuery(queryFragment: string): void {
+  public handleAddQuery(queryFragment: string, replace: boolean = false): void {
     if (!this.editor) return;
 
     const currentValue = this.editor.getValue().trim();
     let newValue: string;
-    if (currentValue) {
-      newValue = `${currentValue} and ${queryFragment}`;
-    } else {
+
+    if (replace) {
+      // Replace the entire editor content
       newValue = queryFragment;
+    } else {
+      // Add to existing content (original behavior)
+      if (currentValue) {
+        newValue = `${currentValue} and ${queryFragment}`;
+      } else {
+        newValue = queryFragment;
+      }
     }
 
     this.editor.setValue(newValue);
@@ -1401,17 +1408,6 @@ export class QueryEditorComponent extends LitElement {
       </div>
     `;
   }
-
-  // private handleAskClick = (e): void => {
-  //   e.preventDefault();
-  //   e.stopPropagation();
-  //   this.dispatchEvent(
-  //     new CustomEvent('ask-clicked', {
-  //       detail: { query: this.editor?.getValue() || '' },
-  //       bubbles: true,
-  //     })
-  //   );
-  // };
 }
 
 // Export monaco and schemaManager
