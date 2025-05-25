@@ -76,8 +76,9 @@
           ];
 
           // Set the query library data
-          editor.setQueryLibrary(queryLibraryData);
-
+          if(editor) {
+            editor.setQueryLibrary(queryLibraryData);
+          }
           // Set popular searches example with AQL syntax
           const popularSearches = [
             { query: 'stats p95(duration) by resource.service.name', description: 'P95 latency by service' },
@@ -88,7 +89,9 @@
           ];
 
           // Use the public method to set popular searches
-          editor.setPopularSearches(popularSearches);
+          if(editor) {
+            editor.setPopularSearches(popularSearches);
+          }
         }, 1000); // Small delay to ensure component is ready
       });
     </script>

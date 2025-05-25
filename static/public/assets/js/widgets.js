@@ -139,8 +139,8 @@ const chartWidget = widgetData => {
   ;['submit', 'add-query', 'update-query'].forEach(event => {
     const selector = event === 'submit' ? '#log_explorer_form' : '#filterElement'
     document.querySelector(selector)?.addEventListener(event, e => {
-      if (param().query) {
-        widgetData.query = param().query + ' | ' + widgetData.query
+      if (params().query) {
+        widgetData.query = params().query + ' | ' + widgetData.query
       }
       updateChartData(chart, opt, true, widgetData)
     })
@@ -149,6 +149,10 @@ const chartWidget = widgetData => {
     if (e.detail?.ast) {
       widgetData.queryAST = e.detail.ast
     }
+    if (window.logListTable) {
+      window.logListTable.refetchLogs()
+    }
+
     updateChartData(chart, opt, true, widgetData)
   })
 
