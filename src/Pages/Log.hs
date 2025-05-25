@@ -378,10 +378,10 @@ logQueryBox_ pid currentRange source targetSpan query queryLibRecent queryLibSav
             ]
           script_
             [text|
-            document.addEventListener('keydown', function(event) {
-              if (event.shiftKey && event.key === " ") {
-                event.preventDefault();
-                event.stopPropagation();
+            document.addEventListener('keydown', function(e) {
+              if (e.key === "?" && !e.ctrlKey && !e.metaKey && !e.altKey && (e.target.tagName !== 'INPUT') && (e.target.tagName !== 'TEXTAREA') && (e.target.contentEditable !== 'true')) {
+                e.preventDefault();
+                e.stopPropagation();
                 document.getElementById("ai-search-chkbox").checked = true;
                 document.getElementById("ai-search-input").focus()
                 document.getElementById("ai-search-input").value=""

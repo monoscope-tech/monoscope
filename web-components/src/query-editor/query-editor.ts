@@ -2,7 +2,7 @@ import { LitElement, html, css, TemplateResult } from 'lit';
 import { customElement, state, query } from 'lit/decorators.js';
 import 'monaco-editor/esm/vs/editor/contrib/suggest/browser/suggestController.js';
 import * as monaco from 'monaco-editor/esm/vs/editor/editor.api';
-import { debounce } from 'lodash';
+import { debounce, groupBy, pick } from 'lodash';
 
 // Make monaco available globally for tests
 globalThis.monaco = monaco;
@@ -12,11 +12,11 @@ type SuggestionKind = 'completion' | 'recentSearch' | 'savedView' | 'popularSear
 type QueryLibType = 'history' | 'saved';
 type FieldType = 'string' | 'number' | 'boolean' | 'duration' | 'array' | 'object';
 
-interface BaseItem {
+interface BaseSuggestion {
   readonly kind: SuggestionKind;
 }
 
-interface CompletionItem extends BaseItem {
+interface CompletionItem extends BaseSuggestion {
   readonly kind: 'completion';
   label: string;
   insertText: string;
@@ -25,18 +25,17 @@ interface CompletionItem extends BaseItem {
   score?: number;
   originalItem?: any;
   isContextSpecific?: boolean;
-  // For nested field handling
   parentPath?: string;
   partialField?: string;
 }
 
-interface RecentSearch extends BaseItem {
+interface RecentSearch extends BaseSuggestion {
   readonly kind: 'recentSearch';
   query: string;
   timestamp: string;
 }
 
-interface SavedView extends BaseItem {
+interface SavedView extends BaseSuggestion {
   readonly kind: 'savedView';
   name: string;
   query: string;
@@ -46,7 +45,7 @@ interface SavedView extends BaseItem {
   };
 }
 
-interface PopularSearch extends BaseItem {
+interface PopularSearch extends BaseSuggestion {
   readonly kind: 'popularSearch';
   query: string;
   description?: string;
@@ -65,7 +64,7 @@ interface QueryLibItem {
   byMe: boolean;
 }
 
-// Schema manager types
+// Schema types
 type FieldInfo = {
   type: FieldType;
   description?: string;
@@ -88,20 +87,11 @@ type SchemaData = {
 type SuggestionItem = CompletionItem | RecentSearch | SavedView | PopularSearch;
 
 interface SuggestController {
-  model?: {
-    onDidSuggest?: (callback: (event: any) => void) => void;
-    _onDidSuggest?: (callback: (event: any) => void) => void;
-    onDidTrigger?: (callback: (event: any) => void) => void;
-  };
-  _model?: {
-    onDidSuggest?: (callback: (event: any) => void) => void;
-    _onDidSuggest?: (callback: (event: any) => void) => void;
-    onDidTrigger?: (callback: (event: any) => void) => void;
-  };
+  model?: any;
+  _model?: any;
   widget?: any;
 }
 
-// Schema Manager: handles multiple schemas with default and dynamic resolution
 interface SchemaField {
   name: string;
   type: string;
@@ -109,152 +99,122 @@ interface SchemaField {
   fields?: Record<string, any>;
 }
 
-const schemaManager = (() => {
-  let schemas: string[] = ['spans', 'metrics'];
-  let defaultSchema = 'spans';
-  let schemaData: Record<string, SchemaData> = {}; // Store schema data per schema name
+// Schema Manager class for better encapsulation
+class SchemaManager {
+  private schemas: string[] = ['spans', 'metrics'];
+  private defaultSchema = 'spans';
+  private schemaData: Record<string, SchemaData> = {};
 
-  // Default nested resolver implementation that uses stored schema data (flattened approach)
-  let nestedResolver: (schema: string, prefix: string) => Promise<SchemaField[]> = async (schema: string, prefix: string) => {
-    const currentSchema = schemaData[schema] || schemaData[defaultSchema];
+  private nestedResolver: (schema: string, prefix: string) => Promise<SchemaField[]> = async (schema, prefix) => {
+    const currentSchema = this.schemaData[schema] || this.schemaData[this.defaultSchema];
     if (!currentSchema?.fields) return [];
 
+    const fields = Object.entries(currentSchema.fields);
+
     if (!prefix) {
-      // Top-level fields - return all fields that don't contain dots (direct fields only)
-      return Object.entries(currentSchema.fields)
+      // Top-level fields
+      return fields
         .filter(([name]) => !name.includes('.'))
         .map(([name, info]) => ({
           name,
           type: info.type || 'string',
           examples: info.examples || info.enum || [],
-          // Check if this field has nested fields by looking for dotted versions
-          fields: Object.keys(currentSchema.fields).some(key => key.startsWith(name + '.')) ? {} : undefined,
+          fields: fields.some(([k]) => k.startsWith(`${name}.`)) ? {} : undefined,
         }));
     }
 
-    // Handle nested fields - find all fields that start with prefix + "."
-    const prefixWithDot = prefix + '.';
-    const nestedFields = Object.entries(currentSchema.fields)
+    // Nested fields
+    const prefixWithDot = `${prefix}.`;
+    const nestedFields = fields
       .filter(([name]) => name.startsWith(prefixWithDot))
-      .map(([name, info]) => {
-        // Extract the immediate child field name
-        const remainder = name.substring(prefixWithDot.length);
-        const nextDotIndex = remainder.indexOf('.');
-        const childName = nextDotIndex === -1 ? remainder : remainder.substring(0, nextDotIndex);
-        
-        return {
-          childName,
-          fullName: name,
-          info,
-          hasNestedFields: nextDotIndex !== -1,
-        };
-      });
+      .reduce((acc, [name, info]) => {
+        const childName = name.substring(prefixWithDot.length).split('.')[0];
+        if (!acc.has(childName)) {
+          acc.set(childName, {
+            name: childName,
+            type: info.type || 'string',
+            examples: info.examples || info.enum || [],
+            fields: fields.some(([k]) => k.startsWith(`${prefixWithDot}${childName}.`)) ? {} : undefined,
+          });
+        }
+        return acc;
+      }, new Map<string, SchemaField>());
 
-    // Group by immediate child name and deduplicate
-    const childMap = new Map();
-    nestedFields.forEach(({ childName, fullName, info, hasNestedFields }) => {
-      if (!childMap.has(childName)) {
-        childMap.set(childName, {
-          name: childName,
-          type: info.type || 'string',
-          examples: info.examples || info.enum || [],
-          // Mark as having nested fields if there are deeper levels
-          fields: hasNestedFields || 
-                 nestedFields.some(f => f.fullName.startsWith(prefixWithDot + childName + '.')) ? {} : undefined,
-        });
-      }
-    });
-
-    return Array.from(childMap.values());
+    return Array.from(nestedFields.values());
   };
 
-  // Default value resolver implementation that uses stored schema data (flattened approach)
-  let valueResolver: (schema: string, field: string) => Promise<string[]> = async (schema: string, field: string) => {
-    const currentSchema = schemaData[schema] || schemaData[defaultSchema];
-    if (!currentSchema?.fields) return [];
-
-    // Direct field lookup in flattened schema
-    const fieldInfo = currentSchema.fields[field];
-    
-    // Check for enum values first
-    if (fieldInfo?.enum) {
-      return fieldInfo.enum.map((v) => String(v));
-    }
-
-    // Check for examples
-    if (fieldInfo?.examples) {
-      return fieldInfo.examples.map((v) => String(v));
-    }
-
-    return [];
+  private valueResolver: (schema: string, field: string) => Promise<string[]> = async (schema, field) => {
+    const fieldInfo = this.schemaData[schema]?.fields?.[field] || this.schemaData[this.defaultSchema]?.fields?.[field];
+    return (fieldInfo?.enum || fieldInfo?.examples || []).map(String);
   };
 
-  return {
-    setSchemas: (list: string[]) => {
-      schemas = list;
-    },
-    setDefaultSchema: (schema: string) => {
-      if (schemas.includes(schema)) defaultSchema = schema;
-    },
-    setSchemaData: (schema: string, data: SchemaData) => {
-      schemaData[schema] = data;
-    },
-    getSchemaData: (schema: string) => schemaData[schema],
-    setNestedResolver: (fn: typeof nestedResolver) => {
-      nestedResolver = fn;
-    },
-    setValueResolver: (fn: typeof valueResolver) => {
-      valueResolver = fn;
-    },
-    getSchemas: () => schemas,
-    getDefaultSchema: () => defaultSchema,
-    resolveNested: (schema: string, prefix: string) => nestedResolver(schema, prefix),
-    resolveValues: (schema: string, field: string) => valueResolver(schema, field),
+  setSchemas = (list: string[]) => {
+    this.schemas = list;
+  };
+  setDefaultSchema = (schema: string) => {
+    if (this.schemas.includes(schema)) this.defaultSchema = schema;
+  };
+  setSchemaData = (schema: string, data: SchemaData) => {
+    this.schemaData[schema] = data;
+  };
+  getSchemaData = (schema: string) => this.schemaData[schema];
+  setNestedResolver = (fn: typeof this.nestedResolver) => {
+    this.nestedResolver = fn;
+  };
+  setValueResolver = (fn: typeof this.valueResolver) => {
+    this.valueResolver = fn;
+  };
+  getSchemas = () => this.schemas;
+  getDefaultSchema = () => this.defaultSchema;
+  resolveNested = (schema: string, prefix: string) => this.nestedResolver(schema, prefix);
+  resolveValues = (schema: string, field: string) => this.valueResolver(schema, field);
 
-    // Compatibility with the old API
-    getRootFields: async (): Promise<{ name: string; info: FieldInfo }[]> => {
-      const fields = await nestedResolver(defaultSchema, '');
+  // Legacy compatibility methods
+  getRootFields = async (): Promise<{ name: string; info: FieldInfo }[]> => {
+    const fields = await this.nestedResolver(this.defaultSchema, '');
+    return fields.map((f) => ({
+      name: f.name,
+      info: {
+        type: f.type as FieldType,
+        examples: f.examples,
+        enum: f.examples,
+        fields: f.fields,
+      },
+    }));
+  };
+
+  resolveNestedFields = async (path: string[]): Promise<{ name: string; info: FieldInfo }[]> => {
+    const fields = await this.nestedResolver(this.defaultSchema, path.join('.'));
+    return fields.map((f) => ({
+      name: f.name,
+      info: {
+        type: f.type as FieldType,
+        examples: f.examples,
+        enum: f.examples,
+        fields: f.fields,
+      },
+    }));
+  };
+
+  setSchema = (cfg: Partial<Schema>) => {
+    console.log('Using legacy setSchema method, consider updating to new API');
+  };
+
+  setDynamicResolver = (fn: (path: string[]) => Promise<any[]>) => {
+    this.nestedResolver = async (schema: string, prefix: string) => {
+      const path = prefix ? prefix.split('.') : [];
+      const fields = await fn(path);
       return fields.map((f) => ({
         name: f.name,
-        info: {
-          type: f.type as FieldType,
-          examples: f.examples,
-          enum: f.examples, // Map examples to enum for backward compatibility
-          fields: f.fields,
-        },
+        type: f.info.type,
+        examples: f.info.examples,
+        fields: f.info.fields,
       }));
-    },
-    resolveNestedFields: async (path: string[]): Promise<{ name: string; info: FieldInfo }[]> => {
-      const fields = await nestedResolver(defaultSchema, path.join('.'));
-      return fields.map((f) => ({
-        name: f.name,
-        info: {
-          type: f.type as FieldType,
-          examples: f.examples,
-          enum: f.examples, // Map examples to enum for backward compatibility
-          fields: f.fields,
-        },
-      }));
-    },
-    setSchema: (cfg: Partial<Schema>) => {
-      // For backward compatibility
-      console.log('Using legacy setSchema method, consider updating to new API');
-    },
-    setDynamicResolver: (fn: (path: string[]) => Promise<any[]>) => {
-      // For backward compatibility
-      nestedResolver = async (schema: string, prefix: string) => {
-        const path = prefix ? prefix.split('.') : [];
-        const fields = await fn(path);
-        return fields.map((f) => ({
-          name: f.name,
-          type: f.info.type,
-          examples: f.info.examples,
-          fields: f.info.fields,
-        }));
-      };
-    },
+    };
   };
-})();
+}
+
+const schemaManager = new SchemaManager();
 
 // Monarch configuration for AQL
 export const conf = {
@@ -333,15 +293,15 @@ export const language = {
   },
 };
 
-// Define a custom theme with transparent background
+// Define transparent theme
 monaco.editor.defineTheme('transparent-theme', {
-  base: 'vs', // or 'vs-dark' for dark theme
+  base: 'vs',
   inherit: true,
   rules: [],
   colors: {
-    'editor.background': '#00000000', // Transparent background
-    'editor.lineHighlightBackground': '#00000000', // Transparent line highlight
-    'editorGutter.background': '#00000000', // Transparent gutter
+    'editor.background': '#00000000',
+    'editor.lineHighlightBackground': '#00000000',
+    'editorGutter.background': '#00000000',
   },
 });
 
@@ -350,12 +310,13 @@ monaco.languages.register({ id: 'aql' });
 monaco.languages.setMonarchTokensProvider('aql', language);
 monaco.languages.setLanguageConfiguration('aql', conf);
 
-// Completion provider using schemaManager
+// Completion provider
 console.log('Registering completion provider for aql language');
 monaco.languages.registerCompletionItemProvider('aql', {
   triggerCharacters: [' ', '|', '.', '[', ',', '"'],
   provideCompletionItems: async (model, position) => {
     console.log('Completion provider triggered at position:', position);
+
     const text = model.getValueInRange({
       startLineNumber: 1,
       startColumn: 1,
@@ -363,11 +324,10 @@ monaco.languages.registerCompletionItemProvider('aql', {
       endColumn: position.column,
     });
 
-    // Get the current line and cursor position for context analysis
     const currentLine = model.getLineContent(position.lineNumber);
-
     const segments = text.split(/\|/).map((s) => s.trim());
     const last = segments[segments.length - 1];
+
     console.log('segments:', segments, 'last:', JSON.stringify(last));
 
     const suggestions: monaco.languages.CompletionItem[] = [];
@@ -375,18 +335,17 @@ monaco.languages.registerCompletionItemProvider('aql', {
     const firstToken = text.trim().split(/\s+/)[0].toLowerCase();
     const currentSchema = tables.includes(firstToken) ? firstToken : schemaManager.getDefaultSchema();
 
-    // Helper to create range for completion items
-    const createRange = (startCol: number = position.column, endCol: number = position.column) => ({
+    const createRange = (startCol = position.column, endCol = position.column) => ({
       startLineNumber: position.lineNumber,
       startColumn: startCol,
       endLineNumber: position.lineNumber,
       endColumn: endCol,
     });
 
-    // PRIORITY: Check for nested fields after dot FIRST
     const lineText = currentLine.substring(0, position.column - 1);
     console.log('lineText for analysis:', JSON.stringify(lineText));
 
+    // Check for nested fields after dot
     const dotMatch =
       lineText.match(/([a-zA-Z_][a-zA-Z0-9_]*(?:\.[a-zA-Z_][a-zA-Z0-9_]*)*)\.$/) ||
       lineText.match(/([a-zA-Z_][a-zA-Z0-9_]*(?:\.[a-zA-Z_][a-zA-Z0-9_]*)*)\.[a-zA-Z0-9_]*$/);
@@ -400,20 +359,17 @@ monaco.languages.registerCompletionItemProvider('aql', {
         suggestions.push({
           label: n.name,
           kind: monaco.languages.CompletionItemKind.Field,
-          insertText: n.type === 'object' ? n.name + '.' : n.name + ' ',
+          insertText: n.type === 'object' ? `${n.name}.` : `${n.name} `,
           range: createRange(),
-          // Add additional properties for nested field context
           detail: n.type,
           documentation: n.examples?.join(', '),
         })
       );
 
-      // Always return for dot notation, even if empty
-      // This prevents fallback to other suggestion types
       return { suggestions };
     }
 
-    // PRIORITY: Check for operator pattern - show value suggestions (MOVED UP)
+    // Check for operator pattern - show value suggestions
     const operatorMatch = lineText.match(/([\w\.]+)\s*(==|!=|>=|<=|>|<|=~)\s*$/);
     if (operatorMatch) {
       const fieldName = operatorMatch[1];
@@ -422,29 +378,28 @@ monaco.languages.registerCompletionItemProvider('aql', {
         suggestions.push({
           label: String(v),
           kind: monaco.languages.CompletionItemKind.Value,
-          insertText: typeof v === 'string' ? `"${v}" ` : String(v) + ' ',
+          insertText: typeof v === 'string' ? `"${v}" ` : `${v} `,
           range: createRange(),
         })
       );
       return { suggestions };
     }
 
-    // PRIORITY: Check for complete field-operator-value pattern - suggest logical/pipeline operators
-    const afterQuotedString = /".*"\s*$/.test(lineText);
-    const afterNumber = /\d+\s*$/.test(lineText);
-    if (afterQuotedString || afterNumber) {
+    // Check for complete field-operator-value pattern
+    const afterValue = /".*"\s*$/.test(lineText) || /\d+\s*$/.test(lineText);
+    if (afterValue) {
       ['and', 'or', '|'].forEach((op) =>
         suggestions.push({
           label: op,
           kind: monaco.languages.CompletionItemKind.Operator,
-          insertText: op + ' ',
+          insertText: `${op} `,
           range: createRange(),
         })
       );
       return { suggestions };
     }
 
-    // Check for logical operators followed by space - suggest fields
+    // Check for logical operators followed by space
     const logicalOperatorMatch = lineText.match(/\b(and|or)\s+$/i);
     if (logicalOperatorMatch) {
       const fields = await schemaManager.resolveNested(currentSchema, '');
@@ -454,42 +409,40 @@ monaco.languages.registerCompletionItemProvider('aql', {
           kind: monaco.languages.CompletionItemKind.Field,
           detail: f.type,
           documentation: f.examples?.join(', '),
-          insertText: f.type === 'object' ? f.name + '.' : f.name + ' ',
+          insertText: f.type === 'object' ? `${f.name}.` : `${f.name} `,
           range: createRange(),
         })
       );
       return { suggestions };
     }
 
-    // Check for field name followed by space - suggest only operators
+    // Check for field name followed by space
     const fieldSpaceMatch = lineText.match(/([a-zA-Z_][a-zA-Z0-9_]*(?:\.[a-zA-Z_][a-zA-Z0-9_]*)*)\s+$/);
     if (fieldSpaceMatch && !logicalOperatorMatch) {
       ['==', '!=', '>', '<', '>=', '<=', '=~', 'and', 'or', 'not', 'exists'].forEach((op) =>
         suggestions.push({
           label: op,
           kind: monaco.languages.CompletionItemKind.Operator,
-          insertText: op + ' ',
+          insertText: `${op} `,
           range: createRange(),
         })
       );
       return { suggestions };
     }
 
-    // 1. Empty or start: suggest schemas + default fields
+    // Empty or start
     if (segments.length === 1 && (last === '' || !tables.some((t) => last.toLowerCase().startsWith(t)))) {
-      // Always suggest available schemas that match current input
       tables
         .filter((t) => last === '' || t.toLowerCase().startsWith(last.toLowerCase().trim()))
         .forEach((t) =>
           suggestions.push({
             label: t,
             kind: monaco.languages.CompletionItemKind.Module,
-            insertText: t + ' ',
+            insertText: `${t} `,
             range: createRange(),
           })
         );
 
-      // If no schema prefix is being typed, also suggest fields from the default schema
       if (last === '' || !tables.some((t) => last.toLowerCase().trim().startsWith(t))) {
         const defaultSchema = schemaManager.getDefaultSchema();
         const fields = await schemaManager.resolveNested(defaultSchema, '');
@@ -499,7 +452,7 @@ monaco.languages.registerCompletionItemProvider('aql', {
             kind: monaco.languages.CompletionItemKind.Field,
             detail: f.type,
             documentation: f.examples?.join(', '),
-            insertText: f.type === 'object' ? f.name + '.' : f.name + ' ',
+            insertText: f.type === 'object' ? `${f.name}.` : `${f.name} `,
             range: createRange(),
           })
         );
@@ -507,7 +460,7 @@ monaco.languages.registerCompletionItemProvider('aql', {
       return { suggestions };
     }
 
-    // 2. Schema name completion
+    // Schema name completion
     if (segments.length === 1 && tables.some((t) => t.startsWith(last.toLowerCase()))) {
       tables
         .filter((t) => t.startsWith(last.toLowerCase()))
@@ -515,20 +468,20 @@ monaco.languages.registerCompletionItemProvider('aql', {
           suggestions.push({
             label: t,
             kind: monaco.languages.CompletionItemKind.Module,
-            insertText: t + ' ',
+            insertText: `${t} `,
             range: createRange(),
           })
         );
       return { suggestions };
     }
 
-    // 3. After schema: LIMIT, stats, timechart, or filters
+    // After schema
     if (segments.length === 1 && tables.includes(last.toLowerCase())) {
       ['limit', 'stats', 'timechart'].forEach((k) =>
         suggestions.push({
           label: k,
           kind: monaco.languages.CompletionItemKind.Keyword,
-          insertText: k + ' ',
+          insertText: `${k} `,
           range: createRange(),
         })
       );
@@ -537,25 +490,24 @@ monaco.languages.registerCompletionItemProvider('aql', {
         suggestions.push({
           label: f.name,
           kind: monaco.languages.CompletionItemKind.Field,
-          insertText: f.type === 'object' ? f.name + '.' : f.name + ' ',
+          insertText: f.type === 'object' ? `${f.name}.` : `${f.name} `,
           range: createRange(),
         })
       );
       return { suggestions };
     }
 
-    // 5. Search segment (no stats/timechart)
+    // Search segment
     if (!/stats|timechart/i.test(last)) {
       ['==', '!=', '>', '<', '>=', '<=', '=~', 'and', 'or', 'not', 'exists'].forEach((op) =>
         suggestions.push({
           label: op,
           kind: monaco.languages.CompletionItemKind.Operator,
-          insertText: op + ' ',
+          insertText: `${op} `,
           range: createRange(),
         })
       );
 
-      // For field suggestions, use the determined current schema or default
       const fields = await schemaManager.resolveNested(currentSchema, '');
       fields.forEach((f) =>
         suggestions.push({
@@ -563,30 +515,32 @@ monaco.languages.registerCompletionItemProvider('aql', {
           kind: monaco.languages.CompletionItemKind.Field,
           detail: f.type,
           documentation: f.examples?.join(', '),
-          insertText: f.type === 'object' ? f.name + '.' : f.name + ' ',
+          insertText: f.type === 'object' ? `${f.name}.` : `${f.name} `,
           range: createRange(),
         })
       );
       return { suggestions };
     }
 
-    // 6. Stats/timechart segment
+    // Stats/timechart segment
     if (/stats\s|timechart\s/i.test(last)) {
-      ['count', 'sum', 'avg', 'min', 'max', 'median', 'stdev', 'range', 'p50', 'p75', 'p90', 'p95', 'p99', 'p100'].forEach((fn) =>
+      const statsFunctions = ['count', 'sum', 'avg', 'min', 'max', 'median', 'stdev', 'range', 'p50', 'p75', 'p90', 'p95', 'p99', 'p100'];
+      statsFunctions.forEach((fn) =>
         suggestions.push({
           label: fn,
           kind: monaco.languages.CompletionItemKind.Function,
-          insertText: fn + '(',
+          insertText: `${fn}(`,
           range: createRange(),
         })
       );
+
       if (/\bby\s*$/i.test(last)) {
         const fields = await schemaManager.resolveNested(currentSchema, '');
         fields.forEach((f) =>
           suggestions.push({
             label: f.name,
             kind: monaco.languages.CompletionItemKind.Field,
-            insertText: f.type === 'object' ? f.name + '.' : f.name + ' ',
+            insertText: f.type === 'object' ? `${f.name}.` : `${f.name} `,
             range: createRange(),
           })
         );
@@ -598,6 +552,7 @@ monaco.languages.registerCompletionItemProvider('aql', {
           range: createRange(),
         });
       }
+
       if (/timechart/i.test(last)) {
         ['[5m]', '[1h]'].forEach((iv) =>
           suggestions.push({
@@ -611,22 +566,17 @@ monaco.languages.registerCompletionItemProvider('aql', {
       return { suggestions };
     }
 
-    // Removed duplicate dot notation check - now handled at the top
-
     return { suggestions };
   },
 });
 
 @customElement('query-editor')
 export class QueryEditorComponent extends LitElement {
-  // Skip shadow DOM
   protected createRenderRoot = () => this;
 
-  // DOM refs
   @query('#editor-container') private _editorContainer!: HTMLElement;
   @query('.placeholder-overlay') private _placeholderElement!: HTMLElement;
 
-  // Component state
   @state() private completionItems: CompletionItem[] = [];
   @state() public recentSearches: RecentSearch[] = [];
   @state() public savedViews: SavedView[] = [];
@@ -636,19 +586,15 @@ export class QueryEditorComponent extends LitElement {
   @state() private selectedIndex = -1;
   @state() private defaultValue = '';
 
-  // Internal state
   private editor: monaco.editor.IStandaloneCodeEditor | null = null;
   private suggestionListeners: (() => void)[] = [];
   private isProgrammaticUpdate = false;
   private updateHandlers: Array<monaco.IDisposable> = [];
 
-  // Icons for different suggestion types: document, function, operator, variable, keyword, etc.
   private readonly KIND_ICONS = ['📄', '🔢', '🔍', '#', '📊', '📋', '#', '🔢', '✅', '❓'];
 
-  // Method to set popular searches externally
   public setPopularSearches(items: { query: string; description?: string }[]): void {
     if (!items?.length) return;
-
     this.popularSearches = items.map((item) => ({
       kind: 'popularSearch' as const,
       query: item.query,
@@ -656,10 +602,8 @@ export class QueryEditorComponent extends LitElement {
     }));
   }
 
-  // Simple debounced handlers
   private debouncedTriggerSuggestions = debounce(() => this.editor?.trigger('auto', 'editor.action.triggerSuggest', {}), 50);
   private debouncedUpdateQuery = debounce((queryValue: string) => {
-    // Emit update-query event
     this.dispatchEvent(
       new CustomEvent('update-query', {
         detail: { value: queryValue },
@@ -667,7 +611,6 @@ export class QueryEditorComponent extends LitElement {
       })
     );
 
-    // Update URL query parameter
     const url = new URL(window.location.href);
     if (queryValue.trim()) {
       url.searchParams.set('query', queryValue);
@@ -677,23 +620,17 @@ export class QueryEditorComponent extends LitElement {
     window.history.replaceState({}, '', url.toString());
   }, 300);
 
-  // Helper to get all available suggestions
   private get serviceSuggestions(): SuggestionItem[] {
-    // Combine all suggestion types in the order: Monaco completions, saved, recent, popular
     return [...this.completionItems, ...this.savedViews, ...this.recentSearches, ...this.popularSearches];
   }
 
-  // Lifecycle methods
   async firstUpdated(): Promise<void> {
     if (!this._editorContainer) return;
 
-    // Get default value from attributes
     this.defaultValue = this.getAttribute('default-value') || '';
-
     this.createMonacoEditor();
     this.setupSuggestions();
 
-    // Event listeners
     this.addEventListener('keydown', (e: KeyboardEvent) => {
       if (e.key === 'Escape' && this.showSuggestions) {
         this.showSuggestions = false;
@@ -701,6 +638,17 @@ export class QueryEditorComponent extends LitElement {
     });
 
     window.addEventListener('resize', () => this.editor?.layout());
+
+    // Focus editor when "/" is pressed
+    document.addEventListener('keydown', (e: KeyboardEvent) => {
+      if (e.key === '/' && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        const target = e.target as HTMLElement;
+        if (target.tagName !== 'INPUT' && target.tagName !== 'TEXTAREA' && target.contentEditable !== 'true') {
+          e.preventDefault();
+          this.editor?.focus();
+        }
+      }
+    });
   }
 
   disconnectedCallback(): void {
@@ -712,7 +660,6 @@ export class QueryEditorComponent extends LitElement {
     super.disconnectedCallback();
   }
 
-  // Public methods
   public setSchema(schema: Partial<Schema>): void {
     schemaManager.setSchema(schema);
   }
@@ -725,46 +672,37 @@ export class QueryEditorComponent extends LitElement {
     if (!items?.length) return;
 
     const stripPrefix = (text: string) => text;
+    const grouped = groupBy(items, 'queryType');
 
-    this.recentSearches = items
-      .filter((item) => item.queryType === 'history')
-      .map((item) => ({
-        kind: 'recentSearch' as const,
-        query: stripPrefix(item.queryText),
-        timestamp: this.formatRelativeTime(new Date(item.updatedAt)),
-      }));
+    this.recentSearches = (grouped.history || []).map((item) => ({
+      kind: 'recentSearch' as const,
+      query: stripPrefix(item.queryText),
+      timestamp: this.formatRelativeTime(new Date(item.updatedAt)),
+    }));
 
-    this.savedViews = items
-      .filter((item) => item.queryType === 'saved')
-      .map((item) => ({
-        kind: 'savedView' as const,
-        name: item.title || `Query ${item.id.substring(0, 8)}`,
-        query: stripPrefix(item.queryText),
-        owner: { name: item.byMe ? 'You' : 'Other', icon: item.byMe ? '👤' : '👥' },
-      }));
+    this.savedViews = (grouped.saved || []).map((item) => ({
+      kind: 'savedView' as const,
+      name: item.title || `Query ${item.id.substring(0, 8)}`,
+      query: stripPrefix(item.queryText),
+      owner: { name: item.byMe ? 'You' : 'Other', icon: item.byMe ? '👤' : '👥' },
+    }));
   }
 
-  // New handleAddQuery that prevents all focus
   public handleAddQuery(queryFragment: string, replace: boolean = false): void {
     if (!this.editor) return;
 
-    // Capture current focus state
     const previouslyFocusedElement = document.activeElement as HTMLElement;
     const hadFocus = this.editor.hasTextFocus();
 
-    // Prevent all updates and focus
     this.isProgrammaticUpdate = true;
 
-    // Store original Monaco methods
     const originalFocus = this.editor.focus;
     const originalTrigger = this.editor.trigger;
     const editorDomNode = this.editor.getDomNode();
 
-    // Override focus-related methods
     this.editor.focus = () => {};
     this.editor.trigger = () => {};
 
-    // Prevent DOM focus events
     const preventFocus = (e: FocusEvent) => {
       if (e.target === editorDomNode || editorDomNode?.contains(e.target as Node)) {
         e.preventDefault();
@@ -773,28 +711,15 @@ export class QueryEditorComponent extends LitElement {
       }
     };
 
-    // Add capture phase listeners to intercept focus before Monaco handles it
     document.addEventListener('focus', preventFocus, true);
     document.addEventListener('focusin', preventFocus, true);
 
     try {
       const currentValue = this.editor.getValue().trim();
-      let newValue: string;
+      const newValue = replace ? queryFragment : currentValue ? `${currentValue} and ${queryFragment}` : queryFragment;
 
-      if (replace) {
-        newValue = queryFragment;
-      } else {
-        if (currentValue) {
-          newValue = `${currentValue} and ${queryFragment}`;
-        } else {
-          newValue = queryFragment;
-        }
-      }
-
-      // Update the editor value
       this.editor.setValue(newValue);
 
-      // Move cursor without focusing
       const model = this.editor.getModel();
       if (model) {
         const lastLine = model.getLineCount();
@@ -802,11 +727,9 @@ export class QueryEditorComponent extends LitElement {
         this.editor.setPosition({ lineNumber: lastLine, column: lastColumn });
       }
 
-      // Update state
       this.showSuggestions = false;
       this.selectedIndex = -1;
 
-      // Manually trigger the update query event
       const url = new URL(window.location.href);
       if (newValue.trim()) {
         url.searchParams.set('query', newValue);
@@ -822,20 +745,15 @@ export class QueryEditorComponent extends LitElement {
         })
       );
     } finally {
-      // Clean up in next tick
       setTimeout(() => {
-        // Restore Monaco methods
         this.editor.focus = originalFocus.bind(this.editor);
         this.editor.trigger = originalTrigger.bind(this.editor);
 
-        // Remove focus prevention listeners
         document.removeEventListener('focus', preventFocus, true);
         document.removeEventListener('focusin', preventFocus, true);
 
-        // Reset programmatic flag
         this.isProgrammaticUpdate = false;
 
-        // Restore focus to previous element if needed
         if (
           !hadFocus &&
           previouslyFocusedElement &&
@@ -844,7 +762,6 @@ export class QueryEditorComponent extends LitElement {
         ) {
           previouslyFocusedElement.focus();
 
-          // Double-check focus didn't get stolen
           setTimeout(() => {
             if (document.activeElement === editorDomNode || editorDomNode?.contains(document.activeElement)) {
               previouslyFocusedElement.focus();
@@ -855,14 +772,21 @@ export class QueryEditorComponent extends LitElement {
     }
   }
 
-  // Private methods
   private formatRelativeTime(date: Date): string {
     const diffSec = Math.floor((Date.now() - date.getTime()) / 1000);
+    const intervals = [
+      { threshold: 60, unit: 'just now' },
+      { threshold: 3600, unit: 'minutes ago', divisor: 60 },
+      { threshold: 86400, unit: 'hours ago', divisor: 3600 },
+      { threshold: Infinity, unit: 'days ago', divisor: 86400 },
+    ];
 
-    if (diffSec < 60) return 'just now';
-    if (diffSec < 3600) return `${Math.floor(diffSec / 60)} minutes ago`;
-    if (diffSec < 86400) return `${Math.floor(diffSec / 3600)} hours ago`;
-    return `${Math.floor(diffSec / 86400)} days ago`;
+    for (const { threshold, unit, divisor } of intervals) {
+      if (diffSec < threshold) {
+        return divisor ? `${Math.floor(diffSec / divisor)} ${unit}` : unit;
+      }
+    }
+    return '';
   }
 
   private createMonacoEditor(): void {
@@ -890,7 +814,7 @@ export class QueryEditorComponent extends LitElement {
         showIcons: false,
         snippetsPreventQuickSuggestions: false,
         filterGraceful: true,
-        showWords: false, // Disable word-based completion
+        showWords: false,
       } as any,
       wordWrap: 'on',
       wrappingStrategy: 'advanced',
@@ -898,7 +822,6 @@ export class QueryEditorComponent extends LitElement {
       glyphMargin: false,
       folding: false,
       padding: { top: 8, bottom: 4 },
-      // Remove borders and make background transparent
       renderLineHighlight: 'none',
       overviewRulerBorder: false,
       overviewRulerLanes: 0,
@@ -911,20 +834,15 @@ export class QueryEditorComponent extends LitElement {
 
     this.setupEditorEvents();
     this.adjustEditorHeight();
-
-    // Initial placeholder update
     setTimeout(() => this.updatePlaceholder(), 100);
   }
 
-  // Override the setupEditorEvents method
   private setupEditorEvents(): void {
     if (!this.editor) return;
 
-    // Clear any existing handlers
     this.updateHandlers.forEach((handler) => handler.dispose());
     this.updateHandlers = [];
 
-    // Add Cmd+Enter handler for new lines
     this.editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter, () => {
       const position = this.editor?.getPosition();
       if (position) {
@@ -942,75 +860,64 @@ export class QueryEditorComponent extends LitElement {
       }
     });
 
-    // Track suggestion panel clicks
     let clickedOnSuggestion = false;
     document.addEventListener('mousedown', (e: MouseEvent) => {
       clickedOnSuggestion = !!this.querySelector('.suggestions-dropdown')?.contains(e.target as Node);
     });
 
-    // Set up focus and blur events with programmatic update check
-    const focusHandler = this.editor.onDidFocusEditorText(() => {
-      if (!this.isProgrammaticUpdate) {
-        this.showSuggestions = true;
-        this.updatePlaceholder();
-        setTimeout(() => {
-          if (!this.isProgrammaticUpdate) {
-            this.editor?.trigger('focus', 'editor.action.triggerSuggest', {});
-          }
-        }, 10);
-      }
-    });
-    this.updateHandlers.push(focusHandler);
-
-    const mouseHandler = this.editor.onMouseDown(() => {
-      if (!this.isProgrammaticUpdate) {
-        setTimeout(() => {
-          if (!this.isProgrammaticUpdate && this.editor?.hasTextFocus()) {
-            this.showSuggestions = true;
-          }
-        }, 10);
-      }
-    });
-    this.updateHandlers.push(mouseHandler);
-
-    const blurHandler = this.editor.onDidBlurEditorText(() => {
-      setTimeout(() => {
-        if (!this.editor?.hasTextFocus() && !clickedOnSuggestion) {
-          this.showSuggestions = false;
+    const handlers = [
+      this.editor.onDidFocusEditorText(() => {
+        if (!this.isProgrammaticUpdate) {
+          this.showSuggestions = true;
+          this.updatePlaceholder();
+          setTimeout(() => {
+            if (!this.isProgrammaticUpdate) {
+              this.editor?.trigger('focus', 'editor.action.triggerSuggest', {});
+            }
+          }, 10);
         }
-        this.updatePlaceholder();
-      }, 300);
-    });
-    this.updateHandlers.push(blurHandler);
+      }),
 
-    const keyHandler = this.editor.onKeyDown(this.handleKeyboardNavigation);
-    this.updateHandlers.push(keyHandler);
+      this.editor.onMouseDown(() => {
+        if (!this.isProgrammaticUpdate) {
+          setTimeout(() => {
+            if (!this.isProgrammaticUpdate && this.editor?.hasTextFocus()) {
+              this.showSuggestions = true;
+            }
+          }, 10);
+        }
+      }),
 
-    // Update suggestions when typing with programmatic update check
-    const contentHandler = this.editor.onDidChangeModelContent(() => {
-      if (!this.isProgrammaticUpdate) {
-        const model = this.editor?.getModel();
-        const position = this.editor?.getPosition();
-        if (!model || !position) return;
+      this.editor.onDidBlurEditorText(() => {
+        setTimeout(() => {
+          if (!this.editor?.hasTextFocus() && !clickedOnSuggestion) {
+            this.showSuggestions = false;
+          }
+          this.updatePlaceholder();
+        }, 300);
+      }),
 
-        this.currentQuery = model.getLineContent(position.lineNumber);
-        this.showSuggestions = true;
-        this.updatePlaceholder();
+      this.editor.onKeyDown(this.handleKeyboardNavigation),
 
-        // Debounced update of query event and URL
-        this.debouncedUpdateQuery(model.getValue());
+      this.editor.onDidChangeModelContent(() => {
+        if (!this.isProgrammaticUpdate) {
+          const model = this.editor?.getModel();
+          const position = this.editor?.getPosition();
+          if (!model || !position) return;
 
-        // Trigger suggestions on every input change
-        this.debouncedTriggerSuggestions();
-      }
-    });
-    this.updateHandlers.push(contentHandler);
+          this.currentQuery = model.getLineContent(position.lineNumber);
+          this.showSuggestions = true;
+          this.updatePlaceholder();
 
-    // Auto-adjust editor height
-    const sizeHandler = this.editor.onDidContentSizeChange((e) => {
-      this.editor?.layout();
-    });
-    this.updateHandlers.push(sizeHandler);
+          this.debouncedUpdateQuery(model.getValue());
+          this.debouncedTriggerSuggestions();
+        }
+      }),
+
+      this.editor.onDidContentSizeChange(() => this.editor?.layout()),
+    ];
+
+    this.updateHandlers.push(...handlers);
   }
 
   private handleKeyboardNavigation = (e: monaco.IKeyboardEvent): void => {
@@ -1019,50 +926,60 @@ export class QueryEditorComponent extends LitElement {
     const totalItems = this.getTotalVisibleSuggestions();
     if (totalItems === 0) return;
 
-    // Prevent default and stop propagation for navigation keys
     const preventAndStop = () => {
       e.preventDefault();
       e.stopPropagation();
     };
 
     const key = e.browserEvent.key;
-
-    // Handle navigation
-    if (key === 'ArrowDown' || (key === 'Tab' && !e.browserEvent.shiftKey)) {
-      preventAndStop();
-      this.selectedIndex = (this.selectedIndex + 1) % totalItems;
-      this.scrollSelectedIntoView();
-    } else if (key === 'ArrowUp' || (key === 'Tab' && e.browserEvent.shiftKey)) {
-      preventAndStop();
-      this.selectedIndex = this.selectedIndex <= 0 ? totalItems - 1 : this.selectedIndex - 1;
-      this.scrollSelectedIntoView();
-    } else if (key === 'Enter') {
-      // Only select suggestion if we have actively selected one (selectedIndex >= 0)
-      if (this.selectedIndex >= 0) {
+    const keyActions: Record<string, () => void> = {
+      ArrowDown: () => {
         preventAndStop();
-        const item = this.getItemAtIndex(this.selectedIndex);
-        if (item) this.insertCompletion(item);
-      } else {
-        // No suggestion selected - close dropdown and trigger update-query event
+        this.selectedIndex = (this.selectedIndex + 1) % totalItems;
+        this.scrollSelectedIntoView();
+      },
+      ArrowUp: () => {
+        preventAndStop();
+        this.selectedIndex = this.selectedIndex <= 0 ? totalItems - 1 : this.selectedIndex - 1;
+        this.scrollSelectedIntoView();
+      },
+      Tab: () => {
+        if (!e.browserEvent.shiftKey) {
+          preventAndStop();
+          this.selectedIndex = (this.selectedIndex + 1) % totalItems;
+          this.scrollSelectedIntoView();
+        } else {
+          preventAndStop();
+          this.selectedIndex = this.selectedIndex <= 0 ? totalItems - 1 : this.selectedIndex - 1;
+          this.scrollSelectedIntoView();
+        }
+      },
+      Enter: () => {
+        if (this.selectedIndex >= 0) {
+          preventAndStop();
+          const item = this.getItemAtIndex(this.selectedIndex);
+          if (item) this.insertCompletion(item);
+        } else {
+          preventAndStop();
+          this.showSuggestions = false;
+          this.selectedIndex = -1;
+          const model = this.editor?.getModel();
+          if (model) {
+            this.debouncedUpdateQuery(model.getValue());
+          }
+        }
+      },
+      Escape: () => {
         preventAndStop();
         this.showSuggestions = false;
         this.selectedIndex = -1;
+      },
+    };
 
-        // Use existing debounced function to trigger update-query and URL update
-        const model = this.editor?.getModel();
-        if (model) {
-          this.debouncedUpdateQuery(model.getValue());
-        }
-      }
-    } else if (key === 'Escape') {
-      preventAndStop();
-      this.showSuggestions = false;
-      this.selectedIndex = -1;
-    }
+    keyActions[key]?.();
   };
 
   private scrollSelectedIntoView(): void {
-    // Use requestAnimationFrame to ensure DOM has updated
     requestAnimationFrame(() => {
       const item = this.querySelector(`[data-index="${this.selectedIndex}"]`) as HTMLElement;
       item?.scrollIntoView({ block: 'nearest' });
@@ -1071,24 +988,19 @@ export class QueryEditorComponent extends LitElement {
 
   private adjustEditorHeight(): void {
     if (!this.editor) return;
-    // const initialHeight = this.editor.getContentHeight();
-    // this._editorContainer.style.height = `${initialHeight}px`;
     this.editor.layout();
   }
 
   private updatePlaceholder(): void {
     if (!this._placeholderElement || !this.editor) return;
-
     const model = this.editor.getModel();
     const isEmpty = !model || model.getValue().trim() === '';
     this._placeholderElement.style.display = isEmpty ? 'block' : 'none';
   }
 
   private updateSuggestions(aqlItems: any[] = [], isContextSpecific: boolean = false): void {
-    // Debug: log the first few items to understand structure
     console.log('updateSuggestions received:', aqlItems.slice(0, 3));
 
-    // Get current context to determine if we're in a nested field context
     const position = this.editor?.getPosition();
     const model = this.editor?.getModel();
     let parentPath = '';
@@ -1103,20 +1015,16 @@ export class QueryEditorComponent extends LitElement {
       }
     }
 
-    // Process items (limit to 20)
-    this.completionItems = aqlItems.slice(0, 20).map((item, index) => {
-      // Monaco completion items might have nested structure under 'completion' property
+    this.completionItems = aqlItems.slice(0, 20).map((item) => {
       const completionData = item.completion || item;
-
       return {
-        kind: 'completion',
+        kind: 'completion' as const,
         label: completionData.label || completionData.insertText || 'Unknown',
         insertText: completionData.insertText || completionData.label || '',
         kindCategory: completionData.kind || monaco.languages.CompletionItemKind.Field,
         detail: completionData.detail || completionData.documentation || '',
         score: item.score || 2000,
         isContextSpecific: isContextSpecific,
-        // Add parent path if we're in a nested field context
         parentPath: parentPath || undefined,
       };
     });
@@ -1126,66 +1034,41 @@ export class QueryEditorComponent extends LitElement {
 
   private getTotalVisibleSuggestions(): number {
     const matches = this.getMatches();
-    // Total across all categories
     return this.completionItems.length + matches.recent.length + matches.saved.length + matches.popular.length;
   }
 
   private getItemAtIndex(index: number): SuggestionItem | null {
     const matches = this.getMatches();
-
-    // Get all items from all categories
-    const groups = {
-      completion: this.completionItems,
-      recent: matches.recent,
-      saved: matches.saved,
-      popular: matches.popular,
-    };
-
-    // Convert to a flat array of valid groups
-    const allItems = Object.values(groups)
-      .filter((items) => items && items.length > 0)
-      .flat();
-
+    const allItems = [...this.completionItems, ...matches.recent, ...matches.saved, ...matches.popular];
     return allItems[index] || null;
   }
 
   private getMatches() {
-    // Return cached results if query hasn't changed
     const query = this.currentQuery?.toLowerCase() || '';
-    const lastPart = query.split('|').pop()?.trim() || '';
-    const searchTerm = lastPart;
+    const searchTerm = query.split('|').pop()?.trim() || '';
 
-    // Filter all suggestion types with the same logic
+    const filterAndSlice = (items: any[], prop: string = 'query') =>
+      searchTerm
+        ? items
+            .filter(
+              (item) =>
+                (prop === 'query' ? item.query : item.name).toLowerCase().includes(searchTerm) ||
+                item.query.toLowerCase().includes(searchTerm)
+            )
+            .slice(0, 5)
+        : items.slice(0, 5);
+
     return {
-      saved:
-        this.savedViews.length > 0
-          ? searchTerm
-            ? this.savedViews
-                .filter((view) => view.name.toLowerCase().includes(searchTerm) || view.query.toLowerCase().includes(searchTerm))
-                .slice(0, 5) // Show only 5 most relevant saved views
-            : this.savedViews.slice(0, 5)
-          : [],
-      recent:
-        this.recentSearches.length > 0
-          ? searchTerm
-            ? this.recentSearches.filter((item) => item.query.toLowerCase().includes(searchTerm)).slice(0, 5) // Show only 5 most relevant recent searches
-            : this.recentSearches.slice(0, 5) // Show only 5 most recent searches
-          : [],
-      popular:
-        this.popularSearches.length > 0
-          ? searchTerm
-            ? this.popularSearches.filter((item) => item.query.toLowerCase().includes(searchTerm)).slice(0, 5) // Show only 5 most relevant popular searches
-            : this.popularSearches.slice(0, 5) // Show only 5 most popular searches
-          : [],
+      saved: filterAndSlice(this.savedViews, 'name'),
+      recent: filterAndSlice(this.recentSearches),
+      popular: filterAndSlice(this.popularSearches),
     };
   }
 
   private handleSuggestionClick(item: SuggestionItem, e: MouseEvent): void {
     e.preventDefault();
     e.stopPropagation();
-
     console.log(item);
-
     this.insertCompletion(item);
     this.editor?.focus();
   }
@@ -1200,13 +1083,8 @@ export class QueryEditorComponent extends LitElement {
     let textToInsert = '';
     let replaceRange: monaco.IRange;
 
-    // Determine text and range based on item type
     if (item.kind === 'recentSearch' || item.kind === 'savedView' || item.kind === 'popularSearch') {
-      // Replace entire line with query, but keep the prefix
-      const currentLine = model.getLineContent(position.lineNumber);
       textToInsert = item.query;
-
-      // Replace the entire line
       replaceRange = {
         startLineNumber: position.lineNumber,
         startColumn: 1,
@@ -1214,26 +1092,21 @@ export class QueryEditorComponent extends LitElement {
         endColumn: model.getLineMaxColumn(position.lineNumber),
       };
     } else {
-      // It's a CompletionItem
       textToInsert = item.insertText || item.label;
 
-      // Get current token for replacement
       const currentLine = model.getLineContent(position.lineNumber);
       const lineText = currentLine.substring(0, position.column - 1);
       const wordEndPos = position.column - 1;
       let wordStartPos = wordEndPos;
 
-      // Check if we're in dot notation context (e.g., "attributes.client" or "attributes.")
       const dotMatch =
         lineText.match(/([a-zA-Z_][a-zA-Z0-9_]*(?:\.[a-zA-Z_][a-zA-Z0-9_]*)*)\.$/) ||
         lineText.match(/([a-zA-Z_][a-zA-Z0-9_]*(?:\.[a-zA-Z_][a-zA-Z0-9_]*)*)\.[a-zA-Z0-9_]*$/);
 
       if (dotMatch) {
-        // For dot notation, only replace after the last dot
         const lastDotIndex = lineText.lastIndexOf('.');
         wordStartPos = lastDotIndex + 1;
       } else {
-        // Normal token replacement - find start of current token by going backwards
         while (wordStartPos > 0) {
           const c = currentLine.charAt(wordStartPos - 1);
           if (/\s/.test(c) || /[^\w\d_=<>!&|+\-*/%^.:]/.test(c)) break;
@@ -1249,24 +1122,17 @@ export class QueryEditorComponent extends LitElement {
       };
     }
 
-    // Handle function suggestions that end with '()'
     const shouldMoveCursor = textToInsert.endsWith('(') && !textToInsert.includes(' ');
-    if (shouldMoveCursor) {
-      textToInsert = textToInsert;
-    }
 
-    // Execute the edit
     try {
       this.editor.executeEdits('completion', [{ range: replaceRange, text: textToInsert }]);
     } catch (e) {
       console.error('Error executing edit:', e);
-      // Fallback direct model edit
       model.pushEditOperations([], [{ range: replaceRange, text: textToInsert }], () => null);
     }
 
     this.selectedIndex = -1;
 
-    // Handle cursor positioning
     if (shouldMoveCursor) {
       const newPosition = {
         lineNumber: replaceRange.startLineNumber,
@@ -1281,15 +1147,9 @@ export class QueryEditorComponent extends LitElement {
       this.editor.focus();
     }
 
-    // Special handling for field completions that end with a dot
-    if (textToInsert.endsWith('.')) {
-      // Trigger suggestions immediately for dot notation
-      setTimeout(() => this.editor?.trigger('keyboard', 'editor.action.triggerSuggest', {}), 0);
-    } else {
-      // Standard delay for other completions
-      console.log('Triggering suggestions after insertion of:', textToInsert);
-      setTimeout(() => this.editor?.trigger('keyboard', 'editor.action.triggerSuggest', {}), 100);
-    }
+    const triggerDelay = textToInsert.endsWith('.') ? 0 : 100;
+    console.log('Triggering suggestions after insertion of:', textToInsert);
+    setTimeout(() => this.editor?.trigger('keyboard', 'editor.action.triggerSuggest', {}), triggerDelay);
   }
 
   private setupSuggestions(): void {
@@ -1318,7 +1178,6 @@ export class QueryEditorComponent extends LitElement {
   }
 
   private getCompletionIcon(kind: number): string {
-    // Map to appropriate icon - fix for � display issue
     const idx = Math.min(Math.max(0, kind % 10), this.KIND_ICONS.length - 1);
     return this.KIND_ICONS[idx];
   }
@@ -1328,50 +1187,47 @@ export class QueryEditorComponent extends LitElement {
     primaryText: string | TemplateResult;
     secondaryText: string | TemplateResult | undefined;
   } {
-    switch (item.kind) {
-      case 'recentSearch':
-        return {
-          icon: '⏱️',
-          primaryText: item.query,
-          secondaryText: item.timestamp,
-        };
-
-      case 'savedView':
-        return {
-          icon: '⭐',
-          primaryText: item.name,
-          secondaryText: html`
-            <span class="truncate text-gray-500 mr-2" title="${item.query}">${item.query}</span>
-            ${item.owner
-              ? html`<span class="flex-shrink-0 rounded-full w-6 h-6 flex items-center justify-center text-xs"
-                  >${item.owner.icon || ''}</span
-                >`
-              : ''}
-          `,
-        };
-
-      case 'popularSearch':
-        return {
-          icon: '🔍',
-          primaryText: item.query,
-          secondaryText: item.description,
-        };
-
-      case 'completion':
-        // Check if this is a nested field with parent path
-        if (item.parentPath) {
+    const uiData: Record<SuggestionKind, () => ReturnType<typeof this.getSuggestionUIData>> = {
+      recentSearch: () => ({
+        icon: '⏱️',
+        primaryText: item.query,
+        secondaryText: (item as RecentSearch).timestamp,
+      }),
+      savedView: () => ({
+        icon: '⭐',
+        primaryText: (item as SavedView).name,
+        secondaryText: html`
+          <span class="truncate text-gray-500 mr-2" title="${item.query}">${item.query}</span>
+          ${(item as SavedView).owner
+            ? html`<span class="flex-shrink-0 rounded-full w-6 h-6 flex items-center justify-center text-xs"
+                >${(item as SavedView).owner!.icon || ''}</span
+              >`
+            : ''}
+        `,
+      }),
+      popularSearch: () => ({
+        icon: '🔍',
+        primaryText: item.query,
+        secondaryText: (item as PopularSearch).description,
+      }),
+      completion: () => {
+        const completion = item as CompletionItem;
+        if (completion.parentPath) {
           return {
-            icon: this.getCompletionIcon(item.kindCategory),
-            primaryText: html` <span class="text-gray-400">${item.parentPath}.</span><span>${item.label}</span> `,
-            secondaryText: item.detail,
+            icon: this.getCompletionIcon(completion.kindCategory),
+            primaryText: html` <span class="text-gray-400">${completion.parentPath}.</span><span>${completion.label}</span> `,
+            secondaryText: completion.detail,
           };
         }
         return {
-          icon: this.getCompletionIcon(item.kindCategory),
-          primaryText: item.label,
-          secondaryText: item.detail,
+          icon: this.getCompletionIcon(completion.kindCategory),
+          primaryText: completion.label,
+          secondaryText: completion.detail,
         };
-    }
+      },
+    };
+
+    return uiData[item.kind]();
   }
 
   private renderSuggestionItem(item: SuggestionItem, itemIndex: number): TemplateResult {
@@ -1379,17 +1235,12 @@ export class QueryEditorComponent extends LitElement {
     const { icon, primaryText, secondaryText } = this.getSuggestionUIData(item);
     const selectedClass = isSelected ? 'bg-blue-50' : '';
 
-    // Determine the best text to show for tooltip (when primaryText is a template)
     const displayTextForTooltip =
       item.kind === 'completion'
-        ? (item.parentPath ? `${item.parentPath}.${item.label}` : item.label) || ''
+        ? ((item as CompletionItem).parentPath ? `${(item as CompletionItem).parentPath}.${item.label}` : item.label) || ''
         : item.kind === 'savedView'
-          ? item.name || 'Saved View'
-          : item.kind === 'recentSearch'
-            ? item.query || 'Recent Search'
-            : item.kind === 'popularSearch'
-              ? item.query || 'Popular Search'
-              : '';
+          ? (item as SavedView).name || 'Saved View'
+          : item.query || '';
 
     return html`
       <div
@@ -1410,10 +1261,7 @@ export class QueryEditorComponent extends LitElement {
   private renderSuggestionDropdown(): TemplateResult {
     if (!this.showSuggestions) return html``;
 
-    // Get all matching items
     const matches = this.getMatches();
-
-    // Group all suggestion categories
     const groups = {
       completion: this.completionItems,
       saved: matches.saved,
@@ -1421,26 +1269,21 @@ export class QueryEditorComponent extends LitElement {
       popular: matches.popular,
     };
 
-    // Generate group titles
     const groupTitles = {
-      completion: null, // No title for main completions
+      completion: null,
       saved: 'Saved Views',
       recent: 'Recent Searches',
       popular: 'Popular Searches',
     };
 
-    // Define the order for sections (Monaco completions first, then saved, recent, popular)
     const orderedCategories: Array<keyof typeof groups> = ['completion', 'saved', 'recent', 'popular'];
-
-    // Filter out empty groups and create sections in specified order
     const sections = orderedCategories
-      .filter((category) => groups[category] && groups[category].length > 0)
+      .filter((category) => groups[category]?.length > 0)
       .map((category) => ({
         items: groups[category],
         title: groupTitles[category],
       }));
 
-    // Only render if we have suggestions
     if (!sections.length) {
       return html`
         <div
@@ -1451,7 +1294,6 @@ export class QueryEditorComponent extends LitElement {
       `;
     }
 
-    // Track index for selection
     let currentIndex = 0;
     const keyboardHelp = html`
       <div class="sticky bottom-0 bg-white z-50 border-t border-gray-200 px-4 py-2 text-xs text-gray-500">
@@ -1508,7 +1350,8 @@ export class QueryEditorComponent extends LitElement {
             class="placeholder-overlay absolute top-0 left-0 right-0 bottom-0 pointer-events-auto z-[1] text-gray-400 f/nont-mono text-sm leading-[18px] pt-2 pl-2 hidden cursor-text"
             @click=${() => this.editor?.focus()}
           >
-            Filter by your logs and events. Press <span class="kbd">Shift + Space</span> to search using natural langauge.
+            Filter logs and events. Press <span class="kbd">/</span> to search or <span class="kbd">?</span>
+            to ask in Natural language.
           </div>
         </div>
         <div class="absolute top-1 right-1 z-[2]">
@@ -1529,7 +1372,6 @@ export class QueryEditorComponent extends LitElement {
   }
 }
 
-// Export monaco and schemaManager
 // Expose schemaManager globally for external configuration
 (window as any).schemaManager = schemaManager;
 
