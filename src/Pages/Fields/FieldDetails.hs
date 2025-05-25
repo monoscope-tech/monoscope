@@ -5,7 +5,7 @@ import Data.Digest.XXHash (xxHash)
 import Data.Time (getZonedTime)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
-import Database.PostgreSQL.Entity.DBT (QueryNature (Update), execute)
+import Database.PostgreSQL.Entity.DBT (execute)
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
 import Lucid (ToHtml (..))
@@ -39,7 +39,7 @@ parseCheckbox Nothing = False
 fieldPutH :: Projects.ProjectId -> Fields.FieldId -> EditFieldForm -> ATAuthCtx (RespHeaders FieldPut)
 fieldPutH pid fid editData = do
   _ <- Sessions.sessionAndProject pid
-  fi <- dbtToEff $ execute Update [sql|update apis.fields set is_required = ?, is_enum = ?, description=? where id=?|] (parseCheckbox editData.isRequired, parseCheckbox editData.isEnum, editData.description, fid)
+  fi <- dbtToEff $ execute [sql|update apis.fields set is_required = ?, is_enum = ?, description=? where id=?|] (parseCheckbox editData.isRequired, parseCheckbox editData.isEnum, editData.description, fid)
   now <- liftIO getZonedTime
   let formats =
         ( \format ->

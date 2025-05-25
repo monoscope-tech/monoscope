@@ -20,7 +20,7 @@ import Data.Aeson.KeyMap qualified as KM
 import Data.Default (def)
 import Data.Text qualified as T
 import Data.Vector as V (Vector, fromList, head, length, toList)
-import Database.PostgreSQL.Entity.DBT (QueryNature (Select, Update), execute, queryOne)
+import Database.PostgreSQL.Entity.DBT (execute, queryOne)
 import Database.PostgreSQL.Simple.Types (Query (Query))
 
 import Data.CaseInsensitive qualified as CI
@@ -155,7 +155,7 @@ discorPostH pid form = do
       newCompleted = insertIfNotExist "NotifChannel" stepsCompleted
       q = [sql| update projects.projects set onboarding_steps_completed=? where id=? |]
   _ <- dbtToEff do Projects.updateNotificationsChannel pid notifs (Just form.url)
-  _ <- dbtToEff $ execute Update q (newCompleted, pid)
+  _ <- dbtToEff $ execute q (newCompleted, pid)
   addRespHeaders $ button_ [class_ "text-green-500 font-semibold"] "Connected"
 
 
@@ -166,7 +166,7 @@ onboardingStepSkipped pid stepM = do
     Just step -> do
       let stepsCompleted = project.onboardingStepsCompleted
           newCompleted = insertIfNotExist step stepsCompleted
-      _ <- dbtToEff $ execute Update [sql| update projects.projects set onboarding_steps_completed=? where id=? |] (newCompleted, pid)
+      _ <- dbtToEff $ execute [sql| update projects.projects set onboarding_steps_completed=? where id=? |] (newCompleted, pid)
 
       redirectCS $ "/p/" <> pid.toText <> "/onboarding?step=" <> getNextStep step
       addRespHeaders ""
@@ -194,7 +194,7 @@ phoneEmailPostH pid form = do
       q = [sql| update projects.projects set notifications_channel=?::notification_channel_enum[], notify_phone_number=?, notify_emails=?::text[],onboarding_steps_completed=? where id=? |]
   projectMembers <- dbtToEff $ Projects.usersByProjectId pid
   let emails' = (\u -> CI.original u.email) <$> projectMembers
-  _ <- dbtToEff $ execute Update q (V.fromList notifsTxt, phone, V.fromList emails, newCompleted, pid)
+  _ <- dbtToEff $ execute q (V.fromList notifsTxt, phone, V.fromList emails, newCompleted, pid)
   addRespHeaders $ inviteTeamMemberModal pid (V.fromList $ ordNub $ emails <> V.toList emails')
 
 
@@ -209,10 +209,10 @@ checkIntegrationGet pid languageM = do
            in "and resource ->> 'telemetry.sdk.language' = '" <> l <> "'"
         _ -> ""
       q = [text|SELECT span_id, span_name FROM telemetry.spans WHERE project_id = ? $extrQ|]
-  v <- dbtToEff (queryOne Select (Query $ encodeUtf8 q) (Only pid) :: (DBT IO (Maybe (Text, Text))))
+  v <- dbtToEff (queryOne (Query $ encodeUtf8 q) (Only pid) :: (DBT IO (Maybe (Text, Text))))
   if isJust v
     then do
-      _ <- dbtToEff $ execute Update [sql|update projects.projects set onboarding_steps_completed=? where id=?|] (newCompleted, pid)
+      _ <- dbtToEff $ execute [sql|update projects.projects set onboarding_steps_completed=? where id=?|] (newCompleted, pid)
       case languageM of
         Just lg -> addRespHeaders verifiedCheck
         _ -> do
@@ -249,8 +249,8 @@ onboardingInfoPost pid form = do
       jsonBytes = AE.encode questions
       stepsCompleted = project.onboardingStepsCompleted
       newCompleted = insertIfNotExist "Info" stepsCompleted
-  _ <- dbtToEff $ execute Update [sql| update projects.projects set title=?,questions=?,onboarding_steps_completed=? where id=? |] (form.companyName, jsonBytes, newCompleted, pid)
-  _ <- dbtToEff $ execute Update [sql| update users.users set first_name= ?, last_name=? where id=? |] (firstName, lastName, sess.user.id)
+  _ <- dbtToEff $ execute [sql| update projects.projects set title=?,questions=?,onboarding_steps_completed=? where id=? |] (form.companyName, jsonBytes, newCompleted, pid)
+  _ <- dbtToEff $ execute [sql| update users.users set first_name= ?, last_name=? where id=? |] (firstName, lastName, sess.user.id)
   redirectCS $ "/p/" <> pid.toText <> "/onboarding?step=Survey"
   addRespHeaders ""
 
@@ -269,7 +269,7 @@ onboardingConfPost pid form = do
       jsonBytes = AE.encode questions
       stepsCompleted = project.onboardingStepsCompleted
       newCompleted = insertIfNotExist "Survey" stepsCompleted
-  _ <- dbtToEff $ execute Update [sql| update projects.projects set questions=?, onboarding_steps_completed=? where id=? |] (jsonBytes, newCompleted, pid)
+  _ <- dbtToEff $ execute [sql| update projects.projects set questions=?, onboarding_steps_completed=? where id=? |] (jsonBytes, newCompleted, pid)
   redirectCS $ "/p/" <> pid.toText <> "/onboarding?step=CreateMonitor"
   addRespHeaders ""
 

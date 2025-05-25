@@ -15,13 +15,8 @@ import Data.CaseInsensitive (CI)
 import Data.Default.Instances ()
 import Data.Time (ZonedTime)
 import Data.UUID qualified as UUID
-import Database.PostgreSQL.Entity.DBT (
-  QueryNature (..),
-  query,
-  queryOne,
- )
-
 import Data.Vector qualified as V
+import Database.PostgreSQL.Entity.DBT (query, queryOne)
 import Database.PostgreSQL.Entity.Types (
   CamelToSnake,
   Entity,
@@ -89,8 +84,8 @@ data ProjectMembers = ProjectMembers
   , userId :: Users.UserId
   , permission :: Permissions
   }
-  deriving stock (Show, Generic)
-  deriving anyclass (FromRow, ToRow, NFData)
+  deriving stock (Generic, Show)
+  deriving anyclass (FromRow, NFData, ToRow)
   deriving
     (Entity)
     via (GenericEntity '[Schema "projects", TableName "project_members", PrimaryKey "id", FieldModifiers '[CamelToSnake]] ProjectMembers)
@@ -101,8 +96,8 @@ data CreateProjectMembers = CreateProjectMembers
   , userId :: Users.UserId
   , permission :: Permissions
   }
-  deriving stock (Show, Generic, Eq)
-  deriving anyclass (FromRow, ToRow, NFData)
+  deriving stock (Eq, Generic, Show)
+  deriving anyclass (FromRow, NFData, ToRow)
   deriving
     (Entity)
     via (GenericEntity '[Schema "projects", TableName "project_members", PrimaryKey "id", FieldModifiers '[CamelToSnake]] CreateProjectMembers)
@@ -121,12 +116,12 @@ data ProjectMemberVM = ProjectMemberVM
   , permission :: Permissions
   , email :: CI Text
   }
-  deriving stock (Show, Generic, Eq)
+  deriving stock (Eq, Generic, Show)
   deriving anyclass (FromRow, NFData)
 
 
 selectActiveProjectMembers :: Projects.ProjectId -> DBT IO (V.Vector ProjectMemberVM)
-selectActiveProjectMembers = query Select q
+selectActiveProjectMembers = query q
   where
     q =
       [sql| SELECT pm.id, pm.user_id, pm.permission,us.email  from projects.project_members pm
@@ -137,7 +132,7 @@ selectActiveProjectMembers = query Select q
 
 
 selectProjectActiveMember :: Projects.ProjectId -> Users.UserId -> DBT IO (Maybe ProjectMembers)
-selectProjectActiveMember pid userId = queryOne Select q (pid, userId)
+selectProjectActiveMember pid userId = queryOne q (pid, userId)
   where
     q = [sql| SELECT * from projects.project_members where project_id = ? AND user_id = ?  AND deleted_at is null AND active = true; |]
 

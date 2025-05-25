@@ -36,13 +36,13 @@ import Data.Time (UTCTime, ZonedTime)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity
-import Database.PostgreSQL.Entity.DBT (QueryNature (..), execute, query, queryOne)
+import Database.PostgreSQL.Entity.DBT (execute, query, queryOne)
 import Database.PostgreSQL.Entity.Types
 import Database.PostgreSQL.Simple (FromRow, Only (Only), ToRow)
 import Database.PostgreSQL.Simple.FromField (FromField)
 import Database.PostgreSQL.Simple.Newtypes
-import Database.PostgreSQL.Simple.ToField (ToField)
 import Database.PostgreSQL.Simple.SqlQQ (sql)
+import Database.PostgreSQL.Simple.ToField (ToField)
 import Database.PostgreSQL.Transact (DBT)
 import Deriving.Aeson qualified as DAE
 import Effectful
@@ -57,8 +57,8 @@ import Web.HttpApiData
 
 
 newtype ProjectId = ProjectId {unProjectId :: UUID.UUID}
-  deriving stock (Generic, Show, Read, THS.Lift)
-  deriving newtype (Eq, Ord, AE.ToJSON, AE.FromJSON, FromField, ToField, FromHttpApiData, Default, Hashable, NFData)
+  deriving stock (Generic, Read, Show, THS.Lift)
+  deriving newtype (AE.FromJSON, AE.ToJSON, Default, Eq, FromField, FromHttpApiData, Hashable, NFData, Ord, ToField)
   deriving anyclass (FromRow, ToRow)
 
 
@@ -79,10 +79,10 @@ data NotificationChannel
   | NSlack
   | NDiscord
   | NPhone
-  deriving stock (Eq, Generic, Show, Read)
+  deriving stock (Eq, Generic, Read, Show)
   deriving anyclass (NFData)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.ConstructorTagModifier '[DAE.StripPrefix "N", DAE.CamelToSnake]] NotificationChannel
-  deriving (ToField, FromField) via WrappedEnumSC "N" NotificationChannel
+  deriving (FromField, ToField) via WrappedEnumSC "N" NotificationChannel
 
 
 instance HasField "toText" NotificationChannel Text where
@@ -92,9 +92,8 @@ instance HasField "toText" NotificationChannel Text where
 
 
 data OnboardingStep = Info | Survey | CreateMonitor | NotifChannel | Integration | Pricing | Complete
-  deriving stock (Eq, Generic, Show, Read)
-  deriving (AE.FromJSON, AE.ToJSON, NFData, ToField, FromField) via OnboardingStep
-
+  deriving stock (Eq, Generic, Read, Show)
+  deriving (AE.FromJSON, AE.ToJSON, FromField, NFData, ToField) via OnboardingStep
 
 
 data Project = Project
@@ -123,14 +122,14 @@ data Project = Project
   , notifyPhoneNumber :: Maybe Text
   , notifyEmails :: V.Vector Text
   }
-  deriving stock (Show, Generic)
+  deriving stock (Generic, Show)
   deriving anyclass (FromRow, NFData)
-  deriving
-    (AE.FromJSON, AE.ToJSON)
-    via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] Project
   deriving
     (Entity)
     via (GenericEntity '[Schema "projects", TableName "projects", PrimaryKey "id", FieldModifiers '[CamelToSnake]] Project)
+  deriving
+    (AE.FromJSON, AE.ToJSON)
+    via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] Project
 
 
 -- FIXME: Why was this record created? And not the regular projects record?
@@ -162,8 +161,8 @@ data Project' = Project'
   , hasIntegrated :: Bool
   , usersDisplayImages :: V.Vector Text
   }
-  deriving stock (Show, Generic)
-  deriving anyclass (FromRow, Default, NFData)
+  deriving stock (Generic, Show)
+  deriving anyclass (Default, FromRow, NFData)
 
 
 data ProjectCache = ProjectCache
@@ -183,7 +182,7 @@ data ProjectCache = ProjectCache
   , weeklyRequestCount :: Int
   , paymentPlan :: Text
   }
-  deriving stock (Show, Generic)
+  deriving stock (Generic, Show)
   deriving anyclass (FromRow)
 
 
@@ -197,7 +196,7 @@ data CreateProject = CreateProject
   , firstSubItemId :: Maybe Text
   , orderId :: Maybe Text
   }
-  deriving stock (Show, Generic)
+  deriving stock (Generic, Show)
   deriving anyclass (FromRow, ToRow)
   deriving
     (Entity)
@@ -206,7 +205,7 @@ data CreateProject = CreateProject
 
 -- FIXME: We currently return an object with empty vectors when nothing was found.
 projectCacheById :: ProjectId -> DBT IO (Maybe ProjectCache)
-projectCacheById pid = queryOne Select q (pid, pid, pid)
+projectCacheById pid = queryOne q (pid, pid, pid)
   where
     q =
       [sql| select  coalesce(ARRAY_AGG(DISTINCT hosts ORDER BY hosts ASC),'{}') hosts,
@@ -231,13 +230,13 @@ insertProject = insert @CreateProject
 
 
 projectById :: ProjectId -> DBT IO (Maybe Project)
-projectById = queryOne Select q
+projectById = queryOne q
   where
     q = [sql| select p.* from projects.projects p where id=?|]
 
 
 selectProjectsForUser :: Users.UserId -> DBT IO (V.Vector Project')
-selectProjectsForUser = query Select q
+selectProjectsForUser = query q
   where
     q =
       [sql|
@@ -254,7 +253,7 @@ selectProjectsForUser = query Select q
 
 
 usersByProjectId :: ProjectId -> DBT IO (V.Vector Users.User)
-usersByProjectId pid = query Select q (Only pid)
+usersByProjectId pid = query q (Only pid)
   where
     q =
       [sql| select u.id, u.created_at, u.updated_at, u.deleted_at, u.active, u.first_name, u.last_name, u.display_image_url, u.email, u.phone_number, u.is_sudo
@@ -262,7 +261,7 @@ usersByProjectId pid = query Select q (Only pid)
 
 
 userByProjectId :: ProjectId -> Users.UserId -> DBT IO (V.Vector Users.User)
-userByProjectId pid user_id = query Select q (user_id, pid)
+userByProjectId pid user_id = query q (user_id, pid)
   where
     q =
       [sql| select u.id, u.created_at, u.updated_at, u.deleted_at, u.active, u.first_name, u.last_name, u.display_image_url, u.email, u.phone_number,  u.is_sudo
@@ -271,7 +270,7 @@ userByProjectId pid user_id = query Select q (user_id, pid)
 
 updateProject :: CreateProject -> DBT IO Int64
 updateProject cp = do
-  execute Update q (cp.title, cp.description, cp.paymentPlan, cp.subId, cp.firstSubItemId, cp.orderId, cp.timeZone, cp.id)
+  execute q (cp.title, cp.description, cp.paymentPlan, cp.subId, cp.firstSubItemId, cp.orderId, cp.timeZone, cp.id)
   where
     q =
       [sql| UPDATE projects.projects SET title=?,  description=?, payment_plan=?, sub_id=?, first_sub_item_id=?, order_id=?, time_zone=? where id=?;|]
@@ -279,14 +278,14 @@ updateProject cp = do
 
 updateProjectPricing :: ProjectId -> Text -> Text -> Text -> Text -> V.Vector Text -> DBT IO Int64
 updateProjectPricing pid paymentPlan subId firstSubItemId orderId stepsCompleted = do
-  execute Update q (paymentPlan, subId, firstSubItemId, orderId, stepsCompleted, pid)
+  execute q (paymentPlan, subId, firstSubItemId, orderId, stepsCompleted, pid)
   where
     q = [sql| UPDATE projects.projects SET payment_plan=?, sub_id=?, first_sub_item_id=?, order_id=?, onboarding_steps_completed=? where id=?;|]
 
 
 updateProjectReportNotif :: ProjectId -> Text -> DBT IO Int64
 updateProjectReportNotif pid report_type = do
-  execute Update q (Only pid)
+  execute q (Only pid)
   where
     q =
       if report_type == "daily"
@@ -296,35 +295,35 @@ updateProjectReportNotif pid report_type = do
 
 deleteProject :: ProjectId -> DBT IO Int64
 deleteProject pid = do
-  execute Update q pid
+  execute q pid
   where
     q =
       [sql| UPDATE projects.projects SET deleted_at=NOW(), active=False where id=?;|]
 
 
 updateNotificationsChannel :: ProjectId -> [Text] -> Maybe Text -> DBT IO Int64
-updateNotificationsChannel pid channels discordUrl = execute Update q (list, discordUrl, pid)
+updateNotificationsChannel pid channels discordUrl = execute q (list, discordUrl, pid)
   where
     list = V.fromList channels
     q = [sql| UPDATE projects.projects SET notifications_channel=?::notification_channel_enum[], discord_url=? WHERE id=?;|]
 
 
 updateOnboardingStepsCompleted :: ProjectId -> V.Vector Text -> DBT IO Int64
-updateOnboardingStepsCompleted pid steps = execute Update q (steps, pid)
+updateOnboardingStepsCompleted pid steps = execute q (steps, pid)
   where
     q = [sql| UPDATE projects.projects SET onboarding_steps_completed=? WHERE id=?;|]
 
 
 updateUsageLastReported :: ProjectId -> ZonedTime -> DBT IO Int64
-updateUsageLastReported pid lastReported = execute Update q (lastReported, pid)
+updateUsageLastReported pid lastReported = execute q (lastReported, pid)
   where
     q = [sql| UPDATE projects.projects SET usage_last_reported=? WHERE id=?;|]
 
 
 ---------------------------------
 newtype QueryLibItemId = QueryLibItemId {unQueryLibItemId :: UUID.UUID}
-  deriving stock (Generic, Show, Read)
-  deriving newtype (Eq, Ord, FromField, ToField, FromHttpApiData, Default, Hashable, NFData, AE.FromJSON, AE.ToJSON)
+  deriving stock (Generic, Read, Show)
+  deriving newtype (AE.FromJSON, AE.ToJSON, Default, Eq, FromField, FromHttpApiData, Hashable, NFData, Ord, ToField)
 
 
 instance HasField "unwrap" QueryLibItemId UUID.UUID where
@@ -336,9 +335,9 @@ instance HasField "toText" QueryLibItemId Text where
 
 
 data QueryLibType = QLTHistory | QLTSaved
-  deriving (Eq, Generic, Show, Read, NFData)
-  deriving (ToField, FromField) via WrappedEnumSC "QLT" QueryLibType
-  deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.ConstructorTagModifier '[DAE.StripPrefix "QLT", DAE.CamelToSnake]] QueryLibType 
+  deriving (Eq, Generic, NFData, Read, Show)
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.ConstructorTagModifier '[DAE.StripPrefix "QLT", DAE.CamelToSnake]] QueryLibType
+  deriving (FromField, ToField) via WrappedEnumSC "QLT" QueryLibType
 
 
 data QueryLibItem = QueryLibItem
@@ -353,12 +352,12 @@ data QueryLibItem = QueryLibItem
   , title :: Maybe Text
   , byMe :: Bool
   }
-  deriving (Show, Generic, Eq)
-  deriving anyclass (FromRow, ToRow, NFData, AE.FromJSON, AE.ToJSON)
+  deriving (Eq, Generic, Show)
+  deriving anyclass (AE.FromJSON, AE.ToJSON, FromRow, NFData, ToRow)
 
 
 queryLibHistoryForUser :: DB :> es => ProjectId -> Users.UserId -> Eff es (V.Vector QueryLibItem)
-queryLibHistoryForUser pid uid = dbtToEff $ query Select q (uid, uid, pid, uid, uid, pid, uid, pid, uid)
+queryLibHistoryForUser pid uid = dbtToEff $ query q (uid, uid, pid, uid, uid, pid, uid, pid, uid)
   where
     q =
       [sql|
@@ -389,7 +388,7 @@ UNION ALL
 
 
 queryLibInsert :: DB :> es => QueryLibType -> ProjectId -> Users.UserId -> Text -> [Section] -> Maybe Text -> Eff es ()
-queryLibInsert qKind pid uid qt qast title = void $ dbtToEff $ execute Insert q (pid, uid, qKind, pid, uid, qKind, qt, Aeson qast, title, pid, uid, qKind, qt)
+queryLibInsert qKind pid uid qt qast title = void $ dbtToEff $ execute q (pid, uid, qKind, pid, uid, qKind, qt, Aeson qast, title, pid, uid, qKind, qt)
   where
     q =
       [sql|
@@ -418,12 +417,12 @@ ON CONFLICT DO NOTHING;
 
 
 queryLibTitleEdit :: DB :> es => ProjectId -> Users.UserId -> Text -> Text -> Eff es ()
-queryLibTitleEdit pid uid qId title = void $ dbtToEff $ execute Update q (title, pid, uid, qId)
+queryLibTitleEdit pid uid qId title = void $ dbtToEff $ execute q (title, pid, uid, qId)
   where
     q = [sql|UPDATE projects.query_library SET title=? where project_id=? AND user_id=? AND id=?::uuid|]
 
 
 queryLibItemDelete :: DB :> es => ProjectId -> Users.UserId -> Text -> Eff es ()
-queryLibItemDelete pid uid qId = void $ dbtToEff $ execute Delete q (pid, uid, qId)
+queryLibItemDelete pid uid qId = void $ dbtToEff $ execute q (pid, uid, qId)
   where
     q = [sql|DELETE from projects.query_library where project_id=? AND user_id=? AND id=?::uuid|]

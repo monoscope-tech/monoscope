@@ -54,13 +54,13 @@ getSwaggerById id' = selectById (Only id')
 
 
 swaggersByProject :: Projects.ProjectId -> Text -> DBT IO (V.Vector Swagger)
-swaggersByProject pid host = query Select q (pid, host)
+swaggersByProject pid host = query q (pid, host)
   where
     q = [sql| select id, project_id, created_by, created_at, updated_at, swagger_json, host from apis.swagger_jsons where project_id=? AND host=? order by created_at desc|]
 
 
 updateSwagger :: Text -> AE.Value -> DBT IO Int64
 updateSwagger swaggerId swaggerJson = do
-  execute Update q (swaggerJson, swaggerId)
+  execute q (swaggerJson, swaggerId)
   where
     q = [sql| UPDATE apis.swagger_jsons SET swagger_json=? WHERE id=? |]

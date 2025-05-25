@@ -13,7 +13,7 @@ import Data.Text.Encoding qualified as TE
 import Data.Time (UTCTime, defaultTimeLocale, formatTime)
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity qualified as DBT
-import Database.PostgreSQL.Entity.DBT (QueryNature (Select), query_)
+import Database.PostgreSQL.Entity.DBT (query_)
 import Database.PostgreSQL.Entity.DBT qualified as DBT
 import Database.PostgreSQL.Entity.Types qualified as DBT
 import Database.PostgreSQL.Simple (Only (Only))
@@ -291,7 +291,7 @@ processVariable pid now (sinceStr, fromDStr, toDStr) allParams variableBase = do
     Dashboards.VTQuery -> case variable.sql of
       Nothing -> pure variable
       Just sqlQuery -> do
-        queryResults <- dbtToEff $ query_ Select (Query $ TE.encodeUtf8 sqlQuery)
+        queryResults <- dbtToEff $ query_ (Query $ TE.encodeUtf8 sqlQuery)
         pure variable'{Dashboards.options = Just $ V.toList queryResults}
     _ -> pure variable'
 
@@ -318,7 +318,7 @@ processWidget pid now (sinceStr, fromDStr, toDStr) allParams widgetBase = do
                       $ forM_ issuesVM (\x -> div_ [class_ "border border-strokeWeak rounded-2xl overflow-hidden"] $ toHtml x)
                    )
           Widget.WTStat -> do
-            stat <- Charts.queryMetrics (Just Charts.DTFloat) (Just pid) widget.query Nothing widget.sql sinceStr fromDStr toDStr Nothing allParams
+            stat <- Charts.queryMetrics (Just Charts.DTFloat) (Just pid) widget.query widget.sql sinceStr fromDStr toDStr Nothing allParams
             pure
               $ widget
               & #dataset
@@ -328,7 +328,7 @@ processWidget pid now (sinceStr, fromDStr, toDStr) allParams widgetBase = do
                   }
           _ -> do
             metricsD <-
-              Charts.queryMetrics (Just Charts.DTMetric) (Just pid) widget.query Nothing widget.sql sinceStr fromDStr toDStr Nothing allParams
+              Charts.queryMetrics (Just Charts.DTMetric) (Just pid) widget.query widget.sql sinceStr fromDStr toDStr Nothing allParams
             pure
               $ widget
               & #dataset
@@ -908,7 +908,7 @@ entrypointRedirectGetH baseTemplate title tags pid qparams = do
   redirectTo <-
     if project.paymentPlan == "ONBOARDING"
       then pure $ mkPath "/onboarding" ""
-      else (mkPath "/dashboards/") <$> (maybe newDashboard pure =<< dbtToEff (DBT.queryOne DBT.Select q (pid, baseTemplate)))
+      else (mkPath "/dashboards/") <$> (maybe newDashboard pure =<< dbtToEff (DBT.queryOne q (pid, baseTemplate)))
   pure $ addHeader redirectTo NoContent
 
 

@@ -40,7 +40,7 @@ type Routes = NamedRoutes Routes'
 -- TODO: rename layout to action
 type Routes' :: Type -> Type
 data Routes' mode = Routes'
-  { logExplorerGet :: mode :- "log_explorer" :> QPT "query" :> QPT "queryAST" :> QPT "cols" :> QPU "cursor" :> QPT "since" :> QPT "from" :> QPT "to" :> QPT "layout" :> QPT "source" :> QPT "target-spans" :> QPT "queryTitle" :> QPT "queryLibId" :> QPT "details_width" :> QPT "target_event" :> QPT "showTrace" :> HXRequest :> HXBoosted :> QPT "json" :> Get '[HTML, JSON] (RespHeaders Log.LogsGet)
+  { logExplorerGet :: mode :- "log_explorer" :> QPT "query" :> QPT "cols" :> QPU "cursor" :> QPT "since" :> QPT "from" :> QPT "to" :> QPT "layout" :> QPT "source" :> QPT "target-spans" :> QPT "queryTitle" :> QPT "queryLibId" :> QPT "details_width" :> QPT "target_event" :> QPT "showTrace" :> HXRequest :> HXBoosted :> QPT "json" :> Get '[HTML, JSON] (RespHeaders Log.LogsGet)
   , logExplorerItemDetailedGet :: mode :- "log_explorer" :> Capture "logItemID" UUID.UUID :> Capture "createdAt" UTCTime :> "detailed" :> QPT "source" :> Get '[HTML] (RespHeaders LogItem.ApiItemDetailed)
   , aiSearchPost :: mode :- "log_explorer" :> "ai_search" :> ReqBody '[JSON] AE.Value :> Post '[JSON] (RespHeaders AE.Value)
   , schemaGet :: mode :- "log_explorer" :> "schema" :> Get '[JSON] (RespHeaders AE.Value)

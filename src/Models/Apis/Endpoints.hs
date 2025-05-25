@@ -33,7 +33,7 @@ import Data.Default.Instances ()
 import Data.Time (UTCTime, ZonedTime)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
-import Database.PostgreSQL.Entity.DBT (QueryNature (..), query, queryOne)
+import Database.PostgreSQL.Entity.DBT (query, queryOne)
 import Database.PostgreSQL.Entity.Types
 import Database.PostgreSQL.Simple (FromRow, Only (Only), ToRow)
 import Database.PostgreSQL.Simple.FromField (FromField)
@@ -154,7 +154,7 @@ data EndpointRequestStats = EndpointRequestStats
 -- FIXME: Include and return a boolean flag to show if fields that have annomalies.
 -- FIXME: return endpoint_hash as well.
 endpointRequestStatsByProject :: Projects.ProjectId -> Bool -> Bool -> Maybe Text -> Maybe Text -> Maybe Text -> Int -> Text -> PgT.DBT IO (V.Vector EndpointRequestStats)
-endpointRequestStatsByProject pid ackd archived pHostM sortM searchM page requestType = query Select (Query $ encodeUtf8 q) queryParams
+endpointRequestStatsByProject pid ackd archived pHostM sortM searchM page requestType = query (Query $ encodeUtf8 q) queryParams
   where
     -- Construct the list of parameters conditionally
     pHostParams = maybe [] (\h -> [toField h]) pHostM
@@ -192,7 +192,7 @@ endpointRequestStatsByProject pid ackd archived pHostM sortM searchM page reques
 
 
 dependencyEndpointsRequestStatsByProject :: Projects.ProjectId -> Text -> Bool -> Bool -> Maybe Text -> Maybe Text -> Int -> PgT.DBT IO (V.Vector EndpointRequestStats)
-dependencyEndpointsRequestStatsByProject pid host ack arch sortM searchM page = query Select (Query $ encodeUtf8 q) (pid, host)
+dependencyEndpointsRequestStatsByProject pid host ack arch sortM searchM page = query (Query $ encodeUtf8 q) (pid, host)
   where
     q =
       [text|
@@ -218,7 +218,7 @@ dependencyEndpointsRequestStatsByProject pid host ack arch sortM searchM page = 
 -- FIXME: return endpoint_hash as well.
 -- This would require tampering with the view.
 endpointRequestStatsByEndpoint :: EndpointId -> PgT.DBT IO (Maybe EndpointRequestStats)
-endpointRequestStatsByEndpoint eid = queryOne Select q (eid, eid)
+endpointRequestStatsByEndpoint eid = queryOne q (eid, eid)
   where
     q =
       [sql| SELECT endpoint_id, endpoint_hash, project_id, url_path, method, host, coalesce(min, 0), coalesce(p50, 0), coalesce(p75, 0), coalesce(p90, 0), coalesce(p95, 0), coalesce(p99, 0), coalesce
@@ -235,25 +235,25 @@ endpointRequestStatsByEndpoint eid = queryOne Select q (eid, eid)
 
 
 endpointById :: EndpointId -> PgT.DBT IO (Maybe Endpoint)
-endpointById eid = queryOne Select q (Only eid)
+endpointById eid = queryOne q (Only eid)
   where
     q = [sql| SELECT id, created_at, updated_at, project_id, url_path, url_params, method, host, hash, outgoing, description from apis.endpoints where id=? |]
 
 
 endpointByHash :: Projects.ProjectId -> Text -> PgT.DBT IO (Maybe Endpoint)
-endpointByHash pid hash = queryOne Select q (pid, hash)
+endpointByHash pid hash = queryOne q (pid, hash)
   where
     q = [sql| SELECT id, created_at, updated_at, project_id, url_path, url_params, method, host, hash, outgoing, description from apis.endpoints where project_id=? AND hash=? |]
 
 
 endpointsByHashes :: Projects.ProjectId -> V.Vector Text -> PgT.DBT IO (V.Vector Endpoint)
-endpointsByHashes pid hashes = query Select q (pid, hashes)
+endpointsByHashes pid hashes = query q (pid, hashes)
   where
     q = [sql| SELECT id, created_at, updated_at, project_id, url_path, url_params, method, host, hash, outgoing, description from apis.endpoints where project_id=? AND hash=ANY(?)|]
 
 
 getEndpointsByAnomalyTargetHash :: Projects.ProjectId -> V.Vector Text -> PgT.DBT IO (V.Vector Host)
-getEndpointsByAnomalyTargetHash pid hashes = query Select q (pid, prefixHashes)
+getEndpointsByAnomalyTargetHash pid hashes = query q (pid, prefixHashes)
   where
     q = [sql|select distinct host from apis.endpoints where project_id=? AND hash LIKE ANY(?)|]
     prefixHashes = (<> "%") <$> hashes
@@ -284,7 +284,7 @@ data HostEvents = HostEvents
 
 
 endpointsByProjectId :: Projects.ProjectId -> Text -> PgT.DBT IO (V.Vector SwEndpoint)
-endpointsByProjectId pid host = query Select q (pid, host)
+endpointsByProjectId pid host = query q (pid, host)
   where
     q =
       [sql|
@@ -323,13 +323,13 @@ insertEndpoints endpoints = do
 
 
 getProjectHosts :: Projects.ProjectId -> PgT.DBT IO (V.Vector Host)
-getProjectHosts pid = query Select q (Only pid)
+getProjectHosts pid = query q (Only pid)
   where
     q = [sql| SELECT DISTINCT host FROM apis.endpoints where  project_id = ? AND outgoing=false AND host!= '' |]
 
 
 dependenciesAndEventsCount :: Projects.ProjectId -> Text -> Text -> DBT IO (V.Vector HostEvents)
-dependenciesAndEventsCount pid requestType sortT = query Select (Query $ encodeUtf8 q) (pid, requestType, pid)
+dependenciesAndEventsCount pid requestType sortT = query (Query $ encodeUtf8 q) (pid, requestType, pid)
   where
     orderBy = case sortT of
       "first_seen" -> "first_seen ASC;"
@@ -369,7 +369,7 @@ WHERE ep.project_id = ?
 
 countEndpointInbox :: Projects.ProjectId -> Text -> Text -> DBT IO Int
 countEndpointInbox pid host requestType = do
-  result <- query Select (Query $ encodeUtf8 q) (pid, host)
+  result <- query (Query $ encodeUtf8 q) (pid, host)
   case result of
     [Only count] -> return count
     v -> return $ length v

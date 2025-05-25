@@ -4,7 +4,7 @@ with-compiler: ghc-9.10.2
 -- documentation: True
 
 -- with-compiler: ghc-9.8.2
-import: https://www.stackage.org/nightly-2025-04-20/cabal.config
+import: https://www.stackage.org/nightly-2025-05-11/cabal.config
 --import: https://www.stackage.org/lts-23.19/cabal.config
 
 
@@ -115,6 +115,11 @@ source-repository-package
   tag: 4d374aca55bb5392e3b91ae47d6ca5625ffc59b6
   subdir: grpc-spec
 
+source-repository-package
+  type: git
+  location: https://github.com/tusharad/langchain-hs
+  tag: 8182563f4648fcc34952ccaf06a2247e6514727f
+  subdir: .
 
 source-repository-package
   type: git
@@ -132,7 +137,7 @@ source-repository-package
   subdir:   propagators/b3
   
 constraints:
-  pg-entity +prod,
+  -- pg-entity +prod,
   streamly ^>=0.10.0
 
 

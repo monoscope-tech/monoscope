@@ -1,6 +1,6 @@
 module Models.Apis.Slack (SlackData (..), insertAccessToken, getProjectSlackData) where
 
-import Database.PostgreSQL.Entity.DBT (QueryNature (Select), queryOne)
+import Database.PostgreSQL.Entity.DBT (queryOne)
 import Database.PostgreSQL.Simple (FromRow, Only (Only), ToRow)
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Transact (DBT, executeMany)
@@ -34,6 +34,6 @@ insertAccessToken projects webhookUrl = executeMany q params
 
 
 getProjectSlackData :: DB :> es => Projects.ProjectId -> Eff es (Maybe SlackData)
-getProjectSlackData pid = dbtToEff $ queryOne Select q (Only pid)
+getProjectSlackData pid = dbtToEff $ queryOne q (Only pid)
   where
     q = [sql|SELECT project_id, webhook_url FROM apis.slack WHERE project_id =? |]

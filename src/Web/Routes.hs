@@ -148,7 +148,7 @@ data CookieProtectedRoutes mode = CookieProtectedRoutes
   , reportsPost :: mode :- "p" :> ProjectId :> "reports_notif" :> Capture "report_type" Text :> Post '[HTML] (RespHeaders Reports.ReportsPost)
   , shareLinkPost :: mode :- "p" :> ProjectId :> "share" :> Capture "event_id" UUID.UUID :> Capture "createdAt" UTCTime :> QPT "event_type" :> Post '[HTML] (RespHeaders Share.ShareLinkPost)
   , swaggerGenerateGet :: mode :- "p" :> ProjectId :> "generate_swagger" :> Get '[JSON] (RespHeaders AE.Value)
-  , chartsDataGet :: mode :- "chart_data" :> QueryParam "data_type" Charts.DataType :> QueryParam "pid" Projects.ProjectId :> QPT "query_raw" :> QPT "queryAST" :> QPT "query_sql" :> QPT "since" :> QPT "from" :> QPT "to" :> QPT "source" :> AllQueryParams :> Get '[JSON] Charts.MetricsData
+  , chartsDataGet :: mode :- "chart_data" :> QueryParam "data_type" Charts.DataType :> QueryParam "pid" Projects.ProjectId :> QPT "query_raw" :> QPT "query_sql" :> QPT "since" :> QPT "from" :> QPT "to" :> QPT "source" :> AllQueryParams :> Get '[JSON] Charts.MetricsData
   , editField :: mode :- "p" :> ProjectId :> "fields" :> Capture "field_id" Fields.FieldId :> ReqBody '[FormUrlEncoded] FieldDetails.EditFieldForm :> Post '[HTML] (RespHeaders FieldDetails.FieldPut)
   , manageBillingGet :: mode :- "p" :> ProjectId :> "manage_billing" :> QPT "from" :> Get '[HTML] (RespHeaders LemonSqueezy.BillingGet)
   , endpointListGet :: mode :- "p" :> ProjectId :> "endpoints" :> QPT "page" :> QPT "layout" :> QPT "filter" :> QPT "host" :> QPT "request_type" :> QPT "sort" :> HXRequest :> HXBoosted :> HXCurrentURL :> QPT "load_more" :> QPT "search" :> Get '[HTML] (RespHeaders EndpointList.EndpointRequestStatsVM)

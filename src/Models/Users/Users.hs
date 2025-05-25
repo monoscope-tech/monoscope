@@ -19,7 +19,6 @@ import Data.Effectful.UUID (UUIDEff)
 import Data.Effectful.UUID qualified as UUID
 import Data.Time (UTCTime)
 import Database.PostgreSQL.Entity (Entity, insert, selectById, selectOneByField)
-import Database.PostgreSQL.Entity.DBT (QueryNature (..), execute, queryOne)
 import Database.PostgreSQL.Entity.Types (
   CamelToSnake,
   FieldModifiers,
@@ -51,12 +50,12 @@ instance AE.ToJSON (CI.CI Text) where
 
 
 newtype UserId = UserId {getUserId :: UUID.UUID}
-  deriving stock (Generic, Show, Eq)
-  deriving
-    (Ord, AE.ToJSON, AE.FromJSON, FromField, ToField, Default)
-    via UUID.UUID
-  deriving anyclass (FromRow, ToRow)
+  deriving stock (Eq, Generic, Show)
   deriving newtype (NFData)
+  deriving anyclass (FromRow, ToRow)
+  deriving
+    (AE.FromJSON, AE.ToJSON, Default, FromField, Ord, ToField)
+    via UUID.UUID
 
 
 instance HasField "toText" UserId Text where
@@ -76,14 +75,14 @@ data User = User
   , phoneNumber :: Maybe Text
   , isSudo :: Bool
   }
-  deriving stock (Show, Generic)
-  deriving anyclass (FromRow, ToRow, Default, NFData)
-  deriving
-    (AE.FromJSON, AE.ToJSON)
-    via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] User
+  deriving stock (Generic, Show)
+  deriving anyclass (Default, FromRow, NFData, ToRow)
   deriving
     (Entity)
     via (GenericEntity '[Schema "users", TableName "users", PrimaryKey "id", FieldModifiers '[CamelToSnake]] User)
+  deriving
+    (AE.FromJSON, AE.ToJSON)
+    via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] User
 
 
 createUserId :: UUIDEff :> es => Eff es UserId
@@ -124,20 +123,20 @@ userByEmail email = dbtToEff $ selectOneByField @User [field| email |] (Only ema
 
 -- TODO: switch to the Eff monad
 userIdByEmail :: Text -> PgT.DBT IO (Maybe UserId)
-userIdByEmail email = queryOne Select q (Only email)
+userIdByEmail email = PgT.queryOne q (Only email)
   where
     q = [sql|select id from users.users where email=?|]
 
 
 createEmptyUser :: Text -> PgT.DBT IO (Maybe UserId)
-createEmptyUser email = queryOne Insert q (Only email)
+createEmptyUser email = PgT.queryOne q (Only email)
   where
     q = [sql| insert into users.users (email, active) values (?, TRUE) on conflict do nothing returning id |]
 
 
 -- addUserToAllProjects is a hack for development to add the user to all projects
 addUserToAllProjects :: Text -> PgT.DBT IO Int64
-addUserToAllProjects email = execute Insert q values
+addUserToAllProjects email = PgT.execute q values
   where
     q =
       [sql| insert into projects.project_members (active, project_id, permission, user_id)

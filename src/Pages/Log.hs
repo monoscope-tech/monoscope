@@ -177,19 +177,14 @@ replaceNestJsonWithColumns =
     . T.replace "resource.telemetry.sdk.version" "resource___telemetry___sdk___version"
 
 
-apiLogH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe UTCTime -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders LogsGet)
-apiLogH pid queryM' queryASTM' cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM queryLibItemTitle queryLibItemID detailWM targetEventM showTraceM hxRequestM hxBoostedM jsonM = do
+apiLogH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe UTCTime -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders LogsGet)
+apiLogH pid queryM' cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM queryLibItemTitle queryLibItemID detailWM targetEventM showTraceM hxRequestM hxBoostedM jsonM = do
   (sess, project) <- Sessions.sessionAndProject pid
   let source = "spans" -- fromMaybe "spans" sourceM
   let summaryCols = T.splitOn "," (fromMaybe "" cols')
   let parseQuery q = either (\err -> addErrorToast "Error Parsing Query" (Just err) >> pure []) pure (parseQueryToAST $ replaceNestJsonWithColumns q)
-  let queryASTM = queryASTM' >>= (\x -> Just $ replaceNestJsonWithColumns x)
   let queryM = queryM' >>= (\x -> Just $ replaceNestJsonWithColumns x)
-  queryAST <-
-    maybe
-      (parseQuery $ maybeToMonoid queryM)
-      (either (const $ parseQuery $ maybeToMonoid queryM) pure . AE.eitherDecode . encodeUtf8)
-      queryASTM
+  queryAST <- parseQuery $ maybeToMonoid queryM
   let queryText = toQText queryAST
   unless (isJust queryLibItemTitle) $ Projects.queryLibInsert Projects.QLTHistory pid sess.persistentSession.userId queryText queryAST Nothing
 
@@ -251,10 +246,10 @@ apiLogH pid queryM' queryASTM' cols' cursorM' sinceM fromM toM layoutM sourceM t
           colIdxMap = listToIndexHashMap colNames
           reqLastCreatedAtM = (\r -> lookupVecTextByKey r colIdxMap "timestamp") =<< (requestVecs V.!? (V.length requestVecs - 1))
           reqFirstCreatedAtM = (\r -> lookupVecTextByKey r colIdxMap "timestamp") =<< (requestVecs V.!? 0)
-          nextLogsURL = RequestDumps.requestDumpLogUrlPath pid queryM cols' reqLastCreatedAtM sinceM fromM toM (Just "loadmore") source queryASTM False
-          recentLogsURL = RequestDumps.requestDumpLogUrlPath pid queryM cols' reqFirstCreatedAtM sinceM fromM toM (Just "loadmore") source queryASTM True
+          nextLogsURL = RequestDumps.requestDumpLogUrlPath pid queryM cols' reqLastCreatedAtM sinceM fromM toM (Just "loadmore") source False
+          recentLogsURL = RequestDumps.requestDumpLogUrlPath pid queryM cols' reqFirstCreatedAtM sinceM fromM toM (Just "loadmore") source True
 
-          resetLogsURL = RequestDumps.requestDumpLogUrlPath pid queryM cols' Nothing Nothing Nothing Nothing Nothing source Nothing False
+          resetLogsURL = RequestDumps.requestDumpLogUrlPath pid queryM cols' Nothing Nothing Nothing Nothing Nothing source False
           -- additionalReqsVec <-
           --   if (null traceIDs)
           --     then pure []
@@ -838,6 +833,7 @@ aiSearchH _pid requestBody = do
               { apiKey = config.openaiApiKey
               , openAIModelName = "gpt-4o-mini"
               , callbacks = []
+              , baseUrl = Nothing
               }
       let fullPrompt = systemPrompt <> "\n\nUser query: " <> input
 
