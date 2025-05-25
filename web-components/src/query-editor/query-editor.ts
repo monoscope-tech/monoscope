@@ -744,6 +744,9 @@ export class QueryEditorComponent extends LitElement {
           bubbles: true,
         })
       );
+
+      // Update placeholder immediately
+      this.updatePlaceholder();
     } finally {
       setTimeout(() => {
         this.editor.focus = originalFocus.bind(this.editor);

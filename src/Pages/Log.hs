@@ -401,6 +401,8 @@ logQueryBox_ pid currentRange source targetSpan query queryLibRecent queryLibSav
               , hxTrigger_ "input[this.value.trim().length > 0] changed delay:500ms"
               , hxSwap_ "none"
               , hxExt_ "json-enc"
+              , term "hx-validate" "false"
+              , hxIndicator_ "#ai-search-loader"
               , [__|on keydown[key=='Escape'] set #ai-search-chkbox.checked to false
                    on keydown[key=='Enter'] 
                      if this.value.trim().length > 0 
@@ -414,9 +416,15 @@ logQueryBox_ pid currentRange source targetSpan query queryLibRecent queryLibSav
                            then 
                              call #filterElement.handleAddQuery(result.query, true)
                          end
+                     else
+                       if event.detail.xhr.responseText and event.detail.xhr.responseText.includes('INVALID_QUERY_ERROR')
+                         then
+                           send errorToast(value:['Could not understand your query. Please try rephrasing it or use a more specific request.']) to <body/>
+                       end
                      end|]
               ]
-            button_
+            span_ [class_ "htmx-indicator", id_ "ai-search-loader"] $ faSprite_ "spinner" "regular" "w-4 h-4 animate-spin"
+            a_
               [ class_ "px-3 py-0.5 inline-flex gap-2 items-center cursor-pointer border text-textDisabled shadow-strokeBrand-weak hover:border-strokeBrand-weak rounded-sm peer-valid:border-strokeBrand-strong peer-valid:text-textBrand peer-valid:shadow-md"
               , onclick_ "htmx.trigger('#ai-search-input', 'htmx:trigger')"
               ]
@@ -658,21 +666,24 @@ apiLogsPage page = do
             , Widget.summarizeBy = Just Widget.SBMax
             , Widget.sql =
                 Just
-                  [text| SELECT timeB, value, quantile
+                  [text| SELECT timeB, COALESCE(value, 0)::float AS value, quantile
                               FROM ( SELECT extract(epoch from time_bucket('1h', timestamp))::integer AS timeB,
                                       ARRAY[
-                                        (approx_percentile(0.50, percentile_agg(duration)) / 1000000.0)::float,
-                                        (approx_percentile(0.75, percentile_agg(duration)) / 1000000.0)::float,
-                                        (approx_percentile(0.90, percentile_agg(duration)) / 1000000.0)::float,
-                                        (approx_percentile(0.95, percentile_agg(duration)) / 1000000.0)::float
+                                        COALESCE((approx_percentile(0.50, percentile_agg(duration)) / 1000000.0), 0)::float,
+                                        COALESCE((approx_percentile(0.75, percentile_agg(duration)) / 1000000.0), 0)::float,
+                                        COALESCE((approx_percentile(0.90, percentile_agg(duration)) / 1000000.0), 0)::float,
+                                        COALESCE((approx_percentile(0.95, percentile_agg(duration)) / 1000000.0), 0)::float
                                       ] AS values,
                                       ARRAY['p50', 'p75', 'p90', 'p95'] AS quantiles
                                 FROM otel_logs_and_spans
                                 WHERE project_id='{{project_id}}'
                                   {{time_filter}} {{query_ast_filters}}
+                                  AND duration IS NOT NULL
                                 GROUP BY timeB
+                                HAVING COUNT(*) > 0
                               ) s,
-                            LATERAL unnest(s.values, s.quantiles) AS u(value, quantile);
+                            LATERAL unnest(s.values, s.quantiles) AS u(value, quantile)
+                            WHERE value IS NOT NULL;
                         |]
             , Widget.unit = Just "ms"
             , Widget.hideLegend = Just True
@@ -836,7 +847,13 @@ aiSearchH _pid requestBody = do
         Right response ->
           -- Clean up the response to extract just the KQL query
           let cleanedResponse = T.strip $ T.takeWhile (/= '\n') response
-           in pure $ Right cleanedResponse
+           in -- Check if the response indicates an invalid query
+              if "Please provide a query" `T.isInfixOf` cleanedResponse
+                || "I need more" `T.isInfixOf` cleanedResponse
+                || "Could you please" `T.isInfixOf` cleanedResponse
+                || T.length cleanedResponse < 3
+                then pure $ Left "INVALID_QUERY_ERROR"
+                else pure $ Right cleanedResponse
 
     systemPrompt :: Text
     systemPrompt =
