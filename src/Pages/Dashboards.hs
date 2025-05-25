@@ -132,11 +132,11 @@ dashboardPage_ pid dashId dash dashVM = do
             , data_ "enforce-whitelist" "true"
             , data_ "mode" $ if var.multi == Just True then "" else "select"
             , data_ "query_sql" $ maybeToMonoid var.sql
-            , data_ "query_raw" $ maybeToMonoid var.query
+            , data_ "query" $ maybeToMonoid var.query
             , data_ "reload_on_change" $ maybe "false" (T.toLower . show) var.reloadOnChange
             , value_ $ maybeToMonoid var.value
             ]
-          <> memptyIfFalse (var.multi == Just True) [data_ "mode" "select"]
+            <> memptyIfFalse (var.multi == Just True) [data_ "mode" "select"]
     script_
       [text|
   const tagifyInstances = new Map();
@@ -171,15 +171,15 @@ dashboardPage_ pid dashId dash dashVM = do
 
   window.addEventListener('update-query', async () => {
     document.querySelectorAll('.tagify-select-input[data-reload_on_change="true"]').forEach(async input => {
-      const { query_sql, query_raw } = input.dataset;
-      if (!query_sql && !query_raw) return;
+      const { query_sql, query } = input.dataset;
+      if (!query_sql && !query) return;
       
       try {
         const tagify = tagifyInstances.get(input.getAttribute('name') || input.id);
         tagify?.loading(true);
         
         const params = new URLSearchParams({ ...Object.fromEntries(new URLSearchParams(location.search)), 
-          query_raw, query_sql, data_type: 'text' });
+          query, query_sql, data_type: 'text' });
         
         const { data_text } = await fetch(`/chart_data?$${params}`).then(res => res.json());
         
@@ -312,38 +312,38 @@ processWidget pid now (sinceStr, fromDStr, toDStr) allParams widgetBase = do
             let issuesVM = V.map (AnomalyList.IssueVM False now "24h") issues
             pure
               $ widget
-              & #html
-                ?~ ( renderText
-                      $ div_ [class_ "flex flex-col gap-4 h-full w-full overflow-hidden"]
-                      $ forM_ issuesVM (\x -> div_ [class_ "border border-strokeWeak rounded-2xl overflow-hidden"] $ toHtml x)
-                   )
+                & #html
+                  ?~ ( renderText
+                         $ div_ [class_ "flex flex-col gap-4 h-full w-full overflow-hidden"]
+                         $ forM_ issuesVM (\x -> div_ [class_ "border border-strokeWeak rounded-2xl overflow-hidden"] $ toHtml x)
+                     )
           Widget.WTStat -> do
             stat <- Charts.queryMetrics (Just Charts.DTFloat) (Just pid) widget.query widget.sql sinceStr fromDStr toDStr Nothing allParams
             pure
               $ widget
-              & #dataset
-                ?~ def
-                  { Widget.source = AE.Null
-                  , Widget.value = stat.dataFloat
-                  }
+                & #dataset
+                  ?~ def
+                    { Widget.source = AE.Null
+                    , Widget.value = stat.dataFloat
+                    }
           _ -> do
             metricsD <-
               Charts.queryMetrics (Just Charts.DTMetric) (Just pid) widget.query widget.sql sinceStr fromDStr toDStr Nothing allParams
             pure
               $ widget
-              & #dataset
-                ?~ Widget.WidgetDataset
-                  { source =
-                      AE.toJSON
-                        $ V.cons
-                          (AE.toJSON <$> metricsD.headers)
-                          (AE.toJSON <<$>> metricsD.dataset)
-                  , rowsPerMin = metricsD.rowsPerMin
-                  , value = Just metricsD.rowsCount
-                  , from = metricsD.from
-                  , to = metricsD.to
-                  , stats = metricsD.stats
-                  }
+                & #dataset
+                  ?~ Widget.WidgetDataset
+                    { source =
+                        AE.toJSON
+                          $ V.cons
+                            (AE.toJSON <$> metricsD.headers)
+                            (AE.toJSON <<$>> metricsD.dataset)
+                    , rowsPerMin = metricsD.rowsPerMin
+                    , value = Just metricsD.rowsCount
+                    , from = metricsD.from
+                    , to = metricsD.to
+                    , stats = metricsD.stats
+                    }
       else pure widget
   -- Recursively process child widgets, if any.
   case widget'.children of
@@ -387,8 +387,8 @@ data WidgetReorderItem = WidgetReorderItem
   , y :: Maybe Int
   , children :: Maybe (Map Text WidgetReorderItem)
   }
-  deriving stock (Show, Generic)
-  deriving anyclass (NFData, Default)
+  deriving stock (Generic, Show)
+  deriving anyclass (Default, NFData)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake WidgetReorderItem
 
 
@@ -442,7 +442,7 @@ reorderWidgets patch ws = go patch
         Widget.Layout ox oy ow oh = fromMaybe (Widget.Layout Nothing Nothing Nothing Nothing) mLayout
 
 
-getDashAndVM :: (DB :> es, Wreq.HTTP :> es, Error ServerError :> es) => Dashboards.DashboardId -> Maybe Text -> Eff es (Dashboards.DashboardVM, Dashboards.Dashboard)
+getDashAndVM :: (DB :> es, Error ServerError :> es, Wreq.HTTP :> es) => Dashboards.DashboardId -> Maybe Text -> Eff es (Dashboards.DashboardVM, Dashboards.Dashboard)
 getDashAndVM dashId fileM = do
   dashVM <-
     (dbtToEff $ DBT.selectById @Dashboards.DashboardVM (Only dashId)) >>= \case
@@ -694,7 +694,7 @@ data DashboardsGet = DashboardsGet
   , projectId :: Projects.ProjectId
   , embedded :: Bool -- Whether to render in embedded mode (for modals)
   }
-  deriving (Show, Generic)
+  deriving (Generic, Show)
 
 
 instance ToHtml DashboardsGet where
@@ -839,7 +839,7 @@ dashboardsGetH pid embeddedM = do
 data DashboardForm = DashboardForm
   { file :: Text
   }
-  deriving stock (Show, Generic)
+  deriving stock (Generic, Show)
   deriving anyclass (FromForm)
 
 
@@ -925,7 +925,7 @@ toQueryParams qs =
 data DashboardRenameForm = DashboardRenameForm
   { title :: Text
   }
-  deriving stock (Show, Generic)
+  deriving stock (Generic, Show)
   deriving anyclass (FromForm)
 
 
@@ -1025,7 +1025,7 @@ data WidgetMoveForm = WidgetMoveForm
   , sourceDashboardId :: Dashboards.DashboardId
   , targetDashboardId :: Dashboards.DashboardId
   }
-  deriving stock (Show, Generic)
+  deriving stock (Generic, Show)
   deriving anyclass (AE.FromJSON, AE.ToJSON)
 
 

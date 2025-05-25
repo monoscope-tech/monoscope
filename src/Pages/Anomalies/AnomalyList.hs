@@ -72,7 +72,7 @@ import Web.FormUrlEncoded (FromForm)
 newtype AnomalyBulkForm = AnomalyBulk
   { anomalyId :: [Text]
   }
-  deriving stock (Show, Generic)
+  deriving stock (Generic, Show)
   deriving anyclass (FromForm)
 
 
@@ -500,7 +500,7 @@ detailsHeader title method statusCode issue currTime filterV content anBtn = do
       anomalyActionButtons issue.projectId issue.id (isJust issue.acknowlegedAt) (isJust issue.archivedAt) ""
     span_ [class_ "font-medium text-2xl text-slate-600 mt-6"] $ toHtml title
     div_ [class_ "flex justify-between items-center gap-4 mt-8"] do
-      let currentURL' = "/charts_html?pid=" <> issue.projectId.toText <> ("&query_raw=" <> escapedQueryPartial [fmt|{anomalyQueryPartial} | timechart [1d]|])
+      let currentURL' = "/charts_html?pid=" <> issue.projectId.toText <> ("&query=" <> escapedQueryPartial [fmt|{anomalyQueryPartial} | timechart [1d]|])
       div_ [class_ "flex flex-col gap-4"] do
         div_ [class_ "flex items-center w-full gap-9 border border-slate-200 rounded-2xl px-10 py-4"] do
           stBox "Events" (show issue.eventsAgg.count)
@@ -687,7 +687,7 @@ anomalyAcknowlegeButton pid aid acked host = do
   a_
     [ class_
         $ "flex items-center gap-2 cursor-pointer py-2 px-3 rounded-xl  "
-        <> (if acked then "bg-green-100 text-green-900" else "btn-primary")
+          <> (if acked then "bg-green-100 text-green-900" else "btn-primary")
     , term "data-tippy-content" "acknowlege anomaly"
     , hxGet_ acknowlegeAnomalyEndpoint
     , hxSwap_ "outerHTML"
@@ -703,7 +703,7 @@ anomalyArchiveButton pid aid archived = do
   a_
     [ class_
         $ "flex items-center gap-2 cursor-pointer py-2 px-3 rounded-xl "
-        <> (if archived then " bg-green-100 text-green-900" else "btn-primary")
+          <> (if archived then " bg-green-100 text-green-900" else "btn-primary")
     , term "data-tippy-content" $ if archived then "unarchive" else "archive"
     , hxGet_ archiveAnomalyEndpoint
     , hxSwap_ "outerHTML"

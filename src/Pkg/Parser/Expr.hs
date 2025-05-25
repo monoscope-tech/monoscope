@@ -20,7 +20,7 @@ import Text.Megaparsec.Char.Lexer qualified as L
 -- Values is an enum of the list of supported value types.
 -- Num is a text  that represents a float as float covers ints in a lot of cases. But its basically the json num type.
 data Values = Num Text | Str Text | Boolean Bool | Null | List [Values]
-  deriving stock (Eq, Ord, Show, Generic)
+  deriving stock (Eq, Generic, Ord, Show)
 
 
 instance AE.FromJSON Values where
@@ -49,7 +49,7 @@ instance ToQueryText Values where
 -- A subject consists of the primary key, and then the list of fields keys which are delimited by a .
 -- To support jsonpath, we will have more powerfule field keys, so instead of a text array, we could have an enum field key type?
 data Subject = Subject Text Text [FieldKey]
-  deriving stock (Eq, Ord, Show, Generic)
+  deriving stock (Eq, Generic, Ord, Show)
 
 
 -- Custom ToJSON which lets us stick to the jsonpath representation of subjects, when rendering subject to json
@@ -70,7 +70,7 @@ instance ToQueryText Subject where
 
 
 data FieldKey = FieldKey Text | ArrayIndex Text Int | ArrayWildcard Text
-  deriving stock (Eq, Ord, Show, Generic)
+  deriving stock (Eq, Generic, Ord, Show)
   deriving anyclass (AE.FromJSON, AE.ToJSON)
 
 
@@ -118,7 +118,7 @@ data Expr
   --  | Not Expr
   --  | JSONPathExpr Expr
   --  | FunctionCall String [Expr] -- For functions like ANY
-  deriving stock (Eq, Ord, Show, Generic)
+  deriving stock (Eq, Generic, Ord, Show)
   deriving anyclass (AE.FromJSON, AE.ToJSON)
 
 
@@ -303,6 +303,49 @@ subjectHasWildcard (Subject _ _ keys) = any isArrayWildcard keys
     isArrayWildcard _ = False
 
 
+-- List of OpenTelemetry attribute paths that have been flattened in the database schema
+flattenedOtelAttributes :: [T.Text]
+flattenedOtelAttributes =
+  [ "attributes.http.request.method"
+  , "attributes.http.request.method_original"
+  , "attributes.http.response.status_code"
+  , "attributes.http.request.resend_count"
+  , "attributes.http.request.body.size"
+  , "attributes.url.fragment"
+  , "attributes.url.full"
+  , "attributes.url.path"
+  , "attributes.url.query"
+  , "attributes.url.scheme"
+  , "attributes.user_agent.original"
+  , "attributes.db.system.name"
+  , "attributes.db.collection.name"
+  , "attributes.db.namespace"
+  , "attributes.db.operation.name"
+  , "attributes.db.operation.batch.size"
+  , "attributes.db.query.summary"
+  , "attributes.db.query.text"
+  , "context.trace_id"
+  , "context.span_id"
+  , "context.trace_state"
+  , "context.trace_flags"
+  , "context.is_remote"
+  , "resource.service.name"
+  , "resource.service.version"
+  , "resource.service.instance.id"
+  , "resource.service.namespace"
+  , "resource.telemetry.sdk.language"
+  , "resource.telemetry.sdk.name"
+  , "resource.telemetry.sdk.version"
+  ]
+
+
+-- Transform dot notation to triple-underscore notation for flattened attributes
+transformFlattenedAttribute :: T.Text -> T.Text
+transformFlattenedAttribute entire
+  | entire `elem` flattenedOtelAttributes = T.replace "." "___" entire
+  | otherwise = entire
+
+
 -- >>> display (Subject "" "request_body" [FieldKey "message"])
 -- "request_body->>'message' as message"
 --
@@ -315,9 +358,12 @@ subjectHasWildcard (Subject _ _ keys) = any isArrayWildcard keys
 -- >>> display (Subject "" "errors" [ArrayIndex "" 0, FieldKey "message"])
 -- "errors->0->>'message' as message"
 instance Display Subject where
-  displayPrec prec (Subject entire x []) = displayPrec prec x
-  displayPrec prec (Subject entire x (y : ys)) =
-    displayPrec prec $ buildQuerySequence x (y : ys)
+  displayPrec prec (Subject entire x keys) =
+    if entire `elem` flattenedOtelAttributes
+      then displayPrec prec (transformFlattenedAttribute entire)
+      else case keys of
+        [] -> displayPrec prec x
+        (y : ys) -> displayPrec prec $ buildQuerySequence x (y : ys)
     where
       buildQuerySequence :: T.Text -> [FieldKey] -> T.Text
       buildQuerySequence acc [] = acc

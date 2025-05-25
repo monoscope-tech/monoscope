@@ -447,7 +447,7 @@ monitorMetric_ pid monitorM = section_ [class_ "px-8 py-5 space-y-5 group/pg ove
     , class_ "px-5 mt-5 aspect-4/1"
     , hxGet_ $ "/charts_html?id=reqsChartsEC&show_legend=true&pid=" <> pid.toText
     , hxTrigger_ "load,  htmx:beforeRequest from:#log_explorer_form"
-    , hxVals_ "js:{query_raw:window.getQueryFromEditor(), since: getTimeRange().since, from: getTimeRange().from, to:getTimeRange().to, cols:params().cols, layout:'all', source: params().source}"
+    , hxVals_ "js:{query:window.getQueryFromEditor(), since: getTimeRange().since, from: getTimeRange().from, to:getTimeRange().to, cols:params().cols, layout:'all', source: params().source}"
     , hxSwap_ "innerHTML"
     ]
     ""
