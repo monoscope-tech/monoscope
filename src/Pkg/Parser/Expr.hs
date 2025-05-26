@@ -206,7 +206,7 @@ parens = between (symbol "(") (symbol ")")
 -- Right (Duration "h" 3600000000000)
 pDuration :: Parser Values
 pDuration = do
-  value <- L.float
+  value <- try L.float <|> (fromIntegral <$> L.decimal)
   unit <- (string "ns" <|> string "us" <|> string "µs" <|> string "ms" <|> string "s" <|> string "m" <|> string "h")
   let multiplier = case unit of
         "ns" -> 1
@@ -247,7 +247,8 @@ pValues =
     , List [] <$ string "[]"
     , List <$> sqParens (pValues `sepBy` char ',')
     , try pDuration
-    , Num . toText . show <$> L.float
+    , try (Num . toText . show <$> L.float)
+    , Num . toText . show <$> L.decimal
     , Str . toText <$> manyTill L.charLiteral space1
     ]
 

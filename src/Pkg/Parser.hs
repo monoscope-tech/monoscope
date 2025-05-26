@@ -33,7 +33,7 @@ data QueryComponents = QueryComponents
   , rollup :: Maybe Text
   , finalTimechartQuery :: Maybe Text
   }
-  deriving stock (Show, Generic)
+  deriving stock (Generic, Show)
   deriving anyclass (Default)
 
 
@@ -72,7 +72,7 @@ data SqlQueryCfg = SqlQueryCfg
   , source :: Maybe Sources
   , targetSpansM :: Maybe Text
   }
-  deriving stock (Show, Generic)
+  deriving stock (Generic, Show)
   deriving anyclass (Default)
 
 
@@ -232,6 +232,9 @@ sqlFromQueryComponents sqlCfg qc =
 -- >>>  parseQueryStringToWhereClause "request_body.is_customer==true"
 -- Right "request_body->>'is_customer'=true"
 --
+-- >>>  parseQueryStringToWhereClause "duration > 500ms"
+-- Right "request_body->>'is_customer'=true"
+--
 parseQueryStringToWhereClause :: Text -> Either Text Text
 parseQueryStringToWhereClause q =
   let trimmedQ = T.strip q
@@ -272,7 +275,7 @@ queryASTToComponents sqlCfg = sqlFromQueryComponents sqlCfg . sectionsToComponen
 
 
 parseQueryToAST :: Text -> Either Text [Section]
-parseQueryToAST q = first (toText . errorBundlePretty) (parse parseQuery "" (T.strip q))
+parseQueryToAST q = first (toText . errorBundlePretty) (traceShowId $ parse parseQuery "" (traceShowId $ T.strip $ traceShowId q))
 
 
 defPid :: Projects.ProjectId

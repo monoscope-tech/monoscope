@@ -26,6 +26,7 @@ import Effectful.Time qualified as Time
 import Fmt (commaizeF, fmt)
 import Langchain.LLM.Core qualified as LLM
 import Langchain.LLM.OpenAI (OpenAI (..))
+import Log qualified
 import Lucid
 import Lucid.Aria qualified as Aria
 import Lucid.Base (TermRaw (termRaw))
@@ -150,6 +151,17 @@ apiLogH pid queryM' cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM
   let parseQuery q = either (\err -> addErrorToast "Error Parsing Query" (Just err) >> pure []) pure (parseQueryToAST q)
   queryAST <- parseQuery $ maybeToMonoid queryM'
   let queryText = toQText queryAST
+  
+  -- Debug logging for query parsing in apiLogH
+  Log.logTrace "apiLogH Query Processing" (AE.object
+    [ "original_query_input" AE..= fromMaybe "" queryM'
+    , "parsed_query_ast" AE..= show queryAST
+    , "reconstructed_query_text" AE..= queryText
+    , "project_id" AE..= show pid
+    , "source" AE..= source
+    , "target_spans" AE..= fromMaybe "" targetSpansM
+    ])
+  
   unless (isJust queryLibItemTitle) $ Projects.queryLibInsert Projects.QLTHistory pid sess.persistentSession.userId queryText queryAST Nothing
 
   when (layoutM == Just "SaveQuery") do
