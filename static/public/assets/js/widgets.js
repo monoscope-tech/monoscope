@@ -77,7 +77,7 @@ const updateChartData = async (chart, opt, shouldFetch, widgetData) => {
     value && ((value.innerHTML = `${summarizeByPrefix} ${Number(stats[summarizeBy]).toLocaleString()}`), value.classList.remove('hidden'))
 
     chart.hideLoading()
-    chart.setOption(updateChartConfiguration(widgetData, opt, opt.dataset.source))
+    chart.setOption(updateChartConfiguration(widgetData, opt, opt.dataset.source), true)
   } catch (e) {
     console.error('Failed to fetch new data:', e)
   } finally {
