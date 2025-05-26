@@ -114,6 +114,7 @@ data Expr
   | GTEq Subject Values
   | LTEq Subject Values
   | Regex Subject Text
+  | In Subject Values
   | Paren Expr
   | And Expr Expr
   | Or Expr Expr
@@ -245,7 +246,9 @@ pValues =
     , Boolean <$> (True <$ string "true" <|> False <$ string "false" <|> False <$ string "FALSE" <|> True <$ string "TRUE")
     , Str . toText <$> (char '\"' *> manyTill L.charLiteral (char '\"'))
     , List [] <$ string "[]"
-    , List <$> sqParens (pValues `sepBy` char ',')
+    , List <$> sqParens (pValues `sepBy` (space *> char ',' <* space))
+    , List [] <$ string "()"
+    , List <$> parens (pValues `sepBy` (space *> char ',' <* space))
     , try pDuration
     , try (Num . toText . show <$> L.float)
     , Num . toText . show <$> L.decimal
@@ -267,6 +270,7 @@ pTerm =
     <|> try (LTEq <$> pSubject <* space <* void (symbol "<=") <* space <*> pValues)
     <|> try (GT <$> pSubject <* space <* void (symbol ">") <* space <*> pValues)
     <|> try (LT <$> pSubject <* space <* void (symbol "<") <* space <*> pValues)
+    <|> try (In <$> pSubject <* space <* void (symbol "in") <* space <*> pValues)
     <|> try regexParser
 
 
@@ -480,6 +484,7 @@ instance Display Expr where
   displayPrec prec (LT sub val) = displayExprHelper "<" prec sub val
   displayPrec prec (GTEq sub val) = displayExprHelper ">=" prec sub val
   displayPrec prec (LTEq sub val) = displayExprHelper "<=" prec sub val
+  displayPrec prec (In sub val) = displayExprHelper "IN" prec sub val
   displayPrec prec (Paren u1) = displayParen True $ displayPrec prec u1
   displayPrec prec (And u1 u2) = displayParen (prec > 0) $ displayPrec prec u1 <> " AND " <> displayPrec prec u2
   displayPrec prec (Or u1 u2) = displayParen (prec > 0) $ displayPrec prec u1 <> " OR " <> displayPrec prec u2
@@ -494,6 +499,7 @@ instance ToQueryText Expr where
   toQText (LT sub val) = toQText sub <> " < " <> toQText val
   toQText (GTEq sub val) = toQText sub <> " >= " <> toQText val
   toQText (LTEq sub val) = toQText sub <> " <= " <> toQText val
+  toQText (In sub val) = toQText sub <> " in " <> toQText val
   toQText (Paren expr) = "(" <> toQText expr <> ")"
   toQText (And left right) = toQText left <> " AND " <> toQText right
   toQText (Or left right) = toQText left <> " OR " <> toQText right
@@ -506,15 +512,11 @@ displayExprHelper op prec sub val =
   displayParen (prec > 0)
     $ if subjectHasWildcard sub
       then displayPrec prec (jsonPathQuery op sub val)
-      else case val of
-        Null ->
-          if op == "="
-            then displayPrec prec sub <> " IS NULL"
-            else
-              if op == "!="
-                then displayPrec prec sub <> " IS NOT NULL"
-                else displayPrec prec sub <> displayPrec @T.Text prec op <> displayPrec prec val
-        _ -> displayPrec prec sub <> displayPrec @T.Text prec op <> displayPrec prec val
+      else case (op, val) of
+        ("=", Null) -> displayPrec prec sub <> " IS NULL"
+        ("!=", Null) -> displayPrec prec sub <> " IS NOT NULL"
+        ("IN", List vs) -> displayPrec prec sub <> " IN (" <> (mconcat . intersperse "," . map (displayPrec prec)) vs <> ")"
+        _ -> displayPrec prec sub <> " " <> displayPrec @T.Text prec op <> " " <> displayPrec prec val
 
 
 -- | Generate PostgreSQL JSONPath queries from AST with specified operator
@@ -563,4 +565,4 @@ jsonPathQuery op' (Subject entire base keys) val =
         "=" -> " ? (@ is null" <> pstfx <> ")"
         "!=" -> " ? (@ is not null" <> pstfx <> ")"
         _ -> " ? (@ " <> oper <> " null" <> pstfx <> ")"
-    buildCondition oper (List xs) pstfx = " ? (@ " <> oper <> " {" <> (mconcat . intersperse "," . map display) xs <> "}" <> pstfx <> ")"
+    buildCondition oper (List xs) pstfx = " ? (@ " <> oper <> " [" <> (mconcat . intersperse "," . map display) xs <> "]" <> pstfx <> ")"
