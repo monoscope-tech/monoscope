@@ -19,7 +19,8 @@ import Text.Megaparsec.Char.Lexer qualified as L
 
 -- Values is an enum of the list of supported value types.
 -- Num is a text  that represents a float as float covers ints in a lot of cases. But its basically the json num type.
-data Values = Num Text | Str Text | Boolean Bool | Null | List [Values]
+-- Duration stores original unit and nanoseconds value for precise time comparisons
+data Values = Num Text | Str Text | Boolean Bool | Null | List [Values] | Duration Text Integer
   deriving stock (Eq, Generic, Ord, Show)
 
 
@@ -40,6 +41,7 @@ instance AE.ToJSON Values where
   toJSON (Boolean b) = AE.Bool b
   toJSON Null = AE.Null
   toJSON (List xs) = AE.Array (V.fromList (map AE.toJSON xs))
+  toJSON (Duration _ ns) = AE.Number (fromInteger ns)
 
 
 instance ToQueryText Values where
@@ -184,6 +186,40 @@ parens :: Parser a -> Parser a
 parens = between (symbol "(") (symbol ")")
 
 
+-- | Parse duration values and convert to nanoseconds
+--
+-- Examples:
+--
+-- >>> parse pDuration "" "100ms"
+-- Right (Duration "ms" 100000000)
+--
+-- >>> parse pDuration "" "4.3ms"
+-- Right (Duration "ms" 4300000)
+--
+-- >>> parse pDuration "" "5s"
+-- Right (Duration "s" 5000000000)
+--
+-- >>> parse pDuration "" "2.5m"
+-- Right (Duration "m" 150000000000)
+--
+-- >>> parse pDuration "" "1h"
+-- Right (Duration "h" 3600000000000)
+pDuration :: Parser Values
+pDuration = do
+  value <- L.float
+  unit <- (string "ns" <|> string "us" <|> string "µs" <|> string "ms" <|> string "s" <|> string "m" <|> string "h")
+  let multiplier = case unit of
+        "ns" -> 1
+        "us" -> 1000
+        "µs" -> 1000
+        "ms" -> 1000000
+        "s" -> 1000000000
+        "m" -> 60000000000
+        "h" -> 3600000000000
+        _ -> error "Invalid duration unit"
+  return $ Duration unit (round (value * multiplier))
+
+
 -- | parse values into our internal AST representation. Int, Str, Num, Bool, List, etc
 --
 -- Examples:
@@ -207,10 +243,11 @@ pValues =
   choice @[]
     [ Null <$ string "null"
     , Boolean <$> (True <$ string "true" <|> False <$ string "false" <|> False <$ string "FALSE" <|> True <$ string "TRUE")
-    , Num . toText <$> some (digitChar <|> char '.')
     , Str . toText <$> (char '\"' *> manyTill L.charLiteral (char '\"'))
     , List [] <$ string "[]"
     , List <$> sqParens (pValues `sepBy` char ',')
+    , try pDuration
+    , Num . toText . show <$> L.float
     , Str . toText <$> manyTill L.charLiteral space1
     ]
 
@@ -393,6 +430,7 @@ instance Display Values where
   displayPrec prec (Boolean True) = "true"
   displayPrec prec (Boolean False) = "false"
   displayPrec prec Null = "null"
+  displayPrec prec (Duration _ ns) = displayPrec prec (show ns)
   displayPrec prec (List vs) =
     let arrayElements = mconcat . intersperse "," . map (displayPrec prec) $ vs
      in "ARRAY[" <> arrayElements <> "]"
@@ -518,6 +556,7 @@ jsonPathQuery op' (Subject entire base keys) val =
     buildCondition oper (Num n) pstfx = " ? (@ " <> oper <> " " <> n <> postfix <> ")"
     buildCondition oper (Str s) pstfx = " ? (@ " <> oper <> " \"" <> s <> "\"" <> postfix <> ")"
     buildCondition oper (Boolean b) pstfx = " ? (@ " <> oper <> " " <> T.toLower (show b) <> pstfx <> ")"
+    buildCondition oper (Duration _ ns) pstfx = " ? (@ " <> oper <> " " <> show ns <> postfix <> ")"
     buildCondition oper Null pstfx =
       case op' of
         "=" -> " ? (@ is null" <> pstfx <> ")"

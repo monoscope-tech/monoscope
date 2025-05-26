@@ -115,7 +115,7 @@ renderFacets facetSummary = do
             , [__|on click toggle .collapsed on me.parentElement|]
             ]
             $ span_ [class_ "facet-title"] (toHtml displayName)
-            >> faSprite_ "chevron-down" "regular" "w-3 h-3 transition-transform duration-200 group-[.collapsed]:rotate-180"
+              >> faSprite_ "chevron-down" "regular" "w-3 h-3 transition-transform duration-200 group-[.collapsed]:rotate-180"
 
           -- Wrap facet values in a collapsible container with animation
           div_ [class_ "facet-content overflow-hidden transition-all duration-300 ease-in-out max-h-96 opacity-100 transition-opacity duration-150 group-[.collapsed]:max-h-0 group-[.collapsed]:opacity-0 group-[.collapsed]:py-0"] do
@@ -614,7 +614,7 @@ apiLogsPage page = do
       logQueryBox_ page.pid page.currentRange page.source page.targetSpans page.query page.queryLibRecent page.queryLibSaved
 
       div_ [class_ "flex flex-row gap-4 mt-3 group-has-[.toggle-chart:checked]/pg:hidden w-full", style_ "aspect-ratio: 10 / 1;"] do
-        Widget.widget_ $ (def :: Widget.Widget){Widget.query = Just "timechart count(*)", Widget.unit = Just "rows", Widget.title = Just "All traces", Widget.hideLegend = Just True, Widget._projectId = Just page.pid, Widget.standalone = Just True, Widget.yAxis = Just (def{showOnlyMaxLabel = Just True}),Widget.allowZoom = Just True, Widget.showMarkArea = Just True}
+        Widget.widget_ $ (def :: Widget.Widget){Widget.query = Just "timechart count(*)", Widget.unit = Just "rows", Widget.title = Just "All traces", Widget.hideLegend = Just True, Widget._projectId = Just page.pid, Widget.standalone = Just True, Widget.yAxis = Just (def{showOnlyMaxLabel = Just True}), Widget.allowZoom = Just True, Widget.showMarkArea = Just True}
 
         Widget.widget_
           $ (def :: Widget.Widget)
@@ -812,11 +812,11 @@ aiSearchH _pid requestBody = do
               if "Please provide a query"
                 `T.isInfixOf` cleanedResponse
                 || "I need more"
-                `T.isInfixOf` cleanedResponse
+                  `T.isInfixOf` cleanedResponse
                 || "Could you please"
-                `T.isInfixOf` cleanedResponse
+                  `T.isInfixOf` cleanedResponse
                 || T.length cleanedResponse
-                < 3
+                  < 3
                 then pure $ Left "INVALID_QUERY_ERROR"
                 else pure $ Right cleanedResponse
 
@@ -830,7 +830,7 @@ aiSearchH _pid requestBody = do
         , "Examples:"
         , "- \"show me errors\" -> level == \"ERROR\""
         , "- \"POST requests\" -> attributes.http.request.method == \"POST\""
-        , "- \"slow requests\" -> duration > 5000000000"
+        , "- \"slow requests\" -> duration > 500ms"
         , "- \"500 errors\" -> attributes.http.response.status_code == \"500\""
         , ""
         , "Return only the KQL filter expression, no explanations."

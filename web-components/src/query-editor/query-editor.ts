@@ -271,8 +271,8 @@ export const language = {
   operators: ['==', '!=', '>', '<', '>=', '<=', '=~', '|'],
   tokenizer: {
     root: [
-      [/\[[0-9]+(?:s|m|h|d|w)\]/, 'number.timespan'],
-      [/[0-9]+(?:ns|µs|us|ms|s|m|h|d|w)/, 'number.duration'],
+      [/\[[0-9]+(?:\.[0-9]+)?(?:s|m|h|d|w)\]/, 'number.timespan'],
+      [/[0-9]+(?:\.[0-9]+)?(?:ns|µs|us|ms|s|m|h|d|w)/, 'number.duration'],
       [/[0-9]+(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?/, 'number'],
       [/"([^"\\]|\\.)*"/, 'string'],
       [/\/(\\.|[^\\/])+\/[iIsS]*/, 'regexp'],
