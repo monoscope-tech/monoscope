@@ -163,10 +163,8 @@ nonNull (Just "") = Nothing
 nonNull x = x
 
 
-
 queryMetrics :: (DB :> es, Log :> es, State.State TriggerEvents :> es, Time.Time :> es) => M DataType -> M Projects.ProjectId -> M Text -> M Text -> M Text -> M Text -> M Text -> M Text -> [(Text, Maybe Text)] -> Eff es MetricsData
 queryMetrics (maybeToMonoid -> respDataType) pidM (nonNull -> queryM) (nonNull -> querySQLM) (nonNull -> sinceM) (nonNull -> fromM) (nonNull -> toM) (nonNull -> sourceM) allParams = do
-
   now <- Time.currentTime
   let (fromD, toD, _currentRange) = Components.parseTimeRange now (Components.TimePicker sinceM fromM toM)
   let mappng = DashboardUtils.variablePresets (maybe "" (.toText) pidM) fromD toD allParams

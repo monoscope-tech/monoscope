@@ -96,8 +96,6 @@ data OnboardingStep = Info | Survey | CreateMonitor | NotifChannel | Integration
   deriving (AE.FromJSON, AE.ToJSON, FromField, NFData, ToField) via OnboardingStep
 
 
-
-
 data Project = Project
   { id :: ProjectId
   , createdAt :: UTCTime
@@ -325,7 +323,6 @@ updateUsageLastReported pid lastReported = execute q (lastReported, pid)
 ---------------------------------
 newtype QueryLibItemId = QueryLibItemId {unQueryLibItemId :: UUID.UUID}
   deriving stock (Generic, Read, Show)
-
   deriving newtype (AE.FromJSON, AE.ToJSON, Default, Eq, FromField, FromHttpApiData, Hashable, NFData, Ord, ToField)
 
 
@@ -339,9 +336,7 @@ instance HasField "toText" QueryLibItemId Text where
 
 data QueryLibType = QLTHistory | QLTSaved
   deriving (Eq, Generic, NFData, Read, Show)
-
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.ConstructorTagModifier '[DAE.StripPrefix "QLT", DAE.CamelToSnake]] QueryLibType
-
   deriving (FromField, ToField) via WrappedEnumSC "QLT" QueryLibType
 
 
@@ -358,7 +353,6 @@ data QueryLibItem = QueryLibItem
   , byMe :: Bool
   }
   deriving (Eq, Generic, Show)
-
   deriving anyclass (AE.FromJSON, AE.ToJSON, FromRow, NFData, ToRow)
 
 
