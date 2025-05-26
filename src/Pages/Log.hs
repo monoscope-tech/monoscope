@@ -1,5 +1,6 @@
 module Pages.Log (
   apiLogH,
+  aiSearchH,
   LogsGet (..),
   ApiLogsPageData (..),
   virtualTable,
@@ -10,16 +11,21 @@ where
 
 import Control.Error (hush)
 import Data.Aeson qualified as AE
+import Data.Aeson.Types qualified as AET
 import Data.Containers.ListUtils (nubOrd)
 import Data.Default (def)
 import Data.HashMap.Strict qualified as HM
 import Data.List qualified as L
 import Data.Text qualified as T
-import Data.Time (UTCTime, addUTCTime, diffUTCTime)
+import Data.Time (UTCTime, addUTCTime)
 import Data.Vector qualified as V
+import Effectful.Error.Static (throwError)
 import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
+import Effectful.Reader.Static qualified
 import Effectful.Time qualified as Time
 import Fmt (commaizeF, fmt)
+import Langchain.LLM.Core qualified as LLM
+import Langchain.LLM.OpenAI (OpenAI (..))
 import Lucid
 import Lucid.Aria qualified as Aria
 import Lucid.Base (TermRaw (termRaw))
@@ -29,7 +35,7 @@ import Models.Apis.Fields.Facets qualified as Facets
 import Models.Apis.Fields.Types (FacetData (..), FacetSummary (..), FacetValue (..))
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.Projects qualified as Projects
-import Models.Telemetry.Telemetry qualified as Telemetry
+import Models.Telemetry.Schema qualified as Schema
 import Models.Users.Sessions qualified as Sessions
 import NeatInterpolation (text)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), currProject, pageActions, pageTitle, sessM)
@@ -38,6 +44,8 @@ import Pkg.Components.Widget (WidgetAxis (..), WidgetType (WTTimeseriesLine))
 import Pkg.Components.Widget qualified as Widget
 import Pkg.Parser (pSource, parseQueryToAST, toQText)
 import Relude hiding (ask)
+import Servant qualified
+import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types
 import Text.Megaparsec (parseMaybe)
 import Utils
@@ -93,10 +101,7 @@ renderFacets facetSummary = do
   script_
     [text|
     function filterByFacet(field, value) {
-      document.getElementById("filterElement").handleAddQuery({
-        "tag": "Eq",
-        "contents": [field, value]
-      });
+      document.getElementById("filterElement").handleAddQuery(field + ' == "' + value + '"');
     }
   |]
 
@@ -137,17 +142,13 @@ keepNonEmpty (Just "") = Nothing
 keepNonEmpty (Just a) = Just a
 
 
-apiLogH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe UTCTime -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders LogsGet)
-apiLogH pid queryM queryASTM cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM queryLibItemTitle queryLibItemID detailWM targetEventM showTraceM hxRequestM hxBoostedM jsonM = do
+apiLogH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe UTCTime -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders LogsGet)
+apiLogH pid queryM' cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM queryLibItemTitle queryLibItemID detailWM targetEventM showTraceM hxRequestM hxBoostedM jsonM = do
   (sess, project) <- Sessions.sessionAndProject pid
   let source = "spans" -- fromMaybe "spans" sourceM
   let summaryCols = T.splitOn "," (fromMaybe "" cols')
   let parseQuery q = either (\err -> addErrorToast "Error Parsing Query" (Just err) >> pure []) pure (parseQueryToAST q)
-  queryAST <-
-    maybe
-      (parseQuery $ maybeToMonoid queryM)
-      (either (const $ parseQuery $ maybeToMonoid queryM) pure . AE.eitherDecode . encodeUtf8)
-      queryASTM
+  queryAST <- parseQuery $ maybeToMonoid queryM'
   let queryText = toQText queryAST
   unless (isJust queryLibItemTitle) $ Projects.queryLibInsert Projects.QLTHistory pid sess.persistentSession.userId queryText queryAST Nothing
 
@@ -201,15 +202,18 @@ apiLogH pid queryM queryASTM cols' cursorM' sinceM fromM toM layoutM sourceM tar
                 "Events"
                 -- a_ [onclick_ "window.setQueryParamAndReload('source', 'metrics')", role_ "tab", class_ $ "tab py-1.5 h-auto! " <> if source == "metrics" then "tab-active" else ""] "Metrics"
           }
+
   case tableAsVecM of
     Just tableAsVec -> do
       let (requestVecs, colNames, resultCount) = tableAsVec
           curatedColNames = nubOrd $ curateCols summaryCols colNames
           colIdxMap = listToIndexHashMap colNames
           reqLastCreatedAtM = (\r -> lookupVecTextByKey r colIdxMap "timestamp") =<< (requestVecs V.!? (V.length requestVecs - 1))
-          nextLogsURL = RequestDumps.requestDumpLogUrlPath pid queryM cols' reqLastCreatedAtM sinceM fromM toM (Just "loadmore") source queryASTM
-          -- traceIDs = V.catMaybes $ V.map (\v -> lookupVecTextByKey v colIdxMap "trace_id") requestVecs
-          resetLogsURL = RequestDumps.requestDumpLogUrlPath pid queryM cols' Nothing Nothing Nothing Nothing Nothing source Nothing
+          reqFirstCreatedAtM = (\r -> lookupVecTextByKey r colIdxMap "timestamp") =<< (requestVecs V.!? 0)
+          nextLogsURL = RequestDumps.requestDumpLogUrlPath pid queryM' cols' reqLastCreatedAtM sinceM fromM toM (Just "loadmore") source False
+          recentLogsURL = RequestDumps.requestDumpLogUrlPath pid queryM' cols' reqFirstCreatedAtM sinceM fromM toM (Just "loadmore") source True
+
+          resetLogsURL = RequestDumps.requestDumpLogUrlPath pid queryM' cols' Nothing Nothing Nothing Nothing Nothing source False
           -- additionalReqsVec <-
           --   if (null traceIDs)
           --     then pure []
@@ -228,9 +232,10 @@ apiLogH pid queryM queryASTM cols' cursorM' sinceM fromM toM layoutM sourceM tar
               , colIdxMap
               , nextLogsURL
               , resetLogsURL
+              , recentLogsURL
               , currentRange
               , exceededFreeTier = freeTierExceeded
-              , query = queryM
+              , query = queryM'
               , cursor = reqLastCreatedAtM
               , isTestLog = Nothing
               , emptyStateUrl = Nothing
@@ -238,7 +243,6 @@ apiLogH pid queryM queryASTM cols' cursorM' sinceM fromM toM layoutM sourceM tar
               , targetSpans = targetSpansM
               , serviceColors = colors
               , daysCountDown = Nothing
-              , queryAST = decodeUtf8 $ AE.encode queryAST
               , queryLibRecent
               , queryLibSaved
               , fromD
@@ -253,7 +257,7 @@ apiLogH pid queryM queryASTM cols' cursorM' sinceM fromM toM layoutM sourceM tar
         (Just "resultTable", Just "true", _, _) -> addRespHeaders $ LogsGetResultTable page False
         (Just "virtualTable", _, _, _) -> addRespHeaders $ LogsGetVirtuaTable page
         (Just "all", Just "true", _, Nothing) -> addRespHeaders $ LogsGetResultTable page True
-        (_, _, _, Just _) -> addRespHeaders $ LogsGetJson requestVecs colors nextLogsURL resetLogsURL
+        (_, _, _, Just _) -> addRespHeaders $ LogsGetJson requestVecs colors nextLogsURL resetLogsURL recentLogsURL
         _ -> addRespHeaders $ LogPage $ PageCtx bwconf page
     Nothing -> do
       case (layoutM, hxRequestM, hxBoostedM) of
@@ -273,7 +277,7 @@ data LogsGet
   | LogsGetVirtuaTable ApiLogsPageData
   | LogsGetError (PageCtx Text)
   | LogsGetErrorSimple Text
-  | LogsGetJson (V.Vector (V.Vector AE.Value)) (HM.HashMap Text Text) Text Text
+  | LogsGetJson (V.Vector (V.Vector AE.Value)) (HM.HashMap Text Text) Text Text Text
   | LogsQueryLibrary Projects.ProjectId (V.Vector Projects.QueryLibItem) (V.Vector Projects.QueryLibItem)
 
 
@@ -284,21 +288,21 @@ instance ToHtml LogsGet where
   toHtml (LogsGetErrorSimple err) = span_ [class_ "text-red-500"] $ toHtml err
   toHtml (LogsGetError (PageCtx conf err)) = toHtml $ PageCtx conf err
   toHtml (LogsQueryLibrary pid queryLibSaved queryLibRecent) = toHtml $ queryLibrary_ pid queryLibSaved queryLibRecent
-  toHtml (LogsGetJson vecs colors nextLogsURL resetLogsURL) = span_ [] $ show $ AE.object ["logsData" AE..= vecs, "serviceColors" AE..= colors, "nextUrl" AE..= nextLogsURL, "resetLogsUrl" AE..= resetLogsURL]
+  toHtml (LogsGetJson vecs colors nextLogsURL resetLogsURL recentLogsURL) = span_ [] $ show $ AE.object ["logsData" AE..= vecs, "serviceColors" AE..= colors, "nextUrl" AE..= nextLogsURL, "resetLogsUrl" AE..= resetLogsURL, "recentUrl" AE..= recentLogsURL]
   toHtmlRaw = toHtml
 
 
 instance AE.ToJSON LogsGet where
-  toJSON (LogsGetJson vecs colors nextLogsURL resetLogsURL) = AE.object ["logsData" AE..= vecs, "serviceColors" AE..= colors, "nextUrl" AE..= nextLogsURL, "resetLogsUrl" AE..= resetLogsURL]
+  toJSON (LogsGetJson vecs colors nextLogsURL resetLogsURL recentLogsURL) = AE.object ["logsData" AE..= vecs, "serviceColors" AE..= colors, "nextUrl" AE..= nextLogsURL, "resetLogsUrl" AE..= resetLogsURL, "recentUrl" AE..= recentLogsURL]
   toJSON _ = AE.object []
 
 
-logQueryBox_ :: Projects.ProjectId -> Maybe Text -> Text -> Maybe Text -> Text -> V.Vector Projects.QueryLibItem -> V.Vector Projects.QueryLibItem -> Html ()
-logQueryBox_ pid currentRange source targetSpan queryAST queryLibRecent queryLibSaved = do
+logQueryBox_ :: Projects.ProjectId -> Maybe Text -> Text -> Maybe Text -> Maybe Text -> V.Vector Projects.QueryLibItem -> V.Vector Projects.QueryLibItem -> Html ()
+logQueryBox_ pid currentRange source targetSpan query queryLibRecent queryLibSaved = do
   Components.modal_ "saveQueryMdl" "" $ form_
     [ class_ "flex flex-col p-3 gap-3"
     , hxGet_ $ "/p/" <> pid.toText <> "/log_explorer?layout=SaveQuery"
-    , hxVals_ "js:{queryAST:window.getQueryFromEditor()}"
+    , hxVals_ "js:{query:window.getQueryFromEditor()}"
     , hxTarget_ "#queryLibraryParentEl"
     , hxSwap_ "outerHTML"
     , hxSelect_ "#queryLibraryParentEl"
@@ -311,9 +315,9 @@ logQueryBox_ pid currentRange source targetSpan queryAST queryLibRecent queryLib
       button_ [type_ "submit", class_ "btn cursor-pointer bg-linear-to-b from-[#067cff] to-[#0850c5] text-white"] "Save"
   form_
     [ hxGet_ $ "/p/" <> pid.toText <> "/log_explorer"
-    , hxPushUrl_ "true"
-    , hxTrigger_ "add-query from:#filterElement, update-query from:#filterElement, submit, update-query from:window"
-    , hxVals_ "js:{queryAST:window.getQueryFromEditor(), since: params().since, from: params().from, to:params().to, cols:params().cols, layout:'resultTable', source: params().source}"
+    , -- , hxPushUrl_ "true"
+      hxTrigger_ "update-query from:#filterElement, submit, update-query from:window"
+    , hxVals_ "js:{...{layout:'resultTable', ...params()}}"
     , hxTarget_ "#resultTableInner"
     , hxSwap_ "outerHTML"
     , id_ "log_explorer_form"
@@ -322,49 +326,114 @@ logQueryBox_ pid currentRange source targetSpan queryAST queryLibRecent queryLib
     , class_ "flex flex-col gap-1"
     ]
     do
-      div_ [class_ "flex gap-2 items-stretch justify-center"] do
-        queryLibrary_ pid queryLibSaved queryLibRecent
-        div_ [class_ "p-1 pl-3 flex-1 flex gap-2  bg-fillWeaker rounded-lg border border-strokeWeak justify-between items-stretch"] do
-          div_ [id_ "queryEditor", class_ "h-14 hidden overflow-hidden  bg-fillWeak flex-1 flex items-center"] pass
-          div_ [id_ "queryBuilder", class_ "flex-1 flex items-center"] $ termRaw "filter-element" [id_ "filterElement", class_ "w-full h-full flex items-center", termRaw "ast" queryAST] ("" :: Text)
-          div_ [class_ "gap-[2px] flex items-center"] do
-            span_ "in"
-            select_
-              [ class_ "ml-1 select select-sm w-full max-w-[150px]"
-              , name_ "target-spans"
-              , id_ "spans-toggle"
-              , onchange_ "htmx.trigger('#log_explorer_form', 'submit')"
+      div_ [class_ "flex flex-col gap-2 items-stretch justify-center group/fltr"] do
+        div_ [class_ "p-1 flex-1 flex flex-col gap-2  bg-fillWeaker rounded-lg border border-strokeWeak group-has-[.ai-search:checked]/fltr:border-2 group-has-[.ai-search:checked]/fltr:border-iconBrand group-has-[.ai-search:checked]/fltr:shadow-xs shadow-strokeBrand-weak"] do
+          input_
+            [ class_ "hidden ai-search"
+            , type_ "checkbox"
+            , id_ "ai-search-chkbox"
+            , [__|on change if me.checked then call #ai-search-input.focus() end
+                  on keydown[key=='Space' and shiftKey] from document set #ai-search-chkbox.checked to true
+                  |]
+            ]
+          script_
+            [text|
+            document.addEventListener('keydown', function(e) {
+              if (e.key === "?" && !e.ctrlKey && !e.metaKey && !e.altKey && (e.target.tagName !== 'INPUT') && (e.target.tagName !== 'TEXTAREA') && (e.target.contentEditable !== 'true')) {
+                e.preventDefault();
+                e.stopPropagation();
+                document.getElementById("ai-search-chkbox").checked = true;
+                document.getElementById("ai-search-input").focus()
+                document.getElementById("ai-search-input").value=""
+              }
+            });
+            |]
+          div_ [class_ "w-full gap-2 items-center px-2 hidden group-has-[.ai-search:checked]/fltr:flex"] do
+            faSprite_ "sparkles" "regular" "h-4 w-4 inline-block text-iconBrand"
+            input_
+              [ class_ "border-0 w-full flex-1 p-2 outline-none peer"
+              , placeholder_ "Ask. Eg: Logs with errors. Hit Enter to submit"
+              , id_ "ai-search-input"
+              , autofocus_
+              , required_ "required"
+              , name_ "input"
+              , hxPost_ $ "/p/" <> pid.toText <> "/log_explorer/ai_search"
+              , hxTrigger_ "input[this.value.trim().length > 0] changed delay:500ms"
+              , hxSwap_ "none"
+              , hxExt_ "json-enc"
+              , term "hx-validate" "false"
+              , hxIndicator_ "#ai-search-loader"
+              , [__|on keydown[key=='Escape'] set #ai-search-chkbox.checked to false
+                   on keydown[key=='Enter'] 
+                     if this.value.trim().length > 0 
+                       then halt then trigger htmx:trigger 
+                     end
+                   on htmx:afterRequest 
+                     if event.detail.successful 
+                       then 
+                         call JSON.parse(event.detail.xhr.responseText) set result to it
+                         if result.query
+                           then 
+                             call #filterElement.handleAddQuery(result.query, true)
+                         end
+                     else
+                       if event.detail.xhr.responseText and event.detail.xhr.responseText.includes('INVALID_QUERY_ERROR')
+                         then
+                           send errorToast(value:['Could not understand your query. Please try rephrasing it or use a more specific request.']) to <body/>
+                       end
+                     end|]
+              ]
+            span_ [class_ "htmx-indicator", id_ "ai-search-loader"] $ faSprite_ "spinner" "regular" "w-4 h-4 animate-spin"
+            a_
+              [ class_ "px-3 py-0.5 inline-flex gap-2 items-center cursor-pointer border text-textDisabled shadow-strokeBrand-weak hover:border-strokeBrand-weak rounded-sm peer-valid:border-strokeBrand-strong peer-valid:text-textBrand peer-valid:shadow-md"
+              , onclick_ "htmx.trigger('#ai-search-input', 'htmx:trigger')"
               ]
               do
-                let target = fromMaybe "all-spans" targetSpan
-                option_ (value_ "all-spans" : ([selected_ "true" | target == "all-spans"])) "All spans"
-                option_ (value_ "root-spans" : ([selected_ "true" | target == "root-spans"])) "Trace Root Spans"
-                option_ (value_ "service-entry-spans" : ([selected_ "true" | target == "service-entry-spans"])) "Service Entry Spans"
-          div_ [class_ "dropdown dropdown-hover dropdown-bottom dropdown-end"] do
-            div_ [class_ "rounded-lg px-3 py-2 text-slate-700 inline-flex items-center border border-strokeStrong", tabindex_ "0", role_ "button"] $ faSprite_ "floppy-disk" "regular" "h-5 w-5"
-            ul_ [tabindex_ "0", class_ "dropdown-content border menu bg-base-100 rounded-box z-1 w-60 p-2 shadow-lg"] do
-              li_ $ label_ [Lucid.for_ "saveQueryMdl"] "Save query to Query Library"
-          -- li_ $ a_ [] "Save query as an Alerts"
-          -- li_ $ a_ [] "Save result to a dashboard"
-          button_
-            [type_ "submit", class_ "leading-none rounded-lg px-3 py-2 cursor-pointer btn btn-primary"]
-            do
-              span_ [id_ "run-query-indicator", class_ "refresh-indicator htmx-indicator query-indicator loading loading-dots loading-sm"] ""
-              faSprite_ "magnifying-glass" "regular" "h-4 w-4 inline-block"
+                faSprite_ "arrow-right" "regular" "h-4 w-4"
+                "Submit"
+            label_ [Lucid.for_ "ai-search-chkbox", class_ "cursor-pointer p-1", data_ "tippy-content" "Collapse APItoolkit AI without losing your query"] $ faSprite_ "arrows-minimize" "regular" "h-4 w-4 inline-block text-iconBrand"
+
+          div_ [class_ "flex flex-1 gap-2 justify-between items-stretch"] do
+            queryLibrary_ pid queryLibSaved queryLibRecent
+            div_ [id_ "queryBuilder", class_ "flex-1 flex items-center"] $ termRaw "query-editor" [id_ "filterElement", class_ "w-full h-full flex items-center", term "default-value" (fromMaybe "" query)] ("" :: Text)
+            div_ [class_ "gap-[2px] flex items-center"] do
+              span_ "in"
+              -- TODO: trigger update-query instead
+              select_
+                [ class_ "ml-1 select select-sm w-full max-w-xs h-full bg-transparent border-strokeStrong"
+                , name_ "target-spans"
+                , id_ "spans-toggle"
+                , onchange_ "htmx.trigger('#log_explorer_form', 'submit')"
+                ]
+                do
+                  let target = fromMaybe "all-spans" targetSpan
+                  option_ (value_ "all-spans" : ([selected_ "true" | target == "all-spans"])) "All spans"
+                  option_ (value_ "root-spans" : ([selected_ "true" | target == "root-spans"])) "Trace Root Spans"
+                  option_ (value_ "service-entry-spans" : ([selected_ "true" | target == "service-entry-spans"])) "Service Entry Spans"
+            div_ [class_ "dropdown dropdown-hover dropdown-bottom dropdown-end"] do
+              div_ [class_ "rounded-lg px-3 py-2 text-slate-700 inline-flex items-center border border-strokeStrong h-full", tabindex_ "0", role_ "button"] $ faSprite_ "floppy-disk" "regular" "h-5 w-5"
+              ul_ [tabindex_ "0", class_ "dropdown-content border menu bg-base-100 rounded-box z-1 w-60 p-2 shadow-lg h-full"] do
+                li_ $ label_ [Lucid.for_ "saveQueryMdl"] "Save query to Query Library"
+            -- li_ $ a_ [] "Save query as an Alerts"
+            -- li_ $ a_ [] "Save result to a dashboard"
+            button_
+              [type_ "submit", class_ "leading-none rounded-lg px-3 py-2 cursor-pointer !h-auto btn btn-primary"]
+              do
+                span_ [id_ "run-query-indicator", class_ "refresh-indicator htmx-indicator query-indicator loading loading-dots loading-sm"] ""
+                faSprite_ "magnifying-glass" "regular" "h-4 w-4 inline-block"
       div_ [class_ "flex items-between justify-between"] do
         div_ [class_ "", id_ "resultTableInner"] pass
 
-        -- termRaw "filter-element" [id_ "filterElement", class_ "w-full h-full flex items-center", termRaw "ast" queryAST, termRaw "mode" "command"] ("" :: Text)
         div_ [class_ "flex justify-end  gap-2 "] do
           fieldset_ [class_ "fieldset"] $ label_ [class_ "label"] do
             input_ [type_ "checkbox", class_ "checkbox checkbox-sm rounded-sm toggle-chart"] >> span_ "charts"
-          fieldset_ [class_ "fieldset"] $ label_ [class_ "label"] do
-            input_ [type_ "checkbox", class_ "checkbox checkbox-sm rounded-sm", id_ "toggleQueryEditor", onclick_ "toggleQueryBuilder()"] >> span_ "query editor"
 
 
 queryLibrary_ :: Projects.ProjectId -> V.Vector Projects.QueryLibItem -> V.Vector Projects.QueryLibItem -> Html ()
-queryLibrary_ pid queryLibSaved queryLibRecent = div_ [class_ "dropdown dropdown-hover dropdown-bottom dropdown-start", id_ "queryLibraryParentEl"] do
-  div_ [class_ "cursor-pointer relative  bg-fillWeak  text-textWeak rounded-lg border border-strokeWeaker h-full flex gap-2 items-center px-2", tabindex_ "0", role_ "button"]
+
+queryLibrary_ pid queryLibSaved queryLibRecent = div_ [class_ "dropdown dropdown-bottom dropdown-start", id_ "queryLibraryParentEl"] do
+  div_ [class_ "cursor-pointer relative  text-textWeak rounded-lg border border-strokeStrong h-full flex gap-2 items-center px-2 mb-2", tabindex_ "0", role_ "button"]
+
     $ (toHtml "Presets" >> faSprite_ "chevron-down" "regular" "w-3 h-3")
   div_ [class_ "dropdown-content z-20"] $ div_ [class_ "tabs tabs-box tabs-md tabs-outline items-center bg-fillWeak p-0 h-full", role_ "tablist", id_ "queryLibraryTabListEl"] do
     tabPanel_ "Saved" (queryLibraryContent_ "Saved" queryLibSaved)
@@ -373,7 +442,7 @@ queryLibrary_ pid queryLibSaved queryLibRecent = div_ [class_ "dropdown dropdown
     tabPanel_ :: Text -> Html () -> Html ()
     tabPanel_ label content = do
       input_ $ [type_ "radio", name_ "querylib", role_ "tab", class_ "tab", Aria.label_ label] <> [checked_ | label == "Saved"]
-      div_ [role_ "tabpanel", class_ "tab-content bg-base-100 shadow-lg rounded-box h-[70vh] w-[40vw] space-y-2 overflow-y-scroll"] content
+      div_ [role_ "tabpanel", class_ "tab-content bg-bgBase shadow-lg rounded-box h-full max-h-[60dvh] w-[40vw] space-y-2 overflow-y-scroll"] content
 
     queryLibraryContent_ :: Text -> V.Vector Projects.QueryLibItem -> Html ()
     queryLibraryContent_ label items = do
@@ -381,7 +450,7 @@ queryLibrary_ pid queryLibSaved queryLibRecent = div_ [class_ "dropdown dropdown
       div_ [class_ $ "border divide-y rounded-xl p-3 dataLibContent" <> label] $ V.forM_ items queryLibItem_
 
     searchBar_ :: Text -> Html ()
-    searchBar_ label = div_ [class_ "flex gap-2 sticky top-0 p-3 bg-base-100 z-20"] do
+    searchBar_ label = div_ [class_ "flex gap-2 sticky top-0 p-3 bg-bgBase z-20"] do
       label_ [class_ "input input-md flex items-center gap-2 flex-1"] do
         faSprite_ "magnifying-glass" "regular" "h-4 w-4 opacity-70"
         input_
@@ -408,8 +477,8 @@ queryLibItem_ qli =
         a_
           [ class_ "tooltip"
           , term "data-tip" "run query"
-          , term "data-queryAST" $ decodeUtf8 $ AE.encode qli.queryAst
-          , [__| on click call #filterElement.handleAddQuery({detail: JSON.parse(@data-queryAST)})|]
+          , term "data-query" $ qli.queryText
+          , [__| on click call #filterElement.handleAddQuery({detail: JSON.parse(@data-query)})|]
           ]
           $ faSprite_ "play" "regular" "h-4 w-4"
         a_ [class_ "tooltip", term "data-tip" "copy query to clipboard", [__|install Copy(content: (next <.queryText/> ))|]] $ faSprite_ "copy" "regular" "h-4 w-4"
@@ -419,7 +488,7 @@ queryLibItem_ qli =
             [ class_ "tooltip"
             , term "data-tip" "delete query"
             , hxGet_ $ "/p/" <> qli.projectId.toText <> "/log_explorer?layout=DeleteQuery&queryLibId=" <> qli.id.toText
-            , hxVals_ "js:{queryAST:window.getQueryFromEditor()}"
+            , hxVals_ "js:{query:window.getQueryFromEditor()}"
             , hxTarget_ "#queryLibraryTabListEl"
             , hxSwap_ "outerHTML"
             , hxSelect_ "#queryLibraryTabListEl"
@@ -447,6 +516,7 @@ data ApiLogsPageData = ApiLogsPageData
   , colIdxMap :: HM.HashMap Text Int
   , nextLogsURL :: Text
   , resetLogsURL :: Text
+  , recentLogsURL :: Text
   , currentRange :: Maybe Text
   , exceededFreeTier :: Bool
   , query :: Maybe Text
@@ -457,7 +527,6 @@ data ApiLogsPageData = ApiLogsPageData
   , targetSpans :: Maybe Text
   , serviceColors :: HM.HashMap Text Text
   , daysCountDown :: Maybe Text
-  , queryAST :: Text
   , queryLibRecent :: V.Vector Projects.QueryLibItem
   , queryLibSaved :: V.Vector Projects.QueryLibItem
   , fromD :: Maybe UTCTime
@@ -477,11 +546,11 @@ virtualTableTrigger page = do
         colIdxMap = decodeUtf8 $ AE.encode page.colIdxMap
         serviceColors = decodeUtf8 $ AE.encode page.serviceColors
         nextLogsURL = decodeUtf8 $ AE.encode page.nextLogsURL
-
+        recentFetchUrl = decodeUtf8 $ AE.encode page.recentLogsURL
     script_
       [text|
         if(window.logListTable) {
-           window.logListTable.updateTableData($vecs, $cols, $colIdxMap, $serviceColors, $nextLogsURL)
+           window.logListTable.updateTableData($vecs, $cols, $colIdxMap, $serviceColors, $nextLogsURL, $recentFetchUrl)
           }
     |]
 
@@ -499,6 +568,7 @@ virtualTable page = do
       colIdxMap = decodeUtf8 $ AE.encode page.colIdxMap
       serviceColors = decodeUtf8 $ AE.encode page.serviceColors
       nextfetchurl = page.nextLogsURL
+      recentFetchUrl = page.recentLogsURL
       resetLogsURL = page.resetLogsURL
       projectid = page.pid.toText
   script_
@@ -509,6 +579,7 @@ virtualTable page = do
        colIdxMap: $colIdxMap,
        serviceColors: $serviceColors,
        nextFetchUrl: `$nextfetchurl`,
+       recentFetchUrl: `$recentFetchUrl`,
        resetLogsUrl: `$resetLogsURL`,
        projectId: "$projectid"
       }
@@ -542,10 +613,10 @@ apiLogsPage page = do
               input_ [type_ "hidden", value_ "", name_ "reqId", id_ "req_id_input"]
               input_ [type_ "hidden", value_ "", name_ "reqCreatedAt", id_ "req_created_at_input"]
     div_ [] do
-      logQueryBox_ page.pid page.currentRange page.source page.targetSpans page.queryAST page.queryLibRecent page.queryLibSaved
+      logQueryBox_ page.pid page.currentRange page.source page.targetSpans page.query page.queryLibRecent page.queryLibSaved
 
       div_ [class_ "flex flex-row gap-4 mt-3 group-has-[.toggle-chart:checked]/pg:hidden w-full", style_ "aspect-ratio: 10 / 1;"] do
-        Widget.widget_ $ (def :: Widget.Widget){Widget.query = Just "timechart count(*)", Widget.unit = Just "rows", Widget.title = Just "All traces", Widget.hideLegend = Just True, Widget._projectId = Just page.pid, Widget.standalone = Just True, Widget.yAxis = Just (def{showOnlyMaxLabel = Just True})}
+        Widget.widget_ $ (def :: Widget.Widget){Widget.query = Just "timechart count(*)", Widget.unit = Just "rows", Widget.title = Just "All traces", Widget.hideLegend = Just True, Widget._projectId = Just page.pid, Widget.standalone = Just True, Widget.yAxis = Just (def{showOnlyMaxLabel = Just True}),Widget.allowZoom = Just True, Widget.showMarkArea = Just True}
 
         Widget.widget_
           $ (def :: Widget.Widget)
@@ -557,22 +628,24 @@ apiLogsPage page = do
             , Widget.summarizeBy = Just Widget.SBMax
             , Widget.sql =
                 Just
-                  [text|
-                        SELECT timeB, value, quantile
+                  [text| SELECT timeB, COALESCE(value, 0)::float AS value, quantile
                               FROM ( SELECT extract(epoch from time_bucket('1h', timestamp))::integer AS timeB,
                                       ARRAY[
-                                        (approx_percentile(0.50, percentile_agg(duration)) / 1000000.0)::float,
-                                        (approx_percentile(0.75, percentile_agg(duration)) / 1000000.0)::float,
-                                        (approx_percentile(0.90, percentile_agg(duration)) / 1000000.0)::float,
-                                        (approx_percentile(0.95, percentile_agg(duration)) / 1000000.0)::float
+                                        COALESCE((approx_percentile(0.50, percentile_agg(duration)) / 1000000.0), 0)::float,
+                                        COALESCE((approx_percentile(0.75, percentile_agg(duration)) / 1000000.0), 0)::float,
+                                        COALESCE((approx_percentile(0.90, percentile_agg(duration)) / 1000000.0), 0)::float,
+                                        COALESCE((approx_percentile(0.95, percentile_agg(duration)) / 1000000.0), 0)::float
                                       ] AS values,
                                       ARRAY['p50', 'p75', 'p90', 'p95'] AS quantiles
                                 FROM otel_logs_and_spans
                                 WHERE project_id='{{project_id}}'
                                   {{time_filter}} {{query_ast_filters}}
+                                  AND duration IS NOT NULL
                                 GROUP BY timeB
+                                HAVING COUNT(*) > 0
                               ) s,
-                            LATERAL unnest(s.values, s.quantiles) AS u(value, quantile);
+                            LATERAL unnest(s.values, s.quantiles) AS u(value, quantile)
+                            WHERE value IS NOT NULL;
                         |]
             , Widget.unit = Just "ms"
             , Widget.hideLegend = Just True
@@ -693,7 +766,77 @@ apiLogsPage page = do
           window.addEventListener ('mouseup', handleMouseup)
           |]
 
-  jsonTreeAuxillaryCode page.pid page.queryAST
+  jsonTreeAuxillaryCode page.pid page.query
+  queryEditorInitializationCode page.queryLibRecent page.queryLibSaved
+
+
+aiSearchH :: Projects.ProjectId -> AE.Value -> ATAuthCtx (RespHeaders AE.Value)
+aiSearchH _pid requestBody = do
+  let inputTextM = AET.parseMaybe (AE.withObject "request" (AE..: "input")) requestBody
+  case inputTextM of
+    Nothing -> do
+      addErrorToast "Invalid AI search input" Nothing
+      throwError Servant.err400{Servant.errBody = "Invalid input format"}
+    Just inputText ->
+      if T.null (T.strip inputText)
+        then do
+          addErrorToast "Please enter a search query" Nothing
+          throwError Servant.err400{Servant.errBody = "Empty input"}
+        else do
+          result <- callOpenAIAPI inputText
+          case result of
+            Left errMsg -> do
+              addErrorToast "AI search failed" (Just errMsg)
+              throwError Servant.err502{Servant.errBody = encodeUtf8 errMsg}
+            Right kqlQuery -> addRespHeaders $ AE.object ["query" AE..= kqlQuery]
+  where
+    callOpenAIAPI :: Text -> ATAuthCtx (Either Text Text)
+    callOpenAIAPI input = do
+      authCtx <- Effectful.Reader.Static.ask @AuthContext
+      let config = authCtx.env
+      let openAI =
+            OpenAI
+              { apiKey = config.openaiApiKey
+              , openAIModelName = "gpt-4o-mini"
+              , callbacks = []
+              , baseUrl = Nothing
+              }
+      let fullPrompt = systemPrompt <> "\n\nUser query: " <> input
+
+      -- Use langchain-hs to generate response
+      result <- liftIO $ LLM.generate openAI fullPrompt Nothing
+      case result of
+        Left err -> pure $ Left $ "LLM Error: " <> T.pack err
+        Right response ->
+          -- Clean up the response to extract just the KQL query
+          let cleanedResponse = T.strip $ T.takeWhile (/= '\n') response
+           in -- Check if the response indicates an invalid query
+              if "Please provide a query"
+                `T.isInfixOf` cleanedResponse
+                || "I need more"
+                `T.isInfixOf` cleanedResponse
+                || "Could you please"
+                `T.isInfixOf` cleanedResponse
+                || T.length cleanedResponse
+                < 3
+                then pure $ Left "INVALID_QUERY_ERROR"
+                else pure $ Right cleanedResponse
+
+    systemPrompt :: Text
+    systemPrompt =
+      T.unlines
+        [ "You are a helpful assistant that converts natural language queries to KQL (Kusto Query Language) filter expressions."
+        , ""
+        , Schema.generateSchemaForAI Schema.telemetrySchema
+        , ""
+        , "Examples:"
+        , "- \"show me errors\" -> level == \"ERROR\""
+        , "- \"POST requests\" -> attributes.http.request.method == \"POST\""
+        , "- \"slow requests\" -> duration > 5000000000"
+        , "- \"500 errors\" -> attributes.http.response.status_code == \"500\""
+        , ""
+        , "Return only the KQL filter expression, no explanations."
+        ]
 
 
 curateCols :: [Text] -> [Text] -> [Text]
@@ -730,8 +873,8 @@ curateCols summaryCols cols = sortBy sortAccordingly filteredCols
 
 
 -- TODO:
-jsonTreeAuxillaryCode :: Projects.ProjectId -> Text -> Html ()
-jsonTreeAuxillaryCode pid queryAST = do
+jsonTreeAuxillaryCode :: Projects.ProjectId -> Maybe Text -> Html ()
+jsonTreeAuxillaryCode pid query = do
   template_ [id_ "log-item-context-menu-tmpl"] do
     div_ [id_ "log-item-context-menu", class_ "log-item-context-menu  origin-top-right absolute left-0 mt-2 w-56 rounded-md shadow-md shadow-slate-300 bg-bgBase ring-1 ring-black ring-opacity-5 divide-y divide-gray-100 focus:outline-hidden z-10", role_ "menu", tabindex_ "-1"] do
       div_ [class_ "py-1", role_ "none"] do
@@ -741,7 +884,7 @@ jsonTreeAuxillaryCode pid queryAST = do
           , tabindex_ "-1"
           , hxGet_ $ "/p/" <> pid.toText <> "/log_explorer"
           , hxPushUrl_ "true"
-          , hxVals_ "js:{queryAST:params().queryAST,cols:toggleColumnToSummary(event),layout:'resultTable', since: params().since, from: params().from, to:params().to, source: params().source}"
+          , hxVals_ "js:{...{layout:'resultTable',cols:toggleColumnToSummary(event), ...params()}}"
           , hxTarget_ "#resultTableInner"
           , hxSwap_ "outerHTML"
           , -- , hxIndicator_ "#query-indicator"
@@ -799,10 +942,8 @@ jsonTreeAuxillaryCode pid queryAST = do
           }
         })
 
-        document.getElementById("filterElement").handleAddQuery({
-            "tag": operation,
-            "contents": [path, JSON.parse(value)]
-        });
+        const operator = operation === 'Eq' ? '==' : operation === 'NotEq' ? '!=' : '==';
+        document.getElementById("filterElement").handleAddQuery(path + ' ' + operator + ' ' + value);
     }
 
     var toggleColumnToSummary = (e)=>{
@@ -821,20 +962,37 @@ jsonTreeAuxillaryCode pid queryAST = do
       return [...new Set(cols.filter((x) => namedCol.toLowerCase() != x.replaceAll('.', '•').replaceAll('[', '❲').replaceAll(']', '❳').toLowerCase()))].join(',')
     }
 
-    // TODO: Delete
-    function toggleQueryBuilder() {
-        ["queryBuilder", "queryEditor"].forEach(id => document.getElementById(id).classList.toggle("hidden"));
-        window.editor ??= CodeMirror(document.getElementById('queryEditor'), {
-            value: params().queryAST || window.queryBuilderValue || '',
-            mode: "javascript",
-            theme: "elegant",
-            lineNumbers: true,
-        });
-        setTimeout(() => {
-            const editorVisible = !document.getElementById("queryEditor").classList.contains("hidden");
-            editorVisible
-                ? window.editor.setValue(window.queryBuilderValue)
-                : document.querySelector('#filterElement')?.setBuilderValue(window.editor.getValue());
-        }, 10);
-    }
 |]
+
+
+queryEditorInitializationCode :: V.Vector Projects.QueryLibItem -> V.Vector Projects.QueryLibItem -> Html ()
+queryEditorInitializationCode queryLibRecent queryLibSaved = do
+  let queryLibData = queryLibRecent <> queryLibSaved
+      queryLibDataJson = decodeUtf8 $ AE.encode queryLibData
+      schemaJson = decodeUtf8 $ AE.encode Schema.telemetrySchemaJson
+  script_
+    [text|
+    // Initialize query-editor component with query library data and schema
+    setTimeout(() => {
+      const editor = document.getElementById('filterElement');
+      if (editor) {
+        // Set query library if available
+        if (editor.setQueryLibrary) {
+          const queryLibraryData = $queryLibDataJson;
+          editor.setQueryLibrary(queryLibraryData);
+        }
+        
+        // Set schema data using schemaManager if available
+        if (window.schemaManager && window.schemaManager.setSchemaData) {
+          const schemaData = $schemaJson;
+          window.schemaManager.setSchemaData('spans', schemaData);
+        }
+        
+        // Set popular searches if available
+        if (editor.setPopularSearches && window.getPopularQueries) {
+          const popularQueries = window.getPopularQueries();
+          editor.setPopularSearches(popularQueries);
+        }
+      }
+    }, 100);
+    |]

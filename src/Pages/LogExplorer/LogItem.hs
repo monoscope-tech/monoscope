@@ -2,7 +2,6 @@ module Pages.LogExplorer.LogItem (expandAPIlogItemH, expandAPIlogItem', ApiItemD
 
 import Data.Aeson qualified as AE
 import Data.Aeson.KeyMap qualified as KEM
-import Data.Aeson.KeyMap qualified as Map
 import Data.Aeson.Text (encodeToLazyText)
 import Data.ByteString.Lazy qualified as BS
 import Data.Text qualified as T
@@ -10,7 +9,6 @@ import Data.Time (UTCTime)
 import Data.Time.Format (defaultTimeLocale, formatTime)
 import Data.Time.LocalTime (zonedTimeToUTC)
 import Data.UUID qualified as UUID
-import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
 import Lucid
 import Lucid.Htmx
 import Lucid.Hyperscript (__)
@@ -25,7 +23,7 @@ import Pages.Telemetry.Spans qualified as Spans
 import Pages.Telemetry.Utils (atMapText, getRequestDetails)
 import Relude
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
-import Utils (faSprite_, getDurationNSMS, getMethodBorderColor, getMethodColor, getSeverityColor, getStatusBorderColor, getStatusColor, jsonValueToHtmlTree, lookupValueText)
+import Utils (faSprite_, getDurationNSMS, getMethodBorderColor, getMethodColor, getSeverityColor, getStatusBorderColor, getStatusColor, jsonValueToHtmlTree)
 
 
 expandAPIlogItemH :: Projects.ProjectId -> UUID.UUID -> UTCTime -> Maybe Text -> ATAuthCtx (RespHeaders ApiItemDetailed)

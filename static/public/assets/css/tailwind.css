@@ -246,7 +246,7 @@ body {
   ::before,
   ::backdrop,
   ::file-selector-button {
-    border-color: var(--color-gray-200, currentColor);
+    border-color: var(--color-strokeWeak, currentColor);
   }
 }
 
@@ -646,12 +646,6 @@ code, pre, .code, .monospace {
     display: block;
   }
 
-  .text-weak {
-    @apply text-[#000933]/60;
-  }
-  .bg-weak {
-    @apply bg-[#00157f]/5;
-  }
   .text-brand {
     @apply text-[var(--brand-color)];
   }
@@ -661,19 +655,9 @@ code, pre, .code, .monospace {
   .btn-primary {
     @apply bg-[var(--brand-color)] hover:bg-[var(--brand-color-light)] text-white;
   }
-  .input,
-  .select,
-  .checkbox,
-  .textarea {
+  .input, .select, .checkbox, .textarea {
     @apply shadow-none;
     --chkbg: var(--brand-color);
-    border-color: rgba(0, 13, 77, 0.45);
-  }
-  .stroke-strong {
-    border: 1px solid rgba(0, 13, 77, 0.45);
-  }
-  .stroke-weak {
-    @apply border-[#001066]/10;
   }
 }
 @layer components {
@@ -925,4 +909,9 @@ code, pre, .code, .monospace {
   inset: 1px;
   background: var(--color-fillWeakerSolid);
   border-radius: inherit;
+}
+
+
+.gradient-border {
+  border-image: linear-gradient(45deg, #ffcc00, #33cc33, #3399ff) 1;
 }

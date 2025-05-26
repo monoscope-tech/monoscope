@@ -5,7 +5,7 @@ import Data.Default (def)
 import Data.Time (UTCTime)
 import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUIDV4
-import Database.PostgreSQL.Entity.DBT (QueryNature (Insert, Select), execute, queryOne)
+import Database.PostgreSQL.Entity.DBT (execute, queryOne)
 import Database.PostgreSQL.Simple (Only (Only))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
@@ -40,7 +40,6 @@ shareLinkPostH pid eventId createdAt reqTypeM = do
   res <-
     dbtToEff
       $ execute
-        Insert
         [sql| INSERT INTO apis.share_events (id, project_id, event_id, event_type, event_created_at)
                               VALUES (?,?,?,?,?) |]
         (shareId, pid, eventId, eventType, createdAt)
@@ -92,7 +91,7 @@ copyLink rid = do
 shareLinkGetH :: UUID.UUID -> ATBaseCtx ShareLinkGet
 shareLinkGetH sid = do
   -- FIXME: handle errors
-  r <- dbtToEff $ queryOne Select [sql|SELECT project_id, event_id, event_type, event_created_at FROM apis.share_events where id=? and created_at > current_timestamp - interval '48 hours' limit 1|] (Only sid)
+  r <- dbtToEff $ queryOne [sql|SELECT project_id, event_id, event_type, event_created_at FROM apis.share_events where id=? and created_at > current_timestamp - interval '48 hours' limit 1|] (Only sid)
   uiM <- do
     case r of
       Just (pid, eventId, eventType, createdAt) -> do

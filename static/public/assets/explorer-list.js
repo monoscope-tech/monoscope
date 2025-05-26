@@ -10,6 +10,7 @@ export class LogList extends LitElement {
     flipDirection: { type: Boolean },
     isLoadingRecent: { type: Boolean },
     spanListTree: {},
+    recentDataToBeAdded: {},
     isLoading: { type: Boolean },
     view: { type: String },
     showOptions: { type: Boolean },
@@ -27,6 +28,7 @@ export class LogList extends LitElement {
     this.hasMore = false
     this.expandedTraces = {}
     this.showOptions = false
+    this.recentDataToBeAdded = []
     this.spanListTree = []
     this.isLoading = false
     this.columnMaxWidthMap = {}
@@ -39,8 +41,9 @@ export class LogList extends LitElement {
     this.expandTrace = this.expandTrace.bind(this)
     this.renderLoadMore = this.renderLoadMore.bind(this)
     this.updateTableData = this.updateTableData.bind(this)
+    this.handleChartZoom = this.handleChartZoom.bind(this)
     this.updateColumnMaxWidthMap = this.updateColumnMaxWidthMap.bind(this)
-    this.latestLogsURLQueryValsFn = this.latestLogsURLQueryValsFn.bind(this)
+    this.addWithFlipDirection = this.addWithFlipDirection.bind(this)
     this.toggleLogRow = this.toggleLogRow.bind(this)
     this.logItemCol = this.logItemCol.bind(this)
     this.wrapLines = false
@@ -51,8 +54,7 @@ export class LogList extends LitElement {
         if (liveBtn.checked) {
           this.isLiveStreaming = true
           this.liveStreamInterval = setInterval(() => {
-            const url = this.latestLogsURLQueryValsFn(this.nextFetchUrl)
-            this.fetchData(url, true)
+            this.fetchData(this.recentFetchUrl, true)
           }, 5000)
         } else {
           clearInterval(this.liveStreamInterval)
@@ -78,45 +80,121 @@ export class LogList extends LitElement {
       }
       this.mouseState = { x: event.clientX }
     })
-  }
 
-  latestLogsURLQueryValsFn() {
-    const latestIndex = this.flipDirection ? this.spanListTree.length - 1 : 0
-    const url = new URL(this.nextFetchUrl, window.location.origin)
-    const p = url.searchParams
-    p.delete('cursor')
-    if (this.spanListTree[latestIndex]) {
-      const latestData = this.spanListTree[latestIndex].data
-      const timeIndex = this.colIdxMap['timestamp']
-      const traceIdIndex = this.colIdxMap['trace_id']
-      const traceId = latestData[traceIdIndex]
-      const startTimes = []
-
-      const length = this.spanListTree.length
-      const [start, end, step] = this.flipDirection ? [length - 1, 0, -1] : [0, length, 1]
-      for (let i = start; this.flipDirection ? i > -1 : i < end; i += step) {
-        const data = this.spanListTree[i].data
-        if (data[traceIdIndex] === traceId) {
-          startTimes.push(data[timeIndex])
-        } else if (startTimes.length > 0) {
-          break
-        }
+    window.addEventListener('load', () => {
+      this.barChart = window.barChart
+      this.lineChart = window.lineChart
+      if (this.barChart) {
+        this.barChart.on('datazoom', this.handleChartZoom)
       }
-      const datetime = Math.max(...startTimes.map(d => new Date(d).getTime()))
-      const to = datetime ? new Date(datetime + 1).toISOString() : params().to
-      p.set('to', to)
-      const from = params().from
-      p.set('from', from)
-    }
-    return url.toString()
+      if (this.lineChart) {
+        this.lineChart.on('datazoom', this.handleChartZoom)
+      }
+    })
   }
 
-  updateTableData = (ves, cols, colIdxMap, serviceColors, nextFetchUrl) => {
+  updateChartDataZoom(start, end) {
+    // let first = this.spanListTree[start]
+    // let last = this.spanListTree[end]
+    // if (first === 'start' || last === 'end') {
+    //   first = this.spansListTree[start + 1]
+    // }
+    // if (last === 'end' || last === 'start') {
+    //   last = this.spansListTree[end - 1]
+    // }
+    // let startTime, endTime
+    // startTime = new Date(first.data[this.colIdxMap['timestamp']]).getTime()
+    // endTime = new Date(last.data[this.colIdxMap['timestamp']]).getTime()
+    // if (this.barChart) {
+    //   const options = this.barChart.getOption()
+    //   options.series[0].markArea = {
+    //     silent: true,
+    //     itemStyle: {
+    //       opacity: 0.8,
+    //       color: 'red',
+    //     },
+    //     data: [
+    //       [
+    //         {
+    //           xAxis: new Date(1747555577663.2622),
+    //         },
+    //         {
+    //           xAxis: new Date(1748123258929.097).toISOString(),
+    //         },
+    //       ],
+    //     ],
+    //   }
+    //   this.barChart.setOption(options)
+    // }
+    // console.log(startTime, endTime)
+    // if (this.barChart) {
+    //   const option = this.barChart.getOption()
+    //   option.markArea.data = [[{ xAxis: startTime }], [{ xAxis: endTime }]]
+    //   this.barChart.setOption(option)
+    //   if (this.lineChart) {
+    //     const option = this.lineChart.getOption()
+    //     option.markArea.data = [[{ xAxis: startTime }], [{ xAxis: endTime }]]
+    //     this.lineChart.setOption(option)
+    //   }
+    // }
+  }
+
+  getTraceMaxMin(traceId, timeIndex, traceIdIndex, minMax = 'max') {
+    const startTimes = []
+    const [start, end, step] = this.flipDirection ? [length - 1, 0, -1] : [0, length, 1]
+    for (let i = start; this.flipDirection ? i > -1 : i < end; i += step) {
+      const data = this.spanListTree[i].data
+      if (data[traceIdIndex] === traceId) {
+        startTimes.push(data[timeIndex])
+      } else if (startTimes.length > 0) {
+        break
+      }
+    }
+    // if
+  }
+
+  refetchLogs() {
+    const p = new URLSearchParams(window.location.search)
+    const pathName = window.location.pathname
+    const url = `${window.location.origin}${pathName}?json=true&${p.toString()}`
+    this.fetchData(url, false, true)
+  }
+
+  handleChartZoom(params) {
+    const zoom = params.batch ? params.batch[0] : params
+    let startValue = zoom.startValue
+    let endValue = zoom.endValue
+    if (startValue === undefined || endValue === undefined) return
+    startValue = new Date(startValue).toISOString()
+    endValue = new Date(endValue).toISOString()
+    const p = new URLSearchParams(window.location.search)
+    p.set('from', startValue)
+    p.set('to', endValue)
+    p.delete('since')
+
+    const newUrl = `${window.location.pathname}?${p.toString()}${window.location.hash}`
+    window.history.replaceState({}, '', newUrl)
+    document.getElementById('currentRange').innerText = `${startValue} - ${endValue}`
+
+    this.dispatchEvent(
+      new CustomEvent('update-query', {
+        bubbles: true,
+        detail: {
+          ast: p.queryAST,
+        },
+      }),
+    )
+
+    // set from and to to the startValue and endValue in search params
+  }
+
+  updateTableData = (ves, cols, colIdxMap, serviceColors, nextFetchUrl, recentFetchUrl) => {
     this.logsColumns = [...cols]
     this.colIdxMap = { ...colIdxMap }
     this.hasMore = ves.length > 0
     this.serviceColors = { ...serviceColors }
     this.nextFetchUrl = nextFetchUrl
+    this.recentFetchUrl = recentFetchUrl
     this.spanListTree = this.buildSpanListTree(ves)
     this.updateColumnMaxWidthMap(ves)
     this.requestUpdate()
@@ -136,6 +214,7 @@ export class LogList extends LitElement {
       this.serviceColors = window.virtualListData.serviceColors
       this.nextFetchUrl = window.virtualListData.nextFetchUrl
       this.resetLogsUrl = window.virtualListData.resetLogsUrl
+      this.recentFetchUrl = window.virtualListData.recentFetchUrl
       this.projectId = window.virtualListData.projectId
       this.expandedTraces = {}
       this.spanListTree = this.buildSpanListTree(logs)
@@ -243,7 +322,7 @@ export class LogList extends LitElement {
     this.requestUpdate()
   }
 
-  fetchData(url, isNewData = false) {
+  fetchData(url, isNewData = false, isRefresh = false) {
     if ((this.isLoading && !isNewData) || (this.isLoadingRecent && isNewData)) return
     if (isNewData) {
       this.isLoadingRecent = true
@@ -259,25 +338,49 @@ export class LogList extends LitElement {
       .then(response => response.json())
       .then(data => {
         if (!data.error) {
-          let { logsData, serviceColors, nextUrl } = data
+          let { logsData, serviceColors, nextUrl, recentUrl } = data
           if (!isNewData) {
             this.hasMore = logsData.length > 0
-            this.nextFetchUrl = nextUrl
           }
+          if (logsData.length === 0 && isRefresh) {
+            this.spanListTree = []
+          }
+
           if (logsData.length > 0) {
+            if (!isNewData) {
+              this.nextFetchUrl = nextUrl
+            } else {
+              this.recentFetchUrl = recentUrl
+            }
+
             this.serviceColors = { ...serviceColors, ...this.serviceColors }
             let tree = this.buildSpanListTree([...logsData])
-            if (isNewData) {
-              this.fetchedNew = true
-              tree.forEach(t => (t.isNew = true))
-              const container = document.querySelector('#logs_list_container_inner')
-              if (container && container.scrollTop + container.clientHeight >= container.scrollHeight - 1) {
-                this.shouldScrollToBottom = true
-              }
-              this.spanListTree = this.flipDirection ? [...this.spanListTree, ...tree] : [...tree, ...this.spanListTree]
+
+            if (isRefresh) {
+              this.nextFetchUrl = nextUrl
+              this.recentFetchUrl = recentUrl
+              this.spanListTree = tree
             } else {
-              this.spanListTree = this.flipDirection ? [...tree, ...this.spanListTree] : [...this.spanListTree, ...tree]
+              if (isNewData) {
+                this.fetchedNew = true
+                tree.forEach(t => (t.isNew = true))
+                const container = document.querySelector('#logs_list_container_inner')
+                const scrolledToBottom = container.scrollTop + container.clientHeight >= container.scrollHeight - 1
+                if (container && scrolledToBottom) {
+                  this.shouldScrollToBottom = true
+                }
+                if (this.isLiveStreaming && container && container.scrollTop > 30 && !this.flipDirection) {
+                  this.recentDataToBeAdded = this.addWithFlipDirection(this.recentDataToBeAdded, tree)
+                } else if (this.isLiveStreaming && !scrolledToBottom && this.flipDirection) {
+                  this.recentDataToBeAdded = this.addWithFlipDirection(this.recentDataToBeAdded, tree)
+                } else {
+                  this.spanListTree = this.addWithFlipDirection(this.spanListTree, tree)
+                }
+              } else {
+                this.spanListTree = this.addWithFlipDirection(tree, this.spanListTree)
+              }
             }
+
             this.updateColumnMaxWidthMap(logsData)
           }
         } else {
@@ -370,6 +473,24 @@ export class LogList extends LitElement {
     this.requestUpdate()
   }
 
+  addWithFlipDirection(current, newData) {
+    return this.flipDirection ? [...current, ...newData] : [...newData, ...current]
+  }
+
+  handleRecentClick() {
+    const container = document.querySelector('#logs_list_container_inner')
+    if (container) {
+      container.scrollTop = 0
+    }
+    this.handleRecentConcatenation()
+  }
+
+  handleRecentConcatenation() {
+    if (this.recentDataToBeAdded.length === 0) return
+    this.spanListTree = this.addWithFlipDirection(this.spanListTree, this.recentDataToBeAdded)
+    this.recentDataToBeAdded = []
+  }
+
   render() {
     const list = this.view === 'tree' ? this.spanListTree.filter(sp => sp.show) : [...this.spanListTree]
     // end is used to render the load more button"
@@ -381,20 +502,34 @@ export class LogList extends LitElement {
       <div
         @scroll=${event => {
           const container = event.target
-          if (container.scrollTop + container.clientHeight >= container.scrollHeight - 1) {
-            this.shouldScrollToBottom = true
+          if (this.flipDirection) {
+            if (container.scrollTop + container.clientHeight >= container.scrollHeight - 1) {
+              this.shouldScrollToBottom = true
+            } else {
+              this.shouldScrollToBottom = false
+              this.handleRecentConcatenation()
+            }
           } else {
-            this.shouldScrollToBottom = false
+            if (container.scrollTop === 0) {
+              this.handleRecentConcatenation()
+            }
           }
         }}
-        class="relative h-full shrink-1 min-w-0 p-0 m-0 bg-white w-full c-scroll pb-12 overflow-y-scroll scroll-smooth"
+        class="relative h-full shrink-1 min-w-0 p-0 m-0 bg-white w-full c-scroll pb-12 overflow-y-scroll"
         id="logs_list_container_inner"
       >
+        ${this.recentDataToBeAdded.length > 0 && !this.flipDirection
+          ? html` <div class="sticky left-1/2 -translate-y-1/2 top-[30px] z-50">
+              <button class="cbadge-sm badge-neutral cursor-pointer bg-fillBrand-strong text-textInverse-strong shadow rounded-lg text-sm absolute" @click=${this.handleRecentClick}>
+                ${this.recentDataToBeAdded.length} new
+              </button>
+            </div>`
+          : nothing}
+
         <table class="table-auto w-max relative ctable table-pin-rows table-pin-cols">
           <thead class="z-10 sticky top-0">
             <tr class="text-textStrong border-b flex min-w-0 relative font-medium ">
-              ${this.logsColumns.filter(v => v !== 'latency_breakdown').map(column => this.logTableHeading(column))}
-              ${this.logTableHeading('latency_breakdown')}
+              ${this.logsColumns.filter(v => v !== 'latency_breakdown').map(column => this.logTableHeading(column))} ${this.logTableHeading('latency_breakdown')}
             </tr>
           </thead>
           ${list.length === 1 ? emptyState(this.source, this.logsColumns.length) : nothing}
@@ -404,6 +539,9 @@ export class LogList extends LitElement {
             @rangeChanged=${event => {
               this.setupIntersectionObserver()
             }}
+            @visibilityChanged=${event => {
+              this.updateChartDataZoom(event.first, event.last)
+            }}
           >
             ${virtualize({
               items: list,
@@ -411,15 +549,19 @@ export class LogList extends LitElement {
             })}
           </tbody>
         </table>
+
         ${!this.shouldScrollToBottom && this.flipDirection
           ? html`<div style="position: sticky;bottom: 0px;overflow-anchor: none;">
               <button
                 @click=${() => {
                   this.shouldScrollToBottom = true
                   this.scrollToBottom()
+                  this.handleRecentConcatenation()
                 }}
                 data-tip="Scroll to bottom"
-                class="absolute tooltip tooltip-left right-8 bottom-2 group z-50 bg-bgInverse text-white flex justify-center items-center rounded-full shadow-lg h-10 w-10"
+                class=${`absolute tooltip tooltip-left right-8 bottom-2 group z-50 ${
+                  this.recentDataToBeAdded.length > 0 ? 'bg-fillBrand-strong' : 'bg-bgInverse'
+                } text-white flex justify-center items-center rounded-full shadow-lg h-10 w-10`}
               >
                 ${faSprite('arrow-down', 'regular', 'h-6 w-6 fill-white stroke-white')}
               </button>
@@ -459,8 +601,7 @@ export class LogList extends LitElement {
         return renderBadge('min-w-[4rem] cbadge ' + methodCls, method, 'method')
       case 'request_type':
         let requestType = lookupVecTextByKey(dataArr, colIdxMap, key)
-        if (requestType === 'Incoming')
-          return renderIconWithTippy('w-4', 'Incoming Request => Server', faSprite('arrow-down-left', 'solid', ' h-3 fill-slate-500'))
+        if (requestType === 'Incoming') return renderIconWithTippy('w-4', 'Incoming Request => Server', faSprite('arrow-down-left', 'solid', ' h-3 fill-slate-500'))
         return renderIconWithTippy('w-4', 'Outgoing Request => Client', faSprite('arrow-up-right', 'solid', ' h-3 fill-blue-700'))
       case 'duration':
         let dur = rowData.type === 'log' ? 'log' : getDurationNSMS(lookupVecTextByKey(dataArr, colIdxMap, key))
@@ -534,8 +675,7 @@ export class LogList extends LitElement {
         const { system, statement } = dbAttributes
         if (system || statement) {
           return html`
-            ${renderIconWithTippy('w-4 ml-2', system, faSprite('database', 'regular', 'h-3 w-3 fill-slate-500'))}
-            ${statement ? renderBadge('cbadge-sm badge-neutral bg-fillWeak', statement) : nothing}
+            ${renderIconWithTippy('w-4 ml-2', system, faSprite('database', 'regular', 'h-3 w-3 fill-slate-500'))} ${statement ? renderBadge('cbadge-sm badge-neutral bg-fillWeak', statement) : nothing}
           `
         }
         break
@@ -566,9 +706,7 @@ export class LogList extends LitElement {
           ${this.view === 'tree'
             ? html`
                 <div class="flex items-center gap-1">
-                  ${depth > 1
-                    ? new Array(depth - 1).fill(1).map((_, i) => html`<div class=${`ml-[15px] w-4 h-5 shrink-0 ${siblingsArr[i] ? 'border-l' : ''}`}></div>`)
-                    : nothing}
+                  ${depth > 1 ? new Array(depth - 1).fill(1).map((_, i) => html`<div class=${`ml-[15px] w-4 h-5 shrink-0 ${siblingsArr[i] ? 'border-l' : ''}`}></div>`) : nothing}
                   ${depth > 0
                     ? html`<div class=${`border-l ml-[15px] w-4 ${isLastChild ? 'h-3' : 'h-5'} relative shrink-0`}>
                         <span class=${`border-b w-full absolute left-0 ${isLastChild ? 'bottom-0' : 'top-1/2 -translate-y-1/2'}`}></span>
@@ -612,19 +750,15 @@ export class LogList extends LitElement {
             <div class="absolute -top-[500px] w-[1px] h-[500px] left-0 flex flex-col justify-end bg-transparent items-center" id="loader"></div>
             ${this.isLoading
               ? html`<div class="loading loading-dots loading-md"></div>`
-              : html`
-                  <button class="cursor-pointer text-textBrand underline font-semibold w-max mx-auto" @click=${() => this.fetchData(this.nextFetchUrl)}>
-                    Load more
-                  </button>
-                `}
+              : html` <button class="cursor-pointer text-textBrand underline font-semibold w-max mx-auto" @click=${() => this.fetchData(this.nextFetchUrl)}>Load more</button> `}
           </td>
         </tr>`
       : html`<tr></tr>`
   }
 
   fetchRecent() {
-    return html`<tr class="w-full flex relative">
-      <td colspan=${String(this.logsColumns.length)} class="relative pl-[calc(40vw-10ch)]">
+    return html`<tr class="w-full flex relative" id="recent-logs">
+      <td colspan=${String(this.logsColumns.length)} class="relative pl-[calc(40vw-10ch)]" id="recent-logs">
         ${this.isLiveStreaming
           ? html`<p>Live streaming latest data...</p>`
           : this.isLoadingRecent
@@ -633,8 +767,7 @@ export class LogList extends LitElement {
               <button
                 class="cursor-pointer text-textBrand underline font-semibold w-max mx-auto"
                 @click=${() => {
-                  const updatedUrl = this.latestLogsURLQueryValsFn()
-                  this.fetchData(updatedUrl, true)
+                  this.fetchData(this.recentFetchUrl, true)
                 }}
               >
                 Check for recent data
@@ -686,38 +819,19 @@ export class LogList extends LitElement {
     const targetInfo = requestDumpLogItemUrlPath(rowData.data, this.colIdxMap, s)
     let isNew = rowData.isNew
     return html`
-      <tr
-        class=${`item-row relative p-0 flex items-center cursor-pointer whitespace-nowrap ${isNew ? 'animate-fadeBg' : ''}`}
-        @click=${event => this.toggleLogRow(event, targetInfo, this.projectId)}
-      >
+      <tr class=${`item-row relative p-0 flex items-center cursor-pointer whitespace-nowrap ${isNew ? 'animate-fadeBg' : ''}`} @click=${event => this.toggleLogRow(event, targetInfo, this.projectId)}>
         ${this.logsColumns
           .filter(v => v !== 'latency_breakdown')
           .map(column => {
             const tableDataWidth = getColumnWidth(column)
             let width = this.columnMaxWidthMap[column]
-            return html`<td
-              class=${`${this.wrapLines ? 'break-all whitespace-wrap' : ''} bg-white relative ${column === 'summary' ? '' : tableDataWidth}`}
-              style=${width ? `width: ${width}px;` : ''}
-            >
+            return html`<td class=${`${this.wrapLines ? 'break-all whitespace-wrap' : ''} bg-white relative ${column === 'summary' ? '' : tableDataWidth}`} style=${width ? `width: ${width}px;` : ''}>
               ${this.logItemCol(rowData, this.source, this.colIdxMap, column, this.serviceColors, this.expandTrace, this.columnMaxWidthMap, this.wrapLines)}
             </td>`
           })}
         ${this.logsColumns.includes('latency_breakdown')
-          ? html`<td
-              class="bg-white sticky right-0 overflow-x-hidden"
-              style=${this.columnMaxWidthMap['latency_breakdown'] ? "width: ${this.columnMaxWidthMap['latency_breakdown']}px;" : ''}
-            >
-              ${this.logItemCol(
-                rowData,
-                this.source,
-                this.colIdxMap,
-                'latency_breakdown',
-                this.serviceColors,
-                this.expandTrace,
-                this.columnMaxWidthMap,
-                this.wrapLines,
-                this.view,
-              )}
+          ? html`<td class="bg-white sticky right-0 overflow-x-hidden" style=${this.columnMaxWidthMap['latency_breakdown'] ? "width: ${this.columnMaxWidthMap['latency_breakdown']}px;" : ''}>
+              ${this.logItemCol(rowData, this.source, this.colIdxMap, 'latency_breakdown', this.serviceColors, this.expandTrace, this.columnMaxWidthMap, this.wrapLines, this.view)}
             </td>`
           : nothing}
       </tr>
@@ -731,9 +845,7 @@ export class LogList extends LitElement {
     }
     return html`
       <td
-        class=${`cursor-pointer p-0 m-0 whitespace-nowrap relative flex justify-between items-center pl-1 text-sm font-normal bg-white ${
-          classes ? classes : ''
-        }`}
+        class=${`cursor-pointer p-0 m-0 whitespace-nowrap relative flex justify-between items-center pl-1 text-sm font-normal bg-white ${classes ? classes : ''}`}
         style=${width ? `width: ${width}px` : ''}
       >
         <div class="dropdown font-medium text-base" data-tippy-content=${title}>
@@ -774,9 +886,7 @@ export class LogList extends LitElement {
           <div class="tabs tabs-box tabs-md p-0 tabs-outline items-center border">
             <button
               @click=${() => (this.view = 'tree')}
-              class=${`flex items-center cursor-pointer justify-center gap-1 px-2 py-1 text-xs rounded ${
-                this.view === 'tree' ? 'bg-gray-200 text-gray-800' : 'text-textWeak  hover:bg-gray-100'
-              }`}
+              class=${`flex items-center cursor-pointer justify-center gap-1 px-2 py-1 text-xs rounded ${this.view === 'tree' ? 'bg-gray-200 text-gray-800' : 'text-textWeak  hover:bg-gray-100'}`}
             >
               ${faSprite('tree', 'regular', 'h-4 w-4')}
               <span class="sm:inline hidden">Tree</span>
@@ -784,9 +894,7 @@ export class LogList extends LitElement {
 
             <button
               @click=${() => (this.view = 'list')}
-              class=${`flex items-center cursor-pointer justify-center gap-1 px-2 py-1 text-xs rounded ${
-                this.view === 'list' ? 'bg-gray-200 text-gray-800' : 'text-textWeak  hover:bg-gray-100'
-              }`}
+              class=${`flex items-center cursor-pointer justify-center gap-1 px-2 py-1 text-xs rounded ${this.view === 'list' ? 'bg-gray-200 text-gray-800' : 'text-textWeak  hover:bg-gray-100'}`}
             >
               ${faSprite('list-view', 'regular', 'h-4 w-4')}
               <span class="sm:inline hidden">List</span>
@@ -794,12 +902,13 @@ export class LogList extends LitElement {
           </div>
         `}
         <button
-          class=${`flex items-center cursor-pointer justify-center gap-1 px-2 py-1 text-xs rounded ${
-            this.flipDirection ? 'bg-gray-200 text-gray-800' : 'text-textWeak  hover:bg-gray-100'
-          }`}
+          class=${`flex items-center cursor-pointer justify-center gap-1 px-2 py-1 text-xs rounded ${this.flipDirection ? 'bg-gray-200 text-gray-800' : 'text-textWeak  hover:bg-gray-100'}`}
           @click=${() => {
             this.flipDirection = !this.flipDirection
             this.spanListTree = this.buildSpanListTree(this.spanListTree.map(span => span.data).reverse())
+            this.recentDataToBeAdded = this.buildSpanListTree(this.recentDataToBeAdded.map(span => span.data).reverse())
+            this.spanListTree = [...this.spanListTree, ...this.recentDataToBeAdded]
+            this.recentDataToBeAdded = []
             this.requestUpdate()
           }}
         >
@@ -808,9 +917,7 @@ export class LogList extends LitElement {
         </button>
 
         <button
-          class=${`flex items-center cursor-pointer justify-center gap-1 px-2 py-1 text-xs rounded ${
-            this.wrapLines ? 'bg-gray-200 text-gray-800' : 'text-textWeak  hover:bg-gray-100'
-          }`}
+          class=${`flex items-center cursor-pointer justify-center gap-1 px-2 py-1 text-xs rounded ${this.wrapLines ? 'bg-gray-200 text-gray-800' : 'text-textWeak  hover:bg-gray-100'}`}
           @click=${() => {
             this.wrapLines = !this.wrapLines
             if (this.wrapLines) {
@@ -843,6 +950,7 @@ class ColumnsSettings extends LitElement {
   static properties = {
     showModal: { type: Boolean },
     searchTerm: { type: String },
+    dragOverIndex: { type: Number },
     showSearchResults: { type: Boolean },
   }
 
@@ -851,6 +959,7 @@ class ColumnsSettings extends LitElement {
     this.columns = []
     this.showModal = false
     this.dragIndex = null
+    this.dragOverIndex = null
     this.defaultColumns = [
       'trace_id',
       'severity_text',
@@ -878,7 +987,6 @@ class ColumnsSettings extends LitElement {
       const merged = [...this.defaultColumns, ...this.columns.filter(c => !currentNames.has(c))]
       this.defaultColumns = merged
     }
-    this._emitChanges()
   }
 
   render() {
@@ -932,8 +1040,7 @@ class ColumnsSettings extends LitElement {
                             </li>
                           `,
                       )}
-                    ${this.defaultColumns.filter(col => !this.columns.some(c => c === col) && col.toLowerCase().includes(this.searchTerm.toLowerCase()))
-                      .length === 0
+                    ${this.defaultColumns.filter(col => !this.columns.some(c => c === col) && col.toLowerCase().includes(this.searchTerm.toLowerCase())).length === 0
                       ? html`<li class="px-3 py-2 text-gray-400">No results</li>`
                       : ''}
                   </ul>
@@ -945,10 +1052,12 @@ class ColumnsSettings extends LitElement {
             ${this.columns.map(
               (col, index) => html`
                 <li
-                  class="flex items-center group justify-between  px-1 py-0.5 rounded hover:bg-fillWeak cursor-move"
-                  draggable="true"
+                  class=${`flex items-center group justify-between  px-1 py-0.5 rounded ${col === 'latency_breakdown' ? 'cursor-default select-none' : 'cursor-move hover:bg-fillWeak'} ${
+                    this.dragOverIndex === index ? 'border border-strokeBrand-strong' : ''
+                  }`}
+                  draggable=${col === 'latency_breakdown' ? 'false' : 'true'}
                   @dragstart=${e => this._onDragStart(e, index)}
-                  @dragover=${e => e.preventDefault()}
+                  @dragover=${e => this._onDragOver(e, index)}
                   @drop=${e => this._onDrop(e, index)}
                 >
                   <span class="text-textStrong">${col}</span>
@@ -967,9 +1076,18 @@ class ColumnsSettings extends LitElement {
     `
   }
 
+  _onDragOver(e, index) {
+    e.preventDefault()
+    if (this.columns[index] === 'latency_breakdown' || index === this.dragIndex) {
+      this.dragOverIndex = null
+      return
+    }
+
+    this.dragOverIndex = index
+  }
+
   _removeColumn(index) {
     this.columns.splice(index, 1)
-    this.requestUpdate()
   }
 
   _onDragStart(e, index) {
@@ -984,7 +1102,8 @@ class ColumnsSettings extends LitElement {
     this.columns.splice(this.dragIndex, 1)
     this.columns.splice(index, 0, dragged)
     this.dragIndex = null
-    this.requestUpdate()
+    this.dragOverIndex = null
+    this._emitChanges()
   }
 
   _emitChanges() {
@@ -1016,7 +1135,7 @@ function displayTimestamp(inputDateString) {
     timeZone: 'UTC',
   }
 
-  const formatted = date.toLocaleString('en-US', options)
+  const formatted = `${date.toLocaleString('en-US', options)}.${String(date.getUTCMilliseconds()).padStart(3, '0')}`
   return formatted.replace(',', '')
 }
 

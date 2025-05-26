@@ -261,8 +261,8 @@ dashboardPage pid col reqsVecM = do
                   colIdxMap = listToIndexHashMap colNames
                   reqLastCreatedAtM = (\r -> lookupVecTextByKey r colIdxMap "created_at") =<< (requestVecs V.!? (V.length requestVecs - 1))
                   curatedColNames = nubOrd $ Log.curateCols [""] colNames
-                  nextLogsURL = RequestDumps.requestDumpLogUrlPath pid query reqLastCreatedAtM Nothing Nothing Nothing Nothing (Just "loadmore") "requests" Nothing
-                  resetLogsURL = RequestDumps.requestDumpLogUrlPath pid query Nothing Nothing Nothing Nothing Nothing Nothing "requests" Nothing
+                  nextLogsURL = RequestDumps.requestDumpLogUrlPath pid query reqLastCreatedAtM Nothing Nothing Nothing Nothing (Just "loadmore") "requests" False
+                  resetLogsURL = RequestDumps.requestDumpLogUrlPath pid query Nothing Nothing Nothing Nothing Nothing Nothing "requests" False
                   page =
                     Log.ApiLogsPageData
                       { pid
@@ -272,10 +272,10 @@ dashboardPage pid col reqsVecM = do
                       , colIdxMap
                       , nextLogsURL
                       , resetLogsURL
+                      , recentLogsURL = ""
                       , currentRange = Nothing
                       , exceededFreeTier = False
                       , query
-                      , queryAST = ""
                       , cursor = Nothing
                       , isTestLog = Just True
                       , emptyStateUrl = Just $ "/p/" <> pid.toText <> "/monitors/collection?col_id=" <> col.id.toText

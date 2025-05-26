@@ -10,14 +10,13 @@ module Models.Apis.Fields.Query (
   deleteFieldByHash,
   selectFieldsByHashes,
   getFieldsByEndpointKeyPathAndCategory,
-  autoCompleteFields,
 )
 where
 
 import Data.Time (ZonedTime)
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity (selectById)
-import Database.PostgreSQL.Entity.DBT (QueryNature (Select, Update), execute, query)
+import Database.PostgreSQL.Entity.DBT (execute, query)
 import Database.PostgreSQL.Simple (Only (Only))
 import Database.PostgreSQL.Simple.FromRow
 import Database.PostgreSQL.Simple.SqlQQ (sql)
@@ -95,7 +94,7 @@ fieldById fid = selectById @Field (Only fid)
 
 
 selectFields :: Projects.ProjectId -> Text -> DBT IO (V.Vector Field)
-selectFields pid endpointHash = query Select q (pid, endpointHash)
+selectFields pid endpointHash = query q (pid, endpointHash)
   where
     q =
       [sql| select id,created_at,updated_at,project_id,endpoint_hash,key,field_type,
@@ -104,7 +103,7 @@ selectFields pid endpointHash = query Select q (pid, endpointHash)
 
 
 selectFieldsByHashes :: Projects.ProjectId -> V.Vector Text -> DBT IO (V.Vector Field)
-selectFieldsByHashes pid fieldHashes = query Select q (pid, fieldHashes)
+selectFieldsByHashes pid fieldHashes = query q (pid, fieldHashes)
   where
     q =
       [sql| SELECT id,created_at,updated_at,project_id,endpoint_hash,key,field_type,
@@ -114,7 +113,7 @@ selectFieldsByHashes pid fieldHashes = query Select q (pid, fieldHashes)
 
 
 getFieldsByEndpointKeyPathAndCategory :: Projects.ProjectId -> Text -> Text -> FieldCategoryEnum -> DBT IO (V.Vector Text)
-getFieldsByEndpointKeyPathAndCategory pid endpointId keyPath fieldCategory = query Select q (pid, endpointId, keyPath, fieldCategory)
+getFieldsByEndpointKeyPathAndCategory pid endpointId keyPath fieldCategory = query q (pid, endpointId, keyPath, fieldCategory)
   where
     q = [sql|SELECT f.format from apis.endpoints enp JOIN apis.fields f on enp.hash = f.endpoint_hash where f.project_id=? AND enp.id=? AND f.key_path=? AND f.field_category=?  limit 4;|]
 
@@ -123,18 +122,18 @@ updateFieldByHash :: Text -> Text -> Text -> DBT IO Int64
 updateFieldByHash endpointHash fieldHash description = do
   let q =
         [sql| UPDATE apis.fields SET  description=? WHERE endpoint_hash=? AND hash=? |]
-  execute Update q (description, endpointHash, fieldHash)
+  execute q (description, endpointHash, fieldHash)
 
 
 deleteFieldByHash :: Text -> ZonedTime -> DBT IO Int64
 deleteFieldByHash fieldHash dTime = do
   let q =
         [sql| UPDATE apis.fields SET  deleted_at=? WHERE hash=? |]
-  execute Update q (dTime, fieldHash)
+  execute q (dTime, fieldHash)
 
 
 fieldsByEndpointHashes :: Projects.ProjectId -> V.Vector Text -> PgT.DBT IO (V.Vector SwField)
-fieldsByEndpointHashes pid hashes = query Select q (pid, hashes)
+fieldsByEndpointHashes pid hashes = query q (pid, hashes)
   where
     q =
       [sql|
@@ -143,9 +142,3 @@ fieldsByEndpointHashes pid hashes = query Select q (pid, hashes)
       FROM apis.fields
       WHERE project_id = ? AND endpoint_hash = ANY(?)
     |]
-
-
-autoCompleteFields :: Projects.ProjectId -> FieldCategoryEnum -> Text -> DBT IO (V.Vector Text)
-autoCompleteFields pid fieldCategory pathPrefix = query Select q (pid, fieldCategory, pathPrefix <> "%")
-  where
-    q = [sql|SELECT DISTINCT key_path from apis.fields WHERE project_id = ? AND field_category = ? AND key_path <> ''  AND key_path LIKE ? LIMIT 15|]

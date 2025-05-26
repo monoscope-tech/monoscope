@@ -6,6 +6,7 @@ import Data.Default
 import Data.Generics.Labels ()
 import Data.Scientific (fromFloatDigits)
 import Data.Text qualified as T
+import Data.Vector qualified as V
 import Deriving.Aeson qualified as DAE
 import Deriving.Aeson.Stock qualified as DAES
 import Fmt qualified as Ft
@@ -122,6 +123,8 @@ data Widget = Widget
   , children :: Maybe [Widget]
   , html :: Maybe LText
   , standalone :: Maybe Bool -- Not used in a grid stack
+  , allowZoom :: Maybe Bool -- Allow zooming in the chart
+  , showMarkArea :: Maybe Bool -- Show mark area in the chart
   }
   deriving stock (Generic, Show, THS.Lift)
   deriving anyclass (Default, NFData)
@@ -185,7 +188,7 @@ widgetHelper_ w' = case w.wType of
     gridStackHandleClass = if w._isNested == Just True then "nested-grid-stack-handle" else "grid-stack-handle"
     layoutFields = [("x", (.x)), ("y", (.y)), ("w", (.w)), ("h", (.h))]
     attrs = concat [maybe [] (\v -> [term ("gs-" <> name) (show v)]) (w.layout >>= layoutField) | (name, layoutField) <- layoutFields]
-    paddingBtm = if w.standalone == Just True then "" else (bool " pb-8 " " pb-4 " (w._isNested == Just True))
+    paddingBtm = if w.standalone == Just True then "" else (bool " pb-8 " " standalone pb-4 " (w._isNested == Just True))
     -- Serialize the widget to JSON for easy copying
     widgetJson = decodeUtf8 $ fromLazy $ AE.encode w
     gridItem_ =
@@ -195,10 +198,10 @@ widgetHelper_ w' = case w.wType of
 
 
 renderWidgetHeader :: Widget -> Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe (Text, Text) -> Bool -> Html ()
-renderWidgetHeader widget wId title valueM subValueM expandBtnFn ctaM hideSub = div_ [class_ "leading-none flex justify-between items-center grid-stack-handle", id_ $ wId <> "_header"] do
+renderWidgetHeader widget wId title valueM subValueM expandBtnFn ctaM hideSub = div_ [class_ $ "leading-none flex justify-between items-center  " <> bool "grid-stack-handle" "" (widget.standalone == Just True), id_ $ wId <> "_header"] do
   div_ [class_ "inline-flex gap-3 items-center group/h"] do
     span_ [class_ "text-sm flex items-center gap-1"] do
-      span_ [class_ "hidden group-hover/h:inline-flex"] $ Utils.faSprite_ "grip-dots-vertical" "regular" "w-4 h-4"
+      unless (widget.standalone == Just True) $ span_ [class_ "hidden  group-hover/h:inline-flex"] $ Utils.faSprite_ "grip-dots-vertical" "regular" "w-4 h-4"
       whenJust widget.icon \icon -> span_ [] $ Utils.faSprite_ icon "regular" "w-4 h-4"
       toHtml $ maybeToMonoid title
     span_ [class_ $ "bg-fillWeak border border-strokeWeak text-sm font-semibold px-2 py-1 rounded-3xl " <> if (isJust valueM) then "" else "hidden", id_ $ wId <> "Value"]
@@ -270,12 +273,12 @@ renderWidgetHeader widget wId title valueM subValueM expandBtnFn ctaM hideSub = 
               , data_ "tippy-content" "Create a copy of this widget"
               , hxPost_
                   $ "/p/"
-                  <> maybeToMonoid (widget._projectId <&> (.toText))
-                  <> "/dashboards/"
-                  <> maybeToMonoid widget._dashboardId
-                  <> "/widgets/"
-                  <> wId
-                  <> "/duplicate"
+                    <> maybeToMonoid (widget._projectId <&> (.toText))
+                    <> "/dashboards/"
+                    <> maybeToMonoid widget._dashboardId
+                    <> "/widgets/"
+                    <> wId
+                    <> "/duplicate"
               , hxSwap_ "beforeend"
               , hxTrigger_ "click"
               , hxTarget_ ".grid-stack"
@@ -318,7 +321,7 @@ renderChart widget = do
       div_
         [ class_
             $ "h-full w-full flex flex-col justify-end "
-            <> if widget.naked == Just True then "" else " rounded-2xl border border-strokeWeak bg-fillWeaker"
+              <> if widget.naked == Just True then "" else " rounded-2xl border border-strokeWeak bg-fillWeaker"
         , id_ $ chartId <> "_bordered"
         ]
         do
@@ -346,7 +349,6 @@ renderChart widget = do
               [type_ "text/javascript"]
               [text|
               (()=>{
-
                 const echartOptTxt = `${echartOpt}`
                 const echartOpt = JSON.parse(echartOptTxt, (key, value) => {
                   if (typeof value === 'string' && value.trim().startsWith("function(")) {
@@ -373,6 +375,7 @@ renderChart widget = do
                   pid: ${pid},
                   summarizeBy: '${summarizeBy}',
                   summarizeByPrefix: '${summarizeByPfx}'
+                 
                 });
               })();
             |]
@@ -466,6 +469,31 @@ widgetToECharts widget =
               ["source" AE..= fromMaybe AE.Null (widget.dataset <&> (.source))]
         , "series" AE..= map (createSeries widget.wType) []
         , "animation" AE..= False
+        , -- , "dataZoom" AE..= AE.Array(V.fromList [ AE.object[
+          --   "type" AE..= "inside"
+          --   , "xAxisIndex" AE..= 0
+          --   , "filterMode" AE..= "weakFilter"
+          --   , "zoomOnMouseWheel" AE..= True
+          --   , "moveOnMouseMove": True
+          --   , "moveOnMouseWheel": True
+          --   ] ])
+          "dataZoom"
+            AE..= AE.Array
+              ( V.fromList
+                  [ AE.object
+                      [ "type" AE..= ("inside" :: Text)
+                      , "xAxisIndex" AE..= 0
+                      , "filterMode" AE..= ("weakFilter" :: Text)
+                      ]
+                  ]
+              )
+        , if widget.allowZoom == Just True
+            then
+              "toolbox"
+                AE..= AE.object
+                  [ "feature" AE..= AE.object ["dataZoom" AE..= AE.object ["show" AE..= True, "yAxisIndex" AE..= "none", "icon" AE..= AE.object ["back" AE..= "none"]]]
+                  ]
+            else "toolbox" AE..= AE.object []
         ]
 
 
@@ -497,6 +525,24 @@ createSeries widgetType query =
         [ "name" AE..= fromMaybe "Unnamed Series" (query >>= (.query))
         , "type" AE..= mapWidgetTypeToChartType widgetType
         , "stack" AE..= ("Stack" :: Text)
+        , "markArea"
+            AE..= AE.object
+              [ "show" AE..= True
+              , "data"
+                  AE..= if isStat
+                    then AE.Array V.empty -- No mark area for stat widgets
+                    else
+                      AE.Array
+                        ( V.fromList
+                            [ AE.Array
+                                ( V.fromList
+                                    [ AE.object ["x" AE..= 5]
+                                    , AE.object ["x" AE..= 25]
+                                    ]
+                                )
+                            ]
+                        )
+              ]
         , "showBackground" AE..= not isStat
         , "backgroundStyle"
             AE..= AE.object

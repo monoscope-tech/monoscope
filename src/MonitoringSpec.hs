@@ -2,7 +2,7 @@ module MonitoringSpec (spec) where
 
 import Data.Time (defaultTimeLocale, formatTime, getCurrentTime)
 import Data.UUID qualified as UUID
-import Database.PostgreSQL.Entity.DBT (QueryNature (Select), execute, withPool)
+import Database.PostgreSQL.Entity.DBT (execute, withPool)
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Models.Apis.Monitors qualified as Monitors
 import Models.Projects.Projects qualified as Projects
@@ -54,7 +54,7 @@ spec = aroundAll TestUtils.withSetup do
             ]
       r <- TestUtils.runTestBackground authCtx $ processRequestMessages msgs
       r `shouldBe` ["m1", "m2", "m4", "m5", "m5"]
-      respC' <- withPool pool $ execute Select [sql|CALL monitors.check_triggered_query_monitors(0, '{}')|] ()
+      respC' <- withPool pool $ execute [sql|CALL monitors.check_triggered_query_monitors(0, '{}')|] ()
       respC' `shouldBe` 0
       _ <- TestUtils.runAllBackgroundJobs authCtx
       -- TODO:

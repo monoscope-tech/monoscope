@@ -28,7 +28,6 @@ import Data.Time
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity
-import Database.PostgreSQL.Entity.DBT (QueryNature (..))
 import Database.PostgreSQL.Entity.DBT qualified as DBT
 import Database.PostgreSQL.Entity.Types
 import Database.PostgreSQL.Simple hiding (execute)
@@ -38,7 +37,7 @@ import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.ToField
 import Database.PostgreSQL.Transact hiding (DB, execute, queryOne)
 import Effectful
-import Effectful.Error.Static
+import Effectful.Error.Static (throwError)
 import Effectful.Error.Static qualified as EffError
 import Effectful.PostgreSQL.Transact.Effect (DB, dbtToEff)
 import Effectful.Reader.Static (Reader, asks)
@@ -121,7 +120,7 @@ newPersistentSessionId = PersistentSessionId <$> UUID.genUUID
 
 
 insertSession :: DB :> es => PersistentSessionId -> UserId -> SessionData -> Eff es ()
-insertSession pid userId sessionData = void <$> dbtToEff $ DBT.execute Insert q (pid, userId, sessionData)
+insertSession pid userId sessionData = void <$> dbtToEff $ DBT.execute q (pid, userId, sessionData)
   where
     q = [sql| insert into users.persistent_sessions(id, user_id, session_data) VALUES (?, ?, ?) |]
 
@@ -132,7 +131,7 @@ deleteSession sessionId = delete @PersistentSession (Only sessionId)
 
 -- TODO: getting persistent session happens very frequently, so we should create a view for this, when our user base grows.
 getPersistentSession :: DB :> es => PersistentSessionId -> Eff es (Maybe PersistentSession)
-getPersistentSession sessionId = dbtToEff $ DBT.queryOne Select q value
+getPersistentSession sessionId = dbtToEff $ DBT.queryOne q value
   where
     q =
       [sql| select ps.id, ps.created_at, ps.updated_at, ps.user_id, ps.session_data, row_to_json(u) as user, u.is_sudo,

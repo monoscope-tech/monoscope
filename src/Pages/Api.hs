@@ -2,9 +2,7 @@ module Pages.Api (apiGetH, apiPostH, apiActivateH, apiDeleteH, GenerateAPIKeyFor
 
 import Data.Base64.Types qualified as B64
 import Data.ByteString.Base64 qualified as B64
-import Data.Char (isAlphaNum)
 import Data.Default (def)
-import Data.Map qualified as Map
 import Data.Text qualified as T
 import Data.UUID as UUID (toText)
 import Data.UUID.V4 qualified as UUIDV4
@@ -12,7 +10,7 @@ import Data.Vector qualified as V
 import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
 import Effectful.Reader.Static (ask)
 import Lucid
-import Lucid.Htmx (hxConfirm_, hxDelete_, hxPatch_, hxPost_, hxPut_, hxTarget_)
+import Lucid.Htmx (hxConfirm_, hxDelete_, hxPatch_, hxPost_, hxTarget_)
 import Lucid.Hyperscript (__)
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys

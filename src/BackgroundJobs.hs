@@ -3,7 +3,6 @@ module BackgroundJobs (jobsWorkerInit, jobsRunner, BgJobs (..), runHourlyJob, ge
 import Control.Lens ((.~))
 import Data.Aeson ((.=))
 import Data.Aeson qualified as AE
-import Data.Aeson.Encoding qualified as AE
 import Data.Aeson.QQ (aesonQQ)
 import Data.CaseInsensitive qualified as CI
 import Data.Effectful.UUID qualified as UUID
@@ -17,7 +16,7 @@ import Data.Time.LocalTime (LocalTime (localDay), ZonedTime (zonedTimeToLocalTim
 import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUIDV4
 import Data.Vector qualified as V
-import Database.PostgreSQL.Entity.DBT (QueryNature (..), execute, query, withPool)
+import Database.PostgreSQL.Entity.DBT (execute, query, withPool)
 import Database.PostgreSQL.Simple (Only (Only))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Transact qualified as PTR
@@ -179,7 +178,7 @@ jobsRunner logger authCtx job = when authCtx.config.enableBackgroundJobs $ do
             scheduleJob conn "background_jobs" (BackgroundJobs.HourlyJob scheduledTime hour) scheduledTime
 
         -- Handle regular daily jobs for each project
-        projects <- dbtToEff $ query Select [sql|SELECT id FROM projects.projects WHERE active=? AND deleted_at IS NULL and payment_plan != 'ONBOARDING'|] (Only True)
+        projects <- dbtToEff $ query [sql|SELECT id FROM projects.projects WHERE active=? AND deleted_at IS NULL and payment_plan != 'ONBOARDING'|] (Only True)
         forM_ projects \p -> do
           liftIO $ withResource authCtx.jobsPool \conn -> do
             when (dayOfWeek currentDay == Monday)
@@ -247,7 +246,6 @@ runHourlyJob scheduledTime hour = do
   activeProjects <-
     dbtToEff
       $ query
-        Select
         [sql| SELECT DISTINCT project_id 
               FROM otel_logs_and_spans ols
               WHERE ols.timestamp >= ?
@@ -596,7 +594,7 @@ We have detected a new endpoint on *{project.title}*
       anomalies <- forM anomaliesVM \anomaly -> do
         let targetHash = anomaly.targetHash
             getShapesQuery = [sql| select hash, field_hashes from apis.shapes where project_id=? and endpoint_hash=? |]
-        shapes <- (dbtToEff $ query Select getShapesQuery (pid, T.take 8 targetHash))
+        shapes <- (dbtToEff $ query getShapesQuery (pid, T.take 8 targetHash))
         let targetFields = maybe [] (V.toList . snd) $ V.find (\a -> fst a == targetHash) shapes
         let otherFields = toList <$> toList (snd $ V.unzip $ V.filter (\a -> fst a /= targetHash) shapes)
         updatedFieldFormats <- dbtToEff $ getUpdatedFieldFormats pid (V.fromList targetFields)
@@ -735,7 +733,7 @@ A new runtime exception has been detected. click the link below to see more deta
 
 
 getUpdatedFieldFormats :: Projects.ProjectId -> V.Vector Text -> PTR.DBT IO (V.Vector Text)
-getUpdatedFieldFormats pid fieldHashes = query Select q (pid, fieldHashes)
+getUpdatedFieldFormats pid fieldHashes = query q (pid, fieldHashes)
   where
     q =
       [sql| select fm.hash from apis.formats fm JOIN apis.fields fd ON (fm.project_id=fd.project_id AND fd.hash=fm.field_hash) 
@@ -743,6 +741,6 @@ getUpdatedFieldFormats pid fieldHashes = query Select q (pid, fieldHashes)
 
 
 updateShapeCounts :: Projects.ProjectId -> Text -> V.Vector Text -> V.Vector Text -> V.Vector Text -> PTR.DBT IO Int64
-updateShapeCounts pid shapeHash newFields deletedFields updatedFields = execute Update q (newFields, deletedFields, updatedFields, pid, shapeHash)
+updateShapeCounts pid shapeHash newFields deletedFields updatedFields = execute q (newFields, deletedFields, updatedFields, pid, shapeHash)
   where
     q = [sql| update apis.shapes SET new_unique_fields=?, deleted_fields=?, updated_field_formats=? where project_id=? and hash=?|]

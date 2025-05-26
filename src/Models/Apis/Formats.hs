@@ -13,7 +13,7 @@ import Data.Default (Default)
 import Data.Time (ZonedTime)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
-import Database.PostgreSQL.Entity.DBT (QueryNature (Select), query)
+import Database.PostgreSQL.Entity.DBT (query)
 import Database.PostgreSQL.Entity.Types
 import Database.PostgreSQL.Simple (FromRow, Only (Only), ToRow)
 import Database.PostgreSQL.Simple.FromField (FromField)
@@ -55,13 +55,13 @@ data Format = Format
 
 
 formatsByFieldHash :: Text -> DBT IO (V.Vector Format)
-formatsByFieldHash fhash = query Select q (Only fhash)
+formatsByFieldHash fhash = query q (Only fhash)
   where
     q = [sql| SELECT id,created_at,updated_at,project_id, field_hash,field_type,field_format,examples::json[], hash from apis.formats where field_hash=? |]
 
 
 formatsByHash :: Text -> DBT IO (V.Vector Format)
-formatsByHash fhash = query Select q (Only fhash)
+formatsByHash fhash = query q (Only fhash)
   where
     q = [sql| SELECT id,created_at,updated_at,project_id, field_hash,field_type,field_format,examples::json[], hash from apis.formats where hash=? |]
 
@@ -103,7 +103,7 @@ data SwFormat = SwFormat
 
 
 formatsByFieldsHashes :: Projects.ProjectId -> V.Vector Text -> PgT.DBT IO (V.Vector SwFormat)
-formatsByFieldsHashes pid fieldHashes = query Select q (pid, fieldHashes)
+formatsByFieldsHashes pid fieldHashes = query q (pid, fieldHashes)
   where
     q =
       [sql|

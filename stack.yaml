@@ -10,7 +10,8 @@ ghc-options:
 
 extra-deps:
   - ./rust-interop
-  - pg-entity-0.0.4.4@sha256:33c2b9b7890ac89a3bdaec4765fa5740cc882fe464f4b94cfa41c16b5cb95cb5,4577
+  - pg-entity-0.0.6.0
+  # - pg-entity-0.0.4.4@sha256:33c2b9b7890ac89a3bdaec4765fa5740cc882fe464f4b94cfa41c16b5cb95cb5,4577
   - Unique-0.4.7.9@sha256:7c37e22b7bb9df935c22112e67043177461aedcebe3a958854f6c0e9ecb54083,2155
   - dotenv-0.12.0.0@sha256:2f25615cec37ff9a66a48ef0ebf2ac96ae989911d0c26c6796fc2f5247bdd665,4702
   - hiedb-plugin-0.1.0@sha256:480d8836e7d21b91a6205010af534cb739a2079d4bdeac7893cf85c9a4d75f32,1439
@@ -101,9 +102,11 @@ extra-deps:
     commit: 893368e6010a87c3a2d33227af675b4fb8fe411f
     subdirs:
       - .
+  - git: https://github.com/tusharad/langchain-hs
+    commit: 8182563f4648fcc34952ccaf06a2247e6514727f
+    subdirs:
+      - .
 
 flags:
-  pg-entity:
-    prod: True
 
 allow-newer: true

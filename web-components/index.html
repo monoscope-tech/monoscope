@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Monaco AQL Editor</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+  </head>
+  <body class="h-screen w-screen m-0 p-0 overflow-hidden flex flex-col">
+    <div class="flex-1 relative h-full w-full min-h-0 justify-center flex p-8">
+      <div class="w-1/2">
+        <query-editor id="kusto-editor" class="block w-full search-input"></query-editor>
+      </div>
+    </div>
+    <script type="module" src="/src/index.ts"></script>
+    <script type="module">
+      import { initializeDefaultSchema } from '/src/index.ts';
+
+      document.addEventListener('DOMContentLoaded', () => {
+        // Get a reference to the editor component
+        const editor = document.getElementById('kusto-editor');
+
+        // Wait for the component to be fully initialized
+        setTimeout(() => {
+          // Initialize the default schema with all configuration
+          initializeDefaultSchema();
+
+          // Set query library data using the setQueryLibrary method
+          const queryLibraryData = [
+            {
+              id: '1234abcd',
+              projectId: 'project1',
+              createdAt: '2023-04-15T10:30:00Z',
+              updatedAt: '2023-04-15T10:30:00Z',
+              userId: 'user123',
+              queryType: 'history',
+              queryText: 'resource.service.name == "checkout"',
+              queryAst: {},
+              byMe: true,
+            },
+            {
+              id: '5678efgh',
+              projectId: 'project1',
+              createdAt: '2023-04-14T14:45:00Z',
+              updatedAt: '2023-04-14T14:45:00Z',
+              userId: 'user123',
+              queryType: 'history',
+              queryText: 'attributes.http.request.method == "GET" and status_code == "ERROR"',
+              queryAst: {},
+              byMe: true,
+            },
+            {
+              id: 'abcd1234',
+              projectId: 'project1',
+              createdAt: '2023-04-10T09:15:00Z',
+              updatedAt: '2023-04-10T09:15:00Z',
+              userId: 'user123',
+              queryType: 'saved',
+              queryText: 'stats avg(duration) by resource.service.name',
+              queryAst: {},
+              title: 'Average Duration by Service',
+              byMe: true,
+            },
+            {
+              id: 'efgh5678',
+              projectId: 'project1',
+              createdAt: '2023-04-05T16:20:00Z',
+              updatedAt: '2023-04-05T16:20:00Z',
+              userId: 'user456',
+              queryType: 'saved',
+              queryText: 'metrics | timechart [5m] avg(duration) by resource.service.name',
+              queryAst: {},
+              title: 'Service Metrics Over Time',
+              byMe: false,
+            },
+          ];
+
+          // Set the query library data
+          if(editor) {
+            editor.setQueryLibrary(queryLibraryData);
+          }
+          // Set popular searches example with AQL syntax
+          const popularSearches = [
+            { query: 'stats p95(duration) by resource.service.name', description: 'P95 latency by service' },
+            { query: 'attributes.http.response.status_code >= 400', description: 'HTTP errors' },
+            { query: 'resource.service.name == "auth-service"', description: 'Auth service logs' },
+            { query: 'timechart [5m] count() by resource.service.name', description: 'Request volume over time' },
+            { query: 'duration > 500ms', description: 'Slow requests' },
+          ];
+
+          // Use the public method to set popular searches
+          if(editor) {
+            editor.setPopularSearches(popularSearches);
+          }
+        }, 1000); // Small delay to ensure component is ready
+      });
+    </script>
+  </body>
+</html>

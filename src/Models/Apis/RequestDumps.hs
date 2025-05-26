@@ -17,7 +17,6 @@ module Models.Apis.RequestDumps (
   selectChildSpansAndLogs,
   countRequestDumpByProject,
   getRequestType,
-  autoCompleteFromRequestDumps,
   getLastSevenDaysTotalRequest,
   getTotalRequestToReport,
   parseSDKType,
@@ -31,11 +30,12 @@ import Data.Default
 import Data.Default.Instances ()
 import Data.Text qualified as T
 import Data.Time (CalendarDiffTime, UTCTime, ZonedTime)
+import Data.Time.Clock.POSIX (posixSecondsToUTCTime, utcTimeToPOSIXSeconds)
 import Data.Time.Format
 import Data.Time.Format.ISO8601 (iso8601Show)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
-import Database.PostgreSQL.Entity.DBT (QueryNature (Insert, Select), executeMany, query, queryOne)
+import Database.PostgreSQL.Entity.DBT (executeMany, query, queryOne)
 import Database.PostgreSQL.Entity.Types
 import Database.PostgreSQL.Simple (FromRow, Only (Only), ToRow)
 import Database.PostgreSQL.Simple.FromField (FromField (fromField))
@@ -372,27 +372,37 @@ data RequestDumpLogItem = RequestDumpLogItem
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] RequestDumpLogItem
 
 
-requestDumpLogUrlPath :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Text -> Maybe Text -> Text
-requestDumpLogUrlPath pid q cols cursor since fromV toV layout source queryASTM =
-  "/p/" <> pid.toText <> "/log_explorer?" <> T.intercalate "&" params
+incrementByOneMillisecond :: String -> String
+incrementByOneMillisecond dateStr =
+  case maybeTime of
+    Nothing -> ""
+    Just utcTime ->
+      let newTime = posixSecondsToUTCTime $ utcTimeToPOSIXSeconds utcTime + 0.000001
+       in iso8601Show newTime
   where
+    maybeTime = parseTimeM True defaultTimeLocale "%Y-%m-%dT%H:%M:%S%QZ" dateStr :: Maybe UTCTime
+
+
+requestDumpLogUrlPath :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Text -> Bool -> Text
+requestDumpLogUrlPath pid q cols cursor since fromV toV layout source recent = "/p/" <> pid.toText <> "/log_explorer?" <> T.intercalate "&" params
+  where
+    recentTo = cursor >>= (\x -> Just (toText . incrementByOneMillisecond . toString $ x))
     params =
       catMaybes
         [ Just ("json=true")
         , fmap ("query=" <>) (toQueryParam <$> q)
         , fmap ("cols=" <>) (toQueryParam <$> cols)
-        , fmap ("cursor=" <>) (toQueryParam <$> cursor)
-        , fmap ("since=" <>) (toQueryParam <$> since)
+        , if recent then Nothing else fmap ("cursor=" <>) (toQueryParam <$> cursor)
+        , if recent then Nothing else fmap ("since=" <>) (toQueryParam <$> since)
         , fmap ("from=" <>) (toQueryParam <$> fromV)
-        , fmap ("to=" <>) (toQueryParam <$> toV)
+        , if recent then fmap ("to=" <>) (toQueryParam <$> recentTo) else fmap ("to=" <>) (toQueryParam <$> toV)
         , fmap ("layout=" <>) (toQueryParam <$> layout)
-        , fmap ("queryAST=" <>) (toQueryParam <$> queryASTM)
         , Just ("source=" <> toQueryParam source)
         ]
 
 
 getRequestDumpForReports :: Projects.ProjectId -> Text -> DBT IO (V.Vector RequestForReport)
-getRequestDumpForReports pid report_type = query Select (Query $ encodeUtf8 q) pid
+getRequestDumpForReports pid report_type = query (Query $ encodeUtf8 q) pid
   where
     report_interval = if report_type == "daily" then ("'24 hours'" :: Text) else "'7 days'"
     q =
@@ -408,7 +418,7 @@ getRequestDumpForReports pid report_type = query Select (Query $ encodeUtf8 q) p
 
 
 getRequestDumpsForPreviousReportPeriod :: Projects.ProjectId -> Text -> DBT IO (V.Vector EndpointPerf)
-getRequestDumpsForPreviousReportPeriod pid report_type = query Select (Query $ encodeUtf8 q) pid
+getRequestDumpsForPreviousReportPeriod pid report_type = query (Query $ encodeUtf8 q) pid
   where
     (start, end) = if report_type == "daily" then ("'48 hours'" :: Text, "'24 hours'") else ("'14 days'", "'7 days'")
     q =
@@ -446,7 +456,7 @@ selectChildSpansAndLogs pid projectedColsByUser traceIds dateRange = do
         [text|SELECT json_build_array($r) FROM otel_logs_and_spans
              WHERE project_id=? and  context___trace_id=Any(?) $dateRangeStr and parent_id IS NOT NULL
            |]
-  v <- dbtToEff $ query Select (Query $ encodeUtf8 q) (pid, traceIds)
+  v <- dbtToEff $ query (Query $ encodeUtf8 q) (pid, traceIds)
   pure $ V.mapMaybe valueToVector v
 
 
@@ -466,8 +476,8 @@ queryCount q = dbtToEff $ DBT.queryOne_ (Query $ encodeUtf8 q)
 
 selectRequestDumpByProject :: Projects.ProjectId -> Text -> Maybe Text -> Maybe ZonedTime -> Maybe ZonedTime -> DBT IO (V.Vector RequestDumpLogItem, Int)
 selectRequestDumpByProject pid extraQuery cursorM fromM toM = do
-  logItems <- query Select (Query $ encodeUtf8 q) (pid, cursorT)
-  Only c <- fromMaybe (Only 0) <$> queryOne Select (Query $ encodeUtf8 qCount) (pid, cursorT)
+  logItems <- query (Query $ encodeUtf8 q) (pid, cursorT)
+  Only c <- fromMaybe (Only 0) <$> queryOne (Query $ encodeUtf8 qCount) (pid, cursorT)
   pure (logItems, c)
   where
     cursorT = fromMaybe "infinity" cursorM
@@ -495,7 +505,7 @@ selectRequestDumpByProject pid extraQuery cursorM fromM toM = do
 
 countRequestDumpByProject :: Projects.ProjectId -> DBT IO Int
 countRequestDumpByProject pid = do
-  result <- query Select q pid
+  result <- query q pid
   case result of
     [Only c] -> return c
     v -> return $ length v
@@ -504,13 +514,13 @@ countRequestDumpByProject pid = do
 
 
 bulkInsertRequestDumps :: DB :> es => [RequestDump] -> Eff es ()
-bulkInsertRequestDumps params = void $ dbtToEff $ executeMany Insert q params
+bulkInsertRequestDumps params = void $ dbtToEff $ executeMany q params
   where
     q = [sql| INSERT INTO apis.request_dumps VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING; |]
 
 
 selectRequestDumpByProjectAndId :: Projects.ProjectId -> UTCTime -> UUID.UUID -> DBT IO (Maybe RequestDumpLogItem)
-selectRequestDumpByProjectAndId pid createdAt rdId = queryOne Select q (createdAt, pid, rdId)
+selectRequestDumpByProjectAndId pid createdAt rdId = queryOne q (createdAt, pid, rdId)
   where
     q =
       [sql|SELECT   id,created_at,project_id, host,url_path,method,raw_url,referer,
@@ -521,15 +531,9 @@ selectRequestDumpByProjectAndId pid createdAt rdId = queryOne Select q (createdA
              FROM apis.request_dumps where (created_at=?)  and project_id=? and id=? LIMIT 1|]
 
 
-autoCompleteFromRequestDumps :: Projects.ProjectId -> Text -> Text -> DBT IO (V.Vector Text)
-autoCompleteFromRequestDumps pid key prefix = query Select (Query $ encodeUtf8 q) (pid, prefix <> "%")
-  where
-    q = [text|SELECT DISTINCT $key from apis.request_dumps WHERE project_id = ? AND created_at > NOW() - interval '14' day AND $key <> ''  AND $key LIKE ?|]
-
-
 getLastSevenDaysTotalRequest :: Projects.ProjectId -> DBT IO Int
 getLastSevenDaysTotalRequest pid = do
-  result <- queryOne Select q pid
+  result <- queryOne q pid
   case fromMaybe (Only 0) result of
     (Only c) -> return c
   where
@@ -539,7 +543,7 @@ getLastSevenDaysTotalRequest pid = do
 
 getTotalRequestToReport :: Projects.ProjectId -> UTCTime -> DBT IO Int
 getTotalRequestToReport pid lastReported = do
-  result <- query Select q (pid, lastReported)
+  result <- query q (pid, lastReported)
   case result of
     [Only c] -> return c
     v -> return $ length v

@@ -45,7 +45,7 @@ const updateChartConfiguration = (widgetData, opt, data) => {
 const updateChartData = async (chart, opt, shouldFetch, widgetData) => {
   if (!shouldFetch) return
 
-  const { query, querySQL, queryAST, pid, chartId, summarizeBy, summarizeByPrefix } = widgetData
+  const { query, querySQL, pid, chartId, summarizeBy, summarizeByPrefix } = widgetData
   const loader = $(`${chartId}_loader`)
   // Show loader before fetch
   if (loader) loader.classList.remove('hidden')
@@ -56,8 +56,7 @@ const updateChartData = async (chart, opt, shouldFetch, widgetData) => {
   try {
     const params = new URLSearchParams(window.location.search)
     params.set('pid', pid)
-    params.set('query_raw', query)
-    params.set('queryAST', JSON.stringify(queryAST))
+    params.set('query', query)
     if (querySQL) params.set('query_sql', querySQL)
 
     const { from, to, headers, dataset, rows_per_min, stats } = await fetch(`/chart_data?${params}`).then(res => res.json())
@@ -78,7 +77,7 @@ const updateChartData = async (chart, opt, shouldFetch, widgetData) => {
     value && ((value.innerHTML = `${summarizeByPrefix} ${Number(stats[summarizeBy]).toLocaleString()}`), value.classList.remove('hidden'))
 
     chart.hideLoading()
-    chart.setOption(updateChartConfiguration(widgetData, opt, opt.dataset.source))
+    chart.setOption(updateChartConfiguration(widgetData, opt, opt.dataset.source), true)
   } catch (e) {
     console.error('Failed to fetch new data:', e)
   } finally {
@@ -111,11 +110,17 @@ const chartWidget = widgetData => {
   let intervalId = null
   chart.group = 'default'
 
-  if (params().queryAST) {
-    widgetData.queryAST = JSON.parse(params().queryAST)
+  if (params().query) {
+    widgetData.query = params().query + ' | ' + widgetData.query
   }
 
   opt.dataset.source = opt.dataset?.source?.map(row => [row[0] * 1000, ...row.slice(1)]) ?? null
+
+  const isLogExlorerPage = window.location.pathname.includes('/log_explorer')
+  if (isLogExlorerPage) {
+    window[`${chartType}Chart`] = chart
+  }
+
   chart.setOption(updateChartConfiguration(widgetData, opt, opt.dataset.source))
 
   const resizeObserver = new ResizeObserver(() => requestAnimationFrame(() => echarts.getInstanceByDom(chartEl).resize()))
@@ -123,24 +128,24 @@ const chartWidget = widgetData => {
 
   liveStreamCheckbox &&
     liveStreamCheckbox.addEventListener('change', () =>
-      liveStreamCheckbox.checked
-        ? (intervalId = setInterval(() => updateChartData(chart, opt, true, widgetData), INITIAL_FETCH_INTERVAL))
-        : (clearInterval(intervalId), (intervalId = null)),
+      liveStreamCheckbox.checked ? (intervalId = setInterval(() => updateChartData(chart, opt, true, widgetData), INITIAL_FETCH_INTERVAL)) : (clearInterval(intervalId), (intervalId = null)),
     )
 
   if (!opt.dataset.source) {
     chart.showLoading()
-    new IntersectionObserver(
-      (entries, observer) => entries[0]?.isIntersecting && (updateChartData(chart, opt, true, widgetData), observer.disconnect()),
-    ).observe(chartEl)
+    new IntersectionObserver((entries, observer) => entries[0]?.isIntersecting && (updateChartData(chart, opt, true, widgetData), observer.disconnect())).observe(chartEl)
   }
 
   ;['submit', 'add-query', 'update-query'].forEach(event => {
     const selector = event === 'submit' ? '#log_explorer_form' : '#filterElement'
     document.querySelector(selector)?.addEventListener(event, e => {
-      if (e.detail?.ast) {
-        widgetData.queryAST = e.detail.ast
+      if (params().query) {
+        widgetData.query = params().query + ' | ' + widgetData.query
       }
+      if (window.logListTable) {
+        window.logListTable.refetchLogs()
+      }
+
       updateChartData(chart, opt, true, widgetData)
     })
   })
@@ -148,6 +153,10 @@ const chartWidget = widgetData => {
     if (e.detail?.ast) {
       widgetData.queryAST = e.detail.ast
     }
+    if (window.logListTable) {
+      window.logListTable.refetchLogs()
+    }
+
     updateChartData(chart, opt, true, widgetData)
   })
 

@@ -19,7 +19,6 @@ import Data.Effectful.UUID (UUIDEff)
 import Data.Effectful.UUID qualified as UUID
 import Data.Time (UTCTime)
 import Database.PostgreSQL.Entity (Entity, insert, selectById, selectOneByField)
-import Database.PostgreSQL.Entity.DBT (QueryNature (..), execute, queryOne)
 import Database.PostgreSQL.Entity.Types (
   CamelToSnake,
   FieldModifiers,
@@ -124,20 +123,20 @@ userByEmail email = dbtToEff $ selectOneByField @User [field| email |] (Only ema
 
 -- TODO: switch to the Eff monad
 userIdByEmail :: Text -> PgT.DBT IO (Maybe UserId)
-userIdByEmail email = queryOne Select q (Only email)
+userIdByEmail email = PgT.queryOne q (Only email)
   where
     q = [sql|select id from users.users where email=?|]
 
 
 createEmptyUser :: Text -> PgT.DBT IO (Maybe UserId)
-createEmptyUser email = queryOne Insert q (Only email)
+createEmptyUser email = PgT.queryOne q (Only email)
   where
     q = [sql| insert into users.users (email, active) values (?, TRUE) on conflict do nothing returning id |]
 
 
 -- addUserToAllProjects is a hack for development to add the user to all projects
 addUserToAllProjects :: Text -> PgT.DBT IO Int64
-addUserToAllProjects email = execute Insert q values
+addUserToAllProjects email = PgT.execute q values
   where
     q =
       [sql| insert into projects.project_members (active, project_id, permission, user_id)

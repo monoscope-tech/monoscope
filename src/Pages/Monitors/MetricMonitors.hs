@@ -158,7 +158,7 @@ chooseDetectionMethod_ = do
 
 defineTheMetric_ :: Projects.ProjectId -> Html ()
 defineTheMetric_ pid = do
-  div_ [class_ " max-w-[750px]"] $ LogList.logQueryBox_ pid Nothing "requests" Nothing "{}" V.empty V.empty
+  div_ [class_ " max-w-[750px]"] $ LogList.logQueryBox_ pid Nothing "requests" Nothing Nothing V.empty V.empty
   div_ [class_ "border-l-2 border-l-slate-300 pl-4 space-y-2"] do
     h3_ [class_ "font-normal text-base"] "Evaluation Details"
     div_ [class_ "flex items-center gap-2"] do
@@ -323,7 +323,7 @@ monitorMetric_ pid monitorM = section_ [class_ "px-8 py-5 space-y-5 group/pg ove
     , class_ "px-5 mt-5 aspect-4/1"
     , hxGet_ $ "/charts_html?id=reqsChartsEC&show_legend=true&pid=" <> pid.toText
     , hxTrigger_ "load,  htmx:beforeRequest from:#log_explorer_form"
-    , hxVals_ "js:{query_raw:window.getQueryFromEditor(), since: getTimeRange().since, from: getTimeRange().from, to:getTimeRange().to, cols:params().cols, layout:'all', source: params().source}"
+    , hxVals_ "js:{query:window.getQueryFromEditor(), since: getTimeRange().since, from: getTimeRange().from, to:getTimeRange().to, cols:params().cols, layout:'all', source: params().source}"
     , hxSwap_ "innerHTML"
     ]
     ""

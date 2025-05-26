@@ -19,7 +19,6 @@ import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity (Entity, selectById, selectManyByField)
 import Database.PostgreSQL.Entity.DBT (
-  QueryNature (..),
   execute,
   query,
  )
@@ -135,7 +134,6 @@ data QueryMonitorEvaled = QueryMonitorEvaled
 queryMonitorUpsert :: QueryMonitor -> DBT IO Int64
 queryMonitorUpsert qm =
   execute
-    Insert
     q
     ( qm.id
     , qm.projectId
@@ -177,7 +175,7 @@ queryMonitorById id' = selectById @QueryMonitor (Only id')
 
 
 queryMonitorsById :: V.Vector QueryMonitorId -> DBT IO (V.Vector QueryMonitorEvaled)
-queryMonitorsById ids = query Select q (Only ids)
+queryMonitorsById ids = query q (Only ids)
   where
     q =
       [sql|
@@ -189,7 +187,7 @@ queryMonitorsById ids = query Select q (Only ids)
 
 
 updateQMonitorTriggeredState :: QueryMonitorId -> Bool -> DBT IO Int64
-updateQMonitorTriggeredState qmId isAlert = execute Update q (Only qmId)
+updateQMonitorTriggeredState qmId isAlert = execute q (Only qmId)
   where
     q =
       if isAlert
@@ -198,7 +196,7 @@ updateQMonitorTriggeredState qmId isAlert = execute Update q (Only qmId)
 
 
 monitorToggleActiveById :: QueryMonitorId -> DBT IO Int64
-monitorToggleActiveById id' = execute Update q (Only id')
+monitorToggleActiveById id' = execute q (Only id')
   where
     q =
       [sql| 

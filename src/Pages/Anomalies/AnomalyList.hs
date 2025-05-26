@@ -26,7 +26,7 @@ import Data.Text qualified as T
 import Data.Time (UTCTime, defaultTimeLocale, formatTime, getCurrentTime, zonedTimeToUTC)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
-import Database.PostgreSQL.Entity.DBT (QueryNature (Update), execute)
+import Database.PostgreSQL.Entity.DBT (execute)
 import Database.PostgreSQL.Simple (Only (Only))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
@@ -93,8 +93,8 @@ unAcknowlegeAnomalyGetH pid aid = do
   (sess, project) <- Sessions.sessionAndProject pid
   let q = [sql| update apis.anomalies set acknowleged_by=null, acknowleged_at=null where id=? |]
   let qI = [sql| update apis.issues set acknowleged_by=null, acknowleged_at=null where id=? |]
-  _ <- dbtToEff $ execute Update qI (Only aid)
-  _ <- dbtToEff $ execute Update q (Only aid)
+  _ <- dbtToEff $ execute qI (Only aid)
+  _ <- dbtToEff $ execute q (Only aid)
   addRespHeaders $ Acknowlege pid aid False
 
 
@@ -103,8 +103,8 @@ archiveAnomalyGetH pid aid = do
   (sess, project) <- Sessions.sessionAndProject pid
   let q = [sql| update apis.anomalies set archived_at=NOW() where id=? |]
   let qI = [sql| update apis.issues set archived_at=NOW() where id=? |]
-  _ <- dbtToEff $ execute Update qI (Only aid)
-  _ <- dbtToEff $ execute Update q (Only aid)
+  _ <- dbtToEff $ execute qI (Only aid)
+  _ <- dbtToEff $ execute q (Only aid)
   addRespHeaders $ Archive pid aid True
 
 
@@ -113,8 +113,8 @@ unArchiveAnomalyGetH pid aid = do
   (sess, project) <- Sessions.sessionAndProject pid
   let q = [sql| update apis.anomalies set archived_at=null where id=? |]
   let qI = [sql| update apis.issues set archived_at=null where id=? |]
-  _ <- dbtToEff $ execute Update qI (Only aid)
-  _ <- dbtToEff $ execute Update q (Only aid)
+  _ <- dbtToEff $ execute qI (Only aid)
+  _ <- dbtToEff $ execute q (Only aid)
   addRespHeaders $ Archive pid aid False
 
 
@@ -146,7 +146,7 @@ anomalyBulkActionsPostH pid action items = do
         _ <- liftIO $ withResource appCtx.pool \conn -> createJob conn "background_jobs" do BackgroundJobs.GenSwagger pid sess.user.id h.host
         pass
     "archive" -> do
-      _ <- dbtToEff $ execute Update [sql| update apis.anomalies set archived_at=NOW() where id=ANY(?::uuid[]) |] (Only $ V.fromList items.anomalyId)
+      _ <- dbtToEff $ execute [sql| update apis.anomalies set archived_at=NOW() where id=ANY(?::uuid[]) |] (Only $ V.fromList items.anomalyId)
       pass
     _ -> error $ "unhandled anomaly bulk action state " <> action
   addSuccessToast (action <> "d items Successfully") Nothing
@@ -500,7 +500,7 @@ detailsHeader title method statusCode issue currTime filterV content anBtn = do
       anomalyActionButtons issue.projectId issue.id (isJust issue.acknowlegedAt) (isJust issue.archivedAt) ""
     span_ [class_ "font-medium text-2xl text-slate-600 mt-6"] $ toHtml title
     div_ [class_ "flex justify-between items-center gap-4 mt-8"] do
-      let currentURL' = "/charts_html?pid=" <> issue.projectId.toText <> ("&query_raw=" <> escapedQueryPartial [fmt|{anomalyQueryPartial} | timechart [1d]|])
+      let currentURL' = "/charts_html?pid=" <> issue.projectId.toText <> ("&query=" <> escapedQueryPartial [fmt|{anomalyQueryPartial} | timechart [1d]|])
       div_ [class_ "flex flex-col gap-4"] do
         div_ [class_ "flex items-center w-full gap-9 border border-slate-200 rounded-2xl px-10 py-4"] do
           stBox "Events" (show issue.eventsAgg.count)

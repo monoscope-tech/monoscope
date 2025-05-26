@@ -50,8 +50,7 @@ traceH pid trId spanIdM nav = do
         Just traceItem -> do
           spanRecords' <- Telemetry.getSpandRecordsByTraceId pid trId
           let spanRecords = V.catMaybes $ Telemetry.convertOtelLogsAndSpansToSpanRecord <$> spanRecords'
-              spanid = fromMaybe "" $ if isJust spanIdM then spanIdM else Just ""
-              pageProps = PageProps pid traceItem spanid spanRecords
+              pageProps = PageProps pid traceItem spanRecords
           addRespHeaders $ TraceDetails pageProps
         Nothing -> addRespHeaders $ TraceDetailsNotFound "Trace not found"
 
@@ -59,7 +58,6 @@ traceH pid trId spanIdM nav = do
 data PageProps = PageProps
   { pid :: Projects.ProjectId
   , traceItem :: Telemetry.Trace
-  , span_id :: Text
   , spanRecords :: V.Vector Telemetry.SpanRecord
   }
 

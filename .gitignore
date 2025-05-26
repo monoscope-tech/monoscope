@@ -12,6 +12,7 @@ target
 **/*/.stack-work
 .halive
 node_modules/
+web-components/node_modules
 static/assets/.DS_Store
 static/assets/css/tailwind.min.css
 static/public/assets/css/tailwind.min.css

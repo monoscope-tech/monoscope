@@ -3,7 +3,6 @@ module.exports = {
     './src/**/*.{html,js,hs}',
     './static/public/assets/js/charts.js',
     './static/public/assets/js/widgets.js',
-    './static/public/assets/filtercomponent.js',
     './static/public/assets/testeditor.js',
     './static/public/assets/steps-editor.js',
     './static/public/assets/steps-assertions.js',

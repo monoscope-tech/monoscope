@@ -305,6 +305,49 @@ subjectHasWildcard (Subject _ _ keys) = any isArrayWildcard keys
     isArrayWildcard _ = False
 
 
+-- List of OpenTelemetry attribute paths that have been flattened in the database schema
+flattenedOtelAttributes :: [T.Text]
+flattenedOtelAttributes =
+  [ "attributes.http.request.method"
+  , "attributes.http.request.method_original"
+  , "attributes.http.response.status_code"
+  , "attributes.http.request.resend_count"
+  , "attributes.http.request.body.size"
+  , "attributes.url.fragment"
+  , "attributes.url.full"
+  , "attributes.url.path"
+  , "attributes.url.query"
+  , "attributes.url.scheme"
+  , "attributes.user_agent.original"
+  , "attributes.db.system.name"
+  , "attributes.db.collection.name"
+  , "attributes.db.namespace"
+  , "attributes.db.operation.name"
+  , "attributes.db.operation.batch.size"
+  , "attributes.db.query.summary"
+  , "attributes.db.query.text"
+  , "context.trace_id"
+  , "context.span_id"
+  , "context.trace_state"
+  , "context.trace_flags"
+  , "context.is_remote"
+  , "resource.service.name"
+  , "resource.service.version"
+  , "resource.service.instance.id"
+  , "resource.service.namespace"
+  , "resource.telemetry.sdk.language"
+  , "resource.telemetry.sdk.name"
+  , "resource.telemetry.sdk.version"
+  ]
+
+
+-- Transform dot notation to triple-underscore notation for flattened attributes
+transformFlattenedAttribute :: T.Text -> T.Text
+transformFlattenedAttribute entire
+  | entire `elem` flattenedOtelAttributes = T.replace "." "___" entire
+  | otherwise = entire
+
+
 -- >>> display (Subject "" "request_body" [FieldKey "message"])
 -- "request_body->>'message' as message"
 --
@@ -317,9 +360,12 @@ subjectHasWildcard (Subject _ _ keys) = any isArrayWildcard keys
 -- >>> display (Subject "" "errors" [ArrayIndex "" 0, FieldKey "message"])
 -- "errors->0->>'message' as message"
 instance Display Subject where
-  displayPrec prec (Subject entire x []) = displayPrec prec x
-  displayPrec prec (Subject entire x (y : ys)) =
-    displayPrec prec $ buildQuerySequence x (y : ys)
+  displayPrec prec (Subject entire x keys) =
+    if entire `elem` flattenedOtelAttributes
+      then displayPrec prec (transformFlattenedAttribute entire)
+      else case keys of
+        [] -> displayPrec prec x
+        (y : ys) -> displayPrec prec $ buildQuerySequence x (y : ys)
     where
       buildQuerySequence :: T.Text -> [FieldKey] -> T.Text
       buildQuerySequence acc [] = acc

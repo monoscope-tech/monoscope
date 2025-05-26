@@ -36,7 +36,7 @@ import Data.Time (UTCTime)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity (insert)
-import Database.PostgreSQL.Entity.DBT (QueryNature (..), execute, query, queryOne)
+import Database.PostgreSQL.Entity.DBT (execute, query, queryOne)
 import Database.PostgreSQL.Entity.Types (CamelToSnake, Entity, FieldModifiers, GenericEntity, PrimaryKey, Schema, TableName)
 import Database.PostgreSQL.Simple hiding (execute, executeMany, query, query_)
 import Database.PostgreSQL.Simple.FromField (FromField)
@@ -361,14 +361,14 @@ addCollection = insert @Collection
 
 
 updateCollectionLastRun :: CollectionId -> Maybe AE.Value -> Int -> Int -> DBT IO Int64
-updateCollectionLastRun id' lastRunResponse' passed failed = execute Update q params
+updateCollectionLastRun id' lastRunResponse' passed failed = execute q params
   where
     params = (lastRunResponse', passed, failed, id')
     q = [sql| UPDATE tests.collections SET last_run=NOW(), last_run_response=?, last_run_passed=?, last_run_failed=? WHERE id=? |]
 
 
 updateCollection :: Projects.ProjectId -> CollectionId -> CollectionStepUpdateForm -> DBT IO Int64
-updateCollection pid cid colF = execute Update q params
+updateCollection pid cid colF = execute q params
   where
     scheduled = colF.scheduled == Just "on"
     stopAfterCheck = colF.stopAfterCheck == Just "on"
@@ -409,7 +409,7 @@ updateCollection pid cid colF = execute Update q params
 
 
 getCollectionById :: CollectionId -> DBT IO (Maybe Collection)
-getCollectionById id' = queryOne Select q (Only id')
+getCollectionById id' = queryOne q (Only id')
   where
     q =
       [sql| SELECT id, created_at, updated_at, last_run, project_id, title, description, config,
@@ -422,7 +422,7 @@ getCollectionById id' = queryOne Select q (Only id')
                   notify_after_check, stop_after, stop_after_check
                   FROM tests.collections t WHERE id=?|]
 getCollectionByTitle :: Projects.ProjectId -> Text -> DBT IO (Maybe Collection)
-getCollectionByTitle pid title = queryOne Select q (pid, title)
+getCollectionByTitle pid title = queryOne q (pid, title)
   where
     q =
       [sql| SELECT id, created_at, updated_at, last_run, project_id, title, description, config,
@@ -437,7 +437,7 @@ getCollectionByTitle pid title = queryOne Select q (pid, title)
 
 
 getCollections :: Projects.ProjectId -> TabStatus -> DBT IO (V.Vector CollectionListItem)
-getCollections pid tabStatus = query Select q (pid, statusValue)
+getCollections pid tabStatus = query q (pid, statusValue)
   where
     statusValue = case tabStatus of
       Active -> True
@@ -476,7 +476,7 @@ getCollections pid tabStatus = query Select q (pid, statusValue)
 
 
 updateCollectionVariables :: Projects.ProjectId -> CollectionId -> CollectionVariables -> DBT IO Int64
-updateCollectionVariables pid cid variables = execute Update q params
+updateCollectionVariables pid cid variables = execute q params
   where
     params = (variables, pid, cid)
     q = [sql| UPDATE tests.collections SET collection_variables = ? WHERE project_id = ? AND id = ? |]
@@ -484,7 +484,7 @@ updateCollectionVariables pid cid variables = execute Update q params
 
 inactiveCollectionsCount :: Projects.ProjectId -> DBT IO Int
 inactiveCollectionsCount pid = do
-  result <- query Select q pid
+  result <- query q pid
   case result of
     [Only countt] -> return countt
     v -> return $ length v
@@ -497,7 +497,7 @@ inactiveCollectionsCount pid = do
 
 
 getCollectionsId :: DBT IO (V.Vector CollectionId)
-getCollectionsId = query Select q ()
+getCollectionsId = query q ()
   where
     q =
       [sql|SELECT id FROM tests.collections where deleted_at IS NULL AND schedule IS NOT NULL;|]

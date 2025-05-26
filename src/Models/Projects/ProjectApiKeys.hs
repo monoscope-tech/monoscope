@@ -27,7 +27,7 @@ import Data.Time (UTCTime)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity
-import Database.PostgreSQL.Entity.DBT (QueryNature (..), execute, query, queryOne, withPool)
+import Database.PostgreSQL.Entity.DBT (execute, query, queryOne, withPool)
 import Database.PostgreSQL.Entity.Types
 import Database.PostgreSQL.Simple (FromRow, Only (Only), ToRow)
 import Database.PostgreSQL.Simple.FromField (FromField)
@@ -91,7 +91,7 @@ projectApiKeysByProjectId projectId = do selectManyByField @ProjectApiKey [field
 
 revokeApiKey :: ProjectApiKeyId -> DBT IO Int64
 revokeApiKey kid = do
-  execute Update q kid
+  execute q kid
   where
     q =
       [sql| UPDATE projects.project_api_keys SET deleted_at=NOW(), active=false where id=?;|]
@@ -99,7 +99,7 @@ revokeApiKey kid = do
 
 activateApiKey :: ProjectApiKeyId -> DBT IO Int64
 activateApiKey kid = do
-  execute Update q kid
+  execute q kid
   where
     q =
       [sql| UPDATE projects.project_api_keys SET deleted_at=null, active=true where id=?;|]
@@ -107,7 +107,7 @@ activateApiKey kid = do
 
 countProjectApiKeysByProjectId :: Projects.ProjectId -> DBT IO Int
 countProjectApiKeysByProjectId pid = do
-  result <- query Select q pid
+  result <- query q pid
   case result of
     [Only count] -> return count
     v -> return $ length v
@@ -116,7 +116,7 @@ countProjectApiKeysByProjectId pid = do
 
 
 getProjectApiKey :: ProjectApiKeyId -> DBT IO (Maybe ProjectApiKey)
-getProjectApiKey = queryOne Select q
+getProjectApiKey = queryOne q
   where
     q = [sql|select id, created_at, updated_at, deleted_at, active, project_id,  title, key_prefix from projects.project_api_keys where id=? and active=true |]
 
@@ -126,13 +126,13 @@ getProjectIdByApiKey projectKey = do
   pool <- getPool
   appCtx <- Effectful.ask @Config.AuthContext
   liftIO $ Cache.fetchWithCache appCtx.projectKeyCache projectKey \_ ->
-    withPool pool $ queryOne Select q (Only projectKey)
+    withPool pool $ queryOne q (Only projectKey)
   where
     q = [sql| select project_id from projects.project_api_keys where key_prefix=?|]
 
 
 projectIdsByProjectApiKeys :: V.Vector Text -> DBT IO (V.Vector (Text, Projects.ProjectId, Integer))
-projectIdsByProjectApiKeys projectKeys = query Select q (Only projectKeys)
+projectIdsByProjectApiKeys projectKeys = query q (Only projectKeys)
   where
     q =
       [sql| 
