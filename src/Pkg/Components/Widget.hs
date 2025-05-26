@@ -5,8 +5,8 @@ import Data.Aeson qualified as AE
 import Data.Default
 import Data.Generics.Labels ()
 import Data.Scientific (fromFloatDigits)
-import Data.Vector qualified as V
 import Data.Text qualified as T
+import Data.Vector qualified as V
 import Deriving.Aeson qualified as DAE
 import Deriving.Aeson.Stock qualified as DAES
 import Fmt qualified as Ft
@@ -273,12 +273,12 @@ renderWidgetHeader widget wId title valueM subValueM expandBtnFn ctaM hideSub = 
               , data_ "tippy-content" "Create a copy of this widget"
               , hxPost_
                   $ "/p/"
-                  <> maybeToMonoid (widget._projectId <&> (.toText))
-                  <> "/dashboards/"
-                  <> maybeToMonoid widget._dashboardId
-                  <> "/widgets/"
-                  <> wId
-                  <> "/duplicate"
+                    <> maybeToMonoid (widget._projectId <&> (.toText))
+                    <> "/dashboards/"
+                    <> maybeToMonoid widget._dashboardId
+                    <> "/widgets/"
+                    <> wId
+                    <> "/duplicate"
               , hxSwap_ "beforeend"
               , hxTrigger_ "click"
               , hxTarget_ ".grid-stack"
@@ -321,7 +321,7 @@ renderChart widget = do
       div_
         [ class_
             $ "h-full w-full flex flex-col justify-end "
-            <> if widget.naked == Just True then "" else " rounded-2xl border border-strokeWeak bg-fillWeaker"
+              <> if widget.naked == Just True then "" else " rounded-2xl border border-strokeWeak bg-fillWeaker"
         , id_ $ chartId <> "_bordered"
         ]
         do
@@ -469,21 +469,33 @@ widgetToECharts widget =
               ["source" AE..= fromMaybe AE.Null (widget.dataset <&> (.source))]
         , "series" AE..= map (createSeries widget.wType) []
         , "animation" AE..= False
-
-        -- , "dataZoom" AE..= AE.Array(V.fromList [ AE.object[
-        --   "type" AE..= "inside" 
-        --   , "xAxisIndex" AE..= 0 
-        --   , "filterMode" AE..= "weakFilter"
-        --   , "zoomOnMouseWheel" AE..= True
-        --   , "moveOnMouseMove": True
-        --   , "moveOnMouseWheel": True
-        --   ] ])
+        , -- , "dataZoom" AE..= AE.Array(V.fromList [ AE.object[
+          --   "type" AE..= "inside"
+          --   , "xAxisIndex" AE..= 0
+          --   , "filterMode" AE..= "weakFilter"
+          --   , "zoomOnMouseWheel" AE..= True
+          --   , "moveOnMouseMove": True
+          --   , "moveOnMouseWheel": True
+          --   ] ])
+          "dataZoom"
+            AE..= AE.Array
+              ( V.fromList
+                  [ AE.object
+                      [ "type" AE..= ("inside" :: Text)
+                      , "xAxisIndex" AE..= 0
+                      , "filterMode" AE..= ("weakFilter" :: Text)
+                      ]
+                  ]
+              )
         , if widget.allowZoom == Just True
-          then  "toolbox" AE..= AE.object [
-           "feature" AE..= AE.object [  "dataZoom" AE..= AE.object ["show" AE..= True, "yAxisIndex" AE..= "none"] ]
-          ]
-          else "toolbox" AE..= AE.object [ ]
-        ] 
+            then
+              "toolbox"
+                AE..= AE.object
+                  [ "feature" AE..= AE.object ["dataZoom" AE..= AE.object ["show" AE..= True, "yAxisIndex" AE..= "none", "icon" AE..= AE.object ["back" AE..= "none"]]]
+                  ]
+            else "toolbox" AE..= AE.object []
+        ]
+
 
 -- Helper: Extract legend data
 extractLegend :: Widget -> Maybe [Text]
@@ -513,20 +525,24 @@ createSeries widgetType query =
         [ "name" AE..= fromMaybe "Unnamed Series" (query >>= (.query))
         , "type" AE..= mapWidgetTypeToChartType widgetType
         , "stack" AE..= ("Stack" :: Text)
-        , "markArea" AE..=  AE.object
-            [ "show" AE..= True
-            , "data"
-                AE..= if isStat
-                  then AE.Array V.empty -- No mark area for stat widgets
-                  else AE.Array
-                    (V.fromList
-                      [ AE.Array
-                          (V.fromList
-                            [ AE.object ["x" AE..= 5]
-                            , AE.object ["x" AE..= 25]
-                            ])
-                      ])
-            ]
+        , "markArea"
+            AE..= AE.object
+              [ "show" AE..= True
+              , "data"
+                  AE..= if isStat
+                    then AE.Array V.empty -- No mark area for stat widgets
+                    else
+                      AE.Array
+                        ( V.fromList
+                            [ AE.Array
+                                ( V.fromList
+                                    [ AE.object ["x" AE..= 5]
+                                    , AE.object ["x" AE..= 25]
+                                    ]
+                                )
+                            ]
+                        )
+              ]
         , "showBackground" AE..= not isStat
         , "backgroundStyle"
             AE..= AE.object
