@@ -28,7 +28,17 @@ jobs:
           enable-stack: true
           stack-version: 'latest'
       - name: Install OpenSSL, protoc and snappy
-        run:  sudo apt-get update && sudo apt-get install -y libssl-dev librdkafka-dev libgrpc-dev>=1.55 protobuf-compiler libsnappy-dev postgresql-16 # or "brew install openssl" for macOS
+        run:  sudo apt-get update && sudo apt-get install -y libssl-dev librdkafka-dev libgrpc-dev>=1.55 protobuf-compiler libsnappy-dev gnupg postgresql-common apt-transport-https lsb-release wget # or "brew install openssl" for macOS
+      - name : Timescaledb
+        run : |
+          sudo /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh
+          sudo apt install postgresql-server-dev-17
+          echo "deb https://packagecloud.io/timescale/timescaledb/debian/ $(lsb_release -c -s) main" | sudo tee /etc/apt/sources.list.d/timescaledb.list
+          wget --quiet -O - https://packagecloud.io/timescale/timescaledb/gpgkey | sudo gpg --dearmor -o /etc/apt/trusted.gpg.d/timescaledb.gpg
+          sudo apt update
+          sudo apt install timescaledb-2-postgresql-17 postgresql-client-17
+          sudo timescaledb-tune
+          sudo systemctl restart postgresql
       - name: Set OpenSSL Paths
         run: |
           export OPENSSL_INCLUDE_DIR=$(pkg-config --variable=includedir openssl)
@@ -50,4 +60,6 @@ jobs:
           sudo cp rust-interop/target/release/libCrust_interop.so /usr/lib/librust_interop.so
       - run: stack --no-terminal build --dependencies-only
       - run: stack install --local-bin-path=. --flag pg-entity:prod --ghc-options "-O0"
-      - run: make test
+      - run: |
+         export PATH=$PATH:/usr/lib/postgresql/17/bin
+         make test
