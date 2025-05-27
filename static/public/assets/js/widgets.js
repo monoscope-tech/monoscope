@@ -110,7 +110,9 @@ const chartWidget = widgetData => {
   let intervalId = null
   chart.group = 'default'
 
-  widgetData.query = params().query ? (widgetData.query ? params().query + ' | ' + widgetData.query : params().query) : widgetData.query
+  // Store the original base query to avoid stacking
+  const baseQuery = widgetData.query
+  widgetData.query = params().query ? (baseQuery ? params().query + ' | ' + baseQuery : params().query) : baseQuery
 
   opt.dataset.source = opt.dataset?.source?.map(row => [row[0] * 1000, ...row.slice(1)]) ?? null
 
@@ -138,7 +140,7 @@ const chartWidget = widgetData => {
     const selector = event === 'submit' ? '#log_explorer_form' : '#filterElement'
     document.querySelector(selector)?.addEventListener(event, e => {
       if (params().query) {
-        widgetData.query = params().query ? (widgetData.query ? params().query + ' | ' + widgetData.query : params().query) : widgetData.query
+        widgetData.query = params().query ? (baseQuery ? params().query + ' | ' + baseQuery : params().query) : baseQuery
       }
       if (window.logListTable) {
         window.logListTable.refetchLogs()
