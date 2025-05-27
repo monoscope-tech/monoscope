@@ -34,6 +34,8 @@ jobs:
           sudo apt install postgresql-16
           sudo apt install  postgresql-client-16
           sudo systemctl start postgresql
+          sudo systemctl enable postgresql
+          stack install tmp-postgres
       - name: Set OpenSSL Paths
         run: |
           export OPENSSL_INCLUDE_DIR=$(pkg-config --variable=includedir openssl)
