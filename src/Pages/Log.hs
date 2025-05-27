@@ -839,11 +839,27 @@ aiSearchH _pid requestBody = do
         , ""
         , Schema.generateSchemaForAI Schema.telemetrySchema
         , ""
+        , "Available Operators:"
+        , "- Comparison: == != > < >= <="
+        , "- Set operations: in !in (e.g., method in (\"GET\", \"POST\"))"
+        , "- Text search: has !has (case-insensitive word search)"
+        , "- Text collections: has_any has_all (e.g., tags has_any [\"urgent\", \"critical\"])"
+        , "- String operations: contains !contains startswith !startswith endswith !endswith"
+        , "- Pattern matching: matches =~ (regex, e.g., email matches /.*@company\\.com/)"
+        , "- Logical: AND OR (or lowercase and or)"
+        , "- Duration values: 100ms 5s 2m 1h (nanoseconds, microseconds, milliseconds, seconds, minutes, hours)"
+        , ""
         , "Examples:"
         , "- \"show me errors\" -> level == \"ERROR\""
         , "- \"POST requests\" -> attributes.http.request.method == \"POST\""
         , "- \"slow requests\" -> duration > 500ms"
         , "- \"500 errors\" -> attributes.http.response.status_code == \"500\""
+        , "- \"GET or POST requests\" -> method in (\"GET\", \"POST\")"
+        , "- \"messages containing error\" -> message contains \"error\""
+        , "- \"logs with urgent or critical tags\" -> tags has_any [\"urgent\", \"critical\"]"
+        , "- \"paths starting with /api\" -> path startswith \"/api\""
+        , "- \"emails from company.com\" -> email matches /.*@company\\.com/"
+        , "- \"requests taking more than 1 second\" -> duration > 1s"
         , ""
         , "Return only the KQL filter expression, no explanations."
         ]
@@ -980,6 +996,7 @@ queryEditorInitializationCode queryLibRecent queryLibSaved = do
   let queryLibData = queryLibRecent <> queryLibSaved
       queryLibDataJson = decodeUtf8 $ AE.encode queryLibData
       schemaJson = decodeUtf8 $ AE.encode Schema.telemetrySchemaJson
+      popularQueriesJson = decodeUtf8 $ AE.encode Schema.popularOtelQueriesJson
   script_
     [text|
     // Initialize query-editor component with query library data and schema
@@ -998,9 +1015,9 @@ queryEditorInitializationCode queryLibRecent queryLibSaved = do
           window.schemaManager.setSchemaData('spans', schemaData);
         }
         
-        // Set popular searches if available
-        if (editor.setPopularSearches && window.getPopularQueries) {
-          const popularQueries = window.getPopularQueries();
+        // Set popular searches directly from Haskell backend
+        if (editor.setPopularSearches) {
+          const popularQueries = $popularQueriesJson;
           editor.setPopularSearches(popularQueries);
         }
       }

@@ -2,8 +2,7 @@
 export * from './query-editor/query-editor';
 
 // Re-export the config functions
-export { initializeDefaultSchema, getPopularQueries } from './query-editor/query-editor-config';
+export { initializeDefaultSchema } from './query-editor/query-editor-config';
 
-// Expose getPopularQueries globally for Haskell initialization
-import { getPopularQueries } from './query-editor/query-editor-config';
-(window as any).getPopularQueries = getPopularQueries;
+// Note: Popular queries are now provided directly from Haskell backend
+// instead of being exposed from TypeScript
