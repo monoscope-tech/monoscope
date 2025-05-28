@@ -2,7 +2,7 @@
 import { virtualize } from '@lit-labs/virtualizer/virtualize.js';
 import { LitElement, html, css, TemplateResult, nothing } from 'lit';
 import { customElement, state, query } from 'lit/decorators.js';
-import { APTEvent, ChildrenForLatency, ColIdxMap, EventLine, htmx, Trace, TraceData, TraceDataMap, updateUrlState } from './types/log-list';
+import { APTEvent, ChildrenForLatency, ColIdxMap, EventLine, Trace, TraceDataMap } from './types/log-list';
 import { RangeChangedEvent, VisibilityChangedEvent } from '@lit-labs/virtualizer';
 
 @customElement('log-list')

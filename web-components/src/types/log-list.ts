@@ -15,14 +15,13 @@ declare global {
 
     logListTable: Element | null;
   }
+  function updateUrlState(key: string, value: string): void;
+  interface htmx {
+    ajax: (verb: string, path: string, context: any) => void;
+  }
 }
 
 export type ColIdxMap = Record<string, number>;
-export declare function updateUrlState(key: string, value: string): void;
-
-export declare const htmx: {
-  ajax: (verb: string, path: string, context: any) => void;
-};
 
 export interface APTEvent {
   id: string;
