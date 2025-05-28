@@ -134,7 +134,6 @@ kafkaService appLogger appCtx fn = do
         <> K.extraProp "max.poll.interval.ms" "300000"
         <> K.extraProp "max.poll.records" "1000"
         <> K.extraProp "fetch.min.bytes" "1024"
-        <> K.extraProp "fetch.max.wait.ms" "100"
         <> K.extraProp "partition.assignment.strategy" "cooperative-sticky"
         <> K.extraProp "group.instance.id" clientId
         <> K.logLevel K.KafkaLogInfo
