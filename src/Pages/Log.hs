@@ -60,6 +60,8 @@ import Utils
 
 
 -- | Render facet data for Log Explorer sidebar in a compact format
+-- | The facet counts are already scaled in the Facets.getFacetSummary function based on the selected time range
+-- | Facets are normally generated for a 24-hour period, but will be proportionally adjusted for the user's time selection
 renderFacets :: FacetSummary -> Html ()
 renderFacets facetSummary = do
   let (FacetData facetMap) = facetSummary.facetJson
@@ -190,6 +192,7 @@ apiLogH pid queryM' cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM
 
   (queryLibRecent, queryLibSaved) <- V.partition (\x -> Projects.QLTHistory == (x.queryType)) <$> Projects.queryLibHistoryForUser pid sess.persistentSession.userId
 
+  -- Get facet summary for the time range specified
   facetSummary <- Facets.getFacetSummary pid "otel_logs_and_spans" (fromMaybe (addUTCTime (-86400) now) fromD) (fromMaybe now toD)
 
   freeTierExceeded <-
@@ -265,7 +268,7 @@ apiLogH pid queryM' cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM
               , detailsWidth = detailWM
               , targetEvent = targetEventM
               , showTrace = showTraceM
-              , facets = Nothing
+              , facets = facetSummary
               }
       case (layoutM, hxRequestM, hxBoostedM, jsonM) of
         (Just "SaveQuery", _, _, _) -> addRespHeaders $ LogsQueryLibrary pid queryLibSaved queryLibRecent

@@ -41,6 +41,7 @@ import Control.Exception.Safe qualified as Safe
 import Data.Time (getCurrentTime)
 import Effectful
 import Effectful.Fail (runFailIO)
+import Models.Projects.Projects (ProjectId (ProjectId))
 import Pkg.TestUtils (runTestBackground)
 import System.Config qualified as Cfg
 
@@ -52,7 +53,7 @@ dev2 = do
   -- traceShowM ctx
   now <- getCurrentTime
   -- _ <- runTestBackground ctx $ BackgroundJobs.runHourlyJob now 18
-  let pids = []
+  let pids = ["00000000-0000-0000-0000-000000000000"]
   _ <- runTestBackground ctx $ BackgroundJobs.generateOtelFacetsBatch pids now
 
   pass
