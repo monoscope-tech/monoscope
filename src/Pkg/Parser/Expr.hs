@@ -1,4 +1,4 @@
-module Pkg.Parser.Expr (pSubject, pExpr, Subject (..), Values (..), Expr (..), pSquareBracketKey, pTerm, jsonPathQuery, pValues, FieldKey (..)) where
+module Pkg.Parser.Expr (pSubject, pExpr, Subject (..), Values (..), Expr (..), pSquareBracketKey, pTerm, jsonPathQuery, pValues, FieldKey (..),pDuration) where
 
 import Control.Monad.Combinators.Expr (
   Operator (InfixL),
@@ -524,7 +524,7 @@ instance Display Values where
 -- >>> import qualified Data.Text as T
 -- >>> import Pkg.Parser.Expr (FieldKey(..))
 -- >>> display (Eq (Subject "" "request_body" [FieldKey (T.pack "message")]) (Str "val"))
--- "request_body->>'message'='val'"
+-- "request_body->>'message''al'"
 --
 -- >>> display (Eq (Subject "" "errors" [ArrayIndex "" 0, FieldKey "message"]) (Str "val"))
 -- "errors->0->>'message'='val'"

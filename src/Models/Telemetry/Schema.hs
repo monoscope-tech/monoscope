@@ -225,61 +225,51 @@ popularOtelQueries =
   , PopularOtelQuery "attributes.exception.type != null" "Find logs with exceptions"
   , PopularOtelQuery "level == \"ERROR\" AND attributes.http.response.status_code >= 500" "Server errors with HTTP 5xx status codes"
   , PopularOtelQuery "attributes.error.type != null" "Find logs with error information"
-  
-  -- HTTP-related queries  
-  , PopularOtelQuery "attributes.http.request.method == \"POST\"" "All POST requests"
+  , -- HTTP-related queries
+    PopularOtelQuery "attributes.http.request.method == \"POST\"" "All POST requests"
   , PopularOtelQuery "attributes.http.response.status_code >= 400" "HTTP errors (4xx and 5xx)"
   , PopularOtelQuery "attributes.http.response.status_code == 404" "Not found errors"
   , PopularOtelQuery "attributes.http.request.method in (\"GET\", \"POST\", \"PUT\")" "Common HTTP methods"
   , PopularOtelQuery "attributes.http.request.method == \"GET\" AND attributes.http.response.status_code == 200" "Successful GET requests"
-  
-  -- Performance queries using proper duration syntax
-  , PopularOtelQuery "duration > 5s" "Slow requests (>5 seconds)"
+  , -- Performance queries using proper duration syntax
+    PopularOtelQuery "duration > 5s" "Slow requests (>5 seconds)"
   , PopularOtelQuery "duration > 1s" "Requests taking more than 1 second"
   , PopularOtelQuery "duration > 500ms" "Requests slower than 500ms"
   , PopularOtelQuery "kind == \"span\" AND duration > 100ms" "Slow spans (>100ms)"
-  
-  -- Service and trace queries
-  , PopularOtelQuery "resource.service.name == \"api\"" "Logs from API service"
+  , -- Service and trace queries
+    PopularOtelQuery "resource.service.name == \"api\"" "Logs from API service"
   , PopularOtelQuery "kind == \"span\"" "All span data"
   , PopularOtelQuery "kind == \"logs\"" "All log entries"
   , PopularOtelQuery "parent_id != null" "Child spans with parent relationships"
   , PopularOtelQuery "context.trace_id != null" "Logs with trace correlation"
-  
-  -- Text search operations using new operators
-  , PopularOtelQuery "body contains \"error\"" "Logs containing \"error\" in body"
+  , -- Text search operations using new operators
+    PopularOtelQuery "body contains \"error\"" "Logs containing \"error\" in body"
   , PopularOtelQuery "name startswith \"database\"" "Operations starting with \"database\""
   , PopularOtelQuery "attributes.url.path startswith \"/api/\"" "API endpoint requests"
   , PopularOtelQuery "body has \"timeout\"" "Logs mentioning timeout"
-  
-  -- Database queries
-  , PopularOtelQuery "attributes.db.operation.name != null" "Database operations"
+  , -- Database queries
+    PopularOtelQuery "attributes.db.operation.name != null" "Database operations"
   , PopularOtelQuery "attributes.db.system.name == \"postgresql\"" "PostgreSQL database operations"
   , PopularOtelQuery "attributes.db.query.text contains \"SELECT\"" "Database SELECT queries"
   , PopularOtelQuery "attributes.db.operation.name in (\"INSERT\", \"UPDATE\", \"DELETE\")" "Database write operations"
-  
-  -- User and session queries
-  , PopularOtelQuery "attributes.user.id != null" "Logs with user information"
+  , -- User and session queries
+    PopularOtelQuery "attributes.user.id != null" "Logs with user information"
   , PopularOtelQuery "attributes.session.id != null" "Logs with session tracking"
   , PopularOtelQuery "attributes.user.email endswith \"@company.com\"" "Company user activities"
-  
-  -- Status and severity combinations
-  , PopularOtelQuery "level in (\"ERROR\", \"FATAL\")" "Critical log levels"
+  , -- Status and severity combinations
+    PopularOtelQuery "level in (\"ERROR\", \"FATAL\")" "Critical log levels"
   , PopularOtelQuery "status_code == \"ERROR\"" "Failed operations"
   , PopularOtelQuery "level == \"WARN\" AND duration > 2s" "Slow operations with warnings"
-  
-  -- Advanced filtering with new operators
-  , PopularOtelQuery "attributes.http.request.method == \"POST\" AND attributes.http.response.status_code < 400" "Successful POST requests"
+  , -- Advanced filtering with new operators
+    PopularOtelQuery "attributes.http.request.method == \"POST\" AND attributes.http.response.status_code < 400" "Successful POST requests"
   , PopularOtelQuery "resource.service.name startswith \"auth\" AND level !in (\"DEBUG\", \"TRACE\")" "Important auth service logs"
   , PopularOtelQuery "attributes.url.path contains \"/api/\" AND duration > 2s" "Slow API endpoint calls"
   , PopularOtelQuery "attributes.exception.message has_any [\"timeout\", \"connection\", \"network\"]" "Network-related exceptions"
-  
-  -- Resource and telemetry queries
-  , PopularOtelQuery "resource.telemetry.sdk.language == \"javascript\"" "JavaScript telemetry data"
+  , -- Resource and telemetry queries
+    PopularOtelQuery "resource.telemetry.sdk.language == \"javascript\"" "JavaScript telemetry data"
   , PopularOtelQuery "resource.service.namespace != null" "Services with namespace information"
-  
-  -- Complex multi-condition queries
-  , PopularOtelQuery "(level == \"ERROR\" OR duration > 5s) AND resource.service.name != null" "Errors or slow requests from known services"
+  , -- Complex multi-condition queries
+    PopularOtelQuery "(level == \"ERROR\" OR duration > 5s) AND resource.service.name != null" "Errors or slow requests from known services"
   , PopularOtelQuery "attributes.http.response.status_code >= 500 AND attributes.user.id != null" "Server errors affecting users"
   , PopularOtelQuery "kind == \"span\" AND (name contains \"database\" OR attributes.db.operation.name != null)" "Database-related spans"
   ]
