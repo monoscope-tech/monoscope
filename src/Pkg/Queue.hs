@@ -85,10 +85,13 @@ kafkaService appLogger appCtx fn = do
     case rightRecords of
       [] -> pass
       (rec : _) -> do
+        traceShowM "kafka service message"
+        traceShowM rightRecords
         let topic = rec.crTopic.unTopicName
             attributes = HM.insert "ce-type" (topicToCeType topic) $ consumerRecordHeadersToHashMap rec
             allRecords = consumerRecordToTuple <$> rightRecords
 
+        traceShowM attributes
         msgIds <-
           tryAny (runBackground appLogger appCtx $ fn allRecords attributes) >>= \case
             Left e -> do
