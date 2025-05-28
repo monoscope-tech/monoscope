@@ -54,7 +54,7 @@ runLog
   -> Logger
   -> Eff (Log ': es) a
   -> Eff es a
-runLog envTxt logger = Log.runLog ("[AT]-" <> envTxt) logger Log.defaultLogLevel
+runLog envTxt logger = Log.runLog ("[AT]-" <> envTxt) logger Log.LogTrace -- Log.defaultLogLevel
 
 
 makeLogger :: IOE :> es => LoggingDestination -> (Logger -> Eff es a) -> Eff es a

@@ -7,7 +7,10 @@ import Data.ByteString.Char8 qualified as BC
 import Data.ByteString.Lazy.Base64 qualified as LB64
 import Data.Generics.Product (field)
 import Data.HashMap.Strict qualified as HM
+import Data.Text qualified as T
 import Data.Text.Lazy.Encoding qualified as LT
+import Data.UUID qualified as UUID
+import Data.UUID.V4 qualified as UUID
 import Effectful
 import Gogol qualified as Google
 import Gogol.Auth.ApplicationDefault qualified as Google
@@ -19,7 +22,7 @@ import Relude
 import System.Config
 import System.Types (ATBackgroundCtx, runBackground)
 import UnliftIO (throwIO)
-import UnliftIO.Exception (tryAny)
+import UnliftIO.Exception (bracket, tryAny)
 
 
 -- pubsubService connects to the pubsub service and listens for  messages,
@@ -78,28 +81,33 @@ pubsubService appLogger appCtx topics fn = do
 
 kafkaService :: Log.Logger -> AuthContext -> ([(Text, ByteString)] -> HM.HashMap Text Text -> ATBackgroundCtx [Text]) -> IO ()
 kafkaService appLogger appCtx fn = do
+  -- Generate unique client ID for logging/metrics
+  instanceUuid <- UUID.toText <$> UUID.nextRandom
+  let clientId = "apitoolkit-" <> T.take 8 instanceUuid
   let consumerSub = K.topics (map K.TopicName appCtx.config.kafkaTopics) <> K.offsetReset K.Earliest
-  consumer <- either throwIO pure =<< K.newConsumer (consumerProps appCtx.config) consumerSub
-  forever do
-    pollResult@(leftRecords, rightRecords) <- partitionEithers <$> K.pollMessageBatch consumer (K.Timeout 10) (K.BatchSize appCtx.config.messagesPerPubsubPullBatch) -- timeout in milliseconds
-    case rightRecords of
-      [] -> pass
-      (rec : _) -> do
-        let topic = rec.crTopic.unTopicName
-            attributes = HM.insert "ce-type" (topicToCeType topic) $ consumerRecordHeadersToHashMap rec
-            allRecords = consumerRecordToTuple <$> rightRecords
+  bracket
+    (either throwIO pure =<< K.newConsumer (consumerProps appCtx.config clientId) consumerSub)
+    K.closeConsumer
+    $ \consumer -> forever do
+      pollResult@(leftRecords, rightRecords) <- partitionEithers <$> K.pollMessageBatch consumer (K.Timeout 1000) (K.BatchSize appCtx.config.messagesPerPubsubPullBatch) -- timeout in milliseconds
+      case rightRecords of
+        [] -> pass
+        (rec : _) -> do
+          let topic = rec.crTopic.unTopicName
+              attributes = HM.insert "ce-type" (topicToCeType topic) $ consumerRecordHeadersToHashMap rec
+              allRecords = consumerRecordToTuple <$> rightRecords
 
-        msgIds <-
-          tryAny (runBackground appLogger appCtx $ fn allRecords attributes) >>= \case
-            Left e -> do
-              Log.runLogT "apitoolkit" appLogger Log.LogAttention
-                $ Log.logAttention "Error processing Kafka messages, but continuing" (show e)
-              -- Return all message IDs so they're acknowledged anyway
-              pure $ map fst allRecords
-            Right ids -> pure ids
+          msgIds <-
+            tryAny (runBackground appLogger appCtx $ fn allRecords attributes) >>= \case
+              Left e -> do
+                Log.runLogT "apitoolkit" appLogger Log.LogAttention
+                  $ Log.logAttention "Error processing Kafka messages, but continuing" (show e)
+                -- Return all message IDs so they're acknowledged anyway
+                pure $ map fst allRecords
+              Right ids -> pure ids
 
-        (maybe pass throwIO) =<< K.commitAllOffsets (K.OffsetCommitAsync) consumer
-    pass
+          (maybe pass throwIO) =<< K.commitAllOffsets (K.OffsetCommitAsync) consumer
+      pass
   where
     -- TODO: How should errors and retries be handled and implemented?
 
@@ -112,24 +120,24 @@ kafkaService appLogger appCtx fn = do
         headerToTuple :: (ByteString, ByteString) -> (Text, Text)
         headerToTuple (key, value) = (fromString $ BC.unpack key, fromString $ BC.unpack value)
 
-    consumerProps :: EnvConfig -> K.ConsumerProperties
-    consumerProps cfg =
+    consumerProps :: EnvConfig -> Text -> K.ConsumerProperties
+    consumerProps cfg clientId =
       K.brokersList (map K.BrokerAddress cfg.kafkaBrokers)
         <> K.groupId (K.ConsumerGroupId cfg.kafkaGroupId)
+        <> K.clientId (K.ClientId clientId)
         <> K.extraProp "security.protocol" "sasl_plaintext"
         <> K.extraProp "sasl.mechanism" "SCRAM-SHA-256"
         <> K.extraProp "sasl.username" cfg.kafkaUsername
         <> K.extraProp "sasl.password" cfg.kafkaPassword
+        <> K.extraProp "session.timeout.ms" "30000"
+        <> K.extraProp "heartbeat.interval.ms" "10000"
+        <> K.extraProp "group.instance.id" clientId
         <> K.logLevel K.KafkaLogInfo
 
     -- \| Maps Kafka topic names to their corresponding CloudEvent types
     topicToCeType :: Text -> Text
     topicToCeType topic = case topic of
-      "otlp_traces" -> "org.opentelemetry.otlp.traces.v1"
       "otlp_spans" -> "org.opentelemetry.otlp.traces.v1"
       "otlp_logs" -> "org.opentelemetry.otlp.logs.v1"
       "otlp_metrics" -> "org.opentelemetry.otlp.metrics.v1"
-      "otlp-traces" -> "org.opentelemetry.otlp.traces.v1"
-      "otlp-logs" -> "org.opentelemetry.otlp.logs.v1"
-      "otlp-metrics" -> "org.opentelemetry.otlp.metrics.v1"
       _ -> ""

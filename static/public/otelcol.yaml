@@ -52,6 +52,9 @@ exporters:
     # traces:
     #   topic: otlp-traces
     #   encoding: otlp_proto
+    partition_traces_by_id: true
+    partition_metrics_by_resource_attributes: true
+    partition_logs_by_resource_attributes: true
     sending_queue:
       queue_size: 1000000
       num_consumers: 6
@@ -60,8 +63,8 @@ exporters:
 
     brokers:
       - redpanda-0.s.past3.tech:19092
-      - redpanda-1.s.past3.tech:19092
-      - redpanda-2.s.past3.tech:19092
+      - redpanda-1.s.past3.tech:29092
+      - redpanda-2.s.past3.tech:39092
       # - srv-captain--redpanda-0:9092
       # - srv-captain--redpanda-1:9092
       # - srv-captain--redpanda-2:9092

@@ -19,7 +19,8 @@ import Text.Megaparsec.Char.Lexer qualified as L
 
 -- Values is an enum of the list of supported value types.
 -- Num is a text  that represents a float as float covers ints in a lot of cases. But its basically the json num type.
-data Values = Num Text | Str Text | Boolean Bool | Null | List [Values]
+-- Duration stores original unit and nanoseconds value for precise time comparisons
+data Values = Num Text | Str Text | Boolean Bool | Null | List [Values] | Duration Text Integer
   deriving stock (Eq, Generic, Ord, Show)
 
 
@@ -40,6 +41,7 @@ instance AE.ToJSON Values where
   toJSON (Boolean b) = AE.Bool b
   toJSON Null = AE.Null
   toJSON (List xs) = AE.Array (V.fromList (map AE.toJSON xs))
+  toJSON (Duration _ ns) = AE.Number (fromInteger ns)
 
 
 instance ToQueryText Values where
@@ -112,6 +114,19 @@ data Expr
   | GTEq Subject Values
   | LTEq Subject Values
   | Regex Subject Text
+  | In Subject Values
+  | NotIn Subject Values
+  | Has Subject Values
+  | NotHas Subject Values
+  | HasAny Subject Values
+  | HasAll Subject Values
+  | Contains Subject Values
+  | NotContains Subject Values
+  | StartsWith Subject Values
+  | NotStartsWith Subject Values
+  | EndsWith Subject Values
+  | NotEndsWith Subject Values
+  | Matches Subject Text
   | Paren Expr
   | And Expr Expr
   | Or Expr Expr
@@ -185,6 +200,40 @@ parens :: Parser a -> Parser a
 parens = between (symbol "(") (symbol ")")
 
 
+-- | Parse duration values and convert to nanoseconds
+--
+-- Examples:
+--
+-- >>> parse pDuration "" "100ms"
+-- Right (Duration "ms" 100000000)
+--
+-- >>> parse pDuration "" "4.3ms"
+-- Right (Duration "ms" 4300000)
+--
+-- >>> parse pDuration "" "5s"
+-- Right (Duration "s" 5000000000)
+--
+-- >>> parse pDuration "" "2.5m"
+-- Right (Duration "m" 150000000000)
+--
+-- >>> parse pDuration "" "1h"
+-- Right (Duration "h" 3600000000000)
+pDuration :: Parser Values
+pDuration = do
+  value <- try L.float <|> (fromIntegral <$> L.decimal)
+  unit <- (string "ns" <|> string "us" <|> string "µs" <|> string "ms" <|> string "s" <|> string "m" <|> string "h")
+  let multiplier = case unit of
+        "ns" -> 1
+        "us" -> 1000
+        "µs" -> 1000
+        "ms" -> 1000000
+        "s" -> 1000000000
+        "m" -> 60000000000
+        "h" -> 3600000000000
+        _ -> error "Invalid duration unit"
+  return $ Duration unit (round (value * multiplier))
+
+
 -- | parse values into our internal AST representation. Int, Str, Num, Bool, List, etc
 -- import Text.Megaparsec ( parse)
 -- Examples:
@@ -203,25 +252,81 @@ parens = between (symbol "(") (symbol ")")
 --
 -- >>> parse pValues "" "[]"
 -- Right (List [])
+--
+-- Test parenthesized lists:
+-- >>> parse pValues "" "(\"success\", \"error\")"
+-- Right (List [Str "success",Str "error"])
+--
+-- >>> parse pValues "" "()"
+-- Right (List [])
+--
+-- >>> parse pValues "" "(\"GET\", \"POST\", \"PUT\")"
+-- Right (List [Str "GET",Str "POST",Str "PUT"])
 pValues :: Parser Values
 pValues =
   choice @[]
     [ Null <$ string "null"
     , Boolean <$> (True <$ string "true" <|> False <$ string "false" <|> False <$ string "FALSE" <|> True <$ string "TRUE")
-    , Num . toText <$> some (digitChar <|> char '.')
     , Str . toText <$> (char '\"' *> manyTill L.charLiteral (char '\"'))
     , List [] <$ string "[]"
-    , List <$> sqParens (pValues `sepBy` char ',')
+    , List <$> sqParens (pValues `sepBy` (space *> char ',' <* space))
+    , List [] <$ string "()"
+    , List <$> parens (pValues `sepBy` (space *> char ',' <* space))
+    , try pDuration
+    , try (Num . toText . show <$> L.float)
+    , Num . toText . show <$> L.decimal
     , Str . toText <$> manyTill L.charLiteral space1
     ]
 
 
 -- | pTerm is the main entry point that desides what tree lines to decend
 --
--- Exampes:
--- >>> import Text.Megaparsec ( parseTest)
+
+-- Examples:
+--
 -- >>> parseTest pTerm "abc != \"GET\""
--- NotEq (Subject "abc" "abc" []) (Str "GET")
+--
+-- Test new 'in' and '!in' operators:
+-- >>> parse pTerm "" "status in (\"success\", \"error\")"
+-- Right (In (Subject "status" "status" []) (List [Str "success",Str "error"]))
+--
+-- >>> parse pTerm "" "method !in (\"GET\", \"POST\")"
+-- Right (NotIn (Subject "method" "method" []) (List [Str "GET",Str "POST"]))
+--
+-- Test text search operators:
+-- >>> parse pTerm "" "message has \"error\""
+-- Right (Has (Subject "message" "message" []) (Str "error"))
+--
+-- >>> parse pTerm "" "message !has \"success\""
+-- Right (NotHas (Subject "message" "message" []) (Str "success"))
+--
+-- >>> parse pTerm "" "tags has_any [\"urgent\", \"critical\"]"
+-- Right (HasAny (Subject "tags" "tags" []) (List [Str "urgent",Str "critical"]))
+--
+-- >>> parse pTerm "" "description has_all [\"user\", \"login\"]"
+-- Right (HasAll (Subject "description" "description" []) (List [Str "user",Str "login"]))
+--
+-- >>> parse pTerm "" "url contains \"api\""
+-- Right (Contains (Subject "url" "url" []) (Str "api"))
+--
+-- >>> parse pTerm "" "path !contains \"admin\""
+-- Right (NotContains (Subject "path" "path" []) (Str "admin"))
+--
+-- >>> parse pTerm "" "endpoint startswith \"/api/\""
+-- Right (StartsWith (Subject "endpoint" "endpoint" []) (Str "/api/"))
+--
+-- >>> parse pTerm "" "path !startswith \"/internal\""
+-- Right (NotStartsWith (Subject "path" "path" []) (Str "/internal"))
+--
+-- >>> parse pTerm "" "filename endswith \".log\""
+-- Right (EndsWith (Subject "filename" "filename" []) (Str ".log"))
+--
+-- >>> parse pTerm "" "url !endswith \".css\""
+-- Right (NotEndsWith (Subject "url" "url" []) (Str ".css"))
+--
+-- >>> parse pTerm "" "email matches /.*@company\\.com/"
+-- Right (Matches (Subject "email" "email" []) ".*@company\\.com")
+
 pTerm :: Parser Expr
 pTerm =
   (Paren <$> parens pExpr)
@@ -231,6 +336,19 @@ pTerm =
     <|> try (LTEq <$> pSubject <* space <* void (symbol "<=") <* space <*> pValues)
     <|> try (GT <$> pSubject <* space <* void (symbol ">") <* space <*> pValues)
     <|> try (LT <$> pSubject <* space <* void (symbol "<") <* space <*> pValues)
+    <|> try (NotIn <$> pSubject <* space <* void (symbol "!in") <* space <*> pValues)
+    <|> try (In <$> pSubject <* space <* void (symbol "in") <* space <*> pValues)
+    <|> try (NotHas <$> pSubject <* space <* void (symbol "!has") <* space <*> pValues)
+    <|> try (HasAll <$> pSubject <* space <* void (symbol "has_all") <* space <*> pValues)
+    <|> try (HasAny <$> pSubject <* space <* void (symbol "has_any") <* space <*> pValues)
+    <|> try (Has <$> pSubject <* space <* void (symbol "has") <* space <*> pValues)
+    <|> try (NotContains <$> pSubject <* space <* void (symbol "!contains") <* space <*> pValues)
+    <|> try (Contains <$> pSubject <* space <* void (symbol "contains") <* space <*> pValues)
+    <|> try (NotStartsWith <$> pSubject <* space <* void (symbol "!startswith") <* space <*> pValues)
+    <|> try (StartsWith <$> pSubject <* space <* void (symbol "startswith") <* space <*> pValues)
+    <|> try (NotEndsWith <$> pSubject <* space <* void (symbol "!endswith") <* space <*> pValues)
+    <|> try (EndsWith <$> pSubject <* space <* void (symbol "endswith") <* space <*> pValues)
+    <|> try (Matches <$> pSubject <* space <* void (symbol "matches") <* space <*> (toText <$> (char '/' *> manyTill L.charLiteral (char '/'))))
     <|> try regexParser
 
 
@@ -395,6 +513,7 @@ instance Display Values where
   displayPrec prec (Boolean True) = "true"
   displayPrec prec (Boolean False) = "false"
   displayPrec prec Null = "null"
+  displayPrec prec (Duration _ ns) = displayPrec prec (show ns)
   displayPrec prec (List vs) =
     let arrayElements = mconcat . intersperse "," . map (displayPrec prec) $ vs
      in "ARRAY[" <> arrayElements <> "]"
@@ -437,7 +556,44 @@ instance Display Values where
 -- "request_body->'message'->'tags'->>'name'"
 --
 -- >>> display (Regex (Subject "" "request_body" [FieldKey "msg"]) "^abc.*")
--- "jsonb_path_exists(to_jsonb(request_body), $$$.\"msg\" ? (@ like_regex \"^abc.*\" flag \"i\" )$$::jsonpath)"
+
+-- "jsonb_path_exists(request_body, $$$.\"msg\" ? (@ = \"^abc.*\")$$::jsonpath)"
+--
+-- Test new operators Display instances for SQL generation:
+--
+-- >>> display (In (Subject "" "status" []) (List [Str "success", Str "error"]))
+-- "status IN ('success','error')"
+--
+-- >>> display (NotIn (Subject "" "method" []) (List [Str "GET", Str "POST"]))
+-- "method NOT IN ('GET','POST')"
+--
+-- >>> display (Has (Subject "" "message" []) (Str "error"))
+-- "message ~* 'error'"
+--
+-- >>> display (NotHas (Subject "" "message" []) (Str "success"))
+-- "message !~* 'success'"
+--
+-- >>> display (Contains (Subject "" "url" []) (Str "api"))
+-- "url ILIKE '%' || 'api' || '%'"
+--
+-- >>> display (NotContains (Subject "" "path" []) (Str "admin"))
+-- "path NOT ILIKE '%' || 'admin' || '%'"
+--
+-- >>> display (StartsWith (Subject "" "endpoint" []) (Str "/api/"))
+-- "endpoint ILIKE '/api/' || '%'"
+--
+-- >>> display (NotStartsWith (Subject "" "path" []) (Str "/internal"))
+-- "path NOT ILIKE '/internal' || '%'"
+--
+-- >>> display (EndsWith (Subject "" "filename" []) (Str ".log"))
+-- "filename ILIKE '%' || '.log'"
+--
+-- >>> display (NotEndsWith (Subject "" "url" []) (Str ".css"))
+-- "url NOT ILIKE '%' || '.css'"
+--
+-- >>> display (Matches (Subject "" "email" []) ".*@company\\.com")
+-- "jsonb_path_exists(to_jsonb(email), $$$ ? (@ like_regex \".*@company\\.com\" flag \"i\" )$$::jsonpath)"
+
 instance Display Expr where
   displayPrec prec expr@(Eq sub val) = displayExprHelper "=" prec sub val
   displayPrec prec (NotEq sub val) = displayExprHelper "!=" prec sub val
@@ -445,6 +601,19 @@ instance Display Expr where
   displayPrec prec (LT sub val) = displayExprHelper "<" prec sub val
   displayPrec prec (GTEq sub val) = displayExprHelper ">=" prec sub val
   displayPrec prec (LTEq sub val) = displayExprHelper "<=" prec sub val
+  displayPrec prec (In sub val) = displayExprHelper "IN" prec sub val
+  displayPrec prec (NotIn sub val) = displayExprHelper "NOT IN" prec sub val
+  displayPrec prec (Has sub val) = displayExprHelper "HAS" prec sub val
+  displayPrec prec (NotHas sub val) = displayExprHelper "NOT HAS" prec sub val
+  displayPrec prec (HasAny sub val) = displayExprHelper "HAS_ANY" prec sub val
+  displayPrec prec (HasAll sub val) = displayExprHelper "HAS_ALL" prec sub val
+  displayPrec prec (Contains sub val) = displayExprHelper "CONTAINS" prec sub val
+  displayPrec prec (NotContains sub val) = displayExprHelper "NOT CONTAINS" prec sub val
+  displayPrec prec (StartsWith sub val) = displayExprHelper "STARTSWITH" prec sub val
+  displayPrec prec (NotStartsWith sub val) = displayExprHelper "NOT STARTSWITH" prec sub val
+  displayPrec prec (EndsWith sub val) = displayExprHelper "ENDSWITH" prec sub val
+  displayPrec prec (NotEndsWith sub val) = displayExprHelper "NOT ENDSWITH" prec sub val
+  displayPrec prec (Matches sub val) = displayPrec prec $ jsonPathQuery "like_regex" sub (Str val)
   displayPrec prec (Paren u1) = displayParen True $ displayPrec prec u1
   displayPrec prec (And u1 u2) = displayParen (prec > 0) $ displayPrec prec u1 <> " AND " <> displayPrec prec u2
   displayPrec prec (Or u1 u2) = displayParen (prec > 0) $ displayPrec prec u1 <> " OR " <> displayPrec prec u2
@@ -459,6 +628,19 @@ instance ToQueryText Expr where
   toQText (LT sub val) = toQText sub <> " < " <> toQText val
   toQText (GTEq sub val) = toQText sub <> " >= " <> toQText val
   toQText (LTEq sub val) = toQText sub <> " <= " <> toQText val
+  toQText (In sub val) = toQText sub <> " in " <> toQText val
+  toQText (NotIn sub val) = toQText sub <> " !in " <> toQText val
+  toQText (Has sub val) = toQText sub <> " has " <> toQText val
+  toQText (NotHas sub val) = toQText sub <> " !has " <> toQText val
+  toQText (HasAny sub val) = toQText sub <> " has_any " <> toQText val
+  toQText (HasAll sub val) = toQText sub <> " has_all " <> toQText val
+  toQText (Contains sub val) = toQText sub <> " contains " <> toQText val
+  toQText (NotContains sub val) = toQText sub <> " !contains " <> toQText val
+  toQText (StartsWith sub val) = toQText sub <> " startswith " <> toQText val
+  toQText (NotStartsWith sub val) = toQText sub <> " !startswith " <> toQText val
+  toQText (EndsWith sub val) = toQText sub <> " endswith " <> toQText val
+  toQText (NotEndsWith sub val) = toQText sub <> " !endswith " <> toQText val
+  toQText (Matches sub val) = toQText sub <> " matches /" <> val <> "/"
   toQText (Paren expr) = "(" <> toQText expr <> ")"
   toQText (And left right) = toQText left <> " AND " <> toQText right
   toQText (Or left right) = toQText left <> " OR " <> toQText right
@@ -471,15 +653,22 @@ displayExprHelper op prec sub val =
   displayParen (prec > 0)
     $ if subjectHasWildcard sub
       then displayPrec prec (jsonPathQuery op sub val)
-      else case val of
-        Null ->
-          if op == "="
-            then displayPrec prec sub <> " IS NULL"
-            else
-              if op == "!="
-                then displayPrec prec sub <> " IS NOT NULL"
-                else displayPrec prec sub <> displayPrec @T.Text prec op <> displayPrec prec val
-        _ -> displayPrec prec sub <> displayPrec @T.Text prec op <> displayPrec prec val
+      else case (op, val) of
+        ("=", Null) -> displayPrec prec sub <> " IS NULL"
+        ("!=", Null) -> displayPrec prec sub <> " IS NOT NULL"
+        ("IN", List vs) -> displayPrec prec sub <> " IN (" <> (mconcat . intersperse "," . map (displayPrec prec)) vs <> ")"
+        ("NOT IN", List vs) -> displayPrec prec sub <> " NOT IN (" <> (mconcat . intersperse "," . map (displayPrec prec)) vs <> ")"
+        ("HAS", _) -> displayPrec prec sub <> " ~* " <> displayPrec prec val
+        ("NOT HAS", _) -> displayPrec prec sub <> " !~* " <> displayPrec prec val
+        ("HAS_ANY", List vs) -> "(" <> (mconcat . intersperse " OR " . map (\v -> displayPrec prec sub <> " ~* " <> displayPrec prec v)) vs <> ")"
+        ("HAS_ALL", List vs) -> "(" <> (mconcat . intersperse " AND " . map (\v -> displayPrec prec sub <> " ~* " <> displayPrec prec v)) vs <> ")"
+        ("CONTAINS", _) -> displayPrec prec sub <> " ILIKE '%' || " <> displayPrec prec val <> " || '%'"
+        ("NOT CONTAINS", _) -> displayPrec prec sub <> " NOT ILIKE '%' || " <> displayPrec prec val <> " || '%'"
+        ("STARTSWITH", _) -> displayPrec prec sub <> " ILIKE " <> displayPrec prec val <> " || '%'"
+        ("NOT STARTSWITH", _) -> displayPrec prec sub <> " NOT ILIKE " <> displayPrec prec val <> " || '%'"
+        ("ENDSWITH", _) -> displayPrec prec sub <> " ILIKE '%' || " <> displayPrec prec val
+        ("NOT ENDSWITH", _) -> displayPrec prec sub <> " NOT ILIKE '%' || " <> displayPrec prec val
+        _ -> displayPrec prec sub <> " " <> displayPrec @T.Text prec op <> " " <> displayPrec prec val
 
 
 -- | Generate PostgreSQL JSONPath queries from AST with specified operator
@@ -500,7 +689,24 @@ displayExprHelper op prec sub val =
 -- "jsonb_path_exists(to_jsonb(orders), $$$[0].val[*].\"status\" ? (@ > \"pending\")$$::jsonpath)"
 --
 -- >>> jsonPathQuery "like_regex" (Subject "" "request_body" [FieldKey "msg"]) (Str "^abc.*")
+
+
 -- "jsonb_path_exists(to_jsonb(request_body), $$$.\"msg\" ? (@ like_regex \"^abc.*\" flag \"i\" )$$::jsonpath)"
+--
+-- Test new operators with JSONPath (wildcard subjects):
+--
+-- >>> jsonPathQuery "IN" (Subject "" "users" [ArrayWildcard "", FieldKey "role"]) (List [Str "admin", Str "user"])
+-- "jsonb_path_exists(to_jsonb(users), $$$[*].\"role\" ? (@ IN {\"admin\",\"user\"})$$::jsonpath)"
+--
+-- >>> jsonPathQuery "HAS" (Subject "" "logs" [ArrayWildcard "", FieldKey "message"]) (Str "error")
+-- "jsonb_path_exists(to_jsonb(logs), $$$[*].\"message\" ? (@ HAS \"error\")$$::jsonpath)"
+--
+-- >>> jsonPathQuery "CONTAINS" (Subject "" "events" [ArrayWildcard "", FieldKey "description"]) (Str "login")
+-- "jsonb_path_exists(to_jsonb(events), $$$[*].\"description\" ? (@ CONTAINS \"login\")$$::jsonpath)"
+--
+-- >>> jsonPathQuery "STARTSWITH" (Subject "" "requests" [ArrayWildcard "", FieldKey "path"]) (Str "/api")
+-- "jsonb_path_exists(to_jsonb(requests), $$$[*].\"path\" ? (@ STARTSWITH \"/api\")$$::jsonpath)"
+
 jsonPathQuery :: T.Text -> Subject -> Values -> T.Text
 jsonPathQuery op' (Subject entire base keys) val =
   "jsonb_path_exists(to_jsonb(" <> base <> "), $$" <> "$" <> buildPath keys <> buildCondition op val postfix <> "$$::jsonpath)"
@@ -520,9 +726,10 @@ jsonPathQuery op' (Subject entire base keys) val =
     buildCondition oper (Num n) pstfx = " ? (@ " <> oper <> " " <> n <> postfix <> ")"
     buildCondition oper (Str s) pstfx = " ? (@ " <> oper <> " \"" <> s <> "\"" <> postfix <> ")"
     buildCondition oper (Boolean b) pstfx = " ? (@ " <> oper <> " " <> T.toLower (show b) <> pstfx <> ")"
+    buildCondition oper (Duration _ ns) pstfx = " ? (@ " <> oper <> " " <> show ns <> postfix <> ")"
     buildCondition oper Null pstfx =
       case op' of
         "=" -> " ? (@ is null" <> pstfx <> ")"
         "!=" -> " ? (@ is not null" <> pstfx <> ")"
         _ -> " ? (@ " <> oper <> " null" <> pstfx <> ")"
-    buildCondition oper (List xs) pstfx = " ? (@ " <> oper <> " {" <> (mconcat . intersperse "," . map display) xs <> "}" <> pstfx <> ")"
+    buildCondition oper (List xs) pstfx = " ? (@ " <> oper <> " [" <> (mconcat . intersperse "," . map display) xs <> "]" <> pstfx <> ")"

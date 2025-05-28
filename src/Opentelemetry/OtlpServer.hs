@@ -119,6 +119,7 @@ processList msgs attrs = checkpoint "processList" $ process `onException` handle
     process = do
       let msgs' = V.fromList msgs
       appCtx <- ask @AuthContext
+      Log.logAttention "processList: caught exception" (HashMap.lookup "ce-type" attrs)
       case HashMap.lookup "ce-type" attrs of
         Just "org.opentelemetry.otlp.logs.v1" -> checkpoint "processList:logs" $ do
           results <- V.forM msgs' $ \(ackId, msg) ->

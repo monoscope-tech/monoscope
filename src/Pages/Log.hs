@@ -26,6 +26,7 @@ import Effectful.Time qualified as Time
 import Fmt (commaizeF, fmt)
 import Langchain.LLM.Core qualified as LLM
 import Langchain.LLM.OpenAI (OpenAI (..))
+import Log qualified
 import Lucid
 import Lucid.Aria qualified as Aria
 import Lucid.Base (TermRaw (termRaw))
@@ -115,7 +116,7 @@ renderFacets facetSummary = do
             , [__|on click toggle .collapsed on me.parentElement|]
             ]
             $ span_ [class_ "facet-title"] (toHtml displayName)
-            >> faSprite_ "chevron-down" "regular" "w-3 h-3 transition-transform duration-200 group-[.collapsed]:rotate-180"
+              >> faSprite_ "chevron-down" "regular" "w-3 h-3 transition-transform duration-200 group-[.collapsed]:rotate-180"
 
           -- Wrap facet values in a collapsible container with animation
           div_ [class_ "facet-content overflow-hidden transition-all duration-300 ease-in-out max-h-96 opacity-100 transition-opacity duration-150 group-[.collapsed]:max-h-0 group-[.collapsed]:opacity-0 group-[.collapsed]:py-0"] do
@@ -150,6 +151,17 @@ apiLogH pid queryM' cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM
   let parseQuery q = either (\err -> addErrorToast "Error Parsing Query" (Just err) >> pure []) pure (parseQueryToAST q)
   queryAST <- parseQuery $ maybeToMonoid queryM'
   let queryText = toQText queryAST
+  
+  -- Debug logging for query parsing in apiLogH
+  Log.logTrace "apiLogH Query Processing" (AE.object
+    [ "original_query_input" AE..= fromMaybe "" queryM'
+    , "parsed_query_ast" AE..= show queryAST
+    , "reconstructed_query_text" AE..= queryText
+    , "project_id" AE..= show pid
+    , "source" AE..= source
+    , "target_spans" AE..= fromMaybe "" targetSpansM
+    ])
+  
   unless (isJust queryLibItemTitle) $ Projects.queryLibInsert Projects.QLTHistory pid sess.persistentSession.userId queryText queryAST Nothing
 
   when (layoutM == Just "SaveQuery") do
@@ -812,11 +824,11 @@ aiSearchH _pid requestBody = do
               if "Please provide a query"
                 `T.isInfixOf` cleanedResponse
                 || "I need more"
-                `T.isInfixOf` cleanedResponse
+                  `T.isInfixOf` cleanedResponse
                 || "Could you please"
-                `T.isInfixOf` cleanedResponse
+                  `T.isInfixOf` cleanedResponse
                 || T.length cleanedResponse
-                < 3
+                  < 3
                 then pure $ Left "INVALID_QUERY_ERROR"
                 else pure $ Right cleanedResponse
 
@@ -827,11 +839,27 @@ aiSearchH _pid requestBody = do
         , ""
         , Schema.generateSchemaForAI Schema.telemetrySchema
         , ""
+        , "Available Operators:"
+        , "- Comparison: == != > < >= <="
+        , "- Set operations: in !in (e.g., method in (\"GET\", \"POST\"))"
+        , "- Text search: has !has (case-insensitive word search)"
+        , "- Text collections: has_any has_all (e.g., tags has_any [\"urgent\", \"critical\"])"
+        , "- String operations: contains !contains startswith !startswith endswith !endswith"
+        , "- Pattern matching: matches =~ (regex, e.g., email matches /.*@company\\.com/)"
+        , "- Logical: AND OR (or lowercase and or)"
+        , "- Duration values: 100ms 5s 2m 1h (nanoseconds, microseconds, milliseconds, seconds, minutes, hours)"
+        , ""
         , "Examples:"
         , "- \"show me errors\" -> level == \"ERROR\""
         , "- \"POST requests\" -> attributes.http.request.method == \"POST\""
-        , "- \"slow requests\" -> duration > 5000000000"
+        , "- \"slow requests\" -> duration > 500ms"
         , "- \"500 errors\" -> attributes.http.response.status_code == \"500\""
+        , "- \"GET or POST requests\" -> method in (\"GET\", \"POST\")"
+        , "- \"messages containing error\" -> message contains \"error\""
+        , "- \"logs with urgent or critical tags\" -> tags has_any [\"urgent\", \"critical\"]"
+        , "- \"paths starting with /api\" -> path startswith \"/api\""
+        , "- \"emails from company.com\" -> email matches /.*@company\\.com/"
+        , "- \"requests taking more than 1 second\" -> duration > 1s"
         , ""
         , "Return only the KQL filter expression, no explanations."
         ]
@@ -968,6 +996,7 @@ queryEditorInitializationCode queryLibRecent queryLibSaved = do
   let queryLibData = queryLibRecent <> queryLibSaved
       queryLibDataJson = decodeUtf8 $ AE.encode queryLibData
       schemaJson = decodeUtf8 $ AE.encode Schema.telemetrySchemaJson
+      popularQueriesJson = decodeUtf8 $ AE.encode Schema.popularOtelQueriesJson
   script_
     [text|
     // Initialize query-editor component with query library data and schema
@@ -986,9 +1015,9 @@ queryEditorInitializationCode queryLibRecent queryLibSaved = do
           window.schemaManager.setSchemaData('spans', schemaData);
         }
         
-        // Set popular searches if available
-        if (editor.setPopularSearches && window.getPopularQueries) {
-          const popularQueries = window.getPopularQueries();
+        // Set popular searches directly from Haskell backend
+        if (editor.setPopularSearches) {
+          const popularQueries = $popularQueriesJson;
           editor.setPopularSearches(popularQueries);
         }
       }

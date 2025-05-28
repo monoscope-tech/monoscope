@@ -268,11 +268,11 @@ export const language = {
     'p99',
     'p100',
   ],
-  operators: ['==', '!=', '>', '<', '>=', '<=', '=~', '|'],
+  operators: ['==', '!=', '>', '<', '>=', '<=', '=~', 'in', '!in', 'has', '!has', 'has_any', 'has_all', 'contains', '!contains', 'startswith', '!startswith', 'endswith', '!endswith', 'matches', '|'],
   tokenizer: {
     root: [
-      [/\[[0-9]+(?:s|m|h|d|w)\]/, 'number.timespan'],
-      [/[0-9]+(?:ns|µs|us|ms|s|m|h|d|w)/, 'number.duration'],
+      [/\[[0-9]+(?:\.[0-9]+)?(?:s|m|h|d|w)\]/, 'number.timespan'],
+      [/[0-9]+(?:\.[0-9]+)?(?:ns|µs|us|ms|s|m|h|d|w)/, 'number.duration'],
       [/[0-9]+(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?/, 'number'],
       [/"([^"\\]|\\.)*"/, 'string'],
       [/\/(\\.|[^\\/])+\/[iIsS]*/, 'regexp'],
@@ -370,18 +370,30 @@ monaco.languages.registerCompletionItemProvider('aql', {
     }
 
     // Check for operator pattern - show value suggestions
-    const operatorMatch = lineText.match(/([\w\.]+)\s*(==|!=|>=|<=|>|<|=~)\s*$/);
+    const operatorMatch = lineText.match(/([\w\.]+)\s*(==|!=|>=|<=|>|<|=~|in|!in|has|!has|has_any|has_all|contains|!contains|startswith|!startswith|endswith|!endswith|matches)\s*$/);
     if (operatorMatch) {
       const fieldName = operatorMatch[1];
+      const operator = operatorMatch[2];
       const values = await schemaManager.resolveValues(currentSchema, fieldName);
-      values.forEach((v) =>
+      
+      // Special handling for 'in' and '!in' operators
+      if (operator === 'in' || operator === '!in') {
         suggestions.push({
-          label: String(v),
-          kind: monaco.languages.CompletionItemKind.Value,
-          insertText: typeof v === 'string' ? `"${v}" ` : `${v} `,
+          label: '("value1", "value2")',
+          kind: monaco.languages.CompletionItemKind.Snippet,
+          insertText: '("value1", "value2") ',
           range: createRange(),
-        })
-      );
+        });
+      } else {
+        values.forEach((v) =>
+          suggestions.push({
+            label: String(v),
+            kind: monaco.languages.CompletionItemKind.Value,
+            insertText: typeof v === 'string' ? `"${v}" ` : `${v} `,
+            range: createRange(),
+          })
+        );
+      }
       return { suggestions };
     }
 
@@ -419,7 +431,7 @@ monaco.languages.registerCompletionItemProvider('aql', {
     // Check for field name followed by space
     const fieldSpaceMatch = lineText.match(/([a-zA-Z_][a-zA-Z0-9_]*(?:\.[a-zA-Z_][a-zA-Z0-9_]*)*)\s+$/);
     if (fieldSpaceMatch && !logicalOperatorMatch) {
-      ['==', '!=', '>', '<', '>=', '<=', '=~', 'and', 'or', 'not', 'exists'].forEach((op) =>
+      ['==', '!=', '>', '<', '>=', '<=', '=~', 'in', '!in', 'has', '!has', 'has_any', 'has_all', 'contains', '!contains', 'startswith', '!startswith', 'endswith', '!endswith', 'matches', 'and', 'or', 'not', 'exists'].forEach((op) =>
         suggestions.push({
           label: op,
           kind: monaco.languages.CompletionItemKind.Operator,
@@ -499,7 +511,7 @@ monaco.languages.registerCompletionItemProvider('aql', {
 
     // Search segment
     if (!/stats|timechart/i.test(last)) {
-      ['==', '!=', '>', '<', '>=', '<=', '=~', 'and', 'or', 'not', 'exists'].forEach((op) =>
+      ['==', '!=', '>', '<', '>=', '<=', '=~', 'in', '!in', 'has', '!has', 'has_any', 'has_all', 'contains', '!contains', 'startswith', '!startswith', 'endswith', '!endswith', 'matches', 'and', 'or', 'not', 'exists'].forEach((op) =>
         suggestions.push({
           label: op,
           kind: monaco.languages.CompletionItemKind.Operator,

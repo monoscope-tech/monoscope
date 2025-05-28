@@ -3,11 +3,10 @@ import { schemaManager, SchemaData } from './query-editor';
 export function initializeDefaultSchema(): void {
   // Schema is now provided by the Haskell backend
   // This function sets up the resolvers for the schema provided via setSchema()
-  
+
   // Set the available schemas
   schemaManager.setSchemas(['spans', 'metrics']);
   schemaManager.setDefaultSchema('spans');
-
 
   // Set up a nested field resolver for flattened schema
   schemaManager.setNestedResolver(async (schema: string, prefix: string) => {
@@ -26,7 +25,7 @@ export function initializeDefaultSchema(): void {
           type: info.field_type,
           examples: info.examples,
           // Check if this field has nested fields by looking for dotted versions
-          fields: Object.keys(currentSchema.fields).some(key => key.startsWith(name + '.')) ? {} : undefined,
+          fields: Object.keys(currentSchema.fields).some((key) => key.startsWith(name + '.')) ? {} : undefined,
         }));
     }
 
@@ -39,7 +38,7 @@ export function initializeDefaultSchema(): void {
         const remainder = name.substring(prefixWithDot.length);
         const nextDotIndex = remainder.indexOf('.');
         const childName = nextDotIndex === -1 ? remainder : remainder.substring(0, nextDotIndex);
-        
+
         return {
           childName,
           fullName: name,
@@ -57,8 +56,7 @@ export function initializeDefaultSchema(): void {
           type: info.field_type,
           examples: info.examples,
           // Mark as having nested fields if there are deeper levels or if it's an object type
-          fields: hasNestedFields || 
-                 nestedFields.some(f => f.fullName.startsWith(prefixWithDot + childName + '.')) ? {} : undefined,
+          fields: hasNestedFields || nestedFields.some((f) => f.fullName.startsWith(prefixWithDot + childName + '.')) ? {} : undefined,
         });
       }
     });
@@ -76,7 +74,7 @@ export function initializeDefaultSchema(): void {
 
     // Direct field lookup in flattened schema
     const fieldInfo = currentSchema.fields[field];
-    
+
     // Check for examples
     if (fieldInfo && fieldInfo.examples) {
       return fieldInfo.examples.map((v) => String(v));
@@ -128,47 +126,3 @@ export function initializeDefaultSchema(): void {
   });
 }
 
-// Export popular OpenTelemetry queries
-export function getPopularQueries() {
-  return [
-    // Error and exception queries
-    ['level == "ERROR"', 'Show all error-level logs'],
-    ['attributes.exception.type != null', 'Find logs with exceptions'],
-    ['level == "ERROR" and attributes.http.response.status_code >= 500', 'Server errors with HTTP 5xx status codes'],
-    
-    // HTTP-related queries
-    ['attributes.http.request.method == "POST"', 'All POST requests'],
-    ['attributes.http.response.status_code >= 400', 'HTTP errors (4xx and 5xx)'],
-    ['attributes.http.response.status_code == 404', 'Not found errors'],
-    ['attributes.http.request.method == "GET" and attributes.http.response.status_code == 200', 'Successful GET requests'],
-    
-    // Performance queries
-    ['duration > 5000000000', 'Slow requests (>5 seconds)'],
-    ['duration > 1000000000', 'Requests taking more than 1 second'],
-    ['kind == "span" and duration > 500000000', 'Slow spans (>500ms)'],
-    
-    // Service and trace queries
-    ['resource.service.name == "api"', 'Logs from API service'],
-    ['kind == "span"', 'All span data'],
-    ['kind == "logs"', 'All log entries'],
-    ['parent_id != null', 'Child spans with parent relationships'],
-    
-    // Database queries
-    ['attributes.db.operation.name != null', 'Database operations'],
-    ['attributes.db.system.name == "postgresql"', 'PostgreSQL database operations'],
-    ['attributes.db.query.text contains "SELECT"', 'Database SELECT queries'],
-    
-    // User and session queries
-    ['attributes.user.id != null', 'Logs with user information'],
-    ['attributes.session.id != null', 'Logs with session tracking'],
-    
-    // Time-based and filtering
-    ['timestamp > ago(1h)', 'Logs from the last hour'],
-    ['timestamp > ago(24h) and level == "WARN"', 'Warnings from the last 24 hours'],
-    
-    // Complex filtering examples
-    ['attributes.http.request.method == "POST" and attributes.http.response.status_code < 400', 'Successful POST requests'],
-    ['resource.service.name == "frontend" and level in ["ERROR", "WARN"]', 'Frontend service errors and warnings'],
-    ['attributes.url.path contains "/api/" and duration > 2000000000', 'Slow API endpoint calls']
-  ].map(([query, description]) => ({ query, description }));
-}
