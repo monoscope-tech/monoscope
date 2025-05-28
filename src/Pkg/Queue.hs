@@ -7,6 +7,7 @@ import Data.ByteString.Char8 qualified as BC
 import Data.ByteString.Lazy.Base64 qualified as LB64
 import Data.Generics.Product (field)
 import Data.HashMap.Strict qualified as HM
+import Data.Text qualified as T
 import Data.Text.Lazy.Encoding qualified as LT
 import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUID
@@ -82,7 +83,7 @@ kafkaService :: Log.Logger -> AuthContext -> ([(Text, ByteString)] -> HM.HashMap
 kafkaService appLogger appCtx fn = do
   -- Generate unique client ID for logging/metrics
   instanceUuid <- UUID.toText <$> UUID.nextRandom
-  let clientId = "apitoolkit-" <> instanceUuid
+  let clientId = "apitoolkit-" <> T.take 8 instanceUuid
   let consumerSub = K.topics (map K.TopicName appCtx.config.kafkaTopics) <> K.offsetReset K.Earliest
   bracket
     (either throwIO pure =<< K.newConsumer (consumerProps appCtx.config clientId) consumerSub)
