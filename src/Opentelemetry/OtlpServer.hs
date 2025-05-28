@@ -56,7 +56,7 @@ import Proto.Opentelemetry.Proto.Resource.V1.Resource_Fields qualified as PRF
 import Proto.Opentelemetry.Proto.Trace.V1.Trace qualified as PT
 import Proto.Opentelemetry.Proto.Trace.V1.Trace_Fields qualified as PTF
 import Relude hiding (ask)
-import System.Config (AuthContext)
+import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types (runBackground)
 import Utils (b64ToJson, freeTierDailyMaxEvents, nestedJsonFromDotNotation)
 
@@ -729,7 +729,7 @@ runServer :: Log.Logger -> AuthContext -> IO ()
 runServer appLogger appCtx = runServerWithHandlers def config $ (services appLogger appCtx)
   where
     serverHost = "localhost"
-    serverPort = 4317
+    serverPort = appCtx.config.grpcPort
     config :: ServerConfig
     config =
       ServerConfig
