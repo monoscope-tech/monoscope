@@ -116,7 +116,7 @@ renderFacets facetSummary = do
             , [__|on click toggle .collapsed on me.parentElement|]
             ]
             $ span_ [class_ "facet-title"] (toHtml displayName)
-              >> faSprite_ "chevron-down" "regular" "w-3 h-3 transition-transform duration-200 group-[.collapsed]:rotate-180"
+            >> faSprite_ "chevron-down" "regular" "w-3 h-3 transition-transform duration-200 group-[.collapsed]:rotate-180"
 
           -- Wrap facet values in a collapsible container with animation
           div_ [class_ "facet-content overflow-hidden transition-all duration-300 ease-in-out max-h-96 opacity-100 transition-opacity duration-150 group-[.collapsed]:max-h-0 group-[.collapsed]:opacity-0 group-[.collapsed]:py-0"] do
@@ -151,17 +151,20 @@ apiLogH pid queryM' cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM
   let parseQuery q = either (\err -> addErrorToast "Error Parsing Query" (Just err) >> pure []) pure (parseQueryToAST q)
   queryAST <- parseQuery $ maybeToMonoid queryM'
   let queryText = toQText queryAST
-  
+
   -- Debug logging for query parsing in apiLogH
-  Log.logTrace "apiLogH Query Processing" (AE.object
-    [ "original_query_input" AE..= fromMaybe "" queryM'
-    , "parsed_query_ast" AE..= show queryAST
-    , "reconstructed_query_text" AE..= queryText
-    , "project_id" AE..= show pid
-    , "source" AE..= source
-    , "target_spans" AE..= fromMaybe "" targetSpansM
-    ])
-  
+  Log.logTrace
+    "apiLogH Query Processing"
+    ( AE.object
+        [ "original_query_input" AE..= fromMaybe "" queryM'
+        , "parsed_query_ast" AE..= show queryAST
+        , "reconstructed_query_text" AE..= queryText
+        , "project_id" AE..= show pid
+        , "source" AE..= source
+        , "target_spans" AE..= fromMaybe "" targetSpansM
+        ]
+    )
+
   unless (isJust queryLibItemTitle) $ Projects.queryLibInsert Projects.QLTHistory pid sess.persistentSession.userId queryText queryAST Nothing
 
   when (layoutM == Just "SaveQuery") do
@@ -824,11 +827,11 @@ aiSearchH _pid requestBody = do
               if "Please provide a query"
                 `T.isInfixOf` cleanedResponse
                 || "I need more"
-                  `T.isInfixOf` cleanedResponse
+                `T.isInfixOf` cleanedResponse
                 || "Could you please"
-                  `T.isInfixOf` cleanedResponse
+                `T.isInfixOf` cleanedResponse
                 || T.length cleanedResponse
-                  < 3
+                < 3
                 then pure $ Left "INVALID_QUERY_ERROR"
                 else pure $ Right cleanedResponse
 

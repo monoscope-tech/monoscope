@@ -437,15 +437,18 @@ selectLogTable :: (DB :> es, Time.Time :> es, Log :> es) => Projects.ProjectId -
 selectLogTable pid queryAST cursorM dateRange projectedColsByUser source targetSpansM = do
   now <- Time.currentTime
   let (q, queryComponents) = queryASTToComponents ((defSqlQueryCfg pid now source targetSpansM){cursorM, dateRange, projectedColsByUser, source, targetSpansM}) queryAST
-  
+
   -- Debug logging for parsed query AST and generated SQL
-  Log.logTrace "Query Debug Info" (AE.object 
-    [ "parsed_query_ast" AE..= show queryAST
-    , "generated_sql_query" AE..= q
-    , "count_query" AE..= queryComponents.countQuery
-    , "project_id" AE..= show pid
-    ])
-  
+  Log.logTrace
+    "Query Debug Info"
+    ( AE.object
+        [ "parsed_query_ast" AE..= show queryAST
+        , "generated_sql_query" AE..= q
+        , "count_query" AE..= queryComponents.countQuery
+        , "project_id" AE..= show pid
+        ]
+    )
+
   logItems <- checkpoint (toAnnotation ("selectLogTable", q)) $ queryToValues q
   Only c <- fromMaybe (Only 0) <$> queryCount queryComponents.countQuery
   let logItemsV = V.mapMaybe valueToVector logItems
