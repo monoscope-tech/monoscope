@@ -268,7 +268,29 @@ export const language = {
     'p99',
     'p100',
   ],
-  operators: ['==', '!=', '>', '<', '>=', '<=', '=~', 'in', '!in', 'has', '!has', 'has_any', 'has_all', 'contains', '!contains', 'startswith', '!startswith', 'endswith', '!endswith', 'matches', '|'],
+  operators: [
+    '==',
+    '!=',
+    '>',
+    '<',
+    '>=',
+    '<=',
+    '=~',
+    'in',
+    '!in',
+    'has',
+    '!has',
+    'has_any',
+    'has_all',
+    'contains',
+    '!contains',
+    'startswith',
+    '!startswith',
+    'endswith',
+    '!endswith',
+    'matches',
+    '|',
+  ],
   tokenizer: {
     root: [
       [/\[[0-9]+(?:\.[0-9]+)?(?:s|m|h|d|w)\]/, 'number.timespan'],
@@ -370,12 +392,14 @@ monaco.languages.registerCompletionItemProvider('aql', {
     }
 
     // Check for operator pattern - show value suggestions
-    const operatorMatch = lineText.match(/([\w\.]+)\s*(==|!=|>=|<=|>|<|=~|in|!in|has|!has|has_any|has_all|contains|!contains|startswith|!startswith|endswith|!endswith|matches)\s*$/);
+    const operatorMatch = lineText.match(
+      /([\w\.]+)\s*(==|!=|>=|<=|>|<|=~|in|!in|has|!has|has_any|has_all|contains|!contains|startswith|!startswith|endswith|!endswith|matches)\s*$/
+    );
     if (operatorMatch) {
       const fieldName = operatorMatch[1];
       const operator = operatorMatch[2];
       const values = await schemaManager.resolveValues(currentSchema, fieldName);
-      
+
       // Special handling for 'in' and '!in' operators
       if (operator === 'in' || operator === '!in') {
         suggestions.push({
@@ -431,7 +455,32 @@ monaco.languages.registerCompletionItemProvider('aql', {
     // Check for field name followed by space
     const fieldSpaceMatch = lineText.match(/([a-zA-Z_][a-zA-Z0-9_]*(?:\.[a-zA-Z_][a-zA-Z0-9_]*)*)\s+$/);
     if (fieldSpaceMatch && !logicalOperatorMatch) {
-      ['==', '!=', '>', '<', '>=', '<=', '=~', 'in', '!in', 'has', '!has', 'has_any', 'has_all', 'contains', '!contains', 'startswith', '!startswith', 'endswith', '!endswith', 'matches', 'and', 'or', 'not', 'exists'].forEach((op) =>
+      [
+        '==',
+        '!=',
+        '>',
+        '<',
+        '>=',
+        '<=',
+        '=~',
+        'in',
+        '!in',
+        'has',
+        '!has',
+        'has_any',
+        'has_all',
+        'contains',
+        '!contains',
+        'startswith',
+        '!startswith',
+        'endswith',
+        '!endswith',
+        'matches',
+        'and',
+        'or',
+        'not',
+        'exists',
+      ].forEach((op) =>
         suggestions.push({
           label: op,
           kind: monaco.languages.CompletionItemKind.Operator,
@@ -511,7 +560,32 @@ monaco.languages.registerCompletionItemProvider('aql', {
 
     // Search segment
     if (!/stats|timechart/i.test(last)) {
-      ['==', '!=', '>', '<', '>=', '<=', '=~', 'in', '!in', 'has', '!has', 'has_any', 'has_all', 'contains', '!contains', 'startswith', '!startswith', 'endswith', '!endswith', 'matches', 'and', 'or', 'not', 'exists'].forEach((op) =>
+      [
+        '==',
+        '!=',
+        '>',
+        '<',
+        '>=',
+        '<=',
+        '=~',
+        'in',
+        '!in',
+        'has',
+        '!has',
+        'has_any',
+        'has_all',
+        'contains',
+        '!contains',
+        'startswith',
+        '!startswith',
+        'endswith',
+        '!endswith',
+        'matches',
+        'and',
+        'or',
+        'not',
+        'exists',
+      ].forEach((op) =>
         suggestions.push({
           label: op,
           kind: monaco.languages.CompletionItemKind.Operator,
@@ -704,29 +778,71 @@ export class QueryEditorComponent extends LitElement {
   public toggleSubQuery(queryFragment: string): void {
     if (!this.editor) return;
     const currentValue = this.editor.getValue().trim();
-    
+
     if (currentValue.includes(queryFragment)) {
       // Remove the fragment if it exists
       const escFragment = queryFragment.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
       let newQuery = currentValue;
-      
+
       // Handle different position cases
       if (new RegExp(`^${escFragment}$`).test(currentValue)) {
-        newQuery = ""; // It's the only query
+        newQuery = ''; // It's the only query
       } else if (new RegExp(`^${escFragment} and `, 'i').test(currentValue)) {
-        newQuery = currentValue.replace(new RegExp(`^${escFragment} and `, 'i'), ""); // At start
+        newQuery = currentValue.replace(new RegExp(`^${escFragment} and `, 'i'), ''); // At start
       } else if (new RegExp(` and ${escFragment}$`, 'i').test(currentValue)) {
-        newQuery = currentValue.replace(new RegExp(` and ${escFragment}$`, 'i'), ""); // At end
+        newQuery = currentValue.replace(new RegExp(` and ${escFragment}$`, 'i'), ''); // At end
       } else {
-        newQuery = currentValue.replace(new RegExp(` and ${escFragment}`, 'i'), ""); // In middle
+        newQuery = currentValue.replace(new RegExp(` and ${escFragment}`, 'i'), ''); // In middle
       }
-      
+
       // Clean up
-      newQuery = newQuery.replace(/^and /i, "").replace(/ and$/i, "").trim();
+      newQuery = newQuery.replace(/^and /i, '').replace(/ and$/i, '').trim();
       this.handleAddQuery(newQuery, true);
     } else {
       // Add the fragment if it doesn't exist
       this.handleAddQuery(queryFragment, currentValue ? false : true);
+    }
+  }
+
+  public handleVisualizationChange(visualizationType: string): void {
+    console.log('handleVisualizationChange', visualizationType);
+    if (!this.editor) return;
+
+    const currentQuery = this.editor.getValue().trim();
+    const baseQuery = currentQuery.replace(/\|\s*(timechart|stats)\s+[^|]*$/i, '').trim();
+
+    let newQuery = '';
+    switch (visualizationType) {
+      case 'timeseries':
+        newQuery = baseQuery ? `${baseQuery} | timechart [5m] count(*)` : 'timechart [5m] count(*)';
+        break;
+      case 'table':
+      case 'top-list':
+      case 'distribution':
+      case 'query-value':
+        newQuery = baseQuery ? `${baseQuery} | stats count(*)` : 'stats count(*)';
+        break;
+      default: // logs
+        newQuery = baseQuery;
+        break;
+    }
+
+    this.handleAddQuery(newQuery, true);
+  }
+
+  private updateVisualizationTab(): void {
+    const query = this.editor?.getValue().toLowerCase() || '';
+    let selectedTab = 'logs';
+
+    if (/\|\s*timechart\s+/i.test(query)) {
+      selectedTab = 'timeseries';
+    } else if (/\|\s*stats\s+/i.test(query)) {
+      selectedTab = 'table';
+    }
+
+    const radioButton = document.querySelector(`input[name="visualization"][value="${selectedTab}"]`) as HTMLInputElement;
+    if (radioButton) {
+      radioButton.checked = true;
     }
   }
 
@@ -789,6 +905,7 @@ export class QueryEditorComponent extends LitElement {
 
       // Update placeholder immediately
       this.updatePlaceholder();
+      this.updateVisualizationTab();
     } finally {
       setTimeout(() => {
         this.editor.focus = originalFocus.bind(this.editor);
@@ -953,6 +1070,7 @@ export class QueryEditorComponent extends LitElement {
           this.currentQuery = model.getLineContent(position.lineNumber);
           this.showSuggestions = true;
           this.updatePlaceholder();
+          this.updateVisualizationTab();
 
           this.debouncedUpdateQuery(model.getValue());
           this.debouncedTriggerSuggestions();

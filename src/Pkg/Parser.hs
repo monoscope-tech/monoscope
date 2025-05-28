@@ -275,7 +275,7 @@ queryASTToComponents sqlCfg = sqlFromQueryComponents sqlCfg . sectionsToComponen
 
 
 parseQueryToAST :: Text -> Either Text [Section]
-parseQueryToAST q = first (toText . errorBundlePretty) (traceShowId $ parse parseQuery "" (traceShowId $ T.strip $ traceShowId q))
+parseQueryToAST q = first (toText . errorBundlePretty) (parse parseQuery "" (T.strip q))
 
 
 defPid :: Projects.ProjectId

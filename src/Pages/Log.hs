@@ -552,11 +552,12 @@ logQueryBox_ pid currentRange source targetSpan query queryLibRecent queryLibSav
                 span_ [id_ "run-query-indicator", class_ "refresh-indicator htmx-indicator query-indicator loading loading-dots loading-sm"] ""
                 faSprite_ "magnifying-glass" "regular" "h-4 w-4 inline-block"
       div_ [class_ "flex items-between justify-between"] do
+        visualizationTabs_
         div_ [class_ "", id_ "resultTableInner"] pass
 
         div_ [class_ "flex justify-end  gap-2 "] do
           fieldset_ [class_ "fieldset"] $ label_ [class_ "label"] do
-            input_ [type_ "checkbox", class_ "checkbox checkbox-sm rounded-sm toggle-chart"] >> span_ "charts"
+            input_ [type_ "checkbox", class_ "checkbox checkbox-sm rounded-sm toggle-chart"] >> span_ "timeline"
 
 
 queryLibrary_ :: Projects.ProjectId -> V.Vector Projects.QueryLibItem -> V.Vector Projects.QueryLibItem -> Html ()
@@ -712,6 +713,23 @@ virtualTable page = do
        projectId: "$projectid"
       }
    |]
+
+
+visualizationTabs_ :: Html ()
+visualizationTabs_ =
+  div_ [class_ "tabs tabs-box tabs-outline tabs-xs bg-gray-100 p-1 rounded-lg", id_ "visualizationTabs", role_ "tablist"] do
+    let tabData :: [(Text, Text, Text)]
+        tabData =
+          [ ("logs", "📋", "Logs")
+          , ("timeseries", "📈", "Timeseries")
+          , -- , ("top-list", "📊", "Top List")
+            -- , ("table", "🗂️", "Table")
+            -- , ("distribution", "📉", "Distribution")
+            -- , ("heatmap", "🔥", "Heatmap")
+            ("query-value", "🔢", "Query Value")
+          ]
+    forM_ tabData $ \(tabId, icon, label) -> do
+      input_ $ [type_ "radio", name_ "visualization", Aria.label_ (icon <> " " <> label), id_ $ "viz-" <> tabId, class_ "tab !shadow-none !border-strokeWeak ", value_ tabId, [__|on change call #filterElement.handleVisualizationChange(@value)|]] <> [checked_ | tabId == "logs"]
 
 
 apiLogsPage :: ApiLogsPageData -> Html ()
