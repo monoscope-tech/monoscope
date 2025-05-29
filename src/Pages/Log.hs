@@ -187,7 +187,7 @@ renderFacets facetSummary = do
   script_
     [text|
     function filterByFacet(field, value) {
-      document.getElementById("filterElement").handleAddQuery(field + ' == "' + value + '"');
+      document.getElementById("filterElement").toggleSubQuery(field + ' == "' + value + '"');
     }
   |]
 

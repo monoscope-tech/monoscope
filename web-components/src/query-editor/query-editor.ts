@@ -700,6 +700,36 @@ export class QueryEditorComponent extends LitElement {
     }));
   }
 
+  // Toggle a subquery - add if not present, remove if present
+  public toggleSubQuery(queryFragment: string): void {
+    if (!this.editor) return;
+    const currentValue = this.editor.getValue().trim();
+    
+    if (currentValue.includes(queryFragment)) {
+      // Remove the fragment if it exists
+      const escFragment = queryFragment.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      let newQuery = currentValue;
+      
+      // Handle different position cases
+      if (new RegExp(`^${escFragment}$`).test(currentValue)) {
+        newQuery = ""; // It's the only query
+      } else if (new RegExp(`^${escFragment} and `, 'i').test(currentValue)) {
+        newQuery = currentValue.replace(new RegExp(`^${escFragment} and `, 'i'), ""); // At start
+      } else if (new RegExp(` and ${escFragment}$`, 'i').test(currentValue)) {
+        newQuery = currentValue.replace(new RegExp(` and ${escFragment}$`, 'i'), ""); // At end
+      } else {
+        newQuery = currentValue.replace(new RegExp(` and ${escFragment}`, 'i'), ""); // In middle
+      }
+      
+      // Clean up
+      newQuery = newQuery.replace(/^and /i, "").replace(/ and$/i, "").trim();
+      this.handleAddQuery(newQuery, true);
+    } else {
+      // Add the fragment if it doesn't exist
+      this.handleAddQuery(queryFragment, currentValue ? false : true);
+    }
+  }
+
   public handleAddQuery(queryFragment: string, replace: boolean = false): void {
     if (!this.editor) return;
 
