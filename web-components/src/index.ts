@@ -4,6 +4,8 @@ export * from './query-editor/query-editor';
 // Re-export the config functions
 export { initializeDefaultSchema, getPopularQueries } from './query-editor/query-editor-config';
 export * from './log-list';
+export * from './monitors/steps-editor';
+export * from './monitors/steps-assertions';
 // Expose getPopularQueries globally for Haskell initialization
 import { getPopularQueries } from './query-editor/query-editor-config';
 (window as any).getPopularQueries = getPopularQueries;

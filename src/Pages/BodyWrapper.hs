@@ -145,8 +145,8 @@ bodyWrapper bcfg child = do
 
         script_ [src_ "/public/assets/js/thirdparty/jsyaml.min.js", crossorigin_ "true"] ("" :: Text)
         script_ [src_ "/public/assets/testeditor-utils.js"] ("" :: Text)
-        script_ [type_ "module", src_ "/public/assets/steps-editor.js"] ("" :: Text)
-        script_ [type_ "module", src_ "/public/assets/steps-assertions.js"] ("" :: Text)
+        -- script_ [type_ "module", src_ "/public/assets/steps-editor.js"] ("" :: Text)
+        -- script_ [type_ "module", src_ "/public/assets/steps-assertions.js"] ("" :: Text)
         script_
           [text|
 
