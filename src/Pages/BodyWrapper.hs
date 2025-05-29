@@ -118,7 +118,7 @@ bodyWrapper bcfg child = do
         script_ [src_ $(hashAssetFile "/public/assets/js/thirdparty/tippy6_3_7.umd.min.js"), defer_ "true"] ("" :: Text)
         script_ [src_ $(hashAssetFile "/public/assets/js/thirdparty/instantpage5_1_0.js"), type_ "module", defer_ "true"] ("" :: Text)
         script_ [src_ $(hashAssetFile "/public/assets/js/monaco/vs/loader.js"), defer_ "true"] ("" :: Text)
-        script_ [src_ $(hashAssetFile "/public/assets/js/charts.js")] ("" :: Text)
+        -- script_ [src_ $(hashAssetFile "/public/assets/js/charts.js")] ("" :: Text)
         script_ [src_ $(hashAssetFile "/public/assets/js/widgets.js")] ("" :: Text)
 
         script_ [src_ $(hashAssetFile "/public/assets/deps/easepick/bundle.min.js")] ("" :: Text)
@@ -143,8 +143,8 @@ bodyWrapper bcfg child = do
       twq('config','om5gt');
       |]
 
-        script_ [src_ "/public/assets/js/thirdparty/jsyaml.min.js", crossorigin_ "true"] ("" :: Text)
-        script_ [src_ "/public/assets/testeditor-utils.js"] ("" :: Text)
+        -- script_ [src_ "/public/assets/js/thirdparty/jsyaml.min.js", crossorigin_ "true"] ("" :: Text)
+        -- script_ [src_ "/public/assets/testeditor-utils.js"] ("" :: Text)
         -- script_ [type_ "module", src_ "/public/assets/steps-editor.js"] ("" :: Text)
         -- script_ [type_ "module", src_ "/public/assets/steps-assertions.js"] ("" :: Text)
         script_

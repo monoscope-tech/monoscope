@@ -21,6 +21,8 @@ declare global {
     updateCollectionResults: (results: any[]) => void;
     updateEditorVal: () => void;
     addCollectionStep: () => void;
+    flameGraphChart: any;
+    waterFallGraphChart: any;
   }
   function updateUrlState(key: string, value: string): void;
   interface htmx {

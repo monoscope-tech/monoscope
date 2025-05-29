@@ -213,13 +213,13 @@ tracePage p = do
 getSpanJson :: Telemetry.SpanRecord -> AE.Value
 getSpanJson sp =
   AE.object
-    [ "span_id" AE..= sp.spanId
+    [ "spanId" AE..= sp.spanId
     , "name" AE..= sp.spanName
     , "value" AE..= sp.spanDurationNs
     , "start" AE..= start
-    , "parent_id" AE..= sp.parentSpanId
-    , "service_name" AE..= getServiceName sp.resource
-    , "has_errors" AE..= spanHasErrors sp
+    , "parentId" AE..= sp.parentSpanId
+    , "serviceName" AE..= getServiceName sp.resource
+    , "hasErrors" AE..= spanHasErrors sp
     ]
   where
     start = utcTimeToNanoseconds sp.startTime
