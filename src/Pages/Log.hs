@@ -23,7 +23,7 @@ import Effectful.Error.Static (throwError)
 import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
 import Effectful.Reader.Static qualified
 import Effectful.Time qualified as Time
-import Fmt (commaizeF, fmt)
+-- import Fmt (commaizeF, fmt) -- Using prettyPrintCount instead
 import Langchain.LLM.Core qualified as LLM
 import Langchain.LLM.OpenAI (OpenAI (..))
 import Log qualified
@@ -49,7 +49,7 @@ import Servant qualified
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types
 import Text.Megaparsec (parseMaybe)
-import Utils
+import Utils (prettyPrintCount, faSprite_, listToIndexHashMap, lookupVecTextByKey, getServiceColors, displayTimestamp, formatUTC, freeTierLimitExceededBanner)
 
 
 -- $setup
@@ -235,7 +235,7 @@ renderFacets facetSummary = do
                           let colorClass = colorFn val
                           when (not $ T.null colorClass) $ span_ [class_ $ colorClass <> " shrink-0 w-1 h-5 rounded-sm mr-1.5"] " "
                           toHtml val
-                      span_ [class_ "facet-count text-textWeak ml-1"] $ toHtml $ show count
+                      span_ [class_ "facet-count text-textWeak ml-1"] $ toHtml $ prettyPrintCount count
 
               div_ [class_ "values-container"] do
                 forM_ visibleValues \(_, value) -> renderFacetValue value
@@ -245,10 +245,10 @@ renderFacets facetSummary = do
                     $ forM_ hiddenValues \(_, value) -> renderFacetValue value
 
                   label_ [class_ "text-textBrand px-3 py-3 cursor-pointer hover:underline peer-checked/more:hidden flex items-center gap-1", Lucid.for_ $ "more-toggle-" <> key] do
-                    toHtml $ "+ More (" <> show hiddenCount <> ")"
+                    toHtml $ "+ More (" <> prettyPrintCount hiddenCount <> ")"
 
                   label_ [class_ "text-textBrand px-3 py-3 cursor-pointer hover:underline hidden peer-checked/more:flex items-center gap-1", Lucid.for_ $ "more-toggle-" <> key] do
-                    toHtml $ "- Less (" <> show hiddenCount <> ")"
+                    toHtml $ "- Less (" <> prettyPrintCount hiddenCount <> ")"
 
 
 keepNonEmpty :: Maybe Text -> Maybe Text
@@ -814,7 +814,7 @@ apiLogsPage page = do
                 "filters"
                 input_ [type_ "checkbox", class_ "toggle-filters hidden"]
               span_ [class_ "text-slate-200"] "|"
-              div_ [class_ ""] $ span_ [class_ "text-slate-950"] (toHtml @Text $ fmt $ commaizeF page.resultCount) >> span_ [class_ "text-slate-600"] (toHtml (" rows found"))
+              div_ [class_ ""] $ span_ [class_ "text-slate-950"] (toHtml $ prettyPrintCount page.resultCount) >> span_ [class_ "text-slate-600"] (toHtml (" rows found"))
             div_ [class_ $ "absolute top-0 right-0  w-full h-full overflow-scroll c-scroll z-50 bg-white transition-all duration-100 " <> if showTrace then "" else "hidden", id_ "trace_expanded_view"] do
               whenJust page.showTrace \trId -> do
                 let url = "/p/" <> page.pid.toText <> "/traces/" <> trId
