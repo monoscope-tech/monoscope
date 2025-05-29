@@ -363,9 +363,29 @@ monaco.languages.registerCompletionItemProvider('aql', {
       return { suggestions };
     }
 
-    // Check for operator pattern - show value suggestions
-    const operatorMatch = lineText.match(new RegExp(`([\\w\\.]+)\\s*(${ALL_OPERATORS.join('|')})\\s*$`));
+    // First priority: Check for field name followed by space - show operator suggestions
+    const fieldSpaceMatch = lineText.match(/([a-zA-Z_][a-zA-Z0-9_]*(?:\.[a-zA-Z_][a-zA-Z0-9_]*)*)\s+$/);
+    const logicalOperatorPattern = new RegExp(`\\b(${LOGICAL_OPERATORS.filter((op) => ['and', 'or'].includes(op)).join('|')})\\s+$`, 'i');
+    const logicalOperatorMatch = lineText.match(logicalOperatorPattern);
+    
+    if (fieldSpaceMatch && !logicalOperatorMatch) {
+      console.log('Field followed by space detected, suggesting operators');
+      // Display all operators horizontally by concatenating all operator arrays
+      [...COMPARISON_OPERATORS, ...SET_OPERATORS, ...STRING_OPERATORS, ...LOGICAL_OPERATORS].forEach((op) =>
+        suggestions.push({
+          label: op,
+          kind: monaco.languages.CompletionItemKind.Operator,
+          insertText: `${op} `,
+          range: createRange(),
+        })
+      );
+      return { suggestions };
+    }
+    
+    // Second priority: Check for operator pattern - show value suggestions
+    const operatorMatch = lineText.match(new RegExp(`([\\w\\.]+)\\s+(${ALL_OPERATORS.join('|')})\\s*$`));
     if (operatorMatch) {
+      console.log('Field and operator detected, suggesting values');
       const fieldName = operatorMatch[1];
       const operator = operatorMatch[2];
       const values = await schemaManager.resolveValues(currentSchema, fieldName);
@@ -391,9 +411,10 @@ monaco.languages.registerCompletionItemProvider('aql', {
       return { suggestions };
     }
 
-    // Check for complete field-operator-value pattern
+    // Third priority: Check for complete field-operator-value pattern - suggest logical operators
     const afterValue = /".*"\s*$/.test(lineText) || /\d+\s*$/.test(lineText);
     if (afterValue) {
+      console.log('Complete expression detected, suggesting logical operators');
       [...LOGICAL_OPERATORS.filter((op) => op === 'and' || op === 'or'), PIPE_OPERATOR[0]].forEach((op) =>
         suggestions.push({
           label: op,
@@ -405,11 +426,9 @@ monaco.languages.registerCompletionItemProvider('aql', {
       return { suggestions };
     }
 
-    // Check for logical operators followed by space
-    // Only look for 'and' and 'or' operators that need space after them
-    const logicalOperatorPattern = new RegExp(`\\b(${LOGICAL_OPERATORS.filter((op) => ['and', 'or'].includes(op)).join('|')})\\s+$`, 'i');
-    const logicalOperatorMatch = lineText.match(logicalOperatorPattern);
+    // Fourth priority: Check for logical operators followed by space - suggest fields
     if (logicalOperatorMatch) {
+      console.log('Logical operator followed by space detected, suggesting fields');
       const fields = await schemaManager.resolveNested(currentSchema, '');
       fields.forEach((f) =>
         suggestions.push({
@@ -418,21 +437,6 @@ monaco.languages.registerCompletionItemProvider('aql', {
           detail: f.type,
           documentation: f.examples?.join(', '),
           insertText: f.type === 'object' ? `${f.name}.` : `${f.name} `,
-          range: createRange(),
-        })
-      );
-      return { suggestions };
-    }
-
-    // Check for field name followed by space
-    const fieldSpaceMatch = lineText.match(/([a-zA-Z_][a-zA-Z0-9_]*(?:\.[a-zA-Z_][a-zA-Z0-9_]*)*)\s+$/);
-    if (fieldSpaceMatch && !logicalOperatorMatch) {
-      // Display all operators horizontally by concatenating all operator arrays
-      [...COMPARISON_OPERATORS, ...SET_OPERATORS, ...STRING_OPERATORS, ...LOGICAL_OPERATORS].forEach((op) =>
-        suggestions.push({
-          label: op,
-          kind: monaco.languages.CompletionItemKind.Operator,
-          insertText: `${op} `,
           range: createRange(),
         })
       );
