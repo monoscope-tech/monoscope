@@ -56,7 +56,7 @@ import Proto.Opentelemetry.Proto.Resource.V1.Resource_Fields qualified as PRF
 import Proto.Opentelemetry.Proto.Trace.V1.Trace qualified as PT
 import Proto.Opentelemetry.Proto.Trace.V1.Trace_Fields qualified as PTF
 import Relude hiding (ask)
-import System.Config (AuthContext)
+import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types (runBackground)
 import Utils (b64ToJson, freeTierDailyMaxEvents, nestedJsonFromDotNotation)
 
@@ -108,7 +108,7 @@ getMetricAttributeValue attribute rms = listToMaybe $ V.toList $ V.mapMaybe getR
 
 
 -- | Process a list of messages
-processList :: (Eff.Reader AuthContext :> es, DB :> es, Labeled "timefusion" DB :> es, Log :> es, IOE :> es, Time :> es, UUIDEff :> es, Ki.StructuredConcurrency :> es) => [(Text, ByteString)] -> HashMap Text Text -> Eff es [Text]
+processList :: (DB :> es, Eff.Reader AuthContext :> es, IOE :> es, Ki.StructuredConcurrency :> es, Labeled "timefusion" DB :> es, Log :> es, Time :> es, UUIDEff :> es) => [(Text, ByteString)] -> HashMap Text Text -> Eff es [Text]
 processList [] _ = pure []
 processList msgs attrs = checkpoint "processList" $ process `onException` handleException
   where
@@ -119,6 +119,7 @@ processList msgs attrs = checkpoint "processList" $ process `onException` handle
     process = do
       let msgs' = V.fromList msgs
       appCtx <- ask @AuthContext
+      Log.logAttention "processList: caught exception" (HashMap.lookup "ce-type" attrs)
       case HashMap.lookup "ce-type" attrs of
         Just "org.opentelemetry.otlp.logs.v1" -> checkpoint "processList:logs" $ do
           results <- V.forM msgs' $ \(ackId, msg) ->
@@ -728,7 +729,7 @@ runServer :: Log.Logger -> AuthContext -> IO ()
 runServer appLogger appCtx = runServerWithHandlers def config $ (services appLogger appCtx)
   where
     serverHost = "localhost"
-    serverPort = 4317
+    serverPort = appCtx.config.grpcPort
     config :: ServerConfig
     config =
       ServerConfig

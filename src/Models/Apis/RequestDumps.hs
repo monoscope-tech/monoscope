@@ -47,8 +47,10 @@ import Database.PostgreSQL.Transact (DBT)
 import Database.PostgreSQL.Transact qualified as DBT
 import Deriving.Aeson qualified as DAE
 import Effectful
+import Effectful.Log (Log)
 import Effectful.PostgreSQL.Transact.Effect (DB, dbtToEff)
 import Effectful.Time qualified as Time
+import Log qualified
 import Models.Apis.Fields.Query ()
 import Models.Projects.Projects qualified as Projects
 import NeatInterpolation (text)
@@ -431,10 +433,22 @@ getRequestDumpsForPreviousReportPeriod pid report_type = query (Query $ encodeUt
     |]
 
 
-selectLogTable :: (DB :> es, Time.Time :> es) => Projects.ProjectId -> [Section] -> Maybe UTCTime -> (Maybe UTCTime, Maybe UTCTime) -> [Text] -> Maybe Sources -> Maybe Text -> Eff es (Either Text (V.Vector (V.Vector AE.Value), [Text], Int))
+selectLogTable :: (DB :> es, Time.Time :> es, Log :> es) => Projects.ProjectId -> [Section] -> Maybe UTCTime -> (Maybe UTCTime, Maybe UTCTime) -> [Text] -> Maybe Sources -> Maybe Text -> Eff es (Either Text (V.Vector (V.Vector AE.Value), [Text], Int))
 selectLogTable pid queryAST cursorM dateRange projectedColsByUser source targetSpansM = do
   now <- Time.currentTime
   let (q, queryComponents) = queryASTToComponents ((defSqlQueryCfg pid now source targetSpansM){cursorM, dateRange, projectedColsByUser, source, targetSpansM}) queryAST
+
+  -- Debug logging for parsed query AST and generated SQL
+  Log.logTrace
+    "Query Debug Info"
+    ( AE.object
+        [ "parsed_query_ast" AE..= show queryAST
+        , "generated_sql_query" AE..= q
+        , "count_query" AE..= queryComponents.countQuery
+        , "project_id" AE..= show pid
+        ]
+    )
+
   logItems <- checkpoint (toAnnotation ("selectLogTable", q)) $ queryToValues q
   Only c <- fromMaybe (Only 0) <$> queryCount queryComponents.countQuery
   let logItemsV = V.mapMaybe valueToVector logItems

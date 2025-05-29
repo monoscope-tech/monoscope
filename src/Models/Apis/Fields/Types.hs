@@ -259,7 +259,6 @@ data FacetSummary = FacetSummary
   { id :: UUID.UUID
   , projectId :: Text
   , tableName :: Text
-  , timestamp :: UTCTime
   , facetJson :: FacetData
   }
   deriving stock (Show, Generic)

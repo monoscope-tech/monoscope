@@ -14,7 +14,7 @@ import Data.Time.Clock.POSIX (posixSecondsToUTCTime, utcTimeToPOSIXSeconds)
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity.DBT (execute, query)
 import Database.PostgreSQL.Simple.SqlQQ (sql)
-import Database.PostgreSQL.Simple.Types (Query)
+import Database.PostgreSQL.Simple.Types (Only (..), Query)
 import Effectful (Eff, (:>))
 import Effectful.PostgreSQL.Transact.Effect (DB, dbtToEff)
 import Models.Apis.Fields.Types (FacetData (..), FacetSummary (..), FacetValue (..))
@@ -50,66 +50,57 @@ generateAndSaveFacets
   -> UTCTime
   -> Eff es FacetSummary
 generateAndSaveFacets pid tableName columns maxValues timestamp = do
-  -- Truncate timestamp to hour
-  let unixTime = utcTimeToPOSIXSeconds timestamp
-      hourTruncated = fromIntegral @Int @Int64 (floor unixTime) `div` 3600 * 3600
-      hourStart = posixSecondsToUTCTime (fromIntegral hourTruncated)
-      hourEnd = addUTCTime 3600 hourStart
+  -- Calculate 24-hour window
+  let dayEnd = timestamp
+      dayStart = addUTCTime (-86400) dayEnd
 
-  -- Check if a summary already exists for this hour to avoid redundant computation
-  existingSummary <- dbtToEff $ do
-    results <-
-      query
-        [sql|
-        SELECT id, project_id, table_name, timestamp, facet_json
-        FROM apis.facet_summaries
-        WHERE project_id = ?
-          AND table_name = ?
-          AND timestamp = ?
-        LIMIT 1
-        |]
-        (pid.toText, tableName, hourStart)
-    pure $ if V.null results then Nothing else Just (V.head results)
+  -- Generate facets for the last 24 hours
+  facetMap <- do
+    values <-
+      checkpoint (toAnnotation (buildOptimizedFacetQuery tableName (length columns)))
+        $ dbtToEff
+        $ query
+          (buildOptimizedFacetQuery tableName (length columns))
+          (V.fromList columns, pid.toText, dayStart, dayEnd, maxValues)
+    pure $ processQueryResults values
 
-  -- If summary exists for this hour, return it
-  case existingSummary of
-    Just summary -> pure summary
-    Nothing -> do
-      -- Generate facets using an optimized query for all columns
-      facetMap <- do
-        let facetQuery = buildOptimizedFacetQuery tableName (length columns)
-        -- Prepare columns for the optimized query
-        values <-
-          checkpoint (toAnnotation facetQuery)
-            $ dbtToEff
-            $ query
-              facetQuery
-              (V.fromList columns, pid.toText, hourStart, hourEnd, maxValues)
-        pure $ processQueryResults values
+  -- Get existing summary ID (if any) to preserve it
+  existingIdM <-
+    dbtToEff
+      $ query
+        [sql| SELECT id FROM apis.facet_summaries
+              WHERE project_id = ? AND table_name = ?
+              LIMIT 1 |]
+        (pid.toText, tableName)
+        <&> \case
+          v
+            | V.null v -> Nothing
+            | otherwise -> Just (V.head v)
 
-      -- Create and save the new facet summary
-      facetId <- UUID.genUUID
-      let summary =
-            FacetSummary
-              { id = facetId
-              , projectId = pid.toText
-              , tableName = tableName
-              , timestamp = hourStart
-              , facetJson = FacetData facetMap
-              }
+  -- Create a summary object with either existing or new ID
+  facetId <- case existingIdM of
+    Just (Only uuid) -> pure uuid
+    Nothing -> UUID.genUUID
 
-      _ <-
-        dbtToEff
-          $ execute
-            [sql|
-          INSERT INTO apis.facet_summaries 
-            (id, project_id, table_name, timestamp, facet_json) 
-          VALUES (?, ?, ?, ?, ?)
-          ON CONFLICT (project_id, table_name, timestamp) DO NOTHING
-        |]
-            (summary.id, pid.toText, summary.tableName, summary.timestamp, summary.facetJson)
+  let summary =
+        FacetSummary
+          { id = facetId
+          , projectId = pid.toText
+          , tableName = tableName
+          , facetJson = FacetData facetMap
+          }
 
-      pure summary
+  -- Upsert the summary - replace existing data
+  _ <-
+    dbtToEff
+      $ execute
+        [sql| INSERT INTO apis.facet_summaries (id, project_id, table_name, facet_json)
+              VALUES (?, ?, ?, ?)
+              ON CONFLICT (project_id, table_name) 
+              DO UPDATE SET facet_json = EXCLUDED.facet_json |]
+        (summary.id, pid.toText, summary.tableName, summary.facetJson)
+
+  pure summary
 
 
 -- | Process query results directly into the final map format
@@ -149,6 +140,7 @@ buildOptimizedFacetQuery tableName _ =
     [sql|
       WITH columns_list AS (SELECT unnest(?::text[]) as column_name),
       filtered_data AS (
+        -- Use 24-hour window (dayStart to dayEnd) for data aggregation
         SELECT * FROM |]
       <> (" " <> fromString (toString tableName) <> " ")
       <> [sql| 
@@ -180,105 +172,46 @@ buildOptimizedFacetQuery tableName _ =
 getFacetSummary
   :: DB :> es => ProjectId -> Text -> UTCTime -> UTCTime -> Eff es (Maybe FacetSummary)
 getFacetSummary projectId tableName fromTime toTime = checkpoint "getFacetSummary" $ do
-  -- Calculate the time span in hours (rounded up)
+  -- Calculate time span in minutes for more precise scaling
   let projectIdText = projectId.toText
       timeSpanSeconds = max 1 $ floor $ diffUTCTime toTime fromTime
-      timeSpanHours = (timeSpanSeconds + 3599) `div` 3600 -- Round up to nearest hour
+      timeSpanMinutes = (timeSpanSeconds + 59) `div` 60 -- Round up to nearest minute
 
-      -- Calculate appropriate sampling to avoid excessive data
-      -- For longer time ranges, we don't need every hour's data
-      -- Strategy: Use all summaries for short ranges, sample evenly for longer ranges
-      sampleLimit =
-        if timeSpanHours <= 24
-          then timeSpanHours + 1 -- Get all hours for up to 24 hour range
-          else min 48 (timeSpanHours `div` 4 + 12) -- Sample reasonably for longer ranges
-  let qury =
-        [sql|
-      WITH in_range AS (
-        SELECT id, project_id, table_name, timestamp, facet_json
-        FROM apis.facet_summaries
-        WHERE project_id = ? AND table_name = ? AND timestamp >= ? AND timestamp <= ?
-        ORDER BY timestamp DESC LIMIT ?
-      ),
-      before_range AS (
-        SELECT id, project_id, table_name, timestamp, facet_json
-        FROM apis.facet_summaries
-        WHERE project_id = ? AND table_name = ? AND timestamp < ? AND NOT EXISTS (SELECT 1 FROM in_range)
-        ORDER BY timestamp DESC LIMIT 1
-      )
-      SELECT * FROM in_range
-      UNION ALL
-      SELECT * FROM before_range
-      |]
-
-  -- Fetch facet summaries in the time range, plus a fallback if needed
-  summariesVec <-
-    checkpoint (toAnnotation qury)
+  -- Fetch the single facet summary for this project/table
+  summaryVec <-
+    checkpoint "Fetching facet summary"
       $ dbtToEff
       $ query
-        qury
-        (projectIdText, tableName, fromTime, toTime, sampleLimit, projectIdText, tableName, fromTime)
+        [sql| SELECT id, project_id, table_name, facet_json
+              FROM apis.facet_summaries
+              WHERE project_id = ? AND table_name = ?
+              LIMIT 1 |]
+        (projectIdText, tableName)
 
-  let summaries = V.toList summariesVec
-  case summaries of
-    [] -> pure Nothing
-    [summary] -> pure $ fromSingleSummary timeSpanHours timeSpanSeconds summary
-    _ -> pure $ mergeSummariesEfficient timeSpanHours summaries
+  -- Scale facet data based on requested time range
+  pure $ case V.toList summaryVec of
+    [] -> Nothing
+    [summary] -> Just $ scaleFacetSummary summary timeSpanMinutes
+    _ -> error "Multiple facet summaries found for same project/table (should be impossible)"
   where
-    -- Handle a single summary (scale based on time span)
-    fromSingleSummary :: Int -> Int -> FacetSummary -> Maybe FacetSummary
-    fromSingleSummary timeSpanHours timeSpanSeconds summary =
-      let ratio =
-            if timeSpanHours < 1
-              then fromIntegral timeSpanSeconds / 3600.0 -- For sub-hour spans
-              else fromIntegral timeSpanHours -- For spans >= 1 hour
-          (FacetData facetMap) = summary.facetJson
-          -- Skip scaling if ratio is close to 1 to save CPU
-          scaledMap =
-            if abs (ratio - 1.0) < 0.1
-              then facetMap
-              else HM.map (map (\(FacetValue v c) -> FacetValue v (ceiling $ fromIntegral c * ratio))) facetMap
-       in Just summary{facetJson = FacetData scaledMap}
+    -- Scale facet counts based on time window
+    scaleFacetSummary :: FacetSummary -> Int -> FacetSummary
+    scaleFacetSummary summary timeSpanMinutes =
+      let
+        -- Calculate scaling factor based on minutes
+        -- Our baseline is 24 hours = 1440 minutes
+        scaleFactor = fromIntegral timeSpanMinutes / 1440.0
 
-    -- Optimized version of merge summaries
-    mergeSummariesEfficient :: Int -> [FacetSummary] -> Maybe FacetSummary
-    mergeSummariesEfficient timeSpanHours summaries =
-      summaries & viaNonEmpty \nonEmptySummaries ->
-        let
-          latestSummary = head nonEmptySummaries
-          numSummaries = length $ toList nonEmptySummaries
-          scaleFactor = max 1.0 (fromIntegral timeSpanHours / fromIntegral numSummaries)
-          mergedMap = buildMergedFacetMap (toList nonEmptySummaries) scaleFactor
-         in
-          latestSummary{facetJson = FacetData mergedMap}
+        -- Scale each facet count
+        (FacetData facetMap) = summary.facetJson
+        scaledMap =
+          if abs (scaleFactor - 1.0) < 0.01 -- Skip scaling if very close to 1
+            then facetMap
+            else HM.map (scaleFacetValues scaleFactor) facetMap
+       in
+        summary{facetJson = FacetData scaledMap}
 
-    -- Build merged facet map in a more efficient way
-    buildMergedFacetMap :: [FacetSummary] -> Double -> HM.HashMap Text [FacetValue]
-    buildMergedFacetMap summaries scaleFactor =
-      -- Step 1: Extract and combine all facet maps
-      let allMaps = map (.facetJson) summaries
-          combinedMap = foldl' combineIntoAccumulator HM.empty allMaps
-       in combinedMap
-      where
-        -- Helper to combine facet data into accumulator
-        combineIntoAccumulator :: HM.HashMap Text [FacetValue] -> FacetData -> HM.HashMap Text [FacetValue]
-        combineIntoAccumulator acc (FacetData facetMap) =
-          HM.foldrWithKey
-            ( \k values result ->
-                let
-                  -- Get existing values for this key or empty list
-                  existing = HM.lookupDefault [] k result
-                  -- Merge with new values
-                  allValues = existing ++ values
-                  -- Group by value, sum counts, scale, and sort
-                  grouped = HM.fromListWith (+) [(v, c) | FacetValue v c <- allValues]
-                  merged =
-                    grouped
-                      & HM.toList
-                      & map (\(v, c) -> FacetValue v (ceiling $ fromIntegral c * scaleFactor))
-                      & sortOn (negate . (.count))
-                 in
-                  HM.insert k merged result
-            )
-            acc
-            facetMap
+    -- Scale individual facet values, preserving at least 1 count
+    scaleFacetValues :: Double -> [FacetValue] -> [FacetValue]
+    scaleFacetValues factor =
+      map (\(FacetValue v c) -> FacetValue v (max 1 $ ceiling $ fromIntegral c * factor))
