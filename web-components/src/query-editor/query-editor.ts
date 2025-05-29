@@ -339,13 +339,14 @@ monaco.languages.registerCompletionItemProvider('aql', {
     const lineText = currentLine.substring(0, position.column - 1);
     console.log('lineText for analysis:', JSON.stringify(lineText));
 
-    // Check for nested fields after dot
+    // First priority: Check for nested fields after dot
     const dotMatch =
       lineText.match(/([a-zA-Z_][a-zA-Z0-9_]*(?:\.[a-zA-Z_][a-zA-Z0-9_]*)*)\.$/) ||
       lineText.match(/([a-zA-Z_][a-zA-Z0-9_]*(?:\.[a-zA-Z_][a-zA-Z0-9_]*)*)\.[a-zA-Z0-9_]*$/);
 
     console.log('dotMatch result:', dotMatch);
     if (dotMatch) {
+      console.log('Dot match detected, suggesting nested fields');
       const fieldPrefix = dotMatch[1];
       const nested = await schemaManager.resolveNested(currentSchema, fieldPrefix);
 
@@ -363,7 +364,7 @@ monaco.languages.registerCompletionItemProvider('aql', {
       return { suggestions };
     }
 
-    // First priority: Check for field name followed by space - show operator suggestions
+    // Second priority: Check for field name followed by space - show operator suggestions
     const fieldSpaceMatch = lineText.match(/([a-zA-Z_][a-zA-Z0-9_]*(?:\.[a-zA-Z_][a-zA-Z0-9_]*)*)\s+$/);
     const logicalOperatorPattern = new RegExp(`\\b(${LOGICAL_OPERATORS.filter((op) => ['and', 'or'].includes(op)).join('|')})\\s+$`, 'i');
     const logicalOperatorMatch = lineText.match(logicalOperatorPattern);
@@ -382,12 +383,14 @@ monaco.languages.registerCompletionItemProvider('aql', {
       return { suggestions };
     }
     
-    // Second priority: Check for operator pattern - show value suggestions
+    // Third priority: Check for operator pattern - show value suggestions
+    // Updated regex to require a space before the operator
     const operatorMatch = lineText.match(new RegExp(`([\\w\\.]+)\\s+(${ALL_OPERATORS.join('|')})\\s*$`));
     if (operatorMatch) {
       console.log('Field and operator detected, suggesting values');
       const fieldName = operatorMatch[1];
       const operator = operatorMatch[2];
+      console.log('Field:', fieldName, 'Operator:', operator);
       const values = await schemaManager.resolveValues(currentSchema, fieldName);
 
       // Special handling for 'in' and '!in' operators
@@ -411,7 +414,7 @@ monaco.languages.registerCompletionItemProvider('aql', {
       return { suggestions };
     }
 
-    // Third priority: Check for complete field-operator-value pattern - suggest logical operators
+    // Fourth priority: Check for complete field-operator-value pattern - suggest logical operators
     const afterValue = /".*"\s*$/.test(lineText) || /\d+\s*$/.test(lineText);
     if (afterValue) {
       console.log('Complete expression detected, suggesting logical operators');
@@ -426,7 +429,7 @@ monaco.languages.registerCompletionItemProvider('aql', {
       return { suggestions };
     }
 
-    // Fourth priority: Check for logical operators followed by space - suggest fields
+    // Fifth priority: Check for logical operators followed by space - suggest fields
     if (logicalOperatorMatch) {
       console.log('Logical operator followed by space detected, suggesting fields');
       const fields = await schemaManager.resolveNested(currentSchema, '');
