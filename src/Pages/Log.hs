@@ -23,6 +23,7 @@ import Effectful.Error.Static (throwError)
 import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
 import Effectful.Reader.Static qualified
 import Effectful.Time qualified as Time
+
 -- import Fmt (commaizeF, fmt) -- Using prettyPrintCount instead
 import Langchain.LLM.Core qualified as LLM
 import Langchain.LLM.OpenAI (OpenAI (..))
@@ -40,8 +41,9 @@ import Models.Telemetry.Schema qualified as Schema
 import Models.Users.Sessions qualified as Sessions
 import NeatInterpolation (text)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), currProject, pageActions, pageTitle, sessM)
+import Pages.Dashboards (visTypes)
 import Pkg.Components qualified as Components
-import Pkg.Components.Widget (WidgetAxis (..), WidgetType (WTTimeseriesLine))
+import Pkg.Components.Widget (WidgetAxis (..), WidgetType (WTStat, WTTimeseriesLine))
 import Pkg.Components.Widget qualified as Widget
 import Pkg.Parser (pSource, parseQueryToAST, toQText)
 import Relude hiding (ask)
@@ -49,7 +51,7 @@ import Servant qualified
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types
 import Text.Megaparsec (parseMaybe)
-import Utils (prettyPrintCount, faSprite_, listToIndexHashMap, lookupVecTextByKey, getServiceColors, displayTimestamp, formatUTC, freeTierLimitExceededBanner)
+import Utils (displayTimestamp, faSprite_, formatUTC, freeTierLimitExceededBanner, getServiceColors, listToIndexHashMap, lookupVecTextByKey, prettyPrintCount)
 
 
 -- $setup
@@ -211,7 +213,8 @@ renderFacets facetSummary = do
                     shouldBeUnchecked = sectionName == "Common Filters" && key `elem` commonFilterKeys
                 input_ $ [class_ "hidden peer", type_ "checkbox", name_ $ "group-" <> key] ++ [checked_ | not shouldBeUnchecked]
                 span_ [class_ "peer-checked:-rotate-90 transition-transform duration-150 flex"] $ faSprite_ "chevron-down" "regular" "w-3 h-3"
-                span_ (toHtml displayName)
+                let dotKey = T.replace "___" "." key
+                span_ [term "data-tippy-content" dotKey] (toHtml displayName)
               span_ ""
 
             div_ [class_ "pl-5 xmax-h-auto peer-has-checked:max-h-0 peer-has-checked:overflow-hidden transition-[max-height] duration-150"] do
@@ -229,6 +232,7 @@ renderFacets facetSummary = do
                           , class_ "checkbox checkbox-sm"
                           , name_ key
                           , onclick_ $ "filterByFacet('" <> T.replace "___" "." key <> "', '" <> val <> "')"
+                          , term "data-tippy-content" (T.replace "___" "." key <> " == \"" <> val <> "\"")
                           ]
 
                         span_ [class_ "facet-value truncate", term "data-tippy-content" val] do
@@ -552,11 +556,12 @@ logQueryBox_ pid currentRange source targetSpan query queryLibRecent queryLibSav
                 span_ [id_ "run-query-indicator", class_ "refresh-indicator htmx-indicator query-indicator loading loading-dots loading-sm"] ""
                 faSprite_ "magnifying-glass" "regular" "h-4 w-4 inline-block"
       div_ [class_ "flex items-between justify-between"] do
+        visualizationTabs_
         div_ [class_ "", id_ "resultTableInner"] pass
 
         div_ [class_ "flex justify-end  gap-2 "] do
           fieldset_ [class_ "fieldset"] $ label_ [class_ "label"] do
-            input_ [type_ "checkbox", class_ "checkbox checkbox-sm rounded-sm toggle-chart"] >> span_ "charts"
+            input_ [type_ "checkbox", class_ "checkbox checkbox-sm rounded-sm toggle-chart"] >> span_ "timeline"
 
 
 queryLibrary_ :: Projects.ProjectId -> V.Vector Projects.QueryLibItem -> V.Vector Projects.QueryLibItem -> Html ()
@@ -714,6 +719,15 @@ virtualTable page = do
    |]
 
 
+visualizationTabs_ :: Html ()
+visualizationTabs_ =
+  div_ [class_ "tabs tabs-box tabs-outline tabs-xs bg-gray-100 p-1 rounded-lg", id_ "visualizationTabs", role_ "tablist"] do
+    forM_ visTypes $ \(icon, label, vizType, emoji) -> label_ [class_ "tab !shadow-none !border-strokeWeak flex gap-1"] do
+      input_ $ [type_ "radio", name_ "visualization", id_ $ "viz-" <> vizType, value_ vizType] <> [checked_ | vizType == "logs"]
+      span_ [class_ "text-iconNeutral leading-none"] $ toHtml emoji -- faSprite_ icon "regular" "w-3 h-2"
+      span_ [] $ toHtml label
+
+
 apiLogsPage :: ApiLogsPageData -> Html ()
 apiLogsPage page = do
   section_ [class_ "mx-auto pt-2 px-6 gap-3.5 w-full flex flex-col h-full overflow-y-hidden pb-2 group/pg", id_ "apiLogsPage"] do
@@ -743,7 +757,7 @@ apiLogsPage page = do
     div_ [] do
       logQueryBox_ page.pid page.currentRange page.source page.targetSpans page.query page.queryLibRecent page.queryLibSaved
 
-      div_ [class_ "flex flex-row gap-4 mt-3 group-has-[.toggle-chart:checked]/pg:hidden w-full", style_ "aspect-ratio: 10 / 1;"] do
+      div_ [class_ "timeline flex flex-row gap-4 mt-3 group-has-[#viz-logs:not(:checked)]/pg:hidden group-has-[.toggle-chart:checked]/pg:hidden w-full", style_ "aspect-ratio: 10 / 1;"] do
         Widget.widget_ $ (def :: Widget.Widget){Widget.query = Just "timechart count(*)", Widget.unit = Just "rows", Widget.title = Just "All traces", Widget.hideLegend = Just True, Widget._projectId = Just page.pid, Widget.standalone = Just True, Widget.yAxis = Just (def{showOnlyMaxLabel = Just True}), Widget.allowZoom = Just True, Widget.showMarkArea = Just True}
 
         Widget.widget_
@@ -820,7 +834,56 @@ apiLogsPage page = do
                 let url = "/p/" <> page.pid.toText <> "/traces/" <> trId
                 span_ [class_ "loading loading-dots loading-md"] ""
                 div_ [hxGet_ url, hxTarget_ "#trace_expanded_view", hxSwap_ "innerHtml", hxTrigger_ "intersect one"] pass
-            virtualTable page
+
+            -- Visualization container with conditional display based on radio selection
+            div_ [class_ "hidden group-has-[#viz-logs:checked]/pg:block h-full"] do
+              virtualTable page
+
+            div_ [class_ "group-has-[#viz-logs:checked]/pg:hidden h-full"] do
+              let pid = page.pid.toText
+              script_
+                [class_ "hidden"]
+                [text| var widgetJSON = { 
+                  "id": "visualization-widget",
+                  "type": "timeseries_line", 
+                  "title": "Visualization",
+                  "hide_subtitle": false,
+                  "standalone": true,
+                  "hide_legend": false,
+                  "allow_zoom": true,
+                  "y_axis": {"show_only_max_label": true},
+                  "_project_id": "$pid",
+                  "_center_title": true
+                };
+                
+                document.addEventListener('DOMContentLoaded', function() {
+                  const updateWidget = () => {
+                    const visType = document.querySelector('input[name="visualization"]:checked').value;
+                    if (visType) {
+                      widgetJSON.type = visType;
+                    }
+                    document.getElementById('visualization-widget-container').dispatchEvent(new Event('update-widget'));
+                  };
+                  
+                  // Update visualization when tabs change
+                  document.querySelectorAll('input[name="visualization"]').forEach(radio => {
+                    radio.addEventListener('change', updateWidget);
+                  });
+                  
+                  updateWidget();
+                });
+                |]
+              div_
+                [ id_ "visualization-widget-container"
+                , class_ "h-full w-full"
+                , hxPost_ "/widget"
+                , hxTrigger_ "intersect once, update-widget"
+                , hxTarget_ "this"
+                , hxSwap_ "innerHTML"
+                , hxVals_ "js:{...widgetJSON}"
+                , hxExt_ "json-enc"
+                ]
+                ""
 
           div_ [onmousedown_ "mouseDown(event)", class_ "relative shrink-0 h-full flex items-center justify-center border-l  hover:border-strokeBrand-strong cursor-ew-resize overflow-visible"] do
             div_

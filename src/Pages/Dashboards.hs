@@ -1,4 +1,4 @@
-module Pages.Dashboards (dashboardGetH, entrypointRedirectGetH, DashboardGet (..), dashboardsGetH, DashboardsGet (..), dashboardsPostH, DashboardForm (..), dashboardWidgetPutH, dashboardWidgetReorderPatchH, WidgetReorderItem (..), dashboardDeleteH, dashboardRenamePatchH, DashboardRenameForm (..), dashboardDuplicatePostH, WidgetMoveForm (..), dashboardDuplicateWidgetPostH, dashboardWidgetExpandGetH) where
+module Pages.Dashboards (dashboardGetH, entrypointRedirectGetH, DashboardGet (..), dashboardsGetH, DashboardsGet (..), dashboardsPostH, DashboardForm (..), dashboardWidgetPutH, dashboardWidgetReorderPatchH, WidgetReorderItem (..), dashboardDeleteH, dashboardRenamePatchH, DashboardRenameForm (..), dashboardDuplicatePostH, WidgetMoveForm (..), dashboardDuplicateWidgetPostH, dashboardWidgetExpandGetH, visTypes) where
 
 import Control.Lens
 import Data.Aeson qualified as AE
@@ -136,7 +136,7 @@ dashboardPage_ pid dashId dash dashVM = do
             , data_ "reload_on_change" $ maybe "false" (T.toLower . show) var.reloadOnChange
             , value_ $ maybeToMonoid var.value
             ]
-          <> memptyIfFalse (var.multi == Just True) [data_ "mode" "select"]
+            <> memptyIfFalse (var.multi == Just True) [data_ "mode" "select"]
     script_
       [text|
   const tagifyInstances = new Map();
@@ -312,38 +312,38 @@ processWidget pid now (sinceStr, fromDStr, toDStr) allParams widgetBase = do
             let issuesVM = V.map (AnomalyList.IssueVM False now "24h") issues
             pure
               $ widget
-              & #html
-                ?~ ( renderText
-                      $ div_ [class_ "flex flex-col gap-4 h-full w-full overflow-hidden"]
-                      $ forM_ issuesVM (\x -> div_ [class_ "border border-strokeWeak rounded-2xl overflow-hidden"] $ toHtml x)
-                   )
+                & #html
+                  ?~ ( renderText
+                         $ div_ [class_ "flex flex-col gap-4 h-full w-full overflow-hidden"]
+                         $ forM_ issuesVM (\x -> div_ [class_ "border border-strokeWeak rounded-2xl overflow-hidden"] $ toHtml x)
+                     )
           Widget.WTStat -> do
             stat <- Charts.queryMetrics (Just Charts.DTFloat) (Just pid) widget.query widget.sql sinceStr fromDStr toDStr Nothing allParams
             pure
               $ widget
-              & #dataset
-                ?~ def
-                  { Widget.source = AE.Null
-                  , Widget.value = stat.dataFloat
-                  }
+                & #dataset
+                  ?~ def
+                    { Widget.source = AE.Null
+                    , Widget.value = stat.dataFloat
+                    }
           _ -> do
             metricsD <-
               Charts.queryMetrics (Just Charts.DTMetric) (Just pid) widget.query widget.sql sinceStr fromDStr toDStr Nothing allParams
             pure
               $ widget
-              & #dataset
-                ?~ Widget.WidgetDataset
-                  { source =
-                      AE.toJSON
-                        $ V.cons
-                          (AE.toJSON <$> metricsD.headers)
-                          (AE.toJSON <<$>> metricsD.dataset)
-                  , rowsPerMin = metricsD.rowsPerMin
-                  , value = Just metricsD.rowsCount
-                  , from = metricsD.from
-                  , to = metricsD.to
-                  , stats = metricsD.stats
-                  }
+                & #dataset
+                  ?~ Widget.WidgetDataset
+                    { source =
+                        AE.toJSON
+                          $ V.cons
+                            (AE.toJSON <$> metricsD.headers)
+                            (AE.toJSON <<$>> metricsD.dataset)
+                    , rowsPerMin = metricsD.rowsPerMin
+                    , value = Just metricsD.rowsCount
+                    , from = metricsD.from
+                    , to = metricsD.to
+                    , stats = metricsD.stats
+                    }
       else pure widget
   -- Recursively process child widgets, if any.
   case widget'.children of
@@ -627,32 +627,22 @@ widgetViewerEditor_ pid dashboardIdM currentRange existingWidgetM activeTab = di
         span_ [class_ "inline-block rounded-full bg-fillWeak px-3 py-1 leading-none"] "1"
         strong_ [class_ "text-lg font-semibold"] "Select your Visualization"
       div_ [class_ "grid grid-cols-12 gap-3 px-5"]
-        $ let visTypes :: [(Text, Text, Text)]
-              visTypes =
-                [ ("bar-chart", "Bar", "timeseries")
-                , ("duo-line-chart", "Line", "timeseries_line")
-                , ("duo-pie-chart", "Pie", "pie_chart")
-                , ("duo-scatter-chart", "Scatter", "distribution")
-                , ("hashtag", "Number", "stat")
-                , ("guage", "Guage", "")
-                , ("text", "Text", "")
-                ]
-           in iforM_ visTypes \idx (icon, title, widgetType) ->
-                label_
-                  [ class_ "col-span-1 p-4 aspect-square gap-3 flex flex-col border border-strokeWeak rounded-lg items-center justify-center has-checked:border-strokeBrand-strong has-checked:bg-fillBrand-weak"
-                  , data_ "widgetType" widgetType
-                  , [__| on click set widgetJSON.type to @data-widgetType then trigger 'update-widget' on #widget-preview |]
+        $ iforM_ visTypes \idx (icon, title, widgetType, _) ->
+          label_
+            [ class_ "col-span-1 p-4 aspect-square gap-3 flex flex-col border border-strokeWeak rounded-lg items-center justify-center has-checked:border-strokeBrand-strong has-checked:bg-fillBrand-weak"
+            , data_ "widgetType" widgetType
+            , [__| on click set widgetJSON.type to @data-widgetType then trigger 'update-widget' on #widget-preview |]
+            ]
+            do
+              input_
+                ( [ class_ "hidden"
+                  , name_ "widgetType"
+                  , type_ "radio"
                   ]
-                  do
-                    input_
-                      ( [ class_ "hidden"
-                        , name_ "widgetType"
-                        , type_ "radio"
-                        ]
-                          <> if idx == 0 then [checked_] else mempty
-                      )
-                    span_ [class_ "block"] $ faSprite_ icon "regular" "w-4 h-4"
-                    span_ [class_ "text-textWeak block leading-none"] $ toHtml title
+                    <> if idx == 0 then [checked_] else mempty
+                )
+              span_ [class_ "block"] $ faSprite_ icon "regular" "w-4 h-4"
+              span_ [class_ "text-textWeak block leading-none"] $ toHtml title
 
       div_ [class_ "space-y-7"] do
         div_ [class_ "flex gap-3"] do
@@ -678,6 +668,19 @@ widgetViewerEditor_ pid dashboardIdM currentRange existingWidgetM activeTab = di
             , value_ $ fromMaybe "" widgetToUse.title
             , [__| on change set widgetJSON.title to my value then trigger 'update-widget' on #widget-preview |]
             ]
+
+
+visTypes :: [(Text, Text, Text, Text)]
+visTypes =
+  [ ("list-view", "Logs", "logs", "📋")
+  , ("bar-chart", "Bar", "timeseries", "📊")
+  , ("duo-line-chart", "Line", "timeseries_line", "📈")
+  -- , ("duo-pie-chart", "Pie", "pie_chart", "🥧")
+  -- , ("duo-scatter-chart", "Scatter", "distribution", "📉")
+  -- , ("hashtag", "Number", "stat", "🔢")
+  -- , ("guage", "Guage", "", "🧮")
+  -- , ("text", "Text", "", "📝")
+  ]
 
 
 -- | Backward compatibility wrapper for the new widget editor
