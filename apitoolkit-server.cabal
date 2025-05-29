@@ -1,6 +1,6 @@
 cabal-version: 2.0
 
--- This file has been generated from package.yaml by hpack version 0.38.0.
+-- This file has been generated from package.yaml by hpack version 0.38.1.
 --
 -- see: https://github.com/sol/hpack
 
@@ -75,10 +75,6 @@ library
       Network.Wai.Middleware.Heartbeat
       Opentelemetry.OtlpMockValues
       Opentelemetry.OtlpServer
-      Opentelemetry.OtlpServer_BACKUP_97230
-      Opentelemetry.OtlpServer_BASE_97230
-      Opentelemetry.OtlpServer_LOCAL_97230
-      Opentelemetry.OtlpServer_REMOTE_97230
       Opentelemetry.OtlpServerSpec
       Pages.Anomalies.AnomalyList
       Pages.Anomalies.AnomalyListSpec

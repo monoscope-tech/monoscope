@@ -830,22 +830,6 @@ export class QueryEditorComponent extends LitElement {
     this.handleAddQuery(newQuery, true);
   }
 
-  private updateVisualizationTab(): void {
-    const query = this.editor?.getValue().toLowerCase() || '';
-    let selectedTab = 'logs';
-
-    if (/\|\s*timechart\s+/i.test(query)) {
-      selectedTab = 'timeseries';
-    } else if (/\|\s*stats\s+/i.test(query)) {
-      selectedTab = 'table';
-    }
-
-    const radioButton = document.querySelector(`input[name="visualization"][value="${selectedTab}"]`) as HTMLInputElement;
-    if (radioButton) {
-      radioButton.checked = true;
-    }
-  }
-
   public handleAddQuery(queryFragment: string, replace: boolean = false): void {
     if (!this.editor) return;
 
@@ -905,7 +889,6 @@ export class QueryEditorComponent extends LitElement {
 
       // Update placeholder immediately
       this.updatePlaceholder();
-      this.updateVisualizationTab();
     } finally {
       setTimeout(() => {
         this.editor.focus = originalFocus.bind(this.editor);
@@ -1070,7 +1053,6 @@ export class QueryEditorComponent extends LitElement {
           this.currentQuery = model.getLineContent(position.lineNumber);
           this.showSuggestions = true;
           this.updatePlaceholder();
-          this.updateVisualizationTab();
 
           this.debouncedUpdateQuery(model.getValue());
           this.debouncedTriggerSuggestions();
