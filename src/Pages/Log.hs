@@ -81,24 +81,107 @@ renderFacets facetSummary = do
         "DELETE" -> "bg-red-500"
         _ -> "bg-purple-500"
 
-      -- Define display info for different facet types
-      facetDisplays :: [(Text, Text, (Text -> Text))]
-      facetDisplays =
-        [ ("level", "Log Level", levelColorFn)
-        , ("kind", "Span Kind", const "")
-        , ("name", "Operation name", const "")
-        , ("attributes___http___response___status_code", "Status Code", statusColorFn)
-        , ("attributes___http___request___method", "HTTP Method", methodColorFn)
-        , ("resource___service___name", "Service", const "")
-        , ("attributes___error___type", "Error Type", const "bg-red-500")
-        ]
-
       levelColorFn val = case val of
         "ERROR" -> "bg-red-500"
         "WARN" -> "bg-yellow-500"
         "INFO" -> "bg-blue-500"
         "DEBUG" -> "bg-gray-500"
         _ -> "bg-gray-400"
+
+      -- Group facet fields by category
+      -- Define mapping of field keys to display names and color functions
+
+      -- Root level facets (displayed at the top)
+      rootFacets :: [(Text, Text, (Text -> Text))]
+      rootFacets =
+        [ ("level", "Log Level", levelColorFn)
+        , ("kind", "Kind", const "")
+        , ("name", "Operation Name", const "")
+        , ("status_code", "Status Code", statusColorFn)
+        , ("resource___service___name", "Service", const "")
+        , ("resource___service___version", "Service Version", const "")
+        , ("attributes___http___request___method", "HTTP Method", methodColorFn)
+        , ("attributes___http___response___status_code", "HTTP Status", statusColorFn)
+        , ("attributes___error___type", "Error Type", const "bg-red-500")
+        ]
+
+      -- Grouped facets for better organization
+      facetGroups :: [(Text, [(Text, Text, (Text -> Text))])]
+      facetGroups =
+        [
+          ( "HTTP"
+          ,
+            [ ("attributes___http___request___method_original", "Original Method", methodColorFn)
+            , ("attributes___http___request___resend_count", "Resend Count", const "")
+            , ("attributes___http___request___body___size", "Request Body Size", const "")
+            , ("attributes___url___path", "URL Path", const "")
+            , ("attributes___url___scheme", "URL Scheme", const "")
+            , ("attributes___url___full", "Full URL", const "")
+            , ("attributes___url___fragment", "URL Fragment", const "")
+            , ("attributes___url___query", "URL Query", const "")
+            , ("attributes___user_agent___original", "User Agent", const "")
+            ]
+          )
+        ,
+          ( "Network"
+          ,
+            [ ("attributes___network___protocol___name", "Protocol Name", const "")
+            , ("attributes___network___protocol___version", "Protocol Version", const "")
+            , ("attributes___network___transport", "Transport", const "")
+            , ("attributes___network___type", "Network Type", const "")
+            , ("attributes___client___address", "Client Address", const "")
+            , ("attributes___server___address", "Server Address", const "")
+            ]
+          )
+        ,
+          ( "User & Session"
+          ,
+            [ ("attributes___user___id", "User ID", const "")
+            , ("attributes___user___email", "User Email", const "")
+            , ("attributes___user___name", "Username", const "")
+            , ("attributes___user___full_name", "Full Name", const "")
+            , ("attributes___session___id", "Session ID", const "")
+            , ("attributes___session___previous___id", "Previous Session", const "")
+            ]
+          )
+        ,
+          ( "Database"
+          ,
+            [ ("attributes___db___system___name", "Database System", const "")
+            , ("attributes___db___collection___name", "Collection Name", const "")
+            , ("attributes___db___namespace", "Database Namespace", const "")
+            , ("attributes___db___operation___name", "DB Operation", const "")
+            , ("attributes___db___response___status_code", "DB Status Code", const "")
+            , ("attributes___db___operation___batch___size", "Batch Size", const "")
+            ]
+          )
+        ,
+          ( "Errors & Exceptions"
+          ,
+            [ ("attributes___error___type", "Error Type", const "bg-red-500")
+            , ("attributes___exception___type", "Exception Type", const "bg-red-500")
+            , ("attributes___exception___message", "Exception Message", const "")
+            ]
+          )
+        ,
+          ( "Resource"
+          ,
+            [ ("resource___service___instance___id", "Service Instance ID", const "")
+            , ("resource___service___namespace", "Service Namespace", const "")
+            , ("resource___telemetry___sdk___language", "SDK Language", const "")
+            , ("resource___telemetry___sdk___name", "SDK Name", const "")
+            , ("resource___telemetry___sdk___version", "SDK Version", const "")
+            ]
+          )
+        ,
+          ( "Severity"
+          ,
+            [ ("severity___severity_text", "Severity Text", levelColorFn)
+            , ("severity___severity_number", "Severity Number", const "")
+            , ("status_message", "Status Message", const "")
+            ]
+          )
+        ]
 
   -- Add JS for filtering
   script_
@@ -108,35 +191,40 @@ renderFacets facetSummary = do
     }
   |]
 
-  -- Render each facet group
-  forM_ facetDisplays $ \(key, displayName, colorFn) -> do
-    whenJust (HM.lookup key facetMap) $ \values -> do
-      when (not $ null values) $ do
-        div_ [class_ "facet-section flex flex-col gap-1.5 py-3 transition-all duration-200 hover:bg-fillWeaker rounded-lg group"] do
-          div_
-            [ class_ "flex justify-between items-center text-slate-950 pb-2 cursor-pointer"
-            , [__|on click toggle .collapsed on me.parentElement|]
-            ]
-            $ span_ [class_ "facet-title"] (toHtml displayName)
-            >> faSprite_ "chevron-down" "regular" "w-3 h-3 transition-transform duration-200 group-[.collapsed]:rotate-180"
+  renderFacetSection "Common Filters" rootFacets facetMap False
 
-          -- Wrap facet values in a collapsible container with animation
-          div_ [class_ "facet-content overflow-hidden transition-all duration-300 ease-in-out max-h-96 opacity-100 transition-opacity duration-150 group-[.collapsed]:max-h-0 group-[.collapsed]:opacity-0 group-[.collapsed]:py-0"] do
-            -- Render each facet value
-            forM_ values \(FacetValue val count) -> do
-              div_ [class_ "facet-item flex justify-between items-center py-1 hover:bg-fillWeak transition-colors duration-150 rounded-md px-1"] do
-                label_ [class_ "flex gap-1.5 items-center text-slate-950 cursor-pointer flex-1"] $ do
+  forM_ facetGroups $ \(groupName, facetDisplays) -> renderFacetSection groupName facetDisplays facetMap True
+  where
+    renderFacetSection :: Text -> [(Text, Text, (Text -> Text))] -> HM.HashMap Text [FacetValue] -> Bool -> Html ()
+    renderFacetSection sectionName facetDisplays facetMap collapsed = div_ do
+      label_ [class_ "p-3 bg-fillWeak rounded-lg cursor-pointer flex gap-3 items-center peer"] do
+        input_ $ [class_ "hidden peer", type_ "checkbox", name_ $ "section-" <> sectionName] ++ [checked_ | collapsed]
+        span_ [class_ "peer-checked:-rotate-90 transition-transform duration-150 flex"] $ faSprite_ "chevron-down" "regular" "w-3 h-3"
+        toHtml sectionName
+      div_ [class_ "xmax-h-auto divide-y peer-has-checked:max-h-0 peer-has-checked:overflow-hidden transition-[max-height] duration-150"] $ forM_ facetDisplays \(key, displayName, colorFn) ->
+        whenJust (HM.lookup key facetMap) \values ->
+          div_ [class_ "facet-section flex flex-col transition-all duration-150 rounded-lg group"] do
+            label_ [class_ "p-3 flex justify-between items-center cursor-pointer peer"] do
+              div_ [class_ "gap-3 flex items-center"] do
+                input_ [class_ "hidden peer", type_ "checkbox", name_ $ "group-" <> key]
+                span_ [class_ "peer-checked:-rotate-90 transition-transform duration-150 flex"] $ faSprite_ "chevron-down" "regular" "w-3 h-3"
+                span_ (toHtml displayName)
+              span_ ""
+
+            div_ [class_ "pl-5 xmax-h-auto peer-has-checked:max-h-0 peer-has-checked:overflow-hidden transition-[max-height] duration-150"] do
+              forM_ values \(FacetValue val count) -> div_ [class_ "facet-item flex justify-between items-center hover:bg-fillWeak transition-colors duration-150 rounded-md p-1 last:pb-3"] do
+                label_ [class_ "flex gap-3 items-center cursor-pointer flex-1 min-w-0 overflow-hidden"] do
                   input_
                     [ type_ "checkbox"
                     , class_ "checkbox checkbox-sm"
-                    , -- Convert key format for filter (from db___ format to proper dot notation)
-                      onclick_ $ "filterByFacet('" <> T.replace "___" "." key <> "', '" <> val <> "')"
+                    , name_ key
+                    , onclick_ $ "filterByFacet('" <> T.replace "___" "." key <> "', '" <> val <> "')"
                     ]
-                  let colorClass = colorFn val
-                  when (not $ T.null colorClass)
-                    $ span_ [class_ $ colorClass <> " shrink-0 w-1 h-5 rounded-sm"] " "
-                  span_ [class_ "facet-value truncate max-w-[80%]", term "data-tippy-content" val] $ toHtml val
-                span_ [class_ "facet-count text-slate-500 shrink-0 ml-1"] $ toHtml $ show count
+                  span_ [class_ "facet-value truncate", term "data-tippy-content" val] do
+                    let colorClass = colorFn val
+                    when (not $ T.null colorClass) $ span_ [class_ $ colorClass <> " shrink-0 w-1 h-5 rounded-sm mr-1.5"] " "
+                    toHtml val
+                span_ [class_ "facet-count text-textWeak ml-1"] $ toHtml $ show count
 
 
 keepNonEmpty :: Maybe Text -> Maybe Text
@@ -670,22 +758,24 @@ apiLogsPage page = do
 
     div_ [class_ "flex h-full gap-3.5 overflow-y-hidden"] do
       -- FACETS
-      div_ [class_ "w-1/6 text-sm shrink-0 flex flex-col gap-2 p-2 transition-all duration-500 ease-out opacity-100 delay-[0ms] group-has-[.toggle-filters:checked]/pg:duration-300 group-has-[.toggle-filters:checked]/pg:opacity-0 group-has-[.toggle-filters:checked]/pg:w-0 group-has-[.toggle-filters:checked]/pg:p-0 group-has-[.toggle-filters:checked]/pg:overflow-hidden"] do
-        input_
-          [ placeholder_ "Search facets..."
-          , class_ "rounded-lg px-3 py-1 border border-strokeStrong"
-          , term "data-filterParent" "facets-container"
-          , [__| on keyup 
-                if the event's key is 'Escape' 
-                  set my value to '' 
-                  trigger keyup 
-                else 
-                  show <div.facet-section/> in #{@data-filterParent} when its textContent.toLowerCase() contains my value.toLowerCase()
-                  show <div.facet-item/> in #{@data-filterParent} when its textContent.toLowerCase() contains my value.toLowerCase()
-              |]
-          ]
-        div_ [class_ "divide-y gap-3 overflow-y-scroll h-full", id_ "facets-container"] do
-          whenJust page.facets renderFacets
+      div_ [class_ "w-80 text-sm shrink-0 flex flex-col h-full overflow-y-scroll gap-2 pr-3 transition-all duration-500 ease-out opacity-100 delay-[0ms] group-has-[.toggle-filters:checked]/pg:duration-300 group-has-[.toggle-filters:checked]/pg:opacity-0 group-has-[.toggle-filters:checked]/pg:w-0 group-has-[.toggle-filters:checked]/pg:p-0 group-has-[.toggle-filters:checked]/pg:overflow-hidden border-r border-r-strokeWeak"] do
+        div_ [class_ "sticky top-0 z-10 bg-bgBase relative mb-2"] do
+          span_ [class_ "absolute inset-y-0 left-3 flex items-center", Aria.hidden_ "true"]
+            $ faSprite_ "magnifying-glass" "regular" "w-4 h-4 text-iconNeutral"
+          input_
+            [ placeholder_ "Search facets..."
+            , class_ "rounded-lg pl-10 pr-3 py-1.5 border border-strokeStrong w-full"
+            , term "data-filterParent" "facets-container"
+            , [__| on keyup 
+                    if the event's key is 'Escape' 
+                      set my value to '' then trigger keyup 
+                    else 
+                      show <div.facet-section/> in #{@data-filterParent} when its textContent.toLowerCase() contains my value.toLowerCase()
+                      show <div.facet-item/> in #{@data-filterParent} when its textContent.toLowerCase() contains my value.toLowerCase()
+                      show <div.facet-group/> in #{@data-filterParent}
+                  |]
+            ]
+        whenJust page.facets renderFacets
 
       div_ [class_ "grow flex-1 h-full space-y-1.5 overflow-y-hidden"] do
         div_ [class_ "flex w-full relative h-full", id_ "logs_section_container"] do
@@ -698,7 +788,7 @@ apiLogsPage page = do
                 span_ [class_ "hidden group-has-[.toggle-filters:checked]/pg:block"] "Show"
                 span_ [class_ "group-has-[.toggle-filters:checked]/pg:hidden"] "Hide"
                 "filters"
-                input_ [type_ "checkbox", class_ "toggle-filters hidden", checked_]
+                input_ [type_ "checkbox", class_ "toggle-filters hidden"]
               span_ [class_ "text-slate-200"] "|"
               div_ [class_ ""] $ span_ [class_ "text-slate-950"] (toHtml @Text $ fmt $ commaizeF page.resultCount) >> span_ [class_ "text-slate-600"] (toHtml (" rows found"))
             div_ [class_ $ "absolute top-0 right-0  w-full h-full overflow-scroll c-scroll z-50 bg-white transition-all duration-100 " <> if showTrace then "" else "hidden", id_ "trace_expanded_view"] do
@@ -830,11 +920,11 @@ aiSearchH _pid requestBody = do
               if "Please provide a query"
                 `T.isInfixOf` cleanedResponse
                 || "I need more"
-                `T.isInfixOf` cleanedResponse
+                  `T.isInfixOf` cleanedResponse
                 || "Could you please"
-                `T.isInfixOf` cleanedResponse
+                  `T.isInfixOf` cleanedResponse
                 || T.length cleanedResponse
-                < 3
+                  < 3
                 then pure $ Left "INVALID_QUERY_ERROR"
                 else pure $ Right cleanedResponse
 

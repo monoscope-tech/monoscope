@@ -10,7 +10,6 @@ import Data.Effectful.UUID qualified as UUID
 import Data.HashMap.Strict qualified as HM
 import Data.Text qualified as T
 import Data.Time (UTCTime, addUTCTime, diffUTCTime)
-import Data.Time.Clock.POSIX (posixSecondsToUTCTime, utcTimeToPOSIXSeconds)
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity.DBT (execute, query)
 import Database.PostgreSQL.Simple.SqlQQ (sql)
@@ -23,20 +22,71 @@ import Relude
 
 
 -- | Centralized list of facet columns for OTLP data
+-- | Organized into groups for better UI navigation
 facetColumns :: [Text]
 facetColumns =
+  -- Root level/commonly used facets (always shown at top level)
   [ "name"
   , "resource___service___name"
   , "resource___service___version"
-  , "attributes___http___request___method"
-  , "attributes___http___response___status_code"
-  , "attributes___db___system___name"
-  , "attributes___error___type"
-  , "attributes___user___id"
-  , "attributes___session___id"
-  , "level"
   , "kind"
   , "status_code"
+  , "level"
+  , "attributes___http___request___method"
+  , "attributes___http___response___status_code"
+  , "attributes___error___type"
+  
+  -- Service & Resource attributes
+  , "resource___service___instance___id"
+  , "resource___service___namespace"
+  , "resource___telemetry___sdk___language"
+  , "resource___telemetry___sdk___name"
+  , "resource___telemetry___sdk___version"
+  
+  -- HTTP related
+  , "attributes___http___request___method_original"
+  , "attributes___http___request___resend_count"
+  , "attributes___http___request___body___size"
+  , "attributes___url___path"
+  , "attributes___url___scheme"
+  , "attributes___url___full"
+  , "attributes___url___fragment"
+  , "attributes___url___query"
+  , "attributes___user_agent___original"
+  
+  -- Network related
+  , "attributes___network___protocol___name"
+  , "attributes___network___protocol___version"
+  , "attributes___network___transport"
+  , "attributes___network___type"
+  , "attributes___client___address"
+  , "attributes___server___address"
+  
+  -- User & Session information
+  , "attributes___user___id"
+  , "attributes___user___email"
+  , "attributes___user___name"
+  , "attributes___user___full_name"
+  , "attributes___session___id"
+  , "attributes___session___previous___id"
+  
+  -- Database related
+  , "attributes___db___system___name"
+  , "attributes___db___collection___name"
+  , "attributes___db___namespace"
+  , "attributes___db___operation___name"
+  , "attributes___db___response___status_code"
+  , "attributes___db___operation___batch___size"
+  
+  -- Error & Exception related
+  , "attributes___error___type"
+  , "attributes___exception___type"
+  , "attributes___exception___message"
+  
+  -- Severity & Status
+  , "severity___severity_text"
+  , "severity___severity_number"
+  , "status_message"
   ]
 
 
