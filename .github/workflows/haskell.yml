@@ -43,6 +43,11 @@ jobs:
       - run: npm install
       - run: npx tailwindcss  -i ./static/public/assets/css/tailwind.css -o ./static/public/assets/css/tailwind.min.css
       # - run: npx postcss-cli ./static/public/assets/css/tailwind.css -o ./static/public/assets/css/tailwind.min.css
+      - name: Build web-components
+        run: |
+          cd web-components
+          npm install
+          npm run build
 
       - run: |
           make prepare-rust-interop

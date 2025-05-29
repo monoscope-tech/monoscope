@@ -232,6 +232,7 @@ renderFacets facetSummary = do
                           , class_ "checkbox checkbox-sm"
                           , name_ key
                           , onclick_ $ "filterByFacet('" <> T.replace "___" "." key <> "', '" <> val <> "')"
+                          , term "data-tippy-content" (T.replace "___" "." key <> " == \"" <> val <> "\"")
                           ]
 
                         span_ [class_ "facet-value truncate", term "data-tippy-content" val] do
