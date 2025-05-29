@@ -187,7 +187,7 @@ renderFacets facetSummary = do
   script_
     [text|
     function filterByFacet(field, value) {
-      document.getElementById("filterElement").toggleSubQuery(field + ' == "' + value + '"');
+      document.getElementById("filterElement").handleAddQuery(field + ' == "' + value + '"');
     }
   |]
 
@@ -206,25 +206,49 @@ renderFacets facetSummary = do
           div_ [class_ "facet-section flex flex-col transition-all duration-150 rounded-lg group"] do
             label_ [class_ "p-3 flex justify-between items-center cursor-pointer peer"] do
               div_ [class_ "gap-3 flex items-center"] do
-                input_ [class_ "hidden peer", type_ "checkbox", name_ $ "group-" <> key]
+                -- Check if this facet's checkboxes should be unchecked by default (first 4 in Common Filters)
+                let commonFilterKeys = ["level", "kind", "name", "status_code"]
+                    shouldBeUnchecked = sectionName == "Common Filters" && key `elem` commonFilterKeys
+                input_ $ [class_ "hidden peer", type_ "checkbox", name_ $ "group-" <> key] ++ [checked_ | not shouldBeUnchecked]
                 span_ [class_ "peer-checked:-rotate-90 transition-transform duration-150 flex"] $ faSprite_ "chevron-down" "regular" "w-3 h-3"
                 span_ (toHtml displayName)
               span_ ""
 
             div_ [class_ "pl-5 xmax-h-auto peer-has-checked:max-h-0 peer-has-checked:overflow-hidden transition-[max-height] duration-150"] do
-              forM_ values \(FacetValue val count) -> div_ [class_ "facet-item flex justify-between items-center hover:bg-fillWeak transition-colors duration-150 rounded-md p-1 last:pb-3"] do
-                label_ [class_ "flex gap-3 items-center cursor-pointer flex-1 min-w-0 overflow-hidden"] do
-                  input_
-                    [ type_ "checkbox"
-                    , class_ "checkbox checkbox-sm"
-                    , name_ key
-                    , onclick_ $ "filterByFacet('" <> T.replace "___" "." key <> "', '" <> val <> "')"
-                    ]
-                  span_ [class_ "facet-value truncate", term "data-tippy-content" val] do
-                    let colorClass = colorFn val
-                    when (not $ T.null colorClass) $ span_ [class_ $ colorClass <> " shrink-0 w-1 h-5 rounded-sm mr-1.5"] " "
-                    toHtml val
-                span_ [class_ "facet-count text-textWeak ml-1"] $ toHtml $ show count
+              -- Prepare value lists and add toggle when needed
+              let valuesWithIndices = zip [0 ..] values
+                  (visibleValues, hiddenValues) = splitAt 5 valuesWithIndices
+                  hiddenCount = length hiddenValues
+
+                  -- Helper function to render a facet value item
+                  renderFacetValue (FacetValue val count) =
+                    div_ [class_ "facet-item flex justify-between items-center hover:bg-fillWeak transition-colors duration-150 rounded-md p-1 last:pb-3"] do
+                      label_ [class_ "flex gap-3 items-center cursor-pointer flex-1 min-w-0 overflow-hidden"] do
+                        input_
+                          [ type_ "checkbox"
+                          , class_ "checkbox checkbox-sm"
+                          , name_ key
+                          , onclick_ $ "filterByFacet('" <> T.replace "___" "." key <> "', '" <> val <> "')"
+                          ]
+
+                        span_ [class_ "facet-value truncate", term "data-tippy-content" val] do
+                          let colorClass = colorFn val
+                          when (not $ T.null colorClass) $ span_ [class_ $ colorClass <> " shrink-0 w-1 h-5 rounded-sm mr-1.5"] " "
+                          toHtml val
+                      span_ [class_ "facet-count text-textWeak ml-1"] $ toHtml $ show count
+
+              div_ [class_ "values-container"] do
+                forM_ visibleValues \(_, value) -> renderFacetValue value
+                when (hiddenCount > 0) do
+                  input_ [type_ "checkbox", class_ "hidden peer/more", id_ $ "more-toggle-" <> key]
+                  div_ [class_ "hidden peer-checked/more:block"]
+                    $ forM_ hiddenValues \(_, value) -> renderFacetValue value
+
+                  label_ [class_ "text-textBrand px-3 py-3 cursor-pointer hover:underline peer-checked/more:hidden flex items-center gap-1", Lucid.for_ $ "more-toggle-" <> key] do
+                    toHtml $ "+ More (" <> show hiddenCount <> ")"
+
+                  label_ [class_ "text-textBrand px-3 py-3 cursor-pointer hover:underline hidden peer-checked/more:flex items-center gap-1", Lucid.for_ $ "more-toggle-" <> key] do
+                    toHtml $ "- Less (" <> show hiddenCount <> ")"
 
 
 keepNonEmpty :: Maybe Text -> Maybe Text
