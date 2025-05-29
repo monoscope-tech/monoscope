@@ -196,7 +196,7 @@ renderFacets facetSummary = do
   forM_ facetGroups $ \(groupName, facetDisplays) -> renderFacetSection groupName facetDisplays facetMap True
   where
     renderFacetSection :: Text -> [(Text, Text, (Text -> Text))] -> HM.HashMap Text [FacetValue] -> Bool -> Html ()
-    renderFacetSection sectionName facetDisplays facetMap collapsed = div_ do
+    renderFacetSection sectionName facetDisplays facetMap collapsed = div_ [class_ "facet-section-group"] do
       label_ [class_ "p-3 bg-fillWeak rounded-lg cursor-pointer flex gap-3 items-center peer"] do
         input_ $ [class_ "hidden peer", type_ "checkbox", name_ $ "section-" <> sectionName] ++ [checked_ | collapsed]
         span_ [class_ "peer-checked:-rotate-90 transition-transform duration-150 flex"] $ faSprite_ "chevron-down" "regular" "w-3 h-3"
@@ -782,7 +782,7 @@ apiLogsPage page = do
 
     div_ [class_ "flex h-full gap-3.5 overflow-y-hidden"] do
       -- FACETS
-      div_ [class_ "w-80 text-sm shrink-0 flex flex-col h-full overflow-y-scroll gap-2 pr-3 transition-all duration-500 ease-out opacity-100 delay-[0ms] group-has-[.toggle-filters:checked]/pg:duration-300 group-has-[.toggle-filters:checked]/pg:opacity-0 group-has-[.toggle-filters:checked]/pg:w-0 group-has-[.toggle-filters:checked]/pg:p-0 group-has-[.toggle-filters:checked]/pg:overflow-hidden border-r border-r-strokeWeak"] do
+      div_ [class_ "w-80 text-sm shrink-0 flex flex-col h-full overflow-y-scroll gap-2 pr-3 transition-all duration-500 ease-out opacity-100 delay-[0ms] group-has-[.toggle-filters:checked]/pg:duration-300 group-has-[.toggle-filters:checked]/pg:opacity-0 group-has-[.toggle-filters:checked]/pg:w-0 group-has-[.toggle-filters:checked]/pg:p-0 group-has-[.toggle-filters:checked]/pg:overflow-hidden border-r border-r-strokeWeak", id_ "facets-container"] do
         div_ [class_ "sticky top-0 z-10 bg-bgBase relative mb-2"] do
           span_ [class_ "absolute inset-y-0 left-3 flex items-center", Aria.hidden_ "true"]
             $ faSprite_ "magnifying-glass" "regular" "w-4 h-4 text-iconNeutral"
@@ -794,9 +794,9 @@ apiLogsPage page = do
                     if the event's key is 'Escape' 
                       set my value to '' then trigger keyup 
                     else 
+                      show <div.facet-section-group/> in #{@data-filterParent} when its textContent.toLowerCase() contains my value.toLowerCase()
                       show <div.facet-section/> in #{@data-filterParent} when its textContent.toLowerCase() contains my value.toLowerCase()
-                      show <div.facet-item/> in #{@data-filterParent} when its textContent.toLowerCase() contains my value.toLowerCase()
-                      show <div.facet-group/> in #{@data-filterParent}
+                      show <div.facet-value/> in #{@data-filterParent} when its textContent.toLowerCase() contains my value.toLowerCase()
                   |]
             ]
         whenJust page.facets renderFacets
