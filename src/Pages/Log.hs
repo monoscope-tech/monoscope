@@ -193,6 +193,7 @@ renderFacets facetSummary = do
     }
   |]
 
+
   renderFacetSection "Common Filters" rootFacets facetMap False
 
   forM_ facetGroups $ \(groupName, facetDisplays) -> renderFacetSection groupName facetDisplays facetMap True
@@ -253,6 +254,7 @@ renderFacets facetSummary = do
 
                   label_ [class_ "text-textBrand px-3 py-3 cursor-pointer hover:underline hidden peer-checked/more:flex items-center gap-1", Lucid.for_ $ "more-toggle-" <> key] do
                     toHtml $ "- Less (" <> prettyPrintCount hiddenCount <> ")"
+
 
 
 keepNonEmpty :: Maybe Text -> Maybe Text

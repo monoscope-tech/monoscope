@@ -28,7 +28,12 @@ jobs:
           enable-stack: true
           stack-version: 'latest'
       - name: Install OpenSSL, protoc and snappy
-        run: sudo apt-get update && sudo apt-get install -y libssl-dev librdkafka-dev libgrpc-dev>=1.55 protobuf-compiler libsnappy-dev # or "brew install openssl" for macOS
+        run:  sudo apt-get update && sudo apt-get install -y libssl-dev librdkafka-dev libgrpc-dev>=1.55 protobuf-compiler libsnappy-dev gnupg postgresql-common apt-transport-https lsb-release wget # or "brew install openssl" for macOS
+      - name : Timescaledb
+        run : |
+          sudo apt install postgresql-16
+          sudo apt install  postgresql-client-16
+          stack install tmp-postgres
       - name: Set OpenSSL Paths
         run: |
           export OPENSSL_INCLUDE_DIR=$(pkg-config --variable=includedir openssl)
@@ -54,5 +59,9 @@ jobs:
           sudo cp rust-interop/target/release/libCrust_interop.so /usr/lib
           sudo cp rust-interop/target/release/libCrust_interop.so /usr/lib/librust_interop.so
       - run: stack --no-terminal build --dependencies-only
-      - run: stack install --local-bin-path=. --ghc-options "-O0"
-      - run: stack test
+
+      - run: stack install --local-bin-path=.  --ghc-options "-O0"
+      - run: |
+         export PATH=$PATH:/usr/lib/postgresql/16/bin
+         make test
+

@@ -1,4 +1,4 @@
-module Pkg.Parser.Expr (pSubject, pExpr, Subject (..), Values (..), Expr (..)) where
+module Pkg.Parser.Expr (pSubject, pExpr, Subject (..), Values (..), Expr (..), pSquareBracketKey, pTerm, jsonPathQuery, pValues, FieldKey (..), pDuration) where
 
 import Control.Monad.Combinators.Expr (
   Operator (InfixL),
@@ -179,6 +179,7 @@ pPrimaryKey = do
 -- | pSquareBracketKey parses an array element, usually an index with an integer within the bracket
 -- or an asterisk indicating a wildcard
 --
+-- >>> import Text.Megaparsec ( parse)
 -- >>> parse (pSquareBracketKey "") "" "[1]"
 -- Right (ArrayIndex "" 1)
 --
@@ -234,7 +235,7 @@ pDuration = do
 
 
 -- | parse values into our internal AST representation. Int, Str, Num, Bool, List, etc
---
+-- import Text.Megaparsec ( parse)
 -- Examples:
 --
 -- >>> parse pValues "" "[1,2,3]"
@@ -279,7 +280,7 @@ pValues =
 
 
 -- | pTerm is the main entry point that desides what tree lines to decend
---
+
 -- Examples:
 --
 -- >>> parseTest pTerm "abc != \"GET\""
@@ -324,6 +325,7 @@ pValues =
 --
 -- >>> parse pTerm "" "email matches /.*@company\\.com/"
 -- Right (Matches (Subject "email" "email" []) ".*@company\\.com")
+
 pTerm :: Parser Expr
 pTerm =
   (Paren <$> parens pExpr)
@@ -517,18 +519,20 @@ instance Display Values where
 
 
 -- | Render the expr ast to a value. Start with Eq only, for supporting jsonpath
---
--- >>> display (Eq (Subject "" "request_body" [FieldKey "message"]) (Str "val"))
--- "request_body->>'message'='val'"
+-- >>> import Data.Text.Display ( display)
+-- >>> import qualified Data.Text as T
+-- >>> import Pkg.Parser.Expr (FieldKey(..))
+-- >>> display (Eq (Subject "" "request_body" [FieldKey (T.pack "message")]) (Str "val"))
+-- "request_body->>'message''al'"
 --
 -- >>> display (Eq (Subject "" "errors" [ArrayIndex "" 0, FieldKey "message"]) (Str "val"))
 -- "errors->0->>'message'='val'"
 --
 -- >>> display (Eq (Subject "" "abc" [ArrayWildcard "",FieldKey "xyz"]) (Str "val"))
--- "jsonb_path_exists(abc, $$$[*].\"xyz\" ? (@ == \"val\")$$::jsonpath)"
+-- "jsonb_path_exists(to_jsonb(abc), $$$[*].\"xyz\" ? (@ == \"val\")$$::jsonpath)"
 --
 -- >>> display (Eq (Subject "" "errors" [ArrayWildcard "", ArrayIndex "message" 0, FieldKey "details"]) (Str "detailsVal"))
--- "jsonb_path_exists(errors, $$$[*].message[0].\"details\" ? (@ == \"detailsVal\")$$::jsonpath)"
+-- "jsonb_path_exists(to_jsonb(errors), $$$[*].message[0].\"details\" ? (@ == \"detailsVal\")$$::jsonpath)"
 --
 -- -- abc[*].xyz which should generate something else than what is generated.
 -- -- TODO: investigate and then FIXME
@@ -551,6 +555,7 @@ instance Display Values where
 -- "request_body->'message'->'tags'->>'name'"
 --
 -- >>> display (Regex (Subject "" "request_body" [FieldKey "msg"]) "^abc.*")
+
 -- "jsonb_path_exists(request_body, $$$.\"msg\" ? (@ = \"^abc.*\")$$::jsonpath)"
 --
 -- Test new operators Display instances for SQL generation:
@@ -587,6 +592,7 @@ instance Display Values where
 --
 -- >>> display (Matches (Subject "" "email" []) ".*@company\\.com")
 -- "jsonb_path_exists(to_jsonb(email), $$$ ? (@ like_regex \".*@company\\.com\" flag \"i\" )$$::jsonpath)"
+
 instance Display Expr where
   displayPrec prec expr@(Eq sub val) = displayExprHelper "=" prec sub val
   displayPrec prec (NotEq sub val) = displayExprHelper "!=" prec sub val
@@ -667,24 +673,23 @@ displayExprHelper op prec sub val =
 -- | Generate PostgreSQL JSONPath queries from AST with specified operator
 --
 -- Examples:
---
--- >>> jsonPathQuery "==" (Subject "" "data" [FieldKey "name"]) (Str "John Doe")
--- "jsonb_path_exists(data, $$$.\"name\" ? (@ == \"John Doe\")$$::jsonpath)"
+-- >>> import qualified Data.Text as T
+-- >>> import Pkg.Parser.Expr (FieldKey(..))
+-- >>> jsonPathQuery "==" (Subject "" "data" [FieldKey (T.pack "name")]) (Str "John Doe")
+-- "jsonb_path_exists(to_jsonb(data), $$$.\"name\" ? (@ == \"John Doe\")$$::jsonpath)"
 --
 -- >>> jsonPathQuery "!=" (Subject "" "users" [ArrayIndex "" 1, FieldKey "age"]) (Num "30")
--- "jsonb_path_exists(users, $$$[1].\"age\" ? (@ != 30)$$::jsonpath)"
---
--- >>> jsonPathQuery "!=" (Subject "" "settings" [ArrayWildcard "", FieldKey "enabled"]) (Boolean True)
--- "jsonb_path_exists(settings, $$$[*].\"enabled\" ? (@ != true)$$::jsonpath)"
+-- "jsonb_path_exists(to_jsonb(users), $$$[1].\"age\" ? (@ != 30)$$::jsonpath)"
 --
 -- >>> jsonPathQuery "<" (Subject "" "user" [FieldKey "profile", FieldKey "address", FieldKey "zipcode"]) Null
--- "jsonb_path_exists(user, $$$.\"profile\".\"address\".\"zipcode\" ? (@ < null)$$::jsonpath)"
+-- "jsonb_path_exists(to_jsonb(user), $$$.\"profile\".\"address\".\"zipcode\" ? (@ < null)$$::jsonpath)"
 --
 -- >>> jsonPathQuery ">" (Subject "" "orders" [ArrayIndex "" 0, ArrayWildcard "val", FieldKey "status"]) (Str "pending")
--- "jsonb_path_exists(orders, $$$[0].val[*].\"status\" ? (@ > \"pending\")$$::jsonpath)"
+-- "jsonb_path_exists(to_jsonb(orders), $$$[0].val[*].\"status\" ? (@ > \"pending\")$$::jsonpath)"
 --
 -- >>> jsonPathQuery "like_regex" (Subject "" "request_body" [FieldKey "msg"]) (Str "^abc.*")
--- "jsonb_path_exists(request_body, $$$.\"msg\" ? (@ like_regex \"^abc.*\" flag \"i\" )$$::jsonpath)"
+
+-- "jsonb_path_exists(to_jsonb(request_body), $$$.\"msg\" ? (@ like_regex \"^abc.*\" flag \"i\" )$$::jsonpath)"
 --
 -- Test new operators with JSONPath (wildcard subjects):
 --
@@ -699,6 +704,7 @@ displayExprHelper op prec sub val =
 --
 -- >>> jsonPathQuery "STARTSWITH" (Subject "" "requests" [ArrayWildcard "", FieldKey "path"]) (Str "/api")
 -- "jsonb_path_exists(to_jsonb(requests), $$$[*].\"path\" ? (@ STARTSWITH \"/api\")$$::jsonpath)"
+
 jsonPathQuery :: T.Text -> Subject -> Values -> T.Text
 jsonPathQuery op' (Subject entire base keys) val =
   "jsonb_path_exists(to_jsonb(" <> base <> "), $$" <> "$" <> buildPath keys <> buildCondition op val postfix <> "$$::jsonpath)"
