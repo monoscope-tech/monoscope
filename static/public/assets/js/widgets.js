@@ -157,6 +157,9 @@ const chartWidget = widgetData => {
     if (e.detail?.ast) {
       widgetData.queryAST = e.detail.ast
     }
+    if (e.detail?.value) {
+      widgetData.query = e.detail.value
+    }
     if (window.logListTable) window.logListTable.refetchLogs()
 
     updateChartData(chart, opt, true, widgetData)

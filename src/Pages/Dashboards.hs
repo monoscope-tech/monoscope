@@ -25,6 +25,7 @@ import Effectful.Error.Static (Error, throwError)
 import Effectful.PostgreSQL.Transact.Effect (DB, dbtToEff)
 import Effectful.Time qualified as Time
 import Lucid
+import Lucid.Base
 import Lucid.Htmx (hxConfirm_, hxDelete_, hxExt_, hxGet_, hxPatch_, hxPost_, hxPut_, hxSelect_, hxSwap_, hxTarget_, hxTrigger_, hxVals_)
 import Lucid.Hyperscript (__)
 import Models.Apis.Anomalies qualified as Anomalies
@@ -136,7 +137,7 @@ dashboardPage_ pid dashId dash dashVM = do
             , data_ "reload_on_change" $ maybe "false" (T.toLower . show) var.reloadOnChange
             , value_ $ maybeToMonoid var.value
             ]
-          <> memptyIfFalse (var.multi == Just True) [data_ "mode" "select"]
+            <> memptyIfFalse (var.multi == Just True) [data_ "mode" "select"]
     script_
       [text|
   const tagifyInstances = new Map();
@@ -169,7 +170,14 @@ dashboardPage_ pid dashId dash dashVM = do
     return tgfy
   });
 
-  window.addEventListener('update-query', async () => {
+  window.addEventListener('update-query', async (e) => {
+    // Check if the event has the stopImmediatePropagation flag set by a call to stopPropagation
+    // This ensures the event won't trigger dashboard-wide updates when it comes from the widget editor
+    if (e.cancelBubble) {
+      // Event propagation was cancelled by an editor, skip dashboard-wide updates
+      return;
+    }
+    
     document.querySelectorAll('.tagify-select-input[data-reload_on_change="true"]').forEach(async input => {
       const { query_sql, query } = input.dataset;
       if (!query_sql && !query) return;
@@ -312,38 +320,38 @@ processWidget pid now (sinceStr, fromDStr, toDStr) allParams widgetBase = do
             let issuesVM = V.map (AnomalyList.IssueVM False now "24h") issues
             pure
               $ widget
-              & #html
-                ?~ ( renderText
-                       $ div_ [class_ "flex flex-col gap-4 h-full w-full overflow-hidden"]
-                       $ forM_ issuesVM (\x -> div_ [class_ "border border-strokeWeak rounded-2xl overflow-hidden"] $ toHtml x)
-                   )
+                & #html
+                  ?~ ( renderText
+                         $ div_ [class_ "flex flex-col gap-4 h-full w-full overflow-hidden"]
+                         $ forM_ issuesVM (\x -> div_ [class_ "border border-strokeWeak rounded-2xl overflow-hidden"] $ toHtml x)
+                     )
           Widget.WTStat -> do
             stat <- Charts.queryMetrics (Just Charts.DTFloat) (Just pid) widget.query widget.sql sinceStr fromDStr toDStr Nothing allParams
             pure
               $ widget
-              & #dataset
-                ?~ def
-                  { Widget.source = AE.Null
-                  , Widget.value = stat.dataFloat
-                  }
+                & #dataset
+                  ?~ def
+                    { Widget.source = AE.Null
+                    , Widget.value = stat.dataFloat
+                    }
           _ -> do
             metricsD <-
               Charts.queryMetrics (Just Charts.DTMetric) (Just pid) widget.query widget.sql sinceStr fromDStr toDStr Nothing allParams
             pure
               $ widget
-              & #dataset
-                ?~ Widget.WidgetDataset
-                  { source =
-                      AE.toJSON
-                        $ V.cons
-                          (AE.toJSON <$> metricsD.headers)
-                          (AE.toJSON <<$>> metricsD.dataset)
-                  , rowsPerMin = metricsD.rowsPerMin
-                  , value = Just metricsD.rowsCount
-                  , from = metricsD.from
-                  , to = metricsD.to
-                  , stats = metricsD.stats
-                  }
+                & #dataset
+                  ?~ Widget.WidgetDataset
+                    { source =
+                        AE.toJSON
+                          $ V.cons
+                            (AE.toJSON <$> metricsD.headers)
+                            (AE.toJSON <<$>> metricsD.dataset)
+                    , rowsPerMin = metricsD.rowsPerMin
+                    , value = Just metricsD.rowsCount
+                    , from = metricsD.from
+                    , to = metricsD.to
+                    , stats = metricsD.stats
+                    }
       else pure widget
   -- Recursively process child widgets, if any.
   case widget'.children of
@@ -532,7 +540,7 @@ widgetViewerEditor_ pid dashboardIdM currentRange existingWidgetM activeTab = di
           , Widget.naked = Just True
           , Widget.title = Just "New Widget"
           , Widget.hideSubtitle = Just True
-          , Widget.query = Just "timechart count(*)"
+          , Widget.query = Nothing
           , Widget.unit = Just "ms"
           , Widget.hideLegend = Just True
           , Widget._projectId = Just pid
@@ -593,7 +601,9 @@ widgetViewerEditor_ pid dashboardIdM currentRange existingWidgetM activeTab = di
       -- Close drawer button
       let drawerToClose = if isJust existingWidgetM then "global-data-drawer" else "page-data-drawer"
       span_ [class_ "text-fillDisabled"] "|"
-      button_ [class_ "leading-none rounded-lg px-4 py-2 cursor-pointer btn btn-primary shadow-sm leading-none hidden group-has-[.page-drawer-tab-edit:checked]/wgtexp:block", type_ "submit", form_ "newWidgetForm"] $ "Save changes"
+      if isNewWidget
+        then button_ [class_ "leading-none rounded-lg px-4 py-2 cursor-pointer btn btn-primary shadow-sm leading-none", type_ "submit", form_ "widget-form"] $ "Save changes"
+        else button_ [class_ "leading-none rounded-lg px-4 py-2 cursor-pointer btn btn-primary shadow-sm leading-none hidden group-has-[.page-drawer-tab-edit:checked]/wgtexp:block", type_ "submit", form_ "widget-form"] $ "Save changes"
       label_ [class_ "text-iconNeutral cursor-pointer p-2 hover:bg-fillWeak rounded-lg leading-none", data_ "tippy-content" "Close Drawer", Lucid.for_ drawerToClose] $ faSprite_ "xmark" "regular" "w-3 h-3"
 
   -- Only show overview when viewing existing widgets and the overview tab is selected
@@ -618,6 +628,10 @@ widgetViewerEditor_ pid dashboardIdM currentRange existingWidgetM activeTab = di
         , hxSwap_ "innerHTML"
         , hxVals_ "js:{...widgetJSON}"
         , hxExt_ "json-enc"
+        , [__| on 'update-widget-query' log 'update-widget-query' then
+               set widgetJSON.query to event.detail.value 
+               then trigger 'update-widget' on me
+            |]
         ]
         ""
 
@@ -648,13 +662,17 @@ widgetViewerEditor_ pid dashboardIdM currentRange existingWidgetM activeTab = di
         div_ [class_ "flex gap-3"] do
           span_ [class_ "inline-block rounded-full bg-fillWeak px-3 py-1 leading-none"] "2"
           strong_ [class_ "text-lg font-semibold"] "Graph your Data"
-        div_ [class_ "px-5"]
-          $ textarea_
-            [ class_ "w-full h-20 textarea"
-            , value_ $ fromMaybe "" widgetToUse.query
-            , [__| on change set widgetJSON.query to my value then trigger 'update-widget' on #widget-preview |]
-            ]
-            ""
+        div_ [class_ "px-5 flex flex-col gap-2"] do
+          div_ [id_ "queryBuilder", class_ "flex-1 flex items-center"]
+            $ termRaw
+              "query-editor"
+              [ id_ "filterElement"
+              , class_ "w-full h-[2rem] flex items-center"
+              , term "default-value" (fromMaybe "" widgetToUse.query)
+              , term "widget-editor" "true"
+              , term "target-widget-preview" "widget-preview"
+              ]
+              ("" :: Text)
 
       div_ [class_ "space-y-7"] do
         div_ [class_ "flex gap-3"] do

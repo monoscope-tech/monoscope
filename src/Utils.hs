@@ -598,7 +598,7 @@ freeTierDailyMaxEvents = 1000
 -- | Example: 1534999 becomes 1.5M, 200000 becomes 200K
 prettyPrintCount :: Int -> Text
 prettyPrintCount n
-  | n >= 1_000_000_000 = T.pack (show (n `div` 100_000_000)) <> "." <> T.pack (show ((n `mod` 100_000_000) `div` 10_000_000)) <> "B"
-  | n >= 1_000_000 = T.pack (show (n `div` 100_000)) <> "." <> T.pack (show ((n `mod` 100_000) `div` 10_000)) <> "M"
-  | n >= 1_000 = T.pack (show (n `div` 100)) <> "." <> T.pack (show ((n `mod` 100) `div` 10)) <> "K"
+  | n >= 1_000_000_000 = T.pack (show (n `div` 1_000_000_000)) <> "." <> T.pack (show ((n `mod` 1_000_000_000) `div` 100_000_000)) <> "B"
+  | n >= 1_000_000 = T.pack (show (n `div` 1_000_000)) <> "." <> T.pack (show ((n `mod` 1_000_000) `div` 100_000)) <> "M"
+  | n >= 1_000 = T.pack (show (n `div` 1_000)) <> "." <> T.pack (show ((n `mod` 1_000) `div` 100)) <> "K"
   | otherwise = T.pack (show n)

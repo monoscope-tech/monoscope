@@ -305,12 +305,9 @@ monaco.languages.setMonarchTokensProvider('aql', language);
 monaco.languages.setLanguageConfiguration('aql', conf);
 
 // Completion provider
-console.log('Registering completion provider for aql language');
 monaco.languages.registerCompletionItemProvider('aql', {
   triggerCharacters: [' ', '|', '.', '[', ',', '"'],
   provideCompletionItems: async (model, position) => {
-    console.log('Completion provider triggered at position:', position);
-
     const text = model.getValueInRange({
       startLineNumber: 1,
       startColumn: 1,
@@ -321,8 +318,6 @@ monaco.languages.registerCompletionItemProvider('aql', {
     const currentLine = model.getLineContent(position.lineNumber);
     const segments = text.split(/\|/).map((s) => s.trim());
     const last = segments[segments.length - 1];
-
-    console.log('segments:', segments, 'last:', JSON.stringify(last));
 
     const suggestions: monaco.languages.CompletionItem[] = [];
     const tables = schemaManager.getSchemas();
@@ -337,16 +332,13 @@ monaco.languages.registerCompletionItemProvider('aql', {
     });
 
     const lineText = currentLine.substring(0, position.column - 1);
-    console.log('lineText for analysis:', JSON.stringify(lineText));
 
     // First priority: Check for nested fields after dot
     const dotMatch =
       lineText.match(/([a-zA-Z_][a-zA-Z0-9_]*(?:\.[a-zA-Z_][a-zA-Z0-9_]*)*)\.$/) ||
       lineText.match(/([a-zA-Z_][a-zA-Z0-9_]*(?:\.[a-zA-Z_][a-zA-Z0-9_]*)*)\.[a-zA-Z0-9_]*$/);
 
-    console.log('dotMatch result:', dotMatch);
     if (dotMatch) {
-      console.log('Dot match detected, suggesting nested fields');
       const fieldPrefix = dotMatch[1];
       const nested = await schemaManager.resolveNested(currentSchema, fieldPrefix);
 
@@ -368,9 +360,8 @@ monaco.languages.registerCompletionItemProvider('aql', {
     const fieldSpaceMatch = lineText.match(/([a-zA-Z_][a-zA-Z0-9_]*(?:\.[a-zA-Z_][a-zA-Z0-9_]*)*)\s+$/);
     const logicalOperatorPattern = new RegExp(`\\b(${LOGICAL_OPERATORS.filter((op) => ['and', 'or'].includes(op)).join('|')})\\s+$`, 'i');
     const logicalOperatorMatch = lineText.match(logicalOperatorPattern);
-    
+
     if (fieldSpaceMatch && !logicalOperatorMatch) {
-      console.log('Field followed by space detected, suggesting operators');
       // Display all operators horizontally by concatenating all operator arrays
       [...COMPARISON_OPERATORS, ...SET_OPERATORS, ...STRING_OPERATORS, ...LOGICAL_OPERATORS].forEach((op) =>
         suggestions.push({
@@ -382,15 +373,13 @@ monaco.languages.registerCompletionItemProvider('aql', {
       );
       return { suggestions };
     }
-    
+
     // Third priority: Check for operator pattern - show value suggestions
     // Updated regex to require a space before the operator
     const operatorMatch = lineText.match(new RegExp(`([\\w\\.]+)\\s+(${ALL_OPERATORS.join('|')})\\s*$`));
     if (operatorMatch) {
-      console.log('Field and operator detected, suggesting values');
       const fieldName = operatorMatch[1];
       const operator = operatorMatch[2];
-      console.log('Field:', fieldName, 'Operator:', operator);
       const values = await schemaManager.resolveValues(currentSchema, fieldName);
 
       // Special handling for 'in' and '!in' operators
@@ -417,7 +406,6 @@ monaco.languages.registerCompletionItemProvider('aql', {
     // Fourth priority: Check for complete field-operator-value pattern - suggest logical operators
     const afterValue = /".*"\s*$/.test(lineText) || /\d+\s*$/.test(lineText);
     if (afterValue) {
-      console.log('Complete expression detected, suggesting logical operators');
       [...LOGICAL_OPERATORS.filter((op) => op === 'and' || op === 'or'), PIPE_OPERATOR[0]].forEach((op) =>
         suggestions.push({
           label: op,
@@ -431,7 +419,6 @@ monaco.languages.registerCompletionItemProvider('aql', {
 
     // Fifth priority: Check for logical operators followed by space - suggest fields
     if (logicalOperatorMatch) {
-      console.log('Logical operator followed by space detected, suggesting fields');
       const fields = await schemaManager.resolveNested(currentSchema, '');
       fields.forEach((f) =>
         suggestions.push({
@@ -604,6 +591,7 @@ export class QueryEditorComponent extends LitElement {
   @state() private currentQuery = '';
   @state() private selectedIndex = -1;
   @state() private defaultValue = '';
+  @state() private updateURLParams = true;
 
   private editor: monaco.editor.IStandaloneCodeEditor | null = null;
   private suggestionListeners: (() => void)[] = [];
@@ -623,20 +611,32 @@ export class QueryEditorComponent extends LitElement {
 
   private debouncedTriggerSuggestions = debounce(() => this.editor?.trigger('auto', 'editor.action.triggerSuggest', {}), 50);
   private debouncedUpdateQuery = debounce((queryValue: string) => {
-    this.dispatchEvent(
-      new CustomEvent('update-query', {
-        detail: { value: queryValue },
-        bubbles: true,
-      })
-    );
-
-    const url = new URL(window.location.href);
-    if (queryValue.trim()) {
-      url.searchParams.set('query', queryValue);
+    const widgetPreviewId = this.getAttribute('target-widget-preview');
+    if (widgetPreviewId) {
+      document.getElementById(widgetPreviewId)?.dispatchEvent(
+        new CustomEvent('update-widget-query', {
+          detail: { value: queryValue },
+        })
+      );
     } else {
-      url.searchParams.delete('query');
+      this.dispatchEvent(
+        new CustomEvent('update-query', {
+          detail: { value: queryValue },
+          bubbles: true,
+        })
+      );
     }
-    window.history.replaceState({}, '', url.toString());
+
+    // Update URL if needed
+    if (this.updateURLParams) {
+      const url = new URL(window.location.href);
+      if (queryValue.trim()) {
+        url.searchParams.set('query', queryValue);
+      } else {
+        url.searchParams.delete('query');
+      }
+      window.history.replaceState({}, '', url.toString());
+    }
   }, 300);
 
   private get serviceSuggestions(): SuggestionItem[] {
@@ -647,6 +647,7 @@ export class QueryEditorComponent extends LitElement {
     if (!this._editorContainer) return;
 
     this.defaultValue = this.getAttribute('default-value') || '';
+    this.updateURLParams = this.getAttribute('widget-editor') !== 'true';
     this.createMonacoEditor();
     this.setupSuggestions();
 
@@ -738,7 +739,6 @@ export class QueryEditorComponent extends LitElement {
   }
 
   public handleVisualizationChange(visualizationType: string): void {
-    console.log('handleVisualizationChange', visualizationType);
     if (!this.editor) return;
 
     const currentQuery = this.editor.getValue().trim();
@@ -805,20 +805,7 @@ export class QueryEditorComponent extends LitElement {
       this.showSuggestions = false;
       this.selectedIndex = -1;
 
-      const url = new URL(window.location.href);
-      if (newValue.trim()) {
-        url.searchParams.set('query', newValue);
-      } else {
-        url.searchParams.delete('query');
-      }
-      window.history.replaceState({}, '', url.toString());
-
-      this.dispatchEvent(
-        new CustomEvent('update-query', {
-          detail: { value: newValue },
-          bubbles: true,
-        })
-      );
+      this.debouncedUpdateQuery(newValue);
 
       // Update placeholder immediately
       this.updatePlaceholder();
@@ -1077,8 +1064,6 @@ export class QueryEditorComponent extends LitElement {
   }
 
   private updateSuggestions(aqlItems: any[] = [], isContextSpecific: boolean = false): void {
-    console.log('updateSuggestions received:', aqlItems.slice(0, 3));
-
     const position = this.editor?.getPosition();
     const model = this.editor?.getModel();
     let parentPath = '';
@@ -1146,7 +1131,6 @@ export class QueryEditorComponent extends LitElement {
   private handleSuggestionClick(item: SuggestionItem, e: MouseEvent): void {
     e.preventDefault();
     e.stopPropagation();
-    console.log(item);
     this.insertCompletion(item);
     this.editor?.focus();
   }
@@ -1226,7 +1210,6 @@ export class QueryEditorComponent extends LitElement {
     }
 
     const triggerDelay = textToInsert.endsWith('.') ? 0 : 100;
-    console.log('Triggering suggestions after insertion of:', textToInsert);
     setTimeout(() => this.editor?.trigger('keyboard', 'editor.action.triggerSuggest', {}), triggerDelay);
   }
 
