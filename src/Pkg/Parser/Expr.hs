@@ -1,4 +1,4 @@
-module Pkg.Parser.Expr (pSubject, pExpr, Subject (..), Values (..), Expr (..), pSquareBracketKey, pTerm, jsonPathQuery, pValues, FieldKey (..),pDuration) where
+module Pkg.Parser.Expr (pSubject, pExpr, Subject (..), Values (..), Expr (..), pSquareBracketKey, pTerm, jsonPathQuery, pValues, FieldKey (..), pDuration) where
 
 import Control.Monad.Combinators.Expr (
   Operator (InfixL),
@@ -280,7 +280,6 @@ pValues =
 
 
 -- | pTerm is the main entry point that desides what tree lines to decend
---
 
 -- Examples:
 --
@@ -689,7 +688,6 @@ displayExprHelper op prec sub val =
 -- "jsonb_path_exists(to_jsonb(orders), $$$[0].val[*].\"status\" ? (@ > \"pending\")$$::jsonpath)"
 --
 -- >>> jsonPathQuery "like_regex" (Subject "" "request_body" [FieldKey "msg"]) (Str "^abc.*")
-
 
 -- "jsonb_path_exists(to_jsonb(request_body), $$$.\"msg\" ? (@ like_regex \"^abc.*\" flag \"i\" )$$::jsonpath)"
 --
