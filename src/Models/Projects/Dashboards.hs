@@ -49,16 +49,16 @@ data DashboardVM = DashboardVM
   , tags :: V.Vector Text
   , title :: Text
   }
-  deriving stock (Show, Generic)
-  deriving anyclass (FromRow, ToRow, NFData)
+  deriving stock (Generic, Show)
+  deriving anyclass (FromRow, NFData, ToRow)
   deriving
     (DBT.Entity)
     via (GenericEntity '[Schema "projects", TableName "dashboards", PrimaryKey "id", FieldModifiers '[CamelToSnake]] DashboardVM)
 
 
 newtype DashboardId = DashboardId {unDashboardId :: UUID.UUID}
-  deriving stock (Generic, Show, Read)
-  deriving newtype (Eq, Ord, AE.ToJSON, AE.FromJSON, FromField, ToField, Default, Hashable, NFData, FromHttpApiData)
+  deriving stock (Generic, Read, Show)
+  deriving newtype (AE.FromJSON, AE.ToJSON, Default, Eq, FromField, FromHttpApiData, Hashable, NFData, Ord, ToField)
   deriving anyclass (FromRow, ToRow)
 
 
@@ -82,14 +82,14 @@ data Dashboard = Dashboard
   , variables :: Maybe [Variable]
   , widgets :: [Widget.Widget] -- List of widgets
   }
-  deriving stock (Show, Generic, THS.Lift)
-  deriving (AE.FromJSON, AE.ToJSON) via DAES.Snake Dashboard
-  deriving anyclass (NFData, Default)
+  deriving stock (Generic, Show, THS.Lift)
+  deriving anyclass (Default, NFData)
   deriving (FromField, ToField) via Aeson Dashboard
+  deriving (AE.FromJSON, AE.ToJSON) via DAES.Snake Dashboard
 
 
 data VariableType = VTQuery | VTValues
-  deriving stock (Show, Eq, Generic, Enum, THS.Lift)
+  deriving stock (Enum, Eq, Generic, Show, THS.Lift)
   deriving anyclass (NFData)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.ConstructorTagModifier '[DAE.StripPrefix "VT", DAE.CamelToSnake]] VariableType
 
@@ -107,7 +107,7 @@ data Variable = Variable
   , options :: Maybe [[Text]]
   , value :: Maybe Text
   }
-  deriving stock (Show, Generic, THS.Lift)
+  deriving stock (Generic, Show, THS.Lift)
   deriving anyclass (NFData)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.StripPrefix "_v", DAE.CamelToSnake]] Variable
 
@@ -137,7 +137,7 @@ readDashboardFile dir file = do
         Right dashboard -> pure (Just $ dashboard{file = Just $ fromString file})
 
 
-readDashboardEndpoint :: (HTTP :> es, Error ServerError :> es) => Text -> Eff es Dashboard
+readDashboardEndpoint :: (Error ServerError :> es, HTTP :> es) => Text -> Eff es Dashboard
 readDashboardEndpoint uri = do
   fileResp <- W.get (toString uri)
   Yml.decodeEither' (toStrict $ fileResp ^. W.responseBody)

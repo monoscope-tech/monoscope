@@ -39,8 +39,8 @@ data CreateProjectForm = CreateProjectForm
   , timeZone :: Text
   , orderId :: Maybe Text
   }
-  deriving stock (Eq, Show, Generic)
-  deriving anyclass (FromForm, Default)
+  deriving stock (Eq, Generic, Show)
+  deriving anyclass (Default, FromForm)
 
 
 ----------------------------------------------------------------------------------------------------------
@@ -70,7 +70,7 @@ data NotifListForm = NotifListForm
   { notificationsChannel :: [Text]
   , discordUrl :: Maybe Text
   }
-  deriving stock (Show, Generic)
+  deriving stock (Generic, Show)
   deriving anyclass (FromForm)
 
 

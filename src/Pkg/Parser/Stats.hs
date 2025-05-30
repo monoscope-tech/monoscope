@@ -28,23 +28,23 @@ data AggFunction
   | Range Subject (Maybe Text)
   | -- | CustomAgg String [Field] (Maybe String)
     Plain Subject (Maybe Text)
-  deriving stock (Show, Generic, Eq)
+  deriving stock (Eq, Generic, Show)
   deriving anyclass (AE.FromJSON, AE.ToJSON)
 
 
 -- Define an optional 'by' clause
 newtype ByClause = ByClause [Subject] -- List of fields to group by
-  deriving stock (Show, Generic, Eq)
+  deriving stock (Eq, Generic, Show)
   deriving anyclass (AE.FromJSON, AE.ToJSON)
 
 
 newtype Rollup = Rollup Text
-  deriving stock (Show, Generic, Eq)
+  deriving stock (Eq, Generic, Show)
   deriving anyclass (AE.FromJSON, AE.ToJSON)
 
 
 data Sources = SSpans | SMetrics
-  deriving stock (Show, Generic, Eq)
+  deriving stock (Eq, Generic, Show)
   deriving anyclass (AE.FromJSON, AE.ToJSON)
 
 
@@ -242,7 +242,7 @@ data Section
     StatsCommand [AggFunction] (Maybe ByClause)
   | TimeChartCommand [AggFunction] (Maybe ByClause) (Maybe Rollup)
   | Source Sources
-  deriving stock (Show, Generic, Eq)
+  deriving stock (Eq, Generic, Show)
   deriving anyclass (AE.FromJSON, AE.ToJSON)
 
 

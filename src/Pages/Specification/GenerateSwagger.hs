@@ -31,14 +31,14 @@ data MergedEndpoint = MergedEndpoint
   , description :: Text
   , shapes :: V.Vector MergedShapesAndFields
   }
-  deriving stock (Show, Generic)
+  deriving stock (Generic, Show)
 
 
 data MergedFieldsAndFormats = MergedFieldsAndFormats
   { field :: Fields.SwField
   , format :: Formats.SwFormat
   }
-  deriving stock (Show, Generic)
+  deriving stock (Generic, Show)
   deriving anyclass (AE.ToJSON)
 
 
@@ -46,14 +46,14 @@ data MergedShapesAndFields = MergedShapesAndFields
   { shape :: Shapes.SwShape
   , sField :: Map Fields.FieldCategoryEnum [MergedFieldsAndFormats]
   }
-  deriving stock (Show, Generic)
+  deriving stock (Generic, Show)
 
 
 data KeyPathGroup = KeyPathGroup
   { subGoups :: [Text]
   , keyPath :: Text
   }
-  deriving stock (Show, Generic)
+  deriving stock (Generic, Show)
 
 
 convertQueryParamsToJSON :: [T.Text] -> [MergedFieldsAndFormats] -> AE.Value

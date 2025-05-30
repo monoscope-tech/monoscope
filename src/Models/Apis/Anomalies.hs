@@ -77,8 +77,8 @@ import Utils
 
 newtype AnomalyId = AnomalyId {unAnomalyId :: UUID.UUID}
   deriving stock (Generic, Show)
-  deriving newtype (NFData, AE.FromJSON, AE.ToJSON)
-  deriving newtype (Eq, Ord, FromField, ToField, FromHttpApiData, Default)
+  deriving newtype (AE.FromJSON, AE.ToJSON, NFData)
+  deriving newtype (Default, Eq, FromField, FromHttpApiData, Ord, ToField)
 
 
 anomalyIdText :: AnomalyId -> Text
@@ -95,7 +95,7 @@ data AnomalyTypes
   deriving stock (Eq, Generic, Show)
   deriving anyclass (NFData)
   deriving
-    (AE.ToJSON, AE.FromJSON)
+    (AE.FromJSON, AE.ToJSON)
     via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.StripPrefix "FT", DAE.CamelToSnake]] AnomalyTypes
 
 
@@ -148,10 +148,10 @@ instance FromField AnomalyTypes where
 data AnomalyActions
   = AAUnknown
   | AACreated
-  deriving stock (Show, Eq, Generic)
+  deriving stock (Eq, Generic, Show)
   deriving anyclass (NFData)
   deriving
-    (AE.ToJSON, AE.FromJSON)
+    (AE.FromJSON, AE.ToJSON)
     via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.StripPrefix "FT", DAE.CamelToSnake]] AnomalyActions
 
 
@@ -218,8 +218,8 @@ data AnomalyVM = AnomalyVM
   , eventsCount14d :: Int
   , lastSeen :: ZonedTime
   }
-  deriving stock (Show, Generic)
-  deriving anyclass (FromRow, Default, NFData)
+  deriving stock (Generic, Show)
+  deriving anyclass (Default, FromRow, NFData)
   deriving
     (Entity)
     via (GenericEntity '[Schema "apis", TableName "anomalies_vm", PrimaryKey "id", FieldModifiers '[CamelToSnake]] AnomalyVM)
@@ -429,10 +429,10 @@ data NewShapeIssue = NewShapeIssue
   , deletedFields :: V.Vector Text
   , updatedFieldFormats :: V.Vector Text
   }
-  deriving stock (Show, Generic)
+  deriving stock (Generic, Show)
   deriving anyclass (NFData)
   deriving
-    (AE.ToJSON, AE.FromJSON)
+    (AE.FromJSON, AE.ToJSON)
     via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] NewShapeIssue
 
 
@@ -447,10 +447,10 @@ data NewFieldIssue = NewFieldIssue
   , fieldCategory :: Fields.FieldCategoryEnum
   , format :: Text
   }
-  deriving stock (Show, Generic)
+  deriving stock (Generic, Show)
   deriving anyclass (NFData)
   deriving
-    (AE.ToJSON, AE.FromJSON)
+    (AE.FromJSON, AE.ToJSON)
     via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] NewFieldIssue
 
 
@@ -465,10 +465,10 @@ data NewFormatIssue = NewFormatIssue
   , fieldCategory :: Fields.FieldCategoryEnum
   , examples :: Maybe (V.Vector Text)
   }
-  deriving stock (Show, Generic)
+  deriving stock (Generic, Show)
   deriving anyclass (NFData)
   deriving
-    (AE.ToJSON, AE.FromJSON)
+    (AE.FromJSON, AE.ToJSON)
     via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] NewFormatIssue
 
 
@@ -478,10 +478,10 @@ data NewEndpointIssue = NewEndpointIssue
   , endpointUrlPath :: Text
   , host :: Text
   }
-  deriving stock (Show, Generic)
+  deriving stock (Generic, Show)
   deriving anyclass (NFData)
   deriving
-    (AE.ToJSON, AE.FromJSON)
+    (AE.FromJSON, AE.ToJSON)
     via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] NewEndpointIssue
 
 
@@ -492,11 +492,11 @@ data IssuesData
   | IDNewEndpointIssue NewEndpointIssue
   | IDNewRuntimeExceptionIssue RequestDumps.ATError
   | IDEmpty
-  deriving stock (Show, Generic)
+  deriving stock (Generic, Show)
   deriving anyclass (NFData)
   deriving (FromField, ToField) via Aeson IssuesData
   deriving
-    (AE.ToJSON, AE.FromJSON)
+    (AE.FromJSON, AE.ToJSON)
     via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] IssuesData
 
 
@@ -517,8 +517,8 @@ data Issue = Issue
   , acknowlegedBy :: Maybe Users.UserId
   , archivedAt :: Maybe ZonedTime
   }
-  deriving stock (Show, Generic)
-  deriving anyclass (FromRow, ToRow, NFData, Default)
+  deriving stock (Generic, Show)
+  deriving anyclass (Default, FromRow, NFData, ToRow)
   deriving
     (Entity)
     via (GenericEntity '[Schema "apis", TableName "issues", PrimaryKey "id", FieldModifiers '[CamelToSnake]] Issue)
@@ -528,7 +528,7 @@ data IssueEventAgg = IssueEventAgg
   { count :: Int
   , lastSeen :: UTCTime
   }
-  deriving stock (Show, Generic)
+  deriving stock (Generic, Show)
   deriving anyclass (NFData)
 
 
@@ -571,7 +571,7 @@ data IssueL = IssueL
   , archivedAt :: Maybe ZonedTime
   , eventsAgg :: IssueEventAgg
   }
-  deriving stock (Show, Generic)
+  deriving stock (Generic, Show)
   deriving anyclass (FromRow, NFData)
 
 
@@ -649,7 +649,7 @@ convertAnomalyToIssue hostM anomaly = do
 
 newtype ErrorId = ErrorId {unErrorId :: UUID.UUID}
   deriving stock (Generic, Show)
-  deriving newtype (Eq, Ord, FromField, ToField, FromHttpApiData, Default, AE.FromJSON, NFData, AE.ToJSON)
+  deriving newtype (AE.FromJSON, AE.ToJSON, Default, Eq, FromField, FromHttpApiData, NFData, Ord, ToField)
 
 
 data ATError = ATError
@@ -662,11 +662,11 @@ data ATError = ATError
   , message :: Text
   , errorData :: RequestDumps.ATError
   }
-  deriving stock (Show, Generic)
-  deriving anyclass (FromRow, ToRow, NFData, Default)
-  deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] ATError
+  deriving stock (Generic, Show)
+  deriving anyclass (Default, FromRow, NFData, ToRow)
   deriving (Entity) via (GenericEntity '[Schema "apis", TableName "errors", PrimaryKey "id", FieldModifiers '[CamelToSnake]] ATError)
   deriving (FromField, ToField) via Aeson ATError
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] ATError
 
 
 errorByHash :: Text -> DBT IO (Maybe ATError)

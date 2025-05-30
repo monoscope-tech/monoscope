@@ -275,12 +275,12 @@ renderWidgetHeader widget wId title valueM subValueM expandBtnFn ctaM hideSub = 
               , data_ "tippy-content" "Create a copy of this widget"
               , hxPost_
                   $ "/p/"
-                    <> maybeToMonoid (widget._projectId <&> (.toText))
-                    <> "/dashboards/"
-                    <> maybeToMonoid widget._dashboardId
-                    <> "/widgets/"
-                    <> wId
-                    <> "/duplicate"
+                  <> maybeToMonoid (widget._projectId <&> (.toText))
+                  <> "/dashboards/"
+                  <> maybeToMonoid widget._dashboardId
+                  <> "/widgets/"
+                  <> wId
+                  <> "/duplicate"
               , hxSwap_ "beforeend"
               , hxTrigger_ "click"
               , hxTarget_ ".grid-stack"
@@ -323,7 +323,7 @@ renderChart widget = do
       div_
         [ class_
             $ "h-full w-full flex flex-col justify-end "
-              <> if widget.naked == Just True then "" else " rounded-2xl border border-strokeWeak bg-fillWeaker"
+            <> if widget.naked == Just True then "" else " rounded-2xl border border-strokeWeak bg-fillWeaker"
         , id_ $ chartId <> "_bordered"
         ]
         do

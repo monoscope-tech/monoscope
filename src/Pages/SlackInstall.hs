@@ -30,7 +30,7 @@ data LinkProjectsForm = LinkProjectsForm
   { projects :: [Text]
   , webhookUrl :: Text
   }
-  deriving stock (Show, Generic)
+  deriving stock (Generic, Show)
   deriving anyclass (FromForm)
 
 
@@ -40,7 +40,7 @@ data IncomingWebhook = IncomingWebhook
   , configurationUrl :: Text
   , url :: Text
   }
-  deriving stock (Show, Generic)
+  deriving stock (Generic, Show)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] IncomingWebhook
 
 
@@ -48,7 +48,7 @@ data TokenResponse = TokenResponse
   { ok :: Bool
   , incomingWebhook :: IncomingWebhook
   }
-  deriving stock (Show, Generic)
+  deriving stock (Generic, Show)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] TokenResponse
 
 

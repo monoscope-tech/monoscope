@@ -55,7 +55,7 @@ data CollectionVariableForm = CollectionVariableForm
   { variableName :: Text
   , variableValue :: Text
   }
-  deriving stock (Show, Generic)
+  deriving stock (Generic, Show)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields] CollectionVariableForm
 
 

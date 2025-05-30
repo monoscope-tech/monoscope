@@ -178,7 +178,7 @@ type RespHeaders =
      ]
 
 
-addRespHeaders :: (State.State TriggerEvents :> es, State.State HXRedirectDest :> es) => a -> Eff es (RespHeaders a)
+addRespHeaders :: (State.State HXRedirectDest :> es, State.State TriggerEvents :> es) => a -> Eff es (RespHeaders a)
 addRespHeaders resp = do
   triggerEvents <- State.get @TriggerEvents
   redirectDest <- State.get @HXRedirectDest
@@ -206,7 +206,7 @@ addSuccessToast :: State.State TriggerEvents :> es => Text -> Maybe Text -> Eff 
 addSuccessToast = addToast "success"
 
 
-addErrorToast :: (State.State TriggerEvents :> es, Log :> es) => Text -> Maybe Text -> Eff es ()
+addErrorToast :: (Log :> es, State.State TriggerEvents :> es) => Text -> Maybe Text -> Eff es ()
 addErrorToast msg msg2 = do
   Log.logAttention_ $ "ERROR: " <> msg <> " => " <> maybeToMonoid msg2
   addToast "error" msg msg2

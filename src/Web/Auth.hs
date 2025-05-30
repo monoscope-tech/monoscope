@@ -93,7 +93,7 @@ authHandler logger env =
       & runTime
       & effToHandler
   where
-    handler :: (DB :> es, UUIDEff :> es, HTTP :> es, Time :> es, Error ServerError :> es, IOE :> es) => Request -> Eff es (Headers '[Header "Set-Cookie" SetCookie] Sessions.Session)
+    handler :: (DB :> es, Error ServerError :> es, HTTP :> es, IOE :> es, Time :> es, UUIDEff :> es) => Request -> Eff es (Headers '[Header "Set-Cookie" SetCookie] Sessions.Session)
     handler req = do
       let cookies = getCookies req
       mbPersistentSessionId <- handlerToEff $ getSessionId cookies
@@ -102,7 +102,7 @@ authHandler logger env =
       sessionByID mbPersistentSessionId requestID isSidebarClosed (Just $ getRequestUrl req)
 
 
-sessionByID :: (DB :> es, UUIDEff :> es, HTTP :> es, Time :> es, Error ServerError :> es) => Maybe Sessions.PersistentSessionId -> Text -> Bool -> Maybe ByteString -> Eff es (Headers '[Header "Set-Cookie" SetCookie] Sessions.Session)
+sessionByID :: (DB :> es, Error ServerError :> es, HTTP :> es, Time :> es, UUIDEff :> es) => Maybe Sessions.PersistentSessionId -> Text -> Bool -> Maybe ByteString -> Eff es (Headers '[Header "Set-Cookie" SetCookie] Sessions.Session)
 sessionByID mbPersistentSessionId requestID isSidebarClosed url = do
   mbPersistentSession <- join <$> mapM Sessions.getPersistentSession mbPersistentSessionId
   let mUser = mbPersistentSession <&> (.user.getUser)
@@ -189,10 +189,10 @@ loginRedirectH redirectToM = do
 loginH
   :: Maybe Text
   -> ATBaseCtx
-      ( Headers
-          '[Header "Location" Text, Header "Set-Cookie" SetCookie]
-          NoContent
-      )
+       ( Headers
+           '[Header "Location" Text, Header "Set-Cookie" SetCookie]
+           NoContent
+       )
 loginH redirectToM = do
   envCfg <- asks env
   stateVar <- liftIO $ UUID.toText <$> UUIDV4.nextRandom
@@ -209,10 +209,10 @@ authCallbackH
   -> Maybe Text -- state variable from auth0
   -> Maybe Text
   -> ATBaseCtx
-      ( Headers
-          '[Header "Location" Text, Header "Set-Cookie" SetCookie]
-          (Html ())
-      )
+       ( Headers
+           '[Header "Location" Text, Header "Set-Cookie" SetCookie]
+           (Html ())
+       )
 authCallbackH codeM _ redirectToM = do
   envCfg <- ask @AuthContext
   pool <- asks pool
@@ -254,7 +254,7 @@ authCallbackH codeM _ redirectToM = do
               a_ [href_ $ fromMaybe "/" redirectToM] "Continue to APIToolkit"
 
 
-authorizeUserAndPersist :: (DB :> es, UUIDEff :> es, HTTP :> es, Time :> es) => Maybe Text -> Text -> Text -> Text -> Text -> Eff es Sessions.PersistentSessionId
+authorizeUserAndPersist :: (DB :> es, HTTP :> es, Time :> es, UUIDEff :> es) => Maybe Text -> Text -> Text -> Text -> Text -> Eff es Sessions.PersistentSessionId
 authorizeUserAndPersist convertkitApiKeyM firstName lastName picture email = do
   userM <- Users.userByEmail email
   userId <- case userM of

@@ -55,14 +55,14 @@ import Web.HttpApiData (FromHttpApiData)
 
 
 newtype EndpointId = EndpointId {unEndpointId :: UUID.UUID}
-  deriving stock (Generic, Show, Read, THS.Lift)
-  deriving newtype (AE.ToJSON, AE.FromJSON, Eq, Ord, FromField, ToField, FromHttpApiData, Default, NFData)
+  deriving stock (Generic, Read, Show, THS.Lift)
+  deriving newtype (AE.FromJSON, AE.ToJSON, Default, Eq, FromField, FromHttpApiData, NFData, Ord, ToField)
   deriving anyclass (FromRow, ToRow)
 
 
 newtype Host = Host {host :: Text}
-  deriving stock (Show, Generic, Eq)
-  deriving anyclass (FromRow, ToRow, Default, NFData)
+  deriving stock (Eq, Generic, Show)
+  deriving anyclass (Default, FromRow, NFData, ToRow)
 
 
 instance HasField "toText" EndpointId Text where
@@ -87,10 +87,10 @@ data Endpoint = Endpoint
   , outgoing :: Bool
   , description :: Text
   }
-  deriving stock (Show, Generic, Eq)
-  deriving anyclass (FromRow, ToRow, Default, NFData)
-  deriving (AE.FromJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] Endpoint
+  deriving stock (Eq, Generic, Show)
+  deriving anyclass (Default, FromRow, NFData, ToRow)
   deriving (FromField) via Aeson Endpoint
+  deriving (AE.FromJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] Endpoint
 
 
 -- | endpointToUrlPath builds an apitoolkit path link to the endpoint details page of that endpoint.
@@ -146,8 +146,8 @@ data EndpointRequestStats = EndpointRequestStats
   , archivedAt :: Maybe UTCTime
   , anomalyId :: UUID.UUID
   }
-  deriving stock (Show, Generic, Eq)
-  deriving anyclass (FromRow, ToRow, Default, NFData)
+  deriving stock (Eq, Generic, Show)
+  deriving anyclass (Default, FromRow, NFData, ToRow)
   deriving (Entity) via (GenericEntity '[Schema "apis", TableName "endpoint_request_stats", PrimaryKey "endpoint_id", FieldModifiers '[CamelToSnake]] EndpointRequestStats)
 
 
@@ -267,10 +267,10 @@ data SwEndpoint = SwEndpoint
   , hash :: Text
   , description :: Text
   }
-  deriving stock (Show, Generic, Eq)
-  deriving anyclass (FromRow, ToRow, Default, NFData)
-  deriving (AE.FromJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] SwEndpoint
+  deriving stock (Eq, Generic, Show)
+  deriving anyclass (Default, FromRow, NFData, ToRow)
   deriving (FromField) via Aeson SwEndpoint
+  deriving (AE.FromJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] SwEndpoint
 
 
 data HostEvents = HostEvents
@@ -279,8 +279,8 @@ data HostEvents = HostEvents
   , first_seen :: Maybe ZonedTime
   , last_seen :: Maybe ZonedTime
   }
-  deriving stock (Show, Generic)
-  deriving anyclass (ToRow, FromRow, NFData)
+  deriving stock (Generic, Show)
+  deriving anyclass (FromRow, NFData, ToRow)
 
 
 endpointsByProjectId :: Projects.ProjectId -> Text -> PgT.DBT IO (V.Vector SwEndpoint)

@@ -22,7 +22,7 @@ instance (KnownSymbol prefix, Show a) => ToField (WrappedEnum prefix a) where
   toField (WrappedEnum a) = toField . T.toUpper . fromString . drop (length $ symbolVal (Proxy @prefix)) . show $ a
 
 
-instance (KnownSymbol prefix, Typeable a, Read a) => FromField (WrappedEnum prefix a) where
+instance (KnownSymbol prefix, Read a, Typeable a) => FromField (WrappedEnum prefix a) where
   fromField f = \case
     Nothing -> returnError UnexpectedNull f ""
     Just bss -> pure $ WrappedEnum (Unsafe.read $ symbolVal (Proxy @prefix) <> toString (T.toTitle (decodeUtf8 bss)))
@@ -37,7 +37,7 @@ instance (KnownSymbol prefix, Show a) => ToField (WrappedEnumSC prefix a) where
   toField (WrappedEnumSC a) = toField . quietSnake . fromString . drop (length $ symbolVal (Proxy @prefix)) . show $ a
 
 
-instance (KnownSymbol prefix, Typeable a, Read a) => FromField (WrappedEnumSC prefix a) where
+instance (KnownSymbol prefix, Read a, Typeable a) => FromField (WrappedEnumSC prefix a) where
   fromField f = \case
     Nothing -> returnError UnexpectedNull f ""
     Just bss -> pure $ WrappedEnumSC (Unsafe.read $ symbolVal (Proxy @prefix) <> toString (T.toTitle (decodeUtf8 bss)))

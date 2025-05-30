@@ -1007,11 +1007,11 @@ aiSearchH _pid requestBody = do
               if "Please provide a query"
                 `T.isInfixOf` cleanedResponse
                 || "I need more"
-                  `T.isInfixOf` cleanedResponse
+                `T.isInfixOf` cleanedResponse
                 || "Could you please"
-                  `T.isInfixOf` cleanedResponse
+                `T.isInfixOf` cleanedResponse
                 || T.length cleanedResponse
-                  < 3
+                < 3
                 then pure $ Left "INVALID_QUERY_ERROR"
                 else pure $ Right cleanedResponse
 

@@ -46,7 +46,7 @@ data SwaggerForm = SwaggerForm
   { swagger_json :: Text
   , from :: Text
   }
-  deriving stock (Show, Generic)
+  deriving stock (Generic, Show)
   deriving anyclass (FromForm)
 
 
@@ -64,7 +64,7 @@ data FieldOperation = FieldOperation
   , isEnum :: Bool
   , isRequired :: Bool
   }
-  deriving stock (Show, Generic)
+  deriving stock (Generic, Show)
   deriving anyclass (AE.FromJSON, AE.ToJSON)
 
 
@@ -73,7 +73,7 @@ data KeyPathData = KeyPathData
   , fkCategory :: Text
   , fkType :: Text
   }
-  deriving stock (Show, Generic)
+  deriving stock (Generic, Show)
   deriving anyclass (AE.FromJSON, AE.ToJSON)
 
 
@@ -92,7 +92,7 @@ data OpShape = OpShape
   , reqDescription :: Text
   , resDescription :: Text
   }
-  deriving stock (Show, Generic)
+  deriving stock (Generic, Show)
   deriving anyclass (AE.FromJSON, AE.ToJSON)
 
 
@@ -102,7 +102,7 @@ data OpEndpoint = OpEndpoint
   , endpointHost :: Text
   , endpointDescription :: Text
   }
-  deriving stock (Show, Generic)
+  deriving stock (Generic, Show)
   deriving anyclass (AE.FromJSON, AE.ToJSON)
 
 
@@ -112,7 +112,7 @@ data SaveSwaggerForm = SaveSwaggerForm
   , endpoints :: V.Vector OpEndpoint
   , diffsInfo :: V.Vector OpShape
   }
-  deriving stock (Show, Generic)
+  deriving stock (Generic, Show)
   deriving anyclass (AE.FromJSON, AE.ToJSON)
 
 
