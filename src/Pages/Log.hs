@@ -860,9 +860,7 @@ apiLogsPage page = do
                 document.addEventListener('DOMContentLoaded', function() {
                   const updateWidget = () => {
                     const visType = document.querySelector('input[name="visualization"]:checked').value;
-                    if (visType) {
-                      widgetJSON.type = visType;
-                    }
+                    if (visType) {widgetJSON.type = visType}
                     document.getElementById('visualization-widget-container').dispatchEvent(new Event('update-widget'));
                   };
                   
@@ -1008,11 +1006,11 @@ aiSearchH _pid requestBody = do
               if "Please provide a query"
                 `T.isInfixOf` cleanedResponse
                 || "I need more"
-                `T.isInfixOf` cleanedResponse
+                  `T.isInfixOf` cleanedResponse
                 || "Could you please"
-                `T.isInfixOf` cleanedResponse
+                  `T.isInfixOf` cleanedResponse
                 || T.length cleanedResponse
-                < 3
+                  < 3
                 then pure $ Left "INVALID_QUERY_ERROR"
                 else pure $ Right cleanedResponse
 
@@ -1183,23 +1181,19 @@ queryEditorInitializationCode queryLibRecent queryLibSaved = do
       popularQueriesJson = decodeUtf8 $ AE.encode Schema.popularOtelQueriesJson
   script_
     [text|
-    // Initialize query-editor component with query library data and schema
     setTimeout(() => {
       const editor = document.getElementById('filterElement');
       if (editor) {
-        // Set query library if available
         if (editor.setQueryLibrary) {
           const queryLibraryData = $queryLibDataJson;
           editor.setQueryLibrary(queryLibraryData);
         }
         
-        // Set schema data using schemaManager if available
         if (window.schemaManager && window.schemaManager.setSchemaData) {
           const schemaData = $schemaJson;
           window.schemaManager.setSchemaData('spans', schemaData);
         }
         
-        // Set popular searches directly from Haskell backend
         if (editor.setPopularSearches) {
           const popularQueries = $popularQueriesJson;
           editor.setPopularSearches(popularQueries);

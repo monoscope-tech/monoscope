@@ -115,10 +115,10 @@ generateAndSaveFacets pid tableName columns maxValues timestamp = do
               WHERE project_id = ? AND table_name = ?
               LIMIT 1 |]
         (pid.toText, tableName)
-      <&> \case
-        v
-          | V.null v -> Nothing
-          | otherwise -> Just (V.head v)
+        <&> \case
+          v
+            | V.null v -> Nothing
+            | otherwise -> Just (V.head v)
 
   -- Create a summary object with either existing or new ID
   facetId <- case existingIdM of
@@ -158,7 +158,7 @@ processQueryResults results =
         newVal = FacetValue valText count
         updatedVals = insertSorted newVal currentVals
        in
-        HM.insert colName (take 10 updatedVals) acc
+        HM.insert colName (updatedVals) acc
 
     -- Insert value into sorted list (by count, descending)
     insertSorted newVal [] = [newVal]

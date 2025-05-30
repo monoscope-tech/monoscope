@@ -31,6 +31,7 @@ import Lucid.Hyperscript (__)
 import Models.Apis.Anomalies qualified as Anomalies
 import Models.Projects.Dashboards qualified as Dashboards
 import Models.Projects.Projects qualified as Projects
+import Models.Telemetry.Schema qualified as Schema
 import Models.Users.Sessions qualified as Sessions
 import Models.Users.Users
 import NeatInterpolation
@@ -171,13 +172,6 @@ dashboardPage_ pid dashId dash dashVM = do
   });
 
   window.addEventListener('update-query', async (e) => {
-    // Check if the event has the stopImmediatePropagation flag set by a call to stopPropagation
-    // This ensures the event won't trigger dashboard-wide updates when it comes from the widget editor
-    if (e.cancelBubble) {
-      // Event propagation was cancelled by an editor, skip dashboard-wide updates
-      return;
-    }
-    
     document.querySelectorAll('.tagify-select-input[data-reload_on_change="true"]').forEach(async input => {
       const { query_sql, query } = input.dataset;
       if (!query_sql && !query) return;
@@ -196,7 +190,7 @@ dashboardPage_ pid dashId dash dashVM = do
           tagify.loading(false);
         }
       } catch (e) {
-console.error(`Error fetching data for ${input.name}:`, e);
+        console.error(`Error fetching data for ${input.name}:`, e);
       }
     });
   });
@@ -204,12 +198,7 @@ console.error(`Error fetching data for ${input.name}:`, e);
     |]
   section_ [class_ "pb-12 h-full"] $ div_ [class_ "mx-auto mb-20 pt-5 pb-6 px-6 gap-3.5 w-full flex flex-col h-full overflow-y-scroll pb-2 group/pg", id_ "dashboardPage"] do
     div_
-      [ class_ "grid-stack  -m-2 "
-      , [__|
-             on htmx:afterSettle gridStackInstance.makeWidget('.grid-stack .grid-stack-item:last-child')
-                  then set #page-data-drawer.checked to false
-      |]
-      ]
+      [class_ "grid-stack -m-2"]
       do
         forM_ dash.widgets (\w -> toHtml (w{Widget._projectId = Just pid}))
         when (null dash.widgets) $ label_ [id_ "add_a_widget_label", class_ "grid-stack-item pb-8 cursor-pointer bg-fillBrand-weak border-2 border-strokeBrand-strong border-dashed text-strokeSelected rounded-sm rounded-lg flex flex-col gap-3 items-center justify-center *:right-0!  *:bottom-0! ", term "gs-w" "3", term "gs-h" "2", Lucid.for_ "page-data-drawer"] do
@@ -222,6 +211,17 @@ console.error(`Error fetching data for ${input.name}:`, e);
 
     script_
       [text|
+        GridStack.renderCB = function(el, w) {
+          el.innerHTML = w.content;
+          const scripts = Array.from(el.querySelectorAll('script'));
+          scripts.forEach(oldScript => {
+            const newScript = document.createElement('script');
+            Array.from(oldScript.attributes).forEach(attr => newScript.setAttribute(attr.name, attr.value));
+            if (oldScript.textContent) {newScript.textContent = oldScript.textContent}
+            oldScript.parentNode.replaceChild(newScript, oldScript);
+          });
+        };
+
         // Initialize the main grid.
         var gridStackInstance = GridStack.init({
           column: 12,
@@ -269,7 +269,6 @@ console.error(`Error fetching data for ${input.name}:`, e);
             for (const nestedInstance of nestedGridInstances) {
               try {
                 // If the widget belongs to this grid, it will be removed
-                // If not, nothing happens
                 nestedInstance.removeWidget(widgetEl, true);
                 break;
               } catch (err) {
@@ -472,7 +471,6 @@ dashboardGetH pid dashId fileM fromDStr toDStr sinceStr allParams = do
   (dashVM, dash) <- getDashAndVM dashId fileM
   dash' <- forOf (#variables . traverse . traverse) dash (processVariable pid now (sinceStr, fromDStr, toDStr) allParams)
 
-  -- Process widgets and add the dashboard ID to each one
   let processWidgetWithDashboardId w = do
         processed <- processWidget pid now (sinceStr, fromDStr, toDStr) allParams w
         pure $ processed{Widget._dashboardId = Just dashId.toText}
@@ -564,12 +562,16 @@ widgetViewerEditor_ pid dashboardIdM currentRange existingWidgetM activeTab = di
     , hxVals_ "js:{...widgetJSON}"
     , hxExt_ "json-enc"
     , hxSwap_ "beforeend"
-    , hxTarget_ ".grid-stack"
+    , hxTarget_ "#widget-form" -- So we can listen on before swap here
     , hxTrigger_ "submit"
     , [__| on htmx:beforeRequest 
             if not widgetJSON.id
               gridStackInstance.removeWidget('#add_a_widget_label', true, false)
             end
+           on htmx:beforeSwap log "before swap" then log event then log event.detail.xhr.response then
+            set event.detail.shouldSwap to false then
+            set #page-data-drawer.checked to false then
+            call gridStackInstance.addWidget({w: 3,h:4, content: event.detail.serverResponse})
         |]
     ]
     ""
@@ -635,7 +637,6 @@ widgetViewerEditor_ pid dashboardIdM currentRange existingWidgetM activeTab = di
         ]
         ""
 
-    -- Widget configuration UI
     div_ [class_ "space-y-7"] do
       div_ [class_ "flex gap-3"] do
         span_ [class_ "inline-block rounded-full bg-fillWeak px-3 py-1 leading-none"] "1"
@@ -673,6 +674,29 @@ widgetViewerEditor_ pid dashboardIdM currentRange existingWidgetM activeTab = di
               , term "target-widget-preview" "widget-preview"
               ]
               ("" :: Text)
+
+          -- Initialize the query-editor with schema and library data
+          let schemaJson = decodeUtf8 $ AE.encode Schema.telemetrySchemaJson
+              popularQueriesJson = decodeUtf8 $ AE.encode Schema.popularOtelQueriesJson
+          script_
+            [text|
+              // Initialize query-editor with schema data when loaded
+              setTimeout(() => {
+                const editor = document.getElementById('filterElement');
+                if (!editor) return;
+                
+                // Set schema data using schemaManager if available
+                if (window.schemaManager && window.schemaManager.setSchemaData) {
+                  const schemaData = $schemaJson;
+                  window.schemaManager.setSchemaData('spans', schemaData);
+                }
+                
+                if (editor.setPopularSearches) {
+                  const popularQueries = $popularQueriesJson;
+                  editor.setPopularSearches(popularQueries);
+                }
+              }, 100);
+            |]
 
       div_ [class_ "space-y-7"] do
         div_ [class_ "flex gap-3"] do
@@ -986,12 +1010,9 @@ dashboardDuplicatePostH pid dashId = do
     Just dashVM -> do
       (sess, _) <- Sessions.sessionAndProject pid
       now <- Time.currentTime
-      -- Generate new dashboard ID
       newDashId <- Dashboards.DashboardId <$> UUID.genUUID
 
-      -- Create new title with "(Copy)" suffix
       let copyTitle = if dashVM.title == "" then "Untitled (Copy)" else dashVM.title <> " (Copy)"
-      -- Update schema title if it exists
       let updatedSchema =
             dashVM.schema
               & _Just . #title %~ \t ->
@@ -1000,7 +1021,6 @@ dashboardDuplicatePostH pid dashId = do
                   Just "" -> "Untitled (Copy)"
                   Just title -> title <> " (Copy)"
 
-      -- Insert the new dashboard
       _ <-
         dbtToEff
           $ DBT.insert @Dashboards.DashboardVM
@@ -1033,7 +1053,6 @@ dashboardDeleteH pid dashId = do
     Just _ -> do
       dbtToEff $ DBT.delete @Dashboards.DashboardVM (Only dashId)
 
-      -- Redirect to dashboard list page
       let redirectURI = "/p/" <> pid.toText <> "/dashboards"
       redirectCS redirectURI
       addSuccessToast "Dashboard was deleted successfully" Nothing
@@ -1055,19 +1074,12 @@ data WidgetMoveForm = WidgetMoveForm
 -- Returns the duplicated widget that will be converted to HTML automatically.
 dashboardDuplicateWidgetPostH :: Projects.ProjectId -> Dashboards.DashboardId -> Text -> ATAuthCtx (RespHeaders Widget.Widget)
 dashboardDuplicateWidgetPostH pid dashId widgetId = do
-  -- Load the dashboard
   (_, dash) <- getDashAndVM dashId Nothing
-
-  -- Find the widget to duplicate
   let widgetToDuplicateM = find (\w -> (w.id == Just widgetId) || (maybeToMonoid (slugify <$> w.title) == widgetId)) dash.widgets
-
   case widgetToDuplicateM of
     Nothing -> throwError $ err404{errBody = "Widget not found in dashboard"}
     Just widgetToDuplicate -> do
-      -- Generate a new ID for the widget
       newWidgetId <- UUID.genUUID >>= pure . UUID.toText
-
-      -- Create a copy of the widget with a new ID and modified title
       let widgetCopy =
             widgetToDuplicate
               { Widget.id = Just newWidgetId
@@ -1079,10 +1091,7 @@ dashboardDuplicateWidgetPostH pid dashId widgetId = do
               , Widget._dashboardId = Just dashId.toText
               }
 
-      -- Add the copy to the dashboard
       let updatedDash = dash{Dashboards.widgets = dash.widgets <> [widgetCopy]}
-
-      -- Update the dashboard in the database
       now <- Time.currentTime
       _ <-
         dbtToEff
@@ -1090,32 +1099,18 @@ dashboardDuplicateWidgetPostH pid dashId widgetId = do
             [[DBT.field| schema |], [DBT.field| updated_at |]]
             ([DBT.field| id |], dashId)
             (updatedDash, now)
-
       addSuccessToast "Widget duplicated successfully" Nothing
-
-      -- Return the widget directly (will be converted to HTML by ToHtml instance)
       addRespHeaders widgetCopy
 
 
--- | Handler for expanding a widget to full-screen view in a drawer.
--- Returns an HTML representation of the expanded widget with controls.
 dashboardWidgetExpandGetH :: Projects.ProjectId -> Dashboards.DashboardId -> Text -> ATAuthCtx (RespHeaders (Html ()))
 dashboardWidgetExpandGetH pid dashId widgetId = do
-  -- Load the dashboard
   (_, dash) <- getDashAndVM dashId Nothing
   now <- Time.currentTime
-
-  -- Find the widget to expand
   let widgetToExpandM = find (\w -> (w.id == Just widgetId) || (maybeToMonoid (slugify <$> w.title) == widgetId)) dash.widgets
 
   case widgetToExpandM of
     Nothing -> throwError $ err404{errBody = "Widget not found in dashboard"}
     Just widgetToExpand -> do
-      -- Process the widget to ensure data is loaded
       processedWidget <- processWidget pid now (Nothing, Nothing, Nothing) [] widgetToExpand
-
-      -- Create an expanded view of the widget using our unified component
-      -- Start with "overview" tab active by default, but user can switch to edit if they want
-      let expandedWidgetHtml = widgetViewerEditor_ pid (Just dashId) Nothing (Just processedWidget) "overview"
-
-      addRespHeaders expandedWidgetHtml
+      addRespHeaders $ widgetViewerEditor_ pid (Just dashId) Nothing (Just processedWidget) "overview"

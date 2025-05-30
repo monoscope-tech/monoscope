@@ -240,8 +240,6 @@ jobsRunner logger authCtx job = when authCtx.config.enableBackgroundJobs $ do
 runHourlyJob :: UTCTime -> Int -> ATBackgroundCtx ()
 runHourlyJob scheduledTime hour = do
   ctx <- ask @Config.AuthContext
-  Log.logInfo "Running hourly job for hour" hour
-
   let oneHourAgo = addUTCTime (-3600) scheduledTime
   activeProjects <-
     dbtToEff
@@ -271,8 +269,7 @@ runHourlyJob scheduledTime hour = do
 -- | Batch process facets generation for multiple projects using 24-hour window
 generateOtelFacetsBatch :: (DB :> es, Log :> es, UUID.UUIDEff :> es) => V.Vector Text -> UTCTime -> Eff es ()
 generateOtelFacetsBatch projectIds timestamp = do
-  Log.logInfo "Starting batch facets generation for projects" (V.length projectIds)
-  forM_ projectIds \pid -> void $ Facets.generateAndSaveFacets (Projects.ProjectId $ Unsafe.fromJust $ UUID.fromText pid) "otel_logs_and_spans" Facets.facetColumns 10 timestamp
+  forM_ projectIds \pid -> void $ Facets.generateAndSaveFacets (Projects.ProjectId $ Unsafe.fromJust $ UUID.fromText pid) "otel_logs_and_spans" Facets.facetColumns 50 timestamp
   Log.logInfo "Completed batch OTLP facets generation for projects" (V.length projectIds)
 
 
@@ -675,7 +672,7 @@ We have detected a new endpoint on *{project.title}*
                   , archivedAt = Nothing
                   }
             )
-          <$> errs
+            <$> errs
 
       forM_ project.notificationsChannel \case
         Projects.NSlack ->
