@@ -36,3 +36,4 @@ apitoolkit-server-exe*
 .hiedb-shm
 .hiedb-wal
 stack.yaml.local
+static/public/assets/web-components/dist/

@@ -18,13 +18,18 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
+    "@lit-labs/virtualizer": "^2.1.0",
     "@types/lodash": "^4.17.16",
+    "js-yaml": "^4.1.0",
+    "jsonpath": "^1.1.1",
     "lit": "^3.3.0",
     "lodash": "^4.17.21",
     "monaco-editor": "^0.52.2",
     "vite": "^6.3.5"
   },
   "devDependencies": {
+    "@types/js-yaml": "^4.0.9",
+    "@types/jsonpath": "^0.2.4",
     "@types/node": "^20.12.12",
     "@vitest/browser": "^3.1.4",
     "happy-dom": "^17.4.7",

@@ -89,7 +89,7 @@ kafkaService appLogger appCtx fn = do
     (either throwIO pure =<< K.newConsumer (consumerProps appCtx.config clientId) consumerSub)
     K.closeConsumer
     $ \consumer -> forever do
-      pollResult@(leftRecords, rightRecords) <- partitionEithers <$> K.pollMessageBatch consumer (K.Timeout 1000) (K.BatchSize appCtx.config.messagesPerPubsubPullBatch) -- timeout in milliseconds
+      pollResult@(leftRecords, rightRecords) <- partitionEithers <$> K.pollMessageBatch consumer (K.Timeout 100) (K.BatchSize (appCtx.config.messagesPerPubsubPullBatch)) -- timeout in milliseconds
       case rightRecords of
         [] -> pass
         (rec : _) -> do
@@ -129,8 +129,11 @@ kafkaService appLogger appCtx fn = do
         <> K.extraProp "sasl.mechanism" "SCRAM-SHA-256"
         <> K.extraProp "sasl.username" cfg.kafkaUsername
         <> K.extraProp "sasl.password" cfg.kafkaPassword
-        <> K.extraProp "session.timeout.ms" "30000"
-        <> K.extraProp "heartbeat.interval.ms" "10000"
+        <> K.extraProp "session.timeout.ms" "45000"
+        <> K.extraProp "heartbeat.interval.ms" "3000"
+        <> K.extraProp "max.poll.interval.ms" "300000"
+        <> K.extraProp "fetch.min.bytes" "1024"
+        <> K.extraProp "partition.assignment.strategy" "cooperative-sticky"
         <> K.extraProp "group.instance.id" clientId
         <> K.logLevel K.KafkaLogInfo
 

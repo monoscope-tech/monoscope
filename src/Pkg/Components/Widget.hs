@@ -119,6 +119,7 @@ data Widget = Widget
   , _projectId :: Maybe Projects.ProjectId
   , _dashboardId :: Maybe Text -- Dashboard ID for context
   , _isNested :: Maybe Bool
+  , _centerTitle :: Maybe Bool
   , expandBtnFn :: Maybe Text
   , children :: Maybe [Widget]
   , html :: Maybe LText
@@ -199,6 +200,7 @@ widgetHelper_ w' = case w.wType of
 
 renderWidgetHeader :: Widget -> Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe (Text, Text) -> Bool -> Html ()
 renderWidgetHeader widget wId title valueM subValueM expandBtnFn ctaM hideSub = div_ [class_ $ "leading-none flex justify-between items-center  " <> bool "grid-stack-handle" "" (widget.standalone == Just True), id_ $ wId <> "_header"] do
+  when (widget._centerTitle == Just True) $ div_ ""
   div_ [class_ "inline-flex gap-3 items-center group/h"] do
     span_ [class_ "text-sm flex items-center gap-1"] do
       unless (widget.standalone == Just True) $ span_ [class_ "hidden  group-hover/h:inline-flex"] $ Utils.faSprite_ "grip-dots-vertical" "regular" "w-4 h-4"

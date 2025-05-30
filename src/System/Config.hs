@@ -19,7 +19,7 @@ import Pkg.DBUtils qualified as DBUtils
 import Relude
 import Servant.Server (Handler)
 import System.Clock (TimeSpec (TimeSpec))
-import System.Envy (FromEnv (..), ReadShowVar (..), Var (..), decodeEnv, fromVar, toVar)
+import System.Envy (FromEnv (..), ReadShowVar (..), Var (..), decodeEnv, decodeWithDefaults, fromVar, toVar)
 import System.Logging qualified as Logging
 
 
@@ -27,6 +27,7 @@ data EnvConfig = EnvConfig
   { databaseUrl :: Text -- "DATABASE_URL"
   , timefusionPgUrl :: Text -- TIMEFUSION_PG_URL
   , port :: Int
+  , grpcPort :: Int -- "GRPC_PORT"
   , migrationsDir :: Text -- "MIGRATIONS_DIR"
   , auth0ClientId :: Text
   , auth0Secret :: Text

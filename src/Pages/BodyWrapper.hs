@@ -134,7 +134,7 @@ bodyWrapper bcfg child = do
         script_ [src_ "https://cdnjs.cloudflare.com/ajax/libs/codemirror/6.65.7/mode/javascript/javascript.min.js"] ("" :: Text)
         script_ [type_ "module", src_ $(hashAssetFile "/public/assets/web-components/dist/js/index.js")] ("" :: Text)
         script_ [src_ $(hashAssetFile "/public/assets/js/main.js")] ("" :: Text)
-        script_ [type_ "module", src_ $(hashAssetFile "/public/assets/explorer-list.js")] ("" :: Text)
+        -- script_ [type_ "module", src_ $(hashAssetFile "/public/assets/explorer-list.js")] ("" :: Text)
 
         script_
           [text|
@@ -145,8 +145,8 @@ bodyWrapper bcfg child = do
 
         script_ [src_ "/public/assets/js/thirdparty/jsyaml.min.js", crossorigin_ "true"] ("" :: Text)
         script_ [src_ "/public/assets/testeditor-utils.js"] ("" :: Text)
-        script_ [type_ "module", src_ "/public/assets/steps-editor.js"] ("" :: Text)
-        script_ [type_ "module", src_ "/public/assets/steps-assertions.js"] ("" :: Text)
+        -- script_ [type_ "module", src_ "/public/assets/steps-editor.js"] ("" :: Text)
+        -- script_ [type_ "module", src_ "/public/assets/steps-assertions.js"] ("" :: Text)
         script_
           [text|
 

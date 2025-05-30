@@ -99,10 +99,30 @@ interface SchemaField {
   fields?: Record<string, any>;
 }
 
+// Define constants to avoid duplication
+// Operators categorized by type
+const COMPARISON_OPERATORS = ['==', '!=', '>', '<', '>=', '<=', '=~'];
+const SET_OPERATORS = ['in', '!in', 'has', '!has', 'has_any', 'has_all'];
+const STRING_OPERATORS = ['contains', '!contains', 'startswith', '!startswith', 'endswith', '!endswith', 'matches'];
+const LOGICAL_OPERATORS = ['and', 'or', 'not', 'exists', '!exists'];
+const PIPE_OPERATOR = ['|'];
+
+// Combine all operators for easy access
+const ALL_OPERATORS = [...COMPARISON_OPERATORS, ...SET_OPERATORS, ...STRING_OPERATORS, ...PIPE_OPERATOR];
+
+// Sources and keywords
+const DATA_SOURCES = ['spans', 'metrics'];
+const AGGREGATION_COMMANDS = ['stats', 'timechart'];
+const AGGREGATION_MODIFIERS = ['by', 'as', 'limit'];
+const STATS_FUNCTIONS = ['count', 'sum', 'avg', 'min', 'max', 'median', 'stdev', 'range', 'p50', 'p75', 'p90', 'p95', 'p99', 'p100'];
+
+// Combine all keywords
+const KEYWORDS = [...DATA_SOURCES, ...AGGREGATION_COMMANDS, ...AGGREGATION_MODIFIERS, ...LOGICAL_OPERATORS, ...STATS_FUNCTIONS];
+
 // Schema Manager class for better encapsulation
 class SchemaManager {
-  private schemas: string[] = ['spans', 'metrics'];
-  private defaultSchema = 'spans';
+  private schemas: string[] = DATA_SOURCES;
+  private defaultSchema = DATA_SOURCES[0];
   private schemaData: Record<string, SchemaData> = {};
 
   private nestedResolver: (schema: string, prefix: string) => Promise<SchemaField[]> = async (schema, prefix) => {
@@ -214,6 +234,7 @@ class SchemaManager {
   };
 }
 
+// Create schema manager instance
 const schemaManager = new SchemaManager();
 
 // Monarch configuration for AQL
@@ -240,35 +261,8 @@ export const language = {
   defaultToken: '',
   tokenPostfix: '.aql',
   ignoreCase: true,
-  keywords: [
-    'spans',
-    'metrics',
-    'stats',
-    'timechart',
-    'by',
-    'as',
-    'limit',
-    'exists',
-    '!exists',
-    'and',
-    'or',
-    'not',
-    'count',
-    'sum',
-    'avg',
-    'min',
-    'max',
-    'median',
-    'stdev',
-    'range',
-    'p50',
-    'p75',
-    'p90',
-    'p95',
-    'p99',
-    'p100',
-  ],
-  operators: ['==', '!=', '>', '<', '>=', '<=', '=~', 'in', '!in', 'has', '!has', 'has_any', 'has_all', 'contains', '!contains', 'startswith', '!startswith', 'endswith', '!endswith', 'matches', '|'],
+  keywords: KEYWORDS,
+  operators: ALL_OPERATORS,
   tokenizer: {
     root: [
       [/\[[0-9]+(?:\.[0-9]+)?(?:s|m|h|d|w)\]/, 'number.timespan'],
@@ -345,13 +339,14 @@ monaco.languages.registerCompletionItemProvider('aql', {
     const lineText = currentLine.substring(0, position.column - 1);
     console.log('lineText for analysis:', JSON.stringify(lineText));
 
-    // Check for nested fields after dot
+    // First priority: Check for nested fields after dot
     const dotMatch =
       lineText.match(/([a-zA-Z_][a-zA-Z0-9_]*(?:\.[a-zA-Z_][a-zA-Z0-9_]*)*)\.$/) ||
       lineText.match(/([a-zA-Z_][a-zA-Z0-9_]*(?:\.[a-zA-Z_][a-zA-Z0-9_]*)*)\.[a-zA-Z0-9_]*$/);
 
     console.log('dotMatch result:', dotMatch);
     if (dotMatch) {
+      console.log('Dot match detected, suggesting nested fields');
       const fieldPrefix = dotMatch[1];
       const nested = await schemaManager.resolveNested(currentSchema, fieldPrefix);
 
@@ -369,13 +364,35 @@ monaco.languages.registerCompletionItemProvider('aql', {
       return { suggestions };
     }
 
-    // Check for operator pattern - show value suggestions
-    const operatorMatch = lineText.match(/([\w\.]+)\s*(==|!=|>=|<=|>|<|=~|in|!in|has|!has|has_any|has_all|contains|!contains|startswith|!startswith|endswith|!endswith|matches)\s*$/);
+    // Second priority: Check for field name followed by space - show operator suggestions
+    const fieldSpaceMatch = lineText.match(/([a-zA-Z_][a-zA-Z0-9_]*(?:\.[a-zA-Z_][a-zA-Z0-9_]*)*)\s+$/);
+    const logicalOperatorPattern = new RegExp(`\\b(${LOGICAL_OPERATORS.filter((op) => ['and', 'or'].includes(op)).join('|')})\\s+$`, 'i');
+    const logicalOperatorMatch = lineText.match(logicalOperatorPattern);
+    
+    if (fieldSpaceMatch && !logicalOperatorMatch) {
+      console.log('Field followed by space detected, suggesting operators');
+      // Display all operators horizontally by concatenating all operator arrays
+      [...COMPARISON_OPERATORS, ...SET_OPERATORS, ...STRING_OPERATORS, ...LOGICAL_OPERATORS].forEach((op) =>
+        suggestions.push({
+          label: op,
+          kind: monaco.languages.CompletionItemKind.Operator,
+          insertText: `${op} `,
+          range: createRange(),
+        })
+      );
+      return { suggestions };
+    }
+    
+    // Third priority: Check for operator pattern - show value suggestions
+    // Updated regex to require a space before the operator
+    const operatorMatch = lineText.match(new RegExp(`([\\w\\.]+)\\s+(${ALL_OPERATORS.join('|')})\\s*$`));
     if (operatorMatch) {
+      console.log('Field and operator detected, suggesting values');
       const fieldName = operatorMatch[1];
       const operator = operatorMatch[2];
+      console.log('Field:', fieldName, 'Operator:', operator);
       const values = await schemaManager.resolveValues(currentSchema, fieldName);
-      
+
       // Special handling for 'in' and '!in' operators
       if (operator === 'in' || operator === '!in') {
         suggestions.push({
@@ -397,10 +414,11 @@ monaco.languages.registerCompletionItemProvider('aql', {
       return { suggestions };
     }
 
-    // Check for complete field-operator-value pattern
+    // Fourth priority: Check for complete field-operator-value pattern - suggest logical operators
     const afterValue = /".*"\s*$/.test(lineText) || /\d+\s*$/.test(lineText);
     if (afterValue) {
-      ['and', 'or', '|'].forEach((op) =>
+      console.log('Complete expression detected, suggesting logical operators');
+      [...LOGICAL_OPERATORS.filter((op) => op === 'and' || op === 'or'), PIPE_OPERATOR[0]].forEach((op) =>
         suggestions.push({
           label: op,
           kind: monaco.languages.CompletionItemKind.Operator,
@@ -411,9 +429,9 @@ monaco.languages.registerCompletionItemProvider('aql', {
       return { suggestions };
     }
 
-    // Check for logical operators followed by space
-    const logicalOperatorMatch = lineText.match(/\b(and|or)\s+$/i);
+    // Fifth priority: Check for logical operators followed by space - suggest fields
     if (logicalOperatorMatch) {
+      console.log('Logical operator followed by space detected, suggesting fields');
       const fields = await schemaManager.resolveNested(currentSchema, '');
       fields.forEach((f) =>
         suggestions.push({
@@ -428,22 +446,9 @@ monaco.languages.registerCompletionItemProvider('aql', {
       return { suggestions };
     }
 
-    // Check for field name followed by space
-    const fieldSpaceMatch = lineText.match(/([a-zA-Z_][a-zA-Z0-9_]*(?:\.[a-zA-Z_][a-zA-Z0-9_]*)*)\s+$/);
-    if (fieldSpaceMatch && !logicalOperatorMatch) {
-      ['==', '!=', '>', '<', '>=', '<=', '=~', 'in', '!in', 'has', '!has', 'has_any', 'has_all', 'contains', '!contains', 'startswith', '!startswith', 'endswith', '!endswith', 'matches', 'and', 'or', 'not', 'exists'].forEach((op) =>
-        suggestions.push({
-          label: op,
-          kind: monaco.languages.CompletionItemKind.Operator,
-          insertText: `${op} `,
-          range: createRange(),
-        })
-      );
-      return { suggestions };
-    }
-
     // Empty or start
     if (segments.length === 1 && (last === '' || !tables.some((t) => last.toLowerCase().startsWith(t)))) {
+      // Suggest data sources (tables)
       tables
         .filter((t) => last === '' || t.toLowerCase().startsWith(last.toLowerCase().trim()))
         .forEach((t) =>
@@ -489,7 +494,8 @@ monaco.languages.registerCompletionItemProvider('aql', {
 
     // After schema
     if (segments.length === 1 && tables.includes(last.toLowerCase())) {
-      ['limit', 'stats', 'timechart'].forEach((k) =>
+      // Suggest aggregation commands and modifiers
+      [...AGGREGATION_COMMANDS, 'limit'].forEach((k) =>
         suggestions.push({
           label: k,
           kind: monaco.languages.CompletionItemKind.Keyword,
@@ -510,8 +516,9 @@ monaco.languages.registerCompletionItemProvider('aql', {
     }
 
     // Search segment
-    if (!/stats|timechart/i.test(last)) {
-      ['==', '!=', '>', '<', '>=', '<=', '=~', 'in', '!in', 'has', '!has', 'has_any', 'has_all', 'contains', '!contains', 'startswith', '!startswith', 'endswith', '!endswith', 'matches', 'and', 'or', 'not', 'exists'].forEach((op) =>
+    if (!new RegExp(`${AGGREGATION_COMMANDS.join('|')}`, 'i').test(last)) {
+      // Display all operators horizontally by concatenating all operator arrays
+      [...COMPARISON_OPERATORS, ...SET_OPERATORS, ...STRING_OPERATORS, ...LOGICAL_OPERATORS].forEach((op) =>
         suggestions.push({
           label: op,
           kind: monaco.languages.CompletionItemKind.Operator,
@@ -536,8 +543,8 @@ monaco.languages.registerCompletionItemProvider('aql', {
 
     // Stats/timechart segment
     if (/stats\s|timechart\s/i.test(last)) {
-      const statsFunctions = ['count', 'sum', 'avg', 'min', 'max', 'median', 'stdev', 'range', 'p50', 'p75', 'p90', 'p95', 'p99', 'p100'];
-      statsFunctions.forEach((fn) =>
+      // Use the STATS_FUNCTIONS constant directly
+      STATS_FUNCTIONS.forEach((fn) =>
         suggestions.push({
           label: fn,
           kind: monaco.languages.CompletionItemKind.Function,
@@ -698,6 +705,62 @@ export class QueryEditorComponent extends LitElement {
       query: stripPrefix(item.queryText),
       owner: { name: item.byMe ? 'You' : 'Other', icon: item.byMe ? '👤' : '👥' },
     }));
+  }
+
+  // Toggle a subquery - add if not present, remove if present
+  public toggleSubQuery(queryFragment: string): void {
+    if (!this.editor) return;
+    const currentValue = this.editor.getValue().trim();
+
+    if (currentValue.includes(queryFragment)) {
+      // Remove the fragment if it exists
+      const escFragment = queryFragment.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      let newQuery = currentValue;
+
+      // Handle different position cases
+      if (new RegExp(`^${escFragment}$`).test(currentValue)) {
+        newQuery = ''; // It's the only query
+      } else if (new RegExp(`^${escFragment} and `, 'i').test(currentValue)) {
+        newQuery = currentValue.replace(new RegExp(`^${escFragment} and `, 'i'), ''); // At start
+      } else if (new RegExp(` and ${escFragment}$`, 'i').test(currentValue)) {
+        newQuery = currentValue.replace(new RegExp(` and ${escFragment}$`, 'i'), ''); // At end
+      } else {
+        newQuery = currentValue.replace(new RegExp(` and ${escFragment}`, 'i'), ''); // In middle
+      }
+
+      // Clean up
+      newQuery = newQuery.replace(/^and /i, '').replace(/ and$/i, '').trim();
+      this.handleAddQuery(newQuery, true);
+    } else {
+      // Add the fragment if it doesn't exist
+      this.handleAddQuery(queryFragment, currentValue ? false : true);
+    }
+  }
+
+  public handleVisualizationChange(visualizationType: string): void {
+    console.log('handleVisualizationChange', visualizationType);
+    if (!this.editor) return;
+
+    const currentQuery = this.editor.getValue().trim();
+    const baseQuery = currentQuery.replace(/\|\s*(timechart|stats)\s+[^|]*$/i, '').trim();
+
+    let newQuery = '';
+    switch (visualizationType) {
+      case 'timeseries':
+        newQuery = baseQuery ? `${baseQuery} | timechart [5m] count(*)` : 'timechart [5m] count(*)';
+        break;
+      case 'table':
+      case 'top-list':
+      case 'distribution':
+      case 'query-value':
+        newQuery = baseQuery ? `${baseQuery} | stats count(*)` : 'stats count(*)';
+        break;
+      default: // logs
+        newQuery = baseQuery;
+        break;
+    }
+
+    this.handleAddQuery(newQuery, true);
   }
 
   public handleAddQuery(queryFragment: string, replace: boolean = false): void {

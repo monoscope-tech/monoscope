@@ -1,26 +1,34 @@
-import { LitElement, html, nothing, unsafeHTML, repeat } from './js/thirdparty/lit.js'
-import { renderAssertionBuilder } from './steps-assertions.js'
-import { makeRequestAndProcessResponse, generateRequestPreviewFromObject, renderJsonWithIndentation } from './steps-executor.js'
+import { LitElement, TemplateResult, html, nothing } from 'lit';
+import { unsafeHTML } from 'lit/directives/unsafe-html.js';
+import jsyaml from 'js-yaml';
+import { renderAssertionBuilder } from './steps-assertions.js';
+import { makeRequestAndProcessResponse, generateRequestPreviewFromObject, renderJsonWithIndentation } from './steps-executer';
+import { customElement, query, state } from 'lit/decorators.js';
+import * as monaco from 'monaco-editor';
+import { convertTestkitToCollectionSteps, convertCollectionStepsToTestkitFormat, faSprite_ } from './test-editor-utils';
+import { Assertion, AssertionBuilderProps, AssertionResult, Result, Step } from '../types/types';
 
-const validMethods = ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'HEAD', 'OPTIONS', 'TRACE', 'CONNECT']
+const validMethods = ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'HEAD', 'OPTIONS', 'TRACE', 'CONNECT'];
 
+@customElement('steps-editor')
 export class StepsEditor extends LitElement {
-  static properties = {
-    collectionSteps: [],
-    collectionResults: [],
-    saveErrors: [],
-    isSendingRequest: [],
-    sendRequestErrors: [],
-    isOnboarding: false,
-  }
+  @state() private collectionSteps: Step[] = [];
+  @state() private collectionResults: any[] = [];
+  @state() private saveErrors: Record<string, any>[] = [];
+  @state() private isSendingRequest: boolean[] = [];
+  @state() private sendRequestErrors: (string | null)[] = [];
+  @state() private isOnboarding = false;
 
+  private editor: any = null;
+  private response: any = {};
+  @query('#editor-container') private editorContainer!: HTMLElement;
+  createRenderRoot = () => this;
   constructor() {
-    super()
-    this.collectionSteps = convertTestkitToCollectionSteps(window.collectionSteps) || []
-    this.collectionResults = window.collectionResults || []
-    this.saveErrors = []
-    this.isSendingRequest = this.collectionSteps.map(() => false)
-    this.sendRequestErrors = this.collectionSteps.map(() => null)
+    super();
+    this.collectionSteps = convertTestkitToCollectionSteps(window.collectionSteps) || [];
+    this.collectionResults = window.collectionResults || [];
+    this.isSendingRequest = this.collectionSteps.map(() => false);
+    this.sendRequestErrors = this.collectionSteps.map(() => null);
 
     // Ensure there's at least one step
     if (this.collectionSteps.length === 0) {
@@ -31,45 +39,42 @@ export class StepsEditor extends LitElement {
           assertions: [{ equal: ['$.resp.status', 200] }],
           _assertions: [{ type: 'statusCode', operation: 'equals', value: 200, status: 'PASSED' }],
         },
-      ]
+      ];
     } else if (this.collectionSteps.length == 1) {
-      this.collectionSteps[0]._expanded = true
+      this.collectionSteps[0]._expanded = true;
     }
-    require.config({ paths: { vs: '/public/assets/js/monaco/vs' } })
-    require.config({ paths: { vs: 'https://unpkg.com/monaco-editor/min/vs' } })
-    require(['vs/editor/editor.main'], () => {
-      this.initializeEditor(monaco)
-    })
+
+    // this.initializeEditor(monaco);
 
     window.updateStepAssertions = (assertion, expression, step) => {
-      const stepData = this.collectionSteps[step]
-      const asserts = stepData.asserts || []
-      asserts.push({ [assertion]: expression })
-      stepData.asserts = asserts
-      this.collectionSteps[step] = stepData
-      window.collectionSteps = this.collectionSteps
-      this.requestUpdate()
-    }
+      const stepData = this.collectionSteps[step];
+      const asserts = stepData.asserts || [];
+      asserts.push({ [assertion]: expression });
+      stepData.asserts = asserts;
+      this.collectionSteps[step] = stepData;
+      window.collectionSteps = this.collectionSteps;
+      this.requestUpdate();
+    };
 
-    window.updateCollectionResults = results => {
+    window.updateCollectionResults = (results) => {
       if (results && Array.isArray(results)) {
-        this.collectionResults = results
+        this.collectionResults = results;
       }
-      this.requestUpdate()
-    }
+      this.requestUpdate();
+    };
 
-    window.updateStepsWithErrors = errors => {
+    window.updateStepsWithErrors = (errors) => {
       if (errors && Array.isArray(errors)) {
-        this.saveErrors = errors
+        this.saveErrors = errors;
       }
-      this.requestUpdate()
-    }
+      this.requestUpdate();
+    };
     window.updateEditorVal = () => {
       // this.updateEditorContent()
-    }
+    };
     window.addCollectionStep = () => {
-      this.addStep()
-    }
+      this.addStep();
+    };
   }
   addStep() {
     this.collectionSteps = [
@@ -88,11 +93,10 @@ export class StepsEditor extends LitElement {
           },
         ],
       },
-    ]
+    ];
   }
-  initializeEditor(monaco) {
-    const editorContainer = this.querySelector('#steps-codeEditor')
-    const reqBodyContainer = this.querySelector('#reqBodyContainer')
+  initializeEditor(monaco: typeof import('monaco-editor')) {
+    const reqBodyContainer = this.querySelector('#reqBodyContainer');
 
     monaco.editor.defineTheme('nightOwl', {
       base: 'vs-dark',
@@ -120,10 +124,10 @@ export class StepsEditor extends LitElement {
         'editorCursor.foreground': '#D4D4D4',
         'editorWhitespace.foreground': '#404040',
       },
-    })
+    });
 
-    this.editor = monaco.editor.create(editorContainer, {
-      value: jsyaml.dump(convertCollectionStepsToTestkitFormat(this.collectionSteps), { ident: 2 }),
+    this.editor = monaco.editor.create(this.editorContainer, {
+      value: jsyaml.dump(convertCollectionStepsToTestkitFormat(this.collectionSteps), { indent: 2 }),
       language: 'yaml',
       theme: 'nightOwl',
       fontSize: 14,
@@ -134,135 +138,131 @@ export class StepsEditor extends LitElement {
       fontFamily: 'JetBrains Mono, monospace',
       fontLigatures: true,
       fontWeight: '400',
-    })
+    });
 
-    const model = this.editor.getModel()
+    const model = this.editor.getModel();
     model.onDidChangeContent(() => {
       try {
-        const newCollectionSteps = jsyaml.load(model.getValue())
-        const toggler = document.querySelector('#test-code-toggle')
+        const newCollectionSteps = jsyaml.load(model.getValue());
+        const toggler = document.querySelector('#test-code-toggle') as HTMLInputElement;
         if (this.collectionSteps != convertTestkitToCollectionSteps(newCollectionSteps)) {
           if (toggler && toggler.checked) {
-            this.collectionSteps = convertTestkitToCollectionSteps(newCollectionSteps)
+            this.collectionSteps = convertTestkitToCollectionSteps(newCollectionSteps);
           }
         }
       } catch (e) {
-        console.error('Invalid YAML input', e)
+        console.error('Invalid YAML input', e);
       }
-    })
+    });
   }
 
   updateEditorContent() {
-    const testkitContent = convertCollectionStepsToTestkitFormat(this.collectionSteps)
-    const editorContent = jsyaml.dump(testkitContent, { ident: 2 })
+    const testkitContent = convertCollectionStepsToTestkitFormat(this.collectionSteps);
+    const editorContent = jsyaml.dump(testkitContent, { indent: 2 });
     if (this.editor) {
-      this.editor.getModel().setValue(editorContent)
+      this.editor.getModel().setValue(editorContent);
     }
   }
 
-  createRenderRoot() {
-    return this
-  }
+  _onDragOver(event: any) {
+    event.preventDefault();
+    const items = document.querySelectorAll('.draggable');
+    let closestItem: Element | null = null;
+    let smallestDistance = Number.MAX_SAFE_INTEGER;
 
-  _onDragOver(event) {
-    event.preventDefault()
-    const items = document.querySelectorAll('.draggable')
-    let closestItem = null
-    let smallestDistance = Number.MAX_SAFE_INTEGER
-
-    items.forEach(item => {
-      const box = item.getBoundingClientRect()
-      const midpoint = box.top + box.height / 2
-      const distance = Math.abs(event.clientY - midpoint)
+    items.forEach((item) => {
+      const box = item.getBoundingClientRect();
+      const midpoint = box.top + box.height / 2;
+      const distance = Math.abs(event.clientY - midpoint);
       if (distance < smallestDistance) {
-        closestItem = item
-        smallestDistance = distance
+        closestItem = item;
+        smallestDistance = distance;
       }
-    })
+    });
 
-    items.forEach(item => {
+    items.forEach((item) => {
       if (item === closestItem) {
-        item.classList.add('active-drop-target')
+        item.classList.add('active-drop-target');
       } else {
-        item.classList.remove('active-drop-target')
+        item.classList.remove('active-drop-target');
       }
-    })
+    });
   }
 
-  _onDragEnter(event) {
+  _onDragEnter(event: any) {
     if (event.target.hasAttribute('data-index')) {
-      event.preventDefault() // Necessary to allow dropping
-      event.target.classList.add('over') // Highlight the drop target only if it has data-index
+      event.preventDefault(); // Necessary to allow dropping
+      event.target.classList.add('over'); // Highlight the drop target only if it has data-index
     }
   }
 
-  _onDragLeave(event) {
+  _onDragLeave(event: any) {
     if (event.target.hasAttribute('data-index')) {
-      event.target.classList.remove('over')
-      event.target.classList.remove('active-drop-target') // Remove additional highlight
+      event.target.classList.remove('over');
+      event.target.classList.remove('active-drop-target'); // Remove additional highlight
     }
   }
 
-  _onDrop(event) {
-    const activeTarget = document.querySelector('.active-drop-target')
+  _onDrop(event: any) {
+    const activeTarget = document.querySelector('.active-drop-target') as HTMLElement;
     if (activeTarget) {
-      event.preventDefault()
-      activeTarget.classList.remove('over')
-      activeTarget.classList.remove('active-drop-target')
-      const originIndex = parseInt(event.dataTransfer.getData('text/plain'))
-      const targetIndex = parseInt(activeTarget.dataset.index)
+      event.preventDefault();
+      activeTarget.classList.remove('over');
+      activeTarget.classList.remove('active-drop-target');
+      const originIndex = parseInt(event.dataTransfer.getData('text/plain'));
+      const targetIndex = parseInt(activeTarget.dataset.index || '0');
       if (targetIndex !== originIndex) {
-        const movedItems = [...this.collectionSteps]
-        const item = movedItems.splice(originIndex, 1)[0]
-        movedItems.splice(targetIndex, 0, item)
-        this.collectionSteps = [...movedItems]
-        this.requestUpdate()
+        const movedItems = [...this.collectionSteps];
+        const item = movedItems.splice(originIndex, 1)[0];
+        movedItems.splice(targetIndex, 0, item);
+        this.collectionSteps = [...movedItems];
+        this.requestUpdate();
       }
     }
   }
 
-  toggleExpanded(idx) {
-    this.collectionSteps[idx]._expanded = !this.collectionSteps[idx]._expanded
-    this.requestUpdate()
+  toggleExpanded(idx: number) {
+    this.collectionSteps[idx]._expanded = !this.collectionSteps[idx]._expanded;
+    this.requestUpdate();
   }
 
-  async sendStepRequest(e, idx) {
-    e.preventDefault()
-    this.isSendingRequest[idx] = true
-    this.requestUpdate()
-    this.sendRequestErrors[idx] = null
+  async sendStepRequest(e: any, idx: number) {
+    e.preventDefault();
+    this.isSendingRequest[idx] = true;
+    this.requestUpdate();
+    this.sendRequestErrors[idx] = null;
     try {
-      const resp = await makeRequestAndProcessResponse(this.collectionSteps[idx])
-      const stepResult = this.collectionResults[idx]
+      const resp = await makeRequestAndProcessResponse(this.collectionSteps[idx]);
+      const stepResult = this.collectionResults[idx];
       if (stepResult) {
-        this.collectionResults[idx] = { ...stepResult, ...resp }
+        this.collectionResults[idx] = { ...stepResult, ...resp };
       } else {
-        this.collectionResults[idx] = { ...resp }
+        this.collectionResults[idx] = { ...resp };
       }
-    } catch (error) {
-      let msg = error.message
+    } catch (error: any) {
+      let msg = error.message;
       if (msg === 'Failed to fetch') {
         if (!navigator.onLine) {
-          msg += ': Please check your network connection'
+          msg += ': Please check your network connection';
         } else {
-          msg += ': This could be due to a CORS restriction, DNS failure, server being unreachable.'
+          msg += ': This could be due to a CORS restriction, DNS failure, server being unreachable.';
         }
       }
-      this.sendRequestErrors[idx] = 'Send request error: \n' + msg
+      this.sendRequestErrors[idx] = 'Send request error: \n' + msg;
     } finally {
-      this.isSendingRequest[idx] = false
-      this.requestUpdate()
+      this.isSendingRequest[idx] = false;
+      this.requestUpdate();
     }
   }
 
-  renderCollectionStep(stepData, idx, result, saveError) {
-    const stepResult = this.collectionResults[idx]
-    const hasResults = !!result
-    const hasFailingAssertions = result?.assert_results?.some(a => !a.ok || a.ok === false) || false
-    const svErr = saveError !== undefined
-    const failed = !stepData.disabled && (hasFailingAssertions || svErr)
-    const passed = !stepData.disabled && hasResults && !hasFailingAssertions && !svErr
-    saveError = saveError ? saveError : {}
+  renderCollectionStep(stepData: Step, idx: number, result: Result | null, saveError: { method?: string; url?: string }) {
+    const stepResult = this.collectionResults[idx];
+    const hasResults = !!result;
+    const hasFailingAssertions = result?.assert_results?.some((a) => a.ok === undefined || a.ok === false) || false;
+    const svErr = saveError !== undefined;
+    const failed = !stepData.disabled && (hasFailingAssertions || svErr);
+    const passed = !stepData.disabled && hasResults && !hasFailingAssertions && !svErr;
+    saveError = saveError ? saveError : {};
     const configuredOptions = {
       'request-options': (stepData.headers ? Object.keys(stepData.headers) : []).length,
       'query-params': (stepData.params ? Object.keys(stepData.params) : []).length,
@@ -270,13 +270,13 @@ export class StepsEditor extends LitElement {
       ignoreSSLErrors: stepData.ignoreSSLErrors ? 1 : 0,
       followRedirects: stepData.followRedirects ? 1 : 0,
       timeout: stepData.timeout !== 60 ? 1 : 0,
-    }
-    const activeTab = this.collectionSteps[idx].activeTab || 'request-options'
-    const setActiveTab = tab => {
-      this.collectionSteps[idx].activeTab = tab
-      this.requestUpdate()
-    }
-    const totalConfigured = Object.values(configuredOptions).reduce((a, b) => a + b, 0)
+    };
+    const activeTab = this.collectionSteps[idx].activeTab || 'request-options';
+    const setActiveTab = (tab: string) => {
+      this.collectionSteps[idx].activeTab = tab;
+      this.requestUpdate();
+    };
+    const totalConfigured = Object.values(configuredOptions).reduce((a, b) => a + b, 0);
 
     return html`
       <div
@@ -288,34 +288,34 @@ export class StepsEditor extends LitElement {
         <div class="flex flex-row items-center">
           <div class="h-full shrink p-3 cursor-move"
             draggable="true"
-            @dragstart="${e => e.dataTransfer.setData('text/plain', e.target.dataset.index)}"
+            @dragstart="${(e: any) => e.dataTransfer.setData('text/plain', e.target.dataset.index)}"
           >${faSprite_('grip-dots-vertical', 'solid', 'h-4 w-4')}</div>
           <div class="flex-1 flex flex-row items-center gap-1 pr-5 py-3" @click="${() => this.toggleExpanded(idx)}">
             <label
              for="stepState-${idx}" class="flex items-center whitespace-nowrap gap-1 py-1 w-max text-xs bg-fillStrong badge text-textInverse-strong">Step ${
       idx + 1
     }</label>
-            <div class="w-full space-y-1 shrink" @click="${e => e.stopPropagation()}">
+            <div class="w-full space-y-1 shrink" @click="${(e: any) => e.stopPropagation()}">
               <input
               class="text-lg w-full pl-2 bg-transparent outline-hidden focus:outline-hidden" placeholder="Give your step a name*"
-               .value="${stepData.title || ''}" id="title-${idx}" @change=${e => this.updateValue(e, idx, null, null, 'title')} />
+               .value="${stepData.title || ''}" id="title-${idx}" @change=${(e: any) => this.updateValue(e, idx, null, null, 'title')} />
             </div>
             <div class="items-center w-max shrink-0 gap-3 text-xs text-slate-600 flex">
                 <input
-                  @click="${e => e.stopPropagation()}"
-                  @change="${e => {
-                    this.collectionSteps[idx].disabled = !e.target.checked
-                    this.requestUpdate()
+                  @click="${(e: any) => e.stopPropagation()}"
+                  @change="${(e: any) => {
+                    this.collectionSteps[idx].disabled = !e.target.checked;
+                    this.requestUpdate();
                   }}"
                   ?checked="${stepData.disabled === undefined ? true : stepData.disabled ? false : true}"
                   type="checkbox"
                   class="toggle toggle-sm  ${stepData.disabled ? 'border-red-500  text-[#ef4444]' : 'border-green-500 text-[#22c55e]'}"
                    />
-                <button class="text-red-700 cursor-pointer" @click="${e => {
-                  e.preventDefault()
-                  e.stopPropagation()
-                  this.collectionSteps = this.collectionSteps.filter((_, i) => i != idx)
-                  this.collectionResults = this.collectionResults.filter((_, i) => i != idx)
+                <button class="text-red-700 cursor-pointer" @click="${(e: any) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  this.collectionSteps = this.collectionSteps.filter((_, i) => i != idx);
+                  this.collectionResults = this.collectionResults.filter((_, i) => i != idx);
                 }}">
                   ${faSprite_('trash', 'regular', 'w-4 h-4 stroke-red-700')}
                 </button>
@@ -333,17 +333,18 @@ export class StepsEditor extends LitElement {
                 <div class="text-sm text-slate-700"><div>URL<span class="text-error">*</span></div></div>
                 <div class="relative flex flex-row gap-2 items-center">
                   <label for="actions-list-input-${idx}" class="w-28 shrink text-sm font-medium form-control">
-                    <select id="actions-list-input-${idx}" class="select select-sm shadow-none w-full" @change=${e =>
+                    <select id="actions-list-input-${idx}" class="select select-sm shadow-none w-full" @change=${(e: any) =>
       this.updateValue(e, idx, null, null, '_method')}>
-                      ${validMethods.map(methodItem => html`<option ?selected=${methodItem == stepData._method}>${methodItem}</option>`)}
+                      ${validMethods.map((methodItem) => html`<option ?selected=${methodItem == stepData._method}>${methodItem}</option>`)}
                     </select>
                     ${saveError.method ? html`<span class="text-red-700 text-xs">${saveError.method}</span>` : ''}
                   </label>
                   <label for="actions-data-${idx}" class="flex-1 text-sm font-medium form-control w-full flex flex-row items-center gap-1">
                     <input
                       placeholder="https://example.com/api/users"
-                      type="text" id="actions-data-${idx}" .value=${stepData._url || ''} class="input input-sm shadow-none w-full" @change=${e =>
-      this.updateValue(e, idx, null, null, '_url')}
+                      type="text" id="actions-data-${idx}" .value=${
+      stepData._url || ''
+    } class="input input-sm shadow-none w-full" @change=${(e: any) => this.updateValue(e, idx, null, null, '_url')}
                     />
                     ${saveError.url ? html`<span class="text-red-700 text-xs">${saveError.url}</span>` : ''}
                   </label>
@@ -391,8 +392,8 @@ export class StepsEditor extends LitElement {
                                 <select
                                   class="select select-sm max-w-xs shadow-none"
                                   .value=${this.collectionSteps[idx].httpVersion}
-                                  @change=${e => {
-                                    this.collectionSteps[idx].httpVersion = e.target.value
+                                  @change=${(e: any) => {
+                                    this.collectionSteps[idx].httpVersion = e.target.value;
                                   }}
                                 >
                                   <option value="http2-http1">HTTP/2 fallback to HTTP/1.1</option>
@@ -407,7 +408,7 @@ export class StepsEditor extends LitElement {
                                       type="checkbox"
                                       class="checkbox checkbox-sm"
                                       ?checked=${stepData.followRedirects}
-                                      @change=${e => (this.collectionSteps[idx].followRedirects = e.target.value == 'on')}
+                                      @change=${(e: any) => (this.collectionSteps[idx].followRedirects = e.target.value == 'on')}
                                     />
                                     <span class="text-slate-700 font-medium">Follow redirects</span>
                                   </label>
@@ -418,7 +419,7 @@ export class StepsEditor extends LitElement {
                                       type="checkbox"
                                       class="checkbox checkbox-sm"
                                       ?checked=${stepData.ignoreSSLErrors}
-                                      @change=${e => (this.collectionSteps[idx].ignoreSSLErrors = e.target.value == 'on')}
+                                      @change=${(e: any) => (this.collectionSteps[idx].ignoreSSLErrors = e.target.value == 'on')}
                                     />
                                     <span class="text-slate-700 font-medium">Ignore server certificate error</span>
                                   </label>
@@ -431,20 +432,22 @@ export class StepsEditor extends LitElement {
                                   type="number"
                                   value=${stepData.timeout || 60}
                                   class="input input-sm w-20 shadow-none"
-                                  @change=${e => (this.collectionSteps[idx].timeout = parseInt(e.target.value))}
+                                  @change=${(e: any) => (this.collectionSteps[idx].timeout = parseInt(e.target.value))}
                                 />
                                 <span>seconds</span>
                               </div>
                               <div class="form-control w-full">
                                 <div class="label"><span class="label-text">Request Headers</span></div>
-                                <div class="space-y-2 paramRows" id="[${idx}][headers]">${this.renderParamsRows(stepData, idx, 'headers')}</div>
+                                <div class="space-y-2 paramRows" id="[${idx}][headers]">
+                                  ${this.renderParamsRows(stepData, idx, 'headers')}
+                                </div>
                               </div>
                               <div class="form-control w-full">
                                 <div class="label"><span class="label-text">Cookies</span></div>
                                 <textarea
                                   class="textarea"
                                   placeholder="cookie-name-1=value; cookie-name-2=value"
-                                  @change=${e => ((this.collectionSteps[idx].headers ??= {}).Cookie = e.target.value)}
+                                  @change=${(e: any) => ((this.collectionSteps[idx].headers ??= {}).Cookie = e.target.value)}
                                 >
 ${stepData?.headers?.Cookie || ''}</textarea
                                 >
@@ -459,11 +462,13 @@ ${stepData?.headers?.Cookie || ''}</textarea
                                 <div class="label flex-col items-start gap-2">
                                   <p class="label-text">Parameters to encode</p>
                                   <p class="label-text text-xs">
-                                    Add all parameters that require encoding to the below fields. Query parameters that do not require encoding can be added to
-                                    the URL field directly.
+                                    Add all parameters that require encoding to the below fields. Query parameters that do not require
+                                    encoding can be added to the URL field directly.
                                   </p>
                                 </div>
-                                <div class="space-y-2 paramRows" id="[${idx}][params]">${this.renderParamsRows(stepData, idx, 'params')}</div>
+                                <div class="space-y-2 paramRows" id="[${idx}][params]">
+                                  ${this.renderParamsRows(stepData, idx, 'params')}
+                                </div>
                               </div>
                             `
                           : nothing
@@ -476,9 +481,9 @@ ${stepData?.headers?.Cookie || ''}</textarea
                                 <select
                                   class="select select-sm max-w-xs"
                                   .value=${stepData._requestType || 'application/json'}
-                                  @change=${e => {
-                                    this.collectionSteps[idx]._requestType = e.target.value
-                                    this.requestUpdate()
+                                  @change=${(e: any) => {
+                                    this.collectionSteps[idx]._requestType = e.target.value;
+                                    this.requestUpdate();
                                   }}
                                 >
                                   <option>application/json</option>
@@ -498,8 +503,8 @@ ${stepData?.headers?.Cookie || ''}</textarea
                                   : html` <textarea
                                       class="w-full border border-slate-200 textarea"
                                       name="[${idx}][json]"
-                                      @change=${e => {
-                                        this.collectionSteps[idx]._json = e.target.value
+                                      @change=${(e: any) => {
+                                        this.collectionSteps[idx]._json = e.target.value;
                                       }}
                                     >
 ${stepData._json}</textarea
@@ -512,17 +517,20 @@ ${stepData._json}</textarea
                   </div>
                 </details>
               </div>
-              <button class="mt-5 btn btn-sm btn-primary px-2 py-1" @click=${e => this.sendStepRequest(e, idx)}>
+              <button class="mt-5 btn btn-sm btn-primary px-2 py-1" @click=${(e: any) => this.sendStepRequest(e, idx)}>
               ${this.isSendingRequest[idx] ? html`<span class="loading loading-dots loading-sm"></span>` : 'Send request'}
               </button>
-              ${this.sendRequestErrors[idx] !== null ? html`<div class="mt-2 text-textError">${this.sendRequestErrors[idx]}</div>` : nothing}
+              ${
+                this.sendRequestErrors[idx] !== null ? html`<div class="mt-2 text-textError">${this.sendRequestErrors[idx]}</div>` : nothing
+              }
               ${
                 stepResult && stepResult.resp
                   ? html`
                       <h3 class=" text-textStrong text-lg font-medium py-2 mt-10">
                         Request Preview
                         <span class="font-normal  text-textWeak"
-                          >(took <strong>${stepResult.resp.duration_ms}ms</strong> with status <strong>${stepResult.resp.status}</strong>)</span
+                          >(took <strong>${stepResult.resp.duration_ms}ms</strong> with status
+                          <strong>${stepResult.resp.status}</strong>)</span
                         >
                       </h3>
                       <div class="rounded-xl border border-weak p-4  text-textStrong flex flex-col gap-1">
@@ -543,13 +551,13 @@ ${stepData._json}</textarea
                             <span class=" text-textWeak">Click below to add field as an assertion</span>
                           </div>
                           ${Object.entries(stepResult.resp.headers).map(([key, value]) => {
-                            let assertionObj = {
+                            let assertionObj: Assertion = {
                               type: 'header',
                               operation: 'equals',
                               headerName: key,
                               value: value,
                               status: 'PASSED',
-                            }
+                            };
                             return html`
                               <div class="flex items-center gap-2">
                                 <span class=" text-textStrong">${key}:</span>
@@ -557,12 +565,12 @@ ${stepData._json}</textarea
                                 <button
                                   data-tippy-content="Add as an assertion"
                                   class="rounded-full border fill-textDisabled shadow-[0px_4px_4px_0px_rgba(0,0,0,0.06)] border-strokeWeak shadown-sm p-1.5 bg-bgBase"
-                                  @click="${e => this.addAssertion(e, idx, assertionObj)}"
+                                  @click="${(e: any) => this.addAssertion(e, idx, assertionObj)}"
                                 >
                                   ${faSprite_('plus', 'regular', 'w-3 h-3')}
                                 </button>
                               </div>
-                            `
+                            `;
                           })}
                         </div>
 
@@ -576,7 +584,11 @@ ${stepData._json}</textarea
                         <div role="tabpanel" class="tab-content p-4">
                           <div>{</div>
                           <div class="pl-3">
-                            ${renderJsonWithIndentation(stepResult.resp.json, (e, assertionObj) => this.addAssertion(e, idx, assertionObj), '$')}
+                            ${renderJsonWithIndentation(
+                              stepResult.resp.json,
+                              (e, assertionObj) => this.addAssertion(e, idx, assertionObj),
+                              '$'
+                            )}
                           </div>
                           <div>}</div>
                         </div>
@@ -610,8 +622,8 @@ ${stepData._json}</textarea
             assertions: this.collectionSteps[idx]._assertions || [],
             result: this.collectionResults[idx],
             updateAssertion: (index, updates) => this.updateAssertion(idx, index, updates),
-            addAssertion: e => this.addAssertion(e, idx, { type: 'body', operation: 'equals', value: '' }),
-            removeAssertion: index => e => this.removeAssertion(idx, index),
+            addAssertion: (e: any) => this.addAssertion(e, idx, { type: 'body', operation: 'equals', value: '' }),
+            removeAssertion: (index) => (e: any) => this.removeAssertion(idx, index),
           })}
               </div>
             </details>
@@ -631,33 +643,42 @@ ${stepData._json}</textarea
         </div>
         </div>
       </div>
-    `
+    `;
   }
 
-  renderAssertResult(result) {
-    let hasPassed = result?.ok === true || false
-    let notRun = !result
-    let error = result?.err?.advice || ''
+  renderAssertResult(result: AssertionResult | undefined) {
+    let hasPassed = result?.ok === true || false;
+    let notRun = !result;
+    let error = result?.err?.advice || '';
 
     if (hasPassed) {
-      return html` <svg class="icon w-3 h-3 text-green-500"><use href="/public/assets/svgs/fa-sprites/solid.svg#check"></use></svg>`
+      return html` <svg class="icon w-3 h-3 text-green-500"><use href="/public/assets/svgs/fa-sprites/solid.svg#check"></use></svg>`;
     }
     if (!hasPassed && !notRun) {
       return html`<span title="${error}"
         ><svg class="icon w-3 h-3 text-red-500"><use href="/public/assets/svgs/fa-sprites/regular.svg#trash"></use></svg><span></span
-      ></span>`
+      ></span>`;
     }
     return html`<span title="${error}" class="opacity-0"
       ><svg class="icon w-3 h-3 text-red-500"><use href="/public/assets/svgs/fa-sprites/regular.svg#trash"></use></svg><span></span
-    ></span>`
+    ></span>`;
   }
 
-  renderParamRow(key, value, type, idx, aidx, category, result, saveError) {
-    let error = result?.err?.advice || ''
-    let keyError = ''
+  renderParamRow(
+    key: string,
+    value: string,
+    type: string,
+    idx: number,
+    aidx: number,
+    category: string,
+    result: AssertionResult | undefined = undefined,
+    saveError: Record<string, any> | null = null
+  ) {
+    let error = result?.err?.advice || '';
+    let keyError = '';
     if (saveError) {
-      error = saveError.value ? saveError.value : error
-      keyError = saveError.key ? saveError.key : ''
+      error = saveError.value ? saveError.value : error;
+      keyError = saveError.key ? saveError.key : '';
     }
     const options = [
       {
@@ -676,8 +697,8 @@ ${stepData._json}</textarea
         value: 'responseTime',
         label: 'Response Time',
       },
-    ]
-    const noValue = category == 'status' || category == 'responseTime'
+    ];
+    const noValue = category == 'status' || category == 'responseTime';
     return html`
       <div class="flex flex-row gap-2 w-full paramRow">
         <span class="shrink hidden assertIndicator"> ${this.renderAssertResult(result)} </span>
@@ -687,15 +708,17 @@ ${stepData._json}</textarea
             list="${type}DataList"
             placeholder="Key"
             .value="${key}"
-            @change=${e => this.updateKey(e, idx, type, aidx)}
+            @change=${(e: any) => this.updateKey(e, idx, type, aidx)}
           />
           <span class="text-xs text-red-500 w-full">${keyError}</span>
         </div>
         ${type === 'exports'
           ? html`
               <div class="flex flex-col w-1/3">
-                <select class="select select-sm max-w-xs shadow-none" @change=${e => this.updateExportCategory(e, idx, type, aidx, key)}>
-                  ${options.map(option => html` <option value=${option.value} ?selected=${option.value === category}>${option.label}</option> `)}
+                <select class="select select-sm max-w-xs shadow-none" @change=${(e: any) => this.updateExportCategory(e, idx, type, aidx)}>
+                  ${options.map(
+                    (option) => html` <option value=${option.value} ?selected=${option.value === category}>${option.label}</option> `
+                  )}
                 </select>
               </div>
             `
@@ -707,168 +730,179 @@ ${stepData._json}</textarea
             class="input shadow-none ${error ? 'input-error' : ''} input-sm w-full"
             placeholder="Value"
             .value="${value}"
-            @input=${e => this.updateValue(e, idx, type, aidx, key)}
+            @input=${(e: any) => this.updateValue(e, idx, type, aidx, key)}
           />
           <span class="text-xs text-red-500">${error}</span>
         </div>
-        <a class="cursor-pointer text-slate-600" @click=${e => this.deleteKey(e, idx, type, aidx, key)}>
+        <a class="cursor-pointer text-slate-600" @click=${(e: any) => this.deleteKey(e, idx, type, aidx, key)}>
           <svg class="inline-block icon w-5 h-5 p-1 rounded-full shadow-sm border stroke-red-500"><use href="/public/assets/svgs/fa-sprites/regular.svg#trash"></use></svg>
         </a>
       </div>`
           : nothing}
       </div>
-    `
+    `;
   }
 
-  renderParamsRows(stepData, idx, type, results) {
-    let rows
-    const errors = this.saveErrors[idx] ? this.saveErrors[idx][type] || [] : []
+  renderParamsRows(stepData: Step, idx: number, type: string, results?: AssertionResult[]) {
+    let rows: TemplateResult<1>[] = [];
+    const errors = this.saveErrors[idx] ? this.saveErrors[idx][type] || [] : [];
     if (type === 'asserts') {
-      let matches = []
-      let fieldPathValues = new Set()
-      let resultContainer = document.querySelector('#res-container-' + idx)
-      let elements = []
+      let matches = [];
+      let fieldPathValues = new Set();
+      let resultContainer = document.querySelector('#res-container-' + idx);
+      let elements: NodeListOf<Element>;
       if (resultContainer) {
-        elements = resultContainer.querySelectorAll('[data-field-path]')
+        elements = resultContainer.querySelectorAll('[data-field-path]');
+        elements.forEach((element) => {
+          let path = element.getAttribute('data-field-path');
+          if (path) {
+            fieldPathValues.add(('$.resp.json.' + path.replace(/\.?(\d+)\.?/g, '.[$1].')).replace('..', '.'));
+          }
+        });
       }
-      elements.forEach(element => {
-        let path = element.getAttribute('data-field-path')
-        if (path) {
-          fieldPathValues.add(('$.resp.json.' + path.replace(/\.?(\d+)\.?/g, '.[$1].')).replace('..', '.'))
-        }
-      })
 
-      matches = Array.from(fieldPathValues)
+      matches = Array.from(fieldPathValues);
 
-      const data = stepData[type] || []
-      rows = data.map((assertObj, aidx) =>
-        Object.entries(assertObj).map(([key, value]) => this.renderParamRow(key, value, type, idx, aidx, results[aidx], errors[aidx])),
-      )
-      if (rows.length === 0 || !Object.entries(data).some(([k, v]) => k.trim() === '' && v.trim() === '')) {
-        rows.push(this.renderParamRow('', '', type, idx, rows.length))
+      const data = stepData[type] || [];
+      data.forEach((assertObj, aidx) =>
+        Object.entries(assertObj).map(([key, value]) =>
+          rows.push(this.renderParamRow(key, value, type, idx, aidx, '', results ? results[aidx] : undefined, errors[aidx]))
+        )
+      );
+      if (rows.length === 0 || !data.some((d) => d.key.trim() === '' && d.value.trim() === '')) {
+        rows.push(this.renderParamRow('', '', type, idx, rows.length, ''));
       }
       rows.push(html`
         <datalist id=${'assertAutocomplete-' + idx}>
-          ${matches.map(fieldPath => {
-            return html`<option class="w-full  text-left text-xs px-3 py-1 hover:bg-gray-200">${fieldPath}</option>`
+          ${matches.map((fieldPath) => {
+            return html`<option class="w-full  text-left text-xs px-3 py-1 hover:bg-gray-200">${fieldPath}</option>`;
           })}
         </datalist>
-      `)
+      `);
     } else if (type === 'exports') {
-      const data = stepData[type] || []
+      const data = stepData[type] || [];
       rows = data.map((d, ind) => {
-        return this.renderParamRow(d.key, d.value, type, idx, ind, d.category, undefined, errors[ind])
-      })
-      if (rows.length === 0 || !Object.entries(data).some(([k, v]) => k.trim() === '' && v.trim() === '')) {
-        rows.push(this.renderParamRow('', '', type, idx, rows.length, 'body', undefined, errors[rows.length - 1]))
+        return this.renderParamRow(d.key, d.value, type, idx, ind, d.category, undefined, errors[ind]);
+      });
+      if (rows.length === 0 || data.some((d) => d.key.trim() === '' && d.value.trim() === '')) {
+        rows.push(this.renderParamRow('', '', type, idx, rows.length, 'body', undefined, errors[rows.length - 1]));
       }
     } else {
-      const data = stepData[type] || {}
+      const data = stepData[type] || {};
       rows = Object.entries(data)
         .filter(([key, _]) => key != 'Cookie')
-        .map(([key, value], ind) => this.renderParamRow(key, value, type, idx, null, undefined, errors[ind]))
-      if (rows.length === 0 || !Object.entries(data).some(([k, v]) => k.trim() === '' && v.trim() === '')) {
-        rows.push(this.renderParamRow('', '', type, idx))
+        .map(([key, value], ind) => this.renderParamRow(key, value as string, type, idx, ind, '', undefined, errors[ind]));
+      if (rows.length === 0 || !Object.entries(data).some(([k, v]) => k.trim() === '' && (v as string).trim() === '')) {
+        rows.push(this.renderParamRow('', '', type, idx, rows.length, '', undefined, null));
       }
     }
-    return html`${rows}`
+    return html`${rows}`;
   }
 
-  updateKey(event, idx, type, aidx) {
-    const newKey = event.target.value
-    const oldKey = event.target.defaultValue
-    const stepData = this.collectionSteps[idx]
+  updateKey(event: any, idx: number, type: string, aidx: number | null) {
+    const newKey = event.target.value;
+    const oldKey = event.target.defaultValue;
+    const stepData = this.collectionSteps[idx];
 
-    const updateObject = (obj, oldKey, newKey) => {
-      const oldValue = obj[oldKey]
-      delete obj[oldKey]
-      obj[newKey] = oldValue || ''
-    }
+    const updateObject = (obj: Record<string, any>, oldKey: string, newKey: string) => {
+      const oldValue = obj[oldKey];
+      delete obj[oldKey];
+      obj[newKey] = oldValue || '';
+    };
 
     if (type == null) {
-      updateObject(stepData, oldKey, newKey)
+      updateObject(stepData, oldKey, newKey);
     } else {
-      stepData[type] = stepData[type] || (aidx === null ? {} : [])
+      stepData[type] = stepData[type] || (aidx === null ? {} : []);
       if (aidx != null) {
         if (type === 'exports') {
-          const val = this.collectionSteps[idx][type][aidx] || { key: '', value: '', category: '' }
-          this.collectionSteps[idx][type][aidx] = { ...val, key: newKey }
+          if (this.collectionSteps[idx][type]) {
+            const val = this.collectionSteps[idx][type][aidx] || { key: '', value: '', category: '' };
+            this.collectionSteps[idx][type][aidx] = { ...val, key: newKey };
+          }
         } else {
-          const arrayItem = stepData[type][aidx] || {}
-          const values = Object.entries(arrayItem)
+          const arrayItem = stepData[type][aidx] || {};
+          const values = Object.entries(arrayItem);
           if (values.length > 0) {
-            const val = values[0][1]
+            const val = values[0][1];
             stepData[type][aidx] = {
               [newKey]: val,
-            }
+            };
           } else {
             stepData[type][aidx] = {
               [newKey]: '',
-            }
+            };
           }
         }
       } else {
-        updateObject(stepData[type], oldKey, newKey)
+        updateObject(stepData[type], oldKey, newKey);
       }
     }
-    this.requestUpdate()
+    this.requestUpdate();
   }
 
-  deleteKey(_event, idx, type, aidx, oldKey) {
-    const stepData = this.collectionSteps[idx]
-    stepData[type] = stepData[type] || (aidx != null ? [] : {})
+  deleteKey(_event: any, idx: number, type: string, aidx: number | null, oldKey: string) {
+    const stepData = this.collectionSteps[idx];
+    stepData[type] = stepData[type] || (aidx != null ? [] : {});
 
     if (aidx != null) {
-      stepData[type].splice(aidx, 1)
+      stepData[type].splice(aidx, 1);
     } else {
-      delete stepData[type][oldKey]
+      delete stepData[type][oldKey];
     }
-    this.requestUpdate()
+    this.requestUpdate();
   }
 
-  updateExportCategory(event, idx, type, aidx) {
-    if (type !== 'exports') return
-    const value = event.target.value
-    const stepData = this.collectionSteps[idx]
-    stepData[type] = stepData[type] || []
-    stepData[type][aidx] = stepData[type][aidx] || {}
-    stepData[type][aidx]['category'] = value
-    this.requestUpdate()
+  updateExportCategory(event: any, idx: number, type: string, aidx: number) {
+    if (type !== 'exports') return;
+    const value = event.target.value;
+    const stepData = this.collectionSteps[idx];
+    stepData[type] = stepData[type] || [];
+    stepData[type][aidx] = stepData[type][aidx] || {};
+    stepData[type][aidx]['category'] = value;
+    this.requestUpdate();
   }
 
-  updateValue(event, idx, type, aidx, key) {
-    const value = event.target.value
+  updateValue(event: any, idx: number, type: string | null, aidx: number | null, key: string) {
+    const value = event.target.value;
     if (type == null) {
-      this.collectionSteps[idx][key] = value
-      this.requestUpdate()
-      return
+      this.collectionSteps[idx][key] = value;
+      this.requestUpdate();
+      return;
     }
     if (aidx != null) {
       if (key === '') {
         if (type === 'asserts') {
-          this.collectionSteps[idx][type][aidx] = { ok: value }
+          const val = this.collectionSteps[idx][type];
+          if (val) {
+            val[aidx] = { ok: value };
+          }
         } else if (type === 'exports') {
-          const val = this.collectionSteps[idx][type][aidx]
-          this.collectionSteps[idx][type][aidx] = { ...val, value: value }
+          if (this.collectionSteps[idx][type]) {
+            const val = this.collectionSteps[idx][type][aidx];
+            this.collectionSteps[idx][type][aidx] = { ...val, value: value };
+          }
+        } else {
+          if (type === 'exports') {
+            if (this.collectionSteps[idx][type]) {
+              const val = this.collectionSteps[idx][type][aidx];
+              this.collectionSteps[idx][type][aidx] = { ...val, value: value };
+            }
+          } else {
+            this.collectionSteps[idx][type][aidx][key] = value;
+          }
         }
       } else {
-        if (type === 'exports') {
-          const val = this.collectionSteps[idx][type][aidx]
-          this.collectionSteps[idx][type][aidx] = { ...val, value: value }
-        } else {
-          this.collectionSteps[idx][type][aidx][key] = value
-        }
+        this.collectionSteps[idx][type][key] = value;
       }
-    } else {
-      this.collectionSteps[idx][type][key] = value
+      this.requestUpdate();
     }
-    this.requestUpdate()
   }
 
   render() {
-    const toggler = document.querySelector('#test-code-toggle')
+    const toggler = document.querySelector('#test-code-toggle')! as HTMLInputElement;
     if (toggler && !toggler.checked) {
-      this.updateEditorContent()
+      this.updateEditorContent();
     }
     return html`
       <style>
@@ -895,64 +929,66 @@ ${stepData._json}</textarea
             @dragenter="${this._onDragEnter}"
             @dragleave="${this._onDragLeave}"
           >
-            ${repeat(
-              this.collectionSteps,
-              (stepData, idx) => this.renderCollectionStep(stepData, idx, this.collectionResults[idx], this.saveErrors[idx]) || undefined,
+            ${this.collectionSteps.map(
+              (stepData, idx) => this.renderCollectionStep(stepData, idx, this.collectionResults[idx], this.saveErrors[idx]) || undefined
             )}
           </div>
           ${this.isOnboarding
             ? nothing
             : html`<div class="p-4 pt-4">
-                <a class="btn btn-sm blue-outline-btn bg-transparent border-[var(--brand-color)] items-center cursor-pointer" @click=${() => this.addStep()}>
+                <a
+                  class="btn btn-sm blue-outline-btn bg-transparent border-[var(--brand-color)] items-center cursor-pointer"
+                  @click=${() => this.addStep()}
+                >
                   <svg class="inline-block icon w-3 h-3"><use href="/public/assets/svgs/fa-sprites/solid.svg#plus"></use></svg>
                   Add new step
                 </a>
               </div>`}
         </div>
       </div>
-    `
+    `;
   }
 
   // Assume that stepIndex is available in your component
-  updateAssertion(stepIdx, index, updates) {
-    this.collectionSteps[stepIdx]._assertions = this.collectionSteps[stepIdx]._assertions.map((assertion, i) =>
-      i === index ? { ...assertion, ...updates } : assertion,
-    )
-    // Optionally re-evaluate the assertion after the update
-    const updatedAssertion = this.collectionSteps[stepIdx]._assertions[index]
-    const status = this.evaluateAssertion(updatedAssertion) ? 'PASSED' : 'FAILED'
-    this.collectionSteps[stepIdx]._assertions = this.collectionSteps[stepIdx]._assertions.map((assertion, i) =>
-      i === index ? { ...assertion, status } : assertion,
-    )
-    this.requestUpdate()
-  }
-
-  addAssertion(e, idx, assertion_obj) {
-    e.preventDefault()
-    this.collectionSteps[idx]._assertions = [...this.collectionSteps[idx]._assertions, assertion_obj]
-    this.requestUpdate()
-  }
-
-  removeAssertion(idx, index) {
-    this.collectionSteps[idx]._assertions.splice(index, 1)
-    if (this.collectionResults && this.collectionResults[idx]) {
-      this.collectionResults[idx].assert_results?.splice(index, 1)
+  updateAssertion(stepIdx: number, index: number, updates: Partial<Assertion>) {
+    if (this.collectionSteps[stepIdx]._assertions === undefined) {
+      this.collectionSteps[stepIdx]._assertions = [];
     }
-    this.requestUpdate()
+    this.collectionSteps[stepIdx]._assertions = this.collectionSteps[stepIdx]._assertions.map((assertion, i) =>
+      i === index ? { ...assertion, ...updates } : assertion
+    );
+    // Optionally re-evaluate the assertion after the update
+    const updatedAssertion = this.collectionSteps[stepIdx]._assertions[index];
+    const status = this.evaluateAssertion(updatedAssertion) ? 'PASSED' : 'FAILED';
+    this.collectionSteps[stepIdx]._assertions = this.collectionSteps[stepIdx]._assertions.map((assertion, i) =>
+      i === index ? { ...assertion, status } : assertion
+    );
+    this.requestUpdate();
   }
 
-  evaluateAssertion(assertion) {
+  addAssertion(e: any, idx: number, assertion_obj: Assertion) {
+    e.preventDefault();
+    this.collectionSteps[idx]._assertions = [...(this.collectionSteps[idx]._assertions || []), assertion_obj];
+    this.requestUpdate();
+  }
+
+  removeAssertion(idx: number, index: number) {
+    if (this.collectionSteps[idx]._assertions === undefined) {
+      this.collectionSteps[idx]._assertions = [];
+    }
+    this.collectionSteps[idx]._assertions.splice(index, 1);
+    if (this.collectionResults && this.collectionResults[idx]) {
+      this.collectionResults[idx].assert_results?.splice(index, 1);
+    }
+    this.requestUpdate();
+  }
+
+  evaluateAssertion(assertion: Assertion): boolean {
     // Implement your assertion evaluation logic here
     if (assertion.type === 'body' && assertion.operation === 'contains') {
-      return this.response.body.includes(assertion.value)
+      return this.response.body.includes(assertion.value);
     }
     // Handle other types and operations
-    return false // Default to false if not matched
+    return false; // Default to false if not matched
   }
 }
-
-function faSprite_(iconName, kind, classes) {
-  return html`<svg class="${classes}"><use href="/public/assets/svgs/fa-sprites/${kind}.svg#${iconName}"></use></svg>`
-}
-
-customElements.define('steps-editor', StepsEditor)

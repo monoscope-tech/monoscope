@@ -268,16 +268,11 @@ runHourlyJob scheduledTime hour = do
   Log.logInfo "Completed hourly job scheduling for hour" hour
 
 
--- | Batch process facets generation for multiple projects
+-- | Batch process facets generation for multiple projects using 24-hour window
 generateOtelFacetsBatch :: (DB :> es, Log :> es, UUID.UUIDEff :> es) => V.Vector Text -> UTCTime -> Eff es ()
 generateOtelFacetsBatch projectIds timestamp = do
   Log.logInfo "Starting batch facets generation for projects" (V.length projectIds)
-
-  -- Process each project in the batch using centralized facet columns
-  forM_ projectIds \pid -> do
-    _ <- Facets.generateAndSaveFacets (Projects.ProjectId $ Unsafe.fromJust $ UUID.fromText pid) "otel_logs_and_spans" Facets.facetColumns 10 timestamp
-    pure ()
-
+  forM_ projectIds \pid -> void $ Facets.generateAndSaveFacets (Projects.ProjectId $ Unsafe.fromJust $ UUID.fromText pid) "otel_logs_and_spans" Facets.facetColumns 10 timestamp
   Log.logInfo "Completed batch OTLP facets generation for projects" (V.length projectIds)
 
 

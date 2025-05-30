@@ -1,4 +1,4 @@
-module Pages.Dashboards (dashboardGetH, entrypointRedirectGetH, DashboardGet (..), dashboardsGetH, DashboardsGet (..), dashboardsPostH, DashboardForm (..), dashboardWidgetPutH, dashboardWidgetReorderPatchH, WidgetReorderItem (..), dashboardDeleteH, dashboardRenamePatchH, DashboardRenameForm (..), dashboardDuplicatePostH, WidgetMoveForm (..), dashboardDuplicateWidgetPostH, dashboardWidgetExpandGetH) where
+module Pages.Dashboards (dashboardGetH, entrypointRedirectGetH, DashboardGet (..), dashboardsGetH, DashboardsGet (..), dashboardsPostH, DashboardForm (..), dashboardWidgetPutH, dashboardWidgetReorderPatchH, WidgetReorderItem (..), dashboardDeleteH, dashboardRenamePatchH, DashboardRenameForm (..), dashboardDuplicatePostH, WidgetMoveForm (..), dashboardDuplicateWidgetPostH, dashboardWidgetExpandGetH, visTypes) where
 
 import Control.Lens
 import Data.Aeson qualified as AE
@@ -627,32 +627,22 @@ widgetViewerEditor_ pid dashboardIdM currentRange existingWidgetM activeTab = di
         span_ [class_ "inline-block rounded-full bg-fillWeak px-3 py-1 leading-none"] "1"
         strong_ [class_ "text-lg font-semibold"] "Select your Visualization"
       div_ [class_ "grid grid-cols-12 gap-3 px-5"]
-        $ let visTypes :: [(Text, Text, Text)]
-              visTypes =
-                [ ("bar-chart", "Bar", "timeseries")
-                , ("duo-line-chart", "Line", "timeseries_line")
-                , ("duo-pie-chart", "Pie", "pie_chart")
-                , ("duo-scatter-chart", "Scatter", "distribution")
-                , ("hashtag", "Number", "stat")
-                , ("guage", "Guage", "")
-                , ("text", "Text", "")
-                ]
-           in iforM_ visTypes \idx (icon, title, widgetType) ->
-                label_
-                  [ class_ "col-span-1 p-4 aspect-square gap-3 flex flex-col border border-strokeWeak rounded-lg items-center justify-center has-checked:border-strokeBrand-strong has-checked:bg-fillBrand-weak"
-                  , data_ "widgetType" widgetType
-                  , [__| on click set widgetJSON.type to @data-widgetType then trigger 'update-widget' on #widget-preview |]
+        $ iforM_ visTypes \idx (icon, title, widgetType, _) ->
+          label_
+            [ class_ "col-span-1 p-4 aspect-square gap-3 flex flex-col border border-strokeWeak rounded-lg items-center justify-center has-checked:border-strokeBrand-strong has-checked:bg-fillBrand-weak"
+            , data_ "widgetType" widgetType
+            , [__| on click set widgetJSON.type to @data-widgetType then trigger 'update-widget' on #widget-preview |]
+            ]
+            do
+              input_
+                ( [ class_ "hidden"
+                  , name_ "widgetType"
+                  , type_ "radio"
                   ]
-                  do
-                    input_
-                      ( [ class_ "hidden"
-                        , name_ "widgetType"
-                        , type_ "radio"
-                        ]
-                          <> if idx == 0 then [checked_] else mempty
-                      )
-                    span_ [class_ "block"] $ faSprite_ icon "regular" "w-4 h-4"
-                    span_ [class_ "text-textWeak block leading-none"] $ toHtml title
+                    <> if idx == 0 then [checked_] else mempty
+                )
+              span_ [class_ "block"] $ faSprite_ icon "regular" "w-4 h-4"
+              span_ [class_ "text-textWeak block leading-none"] $ toHtml title
 
       div_ [class_ "space-y-7"] do
         div_ [class_ "flex gap-3"] do
@@ -678,6 +668,19 @@ widgetViewerEditor_ pid dashboardIdM currentRange existingWidgetM activeTab = di
             , value_ $ fromMaybe "" widgetToUse.title
             , [__| on change set widgetJSON.title to my value then trigger 'update-widget' on #widget-preview |]
             ]
+
+
+visTypes :: [(Text, Text, Text, Text)]
+visTypes =
+  [ ("list-view", "Logs", "logs", "📋")
+  , ("bar-chart", "Bar", "timeseries", "📊")
+  , ("duo-line-chart", "Line", "timeseries_line", "📈")
+  -- , ("duo-pie-chart", "Pie", "pie_chart", "🥧")
+  -- , ("duo-scatter-chart", "Scatter", "distribution", "📉")
+  -- , ("hashtag", "Number", "stat", "🔢")
+  -- , ("guage", "Guage", "", "🧮")
+  -- , ("text", "Text", "", "📝")
+  ]
 
 
 -- | Backward compatibility wrapper for the new widget editor

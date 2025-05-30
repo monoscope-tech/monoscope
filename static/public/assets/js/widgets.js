@@ -112,7 +112,11 @@ const chartWidget = widgetData => {
 
   // Store the original base query to avoid stacking
   const baseQuery = widgetData.query
+  // Handle URL query parameter correctly - ensure it's properly combined with the base query
   widgetData.query = params().query ? (baseQuery ? params().query + ' | ' + baseQuery : params().query) : baseQuery
+  
+  // Store the original query for reference
+  widgetData.originalQuery = baseQuery
 
   opt.dataset.source = opt.dataset?.source?.map(row => [row[0] * 1000, ...row.slice(1)]) ?? null
 

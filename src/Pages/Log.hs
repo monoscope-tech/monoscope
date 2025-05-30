@@ -23,7 +23,8 @@ import Effectful.Error.Static (throwError)
 import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
 import Effectful.Reader.Static qualified
 import Effectful.Time qualified as Time
-import Fmt (commaizeF, fmt)
+
+-- import Fmt (commaizeF, fmt) -- Using prettyPrintCount instead
 import Langchain.LLM.Core qualified as LLM
 import Langchain.LLM.OpenAI (OpenAI (..))
 import Log qualified
@@ -40,8 +41,9 @@ import Models.Telemetry.Schema qualified as Schema
 import Models.Users.Sessions qualified as Sessions
 import NeatInterpolation (text)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), currProject, pageActions, pageTitle, sessM)
+import Pages.Dashboards (visTypes)
 import Pkg.Components qualified as Components
-import Pkg.Components.Widget (WidgetAxis (..), WidgetType (WTTimeseriesLine))
+import Pkg.Components.Widget (WidgetAxis (..), WidgetType (WTStat, WTTimeseriesLine))
 import Pkg.Components.Widget qualified as Widget
 import Pkg.Parser (pSource, parseQueryToAST, toQText)
 import Relude hiding (ask)
@@ -49,7 +51,7 @@ import Servant qualified
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types
 import Text.Megaparsec (parseMaybe)
-import Utils
+import Utils (displayTimestamp, faSprite_, formatUTC, freeTierLimitExceededBanner, getServiceColors, listToIndexHashMap, lookupVecTextByKey, prettyPrintCount)
 
 
 -- $setup
@@ -60,6 +62,8 @@ import Utils
 
 
 -- | Render facet data for Log Explorer sidebar in a compact format
+-- | The facet counts are already scaled in the Facets.getFacetSummary function based on the selected time range
+-- | Facets are normally generated for a 24-hour period, but will be proportionally adjusted for the user's time selection
 renderFacets :: FacetSummary -> Html ()
 renderFacets facetSummary = do
   let (FacetData facetMap) = facetSummary.facetJson
@@ -79,24 +83,107 @@ renderFacets facetSummary = do
         "DELETE" -> "bg-red-500"
         _ -> "bg-purple-500"
 
-      -- Define display info for different facet types
-      facetDisplays :: [(Text, Text, (Text -> Text))]
-      facetDisplays =
-        [ ("level", "Log Level", levelColorFn)
-        , ("kind", "Span Kind", const "")
-        , ("name", "Operation name", const "")
-        , ("attributes___http___response___status_code", "Status Code", statusColorFn)
-        , ("attributes___http___request___method", "HTTP Method", methodColorFn)
-        , ("resource___service___name", "Service", const "")
-        , ("attributes___error___type", "Error Type", const "bg-red-500")
-        ]
-
       levelColorFn val = case val of
         "ERROR" -> "bg-red-500"
         "WARN" -> "bg-yellow-500"
         "INFO" -> "bg-blue-500"
         "DEBUG" -> "bg-gray-500"
         _ -> "bg-gray-400"
+
+      -- Group facet fields by category
+      -- Define mapping of field keys to display names and color functions
+
+      -- Root level facets (displayed at the top)
+      rootFacets :: [(Text, Text, (Text -> Text))]
+      rootFacets =
+        [ ("level", "Log Level", levelColorFn)
+        , ("kind", "Kind", const "")
+        , ("name", "Operation Name", const "")
+        , ("status_code", "Status Code", statusColorFn)
+        , ("resource___service___name", "Service", const "")
+        , ("resource___service___version", "Service Version", const "")
+        , ("attributes___http___request___method", "HTTP Method", methodColorFn)
+        , ("attributes___http___response___status_code", "HTTP Status", statusColorFn)
+        , ("attributes___error___type", "Error Type", const "bg-red-500")
+        ]
+
+      -- Grouped facets for better organization
+      facetGroups :: [(Text, [(Text, Text, (Text -> Text))])]
+      facetGroups =
+        [
+          ( "HTTP"
+          ,
+            [ ("attributes___http___request___method_original", "Original Method", methodColorFn)
+            , ("attributes___http___request___resend_count", "Resend Count", const "")
+            , ("attributes___http___request___body___size", "Request Body Size", const "")
+            , ("attributes___url___path", "URL Path", const "")
+            , ("attributes___url___scheme", "URL Scheme", const "")
+            , ("attributes___url___full", "Full URL", const "")
+            , ("attributes___url___fragment", "URL Fragment", const "")
+            , ("attributes___url___query", "URL Query", const "")
+            , ("attributes___user_agent___original", "User Agent", const "")
+            ]
+          )
+        ,
+          ( "Network"
+          ,
+            [ ("attributes___network___protocol___name", "Protocol Name", const "")
+            , ("attributes___network___protocol___version", "Protocol Version", const "")
+            , ("attributes___network___transport", "Transport", const "")
+            , ("attributes___network___type", "Network Type", const "")
+            , ("attributes___client___address", "Client Address", const "")
+            , ("attributes___server___address", "Server Address", const "")
+            ]
+          )
+        ,
+          ( "User & Session"
+          ,
+            [ ("attributes___user___id", "User ID", const "")
+            , ("attributes___user___email", "User Email", const "")
+            , ("attributes___user___name", "Username", const "")
+            , ("attributes___user___full_name", "Full Name", const "")
+            , ("attributes___session___id", "Session ID", const "")
+            , ("attributes___session___previous___id", "Previous Session", const "")
+            ]
+          )
+        ,
+          ( "Database"
+          ,
+            [ ("attributes___db___system___name", "Database System", const "")
+            , ("attributes___db___collection___name", "Collection Name", const "")
+            , ("attributes___db___namespace", "Database Namespace", const "")
+            , ("attributes___db___operation___name", "DB Operation", const "")
+            , ("attributes___db___response___status_code", "DB Status Code", const "")
+            , ("attributes___db___operation___batch___size", "Batch Size", const "")
+            ]
+          )
+        ,
+          ( "Errors & Exceptions"
+          ,
+            [ ("attributes___error___type", "Error Type", const "bg-red-500")
+            , ("attributes___exception___type", "Exception Type", const "bg-red-500")
+            , ("attributes___exception___message", "Exception Message", const "")
+            ]
+          )
+        ,
+          ( "Resource"
+          ,
+            [ ("resource___service___instance___id", "Service Instance ID", const "")
+            , ("resource___service___namespace", "Service Namespace", const "")
+            , ("resource___telemetry___sdk___language", "SDK Language", const "")
+            , ("resource___telemetry___sdk___name", "SDK Name", const "")
+            , ("resource___telemetry___sdk___version", "SDK Version", const "")
+            ]
+          )
+        ,
+          ( "Severity"
+          ,
+            [ ("severity___severity_text", "Severity Text", levelColorFn)
+            , ("severity___severity_number", "Severity Number", const "")
+            , ("status_message", "Status Message", const "")
+            ]
+          )
+        ]
 
   -- Add JS for filtering
   script_
@@ -106,35 +193,68 @@ renderFacets facetSummary = do
     }
   |]
 
-  -- Render each facet group
-  forM_ facetDisplays $ \(key, displayName, colorFn) -> do
-    whenJust (HM.lookup key facetMap) $ \values -> do
-      when (not $ null values) $ do
-        div_ [class_ "facet-section flex flex-col gap-1.5 py-3 transition-all duration-200 hover:bg-fillWeaker rounded-lg group"] do
-          div_
-            [ class_ "flex justify-between items-center text-slate-950 pb-2 cursor-pointer"
-            , [__|on click toggle .collapsed on me.parentElement|]
-            ]
-            $ span_ [class_ "facet-title"] (toHtml displayName)
-            >> faSprite_ "chevron-down" "regular" "w-3 h-3 transition-transform duration-200 group-[.collapsed]:rotate-180"
 
-          -- Wrap facet values in a collapsible container with animation
-          div_ [class_ "facet-content overflow-hidden transition-all duration-300 ease-in-out max-h-96 opacity-100 transition-opacity duration-150 group-[.collapsed]:max-h-0 group-[.collapsed]:opacity-0 group-[.collapsed]:py-0"] do
-            -- Render each facet value
-            forM_ values \(FacetValue val count) -> do
-              div_ [class_ "facet-item flex justify-between items-center py-1 hover:bg-fillWeak transition-colors duration-150 rounded-md px-1"] do
-                label_ [class_ "flex gap-1.5 items-center text-slate-950 cursor-pointer flex-1"] $ do
-                  input_
-                    [ type_ "checkbox"
-                    , class_ "checkbox checkbox-sm"
-                    , -- Convert key format for filter (from db___ format to proper dot notation)
-                      onclick_ $ "filterByFacet('" <> T.replace "___" "." key <> "', '" <> val <> "')"
-                    ]
-                  let colorClass = colorFn val
-                  when (not $ T.null colorClass)
-                    $ span_ [class_ $ colorClass <> " shrink-0 w-1 h-5 rounded-sm"] " "
-                  span_ [class_ "facet-value truncate max-w-[80%]", term "data-tippy-content" val] $ toHtml val
-                span_ [class_ "facet-count text-slate-500 shrink-0 ml-1"] $ toHtml $ show count
+  renderFacetSection "Common Filters" rootFacets facetMap False
+
+  forM_ facetGroups $ \(groupName, facetDisplays) -> renderFacetSection groupName facetDisplays facetMap True
+  where
+    renderFacetSection :: Text -> [(Text, Text, (Text -> Text))] -> HM.HashMap Text [FacetValue] -> Bool -> Html ()
+    renderFacetSection sectionName facetDisplays facetMap collapsed = div_ [class_ "facet-section-group"] do
+      label_ [class_ "p-3 bg-fillWeak rounded-lg cursor-pointer flex gap-3 items-center peer"] do
+        input_ $ [class_ "hidden peer", type_ "checkbox", name_ $ "section-" <> sectionName] ++ [checked_ | collapsed]
+        span_ [class_ "peer-checked:-rotate-90 transition-transform duration-150 flex"] $ faSprite_ "chevron-down" "regular" "w-3 h-3"
+        toHtml sectionName
+      div_ [class_ "xmax-h-auto divide-y peer-has-checked:max-h-0 peer-has-checked:overflow-hidden transition-[max-height] duration-150"] $ forM_ facetDisplays \(key, displayName, colorFn) ->
+        whenJust (HM.lookup key facetMap) \values ->
+          div_ [class_ "facet-section flex flex-col transition-all duration-150 rounded-lg group"] do
+            label_ [class_ "p-3 flex justify-between items-center cursor-pointer peer"] do
+              div_ [class_ "gap-3 flex items-center"] do
+                -- Check if this facet's checkboxes should be unchecked by default (first 4 in Common Filters)
+                let commonFilterKeys = ["level", "kind", "name", "status_code"]
+                    shouldBeUnchecked = sectionName == "Common Filters" && key `elem` commonFilterKeys
+                input_ $ [class_ "hidden peer", type_ "checkbox", name_ $ "group-" <> key] ++ [checked_ | not shouldBeUnchecked]
+                span_ [class_ "peer-checked:-rotate-90 transition-transform duration-150 flex"] $ faSprite_ "chevron-down" "regular" "w-3 h-3"
+                let dotKey = T.replace "___" "." key
+                span_ [term "data-tippy-content" dotKey] (toHtml displayName)
+              span_ ""
+
+            div_ [class_ "pl-5 xmax-h-auto peer-has-checked:max-h-0 peer-has-checked:overflow-hidden transition-[max-height] duration-150"] do
+              -- Prepare value lists and add toggle when needed
+              let valuesWithIndices = zip [0 ..] values
+                  (visibleValues, hiddenValues) = splitAt 5 valuesWithIndices
+                  hiddenCount = length hiddenValues
+
+                  -- Helper function to render a facet value item
+                  renderFacetValue (FacetValue val count) =
+                    div_ [class_ "facet-item flex justify-between items-center hover:bg-fillWeak transition-colors duration-150 rounded-md p-1 last:pb-3"] do
+                      label_ [class_ "flex gap-3 items-center cursor-pointer flex-1 min-w-0 overflow-hidden"] do
+                        input_
+                          [ type_ "checkbox"
+                          , class_ "checkbox checkbox-sm"
+                          , name_ key
+                          , onclick_ $ "filterByFacet('" <> T.replace "___" "." key <> "', '" <> val <> "')"
+                          , term "data-tippy-content" (T.replace "___" "." key <> " == \"" <> val <> "\"")
+                          ]
+
+                        span_ [class_ "facet-value truncate", term "data-tippy-content" val] do
+                          let colorClass = colorFn val
+                          when (not $ T.null colorClass) $ span_ [class_ $ colorClass <> " shrink-0 w-1 h-5 rounded-sm mr-1.5"] " "
+                          toHtml val
+                      span_ [class_ "facet-count text-textWeak ml-1"] $ toHtml $ prettyPrintCount count
+
+              div_ [class_ "values-container"] do
+                forM_ visibleValues \(_, value) -> renderFacetValue value
+                when (hiddenCount > 0) do
+                  input_ [type_ "checkbox", class_ "hidden peer/more", id_ $ "more-toggle-" <> key]
+                  div_ [class_ "hidden peer-checked/more:block"]
+                    $ forM_ hiddenValues \(_, value) -> renderFacetValue value
+
+                  label_ [class_ "text-textBrand px-3 py-3 cursor-pointer hover:underline peer-checked/more:hidden flex items-center gap-1", Lucid.for_ $ "more-toggle-" <> key] do
+                    toHtml $ "+ More (" <> prettyPrintCount hiddenCount <> ")"
+
+                  label_ [class_ "text-textBrand px-3 py-3 cursor-pointer hover:underline hidden peer-checked/more:flex items-center gap-1", Lucid.for_ $ "more-toggle-" <> key] do
+                    toHtml $ "- Less (" <> prettyPrintCount hiddenCount <> ")"
+
 
 
 keepNonEmpty :: Maybe Text -> Maybe Text
@@ -190,6 +310,7 @@ apiLogH pid queryM' cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM
 
   (queryLibRecent, queryLibSaved) <- V.partition (\x -> Projects.QLTHistory == (x.queryType)) <$> Projects.queryLibHistoryForUser pid sess.persistentSession.userId
 
+  -- Get facet summary for the time range specified
   facetSummary <- Facets.getFacetSummary pid "otel_logs_and_spans" (fromMaybe (addUTCTime (-86400) now) fromD) (fromMaybe now toD)
 
   freeTierExceeded <-
@@ -265,7 +386,7 @@ apiLogH pid queryM' cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM
               , detailsWidth = detailWM
               , targetEvent = targetEventM
               , showTrace = showTraceM
-              , facets = Nothing
+              , facets = facetSummary
               }
       case (layoutM, hxRequestM, hxBoostedM, jsonM) of
         (Just "SaveQuery", _, _, _) -> addRespHeaders $ LogsQueryLibrary pid queryLibSaved queryLibRecent
@@ -437,11 +558,12 @@ logQueryBox_ pid currentRange source targetSpan query queryLibRecent queryLibSav
                 span_ [id_ "run-query-indicator", class_ "refresh-indicator htmx-indicator query-indicator loading loading-dots loading-sm"] ""
                 faSprite_ "magnifying-glass" "regular" "h-4 w-4 inline-block"
       div_ [class_ "flex items-between justify-between"] do
+        visualizationTabs_
         div_ [class_ "", id_ "resultTableInner"] pass
 
         div_ [class_ "flex justify-end  gap-2 "] do
           fieldset_ [class_ "fieldset"] $ label_ [class_ "label"] do
-            input_ [type_ "checkbox", class_ "checkbox checkbox-sm rounded-sm toggle-chart"] >> span_ "charts"
+            input_ [type_ "checkbox", class_ "checkbox checkbox-sm rounded-sm toggle-chart"] >> span_ "timeline"
 
 
 queryLibrary_ :: Projects.ProjectId -> V.Vector Projects.QueryLibItem -> V.Vector Projects.QueryLibItem -> Html ()
@@ -599,6 +721,15 @@ virtualTable page = do
    |]
 
 
+visualizationTabs_ :: Html ()
+visualizationTabs_ =
+  div_ [class_ "tabs tabs-box tabs-outline tabs-xs bg-gray-100 p-1 rounded-lg", id_ "visualizationTabs", role_ "tablist"] do
+    forM_ visTypes $ \(icon, label, vizType, emoji) -> label_ [class_ "tab !shadow-none !border-strokeWeak flex gap-1"] do
+      input_ $ [type_ "radio", name_ "visualization", id_ $ "viz-" <> vizType, value_ vizType] <> [checked_ | vizType == "logs"]
+      span_ [class_ "text-iconNeutral leading-none"] $ toHtml emoji -- faSprite_ icon "regular" "w-3 h-2"
+      span_ [] $ toHtml label
+
+
 apiLogsPage :: ApiLogsPageData -> Html ()
 apiLogsPage page = do
   section_ [class_ "mx-auto pt-2 px-6 gap-3.5 w-full flex flex-col h-full overflow-y-hidden pb-2 group/pg", id_ "apiLogsPage"] do
@@ -628,7 +759,7 @@ apiLogsPage page = do
     div_ [] do
       logQueryBox_ page.pid page.currentRange page.source page.targetSpans page.query page.queryLibRecent page.queryLibSaved
 
-      div_ [class_ "flex flex-row gap-4 mt-3 group-has-[.toggle-chart:checked]/pg:hidden w-full", style_ "aspect-ratio: 10 / 1;"] do
+      div_ [class_ "timeline flex flex-row gap-4 mt-3 group-has-[#viz-logs:not(:checked)]/pg:hidden group-has-[.toggle-chart:checked]/pg:hidden w-full", style_ "aspect-ratio: 10 / 1;"] do
         Widget.widget_ $ (def :: Widget.Widget){Widget.query = Just "timechart count(*)", Widget.unit = Just "rows", Widget.title = Just "All traces", Widget.hideLegend = Just True, Widget._projectId = Just page.pid, Widget.standalone = Just True, Widget.yAxis = Just (def{showOnlyMaxLabel = Just True}), Widget.allowZoom = Just True, Widget.showMarkArea = Just True}
 
         Widget.widget_
@@ -667,22 +798,24 @@ apiLogsPage page = do
 
     div_ [class_ "flex h-full gap-3.5 overflow-y-hidden"] do
       -- FACETS
-      div_ [class_ "w-1/6 text-sm shrink-0 flex flex-col gap-2 p-2 transition-all duration-500 ease-out opacity-100 delay-[0ms] group-has-[.toggle-filters:checked]/pg:duration-300 group-has-[.toggle-filters:checked]/pg:opacity-0 group-has-[.toggle-filters:checked]/pg:w-0 group-has-[.toggle-filters:checked]/pg:p-0 group-has-[.toggle-filters:checked]/pg:overflow-hidden"] do
-        input_
-          [ placeholder_ "Search facets..."
-          , class_ "rounded-lg px-3 py-1 border border-strokeStrong"
-          , term "data-filterParent" "facets-container"
-          , [__| on keyup 
-                if the event's key is 'Escape' 
-                  set my value to '' 
-                  trigger keyup 
-                else 
-                  show <div.facet-section/> in #{@data-filterParent} when its textContent.toLowerCase() contains my value.toLowerCase()
-                  show <div.facet-item/> in #{@data-filterParent} when its textContent.toLowerCase() contains my value.toLowerCase()
-              |]
-          ]
-        div_ [class_ "divide-y gap-3 overflow-y-scroll h-full", id_ "facets-container"] do
-          whenJust page.facets renderFacets
+      div_ [class_ "w-80 text-sm shrink-0 flex flex-col h-full overflow-y-scroll gap-2 pr-3 transition-all duration-500 ease-out opacity-100 delay-[0ms] group-has-[.toggle-filters:checked]/pg:duration-300 group-has-[.toggle-filters:checked]/pg:opacity-0 group-has-[.toggle-filters:checked]/pg:w-0 group-has-[.toggle-filters:checked]/pg:p-0 group-has-[.toggle-filters:checked]/pg:overflow-hidden border-r border-r-strokeWeak", id_ "facets-container"] do
+        div_ [class_ "sticky top-0 z-10 bg-bgBase relative mb-2"] do
+          span_ [class_ "absolute inset-y-0 left-3 flex items-center", Aria.hidden_ "true"]
+            $ faSprite_ "magnifying-glass" "regular" "w-4 h-4 text-iconNeutral"
+          input_
+            [ placeholder_ "Search facets..."
+            , class_ "rounded-lg pl-10 pr-3 py-1.5 border border-strokeStrong w-full"
+            , term "data-filterParent" "facets-container"
+            , [__| on keyup 
+                    if the event's key is 'Escape' 
+                      set my value to '' then trigger keyup 
+                    else 
+                      show <div.facet-section-group/> in #{@data-filterParent} when its textContent.toLowerCase() contains my value.toLowerCase()
+                      show <div.facet-section/> in #{@data-filterParent} when its textContent.toLowerCase() contains my value.toLowerCase()
+                      show <div.facet-value/> in #{@data-filterParent} when its textContent.toLowerCase() contains my value.toLowerCase()
+                  |]
+            ]
+        whenJust page.facets renderFacets
 
       div_ [class_ "grow flex-1 h-full space-y-1.5 overflow-y-hidden"] do
         div_ [class_ "flex w-full relative h-full", id_ "logs_section_container"] do
@@ -695,15 +828,64 @@ apiLogsPage page = do
                 span_ [class_ "hidden group-has-[.toggle-filters:checked]/pg:block"] "Show"
                 span_ [class_ "group-has-[.toggle-filters:checked]/pg:hidden"] "Hide"
                 "filters"
-                input_ [type_ "checkbox", class_ "toggle-filters hidden", checked_]
+                input_ [type_ "checkbox", class_ "toggle-filters hidden"]
               span_ [class_ "text-slate-200"] "|"
-              div_ [class_ ""] $ span_ [class_ "text-slate-950"] (toHtml @Text $ fmt $ commaizeF page.resultCount) >> span_ [class_ "text-slate-600"] (toHtml (" rows found"))
+              div_ [class_ ""] $ span_ [class_ "text-slate-950"] (toHtml $ prettyPrintCount page.resultCount) >> span_ [class_ "text-slate-600"] (toHtml (" rows found"))
             div_ [class_ $ "absolute top-0 right-0  w-full h-full overflow-scroll c-scroll z-50 bg-white transition-all duration-100 " <> if showTrace then "" else "hidden", id_ "trace_expanded_view"] do
               whenJust page.showTrace \trId -> do
                 let url = "/p/" <> page.pid.toText <> "/traces/" <> trId
                 span_ [class_ "loading loading-dots loading-md"] ""
                 div_ [hxGet_ url, hxTarget_ "#trace_expanded_view", hxSwap_ "innerHtml", hxTrigger_ "intersect one"] pass
-            virtualTable page
+
+            -- Visualization container with conditional display based on radio selection
+            div_ [class_ "hidden group-has-[#viz-logs:checked]/pg:block h-full"] do
+              virtualTable page
+
+            div_ [class_ "group-has-[#viz-logs:checked]/pg:hidden h-full"] do
+              let pid = page.pid.toText
+              script_
+                [class_ "hidden"]
+                [text| var widgetJSON = { 
+                  "id": "visualization-widget",
+                  "type": "timeseries_line", 
+                  "title": "Visualization",
+                  "hide_subtitle": false,
+                  "standalone": true,
+                  "hide_legend": false,
+                  "allow_zoom": true,
+                  "y_axis": {"show_only_max_label": true},
+                  "_project_id": "$pid",
+                  "_center_title": true
+                };
+                
+                document.addEventListener('DOMContentLoaded', function() {
+                  const updateWidget = () => {
+                    const visType = document.querySelector('input[name="visualization"]:checked').value;
+                    if (visType) {
+                      widgetJSON.type = visType;
+                    }
+                    document.getElementById('visualization-widget-container').dispatchEvent(new Event('update-widget'));
+                  };
+                  
+                  // Update visualization when tabs change
+                  document.querySelectorAll('input[name="visualization"]').forEach(radio => {
+                    radio.addEventListener('change', updateWidget);
+                  });
+                  
+                  updateWidget();
+                });
+                |]
+              div_
+                [ id_ "visualization-widget-container"
+                , class_ "h-full w-full"
+                , hxPost_ "/widget"
+                , hxTrigger_ "intersect once, update-widget"
+                , hxTarget_ "this"
+                , hxSwap_ "innerHTML"
+                , hxVals_ "js:{...widgetJSON}"
+                , hxExt_ "json-enc"
+                ]
+                ""
 
           div_ [onmousedown_ "mouseDown(event)", class_ "relative shrink-0 h-full flex items-center justify-center border-l  hover:border-strokeBrand-strong cursor-ew-resize overflow-visible"] do
             div_
