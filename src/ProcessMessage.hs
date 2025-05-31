@@ -118,7 +118,7 @@ import Utils (b64ToJson, eitherStrToText, nestedJsonFromDotNotation)
  --}
 processMessages
   -- :: (Reader.Reader Config.AuthContext :> es, Time.Time :> es, DB :> es, Log :> es, IOE :> es)
-  :: (Reader.Reader Config.AuthContext :> es, Time.Time :> es, DB :> es, Labeled "timefusion" DB :> es, Log :> es, IOE :> es, UUIDEff :> es, Ki.StructuredConcurrency :> es)
+  :: (DB :> es, IOE :> es, Ki.StructuredConcurrency :> es, Labeled "timefusion" DB :> es, Log :> es, Reader.Reader Config.AuthContext :> es, Time.Time :> es, UUIDEff :> es)
   => [(Text, ByteString)]
   -> HashMap Text Text
   -> Eff es [Text]
@@ -161,7 +161,7 @@ jsonToMap _ = Nothing
 
 
 processRequestMessages
-  :: (Reader.Reader Config.AuthContext :> es, Time.Time :> es, DB :> es, Log :> es, IOE :> es, Ki.StructuredConcurrency :> es, UUIDEff :> es)
+  :: (DB :> es, IOE :> es, Ki.StructuredConcurrency :> es, Log :> es, Reader.Reader Config.AuthContext :> es, Time.Time :> es, UUIDEff :> es)
   => [(Text, RequestMessages.RequestMessage)]
   -> Eff es [Text]
 processRequestMessages msgs' = do

@@ -29,7 +29,7 @@ data GenerateAPIKeyForm = GenerateAPIKeyForm
   { title :: Text
   , from :: Maybe Text
   }
-  deriving stock (Show, Generic)
+  deriving stock (Generic, Show)
   deriving anyclass (FromForm)
 
 

@@ -119,6 +119,7 @@ data Widget = Widget
   , _projectId :: Maybe Projects.ProjectId
   , _dashboardId :: Maybe Text -- Dashboard ID for context
   , _isNested :: Maybe Bool
+  , _centerTitle :: Maybe Bool
   , expandBtnFn :: Maybe Text
   , children :: Maybe [Widget]
   , html :: Maybe LText
@@ -199,6 +200,7 @@ widgetHelper_ w' = case w.wType of
 
 renderWidgetHeader :: Widget -> Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe (Text, Text) -> Bool -> Html ()
 renderWidgetHeader widget wId title valueM subValueM expandBtnFn ctaM hideSub = div_ [class_ $ "leading-none flex justify-between items-center  " <> bool "grid-stack-handle" "" (widget.standalone == Just True), id_ $ wId <> "_header"] do
+  when (widget._centerTitle == Just True) $ div_ ""
   div_ [class_ "inline-flex gap-3 items-center group/h"] do
     span_ [class_ "text-sm flex items-center gap-1"] do
       unless (widget.standalone == Just True) $ span_ [class_ "hidden  group-hover/h:inline-flex"] $ Utils.faSprite_ "grip-dots-vertical" "regular" "w-4 h-4"
@@ -246,24 +248,23 @@ renderWidgetHeader widget wId title valueM subValueM expandBtnFn ctaM hideSub = 
       ul_ [class_ "text-textStrong menu menu-md dropdown-content bg-base-100 rounded-box p-2 w-52 shadow-sm leading-none z-10"] do
         -- Only show the "Move to dashboard" option if we're in a dashboard context
 
-        when (isJust widget._dashboardId) do
-          let dashId = fromMaybe "" widget._dashboardId
-          li_
-            $ a_
-              [ class_ "p-2 w-full text-left block"
-              , data_ "tippy-content" "Copy this widget to another dashboard"
-              , id_ $ wId <> "_copy_link"
-              , term
-                  "_"
-                  [text|
-                on click 
-                set #dashboards-modal.checked to true
-                then set #dashboards-modal-widget-id.value to "${wId}"
-                then set #dashboards-modal-source-dashboard-id.value to "${dashId}"
-                then set (the closest <details/>).open to false 
-              |]
-              ]
-              "Copy to dashboard"
+        let dashId = fromMaybe "" widget._dashboardId
+        li_
+          $ a_
+            [ class_ "p-2 w-full text-left block"
+            , data_ "tippy-content" "Copy this widget to another dashboard"
+            , id_ $ wId <> "_copy_link"
+            , term
+                "_"
+                [text|
+              on click 
+              set #dashboards-modal.checked to true
+              then set #dashboards-modal-widget-id.value to "${wId}"
+              then set #dashboards-modal-source-dashboard-id.value to "${dashId}"
+              then set (the closest <details/>).open to false 
+            |]
+            ]
+            "Copy to dashboard"
 
         -- Only show the "Duplicate widget" option if we're in a dashboard context
         when (isJust widget._dashboardId) do
@@ -273,16 +274,25 @@ renderWidgetHeader widget wId title valueM subValueM expandBtnFn ctaM hideSub = 
               , data_ "tippy-content" "Create a copy of this widget"
               , hxPost_
                   $ "/p/"
-                  <> maybeToMonoid (widget._projectId <&> (.toText))
-                  <> "/dashboards/"
-                  <> maybeToMonoid widget._dashboardId
-                  <> "/widgets/"
-                  <> wId
-                  <> "/duplicate"
-              , hxSwap_ "beforeend"
+                    <> maybeToMonoid (widget._projectId <&> (.toText))
+                    <> "/dashboards/"
+                    <> maybeToMonoid widget._dashboardId
+                    <> "/widgets/"
+                    <> wId
+                    <> "/duplicate"
               , hxTrigger_ "click"
-              , hxTarget_ ".grid-stack"
-              , [__| on click set (the closest <details/>).open to false |]
+              , [__| on click set (the closest <details/>).open to false
+                     on htmx:beforeSwap
+                        set event.detail.shouldSwap to false then
+                        set widgetData to JSON.parse(event.detail.xhr.getResponseHeader('X-Widget-JSON')) then
+                        call gridStackInstance.addWidget({
+                          w: widgetData.layout.w, 
+                          h: widgetData.layout.h, 
+                          x: widgetData.layout.x, 
+                          y: widgetData.layout.y,
+                          content: event.detail.serverResponse
+                        })
+                 |]
               ]
               "Duplicate widget"
           li_
@@ -293,7 +303,6 @@ renderWidgetHeader widget wId title valueM subValueM expandBtnFn ctaM hideSub = 
                   [text|
                   if(confirm('Are you sure you want to delete this widget? This action cannot be undone.')) {
                     const widgetEl = document.getElementById('${wId}_widgetEl');
-                    gridStackInstance.removeWidget(widgetEl, true);
                     if (document.getElementById('${wId}_widgetEl')) {
                       widgetEl.dispatchEvent(new CustomEvent('widget-remove-requested', {
                         bubbles: true,
@@ -321,7 +330,7 @@ renderChart widget = do
       div_
         [ class_
             $ "h-full w-full flex flex-col justify-end "
-            <> if widget.naked == Just True then "" else " rounded-2xl border border-strokeWeak bg-fillWeaker"
+              <> if widget.naked == Just True then "" else " rounded-2xl border border-strokeWeak bg-fillWeaker"
         , id_ $ chartId <> "_bordered"
         ]
         do

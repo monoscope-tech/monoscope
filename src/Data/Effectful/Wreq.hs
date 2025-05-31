@@ -186,7 +186,7 @@ data WreqResponse = WreqResponse
   , originalRequest :: Text
   , responseEarlyHints :: [(Text, Text)]
   }
-  deriving stock (Show, Generic)
+  deriving stock (Generic, Show)
   deriving anyclass (AE.FromJSON, AE.ToJSON)
 
 

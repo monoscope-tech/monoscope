@@ -112,7 +112,11 @@ const chartWidget = widgetData => {
 
   // Store the original base query to avoid stacking
   const baseQuery = widgetData.query
+  // Handle URL query parameter correctly - ensure it's properly combined with the base query
   widgetData.query = params().query ? (baseQuery ? params().query + ' | ' + baseQuery : params().query) : baseQuery
+
+  // Store the original query for reference
+  widgetData.originalQuery = baseQuery
 
   opt.dataset.source = opt.dataset?.source?.map(row => [row[0] * 1000, ...row.slice(1)]) ?? null
 
@@ -154,6 +158,9 @@ const chartWidget = widgetData => {
   window.addEventListener('update-query', e => {
     if (e.detail?.ast) {
       widgetData.queryAST = e.detail.ast
+    }
+    if (e.detail?.value) {
+      widgetData.query = e.detail.value
     }
     updateChartData(chart, opt, true, widgetData)
   })
@@ -213,12 +220,11 @@ function buildWidgetOrder(container) {
   items.forEach(el => {
     if (!el.id || !el.id.endsWith('_widgetEl')) return
     const widgetId = el.id.slice(0, -'_widgetEl'.length)
-    console.log(el.gridstackNode)
     const reorderItem = {
-      x: el.gridstackNode.x,
-      y: el.gridstackNode.y,
-      w: el.gridstackNode.w,
-      h: el.gridstackNode.h,
+      x: el.gridstackNode?.x,
+      y: el.gridstackNode?.y,
+      w: el.gridstackNode?.w,
+      h: el.gridstackNode?.h,
     }
     // Check for a nested grid within this grid item.
     const nestedGridContainer = el.querySelector('.nested-grid')

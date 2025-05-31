@@ -52,8 +52,8 @@ data PerformanceReport = PerformanceReport
   , durationDiffType :: Text
   , durationDiffPct :: Integer
   }
-  deriving stock (Show, Generic)
-  deriving anyclass (AE.ToJSON, AE.FromJSON)
+  deriving stock (Generic, Show)
+  deriving anyclass (AE.FromJSON, AE.ToJSON)
 
 
 data ReportAnomalyType
@@ -83,7 +83,7 @@ data ReportAnomalyType
       { endpointUrlPath :: Text
       }
   | UnknownAnomaly
-  deriving stock (Show, Generic)
+  deriving stock (Generic, Show)
   deriving anyclass (AE.ToJSON)
 
 
@@ -145,7 +145,7 @@ data ReportData = ReportData
   , anomalies :: [ReportAnomalyType]
   , anomaliesCount :: Int
   }
-  deriving stock (Show, Generic)
+  deriving stock (Generic, Show)
   deriving anyclass (AE.FromJSON)
 
 

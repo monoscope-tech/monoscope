@@ -77,7 +77,7 @@ widgets:
   #
   - type: 'timeseries'
     title: 'All requests'
-    query: hashes[*]=="{{var-endpointHash}}" | timechart count(*) by attributes___http___response___status_code
+    query: hashes[*]=="{{var-endpointHash}}" | timechart count(*) by attributes.http.response.status_code
     unit: reqs
     layout: { w: 6, h: 4 }
 
@@ -109,5 +109,5 @@ widgets:
   - type: 'timeseries'
     title: 'Errors'
     theme: 'roma'
-    query: kind=="server" AND attributes___http___response___status_code != null AND attributes___http___response___status_code >= 300.0 AND hashes[*]=="{{var-endpointHash}}"  | timechart count(*) by attributes___http___response___status_code
+    query: kind=="server" AND attributes.http.response.status_code != null AND attributes.http.response.status_code >= 300.0 AND hashes[*]=="{{var-endpointHash}}"  | timechart count(*) by attributes.http.response.status_code
     layout: { w: 6, h: 4 }

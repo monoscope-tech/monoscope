@@ -7,13 +7,14 @@ import Data.Text qualified as T
 import Data.Tuple.Extra (fst3)
 import Data.Vector qualified as V
 import Lucid
-import Lucid.Htmx (hxGet_, hxTarget_)
+import Lucid.Htmx (hxGet_, hxSelect_, hxSwap_, hxTarget_, hxTrigger_)
 import Lucid.Hyperscript (__)
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
 import Models.Users.Users qualified as Users
 import NeatInterpolation (text)
 import Pages.Components qualified as Components
+import Pkg.Components qualified as Components
 import Pkg.Components.ExternalHeadScripts (externalHeadScripts_)
 import Pkg.THUtils
 import PyF
@@ -302,6 +303,23 @@ bodyWrapper bcfg child = do
                       then maybe child (\p -> settingsWrapper p.id bcfg.pageTitle child) bcfg.currProject
                       else child
                   Components.drawer_ "global-data-drawer" Nothing Nothing ""
+                  -- Modal for copying widgets to other dashboards
+                  Components.modal_ "dashboards-modal" "" do
+                    -- Hidden fields to store widget and dashboard IDs
+                    input_ [type_ "hidden", id_ "dashboards-modal-widget-id", name_ "widget_id"]
+                    input_ [type_ "hidden", id_ "dashboards-modal-source-dashboard-id", name_ "source_dashboard_id"]
+
+                    div_
+                      [ class_ "dashboards-list space-y-3 max-h-160 overflow-y-auto"
+                      , hxGet_ ("/p/" <> maybe "" (.id.toText) bcfg.currProject <> "/dashboards?embedded=true")
+                      , hxTrigger_ "intersect once"
+                      , hxSelect_ "#itemsListPage"
+                      , hxSwap_ "innerHTML"
+                      ]
+                      do
+                        div_ [class_ "skeleton h-16 w-full"] ""
+                        div_ [class_ "skeleton h-16 w-full"] ""
+                        div_ [class_ "skeleton h-16 w-full"] ""
 
       externalHeadScripts_
       alerts_
@@ -332,9 +350,11 @@ bodyWrapper bcfg child = do
       |]
       let email = show $ maybe "" ((.persistentSession.user.getUser.email)) bcfg.sessM
       let name = maybe "" (\sess -> sess.persistentSession.user.getUser.firstName <> " " <> sess.persistentSession.user.getUser.lastName) bcfg.sessM
+      let pidT = maybe "" (.id.toText) bcfg.currProject
+      let pTitle = maybe "" (.title) bcfg.currProject
       script_
         [text| window.addEventListener("load", (event) => {
-        posthog.people.set_once({email: ${email}, name: "${name}"});
+        posthog.people.set_once({email: ${email}, name: "${name}", projectId: "${pidT}", projectTitle: "${pTitle}"});
       });
       echarts.connect('default');
       |]

@@ -23,12 +23,7 @@ window.buildCurlRequest = function (event) {
       : ''
   curlCommand += curlHeaders
 
-  const reqBody =
-    method.toLowerCase() !== 'get'
-      ? typeof request_body === 'object'
-        ? ` -d '${JSON.stringify(request_body)}' \\\n`
-        : `-data-raw "${request_body}"  \\\n`
-      : ''
+  const reqBody = method.toLowerCase() !== 'get' ? (typeof request_body === 'object' ? ` -d '${JSON.stringify(request_body)}' \\\n` : `-data-raw "${request_body}"  \\\n`) : ''
   if (reqBody) curlCommand += reqBody
 
   navigator.clipboard.writeText(curlCommand).then(() => {
@@ -177,3 +172,14 @@ function updateMarkAreas(chartId, warningVal, incidentVal) {
   })
   myChart.setOption({ series: options.series }, false)
 }
+
+function updateUrlState(key, value, action = 'set') {
+  const params = new URLSearchParams(window.location.search)
+  if (action === 'delete') {
+    params.delete(key)
+  } else {
+    params.set(key, value)
+  }
+  window.history.replaceState({}, '', `${window.location.pathname}?${params}`)
+}
+window.updateUrlState = updateUrlState

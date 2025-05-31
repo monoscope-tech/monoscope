@@ -23,6 +23,7 @@ import Effectful.Error.Static (throwError)
 import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
 import Effectful.Reader.Static qualified
 import Effectful.Time qualified as Time
+
 -- import Fmt (commaizeF, fmt) -- Using prettyPrintCount instead
 import Langchain.LLM.Core qualified as LLM
 import Langchain.LLM.OpenAI (OpenAI (..))
@@ -40,8 +41,9 @@ import Models.Telemetry.Schema qualified as Schema
 import Models.Users.Sessions qualified as Sessions
 import NeatInterpolation (text)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), currProject, pageActions, pageTitle, sessM)
+import Pages.Dashboards (visTypes)
 import Pkg.Components qualified as Components
-import Pkg.Components.Widget (WidgetAxis (..), WidgetType (WTTimeseriesLine))
+import Pkg.Components.Widget (WidgetAxis (..), WidgetType (WTStat, WTTimeseriesLine))
 import Pkg.Components.Widget qualified as Widget
 import Pkg.Parser (pSource, parseQueryToAST, toQText)
 import Relude hiding (ask)
@@ -49,7 +51,7 @@ import Servant qualified
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types
 import Text.Megaparsec (parseMaybe)
-import Utils (prettyPrintCount, faSprite_, listToIndexHashMap, lookupVecTextByKey, getServiceColors, displayTimestamp, formatUTC, freeTierLimitExceededBanner)
+import Utils (displayTimestamp, faSprite_, formatUTC, freeTierLimitExceededBanner, getServiceColors, listToIndexHashMap, lookupVecTextByKey, prettyPrintCount)
 
 
 -- $setup
@@ -211,7 +213,8 @@ renderFacets facetSummary = do
                     shouldBeUnchecked = sectionName == "Common Filters" && key `elem` commonFilterKeys
                 input_ $ [class_ "hidden peer", type_ "checkbox", name_ $ "group-" <> key] ++ [checked_ | not shouldBeUnchecked]
                 span_ [class_ "peer-checked:-rotate-90 transition-transform duration-150 flex"] $ faSprite_ "chevron-down" "regular" "w-3 h-3"
-                span_ (toHtml displayName)
+                let dotKey = T.replace "___" "." key
+                span_ [term "data-tippy-content" dotKey] (toHtml displayName)
               span_ ""
 
             div_ [class_ "pl-5 xmax-h-auto peer-has-checked:max-h-0 peer-has-checked:overflow-hidden transition-[max-height] duration-150"] do
@@ -229,6 +232,7 @@ renderFacets facetSummary = do
                           , class_ "checkbox checkbox-sm"
                           , name_ key
                           , onclick_ $ "filterByFacet('" <> T.replace "___" "." key <> "', '" <> val <> "')"
+                          , term "data-tippy-content" (T.replace "___" "." key <> " == \"" <> val <> "\"")
                           ]
 
                         span_ [class_ "facet-value truncate", term "data-tippy-content" val] do
@@ -249,6 +253,54 @@ renderFacets facetSummary = do
 
                   label_ [class_ "text-textBrand px-3 py-3 cursor-pointer hover:underline hidden peer-checked/more:flex items-center gap-1", Lucid.for_ $ "more-toggle-" <> key] do
                     toHtml $ "- Less (" <> prettyPrintCount hiddenCount <> ")"
+
+
+resizer_ :: Text -> Text -> Bool -> Html ()
+resizer_ targetId urlParam increasingDirection =
+  div_
+    [ class_ "group relative shrink-0 h-full flex items-center justify-center border-l hover:border-strokeBrand-strong cursor-ew-resize overflow-visible select-none"
+    , term "data-resize-target" targetId
+    , term "data-resize-direction" (if increasingDirection then "increase" else "decrease")
+    , term "data-url-param" urlParam
+    , [__|
+        on mousedown
+          add .select-none to body then
+          set :startX to event.clientX then
+          set :target to #{@data-resize-target} then
+          set :startWidth to the :target's offsetWidth then
+          set :urlParam to @data-url-param then
+          set :isRightPanel to (@data-resize-direction == 'decrease')
+        end
+        
+        on mousemove from window
+          if :startX is not null
+            set deltaX to (event.clientX - :startX) then
+            if :isRightPanel
+            then set newWidth to :startWidth - deltaX
+            else set newWidth to :startWidth + deltaX end
+            if newWidth < 0 set newWidth to 0 end
+            set the :target's *width to newWidth + 'px'
+          end
+        end
+        
+        on mouseup from window
+          if :startX is not null
+            set finalWidth to the :target's offsetWidth then
+            remove .select-none from body then
+
+            call updateUrlState(:urlParam, finalWidth) then
+            call localStorage.setItem('resizer-'+:urlParam, finalWidth + 'px') then
+            set :startX to null
+          end
+        end
+      |]
+    ]
+    do
+      div_
+        [ id_ "resizer"
+        , class_ $ "absolute left-1/2 top-1/2 z-50 -translate-x-1/2 leading-none py-1 -translate-y-1/2 bg-slate-50 rounded-sm border border-strokeBrand-weak group-hover:border-strokeBrand-strong text-iconNeutral group-hover:text-iconBrand"
+        ]
+        $ faSprite_ "grip-dots-vertical" "regular" "w-4 h-5"
 
 
 keepNonEmpty :: Maybe Text -> Maybe Text
@@ -552,11 +604,12 @@ logQueryBox_ pid currentRange source targetSpan query queryLibRecent queryLibSav
                 span_ [id_ "run-query-indicator", class_ "refresh-indicator htmx-indicator query-indicator loading loading-dots loading-sm"] ""
                 faSprite_ "magnifying-glass" "regular" "h-4 w-4 inline-block"
       div_ [class_ "flex items-between justify-between"] do
+        visualizationTabs_
         div_ [class_ "", id_ "resultTableInner"] pass
 
         div_ [class_ "flex justify-end  gap-2 "] do
           fieldset_ [class_ "fieldset"] $ label_ [class_ "label"] do
-            input_ [type_ "checkbox", class_ "checkbox checkbox-sm rounded-sm toggle-chart"] >> span_ "charts"
+            input_ [type_ "checkbox", class_ "checkbox checkbox-sm rounded-sm toggle-chart"] >> span_ "timeline"
 
 
 queryLibrary_ :: Projects.ProjectId -> V.Vector Projects.QueryLibItem -> V.Vector Projects.QueryLibItem -> Html ()
@@ -714,6 +767,15 @@ virtualTable page = do
    |]
 
 
+visualizationTabs_ :: Html ()
+visualizationTabs_ =
+  div_ [class_ "tabs tabs-box tabs-outline tabs-xs bg-gray-100 p-1 rounded-lg", id_ "visualizationTabs", role_ "tablist"] do
+    forM_ visTypes $ \(icon, label, vizType, emoji) -> label_ [class_ "tab !shadow-none !border-strokeWeak flex gap-1"] do
+      input_ $ [type_ "radio", name_ "visualization", id_ $ "viz-" <> vizType, value_ vizType] <> [checked_ | vizType == "logs"]
+      span_ [class_ "text-iconNeutral leading-none"] $ toHtml emoji -- faSprite_ icon "regular" "w-3 h-2"
+      span_ [] $ toHtml label
+
+
 apiLogsPage :: ApiLogsPageData -> Html ()
 apiLogsPage page = do
   section_ [class_ "mx-auto pt-2 px-6 gap-3.5 w-full flex flex-col h-full overflow-y-hidden pb-2 group/pg", id_ "apiLogsPage"] do
@@ -728,7 +790,7 @@ apiLogsPage page = do
       do
         div_ [class_ "relative ml-auto w-full", style_ ""] do
           div_ [class_ "flex justify-end  w-full p-4 "]
-            $ button_ [[__|on click add .hidden to #expand-log-modal|]]
+            $ button_ [class_ "cursor-pointer", [__|on click add .hidden to #expand-log-modal|]]
             $ faSprite_ "xmark" "regular" "h-8"
           form_
             [ hxPost_ $ "/p/" <> page.pid.toText <> "/share/"
@@ -743,8 +805,8 @@ apiLogsPage page = do
     div_ [] do
       logQueryBox_ page.pid page.currentRange page.source page.targetSpans page.query page.queryLibRecent page.queryLibSaved
 
-      div_ [class_ "flex flex-row gap-4 mt-3 group-has-[.toggle-chart:checked]/pg:hidden w-full", style_ "aspect-ratio: 10 / 1;"] do
-        Widget.widget_ $ (def :: Widget.Widget){Widget.query = Just "timechart count(*)", Widget.unit = Just "rows", Widget.title = Just "All traces", Widget.hideLegend = Just True, Widget._projectId = Just page.pid, Widget.standalone = Just True, Widget.yAxis = Just (def{showOnlyMaxLabel = Just True}), Widget.allowZoom = Just True, Widget.showMarkArea = Just True}
+      div_ [class_ "timeline flex flex-row gap-4 mt-3 group-has-[#viz-logs:not(:checked)]/pg:hidden group-has-[.toggle-chart:checked]/pg:hidden w-full", style_ "aspect-ratio: 10 / 1;"] do
+        Widget.widget_ $ (def :: Widget.Widget){Widget.query = Just "timechart count(*)", Widget.unit = Just "rows", Widget.title = Just "All traces", Widget.hideLegend = Just True, Widget._projectId = Just page.pid, Widget.standalone = Just True, Widget.yAxis = Just (def{showOnlyMaxLabel = Just True}), Widget.allowZoom = Just True, Widget.showMarkArea = Just True, Widget.layout = Just (def{Widget.w = Just 6, Widget.h = Just 4})}
 
         Widget.widget_
           $ (def :: Widget.Widget)
@@ -754,6 +816,7 @@ apiLogsPage page = do
             , Widget.hideSubtitle = Just True
             , Widget.yAxis = Just (def{showOnlyMaxLabel = Just True})
             , Widget.summarizeBy = Just Widget.SBMax
+            , Widget.layout = Just (def{Widget.w = Just 6, Widget.h = Just 4})
             , Widget.sql =
                 Just
                   [text| SELECT timeB, COALESCE(value, 0)::float AS value, quantile
@@ -782,12 +845,12 @@ apiLogsPage page = do
 
     div_ [class_ "flex h-full gap-3.5 overflow-y-hidden"] do
       -- FACETS
-      div_ [class_ "w-80 text-sm shrink-0 flex flex-col h-full overflow-y-scroll gap-2 pr-3 transition-all duration-500 ease-out opacity-100 delay-[0ms] group-has-[.toggle-filters:checked]/pg:duration-300 group-has-[.toggle-filters:checked]/pg:opacity-0 group-has-[.toggle-filters:checked]/pg:w-0 group-has-[.toggle-filters:checked]/pg:p-0 group-has-[.toggle-filters:checked]/pg:overflow-hidden border-r border-r-strokeWeak", id_ "facets-container"] do
+      div_ [class_ "w-68 text-sm shrink-0 flex flex-col h-full overflow-y-scroll gap-2 group-has-[.toggle-filters:checked]/pg:max-w-0 group-has-[.toggle-filters:checked]/pg:overflow-hidden ", id_ "facets-container"] do
         div_ [class_ "sticky top-0 z-10 bg-bgBase relative mb-2"] do
           span_ [class_ "absolute inset-y-0 left-3 flex items-center", Aria.hidden_ "true"]
             $ faSprite_ "magnifying-glass" "regular" "w-4 h-4 text-iconNeutral"
           input_
-            [ placeholder_ "Search facets..."
+            [ placeholder_ "Search filters..."
             , class_ "rounded-lg pl-10 pr-3 py-1.5 border border-strokeStrong w-full"
             , term "data-filterParent" "facets-container"
             , [__| on keyup 
@@ -801,100 +864,93 @@ apiLogsPage page = do
             ]
         whenJust page.facets renderFacets
 
-      div_ [class_ "grow flex-1 h-full space-y-1.5 overflow-y-hidden"] do
-        div_ [class_ "flex w-full relative h-full", id_ "logs_section_container"] do
-          let dW = fromMaybe "100%" page.detailsWidth
-              showTrace = isJust page.showTrace
-          div_ [class_ "relative flex flex-col shrink-1 min-w-0 w-full h-full", style_ $ "width: " <> dW, id_ "logs_list_container"] do
-            div_ [class_ "flex gap-2  pt-1 text-sm -mb-6 z-10 w-max"] do
-              label_ [class_ "gap-1 flex items-center cursor-pointer"] do
-                faSprite_ "side-chevron-left-in-box" "regular" "w-4 h-4 group-has-[.toggle-filters:checked]/pg:rotate-180 "
-                span_ [class_ "hidden group-has-[.toggle-filters:checked]/pg:block"] "Show"
-                span_ [class_ "group-has-[.toggle-filters:checked]/pg:hidden"] "Hide"
-                "filters"
-                input_ [type_ "checkbox", class_ "toggle-filters hidden"]
-              span_ [class_ "text-slate-200"] "|"
-              div_ [class_ ""] $ span_ [class_ "text-slate-950"] (toHtml $ prettyPrintCount page.resultCount) >> span_ [class_ "text-slate-600"] (toHtml (" rows found"))
-            div_ [class_ $ "absolute top-0 right-0  w-full h-full overflow-scroll c-scroll z-50 bg-white transition-all duration-100 " <> if showTrace then "" else "hidden", id_ "trace_expanded_view"] do
-              whenJust page.showTrace \trId -> do
-                let url = "/p/" <> page.pid.toText <> "/traces/" <> trId
-                span_ [class_ "loading loading-dots loading-md"] ""
-                div_ [hxGet_ url, hxTarget_ "#trace_expanded_view", hxSwap_ "innerHtml", hxTrigger_ "intersect one"] pass
-            virtualTable page
+      div_ [class_ "group-has-[.toggle-filters:checked]/pg:hidden"] $ resizer_ "facets-container" "facets_width" True
 
-          div_ [onmousedown_ "mouseDown(event)", class_ "relative shrink-0 h-full flex items-center justify-center border-l  hover:border-strokeBrand-strong cursor-ew-resize overflow-visible"] do
-            div_
-              [ onmousedown_ "mouseDown(event)"
-              , class_ "absolute inset-y-0 left-0 w-4 -ml-3 cursor-ew-resize h-full z-10"
-              ]
-              ""
-            div_
-              [ onmousedown_ "mouseDown(event)"
-              , id_ "resizer"
-              , class_ $ "absolute left-1/2 top-1/2 z-50 -translate-x-1/2 leading-none py-1 -translate-y-1/2 bg-slate-50 rounded-sm border border-strokeBrand-weak hover:border-strokeBrand-strong text-iconNeutral hover:text-iconBrand" <> if isJust page.detailsWidth then "" else "hidden"
-              ]
-              $ faSprite_ "grip-dots-vertical" "regular" "w-4 h-5"
+      let dW = fromMaybe "100%" page.detailsWidth
+          showTrace = isJust page.showTrace
+      div_ [class_ "grow relative flex flex-col shrink-1 min-w-0 w-full h-full", style_ $ "xwidth: " <> dW, id_ "logs_list_container"] do
+        div_ [class_ "flex gap-2  pt-1 text-sm -mb-6 z-10 w-max"] do
+          label_ [class_ "gap-1 flex items-center cursor-pointer"] do
+            faSprite_ "side-chevron-left-in-box" "regular" "w-4 h-4 group-has-[.toggle-filters:checked]/pg:rotate-180 "
+            span_ [class_ "hidden group-has-[.toggle-filters:checked]/pg:block"] "Show"
+            span_ [class_ "group-has-[.toggle-filters:checked]/pg:hidden"] "Hide"
+            "filters"
+            input_ [type_ "checkbox", class_ "toggle-filters hidden", id_ "toggle-filters", onchange_ "localStorage.setItem('toggle-filter-checked', this.checked)"]
+            script_ "document.getElementById('toggle-filters').checked = localStorage.getItem('toggle-filter-checked') === 'true';"
+          span_ [class_ "text-slate-200"] "|"
+          div_ [class_ ""] $ span_ [class_ "text-slate-950"] (toHtml $ prettyPrintCount page.resultCount) >> span_ [class_ "text-slate-600"] (toHtml (" rows found"))
+        div_ [class_ $ "absolute top-0 right-0  w-full h-full overflow-scroll c-scroll z-50 bg-white transition-all duration-100 " <> if showTrace then "" else "hidden", id_ "trace_expanded_view"] do
+          whenJust page.showTrace \trId -> do
+            let url = "/p/" <> page.pid.toText <> "/traces/" <> trId
+            span_ [class_ "loading loading-dots loading-md"] ""
+            div_ [hxGet_ url, hxTarget_ "#trace_expanded_view", hxSwap_ "innerHtml", hxTrigger_ "intersect one"] pass
 
-          div_ [class_ "overflow-y-auto grow-1 overflow-x-hidden h-full c-scroll transition-all duration-100", style_ "width:0px", id_ "log_details_container"] do
-            span_ [class_ "htmx-indicator query-indicator absolute loading left-1/2 -translate-x-1/2 loading-dots absoute z-10 top-10", id_ "details_indicator"] ""
-            whenJust page.targetEvent \te -> do
-              let url = "/p/" <> page.pid.toText <> "/log_explorer/" <> te
-              div_ [hxGet_ url, hxTarget_ "#log_details_container", hxSwap_ "innerHtml", hxTrigger_ "intersect one", hxIndicator_ "#details_indicator"] pass
+        -- Visualization container with conditional display based on radio selection
+        div_ [class_ "hidden group-has-[#viz-logs:checked]/pg:block h-full"] do
+          virtualTable page
 
+        div_ [class_ "group-has-[#viz-logs:checked]/pg:hidden h-full"] do
+          let pid = page.pid.toText
+          script_
+            [class_ "hidden"]
+            [text| var widgetJSON = { 
+                  "id": "visualization-widget",
+                  "type": "timeseries_line", 
+                  "title": "Visualization",
+                  "standalone": true,
+                  "allow_zoom": true,
+                  "_project_id": "$pid",
+                  "_center_title": true, 
+                  "layout": {"w": 6, "h": 4}
+                };
+                
+                document.addEventListener('DOMContentLoaded', function() {
+                  const updateWidget = () => {
+                    const visType = document.querySelector('input[name="visualization"]:checked').value;
+                    if (visType) {widgetJSON.type = visType}
+                    document.getElementById('visualization-widget-container').dispatchEvent(new Event('update-widget'));
+                  };
+                  
+                  // Update visualization when tabs change
+                  document.querySelectorAll('input[name="visualization"]').forEach(radio => {
+                    radio.addEventListener('change', updateWidget);
+                  });
+                  
+                  updateWidget();
+                });
+                |]
+          div_
+            [ id_ "visualization-widget-container"
+            , class_ "h-full w-full"
+            , hxPost_ "/widget"
+            , hxTrigger_ "intersect once, update-widget"
+            , hxTarget_ "this"
+            , hxSwap_ "innerHTML"
+            , hxVals_ "js:{...widgetJSON}"
+            , hxExt_ "json-enc"
+            ]
+            ""
+
+      resizer_ "log_details_container" "details_width" False
+
+      div_ [class_ "grow-0 shrink-0 overflow-y-auto overflow-x-hidden h-full c-scroll w-0", id_ "log_details_container"] do
+        span_ [class_ "htmx-indicator query-indicator absolute loading left-1/2 -translate-x-1/2 loading-dots absoute z-10 top-10", id_ "details_indicator"] ""
+        whenJust page.targetEvent \te -> do
           script_
             [text|
-          function updateUrlState(key, value, action='set') {
-            const params = new URLSearchParams(window.location.search)
-            if(action === 'delete') {
-              params.delete(key)
-            }else {
-             params.set(key, value)
+            const detailsContainer = document.getElementById('log_details_container');
+            if (detailsContainer) {
+              const queryWidth = new URLSearchParams(window.location.search).get('details_width');
+              const storedWidth = localStorage.getItem('resizer-details_width');
+              
+              if (queryWidth) detailsContainer.style.width = queryWidth + 'px';
+              else if (storedWidth && !storedWidth.endsWith('px')) detailsContainer.style.width = storedWidth + 'px';
+              else if (storedWidth) detailsContainer.style.width = storedWidth;
+              else detailsContainer.style.width = '30%';
             }
-            window.history.replaceState({}, '', `$${window.location.pathname}?$${params}`)
-          }
-          var logsList = null
-          const logDetails = document.querySelector('#log_details_container')
-          const container = document.querySelector('#logs_section_container')
-          const logsListC = document.querySelector('#logs_list_container')          
-          const containerWidth = Number(window.getComputedStyle(container).width.replace('px',''))
-
-          let mouseState = {x: 0}
-          let resizeStart = false
-          let target = ""
-
-
-          function mouseDown(event) {
-              resizeStart = true
-              container.style.userSelect = "none";
-              mouseState = {x: event.clientX  }
-              target = event.target.id
-          }
-
-          function handleMouseup(event) {
-            resizeStart = false
-            container.style.userSelect = "auto";
-            target = ""
-          }
-
-          function handleMouseMove(event) {
-            if(!resizeStart) return
-            if(!logsList) {
-            
-            }
-            const diff = event.clientX  - mouseState.x
-            mouseState = {x: event.clientX}
-            const edW = Number(logDetails.style.width.replace('px',''))
-            let ldW = Number(logsListC.style.width.replace('px',''))
-            if(isNaN(ldW)) {
-                ldW = Number(window.getComputedStyle(logsListC).width.replace('px',''))
-            }
-            //logDetails.style.width = (edW - diff) + 'px'
-            logsListC.style.width = (ldW + diff) + 'px'
-            updateUrlState('details_width', logsListC.style.width)
-          }
-          window.addEventListener ('mousemove', handleMouseMove)
-          window.addEventListener ('mouseup', handleMouseup)
           |]
+          let url = "/p/" <> page.pid.toText <> "/log_explorer/" <> te
+          div_ [hxGet_ url, hxTarget_ "#log_details_container", hxSwap_ "innerHtml", hxTrigger_ "intersect one", hxIndicator_ "#details_indicator"] pass
 
   jsonTreeAuxillaryCode page.pid page.query
   queryEditorInitializationCode page.queryLibRecent page.queryLibSaved
@@ -1119,23 +1175,19 @@ queryEditorInitializationCode queryLibRecent queryLibSaved = do
       popularQueriesJson = decodeUtf8 $ AE.encode Schema.popularOtelQueriesJson
   script_
     [text|
-    // Initialize query-editor component with query library data and schema
     setTimeout(() => {
       const editor = document.getElementById('filterElement');
       if (editor) {
-        // Set query library if available
         if (editor.setQueryLibrary) {
           const queryLibraryData = $queryLibDataJson;
           editor.setQueryLibrary(queryLibraryData);
         }
         
-        // Set schema data using schemaManager if available
         if (window.schemaManager && window.schemaManager.setSchemaData) {
           const schemaData = $schemaJson;
           window.schemaManager.setSchemaData('spans', schemaData);
         }
         
-        // Set popular searches directly from Haskell backend
         if (editor.setPopularSearches) {
           const popularQueries = $popularQueriesJson;
           editor.setPopularSearches(popularQueries);

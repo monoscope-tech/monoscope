@@ -30,7 +30,7 @@ data ClientMetadata = ClientMetadata
   , pubsubProjectId :: Text
   , pubsubPushServiceAccount :: AE.Value
   }
-  deriving stock (Show, Generic)
+  deriving stock (Generic, Show)
   deriving
     (ToJSON)
     via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] ClientMetadata

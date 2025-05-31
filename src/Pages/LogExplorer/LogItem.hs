@@ -75,7 +75,7 @@ expandAPIlogItem' pid req modal = do
         div_ [class_ "flex items-center gap-2"] do
           dateTime (zonedTimeToUTC req.createdAt) Nothing
           button_
-            [ class_ "ml-4 p-0 -mt-1"
+            [ class_ "ml-4 p-0 -mt-1 cursor-pointer"
             , [__|on click add .hidden to #trace_expanded_view 
             then put '0px' into  #log_details_container.style.width 
             then put '100%' into #logs_list_container.style.width 
@@ -128,7 +128,7 @@ expandAPIlogItem' pid req modal = do
       let json = selectiveReqToJson req
       div_ [class_ "flex items-center gap-2"] do
         button_
-          [ class_ "flex items-center gap-1 text-sm text-textBrand"
+          [ class_ "flex items-center gap-1 text-sm text-textBrand cursor-pointer"
           , onclick_ "window.buildCurlRequest(event)"
           , term "data-reqjson" $ decodeUtf8 $ AE.encode json
           ]
@@ -137,7 +137,7 @@ expandAPIlogItem' pid req modal = do
             faSprite_ "copy" "regular" "w-2 h-2"
         let createdAt = toText $ formatTime defaultTimeLocale "%Y-%m-%dT%H:%M:%S%6QZ" req.createdAt
         button_
-          [ class_ "flex items-center gap-2 text-textBrand text-sm underline"
+          [ class_ "flex items-center gap-2 text-textBrand text-sm underline cursor-pointer"
           , hxPost_ $ "/p/" <> pid.toText <> "/share/" <> UUID.toText req.id <> "/" <> createdAt <> "?event_type=request"
           , hxSwap_ "innerHTML"
           , hxTarget_ "#copy_share_link"
@@ -148,11 +148,11 @@ expandAPIlogItem' pid req modal = do
 
       div_ [class_ "bg-fillWeak w-max rounded-lg border border-strokeWeak justify-start items-start inline-flex"] $ do
         div_ [class_ "justify-start items-start flex text-sm"] $ do
-          button_ [onclick_ "navigatable(this, '#raw_content', '#http-content-container', 't-tab-box-active')", class_ "a-tab px-3 py-1 rounded-lg text-textWeak t-tab-box-active"] "Raw Details"
-          button_ [onclick_ "navigatable(this, '#req_content', '#http-content-container', 't-tab-box-active')", class_ "a-tab px-3 py-1 rounded-lg text-textWeak"] "Req Body"
-          button_ [onclick_ "navigatable(this, '#res_content', '#http-content-container', 't-tab-box-active')", class_ "a-tab px-3 py-1 rounded-lg text-textWeak"] "Res Body"
-          button_ [onclick_ "navigatable(this, '#hed_content', '#http-content-container', 't-tab-box-active')", class_ "a-tab px-3 py-1 rounded-lg text-textWeak"] "Headers"
-          button_ [onclick_ "navigatable(this, '#par_content', '#http-content-container', 't-tab-box-active')", class_ "a-tab px-3 py-1 rounded-lg text-textWeak"] "Params"
+          button_ [onclick_ "navigatable(this, '#raw_content', '#http-content-container', 't-tab-box-active')", class_ "cursor-pointer a-tab px-3 py-1 rounded-lg text-textWeak t-tab-box-active"] "Raw Details"
+          button_ [onclick_ "navigatable(this, '#req_content', '#http-content-container', 't-tab-box-active')", class_ "cursor-pointer a-tab px-3 py-1 rounded-lg text-textWeak"] "Req Body"
+          button_ [onclick_ "navigatable(this, '#res_content', '#http-content-container', 't-tab-box-active')", class_ "cursor-pointer a-tab px-3 py-1 rounded-lg text-textWeak"] "Res Body"
+          button_ [onclick_ "navigatable(this, '#hed_content', '#http-content-container', 't-tab-box-active')", class_ "cursor-pointer a-tab px-3 py-1 rounded-lg text-textWeak"] "Headers"
+          button_ [onclick_ "navigatable(this, '#par_content', '#http-content-container', 't-tab-box-active')", class_ "cursor-pointer a-tab px-3 py-1 rounded-lg text-textWeak"] "Params"
       div_ [] do
         div_ [id_ "raw_content", class_ "a-tab-content"] do
           jsonValueToHtmlTree json Nothing
@@ -201,7 +201,8 @@ apiLogItemView pid lg = do
           dateTime lg.timestamp Nothing
           div_ [class_ "flex gap-2 items-center"] do
             button_
-              [ [__|on click add .hidden to #trace_expanded_view 
+              [ class_ "cursor-pointer"
+              , [__|on click add .hidden to #trace_expanded_view 
             then put '0px' into  #log_details_container.style.width 
             then put '100%' into #logs_list_container.style.width 
             then add .hidden to #resizer
@@ -232,7 +233,7 @@ apiLogItemView pid lg = do
           whenJust ctx.trace_id $ \trId -> do
             let tracePath = "/p/" <> pid.toText <> "/traces/" <> trId <> "/"
             button_
-              [ class_ "flex items-end gap-1"
+              [ class_ "flex items-end gap-1 cursor-pointer"
               , term
                   "_"
                   [text|on click remove .hidden from #trace_expanded_view
@@ -249,7 +250,7 @@ apiLogItemView pid lg = do
         let lg_id = UUID.toText lg.id
         let createdAt = toText $ formatTime defaultTimeLocale "%Y-%m-%dT%H:%M:%S%6QZ" $ lg.timestamp
         button_
-          [ class_ "flex items-center gap-2"
+          [ class_ "flex items-center gap-2 cursor-pointer"
           , hxPost_ $ "/p/" <> pid.toText <> "/share/" <> lg_id <> "/" <> createdAt <> "?event_type=log"
           , hxSwap_ "innerHTML"
           , hxTarget_ "#copy_share_link"
@@ -260,8 +261,8 @@ apiLogItemView pid lg = do
 
       div_ [class_ "w-full mt-4", id_ "log-tabs-container"] do
         div_ [class_ "flex", [__|on click halt|]] $ do
-          button_ [class_ "a-tab border-b-2 border-b-slate-200 px-4 py-1.5 t-tab-active", onclick_ "navigatable(this, '#att-content', '#log-tabs-container', 't-tab-active')"] "Attributes"
-          button_ [class_ "a-tab border-b-2 border-b-slate-200 px-4 py-1.5 ", onclick_ "navigatable(this, '#meta-content', '#log-tabs-container', 't-tab-active')"] "Process"
+          button_ [class_ "cursor-pointer a-tab border-b-2 border-b-slate-200 px-4 py-1.5 t-tab-active", onclick_ "navigatable(this, '#att-content', '#log-tabs-container', 't-tab-active')"] "Attributes"
+          button_ [class_ "cursor-pointer a-tab border-b-2 border-b-slate-200 px-4 py-1.5 ", onclick_ "navigatable(this, '#meta-content', '#log-tabs-container', 't-tab-active')"] "Process"
           div_ [class_ "w-full border-b-2 border-b-slate-200"] pass
 
         div_ [class_ "grid my-4 text-slate-600 font"] $ do

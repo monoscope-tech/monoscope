@@ -1,4 +1,4 @@
-module Pages.Dashboards (dashboardGetH, entrypointRedirectGetH, DashboardGet (..), dashboardsGetH, DashboardsGet (..), dashboardsPostH, DashboardForm (..), dashboardWidgetPutH, dashboardWidgetReorderPatchH, WidgetReorderItem (..), dashboardDeleteH, dashboardRenamePatchH, DashboardRenameForm (..), dashboardDuplicatePostH, WidgetMoveForm (..), dashboardDuplicateWidgetPostH, dashboardWidgetExpandGetH) where
+module Pages.Dashboards (dashboardGetH, entrypointRedirectGetH, DashboardGet (..), dashboardsGetH, DashboardsGet (..), dashboardsPostH, DashboardForm (..), dashboardWidgetPutH, dashboardWidgetReorderPatchH, WidgetReorderItem (..), dashboardDeleteH, dashboardRenamePatchH, DashboardRenameForm (..), dashboardDuplicatePostH, WidgetMoveForm (..), dashboardDuplicateWidgetPostH, dashboardWidgetExpandGetH, visTypes) where
 
 import Control.Lens
 import Data.Aeson qualified as AE
@@ -25,11 +25,13 @@ import Effectful.Error.Static (Error, throwError)
 import Effectful.PostgreSQL.Transact.Effect (DB, dbtToEff)
 import Effectful.Time qualified as Time
 import Lucid
+import Lucid.Base
 import Lucid.Htmx (hxConfirm_, hxDelete_, hxExt_, hxGet_, hxPatch_, hxPost_, hxPut_, hxSelect_, hxSwap_, hxTarget_, hxTrigger_, hxVals_)
 import Lucid.Hyperscript (__)
 import Models.Apis.Anomalies qualified as Anomalies
 import Models.Projects.Dashboards qualified as Dashboards
 import Models.Projects.Projects qualified as Projects
+import Models.Telemetry.Schema qualified as Schema
 import Models.Users.Sessions qualified as Sessions
 import Models.Users.Users
 import NeatInterpolation
@@ -85,26 +87,8 @@ dashboardPage_ pid dashId dash dashVM = do
       label_ [class_ "label"] "Change Dashboard Title"
       input_ [class_ "input w-full max-w-xs", placeholder_ "Insert new title", value_ $ if dashVM.title == "" then "Untitled" else dashVM.title]
 
-  -- Modal for copying widgets to other dashboards
-  Components.modal_ "dashboards-modal" "" do
-    -- Hidden fields to store widget and dashboard IDs
-    input_ [type_ "hidden", id_ "dashboards-modal-widget-id", name_ "widget_id"]
-    input_ [type_ "hidden", id_ "dashboards-modal-source-dashboard-id", name_ "source_dashboard_id"]
-
-    div_
-      [ class_ "dashboards-list space-y-3 max-h-160 overflow-y-auto"
-      , hxGet_ ("/p/" <> pid.toText <> "/dashboards?embedded=true")
-      , hxTrigger_ "intersect once"
-      , hxSelect_ "#itemsListPage"
-      , hxSwap_ "innerHTML"
-      ]
-      do
-        div_ [class_ "skeleton h-16 w-full"] ""
-        div_ [class_ "skeleton h-16 w-full"] ""
-        div_ [class_ "skeleton h-16 w-full"] ""
-
-    div_ [class_ "mt-3 flex justify-end gap-2"] do
-      label_ [Lucid.for_ "dashboards-modal", class_ "btn btn-outline cursor-pointer"] "Cancel"
+  div_ [class_ "mt-3 flex justify-end gap-2"] do
+    label_ [Lucid.for_ "dashboards-modal", class_ "btn btn-outline cursor-pointer"] "Cancel"
 
   whenJust dash.variables \variables -> do
     div_ [class_ "flex bg-fillWeaker px-6 py-2 gap-2"]
@@ -136,7 +120,7 @@ dashboardPage_ pid dashId dash dashVM = do
             , data_ "reload_on_change" $ maybe "false" (T.toLower . show) var.reloadOnChange
             , value_ $ maybeToMonoid var.value
             ]
-          <> memptyIfFalse (var.multi == Just True) [data_ "mode" "select"]
+            <> memptyIfFalse (var.multi == Just True) [data_ "mode" "select"]
     script_
       [text|
   const tagifyInstances = new Map();
@@ -169,7 +153,7 @@ dashboardPage_ pid dashId dash dashVM = do
     return tgfy
   });
 
-  window.addEventListener('update-query', async () => {
+  window.addEventListener('update-query', async (e) => {
     document.querySelectorAll('.tagify-select-input[data-reload_on_change="true"]').forEach(async input => {
       const { query_sql, query } = input.dataset;
       if (!query_sql && !query) return;
@@ -188,7 +172,7 @@ dashboardPage_ pid dashId dash dashVM = do
           tagify.loading(false);
         }
       } catch (e) {
-console.error(`Error fetching data for ${input.name}:`, e);
+        console.error(`Error fetching data for ${input.name}:`, e);
       }
     });
   });
@@ -196,12 +180,7 @@ console.error(`Error fetching data for ${input.name}:`, e);
     |]
   section_ [class_ "pb-12 h-full"] $ div_ [class_ "mx-auto mb-20 pt-5 pb-6 px-6 gap-3.5 w-full flex flex-col h-full overflow-y-scroll pb-2 group/pg", id_ "dashboardPage"] do
     div_
-      [ class_ "grid-stack  -m-2 "
-      , [__|
-             on htmx:afterSettle gridStackInstance.makeWidget('.grid-stack .grid-stack-item:last-child')
-                  then set #page-data-drawer.checked to false
-      |]
-      ]
+      [class_ "grid-stack -m-2"]
       do
         forM_ dash.widgets (\w -> toHtml (w{Widget._projectId = Just pid}))
         when (null dash.widgets) $ label_ [id_ "add_a_widget_label", class_ "grid-stack-item pb-8 cursor-pointer bg-fillBrand-weak border-2 border-strokeBrand-strong border-dashed text-strokeSelected rounded-sm rounded-lg flex flex-col gap-3 items-center justify-center *:right-0!  *:bottom-0! ", term "gs-w" "3", term "gs-h" "2", Lucid.for_ "page-data-drawer"] do
@@ -214,6 +193,17 @@ console.error(`Error fetching data for ${input.name}:`, e);
 
     script_
       [text|
+        GridStack.renderCB = function(el, w) {
+          el.innerHTML = w.content;
+          const scripts = Array.from(el.querySelectorAll('script'));
+          scripts.forEach(oldScript => {
+            const newScript = document.createElement('script');
+            Array.from(oldScript.attributes).forEach(attr => newScript.setAttribute(attr.name, attr.value));
+            if (oldScript.textContent) {newScript.textContent = oldScript.textContent}
+            oldScript.parentNode.replaceChild(newScript, oldScript);
+          });
+        };
+
         // Initialize the main grid.
         var gridStackInstance = GridStack.init({
           column: 12,
@@ -254,14 +244,12 @@ console.error(`Error fetching data for ${input.name}:`, e);
         
         // Listen for widget-remove-requested custom events
         document.addEventListener('widget-remove-requested', function(e) {
-          const widgetId = e.detail.widgetId;
-          const widgetEl = document.getElementById(widgetId + '_widgetEl');
+          const widgetEl = document.getElementById(e.detail.widgetId + '_widgetEl');
           if (widgetEl) {
+             gridStackInstance.removeWidget(widgetEl, true);
             // Find which nested grid contains this widget
             for (const nestedInstance of nestedGridInstances) {
               try {
-                // If the widget belongs to this grid, it will be removed
-                // If not, nothing happens
                 nestedInstance.removeWidget(widgetEl, true);
                 break;
               } catch (err) {
@@ -312,38 +300,38 @@ processWidget pid now (sinceStr, fromDStr, toDStr) allParams widgetBase = do
             let issuesVM = V.map (AnomalyList.IssueVM False now "24h") issues
             pure
               $ widget
-              & #html
-                ?~ ( renderText
-                      $ div_ [class_ "flex flex-col gap-4 h-full w-full overflow-hidden"]
-                      $ forM_ issuesVM (\x -> div_ [class_ "border border-strokeWeak rounded-2xl overflow-hidden"] $ toHtml x)
-                   )
+                & #html
+                  ?~ ( renderText
+                         $ div_ [class_ "flex flex-col gap-4 h-full w-full overflow-hidden"]
+                         $ forM_ issuesVM (\x -> div_ [class_ "border border-strokeWeak rounded-2xl overflow-hidden"] $ toHtml x)
+                     )
           Widget.WTStat -> do
             stat <- Charts.queryMetrics (Just Charts.DTFloat) (Just pid) widget.query widget.sql sinceStr fromDStr toDStr Nothing allParams
             pure
               $ widget
-              & #dataset
-                ?~ def
-                  { Widget.source = AE.Null
-                  , Widget.value = stat.dataFloat
-                  }
+                & #dataset
+                  ?~ def
+                    { Widget.source = AE.Null
+                    , Widget.value = stat.dataFloat
+                    }
           _ -> do
             metricsD <-
               Charts.queryMetrics (Just Charts.DTMetric) (Just pid) widget.query widget.sql sinceStr fromDStr toDStr Nothing allParams
             pure
               $ widget
-              & #dataset
-                ?~ Widget.WidgetDataset
-                  { source =
-                      AE.toJSON
-                        $ V.cons
-                          (AE.toJSON <$> metricsD.headers)
-                          (AE.toJSON <<$>> metricsD.dataset)
-                  , rowsPerMin = metricsD.rowsPerMin
-                  , value = Just metricsD.rowsCount
-                  , from = metricsD.from
-                  , to = metricsD.to
-                  , stats = metricsD.stats
-                  }
+                & #dataset
+                  ?~ Widget.WidgetDataset
+                    { source =
+                        AE.toJSON
+                          $ V.cons
+                            (AE.toJSON <$> metricsD.headers)
+                            (AE.toJSON <<$>> metricsD.dataset)
+                    , rowsPerMin = metricsD.rowsPerMin
+                    , value = Just metricsD.rowsCount
+                    , from = metricsD.from
+                    , to = metricsD.to
+                    , stats = metricsD.stats
+                    }
       else pure widget
   -- Recursively process child widgets, if any.
   case widget'.children of
@@ -370,12 +358,28 @@ dashboardWidgetPutH pid dashId widgetIdM widget = do
   (_, dash) <- getDashAndVM dashId Nothing
   uid <- UUID.genUUID >>= pure . UUID.toText
   let (dash', widget') = case widgetIdM of
-        Just wID -> (dash, widget)
+        Just wID -> do
+          let normalizedWidgetId = T.replace "Expanded" "" wID
+
+          let updateWidget w =
+                if (w.id == Just normalizedWidgetId) || (maybeToMonoid (slugify <$> w.title) == normalizedWidgetId)
+                  then widget{Widget.standalone = Nothing, Widget.naked = Nothing, Widget.id = Just normalizedWidgetId}
+                  else w
+              updatedWidgets = map updateWidget dash.widgets
+              updatedWidget = widget{Widget.standalone = Nothing, Widget.naked = Nothing, Widget.id = Just normalizedWidgetId}
+          (dash{Dashboards.widgets = updatedWidgets}, updatedWidget)
         Nothing -> do
-          let widgetUpdated = widget{Widget.standalone = Nothing, Widget.naked = Nothing, Widget.id = Just uid}
+          -- When adding a new widget
+          let widgetUpdated = widget{Widget.standalone = Nothing, Widget.naked = Nothing, Widget.id = Just uid, Widget._centerTitle = Nothing}
           (dash{Dashboards.widgets = dash.widgets <> [widgetUpdated]}, widgetUpdated)
+
   _ <- dbtToEff $ DBT.updateFieldsBy @Dashboards.DashboardVM [[DBT.field| schema |]] ([DBT.field| id |], dashId) (Only dash')
-  addSuccessToast "Widget added to dsahboard successfully" Nothing
+
+  let successMsg = case widgetIdM of
+        Just _ -> "Widget updated successfully"
+        Nothing -> "Widget added to dashboard successfully"
+
+  addSuccessToast successMsg Nothing
   addTriggerEvent "closeModal" ""
   addRespHeaders $ widget'
 
@@ -464,7 +468,6 @@ dashboardGetH pid dashId fileM fromDStr toDStr sinceStr allParams = do
   (dashVM, dash) <- getDashAndVM dashId fileM
   dash' <- forOf (#variables . traverse . traverse) dash (processVariable pid now (sinceStr, fromDStr, toDStr) allParams)
 
-  -- Process widgets and add the dashboard ID to each one
   let processWidgetWithDashboardId w = do
         processed <- processWidget pid now (sinceStr, fromDStr, toDStr) allParams w
         pure $ processed{Widget._dashboardId = Just dashId.toText}
@@ -518,12 +521,9 @@ dashboardGetH pid dashId fileM fromDStr toDStr sinceStr allParams = do
 -- @param activeTab Which tab should be active initially ("edit" or "overview")
 widgetViewerEditor_ :: Projects.ProjectId -> Maybe Dashboards.DashboardId -> Maybe Text -> Maybe Widget.Widget -> Text -> Html ()
 widgetViewerEditor_ pid dashboardIdM currentRange existingWidgetM activeTab = div_ [class_ "group/wgtexp"] do
-  -- Determine if this is a new widget or editing existing one
   let isNewWidget = isNothing existingWidgetM
-  -- Set the actual active tab based on whether this is a new widget or editing an existing one
   let effectiveActiveTab = if isNewWidget then "edit" else activeTab
 
-  -- Define widget data (either existing or default)
   let defaultWidget =
         (def :: Widget.Widget)
           { Widget.wType = Widget.WTTimeseries
@@ -532,7 +532,7 @@ widgetViewerEditor_ pid dashboardIdM currentRange existingWidgetM activeTab = di
           , Widget.naked = Just True
           , Widget.title = Just "New Widget"
           , Widget.hideSubtitle = Just True
-          , Widget.query = Just "timechart count(*)"
+          , Widget.query = Nothing
           , Widget.unit = Just "ms"
           , Widget.hideLegend = Just True
           , Widget._projectId = Just pid
@@ -542,34 +542,53 @@ widgetViewerEditor_ pid dashboardIdM currentRange existingWidgetM activeTab = di
       widgetToUse' = fromMaybe defaultWidget existingWidgetM
       widgetToUse = (fromMaybe defaultWidget existingWidgetM){Widget.id = Just $ maybeToMonoid widgetToUse'.id <> "Expanded", Widget.standalone = Just True, Widget.naked = Just True}
 
+  -- Generate unique IDs for all elements based on widget ID to prevent conflicts
+  let wid = maybeToMonoid widgetToUse.id
+      sourceWid = T.replace "Expanded" "" wid
+      widPrefix = "id" <> T.take 8 wid
+      widgetFormId = widPrefix <> "-widget-form"
+      widgetPreviewId = widPrefix <> "-widget-preview"
+      widgetTitleInputId = widPrefix <> "-widget-title-input"
+      queryBuilderId = widPrefix <> "-queryBuilder"
+      filterElementId = widPrefix <> "-filterElement"
+      widgetTypeNameId = widPrefix <> "-widgetType"
+      drawerStateCheckbox = if isJust existingWidgetM then "global-data-drawer" else "page-data-drawer"
+
   let widgetJSON = TE.decodeUtf8 $ fromLazy $ AE.encode widgetToUse
   let formAction = case (dashboardIdM, existingWidgetM) of
-        (Just dashId, Just w) -> "/p/" <> pid.toText <> "/dashboards/" <> dashId.toText <> "/widgets/" <> fromMaybe "" w.id
-        (Just dashId, Nothing) -> "/p/" <> pid.toText <> "/dashboards/" <> dashId.toText <> "/widgets"
+        (Just dashId, Just w) -> "?widget_id=" <> fromMaybe "" w.id
         _ -> ""
-  let wid = maybeToMonoid widgetToUse.id
-  -- Form for saving widgets
+
   form_
     [ class_ "hidden"
-    , id_ "widget-form"
+    , id_ widgetFormId
     , hxPut_ formAction
     , hxVals_ "js:{...widgetJSON}"
     , hxExt_ "json-enc"
-    , hxSwap_ "beforeend"
-    , hxTarget_ ".grid-stack"
+    , data_ "formMode" $ if isNewWidget then "new" else "edit"
+    , hxTarget_ ("#" <> widgetFormId)
     , hxTrigger_ "submit"
-    , [__| on htmx:beforeRequest 
+    , term
+        "_"
+        [text| on htmx:beforeRequest 
+            set widgetJSON.title to #{'${widgetTitleInputId}'}.value then 
             if not widgetJSON.id
               gridStackInstance.removeWidget('#add_a_widget_label', true, false)
+            end
+           on htmx:beforeSwap 
+            set event.detail.shouldSwap to false then
+            set #${drawerStateCheckbox}.checked to false then
+            if @data-formMode == "edit"
+              call gridStackInstance.update(#{'${sourceWid}_widgetEl'}, {content: event.detail.serverResponse})
+            else
+              call gridStackInstance.addWidget({w: 3, h: 3, content: event.detail.serverResponse})
             end
         |]
     ]
     ""
 
-  -- Widget title and close button
   div_ [class_ "flex justify-between items-center mb-4"] do
     div_ [class_ "flex justify-between"] do
-      -- Only show tabs when viewing an existing widget, not for new widgets
       when (not isNewWidget)
         $ div_ [class_ "tabs tabs-box tabs-md p-0 tabs-outline items-center border"] do
           label_ [role_ "tab", class_ $ "tab h-auto! has-[:checked]:tab-active"] do
@@ -579,92 +598,102 @@ widgetViewerEditor_ pid dashboardIdM currentRange existingWidgetM activeTab = di
           label_ [role_ "tab", class_ $ "tab h-auto! has-[:checked]:tab-active "] do
             input_ ([type_ "radio", value_ "Edit", class_ "hidden page-drawer-tab page-drawer-tab-edit", name_ $ wid <> "-drawer-tab"] <> if effectiveActiveTab == "edit" then [checked_] else mempty)
             "Edit"
+      when isNewWidget $ h3_ [class_ "text-lg font-normal"] "Add a new widget"
 
-      -- For new widgets, just show a title
-      when isNewWidget
-        $ h3_ [class_ "text-lg font-normal"] "Add a new widget"
-
-    -- Action buttons
     div_ [class_ "flex items-center gap-2"] do
       Components.timepicker_ Nothing currentRange
-
       Components.refreshButton_
-
-      -- Close drawer button
-      let drawerToClose = if isJust existingWidgetM then "global-data-drawer" else "page-data-drawer"
       span_ [class_ "text-fillDisabled"] "|"
-      button_ [class_ "leading-none rounded-lg px-4 py-2 cursor-pointer btn btn-primary shadow-sm leading-none hidden group-has-[.page-drawer-tab-edit:checked]/wgtexp:block", type_ "submit", form_ "newWidgetForm"] $ "Save changes"
-      label_ [class_ "text-iconNeutral cursor-pointer p-2 hover:bg-fillWeak rounded-lg leading-none", data_ "tippy-content" "Close Drawer", Lucid.for_ drawerToClose] $ faSprite_ "xmark" "regular" "w-3 h-3"
+      if isNewWidget
+        then button_ [class_ "leading-none rounded-lg px-4 py-2 cursor-pointer btn btn-primary shadow-sm leading-none !h-auto", type_ "submit", form_ widgetFormId] $ "Save changes"
+        else button_ [class_ "leading-none rounded-lg px-4 py-2 cursor-pointer btn btn-primary shadow-sm leading-none hidden group-has-[.page-drawer-tab-edit:checked]/wgtexp:block", type_ "submit", form_ widgetFormId] $ "Save changes"
+      label_ [class_ "text-iconNeutral cursor-pointer p-2 hover:bg-fillWeak rounded-lg leading-none", data_ "tippy-content" "Close Drawer", Lucid.for_ drawerStateCheckbox] $ faSprite_ "xmark" "regular" "w-3 h-3"
 
-  -- Only show overview when viewing existing widgets and the overview tab is selected
-  when (not isNewWidget) $ div_ [class_ " hidden group-has-[.page-drawer-tab-overview:checked]/wgtexp:block"] do
-    div_ [class_ "w-full aspect-4/1 p-3 rounded-lg bg-fillWeaker mb-4"] do
-      toHtml
-        $ widgetToUse{Widget.standalone = Just True, Widget.naked = Just True, Widget.id = Just $ maybeToMonoid widgetToUse.id <> "Expanded"}
-    h3_ [class_ "text-lg font-normal text-center"] $ toHtml $ maybeToMonoid widgetToUse.title
-
-  -- Always show edit for new widgets, otherwise only when edit tab is selected
+  div_ [class_ "w-full aspect-4/1 p-3 rounded-lg bg-fillWeaker mb-4"] do
+    script_ [text| var widgetJSON = ${widgetJSON}; |]
+    div_
+      [ id_ widgetPreviewId
+      , class_ "h-full w-full"
+      , hxPost_ "/widget"
+      , hxTrigger_ "intersect once, update-widget"
+      , hxTarget_ "this"
+      , hxSwap_ "innerHTML"
+      , hxVals_ "js:{...widgetJSON}"
+      , hxExt_ "json-enc"
+      , term
+          "_"
+          [text| on 'update-widget-query'
+               set widgetJSON.query to event.detail.value then
+               set widgetJSON.title to #{'${widgetTitleInputId}'}.value then
+               trigger 'update-widget' on me |]
+      ]
+      ""
   div_ [class_ $ if isNewWidget then "block" else "hidden group-has-[.page-drawer-tab-edit:checked]/wgtexp:block"] do
-    div_ [class_ "w-full aspect-4/1 p-3 rounded-lg bg-fillWeaker mb-4"] do
-      script_
-        [class_ "hidden"]
-        [text| var widgetJSON = ${widgetJSON}; |]
-      div_
-        [ id_ "widget-preview"
-        , class_ "h-full w-full"
-        , hxPost_ "/widget"
-        , hxTrigger_ "intersect once, update-widget"
-        , hxTarget_ "this"
-        , hxSwap_ "innerHTML"
-        , hxVals_ "js:{...widgetJSON}"
-        , hxExt_ "json-enc"
-        ]
-        ""
-
-    -- Widget configuration UI
     div_ [class_ "space-y-7"] do
       div_ [class_ "flex gap-3"] do
         span_ [class_ "inline-block rounded-full bg-fillWeak px-3 py-1 leading-none"] "1"
         strong_ [class_ "text-lg font-semibold"] "Select your Visualization"
       div_ [class_ "grid grid-cols-12 gap-3 px-5"]
-        $ let visTypes :: [(Text, Text, Text)]
-              visTypes =
-                [ ("bar-chart", "Bar", "timeseries")
-                , ("duo-line-chart", "Line", "timeseries_line")
-                , ("duo-pie-chart", "Pie", "pie_chart")
-                , ("duo-scatter-chart", "Scatter", "distribution")
-                , ("hashtag", "Number", "stat")
-                , ("guage", "Guage", "")
-                , ("text", "Text", "")
-                ]
-           in iforM_ visTypes \idx (icon, title, widgetType) ->
-                label_
-                  [ class_ "col-span-1 p-4 aspect-square gap-3 flex flex-col border border-strokeWeak rounded-lg items-center justify-center has-checked:border-strokeBrand-strong has-checked:bg-fillBrand-weak"
-                  , data_ "widgetType" widgetType
-                  , [__| on click set widgetJSON.type to @data-widgetType then trigger 'update-widget' on #widget-preview |]
+        $ iforM_ visTypes \idx (icon, title, widgetType, _) ->
+          label_
+            [ class_ "col-span-1 p-4 aspect-square gap-3 flex flex-col border border-strokeWeak rounded-lg items-center justify-center has-checked:border-strokeBrand-strong has-checked:bg-fillBrand-weak widget-type-label"
+            , data_ "widgetType" widgetType
+            , term
+                "_"
+                [text| on click 
+                 set widgetJSON.type to @data-widgetType then 
+                 set widgetJSON.title to #{'${widgetTitleInputId}'}.value then
+                 trigger 'update-widget' on #{'${widgetPreviewId}'} |]
+            ]
+            do
+              input_
+                ( [ class_ "hidden widget-type-input"
+                  , name_ widgetTypeNameId
+                  , type_ "radio"
+                  , value_ widgetType
                   ]
-                  do
-                    input_
-                      ( [ class_ "hidden"
-                        , name_ "widgetType"
-                        , type_ "radio"
-                        ]
-                          <> if idx == 0 then [checked_] else mempty
-                      )
-                    span_ [class_ "block"] $ faSprite_ icon "regular" "w-4 h-4"
-                    span_ [class_ "text-textWeak block leading-none"] $ toHtml title
+                    <> if idx == 0 then [checked_] else mempty
+                )
+              span_ [class_ "block"] $ faSprite_ icon "regular" "w-4 h-4"
+              span_ [class_ "text-textWeak block leading-none"] $ toHtml title
 
       div_ [class_ "space-y-7"] do
         div_ [class_ "flex gap-3"] do
           span_ [class_ "inline-block rounded-full bg-fillWeak px-3 py-1 leading-none"] "2"
           strong_ [class_ "text-lg font-semibold"] "Graph your Data"
-        div_ [class_ "px-5"]
-          $ textarea_
-            [ class_ "w-full h-20 textarea"
-            , value_ $ fromMaybe "" widgetToUse.query
-            , [__| on change set widgetJSON.query to my value then trigger 'update-widget' on #widget-preview |]
-            ]
-            ""
+        div_ [class_ "px-5 flex flex-col gap-2"] do
+          div_ [id_ queryBuilderId, class_ "flex-1 flex items-center"]
+            $ termRaw
+              "query-editor"
+              [ id_ filterElementId
+              , class_ "w-full h-[2rem] flex items-center"
+              , term "default-value" (fromMaybe "" widgetToUse.query)
+              , term "widget-editor" "true"
+              , term "target-widget-preview" widgetPreviewId
+              ]
+              ("" :: Text)
+
+          let schemaJson = decodeUtf8 $ AE.encode Schema.telemetrySchemaJson
+              popularQueriesJson = decodeUtf8 $ AE.encode Schema.popularOtelQueriesJson
+          script_
+            [text|
+              // Initialize query-editor with schema data when loaded
+              setTimeout(() => {
+                const editor = document.getElementById('${filterElementId}');
+                if (!editor) return;
+                
+                // Set schema data using schemaManager if available
+                if (window.schemaManager && window.schemaManager.setSchemaData) {
+                  const schemaData = $schemaJson;
+                  window.schemaManager.setSchemaData('spans', schemaData);
+                }
+                
+                if (editor.setPopularSearches) {
+                  const popularQueries = $popularQueriesJson;
+                  editor.setPopularSearches(popularQueries);
+                }
+              }, 100);
+            |]
 
       div_ [class_ "space-y-7"] do
         div_ [class_ "flex gap-3"] do
@@ -672,12 +701,31 @@ widgetViewerEditor_ pid dashboardIdM currentRange existingWidgetM activeTab = di
           strong_ [class_ "text-lg font-semibold"] "Give your graph a title"
         div_ [class_ "space-x-8 px-5"]
           $ input_
-            [ class_ "p-3 border border-strokeWeak w-full rounded-lg bg-transparent"
+            [ class_ "p-3 border border-strokeWeak w-full rounded-lg bg-transparent widget-title-input"
+            , id_ widgetTitleInputId
             , placeholder_ "Throughput"
             , required_ "required"
             , value_ $ fromMaybe "" widgetToUse.title
-            , [__| on change set widgetJSON.title to my value then trigger 'update-widget' on #widget-preview |]
+            , term
+                "_"
+                [text| on change 
+                 set widgetJSON.title to my value then 
+                 trigger 'update-widget' on #{'${widgetPreviewId}'}
+               |]
             ]
+
+
+visTypes :: [(Text, Text, Text, Text)]
+visTypes =
+  [ ("list-view", "Logs", "logs", "📋")
+  , ("bar-chart", "Bar", "timeseries", "📊")
+  , ("duo-line-chart", "Line", "timeseries_line", "📈")
+  -- , ("duo-pie-chart", "Pie", "pie_chart", "🥧")
+  -- , ("duo-scatter-chart", "Scatter", "distribution", "📉")
+  -- , ("hashtag", "Number", "stat", "🔢")
+  -- , ("guage", "Guage", "", "🧮")
+  -- , ("text", "Text", "", "📝")
+  ]
 
 
 -- | Backward compatibility wrapper for the new widget editor
@@ -965,12 +1013,9 @@ dashboardDuplicatePostH pid dashId = do
     Just dashVM -> do
       (sess, _) <- Sessions.sessionAndProject pid
       now <- Time.currentTime
-      -- Generate new dashboard ID
       newDashId <- Dashboards.DashboardId <$> UUID.genUUID
 
-      -- Create new title with "(Copy)" suffix
       let copyTitle = if dashVM.title == "" then "Untitled (Copy)" else dashVM.title <> " (Copy)"
-      -- Update schema title if it exists
       let updatedSchema =
             dashVM.schema
               & _Just . #title %~ \t ->
@@ -979,7 +1024,6 @@ dashboardDuplicatePostH pid dashId = do
                   Just "" -> "Untitled (Copy)"
                   Just title -> title <> " (Copy)"
 
-      -- Insert the new dashboard
       _ <-
         dbtToEff
           $ DBT.insert @Dashboards.DashboardVM
@@ -1012,7 +1056,6 @@ dashboardDeleteH pid dashId = do
     Just _ -> do
       dbtToEff $ DBT.delete @Dashboards.DashboardVM (Only dashId)
 
-      -- Redirect to dashboard list page
       let redirectURI = "/p/" <> pid.toText <> "/dashboards"
       redirectCS redirectURI
       addSuccessToast "Dashboard was deleted successfully" Nothing
@@ -1034,19 +1077,12 @@ data WidgetMoveForm = WidgetMoveForm
 -- Returns the duplicated widget that will be converted to HTML automatically.
 dashboardDuplicateWidgetPostH :: Projects.ProjectId -> Dashboards.DashboardId -> Text -> ATAuthCtx (RespHeaders Widget.Widget)
 dashboardDuplicateWidgetPostH pid dashId widgetId = do
-  -- Load the dashboard
   (_, dash) <- getDashAndVM dashId Nothing
-
-  -- Find the widget to duplicate
   let widgetToDuplicateM = find (\w -> (w.id == Just widgetId) || (maybeToMonoid (slugify <$> w.title) == widgetId)) dash.widgets
-
   case widgetToDuplicateM of
     Nothing -> throwError $ err404{errBody = "Widget not found in dashboard"}
     Just widgetToDuplicate -> do
-      -- Generate a new ID for the widget
       newWidgetId <- UUID.genUUID >>= pure . UUID.toText
-
-      -- Create a copy of the widget with a new ID and modified title
       let widgetCopy =
             widgetToDuplicate
               { Widget.id = Just newWidgetId
@@ -1058,10 +1094,7 @@ dashboardDuplicateWidgetPostH pid dashId widgetId = do
               , Widget._dashboardId = Just dashId.toText
               }
 
-      -- Add the copy to the dashboard
       let updatedDash = dash{Dashboards.widgets = dash.widgets <> [widgetCopy]}
-
-      -- Update the dashboard in the database
       now <- Time.currentTime
       _ <-
         dbtToEff
@@ -1070,31 +1103,19 @@ dashboardDuplicateWidgetPostH pid dashId widgetId = do
             ([DBT.field| id |], dashId)
             (updatedDash, now)
 
+      addWidgetJSON $ decodeUtf8 $ fromLazy $ AE.encode widgetCopy
       addSuccessToast "Widget duplicated successfully" Nothing
-
-      -- Return the widget directly (will be converted to HTML by ToHtml instance)
       addRespHeaders widgetCopy
 
 
--- | Handler for expanding a widget to full-screen view in a drawer.
--- Returns an HTML representation of the expanded widget with controls.
 dashboardWidgetExpandGetH :: Projects.ProjectId -> Dashboards.DashboardId -> Text -> ATAuthCtx (RespHeaders (Html ()))
 dashboardWidgetExpandGetH pid dashId widgetId = do
-  -- Load the dashboard
   (_, dash) <- getDashAndVM dashId Nothing
   now <- Time.currentTime
-
-  -- Find the widget to expand
   let widgetToExpandM = find (\w -> (w.id == Just widgetId) || (maybeToMonoid (slugify <$> w.title) == widgetId)) dash.widgets
 
   case widgetToExpandM of
     Nothing -> throwError $ err404{errBody = "Widget not found in dashboard"}
     Just widgetToExpand -> do
-      -- Process the widget to ensure data is loaded
       processedWidget <- processWidget pid now (Nothing, Nothing, Nothing) [] widgetToExpand
-
-      -- Create an expanded view of the widget using our unified component
-      -- Start with "overview" tab active by default, but user can switch to edit if they want
-      let expandedWidgetHtml = widgetViewerEditor_ pid (Just dashId) Nothing (Just processedWidget) "overview"
-
-      addRespHeaders expandedWidgetHtml
+      addRespHeaders $ widgetViewerEditor_ pid (Just dashId) Nothing (Just processedWidget) "edit"

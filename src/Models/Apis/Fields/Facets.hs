@@ -35,16 +35,14 @@ facetColumns =
   , "attributes___http___request___method"
   , "attributes___http___response___status_code"
   , "attributes___error___type"
-  
-  -- Service & Resource attributes
-  , "resource___service___instance___id"
+  , -- Service & Resource attributes
+    "resource___service___instance___id"
   , "resource___service___namespace"
   , "resource___telemetry___sdk___language"
   , "resource___telemetry___sdk___name"
   , "resource___telemetry___sdk___version"
-  
-  -- HTTP related
-  , "attributes___http___request___method_original"
+  , -- HTTP related
+    "attributes___http___request___method_original"
   , "attributes___http___request___resend_count"
   , "attributes___http___request___body___size"
   , "attributes___url___path"
@@ -53,38 +51,33 @@ facetColumns =
   , "attributes___url___fragment"
   , "attributes___url___query"
   , "attributes___user_agent___original"
-  
-  -- Network related
-  , "attributes___network___protocol___name"
+  , -- Network related
+    "attributes___network___protocol___name"
   , "attributes___network___protocol___version"
   , "attributes___network___transport"
   , "attributes___network___type"
   , "attributes___client___address"
   , "attributes___server___address"
-  
-  -- User & Session information
-  , "attributes___user___id"
+  , -- User & Session information
+    "attributes___user___id"
   , "attributes___user___email"
   , "attributes___user___name"
   , "attributes___user___full_name"
   , "attributes___session___id"
   , "attributes___session___previous___id"
-  
-  -- Database related
-  , "attributes___db___system___name"
+  , -- Database related
+    "attributes___db___system___name"
   , "attributes___db___collection___name"
   , "attributes___db___namespace"
   , "attributes___db___operation___name"
   , "attributes___db___response___status_code"
   , "attributes___db___operation___batch___size"
-  
-  -- Error & Exception related
-  , "attributes___error___type"
+  , -- Error & Exception related
+    "attributes___error___type"
   , "attributes___exception___type"
   , "attributes___exception___message"
-  
-  -- Severity & Status
-  , "severity___severity_text"
+  , -- Severity & Status
+    "severity___severity_text"
   , "severity___severity_number"
   , "status_message"
   ]
@@ -165,7 +158,7 @@ processQueryResults results =
         newVal = FacetValue valText count
         updatedVals = insertSorted newVal currentVals
        in
-        HM.insert colName (take 10 updatedVals) acc
+        HM.insert colName (updatedVals) acc
 
     -- Insert value into sorted list (by count, descending)
     insertSorted newVal [] = [newVal]

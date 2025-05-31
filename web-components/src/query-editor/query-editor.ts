@@ -99,10 +99,30 @@ interface SchemaField {
   fields?: Record<string, any>;
 }
 
+// Define constants to avoid duplication
+// Operators categorized by type
+const COMPARISON_OPERATORS = ['==', '!=', '>', '<', '>=', '<=', '=~'];
+const SET_OPERATORS = ['in', '!in', 'has', '!has', 'has_any', 'has_all'];
+const STRING_OPERATORS = ['contains', '!contains', 'startswith', '!startswith', 'endswith', '!endswith', 'matches'];
+const LOGICAL_OPERATORS = ['and', 'or', 'not', 'exists', '!exists'];
+const PIPE_OPERATOR = ['|'];
+
+// Combine all operators for easy access
+const ALL_OPERATORS = [...COMPARISON_OPERATORS, ...SET_OPERATORS, ...STRING_OPERATORS, ...PIPE_OPERATOR];
+
+// Sources and keywords
+const DATA_SOURCES = ['spans', 'metrics'];
+const AGGREGATION_COMMANDS = ['stats', 'timechart'];
+const AGGREGATION_MODIFIERS = ['by', 'as', 'limit'];
+const STATS_FUNCTIONS = ['count', 'sum', 'avg', 'min', 'max', 'median', 'stdev', 'range', 'p50', 'p75', 'p90', 'p95', 'p99', 'p100'];
+
+// Combine all keywords
+const KEYWORDS = [...DATA_SOURCES, ...AGGREGATION_COMMANDS, ...AGGREGATION_MODIFIERS, ...LOGICAL_OPERATORS, ...STATS_FUNCTIONS];
+
 // Schema Manager class for better encapsulation
 class SchemaManager {
-  private schemas: string[] = ['spans', 'metrics'];
-  private defaultSchema = 'spans';
+  private schemas: string[] = DATA_SOURCES;
+  private defaultSchema = DATA_SOURCES[0];
   private schemaData: Record<string, SchemaData> = {};
 
   private nestedResolver: (schema: string, prefix: string) => Promise<SchemaField[]> = async (schema, prefix) => {
@@ -212,6 +232,7 @@ class SchemaManager {
   };
 }
 
+// Create schema manager instance
 const schemaManager = new SchemaManager();
 
 // Monarch configuration for AQL
@@ -289,6 +310,8 @@ export const language = {
     'matches',
     '|',
   ],
+  keywords: KEYWORDS,
+  operators: ALL_OPERATORS,
   tokenizer: {
     root: [
       [/\[[0-9]+(?:\.[0-9]+)?(?:s|m|h|d|w)\]/, 'number.timespan'],
@@ -359,7 +382,7 @@ monaco.languages.registerCompletionItemProvider('aql', {
 
     const lineText = currentLine.substring(0, position.column - 1);
 
-    // Check for nested fields after dot
+    // First priority: Check for nested fields after dot
     const dotMatch =
       lineText.match(/([a-zA-Z_][a-zA-Z0-9_]*(?:\.[a-zA-Z_][a-zA-Z0-9_]*)*)\.$/) ||
       lineText.match(/([a-zA-Z_][a-zA-Z0-9_]*(?:\.[a-zA-Z_][a-zA-Z0-9_]*)*)\.[a-zA-Z0-9_]*$/);
@@ -412,10 +435,10 @@ monaco.languages.registerCompletionItemProvider('aql', {
       return { suggestions };
     }
 
-    // Check for complete field-operator-value pattern
+    // Fourth priority: Check for complete field-operator-value pattern - suggest logical operators
     const afterValue = /".*"\s*$/.test(lineText) || /\d+\s*$/.test(lineText);
     if (afterValue) {
-      ['and', 'or', '|'].forEach((op) =>
+      [...LOGICAL_OPERATORS.filter((op) => op === 'and' || op === 'or'), PIPE_OPERATOR[0]].forEach((op) =>
         suggestions.push({
           label: op,
           kind: monaco.languages.CompletionItemKind.Operator,
@@ -426,8 +449,7 @@ monaco.languages.registerCompletionItemProvider('aql', {
       return { suggestions };
     }
 
-    // Check for logical operators followed by space
-    const logicalOperatorMatch = lineText.match(/\b(and|or)\s+$/i);
+    // Fifth priority: Check for logical operators followed by space - suggest fields
     if (logicalOperatorMatch) {
       const fields = await schemaManager.resolveNested(currentSchema, '');
       fields.forEach((f) =>
@@ -484,6 +506,7 @@ monaco.languages.registerCompletionItemProvider('aql', {
 
     // Empty or start
     if (segments.length === 1 && (last === '' || !tables.some((t) => last.toLowerCase().startsWith(t)))) {
+      // Suggest data sources (tables)
       tables
         .filter((t) => last === '' || t.toLowerCase().startsWith(last.toLowerCase().trim()))
         .forEach((t) =>
@@ -529,7 +552,8 @@ monaco.languages.registerCompletionItemProvider('aql', {
 
     // After schema
     if (segments.length === 1 && tables.includes(last.toLowerCase())) {
-      ['limit', 'stats', 'timechart'].forEach((k) =>
+      // Suggest aggregation commands and modifiers
+      [...AGGREGATION_COMMANDS, 'limit'].forEach((k) =>
         suggestions.push({
           label: k,
           kind: monaco.languages.CompletionItemKind.Keyword,
@@ -601,8 +625,8 @@ monaco.languages.registerCompletionItemProvider('aql', {
 
     // Stats/timechart segment
     if (/stats\s|timechart\s/i.test(last)) {
-      const statsFunctions = ['count', 'sum', 'avg', 'min', 'max', 'median', 'stdev', 'range', 'p50', 'p75', 'p90', 'p95', 'p99', 'p100'];
-      statsFunctions.forEach((fn) =>
+      // Use the STATS_FUNCTIONS constant directly
+      STATS_FUNCTIONS.forEach((fn) =>
         suggestions.push({
           label: fn,
           kind: monaco.languages.CompletionItemKind.Function,
@@ -662,6 +686,7 @@ export class QueryEditorComponent extends LitElement {
   @state() private currentQuery = '';
   @state() private selectedIndex = -1;
   @state() private defaultValue = '';
+  @state() private updateURLParams = true;
 
   private editor: monaco.editor.IStandaloneCodeEditor | null = null;
   private suggestionListeners: (() => void)[] = [];
@@ -681,20 +706,32 @@ export class QueryEditorComponent extends LitElement {
 
   private debouncedTriggerSuggestions = debounce(() => this.editor?.trigger('auto', 'editor.action.triggerSuggest', {}), 50);
   private debouncedUpdateQuery = debounce((queryValue: string) => {
-    this.dispatchEvent(
-      new CustomEvent('update-query', {
-        detail: { value: queryValue },
-        bubbles: true,
-      })
-    );
-
-    const url = new URL(window.location.href);
-    if (queryValue.trim()) {
-      url.searchParams.set('query', queryValue);
+    const widgetPreviewId = this.getAttribute('target-widget-preview');
+    if (widgetPreviewId) {
+      document.getElementById(widgetPreviewId)?.dispatchEvent(
+        new CustomEvent('update-widget-query', {
+          detail: { value: queryValue },
+        })
+      );
     } else {
-      url.searchParams.delete('query');
+      this.dispatchEvent(
+        new CustomEvent('update-query', {
+          detail: { value: queryValue },
+          bubbles: true,
+        })
+      );
     }
-    window.history.replaceState({}, '', url.toString());
+
+    // Update URL if needed
+    if (this.updateURLParams) {
+      const url = new URL(window.location.href);
+      if (queryValue.trim()) {
+        url.searchParams.set('query', queryValue);
+      } else {
+        url.searchParams.delete('query');
+      }
+      window.history.replaceState({}, '', url.toString());
+    }
   }, 300);
 
   private get serviceSuggestions(): SuggestionItem[] {
@@ -705,6 +742,7 @@ export class QueryEditorComponent extends LitElement {
     if (!this._editorContainer) return;
 
     this.defaultValue = this.getAttribute('default-value') || '';
+    this.updateURLParams = this.getAttribute('widget-editor') !== 'true';
     this.createMonacoEditor();
     this.setupSuggestions();
 
@@ -795,6 +833,31 @@ export class QueryEditorComponent extends LitElement {
     }
   }
 
+  public handleVisualizationChange(visualizationType: string): void {
+    if (!this.editor) return;
+
+    const currentQuery = this.editor.getValue().trim();
+    const baseQuery = currentQuery.replace(/\|\s*(timechart|stats)\s+[^|]*$/i, '').trim();
+
+    let newQuery = '';
+    switch (visualizationType) {
+      case 'timeseries':
+        newQuery = baseQuery ? `${baseQuery} | timechart [5m] count(*)` : 'timechart [5m] count(*)';
+        break;
+      case 'table':
+      case 'top-list':
+      case 'distribution':
+      case 'query-value':
+        newQuery = baseQuery ? `${baseQuery} | stats count(*)` : 'stats count(*)';
+        break;
+      default: // logs
+        newQuery = baseQuery;
+        break;
+    }
+
+    this.handleAddQuery(newQuery, true);
+  }
+
   public handleAddQuery(queryFragment: string, replace: boolean = false): void {
     if (!this.editor) return;
 
@@ -837,20 +900,7 @@ export class QueryEditorComponent extends LitElement {
       this.showSuggestions = false;
       this.selectedIndex = -1;
 
-      const url = new URL(window.location.href);
-      if (newValue.trim()) {
-        url.searchParams.set('query', newValue);
-      } else {
-        url.searchParams.delete('query');
-      }
-      window.history.replaceState({}, '', url.toString());
-
-      this.dispatchEvent(
-        new CustomEvent('update-query', {
-          detail: { value: newValue },
-          bubbles: true,
-        })
-      );
+      this.debouncedUpdateQuery(newValue);
 
       // Update placeholder immediately
       this.updatePlaceholder();

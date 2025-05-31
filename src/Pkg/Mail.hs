@@ -55,7 +55,7 @@ sendPostmarkEmail reciever tmpOptionsM subMsg = do
   pass
 
 
-sendSlackMessage :: (DB :> es, Log :> es, IOE :> es) => Projects.ProjectId -> Text -> Eff es ()
+sendSlackMessage :: (DB :> es, IOE :> es, Log :> es) => Projects.ProjectId -> Text -> Eff es ()
 sendSlackMessage pid message = do
   slackData <- getProjectSlackData pid
   case slackData of
