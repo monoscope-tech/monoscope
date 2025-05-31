@@ -816,36 +816,35 @@ apiLogsPage page = do
             ]
         whenJust page.facets renderFacets
 
-      div_ [class_ "grow flex-1 h-full space-y-1.5 overflow-y-hidden"] do
-        div_ [class_ "flex w-full relative h-full", id_ "logs_section_container"] do
-          let dW = fromMaybe "100%" page.detailsWidth
-              showTrace = isJust page.showTrace
-          div_ [class_ "relative flex flex-col shrink-1 min-w-0 w-full h-full", style_ $ "width: " <> dW, id_ "logs_list_container"] do
-            div_ [class_ "flex gap-2  pt-1 text-sm -mb-6 z-10 w-max"] do
-              label_ [class_ "gap-1 flex items-center cursor-pointer"] do
-                faSprite_ "side-chevron-left-in-box" "regular" "w-4 h-4 group-has-[.toggle-filters:checked]/pg:rotate-180 "
-                span_ [class_ "hidden group-has-[.toggle-filters:checked]/pg:block"] "Show"
-                span_ [class_ "group-has-[.toggle-filters:checked]/pg:hidden"] "Hide"
-                "filters"
-                input_ [type_ "checkbox", class_ "toggle-filters hidden", id_ "toggle-filters", onchange_ "localStorage.setItem('toggle-filter-checked', this.checked)"]
-                script_ "document.getElementById('toggle-filters').checked = localStorage.getItem('toggle-filter-checked') === 'true';"
-              span_ [class_ "text-slate-200"] "|"
-              div_ [class_ ""] $ span_ [class_ "text-slate-950"] (toHtml $ prettyPrintCount page.resultCount) >> span_ [class_ "text-slate-600"] (toHtml (" rows found"))
-            div_ [class_ $ "absolute top-0 right-0  w-full h-full overflow-scroll c-scroll z-50 bg-white transition-all duration-100 " <> if showTrace then "" else "hidden", id_ "trace_expanded_view"] do
-              whenJust page.showTrace \trId -> do
-                let url = "/p/" <> page.pid.toText <> "/traces/" <> trId
-                span_ [class_ "loading loading-dots loading-md"] ""
-                div_ [hxGet_ url, hxTarget_ "#trace_expanded_view", hxSwap_ "innerHtml", hxTrigger_ "intersect one"] pass
+      div_ [class_ "grow flex-1 flex w-full relative h-full overflow-y-hidden", id_ "logs_section_container"] do
+        let dW = fromMaybe "100%" page.detailsWidth
+            showTrace = isJust page.showTrace
+        div_ [class_ "relative flex flex-col shrink-1 min-w-0 w-full h-full", style_ $ "width: " <> dW, id_ "logs_list_container"] do
+          div_ [class_ "flex gap-2  pt-1 text-sm -mb-6 z-10 w-max"] do
+            label_ [class_ "gap-1 flex items-center cursor-pointer"] do
+              faSprite_ "side-chevron-left-in-box" "regular" "w-4 h-4 group-has-[.toggle-filters:checked]/pg:rotate-180 "
+              span_ [class_ "hidden group-has-[.toggle-filters:checked]/pg:block"] "Show"
+              span_ [class_ "group-has-[.toggle-filters:checked]/pg:hidden"] "Hide"
+              "filters"
+              input_ [type_ "checkbox", class_ "toggle-filters hidden", id_ "toggle-filters", onchange_ "localStorage.setItem('toggle-filter-checked', this.checked)"]
+              script_ "document.getElementById('toggle-filters').checked = localStorage.getItem('toggle-filter-checked') === 'true';"
+            span_ [class_ "text-slate-200"] "|"
+            div_ [class_ ""] $ span_ [class_ "text-slate-950"] (toHtml $ prettyPrintCount page.resultCount) >> span_ [class_ "text-slate-600"] (toHtml (" rows found"))
+          div_ [class_ $ "absolute top-0 right-0  w-full h-full overflow-scroll c-scroll z-50 bg-white transition-all duration-100 " <> if showTrace then "" else "hidden", id_ "trace_expanded_view"] do
+            whenJust page.showTrace \trId -> do
+              let url = "/p/" <> page.pid.toText <> "/traces/" <> trId
+              span_ [class_ "loading loading-dots loading-md"] ""
+              div_ [hxGet_ url, hxTarget_ "#trace_expanded_view", hxSwap_ "innerHtml", hxTrigger_ "intersect one"] pass
 
-            -- Visualization container with conditional display based on radio selection
-            div_ [class_ "hidden group-has-[#viz-logs:checked]/pg:block h-full"] do
-              virtualTable page
+          -- Visualization container with conditional display based on radio selection
+          div_ [class_ "hidden group-has-[#viz-logs:checked]/pg:block h-full"] do
+            virtualTable page
 
-            div_ [class_ "group-has-[#viz-logs:checked]/pg:hidden h-full"] do
-              let pid = page.pid.toText
-              script_
-                [class_ "hidden"]
-                [text| var widgetJSON = { 
+          div_ [class_ "group-has-[#viz-logs:checked]/pg:hidden h-full"] do
+            let pid = page.pid.toText
+            script_
+              [class_ "hidden"]
+              [text| var widgetJSON = { 
                   "id": "visualization-widget",
                   "type": "timeseries_line", 
                   "title": "Visualization",
@@ -871,39 +870,39 @@ apiLogsPage page = do
                   updateWidget();
                 });
                 |]
-              div_
-                [ id_ "visualization-widget-container"
-                , class_ "h-full w-full"
-                , hxPost_ "/widget"
-                , hxTrigger_ "intersect once, update-widget"
-                , hxTarget_ "this"
-                , hxSwap_ "innerHTML"
-                , hxVals_ "js:{...widgetJSON}"
-                , hxExt_ "json-enc"
-                ]
-                ""
-
-          div_ [onmousedown_ "mouseDown(event)", class_ "relative shrink-0 h-full flex items-center justify-center border-l  hover:border-strokeBrand-strong cursor-ew-resize overflow-visible"] do
             div_
-              [ onmousedown_ "mouseDown(event)"
-              , class_ "absolute inset-y-0 left-0 w-4 -ml-3 cursor-ew-resize h-full z-10"
+              [ id_ "visualization-widget-container"
+              , class_ "h-full w-full"
+              , hxPost_ "/widget"
+              , hxTrigger_ "intersect once, update-widget"
+              , hxTarget_ "this"
+              , hxSwap_ "innerHTML"
+              , hxVals_ "js:{...widgetJSON}"
+              , hxExt_ "json-enc"
               ]
               ""
-            div_
-              [ onmousedown_ "mouseDown(event)"
-              , id_ "resizer"
-              , class_ $ "absolute left-1/2 top-1/2 z-50 -translate-x-1/2 leading-none py-1 -translate-y-1/2 bg-slate-50 rounded-sm border border-strokeBrand-weak hover:border-strokeBrand-strong text-iconNeutral hover:text-iconBrand" <> if isJust page.detailsWidth then "" else "hidden"
-              ]
-              $ faSprite_ "grip-dots-vertical" "regular" "w-4 h-5"
 
-          div_ [class_ "overflow-y-auto grow-1 overflow-x-hidden h-full c-scroll transition-all duration-100", style_ "width:0px", id_ "log_details_container"] do
-            span_ [class_ "htmx-indicator query-indicator absolute loading left-1/2 -translate-x-1/2 loading-dots absoute z-10 top-10", id_ "details_indicator"] ""
-            whenJust page.targetEvent \te -> do
-              let url = "/p/" <> page.pid.toText <> "/log_explorer/" <> te
-              div_ [hxGet_ url, hxTarget_ "#log_details_container", hxSwap_ "innerHtml", hxTrigger_ "intersect one", hxIndicator_ "#details_indicator"] pass
+        div_ [onmousedown_ "mouseDown(event)", class_ "relative shrink-0 h-full flex items-center justify-center border-l  hover:border-strokeBrand-strong cursor-ew-resize overflow-visible"] do
+          div_
+            [ onmousedown_ "mouseDown(event)"
+            , class_ "absolute inset-y-0 left-0 w-4 -ml-3 cursor-ew-resize h-full z-10"
+            ]
+            ""
+          div_
+            [ onmousedown_ "mouseDown(event)"
+            , id_ "resizer"
+            , class_ $ "absolute left-1/2 top-1/2 z-50 -translate-x-1/2 leading-none py-1 -translate-y-1/2 bg-slate-50 rounded-sm border border-strokeBrand-weak hover:border-strokeBrand-strong text-iconNeutral hover:text-iconBrand" <> if isJust page.detailsWidth then "" else "hidden"
+            ]
+            $ faSprite_ "grip-dots-vertical" "regular" "w-4 h-5"
 
-          script_
-            [text|
+        div_ [class_ "overflow-y-auto grow-1 overflow-x-hidden h-full c-scroll transition-all duration-100", style_ "width:0px", id_ "log_details_container"] do
+          span_ [class_ "htmx-indicator query-indicator absolute loading left-1/2 -translate-x-1/2 loading-dots absoute z-10 top-10", id_ "details_indicator"] ""
+          whenJust page.targetEvent \te -> do
+            let url = "/p/" <> page.pid.toText <> "/log_explorer/" <> te
+            div_ [hxGet_ url, hxTarget_ "#log_details_container", hxSwap_ "innerHtml", hxTrigger_ "intersect one", hxIndicator_ "#details_indicator"] pass
+
+        script_
+          [text|
           function updateUrlState(key, value, action='set') {
             const params = new URLSearchParams(window.location.search)
             if(action === 'delete') {
