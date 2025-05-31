@@ -845,7 +845,7 @@ apiLogsPage page = do
 
     div_ [class_ "flex h-full gap-3.5 overflow-y-hidden"] do
       -- FACETS
-      div_ [class_ "w-80 text-sm shrink-0 flex flex-col h-full overflow-y-scroll gap-2 group-has-[.toggle-filters:checked]/pg:max-w-0 group-has-[.toggle-filters:checked]/pg:overflow-hidden ", id_ "facets-container"] do
+      div_ [class_ "w-68 text-sm shrink-0 flex flex-col h-full overflow-y-scroll gap-2 group-has-[.toggle-filters:checked]/pg:max-w-0 group-has-[.toggle-filters:checked]/pg:overflow-hidden ", id_ "facets-container"] do
         div_ [class_ "sticky top-0 z-10 bg-bgBase relative mb-2"] do
           span_ [class_ "absolute inset-y-0 left-3 flex items-center", Aria.hidden_ "true"]
             $ faSprite_ "magnifying-glass" "regular" "w-4 h-4 text-iconNeutral"
@@ -936,7 +936,8 @@ apiLogsPage page = do
       div_ [class_ "grow-0 shrink-0 overflow-y-auto overflow-x-hidden h-full c-scroll w-0", id_ "log_details_container"] do
         span_ [class_ "htmx-indicator query-indicator absolute loading left-1/2 -translate-x-1/2 loading-dots absoute z-10 top-10", id_ "details_indicator"] ""
         whenJust page.targetEvent \te -> do
-          script_ [text|
+          script_
+            [text|
             const detailsContainer = document.getElementById('log_details_container');
             if (detailsContainer) {
               const queryWidth = new URLSearchParams(window.location.search).get('details_width');
