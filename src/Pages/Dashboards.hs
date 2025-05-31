@@ -378,10 +378,8 @@ dashboardWidgetPutH pid dashId widgetIdM widget = do
   uid <- UUID.genUUID >>= pure . UUID.toText
   let (dash', widget') = case widgetIdM of
         Just wID -> do
-          -- Remove "Expanded" suffix if present (from editing in expanded view)
           let normalizedWidgetId = T.replace "Expanded" "" wID
 
-          -- When editing an existing widget, find it in the dashboard and replace it
           let updateWidget w =
                 if (w.id == Just normalizedWidgetId) || (maybeToMonoid (slugify <$> w.title) == normalizedWidgetId)
                   then widget{Widget.standalone = Nothing, Widget.naked = Nothing, Widget.id = Just normalizedWidgetId}
@@ -563,31 +561,48 @@ widgetViewerEditor_ pid dashboardIdM currentRange existingWidgetM activeTab = di
       widgetToUse' = fromMaybe defaultWidget existingWidgetM
       widgetToUse = (fromMaybe defaultWidget existingWidgetM){Widget.id = Just $ maybeToMonoid widgetToUse'.id <> "Expanded", Widget.standalone = Just True, Widget.naked = Just True}
 
+  -- Generate unique IDs for all elements based on widget ID to prevent conflicts
+  let wid = maybeToMonoid widgetToUse.id
+      sourceWid = T.replace "Expanded" "" wid
+      widPrefix = "id" <> T.take 8 wid
+      widgetFormId = widPrefix <> "-widget-form"
+      widgetPreviewId = widPrefix <> "-widget-preview"
+      widgetTitleInputId = widPrefix <> "-widget-title-input"
+      queryBuilderId = widPrefix <> "-queryBuilder"
+      filterElementId = widPrefix <> "-filterElement"
+      widgetTypeNameId = widPrefix <> "-widgetType"
+      drawerStateCheckbox = if isJust existingWidgetM then "global-data-drawer" else "page-data-drawer"
+
   let widgetJSON = TE.decodeUtf8 $ fromLazy $ AE.encode widgetToUse
   let formAction = case (dashboardIdM, existingWidgetM) of
-        (Just dashId, Just w) -> "/p/" <> pid.toText <> "/dashboards/" <> dashId.toText <> "/widgets/" <> fromMaybe "" w.id
-        (Just dashId, Nothing) -> "/p/" <> pid.toText <> "/dashboards/" <> dashId.toText <> "/widgets"
+        (Just dashId, Just w) -> "?widget_id=" <> fromMaybe "" w.id
         _ -> ""
-  let wid = maybeToMonoid widgetToUse.id
+
   form_
     [ class_ "hidden"
-    , id_ "widget-form"
+    , id_ widgetFormId
     , hxPut_ formAction
     , hxVals_ "js:{...widgetJSON}"
     , hxExt_ "json-enc"
     , hxSwap_ "beforeend"
-    , hxTarget_ "#widget-form" -- So we can listen on before swap here
+    , data_ "formMode" $ if isNewWidget then "new" else "edit"
+    , hxTarget_ ("#" <> widgetFormId)
     , hxTrigger_ "submit"
-    , [__| on htmx:beforeRequest 
-            set widgetJSON.title to #widget-title-input.value then 
-            
+    , term
+        "_"
+        [text| on htmx:beforeRequest 
+            set widgetJSON.title to #{'${widgetTitleInputId}'}.value then 
             if not widgetJSON.id
               gridStackInstance.removeWidget('#add_a_widget_label', true, false)
             end
            on htmx:beforeSwap log "before swap" then
             set event.detail.shouldSwap to false then
-            set #page-data-drawer.checked to false then
-            call gridStackInstance.addWidget({w: 3,h:4, content: event.detail.serverResponse})
+            set #${drawerStateCheckbox}.checked to false then
+            if @data-formMode == "edit"
+              call gridStackInstance.update(#{'${sourceWid}_widgetEl'}, {content: event.detail.serverResponse})
+            else
+              call gridStackInstance.addWidget({w: 3, h: 3, content: event.detail.serverResponse})
+            end
         |]
     ]
     ""
@@ -610,14 +625,14 @@ widgetViewerEditor_ pid dashboardIdM currentRange existingWidgetM activeTab = di
       Components.refreshButton_
       span_ [class_ "text-fillDisabled"] "|"
       if isNewWidget
-        then button_ [class_ "leading-none rounded-lg px-4 py-2 cursor-pointer btn btn-primary shadow-sm leading-none !h-auto", type_ "submit", form_ "widget-form"] $ "Save changes"
-        else button_ [class_ "leading-none rounded-lg px-4 py-2 cursor-pointer btn btn-primary shadow-sm leading-none hidden group-has-[.page-drawer-tab-edit:checked]/wgtexp:block", type_ "submit", form_ "widget-form"] $ "Save changes"
-      label_ [class_ "text-iconNeutral cursor-pointer p-2 hover:bg-fillWeak rounded-lg leading-none", data_ "tippy-content" "Close Drawer", Lucid.for_ $ if isJust existingWidgetM then "global-data-drawer" else "page-data-drawer"] $ faSprite_ "xmark" "regular" "w-3 h-3"
+        then button_ [class_ "leading-none rounded-lg px-4 py-2 cursor-pointer btn btn-primary shadow-sm leading-none !h-auto", type_ "submit", form_ widgetFormId] $ "Save changes"
+        else button_ [class_ "leading-none rounded-lg px-4 py-2 cursor-pointer btn btn-primary shadow-sm leading-none hidden group-has-[.page-drawer-tab-edit:checked]/wgtexp:block", type_ "submit", form_ widgetFormId] $ "Save changes"
+      label_ [class_ "text-iconNeutral cursor-pointer p-2 hover:bg-fillWeak rounded-lg leading-none", data_ "tippy-content" "Close Drawer", Lucid.for_ drawerStateCheckbox] $ faSprite_ "xmark" "regular" "w-3 h-3"
 
   div_ [class_ "w-full aspect-4/1 p-3 rounded-lg bg-fillWeaker mb-4"] do
     script_ [text| var widgetJSON = ${widgetJSON}; |]
     div_
-      [ id_ "widget-preview"
+      [ id_ widgetPreviewId
       , class_ "h-full w-full"
       , hxPost_ "/widget"
       , hxTrigger_ "intersect once, update-widget"
@@ -625,12 +640,12 @@ widgetViewerEditor_ pid dashboardIdM currentRange existingWidgetM activeTab = di
       , hxSwap_ "innerHTML"
       , hxVals_ "js:{...widgetJSON}"
       , hxExt_ "json-enc"
-      , [__| on 'update-widget-query'
+      , term
+          "_"
+          [text| on 'update-widget-query'
                set widgetJSON.query to event.detail.value then
-               set widgetJSON.title to #widget-title-input.value then
-               set widgetJSON.type to <.widget-type-input:checked/>'s value then
-               trigger 'update-widget' on me
-            |]
+               set widgetJSON.title to #{'${widgetTitleInputId}'}.value then
+               trigger 'update-widget' on me |]
       ]
       ""
   div_ [class_ $ if isNewWidget then "block" else "hidden group-has-[.page-drawer-tab-edit:checked]/wgtexp:block"] do
@@ -643,12 +658,17 @@ widgetViewerEditor_ pid dashboardIdM currentRange existingWidgetM activeTab = di
           label_
             [ class_ "col-span-1 p-4 aspect-square gap-3 flex flex-col border border-strokeWeak rounded-lg items-center justify-center has-checked:border-strokeBrand-strong has-checked:bg-fillBrand-weak widget-type-label"
             , data_ "widgetType" widgetType
-            , [__| on click set widgetJSON.type to @data-widgetType then trigger 'update-widget' on #widget-preview |]
+            , term
+                "_"
+                [text| on click 
+                 set widgetJSON.type to @data-widgetType then 
+                 set widgetJSON.title to #{'${widgetTitleInputId}'}.value then
+                 trigger 'update-widget' on #{'${widgetPreviewId}'} |]
             ]
             do
               input_
                 ( [ class_ "hidden widget-type-input"
-                  , name_ "widgetType"
+                  , name_ widgetTypeNameId
                   , type_ "radio"
                   , value_ widgetType
                   ]
@@ -662,14 +682,14 @@ widgetViewerEditor_ pid dashboardIdM currentRange existingWidgetM activeTab = di
           span_ [class_ "inline-block rounded-full bg-fillWeak px-3 py-1 leading-none"] "2"
           strong_ [class_ "text-lg font-semibold"] "Graph your Data"
         div_ [class_ "px-5 flex flex-col gap-2"] do
-          div_ [id_ "queryBuilder", class_ "flex-1 flex items-center"]
+          div_ [id_ queryBuilderId, class_ "flex-1 flex items-center"]
             $ termRaw
               "query-editor"
-              [ id_ "filterElement"
+              [ id_ filterElementId
               , class_ "w-full h-[2rem] flex items-center"
               , term "default-value" (fromMaybe "" widgetToUse.query)
               , term "widget-editor" "true"
-              , term "target-widget-preview" "widget-preview"
+              , term "target-widget-preview" widgetPreviewId
               ]
               ("" :: Text)
 
@@ -679,7 +699,7 @@ widgetViewerEditor_ pid dashboardIdM currentRange existingWidgetM activeTab = di
             [text|
               // Initialize query-editor with schema data when loaded
               setTimeout(() => {
-                const editor = document.getElementById('filterElement');
+                const editor = document.getElementById('${filterElementId}');
                 if (!editor) return;
                 
                 // Set schema data using schemaManager if available
@@ -702,11 +722,16 @@ widgetViewerEditor_ pid dashboardIdM currentRange existingWidgetM activeTab = di
         div_ [class_ "space-x-8 px-5"]
           $ input_
             [ class_ "p-3 border border-strokeWeak w-full rounded-lg bg-transparent widget-title-input"
-            , id_ "widget-title-input"
+            , id_ widgetTitleInputId
             , placeholder_ "Throughput"
             , required_ "required"
             , value_ $ fromMaybe "" widgetToUse.title
-            , [__| on change set widgetJSON.title to my value then trigger 'update-widget' on #widget-preview |]
+            , term
+                "_"
+                [text| on change 
+                 set widgetJSON.title to my value then 
+                 trigger 'update-widget' on #{'${widgetPreviewId}'}
+               |]
             ]
 
 
