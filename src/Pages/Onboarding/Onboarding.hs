@@ -317,7 +317,7 @@ integrationsPage pid apikey =
                 let langs = [("js", "Javascript") :: (Text, Text), ("go", "Golang"), ("py", "Python"), ("php", "PHP"), ("java", "Java"), ("cs", "C#")]
                 forM_ langs $ \(lang, langName) -> languageItem pid langName lang
             div_ [class_ "flex items-center gap-4"] do
-              button_ [class_ "btn btn-primary", hxGet_ $ "/p/" <> pid.toText <> "/onboarding/integration-check", hxSwap_ "none", hxIndicator_ "#loadingIndicator"] "Confirm & Proceed"
+              button_ [class_ "btn btn-primary cursor-pointer", hxGet_ $ "/p/" <> pid.toText <> "/onboarding/integration-check", hxSwap_ "none", hxIndicator_ "#loadingIndicator"] "Confirm & Proceed"
               a_
                 [ class_ "px-2 h-14 flex items-center underline text-brand text-xl font-semibold"
                 , type_ "button"
@@ -425,7 +425,7 @@ notifChannels pid slackRedirectUri phone emails hasDiscord hasSlack = do
                   span_ [class_ " text-textStrong lowercase first-letter:uppercase"] "Notify the following email address"
                 textarea_ [class_ "w-full rounded-lg border border-strokeStrong", type_ "text", name_ "emails", id_ "emails_input"] ""
               div_ [class_ "items-center gap-4 flex"] $ do
-                button_ [class_ "px-6 h-14 flex items-center btn-primary text-xl font-semibold rounded-lg"] "Proceed"
+                button_ [class_ "px-6 h-14 flex items-center btn-primary text-xl font-semibold rounded-lg cursor-pointer"] "Proceed"
       let tgs = decodeUtf8 $ AE.encode $ V.toList emails
       script_
         [text|
@@ -473,15 +473,15 @@ createMonitorPage pid colM = do
           div_ [class_ "w-full"] $ termRaw "assertion-builder" [id_ ""] ""
           div_ [class_ "w-full"] $ termRaw "steps-editor" [id_ "stepsEditor", term "isOnboarding" "true"] ""
           div_ [class_ "items-center gap-4 flex"] $ do
-            button_ [class_ "px-6 h-14 flex items-center btn-primary text-xl font-semibold rounded-lg", type_ "submit"] "Proceed"
+            button_ [class_ "px-6 h-14 flex items-center btn-primary text-xl font-semibold rounded-lg cursor-pointer", type_ "submit"] "Proceed"
             button_
-              [ class_ "px-6 h-14 flex items-center border border-[var(--brand-color)] text-brand text-xl font-semibold rounded-lg"
+              [ class_ "px-6 h-14 flex items-center border border-[var(--brand-color)] text-brand text-xl font-semibold rounded-lg cursor-pointer"
               , onclick_ "window.addCollectionStep()"
               , type_ "button"
               ]
               "Add a step"
             button_
-              [ class_ "px-2 h-14 flex items-center underline text-brand text-xl font-semibold"
+              [ class_ "px-2 h-14 flex items-center underline text-brand text-xl font-semibold cursor-pointer"
               , type_ "button"
               , hxPost_ $ "/p/" <> pid.toText <> "/onboarding/skip?step=CreateMonitor"
               ]
@@ -524,7 +524,7 @@ onboardingInfoBody pid firstName lastName cName cSize fUsFrm = do
           createSelectField cSize "company Size" [("1 - 4", "1 to 4"), ("5 - 10", "5 to 10"), ("11 - 25", "11 to 25"), ("26+", "26 and above")]
           createSelectField fUsFrm "where Did You Hear About Us" [("google", "Google"), ("twitter", "Twitter"), ("linkedin", "LinkedIn"), ("friend", "Friend"), ("other", "Other")]
         div_ [class_ "items-center gap-1 flex"] $ do
-          button_ [class_ "px-6 h-14 flex items-center btn-primary text-xl font-semibold rounded-lg"] "Proceed"
+          button_ [class_ "px-6 h-14 flex items-center btn-primary text-xl font-semibold rounded-lg cursor-pointer"] "Proceed"
 
 
 onboardingConfigBody :: Projects.ProjectId -> Text -> [Text] -> Html ()
@@ -547,7 +547,7 @@ onboardingConfigBody pid loca func = do
             div_ [class_ "pt-2 flex-col gap-4 flex"] $ do
               forM_ functionalities $ createBinaryField "checkbox" "functionality" func
         div_ [class_ "items-center gap-1 flex"] $ do
-          button_ [class_ "px-6 h-14 flex items-center btn-primary text-xl font-semibold rounded-lg"] "Proceed"
+          button_ [class_ "px-6 h-14 flex items-center btn-primary text-xl font-semibold rounded-lg cursor-pointer"] "Proceed"
 
 
 inviteTeamMemberModal :: Projects.ProjectId -> Vector Text -> Html ()
@@ -586,7 +586,7 @@ inviteTeamMemberModal pid emails = do
                       forM_ emails $ \email -> do
                         inviteMemberItem email
         div_ [class_ "modal-action w-full flex items-center justify-start gap-2 mt-2"] do
-          button_ [class_ "btn btn-primary font-semibold rounded-lg", type_ "button", onclick_ "htmx.trigger('#members-container', 'submit')"] "Proceed"
+          button_ [class_ "btn btn-primary font-semibold rounded-lg cursor-pointer", type_ "button", onclick_ "htmx.trigger('#members-container', 'submit')"] "Proceed"
           label_ [class_ "text-brand font-semibold underline", Lucid.for_ "inviteModal"] "Close"
 
 

@@ -1,5 +1,6 @@
 import { html, TemplateResult } from 'lit-html';
 import { Assertion, AssertType, HttpMethod, Step, TestkitStep } from '../types/types';
+import * as yaml from 'js-yaml';
 
 export function faSprite_(iconName: string, kind: string, classes: string): TemplateResult {
   return html`<svg class="${classes}"><use href="/public/assets/svgs/fa-sprites/${kind}.svg#${iconName}"></use></svg>`;
@@ -372,3 +373,51 @@ export function replaceVariables(expression: string) {
   }
   return expression;
 }
+
+// Add validateYaml function with the same logic as the JavaScript version
+export function validateYaml(data: any): any {
+  data = convertCollectionStepsToTestkitFormat(data);
+  try {
+    if (!Array.isArray(data)) {
+      triggerToastEvent(getEvent('errorToast', { value: ['Array of steps expected'] }));
+      return undefined;
+    }
+    let errors: any[] = [];
+    for (let [_, step] of data.entries()) {
+      errors.push(isValidStep(step));
+    }
+    if (window.updateStepsWithErrors) {
+      window.updateStepsWithErrors(errors);
+    }
+    if (errors.filter((err) => err !== undefined).length > 0) {
+      triggerToastEvent(getEvent('errorToast', { value: ['Saving failed. Please fix the errors and try again.'] }));
+      return undefined;
+    }
+    data.map((step: any) => {
+      if (step.json) {
+        step.json = typeof step.json === 'string' ? step.json : JSON.stringify(step.json);
+      }
+    });
+    return data;
+  } catch (error) {
+    const event = getEvent('errorToast', { value: ['Invalid yaml'] });
+    triggerToastEvent(event);
+    return undefined;
+  }
+}
+
+// Expose the function to the global scope
+declare global {
+  interface Window {
+    validateYaml: typeof validateYaml;
+    updateStepsWithErrors?: (errors: any[]) => void;
+    testVariables?: Array<{ variableName: string; variableValue: string }>;
+  }
+}
+
+// Initialize on load
+(function() {
+  if (typeof window !== 'undefined') {
+    window.validateYaml = validateYaml;
+  }
+})();
