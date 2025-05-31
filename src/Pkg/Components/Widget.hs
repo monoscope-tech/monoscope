@@ -248,24 +248,23 @@ renderWidgetHeader widget wId title valueM subValueM expandBtnFn ctaM hideSub = 
       ul_ [class_ "text-textStrong menu menu-md dropdown-content bg-base-100 rounded-box p-2 w-52 shadow-sm leading-none z-10"] do
         -- Only show the "Move to dashboard" option if we're in a dashboard context
 
-        when (isJust widget._dashboardId) do
-          let dashId = fromMaybe "" widget._dashboardId
-          li_
-            $ a_
-              [ class_ "p-2 w-full text-left block"
-              , data_ "tippy-content" "Copy this widget to another dashboard"
-              , id_ $ wId <> "_copy_link"
-              , term
-                  "_"
-                  [text|
-                on click 
-                set #dashboards-modal.checked to true
-                then set #dashboards-modal-widget-id.value to "${wId}"
-                then set #dashboards-modal-source-dashboard-id.value to "${dashId}"
-                then set (the closest <details/>).open to false 
-              |]
-              ]
-              "Copy to dashboard"
+        let dashId = fromMaybe "" widget._dashboardId
+        li_
+          $ a_
+            [ class_ "p-2 w-full text-left block"
+            , data_ "tippy-content" "Copy this widget to another dashboard"
+            , id_ $ wId <> "_copy_link"
+            , term
+                "_"
+                [text|
+              on click 
+              set #dashboards-modal.checked to true
+              then set #dashboards-modal-widget-id.value to "${wId}"
+              then set #dashboards-modal-source-dashboard-id.value to "${dashId}"
+              then set (the closest <details/>).open to false 
+            |]
+            ]
+            "Copy to dashboard"
 
         -- Only show the "Duplicate widget" option if we're in a dashboard context
         when (isJust widget._dashboardId) do

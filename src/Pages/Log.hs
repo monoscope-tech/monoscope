@@ -758,7 +758,7 @@ apiLogsPage page = do
       logQueryBox_ page.pid page.currentRange page.source page.targetSpans page.query page.queryLibRecent page.queryLibSaved
 
       div_ [class_ "timeline flex flex-row gap-4 mt-3 group-has-[#viz-logs:not(:checked)]/pg:hidden group-has-[.toggle-chart:checked]/pg:hidden w-full", style_ "aspect-ratio: 10 / 1;"] do
-        Widget.widget_ $ (def :: Widget.Widget){Widget.query = Just "timechart count(*)", Widget.unit = Just "rows", Widget.title = Just "All traces", Widget.hideLegend = Just True, Widget._projectId = Just page.pid, Widget.standalone = Just True, Widget.yAxis = Just (def{showOnlyMaxLabel = Just True}), Widget.allowZoom = Just True, Widget.showMarkArea = Just True}
+        Widget.widget_ $ (def :: Widget.Widget){Widget.query = Just "timechart count(*)", Widget.unit = Just "rows", Widget.title = Just "All traces", Widget.hideLegend = Just True, Widget._projectId = Just page.pid, Widget.standalone = Just True, Widget.yAxis = Just (def{showOnlyMaxLabel = Just True}), Widget.allowZoom = Just True, Widget.showMarkArea = Just True, Widget.layout = Just (def{Widget.w = Just 6, Widget.h = Just 4})}
 
         Widget.widget_
           $ (def :: Widget.Widget)
@@ -768,6 +768,7 @@ apiLogsPage page = do
             , Widget.hideSubtitle = Just True
             , Widget.yAxis = Just (def{showOnlyMaxLabel = Just True})
             , Widget.summarizeBy = Just Widget.SBMax
+            , Widget.layout = Just (def{Widget.w = Just 6, Widget.h = Just 4})
             , Widget.sql =
                 Just
                   [text| SELECT timeB, COALESCE(value, 0)::float AS value, quantile
@@ -848,13 +849,11 @@ apiLogsPage page = do
                   "id": "visualization-widget",
                   "type": "timeseries_line", 
                   "title": "Visualization",
-                  "hide_subtitle": false,
                   "standalone": true,
-                  "hide_legend": false,
                   "allow_zoom": true,
-                  "y_axis": {"show_only_max_label": true},
                   "_project_id": "$pid",
-                  "_center_title": true
+                  "_center_title": true, 
+                  "layout": {"w": 6, "h": 4}
                 };
                 
                 document.addEventListener('DOMContentLoaded', function() {

@@ -87,26 +87,8 @@ dashboardPage_ pid dashId dash dashVM = do
       label_ [class_ "label"] "Change Dashboard Title"
       input_ [class_ "input w-full max-w-xs", placeholder_ "Insert new title", value_ $ if dashVM.title == "" then "Untitled" else dashVM.title]
 
-  -- Modal for copying widgets to other dashboards
-  Components.modal_ "dashboards-modal" "" do
-    -- Hidden fields to store widget and dashboard IDs
-    input_ [type_ "hidden", id_ "dashboards-modal-widget-id", name_ "widget_id"]
-    input_ [type_ "hidden", id_ "dashboards-modal-source-dashboard-id", name_ "source_dashboard_id"]
-
-    div_
-      [ class_ "dashboards-list space-y-3 max-h-160 overflow-y-auto"
-      , hxGet_ ("/p/" <> pid.toText <> "/dashboards?embedded=true")
-      , hxTrigger_ "intersect once"
-      , hxSelect_ "#itemsListPage"
-      , hxSwap_ "innerHTML"
-      ]
-      do
-        div_ [class_ "skeleton h-16 w-full"] ""
-        div_ [class_ "skeleton h-16 w-full"] ""
-        div_ [class_ "skeleton h-16 w-full"] ""
-
-    div_ [class_ "mt-3 flex justify-end gap-2"] do
-      label_ [Lucid.for_ "dashboards-modal", class_ "btn btn-outline cursor-pointer"] "Cancel"
+  div_ [class_ "mt-3 flex justify-end gap-2"] do
+    label_ [Lucid.for_ "dashboards-modal", class_ "btn btn-outline cursor-pointer"] "Cancel"
 
   whenJust dash.variables \variables -> do
     div_ [class_ "flex bg-fillWeaker px-6 py-2 gap-2"]
@@ -388,7 +370,7 @@ dashboardWidgetPutH pid dashId widgetIdM widget = do
           (dash{Dashboards.widgets = updatedWidgets}, updatedWidget)
         Nothing -> do
           -- When adding a new widget
-          let widgetUpdated = widget{Widget.standalone = Nothing, Widget.naked = Nothing, Widget.id = Just uid}
+          let widgetUpdated = widget{Widget.standalone = Nothing, Widget.naked = Nothing, Widget.id = Just uid, Widget._centerTitle = Nothing}
           (dash{Dashboards.widgets = dash.widgets <> [widgetUpdated]}, widgetUpdated)
 
   _ <- dbtToEff $ DBT.updateFieldsBy @Dashboards.DashboardVM [[DBT.field| schema |]] ([DBT.field| id |], dashId) (Only dash')
