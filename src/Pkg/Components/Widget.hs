@@ -275,16 +275,25 @@ renderWidgetHeader widget wId title valueM subValueM expandBtnFn ctaM hideSub = 
               , data_ "tippy-content" "Create a copy of this widget"
               , hxPost_
                   $ "/p/"
-                  <> maybeToMonoid (widget._projectId <&> (.toText))
-                  <> "/dashboards/"
-                  <> maybeToMonoid widget._dashboardId
-                  <> "/widgets/"
-                  <> wId
-                  <> "/duplicate"
-              , hxSwap_ "beforeend"
+                    <> maybeToMonoid (widget._projectId <&> (.toText))
+                    <> "/dashboards/"
+                    <> maybeToMonoid widget._dashboardId
+                    <> "/widgets/"
+                    <> wId
+                    <> "/duplicate"
               , hxTrigger_ "click"
-              , hxTarget_ ".grid-stack"
-              , [__| on click set (the closest <details/>).open to false |]
+              , [__| on click set (the closest <details/>).open to false
+                     on htmx:beforeSwap
+                        set event.detail.shouldSwap to false then
+                        set widgetData to JSON.parse(event.detail.xhr.getResponseHeader('X-Widget-JSON')) then
+                        call gridStackInstance.addWidget({
+                          w: widgetData.layout.w, 
+                          h: widgetData.layout.h, 
+                          x: widgetData.layout.x, 
+                          y: widgetData.layout.y,
+                          content: event.detail.serverResponse
+                        })
+                 |]
               ]
               "Duplicate widget"
           li_
@@ -295,7 +304,6 @@ renderWidgetHeader widget wId title valueM subValueM expandBtnFn ctaM hideSub = 
                   [text|
                   if(confirm('Are you sure you want to delete this widget? This action cannot be undone.')) {
                     const widgetEl = document.getElementById('${wId}_widgetEl');
-                    gridStackInstance.removeWidget(widgetEl, true);
                     if (document.getElementById('${wId}_widgetEl')) {
                       widgetEl.dispatchEvent(new CustomEvent('widget-remove-requested', {
                         bubbles: true,
@@ -323,7 +331,7 @@ renderChart widget = do
       div_
         [ class_
             $ "h-full w-full flex flex-col justify-end "
-            <> if widget.naked == Just True then "" else " rounded-2xl border border-strokeWeak bg-fillWeaker"
+              <> if widget.naked == Just True then "" else " rounded-2xl border border-strokeWeak bg-fillWeaker"
         , id_ $ chartId <> "_bordered"
         ]
         do

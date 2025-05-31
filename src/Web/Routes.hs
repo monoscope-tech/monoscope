@@ -106,8 +106,9 @@ server pool =
           (Proxy @'[APItoolkitAuthContext])
           ( \page ->
               page
-                & State.evalState Map.empty
-                & State.evalState Nothing
+                & State.evalState Map.empty   -- TriggerEvents
+                & State.evalState Nothing     -- HXRedirectDest
+                & State.evalState Nothing     -- XWidgetJSON
                 & Effectful.Reader.Static.runReader sessionWithCookies
           )
           cookieProtectedServer

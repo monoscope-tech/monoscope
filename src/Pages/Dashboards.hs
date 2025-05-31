@@ -262,13 +262,12 @@ dashboardPage_ pid dashId dash dashVM = do
         
         // Listen for widget-remove-requested custom events
         document.addEventListener('widget-remove-requested', function(e) {
-          const widgetId = e.detail.widgetId;
-          const widgetEl = document.getElementById(widgetId + '_widgetEl');
+          const widgetEl = document.getElementById(e.detail.widgetId + '_widgetEl');
           if (widgetEl) {
+             gridStackInstance.removeWidget(widgetEl, true);
             // Find which nested grid contains this widget
             for (const nestedInstance of nestedGridInstances) {
               try {
-                // If the widget belongs to this grid, it will be removed
                 nestedInstance.removeWidget(widgetEl, true);
                 break;
               } catch (err) {
@@ -584,7 +583,6 @@ widgetViewerEditor_ pid dashboardIdM currentRange existingWidgetM activeTab = di
     , hxPut_ formAction
     , hxVals_ "js:{...widgetJSON}"
     , hxExt_ "json-enc"
-    , hxSwap_ "beforeend"
     , data_ "formMode" $ if isNewWidget then "new" else "edit"
     , hxTarget_ ("#" <> widgetFormId)
     , hxTrigger_ "submit"
@@ -595,7 +593,7 @@ widgetViewerEditor_ pid dashboardIdM currentRange existingWidgetM activeTab = di
             if not widgetJSON.id
               gridStackInstance.removeWidget('#add_a_widget_label', true, false)
             end
-           on htmx:beforeSwap log "before swap" then
+           on htmx:beforeSwap 
             set event.detail.shouldSwap to false then
             set #${drawerStateCheckbox}.checked to false then
             if @data-formMode == "edit"
@@ -1122,6 +1120,8 @@ dashboardDuplicateWidgetPostH pid dashId widgetId = do
             [[DBT.field| schema |], [DBT.field| updated_at |]]
             ([DBT.field| id |], dashId)
             (updatedDash, now)
+
+      addWidgetJSON $ decodeUtf8 $ fromLazy $ AE.encode widgetCopy
       addSuccessToast "Widget duplicated successfully" Nothing
       addRespHeaders widgetCopy
 

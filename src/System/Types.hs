@@ -13,7 +13,9 @@ module System.Types (
   addToast,
   addSuccessToast,
   addErrorToast,
+  addWidgetJSON,
   HXRedirectDest,
+  XWidgetJSON,
   TriggerEvents,
   RespHeaders,
   redirectCS,
@@ -61,6 +63,13 @@ type TriggerEvents = Map Text [AE.Value]
 type HXRedirectDest = Maybe Text
 
 
+newtype WidgetJSON = WidgetJSON {unWidgetJSON :: Text}
+  deriving stock (Show)
+
+
+type XWidgetJSON = Maybe WidgetJSON
+
+
 type CommonWebEffects =
   '[ Effectful.Reader.Static.Reader AuthContext
    , UUIDEff
@@ -83,6 +92,7 @@ type ATAuthCtx =
   Effectful.Eff
     ( State.State TriggerEvents
         ': State.State HXRedirectDest
+        ': State.State XWidgetJSON
         ': Effectful.Reader.Static.Reader (Headers '[Header "Set-Cookie" SetCookie] Sessions.Session)
         ': CommonWebEffects
     )
@@ -91,8 +101,9 @@ type ATAuthCtx =
 atAuthToBase :: Headers '[Header "Set-Cookie" SetCookie] Sessions.Session -> ATAuthCtx a -> ATBaseCtx a
 atAuthToBase sessionWithCookies page =
   page
-    & State.evalState Map.empty
-    & State.evalState Nothing
+    & State.evalState Map.empty -- TriggerEvents
+    & State.evalState Nothing -- HXRedirectDest
+    & State.evalState Nothing -- XWidgetJSON
     & Effectful.Reader.Static.runReader sessionWithCookies
 
 
@@ -175,14 +186,20 @@ type RespHeaders =
   Headers
     '[ HXTriggerAfterSettle
      , HXRedirect
+     , Header "X-Widget-JSON" Text
      ]
 
 
-addRespHeaders :: (State.State HXRedirectDest :> es, State.State TriggerEvents :> es) => a -> Eff es (RespHeaders a)
+addRespHeaders :: (State.State HXRedirectDest :> es, State.State TriggerEvents :> es, State.State XWidgetJSON :> es) => a -> Eff es (RespHeaders a)
 addRespHeaders resp = do
   triggerEvents <- State.get @TriggerEvents
   redirectDest <- State.get @HXRedirectDest
-  pure $ addHeader (decodeUtf8 $ AE.encode triggerEvents) $ maybe noHeader addHeader redirectDest resp
+  widgetJSON <- State.get @XWidgetJSON
+  pure
+    $ addHeader (decodeUtf8 $ AE.encode triggerEvents)
+    $ maybe noHeader addHeader redirectDest
+    $ maybe noHeader (\w -> addHeader w.unWidgetJSON) widgetJSON
+    $ resp
 
 
 -- redirectCS adds a header to the request, which in turn triggers a client side redirect via HTMX redirect header.
@@ -210,3 +227,8 @@ addErrorToast :: (Log :> es, State.State TriggerEvents :> es) => Text -> Maybe T
 addErrorToast msg msg2 = do
   Log.logAttention_ $ "ERROR: " <> msg <> " => " <> maybeToMonoid msg2
   addToast "error" msg msg2
+
+
+-- Add widget JSON for inclusion in response headers
+addWidgetJSON :: State.State XWidgetJSON :> es => Text -> Eff es ()
+addWidgetJSON widgetJson = State.modify $ \_ -> Just (WidgetJSON widgetJson)
