@@ -455,12 +455,11 @@ export class LogList extends LitElement {
     const width = Number(getComputedStyle(sideView).width.replace('px', ''));
     this.shouldScrollToBottom = false;
     if (width < 50) {
-      const lW = Number(getComputedStyle(logsView).width.replace('px', ''));
-      logsView.style.width = `${lW - 550}px`;
+      sideView.style.width = '30%';
       if (resizer) {
         resizer.classList.remove('hidden');
       }
-      updateUrlState('details_width', logsView.style.width);
+      updateUrlState('details_width', sideView.style.width);
     }
     const rows = document.querySelectorAll('.item-row.bg-fillBrand-strong');
     rows.forEach((row) => row.classList.remove('bg-fillBrand-strong'));
