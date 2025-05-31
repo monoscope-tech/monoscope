@@ -14,5 +14,13 @@ if (typeof window !== 'undefined') {
   window.waterFallGraphChart = waterFallGraphChart;
 }
 
+// Export validateYaml and related utility functions
+export {
+  validateYaml,
+  convertCollectionStepsToTestkitFormat,
+  isValidStep,
+  getEvent,
+  triggerToastEvent,
+} from './monitors/test-editor-utils';
 // Note: Popular queries are now provided directly from Haskell backend
 // instead of being exposed from TypeScript

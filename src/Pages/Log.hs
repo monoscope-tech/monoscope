@@ -193,6 +193,21 @@ renderFacets facetSummary = do
     }
   |]
 
+  script_
+    [text|
+    // Add a utility to handle removing group by statements
+    if (!document.getElementById("filterElement").handleRemoveGroupBy) {
+      document.getElementById("filterElement").handleRemoveGroupBy = function(field) {
+        const currentQuery = this.value || "";
+        const regex = new RegExp("group by " + field, 'gi');
+        const newQuery = currentQuery.replace(regex, "").trim();
+        this.value = newQuery;
+        this.dispatchEvent(new Event('input'));
+        htmx.trigger('#log_explorer_form', 'update-query');
+      };
+    }
+  |]
+
   renderFacetSection "Common Filters" rootFacets facetMap False
 
   forM_ facetGroups $ \(groupName, facetDisplays) -> renderFacetSection groupName facetDisplays facetMap True
@@ -206,8 +221,8 @@ renderFacets facetSummary = do
       div_ [class_ "xmax-h-auto divide-y peer-has-checked:max-h-0 peer-has-checked:overflow-hidden transition-[max-height] duration-150"] $ forM_ facetDisplays \(key, displayName, colorFn) ->
         whenJust (HM.lookup key facetMap) \values ->
           div_ [class_ "facet-section flex flex-col transition-all duration-150 rounded-lg group"] do
-            label_ [class_ "p-3 flex justify-between items-center cursor-pointer peer"] do
-              div_ [class_ "gap-3 flex items-center"] do
+            div_ [class_ "p-3 flex justify-between items-center cursor-pointer peer"] do
+              label_ [class_ "gap-3 flex items-center cursor-pointer"] do
                 -- Check if this facet's checkboxes should be unchecked by default (first 4 in Common Filters)
                 let commonFilterKeys = ["level", "kind", "name", "status_code"]
                     shouldBeUnchecked = sectionName == "Common Filters" && key `elem` commonFilterKeys
@@ -215,7 +230,51 @@ renderFacets facetSummary = do
                 span_ [class_ "peer-checked:-rotate-90 transition-transform duration-150 flex"] $ faSprite_ "chevron-down" "regular" "w-3 h-3"
                 let dotKey = T.replace "___" "." key
                 span_ [term "data-tippy-content" dotKey] (toHtml displayName)
-              span_ ""
+              -- Add vertical ellipsis dropdown menu
+              div_ [class_ "dropdown dropdown-end"] do
+                label_ [tabindex_ "0", class_ "cursor-pointer"] do
+                  faSprite_ "ellipsis-vertical" "regular" "w-3 h-3"
+                ul_ [tabindex_ "0", class_ "dropdown-content z-10 menu p-2 shadow bg-base-100 rounded-box w-52"] do
+                  li_
+                    $ a_
+                      [ term "data-field" (T.replace "___" "." key)
+                      , term "data-key" key
+                      , [__|
+                      init
+                        set query to window.getQueryFromEditor()
+                        if query && query.toLowerCase().includes('group by ' + @data-field.toLowerCase())
+                          set my innerHTML to 'Remove group by'
+                        end
+                      on click
+                        set query to window.getQueryFromEditor()
+                        if query && query.toLowerCase().includes('group by ' + @data-field.toLowerCase())
+                          call document.getElementById('filterElement').handleRemoveGroupBy(@data-field)
+                        else
+                          call document.getElementById('filterElement').handleAddQuery('group by ' + @data-field)
+                        end
+                    |]
+                      ]
+                      "Group by"
+                  li_
+                    $ a_
+                      [ term "data-key" key
+                      , [__|
+                      init
+                        set cols to (params().cols ?? "").split(",").filter(x => x != "")
+                        if cols.includes(@data-key)
+                          set my innerHTML to 'Remove table column'
+                        end
+                      on click
+                        set cols to (params().cols ?? "").split(",").filter(x => x != "")
+                        if cols.includes(@data-key)
+                          set newCols to [...new Set(cols.filter(x => x != @data-key))].join(",")
+                        else
+                          set newCols to [...new Set([...cols, @data-key])].join(",")
+                        end
+                        call htmx.trigger('#log_explorer_form', 'submit', {cols: newCols})
+                      |]
+                      ]
+                      "Add table column"
 
             div_ [class_ "pl-5 xmax-h-auto peer-has-checked:max-h-0 peer-has-checked:overflow-hidden transition-[max-height] duration-150"] do
               -- Prepare value lists and add toggle when needed
@@ -1091,7 +1150,7 @@ jsonTreeAuxillaryCode pid query = do
           , hxSwap_ "outerHTML"
           , -- , hxIndicator_ "#query-indicator"
             [__|init set fp to (closest @data-field-path) then
-                  if params().cols.split(",").includes(fp) then set my innerHTML to 'Remove field from summary' end|]
+                  if params().cols.split(",").includes(fp) then set my innerHTML to 'Remove column' end|]
           ]
           "Add field as Column"
         a_

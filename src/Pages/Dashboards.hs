@@ -73,22 +73,12 @@ dashboardPage_ pid dashId dash dashVM = do
       , hxTrigger_ "submit"
       , hxTarget_ "#pageTitleText"
       ]
-    $ fieldset_ [class_ "fieldset"] do
+    $ fieldset_ [class_ "fieldset min-w-xs"] do
       label_ [class_ "label"] "Change Dashboard Title"
       input_ [class_ "input", name_ "title", placeholder_ "Insert new title", value_ $ if dashVM.title == "" then "Untitled" else dashVM.title]
       div_ [class_ "mt-3 flex justify-end gap-2"] do
         label_ [Lucid.for_ "pageTitleModalId", class_ "btn btn-outline cursor-pointer"] "Cancel"
         button_ [type_ "submit", class_ "btn btn-primary"] "Save"
-
-  Components.modal_ "pageAddWidgetModalId" ""
-    $ form_
-      [class_ "flex flex-col p-3 gap-3"]
-    $ fieldset_ [class_ "fieldset"] do
-      label_ [class_ "label"] "Change Dashboard Title"
-      input_ [class_ "input w-full max-w-xs", placeholder_ "Insert new title", value_ $ if dashVM.title == "" then "Untitled" else dashVM.title]
-
-  div_ [class_ "mt-3 flex justify-end gap-2"] do
-    label_ [Lucid.for_ "dashboards-modal", class_ "btn btn-outline cursor-pointer"] "Cancel"
 
   whenJust dash.variables \variables -> do
     div_ [class_ "flex bg-fillWeaker px-6 py-2 gap-2"]

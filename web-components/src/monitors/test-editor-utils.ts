@@ -1,5 +1,6 @@
 import { html, TemplateResult } from 'lit-html';
 import { Assertion, AssertType, HttpMethod, Step, TestkitStep } from '../types/types';
+import * as yaml from 'js-yaml';
 
 export function faSprite_(iconName: string, kind: string, classes: string): TemplateResult {
   return html`<svg class="${classes}"><use href="/public/assets/svgs/fa-sprites/${kind}.svg#${iconName}"></use></svg>`;
