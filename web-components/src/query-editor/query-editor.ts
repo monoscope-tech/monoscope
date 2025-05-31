@@ -196,9 +196,7 @@ class SchemaManager {
     }));
   };
 
-  setSchema = (cfg: Partial<Schema>) => {
-    console.log('Using legacy setSchema method, consider updating to new API');
-  };
+  setSchema = (cfg: Partial<Schema>) => {};
 
   setDynamicResolver = (fn: (path: string[]) => Promise<any[]>) => {
     this.nestedResolver = async (schema: string, prefix: string) => {
@@ -268,7 +266,29 @@ export const language = {
     'p99',
     'p100',
   ],
-  operators: ['==', '!=', '>', '<', '>=', '<=', '=~', 'in', '!in', 'has', '!has', 'has_any', 'has_all', 'contains', '!contains', 'startswith', '!startswith', 'endswith', '!endswith', 'matches', '|'],
+  operators: [
+    '==',
+    '!=',
+    '>',
+    '<',
+    '>=',
+    '<=',
+    '=~',
+    'in',
+    '!in',
+    'has',
+    '!has',
+    'has_any',
+    'has_all',
+    'contains',
+    '!contains',
+    'startswith',
+    '!startswith',
+    'endswith',
+    '!endswith',
+    'matches',
+    '|',
+  ],
   tokenizer: {
     root: [
       [/\[[0-9]+(?:\.[0-9]+)?(?:s|m|h|d|w)\]/, 'number.timespan'],
@@ -311,12 +331,9 @@ monaco.languages.setMonarchTokensProvider('aql', language);
 monaco.languages.setLanguageConfiguration('aql', conf);
 
 // Completion provider
-console.log('Registering completion provider for aql language');
 monaco.languages.registerCompletionItemProvider('aql', {
   triggerCharacters: [' ', '|', '.', '[', ',', '"'],
   provideCompletionItems: async (model, position) => {
-    console.log('Completion provider triggered at position:', position);
-
     const text = model.getValueInRange({
       startLineNumber: 1,
       startColumn: 1,
@@ -327,8 +344,6 @@ monaco.languages.registerCompletionItemProvider('aql', {
     const currentLine = model.getLineContent(position.lineNumber);
     const segments = text.split(/\|/).map((s) => s.trim());
     const last = segments[segments.length - 1];
-
-    console.log('segments:', segments, 'last:', JSON.stringify(last));
 
     const suggestions: monaco.languages.CompletionItem[] = [];
     const tables = schemaManager.getSchemas();
@@ -343,14 +358,12 @@ monaco.languages.registerCompletionItemProvider('aql', {
     });
 
     const lineText = currentLine.substring(0, position.column - 1);
-    console.log('lineText for analysis:', JSON.stringify(lineText));
 
     // Check for nested fields after dot
     const dotMatch =
       lineText.match(/([a-zA-Z_][a-zA-Z0-9_]*(?:\.[a-zA-Z_][a-zA-Z0-9_]*)*)\.$/) ||
       lineText.match(/([a-zA-Z_][a-zA-Z0-9_]*(?:\.[a-zA-Z_][a-zA-Z0-9_]*)*)\.[a-zA-Z0-9_]*$/);
 
-    console.log('dotMatch result:', dotMatch);
     if (dotMatch) {
       const fieldPrefix = dotMatch[1];
       const nested = await schemaManager.resolveNested(currentSchema, fieldPrefix);
@@ -370,12 +383,14 @@ monaco.languages.registerCompletionItemProvider('aql', {
     }
 
     // Check for operator pattern - show value suggestions
-    const operatorMatch = lineText.match(/([\w\.]+)\s*(==|!=|>=|<=|>|<|=~|in|!in|has|!has|has_any|has_all|contains|!contains|startswith|!startswith|endswith|!endswith|matches)\s*$/);
+    const operatorMatch = lineText.match(
+      /([\w\.]+)\s*(==|!=|>=|<=|>|<|=~|in|!in|has|!has|has_any|has_all|contains|!contains|startswith|!startswith|endswith|!endswith|matches)\s*$/
+    );
     if (operatorMatch) {
       const fieldName = operatorMatch[1];
       const operator = operatorMatch[2];
       const values = await schemaManager.resolveValues(currentSchema, fieldName);
-      
+
       // Special handling for 'in' and '!in' operators
       if (operator === 'in' || operator === '!in') {
         suggestions.push({
@@ -431,7 +446,32 @@ monaco.languages.registerCompletionItemProvider('aql', {
     // Check for field name followed by space
     const fieldSpaceMatch = lineText.match(/([a-zA-Z_][a-zA-Z0-9_]*(?:\.[a-zA-Z_][a-zA-Z0-9_]*)*)\s+$/);
     if (fieldSpaceMatch && !logicalOperatorMatch) {
-      ['==', '!=', '>', '<', '>=', '<=', '=~', 'in', '!in', 'has', '!has', 'has_any', 'has_all', 'contains', '!contains', 'startswith', '!startswith', 'endswith', '!endswith', 'matches', 'and', 'or', 'not', 'exists'].forEach((op) =>
+      [
+        '==',
+        '!=',
+        '>',
+        '<',
+        '>=',
+        '<=',
+        '=~',
+        'in',
+        '!in',
+        'has',
+        '!has',
+        'has_any',
+        'has_all',
+        'contains',
+        '!contains',
+        'startswith',
+        '!startswith',
+        'endswith',
+        '!endswith',
+        'matches',
+        'and',
+        'or',
+        'not',
+        'exists',
+      ].forEach((op) =>
         suggestions.push({
           label: op,
           kind: monaco.languages.CompletionItemKind.Operator,
@@ -511,7 +551,32 @@ monaco.languages.registerCompletionItemProvider('aql', {
 
     // Search segment
     if (!/stats|timechart/i.test(last)) {
-      ['==', '!=', '>', '<', '>=', '<=', '=~', 'in', '!in', 'has', '!has', 'has_any', 'has_all', 'contains', '!contains', 'startswith', '!startswith', 'endswith', '!endswith', 'matches', 'and', 'or', 'not', 'exists'].forEach((op) =>
+      [
+        '==',
+        '!=',
+        '>',
+        '<',
+        '>=',
+        '<=',
+        '=~',
+        'in',
+        '!in',
+        'has',
+        '!has',
+        'has_any',
+        'has_all',
+        'contains',
+        '!contains',
+        'startswith',
+        '!startswith',
+        'endswith',
+        '!endswith',
+        'matches',
+        'and',
+        'or',
+        'not',
+        'exists',
+      ].forEach((op) =>
         suggestions.push({
           label: op,
           kind: monaco.languages.CompletionItemKind.Operator,
@@ -704,25 +769,25 @@ export class QueryEditorComponent extends LitElement {
   public toggleSubQuery(queryFragment: string): void {
     if (!this.editor) return;
     const currentValue = this.editor.getValue().trim();
-    
+
     if (currentValue.includes(queryFragment)) {
       // Remove the fragment if it exists
       const escFragment = queryFragment.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
       let newQuery = currentValue;
-      
+
       // Handle different position cases
       if (new RegExp(`^${escFragment}$`).test(currentValue)) {
-        newQuery = ""; // It's the only query
+        newQuery = ''; // It's the only query
       } else if (new RegExp(`^${escFragment} and `, 'i').test(currentValue)) {
-        newQuery = currentValue.replace(new RegExp(`^${escFragment} and `, 'i'), ""); // At start
+        newQuery = currentValue.replace(new RegExp(`^${escFragment} and `, 'i'), ''); // At start
       } else if (new RegExp(` and ${escFragment}$`, 'i').test(currentValue)) {
-        newQuery = currentValue.replace(new RegExp(` and ${escFragment}$`, 'i'), ""); // At end
+        newQuery = currentValue.replace(new RegExp(` and ${escFragment}$`, 'i'), ''); // At end
       } else {
-        newQuery = currentValue.replace(new RegExp(` and ${escFragment}`, 'i'), ""); // In middle
+        newQuery = currentValue.replace(new RegExp(` and ${escFragment}`, 'i'), ''); // In middle
       }
-      
+
       // Clean up
-      newQuery = newQuery.replace(/^and /i, "").replace(/ and$/i, "").trim();
+      newQuery = newQuery.replace(/^and /i, '').replace(/ and$/i, '').trim();
       this.handleAddQuery(newQuery, true);
     } else {
       // Add the fragment if it doesn't exist
@@ -1044,8 +1109,6 @@ export class QueryEditorComponent extends LitElement {
   }
 
   private updateSuggestions(aqlItems: any[] = [], isContextSpecific: boolean = false): void {
-    console.log('updateSuggestions received:', aqlItems.slice(0, 3));
-
     const position = this.editor?.getPosition();
     const model = this.editor?.getModel();
     let parentPath = '';
@@ -1113,7 +1176,6 @@ export class QueryEditorComponent extends LitElement {
   private handleSuggestionClick(item: SuggestionItem, e: MouseEvent): void {
     e.preventDefault();
     e.stopPropagation();
-    console.log(item);
     this.insertCompletion(item);
     this.editor?.focus();
   }
@@ -1193,7 +1255,6 @@ export class QueryEditorComponent extends LitElement {
     }
 
     const triggerDelay = textToInsert.endsWith('.') ? 0 : 100;
-    console.log('Triggering suggestions after insertion of:', textToInsert);
     setTimeout(() => this.editor?.trigger('keyboard', 'editor.action.triggerSuggest', {}), triggerDelay);
   }
 
@@ -1284,8 +1345,8 @@ export class QueryEditorComponent extends LitElement {
       item.kind === 'completion'
         ? ((item as CompletionItem).parentPath ? `${(item as CompletionItem).parentPath}.${item.label}` : item.label) || ''
         : item.kind === 'savedView'
-          ? (item as SavedView).name || 'Saved View'
-          : item.query || '';
+        ? (item as SavedView).name || 'Saved View'
+        : item.query || '';
 
     return html`
       <div

@@ -10,7 +10,7 @@ export class LogList extends LitElement {
   @state() private expandedTraces: Record<string, boolean> = {};
   @state() private flipDirection: boolean = false;
   @state() private isLoadingRecent: boolean = false;
-  @state() private spanListTree: any[] = [];
+  @state() private spanListTree: EventLine[] = [];
   @state() private recentDataToBeAdded: any[] = [];
   @state() private isLoading: boolean = false;
   @state() private view: 'tree' | 'list' = 'tree';
@@ -19,6 +19,7 @@ export class LogList extends LitElement {
   @state() private wrapLines: boolean = false;
   @state() private hasMore: boolean = false;
   @state() private isLiveStreaming: boolean = false;
+  @state() private isLoadingReplace: boolean = false;
 
   private resizeTarget: string | null = null;
   private mouseState: { x: number } = { x: 0 };
@@ -64,6 +65,15 @@ export class LogList extends LitElement {
         this.requestUpdate();
       });
     }
+
+    window.addEventListener('update-query', (e) => {
+      this.isLoadingReplace = true;
+      this.refetchLogs();
+    });
+
+    window.addEventListener('pagehide', () => {
+      if (this.liveStreamInterval) clearInterval(this.liveStreamInterval);
+    });
 
     window.addEventListener('mouseup', () => {
       this.resizeTarget = null;
@@ -154,10 +164,12 @@ export class LogList extends LitElement {
   }
 
   refetchLogs() {
+    console.log('refetching logs', this.isLoadingReplace);
     const p = new URLSearchParams(window.location.search);
     const pathName = window.location.pathname;
     const url = `${window.location.origin}${pathName}?json=true&${p.toString()}`;
     this.fetchData(url, false, true);
+    this.isLoadingReplace = false;
   }
 
   handleChartZoom(params: { batch?: { startValue: string; endValue: string }[] }) {
@@ -200,15 +212,16 @@ export class LogList extends LitElement {
     nextFetchUrl: string,
     recentFetchUrl: string
   ) => {
+    console.log('here, replacing to falsing');
+    this.isLoadingReplace = false;
     this.logsColumns = [...cols];
     this.colIdxMap = { ...colIdxMap };
     this.hasMore = ves.length > 0;
     this.serviceColors = { ...serviceColors };
     this.nextFetchUrl = nextFetchUrl;
+    this.updateColumnMaxWidthMap(ves);
     this.recentFetchUrl = recentFetchUrl;
     this.spanListTree = this.buildSpanListTree(ves);
-    this.updateColumnMaxWidthMap(ves);
-    this.requestUpdate();
   };
 
   toggleWrapLines = () => {
@@ -472,7 +485,7 @@ export class LogList extends LitElement {
     const [rdId, rdCreatedAt, source] = targetInfo;
     const url = `/p/${pid}/log_explorer/${rdId}/${rdCreatedAt}/detailed?source=${source}`;
     updateUrlState('target_event', `${rdId}/${rdCreatedAt}/detailed?source=${source}`);
-    htmx.ajax('GET', url, { target: '#log_details_container', swap: 'innerHTML', indicator: '#details_indicator' });
+    (window as any).htmx.ajax('GET', url, { target: '#log_details_container', swap: 'innerHTML', indicator: '#details_indicator' });
   }
 
   moveColumn(column: string, direction: number) {
@@ -504,7 +517,7 @@ export class LogList extends LitElement {
   }
 
   render() {
-    const list = this.view === 'tree' ? this.spanListTree.filter((sp) => sp.show) : [...this.spanListTree];
+    const list: (EventLine | 'start' | 'end')[] = this.view === 'tree' ? this.spanListTree.filter((sp) => sp.show) : [...this.spanListTree];
     // end is used to render the load more button"
     list.unshift('start');
     list.push('end');
@@ -540,7 +553,11 @@ export class LogList extends LitElement {
               </button>
             </div>`
           : nothing}
-
+        ${this.isLoadingReplace
+          ? html`<div class="absolute z-50 top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2">
+              <span class="loading loading-dots"></span>
+            </div>`
+          : nothing}
         <table class="table-auto w-max relative ctable table-pin-rows table-pin-cols">
           <thead class="z-10 sticky top-0">
             <tr class="text-textStrong border-b flex min-w-0 relative font-medium ">

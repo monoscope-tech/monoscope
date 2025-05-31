@@ -16,11 +16,20 @@ declare global {
     logListTable: Element | null;
     collectionSteps: any[];
     collectionResults: any[] | undefined;
+    dashboardRefreshInterval: number;
+    dashboardRefreshTimer: NodeJS.Timeout | null;
     updateStepAssertions: (assertion: string, expression: string, step: number) => void;
     updateStepsWithErrors: (errors: any[]) => void;
     updateCollectionResults: (results: any[]) => void;
     updateEditorVal: () => void;
     addCollectionStep: () => void;
+    buildCurlRequest: (e: any) => void;
+    downloadJson: (e: any) => void;
+    validateYaml: (data: any) => void;
+    evalScriptsFromContent: (container: HTMLElement) => void;
+    params: () => Record<string, string>;
+    setQueryParamAndReload: (key: string, value: string) => void;
+    setParams: (state: Record<string, any>, load: boolean) => void;
     flameGraphChart: any;
     waterFallGraphChart: any;
   }

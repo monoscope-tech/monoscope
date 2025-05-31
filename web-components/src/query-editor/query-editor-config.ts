@@ -10,8 +10,6 @@ export function initializeDefaultSchema(): void {
 
   // Set up a nested field resolver for flattened schema
   schemaManager.setNestedResolver(async (schema: string, prefix: string) => {
-    console.log(`Resolving nested fields for schema: ${schema}, prefix: ${prefix}`);
-
     // Get the schema data
     const currentSchema = schemaManager.getSchemaData(schema) || schemaManager.getSchemaData('spans');
     if (!currentSchema?.fields) return [];
@@ -22,7 +20,7 @@ export function initializeDefaultSchema(): void {
         .filter(([name]) => !name.includes('.'))
         .map(([name, info]) => ({
           name,
-          type: info.field_type,
+          type: info.type,
           examples: info.examples,
           // Check if this field has nested fields by looking for dotted versions
           fields: Object.keys(currentSchema.fields).some((key) => key.startsWith(name + '.')) ? {} : undefined,
@@ -53,7 +51,7 @@ export function initializeDefaultSchema(): void {
       if (!childMap.has(childName)) {
         childMap.set(childName, {
           name: childName,
-          type: info.field_type,
+          type: info.type,
           examples: info.examples,
           // Mark as having nested fields if there are deeper levels or if it's an object type
           fields: hasNestedFields || nestedFields.some((f) => f.fullName.startsWith(prefixWithDot + childName + '.')) ? {} : undefined,
@@ -66,8 +64,6 @@ export function initializeDefaultSchema(): void {
 
   // Set up a value resolver for field-specific values with flattened schema
   schemaManager.setValueResolver(async (schema: string, field: string) => {
-    console.log(`Resolving values for field: ${field} in schema: ${schema}`);
-
     // Get the schema data
     const currentSchema = schemaManager.getSchemaData(schema) || schemaManager.getSchemaData('spans');
     if (!currentSchema?.fields) return [];
@@ -109,7 +105,7 @@ export function initializeDefaultSchema(): void {
 
     // Default fallback values based on field type
     if (fieldInfo) {
-      switch (fieldInfo.field_type) {
+      switch (fieldInfo.type) {
         case 'string':
           return ['example-value', 'test-string', 'sample-data'];
         case 'number':
@@ -125,4 +121,3 @@ export function initializeDefaultSchema(): void {
     return ['value1', 'value2', 'value3'];
   });
 }
-

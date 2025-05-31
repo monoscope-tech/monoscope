@@ -73,6 +73,36 @@ export function getMethodAndUrlErrors(obj: any): ErrorMap | undefined {
   return undefined;
 }
 
+export function validateYaml(data: any) {
+  data = convertCollectionStepsToTestkitFormat(data);
+  try {
+    if (!Array.isArray(data)) {
+      triggerToastEvent(getEvent('errorToast', { value: ['Array of steps expected'] }));
+      return undefined;
+    }
+    let errors = [];
+    for (let [_, step] of data.entries()) {
+      errors.push(isValidStep(step));
+    }
+    window.updateStepsWithErrors(errors);
+    if (errors.filter((err) => err !== undefined).length > 0) {
+      triggerToastEvent(getEvent('errorToast', { value: ['Saving failed. Please fix the errors and try again.'] }));
+      return;
+    }
+    data.map((step) => {
+      if (step.json) {
+        step.json = typeof step.json === 'string' ? step.json : JSON.stringify(step.json);
+      }
+    });
+    return data;
+  } catch (error) {
+    const event = getEvent('errorToast', { value: ['Invalid yaml'] });
+    triggerToastEvent(event);
+    return undefined;
+  }
+}
+window.validateYaml = validateYaml;
+
 export function getAssertErrors(asserts: any): ErrorMap | undefined {
   if (!Array.isArray(asserts)) return { asserts: 'Asserts must be an array' };
 

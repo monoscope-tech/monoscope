@@ -480,7 +480,7 @@ createMonitorPage pid colM = do
               , type_ "button"
               ]
               "Add a step"
-            a_
+            button_
               [ class_ "px-2 h-14 flex items-center underline text-brand text-xl font-semibold"
               , type_ "button"
               , hxPost_ $ "/p/" <> pid.toText <> "/onboarding/skip?step=CreateMonitor"
