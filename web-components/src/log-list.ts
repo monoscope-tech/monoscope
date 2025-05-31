@@ -450,15 +450,22 @@ export class LogList extends LitElement {
   }
   toggleLogRow(event: any, targetInfo: [string, string, string], pid: string) {
     const sideView = document.querySelector('#log_details_container')! as HTMLElement;
-    const logsView = document.querySelector('#logs_list_container')! as HTMLElement;
     const resizer = document.querySelector('#resizer');
     const width = Number(getComputedStyle(sideView).width.replace('px', ''));
     this.shouldScrollToBottom = false;
     if (width < 50) {
-      sideView.style.width = '30%';
+      const queryWidth = new URLSearchParams(window.location.search).get('details_width');
+      const storedWidth = localStorage.getItem('resizer-details_width');
+      
+      if (queryWidth) sideView.style.width = queryWidth + 'px';
+      else if (storedWidth && !storedWidth.endsWith('px')) sideView.style.width = storedWidth + 'px';
+      else if (storedWidth) sideView.style.width = storedWidth;
+      else sideView.style.width = '30%';
+      
       if (resizer) {
         resizer.classList.remove('hidden');
       }
+      updateUrlState('details_width', sideView.style.width);
     }
     const rows = document.querySelectorAll('.item-row.bg-fillBrand-strong');
     rows.forEach((row) => row.classList.remove('bg-fillBrand-strong'));
