@@ -259,57 +259,6 @@ export const language = {
   defaultToken: '',
   tokenPostfix: '.aql',
   ignoreCase: true,
-  keywords: [
-    'spans',
-    'metrics',
-    'stats',
-    'timechart',
-    'by',
-    'as',
-    'limit',
-    'exists',
-    '!exists',
-    'and',
-    'or',
-    'not',
-    'count',
-    'sum',
-    'avg',
-    'min',
-    'max',
-    'median',
-    'stdev',
-    'range',
-    'p50',
-    'p75',
-    'p90',
-    'p95',
-    'p99',
-    'p100',
-  ],
-  operators: [
-    '==',
-    '!=',
-    '>',
-    '<',
-    '>=',
-    '<=',
-    '=~',
-    'in',
-    '!in',
-    'has',
-    '!has',
-    'has_any',
-    'has_all',
-    'contains',
-    '!contains',
-    'startswith',
-    '!startswith',
-    'endswith',
-    '!endswith',
-    'matches',
-    '|',
-  ],
   keywords: KEYWORDS,
   operators: ALL_OPERATORS,
   tokenizer: {
@@ -706,6 +655,16 @@ export class QueryEditorComponent extends LitElement {
 
   private debouncedTriggerSuggestions = debounce(() => this.editor?.trigger('auto', 'editor.action.triggerSuggest', {}), 50);
   private debouncedUpdateQuery = debounce((queryValue: string) => {
+    if (this.updateURLParams) {
+      const url = new URL(window.location.href);
+      if (queryValue.trim()) {
+        url.searchParams.set('query', queryValue);
+      } else {
+        url.searchParams.delete('query');
+      }
+      window.history.replaceState({}, '', url.toString());
+    }
+
     const widgetPreviewId = this.getAttribute('target-widget-preview');
     if (widgetPreviewId) {
       document.getElementById(widgetPreviewId)?.dispatchEvent(
@@ -723,15 +682,6 @@ export class QueryEditorComponent extends LitElement {
     }
 
     // Update URL if needed
-    if (this.updateURLParams) {
-      const url = new URL(window.location.href);
-      if (queryValue.trim()) {
-        url.searchParams.set('query', queryValue);
-      } else {
-        url.searchParams.delete('query');
-      }
-      window.history.replaceState({}, '', url.toString());
-    }
   }, 300);
 
   private get serviceSuggestions(): SuggestionItem[] {

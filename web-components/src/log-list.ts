@@ -166,13 +166,10 @@ export class LogList extends LitElement {
   }
 
   refetchLogs() {
-    console.log('refetching logs', this.isLoadingReplace);
     const p = new URLSearchParams(window.location.search);
     const pathName = window.location.pathname;
     const url = `${window.location.origin}${pathName}?json=true&${p.toString()}`;
     this.fetchData(url, false, true);
-    this.isLoadingReplace = false;
-    this.performUpdate();
   }
 
   handleChartZoom(params: { batch?: { startValue: string; endValue: string }[] }) {
@@ -215,7 +212,6 @@ export class LogList extends LitElement {
     nextFetchUrl: string,
     recentFetchUrl: string
   ) => {
-    console.log('here, replacing to falsing');
     this.isLoadingReplace = false;
     this.logsColumns = [...cols];
     this.colIdxMap = { ...colIdxMap };
@@ -369,47 +365,42 @@ export class LogList extends LitElement {
           if (!isNewData) {
             this.hasMore = logsData.length > 0;
           }
-          if (logsData.length === 0 && isRefresh) {
-            this.spanListTree = [];
+
+          if (!isNewData) {
+            this.nextFetchUrl = nextUrl;
+          } else {
+            this.recentFetchUrl = recentUrl;
           }
 
-          if (logsData.length > 0) {
-            if (!isNewData) {
-              this.nextFetchUrl = nextUrl;
-            } else {
-              this.recentFetchUrl = recentUrl;
-            }
+          this.serviceColors = { ...serviceColors, ...this.serviceColors };
+          let tree = this.buildSpanListTree([...logsData]);
 
-            this.serviceColors = { ...serviceColors, ...this.serviceColors };
-            let tree = this.buildSpanListTree([...logsData]);
-
-            if (isRefresh) {
-              this.nextFetchUrl = nextUrl;
-              this.recentFetchUrl = recentUrl;
-              this.spanListTree = tree;
-            } else {
-              if (isNewData) {
-                this.fetchedNew = true;
-                tree.forEach((t) => (t.isNew = true));
-                const container = document.querySelector('#logs_list_container_inner')!;
-                const scrolledToBottom = container.scrollTop + container.clientHeight >= container.scrollHeight - 1;
-                if (container && scrolledToBottom) {
-                  this.shouldScrollToBottom = true;
-                }
-                if (this.isLiveStreaming && container && container.scrollTop > 30 && !this.flipDirection) {
-                  this.recentDataToBeAdded = this.addWithFlipDirection(this.recentDataToBeAdded, tree);
-                } else if (this.isLiveStreaming && !scrolledToBottom && this.flipDirection) {
-                  this.recentDataToBeAdded = this.addWithFlipDirection(this.recentDataToBeAdded, tree);
-                } else {
-                  this.spanListTree = this.addWithFlipDirection(this.spanListTree, tree);
-                }
-              } else {
-                this.spanListTree = this.addWithFlipDirection(tree, this.spanListTree);
+          if (isRefresh) {
+            this.nextFetchUrl = nextUrl;
+            this.recentFetchUrl = recentUrl;
+            this.spanListTree = tree;
+          } else {
+            if (isNewData) {
+              this.fetchedNew = true;
+              tree.forEach((t) => (t.isNew = true));
+              const container = document.querySelector('#logs_list_container_inner')!;
+              const scrolledToBottom = container.scrollTop + container.clientHeight >= container.scrollHeight - 1;
+              if (container && scrolledToBottom) {
+                this.shouldScrollToBottom = true;
               }
+              if (this.isLiveStreaming && container && container.scrollTop > 30 && !this.flipDirection) {
+                this.recentDataToBeAdded = this.addWithFlipDirection(this.recentDataToBeAdded, tree);
+              } else if (this.isLiveStreaming && !scrolledToBottom && this.flipDirection) {
+                this.recentDataToBeAdded = this.addWithFlipDirection(this.recentDataToBeAdded, tree);
+              } else {
+                this.spanListTree = this.addWithFlipDirection(this.spanListTree, tree);
+              }
+            } else {
+              this.spanListTree = this.addWithFlipDirection(tree, this.spanListTree);
             }
-
-            this.updateColumnMaxWidthMap(logsData);
           }
+
+          this.updateColumnMaxWidthMap(logsData);
         }
       })
       .catch((error) => {
@@ -418,11 +409,13 @@ export class LogList extends LitElement {
       .finally(() => {
         if (isNewData) {
           this.isLoadingRecent = false;
+        } else if (isRefresh) {
+          this.isLoadingReplace = false;
         } else {
           this.isLoading = false;
         }
+        this.requestUpdate();
       });
-    this.requestUpdate();
   }
 
   hideColumn(column: string) {
