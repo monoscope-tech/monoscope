@@ -157,20 +157,21 @@ export class QueryBuilderComponent extends LitElement {
           }
         });
         
-        // Hide both popovers when an option is selected in the sort popover
+        // Stop propagation for clicks inside the sort popover without closing it
         sortByPopover.addEventListener('click', (e) => {
-          if ((e.target as HTMLElement).closest('.hover\\:bg-fillHover')) {
-            sortByPopover.hidePopover?.();
-            (moreSettingsPopover as any).hidePopover?.();
-          }
+          // Don't close popovers when selecting options - we'll close them after selection is complete
+          // The actual closing will happen in the @click handler for each field item
           e.stopPropagation();
         });
         
-        // Add event listener to close the sort popover when clicking outside of it
+        // Add event listener to close the sort popover only when clicking outside of sort-by-popover AND more-settings-popover
         document.addEventListener('click', (e) => {
           if (sortByPopover.matches?.(':popover-open')) {
-            if (!(e.target as HTMLElement).closest('#sort-by-popover') && 
-                !(e.target as HTMLElement).closest('#sort-by-button')) {
+            const target = e.target as HTMLElement;
+            // Only close if the click is outside both popovers and not on the trigger button
+            if (!target.closest('#sort-by-popover') && 
+                !target.closest('#sort-by-button') && 
+                !target.closest('#more-settings-popover')) {
               sortByPopover.hidePopover?.();
             }
           }
@@ -975,11 +976,9 @@ export class QueryBuilderComponent extends LitElement {
       e.preventDefault();
       e.stopPropagation();
       this.addSortField();
-    } else if (target.closest('#more-settings-popover')) {
-      // Don't propagate clicks within the more settings popover to avoid closing it
-      if (!target.closest('#sort-by-popover')) {
-        e.stopPropagation();
-      }
+    } else if (target.closest('#more-settings-popover') || target.closest('#sort-by-popover')) {
+      // Don't propagate clicks within either popover to avoid closing them
+      e.stopPropagation();
     }
   };
   
@@ -1387,16 +1386,21 @@ export class QueryBuilderComponent extends LitElement {
                       class="p-2 hover:bg-fillHover cursor-pointer monospace ${this.newSortField === field.value ? 'bg-fillHover font-medium' : ''}"
                       @click="${() => { 
                         this.newSortField = field.value; 
-                        this.addSortField();
-                        // Close popover
-                        const popover = document.getElementById('sort-by-popover');
-                        if (popover) {
-                          (popover as any).hidePopover?.();
-                        }
-                        const morePopover = document.getElementById('more-settings-popover');
-                        if (morePopover) {
-                          (morePopover as any).hidePopover?.();
-                        }
+                        // Set field value first, then add sort field, and only close popovers after the operation is complete
+                        setTimeout(() => {
+                          this.addSortField();
+                          // Only close popovers after the sort field has been added
+                          setTimeout(() => {
+                            const popover = document.getElementById('sort-by-popover');
+                            if (popover) {
+                              (popover as any).hidePopover?.();
+                            }
+                            const morePopover = document.getElementById('more-settings-popover');
+                            if (morePopover) {
+                              (morePopover as any).hidePopover?.();
+                            }
+                          }, 100);
+                        }, 0);
                       }}"
                     >
                       ${field.value} 
