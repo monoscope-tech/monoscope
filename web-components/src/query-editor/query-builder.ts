@@ -294,13 +294,42 @@ export class QueryBuilderComponent extends LitElement {
 
     const query = queryEditor.editor.getValue();
 
-    // Extract GROUP BY fields
+    // Extract GROUP BY fields - preserve bin functions intact
     const groupByMatch = query.match(/\bgroup\s+by\s+([^|]+?)(?:\||$)/i);
     if (groupByMatch) {
-      this.groupByFields = groupByMatch[1]
-        .split(',')
-        .map((field) => field.trim())
-        .filter(Boolean);
+      // Process group by fields with special handling for bin functions
+      const groupByText = groupByMatch[1].trim();
+      const fields: string[] = [];
+      let currentField = '';
+      let parenCount = 0;
+      
+      // Process character by character to handle nested parentheses correctly
+      for (let i = 0; i < groupByText.length; i++) {
+        const char = groupByText[i];
+        
+        if (char === '(') {
+          parenCount++;
+          currentField += char;
+        } else if (char === ')') {
+          parenCount--;
+          currentField += char;
+        } else if (char === ',' && parenCount === 0) {
+          // Only split on commas at the top level
+          if (currentField.trim()) {
+            fields.push(currentField.trim());
+          }
+          currentField = '';
+        } else {
+          currentField += char;
+        }
+      }
+      
+      // Add the last field if there is one
+      if (currentField.trim()) {
+        fields.push(currentField.trim());
+      }
+      
+      this.groupByFields = fields.filter(Boolean);
     } else {
       this.groupByFields = [];
     }
@@ -447,7 +476,7 @@ export class QueryBuilderComponent extends LitElement {
     console.log('Adding group by field:', this.newGroupByField);
 
     // Make sure we have a non-empty field that's not already in the list
-    if (this.newGroupByField?.trim() && !this.groupByFields.includes(this.newGroupByField)) {
+    if (this.newGroupByField?.trim()) {
       try {
         let fieldValue = this.newGroupByField;
         
@@ -460,13 +489,41 @@ export class QueryBuilderComponent extends LitElement {
           }
         }
         
+        // Check if the exact field or binned version of it already exists
+        const isDuplicate = this.groupByFields.some(existingField => {
+          if (existingField === fieldValue) {
+            return true; // Exact match
+          }
+          
+          // Check if it's the same field but with different binning
+          if (this.enableBinning) {
+            const fieldWithoutBin = fieldValue.replace(/bin(_auto)?\([^,]+(?:, \d+)?\)/, '').trim();
+            const existingWithoutBin = existingField.replace(/bin(_auto)?\([^,]+(?:, \d+)?\)/, '').trim();
+            return fieldWithoutBin === existingWithoutBin;
+          }
+          
+          return false;
+        });
+        
+        if (isDuplicate) {
+          console.warn('Cannot add duplicate group by field:', fieldValue);
+          return;
+        }
+        
         // Add to fields array
         this.groupByFields = [...this.groupByFields, fieldValue];
         // Clear the input
         this.newGroupByField = '';
-        // Reset binning options
+        // Reset binning options to default (no binning)
         this.enableBinning = false;
         this.enableAutoBin = false;
+        // Make sure the radio button for "no bin" is selected after adding
+        setTimeout(() => {
+          const noBinRadio = document.querySelector('input[name="bin-type"]:first-of-type') as HTMLInputElement;
+          if (noBinRadio) {
+            noBinRadio.checked = true;
+          }
+        }, 50);
         // Force UI update
         this.requestUpdate();
         // Close the popover if open
@@ -483,7 +540,7 @@ export class QueryBuilderComponent extends LitElement {
         console.error('Error adding group by field:', error);
       }
     } else {
-      console.warn('Cannot add empty or duplicate group by field:', this.newGroupByField);
+      console.warn('Cannot add empty group by field:', this.newGroupByField);
     }
   }
 
@@ -942,12 +999,17 @@ export class QueryBuilderComponent extends LitElement {
           <span class="text-xs text-textDisabled monospace" data-tippy-content="Group results by field value">by:</span>
           <div class="flex flex-wrap gap-1">
             ${this.groupByFields.map(
-              (field, index) => html`
-                <div class="text-xs text-textDisabled monospace bg-bgWeaker">
-                  [<span class="text-textStrong">${field}</span>
-                  <span class="cursor-pointer" data-tippy-content="Remove group by field" @click="${() => this.removeGroupByField(index)}">✕</span>]
-                </div>
-              `
+              (field, index) => {
+                // Determine if this is a binned field
+                const isBinned = field.includes('bin(') || field.includes('bin_auto(');
+                // For display purposes, ensure we show the full function with parameter
+                return html`
+                  <div class="text-xs text-textDisabled monospace bg-bgWeaker">
+                    [<span class="text-textStrong">${field}</span>
+                    <span class="cursor-pointer" data-tippy-content="Remove group by field" @click="${() => this.removeGroupByField(index)}">✕</span>]
+                  </div>
+                `;
+              }
             )}
             <button
               type="button"
