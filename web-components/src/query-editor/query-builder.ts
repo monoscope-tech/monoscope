@@ -127,7 +127,7 @@ export class QueryBuilderComponent extends LitElement {
           }
         });
         
-        // Position and show the sort popover when hovering or clicking the sort by button
+        // Position the sort popover relative to the button
         const positionSortPopover = () => {
           const buttonRect = sortByButton.getBoundingClientRect();
           // Position to the right of the button
@@ -135,28 +135,26 @@ export class QueryBuilderComponent extends LitElement {
           sortByPopover.style.top = `${buttonRect.top}px`;
         };
         
-        // Events to show/hide the sort popover when the mouse moves over and out
-        sortByButton.addEventListener('mouseover', () => {
+        // Click event for the sort by button
+        sortByButton.addEventListener('click', (e) => {
+          e.stopPropagation();
           positionSortPopover();
-          sortByPopover.showPopover?.();
-        });
-        
-        sortByButton.addEventListener('mouseout', (e) => {
-          // Only hide if we're not moving to the sort popover itself
-          if (!e.relatedTarget || !(e.relatedTarget as HTMLElement).closest('#sort-by-popover')) {
-            setTimeout(() => {
-              // Small delay to check if cursor moved to popover
-              if (!document.querySelector(':hover')?.closest('#sort-by-popover')) {
-                sortByPopover.hidePopover?.();
-              }
-            }, 100);
+          
+          // Toggle the popover
+          if ((sortByPopover as any).matches?.(':popover-open')) {
+            sortByPopover.hidePopover?.();
+          } else {
+            sortByPopover.showPopover?.();
           }
         });
         
         // Event to make the subpopover keyboard-accessible
-        sortByButton.addEventListener('focusin', () => {
-          positionSortPopover();
-          sortByPopover.showPopover?.();
+        sortByButton.addEventListener('keydown', (e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            positionSortPopover();
+            sortByPopover.showPopover?.();
+          }
         });
         
         // Hide both popovers when an option is selected in the sort popover
@@ -165,18 +163,17 @@ export class QueryBuilderComponent extends LitElement {
             sortByPopover.hidePopover?.();
             (moreSettingsPopover as any).hidePopover?.();
           }
-        });
-        
-        // Handle mouse entering/leaving the sort popover
-        sortByPopover.addEventListener('mouseleave', () => {
-          if (sortByPopover.matches?.(':popover-open')) {
-            sortByPopover.hidePopover?.();
-          }
-        });
-        
-        // Add event listener to the sort popover to prevent it from closing when clicked inside
-        sortByPopover.addEventListener('click', (e) => {
           e.stopPropagation();
+        });
+        
+        // Add event listener to close the sort popover when clicking outside of it
+        document.addEventListener('click', (e) => {
+          if (sortByPopover.matches?.(':popover-open')) {
+            if (!(e.target as HTMLElement).closest('#sort-by-popover') && 
+                !(e.target as HTMLElement).closest('#sort-by-button')) {
+              sortByPopover.hidePopover?.();
+            }
+          }
         });
       }
     }, 500); // Delay to ensure elements are loaded
@@ -978,19 +975,6 @@ export class QueryBuilderComponent extends LitElement {
       e.preventDefault();
       e.stopPropagation();
       this.addSortField();
-    } else if (target.closest('#sort-by-button')) {
-      console.log('Sort by button clicked via direct listener');
-      e.preventDefault();
-      e.stopPropagation();
-      const sortPopover = document.getElementById('sort-by-popover') as HTMLElement;
-      const sortByButton = target.closest('#sort-by-button');
-      if (sortPopover && sortByButton) {
-        // Position the popover relative to the button
-        const buttonRect = sortByButton.getBoundingClientRect();
-        sortPopover.style.left = `${buttonRect.right + 5}px`;
-        sortPopover.style.top = `${buttonRect.top}px`;
-        sortPopover.showPopover?.();
-      }
     } else if (target.closest('#more-settings-popover')) {
       // Don't propagate clicks within the more settings popover to avoid closing it
       if (!target.closest('#sort-by-popover')) {
