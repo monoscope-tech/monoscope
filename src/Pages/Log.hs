@@ -1250,6 +1250,13 @@ queryEditorInitializationCode queryLibRecent queryLibSaved = do
         if (window.schemaManager && window.schemaManager.setSchemaData) {
           const schemaData = $schemaJson;
           window.schemaManager.setSchemaData('spans', schemaData);
+          
+          // Force refresh field suggestions in the query-builder component
+          // This makes sure any field inputs get the latest schema data
+          const queryBuilder = document.querySelector('query-builder');
+          if (queryBuilder && typeof queryBuilder.refreshFieldSuggestions === 'function') {
+            setTimeout(() => queryBuilder.refreshFieldSuggestions(), 200);
+          }
         }
         
         if (editor.setPopularSearches) {

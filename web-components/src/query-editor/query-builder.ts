@@ -30,6 +30,7 @@ export class QueryBuilderComponent extends LitElement {
 
   // Connects to the query editor when first updated
   async firstUpdated(): Promise<void> {
+    // Manual method binding is not needed with arrow functions in the template
     await this.initializeFields();
     this.extractQueryParts();
 
@@ -39,7 +40,51 @@ export class QueryBuilderComponent extends LitElement {
       queryEditor.addEventListener('update-query', () => {
         this.extractQueryParts();
       });
+
+      // Set up a schema change observer
+      if ((window as any).schemaManager) {
+        const originalSetSchemaData = (window as any).schemaManager.setSchemaData;
+        (window as any).schemaManager.setSchemaData = (...args: any[]) => {
+          // Call the original method
+          const result = originalSetSchemaData.apply((window as any).schemaManager, args);
+
+          // Then refresh our field suggestions
+          setTimeout(() => this.refreshFieldSuggestions(), 100);
+
+          return result;
+        };
+      }
     }
+
+    // Add direct event handlers to add buttons after the component is rendered
+    setTimeout(() => {
+      const addGroupByBtn = this.querySelector('#add-group-by-btn');
+      if (addGroupByBtn) {
+        console.log('Found add group by button, adding direct event listener');
+        addGroupByBtn.addEventListener('click', () => {
+          console.log('Group by button clicked directly');
+          this.addGroupByField();
+        });
+      }
+
+      const addAggBtn = this.querySelector('#add-agg-btn');
+      if (addAggBtn) {
+        console.log('Found add agg button, adding direct event listener');
+        addAggBtn.addEventListener('click', () => {
+          console.log('Agg button clicked directly');
+          this.addAggregation();
+        });
+      }
+
+      const addSortBtn = this.querySelector('#add-sort-btn');
+      if (addSortBtn) {
+        console.log('Found add sort button, adding direct event listener');
+        addSortBtn.addEventListener('click', () => {
+          console.log('Sort button clicked directly');
+          this.addSortField();
+        });
+      }
+    }, 500);
 
     // Set up click event handler to close popovers when clicking outside
     document.addEventListener('click', (e: MouseEvent) => {
@@ -58,13 +103,119 @@ export class QueryBuilderComponent extends LitElement {
    */
   private async initializeFields(): Promise<void> {
     try {
+      // Get fields from schema manager
       const fields = await schemaManager.resolveNested(schemaManager.getDefaultSchema(), '');
+      console.log('Loaded initial fields:', fields.length);
+
+      // Update fields options array
       this.fieldsOptions = fields.map((field) => ({
-        label: field.name,
+        label: `${field.name} (${field.type})`,
         value: field.name,
       }));
+
+      // Ensure UI updates with the new options
+      this.requestUpdate();
+
+      // Schedule another update after render is complete to ensure datalists exist
+      setTimeout(() => this.refreshFieldSuggestions(), 100);
     } catch (error) {
       console.error('Failed to load schema fields:', error);
+    }
+  }
+
+  /**
+   * Refreshes field suggestions based on current schema
+   * This method is public to allow external components to trigger a refresh
+   */
+  public async refreshFieldSuggestions(path: string = ''): Promise<void> {
+    try {
+      console.log('Refreshing field suggestions for path:', path || 'root');
+
+      // Get fields from schema manager
+      const fields = await schemaManager.resolveNested(schemaManager.getDefaultSchema(), path);
+
+      // If we're refreshing root fields, update the fieldsOptions property
+      if (!path) {
+        this.fieldsOptions = fields.map((field) => ({
+          label: `${field.name} (${field.type})`,
+          value: field.name,
+        }));
+        this.requestUpdate();
+      }
+
+      // Update all datalists
+      this.updateDatalistsWithFields(fields, path);
+    } catch (error) {
+      console.error(`Failed to refresh schema fields for path ${path}:`, error);
+    }
+  }
+
+  /**
+   * Updates all datalists with the given fields
+   */
+  private updateDatalistsWithFields(fields: any[], prefix: string = ''): void {
+    // Let the normal Lit rendering cycle handle datalist population
+    // This should be safer and avoid DOM manipulation errors
+    this.fieldsOptions = fields.map((field) => {
+      const fieldPath = prefix ? `${prefix}.${field.name}` : field.name;
+      return {
+        label: `${fieldPath} (${field.type})`,
+        value: fieldPath,
+      };
+    });
+
+    console.log(`Updated field options with ${fields.length} fields, path: ${prefix || 'root'}`);
+    this.requestUpdate();
+  }
+
+  /**
+   * Handles input in field suggestions
+   */
+  private async handleFieldInput(e: Event, fieldType: 'group' | 'agg' | 'sort'): Promise<void> {
+    try {
+      const input = e.target as HTMLInputElement;
+      const value = input.value;
+      console.log(`Field input (${fieldType}):`, value);
+
+      // Update the appropriate field value
+      switch (fieldType) {
+        case 'group':
+          this.newGroupByField = value;
+          break;
+        case 'agg':
+          this.newAggField = value;
+          break;
+        case 'sort':
+          this.newSortField = value;
+          break;
+      }
+
+      // Check if we need to update the suggestions based on dot notation
+      if (value.endsWith('.')) {
+        // Extract the parent path
+        const parentPath = value.substring(0, value.length - 1);
+        console.log(`Getting nested fields for path: ${parentPath}`);
+
+        // Fetch nested fields from schema manager
+        try {
+          const nestedFields = await schemaManager.resolveNested(schemaManager.getDefaultSchema(), parentPath);
+          console.log(`Found ${nestedFields.length} nested fields for ${parentPath}`);
+
+          // Update the fieldsOptions property directly for template rendering
+          // This is safer than direct DOM manipulation
+          this.fieldsOptions = nestedFields.map((field) => ({
+            label: `${field.name} (${field.type})`,
+            value: `${parentPath}.${field.name}`,
+          }));
+
+          // Request a UI update
+          this.requestUpdate();
+        } catch (error) {
+          console.error(`Failed to get nested fields for ${parentPath}:`, error);
+        }
+      }
+    } catch (error) {
+      console.error(`Error in handleFieldInput for ${fieldType}:`, error);
     }
   }
 
@@ -140,8 +291,18 @@ export class QueryBuilderComponent extends LitElement {
    * Update the query in the editor
    */
   private updateQuery(): void {
+    console.log('Updating query with:', {
+      groupByFields: this.groupByFields,
+      aggregations: this.aggregations,
+      sortFields: this.sortFields,
+      limitValue: this.limitValue,
+    });
+
     const queryEditor = document.querySelector(this.queryEditorSelector) as any;
-    if (!queryEditor?.editor) return;
+    if (!queryEditor?.editor) {
+      console.error('Query editor not found or missing editor instance');
+      return;
+    }
 
     let query = queryEditor.editor.getValue();
 
@@ -215,16 +376,37 @@ export class QueryBuilderComponent extends LitElement {
   /**
    * Add a new GROUP BY field
    */
-  private addGroupByField(): void {
-    if (this.newGroupByField && !this.groupByFields.includes(this.newGroupByField)) {
-      this.groupByFields = [...this.groupByFields, this.newGroupByField];
-      this.newGroupByField = '';
-      // Close the popover
-      const popover = document.getElementById('group-by-popover');
-      if (popover) {
-        (popover as any).hidePopover?.();
+  /**
+   * Add a new GROUP BY field
+   */
+  public addGroupByField(): void {
+    // Debug logging
+    console.log('Adding group by field:', this.newGroupByField);
+
+    // Make sure we have a non-empty field that's not already in the list
+    if (this.newGroupByField?.trim() && !this.groupByFields.includes(this.newGroupByField)) {
+      try {
+        // Add to fields array
+        this.groupByFields = [...this.groupByFields, this.newGroupByField];
+        // Clear the input
+        this.newGroupByField = '';
+        // Force UI update
+        this.requestUpdate();
+        // Close the popover if open
+        const popover = document.getElementById('group-by-popover');
+        if (popover) {
+          (popover as any).hidePopover?.();
+        }
+        // Update the query in the editor
+        this.updateQuery();
+
+        // Directly render the updated group by fields
+        console.log('Group by fields now:', this.groupByFields);
+      } catch (error) {
+        console.error('Error adding group by field:', error);
       }
-      this.updateQuery();
+    } else {
+      console.warn('Cannot add empty or duplicate group by field:', this.newGroupByField);
     }
   }
 
@@ -239,8 +421,15 @@ export class QueryBuilderComponent extends LitElement {
   /**
    * Add a new aggregation
    */
-  private addAggregation(): void {
-    if (this.newAggFunction && this.newAggField) {
+  /**
+   * Add a new aggregation
+   */
+  public addAggregation(): void {
+    // Debug logging
+    console.log('Adding aggregation:', this.newAggFunction, this.newAggField);
+
+    if (this.newAggFunction && this.newAggField?.trim()) {
+      // Add to aggregations array
       this.aggregations = [
         ...this.aggregations,
         {
@@ -248,13 +437,17 @@ export class QueryBuilderComponent extends LitElement {
           field: this.newAggField,
         },
       ];
+      // Reset form fields
       this.newAggFunction = 'count';
       this.newAggField = '';
-      // Close the popover
+      // Force UI update
+      this.requestUpdate();
+      // Close the popover if open
       const popover = document.getElementById('agg-popover');
       if (popover) {
         (popover as any).hidePopover?.();
       }
+      // Update the query in the editor
       this.updateQuery();
     }
   }
@@ -270,8 +463,12 @@ export class QueryBuilderComponent extends LitElement {
   /**
    * Add a new sort field
    */
-  private addSortField(): void {
-    if (this.newSortField) {
+  public addSortField(): void {
+    // Debug logging
+    console.log('Adding sort field:', this.newSortField, this.newSortDirection);
+
+    if (this.newSortField?.trim()) {
+      // Add to sort fields array
       this.sortFields = [
         ...this.sortFields,
         {
@@ -279,7 +476,11 @@ export class QueryBuilderComponent extends LitElement {
           direction: this.newSortDirection,
         },
       ];
+      // Clear input
       this.newSortField = '';
+      // Force UI update
+      this.requestUpdate();
+      // Update the query
       this.updateQuery();
     }
   }
@@ -316,79 +517,56 @@ export class QueryBuilderComponent extends LitElement {
   /**
    * Render the component
    */
+  // Removed updated method to avoid rendering issues
+
+  connectedCallback(): void {
+    super.connectedCallback();
+
+    // Add direct click handler for the whole component
+    this.addEventListener('click', this.handleComponentClick);
+  }
+
+  disconnectedCallback(): void {
+    // Clean up event listeners
+    this.removeEventListener('click', this.handleComponentClick);
+    super.disconnectedCallback();
+  }
+
+  // Handle all clicks in the component
+  private handleComponentClick = (e: MouseEvent): void => {
+    const target = e.target as HTMLElement;
+
+    // Check which button was clicked
+    if (target.closest('#add-group-by-btn')) {
+      console.log('Add group by button clicked via direct listener');
+      e.preventDefault();
+      e.stopPropagation();
+      this.addGroupByField();
+    } else if (target.closest('#add-agg-btn')) {
+      console.log('Add aggregation button clicked via direct listener');
+      e.preventDefault();
+      e.stopPropagation();
+      this.addAggregation();
+    } else if (target.closest('#add-sort-btn')) {
+      console.log('Add sort button clicked via direct listener');
+      e.preventDefault();
+      e.stopPropagation();
+      this.addSortField();
+    }
+  };
+
   render() {
     return html`
       <div class="flex flex-wrap items-center gap-2 text-sm">
-        <!-- GROUP BY Section -->
-        <div class="flex items-center gap-1">
-          <span class="text-xs text-textDisabled monospace">group by:</span>
-          <div class="flex flex-wrap gap-1">
-            ${this.groupByFields.map(
-              (field, index) => html`
-                <div class="badge badge-sm badge-outline gap-1 bg-fillWeak">
-                  ${field}
-                  <button type="button" class="btn btn-xs btn-ghost btn-circle" @click="${() => this.removeGroupByField(index)}">
-                    <svg class="w-3 h-3">
-                      <use href="/public/assets/svgs/fa-sprites/regular.svg#xmark"></use>
-                    </svg>
-                  </button>
-                </div>
-              `
-            )}
-            <button
-              type="button"
-              class="text-xs text-textDisabled monospace bg-bgWeaker rounded hover:bg-fillHover cursor-pointer"
-              popovertarget="group-by-popover"
-              style="anchor-name: --group-by-anchor"
-            >
-              [+]
-            </button>
-
-            <!-- GROUP BY Dropdown -->
-            <div
-              popover
-              id="group-by-popover"
-              class="dropdown menu p-2 shadow bg-bgRaised rounded-box w-64 z-50"
-              style="position: absolute; position-anchor: --group-by-anchor"
-            >
-              <h3 class="font-medium mb-2 text-center">Add GROUP BY Field</h3>
-              <div class="mb-2">
-                <select
-                  class="select select-bordered select-sm w-full"
-                  .value="${this.newGroupByField}"
-                  @change="${(e: Event) => (this.newGroupByField = (e.target as HTMLSelectElement).value)}"
-                >
-                  <option value="" disabled selected>Select a field</option>
-                  ${this.fieldsOptions.map((field) => html` <option value="${field.value}">${field.label}</option> `)}
-                </select>
-              </div>
-              <div class="flex justify-end gap-2">
-                <button
-                  type="button"
-                  class="btn btn-sm btn-primary w-full"
-                  ?disabled="${!this.newGroupByField}"
-                  @click="${this.addGroupByField}"
-                >
-                  Add
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-
         <!-- AGG Section -->
-        <div class="flex items-center ml-4 gap-1">
-          <span class="text-xs text-textDisabled monospace">agg:</span>
+        <div class="flex items-center gap-1">
+          <span class="text-xs text-textDisabled monospace" data-tippy-content="Apply aggregation functions like count, sum, avg, etc.">agg:</span>
           <div class="flex flex-wrap gap-1">
             ${this.aggregations.map(
               (agg, index) => html`
-                <div class="badge badge-sm badge-outline gap-1 bg-fillWeak">
-                  ${agg.function}(${agg.field})
-                  <button type="button" class="btn btn-xs btn-ghost btn-circle" @click="${() => this.removeAggregation(index)}">
-                    <svg class="w-3 h-3">
-                      <use href="/public/assets/svgs/fa-sprites/regular.svg#xmark"></use>
-                    </svg>
-                  </button>
+                <div class="text-xs text-textDisabled monospace bg-bgWeaker">
+                  [<span class="text-textStrong">${agg.function}(${agg.field})</span>
+                  <span class="cursor-pointer" data-tippy-content="Remove aggregation" @click="${() => this.removeAggregation(index)}">✕</span>]
                 </div>
               `
             )}
@@ -397,6 +575,7 @@ export class QueryBuilderComponent extends LitElement {
               class="text-xs text-textDisabled monospace bg-bgWeaker rounded hover:bg-fillHover cursor-pointer"
               popovertarget="agg-popover"
               style="anchor-name: --agg-anchor"
+              data-tippy-content="Add an aggregation function"
             >
               [+]
             </button>
@@ -425,36 +604,101 @@ export class QueryBuilderComponent extends LitElement {
                 <label class="label">
                   <span class="label-text">Field:</span>
                 </label>
-                <select
-                  class="select select-bordered select-sm w-full"
+                <input
+                  list="agg-field-suggestions"
+                  type="text"
+                  class="input input-bordered input-sm w-full"
+                  placeholder="Select or type field"
                   .value="${this.newAggField}"
-                  @change="${(e: Event) => (this.newAggField = (e.target as HTMLSelectElement).value)}"
-                >
-                  <option value="" disabled selected>Select a field</option>
-                  ${this.fieldsOptions.map((field) => html` <option value="${field.value}">${field.label}</option> `)}
-                </select>
+                  @input="${(e: Event) => this.handleFieldInput(e, 'agg')}"
+                  @keydown="${(e: KeyboardEvent) => e.key === 'Enter' && this.addAggregation()}"
+                />
+                <datalist id="agg-field-suggestions">
+                  ${this.fieldsOptions.map((field) => html`<option value="${field.value}">${field.label}</option>`)}
+                </datalist>
               </div>
               <div class="flex justify-end gap-2">
                 <button
                   type="button"
                   class="btn btn-sm btn-primary w-full"
-                  ?disabled="${!this.newAggFunction || !this.newAggField}"
-                  @click="${this.addAggregation}"
+                  ?disabled="${!this.newAggFunction || !this.newAggField?.trim()}"
+                  id="add-agg-btn"
                 >
-                  Add
+                  Add Aggregation
                 </button>
               </div>
             </div>
           </div>
         </div>
 
+        <!-- GROUP BY Section -->
+        ${this.aggregations.length > 0 ? html`
+        <div class="flex items-center ml-4 gap-1">
+          <span class="text-xs text-textDisabled monospace" data-tippy-content="Group results by field value">by:</span>
+          <div class="flex flex-wrap gap-1">
+            ${this.groupByFields.map(
+              (field, index) => html`
+                <div class="text-xs text-textDisabled monospace bg-bgWeaker">
+                  [<span class="text-textStrong">${field}</span>
+                  <span class="cursor-pointer" data-tippy-content="Remove group by field" @click="${() => this.removeGroupByField(index)}">✕</span>]
+                </div>
+              `
+            )}
+            <button
+              type="button"
+              class="text-xs text-textDisabled monospace bg-bgWeaker rounded hover:bg-fillHover cursor-pointer"
+              popovertarget="group-by-popover"
+              style="anchor-name: --group-by-anchor"
+              data-tippy-content="Add a group by field"
+            >
+              [+]
+            </button>
+
+            <!-- GROUP BY Dropdown -->
+            <div
+              popover
+              id="group-by-popover"
+              class="dropdown menu p-2 shadow bg-bgRaised rounded-box w-64 z-50"
+              style="position: absolute; position-anchor: --group-by-anchor"
+            >
+              <h3 class="font-medium mb-2 text-center">Add GROUP BY Field</h3>
+              <div class="mb-2">
+                <input
+                  list="group-by-field-suggestions"
+                  type="text"
+                  class="input input-bordered input-sm w-full"
+                  placeholder="Select or type field"
+                  .value="${this.newGroupByField}"
+                  @input="${(e: Event) => this.handleFieldInput(e, 'group')}"
+                  @keydown="${(e: KeyboardEvent) => e.key === 'Enter' && this.addGroupByField()}"
+                />
+                <datalist id="group-by-field-suggestions">
+                  ${this.fieldsOptions.map((field) => html`<option value="${field.value}">${field.label}</option>`)}
+                </datalist>
+              </div>
+              <div class="flex justify-end gap-2">
+                <button
+                  type="button"
+                  class="btn btn-sm btn-primary w-full"
+                  ?disabled="${!this.newGroupByField?.trim()}"
+                  id="add-group-by-btn"
+                >
+                  Add Group
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+        ` : ''}
+
         <!-- More Options Button -->
         <div class="ml-auto">
           <button
             type="button"
-            class="text-xs text-textDisabled monospace bg-bgWeaker px-2 py-1 rounded hover:bg-fillHover cursor-pointer"
+            class="text-xs text-textDisabled monospace bg-bgWeaker rounded hover:bg-fillHover cursor-pointer"
             popovertarget="more-settings-popover"
             style="anchor-name: --more-settings-anchor"
+            data-tippy-content="Additional options: sorting and limits"
           >
             [more ▾]
           </button>
@@ -470,19 +714,15 @@ export class QueryBuilderComponent extends LitElement {
 
             <!-- Sort By -->
             <div class="flex flex-wrap items-center gap-2 mb-3">
-              <span class="text-xs monospace">📐 sort by:</span>
+              <span class="text-xs monospace" data-tippy-content="Sort results by field values">📐 sort by:</span>
 
               <!-- Existing Sort Fields -->
               <div class="flex flex-wrap gap-1">
                 ${this.sortFields.map(
                   (sort, index) => html`
-                    <div class="badge badge-sm badge-outline gap-1 bg-fillWeaker">
-                      ${sort.field} ${sort.direction}
-                      <button type="button" class="btn btn-xs btn-ghost btn-circle" @click="${() => this.removeSortField(index)}">
-                        <svg class="w-3 h-3">
-                          <use href="/public/assets/svgs/fa-sprites/regular.svg#xmark"></use>
-                        </svg>
-                      </button>
+                    <div class="text-xs text-textDisabled monospace bg-bgWeaker rounded cursor-pointer">
+                      [<span class="text-textWeak">${sort.field} ${sort.direction}</span>
+                      <span class="cursor-pointer" data-tippy-content="Remove sort field" @click="${() => this.removeSortField(index)}">✕</span>]
                     </div>
                   `
                 )}
@@ -490,14 +730,20 @@ export class QueryBuilderComponent extends LitElement {
 
               <!-- Add Sort Field -->
               <div class="flex gap-1">
-                <select
-                  class="select select-bordered select-xs"
-                  .value="${this.newSortField}"
-                  @change="${(e: Event) => (this.newSortField = (e.target as HTMLSelectElement).value)}"
-                >
-                  <option value="" disabled selected>Select field</option>
-                  ${this.fieldsOptions.map((field) => html` <option value="${field.value}">${field.label}</option> `)}
-                </select>
+                <div class="relative">
+                  <input
+                    list="sort-field-suggestions"
+                    type="text"
+                    class="input input-bordered input-xs w-full"
+                    placeholder="Select or type field"
+                    .value="${this.newSortField}"
+                    @input="${(e: Event) => this.handleFieldInput(e, 'sort')}"
+                    @keydown="${(e: KeyboardEvent) => e.key === 'Enter' && this.addSortField()}"
+                  />
+                  <datalist id="sort-field-suggestions">
+                    ${this.fieldsOptions.map((field) => html`<option value="${field.value}">${field.label}</option>`)}
+                  </datalist>
+                </div>
 
                 <select
                   class="select select-bordered select-xs"
@@ -508,12 +754,7 @@ export class QueryBuilderComponent extends LitElement {
                   <option value="desc">desc</option>
                 </select>
 
-                <button
-                  type="button"
-                  class="btn btn-xs btn-ghost btn-square"
-                  ?disabled="${!this.newSortField}"
-                  @click="${this.addSortField}"
-                >
+                <button type="button" class="btn btn-xs btn-ghost btn-square" ?disabled="${!this.newSortField?.trim()}" id="add-sort-btn">
                   <span class="text-xs">✓</span>
                 </button>
               </div>
@@ -521,7 +762,7 @@ export class QueryBuilderComponent extends LitElement {
 
             <!-- Limit -->
             <div class="flex items-center gap-2 mt-2">
-              <span class="text-xs monospace">🔢 limit:</span>
+              <span class="text-xs monospace" data-tippy-content="Limit the number of results returned">🔢 limit:</span>
               <input
                 type="number"
                 class="input input-bordered input-xs w-24"
@@ -547,4 +788,3 @@ declare global {
     'query-builder': QueryBuilderComponent;
   }
 }
-
