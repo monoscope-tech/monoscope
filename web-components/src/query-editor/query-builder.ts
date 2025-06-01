@@ -815,14 +815,23 @@ export class QueryBuilderComponent extends LitElement {
     console.log('Adding sort field:', this.newSortField, this.newSortDirection);
 
     if (this.newSortField?.trim()) {
-      // Add to sort fields array
-      this.sortFields = [
-        ...this.sortFields,
-        {
-          field: this.newSortField,
-          direction: this.newSortDirection,
-        },
-      ];
+      // Check if this field is already being sorted
+      const existingIndex = this.sortFields.findIndex(sort => sort.field === this.newSortField);
+      
+      if (existingIndex >= 0) {
+        // If field already exists, update its direction instead of adding a duplicate
+        this.sortFields[existingIndex].direction = this.newSortDirection;
+      } else {
+        // Add to sort fields array
+        this.sortFields = [
+          ...this.sortFields,
+          {
+            field: this.newSortField,
+            direction: this.newSortDirection,
+          },
+        ];
+      }
+      
       // Clear input
       this.newSortField = '';
       // Force UI update
@@ -901,6 +910,18 @@ export class QueryBuilderComponent extends LitElement {
       this.addSortField();
     }
   };
+  
+  /**
+   * Toggle between sort directions
+   */
+  private toggleSortDirection(index: number): void {
+    // Toggle between 'asc' and 'desc'
+    this.sortFields[index].direction = 
+      this.sortFields[index].direction === 'asc' ? 'desc' : 'asc';
+    
+    // Update query
+    this.updateQuery();
+  }
 
   render() {
     return html`
@@ -1132,6 +1153,55 @@ export class QueryBuilderComponent extends LitElement {
         </div>
         ` : ''}
 
+        <!-- Sort Section (if sort fields exist) -->
+        ${this.sortFields.length > 0 ? html`
+          <div class="flex items-center ml-4 gap-1">
+            <div class="flex flex-wrap gap-1">
+              ${this.sortFields.map(
+                (sort, index) => html`
+                  <div class="text-xs text-textDisabled monospace bg-bgWeaker">
+                    [<span class="text-textDisabled">sort:</span> <span class="text-textStrong">${sort.field} 
+                    <span class="cursor-pointer hover:bg-fillHover px-1" 
+                      data-tippy-content="Toggle sort direction" 
+                      @click="${() => {
+                        // Toggle direction
+                        this.sortFields[index].direction = this.sortFields[index].direction === 'asc' ? 'desc' : 'asc';
+                        this.updateQuery();
+                        this.requestUpdate();
+                      }}">${sort.direction}</span></span>
+                    <span class="cursor-pointer" data-tippy-content="Remove sort field" @click="${() => this.removeSortField(index)}">✕</span>]
+                  </div>
+                `
+              )}
+            </div>
+          </div>
+        ` : ''}
+
+        <!-- Limit Section (if limit is set and not default) -->
+        ${this.limitValue !== 100 ? html`
+          <div class="flex items-center ml-4 gap-1">
+            <div class="flex flex-wrap gap-1">
+              <div class="text-xs text-textDisabled monospace bg-bgWeaker">
+                [<span class="text-textDisabled">limit:</span> <input
+                  type="number"
+                  class="w-16 bg-transparent border-none focus:outline-none text-textStrong"
+                  min="1"
+                  max="10000"
+                  .value="${this.limitValue.toString()}"
+                  @change="${(e: Event) => {
+                    this.limitValue = parseInt((e.target as HTMLInputElement).value) || 100;
+                    this.updateLimit();
+                  }}"
+                />
+                <span class="cursor-pointer" data-tippy-content="Remove limit" @click="${() => {
+                  this.limitValue = 100; // Reset to default
+                  this.updateLimit();
+                }}">✕</span>]
+              </div>
+            </div>
+          </div>
+        ` : ''}
+
         <!-- More Options Button -->
         <div class="ml-auto">
           <button
@@ -1148,74 +1218,161 @@ export class QueryBuilderComponent extends LitElement {
           <div
             popover
             id="more-settings-popover"
-            class="dropdown menu p-2 shadow bg-bgRaised rounded-box w-80 z-50"
+            class="dropdown menu p-2 shadow-md bg-bgRaised rounded-box w-64 z-50 border border-strokeWeak"
             style="position: absolute; position-anchor: --more-settings-anchor"
+            @mouseleave="${(e: MouseEvent) => {
+              // Only hide if we're not moving to the sort popover
+              const toElement = (e as any).relatedTarget as HTMLElement;
+              const sortPopover = document.getElementById('sort-by-popover');
+              if (!toElement?.closest('#sort-by-popover') && !sortPopover?.contains(toElement)) {
+                const morePopover = document.getElementById('more-settings-popover');
+                if (morePopover) {
+                  (morePopover as any).hidePopover?.();
+                }
+                // Also hide sort popover if it's open
+                if (sortPopover && (sortPopover as any).matches?.(':popover-open')) {
+                  (sortPopover as any).hidePopover?.();
+                }
+              }
+            }}"
           >
-            <h3 class="text-sm font-medium mb-2">More Settings</h3>
-
-            <!-- Sort By -->
-            <div class="flex flex-wrap items-center gap-2 mb-3">
-              <span class="text-xs monospace" data-tippy-content="Sort results by field values">📐 sort by:</span>
-
-              <!-- Existing Sort Fields -->
-              <div class="flex flex-wrap gap-1">
-                ${this.sortFields.map(
-                  (sort, index) => html`
-                    <div class="text-xs text-textDisabled monospace bg-bgWeaker rounded cursor-pointer">
-                      [<span class="text-textWeak">${sort.field} ${sort.direction}</span>
-                      <span class="cursor-pointer" data-tippy-content="Remove sort field" @click="${() => this.removeSortField(index)}">✕</span>]
-                    </div>
-                  `
-                )}
+            <!-- Main Menu Options -->
+            <div id="more-main-menu">
+              <!-- Sort By Option -->
+              <div 
+                class="p-2 hover:bg-fillHover cursor-pointer monospace flex items-center justify-between sort-by-trigger"
+                @mouseover="${() => {
+                  // We need a slight delay to prevent flickering
+                  setTimeout(() => {
+                    const popover = document.getElementById('sort-by-popover');
+                    if (popover && !(popover as any).matches?.(':popover-open')) {
+                      (popover as any).showPopover?.();
+                    }
+                  }, 50);
+                }}"
+                popovertarget="sort-by-popover"
+                style="anchor-name: --sort-by-anchor"
+              >
+                <span>Sort by...</span>
+                <span class="text-xs">▶</span>
               </div>
 
-              <!-- Add Sort Field -->
-              <div class="flex gap-1">
-                <div class="relative">
-                  <input
-                    list="sort-field-suggestions"
-                    type="text"
-                    class="input input-bordered input-xs w-full"
-                    placeholder="Select or type field"
-                    .value="${this.newSortField}"
-                    @input="${(e: Event) => this.handleFieldInput(e, 'sort')}"
-                    @keydown="${(e: KeyboardEvent) => e.key === 'Enter' && this.addSortField()}"
+              <!-- Limit Option -->
+              <div 
+                class="p-2 hover:bg-fillHover cursor-pointer monospace"
+                @click="${() => {
+                  // Add limit directly
+                  if (this.limitValue === 100) { // If default, use a different value to show change
+                    this.limitValue = 1000;
+                  }
+                  this.updateLimit();
+                  // Close popover
+                  const popover = document.getElementById('more-settings-popover');
+                  if (popover) {
+                    (popover as any).hidePopover?.();
+                  }
+                }}"
+              >
+                Limit results...
+              </div>
+            </div>
+          </div>
+
+          <!-- Sort By Popover (second level) -->
+          <div
+            popover
+            id="sort-by-popover"
+            class="dropdown menu p-2 shadow-md bg-bgRaised rounded-box w-[500px] z-50 border border-strokeWeak sort-by-popover"
+            style="position: absolute; position-anchor: --sort-by-anchor; top: -5px; left: 105%;"
+            @mouseleave="${(e: MouseEvent) => {
+              // Only hide if we're not moving to the more-settings-popover or sort-by-trigger
+              const toElement = (e as any).relatedTarget as HTMLElement;
+              const morePopover = document.getElementById('more-settings-popover');
+              if (!toElement?.closest('#more-settings-popover') && 
+                  !toElement?.closest('.sort-by-trigger')) {
+                const sortPopover = document.getElementById('sort-by-popover');
+                if (sortPopover && (sortPopover as any).matches?.(':popover-open')) {
+                  (sortPopover as any).hidePopover?.();
+                }
+              }
+            }}"
+          >
+            <!-- Direction Selection at Top -->
+            <div class="mb-3 p-2 border rounded bg-bgWeaker flex items-center justify-between">
+              <div>Sort direction:</div>
+              <div class="flex gap-2">
+                <label class="flex items-center cursor-pointer">
+                  <input 
+                    type="radio" 
+                    name="sort-direction" 
+                    class="radio radio-sm mr-2" 
+                    ?checked="${this.newSortDirection === 'asc'}"
+                    @change="${() => {
+                      this.newSortDirection = 'asc';
+                      this.requestUpdate();
+                    }}"
                   />
-                  <datalist id="sort-field-suggestions">
-                    ${this.fieldsOptions.map((field) => html`<option value="${field.value}">${field.label}</option>`)}
-                  </datalist>
-                </div>
-
-                <select
-                  class="select select-bordered select-xs"
-                  .value="${this.newSortDirection}"
-                  @change="${(e: Event) => (this.newSortDirection = (e.target as HTMLSelectElement).value as 'asc' | 'desc')}"
-                >
-                  <option value="asc">asc</option>
-                  <option value="desc">desc</option>
-                </select>
-
-                <button type="button" class="btn btn-xs btn-ghost btn-square" ?disabled="${!this.newSortField?.trim()}" id="add-sort-btn">
-                  <span class="text-xs">✓</span>
-                </button>
+                  <span class="label-text">Ascending (asc)</span>
+                </label>
+                
+                <label class="flex items-center cursor-pointer">
+                  <input 
+                    type="radio" 
+                    name="sort-direction" 
+                    class="radio radio-sm mr-2" 
+                    ?checked="${this.newSortDirection === 'desc'}"
+                    @change="${() => {
+                      this.newSortDirection = 'desc';
+                      this.requestUpdate();
+                    }}"
+                  />
+                  <span class="label-text">Descending (desc)</span>
+                </label>
               </div>
             </div>
 
-            <!-- Limit -->
-            <div class="flex items-center gap-2 mt-2">
-              <span class="text-xs monospace" data-tippy-content="Limit the number of results returned">🔢 limit:</span>
+            <div class="mb-3">
               <input
-                type="number"
-                class="input input-bordered input-xs w-24"
-                min="1"
-                max="10000"
-                .value="${this.limitValue.toString()}"
-                @change="${(e: Event) => {
-                  this.limitValue = parseInt((e.target as HTMLInputElement).value);
-                  this.updateLimit();
-                }}"
+                type="text"
+                class="input input-bordered input-md w-full px-3 py-2 focus:outline-none"
+                placeholder="Search fields..."
+                .value="${this.aggSearchTerm}"
+                @input="${(e: Event) => this.filterAggregationOptions(e)}"
+                autofocus
               />
-              <button type="button" class="btn btn-xs btn-primary" @click="${this.updateLimit}">Set</button>
+            </div>
+            
+            <!-- Fields List -->
+            <div class="border rounded">
+              <div class="p-1 bg-bgWeaker font-medium border-b monospace">Fields</div>
+              <div class="max-h-60 overflow-y-auto">
+                ${this.fieldsOptions.length > 0 ? 
+                  ((this.aggSearchTerm && this.filteredFields.length > 0) ? this.filteredFields : this.fieldsOptions).map((field) => html`
+                    <div 
+                      class="p-2 hover:bg-fillHover cursor-pointer monospace ${this.newSortField === field.value ? 'bg-fillHover font-medium' : ''}"
+                      @click="${() => { 
+                        this.newSortField = field.value; 
+                        this.addSortField();
+                        // Close popover
+                        const popover = document.getElementById('sort-by-popover');
+                        if (popover) {
+                          (popover as any).hidePopover?.();
+                        }
+                        const morePopover = document.getElementById('more-settings-popover');
+                        if (morePopover) {
+                          (morePopover as any).hidePopover?.();
+                        }
+                      }}"
+                    >
+                      ${field.value} 
+                      <span class="float-right text-xs text-textDisabled p-1 rounded-sm bg-bgWeaker">
+                        ${this.getFieldIcon(field.type, field.value)}
+                      </span>
+                    </div>
+                  `)
+                  : html`<div class="p-2 text-center text-textDisabled">No fields available</div>`
+                }
+              </div>
             </div>
           </div>
         </div>
