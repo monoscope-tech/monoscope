@@ -450,6 +450,8 @@ monaco.languages.registerCompletionItemProvider('aql', {
     }
 
     // Fifth priority: Check for logical operators followed by space - suggest fields
+    const logicalOperatorPattern = new RegExp(`\\b(${LOGICAL_OPERATORS.filter((op) => ['and', 'or', 'not'].includes(op)).join('|')})\\s+$`, 'i');
+    const logicalOperatorMatch = lineText.match(logicalOperatorPattern);
     if (logicalOperatorMatch) {
       const fields = await schemaManager.resolveNested(currentSchema, '');
       fields.forEach((f) =>

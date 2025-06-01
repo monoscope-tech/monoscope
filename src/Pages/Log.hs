@@ -357,7 +357,7 @@ resizer_ targetId urlParam increasingDirection =
     do
       div_
         [ id_ "resizer"
-        , class_ $ "absolute left-1/2 top-1/2 z-50 -translate-x-1/2 leading-none py-1 -translate-y-1/2 bg-slate-50 rounded-sm border border-strokeBrand-weak group-hover:border-strokeBrand-strong text-iconNeutral group-hover:text-iconBrand"
+        , class_ $ "absolute left-1/2 top-1/2 -translate-x-1/2 leading-none py-1 -translate-y-1/2 bg-bgRaised rounded-sm border border-strokeBrand-weak group-hover:border-strokeBrand-strong text-iconNeutral group-hover:text-iconBrand"
         ]
         $ faSprite_ "grip-dots-vertical" "regular" "w-4 h-5"
 
@@ -663,7 +663,12 @@ logQueryBox_ pid currentRange source targetSpan query queryLibRecent queryLibSav
                 span_ [id_ "run-query-indicator", class_ "refresh-indicator htmx-indicator query-indicator loading loading-dots loading-sm"] ""
                 faSprite_ "magnifying-glass" "regular" "h-4 w-4 inline-block"
       div_ [class_ "flex items-between justify-between"] do
-        visualizationTabs_
+        div_ [class_ "flex items-center gap-2"] do
+          visualizationTabs_
+          span_ [class_ "text-textDisabled mx-2 text-xs"] "|"
+          -- Query Builder for GROUP BY, AGG, SORT, LIMIT
+          termRaw "query-builder" [term "query-editor-selector" "#filterElement"] ("" :: Text)
+
         div_ [class_ "", id_ "resultTableInner"] pass
 
         div_ [class_ "flex justify-end  gap-2 "] do
