@@ -30,6 +30,14 @@ export class QueryBuilderComponent extends LitElement {
   @state() private visualizationType: string = '';
   @state() private newSortField: string = '';
   @state() private newSortDirection: 'asc' | 'desc' = 'asc';
+  
+  // New Group By UI state
+  @state() private groupBySearchTerm: string = '';
+  @state() private showGroupByFieldsColumn: boolean = false;
+  @state() private filteredGroupByFields: { label: string; value: string }[] = [];
+  @state() private enableBinning: boolean = false;
+  @state() private enableAutoBin: boolean = false;
+  @state() private binValue: number = 5;
 
   // Available aggregation functions
   private readonly aggFunctions = ['count', 'sum', 'avg', 'min', 'max', 'median', 'stdev', 'range', 'p50', 'p75', 'p90', 'p95', 'p99'];
@@ -434,9 +442,6 @@ export class QueryBuilderComponent extends LitElement {
   /**
    * Add a new GROUP BY field
    */
-  /**
-   * Add a new GROUP BY field
-   */
   public addGroupByField(): void {
     // Debug logging
     console.log('Adding group by field:', this.newGroupByField);
@@ -444,10 +449,24 @@ export class QueryBuilderComponent extends LitElement {
     // Make sure we have a non-empty field that's not already in the list
     if (this.newGroupByField?.trim() && !this.groupByFields.includes(this.newGroupByField)) {
       try {
+        let fieldValue = this.newGroupByField;
+        
+        // If binning is enabled, add bin function wrapper
+        if (this.enableBinning) {
+          if (this.enableAutoBin) {
+            fieldValue = `bin_auto(${fieldValue})`;
+          } else {
+            fieldValue = `bin(${fieldValue}, ${this.binValue})`;
+          }
+        }
+        
         // Add to fields array
-        this.groupByFields = [...this.groupByFields, this.newGroupByField];
+        this.groupByFields = [...this.groupByFields, fieldValue];
         // Clear the input
         this.newGroupByField = '';
+        // Reset binning options
+        this.enableBinning = false;
+        this.enableAutoBin = false;
         // Force UI update
         this.requestUpdate();
         // Close the popover if open
@@ -509,6 +528,25 @@ export class QueryBuilderComponent extends LitElement {
       this.requestUpdate();
     }
   }
+
+  /**
+   * Show the fields selection for group by
+   */
+  private showGroupByFieldsSelector(): void {
+    this.showGroupByFieldsColumn = true;
+    this.groupBySearchTerm = ''; // Clear search term
+    this.filteredGroupByFields = []; // Reset filtered fields
+    
+    // Make sure we have fields loaded
+    if (this.fieldsOptions.length === 0) {
+      this.initializeFields().then(() => {
+        console.log(`Fields loaded for group by, count:`, this.fieldsOptions.length);
+        this.requestUpdate();
+      });
+    }
+    
+    this.requestUpdate();
+  }
   
   /**
    * Reset the aggregation state
@@ -546,6 +584,38 @@ export class QueryBuilderComponent extends LitElement {
     }
     
     this.requestUpdate();
+  }
+  
+  /**
+   * Filter group by field options based on search term
+   */
+  private filterGroupByOptions(e: Event): void {
+    const searchTerm = (e.target as HTMLInputElement).value.toLowerCase();
+    this.groupBySearchTerm = searchTerm;
+    
+    if (this.fieldsOptions.length === 0) {
+      // Try to load fields if they're not available
+      console.log("Field options are empty, trying to load them");
+      this.initializeFields().then(() => {
+        this.filterGroupByFieldsBySearchTerm(searchTerm);
+        this.requestUpdate();
+      });
+    } else {
+      this.filterGroupByFieldsBySearchTerm(searchTerm);
+    }
+    
+    this.requestUpdate();
+  }
+  
+  /**
+   * Filter group by fields by search term
+   */
+  private filterGroupByFieldsBySearchTerm(searchTerm: string): void {
+    this.filteredGroupByFields = this.fieldsOptions.filter(field => 
+      field.value.toLowerCase().includes(searchTerm) || 
+      field.label.toLowerCase().includes(searchTerm)
+    );
+    console.log(`Filtered group by fields by "${searchTerm}": found ${this.filteredGroupByFields.length} matches out of ${this.fieldsOptions.length} total fields`);
   }
   
   /**
@@ -889,38 +959,112 @@ export class QueryBuilderComponent extends LitElement {
               [+]
             </button>
 
-            <!-- GROUP BY Dropdown -->
+            <!-- GROUP BY Dropdown (Now styled like AGG dropdown) -->
             <div
               popover
               id="group-by-popover"
-              class="dropdown menu p-2 shadow bg-bgRaised rounded-box w-64 z-50"
+              class="dropdown menu p-2 shadow-md bg-bgRaised rounded-box w-[500px] z-50 border border-strokeWeak"
               style="position: absolute; position-anchor: --group-by-anchor"
             >
-              <h3 class="font-medium mb-2 text-center">Add GROUP BY Field</h3>
-              <div class="mb-2">
+              <!-- Compact Binning Options at the Very Top -->
+              <div class="flex items-center mb-3 p-2 border rounded bg-bgWeaker whitespace-nowrap">
+                <label class="flex items-center cursor-pointer mr-4">
+                  <input 
+                    type="radio" 
+                    name="bin-type" 
+                    class="radio radio-sm mr-2" 
+                    ?checked="${!this.enableBinning}"
+                    @change="${() => {
+                      this.enableBinning = false;
+                      this.requestUpdate();
+                    }}"
+                  />
+                  <span class="label-text">no bin</span>
+                </label>
+                
+                <label class="flex items-center cursor-pointer mr-4">
+                  <input 
+                    type="radio" 
+                    name="bin-type" 
+                    class="radio radio-sm mr-2" 
+                    ?checked="${this.enableBinning && !this.enableAutoBin}"
+                    @change="${() => {
+                      this.enableBinning = true;
+                      this.enableAutoBin = false;
+                      this.requestUpdate();
+                    }}"
+                  />
+                  <span class="label-text inline-flex items-center">bin(_,
+                    <select
+                      class="select select-xs bg-bgWeaker border-none p-0 mx-1 focus:outline-none"
+                      @change="${(e: Event) => {
+                        this.binValue = parseInt((e.target as HTMLSelectElement).value) || 5;
+                      }}"
+                    >
+                      <option value="5">5</option>
+                      <option value="10">10</option>
+                      <option value="20">20</option>
+                      <option value="30">30</option>
+                      <option value="60">1h</option>
+                      <option value="120">2h</option>
+                      <option value="360">6h</option>
+                      <option value="720">12h</option>
+                      <option value="1440">1d</option>
+                    </select>)</span>
+                </label>
+                
+                <label class="flex items-center cursor-pointer">
+                  <input 
+                    type="radio" 
+                    name="bin-type" 
+                    class="radio radio-sm mr-2" 
+                    ?checked="${this.enableBinning && this.enableAutoBin}"
+                    @change="${() => {
+                      this.enableBinning = true;
+                      this.enableAutoBin = true;
+                      this.requestUpdate();
+                    }}"
+                  />
+                  <span class="label-text">bin_auto(_)</span>
+                </label>
+              </div>
+              
+              <div class="mb-3">
                 <input
-                  list="group-by-field-suggestions"
                   type="text"
-                  class="input input-bordered input-sm w-full"
-                  placeholder="Select or type field"
-                  .value="${this.newGroupByField}"
-                  @input="${(e: Event) => this.handleFieldInput(e, 'group')}"
-                  @keydown="${(e: KeyboardEvent) => e.key === 'Enter' && this.addGroupByField()}"
+                  class="input input-bordered input-md w-full px-3 py-2 focus:outline-none"
+                  placeholder="Search fields..."
+                  .value="${this.groupBySearchTerm}"
+                  @input="${(e: Event) => this.filterGroupByOptions(e)}"
+                  autofocus
                 />
-                <datalist id="group-by-field-suggestions">
-                  ${this.fieldsOptions.map((field) => html`<option value="${field.value}">${field.label}</option>`)}
-                </datalist>
               </div>
-              <div class="flex justify-end gap-2">
-                <button
-                  type="button"
-                  class="btn btn-sm btn-primary w-full"
-                  ?disabled="${!this.newGroupByField?.trim()}"
-                  id="add-group-by-btn"
-                >
-                  Add Group
-                </button>
+              
+              <!-- Fields List -->
+              <div class="border rounded">
+                <div class="p-1 bg-bgWeaker font-medium border-b monospace">Fields</div>
+                <div class="max-h-60 overflow-y-auto">
+                  ${this.fieldsOptions.length > 0 ? 
+                    ((this.groupBySearchTerm && this.filteredGroupByFields.length > 0) ? this.filteredGroupByFields : this.fieldsOptions).map((field) => html`
+                      <div 
+                        class="p-2 hover:bg-fillHover cursor-pointer monospace ${this.newGroupByField === field.value ? 'bg-fillHover font-medium' : ''}"
+                        @click="${() => { 
+                          this.newGroupByField = field.value; 
+                          this.addGroupByField();
+                        }}"
+                      >
+                        ${field.value} 
+                        <span class="float-right text-xs text-textDisabled p-1 rounded-sm bg-bgWeaker">
+                          ${this.getFieldIcon(field.type, field.value)}
+                        </span>
+                      </div>
+                    `)
+                    : html`<div class="p-2 text-center text-textDisabled">No fields available</div>`
+                  }
+                </div>
               </div>
+              
+              <!-- Add Group button is now removed as we're using direct field selection -->
             </div>
           </div>
         </div>
