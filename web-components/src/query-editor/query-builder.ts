@@ -1220,36 +1220,12 @@ export class QueryBuilderComponent extends LitElement {
             id="more-settings-popover"
             class="dropdown menu p-2 shadow-md bg-bgRaised rounded-box w-64 z-50 border border-strokeWeak"
             style="position: absolute; position-anchor: --more-settings-anchor"
-            @mouseleave="${(e: MouseEvent) => {
-              // Only hide if we're not moving to the sort popover
-              const toElement = (e as any).relatedTarget as HTMLElement;
-              const sortPopover = document.getElementById('sort-by-popover');
-              if (!toElement?.closest('#sort-by-popover') && !sortPopover?.contains(toElement)) {
-                const morePopover = document.getElementById('more-settings-popover');
-                if (morePopover) {
-                  (morePopover as any).hidePopover?.();
-                }
-                // Also hide sort popover if it's open
-                if (sortPopover && (sortPopover as any).matches?.(':popover-open')) {
-                  (sortPopover as any).hidePopover?.();
-                }
-              }
-            }}"
           >
             <!-- Main Menu Options -->
             <div id="more-main-menu">
               <!-- Sort By Option -->
               <div 
-                class="p-2 hover:bg-fillHover cursor-pointer monospace flex items-center justify-between sort-by-trigger"
-                @mouseover="${() => {
-                  // We need a slight delay to prevent flickering
-                  setTimeout(() => {
-                    const popover = document.getElementById('sort-by-popover');
-                    if (popover && !(popover as any).matches?.(':popover-open')) {
-                      (popover as any).showPopover?.();
-                    }
-                  }, 50);
-                }}"
+                class="p-2 hover:bg-fillHover cursor-pointer monospace flex items-center justify-between"
                 popovertarget="sort-by-popover"
                 style="anchor-name: --sort-by-anchor"
               >
@@ -1282,20 +1258,8 @@ export class QueryBuilderComponent extends LitElement {
           <div
             popover
             id="sort-by-popover"
-            class="dropdown menu p-2 shadow-md bg-bgRaised rounded-box w-[500px] z-50 border border-strokeWeak sort-by-popover"
-            style="position: absolute; position-anchor: --sort-by-anchor; top: -5px; left: 105%;"
-            @mouseleave="${(e: MouseEvent) => {
-              // Only hide if we're not moving to the more-settings-popover or sort-by-trigger
-              const toElement = (e as any).relatedTarget as HTMLElement;
-              const morePopover = document.getElementById('more-settings-popover');
-              if (!toElement?.closest('#more-settings-popover') && 
-                  !toElement?.closest('.sort-by-trigger')) {
-                const sortPopover = document.getElementById('sort-by-popover');
-                if (sortPopover && (sortPopover as any).matches?.(':popover-open')) {
-                  (sortPopover as any).hidePopover?.();
-                }
-              }
-            }}"
+            class="dropdown menu p-2 shadow-md bg-bgRaised rounded-box w-[500px] z-50 border border-strokeWeak"
+            style="position: absolute; position-anchor: --sort-by-anchor; margin-left: 100%; margin-top: -20px;"
           >
             <!-- Direction Selection at Top -->
             <div class="mb-3 p-2 border rounded bg-bgWeaker flex items-center justify-between">
