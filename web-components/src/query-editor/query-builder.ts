@@ -1273,7 +1273,8 @@ export class QueryBuilderComponent extends LitElement {
           </div>
         ` : ''}
 
-        <!-- More Options Button -->
+        <!-- More Options Button - Hide when all options are already set -->
+        ${(this.sortFields.length === 0 || this.limitValue === 100) ? html`
         <div class="ml-auto">
           <button
             type="button"
@@ -1284,6 +1285,8 @@ export class QueryBuilderComponent extends LitElement {
           >
             [more ▾]
           </button>
+        </div>
+        ` : ''}
 
           <!-- More Settings Dropdown -->
           <div
@@ -1294,33 +1297,42 @@ export class QueryBuilderComponent extends LitElement {
           >
             <!-- Main Menu Options -->
             <div id="more-main-menu">
-              <!-- Sort By Option - this is now a button that shows a nested popover -->
-              <div 
-                class="p-2 hover:bg-fillHover cursor-pointer monospace flex items-center justify-between"
-                id="sort-by-button"
-              >
-                <span>Sort by...</span>
-                <span class="text-xs">▶</span>
-              </div>
+              <!-- Sort By Option - only show if no sort fields exist -->
+              ${this.sortFields.length === 0 ? html`
+                <div 
+                  class="p-2 hover:bg-fillHover cursor-pointer monospace flex items-center justify-between"
+                  id="sort-by-button"
+                >
+                  <span>Sort by...</span>
+                  <span class="text-xs">▶</span>
+                </div>
+              ` : ''}
 
-              <!-- Limit Option -->
-              <div 
-                class="p-2 hover:bg-fillHover cursor-pointer monospace"
-                @click="${() => {
-                  // Add limit directly
-                  if (this.limitValue === 100) { // If default, use a different value to show change
+              <!-- Limit Option - only show if limit is default -->
+              ${this.limitValue === 100 ? html`
+                <div 
+                  class="p-2 hover:bg-fillHover cursor-pointer monospace"
+                  @click="${() => {
+                    // Add limit directly with a non-default value
                     this.limitValue = 1000;
-                  }
-                  this.updateLimit();
-                  // Close popover
-                  const popover = document.getElementById('more-settings-popover');
-                  if (popover) {
-                    (popover as any).hidePopover?.();
-                  }
-                }}"
-              >
-                Limit results...
-              </div>
+                    this.updateLimit();
+                    // Close popover
+                    const popover = document.getElementById('more-settings-popover');
+                    if (popover) {
+                      (popover as any).hidePopover?.();
+                    }
+                  }}"
+                >
+                  Limit results...
+                </div>
+              ` : ''}
+              
+              <!-- Show a message if all options are set -->
+              ${this.sortFields.length > 0 && this.limitValue !== 100 ? html`
+                <div class="p-2 text-center text-textDisabled monospace">
+                  All options are set
+                </div>
+              ` : ''}
             </div>
           </div>
 
@@ -1331,39 +1343,6 @@ export class QueryBuilderComponent extends LitElement {
             class="dropdown menu p-2 shadow-md bg-bgRaised rounded-box w-[500px] z-50 border border-strokeWeak"
             style="position: fixed; left: auto; top: auto;"
           >
-            <!-- Direction Selection at Top -->
-            <div class="mb-3 p-2 border rounded bg-bgWeaker flex items-center justify-between">
-              <div>Sort direction:</div>
-              <div class="flex gap-2">
-                <label class="flex items-center cursor-pointer">
-                  <input 
-                    type="radio" 
-                    name="sort-direction" 
-                    class="radio radio-sm mr-2" 
-                    ?checked="${this.newSortDirection === 'asc'}"
-                    @change="${() => {
-                      this.newSortDirection = 'asc';
-                      this.requestUpdate();
-                    }}"
-                  />
-                  <span class="label-text">Ascending (asc)</span>
-                </label>
-                
-                <label class="flex items-center cursor-pointer">
-                  <input 
-                    type="radio" 
-                    name="sort-direction" 
-                    class="radio radio-sm mr-2" 
-                    ?checked="${this.newSortDirection === 'desc'}"
-                    @change="${() => {
-                      this.newSortDirection = 'desc';
-                      this.requestUpdate();
-                    }}"
-                  />
-                  <span class="label-text">Descending (desc)</span>
-                </label>
-              </div>
-            </div>
 
             <div class="mb-3">
               <input
@@ -1384,8 +1363,13 @@ export class QueryBuilderComponent extends LitElement {
                   ((this.aggSearchTerm && this.filteredFields.length > 0) ? this.filteredFields : this.fieldsOptions).map((field) => html`
                     <div 
                       class="p-2 hover:bg-fillHover cursor-pointer monospace ${this.newSortField === field.value ? 'bg-fillHover font-medium' : ''}"
-                      @click="${() => { 
+                      @click="${(e: Event) => { 
+                        e.stopPropagation(); // Stop event propagation
+                        
                         this.newSortField = field.value; 
+                        // Always use asc as default direction
+                        this.newSortDirection = 'asc';
+                        
                         // Set field value first, then add sort field, and only close popovers after the operation is complete
                         setTimeout(() => {
                           this.addSortField();
