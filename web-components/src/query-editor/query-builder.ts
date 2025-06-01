@@ -18,10 +18,16 @@ export class QueryBuilderComponent extends LitElement {
   @state() private sortFields: { field: string; direction: 'asc' | 'desc' }[] = [];
   @state() private limitValue: number = 100;
   @state() private showMoreSettings: boolean = false;
-  @state() private fieldsOptions: { label: string; value: string }[] = [];
+  @state() private fieldsOptions: { label: string; value: string; type: string }[] = [];
   @state() private newGroupByField: string = '';
-  @state() private newAggFunction: string = 'count';
+  @state() private newAggFunction: string = '';
   @state() private newAggField: string = '';
+  @state() private selectedAggFunction: string = '';
+  @state() private aggSearchTerm: string = '';
+  @state() private filteredAggFunctions: string[] = [];
+  @state() private filteredFields: { label: string; value: string }[] = [];
+  @state() private showFieldsColumn: boolean = false;
+  @state() private visualizationType: string = '';
   @state() private newSortField: string = '';
   @state() private newSortDirection: 'asc' | 'desc' = 'asc';
 
@@ -103,15 +109,13 @@ export class QueryBuilderComponent extends LitElement {
    */
   private async initializeFields(): Promise<void> {
     try {
-      // Get fields from schema manager
-      const fields = await schemaManager.resolveNested(schemaManager.getDefaultSchema(), '');
+      // Get raw schema data to include nested fields
+      const schemaData = schemaManager.getSchemaData(schemaManager.getDefaultSchema());
+      const fields = this.extractAllFields(schemaData);
       console.log('Loaded initial fields:', fields.length);
 
       // Update fields options array
-      this.fieldsOptions = fields.map((field) => ({
-        label: `${field.name} (${field.type})`,
-        value: field.name,
-      }));
+      this.fieldsOptions = fields;
 
       // Ensure UI updates with the new options
       this.requestUpdate();
@@ -122,6 +126,63 @@ export class QueryBuilderComponent extends LitElement {
       console.error('Failed to load schema fields:', error);
     }
   }
+  
+  /**
+   * Extract all fields including deeply nested ones from schema data
+   */
+  private extractAllFields(schema: any, prefix: string = ''): { label: string; value: string; type: string }[] {
+    let fields: { label: string; value: string; type: string }[] = [];
+    
+    if (!schema || typeof schema !== 'object') return fields;
+    
+    // Check if this is a schema with 'fields' property (format from schema manager)
+    if (schema.fields && typeof schema.fields === 'object') {
+      for (const [key, info] of Object.entries(schema.fields)) {
+        const fieldType = (info as any).fieldType || (info as any).type || 'string';
+        
+        fields.push({
+          label: `${key} (${fieldType})`,
+          value: key,
+          type: fieldType
+        });
+      }
+      return fields;
+    }
+    
+    // Process properties if this is an object with properties
+    if (schema.properties && typeof schema.properties === 'object') {
+      for (const [key, value] of Object.entries(schema.properties)) {
+        const fieldPath = prefix ? `${prefix}.${key}` : key;
+        const fieldType = (value as any).type || 'object';
+        
+        // Add this field
+        fields.push({
+          label: `${fieldPath} (${fieldType})`,
+          value: fieldPath,
+          type: fieldType
+        });
+        
+        // Recursively process nested objects
+        if (fieldType === 'object' && (value as any).properties) {
+          fields = fields.concat(this.extractAllFields((value as any), fieldPath));
+        }
+        
+        // Handle arrays with items
+        if (fieldType === 'array' && (value as any).items) {
+          const itemsType = (value as any).items.type || 'any';
+          
+          // For array of objects, extract their properties too
+          if (itemsType === 'object' && (value as any).items.properties) {
+            fields = fields.concat(this.extractAllFields((value as any).items, `${fieldPath}[]`));
+          }
+        }
+      }
+    }
+    
+    // Log fields count
+    console.log(`Extracted ${fields.length} fields with prefix: ${prefix || 'root'}`);
+    return fields;
+  }
 
   /**
    * Refreshes field suggestions based on current schema
@@ -131,41 +192,38 @@ export class QueryBuilderComponent extends LitElement {
     try {
       console.log('Refreshing field suggestions for path:', path || 'root');
 
-      // Get fields from schema manager
-      const fields = await schemaManager.resolveNested(schemaManager.getDefaultSchema(), path);
-
+      // Get raw schema data
+      const schemaData = schemaManager.getSchemaData(schemaManager.getDefaultSchema());
+      
       // If we're refreshing root fields, update the fieldsOptions property
       if (!path) {
-        this.fieldsOptions = fields.map((field) => ({
-          label: `${field.name} (${field.type})`,
-          value: field.name,
-        }));
+        const fields = this.extractAllFields(schemaData);
+        this.fieldsOptions = fields;
+        this.requestUpdate();
+      } else {
+        // For specific paths, navigate to that path in the schema
+        let targetSchema = schemaData;
+        const pathParts = path.split('.');
+        
+        for (const part of pathParts) {
+          if (targetSchema?.properties?.[part]) {
+            targetSchema = targetSchema.properties[part];
+          } else {
+            // Path not found
+            console.warn(`Path ${path} not found in schema`);
+            return;
+          }
+        }
+        
+        // Extract fields from this specific path
+        const fields = this.extractAllFields(targetSchema, path);
+        // Add these fields to the options without replacing everything
+        this.fieldsOptions = [...this.fieldsOptions, ...fields];
         this.requestUpdate();
       }
-
-      // Update all datalists
-      this.updateDatalistsWithFields(fields, path);
     } catch (error) {
       console.error(`Failed to refresh schema fields for path ${path}:`, error);
     }
-  }
-
-  /**
-   * Updates all datalists with the given fields
-   */
-  private updateDatalistsWithFields(fields: any[], prefix: string = ''): void {
-    // Let the normal Lit rendering cycle handle datalist population
-    // This should be safer and avoid DOM manipulation errors
-    this.fieldsOptions = fields.map((field) => {
-      const fieldPath = prefix ? `${prefix}.${field.name}` : field.name;
-      return {
-        label: `${fieldPath} (${field.type})`,
-        value: fieldPath,
-      };
-    });
-
-    console.log(`Updated field options with ${fields.length} fields, path: ${prefix || 'root'}`);
-    this.requestUpdate();
   }
 
   /**
@@ -419,10 +477,171 @@ export class QueryBuilderComponent extends LitElement {
   }
 
   /**
-   * Add a new aggregation
+   * Handle clicking on an aggregation function
    */
+  private handleAggFunctionClick(func: string): void {
+    // Clear previous selection if different function is chosen
+    if (this.newAggFunction !== func) {
+      this.newAggField = '';
+    }
+    
+    // Set new function
+    this.newAggFunction = func;
+    
+    if (func === 'count') {
+      // For count(), complete immediately
+      this.completeAggregation();
+    } else {
+      // For other functions, show fields and focus on search
+      this.showFieldsColumn = true;
+      this.aggSearchTerm = ''; // Clear search to start fresh for fields
+      this.filteredFields = []; // Reset filtered fields
+      
+      // Make sure we have fields loaded
+      if (this.fieldsOptions.length === 0) {
+        // If fields aren't loaded yet, try loading them again
+        this.initializeFields().then(() => {
+          console.log(`Fields loaded after selecting ${func}, count:`, this.fieldsOptions.length);
+          this.requestUpdate();
+        });
+      }
+      
+      this.requestUpdate();
+    }
+  }
+  
   /**
-   * Add a new aggregation
+   * Reset the aggregation state
+   */
+  private resetAggregationState(): void {
+    this.newAggFunction = 'count';
+    this.newAggField = '';
+    this.selectedAggFunction = '';
+    this.aggSearchTerm = '';
+    this.filteredAggFunctions = [];
+    this.filteredFields = [];
+    this.showFieldsColumn = false;
+    this.requestUpdate();
+  }
+  
+  /**
+   * Filter aggregation options based on search term
+   */
+  private filterAggregationOptions(e: Event): void {
+    const searchTerm = (e.target as HTMLInputElement).value.toLowerCase();
+    this.aggSearchTerm = searchTerm;
+    
+    // When the fields column is showing, filter fields
+    if (this.showFieldsColumn) {
+      if (this.fieldsOptions.length === 0) {
+        // Try to load fields if they're not available
+        console.log("Field options are empty, trying to load them");
+        this.initializeFields().then(() => {
+          this.filterFieldsBySearchTerm(searchTerm);
+          this.requestUpdate();
+        });
+      } else {
+        this.filterFieldsBySearchTerm(searchTerm);
+      }
+    }
+    
+    this.requestUpdate();
+  }
+  
+  /**
+   * Filter fields by search term
+   */
+  private filterFieldsBySearchTerm(searchTerm: string): void {
+    this.filteredFields = this.fieldsOptions.filter(field => 
+      field.value.toLowerCase().includes(searchTerm) || 
+      field.label.toLowerCase().includes(searchTerm)
+    );
+    console.log(`Filtered fields by "${searchTerm}": found ${this.filteredFields.length} matches out of ${this.fieldsOptions.length} total fields`);
+  }
+  
+  /**
+   * Handle Enter key in the aggregation search
+   */
+  private handleAggregationEnter(): void {
+    if (!this.showFieldsColumn) {
+      // If we're still selecting an aggregation function
+      if (this.filteredAggFunctions.length === 1) {
+        // If there's only one matching function, select it
+        this.handleAggFunctionClick(this.filteredAggFunctions[0]);
+      }
+    } else {
+      // If we're selecting a field
+      if (this.filteredFields.length === 1) {
+        // If there's only one matching field, select it and complete
+        this.newAggField = this.filteredFields[0].value;
+        this.completeAggregation();
+      }
+    }
+  }
+  
+  /**
+   * Get an icon for a field based on its type and name
+   */
+  private getFieldIcon(fieldType: string, fieldValue: string): string {
+    // First check by field name
+    if (fieldValue.includes('duration')) return '⏱';
+    if (fieldValue.includes('time')) return '⏱';
+    if (fieldValue.includes('status')) return 'N';
+    if (fieldValue.includes('code')) return 'N';
+    if (fieldValue.includes('error')) return 'N';
+    
+    // Then check by field type
+    if (fieldType === 'number' || fieldType === 'integer') return 'N';
+    if (fieldType === 'string') return '';
+    if (fieldType === 'boolean') return '';
+    if (fieldType === 'object') return '';
+    if (fieldType === 'array') return '';
+    
+    return '';
+  }
+  
+  /**
+   * Completes the aggregation process
+   */
+  private completeAggregation(): void {
+    // For count(), we don't need a field
+    if (this.newAggFunction === 'count') {
+      this.aggregations = [
+        ...this.aggregations,
+        {
+          function: this.newAggFunction,
+          field: '*',
+        },
+      ];
+    } else if (this.newAggFunction && this.newAggField?.trim()) {
+      // For other functions, we need both function and field
+      this.aggregations = [
+        ...this.aggregations,
+        {
+          function: this.newAggFunction,
+          field: this.newAggField,
+        },
+      ];
+    } else {
+      // If we don't have required info, return without doing anything
+      return;
+    }
+    
+    // Reset form fields
+    this.resetAggregationState();
+    
+    // Close the popover if open
+    const popover = document.getElementById('agg-popover');
+    if (popover) {
+      (popover as any).hidePopover?.();
+    }
+    
+    // Update the query in the editor
+    this.updateQuery();
+  }
+
+  /**
+   * Add a new aggregation (for backward compatibility)
    */
   public addAggregation(): void {
     // Debug logging
@@ -440,6 +659,7 @@ export class QueryBuilderComponent extends LitElement {
       // Reset form fields
       this.newAggFunction = 'count';
       this.newAggField = '';
+      this.selectedAggFunction = '';
       // Force UI update
       this.requestUpdate();
       // Close the popover if open
@@ -546,7 +766,7 @@ export class QueryBuilderComponent extends LitElement {
       console.log('Add aggregation button clicked via direct listener');
       e.preventDefault();
       e.stopPropagation();
-      this.addAggregation();
+      this.completeAggregation();
     } else if (target.closest('#add-sort-btn')) {
       console.log('Add sort button clicked via direct listener');
       e.preventDefault();
@@ -584,49 +804,64 @@ export class QueryBuilderComponent extends LitElement {
             <div
               popover
               id="agg-popover"
-              class="dropdown menu p-2 shadow bg-bgRaised rounded-box w-72 z-50"
+              class="dropdown menu p-2 shadow-md bg-bgRaised rounded-box w-[500px] z-50 border border-strokeWeak"
               style="position: absolute; position-anchor: --agg-anchor"
             >
-              <h3 class="font-medium mb-2 text-center">Add Aggregation</h3>
-              <div class="form-control mb-2">
-                <label class="label">
-                  <span class="label-text">Function:</span>
-                </label>
-                <select
-                  class="select select-bordered select-sm w-full"
-                  .value="${this.newAggFunction}"
-                  @change="${(e: Event) => (this.newAggFunction = (e.target as HTMLSelectElement).value)}"
-                >
-                  ${this.aggFunctions.map((func) => html` <option value="${func}">${func}</option> `)}
-                </select>
-              </div>
-              <div class="form-control mb-2">
-                <label class="label">
-                  <span class="label-text">Field:</span>
-                </label>
+              <!-- Visualization Type Input -->
+              <div class="mb-3">
                 <input
-                  list="agg-field-suggestions"
                   type="text"
-                  class="input input-bordered input-sm w-full"
-                  placeholder="Select or type field"
-                  .value="${this.newAggField}"
-                  @input="${(e: Event) => this.handleFieldInput(e, 'agg')}"
-                  @keydown="${(e: KeyboardEvent) => e.key === 'Enter' && this.addAggregation()}"
+                  class="input input-bordered input-md w-full px-3 py-2 focus:outline-none"
+                  placeholder="Visualization type..."
+                  .value="${this.visualizationType}"
+                  @input="${(e: Event) => this.visualizationType = (e.target as HTMLInputElement).value}"
+                  autofocus
                 />
-                <datalist id="agg-field-suggestions">
-                  ${this.fieldsOptions.map((field) => html`<option value="${field.value}">${field.label}</option>`)}
-                </datalist>
               </div>
-              <div class="flex justify-end gap-2">
-                <button
-                  type="button"
-                  class="btn btn-sm btn-primary w-full"
-                  ?disabled="${!this.newAggFunction || !this.newAggField?.trim()}"
-                  id="add-agg-btn"
-                >
-                  Add Aggregation
-                </button>
+              
+              <!-- Two-column layout -->
+              <div class="flex mb-3 border rounded">
+                <!-- Aggregations column -->
+                <div class="w-1/2 border-r">
+                  <div class="p-1 bg-bgWeaker font-medium border-b monospace">Aggregation</div>
+                  <div class="max-h-60 overflow-y-auto">
+                    ${this.aggFunctions.map((func) => html`
+                      <div 
+                        class="p-2 hover:bg-fillHover cursor-pointer monospace ${this.newAggFunction === func ? 'bg-fillHover font-medium' : ''}"
+                        @click="${() => this.handleAggFunctionClick(func)}"
+                      >
+                        ${this.newAggFunction === func ? '✓ ' : ''}${func}${func !== 'count' ? '(...)' : '(*)'}
+                      </div>
+                    `)}
+                  </div>
+                </div>
+                
+                <!-- Fields column -->
+                <div class="w-1/2">
+                  <div class="p-1 bg-bgWeaker font-medium border-b monospace">Fields</div>
+                  <div class="max-h-60 overflow-y-auto">
+                    ${this.showFieldsColumn && this.fieldsOptions.length > 0 ? 
+                      (this.filteredFields.length > 0 ? this.filteredFields : this.fieldsOptions).map((field) => html`
+                        <div 
+                          class="p-2 hover:bg-fillHover cursor-pointer monospace ${this.newAggField === field.value ? 'bg-fillHover font-medium' : ''}"
+                          @click="${() => { 
+                            this.newAggField = field.value; 
+                            this.completeAggregation();
+                          }}"
+                        >
+                          ${field.value} 
+                          <span class="float-right text-xs text-textDisabled p-1 rounded-sm bg-bgWeaker">
+                            ${this.getFieldIcon(field.type, field.value)}
+                          </span>
+                        </div>
+                      `)
+                      : html`<div class="p-2 text-center text-textDisabled">Select an aggregation first</div>`
+                    }
+                  </div>
+                </div>
               </div>
+              
+              <!-- No action buttons -->
             </div>
           </div>
         </div>
