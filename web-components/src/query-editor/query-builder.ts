@@ -103,13 +103,83 @@ export class QueryBuilderComponent extends LitElement {
     // Set up click event handler to close popovers when clicking outside
     document.addEventListener('click', (e: MouseEvent) => {
       const target = e.target as HTMLElement;
-      if (!target.closest('[popovertarget]') && !target.closest('[popover]')) {
+      if (!target.closest('[popovertarget]') && !target.closest('[popover]') && !target.closest('#sort-by-button')) {
         // Close any open popovers
         document.querySelectorAll('[popover].showing').forEach((popover: Element) => {
           (popover as HTMLElement).hidePopover?.();
         });
       }
     });
+    
+    // Set up additional behavior for nested popovers
+    setTimeout(() => {
+      const moreSettingsPopover = document.getElementById('more-settings-popover');
+      const sortByButton = document.getElementById('sort-by-button');
+      const sortByPopover = document.getElementById('sort-by-popover') as HTMLElement;
+      
+      if (moreSettingsPopover && sortByButton && sortByPopover) {
+        // When more settings popover is hidden, also hide the sort popover
+        moreSettingsPopover.addEventListener('beforetoggle', (e) => {
+          if (e.newState === 'closed') {
+            if (sortByPopover && (sortByPopover as any).matches?.(':popover-open')) {
+              (sortByPopover as any).hidePopover?.();
+            }
+          }
+        });
+        
+        // Position and show the sort popover when hovering or clicking the sort by button
+        const positionSortPopover = () => {
+          const buttonRect = sortByButton.getBoundingClientRect();
+          // Position to the right of the button
+          sortByPopover.style.left = `${buttonRect.right + 5}px`;
+          sortByPopover.style.top = `${buttonRect.top}px`;
+        };
+        
+        // Events to show/hide the sort popover when the mouse moves over and out
+        sortByButton.addEventListener('mouseover', () => {
+          positionSortPopover();
+          sortByPopover.showPopover?.();
+        });
+        
+        sortByButton.addEventListener('mouseout', (e) => {
+          // Only hide if we're not moving to the sort popover itself
+          if (!e.relatedTarget || !(e.relatedTarget as HTMLElement).closest('#sort-by-popover')) {
+            setTimeout(() => {
+              // Small delay to check if cursor moved to popover
+              if (!document.querySelector(':hover')?.closest('#sort-by-popover')) {
+                sortByPopover.hidePopover?.();
+              }
+            }, 100);
+          }
+        });
+        
+        // Event to make the subpopover keyboard-accessible
+        sortByButton.addEventListener('focusin', () => {
+          positionSortPopover();
+          sortByPopover.showPopover?.();
+        });
+        
+        // Hide both popovers when an option is selected in the sort popover
+        sortByPopover.addEventListener('click', (e) => {
+          if ((e.target as HTMLElement).closest('.hover\\:bg-fillHover')) {
+            sortByPopover.hidePopover?.();
+            (moreSettingsPopover as any).hidePopover?.();
+          }
+        });
+        
+        // Handle mouse entering/leaving the sort popover
+        sortByPopover.addEventListener('mouseleave', () => {
+          if (sortByPopover.matches?.(':popover-open')) {
+            sortByPopover.hidePopover?.();
+          }
+        });
+        
+        // Add event listener to the sort popover to prevent it from closing when clicked inside
+        sortByPopover.addEventListener('click', (e) => {
+          e.stopPropagation();
+        });
+      }
+    }, 500); // Delay to ensure elements are loaded
   }
 
   /**
@@ -908,6 +978,24 @@ export class QueryBuilderComponent extends LitElement {
       e.preventDefault();
       e.stopPropagation();
       this.addSortField();
+    } else if (target.closest('#sort-by-button')) {
+      console.log('Sort by button clicked via direct listener');
+      e.preventDefault();
+      e.stopPropagation();
+      const sortPopover = document.getElementById('sort-by-popover') as HTMLElement;
+      const sortByButton = target.closest('#sort-by-button');
+      if (sortPopover && sortByButton) {
+        // Position the popover relative to the button
+        const buttonRect = sortByButton.getBoundingClientRect();
+        sortPopover.style.left = `${buttonRect.right + 5}px`;
+        sortPopover.style.top = `${buttonRect.top}px`;
+        sortPopover.showPopover?.();
+      }
+    } else if (target.closest('#more-settings-popover')) {
+      // Don't propagate clicks within the more settings popover to avoid closing it
+      if (!target.closest('#sort-by-popover')) {
+        e.stopPropagation();
+      }
     }
   };
   
@@ -1223,11 +1311,10 @@ export class QueryBuilderComponent extends LitElement {
           >
             <!-- Main Menu Options -->
             <div id="more-main-menu">
-              <!-- Sort By Option -->
+              <!-- Sort By Option - this is now a button that shows a nested popover -->
               <div 
                 class="p-2 hover:bg-fillHover cursor-pointer monospace flex items-center justify-between"
-                popovertarget="sort-by-popover"
-                style="anchor-name: --sort-by-anchor"
+                id="sort-by-button"
               >
                 <span>Sort by...</span>
                 <span class="text-xs">▶</span>
@@ -1254,12 +1341,12 @@ export class QueryBuilderComponent extends LitElement {
             </div>
           </div>
 
-          <!-- Sort By Popover (second level) -->
+          <!-- Sort By Popover (nested inside more-settings-popover) -->
           <div
-            popover
+            popover="manual"
             id="sort-by-popover"
             class="dropdown menu p-2 shadow-md bg-bgRaised rounded-box w-[500px] z-50 border border-strokeWeak"
-            style="position: absolute; position-anchor: --sort-by-anchor; margin-left: 100%; margin-top: -20px;"
+            style="position: fixed; left: auto; top: auto;"
           >
             <!-- Direction Selection at Top -->
             <div class="mb-3 p-2 border rounded bg-bgWeaker flex items-center justify-between">
