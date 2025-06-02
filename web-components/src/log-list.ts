@@ -365,10 +365,9 @@ export class LogList extends LitElement {
           if (!isNewData) {
             this.hasMore = logsData.length > 0;
           }
-
           if (!isNewData) {
             this.nextFetchUrl = nextUrl;
-          } else {
+          } else if (isNewData && logsData.length > 0) {
             this.recentFetchUrl = recentUrl;
           }
 

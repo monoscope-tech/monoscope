@@ -10,6 +10,8 @@
   },
 });
 
+
+
 // buildCurlRequest converts a log explorer result item into a curl and copies the curl to clipboard.
 window.buildCurlRequest = function (event: any) {
   const { request_headers, request_body, method, host, raw_url } = JSON.parse(event.currentTarget?.dataset.reqjson);
@@ -160,3 +162,4 @@ function updateMarkAreas(chartId: string, warningVal: string, incidentVal: strin
   });
   myChart.setOption({ series: options.series }, false);
 }
+window.updateMarkAreas = updateMarkAreas;
