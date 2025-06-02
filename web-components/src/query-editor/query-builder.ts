@@ -362,9 +362,49 @@ export class QueryBuilderComponent extends LitElement {
 
     const query = queryEditor.editor.getValue();
 
-    // Extract GROUP BY fields - preserve bin functions intact
+    // Extract GROUP BY fields from summarize statement
+    // Look for both KQL style summarize and older group by format
+    const summarizeMatch = query.match(/\|?\s*summarize\s+([^|]+?)(?:by\s+([^|]+?))?(?:\||$)/i);
     const groupByMatch = query.match(/\bgroup\s+by\s+([^|]+?)(?:\||$)/i);
-    if (groupByMatch) {
+    
+    // First try to extract from summarize statement (KQL style)
+    if (summarizeMatch && summarizeMatch[2]) {
+      // We have a "by" clause in the summarize statement
+      const groupByText = summarizeMatch[2].trim();
+      const fields: string[] = [];
+      let currentField = '';
+      let parenCount = 0;
+      
+      // Process character by character to handle nested parentheses correctly
+      for (let i = 0; i < groupByText.length; i++) {
+        const char = groupByText[i];
+        
+        if (char === '(') {
+          parenCount++;
+          currentField += char;
+        } else if (char === ')') {
+          parenCount--;
+          currentField += char;
+        } else if (char === ',' && parenCount === 0) {
+          // Only split on commas at the top level
+          if (currentField.trim()) {
+            fields.push(currentField.trim());
+          }
+          currentField = '';
+        } else {
+          currentField += char;
+        }
+      }
+      
+      // Add the last field if there is one
+      if (currentField.trim()) {
+        fields.push(currentField.trim());
+      }
+      
+      this.groupByFields = fields.filter(Boolean);
+    } 
+    // If not found in summarize statement, check for standalone group by (backward compatibility)
+    else if (groupByMatch) {
       // Process group by fields with special handling for bin functions
       const groupByText = groupByMatch[1].trim();
       const fields: string[] = [];
@@ -403,9 +443,13 @@ export class QueryBuilderComponent extends LitElement {
     }
 
     // Extract SUMMARIZE/AGG functions
-    const summarizeMatch = query.match(/\|?\s*summarize\s+([^|]+?)(?:\||$)/i);
-    if (summarizeMatch) {
-      const summarizeParts = summarizeMatch[1]
+    // We've already captured the summarize match above, no need to match again
+    if (summarizeMatch && summarizeMatch[1]) {
+      // For the aggregation part, we need to handle the case where there's a "by" clause
+      // Extract just the aggregation part by splitting on " by " if it exists
+      const aggregationPart = summarizeMatch[1].split(/\s+by\s+/i)[0].trim();
+      
+      const summarizeParts = aggregationPart
         .split(',')
         .map((part) => part.trim())
         .filter(Boolean);
@@ -426,15 +470,16 @@ export class QueryBuilderComponent extends LitElement {
       this.aggregations = [];
     }
 
-    // Extract ORDER BY
-    const orderByMatch = query.match(/\|?\s*order\s+by\s+([^|]+?)(?:\||$)/i);
-    if (orderByMatch) {
-      const orderParts = orderByMatch[1]
+    // Extract SORT BY / ORDER BY
+    // Support both KQL "sort by" and SQL-style "order by"
+    const sortByMatch = query.match(/\|?\s*(sort|order)\s+by\s+([^|]+?)(?:\||$)/i);
+    if (sortByMatch) {
+      const sortParts = sortByMatch[2]
         .split(',')
         .map((part) => part.trim())
         .filter(Boolean);
 
-      this.sortFields = orderParts.map((part) => {
+      this.sortFields = sortParts.map((part) => {
         const [field, direction] = part.split(/\s+/);
         return {
           field: field.trim(),
@@ -445,9 +490,10 @@ export class QueryBuilderComponent extends LitElement {
       this.sortFields = [];
     }
 
-    // Extract LIMIT
-    const limitMatch = query.match(/\|?\s*limit\s+(\d+)/i);
-    this.limitValue = limitMatch ? parseInt(limitMatch[1], 10) : 100;
+    // Extract LIMIT/TAKE
+    // Support both KQL "take" and SQL-style "limit"
+    const limitMatch = query.match(/\|?\s*(take|limit)\s+(\d+)/i);
+    this.limitValue = limitMatch ? parseInt(limitMatch[2], 10) : 100;
   }
 
   /**
@@ -469,64 +515,74 @@ export class QueryBuilderComponent extends LitElement {
 
     let query = queryEditor.editor.getValue();
 
-    // Replace or add GROUP BY clause
-    if (this.groupByFields.length > 0) {
-      const groupByStr = `group by ${this.groupByFields.join(', ')}`;
-      if (query.match(/\bgroup\s+by\s+[^|]+/i)) {
-        query = query.replace(/\bgroup\s+by\s+[^|]+?(?=\||$)/i, groupByStr);
-      } else {
-        query = query.trim();
-        query += query && !query.endsWith('|') ? ' | ' : ' ';
-        query += groupByStr;
-      }
-    } else {
-      // Remove GROUP BY clause if empty
-      query = query.replace(/\|?\s*group\s+by\s+[^|]+?(?=\||$)/i, '');
-    }
-
-    // Replace or add SUMMARIZE clause
+    // Make summarize clause with GROUP BY
     if (this.aggregations.length > 0) {
-      const aggStr = `summarize ${this.aggregations.map((agg) => `${agg.function}(${agg.field})`).join(', ')}`;
+      // The summarize clause will include both aggregations AND group by
+      const aggPart = this.aggregations.map((agg) => `${agg.function}(${agg.field})`).join(', ');
+      const groupByPart = this.groupByFields.length > 0 ? ` by ${this.groupByFields.join(', ')}` : '';
+      
+      const summarizeStr = `summarize ${aggPart}${groupByPart}`;
+      
+      // Check if a summarize clause already exists in the query
       if (query.match(/\|?\s*summarize\s+[^|]+/i)) {
-        query = query.replace(/\|?\s*summarize\s+[^|]+?(?=\||$)/i, ` | ${aggStr}`);
+        query = query.replace(/\|?\s*summarize\s+[^|]+?(?=\||$)/i, ` | ${summarizeStr}`);
       } else {
         query = query.trim();
         query += query && !query.endsWith('|') ? ' | ' : ' ';
-        query += aggStr;
+        query += summarizeStr;
+      }
+    } else if (this.groupByFields.length > 0) {
+      // If we have group by fields but no aggregations, add count(*) aggregation
+      const groupByPart = this.groupByFields.join(', ');
+      const summarizeStr = `summarize count(*) by ${groupByPart}`;
+      
+      // Check if a summarize clause already exists in the query
+      if (query.match(/\|?\s*summarize\s+[^|]+/i)) {
+        query = query.replace(/\|?\s*summarize\s+[^|]+?(?=\||$)/i, ` | ${summarizeStr}`);
+      } else {
+        query = query.trim();
+        query += query && !query.endsWith('|') ? ' | ' : ' ';
+        query += summarizeStr;
       }
     } else {
-      // Remove SUMMARIZE clause if empty
+      // Remove any summarize clause if no aggregations or group by fields
       query = query.replace(/\|?\s*summarize\s+[^|]+?(?=\||$)/i, '');
     }
 
-    // Replace or add ORDER BY clause
+    // Summarize clause already handled above with group by integration
+
+    // Replace or add SORT BY clause (KQL uses "sort by" instead of "order by")
     if (this.sortFields.length > 0) {
-      const orderStr = `order by ${this.sortFields.map((sort) => `${sort.field} ${sort.direction}`).join(', ')}`;
-      if (query.match(/\|?\s*order\s+by\s+[^|]+/i)) {
-        query = query.replace(/\|?\s*order\s+by\s+[^|]+?(?=\||$)/i, ` | ${orderStr}`);
+      const sortStr = `sort by ${this.sortFields.map((sort) => `${sort.field} ${sort.direction}`).join(', ')}`;
+      
+      // Match both "sort by" and "order by" for backward compatibility
+      if (query.match(/\|?\s*(sort|order)\s+by\s+[^|]+/i)) {
+        query = query.replace(/\|?\s*(sort|order)\s+by\s+[^|]+?(?=\||$)/i, ` | ${sortStr}`);
       } else {
         query = query.trim();
         query += query && !query.endsWith('|') ? ' | ' : ' ';
-        query += orderStr;
+        query += sortStr;
       }
     } else {
-      // Remove ORDER BY clause if empty
-      query = query.replace(/\|?\s*order\s+by\s+[^|]+?(?=\||$)/i, '');
+      // Remove SORT BY or ORDER BY clause if empty
+      query = query.replace(/\|?\s*(sort|order)\s+by\s+[^|]+?(?=\||$)/i, '');
     }
 
-    // Replace or add LIMIT clause
+    // Replace or add LIMIT clause (KQL uses "take" instead of "limit")
     if (this.limitValue) {
-      const limitStr = `limit ${this.limitValue}`;
-      if (query.match(/\|?\s*limit\s+\d+/i)) {
-        query = query.replace(/\|?\s*limit\s+\d+(?=\||$)/i, ` | ${limitStr}`);
+      const takeStr = `take ${this.limitValue}`;
+      
+      // Match both "take" and "limit" for backward compatibility
+      if (query.match(/\|?\s*(take|limit)\s+\d+/i)) {
+        query = query.replace(/\|?\s*(take|limit)\s+\d+(?=\||$)/i, ` | ${takeStr}`);
       } else {
         query = query.trim();
         query += query && !query.endsWith('|') ? ' | ' : ' ';
-        query += limitStr;
+        query += takeStr;
       }
     } else {
-      // Remove LIMIT clause if empty
-      query = query.replace(/\|?\s*limit\s+\d+(?=\||$)/i, '');
+      // Remove TAKE or LIMIT clause if empty
+      query = query.replace(/\|?\s*(take|limit)\s+\d+(?=\||$)/i, '');
     }
 
     // Clean up extra pipes and spaces
@@ -1253,7 +1309,7 @@ export class QueryBuilderComponent extends LitElement {
           <div class="flex items-center ml-4 gap-1">
             <div class="flex flex-wrap gap-1">
               <div class="text-xs text-textDisabled monospace bg-bgWeaker">
-                [<span class="text-textDisabled">limit:</span> <input
+                [<span class="text-textDisabled">take:</span> <input
                   type="number"
                   class="w-16 bg-transparent border-none focus:outline-none text-textStrong"
                   min="1"
@@ -1323,7 +1379,7 @@ export class QueryBuilderComponent extends LitElement {
                     }
                   }}"
                 >
-                  Limit results...
+                  Take/Limit results...
                 </div>
               ` : ''}
               
