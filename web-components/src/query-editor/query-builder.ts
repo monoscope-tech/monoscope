@@ -16,7 +16,7 @@ export class QueryBuilderComponent extends LitElement {
   @state() private groupByFields: string[] = [];
   @state() private aggregations: { function: string; field: string }[] = [];
   @state() private sortFields: { field: string; direction: 'asc' | 'desc' }[] = [];
-  @state() private limitValue: number = 100;
+  @state() private limitValue: number | null = null;
   @state() private showMoreSettings: boolean = false;
   @state() private fieldsOptions: { label: string; value: string; type: string }[] = [];
   @state() private newGroupByField: string = '';
@@ -490,10 +490,9 @@ export class QueryBuilderComponent extends LitElement {
       this.sortFields = [];
     }
 
-    // Extract LIMIT/TAKE
-    // Support both KQL "take" and SQL-style "limit"
-    const limitMatch = query.match(/\|?\s*(take|limit)\s+(\d+)/i);
-    this.limitValue = limitMatch ? parseInt(limitMatch[2], 10) : 100;
+    // Extract TAKE - Only support KQL "take" syntax
+    const takeMatch = query.match(/\|?\s*take\s+(\d+)/i);
+    this.limitValue = takeMatch ? parseInt(takeMatch[1], 10) : null;
   }
 
   /**
@@ -568,21 +567,22 @@ export class QueryBuilderComponent extends LitElement {
       query = query.replace(/\|?\s*(sort|order)\s+by\s+[^|]+?(?=\||$)/i, '');
     }
 
-    // Replace or add LIMIT clause (KQL uses "take" instead of "limit")
-    if (this.limitValue) {
+    // Replace or add TAKE clause (KQL syntax)
+    // Only add if limitValue is explicitly set (not null)
+    if (this.limitValue !== null) {
       const takeStr = `take ${this.limitValue}`;
       
-      // Match both "take" and "limit" for backward compatibility
-      if (query.match(/\|?\s*(take|limit)\s+\d+/i)) {
-        query = query.replace(/\|?\s*(take|limit)\s+\d+(?=\||$)/i, ` | ${takeStr}`);
+      // Check if there's an existing take clause
+      if (query.match(/\|?\s*take\s+\d+/i)) {
+        query = query.replace(/\|?\s*take\s+\d+(?=\||$)/i, ` | ${takeStr}`);
       } else {
         query = query.trim();
         query += query && !query.endsWith('|') ? ' | ' : ' ';
         query += takeStr;
       }
     } else {
-      // Remove TAKE or LIMIT clause if empty
-      query = query.replace(/\|?\s*(take|limit)\s+\d+(?=\||$)/i, '');
+      // Remove TAKE clause if not set
+      query = query.replace(/\|?\s*take\s+\d+(?=\||$)/i, '');
     }
 
     // Clean up extra pipes and spaces
@@ -1304,24 +1304,25 @@ export class QueryBuilderComponent extends LitElement {
           </div>
         ` : ''}
 
-        <!-- Limit Section (if limit is set and not default) -->
-        ${this.limitValue !== 100 ? html`
+        <!-- Limit Section (if take is set) -->
+        ${this.limitValue !== null ? html`
           <div class="flex items-center ml-4 gap-1">
             <div class="flex flex-wrap gap-1">
               <div class="text-xs text-textDisabled monospace bg-bgWeaker">
-                [<span class="text-textDisabled">take:</span> <input
+                [<span class="text-textDisabled">limit:</span> <input
                   type="number"
                   class="w-16 bg-transparent border-none focus:outline-none text-textStrong"
                   min="1"
                   max="10000"
                   .value="${this.limitValue.toString()}"
                   @change="${(e: Event) => {
-                    this.limitValue = parseInt((e.target as HTMLInputElement).value) || 100;
+                    const value = parseInt((e.target as HTMLInputElement).value);
+                    this.limitValue = isNaN(value) ? null : value;
                     this.updateLimit();
                   }}"
                 />
                 <span class="cursor-pointer" data-tippy-content="Remove limit" @click="${() => {
-                  this.limitValue = 100; // Reset to default
+                  this.limitValue = null; // Remove limit
                   this.updateLimit();
                 }}">✕</span>]
               </div>
@@ -1330,7 +1331,7 @@ export class QueryBuilderComponent extends LitElement {
         ` : ''}
 
         <!-- More Options Button - Hide when all options are already set -->
-        ${(this.sortFields.length === 0 || this.limitValue === 100) ? html`
+        ${(this.sortFields.length === 0 || this.limitValue === null) ? html`
         <div class="ml-auto">
           <button
             type="button"
@@ -1364,12 +1365,12 @@ export class QueryBuilderComponent extends LitElement {
                 </div>
               ` : ''}
 
-              <!-- Limit Option - only show if limit is default -->
-              ${this.limitValue === 100 ? html`
+              <!-- Take Option - only show if take is not set -->
+              ${this.limitValue === null ? html`
                 <div 
                   class="p-2 hover:bg-fillHover cursor-pointer monospace"
                   @click="${() => {
-                    // Add limit directly with a non-default value
+                    // Add take with a reasonable default value
                     this.limitValue = 1000;
                     this.updateLimit();
                     // Close popover
@@ -1379,12 +1380,12 @@ export class QueryBuilderComponent extends LitElement {
                     }
                   }}"
                 >
-                  Take/Limit results...
+                  Limit results...
                 </div>
               ` : ''}
               
               <!-- Show a message if all options are set -->
-              ${this.sortFields.length > 0 && this.limitValue !== 100 ? html`
+              ${this.sortFields.length > 0 && this.limitValue !== null ? html`
                 <div class="p-2 text-center text-textDisabled monospace">
                   All options are set
                 </div>
