@@ -187,10 +187,11 @@ pageTabs url ov = do
 collectionDashboard :: Projects.ProjectId -> Testing.CollectionId -> ATAuthCtx (RespHeaders (PageCtx (Html ())))
 collectionDashboard pid cid = do
   (sess, project) <- Sessions.sessionAndProject pid
-  queryAST <- case parseQueryToAST [PyF.fmt|"sdk_type == \"TestkitOutgoing\" and request_headers.X-Testkit-Collection-ID == \"{cid.toText}\""]|] of
+  let queryTextRaw = [PyF.fmt|"sdk_type == \"TestkitOutgoing\" and request_headers.X-Testkit-Collection-ID == \"{cid.toText}\""]|]
+  queryAST <- case parseQueryToAST queryTextRaw of
     Left err -> addErrorToast "Error Parsing Query " (Just err) >> pure []
     Right ast -> pure ast
-  tableAsVecE <- RequestDumps.selectLogTable pid queryAST Nothing (Nothing, Nothing) [""] Nothing Nothing
+  tableAsVecE <- RequestDumps.selectLogTable pid queryAST queryTextRaw Nothing (Nothing, Nothing) [""] Nothing Nothing
   collectionM <- dbtToEff $ Testing.getCollectionById cid
   let tableAsVecM = hush tableAsVecE
   let url = "/p/" <> pid.toText <> "/monitors/collection?col_id=" <> cid.toText

@@ -1,4 +1,20 @@
-module Pkg.Parser.Stats (pTimeChartSection, pStatsSection, AggFunction (..), Section (..), Rollup (..), ByClause (..), Sources (..), parseQuery, pSource) where
+module Pkg.Parser.Stats (
+  pTimeChartSection, 
+  pStatsSection, 
+  pSummarizeSection,
+  pSortSection,
+  pTakeSection,
+  AggFunction (..), 
+  Section (..), 
+  Rollup (..), 
+  ByClause (..),
+  SummarizeByClause(..),
+  BinFunction(..),
+  SortField(..),
+  Sources (..), 
+  parseQuery, 
+  pSource
+) where
 
 import Data.Aeson qualified as AE
 import Data.Text qualified as T
@@ -7,7 +23,7 @@ import Pkg.Parser.Core
 import Pkg.Parser.Expr (Expr, Subject (..), pExpr, pSubject)
 import Relude hiding (Sum, some)
 import Text.Megaparsec
-import Text.Megaparsec.Char (alphaNumChar, char, space, space1, string)
+import Text.Megaparsec.Char (alphaNumChar, char, digitChar, space, space1, string)
 
 
 -- Modify Aggregation Functions to include optional aliases
@@ -39,6 +55,20 @@ newtype ByClause = ByClause [Subject] -- List of fields to group by
 
 
 newtype Rollup = Rollup Text
+  deriving stock (Eq, Generic, Show)
+  deriving anyclass (AE.FromJSON, AE.ToJSON)
+
+
+-- Added to support bin() and bin_auto() functions in by clause
+data BinFunction 
+  = Bin Subject Text
+  | BinAuto Subject -- Will use fixed interval or legacy rollup calculation
+  deriving stock (Eq, Generic, Show)
+  deriving anyclass (AE.FromJSON, AE.ToJSON)
+
+
+-- Support for summarize by with bin() function
+data SummarizeByClause = SummarizeByClause [Either Subject BinFunction]
   deriving stock (Eq, Generic, Show)
   deriving anyclass (AE.FromJSON, AE.ToJSON)
 
@@ -187,6 +217,11 @@ instance ToQueryText Section where
   toQText (Search expr) = toQText expr
   toQText (StatsCommand funcs byClauseM) = "stats " <> T.intercalate "," (map toQText funcs) <> maybeToMonoid (toQText <$> byClauseM)
   toQText (TimeChartCommand aggF byClauseM rollupM) = "timechart " <> toQText aggF <> maybeToMonoid (toQText <$> byClauseM) <> maybeToMonoid (toQText <$> rollupM)
+  toQText (SummarizeCommand funcs byClauseM) = 
+    "summarize " <> T.intercalate "," (map toQText funcs) <> 
+    maybeToMonoid (toQText <$> byClauseM)
+  toQText (SortCommand fields) = "sort by " <> T.intercalate ", " (map toQText fields)
+  toQText (TakeCommand limit) = "take " <> toText (show limit)
 
 
 -- TimeChartSection  (Count Nothing Nothing) (Just (ByClause [FieldName "field1"])) (Rollup "1w")
@@ -236,11 +271,19 @@ instance ToQueryText Rollup where
 -- request_body.v1.v2 == "abc" AND (request_body.v3.v4 == 123 OR request_body.v5[].v6==ANY[1,2,3] OR request_body[1].v7 OR NOT request_body[-1].v8 )
 -- request_body[1].v7 | {.v7, .v8} |
 
+-- Sort field can include optional direction
+data SortField = SortField Subject (Maybe Text) -- field and optional direction (asc/desc)
+  deriving stock (Eq, Generic, Show)
+  deriving anyclass (AE.FromJSON, AE.ToJSON)
+
 data Section
   = Search Expr
   | -- Define the AST for the 'stats' command
     StatsCommand [AggFunction] (Maybe ByClause)
   | TimeChartCommand [AggFunction] (Maybe ByClause) (Maybe Rollup)
+  | SummarizeCommand [AggFunction] (Maybe SummarizeByClause)
+  | SortCommand [SortField] -- sort by multiple fields
+  | TakeCommand Int -- limit/take number of results
   | Source Sources
   deriving stock (Eq, Generic, Show)
   deriving anyclass (AE.FromJSON, AE.ToJSON)
@@ -266,12 +309,172 @@ data Section
 -- >>> parse pSection "" " traces | method==\"GET\" "
 -- Right (Source STraces)
 --
+-- | Parse a bin function call like 'bin(timestamp, 60)' or 'bin_auto(timestamp)'
+--
+-- >>> parse pBinFunction "" "bin(timestamp, 60)"
+-- Right (Bin (Subject "timestamp" "timestamp" []) "60")
+--
+-- >>> parse pBinFunction "" "bin_auto(timestamp)"
+-- Right (BinAuto (Subject "timestamp" "timestamp" []))
+pBinFunction :: Parser BinFunction
+pBinFunction = try binParser <|> binAutoParser
+  where
+    binParser = do
+      _ <- string "bin("
+      subj <- pSubject
+      _ <- string ","
+      space
+      interval <- toText <$> some (alphaNumChar <|> char '.')
+      _ <- string ")"
+      return $ Bin subj interval
+    
+    binAutoParser = do
+      _ <- string "bin_auto("
+      subj <- pSubject
+      _ <- string ")"
+      return $ BinAuto subj
+
+
+instance ToQueryText BinFunction where
+  toQText (Bin subj interval) = "bin(" <> toQText subj <> ", " <> interval <> ")"
+  toQText (BinAuto subj) = "bin_auto(" <> toQText subj <> ")"
+
+
+instance Display BinFunction where
+  displayPrec prec (Bin subj interval) = displayBuilder $ "time_bucket('" <> interval <> " seconds', " <> display subj <> ")"
+  -- Use fixed 5min interval for now, can be enhanced later to use legacy rollup calculation
+  displayPrec prec (BinAuto subj) = displayBuilder $ "time_bucket('5 minutes', " <> display subj <> ")"
+
+
+-- | Parse a summarize by clause which can contain fields and bin functions
+--
+-- >>> parse pSummarizeByClause "" "by attributes.client, bin(timestamp, 60)"
+-- Right (SummarizeByClause [Left (Subject "attributes.client" "attributes.client" []), Right (Bin (Subject "timestamp" "timestamp" []) "60")])
+--
+-- >>> parse pSummarizeByClause "" "by Computer, bin_auto(timestamp)"
+-- Right (SummarizeByClause [Left (Subject "Computer" "Computer" []), Right (BinAuto (Subject "timestamp" "timestamp" []))])
+--
+-- >>> parse pSummarizeByClause "" "by bin_auto(timestamp)"
+-- Right (SummarizeByClause [Right (BinAuto (Subject "timestamp" "timestamp" []))])
+pSummarizeByClause :: Parser SummarizeByClause
+pSummarizeByClause = do
+  _ <- string "by"
+  space
+  fields <- sepBy (try (Right <$> pBinFunction) <|> (Left <$> pSubject)) (string "," <* space)
+  return $ SummarizeByClause fields
+
+
+instance ToQueryText SummarizeByClause where
+  toQText (SummarizeByClause fields) = "by " <> T.intercalate ", " (map (either toQText toQText) fields)
+
+
+-- | Parse a sort field that can include an optional direction
+--
+-- >>> parse pSortField "" "parent_id asc"
+-- Right (SortField (Subject "parent_id" "parent_id" []) (Just "asc"))
+--
+-- >>> parse pSortField "" "timestamp"
+-- Right (SortField (Subject "timestamp" "timestamp" []) Nothing)
+pSortField :: Parser SortField
+pSortField = do
+  field <- pSubject
+  dirM <- optional $ try (space *> (string "asc" <|> string "desc"))
+  return $ SortField field dirM
+
+
+instance ToQueryText SortField where
+  toQText (SortField field Nothing) = toQText field
+  toQText (SortField field (Just dir)) = toQText field <> " " <> dir
+
+
+-- | Parser for 'sort by' command (also supports 'order by' synonym)
+--
+-- >>> parse pSortSection "" "sort by parent_id asc, timestamp desc"
+-- Right (SortCommand [SortField (Subject "parent_id" "parent_id" []) (Just "asc"), SortField (Subject "timestamp" "timestamp" []) (Just "desc")])
+--
+-- >>> parse pSortSection "" "order by parent_id asc"
+-- Right (SortCommand [SortField (Subject "parent_id" "parent_id" []) (Just "asc")])
+pSortSection :: Parser Section
+pSortSection = do
+  _ <- (string "sort by" <|> string "order by")
+  space
+  fields <- sepBy pSortField (string "," <* space)
+  return $ SortCommand fields
+
+
+-- | Parser for 'take' command (also supports 'limit' synonym)
+--
+-- >>> parse pTakeSection "" "take 1000"
+-- Right (TakeCommand 1000)
+--
+-- >>> parse pTakeSection "" "limit 500"
+-- Right (TakeCommand 500)
+pTakeSection :: Parser Section
+pTakeSection = do
+  _ <- (string "take" <|> string "limit")
+  space
+  limitStr <- some digitChar
+  let limit = readMaybe (toString limitStr) :: Maybe Int
+  return $ TakeCommand (fromMaybe 1000 limit) -- Default to 1000 if parsing fails
+
+
+-- | Parse a named aggregation like 'TotalCount = count()'
+--
+-- >>> parse namedAggregation "" "TotalCount = count()"
+-- Right (Count (Subject "*" "*" []) (Just "TotalCount"))
+namedAggregation :: Parser AggFunction
+namedAggregation = do
+  name <- toText <$> some (alphaNumChar <|> oneOf "_")
+  space
+  _ <- string "="
+  space
+  func <- aggFunctionParser
+  case func of
+    Count sub _ -> return $ Count sub (Just name)
+    Sum sub _ -> return $ Sum sub (Just name)
+    Avg sub _ -> return $ Avg sub (Just name)
+    Min sub _ -> return $ Min sub (Just name)
+    Max sub _ -> return $ Max sub (Just name)
+    P50 sub _ -> return $ P50 sub (Just name)
+    P75 sub _ -> return $ P75 sub (Just name)
+    P90 sub _ -> return $ P90 sub (Just name)
+    P95 sub _ -> return $ P95 sub (Just name)
+    P99 sub _ -> return $ P99 sub (Just name)
+    P100 sub _ -> return $ P100 sub (Just name)
+    Median sub _ -> return $ Median sub (Just name)
+    Stdev sub _ -> return $ Stdev sub (Just name)
+    Range sub _ -> return $ Range sub (Just name)
+    Plain sub _ -> return $ Plain sub (Just name)
+
+
+-- | Parse the summarize command
+-- 
+-- >>> parse pSummarizeSection "" "summarize sum(attributes.client) by attributes.client, bin(timestamp, 60)"
+-- Right (SummarizeCommand [Sum (Subject "attributes.client" "attributes.client" []) Nothing] (Just (SummarizeByClause [Left (Subject "attributes.client" "attributes.client" []), Right (Bin (Subject "timestamp" "timestamp" []) "60")])))
+--
+-- >>> parse pSummarizeSection "" "summarize TotalCount = count() by Computer"
+-- Right (SummarizeCommand [Count (Subject "*" "*" []) (Just "TotalCount")] (Just (SummarizeByClause [Left (Subject "Computer" "Computer" [])])))
+--
+-- >>> parse pSummarizeSection "" "summarize count(*) by bin_auto(timestamp)"
+-- Right (SummarizeCommand [Count (Subject "*" "*" []) Nothing] (Just (SummarizeByClause [Right (BinAuto (Subject "timestamp" "timestamp" []))])))
+pSummarizeSection :: Parser Section
+pSummarizeSection = do
+  _ <- string "summarize"
+  space
+  funcs <- sepBy (try namedAggregation <|> aggFunctionParser) (char ',' <* space)
+  byClause <- optional $ try (space *> pSummarizeByClause)
+  return $ SummarizeCommand funcs byClause
+
+
 pSection :: Parser Section
 pSection = do
   _ <- space
   choice @[]
     [ pStatsSection
     , pTimeChartSection
+    , pSummarizeSection
+    , pSortSection
+    , pTakeSection
     , Search <$> pExpr
     , Source <$> pSource
     ]
@@ -309,8 +512,14 @@ instance Display Sources where
 --- >>> parse parseQuery "" "method// = bla "
 -- Right []
 --
+-- >>> parse parseQuery "" "| summarize count(*) by bin_auto(timestamp)"
+-- Right [SummarizeCommand [Count (Subject "*" "*" []) Nothing] (Just (SummarizeByClause [Right (BinAuto (Subject "timestamp" "timestamp" []))]))]
+--
 parseQuery :: Parser [Section]
-parseQuery = sepBy pSection (space *> char '|' <* space)
+parseQuery = do
+  -- Optionally parse a leading pipe character and ignore it
+  _ <- optional (space *> char '|' <* space)
+  sepBy pSection (space *> char '|' <* space)
 
 
 instance ToQueryText [Section] where

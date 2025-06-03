@@ -32,6 +32,8 @@ data QueryComponents = QueryComponents
   , finalAlertQuery :: Maybe Text
   , rollup :: Maybe Text
   , finalTimechartQuery :: Maybe Text
+  , sortFields :: Maybe [SortField] -- Fields to sort by
+  , takeLimit :: Maybe Int -- Limit number of results
   }
   deriving stock (Generic, Show)
   deriving anyclass (Default)
@@ -47,6 +49,25 @@ applySectionToComponent qc (Source source) = qc{fromTable = Just $ display sourc
 applySectionToComponent qc (StatsCommand aggs Nothing) = qc{select = qc.select <> map display aggs}
 applySectionToComponent qc (StatsCommand aggs byClauseM) = applyByClauseToQC byClauseM $ qc{select = qc.select <> map display aggs}
 applySectionToComponent qc (TimeChartCommand agg byClauseM rollupM) = applyRollupToQC rollupM $ applyByClauseToQC byClauseM $ qc{select = qc.select <> (map display agg)}
+applySectionToComponent qc (SummarizeCommand aggs byClauseM) = applySummarizeByClauseToQC byClauseM $ qc{select = qc.select <> map display aggs}
+applySectionToComponent qc (SortCommand sortFields) = qc{sortFields = Just sortFields}
+applySectionToComponent qc (TakeCommand limit) = qc{takeLimit = Just limit}
+
+
+-- | Apply summarize by clause to query components
+applySummarizeByClauseToQC :: Maybe SummarizeByClause -> QueryComponents -> QueryComponents
+applySummarizeByClauseToQC Nothing qc = qc
+applySummarizeByClauseToQC (Just (SummarizeByClause fields)) qc = 
+  qc{groupByClause = qc.groupByClause <> concatMap convertField fields}
+  where
+    convertField (Left subj) = ["COALESCE(" <> display subj <> "::text, '')::text"]
+    convertField (Right binFunc) = [display binFunc]
+
+
+-- | Display a sort field for SQL generation
+displaySortField :: SortField -> Text
+displaySortField (SortField field Nothing) = display field
+displaySortField (SortField field (Just dir)) = display field <> " " <> dir
 
 
 applyByClauseToQC :: Maybe ByClause -> QueryComponents -> QueryComponents
@@ -115,6 +136,17 @@ sqlFromQueryComponents sqlCfg qc =
 
       (fromT, toT) = bimap (fromMaybe sqlCfg.currentTime) (fromMaybe sqlCfg.currentTime) sqlCfg.dateRange
       timeDiffSecs = abs $ nominalDiffTimeToSeconds $ diffUTCTime fromT toT
+      
+      -- Handle sort order
+      sortOrder = case qc.sortFields of
+        Just fields -> "ORDER BY " <> T.intercalate ", " (map displaySortField fields)
+        Nothing -> "ORDER BY " <> timestampCol <> " desc"
+      
+      -- Handle limit
+      limitClause = case qc.takeLimit of
+        Just limit -> "limit " <> toText (show limit)
+        Nothing -> "limit 150"
+      
       finalSqlQuery = case sqlCfg.targetSpansM of
         Just "service-entry-spans" ->
           [fmt|WITH ranked_spans AS (SELECT *, resource->'service'->>'name' AS service_name,
@@ -125,12 +157,12 @@ sqlFromQueryComponents sqlCfg qc =
                 {groupByClause}
                 )
                SELECT json_build_array({selectClause}) FROM ranked_spans
-                  WHERE rn = 1 ORDER BY {timestampCol} desc limit 150 |]
+                  WHERE rn = 1 {sortOrder} {limitClause} |]
         _ ->
           [fmt|SELECT json_build_array({selectClause}) FROM {fromTable}
              WHERE project_id='{sqlCfg.pid.toText}'  and ( {timestampCol} > NOW() - interval '14 days'
              {cursorT} {dateRangeStr} {whereClause} )
-             {groupByClause} ORDER BY {timestampCol} desc limit 150 |]
+             {groupByClause} {sortOrder} {limitClause} |]
       countQuery =
         [fmt|SELECT count(*) FROM {fromTable}
           WHERE project_id='{sqlCfg.pid.toText}' and ( {timestampCol} > NOW() - interval '14 days'

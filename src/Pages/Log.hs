@@ -377,19 +377,6 @@ apiLogH pid queryM' cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM
   queryAST <- parseQuery $ maybeToMonoid queryM'
   let queryText = toQText queryAST
 
-  -- Debug logging for query parsing in apiLogH
-  Log.logTrace
-    "apiLogH Query Processing"
-    ( AE.object
-        [ "original_query_input" AE..= fromMaybe "" queryM'
-        , "parsed_query_ast" AE..= show queryAST
-        , "reconstructed_query_text" AE..= queryText
-        , "project_id" AE..= show pid
-        , "source" AE..= source
-        , "target_spans" AE..= fromMaybe "" targetSpansM
-        ]
-    )
-
   unless (isJust queryLibItemTitle) $ Projects.queryLibInsert Projects.QLTHistory pid sess.persistentSession.userId queryText queryAST Nothing
 
   when (layoutM == Just "SaveQuery") do
@@ -408,7 +395,7 @@ apiLogH pid queryM' cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM
 
   now <- Time.currentTime
   let (fromD, toD, currentRange) = Components.parseTimeRange now (Components.TimePicker sinceM fromM toM)
-  tableAsVecE <- RequestDumps.selectLogTable pid queryAST cursorM' (fromD, toD) summaryCols (parseMaybe pSource =<< sourceM) targetSpansM
+  tableAsVecE <- RequestDumps.selectLogTable pid queryAST queryText cursorM' (fromD, toD) summaryCols (parseMaybe pSource =<< sourceM) targetSpansM
 
   -- FIXME: we're silently ignoring parse errors and the likes.
   let tableAsVecM = hush tableAsVecE

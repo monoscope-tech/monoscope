@@ -457,9 +457,12 @@ test-suite doctests
     , rust-interop
   default-language: GHC2021
 
-test-suite tests
+test-suite integration-tests
   type: exitcode-stdio-1.0
-  main-is: Main.hs
+  main-is: MainIntegration.hs
+  other-modules:
+      Main
+      MainUnit
   hs-source-dirs:
       test/hspec
   default-extensions:
@@ -502,4 +505,101 @@ test-suite tests
     , relude >=1.2.0.0
     , rust-interop
     , tmp-postgres
+  default-language: GHC2021
+
+test-suite tests
+  type: exitcode-stdio-1.0
+  main-is: Main.hs
+  other-modules:
+      MainUnit
+  hs-source-dirs:
+      test/hspec
+  default-extensions:
+      BlockArguments
+      DataKinds
+      DerivingVia
+      DeriveAnyClass
+      DerivingStrategies
+      DuplicateRecordFields
+      ExplicitNamespaces
+      ExtendedDefaultRules
+      LambdaCase
+      MultiWayIf
+      NoImplicitPrelude
+      OverloadedLabels
+      OverloadedLists
+      OverloadedRecordDot
+      OverloadedStrings
+      PatternSynonyms
+      QuasiQuotes
+      RoleAnnotations
+      UndecidableInstances
+      TypeFamilies
+      RecordWildCards
+      TemplateHaskell
+      AllowAmbiguousTypes
+      TupleSections
+      ViewPatterns
+  ghc-options: -fwrite-ide-info -hiedir .hiefiles -threaded -fplugin AutoInstrument -Weverything -Werror -fno-defer-typed-holes -Wno-error=deprecations -Wno-error=unused-packages -Wno-error=implicit-lift -Wno-error=missing-poly-kind-signatures -Wno-missing-exported-signatures -Wno-missing-import-lists -Wno-missed-specialisations -Wno-all-missed-specialisations -Wno-unsafe -Wno-safe -Wno-missing-local-signatures -Wno-monomorphism-restriction -Wno-missing-safe-haskell-mode -Wno-partial-fields -Wno-prepositive-qualified-module -Wno-missing-export-lists -Wno-orphans -Wno-missing-deriving-strategies -Wno-missing-role-annotations -Wno-unused-matches -Wno-missing-kind-signatures -Wno-type-defaults -Wno-unused-top-binds -Wno-unused-imports -Wno-error=incomplete-record-selectors
+  build-tool-depends:
+      proto-lens-protoc:proto-lens-protoc
+  build-depends:
+      apitoolkit-server
+    , base
+    , doctest-parallel
+    , hiedb-plugin
+    , hs-opentelemetry-instrumentation-auto
+    , hspec
+    , hspec-discover
+    , relude >=1.2.0.0
+    , rust-interop
+    , tmp-postgres
+  default-language: GHC2021
+
+test-suite unit-tests
+  type: exitcode-stdio-1.0
+  main-is: MainUnit.hs
+  other-modules:
+      Main
+  hs-source-dirs:
+      test/hspec
+  default-extensions:
+      BlockArguments
+      DataKinds
+      DerivingVia
+      DeriveAnyClass
+      DerivingStrategies
+      DuplicateRecordFields
+      ExplicitNamespaces
+      ExtendedDefaultRules
+      LambdaCase
+      MultiWayIf
+      NoImplicitPrelude
+      OverloadedLabels
+      OverloadedLists
+      OverloadedRecordDot
+      OverloadedStrings
+      PatternSynonyms
+      QuasiQuotes
+      RoleAnnotations
+      UndecidableInstances
+      TypeFamilies
+      RecordWildCards
+      TemplateHaskell
+      AllowAmbiguousTypes
+      TupleSections
+      ViewPatterns
+  ghc-options: -fwrite-ide-info -hiedir .hiefiles -threaded -fplugin AutoInstrument -Weverything -Werror -fno-defer-typed-holes -Wno-error=deprecations -Wno-error=unused-packages -Wno-error=implicit-lift -Wno-error=missing-poly-kind-signatures -Wno-missing-exported-signatures -Wno-missing-import-lists -Wno-missed-specialisations -Wno-all-missed-specialisations -Wno-unsafe -Wno-safe -Wno-missing-local-signatures -Wno-monomorphism-restriction -Wno-missing-safe-haskell-mode -Wno-partial-fields -Wno-prepositive-qualified-module -Wno-missing-export-lists -Wno-orphans -Wno-missing-deriving-strategies -Wno-missing-role-annotations -Wno-unused-matches -Wno-missing-kind-signatures -Wno-type-defaults -Wno-unused-top-binds -Wno-unused-imports -Wno-error=incomplete-record-selectors
+  build-tool-depends:
+      proto-lens-protoc:proto-lens-protoc
+  build-depends:
+      apitoolkit-server
+    , base
+    , doctest-parallel
+    , hiedb-plugin
+    , hs-opentelemetry-instrumentation-auto
+    , hspec
+    , hspec-discover
+    , relude >=1.2.0.0
+    , rust-interop
   default-language: GHC2021

@@ -433,8 +433,8 @@ getRequestDumpsForPreviousReportPeriod pid report_type = query (Query $ encodeUt
     |]
 
 
-selectLogTable :: (DB :> es, Log :> es, Time.Time :> es) => Projects.ProjectId -> [Section] -> Maybe UTCTime -> (Maybe UTCTime, Maybe UTCTime) -> [Text] -> Maybe Sources -> Maybe Text -> Eff es (Either Text (V.Vector (V.Vector AE.Value), [Text], Int))
-selectLogTable pid queryAST cursorM dateRange projectedColsByUser source targetSpansM = do
+selectLogTable :: (DB :> es, Log :> es, Time.Time :> es) => Projects.ProjectId -> [Section] -> Text -> Maybe UTCTime -> (Maybe UTCTime, Maybe UTCTime) -> [Text] -> Maybe Sources -> Maybe Text -> Eff es (Either Text (V.Vector (V.Vector AE.Value), [Text], Int))
+selectLogTable pid queryAST queryText cursorM dateRange projectedColsByUser source targetSpansM = do
   now <- Time.currentTime
   let (q, queryComponents) = queryASTToComponents ((defSqlQueryCfg pid now source targetSpansM){cursorM, dateRange, projectedColsByUser, source, targetSpansM}) queryAST
 
@@ -442,10 +442,13 @@ selectLogTable pid queryAST cursorM dateRange projectedColsByUser source targetS
   Log.logTrace
     "Query Debug Info"
     ( AE.object
-        [ "parsed_query_ast" AE..= show queryAST
+        [ "original_query_input" AE..= queryText
+        , "parsed_query_ast" AE..= show queryAST
         , "generated_sql_query" AE..= q
         , "count_query" AE..= queryComponents.countQuery
         , "project_id" AE..= show pid
+        , "source" AE..= source
+        , "target_spans" AE..= fromMaybe "" targetSpansM
         ]
     )
 
