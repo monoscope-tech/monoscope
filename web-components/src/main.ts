@@ -10,9 +10,7 @@
   },
 });
 
-
-
-// buildCurlRequest converts a log explorer result item into a curl and copies the curl to clipboard.
+// Attach functions to the window object
 window.buildCurlRequest = function (event: any) {
   const { request_headers, request_body, method, host, raw_url } = JSON.parse(event.currentTarget?.dataset.reqjson);
   let curlCommand = `curl -X ${method} https://${host}${raw_url} \\\n `;
@@ -44,7 +42,7 @@ window.buildCurlRequest = function (event: any) {
   });
 };
 
-window.setQueryParamAndReload = (key, value) => {
+window.setQueryParamAndReload = (key: string, value: string) => {
   const url = new URL(window.location.href);
   url.searchParams.set(key, value);
   if (key === 'source') {
@@ -86,10 +84,10 @@ window.evalScriptsFromContent = function (container: HTMLElement) {
   });
 };
 
-const params = () => ({ ...Object.fromEntries(new URLSearchParams(location.search)) });
+export const params = () => ({ ...Object.fromEntries(new URLSearchParams(location.search)) });
 window.params = params;
 
-var getTimeRange = function () {
+window.getTimeRange = function () {
   const rangeInput = document.getElementById('custom_range_input') as HTMLInputElement | undefined;
   if (rangeInput) {
     const range = rangeInput.value.split('/');
@@ -105,14 +103,10 @@ var getTimeRange = function () {
     return { since: params().since, from: params().from, to: params().to };
   }
 };
-window.getTimeRange = getTimeRange;
 
-// Example usage
-// setParams({ param1: 'newValue1' }, true); // Will trigger a full page load with new state
-// setParams({ param2: 'newValue2' });       // Will update URL without reloading
 window.setParams = (
   (state = { ...Object.fromEntries(new URLSearchParams(window.location.search)) }) =>
-  (newState, load = false) => {
+  (newState: any, load = false) => {
     Object.assign(state, newState);
 
     const url =
@@ -127,7 +121,7 @@ window.setParams = (
   }
 )();
 
-function updateMarkAreas(chartId: string, warningVal: string, incidentVal: string) {
+window.updateMarkAreas = function (chartId: string, warningVal: string, incidentVal: string) {
   const warning = parseInt(warningVal, 10),
     incident = parseInt(incidentVal, 10),
     myChart = (window as any).echarts.getInstanceByDom(document.getElementById(chartId)),
@@ -161,5 +155,31 @@ function updateMarkAreas(chartId: string, warningVal: string, incidentVal: strin
     };
   });
   myChart.setOption({ series: options.series }, false);
+};
+
+function updateUrlState(key: string, value: string, action: 'set' | 'delete' = 'set') {
+  const params = new URLSearchParams(window.location.search);
+  if (action === 'delete') {
+    params.delete(key);
+  } else {
+    params.set(key, value);
+  }
+  window.history.replaceState({}, '', `${window.location.pathname}?${params}`);
 }
-window.updateMarkAreas = updateMarkAreas;
+window.updateUrlState = updateUrlState;
+
+function bindFunctionsToObjects(rootObj: any, obj: any) {
+  if (!obj || typeof obj !== 'object') return;
+
+  Object.keys(obj).forEach((key) => {
+    const value = obj[key];
+    if (typeof value === 'function') {
+      obj[key] = value.bind(rootObj);
+    } else if (value && typeof value === 'object') {
+      bindFunctionsToObjects(rootObj, value);
+    }
+  });
+
+  return obj;
+}
+window.bindFunctionsToObjects = bindFunctionsToObjects;

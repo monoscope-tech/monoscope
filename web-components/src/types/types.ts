@@ -22,9 +22,8 @@ declare global {
     updateStepsWithErrors: (errors: any[]) => void;
     updateCollectionResults: (results: any[]) => void;
     updateEditorVal: () => void;
+    bindFunctionsToObjects: (rootObj: any, obj: any) => any;
     addCollectionStep: () => void;
-    buildCurlRequest: (e: any) => void;
-    downloadJson: (e: any) => void;
     validateYaml: (data: any) => void;
     evalScriptsFromContent: (container: HTMLElement) => void;
     params: () => Record<string, string>;
@@ -32,11 +31,13 @@ declare global {
     setParams: (state: Record<string, any>, load: boolean) => void;
     flameGraphChart: any;
     waterFallGraphChart: any;
+    buildCurlRequest: (event: any) => void;
+    downloadJson: (event: any) => void;
+    getTimeRange: () => { from: string; to: string; since: string } | undefined;
+    updateMarkAreas: (chartId: string, warningVal: string, incidentVal: string) => void;
+    formatNumber: (num: number) => string;
   }
   function updateUrlState(key: string, value: string): void;
-  interface htmx {
-    ajax: (verb: string, path: string, context: any) => void;
-  }
 }
 
 export type Result = {

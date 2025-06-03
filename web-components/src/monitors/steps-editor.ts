@@ -21,7 +21,7 @@ export class StepsEditor extends LitElement {
 
   private editor: any = null;
   private response: any = {};
-  @query('#editor-container') private editorContainer!: HTMLElement;
+  @query('#steps-codeEditor') private editorContainer!: HTMLElement;
   createRenderRoot = () => this;
   constructor() {
     super();
@@ -43,9 +43,6 @@ export class StepsEditor extends LitElement {
     } else if (this.collectionSteps.length == 1) {
       this.collectionSteps[0]._expanded = true;
     }
-
-    // this.initializeEditor(monaco);
-
     window.updateStepAssertions = (assertion, expression, step) => {
       const stepData = this.collectionSteps[step];
       const asserts = stepData.asserts || [];
@@ -75,6 +72,9 @@ export class StepsEditor extends LitElement {
     window.addCollectionStep = () => {
       this.addStep();
     };
+    document.addEventListener('DOMContentLoaded', () => {
+      this.initializeEditor(monaco);
+    });
   }
   addStep() {
     this.collectionSteps = [
@@ -96,8 +96,6 @@ export class StepsEditor extends LitElement {
     ];
   }
   initializeEditor(monaco: typeof import('monaco-editor')) {
-    const reqBodyContainer = this.querySelector('#reqBodyContainer');
-
     monaco.editor.defineTheme('nightOwl', {
       base: 'vs-dark',
       inherit: true,
@@ -126,6 +124,7 @@ export class StepsEditor extends LitElement {
       },
     });
 
+    console.log(this.editorContainer);
     this.editor = monaco.editor.create(this.editorContainer, {
       value: jsyaml.dump(convertCollectionStepsToTestkitFormat(this.collectionSteps), { indent: 2 }),
       language: 'yaml',
