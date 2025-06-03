@@ -59,7 +59,7 @@ expandedSpanItem pid sp aptSp leftM rightM = do
               [ [__|on click add .hidden to #trace_expanded_view 
             then put '0px' into  #log_details_container.style.width 
             then put '100%' into #logs_list_container.style.width 
-            then add .hidden to #resizer
+            then add .hidden to #resizer-details_width
             then remove .bg-fillBrand-strong from <.item-row.bg-fillBrand-strong/>
             then call updateUrlState('details_width', '', 'delete')
             then call updateUrlState('target_event', '0px', 'delete')
