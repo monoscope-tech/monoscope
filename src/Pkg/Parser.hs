@@ -58,10 +58,19 @@ applySectionToComponent qc (TakeCommand limit) = qc{takeLimit = Just limit}
 applySummarizeByClauseToQC :: Maybe SummarizeByClause -> QueryComponents -> QueryComponents
 applySummarizeByClauseToQC Nothing qc = qc
 applySummarizeByClauseToQC (Just (SummarizeByClause fields)) qc = 
-  qc{groupByClause = qc.groupByClause <> concatMap convertField fields}
-  where
-    convertField (Left subj) = ["COALESCE(" <> display subj <> "::text, '')::text"]
-    convertField (Right binFunc) = [display binFunc]
+  let (regularFields, binFields) = partitionEithers fields
+      -- Extract bin functions for special handling
+      hasBinFuncs = not (null binFields)
+      -- Only add regular fields to GROUP BY
+      groupByClauses = map (\subj -> "COALESCE(" <> display subj <> "::text, '')::text") regularFields
+      -- Also add bin functions to GROUP BY but with the raw SQL (not coalesced)
+      binGroupByClauses = map display binFields
+  in qc{
+        -- Mark that we have bin functions for special handling in SQL generation
+        finalTimechartQuery = if hasBinFuncs then Just "has_bin_funcs" else qc.finalTimechartQuery,
+        -- For GROUP BY, include both regular fields (coalesced) and bin functions (raw)
+        groupByClause = qc.groupByClause <> groupByClauses <> binGroupByClauses
+      }
 
 
 -- | Display a sort field for SQL generation
@@ -117,22 +126,24 @@ sqlFromQueryComponents sqlCfg qc =
       fromTable = "otel_logs_and_spans"
       timestampCol = "timestamp"
 
-      cursorT = maybe "" (\c -> " AND " <> timestampCol <> "<'" <> fmtTime c <> "' ") sqlCfg.cursorM
+      -- Note: cursorT is now handled in the whereCondition computation
       -- Handle the Either error case correctly not hushing it.
       (_, selVec) = getProcessedColumns sqlCfg.projectedColsByUser sqlCfg.defaultSelect
       selectedCols = if null qc.select then selVec else qc.select
       selectClause = T.intercalate "," $ colsNoAsClause selectedCols
-      where' = maybe "" (\whereC -> " AND (" <> whereC <> ")") qc.whereClause
-      whereClause = case sqlCfg.source of
-        Just SSpans -> case sqlCfg.targetSpansM of
-          Nothing -> where'
-          _ -> where'
-        _ -> where'
+      -- Extract the raw where clause without the AND prefix
+      rawWhere = maybe "" id qc.whereClause
+      -- Use raw where with parentheses but NO AND prefix
+      whereClause = 
+        if T.null rawWhere 
+        then ""
+        else "(" <> rawWhere <> ")"
       groupByClause = if null qc.groupByClause then "" else " GROUP BY " <> T.intercalate "," qc.groupByClause
+      -- Only generate date range conditions if they exist, otherwise return empty string
       dateRangeStr = case sqlCfg.dateRange of
-        (Nothing, Just b) -> "AND " <> timestampCol <> " BETWEEN '" <> fmtTime b <> "' AND NOW() "
-        (Just a, Just b) -> "AND " <> timestampCol <> " BETWEEN '" <> fmtTime a <> "' AND '" <> fmtTime b <> "'"
-        _ -> ""
+        (Nothing, Just b) -> timestampCol <> " BETWEEN '" <> fmtTime b <> "' AND NOW() "
+        (Just a, Just b) -> timestampCol <> " BETWEEN '" <> fmtTime a <> "' AND '" <> fmtTime b <> "'"
+        _ -> "TRUE"
 
       (fromT, toT) = bimap (fromMaybe sqlCfg.currentTime) (fromMaybe sqlCfg.currentTime) sqlCfg.dateRange
       timeDiffSecs = abs $ nominalDiffTimeToSeconds $ diffUTCTime fromT toT
@@ -140,34 +151,70 @@ sqlFromQueryComponents sqlCfg qc =
       -- Handle sort order
       sortOrder = case qc.sortFields of
         Just fields -> "ORDER BY " <> T.intercalate ", " (map displaySortField fields)
-        Nothing -> "ORDER BY " <> timestampCol <> " desc"
+        Nothing -> 
+          -- If there's a bin function on timestamp, order by that instead of raw timestamp
+          if any (\s -> "time_bucket" `T.isInfixOf` s) qc.select
+          then "ORDER BY " <> "time_bucket('5 minutes', " <> timestampCol <> ")" <> " desc" 
+          else "ORDER BY " <> timestampCol <> " desc"
       
       -- Handle limit
       limitClause = case qc.takeLimit of
         Just limit -> "limit " <> toText (show limit)
         Nothing -> "limit 150"
       
+      -- Create a properly formatted WHERE clause condition
+      whereCondition = 
+        let cursorStr = maybe "" (\c -> timestampCol <> "<'" <> fmtTime c <> "'") sqlCfg.cursorM
+            dateRangeEmpty = sqlCfg.dateRange == (Nothing, Nothing) || dateRangeStr == "TRUE" 
+            whereEmpty = T.null rawWhere
+        in if T.null cursorStr && dateRangeEmpty && whereEmpty
+           then "TRUE" -- No conditions at all, use TRUE
+           else
+             let 
+                 cursorPart = if not (T.null cursorStr) then Just cursorStr else Nothing
+                 datePart = if not dateRangeEmpty then Just dateRangeStr else Nothing
+                 wherePart = if not whereEmpty then Just whereClause else Nothing
+                 
+                 nonEmptyParts = filter (not . T.null) $ catMaybes [cursorPart, datePart, wherePart]
+             in T.intercalate " AND " nonEmptyParts
+      
       finalSqlQuery = case sqlCfg.targetSpansM of
         Just "service-entry-spans" ->
           [fmt|WITH ranked_spans AS (SELECT *, resource->'service'->>'name' AS service_name,
                 ROW_NUMBER() OVER (PARTITION BY trace_id, resource->'service'->>'name' ORDER BY start_time) AS rn
-                FROM telemetry.spans where project_id='{sqlCfg.pid.toText}' and (
-                {timestampCol} > NOW() - interval '14 days'
-                {cursorT} {dateRangeStr} {whereClause} )
+                FROM telemetry.spans where project_id='{sqlCfg.pid.toText}' and ({whereCondition})
                 {groupByClause}
                 )
                SELECT json_build_array({selectClause}) FROM ranked_spans
                   WHERE rn = 1 {sortOrder} {limitClause} |]
         _ ->
-          [fmt|SELECT json_build_array({selectClause}) FROM {fromTable}
-             WHERE project_id='{sqlCfg.pid.toText}'  and ( {timestampCol} > NOW() - interval '14 days'
-             {cursorT} {dateRangeStr} {whereClause} )
-             {groupByClause} {sortOrder} {limitClause} |]
-      countQuery =
-        [fmt|SELECT count(*) FROM {fromTable}
-          WHERE project_id='{sqlCfg.pid.toText}' and ( {timestampCol} > NOW() - interval '14 days'
-          {cursorT} {dateRangeStr} {where'} )
-          {groupByClause} limit 1|]
+          if qc.finalTimechartQuery == Just "has_bin_funcs"
+          then
+            -- For summarize queries with bin functions, create a special format
+            [fmt|SELECT 
+                 json_build_array(
+                   time_bucket('5 minutes', {timestampCol}),
+                   {T.intercalate "," (filter (\s -> not ("time_bucket" `T.isInfixOf` s)) qc.select)}
+                 ) 
+               FROM {fromTable}
+               WHERE project_id='{sqlCfg.pid.toText}' and ({whereCondition})
+               GROUP BY time_bucket('5 minutes', {timestampCol})
+               ORDER BY time_bucket('5 minutes', {timestampCol}) DESC
+               {limitClause} |]
+          else
+            [fmt|SELECT json_build_array({selectClause}) FROM {fromTable}
+               WHERE project_id='{sqlCfg.pid.toText}' and ({whereCondition})
+               {groupByClause} {sortOrder} {limitClause} |]
+      countQuery = 
+        if qc.finalTimechartQuery == Just "has_bin_funcs"
+        then
+          [fmt|SELECT count(*) FROM {fromTable}
+            WHERE project_id='{sqlCfg.pid.toText}' and ({whereCondition})
+            GROUP BY time_bucket('5 minutes', {timestampCol}) limit 1|]
+        else
+          [fmt|SELECT count(*) FROM {fromTable}
+            WHERE project_id='{sqlCfg.pid.toText}' and ({whereCondition})
+            {groupByClause} limit 1|]
 
       defRollup
         | timeDiffSecs == 0 = "1h"
@@ -189,23 +236,45 @@ sqlFromQueryComponents sqlCfg qc =
           then "'Throughput'"
           else T.intercalate "||' '|| " (map (<> "::text") qc.groupByClause)
       timeChartQuery =
-        [fmt|
-      SELECT {timebucket} {chartSelect}, {timeGroupSelect} FROM {fromTable}
-          WHERE project_id='{sqlCfg.pid.toText}'  and ( {timestampCol} > NOW() - interval '14 days'
-          {cursorT} {dateRangeStr} {where'} )
-          {timeGroupByClause}
-        |]
+        if qc.finalTimechartQuery == Just "has_bin_funcs"
+        then
+          [fmt|
+        SELECT time_bucket('5 minutes', {timestampCol}), {chartSelect} FROM {fromTable}
+            WHERE project_id='{sqlCfg.pid.toText}'  and ({whereCondition})
+            GROUP BY time_bucket('5 minutes', {timestampCol})
+            ORDER BY time_bucket('5 minutes', {timestampCol}) DESC
+          |]
+        else
+          [fmt|
+        SELECT {timebucket} {chartSelect}, {timeGroupSelect} FROM {fromTable}
+            WHERE project_id='{sqlCfg.pid.toText}'  and ({whereCondition})
+            {timeGroupByClause}
+          |]
 
       -- FIXME: render this based on the aggregations, but without the aliases
       alertSelect = [fmt| count(*)::integer|] :: Text
       alertGroupByClause = if null qc.groupByClause then "" else " GROUP BY " <> T.intercalate "," qc.groupByClause
       -- Returns the max of all the values returned by the query. Change 5mins to
+      -- For alert queries, we use a simplified whereCondition without the time range/cursor
+      alertWhereCondition = 
+        if not (T.null rawWhere)
+        then whereClause
+        else "TRUE"
+      
       alertQuery =
-        [fmt|
-      SELECT GREATEST({alertSelect}) FROM {fromTable}
-          WHERE project_id='{sqlCfg.pid.toText}' and ( {timestampCol} > NOW() - interval '{timeRollup}'
-          {whereClause}) {alertGroupByClause}
-        |]
+        if qc.finalTimechartQuery == Just "has_bin_funcs"
+        then
+          [fmt|
+        SELECT GREATEST({alertSelect}) FROM {fromTable}
+            WHERE project_id='{sqlCfg.pid.toText}' and ({alertWhereCondition})
+            GROUP BY time_bucket('5 minutes', {timestampCol})
+          |]
+        else
+          [fmt|
+        SELECT GREATEST({alertSelect}) FROM {fromTable}
+            WHERE project_id='{sqlCfg.pid.toText}' and ({alertWhereCondition})
+            {alertGroupByClause}
+          |]
    in ( finalSqlQuery
       , qc
           { finalColumns = listToColNames selectedCols

@@ -343,6 +343,7 @@ instance ToQueryText BinFunction where
 instance Display BinFunction where
   displayPrec prec (Bin subj interval) = displayBuilder $ "time_bucket('" <> interval <> " seconds', " <> display subj <> ")"
   -- Use fixed 5min interval for now, can be enhanced later to use legacy rollup calculation
+  -- Don't include "as bin_timestamp" here as it causes syntax errors in GROUP BY
   displayPrec prec (BinAuto subj) = displayBuilder $ "time_bucket('5 minutes', " <> display subj <> ")"
 
 
