@@ -30,7 +30,7 @@ import Models.Projects.Projects qualified as Projects
 import Pkg.Components qualified as Components
 import Pkg.DashboardUtils qualified as DashboardUtils
 import Pkg.Parser (
-  QueryComponents (finalTimechartQuery),
+  QueryComponents (finalSummarizeQuery),
   SqlQueryCfg (dateRange),
   defSqlQueryCfg,
   pSource,
@@ -46,17 +46,17 @@ import Text.Megaparsec (parseMaybe)
 import Utils (JSONHttpApiData (..))
 
 
-pivot' :: V.Vector (Int, Double, Text) -> (V.Vector Text, V.Vector (V.Vector (Maybe Double)), Double, Double)
+pivot' :: V.Vector (Int, Text, Double) -> (V.Vector Text, V.Vector (V.Vector (Maybe Double)), Double, Double)
 pivot' rows
   | V.null rows = (V.empty, V.empty, 0.0, 0.0)
   | otherwise =
-      let extractHeaders vec = V.uniq . V.map thd3 . V.modify (\mvec -> VA.sortBy (comparing thd3) mvec) $ vec
+      let extractHeaders vec = V.uniq . V.map snd3 . V.modify (\mvec -> VA.sortBy (comparing snd3) mvec) $ vec
           headers = extractHeaders rows
           grouped =
             V.groupBy (\a b -> fst3 a == fst3 b)
               $ V.modify (\mvec -> VA.sortBy (comparing fst3) mvec) rows
           ngrouped = map (transform headers) grouped
-          totalSum = V.sum $ V.map snd3 rows
+          totalSum = V.sum $ V.map thd3 rows
 
           -- Calculate rate (rows per minute)
           timeVec = V.map fst3 rows
@@ -68,25 +68,25 @@ pivot' rows
        in (headers, V.fromList ngrouped, totalSum, rate)
 
 
-transform :: V.Vector Text -> V.Vector (Int, Double, Text) -> V.Vector (Maybe Double)
+transform :: V.Vector Text -> V.Vector (Int, Text, Double) -> V.Vector (Maybe Double)
 transform fields tuples =
   V.cons (Just timestamp) (V.map getValue fields)
   where
-    getValue field = V.find (\(_, _, b) -> b == field) tuples >>= \(_, a, _) -> Just a
+    getValue field = V.find (\(_, b, _) -> b == field) tuples >>= \(_, _, a) -> Just a
     timestamp = fromIntegral $ fromMaybe 0 $ fst3 <$> V.find (const True) tuples
 
 
-statsTriple :: V.Vector (Int, Double, Text) -> MetricsStats
+statsTriple :: V.Vector (Int, Text, Double) -> MetricsStats
 statsTriple v
   | V.null v = MetricsStats 0 0 0 0 0 0 0
   | otherwise = MetricsStats mn mx tot cnt (tot / fromIntegral cnt) mode maxGroupSum
   where
     -- Extract the Double values from each tuple
-    doubles = V.map (\(_, d, _) -> d) v
+    doubles = V.map thd3 v
 
     (!mn, !mx, !tot, !cnt, !freq, !timestampMap) =
       V.foldl'
-        ( \(a, b, c, d, m, tsMap) (ts, x, _) ->
+        ( \(a, b, c, d, m, tsMap) (ts, _, x) ->
             ( min a x
             , max b x
             , c + x
@@ -194,7 +194,7 @@ queryMetrics (maybeToMonoid -> respDataType) pidM (nonNull -> queryM) (nonNull -
               { dateRange = (fromD, toD)
               }
       let (_, qc) = queryASTToComponents sqlQueryComponents queryAST
-      pure $ maybeToMonoid qc.finalTimechartQuery
+      pure $ maybeToMonoid qc.finalSummarizeQuery
 
   let baseMetricsData =
         def

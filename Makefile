@@ -46,6 +46,12 @@ live-test-reload-stack:
 test:
 	stack test --ghc-options=-w
 
+test-unit:
+	stack test apitoolkit-server:unit-tests --ghc-options=-w
+
+live-test-unit:
+	stack test apitoolkit-server:unit-tests --ghc-options=-w --file-watch
+
 fmt:
 	fourmolu --mode inplace $$(find ./src/ -name '*.hs')
 

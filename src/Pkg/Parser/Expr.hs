@@ -1,14 +1,15 @@
-module Pkg.Parser.Expr (pSubject, pExpr, Subject (..), Values (..), Expr (..)) where
+module Pkg.Parser.Expr (pSubject, pExpr, Subject (..), Values (..), Expr (..), kqlTimespanToTimeBucket) where
 
 import Control.Monad.Combinators.Expr (
   Operator (InfixL),
   makeExprParser,
  )
 import Data.Aeson qualified as AE
+import Data.Char (isDigit)
 import Data.Scientific (FPFormat (Fixed), Scientific, formatScientific)
 import Data.Text qualified as T
 import Data.Text.Builder.Linear (Builder)
-import Data.Text.Display (Display, display, displayParen, displayPrec)
+import Data.Text.Display (Display, display, displayParen, displayPrec, displayBuilder)
 import Data.Vector qualified as V
 import Pkg.Parser.Core
 import Relude hiding (GT, LT, Sum, many, some)
@@ -20,7 +21,18 @@ import Text.Megaparsec.Char.Lexer qualified as L
 -- Values is an enum of the list of supported value types.
 -- Num is a text  that represents a float as float covers ints in a lot of cases. But its basically the json num type.
 -- Duration stores original unit and nanoseconds value for precise time comparisons
-data Values = Num Text | Str Text | Boolean Bool | Null | List [Values] | Duration Text Integer
+-- TimeFunction stores KQL time functions like now()
+-- AgoExpression represents KQL ago() function with the value and unit for SQL interval conversion
+data Values 
+  = Num Text 
+  | Str Text 
+  | Boolean Bool 
+  | Null 
+  | List [Values] 
+  | Duration Text Integer 
+  | TimeFunction Text
+  | AgoExpression Text -- The original KQL timespan expression for direct conversion to PostgreSQL interval
+  | NowExpression -- Represents now() function
   deriving stock (Eq, Generic, Ord, Show)
 
 
@@ -42,6 +54,9 @@ instance AE.ToJSON Values where
   toJSON Null = AE.Null
   toJSON (List xs) = AE.Array (V.fromList (map AE.toJSON xs))
   toJSON (Duration _ ns) = AE.Number (fromInteger ns)
+  toJSON (TimeFunction tf) = AE.String tf
+  toJSON (AgoExpression expr) = AE.String ("ago(" <> expr <> ")")
+  toJSON NowExpression = AE.String "now()"
 
 
 instance ToQueryText Values where
@@ -233,6 +248,44 @@ pDuration = do
   return $ Duration unit (round (value * multiplier))
 
 
+-- | Parse the now() function
+--
+-- >>> parse pNowFunction "" "now()"
+-- Right NowExpression
+pNowFunction :: Parser Values
+pNowFunction = NowExpression <$ string "now()"
+
+
+-- | Parse the ago() function with various time units (d, h, m, s, ms, us, ns)
+--
+-- >>> parse pAgoFunction "" "ago(7d)"
+-- Right (AgoExpression "7d")
+--
+-- >>> parse pAgoFunction "" "ago(12h)"
+-- Right (AgoExpression "12h")
+--
+-- >>> parse pAgoFunction "" "ago(30m)"
+-- Right (AgoExpression "30m")
+--
+-- >>> parse pAgoFunction "" "ago(45s)"
+-- Right (AgoExpression "45s")
+--
+-- >>> parse pAgoFunction "" "ago(500ms)"
+-- Right (AgoExpression "500ms")
+--
+-- >>> parse pAgoFunction "" "ago(1.5h)"
+-- Right (AgoExpression "1.5h")
+--
+-- >>> parse pAgoFunction "" "ago(1d2h30m)"
+-- Right (AgoExpression "1d2h30m")
+pAgoFunction :: Parser Values
+pAgoFunction = do
+  _ <- string "ago("
+  timespan <- some (alphaNumChar <|> char '.')
+  _ <- string ")"
+  return $ AgoExpression (toText timespan)
+
+
 -- | parse values into our internal AST representation. Int, Str, Num, Bool, List, etc
 --
 -- Examples:
@@ -261,6 +314,12 @@ pDuration = do
 --
 -- >>> parse pValues "" "(\"GET\", \"POST\", \"PUT\")"
 -- Right (List [Str "GET",Str "POST",Str "PUT"])
+--
+-- >>> parse pValues "" "now()"
+-- Right NowExpression
+--
+-- >>> parse pValues "" "ago(7d)"
+-- Right (AgoExpression "7d")
 pValues :: Parser Values
 pValues =
   choice @[]
@@ -271,6 +330,8 @@ pValues =
     , List <$> sqParens (pValues `sepBy` (space *> char ',' <* space))
     , List [] <$ string "()"
     , List <$> parens (pValues `sepBy` (space *> char ',' <* space))
+    , try pNowFunction
+    , try pAgoFunction
     , try pDuration
     , try (Num . toText . show <$> L.float)
     , Num . toText . show <$> L.decimal
@@ -504,6 +565,61 @@ instance Display Subject where
 --
 -- >>> display (List [Num "2"])
 -- "ARRAY[2]"
+-- | Convert a KQL timespan to PostgreSQL interval syntax
+-- 
+-- Example conversion:
+-- 7d -> INTERVAL '7 days'
+-- 12h -> INTERVAL '12 hours'
+-- 30m -> INTERVAL '30 minutes'
+-- 45s -> INTERVAL '45 seconds'
+-- 500ms -> INTERVAL '500 milliseconds'
+kqlTimespanToInterval :: Text -> Text
+kqlTimespanToInterval timespan = 
+  let 
+    parseTimeUnit :: Text -> (Text, Text)
+    parseTimeUnit input = 
+      let (digits, rest) = T.span (\c -> isDigit c || c == '.') input
+      in case rest of
+        rest' | T.isPrefixOf "d" rest' -> (digits <> " days", T.drop 1 rest')
+        rest' | T.isPrefixOf "h" rest' -> (digits <> " hours", T.drop 1 rest')
+        rest' | T.isPrefixOf "m" rest' -> (digits <> " minutes", T.drop 1 rest')
+        rest' | T.isPrefixOf "s" rest' -> (digits <> " seconds", T.drop 1 rest')
+        rest' | T.isPrefixOf "ms" rest' -> (digits <> " milliseconds", T.drop 2 rest')
+        rest' | T.isPrefixOf "us" rest' -> (digits <> " microseconds", T.drop 2 rest')
+        rest' | T.isPrefixOf "ns" rest' -> (digits <> " nanoseconds", T.drop 2 rest')
+        _ -> ("", input) -- No recognized unit or parsing error
+    
+    parseComplexTimespan :: Text -> Text
+    parseComplexTimespan ts = 
+      case parseTimeUnit ts of
+        ("", _) -> "" -- Parsing error or no recognized unit
+        (unit, "") -> unit -- End of input
+        (unit, rest) -> unit <> " " <> parseComplexTimespan rest
+    
+    intervalExpr = 
+      case T.strip (parseComplexTimespan timespan) of
+        "" -> "0" -- Default if parsing fails
+        expr -> expr
+  in
+    "INTERVAL '" <> intervalExpr <> "'"
+
+-- | Convert KQL timespan to PostgreSQL time bucket string
+-- This is used for bin() function in summarize queries
+kqlTimespanToTimeBucket :: Text -> Text
+kqlTimespanToTimeBucket timespan =
+  case T.strip timespan of
+    ts | T.isSuffixOf "w" ts -> T.dropEnd 1 ts <> " weeks"
+    ts | T.isSuffixOf "d" ts -> T.dropEnd 1 ts <> " days"
+    ts | T.isSuffixOf "h" ts -> T.dropEnd 1 ts <> " hours"
+    ts | T.isSuffixOf "m" ts -> T.dropEnd 1 ts <> " minutes"
+    ts | T.isSuffixOf "s" ts -> T.dropEnd 1 ts <> " seconds"
+    ts | T.isSuffixOf "ms" ts -> T.dropEnd 2 ts <> " milliseconds"
+    ts | T.isSuffixOf "µs" ts -> T.dropEnd 2 ts <> " microseconds"
+    ts | T.isSuffixOf "us" ts -> T.dropEnd 2 ts <> " microseconds"
+    ts | T.isSuffixOf "ns" ts -> T.dropEnd 2 ts <> " nanoseconds"
+    _ -> "5 minutes" -- Default to 5 minutes if parsing fails
+
+
 instance Display Values where
   displayPrec prec (Num a) = displayPrec prec a
   displayPrec prec (Str a) = displayPrec prec $ "'" <> a <> "'"
@@ -511,6 +627,9 @@ instance Display Values where
   displayPrec prec (Boolean False) = "false"
   displayPrec prec Null = "null"
   displayPrec prec (Duration _ ns) = displayPrec prec (show ns)
+  displayPrec prec NowExpression = displayBuilder "NOW()"
+  displayPrec prec (AgoExpression timespan) = displayBuilder $ "NOW() - " <> kqlTimespanToInterval timespan
+  displayPrec prec (TimeFunction tf) = displayBuilder tf
   displayPrec prec (List vs) =
     let arrayElements = mconcat . intersperse "," . map (displayPrec prec) $ vs
      in "ARRAY[" <> arrayElements <> "]"
@@ -719,6 +838,9 @@ jsonPathQuery op' (Subject entire base keys) val =
     buildCondition oper (Str s) pstfx = " ? (@ " <> oper <> " \"" <> s <> "\"" <> postfix <> ")"
     buildCondition oper (Boolean b) pstfx = " ? (@ " <> oper <> " " <> T.toLower (show b) <> pstfx <> ")"
     buildCondition oper (Duration _ ns) pstfx = " ? (@ " <> oper <> " " <> show ns <> postfix <> ")"
+    buildCondition oper NowExpression pstfx = " ? (@ " <> oper <> " now()" <> pstfx <> ")"
+    buildCondition oper (AgoExpression timespan) pstfx = " ? (@ " <> oper <> " ago(" <> timespan <> ")" <> pstfx <> ")"
+    buildCondition oper (TimeFunction tf) pstfx = " ? (@ " <> oper <> " " <> tf <> pstfx <> ")"
     buildCondition oper Null pstfx =
       case op' of
         "=" -> " ? (@ is null" <> pstfx <> ")"

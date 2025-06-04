@@ -41,20 +41,20 @@ widgets:
 
   - type: "timeseries"
     title: "POST requests"
-    query: method == "POST" | timechart count(*) by method 
+    query: method == "POST" | summarize count(*) by bin_auto(timestamp), method
     unit: reqs
     layout: { w: 4, h: 2 }
     eager: true
 
   - type: "timeseries"
     title: "GET requests"
-    query: method == "GET" | timechart count(*) by method 
+    query: method == "GET" | summarize count(*) by bin_auto(timestamp), method
     layout: { w: 4, h: 2 }
     eager: true
 
   - type: "timeseries"
     title: "POST requests by method"
-    query:  timechart count(*) by method 
+    query: summarize count(*) by bin_auto(timestamp), method
     layout: { w: 4, h: 2 }
     # eager: true
 
@@ -169,7 +169,7 @@ widgets:
 
   # - type: "scatter"
   #   title: "Flight Duration by Airline"
-  #   query: source=logs level=error | timechart count()
+  #   query: source=logs level=error | summarize count(*) by bin_auto(timestamp)
   #   layout: { x: 3, y: 4, w: 6, h: 4 }
   #   x_axis_label: "Airline"
   #   y_axis_label: "Avg Duration (min)"

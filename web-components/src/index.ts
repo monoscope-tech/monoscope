@@ -1,5 +1,6 @@
 // Re-export everything from query-editor
 export * from './query-editor/query-editor';
+export * from './query-editor/query-builder';
 
 // Re-export the config functions
 export { initializeDefaultSchema } from './query-editor/query-editor-config';

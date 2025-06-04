@@ -399,6 +399,8 @@ monaco.languages.registerCompletionItemProvider('aql', {
     }
 
     // Fifth priority: Check for logical operators followed by space - suggest fields
+    const logicalOperatorPattern = new RegExp(`\\b(${LOGICAL_OPERATORS.filter((op) => ['and', 'or', 'not'].includes(op)).join('|')})\\s+$`, 'i');
+    const logicalOperatorMatch = lineText.match(logicalOperatorPattern);
     if (logicalOperatorMatch) {
       const fields = await schemaManager.resolveNested(currentSchema, '');
       fields.forEach((f) =>
@@ -1477,6 +1479,17 @@ export class QueryEditorComponent extends LitElement {
     `;
   }
 }
+
+// Add a convenience method to get field suggestions directly from schemaManager
+schemaManager.getFieldSuggestions = async (schema?: string): Promise<{name: string, type: string, description?: string}[]> => {
+  const schemaToUse = schema || schemaManager.getDefaultSchema();
+  const fields = await schemaManager.resolveNested(schemaToUse, '');
+  return fields.map(field => ({
+    name: field.name,
+    type: field.type,
+    description: field.examples?.join(', ')
+  }));
+};
 
 // Expose schemaManager globally for external configuration
 (window as any).schemaManager = schemaManager;

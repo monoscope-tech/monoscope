@@ -86,9 +86,33 @@ ALTER system SET shared_preload_libraries = 'pg_cron';
 - restart timescaledb-docker
 
 
-## Run a specific individual test 
+## Testing
+
+### Run all tests
 ```haskell
-    stack test --test-arguments "--match=SeedingConfig" apitoolkit-server:tests
-    OR 
-    stack test --ta "--match=SeedingConfig" apitoolkit-server:tests
+make test
+# OR
+stack test --ghc-options=-w
+```
+
+### Run only unit tests
+Unit tests don't require a database connection and run much faster. They include doctests and pure function tests.
+```haskell
+make test-unit
+# OR
+stack test apitoolkit-server:unit-tests --ghc-options=-w
+```
+
+### Run unit tests with file watching for development
+```haskell
+make live-test-unit
+# OR
+stack test apitoolkit-server:unit-tests --ghc-options=-w --file-watch
+```
+
+### Run a specific individual test 
+```haskell
+stack test --test-arguments "--match=SeedingConfig" apitoolkit-server:tests
+# OR 
+stack test --ta "--match=SeedingConfig" apitoolkit-server:tests
 ```

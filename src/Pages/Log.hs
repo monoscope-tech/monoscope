@@ -377,19 +377,6 @@ apiLogH pid queryM' cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM
   queryAST <- parseQuery $ maybeToMonoid queryM'
   let queryText = toQText queryAST
 
-  -- Debug logging for query parsing in apiLogH
-  Log.logTrace
-    "apiLogH Query Processing"
-    ( AE.object
-        [ "original_query_input" AE..= fromMaybe "" queryM'
-        , "parsed_query_ast" AE..= show queryAST
-        , "reconstructed_query_text" AE..= queryText
-        , "project_id" AE..= show pid
-        , "source" AE..= source
-        , "target_spans" AE..= fromMaybe "" targetSpansM
-        ]
-    )
-
   unless (isJust queryLibItemTitle) $ Projects.queryLibInsert Projects.QLTHistory pid sess.persistentSession.userId queryText queryAST Nothing
 
   when (layoutM == Just "SaveQuery") do
@@ -408,7 +395,7 @@ apiLogH pid queryM' cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM
 
   now <- Time.currentTime
   let (fromD, toD, currentRange) = Components.parseTimeRange now (Components.TimePicker sinceM fromM toM)
-  tableAsVecE <- RequestDumps.selectLogTable pid queryAST cursorM' (fromD, toD) summaryCols (parseMaybe pSource =<< sourceM) targetSpansM
+  tableAsVecE <- RequestDumps.selectLogTable pid queryAST queryText cursorM' (fromD, toD) summaryCols (parseMaybe pSource =<< sourceM) targetSpansM
 
   -- FIXME: we're silently ignoring parse errors and the likes.
   let tableAsVecM = hush tableAsVecE
@@ -663,7 +650,12 @@ logQueryBox_ pid currentRange source targetSpan query queryLibRecent queryLibSav
                 span_ [id_ "run-query-indicator", class_ "refresh-indicator htmx-indicator query-indicator loading loading-dots loading-sm"] ""
                 faSprite_ "magnifying-glass" "regular" "h-4 w-4 inline-block"
       div_ [class_ "flex items-between justify-between"] do
-        visualizationTabs_
+        div_ [class_ "flex items-center gap-2"] do
+          visualizationTabs_
+          span_ [class_ "text-textDisabled mx-2 text-xs"] "|"
+          -- Query Builder for GROUP BY, AGG, SORT, LIMIT
+          termRaw "query-builder" [term "query-editor-selector" "#filterElement"] ("" :: Text)
+
         div_ [class_ "", id_ "resultTableInner"] pass
 
         div_ [class_ "flex justify-end  gap-2 "] do
@@ -865,7 +857,7 @@ apiLogsPage page = do
       logQueryBox_ page.pid page.currentRange page.source page.targetSpans page.query page.queryLibRecent page.queryLibSaved
 
       div_ [class_ "timeline flex flex-row gap-4 mt-3 group-has-[#viz-logs:not(:checked)]/pg:hidden group-has-[.toggle-chart:checked]/pg:hidden w-full", style_ "aspect-ratio: 10 / 1;"] do
-        Widget.widget_ $ (def :: Widget.Widget){Widget.query = Just "timechart count(*)", Widget.unit = Just "rows", Widget.title = Just "All traces", Widget.hideLegend = Just True, Widget._projectId = Just page.pid, Widget.standalone = Just True, Widget.yAxis = Just (def{showOnlyMaxLabel = Just True}), Widget.allowZoom = Just True, Widget.showMarkArea = Just True, Widget.layout = Just (def{Widget.w = Just 6, Widget.h = Just 4})}
+        Widget.widget_ $ (def :: Widget.Widget){Widget.query = Just "summarize count(*) by bin_auto(timestamp), status_code", Widget.unit = Just "rows", Widget.title = Just "All traces", Widget.hideLegend = Just True, Widget._projectId = Just page.pid, Widget.standalone = Just True, Widget.yAxis = Just (def{showOnlyMaxLabel = Just True}), Widget.allowZoom = Just True, Widget.showMarkArea = Just True, Widget.layout = Just (def{Widget.w = Just 6, Widget.h = Just 4})}
 
         Widget.widget_
           $ (def :: Widget.Widget)
@@ -878,7 +870,7 @@ apiLogsPage page = do
             , Widget.layout = Just (def{Widget.w = Just 6, Widget.h = Just 4})
             , Widget.sql =
                 Just
-                  [text| SELECT timeB, COALESCE(value, 0)::float AS value, quantile
+                  [text| SELECT timeB, quantile,COALESCE(value, 0)::float AS value
                               FROM ( SELECT extract(epoch from time_bucket('1h', timestamp))::integer AS timeB,
                                       ARRAY[
                                         COALESCE((approx_percentile(0.50, percentile_agg(duration)) / 1000000.0), 0)::float,
@@ -1247,6 +1239,13 @@ queryEditorInitializationCode queryLibRecent queryLibSaved = do
         if (window.schemaManager && window.schemaManager.setSchemaData) {
           const schemaData = $schemaJson;
           window.schemaManager.setSchemaData('spans', schemaData);
+          
+          // Force refresh field suggestions in the query-builder component
+          // This makes sure any field inputs get the latest schema data
+          const queryBuilder = document.querySelector('query-builder');
+          if (queryBuilder && typeof queryBuilder.refreshFieldSuggestions === 'function') {
+            setTimeout(() => queryBuilder.refreshFieldSuggestions(), 200);
+          }
         }
         
         if (editor.setPopularSearches) {

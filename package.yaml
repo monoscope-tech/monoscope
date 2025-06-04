@@ -305,3 +305,30 @@ tests:
       - hspec-discover
       - doctest-parallel
       - relude >= 1.2.0.0
+  unit-tests:
+    main: MainUnit.hs
+    source-dirs: test/hspec
+    dependencies:
+      - base
+      - apitoolkit-server
+      - rust-interop
+      - hs-opentelemetry-instrumentation-auto
+      - hiedb-plugin
+      - hspec
+      - hspec-discover
+      - doctest-parallel
+      - relude >= 1.2.0.0
+  integration-tests:
+    main: MainIntegration.hs
+    source-dirs: test/hspec
+    dependencies:
+      - base
+      - apitoolkit-server
+      - rust-interop
+      - hs-opentelemetry-instrumentation-auto
+      - hiedb-plugin
+      - tmp-postgres
+      - hspec
+      - hspec-discover
+      - doctest-parallel
+      - relude >= 1.2.0.0
