@@ -346,7 +346,12 @@ pSummarizeSection = do
   space
   funcs <- sepBy (try namedAggregation <|> aggFunctionParser) (char ',' <* space)
   byClause <- optional $ try (space *> pSummarizeByClause)
-  return $ SummarizeCommand funcs byClause
+  
+  -- If no by clause was provided, automatically add "by status_code"
+  let defaultByClause = SummarizeByClause [Left $ Subject "status_code" "status_code" []]
+      finalByClause = Just $ fromMaybe defaultByClause byClause
+  
+  return $ SummarizeCommand funcs finalByClause
 
 
 pSection :: Parser Section

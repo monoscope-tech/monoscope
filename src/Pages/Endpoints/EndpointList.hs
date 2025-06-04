@@ -165,7 +165,7 @@ renderEndpoint activePage currTime enp = do
         , Widget.naked = Just True
         , Widget.xAxis = Just (def{showAxisLabel = Just False})
         , Widget.yAxis = Just (def{showOnlyMaxLabel = Just True})
-        , Widget.query = Just $ "endpoint_hash==\"" <> enp.endpointHash <> "\" | summarize count(*) by bin(timestamp, 1h)"
+        , Widget.query = Just $ "endpoint_hash==\"" <> enp.endpointHash <> "\" | summarize count(*) by bin(timestamp, 1h), status_code"
         , Widget._projectId = Just enp.projectId
         , Widget.hideLegend = Just True
         }
