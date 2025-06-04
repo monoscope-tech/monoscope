@@ -185,12 +185,38 @@ renderFacets facetSummary = do
           )
         ]
 
-  -- Add JS for filtering
+  -- Add JS for filtering with checkbox sync
   script_
     [text|
     function filterByFacet(field, value) {
-      document.getElementById("filterElement").handleAddQuery(field + ' == "' + value + '"');
+      const queryFragment = field + ' == "' + value + '"';
+      document.getElementById("filterElement").toggleSubQuery(queryFragment);
     }
+    
+    // Function to update facet checkboxes based on query content
+    function syncFacetCheckboxes() {
+      const filterEl = document.getElementById("filterElement");
+      if (!filterEl) return;
+      
+      // Need to get the query directly from the monaco editor
+      const query = filterEl.editor ? filterEl.editor.getValue() : "";
+      
+      document.querySelectorAll('input[type="checkbox"][data-field][data-value]').forEach(cb => {
+        const field = cb.getAttribute('data-field');
+        const value = cb.getAttribute('data-value');
+        const fragment = field + ' == "' + value + '"';
+        cb.checked = query.includes(fragment);
+      });
+    }
+    
+    // Initialize and set up event listeners
+    document.addEventListener('DOMContentLoaded', () => {
+      // Initial sync after load
+      setTimeout(syncFacetCheckboxes, 300);
+      
+      // Listen for query changes via the custom event
+      window.addEventListener('update-query', syncFacetCheckboxes);
+    });
   |]
 
   script_
@@ -292,6 +318,8 @@ renderFacets facetSummary = do
                           , name_ key
                           , onclick_ $ "filterByFacet('" <> T.replace "___" "." key <> "', '" <> val <> "')"
                           , term "data-tippy-content" (T.replace "___" "." key <> " == \"" <> val <> "\"")
+                          , term "data-field" (T.replace "___" "." key)
+                          , term "data-value" val
                           ]
 
                         span_ [class_ "facet-value truncate", term "data-tippy-content" val] do
