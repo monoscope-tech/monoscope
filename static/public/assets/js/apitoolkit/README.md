@@ -9,11 +9,11 @@ Example queries:
     method == "GET" | stats count(*) 
     method == "GET" | stats count(*) as total by field1
     method == "GET" | stats count(*) as total by field1, field2
-    method == "GET" | timechart 
-    method == "GET" | timechart [1d]
-    method == "GET" | timechart count(*) [1d]
-    method == "GET" | timechart count(*) by field1, field2 [1d]
-    method == "GET" | timechart average(field1) by field1, field2 [1d]
+    method == "GET" | summarize count(*) by bin_auto(timestamp)
+    method == "GET" | summarize count(*) by bin(timestamp, 86400)
+    method == "GET" | summarize count(*) by bin_auto(timestamp)
+    method == "GET" | summarize count(*) by field1, field2, bin_auto(timestamp)
+    method == "GET" | summarize avg(field1) by field1, field2, bin_auto(timestamp)
 
 Goals:
     - Support creating any arbitrary query with just the builders 
