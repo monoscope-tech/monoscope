@@ -857,7 +857,7 @@ apiLogsPage page = do
       logQueryBox_ page.pid page.currentRange page.source page.targetSpans page.query page.queryLibRecent page.queryLibSaved
 
       div_ [class_ "timeline flex flex-row gap-4 mt-3 group-has-[#viz-logs:not(:checked)]/pg:hidden group-has-[.toggle-chart:checked]/pg:hidden w-full", style_ "aspect-ratio: 10 / 1;"] do
-        Widget.widget_ $ (def :: Widget.Widget){Widget.query = Just "summarize count(*) by bin_auto(timestamp)", Widget.unit = Just "rows", Widget.title = Just "All traces", Widget.hideLegend = Just True, Widget._projectId = Just page.pid, Widget.standalone = Just True, Widget.yAxis = Just (def{showOnlyMaxLabel = Just True}), Widget.allowZoom = Just True, Widget.showMarkArea = Just True, Widget.layout = Just (def{Widget.w = Just 6, Widget.h = Just 4})}
+        Widget.widget_ $ (def :: Widget.Widget){Widget.query = Just "summarize count(*) by bin_auto(timestamp), status_code", Widget.unit = Just "rows", Widget.title = Just "All traces", Widget.hideLegend = Just True, Widget._projectId = Just page.pid, Widget.standalone = Just True, Widget.yAxis = Just (def{showOnlyMaxLabel = Just True}), Widget.allowZoom = Just True, Widget.showMarkArea = Just True, Widget.layout = Just (def{Widget.w = Just 6, Widget.h = Just 4})}
 
         Widget.widget_
           $ (def :: Widget.Widget)
@@ -870,7 +870,7 @@ apiLogsPage page = do
             , Widget.layout = Just (def{Widget.w = Just 6, Widget.h = Just 4})
             , Widget.sql =
                 Just
-                  [text| SELECT timeB, COALESCE(value, 0)::float AS value, quantile
+                  [text| SELECT timeB, quantile,COALESCE(value, 0)::float AS value
                               FROM ( SELECT extract(epoch from time_bucket('1h', timestamp))::integer AS timeB,
                                       ARRAY[
                                         COALESCE((approx_percentile(0.50, percentile_agg(duration)) / 1000000.0), 0)::float,

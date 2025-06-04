@@ -34,7 +34,7 @@ widgets:
       - type: 'timeseries_stat'
         title: 'Requests'
         icon: list-tree
-        query: kind=="server" AND hashes[*]=="{{var-endpointHash}}" | summarize count(*) by bin_auto(timestamp)
+        query: kind=="server" AND hashes[*]=="{{var-endpointHash}}" | summarize count(*) by bin_auto(timestamp), status_code
         unit: reqs
         eager: true
         layout: { w: 7, h: 2 }
@@ -88,7 +88,7 @@ widgets:
     # query: timechart p50(duration_ns) as p50, p75(duration_ns) as p75, p90(duration_ns) as p90, p95(duration_ns) as p95 by duration_ns
     summarize_by: max
     sql: |
-      SELECT timeB, value, quantile
+      SELECT timeB, quantile, value
       FROM (
         SELECT extract(epoch from time_bucket('1h', timestamp))::integer AS timeB,
                ARRAY[

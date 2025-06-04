@@ -1,4 +1,4 @@
-module Pkg.Parser.Expr (pSubject, pExpr, Subject (..), Values (..), Expr (..)) where
+module Pkg.Parser.Expr (pSubject, pExpr, Subject (..), Values (..), Expr (..), kqlTimespanToTimeBucket) where
 
 import Control.Monad.Combinators.Expr (
   Operator (InfixL),
@@ -602,6 +602,22 @@ kqlTimespanToInterval timespan =
         expr -> expr
   in
     "INTERVAL '" <> intervalExpr <> "'"
+
+-- | Convert KQL timespan to PostgreSQL time bucket string
+-- This is used for bin() function in summarize queries
+kqlTimespanToTimeBucket :: Text -> Text
+kqlTimespanToTimeBucket timespan =
+  case T.strip timespan of
+    ts | T.isSuffixOf "w" ts -> T.dropEnd 1 ts <> " weeks"
+    ts | T.isSuffixOf "d" ts -> T.dropEnd 1 ts <> " days"
+    ts | T.isSuffixOf "h" ts -> T.dropEnd 1 ts <> " hours"
+    ts | T.isSuffixOf "m" ts -> T.dropEnd 1 ts <> " minutes"
+    ts | T.isSuffixOf "s" ts -> T.dropEnd 1 ts <> " seconds"
+    ts | T.isSuffixOf "ms" ts -> T.dropEnd 2 ts <> " milliseconds"
+    ts | T.isSuffixOf "µs" ts -> T.dropEnd 2 ts <> " microseconds"
+    ts | T.isSuffixOf "us" ts -> T.dropEnd 2 ts <> " microseconds"
+    ts | T.isSuffixOf "ns" ts -> T.dropEnd 2 ts <> " nanoseconds"
+    _ -> "5 minutes" -- Default to 5 minutes if parsing fails
 
 
 instance Display Values where

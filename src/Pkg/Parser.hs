@@ -30,8 +30,7 @@ data QueryComponents = QueryComponents
   , -- final generated sql query
     finalSqlQuery :: Text
   , finalAlertQuery :: Maybe Text
-  , rollup :: Maybe Text
-  , finalTimechartQuery :: Maybe Text
+  , finalSummarizeQuery :: Maybe Text -- For summarize query commands
   , sortFields :: Maybe [SortField] -- Fields to sort by
   , takeLimit :: Maybe Int -- Limit number of results
   }
@@ -46,9 +45,6 @@ sectionsToComponents = foldl' applySectionToComponent (def :: QueryComponents)
 applySectionToComponent :: QueryComponents -> Section -> QueryComponents
 applySectionToComponent qc (Search expr) = qc{whereClause = Just $ display expr}
 applySectionToComponent qc (Source source) = qc{fromTable = Just $ display source}
-applySectionToComponent qc (StatsCommand aggs Nothing) = qc{select = qc.select <> map display aggs}
-applySectionToComponent qc (StatsCommand aggs byClauseM) = applyByClauseToQC byClauseM $ qc{select = qc.select <> map display aggs}
-applySectionToComponent qc (TimeChartCommand agg byClauseM rollupM) = applyRollupToQC rollupM $ applyByClauseToQC byClauseM $ qc{select = qc.select <> (map display agg)}
 applySectionToComponent qc (SummarizeCommand aggs byClauseM) = applySummarizeByClauseToQC byClauseM $ qc{select = qc.select <> map display aggs}
 applySectionToComponent qc (SortCommand sortFields) = qc{sortFields = Just sortFields}
 applySectionToComponent qc (TakeCommand limit) = qc{takeLimit = Just limit}
@@ -61,15 +57,18 @@ applySummarizeByClauseToQC (Just (SummarizeByClause fields)) qc =
   let (regularFields, binFields) = partitionEithers fields
       -- Extract bin functions for special handling
       hasBinFuncs = not (null binFields)
+      -- Extract the bin interval from the first bin function, or use auto bin calculation
+      binInterval = case listToMaybe binFields of
+                      Just (Bin _ interval) -> kqlTimespanToTimeBucket interval
+                      Just (BinAuto _) -> defaultBinSize -- Could be replaced with query_bin_auto_size calculation
+                      Nothing -> defaultBinSize
       -- Only add regular fields to GROUP BY
-      groupByClauses = map (\subj -> "COALESCE(" <> display subj <> "::text, '')::text") regularFields
-      -- Also add bin functions to GROUP BY but with the raw SQL (not coalesced)
-      binGroupByClauses = map display binFields
+      groupByClauses = map display regularFields
   in qc{
-        -- Mark that we have bin functions for special handling in SQL generation
-        finalTimechartQuery = if hasBinFuncs then Just "has_bin_funcs" else qc.finalTimechartQuery,
-        -- For GROUP BY, include both regular fields (coalesced) and bin functions (raw)
-        groupByClause = qc.groupByClause <> groupByClauses <> binGroupByClauses
+        -- Store bin interval for SQL generation when bin functions are present
+        finalSummarizeQuery = if hasBinFuncs then Just binInterval else Nothing,
+        -- Add regular fields to GROUP BY
+        groupByClause = qc.groupByClause <> groupByClauses
       }
 
 
@@ -79,14 +78,7 @@ displaySortField (SortField field Nothing) = display field
 displaySortField (SortField field (Just dir)) = display field <> " " <> dir
 
 
-applyByClauseToQC :: Maybe ByClause -> QueryComponents -> QueryComponents
-applyByClauseToQC Nothing qc = qc
-applyByClauseToQC (Just (ByClause fields)) qc = qc{groupByClause = qc.groupByClause <> map (\f -> "COALESCE(" <> display f <> "::text, '')::text") fields}
-
-
-applyRollupToQC :: Maybe Rollup -> QueryComponents -> QueryComponents
-applyRollupToQC Nothing qc = qc
-applyRollupToQC (Just (Rollup ru)) qc = qc{rollup = Just ru}
+-- Legacy clause application functions removed
 
 
 ----------------------------------------------------------------------------------
@@ -145,22 +137,28 @@ sqlFromQueryComponents sqlCfg qc =
         (Just a, Just b) -> timestampCol <> " BETWEEN '" <> fmtTime a <> "' AND '" <> fmtTime b <> "'"
         _ -> "TRUE"
 
-      (fromT, toT) = bimap (fromMaybe sqlCfg.currentTime) (fromMaybe sqlCfg.currentTime) sqlCfg.dateRange
-      timeDiffSecs = abs $ nominalDiffTimeToSeconds $ diffUTCTime fromT toT
+      -- Time-based calculations removed with timechart/stats support
       
       -- Handle sort order
       sortOrder = case qc.sortFields of
         Just fields -> "ORDER BY " <> T.intercalate ", " (map displaySortField fields)
         Nothing -> 
           -- If there's a bin function on timestamp, order by that instead of raw timestamp
-          if any (\s -> "time_bucket" `T.isInfixOf` s) qc.select
-          then "ORDER BY " <> "time_bucket('5 minutes', " <> timestampCol <> ")" <> " desc" 
-          else "ORDER BY " <> timestampCol <> " desc"
+          case qc.finalSummarizeQuery of
+            Just binInterval -> "ORDER BY " <> "time_bucket('" <> binInterval <> "', " <> timestampCol <> ")" <> " desc"
+            Nothing -> 
+              if any (\s -> "time_bucket" `T.isInfixOf` s) qc.select
+              then "ORDER BY " <> "time_bucket('" <> defaultBinSize <> "', " <> timestampCol <> ")" <> " desc" 
+              else "ORDER BY " <> timestampCol <> " desc"
       
-      -- Handle limit
+      -- Handle limit - only apply for non-summarize queries by default
       limitClause = case qc.takeLimit of
         Just limit -> "limit " <> toText (show limit)
-        Nothing -> "limit 150"
+        Nothing -> 
+          -- For summarize queries, don't apply a default limit to ensure we get complete data
+          case qc.finalSummarizeQuery of
+            Just _ -> "" -- No limit for summarize queries unless explicitly specified
+            Nothing -> "limit 150" -- Default limit for non-summarize queries
       
       -- Create a properly formatted WHERE clause condition
       whereCondition = 
@@ -188,68 +186,112 @@ sqlFromQueryComponents sqlCfg qc =
                SELECT json_build_array({selectClause}) FROM ranked_spans
                   WHERE rn = 1 {sortOrder} {limitClause} |]
         _ ->
-          if qc.finalTimechartQuery == Just "has_bin_funcs"
-          then
-            -- For summarize queries with bin functions, create a special format
-            [fmt|SELECT 
-                 json_build_array(
-                   time_bucket('5 minutes', {timestampCol}),
-                   {T.intercalate "," (filter (\s -> not ("time_bucket" `T.isInfixOf` s)) qc.select)}
-                 ) 
-               FROM {fromTable}
-               WHERE project_id='{sqlCfg.pid.toText}' and ({whereCondition})
-               GROUP BY time_bucket('5 minutes', {timestampCol})
-               ORDER BY time_bucket('5 minutes', {timestampCol}) DESC
-               {limitClause} |]
-          else
-            [fmt|SELECT json_build_array({selectClause}) FROM {fromTable}
-               WHERE project_id='{sqlCfg.pid.toText}' and ({whereCondition})
-               {groupByClause} {sortOrder} {limitClause} |]
+          case qc.finalSummarizeQuery of
+            Just binInterval ->
+              -- For summarize queries with bin functions, create a special format
+              let
+                -- Create time bucket expression with the specified interval
+                timeBucketExpr = "time_bucket('" <> binInterval <> "', " <> timestampCol <> ")"
+              in
+                -- We need to make sure the first item in json_build_array is the timestamp
+                -- and we exclude any time_bucket expressions from the original select columns
+                let selectCols = T.intercalate "," (filter (\s -> not ("time_bucket" `T.isInfixOf` s)) qc.select)
+                in [fmt|SELECT 
+                     json_build_array(
+                       {timeBucketExpr},
+                       {selectCols}
+                     ) 
+                   FROM {fromTable}
+                   WHERE project_id='{sqlCfg.pid.toText}' and ({whereCondition})
+                   GROUP BY {timeBucketExpr}
+                   ORDER BY {timeBucketExpr} DESC
+                   {limitClause} |]
+            Nothing ->
+              [fmt|SELECT json_build_array({selectClause}) FROM {fromTable}
+                 WHERE project_id='{sqlCfg.pid.toText}' and ({whereCondition})
+                 {groupByClause} {sortOrder} {limitClause} |]
       countQuery = 
-        if qc.finalTimechartQuery == Just "has_bin_funcs"
-        then
-          [fmt|SELECT count(*) FROM {fromTable}
-            WHERE project_id='{sqlCfg.pid.toText}' and ({whereCondition})
-            GROUP BY time_bucket('5 minutes', {timestampCol}) limit 1|]
-        else
-          [fmt|SELECT count(*) FROM {fromTable}
-            WHERE project_id='{sqlCfg.pid.toText}' and ({whereCondition})
-            {groupByClause} limit 1|]
+        case qc.finalSummarizeQuery of
+          Just binInterval ->
+            -- For summarize with time bucket, count the number of unique time buckets
+            let 
+                -- Create time bucket expression with the specified interval
+                timeBucketExpr = "time_bucket('" <> binInterval <> "', " <> timestampCol <> ")"
+                
+                -- Create the subquery column list and GROUP BY clause
+                -- Including group by columns if present
+                groupByCols = T.intercalate ", " qc.groupByClause
+                
+                -- Create column selections for subquery
+                subqueryCols = if null qc.groupByClause
+                               then timeBucketExpr
+                               else timeBucketExpr <> ", " <> groupByCols
+                
+                -- Create GROUP BY clause
+                groupByPart = if null qc.groupByClause
+                             then timeBucketExpr
+                             else timeBucketExpr <> ", " <> groupByCols
+            in 
+              [fmt|SELECT count(*) FROM 
+                  (SELECT {subqueryCols} 
+                   FROM {fromTable} 
+                   WHERE project_id='{sqlCfg.pid.toText}' and ({whereCondition}) 
+                   GROUP BY {groupByPart}) as subq|]
+          Nothing ->
+            -- For regular summarize queries
+            [fmt|SELECT count(*) FROM {fromTable}
+              WHERE project_id='{sqlCfg.pid.toText}' and ({whereCondition})
+              {groupByClause} limit 1|]
 
-      defRollup
-        | timeDiffSecs == 0 = "1h"
-        | timeDiffSecs <= (60 * 30) = "1s"
-        | timeDiffSecs <= (60 * 60) = "20s"
-        | timeDiffSecs <= (60 * 60 * 6) = "1m"
-        | timeDiffSecs <= (60 * 60 * 24 * 3) = "5m"
-        | otherwise = "1h"
-
-      timeRollup = fromMaybe defRollup (sqlCfg.presetRollup <|> qc.rollup)
-
-      timebucket = [fmt|extract(epoch from time_bucket('{timeRollup}', {timestampCol}))::integer as timeB, |] :: Text
-      -- FIXME: render this based on the aggregations
-      chartSelect = [fmt| count(*)::integer as count|] :: Text
-      -- chartSelect = T.intercalate "," qc.select
-      timeGroupByClause = " GROUP BY " <> T.intercalate "," ("timeB" : qc.groupByClause)
-      timeGroupSelect =
-        if null qc.groupByClause
-          then "'Throughput'"
-          else T.intercalate "||' '|| " (map (<> "::text") qc.groupByClause)
-      timeChartQuery =
-        if qc.finalTimechartQuery == Just "has_bin_funcs"
-        then
-          [fmt|
-        SELECT time_bucket('5 minutes', {timestampCol}), {chartSelect} FROM {fromTable}
-            WHERE project_id='{sqlCfg.pid.toText}'  and ({whereCondition})
-            GROUP BY time_bucket('5 minutes', {timestampCol})
-            ORDER BY time_bucket('5 minutes', {timestampCol}) DESC
-          |]
-        else
-          [fmt|
-        SELECT {timebucket} {chartSelect}, {timeGroupSelect} FROM {fromTable}
-            WHERE project_id='{sqlCfg.pid.toText}'  and ({whereCondition})
-            {timeGroupByClause}
-          |]
+      -- Generate the summarize query depending on bin functions and data type
+      summarizeQuery =
+        case qc.finalSummarizeQuery of
+          Just binInterval ->
+            -- For queries with bin functions, create a time-bucketed query returning (timestamp, group, value) tuples
+            -- This format is compatible with the pivot' function in Charts.hs
+            let
+                -- Default to status_code as the group by column if none specified
+                -- This simplifies the case where we need to return the tuple (time, group, value) format
+                -- but only have a time series with no explicit grouping
+                groupCol = if null qc.groupByClause 
+                           then "'" <> (if null qc.select then "count" else "value") <> "'" 
+                           else "COALESCE(" <> fromMaybe "status_code" (listToMaybe qc.groupByClause) <> "::text, 'null')"
+                
+                -- Default to count(*) if no aggregation specified
+                aggCol = if null qc.select 
+                         then "count(*)" 
+                         else fromMaybe "count(*)" (listToMaybe qc.select)
+                
+                -- Create time bucket expression with the specified interval
+                timeBucketExpr = "time_bucket('" <> binInterval <> "', " <> timestampCol <> ")"
+                
+                -- Create GROUP BY clause with conditional logic outside PyF template
+                firstGroupCol = fromMaybe "status_code" (listToMaybe qc.groupByClause)
+                groupByPart = if null qc.groupByClause 
+                              then timeBucketExpr
+                              else timeBucketExpr <> ", " <> firstGroupCol
+            in
+              [fmt|
+                SELECT 
+                  extract(epoch from {timeBucketExpr})::integer, 
+                  {groupCol},
+                  ({aggCol})::float
+                FROM {fromTable}
+                WHERE project_id='{sqlCfg.pid.toText}' and ({whereCondition})
+                GROUP BY {groupByPart}
+                ORDER BY {timeBucketExpr} DESC
+                {limitClause}
+              |]
+          Nothing ->
+            -- For regular summarize queries without time buckets
+            [fmt|
+              SELECT {T.intercalate "," qc.select} 
+              FROM {fromTable}
+              WHERE project_id='{sqlCfg.pid.toText}' and ({whereCondition})
+              {groupByClause}
+              ORDER BY {timestampCol} DESC
+              {limitClause}
+            |]
 
       -- FIXME: render this based on the aggregations, but without the aliases
       alertSelect = [fmt| count(*)::integer|] :: Text
@@ -262,25 +304,31 @@ sqlFromQueryComponents sqlCfg qc =
         else "TRUE"
       
       alertQuery =
-        if qc.finalTimechartQuery == Just "has_bin_funcs"
-        then
-          [fmt|
-        SELECT GREATEST({alertSelect}) FROM {fromTable}
-            WHERE project_id='{sqlCfg.pid.toText}' and ({alertWhereCondition})
-            GROUP BY time_bucket('5 minutes', {timestampCol})
-          |]
-        else
-          [fmt|
-        SELECT GREATEST({alertSelect}) FROM {fromTable}
-            WHERE project_id='{sqlCfg.pid.toText}' and ({alertWhereCondition})
-            {alertGroupByClause}
-          |]
+        case qc.finalSummarizeQuery of
+          Just binInterval ->
+            -- For queries with bin functions, create a time-bucketed alert query
+            let
+                -- Create time bucket expression with the specified interval
+                timeBucketExpr = "time_bucket('" <> binInterval <> "', " <> timestampCol <> ")"
+            in
+              [fmt|
+                SELECT GREATEST({alertSelect}) FROM {fromTable}
+                WHERE project_id='{sqlCfg.pid.toText}' and ({alertWhereCondition})
+                GROUP BY {timeBucketExpr}
+              |]
+          Nothing ->
+            -- For regular summarize queries without time buckets
+            [fmt|
+              SELECT GREATEST({alertSelect}) FROM {fromTable}
+              WHERE project_id='{sqlCfg.pid.toText}' and ({alertWhereCondition})
+              {alertGroupByClause}
+            |]
    in ( finalSqlQuery
       , qc
           { finalColumns = listToColNames selectedCols
           , countQuery
           , finalSqlQuery = finalSqlQuery
-          , finalTimechartQuery = Just timeChartQuery
+          , finalSummarizeQuery = Just summarizeQuery
           , finalAlertQuery = Just alertQuery
           }
       )

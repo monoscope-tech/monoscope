@@ -4,7 +4,7 @@ import Data.Either.Extra (fromRight')
 import Data.Text qualified as T
 import NeatInterpolation (text)
 import Pkg.Parser (
-  QueryComponents (finalTimechartQuery),
+  QueryComponents (finalSummarizeQuery),
   defPid,
   defSqlQueryCfg,
   fixedUTCTime,
@@ -75,7 +75,7 @@ spec = do
       and ( created_at > NOW() - interval '14 days' AND (method='GET') )
       ORDER BY created_at desc limit 200|]
       normT query `shouldBe` normT expected
-    it "timechart query query" do
+    it "summarize query query" do
       let (_, c) = fromRight' $ parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing) "method==\"GET\""
       let expected =
             [text|
@@ -83,16 +83,16 @@ SELECT extract(epoch from time_bucket('1h', created_at))::integer as timeB, coun
 FROM apis.request_dumps WHERE project_id='00000000-0000-0000-0000-000000000000'::uuid
 and ( created_at > NOW() - interval '14 days' AND (method='GET') ) GROUP BY timeB
       |]
-      normT (fromMaybe "" c.finalTimechartQuery) `shouldBe` normT expected
-    it "timechart query query 1d" do
-      let (_, c) = fromRight' $ parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing) "method==\"GET\" | timechart count(*) [1d]"
+      normT (fromMaybe "" c.finalSummarizeQuery) `shouldBe` normT expected
+    it "summarize query by time bin" do
+      let (_, c) = fromRight' $ parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing) "method==\"GET\" | summarize count(*) by bin(timestamp, 1d)"
       let expected =
             [text|
 SELECT extract(epoch from time_bucket('1d', created_at))::integer as timeB, count(*)::integer as count, 'Throughput'
 FROM apis.request_dumps WHERE project_id='00000000-0000-0000-0000-000000000000'::uuid
 and ( created_at > NOW() - interval '14 days' AND (method='GET') ) GROUP BY timeB
       |]
-      normT (fromMaybe "" c.finalTimechartQuery) `shouldBe` normT expected
+      normT (fromMaybe "" c.finalSummarizeQuery) `shouldBe` normT expected
     it "summarize with bin()" do
       let (query, _) = fromRight' $ parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing) "method==\"GET\" | summarize sum(attributes.client) by attributes.client, bin(timestamp, 60)"
       let expected =
