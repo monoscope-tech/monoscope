@@ -106,6 +106,7 @@ bodyWrapper bcfg child = do
         script_ [src_ $(hashAssetFile "/public/assets/deps/lit/lit-html.js"), type_ "module", defer_ "true"] ("" :: Text)
         script_ [src_ $(hashAssetFile "/public/assets/deps/gridstack/gridstack-all.js")] ("" :: Text)
 
+
         script_ [src_ $(hashAssetFile "/public/assets/deps/easepick/bundle.min.js")] ("" :: Text)
         script_ [src_ "https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"] ("" :: Text)
         script_ [src_ "https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/go.min.js"] ("" :: Text)
@@ -124,7 +125,7 @@ bodyWrapper bcfg child = do
         script_ [src_ $(hashAssetFile "/public/assets/js/thirdparty/tippy6_3_7.umd.min.js"), defer_ "true"] ("" :: Text)
         script_ [src_ $(hashAssetFile "/public/assets/js/thirdparty/instantpage5_1_0.js"), type_ "module", defer_ "true"] ("" :: Text)
 
-        script_ [type_ "module", src_ "/public/assets/web-components/dist/js/index.js"] ("" :: Text)
+        script_ [type_ "module", src_ $(hashAssetFile "/public/assets/web-components/dist/js/index.js")] ("" :: Text)
 
 
         script_
