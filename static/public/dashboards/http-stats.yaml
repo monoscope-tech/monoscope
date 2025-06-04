@@ -16,7 +16,7 @@ widgets:
       - type: 'timeseries_stat'
         title: 'Requests'
         icon: list-tree
-        query: timechart count(*)
+        query: summarize count(*) by bin_auto(timestamp)
         unit: reqs
         eager: true
         layout: { w: 7, h: 2 }
@@ -59,7 +59,7 @@ widgets:
 
   - type: 'timeseries'
     title: 'All requests'
-    query: timechart count(*) by status_code
+    query: summarize count(*) by bin_auto(timestamp), status_code
     unit: reqs
     layout: { w: 6, h: 4 }
 
@@ -91,10 +91,10 @@ widgets:
   - type: 'timeseries'
     title: 'Errors'
     theme: 'roma'
-    query: status_code >= 300.0 | timechart count(*) by status_code
+    query: status_code >= 300.0 | summarize count(*) by bin_auto(timestamp), status_code
     layout: { w: 6, h: 4 }
 
   - type: 'timeseries'
     title: 'Requests by Endpoint'
-    query: timechart count(*) by method,url_path
+    query: summarize count(*) by bin_auto(timestamp), method, url_path
     layout: { w: 6, h: 4 }
