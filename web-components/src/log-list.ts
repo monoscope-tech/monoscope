@@ -66,9 +66,11 @@ export class LogList extends LitElement {
       });
     }
 
-    window.addEventListener('update-query', (e) => {
-      this.isLoadingReplace = true;
-      this.refetchLogs();
+    ['submit', 'add-query', 'update-query'].forEach((ev) => {
+      window.addEventListener(ev, (e) => {
+        this.isLoadingReplace = true;
+        this.refetchLogs();
+      });
     });
 
     window.addEventListener('pagehide', () => {
@@ -164,12 +166,10 @@ export class LogList extends LitElement {
   }
 
   refetchLogs() {
-    console.log('refetching logs', this.isLoadingReplace);
     const p = new URLSearchParams(window.location.search);
     const pathName = window.location.pathname;
     const url = `${window.location.origin}${pathName}?json=true&${p.toString()}`;
     this.fetchData(url, false, true);
-    this.isLoadingReplace = false;
   }
 
   handleChartZoom(params: { batch?: { startValue: string; endValue: string }[] }) {
@@ -212,7 +212,6 @@ export class LogList extends LitElement {
     nextFetchUrl: string,
     recentFetchUrl: string
   ) => {
-    console.log('here, replacing to falsing');
     this.isLoadingReplace = false;
     this.logsColumns = [...cols];
     this.colIdxMap = { ...colIdxMap };
@@ -346,9 +345,10 @@ export class LogList extends LitElement {
   }
 
   fetchData(url: string, isNewData = false, isRefresh = false) {
-    if ((this.isLoading && !isNewData) || (this.isLoadingRecent && isNewData)) return;
     if (isNewData) {
       this.isLoadingRecent = true;
+    } else if (isRefresh) {
+      this.isLoadingReplace = true;
     } else {
       this.isLoading = true;
     }
@@ -365,47 +365,41 @@ export class LogList extends LitElement {
           if (!isNewData) {
             this.hasMore = logsData.length > 0;
           }
-          if (logsData.length === 0 && isRefresh) {
-            this.spanListTree = [];
+          if (!isNewData) {
+            this.nextFetchUrl = nextUrl;
+          } else if (isNewData && logsData.length > 0) {
+            this.recentFetchUrl = recentUrl;
           }
 
-          if (logsData.length > 0) {
-            if (!isNewData) {
-              this.nextFetchUrl = nextUrl;
-            } else {
-              this.recentFetchUrl = recentUrl;
-            }
+          this.serviceColors = { ...serviceColors, ...this.serviceColors };
+          let tree = this.buildSpanListTree([...logsData]);
 
-            this.serviceColors = { ...serviceColors, ...this.serviceColors };
-            let tree = this.buildSpanListTree([...logsData]);
-
-            if (isRefresh) {
-              this.nextFetchUrl = nextUrl;
-              this.recentFetchUrl = recentUrl;
-              this.spanListTree = tree;
-            } else {
-              if (isNewData) {
-                this.fetchedNew = true;
-                tree.forEach((t) => (t.isNew = true));
-                const container = document.querySelector('#logs_list_container_inner')!;
-                const scrolledToBottom = container.scrollTop + container.clientHeight >= container.scrollHeight - 1;
-                if (container && scrolledToBottom) {
-                  this.shouldScrollToBottom = true;
-                }
-                if (this.isLiveStreaming && container && container.scrollTop > 30 && !this.flipDirection) {
-                  this.recentDataToBeAdded = this.addWithFlipDirection(this.recentDataToBeAdded, tree);
-                } else if (this.isLiveStreaming && !scrolledToBottom && this.flipDirection) {
-                  this.recentDataToBeAdded = this.addWithFlipDirection(this.recentDataToBeAdded, tree);
-                } else {
-                  this.spanListTree = this.addWithFlipDirection(this.spanListTree, tree);
-                }
-              } else {
-                this.spanListTree = this.addWithFlipDirection(tree, this.spanListTree);
+          if (isRefresh) {
+            this.nextFetchUrl = nextUrl;
+            this.recentFetchUrl = recentUrl;
+            this.spanListTree = tree;
+          } else {
+            if (isNewData) {
+              this.fetchedNew = true;
+              tree.forEach((t) => (t.isNew = true));
+              const container = document.querySelector('#logs_list_container_inner')!;
+              const scrolledToBottom = container.scrollTop + container.clientHeight >= container.scrollHeight - 1;
+              if (container && scrolledToBottom) {
+                this.shouldScrollToBottom = true;
               }
+              if (this.isLiveStreaming && container && container.scrollTop > 30 && !this.flipDirection) {
+                this.recentDataToBeAdded = this.addWithFlipDirection(this.recentDataToBeAdded, tree);
+              } else if (this.isLiveStreaming && !scrolledToBottom && this.flipDirection) {
+                this.recentDataToBeAdded = this.addWithFlipDirection(this.recentDataToBeAdded, tree);
+              } else {
+                this.spanListTree = this.addWithFlipDirection(this.spanListTree, tree);
+              }
+            } else {
+              this.spanListTree = this.addWithFlipDirection(tree, this.spanListTree);
             }
-
-            this.updateColumnMaxWidthMap(logsData);
           }
+
+          this.updateColumnMaxWidthMap(logsData);
         }
       })
       .catch((error) => {
@@ -414,11 +408,13 @@ export class LogList extends LitElement {
       .finally(() => {
         if (isNewData) {
           this.isLoadingRecent = false;
+        } else if (isRefresh) {
+          this.isLoadingReplace = false;
         } else {
           this.isLoading = false;
         }
+        this.requestUpdate();
       });
-    this.requestUpdate();
   }
 
   hideColumn(column: string) {
@@ -463,22 +459,15 @@ export class LogList extends LitElement {
   }
   toggleLogRow(event: any, targetInfo: [string, string, string], pid: string) {
     const sideView = document.querySelector('#log_details_container')! as HTMLElement;
-    const resizer = document.querySelector('#resizer');
+    const resizer = document.querySelector('#resizer-details_width');
     const width = Number(getComputedStyle(sideView).width.replace('px', ''));
     this.shouldScrollToBottom = false;
     if (width < 50) {
-      const queryWidth = new URLSearchParams(window.location.search).get('details_width');
-      const storedWidth = localStorage.getItem('resizer-details_width');
-      
-      if (queryWidth) sideView.style.width = queryWidth + 'px';
-      else if (storedWidth && !storedWidth.endsWith('px')) sideView.style.width = storedWidth + 'px';
-      else if (storedWidth) sideView.style.width = storedWidth;
-      else sideView.style.width = '30%';
-      
+      sideView.style.width = `550px`;
       if (resizer) {
         resizer.classList.remove('hidden');
       }
-      updateUrlState('details_width', sideView.style.width);
+      updateUrlState('details_width', '550');
     }
     const rows = document.querySelectorAll('.item-row.bg-fillBrand-strong');
     rows.forEach((row) => row.classList.remove('bg-fillBrand-strong'));
@@ -722,8 +711,8 @@ export class LogList extends LitElement {
             ${k.toLowerCase() === 'server'
               ? renderIconWithTippy('w-4 ml-2', 'Incoming Request => Server', faSprite('arrow-down-left', 'solid', ' h-3 fill-slate-500'))
               : k.toLowerCase() === 'client'
-                ? renderIconWithTippy('w-4 ml-2', 'Outgoing Request  => Client', faSprite('arrow-up-right', 'solid', ' h-3 fill-blue-700'))
-                : nothing}
+              ? renderIconWithTippy('w-4 ml-2', 'Outgoing Request  => Client', faSprite('arrow-up-right', 'solid', ' h-3 fill-blue-700'))
+              : nothing}
             ${statusCode_ && statusCode_ !== 'UNSET' ? renderBadge(statusCls_, statusCode_, 'status code') : nothing}
             ${m ? renderBadge('min-w-[4rem] text-center cbadge cbadge-sm ' + methodCls_, m, 'method') : nothing}
             ${url ? renderBadge('cbadge-sm badge-neutral bg-fillWeak ' + wrapCls, url, 'url') : nothing}
@@ -749,8 +738,8 @@ export class LogList extends LitElement {
             ${k.toLowerCase() === 'server'
               ? renderIconWithTippy('w-4 ml-2', 'Incoming Request => Server', faSprite('arrow-down-left', 'solid', ' h-3 fill-slate-500'))
               : k.toLowerCase() === 'client'
-                ? renderIconWithTippy('w-4 ml-2', 'Outgoing Request  => Client', faSprite('arrow-up-right', 'solid', ' h-3 fill-blue-700'))
-                : nothing}
+              ? renderIconWithTippy('w-4 ml-2', 'Outgoing Request  => Client', faSprite('arrow-up-right', 'solid', ' h-3 fill-blue-700'))
+              : nothing}
             ${rpcMethod ? renderBadge('cbadge-sm badge-neutral bg-fillWeak', rpcMethod) : nothing}
           `;
         }
@@ -761,8 +750,8 @@ export class LogList extends LitElement {
         const errClas = hasErrors
           ? 'bg-fillError-strong text-white fill-white stroke-strokeError-strong'
           : childErrors
-            ? 'border border-strokeError-strong bg-fillWeak text-textWeak fill-textWeak'
-            : 'border border-strokeWeak bg-fillWeak text-textWeak fill-textWeak';
+          ? 'border border-strokeError-strong bg-fillWeak text-textWeak fill-textWeak'
+          : 'border border-strokeWeak bg-fillWeak text-textWeak fill-textWeak';
         return html`<div class="flex w-full ${wrapLines ? 'items-start' : 'items-center'} gap-1">
           ${this.view === 'tree'
             ? html`
@@ -789,8 +778,8 @@ export class LogList extends LitElement {
                         ${children}
                       </button>`
                     : depth === 0
-                      ? nothing
-                      : html`<div class=${`rounded-sm ml-1 shrink-0 w-3 h-5 ${errClas}`}></div>`}
+                    ? nothing
+                    : html`<div class=${`rounded-sm ml-1 shrink-0 w-3 h-5 ${errClas}`}></div>`}
                 </div>
               `
             : nothing}
@@ -838,17 +827,17 @@ export class LogList extends LitElement {
         ${this.isLiveStreaming
           ? html`<p>Live streaming latest data...</p>`
           : this.isLoadingRecent
-            ? html`<div class="loading loading-dots loading-md"></div>`
-            : html`
-                <button
-                  class="cursor-pointer text-textBrand underline font-semibold w-max mx-auto"
-                  @click=${() => {
-                    this.fetchData(this.recentFetchUrl, true);
-                  }}
-                >
-                  Check for recent data
-                </button>
-              `}
+          ? html`<div class="loading loading-dots loading-md"></div>`
+          : html`
+              <button
+                class="cursor-pointer text-textBrand underline font-semibold w-max mx-auto"
+                @click=${() => {
+                  this.fetchData(this.recentFetchUrl, true);
+                }}
+              >
+                Check for recent data
+              </button>
+            `}
       </td>
     </tr>`;
   }
@@ -1116,23 +1105,24 @@ class ColumnsSettings extends LitElement {
                       .concat(this.columns)
                       .filter((col) => !this.columns.some((c) => c === col) && col.toLowerCase().includes(this.searchTerm.toLowerCase()))
                       .map(
-                        (col) => html`
-                          <li
-                            class="px-1 py-0.5 hover:bg-fillWeak cursor-pointer"
-                            @click=${() => {
-                              let summaryIndex = this.columns.indexOf('summary');
-                              if (summaryIndex === -1 || col === 'latency_breakdown') {
-                                this.columns.push(col);
-                              } else {
-                                this.columns.splice(summaryIndex, 0, col);
-                              }
-                              this.searchTerm = '';
-                              this._emitChanges();
-                            }}
-                          >
-                            ${col}
-                          </li>
-                        `
+                        (col) =>
+                          html`
+                            <li
+                              class="px-1 py-0.5 hover:bg-fillWeak cursor-pointer"
+                              @click=${() => {
+                                let summaryIndex = this.columns.indexOf('summary');
+                                if (summaryIndex === -1 || col === 'latency_breakdown') {
+                                  this.columns.push(col);
+                                } else {
+                                  this.columns.splice(summaryIndex, 0, col);
+                                }
+                                this.searchTerm = '';
+                                this._emitChanges();
+                              }}
+                            >
+                              ${col}
+                            </li>
+                          `
                       )}
                     ${this.defaultColumns.filter(
                       (col) => !this.columns.some((c) => c === col) && col.toLowerCase().includes(this.searchTerm.toLowerCase())

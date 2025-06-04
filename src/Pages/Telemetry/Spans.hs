@@ -59,7 +59,7 @@ expandedSpanItem pid sp aptSp leftM rightM = do
               [ [__|on click add .hidden to #trace_expanded_view 
             then put '0px' into  #log_details_container.style.width 
             then put '100%' into #logs_list_container.style.width 
-            then add .hidden to #resizer
+            then add .hidden to #resizer-details_width
             then remove .bg-fillBrand-strong from <.item-row.bg-fillBrand-strong/>
             then call updateUrlState('details_width', '', 'delete')
             then call updateUrlState('target_event', '0px', 'delete')
@@ -186,22 +186,22 @@ expandedSpanItem pid sp aptSp leftM rightM = do
                   div_ [id_ "http-content-container", class_ "flex flex-col gap-3 mt-2"] do
                     div_ [class_ "bg-fillWeak w-max rounded-lg border border-strokeWeak justify-start items-start inline-flex"] $ do
                       div_ [class_ "justify-start items-start flex text-sm"] $ do
-                        button_ [onclick_ "navigatable(this, '#req_content', '#http-content-container', 't-tab-box-active')", class_ "http a-tab px-3 py-1 rounded-lg text-textWeak t-tab-box-active"] "Req Body"
-                        button_ [onclick_ "navigatable(this, '#res_content', '#http-content-container', 't-tab-box-active')", class_ "http a-tab px-3 py-1 rounded-lg text-textWeak"] "Res Body"
+                        button_ [onclick_ "navigatable(this, '#res_content', '#http-content-container', 't-tab-box-active')", class_ "http a-tab px-3 py-1 rounded-lg text-textWeak t-tab-box-active"] "Res Body"
+                        button_ [onclick_ "navigatable(this, '#req_content', '#http-content-container', 't-tab-box-active')", class_ "http a-tab px-3 py-1 rounded-lg text-textWeak"] "Req Body"
                         button_ [onclick_ "navigatable(this, '#hed_content', '#http-content-container', 't-tab-box-active')", class_ "http a-tab px-3 py-1 rounded-lg text-textWeak"] "Headers"
                         button_ [onclick_ "navigatable(this, '#par_content', '#http-content-container', 't-tab-box-active')", class_ "http a-tab px-3 py-1 rounded-lg text-textWeak"] "Params"
                         button_ [onclick_ "navigatable(this, '#raw_content', '#http-content-container', 't-tab-box-active')", class_ "http a-tab px-3 py-1 rounded-lg text-textWeak"] "Request Details"
                     div_ [] do
                       div_ [id_ "raw_content", class_ "hidden a-tab-content http"] do
                         jsonValueToHtmlTree (selectiveReqToJson httpJson) Nothing
-                      div_ [id_ "req_content", class_ "a-tab-content http"] do
+                      div_ [id_ "req_content", class_ "hidden a-tab-content http"] do
                         let b = case cSp.body of
                               Just (AE.Object bb) -> case KEM.lookup "request_body" bb of
                                 Just a -> a
                                 _ -> AE.object []
                               _ -> AE.object []
                         jsonValueToHtmlTree b $ Just "body.request_body"
-                      div_ [id_ "res_content", class_ "hidden a-tab-content http"] do
+                      div_ [id_ "res_content", class_ "a-tab-content http"] do
                         let b = case cSp.body of
                               Just (AE.Object bb) -> case KEM.lookup "response_body" bb of
                                 Just a -> a

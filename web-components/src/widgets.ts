@@ -1,5 +1,5 @@
 'use strict';
-
+import { params } from './main';
 const DEFAULT_BACKGROUND_STYLE = { color: 'rgba(240,248,255, 0.4)' };
 const INITIAL_FETCH_INTERVAL = 5000;
 const $ = (id: string) => document.getElementById(id);
@@ -152,9 +152,7 @@ const chartWidget = (widgetData: WidGetData) => {
         widgetData.query = params().query ? (baseQuery ? params().query + ' | ' + baseQuery : params().query) : baseQuery;
       }
       if (window.logListTable) {
-        console.log('wwwwwwwwwwwwwwwwwwwwwwwww-------------------');
         (window.logListTable as any).refetchLogs();
-        console.log('lllllllllllllllll---------------');
       }
 
       updateChartData(chart, opt, true, widgetData);
@@ -173,32 +171,19 @@ const chartWidget = (widgetData: WidGetData) => {
   });
 };
 
-function bindFunctionsToObjects(rootObj: any, obj: any) {
-  if (!obj || typeof obj !== 'object') return;
+(window as any).chartWidget = chartWidget;
 
-  Object.keys(obj).forEach((key) => {
-    const value = obj[key];
-    if (typeof value === 'function') {
-      obj[key] = value.bind(rootObj);
-    } else if (value && typeof value === 'object') {
-      bindFunctionsToObjects(rootObj, value);
-    }
-  });
-
-  return obj;
-}
-
-function formatNumber(num: number) {
+window.formatNumber = (num: number) => {
   if (Number.isInteger(num)) {
     return num.toString();
   } else {
     // toFixed returns a string with exactly 2 decimals, so parseFloat removes trailing zeros.
     return parseFloat(num.toFixed(2)).toString();
   }
-}
+};
 
 // Update the widget order on the server.
-const updateWidgetOrder = (projectId: string, dashboardId: string) => () => {
+export const updateWidgetOrder = (projectId: string, dashboardId: string) => () => {
   const mainContainer = document.querySelector('.grid-stack') as HTMLElement;
   const widgetOrder = buildWidgetOrder(mainContainer);
   fetch(`/p/${projectId}/dashboards/${dashboardId}/widgets_order`, {
@@ -253,10 +238,6 @@ const DEFAULT_REFRESH_INTERVAL = 0; // Default to Off
 window.dashboardRefreshTimer = null;
 window.dashboardRefreshInterval = DEFAULT_REFRESH_INTERVAL;
 
-/**
- * Sets up auto-refresh functionality for the page
- * @param {number} interval - Refresh interval in milliseconds (0 to disable)
- */
 function setRefreshInterval(detail: { interval: string }) {
   if (window.dashboardRefreshTimer) clearInterval(window.dashboardRefreshTimer);
   const interval = parseInt(detail.interval);

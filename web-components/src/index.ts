@@ -1,5 +1,3 @@
-import { flameGraphChart, waterFallGraphChart } from './charts';
-
 // Re-export everything from query-editor
 export * from './query-editor/query-editor';
 export * from './query-editor/query-builder';
@@ -9,6 +7,9 @@ export { initializeDefaultSchema } from './query-editor/query-editor-config';
 export * from './log-list';
 export * from './monitors/steps-editor';
 export * from './monitors/steps-assertions';
+export * from './widgets';
+import { flameGraphChart, waterFallGraphChart } from './charts';
+export * from './main';
 
 if (typeof window !== 'undefined') {
   window.flameGraphChart = flameGraphChart;

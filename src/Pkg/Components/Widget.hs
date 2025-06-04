@@ -357,7 +357,9 @@ renderChart widget = do
             script_
               [type_ "text/javascript"]
               [text|
-              (()=>{
+
+              window.addEventListener('DOMContentLoaded', function() {
+                  (()=>{
                 const echartOptTxt = `${echartOpt}`
                 const echartOpt = JSON.parse(echartOptTxt, (key, value) => {
                   if (typeof value === 'string' && value.trim().startsWith("function(")) {
@@ -370,7 +372,6 @@ renderChart widget = do
                   }
                   return value;
                 })
-
                 bindFunctionsToObjects(echartOpt, echartOpt);
                 chartWidget({
                   chartType: '${chartType}',
@@ -387,6 +388,8 @@ renderChart widget = do
                  
                 });
               })();
+              });
+            
             |]
 
 

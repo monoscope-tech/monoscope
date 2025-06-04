@@ -356,8 +356,8 @@ resizer_ targetId urlParam increasingDirection =
     ]
     do
       div_
-        [ id_ "resizer"
-        , class_ $ "absolute left-1/2 top-1/2 -translate-x-1/2 leading-none py-1 -translate-y-1/2 bg-bgRaised rounded-sm border border-strokeBrand-weak group-hover:border-strokeBrand-strong text-iconNeutral group-hover:text-iconBrand"
+        [ id_ $ "resizer-" <> urlParam
+        , class_ $ "absolute left-1/2 top-1/2 z-50 -translate-x-1/2 leading-none py-1 -translate-y-1/2 bg-slate-50 rounded-sm border border-strokeBrand-weak group-hover:border-strokeBrand-strong text-iconNeutral group-hover:text-iconBrand"
         ]
         $ faSprite_ "grip-dots-vertical" "regular" "w-4 h-5"
 
@@ -989,16 +989,18 @@ apiLogsPage page = do
         whenJust page.targetEvent \te -> do
           script_
             [text|
-            const detailsContainer = document.getElementById('log_details_container');
-            if (detailsContainer) {
-              const queryWidth = new URLSearchParams(window.location.search).get('details_width');
-              const storedWidth = localStorage.getItem('resizer-details_width');
-              
-              if (queryWidth) detailsContainer.style.width = queryWidth + 'px';
-              else if (storedWidth && !storedWidth.endsWith('px')) detailsContainer.style.width = storedWidth + 'px';
-              else if (storedWidth) detailsContainer.style.width = storedWidth;
-              else detailsContainer.style.width = '30%';
-            }
+            document.addEventListener('DOMContentLoaded', function() {
+              const detailsContainer = document.getElementById('log_details_container');
+              if (detailsContainer) {
+                const queryWidth = new URLSearchParams(window.location.search).get('details_width');
+                const storedWidth = localStorage.getItem('resizer-details_width');
+                
+                if (queryWidth) detailsContainer.style.width = queryWidth + 'px';
+                else if (storedWidth && !storedWidth.endsWith('px')) detailsContainer.style.width = storedWidth + 'px';
+                else if (storedWidth) detailsContainer.style.width = storedWidth;
+                else detailsContainer.style.width = '30%';
+              }
+              });
           |]
           let url = "/p/" <> page.pid.toText <> "/log_explorer/" <> te
           div_ [hxGet_ url, hxTarget_ "#log_details_container", hxSwap_ "innerHtml", hxTrigger_ "intersect one", hxIndicator_ "#details_indicator"] pass
