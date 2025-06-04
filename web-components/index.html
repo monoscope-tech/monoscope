@@ -68,7 +68,7 @@
               updatedAt: '2023-04-05T16:20:00Z',
               userId: 'user456',
               queryType: 'saved',
-              queryText: 'metrics | timechart [5m] avg(duration) by resource.service.name',
+              queryText: 'metrics | summarize avg(duration) by bin(timestamp, 300)',
               queryAst: {},
               title: 'Service Metrics Over Time',
               byMe: false,
@@ -84,7 +84,7 @@
             { query: 'stats p95(duration) by resource.service.name', description: 'P95 latency by service' },
             { query: 'attributes.http.response.status_code >= 400', description: 'HTTP errors' },
             { query: 'resource.service.name == "auth-service"', description: 'Auth service logs' },
-            { query: 'timechart [5m] count() by resource.service.name', description: 'Request volume over time' },
+            { query: 'summarize count(*) by bin(timestamp, 300), resource.service.name', description: 'Request volume over time' },
             { query: 'duration > 500ms', description: 'Slow requests' },
           ];
 

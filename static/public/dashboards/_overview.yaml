@@ -11,7 +11,7 @@ widgets:
       - type: 'timeseries_stat'
         title: 'Requests'
         icon: list-tree
-        query: timechart count(*)
+        query: summarize count(*) by bin_auto(timestamp)
         unit: reqs
         eager: true
         layout: { w: 7, h: 2 }
@@ -54,7 +54,7 @@ widgets:
 
   - type: 'timeseries'
     title: 'All requests (Incoming)'
-    query: kind=="server" OR name=="apitoolkit-http-span" AND  attributes.http.response.status_code != null | timechart count(*) by attributes.http.response.status_code
+    query: kind=="server" OR name=="apitoolkit-http-span" AND attributes.http.response.status_code != null | summarize count(*) by bin_auto(timestamp), attributes.http.response.status_code
     unit: reqs
     layout: { w: 6, h: 4 }
 
@@ -65,7 +65,7 @@ widgets:
     # query: timechart p50(duration_ns) as p50, p75(duration_ns) as p75, p90(duration_ns) as p90, p95(duration_ns) as p95 by duration_ns
     summarize_by: max
     sql: |
-      SELECT timeB, value, quantile
+      SELECT timeB, quantile, value
       FROM (
         SELECT extract(epoch from time_bucket('1h', timestamp))::integer AS timeB,
                ARRAY[
@@ -87,10 +87,10 @@ widgets:
     title: 'HTTP Errors (Incoming)'
     eager: true
     theme: 'roma'
-    query: kind=="server" OR name=="apitoolkit-http-span" AND attributes.http.response.status_code != null AND attributes.http.response.status_code > 399.0  | timechart count(*) by attributes.http.response.status_code
+    query: kind=="server" OR name=="apitoolkit-http-span" AND attributes.http.response.status_code != null AND attributes.http.response.status_code > 399.0 | summarize count(*) by bin_auto(timestamp), attributes.http.response.status_code
     layout: { w: 6, h: 4 }
 
   - type: 'timeseries'
     title: 'Incoming Requests by Endpoint'
-    query: kind=="server" OR name=="apitoolkit-http-span" AND attributes.http.response.status_code != null  | timechart count(*) by attributes.http.request.method,attributes.url.path
+    query: kind=="server" OR name=="apitoolkit-http-span" AND attributes.http.response.status_code != null | summarize count(*) by bin_auto(timestamp), attributes.http.request.method, attributes.url.path
     layout: { w: 6, h: 4 }
