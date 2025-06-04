@@ -183,6 +183,8 @@ dashboardPage_ pid dashId dash dashVM = do
 
     script_
       [text|
+
+      document.addEventListener('DOMContentLoaded', () => {
         GridStack.renderCB = function(el, w) {
           el.innerHTML = w.content;
           const scripts = Array.from(el.querySelectorAll('script'));
@@ -231,7 +233,7 @@ dashboardPage_ pid dashId dash dashVM = do
           nestedInstance.on('removed change', debounce(updateWidgetOrder('${projectId}', '${dashboardId}'), 200));
           nestedGridInstances.push(nestedInstance);
         });
-        
+      })
         // Listen for widget-remove-requested custom events
         document.addEventListener('widget-remove-requested', function(e) {
           const widgetEl = document.getElementById(e.detail.widgetId + '_widgetEl');

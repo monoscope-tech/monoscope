@@ -199,6 +199,8 @@ export const updateWidgetOrder = (projectId: string, dashboardId: string) => () 
     .catch((error) => console.error('Error updating widget order:', error));
 };
 
+(window as any).updateWidgetOrder = updateWidgetOrder;
+
 // Recursively build the widget order from a grid container.
 // It looks for direct children with the class "grid-stack-item" and
 // expects their ids to end with "_widgetEl". If an item contains a nested grid
@@ -228,6 +230,19 @@ function buildWidgetOrder(container: HTMLElement) {
   });
   return order;
 }
+
+(window as any).buildWidgetOrder = buildWidgetOrder;
+
+function debounce(func: any, wait: number) {
+  let timeout: NodeJS.Timeout;
+  return (...args: any[]) => {
+    if (timeout) {
+      clearTimeout(timeout);
+    }
+    timeout = setTimeout(() => func(...args), wait);
+  };
+}
+(window as any).debounce = debounce;
 
 /**
  * Auto-refresh functionality for dashboards and widgets
