@@ -36,6 +36,7 @@ declare global {
     getTimeRange: () => { from: string; to: string; since: string } | undefined;
     updateMarkAreas: (chartId: string, warningVal: string, incidentVal: string) => void;
     formatNumber: (num: number) => string;
+    getUTCOffset: () => string;
   }
   function updateUrlState(key: string, value: string): void;
 }

@@ -1217,7 +1217,6 @@ function displayTimestamp(inputDateString: string) {
     minute: '2-digit',
     second: '2-digit',
     hour12: false,
-    timeZone: 'UTC',
   } as const;
 
   const formatted = `${date.toLocaleString('en-US', options)}.${String(date.getUTCMilliseconds()).padStart(3, '0')}`;

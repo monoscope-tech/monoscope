@@ -106,6 +106,7 @@ timepicker_ submitForm currentRange = div_ [class_ "relative"] do
     , [__| on click toggle .hidden on #timepickerBox |]
     ]
     do
+      span_ [id_ "offsetIndicator", class_ "absolute top-0 -translate-y-1/2 left-1/2 -translate-x-1/2 bg-white z-50 text-xs"] "UTC+00:00"
       faSprite_ "calendar" "regular" "h-4 w-4"
       span_ [class_ "inline-block leading-none", id_ "currentRange"] $ toHtml (fromMaybe "Last 24 Hours" currentRange)
       faSprite_ "chevron-down" "regular" "h-3 w-3 text-iconNeutral "
@@ -147,6 +148,11 @@ timepicker_ submitForm currentRange = div_ [class_ "relative"] do
             submitForm
     script_
       [text|
+
+      document.addEventListener('DOMContentLoaded', ()=> {
+        const offsetStr = getUTCOffset(); 
+        document.getElementById('offsetIndicator').innerText = offsetStr;
+      })
       window.picker = new easepick.create({
         element: '#startTime',
         css: ['https://cdn.jsdelivr.net/npm/@easepick/bundle@1.2.0/dist/index.css'],
