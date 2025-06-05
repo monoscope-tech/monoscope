@@ -98,45 +98,45 @@ instance AE.FromJSON ReportAnomalyType where
           Just "ATEndpoint" ->
             ATEndpoint
               <$> o
-              AE..: "endpointUrlPath"
+                AE..: "endpointUrlPath"
               <*> o
-              AE..: "endpointMethod"
+                AE..: "endpointMethod"
               <*> o
-              AE..: "eventsCount"
+                AE..: "eventsCount"
           Just "ATShape" ->
             ATShape
               <$> o
-              AE..: "endpointUrlPath"
+                AE..: "endpointUrlPath"
               <*> o
-              AE..: "endpointMethod"
+                AE..: "endpointMethod"
               <*> o
-              AE..: "targetHash"
+                AE..: "targetHash"
               <*> o
-              AE..: "newUniqueFields"
+                AE..: "newUniqueFields"
               <*> o
-              AE..: "updatedFieldFormats"
+                AE..: "updatedFieldFormats"
               <*> o
-              AE..: "deletedFields"
+                AE..: "deletedFields"
               <*> o
-              AE..: "eventsCount"
+                AE..: "eventsCount"
           Just "ATFormat" ->
             ATFormat
               <$> o
-              AE..: "endpointUrlPath"
+                AE..: "endpointUrlPath"
               <*> o
-              AE..: "keyPath"
+                AE..: "keyPath"
               <*> o
-              AE..: "endpointMethod"
+                AE..: "endpointMethod"
               <*> o
-              AE..: "formatType"
+                AE..: "formatType"
               <*> o
-              AE..: "formatExamples"
+                AE..: "formatExamples"
               <*> o
-              AE..: "eventsCount"
+                AE..: "eventsCount"
           Just "ATRuntimeException" ->
             ATRuntimeException
               <$> o
-              AE..: "endpointUrlPath"
+                AE..: "endpointUrlPath"
           _ -> pure UnknownAnomaly
 
 
@@ -165,17 +165,19 @@ instance ToHtml ReportsPost where
   toHtmlRaw = toHtml
 
 
-singleReportGetH :: Projects.ProjectId -> Reports.ReportId -> ATAuthCtx (RespHeaders ReportsGet)
-singleReportGetH pid rid = do
+singleReportGetH :: Projects.ProjectId -> Reports.ReportId -> Maybe Text -> ATAuthCtx (RespHeaders ReportsGet)
+singleReportGetH pid rid hxRequestM = do
   (sess, project) <- Sessions.sessionAndProject pid
   report <- dbtToEff $ Reports.getReportById rid
   let bwconf =
         (def :: BWConfig)
           { sessM = Just sess
           , currProject = Just project
-          , pageTitle = "Reports"
+          , pageTitle = "Report"
           }
-  addRespHeaders $ ReportsGetSingle $ PageCtx bwconf (pid, report)
+  case hxRequestM of
+    Just _ -> addRespHeaders $ ReportsGetSingle' (pid, report)
+    _ -> addRespHeaders $ ReportsGetSingle $ PageCtx bwconf (pid, report)
 
 
 reportsGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders ReportsGet)
@@ -202,20 +204,22 @@ data ReportsGet
   = ReportsGetMain (PageCtx (Projects.ProjectId, V.Vector Reports.ReportListItem, Text, Bool, Bool))
   | ReportsGetList Projects.ProjectId (V.Vector Reports.ReportListItem) Text
   | ReportsGetSingle (PageCtx (Projects.ProjectId, Maybe Reports.Report))
+  | ReportsGetSingle' (Projects.ProjectId, Maybe Reports.Report)
 
 
 -- this one has no PageCtx wrapping
 instance ToHtml ReportsGet where
   toHtml (ReportsGetMain (PageCtx conf (pid, reports, next, daily, weekly))) = toHtml $ PageCtx conf $ reportsPage pid reports next daily weekly
   toHtml (ReportsGetList pid reports next) = toHtml $ reportListItems pid reports next
-  toHtml (ReportsGetSingle (PageCtx _ (pid, report))) = toHtml $ singleReportPage pid report
+  toHtml (ReportsGetSingle (PageCtx conf (pid, report))) = toHtml $ PageCtx conf $ singleReportPage pid report
+  toHtml (ReportsGetSingle' (pid, report)) = toHtml $ singleReportPage pid report
   toHtmlRaw = toHtml
 
 
 singleReportPage :: Projects.ProjectId -> Maybe Reports.Report -> Html ()
 singleReportPage pid report =
   div_ [class_ "mx-auto w-full flex flex-col overflow-y-scroll h-full"] do
-    h3_ [class_ "text-xl text-slate-700 flex place-items-center font-bold pb-4 border-b"] "Anomaly and Performance Report"
+    h3_ [class_ "px-6 text-lg text-textStrong flex place-items-center font-medium pb-4 border-b"] "Anomaly and Performance Report"
     case report of
       Just report' -> do
         div_ [class_ "mt-4 space-y-4"] do

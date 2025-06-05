@@ -106,9 +106,9 @@ server pool =
           (Proxy @'[APItoolkitAuthContext])
           ( \page ->
               page
-                & State.evalState Map.empty   -- TriggerEvents
-                & State.evalState Nothing     -- HXRedirectDest
-                & State.evalState Nothing     -- XWidgetJSON
+                & State.evalState Map.empty -- TriggerEvents
+                & State.evalState Nothing -- HXRedirectDest
+                & State.evalState Nothing -- XWidgetJSON
                 & Effectful.Reader.Static.runReader sessionWithCookies
           )
           cookieProtectedServer
@@ -145,7 +145,7 @@ data CookieProtectedRoutes mode = CookieProtectedRoutes
   , slackInstallPost :: mode :- "slack" :> "link-projects" :> ReqBody '[FormUrlEncoded] SlackInstall.LinkProjectsForm :> Post '[HTML] (RespHeaders (Html ()))
   , slackUpdateWebhook :: mode :- "p" :> ProjectId :> "slack" :> "webhook" :> ReqBody '[FormUrlEncoded] SlackInstall.LinkProjectsForm :> Post '[HTML] (RespHeaders (Html ()))
   , reportsGet :: mode :- "p" :> ProjectId :> "reports" :> QPT "page" :> HXRequest :> HXBoosted :> Get '[HTML] (RespHeaders Reports.ReportsGet)
-  , reportsSingleGet :: mode :- "p" :> ProjectId :> "reports" :> Capture "report_id" ReportsM.ReportId :> Get '[HTML] (RespHeaders Reports.ReportsGet)
+  , reportsSingleGet :: mode :- "p" :> ProjectId :> "reports" :> Capture "report_id" ReportsM.ReportId :> HXRequest :> Get '[HTML] (RespHeaders Reports.ReportsGet)
   , reportsPost :: mode :- "p" :> ProjectId :> "reports_notif" :> Capture "report_type" Text :> Post '[HTML] (RespHeaders Reports.ReportsPost)
   , shareLinkPost :: mode :- "p" :> ProjectId :> "share" :> Capture "event_id" UUID.UUID :> Capture "createdAt" UTCTime :> QPT "event_type" :> Post '[HTML] (RespHeaders Share.ShareLinkPost)
   , swaggerGenerateGet :: mode :- "p" :> ProjectId :> "generate_swagger" :> Get '[JSON] (RespHeaders AE.Value)

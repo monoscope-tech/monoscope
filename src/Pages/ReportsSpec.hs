@@ -71,7 +71,7 @@ spec = aroundAll withTestResources do
           dailyReport.reportType `shouldBe` "daily"
           weeklyReport.reportType `shouldBe` "weekly"
 
-          r <- toServantResponse trATCtx trSessAndHeader trLogger $ Reports.singleReportGetH testPid dailyReport.id
+          r <- toServantResponse trATCtx trSessAndHeader trLogger $ Reports.singleReportGetH testPid dailyReport.id Nothing
           case r of
             Reports.ReportsGetSingle (PageCtx _ (prid, reportM)) -> do
               prid `shouldBe` testPid
