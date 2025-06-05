@@ -542,8 +542,8 @@ instance AE.ToJSON LogsGet where
   toJSON _ = AE.object []
 
 
-logQueryBox_ :: Projects.ProjectId -> Maybe Text -> Text -> Maybe Text -> Maybe Text -> V.Vector Projects.QueryLibItem -> V.Vector Projects.QueryLibItem -> Html ()
-logQueryBox_ pid currentRange source targetSpan query queryLibRecent queryLibSaved = do
+logQueryBox_ :: Projects.ProjectId -> Maybe (Text, Text) -> Text -> Maybe Text -> Maybe Text -> V.Vector Projects.QueryLibItem -> V.Vector Projects.QueryLibItem -> Html ()
+logQueryBox_ pid currentRange' source targetSpan query queryLibRecent queryLibSaved = do
   Components.modal_ "saveQueryMdl" "" $ form_
     [ class_ "flex flex-col p-3 gap-3"
     , hxGet_ $ "/p/" <> pid.toText <> "/log_explorer?layout=SaveQuery"
@@ -766,7 +766,7 @@ data ApiLogsPageData = ApiLogsPageData
   , nextLogsURL :: Text
   , resetLogsURL :: Text
   , recentLogsURL :: Text
-  , currentRange :: Maybe Text
+  , currentRange :: Maybe (Text, Text)
   , exceededFreeTier :: Bool
   , query :: Maybe Text
   , cursor :: Maybe Text

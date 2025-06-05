@@ -9,6 +9,7 @@ module Pkg.Components.TimePicker (
 
 import Data.Aeson qualified as AE
 import Data.List qualified as L
+import Data.Text qualified as T
 import Data.Time (UTCTime, addUTCTime, defaultTimeLocale, formatTime, secondsToNominalDiffTime)
 import Data.Time.Format.ISO8601 (iso8601ParseM)
 import Deriving.Aeson.Stock qualified as DAE
@@ -53,11 +54,11 @@ unitToSeconds unit =
 ---- >>> parseTimeRange (Unsafe.read "2024-10-31 12:00:00 UTC") "2H"
 -- (Just 2024-10-31 10:00:00 UTC,Just 2024-10-31 12:00:00 UTC,Just "Last 2 Hours")
 --
-parseSince :: UTCTime -> Text -> (Maybe UTCTime, Maybe UTCTime, Maybe Text)
+parseSince :: UTCTime -> Text -> (Maybe UTCTime, Maybe UTCTime, Maybe (Text, Text))
 parseSince now since =
   either (const (Nothing, Nothing, Nothing)) buildResult (parse timeParser "" since)
   where
-    buildResult (num, unit) = (Just start, Just now, Just $ "Last " <> show num <> " " <> label)
+    buildResult (num, unit) = (Just start, Just now, Just ("Last " <> show num <> " " <> label, ""))
       where
         (secs, label) = fromMaybe (0, "") (unitToSeconds unit)
         start = addUTCTime (negate . secondsToNominalDiffTime . fromIntegral $ num * secs) now
@@ -66,7 +67,7 @@ parseSince now since =
     timeParser = (,) <$> decimal <*> (space *> some letterChar)
 
 
-parseTimeRange :: UTCTime -> TimePicker -> (Maybe UTCTime, Maybe UTCTime, Maybe Text)
+parseTimeRange :: UTCTime -> TimePicker -> (Maybe UTCTime, Maybe UTCTime, Maybe (Text, Text))
 parseTimeRange now (TimePicker Nothing Nothing Nothing) = parseSince now "24H"
 parseTimeRange now (TimePicker (Just "") Nothing Nothing) = parseSince now "24H"
 parseTimeRange now (TimePicker Nothing fromM toM) = parseFromAndTo now fromM toM
@@ -74,12 +75,12 @@ parseTimeRange now (TimePicker (Just "") fromM toM) = parseFromAndTo now fromM t
 parseTimeRange now (TimePicker sinceM _ _) = parseSince now (maybeToMonoid sinceM)
 
 
-parseFromAndTo :: UTCTime -> Maybe Text -> Maybe Text -> (Maybe UTCTime, Maybe UTCTime, Maybe Text)
+parseFromAndTo :: UTCTime -> Maybe Text -> Maybe Text -> (Maybe UTCTime, Maybe UTCTime, Maybe (Text, Text))
 parseFromAndTo now fromM toM =
   (parseUTCTime fromM, parseUTCTime toM, formatRange fromM toM)
   where
     parseUTCTime = iso8601ParseM . toString . fromMaybe ""
-    formatRange f t = liftA2 (\start end -> start <> "-" <> end) (formatTime' f) (formatTime' t)
+    formatRange f t = liftA2 (\start end -> (start, end)) (formatTime' f) (formatTime' t)
 
     formatTime' :: Maybe Text -> Maybe Text
     formatTime' = fmap (toText . formatTime defaultTimeLocale "%F %T") . parseUTCTime
@@ -97,7 +98,7 @@ timePickerItems =
   ]
 
 
-timepicker_ :: Maybe Text -> Maybe Text -> Html ()
+timepicker_ :: Maybe Text -> Maybe (Text, Text) -> Html ()
 timepicker_ submitForm currentRange = div_ [class_ "relative"] do
   input_ [type_ "hidden", id_ "since_input"]
   input_ [type_ "hidden", id_ "custom_range_input"]
@@ -108,7 +109,8 @@ timepicker_ submitForm currentRange = div_ [class_ "relative"] do
     do
       span_ [id_ "offsetIndicator", class_ "absolute top-0 -translate-y-1/2 left-1/2 -translate-x-1/2 bg-white z-50 text-xs"] "UTC+00:00"
       faSprite_ "calendar" "regular" "h-4 w-4"
-      span_ [class_ "inline-block leading-none", id_ "currentRange"] $ toHtml (fromMaybe "Last 24 Hours" currentRange)
+      let attrs = maybe [] (\(s, e) -> [term "data-start" s, term "data-end" e]) currentRange
+      span_ (attrs ++ [class_ "inline-block leading-none", id_ "currentRange"]) $ toHtml (maybe "Last 24 Hours" (\(s, e) -> s <> if T.null e then "" else "-" <> e) currentRange)
       faSprite_ "chevron-down" "regular" "h-3 w-3 text-iconNeutral "
   div_ [id_ "timepickerBox", class_ "hidden absolute right-0 z-50 mt-1 rounded-md flex"] do
     div_ [class_ "relative hidden", id_ "timepickerSidebar"] $ div_ [id_ "startTime", class_ "hidden"] ""
@@ -148,10 +150,16 @@ timepicker_ submitForm currentRange = div_ [class_ "relative"] do
             submitForm
     script_
       [text|
-
+      const formatDateLocal = (date) => new Date(date).toLocaleString();
       document.addEventListener('DOMContentLoaded', ()=> {
         const offsetStr = getUTCOffset(); 
         document.getElementById('offsetIndicator').innerText = offsetStr;
+        const range = document.getElementById("currentRange");
+        const start = range.dataset.start;
+        const end = range.dataset.end;
+        if(start && end) {
+            range.innerText = `$${formatDateLocal(start)} - $${formatDateLocal(end)}`
+          }
       })
       window.picker = new easepick.create({
         element: '#startTime',
@@ -169,7 +177,7 @@ timepicker_ submitForm currentRange = div_ [class_ "relative"] do
             const formatDate = (date) => date.toISOString();
             document.getElementById('custom_range_input').value = `$${start}/$${end}`;
             document.getElementById('timepickerBox')?.classList.toggle('hidden');
-            document.getElementById('currentRange').innerText = `$${formatDate(start)} - $${formatDate(end)}`;
+            document.getElementById('currentRange').innerText = `$${formatDateLocal(start)} - $${formatDateLocal(end)}`;
             ${submitAction}
           });
         },

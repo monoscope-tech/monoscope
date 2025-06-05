@@ -539,19 +539,19 @@ isDemoAndNotSudo :: Projects.ProjectId -> Bool -> Bool
 isDemoAndNotSudo pid isSudo = pid.toText == "00000000-0000-0000-0000-000000000000" && not isSudo
 
 
-parseTime :: Maybe Text -> Maybe Text -> Maybe Text -> UTCTime -> (Maybe UTCTime, Maybe UTCTime, Maybe Text)
+parseTime :: Maybe Text -> Maybe Text -> Maybe Text -> UTCTime -> (Maybe UTCTime, Maybe UTCTime, Maybe (Text, Text))
 parseTime fromM toM sinceM now = case sinceM of
-  Just "1H" -> (Just $ addUTCTime (negate $ secondsToNominalDiffTime 3600) now, Just now, Just "Last Hour")
-  Just "24H" -> (Just $ addUTCTime (negate $ secondsToNominalDiffTime $ 3600 * 24) now, Just now, Just "Last 24 Hours")
-  Just "7D" -> (Just $ addUTCTime (negate $ secondsToNominalDiffTime $ 3600 * 24 * 7) now, Just now, Just "Last 7 Days")
-  Just "14D" -> (Just $ addUTCTime (negate $ secondsToNominalDiffTime $ 3600 * 24 * 14) now, Just now, Just "Last 14 Days")
+  Just "1H" -> (Just $ addUTCTime (negate $ secondsToNominalDiffTime 3600) now, Just now, Just ("Last Hour", ""))
+  Just "24H" -> (Just $ addUTCTime (negate $ secondsToNominalDiffTime $ 3600 * 24) now, Just now, Just ("Last 24 Hours", ""))
+  Just "7D" -> (Just $ addUTCTime (negate $ secondsToNominalDiffTime $ 3600 * 24 * 7) now, Just now, Just ("Last 7 Days", ""))
+  Just "14D" -> (Just $ addUTCTime (negate $ secondsToNominalDiffTime $ 3600 * 24 * 14) now, Just now, Just ("Last 14 Days", ""))
   _ -> do
     let f = (iso8601ParseM (toString $ fromMaybe "" fromM) :: Maybe UTCTime)
         t = (iso8601ParseM (toString $ fromMaybe "" toM) :: Maybe UTCTime)
         start = toText . formatTime defaultTimeLocale "%F %T" <$> f
         end = toText . formatTime defaultTimeLocale "%F %T" <$> t
         range = case (start, end) of
-          (Just s, Just e) -> Just (s <> "-" <> e)
+          (Just s, Just e) -> Just (s, e)
           _ -> Nothing
      in (f, t, range)
 

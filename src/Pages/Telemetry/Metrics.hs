@@ -199,7 +199,7 @@ metricBreakdownGetH pid metricName labelM = do
       addRespHeaders $ metricBreakdown pid labelM lableValues
 
 
-metricsDetailsPage :: Projects.ProjectId -> V.Vector Text -> Telemetry.MetricDataPoint -> Text -> Maybe Text -> Html ()
+metricsDetailsPage :: Projects.ProjectId -> V.Vector Text -> Telemetry.MetricDataPoint -> Text -> Maybe (Text, Text) -> Html ()
 metricsDetailsPage pid sources metric source currentRange = do
   div_ [class_ "flex flex-col gap-8 h-full"] do
     div_ [class_ "flex items-center w-full"] do

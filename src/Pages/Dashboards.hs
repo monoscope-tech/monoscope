@@ -511,7 +511,7 @@ dashboardGetH pid dashId fileM fromDStr toDStr sinceStr allParams = do
 -- @param currentRange Time range for the widget
 -- @param existingWidgetM Optional existing widget (for edit mode)
 -- @param activeTab Which tab should be active initially ("edit" or "overview")
-widgetViewerEditor_ :: Projects.ProjectId -> Maybe Dashboards.DashboardId -> Maybe Text -> Maybe Widget.Widget -> Text -> Html ()
+widgetViewerEditor_ :: Projects.ProjectId -> Maybe Dashboards.DashboardId -> Maybe (Text, Text) -> Maybe Widget.Widget -> Text -> Html ()
 widgetViewerEditor_ pid dashboardIdM currentRange existingWidgetM activeTab = div_ [class_ "group/wgtexp"] do
   let isNewWidget = isNothing existingWidgetM
   let effectiveActiveTab = if isNewWidget then "edit" else activeTab
@@ -721,7 +721,7 @@ visTypes =
 
 
 -- | Backward compatibility wrapper for the new widget editor
-newWidget_ :: Projects.ProjectId -> Maybe Text -> Html ()
+newWidget_ :: Projects.ProjectId -> Maybe (Text, Text) -> Html ()
 newWidget_ pid currentRange = widgetViewerEditor_ pid Nothing currentRange Nothing "edit"
 
 
