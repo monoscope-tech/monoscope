@@ -57,9 +57,26 @@
     const params = new URLSearchParams(window.location.search);
     params.set('pid', pid);
 
-    // Only set non-null query parameters
-    if (query && query !== 'null') {
-      params.set('query', query);
+    // Default query to use when no query is provided
+    const DEFAULT_QUERY = 'summarize count(*) by bin_auto(timestamp)';
+    
+    // Handle query parameter
+    if (!query || query === 'null' || query === '') {
+      // If query is empty or null, use the default query
+      params.set('query', DEFAULT_QUERY);
+    } else {
+      // Check if query contains any summarize clause with binning
+      const hasSummarize = /summarize\s+/i.test(query);
+      const hasBinning = /\s+by\s+bin/i.test(query) || /\s+by\s+.*\(.*\)/i.test(query);
+      
+      // If no summarize clause or no binning in the query, add default summarization
+      if (!hasSummarize || !hasBinning) {
+        params.set('query', query + ' | ' + DEFAULT_QUERY);
+      } else {
+        // Ensure we preserve the original query exactly as written
+        // This ensures grouping by fields like 'kind' works correctly
+        params.set('query', query);
+      }
     }
 
     if (querySQL && querySQL !== 'null') {
