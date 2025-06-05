@@ -261,46 +261,35 @@ renderFacets facetSummary = do
                 label_ [tabindex_ "0", class_ "cursor-pointer"] do
                   faSprite_ "ellipsis-vertical" "regular" "w-3 h-3"
                 ul_ [tabindex_ "0", class_ "dropdown-content z-10 menu p-2 shadow bg-base-100 rounded-box w-52"] do
-                  li_
-                    $ a_
-                      [ term "data-field" (T.replace "___" "." key)
-                      , term "data-key" key
-                      , [__|
-                      init
-                        set query to window.getQueryFromEditor()
-                        if query && query.toLowerCase().includes('group by ' + @data-field.toLowerCase())
-                          set my innerHTML to 'Remove group by'
-                        end
-                      on click
-                        set query to window.getQueryFromEditor()
-                        if query && query.toLowerCase().includes('group by ' + @data-field.toLowerCase())
-                          call document.getElementById('filterElement').handleRemoveGroupBy(@data-field)
-                        else
-                          call document.getElementById('filterElement').handleAddQuery('group by ' + @data-field)
-                        end
-                    |]
-                      ]
-                      "Group by"
+                  -- li_
+                  --   $ a_
+                  --     [ term "data-field" (T.replace "___" "." key)
+                  --     , term "data-key" key
+                  --     , [__|
+                  --     init
+                  --       set query to window.getQueryFromEditor()
+                  --       if query and query.toLowerCase().includes('group by ' + @data-field.toLowerCase())
+                  --         set my innerHTML to 'Remove group by'
+                  --       end
+                  --     on click
+                  --       set query to window.getQueryFromEditor()
+                  --       if query and query.toLowerCase().includes('group by ' + @data-field.toLowerCase())
+                  --         call document.getElementById('filterElement').handleRemoveGroupBy(@data-field)
+                  --       else call document.getElementById('filterElement').handleAddQuery('group by ' + @data-field)
+                  --       end
+                  --     end
+                  --   |]
+                  --     ]
+                  --     "Group by"
                   li_
                     $ a_
                       [ term "data-key" key
-                      , [__|
-                      init
-                        set cols to (params().cols ?? "").split(",").filter(x => x != "")
-                        if cols.includes(@data-key)
-                          set my innerHTML to 'Remove table column'
-                        end
-                      on click
-                        set cols to (params().cols ?? "").split(",").filter(x => x != "")
-                        if cols.includes(@data-key)
-                          set newCols to [...new Set(cols.filter(x => x != @data-key))].join(",")
-                        else
-                          set newCols to [...new Set([...cols, @data-key])].join(",")
-                        end
-                        call htmx.trigger('#log_explorer_form', 'submit', {cols: newCols})
-                      |]
+                      , term "data-field" (T.replace "___" "." key)
+                      , [__|init set fp to @data-field then
+                                if params().cols.split(",").includes(fp) then set my innerHTML to 'Remove column' end
+                          |]
                       ]
-                      "Add table column"
+                      "Add as table column"
 
             div_ [class_ "pl-5 xmax-h-auto peer-has-checked:max-h-0 peer-has-checked:overflow-hidden transition-[max-height] duration-150"] do
               -- Prepare value lists and add toggle when needed
@@ -915,8 +904,7 @@ apiLogsPage page = do
                                 HAVING COUNT(*) > 0
                               ) s,
                             LATERAL unnest(s.values, s.quantiles) AS u(value, quantile)
-                            WHERE value IS NOT NULL;
-                        |]
+                            WHERE value IS NOT NULL;|]
             , Widget.unit = Just "ms"
             , Widget.hideLegend = Just True
             , Widget._projectId = Just page.pid
@@ -1000,7 +988,8 @@ apiLogsPage page = do
                 |]
           div_
             [ id_ "visualization-widget-container"
-            , class_ "h-full w-full"
+            , class_ " w-full"
+            , style_ "aspect-ratio: 4 / 3;"
             , hxPost_ "/widget"
             , hxTrigger_ "intersect once, update-widget"
             , hxTarget_ "this"
@@ -1230,7 +1219,7 @@ jsonTreeAuxillaryCode pid query = do
     }
 
     var toggleColumnToSummary = (e)=>{
-      const cols = (params().cols??"").split(",").filter(x=>x!="");
+      const cols = (params().cols||"").split(",").filter(x=>x!="");
       const subject = e.target.closest('.log-item-field-parent').dataset.fieldPath;
       if (cols.includes(subject)) {
         return [...new Set(cols.filter(x=>x!=subject))].join(",");

@@ -195,7 +195,7 @@ widgetHelper_ w' = case w.wType of
     gridItem_ =
       if w.naked == Just True
         then Relude.id
-        else (div_ ([class_ "grid-stack-item h-full flex-1 overflow-hidden ", id_ $ maybeToMonoid w.id <> "_widgetEl", data_ "widget" widgetJson] <> attrs) . div_ [class_ "grid-stack-item-content h-full"])
+        else (div_ ([class_ "grid-stack-item h-full flex-1 [.nested-grid_&]:overflow-hidden ", id_ $ maybeToMonoid w.id <> "_widgetEl", data_ "widget" widgetJson] <> attrs) . div_ [class_ "grid-stack-item-content h-full"])
 
 
 renderWidgetHeader :: Widget -> Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe (Text, Text) -> Bool -> Html ()
@@ -423,6 +423,12 @@ widgetToECharts widget =
               [ "show" AE..= legendVisibility
               , "type" AE..= "scroll"
               , "top" AE..= "bottom"
+              , "textStyle" AE..= AE.object ["fontSize" AE..= AE.Number 12] -- // default is usually 12 or 14
+              --  Shrink the symbol/icon size
+              , "itemWidth" AE..= (AE.Number 14) -- default is 25
+              , "itemHeight" AE..= (AE.Number 12) -- default is 14
+              , "itemGap" AE..= (AE.Number 8) -- defalt is 10
+              , "padding" AE..= AE.Array [AE.Number 2, AE.Number 4, AE.Number 2, AE.Number 4] -- [top, right, bottom, left]
               , "data" AE..= fromMaybe [] (extractLegend widget)
               ]
         , "grid"
@@ -430,7 +436,7 @@ widgetToECharts widget =
               [ "width" AE..= ("100%" :: Text)
               , "left" AE..= ("0%" :: Text)
               , "top" AE..= if widget.naked == Just True then "10%" else "5%"
-              , "bottom" AE..= if (fromMaybe False widget.hideLegend || widget.wType == WTTimeseriesStat) then "1.8%" else "22%"
+              , "bottom" AE..= if (fromMaybe False widget.hideLegend || widget.wType == WTTimeseriesStat) then "1.8%" else "18%"
               , "containLabel" AE..= True
               , "show" AE..= False
               ]
