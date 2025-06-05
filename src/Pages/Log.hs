@@ -385,8 +385,8 @@ keepNonEmpty (Just "") = Nothing
 keepNonEmpty (Just a) = Just a
 
 
-apiLogH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe UTCTime -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders LogsGet)
-apiLogH pid queryM' cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM queryLibItemTitle queryLibItemID detailWM targetEventM showTraceM hxRequestM hxBoostedM jsonM = do
+apiLogH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe UTCTime -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders LogsGet)
+apiLogH pid queryM' cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM queryLibItemTitle queryLibItemID detailWM targetEventM showTraceM hxRequestM hxBoostedM jsonM vizTypeM = do
   (sess, project) <- Sessions.sessionAndProject pid
   let source = "spans" -- fromMaybe "spans" sourceM
   let summaryCols = T.splitOn "," (fromMaybe "" cols')
@@ -496,6 +496,7 @@ apiLogH pid queryM' cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM
               , targetEvent = targetEventM
               , showTrace = showTraceM
               , facets = facetSummary
+              , vizType = vizTypeM
               }
       case (layoutM, hxRequestM, hxBoostedM, jsonM) of
         (Just "SaveQuery", _, _, _) -> addRespHeaders $ LogsQueryLibrary pid queryLibSaved queryLibRecent
@@ -542,8 +543,8 @@ instance AE.ToJSON LogsGet where
   toJSON _ = AE.object []
 
 
-logQueryBox_ :: Projects.ProjectId -> Maybe (Text, Text) -> Text -> Maybe Text -> Maybe Text -> V.Vector Projects.QueryLibItem -> V.Vector Projects.QueryLibItem -> Html ()
-logQueryBox_ pid currentRange' source targetSpan query queryLibRecent queryLibSaved = do
+logQueryBox_ :: Projects.ProjectId -> Maybe (Text, Text) -> Text -> Maybe Text -> Maybe Text -> Maybe Text -> V.Vector Projects.QueryLibItem -> V.Vector Projects.QueryLibItem -> Html ()
+logQueryBox_ pid currentRange' source targetSpan query vizTypeM queryLibRecent queryLibSaved = do
   Components.modal_ "saveQueryMdl" "" $ form_
     [ class_ "flex flex-col p-3 gap-3"
     , hxGet_ $ "/p/" <> pid.toText <> "/log_explorer?layout=SaveQuery"
@@ -668,7 +669,7 @@ logQueryBox_ pid currentRange' source targetSpan query queryLibRecent queryLibSa
                 faSprite_ "magnifying-glass" "regular" "h-4 w-4 inline-block"
       div_ [class_ "flex items-between justify-between"] do
         div_ [class_ "flex items-center gap-2"] do
-          visualizationTabs_
+          visualizationTabs_ vizTypeM
           span_ [class_ "text-textDisabled mx-2 text-xs"] "|"
           -- Query Builder for GROUP BY, AGG, SORT, LIMIT
           termRaw "query-builder" [term "query-editor-selector" "#filterElement"] ("" :: Text)
@@ -784,6 +785,7 @@ data ApiLogsPageData = ApiLogsPageData
   , targetEvent :: Maybe Text
   , showTrace :: Maybe Text
   , facets :: Maybe Models.Apis.Fields.Types.FacetSummary
+  , vizType :: Maybe Text
   }
 
 
@@ -835,11 +837,12 @@ virtualTable page = do
    |]
 
 
-visualizationTabs_ :: Html ()
-visualizationTabs_ =
+visualizationTabs_ :: Maybe Text -> Html ()
+visualizationTabs_ vizTypeM =
   div_ [class_ "tabs tabs-box tabs-outline tabs-xs bg-gray-100 p-1 rounded-lg", id_ "visualizationTabs", role_ "tablist"] do
+    let defaultVizType = fromMaybe "logs" vizTypeM
     forM_ visTypes $ \(icon, label, vizType, emoji) -> label_ [class_ "tab !shadow-none !border-strokeWeak flex gap-1"] do
-      input_ $ [type_ "radio", name_ "visualization", id_ $ "viz-" <> vizType, value_ vizType] <> [checked_ | vizType == "logs"]
+      input_ $ [type_ "radio", name_ "visualization", id_ $ "viz-" <> vizType, value_ vizType, onchange_ "updateVizTypeInUrl(this.value)"] <> [checked_ | vizType == defaultVizType]
       span_ [class_ "text-iconNeutral leading-none"] $ toHtml emoji -- faSprite_ icon "regular" "w-3 h-2"
       span_ [] $ toHtml label
 
@@ -871,7 +874,7 @@ apiLogsPage page = do
               input_ [type_ "hidden", value_ "", name_ "reqId", id_ "req_id_input"]
               input_ [type_ "hidden", value_ "", name_ "reqCreatedAt", id_ "req_created_at_input"]
     div_ [] do
-      logQueryBox_ page.pid page.currentRange page.source page.targetSpans page.query page.queryLibRecent page.queryLibSaved
+      logQueryBox_ page.pid page.currentRange page.source page.targetSpans page.query page.vizType page.queryLibRecent page.queryLibSaved
 
       div_ [class_ "timeline flex flex-row gap-4 mt-3 group-has-[#viz-logs:not(:checked)]/pg:hidden group-has-[.toggle-chart:checked]/pg:hidden w-full", style_ "aspect-ratio: 10 / 1;"] do
         Widget.widget_ $ (def :: Widget.Widget){Widget.query = Just "summarize count(*) by bin_auto(timestamp), status_code", Widget.unit = Just "rows", Widget.title = Just "All traces", Widget.hideLegend = Just True, Widget._projectId = Just page.pid, Widget.standalone = Just True, Widget.yAxis = Just (def{showOnlyMaxLabel = Just True}), Widget.allowZoom = Just True, Widget.showMarkArea = Just True, Widget.layout = Just (def{Widget.w = Just 6, Widget.h = Just 4})}
@@ -1023,7 +1026,7 @@ apiLogsPage page = do
           div_ [hxGet_ url, hxTarget_ "#log_details_container", hxSwap_ "innerHtml", hxTrigger_ "intersect one", hxIndicator_ "#details_indicator"] pass
 
   jsonTreeAuxillaryCode page.pid page.query
-  queryEditorInitializationCode page.queryLibRecent page.queryLibSaved
+  queryEditorInitializationCode page.queryLibRecent page.queryLibSaved page.vizType
 
 
 aiSearchH :: Projects.ProjectId -> AE.Value -> ATAuthCtx (RespHeaders AE.Value)
@@ -1237,14 +1240,21 @@ jsonTreeAuxillaryCode pid query = do
 |]
 
 
-queryEditorInitializationCode :: V.Vector Projects.QueryLibItem -> V.Vector Projects.QueryLibItem -> Html ()
-queryEditorInitializationCode queryLibRecent queryLibSaved = do
+queryEditorInitializationCode :: V.Vector Projects.QueryLibItem -> V.Vector Projects.QueryLibItem -> Maybe Text -> Html ()
+queryEditorInitializationCode queryLibRecent queryLibSaved vizTypeM = do
   let queryLibData = queryLibRecent <> queryLibSaved
       queryLibDataJson = decodeUtf8 $ AE.encode queryLibData
       schemaJson = decodeUtf8 $ AE.encode Schema.telemetrySchemaJson
       popularQueriesJson = decodeUtf8 $ AE.encode Schema.popularOtelQueriesJson
   script_
     [text|
+    // Function to update viz type in URL without reloading the page
+    window.updateVizTypeInUrl = function(vizType) {
+      const url = new URL(window.location);
+      url.searchParams.set('viz_type', vizType);
+      history.replaceState({}, '', url);
+    };
+    
     setTimeout(() => {
       const editor = document.getElementById('filterElement');
       if (editor) {

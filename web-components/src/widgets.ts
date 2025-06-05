@@ -53,11 +53,18 @@
 //   const borderedItem = $(`${chartId}_bordered`);
 //   if (borderedItem) borderedItem.classList.add('spotlight-border');
 
-//   try {
-//     const params = new URLSearchParams(window.location.search);
-//     params.set('pid', pid);
-//     params.set('query', query);
-//     if (querySQL) params.set('query_sql', querySQL);
+  try {
+    const params = new URLSearchParams(window.location.search);
+    params.set('pid', pid);
+
+    // Only set non-null query parameters
+    if (query && query !== 'null') {
+      params.set('query', query);
+    }
+
+    if (querySQL && querySQL !== 'null') {
+      params.set('query_sql', querySQL);
+    }
 
 //     const { from, to, headers, dataset, rows_per_min, stats } = await fetch(`/chart_data?${params}`).then((res) => res.json());
 
@@ -111,9 +118,16 @@
 //   let intervalId: NodeJS.Timeout | null = null;
 //   chart.group = 'default';
 
-//   // Store the original base query to avoid stacking
-//   const baseQuery = widgetData.query;
-//   widgetData.query = params().query ? (baseQuery ? params().query + ' | ' + baseQuery : params().query) : baseQuery;
+  // Store the original base query to avoid stacking
+  const baseQuery = widgetData.query;
+  const userQuery = params().query;
+
+  // Ensure we don't use 'null' string as a query
+  if (userQuery && userQuery !== 'null') {
+    widgetData.query = baseQuery ? userQuery + ' | ' + baseQuery : userQuery;
+  } else {
+    widgetData.query = baseQuery;
+  }
 
 //   opt.dataset.source = opt.dataset?.source?.map((row: any) => [row[0] * 1000, ...row.slice(1)]) ?? null;
 
@@ -145,15 +159,19 @@
 //     ).observe(chartEl);
 //   }
 
-//   ['submit', 'add-query', 'update-query'].forEach((event) => {
-//     const selector = event === 'submit' ? '#log_explorer_form' : '#filterElement';
-//     document.querySelector(selector)?.addEventListener(event, (e) => {
-//       if (params().query) {
-//         widgetData.query = params().query ? (baseQuery ? params().query + ' | ' + baseQuery : params().query) : baseQuery;
-//       }
-//       if (window.logListTable) {
-//         (window.logListTable as any).refetchLogs();
-//       }
+  ['submit', 'add-query', 'update-query'].forEach((event) => {
+    const selector = event === 'submit' ? '#log_explorer_form' : '#filterElement';
+    document.querySelector(selector)?.addEventListener(event, (e) => {
+      const userQuery = params().query;
+      if (userQuery && userQuery !== 'null') {
+        widgetData.query = baseQuery ? userQuery + ' | ' + baseQuery : userQuery;
+      } else {
+        widgetData.query = baseQuery;
+      }
+
+      if (window.logListTable) {
+        (window.logListTable as any).refetchLogs();
+      }
 
 //       updateChartData(chart, opt, true, widgetData);
 //     });
@@ -263,9 +281,25 @@
 //   }
 // }
 
-// // Custom event handler for setting the refresh interval programmatically
-// window.addEventListener('setRefreshInterval', function (e: any) {
-//   if (e.detail !== undefined) {
-//     setRefreshInterval(e.detail);
-//   }
-// });
+// Custom event handler for setting the refresh interval programmatically
+window.addEventListener('setRefreshInterval', function (e: any) {
+  if (e.detail !== undefined) {
+    setRefreshInterval(e.detail);
+  }
+});
+
+function bindFunctionsToObjects(rootObj: any, obj: any) {
+  if (!obj || typeof obj !== 'object') return;
+
+  Object.keys(obj).forEach((key) => {
+    const value = obj[key];
+    if (typeof value === 'function') {
+      obj[key] = value.bind(rootObj);
+    } else if (value && typeof value === 'object') {
+      bindFunctionsToObjects(rootObj, value);
+    }
+  });
+
+  return obj;
+}
+window.bindFunctionsToObjects = bindFunctionsToObjects;

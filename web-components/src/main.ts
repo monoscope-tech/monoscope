@@ -157,29 +157,13 @@
 //   myChart.setOption({ series: options.series }, false);
 // };
 
-// function updateUrlState(key: string, value: string, action: 'set' | 'delete' = 'set') {
-//   const params = new URLSearchParams(window.location.search);
-//   if (action === 'delete') {
-//     params.delete(key);
-//   } else {
-//     params.set(key, value);
-//   }
-//   window.history.replaceState({}, '', `${window.location.pathname}?${params}`);
-// }
-// window.updateUrlState = updateUrlState;
-
-// function bindFunctionsToObjects(rootObj: any, obj: any) {
-//   if (!obj || typeof obj !== 'object') return;
-
-//   Object.keys(obj).forEach((key) => {
-//     const value = obj[key];
-//     if (typeof value === 'function') {
-//       obj[key] = value.bind(rootObj);
-//     } else if (value && typeof value === 'object') {
-//       bindFunctionsToObjects(rootObj, value);
-//     }
-//   });
-
-//   return obj;
-// }
-// window.bindFunctionsToObjects = bindFunctionsToObjects;
+function updateUrlState(key: string, value: string, action: 'set' | 'delete' = 'set') {
+  const params = new URLSearchParams(window.location.search);
+  if (action === 'delete') {
+    params.delete(key);
+  } else {
+    params.set(key, value);
+  }
+  window.history.replaceState({}, '', `${window.location.pathname}?${params}`);
+}
+window.updateUrlState = updateUrlState;

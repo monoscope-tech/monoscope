@@ -358,26 +358,14 @@ renderChart widget = do
               [type_ "text/javascript"]
               [text|
 
-              window.addEventListener('DOMContentLoaded', function() {
-                  (()=>{
-                const echartOptTxt = `${echartOpt}`
-                const echartOpt = JSON.parse(echartOptTxt, (key, value) => {
-                  if (typeof value === 'string' && value.trim().startsWith("function(")) {
-                    try {
-                      return eval('(' + value + ')');
-                    } catch (error) {
-                      console.error(`Error evaluating function for key "$${key}":`, error);
-                      return value;
-                    }
-                  }
-                  return value;
-                })
-                bindFunctionsToObjects(echartOpt, echartOpt);
-                chartWidget({
+              // IIFE to avoid global variable conflicts
+              (function() {
+                // Configuration for this specific widget
+                const config = {
+                  chartId: "${chartId}",
+                  echartOpt: `${echartOpt}`,
                   chartType: '${chartType}',
                   widgetType: ${wType},
-                  opt: echartOpt,
-                  chartId: "${chartId}",
                   query: ${query},
                   querySQL: `${querySQL}`,
                   theme: "${theme}",
@@ -385,10 +373,65 @@ renderChart widget = do
                   pid: ${pid},
                   summarizeBy: '${summarizeBy}',
                   summarizeByPrefix: '${summarizeByPfx}'
-                 
+                };
+
+                // Function to initialize this specific widget
+                function initializeThisWidget() {
+                  if (typeof window.bindFunctionsToObjects !== 'function' || typeof window.chartWidget !== 'function') {
+                    // If dependencies aren't loaded yet, retry after a short delay
+                    setTimeout(initializeThisWidget, 100);
+                    return;
+                  }
+
+                  // Parse chart options
+                  const echartOpt = JSON.parse(config.echartOpt, (key, value) => {
+                    if (typeof value === 'string' && value.trim().startsWith("function(")) {
+                      try {
+                        return eval('(' + value + ')');
+                      } catch (error) {
+                        console.error(`Error evaluating function for key "$${key}":`, error);
+                        return value;
+                      }
+                    }
+                    return value;
+                  });
+                  
+                  // Check if the chart element exists
+                  const chartEl = document.getElementById(config.chartId);
+                  if (!chartEl) return;
+                  
+                  window.bindFunctionsToObjects(echartOpt, echartOpt);
+                  window.chartWidget({
+                    chartType: config.chartType,
+                    widgetType: config.widgetType,
+                    opt: echartOpt,
+                    chartId: config.chartId,
+                    query: config.query,
+                    querySQL: config.querySQL,
+                    theme: config.theme,
+                    yAxisLabel: config.yAxisLabel,
+                    pid: config.pid,
+                    summarizeBy: config.summarizeBy,
+                    summarizeByPrefix: config.summarizeByPrefix
+                  });
+                }
+
+                // Initialize on page load
+                if (document.readyState === 'loading') {
+                  window.addEventListener('DOMContentLoaded', initializeThisWidget);
+                } else {
+                  // DOM already loaded, initialize now
+                  initializeThisWidget();
+                }
+
+                // Register HTMX event handler
+                document.addEventListener('htmx:afterSwap', function(event) {
+                  const swappedEl = event.detail.elt;
+                  if (swappedEl && swappedEl.contains(document.getElementById(config.chartId))) {
+                    initializeThisWidget();
+                  }
                 });
               })();
-              });
             
             |]
 
