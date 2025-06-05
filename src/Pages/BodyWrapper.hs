@@ -125,8 +125,10 @@ bodyWrapper bcfg child = do
         script_ [src_ $(hashAssetFile "/public/assets/js/thirdparty/tippy6_3_7.umd.min.js"), defer_ "true"] ("" :: Text)
         script_ [src_ $(hashAssetFile "/public/assets/js/thirdparty/instantpage5_1_0.js"), type_ "module", defer_ "true"] ("" :: Text)
         script_ [src_ $(hashAssetFile "/public/assets/js/monaco/vs/loader.js"), defer_ "true"] ("" :: Text)
+        script_ [src_ $(hashAssetFile "/public/assets/js/main.js")] ("" :: Text)
+        script_ [src_ $(hashAssetFile "/public/assets/js/widgets.js")] ("" :: Text)
 
-        script_ [type_ "module", src_ $(hashAssetFile "/public/assets/web-components/dist/js/index.js")] ("" :: Text)
+        script_ [type_ "module", src_  $(hashAssetFile "/public/assets/web-components/dist/js/index.js")] ("" :: Text)
 
 
         script_

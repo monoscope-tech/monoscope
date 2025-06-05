@@ -73,7 +73,7 @@ export class StepsEditor extends LitElement {
       this.addStep();
     };
     document.addEventListener('DOMContentLoaded', () => {
-      this.initializeEditor(monaco);
+      // this.initializeEditor(monaco);
     });
   }
   addStep() {

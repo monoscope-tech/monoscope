@@ -183,3 +183,14 @@ function updateUrlState(key, value, action = 'set') {
   window.history.replaceState({}, '', `${window.location.pathname}?${params}`)
 }
 window.updateUrlState = updateUrlState
+
+function getUTCOffset() {
+  const now = new Date()
+  const offset = now.getTimezoneOffset()
+  const sign = offset > 0 ? '-' : '+'
+  const absOffset = Math.abs(offset)
+  const hours = String(Math.floor(absOffset / 60)).padStart(2, '0')
+  const minutes = String(absOffset % 60).padStart(2, '0')
+  return `UTC${sign}${hours}:${minutes}`
+}
+window.getUTCOffset = getUTCOffset
