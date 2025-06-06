@@ -151,7 +151,7 @@ timepicker_ submitForm currentRange = div_ [class_ "relative"] do
     script_
       [text|
       (function() {
-        const formatDateLocal = (date) => new Date(date).toLocaleString();
+        var formatDateLocal = (date) => new Date(date).toLocaleString();
         document.addEventListener('DOMContentLoaded', ()=> {
           const offsetStr = getUTCOffset(); 
           document.getElementById('offsetIndicator').innerText = offsetStr;
