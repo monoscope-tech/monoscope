@@ -122,39 +122,7 @@ bodyWrapper bcfg child = do
         script_ [src_ $(hashAssetFile "/public/assets/js/thirdparty/popper2_11_4.min.js"), defer_ "true"] ("" :: Text)
         script_ [src_ $(hashAssetFile "/public/assets/js/thirdparty/tippy6_3_7.umd.min.js"), defer_ "true"] ("" :: Text)
         script_ [src_ $(hashAssetFile "/public/assets/js/thirdparty/instantpage5_1_0.js"), type_ "module", defer_ "true"] ("" :: Text)
-        script_ [src_ $(hashAssetFile "/public/assets/js/monaco/vs/loader.js"), defer_ "true"] ("" :: Text)
         script_ [src_ $(hashAssetFile "/public/assets/js/main.js")] ("" :: Text)
-        script_ [src_ $(hashAssetFile "/public/assets/js/widgets.js")] ("" :: Text)
-        
-        -- Define critical utility functions that might be needed before modules load
-        script_ [type_ "text/javascript"] [text|
-          // Define debounce function globally so it's available immediately
-          window.debounce = function(func, wait) {
-            let timeout;
-            return function(...args) {
-              if (timeout) {
-                clearTimeout(timeout);
-              }
-              timeout = setTimeout(() => func(...args), wait);
-            };
-          };
-          
-          // Define bindFunctionsToObjects globally for widget initialization
-          window.bindFunctionsToObjects = function(rootObj, obj) {
-            if (!obj || typeof obj !== 'object') return;
-            
-            Object.keys(obj).forEach(function(key) {
-              const value = obj[key];
-              if (typeof value === 'function') {
-                obj[key] = value.bind(rootObj);
-              } else if (value && typeof value === 'object') {
-                window.bindFunctionsToObjects(rootObj, value);
-              }
-            });
-            
-            return obj;
-          };
-        |]
 
         script_ [type_ "module", src_ $(hashAssetFile "/public/assets/web-components/dist/js/index.js")] ("" :: Text)
 

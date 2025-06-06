@@ -150,38 +150,40 @@ timepicker_ submitForm currentRange = div_ [class_ "relative"] do
             submitForm
     script_
       [text|
-      const formatDateLocal = (date) => new Date(date).toLocaleString();
-      document.addEventListener('DOMContentLoaded', ()=> {
-        const offsetStr = getUTCOffset(); 
-        document.getElementById('offsetIndicator').innerText = offsetStr;
-        const range = document.getElementById("currentRange");
-        const start = range.dataset.start;
-        const end = range.dataset.end;
-        if(start && end) {
-            range.innerText = `$${formatDateLocal(start)} - $${formatDateLocal(end)}`
-          }
-      })
-      window.picker = new easepick.create({
-        element: '#startTime',
-        css: ['https://cdn.jsdelivr.net/npm/@easepick/bundle@1.2.0/dist/index.css'],
-        inline: true,
-        plugins: ['RangePlugin', 'TimePlugin'],
-        autoApply: false,
-        setup(picker) {
-          picker.on('select', ({ detail: { start, end } }) => {
-            startMs = start.getTime();
-            endMs = end.getTime();
-            if (startMs >= endMs) {
-               end = new Date();
-              }
-            const formatDate = (date) => date.toISOString();
-            document.getElementById('custom_range_input').value = `$${start}/$${end}`;
-            document.getElementById('timepickerBox')?.classList.toggle('hidden');
-            document.getElementById('currentRange').innerText = `$${formatDateLocal(start)} - $${formatDateLocal(end)}`;
-            ${submitAction}
-          });
-        },
-      });
+      (function() {
+        const formatDateLocal = (date) => new Date(date).toLocaleString();
+        document.addEventListener('DOMContentLoaded', ()=> {
+          const offsetStr = getUTCOffset(); 
+          document.getElementById('offsetIndicator').innerText = offsetStr;
+          const range = document.getElementById("currentRange");
+          const start = range.dataset.start;
+          const end = range.dataset.end;
+          if(start && end) {
+              range.innerText = `$${formatDateLocal(start)} - $${formatDateLocal(end)}`
+            }
+        })
+        window.picker = new easepick.create({
+          element: '#startTime',
+          css: ['https://cdn.jsdelivr.net/npm/@easepick/bundle@1.2.0/dist/index.css'],
+          inline: true,
+          plugins: ['RangePlugin', 'TimePlugin'],
+          autoApply: false,
+          setup(picker) {
+            picker.on('select', ({ detail: { start, end } }) => {
+              startMs = start.getTime();
+              endMs = end.getTime();
+              if (startMs >= endMs) {
+                end = new Date();
+                }
+              const formatDate = (date) => date.toISOString();
+              document.getElementById('custom_range_input').value = `$${start}/$${end}`;
+              document.getElementById('timepickerBox')?.classList.toggle('hidden');
+              document.getElementById('currentRange').innerText = `$${formatDateLocal(start)} - $${formatDateLocal(end)}`;
+              ${submitAction}
+            });
+          },
+        });
+      })()
     |]
 
 

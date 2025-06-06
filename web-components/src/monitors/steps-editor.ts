@@ -73,7 +73,7 @@ export class StepsEditor extends LitElement {
       this.addStep();
     };
     document.addEventListener('DOMContentLoaded', () => {
-      // this.initializeEditor(monaco);
+      this.initializeEditor(monaco);
     });
   }
   addStep() {
@@ -292,8 +292,8 @@ export class StepsEditor extends LitElement {
           <div class="flex-1 flex flex-row items-center gap-1 pr-5 py-3" @click="${() => this.toggleExpanded(idx)}">
             <label
              for="stepState-${idx}" class="flex items-center whitespace-nowrap gap-1 py-1 w-max text-xs bg-fillStrong badge text-textInverse-strong">Step ${
-      idx + 1
-    }</label>
+               idx + 1
+             }</label>
             <div class="w-full space-y-1 shrink" @click="${(e: any) => e.stopPropagation()}">
               <input
               class="text-lg w-full pl-2 bg-transparent outline-hidden focus:outline-hidden" placeholder="Give your step a name*"
@@ -333,7 +333,7 @@ export class StepsEditor extends LitElement {
                 <div class="relative flex flex-row gap-2 items-center">
                   <label for="actions-list-input-${idx}" class="w-28 shrink text-sm font-medium form-control">
                     <select id="actions-list-input-${idx}" class="select select-sm shadow-none w-full" @change=${(e: any) =>
-      this.updateValue(e, idx, null, null, '_method')}>
+                      this.updateValue(e, idx, null, null, '_method')}>
                       ${validMethods.map((methodItem) => html`<option ?selected=${methodItem == stepData._method}>${methodItem}</option>`)}
                     </select>
                     ${saveError.method ? html`<span class="text-red-700 text-xs">${saveError.method}</span>` : ''}
@@ -342,8 +342,8 @@ export class StepsEditor extends LitElement {
                     <input
                       placeholder="https://example.com/api/users"
                       type="text" id="actions-data-${idx}" .value=${
-      stepData._url || ''
-    } class="input input-sm shadow-none w-full" @change=${(e: any) => this.updateValue(e, idx, null, null, '_url')}
+                        stepData._url || ''
+                      } class="input input-sm shadow-none w-full" @change=${(e: any) => this.updateValue(e, idx, null, null, '_url')}
                     />
                     ${saveError.url ? html`<span class="text-red-700 text-xs">${saveError.url}</span>` : ''}
                   </label>
