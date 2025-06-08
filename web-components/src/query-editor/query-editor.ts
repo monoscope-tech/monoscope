@@ -789,22 +789,55 @@ export class QueryEditorComponent extends LitElement {
     if (!this.editor) return;
 
     const currentQuery = this.editor.getValue().trim();
-    const baseQuery = currentQuery.replace(/\|\s*(timechart|stats)\s+[^|]*$/i, '').trim();
+    
+    // Check if the query contains a summarize clause
+    const hasSummarize = /summarize\s+/i.test(currentQuery);
+    
+    // Check if summarize includes bin_auto or bin with any field
+    const hasBinFunction = /summarize.*by\s+.*bin(_auto)?\s*\(\s*\w+\s*[,)].*$/i.test(currentQuery);
+
+    console.log(`Visualization change: ${visualizationType}`);
+    console.log(`Current query: "${currentQuery}"`);
+    console.log(`Has summarize: ${hasSummarize}, Has bin function: ${hasBinFunction}`);
+
+    // If query already has the correct format, don't change it
+    if (hasSummarize && hasBinFunction) {
+      console.log(`Query already has bin/bin_auto function, keeping as is: "${currentQuery}"`);
+      return;
+    }
 
     let newQuery = '';
     switch (visualizationType) {
-      case 'timeseries':
-        newQuery = baseQuery ? `${baseQuery} | timechart [5m] count(*)` : 'timechart [5m] count(*)';
+      case 'timeseries':        // Bar chart
+      case 'timeseries_line':   // Line chart
+        if (hasSummarize && !hasBinFunction) {
+          // Query has summarize but no bin_auto for timestamp, add bin_auto(timestamp) to the by clause
+          newQuery = currentQuery.replace(
+            /(\s*summarize\s+[^|]*?by\s+)([^|]*?)(?=\||$)/i,
+            (match, summarizePrefix, byClause) => {
+              // Add bin_auto(timestamp) to the beginning of the by clause
+              const updatedBy = byClause.trim() ? 
+                `${summarizePrefix}bin_auto(timestamp), ${byClause.trim()}` : 
+                `${summarizePrefix}bin_auto(timestamp)`;
+              return updatedBy;
+            }
+          );
+          console.log(`Adding bin_auto to existing summarize. New query: "${newQuery}"`);
+        } else if (!hasSummarize) {
+          // No summarize clause, add one with bin_auto(timestamp)
+          newQuery = `${currentQuery ? currentQuery + ' ' : ''}| summarize count(*) by bin_auto(timestamp), status_code`;
+          console.log(`Adding new summarize clause. New query: "${newQuery}"`);
+        }
         break;
       case 'table':
       case 'top-list':
       case 'distribution':
       case 'query-value':
-        newQuery = baseQuery ? `${baseQuery} | stats count(*)` : 'stats count(*)';
-        break;
+        // We don't modify queries for these visualization types
+        return;
       default: // logs
-        newQuery = baseQuery;
-        break;
+        // No modification for logs
+        return;
     }
 
     this.handleAddQuery(newQuery, true);

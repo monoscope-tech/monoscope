@@ -677,7 +677,7 @@ logQueryBox_ pid currentRange' source targetSpan query vizTypeM queryLibRecent q
         div_ [class_ "", id_ "resultTableInner"] pass
 
         div_ [class_ "flex justify-end  gap-2 "] do
-          fieldset_ [class_ "fieldset"] $ label_ [class_ "label"] do
+          fieldset_ [class_ "fieldset"] $ label_ [class_ "label hidden group-has-[#viz-logs:checked]/pg:block"] do
             input_ [type_ "checkbox", class_ "checkbox checkbox-sm rounded-sm toggle-chart"] >> span_ "timeline"
 
 
@@ -1253,6 +1253,13 @@ queryEditorInitializationCode queryLibRecent queryLibSaved vizTypeM = do
       const url = new URL(window.location);
       url.searchParams.set('viz_type', vizType);
       history.replaceState({}, '', url);
+      
+      // Call the query editor's handleVisualizationChange method to update the query
+      const editor = document.getElementById('filterElement');
+      if (editor?.handleVisualizationChange) {
+        const vizTypeMap = { 'bar': 'timeseries', 'line': 'timeseries_line' };
+        editor.handleVisualizationChange(vizTypeMap[vizType] || vizType);
+      }
     };
     
     setTimeout(() => {
