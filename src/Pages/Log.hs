@@ -1261,7 +1261,7 @@ queryEditorInitializationCode queryLibRecent queryLibSaved vizTypeM = do
       }
     };
     
-    setTimeout(() => {
+    document.addEventListener('DOMContentLoaded', () => {
       const editor = document.getElementById('filterElement');
       if (editor) {
         if (editor.setQueryLibrary) {
@@ -1277,7 +1277,7 @@ queryEditorInitializationCode queryLibRecent queryLibSaved vizTypeM = do
           // This makes sure any field inputs get the latest schema data
           const queryBuilder = document.querySelector('query-builder');
           if (queryBuilder && typeof queryBuilder.refreshFieldSuggestions === 'function') {
-            setTimeout(() => queryBuilder.refreshFieldSuggestions(), 200);
+            queryBuilder.refreshFieldSuggestions();
           }
         }
         
@@ -1286,5 +1286,5 @@ queryEditorInitializationCode queryLibRecent queryLibSaved vizTypeM = do
           editor.setPopularSearches(popularQueries);
         }
       }
-    }, 100);
+    });
     |]
