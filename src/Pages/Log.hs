@@ -842,7 +842,20 @@ visualizationTabs_ vizTypeM =
   div_ [class_ "tabs tabs-box tabs-outline tabs-xs bg-gray-100 p-1 rounded-lg", id_ "visualizationTabs", role_ "tablist"] do
     let defaultVizType = fromMaybe "logs" vizTypeM
     forM_ visTypes $ \(icon, label, vizType, emoji) -> label_ [class_ "tab !shadow-none !border-strokeWeak flex gap-1"] do
-      input_ $ [type_ "radio", name_ "visualization", id_ $ "viz-" <> vizType, value_ vizType, onchange_ "updateVizTypeInUrl(this.value)"] <> [checked_ | vizType == defaultVizType]
+      input_
+        $ [ type_ "radio"
+          , name_ "visualization"
+          , id_ $ "viz-" <> vizType
+          , value_ vizType
+          , [__| on change
+                    if my.checked
+                      call updateVizTypeInUrl(my.value)
+                      set widgetJSON.type to my.value
+                      send 'update-widget' to #visualization-widget-container
+                    end
+                 |]
+          ]
+          <> [checked_ | vizType == defaultVizType]
       span_ [class_ "text-iconNeutral leading-none"] $ toHtml emoji -- faSprite_ icon "regular" "w-3 h-2"
       span_ [] $ toHtml label
 
@@ -953,7 +966,7 @@ apiLogsPage page = do
           whenJust page.showTrace \trId -> do
             let url = "/p/" <> page.pid.toText <> "/traces/" <> trId
             span_ [class_ "loading loading-dots loading-md"] ""
-            div_ [hxGet_ url, hxTarget_ "#trace_expanded_view", hxSwap_ "innerHtml", hxTrigger_ "intersect one"] pass
+            div_ [hxGet_ url, hxTarget_ "#trace_expanded_view", hxSwap_ "innerHtml", hxTrigger_ "intersect one", term "hx-sync" "this:replace"] pass
 
         -- Visualization container with conditional display based on radio selection
         div_ [class_ "hidden group-has-[#viz-logs:checked]/pg:block h-full"] do
@@ -961,11 +974,11 @@ apiLogsPage page = do
 
         div_ [class_ "group-has-[#viz-logs:checked]/pg:hidden h-full"] do
           let pid = page.pid.toText
+          let vizType = maybe "\"timeseries\"" show page.vizType
           script_
-            [class_ "hidden"]
             [text| var widgetJSON = { 
                   "id": "visualization-widget",
-                  "type": "timeseries_line", 
+                  "type": ${vizType}, 
                   "title": "Visualization",
                   "standalone": true,
                   "allow_zoom": true,
@@ -973,32 +986,18 @@ apiLogsPage page = do
                   "_center_title": true, 
                   "layout": {"w": 6, "h": 4}
                 };
-                
-                document.addEventListener('DOMContentLoaded', function() {
-                  const updateWidget = () => {
-                    const visType = document.querySelector('input[name="visualization"]:checked').value;
-                    if (visType) {widgetJSON.type = visType}
-                    document.getElementById('visualization-widget-container').dispatchEvent(new Event('update-widget'));
-                  };
-                  
-                  // Update visualization when tabs change
-                  document.querySelectorAll('input[name="visualization"]').forEach(radio => {
-                    radio.addEventListener('change', updateWidget);
-                  });
-                  
-                  updateWidget();
-                });
                 |]
           div_
             [ id_ "visualization-widget-container"
             , class_ " w-full"
-            , style_ "aspect-ratio: 4 / 3;"
+            , style_ "aspect-ratio: 4 / 2;"
             , hxPost_ "/widget"
             , hxTrigger_ "intersect once, update-widget"
             , hxTarget_ "this"
             , hxSwap_ "innerHTML"
             , hxVals_ "js:{...widgetJSON}"
             , hxExt_ "json-enc"
+            , term "hx-sync" "this:replace"
             ]
             ""
 
@@ -1023,7 +1022,7 @@ apiLogsPage page = do
               });
           |]
           let url = "/p/" <> page.pid.toText <> "/log_explorer/" <> te
-          div_ [hxGet_ url, hxTarget_ "#log_details_container", hxSwap_ "innerHtml", hxTrigger_ "intersect one", hxIndicator_ "#details_indicator"] pass
+          div_ [hxGet_ url, hxTarget_ "#log_details_container", hxSwap_ "innerHtml", hxTrigger_ "intersect one", hxIndicator_ "#details_indicator", term "hx-sync" "this:replace"] pass
 
   jsonTreeAuxillaryCode page.pid page.query
   queryEditorInitializationCode page.queryLibRecent page.queryLibSaved page.vizType

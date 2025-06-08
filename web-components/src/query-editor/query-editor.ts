@@ -399,7 +399,10 @@ monaco.languages.registerCompletionItemProvider('aql', {
     }
 
     // Fifth priority: Check for logical operators followed by space - suggest fields
-    const logicalOperatorPattern = new RegExp(`\\b(${LOGICAL_OPERATORS.filter((op) => ['and', 'or', 'not'].includes(op)).join('|')})\\s+$`, 'i');
+    const logicalOperatorPattern = new RegExp(
+      `\\b(${LOGICAL_OPERATORS.filter((op) => ['and', 'or', 'not'].includes(op)).join('|')})\\s+$`,
+      'i'
+    );
     const logicalOperatorMatch = lineText.match(logicalOperatorPattern);
     if (logicalOperatorMatch) {
       const fields = await schemaManager.resolveNested(currentSchema, '');
@@ -789,10 +792,10 @@ export class QueryEditorComponent extends LitElement {
     if (!this.editor) return;
 
     const currentQuery = this.editor.getValue().trim();
-    
+
     // Check if the query contains a summarize clause
     const hasSummarize = /summarize\s+/i.test(currentQuery);
-    
+
     // Check if summarize includes bin_auto or bin with any field
     const hasBinFunction = /summarize.*by\s+.*bin(_auto)?\s*\(\s*\w+\s*[,)].*$/i.test(currentQuery);
 
@@ -800,28 +803,25 @@ export class QueryEditorComponent extends LitElement {
     console.log(`Current query: "${currentQuery}"`);
     console.log(`Has summarize: ${hasSummarize}, Has bin function: ${hasBinFunction}`);
 
-    // If query already has the correct format, don't change it
-    if (hasSummarize && hasBinFunction) {
-      console.log(`Query already has bin/bin_auto function, keeping as is: "${currentQuery}"`);
-      return;
-    }
-
     let newQuery = '';
     switch (visualizationType) {
-      case 'timeseries':        // Bar chart
-      case 'timeseries_line':   // Line chart
+      case 'timeseries': // Bar chart
+      case 'timeseries_line': // Line chart
+        // If query already has the correct format for timeseries, don't change it
+        if (hasSummarize && hasBinFunction) {
+          console.log(`Query already has bin/bin_auto function, keeping as is: "${currentQuery}"`);
+          return;
+        }
+
         if (hasSummarize && !hasBinFunction) {
           // Query has summarize but no bin_auto for timestamp, add bin_auto(timestamp) to the by clause
-          newQuery = currentQuery.replace(
-            /(\s*summarize\s+[^|]*?by\s+)([^|]*?)(?=\||$)/i,
-            (match, summarizePrefix, byClause) => {
-              // Add bin_auto(timestamp) to the beginning of the by clause
-              const updatedBy = byClause.trim() ? 
-                `${summarizePrefix}bin_auto(timestamp), ${byClause.trim()}` : 
-                `${summarizePrefix}bin_auto(timestamp)`;
-              return updatedBy;
-            }
-          );
+          newQuery = currentQuery.replace(/(\s*summarize\s+[^|]*?by\s+)([^|]*?)(?=\||$)/i, (match, summarizePrefix, byClause) => {
+            // Add bin_auto(timestamp) to the beginning of the by clause
+            const updatedBy = byClause.trim()
+              ? `${summarizePrefix}bin_auto(timestamp), ${byClause.trim()}`
+              : `${summarizePrefix}bin_auto(timestamp)`;
+            return updatedBy;
+          });
           console.log(`Adding bin_auto to existing summarize. New query: "${newQuery}"`);
         } else if (!hasSummarize) {
           // No summarize clause, add one with bin_auto(timestamp)
@@ -835,9 +835,16 @@ export class QueryEditorComponent extends LitElement {
       case 'query-value':
         // We don't modify queries for these visualization types
         return;
-      default: // logs
-        // No modification for logs
-        return;
+      case 'logs':
+      default:
+        // For logs or default case (which is interpreted as logs), remove any summarize part
+        if (hasSummarize) {
+          newQuery = currentQuery.replace(/\|\s*summarize\s+[^|]*?(?=\||$)/i, '');
+          console.log(`Removing summarize for ${visualizationType === 'logs' ? 'logs' : 'default'} view. New query: "${newQuery}"`);
+        } else {
+          return; // No summarize to remove
+        }
+        break;
     }
 
     this.handleAddQuery(newQuery, true);
@@ -1380,8 +1387,8 @@ export class QueryEditorComponent extends LitElement {
       item.kind === 'completion'
         ? ((item as CompletionItem).parentPath ? `${(item as CompletionItem).parentPath}.${item.label}` : item.label) || ''
         : item.kind === 'savedView'
-        ? (item as SavedView).name || 'Saved View'
-        : item.query || '';
+          ? (item as SavedView).name || 'Saved View'
+          : item.query || '';
 
     return html`
       <div
@@ -1514,13 +1521,13 @@ export class QueryEditorComponent extends LitElement {
 }
 
 // Add a convenience method to get field suggestions directly from schemaManager
-schemaManager.getFieldSuggestions = async (schema?: string): Promise<{name: string, type: string, description?: string}[]> => {
+schemaManager.getFieldSuggestions = async (schema?: string): Promise<{ name: string; type: string; description?: string }[]> => {
   const schemaToUse = schema || schemaManager.getDefaultSchema();
   const fields = await schemaManager.resolveNested(schemaToUse, '');
-  return fields.map(field => ({
+  return fields.map((field) => ({
     name: field.name,
     type: field.type,
-    description: field.examples?.join(', ')
+    description: field.examples?.join(', '),
   }));
 };
 
