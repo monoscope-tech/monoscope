@@ -292,6 +292,7 @@ dashboardPage pid col reqsVecM = do
                       , targetEvent = Nothing
                       , showTrace = Nothing
                       , facets = Nothing
+                      , vizType = Nothing
                       }
               Log.virtualTable page
             _ -> pass
