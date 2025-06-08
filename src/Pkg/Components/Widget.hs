@@ -46,6 +46,7 @@ data Layout = Layout
 
 data WidgetType
   = WTGroup
+  | WTLogs
   | WTTimeseries
   | WTTimeseriesLine
   | WTTimeseriesStat

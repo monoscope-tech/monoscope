@@ -593,6 +593,14 @@ logQueryBox_ pid currentRange' source targetSpan query vizTypeM queryLibRecent q
                 document.getElementById("ai-search-input").value=""
               }
             });
+            window.handleVisualizationUpdate = function(vizType) {
+              window.requestAnimationFrame(() => {
+                updateVizTypeInUrl(vizType);
+                document.querySelector(`#visualizationTabs input[value='$${vizType}']`).checked = true;
+                window.widgetJSON.type = vizType;
+                document.getElementById('visualization-widget-container').dispatchEvent(new Event('update-widget'));
+              });
+            }
             |]
           div_ [class_ "w-full gap-2 items-center px-2 hidden group-has-[.ai-search:checked]/fltr:flex"] do
             faSprite_ "sparkles" "regular" "h-4 w-4 inline-block text-iconBrand"
@@ -604,24 +612,26 @@ logQueryBox_ pid currentRange' source targetSpan query vizTypeM queryLibRecent q
               , required_ "required"
               , name_ "input"
               , hxPost_ $ "/p/" <> pid.toText <> "/log_explorer/ai_search"
-              , hxTrigger_ "input[this.value.trim().length > 0] changed delay:500ms"
+              , hxTrigger_ "input[this.value.trim().length > 0] changed delay:1s"
               , hxSwap_ "none"
               , hxExt_ "json-enc"
               , term "hx-validate" "false"
               , hxIndicator_ "#ai-search-loader"
               , [__|on keydown[key=='Escape'] set #ai-search-chkbox.checked to false
                    on keydown[key=='Enter'] 
-                     if this.value.trim().length > 0 
+                     if my.value.trim().length > 0 
                        then halt then trigger htmx:trigger 
                      end
                    on htmx:afterRequest 
                      if event.detail.successful 
                        then 
                          call JSON.parse(event.detail.xhr.responseText) set result to it
-                         if result.query
-                           then 
-                             call #filterElement.handleAddQuery(result.query, true)
+                         if result.visualization_type
+                           then
+                             set vizType to result.visualization_type
+                             call window.handleVisualizationUpdate(vizType)
                          end
+                         if result.query then call #filterElement.handleAddQuery(result.query, true) end
                      else
                        if event.detail.xhr.responseText and event.detail.xhr.responseText.includes('INVALID_QUERY_ERROR')
                          then
@@ -1046,9 +1056,14 @@ aiSearchH _pid requestBody = do
             Left errMsg -> do
               addErrorToast "AI search failed" (Just errMsg)
               throwError Servant.err502{Servant.errBody = encodeUtf8 errMsg}
-            Right kqlQuery -> addRespHeaders $ AE.object ["query" AE..= kqlQuery]
+            Right (kqlQuery, vizType) ->
+              addRespHeaders
+                $ AE.object
+                  [ "query" AE..= kqlQuery
+                  , "visualization_type" AE..= vizType
+                  ]
   where
-    callOpenAIAPI :: Text -> ATAuthCtx (Either Text Text)
+    callOpenAIAPI :: Text -> ATAuthCtx (Either Text (Text, Maybe Text))
     callOpenAIAPI input = do
       authCtx <- Effectful.Reader.Static.ask @AuthContext
       let config = authCtx.env
@@ -1065,21 +1080,62 @@ aiSearchH _pid requestBody = do
       result <- liftIO $ LLM.generate openAI fullPrompt Nothing
       case result of
         Left err -> pure $ Left $ "LLM Error: " <> T.pack err
-        Right response ->
-          -- Clean up the response to extract just the KQL query
-          let cleanedResponse = T.strip $ T.takeWhile (/= '\n') response
+        Right response -> do
+          -- Parse the response for query and visualization type
+          let lines = T.lines $ T.strip response
+              queryLine = fromMaybe "" (viaNonEmpty head lines)
+
+              -- Check if a visualization type is specified
+              vizTypeM =
+                if length lines > 1
+                  then parseVisualizationType (lines L.!! 1)
+                  else Nothing
+
+              -- Clean the query by removing any code block markup and language identifiers
+              cleanedQuery =
+                T.strip
+                  $ if "```" `T.isPrefixOf` queryLine
+                    then
+                      let withoutFirstLine = maybe "" (T.unlines . toList) $ viaNonEmpty tail (T.lines queryLine)
+                          withoutBackticks = T.takeWhile (/= '`') withoutFirstLine
+                       in T.strip withoutBackticks
+                    else queryLine
            in -- Check if the response indicates an invalid query
               if "Please provide a query"
-                `T.isInfixOf` cleanedResponse
+                `T.isInfixOf` cleanedQuery
                 || "I need more"
-                  `T.isInfixOf` cleanedResponse
+                  `T.isInfixOf` cleanedQuery
                 || "Could you please"
-                  `T.isInfixOf` cleanedResponse
-                || T.length cleanedResponse
+                  `T.isInfixOf` cleanedQuery
+                || T.length cleanedQuery
                   < 3
                 then pure $ Left "INVALID_QUERY_ERROR"
-                else pure $ Right cleanedResponse
+                else pure $ Right (cleanedQuery, vizTypeM)
 
+    -- Parse visualization type from the response
+    parseVisualizationType :: Text -> Maybe Text
+    parseVisualizationType line = do
+      let lowerLine = T.toLower $ T.strip line
+          prefixes = ["visualization:", "visualization type:", "viz:", "viz type:", "chart:", "chart type:", "type:"]
+          -- Try to match any of the prefixes
+          matchedPrefix = find (`T.isPrefixOf` lowerLine) prefixes
+
+      matchedPrefix >>= \prefix -> do
+        -- Extract the visualization type after the prefix
+        let rawType = T.strip $ T.drop (T.length prefix) lowerLine
+
+        -- Map to known visualization types
+        case rawType of
+          "bar" -> Just "timeseries"
+          "line" -> Just "timeseries_line"
+          "logs" -> Just "logs"
+          "timeseries" -> Just "timeseries"
+          "timeseries_line" -> Just "timeseries_line"
+          "bar chart" -> Just "timeseries"
+          "line chart" -> Just "timeseries_line"
+          "time series" -> Just "timeseries"
+          "time series line" -> Just "timeseries_line"
+          _ -> Nothing -- Unknown visualization type
     systemPrompt :: Text
     systemPrompt =
       T.unlines
@@ -1097,6 +1153,30 @@ aiSearchH _pid requestBody = do
         , "- Logical: AND OR (or lowercase and or)"
         , "- Duration values: 100ms 5s 2m 1h (nanoseconds, microseconds, milliseconds, seconds, minutes, hours)"
         , ""
+        , "VISUALIZATION TYPES:"
+        , "If the query is best visualized as a chart rather than logs, specify the visualization type on a new line after the query:"
+        , "- logs: For displaying log entries (default)"
+        , "- timeseries (bar): For bar chart time-based visualization"
+        , "- timeseries_line (line): For line chart time-based visualization"
+        , ""
+        , "When to use different visualization types:"
+        , "- Use 'logs' for filtering specific log entries or when detailed log information is needed"
+        , "- Use 'timeseries' (bar chart) for queries that count occurrences over time, like error counts, status code distribution"
+        , "- Use 'timeseries_line' (line chart) for continuous metrics over time, like response times, latency, throughput"
+        , ""
+        , "IMPORTANT: For chart visualizations (timeseries or timeseries_line), you MUST include a 'summarize' statement in your query."
+        , "Chart queries follow standard KQL syntax and typically include:"
+        , "1. [filters] | summarize <aggregation> by bin(timestamp, <time>), [optional field]"
+        , -- , "2. Optional: | sort by <field> [asc|desc]"
+          -- , "3. Optional: | take N"
+          ""
+        , "The summarize statement can use various aggregation functions like count(*), sum(...), avg(...), min(...), max(...), median(...), etc."
+        , ""
+        , "Examples of chart queries:"
+        , "- \"Show errors by hour\": level == \"ERROR\" | summarize count(*) by bin(timestamp, 1h)"
+        , "- \"Graph request counts by kind in 2h blocks\": | summarize count(*) by bin(timestamp, 2h), kind"
+        , "- \"Line chart of p95 durations by method\": | summarize p95(duration) by bin(timestamp, 30m), attributes.http.request.method"
+        , ""
         , "Examples:"
         , "- \"show me errors\" -> level == \"ERROR\""
         , "- \"POST requests\" -> attributes.http.request.method == \"POST\""
@@ -1108,8 +1188,12 @@ aiSearchH _pid requestBody = do
         , "- \"paths starting with /api\" -> path startswith \"/api\""
         , "- \"emails from company.com\" -> email matches /.*@company\\.com/"
         , "- \"requests taking more than 1 second\" -> duration > 1s"
+        , "- \"Show me error count over time\" -> level == \"ERROR\"\nvisualization: timeseries"
+        , "- \"Graph of response times\" -> duration > 0\nvisualization: timeseries_line"
         , ""
-        , "Return only the KQL filter expression, no explanations."
+        , "Return ONLY the KQL filter expression on the first line without any backticks, markdown formatting, or code blocks. If applicable, specify the visualization type on the second line with format 'visualization: [type]'"
+        , ""
+        , "IMPORTANT: Do not use code blocks or backticks in your response. Return the raw query directly."
         ]
 
 
@@ -1249,16 +1333,18 @@ queryEditorInitializationCode queryLibRecent queryLibSaved vizTypeM = do
     [text|
     // Function to update viz type in URL without reloading the page
     window.updateVizTypeInUrl = function(vizType) {
-      const url = new URL(window.location);
-      url.searchParams.set('viz_type', vizType);
-      history.replaceState({}, '', url);
-      
-      // Call the query editor's handleVisualizationChange method to update the query
-      const editor = document.getElementById('filterElement');
-      if (editor?.handleVisualizationChange) {
-        const vizTypeMap = { 'bar': 'timeseries', 'line': 'timeseries_line' };
-        editor.handleVisualizationChange(vizTypeMap[vizType] || vizType);
-      }
+      requestAnimationFrame(() => {
+        const url = new URL(window.location);
+        url.searchParams.set('viz_type', vizType);
+        history.replaceState({}, '', url);
+        
+        // Call the query editor's handleVisualizationChange method to update the query
+        const editor = document.getElementById('filterElement');
+        if (editor?.handleVisualizationChange) {
+          const vizTypeMap = { 'bar': 'timeseries', 'line': 'timeseries_line' };
+          editor.handleVisualizationChange(vizTypeMap[vizType] || vizType);
+        }
+      });
     };
     
     document.addEventListener('DOMContentLoaded', () => {
