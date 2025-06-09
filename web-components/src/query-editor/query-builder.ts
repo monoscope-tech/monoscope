@@ -456,7 +456,8 @@ export class QueryBuilderComponent extends LitElement {
 
       this.aggregations = summarizeParts
         .map((part) => {
-          const funcMatch = part.match(/(\w+)\(([^)]+)\)/);
+          // Match function with optional parameters: func() or func(params)
+          const funcMatch = part.match(/(\w+)\(([^)]*)\)/);
           if (funcMatch) {
             return {
               function: funcMatch[1].trim(),
@@ -597,6 +598,9 @@ export class QueryBuilderComponent extends LitElement {
 
     // Update the editor
     queryEditor.handleAddQuery(query, true);
+    
+    // Dispatch an event so listeners know the query has been updated programmatically
+    queryEditor.dispatchEvent(new CustomEvent('update-query'));
   }
 
   /**
@@ -714,6 +718,9 @@ export class QueryBuilderComponent extends LitElement {
       if (this.groupByFields.length === 0 && this.aggregations.length === 0) {
         const query = queryEditor.editor.getValue().replace(/\|?\s*summarize\s+[^|]+?(?=\||$)/i, '');
         queryEditor.handleAddQuery(query, true);
+        
+        // Make sure to extract query parts after updating
+        setTimeout(() => this.extractQueryParts(), 0);
         return;
       }
     } else {
@@ -736,6 +743,9 @@ export class QueryBuilderComponent extends LitElement {
     }
     
     this.updateQuery();
+    
+    // Extract query parts after updating the query to refresh the UI state
+    setTimeout(() => this.extractQueryParts(), 0);
   }
 
   /**

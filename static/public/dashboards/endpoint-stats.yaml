@@ -34,7 +34,7 @@ widgets:
       - type: 'timeseries_stat'
         title: 'Requests'
         icon: list-tree
-        query: kind=="server" AND hashes[*]=="{{var-endpointHash}}" | summarize count(*) by bin_auto(timestamp), status_code
+        query: kind=="server" AND hashes[*]=="{{var-endpointHash}}" | summarize count() by bin_auto(timestamp), status_code
         unit: reqs
         eager: true
         layout: { w: 7, h: 2 }
@@ -77,14 +77,14 @@ widgets:
   #
   - type: 'timeseries'
     title: 'All requests'
-    query: hashes[*]=="{{var-endpointHash}}" | summarize count(*) by bin_auto(timestamp), attributes.http.response.status_code
+    query: hashes[*]=="{{var-endpointHash}}" | summarize count() by bin_auto(timestamp), attributes.http.response.status_code
     unit: reqs
     layout: { w: 6, h: 4 }
 
   - type: 'timeseries_line'
     title: 'Latency percentiles (ms)'
     hide_subtitle: true
-    # query: timechart count(*) by status_code
+    # query: timechart count() by status_code
     # query: timechart p50(duration_ns) as p50, p75(duration_ns) as p75, p90(duration_ns) as p90, p95(duration_ns) as p95 by duration_ns
     summarize_by: max
     sql: |
@@ -109,5 +109,5 @@ widgets:
   - type: 'timeseries'
     title: 'Errors'
     theme: 'roma'
-    query: kind=="server" AND attributes.http.response.status_code != null AND attributes.http.response.status_code >= 300.0 AND hashes[*]=="{{var-endpointHash}}" | summarize count(*) by bin_auto(timestamp), attributes.http.response.status_code
+    query: kind=="server" AND attributes.http.response.status_code != null AND attributes.http.response.status_code >= 300.0 AND hashes[*]=="{{var-endpointHash}}" | summarize count() by bin_auto(timestamp), attributes.http.response.status_code
     layout: { w: 6, h: 4 }

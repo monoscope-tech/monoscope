@@ -250,19 +250,24 @@ renderFacets facetSummary = do
                       [ term "data-field" (T.replace "___" "." key)
                       , term "data-key" key
                       , [__|
-                        init
+                        def updateButtonText()
                           if #filterElement.editor
                             set editorValue to #filterElement.editor.getValue().toLowerCase()
                             if editorValue.includes('summarize') and 
                               editorValue.includes('by') and 
                               editorValue.includes(@data-field.toLowerCase())
                               set my.innerHTML to 'Remove group by'
+                            else
+                              set my.innerHTML to 'Group by' -- or whatever the default text should be
                             end
                           end
                         end
+                        init updateButtonText() end
+                        on refreshItem updateButtonText() end
 
                         on click
-                          call (<query-builder/>).toggleGroupByField(@data-field)
+                          call document.querySelector('query-builder').toggleGroupByField(@data-field) then
+                          trigger refreshItem on me
                         end
                     |]
                       ]
