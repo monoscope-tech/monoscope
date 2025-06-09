@@ -606,7 +606,7 @@ widgetViewerEditor_ pid dashboardIdM currentRange existingWidgetM activeTab = di
     div_
       [ id_ widgetPreviewId
       , class_ "h-full w-full"
-      , hxPost_ "/widget"
+      , hxPost_ ("/p/" <> pid.toText <> "/widget")
       , hxTrigger_ "intersect once, update-widget"
       , hxTarget_ "this"
       , hxSwap_ "innerHTML"

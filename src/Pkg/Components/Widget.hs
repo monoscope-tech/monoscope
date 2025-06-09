@@ -164,8 +164,8 @@ data WidgetAxis = WidgetAxis
 
 
 -- Used when converting a widget json to its html representation. Eg in a query chart builder
-widgetPostH :: Widget -> ATAuthCtx (RespHeaders Widget)
-widgetPostH widget = addRespHeaders widget
+widgetPostH :: Projects.ProjectId -> Widget -> ATAuthCtx (RespHeaders Widget)
+widgetPostH pid widget = addRespHeaders (widget & #_projectId .~ Just pid)
 
 
 -- use either index or the xxhash as id

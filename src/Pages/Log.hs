@@ -748,7 +748,7 @@ apiLogsPage page = do
             [ id_ "visualization-widget-container"
             , class_ " w-full"
             , style_ "aspect-ratio: 4 / 2;"
-            , hxPost_ "/widget"
+            , hxPost_ ("/p/" <> page.pid.toText <> "/widget")
             , hxTrigger_ "intersect once, update-widget"
             , hxTarget_ "this"
             , hxSwap_ "innerHTML"
