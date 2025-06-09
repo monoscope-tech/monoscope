@@ -335,14 +335,17 @@ queryEditorInitializationCode queryLibRecent queryLibSaved vizTypeM = do
     // Function to update viz type in URL without reloading the page
     window.updateVizTypeInUrl = function(vizType, shouldUpdateUrl = true) {
       requestAnimationFrame(() => {
-        if (shouldUpdateUrl) {
+        // Only update URL if we're not in widget mode and shouldUpdateUrl is true
+        const editor = document.getElementById('filterElement');
+        const isWidgetMode = editor && editor.hasAttribute('target-widget-preview');
+        
+        if (shouldUpdateUrl && !isWidgetMode) {
           const url = new URL(window.location);
           url.searchParams.set('viz_type', vizType);
           history.replaceState({}, '', url);
         }
         
         // Call the query editor's handleVisualizationChange method to update the query
-        const editor = document.getElementById('filterElement');
         if (editor?.handleVisualizationChange) {
           const vizTypeMap = { 'bar': 'timeseries', 'line': 'timeseries_line' };
           editor.handleVisualizationChange(vizTypeMap[vizType] || vizType);
