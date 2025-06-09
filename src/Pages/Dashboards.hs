@@ -527,7 +527,6 @@ widgetViewerEditor_ pid dashboardIdM currentRange existingWidgetM activeTab = di
           , Widget.hideSubtitle = Just True
           , Widget.query = Nothing
           , Widget.unit = Just "ms"
-          , Widget.hideLegend = Just True
           , Widget._projectId = Just pid
           , Widget._dashboardId = dashboardIdM <&> (.toText)
           , Widget.layout = Just $ def{Widget.w = Just 3, Widget.h = Just 3}

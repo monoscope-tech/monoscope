@@ -65,3 +65,30 @@ function getUTCOffset() {
 }
 window.getUTCOffset = getUTCOffset
 
+// Query editor access function
+window.getQueryFromEditor = () => 
+  [
+    document.activeElement?.closest('form')?.querySelector('query-editor'),
+    document.getElementById('filterElement'),
+    document.querySelector('query-editor')
+  ]
+  .find(el => el && el.editor)?.editor.getValue() || "";
+
+// Time range getter from UI
+window.getTimeRange = () => {
+  const customRange = document.getElementById('custom_range_input')?.value;
+  return customRange ? 
+    { since: customRange, from: '', to: '' } : 
+    { 
+      since: '', 
+      from: document.querySelector('input[name="from"]')?.value || '', 
+      to: document.querySelector('input[name="to"]')?.value || '' 
+    };
+};
+
+// URL parameters helper
+window.params = () => {
+  const params = Object.fromEntries(new URL(location.href).searchParams);
+  params.cols = params.cols || '';
+  return params;
+};
