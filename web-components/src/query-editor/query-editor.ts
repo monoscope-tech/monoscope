@@ -707,7 +707,7 @@ export class QueryEditorComponent extends LitElement {
       }
     });
 
-    window.addEventListener('resize', () => this.editor?.layout());
+    window.addEventListener('resize', () => this.adjustEditorHeight());
 
     // Focus editor when "/" is pressed
     document.addEventListener('keydown', (e: KeyboardEvent) => {
@@ -981,7 +981,11 @@ export class QueryEditorComponent extends LitElement {
       scrollbar: {
         vertical: 'hidden',
         horizontal: 'hidden',
+        alwaysConsumeMouseWheel: false,
       },
+      automaticLayout: true,
+      lineDecorationsWidth: 0,
+      lineNumbersMinChars: 0,
     });
 
     this.setupEditorEvents();
@@ -1066,7 +1070,7 @@ export class QueryEditorComponent extends LitElement {
         }
       }),
 
-      this.editor.onDidContentSizeChange(() => this.editor?.layout()),
+      this.editor.onDidContentSizeChange(() => this.adjustEditorHeight()),
     ];
 
     this.updateHandlers.push(...handlers);
@@ -1140,6 +1144,9 @@ export class QueryEditorComponent extends LitElement {
 
   private adjustEditorHeight(): void {
     if (!this.editor) return;
+    const minHeight = 34; // Minimum height in pixels (single line + padding)
+    const height = Math.max(this.editor.getContentHeight(), minHeight);
+    this._editorContainer.style.height = `${height}px`;
     this.editor.layout();
   }
 
@@ -1484,25 +1491,29 @@ export class QueryEditorComponent extends LitElement {
           visibility: hidden !important;
         }
         .monaco-editor {
-          border-radius: 6px;
-          outline-color: var(--color-strokeStrong);
+          border-radius: 0;
+          outline: none !important;
+          border: none !important;
         }
-        .monaco-editor:focus-within {
-          outline-color: var(--color-strokeBrand-strong);
+        .monaco-editor .overflow-guard {
+          border: none !important;
+          outline: none !important;
         }
       </style>
-      <div class="relative w-full h-full">
-        <div class="relative w-full h-full">
-          <div id="editor-container" class="h-full"></div>
+      <div
+        class="relative w-full h-full pl-2 flex border rounded-md border-strokeStrong focus-within:border-strokeBrand-strong focus:outline-2 "
+      >
+        <div class="relative w-full flex-1">
+          <div id="editor-container" class="w-full"></div>
           <div
-            class="placeholder-overlay absolute top-0 left-0 right-0 bottom-0 pointer-events-auto z-[1] text-gray-400 f/nont-mono text-sm leading-[18px] pt-2 pl-2 hidden cursor-text"
+            class="placeholder-overlay absolute top-0 left-0 right-0 bottom-0 pointer-events-auto z-[1] text-gray-400 f/nont-mono text-sm leading-[18px] pt-2 pl-0 hidden cursor-text"
             @click=${() => this.editor?.focus()}
           >
             Filter logs and events. Press <span class="kbd">/</span> to search or <span class="kbd">?</span>
             to ask in Natural language.
           </div>
         </div>
-        <div class="absolute top-1 right-1 z-[2]">
+        <div class="p-1">
           <label
             class="px-3 py-0.5 inline-flex gap-2 items-center cursor-pointer border border-strokeBrand-strong text-textBrand hover:border-strokeBrand-weak rounded-sm group-has-[.ai-search:checked]/fltr:hidden"
             data-tippy-content="Write queries in natural language with APItoolkit AI"
