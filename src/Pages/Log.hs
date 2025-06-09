@@ -663,6 +663,7 @@ apiLogsPage page = do
           , vizType = page.vizType
           , queryLibRecent = page.queryLibRecent
           , queryLibSaved = page.queryLibSaved
+          , updateUrl = True
           }
 
       div_ [class_ "timeline flex flex-row gap-4 mt-3 group-has-[#viz-logs:not(:checked)]/pg:hidden group-has-[.toggle-chart:checked]/pg:hidden w-full", style_ "aspect-ratio: 10 / 1;"] do
@@ -752,7 +753,7 @@ apiLogsPage page = do
           let pid = page.pid.toText
           let vizType = maybe "\"timeseries\"" show page.vizType
           script_
-            [text| var widgetJSON = { 
+            [text| var widgetJSON = {
                   "id": "visualization-widget",
                   "type": ${vizType}, 
                   "title": "Visualization",

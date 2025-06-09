@@ -689,10 +689,6 @@ export class QueryEditorComponent extends LitElement {
     // Update URL if needed
   }, 300);
 
-  private get serviceSuggestions(): SuggestionItem[] {
-    return [...this.completionItems, ...this.savedViews, ...this.recentSearches, ...this.popularSearches];
-  }
-
   async firstUpdated(): Promise<void> {
     if (!this._editorContainer) return;
 
@@ -1521,7 +1517,7 @@ export class QueryEditorComponent extends LitElement {
       <div
         class="relative w-full h-full pl-2 flex border rounded-md border-strokeStrong focus-within:border-strokeBrand-strong focus:outline-2 "
       >
-        <div class="relative w-full flex-1">
+        <div class="relative overflow-x-hidden w-full flex-1">
           <div id="editor-container" class="w-full"></div>
           <div
             class="placeholder-overlay absolute top-0 left-0 right-0 bottom-0 pointer-events-auto z-[1] text-gray-400 f/nont-mono text-sm leading-[18px] pt-2 pl-0 hidden cursor-text"

@@ -1,6 +1,7 @@
-module Pkg.Components.LogQueryBox (logQueryBox_, visTypes, queryLibrary_, queryEditorInitializationCode, LogQueryBoxConfig (..)) where
+module Pkg.Components.LogQueryBox (logQueryBox_, visTypes, queryLibrary_, queryEditorInitializationCode, LogQueryBoxConfig (..), visualizationTabs_) where
 
 import Data.Aeson qualified as AE
+import Data.Default
 import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
 import Data.Time (defaultTimeLocale, formatTime)
@@ -13,9 +14,6 @@ import Lucid.Hyperscript (__)
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Schema qualified as Schema
 import NeatInterpolation (text)
-
--- Import own visTypes definition instead of Pages.Dashboards
--- to avoid circular dependencies
 import Pkg.Components qualified as Components
 import Relude
 import Utils (displayTimestamp, faSprite_, formatUTC)
@@ -31,8 +29,13 @@ data LogQueryBoxConfig = LogQueryBoxConfig
   , vizType :: Maybe Text
   , queryLibRecent :: V.Vector Projects.QueryLibItem
   , queryLibSaved :: V.Vector Projects.QueryLibItem
+  , updateUrl :: Bool
+  -- ^ Whether to update the URL when the query changes
+  , targetWidgetPreview :: Maybe Text
+  -- ^ ID of the widget preview element to update when the query changes
   }
-  deriving (Show)
+  deriving (Generic, Show)
+  deriving anyclass (Default)
 
 
 -- | Reusable log query box component that can be used in both Logs and Dashboards pages
@@ -68,13 +71,14 @@ logQueryBox_ config = do
       div_ [class_ "flex flex-col gap-2 items-stretch justify-center group/fltr"] do
         div_ [class_ "p-1 flex-1 flex flex-col gap-2  bg-fillWeaker rounded-lg border border-strokeWeak group-has-[.ai-search:checked]/fltr:border-2 group-has-[.ai-search:checked]/fltr:border-iconBrand group-has-[.ai-search:checked]/fltr:shadow-xs shadow-strokeBrand-weak"] do
           input_
-            [ class_ "hidden ai-search"
-            , type_ "checkbox"
-            , id_ "ai-search-chkbox"
-            , [__|on change if me.checked then call #ai-search-input.focus() end
+            $ [ class_ "hidden ai-search"
+              , type_ "checkbox"
+              , id_ "ai-search-chkbox"
+              , [__|on change if me.checked then call #ai-search-input.focus() end
                   on keydown[key=='Space' and shiftKey] from document set #ai-search-chkbox.checked to true
                   |]
-            ]
+              ]
+              <> [checked_ | (isJust config.targetWidgetPreview)]
           script_
             [text|
             document.addEventListener('keydown', function(e) {
@@ -86,12 +90,13 @@ logQueryBox_ config = do
                 document.getElementById("ai-search-input").value=""
               }
             });
-            window.handleVisualizationUpdate = function(vizType) {
+            window.handleVisualizationUpdate = function(vizType, widgetId) {
               window.requestAnimationFrame(() => {
                 updateVizTypeInUrl(vizType);
                 document.querySelector(`#visualizationTabs input[value='$${vizType}']`).checked = true;
                 window.widgetJSON.type = vizType;
-                document.getElementById('visualization-widget-container').dispatchEvent(new Event('update-widget'));
+                const containerId = widgetId || 'visualization-widget-container';
+                document.getElementById(containerId).dispatchEvent(new Event('update-widget'));
               });
             }
             |]
@@ -110,6 +115,7 @@ logQueryBox_ config = do
               , hxExt_ "json-enc"
               , term "hx-validate" "false"
               , hxIndicator_ "#ai-search-loader"
+              , term "data-container-id" (fromMaybe "visualization-widget-container" config.targetWidgetPreview)
               , [__|on keydown[key=='Escape'] set #ai-search-chkbox.checked to false
                    on keydown[key=='Enter'] 
                      if my.value.trim().length > 0 
@@ -122,7 +128,8 @@ logQueryBox_ config = do
                          if result.visualization_type
                            then
                              set vizType to result.visualization_type
-                             call window.handleVisualizationUpdate(vizType)
+                             set widgetId to (@data-container-id or 'visualization-widget-container')
+                             call window.handleVisualizationUpdate(vizType, widgetId)
                          end
                          if result.query then call #filterElement.handleAddQuery(result.query, true) end
                      else
@@ -142,26 +149,38 @@ logQueryBox_ config = do
                 "Submit"
             label_ [Lucid.for_ "ai-search-chkbox", class_ "cursor-pointer p-1", data_ "tippy-content" "Collapse APItoolkit AI without losing your query"] $ faSprite_ "arrows-minimize" "regular" "h-4 w-4 inline-block text-iconBrand"
 
-          div_ [class_ "flex flex-1 gap-2 justify-between items-stretch"] do
-            queryLibrary_ config.pid config.queryLibSaved config.queryLibRecent
-            div_ [id_ "queryBuilder", class_ "flex-1 flex items-center"] $ termRaw "query-editor" [id_ "filterElement", class_ "w-full h-full flex items-center", term "default-value" (fromMaybe "" config.query)] ("" :: Text)
-            div_ [class_ "gap-[2px] flex items-center"] do
-              span_ "in"
-              select_
-                [ class_ "ml-1 select select-sm w-full max-w-xs h-full bg-transparent border-strokeStrong"
-                , name_ "target-spans"
-                , id_ "spans-toggle"
-                , onchange_ "htmx.trigger('#log_explorer_form', 'submit')"
-                ]
-                do
-                  let target = fromMaybe "all-spans" config.targetSpan
-                  option_ (value_ "all-spans" : ([selected_ "true" | target == "all-spans"])) "All spans"
-                  option_ (value_ "root-spans" : ([selected_ "true" | target == "root-spans"])) "Trace Root Spans"
-                  option_ (value_ "service-entry-spans" : ([selected_ "true" | target == "service-entry-spans"])) "Service Entry Spans"
-            div_ [class_ "dropdown dropdown-hover dropdown-bottom dropdown-end"] do
-              div_ [class_ "rounded-lg px-3 py-2 text-slate-700 inline-flex items-center border border-strokeStrong h-full", tabindex_ "0", role_ "button"] $ faSprite_ "floppy-disk" "regular" "h-5 w-5"
-              ul_ [tabindex_ "0", class_ "dropdown-content border menu bg-base-100 rounded-box z-1 w-60 p-2 shadow-lg h-full"] do
-                li_ $ label_ [Lucid.for_ "saveQueryMdl"] "Save query to Query Library"
+          div_ [class_ "w-full flex flex-1 gap-2 justify-between items-stretch"] do
+            unless (isJust config.targetWidgetPreview)
+              $ queryLibrary_ config.pid config.queryLibSaved config.queryLibRecent
+
+            div_ [id_ "queryBuilder", class_ "w-full flex-1 flex items-center"]
+              $ termRaw
+                "query-editor"
+                ( [id_ "filterElement", class_ "w-full h-full flex items-center", term "default-value" (fromMaybe "" config.query)]
+                    <> maybeToList (term "target-widget-preview" <$> config.targetWidgetPreview)
+                    <> [term "widget-editor" "true" | isJust config.targetWidgetPreview]
+                )
+                ("" :: Text)
+
+            unless (isJust config.targetWidgetPreview) $ do
+              div_ [class_ "gap-[2px] flex items-center"] do
+                span_ "in"
+                select_
+                  [ class_ "ml-1 select select-sm w-full max-w-xs h-full bg-transparent border-strokeStrong"
+                  , name_ "target-spans"
+                  , id_ "spans-toggle"
+                  , onchange_ "htmx.trigger('#log_explorer_form', 'submit')"
+                  ]
+                  do
+                    let target = fromMaybe "all-spans" config.targetSpan
+                    option_ (value_ "all-spans" : ([selected_ "true" | target == "all-spans"])) "All spans"
+                    option_ (value_ "root-spans" : ([selected_ "true" | target == "root-spans"])) "Trace Root Spans"
+                    option_ (value_ "service-entry-spans" : ([selected_ "true" | target == "service-entry-spans"])) "Service Entry Spans"
+
+              div_ [class_ "dropdown dropdown-hover dropdown-bottom dropdown-end"] do
+                div_ [class_ "rounded-lg px-3 py-2 text-slate-700 inline-flex items-center border border-strokeStrong h-full", tabindex_ "0", role_ "button"] $ faSprite_ "floppy-disk" "regular" "h-5 w-5"
+                ul_ [tabindex_ "0", class_ "dropdown-content border menu bg-base-100 rounded-box z-1 w-60 p-2 shadow-lg h-full"] do
+                  li_ $ label_ [Lucid.for_ "saveQueryMdl"] "Save query to Query Library"
             button_
               [type_ "submit", class_ "leading-none rounded-lg px-3 py-2 cursor-pointer !h-auto btn btn-primary"]
               do
@@ -169,7 +188,7 @@ logQueryBox_ config = do
                 faSprite_ "magnifying-glass" "regular" "h-4 w-4 inline-block"
       div_ [class_ "flex items-between justify-between"] do
         div_ [class_ "flex items-center gap-2"] do
-          visualizationTabs_ config.vizType
+          visualizationTabs_ config.vizType config.updateUrl config.targetWidgetPreview
           span_ [class_ "text-textDisabled mx-2 text-xs"] "|"
           termRaw "query-builder" [term "query-editor-selector" "#filterElement"] ("" :: Text)
 
@@ -184,21 +203,24 @@ logQueryBox_ config = do
 
 
 -- | Helper for visualizing the data with different chart types
-visualizationTabs_ :: Maybe Text -> Html ()
-visualizationTabs_ vizTypeM =
+visualizationTabs_ :: Maybe Text -> Bool -> Maybe Text -> Html ()
+visualizationTabs_ vizTypeM updateUrl widgetContainerId =
   div_ [class_ "tabs tabs-box tabs-outline tabs-xs bg-gray-100 p-1 rounded-lg", id_ "visualizationTabs", role_ "tablist"] do
     let defaultVizType = fromMaybe "logs" vizTypeM
+        containerSelector = fromMaybe "visualization-widget-container" widgetContainerId
     forM_ visTypes $ \(icon, label, vizType, emoji) -> label_ [class_ "tab !shadow-none !border-strokeWeak flex gap-1"] do
       input_
         $ [ type_ "radio"
           , name_ "visualization"
           , id_ $ "viz-" <> vizType
           , value_ vizType
+          , term "data-update-url" (if updateUrl then "true" else "false")
+          , term "data-container-id" containerSelector
           , [__| on change
                     if my.checked
-                      call updateVizTypeInUrl(my.value)
+                      call updateVizTypeInUrl(my.value, @data-update-url === 'true')
                       set widgetJSON.type to my.value
-                      send 'update-widget' to #visualization-widget-container
+                      send 'update-widget' to #{@data-container-id}
                     end
                  |]
           ]
@@ -311,11 +333,13 @@ queryEditorInitializationCode queryLibRecent queryLibSaved vizTypeM = do
   script_
     [text|
     // Function to update viz type in URL without reloading the page
-    window.updateVizTypeInUrl = function(vizType) {
+    window.updateVizTypeInUrl = function(vizType, shouldUpdateUrl = true) {
       requestAnimationFrame(() => {
-        const url = new URL(window.location);
-        url.searchParams.set('viz_type', vizType);
-        history.replaceState({}, '', url);
+        if (shouldUpdateUrl) {
+          const url = new URL(window.location);
+          url.searchParams.set('viz_type', vizType);
+          history.replaceState({}, '', url);
+        }
         
         // Call the query editor's handleVisualizationChange method to update the query
         const editor = document.getElementById('filterElement');

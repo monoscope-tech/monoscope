@@ -484,6 +484,8 @@ monitorMetric_ pid monitorM = section_ [class_ "px-8 py-5 space-y-5 group/pg ove
             , vizType = Nothing
             , queryLibRecent = V.empty
             , queryLibSaved = V.empty
+            , updateUrl = False
+            , targetWidgetPreview = Nothing
             }
           div_ [class_ "border-l-2 border-l-slate-300 pl-4 space-y-2"] do
             h3_ [class_ "font-normal text-base"] "Evaluation Details"
