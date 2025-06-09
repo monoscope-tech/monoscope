@@ -1067,6 +1067,14 @@ export class QueryEditorComponent extends LitElement {
 
           this.debouncedUpdateQuery(model.getValue());
           this.debouncedTriggerSuggestions();
+          this.requestUpdate(); // Trigger re-render to update dropdown position
+        }
+      }),
+
+      this.editor.onDidChangeCursorPosition(() => {
+        if (this.showSuggestions) {
+          // Update dropdown position when cursor changes
+          this.requestUpdate();
         }
       }),
 
@@ -1414,7 +1422,7 @@ export class QueryEditorComponent extends LitElement {
   }
 
   private renderSuggestionDropdown(): TemplateResult {
-    if (!this.showSuggestions) return html``;
+    if (!this.showSuggestions || !this.editor) return html``;
 
     const matches = this.getMatches();
     const groups = {
@@ -1439,10 +1447,19 @@ export class QueryEditorComponent extends LitElement {
         title: groupTitles[category],
       }));
 
+    const position = this.editor.getPosition();
+    const coords = position ? this.editor.getScrolledVisiblePosition(position) : null;
+    let positionStyle = '';
+
+    if (coords) {
+      positionStyle = `top: ${coords.top + 24}px; left: 10px; right: 10px;`;
+    }
+
     if (!sections.length) {
       return html`
         <div
-          class="suggestions-dropdown absolute top-10 left-0 right-0 bg-white border border-gray-200 shadow-lg z-10 overflow-y-auto rounded-md text-xs"
+          class="mt-1 suggestions-dropdown absolute bg-white border border-gray-200 shadow-lg z-10 overflow-y-auto rounded-md text-xs"
+          style="${positionStyle}"
         >
           <div class="px-4 py-2 text-sm text-gray-400 italic">No suggestions found</div>
         </div>
@@ -1464,7 +1481,8 @@ export class QueryEditorComponent extends LitElement {
 
     return html`
       <div
-        class="suggestions-dropdown absolute top-10 left-0 right-0 bg-white border border-gray-200 shadow-lg z-50 max-h-[80dvh] overflow-y-auto rounded-md text-xs flex flex-col"
+        class="mt-1 suggestions-dropdown absolute bg-white border border-gray-200 shadow-lg z-50 max-h-[80dvh] overflow-y-auto rounded-md text-xs flex flex-col"
+        style="${positionStyle}"
       >
         <div class="overflow-y-auto flex-grow min-h-0">
           ${sections.map(
