@@ -1082,13 +1082,13 @@ aiSearchH _pid requestBody = do
         Left err -> pure $ Left $ "LLM Error: " <> T.pack err
         Right response -> do
           -- Parse the response for query and visualization type
-          let lines = T.lines $ T.strip response
-              queryLine = fromMaybe "" (viaNonEmpty head lines)
+          let lines' = T.lines $ T.strip response
+              queryLine = fromMaybe "" (viaNonEmpty head lines')
 
               -- Check if a visualization type is specified
               vizTypeM =
-                if length lines > 1
-                  then parseVisualizationType (lines L.!! 1)
+                if length lines' > 1
+                  then parseVisualizationType (lines' L.!! 1)
                   else Nothing
 
               -- Clean the query by removing any code block markup and language identifiers
