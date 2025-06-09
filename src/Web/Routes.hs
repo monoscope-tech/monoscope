@@ -1,6 +1,8 @@
 module Web.Routes (server, genAuthServerContext) where
 
 import Data.Aeson qualified as AE
+import Data.ByteString qualified as BS
+import Data.ByteString.Lazy qualified as BL
 import Data.Map qualified as Map
 import Data.Pool (Pool)
 import Data.Text.Encoding qualified as TE
@@ -66,6 +68,18 @@ import Web.Error
 type role Routes nominal
 
 
+-- Define custom RawJSON content type
+data RawJSON
+
+
+instance Accept RawJSON where
+  contentType _ = "application/json"
+
+
+instance MimeUnrender RawJSON BS.ByteString where
+  mimeUnrender _ = Right . BL.toStrict
+
+
 type Routes :: Type -> Type
 data Routes mode = Routes
   { public :: mode :- "public" :> Servant.Raw
@@ -78,7 +92,10 @@ data Routes mode = Routes
   , authCallback :: mode :- "auth_callback" :> QPT "code" :> QPT "state" :> QPT "redirect_to" :> GetRedirect '[HTML] (Headers '[Header "Location" Text, Header "Set-Cookie" SetCookie] (Html ()))
   , shareLinkGet :: mode :- "share" :> "r" :> Capture "shareID" UUID.UUID :> Get '[HTML] Share.ShareLinkGet
   , slackLinkProjectGet :: mode :- "slack" :> "oauth" :> "callback" :> Capture "project_id" Projects.ProjectId :> QPT "code" :> QPT "onboarding" :> GetRedirect '[HTML] (Headers '[Header "Location" Text] SlackInstall.SlackLink)
-  , clientMetadata :: mode :- "api" :> "client_metadata" :> Header "Authorization" Text :> Get '[JSON] ClientMetadata.ClientMetadata
+  , discordLinkProjectGet :: mode :- "discord" :> "oauth" :> "callback" :> QPT "state" :> QPT "code" :> QPT "guild_id" :> GetRedirect '[HTML] (Headers '[Header "Location" Text] SlackInstall.SlackLink)
+  , discordInteractions :: mode :- "discord" :> "interactions" :> ReqBody '[RawJSON] BS.ByteString :> Header "X-Signature-Ed25519" BS.ByteString :> Header "X-Signature-Timestamp" BS.ByteString :> Post '[JSON] AE.Value
+  , -- , discordInteractions :: mode :- "discord" :> "interactions" :> ReqBody' '[OctetStream] BS.ByteString :> Header "X-Signature-Ed25519" BS.ByteString :> Header "X-Signature-Timestamp" BS.ByteString :> Post '[JSON] AE.Value
+    clientMetadata :: mode :- "api" :> "client_metadata" :> Header "Authorization" Text :> Get '[JSON] ClientMetadata.ClientMetadata
   , lemonWebhook :: mode :- "webhook" :> "lemon-squeezy" :> Header "X-Signature" Text :> ReqBody '[JSON] LemonSqueezy.WebhookData :> Post '[HTML] (Html ())
   }
   deriving stock (Generic)
@@ -98,6 +115,8 @@ server pool =
     , authCallback = Auth.authCallbackH
     , shareLinkGet = Share.shareLinkGetH
     , slackLinkProjectGet = SlackInstall.linkProjectGetH
+    , discordLinkProjectGet = SlackInstall.linkDiscordGetH
+    , discordInteractions = SlackInstall.discordInteractionsH
     , clientMetadata = ClientMetadata.clientMetadataH
     , lemonWebhook = LemonSqueezy.webhookPostH
     , cookieProtected = \sessionWithCookies ->

@@ -25,24 +25,16 @@ import Network.Wai.Middleware.Heartbeat (heartbeatMiddleware)
 import OpenTelemetry.Instrumentation.Wai (newOpenTelemetryWaiMiddleware')
 import OpenTelemetry.Trace (TracerProvider)
 import Opentelemetry.OtlpServer qualified as OtlpServer
+import Pages.SlackInstall (registerGlobalDiscordCommands)
 import Pkg.Queue qualified as Queue
 import ProcessMessage (processMessages)
 import Relude
+import Servant (FromHttpApiData (..))
 import Servant qualified
 import Servant.Server.Generic (genericServeTWithContext)
 import System.Config (
   AuthContext (config, jobsPool, pool, timefusionPgPool),
-  EnvConfig (
-    enableBackgroundJobs,
-    enableKafkaService,
-    enablePubsubService,
-    environment,
-    kafkaTopics,
-    loggingDestination,
-    otlpStreamTopics,
-    port,
-    requestPubsubTopics
-  ),
+  EnvConfig (..),
   getAppContext,
  )
 import System.Logging qualified as Logging
@@ -64,6 +56,10 @@ runAPItoolkit tp =
 
 runServer :: IOE :> es => Log.Logger -> AuthContext -> TracerProvider -> Eff es ()
 runServer appLogger env tp = do
+  -- let appId = env.config.discordClientId
+  --     token = env.config.discordBotToken
+  -- res <- liftIO $ registerGlobalDiscordCommands appId token
+  -- traceShowM res
   loggingMiddleware <- Logging.runLog (show env.config.environment) appLogger WaiLog.mkLogMiddleware
   let server = mkServer appLogger env
   let warpSettings =
@@ -105,6 +101,10 @@ runServer appLogger env tp = do
         , [async $ Safe.withException (Queue.kafkaService appLogger env OtlpServer.processList) exceptionLogger | env.config.enableKafkaService && (not . any T.null) env.config.kafkaTopics]
         ]
   void $ liftIO $ waitAnyCancel asyncs
+
+
+instance FromHttpApiData ByteString where
+  parseUrlPiece = Right . encodeUtf8
 
 
 mkServer

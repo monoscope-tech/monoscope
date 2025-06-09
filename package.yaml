@@ -248,6 +248,10 @@ library:
     - ki-effectful
     - grapesy
     - langchain-hs
+    - ed25519 >= 0.0.5
+    - memory
+    - bytestring
+    - base16-bytestring
 
 executables:
   apitoolkit-server-exe:

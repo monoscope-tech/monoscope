@@ -1,16 +1,41 @@
+-- TODO: temporary, to work with current logic
+{-# LANGUAGE DeriveGeneric #-}
+{-# LANGUAGE OverloadedStrings #-}
 {-# OPTIONS_GHC -Wno-unrecognised-pragmas #-}
 
-module Pages.SlackInstall (linkProjectGetH, postH, LinkProjectsForm, updateWebHook, SlackLink) where
+module Pages.SlackInstall (linkProjectGetH, postH, registerGlobalDiscordCommands, linkDiscordGetH, discordInteractionsH, DiscordInteraction, DiscordInteractionResponse, LinkProjectsForm, updateWebHook, SlackLink) where
 
 import Control.Lens ((.~), (^.))
+
+-- import Crypto.Error (CryptoFailable (..), eitherCryptoError)
+
+-- import Crypto.PubKey.Ed25519 (publicKey, signature, verify)
+
+import Crypto.Error qualified as Crypto
+import Crypto.Sign.Ed25519 qualified as Ed
+import Data.ByteArray.Encoding qualified as BAE
+
+import Crypto.PubKey.Ed25519 qualified as Ed25519
+import Data.Aeson
 import Data.Aeson qualified as AE
+import Data.ByteString qualified as BS
+import Data.ByteString.Base16 qualified as Base16
+import Data.ByteString.Char8 qualified as BSC
+import Data.ByteString.Lazy qualified as BL
+import Data.ByteString.Lazy qualified as LBS
 import Data.Default (Default (def))
+import Data.Text (Text)
+import Data.Text qualified as T
+import Data.Text.Encoding qualified as TE
+import Data.Time.Clock.POSIX (POSIXTime, getPOSIXTime)
 import Database.PostgreSQL.Entity.DBT (withPool)
 import Deriving.Aeson qualified as DAE
+import Effectful.Error.Static (Error, throwError)
 import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
 import Effectful.Reader.Static (ask, asks)
+import GHC.Generics (Generic)
 import Lucid
-import Models.Apis.Slack (insertAccessToken)
+import Models.Apis.Slack (DiscordData (..), getDiscordData, insertAccessToken, insertDiscordData, updateDiscordNotificationChannel)
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
 import Network.Wreq (FormParam (..), defaults, header, postWith, responseBody)
@@ -18,9 +43,15 @@ import Pages.BodyWrapper (BWConfig, PageCtx (..), currProject, pageTitle, sessM)
 import Pkg.Components (navBar)
 import Pkg.Mail (sendSlackMessage)
 import Relude hiding (ask, asks)
+import Servant (err401)
+
+import Control.Exception (try)
+import Data.Vector qualified as V
+import Network.Wreq
 import Servant.API (Header)
 import Servant.API.ResponseHeaders (Headers, addHeader)
-import System.Config (AuthContext (env, pool), EnvConfig (slackClientId, slackClientSecret, slackRedirectUri))
+import Servant.Server
+import System.Config (AuthContext (env, pool), EnvConfig (..))
 import System.Types (ATAuthCtx, ATBaseCtx, RespHeaders, addRespHeaders, addSuccessToast)
 import Utils (faSprite_)
 import Web.FormUrlEncoded (FromForm)
@@ -73,7 +104,6 @@ exchangeCodeForToken clientId clientSecret redirectUri code = do
 
 updateWebHook :: Projects.ProjectId -> LinkProjectsForm -> ATAuthCtx (RespHeaders (Html ()))
 updateWebHook pid LinkProjectsForm{projects, webhookUrl} = do
-  -- TODO: temporary, to work with current logic
   appCtx <- ask @AuthContext
   sess' <- Sessions.getSession
 
@@ -120,12 +150,16 @@ linkProjectGetH pid slack_code onboardingM = do
 
 data SlackLink
   = SlackLinked (PageCtx ())
+  | DiscordLinked (PageCtx ())
   | NoTokenFound (PageCtx ())
+  | DiscordError (PageCtx ())
   | NoContent (PageCtx ())
 
 
 instance ToHtml SlackLink where
   toHtml (SlackLinked (PageCtx bwconf ())) = toHtml $ PageCtx bwconf installedSuccess
+  toHtml (DiscordLinked (PageCtx bwconf ())) = toHtml $ PageCtx bwconf installedSuccessDisocrd
+  toHtml (DiscordError (PageCtx bwconf ())) = toHtml $ PageCtx bwconf discordError
   toHtml (NoTokenFound (PageCtx bwconf ())) = toHtml $ PageCtx bwconf noTokenFound
   toHtml (NoContent (PageCtx bwconf ())) = toHtml $ PageCtx bwconf ""
   toHtmlRaw = toHtml
@@ -139,6 +173,20 @@ noTokenFound = do
     p_ [class_ "text-2xl"] "No slack access token found, reinstall the APItoolkit slack app to try again."
 
 
+discordError :: Html ()
+discordError = do
+  navBar
+  section_ [class_ "h-full mt-[80px] w-[1000px] flex flex-col items-center mx-auto"] do
+    faSprite_ "circle-exclamation" "solid" "text-red-500 h-10 w-10"
+    h3_ [class_ "text-4xl font-bold my-6 text-red-600"] "Uh-oh! Something went wrong"
+    p_
+      [class_ "text-xl text-gray-700 text-center max-w-prose mb-4"]
+      "We hit a snag while trying to install the Discord bot. Don’t worry — it happens!"
+    p_
+      [class_ "text-md text-gray-600 text-center max-w-prose"]
+      "This could be due to not adding discord from the integrations page, click on add to discord on the integrations page to try again."
+
+
 installedSuccess :: Html ()
 installedSuccess = do
   navBar
@@ -147,3 +195,244 @@ installedSuccess = do
       faSprite_ "check" "regular" "h-10 w-10 text-green-500"
       h3_ [class_ "text-3xl font-semibold my-8"] "APItoolkit Slack App Installed"
       p_ [class_ "text-gray-600 text-center max-w-prose"] "APItoolkit Bot Slack app has been connected to your project successfully. You can now recieve notifications on slack."
+
+
+installedSuccessDisocrd :: Html ()
+installedSuccessDisocrd = do
+  navBar
+  section_ [class_ "h-full mt-[80px] w-[1000px] flex flex-col items-center mx-auto"] do
+    div_ [class_ "flex flex-col border px-6 py-16 mt-16 rounded-2xl items-center"] do
+      faSprite_ "check" "regular" "h-10 w-10 text-green-500"
+      h3_ [class_ "text-3xl font-semibold my-8"] "APItoolkit Discord Bot Installed"
+      p_
+        [class_ "text-gray-600 text-center max-w-prose mb-4"]
+        "APItoolkit Bot has been successfully added to your Discord server. You're all set to receive real-time alerts and interact with your API data — right from Discord!"
+
+      h4_ [class_ "text-xl font-semibold mt-8 mb-4"] "Available Slash Commands:"
+      ul_ [class_ "text-left text-gray-700 space-y-2"] do
+        li_ do
+          span_ [class_ "font-mono bg-gray-100 px-2 py-1 rounded"] "/ask"
+          span_ " – Ask any question about your project’s API behavior or errors."
+        li_ do
+          span_ [class_ "font-mono bg-gray-100 px-2 py-1 rounded"] "/here"
+          span_ " – Quickly link this channel to receive alerts. No more digging through logs."
+        li_ do
+          span_ [class_ "font-mono bg-gray-100 px-2 py-1 rounded"] "/status"
+          span_ " – Check the current status of your API and recent anomalies."
+
+      p_
+        [class_ "text-gray-500 mt-6"]
+        "You can always invite the bot to other servers or link different projects. Let’s ship safer APIs together!"
+
+
+linkDiscordGetH :: Maybe Text -> Maybe Text -> Maybe Text -> ATBaseCtx (Headers '[Header "Location" Text] SlackLink)
+linkDiscordGetH pidM' codeM guildIdM = do
+  envCfg <- asks env
+  let pidM = pidM' >>= Projects.projectIdFromText
+  case (pidM, codeM, guildIdM) of
+    (Just pid, Just code, Just guildId) -> do
+      _ <- dbtToEff $ insertDiscordData pid guildId
+      pure $ addHeader "" $ DiscordLinked $ PageCtx def ()
+    _ ->
+      pure $ addHeader "" $ DiscordError $ PageCtx def ()
+
+
+-- Discord interaction type
+data InteractionType = Ping | ApplicationCommand
+  deriving (Eq, Show)
+
+
+instance FromJSON InteractionType where
+  parseJSON = withScientific "InteractionType" $ \n -> case round n of
+    1 -> pure Ping
+    _ -> pure ApplicationCommand
+
+
+-- Interaction data
+data DiscordInteraction = Interaction
+  { interaction_type :: InteractionType
+  , id :: Text
+  , token :: Text
+  , data_i :: Maybe InteractionData
+  , channel_id :: Maybe Text
+  , guild_id :: Text
+  }
+  deriving (Generic, Show)
+
+
+instance FromJSON DiscordInteraction where
+  parseJSON = genericParseJSON defaultOptions{fieldLabelModifier = \f -> if f == "data_i" then "data" else if f == "interaction_type" then "type" else f}
+
+
+-- Slash command data
+data InteractionData = InteractionData
+  { name :: Text
+  , options :: Maybe [InteractionOption]
+  }
+  deriving (Generic, Show)
+
+
+instance FromJSON InteractionData
+
+
+data InteractionOption = InteractionOption
+  { name :: Text
+  , value :: Value
+  }
+  deriving (Generic, Show)
+
+
+instance FromJSON InteractionOption
+
+
+-- Outgoing response
+data DiscordInteractionResponse
+  = CommandResponse
+      { response_type :: Int
+      , data_ :: Maybe InteractionApplicationCommandCallbackData
+      }
+  | PingResponse
+      { response_type :: Int
+      }
+  deriving (Generic, Show)
+
+
+instance ToJSON DiscordInteractionResponse where
+  toJSON = genericToJSON defaultOptions{fieldLabelModifier = \f -> if f == "data_" then "data" else if f == "response_type" then "type" else f}
+
+
+data InteractionApplicationCommandCallbackData = InteractionApplicationCommandCallbackData
+  { content :: Text
+  }
+  deriving (Generic, Show)
+
+
+instance ToJSON InteractionApplicationCommandCallbackData
+
+
+discordInteractionsH :: BS.ByteString -> Maybe BS.ByteString -> Maybe BS.ByteString -> ATBaseCtx AE.Value
+discordInteractionsH rawBody signatureM timestampM = do
+  envCfg <- asks env
+  case (signatureM, timestampM) of
+    (Just sig, Just tme)
+      | verifyDiscordSignature (encodeUtf8 envCfg.discordPublicKey) sig tme rawBody -> do
+          let intrM = (AE.decodeStrict' rawBody) :: Maybe DiscordInteraction
+          case intrM of
+            Nothing -> throwError err401{errBody = "Invalid interaction data"}
+            Just interaction -> do
+              case interaction.interaction_type of
+                Ping -> pure $ AE.object ["type" .= (1 :: Int)]
+                ApplicationCommand -> do
+                  case data_i interaction of
+                    Just cmdData -> do
+                      discordData <- getDiscordData interaction.guild_id
+                      case cmdData.name of
+                        "ask" -> do
+                          let maybeQuestion = case cmdData.options of
+                                Just (InteractionOption{value = String q} : _) -> Just q
+                                _ -> Nothing
+                          pure $ AE.object ["type" .= (4 :: Int), "data" .= AE.object ["content" .= ("You asked: " <> maybe "" (\x -> x.projectId.toText) discordData <> maybe "something?" Relude.id maybeQuestion)]]
+                        "here" -> do
+                          case interaction.channel_id of
+                            Just channelId -> do
+                              case discordData of
+                                Just _ -> do
+                                  _ <- updateDiscordNotificationChannel interaction.guild_id channelId
+                                  pure $ AE.object ["type" .= (4 :: Int), "data" .= AE.object ["content" .= "Got it, notifications and alerts on your project will now be sent to this channel"]]
+                                Nothing -> pure $ AE.object ["type" .= (4 :: Int), "data" .= AE.object ["content" .= "No discord data found"]]
+                            Nothing -> pure $ AE.object ["type" .= (4 :: Int), "data" .= AE.object ["content" .= "No channel ID provided"]]
+                        _ -> pure $ AE.object ["type" .= (4 :: Int), "data" .= AE.object ["content" .= "The command is not giving"]]
+                    Nothing -> pure $ AE.object ["type" .= (4 :: Int), "data" .= AE.object ["content" .= "No command data provided"]]
+      | otherwise -> throwError err401{errBody = "Invalid signature"}
+    _ -> throwError err401{errBody = "Invalid signature"}
+
+
+verifyDiscordSignature
+  :: ByteString
+  -> ByteString
+  -> ByteString
+  -> ByteString
+  -> Bool
+verifyDiscordSignature publicKey signatureHex timestamp rawBody =
+  case Base16.decode signatureHex of
+    Right s ->
+      case Ed25519.signature s of
+        Crypto.CryptoFailed _ -> False
+        Crypto.CryptoPassed sig -> case Base16.decode publicKey of
+          Right pkBytes ->
+            case Ed25519.publicKey pkBytes of
+              Crypto.CryptoFailed e -> False
+              Crypto.CryptoPassed pk ->
+                let message = timestamp <> rawBody
+                 in Ed25519.verify pk message sig
+          _ -> False
+    _ -> False
+
+
+registerGlobalDiscordCommands :: T.Text -> T.Text -> IO (Either T.Text ())
+registerGlobalDiscordCommands appId botToken = do
+  let url =
+        T.unpack
+          $ "https://discord.com/api/v10/applications/"
+            <> appId
+            <> "/commands"
+
+      askCommand =
+        AE.object
+          [ "name" .= ("ask" :: T.Text)
+          , "description" .= ("Ask a question about your project using natural language" :: T.Text)
+          , "type" .= 1
+          , "options"
+              .= ( AE.Array
+                     $ V.fromList
+                       [ AE.object
+                           [ "name" .= ("quest" :: T.Text)
+                           , "description" .= ("Your question in natural language" :: T.Text)
+                           , "type" .= (3 :: Int) -- STRING
+                           , "required" .= True
+                           ]
+                       ]
+                 )
+          ]
+
+      queryCommand =
+        AE.object
+          [ "name" .= ("query" :: T.Text)
+          , "description" .= ("query data on your project" :: T.Text)
+          , "type" .= 1
+          , "options"
+              .= ( AE.Array
+                     $ V.fromList
+                       [ AE.object
+                           [ "name" .= ("query" :: T.Text)
+                           , "description" .= ("Enter query" :: T.Text)
+                           , "type" .= 3
+                           , "required" .= True
+                           ]
+                       ]
+                 )
+          ]
+      hereCommand =
+        AE.object
+          [ "name" .= ("here" :: T.Text)
+          , "description" .= ("Channel for apitoolkit to send notifications" :: T.Text)
+          , "type" .= 1
+          ]
+
+      commandBody = AE.Array $ V.fromList [askCommand, queryCommand, hereCommand]
+
+      opts =
+        defaults
+          & header "Authorization"
+          .~ [TE.encodeUtf8 $ "Bot " <> botToken]
+            & header "Content-Type"
+          .~ ["application/json"]
+
+  result <- try $ putWith opts url (AE.encode commandBody) :: IO (Either SomeException (Response LBS.ByteString))
+
+  case result of
+    Left err -> pure $ Left (T.pack $ show err)
+    Right resp ->
+      if (resp ^. responseStatus . statusCode) `elem` [200, 201]
+        then pure $ Right ()
+        else pure $ Left $ TE.decodeUtf8 . LBS.toStrict $ resp ^. responseBody

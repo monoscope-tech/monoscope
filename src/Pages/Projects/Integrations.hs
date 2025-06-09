@@ -15,7 +15,7 @@ import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
 import Effectful.Reader.Static (ask)
 import Lucid
 import Lucid.Htmx
-import Models.Apis.Slack (SlackData, getProjectSlackData)
+import Models.Apis.Slack (SlackData, getDiscordData, getDiscordDataByProjectId, getProjectSlackData)
 import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
@@ -79,8 +79,15 @@ updateNotificationsChannel pid NotifListForm{notificationsChannel, discordUrl} =
   let discordUrl' = if discordUrl == Just "" then Nothing else discordUrl
   if "discord" `elem` notificationsChannel && isNothing discordUrl'
     then do
-      addErrorToast "No discord webhook provided" Nothing
-      addRespHeaders ""
+      discordData <- getDiscordDataByProjectId pid
+      case discordData of
+        Just _ -> do
+          _ <- dbtToEff do Projects.updateNotificationsChannel pid notificationsChannel discordUrl'
+          addSuccessToast "Updated Notification Channels Successfully" Nothing
+          addRespHeaders ""
+        Nothing -> do
+          addErrorToast "You need to connect discord to this project first." Nothing
+          addRespHeaders ""
     else do
       if "slack" `elem` notificationsChannel
         then do
@@ -127,15 +134,6 @@ integrationsBody sess envCfg isUpdate cp notifChannel slackData = do
             div_ [class_ "px-6 pb-6"]
               $ p_ [class_ "text-sm text-gray-500"] "All users on this project will receive updates via email."
 
-          -- div_ [class_ "shadow-xs border p-6 rounded-lg"] do
-          --   div_ [class_ "flex gap-6 items-center mb-2"] do
-          --     h3_ [class_ "text-2xl font-bold"] "Email"
-          --     div_
-          --       [class_ "flex items-center gap-2"]
-          --       do
-          --         label_ [class_ "relative inline-flex items-center cursor-pointer"] do
-          --           input_ [type_ "checkbox", name_ "notificationsChannel", value_ "email", if isChecked then checked_ else title_ "Enable notification via email", class_ "toggle"]
-          --   p_ [class_ " text-brand font-bold"] "All users on this project, will receive updates via email."
           let isCheckedS = Projects.NSlack `elem` notif
           div_ [class_ $ "bg-white rounded-lg border border-strokeWeak shadow-xs " <> if isCheckedS then "border-l-4 border-l-primary" else ""] $ do
             div_ [class_ "p-6 pb-3"] $ do
@@ -155,21 +153,6 @@ integrationsBody sess envCfg isUpdate cp notifChannel slackData = do
               a_ [target_ "_blank", class_ "", href_ $ "https://slack.com/oauth/v2/authorize?client_id=6211090672305.6200958370180&scope=chat:write,incoming-webhook&user_scope=&redirect_uri=" <> envCfg.slackRedirectUri <> pid] do
                 img_ [alt_ "Add to slack", height_ "40", width_ "139", src_ "https://platform.slack-edge.com/img/add_to_slack.png", term "srcSet" "https://platform.slack-edge.com/img/add_to_slack.png 1x, https://platform.slack-edge.com/img/add_to_slack@2x.png 2x"]
 
-          -- div_ [class_ "shadow-xs border p-6 rounded-lg"] do
-          --   div_ [class_ "flex gap-6 items-center mb-6"] do
-          --     h3_ [class_ "text-2xl font-bold"] "Slack"
-          --     let isChecked = Projects.NSlack `elem` notif
-          --     div_
-          --       [class_ "flex items-center gap-2"]
-          --       do
-          --         label_ [class_ "relative inline-flex items-center cursor-pointer"] do
-          --           input_ [type_ "checkbox", name_ "notificationsChannel", if isChecked then checked_ else title_ "Enable notifications via slack", value_ "slack", class_ "sr-only peer"]
-          --           div_ [class_ "w-11 h-6 bg-gray-200 peer-focus:outline-hidden peer-focus:ring-4 peer-focus:ring-blue-300 dark:peer-focus:ring-blue-800 rounded-full peer dark:bg-gray-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-base-100 after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:border-gray-600 peer-checked:bg-blue-600"] pass
-          --   case slackData of
-          --     Just s -> span_ [class_ "font-bold  mb-2 text-brand block"] "Already connected, but you can add again to change workspace or channel."
-          --     Nothing -> pass
-          --   a_ [target_ "_blank", class_ "", href_ $ "https://slack.com/oauth/v2/authorize?client_id=6211090672305.6200958370180&scope=chat:write,incoming-webhook&user_scope=&redirect_uri=" <> envCfg.slackRedirectUri <> pid] do
-          --     img_ [alt_ "Add to slack", height_ "40", width_ "139", src_ "https://platform.slack-edge.com/img/add_to_slack.png", term "srcSet" "https://platform.slack-edge.com/img/add_to_slack.png 1x, https://platform.slack-edge.com/img/add_to_slack@2x.png 2x"]
           let isCheckedD = Projects.NDiscord `elem` notif
           div_ [class_ $ "bg-white rounded-lg border border-strokeWeak shadow-xs " <> if isCheckedD then "border-l-4 border-l-primary" else ""] $ do
             div_ [class_ "p-6 pb-6"] $ do
@@ -183,18 +166,11 @@ integrationsBody sess envCfg isUpdate cp notifChannel slackData = do
                 div_ [class_ "flex items-center gap-2"] do
                   label_ [class_ "relative inline-flex items-center cursor-pointer"] do
                     input_ [type_ "checkbox", name_ "notificationsChannel", value_ "discord", if isCheckedD then checked_ else title_ "Enable notification via discord", class_ "toggle toggle-primary"]
-              input_ [type_ "text", name_ "discordUrl", class_ "input input-sm w-full mt-3", placeholder_ "Discord Webhook URL"]
 
-          -- div_ [class_ "shadow-xs border p-6 rounded-lg"] do
-          --   div_ [class_ "flex gap-6 items-center mb-2"] do
-          --     h3_ [class_ "text-2xl font-bold"] "Discord"
-          --     let isChecked = Projects.NDiscord `elem` notif
-          --     div_
-          --       [class_ "flex items-center gap-2"]
-          --       do
-          --         label_ [class_ "relative inline-flex items-center cursor-pointer"] do
-          --           input_ [type_ "checkbox", name_ "notificationsChannel", value_ "discord", if isChecked then checked_ else title_ "Enable notification via discord", class_ "sr-only peer"]
-          --           div_ [class_ "w-11 h-6 bg-gray-200 peer-focus:outline-hidden peer-focus:ring-4 peer-focus:ring-blue-300 dark:peer-focus:ring-blue-800 rounded-full peer dark:bg-gray-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-base-100 after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:border-gray-600 peer-checked:bg-blue-600"] pass
-          --   input_ [type_ "text", name_ "discordUrl", class_ "input input-sm w-full mt-2", placeholder_ "Discord Webhook URL"]
+            div_ [class_ "px-6 pb-6"] do
+              let addQueryParams = "&state=" <> pid <> "&redirect_uri=" <> envCfg.discordRedirectUri
+              a_ [target_ "_blank", class_ "flex items-center gap-2 border p-2 w-max border-strokeStrong rounded-lg", href_ $ "https://discord.com/oauth2/authorize?response_type=code&client_id=1328384474395967631&permissions=277025392640&integration_type=0&scope=bot+applications.commands" <> addQueryParams] do
+                faSprite_ "discord" "solid" "h-6 w-6 text-textBrand"
+                span_ [class_ "text-sm text-textStrong font-semibold"] "Add to Discord"
 
           button_ [class_ "btn btn-primary w-max"] "Save Selections"

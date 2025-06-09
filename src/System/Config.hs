@@ -3,6 +3,7 @@
 module System.Config (EnvConfig (..), AuthContext (..), DashboardM, ctxToHandler, getAppContext, configToEnv, DeploymentEnv (..)) where
 
 import Colourista.IO (blueMessage)
+import Data.ByteString qualified as BS
 import Data.Cache (Cache, newCache)
 import Data.Default (Default (..))
 import Data.Default.Instances ()
@@ -59,6 +60,11 @@ data EnvConfig = EnvConfig
   , slackClientId :: Text
   , slackClientSecret :: Text
   , slackRedirectUri :: Text
+  , discordRedirectUri :: Text
+  , discordClientId :: Text
+  , discordClientSecret :: Text
+  , discordBotToken :: Text
+  , discordPublicKey :: Text
   , courierClientKey :: Text
   , courierApiKey :: Text
   , environment :: Text

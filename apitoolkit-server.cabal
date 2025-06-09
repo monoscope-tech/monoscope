@@ -365,6 +365,11 @@ library
     , wreq
     , xxhash
     , yaml
+    , cryptonite >= 0.30
+    , ed25519 >= 0.0.5
+    , memory
+    , bytestring
+    , base16-bytestring    
   default-language: GHC2021
 
 executable apitoolkit-server-exe

@@ -726,6 +726,22 @@ CREATE TABLE IF NOT EXISTS apis.slack
   UNIQUE (project_id)
 );
 
+CREATE TABLE IF NOT EXISTS apis.discord (
+  id               UUID        NOT     NULL   DEFAULT        gen_random_uuid() PRIMARY KEY,
+  project_id       UUID        NOT     NULL   REFERENCES projects.projects (id)              ON      DELETE CASCADE,
+  created_at       TIMESTAMP   WITH    TIME   ZONE       NOT               NULL              DEFAULT current_timestamp,
+  updated_at       TIMESTAMP   WITH    TIME   ZONE       NOT               NULL              DEFAULT current_timestamp,
+  guild_id         TEXT        NOT     NULL   DEFAULT        ''
+);
+SELECT manage_updated_at('apis.discord');
+CREATE INDEX IF NOT EXISTS idx_apis_discord_project_id ON apis.discord(project_id);
+CREATE INDEX IF NOT EXISTS idx_apis_discord_guild_id ON apis.discord(guild_id);
+
+ALTER TABLE apis.discord
+ADD CONSTRAINT unique_project_id UNIQUE (project_id);
+ALTER TABLE apis.discord ADD COLUMN notifs_channel_id TEXT DEFAULT NULL;
+
+
 CREATE TABLE IF NOT EXISTS tests.collections
 (
   id               UUID        NOT     NULL   DEFAULT        gen_random_uuid() PRIMARY KEY,
