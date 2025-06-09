@@ -180,7 +180,7 @@ logQueryBox_ config = do
 
               div_ [class_ "dropdown dropdown-hover dropdown-bottom dropdown-end"] do
                 div_ [class_ "rounded-lg px-3 py-2 text-slate-700 inline-flex items-center border border-strokeStrong h-full", tabindex_ "0", role_ "button"] $ faSprite_ "floppy-disk" "regular" "h-5 w-5"
-                ul_ [tabindex_ "0", class_ "dropdown-content border menu bg-base-100 rounded-box z-1 w-60 p-2 shadow-lg h-full"] do
+                ul_ [tabindex_ "0", class_ "dropdown-content border menu bg-base-100 rounded-box z-1 w-60 p-2 shadow-lg"] do
                   li_ $ label_ [Lucid.for_ "saveQueryMdl"] "Save query to Query Library"
             button_
               [type_ "submit", class_ "leading-none rounded-lg px-3 py-2 cursor-pointer !h-auto btn btn-primary"]

@@ -211,27 +211,11 @@ renderFacets facetSummary = do
     
     // Initialize and set up event listeners
     document.addEventListener('DOMContentLoaded', () => {
-      // Initial sync after load
-      setTimeout(syncFacetCheckboxes, 300);
+      setTimeout(syncFacetCheckboxes, 100);
       
       // Listen for query changes via the custom event
       window.addEventListener('update-query', syncFacetCheckboxes);
     });
-  |]
-
-  script_
-    [text|
-    // Add a utility to handle removing group by statements
-    if (!document.getElementById("filterElement").handleRemoveGroupBy) {
-      document.getElementById("filterElement").handleRemoveGroupBy = function(field) {
-        const currentQuery = this.value || "";
-        const regex = new RegExp("group by " + field, 'gi');
-        const newQuery = currentQuery.replace(regex, "").trim();
-        this.value = newQuery;
-        this.dispatchEvent(new Event('input'));
-        htmx.trigger('#log_explorer_form', 'update-query');
-      };
-    }
   |]
 
   renderFacetSection "Common Filters" rootFacets facetMap False
