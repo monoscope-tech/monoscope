@@ -87,6 +87,9 @@ data Sources = SSpans | SMetrics
 -- >>> parse aggFunctionParser "" "count(*)"
 -- Right (Count (Subject "*" "*" []) Nothing)
 --
+-- >>> parse aggFunctionParser "" "count()"
+-- Right (Count (Subject "*" "*" []) Nothing)
+--
 -- >>> parse aggFunctionParser "" "sum(field)"
 -- Right (Sum (Subject "field" "field" []) Nothing)
 --
@@ -123,7 +126,7 @@ aggFunctionParser =
     , P95 <$> (string "p95(" *> pSubject <* string ")") <*> pure Nothing
     , P99 <$> (string "p99(" *> pSubject <* string ")") <*> pure Nothing
     , P100 <$> (string "p100(" *> pSubject <* string ")") <*> pure Nothing
-    , Count <$> (string "count(" *> pSubject <* string ")") <*> pure Nothing
+    , Count <$> (string "count(" *> (pSubject <|> (string ")" *> pure (Subject "*" "*" []))) <* optional (string ")")) <*> pure Nothing
     , Avg <$> (string "avg(" *> pSubject <* string ")") <*> pure Nothing
     , Min <$> (string "min(" *> pSubject <* string ")") <*> pure Nothing
     , Max <$> (string "max(" *> pSubject <* string ")") <*> pure Nothing

@@ -125,13 +125,14 @@ logQueryBox_ config = do
                      if event.detail.successful 
                        then 
                          call JSON.parse(event.detail.xhr.responseText) set result to it
+                         if result.query then call #filterElement.handleAddQuery(result.query, true) end
+                          log result.query then
                          if result.visualization_type
                            then
                              set vizType to result.visualization_type
                              set widgetId to (@data-container-id or 'visualization-widget-container')
                              call window.handleVisualizationUpdate(vizType, widgetId)
                          end
-                         if result.query then call #filterElement.handleAddQuery(result.query, true) end
                      else
                        if event.detail.xhr.responseText and event.detail.xhr.responseText.includes('INVALID_QUERY_ERROR')
                          then

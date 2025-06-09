@@ -664,6 +664,7 @@ apiLogsPage page = do
           , queryLibRecent = page.queryLibRecent
           , queryLibSaved = page.queryLibSaved
           , updateUrl = True
+          , targetWidgetPreview = Nothing
           }
 
       div_ [class_ "timeline flex flex-row gap-4 mt-3 group-has-[#viz-logs:not(:checked)]/pg:hidden group-has-[.toggle-chart:checked]/pg:hidden w-full", style_ "aspect-ratio: 10 / 1;"] do
@@ -937,11 +938,11 @@ aiSearchH _pid requestBody = do
         , -- , "2. Optional: | sort by <field> [asc|desc]"
           -- , "3. Optional: | take N"
           ""
-        , "The summarize statement can use various aggregation functions like count(*), sum(...), avg(...), min(...), max(...), median(...), etc."
+        , "The summarize statement can use various aggregation functions like count(), sum(...), avg(...), min(...), max(...), median(...), etc."
         , ""
         , "Examples of chart queries:"
-        , "- \"Show errors by hour\": level == \"ERROR\" | summarize count(*) by bin(timestamp, 1h)"
-        , "- \"Graph request counts by kind in 2h blocks\": | summarize count(*) by bin(timestamp, 2h), kind"
+        , "- \"Show errors by hour\": level == \"ERROR\" | summarize count() by bin(timestamp, 1h)"
+        , "- \"Graph request counts by kind in 2h blocks\": | summarize count() by bin(timestamp, 2h), kind"
         , "- \"Line chart of p95 durations by method\": | summarize p95(duration) by bin(timestamp, 30m), attributes.http.request.method"
         , ""
         , "Examples:"
