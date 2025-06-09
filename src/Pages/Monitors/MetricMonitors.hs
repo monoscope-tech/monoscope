@@ -12,6 +12,7 @@ import Models.Users.Sessions qualified as Sessions
 import NeatInterpolation (text)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
 import Pages.Log qualified as LogList
+import Pkg.Components.LogQueryBox (LogQueryBoxConfig(..))
 import Pkg.Components qualified as Components
 import Pkg.THUtils qualified as THUtils
 import Relude
@@ -159,7 +160,16 @@ chooseDetectionMethod_ = do
 defineTheMetric_ :: Projects.ProjectId -> Html ()
 defineTheMetric_ pid = do
   div_ [class_ " max-w-[750px]"] do
-    LogList.logQueryBox_ pid Nothing "requests" Nothing Nothing Nothing V.empty V.empty
+    LogList.logQueryBox_ LogQueryBoxConfig
+      { pid = pid
+      , currentRange = Nothing
+      , source = Just "requests"
+      , targetSpan = Nothing
+      , query = Nothing
+      , vizType = Nothing
+      , queryLibRecent = V.empty
+      , queryLibSaved = V.empty
+      }
   div_ [class_ "border-l-2 border-l-slate-300 pl-4 space-y-2"] do
     h3_ [class_ "font-normal text-base"] "Evaluation Details"
     div_ [class_ "flex items-center gap-2"] do

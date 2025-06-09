@@ -41,6 +41,7 @@ import Pages.BodyWrapper
 import Pages.Charts.Charts qualified as Charts
 import Pages.Components qualified as Components
 import Pkg.Components qualified as Components
+import Pkg.Components.LogQueryBox (logQueryBox_, visTypes, queryEditorInitializationCode, LogQueryBoxConfig(..))
 import Pkg.Components.Widget qualified as Widget
 import Relude
 import Relude.Unsafe qualified as Unsafe
@@ -654,11 +655,21 @@ widgetViewerEditor_ pid dashboardIdM currentRange existingWidgetM activeTab = di
           span_ [class_ "inline-block rounded-full bg-fillWeak px-3 py-1 leading-none"] "2"
           strong_ [class_ "text-lg font-semibold"] "Graph your Data"
         div_ [class_ "px-5 flex flex-col gap-2"] do
+          logQueryBox_ LogQueryBoxConfig
+            { pid = pid
+            , currentRange = Nothing
+            , source = Nothing
+            , targetSpan = Nothing
+            , query = Nothing
+            , vizType = Nothing
+            , queryLibRecent = V.empty
+            , queryLibSaved = V.empty
+            }
           div_ [id_ queryBuilderId, class_ "flex-1 flex items-center"]
             $ termRaw
               "query-editor"
               [ id_ filterElementId
-              , class_ "w-full h-[2rem] flex items-center"
+              , class_ "w-full xh-[2rem] flex items-center"
               , term "default-value" (fromMaybe "" widgetToUse.query)
               , term "widget-editor" "true"
               , term "target-widget-preview" widgetPreviewId
@@ -707,17 +718,7 @@ widgetViewerEditor_ pid dashboardIdM currentRange existingWidgetM activeTab = di
             ]
 
 
-visTypes :: [(Text, Text, Text, Text)]
-visTypes =
-  [ ("list-view", "Logs", "logs", "📋")
-  , ("bar-chart", "Bar", "timeseries", "📊")
-  , ("duo-line-chart", "Line", "timeseries_line", "📈")
-  -- , ("duo-pie-chart", "Pie", "pie_chart", "🥧")
-  -- , ("duo-scatter-chart", "Scatter", "distribution", "📉")
-  -- , ("hashtag", "Number", "stat", "🔢")
-  -- , ("guage", "Guage", "", "🧮")
-  -- , ("text", "Text", "", "📝")
-  ]
+-- visTypes is now imported from LogQueryBox to avoid circular dependencies
 
 
 -- | Backward compatibility wrapper for the new widget editor
