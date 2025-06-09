@@ -517,7 +517,14 @@ export class QueryBuilderComponent extends LitElement {
     // Make summarize clause with GROUP BY
     if (this.aggregations.length > 0) {
       // The summarize clause will include both aggregations AND group by
-      const aggPart = this.aggregations.map((agg) => `${agg.function}(${agg.field})`).join(', ');
+      const aggPart = this.aggregations.map((agg) => {
+        // Special handling for count() with empty field
+        if (agg.function === 'count' && agg.field === '') {
+          return 'count()';
+        } else {
+          return `${agg.function}(${agg.field})`;
+        }
+      }).join(', ');
       const groupByPart = this.groupByFields.length > 0 ? ` by ${this.groupByFields.join(', ')}` : '';
       
       const summarizeStr = `summarize ${aggPart}${groupByPart}`;
@@ -531,9 +538,9 @@ export class QueryBuilderComponent extends LitElement {
         query += summarizeStr;
       }
     } else if (this.groupByFields.length > 0) {
-      // If we have group by fields but no aggregations, add count(*) aggregation
+      // If we have group by fields but no aggregations, add count() aggregation
       const groupByPart = this.groupByFields.join(', ');
-      const summarizeStr = `summarize count(*) by ${groupByPart}`;
+      const summarizeStr = `summarize count() by ${groupByPart}`;
       
       // Check if a summarize clause already exists in the query
       if (query.match(/\|?\s*summarize\s+[^|]+/i)) {
@@ -673,6 +680,61 @@ export class QueryBuilderComponent extends LitElement {
    */
   private removeGroupByField(index: number): void {
     this.groupByFields = this.groupByFields.filter((_, i) => i !== index);
+    this.updateQuery();
+  }
+  
+  /**
+   * Toggle a field in the group by clause
+   * Adds the field if not present, removes it if already exists
+   * First ensures that visualization type is timeseries or timeseries_line
+   */
+  public toggleGroupByField(field: string): void {
+    const queryEditor = document.querySelector(this.queryEditorSelector) as any;
+    if (!queryEditor?.editor) return;
+    
+    // First ensure we're using a timeseries visualization type
+    const vizType = (window as any).currentVisualizationType;
+    if (!['timeseries', 'timeseries_line'].includes(vizType)) {
+      // Set visualization type to timeseries if it's not already a timeseries type
+      (window as any).handleVisualizationUpdate('timeseries');
+    }
+    
+    // Normalize field names for comparison (handle bin functions)
+    const normalizeField = (f: string) => f.replace(/bin(_auto)?\([^,]+(?:, \d+)?\)/, '').trim();
+    const normalizedField = normalizeField(field);
+    
+    // Check if field exists in current group by fields
+    const fieldIndex = this.groupByFields.findIndex(f => normalizeField(f) === normalizedField);
+    
+    if (fieldIndex >= 0) {
+      // Remove field if present
+      this.groupByFields.splice(fieldIndex, 1);
+      
+      // Remove entire summarize if no fields and no aggregations left
+      if (this.groupByFields.length === 0 && this.aggregations.length === 0) {
+        const query = queryEditor.editor.getValue().replace(/\|?\s*summarize\s+[^|]+?(?=\||$)/i, '');
+        queryEditor.handleAddQuery(query, true);
+        return;
+      }
+    } else {
+      // First check if we have a summarize with bin_auto or bin for timestamp
+      const hasBinnedTimestamp = this.groupByFields.some(f => /bin(_auto)?\(timestamp(?:,\s*\d+)?\)/.test(f));
+      
+      // If we already have a summarize with bin, just add the field
+      if (hasBinnedTimestamp) {
+        // Add the requested field
+        this.groupByFields.push(field);
+      } else {
+        // No existing bin_auto(timestamp) - create a new summarize with bin_auto(timestamp) and the field
+        this.groupByFields = ['bin_auto(timestamp)', field];
+      }
+      
+      // Ensure at least count() aggregation exists (note: using count() instead of count(*) as specified)
+      if (this.aggregations.length === 0) {
+        this.aggregations = [{ function: 'count', field: '' }];
+      }
+    }
+    
     this.updateQuery();
   }
 
@@ -855,13 +917,13 @@ export class QueryBuilderComponent extends LitElement {
    * Completes the aggregation process
    */
   private completeAggregation(): void {
-    // For count(), we don't need a field
+    // For count(), we should use empty field for count()
     if (this.newAggFunction === 'count') {
       this.aggregations = [
         ...this.aggregations,
         {
           function: this.newAggFunction,
-          field: '*',
+          field: '',
         },
       ];
     } else if (this.newAggFunction && this.newAggField?.trim()) {

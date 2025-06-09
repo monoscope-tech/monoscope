@@ -245,26 +245,28 @@ renderFacets facetSummary = do
                 label_ [tabindex_ "0", class_ "cursor-pointer"] do
                   faSprite_ "ellipsis-vertical" "regular" "w-3 h-3"
                 ul_ [tabindex_ "0", class_ "dropdown-content z-10 menu p-2 shadow bg-base-100 rounded-box w-52"] do
-                  -- li_
-                  --   $ a_
-                  --     [ term "data-field" (T.replace "___" "." key)
-                  --     , term "data-key" key
-                  --     , [__|
-                  --     init
-                  --       set query to window.getQueryFromEditor()
-                  --       if query and query.toLowerCase().includes('group by ' + @data-field.toLowerCase())
-                  --         set my innerHTML to 'Remove group by'
-                  --       end
-                  --     on click
-                  --       set query to window.getQueryFromEditor()
-                  --       if query and query.toLowerCase().includes('group by ' + @data-field.toLowerCase())
-                  --         call document.getElementById('filterElement').handleRemoveGroupBy(@data-field)
-                  --       else call document.getElementById('filterElement').handleAddQuery('group by ' + @data-field)
-                  --       end
-                  --     end
-                  --   |]
-                  --     ]
-                  --     "Group by"
+                  li_
+                    $ a_
+                      [ term "data-field" (T.replace "___" "." key)
+                      , term "data-key" key
+                      , [__|
+                        init
+                          if #filterElement.editor
+                            set editorValue to #filterElement.editor.getValue().toLowerCase()
+                            if editorValue.includes('summarize') and 
+                              editorValue.includes('by') and 
+                              editorValue.includes(@data-field.toLowerCase())
+                              set my.innerHTML to 'Remove group by'
+                            end
+                          end
+                        end
+
+                        on click
+                          call (<query-builder/>).toggleGroupByField(@data-field)
+                        end
+                    |]
+                      ]
+                      "Group by"
                   li_
                     $ a_
                       [ term "data-key" key

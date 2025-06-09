@@ -331,10 +331,16 @@ queryEditorInitializationCode queryLibRecent queryLibSaved vizTypeM = do
       queryLibDataJson = decodeUtf8 $ AE.encode queryLibData
       schemaJson = decodeUtf8 $ AE.encode Schema.telemetrySchemaJson
       popularQueriesJson = decodeUtf8 $ AE.encode Schema.popularOtelQueriesJson
+      vizType = fromMaybe "logs" vizTypeM
   script_
     [text|
+    // Set initial visualization type
+    window.currentVisualizationType = "$vizType";
+    
     // Function to update viz type in URL without reloading the page
     window.updateVizTypeInUrl = function(vizType, shouldUpdateUrl = true) {
+      // Update the current visualization type
+      window.currentVisualizationType = vizType;
       requestAnimationFrame(() => {
         // Only update URL if we're not in widget mode and shouldUpdateUrl is true
         const editor = document.getElementById('filterElement');
