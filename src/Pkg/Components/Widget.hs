@@ -46,6 +46,7 @@ data Layout = Layout
 
 data WidgetType
   = WTGroup
+  | WTLogs
   | WTTimeseries
   | WTTimeseriesLine
   | WTTimeseriesStat
@@ -112,6 +113,7 @@ data Widget = Widget
   , value :: Maybe Int -- value could represent a number or a count
   , wData :: Maybe AE.Value
   , hideLegend :: Maybe Bool
+  , legendPosition :: Maybe Text -- Position of the legend: "top" or "bottom" (default)
   , theme :: Maybe Text
   , dataset :: Maybe WidgetDataset
   , -- eager
@@ -354,6 +356,7 @@ renderChart widget = do
             let summarizeBy = T.toLower $ T.drop 2 $ show $ fromMaybe SBSum widget.summarizeBy
             let summarizeByPfx = summarizeByPrefix $ fromMaybe SBSum widget.summarizeBy
             let wType = decodeUtf8 $ AE.encode widget.wType
+            let legendPos = fromMaybe "bottom" widget.legendPosition
             script_
               [type_ "text/javascript"]
               [text|
@@ -372,7 +375,8 @@ renderChart widget = do
                   yAxisLabel: "${yAxisLabel}",
                   pid: ${pid},
                   summarizeBy: '${summarizeBy}',
-                  summarizeByPrefix: '${summarizeByPfx}'
+                  summarizeByPrefix: '${summarizeByPfx}',
+                  legendPosition: "${legendPos}"
                 };
 
                 // Function to initialize this specific widget
@@ -400,6 +404,12 @@ renderChart widget = do
                   const chartEl = document.getElementById(config.chartId);
                   if (!chartEl) return;
                   
+                  // Dispose of any existing chart instance before initializing a new one
+                  const existingChart = window.echarts && window.echarts.getInstanceByDom(chartEl);
+                  if (existingChart) {
+                    existingChart.dispose();
+                  }
+                  
                   window.bindFunctionsToObjects(echartOpt, echartOpt);
                   window.chartWidget({
                     chartType: config.chartType,
@@ -412,7 +422,8 @@ renderChart widget = do
                     yAxisLabel: config.yAxisLabel,
                     pid: config.pid,
                     summarizeBy: config.summarizeBy,
-                    summarizeByPrefix: config.summarizeByPrefix
+                    summarizeByPrefix: config.summarizeByPrefix,
+                    legendPosition: config.legendPosition
                   });
                 }
 
@@ -465,7 +476,7 @@ widgetToECharts widget =
             AE..= AE.object
               [ "show" AE..= legendVisibility
               , "type" AE..= "scroll"
-              , "top" AE..= "bottom"
+              , "top" AE..= fromMaybe "bottom" widget.legendPosition
               , "textStyle" AE..= AE.object ["fontSize" AE..= AE.Number 12] -- // default is usually 12 or 14
               --  Shrink the symbol/icon size
               , "itemWidth" AE..= (AE.Number 14) -- default is 25
@@ -478,8 +489,8 @@ widgetToECharts widget =
             AE..= AE.object
               [ "width" AE..= ("100%" :: Text)
               , "left" AE..= ("0%" :: Text)
-              , "top" AE..= if widget.naked == Just True then "10%" else "5%"
-              , "bottom" AE..= if (fromMaybe False widget.hideLegend || widget.wType == WTTimeseriesStat) then "1.8%" else "18%"
+              , "top" AE..= if widget.legendPosition == Just "top" && legendVisibility then "18%" else if widget.naked == Just True then "10%" else "5%"
+              , "bottom" AE..= if widget.legendPosition /= Just "top" && legendVisibility then "18%" else "1.8%"
               , "containLabel" AE..= True
               , "show" AE..= False
               ]

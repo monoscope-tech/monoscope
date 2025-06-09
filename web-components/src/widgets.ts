@@ -125,14 +125,23 @@ type WidGetData = {
   summarizeByPrefix: string;
   widgetType: string;
   queryAST: string;
+  legendPosition?: string;
 };
 
 const chartWidget = (widgetData: WidGetData) => {
   const { chartType, opt, chartId, query, querySQL, theme } = widgetData,
     chartEl = $(chartId),
-    chart = (window as any).echarts.init(chartEl, theme),
     liveStreamCheckbox = $('streamLiveData') as HTMLInputElement;
   let intervalId: NodeJS.Timeout | null = null;
+  
+  // Dispose of any existing chart instance before creating a new one
+  const existingChart = (window as any).echarts.getInstanceByDom(chartEl);
+  if (existingChart) {
+    existingChart.dispose();
+  }
+  
+  // Initialize new chart
+  const chart = (window as any).echarts.init(chartEl, theme);
   chart.group = 'default';
 
   // Store the original base query to avoid stacking

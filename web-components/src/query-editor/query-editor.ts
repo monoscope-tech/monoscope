@@ -399,7 +399,10 @@ monaco.languages.registerCompletionItemProvider('aql', {
     }
 
     // Fifth priority: Check for logical operators followed by space - suggest fields
-    const logicalOperatorPattern = new RegExp(`\\b(${LOGICAL_OPERATORS.filter((op) => ['and', 'or', 'not'].includes(op)).join('|')})\\s+$`, 'i');
+    const logicalOperatorPattern = new RegExp(
+      `\\b(${LOGICAL_OPERATORS.filter((op) => ['and', 'or', 'not'].includes(op)).join('|')})\\s+$`,
+      'i'
+    );
     const logicalOperatorMatch = lineText.match(logicalOperatorPattern);
     if (logicalOperatorMatch) {
       const fields = await schemaManager.resolveNested(currentSchema, '');
@@ -704,7 +707,7 @@ export class QueryEditorComponent extends LitElement {
       }
     });
 
-    window.addEventListener('resize', () => this.editor?.layout());
+    window.addEventListener('resize', () => this.adjustEditorHeight());
 
     // Focus editor when "/" is pressed
     document.addEventListener('keydown', (e: KeyboardEvent) => {
@@ -789,21 +792,58 @@ export class QueryEditorComponent extends LitElement {
     if (!this.editor) return;
 
     const currentQuery = this.editor.getValue().trim();
-    const baseQuery = currentQuery.replace(/\|\s*(timechart|stats)\s+[^|]*$/i, '').trim();
+
+    // Check if the query contains a summarize clause
+    const hasSummarize = /summarize\s+/i.test(currentQuery);
+
+    // Check if summarize includes bin_auto or bin with any field
+    const hasBinFunction = /summarize.*by\s+.*bin(_auto)?\s*\(\s*\w+\s*[,)].*$/i.test(currentQuery);
+
+    console.log(`Visualization change: ${visualizationType}`);
+    console.log(`Current query: "${currentQuery}"`);
+    console.log(`Has summarize: ${hasSummarize}, Has bin function: ${hasBinFunction}`);
 
     let newQuery = '';
     switch (visualizationType) {
-      case 'timeseries':
-        newQuery = baseQuery ? `${baseQuery} | timechart [5m] count(*)` : 'timechart [5m] count(*)';
+      case 'timeseries': // Bar chart
+      case 'timeseries_line': // Line chart
+        // If query already has the correct format for timeseries, don't change it
+        if (hasSummarize && hasBinFunction) {
+          console.log(`Query already has bin/bin_auto function, keeping as is: "${currentQuery}"`);
+          return;
+        }
+
+        if (hasSummarize && !hasBinFunction) {
+          // Query has summarize but no bin_auto for timestamp, add bin_auto(timestamp) to the by clause
+          newQuery = currentQuery.replace(/(\s*summarize\s+[^|]*?by\s+)([^|]*?)(?=\||$)/i, (match, summarizePrefix, byClause) => {
+            // Add bin_auto(timestamp) to the beginning of the by clause
+            const updatedBy = byClause.trim()
+              ? `${summarizePrefix}bin_auto(timestamp), ${byClause.trim()}`
+              : `${summarizePrefix}bin_auto(timestamp)`;
+            return updatedBy;
+          });
+          console.log(`Adding bin_auto to existing summarize. New query: "${newQuery}"`);
+        } else if (!hasSummarize) {
+          // No summarize clause, add one with bin_auto(timestamp)
+          newQuery = `${currentQuery ? currentQuery + ' ' : ''}| summarize count(*) by bin_auto(timestamp), status_code`;
+          console.log(`Adding new summarize clause. New query: "${newQuery}"`);
+        }
         break;
       case 'table':
       case 'top-list':
       case 'distribution':
       case 'query-value':
-        newQuery = baseQuery ? `${baseQuery} | stats count(*)` : 'stats count(*)';
-        break;
-      default: // logs
-        newQuery = baseQuery;
+        // We don't modify queries for these visualization types
+        return;
+      case 'logs':
+      default:
+        // For logs or default case (which is interpreted as logs), remove any summarize part
+        if (hasSummarize) {
+          newQuery = currentQuery.replace(/\|\s*summarize\s+[^|]*?(?=\||$)/i, '');
+          console.log(`Removing summarize for ${visualizationType === 'logs' ? 'logs' : 'default'} view. New query: "${newQuery}"`);
+        } else {
+          return; // No summarize to remove
+        }
         break;
     }
 
@@ -941,7 +981,11 @@ export class QueryEditorComponent extends LitElement {
       scrollbar: {
         vertical: 'hidden',
         horizontal: 'hidden',
+        alwaysConsumeMouseWheel: false,
       },
+      automaticLayout: true,
+      lineDecorationsWidth: 0,
+      lineNumbersMinChars: 0,
     });
 
     this.setupEditorEvents();
@@ -1023,10 +1067,18 @@ export class QueryEditorComponent extends LitElement {
 
           this.debouncedUpdateQuery(model.getValue());
           this.debouncedTriggerSuggestions();
+          this.requestUpdate(); // Trigger re-render to update dropdown position
         }
       }),
 
-      this.editor.onDidContentSizeChange(() => this.editor?.layout()),
+      this.editor.onDidChangeCursorPosition(() => {
+        if (this.showSuggestions) {
+          // Update dropdown position when cursor changes
+          this.requestUpdate();
+        }
+      }),
+
+      this.editor.onDidContentSizeChange(() => this.adjustEditorHeight()),
     ];
 
     this.updateHandlers.push(...handlers);
@@ -1100,6 +1152,9 @@ export class QueryEditorComponent extends LitElement {
 
   private adjustEditorHeight(): void {
     if (!this.editor) return;
+    const minHeight = 34; // Minimum height in pixels (single line + padding)
+    const height = Math.max(this.editor.getContentHeight(), minHeight);
+    this._editorContainer.style.height = `${height}px`;
     this.editor.layout();
   }
 
@@ -1347,8 +1402,8 @@ export class QueryEditorComponent extends LitElement {
       item.kind === 'completion'
         ? ((item as CompletionItem).parentPath ? `${(item as CompletionItem).parentPath}.${item.label}` : item.label) || ''
         : item.kind === 'savedView'
-        ? (item as SavedView).name || 'Saved View'
-        : item.query || '';
+          ? (item as SavedView).name || 'Saved View'
+          : item.query || '';
 
     return html`
       <div
@@ -1367,7 +1422,7 @@ export class QueryEditorComponent extends LitElement {
   }
 
   private renderSuggestionDropdown(): TemplateResult {
-    if (!this.showSuggestions) return html``;
+    if (!this.showSuggestions || !this.editor) return html``;
 
     const matches = this.getMatches();
     const groups = {
@@ -1392,10 +1447,19 @@ export class QueryEditorComponent extends LitElement {
         title: groupTitles[category],
       }));
 
+    const position = this.editor.getPosition();
+    const coords = position ? this.editor.getScrolledVisiblePosition(position) : null;
+    let positionStyle = '';
+
+    if (coords) {
+      positionStyle = `top: ${coords.top + 24}px; left: 10px; right: 10px;`;
+    }
+
     if (!sections.length) {
       return html`
         <div
-          class="suggestions-dropdown absolute top-10 left-0 right-0 bg-white border border-gray-200 shadow-lg z-10 overflow-y-auto rounded-md text-xs"
+          class="mt-1 suggestions-dropdown absolute bg-white border border-gray-200 shadow-lg z-10 overflow-y-auto rounded-md text-xs"
+          style="${positionStyle}"
         >
           <div class="px-4 py-2 text-sm text-gray-400 italic">No suggestions found</div>
         </div>
@@ -1417,7 +1481,8 @@ export class QueryEditorComponent extends LitElement {
 
     return html`
       <div
-        class="suggestions-dropdown absolute top-10 left-0 right-0 bg-white border border-gray-200 shadow-lg z-50 max-h-[80dvh] overflow-y-auto rounded-md text-xs flex flex-col"
+        class="mt-1 suggestions-dropdown absolute bg-white border border-gray-200 shadow-lg z-50 max-h-[80dvh] overflow-y-auto rounded-md text-xs flex flex-col"
+        style="${positionStyle}"
       >
         <div class="overflow-y-auto flex-grow min-h-0">
           ${sections.map(
@@ -1444,25 +1509,29 @@ export class QueryEditorComponent extends LitElement {
           visibility: hidden !important;
         }
         .monaco-editor {
-          border-radius: 6px;
-          outline-color: var(--color-strokeStrong);
+          border-radius: 0;
+          outline: none !important;
+          border: none !important;
         }
-        .monaco-editor:focus-within {
-          outline-color: var(--color-strokeBrand-strong);
+        .monaco-editor .overflow-guard {
+          border: none !important;
+          outline: none !important;
         }
       </style>
-      <div class="relative w-full h-full">
-        <div class="relative w-full h-full">
-          <div id="editor-container" class="h-full"></div>
+      <div
+        class="relative w-full h-full pl-2 flex border rounded-md border-strokeStrong focus-within:border-strokeBrand-strong focus:outline-2 "
+      >
+        <div class="relative w-full flex-1">
+          <div id="editor-container" class="w-full"></div>
           <div
-            class="placeholder-overlay absolute top-0 left-0 right-0 bottom-0 pointer-events-auto z-[1] text-gray-400 f/nont-mono text-sm leading-[18px] pt-2 pl-2 hidden cursor-text"
+            class="placeholder-overlay absolute top-0 left-0 right-0 bottom-0 pointer-events-auto z-[1] text-gray-400 f/nont-mono text-sm leading-[18px] pt-2 pl-0 hidden cursor-text"
             @click=${() => this.editor?.focus()}
           >
             Filter logs and events. Press <span class="kbd">/</span> to search or <span class="kbd">?</span>
             to ask in Natural language.
           </div>
         </div>
-        <div class="absolute top-1 right-1 z-[2]">
+        <div class="p-1">
           <label
             class="px-3 py-0.5 inline-flex gap-2 items-center cursor-pointer border border-strokeBrand-strong text-textBrand hover:border-strokeBrand-weak rounded-sm group-has-[.ai-search:checked]/fltr:hidden"
             data-tippy-content="Write queries in natural language with APItoolkit AI"
@@ -1481,13 +1550,13 @@ export class QueryEditorComponent extends LitElement {
 }
 
 // Add a convenience method to get field suggestions directly from schemaManager
-schemaManager.getFieldSuggestions = async (schema?: string): Promise<{name: string, type: string, description?: string}[]> => {
+schemaManager.getFieldSuggestions = async (schema?: string): Promise<{ name: string; type: string; description?: string }[]> => {
   const schemaToUse = schema || schemaManager.getDefaultSchema();
   const fields = await schemaManager.resolveNested(schemaToUse, '');
-  return fields.map(field => ({
+  return fields.map((field) => ({
     name: field.name,
     type: field.type,
-    description: field.examples?.join(', ')
+    description: field.examples?.join(', '),
   }));
 };
 
