@@ -874,7 +874,27 @@ export class QueryEditorComponent extends LitElement {
 
     try {
       const currentValue = this.editor.getValue().trim();
-      const newValue = replace ? queryFragment : currentValue ? `${currentValue} and ${queryFragment}` : queryFragment;
+      let newValue;
+      
+      if (replace || !currentValue) {
+        newValue = queryFragment;
+      } else {
+        // Find where to insert the new condition
+        const pipeIndex = currentValue.indexOf('|');
+        const whereIndex = currentValue.toLowerCase().indexOf('| where ');
+        
+        if (whereIndex >= 0) {
+          // Has explicit where clause - insert after "where"
+          const wherePos = whereIndex + 8; // "| where ".length
+          newValue = `${currentValue.substring(0, wherePos)}(${queryFragment}) and ${currentValue.substring(wherePos)}`;
+        } else if (pipeIndex > 0) {
+          // Has pipe but no where - insert at first segment
+          newValue = `${currentValue.substring(0, pipeIndex)} and ${queryFragment} ${currentValue.substring(pipeIndex)}`;
+        } else {
+          // Simple query - just append
+          newValue = `${currentValue} and ${queryFragment}`;
+        }
+      }
 
       this.editor.setValue(newValue);
 
