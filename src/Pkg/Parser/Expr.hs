@@ -9,7 +9,7 @@ import Data.Char (isDigit)
 import Data.Scientific (FPFormat (Fixed), Scientific, formatScientific)
 import Data.Text qualified as T
 import Data.Text.Builder.Linear (Builder)
-import Data.Text.Display (Display, display, displayParen, displayPrec, displayBuilder)
+import Data.Text.Display (Display, display, displayBuilder, displayParen, displayPrec)
 import Data.Vector qualified as V
 import Pkg.Parser.Core
 import Relude hiding (GT, LT, Sum, many, some)
@@ -23,13 +23,13 @@ import Text.Megaparsec.Char.Lexer qualified as L
 -- Duration stores original unit and nanoseconds value for precise time comparisons
 -- TimeFunction stores KQL time functions like now()
 -- AgoExpression represents KQL ago() function with the value and unit for SQL interval conversion
-data Values 
-  = Num Text 
-  | Str Text 
-  | Boolean Bool 
-  | Null 
-  | List [Values] 
-  | Duration Text Integer 
+data Values
+  = Num Text
+  | Str Text
+  | Boolean Bool
+  | Null
+  | List [Values]
+  | Duration Text Integer
   | TimeFunction Text
   | AgoExpression Text -- The original KQL timespan expression for direct conversion to PostgreSQL interval
   | NowExpression -- Represents now() function
@@ -565,8 +565,9 @@ instance Display Subject where
 --
 -- >>> display (List [Num "2"])
 -- "ARRAY[2]"
+
 -- | Convert a KQL timespan to PostgreSQL interval syntax
--- 
+--
 -- Example conversion:
 -- 7d -> INTERVAL '7 days'
 -- 12h -> INTERVAL '12 hours'
@@ -574,34 +575,34 @@ instance Display Subject where
 -- 45s -> INTERVAL '45 seconds'
 -- 500ms -> INTERVAL '500 milliseconds'
 kqlTimespanToInterval :: Text -> Text
-kqlTimespanToInterval timespan = 
-  let 
+kqlTimespanToInterval timespan =
+  let
     parseTimeUnit :: Text -> (Text, Text)
-    parseTimeUnit input = 
+    parseTimeUnit input =
       let (digits, rest) = T.span (\c -> isDigit c || c == '.') input
-      in case rest of
-        rest' | T.isPrefixOf "d" rest' -> (digits <> " days", T.drop 1 rest')
-        rest' | T.isPrefixOf "h" rest' -> (digits <> " hours", T.drop 1 rest')
-        rest' | T.isPrefixOf "m" rest' -> (digits <> " minutes", T.drop 1 rest')
-        rest' | T.isPrefixOf "s" rest' -> (digits <> " seconds", T.drop 1 rest')
-        rest' | T.isPrefixOf "ms" rest' -> (digits <> " milliseconds", T.drop 2 rest')
-        rest' | T.isPrefixOf "us" rest' -> (digits <> " microseconds", T.drop 2 rest')
-        rest' | T.isPrefixOf "ns" rest' -> (digits <> " nanoseconds", T.drop 2 rest')
-        _ -> ("", input) -- No recognized unit or parsing error
-    
+       in case rest of
+            rest' | T.isPrefixOf "d" rest' -> (digits <> " days", T.drop 1 rest')
+            rest' | T.isPrefixOf "h" rest' -> (digits <> " hours", T.drop 1 rest')
+            rest' | T.isPrefixOf "m" rest' -> (digits <> " minutes", T.drop 1 rest')
+            rest' | T.isPrefixOf "s" rest' -> (digits <> " seconds", T.drop 1 rest')
+            rest' | T.isPrefixOf "ms" rest' -> (digits <> " milliseconds", T.drop 2 rest')
+            rest' | T.isPrefixOf "us" rest' -> (digits <> " microseconds", T.drop 2 rest')
+            rest' | T.isPrefixOf "ns" rest' -> (digits <> " nanoseconds", T.drop 2 rest')
+            _ -> ("", input) -- No recognized unit or parsing error
     parseComplexTimespan :: Text -> Text
-    parseComplexTimespan ts = 
+    parseComplexTimespan ts =
       case parseTimeUnit ts of
         ("", _) -> "" -- Parsing error or no recognized unit
         (unit, "") -> unit -- End of input
         (unit, rest) -> unit <> " " <> parseComplexTimespan rest
-    
-    intervalExpr = 
+
+    intervalExpr =
       case T.strip (parseComplexTimespan timespan) of
         "" -> "0" -- Default if parsing fails
         expr -> expr
-  in
+   in
     "INTERVAL '" <> intervalExpr <> "'"
+
 
 -- | Convert KQL timespan to PostgreSQL time bucket string
 -- This is used for bin() function in summarize queries

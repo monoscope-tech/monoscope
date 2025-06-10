@@ -39,7 +39,7 @@ spec = do
       and ( created_at > NOW() - interval '14 days' AND (timestamp >= NOW() - INTERVAL '7 days') )
       ORDER BY created_at desc limit 200|]
       normT query `shouldBe` normT expected
-      
+
     it "query with now() time function" do
       let (query, _) = fromRight' $ parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing) "timestamp == now()"
       let expected =
@@ -57,7 +57,7 @@ spec = do
       and ( created_at > NOW() - interval '14 days' AND (timestamp = NOW()) )
       ORDER BY created_at desc limit 200|]
       normT query `shouldBe` normT expected
-    
+
     it "basic query eq query" do
       let (query, _) = fromRight' $ parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing) "method==\"GET\""
       let expected =
@@ -144,7 +144,7 @@ and ( created_at > NOW() - interval '14 days' AND (method='GET') ) GROUP BY time
       and ( created_at > NOW() - interval '14 days' AND (method='GET') )
       GROUP BY COALESCE(attributes.client::text, '')::text,time_bucket('60 seconds', timestamp) ORDER BY parent_id asc limit 1000|]
       normT query `shouldBe` normT expected
-      
+
     it "summarize with bin_auto()" do
       let (query, _) = fromRight' $ parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing) "| summarize count(*) by bin_auto(timestamp)"
       let expected =

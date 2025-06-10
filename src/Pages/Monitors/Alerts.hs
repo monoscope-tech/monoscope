@@ -31,8 +31,8 @@ import Models.Users.Sessions qualified as Sessions
 import NeatInterpolation (text)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
 import Pages.Log qualified as LogList
-import Pkg.Components.LogQueryBox (LogQueryBoxConfig(..))
 import Pkg.Components qualified as Components
+import Pkg.Components.LogQueryBox (LogQueryBoxConfig (..))
 import Pkg.Parser (defSqlQueryCfg, finalAlertQuery, fixedUTCTime, parseQueryToComponents, presetRollup)
 import Pkg.THUtils qualified as THUtils
 import Relude
@@ -475,18 +475,19 @@ monitorMetric_ pid monitorM = section_ [class_ "px-8 py-5 space-y-5 group/pg ove
           faSprite_ "chevron-down" "regular" "h-4 w-4 mx-2"
           span_ [] "Define the metric"
         div_ [class_ "pl-8 pb-8 space-y-3 min-w-[750px]"] do
-          LogList.logQueryBox_ LogQueryBoxConfig
-            { pid = pid
-            , currentRange = Nothing
-            , source = Just "requests"
-            , targetSpan = Nothing
-            , query = Nothing
-            , vizType = Nothing
-            , queryLibRecent = V.empty
-            , queryLibSaved = V.empty
-            , updateUrl = False
-            , targetWidgetPreview = Nothing
-            }
+          LogList.logQueryBox_
+            LogQueryBoxConfig
+              { pid = pid
+              , currentRange = Nothing
+              , source = Just "requests"
+              , targetSpan = Nothing
+              , query = Nothing
+              , vizType = Nothing
+              , queryLibRecent = V.empty
+              , queryLibSaved = V.empty
+              , updateUrl = False
+              , targetWidgetPreview = Nothing
+              }
           div_ [class_ "border-l-2 border-l-slate-300 pl-4 space-y-2"] do
             h3_ [class_ "font-normal text-base"] "Evaluation Details"
             div_ [class_ "flex items-center gap-2"] do
