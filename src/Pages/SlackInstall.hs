@@ -216,13 +216,7 @@ installedSuccessDisocrd = do
         li_ do
           span_ [class_ "font-mono bg-gray-100 px-2 py-1 rounded"] "/here"
           span_ " – Quickly link this channel to receive alerts. No more digging through logs."
-        li_ do
-          span_ [class_ "font-mono bg-gray-100 px-2 py-1 rounded"] "/status"
-          span_ " – Check the current status of your API and recent anomalies."
 
-      p_
-        [class_ "text-gray-500 mt-6"]
-        "You can always invite the bot to other servers or link different projects. Let’s ship safer APIs together!"
 
 
 linkDiscordGetH :: Maybe Text -> Maybe Text -> Maybe Text -> ATBaseCtx (Headers '[Header "Location" Text] SlackLink)
