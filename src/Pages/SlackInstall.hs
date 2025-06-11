@@ -255,7 +255,7 @@ data DiscordInteraction = Interaction
   , token :: Text
   , data_i :: Maybe InteractionData
   , channel_id :: Maybe Text
-  , guild_id :: Text
+  , guild_id :: Maybe Text
   }
   deriving (Generic, Show)
 
@@ -325,7 +325,7 @@ discordInteractionsH rawBody signatureM timestampM = do
                 ApplicationCommand -> do
                   case data_i interaction of
                     Just cmdData -> do
-                      discordData <- getDiscordData interaction.guild_id
+                      discordData <- getDiscordData (fromMaybe "" interaction.guild_id)
                       case cmdData.name of
                         "ask" -> do
                           let maybeQuestion = case cmdData.options of
@@ -333,18 +333,20 @@ discordInteractionsH rawBody signatureM timestampM = do
                                 _ -> Nothing
                           pure $ AE.object ["type" .= (4 :: Int), "data" .= AE.object ["content" .= ("You asked: " <> maybe "" (\x -> x.projectId.toText) discordData <> maybe "something?" Relude.id maybeQuestion)]]
                         "here" -> do
-                          case interaction.channel_id of
-                            Just channelId -> do
+                          case (interaction.channel_id, interaction.guild_id ) of
+                            (Just channelId, Just guildId) -> do
                               case discordData of
                                 Just _ -> do
-                                  _ <- updateDiscordNotificationChannel interaction.guild_id channelId
+                                  _ <- updateDiscordNotificationChannel guildId channelId
                                   pure $ AE.object ["type" .= (4 :: Int), "data" .= AE.object ["content" .= "Got it, notifications and alerts on your project will now be sent to this channel"]]
                                 Nothing -> pure $ AE.object ["type" .= (4 :: Int), "data" .= AE.object ["content" .= "No discord data found"]]
-                            Nothing -> pure $ AE.object ["type" .= (4 :: Int), "data" .= AE.object ["content" .= "No channel ID provided"]]
+                            _ -> pure $ AE.object ["type" .= (4 :: Int), "data" .= AE.object ["content" .= "No channel ID provided"]]
                         _ -> pure $ AE.object ["type" .= (4 :: Int), "data" .= AE.object ["content" .= "The command is not giving"]]
                     Nothing -> pure $ AE.object ["type" .= (4 :: Int), "data" .= AE.object ["content" .= "No command data provided"]]
-      | otherwise -> throwError err401{errBody = "Invalid signature"}
-    _ -> throwError err401{errBody = "Invalid signature"}
+      | otherwise -> do
+          throwError err401{errBody = "Invalid signature"}
+    _ -> do
+      throwError err401{errBody = "Invalid signature"}
 
 
 verifyDiscordSignature
