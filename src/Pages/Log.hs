@@ -41,8 +41,8 @@ import Models.Telemetry.Schema qualified as Schema
 import Models.Users.Sessions qualified as Sessions
 import NeatInterpolation (text)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), currProject, pageActions, pageTitle, sessM)
-import Pages.Dashboards (visTypes)
 import Pkg.Components qualified as Components
+import Pkg.Components.LogQueryBox (LogQueryBoxConfig (..), logQueryBox_, queryEditorInitializationCode, queryLibrary_, visTypes)
 import Pkg.Components.Widget (WidgetAxis (..), WidgetType (WTStat, WTTimeseriesLine))
 import Pkg.Components.Widget qualified as Widget
 import Pkg.Parser (pSource, parseQueryToAST, toQText)
@@ -211,27 +211,11 @@ renderFacets facetSummary = do
     
     // Initialize and set up event listeners
     document.addEventListener('DOMContentLoaded', () => {
-      // Initial sync after load
-      setTimeout(syncFacetCheckboxes, 300);
+      setTimeout(syncFacetCheckboxes, 100);
       
       // Listen for query changes via the custom event
       window.addEventListener('update-query', syncFacetCheckboxes);
     });
-  |]
-
-  script_
-    [text|
-    // Add a utility to handle removing group by statements
-    if (!document.getElementById("filterElement").handleRemoveGroupBy) {
-      document.getElementById("filterElement").handleRemoveGroupBy = function(field) {
-        const currentQuery = this.value || "";
-        const regex = new RegExp("group by " + field, 'gi');
-        const newQuery = currentQuery.replace(regex, "").trim();
-        this.value = newQuery;
-        this.dispatchEvent(new Event('input'));
-        htmx.trigger('#log_explorer_form', 'update-query');
-      };
-    }
   |]
 
   renderFacetSection "Common Filters" rootFacets facetMap False
@@ -261,26 +245,21 @@ renderFacets facetSummary = do
                 label_ [tabindex_ "0", class_ "cursor-pointer"] do
                   faSprite_ "ellipsis-vertical" "regular" "w-3 h-3"
                 ul_ [tabindex_ "0", class_ "dropdown-content z-10 menu p-2 shadow bg-base-100 rounded-box w-52"] do
-                  -- li_
-                  --   $ a_
-                  --     [ term "data-field" (T.replace "___" "." key)
-                  --     , term "data-key" key
-                  --     , [__|
-                  --     init
-                  --       set query to window.getQueryFromEditor()
-                  --       if query and query.toLowerCase().includes('group by ' + @data-field.toLowerCase())
-                  --         set my innerHTML to 'Remove group by'
-                  --       end
-                  --     on click
-                  --       set query to window.getQueryFromEditor()
-                  --       if query and query.toLowerCase().includes('group by ' + @data-field.toLowerCase())
-                  --         call document.getElementById('filterElement').handleRemoveGroupBy(@data-field)
-                  --       else call document.getElementById('filterElement').handleAddQuery('group by ' + @data-field)
-                  --       end
-                  --     end
-                  --   |]
-                  --     ]
-                  --     "Group by"
+                  li_
+                    $ a_
+                      [ term "data-field" (T.replace "___" "." key)
+                      , term "data-key" key
+                      , [__|
+                        init call window.updateGroupByButtonText(event, me) end
+                        on refreshItem call window.updateGroupByButtonText(event, me) end
+
+                        on click
+                          call document.querySelector('query-builder').toggleGroupByField(@data-field) then
+                          trigger refreshItem on me
+                        end
+                    |]
+                      ]
+                      "Group by"
                   li_
                     $ a_
                       [ term "data-key" key
@@ -433,7 +412,7 @@ apiLogH pid queryM' cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM
           { sessM = Just sess
           , currProject = Just project
           , pageTitle = "Explorer"
-          , docsLink = Just "https://apitoolkit.io/docs/dashboard/dashboard-pages/openapi-docs/"
+          , docsLink = Just "https://apitoolkit.io/docs/dashboard/dashboard-pages/api-log-explorer/"
           , pageActions = Just $ div_ [class_ "inline-flex gap-2"] do
               label_ [class_ "cursor-pointer border border-strokeStrong rounded-lg flex shadow-sm"] do
                 input_ [type_ "checkbox", id_ "streamLiveData", class_ "hidden"]
@@ -543,230 +522,7 @@ instance AE.ToJSON LogsGet where
   toJSON _ = AE.object []
 
 
-logQueryBox_ :: Projects.ProjectId -> Maybe (Text, Text) -> Text -> Maybe Text -> Maybe Text -> Maybe Text -> V.Vector Projects.QueryLibItem -> V.Vector Projects.QueryLibItem -> Html ()
-logQueryBox_ pid currentRange' source targetSpan query vizTypeM queryLibRecent queryLibSaved = do
-  Components.modal_ "saveQueryMdl" "" $ form_
-    [ class_ "flex flex-col p-3 gap-3"
-    , hxGet_ $ "/p/" <> pid.toText <> "/log_explorer?layout=SaveQuery"
-    , hxVals_ "js:{query:window.getQueryFromEditor()}"
-    , hxTarget_ "#queryLibraryParentEl"
-    , hxSwap_ "outerHTML"
-    , hxSelect_ "#queryLibraryParentEl"
-    , hxPushUrl_ "false"
-    ]
-    do
-      strong_ "Please input a title for your query"
-      input_ [type_ "hidden", value_ "", name_ "queryLibId", id_ "queryLibId"]
-      input_ [class_ "input input-md", placeholder_ "query title", name_ "queryTitle"]
-      button_ [type_ "submit", class_ "btn cursor-pointer bg-linear-to-b from-[#067cff] to-[#0850c5] text-white"] "Save"
-  form_
-    [ hxGet_ $ "/p/" <> pid.toText <> "/log_explorer"
-    , -- , hxPushUrl_ "true"
-      hxTrigger_ "update-query from:#filterElement, submit, update-query from:window"
-    , hxVals_ "js:{...{layout:'resultTable', ...params()}}"
-    , hxTarget_ "#resultTableInner"
-    , hxSwap_ "outerHTML"
-    , id_ "log_explorer_form"
-    , hxIndicator_ "#run-query-indicator"
-    , [__| on keydown if event.key is 'Enter' halt |]
-    , class_ "flex flex-col gap-1"
-    ]
-    do
-      div_ [class_ "flex flex-col gap-2 items-stretch justify-center group/fltr"] do
-        div_ [class_ "p-1 flex-1 flex flex-col gap-2  bg-fillWeaker rounded-lg border border-strokeWeak group-has-[.ai-search:checked]/fltr:border-2 group-has-[.ai-search:checked]/fltr:border-iconBrand group-has-[.ai-search:checked]/fltr:shadow-xs shadow-strokeBrand-weak"] do
-          input_
-            [ class_ "hidden ai-search"
-            , type_ "checkbox"
-            , id_ "ai-search-chkbox"
-            , [__|on change if me.checked then call #ai-search-input.focus() end
-                  on keydown[key=='Space' and shiftKey] from document set #ai-search-chkbox.checked to true
-                  |]
-            ]
-          script_
-            [text|
-            document.addEventListener('keydown', function(e) {
-              if (e.key === "?" && !e.ctrlKey && !e.metaKey && !e.altKey && (e.target.tagName !== 'INPUT') && (e.target.tagName !== 'TEXTAREA') && (e.target.contentEditable !== 'true')) {
-                e.preventDefault();
-                e.stopPropagation();
-                document.getElementById("ai-search-chkbox").checked = true;
-                document.getElementById("ai-search-input").focus()
-                document.getElementById("ai-search-input").value=""
-              }
-            });
-            window.handleVisualizationUpdate = function(vizType) {
-              window.requestAnimationFrame(() => {
-                updateVizTypeInUrl(vizType);
-                document.querySelector(`#visualizationTabs input[value='$${vizType}']`).checked = true;
-                window.widgetJSON.type = vizType;
-                document.getElementById('visualization-widget-container').dispatchEvent(new Event('update-widget'));
-              });
-            }
-            |]
-          div_ [class_ "w-full gap-2 items-center px-2 hidden group-has-[.ai-search:checked]/fltr:flex"] do
-            faSprite_ "sparkles" "regular" "h-4 w-4 inline-block text-iconBrand"
-            input_
-              [ class_ "border-0 w-full flex-1 p-2 outline-none peer"
-              , placeholder_ "Ask. Eg: Logs with errors. Hit Enter to submit"
-              , id_ "ai-search-input"
-              , autofocus_
-              , required_ "required"
-              , name_ "input"
-              , hxPost_ $ "/p/" <> pid.toText <> "/log_explorer/ai_search"
-              , hxTrigger_ "input[this.value.trim().length > 0] changed delay:1s"
-              , hxSwap_ "none"
-              , hxExt_ "json-enc"
-              , term "hx-validate" "false"
-              , hxIndicator_ "#ai-search-loader"
-              , [__|on keydown[key=='Escape'] set #ai-search-chkbox.checked to false
-                   on keydown[key=='Enter'] 
-                     if my.value.trim().length > 0 
-                       then halt then trigger htmx:trigger 
-                     end
-                   on htmx:afterRequest 
-                     if event.detail.successful 
-                       then 
-                         call JSON.parse(event.detail.xhr.responseText) set result to it
-                         if result.visualization_type
-                           then
-                             set vizType to result.visualization_type
-                             call window.handleVisualizationUpdate(vizType)
-                         end
-                         if result.query then call #filterElement.handleAddQuery(result.query, true) end
-                     else
-                       if event.detail.xhr.responseText and event.detail.xhr.responseText.includes('INVALID_QUERY_ERROR')
-                         then
-                           send errorToast(value:['Could not understand your query. Please try rephrasing it or use a more specific request.']) to <body/>
-                       end
-                     end|]
-              ]
-            span_ [class_ "htmx-indicator", id_ "ai-search-loader"] $ faSprite_ "spinner" "regular" "w-4 h-4 animate-spin"
-            a_
-              [ class_ "px-3 py-0.5 inline-flex gap-2 items-center cursor-pointer border text-textDisabled shadow-strokeBrand-weak hover:border-strokeBrand-weak rounded-sm peer-valid:border-strokeBrand-strong peer-valid:text-textBrand peer-valid:shadow-md"
-              , onclick_ "htmx.trigger('#ai-search-input', 'htmx:trigger')"
-              ]
-              do
-                faSprite_ "arrow-right" "regular" "h-4 w-4"
-                "Submit"
-            label_ [Lucid.for_ "ai-search-chkbox", class_ "cursor-pointer p-1", data_ "tippy-content" "Collapse APItoolkit AI without losing your query"] $ faSprite_ "arrows-minimize" "regular" "h-4 w-4 inline-block text-iconBrand"
-
-          div_ [class_ "flex flex-1 gap-2 justify-between items-stretch"] do
-            queryLibrary_ pid queryLibSaved queryLibRecent
-            div_ [id_ "queryBuilder", class_ "flex-1 flex items-center"] $ termRaw "query-editor" [id_ "filterElement", class_ "w-full h-full flex items-center", term "default-value" (fromMaybe "" query)] ("" :: Text)
-            div_ [class_ "gap-[2px] flex items-center"] do
-              span_ "in"
-              -- TODO: trigger update-query instead
-              select_
-                [ class_ "ml-1 select select-sm w-full max-w-xs h-full bg-transparent border-strokeStrong"
-                , name_ "target-spans"
-                , id_ "spans-toggle"
-                , onchange_ "htmx.trigger('#log_explorer_form', 'submit')"
-                ]
-                do
-                  let target = fromMaybe "all-spans" targetSpan
-                  option_ (value_ "all-spans" : ([selected_ "true" | target == "all-spans"])) "All spans"
-                  option_ (value_ "root-spans" : ([selected_ "true" | target == "root-spans"])) "Trace Root Spans"
-                  option_ (value_ "service-entry-spans" : ([selected_ "true" | target == "service-entry-spans"])) "Service Entry Spans"
-            div_ [class_ "dropdown dropdown-hover dropdown-bottom dropdown-end"] do
-              div_ [class_ "rounded-lg px-3 py-2 text-slate-700 inline-flex items-center border border-strokeStrong h-full", tabindex_ "0", role_ "button"] $ faSprite_ "floppy-disk" "regular" "h-5 w-5"
-              ul_ [tabindex_ "0", class_ "dropdown-content border menu bg-base-100 rounded-box z-1 w-60 p-2 shadow-lg h-full"] do
-                li_ $ label_ [Lucid.for_ "saveQueryMdl"] "Save query to Query Library"
-            -- li_ $ a_ [] "Save query as an Alerts"
-            -- li_ $ a_ [] "Save result to a dashboard"
-            button_
-              [type_ "submit", class_ "leading-none rounded-lg px-3 py-2 cursor-pointer !h-auto btn btn-primary"]
-              do
-                span_ [id_ "run-query-indicator", class_ "refresh-indicator htmx-indicator query-indicator loading loading-dots loading-sm"] ""
-                faSprite_ "magnifying-glass" "regular" "h-4 w-4 inline-block"
-      div_ [class_ "flex items-between justify-between"] do
-        div_ [class_ "flex items-center gap-2"] do
-          visualizationTabs_ vizTypeM
-          span_ [class_ "text-textDisabled mx-2 text-xs"] "|"
-          -- Query Builder for GROUP BY, AGG, SORT, LIMIT
-          termRaw "query-builder" [term "query-editor-selector" "#filterElement"] ("" :: Text)
-
-        div_ [class_ "", id_ "resultTableInner"] pass
-
-        div_ [class_ "flex justify-end  gap-2 "] do
-          fieldset_ [class_ "fieldset"] $ label_ [class_ "label hidden group-has-[#viz-logs:checked]/pg:block"] do
-            input_ [type_ "checkbox", class_ "checkbox checkbox-sm rounded-sm toggle-chart"] >> span_ "timeline"
-
-
-queryLibrary_ :: Projects.ProjectId -> V.Vector Projects.QueryLibItem -> V.Vector Projects.QueryLibItem -> Html ()
-queryLibrary_ pid queryLibSaved queryLibRecent = div_ [class_ "dropdown dropdown-bottom dropdown-start", id_ "queryLibraryParentEl"] do
-  div_ [class_ "cursor-pointer relative  text-textWeak rounded-lg border border-strokeStrong h-full flex gap-2 items-center px-2 mb-2", tabindex_ "0", role_ "button"]
-    $ (toHtml "Presets" >> faSprite_ "chevron-down" "regular" "w-3 h-3")
-  div_ [class_ "dropdown-content z-20"] $ div_ [class_ "tabs tabs-box tabs-md tabs-outline items-center bg-fillWeak p-0 h-full", role_ "tablist", id_ "queryLibraryTabListEl"] do
-    tabPanel_ "Saved" (queryLibraryContent_ "Saved" queryLibSaved)
-    tabPanel_ "Recent" (queryLibraryContent_ "Recent" queryLibRecent)
-  where
-    tabPanel_ :: Text -> Html () -> Html ()
-    tabPanel_ label content = do
-      input_ $ [type_ "radio", name_ "querylib", role_ "tab", class_ "tab", Aria.label_ label] <> [checked_ | label == "Saved"]
-      div_ [role_ "tabpanel", class_ "tab-content bg-bgBase shadow-lg rounded-box h-full max-h-[60dvh] w-[40vw] space-y-2 overflow-y-scroll"] content
-
-    queryLibraryContent_ :: Text -> V.Vector Projects.QueryLibItem -> Html ()
-    queryLibraryContent_ label items = do
-      searchBar_ label
-      div_ [class_ $ "border divide-y rounded-xl p-3 dataLibContent" <> label] $ V.forM_ items queryLibItem_
-
-    searchBar_ :: Text -> Html ()
-    searchBar_ label = div_ [class_ "flex gap-2 sticky top-0 p-3 bg-bgBase z-20"] do
-      label_ [class_ "input input-md flex items-center gap-2 flex-1"] do
-        faSprite_ "magnifying-glass" "regular" "h-4 w-4 opacity-70"
-        input_
-          [ type_ "text"
-          , class_ "grow"
-          , placeholder_ "Search"
-          , term "data-filterParent" $ "dataLibContent" <> label
-          , [__|on keyup
-                     if the event's key is 'Escape' set my value to '' then trigger keyup
-                     else show <.group/> in .{@data-filterParent} when its textContent.toLowerCase() contains my value.toLowerCase()|]
-          ]
-      when (label == "Saved") do
-        label_ [class_ "tabs tabs-md tabs-box tabs-outline bg-slate-200 text-slate-50 shrink items-center", role_ "tablist"] do
-          input_ [class_ "hidden", type_ "checkbox", id_ "queryLibraryGroup"]
-          div_ [role_ "tab", class_ "tab h-full bg-slate-50 group-has-[#queryLibraryGroup:checked]/pg:bg-transparent", term "data-tippy-content" "My Queries"] $ faSprite_ "user" "solid" "w-5 h-5"
-          div_ [role_ "tab", class_ "tab h-full group-has-[#queryLibraryGroup:checked]/pg:bg-slate-50", term "data-tippy-content" "All team Queries"] $ faSprite_ "users" "solid" "w-5 h-5"
-
-
-queryLibItem_ :: Projects.QueryLibItem -> Html ()
-queryLibItem_ qli =
-  div_ [class_ $ "clear p-3 space-y-2 hover:bg-fillWeaker cursor-pointer group " <> if qli.byMe then "" else "hidden group-has-[#queryLibraryGroup:checked]/pg:block"] do
-    div_ [class_ "inline-flex gap-2 float-right"] do
-      div_ [class_ "flex opacity-0 transition-opacity duration-300 group-hover:opacity-100 gap-2"] do
-        a_
-          [ class_ "tooltip"
-          , term "data-tip" "run query"
-          , term "data-query" $ qli.queryText
-          , [__| on click call #filterElement.handleAddQuery({detail: JSON.parse(@data-query)})|]
-          ]
-          $ faSprite_ "play" "regular" "h-4 w-4"
-        a_ [class_ "tooltip", term "data-tip" "copy query to clipboard", [__|install Copy(content: (next <.queryText/> ))|]] $ faSprite_ "copy" "regular" "h-4 w-4"
-        when qli.byMe $ a_ [class_ "tooltip", term "data-tip" "edit query title", [__|on click set #queryLibId.value to @data-queryId then set #saveQueryMdl.checked to true|], term "data-queryId" qli.id.toText] $ faSprite_ "pen-to-square" "regular" "h-4 w-4"
-        when qli.byMe
-          $ a_
-            [ class_ "tooltip"
-            , term "data-tip" "delete query"
-            , hxGet_ $ "/p/" <> qli.projectId.toText <> "/log_explorer?layout=DeleteQuery&queryLibId=" <> qli.id.toText
-            , hxVals_ "js:{query:window.getQueryFromEditor()}"
-            , hxTarget_ "#queryLibraryTabListEl"
-            , hxSwap_ "outerHTML"
-            , hxSelect_ "#queryLibraryTabListEl"
-            , hxPushUrl_ "false"
-            ]
-          $ faSprite_ "trash-can" "regular" "h-4 w-4"
-      label_ [class_ ""] do
-        input_ [class_ "hidden", type_ "checkbox"]
-        span_ [class_ ""] $ faSprite_ "ellipsis-vertical" "regular" "h-4 w-4"
-        ul_ [class_ "hidden peer-checked:block z-30"] do
-          li_ "Send query to alert"
-          li_ "Send query to a dashboard"
-    strong_ $ whenJust qli.title \title -> (toHtml title)
-    pre_
-      $ code_ [class_ "language-js bg-transparent! queryText whitespace-pre-wrap break-words"]
-      $ toHtml qli.queryText
-    div_ [class_ "gap-3 flex"] $ time_ [datetime_ "", term "data-tippy-content" "created on"] (toHtml $ displayTimestamp $ formatUTC qli.createdAt) >> when qli.byMe " by me"
-
+-- This component has been moved to Pkg.Components.LogQueryBox
 
 data ApiLogsPageData = ApiLogsPageData
   { pid :: Projects.ProjectId
@@ -847,28 +603,7 @@ virtualTable page = do
    |]
 
 
-visualizationTabs_ :: Maybe Text -> Html ()
-visualizationTabs_ vizTypeM =
-  div_ [class_ "tabs tabs-box tabs-outline tabs-xs bg-gray-100 p-1 rounded-lg", id_ "visualizationTabs", role_ "tablist"] do
-    let defaultVizType = fromMaybe "logs" vizTypeM
-    forM_ visTypes $ \(icon, label, vizType, emoji) -> label_ [class_ "tab !shadow-none !border-strokeWeak flex gap-1"] do
-      input_
-        $ [ type_ "radio"
-          , name_ "visualization"
-          , id_ $ "viz-" <> vizType
-          , value_ vizType
-          , [__| on change
-                    if my.checked
-                      call updateVizTypeInUrl(my.value)
-                      set widgetJSON.type to my.value
-                      send 'update-widget' to #visualization-widget-container
-                    end
-                 |]
-          ]
-          <> [checked_ | vizType == defaultVizType]
-      span_ [class_ "text-iconNeutral leading-none"] $ toHtml emoji -- faSprite_ icon "regular" "w-3 h-2"
-      span_ [] $ toHtml label
-
+-- visualizationTabs_ has been moved to Pkg.Components.LogQueryBox
 
 apiLogsPage :: ApiLogsPageData -> Html ()
 apiLogsPage page = do
@@ -897,7 +632,19 @@ apiLogsPage page = do
               input_ [type_ "hidden", value_ "", name_ "reqId", id_ "req_id_input"]
               input_ [type_ "hidden", value_ "", name_ "reqCreatedAt", id_ "req_created_at_input"]
     div_ [] do
-      logQueryBox_ page.pid page.currentRange page.source page.targetSpans page.query page.vizType page.queryLibRecent page.queryLibSaved
+      logQueryBox_
+        LogQueryBoxConfig
+          { pid = page.pid
+          , currentRange = page.currentRange
+          , source = Just page.source
+          , targetSpan = page.targetSpans
+          , query = page.query
+          , vizType = page.vizType
+          , queryLibRecent = page.queryLibRecent
+          , queryLibSaved = page.queryLibSaved
+          , updateUrl = True
+          , targetWidgetPreview = Nothing
+          }
 
       div_ [class_ "timeline flex flex-row gap-4 mt-3 group-has-[#viz-logs:not(:checked)]/pg:hidden group-has-[.toggle-chart:checked]/pg:hidden w-full", style_ "aspect-ratio: 10 / 1;"] do
         Widget.widget_ $ (def :: Widget.Widget){Widget.query = Just "summarize count(*) by bin_auto(timestamp), status_code", Widget.unit = Just "rows", Widget.title = Just "All traces", Widget.hideLegend = Just True, Widget._projectId = Just page.pid, Widget.standalone = Just True, Widget.yAxis = Just (def{showOnlyMaxLabel = Just True}), Widget.allowZoom = Just True, Widget.showMarkArea = Just True, Widget.layout = Just (def{Widget.w = Just 6, Widget.h = Just 4})}
@@ -986,7 +733,7 @@ apiLogsPage page = do
           let pid = page.pid.toText
           let vizType = maybe "\"timeseries\"" show page.vizType
           script_
-            [text| var widgetJSON = { 
+            [text| var widgetJSON = {
                   "id": "visualization-widget",
                   "type": ${vizType}, 
                   "title": "Visualization",
@@ -1001,7 +748,7 @@ apiLogsPage page = do
             [ id_ "visualization-widget-container"
             , class_ " w-full"
             , style_ "aspect-ratio: 4 / 2;"
-            , hxPost_ "/widget"
+            , hxPost_ ("/p/" <> page.pid.toText <> "/widget")
             , hxTrigger_ "intersect once, update-widget"
             , hxTarget_ "this"
             , hxSwap_ "innerHTML"
@@ -1104,11 +851,11 @@ aiSearchH _pid requestBody = do
               if "Please provide a query"
                 `T.isInfixOf` cleanedQuery
                 || "I need more"
-                  `T.isInfixOf` cleanedQuery
+                `T.isInfixOf` cleanedQuery
                 || "Could you please"
-                  `T.isInfixOf` cleanedQuery
+                `T.isInfixOf` cleanedQuery
                 || T.length cleanedQuery
-                  < 3
+                < 3
                 then pure $ Left "INVALID_QUERY_ERROR"
                 else pure $ Right (cleanedQuery, vizTypeM)
 
@@ -1170,11 +917,11 @@ aiSearchH _pid requestBody = do
         , -- , "2. Optional: | sort by <field> [asc|desc]"
           -- , "3. Optional: | take N"
           ""
-        , "The summarize statement can use various aggregation functions like count(*), sum(...), avg(...), min(...), max(...), median(...), etc."
+        , "The summarize statement can use various aggregation functions like count(), sum(...), avg(...), min(...), max(...), median(...), etc."
         , ""
         , "Examples of chart queries:"
-        , "- \"Show errors by hour\": level == \"ERROR\" | summarize count(*) by bin(timestamp, 1h)"
-        , "- \"Graph request counts by kind in 2h blocks\": | summarize count(*) by bin(timestamp, 2h), kind"
+        , "- \"Show errors by hour\": level == \"ERROR\" | summarize count() by bin(timestamp, 1h)"
+        , "- \"Graph request counts by kind in 2h blocks\": | summarize count() by bin(timestamp, 2h), kind"
         , "- \"Line chart of p95 durations by method\": | summarize p95(duration) by bin(timestamp, 30m), attributes.http.request.method"
         , ""
         , "Examples:"
@@ -1321,56 +1068,3 @@ jsonTreeAuxillaryCode pid query = do
     }
 
 |]
-
-
-queryEditorInitializationCode :: V.Vector Projects.QueryLibItem -> V.Vector Projects.QueryLibItem -> Maybe Text -> Html ()
-queryEditorInitializationCode queryLibRecent queryLibSaved vizTypeM = do
-  let queryLibData = queryLibRecent <> queryLibSaved
-      queryLibDataJson = decodeUtf8 $ AE.encode queryLibData
-      schemaJson = decodeUtf8 $ AE.encode Schema.telemetrySchemaJson
-      popularQueriesJson = decodeUtf8 $ AE.encode Schema.popularOtelQueriesJson
-  script_
-    [text|
-    // Function to update viz type in URL without reloading the page
-    window.updateVizTypeInUrl = function(vizType) {
-      requestAnimationFrame(() => {
-        const url = new URL(window.location);
-        url.searchParams.set('viz_type', vizType);
-        history.replaceState({}, '', url);
-        
-        // Call the query editor's handleVisualizationChange method to update the query
-        const editor = document.getElementById('filterElement');
-        if (editor?.handleVisualizationChange) {
-          const vizTypeMap = { 'bar': 'timeseries', 'line': 'timeseries_line' };
-          editor.handleVisualizationChange(vizTypeMap[vizType] || vizType);
-        }
-      });
-    };
-    
-    document.addEventListener('DOMContentLoaded', () => {
-      const editor = document.getElementById('filterElement');
-      if (editor) {
-        if (editor.setQueryLibrary) {
-          const queryLibraryData = $queryLibDataJson;
-          editor.setQueryLibrary(queryLibraryData);
-        }
-        
-        if (window.schemaManager && window.schemaManager.setSchemaData) {
-          const schemaData = $schemaJson;
-          window.schemaManager.setSchemaData('spans', schemaData);
-          
-          // Force refresh field suggestions in the query-builder component
-          // This makes sure any field inputs get the latest schema data
-          const queryBuilder = document.querySelector('query-builder');
-          if (queryBuilder && typeof queryBuilder.refreshFieldSuggestions === 'function') {
-            queryBuilder.refreshFieldSuggestions();
-          }
-        }
-        
-        if (editor.setPopularSearches) {
-          const popularQueries = $popularQueriesJson;
-          editor.setPopularSearches(popularQueries);
-        }
-      }
-    });
-    |]

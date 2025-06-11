@@ -672,7 +672,7 @@ We have detected a new endpoint on *{project.title}*
                   , archivedAt = Nothing
                   }
             )
-            <$> errs
+          <$> errs
 
       forM_ project.notificationsChannel \case
         Projects.NSlack ->

@@ -2,15 +2,15 @@ module Pkg.Parser.Stats (
   pSummarizeSection,
   pSortSection,
   pTakeSection,
-  AggFunction (..), 
-  Section (..), 
-  SummarizeByClause(..),
-  BinFunction(..),
-  SortField(..),
-  Sources (..), 
-  parseQuery, 
+  AggFunction (..),
+  Section (..),
+  SummarizeByClause (..),
+  BinFunction (..),
+  SortField (..),
+  Sources (..),
+  parseQuery,
   pSource,
-  defaultBinSize
+  defaultBinSize,
 ) where
 
 import Data.Aeson qualified as AE
@@ -22,6 +22,7 @@ import Relude hiding (Sum, some)
 import Text.Megaparsec
 import Text.Megaparsec.Char (alphaNumChar, char, digitChar, space, space1, string)
 import Text.Megaparsec.Char.Lexer qualified as L
+
 
 -- Default bin size for auto binning if not otherwise specified
 defaultBinSize :: Text
@@ -51,7 +52,7 @@ data AggFunction
 
 
 -- Added to support bin() and bin_auto() functions in by clause
-data BinFunction 
+data BinFunction
   = Bin Subject Text
   | BinAuto Subject -- Will use fixed interval or legacy rollup calculation
   deriving stock (Eq, Generic, Show)
@@ -85,6 +86,9 @@ data Sources = SSpans | SMetrics
 -- Right (Count (Subject "field" "field" []) Nothing)
 --
 -- >>> parse aggFunctionParser "" "count(*)"
+-- Right (Count (Subject "*" "*" []) Nothing)
+--
+-- >>> parse aggFunctionParser "" "count()"
 -- Right (Count (Subject "*" "*" []) Nothing)
 --
 -- >>> parse aggFunctionParser "" "sum(field)"
@@ -123,7 +127,7 @@ aggFunctionParser =
     , P95 <$> (string "p95(" *> pSubject <* string ")") <*> pure Nothing
     , P99 <$> (string "p99(" *> pSubject <* string ")") <*> pure Nothing
     , P100 <$> (string "p100(" *> pSubject <* string ")") <*> pure Nothing
-    , Count <$> (string "count(" *> pSubject <* string ")") <*> pure Nothing
+    , Count <$> (string "count(" *> (pSubject <|> (string ")" *> pure (Subject "*" "*" []))) <* optional (string ")")) <*> pure Nothing
     , Avg <$> (string "avg(" *> pSubject <* string ")") <*> pure Nothing
     , Min <$> (string "min(" *> pSubject <* string ")") <*> pure Nothing
     , Max <$> (string "max(" *> pSubject <* string ")") <*> pure Nothing
@@ -163,9 +167,10 @@ instance Display AggFunction where
 instance ToQueryText Section where
   toQText (Source source) = toQText source
   toQText (Search expr) = toQText expr
-  toQText (SummarizeCommand funcs byClauseM) = 
-    "summarize " <> T.intercalate "," (map toQText funcs) <> 
-    maybeToMonoid (toQText <$> byClauseM)
+  toQText (SummarizeCommand funcs byClauseM) =
+    "summarize "
+      <> T.intercalate "," (map toQText funcs)
+      <> maybeToMonoid (toQText <$> byClauseM)
   toQText (SortCommand fields) = "sort by " <> T.intercalate ", " (map toQText fields)
   toQText (TakeCommand limit) = "take " <> toText (show limit)
 
@@ -181,6 +186,7 @@ instance ToQueryText Section where
 data SortField = SortField Subject (Maybe Text) -- field and optional direction (asc/desc)
   deriving stock (Eq, Generic, Show)
   deriving anyclass (AE.FromJSON, AE.ToJSON)
+
 
 data Section
   = Search Expr
@@ -211,7 +217,7 @@ pBinFunction = try binParser <|> binAutoParser
       interval <- toText <$> some (alphaNumChar <|> char '.' <|> char 'm' <|> char 's' <|> char 'h' <|> char 'd' <|> char 'w')
       _ <- string ")"
       return $ Bin subj interval
-    
+
     binAutoParser = do
       _ <- string "bin_auto("
       subj <- pSubject
@@ -331,7 +337,7 @@ namedAggregation = do
 
 
 -- | Parse the summarize command
--- 
+--
 -- >>> parse pSummarizeSection "" "summarize sum(attributes.client) by attributes.client, bin(timestamp, 60)"
 -- Right (SummarizeCommand [Sum (Subject "attributes.client" "attributes.client" []) Nothing] (Just (SummarizeByClause [Left (Subject "attributes.client" "attributes.client" []), Right (Bin (Subject "timestamp" "timestamp" []) "60")])))
 --
@@ -346,11 +352,11 @@ pSummarizeSection = do
   space
   funcs <- sepBy (try namedAggregation <|> aggFunctionParser) (char ',' <* space)
   byClause <- optional $ try (space *> pSummarizeByClause)
-  
+
   -- If no by clause was provided, automatically add "by status_code"
   let defaultByClause = SummarizeByClause [Left $ Subject "status_code" "status_code" []]
       finalByClause = Just $ fromMaybe defaultByClause byClause
-  
+
   return $ SummarizeCommand funcs finalByClause
 
 

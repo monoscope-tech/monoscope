@@ -41,6 +41,7 @@ import Pages.BodyWrapper
 import Pages.Charts.Charts qualified as Charts
 import Pages.Components qualified as Components
 import Pkg.Components qualified as Components
+import Pkg.Components.LogQueryBox (LogQueryBoxConfig (..), logQueryBox_, queryEditorInitializationCode, visTypes)
 import Pkg.Components.Widget qualified as Widget
 import Relude
 import Relude.Unsafe qualified as Unsafe
@@ -110,7 +111,7 @@ dashboardPage_ pid dashId dash dashVM = do
             , data_ "reload_on_change" $ maybe "false" (T.toLower . show) var.reloadOnChange
             , value_ $ maybeToMonoid var.value
             ]
-            <> memptyIfFalse (var.multi == Just True) [data_ "mode" "select"]
+          <> memptyIfFalse (var.multi == Just True) [data_ "mode" "select"]
     script_
       [text|
   const tagifyInstances = new Map();
@@ -292,38 +293,38 @@ processWidget pid now (sinceStr, fromDStr, toDStr) allParams widgetBase = do
             let issuesVM = V.map (AnomalyList.IssueVM False now "24h") issues
             pure
               $ widget
-                & #html
-                  ?~ ( renderText
-                         $ div_ [class_ "flex flex-col gap-4 h-full w-full overflow-hidden"]
-                         $ forM_ issuesVM (\x -> div_ [class_ "border border-strokeWeak rounded-2xl overflow-hidden"] $ toHtml x)
-                     )
+              & #html
+                ?~ ( renderText
+                       $ div_ [class_ "flex flex-col gap-4 h-full w-full overflow-hidden"]
+                       $ forM_ issuesVM (\x -> div_ [class_ "border border-strokeWeak rounded-2xl overflow-hidden"] $ toHtml x)
+                   )
           Widget.WTStat -> do
             stat <- Charts.queryMetrics (Just Charts.DTFloat) (Just pid) widget.query widget.sql sinceStr fromDStr toDStr Nothing allParams
             pure
               $ widget
-                & #dataset
-                  ?~ def
-                    { Widget.source = AE.Null
-                    , Widget.value = stat.dataFloat
-                    }
+              & #dataset
+                ?~ def
+                  { Widget.source = AE.Null
+                  , Widget.value = stat.dataFloat
+                  }
           _ -> do
             metricsD <-
               Charts.queryMetrics (Just Charts.DTMetric) (Just pid) widget.query widget.sql sinceStr fromDStr toDStr Nothing allParams
             pure
               $ widget
-                & #dataset
-                  ?~ Widget.WidgetDataset
-                    { source =
-                        AE.toJSON
-                          $ V.cons
-                            (AE.toJSON <$> metricsD.headers)
-                            (AE.toJSON <<$>> metricsD.dataset)
-                    , rowsPerMin = metricsD.rowsPerMin
-                    , value = Just metricsD.rowsCount
-                    , from = metricsD.from
-                    , to = metricsD.to
-                    , stats = metricsD.stats
-                    }
+              & #dataset
+                ?~ Widget.WidgetDataset
+                  { source =
+                      AE.toJSON
+                        $ V.cons
+                          (AE.toJSON <$> metricsD.headers)
+                          (AE.toJSON <<$>> metricsD.dataset)
+                  , rowsPerMin = metricsD.rowsPerMin
+                  , value = Just metricsD.rowsCount
+                  , from = metricsD.from
+                  , to = metricsD.to
+                  , stats = metricsD.stats
+                  }
       else pure widget
   -- Recursively process child widgets, if any.
   case widget'.children of
@@ -526,7 +527,6 @@ widgetViewerEditor_ pid dashboardIdM currentRange existingWidgetM activeTab = di
           , Widget.hideSubtitle = Just True
           , Widget.query = Nothing
           , Widget.unit = Just "ms"
-          , Widget.hideLegend = Just True
           , Widget._projectId = Just pid
           , Widget._dashboardId = dashboardIdM <&> (.toText)
           , Widget.layout = Just $ def{Widget.w = Just 3, Widget.h = Just 3}
@@ -541,9 +541,9 @@ widgetViewerEditor_ pid dashboardIdM currentRange existingWidgetM activeTab = di
       widgetFormId = widPrefix <> "-widget-form"
       widgetPreviewId = widPrefix <> "-widget-preview"
       widgetTitleInputId = widPrefix <> "-widget-title-input"
-      queryBuilderId = widPrefix <> "-queryBuilder"
-      filterElementId = widPrefix <> "-filterElement"
-      widgetTypeNameId = widPrefix <> "-widgetType"
+      -- queryBuilderId = widPrefix <> "-queryBuilder" -- removed unused variable
+      -- filterElementId = widPrefix <> "-filterElement" -- removed unused variable
+      -- widgetTypeNameId = widPrefix <> "-widgetType" -- removed unused variable
       drawerStateCheckbox = if isJust existingWidgetM then "global-data-drawer" else "page-data-drawer"
 
   let widgetJSON = TE.decodeUtf8 $ fromLazy $ AE.encode widgetToUse
@@ -606,7 +606,7 @@ widgetViewerEditor_ pid dashboardIdM currentRange existingWidgetM activeTab = di
     div_
       [ id_ widgetPreviewId
       , class_ "h-full w-full"
-      , hxPost_ "/widget"
+      , hxPost_ ("/p/" <> pid.toText <> "/widget")
       , hxTrigger_ "intersect once, update-widget"
       , hxTarget_ "this"
       , hxSwap_ "innerHTML"
@@ -622,74 +622,34 @@ widgetViewerEditor_ pid dashboardIdM currentRange existingWidgetM activeTab = di
       ""
   div_ [class_ $ if isNewWidget then "block" else "hidden group-has-[.page-drawer-tab-edit:checked]/wgtexp:block"] do
     div_ [class_ "space-y-7"] do
-      div_ [class_ "flex gap-3"] do
-        span_ [class_ "inline-block rounded-full bg-fillWeak px-3 py-1 leading-none"] "1"
-        strong_ [class_ "text-lg font-semibold"] "Select your Visualization"
-      div_ [class_ "grid grid-cols-12 gap-3 px-5"]
-        $ iforM_ visTypes \idx (icon, title, widgetType, _) ->
-          label_
-            [ class_ "col-span-1 p-4 aspect-square gap-3 flex flex-col border border-strokeWeak rounded-lg items-center justify-center has-checked:border-strokeBrand-strong has-checked:bg-fillBrand-weak widget-type-label"
-            , data_ "widgetType" widgetType
-            , term
-                "_"
-                [text| on click 
-                 set widgetJSON.type to @data-widgetType then 
-                 set widgetJSON.title to #{'${widgetTitleInputId}'}.value then
-                 trigger 'update-widget' on #{'${widgetPreviewId}'} |]
-            ]
-            do
-              input_
-                ( [ class_ "hidden widget-type-input"
-                  , name_ widgetTypeNameId
-                  , type_ "radio"
-                  , value_ widgetType
-                  ]
-                    <> if idx == 0 then [checked_] else mempty
-                )
-              span_ [class_ "block"] $ faSprite_ icon "regular" "w-4 h-4"
-              span_ [class_ "text-textWeak block leading-none"] $ toHtml title
+      -- Select your visualization section removed to avoid circular dependencies
 
-      div_ [class_ "space-y-7"] do
+      div_ [class_ "space-y-4"] do
+        div_ [class_ "flex gap-3"] do
+          span_ [class_ "inline-block rounded-full bg-fillWeak px-3 py-1 leading-none"] "1"
+          strong_ [class_ "text-lg font-semibold"] "Configure Query"
+        div_ [class_ "px-5 flex flex-col gap-2"] do
+          logQueryBox_
+            LogQueryBoxConfig
+              { pid = pid
+              , currentRange = Nothing
+              , source = Nothing
+              , targetSpan = Nothing
+              , query = widgetToUse.query
+              , vizType = Just $ case widgetToUse.wType of
+                  Widget.WTTimeseries -> "timeseries"
+                  Widget.WTTimeseriesLine -> "timeseries_line"
+                  Widget.WTLogs -> "logs"
+                  _ -> "timeseries"
+              , queryLibRecent = V.empty
+              , queryLibSaved = V.empty
+              , updateUrl = False
+              , targetWidgetPreview = Just widgetPreviewId
+              }
+
+      div_ [class_ "space-y-4"] do
         div_ [class_ "flex gap-3"] do
           span_ [class_ "inline-block rounded-full bg-fillWeak px-3 py-1 leading-none"] "2"
-          strong_ [class_ "text-lg font-semibold"] "Graph your Data"
-        div_ [class_ "px-5 flex flex-col gap-2"] do
-          div_ [id_ queryBuilderId, class_ "flex-1 flex items-center"]
-            $ termRaw
-              "query-editor"
-              [ id_ filterElementId
-              , class_ "w-full h-[2rem] flex items-center"
-              , term "default-value" (fromMaybe "" widgetToUse.query)
-              , term "widget-editor" "true"
-              , term "target-widget-preview" widgetPreviewId
-              ]
-              ("" :: Text)
-
-          let schemaJson = decodeUtf8 $ AE.encode Schema.telemetrySchemaJson
-              popularQueriesJson = decodeUtf8 $ AE.encode Schema.popularOtelQueriesJson
-          script_
-            [text|
-              // Initialize query-editor with schema data when loaded
-              setTimeout(() => {
-                const editor = document.getElementById('${filterElementId}');
-                if (!editor) return;
-                
-                // Set schema data using schemaManager if available
-                if (window.schemaManager && window.schemaManager.setSchemaData) {
-                  const schemaData = $schemaJson;
-                  window.schemaManager.setSchemaData('spans', schemaData);
-                }
-                
-                if (editor.setPopularSearches) {
-                  const popularQueries = $popularQueriesJson;
-                  editor.setPopularSearches(popularQueries);
-                }
-              }, 100);
-            |]
-
-      div_ [class_ "space-y-7"] do
-        div_ [class_ "flex gap-3"] do
-          span_ [class_ "inline-block rounded-full bg-fillWeak px-3 py-1 leading-none"] "3"
           strong_ [class_ "text-lg font-semibold"] "Give your graph a title"
         div_ [class_ "space-x-8 px-5"]
           $ input_
@@ -707,18 +667,7 @@ widgetViewerEditor_ pid dashboardIdM currentRange existingWidgetM activeTab = di
             ]
 
 
-visTypes :: [(Text, Text, Text, Text)]
-visTypes =
-  [ ("list-view", "Logs", "logs", "📋")
-  , ("bar-chart", "Bar", "timeseries", "📊")
-  , ("duo-line-chart", "Line", "timeseries_line", "📈")
-  -- , ("duo-pie-chart", "Pie", "pie_chart", "🥧")
-  -- , ("duo-scatter-chart", "Scatter", "distribution", "📉")
-  -- , ("hashtag", "Number", "stat", "🔢")
-  -- , ("guage", "Guage", "", "🧮")
-  -- , ("text", "Text", "", "📝")
-  ]
-
+-- visTypes is now imported from LogQueryBox to avoid circular dependencies
 
 -- | Backward compatibility wrapper for the new widget editor
 newWidget_ :: Projects.ProjectId -> Maybe (Text, Text) -> Html ()

@@ -164,8 +164,8 @@ data WidgetAxis = WidgetAxis
 
 
 -- Used when converting a widget json to its html representation. Eg in a query chart builder
-widgetPostH :: Widget -> ATAuthCtx (RespHeaders Widget)
-widgetPostH widget = addRespHeaders widget
+widgetPostH :: Projects.ProjectId -> Widget -> ATAuthCtx (RespHeaders Widget)
+widgetPostH pid widget = addRespHeaders (widget & #_projectId .~ Just pid)
 
 
 -- use either index or the xxhash as id
@@ -276,12 +276,12 @@ renderWidgetHeader widget wId title valueM subValueM expandBtnFn ctaM hideSub = 
               , data_ "tippy-content" "Create a copy of this widget"
               , hxPost_
                   $ "/p/"
-                    <> maybeToMonoid (widget._projectId <&> (.toText))
-                    <> "/dashboards/"
-                    <> maybeToMonoid widget._dashboardId
-                    <> "/widgets/"
-                    <> wId
-                    <> "/duplicate"
+                  <> maybeToMonoid (widget._projectId <&> (.toText))
+                  <> "/dashboards/"
+                  <> maybeToMonoid widget._dashboardId
+                  <> "/widgets/"
+                  <> wId
+                  <> "/duplicate"
               , hxTrigger_ "click"
               , [__| on click set (the closest <details/>).open to false
                      on htmx:beforeSwap
@@ -332,7 +332,7 @@ renderChart widget = do
       div_
         [ class_
             $ "h-full w-full flex flex-col justify-end "
-              <> if widget.naked == Just True then "" else " rounded-2xl border border-strokeWeak bg-fillWeaker"
+            <> if widget.naked == Just True then "" else " rounded-2xl border border-strokeWeak bg-fillWeaker"
         , id_ $ chartId <> "_bordered"
         ]
         do

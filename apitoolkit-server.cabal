@@ -140,6 +140,7 @@ library
       Pkg.Components
       Pkg.Components.ExternalHeadScripts
       Pkg.Components.ItemsList
+      Pkg.Components.LogQueryBox
       Pkg.Components.Modals
       Pkg.Components.TimePicker
       Pkg.Components.Widget
@@ -272,6 +273,7 @@ library
     , deriving-aeson
     , directory
     , dotenv
+    , ed25519 >=0.0.5
     , effectful
     , effectful-core
     , envy
@@ -311,6 +313,7 @@ library
     , lucid-hyperscript >=0.1.0.2
     , lucid-svg >=0.7.1.1
     , megaparsec
+    , memory
     , mmark
     , monad-time-effectful
     , mtl
@@ -365,11 +368,6 @@ library
     , wreq
     , xxhash
     , yaml
-    , cryptonite >= 0.30
-    , ed25519 >= 0.0.5
-    , memory
-    , bytestring
-    , base16-bytestring    
   default-language: GHC2021
 
 executable apitoolkit-server-exe

@@ -98,45 +98,45 @@ instance AE.FromJSON ReportAnomalyType where
           Just "ATEndpoint" ->
             ATEndpoint
               <$> o
-                AE..: "endpointUrlPath"
+              AE..: "endpointUrlPath"
               <*> o
-                AE..: "endpointMethod"
+              AE..: "endpointMethod"
               <*> o
-                AE..: "eventsCount"
+              AE..: "eventsCount"
           Just "ATShape" ->
             ATShape
               <$> o
-                AE..: "endpointUrlPath"
+              AE..: "endpointUrlPath"
               <*> o
-                AE..: "endpointMethod"
+              AE..: "endpointMethod"
               <*> o
-                AE..: "targetHash"
+              AE..: "targetHash"
               <*> o
-                AE..: "newUniqueFields"
+              AE..: "newUniqueFields"
               <*> o
-                AE..: "updatedFieldFormats"
+              AE..: "updatedFieldFormats"
               <*> o
-                AE..: "deletedFields"
+              AE..: "deletedFields"
               <*> o
-                AE..: "eventsCount"
+              AE..: "eventsCount"
           Just "ATFormat" ->
             ATFormat
               <$> o
-                AE..: "endpointUrlPath"
+              AE..: "endpointUrlPath"
               <*> o
-                AE..: "keyPath"
+              AE..: "keyPath"
               <*> o
-                AE..: "endpointMethod"
+              AE..: "endpointMethod"
               <*> o
-                AE..: "formatType"
+              AE..: "formatType"
               <*> o
-                AE..: "formatExamples"
+              AE..: "formatExamples"
               <*> o
-                AE..: "eventsCount"
+              AE..: "eventsCount"
           Just "ATRuntimeException" ->
             ATRuntimeException
               <$> o
-                AE..: "endpointUrlPath"
+              AE..: "endpointUrlPath"
           _ -> pure UnknownAnomaly
 
 

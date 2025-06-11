@@ -376,8 +376,8 @@ registerGlobalDiscordCommands appId botToken = do
   let url =
         T.unpack
           $ "https://discord.com/api/v10/applications/"
-            <> appId
-            <> "/commands"
+          <> appId
+          <> "/commands"
 
       askCommand =
         AE.object

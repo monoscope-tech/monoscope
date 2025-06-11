@@ -689,10 +689,6 @@ export class QueryEditorComponent extends LitElement {
     // Update URL if needed
   }, 300);
 
-  private get serviceSuggestions(): SuggestionItem[] {
-    return [...this.completionItems, ...this.savedViews, ...this.recentSearches, ...this.popularSearches];
-  }
-
   async firstUpdated(): Promise<void> {
     if (!this._editorContainer) return;
 
@@ -878,7 +874,27 @@ export class QueryEditorComponent extends LitElement {
 
     try {
       const currentValue = this.editor.getValue().trim();
-      const newValue = replace ? queryFragment : currentValue ? `${currentValue} and ${queryFragment}` : queryFragment;
+      let newValue;
+      
+      if (replace || !currentValue) {
+        newValue = queryFragment;
+      } else {
+        // Find where to insert the new condition
+        const pipeIndex = currentValue.indexOf('|');
+        const whereIndex = currentValue.toLowerCase().indexOf('| where ');
+        
+        if (whereIndex >= 0) {
+          // Has explicit where clause - insert after "where"
+          const wherePos = whereIndex + 8; // "| where ".length
+          newValue = `${currentValue.substring(0, wherePos)}(${queryFragment}) and ${currentValue.substring(wherePos)}`;
+        } else if (pipeIndex > 0) {
+          // Has pipe but no where - insert at first segment
+          newValue = `${currentValue.substring(0, pipeIndex)} and ${queryFragment} ${currentValue.substring(pipeIndex)}`;
+        } else {
+          // Simple query - just append
+          newValue = `${currentValue} and ${queryFragment}`;
+        }
+      }
 
       this.editor.setValue(newValue);
 
@@ -1521,7 +1537,7 @@ export class QueryEditorComponent extends LitElement {
       <div
         class="relative w-full h-full pl-2 flex border rounded-md border-strokeStrong focus-within:border-strokeBrand-strong focus:outline-2 "
       >
-        <div class="relative w-full flex-1">
+        <div class="relative overflow-x-hidden w-full flex-1">
           <div id="editor-container" class="w-full"></div>
           <div
             class="placeholder-overlay absolute top-0 left-0 right-0 bottom-0 pointer-events-auto z-[1] text-gray-400 f/nont-mono text-sm leading-[18px] pt-2 pl-0 hidden cursor-text"
