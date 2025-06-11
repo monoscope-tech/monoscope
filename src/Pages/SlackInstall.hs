@@ -218,7 +218,6 @@ installedSuccessDisocrd = do
           span_ " – Quickly link this channel to receive alerts. No more digging through logs."
 
 
-
 linkDiscordGetH :: Maybe Text -> Maybe Text -> Maybe Text -> ATBaseCtx (Headers '[Header "Location" Text] SlackLink)
 linkDiscordGetH pidM' codeM guildIdM = do
   envCfg <- asks env
@@ -306,6 +305,7 @@ instance ToJSON InteractionApplicationCommandCallbackData
 
 discordInteractionsH :: BS.ByteString -> Maybe BS.ByteString -> Maybe BS.ByteString -> ATBaseCtx AE.Value
 discordInteractionsH rawBody signatureM timestampM = do
+  traceShowM rawBody
   envCfg <- asks env
   case (signatureM, timestampM) of
     (Just sig, Just tme)
@@ -327,7 +327,7 @@ discordInteractionsH rawBody signatureM timestampM = do
                                 _ -> Nothing
                           pure $ AE.object ["type" .= (4 :: Int), "data" .= AE.object ["content" .= ("You asked: " <> maybe "" (\x -> x.projectId.toText) discordData <> maybe "something?" Relude.id maybeQuestion)]]
                         "here" -> do
-                          case (interaction.channel_id, interaction.guild_id ) of
+                          case (interaction.channel_id, interaction.guild_id) of
                             (Just channelId, Just guildId) -> do
                               case discordData of
                                 Just _ -> do
@@ -365,13 +365,61 @@ verifyDiscordSignature publicKey signatureHex timestamp rawBody =
     _ -> False
 
 
+
+-- Data types for Discord API responses
+data DiscordUser = DiscordUser
+  { userId :: Text
+  , username :: Text
+  , globalName :: Maybe Text
+  , avatar :: Maybe Text
+  } deriving (Show, Generic)
+
+data DiscordMessage = DiscordMessage
+  { messageId :: Text
+  , content :: Text
+  , author :: DiscordUser
+  , timestamp :: Text
+  } deriving (Show, Generic)
+
+-- JSON instances
+instance FromJSON DiscordUser where
+  parseJSON = withObject "DiscordUser" $ \o -> DiscordUser
+    <$> o .: "id"
+    <*> o .: "username"
+    <*> o .:? "global_name"
+    <*> o .:? "avatar"
+
+instance FromJSON DiscordMessage where
+  parseJSON = withObject "DiscordMessage" $ \o -> DiscordMessage
+    <$> o .: "id"
+    <*> o .: "content"
+    <*> o .: "author"
+    <*> o .: "timestamp"
+
+
+getThreadStarterMessage :: Text -> Text -> IO (Either String DiscordMessage)
+getThreadStarterMessage botToken threadId = do
+  let url = T.unpack $ "https://discord.com/api/v10/channels/" <> threadId <> "/messages?limit=50"
+  let opts = defaults & header "Authorization" .~ [ TE.encodeUtf8 $ "Bot " <> botToken]
+                     & header "Content-Type" .~ ["application/json"]
+  
+  response <- getWith opts url
+  
+  case eitherDecode (response ^. responseBody) of
+    Left err -> return $ Left $ "JSON decode error: " <> err
+    Right messages -> 
+      case messages of
+        [] -> return $ Left "No messages found in thread"
+        msgs -> return $ Right $ last msgs  -- Last message is the oldest (starter)
+
+
 registerGlobalDiscordCommands :: T.Text -> T.Text -> IO (Either T.Text ())
 registerGlobalDiscordCommands appId botToken = do
   let url =
         T.unpack
           $ "https://discord.com/api/v10/applications/"
-          <> appId
-          <> "/commands"
+            <> appId
+            <> "/commands"
 
       askCommand =
         AE.object
