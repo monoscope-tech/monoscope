@@ -988,48 +988,62 @@ export class LogList extends LitElement {
             </button>
           </div>
         `}
-        <button
-          class=${`flex items-center cursor-pointer justify-center gap-1 px-2 py-1 text-xs rounded ${
-            this.flipDirection ? 'bg-gray-200 text-gray-800' : 'text-textWeak  hover:bg-gray-100'
-          }`}
-          @click=${() => {
-            this.flipDirection = !this.flipDirection;
-            this.spanListTree = this.buildSpanListTree(this.spanListTree.map((span) => span.data).reverse());
-            this.recentDataToBeAdded = this.buildSpanListTree(this.recentDataToBeAdded.map((span) => span.data).reverse());
-            this.spanListTree = [...this.spanListTree, ...this.recentDataToBeAdded];
-            this.recentDataToBeAdded = [];
-            this.requestUpdate();
-          }}
-        >
-          ${faSprite('flip-vertical', 'regular', 'h-4 w-4')}
-          <span class="sm:inline hidden">Flip direction</span>
-        </button>
 
-        <button
-          class=${`flex items-center cursor-pointer justify-center gap-1 px-2 py-1 text-xs rounded ${
-            this.wrapLines ? 'bg-gray-200 text-gray-800' : 'text-textWeak  hover:bg-gray-100'
-          }`}
-          @click=${() => {
-            this.wrapLines = !this.wrapLines;
-            if (this.wrapLines) {
-              let width = Number(window.getComputedStyle(document.getElementById('logs_list_container_inner')!).width.replace('px', ''));
-              this.logsColumns.forEach((col) => {
-                if (col !== 'summary' && this.columnMaxWidthMap[col]) {
-                  width -= this.columnMaxWidthMap[col] + 8;
+        <div class="relative dropdown dropdown-end">
+          <button
+            tabindex="0"
+            role="button"
+            class=${`flex cursor-pointer items-center justify-center gap-1 px-2 py-1 text-xs rounded focus:bg-fillBrand-strong focus:text-white focus:fill-white`}
+          >
+            ${faSprite('gear', 'regular', `h-3 w-3 `)}
+            <span class="sm:inline hidden">Options</span>
+          </button>
+          <div tabindex="0" class="dropdown-content space-y-2 bg-white border w-64 border-strokeWeak p-2 text-sm rounded shadow">
+            <button
+              class=${`flex items-center cursor-pointer  w-full gap-1 px-2 py-1 text-sm rounded ${
+                this.flipDirection ? 'bg-gray-200 text-gray-800' : 'text-textWeak  hover:bg-gray-100'
+              }`}
+              @click=${() => {
+                this.flipDirection = !this.flipDirection;
+                this.spanListTree = this.buildSpanListTree(this.spanListTree.map((span) => span.data).reverse());
+                this.recentDataToBeAdded = this.buildSpanListTree(this.recentDataToBeAdded.map((span) => span.data).reverse());
+                this.spanListTree = [...this.spanListTree, ...this.recentDataToBeAdded];
+                this.recentDataToBeAdded = [];
+                this.requestUpdate();
+              }}
+            >
+              ${faSprite('flip-vertical', 'regular', 'h-4 w-4')}
+              <span class="sm:inline hidden">Flip direction</span>
+            </button>
+
+            <button
+              class=${`flex items-center cursor-pointer w-full gap-1 px-2 py-1 text-sm rounded ${
+                this.wrapLines ? 'bg-gray-200 text-gray-800' : 'text-textWeak  hover:bg-gray-100'
+              }`}
+              @click=${() => {
+                this.wrapLines = !this.wrapLines;
+                if (this.wrapLines) {
+                  let width = Number(
+                    window.getComputedStyle(document.getElementById('logs_list_container_inner')!).width.replace('px', '')
+                  );
+                  this.logsColumns.forEach((col) => {
+                    if (col !== 'summary' && this.columnMaxWidthMap[col]) {
+                      width -= this.columnMaxWidthMap[col] + 8;
+                    }
+                  });
+                  this.columnMaxWidthMap['summary'] = width - 20; // margin left and right and id width
+                } else {
+                  this.columnMaxWidthMap['summary'] = 450 * 8;
                 }
-              });
-              this.columnMaxWidthMap['summary'] = width - 20; // margin left and right and id width
-            } else {
-              this.columnMaxWidthMap['summary'] = 450 * 8;
-            }
-            this.requestUpdate();
-          }}
-        >
-          ${faSprite('wrap-text', 'regular', 'h-4 w-4')}
-          <span class="sm:inline hidden">Wrap lines</span>
-        </button>
-
-        <columns-settings .columns=${this.logsColumns} @columns-changed=${this.handleColumnsChanged}></columns-settings>
+                this.requestUpdate();
+              }}
+            >
+              ${faSprite('wrap-text', 'regular', 'h-4 w-4')}
+              <span class="sm:inline hidden">Wrap lines</span>
+            </button>
+            <columns-settings .columns=${this.logsColumns} @columns-changed=${this.handleColumnsChanged}></columns-settings>
+          </div>
+        </div>
       </div>
     `;
   }
@@ -1075,89 +1089,78 @@ class ColumnsSettings extends LitElement {
 
   render() {
     return html`
-      <div class="relative dropdown dropdown-end">
-        <button
-          tabindex="0"
-          role="button"
-          class=${`flex cursor-pointer items-center justify-center gap-1 px-2 py-1 text-xs rounded focus:bg-fillBrand-strong focus:text-white focus:fill-white`}
-          @click=${() => (this.showModal = !this.showModal)}
-        >
-          ${faSprite('gear', 'regular', `h-3 w-3 `)}
-          <span class="sm:inline hidden">Options</span>
-        </button>
-        <div tabindex="0" class="dropdown-content  bg-white border w-64 border-strokeWeak p-2 text-sm rounded shadow">
-          <div class="relative mb-4">
-            <span class="block mb-1 text-sm text-textStrong font-medium">Add column</span>
-            <input
-              type="text"
-              placeholder="Search columns..."
-              class="input input-xs w-full max-w-xs focus:outline-none focus:border-textBrand focus:ring-0"
-              .value=${this.searchTerm || ''}
-              @input=${(e: any) => {
-                this.searchTerm = e.target.value;
-              }}
-            />
+      <div tabindex="0" class="bg-white w-full border-t border-t-strokeWeak p-2 pt-4 text-sm mt-4">
+        <div class="relative mb-4">
+          <span class="block mb-1 text-sm text-textStrong font-medium">Add column</span>
+          <input
+            type="text"
+            placeholder="Search columns..."
+            class="input input-xs w-full max-w-xs focus:outline-none focus:border-textBrand focus:ring-0"
+            .value=${this.searchTerm || ''}
+            @input=${(e: any) => {
+              this.searchTerm = e.target.value;
+            }}
+          />
 
-            ${this.searchTerm && this.searchTerm.length > 0
-              ? html`
-                  <ul class="mt-1 w-full text-sm max-h-48 overflow-y-auto">
-                    ${this.defaultColumns
-                      .concat(this.columns)
-                      .filter((col) => !this.columns.some((c) => c === col) && col.toLowerCase().includes(this.searchTerm.toLowerCase()))
-                      .map(
-                        (col) =>
-                          html`
-                            <li
-                              class="px-1 py-0.5 hover:bg-fillWeak cursor-pointer"
-                              @click=${() => {
-                                let summaryIndex = this.columns.indexOf('summary');
-                                if (summaryIndex === -1 || col === 'latency_breakdown') {
-                                  this.columns.push(col);
-                                } else {
-                                  this.columns.splice(summaryIndex, 0, col);
-                                }
-                                this.searchTerm = '';
-                                this._emitChanges();
-                              }}
-                            >
-                              ${col}
-                            </li>
-                          `
-                      )}
-                    ${this.defaultColumns.filter(
-                      (col) => !this.columns.some((c) => c === col) && col.toLowerCase().includes(this.searchTerm.toLowerCase())
-                    ).length === 0
-                      ? html`<li class="px-3 py-2 text-gray-400">No results</li>`
-                      : ''}
-                  </ul>
-                `
-              : nothing}
-          </div>
-
-          <ul class="flex flex-col gap-1 border-t border-strokeWeak py-2">
-            ${this.columns.map(
-              (col, index) => html`
-                <li
-                  class=${`flex items-center group justify-between  px-1 py-0.5 rounded ${
-                    col === 'latency_breakdown' ? 'cursor-default select-none' : 'cursor-move hover:bg-fillWeak'
-                  } ${this.dragOverIndex === index ? 'border border-strokeBrand-strong' : ''}`}
-                  draggable=${col === 'latency_breakdown' ? 'false' : 'true'}
-                  @dragstart=${(e: any) => this._onDragStart(e, index)}
-                  @dragover=${(e: any) => this._onDragOver(e, index)}
-                  @drop=${(e: any) => this._onDrop(e, index)}
-                >
-                  <span class="text-textStrong">${col}</span>
-                  <div class="flex items-center gap-2">
-                    <button class="hidden group-hover:inline-block cursor-pointer" @click=${() => this._removeColumn(index)}>
-                      ${faSprite('trash-can', 'regular', 'h-3 w-3 text-iconNeutral fill-red-600')}
-                    </button>
-                    ${faSprite('grip-dots-vertical', 'regular', 'h-4 w-4 text-iconNeutral')}
-                  </div>
-                </li>
+          ${this.searchTerm && this.searchTerm.length > 0
+            ? html`
+                <ul class="mt-1 w-full text-sm max-h-48 overflow-y-auto">
+                  ${this.defaultColumns
+                    .concat(this.columns)
+                    .filter((col) => !this.columns.some((c) => c === col) && col.toLowerCase().includes(this.searchTerm.toLowerCase()))
+                    .map(
+                      (col) =>
+                        html`
+                          <li
+                            class="px-1 py-0.5 hover:bg-fillWeak cursor-pointer"
+                            @click=${() => {
+                              let summaryIndex = this.columns.indexOf('summary');
+                              if (summaryIndex === -1 || col === 'latency_breakdown') {
+                                this.columns.push(col);
+                              } else {
+                                this.columns.splice(summaryIndex, 0, col);
+                              }
+                              this.searchTerm = '';
+                              this._emitChanges();
+                            }}
+                          >
+                            ${col}
+                          </li>
+                        `
+                    )}
+                  ${this.defaultColumns.filter(
+                    (col) => !this.columns.some((c) => c === col) && col.toLowerCase().includes(this.searchTerm.toLowerCase())
+                  ).length === 0
+                    ? html`<li class="px-3 py-2 text-gray-400">No results</li>`
+                    : ''}
+                </ul>
               `
-            )}
-          </ul>
+            : nothing}
         </div>
+
+        <ul class="flex flex-col gap-1 py-2">
+          ${this.columns.map(
+            (col, index) => html`
+              <li
+                class=${`flex items-center group justify-between  px-1 py-0.5 rounded ${
+                  col === 'latency_breakdown' ? 'cursor-default select-none' : 'cursor-move hover:bg-fillWeak'
+                } ${this.dragOverIndex === index ? 'border border-strokeBrand-strong' : ''}`}
+                draggable=${col === 'latency_breakdown' ? 'false' : 'true'}
+                @dragstart=${(e: any) => this._onDragStart(e, index)}
+                @dragover=${(e: any) => this._onDragOver(e, index)}
+                @drop=${(e: any) => this._onDrop(e, index)}
+              >
+                <span class="text-textStrong">${col}</span>
+                <div class="flex items-center gap-2">
+                  <button class="hidden group-hover:inline-block cursor-pointer" @click=${() => this._removeColumn(index)}>
+                    ${faSprite('trash-can', 'regular', 'h-3 w-3 text-iconNeutral fill-red-600')}
+                  </button>
+                  ${faSprite('grip-dots-vertical', 'regular', 'h-4 w-4 text-iconNeutral')}
+                </div>
+              </li>
+            `
+          )}
+        </ul>
       </div>
     `;
   }
