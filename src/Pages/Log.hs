@@ -247,8 +247,28 @@ renderFacets facetSummary = do
                 ul_ [tabindex_ "0", class_ "dropdown-content z-10 menu p-2 shadow bg-base-100 rounded-box w-52"] do
                   li_
                     $ a_
+                      [ term "data-key" key
+                      , term "data-field" (T.replace "___" "." key)
+                      , class_ "flex gap-2 items-center"
+                      , hxGet_ $ "/p/" <> facetSummary.projectId <> "/log_explorer"
+                      , hxPushUrl_ "true"
+                      , hxVals_ "js:{...{...params(), layout:'resultTable',cols:toggleColumnToSummary(event)}}"
+                      , hxTarget_ "#resultTableInner"
+                      , hxSwap_ "outerHTML"
+                      , [__|init set fp to @data-field then
+                                if params().cols.split(",").includes(fp) then 
+                                  set my.querySelector('span').innerHTML to "Remove column"
+                                end
+                          |]
+                      ]
+                      do
+                        faSprite_ "table-column" "regular" "w-4 h-4 text-iconNeutral"
+                        span_ [] "Add as table column"
+                  li_
+                    $ a_
                       [ term "data-field" (T.replace "___" "." key)
                       , term "data-key" key
+                      , class_ "flex gap-2 items-center"
                       , [__|
                         init call window.updateGroupByButtonText(event, me) end
                         on refreshItem call window.updateGroupByButtonText(event, me) end
@@ -259,21 +279,9 @@ renderFacets facetSummary = do
                         end
                     |]
                       ]
-                      "Group by"
-                  li_
-                    $ a_
-                      [ term "data-key" key
-                      , term "data-field" (T.replace "___" "." key)
-                      , hxGet_ $ "/p/" <> facetSummary.projectId <> "/log_explorer"
-                      , hxPushUrl_ "true"
-                      , hxVals_ "js:{...{layout:'resultTable',cols:toggleColumnToSummary(event), ...params()}}"
-                      , hxTarget_ "#resultTableInner"
-                      , hxSwap_ "outerHTML"
-                      , [__|init set fp to @data-field then
-                                if params().cols.split(",").includes(fp) then set my innerHTML to 'Remove column' end
-                          |]
-                      ]
-                      "Add as table column"
+                      do
+                        faSprite_ "group-by" "regular" "w-4 h-4 text-iconNeutral"
+                        span_ [] "Group by"
 
             div_ [class_ "pl-5 xmax-h-auto peer-has-checked:max-h-0 peer-has-checked:overflow-hidden transition-[max-height] duration-150"] do
               -- Prepare value lists and add toggle when needed
@@ -989,27 +997,54 @@ jsonTreeAuxillaryCode pid query = do
     ul_ [id_ "log-item-context-menu", class_ "log-item-context-menu origin-top-right absolute left-0 dropdown-content z-10 menu p-2 shadow bg-base-100 rounded-box w-52", tabindex_ "0"] do
       li_
         $ a_
-          [ term "data-field-path" ""
+          [ class_ "flex gap-2 items-center"
           , hxGet_ $ "/p/" <> pid.toText <> "/log_explorer"
           , hxPushUrl_ "true"
-          , hxVals_ "js:{...{layout:'resultTable',cols:toggleColumnToSummary(event), ...params()}}"
+          , hxVals_ "js:{...{...params(), layout:'resultTable',cols:toggleColumnToSummary(event)}}"
           , hxTarget_ "#resultTableInner"
           , hxSwap_ "outerHTML"
           , [__|init set fp to (closest @data-field-path) then
-              if params().cols.split(",").includes(fp) then set my innerHTML to 'Remove column' end|]
+              if params().cols.split(",").includes(fp) then 
+                set my.querySelector('span').innerHTML to "Remove column"
+              end|]
           ]
-          "Add as table column"
+          do
+            faSprite_ "table-column" "regular" "w-4 h-4 text-iconNeutral"
+            span_ [] "Add as table column"
       li_
         $ a_
-          [ [__|on click if 'clipboard' in window.navigator then
+          [ class_ "flex gap-2 items-center"
+          , [__|on click if 'clipboard' in window.navigator then
                 call navigator.clipboard.writeText((previous <.log-item-field-value/>)'s innerText)
                 send successToast(value:['Value has been added to the Clipboard']) to <body/>
                 halt
               end|]
           ]
-          "Copy field value"
-      li_ $ a_ [onclick_ "filterByField(event, 'Eq')"] "Filter by field"
-      li_ $ a_ [onclick_ "filterByField(event, 'NotEq')"] "Exclude field"
+          do
+            faSprite_ "copy" "regular" "w-4 h-4 text-iconNeutral"
+            span_ [] "Copy field value"
+      li_ $ a_ [class_ "flex gap-2 items-center", onclick_ "filterByField(event, 'Eq')"] do
+        faSprite_ "filter-enhanced" "regular" "w-4 h-4 text-iconNeutral"
+        span_ [] "Filter by field"
+      li_ $ a_ [class_ "flex gap-2 items-center", onclick_ "filterByField(event, 'NotEq')"] do
+        faSprite_ "not-equal" "regular" "w-4 h-4 text-iconNeutral"
+        span_ [] "Exclude field"
+      li_
+        $ a_
+          [ class_ "flex gap-2 items-center"
+          , [__|
+              init call window.updateGroupByButtonText(event, me) end
+              on refreshItem call window.updateGroupByButtonText(event, me) end
+
+              on click
+                call document.querySelector('query-builder').toggleGroupByField(closest @data-field-path) then
+                trigger refreshItem on me
+              end
+          |]
+          ]
+          do
+            faSprite_ "copy" "regular" "w-4 h-4 text-iconNeutral"
+            span_ [] "Group by field"
 
   script_
     [text|
@@ -1041,12 +1076,13 @@ jsonTreeAuxillaryCode pid query = do
 
     var toggleColumnToSummary = (e)=>{
       const cols = (params().cols||"").split(",").filter(x=>x!="");
-      const subject = (e.target.closest('.log-item-field-parent')?.dataset.fieldPath || e.target.dataset.field);
-      return subject ? 
+      const subject = (e.target.closest('[data-field-path]')?.dataset.fieldPath || e.target.closest('[data-field]').dataset.field);
+      const finalCols =  subject ? 
         [...new Set(cols.includes(subject) ? 
           cols.filter(x=>x!=subject) : 
           [...cols, subject])].join(",") : 
         cols.join(",");
+      return finalCols;
     }
 
 

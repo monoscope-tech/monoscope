@@ -59,7 +59,7 @@ logQueryBox_ config = do
   form_
     [ hxGet_ $ "/p/" <> config.pid.toText <> "/log_explorer"
     , hxTrigger_ "update-query from:#filterElement, submit, update-query from:window"
-    , hxVals_ "js:{...{layout:'resultTable', ...params()}}"
+    , hxVals_ "js:{...{...params(), layout:'resultTable'}}"
     , hxTarget_ "#resultTableInner"
     , hxSwap_ "outerHTML"
     , id_ "log_explorer_form"
@@ -78,7 +78,7 @@ logQueryBox_ config = do
                   on keydown[key=='Space' and shiftKey] from document set #ai-search-chkbox.checked to true
                   |]
               ]
-            <> [checked_ | (isJust config.targetWidgetPreview)]
+              <> [checked_ | (isJust config.targetWidgetPreview)]
           script_
             [text|
             document.addEventListener('keydown', function(e) {
@@ -225,7 +225,7 @@ visualizationTabs_ vizTypeM updateUrl widgetContainerId =
                     end
                  |]
           ]
-        <> [checked_ | vizType == defaultVizType]
+          <> [checked_ | vizType == defaultVizType]
       span_ [class_ "text-iconNeutral leading-none"] $ toHtml emoji
       span_ [] $ toHtml label
 
