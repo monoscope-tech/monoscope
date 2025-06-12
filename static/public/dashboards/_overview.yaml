@@ -87,10 +87,10 @@ widgets:
     title: 'HTTP Errors (Incoming)'
     eager: true
     theme: 'roma'
-    query: kind=="server" OR name=="apitoolkit-http-span" AND attributes.http.response.status_code != null AND attributes.http.response.status_code > 399.0 | summarize count() by bin_auto(timestamp), attributes.http.response.status_code
+    query: (kind=="server" OR name=="apitoolkit-http-span") AND attributes.http.response.status_code != null AND attributes.http.response.status_code > 399.0 | summarize count() by bin_auto(timestamp), attributes.http.response.status_code
     layout: { w: 6, h: 4 }
 
   - type: 'timeseries'
     title: 'Incoming Requests by Endpoint'
-    query: kind=="server" OR name=="apitoolkit-http-span" AND attributes.http.response.status_code != null | summarize count() by bin_auto(timestamp), attributes.http.request.method, attributes.url.path
+    query: (kind=="server" OR name=="apitoolkit-http-span") AND attributes.http.response.status_code != null | summarize count() by bin_auto(timestamp), attributes.http.request.method, attributes.url.path
     layout: { w: 6, h: 4 }

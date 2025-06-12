@@ -93,7 +93,13 @@ window.params = () => {
 window.updateGroupByButtonText = (_e, self) => {
   const el = self,
     ed = document.querySelector('#filterElement')?.editor,
-    v = ed?.getValue().toLowerCase() || ''
-  el.innerHTML = ed && ['summarize', 'by', el.dataset.field?.toLowerCase()].every(s => v.includes(s)) ? 'Remove group by' : 'Group by'
+    v = ed?.getValue().toLowerCase() || '',
+    field = el.dataset.field || el.closest('[data-field-path]')?.dataset.fieldPath,
+    span = el.querySelector('span')
+  
+  if (span && field && ed) {
+    const isGrouped = ['summarize', 'by', field.toLowerCase()].every(s => v.includes(s))
+    span.textContent = isGrouped ? 'Remove group by' : 'Group by'
+  }
 }
 
