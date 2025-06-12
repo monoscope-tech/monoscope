@@ -361,7 +361,7 @@ export class LogList extends LitElement {
       .then((response) => response.json())
       .then((data) => {
         if (!data.error) {
-          let { logsData, serviceColors, nextUrl, recentUrl } = data;
+          let { logsData, serviceColors, nextUrl, recentUrl, cols, colIdxMap } = data;
           if (!isNewData) {
             this.hasMore = logsData.length > 0;
           }
@@ -375,6 +375,8 @@ export class LogList extends LitElement {
           let tree = this.buildSpanListTree([...logsData]);
 
           if (isRefresh) {
+            this.logsColumns = cols;
+            this.colIdxMap = colIdxMap;
             this.nextFetchUrl = nextUrl;
             this.recentFetchUrl = recentUrl;
             this.spanListTree = tree;
@@ -623,7 +625,7 @@ export class LogList extends LitElement {
       case 'timestamp':
         let timestamp = lookupVecTextByKey(dataArr, colIdxMap, key);
         return html`<div>
-          <time class="monospace text-textStrong ${wrapClass}" data-tippy-content="timestamp" datetime=${timestamp}
+          <time class="monospace text-textStrong tooltip tooltip-right ${wrapClass}" data-tip="timestamp" datetime=${timestamp}
             >${displayTimestamp(timestamp)}</time
           >
         </div>`;
@@ -919,6 +921,7 @@ export class LogList extends LitElement {
     if (column === 'latency_breakdown' && !width) {
       width = 100;
     }
+
     return html`
       <td
         class=${`cursor-pointer p-0 m-0 whitespace-nowrap relative flex justify-between items-center pl-1 text-sm font-normal bg-white ${
@@ -928,7 +931,7 @@ export class LogList extends LitElement {
       >
         <div class="dropdown font-medium text-base" data-tippy-content=${title}>
           <div tabindex="0" role="button" class="py-1">
-            ${title}
+            ${title.split('•').reverse()[0]}
             <span class="ml-1 p-0.5 border border-slate-200 rounded-sm inline-flex">
               ${faSprite('chevron-down', 'regular', 'w-3 h-3')}
             </span>

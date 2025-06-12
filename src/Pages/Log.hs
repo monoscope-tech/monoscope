@@ -495,7 +495,7 @@ apiLogH pid queryM' cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM
         (Just "resultTable", Just "true", _, _) -> addRespHeaders $ LogsGetResultTable page False
         (Just "virtualTable", _, _, _) -> addRespHeaders $ LogsGetVirtuaTable page
         (Just "all", Just "true", _, Nothing) -> addRespHeaders $ LogsGetResultTable page True
-        (_, _, _, Just _) -> addRespHeaders $ LogsGetJson requestVecs colors nextLogsURL resetLogsURL recentLogsURL
+        (_, _, _, Just _) -> addRespHeaders $ LogsGetJson requestVecs colors nextLogsURL resetLogsURL recentLogsURL curatedColNames colIdxMap
         _ -> addRespHeaders $ LogPage $ PageCtx bwconf page
     Nothing -> do
       case (layoutM, hxRequestM, hxBoostedM) of
@@ -515,7 +515,7 @@ data LogsGet
   | LogsGetVirtuaTable ApiLogsPageData
   | LogsGetError (PageCtx Text)
   | LogsGetErrorSimple Text
-  | LogsGetJson (V.Vector (V.Vector AE.Value)) (HM.HashMap Text Text) Text Text Text
+  | LogsGetJson (V.Vector (V.Vector AE.Value)) (HM.HashMap Text Text) Text Text Text [Text] (HM.HashMap Text Int)
   | LogsQueryLibrary Projects.ProjectId (V.Vector Projects.QueryLibItem) (V.Vector Projects.QueryLibItem)
 
 
@@ -526,12 +526,12 @@ instance ToHtml LogsGet where
   toHtml (LogsGetErrorSimple err) = span_ [class_ "text-textError"] $ toHtml err
   toHtml (LogsGetError (PageCtx conf err)) = toHtml $ PageCtx conf err
   toHtml (LogsQueryLibrary pid queryLibSaved queryLibRecent) = toHtml $ queryLibrary_ pid queryLibSaved queryLibRecent
-  toHtml (LogsGetJson vecs colors nextLogsURL resetLogsURL recentLogsURL) = span_ [] $ show $ AE.object ["logsData" AE..= vecs, "serviceColors" AE..= colors, "nextUrl" AE..= nextLogsURL, "resetLogsUrl" AE..= resetLogsURL, "recentUrl" AE..= recentLogsURL]
+  toHtml (LogsGetJson vecs colors nextLogsURL resetLogsURL recentLogsURL cols colIdxMap) = span_ [] $ show $ AE.object ["logsData" AE..= vecs, "serviceColors" AE..= colors, "nextUrl" AE..= nextLogsURL, "resetLogsUrl" AE..= resetLogsURL, "recentUrl" AE..= recentLogsURL]
   toHtmlRaw = toHtml
 
 
 instance AE.ToJSON LogsGet where
-  toJSON (LogsGetJson vecs colors nextLogsURL resetLogsURL recentLogsURL) = AE.object ["logsData" AE..= vecs, "serviceColors" AE..= colors, "nextUrl" AE..= nextLogsURL, "resetLogsUrl" AE..= resetLogsURL, "recentUrl" AE..= recentLogsURL]
+  toJSON (LogsGetJson vecs colors nextLogsURL resetLogsURL recentLogsURL cols colIdxMap) = AE.object ["logsData" AE..= vecs, "serviceColors" AE..= colors, "nextUrl" AE..= nextLogsURL, "resetLogsUrl" AE..= resetLogsURL, "recentUrl" AE..= recentLogsURL, "cols" AE..= cols, "colIdxMap" AE..= colIdxMap]
   toJSON _ = AE.object []
 
 
@@ -581,6 +581,10 @@ virtualTableTrigger page = do
       [text|
         if(window.logListTable) {
            window.logListTable.updateTableData($vecs, $cols, $colIdxMap, $serviceColors, $nextLogsURL, $recentFetchUrl)
+           setTimeout(()=> {
+           tippy('[data-tippy-content]').forEach(t => t.destroy());
+           tippy('[data-tippy-content]');
+           },100)
           }
     |]
 
