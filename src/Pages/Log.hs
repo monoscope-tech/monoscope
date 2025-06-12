@@ -264,6 +264,11 @@ renderFacets facetSummary = do
                     $ a_
                       [ term "data-key" key
                       , term "data-field" (T.replace "___" "." key)
+                      , hxGet_ $ "/p/" <> facetSummary.projectId <> "/log_explorer"
+                      , hxPushUrl_ "true"
+                      , hxVals_ "js:{...{layout:'resultTable',cols:toggleColumnToSummary(event), ...params()}}"
+                      , hxTarget_ "#resultTableInner"
+                      , hxSwap_ "outerHTML"
                       , [__|init set fp to @data-field then
                                 if params().cols.split(",").includes(fp) then set my innerHTML to 'Remove column' end
                           |]
@@ -353,7 +358,7 @@ resizer_ targetId urlParam increasingDirection =
     do
       div_
         [ id_ $ "resizer-" <> urlParam
-        , class_ $ "absolute left-1/2 top-1/2 z-50 -translate-x-1/2 leading-none py-1 -translate-y-1/2 bg-slate-50 rounded-sm border border-strokeBrand-weak group-hover:border-strokeBrand-strong text-iconNeutral group-hover:text-iconBrand"
+        , class_ $ "absolute left-1/2 top-1/2 z-50 -translate-x-1/2 leading-none py-1 -translate-y-1/2 bg-bgBase rounded-sm border border-strokeBrand-weak group-hover:border-strokeBrand-strong text-iconNeutral group-hover:text-iconBrand"
         ]
         $ faSprite_ "grip-dots-vertical" "regular" "w-4 h-5"
 
@@ -510,7 +515,7 @@ instance ToHtml LogsGet where
   toHtml (LogPage (PageCtx conf pa_dat)) = toHtml $ PageCtx conf $ apiLogsPage pa_dat
   toHtml (LogsGetResultTable page bol) = toHtml $ virtualTableTrigger page
   toHtml (LogsGetVirtuaTable page) = toHtml $ virtualTable page
-  toHtml (LogsGetErrorSimple err) = span_ [class_ "text-red-500"] $ toHtml err
+  toHtml (LogsGetErrorSimple err) = span_ [class_ "text-textError"] $ toHtml err
   toHtml (LogsGetError (PageCtx conf err)) = toHtml $ PageCtx conf err
   toHtml (LogsQueryLibrary pid queryLibSaved queryLibRecent) = toHtml $ queryLibrary_ pid queryLibSaved queryLibRecent
   toHtml (LogsGetJson vecs colors nextLogsURL resetLogsURL recentLogsURL) = span_ [] $ show $ AE.object ["logsData" AE..= vecs, "serviceColors" AE..= colors, "nextUrl" AE..= nextLogsURL, "resetLogsUrl" AE..= resetLogsURL, "recentUrl" AE..= recentLogsURL]
@@ -709,7 +714,7 @@ apiLogsPage page = do
       let dW = fromMaybe "100%" page.detailsWidth
           showTrace = isJust page.showTrace
       div_ [class_ "grow relative flex flex-col shrink-1 min-w-0 w-full h-full", style_ $ "xwidth: " <> dW, id_ "logs_list_container"] do
-        div_ [class_ "flex gap-2  pt-1 text-sm -mb-6 z-10 w-max"] do
+        div_ [class_ "flex gap-2  pt-1 text-sm -mb-6 z-10 w-max bg-bgBase"] do
           label_ [class_ "gap-1 flex items-center cursor-pointer"] do
             faSprite_ "side-chevron-left-in-box" "regular" "w-4 h-4 group-has-[.toggle-filters:checked]/pg:rotate-180 "
             span_ [class_ "hidden group-has-[.toggle-filters:checked]/pg:block"] "Show"
@@ -717,8 +722,8 @@ apiLogsPage page = do
             "filters"
             input_ [type_ "checkbox", class_ "toggle-filters hidden", id_ "toggle-filters", onchange_ "localStorage.setItem('toggle-filter-checked', this.checked)"]
             script_ "document.getElementById('toggle-filters').checked = localStorage.getItem('toggle-filter-checked') === 'true';"
-          span_ [class_ "text-slate-200"] "|"
-          div_ [class_ ""] $ span_ [class_ "text-slate-950"] (toHtml $ prettyPrintCount page.resultCount) >> span_ [class_ "text-slate-600"] (toHtml (" rows found"))
+          span_ [class_ "text-textWeak "] "|"
+          div_ [class_ ""] $ span_ [class_ "text-textStrong"] (toHtml $ prettyPrintCount page.resultCount) >> span_ [class_ "text-textStrong"] (toHtml (" rows found"))
         div_ [class_ $ "absolute top-0 right-0  w-full h-full overflow-scroll c-scroll z-50 bg-white transition-all duration-100 " <> if showTrace then "" else "hidden", id_ "trace_expanded_view"] do
           whenJust page.showTrace \trId -> do
             let url = "/p/" <> page.pid.toText <> "/traces/" <> trId
@@ -851,11 +856,11 @@ aiSearchH _pid requestBody = do
               if "Please provide a query"
                 `T.isInfixOf` cleanedQuery
                 || "I need more"
-                `T.isInfixOf` cleanedQuery
+                  `T.isInfixOf` cleanedQuery
                 || "Could you please"
-                `T.isInfixOf` cleanedQuery
+                  `T.isInfixOf` cleanedQuery
                 || T.length cleanedQuery
-                < 3
+                  < 3
                 then pure $ Left "INVALID_QUERY_ERROR"
                 else pure $ Right (cleanedQuery, vizTypeM)
 
@@ -981,47 +986,30 @@ curateCols summaryCols cols = sortBy sortAccordingly filteredCols
 jsonTreeAuxillaryCode :: Projects.ProjectId -> Maybe Text -> Html ()
 jsonTreeAuxillaryCode pid query = do
   template_ [id_ "log-item-context-menu-tmpl"] do
-    div_ [id_ "log-item-context-menu", class_ "log-item-context-menu  origin-top-right absolute left-0 mt-2 w-56 rounded-md shadow-md shadow-slate-300 bg-bgBase ring-1 ring-black ring-opacity-5 divide-y divide-gray-100 focus:outline-hidden z-10", role_ "menu", tabindex_ "-1"] do
-      div_ [class_ "py-1", role_ "none"] do
-        a_
-          [ class_ "cursor-pointer text-slate-700 block px-4 py-1  hover:bg-gray-100 hover:text-slate-900"
-          , role_ "menuitem"
-          , tabindex_ "-1"
+    ul_ [id_ "log-item-context-menu", class_ "log-item-context-menu origin-top-right absolute left-0 dropdown-content z-10 menu p-2 shadow bg-base-100 rounded-box w-52", tabindex_ "0"] do
+      li_
+        $ a_
+          [ term "data-field-path" ""
           , hxGet_ $ "/p/" <> pid.toText <> "/log_explorer"
           , hxPushUrl_ "true"
           , hxVals_ "js:{...{layout:'resultTable',cols:toggleColumnToSummary(event), ...params()}}"
           , hxTarget_ "#resultTableInner"
           , hxSwap_ "outerHTML"
-          , -- , hxIndicator_ "#query-indicator"
-            [__|init set fp to (closest @data-field-path) then
-                  if params().cols.split(",").includes(fp) then set my innerHTML to 'Remove column' end|]
+          , [__|init set fp to (closest @data-field-path) then
+              if params().cols.split(",").includes(fp) then set my innerHTML to 'Remove column' end|]
           ]
-          "Add field as Column"
-        a_
-          [ class_ "cursor-pointer text-slate-700 block px-4 py-1  hover:bg-gray-100 hover:text-slate-900"
-          , role_ "menuitem"
-          , tabindex_ "-1"
-          , [__|on click if 'clipboard' in window.navigator then
-                    call navigator.clipboard.writeText((previous <.log-item-field-value/>)'s innerText)
-                    send successToast(value:['Value has been added to the Clipboard']) to <body/>
-                    halt
-                  end|]
+          "Add as table column"
+      li_
+        $ a_
+          [ [__|on click if 'clipboard' in window.navigator then
+                call navigator.clipboard.writeText((previous <.log-item-field-value/>)'s innerText)
+                send successToast(value:['Value has been added to the Clipboard']) to <body/>
+                halt
+              end|]
           ]
           "Copy field value"
-        button_
-          [ class_ "cursor-pointer w-full text-left text-slate-700 block px-4 py-1  hover:bg-gray-100 hover:text-slate-900"
-          , role_ "menuitem"
-          , tabindex_ "-1"
-          , onclick_ "filterByField(event, 'Eq')"
-          ]
-          "Filter by field"
-        button_
-          [ class_ "cursor-pointer w-full text-left text-slate-700 block px-4 py-1  hover:bg-gray-100 hover:text-slate-900"
-          , role_ "menuitem"
-          , tabindex_ "-1"
-          , onclick_ "filterByField(event, 'NotEq')"
-          ]
-          "Exclude field"
+      li_ $ a_ [onclick_ "filterByField(event, 'Eq')"] "Filter by field"
+      li_ $ a_ [onclick_ "filterByField(event, 'NotEq')"] "Exclude field"
 
   script_
     [text|
@@ -1053,12 +1041,12 @@ jsonTreeAuxillaryCode pid query = do
 
     var toggleColumnToSummary = (e)=>{
       const cols = (params().cols||"").split(",").filter(x=>x!="");
-      const subject = e.target.closest('.log-item-field-parent').dataset.fieldPath;
-      if (cols.includes(subject)) {
-        return [...new Set(cols.filter(x=>x!=subject))].join(",");
-      }
-      cols.push(subject)
-      return [... new Set (cols)].join (",")
+      const subject = (e.target.closest('.log-item-field-parent')?.dataset.fieldPath || e.target.dataset.field);
+      return subject ? 
+        [...new Set(cols.includes(subject) ? 
+          cols.filter(x=>x!=subject) : 
+          [...cols, subject])].join(",") : 
+        cols.join(",");
     }
 
 
