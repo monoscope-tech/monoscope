@@ -42,12 +42,6 @@ import Models.Users.Users
 import NeatInterpolation (text)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
 import Pages.Components
-import Pages.IntegrationDemos.Csharp (csharpGuide)
-import Pages.IntegrationDemos.Golang (golangGuide)
-import Pages.IntegrationDemos.Java (javaGuide)
-import Pages.IntegrationDemos.Javascript (javascriptGuide)
-import Pages.IntegrationDemos.Php (phpGuide)
-import Pages.IntegrationDemos.Python (pythonGuide)
 import Pkg.Mail (sendDiscordNotif)
 import PyF (fmt)
 import Relude hiding (ask)
@@ -303,6 +297,68 @@ pricingPage pid lemon critical paymentPlan = do
           faQ "What makes us better than others?" "Aside the observerbility features like traces, logs, metrics etc. APItoolkit takes it a step further by monitoring request payloads for both incoming and outgoing requests, automatic error reportings like sentry and payload changes detections which gives engineering teams with all the information the need to seamlessly debug and fix issues in their servers."
 
 
+langs :: [(Text, Text, [(Text, Text, Text)])]
+langs =
+  [
+    ( "js"
+    , "Javascript"
+    ,
+      [ ("AdonisJS", "adonis-icon.svg", "nodejs/adonisjs")
+      , ("ExpressJS", "express-icon.png", "nodejs/expressjs")
+      , ("Fastify", "fastify-icon.png", "nodejs/fastifyjs")
+      , ("NestJS", "nest-icon.png", "nodejs/nestjs")
+      , ("NextJS", "next-icon.svg", "nodejs/nextjs")
+      ]
+    )
+  ,
+    ( "go"
+    , "Golang"
+    ,
+      [ ("Go Chi", "chi-logo.svg", "golang/chi")
+      , ("Go Echo", "echo-logo.png", "golang/echo")
+      , ("Go Fiber", "fiber-logo.svg", "golang/fiber")
+      , ("Go Gin", "gin-logo.png", "golang/gin")
+      , ("Go Gorilla Mux", "mux-logo.png", "golang/gorillamux")
+      , ("Go Native", "go-logo.svg", "golang/native")
+      ]
+    )
+  ,
+    ( "py"
+    , "Python"
+    ,
+      [ ("Django", "django-icon.png", "python/django")
+      , ("FastAPI", "fastapi-icon.png", "python/fastapi")
+      , ("Flask", "flask-icon.png", "python/flask")
+      , ("Pyramid", "pyramid-icon.png", "python/pyramid")
+      ]
+    )
+  ,
+    ( "elixir"
+    , "Elixir"
+    , [("Phoenix", "phoenix-logo.png", "elixir/phoenix")]
+    )
+  ,
+    ( "php"
+    , "PHP"
+    ,
+      [ ("Laravel", "laravel-icon.png", "php/laravel")
+      , ("Slim", "slim-icon.png", "php/slim")
+      , ("Symfony", "symfony-icon.png", "php/symfony")
+      ]
+    )
+  ,
+    ( "java"
+    , "Java"
+    , [("Spring Boot", "springboot-logo.svg", "java/springboot")]
+    )
+  ,
+    ( "cs"
+    , "C#"
+    , [(".Net Core", "netcore-logo.png", "dotnet/dotnetcore")]
+    )
+  ]
+
+
 integrationsPage :: Projects.ProjectId -> Text -> Html ()
 integrationsPage pid apikey =
   div_ [class_ "w-full bg-[#0068ff]/5 flex h-full"] $ do
@@ -314,8 +370,7 @@ integrationsPage pid apikey =
             p_ [class_ " text-textStrong"] "Send Logs, Metrics or Traces. Click proceed when you’re done integrating your applications. learn more"
             div_ [class_ "flex flex-col gap-4 "] $ do
               div_ [class_ "flex flex-col gap-2"] do
-                let langs = [("js", "Javascript") :: (Text, Text), ("go", "Golang"), ("py", "Python"), ("php", "PHP"), ("java", "Java"), ("cs", "C#")]
-                forM_ langs $ \(lang, langName) -> languageItem pid langName lang
+                forM_ langs \(lang, langName, _) -> languageItem pid langName lang
             div_ [class_ "flex items-center gap-4"] do
               button_ [class_ "btn btn-primary cursor-pointer", hxGet_ $ "/p/" <> pid.toText <> "/onboarding/integration-check", hxSwap_ "none", hxIndicator_ "#loadingIndicator"] "Confirm & Proceed"
               a_
@@ -326,13 +381,7 @@ integrationsPage pid apikey =
                 "Skip"
     div_ [class_ "w-1/2 flex items-center px-12"] do
       div_ [class_ "rounded-2xl w-[750px] bg-white flex justify-between items-center h-[90vh]"] do
-        div_ [class_ "w-full h-full overflow-y-auto p-6"] do
-          javascriptGuide apikey
-          golangGuide apikey
-          pythonGuide apikey
-          phpGuide apikey
-          csharpGuide apikey
-          javaGuide apikey
+        div_ [class_ "w-full h-full overflow-y-auto p-6"] "Loading Guide"
     script_
       [text|
       function toggleCheckbox(event) {
