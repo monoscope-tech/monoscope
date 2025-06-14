@@ -303,66 +303,122 @@ pricingPage pid lemon critical paymentPlan = do
           faQ "What makes us better than others?" "Aside the observerbility features like traces, logs, metrics etc. APItoolkit takes it a step further by monitoring request payloads for both incoming and outgoing requests, automatic error reportings like sentry and payload changes detections which gives engineering teams with all the information the need to seamlessly debug and fix issues in their servers."
 
 
-langs :: [(Text, Text, [(Text, Text, Text)])]
-langs =
+-- Group is a tuple of (Group Name, List of languages in that group)
+integrationGroups :: [(Text, [(Text, Text, [(Text, Text, Text)])])]
+integrationGroups =
   [
-    ( "js"
-    , "Javascript"
+    ( "Applications"
     ,
-      [ ("ExpressJS", "express-icon.png", "nodejs/expressjs")
-      , ("AdonisJS", "adonis-icon.svg", "nodejs/adonisjs")
-      , ("Fastify", "fastify-icon.png", "nodejs/fastifyjs")
-      , ("NestJS", "nest-icon.png", "nodejs/nestjs")
-      , ("NextJS", "next-icon.svg", "nodejs/nextjs")
+      [
+        ( "js"
+        , "Javascript"
+        ,
+          [ ("ExpressJS", "express-icon.png", "nodejs/expressjs")
+          , ("AdonisJS", "adonis-icon.svg", "nodejs/adonisjs")
+          , ("Fastify", "fastify-icon.png", "nodejs/fastifyjs")
+          , ("NestJS", "nest-icon.png", "nodejs/nestjs")
+          , ("NextJS", "next-icon.svg", "nodejs/nextjs")
+          ]
+        )
+      ,
+        ( "go"
+        , "Golang"
+        ,
+          [ ("Chi", "chi-logo.svg", "golang/chi")
+          , ("Echo", "echo-logo.png", "golang/echo")
+          , ("Fiber", "fiber-logo.svg", "golang/fiber")
+          , ("Gin", "gin-logo.png", "golang/gin")
+          , ("Gorilla Mux", "mux-logo.png", "golang/gorillamux")
+          , ("Native", "go-logo.svg", "golang/native")
+          ]
+        )
+      ,
+        ( "py"
+        , "Python"
+        ,
+          [ ("Django", "django-icon.png", "python/django")
+          , ("FastAPI", "fastapi-icon.png", "python/fastapi")
+          , ("Flask", "flask-icon.png", "python/flask")
+          , ("Pyramid", "pyramid-icon.png", "python/pyramid")
+          ]
+        )
+      ,
+        ( "elixir"
+        , "Elixir"
+        , [("Phoenix", "phoenix-logo.png", "elixir/phoenix")]
+        )
+      ,
+        ( "php"
+        , "PHP"
+        ,
+          [ ("Laravel", "laravel-icon.png", "php/laravel")
+          , ("Slim", "slim-icon.png", "php/slim")
+          , ("Symfony", "symfony-icon.png", "php/symfony")
+          ]
+        )
+      ,
+        ( "java"
+        , "Java"
+        , [("Spring Boot", "springboot-logo.svg", "java/springboot")]
+        )
+      ,
+        ( "cs"
+        , "C#"
+        , [(".Net Core", "netcore-logo.png", "dotnet/dotnetcore")]
+        )
       ]
     )
   ,
-    ( "go"
-    , "Golang"
+    ( "Infrastructure"
     ,
-      [ ("Chi", "chi-logo.svg", "golang/chi")
-      , ("Echo", "echo-logo.png", "golang/echo")
-      , ("Fiber", "fiber-logo.svg", "golang/fiber")
-      , ("Gin", "gin-logo.png", "golang/gin")
-      , ("Gorilla Mux", "mux-logo.png", "golang/gorillamux")
-      , ("Native", "go-logo.svg", "golang/native")
+      [
+        ( "linux"
+        , "Linux"
+        , [("Linux", "linux-logo.svg", "infrastructure/linux")]
+        )
+      ,
+        ( "docker"
+        , "Docker"
+        , [("Docker", "docker-logo.svg", "infrastructure/docker")]
+        )
+      ,
+        ( "kubernetes"
+        , "Kubernetes"
+        , [("Kubernetes", "kubernetes-logo.svg", "infrastructure/kubernetes")]
+        )
+      ,
+        ( "kafka"
+        , "Kafka"
+        , [("Kafka", "kafka-logo.svg", "infrastructure/kafka")]
+        )
       ]
     )
   ,
-    ( "py"
-    , "Python"
+    ( "Databases"
     ,
-      [ ("Django", "django-icon.png", "python/django")
-      , ("FastAPI", "fastapi-icon.png", "python/fastapi")
-      , ("Flask", "flask-icon.png", "python/flask")
-      , ("Pyramid", "pyramid-icon.png", "python/pyramid")
+      [
+        ( "postgres"
+        , "PostgreSQL"
+        , [("PostgreSQL", "postgres-logo.svg", "databases/postgres")]
+        )
+      ,
+        ( "mongodb"
+        , "MongoDB"
+        , [("MongoDB", "mongodb-logo.svg", "databases/mongodb")]
+        )
+      ,
+        ( "mysql"
+        , "MySQL"
+        , [("MySQL", "mysql-logo.svg", "databases/mysql")]
+        )
       ]
-    )
-  ,
-    ( "elixir"
-    , "Elixir"
-    , [("Phoenix", "phoenix-logo.png", "elixir/phoenix")]
-    )
-  ,
-    ( "php"
-    , "PHP"
-    ,
-      [ ("Laravel", "laravel-icon.png", "php/laravel")
-      , ("Slim", "slim-icon.png", "php/slim")
-      , ("Symfony", "symfony-icon.png", "php/symfony")
-      ]
-    )
-  ,
-    ( "java"
-    , "Java"
-    , [("Spring Boot", "springboot-logo.svg", "java/springboot")]
-    )
-  ,
-    ( "cs"
-    , "C#"
-    , [(".Net Core", "netcore-logo.png", "dotnet/dotnetcore")]
     )
   ]
+
+
+-- Flat list of all languages for backward compatibility
+langs :: [(Text, Text, [(Text, Text, Text)])]
+langs = concatMap snd integrationGroups
 
 
 -- IMPORtANT: DO NOT DELETE. Needed for the tailwindcss to generate classes.
@@ -377,25 +433,33 @@ integrationsPage pid apikey =
       div_ [class_ " bg-white ml-auto"] do
         div_ [class_ "flex-col gap-4 flex w-full"] do
           div_ [class_ "max-w-[550px]"] $ stepIndicator 5 "Instrument your apps or servers" $ "/p/" <> pid.toText <> "/onboarding?step=NotifChannel"
-          div_ [class_ "flex-col w-full gap-8 flex mt-4"] do
+          div_ [class_ "flex-col w-full gap-4 flex mt-4"] do
             p_ [class_ " text-textStrong"] do
               "Send Logs, Metrics or Traces. Select an item below for instructions. "
               br_ []
               "Click proceed when you're done integrating your applications."
-            
+
             div_ [class_ "my-6 p-4 bg-fillWeak border border-[#001066]/10 rounded-xl"] do
               div_ [class_ "mb-2 text-textStrong font-semibold"] "Your API Key"
               div_ [class_ "flex items-center gap-2"] do
                 div_ [class_ "flex-1 font-mono bg-bgBase p-3 border border-[#001066]/10 rounded-lg overflow-x-auto", id_ "api-key-display"] $ toHtml apikey
-                button_ 
+                button_
                   [ class_ "px-3 py-2 bg-fillStrong rounded-lg text-white flex items-center gap-1 hover:bg-fillStronger"
                   , type_ "button"
                   , onclick_ "navigator.clipboard.writeText(document.getElementById('api-key-display').textContent); this.innerHTML = '<span>Copied!</span><svg class=\"h-4 w-4\" xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\"><path d=\"M5 13l4 4L19 7\"></path></svg>';"
-                  ] do
+                  ]
+                  do
                     span_ "Copy"
                     faSprite_ "copy" "regular" "h-4 w-4"
-            
-            div_ [class_ "grid grid-cols-2 gap-2"] $ forM_ langs \(lang, langName, _) -> languageItem pid langName lang
+
+            -- Display integration groups
+            forM_ integrationGroups \(groupName, langsList) -> do
+              div_ [class_ "mb-6"] do
+                div_ [class_ "text-textStrong font-semibold text-xl mb-2"] $ toHtml groupName
+                div_ [class_ "grid grid-cols-2 gap-2"]
+                  $ forM_ langsList \(lang, langName, _) ->
+                    languageItem pid langName lang
+
             div_ [class_ "flex items-center gap-4"] do
               button_ [class_ "btn btn-primary cursor-pointer", hxGet_ $ "/p/" <> pid.toText <> "/onboarding/integration-check", hxSwap_ "none", hxIndicator_ "#loadingIndicator"] "Confirm & Proceed"
               a_
@@ -406,10 +470,11 @@ integrationsPage pid apikey =
                 "Skip"
     div_ [class_ "w-1/2 flex items-center px-12"] do
       div_ [class_ "rounded-2xl w-full blue-gradient-box bg-bgBase flex flex-col justify-between items-center h-[90vh]"] do
-        div_ [class_ "w-full h-full overflow-y-auto"]
-          $ forM_ langs \(lang, langName, frameworks) ->
+        div_ [class_ "w-full h-full overflow-y-auto"] do
+          -- Display language guides for all languages
+          forM_ langs \(lang, langName, frameworks) ->
             div_ [class_ $ "p-4 lang-guide hidden group-has-[#check-" <> lang <> ":checked]/pg:block", id_ $ lang <> "_main"] do
-              div_ [class_ "px-8 sticky  top-0 z-10"]
+              div_ [class_ "px-8 sticky top-0 z-10"]
                 $ div_ [class_ "inline-block tabs tabs-box tabs-outline p-0 bg-bgBase text-textWeak border ", role_ "tablist"]
                 $ forM_ (zip [0 ..] frameworks) \(idx, (fwName, fwIcon, fwPath)) ->
                   label_ [class_ "tab gap-2 items-center", Lucid.for_ $ "fw-tab-" <> lang <> "-" <> show idx] do
@@ -450,8 +515,13 @@ languageItem pid lang ext = do
     [ class_ "group/li cols-span-1 h-12 px-3 py-2 bg-[#00157f]/0 rounded-xl border border-[#001066]/10 justify-start items-center gap-3 inline-flex cursor-pointer"
     ]
     do
-      input_ [type_ "checkbox", class_ "checkbox shrink-0", id_ $ "check-" <> ext, value_ ext, 
-              onchange_ $ "if(this.checked) { document.getElementById('" <> ext <> "_main').scrollIntoView({behavior: 'smooth'}); }"]
+      input_
+        [ type_ "checkbox"
+        , class_ "checkbox shrink-0"
+        , id_ $ "check-" <> ext
+        , value_ ext
+        , onchange_ $ "if(this.checked) { document.getElementById('" <> ext <> "_main').scrollIntoView({behavior: 'smooth'}); }"
+        ]
       div_ [class_ "flex w-full items-center justify-between"] do
         div_ [class_ "flex items-center gap-2 text-sm font-semibold"] do
           img_ [class_ "h-5 w-5", src_ $ "/public/assets/svgs/" <> ext <> ".svg"]
@@ -753,7 +823,7 @@ stepIndicator :: Int -> Text -> Text -> Html ()
 stepIndicator step title prevUrl = do
   universalIndicator
   div_ [class_ "flex-col gap-4 flex w-full"] $ do
-    a_ [href_ $ "/", class_ "absolute top-10 left-10"] do
+    a_ [href_ $ "/", class_ "absolute top-10 left-10 py-2 pr-2 bg-bgBase rounded-xs"] do
       img_ [class_ "h-7", src_ "/public/assets/svgs/logo.svg"]
     div_ [class_ "flex-col gap-2 flex w-full"] $ do
       div_ [class_ " text-textStrong text-base font-semibold"] $ "Step " <> show step <> " of 6"
