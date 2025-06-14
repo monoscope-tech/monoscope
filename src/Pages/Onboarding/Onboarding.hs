@@ -374,22 +374,22 @@ integrationGroups =
       [
         ( "linux"
         , "Linux"
-        , [("Linux", "linux-logo.svg", "infrastructure/linux")]
+        , [("Linux", "linux.svg", "infrastructure/linux")]
         )
       ,
         ( "docker"
         , "Docker"
-        , [("Docker", "docker-logo.svg", "infrastructure/docker")]
+        , [("Docker", "docker.svg", "infrastructure/docker")]
         )
       ,
         ( "kubernetes"
         , "Kubernetes"
-        , [("Kubernetes", "kubernetes-logo.svg", "infrastructure/kubernetes")]
+        , [("Kubernetes", "kubernetes.svg", "infrastructure/kubernetes")]
         )
       ,
         ( "kafka"
         , "Kafka"
-        , [("Kafka", "kafka-logo.svg", "infrastructure/kafka")]
+        , [("Kafka", "kafka.svg", "infrastructure/kafka")]
         )
       ]
     )
@@ -397,116 +397,111 @@ integrationGroups =
     ( "Databases"
     ,
       [
-        ( "postgres"
+        ( "postgresql"
         , "PostgreSQL"
-        , [("PostgreSQL", "postgres-logo.svg", "databases/postgres")]
+        , [("PostgreSQL", "postgresql.svg", "databases/postgres")]
         )
       ,
         ( "mongodb"
         , "MongoDB"
-        , [("MongoDB", "mongodb-logo.svg", "databases/mongodb")]
+        , [("MongoDB", "mongodb.svg", "databases/mongodb")]
         )
       ,
         ( "mysql"
         , "MySQL"
-        , [("MySQL", "mysql-logo.svg", "databases/mysql")]
+        , [("MySQL", "mysql.svg", "databases/mysql")]
         )
       ]
     )
   ]
 
 
--- Flat list of all languages for backward compatibility
-langs :: [(Text, Text, [(Text, Text, Text)])]
-langs = concatMap snd integrationGroups
-
-
 -- IMPORtANT: DO NOT DELETE. Needed for the tailwindcss to generate classes.
 -- [class_ "group-has-[#check-js:checked]/pg:block group-has-[#check-go:checked]/pg:block group-has-[#check-elixir:checked]/pg:block group-has-[#check-py:checked]/pg:block group-has-[#check-java:checked]/pg:block"]
 -- [class_ "group-has-[#check-php:checked]/pg:block group-has-[#check-cs:checked]/pg:block"]
+-- [class_ "group-has-[#check-linux:checked]/pg:block group-has-[#check-docker:checked]/pg:block group-has-[#check-kubernetes:checked]/pg:block group-has-[#check-kafka:checked]/pg:block"]
+-- [class_ "group-has-[#check-postgresql:checked]/pg:block group-has-[#check-mongodb:checked]/pg:block group-has-[#check-mysql:checked]/pg:block"]
 -- [class_ "text-left pb-12 prose prose-slate dark:prose-invert prose-headings:font-medium prose-a:text-secondary prose-a:underline prose-a:underline-offset-4 prose-img:w-full prose-img:rounded-md prose-img:drop-shadow-md prose-img:border prose-img:border-base-200 prose-p:leading-relaxed prose-headings:scroll-mt-40 prose-pre:p-0 before:prose-li:bg-secondary before:prose-li:text-secondary prose-strong:font-medium prose-secondary w-full"]
 
 integrationsPage :: Projects.ProjectId -> Text -> Html ()
 integrationsPage pid apikey =
   div_ [class_ "w-full flex h-full group/pg"] do
-    div_ [class_ "w-1/2 bg-white pt-[156px] h-full px-12 border-r border-weak"] do
-      div_ [class_ " bg-white ml-auto"] do
-        div_ [class_ "flex-col gap-4 flex w-full"] do
-          div_ [class_ "max-w-[550px]"] $ stepIndicator 5 "Instrument your apps or servers" $ "/p/" <> pid.toText <> "/onboarding?step=NotifChannel"
-          div_ [class_ "flex-col w-full gap-4 flex mt-4"] do
-            p_ [class_ " text-textStrong"] do
-              "Send Logs, Metrics or Traces. Select an item below for instructions. "
-              br_ []
-              "Click proceed when you're done integrating your applications."
+    div_ [class_ "w-1/2 bg-white pt-[156px] h-full px-12 pb-24 border-r border-weak flex flex-col gap-4"] do
+      div_ [class_ "max-w-[550px]"] $ stepIndicator 5 "Instrument your apps or servers" $ "/p/" <> pid.toText <> "/onboarding?step=NotifChannel"
+      div_ [class_ "flex-col w-full gap-4 flex mt-4"] do
+        p_ [class_ " text-textStrong"] do
+          "Send Logs, Metrics or Traces. Select an item below for instructions. "
+          br_ []
+          "Click proceed when you're done integrating your applications."
 
-            div_ [class_ "my-6 p-4 bg-fillWeak border border-[#001066]/10 rounded-xl"] do
-              div_ [class_ "mb-2 text-textStrong font-semibold"] "Your API Key"
-              div_ [class_ "flex items-center gap-2"] do
-                div_ [class_ "flex-1 font-mono bg-bgBase p-3 border border-[#001066]/10 rounded-lg overflow-x-auto", id_ "api-key-display"] $ toHtml apikey
-                button_
-                  [ class_ "px-3 py-2 bg-fillStrong rounded-lg text-white flex items-center gap-1 hover:bg-fillStronger"
-                  , type_ "button"
-                  , onclick_ "navigator.clipboard.writeText(document.getElementById('api-key-display').textContent); this.innerHTML = '<span>Copied!</span><svg class=\"h-4 w-4\" xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\"><path d=\"M5 13l4 4L19 7\"></path></svg>';"
-                  ]
-                  do
-                    span_ "Copy"
-                    faSprite_ "copy" "regular" "h-4 w-4"
+        div_ [class_ "my-6 p-4 bg-fillWeak border border-[#001066]/10 rounded-xl"] do
+          div_ [class_ "mb-2 text-textStrong font-semibold"] "Your API Key"
+          div_ [class_ "flex items-center gap-2"] do
+            div_ [class_ "flex-1 font-mono bg-bgBase p-3 border border-[#001066]/10 rounded-lg overflow-x-auto", id_ "api-key-display"] $ toHtml apikey
+            button_
+              [ class_ "px-3 py-2 bg-fillStrong rounded-lg text-white flex items-center gap-1 hover:bg-fillStronger"
+              , type_ "button"
+              , onclick_ "navigator.clipboard.writeText(document.getElementById('api-key-display').textContent); this.innerHTML = '<span>Copied!</span><svg class=\"h-4 w-4\" xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\"><path d=\"M5 13l4 4L19 7\"></path></svg>';"
+              ]
+              do
+                span_ "Copy"
+                faSprite_ "copy" "regular" "h-4 w-4"
 
-            -- Display integration groups
-            forM_ integrationGroups \(groupName, langsList) -> do
-              div_ [class_ "mb-6"] do
-                div_ [class_ "text-textStrong font-semibold text-xl mb-2"] $ toHtml groupName
-                div_ [class_ "grid grid-cols-2 gap-2"]
-                  $ forM_ langsList \(lang, langName, _) ->
-                    languageItem pid langName lang
+        -- Display integration groups
+        forM_ integrationGroups \(groupName, langsList) -> div_ [class_ "mb-6"] do
+          div_ [class_ "text-textStrong font-semibold text-xl mb-2"] $ toHtml groupName
+          div_ [class_ "grid grid-cols-2 gap-2"]
+            $ forM_ langsList \(lang, langName, _) ->
+              languageItem pid langName lang
 
-            div_ [class_ "flex items-center gap-4"] do
-              button_ [class_ "btn btn-primary cursor-pointer", hxGet_ $ "/p/" <> pid.toText <> "/onboarding/integration-check", hxSwap_ "none", hxIndicator_ "#loadingIndicator"] "Confirm & Proceed"
-              a_
-                [ class_ "px-2 h-14 flex items-center underline text-brand text-xl font-semibold"
-                , type_ "button"
-                , hxPost_ $ "/p/" <> pid.toText <> "/onboarding/skip?step=Integration"
-                ]
-                "Skip"
+        div_ [class_ "flex items-center gap-4 pb-24"] do
+          button_ [class_ "btn btn-primary cursor-pointer", hxGet_ $ "/p/" <> pid.toText <> "/onboarding/integration-check", hxSwap_ "none", hxIndicator_ "#loadingIndicator"] "Confirm & Proceed"
+          a_
+            [ class_ "px-2 h-14 flex items-center underline text-brand text-xl font-semibold"
+            , type_ "button"
+            , hxPost_ $ "/p/" <> pid.toText <> "/onboarding/skip?step=Integration"
+            ]
+            "Skip"
     div_ [class_ "w-1/2 flex items-center px-12"] do
       div_ [class_ "rounded-2xl w-full blue-gradient-box bg-bgBase flex flex-col justify-between items-center h-[90vh]"] do
         div_ [class_ "w-full h-full overflow-y-auto"] do
-          -- Display language guides for all languages
-          forM_ langs \(lang, langName, frameworks) ->
-            div_ [class_ $ "p-4 lang-guide hidden group-has-[#check-" <> lang <> ":checked]/pg:block", id_ $ lang <> "_main"] do
-              div_ [class_ "px-8 sticky top-0 z-10"]
-                $ div_ [class_ "inline-block tabs tabs-box tabs-outline p-0 bg-bgBase text-textWeak border ", role_ "tablist"]
-                $ forM_ (zip [0 ..] frameworks) \(idx, (fwName, fwIcon, fwPath)) ->
-                  label_ [class_ "tab gap-2 items-center", Lucid.for_ $ "fw-tab-" <> lang <> "-" <> show idx] do
-                    input_
-                      $ [ type_ "radio"
-                        , name_ $ "tab-" <> lang
-                        , id_ $ "fw-tab-" <> lang <> "-" <> show idx
-                        , class_ "hidden"
-                        , Aria.label_ fwName
-                        , hxGet_ $ "/proxy/docs/sdks/" <> fwPath
-                        , hxTarget_ $ "#fw-content-" <> lang
-                        , hxTrigger_ "change"
-                        , hxSwap_ "innerHTML"
-                        , hxSelect_ "#mainArticle"
-                        , hxIndicator_ $ "#fw-indicator-" <> lang
-                        ]
-                        <> [checked_ | (idx == 0)]
-                    unless (T.null fwIcon) $ img_ [class_ "h-5 w-5", src_ $ "https://apitoolkit.io/assets/img/framework-logos/" <> fwIcon]
-                    span_ $ toHtml fwName
-              br_ []
-              div_ [class_ "relative p-8"] do
-                div_ [id_ $ "fw-indicator-" <> lang, class_ "htmx-indicator flex justify-center py-5"]
-                  $ span_ [class_ "loading loading-dots loading-md"] ""
-                div_
-                  [ id_ $ "fw-content-" <> lang
-                  , hxGet_ $ "/proxy/docs/sdks/" <> thd3 (frameworks Unsafe.!! 0)
-                  , hxTrigger_ "load"
-                  , hxSwap_ "innerHTML"
-                  , hxSelect_ "#mainArticle"
-                  , class_ ""
-                  ]
-                  ""
+          -- Display guides for all integration options
+          forM_ integrationGroups \(_, integrations) -> do
+            forM_ integrations \(lang, langName, frameworks) ->
+              div_ [class_ $ "p-4 lang-guide hidden group-has-[#check-" <> lang <> ":checked]/pg:block", id_ $ lang <> "_main"] do
+                div_ [class_ "px-8 sticky top-0 z-10"]
+                  $ div_ [class_ "inline-block tabs tabs-box tabs-outline p-0 bg-bgBase text-textWeak border ", role_ "tablist"]
+                  $ forM_ (zip [0 ..] frameworks) \(idx, (fwName, fwIcon, fwPath)) ->
+                    label_ [class_ "tab gap-2 items-center", Lucid.for_ $ "fw-tab-" <> lang <> "-" <> show idx] do
+                      input_
+                        $ [ type_ "radio"
+                          , name_ $ "tab-" <> lang
+                          , id_ $ "fw-tab-" <> lang <> "-" <> show idx
+                          , class_ "hidden"
+                          , Aria.label_ fwName
+                          , hxGet_ $ "/proxy/docs/sdks/" <> fwPath
+                          , hxTarget_ $ "#fw-content-" <> lang
+                          , hxTrigger_ "change"
+                          , hxSwap_ "innerHTML"
+                          , hxSelect_ "#mainArticle"
+                          , hxIndicator_ $ "#fw-indicator-" <> lang
+                          ]
+                          <> [checked_ | (idx == 0)]
+                      unless (T.null fwIcon) $ img_ [class_ "h-5 w-5", src_ $ "https://apitoolkit.io/assets/img/framework-logos/" <> fwIcon]
+                      span_ $ toHtml fwName
+                br_ []
+                div_ [class_ "relative p-8"] do
+                  div_ [id_ $ "fw-indicator-" <> lang, class_ "htmx-indicator flex justify-center py-5"]
+                    $ span_ [class_ "loading loading-dots loading-md"] ""
+                  div_
+                    [ id_ $ "fw-content-" <> lang
+                    , hxGet_ $ "/proxy/docs/sdks/" <> thd3 (frameworks Unsafe.!! 0)
+                    , hxTrigger_ "load"
+                    , hxSwap_ "innerHTML"
+                    , hxSelect_ "#mainArticle"
+                    , class_ ""
+                    ]
+                    ""
 
 
 languageItem :: Projects.ProjectId -> Text -> Text -> Html ()
