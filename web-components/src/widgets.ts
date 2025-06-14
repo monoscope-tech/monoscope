@@ -95,10 +95,10 @@ const updateChartData = async (chart: any, opt: any, shouldFetch: boolean, widge
     }
 
     const subtitle = $(`${chartId}Subtitle`);
-    subtitle && (subtitle.innerHTML = `${rows_per_min.toFixed(2)} rows/min`);
+    subtitle && (subtitle.innerHTML = `${window.formatNumber(rows_per_min)} rows/min`);
 
     const value = $(`${chartId}Value`);
-    value && ((value.innerHTML = `${summarizeByPrefix} ${Number(stats[summarizeBy]).toLocaleString()}`), value.classList.remove('hidden'));
+    value && ((value.innerHTML = `${summarizeByPrefix} ${window.formatNumber(Number(stats[summarizeBy]))}`), value.classList.remove('hidden'));
 
     chart.hideLoading();
     chart.setOption(updateChartConfiguration(widgetData, opt, opt.dataset.source), true);
@@ -118,6 +118,16 @@ const updateChartData = async (chart: any, opt: any, shouldFetch: boolean, widge
     if (borderedItem) borderedItem.classList.remove('spotlight-border');
   }
 };
+
+declare global {
+  interface Window {
+    formatNumber: (num: number) => string;
+    logListTable?: any;
+    dashboardRefreshTimer: NodeJS.Timeout | null;
+    dashboardRefreshInterval: number;
+    bindFunctionsToObjects: any;
+  }
+}
 
 type WidGetData = {
   chartType: string;
@@ -225,13 +235,23 @@ const chartWidget = (widgetData: WidGetData) => {
 
 (window as any).chartWidget = chartWidget;
 
-window.formatNumber = (num: number) => {
-  if (Number.isInteger(num)) {
-    return num.toString();
-  } else {
-    // toFixed returns a string with exactly 2 decimals, so parseFloat removes trailing zeros.
-    return parseFloat(num.toFixed(2)).toString();
+/**
+ * Format numbers with appropriate suffixes and precision
+ * for display in charts and tooltips
+ */
+window.formatNumber = (n: number): string => {
+  if (n >= 1_000_000_000) return `${Math.floor(n / 1_000_000_000)}.${Math.floor((n % 1_000_000_000) / 100_000_000)}B`;
+  if (n >= 1_000_000) return `${Math.floor(n / 1_000_000)}.${Math.floor((n % 1_000_000) / 100_000)}M`;
+  if (n >= 1_000) return `${Math.floor(n / 1_000)}.${Math.floor((n % 1_000) / 100)}K`;
+  
+  // Format decimals appropriately based on magnitude
+  if (!Number.isInteger(n)) {
+    if (n >= 100) return Math.round(n).toString();
+    if (n >= 10) return parseFloat(n.toFixed(1)).toString();
+    return parseFloat(n.toFixed(2)).toString();
   }
+  
+  return n.toString();
 };
 
 // Update the widget order on the server.

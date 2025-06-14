@@ -9,27 +9,34 @@ module Pages.Onboarding.Onboarding (
   pricingPage,
   checkIntegrationGet,
   onboardingStepSkipped,
+  proxyLandingH,
   DiscordForm (..),
   NotifChannelForm (..),
   OnboardingInfoForm (..),
   OnboardingConfForm (..),
 ) where
 
+import Control.Lens qualified as L
 import Data.Aeson qualified as AE
 import Data.Aeson.KeyMap qualified as KM
+import Data.ByteString.Lazy qualified as BL
+import Data.CaseInsensitive qualified as CI
 import Data.Default (def)
+import Data.Effectful.Wreq qualified as W
 import Data.Text qualified as T
+import Data.Text.Encoding qualified as TE
+import Data.Tuple.Extra (thd3)
 import Data.Vector as V (Vector, fromList, head, length, toList)
 import Database.PostgreSQL.Entity.DBT (execute, queryOne)
-import Database.PostgreSQL.Simple.Types (Query (Query))
-
-import Data.CaseInsensitive qualified as CI
 import Database.PostgreSQL.Simple (Only (Only))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
+import Database.PostgreSQL.Simple.Types (Query (Query))
 import Database.PostgreSQL.Transact (DBT)
+import Effectful.Error.Static (throwError)
 import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
 import Effectful.Reader.Static (ask)
 import Lucid
+import Lucid.Aria qualified as Aria
 import Lucid.Base (TermRaw (termRaw))
 import Lucid.Htmx
 import Lucid.Hyperscript (__)
@@ -40,17 +47,15 @@ import Models.Tests.Testing qualified as Testing
 import Models.Users.Sessions qualified as Sessions
 import Models.Users.Users
 import NeatInterpolation (text)
+import Network.HTTP.Types (status200)
+import Network.Wreq (get, responseBody)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
 import Pages.Components
-import Pages.IntegrationDemos.Csharp (csharpGuide)
-import Pages.IntegrationDemos.Golang (golangGuide)
-import Pages.IntegrationDemos.Java (javaGuide)
-import Pages.IntegrationDemos.Javascript (javascriptGuide)
-import Pages.IntegrationDemos.Php (phpGuide)
-import Pages.IntegrationDemos.Python (pythonGuide)
 import Pkg.Mail (sendDiscordNotif)
 import PyF (fmt)
 import Relude hiding (ask)
+import Relude.Unsafe qualified as Unsafe
+import Servant (err401, err500, errBody)
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types (ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders, redirectCS)
 import Utils (faSprite_, getOtelLangVersion, insertIfNotExist, lookupValueText)
@@ -218,12 +223,7 @@ checkIntegrationGet pid languageM = do
         _ -> do
           redirectCS $ "/p/" <> pid.toText <> "/onboarding?step=Pricing"
           addRespHeaders ""
-    else do
-      case languageM of
-        Just lg -> addRespHeaders $ integrationCheck pid lg
-        _ -> do
-          addErrorToast "Not integrated, please integrate any language and try again" Nothing
-          addRespHeaders ""
+    else throwError (err401{errBody = "No events found yet"})
 
 
 verifiedCheck :: Html ()
@@ -303,75 +303,235 @@ pricingPage pid lemon critical paymentPlan = do
           faQ "What makes us better than others?" "Aside the observerbility features like traces, logs, metrics etc. APItoolkit takes it a step further by monitoring request payloads for both incoming and outgoing requests, automatic error reportings like sentry and payload changes detections which gives engineering teams with all the information the need to seamlessly debug and fix issues in their servers."
 
 
+-- Group is a tuple of (Group Name, List of languages in that group)
+integrationGroups :: [(Text, [(Text, Text, [(Text, Text, Text)])])]
+integrationGroups =
+  [
+    ( "Applications"
+    ,
+      [
+        ( "js"
+        , "Javascript"
+        ,
+          [ ("ExpressJS", "express-icon.png", "nodejs/expressjs")
+          , ("AdonisJS", "adonis-icon.svg", "nodejs/adonisjs")
+          , ("Fastify", "fastify-icon.png", "nodejs/fastifyjs")
+          , ("NestJS", "nest-icon.png", "nodejs/nestjs")
+          , ("NextJS", "next-icon.svg", "nodejs/nextjs")
+          ]
+        )
+      ,
+        ( "go"
+        , "Golang"
+        ,
+          [ ("Chi", "chi-logo.svg", "golang/chi")
+          , ("Echo", "echo-logo.png", "golang/echo")
+          , ("Fiber", "fiber-logo.svg", "golang/fiber")
+          , ("Gin", "gin-logo.png", "golang/gin")
+          , ("Gorilla Mux", "mux-logo.png", "golang/gorillamux")
+          , ("Native", "go-logo.svg", "golang/native")
+          ]
+        )
+      ,
+        ( "py"
+        , "Python"
+        ,
+          [ ("Django", "django-icon.png", "python/django")
+          , ("FastAPI", "fastapi-icon.png", "python/fastapi")
+          , ("Flask", "flask-icon.png", "python/flask")
+          , ("Pyramid", "pyramid-icon.png", "python/pyramid")
+          ]
+        )
+      ,
+        ( "elixir"
+        , "Elixir"
+        , [("Phoenix", "phoenix-logo.png", "elixir/phoenix")]
+        )
+      ,
+        ( "php"
+        , "PHP"
+        ,
+          [ ("Laravel", "laravel-icon.png", "php/laravel")
+          , ("Slim", "slim-icon.png", "php/slim")
+          , ("Symfony", "symfony-icon.png", "php/symfony")
+          ]
+        )
+      ,
+        ( "java"
+        , "Java"
+        , [("Spring Boot", "springboot-logo.svg", "java/springboot")]
+        )
+      ,
+        ( "cs"
+        , "C#"
+        , [(".Net Core", "netcore-logo.png", "dotnet/dotnetcore")]
+        )
+      ]
+    )
+  ,
+    ( "Infrastructure"
+    ,
+      [
+        ( "linux"
+        , "Linux"
+        , [("Linux", "linux.svg", "infrastructure/linux")]
+        )
+      ,
+        ( "docker"
+        , "Docker"
+        , [("Docker", "docker.svg", "infrastructure/docker")]
+        )
+      ,
+        ( "kubernetes"
+        , "Kubernetes"
+        , [("Kubernetes", "kubernetes.svg", "infrastructure/kubernetes")]
+        )
+      ,
+        ( "kafka"
+        , "Kafka"
+        , [("Kafka", "kafka.svg", "infrastructure/kafka")]
+        )
+      ]
+    )
+  ,
+    ( "Databases"
+    ,
+      [
+        ( "postgresql"
+        , "PostgreSQL"
+        , [("PostgreSQL", "postgresql.svg", "databases/postgres")]
+        )
+      ,
+        ( "mongodb"
+        , "MongoDB"
+        , [("MongoDB", "mongodb.svg", "databases/mongodb")]
+        )
+      ,
+        ( "mysql"
+        , "MySQL"
+        , [("MySQL", "mysql.svg", "databases/mysql")]
+        )
+      ]
+    )
+  ]
+
+
+-- IMPORtANT: DO NOT DELETE. Needed for the tailwindcss to generate classes.
+-- [class_ "group-has-[#check-js:checked]/pg:block group-has-[#check-go:checked]/pg:block group-has-[#check-elixir:checked]/pg:block group-has-[#check-py:checked]/pg:block group-has-[#check-java:checked]/pg:block"]
+-- [class_ "group-has-[#check-php:checked]/pg:block group-has-[#check-cs:checked]/pg:block"]
+-- [class_ "group-has-[#check-linux:checked]/pg:block group-has-[#check-docker:checked]/pg:block group-has-[#check-kubernetes:checked]/pg:block group-has-[#check-kafka:checked]/pg:block"]
+-- [class_ "group-has-[#check-postgresql:checked]/pg:block group-has-[#check-mongodb:checked]/pg:block group-has-[#check-mysql:checked]/pg:block"]
+-- [class_ "text-left pb-12 prose prose-slate dark:prose-invert prose-headings:font-medium prose-a:text-secondary prose-a:underline prose-a:underline-offset-4 prose-img:w-full prose-img:rounded-md prose-img:drop-shadow-md prose-img:border prose-img:border-base-200 prose-p:leading-relaxed prose-headings:scroll-mt-40 prose-pre:p-0 before:prose-li:bg-secondary before:prose-li:text-secondary prose-strong:font-medium prose-secondary w-full"]
+
 integrationsPage :: Projects.ProjectId -> Text -> Html ()
 integrationsPage pid apikey =
-  div_ [class_ "w-full bg-[#0068ff]/5 flex h-full"] $ do
-    div_ [class_ "w-1/2 bg-white pt-[156px] h-full px-12 border-r border-weak"] do
-      div_ [class_ "w-[550px]  bg-white ml-auto"] $ do
-        div_ [class_ "flex-col gap-4 flex w-full"] $ do
-          stepIndicator 5 "Instrument your apps or servers" $ "/p/" <> pid.toText <> "/onboarding?step=NotifChannel"
-          div_ [class_ "flex-col w-full gap-8 flex mt-4"] do
-            p_ [class_ " text-textStrong"] "Send Logs, Metrics or Traces. Click proceed when you’re done integrating your applications. learn more"
-            div_ [class_ "flex flex-col gap-4 "] $ do
-              div_ [class_ "flex flex-col gap-2"] do
-                let langs = [("js", "Javascript") :: (Text, Text), ("go", "Golang"), ("py", "Python"), ("php", "PHP"), ("java", "Java"), ("cs", "C#")]
-                forM_ langs $ \(lang, langName) -> languageItem pid langName lang
-            div_ [class_ "flex items-center gap-4"] do
-              button_ [class_ "btn btn-primary cursor-pointer", hxGet_ $ "/p/" <> pid.toText <> "/onboarding/integration-check", hxSwap_ "none", hxIndicator_ "#loadingIndicator"] "Confirm & Proceed"
-              a_
-                [ class_ "px-2 h-14 flex items-center underline text-brand text-xl font-semibold"
-                , type_ "button"
-                , hxPost_ $ "/p/" <> pid.toText <> "/onboarding/skip?step=Integration"
-                ]
-                "Skip"
+  div_ [class_ "w-full flex h-full group/pg"] do
+    div_ [class_ "w-1/2 bg-white pt-[156px] h-full px-12 pb-24 border-r border-weak flex flex-col gap-4"] do
+      div_ [class_ "max-w-[550px]"] $ stepIndicator 5 "Instrument your apps or servers" $ "/p/" <> pid.toText <> "/onboarding?step=NotifChannel"
+      div_ [class_ "flex-col w-full gap-4 flex mt-4"] do
+        p_ [class_ " text-textStrong"] do
+          "Send Logs, Metrics or Traces. Select an item below for instructions. "
+          br_ []
+          "Click proceed when you're done integrating your applications."
+
+        div_ [class_ "my-6 p-4 bg-fillWeak border border-[#001066]/10 rounded-xl"] do
+          div_ [class_ "mb-2 text-textStrong font-semibold"] "Your API Key"
+          div_ [class_ "flex items-center gap-2"] do
+            div_ [class_ "flex-1 font-mono bg-bgBase p-3 border border-[#001066]/10 rounded-lg overflow-x-auto", id_ "api-key-display"] $ toHtml apikey
+            button_
+              [ class_ "px-3 py-2 bg-fillStrong rounded-lg text-white flex items-center gap-1 hover:bg-fillStronger"
+              , type_ "button"
+              , onclick_ "navigator.clipboard.writeText(document.getElementById('api-key-display').textContent); this.innerHTML = '<span>Copied!</span><svg class=\"h-4 w-4\" xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\"><path d=\"M5 13l4 4L19 7\"></path></svg>';"
+              ]
+              do
+                span_ "Copy"
+                faSprite_ "copy" "regular" "h-4 w-4"
+
+        -- Display integration groups
+        forM_ integrationGroups \(groupName, langsList) -> div_ [class_ "mb-6"] do
+          div_ [class_ "text-textStrong font-semibold text-xl mb-2"] $ toHtml groupName
+          div_ [class_ "grid grid-cols-2 gap-2"]
+            $ forM_ langsList \(lang, langName, _) ->
+              languageItem pid langName lang
+
+        div_ [class_ "flex items-center gap-4 pb-24"] do
+          button_ [class_ "btn btn-primary cursor-pointer", hxGet_ $ "/p/" <> pid.toText <> "/onboarding/integration-check", hxSwap_ "none", hxIndicator_ "#loadingIndicator"] "Confirm & Proceed"
+          a_
+            [ class_ "px-2 h-14 flex items-center underline text-brand text-xl font-semibold"
+            , type_ "button"
+            , hxPost_ $ "/p/" <> pid.toText <> "/onboarding/skip?step=Integration"
+            ]
+            "Skip"
     div_ [class_ "w-1/2 flex items-center px-12"] do
-      div_ [class_ "rounded-2xl w-[750px] bg-white flex justify-between items-center h-[90vh]"] do
-        div_ [class_ "w-full h-full overflow-y-auto p-6"] do
-          javascriptGuide apikey
-          golangGuide apikey
-          pythonGuide apikey
-          phpGuide apikey
-          csharpGuide apikey
-          javaGuide apikey
-    script_
-      [text|
-      function toggleCheckbox(event) {
-        event.stopPropagation();
-        event.target.nextSibling.lastChild.classList.toggle('hidden');
-      }
-    |]
+      div_ [class_ "rounded-2xl w-full blue-gradient-box bg-bgBase flex flex-col justify-between items-center h-[90vh]"] do
+        div_ [class_ "w-full h-full overflow-y-auto"] do
+          -- Display guides for all integration options
+          forM_ integrationGroups \(_, integrations) -> do
+            forM_ integrations \(lang, langName, frameworks) ->
+              div_ [class_ $ "p-4 lang-guide hidden group-has-[#check-" <> lang <> ":checked]/pg:block", id_ $ lang <> "_main"] do
+                div_ [class_ "px-8 sticky top-0 z-10"]
+                  $ div_ [class_ "inline-block tabs tabs-box tabs-outline p-0 bg-bgBase text-textWeak border ", role_ "tablist"]
+                  $ forM_ (zip [0 ..] frameworks) \(idx, (fwName, fwIcon, fwPath)) ->
+                    label_ [class_ "tab gap-2 items-center", Lucid.for_ $ "fw-tab-" <> lang <> "-" <> show idx] do
+                      input_
+                        $ [ type_ "radio"
+                          , name_ $ "tab-" <> lang
+                          , id_ $ "fw-tab-" <> lang <> "-" <> show idx
+                          , class_ "hidden"
+                          , Aria.label_ fwName
+                          , hxGet_ $ "/proxy/docs/sdks/" <> fwPath
+                          , hxTarget_ $ "#fw-content-" <> lang
+                          , hxTrigger_ "change"
+                          , hxSwap_ "innerHTML"
+                          , hxSelect_ "#mainArticle"
+                          , hxIndicator_ $ "#fw-indicator-" <> lang
+                          ]
+                          <> [checked_ | (idx == 0)]
+                      unless (T.null fwIcon) $ img_ [class_ "h-5 w-5", src_ $ "https://apitoolkit.io/assets/img/framework-logos/" <> fwIcon]
+                      span_ $ toHtml fwName
+                br_ []
+                div_ [class_ "relative p-8"] do
+                  div_ [id_ $ "fw-indicator-" <> lang, class_ "htmx-indicator flex justify-center py-5"]
+                    $ span_ [class_ "loading loading-dots loading-md"] ""
+                  div_
+                    [ id_ $ "fw-content-" <> lang
+                    , hxGet_ $ "/proxy/docs/sdks/" <> thd3 (frameworks Unsafe.!! 0)
+                    , hxTrigger_ "load"
+                    , hxSwap_ "innerHTML"
+                    , hxSelect_ "#mainArticle"
+                    , class_ ""
+                    ]
+                    ""
 
 
 languageItem :: Projects.ProjectId -> Text -> Text -> Html ()
 languageItem pid lang ext = do
-  let ext_main = ext <> "_main"
-  let clck = [text|on click add .hidden to <.lang-guide/> then remove .hidden from #$ext_main|]
-  button_
-    [ class_ "h-12 px-3 py-2 bg-[#00157f]/0 rounded-xl border border-[#001066]/10 justify-start items-center gap-3 inline-flex"
-    , term "_" clck
+  label_
+    [ class_ "group/li cols-span-1 h-12 px-3 py-2 bg-[#00157f]/0 rounded-xl border border-[#001066]/10 justify-start items-center gap-3 inline-flex cursor-pointer"
     ]
     do
-      input_ [type_ "checkbox", class_ "checkbox shrink-0", onclick_ "toggleCheckbox(event)"]
+      input_
+        [ type_ "checkbox"
+        , class_ "checkbox shrink-0"
+        , id_ $ "check-" <> ext
+        , value_ ext
+        , onchange_ $ "if(this.checked) { document.getElementById('" <> ext <> "_main').scrollIntoView({behavior: 'smooth'}); }"
+        ]
       div_ [class_ "flex w-full items-center justify-between"] do
-        div_ [class_ "flex items-center gap-2"] do
+        div_ [class_ "flex items-center gap-2 text-sm font-semibold"] do
           img_ [class_ "h-5 w-5", src_ $ "/public/assets/svgs/" <> ext <> ".svg"]
-          span_ [class_ "text-sm font-semibold  text-textStrong"] $ toHtml lang
-        div_ [class_ "hidden text-sm toggle-target", id_ $ "integration-check-container" <> T.replace "#" "" lang] do
-          integrationCheck pid lang
-
-
-integrationCheck :: Projects.ProjectId -> Text -> Html ()
-integrationCheck pid language = do
-  div_
-    [ class_ "flex items-center gap-2 "
-    , hxGet_ $ "/p/" <> pid.toText <> "/onboarding/integration-check?language=" <> (T.replace "#" "sharp" language)
-    , hxSwap_ "innerHTML"
-    , hxTarget_ $ "#integration-check-container" <> (T.replace "#" "" language)
-    , hxTrigger_ "load delay:5s"
-    ]
-    do
-      span_ [class_ " text-textStrong"] "waiting for events"
-      faSprite_ "spinner" "regular" "h-4 w-4 animate-spin"
+          span_ $ toHtml lang
+        div_ [class_ "hidden group-has-[.checkbox:checked]/li:block text-sm toggle-target", id_ $ "integration-check-container" <> T.replace "#" "" lang] do
+          div_
+            [ class_ "flex items-center gap-2 "
+            , hxGet_ $ "/p/" <> pid.toText <> "/onboarding/integration-check?language=" <> (T.replace "#" "sharp" lang)
+            , hxSwap_ "innerHTML"
+            , hxTarget_ $ "#integration-check-" <> ext
+            , hxTrigger_ "load delay:5s"
+            ]
+            do
+              span_ [class_ " text-textStrong"] "waiting for events"
+              faSprite_ "spinner" "regular" "h-4 w-4 animate-spin"
 
 
 notifChannels :: Projects.ProjectId -> Text -> Text -> Vector Text -> Bool -> Bool -> Html ()
@@ -658,7 +818,7 @@ stepIndicator :: Int -> Text -> Text -> Html ()
 stepIndicator step title prevUrl = do
   universalIndicator
   div_ [class_ "flex-col gap-4 flex w-full"] $ do
-    a_ [href_ $ "/", class_ "absolute top-10 left-10"] do
+    a_ [href_ $ "/", class_ "absolute top-10 left-10 py-2 pr-2 bg-bgBase rounded-xs"] do
       img_ [class_ "h-7", src_ "/public/assets/svgs/logo.svg"]
     div_ [class_ "flex-col gap-2 flex w-full"] $ do
       div_ [class_ " text-textStrong text-base font-semibold"] $ "Step " <> show step <> " of 6"
@@ -684,3 +844,19 @@ universalIndicator :: Html ()
 universalIndicator =
   div_ [class_ "fixed  htmx-indicator top-0 left-0 right-0 bottom-0 flex items-center justify-center z-9999", id_ "loadingIndicator"] do
     span_ [class_ "loading loading-dots loading-lg"] ""
+
+
+-- | Proxy handler for fetching documentation from apitoolkit.io
+-- This bypasses CORS restrictions by fetching the content server-side
+proxyLandingH :: [Text] -> ATAuthCtx (RespHeaders Text)
+proxyLandingH path = do
+  traceShowM "proxyLandingH "
+  traceShowM path
+  let baseUrl = "https://apitoolkit.io/"
+      fullUrl = baseUrl <> T.intercalate "/" path
+
+  response <- W.get (toString fullUrl)
+
+  let content = fromMaybe "" $ response L.^? responseBody
+      textContent = TE.decodeUtf8 $ BL.toStrict content
+  addRespHeaders textContent

@@ -160,6 +160,7 @@ jsonToMap (AE.Object o) = Just $ AEKM.toMapText o
 jsonToMap _ = Nothing
 
 
+-- TODO: Delete and implement one that operates directly on the spans in bulk, as a batch process
 processRequestMessages
   :: (DB :> es, IOE :> es, Ki.StructuredConcurrency :> es, Log :> es, Reader.Reader Config.AuthContext :> es, Time.Time :> es, UUIDEff :> es)
   => [(Text, RequestMessages.RequestMessage)]

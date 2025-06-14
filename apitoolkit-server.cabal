@@ -93,13 +93,6 @@ library
       Pages.Endpoints.EndpointListSpec
       Pages.Fields.FieldDetails
       Pages.Fields.FieldDetailsSpec
-      Pages.IntegrationDemos.Csharp
-      Pages.IntegrationDemos.Golang
-      Pages.IntegrationDemos.Java
-      Pages.IntegrationDemos.Javascript
-      Pages.IntegrationDemos.Phoenix
-      Pages.IntegrationDemos.Php
-      Pages.IntegrationDemos.Python
       Pages.LemonSqueezy
       Pages.Log
       Pages.LogExplorer.LogItem

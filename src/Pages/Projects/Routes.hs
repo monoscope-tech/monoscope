@@ -10,8 +10,8 @@ import Pages.Projects.ListProjects qualified as ListProjects
 import Pages.Projects.ManageMembers qualified as ManageMembers
 import Pkg.RouteUtils (GetRedirect, QPT)
 import Relude
-import Servant (Capture, FormUrlEncoded, GenericMode (type (:-)), Get, JSON, NamedRoutes, Post, ReqBody, type (:>))
-import Servant.API (Header)
+import Servant (Capture, FormUrlEncoded, GenericMode (type (:-)), Get, JSON, NamedRoutes, PlainText, Post, ReqBody, type (:>))
+import Servant.API (CaptureAll, Header)
 import Servant.API.ResponseHeaders (Headers)
 import Servant.HTML.Lucid (HTML)
 import System.Types (RespHeaders)
@@ -47,5 +47,6 @@ data Routes' mode = Routes'
   , onboardingPricingUpdate :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "onboarding" :> "pricing" :> ReqBody '[FormUrlEncoded] CreateProject.PricingUpdateForm :> Post '[HTML] (RespHeaders (Html ()))
   , pricingUpdateGet :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "update_pricing" :> Get '[HTML] (RespHeaders (PageCtx (Html ())))
   , onboardingSkipped :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "onboarding" :> "skip" :> QPT "step" :> Post '[HTML] (RespHeaders (Html ()))
+  , proxyLanding :: mode :- "proxy" :> CaptureAll "path" Text :> Get '[PlainText] (RespHeaders Text)
   }
   deriving stock (Generic)

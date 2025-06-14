@@ -21,7 +21,7 @@ import Relude
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
 import Text.Printf (printf)
 import Text.Slugify (slugify)
-import Utils (faSprite_)
+import Utils (faSprite_, prettyPrintCount)
 
 
 data Query = Query
@@ -320,9 +320,9 @@ renderWidgetHeader widget wId title valueM subValueM expandBtnFn ctaM hideSub = 
 
 renderChart :: Widget -> Html ()
 renderChart widget = do
-  let rateM = widget.dataset >>= (.rowsPerMin) >>= \r -> Just $ toText $ printf "%.2f" r <> " rows/min"
+  let rateM = widget.dataset >>= (.rowsPerMin) >>= \r -> Just $ Utils.prettyPrintCount (round r) <> " rows/min"
   let chartId = maybeToMonoid widget.id
-  let valueM = widget.dataset >>= (.value) >>= \x -> Just $ Ft.fmt $ Ft.commaizeF $ round x
+  let valueM = widget.dataset >>= (.value) >>= \x -> Just $ Utils.prettyPrintCount $ round x
   let isStat = widget.wType `elem` [WTTimeseriesStat, WTStat]
   let gridStackHandleClass = if widget._isNested == Just True then "nested-grid-stack-handle" else "grid-stack-handle"
   div_ [class_ "gap-0.5 flex flex-col h-full justify-end "] do
