@@ -387,6 +387,7 @@ discordInteractionsH rawBody signatureM timestampM = do
                           case result of
                             Left err -> pure $ AE.object ["type" .= (4 :: Int), "data" .= AE.object ["content" .= ("Sorry, there was an error processing your request")]]
                             Right response -> do
+                              _ <- liftIO $ replyWithChartImage interaction chartOptions envCfg.discordBotToken envCfg.discordClientId
                               pure $ AE.object ["type" .= (5 :: Int), "data" .= AE.object ["content" .= ("Generated query: " <> response)]]
                         "here" -> do
                           case (interaction.channel_id, interaction.guild_id) of

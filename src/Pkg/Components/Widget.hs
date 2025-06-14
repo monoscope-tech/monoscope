@@ -276,12 +276,12 @@ renderWidgetHeader widget wId title valueM subValueM expandBtnFn ctaM hideSub = 
               , data_ "tippy-content" "Create a copy of this widget"
               , hxPost_
                   $ "/p/"
-                  <> maybeToMonoid (widget._projectId <&> (.toText))
-                  <> "/dashboards/"
-                  <> maybeToMonoid widget._dashboardId
-                  <> "/widgets/"
-                  <> wId
-                  <> "/duplicate"
+                    <> maybeToMonoid (widget._projectId <&> (.toText))
+                    <> "/dashboards/"
+                    <> maybeToMonoid widget._dashboardId
+                    <> "/widgets/"
+                    <> wId
+                    <> "/duplicate"
               , hxTrigger_ "click"
               , [__| on click set (the closest <details/>).open to false
                      on htmx:beforeSwap
@@ -332,7 +332,7 @@ renderChart widget = do
       div_
         [ class_
             $ "h-full w-full flex flex-col justify-end "
-            <> if widget.naked == Just True then "" else " rounded-2xl border border-strokeWeak bg-fillWeaker"
+              <> if widget.naked == Just True then "" else " rounded-2xl border border-strokeWeak bg-fillWeaker"
         , id_ $ chartId <> "_bordered"
         ]
         do
@@ -541,29 +541,11 @@ widgetToECharts widget =
               ["source" AE..= fromMaybe AE.Null (widget.dataset <&> (.source))]
         , "series" AE..= map (createSeries widget.wType) []
         , "animation" AE..= False
-        , -- , "dataZoom" AE..= AE.Array(V.fromList [ AE.object[
-          --   "type" AE..= "inside"
-          --   , "xAxisIndex" AE..= 0
-          --   , "filterMode" AE..= "weakFilter"
-          --   , "zoomOnMouseWheel" AE..= True
-          --   , "moveOnMouseMove": True
-          --   , "moveOnMouseWheel": True
-          --   ] ])
-          "dataZoom"
-            AE..= AE.Array
-              ( V.fromList
-                  [ AE.object
-                      [ "type" AE..= ("inside" :: Text)
-                      , "xAxisIndex" AE..= 0
-                      , "filterMode" AE..= ("weakFilter" :: Text)
-                      ]
-                  ]
-              )
         , if widget.allowZoom == Just True
             then
               "toolbox"
                 AE..= AE.object
-                  [ "feature" AE..= AE.object ["dataZoom" AE..= AE.object ["show" AE..= True, "yAxisIndex" AE..= "none", "icon" AE..= AE.object ["back" AE..= "none"]]]
+                  [ "feature" AE..= AE.object ["dataZoom" AE..= AE.object ["show" AE..= True, "yAxisIndex" AE..= "none", "icon" AE..= AE.object ["zoom" AE..= "none", "back" AE..= "none"]]]
                   ]
             else "toolbox" AE..= AE.object []
         ]

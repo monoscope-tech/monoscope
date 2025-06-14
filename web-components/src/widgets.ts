@@ -102,6 +102,14 @@ const updateChartData = async (chart: any, opt: any, shouldFetch: boolean, widge
 
     chart.hideLoading();
     chart.setOption(updateChartConfiguration(widgetData, opt, opt.dataset.source), true);
+    if ((window as any).barChart) {
+      (window as any).barChart.dispatchAction({
+        type: 'takeGlobalCursor',
+        key: 'dataZoomSelect',
+        dataZoomSelectActive: true,
+      });
+    }
+    window.dispatchEvent(new CustomEvent('chart-updated', { detail: { chartId } }));
   } catch (e) {
     console.error('Failed to fetch new data:', e);
   } finally {
@@ -133,13 +141,13 @@ const chartWidget = (widgetData: WidGetData) => {
     chartEl = $(chartId),
     liveStreamCheckbox = $('streamLiveData') as HTMLInputElement;
   let intervalId: NodeJS.Timeout | null = null;
-  
+
   // Dispose of any existing chart instance before creating a new one
   const existingChart = (window as any).echarts.getInstanceByDom(chartEl);
   if (existingChart) {
     existingChart.dispose();
   }
-  
+
   // Initialize new chart
   const chart = (window as any).echarts.init(chartEl, theme);
   chart.group = 'default';

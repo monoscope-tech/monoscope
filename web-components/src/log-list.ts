@@ -98,6 +98,11 @@ export class LogList extends LitElement {
       this.barChart = (window as any).barChart;
       this.lineChart = (window as any).lineChart;
       if (this.barChart) {
+        this.barChart.dispatchAction({
+          type: 'takeGlobalCursor',
+          key: 'dataZoomSelect',
+          dataZoomSelectActive: true,
+        });
         this.barChart.on('datazoom', this.handleChartZoom);
       }
       if (this.lineChart) {
@@ -165,7 +170,7 @@ export class LogList extends LitElement {
     // if
   }
 
-  refetchLogs() {
+  async refetchLogs() {
     const p = new URLSearchParams(window.location.search);
     const pathName = window.location.pathname;
     const url = `${window.location.origin}${pathName}?json=true&${p.toString()}`;
