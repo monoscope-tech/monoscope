@@ -368,6 +368,7 @@ library
     , wreq
     , xxhash
     , yaml
+    , mime-types
   default-language: GHC2021
 
 executable apitoolkit-server-exe

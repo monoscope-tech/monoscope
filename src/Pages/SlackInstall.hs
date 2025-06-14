@@ -46,14 +46,25 @@ import Relude hiding (ask, asks)
 import Servant (err401)
 
 import Control.Exception (try)
+import Control.Lens hiding ((.=))
+import Data.Aeson (encode, object, (.=))
+import Data.Aeson qualified as AE
+import Data.Aeson.QQ (aesonQQ)
+import Data.ByteString.Lazy qualified as BL
+import Data.Text qualified as T
 import Data.Vector qualified as V
+import Langchain.LLM.Core qualified as LLM
+import Langchain.LLM.OpenAI (OpenAI (..))
+import Network.HTTP.Client (RequestBody (..))
+import Network.HTTP.Client.MultipartFormData (PartM, partFileRequestBody)
+import Network.Mime (defaultMimeLookup)
 import Network.Wreq
 import Servant.API (Header)
 import Servant.API.ResponseHeaders (Headers, addHeader)
 import Servant.Server
 import System.Config (AuthContext (env, pool), EnvConfig (..))
 import System.Types (ATAuthCtx, ATBaseCtx, RespHeaders, addRespHeaders, addSuccessToast)
-import Utils (faSprite_)
+import Utils (faSprite_, systemPrompt)
 import Web.FormUrlEncoded (FromForm)
 
 
@@ -249,8 +260,38 @@ data DiscordInteraction = Interaction
   , data_i :: Maybe InteractionData
   , channel_id :: Maybe Text
   , guild_id :: Maybe Text
+  , channel :: Maybe Channel
   }
   deriving (Generic, Show)
+
+
+data ThreadMetadata = ThreadMetadata
+  { archive_timestamp :: Text
+  , archived :: Bool
+  , auto_archive_duration :: Int
+  , create_timestamp :: Text
+  , locked :: Bool
+  }
+  deriving (Generic, Show)
+
+
+instance FromJSON ThreadMetadata
+
+
+data Channel = Channel
+  { id :: Text
+  , name :: Text
+  , guild_id :: Maybe Text
+  , type_ :: Int
+  , parent_id :: Maybe Text
+  , owner_id :: Maybe Text
+  , thread_metadata :: Maybe ThreadMetadata
+  }
+  deriving (Generic, Show)
+
+
+instance FromJSON Channel where
+  parseJSON = genericParseJSON defaultOptions{fieldLabelModifier = \f -> if f == "type_" then "type" else f}
 
 
 instance FromJSON DiscordInteraction where
@@ -305,7 +346,6 @@ instance ToJSON InteractionApplicationCommandCallbackData
 
 discordInteractionsH :: BS.ByteString -> Maybe BS.ByteString -> Maybe BS.ByteString -> ATBaseCtx AE.Value
 discordInteractionsH rawBody signatureM timestampM = do
-  traceShowM rawBody
   envCfg <- asks env
   case (signatureM, timestampM) of
     (Just sig, Just tme)
@@ -320,12 +360,34 @@ discordInteractionsH rawBody signatureM timestampM = do
                   case data_i interaction of
                     Just cmdData -> do
                       discordData <- getDiscordData (fromMaybe "" interaction.guild_id)
+                      threadMsgs <- liftIO $ getThreadStarterMessage interaction envCfg.discordBotToken
+                      let fullPrompt = case cmdData.options of
+                            Just (InteractionOption{value = String q} : _) -> case threadMsgs of
+                              Just msgs -> threadsPrompt msgs q
+                              _ -> systemPrompt <> "\n\n User query:" <> q
+                            _ -> ""
+                      let openAI =
+                            OpenAI
+                              { apiKey = envCfg.openaiApiKey
+                              , openAIModelName = "gpt-4o-mini"
+                              , callbacks = []
+                              , baseUrl = Nothing
+                              }
+
                       case cmdData.name of
                         "ask" -> do
-                          let maybeQuestion = case cmdData.options of
-                                Just (InteractionOption{value = String q} : _) -> Just q
-                                _ -> Nothing
-                          pure $ AE.object ["type" .= (4 :: Int), "data" .= AE.object ["content" .= ("You asked: " <> maybe "" (\x -> x.projectId.toText) discordData <> maybe "something?" Relude.id maybeQuestion)]]
+                          result <- liftIO $ LLM.generate openAI fullPrompt Nothing
+                          case result of
+                            Left err -> pure $ AE.object ["type" .= (4 :: Int), "data" .= AE.object ["content" .= ("Sorry, there was an error processing your request")]]
+                            Right response -> do
+                              _ <- liftIO $ replyWithChartImage interaction chartOptions envCfg.discordBotToken envCfg.discordClientId
+                              pure $ AE.object ["type" .= (4 :: Int), "data" .= AE.object ["content" .= ("Generated query: " <> response)]]
+                        "chart" -> do
+                          result <- liftIO $ LLM.generate openAI fullPrompt Nothing
+                          case result of
+                            Left err -> pure $ AE.object ["type" .= (4 :: Int), "data" .= AE.object ["content" .= ("Sorry, there was an error processing your request")]]
+                            Right response -> do
+                              pure $ AE.object ["type" .= (5 :: Int), "data" .= AE.object ["content" .= ("Generated query: " <> response)]]
                         "here" -> do
                           case (interaction.channel_id, interaction.guild_id) of
                             (Just channelId, Just guildId) -> do
@@ -335,12 +397,29 @@ discordInteractionsH rawBody signatureM timestampM = do
                                   pure $ AE.object ["type" .= (4 :: Int), "data" .= AE.object ["content" .= "Got it, notifications and alerts on your project will now be sent to this channel"]]
                                 Nothing -> pure $ AE.object ["type" .= (4 :: Int), "data" .= AE.object ["content" .= "No discord data found"]]
                             _ -> pure $ AE.object ["type" .= (4 :: Int), "data" .= AE.object ["content" .= "No channel ID provided"]]
-                        _ -> pure $ AE.object ["type" .= (4 :: Int), "data" .= AE.object ["content" .= "The command is not giving"]]
+                        _ -> pure $ AE.object ["type" .= (4 :: Int), "data" .= AE.object ["content" .= "The command is not recognized"]]
                     Nothing -> pure $ AE.object ["type" .= (4 :: Int), "data" .= AE.object ["content" .= "No command data provided"]]
       | otherwise -> do
           throwError err401{errBody = "Invalid signature"}
     _ -> do
       throwError err401{errBody = "Invalid signature"}
+
+
+threadsPrompt :: [DiscordMessage] -> Text -> Text
+threadsPrompt msgs question = prompt
+  where
+    msgs' = (\x -> "- @" <> x.author.username <> " :" <> x.content) <$> msgs
+    threadPrompt =
+      T.unlines
+        $ [ "\n\nTHREADS:"
+          , "- this query is  part of a conversation thread. Use previous messages provited in the thread for additional context if needed."
+          , "- the user query is the main one to answer, but earlier messages may contain important clarifications or parameters."
+          , "Previous messages in this thread:"
+          ]
+          <> msgs'
+          <> ["\n\nCurrent user query: " <> question]
+
+    prompt = systemPrompt <> threadPrompt
 
 
 verifyDiscordSignature
@@ -365,52 +444,44 @@ verifyDiscordSignature publicKey signatureHex timestamp rawBody =
     _ -> False
 
 
-
 -- Data types for Discord API responses
 data DiscordUser = DiscordUser
-  { userId :: Text
-  , username :: Text
-  , globalName :: Maybe Text
-  , avatar :: Maybe Text
-  } deriving (Show, Generic)
+  { username :: Text
+  }
+  deriving (Generic, Show)
+  deriving anyclass (FromJSON)
+
 
 data DiscordMessage = DiscordMessage
-  { messageId :: Text
-  , content :: Text
+  { content :: Text
   , author :: DiscordUser
   , timestamp :: Text
-  } deriving (Show, Generic)
-
--- JSON instances
-instance FromJSON DiscordUser where
-  parseJSON = withObject "DiscordUser" $ \o -> DiscordUser
-    <$> o .: "id"
-    <*> o .: "username"
-    <*> o .:? "global_name"
-    <*> o .:? "avatar"
-
-instance FromJSON DiscordMessage where
-  parseJSON = withObject "DiscordMessage" $ \o -> DiscordMessage
-    <$> o .: "id"
-    <*> o .: "content"
-    <*> o .: "author"
-    <*> o .: "timestamp"
+  }
+  deriving (Generic, Show)
+  deriving anyclass (FromJSON)
 
 
-getThreadStarterMessage :: Text -> Text -> IO (Either String DiscordMessage)
-getThreadStarterMessage botToken threadId = do
-  let url = T.unpack $ "https://discord.com/api/v10/channels/" <> threadId <> "/messages?limit=50"
-  let opts = defaults & header "Authorization" .~ [ TE.encodeUtf8 $ "Bot " <> botToken]
-                     & header "Content-Type" .~ ["application/json"]
-  
-  response <- getWith opts url
-  
-  case eitherDecode (response ^. responseBody) of
-    Left err -> return $ Left $ "JSON decode error: " <> err
-    Right messages -> 
-      case messages of
-        [] -> return $ Left "No messages found in thread"
-        msgs -> return $ Right $ last msgs  -- Last message is the oldest (starter)
+getThreadStarterMessage :: DiscordInteraction -> Text -> IO (Maybe [DiscordMessage])
+getThreadStarterMessage interaction botToken = do
+  case interaction.channel_id of
+    Just channelId -> case interaction.channel of
+      Just Channel{type_ = 11, parent_id = Just pId} -> do
+        let baseUrl = "https://discord.com/api/v10/channels/"
+            url = T.unpack $ baseUrl <> channelId <> "/messages?limit=50"
+            starterMessageUrl = T.unpack $ baseUrl <> pId <> "/messages/" <> channelId
+            opts = defaults & authHeader botToken & contentTypeHeader "application/json"
+        response <- getWith opts url
+        response' <- getWith opts starterMessageUrl
+        case eitherDecode (response ^. responseBody) of
+          Left err -> do
+            return Nothing
+          Right messages -> do
+            case eitherDecode (response' ^. responseBody) of
+              Left err -> do
+                return $ Just messages
+              Right (message :: DiscordMessage) -> return $ Just (messages <> [message])
+      _ -> pure Nothing
+    Nothing -> pure $ Nothing
 
 
 registerGlobalDiscordCommands :: T.Text -> T.Text -> IO (Either T.Text ())
@@ -465,12 +536,7 @@ registerGlobalDiscordCommands appId botToken = do
 
       commandBody = AE.Array $ V.fromList [askCommand, queryCommand, hereCommand]
 
-      opts =
-        defaults
-          & header "Authorization"
-          .~ [TE.encodeUtf8 $ "Bot " <> botToken]
-            & header "Content-Type"
-          .~ ["application/json"]
+      opts = defaults & authHeader botToken & contentTypeHeader "application/json"
 
   result <- try $ putWith opts url (AE.encode commandBody) :: IO (Either SomeException (Response LBS.ByteString))
 
@@ -480,3 +546,81 @@ registerGlobalDiscordCommands appId botToken = do
       if (resp ^. responseStatus . statusCode) `elem` [200, 201]
         then pure $ Right ()
         else pure $ Left $ TE.decodeUtf8 . LBS.toStrict $ resp ^. responseBody
+
+
+sendDeferredResponse :: Text -> Text -> Text -> IO ()
+sendDeferredResponse interactionId interactionToken botToken = do
+  let url = T.unpack $ "https://discord.com/api/v10/interactions/" <> interactionId <> "/" <> interactionToken <> "/callback"
+      payload = encode $ object ["type" .= (5 :: Int)]
+  _ <- postWith (defaults & authHeader botToken & contentTypeHeader "application/json") url payload
+  pure ()
+
+
+authHeader :: Text -> Network.Wreq.Options -> Network.Wreq.Options
+authHeader token = header "Authorization" .~ [TE.encodeUtf8 $ "Bot " <> token]
+
+
+contentTypeHeader :: Text -> Network.Wreq.Options -> Network.Wreq.Options
+contentTypeHeader contentType = header "Content-Type" .~ [TE.encodeUtf8 contentType]
+
+
+data BufferResponse = BufferResponse
+  { bufferType :: String
+  , bufferData :: [Word8]
+  }
+  deriving (Generic, Show)
+
+
+instance FromJSON BufferResponse where
+  parseJSON = withObject "BufferResponse" $ \o ->
+    BufferResponse
+      <$> o .: "type"
+      <*> o .: "data"
+
+
+replyWithChartImage :: DiscordInteraction -> AE.Value -> Text -> Text -> IO ()
+replyWithChartImage interaction chartOption botToken appId = do
+  let interactionToken = interaction.token
+  _ <- sendDeferredResponse interaction.id interaction.token botToken
+  let chartshotUrl = "https://chartshot.s.past3.tech/generate-chart"
+      chartReqPayload = encode chartOption
+
+  chartResp <- post chartshotUrl chartReqPayload
+  let responseBody' = chartResp ^. responseBody
+
+  let followupUrl = T.unpack $ "https://discord.com/api/v10/webhooks/" <> appId <> "/" <> interactionToken
+      payloadJson =
+        encode
+          $ object
+            [ "content" .= ("Here's your chart!" :: T.Text)
+            , "attachments"
+                .= V.fromList
+                  [ object
+                      [ "id" .= (0 :: Int)
+                      , "filename" .= ("chart.png" :: T.Text)
+                      ]
+                  ]
+            ]
+  case eitherDecode responseBody' :: Either String BufferResponse of
+    Left s -> do
+      _ <- postWith (defaults & authHeader botToken & contentTypeHeader "application/json") followupUrl payloadJson
+      pure ()
+    Right imageArray -> do
+      let imageBytes = LBS.fromStrict $ BS.pack imageArray.bufferData
+      let parts' :: [PartM IO]
+          parts' =
+            [ partLBS "payload_json" payloadJson
+            , partFileRequestBody "files[0]" "chart.png" (RequestBodyLBS imageBytes) & partContentType .~ (Just "image/png")
+            ]
+
+      _ <- postWith (defaults & authHeader botToken & contentTypeHeader "multipart/form-data") followupUrl parts'
+      pure ()
+
+
+chartOptions :: AE.Value
+chartOptions =
+  [aesonQQ|{"type": "png",
+  "width": 600,
+  "height": 400,
+  "option":{"title":{"text":"Stacked Line"},"tooltip":{"trigger":"axis"},"legend":{"data":["Email","Union Ads","Video Ads","Direct","Search Engine"]},"grid":{"left":"3%","right":"4%","bottom":"3%","containLabel":true},"toolbox":{"feature":{"saveAsImage":{}}},"xAxis":{"type":"category","boundaryGap":false,"data":["Mon","Tue","Wed","Thu","Fri","Sat","Sun"]},"yAxis":{"type":"value"},"series":[{"name":"Email","type":"line","stack":"Total","data":[120,132,101,134,90,230,210]},{"name":"Union Ads","type":"line","stack":"Total","data":[220,182,191,234,290,330,310]},{"name":"Video Ads","type":"line","stack":"Total","data":[150,232,201,154,190,330,410]},{"name":"Direct","type":"line","stack":"Total","data":[320,332,301,334,390,330,320]},{"name":"Search Engine","type":"line","stack":"Total","data":[820,932,901,934,1290,1330,1320]}]}
+}|]
