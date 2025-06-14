@@ -172,12 +172,15 @@
   --border: 1px;
   --depth: 1;
   --noise: 1;
+  --tw-prose-body: --color-textStrong !important;
 }
 
 :root,
 [data-theme] {
   --backgroundPrimary: #fff;
   --rounded-btn: 0.5rem;
+
+  --tw-prose-body: --color-textStrong !important;
 }
 
 html,
@@ -915,3 +918,30 @@ code, pre, .code, .monospace {
 .gradient-border {
   border-image: linear-gradient(45deg, #ffcc00, #33cc33, #3399ff) 1;
 }
+
+
+/* .blue-gradient-box::before, .blue-gradient-box::after { */
+/*   content: ""; */
+/*   position: absolute; */
+/*   height: inherit; */
+/*   width: inherit; */
+/*   background: conic-gradient( */
+/*     from 0deg at center, */
+/*     #00c3ff, */
+/*     #4d0199, */
+/*     #6300c6, */
+/*     #00c3ff */
+/*     ); */
+/*   border-radius: inherit; */
+/*   z-index:-1; */
+/*   padding:2px; */
+/* } */
+/**/
+/* .blue-gradient-box::after { */
+/*   z-index: 1; */
+/*   filter: blur(10px); */
+/* } */
+/**/
+/* @property --deg { */
+/**/
+/* } */

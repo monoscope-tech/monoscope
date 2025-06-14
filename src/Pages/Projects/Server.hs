@@ -35,4 +35,5 @@ server =
     , onboardingPricingUpdate = CreateProject.pricingUpdateH
     , pricingUpdateGet = CreateProject.pricingUpdateGetH
     , onboardingSkipped = Onboarding.onboardingStepSkipped
+    , proxyLanding = Onboarding.proxyLandingH
     }
