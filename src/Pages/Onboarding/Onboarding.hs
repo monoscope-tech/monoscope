@@ -382,6 +382,19 @@ integrationsPage pid apikey =
               "Send Logs, Metrics or Traces. Select an item below for instructions. "
               br_ []
               "Click proceed when you're done integrating your applications."
+            
+            div_ [class_ "my-6 p-4 bg-fillWeak border border-[#001066]/10 rounded-xl"] do
+              div_ [class_ "mb-2 text-textStrong font-semibold"] "Your API Key"
+              div_ [class_ "flex items-center gap-2"] do
+                div_ [class_ "flex-1 font-mono bg-bgBase p-3 border border-[#001066]/10 rounded-lg overflow-x-auto", id_ "api-key-display"] $ toHtml apikey
+                button_ 
+                  [ class_ "px-3 py-2 bg-fillStrong rounded-lg text-white flex items-center gap-1 hover:bg-fillStronger"
+                  , type_ "button"
+                  , onclick_ "navigator.clipboard.writeText(document.getElementById('api-key-display').textContent); this.innerHTML = '<span>Copied!</span><svg class=\"h-4 w-4\" xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\"><path d=\"M5 13l4 4L19 7\"></path></svg>';"
+                  ] do
+                    span_ "Copy"
+                    faSprite_ "copy" "regular" "h-4 w-4"
+            
             div_ [class_ "grid grid-cols-2 gap-2"] $ forM_ langs \(lang, langName, _) -> languageItem pid langName lang
             div_ [class_ "flex items-center gap-4"] do
               button_ [class_ "btn btn-primary cursor-pointer", hxGet_ $ "/p/" <> pid.toText <> "/onboarding/integration-check", hxSwap_ "none", hxIndicator_ "#loadingIndicator"] "Confirm & Proceed"
